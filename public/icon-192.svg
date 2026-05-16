@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192">
+  <rect width="192" height="192" rx="38" fill="#0d1117"/>
+  <text x="96" y="118" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="98" font-weight="900" text-anchor="middle" fill="#58a6ff">📊</text>
+  <text x="96" y="160" font-family="system-ui" font-size="20" font-weight="700" text-anchor="middle" fill="#e6edf3">Sentinel</text>
+</svg>

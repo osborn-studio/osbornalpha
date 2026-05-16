@@ -5,28 +5,26 @@
 *.pem
 *.key
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-.venv/
-venv/
-ENV/
-.uv/
-.pytest_cache/
-.coverage
-htmlcov/
-*.egg-info/
-dist/
-build/
-
-# Node
+# Node / Next
 node_modules/
 .next/
 out/
 .cache/
+*.tsbuildinfo
+next-env.d.ts
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Supabase local
+supabase/.branches/
+supabase/.temp/
 
 # OS
 .DS_Store
@@ -36,9 +34,8 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
-*.swo
 
-# Project local data (NOT to be public)
+# Project local data
 briefs/
 raw/
 feedback/
@@ -46,9 +43,6 @@ logs/
 *.sqlite
 *.db
 config/watchlist.local.yml
-config/personal-*.yml
 
-# Personal notes
-NOTES.md
-SCRATCH.md
-PERSONAL/
+# Vercel
+.vercel

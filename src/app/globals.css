@@ -1,0 +1,101 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root,
+:root.theme-dark {
+  --bg: #0d1117;
+  --bg-elevated: #161b22;
+  --bg-card: #1c2128;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-dim: #8b949e;
+  --text-muted: #6e7681;
+  --accent: #58a6ff;
+  --accent-dim: #1f6feb;
+  --warn: #f59e0b;
+  --bullish: #ef4444;
+  --neutral: #f59e0b;
+  --bearish: #10b981;
+  --shadow: 0 4px 16px rgba(0,0,0,0.4);
+}
+
+/* Color scheme: CN (red up, green down) — default */
+:root,
+:root[data-color-scheme="cn"] {
+  --up: #ef4444;
+  --down: #10b981;
+}
+
+/* US (green up, red down) */
+:root[data-color-scheme="us"] {
+  --up: #10b981;
+  --down: #ef4444;
+}
+
+/* Light theme */
+:root.theme-light {
+  --bg: #ffffff;
+  --bg-elevated: #f6f8fa;
+  --bg-card: #f0f3f6;
+  --border: #d0d7de;
+  --text: #1f2328;
+  --text-dim: #656d76;
+  --text-muted: #8c959f;
+  --accent: #0969da;
+  --accent-dim: #0550ae;
+  --shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+* { box-sizing: border-box; }
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+               "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  padding-bottom: 60px;
+}
+
+.text-up { color: var(--up); }
+.text-down { color: var(--down); }
+.bg-up { background-color: var(--up); }
+.bg-down { background-color: var(--down); }
+
+/* Reusable card styles */
+.card-base {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+input, select {
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  outline: none;
+  font-family: inherit;
+}
+input:focus { border-color: var(--accent); }
+
+button { cursor: pointer; font-family: inherit; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+table { font-variant-numeric: tabular-nums; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
