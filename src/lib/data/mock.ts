@@ -243,22 +243,40 @@ export const MOCK_STOCKS: Record<string, MockStock> = {
   },
 };
 
-// Lightweight fallback for non-detail tickers
+// Lightweight fallback for non-detail tickers.
+// Lookup order: full mock → curated universe → browser-side custom registry → null.
 export function getStockOrStub(ticker: string): MockStock | null {
   if (MOCK_STOCKS[ticker]) return MOCK_STOCKS[ticker];
-  // Generic stub for tickers in MOCK_DATA.universe that don't have detail
+
+  // Try the curated 30-stock universe first (synchronous, server-safe)
   const universe = MOCK_UNIVERSE.find((u) => u.t === ticker);
-  if (!universe) return null;
+  if (universe) return makeStubFromUniverse(universe.t, universe.n, universe.m);
+
+  // Fallback: client-side custom registry (added via search)
+  if (typeof window !== 'undefined') {
+    try {
+      // Inline lookup to avoid circular import; mirrors custom-stocks.ts logic
+      const raw = window.localStorage.getItem('stock-monitor:custom-stocks:v1');
+      if (raw) {
+        const map = JSON.parse(raw) as Record<string, { t: string; n: string; m: Market }>;
+        const c = map[ticker];
+        if (c) return makeStubFromUniverse(c.t, c.n, c.m);
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
+function makeStubFromUniverse(ticker: string, name: string, market: Market): MockStock {
   return {
-    ticker: universe.t,
-    name: universe.n,
-    market: universe.m,
-    currency: universe.m === 'A' ? '¥' : universe.m === 'HK' ? 'HK$' : '$',
-    price: 100, change: 0, change_pct: 0, open: 100, high: 100, low: 100, prev_close: 100,
+    ticker, name, market,
+    currency: market === 'A' ? '¥' : market === 'HK' ? 'HK$' : '$',
+    price: 0, change: 0, change_pct: 0, open: 0, high: 0, low: 0, prev_close: 0,
     volume_value: 0, amplitude: 0, market_cap: '—',
     pe_ttm: 0, pb: 0, roe: 0, dividend_yield: 0,
     high_52w: 0, low_52w: 0, next_earnings: '—',
-    sentinel_score: 5.0, triggers: [], perspectives: [], news: [], broker_reports: [],
+    sentinel_score: 0, triggers: [], perspectives: [], news: [], broker_reports: [],
     financials: { years: [], revenue: [], net_income: [], roe: [] },
   };
 }
