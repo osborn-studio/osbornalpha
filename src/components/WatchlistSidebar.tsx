@@ -35,7 +35,7 @@ export function WatchlistSidebar({ selectedTicker, onSelect, variant = 'sidebar'
     () => Array.from(new Set(groups.flatMap((g) => g.tickers))),
     [groups]
   );
-  const { quotes, loading: quotesLoading } = useBatchQuotes(allTickers);
+  const { quotes, loading: quotesLoading } = useBatchQuotes(allTickers, { refreshIntervalMs: 30_000 });
 
   const totalCount = groups.reduce((s, g) => s + g.tickers.length, 0);
   const visibleGroups = useMemo(

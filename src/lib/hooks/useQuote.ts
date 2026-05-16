@@ -70,9 +70,10 @@ async function fetchQuote(ticker: string): Promise<LiveQuote | null> {
   }
 }
 
-export function useQuote(ticker: string | null): State {
+export function useQuote(ticker: string | null, opts?: { refreshIntervalMs?: number }): State {
   const [state, setState] = useState<State>({ data: null, loading: !!ticker, error: null });
   const abortRef = useRef<boolean>(false);
+  const refreshMs = opts?.refreshIntervalMs ?? 0;
 
   useEffect(() => {
     if (!ticker) {
@@ -80,20 +81,31 @@ export function useQuote(ticker: string | null): State {
       return;
     }
     abortRef.current = false;
-    setState((prev) => ({ ...prev, loading: true, error: null }));
+    setState((prev) => ({ ...prev, loading: !prev.data, error: null }));
 
-    fetchQuote(ticker)
-      .then((data) => {
+    const run = async (forceBypass = false) => {
+      if (forceBypass) cache.delete(ticker);
+      try {
+        const data = await fetchQuote(ticker);
         if (abortRef.current) return;
         setState({ data, loading: false, error: data ? null : '未找到该标的的报价' });
-      })
-      .catch((err: any) => {
+      } catch (err: any) {
         if (abortRef.current) return;
-        setState({ data: null, loading: false, error: err?.message || '获取失败' });
-      });
+        setState((prev) => ({ data: prev.data, loading: false, error: err?.message || '获取失败' }));
+      }
+    };
+    run();
 
-    return () => { abortRef.current = true; };
-  }, [ticker]);
+    let timer: ReturnType<typeof setInterval> | null = null;
+    if (refreshMs > 0) {
+      timer = setInterval(() => run(true), refreshMs);
+    }
+
+    return () => {
+      abortRef.current = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [ticker, refreshMs]);
 
   return state;
 }
@@ -101,9 +113,10 @@ export function useQuote(ticker: string | null): State {
 // ─── Batch ───
 interface BatchState { quotes: Record<string, LiveQuote | null>; loading: boolean }
 
-export function useBatchQuotes(tickers: string[]): BatchState {
+export function useBatchQuotes(tickers: string[], opts?: { refreshIntervalMs?: number }): BatchState {
   const [state, setState] = useState<BatchState>({ quotes: {}, loading: tickers.length > 0 });
   const key = tickers.slice().sort().join(',');
+  const refreshMs = opts?.refreshIntervalMs ?? 0;
 
   useEffect(() => {
     if (tickers.length === 0) {
@@ -111,29 +124,200 @@ export function useBatchQuotes(tickers: string[]): BatchState {
       return;
     }
     let cancelled = false;
-    setState((prev) => ({ ...prev, loading: true }));
 
-    fetch(`/api/quote/batch?tickers=${encodeURIComponent(tickers.join(','))}`)
+    const run = (isRefresh = false) => {
+      if (!isRefresh) setState((prev) => ({ ...prev, loading: !prev.quotes || Object.keys(prev.quotes).length === 0 }));
+      fetch(`/api/quote/batch?tickers=${encodeURIComponent(tickers.join(','))}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (cancelled) return;
+          const quotes = data.quotes || {};
+          for (const t in quotes) {
+            if (quotes[t]) cache.set(t, { data: quotes[t], ts: Date.now() });
+          }
+          setState({ quotes, loading: false });
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setState((prev) => ({ ...prev, loading: false }));
+        });
+    };
+    run();
+
+    let timer: ReturnType<typeof setInterval> | null = null;
+    if (refreshMs > 0) {
+      timer = setInterval(() => run(true), refreshMs);
+    }
+
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, refreshMs]);
+
+  return state;
+}
+
+// ─── Financials ───
+export interface YearlyFinancial {
+  year: number;
+  revenue_yi: number | null;
+  total_revenue_yi: number | null;
+  net_income_yi: number | null;
+  eps_basic: number | null;
+  total_assets_yi: number | null;
+  total_liab_yi: number | null;
+  equity_yi: number | null;
+  op_cashflow_yi: number | null;
+  free_cashflow_yi: number | null;
+}
+export interface FinancialState {
+  yearly: YearlyFinancial[];
+  latest_indicator: any;
+  source: string | null;
+  loading: boolean;
+  error: string | null;
+}
+
+export function useFinancials(ticker: string | null): FinancialState {
+  const [state, setState] = useState<FinancialState>({
+    yearly: [], latest_indicator: null, source: null,
+    loading: !!ticker, error: null,
+  });
+
+  useEffect(() => {
+    if (!ticker) { setState({ yearly: [], latest_indicator: null, source: null, loading: false, error: null }); return; }
+    let cancelled = false;
+    setState((prev) => ({ ...prev, loading: true, error: null }));
+    fetch(`/api/financials/${encodeURIComponent(ticker)}`)
       .then((r) => r.json())
       .then((data) => {
         if (cancelled) return;
-        const quotes = data.quotes || {};
-        // Hydrate cache too
-        for (const t in quotes) {
-          if (quotes[t]) cache.set(t, { data: quotes[t], ts: Date.now() });
-        }
-        setState({ quotes, loading: false });
+        setState({
+          yearly: data.yearly || [],
+          latest_indicator: data.latest_indicator || null,
+          source: data.source,
+          loading: false,
+          error: data.error || null,
+        });
       })
-      .catch(() => {
+      .catch((err: any) => {
         if (cancelled) return;
-        setState((prev) => ({ ...prev, loading: false }));
+        setState({ yearly: [], latest_indicator: null, source: null, loading: false, error: err?.message || '获取失败' });
       });
-
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [ticker]);
 
   return state;
+}
+
+// ─── Holders ───
+export interface HolderRow {
+  ts_code: string;
+  ann_date: string;
+  end_date: string;
+  holder_name: string;
+  hold_amount: number;
+  hold_ratio: number;
+}
+export interface HoldersState {
+  top10: HolderRow[];
+  floats: HolderRow[];
+  reporting_period: string | null;
+  source: string | null;
+  loading: boolean;
+  error: string | null;
+}
+
+export function useHolders(ticker: string | null): HoldersState {
+  const [state, setState] = useState<HoldersState>({
+    top10: [], floats: [], reporting_period: null, source: null, loading: !!ticker, error: null,
+  });
+
+  useEffect(() => {
+    if (!ticker) { setState({ top10: [], floats: [], reporting_period: null, source: null, loading: false, error: null }); return; }
+    let cancelled = false;
+    setState((prev) => ({ ...prev, loading: true, error: null }));
+    fetch(`/api/holders/${encodeURIComponent(ticker)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        setState({
+          top10: data.top10_holders || [],
+          floats: data.top10_floatholders || [],
+          reporting_period: data.reporting_period,
+          source: data.source,
+          loading: false,
+          error: data.error || null,
+        });
+      })
+      .catch((err: any) => {
+        if (cancelled) return;
+        setState({ top10: [], floats: [], reporting_period: null, source: null, loading: false, error: err?.message });
+      });
+    return () => { cancelled = true; };
+  }, [ticker]);
+
+  return state;
+}
+
+// ─── Perspectives ───
+export interface PerspectiveRow {
+  persona: string;
+  name: string;
+  stance: 'bullish' | 'neutral' | 'bearish';
+  confidence: number;
+  summary: string;
+  cites: string[];
+}
+export interface PerspectivesState {
+  perspectives: PerspectiveRow[];
+  source: string | null;
+  meta: any;
+  loading: boolean;
+  error: string | null;
+}
+
+export function usePerspectives(ticker: string | null, autoLoad = false): PerspectivesState & { refetch: () => void } {
+  const [state, setState] = useState<PerspectivesState>({
+    perspectives: [], source: null, meta: null, loading: false, error: null,
+  });
+
+  const fetcher = (t: string) => {
+    let cancelled = false;
+    setState((prev) => ({ ...prev, loading: true, error: null }));
+    fetch(`/api/perspectives/${encodeURIComponent(t)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        setState({
+          perspectives: data.perspectives || [],
+          source: data.source,
+          meta: data.meta,
+          loading: false,
+          error: data.error || null,
+        });
+      })
+      .catch((err: any) => {
+        if (cancelled) return;
+        setState({ perspectives: [], source: null, meta: null, loading: false, error: err?.message });
+      });
+    return () => { cancelled = true; };
+  };
+
+  useEffect(() => {
+    if (!ticker || !autoLoad) {
+      setState({ perspectives: [], source: null, meta: null, loading: false, error: null });
+      return;
+    }
+    return fetcher(ticker);
+  }, [ticker, autoLoad]);
+
+  return {
+    ...state,
+    refetch: () => { if (ticker) fetcher(ticker); },
+  };
 }
 
 // ─── K-line ───
