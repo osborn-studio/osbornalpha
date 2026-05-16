@@ -104,10 +104,61 @@ export default function SettingsPage() {
             placeholder="例如 123456789（从 @userinfobot 获取）"
             className="w-full"
           />
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              onClick={async () => {
+                try {
+                  show('⏳ 测试发送中...');
+                  const resp = await fetch('/api/brief/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      chatId: tgChatId || undefined,
+                      text: '🧪 *Sentinel 测试消息*\n\n如果你看到这条消息，说明 Telegram 推送配置成功！\n\nhttps://stock-monitor-nu.vercel.app/',
+                    }),
+                  });
+                  const data = await resp.json();
+                  if (data.ok) show(`✅ 测试消息已发送（msg_id ${data.message_id}）`);
+                  else show(`✗ ${data.error || '发送失败'}`);
+                } catch (e: any) {
+                  show(`✗ ${e?.message || '发送失败'}`);
+                }
+              }}
+              className="rounded bg-accent-dim px-3 py-1.5 text-xs text-white"
+            >
+              ✉️ 发测试消息
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  show('⏳ 生成并发送今日简报中（约 10-20s）...');
+                  const resp = await fetch('/api/brief/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      chatId: tgChatId || undefined,
+                      topN: 5,
+                    }),
+                  });
+                  const data = await resp.json();
+                  if (data.sent) show(`✅ 已发送 ${data.chunks_sent} 条消息`);
+                  else show(`✗ ${data.error || data.reason || '失败'}`);
+                } catch (e: any) {
+                  show(`✗ ${e?.message || '失败'}`);
+                }
+              }}
+              className="rounded bg-bg-card border border-border px-3 py-1.5 text-xs text-text-dim"
+            >
+              🚀 立即生成并推送
+            </button>
+          </div>
+          <div className="mt-2 text-[10px] text-text-muted">
+            提示：① 找 @BotFather 创建 bot 拿 token  ②  和 bot 说 hi  ③  从 @userinfobot 拿 chat_id  ④ 在 Vercel env 加 TELEGRAM_BOT_TOKEN
+          </div>
         </div>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={emailNotif} onChange={(e) => setEmailNotif(e.target.checked)} />
-          每日邮件推送
+          每日邮件推送（待 v0.6 接入 Resend）
         </label>
       </div>
 
