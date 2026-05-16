@@ -160,25 +160,28 @@ function AITab({ ticker }: { ticker: string }) {
       <div className="py-10 text-center text-sm text-text-dim">
         ⏳ AI 委员会开会中…<br />
         <span className="text-[11px] text-text-muted">
-          9 位投资大师并发推理（Claude Sonnet 4.6） · 约需 8-15 秒
+          9 位投资大师并发推理 · 约需 10-25 秒
         </span>
       </div>
     );
   }
 
   if (error || perspectives.length === 0) {
-    const noKey = error?.toLowerCase().includes('anthropic_api_key');
+    const noKey = error?.toLowerCase().includes('no llm provider');
     return (
       <div className="py-10 text-center text-sm text-text-dim">
         {noKey ? (
           <>
-            🔑 ANTHROPIC_API_KEY 未配置<br />
+            🔑 LLM 未配置 — 推荐 DeepSeek（OpenAI 兼容，便宜 8-10×）<br />
             <span className="text-[11px] text-text-muted">
-              在 Vercel 添加该环境变量后会自动启用 9 位 AI 委员视角辩论
+              在 Vercel 添加 DEEPSEEK_API_KEY 后自动启用 9 位 AI 委员视角辩论
             </span>
             <pre className="mx-auto mt-3 inline-block rounded bg-bg-card p-2 text-left text-[10px]">
-              vercel env add ANTHROPIC_API_KEY production
+              vercel env add DEEPSEEK_API_KEY production{'\n'}vercel --prod
             </pre>
+            <div className="mt-2 text-[10px] text-text-muted">
+              或设 ANTHROPIC_API_KEY 用 Claude；同时设两个时 LLM_PROVIDER=deepseek|anthropic 可锁定
+            </div>
           </>
         ) : (
           <>⚠ {error || '未生成视角'}</>

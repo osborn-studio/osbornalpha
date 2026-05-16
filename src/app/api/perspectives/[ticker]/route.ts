@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { isAnthropicConfigured, anthropicChat, extractJson } from '@/lib/data/sources/anthropic';
+import { chat, extractJson, isLLMConfigured, getActiveProvider } from '@/lib/data/sources/llm';
 import { fetchEastmoneyQuote } from '@/lib/data/sources/eastmoney';
 import {
   isTushareConfigured,
@@ -10,7 +10,8 @@ import {
 import { PERSONAS, buildUserMessage, type StockContext, type PerspectiveResult } from '@/lib/data/personas';
 
 export const dynamic = 'force-dynamic';
-export const revalidate = 86400;  // cache 24h per ticker
+export const revalidate = 86400;
+export const maxDuration = 60;  // Vercel function timeout
 
 interface Ctx { params: Promise<{ ticker: string }> }
 
@@ -20,16 +21,18 @@ export async function GET(req: Request, { params }: Ctx) {
   const url = new URL(req.url);
   const personaFilter = url.searchParams.get('personas')?.split(',').filter(Boolean);
 
-  if (!isAnthropicConfigured()) {
+  if (!isLLMConfigured()) {
     return NextResponse.json({
       source: 'no-key',
       ticker,
-      error: 'ANTHROPIC_API_KEY not configured — add to Vercel env vars to enable AI committee',
+      error: 'No LLM provider configured — set DEEPSEEK_API_KEY (preferred) or ANTHROPIC_API_KEY in Vercel env vars',
       perspectives: [],
     }, { status: 200 });
   }
 
-  // 1. Gather context: quote + financials
+  const provider = getActiveProvider();
+
+  // 1. Gather context
   const quote = await fetchEastmoneyQuote(ticker).catch(() => null);
   if (!quote) {
     return NextResponse.json(
@@ -39,8 +42,8 @@ export async function GET(req: Request, { params }: Ctx) {
   }
 
   const isA = /\.(SH|SZ|BJ)$/i.test(ticker);
-  let dailyBasic = null;
-  let finaIndicator = null;
+  let dailyBasic: any = null;
+  let finaIndicator: any = null;
   let income: any[] = [];
 
   if (isA && isTushareConfigured()) {
@@ -51,10 +54,9 @@ export async function GET(req: Request, { params }: Ctx) {
     ]);
   }
 
-  // Build financial summary string for prompt
   let financialSummary: string | undefined;
   if (income.length > 0) {
-    const reversed = [...income].reverse(); // oldest first
+    const reversed = [...income].reverse();
     const rows = reversed.map((r) =>
       `${r.end_date.slice(0,4)}: 营收 ${(r.revenue/1e8).toFixed(0)}亿, 净利 ${(r.n_income/1e8).toFixed(0)}亿`
     );
@@ -78,7 +80,7 @@ export async function GET(req: Request, { params }: Ctx) {
     financial_summary: financialSummary,
   };
 
-  // 2. Run all 9 personas in parallel
+  // 2. Run all 9 personas in parallel through the unified LLM facade
   const enabled = personaFilter && personaFilter.length > 0
     ? PERSONAS.filter((p) => personaFilter.includes(p.id))
     : PERSONAS;
@@ -87,24 +89,27 @@ export async function GET(req: Request, { params }: Ctx) {
   const startedAt = Date.now();
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
+  let totalCost = 0;
+  let usedModel = '';
 
   const settled = await Promise.allSettled(
     enabled.map(async (p): Promise<PerspectiveResult | null> => {
-      const resp = await anthropicChat({
-        model: 'claude-sonnet-4-6',
+      const resp = await chat({
         system: p.prompt,
         messages: [{ role: 'user', content: userMessage }],
         max_tokens: 400,
         temperature: 0.7,
-        timeoutMs: 25_000,
+        timeoutMs: 30_000,
+        responseJson: true,  // DeepSeek honors this; Anthropic ignores gracefully
       });
       totalInputTokens += resp.usage.input_tokens;
       totalOutputTokens += resp.usage.output_tokens;
+      totalCost += resp.est_cost_usd;
+      usedModel = resp.model;
 
       const parsed = extractJson(resp.content);
       if (!parsed) return null;
 
-      // Normalize
       const stance = (['bullish', 'neutral', 'bearish'] as const).includes(parsed.stance)
         ? parsed.stance
         : 'neutral';
@@ -124,24 +129,29 @@ export async function GET(req: Request, { params }: Ctx) {
   );
 
   const perspectives = settled
-    .map((s, i) => (s.status === 'fulfilled' ? s.value : null))
+    .map((s) => (s.status === 'fulfilled' ? s.value : null))
     .filter((p): p is PerspectiveResult => p !== null);
 
-  // Estimate cost (sonnet pricing)
-  const estCost = (totalInputTokens / 1e6) * 3 + (totalOutputTokens / 1e6) * 15;
+  // Collect any error messages for debugging
+  const failures = settled
+    .map((s, i) => (s.status === 'rejected' ? { persona: enabled[i].id, err: (s.reason as any)?.message || String(s.reason) } : null))
+    .filter(Boolean);
 
   return NextResponse.json({
-    source: 'anthropic+eastmoney' + (isA && isTushareConfigured() ? '+tushare' : ''),
+    source: `${provider}+eastmoney` + (isA && isTushareConfigured() ? '+tushare' : ''),
     ticker,
     context: ctx,
     perspectives,
     meta: {
       generated_at: new Date().toISOString(),
       duration_ms: Date.now() - startedAt,
+      provider,
+      model: usedModel,
       personas_attempted: enabled.length,
       personas_succeeded: perspectives.length,
       tokens: { input: totalInputTokens, output: totalOutputTokens },
-      est_cost_usd: Number(estCost.toFixed(4)),
+      est_cost_usd: Number(totalCost.toFixed(5)),
+      failures: failures.length > 0 ? failures.slice(0, 3) : undefined,
     },
   });
 }
