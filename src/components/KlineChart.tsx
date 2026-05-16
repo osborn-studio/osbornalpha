@@ -124,12 +124,19 @@ export function KlineChart({ ticker, basePrice }: { ticker: string; basePrice: n
 
   return (
     <div>
-      <div ref={containerRef} className="h-[380px] w-full rounded-md bg-bg-card">
+      <div className="relative h-[380px] w-full">
+        {/* Loading overlay as sibling — keeps containerRef a leaf React node
+            so lightweight-charts can freely mutate its children without
+            confusing React's reconciliation (fixes removeChild NotFoundError). */}
         {loading && bars.length === 0 && (
-          <div className="flex h-full items-center justify-center text-sm text-text-dim">
+          <div
+            className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-md bg-bg-card text-sm text-text-dim"
+            aria-live="polite"
+          >
             ⏳ 加载 K 线...
           </div>
         )}
+        <div ref={containerRef} className="h-[380px] w-full rounded-md bg-bg-card" />
       </div>
       <div className="mt-2 flex items-center justify-between text-[11px] text-text-muted">
         <span>
