@@ -44,7 +44,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <ToastProvider>
           <TopBar />
-          <main className="mx-auto w-full max-w-[1200px] p-4">{children}</main>
+          <main className="mx-auto w-full max-w-[1600px] p-3 lg:p-4">{children}</main>
           <TabBar />
         </ToastProvider>
       </body>
