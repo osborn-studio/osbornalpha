@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 const TABS = [
   { id: 'home',  icon: '🏠', label: '首页', href: '/' },
   { id: 'watch', icon: '📋', label: '股票池', href: '/watchlist' },
+  { id: 'backtest', icon: '🧪', label: 'Backtest', href: '/backtest' },
   { id: 'briefs', icon: '📰', label: '简报', href: '/briefs' },
   { id: 'settings', icon: '⚙️', label: '设置', href: '/settings' },
 ];
