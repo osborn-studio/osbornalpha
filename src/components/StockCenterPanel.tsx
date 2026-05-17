@@ -6,6 +6,7 @@ import {
   useQuote, useFinancials, useHolders, usePerspectives,
   type YearlyFinancial, type HolderRow, type PerspectiveRow,
 } from '@/lib/hooks/useQuote';
+import { useSignals, type SignalEvent } from '@/lib/hooks/useSignals';
 import { formatPrice, formatPct, formatChange, formatVolume, changeClass, marketLabel, stars } from '@/lib/utils';
 import { KlineChart } from './KlineChart';
 import { PerspectiveCard } from './PerspectiveCard';
@@ -105,7 +106,7 @@ export function StockCenterPanel({ ticker }: { ticker: string }) {
         {tab === 'ai' && <AITab ticker={ticker} />}
         {tab === 'fundamentals' && <FundamentalsTab ticker={ticker} />}
         {tab === 'news' && <NewsTab stock={stock} />}
-        {tab === 'signals' && <SignalsTab stock={stock} />}
+        {tab === 'signals' && <SignalsTab ticker={stock.ticker} />}
         {tab === 'holdings' && <HoldingsTab ticker={ticker} market={stock.market} />}
       </div>
     </div>
@@ -379,15 +380,114 @@ function NewsTab({ stock }: { stock: MergedStock }) {
   );
 }
 
-// ─── Signals Tab ───
-function SignalsTab({ stock }: { stock: MergedStock }) {
+// ─── Signals Tab ─── (real backtest from /api/signals/[ticker])
+function SignalsTab({ ticker }: { ticker: string }) {
+  const { events, stats, loading, error, source } = useSignals(ticker, 60);
+
+  if (loading) return <div className="py-10 text-center text-sm text-text-dim">⏳ 跑 60 天 backtest...</div>;
+  if (error) return <div className="py-6 text-center text-sm text-warn">⚠ {error}</div>;
+  if (!stats || events.length === 0) {
+    return (
+      <div className="py-6 text-center text-sm text-text-dim">
+        过去 60 天该标的没有触发任何 Sentinel 信号<br />
+        <span className="text-[10px] text-text-muted">无大涨跌 / 异常量 / RSI 极端 / 连阳连阴</span>
+      </div>
+    );
+  }
+
+  const winRatePct = (stats.hit_rate_5d * 100).toFixed(0);
+  const decided = stats.hits_5d + stats.misses_5d;
+
   return (
-    <div className="py-6 text-center text-sm text-text-dim">
-      该标的近 90 天 Sentinel 信号回看待开发<br />
-      <span className="text-[10px] text-text-muted">
-        将基于历史 brief + 后续 N 天股价表现自动 backtest
-      </span>
+    <div>
+      {/* Headline stats */}
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+        <StatCard label="触发信号" value={String(stats.total_signals)} hint={`bull ${stats.bull_signals} · bear ${stats.bear_signals} · neutral ${stats.neutral_signals}`} />
+        <StatCard label="命中率 5d" value={`${winRatePct}%`} hint={`${stats.hits_5d}/${decided} 命中`} accent={stats.hit_rate_5d >= 0.6 ? 'good' : stats.hit_rate_5d >= 0.5 ? 'neutral' : 'bad'} />
+        <StatCard label="平均 5d 收益" value={`${stats.avg_forward_5d_pct >= 0 ? '+' : ''}${stats.avg_forward_5d_pct.toFixed(2)}%`} accent={stats.avg_forward_5d_pct >= 0 ? 'good' : 'bad'} />
+        <StatCard label="平均 20d 收益" value={`${stats.avg_forward_20d_pct >= 0 ? '+' : ''}${stats.avg_forward_20d_pct.toFixed(2)}%`} accent={stats.avg_forward_20d_pct >= 0 ? 'good' : 'bad'} />
+        <StatCard label="决断/中性" value={`${decided}/${stats.flats_5d}`} hint="hit+miss / flat" />
+      </div>
+
+      {/* Best / worst */}
+      {(stats.best || stats.worst) && (
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {stats.best && (
+            <div className="rounded border border-up/30 bg-up/10 p-2 text-[11px]">
+              <div className="font-semibold text-up">🏆 最佳信号 {stats.best.date}</div>
+              <div className="mt-1 text-text-dim">触发：{stats.best.triggers.join(' · ')}</div>
+              <div className="mt-0.5 font-mono text-up">5 日后：+{stats.best.forward_5d_pct.toFixed(2)}%</div>
+            </div>
+          )}
+          {stats.worst && (
+            <div className="rounded border border-down/30 bg-down/10 p-2 text-[11px]">
+              <div className="font-semibold text-down">💥 最差信号 {stats.worst.date}</div>
+              <div className="mt-1 text-text-dim">触发：{stats.worst.triggers.join(' · ')}</div>
+              <div className="mt-0.5 font-mono text-down">5 日后：{stats.worst.forward_5d_pct.toFixed(2)}%</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Timeline */}
+      <div className="mt-3">
+        <div className="mb-2 text-[11px] font-semibold text-text-dim">📜 信号时间轴（最近 → 最早）</div>
+        <div className="max-h-[400px] overflow-y-auto">
+          <table className="w-full text-[11px]">
+            <thead className="sticky top-0 bg-bg-elevated text-text-muted">
+              <tr>
+                <th className="py-1 text-left">日期</th>
+                <th className="text-left">方向</th>
+                <th className="text-left">触发</th>
+                <th className="text-right">1d</th>
+                <th className="text-right">5d</th>
+                <th className="text-right">20d</th>
+                <th className="text-right">结果</th>
+              </tr>
+            </thead>
+            <tbody>
+              {events.slice().reverse().map((e, i) => <SignalRow key={i} ev={e} />)}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="mt-3 text-[10px] text-text-muted">
+        backtest 算法：复盘 60 天 K 线，对每日规则触发（大涨跌 / 量比 / RSI / 连阳连阴）打 bull/bear 标签，
+        与 5 日后实际涨跌对比；source: {source}
+      </div>
     </div>
+  );
+}
+
+function StatCard({ label, value, hint, accent }: { label: string; value: string; hint?: string; accent?: 'good' | 'bad' | 'neutral' }) {
+  const color = accent === 'good' ? 'text-up' : accent === 'bad' ? 'text-down' : '';
+  return (
+    <div className="rounded bg-bg-card p-2">
+      <div className="text-[10px] text-text-dim">{label}</div>
+      <div className={`font-bold tabular-nums ${color}`}>{value}</div>
+      {hint && <div className="text-[9px] text-text-muted">{hint}</div>}
+    </div>
+  );
+}
+
+function SignalRow({ ev }: { ev: SignalEvent }) {
+  const biasIcon = ev.bias === 'bull' ? '🟢' : ev.bias === 'bear' ? '🔴' : '🟡';
+  const hitIcon = ev.hit_5d === 'hit' ? '✅' : ev.hit_5d === 'miss' ? '❌' : ev.hit_5d === 'flat' ? '➖' : '⏳';
+  const cls = (v: number | null) => v === null ? '' : v > 0 ? 'text-up' : v < 0 ? 'text-down' : '';
+  const fmt = (v: number | null) => v === null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+  return (
+    <tr className="border-t border-border">
+      <td className="py-1 pr-2 font-mono">{ev.date}</td>
+      <td className="pr-2">{biasIcon}</td>
+      <td className="pr-2 truncate" title={ev.triggers.map((t) => t.desc).join(' · ')}>
+        {ev.triggers.map((t) => t.desc).join(' · ').slice(0, 38)}
+      </td>
+      <td className={`pr-2 text-right tabular-nums ${cls(ev.forward_1d_pct)}`}>{fmt(ev.forward_1d_pct)}</td>
+      <td className={`pr-2 text-right tabular-nums font-semibold ${cls(ev.forward_5d_pct)}`}>{fmt(ev.forward_5d_pct)}</td>
+      <td className={`pr-2 text-right tabular-nums ${cls(ev.forward_20d_pct)}`}>{fmt(ev.forward_20d_pct)}</td>
+      <td className="text-right">{hitIcon}</td>
+    </tr>
   );
 }
 
