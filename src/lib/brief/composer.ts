@@ -20,6 +20,35 @@ import {
 import { PERSONAS, buildUserMessage, type StockContext, type PerspectiveResult } from '@/lib/data/personas';
 import { chat, extractJson, isLLMConfigured } from '@/lib/data/sources/llm';
 
+// ─── Morning-note guardrails (adapted from anthropics/financial-services
+//     plugins/agent-plugins/earnings-reviewer/skills/morning-note/SKILL.md,
+//     Apache-2.0) ─────────────────────────────────────────────────────────
+const MORNING_NOTE_DOCTRINE = `
+你是 Stock Monitor 的早间研究主管。按机构 morning note 标准写作，规则如下：
+
+【数据来源 hierarchy】
+- 优先 MCP / 已验证数据（Tushare、东方财富、FRED、EDGAR）
+- 严禁把网络搜索作为主要数据源；任何来源不明的数字标记为 [UNSOURCED]
+- 若数据缺失，宁可说"暂无数据"，不要编造
+
+【时效】
+- "今天是 \${TODAY}"；所有数据必须 ≤ 90 天内
+- 引用任何价格 / 财报数字时附上数据时间戳（如 "截至 16:00 CST"）
+
+【风格】
+- Be opinionated：不写观点的 morning note 没有价值
+- Lead with the headline：不要把最重要的事埋在第三屏
+- "No news is a valid morning note"：如果今天确实没事，明说"今日无重大事件，维持持仓"
+- 区分 actionable（财报、并购、评级变动）和 noise（小幅波动、无关分析师评论）
+- 2 分钟可读完：1 页就够
+
+【合规】
+- 严禁使用"建议买入/卖出/必涨/明天会涨"等措辞
+- 替换为"信号偏多/偏空/中性"、"注意力优先级"
+- 末尾必须含免责声明：本简报仅作决策辅助，不构成投资建议
+`.trim();
+
+
 // ─── Default demo watchlist (used when no user-specific list passed) ───
 export const DEFAULT_WATCHLIST: string[] = [
   '600519.SH',  // 贵州茅台
@@ -189,12 +218,19 @@ export interface DailyBrief {
   top: BriefStockBlock[];
   overall_confidence: number;
   overall_label: '中性' | '偏多' | '偏空' | '偏多偏强' | '偏空偏强';
+  /** LLM-generated headline ("Top Call") — 1-2 sentences from morning-note doctrine */
+  top_call?: { headline: string; rationale: string; ticker: string };
+  /** Trade ideas with risk callouts; only emitted if conviction ≥ 7 */
+  trade_ideas?: Array<{ ticker: string; name: string; bias: 'bull' | 'bear'; thesis: string; risk: string; conviction: number }>;
   markdown: string;
   meta: {
     duration_ms: number;
     tokens?: { input: number; output: number };
     est_cost_usd?: number;
     failures?: number;
+    /** Which provider+model generated the brief (deepseek-chat / claude-sonnet etc) */
+    provider?: string;
+    model?: string;
   };
 }
 
@@ -217,6 +253,92 @@ function applyCompliance(text: string): string {
     out = out.replace(re, sub);
   }
   return out;
+}
+
+/**
+ * LLM-generated headline for #1 priority stock — the "Top Call" in
+ * institutional morning notes. Synthesizes signals + perspectives into a
+ * single opinionated 2-sentence headline.
+ */
+async function generateTopCall(top: BriefStockBlock): Promise<DailyBrief['top_call'] | null> {
+  if (!isLLMConfigured()) return null;
+  if (top.perspectives.length === 0) return null;
+
+  const today = new Date().toISOString().slice(0, 10);
+  const triggers = top.triggers.map((t) => t.desc).join(' · ') || '无显著触发';
+  const bullish = top.perspectives.filter((p) => p.stance === 'bullish').length;
+  const bearish = top.perspectives.filter((p) => p.stance === 'bearish').length;
+  const repBull = top.perspectives.filter((p) => p.stance === 'bullish').sort((a, b) => b.confidence - a.confidence)[0];
+  const repBear = top.perspectives.filter((p) => p.stance === 'bearish').sort((a, b) => b.confidence - a.confidence)[0];
+
+  const prompt = `今天是 ${today}。基于以下数据为机构 morning note 写一个 "Top Call" 标题。
+
+【#1 注意力标的】
+${top.name} (${top.ticker}) · ${top.currency}${top.price} ${top.change_pct >= 0 ? '+' : ''}${top.change_pct.toFixed(2)}%
+触发：${triggers}
+${top.pe_ttm != null ? `PE TTM ${top.pe_ttm.toFixed(1)} · ` : ''}${top.pb != null ? `PB ${top.pb.toFixed(2)} · ` : ''}${top.roe != null ? `ROE ${top.roe.toFixed(1)}%` : ''}
+
+【AI 委员会观点】共识 ${top.consensus.toFixed(1)}/10 · ${bullish} 多 / ${bearish} 空
+${repBull ? `多方代表（${repBull.name}）：${repBull.summary}` : ''}
+${repBear ? `空方代表（${repBear.name}）：${repBear.summary}` : ''}
+
+输出严格 JSON:
+{"headline": "<≤30字 opinionated 标题，机构 morning note 口吻>",
+ "rationale": "<≤80字 一句话理由，引用具体数据点>"}
+
+注意：
+- 必须有观点（不是中立总结）
+- 用"信号偏多/偏空/中性"，不用"建议买入/卖出"
+- 引用至少 1 个具体数字`;
+
+  try {
+    const resp = await chat({
+      system: MORNING_NOTE_DOCTRINE,
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 300,
+      temperature: 0.5,
+      timeoutMs: 20_000,
+      responseJson: true,
+    });
+    const parsed = extractJson(resp.content);
+    if (!parsed?.headline) return null;
+    return {
+      headline: String(parsed.headline).slice(0, 80),
+      rationale: String(parsed.rationale || '').slice(0, 200),
+      ticker: top.ticker,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Derive trade ideas from high-conviction perspectives (≥ 7/10).
+ * Adapted from morning-note "Trade Ideas" section with explicit risk callout.
+ */
+function deriveTradeIdeas(blocks: BriefStockBlock[]): DailyBrief['trade_ideas'] {
+  const ideas: NonNullable<DailyBrief['trade_ideas']> = [];
+  for (const b of blocks) {
+    if (b.perspectives.length === 0) continue;
+    // Find highest-conviction directional perspective
+    const bull = b.perspectives.filter((p) => p.stance === 'bullish').sort((a, b) => b.confidence - a.confidence)[0];
+    const bear = b.perspectives.filter((p) => p.stance === 'bearish').sort((a, b) => b.confidence - a.confidence)[0];
+    const top = (bull?.confidence ?? 0) >= (bear?.confidence ?? 0) ? bull : bear;
+    if (!top || top.confidence < 7) continue;
+    // Find an opposing view to phrase the "risk"
+    const opposing = top.stance === 'bullish' ? bear : bull;
+    ideas.push({
+      ticker: b.ticker,
+      name: b.name,
+      bias: top.stance === 'bullish' ? 'bull' : 'bear',
+      thesis: `${top.name}: ${top.summary.slice(0, 100)}`,
+      risk: opposing
+        ? `${opposing.name}: ${opposing.summary.slice(0, 80)}`
+        : '若关键数据点变化（如财报不及预期、政策变动），需重新评估',
+      conviction: top.confidence,
+    });
+  }
+  return ideas.length > 0 ? ideas : undefined;
 }
 
 export async function generateDailyBrief(
@@ -271,9 +393,23 @@ export async function generateDailyBrief(
     overall >= 5 ? '中性' :
     overall >= 4 ? '偏空' : '偏空偏强';
 
-  // 5. Compose markdown (deterministic template — no LLM needed for the wrapper)
+  // 5a. Generate Top Call (LLM headline for #1 priority)
+  const topCall = (!opts.skipLLM && blocks.length > 0) ? await generateTopCall(blocks[0]) : null;
+
+  // 5b. Derive trade ideas from high-conviction perspectives
+  const tradeIdeas = deriveTradeIdeas(blocks);
+
+  // 6. Compose markdown (deterministic template — uses LLM output above)
   const date = new Date().toISOString().slice(0, 10);
-  const md = composeMarkdown({ date, blocks, overall, overall_label, watchlist_count: watchlist.length });
+  const md = composeMarkdown({
+    date,
+    blocks,
+    overall,
+    overall_label,
+    watchlist_count: watchlist.length,
+    topCall: topCall || undefined,
+    tradeIdeas,
+  });
   const sanitized = applyCompliance(md);
 
   return {
@@ -283,6 +419,8 @@ export async function generateDailyBrief(
     top: blocks,
     overall_confidence: overall,
     overall_label,
+    top_call: topCall || undefined,
+    trade_ideas: tradeIdeas,
     markdown: sanitized,
     meta: {
       duration_ms: Date.now() - startedAt,
@@ -297,60 +435,112 @@ interface ComposeArgs {
   overall: number;
   overall_label: string;
   watchlist_count: number;
+  topCall?: DailyBrief['top_call'];
+  tradeIdeas?: DailyBrief['trade_ideas'];
 }
 
+/**
+ * Compose morning-note style markdown. Section order (institutional standard):
+ *   1. Header (date + analyst + macro context)
+ *   2. **Top Call** — the one thing readers need to see first
+ *   3. Overnight/Pre-Market Developments — Top 5 stocks with one-line take
+ *   4. **Trade Ideas** (only if conviction ≥ 7) with explicit risk
+ *   5. Disclaimer
+ */
 function composeMarkdown(a: ComposeArgs): string {
   const lines: string[] = [];
   const star = (n: number) => '★'.repeat(Math.max(0, Math.min(5, n))) + '☆'.repeat(Math.max(0, 5 - n));
 
-  lines.push(`*Sentinel · ${a.date} 早间简报*`);
+  // ─── 1. Header ──────────────────────────────────────────────
+  lines.push(`*Sentinel Morning Note · ${a.date}*`);
+  lines.push(`_由 Stock Monitor AI 委员会编辑 · 截至生成时刻数据_`);
   lines.push('');
-  lines.push(`📊 AI 委员会信心：*${a.overall.toFixed(1)} / 10* — ${a.overall_label}`);
-  lines.push(`📋 股票池：${a.watchlist_count} 只 · Top ${a.blocks.length} 进入注意力优先级`);
+  lines.push(`📊 委员会信心：*${a.overall.toFixed(1)} / 10* — ${a.overall_label}`);
+  lines.push(`📋 ${a.watchlist_count} 只股票池 · Top ${a.blocks.length} 进入注意力优先级`);
   lines.push('');
-  lines.push('────────────────');
 
-  for (let i = 0; i < a.blocks.length; i++) {
-    const b = a.blocks[i];
-    const stars = star(Math.round(Math.min(b.consensus, 10) / 2));
+  // ─── 2. Top Call ────────────────────────────────────────────
+  if (a.topCall) {
+    lines.push('────────────────');
     lines.push('');
-    lines.push(`*#${i + 1} ${b.name}* (${b.ticker})  ${stars}  共识 ${b.consensus.toFixed(1)}/10`);
-    lines.push(`💰 ${b.currency}${b.price.toFixed(2)}  ${b.change_pct >= 0 ? '+' : ''}${b.change_pct.toFixed(2)}%`);
-
-    // Triggers
-    if (b.triggers.length > 0) {
-      lines.push(`📍 触发：${b.triggers.map((t) => t.desc).join(' · ')}`);
+    lines.push(`🎯 *Top Call · ${a.topCall.headline}*`);
+    if (a.topCall.rationale) lines.push(a.topCall.rationale);
+    const topBlock = a.blocks.find((b) => b.ticker === a.topCall!.ticker);
+    if (topBlock) {
+      lines.push(`  ↗ ${topBlock.name} (${topBlock.ticker}) ${topBlock.currency}${topBlock.price.toFixed(2)} ${topBlock.change_pct >= 0 ? '+' : ''}${topBlock.change_pct.toFixed(2)}%`);
     }
+    lines.push('');
+  }
 
-    // Key fundamentals
-    const funda: string[] = [];
-    if (b.pe_ttm != null) funda.push(`PE ${b.pe_ttm.toFixed(1)}`);
-    if (b.pb != null) funda.push(`PB ${b.pb.toFixed(2)}`);
-    if (b.roe != null) funda.push(`ROE ${b.roe.toFixed(1)}%`);
-    if (funda.length) lines.push(`📐 ${funda.join(' · ')}`);
+  // ─── 3. Overnight / Pre-Market Developments ─────────────────
+  lines.push('────────────────');
+  lines.push('');
+  lines.push('📰 *Overnight & Pre-Market Developments*');
+  lines.push('');
 
-    // AI committee summary — list bull / neutral / bear counts and 1 representative quote each
-    if (b.perspectives.length > 0) {
-      const bulls = b.perspectives.filter((p) => p.stance === 'bullish');
-      const neutrals = b.perspectives.filter((p) => p.stance === 'neutral');
-      const bears = b.perspectives.filter((p) => p.stance === 'bearish');
-      lines.push(`🤖 ${bulls.length} 多 / ${neutrals.length} 中 / ${bears.length} 空`);
+  if (a.blocks.length === 0) {
+    lines.push('_今日无重大事件，维持持仓。（"No news is a valid morning note."）_');
+    lines.push('');
+  } else {
+    for (let i = 0; i < a.blocks.length; i++) {
+      const b = a.blocks[i];
+      const stars = star(Math.round(Math.min(b.consensus, 10) / 2));
+      lines.push(`*#${i + 1} ${b.name}* (${b.ticker})  ${stars}  共识 ${b.consensus.toFixed(1)}/10`);
+      lines.push(`💰 ${b.currency}${b.price.toFixed(2)}  ${b.change_pct >= 0 ? '+' : ''}${b.change_pct.toFixed(2)}%`);
 
-      // Pick representative views — highest confidence of each side
-      const repBull = bulls.sort((a, b) => b.confidence - a.confidence)[0];
-      const repBear = bears.sort((a, b) => b.confidence - a.confidence)[0];
-      if (repBull) lines.push(`  🟢 ${repBull.name}：${repBull.summary.slice(0, 90)}`);
-      if (repBear) lines.push(`  🔴 ${repBear.name}：${repBear.summary.slice(0, 90)}`);
+      if (b.triggers.length > 0) {
+        lines.push(`📍 ${b.triggers.map((t) => t.desc).join(' · ')}`);
+      }
+
+      const funda: string[] = [];
+      if (b.pe_ttm != null) funda.push(`PE ${b.pe_ttm.toFixed(1)}`);
+      if (b.pb != null) funda.push(`PB ${b.pb.toFixed(2)}`);
+      if (b.roe != null) funda.push(`ROE ${b.roe.toFixed(1)}%`);
+      if (funda.length) lines.push(`📐 ${funda.join(' · ')}`);
+
+      if (b.perspectives.length > 0) {
+        const bulls = b.perspectives.filter((p) => p.stance === 'bullish');
+        const neutrals = b.perspectives.filter((p) => p.stance === 'neutral');
+        const bears = b.perspectives.filter((p) => p.stance === 'bearish');
+        lines.push(`🤖 ${bulls.length} 多 / ${neutrals.length} 中 / ${bears.length} 空`);
+
+        const repBull = bulls.sort((a, b) => b.confidence - a.confidence)[0];
+        const repBear = bears.sort((a, b) => b.confidence - a.confidence)[0];
+        if (repBull) lines.push(`  🟢 ${repBull.name}：${repBull.summary.slice(0, 90)}`);
+        if (repBear) lines.push(`  🔴 ${repBear.name}：${repBear.summary.slice(0, 90)}`);
+      }
+      lines.push('');
     }
   }
 
-  lines.push('');
+  // ─── 4. Trade Ideas (high-conviction only) ──────────────────
+  if (a.tradeIdeas && a.tradeIdeas.length > 0) {
+    lines.push('────────────────');
+    lines.push('');
+    lines.push('💡 *Trade Ideas* (置信 ≥ 7/10)');
+    lines.push('');
+    for (const idea of a.tradeIdeas) {
+      const biasIcon = idea.bias === 'bull' ? '📈 偏多' : '📉 偏空';
+      lines.push(`*${biasIcon}* ${idea.name} (${idea.ticker}) · 置信 ${idea.conviction.toFixed(1)}/10`);
+      lines.push(`  论点：${idea.thesis}`);
+      lines.push(`  ⚠️ 风险：${idea.risk}`);
+      lines.push('');
+    }
+  } else {
+    lines.push('────────────────');
+    lines.push('');
+    lines.push('💡 *Trade Ideas* — _今日无高置信（≥ 7/10）信号，观望为主_');
+    lines.push('');
+  }
+
+  // ─── 5. Footer ──────────────────────────────────────────────
   lines.push('────────────────');
   lines.push('');
-  lines.push('💼 完整简报 + K 线 + 财报 + 股东持仓：');
+  lines.push('🔗 完整简报 / K 线 / 财报 / 股东持仓 / Backtest 排行榜：');
   lines.push('https://stock-monitor-nu.vercel.app/');
   lines.push('');
   lines.push('_本内容由 AI 自动生成，仅作为决策辅助参考，不构成任何投资建议。_');
+  lines.push('_数据源：东方财富（A/H/US 报价）· Tushare Pro（A 股财报）· DeepSeek V4 Flash（AI 委员会）_');
 
   return lines.join('\n');
 }

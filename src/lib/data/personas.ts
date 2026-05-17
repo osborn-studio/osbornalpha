@@ -228,7 +228,11 @@ export interface StockContext {
 }
 
 export function buildUserMessage(ctx: StockContext): string {
+  const today = new Date().toISOString().slice(0, 10);
   const lines: string[] = [];
+  lines.push(`【日期】今天是 ${today}。所有数据须为 ≤ 90 天内的最新值；不要引用训练数据中的过期信息。`);
+  lines.push(`【数据来源】仅可引用以下传入的字段（来自 Tushare/东方财富/FRED）。严禁假设网络上的其他数据。`);
+  lines.push('');
   lines.push(`标的：${ctx.name} (${ctx.ticker}) · ${ctx.market}`);
   lines.push(`当前价：${ctx.currency}${ctx.price} · 今日 ${ctx.change_pct >= 0 ? '+' : ''}${ctx.change_pct.toFixed(2)}%`);
   if (ctx.market_cap_label) lines.push(`市值：${ctx.market_cap_label}`);
