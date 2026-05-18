@@ -8,6 +8,7 @@ import { formatPrice, formatPct, changeClass, marketLabel, classifyMarket } from
 import { Disclaimer } from '@/components/Disclaimer';
 import { useToast } from '@/components/Toast';
 import { useBatchQuotes, type LiveQuote } from '@/lib/hooks/useQuote';
+import { normalizeWindTicker } from '@/lib/stocks/wind-normalize';
 import { getBrowserSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import type { Market } from '@/lib/supabase/database.types';
 
@@ -627,8 +628,10 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
     }
     const q = query.trim();
     if (!q) return;
-    if (confirm(`未在数据库中找到 "${q}"。\n仍然加入到「${groupName}」？\n（建议先检查拼写或试试英文代码）`)) {
-      onAdd({ t: q.toUpperCase(), n: q, py: '', m: classifyMarket(q.toUpperCase()) as Market });
+    const canonical = normalizeWindTicker(q) || q.toUpperCase();
+    const note = canonical !== q.toUpperCase() ? `\n（已规范化为 ${canonical}）` : '';
+    if (confirm(`未在数据库中找到 "${q}"。${note}\n仍然加入到「${groupName}」？\n（建议先检查拼写或试试英文代码）`)) {
+      onAdd({ t: canonical, n: q, py: '', m: classifyMarket(canonical) as Market });
       setQuery('');
       setResults([]);
     }
@@ -743,17 +746,21 @@ function parseTickerInput(raw: string): string[] {
   const looksLikeTicker = (s: string) => tickerRegex.test(s.toUpperCase());
 
   // Drop the first cell if it's clearly a header label, not a ticker.
+  // Header check runs against the *normalized* first cell, so a Wind code
+  // like "AAPL.O" doesn't get mistaken for a header.
   const out: string[] = [];
   for (let i = 0; i < cells.length; i++) {
     const cell = cells[i];
-    if (i === 0 && !looksLikeTicker(cell)) continue; // skip header
+    if (i === 0 && !looksLikeTicker(normalizeWindTicker(cell))) continue; // skip header
     // Final whitespace split (handles "600519.SH AAPL TSLA" on one line)
     for (const tok of cell.split(/\s+/)) {
       const upper = tok.trim().toUpperCase();
       if (!upper) continue;
+      // Normalize Wind / Sina / Yahoo / Snowball dialects to canonical form
+      const canonical = normalizeWindTicker(upper);
       // Be permissive on import; the user has signalled intent. Only reject
       // pure garbage (no alphanumeric).
-      if (/[A-Z0-9]/.test(upper)) out.push(upper);
+      if (/[A-Z0-9]/.test(canonical)) out.push(canonical);
     }
   }
   return out;
@@ -872,7 +879,7 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder={`600519.SH\n002594.SZ\nAAPL\nNVDA\n00700.HK\n\n或：600519.SH, 002594.SZ, AAPL`}
+            placeholder={`600519.SH\n002594.SZ\nAAPL.O      ← 自动识别 Wind 后缀\nsh000333    ← Sina 前缀也能用\n00700.HK\n\n或：600519.SH, 002594.SZ, AAPL`}
             rows={6}
             className="w-full font-mono text-xs"
             style={{ resize: 'vertical' }}
@@ -895,6 +902,11 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
           )}
           <div className="mt-1 text-[10px] text-text-muted">
             支持 CSV / TXT / XLSX / XLS / XLSM。自动取第一列，带表头会跳过。Excel 多个工作表会全部读取。
+          </div>
+          <div className="mt-1 text-[10px] text-text-muted">
+            🌐 自动识别 <span className="font-semibold">万得 Wind</span>（<code>AAPL.O</code> / <code>JPM.N</code>）·
+            Yahoo（<code>600519.SS</code>）· Sina（<code>sh600519</code>）·
+            雪球（<code>SH600519</code>）· 同花顺裸数字（<code>600519</code>）
           </div>
         </div>
 
