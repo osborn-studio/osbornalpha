@@ -783,21 +783,48 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
     return { fresh, duplicateOfExisting, duplicateWithinInput, total: parsed.length };
   }, [parsed, existingTickers]);
 
-  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 1024 * 200) {
-      setFileError(`文件过大（${(file.size / 1024).toFixed(0)} KB）。建议 < 200 KB。`);
+    // Excel files compress well — allow 2 MB
+    const maxSize = 1024 * 1024 * 2;
+    if (file.size > maxSize) {
+      setFileError(`文件过大（${(file.size / 1024 / 1024).toFixed(1)} MB）。上限 2 MB。`);
+      e.target.value = '';
       return;
     }
     setFileError(null);
-    const reader = new FileReader();
-    reader.onload = () => {
-      const content = String(reader.result || '');
-      setText((cur) => (cur.trim() ? cur + '\n' + content : content));
-    };
-    reader.onerror = () => setFileError('读取文件失败');
-    reader.readAsText(file, 'utf-8');
+    const ext = file.name.toLowerCase().split('.').pop() || '';
+    const isExcel = ext === 'xlsx' || ext === 'xls' || ext === 'xlsm' || ext === 'xlsb';
+
+    try {
+      if (isExcel) {
+        // Lazy-load SheetJS — only fetched when an Excel file is actually picked
+        const XLSX = await import('xlsx');
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(buf, { type: 'array' });
+        const lines: string[] = [];
+        for (const sheetName of wb.SheetNames) {
+          const sheet = wb.Sheets[sheetName];
+          // sheet_to_csv handles merged cells, formulas (as values), and quoting.
+          const csv = XLSX.utils.sheet_to_csv(sheet, { blankrows: false });
+          if (csv.trim()) lines.push(csv);
+        }
+        const content = lines.join('\n');
+        if (!content.trim()) {
+          setFileError('Excel 文件为空或没有数据');
+          e.target.value = '';
+          return;
+        }
+        setText((cur) => (cur.trim() ? cur + '\n' + content : content));
+      } else {
+        // CSV / TXT — plain text read
+        const content = await file.text();
+        setText((cur) => (cur.trim() ? cur + '\n' + content : content));
+      }
+    } catch (err: any) {
+      setFileError(`读取失败：${err?.message || '未知错误'}`);
+    }
     e.target.value = '';  // allow re-select same file
   }
 
@@ -855,10 +882,10 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
         {/* File upload */}
         <div className="mb-3">
           <label className="inline-flex cursor-pointer items-center gap-2 rounded border border-border bg-bg-card px-3 py-1.5 text-xs text-text-dim hover:text-text">
-            <span>📎 上传 CSV / TXT</span>
+            <span>📎 上传文件</span>
             <input
               type="file"
-              accept=".csv,.txt,text/csv,text/plain"
+              accept=".csv,.txt,.xlsx,.xls,.xlsm,.xlsb,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/vnd.ms-excel.sheet.macroenabled.12"
               onChange={onFile}
               className="hidden"
             />
@@ -867,7 +894,7 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
             <span className="ml-2 text-[11px] text-down">{fileError}</span>
           )}
           <div className="mt-1 text-[10px] text-text-muted">
-            CSV 自动取第一列；带表头会自动跳过。
+            支持 CSV / TXT / XLSX / XLS / XLSM。自动取第一列，带表头会跳过。Excel 多个工作表会全部读取。
           </div>
         </div>
 
