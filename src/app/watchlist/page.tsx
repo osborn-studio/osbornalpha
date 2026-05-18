@@ -1,70 +1,76 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import Link from 'next/link';
-import { MOCK_DATA, MOCK_STOCKS, getStockOrStub } from '@/lib/data/mock';
+import { MOCK_DATA } from '@/lib/data/mock';
 import { addCustomStock } from '@/lib/data/custom-stocks';
-import { formatPrice, formatPct, changeClass, marketLabel } from '@/lib/utils';
+import { formatPrice, formatPct, changeClass, marketLabel, classifyMarket } from '@/lib/utils';
 import { Disclaimer } from '@/components/Disclaimer';
 import { useToast } from '@/components/Toast';
+import { useBatchQuotes, type LiveQuote } from '@/lib/hooks/useQuote';
 import { getBrowserSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import type { Market } from '@/lib/supabase/database.types';
 
 const STORAGE_KEY = 'stock-monitor:watchlist:v2';
+const REFRESH_MS = 60_000;
 
 interface Group { id: string; name: string; tickers: string[] }
-interface ApiResult { t: string; n: string; py: string; m: Market }
+interface SearchResult { t: string; n: string; py: string; m: Market }
 
 export default function WatchlistPage() {
   const { show } = useToast();
   const [groups, setGroups] = useState<Group[]>(() =>
     MOCK_DATA.watchlist_groups.map((g) => ({ id: g.id, name: g.name, tickers: [...g.tickers] }))
   );
-  const [activeGroup, setActiveGroup] = useState<string>('all');
-  const [editMode, setEditMode] = useState(false);
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
+  const [hydrated, setHydrated] = useState(false);
 
-  // === Add-stock UI state ===
-  const [addQuery, setAddQuery] = useState('');
-  const [addResults, setAddResults] = useState<ApiResult[]>([]);
-  const [addLoading, setAddLoading] = useState(false);
-  const [addError, setAddError] = useState<string | null>(null);
-  const [addFocusIdx, setAddFocusIdx] = useState(-1);
-  const [addGroupId, setAddGroupId] = useState('opportunity');
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const addInputRef = useRef<HTMLInputElement>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  // Drag state — single source of truth
+  const [dragTicker, setDragTicker] = useState<string | null>(null);
+  const [dragFromGroup, setDragFromGroup] = useState<string | null>(null);
+  const [dropTargetGroup, setDropTargetGroup] = useState<string | null>(null);
 
-  // Hydrate watchlist
+  // Per-column add UI: which column has the add panel open
+  const [addingInGroup, setAddingInGroup] = useState<string | null>(null);
+
+  // New column UI
+  const [newColumnOpen, setNewColumnOpen] = useState(false);
+  const [newColumnName, setNewColumnName] = useState('');
+
+  // Mobile move menu (per-card kebab) — which ticker's menu is open
+  const [openMenuTicker, setOpenMenuTicker] = useState<string | null>(null);
+
+  // ─── Hydrate watchlist (Supabase → localStorage → mock) ───
   useEffect(() => {
     (async () => {
-      if (isSupabaseConfigured()) {
-        const sb = getBrowserSupabase();
-        const { data: { user: u } } = await sb.auth.getUser();
-        if (u) {
-          setUser({ id: u.id, email: u.email });
-          const { data: wl } = await sb
-            .from('watchlists')
-            .select('id, name, watchlist_items (ticker, sort_order)')
-            .order('sort_order');
-          if (wl && wl.length > 0) {
-            const groupsFromDb: Group[] = wl.map((w: any) => ({
-              id: w.id,
-              name: w.name,
-              tickers: (w.watchlist_items || [])
-                .sort((a: any, b: any) => a.sort_order - b.sort_order)
-                .map((it: any) => it.ticker),
-            }));
-            setGroups(groupsFromDb);
-            return;
+      try {
+        if (isSupabaseConfigured()) {
+          const sb = getBrowserSupabase();
+          const { data: { user: u } } = await sb.auth.getUser();
+          if (u) {
+            setUser({ id: u.id, email: u.email });
+            const { data: wl } = await sb
+              .from('watchlists')
+              .select('id, name, watchlist_items (ticker, sort_order)')
+              .order('sort_order');
+            if (wl && wl.length > 0) {
+              const groupsFromDb: Group[] = wl.map((w: any) => ({
+                id: w.id,
+                name: w.name,
+                tickers: (w.watchlist_items || [])
+                  .sort((a: any, b: any) => a.sort_order - b.sort_order)
+                  .map((it: any) => it.ticker),
+              }));
+              setGroups(groupsFromDb);
+              setHydrated(true);
+              return;
+            }
           }
         }
-      }
-      try {
         const raw = localStorage.getItem(STORAGE_KEY);
         if (raw) setGroups(JSON.parse(raw));
       } catch {}
+      setHydrated(true);
     })();
   }, []);
 
@@ -73,110 +79,95 @@ export default function WatchlistPage() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch {}
   }
 
-  const totalCount = groups.reduce((s, g) => s + g.tickers.length, 0);
-  const visibleGroups = activeGroup === 'all' ? groups : groups.filter((g) => g.id === activeGroup);
+  // ─── Live quotes (batch) ───
+  const allTickers = useMemo(() => {
+    const set = new Set<string>();
+    for (const g of groups) for (const t of g.tickers) set.add(t);
+    return Array.from(set);
+  }, [groups]);
 
-  // ─── Async search via /api/search ───
-  async function performSearch(q: string) {
-    if (abortRef.current) abortRef.current.abort();
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
-    setAddLoading(true);
-    setAddError(null);
-    try {
-      const resp = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: ctrl.signal });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      setAddResults(data.results || []);
-      setDropdownOpen(true);
-      setAddFocusIdx((data.results || []).length > 0 ? 0 : -1);
-    } catch (e: any) {
-      if (e.name !== 'AbortError') {
-        setAddError(e.message || '搜索失败');
-        setAddResults([]);
-      }
-    } finally {
-      setAddLoading(false);
-    }
+  const { quotes, loading: quotesLoading } = useBatchQuotes(allTickers, {
+    refreshIntervalMs: REFRESH_MS,
+  });
+
+  // ─── Drag-and-drop handlers ───
+  function onDragStart(e: React.DragEvent, ticker: string, fromGroup: string) {
+    setDragTicker(ticker);
+    setDragFromGroup(fromGroup);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', ticker);
   }
 
-  function onAddQueryChange(v: string) {
-    setAddQuery(v);
-    setAddError(null);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (v.trim().length === 0) {
-      setAddResults([]);
-      setDropdownOpen(false);
-      return;
-    }
-    debounceRef.current = setTimeout(() => performSearch(v.trim()), 250);
+  function onDragEnd() {
+    setDragTicker(null);
+    setDragFromGroup(null);
+    setDropTargetGroup(null);
   }
 
-  // ─── Add ticker action ───
-  function addTickerInfo(info: ApiResult) {
-    const exists = groups.some((g) => g.tickers.includes(info.t));
-    if (exists) {
-      show(`${info.t} 已经在股票池中`);
+  function onColumnDragOver(e: React.DragEvent, groupId: string) {
+    e.preventDefault();
+    setDropTargetGroup(groupId);
+  }
+
+  function onColumnDrop(e: React.DragEvent, toGroup: string) {
+    e.preventDefault();
+    if (!dragTicker || !dragFromGroup) return;
+    if (dragFromGroup === toGroup) {
+      onDragEnd();
       return;
     }
-    // Save custom stock info so it displays properly
-    addCustomStock({ t: info.t, n: info.n, py: info.py, m: info.m });
-    const next = groups.map((g) =>
-      g.id === addGroupId ? { ...g, tickers: [...g.tickers, info.t] } : g
-    );
+    moveTicker(dragTicker, dragFromGroup, toGroup);
+    onDragEnd();
+  }
+
+  function moveTicker(ticker: string, fromGroup: string, toGroup: string) {
+    const next = groups.map((g) => {
+      if (g.id === fromGroup) return { ...g, tickers: g.tickers.filter((t) => t !== ticker) };
+      if (g.id === toGroup && !g.tickers.includes(ticker)) return { ...g, tickers: [...g.tickers, ticker] };
+      return g;
+    });
     persist(next);
-    setAddQuery('');
-    setAddResults([]);
-    setDropdownOpen(false);
-    show(`✓ 已加入：${info.n} (${info.t})`);
-    addInputRef.current?.focus();
+    const toName = groups.find((g) => g.id === toGroup)?.name || toGroup;
+    show(`✓ ${ticker} → ${toName}`);
   }
 
-  // Click "+ 加入" button (the explicit confirm action)
-  function handleConfirmAdd() {
-    if (addLoading) return;
-    const q = addQuery.trim();
-    if (!q) {
-      show('请先输入股票代码或名称');
-      addInputRef.current?.focus();
-      return;
-    }
-    // If we have results, use focused/first
-    if (addResults.length > 0) {
-      const target = addFocusIdx >= 0 ? addResults[addFocusIdx] : addResults[0];
-      addTickerInfo(target);
-      return;
-    }
-    // No results — let user add as raw ticker (with confirmation)
-    if (addLoading) return;
-    if (confirm(`未在数据库中找到 "${q}"。\n仍然加入到股票池？\n（建议先检查拼写或试试英文代码）`)) {
-      addTickerInfo({ t: q.toUpperCase(), n: q, py: '', m: 'A' });  // best-guess market
-    }
-  }
-
-  function onAddKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleConfirmAdd();
-    } else if (e.key === 'Escape') {
-      setDropdownOpen(false);
-      addInputRef.current?.blur();
-    } else if (e.key === 'ArrowDown' && addResults.length) {
-      e.preventDefault();
-      setAddFocusIdx((i) => (i + 1) % addResults.length);
-    } else if (e.key === 'ArrowUp' && addResults.length) {
-      e.preventDefault();
-      setAddFocusIdx((i) => (i - 1 + addResults.length) % addResults.length);
-    }
-  }
-
+  // ─── Card actions ───
   function removeTicker(ticker: string) {
-    if (!editMode && !confirm(`删除 ${ticker} ?`)) return;
+    if (!confirm(`从股票池移除 ${ticker} ?`)) return;
     const next = groups.map((g) => ({ ...g, tickers: g.tickers.filter((t) => t !== ticker) }));
     persist(next);
-    show(`✓ 已删除：${ticker}`);
+    show(`✓ 已移除：${ticker}`);
   }
 
+  // ─── Column management ───
+  function addColumn() {
+    const name = newColumnName.trim();
+    if (!name) return;
+    const id = `custom_${Date.now()}`;
+    persist([...groups, { id, name, tickers: [] }]);
+    setNewColumnName('');
+    setNewColumnOpen(false);
+    show(`✓ 已新增看板：${name}`);
+  }
+
+  function renameColumn(id: string) {
+    const cur = groups.find((g) => g.id === id);
+    if (!cur) return;
+    const next = prompt(`重命名「${cur.name}」`, cur.name);
+    if (!next || !next.trim() || next.trim() === cur.name) return;
+    persist(groups.map((g) => (g.id === id ? { ...g, name: next.trim() } : g)));
+  }
+
+  function deleteColumn(id: string) {
+    const cur = groups.find((g) => g.id === id);
+    if (!cur) return;
+    if (cur.tickers.length > 0) {
+      if (!confirm(`删除「${cur.name}」？该列还有 ${cur.tickers.length} 只股票，将一并移除。`)) return;
+    } else if (!confirm(`删除「${cur.name}」？`)) return;
+    persist(groups.filter((g) => g.id !== id));
+  }
+
+  // ─── Export ───
   function exportYaml() {
     const lines = ['# Stock Monitor watchlist', 'version: 1', '', 'groups:'];
     for (const g of groups) {
@@ -197,10 +188,21 @@ export default function WatchlistPage() {
 
   return (
     <>
-      <h1 className="mb-3 text-xl font-bold">📋 我的股票池</h1>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold">📋 股票池</h1>
+          <div className="mt-0.5 text-[11px] text-text-dim">
+            拖拽卡片在看板间移动 · 实时报价每 {REFRESH_MS / 1000}s 自动刷新
+            {quotesLoading && allTickers.length > 0 && <span className="ml-2 text-accent">⏳ 加载报价…</span>}
+          </div>
+        </div>
+        <button onClick={exportYaml} className="shrink-0 rounded-md bg-bg-card px-3 py-1.5 text-xs text-text-dim hover:text-text">
+          📤 导出
+        </button>
+      </div>
 
       {!user && isSupabaseConfigured() && (
-        <div className="card-base flex items-center justify-between bg-accent-dim/10 text-sm">
+        <div className="card-base mb-3 flex items-center justify-between bg-accent-dim/10 text-sm">
           <span>
             👤 访客模式（数据存浏览器本地）。
             <Link href="/login" className="font-semibold">登录</Link> 后多设备同步。
@@ -208,198 +210,432 @@ export default function WatchlistPage() {
         </div>
       )}
 
-      {/* ─── Add Stock Card (重设计) ─── */}
-      <div className="card-base">
-        <div className="mb-3 text-sm font-semibold text-text-dim">➕ 添加新标的</div>
-
-        {/* Input + Confirm button row */}
-        <div className="flex gap-2">
-          <div className="relative flex-1">
-            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-dim">
-              {addLoading ? '⏳' : '🔍'}
-            </span>
-            <input
-              ref={addInputRef}
-              type="text"
-              value={addQuery}
-              onChange={(e) => onAddQueryChange(e.target.value)}
-              onKeyDown={onAddKeyDown}
-              onFocus={() => addResults.length && setDropdownOpen(true)}
-              placeholder="输入股票代码或名称（如 完美世界 / AAPL / 600519）"
-              className="w-full pl-9"
-              autoComplete="off"
-            />
-            {/* Dropdown */}
-            {dropdownOpen && (
-              <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-[340px] overflow-y-auto rounded-lg border border-border bg-bg-elevated shadow-lg">
-                {addLoading && addResults.length === 0 && (
-                  <div className="px-3 py-4 text-center text-xs text-text-dim">⏳ 搜索中...</div>
-                )}
-                {!addLoading && addResults.length === 0 && addQuery.trim().length > 0 && (
-                  <div className="px-3 py-4 text-center text-xs text-text-dim">
-                    没有匹配结果<br />
-                    <span className="text-[10px] text-text-muted">
-                      可以点击右侧 &ldquo;+ 加入&rdquo; 强制以 &ldquo;{addQuery.trim()}&rdquo; 为代码加入
-                    </span>
-                  </div>
-                )}
-                {addResults.map((r, i) => (
-                  <button
-                    key={`${r.t}-${i}`}
-                    onClick={() => addTickerInfo(r)}
-                    onMouseEnter={() => setAddFocusIdx(i)}
-                    className={`grid w-full grid-cols-[auto_1fr_auto] items-center gap-3 border-b border-border px-3 py-2.5 text-left last:border-b-0 ${
-                      i === addFocusIdx ? 'bg-bg-card' : 'hover:bg-bg-card'
-                    }`}
-                  >
-                    <span className="rounded bg-bg-card px-1.5 py-0.5 text-[10px] font-semibold text-text-dim">
-                      {marketLabel(r.m)}
-                    </span>
-                    <div>
-                      <div className="font-semibold">{r.n}</div>
-                      <div className="text-xs text-text-dim">{r.t} {r.py && `· ${r.py}`}</div>
-                    </div>
-                    <span className="text-xs text-accent">+ 加入</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <button
-            onClick={handleConfirmAdd}
-            disabled={!addQuery.trim() || addLoading}
-            className="whitespace-nowrap rounded-lg bg-accent-dim px-4 py-2 text-sm font-semibold text-white shadow disabled:opacity-50"
-            title="加入到选定分组（也可按 Enter）"
-          >
-            {addLoading ? '搜索中...' : '+ 加入'}
-          </button>
-        </div>
-
-        {/* Helper text */}
-        <div className="mt-1.5 text-[11px] text-text-muted">
-          按 <kbd className="rounded bg-bg-card px-1">Enter</kbd> 加入第一个匹配项 ·
-          按 <kbd className="rounded bg-bg-card px-1">↑↓</kbd> 选择
-        </div>
-
-        {/* Group selector */}
-        <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-border pt-3 text-xs">
-          <span className="text-text-dim">加入到分组：</span>
-          <div className="flex flex-wrap gap-1.5">
-            {groups.map((g) => (
-              <label
-                key={g.id}
-                className={`flex cursor-pointer items-center gap-1 rounded-full border px-3 py-1 transition ${
-                  addGroupId === g.id ? 'border-accent bg-accent-dim/20 text-accent' : 'border-border text-text-dim hover:text-text'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="add-group"
-                  value={g.id}
-                  checked={addGroupId === g.id}
-                  onChange={() => setAddGroupId(g.id)}
-                  className="sr-only"
-                />
-                {g.name} <span className="text-[10px] opacity-60">({g.tickers.length})</span>
-              </label>
-            ))}
-          </div>
-        </div>
-
-        {addError && (
-          <div className="mt-2 rounded bg-down/10 px-3 py-2 text-xs text-down">
-            ⚠️ {addError}
-          </div>
-        )}
-      </div>
-
-      {/* ─── Tabs ─── */}
-      <div className="mb-3 flex gap-1.5 overflow-x-auto pb-1">
-        <button
-          onClick={() => setActiveGroup('all')}
-          className={`whitespace-nowrap rounded-full border px-3.5 py-1.5 text-xs transition ${
-            activeGroup === 'all' ? 'border-accent bg-accent-dim text-white' : 'border-border bg-bg-card text-text-dim hover:text-text'
-          }`}
-        >
-          全部 {totalCount}
-        </button>
+      {/* ─── Kanban Board ─── */}
+      <div
+        className="flex gap-3 overflow-x-auto pb-3"
+        style={{ scrollSnapType: 'x mandatory' }}
+        onClick={() => setOpenMenuTicker(null)}
+      >
         {groups.map((g) => (
-          <button
+          <KanbanColumn
             key={g.id}
-            onClick={() => setActiveGroup(g.id)}
-            className={`whitespace-nowrap rounded-full border px-3.5 py-1.5 text-xs transition ${
-              activeGroup === g.id ? 'border-accent bg-accent-dim text-white' : 'border-border bg-bg-card text-text-dim hover:text-text'
-            }`}
-          >
-            {g.name} {g.tickers.length}
-          </button>
+            group={g}
+            allGroups={groups}
+            quotes={quotes}
+            isDropTarget={dropTargetGroup === g.id}
+            dragTicker={dragTicker}
+            isAdding={addingInGroup === g.id}
+            openMenuTicker={openMenuTicker}
+            onDragOver={(e) => onColumnDragOver(e, g.id)}
+            onDragLeave={() => setDropTargetGroup((cur) => (cur === g.id ? null : cur))}
+            onDrop={(e) => onColumnDrop(e, g.id)}
+            onCardDragStart={(e, t) => onDragStart(e, t, g.id)}
+            onCardDragEnd={onDragEnd}
+            onAddOpen={() => setAddingInGroup(g.id)}
+            onAddClose={() => setAddingInGroup(null)}
+            onCardMove={(ticker, toGroupId) => moveTicker(ticker, g.id, toGroupId)}
+            onCardRemove={removeTicker}
+            onOpenMenu={(ticker) => setOpenMenuTicker((cur) => (cur === ticker ? null : ticker))}
+            onRename={() => renameColumn(g.id)}
+            onDelete={() => deleteColumn(g.id)}
+            onTickerAdded={(info) => {
+              const exists = groups.some((gg) => gg.tickers.includes(info.t));
+              if (exists) {
+                show(`${info.t} 已经在股票池中`);
+                return;
+              }
+              addCustomStock({ t: info.t, n: info.n, py: info.py, m: info.m });
+              persist(
+                groups.map((gg) => (gg.id === g.id ? { ...gg, tickers: [...gg.tickers, info.t] } : gg))
+              );
+              show(`✓ 已加入「${g.name}」：${info.n} (${info.t})`);
+            }}
+          />
         ))}
-      </div>
 
-      {/* Toolbar */}
-      <div className="mb-3 flex items-center justify-between rounded-lg bg-bg-card px-3 py-2.5">
-        <div className="text-xs text-text-dim">
-          {editMode ? '✏️ 编辑模式：点 × 删除' : '👆 点击进入详情，或开启编辑模式'}
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setEditMode(!editMode)}
-            className="rounded border border-border bg-transparent px-3 py-1.5 text-xs text-text-dim"
-          >
-            {editMode ? '完成' : '编辑模式'}
-          </button>
-          <button onClick={exportYaml} className="rounded bg-accent-dim px-3 py-1.5 text-xs text-white">
-            📤 导出 YAML
-          </button>
-        </div>
-      </div>
-
-      {/* Groups */}
-      {visibleGroups.map((g) => (
-        <div key={g.id} className="card-base">
-          <div className="mb-3 text-sm font-semibold text-text-dim">
-            {g.name} ({g.tickers.length})
-          </div>
-          {g.tickers.length === 0 && (
-            <div className="py-8 text-center text-sm text-text-dim">
-              这个分组还没有标的，去上面搜索加入吧。
-            </div>
-          )}
-          {g.tickers.map((t) => {
-            const s = getStockOrStub(t);
-            const display = s || { name: t, ticker: t, market: 'A' as Market, currency: '', price: 0, change_pct: 0 };
-            return (
-              <div key={t} className="grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-3 border-b border-border px-2 py-2.5 last:border-b-0">
-                <span className="rounded bg-bg-card px-1.5 py-0.5 text-[10px] font-semibold text-text-dim">
-                  {marketLabel(display.market)}
-                </span>
-                <Link href={`/stock/${encodeURIComponent(t)}`} className="text-text hover:no-underline">
-                  <div className="font-semibold">{display.name}</div>
-                  <div className="text-[11px] text-text-dim">{display.ticker}</div>
-                </Link>
-                <Link
-                  href={`/stock/${encodeURIComponent(t)}`}
-                  className="text-right font-semibold tabular-nums text-text hover:no-underline"
-                >
-                  {s && s.price > 0 ? `${display.currency}${formatPrice(s.price)}` : '—'}
-                </Link>
-                <div className={`min-w-[60px] text-right text-sm tabular-nums ${s && s.price > 0 ? changeClass(s.change_pct) : ''}`}>
-                  {s && s.price > 0 ? formatPct(s.change_pct) : '—'}
-                </div>
+        {/* + 新增看板 */}
+        <div
+          className="shrink-0"
+          style={{ scrollSnapAlign: 'start', width: 'min(85vw, 300px)' }}
+        >
+          {newColumnOpen ? (
+            <div className="card-base bg-bg-card p-3">
+              <input
+                autoFocus
+                value={newColumnName}
+                onChange={(e) => setNewColumnName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') addColumn();
+                  if (e.key === 'Escape') { setNewColumnOpen(false); setNewColumnName(''); }
+                }}
+                placeholder="新看板名称（如：基本盘 / 短线机会）"
+                className="w-full text-sm"
+              />
+              <div className="mt-2 flex gap-2">
                 <button
-                  onClick={() => removeTicker(t)}
-                  className={`rounded p-1.5 text-lg ${editMode ? 'text-down hover:bg-down/10' : 'text-text-dim hover:text-text'}`}
-                  title={editMode ? '删除' : '更多'}
+                  onClick={addColumn}
+                  disabled={!newColumnName.trim()}
+                  className="flex-1 rounded bg-accent-dim px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
                 >
-                  {editMode ? '×' : '⋯'}
+                  + 新增看板
+                </button>
+                <button
+                  onClick={() => { setNewColumnOpen(false); setNewColumnName(''); }}
+                  className="rounded border border-border px-3 py-1.5 text-xs text-text-dim"
+                >
+                  取消
                 </button>
               </div>
-            );
-          })}
+            </div>
+          ) : (
+            <button
+              onClick={() => setNewColumnOpen(true)}
+              className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border bg-transparent py-3 text-sm text-text-dim hover:border-accent-dim hover:text-accent"
+            >
+              <span>＋</span><span>新增看板</span>
+            </button>
+          )}
         </div>
-      ))}
+      </div>
+
+      {hydrated && allTickers.length === 0 && (
+        <div className="card-base bg-bg-card py-8 text-center text-sm text-text-dim">
+          股票池是空的。点任意看板上的「＋ 加入股票」开始添加。
+        </div>
+      )}
 
       <Disclaimer />
     </>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Kanban Column
+// ──────────────────────────────────────────────────────────────────────────
+
+interface ColumnProps {
+  group: Group;
+  allGroups: Group[];
+  quotes: Record<string, LiveQuote | null>;
+  isDropTarget: boolean;
+  dragTicker: string | null;
+  isAdding: boolean;
+  openMenuTicker: string | null;
+  onDragOver: (e: React.DragEvent) => void;
+  onDragLeave: () => void;
+  onDrop: (e: React.DragEvent) => void;
+  onCardDragStart: (e: React.DragEvent, ticker: string) => void;
+  onCardDragEnd: () => void;
+  onAddOpen: () => void;
+  onAddClose: () => void;
+  onCardMove: (ticker: string, toGroupId: string) => void;
+  onCardRemove: (ticker: string) => void;
+  onOpenMenu: (ticker: string) => void;
+  onRename: () => void;
+  onDelete: () => void;
+  onTickerAdded: (info: SearchResult) => void;
+}
+
+function KanbanColumn(props: ColumnProps) {
+  const {
+    group, allGroups, quotes, isDropTarget, dragTicker, isAdding, openMenuTicker,
+    onDragOver, onDragLeave, onDrop, onCardDragStart, onCardDragEnd,
+    onAddOpen, onAddClose, onCardMove, onCardRemove, onOpenMenu,
+    onRename, onDelete, onTickerAdded,
+  } = props;
+
+  return (
+    <div
+      className={`flex shrink-0 flex-col rounded-lg border ${isDropTarget ? 'border-accent bg-accent-dim/10' : 'border-border bg-bg-card'} transition-colors`}
+      style={{ width: 'min(85vw, 300px)', maxHeight: '78vh', scrollSnapAlign: 'start' }}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold">{group.name}</span>
+          <span className="rounded-full bg-bg-elevated px-1.5 py-0.5 text-[10px] tabular-nums text-text-dim">
+            {group.tickers.length}
+          </span>
+        </div>
+        <div className="flex gap-0.5">
+          <button onClick={onRename} title="重命名" className="rounded p-1 text-text-dim hover:bg-bg-elevated hover:text-text">
+            ✎
+          </button>
+          <button onClick={onDelete} title="删除看板" className="rounded p-1 text-text-dim hover:bg-down/10 hover:text-down">
+            ×
+          </button>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="flex-1 space-y-1.5 overflow-y-auto p-2">
+        {group.tickers.length === 0 && !isAdding && (
+          <div className="rounded border border-dashed border-border/60 py-6 text-center text-[11px] text-text-muted">
+            拖拽卡片到此处<br />
+            或点下方 + 加入
+          </div>
+        )}
+
+        {group.tickers.map((ticker) => (
+          <StockCard
+            key={ticker}
+            ticker={ticker}
+            quote={quotes[ticker] || null}
+            isDragging={dragTicker === ticker}
+            menuOpen={openMenuTicker === ticker}
+            currentGroupId={group.id}
+            allGroups={allGroups}
+            onDragStart={(e) => onCardDragStart(e, ticker)}
+            onDragEnd={onCardDragEnd}
+            onMove={(to) => onCardMove(ticker, to)}
+            onRemove={() => onCardRemove(ticker)}
+            onToggleMenu={() => onOpenMenu(ticker)}
+          />
+        ))}
+
+        {isAdding ? (
+          <AddStockInline groupName={group.name} onAdd={onTickerAdded} onClose={onAddClose} />
+        ) : (
+          <button
+            onClick={onAddOpen}
+            className="w-full rounded border border-dashed border-border bg-transparent px-2 py-1.5 text-xs text-text-dim hover:border-accent-dim hover:text-accent"
+          >
+            ＋ 加入股票
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Stock Card
+// ──────────────────────────────────────────────────────────────────────────
+
+interface CardProps {
+  ticker: string;
+  quote: LiveQuote | null;
+  isDragging: boolean;
+  menuOpen: boolean;
+  currentGroupId: string;
+  allGroups: Group[];
+  onDragStart: (e: React.DragEvent) => void;
+  onDragEnd: () => void;
+  onMove: (toGroupId: string) => void;
+  onRemove: () => void;
+  onToggleMenu: () => void;
+}
+
+function StockCard({
+  ticker, quote, isDragging, menuOpen, currentGroupId, allGroups,
+  onDragStart, onDragEnd, onMove, onRemove, onToggleMenu,
+}: CardProps) {
+  const market = quote?.market || classifyMarket(ticker);
+  const name = quote?.name || ticker;
+  const currency = quote?.currency || (market === 'A' ? '¥' : market === 'HK' ? 'HK$' : '$');
+  const hasPrice = !!quote && quote.price > 0;
+  const otherGroups = allGroups.filter((g) => g.id !== currentGroupId);
+
+  return (
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      className={`group relative rounded-lg border border-border bg-bg-elevated p-2.5 transition ${isDragging ? 'opacity-30' : 'hover:border-accent-dim'}`}
+      style={{ cursor: 'grab' }}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <Link href={`/stock/${encodeURIComponent(ticker)}`} className="min-w-0 flex-1 text-text hover:no-underline">
+          <div className="flex items-center gap-1.5">
+            <span className="rounded bg-bg-card px-1.5 py-0.5 text-[10px] font-semibold text-text-dim">
+              {marketLabel(market)}
+            </span>
+            <span className="truncate text-sm font-semibold">{name}</span>
+          </div>
+          <div className="mt-0.5 text-[11px] text-text-muted">{ticker}</div>
+        </Link>
+
+        <button
+          onClick={(e) => { e.stopPropagation(); e.preventDefault(); onToggleMenu(); }}
+          className="rounded p-1 text-text-dim hover:bg-bg-card hover:text-text"
+          title="移动 / 删除"
+        >
+          ⋯
+        </button>
+      </div>
+
+      <div className="mt-1.5 flex items-baseline justify-between">
+        <span className="text-base font-semibold tabular-nums">
+          {hasPrice ? `${currency}${formatPrice(quote!.price)}` : <span className="text-text-muted">—</span>}
+        </span>
+        <span className={`text-xs tabular-nums ${hasPrice ? changeClass(quote!.change_pct) : 'text-text-muted'}`}>
+          {hasPrice ? formatPct(quote!.change_pct) : '加载中…'}
+        </span>
+      </div>
+
+      {menuOpen && (
+        <div
+          className="absolute right-2 top-9 z-20 w-40 rounded-lg border border-border bg-bg-elevated p-1 shadow-lg"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-2 py-1 text-[10px] font-semibold uppercase text-text-muted">移到看板</div>
+          {otherGroups.length === 0 && (
+            <div className="px-2 py-1 text-[11px] text-text-muted">没有其他看板</div>
+          )}
+          {otherGroups.map((g) => (
+            <button
+              key={g.id}
+              onClick={() => { onMove(g.id); onToggleMenu(); }}
+              className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-bg-card"
+            >
+              → {g.name}
+            </button>
+          ))}
+          <div className="my-1 border-t border-border" />
+          <button
+            onClick={() => { onRemove(); onToggleMenu(); }}
+            className="block w-full rounded px-2 py-1.5 text-left text-xs text-down hover:bg-down/10"
+          >
+            🗑 从股票池移除
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Inline Add Stock (within a column)
+// ──────────────────────────────────────────────────────────────────────────
+
+interface AddInlineProps {
+  groupName: string;
+  onAdd: (info: SearchResult) => void;
+  onClose: () => void;
+}
+
+function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [focusIdx, setFocusIdx] = useState(-1);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  function runSearch(q: string) {
+    if (abortRef.current) abortRef.current.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    setLoading(true);
+    fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: ctrl.signal })
+      .then((r) => r.json())
+      .then((d) => {
+        setResults(d.results || []);
+        setFocusIdx((d.results || []).length > 0 ? 0 : -1);
+        setLoading(false);
+      })
+      .catch((err) => {
+        if (err.name === 'AbortError') return;
+        setResults([]);
+        setLoading(false);
+      });
+  }
+
+  function onChange(v: string) {
+    setQuery(v);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!v.trim()) { setResults([]); return; }
+    debounceRef.current = setTimeout(() => runSearch(v.trim()), 250);
+  }
+
+  function confirmAdd() {
+    if (results.length > 0) {
+      const target = focusIdx >= 0 ? results[focusIdx] : results[0];
+      onAdd(target);
+      setQuery('');
+      setResults([]);
+      inputRef.current?.focus();
+      return;
+    }
+    const q = query.trim();
+    if (!q) return;
+    if (confirm(`未在数据库中找到 "${q}"。\n仍然加入到「${groupName}」？\n（建议先检查拼写或试试英文代码）`)) {
+      onAdd({ t: q.toUpperCase(), n: q, py: '', m: classifyMarket(q.toUpperCase()) as Market });
+      setQuery('');
+      setResults([]);
+    }
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter') { e.preventDefault(); confirmAdd(); }
+    else if (e.key === 'Escape') { onClose(); }
+    else if (e.key === 'ArrowDown' && results.length) {
+      e.preventDefault(); setFocusIdx((i) => (i + 1) % results.length);
+    }
+    else if (e.key === 'ArrowUp' && results.length) {
+      e.preventDefault(); setFocusIdx((i) => (i - 1 + results.length) % results.length);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-accent-dim bg-bg-elevated p-2">
+      <input
+        ref={inputRef}
+        type="text"
+        value={query}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={onKeyDown}
+        placeholder="代码 / 名称（如 完美世界 / AAPL / 600519）"
+        className="w-full text-xs"
+        autoComplete="off"
+      />
+      {results.length > 0 && (
+        <div className="mt-1.5 max-h-44 overflow-y-auto rounded border border-border bg-bg-card">
+          {results.map((r, i) => (
+            <button
+              key={`${r.t}-${i}`}
+              onClick={() => { onAdd(r); setQuery(''); setResults([]); inputRef.current?.focus(); }}
+              onMouseEnter={() => setFocusIdx(i)}
+              className={`grid w-full grid-cols-[auto_1fr] items-center gap-2 border-b border-border px-2 py-1.5 text-left last:border-b-0 ${
+                i === focusIdx ? 'bg-bg-elevated' : 'hover:bg-bg-elevated'
+              }`}
+            >
+              <span className="rounded bg-bg-elevated px-1 py-0.5 text-[9px] font-semibold text-text-dim">
+                {marketLabel(r.m)}
+              </span>
+              <div className="min-w-0">
+                <div className="truncate text-xs font-semibold">{r.n}</div>
+                <div className="truncate text-[10px] text-text-dim">{r.t}</div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+      {query.trim() && !loading && results.length === 0 && (
+        <div className="mt-1.5 text-[10px] text-text-muted">
+          没有匹配。回车以「{query.trim()}」强制加入。
+        </div>
+      )}
+      <div className="mt-1.5 flex gap-1.5">
+        <button
+          onClick={confirmAdd}
+          disabled={loading || !query.trim()}
+          className="flex-1 rounded bg-accent-dim px-2 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
+        >
+          {loading ? '搜索中…' : '+ 加入'}
+        </button>
+        <button onClick={onClose} className="rounded border border-border px-2 py-1 text-[11px] text-text-dim">
+          完成
+        </button>
+      </div>
+    </div>
   );
 }
