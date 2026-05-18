@@ -4,7 +4,7 @@ import {
   isTushareConfigured,
   fetchTushareDailyBasic,
   fetchTushareFinaIndicator,
-} from '@/lib/data/sources/tushare';
+} from '@/lib/data/sources/tushare-cached';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 30;

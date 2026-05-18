@@ -3,7 +3,7 @@ import {
   isTushareConfigured,
   fetchTushareTopHolders,
   fetchTushareFloatHolders,
-} from '@/lib/data/sources/tushare';
+} from '@/lib/data/sources/tushare-cached';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 86400;  // 24h cache (quarterly disclosure)
