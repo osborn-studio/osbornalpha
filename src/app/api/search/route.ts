@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { MOCK_UNIVERSE } from '@/lib/data/mock';
 import { searchUniverse } from '@/lib/stocks/search';
+import { normalizeWindTicker } from '@/lib/stocks/wind-normalize';
 import type { Market } from '@/lib/supabase/database.types';
 
 export const dynamic = 'force-dynamic';
@@ -94,12 +95,18 @@ async function searchEastmoney(query: string): Promise<UniverseRow[]> {
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const q = (searchParams.get('q') || '').trim();
+  const rawQ = (searchParams.get('q') || '').trim();
   const limit = Math.min(parseInt(searchParams.get('limit') || '10', 10), 30);
 
-  if (q.length === 0) {
+  if (rawQ.length === 0) {
     return NextResponse.json({ source: 'empty', results: [] });
   }
+
+  // Wind / Sina / Yahoo / Snowball dialect normalization. The Eastmoney
+  // suggest API only understands the canonical form (or plain text).
+  // `AAPL.O` → `AAPL`, `sh600519` → `600519.SH`, `700.HK` → `00700.HK`.
+  const normalized = normalizeWindTicker(rawQ);
+  const q = normalized !== rawQ.toUpperCase() ? normalized : rawQ;
 
   // Try local mock first (instant for the curated 30)
   const localHits = searchUniverse(MOCK_UNIVERSE, q, limit);
