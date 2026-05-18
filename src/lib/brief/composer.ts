@@ -16,7 +16,7 @@ import {
   isTushareConfigured,
   fetchTushareDailyBasic,
   fetchTushareFinaIndicator,
-} from '@/lib/data/sources/tushare';
+} from '@/lib/data/sources/tushare-cached';
 import { PERSONAS, buildUserMessage, type StockContext, type PerspectiveResult } from '@/lib/data/personas';
 import { chat, extractJson, isLLMConfigured } from '@/lib/data/sources/llm';
 

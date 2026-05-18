@@ -6,7 +6,7 @@ import {
   fetchTushareDailyBasic,
   fetchTushareFinaIndicator,
   fetchTushareIncome,
-} from '@/lib/data/sources/tushare';
+} from '@/lib/data/sources/tushare-cached';
 import { PERSONAS, buildUserMessage, type StockContext, type PerspectiveResult } from '@/lib/data/personas';
 
 export const dynamic = 'force-dynamic';
