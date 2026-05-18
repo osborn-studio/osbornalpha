@@ -223,6 +223,10 @@ export interface DailyBrief {
   /** Trade ideas with risk callouts; only emitted if conviction ≥ 7 */
   trade_ideas?: Array<{ ticker: string; name: string; bias: 'bull' | 'bear'; thesis: string; risk: string; conviction: number }>;
   markdown: string;
+  /** Email-ready HTML with inlined styles */
+  html?: string;
+  /** Recommended email subject line — derived from Top Call when available */
+  subject?: string;
   meta: {
     duration_ms: number;
     tokens?: { input: number; output: number };
@@ -401,7 +405,7 @@ export async function generateDailyBrief(
 
   // 6. Compose markdown (deterministic template — uses LLM output above)
   const date = new Date().toISOString().slice(0, 10);
-  const md = composeMarkdown({
+  const composeArgs = {
     date,
     blocks,
     overall,
@@ -409,8 +413,15 @@ export async function generateDailyBrief(
     watchlist_count: watchlist.length,
     topCall: topCall || undefined,
     tradeIdeas,
-  });
+  };
+  const md = composeMarkdown(composeArgs);
   const sanitized = applyCompliance(md);
+
+  // 7. Compose HTML (email-ready, parallel to markdown)
+  const html = applyCompliance(composeHTML(composeArgs));
+  const subject = topCall
+    ? `Sentinel ${date} · ${topCall.headline}`
+    : `Sentinel Morning Note · ${date} · ${overall_label}`;
 
   return {
     date,
@@ -422,6 +433,8 @@ export async function generateDailyBrief(
     top_call: topCall || undefined,
     trade_ideas: tradeIdeas,
     markdown: sanitized,
+    html,
+    subject,
     meta: {
       duration_ms: Date.now() - startedAt,
       tokens: { input: totalInputTok, output: totalOutputTok },
@@ -543,4 +556,145 @@ function composeMarkdown(a: ComposeArgs): string {
   lines.push('_数据源：东方财富（A/H/US 报价）· Tushare Pro（A 股财报）· DeepSeek V4 Flash（AI 委员会）_');
 
   return lines.join('\n');
+}
+
+// ─── HTML composer (email-ready, inline CSS) ────────────────────────────────
+
+const HTML_PALETTE = {
+  bg: '#0d1117',
+  card: '#161b22',
+  border: '#30363d',
+  text: '#e6edf3',
+  dim: '#8b949e',
+  muted: '#6e7681',
+  accent: '#58a6ff',
+  up: '#ef4444',
+  down: '#10b981',
+  warn: '#f59e0b',
+};
+
+const esc = (s: string) =>
+  String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+function biasColor(changePct: number): string {
+  return changePct > 0 ? HTML_PALETTE.up : changePct < 0 ? HTML_PALETTE.down : HTML_PALETTE.dim;
+}
+
+function composeHTML(a: ComposeArgs): string {
+  const sections: string[] = [];
+
+  // ─── Header ────────────────────────────────────────────────
+  sections.push(`
+    <h1 style="margin:0;padding:0;font-size:22px;font-weight:700;color:${HTML_PALETTE.text};font-family:-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif">
+      🎯 Sentinel Morning Note · ${esc(a.date)}
+    </h1>
+    <p style="margin:6px 0 0;color:${HTML_PALETTE.dim};font-size:12px">
+      由 Stock Monitor AI 委员会编辑 · 截至生成时刻数据
+    </p>
+    <div style="margin:14px 0 0;padding:10px 14px;background:${HTML_PALETTE.card};border-radius:8px;border:1px solid ${HTML_PALETTE.border};font-size:13px;color:${HTML_PALETTE.text}">
+      📊 委员会信心：<strong style="color:${HTML_PALETTE.accent}">${a.overall.toFixed(1)} / 10</strong> — ${esc(a.overall_label)}<br>
+      📋 ${a.watchlist_count} 只股票池 · Top ${a.blocks.length} 进入注意力优先级
+    </div>
+  `);
+
+  // ─── Top Call ──────────────────────────────────────────────
+  if (a.topCall) {
+    const topBlock = a.blocks.find((b) => b.ticker === a.topCall!.ticker);
+    sections.push(`
+      <div style="margin:18px 0 0;padding:14px 16px;background:linear-gradient(135deg,#1f6feb20,#161b22);border:1px solid ${HTML_PALETTE.accent};border-radius:10px">
+        <div style="font-size:11px;color:${HTML_PALETTE.accent};font-weight:700;text-transform:uppercase;letter-spacing:1px">🎯 Top Call</div>
+        <div style="margin-top:6px;font-size:16px;font-weight:700;color:${HTML_PALETTE.text};line-height:1.4">
+          ${esc(a.topCall.headline)}
+        </div>
+        ${a.topCall.rationale ? `<div style="margin-top:6px;font-size:13px;color:${HTML_PALETTE.text};line-height:1.6">${esc(a.topCall.rationale)}</div>` : ''}
+        ${topBlock ? `<div style="margin-top:8px;font-size:12px;color:${HTML_PALETTE.dim}">↗ ${esc(topBlock.name)} (${esc(topBlock.ticker)}) <span style="color:${HTML_PALETTE.text};font-family:monospace">${esc(topBlock.currency)}${topBlock.price.toFixed(2)}</span> <span style="color:${biasColor(topBlock.change_pct)};font-family:monospace">${topBlock.change_pct >= 0 ? '+' : ''}${topBlock.change_pct.toFixed(2)}%</span></div>` : ''}
+      </div>
+    `);
+  }
+
+  // ─── Overnight / Pre-Market ────────────────────────────────
+  sections.push(`<h2 style="margin:22px 0 10px;font-size:15px;color:${HTML_PALETTE.text};border-bottom:1px solid ${HTML_PALETTE.border};padding-bottom:6px">📰 Overnight &amp; Pre-Market Developments</h2>`);
+
+  if (a.blocks.length === 0) {
+    sections.push(`<p style="color:${HTML_PALETTE.muted};font-style:italic">今日无重大事件，维持持仓。（"No news is a valid morning note."）</p>`);
+  } else {
+    a.blocks.forEach((b, i) => {
+      const stars = '★'.repeat(Math.max(0, Math.min(5, Math.round(b.consensus / 2)))) + '☆'.repeat(Math.max(0, 5 - Math.round(b.consensus / 2)));
+      const bulls = b.perspectives.filter((p) => p.stance === 'bullish');
+      const neutrals = b.perspectives.filter((p) => p.stance === 'neutral');
+      const bears = b.perspectives.filter((p) => p.stance === 'bearish');
+      const repBull = bulls.sort((x, y) => y.confidence - x.confidence)[0];
+      const repBear = bears.sort((x, y) => y.confidence - x.confidence)[0];
+
+      const funda: string[] = [];
+      if (b.pe_ttm != null) funda.push(`PE ${b.pe_ttm.toFixed(1)}`);
+      if (b.pb != null) funda.push(`PB ${b.pb.toFixed(2)}`);
+      if (b.roe != null) funda.push(`ROE ${b.roe.toFixed(1)}%`);
+
+      sections.push(`
+        <div style="margin:12px 0;padding:12px 14px;background:${HTML_PALETTE.card};border:1px solid ${HTML_PALETTE.border};border-radius:8px">
+          <div style="font-size:14px;color:${HTML_PALETTE.text}">
+            <strong>#${i + 1} ${esc(b.name)}</strong>
+            <span style="color:${HTML_PALETTE.dim};font-size:12px">(${esc(b.ticker)})</span>
+            <span style="color:${HTML_PALETTE.warn};font-size:11px;margin-left:6px;letter-spacing:1px">${stars}</span>
+            <span style="float:right;font-size:11px;color:${HTML_PALETTE.dim}">共识 ${b.consensus.toFixed(1)}/10</span>
+          </div>
+          <div style="margin:6px 0;font-family:monospace;font-size:13px">
+            <span style="font-weight:700">${esc(b.currency)}${b.price.toFixed(2)}</span>
+            <span style="color:${biasColor(b.change_pct)};margin-left:6px">${b.change_pct >= 0 ? '+' : ''}${b.change_pct.toFixed(2)}%</span>
+          </div>
+          ${b.triggers.length > 0 ? `<div style="font-size:12px;color:${HTML_PALETTE.dim};margin:4px 0">📍 ${esc(b.triggers.map((t) => t.desc).join(' · '))}</div>` : ''}
+          ${funda.length > 0 ? `<div style="font-size:12px;color:${HTML_PALETTE.dim};margin:4px 0">📐 ${esc(funda.join(' · '))}</div>` : ''}
+          ${b.perspectives.length > 0 ? `
+            <div style="font-size:12px;color:${HTML_PALETTE.dim};margin:6px 0 4px">🤖 ${bulls.length} 多 / ${neutrals.length} 中 / ${bears.length} 空</div>
+            ${repBull ? `<div style="margin:3px 0;padding-left:6px;border-left:2px solid ${HTML_PALETTE.up};font-size:12px;color:${HTML_PALETTE.text}">🟢 <strong>${esc(repBull.name)}</strong>：${esc(repBull.summary.slice(0, 100))}</div>` : ''}
+            ${repBear ? `<div style="margin:3px 0;padding-left:6px;border-left:2px solid ${HTML_PALETTE.down};font-size:12px;color:${HTML_PALETTE.text}">🔴 <strong>${esc(repBear.name)}</strong>：${esc(repBear.summary.slice(0, 100))}</div>` : ''}
+          ` : ''}
+        </div>
+      `);
+    });
+  }
+
+  // ─── Trade Ideas ───────────────────────────────────────────
+  sections.push(`<h2 style="margin:22px 0 10px;font-size:15px;color:${HTML_PALETTE.text};border-bottom:1px solid ${HTML_PALETTE.border};padding-bottom:6px">💡 Trade Ideas</h2>`);
+  if (a.tradeIdeas && a.tradeIdeas.length > 0) {
+    a.tradeIdeas.forEach((idea) => {
+      const color = idea.bias === 'bull' ? HTML_PALETTE.up : HTML_PALETTE.down;
+      const icon = idea.bias === 'bull' ? '📈 偏多' : '📉 偏空';
+      sections.push(`
+        <div style="margin:10px 0;padding:10px 14px;background:${HTML_PALETTE.card};border:1px solid ${HTML_PALETTE.border};border-left:3px solid ${color};border-radius:6px;font-size:12px;color:${HTML_PALETTE.text}">
+          <div><strong style="color:${color}">${icon}</strong> ${esc(idea.name)} <span style="color:${HTML_PALETTE.dim}">(${esc(idea.ticker)})</span> · <span style="color:${HTML_PALETTE.dim}">置信 ${idea.conviction.toFixed(1)}/10</span></div>
+          <div style="margin:5px 0">论点：${esc(idea.thesis)}</div>
+          <div style="color:${HTML_PALETTE.warn}">⚠️ 风险：${esc(idea.risk)}</div>
+        </div>
+      `);
+    });
+  } else {
+    sections.push(`<p style="color:${HTML_PALETTE.muted};font-style:italic;font-size:13px">今日无高置信（≥ 7/10）信号，观望为主。</p>`);
+  }
+
+  // ─── Footer ────────────────────────────────────────────────
+  sections.push(`
+    <div style="margin:24px 0 0;padding:12px 14px;background:${HTML_PALETTE.card};border:1px solid ${HTML_PALETTE.border};border-radius:8px;font-size:11px;color:${HTML_PALETTE.muted};line-height:1.6">
+      🔗 <a href="https://stock-monitor-nu.vercel.app/" style="color:${HTML_PALETTE.accent};text-decoration:none">stock-monitor-nu.vercel.app</a> — 完整简报 / K 线 / 财报 / 股东持仓 / Backtest 排行榜<br>
+      <em>本内容由 AI 自动生成，仅作为决策辅助参考，不构成任何投资建议。</em><br>
+      <em>数据源：东方财富（A/H/US 报价）· Tushare Pro（A 股财报）· DeepSeek V4 Flash（AI 委员会）</em>
+    </div>
+  `);
+
+  // Wrap in email-safe container
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:${HTML_PALETTE.bg};color:${HTML_PALETTE.text};font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif">
+  <div style="max-width:640px;margin:0 auto;padding:24px 20px;background:${HTML_PALETTE.bg}">
+    ${sections.join('\n')}
+  </div>
+</body>
+</html>`;
 }

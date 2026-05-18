@@ -156,9 +156,77 @@ export default function SettingsPage() {
             提示：① 找 @BotFather 创建 bot 拿 token  ②  和 bot 说 hi  ③  从 @userinfobot 拿 chat_id  ④ 在 Vercel env 加 TELEGRAM_BOT_TOKEN
           </div>
         </div>
-        <label className="flex items-center gap-2 text-sm">
+        <div className="mt-4 border-t border-border pt-4">
+          <label className="mb-1 block text-xs text-text-dim">📧 Email 收件人</label>
+          <input
+            type="email"
+            placeholder="you@example.com（不填则用 EMAIL_TO env）"
+            id="email-to-input"
+            className="w-full"
+          />
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              onClick={async () => {
+                const to = (document.getElementById('email-to-input') as HTMLInputElement)?.value || undefined;
+                try {
+                  show('⏳ 发送测试邮件中...');
+                  const resp = await fetch('/api/brief/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      to,
+                      channels: ['email'],
+                      subject: 'Sentinel · 邮件测试',
+                      text: '🧪 Sentinel email 测试\n\n如果你看到这封邮件，说明 Resend 推送配置成功！\n\nhttps://stock-monitor-nu.vercel.app/',
+                    }),
+                  });
+                  const data = await resp.json();
+                  if (data.channels?.email?.ok) show(`✅ 邮件已发送 (id ${data.channels.email.id?.slice(0, 8)}...)`);
+                  else show(`✗ ${data.channels?.email?.error || data.channels?.email?.skipped || '发送失败'}`);
+                } catch (e: any) {
+                  show(`✗ ${e?.message || '发送失败'}`);
+                }
+              }}
+              className="rounded bg-accent-dim px-3 py-1.5 text-xs text-white"
+            >
+              ✉️ 发邮件测试
+            </button>
+            <button
+              onClick={async () => {
+                const to = (document.getElementById('email-to-input') as HTMLInputElement)?.value || undefined;
+                try {
+                  show('⏳ 生成并发邮件简报中（约 20-30s）...');
+                  const resp = await fetch('/api/brief/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      to,
+                      channels: ['email'],
+                      topN: 5,
+                    }),
+                  });
+                  const data = await resp.json();
+                  if (data.channels?.email?.ok) {
+                    show(`✅ 简报邮件已发送（主题：${data.brief_meta?.subject?.slice(0, 30)}...）`);
+                  } else show(`✗ ${data.channels?.email?.error || data.channels?.email?.skipped || '失败'}`);
+                } catch (e: any) {
+                  show(`✗ ${e?.message || '失败'}`);
+                }
+              }}
+              className="rounded bg-bg-card border border-border px-3 py-1.5 text-xs text-text-dim"
+            >
+              🚀 立即生成 brief 并发邮件
+            </button>
+          </div>
+          <div className="mt-2 text-[10px] text-text-muted">
+            提示：① 注册 <a href="https://resend.com" target="_blank" className="text-accent">resend.com</a>（免费 100 邮件/日）② 拿 API key ③ vercel env add RESEND_API_KEY + EMAIL_TO + EMAIL_FROM
+            <br />④ 沙箱测试可用 EMAIL_FROM=onboarding@resend.dev（接收方必须是 Resend 账号邮箱）
+          </div>
+        </div>
+
+        <label className="mt-3 flex items-center gap-2 text-sm">
           <input type="checkbox" checked={emailNotif} onChange={(e) => setEmailNotif(e.target.checked)} />
-          每日邮件推送（待 v0.6 接入 Resend）
+          启用每日邮件推送（与 Telegram 并行）
         </label>
       </div>
 
