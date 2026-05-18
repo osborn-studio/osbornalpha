@@ -37,6 +37,9 @@ export default function WatchlistPage() {
   const [newColumnOpen, setNewColumnOpen] = useState(false);
   const [newColumnName, setNewColumnName] = useState('');
 
+  // Batch import dialog
+  const [importOpen, setImportOpen] = useState(false);
+
   // Mobile move menu (per-card kebab) — which ticker's menu is open
   const [openMenuTicker, setOpenMenuTicker] = useState<string | null>(null);
 
@@ -167,6 +170,42 @@ export default function WatchlistPage() {
     persist(groups.filter((g) => g.id !== id));
   }
 
+  // ─── Batch import ───
+  function importBatch(tickers: string[], boardName: string) {
+    if (tickers.length === 0) return;
+    const existing = new Set<string>();
+    for (const g of groups) for (const t of g.tickers) existing.add(t.toUpperCase());
+
+    const seen = new Set<string>();
+    const fresh: string[] = [];
+    const skipped: string[] = [];
+    for (const raw of tickers) {
+      const t = raw.toUpperCase();
+      if (existing.has(t) || seen.has(t)) {
+        skipped.push(t);
+      } else {
+        seen.add(t);
+        fresh.push(t);
+        addCustomStock({ t, n: t, py: '', m: classifyMarket(t) as Market });
+      }
+    }
+
+    if (fresh.length === 0) {
+      show(`没有新代码可导入（全部 ${skipped.length} 个已存在于股票池）`);
+      return;
+    }
+
+    const id = `import_${Date.now()}`;
+    const finalName = boardName.trim() || `批量导入 ${new Date().toLocaleDateString('zh-CN')}`;
+    persist([...groups, { id, name: finalName, tickers: fresh }]);
+    setImportOpen(false);
+    show(
+      skipped.length > 0
+        ? `✓ 已导入 ${fresh.length} 只到「${finalName}」，去重 ${skipped.length} 个`
+        : `✓ 已导入 ${fresh.length} 只到「${finalName}」`
+    );
+  }
+
   // ─── Export ───
   function exportYaml() {
     const lines = ['# Stock Monitor watchlist', 'version: 1', '', 'groups:'];
@@ -196,9 +235,21 @@ export default function WatchlistPage() {
             {quotesLoading && allTickers.length > 0 && <span className="ml-2 text-accent">⏳ 加载报价…</span>}
           </div>
         </div>
-        <button onClick={exportYaml} className="shrink-0 rounded-md bg-bg-card px-3 py-1.5 text-xs text-text-dim hover:text-text">
-          📤 导出
-        </button>
+        <div className="flex shrink-0 gap-1.5">
+          <button
+            onClick={() => setImportOpen(true)}
+            className="rounded-md bg-accent-dim/15 px-3 py-1.5 text-xs font-semibold text-accent hover:bg-accent-dim/25"
+            title="从 CSV 文件或粘贴文本批量导入"
+          >
+            📥 批量导入
+          </button>
+          <button
+            onClick={exportYaml}
+            className="rounded-md bg-bg-card px-3 py-1.5 text-xs text-text-dim hover:text-text"
+          >
+            📤 导出
+          </button>
+        </div>
       </div>
 
       {!user && isSupabaseConfigured() && (
@@ -305,6 +356,15 @@ export default function WatchlistPage() {
       )}
 
       <Disclaimer />
+
+      {importOpen && (
+        <ImportDialog
+          existingTickerCount={allTickers.length}
+          existingTickers={new Set(allTickers.map((t) => t.toUpperCase()))}
+          onCancel={() => setImportOpen(false)}
+          onConfirm={importBatch}
+        />
+      )}
     </>
   );
 }
@@ -635,6 +695,238 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
         <button onClick={onClose} className="rounded border border-border px-2 py-1 text-[11px] text-text-dim">
           完成
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Batch Import Dialog
+// ──────────────────────────────────────────────────────────────────────────
+
+interface ImportDialogProps {
+  existingTickerCount: number;
+  existingTickers: Set<string>;
+  onCancel: () => void;
+  onConfirm: (tickers: string[], boardName: string) => void;
+}
+
+/**
+ * Parse free-form ticker input. Accepts:
+ *   - CSV (single column, or first column with header row auto-skipped)
+ *   - Comma-separated:    600519.SH, 002594.SZ, AAPL
+ *   - Newline-separated:  one per line
+ *   - Whitespace-mixed:   anything that splits on /[\s,;]+/
+ *
+ * Header detection: first row is dropped if it contains any non-ticker-shaped
+ * cell (e.g. "ticker", "代码", "name"). A ticker shape is one of:
+ *   - 6 digits + .SH/.SZ/.BJ (A-share)
+ *   - 5 digits + .HK
+ *   - 1-6 letters (US, including dots like BRK.B)
+ */
+function parseTickerInput(raw: string): string[] {
+  if (!raw.trim()) return [];
+
+  const lines = raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  // CSV: take first column of each line. Also splits comma/semicolon lists.
+  const cells: string[] = [];
+  for (const line of lines) {
+    const parts = line.split(/[,;]/).map((p) => p.trim()).filter(Boolean);
+    if (parts.length > 0) cells.push(...parts);
+  }
+
+  const tickerRegex = /^(\d{6}\.(SH|SZ|BJ)|\d{5}\.HK|[A-Z][A-Z.]{0,9})$/;
+  const looksLikeTicker = (s: string) => tickerRegex.test(s.toUpperCase());
+
+  // Drop the first cell if it's clearly a header label, not a ticker.
+  const out: string[] = [];
+  for (let i = 0; i < cells.length; i++) {
+    const cell = cells[i];
+    if (i === 0 && !looksLikeTicker(cell)) continue; // skip header
+    // Final whitespace split (handles "600519.SH AAPL TSLA" on one line)
+    for (const tok of cell.split(/\s+/)) {
+      const upper = tok.trim().toUpperCase();
+      if (!upper) continue;
+      // Be permissive on import; the user has signalled intent. Only reject
+      // pure garbage (no alphanumeric).
+      if (/[A-Z0-9]/.test(upper)) out.push(upper);
+    }
+  }
+  return out;
+}
+
+function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfirm }: ImportDialogProps) {
+  const [text, setText] = useState('');
+  const [boardName, setBoardName] = useState('');
+  const [fileError, setFileError] = useState<string | null>(null);
+
+  const parsed = useMemo(() => parseTickerInput(text), [text]);
+  const dedupStats = useMemo(() => {
+    const seen = new Set<string>();
+    let fresh = 0;
+    let duplicateOfExisting = 0;
+    let duplicateWithinInput = 0;
+    for (const t of parsed) {
+      if (existingTickers.has(t)) {
+        duplicateOfExisting++;
+      } else if (seen.has(t)) {
+        duplicateWithinInput++;
+      } else {
+        seen.add(t);
+        fresh++;
+      }
+    }
+    return { fresh, duplicateOfExisting, duplicateWithinInput, total: parsed.length };
+  }, [parsed, existingTickers]);
+
+  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 1024 * 200) {
+      setFileError(`文件过大（${(file.size / 1024).toFixed(0)} KB）。建议 < 200 KB。`);
+      return;
+    }
+    setFileError(null);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const content = String(reader.result || '');
+      setText((cur) => (cur.trim() ? cur + '\n' + content : content));
+    };
+    reader.onerror = () => setFileError('读取文件失败');
+    reader.readAsText(file, 'utf-8');
+    e.target.value = '';  // allow re-select same file
+  }
+
+  const canConfirm = dedupStats.fresh > 0;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-lg rounded-lg border border-border bg-bg-elevated p-4 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-base font-semibold">📥 批量导入股票</h2>
+          <button
+            onClick={onCancel}
+            className="rounded p-1 text-text-dim hover:bg-bg-card hover:text-text"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="mb-3 text-[11px] text-text-dim">
+          股票池现有 <span className="font-semibold tabular-nums text-text">{existingTickerCount}</span> 只股票。
+          导入后将自动建立新看板，已存在的代码会跳过。
+        </div>
+
+        {/* Board name */}
+        <label className="mb-3 block">
+          <span className="mb-1 block text-xs text-text-dim">新看板名称（可选）</span>
+          <input
+            type="text"
+            value={boardName}
+            onChange={(e) => setBoardName(e.target.value)}
+            placeholder={`默认：批量导入 ${new Date().toLocaleDateString('zh-CN')}`}
+            className="w-full text-sm"
+          />
+        </label>
+
+        {/* Text paste */}
+        <label className="mb-2 block">
+          <span className="mb-1 block text-xs text-text-dim">粘贴代码（每行一个或逗号分隔）</span>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder={`600519.SH\n002594.SZ\nAAPL\nNVDA\n00700.HK\n\n或：600519.SH, 002594.SZ, AAPL`}
+            rows={6}
+            className="w-full font-mono text-xs"
+            style={{ resize: 'vertical' }}
+          />
+        </label>
+
+        {/* File upload */}
+        <div className="mb-3">
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded border border-border bg-bg-card px-3 py-1.5 text-xs text-text-dim hover:text-text">
+            <span>📎 上传 CSV / TXT</span>
+            <input
+              type="file"
+              accept=".csv,.txt,text/csv,text/plain"
+              onChange={onFile}
+              className="hidden"
+            />
+          </label>
+          {fileError && (
+            <span className="ml-2 text-[11px] text-down">{fileError}</span>
+          )}
+          <div className="mt-1 text-[10px] text-text-muted">
+            CSV 自动取第一列；带表头会自动跳过。
+          </div>
+        </div>
+
+        {/* Preview */}
+        {parsed.length > 0 && (
+          <div className="mb-3 rounded border border-border bg-bg-card p-2.5 text-[11px]">
+            <div className="mb-1.5 flex items-baseline gap-3 text-text-dim">
+              <span>解析：<span className="font-semibold tabular-nums text-text">{dedupStats.total}</span> 个</span>
+              <span className="text-up">+ <span className="font-semibold tabular-nums">{dedupStats.fresh}</span> 新增</span>
+              {dedupStats.duplicateOfExisting > 0 && (
+                <span className="text-text-muted">
+                  − <span className="font-semibold tabular-nums">{dedupStats.duplicateOfExisting}</span> 与已有重复
+                </span>
+              )}
+              {dedupStats.duplicateWithinInput > 0 && (
+                <span className="text-text-muted">
+                  − <span className="font-semibold tabular-nums">{dedupStats.duplicateWithinInput}</span> 输入内重复
+                </span>
+              )}
+            </div>
+            <div className="max-h-28 overflow-y-auto rounded bg-bg-elevated p-1.5 font-mono text-[10px] leading-relaxed">
+              {Array.from(new Set(parsed)).map((t) => (
+                <span
+                  key={t}
+                  className={`mr-1.5 inline-block ${existingTickers.has(t) ? 'text-text-muted line-through' : 'text-text'}`}
+                  title={existingTickers.has(t) ? '已存在于股票池，将跳过' : '将导入'}
+                >
+                  {t}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex justify-end gap-2 border-t border-border pt-3">
+          <button
+            onClick={onCancel}
+            className="rounded border border-border px-3 py-1.5 text-xs text-text-dim"
+          >
+            取消
+          </button>
+          <button
+            onClick={() => {
+              const seen = new Set<string>();
+              const fresh: string[] = [];
+              for (const t of parsed) {
+                if (existingTickers.has(t) || seen.has(t)) continue;
+                seen.add(t);
+                fresh.push(t);
+              }
+              onConfirm(fresh, boardName);
+            }}
+            disabled={!canConfirm}
+            className="rounded bg-accent-dim px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+          >
+            {canConfirm ? `导入 ${dedupStats.fresh} 个到新看板` : '没有可导入的代码'}
+          </button>
+        </div>
       </div>
     </div>
   );
