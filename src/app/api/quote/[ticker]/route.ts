@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { fetchEastmoneyQuote } from '@/lib/data/sources/eastmoney';
+import { fetchSinaQuote } from '@/lib/data/sources/sina';
+import { fetchTencentQuote } from '@/lib/data/sources/tencent';
 import {
   isTushareConfigured,
   fetchTushareDaily,
@@ -17,23 +19,51 @@ function lookupName(ticker: string): string {
   return MOCK_UNIVERSE.find((u) => u.t === ticker)?.n || ticker;
 }
 
+/** One transient-failure retry with 200 ms backoff. */
+async function withRetry<T>(fn: () => Promise<T | null>): Promise<T | null> {
+  try {
+    const first = await fn();
+    if (first) return first;
+  } catch { /* fall through */ }
+  await new Promise((r) => setTimeout(r, 200));
+  try {
+    return await fn();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Layered quote resolver for the headline (price / name / change_pct).
+ *
+ *   Eastmoney  → Sina  → Tencent  → (A-share only) Tushare daily
+ *
+ * Fundamentals (PE / PB / ROE / market_cap / dividend) still come from
+ * Tushare basic + indicator for A-share — those don't have a free
+ * equivalent of comparable quality, and the cached layer keeps cost
+ * to one hit per ticker per day.
+ */
 export async function GET(_req: Request, { params }: Ctx) {
   const { ticker: raw } = await params;
   const ticker = decodeURIComponent(raw);
+  const isAShare = /\.(SH|SZ|BJ)$/i.test(ticker);
 
-  // Primary: Eastmoney (works for HK/US; A-share is blocked from Vercel egress)
-  let em = null;
-  try {
-    em = await fetchEastmoneyQuote(ticker);
-  } catch (e: any) {
-    console.error('Eastmoney quote error:', e?.message);
+  // ── Headline cascade ──
+  let headline: any = await withRetry(() => fetchEastmoneyQuote(ticker));
+  let headlineSource = 'eastmoney';
+  if (!headline) {
+    headline = await withRetry(() => fetchSinaQuote(ticker));
+    if (headline) headlineSource = 'sina';
+  }
+  if (!headline) {
+    headline = await withRetry(() => fetchTencentQuote(ticker));
+    if (headline) headlineSource = 'tencent';
   }
 
-  // Supplement: Tushare for A-share if token set
+  // ── Tushare supplements (A-share only) ──
   let tushareDaily = null;
   let tushareBasic = null;
   let tushareInd = null;
-  const isAShare = /\.(SH|SZ|BJ)$/i.test(ticker);
   const supplemented: string[] = [];
 
   if (isAShare && isTushareConfigured()) {
@@ -50,22 +80,23 @@ export async function GET(_req: Request, { params }: Ctx) {
     if (tushareInd) supplemented.push('fina_indicator');
   }
 
-  if (!em && !tushareBasic && !tushareDaily) {
+  // If all free sources failed and we have no Tushare data either, 404.
+  if (!headline && !tushareBasic && !tushareDaily) {
     return NextResponse.json(
       {
         source: 'none',
         ticker,
         error: 'No data source returned a quote',
         tushare_configured: isTushareConfigured(),
+        chain_tried: ['eastmoney', 'sina', 'tencent', isAShare ? 'tushare' : null].filter(Boolean),
       },
       { status: 404 }
     );
   }
 
-  // When Eastmoney is unavailable for A-share, synthesize the headline
-  // (price / name / change_pct) from Tushare daily + basic.
+  // ── Final Tushare-headline synthesis (A-share only, if all 3 free sources failed) ──
   const tushareSynth =
-    !em && isAShare && (tushareDaily || tushareBasic)
+    !headline && isAShare && (tushareDaily || tushareBasic)
       ? {
           name: lookupName(ticker),
           market: 'A' as const,
@@ -90,18 +121,21 @@ export async function GET(_req: Request, { params }: Ctx) {
         }
       : null;
 
-  // Merge: Eastmoney base if present, else Tushare-synthesized; then overlay
-  // fundamentals from Tushare basic + indicator.
+  if (tushareSynth) headlineSource = 'tushare';
+
+  // ── Merge — headline (free source or tushare-synth) + Tushare overlays ──
   const result = {
-    source: em && tushareBasic ? 'eastmoney+tushare' : em ? 'eastmoney' : 'tushare',
+    source: tushareBasic && headlineSource !== 'tushare'
+      ? `${headlineSource}+tushare`
+      : headlineSource,
     ticker,
-    ...(em || tushareSynth),
+    ...(headline || tushareSynth),
     ...(tushareBasic && {
-      pe_ttm: tushareBasic.pe_ttm ?? em?.pe_ttm ?? null,
-      pb: tushareBasic.pb ?? em?.pb ?? null,
-      turnover: tushareBasic.turnover_rate ?? em?.turnover ?? null,
+      pe_ttm: tushareBasic.pe_ttm ?? headline?.pe_ttm ?? null,
+      pb: tushareBasic.pb ?? headline?.pb ?? null,
+      turnover: tushareBasic.turnover_rate ?? headline?.turnover ?? null,
       dividend_yield: tushareBasic.dv_ratio ?? null,
-      market_cap: tushareBasic.total_mv ? tushareBasic.total_mv * 10000 : em?.market_cap ?? null,
+      market_cap: tushareBasic.total_mv ? tushareBasic.total_mv * 10000 : headline?.market_cap ?? null,
     }),
     ...(tushareInd && {
       roe: tushareInd.roe ?? null,

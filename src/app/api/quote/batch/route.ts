@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { fetchEastmoneyQuote } from '@/lib/data/sources/eastmoney';
+import { fetchSinaQuote } from '@/lib/data/sources/sina';
+import { fetchTencentQuote } from '@/lib/data/sources/tencent';
 import {
   isTushareConfigured,
   fetchTushareDaily,
@@ -51,11 +53,10 @@ function formatMarketCap(yuan: number | null): string {
 }
 
 /**
- * Tushare-only synthesis for A-shares when Eastmoney is unreachable.
- * Eastmoney's `push2delay` host is blocked from Vercel's US egress for
- * A-share secid prefixes (0/1) — observed in prod. Uses the cached
- * `daily` + `daily_basic` endpoints, so the marginal Tushare cost is
- * one hit per ticker per 24h TTL window.
+ * Tushare-only synthesis for A-shares — the final fallback that costs 积分.
+ * Eastmoney's `push2delay` host is blocked from Vercel for A-share secid
+ * prefixes (0/1). Sina + Tencent are tried first; this only fires if both
+ * also fail (e.g. their CDNs are flaky on a given request).
  */
 async function tushareFallback(ticker: string): Promise<QuoteShape | null> {
   if (!isTushareConfigured()) return null;
@@ -70,7 +71,6 @@ async function tushareFallback(ticker: string): Promise<QuoteShape | null> {
   const prev_close = last?.pre_close ?? 0;
   const change = last?.change ?? (prev_close ? close - prev_close : 0);
   const change_pct = last?.pct_chg ?? (prev_close ? ((close - prev_close) / prev_close) * 100 : 0);
-  // Tushare total_mv unit: 万元
   const market_cap = basic?.total_mv != null ? basic.total_mv * 10000 : null;
 
   return {
@@ -102,13 +102,52 @@ async function tushareFallback(ticker: string): Promise<QuoteShape | null> {
   };
 }
 
+/**
+ * Run a single fetcher with one transient-failure retry.
+ * Transient = throws OR returns null. Retry after 200ms.
+ */
+async function withRetry<T>(fn: () => Promise<T | null>): Promise<T | null> {
+  try {
+    const first = await fn();
+    if (first) return first;
+  } catch { /* fall through */ }
+  await new Promise((r) => setTimeout(r, 200));
+  try {
+    return await fn();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve a quote via the cascading chain. Each layer is a separate
+ * network call — we stop at the first one that returns a usable quote.
+ *
+ *   Eastmoney (push2delay)   ← fastest when reachable; blocked from Vercel for A-share
+ *   Sina (hq.sinajs.cn)      ← free, no auth, GBK; AKShare's underlying A/HK/US source
+ *   Tencent (qt.gtimg.cn)    ← free, no auth, GBK; second free fallback
+ *   Tushare daily            ← costs 积分; only fires if all three free sources fail
+ *
+ * Each individual call has a 1-retry wrapper for transient hiccups.
+ */
 async function resolveQuote(ticker: string): Promise<QuoteShape | null> {
-  const em = await fetchEastmoneyQuote(ticker).catch(() => null);
+  // Layer 1: Eastmoney
+  const em = await withRetry(() => fetchEastmoneyQuote(ticker));
   if (em) return em as unknown as QuoteShape;
-  // A-share fallback when Eastmoney is unreachable
+
+  // Layer 2: Sina
+  const sina = await withRetry(() => fetchSinaQuote(ticker));
+  if (sina) return sina as unknown as QuoteShape;
+
+  // Layer 3: Tencent
+  const tencent = await withRetry(() => fetchTencentQuote(ticker));
+  if (tencent) return tencent as unknown as QuoteShape;
+
+  // Layer 4: Tushare (A-share only, costs 积分)
   if (/\.(SH|SZ|BJ)$/i.test(ticker)) {
     return tushareFallback(ticker);
   }
+
   return null;
 }
 
