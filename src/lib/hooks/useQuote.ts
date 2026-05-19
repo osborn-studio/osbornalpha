@@ -111,23 +111,31 @@ export function useQuote(ticker: string | null, opts?: { refreshIntervalMs?: num
 }
 
 // ─── Batch ───
-interface BatchState { quotes: Record<string, LiveQuote | null>; loading: boolean }
+interface BatchState { quotes: Record<string, LiveQuote | null>; loading: boolean; loadedAt: number | null }
 
-export function useBatchQuotes(tickers: string[], opts?: { refreshIntervalMs?: number }): BatchState {
-  const [state, setState] = useState<BatchState>({ quotes: {}, loading: tickers.length > 0 });
+export function useBatchQuotes(
+  tickers: string[],
+  opts?: { refreshIntervalMs?: number }
+): BatchState & { refetch: () => void } {
+  const [state, setState] = useState<BatchState>({ quotes: {}, loading: tickers.length > 0, loadedAt: null });
+  // `bump` lets callers trigger a manual refetch without changing tickers
+  const [bump, setBump] = useState(0);
   const key = tickers.slice().sort().join(',');
   const refreshMs = opts?.refreshIntervalMs ?? 0;
 
   useEffect(() => {
     if (tickers.length === 0) {
-      setState({ quotes: {}, loading: false });
+      setState({ quotes: {}, loading: false, loadedAt: null });
       return;
     }
     let cancelled = false;
 
     const run = (isRefresh = false) => {
       if (!isRefresh) setState((prev) => ({ ...prev, loading: !prev.quotes || Object.keys(prev.quotes).length === 0 }));
-      fetch(`/api/quote/batch?tickers=${encodeURIComponent(tickers.join(','))}`)
+      // Cache-bust on manual refetch (`bump > 0`); the API layer's
+      // unstable_cache TTL still kicks in for the underlying Tushare hits.
+      const url = `/api/quote/batch?tickers=${encodeURIComponent(tickers.join(','))}${bump > 0 ? `&_=${bump}` : ''}`;
+      fetch(url)
         .then((r) => r.json())
         .then((data) => {
           if (cancelled) return;
@@ -135,7 +143,7 @@ export function useBatchQuotes(tickers: string[], opts?: { refreshIntervalMs?: n
           for (const t in quotes) {
             if (quotes[t]) cache.set(t, { data: quotes[t], ts: Date.now() });
           }
-          setState({ quotes, loading: false });
+          setState({ quotes, loading: false, loadedAt: Date.now() });
         })
         .catch(() => {
           if (cancelled) return;
@@ -154,9 +162,9 @@ export function useBatchQuotes(tickers: string[], opts?: { refreshIntervalMs?: n
       if (timer) clearInterval(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, refreshMs]);
+  }, [key, refreshMs, bump]);
 
-  return state;
+  return { ...state, refetch: () => setBump((b) => b + 1) };
 }
 
 // ─── Financials ───
