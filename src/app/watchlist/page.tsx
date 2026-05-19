@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef, useMemo } from 'react';
+import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { MOCK_DATA } from '@/lib/data/mock';
 import { addCustomStock } from '@/lib/data/custom-stocks';
@@ -26,10 +26,19 @@ export default function WatchlistPage() {
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
-  // Drag state — single source of truth
+  // Drag state — single source of truth.
+  // `dragKind` distinguishes card-drag from column-reorder so the column
+  // header's onDragOver doesn't accidentally fire highlights during a
+  // card-drop (and vice versa).
+  const [dragKind, setDragKind] = useState<'card' | 'column' | null>(null);
   const [dragTicker, setDragTicker] = useState<string | null>(null);
   const [dragFromGroup, setDragFromGroup] = useState<string | null>(null);
+  const [dragColumnId, setDragColumnId] = useState<string | null>(null);
   const [dropTargetGroup, setDropTargetGroup] = useState<string | null>(null);
+  const [dropTargetColumnId, setDropTargetColumnId] = useState<string | null>(null);
+  // dragenter/dragleave fire on every child element. A counter avoids
+  // flicker as the dragged item moves over cards inside a column.
+  const dragOverCounters = useRef<Record<string, number>>({});
 
   // Per-column add UI: which column has the add panel open
   const [addingInGroup, setAddingInGroup] = useState<string | null>(null);
@@ -90,37 +99,85 @@ export default function WatchlistPage() {
     return Array.from(set);
   }, [groups]);
 
-  const { quotes, loading: quotesLoading } = useBatchQuotes(allTickers, {
+  const { quotes, loading: quotesLoading, loadedAt, refetch } = useBatchQuotes(allTickers, {
     refreshIntervalMs: REFRESH_MS,
   });
 
+  const failedTickers = useMemo(() => {
+    if (!loadedAt) return [];  // still loading first batch
+    return allTickers.filter((t) => !quotes[t] || (quotes[t] as any)?.price === 0);
+  }, [allTickers, quotes, loadedAt]);
+
   // ─── Drag-and-drop handlers ───
-  function onDragStart(e: React.DragEvent, ticker: string, fromGroup: string) {
+  // Card drag (within column body)
+  function onCardDragStart(e: React.DragEvent, ticker: string, fromGroup: string) {
+    setDragKind('card');
     setDragTicker(ticker);
     setDragFromGroup(fromGroup);
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', ticker);
+    // Apply 'grabbing' cursor to the whole document during drag so the
+    // experience matches Trello / Linear regardless of where the cursor goes.
+    document.body.style.cursor = 'grabbing';
   }
 
-  function onDragEnd() {
+  // Column drag (from column header)
+  function onColumnDragStart(e: React.DragEvent, columnId: string) {
+    setDragKind('column');
+    setDragColumnId(columnId);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('application/x-watchlist-column', columnId);
+    document.body.style.cursor = 'grabbing';
+  }
+
+  const onDragEnd = useCallback(() => {
+    setDragKind(null);
     setDragTicker(null);
     setDragFromGroup(null);
+    setDragColumnId(null);
     setDropTargetGroup(null);
+    setDropTargetColumnId(null);
+    dragOverCounters.current = {};
+    document.body.style.cursor = '';
+  }, []);
+
+  // Column body drop zone (cards only)
+  function onColumnDragEnter(groupId: string) {
+    if (dragKind !== 'card') return;
+    const counters = dragOverCounters.current;
+    counters[groupId] = (counters[groupId] || 0) + 1;
+    setDropTargetGroup(groupId);
+  }
+
+  function onColumnDragLeave(groupId: string) {
+    if (dragKind !== 'card') return;
+    const counters = dragOverCounters.current;
+    counters[groupId] = Math.max(0, (counters[groupId] || 0) - 1);
+    if (counters[groupId] === 0) {
+      setDropTargetGroup((cur) => (cur === groupId ? null : cur));
+    }
   }
 
   function onColumnDragOver(e: React.DragEvent, groupId: string) {
-    e.preventDefault();
-    setDropTargetGroup(groupId);
+    if (dragKind === 'card') {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    } else if (dragKind === 'column') {
+      // Column being dragged over another column header — allow drop on the
+      // column shell so the user has a wider drop zone
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (dragColumnId && dragColumnId !== groupId) setDropTargetColumnId(groupId);
+    }
   }
 
   function onColumnDrop(e: React.DragEvent, toGroup: string) {
     e.preventDefault();
-    if (!dragTicker || !dragFromGroup) return;
-    if (dragFromGroup === toGroup) {
-      onDragEnd();
-      return;
+    if (dragKind === 'card' && dragTicker && dragFromGroup) {
+      if (dragFromGroup !== toGroup) moveTicker(dragTicker, dragFromGroup, toGroup);
+    } else if (dragKind === 'column' && dragColumnId && dragColumnId !== toGroup) {
+      reorderColumn(dragColumnId, toGroup);
     }
-    moveTicker(dragTicker, dragFromGroup, toGroup);
     onDragEnd();
   }
 
@@ -133,6 +190,23 @@ export default function WatchlistPage() {
     persist(next);
     const toName = groups.find((g) => g.id === toGroup)?.name || toGroup;
     show(`✓ ${ticker} → ${toName}`);
+  }
+
+  function reorderColumn(fromId: string, toId: string) {
+    const fromIdx = groups.findIndex((g) => g.id === fromId);
+    const toIdx = groups.findIndex((g) => g.id === toId);
+    if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
+    const next = [...groups];
+    const [moved] = next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, moved);
+    persist(next);
+    show(`✓ 看板已重排：${moved.name}`);
+  }
+
+  // Manually refresh all quotes (e.g. after a transient API failure)
+  function refreshQuotes() {
+    refetch();
+    show('🔄 正在刷新行情…');
   }
 
   // ─── Card actions ───
@@ -231,16 +305,29 @@ export default function WatchlistPage() {
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold">📋 股票池</h1>
-          <div className="mt-0.5 text-[11px] text-text-dim">
-            拖拽卡片在看板间移动 · 实时报价每 {REFRESH_MS / 1000}s 自动刷新
-            {quotesLoading && allTickers.length > 0 && <span className="ml-2 text-accent">⏳ 加载报价…</span>}
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-text-dim">
+            <span>拖拽卡片在看板间移动 · 拖拽列头重排看板 · 每 {REFRESH_MS / 1000}s 自动刷新</span>
+            {quotesLoading && allTickers.length > 0 && <span className="text-accent">⏳ 加载报价…</span>}
+            {!quotesLoading && failedTickers.length > 0 && (
+              <span className="text-down">
+                ⚠ {failedTickers.length} 只行情拉取失败
+              </span>
+            )}
           </div>
         </div>
         <div className="flex shrink-0 gap-1.5">
           <button
+            onClick={refreshQuotes}
+            disabled={allTickers.length === 0 || quotesLoading}
+            className="rounded-md bg-bg-card px-3 py-1.5 text-xs text-text-dim hover:text-text disabled:opacity-50"
+            title="重新拉取所有行情"
+          >
+            🔄 刷新
+          </button>
+          <button
             onClick={() => setImportOpen(true)}
             className="rounded-md bg-accent-dim/15 px-3 py-1.5 text-xs font-semibold text-accent hover:bg-accent-dim/25"
-            title="从 CSV 文件或粘贴文本批量导入"
+            title="从 CSV / Excel 文件或粘贴文本批量导入"
           >
             📥 批量导入
           </button>
@@ -274,15 +361,21 @@ export default function WatchlistPage() {
             group={g}
             allGroups={groups}
             quotes={quotes}
-            isDropTarget={dropTargetGroup === g.id}
+            loadedAt={loadedAt}
+            isDropTarget={dropTargetGroup === g.id && dragKind === 'card'}
+            isColumnDropTarget={dropTargetColumnId === g.id && dragKind === 'column'}
+            isBeingDragged={dragColumnId === g.id && dragKind === 'column'}
             dragTicker={dragTicker}
             isAdding={addingInGroup === g.id}
             openMenuTicker={openMenuTicker}
             onDragOver={(e) => onColumnDragOver(e, g.id)}
-            onDragLeave={() => setDropTargetGroup((cur) => (cur === g.id ? null : cur))}
+            onDragEnter={() => onColumnDragEnter(g.id)}
+            onDragLeave={() => onColumnDragLeave(g.id)}
             onDrop={(e) => onColumnDrop(e, g.id)}
-            onCardDragStart={(e, t) => onDragStart(e, t, g.id)}
+            onColumnDragStart={(e) => onColumnDragStart(e, g.id)}
+            onCardDragStart={(e, t) => onCardDragStart(e, t, g.id)}
             onCardDragEnd={onDragEnd}
+            onRetryTicker={refetch}
             onAddOpen={() => setAddingInGroup(g.id)}
             onAddClose={() => setAddingInGroup(null)}
             onCardMove={(ticker, toGroupId) => moveTicker(ticker, g.id, toGroupId)}
@@ -378,15 +471,21 @@ interface ColumnProps {
   group: Group;
   allGroups: Group[];
   quotes: Record<string, LiveQuote | null>;
-  isDropTarget: boolean;
+  loadedAt: number | null;
+  isDropTarget: boolean;            // card being dragged into this column
+  isColumnDropTarget: boolean;      // another column being dragged onto this one
+  isBeingDragged: boolean;          // this column is the one being dragged
   dragTicker: string | null;
   isAdding: boolean;
   openMenuTicker: string | null;
   onDragOver: (e: React.DragEvent) => void;
+  onDragEnter: () => void;
   onDragLeave: () => void;
   onDrop: (e: React.DragEvent) => void;
+  onColumnDragStart: (e: React.DragEvent) => void;
   onCardDragStart: (e: React.DragEvent, ticker: string) => void;
   onCardDragEnd: () => void;
+  onRetryTicker: () => void;
   onAddOpen: () => void;
   onAddClose: () => void;
   onCardMove: (ticker: string, toGroupId: string) => void;
@@ -399,33 +498,65 @@ interface ColumnProps {
 
 function KanbanColumn(props: ColumnProps) {
   const {
-    group, allGroups, quotes, isDropTarget, dragTicker, isAdding, openMenuTicker,
-    onDragOver, onDragLeave, onDrop, onCardDragStart, onCardDragEnd,
+    group, allGroups, quotes, loadedAt,
+    isDropTarget, isColumnDropTarget, isBeingDragged,
+    dragTicker, isAdding, openMenuTicker,
+    onDragOver, onDragEnter, onDragLeave, onDrop,
+    onColumnDragStart, onCardDragStart, onCardDragEnd, onRetryTicker,
     onAddOpen, onAddClose, onCardMove, onCardRemove, onOpenMenu,
     onRename, onDelete, onTickerAdded,
   } = props;
 
+  // Visual states stack:
+  //   - isBeingDragged: this column is the one being dragged → fade out
+  //   - isColumnDropTarget: another column hovering this → left/right indicator
+  //   - isDropTarget: card hovering this → fill highlight
+  const shellClass = isBeingDragged
+    ? 'border-border bg-bg-card opacity-40'
+    : isColumnDropTarget
+    ? 'border-accent bg-bg-card ring-2 ring-accent/40'
+    : isDropTarget
+    ? 'border-accent bg-accent-dim/10'
+    : 'border-border bg-bg-card';
+
   return (
     <div
-      className={`flex shrink-0 flex-col rounded-lg border ${isDropTarget ? 'border-accent bg-accent-dim/10' : 'border-border bg-bg-card'} transition-colors`}
+      className={`flex shrink-0 flex-col rounded-lg border ${shellClass} transition-all`}
       style={{ width: 'min(85vw, 300px)', maxHeight: '78vh', scrollSnapAlign: 'start' }}
       onDragOver={onDragOver}
+      onDragEnter={onDragEnter}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
+      {/* Header — draggable for column reorder */}
+      <div
+        draggable
+        onDragStart={onColumnDragStart}
+        onDragEnd={onCardDragEnd}
+        className="flex items-center justify-between border-b border-border px-3 py-2.5 select-none"
+        style={{ cursor: 'grab' }}
+        title="拖拽此处重排看板"
+      >
         <div className="flex items-center gap-2">
+          <span className="text-text-muted" aria-hidden="true">⠿</span>
           <span className="text-sm font-semibold">{group.name}</span>
           <span className="rounded-full bg-bg-elevated px-1.5 py-0.5 text-[10px] tabular-nums text-text-dim">
             {group.tickers.length}
           </span>
         </div>
-        <div className="flex gap-0.5">
-          <button onClick={onRename} title="重命名" className="rounded p-1 text-text-dim hover:bg-bg-elevated hover:text-text">
+        <div className="flex gap-0.5" onDragStart={(e) => e.preventDefault()}>
+          <button
+            onClick={(e) => { e.stopPropagation(); onRename(); }}
+            title="重命名"
+            className="rounded p-1 text-text-dim hover:bg-bg-elevated hover:text-text"
+          >
             ✎
           </button>
-          <button onClick={onDelete} title="删除看板" className="rounded p-1 text-text-dim hover:bg-down/10 hover:text-down">
+          <button
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            title="删除看板"
+            className="rounded p-1 text-text-dim hover:bg-down/10 hover:text-down"
+          >
             ×
           </button>
         </div>
@@ -445,6 +576,7 @@ function KanbanColumn(props: ColumnProps) {
             key={ticker}
             ticker={ticker}
             quote={quotes[ticker] || null}
+            loadedAt={loadedAt}
             isDragging={dragTicker === ticker}
             menuOpen={openMenuTicker === ticker}
             currentGroupId={group.id}
@@ -453,6 +585,7 @@ function KanbanColumn(props: ColumnProps) {
             onDragEnd={onCardDragEnd}
             onMove={(to) => onCardMove(ticker, to)}
             onRemove={() => onCardRemove(ticker)}
+            onRetry={onRetryTicker}
             onToggleMenu={() => onOpenMenu(ticker)}
           />
         ))}
@@ -479,6 +612,7 @@ function KanbanColumn(props: ColumnProps) {
 interface CardProps {
   ticker: string;
   quote: LiveQuote | null;
+  loadedAt: number | null;
   isDragging: boolean;
   menuOpen: boolean;
   currentGroupId: string;
@@ -487,17 +621,22 @@ interface CardProps {
   onDragEnd: () => void;
   onMove: (toGroupId: string) => void;
   onRemove: () => void;
+  onRetry: () => void;
   onToggleMenu: () => void;
 }
 
 function StockCard({
-  ticker, quote, isDragging, menuOpen, currentGroupId, allGroups,
-  onDragStart, onDragEnd, onMove, onRemove, onToggleMenu,
+  ticker, quote, loadedAt, isDragging, menuOpen, currentGroupId, allGroups,
+  onDragStart, onDragEnd, onMove, onRemove, onRetry, onToggleMenu,
 }: CardProps) {
   const market = quote?.market || classifyMarket(ticker);
   const name = quote?.name || ticker;
   const currency = quote?.currency || (market === 'A' ? '¥' : market === 'HK' ? 'HK$' : '$');
   const hasPrice = !!quote && quote.price > 0;
+  // Distinguish "still loading first batch" from "loaded but failed":
+  // - loadedAt === null  → first batch hasn't returned yet → 加载中…
+  // - loadedAt !== null && !hasPrice → load completed but no usable quote → 失败 state
+  const isFailed = loadedAt !== null && !hasPrice;
   const otherGroups = allGroups.filter((g) => g.id !== currentGroupId);
 
   return (
@@ -505,8 +644,17 @@ function StockCard({
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      className={`group relative rounded-lg border border-border bg-bg-elevated p-2.5 transition ${isDragging ? 'opacity-30' : 'hover:border-accent-dim'}`}
-      style={{ cursor: 'grab' }}
+      className={`group relative rounded-lg border bg-bg-elevated p-2.5 transition-all ${
+        isDragging
+          ? 'border-accent opacity-50 shadow-lg shadow-accent/20'
+          : isFailed
+          ? 'border-down/40 hover:border-down/70'
+          : 'border-border hover:border-accent-dim'
+      }`}
+      style={{
+        cursor: isDragging ? 'grabbing' : 'grab',
+        transform: isDragging ? 'rotate(-1.5deg) scale(0.98)' : undefined,
+      }}
     >
       <div className="flex items-start justify-between gap-2">
         <Link href={`/stock/${encodeURIComponent(ticker)}`} className="min-w-0 flex-1 text-text hover:no-underline">
@@ -528,13 +676,35 @@ function StockCard({
         </button>
       </div>
 
-      <div className="mt-1.5 flex items-baseline justify-between">
-        <span className="text-base font-semibold tabular-nums">
-          {hasPrice ? `${currency}${formatPrice(quote!.price)}` : <span className="text-text-muted">—</span>}
-        </span>
-        <span className={`text-xs tabular-nums ${hasPrice ? changeClass(quote!.change_pct) : 'text-text-muted'}`}>
-          {hasPrice ? formatPct(quote!.change_pct) : '加载中…'}
-        </span>
+      <div className="mt-1.5 flex items-baseline justify-between gap-2">
+        {hasPrice ? (
+          <>
+            <span className="text-base font-semibold tabular-nums">
+              {currency}{formatPrice(quote!.price)}
+            </span>
+            <span className={`text-xs tabular-nums ${changeClass(quote!.change_pct)}`}>
+              {formatPct(quote!.change_pct)}
+            </span>
+          </>
+        ) : isFailed ? (
+          <>
+            <span className="text-[11px] text-down" title="行情数据拉取失败">
+              ⚠ 拉取失败
+            </span>
+            <button
+              onClick={(e) => { e.stopPropagation(); e.preventDefault(); onRetry(); }}
+              className="rounded border border-down/40 px-1.5 py-0.5 text-[10px] text-down hover:bg-down/10"
+              title="重试拉取这只股票"
+            >
+              重试
+            </button>
+          </>
+        ) : (
+          <>
+            <span className="text-text-muted">—</span>
+            <span className="text-xs text-text-muted">加载中…</span>
+          </>
+        )}
       </div>
 
       {menuOpen && (
