@@ -24,9 +24,11 @@ interface Ctx { params: Promise<{ ticker: string }> }
  * A-share only. Other markets return a clean "unsupported" payload so
  * the front-end can render a graceful "not available" state.
  */
-export async function GET(_req: Request, { params }: Ctx) {
+export async function GET(req: Request, { params }: Ctx) {
   const { ticker: raw } = await params;
   const ticker = decodeURIComponent(raw);
+  const url = new URL(req.url);
+  const debug = url.searchParams.get('debug') === '1';
 
   if (!/\.(SH|SZ|BJ)$/i.test(ticker)) {
     return NextResponse.json(
@@ -42,11 +44,19 @@ export async function GET(_req: Request, { params }: Ctx) {
     );
   }
 
+  // Capture per-source errors when debug=1; otherwise silently swallow as before.
+  const _errors: Record<string, string> = {};
+  const wrap = <T>(key: string, p: Promise<T[]>): Promise<T[]> =>
+    p.catch((e: any) => {
+      if (debug) _errors[key] = e?.message || String(e);
+      return [];
+    });
+
   try {
     const [hkHold, limitList, anns] = await Promise.all([
-      fetchTushareHkHold(ticker, 25).catch(() => []),
-      fetchTushareLimitList(ticker, 30).catch(() => []),
-      fetchTushareAnnouncements(ticker, 30).catch(() => []),
+      wrap('hk_hold', fetchTushareHkHold(ticker, 25)),
+      wrap('limit_list_d', fetchTushareLimitList(ticker, 30)),
+      wrap('anns_d', fetchTushareAnnouncements(ticker, 30)),
     ]);
 
     // ── 北上 signal math ──
@@ -143,6 +153,14 @@ export async function GET(_req: Request, { params }: Ctx) {
         url: a.url || null,
       })),
       triggers,
+      ...(debug && {
+        _debug: {
+          ts_code_passed: ticker,
+          row_counts: { hk_hold: hkHold.length, limit_list_d: limitList.length, anns_d: anns.length },
+          errors: Object.keys(_errors).length > 0 ? _errors : null,
+          note: 'Empty arrays with no errors → Tushare returned 0 rows (likely no data for date range or ticker not eligible). Errors → 积分 / param / endpoint issue.',
+        },
+      }),
     });
   } catch (e: any) {
     return NextResponse.json(
