@@ -276,3 +276,113 @@ export async function fetchTushareFloatHolders(ticker: string): Promise<TushareH
     .sort((a, b) => (b.hold_ratio || 0) - (a.hold_ratio || 0))
     .slice(0, 10);
 }
+
+// ─── 5000-积分 endpoints (unlocked at 5000 tier) ──────────────────────────
+
+/** 沪深港通持股 — daily northbound holdings for a single A-share. */
+export interface TushareHkHold {
+  code: string;            // 股票代码 (without exchange suffix)
+  trade_date: string;      // YYYYMMDD
+  name: string;
+  vol: number;             // 港股通持股数量 (股)
+  ratio: number;           // 持股比例 (%)
+  exchange: string;        // SH | SZ
+}
+
+/**
+ * Returns N most-recent trading days of northbound (HKEX → HK 通) holdings
+ * for one A-share. Used to compute "北上加仓" signals: today's hold minus
+ * 5-day-ago hold = net northbound flow.
+ *
+ * Note: HK 通 only covers eligible A-shares (沪深 main board, STAR, ChiNext).
+ * BJ stocks return empty.
+ */
+export async function fetchTushareHkHold(ticker: string, days = 25): Promise<TushareHkHold[]> {
+  const ts_code = normalizeTushareTicker(ticker);
+  if (!ts_code) return [];
+  const today = new Date();
+  // Add buffer to days param — non-trading days slip through and we want
+  // ~days trading sessions returned.
+  const calendarDays = Math.ceil(days * 1.6);
+  const start = new Date(today.getTime() - calendarDays * 24 * 60 * 60 * 1000)
+    .toISOString().slice(0, 10).replace(/-/g, '');
+  const end = today.toISOString().slice(0, 10).replace(/-/g, '');
+  const rows = await tushareCall<TushareHkHold>(
+    'hk_hold',
+    { ts_code, start_date: start, end_date: end },
+    'code,trade_date,name,vol,ratio,exchange'
+  );
+  // Newest first
+  return rows.sort((a, b) => b.trade_date.localeCompare(a.trade_date));
+}
+
+/** 涨跌停统计 — limit-up / limit-down history for one ticker. */
+export interface TushareLimitListItem {
+  trade_date: string;
+  ts_code: string;
+  name: string;
+  close: number;
+  pct_chg: number;
+  amount: number;          // 成交金额 (元)
+  limit_amount?: number;   // 板上成交额
+  float_mv?: number;       // 流通市值
+  total_mv?: number;       // 总市值
+  turnover_ratio?: number;
+  fd_amount?: number;      // 封单金额
+  first_time?: string;     // 首次封板时间 HH:MM:SS
+  last_time?: string;      // 最后封板时间
+  open_times?: number;     // 开板次数
+  up_stat?: string;        // 涨停统计 "5/10" → 近5天/近10天涨停次数
+  limit_times?: number;    // n 连板
+  limit?: 'U' | 'D' | 'Z'; // U=涨停 D=跌停 Z=炸板
+}
+
+/**
+ * Returns recent limit events (涨停 / 跌停 / 炸板) for one A-share.
+ * Used to compute "n 连板" or "今日涨停" signals.
+ */
+export async function fetchTushareLimitList(ticker: string, days = 30): Promise<TushareLimitListItem[]> {
+  const ts_code = normalizeTushareTicker(ticker);
+  if (!ts_code) return [];
+  const today = new Date();
+  const calendarDays = Math.ceil(days * 1.6);
+  const start = new Date(today.getTime() - calendarDays * 24 * 60 * 60 * 1000)
+    .toISOString().slice(0, 10).replace(/-/g, '');
+  const end = today.toISOString().slice(0, 10).replace(/-/g, '');
+  const rows = await tushareCall<TushareLimitListItem>(
+    'limit_list_d',
+    { ts_code, start_date: start, end_date: end },
+    'trade_date,ts_code,name,close,pct_chg,amount,limit_amount,float_mv,total_mv,turnover_ratio,fd_amount,first_time,last_time,open_times,up_stat,limit_times,limit'
+  );
+  return rows.sort((a, b) => b.trade_date.localeCompare(a.trade_date));
+}
+
+/** 公告 — daily disclosure announcements for one A-share. */
+export interface TushareAnnouncement {
+  ts_code: string;
+  ann_date: string;        // YYYYMMDD
+  title: string;
+  url?: string;
+  rec_time?: string;
+}
+
+/**
+ * Returns recent disclosure announcements. Used for event-driven signals
+ * (dividend, buyback, earnings guidance, etc).
+ *
+ * Note: `anns_d` requires 5000 积分.
+ */
+export async function fetchTushareAnnouncements(ticker: string, days = 30): Promise<TushareAnnouncement[]> {
+  const ts_code = normalizeTushareTicker(ticker);
+  if (!ts_code) return [];
+  const today = new Date();
+  const start = new Date(today.getTime() - days * 24 * 60 * 60 * 1000)
+    .toISOString().slice(0, 10).replace(/-/g, '');
+  const end = today.toISOString().slice(0, 10).replace(/-/g, '');
+  const rows = await tushareCall<TushareAnnouncement>(
+    'anns_d',
+    { ts_code, start_date: start, end_date: end },
+    'ts_code,ann_date,title,url,rec_time'
+  );
+  return rows.sort((a, b) => b.ann_date.localeCompare(a.ann_date));
+}

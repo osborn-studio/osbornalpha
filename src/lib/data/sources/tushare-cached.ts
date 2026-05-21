@@ -36,6 +36,9 @@ import {
   fetchTushareCashflow as _fetchTushareCashflow,
   fetchTushareTopHolders as _fetchTushareTopHolders,
   fetchTushareFloatHolders as _fetchTushareFloatHolders,
+  fetchTushareHkHold as _fetchTushareHkHold,
+  fetchTushareLimitList as _fetchTushareLimitList,
+  fetchTushareAnnouncements as _fetchTushareAnnouncements,
   isTushareConfigured,
   TushareError,
 } from './tushare';
@@ -91,6 +94,28 @@ export const fetchTushareFloatHolders = unstable_cache(
   async (ticker: string) => _fetchTushareFloatHolders(ticker),
   ['tushare-top10-float'],
   { revalidate: DAY, tags: ['tushare', 'tushare-holders'] }
+);
+
+// ─── 5000-积分 endpoints ──────────────────────────────────────────────────
+// 6h TTL for flows + limits — intra-day refresh isn't valuable for signals
+// computed over multi-day windows.
+
+export const fetchTushareHkHold = unstable_cache(
+  async (ticker: string, days = 25) => _fetchTushareHkHold(ticker, days),
+  ['tushare-hk-hold'],
+  { revalidate: 6 * HOUR, tags: ['tushare', 'tushare-hk-hold'] }
+);
+
+export const fetchTushareLimitList = unstable_cache(
+  async (ticker: string, days = 30) => _fetchTushareLimitList(ticker, days),
+  ['tushare-limit-list'],
+  { revalidate: 6 * HOUR, tags: ['tushare', 'tushare-limit-list'] }
+);
+
+export const fetchTushareAnnouncements = unstable_cache(
+  async (ticker: string, days = 30) => _fetchTushareAnnouncements(ticker, days),
+  ['tushare-anns'],
+  { revalidate: 6 * HOUR, tags: ['tushare', 'tushare-anns'] }
 );
 
 // Pass-through (not data-fetching)
