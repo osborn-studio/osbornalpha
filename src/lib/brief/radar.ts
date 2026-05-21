@@ -21,9 +21,8 @@ import {
   isTushareConfigured,
   fetchTushareDailyBasic,
   fetchTushareFinaIndicator,
-  fetchTushareHkHold,
+  fetchTushareNorthboundTop10,
   fetchTushareLimitList,
-  fetchTushareAnnouncements,
 } from '@/lib/data/sources/tushare-cached';
 import { MOCK_UNIVERSE } from '@/lib/data/mock';
 
@@ -57,9 +56,13 @@ export interface RadarPayload {
     };
     flows: {
       available: boolean;
-      north_5d_pct: number | null;
-      north_20d_pct: number | null;
-      north_latest_ratio: number | null;
+      // Northbound activity (沪深股通十大成交股 hits)
+      north_top10_count_30d: number;       // # of days in past 30 the ticker was in top-10
+      north_latest_rank: number | null;    // rank on most recent appearance (1-10)
+      north_latest_date: string | null;
+      north_latest_amount_yi: number | null;  // 亿元
+      north_total_amount_30d_yi: number | null;
+      // Limits
       limit_streak: number;
       limit_30d_count: number;
     };
@@ -169,9 +172,15 @@ function renderMarkdown(payload: Omit<RadarPayload, 'markdown'>): string {
   if (sections.flows.available) {
     lines.push('');
     lines.push('**资金面** (A 股):');
-    const north5 = sections.flows.north_5d_pct;
-    if (north5 !== null) {
-      lines.push(`- 北上 5 日 ${north5 > 0 ? '加仓 +' : '减仓 '}${north5.toFixed(2)} 个百分点 (当前持股比例 ${sections.flows.north_latest_ratio?.toFixed(2)}%)`);
+    if (sections.flows.north_top10_count_30d > 0) {
+      const parts = [`近 30 天 **${sections.flows.north_top10_count_30d}** 次进入北上前十`];
+      if (sections.flows.north_latest_rank !== null) {
+        parts.push(`最新排名 #${sections.flows.north_latest_rank}`);
+      }
+      if (sections.flows.north_total_amount_30d_yi !== null) {
+        parts.push(`累计成交 ${sections.flows.north_total_amount_30d_yi.toFixed(0)} 亿`);
+      }
+      lines.push(`- 🌏 北上：${parts.join(' · ')}`);
     }
     if (sections.flows.limit_streak >= 3) {
       lines.push(`- **${sections.flows.limit_streak} 连板** 🔥`);
@@ -221,8 +230,10 @@ function buildHeadline(payload: {
   }
   if (payload.flows.limit_streak >= 3) {
     parts.push(`${payload.flows.limit_streak} 连板`);
-  } else if (payload.flows.north_5d_pct !== null && Math.abs(payload.flows.north_5d_pct) >= 0.3) {
-    parts.push(`北上 5 日 ${payload.flows.north_5d_pct > 0 ? '加仓 +' : '减仓 '}${payload.flows.north_5d_pct.toFixed(2)} pct`);
+  } else if (payload.flows.north_latest_rank !== null && payload.flows.north_latest_rank <= 3) {
+    parts.push(`北上前十 #${payload.flows.north_latest_rank}`);
+  } else if (payload.flows.north_top10_count_30d >= 5) {
+    parts.push(`近 30 天 ${payload.flows.north_top10_count_30d} 次进北上前十`);
   }
   if (payload.events.length > 0) {
     parts.push(`今日 ${payload.events.length} 条公告`);
@@ -246,14 +257,14 @@ export async function buildRadar(ticker: string): Promise<RadarPayload> {
   // Layer 1: quote (cascade through 4 sources)
   const quote = await resolveQuote(ticker);
 
-  // Layer 2: A-share supplements
-  const [dailyBasic, finaInd, hkHold, limitList, anns] = await Promise.all([
+  // Layer 2: A-share supplements (anns_d skipped — needs > 5000 积分)
+  const [dailyBasic, finaInd, northTop10, limitList] = await Promise.all([
     isA && isTushareConfigured() ? fetchTushareDailyBasic(ticker).catch(() => null) : Promise.resolve(null),
     isA && isTushareConfigured() ? fetchTushareFinaIndicator(ticker).catch(() => null) : Promise.resolve(null),
-    isA && isTushareConfigured() ? fetchTushareHkHold(ticker, 25).catch(() => []) : Promise.resolve([]),
+    isA && isTushareConfigured() ? fetchTushareNorthboundTop10(ticker, 30).catch(() => []) : Promise.resolve([]),
     isA && isTushareConfigured() ? fetchTushareLimitList(ticker, 30).catch(() => []) : Promise.resolve([]),
-    isA && isTushareConfigured() ? fetchTushareAnnouncements(ticker, 14).catch(() => []) : Promise.resolve([]),
   ]);
+  const anns: any[] = [];  // anns_d skipped (needs higher tier)
 
   // Resolve display fields
   const name = quote?.name || lookupName(ticker);
@@ -261,14 +272,15 @@ export async function buildRadar(ticker: string): Promise<RadarPayload> {
   const currency = quote?.currency || (market === 'A' ? '¥' : market === 'HK' ? 'HK$' : '$');
 
   // Flows math
-  const latestHk = hkHold[0];
-  const fiveAgo = hkHold[Math.min(5, hkHold.length - 1)];
-  const twentyAgo = hkHold[Math.min(20, hkHold.length - 1)];
+  const latestNorth = northTop10[0];
+  const totalAmt = northTop10.reduce((s: number, r: any) => s + (r.amount || 0), 0);
   const flowsSection: RadarPayload['sections']['flows'] = {
-    available: hkHold.length > 0 || limitList.length > 0,
-    north_5d_pct: latestHk && fiveAgo ? latestHk.ratio - fiveAgo.ratio : null,
-    north_20d_pct: latestHk && twentyAgo ? latestHk.ratio - twentyAgo.ratio : null,
-    north_latest_ratio: latestHk?.ratio ?? null,
+    available: northTop10.length > 0 || limitList.length > 0,
+    north_top10_count_30d: northTop10.length,
+    north_latest_rank: latestNorth?.rank ?? null,
+    north_latest_date: latestNorth?.trade_date ?? null,
+    north_latest_amount_yi: latestNorth?.amount ? latestNorth.amount / 1e8 : null,
+    north_total_amount_30d_yi: northTop10.length > 0 ? totalAmt / 1e8 : null,
     limit_streak: limitList[0]?.limit_times || 0,
     limit_30d_count: limitList.filter((r) => r.limit === 'U' || !r.limit).length,
   };
@@ -276,20 +288,31 @@ export async function buildRadar(ticker: string): Promise<RadarPayload> {
   // Triggers
   const triggers: RadarTrigger[] = [];
   if (quote) triggers.push(...computePriceTriggers(quote));
-  if (flowsSection.north_5d_pct !== null) {
-    if (flowsSection.north_5d_pct > 0.3) {
-      triggers.push({
-        rule: 'north_inflow_5d',
-        desc: `北上 5 日加仓 +${flowsSection.north_5d_pct.toFixed(2)} pct`,
-        weight: 3,
-      });
-    } else if (flowsSection.north_5d_pct < -0.3) {
-      triggers.push({
-        rule: 'north_outflow_5d',
-        desc: `北上 5 日减仓 ${flowsSection.north_5d_pct.toFixed(2)} pct`,
-        weight: -2,
-      });
-    }
+  if (flowsSection.north_top10_count_30d >= 10) {
+    triggers.push({
+      rule: 'north_top10_frequent',
+      desc: `近 30 天 ${flowsSection.north_top10_count_30d} 次进入北上前十`,
+      weight: 3,
+    });
+  } else if (flowsSection.north_top10_count_30d >= 5) {
+    triggers.push({
+      rule: 'north_top10_recurring',
+      desc: `近 30 天 ${flowsSection.north_top10_count_30d} 次进入北上前十`,
+      weight: 2,
+    });
+  } else if (flowsSection.north_top10_count_30d > 0) {
+    triggers.push({
+      rule: 'north_top10_appeared',
+      desc: `近 30 天 ${flowsSection.north_top10_count_30d} 次进入北上前十`,
+      weight: 1,
+    });
+  }
+  if (flowsSection.north_latest_rank !== null && flowsSection.north_latest_rank <= 3) {
+    triggers.push({
+      rule: 'north_top3_today',
+      desc: `最新北上排名第 ${flowsSection.north_latest_rank}`,
+      weight: 3,
+    });
   }
   if (flowsSection.limit_streak >= 3) {
     triggers.push({
@@ -297,9 +320,6 @@ export async function buildRadar(ticker: string): Promise<RadarPayload> {
       desc: `${flowsSection.limit_streak} 连板`,
       weight: Math.min(5, flowsSection.limit_streak),
     });
-  }
-  if (anns.length > 0) {
-    triggers.push({ rule: 'recent_announcement', desc: `近期公告 ${anns.length} 条`, weight: 2 });
   }
 
   const score = triggers.reduce((s, t) => s + t.weight, 0);

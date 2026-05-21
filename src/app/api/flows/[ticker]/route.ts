@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
 import {
   isTushareConfigured,
-  fetchTushareHkHold,
+  fetchTushareNorthboundTop10,
   fetchTushareLimitList,
-  fetchTushareAnnouncements,
 } from '@/lib/data/sources/tushare-cached';
 
 export const dynamic = 'force-dynamic';
@@ -14,15 +13,20 @@ interface Ctx { params: Promise<{ ticker: string }> }
 /**
  * GET /api/flows/[ticker]
  *
- * Aggregated 资金面 + 事件面 endpoint backed by 5000-积分 Tushare data.
- * One round-trip = three Tushare calls (all cached at 6h TTL):
+ * Aggregated 资金面 endpoint backed by 5000-积分 Tushare data. Each request
+ * fans out to two Tushare endpoints (both cached at 6h TTL):
  *
- *   hk_hold        →  northbound holdings (5d / 20d net change)
- *   limit_list_d   →  recent limit-ups, current consecutive streak
- *   anns_d         →  recent disclosure announcements
+ *   hsgt_top10      →  northbound top-10 appearances per day (rank + amount)
+ *   limit_list_d    →  涨跌停 history (n 连板, fd_amount, open_times)
  *
- * A-share only. Other markets return a clean "unsupported" payload so
- * the front-end can render a graceful "not available" state.
+ * Note: `anns_d` (公告) requires a tier ABOVE 5000 积分 — silently skipped.
+ *
+ * Earlier versions used `hk_hold` for "northbound holdings" — that endpoint
+ * is actually SOUTHBOUND (港股通: mainland holds HK stocks). Replaced with
+ * `hsgt_top10` which is the genuine northbound (HK → A-share) daily series.
+ *
+ * A-share only. Other markets return a clean "unsupported" payload so the
+ * front-end can render a graceful "not available" state.
  */
 export async function GET(req: Request, { params }: Ctx) {
   const { ticker: raw } = await params;
@@ -44,7 +48,6 @@ export async function GET(req: Request, { params }: Ctx) {
     );
   }
 
-  // Capture per-source errors when debug=1; otherwise silently swallow as before.
   const _errors: Record<string, string> = {};
   const wrap = <T>(key: string, p: Promise<T[]>): Promise<T[]> =>
     p.catch((e: any) => {
@@ -53,52 +56,57 @@ export async function GET(req: Request, { params }: Ctx) {
     });
 
   try {
-    const [hkHold, limitList, anns] = await Promise.all([
-      wrap('hk_hold', fetchTushareHkHold(ticker, 25)),
+    const [northTop10, limitList] = await Promise.all([
+      wrap('hsgt_top10', fetchTushareNorthboundTop10(ticker, 30)),
       wrap('limit_list_d', fetchTushareLimitList(ticker, 30)),
-      wrap('anns_d', fetchTushareAnnouncements(ticker, 30)),
     ]);
 
     // ── 北上 signal math ──
-    // Newest first. Compute delta = today.ratio − N-days-ago.ratio (in %).
+    // northTop10[0] = most recent appearance in top-10. `rank` ∈ [1, 10].
+    // Signal strength = how often + how recently the ticker hits top 10.
     const northbound = (() => {
-      if (hkHold.length === 0) {
-        return { available: false, latest_ratio: null, delta_5d: null, delta_20d: null, latest_date: null };
+      if (northTop10.length === 0) {
+        return {
+          available: false,
+          appearance_count_30d: 0,
+          latest_rank: null,
+          latest_date: null,
+          latest_amount_yi: null,
+          total_amount_30d_yi: null,
+          recent: [],
+        };
       }
-      const latest = hkHold[0];
-      const fiveAgo = hkHold[Math.min(5, hkHold.length - 1)];
-      const twentyAgo = hkHold[Math.min(20, hkHold.length - 1)];
+      const totalAmt = northTop10.reduce((s, r) => s + (r.amount || 0), 0);
       return {
         available: true,
-        latest_date: latest.trade_date,
-        latest_ratio: latest.ratio,                                   // %
-        latest_vol: latest.vol,                                       // 股
-        delta_5d:  latest.ratio - (fiveAgo?.ratio ?? latest.ratio),    // 百分点
-        delta_20d: latest.ratio - (twentyAgo?.ratio ?? latest.ratio),  // 百分点
-        series: hkHold.slice(0, 20).map((r) => ({
+        appearance_count_30d: northTop10.length,
+        latest_rank: northTop10[0].rank,
+        latest_date: northTop10[0].trade_date,
+        latest_amount_yi: northTop10[0].amount ? northTop10[0].amount / 1e8 : null,
+        total_amount_30d_yi: totalAmt / 1e8,
+        recent: northTop10.slice(0, 10).map((r) => ({
           date: r.trade_date,
-          ratio: r.ratio,
-          vol: r.vol,
+          rank: r.rank,
+          amount_yi: r.amount ? r.amount / 1e8 : null,
+          net_amount_yi: r.net_amount != null ? r.net_amount / 1e8 : null,
+          change_pct: r.change,
         })),
       };
     })();
 
     // ── 涨跌停 signal math ──
-    // limit_times = n 连板 (Tushare provides this directly when available).
-    // For older rows where it's missing, infer from contiguous dates with limit='U'.
     const limits = (() => {
       if (limitList.length === 0) {
-        return { current_streak: 0, last_30d_up_count: 0, latest: null, recent: [] };
+        return { current_streak: 0, last_30d_up_count: 0, latest_date: null, recent: [] };
       }
-      const ups = limitList.filter((r) => r.limit === 'U' || !r.limit); // older rows may lack 'limit' field
+      const ups = limitList.filter((r) => r.limit === 'U' || !r.limit);
       const latest = ups[0] || null;
-      // If latest event is today or last trading session, streak comes from limit_times
       const currentStreak = latest?.limit_times || 0;
       return {
         current_streak: currentStreak,
         last_30d_up_count: ups.length,
         latest_date: latest?.trade_date || null,
-        up_stat: latest?.up_stat || null,        // "n/m" 近 n / 近 m 涨停次数
+        up_stat: latest?.up_stat || null,
         recent: ups.slice(0, 8).map((r) => ({
           date: r.trade_date,
           close: r.close,
@@ -113,20 +121,36 @@ export async function GET(req: Request, { params }: Ctx) {
     })();
 
     // ── Triggers — drop-in for Sentinel ──
-    // Each trigger uses the same {rule, desc, weight} shape as backtest.ts.
     const triggers: Array<{ rule: string; desc: string; weight: number }> = [];
-    if (northbound.available && northbound.delta_5d !== null && northbound.delta_5d > 0.3) {
-      triggers.push({
-        rule: 'north_inflow_5d',
-        desc: `北上 5 日加仓 +${northbound.delta_5d.toFixed(2)} pct`,
-        weight: 3,
-      });
-    } else if (northbound.available && northbound.delta_5d !== null && northbound.delta_5d < -0.3) {
-      triggers.push({
-        rule: 'north_outflow_5d',
-        desc: `北上 5 日减仓 ${northbound.delta_5d.toFixed(2)} pct`,
-        weight: -2,
-      });
+    if (northbound.available) {
+      const n = northbound.appearance_count_30d;
+      // Always emit a chip when the ticker appears at all (low-weight context)
+      if (n >= 10) {
+        triggers.push({
+          rule: 'north_top10_frequent',
+          desc: `近 30 天 ${n} 次进入北上前十`,
+          weight: 3,
+        });
+      } else if (n >= 5) {
+        triggers.push({
+          rule: 'north_top10_recurring',
+          desc: `近 30 天 ${n} 次进入北上前十`,
+          weight: 2,
+        });
+      } else {
+        triggers.push({
+          rule: 'north_top10_appeared',
+          desc: `近 30 天 ${n} 次进入北上前十`,
+          weight: 1,
+        });
+      }
+      if (northbound.latest_rank !== null && northbound.latest_rank <= 3) {
+        triggers.push({
+          rule: 'north_top3_today',
+          desc: `最新北上排名第 ${northbound.latest_rank}`,
+          weight: 3,
+        });
+      }
     }
     if (limits.current_streak >= 3) {
       triggers.push({
@@ -147,18 +171,15 @@ export async function GET(req: Request, { params }: Ctx) {
       ticker,
       northbound,
       limits,
-      announcements: anns.slice(0, 8).map((a) => ({
-        date: a.ann_date,
-        title: a.title,
-        url: a.url || null,
-      })),
+      // anns_d skipped — requires > 5000 积分; placeholder for UI consistency
+      announcements: [],
       triggers,
       ...(debug && {
         _debug: {
           ts_code_passed: ticker,
-          row_counts: { hk_hold: hkHold.length, limit_list_d: limitList.length, anns_d: anns.length },
+          row_counts: { hsgt_top10: northTop10.length, limit_list_d: limitList.length },
           errors: Object.keys(_errors).length > 0 ? _errors : null,
-          note: 'Empty arrays with no errors → Tushare returned 0 rows (likely no data for date range or ticker not eligible). Errors → 积分 / param / endpoint issue.',
+          note: 'anns_d (公告) needs higher than 5000 积分 and is intentionally skipped.',
         },
       }),
     });
