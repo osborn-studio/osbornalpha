@@ -279,30 +279,26 @@ export async function fetchTushareFloatHolders(ticker: string): Promise<TushareH
 
 // ─── 5000-积分 endpoints (unlocked at 5000 tier) ──────────────────────────
 
-/** 沪深港通持股 — daily northbound holdings for a single A-share. */
+/**
+ * @deprecated `hk_hold` is 港股通持股 (SOUTHBOUND — mainland investors holding
+ * HK stocks). It returns HK tickers with exchange="HK", not A-share northbound
+ * holdings. Use `fetchTushareNorthboundTop10` instead for per-A-share northbound
+ * activity. Kept here in case future southbound HK signals are added.
+ */
 export interface TushareHkHold {
-  code: string;            // 股票代码 (without exchange suffix)
-  trade_date: string;      // YYYYMMDD
+  code: string;
+  trade_date: string;
   name: string;
-  vol: number;             // 港股通持股数量 (股)
-  ratio: number;           // 持股比例 (%)
-  exchange: string;        // SH | SZ
+  vol: number;
+  ratio: number;
+  exchange: string;        // 'HK' (always — this is southbound)
 }
 
-/**
- * Returns N most-recent trading days of northbound (HKEX → HK 通) holdings
- * for one A-share. Used to compute "北上加仓" signals: today's hold minus
- * 5-day-ago hold = net northbound flow.
- *
- * Note: HK 通 only covers eligible A-shares (沪深 main board, STAR, ChiNext).
- * BJ stocks return empty.
- */
+/** @deprecated See above. Returns SOUTHBOUND data, not northbound. */
 export async function fetchTushareHkHold(ticker: string, days = 25): Promise<TushareHkHold[]> {
   const ts_code = normalizeTushareTicker(ticker);
   if (!ts_code) return [];
   const today = new Date();
-  // Add buffer to days param — non-trading days slip through and we want
-  // ~days trading sessions returned.
   const calendarDays = Math.ceil(days * 1.6);
   const start = new Date(today.getTime() - calendarDays * 24 * 60 * 60 * 1000)
     .toISOString().slice(0, 10).replace(/-/g, '');
@@ -312,7 +308,49 @@ export async function fetchTushareHkHold(ticker: string, days = 25): Promise<Tus
     { ts_code, start_date: start, end_date: end },
     'code,trade_date,name,vol,ratio,exchange'
   );
-  // Newest first
+  return rows.sort((a, b) => b.trade_date.localeCompare(a.trade_date));
+}
+
+/** 沪深股通十大成交股 — top 10 northbound A-shares per day. */
+export interface TushareNorthboundTop10 {
+  ts_code: string;
+  trade_date: string;
+  name: string;
+  close: number;
+  change: number;
+  rank: number;            // 1-10 within that day's top 10
+  amount: number;          // 成交金额 (元)
+  net_amount: number | null;  // 净成交 (often null at 5k tier)
+  buy: number | null;
+  sell: number | null;
+  market_type?: number;    // 1=沪股通 3=深股通
+}
+
+/**
+ * Returns the days within the past N calendar days when this A-share appeared
+ * in the daily 沪深股通十大成交股 list (top 10 northbound by traded amount).
+ * Empty array means the ticker did not crack the top 10 in that window.
+ *
+ * Signal interpretation:
+ *   - Frequent appearance (≥5 in 30d) → strong northbound interest
+ *   - Latest rank ≤3 → very active today
+ *
+ * Note: net_amount / buy / sell are often null at 5000-积分 tier; we rely
+ * on `amount` (total traded) and `rank` for the signal math.
+ */
+export async function fetchTushareNorthboundTop10(ticker: string, days = 30): Promise<TushareNorthboundTop10[]> {
+  const ts_code = normalizeTushareTicker(ticker);
+  if (!ts_code) return [];
+  const today = new Date();
+  const calendarDays = Math.ceil(days * 1.6);
+  const start = new Date(today.getTime() - calendarDays * 24 * 60 * 60 * 1000)
+    .toISOString().slice(0, 10).replace(/-/g, '');
+  const end = today.toISOString().slice(0, 10).replace(/-/g, '');
+  const rows = await tushareCall<TushareNorthboundTop10>(
+    'hsgt_top10',
+    { ts_code, start_date: start, end_date: end },
+    'ts_code,trade_date,name,close,change,rank,amount,net_amount,buy,sell,market_type'
+  );
   return rows.sort((a, b) => b.trade_date.localeCompare(a.trade_date));
 }
 

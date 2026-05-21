@@ -22,7 +22,7 @@ Triggers:
 | Source | Endpoint | Cost | Coverage |
 |---|---|---|---|
 | Live quote | `GET /api/quote/{ticker}` | free (4-layer cascade) | A / HK / US |
-| 资金面 (北上 + 涨跌停 + 公告) | `GET /api/flows/{ticker}` | Tushare 5k 积分 | A-share only |
+| 资金面 (北上前十 + 涨跌停) | `GET /api/flows/{ticker}` | Tushare 5k 积分 | A-share only (公告 anns_d 需更高 tier 已跳过) |
 | 信号 + 历史回测 | `GET /api/signals/{ticker}` | free | A / HK / US |
 | AI 9-persona 观点 | `GET /api/perspectives/{ticker}` | DeepSeek tokens | A / HK / US |
 | 基本面（5 年财报） | `GET /api/financials/{ticker}` | Tushare | A-share only |

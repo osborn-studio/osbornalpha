@@ -259,17 +259,19 @@ function RadarCard({ r, onShowMarkdown }: CardProps) {
       {/* Flows + events one-liner */}
       {(r.sections.flows.available || r.sections.events.length > 0) && (
         <div className="space-y-0.5 text-[11px] text-text-dim">
-          {r.sections.flows.available && r.sections.flows.north_5d_pct !== null && (
+          {r.sections.flows.available && r.sections.flows.north_top10_count_30d > 0 && (
             <div>
-              北上 5d:{' '}
-              <span className={r.sections.flows.north_5d_pct > 0 ? 'text-up' : 'text-down'}>
-                {r.sections.flows.north_5d_pct > 0 ? '+' : ''}
-                {r.sections.flows.north_5d_pct.toFixed(2)} pct
-              </span>
-              {r.sections.flows.north_latest_ratio !== null && (
-                <span className="text-text-muted"> · 持股比 {r.sections.flows.north_latest_ratio.toFixed(2)}%</span>
+              🌏 北上：近 30 天 <span className="text-text font-semibold">{r.sections.flows.north_top10_count_30d}</span> 次前十
+              {r.sections.flows.north_latest_rank !== null && (
+                <span className="text-text-muted"> · 最新 #{r.sections.flows.north_latest_rank}</span>
+              )}
+              {r.sections.flows.north_total_amount_30d_yi !== null && (
+                <span className="text-text-muted"> · 累计 {r.sections.flows.north_total_amount_30d_yi.toFixed(0)} 亿</span>
               )}
             </div>
+          )}
+          {r.sections.flows.limit_streak >= 3 && (
+            <div className="font-semibold text-up">🔥 {r.sections.flows.limit_streak} 连板</div>
           )}
           {r.sections.events.length > 0 && (
             <div>

@@ -37,6 +37,7 @@ import {
   fetchTushareTopHolders as _fetchTushareTopHolders,
   fetchTushareFloatHolders as _fetchTushareFloatHolders,
   fetchTushareHkHold as _fetchTushareHkHold,
+  fetchTushareNorthboundTop10 as _fetchTushareNorthboundTop10,
   fetchTushareLimitList as _fetchTushareLimitList,
   fetchTushareAnnouncements as _fetchTushareAnnouncements,
   isTushareConfigured,
@@ -100,10 +101,17 @@ export const fetchTushareFloatHolders = unstable_cache(
 // 6h TTL for flows + limits — intra-day refresh isn't valuable for signals
 // computed over multi-day windows.
 
+/** @deprecated hk_hold is SOUTHBOUND. Use fetchTushareNorthboundTop10 for northbound A-share. */
 export const fetchTushareHkHold = unstable_cache(
   async (ticker: string, days = 25) => _fetchTushareHkHold(ticker, days),
   ['tushare-hk-hold'],
   { revalidate: 6 * HOUR, tags: ['tushare', 'tushare-hk-hold'] }
+);
+
+export const fetchTushareNorthboundTop10 = unstable_cache(
+  async (ticker: string, days = 30) => _fetchTushareNorthboundTop10(ticker, days),
+  ['tushare-northbound-top10'],
+  { revalidate: 6 * HOUR, tags: ['tushare', 'tushare-northbound-top10'] }
 );
 
 export const fetchTushareLimitList = unstable_cache(
