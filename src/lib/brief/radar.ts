@@ -1,0 +1,352 @@
+/**
+ * Per-stock morning note ("每股雷达") — server-side composer.
+ *
+ * Drives the /radar tab and /api/radar/[ticker] endpoint. Distinct from
+ * `composer.ts` which produces one market-wide morning note across the
+ * full watchlist. Per the `stock-daily-radar` SKILL.md spec (format
+ * adapted from Anthropic equity-research morning-note).
+ *
+ * Composition (no LLM call — instant + zero token cost):
+ *   1. Quote (4-source cascade)
+ *   2. Tushare supplements (A-share only; daily_basic + fina_indicator)
+ *   3. Flows (5k 积分: hk_hold + limit_list_d + anns_d)
+ *   4. Trigger math → radar level + headline
+ *   5. Markdown render in morning-note format
+ */
+
+import { fetchEastmoneyQuote, type EastmoneyQuote } from '@/lib/data/sources/eastmoney';
+import { fetchSinaQuote } from '@/lib/data/sources/sina';
+import { fetchTencentQuote } from '@/lib/data/sources/tencent';
+import {
+  isTushareConfigured,
+  fetchTushareDailyBasic,
+  fetchTushareFinaIndicator,
+  fetchTushareHkHold,
+  fetchTushareLimitList,
+  fetchTushareAnnouncements,
+} from '@/lib/data/sources/tushare-cached';
+import { MOCK_UNIVERSE } from '@/lib/data/mock';
+
+export type RadarLevel = 'red' | 'yellow' | 'white';
+
+export interface RadarTrigger {
+  rule: string;
+  desc: string;
+  weight: number;
+}
+
+export interface RadarPayload {
+  ticker: string;
+  name: string;
+  market: 'A' | 'HK' | 'US';
+  currency: string;
+  as_of: string;                // ISO timestamp
+  radar_level: RadarLevel;
+  level_label: string;          // 关注 / 留意 / 平静
+  score: number;
+  headline: string;
+  sections: {
+    price: {
+      value: number | null;
+      change_pct: number | null;
+      currency: string;
+      pe_ttm: number | null;
+      pb: number | null;
+      market_cap_label: string;
+      source: string;
+    };
+    flows: {
+      available: boolean;
+      north_5d_pct: number | null;
+      north_20d_pct: number | null;
+      north_latest_ratio: number | null;
+      limit_streak: number;
+      limit_30d_count: number;
+    };
+    events: Array<{ date: string; title: string; url: string | null }>;
+    fundamentals: {
+      roe: number | null;
+      gross_margin: number | null;
+      net_margin: number | null;
+      dividend_yield: number | null;
+    };
+  };
+  triggers: RadarTrigger[];
+  markdown: string;
+  disclaimer: string;
+}
+
+const DISCLAIMER = '本简报仅作决策辅助，不构成投资建议';
+
+function lookupName(ticker: string): string {
+  return MOCK_UNIVERSE.find((u) => u.t === ticker)?.n || ticker;
+}
+
+/** Same cascade as /api/quote/batch but inline for one ticker. */
+async function resolveQuote(ticker: string): Promise<any | null> {
+  const em = await fetchEastmoneyQuote(ticker).catch(() => null);
+  if (em) return em;
+  const sina = await fetchSinaQuote(ticker).catch(() => null);
+  if (sina) return sina;
+  const tencent = await fetchTencentQuote(ticker).catch(() => null);
+  if (tencent) return tencent;
+  return null;
+}
+
+function computePriceTriggers(q: any): RadarTrigger[] {
+  const t: RadarTrigger[] = [];
+  if (typeof q?.change_pct !== 'number') return t;
+  if (Math.abs(q.change_pct) >= 5) {
+    t.push({
+      rule: 'large_move',
+      desc: `单日 ${q.change_pct > 0 ? '+' : ''}${q.change_pct.toFixed(2)}%`,
+      weight: 3,
+    });
+  } else if (Math.abs(q.change_pct) >= 3) {
+    t.push({
+      rule: 'medium_move',
+      desc: `单日 ${q.change_pct > 0 ? '+' : ''}${q.change_pct.toFixed(2)}%`,
+      weight: 2,
+    });
+  }
+  if (q.turnover && q.turnover >= 5) {
+    t.push({ rule: 'high_turnover', desc: `换手率 ${q.turnover.toFixed(2)}%`, weight: 2 });
+  }
+  if (q.volume_ratio && q.volume_ratio >= 2) {
+    t.push({ rule: 'anomalous_volume', desc: `量比 ${q.volume_ratio.toFixed(2)}x`, weight: 2 });
+  }
+  if (q.amplitude >= 5) {
+    t.push({ rule: 'high_amplitude', desc: `振幅 ${q.amplitude.toFixed(2)}%`, weight: 1 });
+  }
+  return t;
+}
+
+function levelFromScore(score: number): { level: RadarLevel; label: string } {
+  if (score >= 8) return { level: 'red',    label: '关注' };
+  if (score >= 4) return { level: 'yellow', label: '留意' };
+  return { level: 'white', label: '平静' };
+}
+
+function emojiForLevel(l: RadarLevel): string {
+  return l === 'red' ? '🔴' : l === 'yellow' ? '🟡' : '⚪️';
+}
+
+function todayCST(): string {
+  const now = new Date();
+  // 北京时间 = UTC + 8
+  const beijing = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  return beijing.toISOString().slice(0, 10);
+}
+
+function fmtPrice(p: number | null, currency: string): string {
+  if (p === null || !isFinite(p)) return '—';
+  return `${currency}${p.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function fmtPct(p: number | null, signed = true): string {
+  if (p === null || !isFinite(p)) return '—';
+  const sign = signed && p > 0 ? '+' : '';
+  return `${sign}${p.toFixed(2)}%`;
+}
+
+function renderMarkdown(payload: Omit<RadarPayload, 'markdown'>): string {
+  const { ticker, name, sections, triggers, headline, level_label, radar_level, as_of } = payload;
+  const date = as_of.slice(0, 10);
+  const lines: string[] = [];
+
+  lines.push(`**${date} · ${ticker} ${name} · ${emojiForLevel(radar_level)} ${level_label}**`);
+  lines.push('');
+  lines.push(`**Top Call**: ${headline}`);
+  lines.push('');
+  lines.push(`**价格**: ${fmtPrice(sections.price.value, sections.price.currency)} ${fmtPct(sections.price.change_pct)}` +
+    (sections.price.pe_ttm ? ` · PE ${sections.price.pe_ttm.toFixed(1)}x` : '') +
+    (sections.price.pb ? ` · PB ${sections.price.pb.toFixed(2)}` : '') +
+    (sections.price.market_cap_label && sections.price.market_cap_label !== '—'
+      ? ` · 市值 ${sections.price.market_cap_label}`
+      : '') +
+    `  *(${sections.price.source})*`);
+
+  if (sections.flows.available) {
+    lines.push('');
+    lines.push('**资金面** (A 股):');
+    const north5 = sections.flows.north_5d_pct;
+    if (north5 !== null) {
+      lines.push(`- 北上 5 日 ${north5 > 0 ? '加仓 +' : '减仓 '}${north5.toFixed(2)} 个百分点 (当前持股比例 ${sections.flows.north_latest_ratio?.toFixed(2)}%)`);
+    }
+    if (sections.flows.limit_streak >= 3) {
+      lines.push(`- **${sections.flows.limit_streak} 连板** 🔥`);
+    } else if (sections.flows.limit_30d_count > 0) {
+      lines.push(`- 近 30 日涨停 ${sections.flows.limit_30d_count} 次`);
+    }
+  }
+
+  if (sections.fundamentals.roe !== null || sections.fundamentals.dividend_yield !== null) {
+    lines.push('');
+    lines.push('**基本面**:');
+    if (sections.fundamentals.roe !== null) lines.push(`- ROE ${sections.fundamentals.roe.toFixed(1)}%`);
+    if (sections.fundamentals.gross_margin !== null) lines.push(`- 毛利率 ${sections.fundamentals.gross_margin.toFixed(1)}%`);
+    if (sections.fundamentals.dividend_yield !== null) lines.push(`- 股息率 ${sections.fundamentals.dividend_yield.toFixed(2)}%`);
+  }
+
+  if (sections.events.length > 0) {
+    lines.push('');
+    lines.push('**事件**:');
+    for (const e of sections.events.slice(0, 5)) {
+      lines.push(`- [${e.date.slice(0, 4)}-${e.date.slice(4, 6)}-${e.date.slice(6, 8)}] ${e.title}`);
+    }
+  }
+
+  if (triggers.length > 0) {
+    lines.push('');
+    lines.push('**信号**:');
+    for (const t of triggers) lines.push(`- ${t.desc} (权重 ${t.weight > 0 ? '+' : ''}${t.weight})`);
+  }
+
+  lines.push('');
+  lines.push(`*${DISCLAIMER}*`);
+
+  return lines.join('\n');
+}
+
+function buildHeadline(payload: {
+  change_pct: number | null;
+  flows: RadarPayload['sections']['flows'];
+  events: RadarPayload['sections']['events'];
+  triggers: RadarTrigger[];
+  level: RadarLevel;
+}): string {
+  const parts: string[] = [];
+  if (payload.change_pct !== null) {
+    parts.push(`单日 ${payload.change_pct > 0 ? '+' : ''}${payload.change_pct.toFixed(2)}%`);
+  }
+  if (payload.flows.limit_streak >= 3) {
+    parts.push(`${payload.flows.limit_streak} 连板`);
+  } else if (payload.flows.north_5d_pct !== null && Math.abs(payload.flows.north_5d_pct) >= 0.3) {
+    parts.push(`北上 5 日 ${payload.flows.north_5d_pct > 0 ? '加仓 +' : '减仓 '}${payload.flows.north_5d_pct.toFixed(2)} pct`);
+  }
+  if (payload.events.length > 0) {
+    parts.push(`今日 ${payload.events.length} 条公告`);
+  }
+  if (parts.length === 0) {
+    return payload.level === 'white'
+      ? '今日无重大事件，维持持仓'
+      : '信号偏离常态，留意';
+  }
+  return parts.join(' · ');
+}
+
+/**
+ * Build the radar payload for one ticker. Throws only on catastrophic
+ * failure (no quote source at all); otherwise returns a payload with
+ * "暂无数据" where appropriate.
+ */
+export async function buildRadar(ticker: string): Promise<RadarPayload> {
+  const isA = /\.(SH|SZ|BJ)$/i.test(ticker);
+
+  // Layer 1: quote (cascade through 4 sources)
+  const quote = await resolveQuote(ticker);
+
+  // Layer 2: A-share supplements
+  const [dailyBasic, finaInd, hkHold, limitList, anns] = await Promise.all([
+    isA && isTushareConfigured() ? fetchTushareDailyBasic(ticker).catch(() => null) : Promise.resolve(null),
+    isA && isTushareConfigured() ? fetchTushareFinaIndicator(ticker).catch(() => null) : Promise.resolve(null),
+    isA && isTushareConfigured() ? fetchTushareHkHold(ticker, 25).catch(() => []) : Promise.resolve([]),
+    isA && isTushareConfigured() ? fetchTushareLimitList(ticker, 30).catch(() => []) : Promise.resolve([]),
+    isA && isTushareConfigured() ? fetchTushareAnnouncements(ticker, 14).catch(() => []) : Promise.resolve([]),
+  ]);
+
+  // Resolve display fields
+  const name = quote?.name || lookupName(ticker);
+  const market: 'A' | 'HK' | 'US' = quote?.market || (isA ? 'A' : ticker.includes('.HK') ? 'HK' : 'US');
+  const currency = quote?.currency || (market === 'A' ? '¥' : market === 'HK' ? 'HK$' : '$');
+
+  // Flows math
+  const latestHk = hkHold[0];
+  const fiveAgo = hkHold[Math.min(5, hkHold.length - 1)];
+  const twentyAgo = hkHold[Math.min(20, hkHold.length - 1)];
+  const flowsSection: RadarPayload['sections']['flows'] = {
+    available: hkHold.length > 0 || limitList.length > 0,
+    north_5d_pct: latestHk && fiveAgo ? latestHk.ratio - fiveAgo.ratio : null,
+    north_20d_pct: latestHk && twentyAgo ? latestHk.ratio - twentyAgo.ratio : null,
+    north_latest_ratio: latestHk?.ratio ?? null,
+    limit_streak: limitList[0]?.limit_times || 0,
+    limit_30d_count: limitList.filter((r) => r.limit === 'U' || !r.limit).length,
+  };
+
+  // Triggers
+  const triggers: RadarTrigger[] = [];
+  if (quote) triggers.push(...computePriceTriggers(quote));
+  if (flowsSection.north_5d_pct !== null) {
+    if (flowsSection.north_5d_pct > 0.3) {
+      triggers.push({
+        rule: 'north_inflow_5d',
+        desc: `北上 5 日加仓 +${flowsSection.north_5d_pct.toFixed(2)} pct`,
+        weight: 3,
+      });
+    } else if (flowsSection.north_5d_pct < -0.3) {
+      triggers.push({
+        rule: 'north_outflow_5d',
+        desc: `北上 5 日减仓 ${flowsSection.north_5d_pct.toFixed(2)} pct`,
+        weight: -2,
+      });
+    }
+  }
+  if (flowsSection.limit_streak >= 3) {
+    triggers.push({
+      rule: `limit_streak_${flowsSection.limit_streak}b`,
+      desc: `${flowsSection.limit_streak} 连板`,
+      weight: Math.min(5, flowsSection.limit_streak),
+    });
+  }
+  if (anns.length > 0) {
+    triggers.push({ rule: 'recent_announcement', desc: `近期公告 ${anns.length} 条`, weight: 2 });
+  }
+
+  const score = triggers.reduce((s, t) => s + t.weight, 0);
+  const { level, label: levelLabel } = levelFromScore(score);
+
+  const events = anns.slice(0, 5).map((a) => ({ date: a.ann_date, title: a.title, url: a.url || null }));
+
+  const headline = buildHeadline({
+    change_pct: quote?.change_pct ?? null,
+    flows: flowsSection,
+    events,
+    triggers,
+    level,
+  });
+
+  const partialPayload: Omit<RadarPayload, 'markdown'> = {
+    ticker,
+    name,
+    market,
+    currency,
+    as_of: new Date().toISOString(),
+    radar_level: level,
+    level_label: levelLabel,
+    score,
+    headline,
+    sections: {
+      price: {
+        value: quote?.price ?? null,
+        change_pct: quote?.change_pct ?? null,
+        currency,
+        pe_ttm: dailyBasic?.pe_ttm ?? quote?.pe_ttm ?? null,
+        pb: dailyBasic?.pb ?? quote?.pb ?? null,
+        market_cap_label: quote?.market_cap_label || '—',
+        source: quote?.source || 'none',
+      },
+      flows: flowsSection,
+      events,
+      fundamentals: {
+        roe: finaInd?.roe ?? null,
+        gross_margin: finaInd?.grossprofit_margin ?? null,
+        net_margin: finaInd?.netprofit_margin ?? null,
+        dividend_yield: dailyBasic?.dv_ratio ?? null,
+      },
+    },
+    triggers,
+    disclaimer: DISCLAIMER,
+  };
+
+  return { ...partialPayload, markdown: renderMarkdown(partialPayload) };
+}
