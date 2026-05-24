@@ -15,6 +15,7 @@
  */
 
 import { buildRadar, type RadarPayload, type RadarLevel } from './radar';
+import { buildDigestTakes, isDigestTakesEnabled, type DigestTake } from './digest-takes';
 
 const DISCLAIMER = '本简报仅作决策辅助，不构成投资建议';
 
@@ -24,6 +25,9 @@ export interface RadarDigest {
   totals: Record<RadarLevel, number>;
   by_level: Record<RadarLevel, RadarPayload[]>;
   errors: Array<{ ticker: string; error: string }>;
+  /** Per-actionable-stock LLM 1-sentence take (empty when LLM_DIGEST_TAKE not 'on') */
+  takes: DigestTake[];
+  total_llm_cost_usd: number;
   markdown: string;            // for Telegram
   html: string;                // for email
   subject: string;             // email subject line
@@ -46,7 +50,7 @@ function labelFor(level: RadarLevel): string {
 }
 
 /** One-card Telegram-Markdown block — used in the actionable section. */
-function renderCardMarkdown(r: RadarPayload): string {
+function renderCardMarkdown(r: RadarPayload, take?: DigestTake): string {
   const { ticker, name, headline, score } = r;
   const price = r.sections.price.value;
   const pct = r.sections.price.change_pct;
@@ -66,11 +70,16 @@ function renderCardMarkdown(r: RadarPayload): string {
   for (const t of tops) {
     lines.push(`   • ${t.desc}`);
   }
+
+  // AI 委员会 take (only when LLM_DIGEST_TAKE=on)
+  if (take && take.take && !take.error) {
+    lines.push(`   _🤖 AI: ${take.take}_`);
+  }
   return lines.join('\n');
 }
 
 /** One-card HTML block — for email. */
-function renderCardHtml(r: RadarPayload): string {
+function renderCardHtml(r: RadarPayload, take?: DigestTake): string {
   const { ticker, name, headline, score } = r;
   const price = r.sections.price.value;
   const pct = r.sections.price.change_pct;
@@ -85,11 +94,16 @@ function renderCardHtml(r: RadarPayload): string {
     .sort((a, b) => b.weight - a.weight)
     .slice(0, 3);
 
+  const takeBlock = take && take.take && !take.error
+    ? `<div style="margin-top:6px;padding:6px 10px;background:#eef5ff;border-radius:4px;font-size:12px;color:#234"><span style="color:#888">🤖 AI:</span> ${escapeHtml(take.take)}</div>`
+    : '';
+
   return `
 <div style="border-left:3px solid ${r.radar_level === 'red' ? '#d33' : '#e8a93e'};padding:8px 12px;margin:8px 0;background:#fafafa">
   <div style="font-size:14px"><strong>${levelEmoji} ${escapeHtml(name)}</strong> <span style="color:#666">(${ticker})</span> · ${priceLine} · <span style="color:#888">score ${score > 0 ? '+' : ''}${score}</span></div>
   <div style="font-size:13px;color:#444;margin-top:4px">↳ ${escapeHtml(headline)}</div>
   ${tops.length > 0 ? '<ul style="margin:4px 0 0 0;padding-left:20px;font-size:12px;color:#555">' + tops.map((t) => `<li>${escapeHtml(t.desc)}</li>`).join('') + '</ul>' : ''}
+  ${takeBlock}
 </div>`.trim();
 }
 
@@ -104,6 +118,10 @@ function escapeHtml(s: string): string {
 /**
  * Build the digest by fanning out buildRadar() across the watchlist.
  * Resilient: per-ticker failures are caught and listed in `errors`.
+ *
+ * If LLM_DIGEST_TAKE=on, also fans out a 1-sentence LLM committee take
+ * across actionable (🔴/🟡) stocks. Failures are non-fatal — the digest
+ * still ships, just without takes for the failed ones.
  */
 export async function buildRadarDigest(tickers: string[]): Promise<RadarDigest> {
   const date = bjDateISO();
@@ -132,6 +150,12 @@ export async function buildRadarDigest(tickers: string[]): Promise<RadarDigest> 
     white: by_level.white.length,
   };
 
+  // LLM committee takes for actionables (no-op when env off / no provider)
+  const actionables = [...by_level.red, ...by_level.yellow];
+  const takes = isDigestTakesEnabled() ? await buildDigestTakes(actionables) : [];
+  const takesByTicker = new Map(takes.map((t) => [t.ticker, t]));
+  const total_llm_cost_usd = takes.reduce((s, t) => s + (t.est_cost_usd || 0), 0);
+
   // ── Markdown (Telegram) ────────────────────────────────────────────
   const md: string[] = [];
   md.push(`*🌅 每股雷达* · ${date}`);
@@ -142,7 +166,7 @@ export async function buildRadarDigest(tickers: string[]): Promise<RadarDigest> 
     md.push(`*🔴 关注 (${totals.red})*`);
     md.push('━━━━━━━━━━━━━━━━━━');
     for (const r of by_level.red) {
-      md.push(renderCardMarkdown(r));
+      md.push(renderCardMarkdown(r, takesByTicker.get(r.ticker)));
       md.push('');
     }
   }
@@ -150,7 +174,7 @@ export async function buildRadarDigest(tickers: string[]): Promise<RadarDigest> 
     md.push(`*🟡 留意 (${totals.yellow})*`);
     md.push('━━━━━━━━━━━━━━━━━━');
     for (const r of by_level.yellow) {
-      md.push(renderCardMarkdown(r));
+      md.push(renderCardMarkdown(r, takesByTicker.get(r.ticker)));
       md.push('');
     }
   }
@@ -173,11 +197,11 @@ export async function buildRadarDigest(tickers: string[]): Promise<RadarDigest> 
 
   if (totals.red > 0) {
     html.push(`<h3 style="margin:16px 0 4px 0">🔴 关注 (${totals.red})</h3>`);
-    for (const r of by_level.red) html.push(renderCardHtml(r));
+    for (const r of by_level.red) html.push(renderCardHtml(r, takesByTicker.get(r.ticker)));
   }
   if (totals.yellow > 0) {
     html.push(`<h3 style="margin:16px 0 4px 0">🟡 留意 (${totals.yellow})</h3>`);
-    for (const r of by_level.yellow) html.push(renderCardHtml(r));
+    for (const r of by_level.yellow) html.push(renderCardHtml(r, takesByTicker.get(r.ticker)));
   }
   if (totals.white > 0) {
     html.push(`<h3 style="margin:16px 0 4px 0;color:#888">⚪️ 平静 (${totals.white})</h3>`);
@@ -203,6 +227,8 @@ export async function buildRadarDigest(tickers: string[]): Promise<RadarDigest> 
     totals,
     by_level,
     errors,
+    takes,
+    total_llm_cost_usd,
     markdown: md.join('\n'),
     html: html.join('\n'),
     subject,

@@ -424,3 +424,118 @@ export async function fetchTushareAnnouncements(ticker: string, days = 30): Prom
   );
   return rows.sort((a, b) => b.ann_date.localeCompare(a.ann_date));
 }
+
+// ─── Event calendar endpoints (Tushare 2000+ 积分) ────────────────────────
+
+/** 财报披露计划 — forward-looking earnings date schedule. */
+export interface TushareDisclosureDate {
+  ts_code: string;
+  ann_date: string;          // YYYYMMDD — when the schedule was announced
+  end_date: string;          // YYYYMMDD — reporting period end (e.g. 20260630)
+  pre_date?: string | null;  // YYYYMMDD — previously planned date
+  actual_date?: string | null;
+  modify_date?: string | null;
+}
+
+/**
+ * Returns earnings disclosure schedule rows. Used to compute "earnings T-7"
+ * triggers. `end_date` is the *reporting period* end; the actual announcement
+ * date is in `actual_date` (once known) or `pre_date` (plan).
+ */
+export async function fetchTushareDisclosureDate(ticker: string): Promise<TushareDisclosureDate[]> {
+  const ts_code = normalizeTushareTicker(ticker);
+  if (!ts_code) return [];
+  const rows = await tushareCall<TushareDisclosureDate>(
+    'disclosure_date',
+    { ts_code },
+    'ts_code,ann_date,end_date,pre_date,actual_date,modify_date'
+  );
+  // Newest reporting period first
+  return rows.sort((a, b) => b.end_date.localeCompare(a.end_date));
+}
+
+/** 业绩预告 — forward earnings guidance ("Q2 net profit +30% YoY"). */
+export interface TushareForecast {
+  ts_code: string;
+  ann_date: string;             // YYYYMMDD — when guidance was issued
+  end_date: string;             // YYYYMMDD — reporting period end
+  type?: string | null;         // 预增 / 预减 / 预亏 / 扭亏 / 略增 / 略减 / 续亏 / 续盈
+  p_change_min?: number | null; // % change low end
+  p_change_max?: number | null; // % change high end
+  net_profit_min?: number | null; // 万元 low end
+  net_profit_max?: number | null;
+  last_parent_net?: number | null;
+  first_ann_date?: string | null;
+  summary?: string | null;
+  change_reason?: string | null;
+}
+
+export async function fetchTushareForecast(ticker: string, days = 90): Promise<TushareForecast[]> {
+  const ts_code = normalizeTushareTicker(ticker);
+  if (!ts_code) return [];
+  const today = new Date();
+  const start = new Date(today.getTime() - days * 24 * 60 * 60 * 1000)
+    .toISOString().slice(0, 10).replace(/-/g, '');
+  const end = today.toISOString().slice(0, 10).replace(/-/g, '');
+  const rows = await tushareCall<TushareForecast>(
+    'forecast',
+    { ts_code, start_date: start, end_date: end },
+    'ts_code,ann_date,end_date,type,p_change_min,p_change_max,net_profit_min,net_profit_max,last_parent_net,first_ann_date,summary,change_reason'
+  );
+  return rows.sort((a, b) => b.ann_date.localeCompare(a.ann_date));
+}
+
+/** 分红送股 — dividend / split events. */
+export interface TushareDividend {
+  ts_code: string;
+  end_date: string;          // YYYYMMDD — reporting period
+  ann_date: string;          // YYYYMMDD — announcement
+  div_proc?: string | null;  // 进度: 预案 / 股东大会通过 / 实施
+  stk_div?: number | null;   // 每股送转
+  cash_div?: number | null;  // 每股派现 (税前)
+  cash_div_tax?: number | null;
+  record_date?: string | null;
+  ex_date?: string | null;   // YYYYMMDD — ex-dividend date (the actionable one)
+  pay_date?: string | null;
+  div_listdate?: string | null;
+  imp_ann_date?: string | null;
+}
+
+export async function fetchTushareDividend(ticker: string): Promise<TushareDividend[]> {
+  const ts_code = normalizeTushareTicker(ticker);
+  if (!ts_code) return [];
+  const rows = await tushareCall<TushareDividend>(
+    'dividend',
+    { ts_code },
+    'ts_code,end_date,ann_date,div_proc,stk_div,cash_div,cash_div_tax,record_date,ex_date,pay_date,div_listdate,imp_ann_date'
+  );
+  // Newest first by ann_date
+  return rows.sort((a, b) => b.ann_date.localeCompare(a.ann_date));
+}
+
+/** 限售股解禁 — forward-looking share unlock schedule. */
+export interface TushareShareFloat {
+  ts_code: string;
+  ann_date: string;          // YYYYMMDD
+  float_date: string;        // YYYYMMDD — the day shares unlock
+  float_share: number;       // 流通股数 (万股) — units vary by Tushare doc revision
+  float_ratio?: number | null;
+  holder_name?: string | null;
+  share_type?: string | null;
+}
+
+export async function fetchTushareShareFloat(ticker: string, days_ahead = 180): Promise<TushareShareFloat[]> {
+  const ts_code = normalizeTushareTicker(ticker);
+  if (!ts_code) return [];
+  const today = new Date();
+  const start = today.toISOString().slice(0, 10).replace(/-/g, '');
+  const end = new Date(today.getTime() + days_ahead * 24 * 60 * 60 * 1000)
+    .toISOString().slice(0, 10).replace(/-/g, '');
+  const rows = await tushareCall<TushareShareFloat>(
+    'share_float',
+    { ts_code, start_date: start, end_date: end },
+    'ts_code,ann_date,float_date,float_share,float_ratio,holder_name,share_type'
+  );
+  // Soonest unlock first
+  return rows.sort((a, b) => a.float_date.localeCompare(b.float_date));
+}

@@ -53,6 +53,8 @@ export async function GET(req: Request) {
         totals: digest.totals,
         order: digest.order,
         errors: digest.errors,
+        takes: digest.takes,
+        total_llm_cost_usd: digest.total_llm_cost_usd,
         markdown: digest.markdown,
         html: digest.html,
         duration_ms: Date.now() - startedAt,

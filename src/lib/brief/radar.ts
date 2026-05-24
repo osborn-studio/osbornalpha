@@ -25,6 +25,7 @@ import {
   fetchTushareLimitList,
 } from '@/lib/data/sources/tushare-cached';
 import { MOCK_UNIVERSE } from '@/lib/data/mock';
+import { buildCalendar, type CalendarEvent } from './calendar';
 
 export type RadarLevel = 'red' | 'yellow' | 'white';
 
@@ -67,6 +68,16 @@ export interface RadarPayload {
       limit_30d_count: number;
     };
     events: Array<{ date: string; title: string; url: string | null }>;
+    calendar: {
+      next_earnings_days: number | null;     // days until next earnings (null if unknown / > horizon)
+      next_earnings_date: string | null;     // YYYYMMDD
+      upcoming: Array<{
+        kind: CalendarEvent['kind'];
+        date: string;
+        days_until: number;
+        title: string;
+      }>;
+    };
     fundamentals: {
       roe: number | null;
       gross_margin: number | null;
@@ -205,6 +216,24 @@ function renderMarkdown(payload: Omit<RadarPayload, 'markdown'>): string {
     }
   }
 
+  if (sections.calendar.upcoming.length > 0 || sections.calendar.next_earnings_days !== null) {
+    lines.push('');
+    lines.push('**未来 14 天日历**:');
+    if (sections.calendar.next_earnings_days !== null && sections.calendar.next_earnings_date) {
+      const d = sections.calendar.next_earnings_date;
+      lines.push(`- 📊 财报: ${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)} (T-${sections.calendar.next_earnings_days})`);
+    }
+    for (const ev of sections.calendar.upcoming.slice(0, 5)) {
+      if (ev.kind === 'earnings_announce') continue; // already shown above
+      const icon = ev.kind === 'dividend_ex_date' ? '💰' :
+                   ev.kind === 'share_unlock' ? '🔓' :
+                   ev.kind === 'earnings_guidance' ? '📈' : '·';
+      const datePart = `${ev.date.slice(0, 4)}-${ev.date.slice(4, 6)}-${ev.date.slice(6, 8)}`;
+      const tPart = ev.days_until >= 0 ? `T-${ev.days_until}` : `${Math.abs(ev.days_until)}d 前`;
+      lines.push(`- ${icon} ${datePart} (${tPart}) ${ev.title}`);
+    }
+  }
+
   if (triggers.length > 0) {
     lines.push('');
     lines.push('**信号**:');
@@ -223,10 +252,19 @@ function buildHeadline(payload: {
   events: RadarPayload['sections']['events'];
   triggers: RadarTrigger[];
   level: RadarLevel;
+  nextEarningsDays: number | null;
 }): string {
   const parts: string[] = [];
   if (payload.change_pct !== null) {
     parts.push(`单日 ${payload.change_pct > 0 ? '+' : ''}${payload.change_pct.toFixed(2)}%`);
+  }
+  // Earnings T- countdown takes precedence in the headline when imminent
+  if (payload.nextEarningsDays !== null && payload.nextEarningsDays <= 7) {
+    parts.push(
+      payload.nextEarningsDays <= 1
+        ? '财报前夜 T-1'
+        : `财报临近 T-${payload.nextEarningsDays}`,
+    );
   }
   if (payload.flows.limit_streak >= 3) {
     parts.push(`${payload.flows.limit_streak} 连板`);
@@ -258,11 +296,12 @@ export async function buildRadar(ticker: string): Promise<RadarPayload> {
   const quote = await resolveQuote(ticker);
 
   // Layer 2: A-share supplements (anns_d skipped — needs > 5000 积分)
-  const [dailyBasic, finaInd, northTop10, limitList] = await Promise.all([
+  const [dailyBasic, finaInd, northTop10, limitList, calendar] = await Promise.all([
     isA && isTushareConfigured() ? fetchTushareDailyBasic(ticker).catch(() => null) : Promise.resolve(null),
     isA && isTushareConfigured() ? fetchTushareFinaIndicator(ticker).catch(() => null) : Promise.resolve(null),
     isA && isTushareConfigured() ? fetchTushareNorthboundTop10(ticker, 30).catch(() => []) : Promise.resolve([]),
     isA && isTushareConfigured() ? fetchTushareLimitList(ticker, 30).catch(() => []) : Promise.resolve([]),
+    isA && isTushareConfigured() ? buildCalendar(ticker, 14).catch(() => null) : Promise.resolve(null),
   ]);
   const anns: any[] = [];  // anns_d skipped (needs higher tier)
 
@@ -322,6 +361,70 @@ export async function buildRadar(ticker: string): Promise<RadarPayload> {
     });
   }
 
+  // ── Calendar triggers (event-driven catalysts) ─────────────────────────
+  const calendarSection: RadarPayload['sections']['calendar'] = {
+    next_earnings_days: calendar?.next_earnings?.days_until ?? null,
+    next_earnings_date: calendar?.next_earnings?.date ?? null,
+    upcoming: (calendar?.events || []).slice(0, 8).map((e) => ({
+      kind: e.kind,
+      date: e.date,
+      days_until: e.days_until,
+      title: e.title,
+    })),
+  };
+
+  if (calendar?.next_earnings && calendar.next_earnings.days_until >= 0) {
+    const du = calendar.next_earnings.days_until;
+    if (du <= 1) {
+      triggers.push({
+        rule: 'earnings_t1',
+        desc: du === 0 ? '今日财报披露' : '财报前夜 (T-1)',
+        weight: 5,
+      });
+    } else if (du <= 7) {
+      triggers.push({
+        rule: 'earnings_t7',
+        desc: `财报临近 T-${du}`,
+        weight: 3,
+      });
+    } else if (du <= 14) {
+      triggers.push({
+        rule: 'earnings_t14',
+        desc: `财报临近 T-${du}`,
+        weight: 1,
+      });
+    }
+  }
+  for (const ev of calendar?.events || []) {
+    if (ev.kind === 'dividend_ex_date' && ev.days_until >= 0 && ev.days_until <= 3) {
+      triggers.push({
+        rule: 'dividend_ex_imminent',
+        desc: ev.title,
+        weight: 2,
+      });
+    } else if (ev.kind === 'share_unlock' && ev.days_until <= 7) {
+      // Unlocks are risk-off — negative weight (be careful)
+      triggers.push({
+        rule: 'share_unlock_imminent',
+        desc: ev.title,
+        weight: -2,
+      });
+    } else if (ev.kind === 'earnings_guidance' && ev.days_until >= -7) {
+      // Recent guidance (good or bad) is informational; weight by type
+      const type = String(ev.details?.type || '');
+      const positiveTypes = new Set(['预增', '扭亏', '略增', '续盈']);
+      const negativeTypes = new Set(['预减', '预亏', '略减', '续亏']);
+      let w = 1;
+      if (positiveTypes.has(type)) w = 2;
+      else if (negativeTypes.has(type)) w = -2;
+      triggers.push({
+        rule: 'guidance_recent',
+        desc: ev.title,
+        weight: w,
+      });
+    }
+  }
+
   const score = triggers.reduce((s, t) => s + t.weight, 0);
   const { level, label: levelLabel } = levelFromScore(score);
 
@@ -333,6 +436,7 @@ export async function buildRadar(ticker: string): Promise<RadarPayload> {
     events,
     triggers,
     level,
+    nextEarningsDays: calendarSection.next_earnings_days,
   });
 
   const partialPayload: Omit<RadarPayload, 'markdown'> = {
@@ -357,6 +461,7 @@ export async function buildRadar(ticker: string): Promise<RadarPayload> {
       },
       flows: flowsSection,
       events,
+      calendar: calendarSection,
       fundamentals: {
         roe: finaInd?.roe ?? null,
         gross_margin: finaInd?.grossprofit_margin ?? null,
