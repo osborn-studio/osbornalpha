@@ -40,6 +40,10 @@ import {
   fetchTushareNorthboundTop10 as _fetchTushareNorthboundTop10,
   fetchTushareLimitList as _fetchTushareLimitList,
   fetchTushareAnnouncements as _fetchTushareAnnouncements,
+  fetchTushareDisclosureDate as _fetchTushareDisclosureDate,
+  fetchTushareForecast as _fetchTushareForecast,
+  fetchTushareDividend as _fetchTushareDividend,
+  fetchTushareShareFloat as _fetchTushareShareFloat,
   isTushareConfigured,
   TushareError,
 } from './tushare';
@@ -112,6 +116,32 @@ export const fetchTushareNorthboundTop10 = unstable_cache(
   async (ticker: string, days = 30) => _fetchTushareNorthboundTop10(ticker, days),
   ['tushare-northbound-top10'],
   { revalidate: 6 * HOUR, tags: ['tushare', 'tushare-northbound-top10'] }
+);
+
+// ─── Event calendar (longer TTL — these change quarterly at most) ─────────
+
+export const fetchTushareDisclosureDate = unstable_cache(
+  async (ticker: string) => _fetchTushareDisclosureDate(ticker),
+  ['tushare-disclosure-date'],
+  { revalidate: DAY, tags: ['tushare', 'tushare-calendar'] }
+);
+
+export const fetchTushareForecast = unstable_cache(
+  async (ticker: string, days = 90) => _fetchTushareForecast(ticker, days),
+  ['tushare-forecast'],
+  { revalidate: DAY, tags: ['tushare', 'tushare-calendar'] }
+);
+
+export const fetchTushareDividend = unstable_cache(
+  async (ticker: string) => _fetchTushareDividend(ticker),
+  ['tushare-dividend'],
+  { revalidate: DAY, tags: ['tushare', 'tushare-calendar'] }
+);
+
+export const fetchTushareShareFloat = unstable_cache(
+  async (ticker: string, days_ahead = 180) => _fetchTushareShareFloat(ticker, days_ahead),
+  ['tushare-share-float'],
+  { revalidate: DAY, tags: ['tushare', 'tushare-calendar'] }
 );
 
 export const fetchTushareLimitList = unstable_cache(
