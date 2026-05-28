@@ -2,6 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ────────────────────────────────────────────────────────────────────────
+ * V1 (default) — preserved as-is so all current users see no visual change
+ * V2 (Stitch redesign) — opt-in via [data-design="v2"] on <html>
+ *   Flag wiring lives in src/app/layout.tsx (reads ?design=v2 query +
+ *   localStorage to persist across pages).
+ * Per DESIGN.md migration plan: tokens first (globals.css), components next.
+ * ──────────────────────────────────────────────────────────────────────── */
+
 :root,
 :root.theme-dark {
   --bg: #0d1117;
@@ -20,6 +28,49 @@
   --shadow: 0 4px 16px rgba(0,0,0,0.4);
 }
 
+/* ─── V2 dark — DESIGN.md "quiet-luxury trader terminal" ─── */
+:root[data-design="v2"].theme-dark,
+:root[data-design="v2"]:not(.theme-light) {
+  --bg: #0a0a0b;                              /* Ink Charcoal */
+  --bg-elevated: #141417;                     /* Elevated Charcoal */
+  --bg-card: #1c1c20;                         /* Card Pewter */
+  --bg-hover: #23232a;                        /* Hover Lift */
+  --border: rgba(255, 255, 255, 0.06);        /* Whisper Border */
+  --border-active: rgba(202, 138, 4, 0.4);    /* Active Border (brass) */
+  --text: #fafafa;                            /* Bone White */
+  --text-dim: #a1a1aa;                        /* Pewter Steel */
+  --text-muted: #52525b;                      /* Distant Fog */
+  --accent: #ca8a04;                          /* Distressed Brass */
+  --accent-dim: #a16207;                      /* Brass darker (hover) */
+  --accent-wash: rgba(202, 138, 4, 0.12);     /* Brass Wash */
+  --warn: #eab308;
+  --bullish: #e11d48;                         /* Pulse Red (CN convention) */
+  --neutral: #eab308;                         /* Pulse Amber */
+  --bearish: #16a34a;                         /* Pulse Green (CN convention) */
+  --shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 4px 12px rgba(0,0,0,0.3);
+}
+
+/* ─── V2 light — quieter paper-cream surfaces ─── */
+:root[data-design="v2"].theme-light {
+  --bg: #fafaf9;
+  --bg-elevated: #f5f5f4;
+  --bg-card: #ffffff;
+  --bg-hover: #f0f0ee;
+  --border: rgba(10, 10, 11, 0.08);
+  --border-active: rgba(202, 138, 4, 0.5);
+  --text: #0a0a0b;
+  --text-dim: #52525b;
+  --text-muted: #a1a1aa;
+  --accent: #ca8a04;
+  --accent-dim: #a16207;
+  --accent-wash: rgba(202, 138, 4, 0.10);
+  --warn: #ca8a04;
+  --bullish: #e11d48;
+  --neutral: #eab308;
+  --bearish: #16a34a;
+  --shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
 /* Color scheme: CN (red up, green down) — default */
 :root,
 :root[data-color-scheme="cn"] {
@@ -33,8 +84,18 @@
   --down: #ef4444;
 }
 
-/* Light theme */
-:root.theme-light {
+/* V2 sharpens the up/down to its Pulse Red / Pulse Green */
+:root[data-design="v2"][data-color-scheme="cn"] {
+  --up: #e11d48;
+  --down: #16a34a;
+}
+:root[data-design="v2"][data-color-scheme="us"] {
+  --up: #16a34a;
+  --down: #e11d48;
+}
+
+/* V1 Light theme (unchanged for non-v2 users) */
+:root.theme-light:not([data-design="v2"]) {
   --bg: #ffffff;
   --bg-elevated: #f6f8fa;
   --bg-card: #f0f3f6;
@@ -63,6 +124,26 @@ body {
   padding-bottom: 60px;
 }
 
+/* V2: Geist + CJK fallback, per DESIGN.md §3. The CSS vars
+ * --font-geist-sans / --font-geist-mono are injected by next/font
+ * in src/app/layout.tsx. */
+:root[data-design="v2"] body {
+  font-family: var(--font-geist-sans, -apple-system), "PingFang SC",
+               "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+}
+:root[data-design="v2"] {
+  --font-mono: var(--font-geist-mono, ui-monospace), "SF Mono", Menlo, monospace;
+}
+:root[data-design="v2"] .tabular,
+:root[data-design="v2"] .num,
+:root[data-design="v2"] .tabular-nums,
+:root[data-design="v2"] code,
+:root[data-design="v2"] pre,
+:root[data-design="v2"] kbd {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
 .text-up { color: var(--up); }
 .text-down { color: var(--down); }
 .bg-up { background-color: var(--up); }
@@ -77,6 +158,15 @@ body {
   margin-bottom: 16px;
 }
 
+/* V2: tighter radius, denser feel per DESIGN.md §4 "Cards" */
+:root[data-design="v2"] .card-base {
+  background: var(--bg-card);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  box-shadow: var(--shadow);
+}
+
 input, select {
   background: var(--bg-card);
   color: var(--text);
@@ -87,6 +177,12 @@ input, select {
   font-family: inherit;
 }
 input:focus { border-color: var(--accent); }
+
+:root[data-design="v2"] input:focus,
+:root[data-design="v2"] select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-wash);
+}
 
 button { cursor: pointer; font-family: inherit; }
 a { color: var(--accent); text-decoration: none; }
