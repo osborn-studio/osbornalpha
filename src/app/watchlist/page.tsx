@@ -664,7 +664,7 @@ function StockCard({
             </span>
             <span className="truncate text-sm font-semibold">{name}</span>
           </div>
-          <div className="mt-0.5 text-[11px] text-text-muted">{ticker}</div>
+          <div className="tabular mt-0.5 text-[11px] text-text-muted">{ticker}</div>
         </Link>
 
         <button
