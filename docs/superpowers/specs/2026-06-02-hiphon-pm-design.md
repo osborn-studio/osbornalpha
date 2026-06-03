@@ -223,6 +223,7 @@ stock-monitor/
 
 ## 10. 开放问题 (Open Questions)
 
-- [ ] 生产 API 是否受 site-password 护栏？（实现首步验证）
-- [ ] OSStack `pnpm install` 是否一次成功（早期项目，可能有 lockfile/版本坑）
-- [ ] John Cameron 主代理放 `.claude/agents/`（项目级）还是用户级 `~/.claude/agents/`？默认项目级，随产品走。
+- [x] **生产 API 受 site-password 护栏** —— 已确认。流程：`STOCK_MONITOR_SITE_PASSWORD` env → POST `/api/auth/unlock` 取 `sm_auth` cookie（30 天）→ 复用。已写入 `data-access.md` 并**实测通过**（unlock/search/quote/signals/radar/financials/flows/HK 全部 200）。
+- [x] **OSStack `pnpm install` 一次成功** —— 已修复（缺 node_modules），`pnpm install && pnpm -r build` 通过，daemon 起在 `/tmp/osstack.sock`，5 adapter 在线。
+- [x] **John Cameron 主代理放项目级** `.claude/agents/john-cameron.md`（随产品走）。
+- [ ] OSStack claude-code adapter 历史上有 cancelled/failed（tokens=0/0）记录；本次 v1 由架构师直接编写、OSStack 作追踪/监督 PM。后续大批量任务再压测 adapter 稳定性。

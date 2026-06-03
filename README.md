@@ -25,6 +25,24 @@
 
 > **桌面优先（IBKR 风格）+ 手机适配**。打开首页就是工作台，左栏 watchlist、中栏 K 线/详情、右栏新闻+AI 委员会——切换标的不重新加载页面，URL 用 `?s=TICKER` 同步。
 
+## 🤖 Hiphon PM —— John Cameron 投资顾问 Agent（v1.2，CLI）
+
+在 Stock Monitor 数据管线之上，新增一位虚拟资深基金经理 **John Cameron**（Hiphon 资本首席 PM）。
+DNA：**Druckenmiller 主导**（全球宏观 / 流动性 / 顺势重仓 / 快速止损）+ 价值护城河 + 产业链卡脖子。
+
+- **主代理** [`.claude/agents/john-cameron.md`](.claude/agents/john-cameron.md)：一二级市场专业问答 + 总调度
+- **投资宪法** [`skills/hiphon-pm/references/doctrine.md`](skills/hiphon-pm/references/doctrine.md)：择时/选股/评级/策略/仓位/合规
+- **选股技能** [`skills/hiphon-pm-pick`](skills/hiphon-pm-pick/SKILL.md)：「今天买什么」→ 排序买入清单（每只带评级/仓位%/进场区间/止损/风险）
+- 复用现有 [`stock-daily-radar`](skills/stock-daily-radar/SKILL.md) / [`stock-bottleneck-picker`](skills/stock-bottleneck-picker/SKILL.md) 作子技能
+- 数据全部来自现有 API（[取数与鉴权](skills/hiphon-pm/references/data-access.md)）；市场：A 股为主 + 港/美机会
+
+**双形态**（需求 1）：每个 Skill 既可被用户直接调用（如「今天买什么」触发 `hiphon-pm-pick`），也可被 John Cameron 主代理在对话中自动编排。
+
+**合规（个人版）**：可直言买卖评级，但每条必带 理由 + 仓位% + 止损/风险 + 「仅供个人参考」尾注。
+
+> 设计文档：[`docs/superpowers/specs/2026-06-02-hiphon-pm-design.md`](docs/superpowers/specs/2026-06-02-hiphon-pm-design.md)
+> 路线图：v2 增加 `hiphon-pm-deepdive`（个股系统性基本面报告）。
+
 ## ✨ 已实现（v1.1）
 
 ### Web UI — IBKR 风格 3 栏 workspace
