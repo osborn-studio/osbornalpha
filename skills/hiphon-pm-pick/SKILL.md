@@ -27,8 +27,11 @@ John Cameron 治下的主动选股技能：**自上而下，先择时定总闸�
 
 ## Workflow
 
-### Step 0 — 取数准备
+### Step 0 — 取数准备 + 读持仓/战绩
 按 `data-access.md` 设好 `STOCK_MONITOR_BASE_URL` 与 `sm_unlock`/`sm_get` helper。先 `sm_unlock`。
+再读两份本地状态（若存在，见 `../hiphon-pm/references/storage.md`）：
+- `~/.hiphon-pm/portfolio.json` → 现有持仓，使建议变成"基于持仓"的真决策（doctrine §8）
+- `~/.hiphon-pm/scorecard.json` → 战绩校准桶，给置信度提供真实依据（doctrine §9）
 
 ### Step 1 — 宏观/流动性总闸（择时）
 依 doctrine §1.1 判定 risk 状态（🟢顺风 / 🟡中性 / 🔴逆风）→ 定**总仓位上限**与风格。
@@ -53,8 +56,13 @@ John Cameron 治下的主动选股技能：**自上而下，先择时定总闸�
 ### Step 4 — 裁决与排序
 John Cameron 作主持人综合：质量分 × 时机分 × 宏观总闸 → 给每只 doctrine §3 六档评级，按评级+conviction 排序。仓位与 conviction 正相关（doctrine §5）。
 
-### Step 5 — 输出
+### Step 4.5 — 持仓 + 校准叠加
+- 对已持有标的，评级用 增持/减持/卖出 并跑集中度检查（doctrine §8）；新标的才用 买入/强烈买入。
+- 置信度引用战绩校准桶：仅 `n≥20`（reliable）桶可说成概率，否则只报计数（doctrine §9），永远带 n。
+
+### Step 5 — 输出 + 入库
 对每只标的用 doctrine §7 输出契约；末尾给**组合层建议**（总仓位上限、行业分布、现金比例）+ 合规尾注。
+**入库**：对每个给出的买卖评级，调 `hiphon-pm-track` 把该 `call` append 到 `~/.hiphon-pm/calls.jsonl`（doctrine §10，append-only）。
 
 ## Output format (Markdown)
 
