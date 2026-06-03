@@ -81,6 +81,12 @@ for AI committee). Missing keys → those endpoints return empty/mock; treat as 
 `rsi_overbought`(w2) · `rsi_oversold`(w2) · `momentum_up`(w1). Each event has
 `bias: bull|bear|neutral` and the response carries `hit_rate_5d` (historical accuracy).
 
+> **Note on `signal_mix` in the call journal**: a call's `signal_mix` (storage.md §1.1) may
+> include these backtest rule names **and** narrative tags that aren't `/api/signals` rules,
+> e.g. `north_accum` (北向加仓, from `/api/flows`), `macro_tailwind`. That's intentional — the
+> tag set defines the calibration bucket. Keep tags stable so buckets accumulate rather than
+> fragment; document any new tag here.
+
 ## Cost & latency discipline
 
 - Prefer `/api/radar` (instant, no LLM) over `/api/perspectives` (slow, costs tokens).

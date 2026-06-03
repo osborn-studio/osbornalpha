@@ -201,4 +201,6 @@
 铁律：**打分不是假精确，不是交易信号**。它只用来"比较赛道、比较同赛道内的名字、解释为什么这条路现在更值得下功夫"。最终仓位仍由 doctrine §5（conviction/执行确定性）+ §1（宏观总闸）裁定。
 
 ### 11.7 上游工具箱 (Upstream Toolkit)
-完整方法论源自 fork 仓库 `forks/chokepoint-atlas/`（origin: github.com/gilosbornhello/chokepoint-atlas，upstream: qiuqiubuchongle-cloud）。已内化的 references：`scoring-framework` `evidence-ladder` `catalyst-watch` `graph-schema`（+ 原有 product-manual/question-ladder/output-formats/style-and-voice）。fork 里还有 Python 研究管线（`scripts/`：build_research_pack / compare_lanes / run_source_pipeline / extract_sources_to_pack）—— 重活，列入 TODOS 待后续接为工具，不在本轮范围。
+完整方法论源自 fork 仓库 **`01_active/forks/chokepoint-atlas/`**（与 stock-monitor 同级；origin: github.com/gilosbornhello/chokepoint-atlas，upstream: qiuqiubuchongle-cloud）。已内化的 references：`scoring-framework` `evidence-ladder` `catalyst-watch` `graph-schema`（+ 原有 product-manual/question-ladder/output-formats/style-and-voice）。
+
+fork 的 Python 研究管线（`scripts/`：build_research_pack / compare_lanes / run_source_pipeline / extract_sources_to_pack）经验证为**纯 Python 3 标准库、零依赖、可直接跑**。已加薄封装 `skills/hiphon-pm/scripts/research-pack.sh`（`compare`/`pack`/`pipeline` 三子命令，缺 fork/python 时优雅报错）。集成设计见 `docs/designs/chokepoint-pipeline-integration.md`。铁律：**管线只做聚合，打分仍由 agent 按 §11.6 拍板，仓位仍由 §5/§1 裁定，命中仍由 `score-calls.sh` 裁定**——管线绝不变成交易信号。

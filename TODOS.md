@@ -16,14 +16,12 @@
 - **Why:** Faces end users beyond CLI.
 - **Effort:** L. **Depends on:** CLI suite proven.
 
-### [P2] Wire chokepoint-atlas Python research pipeline
-- **What:** The forked `forks/chokepoint-atlas/scripts/` ships a real pipeline
-  (`build_research_pack.py`, `run_source_pipeline.py`, `compare_lanes.py`,
-  `extract_sources_to_pack.py`, `generate_infographics.py`) + `graph-schema.md` +
-  example JSON inputs. Wire it as a callable research tool for `hiphon-pm-pick` /
-  `hiphon-pm-deepdive` (produce a structured research pack + lane comparison).
-- **Why:** Turns the bottleneck method from prose into a reproducible source→pack pipeline.
-- **Effort:** M-L. **Notes:** Python deps + source ingestion; keep the deterministic
-  scoring (scoring-framework.md) consistent with doctrine §11.6. Method already
-  internalized (doctrine §11); this adds the automated tooling layer.
-- **Source:** fork github.com/gilosbornhello/chokepoint-atlas (upstream qiuqiubuchongle-cloud).
+### [P2] Wire chokepoint-atlas Python research pipeline — PARTIAL (wrapper landed)
+- **Done:** Pipeline verified pure-Python-stdlib (zero deps, runs green). Thin wrapper
+  `skills/hiphon-pm/scripts/research-pack.sh` added (`compare`/`pack`/`pipeline`, graceful
+  guards). Integration design at `docs/designs/chokepoint-pipeline-integration.md`.
+- **Remaining:** Wire the agent loop — `hiphon-pm-pick`/`deepdive` emit a lane JSON from §11.2
+  bottleneck reasoning → run `research-pack.sh` → read the scorecard/memos back to pick the lane.
+  Keep agent-owned scoring (§11.6); pipeline only aggregates; `score-calls.sh` stays sole
+  outcome adjudicator; sizing stays §5/§1.
+- **Effort (remaining):** M. **Source:** fork github.com/gilosbornhello/chokepoint-atlas.

@@ -117,7 +117,7 @@ A *call* is not a 5-day signal. Hit is defined by rating side:
 | rating | side | HIT (win) when closed... | MISS when closed... |
 |---|---|---|---|
 | `strong_buy`/`buy`/`add` | long | `hit_target`, or `expired`/`manual` with realized return > 0 | `hit_stop`, or `expired`/`manual` with return ≤ 0 |
-| `trim`/`sell` | reduce | price **fell** after the call (avoided loss): return-from-ref < 0 at close | price rose after the call: return-from-ref > 0 |
+| `trim`/`sell` | reduce | price **fell** after the call (avoided loss): return-from-entry < 0 at close | price rose after the call: return-from-entry > 0 |
 | `hold` | n/a | not scored (no action) | not scored |
 
 Realized return for longs = `(close_adj_at_terminal − entry_adj) / entry_adj`. The LLM never

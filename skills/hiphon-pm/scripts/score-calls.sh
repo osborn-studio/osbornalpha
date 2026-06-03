@@ -118,9 +118,9 @@ jq -n --argjson v "$VERDICTS" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjs
     closed: {
       n: $cn,
       hits: $hits,
-      hit_rate: (if $cn>0 then ($hits/$cn*100|round/100) else null end),
+      hit_rate: (if $cn>0 then ($hits/$cn*100|round) else null end),
       avg_return_pct_long: (if ($long|length)>0 then ([$long[].return_pct]|add/($long|length)*100|round/100) else null end),
-      by_rating: ( $closed | group_by(.rating) | map({key:.[0].rating, value:{n:length, hit_rate:((map(select(.hit==true))|length)/length*100|round/100)}}) | from_entries )
+      by_rating: ( $closed | group_by(.rating) | map({key:.[0].rating, value:{n:length, hit_rate:((map(select(.hit==true))|length)/length*100|round)}}) | from_entries )
     },
     open: {
       n: ($open|length),
@@ -132,17 +132,17 @@ jq -n --argjson v "$VERDICTS" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjs
         | group_by(.market + "|" + ((.signal_mix//[])|sort|join("+")))
         | map({ key: (.[0].market + "|" + ((.[0].signal_mix//[])|sort|join("+"))),
                 n: length,
-                hit_rate: ((map(select(.hit==true))|length)/length*100|round/100),
+                hit_rate: ((map(select(.hit==true))|length)/length*100|round),
                 reliable: (length >= $floor) }) ),
       by_evidence: ( [ $closed[] | select(.evidence!=null) ]
         | group_by(.evidence)
         | map({ key: .[0].evidence, n: length,
-                hit_rate: ((map(select(.hit==true))|length)/length*100|round/100),
+                hit_rate: ((map(select(.hit==true))|length)/length*100|round),
                 reliable: (length >= $floor) }) ),
       by_chain_role: ( [ $closed[] | select(.chain_role!=null) ]
         | group_by(.chain_role)
         | map({ key: .[0].chain_role, n: length,
-                hit_rate: ((map(select(.hit==true))|length)/length*100|round/100),
+                hit_rate: ((map(select(.hit==true))|length)/length*100|round),
                 reliable: (length >= $floor) }) )
     }
   }' > "$OUT"

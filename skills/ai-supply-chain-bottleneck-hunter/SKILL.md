@@ -82,6 +82,7 @@ What to do:
   - inference
   - speculation
 - Always say what would break the thesis.
+- This is research, not a recommendation: never say "建议买入/卖出" or present names as buy calls; frame as "信号偏多/偏空/中性" and "names worth validating". Always end research output with: *本分析仅作研究参考，不构成投资建议*. (When this method feeds Hiphon PM's pick/deepdive, the buy/sell rating comes from doctrine's personal-version, not from this skill — see doctrine §11.5.)
 - When using the two-public-figure style, borrow:
   - their obsession with bottlenecks
   - their habit of asking where the chain breaks

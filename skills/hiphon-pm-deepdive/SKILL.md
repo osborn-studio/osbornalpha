@@ -43,7 +43,7 @@ description: John Cameron 的个股深度研究。对单只股票做系统性基
 综合 9 人观点，John Cameron 作主持人给最终判断；引用最尖锐的反方意见（devil's advocate）。
 
 ### Step 4 — 操作建议（doctrine §7 契约）+ 入库
-给评级/仓位/进场区间/止损/风险；若 portfolio.json 有该标的，给的是增持/减持/卖出并做集中度检查（doctrine §8）。然后调 `hiphon-pm-track` 把该调用 append 入库。
+给评级/仓位/进场区间/止损/风险；若 portfolio.json 有该标的，给的是增持/减持/卖出并做集中度检查（doctrine §8）。然后调 `hiphon-pm-track` 把该调用 append 入库，**并写入 `chain_role`（§11.4 角色）与 `evidence`（●/◐/○ → high/medium/low）字段**（供 by_chain_role / by_evidence 校准，否则深研调用会以 null 掉出这两个校准桶）。
 
 ## 输出格式（投资报告）
 
