@@ -1,6 +1,6 @@
 # Hedge Fund AI — 产品需求草案 (PRD)
 
-> 状态: Draft v1 · 2026-06-03
+> 状态: Draft **v2**（多专家并行深化）· 2026-06-03
 > 抽象自 `alva_ai_study_note_for_hedge_fund_ai.md`，嫁接到现有 **Hiphon PM**（John Cameron agent + doctrine + 战绩 journal + OSStack）。
 > 注：本文对 Alva 的描述均据其公开材料与该学习笔记（非一手核实）；目的是借鉴模式，非竞品对标。
 > 面向：中国私募基金经理（PM Miller / osborn）。可转债 + A 股多资产 + 周频 + risk parity。
@@ -23,6 +23,26 @@ Idea → Thesis → 需要的数据 → 信号定义 → 历史回测 → 风控
 **中国私募工作流 + 可转债 edge + 周频纪律 + Wind/Choice/券商数据 + 人在环 + 战绩记忆（已在 Hiphon PM 落地）。**
 
 ---
+
+## 0.0 v2 — 多专家深化（companion specs）
+
+本 PRD 是导航顶层文档；细节深挖到 5 份并行专家 annex（`docs/designs/hedge-fund-ai/`）：
+
+| Annex | 覆盖 | 对应 PRD 节 |
+|---|---|---|
+| [playbook-runtime-spec.md](hedge-fund-ai/playbook-runtime-spec.md) | Playbook schema 完整版 + 篮子记录 + 5 层 runtime + 周度工作流状态机 | §4/§4.1/§9 |
+| [convertible-bond-strategy-spec.md](hedge-fund-ai/convertible-bond-strategy-spec.md) | 双低/CV/纯债价值/YTM 公式 + 条款机制(逐券) + 信用尾部硬排除 | §3.2 |
+| [compliance-and-approval-spec.md](hedge-fund-ai/compliance-and-approval-spec.md) | 运作指引锚定 + 硬合规边界 + AI 动作清单 + 审批闸 | §3.5/§7/§8 |
+| [risk-parity-and-backtest-spec.md](hedge-fund-ai/risk-parity-and-backtest-spec.md) | ERC 算法 + EWMA 协方差 + 组合周频回测引擎 + 归因 | §3.4/§6 |
+| [data-skills-and-localization-spec.md](hedge-fund-ai/data-skills-and-localization-spec.md) | copy/不照搬/本地化抽象 + 数据 Skill 表 | §1/§2/§3.1/§6 |
+
+**5 位专家独立收敛的跨域结论（高置信，已并入本 PRD）：**
+1. **组合周频回测器是净新增引擎，不是 score-calls.sh 的扩展**——后者是单券前瞻打分器，无篮子/成本/换手/基准。（最大工作量项）
+2. **单券 journal 装不下篮子** → 新增 `rebalances.jsonl`（kind:rebalance），篮子 hit = 相对基准超额；新增 `by_factor`/`by_playbook` 校准切面（`by_evidence`/`chain_role` 对转债无意义）。
+3. **OSStack 无原生 AMENDED 态** → "修改再审" = 驳回原审批 + 提交新审批；`TIMED_OUT` 等同未批准、绝不默许执行。
+4. **集思录/宁稳网无官方 API** → 生产以 **Wind 转债库为权威**，集思录仅研究期交叉校验。
+5. **"债底保底" 仅在无违约假设下成立**（2021 后已有违约/退市转债）→ 信用/退市升为**硬排除一等约束**，先于双低打分。
+6. **CB sleeve 进 risk-parity 协方差**：v1 篮子单资产(NAV 波动率)，v2 因子分解(股性 delta + 久期)。
 
 ## 0.1 参考架构（5 层，源自笔记 §5）
 
