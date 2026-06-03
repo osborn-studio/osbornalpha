@@ -95,7 +95,9 @@ while IFS= read -r call; do
         else ($term.reason=="hit_target") or ($ret > 0)   # long: win
         end ) as $hit |
       {call_id:$call.call_id, market:$call.market, rating:$r,
-       signal_mix:($call.signal_mix // []), state:$term.state, reason:$term.reason,
+       signal_mix:($call.signal_mix // []), chain_role:($call.chain_role // null),
+       evidence:($call.evidence // null),
+       state:$term.state, reason:$term.reason,
        entry:$entry, entry_date:$entry_date, exit:$term.exit, return_pct:($ret*100|round/100),
        scored:($term.state=="closed" and $hit!=null), hit:$hit}
     end' 2>/dev/null || echo '{"state":"no_data","scored":false}')"
@@ -130,6 +132,16 @@ jq -n --argjson v "$VERDICTS" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjs
         | group_by(.market + "|" + ((.signal_mix//[])|sort|join("+")))
         | map({ key: (.[0].market + "|" + ((.[0].signal_mix//[])|sort|join("+"))),
                 n: length,
+                hit_rate: ((map(select(.hit==true))|length)/length*100|round/100),
+                reliable: (length >= $floor) }) ),
+      by_evidence: ( [ $closed[] | select(.evidence!=null) ]
+        | group_by(.evidence)
+        | map({ key: .[0].evidence, n: length,
+                hit_rate: ((map(select(.hit==true))|length)/length*100|round/100),
+                reliable: (length >= $floor) }) ),
+      by_chain_role: ( [ $closed[] | select(.chain_role!=null) ]
+        | group_by(.chain_role)
+        | map({ key: .[0].chain_role, n: length,
                 hit_rate: ((map(select(.hit==true))|length)/length*100|round/100),
                 reliable: (length >= $floor) }) )
     }

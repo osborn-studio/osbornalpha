@@ -35,7 +35,8 @@ DNA：**Druckenmiller 主导**（全球宏观 / 流动性 / 顺势重仓 / 快�
 - **选股技能** [`skills/hiphon-pm-pick`](skills/hiphon-pm-pick/SKILL.md)：「今天买什么」→ 排序买入清单（每只带评级/仓位%/进场区间/止损/风险）
 - **个股深研** [`skills/hiphon-pm-deepdive`](skills/hiphon-pm-deepdive/SKILL.md)：单股系统性基本面报告 + 操作建议
 - **战绩记录** [`skills/hiphon-pm-track`](skills/hiphon-pm-track/SKILL.md)：每个调用 append 落库 → 用[确定性脚本](skills/hiphon-pm/scripts/score-calls.sh)对照前复权 K 线自动打分（命中率/收益/校准）。**护城河**：对照真实战绩说话，正面解 AI 选股的过拟合/过度自信通病
-- 复用现有 [`stock-daily-radar`](skills/stock-daily-radar/SKILL.md) / [`stock-bottleneck-picker`](skills/stock-bottleneck-picker/SKILL.md) 作子技能
+- **产业链卡脖子作业法内化**（doctrine §11）：把 [`stock-bottleneck-picker`](skills/stock-bottleneck-picker/SKILL.md) + [`ai-supply-chain-bottleneck-hunter`](skills/ai-supply-chain-bottleneck-hunter/SKILL.md) 两个研究技能的方法论吃进 John Cameron——两镜头(Serenity/Crux)、拆栈、四角色候选、证据 ●/◐/○。证据质量与链角色写入战绩，按 `by_evidence`/`by_chain_role` 校准（"我的高证据/真瓶颈调用是否真的更准"）。纯研究仍可路由到这两个独立技能。
+- 复用现有 [`stock-daily-radar`](skills/stock-daily-radar/SKILL.md) 作子技能
 - 数据全部来自现有 API（[取数与鉴权](skills/hiphon-pm/references/data-access.md)）；市场：A 股为主 + 港/美机会
 - 个人战绩/持仓存 `~/.hiphon-pm/`（[storage spec](skills/hiphon-pm/references/storage.md)），**不进 git**（隐私）
 

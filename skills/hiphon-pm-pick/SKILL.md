@@ -38,10 +38,12 @@ John Cameron 治下的主动选股技能：**自上而下，先择时定总闸�
 材料：可用宏观叙事 + 指数/板块行情 + A 股看 `/api/flows` 北向趋势。**判不准就降一档保守。**
 > 这一步决定后面所有个股仓位的"天花板"。逆风时即使有好票，总仓位也压低、多给观望。
 
-### Step 2 — 候选生成（选股漏斗 1–2 层）
-- 有赛道：复用 `stock-bottleneck-picker` 拆产业链 → 锁定卡脖子环节 → 候选公司
-- 无赛道：从顺风行业 + watchlist + 主题龙头组候选池（10–20 只）
-- `GET /api/search` 解析名称→ticker；`GET /api/quote/batch` 批量拉现价/估值
+### Step 2 — 候选生成（选股漏斗 1–2 层 · 用 §11 卡脖子作业法）
+按 doctrine §11 跑作业法（不只是路由）：
+- 有赛道：定终端系统 → 拆栈 6–9 层（模板见 `stock-bottleneck-picker/references/sector-chain-templates.md`）→ "需求翻倍先断哪里"找瓶颈 → 按**四角色**出候选（executor/bottleneck/beneficiary/optionality），每个标**证据等级 ●/◐/○**。
+- 无赛道：从顺风行业 + watchlist + 主题龙头组候选池（10–20 只）。
+- `GET /api/search` 解析名称→ticker；`GET /api/quote/batch` 批量拉现价/估值。
+- **先方向后名字**：候选必须建立在"拆完链+找到瓶颈"之上，不做无逻辑的 ticker 堆砌。
 
 ### Step 3 — 多因子打分（漏斗 3–4 层）
 对候选并行拉取并按 doctrine 打分：
@@ -62,7 +64,7 @@ John Cameron 作主持人综合：质量分 × 时机分 × 宏观总闸 → 给
 
 ### Step 5 — 输出 + 入库
 对每只标的用 doctrine §7 输出契约；末尾给**组合层建议**（总仓位上限、行业分布、现金比例）+ 合规尾注。
-**入库**：对每个给出的买卖评级，调 `hiphon-pm-track` 把该 `call` append 到 `~/.hiphon-pm/calls.jsonl`（doctrine §10，append-only）。
+**入库**：对每个给出的买卖评级，调 `hiphon-pm-track` 把该 `call` append 到 `~/.hiphon-pm/calls.jsonl`（doctrine §10，append-only），并写入 `chain_role`（§11.4 四角色之一）与 `evidence`（●/◐/○）字段，供战绩按证据质量/角色分桶校准。
 
 ## Output format (Markdown)
 
@@ -74,8 +76,9 @@ John Cameron 作主持人综合：质量分 × 时机分 × 宏观总闸 → 给
 
 ---
 ## 1. 【强烈买入】<名称> <ticker> · <现价> (<涨跌幅>) · PE <x>
+- **链位置**：<栈第几层> · 角色 <执行者/真瓶颈/二阶受益/早期期权> · 证据 <●/◐/○>
 - **一句话逻辑**：<宏观→赛道→卡脖子→护城河→时机>
-- **建议仓位**：<x%>（试探 <y%> → 目标 <x%>）
+- **建议仓位**：<x%>（试探 <y%> → 目标 <x%>）（Crux：仓位随执行确定性，§5/§11.1）
 - **进场区间**：<区间>
 - **止损位**：<价> (<-n%>)
 - **主要风险**：<...>

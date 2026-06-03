@@ -33,7 +33,8 @@ jq -nc --arg id "$CALL_ID" \
   '{kind:"call",call_id:$id,ts_utc:(now|todateiso8601),exchange_session:("A:"+(now|strftime("%Y-%m-%d"))),
     ticker:"600519.SH",name:"贵州茅台",market:"A",rating:"buy",thesis:"…",entry_basis:"next_open",
     entry_price_ref:1280.86,target_pct:18,stop_price:1180,stop_pct:-8,size_pct:8,horizon_days:250,
-    signal_mix:["rsi_oversold","north_accum"],source:"hiphon-pm-pick"}' >> ~/.hiphon-pm/calls.jsonl
+    signal_mix:["rsi_oversold","north_accum"],chain_role:"bottleneck",evidence:"high",
+    source:"hiphon-pm-pick"}' >> ~/.hiphon-pm/calls.jsonl
 ```
 （实际字段由当次调用填充。`call_id` 用 `日期-去点ticker-序号`。）
 
@@ -61,7 +62,9 @@ John Cameron 用人话讲战绩，带 n、认账：
 - 按评级：买入 命中 a/b · 卖出 命中 c/d
 **持仓中（未实现）**：K 笔 · 浮动均值 +Z%
 **校准**（仅 n≥20 的可靠桶）：
-- A | rsi_oversold+north_accum：命中率 58%（n=24，可靠）
+- 信号组合 A | rsi_oversold+north_accum：命中率 58%（n=24，可靠）
+- 按证据质量：● high 64%（n=22，可靠）· ○ low 4 中 1（n=5，样本不足）
+- 按链角色：真瓶颈 62%（n=21，可靠）· 早期期权 1 中 4（n=4，样本不足）
 - A | momentum_up：4 中 6（n=6，样本不足，仅供参考）
 **认账**：上次对 <X> 的 <买入> 判断错了——<一句话原因>。
 > ⚠️ 以上为基于公开数据的个人决策辅助，不构成对任何第三方的投资建议。

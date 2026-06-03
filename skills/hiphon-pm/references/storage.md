@@ -48,6 +48,8 @@ Two `kind`s share the file: `call` (a new rating) and `event` (a lifecycle trans
   "size_pct": 8.0,
   "horizon_days": 250,
   "signal_mix": ["rsi_oversold","north_accum"],
+  "chain_role": "bottleneck",
+  "evidence": "high",
   "source": "hiphon-pm-pick"
 }
 ```
@@ -67,6 +69,8 @@ Two `kind`s share the file: `call` (a new rating) and `event` (a lifecycle trans
 | `size_pct` | number | suggested position size (doctrine §5) |
 | `horizon_days` | int | expiry horizon for `expired` close (default 250 ≈ 12mo trading) |
 | `signal_mix` | string[] | signal rules behind the call (for calibration buckets) |
+| `chain_role` | enum | bottleneck-method role (doctrine §11.4): `executor`/`bottleneck`/`beneficiary`/`optionality`; `null` if not chain-sourced |
+| `evidence` | enum | evidence quality (doctrine §11.3): `high`(●)/`medium`(◐)/`low`(○); drives the by-evidence calibration |
 | `source` | string | which skill/agent emitted it |
 
 Scale-in (试探仓 → 目标仓) = **one** `call` with the final `size_pct`; the staged entry is
@@ -153,17 +157,27 @@ at that bar. Else if any bar's adjusted `close ≥ entry*(1+target_pct/100)` →
   "calibration": {
     "min_sample": 20,
     "buckets": [
-      {"key":"A|rsi_oversold+north_accum","n":24,"hit_rate":0.58,"reliable":true},
-      {"key":"A|momentum_up","n":6,"hit_rate":0.67,"reliable":false}
+      {"key":"A|rsi_oversold+north_accum","n":24,"hit_rate":58,"reliable":true},
+      {"key":"A|momentum_up","n":6,"hit_rate":67,"reliable":false}
+    ],
+    "by_evidence": [
+      {"key":"high","n":22,"hit_rate":64,"reliable":true},
+      {"key":"low","n":5,"hit_rate":40,"reliable":false}
+    ],
+    "by_chain_role": [
+      {"key":"bottleneck","n":21,"hit_rate":62,"reliable":true},
+      {"key":"optionality","n":4,"hit_rate":25,"reliable":false}
     ]
   }
 }
 ```
 
 - Every rate is reported **with its `n`**. `reliable` is `true` only when `n ≥ min_sample` (20).
-- Calibration buckets key on `market | sorted(signal_mix)`. **Below the floor, the bucket is
-  shown with `reliable:false` and must NOT be quoted as a calibrated probability** (doctrine §9).
-  This is the guard against the journal becoming its own overfitting target on small n.
+- `buckets` key on `market | sorted(signal_mix)`; `by_evidence` on the `evidence` label;
+  `by_chain_role` on the bottleneck-method role (doctrine §11). **Below the floor, a bucket is
+  `reliable:false` and must NOT be quoted as a calibrated probability** (doctrine §9). The
+  `by_evidence` / `by_chain_role` cuts are the bottleneck-skill integration made measurable:
+  over time they show whether ● high-evidence / true-bottleneck calls actually outperform.
 
 ---
 
