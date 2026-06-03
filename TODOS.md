@@ -15,3 +15,15 @@
 - **What:** Surface John Cameron + pick/deepdive/track in the Next.js web app as a chat/drawer.
 - **Why:** Faces end users beyond CLI.
 - **Effort:** L. **Depends on:** CLI suite proven.
+
+### [P2] Wire chokepoint-atlas Python research pipeline
+- **What:** The forked `forks/chokepoint-atlas/scripts/` ships a real pipeline
+  (`build_research_pack.py`, `run_source_pipeline.py`, `compare_lanes.py`,
+  `extract_sources_to_pack.py`, `generate_infographics.py`) + `graph-schema.md` +
+  example JSON inputs. Wire it as a callable research tool for `hiphon-pm-pick` /
+  `hiphon-pm-deepdive` (produce a structured research pack + lane comparison).
+- **Why:** Turns the bottleneck method from prose into a reproducible source→pack pipeline.
+- **Effort:** M-L. **Notes:** Python deps + source ingestion; keep the deterministic
+  scoring (scoring-framework.md) consistent with doctrine §11.6. Method already
+  internalized (doctrine §11); this adds the automated tooling layer.
+- **Source:** fork github.com/gilosbornhello/chokepoint-atlas (upstream qiuqiubuchongle-cloud).

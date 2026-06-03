@@ -173,7 +173,13 @@
 - **◐ Medium**：券商研报、专业媒体（财联社/路透/彭博）、行业产能/交期报道
 - **○ Low**：社媒、未证实传闻、模糊"共识"
 
-规则：永远**分开**「确认证据 / 管理层声明 / 推断 / 猜测」；明确点出最强证据线与最弱假设；多家公司从不同环节描述同一约束 = 更高质量。**证据标签写入 call 记录的 `evidence` 字段**（storage.md §1.1），战绩按证据质量分桶校准（§9）——长期 John Cameron 就知道"我的 ● 高证据瓶颈调用命中率 vs ○ 期权调用命中率"，用证据质量校准 conviction。
+**四级证据梯（Evidence Ladder，详见 `ai-supply-chain-bottleneck-hunter/references/evidence-ladder.md`）**，与上面的 ●/◐/○ 和 journal `evidence` 字段映射：
+- **Tier A 硬证据**（10-K/年报季报、财报电话会、IR、官方供应商/客户披露）→ ● `high` · 默认标 `Confirmed`
+- **Tier B 半硬**（券商研报、专业媒体、招标/采购文档）→ ◐ `medium` · 默认标 `Inferred`
+- **Tier C 弱**（社媒/论坛/KOL）→ ○ `low` · 标 `Weak`
+- **Tier D 未证实**（传闻/无源截图）→ ○ `low` · 标 `Needs verification`，仅作线索
+
+规则：每条关键论断打一个标签（`Confirmed`/`Inferred`/`Weak`/`Needs verification`）；永远**分开**确认证据/管理层声明/推断/猜测；明确点出最强证据线与最弱假设，并说"什么证据能升级或证伪"；多家公司从不同环节描述同一约束 = 更高质量。**证据标签写入 call 记录的 `evidence` 字段**（storage.md §1.1），战绩按证据质量分桶校准（§9）——长期 John Cameron 就知道"我的 ● 高证据瓶颈调用命中率 vs ○ 期权调用命中率"，用证据质量校准 conviction。
 
 ### 11.4 四角色候选（先方向、后名字）
 **绝不在拆完链之前报名字。** 给候选时按角色分组，每个带 `chain_role`：
@@ -185,3 +191,14 @@
 ### 11.5 与独立技能的关系（合规分层）
 - 需要**纯研究/拆链**（不给买卖评级）→ 路由到 `stock-bottleneck-picker` / `ai-supply-chain-bottleneck-hunter`，它们守"信号偏多/偏空，不说建议买入"的研究合规。
 - 当本作业法**喂给 Hiphon 的 pick/deepdive** → 评级由 doctrine（个人版，可直言买卖）裁定，但证据标签、角色、"什么会证伪"必须一路带下来。两者不冲突：方法共享，口径分层。
+
+### 11.6 赛道/个股打分框架 (Scoring Framework)
+排序赛道与候选时用 5 维打分（1–5，详见 `ai-supply-chain-bottleneck-hunter/references/scoring-framework.md`）。取代 §11.2 步骤 3 的口语化排序：
+
+**Lane Score（赛道层）**：① Constraint 瓶颈有多真 ② Evidence 证据有多硬 ③ Consensus 共识度（越没被关注分越高）④ Mispricing 角色 vs 当前关注/估值的错配 ⑤ Catalyst 近期是否有强制重定价的事件。
+**Name Score（赛道内选名）**：栈内角色 + 瓶颈暴露 + 证据质量 + 重定价路径 + 风险。
+
+铁律：**打分不是假精确，不是交易信号**。它只用来"比较赛道、比较同赛道内的名字、解释为什么这条路现在更值得下功夫"。最终仓位仍由 doctrine §5（conviction/执行确定性）+ §1（宏观总闸）裁定。
+
+### 11.7 上游工具箱 (Upstream Toolkit)
+完整方法论源自 fork 仓库 `forks/chokepoint-atlas/`（origin: github.com/gilosbornhello/chokepoint-atlas，upstream: qiuqiubuchongle-cloud）。已内化的 references：`scoring-framework` `evidence-ladder` `catalyst-watch` `graph-schema`（+ 原有 product-manual/question-ladder/output-formats/style-and-voice）。fork 里还有 Python 研究管线（`scripts/`：build_research_pack / compare_lanes / run_source_pipeline / extract_sources_to_pack）—— 重活，列入 TODOS 待后续接为工具，不在本轮范围。

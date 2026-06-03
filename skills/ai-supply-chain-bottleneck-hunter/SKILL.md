@@ -398,3 +398,14 @@ Ask a clarification only if one of these is genuinely unclear:
 - whether current / latest validation matters
 
 If latest validation matters, browse the web and prefer primary sources.
+
+## Extended references (imported from chokepoint-atlas fork)
+
+Richer methodology imported from `forks/chokepoint-atlas` (origin: github.com/gilosbornhello/chokepoint-atlas). Use these for 2.0-style answers:
+
+- `references/scoring-framework.md` — 5-dim Lane Score + Name Score (Constraint/Evidence/Consensus/Mispricing/Catalyst). Also wired into Hiphon PM doctrine §11.6.
+- `references/evidence-ladder.md` — 4-tier evidence (A/B/C/D) + required claim tagging (Confirmed/Inferred/Weak/Needs verification). Maps to Hiphon `evidence` journal field (doctrine §11.3).
+- `references/catalyst-watch.md` — timeline catalyst monitoring (next events / bullish-bearish confirmation / most-sensitive names). Used by `hiphon-pm-deepdive` §6.
+- `references/graph-schema.md` — supply-chain graph schema for the research pack.
+
+The fork also ships a Python research pipeline (`scripts/`) — not yet wired (see TODOS.md).
