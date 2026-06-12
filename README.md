@@ -44,8 +44,17 @@ DNA：**Druckenmiller 主导**（全球宏观 / 流动性 / 顺势重仓 / 快�
 
 **合规（个人版）**：可直言买卖评级，但每条必带 理由 + 仓位% + 止损/风险 + 「仅供个人参考」尾注。
 
-> 设计文档：[`docs/superpowers/specs/2026-06-02-hiphon-pm-design.md`](docs/superpowers/specs/2026-06-02-hiphon-pm-design.md) · 经 CEO Review（SCOPE EXPANSION）扩出战绩/持仓/校准层
-> 路线图（[TODOS](TODOS.md)）：每日自动早盘推送、Web `/hiphon` 聊天页。
+### 🤝 Hermes Agent 融合（v1.3，接口级）
+
+John Cameron 已接入 [Hermes Agent](https://github.com/NousResearch/hermes-agent)（NousResearch 自进化 agent）运行时——**Telegram/飞书随时问股，cron 自动周度决策包，战绩接 Hermes 学习闭环**。零 fork、零 vendoring：
+
+- [`hermes/skills/`](hermes/skills/)：4 个 Hermes 入口技能（薄壳，权威内容仍在本仓库），由 [`hermes/install.sh`](hermes/install.sh) 符号链接进 `~/.hermes/skills/finance/`
+- [`hermes/upgrade-hermes.sh`](hermes/upgrade-hermes.sh)：**核心模块自动升级**——包裹官方 `hermes update`，加 烟测（版本/技能/状态）→ 失败自动回滚 → Telegram 通知；由 Hermes cron 每周日 03:30 驱动
+- Hermes cron `hiphon-weekly-pack`：每周五 16:30 John Cameron 自动产出周度决策包推送 Telegram
+- 取数密码注入 `~/.hermes/.env`（`STOCK_MONITOR_SITE_PASSWORD`）
+
+> 设计文档：[`docs/superpowers/specs/2026-06-02-hiphon-pm-design.md`](docs/superpowers/specs/2026-06-02-hiphon-pm-design.md) · 经 CEO Review（SCOPE EXPANSION）扩出战绩/持仓/校准层 · [Hermes 融合设计](docs/superpowers/specs/2026-06-12-hermes-integration-design.md)
+> 路线图（[TODOS](TODOS.md)）：Web `/hiphon` 聊天页（每日推送已由 Hermes 周度包取代）。
 
 ## ✨ 已实现（v1.1）
 

@@ -2,14 +2,15 @@
 
 ## Deferred (from CEO review 2026-06-02, SCOPE EXPANSION)
 
-### [P2] Daily auto call-sheet (John Cameron morning push)
-- **What:** Reuse `/api/cron/daily-brief` + telegram/resend to auto-push a morning
-  call sheet: overnight macro change, actions on current holdings, 1-2 fresh buys
-  with size+stop, and a one-line 30-day track-record summary.
-- **Why:** Gets the PM in front of you daily without asking.
-- **Blocked by:** Call journal + self-scoring track record must be stable first
-  (distribution before maturity = pushing unaccountable calls louder).
-- **Effort:** S-M (CC ~30 min). **Depends on:** hiphon-pm-track.
+### ~~[P2] Daily auto call-sheet~~ — SUPERSEDED 2026-06-12
+- Superseded by Hermes cron `hiphon-weekly-pack`（周五 16:30 周度决策包，经 Hermes gateway 推 Telegram）。
+  周频比日频更契合战绩成熟度与可转债/周频路线（见 Hedge Fund AI PRD）。
+
+### [P3] Migrate hermes-agent repo to SSD
+- **What:** `/Users/osborn/hermes-agent`（含 .venv）在内置盘，违反"代码住 SSD"全局规则。
+  迁移到 `~/Developer/hermes-agent` 并重建 venv + launchd 路径。
+- **Why:** 内置盘空间纪律。**Risk:** 运行中 gateway/venv/launchd plist 都指向旧路径，须一次性切换。
+- **Effort:** S-M. **注意:** `hermes gateway start` 会重写 service 定义，可借此切换。
 
 ### [P3] Web integration — /hiphon chat page
 - **What:** Surface John Cameron + pick/deepdive/track in the Next.js web app as a chat/drawer.
