@@ -102,3 +102,22 @@
 | 数据成本 > $100/月 | 砍掉 Tushare，回退 Akshare |
 | LLM 成本 > $300/月 | 切换 DeepSeek-R1 自托管 |
 | 我自己不再每天打开 | 重新审视价值 |
+
+---
+
+## v1.2+ — Hiphon PM Agent 产品线（2026-06 起）
+
+> Web 工作台（上方 v0.x–v1.1）之外新开的一条 **Agent 产品线**：在同一套数据管线之上构建投资顾问 Agent。详见 [README §🤖 Hiphon PM](../README.md) 与 `docs/superpowers/specs/`、`docs/designs/`。
+
+- ✅ **v1.2 — Hiphon PM / John Cameron Agent（CLI）**
+  - `doctrine.md` 投资宪法（择时/选股/评级/策略/仓位/持仓/校准/卡脖子作业法）
+  - `hiphon-pm-pick`（选股+择时）· `hiphon-pm-deepdive`（个股深研）· `hiphon-pm-track`（战绩问责）
+  - append-only 战绩 journal + 确定性打分脚本（命中由代码裁定，非 LLM 自评）
+  - chokepoint-atlas 卡脖子方法论内化（证据梯 ●◐○ + 四角色 + 打分框架）
+- ✅ **v1.3 — Hermes Agent 接口级融合**
+  - 4 个 Hermes 入口技能（符号链接，仓库为单一事实源）
+  - Hermes cron：周五 16:30 周度决策包推 Telegram；周日 03:30 核心自动升级（烟测+回滚）
+- 🏦 **设计中 — Hedge Fund AI（中国私募投资操作系统）**
+  - PRD v2 + 5 份专家 annex：playbook runtime / 可转债策略 / 私募合规与审批 / risk-parity+组合回测 / 数据 Skill 与本地化
+  - 面向可转债 + A股多资产 + 周频 + Wind/Choice/券商 + 人在环审批；**合规为常识性边界、非法律意见**
+  - 状态：仅 PRD/设计，未编码

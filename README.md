@@ -56,6 +56,16 @@ John Cameron 已接入 [Hermes Agent](https://github.com/NousResearch/hermes-age
 > 设计文档：[`docs/superpowers/specs/2026-06-02-hiphon-pm-design.md`](docs/superpowers/specs/2026-06-02-hiphon-pm-design.md) · 经 CEO Review（SCOPE EXPANSION）扩出战绩/持仓/校准层 · [Hermes 融合设计](docs/superpowers/specs/2026-06-12-hermes-integration-design.md)
 > 路线图（[TODOS](TODOS.md)）：Web `/hiphon` 聊天页（每日推送已由 Hermes 周度包取代）。
 
+### 🏦 Hedge Fund AI —— 中国私募投资操作系统 PRD（设计阶段）
+
+把 John Cameron 从「个人选股顾问」延伸为面向**中国私募基金经理**的投资操作系统设计草案：抽象自 Alva.ai 学习笔记，落地为 Playbook OS（可转债 / A股多资产 / 周频 / risk-parity / Wind·Choice·券商数据 / 人在环审批）。**目前为 PRD + 5 份专家深化 annex，尚未编码**。
+
+- 顶层 PRD：[`docs/designs/hedge-fund-ai-prd.md`](docs/designs/hedge-fund-ai-prd.md)（v2，含 5 层架构 + 核心 Playbook schema + MVP + 数据 Skill 表 + 合规边界 + 审批闸 + 周度决策包工作流）
+- 5 份专家 annex（[`docs/designs/hedge-fund-ai/`](docs/designs/hedge-fund-ai/)）：playbook runtime · 可转债策略 · 私募合规与审批 · risk-parity+组合回测 · 数据 Skill 与本地化
+- 卡脖子方法论上游 fork 集成：[`docs/designs/chokepoint-pipeline-integration.md`](docs/designs/chokepoint-pipeline-integration.md) + [`skills/hiphon-pm/scripts/research-pack.sh`](skills/hiphon-pm/scripts/research-pack.sh)（chokepoint-atlas scoring/evidence-ladder/catalyst 已并入 doctrine §11）
+
+> ⚠️ Hedge Fund AI 的合规部分为常识性边界、**非法律意见**，每个数字均标「须法务确认」。
+
 ## ✨ 已实现（v1.1）
 
 ### Web UI — IBKR 风格 3 栏 workspace
@@ -207,7 +217,30 @@ stock-monitor/
 ├── public/
 │   ├── manifest.json           # PWA
 │   └── icon-{192,512}.svg
-├── docs/                       # PRD / ARCHITECTURE / ROADMAP / DISCLAIMER
+│
+│   ── Hiphon PM Agent 层（v1.2+，CLI/Hermes 双端）──
+├── .claude/agents/
+│   └── john-cameron.md         # 主代理：资深 PM 人格 + 技能编排
+├── skills/                     # agentskills.io 标准技能（Claude Code & Hermes 共用）
+│   ├── hiphon-pm/
+│   │   ├── references/         # doctrine（投资宪法）/ storage / data-access
+│   │   └── scripts/            # score-calls.sh（战绩打分）/ research-pack.sh
+│   ├── hiphon-pm-pick/         # 选股+择时
+│   ├── hiphon-pm-deepdive/     # 个股深研
+│   ├── hiphon-pm-track/        # 战绩记录+自我打分
+│   ├── stock-daily-radar/      # 每股早报
+│   ├── stock-bottleneck-picker/        # 产业链瓶颈选股
+│   └── ai-supply-chain-bottleneck-hunter/  # 卡脖子研究框架（含 chokepoint-atlas 导入）
+├── hermes/                     # Hermes Agent 接口级融合（v1.3）
+│   ├── skills/                 # 4 个 Hermes 入口薄壳
+│   ├── install.sh              # 符号链接进 ~/.hermes/skills/
+│   └── upgrade-hermes.sh       # 核心自动升级（烟测+回滚）
+│
+├── docs/
+│   ├── PRD.md · ARCHITECTURE.md · ROADMAP.md · DISCLAIMER.md · SUPABASE_SETUP.md  # Web 产品文档
+│   ├── designs/                # Agent 设计：hedge-fund-ai-prd + 5 annex + chokepoint
+│   └── superpowers/specs/      # Hiphon PM / Hermes 融合 设计 spec
+├── TODOS.md
 ├── legacy-demo/                # v0.1 静态版本（归档保留）
 └── README.md
 ```
@@ -229,10 +262,11 @@ stock-monitor/
 ## 🛣 Roadmap
 
 - ✅ **v0.1** — UI 原型（静态 + mock 数据，GitHub Pages）
-- ✅ **v1.0** — Next.js + Supabase + Vercel（当前）
-- 🚧 **v1.1** — Python Skill 后端（Akshare + Alpha Vantage 接真实数据 + LLM 视角生成 + Telegram 推送）
-- 🚧 **v1.2** — 13F 监控 + 券商研报 AI 摘要 + 30 天 backtest
-- 🚧 **v2.0** — 多用户 SaaS 形态（如开放注册的话）
+- ✅ **v1.0 / v1.1** — Next.js + Supabase + Vercel Web 工作台（IBKR 风格 3 栏）
+- ✅ **v1.2** — **Hiphon PM / John Cameron 投资顾问 Agent**（CLI）：doctrine 投资宪法 + pick/deepdive/track + 战绩问责层 + 卡脖子方法论
+- ✅ **v1.3** — **Hermes Agent 接口级融合**：Telegram/飞书问股、cron 周度决策包、核心自动升级
+- 🏦 **设计中** — **Hedge Fund AI**（中国私募投资操作系统 PRD + 5 专家 annex；可转债/周频/risk-parity）
+- 🚧 **后续** — Web `/hiphon` 聊天页 · 13F 监控 · 多用户 SaaS
 
 详见 [docs/ROADMAP.md](docs/ROADMAP.md)
 
@@ -240,11 +274,16 @@ stock-monitor/
 
 ## 📄 文档
 
-- [PRD — 产品需求](docs/PRD.md)
-- [ARCHITECTURE — 技术架构](docs/ARCHITECTURE.md)
-- [ROADMAP — 路线图](docs/ROADMAP.md)
-- [DISCLAIMER — 免责声明](docs/DISCLAIMER.md)
-- [SUPABASE_SETUP — 数据库接入步骤](docs/SUPABASE_SETUP.md)
+**Web 产品（v1.x）**
+- [PRD — 产品需求](docs/PRD.md) · [ARCHITECTURE — 技术架构](docs/ARCHITECTURE.md) · [ROADMAP — 路线图](docs/ROADMAP.md) · [DISCLAIMER — 免责声明](docs/DISCLAIMER.md) · [SUPABASE_SETUP — 数据库接入](docs/SUPABASE_SETUP.md)
+
+**Hiphon PM Agent（v1.2 / v1.3）**
+- [Hiphon PM 设计](docs/superpowers/specs/2026-06-02-hiphon-pm-design.md) · [Hermes 融合设计](docs/superpowers/specs/2026-06-12-hermes-integration-design.md)
+- [问责层 CEO Plan](docs/designs/hiphon-pm-accountability.md) · [chokepoint-atlas 集成](docs/designs/chokepoint-pipeline-integration.md)
+
+**Hedge Fund AI（设计阶段）**
+- [PRD v2](docs/designs/hedge-fund-ai-prd.md) — 顶层
+- annex：[playbook runtime](docs/designs/hedge-fund-ai/playbook-runtime-spec.md) · [可转债策略](docs/designs/hedge-fund-ai/convertible-bond-strategy-spec.md) · [私募合规与审批](docs/designs/hedge-fund-ai/compliance-and-approval-spec.md) · [risk-parity+回测](docs/designs/hedge-fund-ai/risk-parity-and-backtest-spec.md) · [数据 Skill 与本地化](docs/designs/hedge-fund-ai/data-skills-and-localization-spec.md)
 
 ---
 
