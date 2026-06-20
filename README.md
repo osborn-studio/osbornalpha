@@ -26,6 +26,47 @@
 
 > **桌面优先（IBKR 风格）+ 手机适配**。打开首页就是工作台，左栏 watchlist、中栏 K 线/详情、右栏新闻+AI 委员会——切换标的不重新加载页面，URL 用 `?s=TICKER` 同步。
 
+## 🤖 Hiphon PM —— John Cameron 投资顾问 Agent（v1.2，CLI）
+
+在 Stock Monitor 数据管线之上，新增一位虚拟资深基金经理 **John Cameron**（Hiphon 资本首席 PM）。
+DNA：**Druckenmiller 主导**（全球宏观 / 流动性 / 顺势重仓 / 快速止损）+ 价值护城河 + 产业链卡脖子。
+
+- **主代理** [`.claude/agents/john-cameron.md`](.claude/agents/john-cameron.md)：一二级市场专业问答 + 总调度
+- **投资宪法** [`skills/hiphon-pm/references/doctrine.md`](skills/hiphon-pm/references/doctrine.md)：择时/选股/评级/策略/仓位/持仓决策/置信度校准/合规
+- **选股技能** [`skills/hiphon-pm-pick`](skills/hiphon-pm-pick/SKILL.md)：「今天买什么」→ 排序买入清单（每只带评级/仓位%/进场区间/止损/风险）
+- **个股深研** [`skills/hiphon-pm-deepdive`](skills/hiphon-pm-deepdive/SKILL.md)：单股系统性基本面报告 + 操作建议
+- **战绩记录** [`skills/hiphon-pm-track`](skills/hiphon-pm-track/SKILL.md)：每个调用 append 落库 → 用[确定性脚本](skills/hiphon-pm/scripts/score-calls.sh)对照前复权 K 线自动打分（命中率/收益/校准）。**护城河**：对照真实战绩说话，正面解 AI 选股的过拟合/过度自信通病
+- **产业链卡脖子作业法内化**（doctrine §11）：把 [`stock-bottleneck-picker`](skills/stock-bottleneck-picker/SKILL.md) + [`ai-supply-chain-bottleneck-hunter`](skills/ai-supply-chain-bottleneck-hunter/SKILL.md) 两个研究技能的方法论吃进 John Cameron——两镜头(Serenity/Crux)、拆栈、四角色候选、证据 ●/◐/○。证据质量与链角色写入战绩，按 `by_evidence`/`by_chain_role` 校准（"我的高证据/真瓶颈调用是否真的更准"）。纯研究仍可路由到这两个独立技能。
+- 复用现有 [`stock-daily-radar`](skills/stock-daily-radar/SKILL.md) 作子技能
+- 数据全部来自现有 API（[取数与鉴权](skills/hiphon-pm/references/data-access.md)）；市场：A 股为主 + 港/美机会
+- 个人战绩/持仓存 `~/.hiphon-pm/`（[storage spec](skills/hiphon-pm/references/storage.md)），**不进 git**（隐私）
+
+**双形态**（需求 1）：每个 Skill 既可被用户直接调用（如「今天买什么」触发 `hiphon-pm-pick`），也可被 John Cameron 主代理在对话中自动编排。
+
+**合规（个人版）**：可直言买卖评级，但每条必带 理由 + 仓位% + 止损/风险 + 「仅供个人参考」尾注。
+
+### 🤝 Hermes Agent 融合（v1.3，接口级）
+
+John Cameron 已接入 [Hermes Agent](https://github.com/NousResearch/hermes-agent)（NousResearch 自进化 agent）运行时——**Telegram/飞书随时问股，cron 自动周度决策包，战绩接 Hermes 学习闭环**。零 fork、零 vendoring：
+
+- [`hermes/skills/`](hermes/skills/)：4 个 Hermes 入口技能（薄壳，权威内容仍在本仓库），由 [`hermes/install.sh`](hermes/install.sh) 符号链接进 `~/.hermes/skills/finance/`
+- [`hermes/upgrade-hermes.sh`](hermes/upgrade-hermes.sh)：**核心模块自动升级**——包裹官方 `hermes update`，加 烟测（版本/技能/状态）→ 失败自动回滚 → Telegram 通知；由 Hermes cron 每周日 03:30 驱动
+- Hermes cron `hiphon-weekly-pack`：每周五 16:30 John Cameron 自动产出周度决策包推送 Telegram
+- 取数密码注入 `~/.hermes/.env`（`STOCK_MONITOR_SITE_PASSWORD`）
+
+> 设计文档：[`docs/superpowers/specs/2026-06-02-hiphon-pm-design.md`](docs/superpowers/specs/2026-06-02-hiphon-pm-design.md) · 经 CEO Review（SCOPE EXPANSION）扩出战绩/持仓/校准层 · [Hermes 融合设计](docs/superpowers/specs/2026-06-12-hermes-integration-design.md)
+> 路线图（[TODOS](TODOS.md)）：Web `/hiphon` 聊天页（每日推送已由 Hermes 周度包取代）。
+
+### 🏦 Hedge Fund AI —— 中国私募投资操作系统 PRD（设计阶段）
+
+把 John Cameron 从「个人选股顾问」延伸为面向**中国私募基金经理**的投资操作系统设计草案：抽象自 Alva.ai 学习笔记，落地为 Playbook OS（可转债 / A股多资产 / 周频 / risk-parity / Wind·Choice·券商数据 / 人在环审批）。**目前为 PRD + 5 份专家深化 annex，尚未编码**。
+
+- 顶层 PRD：[`docs/designs/hedge-fund-ai-prd.md`](docs/designs/hedge-fund-ai-prd.md)（v2，含 5 层架构 + 核心 Playbook schema + MVP + 数据 Skill 表 + 合规边界 + 审批闸 + 周度决策包工作流）
+- 5 份专家 annex（[`docs/designs/hedge-fund-ai/`](docs/designs/hedge-fund-ai/)）：playbook runtime · 可转债策略 · 私募合规与审批 · risk-parity+组合回测 · 数据 Skill 与本地化
+- 卡脖子方法论上游 fork 集成：[`docs/designs/chokepoint-pipeline-integration.md`](docs/designs/chokepoint-pipeline-integration.md) + [`skills/hiphon-pm/scripts/research-pack.sh`](skills/hiphon-pm/scripts/research-pack.sh)（chokepoint-atlas scoring/evidence-ladder/catalyst 已并入 doctrine §11）
+
+> ⚠️ Hedge Fund AI 的合规部分为常识性边界、**非法律意见**，每个数字均标「须法务确认」。
+
 ## ✨ 已实现（v1.1）
 
 ### Web UI — IBKR 风格 3 栏 workspace
@@ -182,7 +223,31 @@ stock-monitor/
 ├── public/
 │   ├── manifest.json           # PWA
 │   └── icon-{192,512}.svg
-├── docs/                       # PRD / ARCHITECTURE / ROADMAP / DISCLAIMER
+│
+│   ── Hiphon PM Agent 层（v1.2+，CLI/Hermes 双端）──
+├── .claude/agents/
+│   └── john-cameron.md         # 主代理：资深 PM 人格 + 技能编排
+├── skills/                     # agentskills.io 标准技能（Claude Code & Hermes 共用）
+│   ├── hiphon-pm/
+│   │   ├── references/         # doctrine（投资宪法）/ storage / data-access
+│   │   └── scripts/            # score-calls.sh（战绩打分）/ research-pack.sh
+│   ├── hiphon-pm-pick/         # 选股+择时
+│   ├── hiphon-pm-deepdive/     # 个股深研
+│   ├── hiphon-pm-track/        # 战绩记录+自我打分
+│   ├── stock-daily-radar/      # 每股早报
+│   ├── stock-bottleneck-picker/        # 产业链瓶颈选股
+│   ├── ai-supply-chain-bottleneck-hunter/  # 卡脖子研究框架（含 chokepoint-atlas 导入）
+│   └── portfolio-pdf-report/   # 持仓 PDF → 可搜索/筛选/排序 HTML 报表
+├── hermes/                     # Hermes Agent 接口级融合（v1.3）
+│   ├── skills/                 # 4 个 Hermes 入口薄壳
+│   ├── install.sh              # 符号链接进 ~/.hermes/skills/
+│   └── upgrade-hermes.sh       # 核心自动升级（烟测+回滚）
+│
+├── docs/
+│   ├── PRD.md · ARCHITECTURE.md · ROADMAP.md · DISCLAIMER.md · SUPABASE_SETUP.md  # Web 产品文档
+│   ├── designs/                # Agent 设计：hedge-fund-ai-prd + 5 annex + chokepoint
+│   └── superpowers/specs/      # Hiphon PM / Hermes 融合 设计 spec
+├── TODOS.md
 ├── legacy-demo/                # v0.1 静态版本（归档保留）
 └── README.md
 ```
@@ -204,10 +269,11 @@ stock-monitor/
 ## 🛣 Roadmap
 
 - ✅ **v0.1** — UI 原型（静态 + mock 数据，GitHub Pages）
-- ✅ **v1.0** — Next.js + Supabase + Vercel（当前）
-- 🚧 **v1.1** — Python Skill 后端（Akshare + Alpha Vantage 接真实数据 + LLM 视角生成 + Telegram 推送）
-- 🚧 **v1.2** — 13F 监控 + 券商研报 AI 摘要 + 30 天 backtest
-- 🚧 **v2.0** — 多用户 SaaS 形态（如开放注册的话）
+- ✅ **v1.0 / v1.1** — Next.js + Supabase + Vercel Web 工作台（IBKR 风格 3 栏）
+- ✅ **v1.2** — **Hiphon PM / John Cameron 投资顾问 Agent**（CLI）：doctrine 投资宪法 + pick/deepdive/track + 战绩问责层 + 卡脖子方法论
+- ✅ **v1.3** — **Hermes Agent 接口级融合**：Telegram/飞书问股、cron 周度决策包、核心自动升级
+- 🏦 **设计中** — **Hedge Fund AI**（中国私募投资操作系统 PRD + 5 专家 annex；可转债/周频/risk-parity）
+- 🚧 **后续** — Web `/hiphon` 聊天页 · 13F 监控 · 多用户 SaaS
 
 详见 [docs/ROADMAP.md](docs/ROADMAP.md)
 
@@ -215,12 +281,16 @@ stock-monitor/
 
 ## 📄 文档
 
-- [PRD — 产品需求](docs/PRD.md)
-- [ARCHITECTURE — 技术架构](docs/ARCHITECTURE.md)
-- [ROADMAP — 路线图](docs/ROADMAP.md)
-- [DISCLAIMER — 免责声明](docs/DISCLAIMER.md)
-- [SUPABASE_SETUP — 数据库接入步骤](docs/SUPABASE_SETUP.md)
-- [EDGEONE_DEPLOY — 腾讯 EdgeOne 部署](docs/EDGEONE_DEPLOY.md)
+**Web 产品（v1.x）**
+- [PRD — 产品需求](docs/PRD.md) · [ARCHITECTURE — 技术架构](docs/ARCHITECTURE.md) · [ROADMAP — 路线图](docs/ROADMAP.md) · [DISCLAIMER — 免责声明](docs/DISCLAIMER.md) · [SUPABASE_SETUP — 数据库接入](docs/SUPABASE_SETUP.md) · [EDGEONE_DEPLOY — 腾讯 EdgeOne 部署](docs/EDGEONE_DEPLOY.md)
+
+**Hiphon PM Agent（v1.2 / v1.3）**
+- [Hiphon PM 设计](docs/superpowers/specs/2026-06-02-hiphon-pm-design.md) · [Hermes 融合设计](docs/superpowers/specs/2026-06-12-hermes-integration-design.md)
+- [问责层 CEO Plan](docs/designs/hiphon-pm-accountability.md) · [chokepoint-atlas 集成](docs/designs/chokepoint-pipeline-integration.md)
+
+**Hedge Fund AI（设计阶段）**
+- [PRD v2](docs/designs/hedge-fund-ai-prd.md) — 顶层
+- annex：[playbook runtime](docs/designs/hedge-fund-ai/playbook-runtime-spec.md) · [可转债策略](docs/designs/hedge-fund-ai/convertible-bond-strategy-spec.md) · [私募合规与审批](docs/designs/hedge-fund-ai/compliance-and-approval-spec.md) · [risk-parity+回测](docs/designs/hedge-fund-ai/risk-parity-and-backtest-spec.md) · [数据 Skill 与本地化](docs/designs/hedge-fund-ai/data-skills-and-localization-spec.md)
 
 ## 🧰 Skills
 
