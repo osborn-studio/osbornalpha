@@ -175,3 +175,31 @@ stock-monitor/
 | v0.5 (本地引擎) | macOS Mac mini + launchd |
 | v1 (Web 接入) | 同上 + Cloudflare Tunnel 给 iPhone 用 |
 | v2 (多用户 SaaS) | Cloudflare Pages + Modal / Railway 后端 + Postgres |
+
+---
+
+## 9. Hiphon PM Agent 层（v1.2+）
+
+在上述 Web/数据架构之上叠加一层 **investment agent**（CLI + Hermes 双端），复用现有数据 API、不改 Web 栈。
+
+```
+渠道：CLI (Claude Code) · Telegram/飞书 (Hermes gateway)
+  │
+主代理 .claude/agents/john-cameron.md  ── 人格(Druckenmiller DNA) + 意图路由
+  │   遵循 skills/hiphon-pm/references/doctrine.md（投资宪法，单一事实源）
+  ├─ hiphon-pm-pick      选股+择时 → 排序买入清单
+  ├─ hiphon-pm-deepdive  个股系统性基本面报告
+  ├─ hiphon-pm-track     战绩记录 + score-calls.sh 确定性打分
+  └─ stock-bottleneck-picker / ai-supply-chain-bottleneck-hunter（卡脖子研究）
+  │
+数据：复用 Web 端 API（行情/财报/信号/资金流/AI委员会）
+状态：~/.hiphon-pm/（calls.jsonl 战绩 + portfolio + scorecard，append-only，不进 git）
+```
+
+**关键架构原则**
+- **单一事实源**：技能权威内容在 `skills/`；Hermes 端 `hermes/skills/` 只是符号链接薄壳——一处修改两端生效。
+- **命中由代码裁定**：战绩 hit/miss 由 `score-calls.sh`（前复权 K 线）确定性计算，LLM 不得自评自己的命中率（反过拟合/过度自信）。
+- **append-only journal**：调用与篮子再平衡只追加不改写，使战绩可信、可校准（by_factor/by_evidence/by_chain_role）。
+- **Hermes 接口级融合**：内核 100% 上游（零 fork/vendor），故 `upgrade-hermes.sh` 可持续自动升级（烟测+回滚）。
+
+**Hedge Fund AI（设计阶段）** 在此基础上扩展为 5 层 playbook 操作系统（PM/人决策 → Agent → Playbook Runtime → Skill → Data），面向中国私募/可转债/周频/risk-parity；详见 `docs/designs/hedge-fund-ai-prd.md`。**仅设计，未编码。**
