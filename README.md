@@ -13,6 +13,7 @@
 | 版本 | URL |
 |-----|-----|
 | **v1.0 (current)** Next.js + Supabase | **https://stock-monitor-nu.vercel.app** |
+| EdgeOne Pages / Makers | 待绑定腾讯 EdgeOne 项目与自定义域名 |
 | v0.1 (legacy 静态版) | https://gilosbornhello.github.io/stock-monitor/ |
 
 > 路由：[首页](https://stock-monitor-nu.vercel.app/) · [股票池](https://stock-monitor-nu.vercel.app/watchlist) · [单股详情](https://stock-monitor-nu.vercel.app/stock/00700.HK) · [简报历史](https://stock-monitor-nu.vercel.app/briefs) · [设置](https://stock-monitor-nu.vercel.app/settings) · [登录](https://stock-monitor-nu.vercel.app/login)
@@ -65,6 +66,11 @@
 - ✅ Vercel 自动从 main 分支部署
 - ✅ GitHub Actions 已移除（替换为 Vercel auto-deploy）
 - ✅ 域名：`stock-monitor-nu.vercel.app`（Vercel 默认）
+- ⏳ EdgeOne Pages / Makers：见 [docs/EDGEONE_DEPLOY.md](docs/EDGEONE_DEPLOY.md)
+
+快速导入 EdgeOne：
+
+[![Deploy with EdgeOne Makers](https://cdnstatic.tencentcs.com/edgeone/pages/deploy.svg)](https://edgeone.ai/pages/new?repository-url=https://github.com/gilosbornhello/stock-monitor)
 
 ---
 
@@ -214,6 +220,11 @@ stock-monitor/
 - [ROADMAP — 路线图](docs/ROADMAP.md)
 - [DISCLAIMER — 免责声明](docs/DISCLAIMER.md)
 - [SUPABASE_SETUP — 数据库接入步骤](docs/SUPABASE_SETUP.md)
+- [EDGEONE_DEPLOY — 腾讯 EdgeOne 部署](docs/EDGEONE_DEPLOY.md)
+
+## 🧰 Skills
+
+- [portfolio-pdf-report](skills/portfolio-pdf-report/SKILL.md)：把持仓/portfolio PDF 转成可搜索、筛选、排序的临时多维 HTML 报表。
 
 ---
 
