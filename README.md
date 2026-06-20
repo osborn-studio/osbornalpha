@@ -13,6 +13,7 @@
 | 版本 | URL |
 |-----|-----|
 | **v1.0 (current)** Next.js + Supabase | **https://stock-monitor-nu.vercel.app** |
+| EdgeOne Pages / Makers | 待绑定腾讯 EdgeOne 项目与自定义域名 |
 | v0.1 (legacy 静态版) | https://gilosbornhello.github.io/stock-monitor/ |
 
 > 路由：[首页](https://stock-monitor-nu.vercel.app/) · [股票池](https://stock-monitor-nu.vercel.app/watchlist) · [单股详情](https://stock-monitor-nu.vercel.app/stock/00700.HK) · [简报历史](https://stock-monitor-nu.vercel.app/briefs) · [设置](https://stock-monitor-nu.vercel.app/settings) · [登录](https://stock-monitor-nu.vercel.app/login)
@@ -106,6 +107,11 @@ John Cameron 已接入 [Hermes Agent](https://github.com/NousResearch/hermes-age
 - ✅ Vercel 自动从 main 分支部署
 - ✅ GitHub Actions 已移除（替换为 Vercel auto-deploy）
 - ✅ 域名：`stock-monitor-nu.vercel.app`（Vercel 默认）
+- ⏳ EdgeOne Pages / Makers：见 [docs/EDGEONE_DEPLOY.md](docs/EDGEONE_DEPLOY.md)
+
+快速导入 EdgeOne：
+
+[![Deploy with EdgeOne Makers](https://cdnstatic.tencentcs.com/edgeone/pages/deploy.svg)](https://edgeone.ai/pages/new?repository-url=https://github.com/gilosbornhello/stock-monitor)
 
 ---
 
@@ -230,7 +236,8 @@ stock-monitor/
 │   ├── hiphon-pm-track/        # 战绩记录+自我打分
 │   ├── stock-daily-radar/      # 每股早报
 │   ├── stock-bottleneck-picker/        # 产业链瓶颈选股
-│   └── ai-supply-chain-bottleneck-hunter/  # 卡脖子研究框架（含 chokepoint-atlas 导入）
+│   ├── ai-supply-chain-bottleneck-hunter/  # 卡脖子研究框架（含 chokepoint-atlas 导入）
+│   └── portfolio-pdf-report/   # 持仓 PDF → 可搜索/筛选/排序 HTML 报表
 ├── hermes/                     # Hermes Agent 接口级融合（v1.3）
 │   ├── skills/                 # 4 个 Hermes 入口薄壳
 │   ├── install.sh              # 符号链接进 ~/.hermes/skills/
@@ -275,7 +282,7 @@ stock-monitor/
 ## 📄 文档
 
 **Web 产品（v1.x）**
-- [PRD — 产品需求](docs/PRD.md) · [ARCHITECTURE — 技术架构](docs/ARCHITECTURE.md) · [ROADMAP — 路线图](docs/ROADMAP.md) · [DISCLAIMER — 免责声明](docs/DISCLAIMER.md) · [SUPABASE_SETUP — 数据库接入](docs/SUPABASE_SETUP.md)
+- [PRD — 产品需求](docs/PRD.md) · [ARCHITECTURE — 技术架构](docs/ARCHITECTURE.md) · [ROADMAP — 路线图](docs/ROADMAP.md) · [DISCLAIMER — 免责声明](docs/DISCLAIMER.md) · [SUPABASE_SETUP — 数据库接入](docs/SUPABASE_SETUP.md) · [EDGEONE_DEPLOY — 腾讯 EdgeOne 部署](docs/EDGEONE_DEPLOY.md)
 
 **Hiphon PM Agent（v1.2 / v1.3）**
 - [Hiphon PM 设计](docs/superpowers/specs/2026-06-02-hiphon-pm-design.md) · [Hermes 融合设计](docs/superpowers/specs/2026-06-12-hermes-integration-design.md)
@@ -284,6 +291,10 @@ stock-monitor/
 **Hedge Fund AI（设计阶段）**
 - [PRD v2](docs/designs/hedge-fund-ai-prd.md) — 顶层
 - annex：[playbook runtime](docs/designs/hedge-fund-ai/playbook-runtime-spec.md) · [可转债策略](docs/designs/hedge-fund-ai/convertible-bond-strategy-spec.md) · [私募合规与审批](docs/designs/hedge-fund-ai/compliance-and-approval-spec.md) · [risk-parity+回测](docs/designs/hedge-fund-ai/risk-parity-and-backtest-spec.md) · [数据 Skill 与本地化](docs/designs/hedge-fund-ai/data-skills-and-localization-spec.md)
+
+## 🧰 Skills
+
+- [portfolio-pdf-report](skills/portfolio-pdf-report/SKILL.md)：把持仓/portfolio PDF 转成可搜索、筛选、排序的临时多维 HTML 报表。
 
 ---
 
