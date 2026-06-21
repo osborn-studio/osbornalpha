@@ -29,7 +29,7 @@ export function isDigestTakesEnabled(): boolean {
   return process.env.LLM_DIGEST_TAKE === 'on' && isLLMConfigured();
 }
 
-const SYSTEM_PROMPT = `你是 Stock Monitor 雷达系统的「投资委员会主席」。
+const SYSTEM_PROMPT = `你是 osbornalpha 雷达系统的「投资委员会主席」。
 任务: 基于给定的单只 A 股 / 港股 / 美股的当日信号,
 写**一句**不超过 40 字的中文 take, 风格类似华尔街晨会主管。
 

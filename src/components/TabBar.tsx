@@ -23,7 +23,7 @@ const stroke = {
 
 const TABS: TabDef[] = [
   {
-    id: 'home', emoji: '🏠', label: '首页', href: '/',
+    id: 'home', emoji: '🏠', label: '首页', href: '/dashboard',
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
         <path d="M3 10.5 12 3l9 7.5" />
@@ -93,8 +93,8 @@ export function TabBar() {
     >
       {TABS.map((t) => {
         const active =
-          (t.href === '/' && pathname === '/') ||
-          (t.href !== '/' && pathname.startsWith(t.href));
+          (t.href === '/dashboard' && pathname === '/dashboard') ||
+          (t.href !== '/dashboard' && pathname.startsWith(t.href));
         return (
           <Link
             key={t.id}

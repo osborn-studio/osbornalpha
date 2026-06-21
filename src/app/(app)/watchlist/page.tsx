@@ -283,7 +283,7 @@ export default function WatchlistPage() {
 
   // ─── Export ───
   function exportYaml() {
-    const lines = ['# Stock Monitor watchlist', 'version: 1', '', 'groups:'];
+    const lines = ['# osbornalpha watchlist', 'version: 1', '', 'groups:'];
     for (const g of groups) {
       lines.push(`  - id: ${g.id}`);
       lines.push(`    name: "${g.name}"`);

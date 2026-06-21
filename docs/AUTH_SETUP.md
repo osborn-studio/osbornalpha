@@ -1,6 +1,18 @@
 # 多租户账号体系 — 部署/配置指南 (Phase 1)
 
-> 代码已实现（`feat/multi-tenant-auth`）。要真正跑通登录，需在各控制台完成以下**外部配置**（代码无法独力完成）。
+> 代码已实现（`feat/multi-tenant-auth`，已并入 `main`）。要真正跑通登录，需在各控制台完成以下**外部配置**（代码无法独力完成）。
+
+## ✅ 本次已落地实例（2026-06-20）
+- **Supabase 项目**：`stock-monitor`（gilosbornhello's Org / Free / Tokyo）
+  - Project ref：`mzfcaabhuwtfvsvadvsv`
+  - Project URL：`https://mzfcaabhuwtfvsvadvsv.supabase.co`
+  - **OAuth 回调地址（Google/GitHub 都填这个）**：`https://mzfcaabhuwtfvsvadvsv.supabase.co/auth/v1/callback`
+  - Key 体系：新版 `sb_publishable_…`（= anon，已写入 Vercel）/ `sb_secret_…`（= service_role，代码当前未用，按需自取）
+- **DB 迁移**：✅ 已通过 SQL Editor 应用（11 表 / 26 RLS 策略 / `on_auth_user_created` 触发器）
+- **Auth URL**：✅ Site URL = `https://www.osbornalpha.com`；Redirect = `www.osbornalpha.com/**`、`osbornalpha.com/**`、`localhost:3000/**`
+- **Auth 开关**：✅ 允许注册、✅ 允许 manual linking（第三方绑定）、Confirm email = 开
+- **Vercel(Production)**：✅ `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` 已设；已删 `SITE_PASSWORD` / `SITE_AUTH_SECRET`；已重新部署并 alias 到 osbornalpha.com
+- **待办**：① 用户在 Google Cloud 建 OAuth Client → 填 Supabase Google provider；② 注册首测（需邮箱确认）；③ 可选自有 SMTP / 关 Confirm email 便于测试
 
 ## 0. 已实现（代码侧）
 - 页面：`/login`（邮箱密码 + Google/GitHub/Apple + magic-link 次要）· `/register` · `/forgot-password` · `/reset-password`
