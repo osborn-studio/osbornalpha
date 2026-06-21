@@ -128,6 +128,18 @@ export interface UserPreferences {
 }
 
 // Convenient row aliases
+export interface Profile {
+  id: string;
+  email: string | null;
+  display_name: string | null;
+  plan: string;
+  role: string;
+  usage: Record<string, unknown>;
+  stripe_customer_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export type Database = {
   public: {
     Tables: {
@@ -141,6 +153,7 @@ export type Database = {
       news_items: { Row: NewsItem; Insert: Partial<NewsItem>; Update: Partial<NewsItem> };
       broker_reports: { Row: BrokerReport; Insert: Partial<BrokerReport>; Update: Partial<BrokerReport> };
       user_preferences: { Row: UserPreferences; Insert: Partial<UserPreferences>; Update: Partial<UserPreferences> };
+      profiles: { Row: Profile; Insert: Partial<Profile>; Update: Partial<Profile> };
     };
   };
 };
