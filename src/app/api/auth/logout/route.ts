@@ -1,18 +1,22 @@
 import { NextResponse } from 'next/server';
-import { COOKIE_NAME } from '@/lib/auth/site-password';
+import { getServerSupabase, serverIsSupabaseConfigured } from '@/lib/supabase/server';
 
-export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
+// Signs the user out of Supabase (clears auth cookies). The old SITE_PASSWORD
+// cookie logout was removed with the shared-password gate.
 export async function POST() {
-  const resp = NextResponse.json({ ok: true });
-  resp.cookies.set(COOKIE_NAME, '', { path: '/', maxAge: 0 });
-  return resp;
+  if (serverIsSupabaseConfigured()) {
+    const sb = await getServerSupabase();
+    await sb.auth.signOut();
+  }
+  return NextResponse.json({ ok: true });
 }
 
-export async function GET() {
-  // Allow GET for convenient /api/auth/logout?return=/ link
-  const resp = NextResponse.redirect(new URL('/unlock', 'https://stock-monitor-nu.vercel.app').toString());
-  resp.cookies.set(COOKIE_NAME, '', { path: '/', maxAge: 0 });
-  return resp;
+export async function GET(req: Request) {
+  if (serverIsSupabaseConfigured()) {
+    const sb = await getServerSupabase();
+    await sb.auth.signOut();
+  }
+  return NextResponse.redirect(new URL('/login', req.url));
 }
