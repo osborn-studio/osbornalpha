@@ -2,8 +2,6 @@ import type { Metadata, Viewport } from 'next';
 import { GeistSans } from 'geist/font/sans';
 import { GeistMono } from 'geist/font/mono';
 import './globals.css';
-import { TopBar } from '@/components/TopBar';
-import { TabBar } from '@/components/TabBar';
 import { ToastProvider } from '@/components/Toast';
 
 // Geist (sans) + Geist Mono — loaded for v2 design per DESIGN.md §3.
@@ -13,13 +11,13 @@ import { ToastProvider } from '@/components/Toast';
 // only the static-asset cost; the font file is cached.
 
 export const metadata: Metadata = {
-  title: { default: 'Stock Monitor · 个人股票池每日 AI 监控', template: '%s · Stock Monitor' },
-  description: '个人股票池每日 AI 监控工具 · A 股 / 港股 / 美股',
+  title: { default: 'osbornalpha · AI 投资监控工作台', template: '%s · osbornalpha' },
+  description: 'AI 投资监控工作台 · 个人股票池每日 AI 监控 · A 股 / 港股 / 美股',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
-    title: 'Stock Monitor',
+    title: 'osbornalpha',
   },
 };
 
@@ -66,11 +64,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
-        <ToastProvider>
-          <TopBar />
-          <main className="mx-auto w-full max-w-[1600px] p-3 lg:p-4">{children}</main>
-          <TabBar />
-        </ToastProvider>
+        <ToastProvider>{children}</ToastProvider>
       </body>
     </html>
   );

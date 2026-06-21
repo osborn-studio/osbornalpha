@@ -28,7 +28,7 @@ export default function LoginPage() {
   return (
     <>
       <div className="card-base">
-        <h1 className="mb-1 text-2xl font-bold">👋 登录 Stock Monitor</h1>
+        <h1 className="mb-1 text-2xl font-bold">👋 登录 osbornalpha</h1>
         <p className="mb-4 text-sm text-text-dim">用邮箱密码、Google 或其他方式登录。</p>
 
         <AuthForm mode="login" />
@@ -46,7 +46,6 @@ export default function LoginPage() {
                 className="rounded-lg bg-bg-elev px-3 py-2">发送</button>
             </div>
           )}
-          <div className="mt-3"><Link href="/">← 返回（继续访客模式）</Link></div>
         </div>
       </div>
       <Disclaimer />

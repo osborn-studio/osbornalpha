@@ -24,7 +24,7 @@ import { chat, extractJson, isLLMConfigured } from '@/lib/data/sources/llm';
 //     plugins/agent-plugins/earnings-reviewer/skills/morning-note/SKILL.md,
 //     Apache-2.0) ─────────────────────────────────────────────────────────
 const MORNING_NOTE_DOCTRINE = `
-你是 Stock Monitor 的早间研究主管。按机构 morning note 标准写作，规则如下：
+你是 osbornalpha 的早间研究主管。按机构 morning note 标准写作，规则如下：
 
 【数据来源 hierarchy】
 - 优先 MCP / 已验证数据（Tushare、东方财富、FRED、EDGAR）
@@ -466,7 +466,7 @@ function composeMarkdown(a: ComposeArgs): string {
 
   // ─── 1. Header ──────────────────────────────────────────────
   lines.push(`*Sentinel Morning Note · ${a.date}*`);
-  lines.push(`_由 Stock Monitor AI 委员会编辑 · 截至生成时刻数据_`);
+  lines.push(`_由 osbornalpha AI 委员会编辑 · 截至生成时刻数据_`);
   lines.push('');
   lines.push(`📊 委员会信心：*${a.overall.toFixed(1)} / 10* — ${a.overall_label}`);
   lines.push(`📋 ${a.watchlist_count} 只股票池 · Top ${a.blocks.length} 进入注意力优先级`);
@@ -594,7 +594,7 @@ function composeHTML(a: ComposeArgs): string {
       🎯 Sentinel Morning Note · ${esc(a.date)}
     </h1>
     <p style="margin:6px 0 0;color:${HTML_PALETTE.dim};font-size:12px">
-      由 Stock Monitor AI 委员会编辑 · 截至生成时刻数据
+      由 osbornalpha AI 委员会编辑 · 截至生成时刻数据
     </p>
     <div style="margin:14px 0 0;padding:10px 14px;background:${HTML_PALETTE.card};border-radius:8px;border:1px solid ${HTML_PALETTE.border};font-size:13px;color:${HTML_PALETTE.text}">
       📊 委员会信心：<strong style="color:${HTML_PALETTE.accent}">${a.overall.toFixed(1)} / 10</strong> — ${esc(a.overall_label)}<br>
