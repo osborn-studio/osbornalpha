@@ -7,6 +7,7 @@ import { getStockOrStub } from '@/lib/data/mock';
 import { formatPrice, formatPct, formatChange, formatVolume, changeClass, marketLabel, stars } from '@/lib/utils';
 import { KlineChart } from '@/components/KlineChart';
 import { PerspectiveCard } from '@/components/PerspectiveCard';
+import { DcfStudio } from '@/components/DcfStudio';
 import { Disclaimer } from '@/components/Disclaimer';
 import { useToast } from '@/components/Toast';
 
@@ -205,6 +206,9 @@ export default function StockDetailPage() {
 
       {tab === 'fundamentals' && (
         <>
+          <div className="card-base">
+            <DcfStudio ticker={ticker} />
+          </div>
           <div className="card-base">
             <div className="mb-3 text-sm font-semibold text-text-dim">📅 财报日历</div>
             <div className="rounded-md bg-bg-card p-3 text-sm">
