@@ -35,11 +35,12 @@ Thumbs.db
 .idea/
 *.swp
 
-# Project local data
-briefs/
-raw/
-feedback/
-logs/
+# Project local data (repo-root only — leading slash so these don't match
+# nested source dirs like src/app/(app)/briefs/)
+/briefs/
+/raw/
+/feedback/
+/logs/
 *.sqlite
 *.db
 config/watchlist.local.yml
