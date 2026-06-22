@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { TOOLS, TOOLS_BY_NAME } from './tools';
 
 describe('tool registry', () => {
-  it('exposes the 8 P1 tools', () => {
+  it('exposes the expected tools', () => {
     const names = TOOLS.map((t) => t.name).sort();
     expect(names).toEqual(
-      ['dcf', 'financials', 'flows', 'perspectives', 'quote', 'radar', 'search', 'signals'].sort(),
+      ['calendar', 'dcf', 'financials', 'flows', 'holders', 'kline', 'perspectives', 'quote', 'radar', 'search', 'signals'].sort(),
     );
   });
   it('every tool has description + inputSchema + handler', () => {
