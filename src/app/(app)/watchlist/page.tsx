@@ -9,6 +9,7 @@ import { Disclaimer } from '@/components/Disclaimer';
 import { useToast } from '@/components/Toast';
 import { useBatchQuotes, type LiveQuote } from '@/lib/hooks/useQuote';
 import { normalizeWindTicker } from '@/lib/stocks/wind-normalize';
+import { WatchlistTable } from '@/components/WatchlistTable';
 import { getBrowserSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import type { Market } from '@/lib/supabase/database.types';
 
@@ -25,6 +26,7 @@ export default function WatchlistPage() {
   );
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [viewMode, setViewMode] = useState<'kanban' | 'table'>('kanban');
 
   // Drag state — single source of truth.
   // `dragKind` distinguishes card-drag from column-reorder so the column
@@ -306,7 +308,12 @@ export default function WatchlistPage() {
         <div>
           <h1 className="text-xl font-bold">📋 股票池</h1>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-text-dim">
-            <span>拖拽卡片在看板间移动 · 拖拽列头重排看板 · 每 {REFRESH_MS / 1000}s 自动刷新</span>
+            <span>
+              {viewMode === 'kanban'
+                ? '拖拽卡片在看板间移动 · 拖拽列头重排看板'
+                : '点击表头排序 · 评级/风险/目标价/估值区间'}
+              {' · '}每 {REFRESH_MS / 1000}s 自动刷新
+            </span>
             {quotesLoading && allTickers.length > 0 && <span className="text-accent">⏳ 加载报价…</span>}
             {!quotesLoading && failedTickers.length > 0 && (
               <span className="text-down">
@@ -316,6 +323,22 @@ export default function WatchlistPage() {
           </div>
         </div>
         <div className="flex shrink-0 gap-1.5">
+          <div className="flex overflow-hidden rounded-md border border-border text-xs">
+            <button
+              onClick={() => setViewMode('kanban')}
+              className={`px-3 py-1.5 ${viewMode === 'kanban' ? 'bg-accent-dim/20 font-semibold text-accent' : 'text-text-dim hover:text-text'}`}
+              title="看板视图（拖拽分组）"
+            >
+              📋 看板
+            </button>
+            <button
+              onClick={() => setViewMode('table')}
+              className={`border-l border-border px-3 py-1.5 ${viewMode === 'table' ? 'bg-accent-dim/20 font-semibold text-accent' : 'text-text-dim hover:text-text'}`}
+              title="表格视图（评级 / 风险 / 目标价 / 估值区间）"
+            >
+              📊 表格
+            </button>
+          </div>
           <button
             onClick={refreshQuotes}
             disabled={allTickers.length === 0 || quotesLoading}
@@ -349,7 +372,11 @@ export default function WatchlistPage() {
         </div>
       )}
 
+      {/* ─── Table view (评级 / 风险 / 目标价 / 估值区间) ─── */}
+      {viewMode === 'table' && <WatchlistTable groups={groups} quotes={quotes} />}
+
       {/* ─── Kanban Board ─── */}
+      {viewMode === 'kanban' && (
       <div
         className="flex gap-3 overflow-x-auto pb-3"
         style={{ scrollSnapType: 'x mandatory' }}
@@ -442,6 +469,7 @@ export default function WatchlistPage() {
           )}
         </div>
       </div>
+      )}
 
       {hydrated && allTickers.length === 0 && (
         <div className="card-base bg-bg-card py-8 text-center text-sm text-text-dim">
