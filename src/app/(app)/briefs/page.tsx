@@ -7,6 +7,8 @@ import { Disclaimer } from '@/components/Disclaimer';
 // DynamicServerError at request time (the post-login /briefs failure).
 export const dynamic = 'force-dynamic';
 
+export const metadata = { title: '简报' };
+
 // Server component — fetches from Supabase when available, falls back to mock
 export default async function BriefsPage() {
   // Mock list of briefs (most recent 30 days)

@@ -3,6 +3,8 @@ import { CopilotClient } from './CopilotClient';
 // Auth-gated server component — must render dynamically per request (see briefs/page.tsx).
 export const dynamic = 'force-dynamic';
 
+export const metadata = { title: 'Copilot' };
+
 export default function CopilotPage({ searchParams }: { searchParams: { ticker?: string } }) {
   return (
     <>

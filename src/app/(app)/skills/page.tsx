@@ -5,6 +5,8 @@ import { TOOLS, type AgentTool } from '@/lib/agent/tools';
 // Auth-gated server component — must render dynamically per request (see briefs/page.tsx).
 export const dynamic = 'force-dynamic';
 
+export const metadata = { title: '技能中心' };
+
 const CATEGORIES: AgentTool['category'][] = ['行情', '研究', '估值', '资金'];
 const CATEGORY_ICON: Record<AgentTool['category'], string> = {
   行情: '📈', 研究: '🔬', 估值: '🧮', 资金: '💰',
