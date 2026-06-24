@@ -154,7 +154,7 @@ export function WatchlistTable({ groups, quotes, loading = false }: { groups: Gr
           ⏳ 报价加载中…
         </div>
       )}
-      <table className="w-full min-w-[860px] text-sm">
+      <table aria-label="股票池表格视图" className="w-full min-w-[860px] text-sm">
         <caption className="sr-only">股票池表格视图：评级、风险、目标价、估值区间，可按表头排序</caption>
         <thead>
           <tr className="border-b border-border text-[11px] text-text-dim">
