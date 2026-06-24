@@ -74,3 +74,6 @@ export const TOOLS_BY_NAME: Record<string, AgentTool> = Object.fromEntries(TOOLS
 
 /** Anthropic tool-use schema array. */
 export const TOOL_DEFS = TOOLS.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema }));
+
+/** OpenAI function-calling schema array (for the openai-compat toolChat path). */
+export const OPENAI_TOOL_DEFS = TOOLS.map((t) => ({ name: t.name, description: t.description, parameters: t.inputSchema }));

@@ -1,21 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 import { runCopilotLoop, type CopilotEvent } from './loop';
 
-describe('runCopilotLoop', () => {
-  it('executes a tool_use then emits a verdict', async () => {
+describe('runCopilotLoop (OpenAI tool-calling)', () => {
+  it('executes a tool_call then emits a verdict', async () => {
     const model = vi.fn()
       .mockResolvedValueOnce({
-        stop_reason: 'tool_use',
-        usage: { input_tokens: 1, output_tokens: 1 },
-        content: [
-          { type: 'text', text: '先看雷达。' },
-          { type: 'tool_use', id: 'tu1', name: 'radar', input: { ticker: 'NVDA' } },
-        ],
+        content: '先看雷达。',
+        toolCalls: [{ id: 'tc1', name: 'radar', arguments: { ticker: 'NVDA' } }],
+        finishReason: 'tool_calls',
       })
       .mockResolvedValueOnce({
-        stop_reason: 'end_turn',
-        usage: { input_tokens: 1, output_tokens: 1 },
-        content: [{ type: 'text', text: '结论。\n```json\n{"ticker":"NVDA","rating":"增持","positionPct":5}\n```' }],
+        content: '结论。\n```json\n{"ticker":"NVDA","rating":"增持","positionPct":5}\n```',
+        toolCalls: [],
+        finishReason: 'stop',
       });
     const runTool = vi.fn().mockResolvedValue({ price: 1000, bias: 'bull' });
     const events: CopilotEvent[] = [];
@@ -29,12 +26,19 @@ describe('runCopilotLoop', () => {
     const verdict = events.find((e) => e.type === 'verdict') as any;
     expect(verdict.data.rating).toBe('增持');
     expect(types[types.length - 1]).toBe('done');
+
+    // The assistant tool_calls message must serialize arguments as a JSON string,
+    // and a `tool` result message must follow with the matching tool_call_id.
+    const secondCallMessages = model.mock.calls[1][0];
+    const asst = secondCallMessages.find((m: any) => m.role === 'assistant' && m.tool_calls);
+    expect(asst.tool_calls[0].function.arguments).toBe('{"ticker":"NVDA"}');
+    const toolMsg = secondCallMessages.find((m: any) => m.role === 'tool');
+    expect(toolMsg.tool_call_id).toBe('tc1');
   });
 
   it('stops at maxHops and still emits done', async () => {
     const model = vi.fn().mockResolvedValue({
-      stop_reason: 'tool_use', usage: { input_tokens: 1, output_tokens: 1 },
-      content: [{ type: 'tool_use', id: 'x', name: 'radar', input: { ticker: 'NVDA' } }],
+      content: '', toolCalls: [{ id: 'x', name: 'radar', arguments: { ticker: 'NVDA' } }], finishReason: 'tool_calls',
     });
     const events: CopilotEvent[] = [];
     await runCopilotLoop({ ticker: 'NVDA', model, runTool: async () => ({}), maxHops: 2, onEvent: (e) => events.push(e) });
