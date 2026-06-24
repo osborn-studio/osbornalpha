@@ -1,12 +1,16 @@
 'use client';
 import { useEffect, useRef, useState, useCallback } from 'react';
 
+const HISTORY_KEY = 'osbornalpha:copilot:history:v1';
+const HISTORY_MAX = 20;
+
 interface ToolCall { name: string; args: unknown; ok?: boolean; summary?: string; }
 interface Verdict {
   ticker?: string; name?: string; rating?: string; thesis?: string;
   positionPct?: number; stop?: string; compliance?: string;
   confidence?: { score: number; n: number; note: string };
 }
+interface HistoryEntry { ticker: string; rating: string; positionPct?: number; at: string; }
 
 export function CopilotClient({ initialTicker }: { initialTicker: string }) {
   const [ticker, setTicker] = useState(initialTicker);
@@ -15,7 +19,40 @@ export function CopilotClient({ initialTicker }: { initialTicker: string }) {
   const [calls, setCalls] = useState<ToolCall[]>([]);
   const [verdict, setVerdict] = useState<Verdict | null>(null);
   const [err, setErr] = useState('');
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
   const startedRef = useRef(false);
+
+  // Load persisted run-history on mount (SSR-safe).
+  useEffect(() => {
+    try {
+      if (typeof window === 'undefined') return;
+      const raw = window.localStorage.getItem(HISTORY_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        setHistory(parsed.slice(0, HISTORY_MAX) as HistoryEntry[]);
+      }
+    } catch { /* ignore: malformed or unavailable storage */ }
+  }, []);
+
+  const appendHistory = useCallback((v: Verdict) => {
+    if (!v || !v.ticker || !v.rating) return;
+    const entry: HistoryEntry = {
+      ticker: v.ticker,
+      rating: v.rating,
+      positionPct: v.positionPct,
+      at: new Date().toISOString(),
+    };
+    setHistory((prev) => {
+      const next = [entry, ...prev].slice(0, HISTORY_MAX);
+      try {
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+        }
+      } catch { /* ignore: storage quota or unavailable */ }
+      return next;
+    });
+  }, []);
 
   const run = useCallback(async (t: string) => {
     if (!t || running) return;
@@ -46,12 +83,12 @@ export function CopilotClient({ initialTicker }: { initialTicker: string }) {
           }
           return u;
         });
-        else if (e.type === 'verdict') setVerdict(e.data);
+        else if (e.type === 'verdict') { setVerdict(e.data); appendHistory(e.data); }
         else if (e.type === 'error') setErr(e.message);
       }
     }
     setRunning(false);
-  }, [running]);
+  }, [running, appendHistory]);
 
   useEffect(() => {
     if (initialTicker && !startedRef.current) { startedRef.current = true; run(initialTicker); }
@@ -59,6 +96,25 @@ export function CopilotClient({ initialTicker }: { initialTicker: string }) {
 
   return (
     <div className="space-y-3">
+      {history.length > 0 && (
+        <div className="card-base">
+          <div className="mb-2 text-xs font-semibold text-text-dim">🕘 最近分析</div>
+          <div className="flex flex-wrap gap-1">
+            {history.map((h, i) => (
+              <button
+                key={`${h.ticker}-${h.at}-${i}`}
+                type="button"
+                onClick={() => run(h.ticker)}
+                disabled={running}
+                className="rounded bg-bg-card px-2 py-1 text-xs disabled:opacity-50"
+              >
+                {h.ticker} · {h.rating}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="card-base flex gap-2">
         <input value={ticker} onChange={(e) => setTicker(e.target.value)}
           placeholder="输入代码，如 00700.HK / 600519.SH / NVDA"
