@@ -26,7 +26,17 @@ export default function WatchlistPage() {
   );
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
   const [hydrated, setHydrated] = useState(false);
-  const [viewMode, setViewMode] = useState<'kanban' | 'table'>('kanban');
+  // Default to the table view (评级/风险/目标价/估值区间 are the high-signal columns);
+  // the user's last choice is remembered.
+  const VIEW_KEY = 'stock-monitor:watchlist:view';
+  const [viewMode, setViewMode] = useState<'kanban' | 'table'>('table');
+  useEffect(() => {
+    try { const v = localStorage.getItem(VIEW_KEY); if (v === 'kanban' || v === 'table') setViewMode(v); } catch {}
+  }, []);
+  const setView = (v: 'kanban' | 'table') => {
+    setViewMode(v);
+    try { localStorage.setItem(VIEW_KEY, v); } catch {}
+  };
 
   // Drag state — single source of truth.
   // `dragKind` distinguishes card-drag from column-reorder so the column
@@ -325,14 +335,14 @@ export default function WatchlistPage() {
         <div className="flex shrink-0 gap-1.5">
           <div className="flex overflow-hidden rounded-md border border-border text-xs">
             <button
-              onClick={() => setViewMode('kanban')}
+              onClick={() => setView('kanban')}
               className={`px-3 py-1.5 ${viewMode === 'kanban' ? 'bg-accent-dim/20 font-semibold text-accent' : 'text-text-dim hover:text-text'}`}
               title="看板视图（拖拽分组）"
             >
               📋 看板
             </button>
             <button
-              onClick={() => setViewMode('table')}
+              onClick={() => setView('table')}
               className={`border-l border-border px-3 py-1.5 ${viewMode === 'table' ? 'bg-accent-dim/20 font-semibold text-accent' : 'text-text-dim hover:text-text'}`}
               title="表格视图（评级 / 风险 / 目标价 / 估值区间）"
             >
