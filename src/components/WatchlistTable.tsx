@@ -109,6 +109,25 @@ export function WatchlistTable({ groups, quotes, loading = false }: { groups: Gr
     return out;
   }, [groups, quotes]);
 
+  const summary = useMemo(() => {
+    const tracked = rows.length;
+    const strongBuy = rows.filter((r) => r.rating?.label === 'STRONG BUY').length;
+    const risks = rows.map((r) => r.risk).filter((v): v is number => v != null);
+    const avgRisk = risks.length > 0
+      ? (risks.reduce((a, b) => a + b, 0) / risks.length).toFixed(1)
+      : '--';
+    const upsides = rows
+      .filter((r) => r.target != null && r.target > 0 && r.price > 0)
+      .map((r) => (r.target! / r.price - 1) * 100);
+    let upside = '--';
+    if (upsides.length > 0) {
+      const mean = upsides.reduce((a, b) => a + b, 0) / upsides.length;
+      const sign = mean >= 0 ? '+' : '';
+      upside = `${sign}${mean.toFixed(1)}%`;
+    }
+    return { tracked, strongBuy, avgRisk, upside };
+  }, [rows]);
+
   const sorted = useMemo(() => {
     if (sortKey === 'none') return rows;
     const val = (r: Row): number => {
@@ -149,6 +168,24 @@ export function WatchlistTable({ groups, quotes, loading = false }: { groups: Gr
 
   return (
     <div className="card-base overflow-x-auto p-0">
+      <div className="mb-3 flex gap-2">
+        <div className="flex-1 rounded-md bg-bg-card px-3 py-2">
+          <div className="text-[11px] text-text-dim">跟踪标的</div>
+          <div className="text-lg font-bold">{summary.tracked}</div>
+        </div>
+        <div className="flex-1 rounded-md bg-bg-card px-3 py-2">
+          <div className="text-[11px] text-text-dim">强烈买入</div>
+          <div className="text-lg font-bold">{summary.strongBuy}</div>
+        </div>
+        <div className="flex-1 rounded-md bg-bg-card px-3 py-2">
+          <div className="text-[11px] text-text-dim">平均风险</div>
+          <div className="text-lg font-bold">{summary.avgRisk}</div>
+        </div>
+        <div className="flex-1 rounded-md bg-bg-card px-3 py-2">
+          <div className="text-[11px] text-text-dim">上行空间</div>
+          <div className="text-lg font-bold">{summary.upside}</div>
+        </div>
+      </div>
       {loading && (
         <div className="border-b border-border px-3 py-1.5 text-[11px] text-text-dim" role="status">
           ⏳ 报价加载中…
