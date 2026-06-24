@@ -78,7 +78,7 @@ function ValuationCell({ price, range, currency }: { price: number; range: Row['
   );
 }
 
-export function WatchlistTable({ groups, quotes }: { groups: Group[]; quotes: Record<string, LiveQuote | null> }) {
+export function WatchlistTable({ groups, quotes, loading = false }: { groups: Group[]; quotes: Record<string, LiveQuote | null>; loading?: boolean }) {
   const [sortKey, setSortKey] = useState<SortKey>('none');
   const [asc, setAsc] = useState(false);
 
@@ -129,6 +129,19 @@ export function WatchlistTable({ groups, quotes }: { groups: Group[]; quotes: Re
     else { setSortKey(k); setAsc(false); }
   };
   const arrow = (k: SortKey) => (sortKey === k ? (asc ? ' ▲' : ' ▼') : '');
+  const ariaSort = (k: SortKey): 'ascending' | 'descending' | 'none' =>
+    sortKey === k ? (asc ? 'ascending' : 'descending') : 'none';
+
+  // Accessible sortable header: a real <button> with aria-sort on the <th>.
+  const SortTh = ({ k, label, align = 'left' }: { k: SortKey; label: string; align?: 'left' | 'right' }) => (
+    <th aria-sort={ariaSort(k)} className={`px-3 py-2.5 font-medium ${align === 'right' ? 'text-right' : 'text-left'}`}>
+      <button type="button" onClick={() => sort(k)}
+        className={`inline-flex items-center gap-0.5 hover:text-text focus:outline-none focus-visible:underline ${align === 'right' ? 'flex-row-reverse' : ''}`}
+        aria-label={`按${label}排序`}>
+        {label}<span aria-hidden="true">{arrow(k)}</span>
+      </button>
+    </th>
+  );
 
   if (rows.length === 0) {
     return <div className="card-base text-center text-sm text-text-dim">股票池为空，先到看板视图添加标的。</div>;
@@ -136,18 +149,24 @@ export function WatchlistTable({ groups, quotes }: { groups: Group[]; quotes: Re
 
   return (
     <div className="card-base overflow-x-auto p-0">
+      {loading && (
+        <div className="border-b border-border px-3 py-1.5 text-[11px] text-text-dim" role="status">
+          ⏳ 报价加载中…
+        </div>
+      )}
       <table className="w-full min-w-[860px] text-sm">
+        <caption className="sr-only">股票池表格视图：评级、风险、目标价、估值区间，可按表头排序</caption>
         <thead>
           <tr className="border-b border-border text-[11px] text-text-dim">
-            <th className="px-3 py-2.5 text-left font-medium">股票代码</th>
-            <th className="px-3 py-2.5 text-left font-medium">公司名称</th>
-            <th className="cursor-pointer px-3 py-2.5 text-right font-medium hover:text-text" onClick={() => sort('price')}>当前价格{arrow('price')}</th>
-            <th className="cursor-pointer px-3 py-2.5 text-right font-medium hover:text-text" onClick={() => sort('change')}>涨跌幅{arrow('change')}</th>
-            <th className="cursor-pointer px-3 py-2.5 text-left font-medium hover:text-text" onClick={() => sort('rating')}>投资评级{arrow('rating')}</th>
-            <th className="cursor-pointer px-3 py-2.5 text-left font-medium hover:text-text" onClick={() => sort('risk')}>风险等级{arrow('risk')}</th>
-            <th className="cursor-pointer px-3 py-2.5 text-right font-medium hover:text-text" onClick={() => sort('target')}>目标价{arrow('target')}</th>
-            <th className="px-3 py-2.5 text-left font-medium">估值区间</th>
-            <th className="px-3 py-2.5 text-left font-medium">分组</th>
+            <th className="px-3 py-2.5 text-left font-medium" scope="col">股票代码</th>
+            <th className="px-3 py-2.5 text-left font-medium" scope="col">公司名称</th>
+            <SortTh k="price" label="当前价格" align="right" />
+            <SortTh k="change" label="涨跌幅" align="right" />
+            <SortTh k="rating" label="投资评级" />
+            <SortTh k="risk" label="风险等级" />
+            <SortTh k="target" label="目标价" align="right" />
+            <th className="px-3 py-2.5 text-left font-medium" scope="col">估值区间</th>
+            <th className="px-3 py-2.5 text-left font-medium" scope="col">分组</th>
           </tr>
         </thead>
         <tbody>

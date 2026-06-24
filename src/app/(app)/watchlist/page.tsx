@@ -373,7 +373,7 @@ export default function WatchlistPage() {
       )}
 
       {/* ─── Table view (评级 / 风险 / 目标价 / 估值区间) ─── */}
-      {viewMode === 'table' && <WatchlistTable groups={groups} quotes={quotes} />}
+      {viewMode === 'table' && <WatchlistTable groups={groups} quotes={quotes} loading={quotesLoading} />}
 
       {/* ─── Kanban Board ─── */}
       {viewMode === 'kanban' && (
