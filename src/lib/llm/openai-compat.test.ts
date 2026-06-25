@@ -25,7 +25,7 @@ describe('chat', () => {
     const r = await chat(CFG, { system: 'sys', messages: [{ role: 'user', content: 'hi' }] });
     expect(r.content).toBe('你好');
     expect(r.usage).toEqual({ input_tokens: 12, output_tokens: 7 });
-    const [url, init] = fn.mock.calls[0] as [string, any];
+    const [url, init] = fn.mock.calls[0] as unknown as [string, any];
     expect(url).toBe('https://api.example.com/v1/chat/completions');
     expect(init.headers.Authorization).toBe('Bearer sk-test-123');
     const body = JSON.parse(init.body);
