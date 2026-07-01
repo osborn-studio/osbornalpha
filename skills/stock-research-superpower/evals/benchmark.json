@@ -47,6 +47,7 @@
       "workflow": "B",
       "prompt": "用投研 superpower 拆一下 AI 光模块，找瓶颈股。",
       "expected_route": "workflow-b-industry-to-stocks",
+      "fixture": "fixtures/B-ai-optical-modules-pass.md",
       "must_include": [
         "Scope",
         "Chain map",
@@ -76,6 +77,7 @@
       "workflow": "C",
       "prompt": "把昨天 B 阶段出来的候选池做成今天的每日投研工作台。",
       "expected_route": "workflow-c-research-dashboard",
+      "fixture": "fixtures/C-daily-watchlist-dashboard-pass.md",
       "must_include": [
         "daily priority queue",
         "new evidence",
@@ -103,6 +105,7 @@
       "workflow": "A",
       "prompt": "对中际旭创做单股深研，需要 research book 和估值输入。",
       "expected_route": "workflow-a-single-stock-book",
+      "fixture": "fixtures/A-single-stock-research-book-pass.md",
       "must_include": [
         "entity resolution",
         "source inventory",
@@ -131,6 +134,7 @@
       "workflow": "D",
       "prompt": "基于已有研究，给新易盛做一个 PM decision pack，包含仓位和止损。",
       "expected_route": "workflow-d-pm-decision-pack",
+      "fixture": "fixtures/D-pm-decision-pack-pass.md",
       "must_include": [
         "decision",
         "position sizing",

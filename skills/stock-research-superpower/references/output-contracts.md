@@ -73,3 +73,65 @@ Needs signal watch:
 Rejected but watch:
 Missing evidence:
 ```
+
+## Single-Stock Research Book
+
+Use for Workflow A.
+
+```text
+Workflow:
+Company:
+Ticker:
+As-of date:
+
+1. Entity resolution:
+2. Source inventory:
+3. Business and segment map:
+4. Financial quality:
+5. Moat and competition:
+6. Management and governance:
+7. Catalysts:
+8. Risks and falsification triggers:
+9. Valuation range and assumptions:
+10. Open questions:
+11. Next workflow: C | D | stop
+```
+
+## Research Dashboard
+
+Use for Workflow C.
+
+```text
+Workflow:
+As-of date:
+Input universe:
+
+Daily priority queue:
+New evidence:
+Thesis changes:
+Candidate movements:
+Signal ledger summary:
+Deep-dive queue:
+Weekly backlog:
+Missing-source list:
+```
+
+## PM Decision Pack
+
+Use for Workflow D.
+
+```text
+Workflow:
+Company:
+Ticker:
+Decision: research-only | watch | starter | add | trim | exit | reject
+Evidence quality:
+Valuation range:
+Signal state:
+Position sizing:
+Entry zone:
+Falsification / stop:
+Downside case:
+IC memo:
+Tracking record:
+```

@@ -15,6 +15,12 @@ Self-check the benchmark:
 node scripts/score-stock-research-superpower.mjs --benchmark skills/stock-research-superpower/evals/benchmark.json --self-check
 ```
 
+Score every registered fixture:
+
+```bash
+node scripts/score-stock-research-superpower.mjs --benchmark skills/stock-research-superpower/evals/benchmark.json --score-fixtures
+```
+
 Score one answer against a case:
 
 ```bash
@@ -44,4 +50,13 @@ Passing requires both:
 
 ## TDD Use
 
-Before modifying the skill pack, add or update benchmark cases for the behavior being changed. Run self-check before implementation. After implementation, score at least one representative answer or dry-run artifact.
+Before modifying the skill pack, add or update benchmark cases and fixtures for the behavior being changed. Run self-check and the fixture scorer before implementation to establish the gate. After implementation, score all registered fixtures and at least one representative answer or dry-run artifact for the changed workflow.
+
+## Completion Gate
+
+The skill pack is not considered complete unless:
+
+- A/B/C/D each have one passing fixture registered in `evals/benchmark.json`.
+- `--self-check` succeeds.
+- `--score-fixtures` succeeds with no missing fixtures.
+- each changed workflow reference contains a minimum output contract, data/evidence rules, and handoff rules.
