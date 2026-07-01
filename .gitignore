@@ -48,8 +48,8 @@ config/watchlist.local.yml
 
 # Vercel
 .vercel
-LOOP-STATE.json
-STATE.md
+/LOOP-STATE.json
+/STATE.md
 /tasks/
 /release/
 /reports/

@@ -1,0 +1,157 @@
+{
+  "schema_version": "1.0",
+  "skill": "stock-research-superpower",
+  "passing_score": 80,
+  "excellent_score": 90,
+  "rubric": [
+    {
+      "id": "routing",
+      "label": "Workflow routing",
+      "weight": 10,
+      "description": "Chooses B/C/A/D correctly and states the workflow boundary."
+    },
+    {
+      "id": "structure",
+      "label": "Required output structure",
+      "weight": 20,
+      "description": "Includes the required sections and handoff queue for the chosen workflow."
+    },
+    {
+      "id": "evidence",
+      "label": "Evidence discipline",
+      "weight": 25,
+      "description": "Separates fact, claim, inference, and speculation; labels source quality and missing evidence."
+    },
+    {
+      "id": "domain_logic",
+      "label": "Research logic",
+      "weight": 25,
+      "description": "Applies chain mapping, bottleneck diagnosis, candidate roles, valuation, or PM logic as appropriate."
+    },
+    {
+      "id": "guardrails",
+      "label": "Guardrails",
+      "weight": 10,
+      "description": "Avoids unsupported recommendations, fabricated sources, paid-research leakage, and trading execution."
+    },
+    {
+      "id": "actionability",
+      "label": "Actionability",
+      "weight": 10,
+      "description": "Ends with clear next steps, validation questions, or follow-up workflow assignments."
+    }
+  ],
+  "cases": [
+    {
+      "id": "B-ai-optical-modules",
+      "workflow": "B",
+      "prompt": "用投研 superpower 拆一下 AI 光模块，找瓶颈股。",
+      "expected_route": "workflow-b-industry-to-stocks",
+      "must_include": [
+        "Scope",
+        "Chain map",
+        "Bottleneck",
+        "Candidate",
+        "Evidence",
+        "Follow-up",
+        "本分析仅作研究参考"
+      ],
+      "must_not_include": [
+        "立即买入",
+        "无风险",
+        " guaranteed ",
+        "内幕"
+      ],
+      "scoring_hints": {
+        "routing": ["B", "industry", "theme", "产业链", "瓶颈"],
+        "structure": ["Scope", "Chain map", "Bottleneck", "Candidate", "Evidence", "Follow-up"],
+        "evidence": ["primary", "medium", "weak", "missing-source", "inference", "speculation"],
+        "domain_logic": ["end demand", "capacity", "qualification", "substitutability", "ramp difficulty", "consensus"],
+        "guardrails": ["本分析仅作研究参考", "不构成投资建议"],
+        "actionability": ["needs company diligence", "needs valuation", "needs signal watch", "validation"]
+      }
+    },
+    {
+      "id": "C-daily-watchlist-dashboard",
+      "workflow": "C",
+      "prompt": "把昨天 B 阶段出来的候选池做成今天的每日投研工作台。",
+      "expected_route": "workflow-c-research-dashboard",
+      "must_include": [
+        "daily priority queue",
+        "new evidence",
+        "thesis changes",
+        "signal ledger",
+        "deep-dive queue",
+        "weekly backlog"
+      ],
+      "must_not_include": [
+        "自动下单",
+        "all-in",
+        "保证收益"
+      ],
+      "scoring_hints": {
+        "routing": ["C", "dashboard", "watchlist", "tracking", "每日"],
+        "structure": ["daily priority queue", "new evidence", "thesis changes", "signal ledger", "weekly backlog"],
+        "evidence": ["missing-source", "source class", "new evidence"],
+        "domain_logic": ["promoted", "downgraded", "signal", "candidate movement"],
+        "guardrails": ["No automated trading", "research"],
+        "actionability": ["promote", "downgrade", "deep-dive queue"]
+      }
+    },
+    {
+      "id": "A-single-stock-research-book",
+      "workflow": "A",
+      "prompt": "对中际旭创做单股深研，需要 research book 和估值输入。",
+      "expected_route": "workflow-a-single-stock-book",
+      "must_include": [
+        "entity resolution",
+        "source inventory",
+        "business",
+        "financial quality",
+        "moat",
+        "risks",
+        "valuation"
+      ],
+      "must_not_include": [
+        "无来源",
+        "确定上涨",
+        "替你交易"
+      ],
+      "scoring_hints": {
+        "routing": ["A", "single-stock", "research book", "单股深研"],
+        "structure": ["entity resolution", "source inventory", "business", "financial quality", "valuation"],
+        "evidence": ["source inventory", "official", "transcript", "filing", "missing-source"],
+        "domain_logic": ["segment", "competition", "moat", "DCF", "valuation range"],
+        "guardrails": ["Do not cite sources", "research"],
+        "actionability": ["open questions", "valuation assumptions"]
+      }
+    },
+    {
+      "id": "D-pm-decision-pack",
+      "workflow": "D",
+      "prompt": "基于已有研究，给新易盛做一个 PM decision pack，包含仓位和止损。",
+      "expected_route": "workflow-d-pm-decision-pack",
+      "must_include": [
+        "decision",
+        "position sizing",
+        "entry zone",
+        "falsification",
+        "downside case",
+        "IC memo"
+      ],
+      "must_not_include": [
+        "自动交易",
+        "满仓",
+        "稳赚"
+      ],
+      "scoring_hints": {
+        "routing": ["D", "PM", "decision pack", "仓位", "止损"],
+        "structure": ["decision", "position sizing", "entry zone", "falsification", "IC memo"],
+        "evidence": ["evidence quality", "confidence", "source", "risk"],
+        "domain_logic": ["valuation range", "signal state", "catalyst", "downside"],
+        "guardrails": ["No automated trading", "explicitly requested", "risk"],
+        "actionability": ["starter", "add", "trim", "exit", "watch", "reject"]
+      }
+    }
+  ]
+}
