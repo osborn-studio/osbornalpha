@@ -35,7 +35,7 @@ function assertArray(value, label) {
   }
 }
 
-function validateBenchmark(benchmark) {
+function validateBenchmark(benchmark, benchmarkDir = process.cwd()) {
   const errors = [];
   if (benchmark.schema_version !== "1.0") {
     errors.push("schema_version must be 1.0");
@@ -87,6 +87,15 @@ function validateBenchmark(benchmark) {
     if (!workflows.has(testCase.workflow)) errors.push(`case ${testCase.id} has invalid workflow`);
     if (!testCase.prompt) errors.push(`case ${testCase.id} missing prompt`);
     if (!testCase.expected_route) errors.push(`case ${testCase.id} missing expected_route`);
+    if (testCase.fixture !== undefined && typeof testCase.fixture !== "string") {
+      errors.push(`case ${testCase.id} fixture must be a string when present`);
+    }
+    if (typeof testCase.fixture === "string") {
+      const fixturePath = path.resolve(benchmarkDir, testCase.fixture);
+      if (!fs.existsSync(fixturePath)) {
+        errors.push(`case ${testCase.id} fixture does not exist: ${testCase.fixture}`);
+      }
+    }
     for (const field of ["must_include", "must_not_include"]) {
       if (!Array.isArray(testCase[field]) || testCase[field].length === 0) {
         errors.push(`case ${testCase.id} ${field} must be a non-empty array`);
@@ -165,11 +174,50 @@ function printSelfCheck(benchmark, errors) {
     ok: true,
     skill: benchmark.skill,
     cases: benchmark.cases.length,
+    fixtures: benchmark.cases.filter((item) => item.fixture).length,
     rubric_items: benchmark.rubric.length,
     total_weight: benchmark.rubric.reduce((sum, item) => sum + item.weight, 0),
     passing_score: benchmark.passing_score,
     excellent_score: benchmark.excellent_score
   }, null, 2));
+}
+
+function scoreFixtures(benchmark, benchmarkDir) {
+  const results = [];
+  const missing = [];
+
+  for (const testCase of benchmark.cases) {
+    if (!testCase.fixture) {
+      missing.push(testCase.id);
+      continue;
+    }
+    const fixturePath = path.resolve(benchmarkDir, testCase.fixture);
+    const answerText = fs.readFileSync(fixturePath, "utf8");
+    results.push(scoreAnswer(benchmark, testCase, answerText));
+  }
+
+  const failed = results.filter((result) => !result.passed);
+  console.log(JSON.stringify({
+    ok: failed.length === 0 && missing.length === 0,
+    scored: results.length,
+    missing_fixtures: missing,
+    failed: failed.map((result) => ({
+      case_id: result.case_id,
+      score: result.score,
+      forbidden_hits: result.forbidden_hits,
+      required_missing: result.required_missing
+    })),
+    results: results.map((result) => ({
+      case_id: result.case_id,
+      workflow: result.workflow,
+      score: result.score,
+      passed: result.passed
+    }))
+  }, null, 2));
+
+  if (failed.length > 0 || missing.length > 0) {
+    process.exitCode = 1;
+  }
 }
 
 function main() {
@@ -181,10 +229,20 @@ function main() {
 
   const benchmarkPath = path.resolve(args.benchmark);
   const benchmark = readJson(benchmarkPath);
-  const errors = validateBenchmark(benchmark);
+  const benchmarkDir = path.dirname(benchmarkPath);
+  const errors = validateBenchmark(benchmark, benchmarkDir);
 
   if (args["self-check"]) {
     printSelfCheck(benchmark, errors);
+    return;
+  }
+
+  if (args["score-fixtures"]) {
+    if (errors.length > 0) {
+      printSelfCheck(benchmark, errors);
+      return;
+    }
+    scoreFixtures(benchmark, benchmarkDir);
     return;
   }
 
