@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import Link from 'next/link';
-import { MOCK_DATA } from '@/lib/data/mock';
 import { addCustomStock } from '@/lib/data/custom-stocks';
 import { formatPrice, formatPct, changeClass, marketLabel, classifyMarket } from '@/lib/utils';
 import { Disclaimer } from '@/components/Disclaimer';
@@ -12,20 +11,18 @@ import { normalizeWindTicker } from '@/lib/stocks/wind-normalize';
 import { WatchlistTable } from '@/components/WatchlistTable';
 import { getBrowserSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import type { Market } from '@/lib/supabase/database.types';
+import { useWatchlist } from '@/lib/hooks/useWatchlist';
+import { uniqueWatchlistTickers, type WatchlistGroup } from '@/lib/watchlist/store';
 
-const STORAGE_KEY = 'stock-monitor:watchlist:v2';
 const REFRESH_MS = 60_000;
 
-interface Group { id: string; name: string; tickers: string[] }
+type Group = WatchlistGroup;
 interface SearchResult { t: string; n: string; py: string; m: Market }
 
 export default function WatchlistPage() {
   const { show } = useToast();
-  const [groups, setGroups] = useState<Group[]>(() =>
-    MOCK_DATA.watchlist_groups.map((g) => ({ id: g.id, name: g.name, tickers: [...g.tickers] }))
-  );
+  const { groups, hydrated, setGroups } = useWatchlist();
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
-  const [hydrated, setHydrated] = useState(false);
   // Default to the table view (评级/风险/目标价/估值区间 are the high-signal columns);
   // the user's last choice is remembered.
   const VIEW_KEY = 'stock-monitor:watchlist:view';
@@ -65,14 +62,15 @@ export default function WatchlistPage() {
   // Mobile move menu (per-card kebab) — which ticker's menu is open
   const [openMenuTicker, setOpenMenuTicker] = useState<string | null>(null);
 
-  // ─── Hydrate watchlist (Supabase → localStorage → mock) ───
+  // ─── Optional Supabase overlay for signed-in users ───
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
         if (isSupabaseConfigured()) {
           const sb = getBrowserSupabase();
           const { data: { user: u } } = await sb.auth.getUser();
-          if (u) {
+          if (u && !cancelled) {
             setUser({ id: u.id, email: u.email });
             const { data: wl } = await sb
               .from('watchlists')
@@ -87,29 +85,21 @@ export default function WatchlistPage() {
                   .map((it: any) => it.ticker),
               }));
               setGroups(groupsFromDb);
-              setHydrated(true);
               return;
             }
           }
         }
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) setGroups(JSON.parse(raw));
       } catch {}
-      setHydrated(true);
     })();
-  }, []);
+    return () => { cancelled = true; };
+  }, [setGroups]);
 
   function persist(next: Group[]) {
     setGroups(next);
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch {}
   }
 
   // ─── Live quotes (batch) ───
-  const allTickers = useMemo(() => {
-    const set = new Set<string>();
-    for (const g of groups) for (const t of g.tickers) set.add(t);
-    return Array.from(set);
-  }, [groups]);
+  const allTickers = useMemo(() => uniqueWatchlistTickers(groups), [groups]);
 
   const { quotes, loading: quotesLoading, loadedAt, refetch } = useBatchQuotes(allTickers, {
     refreshIntervalMs: REFRESH_MS,
@@ -383,10 +373,10 @@ export default function WatchlistPage() {
       )}
 
       {/* ─── Table view (评级 / 风险 / 目标价 / 估值区间) ─── */}
-      {viewMode === 'table' && <WatchlistTable groups={groups} quotes={quotes} loading={quotesLoading} />}
+      {hydrated && viewMode === 'table' && <WatchlistTable groups={groups} quotes={quotes} loading={quotesLoading} />}
 
       {/* ─── Kanban Board ─── */}
-      {viewMode === 'kanban' && (
+      {hydrated && viewMode === 'kanban' && (
       <div
         className="flex gap-3 overflow-x-auto pb-3"
         style={{ scrollSnapType: 'x mandatory' }}
@@ -479,6 +469,12 @@ export default function WatchlistPage() {
           )}
         </div>
       </div>
+      )}
+
+      {!hydrated && (
+        <div className="card-base bg-bg-card py-8 text-center text-sm text-text-dim">
+          加载股票池…
+        </div>
       )}
 
       {hydrated && allTickers.length === 0 && (

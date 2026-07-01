@@ -1,15 +1,13 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import Link from 'next/link';
-import { MOCK_DATA, getStockOrStub } from '@/lib/data/mock';
+import { getStockOrStub } from '@/lib/data/mock';
 import { useBatchQuotes } from '@/lib/hooks/useQuote';
 import { Sparkline } from './Sparkline';
 import { formatPrice, formatPct, changeClass, marketLabel } from '@/lib/utils';
-
-const STORAGE_KEY = 'stock-monitor:watchlist:v2';
-
-interface Group { id: string; name: string; tickers: string[] }
+import { useWatchlist } from '@/lib/hooks/useWatchlist';
+import { uniqueWatchlistTickers } from '@/lib/watchlist/store';
 
 interface Props {
   selectedTicker: string;
@@ -18,23 +16,11 @@ interface Props {
 }
 
 export function WatchlistSidebar({ selectedTicker, onSelect, variant = 'sidebar' }: Props) {
-  const [groups, setGroups] = useState<Group[]>(() =>
-    MOCK_DATA.watchlist_groups.map((g) => ({ id: g.id, name: g.name, tickers: [...g.tickers] }))
-  );
+  const { groups } = useWatchlist();
   const [activeGroup, setActiveGroup] = useState<string>('all');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) setGroups(JSON.parse(raw));
-    } catch {}
-  }, []);
-
-  const allTickers = useMemo(
-    () => Array.from(new Set(groups.flatMap((g) => g.tickers))),
-    [groups]
-  );
+  const allTickers = useMemo(() => uniqueWatchlistTickers(groups), [groups]);
   const { quotes, loading: quotesLoading } = useBatchQuotes(allTickers, { refreshIntervalMs: 30_000 });
 
   const totalCount = groups.reduce((s, g) => s + g.tickers.length, 0);
