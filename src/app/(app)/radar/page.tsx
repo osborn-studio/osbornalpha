@@ -2,14 +2,11 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { MOCK_DATA } from '@/lib/data/mock';
 import { Disclaimer } from '@/components/Disclaimer';
 import { marketLabel } from '@/lib/utils';
 import type { RadarPayload, RadarLevel } from '@/lib/brief/radar';
-
-const STORAGE_KEY = 'stock-monitor:watchlist:v2';
-
-interface Group { id: string; name: string; tickers: string[] }
+import { useWatchlist } from '@/lib/hooks/useWatchlist';
+import { uniqueWatchlistTickers } from '@/lib/watchlist/store';
 
 interface RadarApiResponse {
   radars: Record<string, RadarPayload | { error: string }>;
@@ -28,9 +25,7 @@ function colorClassForLevel(l: RadarLevel | undefined): string {
 }
 
 export default function RadarPage() {
-  const [groups, setGroups] = useState<Group[]>(() =>
-    MOCK_DATA.watchlist_groups.map((g) => ({ id: g.id, name: g.name, tickers: [...g.tickers] }))
-  );
+  const { groups, hydrated } = useWatchlist();
   const [data, setData] = useState<RadarApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,19 +33,7 @@ export default function RadarPage() {
   const [filterLevel, setFilterLevel] = useState<RadarLevel | 'all'>('all');
   const [showMarkdown, setShowMarkdown] = useState<string | null>(null);
 
-  // Hydrate watchlist from localStorage
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) setGroups(JSON.parse(raw));
-    } catch {}
-  }, []);
-
-  const allTickers = useMemo(() => {
-    const set = new Set<string>();
-    for (const g of groups) for (const t of g.tickers) set.add(t);
-    return Array.from(set);
-  }, [groups]);
+  const allTickers = useMemo(() => uniqueWatchlistTickers(groups), [groups]);
 
   async function fetchAll() {
     if (allTickers.length === 0) return;
@@ -71,9 +54,9 @@ export default function RadarPage() {
 
   // Initial load when watchlist hydrates
   useEffect(() => {
-    if (allTickers.length > 0 && !data) fetchAll();
+    if (hydrated && allTickers.length > 0 && !data) fetchAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allTickers.length]);
+  }, [hydrated, allTickers.length]);
 
   // Visible list
   const orderedTickers = data?.order || allTickers;
@@ -121,7 +104,13 @@ export default function RadarPage() {
         <div className="mb-3 rounded bg-down/10 px-3 py-2 text-xs text-down">⚠️ {error}</div>
       )}
 
-      {allTickers.length === 0 && (
+      {!hydrated && (
+        <div className="card-base py-8 text-center text-sm text-text-dim">
+          加载股票池…
+        </div>
+      )}
+
+      {hydrated && allTickers.length === 0 && (
         <div className="card-base py-8 text-center text-sm text-text-dim">
           股票池是空的。先去 <Link href="/watchlist" className="text-accent">📋 股票池</Link> 添加几只股票。
         </div>

@@ -1,35 +1,27 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { MOCK_DATA } from '@/lib/data/mock';
 import { useBatchBacktest } from '@/lib/hooks/useBatchBacktest';
 import type { RankedTicker } from '@/lib/signals/batchBacktest';
 import { formatPct, formatPrice, changeClass, marketLabel } from '@/lib/utils';
 import { Disclaimer } from '@/components/Disclaimer';
+import { useWatchlist } from '@/lib/hooks/useWatchlist';
+import { uniqueWatchlistTickers } from '@/lib/watchlist/store';
 
-const STORAGE_KEY = 'stock-monitor:watchlist:v2';
 type SortKey = 'quality' | 'hit_rate' | 'signals' | 'fwd5' | 'fwd20' | 'ci_lower';
 
 export default function BacktestPage() {
-  // Resolve watchlist client-side
-  const [tickers, setTickers] = useState<string[] | null>(null);
+  const { groups, hydrated } = useWatchlist();
   const [days, setDays] = useState(60);
   const [sortKey, setSortKey] = useState<SortKey>('quality');
   const [marketFilter, setMarketFilter] = useState<'all' | 'A' | 'HK' | 'US'>('all');
 
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      const groups = raw
-        ? JSON.parse(raw)
-        : MOCK_DATA.watchlist_groups.map((g) => ({ id: g.id, name: g.name, tickers: [...g.tickers] }));
-      const all = Array.from(new Set(groups.flatMap((g: any) => g.tickers))) as string[];
-      setTickers(all.length > 0 ? all : null);
-    } catch {
-      setTickers(null);
-    }
-  }, []);
+  const tickers = useMemo(() => {
+    if (!hydrated) return null;
+    const all = uniqueWatchlistTickers(groups);
+    return all.length > 0 ? all : null;
+  }, [groups, hydrated]);
 
   const { data, loading, error, refetch } = useBatchBacktest(tickers, days);
 

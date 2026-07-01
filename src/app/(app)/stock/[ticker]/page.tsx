@@ -10,6 +10,7 @@ import { PerspectiveCard } from '@/components/PerspectiveCard';
 import { DcfStudio } from '@/components/DcfStudio';
 import { Disclaimer } from '@/components/Disclaimer';
 import { useToast } from '@/components/Toast';
+import { useWatchlist } from '@/lib/hooks/useWatchlist';
 
 type Tab = 'overview' | 'ai' | 'fundamentals' | 'news' | 'signals' | 'holdings';
 
@@ -28,17 +29,13 @@ export default function StockDetailPage() {
   const stock = getStockOrStub(ticker);
   const [tab, setTab] = useState<Tab>('overview');
   const { show } = useToast();
+  const { groups, hydrated, setGroups } = useWatchlist();
   const [inWatchlist, setInWatchlist] = useState(false);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem('stock-monitor:watchlist:v2');
-      if (raw) {
-        const groups = JSON.parse(raw);
-        setInWatchlist(groups.some((g: any) => g.tickers.includes(ticker)));
-      }
-    } catch {}
-  }, [ticker]);
+    if (!hydrated) return;
+    setInWatchlist(groups.some((g) => g.tickers.includes(ticker)));
+  }, [groups, hydrated, ticker]);
 
   if (!stock) {
     return (
@@ -51,27 +48,21 @@ export default function StockDetailPage() {
 
   function toggleWatchlist() {
     if (!stock) return;
-    try {
-      const raw = localStorage.getItem('stock-monitor:watchlist:v2');
-      const groups = raw ? JSON.parse(raw) : [
-        { id: 'long_hold', name: '长期持有', tickers: [] },
-        { id: 'opportunity', name: '机会跟踪', tickers: [] },
-        { id: 'watch_only', name: '仅观察', tickers: [] },
-      ];
-      if (inWatchlist) {
-        const next = groups.map((g: any) => ({ ...g, tickers: g.tickers.filter((t: string) => t !== ticker) }));
-        localStorage.setItem('stock-monitor:watchlist:v2', JSON.stringify(next));
-        setInWatchlist(false);
-        show(`✓ 已移出：${ticker}`);
-      } else {
-        const next = groups.map((g: any) =>
-          g.id === 'opportunity' ? { ...g, tickers: [...g.tickers, ticker] } : g
-        );
-        localStorage.setItem('stock-monitor:watchlist:v2', JSON.stringify(next));
-        setInWatchlist(true);
-        show(`✓ 已加入「机会跟踪」`);
-      }
-    } catch {}
+    if (inWatchlist) {
+      const next = groups.map((g) => ({ ...g, tickers: g.tickers.filter((t) => t !== ticker) }));
+      setGroups(next);
+      setInWatchlist(false);
+      show(`✓ 已移出：${ticker}`);
+    } else {
+      const targetId = groups.find((g) => g.id === 'opportunity')?.id || groups[0]?.id;
+      if (!targetId) return;
+      const next = groups.map((g) =>
+        g.id === targetId ? { ...g, tickers: Array.from(new Set([...g.tickers, ticker])) } : g
+      );
+      setGroups(next);
+      setInWatchlist(true);
+      show(`✓ 已加入「${groups.find((g) => g.id === targetId)?.name || '股票池'}」`);
+    }
   }
 
   const bullish = stock.perspectives.filter((p) => p.stance === 'bullish');
