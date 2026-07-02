@@ -34,7 +34,8 @@ export function oaiToAnthropic(messages: any[]): AnthropicMessage[] {
       continue;
     }
     if (m.role === 'user' || m.role === 'assistant') {
-      out.push({ role: m.role, content: [{ type: 'text', text: String(m.content ?? '') }] });
+      // Anthropic rejects empty text blocks with a 400 — fall back to a space.
+      out.push({ role: m.role, content: [{ type: 'text', text: String(m.content ?? '') || ' ' }] });
     }
     // system handled separately by the caller
   }

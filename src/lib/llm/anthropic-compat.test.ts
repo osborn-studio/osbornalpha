@@ -83,3 +83,10 @@ describe('responseToTurn', () => {
     });
   });
 });
+
+describe('empty-content hardening', () => {
+  it('never emits an empty text block (Anthropic 400 guard)', () => {
+    const out = oaiToAnthropic([{ role: 'user', content: '' }]);
+    expect(out[0].content).toEqual([{ type: 'text', text: ' ' }]);
+  });
+});
