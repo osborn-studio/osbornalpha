@@ -97,7 +97,7 @@ export default async function LandingPage() {
         <span className="text-lg font-bold tracking-tight">osborn<span className="text-accent">alpha</span></span>
         <nav className="flex items-center gap-2 text-sm">
           {authed ? (
-            <Link href="/dashboard" className="rounded-lg bg-accent px-4 py-2 font-medium text-bg transition-opacity hover:opacity-90">进入工作台</Link>
+            <Link href="/today" className="rounded-lg bg-accent px-4 py-2 font-medium text-bg transition-opacity hover:opacity-90">进入工作台</Link>
           ) : (
             <>
               <Link href="/login" className="rounded-lg px-4 py-2 text-text-dim transition-colors hover:text-text">登录</Link>
@@ -122,7 +122,7 @@ export default async function LandingPage() {
           </p>
           <div className="oa-reveal mt-8 flex flex-wrap items-center gap-3" style={{ animationDelay: '280ms' }}>
             {authed ? (
-              <Link href="/dashboard" className="rounded-xl bg-accent px-6 py-3 font-medium text-bg transition-opacity hover:opacity-90">进入工作台 →</Link>
+              <Link href="/today" className="rounded-xl bg-accent px-6 py-3 font-medium text-bg transition-opacity hover:opacity-90">进入工作台 →</Link>
             ) : (
               <>
                 <Link href="/register" className="rounded-xl bg-accent px-6 py-3 font-medium text-bg transition-opacity hover:opacity-90">免费注册 →</Link>

@@ -9,7 +9,7 @@ export function TopBar() {
   const [open, setOpen] = useState(false);
   return (
     <header className="sticky top-0 z-50 flex items-center gap-3 border-b border-border bg-bg-elevated px-4 py-3">
-      <Link href="/dashboard" className="text-lg font-bold text-text">
+      <Link href="/today" className="text-lg font-bold text-text">
         osborn<span className="text-accent">alpha</span>
       </Link>
       <SearchInput />

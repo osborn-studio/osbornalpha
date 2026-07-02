@@ -27,7 +27,7 @@ export default function AppError({ error, reset }: { error: Error & { digest?: s
           重试
         </button>
         <Link
-          href="/dashboard"
+          href="/today"
           className="rounded-md bg-bg-card px-4 py-2 text-sm text-text-dim hover:text-text"
         >
           返回首页

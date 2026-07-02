@@ -23,11 +23,13 @@ const stroke = {
 
 const TABS: TabDef[] = [
   {
-    id: 'home', emoji: '🏠', label: '首页', href: '/dashboard',
+    id: 'home', emoji: '🌅', label: '今日', href: '/today',
+    // Sunrise glyph — circle + horizon line + rays
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
-        <path d="M3 10.5 12 3l9 7.5" />
-        <path d="M5 9.5V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.5" />
+        <circle cx="12" cy="14" r="4" />
+        <path d="M3 18h18" />
+        <path d="M12 4v2M5 8l1.4 1.4M19 8l-1.4 1.4" />
       </svg>
     ),
   },
@@ -113,8 +115,8 @@ export function TabBar() {
     >
       {TABS.map((t) => {
         const active =
-          (t.href === '/dashboard' && pathname === '/dashboard') ||
-          (t.href !== '/dashboard' && pathname.startsWith(t.href));
+          (t.href === '/today' && pathname === '/today') ||
+          (t.href !== '/today' && pathname.startsWith(t.href));
         return (
           <Link
             key={t.id}
