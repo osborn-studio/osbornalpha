@@ -17,7 +17,7 @@ const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   secondary:
     'bg-[var(--bg-elevated)] text-[var(--text)] border border-[var(--border)] hover:bg-[var(--bg-hover)]',
   danger:
-    'bg-transparent text-[var(--down)] border border-[var(--down)] hover:bg-[var(--down)]/10',
+    'bg-transparent text-[var(--down)] border border-[var(--down)] hover:bg-[color-mix(in_srgb,var(--down)_10%,transparent)]',
   ghost: 'bg-transparent text-[var(--text-dim)] hover:text-[var(--text)]',
 };
 
@@ -32,10 +32,11 @@ export function buttonClasses(variant: ButtonVariant = 'primary', size: ButtonSi
 
 export type TagTone = 'up' | 'down' | 'accent' | 'neutral';
 
+// Tailwind v3 can't alpha-modify var() colors (`.../40` emits no CSS) — use color-mix().
 const TAG_TONES: Record<TagTone, string> = {
-  up: 'text-[var(--up)] border-[var(--up)]/40',
-  down: 'text-[var(--down)] border-[var(--down)]/40',
-  accent: 'text-[var(--accent)] border-[var(--accent)]/40',
+  up: 'text-[var(--up)] border-[color-mix(in_srgb,var(--up)_40%,transparent)]',
+  down: 'text-[var(--down)] border-[color-mix(in_srgb,var(--down)_40%,transparent)]',
+  accent: 'text-[var(--accent)] border-[color-mix(in_srgb,var(--accent)_40%,transparent)]',
   neutral: 'text-[var(--text-dim)] border-[var(--border)]',
 };
 

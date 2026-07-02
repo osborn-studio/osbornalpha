@@ -11,6 +11,7 @@ import { createServerClient } from '@supabase/ssr';
  */
 const PUBLIC_PATHS = new Set([
   '/', '/about', '/login', '/register', '/forgot-password', '/reset-password',
+  '/design', // V3 design-system showcase — static demo content, no user data
 ]);
 
 function isPublic(pathname: string): boolean {
