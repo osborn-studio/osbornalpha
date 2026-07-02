@@ -54,4 +54,23 @@ describe('llm/providers', () => {
   it('getProvider returns null for empty string', () => {
     expect(getProvider('')).toBeNull();
   });
+
+  it('every provider has a protocol of openai or anthropic', () => {
+    for (const id of PROVIDER_IDS) {
+      expect(['openai', 'anthropic']).toContain(PROVIDERS[id].protocol);
+    }
+  });
+
+  it('ark uses the anthropic protocol at the Agent Plan coding endpoint', () => {
+    expect(PROVIDERS.ark.protocol).toBe('anthropic');
+    expect(PROVIDERS.ark.baseUrl).toBe('https://ark.cn-beijing.volces.com/api/coding');
+    expect(PROVIDERS.ark.chatPath).toBe('/v1/messages');
+    expect(PROVIDERS.ark.defaultModel).toBe('doubao-seed-code');
+  });
+
+  it('deepseek, openai, kimi, minimax use the openai protocol', () => {
+    for (const id of ['deepseek', 'openai', 'kimi', 'minimax'] as ProviderId[]) {
+      expect(PROVIDERS[id].protocol).toBe('openai');
+    }
+  });
 });

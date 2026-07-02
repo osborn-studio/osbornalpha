@@ -14,6 +14,7 @@ import type { LlmConfig } from './openai-compat';
 
 export interface ResolvedLlm extends LlmConfig {
   provider: string;
+  protocol: 'openai' | 'anthropic';
 }
 
 const ENV_KEY: Record<string, string> = {
@@ -43,6 +44,7 @@ export async function resolveLlm(): Promise<ResolvedLlm | null> {
           model: u.model || def.defaultModel,
           apiKey,
           chatPath: def.chatPath,
+          protocol: def.protocol,
         };
       }
     }
@@ -59,6 +61,7 @@ export async function resolveLlm(): Promise<ResolvedLlm | null> {
       model: process.env.LLM_MODEL || def.defaultModel,
       apiKey: key,
       chatPath: def.chatPath,
+      protocol: def.protocol,
     };
   }
 
