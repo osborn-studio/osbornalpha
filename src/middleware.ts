@@ -42,7 +42,7 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
 
   if (user && (pathname === '/login' || pathname === '/register')) {
-    return NextResponse.redirect(new URL('/dashboard', request.url));
+    return NextResponse.redirect(new URL('/today', request.url));
   }
   if (!user && !isPublic(pathname)) {
     const url = new URL('/login', request.url);
