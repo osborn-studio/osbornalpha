@@ -5,7 +5,10 @@ describe('tool registry', () => {
   it('exposes the expected tools', () => {
     const names = TOOLS.map((t) => t.name).sort();
     expect(names).toEqual(
-      ['calendar', 'dcf', 'financials', 'flows', 'holders', 'kline', 'perspectives', 'quote', 'radar', 'search', 'signals'].sort(),
+      [
+        'calendar', 'dcf', 'financials', 'flows', 'holders', 'kline', 'perspectives', 'quote', 'radar', 'search', 'signals',
+        'record_decision', 'get_portfolio', 'save_artifact',
+      ].sort(),
     );
   });
   it('every tool has description + inputSchema + handler', () => {
