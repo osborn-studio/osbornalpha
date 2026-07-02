@@ -40,7 +40,7 @@ async function requireUser() {
 export async function listDecisions(opts: { ticker?: string; status?: DecisionStatus } = {}): Promise<Decision[]> {
   const { supabase, userId } = await requireUser();
   let q = supabase.from('decisions').select('*').eq('user_id', userId).order('decided_at', { ascending: false }).limit(200);
-  if (opts.ticker) q = q.eq('ticker', opts.ticker);
+  if (opts.ticker) q = q.eq('ticker', opts.ticker.trim().toUpperCase()); // writes store tickers uppercased (validate.ts)
   if (opts.status) q = q.eq('status', opts.status);
   const { data, error } = await q;
   if (error) throw new Error(error.message);
@@ -67,7 +67,7 @@ export async function updateDecisionStatus(id: string, status: DecisionStatus): 
 export async function listTrades(ticker?: string): Promise<Trade[]> {
   const { supabase, userId } = await requireUser();
   let q = supabase.from('trades').select('*').eq('user_id', userId).order('executed_at', { ascending: false }).limit(500);
-  if (ticker) q = q.eq('ticker', ticker);
+  if (ticker) q = q.eq('ticker', ticker.trim().toUpperCase()); // writes store tickers uppercased (validate.ts)
   const { data, error } = await q;
   if (error) throw new Error(error.message);
   return ((data ?? []) as Record<string, unknown>[]).map(coerceTradeRow);
