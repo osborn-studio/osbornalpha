@@ -12,7 +12,7 @@ interface Verdict {
 }
 interface HistoryEntry { ticker: string; rating: string; positionPct?: number; at: string; }
 
-export function CopilotClient({ initialTicker = '' }: { initialTicker?: string }) {
+export function CopilotClient({ initialTicker = '', autoStart = true }: { initialTicker?: string; autoStart?: boolean }) {
   const [ticker, setTicker] = useState(initialTicker);
   const [running, setRunning] = useState(false);
   const [text, setText] = useState('');
@@ -91,8 +91,8 @@ export function CopilotClient({ initialTicker = '' }: { initialTicker?: string }
   }, [running, appendHistory]);
 
   useEffect(() => {
-    if (initialTicker && !startedRef.current) { startedRef.current = true; run(initialTicker); }
-  }, [initialTicker, run]);
+    if (autoStart && initialTicker && !startedRef.current) { startedRef.current = true; run(initialTicker); }
+  }, [autoStart, initialTicker, run]);
 
   return (
     <div className="space-y-3">

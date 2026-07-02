@@ -65,7 +65,7 @@ export function CopilotFab() {
             </Button>
           </div>
           <div className="flex-1 overflow-y-auto p-3">
-            <CopilotClient initialTicker={ticker} />
+            <CopilotClient initialTicker={ticker} autoStart={false} />
           </div>
         </div>
       )}
