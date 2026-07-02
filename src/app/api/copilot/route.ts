@@ -1,5 +1,6 @@
 import { runCopilotLoop, type CopilotEvent, type OaiMessage } from './loop';
 import { toolChat } from '@/lib/llm/openai-compat';
+import { anthropicToolChat } from '@/lib/llm/anthropic-compat';
 import { resolveLlm } from '@/lib/llm/resolve';
 import { TOOLS_BY_NAME, OPENAI_TOOL_DEFS } from '@/lib/agent/tools';
 import { JOHN_CAMERON_5STEP } from '@/lib/agent/methods/john-cameron-5step';
@@ -32,10 +33,9 @@ export async function POST(req: Request) {
       await runCopilotLoop({
         ticker, question, maxHops: 12, onEvent: send,
         model: async (messages: OaiMessage[]) => {
-          const r = await toolChat(
-            { baseUrl: llm.baseUrl, apiKey: llm.apiKey, model: llm.model, chatPath: llm.chatPath },
-            { system: JOHN_CAMERON_5STEP.systemPrompt, messages, tools: OPENAI_TOOL_DEFS, max_tokens: 1500 },
-          );
+          const cfg = { baseUrl: llm.baseUrl, apiKey: llm.apiKey, model: llm.model, chatPath: llm.chatPath };
+          const call = llm.protocol === 'anthropic' ? anthropicToolChat : toolChat;
+          const r = await call(cfg, { system: JOHN_CAMERON_5STEP.systemPrompt, messages, tools: OPENAI_TOOL_DEFS, max_tokens: 1500 });
           return { content: r.content, toolCalls: r.toolCalls, finishReason: r.finishReason };
         },
         runTool: (name, args) => {

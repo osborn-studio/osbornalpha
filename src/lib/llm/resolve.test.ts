@@ -53,9 +53,10 @@ describe('resolveLlm', () => {
     expect(r).toEqual(
       expect.objectContaining({
         provider: 'ark',
-        baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
-        model: 'doubao-pro-32k',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/coding',
+        model: 'doubao-seed-code',
         apiKey: 'ark-test',
+        protocol: 'anthropic',
       })
     );
   });
@@ -73,5 +74,6 @@ describe('resolveLlm', () => {
     expect(r).not.toBeNull();
     expect(r!.provider).toBe('deepseek');
     expect(r!.apiKey).toBe('sk-user');
+    expect(r!.protocol).toBe('openai');
   });
 });
