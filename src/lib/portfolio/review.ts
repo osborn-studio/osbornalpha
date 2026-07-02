@@ -34,12 +34,29 @@ function calibrationBucket(confidence: number | null): string | null {
   return `${bucket * 20}-${bucket * 20 + 20}`;
 }
 
+// Kline bar dates are exchange-local trading days; normalize decided_at
+// (a UTC timestamptz) into the exchange timezone before extracting the date,
+// otherwise late-night decisions drift one trading day.
+const EXCHANGE_TZ: Record<string, string> = { A: 'Asia/Shanghai', HK: 'Asia/Hong_Kong', US: 'America/New_York' };
+
+function exchangeDate(decidedAt: string, market: string): string {
+  try {
+    // en-CA locale formats as YYYY-MM-DD.
+    return new Date(decidedAt).toLocaleDateString('en-CA', { timeZone: EXCHANGE_TZ[market] ?? 'Asia/Shanghai' });
+  } catch {
+    return decidedAt.slice(0, 10);
+  }
+}
+
 export function scoreDecision(d: Decision, bars: KlineBar[]): DecisionReviewDraft | null {
-  const decisionDate = d.decided_at.slice(0, 10);
+  const decisionDate = exchangeDate(d.decided_at, d.market);
   const baseIdx = bars.findIndex((b) => b.time >= decisionDate);
   if (baseIdx === -1) return null;
 
   const base = bars[baseIdx].close;
+  // Bad feed data (0/NaN close) would poison every downstream pct with
+  // Infinity/NaN and get persisted — refuse to score instead.
+  if (!Number.isFinite(base) || base <= 0) return null;
 
   const forwardAt = (n: number): number | null => {
     const bar = bars[baseIdx + n];

@@ -163,3 +163,50 @@ describe('scoreDecision — decision_id passthrough', () => {
     expect(res!.decision_id).toBe('abc-123');
   });
 });
+
+describe('review hardening (post-review fixes)', () => {
+  const mk = (start: string, closes: number[]): KlineBar[] => {
+    const bars: KlineBar[] = [];
+    const d = new Date(start + 'T00:00:00Z');
+    for (const close of closes) {
+      bars.push({ time: d.toISOString().slice(0, 10), open: close, high: close, low: close, close, volume: 1 });
+      d.setUTCDate(d.getUTCDate() + 1);
+    }
+    return bars;
+  };
+  const base = (o: Partial<Decision>): Decision => ({
+    id: 'd1', user_id: 'u', ticker: '300750', market: 'A', action: 'buy', thesis: null,
+    confidence: null, entry_low: null, entry_high: null, target_price: null, stop_loss: null,
+    horizon: null, source_type: 'manual', source_ref: null, status: 'open',
+    decided_at: '2026-06-01T00:00:00Z', expires_at: null, ...o,
+  });
+
+  it('refuses to score when base close is 0 (bad feed guard)', () => {
+    const bars = mk('2026-06-01', [0, 100, 100, 100, 100, 110]);
+    expect(scoreDecision(base({}), bars)).toBeNull();
+  });
+
+  it('normalizes late-UTC decided_at into the exchange trading day', () => {
+    // 2026-06-01T23:00:00Z = 2026-06-02 07:00 Beijing → base bar must be 06-02 (close 200), not 06-01 (100)
+    const bars = mk('2026-06-01', [100, 200, 200, 200, 200, 200, 220]);
+    const r = scoreDecision(base({ decided_at: '2026-06-01T23:00:00Z' }), bars);
+    expect(r?.forward_5d_pct).toBeCloseTo(10); // (220-200)/200
+  });
+
+  it('locks ?? semantics: flat 0% 20d forward gives score 0, not the 5d fallback', () => {
+    const closes = Array.from({ length: 61 }, () => 100);
+    closes[5] = 110; // 5d = +10
+    closes[20] = 100; // 20d = 0 → score must be 0
+    const r = scoreDecision(base({}), mk('2026-06-01', closes));
+    expect(r?.forward_20d_pct).toBe(0);
+    expect(r?.score).toBe(0);
+  });
+
+  it('pass direction: falling price is a hit with positive score', () => {
+    const closes = Array.from({ length: 61 }, (_, i) => 100 - i * 0.5);
+    const r = scoreDecision(base({ action: 'pass' }), mk('2026-06-01', closes));
+    expect(r?.hit).toBe(true);
+    expect(r?.score).toBeGreaterThan(0);
+    expect(r?.forward_60d_pct).toBeCloseTo(((closes[60] - closes[0]) / closes[0]) * 100, 1);
+  });
+});
