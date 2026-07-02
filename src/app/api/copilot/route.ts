@@ -70,7 +70,7 @@ export async function POST(req: Request) {
             params: { question, verdict: archivedVerdict },
           });
         } catch {
-          // Archiving is best-effort — never let it break the stream that already closed successfully.
+          // Archiving is best-effort — a failure here must not prevent the stream from closing below.
         }
       }
 
