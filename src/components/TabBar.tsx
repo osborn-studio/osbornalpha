@@ -45,32 +45,24 @@ const TABS: TabDef[] = [
     ),
   },
   {
+    id: 'intel', emoji: '📡', label: '情报', href: '/intel',
+    // Radar sweep glyph — concentric arcs + scan dot
+    Icon: ({ className }) => (
+      <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
+        <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
+        <path d="M12 4a8 8 0 0 1 8 8" />
+        <path d="M12 7.5a4.5 4.5 0 0 1 4.5 4.5" />
+        <path d="M12 12l6-3.5" />
+      </svg>
+    ),
+  },
+  {
     id: 'portfolio', emoji: '💼', label: '我的投资', href: '/portfolio',
     // Briefcase glyph
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
         <rect x="3" y="7.5" width="18" height="12.5" rx="2" />
         <path d="M9 7.5V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1.5M3 13h18" />
-      </svg>
-    ),
-  },
-  {
-    id: 'radar', emoji: '🌅', label: '雷达', href: '/radar',
-    // Concentric pulse rings
-    Icon: ({ className }) => (
-      <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
-        <circle cx="12" cy="12" r="2" />
-        <path d="M12 4a8 8 0 0 1 8 8" />
-        <path d="M12 7.5a4.5 4.5 0 0 1 4.5 4.5" />
-      </svg>
-    ),
-  },
-  {
-    id: 'briefs', emoji: '📰', label: '简报', href: '/briefs',
-    Icon: ({ className }) => (
-      <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
-        <rect x="4" y="4" width="16" height="16" rx="2" />
-        <path d="M8 9h8M8 13h8M8 17h5" />
       </svg>
     ),
   },

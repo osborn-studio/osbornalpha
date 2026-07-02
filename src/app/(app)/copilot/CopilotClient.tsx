@@ -23,7 +23,7 @@ function mapRatingToAction(rating: string | undefined): 'buy' | 'hold' | 'sell' 
   return 'hold';
 }
 
-export function CopilotClient({ initialTicker = '', autoStart = true, methodId }: { initialTicker?: string; autoStart?: boolean; methodId?: string }) {
+export function CopilotClient({ initialTicker = '', initialQuestion = '', autoStart = true, methodId }: { initialTicker?: string; initialQuestion?: string; autoStart?: boolean; methodId?: string }) {
   const [ticker, setTicker] = useState(initialTicker);
   const [running, setRunning] = useState(false);
   const [text, setText] = useState('');
@@ -67,12 +67,12 @@ export function CopilotClient({ initialTicker = '', autoStart = true, methodId }
     });
   }, []);
 
-  const run = useCallback(async (t: string) => {
-    if (!t || running) return;
+  const run = useCallback(async (t: string, q?: string) => {
+    if ((!t && !q) || running) return;
     setRunning(true); setText(''); setCalls([]); setVerdict(null); setErr(''); setAdopted(''); setAdopting(false);
     const resp = await fetch('/api/copilot', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ticker: t, methodId }),
+      body: JSON.stringify({ ticker: t || undefined, question: q, methodId }),
     });
     if (!resp.body) { setErr('无响应流'); setRunning(false); return; }
     const reader = resp.body.getReader();
@@ -104,8 +104,14 @@ export function CopilotClient({ initialTicker = '', autoStart = true, methodId }
   }, [running, appendHistory]);
 
   useEffect(() => {
-    if (autoStart && initialTicker && !startedRef.current) { startedRef.current = true; run(initialTicker); }
-  }, [autoStart, initialTicker, run]);
+    // A wizard hand-off (?q=…, optionally with ?method=) should fire immediately,
+    // same as the existing ?ticker= autoStart — the whole point of landing here
+    // from /intel is to run right away.
+    if (autoStart && (initialTicker || initialQuestion) && !startedRef.current) {
+      startedRef.current = true;
+      run(initialTicker, initialQuestion || undefined);
+    }
+  }, [autoStart, initialTicker, initialQuestion, run]);
 
   const adoptVerdict = useCallback(async () => {
     if (!verdict || adopting) return;
@@ -212,18 +218,22 @@ export function CopilotClient({ initialTicker = '', autoStart = true, methodId }
           )}
           {verdict.compliance && <div className="mt-2 text-[11px] text-text-muted">{verdict.compliance}</div>}
 
-          <div className="mt-3 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={adoptVerdict}
-              disabled={adopting || adopted === 'ok'}
-              className="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
-            >
-              {adopting ? '记录中…' : '✅ 采纳 → 记录决策'}
-            </button>
-            {adopted === 'ok' && <span className="text-xs text-up">已记录 ✓</span>}
-            {adopted.startsWith('error:') && <span className="text-xs text-down">{adopted.slice(6)}</span>}
-          </div>
+          {/* Wizard verdicts (bottleneck/industry-chain) carry no single actionable
+              ticker — hide the adopt CTA instead of offering a dead-end 400. */}
+          {(verdict.ticker || ticker) ? (
+            <div className="mt-3 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={adoptVerdict}
+                disabled={adopting || adopted === 'ok'}
+                className="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
+              >
+                {adopting ? '记录中…' : '✅ 采纳 → 记录决策'}
+              </button>
+              {adopted === 'ok' && <span className="text-xs text-up">已记录 ✓</span>}
+              {adopted.startsWith('error:') && <span className="text-xs text-down">{adopted.slice(6)}</span>}
+            </div>
+          ) : null}
         </div>
       )}
     </div>

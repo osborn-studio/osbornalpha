@@ -92,12 +92,18 @@ export default function StockDetailPage() {
           {inWatchlist ? '⭐ 已加入' : '+ 加入股票池'}
         </button>
       </div>
-      <div className="mb-2">
+      <div className="mb-2 flex flex-wrap gap-2">
         <Link
           href={`/copilot?ticker=${encodeURIComponent(ticker)}` as any}
           className="inline-block rounded-md bg-bg-card px-3 py-1 text-xs font-semibold text-accent"
         >
           🎩 用 John 分析这只股票
+        </Link>
+        <Link
+          href={`/copilot?method=hiphon-pm-deepdive&ticker=${encodeURIComponent(ticker)}` as any}
+          className="inline-block rounded-md bg-bg-card px-3 py-1 text-xs font-semibold text-accent"
+        >
+          🔬 深度研究
         </Link>
       </div>
       <div className="mb-1.5 flex flex-wrap items-baseline gap-4">
