@@ -1,4 +1,12 @@
+import type { AgentMethod } from './john-cameron-5step';
 import { JOHN_CAMERON_5STEP } from './john-cameron-5step';
+import { HIPHON_PM_DEEPDIVE } from './hiphon-pm-deepdive';
+
+/** Executable AgentMethods keyed by id — resolved by the copilot route from methodId. */
+export const AGENT_METHODS: Record<string, AgentMethod> = {
+  [JOHN_CAMERON_5STEP.id]: JOHN_CAMERON_5STEP,
+  [HIPHON_PM_DEEPDIVE.id]: HIPHON_PM_DEEPDIVE,
+};
 
 /** An executable analysis workflow surfaced in the Skill Hub. */
 export interface SkillMethod {
@@ -17,6 +25,13 @@ export const METHODS: SkillMethod[] = [
     description: JOHN_CAMERON_5STEP.description,
     icon: '🎩',
     href: '/copilot',
+  },
+  {
+    id: HIPHON_PM_DEEPDIVE.id,
+    name: HIPHON_PM_DEEPDIVE.name,
+    description: HIPHON_PM_DEEPDIVE.description,
+    icon: '🔬',
+    href: '/copilot?method=hiphon-pm-deepdive',
   },
   {
     id: 'dcf-valuation',

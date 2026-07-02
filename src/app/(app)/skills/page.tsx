@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { METHODS } from '@/lib/agent/methods/registry';
 import { TOOLS, type AgentTool } from '@/lib/agent/tools';
+import { ArtifactsPanel } from './ArtifactsPanel';
 
 // Auth-gated server component — must render dynamically per request (see briefs/page.tsx).
 export const dynamic = 'force-dynamic';
@@ -63,6 +64,10 @@ export default function SkillsPage() {
       <p className="mt-4 text-[11px] text-text-muted">
         共 {TOOLS.length} 个工具 · {METHODS.length} 个方法。工具由 Copilot 在推理时按需调用。
       </p>
+
+      <div className="mt-6">
+        <ArtifactsPanel />
+      </div>
     </>
   );
 }

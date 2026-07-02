@@ -3,6 +3,8 @@ export interface AgentMethod {
   id: string; name: string; description: string;
   steps: MethodStep[];
   systemPrompt: string;
+  /** When true, the copilot route auto-archives the run via createArtifact. */
+  archive?: boolean;
 }
 
 export const VERDICT_INSTRUCTION = `

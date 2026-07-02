@@ -5,11 +5,11 @@ export const dynamic = 'force-dynamic';
 
 export const metadata = { title: 'Copilot' };
 
-export default function CopilotPage({ searchParams }: { searchParams: { ticker?: string } }) {
+export default function CopilotPage({ searchParams }: { searchParams: { ticker?: string; method?: string } }) {
   return (
     <>
       <h1 className="mb-3 text-xl font-bold">🎩 John Cameron · 投研助手</h1>
-      <CopilotClient initialTicker={searchParams.ticker ?? ''} />
+      <CopilotClient initialTicker={searchParams.ticker ?? ''} methodId={searchParams.method} />
     </>
   );
 }
