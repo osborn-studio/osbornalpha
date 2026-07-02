@@ -32,7 +32,14 @@ function CockpitInner() {
   const onChanged = () => { refetchPortfolio(); refetchDecisions(); };
 
   return (
-    <div className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-[280px_1fr_320px]">
+    <div className="p-4">
+      <nav className="mb-3 flex gap-4 text-xs">
+        <span className="text-[var(--accent)]">驾驶舱</span>
+        <a href="/portfolio/decisions" className="text-[var(--text-dim)] hover:text-[var(--text)]">决策日志</a>
+        <a href="/portfolio/positions" className="text-[var(--text-dim)] hover:text-[var(--text)]">持仓明细</a>
+        <a href="/portfolio/review" className="text-[var(--text-dim)] hover:text-[var(--text)]">复盘</a>
+      </nav>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_1fr_320px]">
       <PositionsRail positions={positions} quotes={quotes} watchTickers={watchTickers} focus={focus} onFocus={setFocus} />
       {focus ? (
         <FocusPanel
@@ -48,6 +55,7 @@ function CockpitInner() {
         </div>
       )}
       <SignalsRail ticker={focus} openDecisions={openDecisions} onFocus={setFocus} />
+      </div>
     </div>
   );
 }
