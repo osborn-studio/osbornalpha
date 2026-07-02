@@ -27,7 +27,8 @@ export interface OaiMessage {
 }
 
 export interface LoopOpts {
-  ticker: string;
+  /** Absent for no-ticker discovery methods (bottleneck-picker / industry-chain) — question carries the task. */
+  ticker?: string;
   question?: string;
   model: (messages: OaiMessage[]) => Promise<ModelTurn>;
   runTool: (name: string, args: any) => Promise<unknown>;
@@ -36,7 +37,9 @@ export interface LoopOpts {
 }
 
 export async function runCopilotLoop(o: LoopOpts): Promise<void> {
-  const task = o.question
+  const task = !o.ticker
+    ? (o.question as string)
+    : o.question
     ? `${o.question}（标的：${o.ticker}）`
     : `请用 John Cameron 五步分析法分析 ${o.ticker}，给出买卖评级、仓位与止损。`;
   const messages: OaiMessage[] = [{ role: 'user', content: task }];

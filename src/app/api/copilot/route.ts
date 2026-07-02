@@ -15,10 +15,15 @@ const MIN_ARCHIVE_CHARS = 200;
 
 export async function POST(req: Request) {
   const { ticker, question, methodId } = await req.json().catch(() => ({}));
-  if (!ticker) return new Response('missing ticker', { status: 400 });
+  const method = methodId ? AGENT_METHODS[methodId as string] : undefined;
+  // No-ticker discovery methods (e.g. bottleneck-picker / industry-chain) are
+  // allowed through when a known methodId pairs with a non-empty question —
+  // the loop's task template falls back to the question itself in that case.
+  const noTickerAllowed = !!method && typeof question === 'string' && question.trim().length > 0;
+  if (!ticker && !noTickerAllowed) return new Response('missing ticker', { status: 400 });
   const origin = new URL(req.url).origin;
   const enc = new TextEncoder();
-  const method = AGENT_METHODS[methodId as string] ?? JOHN_CAMERON_5STEP;
+  const resolvedMethod = method ?? JOHN_CAMERON_5STEP;
 
   // Resolve the user's (or env) LLM provider config.
   const llm = await resolveLlm();
@@ -27,7 +32,7 @@ export async function POST(req: Request) {
     async start(controller) {
       const send = (e: CopilotEvent) => controller.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n\n`));
       // Step scaffold first so the UI can render the method's step placeholders.
-      controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'steps', steps: method.steps })}\n\n`));
+      controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'steps', steps: resolvedMethod.steps })}\n\n`));
 
       if (!llm) {
         send({ type: 'error', message: '未配置 AI Provider。请在「设置 → AI 模型」中选择提供商并填入 API Key。' });
@@ -46,11 +51,11 @@ export async function POST(req: Request) {
       };
 
       await runCopilotLoop({
-        ticker, question, maxHops: 12, onEvent,
+        ticker: ticker || undefined, question, maxHops: 12, onEvent,
         model: async (messages: OaiMessage[]) => {
           const cfg = { baseUrl: llm.baseUrl, apiKey: llm.apiKey, model: llm.model, chatPath: llm.chatPath };
           const call = llm.protocol === 'anthropic' ? anthropicToolChat : toolChat;
-          const r = await call(cfg, { system: method.systemPrompt, messages, tools: OPENAI_TOOL_DEFS, max_tokens: 1500 });
+          const r = await call(cfg, { system: resolvedMethod.systemPrompt, messages, tools: OPENAI_TOOL_DEFS, max_tokens: 1500 });
           return { content: r.content, toolCalls: r.toolCalls, finishReason: r.finishReason };
         },
         runTool: (name, args) => {
@@ -60,12 +65,13 @@ export async function POST(req: Request) {
         },
       });
 
-      if (method.archive && archivedText.length > MIN_ARCHIVE_CHARS) {
+      if (resolvedMethod.archive && archivedText.length > MIN_ARCHIVE_CHARS) {
         try {
+          const label = ticker || question?.slice(0, 40) || resolvedMethod.name;
           await createArtifact({
-            skill_id: method.id,
-            ticker,
-            title: `${ticker} ${method.name} ${new Date().toISOString().slice(0, 10)}`,
+            skill_id: resolvedMethod.id,
+            ticker: ticker || null,
+            title: `${label} ${resolvedMethod.name} ${new Date().toISOString().slice(0, 10)}`,
             content_md: archivedText,
             params: { question, verdict: archivedVerdict },
           });
