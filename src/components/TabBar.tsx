@@ -43,6 +43,16 @@ const TABS: TabDef[] = [
     ),
   },
   {
+    id: 'portfolio', emoji: '💼', label: '我的投资', href: '/portfolio',
+    // Briefcase glyph
+    Icon: ({ className }) => (
+      <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
+        <rect x="3" y="7.5" width="18" height="12.5" rx="2" />
+        <path d="M9 7.5V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1.5M3 13h18" />
+      </svg>
+    ),
+  },
+  {
     id: 'radar', emoji: '🌅', label: '雷达', href: '/radar',
     // Concentric pulse rings
     Icon: ({ className }) => (
