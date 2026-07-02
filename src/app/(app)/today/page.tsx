@@ -11,8 +11,8 @@ import { MacroGlance } from '@/components/today/MacroGlance';
 import { BriefGlance } from '@/components/today/BriefGlance';
 
 export default function TodayPage() {
-  const { groups } = useWatchlist();
-  const { data: portfolio } = usePortfolio();
+  const { groups, hydrated } = useWatchlist();
+  const { data: portfolio, loading: portfolioLoading } = usePortfolio();
   const [phaseLabel, setPhaseLabel] = useState(() => aShareMarketPhase(new Date()).label);
 
   useEffect(() => {
@@ -41,7 +41,12 @@ export default function TodayPage() {
 
       <div className="grid gap-3 lg:grid-cols-[1fr_320px]">
         <div>
-          <RadarStream tickers={allTickers} />
+          {/* Gate on hydration so an empty-watchlist flash doesn't show before data lands. */}
+          {hydrated && !portfolioLoading ? (
+            <RadarStream tickers={allTickers} />
+          ) : (
+            <p className="text-xs text-[var(--text-dim)]">加载中…</p>
+          )}
         </div>
         <div className="space-y-3">
           <PortfolioGlance />

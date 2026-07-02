@@ -115,8 +115,8 @@ export function TabBar() {
     >
       {TABS.map((t) => {
         const active =
-          (t.href === '/dashboard' && pathname === '/dashboard') ||
-          (t.href !== '/dashboard' && pathname.startsWith(t.href));
+          (t.href === '/today' && pathname === '/today') ||
+          (t.href !== '/today' && pathname.startsWith(t.href));
         return (
           <Link
             key={t.id}
