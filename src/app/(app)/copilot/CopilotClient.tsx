@@ -12,7 +12,7 @@ interface Verdict {
 }
 interface HistoryEntry { ticker: string; rating: string; positionPct?: number; at: string; }
 
-export function CopilotClient({ initialTicker }: { initialTicker: string }) {
+export function CopilotClient({ initialTicker = '' }: { initialTicker?: string }) {
   const [ticker, setTicker] = useState(initialTicker);
   const [running, setRunning] = useState(false);
   const [text, setText] = useState('');
