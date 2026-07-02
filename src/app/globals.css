@@ -195,3 +195,32 @@ table { font-variant-numeric: tabular-nums; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ============================================================
+ * V3 dual-density layer (2026-07-02 refactor, spec §6B)
+ * Reading tier = defaults on :root. Any container with
+ * [data-density="data"] switches to the compact numeric tier.
+ * Components consume ONLY these five vars for density-aware
+ * spacing/typography; colors keep using the V1/V2 vars above.
+ * ============================================================ */
+:root {
+  --panel-pad: 16px;
+  --row-gap: 10px;
+  --num-font: inherit;
+  --label-size: 12px;
+  --value-size: 15px;
+}
+
+[data-density='data'] {
+  --panel-pad: 8px;
+  --row-gap: 4px;
+  --num-font: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --label-size: 10px;
+  --value-size: 13px;
+}
+
+/* Numeric text inside any density context */
+.num {
+  font-family: var(--num-font);
+  font-variant-numeric: tabular-nums;
+}
