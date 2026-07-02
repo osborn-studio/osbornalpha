@@ -218,18 +218,22 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
           )}
           {verdict.compliance && <div className="mt-2 text-[11px] text-text-muted">{verdict.compliance}</div>}
 
-          <div className="mt-3 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={adoptVerdict}
-              disabled={adopting || adopted === 'ok'}
-              className="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
-            >
-              {adopting ? '记录中…' : '✅ 采纳 → 记录决策'}
-            </button>
-            {adopted === 'ok' && <span className="text-xs text-up">已记录 ✓</span>}
-            {adopted.startsWith('error:') && <span className="text-xs text-down">{adopted.slice(6)}</span>}
-          </div>
+          {/* Wizard verdicts (bottleneck/industry-chain) carry no single actionable
+              ticker — hide the adopt CTA instead of offering a dead-end 400. */}
+          {(verdict.ticker || ticker) ? (
+            <div className="mt-3 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={adoptVerdict}
+                disabled={adopting || adopted === 'ok'}
+                className="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
+              >
+                {adopting ? '记录中…' : '✅ 采纳 → 记录决策'}
+              </button>
+              {adopted === 'ok' && <span className="text-xs text-up">已记录 ✓</span>}
+              {adopted.startsWith('error:') && <span className="text-xs text-down">{adopted.slice(6)}</span>}
+            </div>
+          ) : null}
         </div>
       )}
     </div>
