@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { classifyMarket } from '@/lib/utils';
 
 const HISTORY_KEY = 'osbornalpha:copilot:history:v1';
 const HISTORY_MAX = 20;
@@ -8,11 +9,21 @@ interface ToolCall { name: string; args: unknown; ok?: boolean; summary?: string
 interface Verdict {
   ticker?: string; name?: string; rating?: string; thesis?: string;
   positionPct?: number; stop?: string; compliance?: string;
-  confidence?: { score: number; n: number; note: string };
+  confidence?: { score: number; n: number; note: string } | number;
+  // hiphon-pm-deepdive verdict shape (see skills/hiphon-pm-deepdive/SKILL.md derived method):
+  position_pct?: number; entry_low?: number; entry_high?: number; stop_loss?: number; summary?: string;
 }
 interface HistoryEntry { ticker: string; rating: string; positionPct?: number; at: string; }
 
-export function CopilotClient({ initialTicker = '', autoStart = true }: { initialTicker?: string; autoStart?: boolean }) {
+// Loosely map a free-text/verdict rating into the decisions table's action enum.
+function mapRatingToAction(rating: string | undefined): 'buy' | 'hold' | 'sell' {
+  const r = (rating ?? '').toLowerCase();
+  if (/买|buy|bull/.test(r)) return 'buy';
+  if (/卖|sell|bear|reduce|trim/.test(r)) return 'sell';
+  return 'hold';
+}
+
+export function CopilotClient({ initialTicker = '', autoStart = true, methodId }: { initialTicker?: string; autoStart?: boolean; methodId?: string }) {
   const [ticker, setTicker] = useState(initialTicker);
   const [running, setRunning] = useState(false);
   const [text, setText] = useState('');
@@ -20,6 +31,8 @@ export function CopilotClient({ initialTicker = '', autoStart = true }: { initia
   const [verdict, setVerdict] = useState<Verdict | null>(null);
   const [err, setErr] = useState('');
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [adopting, setAdopting] = useState(false);
+  const [adopted, setAdopted] = useState<string>('');
   const startedRef = useRef(false);
 
   // Load persisted run-history on mount (SSR-safe).
@@ -56,10 +69,10 @@ export function CopilotClient({ initialTicker = '', autoStart = true }: { initia
 
   const run = useCallback(async (t: string) => {
     if (!t || running) return;
-    setRunning(true); setText(''); setCalls([]); setVerdict(null); setErr('');
+    setRunning(true); setText(''); setCalls([]); setVerdict(null); setErr(''); setAdopted(''); setAdopting(false);
     const resp = await fetch('/api/copilot', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ticker: t }),
+      body: JSON.stringify({ ticker: t, methodId }),
     });
     if (!resp.body) { setErr('无响应流'); setRunning(false); return; }
     const reader = resp.body.getReader();
@@ -93,6 +106,40 @@ export function CopilotClient({ initialTicker = '', autoStart = true }: { initia
   useEffect(() => {
     if (autoStart && initialTicker && !startedRef.current) { startedRef.current = true; run(initialTicker); }
   }, [autoStart, initialTicker, run]);
+
+  const adoptVerdict = useCallback(async () => {
+    if (!verdict || adopting) return;
+    setAdopting(true); setAdopted('');
+    const t = verdict.ticker || ticker;
+    try {
+      const resp = await fetch('/api/decisions', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ticker: t,
+          market: classifyMarket(t),
+          action: mapRatingToAction(verdict.rating),
+          thesis: (verdict.summary ?? verdict.thesis ?? '').slice(0, 200),
+          confidence: typeof verdict.confidence === 'number' ? verdict.confidence : verdict.confidence?.score,
+          target_price: verdict.entry_high,
+          stop_loss: typeof verdict.stop_loss === 'number' ? verdict.stop_loss : undefined,
+          entry_low: verdict.entry_low,
+          entry_high: verdict.entry_high,
+          source_type: 'copilot',
+          source_ref: { method: methodId, run_at: new Date().toISOString() },
+        }),
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        setAdopted(`error:${body.error ?? resp.statusText}`);
+      } else {
+        setAdopted('ok');
+      }
+    } catch (e) {
+      setAdopted(`error:${String(e)}`);
+    } finally {
+      setAdopting(false);
+    }
+  }, [verdict, ticker, methodId, adopting]);
 
   return (
     <div className="space-y-3">
@@ -156,8 +203,27 @@ export function CopilotClient({ initialTicker = '', autoStart = true }: { initia
             {verdict.positionPct != null && <div>仓位：<b>{verdict.positionPct}%</b></div>}
             {verdict.stop && <div>止损：{verdict.stop}</div>}
           </div>
-          {verdict.confidence && <div className="mt-1 text-xs text-text-dim">置信 {verdict.confidence.score}（n={verdict.confidence.n}）{verdict.confidence.note}</div>}
+          {verdict.confidence != null && (
+            <div className="mt-1 text-xs text-text-dim">
+              {typeof verdict.confidence === 'number'
+                ? `置信 ${verdict.confidence}`
+                : `置信 ${verdict.confidence.score}（n=${verdict.confidence.n}）${verdict.confidence.note}`}
+            </div>
+          )}
           {verdict.compliance && <div className="mt-2 text-[11px] text-text-muted">{verdict.compliance}</div>}
+
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={adoptVerdict}
+              disabled={adopting || adopted === 'ok'}
+              className="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
+            >
+              {adopting ? '记录中…' : '✅ 采纳 → 记录决策'}
+            </button>
+            {adopted === 'ok' && <span className="text-xs text-up">已记录 ✓</span>}
+            {adopted.startsWith('error:') && <span className="text-xs text-down">{adopted.slice(6)}</span>}
+          </div>
         </div>
       )}
     </div>
