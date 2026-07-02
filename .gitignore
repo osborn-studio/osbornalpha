@@ -53,3 +53,4 @@ config/watchlist.local.yml
 /tasks/
 /release/
 /reports/
+.superpowers/
