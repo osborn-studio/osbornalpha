@@ -84,7 +84,8 @@ export async function refreshReviews(): Promise<{ scored: number }> {
 
   if (drafts.length === 0) return { scored: 0 };
 
-  const rows = drafts.map((draft) => ({ ...draft, user_id: userId }));
+  // scored_at refreshes on re-score (upsert's update path would otherwise keep the original).
+  const rows = drafts.map((draft) => ({ ...draft, user_id: userId, scored_at: new Date().toISOString() }));
   const { error: upErr } = await (supabase as any).from('decision_reviews').upsert(rows, { onConflict: 'decision_id' });
   if (upErr) throw new Error(upErr.message);
 
