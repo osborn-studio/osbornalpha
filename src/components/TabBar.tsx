@@ -2,14 +2,12 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useDesignV2 } from '@/lib/hooks/useDesignV2';
 
 interface TabDef {
   id: string;
-  emoji: string;
   label: string;
   href: string;
-  /** Line-art icon (v2) — 24×24, 1.5px stroke, currentColor */
+  /** Line-art icon — 24×24, 1.5px stroke, currentColor */
   Icon: (props: { className?: string }) => JSX.Element;
 }
 
@@ -23,7 +21,7 @@ const stroke = {
 
 const TABS: TabDef[] = [
   {
-    id: 'home', emoji: '🌅', label: '今日', href: '/today',
+    id: 'home', label: '今日', href: '/today',
     // Sunrise glyph — circle + horizon line + rays
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
@@ -34,7 +32,7 @@ const TABS: TabDef[] = [
     ),
   },
   {
-    id: 'watch', emoji: '📋', label: '股票池', href: '/watchlist',
+    id: 'watch', label: '股票池', href: '/watchlist',
     // Kanban columns glyph — three vertical bars
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
@@ -45,7 +43,7 @@ const TABS: TabDef[] = [
     ),
   },
   {
-    id: 'intel', emoji: '📡', label: '情报', href: '/intel',
+    id: 'intel', label: '情报', href: '/intel',
     // Radar sweep glyph — concentric arcs + scan dot
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
@@ -57,7 +55,7 @@ const TABS: TabDef[] = [
     ),
   },
   {
-    id: 'portfolio', emoji: '💼', label: '我的投资', href: '/portfolio',
+    id: 'portfolio', label: '我的投资', href: '/portfolio',
     // Briefcase glyph
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
@@ -67,7 +65,7 @@ const TABS: TabDef[] = [
     ),
   },
   {
-    id: 'tools', emoji: '🧰', label: '工具', href: '/tools',
+    id: 'tools', label: '工具', href: '/tools',
     // Toolbox glyph (wrench + box line-art)
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
@@ -77,7 +75,7 @@ const TABS: TabDef[] = [
     ),
   },
   {
-    id: 'settings', emoji: '⚙️', label: '设置', href: '/settings',
+    id: 'settings', label: '设置', href: '/settings',
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
         <circle cx="12" cy="12" r="3" />
@@ -89,7 +87,6 @@ const TABS: TabDef[] = [
 
 export function TabBar() {
   const pathname = usePathname();
-  const v2 = useDesignV2();
   return (
     <nav
       className="fixed bottom-0 left-0 right-0 z-40 flex border-t border-border bg-bg-elevated"
@@ -107,15 +104,11 @@ export function TabBar() {
               active ? 'text-accent' : 'text-text-dim'
             }`}
           >
-            {/* V2: brass top-edge bar over the active tab */}
-            {v2 && active && (
+            {/* Brass top-edge bar over the active tab */}
+            {active && (
               <span className="absolute left-1/2 top-0 h-0.5 w-8 -translate-x-1/2 rounded-full bg-accent" />
             )}
-            {v2 ? (
-              <t.Icon className="" />
-            ) : (
-              <span className="text-xl">{t.emoji}</span>
-            )}
+            <t.Icon className="" />
             <span>{t.label}</span>
           </Link>
         );
