@@ -14,6 +14,11 @@ import { useWatchlist } from '@/lib/hooks/useWatchlist';
 
 type Tab = 'overview' | 'ai' | 'fundamentals' | 'news' | 'signals' | 'holdings';
 
+interface ConsensusInfo { target: number; min: number | null; max: number | null; n: number; source: string }
+
+/** A-share tickers only — the ones report_rc consensus can cover. */
+const isAShare = (ticker: string) => /\.(SH|SZ|BJ)$/i.test(ticker);
+
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'overview', label: '行情' },
   { id: 'ai', label: 'AI 观点' },
@@ -36,6 +41,32 @@ export default function StockDetailPage() {
     if (!hydrated) return;
     setInWatchlist(groups.some((g) => g.tickers.includes(ticker)));
   }, [groups, hydrated, ticker]);
+
+  // A-share with no mock broker reports: ask /api/consensus for real (tushare
+  // report_rc) consensus so 目标价 isn't stuck at 暂无 once the account is on
+  // real data. Fill-only-missing — mock broker_reports keep priority.
+  const hasBrokerReports = (stock?.broker_reports.length ?? 0) > 0;
+  const [brokerConsensus, setBrokerConsensus] = useState<ConsensusInfo | null>(null);
+
+  useEffect(() => {
+    setBrokerConsensus(null);
+    if (hasBrokerReports || !isAShare(ticker)) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/consensus/${encodeURIComponent(ticker)}`);
+        const data = await res.json();
+        if (cancelled) return;
+        const c = data?.consensus;
+        if (c && Number.isFinite(c.target_median)) {
+          setBrokerConsensus({ target: c.target_median, min: c.target_min, max: c.target_max, n: c.n, source: data.source });
+        }
+      } catch {
+        // fetch failed — keep the 暂无近期研报 empty state
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [ticker, hasBrokerReports]);
 
   if (!stock) {
     return (
@@ -244,9 +275,29 @@ export default function StockDetailPage() {
       {tab === 'news' && (
         <>
           <div className="card-base">
-            <div className="mb-3 text-sm font-semibold text-text-dim">📑 券商研报 ({stock.broker_reports.length})</div>
+            <div className="mb-3 text-sm font-semibold text-text-dim">📑 券商研报 ({stock.broker_reports.length || brokerConsensus?.n || 0})</div>
             {stock.broker_reports.length === 0 ? (
-              <div className="py-8 text-center text-sm text-text-dim">暂无近期研报</div>
+              brokerConsensus ? (
+                <div
+                  className="rounded-md bg-bg-card px-3 py-2.5 text-sm"
+                  title={brokerConsensus.source === 'tushare' ? '来源：Tushare 卖方一致预期' : undefined}
+                >
+                  <div className="font-semibold tabular-nums">
+                    卖方一致目标价 {stock.currency}{formatPrice(brokerConsensus.target)}
+                    {brokerConsensus.source === 'tushare' && (
+                      <sup className="ml-0.5 text-[9px] font-normal text-text-dim">tushare</sup>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-text-dim">
+                    {brokerConsensus.n} 份研报
+                    {brokerConsensus.min != null && brokerConsensus.max != null && brokerConsensus.max > brokerConsensus.min
+                      ? ` · 区间 ${stock.currency}${formatPrice(brokerConsensus.min)} – ${stock.currency}${formatPrice(brokerConsensus.max)}`
+                      : ''}
+                  </div>
+                </div>
+              ) : (
+                <div className="py-8 text-center text-sm text-text-dim">暂无近期研报</div>
+              )
             ) : (
               stock.broker_reports.map((r, i) => (
                 <div key={i} className="mb-2 grid grid-cols-[1fr_auto] items-center gap-3 rounded-md bg-bg-card px-3 py-2.5 text-sm">
