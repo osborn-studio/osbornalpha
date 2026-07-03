@@ -57,6 +57,7 @@ describe('resolveLlm', () => {
         model: 'doubao-seed-code',
         apiKey: 'ark-test',
         protocol: 'anthropic',
+        source: 'env',
       })
     );
   });
@@ -75,5 +76,6 @@ describe('resolveLlm', () => {
     expect(r!.provider).toBe('deepseek');
     expect(r!.apiKey).toBe('sk-user');
     expect(r!.protocol).toBe('openai');
+    expect(r!.source).toBe('user');
   });
 });
