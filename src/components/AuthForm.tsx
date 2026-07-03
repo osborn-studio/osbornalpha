@@ -34,7 +34,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
       setBusy(false);
       if (error) return show(`✗ ${error.message}`);
       show('✓ 登录成功');
-      window.location.href = '/dashboard';
+      window.location.href = '/today';
     } else {
       const { error } = await sb.auth.signUp({
         email,
