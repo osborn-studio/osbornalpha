@@ -32,4 +32,18 @@ describe('watchlist store', () => {
       { id: 'b', name: 'B', tickers: ['TSLA', '700.HK'] },
     ])).toEqual(['NVDA', 'TSLA', '700.HK']);
   });
+
+  it('salvages good entries when some are malformed (no all-or-nothing reset)', () => {
+    const parsed = parseWatchlistGroups(JSON.stringify([
+      { id: 'good', name: 'Good', tickers: ['NVDA'] },
+      { id: '', name: 'no-id', tickers: [] },
+      'not-an-object',
+      { id: 'also-good', name: 'Also', tickers: [] },
+    ]));
+    expect(parsed?.map((g) => g.id)).toEqual(['good', 'also-good']);
+  });
+
+  it('returns null only when every entry is malformed', () => {
+    expect(parseWatchlistGroups(JSON.stringify([{ bad: true }, 42]))).toBeNull();
+  });
 });
