@@ -1,5 +1,5 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { getStockOrStub } from '@/lib/data/mock';
 import { formatPrice, formatPct, changeClass } from '@/lib/utils';
@@ -11,12 +11,18 @@ import {
 
 interface Group { id: string; name: string; tickers: string[] }
 
+interface ConsensusInfo { target: number; min: number | null; max: number | null; source: string }
+
 interface Row {
   ticker: string; name: string; group: string; currency: string;
   price: number; changePct: number;
   rating: Rating | null; risk: number | null;
   target: number | null; range: { min: number; max: number } | null;
+  consensusSource: string | null;
 }
+
+/** A-share tickers only — the ones report_rc consensus can cover. */
+const isAShare = (ticker: string) => /\.(SH|SZ|BJ)$/i.test(ticker);
 
 type SortKey = 'none' | 'price' | 'change' | 'rating' | 'risk' | 'target';
 
@@ -81,8 +87,9 @@ function ValuationCell({ price, range, currency }: { price: number; range: Row['
 export function WatchlistTable({ groups, quotes, loading = false }: { groups: Group[]; quotes: Record<string, LiveQuote | null>; loading?: boolean }) {
   const [sortKey, setSortKey] = useState<SortKey>('none');
   const [asc, setAsc] = useState(false);
+  const [consensus, setConsensus] = useState<Record<string, ConsensusInfo>>({});
 
-  const rows = useMemo<Row[]>(() => {
+  const baseRows = useMemo<Row[]>(() => {
     const out: Row[] = [];
     const seen = new Set<string>();
     for (const g of groups) {
@@ -103,11 +110,65 @@ export function WatchlistTable({ groups, quotes, loading = false }: { groups: Gr
           risk: s ? deriveRiskLevel(s) : null,
           target: s ? deriveTargetPrice(s.broker_reports) : null,
           range: s ? deriveValuationRange(s.broker_reports) : null,
+          consensusSource: null,
         });
       }
     }
     return out;
   }, [groups, quotes]);
+
+  // A-share tickers with no mock broker target: ask /api/consensus for real
+  // (tushare report_rc) or mock-fallback consensus so 目标价/估值区间 aren't
+  // stuck at "--" once the account is on real data.
+  const missingTargetAShares = useMemo(
+    () => baseRows.filter((r) => r.target == null && isAShare(r.ticker)).map((r) => r.ticker),
+    [baseRows]
+  );
+
+  useEffect(() => {
+    const toFetch = missingTargetAShares.filter((t) => !(t in consensus));
+    if (toFetch.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const results = await Promise.all(
+        toFetch.map(async (ticker) => {
+          try {
+            const res = await fetch(`/api/consensus/${encodeURIComponent(ticker)}`);
+            const data = await res.json();
+            return [ticker, data] as const;
+          } catch {
+            return [ticker, null] as const;
+          }
+        })
+      );
+      if (cancelled) return;
+      setConsensus((prev) => {
+        const next = { ...prev };
+        for (const [ticker, data] of results) {
+          const c = data?.consensus;
+          next[ticker] = c
+            ? { target: c.target_median, min: c.target_min, max: c.target_max, source: data.source }
+            : { target: NaN, min: null, max: null, source: 'none' }; // sentinel: fetched, nothing found
+        }
+        return next;
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [missingTargetAShares, consensus]);
+
+  const rows = useMemo<Row[]>(() => {
+    return baseRows.map((r) => {
+      if (r.target != null) return r;
+      const c = consensus[r.ticker];
+      if (!c || !Number.isFinite(c.target)) return r;
+      return {
+        ...r,
+        target: c.target,
+        range: c.min != null && c.max != null && c.max > c.min ? { min: c.min, max: c.max } : null,
+        consensusSource: c.source,
+      };
+    });
+  }, [baseRows, consensus]);
 
   const summary = useMemo(() => {
     const tracked = rows.length;
@@ -224,7 +285,18 @@ export function WatchlistTable({ groups, quotes, loading = false }: { groups: Gr
               <td className="px-3 py-2.5"><RatingBadge rating={r.rating} /></td>
               <td className="px-3 py-2.5"><RiskBars level={r.risk} /></td>
               <td className="px-3 py-2.5 text-right tabular-nums">
-                {r.target != null ? `${r.currency}${Math.round(r.target)}` : <span className="text-text-muted">--</span>}
+                {r.target != null ? (
+                  <span
+                    title={r.consensusSource === 'tushare' ? '来源：Tushare 卖方一致预期' : undefined}
+                  >
+                    {r.currency}{Math.round(r.target)}
+                    {r.consensusSource === 'tushare' && (
+                      <sup className="ml-0.5 text-[9px] font-normal text-text-dim">tushare</sup>
+                    )}
+                  </span>
+                ) : (
+                  <span className="text-text-muted">--</span>
+                )}
               </td>
               <td className="px-3 py-2.5"><ValuationCell price={r.price} range={r.range} currency={r.currency} /></td>
               <td className="px-3 py-2.5 text-[11px] text-text-dim">{r.group}</td>
