@@ -54,3 +54,7 @@ config/watchlist.local.yml
 /release/
 /reports/
 .superpowers/
+
+# Playwright
+playwright-report/
+test-results/
