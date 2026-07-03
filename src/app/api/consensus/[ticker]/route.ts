@@ -14,10 +14,12 @@ interface Ctx { params: Promise<{ ticker: string }> }
  *
  * Broker consensus target price, with graceful degradation:
  *   1. A-share + TUSHARE_TOKEN configured → report_rc (real broker research)
- *   2. Otherwise (non-A-share, no token, or Tushare error) → mock broker_reports
- *      (same data already used by WatchlistTable/FocusPanel) via deriveTargetPrice
- *      / deriveValuationRange, reshaped to the same { target_median, target_min,
+ *   2. Otherwise (non-A-share, no token, Tushare error, or tushare returned no
+ *      usable reports) → mock broker_reports via deriveTargetPrice /
+ *      deriveValuationRange, reshaped to the same { target_median, target_min,
  *      target_max, n } shape so callers don't need to branch on source.
+ *      (Consumed today by WatchlistTable only; stock detail page still reads
+ *      mock broker_reports directly — wiring it is a tracked follow-up.)
  *   3. No usable data anywhere → { source: 'none', consensus: null }
  */
 export async function GET(_req: Request, { params }: Ctx) {
@@ -29,7 +31,10 @@ export async function GET(_req: Request, { params }: Ctx) {
     try {
       const reports = await fetchTushareReportRc(ticker);
       const consensus = deriveConsensus(reports);
-      return NextResponse.json({ source: 'tushare', ticker, consensus });
+      // Zero usable reports (no broker coverage) → try the mock fallback below.
+      if (consensus !== null) {
+        return NextResponse.json({ source: 'tushare', ticker, consensus });
+      }
     } catch (e: any) {
       if (!(e instanceof TushareError)) {
         return NextResponse.json(
