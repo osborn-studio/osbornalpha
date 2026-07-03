@@ -62,6 +62,10 @@ export async function POST(req: Request) {
     switch (event.type) {
       case 'checkout.session.completed': {
         const session = event.data.object as Stripe.Checkout.Session;
+        // Trust boundary: this user_id is trusted because forging a session
+        // with arbitrary metadata requires possession of STRIPE_SECRET_KEY
+        // (= account compromise); the signature check above already proved
+        // the event came from Stripe. Acceptable.
         const userId = session.metadata?.user_id || session.client_reference_id;
         if (!userId) {
           console.warn('checkout.session.completed with no user_id metadata; skipping', session.id);
@@ -97,6 +101,27 @@ export async function POST(req: Request) {
     }
   } catch (err) {
     console.warn('Stripe webhook handler error:', err instanceof Error ? err.message : err);
+    // The dedup row was inserted BEFORE dispatch (extendPass stacking makes
+    // replay-after-partial-apply dangerous the other way), so on a dispatch
+    // failure we must clear it — otherwise Stripe's retry of this same event
+    // would hit the 23505 dedup path, return 200 'duplicate', and the paid
+    // upgrade would be permanently lost while Stripe believes it succeeded.
+    try {
+      const { error: delErr } = await (admin as any)
+        .from('stripe_events')
+        .delete()
+        .eq('id', event.id);
+      if (delErr) throw new Error(delErr.message);
+    } catch (delErr) {
+      // Both the dispatch AND the cleanup failed: the retry will now be
+      // swallowed as a duplicate. Log loudly with the event id so the grant
+      // can be applied manually (Stripe Dashboard has the full event).
+      console.error(
+        `Stripe webhook CRITICAL: dispatch failed AND dedup-row cleanup failed for event ${event.id} — ` +
+        'retries will be treated as duplicates; apply this event manually.',
+        delErr instanceof Error ? delErr.message : delErr
+      );
+    }
     return NextResponse.json({ error: 'handler error' }, { status: 500 });
   }
 

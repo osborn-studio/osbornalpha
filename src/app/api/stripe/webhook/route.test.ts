@@ -32,7 +32,8 @@ function fakeEventPayload(overrides: Record<string, unknown> = {}) {
 }
 
 // Chainable Supabase query-builder mock: .from().select().eq().maybeSingle() /
-// .from().insert() / .from().update().eq() — configurable per test.
+// .from().insert() / .from().update().eq() / .from().delete().eq() —
+// configurable per test.
 function makeAdminMock(opts: {
   insertEventResult?: { error: any };
   profile?: { plan: string | null; plan_expires_at: string | null } | null;
@@ -43,6 +44,9 @@ function makeAdminMock(opts: {
 
   const insert = vi.fn().mockResolvedValue(opts.insertEventResult ?? { error: null });
 
+  const deleteEq = vi.fn().mockResolvedValue({ error: null });
+  const del = vi.fn().mockReturnValue({ eq: deleteEq });
+
   const maybeSingle = vi.fn().mockResolvedValue({
     data: opts.profileByCustomer !== undefined ? opts.profileByCustomer : opts.profile ?? null,
     error: null,
@@ -50,8 +54,8 @@ function makeAdminMock(opts: {
   const eq = vi.fn().mockReturnValue({ maybeSingle });
   const select = vi.fn().mockReturnValue({ eq });
 
-  const from = vi.fn().mockReturnValue({ insert, update, select });
-  return { from, __update: update, __updateEq: updateEq, __insert: insert };
+  const from = vi.fn().mockReturnValue({ insert, update, select, delete: del });
+  return { from, __update: update, __updateEq: updateEq, __insert: insert, __delete: del, __deleteEq: deleteEq };
 }
 
 beforeEach(() => {
@@ -149,5 +153,47 @@ describe('POST /api/stripe/webhook', () => {
     const res = await POST(signedRequest(payload));
     expect(res.status).toBe(200);
     expect(admin.__update).toHaveBeenCalledWith(expect.objectContaining({ plan: 'pro', plan_expires_at: future }));
+  });
+
+  // Regression: dedup-vs-retry trap. The dedup row is inserted BEFORE dispatch;
+  // if dispatch then fails, the row must be cleared before returning 500 —
+  // otherwise Stripe's retry of the same event.id would hit the 23505 dedup
+  // path, get 200 'duplicate', and the paid upgrade would be permanently lost.
+  it('clears the dedup row and returns 500 when the profile write fails after dedup insert', async () => {
+    const admin = makeAdminMock({ profile: { plan: 'free', plan_expires_at: null } });
+    // Dedup insert succeeds, but the profile update fails (e.g. transient DB error).
+    admin.__updateEq.mockResolvedValueOnce({ error: { message: 'db write failed' } });
+    vi.mocked(getAdminSupabase).mockReturnValue(admin as any);
+
+    const res = await POST(signedRequest(fakeEventPayload()));
+    expect(res.status).toBe(500);
+
+    // The stripe_events dedup row must have been deleted for this event id
+    // so that Stripe's retry is NOT swallowed as a duplicate.
+    expect(admin.__delete).toHaveBeenCalled();
+    expect(admin.__deleteEq).toHaveBeenCalledWith('id', 'evt_test_1');
+  });
+
+  it('applies the grant on Stripe retry after a failed first attempt (dedup row was cleared)', async () => {
+    const admin = makeAdminMock({ profile: { plan: 'free', plan_expires_at: null } });
+    // First attempt: profile update fails; subsequent calls succeed (default).
+    admin.__updateEq.mockResolvedValueOnce({ error: { message: 'db write failed' } });
+    vi.mocked(getAdminSupabase).mockReturnValue(admin as any);
+
+    const payload = fakeEventPayload();
+
+    // Attempt 1: dispatch fails → 500, dedup row cleared.
+    const first = await POST(signedRequest(payload));
+    expect(first.status).toBe(500);
+    expect(admin.__deleteEq).toHaveBeenCalledWith('id', 'evt_test_1');
+
+    // Attempt 2 (Stripe retry): dedup insert succeeds again (row was deleted),
+    // dispatch succeeds, grant applied.
+    const second = await POST(signedRequest(payload));
+    expect(second.status).toBe(200);
+    const body = await second.json();
+    expect(body.duplicate).toBeUndefined();
+    expect(admin.__update).toHaveBeenLastCalledWith(expect.objectContaining({ plan: 'pro' }));
+    expect(admin.__updateEq).toHaveBeenLastCalledWith('id', 'u1');
   });
 });
