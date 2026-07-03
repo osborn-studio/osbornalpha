@@ -132,6 +132,11 @@ export function LlmSettings() {
       </div>
 
       {testResult && <div className="text-xs text-text-dim">{testResult}</div>}
+
+      <p className="text-[11px] leading-relaxed text-text-muted">
+        此配置作用于 Copilot、个股 AI 观点与 DCF 假设填充等需要登录的 AI 功能；
+        每日简报/雷达推送为定时任务，使用平台统一模型。未配置时全部功能回落平台默认。
+      </p>
     </div>
   );
 }

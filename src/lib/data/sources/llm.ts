@@ -40,7 +40,8 @@ export interface UnifiedChatOpts {
 }
 
 export interface UnifiedChatResp {
-  provider: LLMProvider;
+  /** Legacy env providers, or any user-configured provider id (ark/kimi/openai/…). */
+  provider: LLMProvider | string;
   model: string;
   content: string;
   usage: { input_tokens: number; output_tokens: number };
@@ -61,7 +62,59 @@ function estimateCost(model: string, usage: { input_tokens: number; output_token
   return (usage.input_tokens / 1e6) * p.in + (usage.output_tokens / 1e6) * p.out;
 }
 
+/**
+ * Per-user override (W2-fix): when called inside an authenticated request,
+ * the user's 设置→AI 模型 config (llm_settings) takes precedence over the
+ * platform env. Crons and signed-out contexts resolve to no user and fall
+ * through to the legacy env router below. Dynamic imports keep next/headers
+ * out of the module graph for unit tests.
+ */
+async function tryUserResolvedChat(opts: UnifiedChatOpts): Promise<UnifiedChatResp | null> {
+  try {
+    const { resolveLlm } = await import('@/lib/llm/resolve');
+    const resolved = await resolveLlm();
+    if (!resolved) return null;
+    const cfg = { baseUrl: resolved.baseUrl, apiKey: resolved.apiKey, model: resolved.model, chatPath: resolved.chatPath };
+    if (resolved.protocol === 'anthropic') {
+      const { anthropicChat: compatChat } = await import('@/lib/llm/anthropic-compat');
+      const r = await compatChat(cfg, {
+        system: opts.system,
+        messages: opts.messages,
+        max_tokens: opts.max_tokens,
+        timeoutMs: opts.timeoutMs,
+      });
+      return {
+        provider: resolved.provider,
+        model: resolved.model,
+        content: r.content,
+        usage: { input_tokens: 0, output_tokens: 0 },
+        est_cost_usd: 0,
+      };
+    }
+    const { chat: compatChat } = await import('@/lib/llm/openai-compat');
+    const r = await compatChat(cfg, {
+      system: opts.system,
+      messages: opts.messages,
+      max_tokens: opts.max_tokens,
+      temperature: opts.temperature,
+      timeoutMs: opts.timeoutMs,
+    });
+    return {
+      provider: resolved.provider,
+      model: resolved.model,
+      content: r.content,
+      usage: r.usage,
+      est_cost_usd: Number(estimateCost(resolved.model, r.usage).toFixed(5)),
+    };
+  } catch {
+    return null; // any resolution/override failure → legacy env path
+  }
+}
+
 export async function chat(opts: UnifiedChatOpts): Promise<UnifiedChatResp> {
+  const userResolved = await tryUserResolvedChat(opts);
+  if (userResolved) return userResolved;
+
   const provider = getActiveProvider();
   if (provider === 'none') throw new Error('No LLM provider configured (set DEEPSEEK_API_KEY or ANTHROPIC_API_KEY)');
 
