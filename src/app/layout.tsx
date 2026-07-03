@@ -4,11 +4,9 @@ import { GeistMono } from 'geist/font/mono';
 import './globals.css';
 import { ToastProvider } from '@/components/Toast';
 
-// Geist (sans) + Geist Mono — loaded for v2 design per DESIGN.md §3.
-// Self-hosted via the `geist` package (Vercel's preferred path). CSS vars
-// --font-geist-sans / --font-geist-mono are emitted on <html>, picked up
-// conditionally by globals.css under [data-design="v2"]. V1 users pay
-// only the static-asset cost; the font file is cached.
+// Geist (sans) + Geist Mono, per DESIGN.md §3. Self-hosted via the `geist`
+// package (Vercel's preferred path). CSS vars --font-geist-sans /
+// --font-geist-mono are emitted on <html> and consumed in globals.css.
 
 export const metadata: Metadata = {
   title: { default: 'osbornalpha · AI 投资监控工作台', template: '%s · osbornalpha' },
@@ -37,8 +35,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       suppressHydrationWarning
     >
       <head>
-        {/* Pre-hydration theme + design-flag — runs BEFORE first paint so
-            we get no FOUC. Reads ?design=v2 OR localStorage 'design'. */}
+        {/* Pre-hydration theme — runs BEFORE first paint so we get no FOUC. */}
         <script
           dangerouslySetInnerHTML={{
             __html: `
@@ -49,15 +46,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 doc.setAttribute('data-color-scheme', s);
                 doc.classList.remove('theme-dark', 'theme-light');
                 doc.classList.add('theme-' + t);
-
-                // Design version: query param wins (and persists), else stored, else v1.
-                var qp = new URLSearchParams(window.location.search).get('design');
-                if (qp === 'v2' || qp === 'v1') {
-                  localStorage.setItem('design', qp);
-                }
-                var d = localStorage.getItem('design');
-                if (d === 'v2') doc.setAttribute('data-design', 'v2');
-                else doc.removeAttribute('data-design');
               } catch (e) {}
             `,
           }}

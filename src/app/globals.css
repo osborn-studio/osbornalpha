@@ -3,34 +3,11 @@
 @tailwind utilities;
 
 /* ────────────────────────────────────────────────────────────────────────
- * V1 (default) — preserved as-is so all current users see no visual change
- * V2 (Stitch redesign) — opt-in via [data-design="v2"] on <html>
- *   Flag wiring lives in src/app/layout.tsx (reads ?design=v2 query +
- *   localStorage to persist across pages).
- * Per DESIGN.md migration plan: tokens first (globals.css), components next.
+ * Theme tokens — "quiet-luxury trader terminal" (Stitch redesign, DESIGN.md)
  * ──────────────────────────────────────────────────────────────────────── */
 
 :root,
 :root.theme-dark {
-  --bg: #0d1117;
-  --bg-elevated: #161b22;
-  --bg-card: #1c2128;
-  --border: #30363d;
-  --text: #e6edf3;
-  --text-dim: #8b949e;
-  --text-muted: #6e7681;
-  --accent: #58a6ff;
-  --accent-dim: #1f6feb;
-  --warn: #f59e0b;
-  --bullish: #ef4444;
-  --neutral: #f59e0b;
-  --bearish: #10b981;
-  --shadow: 0 4px 16px rgba(0,0,0,0.4);
-}
-
-/* ─── V2 dark — DESIGN.md "quiet-luxury trader terminal" ─── */
-:root[data-design="v2"].theme-dark,
-:root[data-design="v2"]:not(.theme-light) {
   --bg: #0a0a0b;                              /* Ink Charcoal */
   --bg-elevated: #141417;                     /* Elevated Charcoal */
   --bg-card: #1c1c20;                         /* Card Pewter */
@@ -50,8 +27,8 @@
   --shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 4px 12px rgba(0,0,0,0.3);
 }
 
-/* ─── V2 light — quieter paper-cream surfaces ─── */
-:root[data-design="v2"].theme-light {
+/* ─── Light theme — quieter paper-cream surfaces ─── */
+:root.theme-light {
   --bg: #fafaf9;
   --bg-elevated: #f5f5f4;
   --bg-card: #ffffff;
@@ -71,41 +48,18 @@
   --shadow: 0 1px 3px rgba(0,0,0,0.05);
 }
 
-/* Color scheme: CN (red up, green down) — default */
+/* Color scheme: CN (red up, green down) — default. Sharpened to the
+ * Pulse Red / Pulse Green palette. */
 :root,
 :root[data-color-scheme="cn"] {
-  --up: #ef4444;
-  --down: #10b981;
+  --up: #e11d48;
+  --down: #16a34a;
 }
 
 /* US (green up, red down) */
 :root[data-color-scheme="us"] {
-  --up: #10b981;
-  --down: #ef4444;
-}
-
-/* V2 sharpens the up/down to its Pulse Red / Pulse Green */
-:root[data-design="v2"][data-color-scheme="cn"] {
-  --up: #e11d48;
-  --down: #16a34a;
-}
-:root[data-design="v2"][data-color-scheme="us"] {
   --up: #16a34a;
   --down: #e11d48;
-}
-
-/* V1 Light theme (unchanged for non-v2 users) */
-:root.theme-light:not([data-design="v2"]) {
-  --bg: #ffffff;
-  --bg-elevated: #f6f8fa;
-  --bg-card: #f0f3f6;
-  --border: #d0d7de;
-  --text: #1f2328;
-  --text-dim: #656d76;
-  --text-muted: #8c959f;
-  --accent: #0969da;
-  --accent-dim: #0550ae;
-  --shadow: 0 2px 8px rgba(0,0,0,0.08);
 }
 
 * { box-sizing: border-box; }
@@ -116,30 +70,26 @@ html, body {
   min-height: 100vh;
 }
 
+/* Geist + CJK fallback, per DESIGN.md §3. The CSS vars
+ * --font-geist-sans / --font-geist-mono are injected by next/font
+ * in src/app/layout.tsx. */
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
-               "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-family: var(--font-geist-sans, -apple-system), "PingFang SC",
+               "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
   font-size: 14px;
   line-height: 1.5;
   padding-bottom: 60px;
 }
 
-/* V2: Geist + CJK fallback, per DESIGN.md §3. The CSS vars
- * --font-geist-sans / --font-geist-mono are injected by next/font
- * in src/app/layout.tsx. */
-:root[data-design="v2"] body {
-  font-family: var(--font-geist-sans, -apple-system), "PingFang SC",
-               "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
-}
-:root[data-design="v2"] {
+:root {
   --font-mono: var(--font-geist-mono, ui-monospace), "SF Mono", Menlo, monospace;
 }
-:root[data-design="v2"] .tabular,
-:root[data-design="v2"] .num,
-:root[data-design="v2"] .tabular-nums,
-:root[data-design="v2"] code,
-:root[data-design="v2"] pre,
-:root[data-design="v2"] kbd {
+.tabular,
+.num,
+.tabular-nums,
+code,
+pre,
+kbd {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
@@ -149,18 +99,10 @@ body {
 .bg-up { background-color: var(--up); }
 .bg-down { background-color: var(--down); }
 
-/* Reusable card styles */
+/* Reusable card styles — tighter radius, denser feel per DESIGN.md §4 "Cards" */
 .card-base {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 16px;
-  margin-bottom: 16px;
-}
-
-/* V2: tighter radius, denser feel per DESIGN.md §4 "Cards" */
-:root[data-design="v2"] .card-base {
   background: var(--bg-card);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px;
   margin-bottom: 12px;
@@ -176,10 +118,8 @@ input, select {
   outline: none;
   font-family: inherit;
 }
-input:focus { border-color: var(--accent); }
-
-:root[data-design="v2"] input:focus,
-:root[data-design="v2"] select:focus {
+input:focus,
+select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-wash);
 }
@@ -201,7 +141,7 @@ table { font-variant-numeric: tabular-nums; }
  * Reading tier = defaults on :root. Any container with
  * [data-density="data"] switches to the compact numeric tier.
  * Components consume ONLY these five vars for density-aware
- * spacing/typography; colors keep using the V1/V2 vars above.
+ * spacing/typography; colors keep using the theme vars above.
  * ============================================================ */
 :root {
   --panel-pad: 16px;
