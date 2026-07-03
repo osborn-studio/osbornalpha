@@ -8,6 +8,8 @@ import {
   fetchTushareIncome,
 } from '@/lib/data/sources/tushare-cached';
 import { PERSONAS, buildUserMessage, type StockContext, type PerspectiveResult } from '@/lib/data/personas';
+import { resolveLlm } from '@/lib/llm/resolve';
+import { checkQuota, recordUsage } from '@/lib/billing/quota';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 86400;
@@ -27,6 +29,33 @@ export async function GET(req: Request, { params }: Ctx) {
       ticker,
       error: 'No LLM provider configured — set DEEPSEEK_API_KEY (preferred) or ANTHROPIC_API_KEY in Vercel env vars',
       perspectives: [],
+    }, { status: 200 });
+  }
+
+  // BYO-key calls (user's own provider config) run unmetered; the shared
+  // platform key is subject to the daily quota. Same fail-open rationale as
+  // the copilot route: checkQuota() throws when signed out (this route has
+  // no separate auth gate), so an auth failure here degrades to "unmetered"
+  // rather than breaking the endpoint.
+  const llm = await resolveLlm();
+  const byo = llm?.source === 'user';
+  let quota: Awaited<ReturnType<typeof checkQuota>> | null = null;
+  if (!byo) {
+    try {
+      quota = await checkQuota('perspectives');
+    } catch {
+      quota = null;
+    }
+  }
+  if (quota && !quota.allowed) {
+    // Field names mirror the no-key degradation shape above so the client
+    // can share one "no perspectives, here's why" rendering path.
+    return NextResponse.json({
+      source: 'quota',
+      ticker,
+      error: '今日平台额度已用完',
+      perspectives: [],
+      quota: { used: quota.used, limit: quota.limit, plan: quota.plan },
     }, { status: 200 });
   }
 
@@ -136,6 +165,13 @@ export async function GET(req: Request, { params }: Ctx) {
   const failures = settled
     .map((s, i) => (s.status === 'rejected' ? { persona: enabled[i].id, err: (s.reason as any)?.message || String(s.reason) } : null))
     .filter(Boolean);
+
+  await recordUsage('perspectives', {
+    ticker,
+    tokensIn: totalInputTokens,
+    tokensOut: totalOutputTokens,
+    byo,
+  });
 
   return NextResponse.json({
     source: `${provider}+eastmoney` + (isA && isTushareConfigured() ? '+tushare' : ''),

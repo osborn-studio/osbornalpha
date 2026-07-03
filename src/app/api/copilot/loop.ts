@@ -9,7 +9,7 @@ export type CopilotEvent =
   | { type: 'tool_result'; name: string; ok: boolean; summary: string }
   | { type: 'verdict'; data: any }
   | { type: 'done' }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string; quota?: { used: number; limit: number; plan: string } };
 
 /** One model turn in OpenAI shape (from openai-compat toolChat). */
 export interface ModelTurn {
