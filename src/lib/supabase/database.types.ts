@@ -1,5 +1,6 @@
 // Auto-generated style types matching supabase/migrations/20260515000000_initial_schema.sql
 // + 20260702090000_decision_layer.sql (decisions/trades/positions/decision_reviews/artifacts)
+// + 20260703090000_usage_events.sql (usage_events)
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US';
@@ -217,6 +218,19 @@ export interface Artifact {
   created_at: string;
 }
 
+export type UsageFeature = 'copilot' | 'perspectives' | 'brief_preview';
+
+export interface UsageEvent {
+  id: string;
+  user_id: string;
+  feature: UsageFeature;
+  ticker: string | null;
+  tokens_in: number;
+  tokens_out: number;
+  byo: boolean;
+  created_at: string;
+}
+
 export type Database = {
   public: {
     Tables: {
@@ -236,6 +250,7 @@ export type Database = {
       positions: { Row: Position; Insert: Partial<Position>; Update: Partial<Position> };
       decision_reviews: { Row: DecisionReview; Insert: Partial<DecisionReview>; Update: Partial<DecisionReview> };
       artifacts: { Row: Artifact; Insert: Partial<Artifact>; Update: Partial<Artifact> };
+      usage_events: { Row: UsageEvent; Insert: Partial<UsageEvent>; Update: Partial<UsageEvent> };
     };
   };
 };

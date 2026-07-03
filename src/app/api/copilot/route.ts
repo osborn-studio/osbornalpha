@@ -6,6 +6,7 @@ import { TOOLS_BY_NAME, OPENAI_TOOL_DEFS } from '@/lib/agent/tools';
 import { JOHN_CAMERON_5STEP } from '@/lib/agent/methods/john-cameron-5step';
 import { AGENT_METHODS } from '@/lib/agent/methods/registry';
 import { createArtifact } from '@/lib/portfolio/artifacts-store';
+import { checkQuota, recordUsage, type QuotaResult } from '@/lib/billing/quota';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -27,6 +28,26 @@ export async function POST(req: Request) {
 
   // Resolve the user's (or env) LLM provider config.
   const llm = await resolveLlm();
+  const byo = llm?.source === 'user';
+
+  // Non-BYO calls are subject to the daily platform quota. This route is
+  // public in middleware, so 'not authenticated' from checkQuota() fails
+  // CLOSED — anonymous callers get no platform-key budget (fail-open would
+  // let bare curl burn the platform key unmetered). Other failures
+  // (transient DB) fail open: quota is cost protection, not a 500 excuse.
+  let quota: QuotaResult | null = null;
+  if (!byo) {
+    try {
+      quota = await checkQuota('copilot');
+    } catch (e) {
+      if ((e as Error).message === 'not authenticated') {
+        return new Response(JSON.stringify({ error: 'not authenticated' }), {
+          status: 401, headers: { 'content-type': 'application/json' },
+        });
+      }
+      quota = null;
+    }
+  }
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -36,6 +57,20 @@ export async function POST(req: Request) {
 
       if (!llm) {
         send({ type: 'error', message: '未配置 AI Provider。请在「设置 → AI 模型」中选择提供商并填入 API Key。' });
+        send({ type: 'done' });
+        controller.close();
+        return;
+      }
+
+      if (quota && !quota.allowed) {
+        // Backward-compatible shape: `message` is always present (old clients
+        // still render the red-text error), `quota` is additive (new clients
+        // detect it and render the QuotaNotice upgrade card instead).
+        send({
+          type: 'error',
+          message: '今日平台额度已用完',
+          quota: { used: quota.used, limit: quota.limit, plan: quota.plan },
+        });
         send({ type: 'done' });
         controller.close();
         return;
@@ -64,6 +99,12 @@ export async function POST(req: Request) {
           return tool.handler(args, { origin });
         },
       });
+
+      // Best-effort ledger entry — tokens aren't surfaced through the tool-call
+      // loop today, so tokensIn/tokensOut are recorded as 0 (spec-accepted:
+      // usage_events is a count-based quota ledger first, token audit second).
+      // recordUsage() never throws (see quota.ts) so this can't break the stream.
+      await recordUsage('copilot', { ticker: ticker || undefined, byo });
 
       if (resolvedMethod.archive && archivedText.length > MIN_ARCHIVE_CHARS) {
         try {

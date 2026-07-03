@@ -15,6 +15,10 @@ import type { LlmConfig } from './openai-compat';
 export interface ResolvedLlm extends LlmConfig {
   provider: string;
   protocol: 'openai' | 'anthropic';
+  // 'user' = the caller's own API key (BYO) — billing must never quota-gate
+  // or count these calls against the platform's free/pro limits.
+  // 'env' = the platform's shared key — subject to quota.
+  source: 'user' | 'env';
 }
 
 const ENV_KEY: Record<string, string> = {
@@ -45,6 +49,7 @@ export async function resolveLlm(): Promise<ResolvedLlm | null> {
           apiKey,
           chatPath: def.chatPath,
           protocol: def.protocol,
+          source: 'user',
         };
       }
     }
@@ -62,6 +67,7 @@ export async function resolveLlm(): Promise<ResolvedLlm | null> {
       apiKey: key,
       chatPath: def.chatPath,
       protocol: def.protocol,
+      source: 'env',
     };
   }
 

@@ -285,11 +285,13 @@ export interface PerspectivesState {
   meta: any;
   loading: boolean;
   error: string | null;
+  /** Present when source === 'quota' (daily platform quota exhausted) — render <QuotaNotice {...quota} />. */
+  quota: { used: number; limit: number; plan: string } | null;
 }
 
 export function usePerspectives(ticker: string | null, autoLoad = false): PerspectivesState & { refetch: () => void } {
   const [state, setState] = useState<PerspectivesState>({
-    perspectives: [], source: null, meta: null, loading: false, error: null,
+    perspectives: [], source: null, meta: null, loading: false, error: null, quota: null,
   });
 
   const fetcher = (t: string) => {
@@ -305,18 +307,19 @@ export function usePerspectives(ticker: string | null, autoLoad = false): Perspe
           meta: data.meta,
           loading: false,
           error: data.error || null,
+          quota: data.quota || null,
         });
       })
       .catch((err: any) => {
         if (cancelled) return;
-        setState({ perspectives: [], source: null, meta: null, loading: false, error: err?.message });
+        setState({ perspectives: [], source: null, meta: null, loading: false, error: err?.message, quota: null });
       });
     return () => { cancelled = true; };
   };
 
   useEffect(() => {
     if (!ticker || !autoLoad) {
-      setState({ perspectives: [], source: null, meta: null, loading: false, error: null });
+      setState({ perspectives: [], source: null, meta: null, loading: false, error: null, quota: null });
       return;
     }
     return fetcher(ticker);

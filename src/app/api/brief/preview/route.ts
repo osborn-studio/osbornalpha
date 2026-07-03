@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { generateDailyBrief, DEFAULT_WATCHLIST } from '@/lib/brief/composer';
+import { resolveLlm } from '@/lib/llm/resolve';
+import { checkQuota, recordUsage } from '@/lib/billing/quota';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -22,8 +24,38 @@ export async function GET(req: Request) {
     ? watchlistParam.split(',').map((s) => s.trim()).filter(Boolean)
     : DEFAULT_WATCHLIST;
 
+  // Quota rules:
+  //  - skipLLM=true costs nothing (composition only) → never metered, never
+  //    blocked (BriefGlance on /today uses this).
+  //  - BYO-key calls run unmetered (user pays their own bill).
+  //  - Anonymous callers get NO platform-key budget: this route is public in
+  //    middleware, so 'not authenticated' from checkQuota fails CLOSED (401)
+  //    — fail-open here would let bare curl burn the platform key unmetered.
+  //    Other checkQuota failures (e.g. transient DB) fail open.
+  const llm = await resolveLlm();
+  const byo = llm?.source === 'user';
+  const metered = !skipLLM && !byo;
+  let quota: Awaited<ReturnType<typeof checkQuota>> | null = null;
+  if (metered) {
+    try {
+      quota = await checkQuota('brief_preview');
+    } catch (e) {
+      if ((e as Error).message === 'not authenticated') {
+        return NextResponse.json({ error: 'not authenticated' }, { status: 401 });
+      }
+      quota = null;
+    }
+  }
+  if (quota && !quota.allowed) {
+    return NextResponse.json({
+      error: '今日平台额度已用完',
+      quota: { used: quota.used, limit: quota.limit, plan: quota.plan },
+    }, { status: 429 });
+  }
+
   try {
     const brief = await generateDailyBrief(watchlist, { topN, skipLLM });
+    if (metered) await recordUsage('brief_preview', { byo });
     if (format === 'markdown' || format === 'md') {
       return new NextResponse(brief.markdown, {
         headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
