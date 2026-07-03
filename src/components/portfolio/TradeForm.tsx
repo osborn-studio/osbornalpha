@@ -16,6 +16,7 @@ export function TradeForm({ ticker, currentPrice, openDecision, onDone }: {
   const [price, setPrice] = useState('');
   const [quantity, setQuantity] = useState('');
   const [fee, setFee] = useState('');
+  const [executedAt, setExecutedAt] = useState(''); // datetime-local; empty = now
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -32,6 +33,8 @@ export function TradeForm({ ticker, currentPrice, openDecision, onDone }: {
         ticker, direction, price: Number(price), quantity: Number(quantity),
         fee: fee ? Number(fee) : 0,
         decision_id: openDecision?.id,
+        // datetime-local has no timezone — toISOString() pins it to the user's local clock.
+        executed_at: executedAt ? new Date(executedAt).toISOString() : undefined,
       });
       setShow(false); setQuantity(''); setFee('');
       onDone();
@@ -62,6 +65,10 @@ export function TradeForm({ ticker, currentPrice, openDecision, onDone }: {
           <label className="flex flex-col gap-0.5">费用
             <input value={fee} onChange={(e) => setFee(e.target.value)} inputMode="decimal" placeholder="0"
               className="w-20 rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1" />
+          </label>
+          <label className="flex flex-col gap-0.5">成交时间（默认现在）
+            <input type="datetime-local" value={executedAt} onChange={(e) => setExecutedAt(e.target.value)}
+              className="rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1" />
           </label>
           <Button size="sm" onClick={submit} disabled={busy || !price || !quantity}>{busy ? '提交中…' : '确认成交'}</Button>
           <Button size="sm" variant="ghost" onClick={() => setShow(false)}>取消</Button>

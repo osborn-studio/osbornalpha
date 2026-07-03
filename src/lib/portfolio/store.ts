@@ -114,12 +114,43 @@ export async function createTrade(input: TradeInput): Promise<Trade> {
   return trade;
 }
 
+export async function deleteTrade(id: string): Promise<void> {
+  const { supabase, userId } = await requireUser();
+  const { data: t, error: getErr } = await supabase
+    .from('trades').select('*').eq('id', id).eq('user_id', userId).single();
+  if (getErr || !t) throw new Error('trade not found');
+  const trade = coerceTradeRow(t as Record<string, unknown>);
+
+  // Pre-check: removing this trade must leave a valid history (deleting a buy
+  // that funds a later sell would make the remainder oversold) — throws before
+  // any write so the caller can 400 cleanly.
+  const { data: history, error: hErr } = await supabase
+    .from('trades').select('*').eq('user_id', userId).eq('ticker', trade.ticker);
+  if (hErr) throw new Error(hErr.message);
+  const remaining = ((history ?? []) as Record<string, unknown>[])
+    .map(coerceTradeRow)
+    .filter((x) => x.id !== id);
+  computePositions(remaining); // throws on oversell
+
+  const { error: delErr } = await (supabase as any)
+    .from('trades').delete().eq('id', id).eq('user_id', userId);
+  if (delErr) throw new Error(delErr.message);
+  await recalcPositions(trade.ticker);
+}
+
 export async function recalcPositions(ticker: string): Promise<void> {
   const { supabase, userId } = await requireUser();
   const { data, error } = await supabase.from('trades').select('*').eq('user_id', userId).eq('ticker', ticker);
   if (error) throw new Error(error.message);
   const [pos] = computePositions(((data ?? []) as Record<string, unknown>[]).map(coerceTradeRow));
-  if (!pos) return;
+  if (!pos) {
+    // No trades left for this ticker (e.g. last one deleted) — drop the stale
+    // derived row instead of leaving a ghost position behind.
+    const { error: rmErr } = await (supabase as any)
+      .from('positions').delete().eq('user_id', userId).eq('ticker', ticker);
+    if (rmErr) throw new Error(rmErr.message);
+    return;
+  }
   const row: Position = {
     user_id: userId,
     ticker,
