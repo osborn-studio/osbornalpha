@@ -52,10 +52,14 @@ export async function PUT(req: Request) {
   if (!Array.isArray(body.groups)) {
     return NextResponse.json({ error: 'groups array required' }, { status: 400 });
   }
-  // Reuse the salvage parser for shape/normalization; explicit [] means wipe.
-  const groups = body.groups.length === 0
-    ? []
-    : parseWatchlistGroups(JSON.stringify(body.groups)) ?? [];
+  // Reuse the salvage parser for shape/normalization; explicit [] means wipe,
+  // but a non-empty payload that parses to nothing is malformed — reject it
+  // rather than misreading it as a wipe request.
+  const parsed = body.groups.length === 0 ? [] : parseWatchlistGroups(JSON.stringify(body.groups));
+  if (parsed === null) {
+    return NextResponse.json({ error: 'groups payload malformed' }, { status: 400 });
+  }
+  const groups = parsed;
 
   try {
     const current = await loadRows(sb);
