@@ -33,17 +33,19 @@ export async function GET(req: Request, { params }: Ctx) {
   }
 
   // BYO-key calls (user's own provider config) run unmetered; the shared
-  // platform key is subject to the daily quota. Same fail-open rationale as
-  // the copilot route: checkQuota() throws when signed out (this route has
-  // no separate auth gate), so an auth failure here degrades to "unmetered"
-  // rather than breaking the endpoint.
+  // platform key is subject to the daily quota. This route is public in
+  // middleware, so 'not authenticated' fails CLOSED (401) — anonymous callers
+  // get no platform-key budget. Other checkQuota failures fail open.
   const llm = await resolveLlm();
   const byo = llm?.source === 'user';
   let quota: Awaited<ReturnType<typeof checkQuota>> | null = null;
   if (!byo) {
     try {
       quota = await checkQuota('perspectives');
-    } catch {
+    } catch (e) {
+      if ((e as Error).message === 'not authenticated') {
+        return NextResponse.json({ error: 'not authenticated' }, { status: 401 });
+      }
       quota = null;
     }
   }

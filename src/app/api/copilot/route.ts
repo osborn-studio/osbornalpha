@@ -30,17 +30,21 @@ export async function POST(req: Request) {
   const llm = await resolveLlm();
   const byo = llm?.source === 'user';
 
-  // Non-BYO calls are subject to the daily platform quota. checkQuota() calls
-  // requireUser() internally and throws when signed out; this route (like the
-  // other AI routes) has no separate auth gate today, so treat that failure
-  // as "can't verify quota" and fail open rather than 500ing a legitimate
-  // guest/dev-mode request — quota-blocking is a UX nicety, not a security
-  // boundary (RLS on usage_events/profiles is the real boundary).
+  // Non-BYO calls are subject to the daily platform quota. This route is
+  // public in middleware, so 'not authenticated' from checkQuota() fails
+  // CLOSED — anonymous callers get no platform-key budget (fail-open would
+  // let bare curl burn the platform key unmetered). Other failures
+  // (transient DB) fail open: quota is cost protection, not a 500 excuse.
   let quota: QuotaResult | null = null;
   if (!byo) {
     try {
       quota = await checkQuota('copilot');
-    } catch {
+    } catch (e) {
+      if ((e as Error).message === 'not authenticated') {
+        return new Response(JSON.stringify({ error: 'not authenticated' }), {
+          status: 401, headers: { 'content-type': 'application/json' },
+        });
+      }
       quota = null;
     }
   }

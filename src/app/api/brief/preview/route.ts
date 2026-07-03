@@ -24,18 +24,25 @@ export async function GET(req: Request) {
     ? watchlistParam.split(',').map((s) => s.trim()).filter(Boolean)
     : DEFAULT_WATCHLIST;
 
-  // BYO-key calls run unmetered; the shared platform key is subject to the
-  // daily quota. Same fail-open rationale as the other two routes: this
-  // route has no separate auth gate, so an auth failure from checkQuota()
-  // degrades to "unmetered" rather than 500ing (e.g. BriefGlance's anonymous
-  // ?skipLLM=true preview call on /today should never break).
+  // Quota rules:
+  //  - skipLLM=true costs nothing (composition only) → never metered, never
+  //    blocked (BriefGlance on /today uses this).
+  //  - BYO-key calls run unmetered (user pays their own bill).
+  //  - Anonymous callers get NO platform-key budget: this route is public in
+  //    middleware, so 'not authenticated' from checkQuota fails CLOSED (401)
+  //    — fail-open here would let bare curl burn the platform key unmetered.
+  //    Other checkQuota failures (e.g. transient DB) fail open.
   const llm = await resolveLlm();
   const byo = llm?.source === 'user';
+  const metered = !skipLLM && !byo;
   let quota: Awaited<ReturnType<typeof checkQuota>> | null = null;
-  if (!byo) {
+  if (metered) {
     try {
       quota = await checkQuota('brief_preview');
-    } catch {
+    } catch (e) {
+      if ((e as Error).message === 'not authenticated') {
+        return NextResponse.json({ error: 'not authenticated' }, { status: 401 });
+      }
       quota = null;
     }
   }
@@ -48,7 +55,7 @@ export async function GET(req: Request) {
 
   try {
     const brief = await generateDailyBrief(watchlist, { topN, skipLLM });
-    await recordUsage('brief_preview', { byo });
+    if (metered) await recordUsage('brief_preview', { byo });
     if (format === 'markdown' || format === 'md') {
       return new NextResponse(brief.markdown, {
         headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
