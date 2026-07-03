@@ -9,13 +9,13 @@
 |---|---|
 | 渠道 | Stripe（用户已有 live 账户，跳过实体问题） |
 | 计费形态 | **双轨**：时长卡（单次 ¥68 / 30 天，支付宝/微信/卡）+ 信用卡自动订阅（¥68/月） |
-| 定价 | ¥68（CNY），首发值可改 |
+| 定价 | **双币种**：¥68 CNY + $9.9 USD（Stripe multi-currency price，Checkout 按买家地区自动选币；2026-07-03 全球化战略修订），首发值可改 |
 | 到期降级 | 惰性判定（effectivePlan 纯函数），零 cron |
 | 时长卡叠加 | 允许：`expires = max(now, 现有) + 30d` |
 
 ## 1. Stripe 商品（API 创建，非手动）
 
-Product `OsbornAlpha Pro`；Price A one-time ¥68 CNY（lookup_key `pass_30d`）、Price B recurring ¥68/月 CNY（lookup_key `sub_monthly`）。创建脚本一次性执行（curl 或 node 脚本），price id 写入 Vercel env `STRIPE_PRICE_PASS_30D` / `STRIPE_PRICE_SUB_MONTHLY`。
+Product `OsbornAlpha Pro`；Price A one-time（lookup_key `pass_30d`）与 Price B recurring 月付（lookup_key `sub_monthly`），**均为 multi-currency**：`currency: cny, unit_amount: 6800` + `currency_options.usd.unit_amount: 990`。Checkout 按买家可用支付方式/地区自动选币。创建脚本一次性执行，price id 写入 Vercel env `STRIPE_PRICE_PASS_30D` / `STRIPE_PRICE_SUB_MONTHLY`。
 
 ## 2. 数据模型
 
