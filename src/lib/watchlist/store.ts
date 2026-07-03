@@ -23,22 +23,26 @@ export function parseWatchlistGroups(raw: string | null): WatchlistGroup[] | nul
   const parsed = JSON.parse(raw);
   if (!Array.isArray(parsed)) return null;
 
+  // Salvage parsing: skip malformed entries instead of discarding the whole
+  // list — an all-or-nothing null here silently reset users to the mock
+  // defaults (the amplifier behind the "my watchlist disappeared" bug).
   const groups: WatchlistGroup[] = [];
   for (const item of parsed) {
-    if (!item || typeof item !== 'object') return null;
+    if (!item || typeof item !== 'object') continue;
     const id = typeof item.id === 'string' ? item.id.trim() : '';
     const name = typeof item.name === 'string' ? item.name.trim() : '';
+    if (!id || !name) continue;
     const rawTickers: unknown[] = Array.isArray(item.tickers) ? item.tickers : [];
     const tickers = rawTickers
           .filter((ticker: unknown): ticker is string => typeof ticker === 'string')
           .map((ticker) => ticker.trim().toUpperCase())
           .filter(Boolean)
 
-    if (!id || !name) return null;
     groups.push({ id, name, tickers: Array.from(new Set(tickers)) });
   }
 
-  return groups;
+  // Everything malformed → treat as no local data (caller falls back).
+  return groups.length ? groups : null;
 }
 
 export function readLocalWatchlist(): WatchlistGroup[] | null {
