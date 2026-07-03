@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { classifyMarket } from '@/lib/utils';
+import { QuotaNotice } from '@/components/QuotaNotice';
 
 const HISTORY_KEY = 'osbornalpha:copilot:history:v1';
 const HISTORY_MAX = 20;
@@ -30,6 +31,7 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
   const [calls, setCalls] = useState<ToolCall[]>([]);
   const [verdict, setVerdict] = useState<Verdict | null>(null);
   const [err, setErr] = useState('');
+  const [quota, setQuota] = useState<{ used: number; limit: number; plan: string } | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [adopting, setAdopting] = useState(false);
   const [adopted, setAdopted] = useState<string>('');
@@ -69,7 +71,7 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
 
   const run = useCallback(async (t: string, q?: string) => {
     if ((!t && !q) || running) return;
-    setRunning(true); setText(''); setCalls([]); setVerdict(null); setErr(''); setAdopted(''); setAdopting(false);
+    setRunning(true); setText(''); setCalls([]); setVerdict(null); setErr(''); setQuota(null); setAdopted(''); setAdopting(false);
     const resp = await fetch('/api/copilot', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ ticker: t || undefined, question: q, methodId }),
@@ -97,7 +99,7 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
           return u;
         });
         else if (e.type === 'verdict') { setVerdict(e.data); appendHistory(e.data); }
-        else if (e.type === 'error') setErr(e.message);
+        else if (e.type === 'error') { setErr(e.message); if (e.quota) setQuota(e.quota); }
       }
     }
     setRunning(false);
@@ -178,7 +180,7 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
         </button>
       </div>
 
-      {err && <div className="card-base text-sm text-down">⚠️ {err}</div>}
+      {err && (quota ? <QuotaNotice {...quota} /> : <div className="card-base text-sm text-down">⚠️ {err}</div>)}
 
       {(text || calls.length > 0) && (
         <div className="card-base">

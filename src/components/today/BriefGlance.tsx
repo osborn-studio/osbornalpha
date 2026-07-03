@@ -3,19 +3,26 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Panel, Tag } from '@/components/ui';
+import { QuotaNotice } from '@/components/QuotaNotice';
 import type { DailyBrief } from '@/lib/brief/composer';
 
 export function BriefGlance() {
   const [brief, setBrief] = useState<DailyBrief | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [quota, setQuota] = useState<{ used: number; limit: number; plan: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setQuota(null);
     fetch('/api/brief/preview?skipLLM=true')
-      .then((r) => {
+      .then(async (r) => {
+        if (r.status === 429) {
+          const body = await r.json().catch(() => ({}));
+          throw Object.assign(new Error(body?.error || '今日平台额度已用完'), { quota: body?.quota });
+        }
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
@@ -25,6 +32,7 @@ export function BriefGlance() {
       })
       .catch((e: any) => {
         if (cancelled) return;
+        if (e?.quota) setQuota(e.quota);
         setError(e?.message || '简报加载失败');
       })
       .finally(() => {
@@ -42,7 +50,8 @@ export function BriefGlance() {
           <div className="h-3 w-5/6 rounded bg-bg-card" />
         </div>
       )}
-      {!loading && error && (
+      {!loading && error && quota && <QuotaNotice {...quota} />}
+      {!loading && error && !quota && (
         <div className="py-2 text-xs text-down">⚠ {error}</div>
       )}
       {!loading && !error && brief && (
