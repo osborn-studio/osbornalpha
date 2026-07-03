@@ -5,7 +5,7 @@ import { createServerClient } from '@supabase/ssr';
  * Auth gate. The product is NOT publicly browsable — only the marketing landing
  * (`/`) and the auth pages are public; everything else requires a Supabase
  * session. Unauthenticated requests to protected paths are redirected to /login;
- * authenticated users hitting /login or /register are sent to /dashboard.
+ * authenticated users hitting /login or /register are sent to /today.
  * When Supabase env vars are absent (local dev), the gate is disabled so the app
  * still runs. The (app)/layout.tsx server guard is the belt-and-suspenders backup.
  */

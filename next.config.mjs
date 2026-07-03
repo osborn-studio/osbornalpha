@@ -7,6 +7,9 @@ const nextConfig = {
     config.watchOptions = { ...config.watchOptions, ignored: ['**/legacy-demo/**'] };
     return config;
   },
+  async redirects() {
+    return [{ source: '/dashboard', destination: '/today', permanent: true }];
+  },
 };
 
 export default nextConfig;

@@ -8,7 +8,7 @@ export default function NotFound() {
       <h1 className="mt-3 text-lg font-bold">页面不存在</h1>
       <p className="mt-1 text-sm text-text-dim">你访问的页面已移动或从未存在。</p>
       <div className="mt-5 flex items-center gap-2">
-        <Link href="/dashboard" className="rounded-md bg-accent px-4 py-2 text-sm font-semibold text-white">
+        <Link href="/today" className="rounded-md bg-accent px-4 py-2 text-sm font-semibold text-white">
           返回首页
         </Link>
         <Link href="/watchlist" className="rounded-md bg-bg-card px-4 py-2 text-sm text-text-dim hover:text-text">
