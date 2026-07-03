@@ -4,6 +4,7 @@
 // audit but never counted against quota and never block the caller.
 import { getServerSupabase } from '@/lib/supabase/server';
 import type { UsageFeature } from '@/lib/supabase/database.types';
+import { effectivePlan } from '@/lib/billing/plan';
 
 export type QuotaFeature = UsageFeature;
 
@@ -61,12 +62,12 @@ export async function checkQuota(feature: QuotaFeature): Promise<QuotaResult> {
   const { supabase, userId } = await requireUser();
   const { data: prof, error: profErr } = await supabase
     .from('profiles')
-    .select('plan, role')
+    .select('plan, role, plan_expires_at')
     .eq('id', userId)
-    .maybeSingle<{ plan: string | null; role: string | null }>();
+    .maybeSingle<{ plan: string | null; role: string | null; plan_expires_at: string | null }>();
   if (profErr) throw new Error(profErr.message);
 
-  const plan = prof?.plan ?? 'free';
+  const plan = effectivePlan(prof?.plan ?? null, prof?.plan_expires_at ?? null, new Date());
   const limit = limitFor(feature, plan, prof?.role ?? null);
   if (limit === -1) {
     return { allowed: true, used: 0, limit: -1, plan };

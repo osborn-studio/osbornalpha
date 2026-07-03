@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getServerSupabase } from '@/lib/supabase/server';
 import { dayWindowUtc8, limitFor, type QuotaFeature } from '@/lib/billing/quota';
+import { effectivePlan } from '@/lib/billing/plan';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,12 +18,13 @@ export async function GET() {
 
   const { data: prof, error: profErr } = await supabase
     .from('profiles')
-    .select('plan, role')
+    .select('plan, role, plan_expires_at')
     .eq('id', user.id)
-    .maybeSingle<{ plan: string | null; role: string | null }>();
+    .maybeSingle<{ plan: string | null; role: string | null; plan_expires_at: string | null }>();
   if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
 
-  const plan = prof?.plan ?? 'free';
+  const planExpiresAt = prof?.plan_expires_at ?? null;
+  const plan = effectivePlan(prof?.plan ?? null, planExpiresAt, new Date());
   const role = prof?.role ?? null;
   const { startIso, endIso } = dayWindowUtc8(new Date());
 
@@ -59,5 +61,11 @@ export async function GET() {
     .lt('created_at', endIso);
   if (byoErr) return NextResponse.json({ error: byoErr.message }, { status: 500 });
 
-  return NextResponse.json({ plan, usage, byoCalls: byoCalls ?? 0 });
+  return NextResponse.json({
+    plan,
+    plan_effective: plan,
+    plan_expires_at: planExpiresAt,
+    usage,
+    byoCalls: byoCalls ?? 0,
+  });
 }
