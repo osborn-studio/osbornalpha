@@ -1,6 +1,7 @@
 // Auto-generated style types matching supabase/migrations/20260515000000_initial_schema.sql
 // + 20260702090000_decision_layer.sql (decisions/trades/positions/decision_reviews/artifacts)
 // + 20260703090000_usage_events.sql (usage_events)
+// + 20260703120000_stripe_billing.sql (profiles.plan_expires_at, stripe_events)
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US';
@@ -138,6 +139,7 @@ export interface Profile {
   role: string;
   usage: Record<string, unknown>;
   stripe_customer_id: string | null;
+  plan_expires_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -231,6 +233,13 @@ export interface UsageEvent {
   created_at: string;
 }
 
+// Webhook idempotency ledger — service-role only (no RLS), see
+// supabase/migrations/20260703120000_stripe_billing.sql.
+export interface StripeEvent {
+  id: string;
+  created_at: string;
+}
+
 export type Database = {
   public: {
     Tables: {
@@ -251,6 +260,7 @@ export type Database = {
       decision_reviews: { Row: DecisionReview; Insert: Partial<DecisionReview>; Update: Partial<DecisionReview> };
       artifacts: { Row: Artifact; Insert: Partial<Artifact>; Update: Partial<Artifact> };
       usage_events: { Row: UsageEvent; Insert: Partial<UsageEvent>; Update: Partial<UsageEvent> };
+      stripe_events: { Row: StripeEvent; Insert: Partial<StripeEvent>; Update: Partial<StripeEvent> };
     };
   };
 };
