@@ -44,6 +44,7 @@ import {
   fetchTushareForecast as _fetchTushareForecast,
   fetchTushareDividend as _fetchTushareDividend,
   fetchTushareShareFloat as _fetchTushareShareFloat,
+  fetchTushareReportRc as _fetchTushareReportRc,
   isTushareConfigured,
   TushareError,
 } from './tushare';
@@ -154,6 +155,12 @@ export const fetchTushareAnnouncements = unstable_cache(
   async (ticker: string, days = 30) => _fetchTushareAnnouncements(ticker, days),
   ['tushare-anns'],
   { revalidate: 6 * HOUR, tags: ['tushare', 'tushare-anns'] }
+);
+
+export const fetchTushareReportRc = unstable_cache(
+  async (ticker: string, opts?: { months?: number }) => _fetchTushareReportRc(ticker, opts),
+  ['tushare-report-rc'],
+  { revalidate: 6 * HOUR, tags: ['tushare', 'tushare-report-rc'] }
 );
 
 // Pass-through (not data-fetching)

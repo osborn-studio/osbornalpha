@@ -6,6 +6,8 @@ import { Panel, Metric, Tag } from '@/components/ui';
 import { formatPct } from '@/lib/utils';
 import type { Decision, DecisionReview } from '@/lib/supabase/database.types';
 
+interface SignalStatsLite { hit_rate_5d: number }
+
 function SubNav({ current }: { current: 'cockpit' | 'decisions' | 'positions' | 'review' }) {
   const items: Array<{ key: typeof current; href: string; label: string }> = [
     { key: 'cockpit', href: '/portfolio', label: '驾驶舱' },
@@ -125,6 +127,76 @@ export default function ReviewPage() {
     }).filter((g) => g.count > 0);
   }, [rows]);
 
+  // ─── 决策 vs 信号对照 ───────────────────────────────────────────────────
+  const [signalStats, setSignalStats] = useState<Record<string, SignalStatsLite | null>>({});
+
+  const scoredTickers = useMemo(
+    () => Array.from(new Set(scoredRows.map((r) => r.decision.ticker))).sort(),
+    [scoredRows]
+  );
+
+  useEffect(() => {
+    const toFetch = scoredTickers.filter((t) => !(t in signalStats));
+    if (toFetch.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const results = await Promise.all(
+        toFetch.map(async (ticker) => {
+          try {
+            const res = await fetch(`/api/signals/${encodeURIComponent(ticker)}`);
+            const data = await res.json().catch(() => ({}));
+            const stats: SignalStatsLite | null =
+              res.ok && data?.stats && typeof data.stats.hit_rate_5d === 'number'
+                ? { hit_rate_5d: data.stats.hit_rate_5d }
+                : null;
+            return [ticker, stats] as const;
+          } catch {
+            return [ticker, null] as const;
+          }
+        })
+      );
+      if (cancelled) return;
+      setSignalStats((prev) => {
+        const next = { ...prev };
+        for (const [ticker, stats] of results) next[ticker] = stats;
+        return next;
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [scoredTickers, signalStats]);
+
+  const decisionVsSignal = useMemo(() => {
+    return scoredTickers.map((ticker) => {
+      const tickerRows = scoredRows.filter((r) => r.decision.ticker === ticker);
+      const hits = tickerRows.filter((r) => r.review.hit === true).length;
+      const myHitRate = tickerRows.length ? (hits / tickerRows.length) * 100 : null;
+      const stats = signalStats[ticker];
+      const signalHitRate = stats ? stats.hit_rate_5d * 100 : stats === null ? null : undefined; // undefined = still loading
+      const diff = myHitRate !== null && signalHitRate != null ? myHitRate - signalHitRate : null;
+      return { ticker, n: tickerRows.length, myHitRate, signalHitRate, diff };
+    });
+  }, [scoredTickers, scoredRows, signalStats]);
+
+  const threeWaySummary = useMemo(() => {
+    const n = scoredRows.length;
+    const hits = scoredRows.filter((r) => r.review.hit === true).length;
+    const myOverall = n ? (hits / n) * 100 : null;
+
+    const signalRates = scoredTickers
+      .map((t) => signalStats[t])
+      .filter((s): s is SignalStatsLite => s != null)
+      .map((s) => s.hit_rate_5d * 100);
+    const signalAvg = signalRates.length
+      ? signalRates.reduce((a, b) => a + b, 0) / signalRates.length
+      : null;
+
+    const copilotRows = scoredRows.filter((r) => r.decision.source_type === 'copilot');
+    const copilotHits = copilotRows.filter((r) => r.review.hit === true).length;
+    const copilotHitRate = copilotRows.length ? (copilotHits / copilotRows.length) * 100 : null;
+
+    return { myOverall, signalAvg, copilotHitRate, copilotN: copilotRows.length };
+  }, [scoredRows, scoredTickers, signalStats]);
+
   return (
     <div className="space-y-4 p-4">
       <SubNav current="review" />
@@ -212,6 +284,61 @@ export default function ReviewPage() {
                 ))}
               </tbody>
             </table>
+          </Panel>
+
+          <Panel title="决策 vs 信号">
+            {scoredRows.length === 0 ? (
+              <p className="text-sm text-[var(--text-dim)]">暂无可评分决策，无法对照信号胜率</p>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-6">
+                  <Metric
+                    label="我的总胜率"
+                    value={threeWaySummary.myOverall !== null ? formatPct(threeWaySummary.myOverall, false) : '--'}
+                  />
+                  <Metric
+                    label="信号平均胜率"
+                    value={threeWaySummary.signalAvg !== null ? formatPct(threeWaySummary.signalAvg, false) : '--'}
+                  />
+                  <Metric
+                    label={`Copilot决策胜率${threeWaySummary.copilotN ? ` (${threeWaySummary.copilotN})` : ''}`}
+                    value={threeWaySummary.copilotHitRate !== null ? formatPct(threeWaySummary.copilotHitRate, false) : '--'}
+                  />
+                </div>
+                <table className="num w-full text-left text-xs">
+                  <thead>
+                    <tr className="text-[var(--text-dim)]">
+                      <th className="pb-1 font-normal">标的</th>
+                      <th className="pb-1 font-normal">已评分决策数</th>
+                      <th className="pb-1 font-normal">我的决策命中率</th>
+                      <th className="pb-1 font-normal">信号5日胜率</th>
+                      <th className="pb-1 font-normal">差值</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {decisionVsSignal.map((r) => (
+                      <tr key={r.ticker} className="border-t border-[var(--border)]">
+                        <td className="py-1">{r.ticker}</td>
+                        <td className="py-1">{r.n}</td>
+                        <td className="py-1">{r.myHitRate !== null ? formatPct(r.myHitRate, false) : '--'}</td>
+                        <td className="py-1">
+                          {r.signalHitRate === undefined ? '加载中…' : r.signalHitRate !== null ? formatPct(r.signalHitRate, false) : '--'}
+                        </td>
+                        <td className="py-1">
+                          {r.diff !== null ? (
+                            <span className={r.diff > 0 ? 'text-[var(--up)]' : r.diff < 0 ? 'text-[var(--down)]' : undefined}>
+                              {r.diff > 0 ? '+' : ''}{r.diff.toFixed(1)}pp
+                            </span>
+                          ) : (
+                            '--'
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </Panel>
         </>
       )}

@@ -539,3 +539,52 @@ export async function fetchTushareShareFloat(ticker: string, days_ahead = 180): 
   // Soonest unlock first
   return rows.sort((a, b) => a.float_date.localeCompare(b.float_date));
 }
+
+/** 卖方盈利预测数据 — sell-side broker research report with target price range. */
+export interface TushareReportRc {
+  ts_code: string;
+  report_date: string;       // YYYYMMDD — report publish date
+  report_title?: string | null;
+  report_type?: string | null;
+  classify?: string | null;
+  org_name?: string | null;  // 机构名称
+  author_name?: string | null;
+  quarter?: string | null;
+  op_rt?: number | null;     // 营业收入(预测)
+  op_pr?: number | null;     // 营业利润(预测)
+  tp?: number | null;        // 利润总额(预测)
+  np?: number | null;        // 净利润(预测)
+  eps?: number | null;       // 每股收益(预测)
+  pe?: number | null;        // 市盈率(预测)
+  rd?: number | null;        // 变动幅度
+  roe?: number | null;       // 净资产收益率(预测)
+  ev_ebitda?: number | null;
+  rating?: string | null;    // 卖方评级
+  max_price?: number | null; // 目标价上限
+  min_price?: number | null; // 目标价下限
+  imp_dg?: string | null;    // 隐含涨跌幅
+  create_time?: string | null;
+}
+
+/**
+ * Returns sell-side broker research reports (report_rc) for one A-share,
+ * most recent first. Default window is the trailing 6 months. Requires
+ * Tushare 5000-积分 tier; throws TushareError when unavailable/misconfigured.
+ */
+export async function fetchTushareReportRc(
+  ticker: string,
+  opts?: { months?: number }
+): Promise<TushareReportRc[]> {
+  const ts_code = normalizeTushareTicker(ticker);
+  if (!ts_code) return [];
+  const months = opts?.months ?? 6;
+  const today = new Date();
+  const start = new Date(today.getFullYear(), today.getMonth() - months, today.getDate())
+    .toISOString().slice(0, 10).replace(/-/g, '');
+  const rows = await tushareCall<TushareReportRc>(
+    'report_rc',
+    { ts_code, start_date: start },
+    'ts_code,report_date,report_title,report_type,classify,org_name,author_name,quarter,op_rt,op_pr,tp,np,eps,pe,rd,roe,ev_ebitda,rating,max_price,min_price,imp_dg,create_time'
+  );
+  return rows.sort((a, b) => b.report_date.localeCompare(a.report_date));
+}
