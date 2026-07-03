@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Panel, Metric } from '@/components/ui';
 import { usePortfolio } from '@/lib/hooks/usePortfolio';
 import { cn, formatPrice } from '@/lib/utils';
@@ -39,25 +39,44 @@ function truncateId(id: string | null): string {
 }
 
 export default function PositionsPage() {
-  const { data, loading: portfolioLoading, error: portfolioError } = usePortfolio();
+  const { data, loading: portfolioLoading, error: portfolioError, refetch: refetchPortfolio } = usePortfolio();
   const [trades, setTrades] = useState<Trade[]>([]);
   const [tradesLoading, setTradesLoading] = useState(true);
   const [tradesError, setTradesError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch('/api/trades');
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(json.error || `http ${res.status}`);
-        setTrades(json.trades ?? []);
-      } catch (e) {
-        setTradesError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setTradesLoading(false);
-      }
-    })();
+  const loadTrades = useCallback(async () => {
+    try {
+      const res = await fetch('/api/trades');
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `http ${res.status}`);
+      setTrades(json.trades ?? []);
+      setTradesError(null);
+    } catch (e) {
+      setTradesError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTradesLoading(false);
+    }
   }, []);
+
+  useEffect(() => { loadTrades(); }, [loadTrades]);
+
+  async function handleDelete(id: string) {
+    if (deletingId) return;
+    setDeletingId(id);
+    setDeleteError(null);
+    try {
+      const res = await fetch(`/api/trades/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `http ${res.status}`);
+      await Promise.all([loadTrades(), refetchPortfolio()]);
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   const positions = useMemo(() => data?.positions ?? [], [data]);
   const sortedPositions = useMemo(
@@ -148,6 +167,7 @@ export default function PositionsPage() {
                 <th className="pb-1 font-normal">数量</th>
                 <th className="pb-1 font-normal">费用</th>
                 <th className="pb-1 font-normal">关联决策</th>
+                <th className="pb-1 font-normal">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -160,10 +180,22 @@ export default function PositionsPage() {
                   <td className="py-1">{t.quantity}</td>
                   <td className="py-1">{formatPrice(t.fee)}</td>
                   <td className="py-1" title={t.decision_id ?? undefined}>{truncateId(t.decision_id)}</td>
+                  <td className="py-1">
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(t.id)}
+                      disabled={deletingId !== null}
+                      className="text-[var(--down)] hover:underline disabled:opacity-50"
+                    >
+                      {deletingId === t.id ? '删除中…' : '删除'}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+          {deleteError && <p className="mt-2 text-xs text-[var(--down)]">{deleteError}</p>}
+          <p className="mt-2 text-[10px] text-[var(--text-dim)]">录错了？删除该笔成交后在驾驶舱重新录入（可指定成交时间）；持仓由成交流水自动重算。</p>
         </Panel>
       )}
     </div>
