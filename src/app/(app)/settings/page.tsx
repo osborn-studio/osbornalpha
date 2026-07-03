@@ -7,6 +7,7 @@ import { Disclaimer } from '@/components/Disclaimer';
 import { AccountSettings } from '@/components/AccountSettings';
 import { LlmSettings } from '@/components/LlmSettings';
 import { UsageToday } from '@/components/UsageToday';
+import { UpgradeCard } from '@/components/UpgradeCard';
 
 export default function SettingsPage() {
   const { show } = useToast();
@@ -43,6 +44,11 @@ export default function SettingsPage() {
       <div className="card-base">
         <div className="mb-3 text-sm font-semibold text-text-dim">📊 今日用量</div>
         <UsageToday />
+      </div>
+
+      <div className="card-base">
+        <div className="mb-3 text-sm font-semibold text-text-dim">⭐ 升级 Pro</div>
+        <UpgradeCard />
       </div>
 
       <div className="card-base">
