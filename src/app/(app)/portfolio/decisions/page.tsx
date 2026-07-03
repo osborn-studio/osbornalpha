@@ -141,7 +141,7 @@ export default function DecisionsPage() {
               {filtered.map((d) => (
                 <tr key={d.id} className="border-t border-[var(--border)]">
                   <td className="py-1">{d.decided_at.slice(0, 10)}</td>
-                  <td className="py-1">{d.ticker}</td>
+                  <td className="py-1"><Link href={`/stock/${encodeURIComponent(d.ticker)}`} className="text-accent hover:underline">{d.ticker}</Link></td>
                   <td className="py-1">{ACTION_LABEL[d.action]}</td>
                   <td className="max-w-[240px] truncate py-1 text-left" title={d.thesis ?? undefined}>{d.thesis ?? '--'}</td>
                   <td className="py-1">{d.confidence ?? '--'}</td>

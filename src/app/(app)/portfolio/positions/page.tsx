@@ -113,7 +113,7 @@ export default function PositionsPage() {
                     key={p.ticker}
                     className={cn('border-t border-[var(--border)]', isClosed && 'text-[var(--text-dim)]')}
                   >
-                    <td className="py-1">{p.ticker}</td>
+                    <td className="py-1"><Link href={`/stock/${encodeURIComponent(p.ticker)}`} className="text-accent hover:underline">{p.ticker}</Link></td>
                     <td className="py-1">{p.shares}</td>
                     <td className="py-1">{formatPrice(p.avg_cost)}</td>
                     <td className="py-1">{formatPrice(p.realized_pnl)}</td>
@@ -154,7 +154,7 @@ export default function PositionsPage() {
               {trades.map((t) => (
                 <tr key={t.id} className="border-t border-[var(--border)]">
                   <td className="py-1">{t.executed_at.slice(0, 10)}</td>
-                  <td className="py-1">{t.ticker}</td>
+                  <td className="py-1"><Link href={`/stock/${encodeURIComponent(t.ticker)}`} className="text-accent hover:underline">{t.ticker}</Link></td>
                   <td className="py-1">{DIRECTION_LABEL[t.direction]}</td>
                   <td className="py-1">{formatPrice(t.price)}</td>
                   <td className="py-1">{t.quantity}</td>
