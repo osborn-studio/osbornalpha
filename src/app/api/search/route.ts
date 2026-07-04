@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { MOCK_UNIVERSE } from '@/lib/data/mock';
 import { searchUniverse } from '@/lib/stocks/search';
 import { normalizeWindTicker } from '@/lib/stocks/wind-normalize';
+import { fetchTwseUniverse } from '@/lib/data/sources/twse';
 import type { Market } from '@/lib/supabase/database.types';
 
 export const dynamic = 'force-dynamic';
@@ -111,22 +112,41 @@ export async function GET(request: Request) {
   // Try local mock first (instant for the curated 30)
   const localHits = searchUniverse(MOCK_UNIVERSE, q, limit);
 
+  // TW universe (TWSE 上市 + TPEx 上柜, 24h-cached registry) — Eastmoney has
+  // no Taiwan equities, so TW hits come exclusively from this local scorer.
+  // Searchable by code prefix (2330) and Chinese (繁体) name (台積電).
+  let twHits: ReturnType<typeof searchUniverse> = [];
+  try {
+    twHits = searchUniverse(await fetchTwseUniverse(), q, limit);
+  } catch {
+    // TW universe unavailable — degrade to Eastmoney + local as before
+  }
+
   // Always try Eastmoney too — its results take precedence for completeness
   try {
     const emHits = await searchEastmoney(q);
-    // Merge: Eastmoney first (broader), local for whatever Eastmoney missed
+    // Merge: Eastmoney first (broader), then TW, then local — deduped by ticker
     const seen = new Set(emHits.map((r) => r.t));
-    const merged = [
-      ...emHits,
-      ...localHits.filter((r) => !seen.has(r.t)),
-    ].slice(0, limit);
-    return NextResponse.json({ source: 'eastmoney+local', results: merged });
+    const merged = [...emHits];
+    for (const r of [...twHits, ...localHits]) {
+      if (!seen.has(r.t)) {
+        seen.add(r.t);
+        merged.push(r);
+      }
+    }
+    return NextResponse.json({ source: 'eastmoney+local', results: merged.slice(0, limit) });
   } catch (err) {
     console.error('Eastmoney search failed:', err);
-    // Fall back to local only
+    // Fall back to TW + local only
+    const seen = new Set<string>();
+    const merged = [...twHits, ...localHits].filter((r) => {
+      if (seen.has(r.t)) return false;
+      seen.add(r.t);
+      return true;
+    });
     return NextResponse.json({
       source: 'local-fallback',
-      results: localHits,
+      results: merged.slice(0, limit),
       error: 'Eastmoney unavailable',
     });
   }

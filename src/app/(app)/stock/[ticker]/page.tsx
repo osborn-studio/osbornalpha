@@ -6,7 +6,7 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { getStockOrStub } from '@/lib/data/mock';
-import { formatPrice, formatPct, formatChange, formatVolume, changeClass, stars } from '@/lib/utils';
+import { formatPrice, formatPct, formatChange, formatVolume, changeClass, stars, classifyMarket } from '@/lib/utils';
 import { KlineChart } from '@/components/KlineChart';
 import { PerspectiveCard } from '@/components/PerspectiveCard';
 import { DcfStudio } from '@/components/DcfStudio';
@@ -143,7 +143,13 @@ export default function StockDetailPage() {
         <span className={`text-lg font-semibold tabular-nums ${changeClass(stock.change_pct)}`}>
           {formatChange(stock.change)} ({formatPct(stock.change_pct)})
         </span>
-        <span className="text-[11px] text-text-muted">{t('delayedQuote')}</span>
+        {/* JP/KR have no quote source yet (EODHD not subscribed) — show a
+            "source pending" badge instead of the delayed-quote note. */}
+        {['JP', 'KR'].includes(classifyMarket(ticker)) ? (
+          <span className="rounded bg-bg-card px-1.5 py-0.5 text-[11px] text-text-muted">{t('sourcePending')}</span>
+        ) : (
+          <span className="text-[11px] text-text-muted">{t('delayedQuote')}</span>
+        )}
       </div>
       <div className="mb-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3 md:grid-cols-6">
         <MetaCell label={t('meta.open')} value={formatPrice(stock.open)} />
