@@ -49,7 +49,7 @@ export default function SettingsPage() {
       const { data } = await sb.from('user_preferences')
         .select('timezone').eq('user_id', user.id).maybeSingle();
       const v = (data as any)?.timezone;
-      if (v) setTimezone(v);
+      if (v !== undefined && v !== null) setTimezone(v);
     });
   }, []);
 

@@ -114,7 +114,7 @@ export function aShareMarketPhase(now: Date): MarketPhase {
     openMorning: (n) => `盘中 · 午休还有 ${n} 分钟`,
     lunch: (n) => `午休 · 下午开盘还有 ${n} 分钟`,
     openAfternoon: (n) => `盘中 · 收盘还有 ${n} 分钟`,
-    open: () => '盘中',
+    open: () => '盘中', // unreachable for A (two sessions ⇒ openMorning); kept for exhaustiveness over MarketPhaseKey
     closed: () => '已收盘',
     weekend: () => '周末休市',
   };
