@@ -141,5 +141,113 @@
     "closeAria": "关闭 Copilot",
     "title": "🎩 Copilot",
     "expand": "展开"
+  },
+  "stock": {
+    "tabs": {
+      "overview": "行情",
+      "ai": "AI 观点",
+      "fundamentals": "财报",
+      "news": "新闻 / 研报",
+      "signals": "Sentinel 信号",
+      "holdings": "股东持仓"
+    },
+    "notFound": {
+      "title": "未找到标的 {ticker}",
+      "bodyPrefix": "本 demo 仅含有限的 mock 数据。回 ",
+      "home": "首页",
+      "or": " 或 ",
+      "watchlist": "股票池"
+    },
+    "removedToast": "✓ 已移出：{ticker}",
+    "addedToast": "✓ 已加入「{group}」",
+    "inWatchlist": "⭐ 已加入",
+    "addToWatchlist": "+ 加入股票池",
+    "analyzeWithJohn": "🎩 用 John 分析这只股票",
+    "deepDive": "🔬 深度研究",
+    "delayedQuote": "15min 延迟",
+    "meta": {
+      "open": "开",
+      "high": "高",
+      "low": "低",
+      "prevClose": "昨",
+      "turnoverValue": "成交额",
+      "amplitude": "振幅"
+    },
+    "overview": {
+      "klineHeading": "📊 K 线（日）",
+      "metricsHeading": "📐 关键指标",
+      "peTtm": "PE (TTM)",
+      "pb": "PB",
+      "roe": "ROE",
+      "dividendYield": "股息率",
+      "marketCap": "市值",
+      "high52w": "52 周高",
+      "low52w": "52 周低",
+      "nextEarnings": "下次财报",
+      "signalsHeading": "🎯 Sentinel 信号 · {score}/10 {stars}",
+      "noTriggersToday": "今日无显著触发信号"
+    },
+    "ai": {
+      "heading": "🤖 AI 委员会观点",
+      "pendingLine1": "该标的视角辩论待生成。",
+      "refreshPlaceholder": "🔄 刷新观点（v0.3 实装）",
+      "consensusSummary": "共识：{consensus}/10 · {bullish} 多 / {neutral} 中 / {bearish} 空",
+      "bullishHeading": "🟢 看多 ({count})",
+      "neutralHeading": "🟡 中性 ({count})",
+      "bearishHeading": "🔴 看空 ({count})"
+    },
+    "fundamentals": {
+      "calendarHeading": "📅 财报日历",
+      "nextRelease": "下次发布",
+      "trendHeading": "📊 5 年财务趋势",
+      "revenueLabel": "营业收入（{currency}亿）",
+      "netIncomeLabel": "净利润（{currency}亿）",
+      "roeLabel": "ROE（%）",
+      "summaryHeading": "📄 财务摘要",
+      "metricHeader": "指标",
+      "revenueRow": "营收",
+      "netIncomeRow": "净利",
+      "roeRow": "ROE"
+    },
+    "news": {
+      "brokerReportsHeading": "📑 券商研报 ({count})",
+      "consensusSourceTitle": "来源：Tushare 卖方一致预期",
+      "consensusTarget": "卖方一致目标价 {price}",
+      "reportCount": "{n} 份研报",
+      "range": " · 区间 {min} – {max}",
+      "noRecentReports": "暂无近期研报",
+      "targetLabel": "目标 {target}",
+      "newsHeading": "📰 新闻动态 ({count})",
+      "noNews": "暂无最新新闻"
+    },
+    "signals": {
+      "heading": "🎯 Sentinel 历史信号",
+      "pending": "该标的近 90 天信号回看待开发（v1.0）。",
+      "pendingDetail": "展示：信号触发日期 + 当日 brief 节选 + 后续 N 天股价表现 + 命中率统计"
+    },
+    "holdings": {
+      "headingSuffix": "（仅美股可用）",
+      "heading": "🏛 13F 持仓变动{suffix}",
+      "usBody": "关注的对冲基金（Berkshire / Bridgewater / Burry 等）13F 持仓变动数据待接入。",
+      "nonUsBody": "此标的非美股，无 13F 数据。",
+      "dataSource": "数据源：EDGAR 13F-HR · 季度更新"
+    }
+  },
+  "dcf": {
+    "variants": {
+      "fcff": "FCFF 标准",
+      "adjusted": "扣非",
+      "exSbc": "扣 SBC",
+      "ebitda": "EBITDA 退出"
+    },
+    "heading": "🧮 DCF 估值",
+    "calculating": "计算中…",
+    "rangeHeading": "每股价值区间",
+    "terminalPct": "终值 {pct}",
+    "assumptionsHeading": "假设（可调）",
+    "wacc": "WACC",
+    "terminalG": "永续增长 g",
+    "forecastYears": "预测年数",
+    "recalculate": "重新计算"
   }
 }

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
+import { useTranslations } from 'next-intl';
 import { getStockOrStub } from '@/lib/data/mock';
 import { formatPrice, formatPct, formatChange, formatVolume, changeClass, marketLabel, stars } from '@/lib/utils';
 import { KlineChart } from '@/components/KlineChart';
@@ -19,16 +20,10 @@ interface ConsensusInfo { target: number; min: number | null; max: number | null
 /** A-share tickers only — the ones report_rc consensus can cover. */
 const isAShare = (ticker: string) => /\.(SH|SZ|BJ)$/i.test(ticker);
 
-const TABS: Array<{ id: Tab; label: string }> = [
-  { id: 'overview', label: '行情' },
-  { id: 'ai', label: 'AI 观点' },
-  { id: 'fundamentals', label: '财报' },
-  { id: 'news', label: '新闻 / 研报' },
-  { id: 'signals', label: 'Sentinel 信号' },
-  { id: 'holdings', label: '股东持仓' },
-];
+const TAB_IDS: Tab[] = ['overview', 'ai', 'fundamentals', 'news', 'signals', 'holdings'];
 
 export default function StockDetailPage() {
+  const t = useTranslations('market.stock');
   const params = useParams<{ ticker: string }>();
   const ticker = decodeURIComponent(params.ticker);
   const stock = getStockOrStub(ticker);
@@ -71,8 +66,13 @@ export default function StockDetailPage() {
   if (!stock) {
     return (
       <div className="card-base text-center">
-        <h2 className="mb-2 text-lg font-bold">未找到标的 {ticker}</h2>
-        <p>本 demo 仅含有限的 mock 数据。回 <Link href="/">首页</Link> 或 <Link href="/watchlist">股票池</Link></p>
+        <h2 className="mb-2 text-lg font-bold">{t('notFound.title', { ticker })}</h2>
+        <p>
+          {t('notFound.bodyPrefix')}
+          <Link href="/">{t('notFound.home')}</Link>
+          {t('notFound.or')}
+          <Link href="/watchlist">{t('notFound.watchlist')}</Link>
+        </p>
       </div>
     );
   }
@@ -83,7 +83,7 @@ export default function StockDetailPage() {
       const next = groups.map((g) => ({ ...g, tickers: g.tickers.filter((t) => t !== ticker) }));
       setGroups(next);
       setInWatchlist(false);
-      show(`✓ 已移出：${ticker}`);
+      show(t('removedToast', { ticker }));
     } else {
       const targetId = groups.find((g) => g.id === 'opportunity')?.id || groups[0]?.id;
       if (!targetId) return;
@@ -92,7 +92,7 @@ export default function StockDetailPage() {
       );
       setGroups(next);
       setInWatchlist(true);
-      show(`✓ 已加入「${groups.find((g) => g.id === targetId)?.name || '股票池'}」`);
+      show(t('addedToast', { group: groups.find((g) => g.id === targetId)?.name || t('notFound.watchlist') }));
     }
   }
 
@@ -120,7 +120,7 @@ export default function StockDetailPage() {
             inWatchlist ? 'bg-bg-card text-warn' : 'bg-accent-dim text-white'
           }`}
         >
-          {inWatchlist ? '⭐ 已加入' : '+ 加入股票池'}
+          {inWatchlist ? t('inWatchlist') : t('addToWatchlist')}
         </button>
       </div>
       <div className="mb-2 flex flex-wrap gap-2">
@@ -128,13 +128,13 @@ export default function StockDetailPage() {
           href={`/copilot?ticker=${encodeURIComponent(ticker)}` as any}
           className="inline-block rounded-md bg-bg-card px-3 py-1 text-xs font-semibold text-accent"
         >
-          🎩 用 John 分析这只股票
+          {t('analyzeWithJohn')}
         </Link>
         <Link
           href={`/copilot?method=hiphon-pm-deepdive&ticker=${encodeURIComponent(ticker)}` as any}
           className="inline-block rounded-md bg-bg-card px-3 py-1 text-xs font-semibold text-accent"
         >
-          🔬 深度研究
+          {t('deepDive')}
         </Link>
       </div>
       <div className="mb-1.5 flex flex-wrap items-baseline gap-4">
@@ -142,28 +142,28 @@ export default function StockDetailPage() {
         <span className={`text-lg font-semibold tabular-nums ${changeClass(stock.change_pct)}`}>
           {formatChange(stock.change)} ({formatPct(stock.change_pct)})
         </span>
-        <span className="text-[11px] text-text-muted">15min 延迟</span>
+        <span className="text-[11px] text-text-muted">{t('delayedQuote')}</span>
       </div>
       <div className="mb-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3 md:grid-cols-6">
-        <MetaCell label="开" value={formatPrice(stock.open)} />
-        <MetaCell label="高" value={formatPrice(stock.high)} />
-        <MetaCell label="低" value={formatPrice(stock.low)} />
-        <MetaCell label="昨" value={formatPrice(stock.prev_close)} />
-        <MetaCell label="成交额" value={formatVolume(stock.volume_value)} />
-        <MetaCell label="振幅" value={`${stock.amplitude}%`} />
+        <MetaCell label={t('meta.open')} value={formatPrice(stock.open)} />
+        <MetaCell label={t('meta.high')} value={formatPrice(stock.high)} />
+        <MetaCell label={t('meta.low')} value={formatPrice(stock.low)} />
+        <MetaCell label={t('meta.prevClose')} value={formatPrice(stock.prev_close)} />
+        <MetaCell label={t('meta.turnoverValue')} value={formatVolume(stock.volume_value)} />
+        <MetaCell label={t('meta.amplitude')} value={`${stock.amplitude}%`} />
       </div>
 
       {/* Tabs */}
       <div className="mb-4 flex gap-1.5 overflow-x-auto border-b border-border">
-        {TABS.map((t) => (
+        {TAB_IDS.map((id) => (
           <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
+            key={id}
+            onClick={() => setTab(id)}
             className={`whitespace-nowrap border-b-2 px-3.5 py-2.5 text-sm transition ${
-              tab === t.id ? 'border-accent text-accent' : 'border-transparent text-text-dim hover:text-text'
+              tab === id ? 'border-accent text-accent' : 'border-transparent text-text-dim hover:text-text'
             }`}
           >
-            {t.label}
+            {t(`tabs.${id}`)}
           </button>
         ))}
       </div>
@@ -172,33 +172,33 @@ export default function StockDetailPage() {
       {tab === 'overview' && (
         <>
           <div className="card-base">
-            <div className="mb-3 text-sm font-semibold text-text-dim">📊 K 线（日）</div>
+            <div className="mb-3 text-sm font-semibold text-text-dim">{t('overview.klineHeading')}</div>
             <KlineChart ticker={stock.ticker} basePrice={stock.price} />
           </div>
           <div className="card-base">
-            <div className="mb-3 text-sm font-semibold text-text-dim">📐 关键指标</div>
+            <div className="mb-3 text-sm font-semibold text-text-dim">{t('overview.metricsHeading')}</div>
             <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-              <MetricCard label="PE (TTM)" value={String(stock.pe_ttm)} />
-              <MetricCard label="PB" value={String(stock.pb)} />
-              <MetricCard label="ROE" value={`${stock.roe}%`} />
-              <MetricCard label="股息率" value={`${stock.dividend_yield}%`} />
-              <MetricCard label="市值" value={stock.market_cap} />
-              <MetricCard label="52 周高" value={`${stock.currency}${formatPrice(stock.high_52w)}`} />
-              <MetricCard label="52 周低" value={`${stock.currency}${formatPrice(stock.low_52w)}`} />
-              <MetricCard label="下次财报" value={stock.next_earnings} small />
+              <MetricCard label={t('overview.peTtm')} value={String(stock.pe_ttm)} />
+              <MetricCard label={t('overview.pb')} value={String(stock.pb)} />
+              <MetricCard label={t('overview.roe')} value={`${stock.roe}%`} />
+              <MetricCard label={t('overview.dividendYield')} value={`${stock.dividend_yield}%`} />
+              <MetricCard label={t('overview.marketCap')} value={stock.market_cap} />
+              <MetricCard label={t('overview.high52w')} value={`${stock.currency}${formatPrice(stock.high_52w)}`} />
+              <MetricCard label={t('overview.low52w')} value={`${stock.currency}${formatPrice(stock.low_52w)}`} />
+              <MetricCard label={t('overview.nextEarnings')} value={stock.next_earnings} small />
             </div>
           </div>
           <div className="card-base">
             <div className="mb-3 text-sm font-semibold text-text-dim">
-              🎯 Sentinel 信号 · {stock.sentinel_score.toFixed(1)}/10 {stars(Math.round(stock.sentinel_score / 2))}
+              {t('overview.signalsHeading', { score: stock.sentinel_score.toFixed(1), stars: stars(Math.round(stock.sentinel_score / 2)) })}
             </div>
             {stock.triggers.length === 0 ? (
-              <div className="py-6 text-center text-sm text-text-dim">今日无显著触发信号</div>
+              <div className="py-6 text-center text-sm text-text-dim">{t('overview.noTriggersToday')}</div>
             ) : (
-              stock.triggers.map((t, i) => (
+              stock.triggers.map((trig, i) => (
                 <div key={i} className="mb-1.5 rounded-md bg-bg-card px-3 py-2 text-sm">
-                  <strong>+{t.weight}</strong> · {t.desc}{' '}
-                  <span className="text-[11px] text-text-muted">({t.rule})</span>
+                  <strong>+{trig.weight}</strong> · {trig.desc}{' '}
+                  <span className="text-[11px] text-text-muted">({trig.rule})</span>
                 </div>
               ))
             )}
@@ -208,24 +208,24 @@ export default function StockDetailPage() {
 
       {tab === 'ai' && (
         <div className="card-base">
-          <div className="mb-3 text-sm font-semibold text-text-dim">🤖 AI 委员会观点</div>
+          <div className="mb-3 text-sm font-semibold text-text-dim">{t('ai.heading')}</div>
           {stock.perspectives.length === 0 ? (
             <div className="py-8 text-center text-sm text-text-dim">
-              该标的视角辩论待生成。<br />
+              {t('ai.pendingLine1')}<br />
               <button disabled className="mt-3 rounded bg-accent-dim/50 px-4 py-2 text-white opacity-50">
-                🔄 刷新观点（v0.3 实装）
+                {t('ai.refreshPlaceholder')}
               </button>
             </div>
           ) : (
             <>
               <div className="mb-3 text-xs text-text-dim">
-                共识：{consensus.toFixed(1)}/10 · {bullish.length} 多 / {neutral.length} 中 / {bearish.length} 空
+                {t('ai.consensusSummary', { consensus: consensus.toFixed(1), bullish: bullish.length, neutral: neutral.length, bearish: bearish.length })}
               </div>
-              {bullish.length > 0 && <h3 className="mb-2 mt-3 text-sm font-semibold text-bullish">🟢 看多 ({bullish.length})</h3>}
+              {bullish.length > 0 && <h3 className="mb-2 mt-3 text-sm font-semibold text-bullish">{t('ai.bullishHeading', { count: bullish.length })}</h3>}
               {bullish.map((p) => <PerspectiveCard key={p.persona} {...p} />)}
-              {neutral.length > 0 && <h3 className="mb-2 mt-3 text-sm font-semibold text-neutral">🟡 中性 ({neutral.length})</h3>}
+              {neutral.length > 0 && <h3 className="mb-2 mt-3 text-sm font-semibold text-neutral">{t('ai.neutralHeading', { count: neutral.length })}</h3>}
               {neutral.map((p) => <PerspectiveCard key={p.persona} {...p} />)}
-              {bearish.length > 0 && <h3 className="mb-2 mt-3 text-sm font-semibold text-bearish">🔴 看空 ({bearish.length})</h3>}
+              {bearish.length > 0 && <h3 className="mb-2 mt-3 text-sm font-semibold text-bearish">{t('ai.bearishHeading', { count: bearish.length })}</h3>}
               {bearish.map((p) => <PerspectiveCard key={p.persona} {...p} />)}
             </>
           )}
@@ -238,33 +238,33 @@ export default function StockDetailPage() {
             <DcfStudio ticker={ticker} />
           </div>
           <div className="card-base">
-            <div className="mb-3 text-sm font-semibold text-text-dim">📅 财报日历</div>
+            <div className="mb-3 text-sm font-semibold text-text-dim">{t('fundamentals.calendarHeading')}</div>
             <div className="rounded-md bg-bg-card p-3 text-sm">
-              <strong>下次发布</strong>：{stock.next_earnings}
+              <strong>{t('fundamentals.nextRelease')}</strong>：{stock.next_earnings}
             </div>
           </div>
           {stock.financials.years.length > 0 && (
             <div className="card-base">
-              <div className="mb-3 text-sm font-semibold text-text-dim">📊 5 年财务趋势</div>
-              <MiniChart label={`营业收入（${stock.currency}亿）`} values={stock.financials.revenue} labels={stock.financials.years} />
-              <MiniChart label={`净利润（${stock.currency}亿）`} values={stock.financials.net_income} labels={stock.financials.years} />
-              <MiniChart label="ROE（%）" values={stock.financials.roe} labels={stock.financials.years} />
+              <div className="mb-3 text-sm font-semibold text-text-dim">{t('fundamentals.trendHeading')}</div>
+              <MiniChart label={t('fundamentals.revenueLabel', { currency: stock.currency })} values={stock.financials.revenue} labels={stock.financials.years} />
+              <MiniChart label={t('fundamentals.netIncomeLabel', { currency: stock.currency })} values={stock.financials.net_income} labels={stock.financials.years} />
+              <MiniChart label={t('fundamentals.roeLabel')} values={stock.financials.roe} labels={stock.financials.years} />
             </div>
           )}
           {stock.financials.years.length > 0 && (
             <div className="card-base overflow-x-auto">
-              <div className="mb-3 text-sm font-semibold text-text-dim">📄 财务摘要</div>
+              <div className="mb-3 text-sm font-semibold text-text-dim">{t('fundamentals.summaryHeading')}</div>
               <table className="w-full text-sm">
                 <thead className="text-text-dim">
                   <tr>
-                    <th className="py-2 text-left">指标</th>
+                    <th className="py-2 text-left">{t('fundamentals.metricHeader')}</th>
                     {stock.financials.years.map((y) => <th key={y} className="py-2 text-right">{y}</th>)}
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="border-t border-border"><td className="py-2">营收</td>{stock.financials.revenue.map((v, i) => <td key={i} className="text-right tabular-nums">{v}</td>)}</tr>
-                  <tr className="border-t border-border"><td className="py-2">净利</td>{stock.financials.net_income.map((v, i) => <td key={i} className="text-right tabular-nums">{v}</td>)}</tr>
-                  <tr className="border-t border-border"><td className="py-2">ROE</td>{stock.financials.roe.map((v, i) => <td key={i} className="text-right tabular-nums">{v}%</td>)}</tr>
+                  <tr className="border-t border-border"><td className="py-2">{t('fundamentals.revenueRow')}</td>{stock.financials.revenue.map((v, i) => <td key={i} className="text-right tabular-nums">{v}</td>)}</tr>
+                  <tr className="border-t border-border"><td className="py-2">{t('fundamentals.netIncomeRow')}</td>{stock.financials.net_income.map((v, i) => <td key={i} className="text-right tabular-nums">{v}</td>)}</tr>
+                  <tr className="border-t border-border"><td className="py-2">{t('fundamentals.roeRow')}</td>{stock.financials.roe.map((v, i) => <td key={i} className="text-right tabular-nums">{v}%</td>)}</tr>
                 </tbody>
               </table>
             </div>
@@ -275,28 +275,28 @@ export default function StockDetailPage() {
       {tab === 'news' && (
         <>
           <div className="card-base">
-            <div className="mb-3 text-sm font-semibold text-text-dim">📑 券商研报 ({stock.broker_reports.length || brokerConsensus?.n || 0})</div>
+            <div className="mb-3 text-sm font-semibold text-text-dim">{t('news.brokerReportsHeading', { count: stock.broker_reports.length || brokerConsensus?.n || 0 })}</div>
             {stock.broker_reports.length === 0 ? (
               brokerConsensus ? (
                 <div
                   className="rounded-md bg-bg-card px-3 py-2.5 text-sm"
-                  title={brokerConsensus.source === 'tushare' ? '来源：Tushare 卖方一致预期' : undefined}
+                  title={brokerConsensus.source === 'tushare' ? t('news.consensusSourceTitle') : undefined}
                 >
                   <div className="font-semibold tabular-nums">
-                    卖方一致目标价 {stock.currency}{formatPrice(brokerConsensus.target)}
+                    {t('news.consensusTarget', { price: `${stock.currency}${formatPrice(brokerConsensus.target)}` })}
                     {brokerConsensus.source === 'tushare' && (
                       <sup className="ml-0.5 text-[9px] font-normal text-text-dim">tushare</sup>
                     )}
                   </div>
                   <div className="text-[11px] text-text-dim">
-                    {brokerConsensus.n} 份研报
+                    {t('news.reportCount', { n: brokerConsensus.n })}
                     {brokerConsensus.min != null && brokerConsensus.max != null && brokerConsensus.max > brokerConsensus.min
-                      ? ` · 区间 ${stock.currency}${formatPrice(brokerConsensus.min)} – ${stock.currency}${formatPrice(brokerConsensus.max)}`
+                      ? t('news.range', { min: `${stock.currency}${formatPrice(brokerConsensus.min)}`, max: `${stock.currency}${formatPrice(brokerConsensus.max)}` })
                       : ''}
                   </div>
                 </div>
               ) : (
-                <div className="py-8 text-center text-sm text-text-dim">暂无近期研报</div>
+                <div className="py-8 text-center text-sm text-text-dim">{t('news.noRecentReports')}</div>
               )
             ) : (
               stock.broker_reports.map((r, i) => (
@@ -306,7 +306,7 @@ export default function StockDetailPage() {
                     <div className="text-[11px] text-text-dim">{r.date} · {r.rating}</div>
                   </div>
                   <div className="text-right">
-                    <div className="font-semibold tabular-nums">目标 {r.target}</div>
+                    <div className="font-semibold tabular-nums">{t('news.targetLabel', { target: r.target })}</div>
                     <div className={`text-[11px] ${r.target_change_pct > 0 ? 'text-up' : r.target_change_pct < 0 ? 'text-down' : ''}`}>
                       {r.target_change_pct > 0 ? '↑ +' : r.target_change_pct < 0 ? '↓ ' : '→ '}{r.target_change_pct}%
                     </div>
@@ -316,9 +316,9 @@ export default function StockDetailPage() {
             )}
           </div>
           <div className="card-base">
-            <div className="mb-3 text-sm font-semibold text-text-dim">📰 新闻动态 ({stock.news.length})</div>
+            <div className="mb-3 text-sm font-semibold text-text-dim">{t('news.newsHeading', { count: stock.news.length })}</div>
             {stock.news.length === 0 ? (
-              <div className="py-8 text-center text-sm text-text-dim">暂无最新新闻</div>
+              <div className="py-8 text-center text-sm text-text-dim">{t('news.noNews')}</div>
             ) : (
               stock.news.map((n, i) => (
                 <div key={i} className="grid grid-cols-[auto_1fr_auto] items-center gap-2.5 border-b border-border px-3 py-2.5 text-sm last:border-b-0">
@@ -336,10 +336,10 @@ export default function StockDetailPage() {
 
       {tab === 'signals' && (
         <div className="card-base">
-          <div className="mb-3 text-sm font-semibold text-text-dim">🎯 Sentinel 历史信号</div>
+          <div className="mb-3 text-sm font-semibold text-text-dim">{t('signals.heading')}</div>
           <div className="py-8 text-center text-sm text-text-dim">
-            <p>该标的近 90 天信号回看待开发（v1.0）。</p>
-            <p className="mt-2 text-[11px]">展示：信号触发日期 + 当日 brief 节选 + 后续 N 天股价表现 + 命中率统计</p>
+            <p>{t('signals.pending')}</p>
+            <p className="mt-2 text-[11px]">{t('signals.pendingDetail')}</p>
           </div>
         </div>
       )}
@@ -347,15 +347,13 @@ export default function StockDetailPage() {
       {tab === 'holdings' && (
         <div className="card-base">
           <div className="mb-3 text-sm font-semibold text-text-dim">
-            🏛 13F 持仓变动{stock.market === 'US' ? '' : '（仅美股可用）'}
+            {t('holdings.heading', { suffix: stock.market === 'US' ? '' : t('holdings.headingSuffix') })}
           </div>
           <div className="py-8 text-center text-sm text-text-dim">
             <p>
-              {stock.market === 'US'
-                ? '关注的对冲基金（Berkshire / Bridgewater / Burry 等）13F 持仓变动数据待接入。'
-                : '此标的非美股，无 13F 数据。'}
+              {stock.market === 'US' ? t('holdings.usBody') : t('holdings.nonUsBody')}
             </p>
-            <p className="mt-2 text-[11px]">数据源：EDGAR 13F-HR · 季度更新</p>
+            <p className="mt-2 text-[11px]">{t('holdings.dataSource')}</p>
           </div>
         </div>
       )}
