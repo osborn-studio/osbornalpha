@@ -1,6 +1,7 @@
 // TODO(P5): replace MOCK_DATA with live macro source
 'use client';
 
+import { useTranslations } from 'next-intl';
 import { Panel } from '@/components/ui';
 import { MOCK_DATA } from '@/lib/data/mock';
 import { formatPct, changeClass } from '@/lib/utils';
@@ -20,21 +21,22 @@ function MacroLine({
 }
 
 export function MacroGlance() {
+  const t = useTranslations('today');
   const { macro } = MOCK_DATA;
   return (
-    <Panel title="宏观速览">
+    <Panel title={t('macro.title')}>
       <div className="space-y-1 text-[11px]">
-        <MacroLine label="上证" v={macro.sse_index.value} pct={macro.sse_index.change_pct} />
-        <MacroLine label="恒生" v={macro.hsi_index.value} pct={macro.hsi_index.change_pct} />
-        <MacroLine label="纳指" v={macro.nasdaq.value} pct={macro.nasdaq.change_pct} />
+        <MacroLine label={t('macro.sse')} v={macro.sse_index.value} pct={macro.sse_index.change_pct} />
+        <MacroLine label={t('macro.hsi')} v={macro.hsi_index.value} pct={macro.hsi_index.change_pct} />
+        <MacroLine label={t('macro.nasdaq')} v={macro.nasdaq.value} pct={macro.nasdaq.change_pct} />
         <MacroLine
-          label="美 10Y"
+          label={t('macro.us10y')}
           v={macro.us_10y.value}
           suffix="%"
           raw={`${macro.us_10y.change_bp > 0 ? '+' : ''}${macro.us_10y.change_bp}bp`}
           chgClass={changeClass(macro.us_10y.change_bp)}
         />
-        <MacroLine label="DXY" v={macro.dxy.value} pct={macro.dxy.change_pct} />
+        <MacroLine label={t('macro.dxy')} v={macro.dxy.value} pct={macro.dxy.change_pct} />
       </div>
     </Panel>
   );

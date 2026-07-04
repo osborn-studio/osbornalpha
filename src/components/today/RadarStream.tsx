@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useTranslations } from 'next-intl';
 import type { RadarPayload, RadarLevel } from '@/lib/brief/radar';
 import { changeClass, formatPct, marketLabel } from '@/lib/utils';
 
@@ -18,6 +19,7 @@ function emojiForLevel(l: RadarLevel): string {
 }
 
 export function RadarStream({ tickers }: { tickers: string[] }) {
+  const t = useTranslations('today');
   const [data, setData] = useState<RadarApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +45,7 @@ export function RadarStream({ tickers }: { tickers: string[] }) {
       })
       .catch((e: any) => {
         if (cancelled) return;
-        setError(e?.message || '加载失败');
+        setError(e?.message || t('radar.loadFailed'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -55,13 +57,13 @@ export function RadarStream({ tickers }: { tickers: string[] }) {
   if (tickers.length === 0) {
     return (
       <div className="card-base py-8 text-center text-sm text-text-dim">
-        股票池是空的。先去 <Link href="/watchlist" className="text-accent">📋 股票池</Link> 添加几只股票。
+        {t('radar.emptyPrefix')}<Link href="/watchlist" className="text-accent">{t('radar.emptyLink')}</Link>{t('radar.emptySuffix')}
       </div>
     );
   }
 
   if (loading && !data) {
-    return <div className="card-base py-8 text-center text-sm text-text-dim">加载雷达中…</div>;
+    return <div className="card-base py-8 text-center text-sm text-text-dim">{t('radar.loading')}</div>;
   }
 
   if (error) {
@@ -97,7 +99,7 @@ export function RadarStream({ tickers }: { tickers: string[] }) {
               onClick={() => setWhiteExpanded(true)}
               className="card-base w-full py-2 text-left text-xs text-text-dim hover:text-text"
             >
-              ⚪ 平静 {whites.length} 只（展开）
+              {t('radar.whiteCollapsed', { count: whites.length })}
             </button>
           ) : (
             <div className="space-y-1.5">
