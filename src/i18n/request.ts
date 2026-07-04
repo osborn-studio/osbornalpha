@@ -11,6 +11,8 @@ const MESSAGE_DOMAINS = [
   'common', 'landing', 'auth', 'errors', 'settings',
   // G1b domains (pre-registered for the parallel extraction fan-out):
   'today', 'portfolio', 'intel', 'tools', 'market', 'components',
+  // G1d domains (pre-registered, same fan-out pattern):
+  'briefs', 'radar', 'watchlist',
 ] as const;
 
 export default getRequestConfig(async () => {
