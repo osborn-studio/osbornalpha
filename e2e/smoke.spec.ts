@@ -57,10 +57,16 @@ test('/en serves the English landing page', async ({ page }) => {
   expect(await page.locator('html').getAttribute('lang')).toBe('en');
 });
 
-test('/ stays Chinese by default', async ({ page }) => {
-  await page.goto('/');
-  await expect(page).toHaveTitle(/AI 投资监控工作台/);
-  expect(await page.locator('html').getAttribute('lang')).toBe('zh-CN');
+// `/` auto-detects via Accept-Language (spec's resolution chain), so pin a
+// Chinese browser context for the zh assertion; English browsers get EN on `/`
+// by design, while `/en` is always English regardless of browser locale.
+test.describe('zh-locale browser', () => {
+  test.use({ locale: 'zh-CN' });
+  test('/ serves Chinese for zh browsers', async ({ page }) => {
+    await page.goto('/');
+    await expect(page).toHaveTitle(/AI 投资监控工作台/);
+    expect(await page.locator('html').getAttribute('lang')).toBe('zh-CN');
+  });
 });
 
 test('/en/<protected> lands on login without /en polluting the next param', async ({ page }) => {
