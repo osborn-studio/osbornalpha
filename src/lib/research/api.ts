@@ -9,6 +9,7 @@ import { ResearchDisabled } from './db';
 import { SourceValidationError } from './sources';
 import { ThesisError } from './theses';
 import { AxiomBlocked, PlaybookError } from './playbooks';
+import { EvalError } from './evals';
 
 export function researchError(e: unknown): NextResponse {
   if (e instanceof ResearchDisabled) {
@@ -36,6 +37,12 @@ export function researchError(e: unknown): NextResponse {
   if (e instanceof PlaybookError) {
     return NextResponse.json(
       { error: { code: 'PLAYBOOK_ERROR', message: e.message } },
+      { status: e.status },
+    );
+  }
+  if (e instanceof EvalError) {
+    return NextResponse.json(
+      { error: { code: 'EVAL_ERROR', message: e.message } },
       { status: e.status },
     );
   }
