@@ -2,12 +2,14 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 import { marketLabel } from '@/lib/utils';
 import type { Market } from '@/lib/supabase/database.types';
 
 interface ApiResult { t: string; n: string; py: string; m: Market }
 
 export function SearchInput() {
+  const t = useTranslations('components.search');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<ApiResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -106,7 +108,7 @@ export function SearchInput() {
           ref={inputRef}
           type="text"
           autoComplete="off"
-          placeholder="搜索代码或名称（⌘+K · 全 A/H/US · 如 完美世界 / AAPL / 600519）"
+          placeholder={t('placeholder')}
           value={query}
           onChange={(e) => onChange(e.target.value)}
           onFocus={() => results.length && setOpen(true)}
@@ -118,7 +120,7 @@ export function SearchInput() {
         <div className="absolute left-0 right-0 top-full z-50 mt-1.5 max-h-[420px] overflow-y-auto rounded-lg border border-border bg-bg-elevated shadow-lg">
           {results.length === 0 && (
             <div className="px-3 py-4 text-center text-xs text-text-dim">
-              {loading ? '搜索中...' : '没有匹配结果'}
+              {loading ? t('searching') : t('noResults')}
             </div>
           )}
           {results.map((r, i) => (

@@ -4,6 +4,30 @@ import {
   fetchTushareNorthboundTop10,
   fetchTushareLimitList,
 } from '@/lib/data/sources/tushare-cached';
+import { getRequestLocale } from '@/lib/i18n/server';
+import type { AppLocale } from '@/lib/i18n/locale';
+
+// User-visible strings (error payloads + trigger `desc` chips) — localized via
+// the G1c inline-dictionary pattern (see src/lib/brief/radar.ts). zh values are
+// the pre-existing literals, byte-identical. en follows messages/GLOSSARY.md.
+const FLOWS_STRINGS = {
+  zh: {
+    unsupported: '资金面数据仅支持 A 股',
+    noToken: 'TUSHARE_TOKEN 未配置',
+    northTop10Count: (n: number) => `近 30 天 ${n} 次进入北上前十`,
+    northLatestRank: (rank: number) => `最新北上排名第 ${rank}`,
+    limitStreak: (n: number) => `${n} 连板`,
+    recentLimitUp: '近日涨停',
+  },
+  en: {
+    unsupported: 'Flows data is only available for A-shares',
+    noToken: 'TUSHARE_TOKEN is not configured',
+    northTop10Count: (n: number) => `Northbound top-10 ${n}x in 30d`,
+    northLatestRank: (rank: number) => `Latest northbound rank #${rank}`,
+    limitStreak: (n: number) => `${n} consecutive limit-ups`,
+    recentLimitUp: 'Recent limit-up',
+  },
+} satisfies Record<AppLocale, unknown>;
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 3600;
@@ -33,17 +57,19 @@ export async function GET(req: Request, { params }: Ctx) {
   const ticker = decodeURIComponent(raw);
   const url = new URL(req.url);
   const debug = url.searchParams.get('debug') === '1';
+  const locale = await getRequestLocale();
+  const S = FLOWS_STRINGS[locale];
 
   if (!/\.(SH|SZ|BJ)$/i.test(ticker)) {
     return NextResponse.json(
-      { source: 'unsupported', ticker, error: '资金面数据仅支持 A 股' },
+      { source: 'unsupported', ticker, error: S.unsupported },
       { status: 200 }
     );
   }
 
   if (!isTushareConfigured()) {
     return NextResponse.json(
-      { source: 'no-token', ticker, error: 'TUSHARE_TOKEN 未配置' },
+      { source: 'no-token', ticker, error: S.noToken },
       { status: 200 }
     );
   }
@@ -128,26 +154,26 @@ export async function GET(req: Request, { params }: Ctx) {
       if (n >= 10) {
         triggers.push({
           rule: 'north_top10_frequent',
-          desc: `近 30 天 ${n} 次进入北上前十`,
+          desc: S.northTop10Count(n),
           weight: 3,
         });
       } else if (n >= 5) {
         triggers.push({
           rule: 'north_top10_recurring',
-          desc: `近 30 天 ${n} 次进入北上前十`,
+          desc: S.northTop10Count(n),
           weight: 2,
         });
       } else {
         triggers.push({
           rule: 'north_top10_appeared',
-          desc: `近 30 天 ${n} 次进入北上前十`,
+          desc: S.northTop10Count(n),
           weight: 1,
         });
       }
       if (northbound.latest_rank !== null && northbound.latest_rank <= 3) {
         triggers.push({
           rule: 'north_top3_today',
-          desc: `最新北上排名第 ${northbound.latest_rank}`,
+          desc: S.northLatestRank(northbound.latest_rank),
           weight: 3,
         });
       }
@@ -155,13 +181,13 @@ export async function GET(req: Request, { params }: Ctx) {
     if (limits.current_streak >= 3) {
       triggers.push({
         rule: `limit_streak_${limits.current_streak}b`,
-        desc: `${limits.current_streak} 连板`,
+        desc: S.limitStreak(limits.current_streak),
         weight: Math.min(5, limits.current_streak),
       });
     } else if (limits.current_streak === 1 || limits.current_streak === 2) {
       triggers.push({
         rule: 'recent_limit_up',
-        desc: '近日涨停',
+        desc: S.recentLimitUp,
         weight: 2,
       });
     }

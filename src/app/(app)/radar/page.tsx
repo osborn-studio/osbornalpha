@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useLocale } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { Disclaimer } from '@/components/Disclaimer';
 import { useDisplayTimezone } from '@/components/TimezoneProvider';
 import { formatDateTimeLocale, type AppLocale } from '@/lib/i18n/locale';
@@ -28,6 +28,7 @@ function colorClassForLevel(l: RadarLevel | undefined): string {
 }
 
 export default function RadarPage() {
+  const t = useTranslations('radar');
   const locale = useLocale() as AppLocale;
   const tz = useDisplayTimezone();
   const { groups, hydrated } = useWatchlist();
@@ -51,7 +52,7 @@ export default function RadarPage() {
       setData(json);
       setGeneratedAt(json.generated_at);
     } catch (e: any) {
-      setError(e?.message || '加载失败');
+      setError(e?.message || t('loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -88,11 +89,11 @@ export default function RadarPage() {
     <>
       <div className="mb-3 flex items-start justify-between gap-2">
         <div>
-          <h1 className="text-xl font-bold">🌅 每股雷达</h1>
+          <h1 className="text-xl font-bold">{t('title')}</h1>
           <div className="mt-0.5 text-[11px] text-text-dim">
-            每只股一份 morning note · 由 <code className="rounded bg-bg-card px-1">stock-daily-radar</code> skill 驱动
+            {t('subtitlePrefix')}<code className="rounded bg-bg-card px-1">stock-daily-radar</code>{t('subtitleSuffix')}
             {generatedAt && (
-              <span className="ml-2">· 生成 {formatDateTimeLocale(generatedAt, locale, tz)}</span>
+              <span className="ml-2">{t('generatedAt', { time: formatDateTimeLocale(generatedAt, locale, tz) })}</span>
             )}
           </div>
         </div>
@@ -101,7 +102,7 @@ export default function RadarPage() {
           disabled={loading || allTickers.length === 0}
           className="shrink-0 rounded-md bg-accent-dim px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
         >
-          {loading ? '生成中…' : '🔄 刷新'}
+          {loading ? t('refreshing') : t('refresh')}
         </button>
       </div>
 
@@ -111,13 +112,13 @@ export default function RadarPage() {
 
       {!hydrated && (
         <div className="card-base py-8 text-center text-sm text-text-dim">
-          加载股票池…
+          {t('loadingWatchlist')}
         </div>
       )}
 
       {hydrated && allTickers.length === 0 && (
         <div className="card-base py-8 text-center text-sm text-text-dim">
-          股票池是空的。先去 <Link href="/watchlist" className="text-accent">📋 股票池</Link> 添加几只股票。
+          {t('emptyPrefix')}<Link href="/watchlist" className="text-accent">{t('emptyLink')}</Link>{t('emptySuffix')}
         </div>
       )}
 
@@ -129,7 +130,7 @@ export default function RadarPage() {
             const count = isAll
               ? counters.red + counters.yellow + counters.white
               : counters[lv as Exclude<typeof lv, 'all'>];
-            const label = isAll ? '全部' : lv === 'red' ? '🔴 关注' : lv === 'yellow' ? '🟡 留意' : '⚪️ 平静';
+            const label = isAll ? t('filter.all') : lv === 'red' ? t('filter.red') : lv === 'yellow' ? t('filter.yellow') : t('filter.white');
             return (
               <button
                 key={lv}
@@ -145,7 +146,7 @@ export default function RadarPage() {
             );
           })}
           {counters.errors > 0 && (
-            <span className="ml-2 text-[10px] text-down">⚠ {counters.errors} 只加载失败</span>
+            <span className="ml-2 text-[10px] text-down">{t('loadErrors', { count: counters.errors })}</span>
           )}
         </div>
       )}
@@ -158,7 +159,7 @@ export default function RadarPage() {
             return (
               <div key={ticker} className="card-base flex items-center justify-between text-xs">
                 <span>{ticker}</span>
-                <span className="text-text-dim">⏳ 加载中…</span>
+                <span className="text-text-dim">{t('cardLoading')}</span>
               </div>
             );
           }
@@ -193,6 +194,8 @@ interface CardProps {
 }
 
 function RadarCard({ r, onShowMarkdown }: CardProps) {
+  const t = useTranslations('radar');
+  const locale = useLocale() as AppLocale;
   const change = r.sections.price.change_pct;
   const changeCls =
     change === null ? 'text-text-dim' : change > 0 ? 'text-up' : change < 0 ? 'text-down' : 'text-text-dim';
@@ -222,7 +225,7 @@ function RadarCard({ r, onShowMarkdown }: CardProps) {
             )}
           </div>
           <div className="text-[10px] text-text-muted">
-            {emojiForLevel(r.radar_level)} {r.level_label} · 评分 {r.score >= 0 ? '+' : ''}{r.score}
+            {emojiForLevel(r.radar_level)} {r.level_label} · {t('score')} {r.score >= 0 ? '+' : ''}{r.score}
           </div>
         </div>
       </div>
@@ -255,21 +258,25 @@ function RadarCard({ r, onShowMarkdown }: CardProps) {
         <div className="space-y-0.5 text-[11px] text-text-dim">
           {r.sections.flows.available && r.sections.flows.north_top10_count_30d > 0 && (
             <div>
-              🌏 北上：近 30 天 <span className="text-text font-semibold">{r.sections.flows.north_top10_count_30d}</span> 次前十
+              {t('flows.northPrefix')}<span className="text-text font-semibold">{r.sections.flows.north_top10_count_30d}</span>{t('flows.northSuffix')}
               {r.sections.flows.north_latest_rank !== null && (
-                <span className="text-text-muted"> · 最新 #{r.sections.flows.north_latest_rank}</span>
+                <span className="text-text-muted">{t('flows.latestRank', { rank: r.sections.flows.north_latest_rank })}</span>
               )}
               {r.sections.flows.north_total_amount_30d_yi !== null && (
-                <span className="text-text-muted"> · 累计 {r.sections.flows.north_total_amount_30d_yi.toFixed(0)} 亿</span>
+                <span className="text-text-muted">{t('flows.totalAmount', {
+                  amount: locale === 'en'
+                    ? (r.sections.flows.north_total_amount_30d_yi / 10).toFixed(1)
+                    : r.sections.flows.north_total_amount_30d_yi.toFixed(0),
+                })}</span>
               )}
             </div>
           )}
           {r.sections.flows.limit_streak >= 3 && (
-            <div className="font-semibold text-up">🔥 {r.sections.flows.limit_streak} 连板</div>
+            <div className="font-semibold text-up">{t('flows.limitStreak', { count: r.sections.flows.limit_streak })}</div>
           )}
           {r.sections.events.length > 0 && (
             <div>
-              📢 {r.sections.events.length} 条公告 · 最新：
+              {t('flows.events', { count: r.sections.events.length })}
               <span className="text-text">{r.sections.events[0].title.slice(0, 30)}{r.sections.events[0].title.length > 30 ? '…' : ''}</span>
             </div>
           )}
@@ -278,16 +285,16 @@ function RadarCard({ r, onShowMarkdown }: CardProps) {
 
       {/* Footer actions */}
       <div className="mt-2 flex items-center justify-between border-t border-border pt-1.5 text-[10px]">
-        <span className="text-text-muted">来源: {r.sections.price.source}</span>
+        <span className="text-text-muted">{t('source', { source: r.sections.price.source })}</span>
         <div className="flex gap-2">
           <button
             onClick={() => onShowMarkdown(r.markdown)}
             className="text-accent hover:underline"
           >
-            📝 完整 morning note
+            {t('fullNote')}
           </button>
           <Link href={`/stock/${encodeURIComponent(r.ticker)}`} className="text-accent hover:underline">
-            详情 →
+            {t('details')}
           </Link>
         </div>
       </div>
@@ -300,6 +307,7 @@ function RadarCard({ r, onShowMarkdown }: CardProps) {
 // ──────────────────────────────────────────────────────────────────────────
 
 function MarkdownModal({ markdown, onClose }: { markdown: string; onClose: () => void }) {
+  const t = useTranslations('radar');
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
@@ -318,7 +326,7 @@ function MarkdownModal({ markdown, onClose }: { markdown: string; onClose: () =>
               }}
               className="rounded bg-accent-dim px-2 py-1 text-xs text-white"
             >
-              复制
+              {t('copy')}
             </button>
             <button onClick={onClose} className="rounded p-1 text-text-dim hover:text-text">×</button>
           </div>

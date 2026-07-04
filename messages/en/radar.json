@@ -1,1 +1,34 @@
-{}
+{
+  "title": "🌅 Per-Stock Radar",
+  "subtitlePrefix": "One morning note per stock · powered by the ",
+  "subtitleSuffix": " skill",
+  "generatedAt": "· Generated {time}",
+  "refreshing": "Generating…",
+  "refresh": "🔄 Refresh",
+  "loadFailed": "Failed to load",
+  "loadingWatchlist": "Loading watchlist…",
+  "emptyPrefix": "Your watchlist is empty. Go to ",
+  "emptyLink": "📋 Watchlist",
+  "emptySuffix": " to add a few stocks.",
+  "filter": {
+    "all": "All",
+    "red": "🔴 Alert",
+    "yellow": "🟡 Watch",
+    "white": "⚪️ Calm"
+  },
+  "loadErrors": "⚠ {count} failed to load",
+  "cardLoading": "⏳ Loading…",
+  "score": "Score",
+  "flows": {
+    "northPrefix": "🌏 Northbound: ",
+    "northSuffix": " top-10 entries in 30d",
+    "latestRank": " · latest #{rank}",
+    "totalAmount": " · cumulative {amount}B CNY",
+    "limitStreak": "🔥 {count} consecutive limit-ups",
+    "events": "📢 {count} announcements · latest: "
+  },
+  "source": "Source: {source}",
+  "fullNote": "📝 Full morning note",
+  "details": "Details →",
+  "copy": "Copy"
+}

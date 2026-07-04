@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import { GeistSans } from 'geist/font/sans';
 import { GeistMono } from 'geist/font/mono';
-import { getLocale, getMessages } from 'next-intl/server';
+import { getLocale, getMessages, getTranslations } from 'next-intl/server';
 import { NextIntlClientProvider } from 'next-intl';
 import './globals.css';
 import { ToastProvider } from '@/components/Toast';
@@ -10,16 +10,19 @@ import { ToastProvider } from '@/components/Toast';
 // package (Vercel's preferred path). CSS vars --font-geist-sans /
 // --font-geist-mono are emitted on <html> and consumed in globals.css.
 
-export const metadata: Metadata = {
-  title: { default: 'osbornalpha · AI 投资监控工作台', template: '%s · osbornalpha' },
-  description: 'AI 投资监控工作台 · 个人股票池每日 AI 监控 · A 股 / 港股 / 美股',
-  manifest: '/manifest.json',
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: 'black-translucent',
-    title: 'osbornalpha',
-  },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations('common.meta');
+  return {
+    title: { default: t('title'), template: '%s · osbornalpha' },
+    description: t('description'),
+    manifest: '/manifest.json',
+    appleWebApp: {
+      capable: true,
+      statusBarStyle: 'black-translucent',
+      title: 'osbornalpha',
+    },
+  };
+}
 
 export const viewport: Viewport = {
   themeColor: '#0a0a0b',
