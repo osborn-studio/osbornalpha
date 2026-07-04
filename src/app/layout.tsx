@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from 'next';
 import { GeistSans } from 'geist/font/sans';
 import { GeistMono } from 'geist/font/mono';
+import { getLocale, getMessages } from 'next-intl/server';
+import { NextIntlClientProvider } from 'next-intl';
 import './globals.css';
 import { ToastProvider } from '@/components/Toast';
 
@@ -26,10 +28,13 @@ export const viewport: Viewport = {
   viewportFit: 'cover',
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const locale = await getLocale();
+  const messages = await getMessages();
+
   return (
     <html
-      lang="zh-CN"
+      lang={locale === 'en' ? 'en' : 'zh-CN'}
       className={`theme-dark ${GeistSans.variable} ${GeistMono.variable}`}
       data-color-scheme="cn"
       suppressHydrationWarning
@@ -52,7 +57,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
-        <ToastProvider>{children}</ToastProvider>
+        <NextIntlClientProvider locale={locale} messages={messages}>
+          <ToastProvider>{children}</ToastProvider>
+        </NextIntlClientProvider>
       </body>
     </html>
   );
