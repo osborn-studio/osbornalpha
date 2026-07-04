@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { buildRadar, type RadarPayload } from '@/lib/brief/radar';
+import { getRequestLocale } from '@/lib/i18n/server';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 1800;
@@ -27,7 +28,8 @@ export async function GET(req: Request) {
     return NextResponse.json({ radars: {} });
   }
 
-  const results = await Promise.allSettled(tickers.map((t) => buildRadar(t)));
+  const locale = await getRequestLocale();
+  const results = await Promise.allSettled(tickers.map((t) => buildRadar(t, locale)));
   const radars: Record<string, RadarPayload | { error: string }> = {};
   results.forEach((r, i) => {
     if (r.status === 'fulfilled') {

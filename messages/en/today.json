@@ -3,6 +3,14 @@
     "title": "Today",
     "loading": "Loading…"
   },
+  "phase": {
+    "pre": "Pre-market · {minutes} min to A-share open",
+    "openMorning": "Trading · {minutes} min to lunch break",
+    "lunch": "Lunch break · {minutes} min to afternoon open",
+    "openAfternoon": "Trading · {minutes} min to close",
+    "closed": "Market closed",
+    "weekend": "Weekend — market closed"
+  },
   "radar": {
     "emptyPrefix": "Your watchlist is empty. Go to ",
     "emptyLink": "📋 Watchlist",

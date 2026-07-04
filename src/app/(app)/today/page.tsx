@@ -15,10 +15,10 @@ export default function TodayPage() {
   const t = useTranslations('today');
   const { groups, hydrated } = useWatchlist();
   const { data: portfolio, loading: portfolioLoading } = usePortfolio();
-  const [phaseLabel, setPhaseLabel] = useState(() => aShareMarketPhase(new Date()).label);
+  const [phase, setPhase] = useState(() => aShareMarketPhase(new Date()));
 
   useEffect(() => {
-    const tick = () => setPhaseLabel(aShareMarketPhase(new Date()).label);
+    const tick = () => setPhase(aShareMarketPhase(new Date()));
     tick();
     const id = setInterval(tick, 60_000);
     return () => clearInterval(id);
@@ -38,7 +38,9 @@ export default function TodayPage() {
     <div>
       <div className="mb-3">
         <h1 className="text-xl font-bold">{t('page.title')}</h1>
-        <div className="mt-0.5 text-[11px] text-text-dim">{phaseLabel}</div>
+        <div className="mt-0.5 text-[11px] text-text-dim">
+          {t(`phase.${phase.phaseKey}`, { minutes: phase.minutes ?? 0 })}
+        </div>
       </div>
 
       <div className="grid gap-3 lg:grid-cols-[1fr_320px]">

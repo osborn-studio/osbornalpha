@@ -26,6 +26,7 @@ import {
 } from '@/lib/data/sources/tushare-cached';
 import { MOCK_UNIVERSE } from '@/lib/data/mock';
 import { buildCalendar, type CalendarEvent } from './calendar';
+import type { AppLocale } from '@/lib/i18n/locale';
 
 export type RadarLevel = 'red' | 'yellow' | 'white';
 
@@ -92,6 +93,66 @@ export interface RadarPayload {
 
 const DISCLAIMER = '本简报仅作决策辅助，不构成投资建议';
 
+// Localized level_label + trigger-desc + headline phrase templates.
+// buildRadar()'s `locale` param defaults to 'zh' (see below), so cron
+// (daily-radar) and composer.ts call sites — which never pass a locale —
+// compile and behave unchanged. Only the two API routes that read
+// getRequestLocale() thread a real locale through.
+const RADAR_TEXT = {
+  zh: {
+    levelLabel: { red: '关注', yellow: '留意', white: '平静' } as Record<RadarLevel, string>,
+    trigger: {
+      dailyMove: (pct: number) => `单日 ${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`,
+      highTurnover: (v: number) => `换手率 ${v.toFixed(2)}%`,
+      anomalousVolume: (v: number) => `量比 ${v.toFixed(2)}x`,
+      highAmplitude: (v: number) => `振幅 ${v.toFixed(2)}%`,
+      northTop10Count: (n: number) => `近 30 天 ${n} 次进入北上前十`,
+      northTop3Today: (rank: number) => `最新北上排名第 ${rank}`,
+      limitStreak: (n: number) => `${n} 连板`,
+      earningsToday: '今日财报披露',
+      earningsT1: '财报前夜 (T-1)',
+      earningsTn: (n: number) => `财报临近 T-${n}`,
+    },
+    headline: {
+      dailyMove: (pct: number) => `单日 ${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`,
+      earningsT1: '财报前夜 T-1',
+      earningsTn: (n: number) => `财报临近 T-${n}`,
+      limitStreak: (n: number) => `${n} 连板`,
+      northTop10Rank: (rank: number) => `北上前十 #${rank}`,
+      northTop10Count: (n: number) => `近 30 天 ${n} 次进北上前十`,
+      announcements: (n: number) => `今日 ${n} 条公告`,
+      calmFallback: '今日无重大事件，维持持仓',
+      elevatedFallback: '信号偏离常态，留意',
+    },
+  },
+  en: {
+    levelLabel: { red: 'Alert', yellow: 'Watch', white: 'Calm' } as Record<RadarLevel, string>,
+    trigger: {
+      dailyMove: (pct: number) => `Daily ${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`,
+      highTurnover: (v: number) => `Turnover ${v.toFixed(2)}%`,
+      anomalousVolume: (v: number) => `Volume ratio ${v.toFixed(2)}x`,
+      highAmplitude: (v: number) => `Amplitude ${v.toFixed(2)}%`,
+      northTop10Count: (n: number) => `Northbound top-10 ${n}x in 30d`,
+      northTop3Today: (rank: number) => `Latest northbound rank #${rank}`,
+      limitStreak: (n: number) => `${n} consecutive limit-ups`,
+      earningsToday: 'Earnings released today',
+      earningsT1: 'Earnings eve (T-1)',
+      earningsTn: (n: number) => `Earnings approaching T-${n}`,
+    },
+    headline: {
+      dailyMove: (pct: number) => `Daily ${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`,
+      earningsT1: 'Earnings eve T-1',
+      earningsTn: (n: number) => `Earnings approaching T-${n}`,
+      limitStreak: (n: number) => `${n} consecutive limit-ups`,
+      northTop10Rank: (rank: number) => `Northbound top-10 #${rank}`,
+      northTop10Count: (n: number) => `Northbound top-10 ${n}x in 30d`,
+      announcements: (n: number) => `${n} announcements today`,
+      calmFallback: 'No major events today, hold steady',
+      elevatedFallback: 'Signal deviates from normal — watch closely',
+    },
+  },
+} satisfies Record<AppLocale, unknown>;
+
 function lookupName(ticker: string): string {
   return MOCK_UNIVERSE.find((u) => u.t === ticker)?.n || ticker;
 }
@@ -107,38 +168,40 @@ async function resolveQuote(ticker: string): Promise<any | null> {
   return null;
 }
 
-function computePriceTriggers(q: any): RadarTrigger[] {
+function computePriceTriggers(q: any, locale: AppLocale): RadarTrigger[] {
+  const T = RADAR_TEXT[locale].trigger;
   const t: RadarTrigger[] = [];
   if (typeof q?.change_pct !== 'number') return t;
   if (Math.abs(q.change_pct) >= 5) {
     t.push({
       rule: 'large_move',
-      desc: `单日 ${q.change_pct > 0 ? '+' : ''}${q.change_pct.toFixed(2)}%`,
+      desc: T.dailyMove(q.change_pct),
       weight: 3,
     });
   } else if (Math.abs(q.change_pct) >= 3) {
     t.push({
       rule: 'medium_move',
-      desc: `单日 ${q.change_pct > 0 ? '+' : ''}${q.change_pct.toFixed(2)}%`,
+      desc: T.dailyMove(q.change_pct),
       weight: 2,
     });
   }
   if (q.turnover && q.turnover >= 5) {
-    t.push({ rule: 'high_turnover', desc: `换手率 ${q.turnover.toFixed(2)}%`, weight: 2 });
+    t.push({ rule: 'high_turnover', desc: T.highTurnover(q.turnover), weight: 2 });
   }
   if (q.volume_ratio && q.volume_ratio >= 2) {
-    t.push({ rule: 'anomalous_volume', desc: `量比 ${q.volume_ratio.toFixed(2)}x`, weight: 2 });
+    t.push({ rule: 'anomalous_volume', desc: T.anomalousVolume(q.volume_ratio), weight: 2 });
   }
   if (q.amplitude >= 5) {
-    t.push({ rule: 'high_amplitude', desc: `振幅 ${q.amplitude.toFixed(2)}%`, weight: 1 });
+    t.push({ rule: 'high_amplitude', desc: T.highAmplitude(q.amplitude), weight: 1 });
   }
   return t;
 }
 
-function levelFromScore(score: number): { level: RadarLevel; label: string } {
-  if (score >= 8) return { level: 'red',    label: '关注' };
-  if (score >= 4) return { level: 'yellow', label: '留意' };
-  return { level: 'white', label: '平静' };
+function levelFromScore(score: number, locale: AppLocale): { level: RadarLevel; label: string } {
+  const labels = RADAR_TEXT[locale].levelLabel;
+  if (score >= 8) return { level: 'red',    label: labels.red };
+  if (score >= 4) return { level: 'yellow', label: labels.yellow };
+  return { level: 'white', label: labels.white };
 }
 
 function emojiForLevel(l: RadarLevel): string {
@@ -253,33 +316,33 @@ function buildHeadline(payload: {
   triggers: RadarTrigger[];
   level: RadarLevel;
   nextEarningsDays: number | null;
+  locale: AppLocale;
 }): string {
+  const H = RADAR_TEXT[payload.locale].headline;
   const parts: string[] = [];
   if (payload.change_pct !== null) {
-    parts.push(`单日 ${payload.change_pct > 0 ? '+' : ''}${payload.change_pct.toFixed(2)}%`);
+    parts.push(H.dailyMove(payload.change_pct));
   }
   // Earnings T- countdown takes precedence in the headline when imminent
   if (payload.nextEarningsDays !== null && payload.nextEarningsDays <= 7) {
     parts.push(
       payload.nextEarningsDays <= 1
-        ? '财报前夜 T-1'
-        : `财报临近 T-${payload.nextEarningsDays}`,
+        ? H.earningsT1
+        : H.earningsTn(payload.nextEarningsDays),
     );
   }
   if (payload.flows.limit_streak >= 3) {
-    parts.push(`${payload.flows.limit_streak} 连板`);
+    parts.push(H.limitStreak(payload.flows.limit_streak));
   } else if (payload.flows.north_latest_rank !== null && payload.flows.north_latest_rank <= 3) {
-    parts.push(`北上前十 #${payload.flows.north_latest_rank}`);
+    parts.push(H.northTop10Rank(payload.flows.north_latest_rank));
   } else if (payload.flows.north_top10_count_30d >= 5) {
-    parts.push(`近 30 天 ${payload.flows.north_top10_count_30d} 次进北上前十`);
+    parts.push(H.northTop10Count(payload.flows.north_top10_count_30d));
   }
   if (payload.events.length > 0) {
-    parts.push(`今日 ${payload.events.length} 条公告`);
+    parts.push(H.announcements(payload.events.length));
   }
   if (parts.length === 0) {
-    return payload.level === 'white'
-      ? '今日无重大事件，维持持仓'
-      : '信号偏离常态，留意';
+    return payload.level === 'white' ? H.calmFallback : H.elevatedFallback;
   }
   return parts.join(' · ');
 }
@@ -289,7 +352,8 @@ function buildHeadline(payload: {
  * failure (no quote source at all); otherwise returns a payload with
  * "暂无数据" where appropriate.
  */
-export async function buildRadar(ticker: string): Promise<RadarPayload> {
+export async function buildRadar(ticker: string, locale: AppLocale = 'zh'): Promise<RadarPayload> {
+  const T = RADAR_TEXT[locale].trigger;
   const isA = /\.(SH|SZ|BJ)$/i.test(ticker);
 
   // Layer 1: quote (cascade through 4 sources)
@@ -326,37 +390,37 @@ export async function buildRadar(ticker: string): Promise<RadarPayload> {
 
   // Triggers
   const triggers: RadarTrigger[] = [];
-  if (quote) triggers.push(...computePriceTriggers(quote));
+  if (quote) triggers.push(...computePriceTriggers(quote, locale));
   if (flowsSection.north_top10_count_30d >= 10) {
     triggers.push({
       rule: 'north_top10_frequent',
-      desc: `近 30 天 ${flowsSection.north_top10_count_30d} 次进入北上前十`,
+      desc: T.northTop10Count(flowsSection.north_top10_count_30d),
       weight: 3,
     });
   } else if (flowsSection.north_top10_count_30d >= 5) {
     triggers.push({
       rule: 'north_top10_recurring',
-      desc: `近 30 天 ${flowsSection.north_top10_count_30d} 次进入北上前十`,
+      desc: T.northTop10Count(flowsSection.north_top10_count_30d),
       weight: 2,
     });
   } else if (flowsSection.north_top10_count_30d > 0) {
     triggers.push({
       rule: 'north_top10_appeared',
-      desc: `近 30 天 ${flowsSection.north_top10_count_30d} 次进入北上前十`,
+      desc: T.northTop10Count(flowsSection.north_top10_count_30d),
       weight: 1,
     });
   }
   if (flowsSection.north_latest_rank !== null && flowsSection.north_latest_rank <= 3) {
     triggers.push({
       rule: 'north_top3_today',
-      desc: `最新北上排名第 ${flowsSection.north_latest_rank}`,
+      desc: T.northTop3Today(flowsSection.north_latest_rank),
       weight: 3,
     });
   }
   if (flowsSection.limit_streak >= 3) {
     triggers.push({
       rule: `limit_streak_${flowsSection.limit_streak}b`,
-      desc: `${flowsSection.limit_streak} 连板`,
+      desc: T.limitStreak(flowsSection.limit_streak),
       weight: Math.min(5, flowsSection.limit_streak),
     });
   }
@@ -378,19 +442,19 @@ export async function buildRadar(ticker: string): Promise<RadarPayload> {
     if (du <= 1) {
       triggers.push({
         rule: 'earnings_t1',
-        desc: du === 0 ? '今日财报披露' : '财报前夜 (T-1)',
+        desc: du === 0 ? T.earningsToday : T.earningsT1,
         weight: 5,
       });
     } else if (du <= 7) {
       triggers.push({
         rule: 'earnings_t7',
-        desc: `财报临近 T-${du}`,
+        desc: T.earningsTn(du),
         weight: 3,
       });
     } else if (du <= 14) {
       triggers.push({
         rule: 'earnings_t14',
-        desc: `财报临近 T-${du}`,
+        desc: T.earningsTn(du),
         weight: 1,
       });
     }
@@ -426,7 +490,7 @@ export async function buildRadar(ticker: string): Promise<RadarPayload> {
   }
 
   const score = triggers.reduce((s, t) => s + t.weight, 0);
-  const { level, label: levelLabel } = levelFromScore(score);
+  const { level, label: levelLabel } = levelFromScore(score, locale);
 
   const events = anns.slice(0, 5).map((a) => ({ date: a.ann_date, title: a.title, url: a.url || null }));
 
@@ -437,6 +501,7 @@ export async function buildRadar(ticker: string): Promise<RadarPayload> {
     triggers,
     level,
     nextEarningsDays: calendarSection.next_earnings_days,
+    locale,
   });
 
   const partialPayload: Omit<RadarPayload, 'markdown'> = {
