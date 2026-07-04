@@ -2,7 +2,10 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useLocale } from 'next-intl';
 import { Disclaimer } from '@/components/Disclaimer';
+import { useDisplayTimezone } from '@/components/TimezoneProvider';
+import { formatDateTimeLocale, type AppLocale } from '@/lib/i18n/locale';
 import { marketLabel } from '@/lib/utils';
 import type { RadarPayload, RadarLevel } from '@/lib/brief/radar';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
@@ -25,6 +28,8 @@ function colorClassForLevel(l: RadarLevel | undefined): string {
 }
 
 export default function RadarPage() {
+  const locale = useLocale() as AppLocale;
+  const tz = useDisplayTimezone();
   const { groups, hydrated } = useWatchlist();
   const [data, setData] = useState<RadarApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -87,7 +92,7 @@ export default function RadarPage() {
           <div className="mt-0.5 text-[11px] text-text-dim">
             每只股一份 morning note · 由 <code className="rounded bg-bg-card px-1">stock-daily-radar</code> skill 驱动
             {generatedAt && (
-              <span className="ml-2">· 生成 {new Date(generatedAt).toLocaleTimeString('zh-CN')}</span>
+              <span className="ml-2">· 生成 {formatDateTimeLocale(generatedAt, locale, tz)}</span>
             )}
           </div>
         </div>

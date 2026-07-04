@@ -146,6 +146,20 @@ describe('formatDateTimeLocale', () => {
   });
 });
 
+describe('formatDateTimeLocale timezone override', () => {
+  const iso = '2026-07-04T01:30:00Z';
+  it('renders differently in Shanghai vs New_York', () => {
+    const sh = formatDateTimeLocale(iso, 'en', 'Asia/Shanghai');   // Jul 4 09:30
+    const ny = formatDateTimeLocale(iso, 'en', 'America/New_York'); // Jul 3 21:30
+    expect(sh).not.toBe(ny);
+    expect(sh).toContain('9:30');
+    expect(ny).toContain('9:30');
+  });
+  it('tz omitted keeps prior behavior (no throw, non-empty)', () => {
+    expect(formatDateTimeLocale(iso, 'zh').length).toBeGreaterThan(0);
+  });
+});
+
 // Type-level smoke check: AppLocale must accept exactly 'zh' | 'en'.
 const _zh: AppLocale = 'zh';
 const _en: AppLocale = 'en';
