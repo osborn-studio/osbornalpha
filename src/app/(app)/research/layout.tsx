@@ -11,9 +11,10 @@ const NAV = [
   { href: '/research/signals', label: 'Signals' },
   { href: '/research/theses', label: 'Theses' },
   { href: '/research/memos', label: 'Memos' },
+  { href: '/research/playbooks', label: 'Playbooks' },
 ];
 
-const PHASE3 = ['Playbooks', 'Evals'];
+const PHASE4 = ['Evals'];
 
 export default function ResearchLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -26,11 +27,11 @@ export default function ResearchLayout({ children }: { children: React.ReactNode
           </Link>
         ))}
         <span className="mx-1 text-gray-300">|</span>
-        {PHASE3.map((label) => (
+        {PHASE4.map((label) => (
           <span
             key={label}
             className="cursor-not-allowed rounded px-3 py-1 text-gray-300"
-            title="Phase 3"
+            title="Phase 4"
           >
             {label}
           </span>

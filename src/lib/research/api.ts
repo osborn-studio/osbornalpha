@@ -8,6 +8,7 @@ import { NextResponse } from 'next/server';
 import { ResearchDisabled } from './db';
 import { SourceValidationError } from './sources';
 import { ThesisError } from './theses';
+import { AxiomBlocked, PlaybookError } from './playbooks';
 
 export function researchError(e: unknown): NextResponse {
   if (e instanceof ResearchDisabled) {
@@ -22,6 +23,19 @@ export function researchError(e: unknown): NextResponse {
   if (e instanceof ThesisError) {
     return NextResponse.json(
       { error: { code: 'THESIS_ERROR', message: e.message } },
+      { status: e.status },
+    );
+  }
+  if (e instanceof AxiomBlocked) {
+    // Axiom gate: the run was NOT persisted (spec acceptance line 1).
+    return NextResponse.json(
+      { error: { code: 'AXIOM_BLOCKED', message: e.message, results: e.results } },
+      { status: 422 },
+    );
+  }
+  if (e instanceof PlaybookError) {
+    return NextResponse.json(
+      { error: { code: 'PLAYBOOK_ERROR', message: e.message } },
       { status: e.status },
     );
   }
