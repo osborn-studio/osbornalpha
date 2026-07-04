@@ -91,8 +91,6 @@ export interface RadarPayload {
   disclaimer: string;
 }
 
-const DISCLAIMER = '本简报仅作决策辅助，不构成投资建议';
-
 // Localized level_label + trigger-desc + headline phrase templates.
 // buildRadar()'s `locale` param defaults to 'zh' (see below), so cron
 // (daily-radar) and composer.ts call sites — which never pass a locale —
@@ -124,6 +122,27 @@ const RADAR_TEXT = {
       calmFallback: '今日无重大事件，维持持仓',
       elevatedFallback: '信号偏离常态，留意',
     },
+    markdown: {
+      disclaimer: '本简报仅作决策辅助，不构成投资建议',
+      priceHeader: '价格',
+      marketCap: '市值',
+      flowsHeaderLine: '**资金面** (A 股):',
+      northPrefix: '北上',
+      northCount: (n: number) => `近 30 天 **${n}** 次进入北上前十`,
+      northRank: (rank: number) => `最新排名 #${rank}`,
+      northAmount: (yi: number) => `累计成交 ${yi.toFixed(0)} 亿`,
+      limitStreak: (n: number) => `**${n} 连板** 🔥`,
+      limit30d: (n: number) => `近 30 日涨停 ${n} 次`,
+      fundamentalsHeader: '基本面',
+      grossMargin: '毛利率',
+      dividendYield: '股息率',
+      eventsHeader: '事件',
+      calendarHeader: '未来 14 天日历',
+      earningsLabel: '财报',
+      daysAgo: (d: number) => `${d}d 前`,
+      signalsHeader: '信号',
+      weightLabel: '权重',
+    },
   },
   en: {
     levelLabel: { red: 'Alert', yellow: 'Watch', white: 'Calm' } as Record<RadarLevel, string>,
@@ -149,6 +168,27 @@ const RADAR_TEXT = {
       announcements: (n: number) => `${n} announcements today`,
       calmFallback: 'No major events today, hold steady',
       elevatedFallback: 'Signal deviates from normal — watch closely',
+    },
+    markdown: {
+      disclaimer: 'This brief is decision support only and does not constitute investment advice',
+      priceHeader: 'Price',
+      marketCap: 'Mkt cap',
+      flowsHeaderLine: '**Flows** (A-share):',
+      northPrefix: 'Northbound',
+      northCount: (n: number) => `**${n}** northbound top-10 entries in 30d`,
+      northRank: (rank: number) => `latest rank #${rank}`,
+      northAmount: (yi: number) => `cumulative ¥${(yi / 10).toFixed(1)}B`,
+      limitStreak: (n: number) => `**${n} consecutive limit-ups** 🔥`,
+      limit30d: (n: number) => `${n} limit-ups in 30d`,
+      fundamentalsHeader: 'Fundamentals',
+      grossMargin: 'Gross margin',
+      dividendYield: 'Dividend yield',
+      eventsHeader: 'Events',
+      calendarHeader: 'Next 14 days',
+      earningsLabel: 'Earnings',
+      daysAgo: (d: number) => `${d}d ago`,
+      signalsHeader: 'Signals',
+      weightLabel: 'weight',
     },
   },
 } satisfies Record<AppLocale, unknown>;
@@ -226,8 +266,9 @@ function fmtPct(p: number | null, signed = true): string {
   return `${sign}${p.toFixed(2)}%`;
 }
 
-function renderMarkdown(payload: Omit<RadarPayload, 'markdown'>): string {
+function renderMarkdown(payload: Omit<RadarPayload, 'markdown'>, locale: AppLocale): string {
   const { ticker, name, sections, triggers, headline, level_label, radar_level, as_of } = payload;
+  const M = RADAR_TEXT[locale].markdown;
   const date = as_of.slice(0, 10);
   const lines: string[] = [];
 
@@ -235,45 +276,45 @@ function renderMarkdown(payload: Omit<RadarPayload, 'markdown'>): string {
   lines.push('');
   lines.push(`**Top Call**: ${headline}`);
   lines.push('');
-  lines.push(`**价格**: ${fmtPrice(sections.price.value, sections.price.currency)} ${fmtPct(sections.price.change_pct)}` +
+  lines.push(`**${M.priceHeader}**: ${fmtPrice(sections.price.value, sections.price.currency)} ${fmtPct(sections.price.change_pct)}` +
     (sections.price.pe_ttm ? ` · PE ${sections.price.pe_ttm.toFixed(1)}x` : '') +
     (sections.price.pb ? ` · PB ${sections.price.pb.toFixed(2)}` : '') +
     (sections.price.market_cap_label && sections.price.market_cap_label !== '—'
-      ? ` · 市值 ${sections.price.market_cap_label}`
+      ? ` · ${M.marketCap} ${sections.price.market_cap_label}`
       : '') +
     `  *(${sections.price.source})*`);
 
   if (sections.flows.available) {
     lines.push('');
-    lines.push('**资金面** (A 股):');
+    lines.push(M.flowsHeaderLine);
     if (sections.flows.north_top10_count_30d > 0) {
-      const parts = [`近 30 天 **${sections.flows.north_top10_count_30d}** 次进入北上前十`];
+      const parts = [M.northCount(sections.flows.north_top10_count_30d)];
       if (sections.flows.north_latest_rank !== null) {
-        parts.push(`最新排名 #${sections.flows.north_latest_rank}`);
+        parts.push(M.northRank(sections.flows.north_latest_rank));
       }
       if (sections.flows.north_total_amount_30d_yi !== null) {
-        parts.push(`累计成交 ${sections.flows.north_total_amount_30d_yi.toFixed(0)} 亿`);
+        parts.push(M.northAmount(sections.flows.north_total_amount_30d_yi));
       }
-      lines.push(`- 🌏 北上：${parts.join(' · ')}`);
+      lines.push(`- 🌏 ${M.northPrefix}：${parts.join(' · ')}`);
     }
     if (sections.flows.limit_streak >= 3) {
-      lines.push(`- **${sections.flows.limit_streak} 连板** 🔥`);
+      lines.push(`- ${M.limitStreak(sections.flows.limit_streak)}`);
     } else if (sections.flows.limit_30d_count > 0) {
-      lines.push(`- 近 30 日涨停 ${sections.flows.limit_30d_count} 次`);
+      lines.push(`- ${M.limit30d(sections.flows.limit_30d_count)}`);
     }
   }
 
   if (sections.fundamentals.roe !== null || sections.fundamentals.dividend_yield !== null) {
     lines.push('');
-    lines.push('**基本面**:');
+    lines.push(`**${M.fundamentalsHeader}**:`);
     if (sections.fundamentals.roe !== null) lines.push(`- ROE ${sections.fundamentals.roe.toFixed(1)}%`);
-    if (sections.fundamentals.gross_margin !== null) lines.push(`- 毛利率 ${sections.fundamentals.gross_margin.toFixed(1)}%`);
-    if (sections.fundamentals.dividend_yield !== null) lines.push(`- 股息率 ${sections.fundamentals.dividend_yield.toFixed(2)}%`);
+    if (sections.fundamentals.gross_margin !== null) lines.push(`- ${M.grossMargin} ${sections.fundamentals.gross_margin.toFixed(1)}%`);
+    if (sections.fundamentals.dividend_yield !== null) lines.push(`- ${M.dividendYield} ${sections.fundamentals.dividend_yield.toFixed(2)}%`);
   }
 
   if (sections.events.length > 0) {
     lines.push('');
-    lines.push('**事件**:');
+    lines.push(`**${M.eventsHeader}**:`);
     for (const e of sections.events.slice(0, 5)) {
       lines.push(`- [${e.date.slice(0, 4)}-${e.date.slice(4, 6)}-${e.date.slice(6, 8)}] ${e.title}`);
     }
@@ -281,10 +322,10 @@ function renderMarkdown(payload: Omit<RadarPayload, 'markdown'>): string {
 
   if (sections.calendar.upcoming.length > 0 || sections.calendar.next_earnings_days !== null) {
     lines.push('');
-    lines.push('**未来 14 天日历**:');
+    lines.push(`**${M.calendarHeader}**:`);
     if (sections.calendar.next_earnings_days !== null && sections.calendar.next_earnings_date) {
       const d = sections.calendar.next_earnings_date;
-      lines.push(`- 📊 财报: ${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)} (T-${sections.calendar.next_earnings_days})`);
+      lines.push(`- 📊 ${M.earningsLabel}: ${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)} (T-${sections.calendar.next_earnings_days})`);
     }
     for (const ev of sections.calendar.upcoming.slice(0, 5)) {
       if (ev.kind === 'earnings_announce') continue; // already shown above
@@ -292,19 +333,19 @@ function renderMarkdown(payload: Omit<RadarPayload, 'markdown'>): string {
                    ev.kind === 'share_unlock' ? '🔓' :
                    ev.kind === 'earnings_guidance' ? '📈' : '·';
       const datePart = `${ev.date.slice(0, 4)}-${ev.date.slice(4, 6)}-${ev.date.slice(6, 8)}`;
-      const tPart = ev.days_until >= 0 ? `T-${ev.days_until}` : `${Math.abs(ev.days_until)}d 前`;
+      const tPart = ev.days_until >= 0 ? `T-${ev.days_until}` : M.daysAgo(Math.abs(ev.days_until));
       lines.push(`- ${icon} ${datePart} (${tPart}) ${ev.title}`);
     }
   }
 
   if (triggers.length > 0) {
     lines.push('');
-    lines.push('**信号**:');
-    for (const t of triggers) lines.push(`- ${t.desc} (权重 ${t.weight > 0 ? '+' : ''}${t.weight})`);
+    lines.push(`**${M.signalsHeader}**:`);
+    for (const t of triggers) lines.push(`- ${t.desc} (${M.weightLabel} ${t.weight > 0 ? '+' : ''}${t.weight})`);
   }
 
   lines.push('');
-  lines.push(`*${DISCLAIMER}*`);
+  lines.push(`*${M.disclaimer}*`);
 
   return lines.join('\n');
 }
@@ -535,8 +576,8 @@ export async function buildRadar(ticker: string, locale: AppLocale = 'zh'): Prom
       },
     },
     triggers,
-    disclaimer: DISCLAIMER,
+    disclaimer: RADAR_TEXT[locale].markdown.disclaimer,
   };
 
-  return { ...partialPayload, markdown: renderMarkdown(partialPayload) };
+  return { ...partialPayload, markdown: renderMarkdown(partialPayload, locale) };
 }

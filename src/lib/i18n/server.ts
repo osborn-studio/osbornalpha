@@ -31,11 +31,13 @@ export async function getRequestLocale(): Promise<AppLocale> {
 // per docs/superpowers/plans/2026-07-03-g1c-dynamic-content.md T1. zh values
 // are the pre-existing literal strings (unchanged copy); en values follow
 // messages/GLOSSARY.md.
+// NOTE: the literal 'not authenticated' thrown by store/route code is an
+// internal control-flow token matched with === in catch blocks — it must NOT
+// be localized or routed through this dictionary.
 export type ApiMessageKey =
   | 'quotaExhausted'
   | 'providerNotConfigured'
-  | 'oversellBlocked'
-  | 'notAuthenticated';
+  | 'oversellBlocked';
 
 const API_MESSAGES: Record<ApiMessageKey, Record<AppLocale, string>> = {
   quotaExhausted: {
@@ -49,10 +51,6 @@ const API_MESSAGES: Record<ApiMessageKey, Record<AppLocale, string>> = {
   oversellBlocked: {
     zh: '删除该笔买入会导致后续卖出超过持仓，请先删除相关卖出记录',
     en: 'Deleting this buy would cause a later sell to exceed your holding — please delete the related sell record(s) first',
-  },
-  notAuthenticated: {
-    zh: 'not authenticated',
-    en: 'not authenticated',
   },
 };
 
