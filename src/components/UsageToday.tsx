@@ -17,6 +17,7 @@ interface UsageResp {
 // quota). Mirrors AccountSettings' guest/unconfigured fallback pattern.
 export function UsageToday() {
   const t = useTranslations('components.usageToday');
+  const tSettings = useTranslations('settings');
   const [data, setData] = useState<UsageResp | null>(null);
   const [error, setError] = useState<string | null>(null);
   const configured = isSupabaseConfigured();
@@ -44,7 +45,7 @@ export function UsageToday() {
   }, [configured]);
 
   if (!configured) return null;
-  if (error) return <div className="text-xs text-text-dim">{t('todayUsage')}：{error === 'Not authenticated' ? t('signInToView') : error}</div>;
+  if (error) return <div className="text-xs text-text-dim">{tSettings('usage.errorLine', { message: error === 'Not authenticated' ? t('signInToView') : error })}</div>;
   if (!data) return <div className="text-xs text-text-dim">{t('loading')}</div>;
 
   return (
