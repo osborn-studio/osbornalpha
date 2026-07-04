@@ -49,7 +49,7 @@
     "openDecisionPrefix": "📌 Open Decision: ",
     "confidenceInline": " · Confidence {pct}%",
     "thesisInline": " · \"{thesis}\"",
-    "distanceToTarget": "{pct} from target"
+    "distanceToTarget": "{pct} from target price"
   },
   "decisionForm": {
     "label": "Decision Bar",

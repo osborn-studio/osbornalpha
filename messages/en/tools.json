@@ -3,10 +3,22 @@
     "heading": "🧰 Tools",
     "subheading": "Skill hub, backtesting, valuation workbench, and primary market research entry points.",
     "cards": {
-      "skills": { "title": "Skill Hub", "desc": "Copilot's analysis methods + tool list." },
-      "backtest": { "title": "Backtest Lab", "desc": "Batch-backtest watchlist signal hit rate and forward returns." },
-      "dcf": { "title": "DCF Workbench", "desc": "A standalone discounted cash flow valuation desk — search any ticker to use it." },
-      "primary": { "title": "Primary Market", "desc": "IC Memo / PE Portfolio / LP Tracking outline generator." }
+      "skills": {
+        "title": "Skill Hub",
+        "desc": "Copilot's analysis methods + tool list."
+      },
+      "backtest": {
+        "title": "Backtest Lab",
+        "desc": "Batch-backtest watchlist signal hit rate and forward returns."
+      },
+      "dcf": {
+        "title": "DCF Workbench",
+        "desc": "A standalone discounted cash flow valuation desk — search any ticker to use it."
+      },
+      "primary": {
+        "title": "Primary Market",
+        "desc": "IC Memo / PE Portfolio / LP Tracking outline generator."
+      }
     },
     "enter": "Enter →",
     "recentOutputs": "📁 Recent Tool Output",
@@ -31,8 +43,14 @@
       "title": "IC Memo Outline",
       "desc": "8-section standard investment committee memo skeleton: Overview → Deal Structure → Industry → Target Analysis → Financials & Valuation → Highlights & Synergy → Risks → Recommendation & Exit.",
       "fields": {
-        "target": { "label": "Target Company / Project Name", "placeholder": "e.g. Sunniwell Tech" },
-        "dealContext": { "label": "Known Deal Context / Terms (optional)", "placeholder": "e.g. Cash acquisition, valued at $1B" }
+        "target": {
+          "label": "Target Company / Project Name",
+          "placeholder": "e.g. Sunniwell Tech"
+        },
+        "dealContext": {
+          "label": "Known Deal Context / Terms (optional)",
+          "placeholder": "e.g. Cash acquisition, valued at $1B"
+        }
       }
     },
     "pePortfolio": {
@@ -40,7 +58,10 @@
       "title": "PE Portfolio Outline",
       "desc": "3-section fund portfolio skeleton: Fund & Portfolio Overview → Key Portfolio Company Detail → Recent Activity & Exits.",
       "fields": {
-        "fund": { "label": "Fund / Institution Name", "placeholder": "e.g. Acme Ventures Fund" }
+        "fund": {
+          "label": "Fund / Institution Name",
+          "placeholder": "e.g. Acme Ventures Fund"
+        }
       }
     },
     "lpTracking": {
@@ -48,8 +69,14 @@
       "title": "LP Tracking Outline",
       "desc": "One section per tracked entity, covering five kinds of activity: new investments / market expansion / divestments & exits / investment outcomes / public statements. Up to 20 entities.",
       "fields": {
-        "names": { "label": "Tracked Entities (one per line, up to 20)", "placeholder": "Institution A\nInstitution B" },
-        "windowLabel": { "label": "Tracking Window (optional, defaults to \"last month\")", "placeholder": "e.g. last week" }
+        "names": {
+          "label": "Tracked Entities (one per line, up to 20)",
+          "placeholder": "Institution A\nInstitution B"
+        },
+        "windowLabel": {
+          "label": "Tracking Window (optional, defaults to \"last month\")",
+          "placeholder": "e.g. last week"
+        }
       }
     },
     "archive": "📁 Primary Market Archive",
@@ -73,7 +100,13 @@
     "run": "Run →",
     "toolsHeading": "🔧 Tools",
     "aShareBadge": "A-Share",
-    "footerSummary": "{toolCount} tools · {methodCount} methods in total. Tools are called by Copilot as needed during reasoning."
+    "footerSummary": "{toolCount} tools · {methodCount} methods in total. Tools are called by Copilot as needed during reasoning.",
+    "categories": {
+      "quotes": "Quotes",
+      "research": "Research",
+      "valuation": "Valuation",
+      "funds": "Fund Flows"
+    }
   },
   "artifacts": {
     "heading": "📁 My Research Archive",

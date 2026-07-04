@@ -3,10 +3,22 @@
     "heading": "🧰 工具",
     "subheading": "技能库、回测、估值工作台与一级市场研究入口。",
     "cards": {
-      "skills": { "title": "技能库", "desc": "Copilot 的分析方法 + 工具清单。" },
-      "backtest": { "title": "回测实验室", "desc": "批量回测股票池信号命中率与前瞻收益。" },
-      "dcf": { "title": "DCF 工作台", "desc": "独立的现金流折现估值台，搜索个股即可用。" },
-      "primary": { "title": "一级市场", "desc": "IC Memo / PE Portfolio / LP 追踪 大纲生成器。" }
+      "skills": {
+        "title": "技能库",
+        "desc": "Copilot 的分析方法 + 工具清单。"
+      },
+      "backtest": {
+        "title": "回测实验室",
+        "desc": "批量回测股票池信号命中率与前瞻收益。"
+      },
+      "dcf": {
+        "title": "DCF 工作台",
+        "desc": "独立的现金流折现估值台，搜索个股即可用。"
+      },
+      "primary": {
+        "title": "一级市场",
+        "desc": "IC Memo / PE Portfolio / LP 追踪 大纲生成器。"
+      }
     },
     "enter": "进入 →",
     "recentOutputs": "📁 最近工具产出",
@@ -31,8 +43,14 @@
       "title": "IC Memo 大纲",
       "desc": "8 节标准投资上会报告骨架：项目概述 → 交易结构 → 行业 → 标的分析 → 财务估值 → 亮点协同 → 风险 → 建议与退出。",
       "fields": {
-        "target": { "label": "标的公司 / 项目名称", "placeholder": "如：隼鹰科技" },
-        "dealContext": { "label": "已知交易背景/条款（可选）", "placeholder": "如：现金收购，估值 10 亿" }
+        "target": {
+          "label": "标的公司 / 项目名称",
+          "placeholder": "如：隼鹰科技"
+        },
+        "dealContext": {
+          "label": "已知交易背景/条款（可选）",
+          "placeholder": "如：现金收购，估值 10 亿"
+        }
       }
     },
     "pePortfolio": {
@@ -40,7 +58,10 @@
       "title": "PE Portfolio 大纲",
       "desc": "3 节基金组合骨架：基金与组合概览 → 主要被投项目明细 → 近期动态与退出。",
       "fields": {
-        "fund": { "label": "基金 / 机构名称", "placeholder": "如：某某创投基金" }
+        "fund": {
+          "label": "基金 / 机构名称",
+          "placeholder": "如：某某创投基金"
+        }
       }
     },
     "lpTracking": {
@@ -48,8 +69,14 @@
       "title": "LP 追踪大纲",
       "desc": "每个追踪对象一节，覆盖新增投资/市场拓展/撤资退出/投资成果/对外表态五类动向。最多 20 个对象。",
       "fields": {
-        "names": { "label": "追踪对象（每行一个，最多 20 个）", "placeholder": "机构A\n机构B" },
-        "windowLabel": { "label": "追踪窗口（可选，默认「近一个月」）", "placeholder": "如：近一周" }
+        "names": {
+          "label": "追踪对象（每行一个，最多 20 个）",
+          "placeholder": "机构A\n机构B"
+        },
+        "windowLabel": {
+          "label": "追踪窗口（可选，默认「近一个月」）",
+          "placeholder": "如：近一周"
+        }
       }
     },
     "archive": "📁 一级市场档案",
@@ -73,7 +100,13 @@
     "run": "运行 →",
     "toolsHeading": "🔧 工具",
     "aShareBadge": "A 股",
-    "footerSummary": "共 {toolCount} 个工具 · {methodCount} 个方法。工具由 Copilot 在推理时按需调用。"
+    "footerSummary": "共 {toolCount} 个工具 · {methodCount} 个方法。工具由 Copilot 在推理时按需调用。",
+    "categories": {
+      "quotes": "行情",
+      "research": "研究",
+      "valuation": "估值",
+      "funds": "资金"
+    }
   },
   "artifacts": {
     "heading": "📁 我的研究档案",

@@ -16,6 +16,11 @@ const CATEGORIES: AgentTool['category'][] = ['行情', '研究', '估值', '资�
 const CATEGORY_ICON: Record<AgentTool['category'], string> = {
   行情: '📈', 研究: '🔬', 估值: '🧮', 资金: '💰',
 };
+// The category union values are the tool registry's internal (Chinese) codes;
+// map them to translatable display keys (tools.skills.categories.*).
+const CATEGORY_KEY: Record<AgentTool['category'], string> = {
+  行情: 'quotes', 研究: 'research', 估值: 'valuation', 资金: 'funds',
+};
 
 export default async function SkillsPage() {
   const t = await getTranslations('tools.skills');
@@ -49,7 +54,7 @@ export default async function SkillsPage() {
           if (tools.length === 0) return null;
           return (
             <div key={cat} className="card-base">
-              <div className="mb-2 text-sm font-semibold">{CATEGORY_ICON[cat]} {cat}</div>
+              <div className="mb-2 text-sm font-semibold">{CATEGORY_ICON[cat]} {t(`categories.${CATEGORY_KEY[cat]}`)}</div>
               <div className="grid gap-2 sm:grid-cols-2">
                 {tools.map((tool) => (
                   <div key={tool.name} className="rounded-md bg-bg-card px-3 py-2">
