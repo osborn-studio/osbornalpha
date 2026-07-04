@@ -8,11 +8,12 @@
 
 import { runBacktest, type SignalEvent } from './backtest';
 import { fetchEastmoneyQuote } from '@/lib/data/sources/eastmoney';
+import type { Market } from '@/lib/supabase/database.types';
 
 export interface RankedTicker {
   ticker: string;
   name: string;
-  market: 'A' | 'HK' | 'US';
+  market: Market;
   currency: string;
   price: number | null;
   change_pct: number | null;
@@ -87,7 +88,7 @@ function qualityScore(r: {
   return Math.round(baseWilson + activityBonus + returnBonus);
 }
 
-interface MinimalQuote { name: string; market: 'A' | 'HK' | 'US'; currency: string; price: number; change_pct: number }
+interface MinimalQuote { name: string; market: Market; currency: string; price: number; change_pct: number }
 
 async function fetchMeta(ticker: string): Promise<MinimalQuote | null> {
   try {

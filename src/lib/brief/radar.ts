@@ -14,9 +14,9 @@
  *   5. Markdown render in morning-note format
  */
 
-import { fetchEastmoneyQuote, type EastmoneyQuote } from '@/lib/data/sources/eastmoney';
-import { fetchSinaQuote } from '@/lib/data/sources/sina';
-import { fetchTencentQuote } from '@/lib/data/sources/tencent';
+import { quoteSourcesFor } from '@/lib/data/sources/registry';
+import { classifyMarket, currencyOfMarket } from '@/lib/utils';
+import type { Market } from '@/lib/supabase/database.types';
 import {
   isTushareConfigured,
   fetchTushareDailyBasic,
@@ -39,7 +39,7 @@ export interface RadarTrigger {
 export interface RadarPayload {
   ticker: string;
   name: string;
-  market: 'A' | 'HK' | 'US';
+  market: Market;
   currency: string;
   as_of: string;                // ISO timestamp
   radar_level: RadarLevel;
@@ -197,14 +197,12 @@ function lookupName(ticker: string): string {
   return MOCK_UNIVERSE.find((u) => u.t === ticker)?.n || ticker;
 }
 
-/** Same cascade as /api/quote/batch but inline for one ticker. */
+/** Same market-routed cascade as /api/quote/batch but inline for one ticker. */
 async function resolveQuote(ticker: string): Promise<any | null> {
-  const em = await fetchEastmoneyQuote(ticker).catch(() => null);
-  if (em) return em;
-  const sina = await fetchSinaQuote(ticker).catch(() => null);
-  if (sina) return sina;
-  const tencent = await fetchTencentQuote(ticker).catch(() => null);
-  if (tencent) return tencent;
+  for (const s of quoteSourcesFor(classifyMarket(ticker))) {
+    const q = await s.fetch(ticker).catch(() => null);
+    if (q) return q;
+  }
   return null;
 }
 
@@ -412,8 +410,8 @@ export async function buildRadar(ticker: string, locale: AppLocale = 'zh'): Prom
 
   // Resolve display fields
   const name = quote?.name || lookupName(ticker);
-  const market: 'A' | 'HK' | 'US' = quote?.market || (isA ? 'A' : ticker.includes('.HK') ? 'HK' : 'US');
-  const currency = quote?.currency || (market === 'A' ? '¥' : market === 'HK' ? 'HK$' : '$');
+  const market: Market = quote?.market || classifyMarket(ticker);
+  const currency = quote?.currency || currencyOfMarket(market);
 
   // Flows math
   const latestNorth = northTop10[0];

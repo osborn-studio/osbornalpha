@@ -132,6 +132,29 @@ describe('marketPhase — multi-market', () => {
   });
 });
 
+describe('marketPhase — JP/KR/TW', () => {
+  // 东京周一 03:00 UTC = 12:00 JST → 午休，30 分钟后下午开盘（12:30）
+  it('JP lunch: Mon 03:00 UTC → lunch, 30 min', () => {
+    const r = marketPhase('JP', new Date('2026-07-06T03:00:00Z'));
+    expect(r.phaseKey).toBe('lunch'); expect(r.minutes).toBe(30);
+  });
+  // 东京 15:30 收盘（2024-11 起）：06:00 UTC = 15:00 JST → openAfternoon, 30 min
+  it('JP closes 15:30: Mon 06:00 UTC → openAfternoon, 30 min', () => {
+    const r = marketPhase('JP', new Date('2026-07-06T06:00:00Z'));
+    expect(r.phaseKey).toBe('openAfternoon'); expect(r.minutes).toBe(30);
+  });
+  // 首尔单段 09:00–15:30：周一 01:00 UTC = 10:00 KST → open
+  it('KR single session: Mon 01:00 UTC → open', () => {
+    const r = marketPhase('KR', new Date('2026-07-06T01:00:00Z'));
+    expect(r.phaseKey).toBe('open'); expect(r.minutes).toBe(330);
+  });
+  // 台北单段 09:00–13:30：周一 05:00 UTC = 13:00 CST → open, 30 min
+  it('TW single session: Mon 05:00 UTC → open, 30 min', () => {
+    const r = marketPhase('TW', new Date('2026-07-06T05:00:00Z'));
+    expect(r.phaseKey).toBe('open'); expect(r.minutes).toBe(30);
+  });
+});
+
 describe('marketOfTicker', () => {
   it.each([
     ['600519.SH', 'A'], ['300750.SZ', 'A'], ['830799.BJ', 'A'],

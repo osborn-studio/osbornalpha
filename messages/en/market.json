@@ -231,7 +231,8 @@
       "usBody": "13F holdings changes for tracked hedge funds (Berkshire / Bridgewater / Burry, etc.) are pending integration.",
       "nonUsBody": "This instrument is not a US stock — no 13F data.",
       "dataSource": "Source: EDGAR 13F-HR · Quarterly"
-    }
+    },
+    "sourcePending": "Data source not connected"
   },
   "dcf": {
     "variants": {

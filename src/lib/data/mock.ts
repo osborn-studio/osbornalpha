@@ -3,6 +3,7 @@
 // stays consistent across the migration.
 
 import type { Market, Stance } from '../supabase/database.types';
+import { currencyOfMarket } from '../utils';
 
 export interface MockStock {
   ticker: string;
@@ -276,7 +277,7 @@ export function getStockOrStub(ticker: string): MockStock | null {
 function makeStubFromUniverse(ticker: string, name: string, market: Market): MockStock {
   return {
     ticker, name, market,
-    currency: market === 'A' ? '¥' : market === 'HK' ? 'HK$' : '$',
+    currency: currencyOfMarket(market),
     price: 0, change: 0, change_pct: 0, open: 0, high: 0, low: 0, prev_close: 0,
     volume_value: 0, amplitude: 0, market_cap: '—',
     pe_ttm: 0, pb: 0, roe: 0, dividend_yield: 0,
