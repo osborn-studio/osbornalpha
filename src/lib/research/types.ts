@@ -231,6 +231,43 @@ export interface ThesisEvent {
   created_at: string;
 }
 
+// ---------------------------------------------------------------------------
+// Playbooks (Phase 3)
+
+export type ProposedAction =
+  | 'WATCHLIST'
+  | 'PAPER_TRADE'
+  | 'RESEARCH_MORE'
+  | 'UPDATE_THESIS'
+  | 'CLOSE_THESIS';
+
+export const PROPOSED_ACTIONS: readonly ProposedAction[] = [
+  'WATCHLIST', 'PAPER_TRADE', 'RESEARCH_MORE', 'UPDATE_THESIS', 'CLOSE_THESIS',
+] as const;
+
+export type ApprovalStatus = 'NOT_REQUIRED' | 'PENDING' | 'APPROVED' | 'REJECTED';
+
+export const APPROVAL_STATUSES: readonly ApprovalStatus[] = [
+  'NOT_REQUIRED', 'PENDING', 'APPROVED', 'REJECTED',
+] as const;
+
+/**
+ * One audited playbook run (spec §3.4). PAPER_TRADE is a RECORD ONLY —
+ * nothing in Research OS ever touches a brokerage or executes a real trade.
+ */
+export interface PlaybookRun {
+  id: string;
+  memo_id?: string | null;
+  thesis_id?: string | null;
+  proposed_action: ProposedAction;
+  rationale: string;
+  risks: string[];
+  approval_status: ApprovalStatus;
+  human_decision?: string | null;
+  review_at?: string | null;
+  created_at: string;
+}
+
 export interface AuditLogEntry {
   id: string;
   action: string;
