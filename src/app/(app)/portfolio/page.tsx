@@ -2,6 +2,7 @@
 
 import { Suspense, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
 import { useBatchQuotes } from '@/lib/hooks/useQuote';
 import { useDecisions, usePortfolio } from '@/lib/hooks/usePortfolio';
@@ -10,6 +11,7 @@ import { FocusPanel } from '@/components/portfolio/FocusPanel';
 import { SignalsRail } from '@/components/portfolio/SignalsRail';
 
 function CockpitInner() {
+  const t = useTranslations('portfolio');
   const router = useRouter();
   const params = useSearchParams();
   const { data: portfolio, refetch: refetchPortfolio } = usePortfolio();
@@ -34,10 +36,10 @@ function CockpitInner() {
   return (
     <div className="p-4">
       <nav className="mb-3 flex gap-4 text-xs">
-        <span className="text-[var(--accent)]">驾驶舱</span>
-        <a href="/portfolio/decisions" className="text-[var(--text-dim)] hover:text-[var(--text)]">决策日志</a>
-        <a href="/portfolio/positions" className="text-[var(--text-dim)] hover:text-[var(--text)]">持仓明细</a>
-        <a href="/portfolio/review" className="text-[var(--text-dim)] hover:text-[var(--text)]">复盘</a>
+        <span className="text-[var(--accent)]">{t('nav.cockpit')}</span>
+        <a href="/portfolio/decisions" className="text-[var(--text-dim)] hover:text-[var(--text)]">{t('nav.decisions')}</a>
+        <a href="/portfolio/positions" className="text-[var(--text-dim)] hover:text-[var(--text)]">{t('nav.positions')}</a>
+        <a href="/portfolio/review" className="text-[var(--text-dim)] hover:text-[var(--text)]">{t('nav.review')}</a>
       </nav>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_1fr_320px]">
       <PositionsRail positions={positions} quotes={quotes} watchTickers={watchTickers} focus={focus} onFocus={setFocus} />
@@ -51,7 +53,7 @@ function CockpitInner() {
         />
       ) : (
         <div className="flex items-center justify-center text-sm text-[var(--text-dim)]">
-          股票池为空——先到 📋 股票池 添加观察标的
+          {t('cockpit.emptyWatchlist')}
         </div>
       )}
       <SignalsRail ticker={focus} openDecisions={openDecisions} onFocus={setFocus} />
