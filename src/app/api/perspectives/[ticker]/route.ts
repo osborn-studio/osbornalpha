@@ -10,6 +10,7 @@ import {
 import { PERSONAS, buildUserMessage, type StockContext, type PerspectiveResult } from '@/lib/data/personas';
 import { resolveLlm } from '@/lib/llm/resolve';
 import { checkQuota, recordUsage } from '@/lib/billing/quota';
+import { getRequestLocale, apiMessage } from '@/lib/i18n/server';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 86400;
@@ -52,10 +53,11 @@ export async function GET(req: Request, { params }: Ctx) {
   if (quota && !quota.allowed) {
     // Field names mirror the no-key degradation shape above so the client
     // can share one "no perspectives, here's why" rendering path.
+    const locale = await getRequestLocale();
     return NextResponse.json({
       source: 'quota',
       ticker,
-      error: '今日平台额度已用完',
+      error: apiMessage(locale, 'quotaExhausted'),
       perspectives: [],
       quota: { used: quota.used, limit: quota.limit, plan: quota.plan },
     }, { status: 200 });
