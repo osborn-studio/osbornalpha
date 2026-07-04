@@ -2,10 +2,11 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 
 interface TabDef {
   id: string;
-  label: string;
+  navKey: 'today' | 'watchlist' | 'intel' | 'portfolio' | 'tools' | 'settings';
   href: string;
   /** Line-art icon — 24×24, 1.5px stroke, currentColor */
   Icon: (props: { className?: string }) => JSX.Element;
@@ -21,7 +22,7 @@ const stroke = {
 
 const TABS: TabDef[] = [
   {
-    id: 'home', label: '今日', href: '/today',
+    id: 'home', navKey: 'today', href: '/today',
     // Sunrise glyph — circle + horizon line + rays
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
@@ -32,7 +33,7 @@ const TABS: TabDef[] = [
     ),
   },
   {
-    id: 'watch', label: '股票池', href: '/watchlist',
+    id: 'watch', navKey: 'watchlist', href: '/watchlist',
     // Kanban columns glyph — three vertical bars
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
@@ -43,7 +44,7 @@ const TABS: TabDef[] = [
     ),
   },
   {
-    id: 'intel', label: '情报', href: '/intel',
+    id: 'intel', navKey: 'intel', href: '/intel',
     // Radar sweep glyph — concentric arcs + scan dot
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
@@ -55,7 +56,7 @@ const TABS: TabDef[] = [
     ),
   },
   {
-    id: 'portfolio', label: '我的投资', href: '/portfolio',
+    id: 'portfolio', navKey: 'portfolio', href: '/portfolio',
     // Briefcase glyph
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
@@ -65,7 +66,7 @@ const TABS: TabDef[] = [
     ),
   },
   {
-    id: 'tools', label: '工具', href: '/tools',
+    id: 'tools', navKey: 'tools', href: '/tools',
     // Toolbox glyph (wrench + box line-art)
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
@@ -75,7 +76,7 @@ const TABS: TabDef[] = [
     ),
   },
   {
-    id: 'settings', label: '设置', href: '/settings',
+    id: 'settings', navKey: 'settings', href: '/settings',
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
         <circle cx="12" cy="12" r="3" />
@@ -87,6 +88,10 @@ const TABS: TabDef[] = [
 
 export function TabBar() {
   const pathname = usePathname();
+  // Tab labels are the app's primary nav and already live in common.nav
+  // (established in G1a). Reuse that single source instead of duplicating
+  // the same six strings under components.tabBar.
+  const tNav = useTranslations('common.nav');
   return (
     <nav
       className="fixed bottom-0 left-0 right-0 z-40 flex border-t border-border bg-bg-elevated"
@@ -109,7 +114,7 @@ export function TabBar() {
               <span className="absolute left-1/2 top-0 h-0.5 w-8 -translate-x-1/2 rounded-full bg-accent" />
             )}
             <t.Icon className="" />
-            <span>{t.label}</span>
+            <span>{tNav(t.navKey)}</span>
           </Link>
         );
       })}

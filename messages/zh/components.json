@@ -1,1 +1,79 @@
-{}
+{
+  "themeToggle": {
+    "appearanceSettings": "外观设置",
+    "themeToggleAria": "主题切换",
+    "colorScheme": "配色方案",
+    "schemeCn": "红涨绿跌",
+    "schemeUs": "绿涨红跌",
+    "theme": "主题",
+    "themeDark": "深色",
+    "themeLight": "浅色"
+  },
+  "upgradeCard": {
+    "checkoutFailed": "暂时无法发起支付",
+    "upgradeSuccess": "支付成功！Pro 权益已生效（如未立即显示，请刷新页面）。",
+    "currentPlan": "当前套餐",
+    "expiresOn": "到期日",
+    "autoRenewing": "按月自动续费中",
+    "timePass30d": "时长卡 · 30 天",
+    "timePassDescription": "支付宝 / 微信 / 银行卡，不自动续费",
+    "redirectingToCheckout": "跳转支付中…",
+    "monthlySubscription": "连续包月",
+    "monthlySubscriptionDescription": "仅支持银行卡，自动续费可随时取消"
+  },
+  "usageToday": {
+    "todayUsage": "今日用量",
+    "signInToView": "登录后可查看",
+    "loading": "加载中…",
+    "loadFailed": "加载失败",
+    "featureCopilot": "Copilot 分析",
+    "featurePerspectives": "九人观点",
+    "featureBriefPreview": "简报预览",
+    "byoCalls": "BYO Key 调用（不计配额）"
+  },
+  "accountSettings": {
+    "emailConfirmSent": "确认邮件已发到新旧邮箱，按提示确认",
+    "passwordTooShort": "密码至少 8 位",
+    "passwordUpdated": "密码已更新",
+    "atLeastOneSignInMethod": "至少保留一种登录方式",
+    "unlinked": "已解绑",
+    "loggedOut": "已登出",
+    "guestMode": "访客模式 — 数据存浏览器本地",
+    "supabaseNotConfigured": "Supabase 未配置，无法登录",
+    "loginOrRegister": "登录 / 注册",
+    "plan": "套餐",
+    "logout": "登出",
+    "changeEmail": "修改邮箱",
+    "newEmailPlaceholder": "新邮箱",
+    "update": "更新",
+    "changePassword": "修改密码",
+    "newPasswordPlaceholder": "新密码（≥8 位）",
+    "thirdPartyLinking": "第三方账号绑定",
+    "linked": "已绑定",
+    "unlink": "解绑",
+    "link": "绑定"
+  },
+  "llmSettings": {
+    "connectionSuccess": "连接成功 ({ms}ms)",
+    "failed": "失败",
+    "enterApiKey": "请输入 API Key",
+    "saved": "已保存",
+    "saveFailed": "保存失败",
+    "provider": "提供商",
+    "apiKeyConfiguredPlaceholder": "已配置 ✓ ••••（留空保持不变，输入则更新）",
+    "apiKeyPlaceholder": "粘贴 API Key，如 ark-... / sk-...",
+    "model": "模型",
+    "testConnection": "测试连接",
+    "save": "保存",
+    "description": "此配置作用于 Copilot、个股 AI 观点与 DCF 假设填充等需要登录的 AI 功能；每日简报/雷达推送为定时任务，使用平台统一模型。未配置时全部功能回落平台默认。"
+  },
+  "perspectiveCard": {
+    "confidence": "信心",
+    "evidenceStrengthTitle": "证据强度：{label} ({score}%)\n{high} 强 · {medium} 中 · {low} 弱 · {unknown} 未分类",
+    "cite": "cite"
+  },
+  "disclaimer": {
+    "heading": "免责声明",
+    "body": "本站所有内容由 AI 自动生成，仅作为投资决策的辅助参考，不构成任何形式的投资建议、要约或推介。AI 生成的观点可能存在错误、遗漏或偏差。历史数据不代表未来表现。投资决策应基于您自身的研究和判断，您应自行承担所有投资风险。osbornalpha 是个人开源工具，不提供任何投资建议许可服务。"
+  }
+}
