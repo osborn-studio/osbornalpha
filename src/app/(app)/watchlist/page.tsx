@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import Link from 'next/link';
+import { useLocale } from 'next-intl';
 import { addCustomStock } from '@/lib/data/custom-stocks';
 import { formatPrice, formatPct, changeClass, marketLabel, classifyMarket } from '@/lib/utils';
 import { Disclaimer } from '@/components/Disclaimer';
@@ -13,6 +14,7 @@ import { getBrowserSupabase, isSupabaseConfigured } from '@/lib/supabase/client'
 import type { Market } from '@/lib/supabase/database.types';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
 import { uniqueWatchlistTickers, type WatchlistGroup } from '@/lib/watchlist/store';
+import { formatDateLocale, type AppLocale } from '@/lib/i18n/locale';
 
 const REFRESH_MS = 60_000;
 
@@ -21,6 +23,7 @@ interface SearchResult { t: string; n: string; py: string; m: Market }
 
 export default function WatchlistPage() {
   const { show } = useToast();
+  const locale = useLocale() as AppLocale;
   const { groups, hydrated, setGroups } = useWatchlist();
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
   // Default to the table view (评级/风险/目标价/估值区间 are the high-signal columns);
@@ -273,7 +276,7 @@ export default function WatchlistPage() {
     }
 
     const id = `import_${Date.now()}`;
-    const finalName = boardName.trim() || `批量导入 ${new Date().toLocaleDateString('zh-CN')}`;
+    const finalName = boardName.trim() || `批量导入 ${formatDateLocale(new Date().toISOString(), locale)}`;
     persist([...groups, { id, name: finalName, tickers: fresh }]);
     setImportOpen(false);
     show(
@@ -971,6 +974,7 @@ function parseTickerInput(raw: string): string[] {
 }
 
 function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfirm }: ImportDialogProps) {
+  const locale = useLocale() as AppLocale;
   const [text, setText] = useState('');
   const [boardName, setBoardName] = useState('');
   const [fileError, setFileError] = useState<string | null>(null);
@@ -1072,7 +1076,7 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
             type="text"
             value={boardName}
             onChange={(e) => setBoardName(e.target.value)}
-            placeholder={`默认：批量导入 ${new Date().toLocaleDateString('zh-CN')}`}
+            placeholder={`默认：批量导入 ${formatDateLocale(new Date().toISOString(), locale)}`}
             className="w-full text-sm"
           />
         </label>

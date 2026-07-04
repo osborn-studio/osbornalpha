@@ -1,11 +1,13 @@
 'use client';
 
+import { useLocale } from 'next-intl';
 import { Card, Metric, Tag } from '@/components/ui';
 import { KlineChart } from '@/components/KlineChart';
 import { DecisionForm } from './DecisionForm';
 import { TradeForm } from './TradeForm';
 import { latestOpenDecision, unrealizedPnl } from '@/lib/portfolio/pnl';
 import { formatPct, formatPrice } from '@/lib/utils';
+import { formatDateLocale, type AppLocale } from '@/lib/i18n/locale';
 import type { Decision, Position } from '@/lib/supabase/database.types';
 import type { LiveQuote } from '@/lib/hooks/useQuote';
 
@@ -16,6 +18,7 @@ export function FocusPanel({ ticker, quote, position, decisions, onChanged }: {
   decisions: Decision[];
   onChanged: () => void;
 }) {
+  const locale = useLocale() as AppLocale;
   const open = latestOpenDecision(decisions, ticker);
   const u = position ? unrealizedPnl(position, quote?.price ?? null) : null;
 
@@ -50,7 +53,7 @@ export function FocusPanel({ ticker, quote, position, decisions, onChanged }: {
 
       {open && (
         <div className="rounded border border-[var(--border)] bg-[var(--bg)] p-2 text-xs text-[var(--text-dim)]">
-          📌 未平决策：{new Date(open.decided_at).toLocaleDateString('zh-CN')}
+          📌 未平决策：{formatDateLocale(open.decided_at, locale)}
           {' '}{open.action === 'buy' ? '买入' : open.action === 'sell' ? '卖出' : open.action}
           {open.confidence != null && ` · 信心 ${open.confidence}%`}
           {open.thesis && ` · 「${open.thesis}」`}

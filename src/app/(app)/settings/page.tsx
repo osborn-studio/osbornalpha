@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useLocale } from 'next-intl';
 import Link from 'next/link';
 import { useToast } from '@/components/Toast';
 import { Disclaimer } from '@/components/Disclaimer';
@@ -8,28 +10,45 @@ import { AccountSettings } from '@/components/AccountSettings';
 import { LlmSettings } from '@/components/LlmSettings';
 import { UsageToday } from '@/components/UsageToday';
 import { UpgradeCard } from '@/components/UpgradeCard';
+import { getBrowserSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
+import type { AppLocale } from '@/lib/i18n/locale';
 
 export default function SettingsPage() {
   const { show } = useToast();
-  const [language, setLanguage] = useState<'zh' | 'en'>('zh');
+  const router = useRouter();
+  const currentLocale = useLocale() as AppLocale;
+  const [language, setLanguage] = useState<AppLocale>(currentLocale);
   const [tgChatId, setTgChatId] = useState('');
   const [emailNotif, setEmailNotif] = useState(true);
   const [briefTime, setBriefTime] = useState('08:30');
 
   useEffect(() => {
-    setLanguage((localStorage.getItem('lang') as 'zh' | 'en') || 'zh');
     setTgChatId(localStorage.getItem('tg-chat-id') || '');
     setEmailNotif(localStorage.getItem('email-notif') !== 'false');
     setBriefTime(localStorage.getItem('brief-time') || '08:30');
   }, []);
 
+  async function selectLanguage(l: AppLocale) {
+    setLanguage(l);
+    document.cookie = `NEXT_LOCALE=${l};path=/;max-age=31536000`;
+    if (isSupabaseConfigured()) {
+      const sb = getBrowserSupabase();
+      const { data: { user } } = await sb.auth.getUser();
+      if (user) {
+        await (sb as any).from('user_preferences').upsert(
+          { user_id: user.id, language: l },
+          { onConflict: 'user_id' }
+        );
+      }
+    }
+    router.refresh();
+  }
+
   function save() {
-    localStorage.setItem('lang', language);
     localStorage.setItem('tg-chat-id', tgChatId);
     localStorage.setItem('email-notif', String(emailNotif));
     localStorage.setItem('brief-time', briefTime);
     show('✓ 设置已保存到本地');
-    // TODO: persist to Supabase if authed
   }
 
   return (
@@ -60,16 +79,16 @@ export default function SettingsPage() {
         <div className="mb-3 text-sm font-semibold text-text-dim">🌐 语言</div>
         <div className="flex gap-2">
           <button
-            onClick={() => setLanguage('zh')}
+            onClick={() => selectLanguage('zh')}
             className={`rounded px-4 py-1.5 text-sm ${language === 'zh' ? 'bg-accent-dim text-white' : 'bg-bg-card text-text-dim'}`}
           >
             🇨🇳 中文
           </button>
           <button
-            onClick={() => setLanguage('en')}
+            onClick={() => selectLanguage('en')}
             className={`rounded px-4 py-1.5 text-sm ${language === 'en' ? 'bg-accent-dim text-white' : 'bg-bg-card text-text-dim'}`}
           >
-            🇺🇸 English (stub)
+            🇺🇸 English
           </button>
         </div>
       </div>
