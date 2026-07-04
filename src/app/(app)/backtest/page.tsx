@@ -1,11 +1,12 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { MarketLabel } from '@/components/MarketLabel';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { useBatchBacktest } from '@/lib/hooks/useBatchBacktest';
 import type { RankedTicker } from '@/lib/signals/batchBacktest';
-import { formatPct, formatPrice, changeClass, marketLabel } from '@/lib/utils';
+import { formatPct, formatPrice, changeClass } from '@/lib/utils';
 import { Disclaimer } from '@/components/Disclaimer';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
 import { uniqueWatchlistTickers } from '@/lib/watchlist/store';
@@ -148,7 +149,7 @@ export default function BacktestPage() {
                     : 'border-border bg-bg-card text-text-dim'
                 }`}
               >
-                {m === 'all' ? t('marketAll') : marketLabel(m)}
+                {m === 'all' ? t('marketAll') : <MarketLabel m={m} />}
               </button>
             ))}
             <span className="ml-2 text-text-dim">{t('sortLabel')}</span>
@@ -265,7 +266,7 @@ function RowItem({ rank, r }: { rank: number; r: RankedTicker }) {
           {r.name}
         </Link>
         <div className="text-[10px] text-text-muted">
-          <span className="mr-1 rounded bg-bg-card px-1 py-0.5">{marketLabel(r.market)}</span>
+          <span className="mr-1 rounded bg-bg-card px-1 py-0.5"><MarketLabel m={r.market} /></span>
           {r.ticker}
         </div>
       </td>

@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import { MarketLabel } from '@/components/MarketLabel';
 import Link from 'next/link';
 import { useLocale, useTranslations } from 'next-intl';
 import { addCustomStock } from '@/lib/data/custom-stocks';
-import { formatPrice, formatPct, changeClass, marketLabel, classifyMarket } from '@/lib/utils';
+import { formatPrice, formatPct, changeClass, classifyMarket } from '@/lib/utils';
 import { Disclaimer } from '@/components/Disclaimer';
 import { useToast } from '@/components/Toast';
 import { useBatchQuotes, type LiveQuote } from '@/lib/hooks/useQuote';
@@ -698,7 +699,7 @@ function StockCard({
         <Link href={`/stock/${encodeURIComponent(ticker)}`} className="min-w-0 flex-1 text-text hover:no-underline">
           <div className="flex items-center gap-1.5">
             <span className="rounded bg-bg-card px-1.5 py-0.5 text-[10px] font-semibold text-text-dim">
-              {marketLabel(market)}
+              <MarketLabel m={market} />
             </span>
             <span className="truncate text-sm font-semibold">{name}</span>
           </div>
@@ -881,7 +882,7 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
               }`}
             >
               <span className="rounded bg-bg-elevated px-1 py-0.5 text-[9px] font-semibold text-text-dim">
-                {marketLabel(r.m)}
+                <MarketLabel m={r.m} />
               </span>
               <div className="min-w-0">
                 <div className="truncate text-xs font-semibold">{r.n}</div>

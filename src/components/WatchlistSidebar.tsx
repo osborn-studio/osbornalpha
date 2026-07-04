@@ -1,12 +1,13 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+import { MarketLabel } from '@/components/MarketLabel';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { getStockOrStub } from '@/lib/data/mock';
 import { useBatchQuotes } from '@/lib/hooks/useQuote';
 import { Sparkline } from './Sparkline';
-import { formatPrice, formatPct, changeClass, marketLabel } from '@/lib/utils';
+import { formatPrice, formatPct, changeClass } from '@/lib/utils';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
 import { uniqueWatchlistTickers } from '@/lib/watchlist/store';
 
@@ -120,7 +121,7 @@ export function WatchlistSidebar({ selectedTicker, onSelect, variant = 'sidebar'
                         <div className="font-semibold tabular-nums">
                           {price > 0 ? formatPrice(price) : '—'}
                         </div>
-                        <div className="text-[10px] text-text-muted">{marketLabel(market)}</div>
+                        <div className="text-[10px] text-text-muted"><MarketLabel m={market} /></div>
                       </div>
                       <div className="flex justify-end">
                         <Sparkline ticker={t} changePct={changePct} width={50} height={20} />

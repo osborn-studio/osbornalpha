@@ -91,5 +91,10 @@
     "placeholder": "搜索代码或名称（⌘+K · 全 A/H/US · 如 完美世界 / AAPL / 600519）",
     "searching": "搜索中...",
     "noResults": "没有匹配结果"
+  },
+  "market": {
+    "A": "A 股",
+    "HK": "港股",
+    "US": "美股"
   }
 }

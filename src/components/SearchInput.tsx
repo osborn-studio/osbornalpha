@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { MarketLabel } from '@/components/MarketLabel';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
-import { marketLabel } from '@/lib/utils';
 import type { Market } from '@/lib/supabase/database.types';
 
 interface ApiResult { t: string; n: string; py: string; m: Market }
@@ -133,7 +133,7 @@ export function SearchInput() {
               }`}
             >
               <span className="rounded bg-bg-card px-1.5 py-0.5 text-[10px] font-semibold text-text-dim">
-                {marketLabel(r.m)}
+                <MarketLabel m={r.m} />
               </span>
               <div>
                 <div className="font-semibold">{r.n}</div>

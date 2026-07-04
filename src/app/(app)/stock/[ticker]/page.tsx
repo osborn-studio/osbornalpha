@@ -1,11 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { MarketLabel } from '@/components/MarketLabel';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { getStockOrStub } from '@/lib/data/mock';
-import { formatPrice, formatPct, formatChange, formatVolume, changeClass, marketLabel, stars } from '@/lib/utils';
+import { formatPrice, formatPct, formatChange, formatVolume, changeClass, stars } from '@/lib/utils';
 import { KlineChart } from '@/components/KlineChart';
 import { PerspectiveCard } from '@/components/PerspectiveCard';
 import { DcfStudio } from '@/components/DcfStudio';
@@ -112,7 +113,7 @@ export default function StockDetailPage() {
       <div className="mb-2 flex flex-wrap items-baseline gap-3">
         <span className="text-2xl font-bold">{stock.name}</span>
         <span className="rounded bg-bg-card px-2 py-1 text-sm text-text-dim">
-          {stock.ticker} · {marketLabel(stock.market)}
+          {stock.ticker} · <MarketLabel m={stock.market} />
         </span>
         <button
           onClick={toggleWatchlist}

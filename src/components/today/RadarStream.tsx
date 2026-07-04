@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { MarketLabel } from '@/components/MarketLabel';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import type { RadarPayload, RadarLevel } from '@/lib/brief/radar';
-import { changeClass, formatPct, marketLabel } from '@/lib/utils';
+import { changeClass, formatPct } from '@/lib/utils';
 
 interface RadarApiResponse {
   radars: Record<string, RadarPayload | { error: string }>;
@@ -126,7 +127,7 @@ function RadarRow({ payload: r }: { payload: RadarPayload }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <span>{emojiForLevel(r.radar_level)}</span>
-            <span className="rounded bg-bg-card px-1 py-0.5 text-[10px] text-text-dim">{marketLabel(r.market)}</span>
+            <span className="rounded bg-bg-card px-1 py-0.5 text-[10px] text-text-dim"><MarketLabel m={r.market} /></span>
             <span className="truncate text-sm font-semibold">{r.name}</span>
             <span className="truncate text-xs text-text-dim">{r.headline}</span>
           </div>

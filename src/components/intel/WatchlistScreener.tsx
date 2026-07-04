@@ -1,12 +1,13 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { MarketLabel } from '@/components/MarketLabel';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
 import { uniqueWatchlistTickers } from '@/lib/watchlist/store';
 import { useBatchQuotes } from '@/lib/hooks/useQuote';
-import { formatPrice, formatPct, changeClass, marketLabel, classifyMarket } from '@/lib/utils';
+import { formatPrice, formatPct, changeClass, classifyMarket } from '@/lib/utils';
 import type { Market } from '@/lib/supabase/database.types';
 
 type MarketFilter = Market;
@@ -82,7 +83,7 @@ export function WatchlistScreener() {
                   markets.has(m) ? 'bg-accent-dim/20 font-semibold text-accent' : 'bg-bg-card text-text-dim'
                 }`}
               >
-                {marketLabel(m)}
+                <MarketLabel m={m} />
               </button>
             ))}
           </div>

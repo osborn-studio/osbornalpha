@@ -1,9 +1,9 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import { MarketLabel } from '@/components/MarketLabel';
 import { useTranslations } from 'next-intl';
 import { DcfStudio } from '@/components/DcfStudio';
-import { marketLabel } from '@/lib/utils';
 import type { Market } from '@/lib/supabase/database.types';
 import { Disclaimer } from '@/components/Disclaimer';
 
@@ -73,7 +73,7 @@ export default function DcfWorkbenchPage() {
                 className="grid w-full grid-cols-[auto_1fr] items-center gap-2 rounded-md bg-bg-card px-2 py-1.5 text-left hover:bg-bg-elevated"
               >
                 <span className="rounded bg-bg-elevated px-1.5 py-0.5 text-[10px] font-semibold text-text-dim">
-                  {marketLabel(r.m)}
+                  <MarketLabel m={r.m} />
                 </span>
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold">{r.n}</div>

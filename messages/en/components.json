@@ -91,5 +91,10 @@
     "placeholder": "Search by ticker or name (⌘+K · A/H/US · e.g. AAPL / 600519)",
     "searching": "Searching...",
     "noResults": "No matching results"
+  },
+  "market": {
+    "A": "A-shares",
+    "HK": "HK",
+    "US": "US"
   }
 }

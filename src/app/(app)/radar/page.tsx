@@ -1,12 +1,12 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { MarketLabel } from '@/components/MarketLabel';
 import Link from 'next/link';
 import { useLocale, useTranslations } from 'next-intl';
 import { Disclaimer } from '@/components/Disclaimer';
 import { useDisplayTimezone } from '@/components/TimezoneProvider';
 import { formatDateTimeLocale, type AppLocale } from '@/lib/i18n/locale';
-import { marketLabel } from '@/lib/utils';
 import type { RadarPayload, RadarLevel } from '@/lib/brief/radar';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
 import { uniqueWatchlistTickers } from '@/lib/watchlist/store';
@@ -208,7 +208,7 @@ function RadarCard({ r, onShowMarkdown }: CardProps) {
           <Link href={`/stock/${encodeURIComponent(r.ticker)}`} className="text-text hover:no-underline">
             <div className="flex items-center gap-1.5">
               <span className="rounded bg-bg-card px-1.5 py-0.5 text-[10px] font-semibold text-text-dim">
-                {marketLabel(r.market)}
+                <MarketLabel m={r.market} />
               </span>
               <span className="truncate text-sm font-semibold">{r.name}</span>
               <span className="text-[11px] text-text-muted">{r.ticker}</span>

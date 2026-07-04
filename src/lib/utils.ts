@@ -34,10 +34,6 @@ export function stars(n: number) {
   return '★'.repeat(n) + '☆'.repeat(5 - n);
 }
 
-export function marketLabel(m: string) {
-  return ({ A: 'A 股', HK: '港股', US: '美股' } as Record<string, string>)[m] || m;
-}
-
 export function classifyMarket(ticker: string): 'A' | 'HK' | 'US' {
   if (/\.(SH|SZ|BJ)$/i.test(ticker)) return 'A';
   if (/\.HK$/i.test(ticker)) return 'HK';
