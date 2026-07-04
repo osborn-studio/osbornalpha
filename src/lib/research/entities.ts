@@ -1,11 +1,15 @@
 /**
- * Entity service (Research OS Phase 1).
+ * Entity service (Research OS Phase 5 — Supabase Postgres).
  * Companies + themes with idempotent upsert keyed by (type, lower(name)) —
  * the seed script can run any number of times without duplicating rows.
+ * (Single-user data volume is tiny, so the case-insensitive match is done
+ * client-side; the (user_id, type, lower(name)) unique index backstops races.)
  */
 
-import { type ResearchDb } from './db';
-import { readJson, writeJson, type Entity, type EntityType } from './types';
+import { isUuid, type ResearchCtx } from './store';
+import type { Entity, EntityType } from './types';
+
+const TABLE = 'research_entities';
 
 export interface UpsertEntityInput {
   type: EntityType;
@@ -21,57 +25,69 @@ function rowToEntity(row: any): Entity {
     id: row.id,
     type: row.type,
     name: row.name,
-    aliases: readJson<string[]>(row.aliases, []),
+    aliases: Array.isArray(row.aliases) ? (row.aliases as string[]) : [],
     ticker: row.ticker,
     description: row.description,
-    metadata: readJson<Record<string, unknown>>(row.metadata, {}),
+    metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : {},
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
 }
 
 /** Idempotent upsert by (type, lower(name)). Returns the entity id. */
-export function upsertEntity(db: ResearchDb, input: UpsertEntityInput): string {
-  const existing = db
-    .prepare(`select id from entities where type = ? and lower(name) = lower(?)`)
-    .get(input.type, input.name) as { id: string } | undefined;
+export async function upsertEntity(ctx: ResearchCtx, input: UpsertEntityInput): Promise<string> {
+  const { data: sameType, error: selErr } = await ctx.supabase
+    .from(TABLE)
+    .select('id, name')
+    .eq('user_id', ctx.userId)
+    .eq('type', input.type);
+  if (selErr) throw new Error(selErr.message);
+  const existing = ((sameType ?? []) as Array<{ id: string; name: string }>).find(
+    (r) => r.name.toLowerCase() === input.name.toLowerCase(),
+  );
   const now = new Date().toISOString();
   if (existing) {
-    db.prepare(
-      `update entities
-       set aliases = ?, ticker = ?, description = ?, metadata = ?, updated_at = ?
-       where id = ?`,
-    ).run(
-      writeJson(input.aliases ?? []),
-      input.ticker ?? null,
-      input.description ?? null,
-      writeJson(input.metadata ?? {}),
-      now,
-      existing.id,
-    );
+    const { error } = await ctx.supabase
+      .from(TABLE)
+      .update({
+        aliases: input.aliases ?? [],
+        ticker: input.ticker ?? null,
+        description: input.description ?? null,
+        metadata: input.metadata ?? {},
+        updated_at: now,
+      })
+      .eq('user_id', ctx.userId)
+      .eq('id', existing.id);
+    if (error) throw new Error(error.message);
     return existing.id;
   }
   const id = crypto.randomUUID();
-  db.prepare(
-    `insert into entities (id, type, name, aliases, ticker, description, metadata, created_at, updated_at)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
+  const { error } = await ctx.supabase.from(TABLE).insert({
     id,
-    input.type,
-    input.name,
-    writeJson(input.aliases ?? []),
-    input.ticker ?? null,
-    input.description ?? null,
-    writeJson(input.metadata ?? {}),
-    now,
-    now,
-  );
+    user_id: ctx.userId,
+    type: input.type,
+    name: input.name,
+    aliases: input.aliases ?? [],
+    ticker: input.ticker ?? null,
+    description: input.description ?? null,
+    metadata: input.metadata ?? {},
+    created_at: now,
+    updated_at: now,
+  });
+  if (error) throw new Error(error.message);
   return id;
 }
 
-export function getEntity(db: ResearchDb, id: string): Entity | null {
-  const row = db.prepare(`select * from entities where id = ?`).get(id);
-  return row ? rowToEntity(row) : null;
+export async function getEntity(ctx: ResearchCtx, id: string): Promise<Entity | null> {
+  if (!isUuid(id)) return null;
+  const { data, error } = await ctx.supabase
+    .from(TABLE)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? rowToEntity(data) : null;
 }
 
 export interface ListEntitiesOpts {
@@ -79,19 +95,21 @@ export interface ListEntitiesOpts {
   q?: string;
 }
 
-export function listEntities(db: ResearchDb, opts: ListEntitiesOpts = {}): Entity[] {
-  const clauses: string[] = [];
-  const args: unknown[] = [];
-  if (opts.type) {
-    clauses.push('type = ?');
-    args.push(opts.type);
-  }
+export async function listEntities(ctx: ResearchCtx, opts: ListEntitiesOpts = {}): Promise<Entity[]> {
+  let query = ctx.supabase
+    .from(TABLE)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .order('name', { ascending: true });
+  if (opts.type) query = query.eq('type', opts.type);
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  let entities = ((data ?? []) as any[]).map(rowToEntity);
   if (opts.q) {
-    clauses.push('(lower(name) like ? or lower(ifnull(ticker,\'\')) like ?)');
-    const like = `%${opts.q.toLowerCase()}%`;
-    args.push(like, like);
+    const q = opts.q.toLowerCase();
+    entities = entities.filter(
+      (e) => e.name.toLowerCase().includes(q) || (e.ticker ?? '').toLowerCase().includes(q),
+    );
   }
-  const where = clauses.length ? `where ${clauses.join(' and ')}` : '';
-  const rows = db.prepare(`select * from entities ${where} order by name asc`).all(...args);
-  return rows.map(rowToEntity);
+  return entities;
 }

@@ -1,19 +1,20 @@
 /**
- * Source ingest service (Research OS Phase 1).
+ * Source ingest service (Research OS Phase 5 — Supabase Postgres).
  * Sources are immutable once ingested (schema trigger) and idempotent by
- * content hash: re-ingesting identical raw_text returns the existing row.
+ * content hash: re-ingesting identical raw_text returns the existing row
+ * (unique (user_id, content_hash) → a 23505 race also resolves to duplicate).
  */
 
 import { createHash } from 'node:crypto';
-import { logAudit, type ResearchDb } from './db';
+import { audit, isUuid, type ResearchCtx } from './store';
 import {
   SOURCE_TYPES,
-  readJson,
-  writeJson,
   type SourceDocument,
   type SourceType,
   type TrustLevel,
 } from './types';
+
+const TABLE = 'research_source_documents';
 
 export interface IngestSourceInput {
   source_type: SourceType;
@@ -44,7 +45,8 @@ export function contentHash(rawText: string): string {
   return createHash('sha256').update(rawText, 'utf8').digest('hex');
 }
 
-function rowToSource(row: any): SourceDocument {
+/** jsonb columns come back as real values — just normalize shape. */
+export function rowToSource(row: any): SourceDocument {
   return {
     id: row.id,
     source_type: row.source_type,
@@ -56,16 +58,27 @@ function rowToSource(row: any): SourceDocument {
     raw_text: row.raw_text,
     content_hash: row.content_hash,
     trust_level: row.trust_level,
-    entity_ids: readJson<string[]>(row.entity_ids, []),
+    entity_ids: Array.isArray(row.entity_ids) ? (row.entity_ids as string[]) : [],
   };
 }
 
+async function findByHash(ctx: ResearchCtx, hash: string): Promise<string | null> {
+  const { data, error } = await ctx.supabase
+    .from(TABLE)
+    .select('id')
+    .eq('user_id', ctx.userId)
+    .eq('content_hash', hash)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? (data.id as string) : null;
+}
+
 /**
- * Validate → hash → dedupe → insert + audit_log('source.ingest').
+ * Validate → hash → dedupe → insert + audit('source.ingest').
  * Idempotent: a raw_text already in the store returns {duplicate:true} with
  * the existing id and writes no new rows.
  */
-export function ingestSource(db: ResearchDb, input: IngestSourceInput): IngestResult {
+export async function ingestSource(ctx: ResearchCtx, input: IngestSourceInput): Promise<IngestResult> {
   if (typeof input.raw_text !== 'string' || input.raw_text.trim() === '') {
     throw new SourceValidationError('raw_text is required and must be non-empty');
   }
@@ -86,31 +99,34 @@ export function ingestSource(db: ResearchDb, input: IngestSourceInput): IngestRe
   }
 
   const hash = contentHash(input.raw_text);
-  const existing = db
-    .prepare(`select id from source_documents where content_hash = ?`)
-    .get(hash) as { id: string } | undefined;
-  if (existing) return { id: existing.id, duplicate: true };
+  const existing = await findByHash(ctx, hash);
+  if (existing) return { id: existing, duplicate: true };
 
   const id = crypto.randomUUID();
-  db.prepare(
-    `insert into source_documents
-       (id, source_type, title, url, author, published_at, ingested_at,
-        raw_text, content_hash, trust_level, entity_ids)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
+  const { error } = await ctx.supabase.from(TABLE).insert({
     id,
-    input.source_type,
-    input.title.trim(),
-    input.url ?? null,
-    input.author ?? null,
-    input.published_at ?? null,
-    new Date().toISOString(),
-    input.raw_text,
-    hash,
-    trust,
-    writeJson(input.entity_ids ?? []),
-  );
-  logAudit(db, 'source.ingest', id, {
+    user_id: ctx.userId,
+    source_type: input.source_type,
+    title: input.title.trim(),
+    url: input.url ?? null,
+    author: input.author ?? null,
+    published_at: input.published_at ?? null,
+    ingested_at: new Date().toISOString(),
+    raw_text: input.raw_text,
+    content_hash: hash,
+    trust_level: trust,
+    entity_ids: input.entity_ids ?? [],
+  });
+  if (error) {
+    // Unique (user_id, content_hash) race: someone inserted the same text
+    // between our dedupe check and the insert — keep duplicate semantics.
+    if (error.code === '23505') {
+      const raced = await findByHash(ctx, hash);
+      if (raced) return { id: raced, duplicate: true };
+    }
+    throw new Error(error.message);
+  }
+  await audit(ctx, 'source.ingest', id, {
     source_type: input.source_type,
     title: input.title.trim(),
     content_hash: hash,
@@ -118,9 +134,16 @@ export function ingestSource(db: ResearchDb, input: IngestSourceInput): IngestRe
   return { id, duplicate: false };
 }
 
-export function getSource(db: ResearchDb, id: string): SourceDocument | null {
-  const row = db.prepare(`select * from source_documents where id = ?`).get(id);
-  return row ? rowToSource(row) : null;
+export async function getSource(ctx: ResearchCtx, id: string): Promise<SourceDocument | null> {
+  if (!isUuid(id)) return null;
+  const { data, error } = await ctx.supabase
+    .from(TABLE)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? rowToSource(data) : null;
 }
 
 export interface ListSourcesOpts {
@@ -129,25 +152,41 @@ export interface ListSourcesOpts {
 }
 
 /** Newest-first listing, optional ?type= filter. */
-export function listSources(db: ResearchDb, opts: ListSourcesOpts = {}): SourceDocument[] {
+export async function listSources(ctx: ResearchCtx, opts: ListSourcesOpts = {}): Promise<SourceDocument[]> {
   const limit = Math.min(Math.max(opts.limit ?? 200, 1), 1000);
-  const rows = opts.type
-    ? db.prepare(
-        `select * from source_documents where source_type = ?
-         order by ingested_at desc limit ?`,
-      ).all(opts.type, limit)
-    : db.prepare(
-        `select * from source_documents order by ingested_at desc limit ?`,
-      ).all(limit);
-  return rows.map(rowToSource);
+  let q = ctx.supabase
+    .from(TABLE)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .order('ingested_at', { ascending: false })
+    .limit(limit);
+  if (opts.type) q = q.eq('source_type', opts.type);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as any[]).map(rowToSource);
 }
 
-/** Sources whose entity_ids JSON array contains the given entity id. */
-export function listSourcesForEntity(db: ResearchDb, entityId: string): SourceDocument[] {
-  const rows = db.prepare(
-    `select * from source_documents
-     where exists (select 1 from json_each(source_documents.entity_ids) where value = ?)
-     order by ingested_at desc`,
-  ).all(entityId);
-  return rows.map(rowToSource);
+/** Sources whose entity_ids jsonb array contains the given entity id. */
+export async function listSourcesForEntity(ctx: ResearchCtx, entityId: string): Promise<SourceDocument[]> {
+  const { data, error } = await ctx.supabase
+    .from(TABLE)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .contains('entity_ids', [entityId])
+    .order('ingested_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as any[]).map(rowToSource);
+}
+
+/** Fetch a set of sources by id (skips non-uuid junk and missing rows). */
+export async function listSourcesByIds(ctx: ResearchCtx, ids: string[]): Promise<SourceDocument[]> {
+  const valid = [...new Set(ids.filter(isUuid))];
+  if (valid.length === 0) return [];
+  const { data, error } = await ctx.supabase
+    .from(TABLE)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .in('id', valid);
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as any[]).map(rowToSource);
 }

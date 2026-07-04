@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { openTestDb, type ResearchDb } from './db';
+import { makeMockCtx, type MockStore } from './test-support';
+import type { ResearchCtx } from './store';
 import { seedResearchData } from './seed';
 import { upsertEntity, listEntities } from './entities';
-import { ingestSource } from './sources';
+import { ingestSource, listSources } from './sources';
 import {
   generateMemo,
   patchMemo,
@@ -14,27 +15,28 @@ import {
 } from './memos';
 import { RESEARCH_DISCLAIMER } from './types';
 
-let db: ResearchDb;
+let ctx: ResearchCtx;
+let store: MockStore;
 let nvdaId: string;
 let srcIds: string[];
 
-beforeEach(() => {
-  db = openTestDb();
-  seedResearchData(db);
-  nvdaId = listEntities(db, { type: 'COMPANY', q: 'nvidia' })[0].id;
+beforeEach(async () => {
+  ({ ctx, store } = makeMockCtx() as unknown as { ctx: ResearchCtx; store: MockStore });
+  await seedResearchData(ctx);
+  nvdaId = (await listEntities(ctx, { type: 'COMPANY', q: 'nvidia' }))[0].id;
   srcIds = [
-    ingestSource(db, {
+    (await ingestSource(ctx, {
       source_type: 'EARNINGS_CALL', title: 'NVDA FY26 Q1 call',
       raw_text: 'Data center revenue grew 70% yoy.', entity_ids: [nvdaId],
-    }).id,
-    ingestSource(db, {
+    })).id,
+    (await ingestSource(ctx, {
       source_type: 'NEWS', title: 'Blackwell supply update',
       raw_text: 'Blackwell shipments ramping at TSMC.', entity_ids: [nvdaId],
-    }).id,
-    ingestSource(db, {
+    })).id,
+    (await ingestSource(ctx, {
       source_type: 'NOTE', title: 'ASIC competition note',
       raw_text: 'Hyperscalers accelerating custom ASIC programs.', entity_ids: [nvdaId],
-    }).id,
+    })).id,
   ];
 });
 
@@ -66,7 +68,7 @@ function goodPayload() {
 
 describe('generateMemo', () => {
   it('persists a DRAFT memo with citations, axiom results, provenance and audit log', async () => {
-    const res = await generateMemo(db, { entity_id: nvdaId }, fakeLlm(goodPayload()));
+    const res = await generateMemo(ctx, { entity_id: nvdaId }, fakeLlm(goodPayload()));
     expect(res.llm).toEqual({ source: 'llm', model: 'fake-model' });
     const memo = res.memo!;
     expect(memo.status).toBe('DRAFT');
@@ -85,33 +87,33 @@ describe('generateMemo', () => {
     expect(memo.axiom_check_results).toHaveLength(5);
     expect(memo.axiom_check_results.every((r) => r.passed)).toBe(true);
     // Audit trail.
-    const audit = db.prepare(`select * from audit_log where action='memo.generate'`).all();
+    const audit = store.rows('research_audit_log').filter((a) => a.action === 'memo.generate');
     expect(audit).toHaveLength(1);
-    expect(audit[0].target_id).toBe(memo.id);
+    expect(audit[0].object_id).toBe(memo.id);
   });
 
   it('returns structured no-key/error results without persisting a memo', async () => {
     const noKey: LlmFn = async () => { throw new Error('No LLM provider configured (set DEEPSEEK_API_KEY or ANTHROPIC_API_KEY)'); };
-    const r1 = await generateMemo(db, { entity_id: nvdaId }, noKey);
+    const r1 = await generateMemo(ctx, { entity_id: nvdaId }, noKey);
     expect(r1.memo).toBeNull();
     expect(r1.llm.source).toBe('no-key');
 
     const broken: LlmFn = async () => { throw new Error('upstream 500'); };
-    const r2 = await generateMemo(db, { entity_id: nvdaId }, broken);
+    const r2 = await generateMemo(ctx, { entity_id: nvdaId }, broken);
     expect(r2.llm.source).toBe('error');
 
     const garbage: LlmFn = async () => ({ content: 'not json at all', model: 'm' });
-    const r3 = await generateMemo(db, { entity_id: nvdaId }, garbage);
+    const r3 = await generateMemo(ctx, { entity_id: nvdaId }, garbage);
     expect(r3.memo).toBeNull();
     expect(r3.llm.source).toBe('error');
 
-    expect(db.prepare(`select count(*) c from memos`).get().c).toBe(0);
+    expect(store.count('research_memos')).toBe(0);
   });
 
   it('404s unknown entity and tags THEME memos under theme_ids', async () => {
-    await expect(generateMemo(db, { entity_id: 'nope' }, fakeLlm(goodPayload()))).rejects.toThrow(MemoError);
-    const theme = upsertEntity(db, { type: 'THEME', name: 'AI inference' });
-    const res = await generateMemo(db, { entity_id: theme }, fakeLlm({ ...goodPayload(), supporting_evidence: [], counter_arguments: [] }));
+    await expect(generateMemo(ctx, { entity_id: 'nope' }, fakeLlm(goodPayload()))).rejects.toThrow(MemoError);
+    const theme = await upsertEntity(ctx, { type: 'THEME', name: 'AI inference' });
+    const res = await generateMemo(ctx, { entity_id: theme }, fakeLlm({ ...goodPayload(), supporting_evidence: [], counter_arguments: [] }));
     expect(res.memo!.theme_ids).toEqual([theme]);
     expect(res.memo!.company_ids).toEqual([]);
   });
@@ -119,8 +121,8 @@ describe('generateMemo', () => {
 
 describe('patchMemo', () => {
   it('updates fields, appends provenance edits, re-runs axioms', async () => {
-    const { memo } = await generateMemo(db, { entity_id: nvdaId }, fakeLlm(goodPayload())) as { memo: NonNullable<any> };
-    const patched = patchMemo(db, memo.id, {
+    const { memo } = await generateMemo(ctx, { entity_id: nvdaId }, fakeLlm(goodPayload())) as { memo: NonNullable<any> };
+    const patched = await patchMemo(ctx, memo.id, {
       one_line_conclusion: '这只票必涨',   // triggers AX005
       key_variables: ['hbm 供给'],
     });
@@ -132,40 +134,40 @@ describe('patchMemo', () => {
   });
 
   it('rejects empty patches, bad confidence, unknown memo', async () => {
-    const { memo } = await generateMemo(db, { entity_id: nvdaId }, fakeLlm(goodPayload())) as { memo: NonNullable<any> };
-    expect(() => patchMemo(db, memo.id, {})).toThrow(/no editable fields/);
-    expect(() => patchMemo(db, memo.id, { confidence: 'ULTRA' })).toThrow(/confidence/);
-    expect(() => patchMemo(db, 'missing', { title: 'x' })).toThrow(/not found/);
+    const { memo } = await generateMemo(ctx, { entity_id: nvdaId }, fakeLlm(goodPayload())) as { memo: NonNullable<any> };
+    await expect(patchMemo(ctx, memo.id, {})).rejects.toThrow(/no editable fields/);
+    await expect(patchMemo(ctx, memo.id, { confidence: 'ULTRA' } as any)).rejects.toThrow(/confidence/);
+    await expect(patchMemo(ctx, '00000000-0000-4000-8000-0000000000ff', { title: 'x' })).rejects.toThrow(/not found/);
   });
 });
 
 describe('reviewMemo', () => {
   it('blocks review while a BLOCK axiom fails, passes after fix', async () => {
     const payload = { ...goodPayload(), invalidation_conditions: [] };  // AX001 fails
-    const { memo } = await generateMemo(db, { entity_id: nvdaId }, fakeLlm(payload)) as { memo: NonNullable<any> };
-    const rejected = reviewMemo(db, memo.id);
+    const { memo } = await generateMemo(ctx, { entity_id: nvdaId }, fakeLlm(payload)) as { memo: NonNullable<any> };
+    const rejected = await reviewMemo(ctx, memo.id);
     expect(rejected.ok).toBe(false);
-    expect(getMemo(db, memo.id)!.status).toBe('DRAFT');
+    expect((await getMemo(ctx, memo.id))!.status).toBe('DRAFT');
 
-    patchMemo(db, memo.id, { invalidation_conditions: ['推理需求连续两季负增长'] });
-    const approved = reviewMemo(db, memo.id);
+    await patchMemo(ctx, memo.id, { invalidation_conditions: ['推理需求连续两季负增长'] });
+    const approved = await reviewMemo(ctx, memo.id);
     expect(approved.ok).toBe(true);
     expect(approved.memo.status).toBe('REVIEWED');
-    const audits = db.prepare(`select * from audit_log where action='memo.review' order by created_at`).all();
+    const audits = store.rows('research_audit_log').filter((a) => a.action === 'memo.review');
     expect(audits).toHaveLength(2);
   });
 
   it('WARN-only failures do not block review', async () => {
-    const lowSrc = ingestSource(db, {
+    const lowSrc = (await ingestSource(ctx, {
       source_type: 'NEWS', title: 'rumor', raw_text: 'unverified rumor text',
       trust_level: 'LOW', entity_ids: [nvdaId],
-    }).id;
+    })).id;
     const payload = {
       ...goodPayload(),
       supporting_evidence: [{ claim: '传闻大单', source_document_ids: [lowSrc] }],
     };
-    const { memo } = await generateMemo(db, { entity_id: nvdaId }, fakeLlm(payload)) as { memo: NonNullable<any> };
-    const res = reviewMemo(db, memo.id);
+    const { memo } = await generateMemo(ctx, { entity_id: nvdaId }, fakeLlm(payload)) as { memo: NonNullable<any> };
+    const res = await reviewMemo(ctx, memo.id);
     expect(res.results.find((r) => r.axiom_code === 'AX004')!.passed).toBe(false);
     expect(res.ok).toBe(true);
   });
@@ -173,9 +175,8 @@ describe('reviewMemo', () => {
 
 describe('memoToMarkdown', () => {
   it('renders all ten sections with numbered citations and the disclaimer', async () => {
-    const { memo } = await generateMemo(db, { entity_id: nvdaId }, fakeLlm(goodPayload())) as { memo: NonNullable<any> };
-    const sources = db.prepare(`select * from source_documents`).all()
-      .map((r: any) => ({ ...r, entity_ids: JSON.parse(r.entity_ids) }));
+    const { memo } = await generateMemo(ctx, { entity_id: nvdaId }, fakeLlm(goodPayload())) as { memo: NonNullable<any> };
+    const sources = await listSources(ctx);
     const md = memoToMarkdown(memo, sources);
     for (const heading of [
       '## 1. 一句话结论', '## 2. 核心 Thesis', '## 3. 支持证据', '## 4. 反方观点',

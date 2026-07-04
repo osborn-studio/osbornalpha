@@ -1,29 +1,26 @@
 import { NextResponse } from 'next/server';
-import { assertEnabled, getDb } from '@/lib/research/db';
+import { requireResearchUser, isUuid } from '@/lib/research/store';
 import { getEvalCase, listEvalRuns } from '@/lib/research/evals';
+import { listSourcesByIds } from '@/lib/research/sources';
 import { withResearch } from '@/lib/research/api';
-import { readJson, type SourceDocument } from '@/lib/research/types';
 
 export const dynamic = 'force-dynamic';
 
 /** Case detail: case + run history + the visible material source rows. */
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
-  return withResearch(() => {
-    assertEnabled();
-    const db = getDb();
-    const evalCase = getEvalCase(db, params.id);
+  return withResearch(async () => {
+    const ctx = await requireResearchUser();
+    const evalCase = isUuid(params.id) ? await getEvalCase(ctx, params.id) : null;
     if (!evalCase) {
       return NextResponse.json(
         { error: { code: 'NOT_FOUND', message: 'eval case not found' } },
         { status: 404 },
       );
     }
-    const stmt = db.prepare(`select * from source_documents where id = ?`);
-    const sources: SourceDocument[] = [];
-    for (const id of evalCase.visible_material) {
-      const row = stmt.get(id);
-      if (row) sources.push({ ...row, entity_ids: readJson<string[]>(row.entity_ids, []) });
-    }
-    return { case: evalCase, runs: listEvalRuns(db, evalCase.id), sources };
+    const [runs, sources] = await Promise.all([
+      listEvalRuns(ctx, evalCase.id),
+      listSourcesByIds(ctx, evalCase.visible_material),
+    ]);
+    return { case: evalCase, runs, sources };
   });
 }

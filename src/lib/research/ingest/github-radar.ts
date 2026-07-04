@@ -14,7 +14,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { logAudit, type ResearchDb } from '../db';
+import { audit, type ResearchCtx } from '../store';
 import { ingestSource, SourceValidationError } from '../sources';
 
 export interface ParsedCard {
@@ -88,11 +88,11 @@ export interface IngestRadarResult {
  * Ingest one radar day directory. Idempotent: content_hash dedupe returns
  * duplicate counts instead of new rows. audit_log('source.ingest_radar').
  */
-export function ingestRadarDay(
-  db: ResearchDb,
+export async function ingestRadarDay(
+  ctx: ResearchCtx,
   dayDir: string,
   opts: IngestRadarOpts = {},
-): IngestRadarResult {
+): Promise<IngestRadarResult> {
   const minRelevance = opts.minRelevance ?? 6;
   if (!fs.existsSync(dayDir) || !fs.statSync(dayDir).isDirectory()) {
     throw new SourceValidationError(`radar day directory not found: ${dayDir}`);
@@ -113,7 +113,7 @@ export function ingestRadarDay(
   if (fs.existsSync(reportPath)) {
     const rawText = fs.readFileSync(reportPath, 'utf8');
     track(
-      ingestSource(db, {
+      await ingestSource(ctx, {
         source_type: 'GITHUB_RADAR',
         title: `GitHub Radar 日报 ${day}`,
         raw_text: rawText,
@@ -147,7 +147,7 @@ export function ingestRadarDay(
         ? parsed.frontmatter.one_liner
         : '';
       track(
-        ingestSource(db, {
+        await ingestSource(ctx, {
           source_type: 'GITHUB_RADAR',
           title: `Radar: ${fullName}${oneLiner ? ` — ${oneLiner}` : ''}`,
           url: `https://github.com/${fullName}`,
@@ -159,7 +159,7 @@ export function ingestRadarDay(
     }
   }
 
-  logAudit(db, 'source.ingest_radar', null, {
+  await audit(ctx, 'source.ingest_radar', null, {
     day,
     inserted,
     duplicates,

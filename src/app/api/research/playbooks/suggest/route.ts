@@ -1,4 +1,4 @@
-import { assertEnabled, getDb } from '@/lib/research/db';
+import { requireResearchUser } from '@/lib/research/store';
 import { suggestPlaybookAction } from '@/lib/research/playbooks';
 import { withResearch } from '@/lib/research/api';
 
@@ -10,10 +10,9 @@ export const dynamic = 'force-dynamic';
  */
 export async function POST(req: Request) {
   return withResearch(async () => {
-    assertEnabled();
+    const ctx = await requireResearchUser();
     const body = await req.json().catch(() => ({}));
-    const db = getDb();
-    return suggestPlaybookAction(db, {
+    return suggestPlaybookAction(ctx, {
       memo_id: body.memo_id,
       thesis_id: body.thesis_id,
     });

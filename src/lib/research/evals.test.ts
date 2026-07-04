@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { openTestDb, type ResearchDb } from './db';
+import { makeMockCtx, type MockStore } from './test-support';
+import type { ResearchCtx } from './store';
 import { ingestSource } from './sources';
 import {
   EvalError,
@@ -15,10 +16,14 @@ import {
 import type { LlmFn } from './memos';
 import { DEFAULT_EVAL_RUBRIC } from './types';
 
-function seedSources(db: ResearchDb, n = 2): string[] {
+function newCtx(): { ctx: ResearchCtx; store: MockStore } {
+  return makeMockCtx() as unknown as { ctx: ResearchCtx; store: MockStore };
+}
+
+async function seedSources(ctx: ResearchCtx, n = 2): Promise<string[]> {
   const ids: string[] = [];
   for (let i = 1; i <= n; i += 1) {
-    const r = ingestSource(db, {
+    const r = await ingestSource(ctx, {
       source_type: 'NEWS',
       title: `NVIDIA source ${i}`,
       raw_text: `nvidia raw text ${i}`,
@@ -29,8 +34,8 @@ function seedSources(db: ResearchDb, n = 2): string[] {
   return ids;
 }
 
-function mkCase(db: ResearchDb, sourceIds: string[], extra: Record<string, unknown> = {}) {
-  return createEvalCase(db, {
+function mkCase(ctx: ResearchCtx, sourceIds: string[], extra: Record<string, unknown> = {}) {
+  return createEvalCase(ctx, {
     title: 'NVIDIA 2026Q1 财报后判断',
     as_of_date: '2026-05-29',
     source_document_ids: sourceIds,
@@ -77,55 +82,52 @@ function twoStageLlm(genPayload: unknown, judgePayload: unknown) {
 }
 
 describe('createEvalCase', () => {
-  it('persists the case with default rubric, JSON columns and an audit row', () => {
-    const db = openTestDb();
-    const ids = seedSources(db);
-    const c = mkCase(db, ids);
+  it('persists the case with default rubric, JSON columns and an audit row', async () => {
+    const { ctx, store } = newCtx();
+    const ids = await seedSources(ctx);
+    const c = await mkCase(ctx, ids);
     expect(c.id).toBeTruthy();
     expect(c.as_of).toBe('2026-05-29');
     expect(c.visible_material).toEqual(ids);
     expect(c.expected).toEqual({ notes: '随后 DC 营收继续超预期。' });
     expect(c.rubric).toEqual(DEFAULT_EVAL_RUBRIC);
-    expect(getEvalCase(db, c.id)).toEqual(c);
-    expect(listEvalCases(db)).toHaveLength(1);
-    const audits = db.prepare(`select * from audit_log where action = 'eval.case_create'`).all();
+    expect(await getEvalCase(ctx, c.id)).toEqual(c);
+    expect(await listEvalCases(ctx)).toHaveLength(1);
+    const audits = store.rows('research_audit_log').filter((a) => a.action === 'eval.case_create');
     expect(audits).toHaveLength(1);
-    expect((audits[0] as any).target_id).toBe(c.id);
-    db.close();
+    expect(audits[0].object_id).toBe(c.id);
   });
 
-  it('accepts a rubric override and dedupes source ids', () => {
-    const db = openTestDb();
-    const ids = seedSources(db);
-    const c = mkCase(db, [ids[0], ids[0], ids[1]], { rubric: { factual_accuracy: 2, hype_resistance: 1 } });
+  it('accepts a rubric override and dedupes source ids', async () => {
+    const { ctx } = newCtx();
+    const ids = await seedSources(ctx);
+    const c = await mkCase(ctx, [ids[0], ids[0], ids[1]], { rubric: { factual_accuracy: 2, hype_resistance: 1 } });
     expect(c.visible_material).toEqual(ids);
     expect(c.rubric).toEqual({ factual_accuracy: 2, hype_resistance: 1 });
-    db.close();
   });
 
-  it('rejects bad input: empty title / bad date / empty or unknown sources / bad rubric', () => {
-    const db = openTestDb();
-    const ids = seedSources(db);
-    expect(() => mkCase(db, ids, { title: '  ' })).toThrowError(EvalError);
-    expect(() => mkCase(db, ids, { as_of_date: '2026/05/29' })).toThrowError(/as_of_date/);
-    expect(() => mkCase(db, ids, { as_of_date: '2026-13-40' })).toThrowError(/as_of_date/);
-    expect(() => mkCase(db, [])).toThrowError(/source/);
-    expect(() => mkCase(db, ['nonexistent-id'])).toThrowError(/not found/);
-    expect(() => mkCase(db, ids, { rubric: {} })).toThrowError(/rubric/);
-    expect(() => mkCase(db, ids, { rubric: { a: -1 } })).toThrowError(/rubric/);
-    expect(listEvalCases(db)).toHaveLength(0);
-    db.close();
+  it('rejects bad input: empty title / bad date / empty or unknown sources / bad rubric', async () => {
+    const { ctx } = newCtx();
+    const ids = await seedSources(ctx);
+    await expect(mkCase(ctx, ids, { title: '  ' })).rejects.toThrowError(EvalError);
+    await expect(mkCase(ctx, ids, { as_of_date: '2026/05/29' })).rejects.toThrowError(/as_of_date/);
+    await expect(mkCase(ctx, ids, { as_of_date: '2026-13-40' })).rejects.toThrowError(/as_of_date/);
+    await expect(mkCase(ctx, [])).rejects.toThrowError(/source/);
+    await expect(mkCase(ctx, ['nonexistent-id'])).rejects.toThrowError(/not found/);
+    await expect(mkCase(ctx, ids, { rubric: {} })).rejects.toThrowError(/rubric/);
+    await expect(mkCase(ctx, ids, { rubric: { a: -1 } })).rejects.toThrowError(/rubric/);
+    expect(await listEvalCases(ctx)).toHaveLength(0);
   });
 });
 
 describe('runEval', () => {
   it('runs gen then judge as two separated calls and persists the full run', async () => {
-    const db = openTestDb();
-    const ids = seedSources(db);
-    const c = mkCase(db, ids);
+    const { ctx, store } = newCtx();
+    const ids = await seedSources(ctx);
+    const c = await mkCase(ctx, ids);
     const { llm, calls } = twoStageLlm(GOOD_MEMO, GOOD_VERDICT);
 
-    const result = await runEval(db, c.id, llm);
+    const result = await runEval(ctx, c.id, llm);
     expect(result.run).not.toBeNull();
     const run = result.run!;
 
@@ -151,51 +153,48 @@ describe('runEval', () => {
     expect(run.output.rationale_per_dimension.risk_identification).toBe('漏了出口管制');
 
     // The generated memo is NOT persisted into the memos table (eval-only).
-    expect((db.prepare('select count(*) c from memos').get() as any).c).toBe(0);
+    expect(store.count('research_memos')).toBe(0);
 
     // Readable back + audit trail.
-    expect(getEvalRun(db, run.id)).toEqual(run);
-    expect(listEvalRuns(db, c.id)).toHaveLength(1);
-    const audits = db.prepare(`select * from audit_log where action = 'eval.run'`).all();
+    expect(await getEvalRun(ctx, run.id)).toEqual(run);
+    expect(await listEvalRuns(ctx, c.id)).toHaveLength(1);
+    const audits = store.rows('research_audit_log').filter((a) => a.action === 'eval.run');
     expect(audits).toHaveLength(1);
-    db.close();
   });
 
   it('clamps out-of-range judge scores and records judge_out_of_range', async () => {
-    const db = openTestDb();
-    const c = mkCase(db, seedSources(db));
+    const { ctx } = newCtx();
+    const c = await mkCase(ctx, await seedSources(ctx));
     const verdict = {
       ...GOOD_VERDICT,
       scores: { ...GOOD_VERDICT.scores, factual_accuracy: 15, overconfidence: -3 },
       failure_modes: [],
     };
     const { llm } = twoStageLlm(GOOD_MEMO, verdict);
-    const result = await runEval(db, c.id, llm);
+    const result = await runEval(ctx, c.id, llm);
     expect(result.run!.scores.factual_accuracy).toBe(10);
     expect(result.run!.scores.overconfidence).toBe(0);
     expect(result.run!.failure_modes).toContain('judge_out_of_range');
-    db.close();
   });
 
   it('gen-stage failure returns a structured error and persists NOTHING', async () => {
-    const db = openTestDb();
-    const c = mkCase(db, seedSources(db));
+    const { ctx, store } = newCtx();
+    const c = await mkCase(ctx, await seedSources(ctx));
     const failing: LlmFn = async () => { throw new Error('boom'); };
-    const r = await runEval(db, c.id, failing);
+    const r = await runEval(ctx, c.id, failing);
     expect(r.run).toBeNull();
     expect(r.llm).toMatchObject({ source: 'error', stage: 'gen' });
-    expect(listEvalRuns(db, c.id)).toHaveLength(0);
-    expect(db.prepare(`select count(*) c from audit_log where action = 'eval.run'`).get()).toMatchObject({ c: 0 });
+    expect(await listEvalRuns(ctx, c.id)).toHaveLength(0);
+    expect(store.rows('research_audit_log').filter((a) => a.action === 'eval.run')).toHaveLength(0);
 
     const noKey: LlmFn = async () => { throw new Error('no LLM provider configured'); };
-    const r2 = await runEval(db, c.id, noKey);
+    const r2 = await runEval(ctx, c.id, noKey);
     expect(r2.llm).toMatchObject({ source: 'no-key', stage: 'gen' });
-    db.close();
   });
 
   it('judge-stage failure (throw or invalid verdict) never persists a half-run', async () => {
-    const db = openTestDb();
-    const c = mkCase(db, seedSources(db));
+    const { ctx } = newCtx();
+    const c = await mkCase(ctx, await seedSources(ctx));
 
     let call = 0;
     const judgeThrows: LlmFn = async () => {
@@ -203,47 +202,45 @@ describe('runEval', () => {
       if (call === 1) return { content: JSON.stringify(GOOD_MEMO), model: 'g' };
       throw new Error('judge down');
     };
-    const r1 = await runEval(db, c.id, judgeThrows);
+    const r1 = await runEval(ctx, c.id, judgeThrows);
     expect(r1.run).toBeNull();
     expect(r1.llm).toMatchObject({ source: 'error', stage: 'judge' });
 
     const { llm: badVerdict } = twoStageLlm(GOOD_MEMO, { scores: { factual_accuracy: 8 } });
-    const r2 = await runEval(db, c.id, badVerdict);
+    const r2 = await runEval(ctx, c.id, badVerdict);
     expect(r2.run).toBeNull();
     expect(r2.llm).toMatchObject({ source: 'error', stage: 'judge' });
 
     const garbageGen: LlmFn = async () => ({ content: 'not json at all — plain prose', model: 'g' });
-    const r3 = await runEval(db, c.id, garbageGen);
+    const r3 = await runEval(ctx, c.id, garbageGen);
     expect(r3.run).toBeNull();
     expect(r3.llm).toMatchObject({ source: 'error', stage: 'gen' });
 
-    expect(listEvalRuns(db, c.id)).toHaveLength(0);
-    db.close();
+    expect(await listEvalRuns(ctx, c.id)).toHaveLength(0);
   });
 
   it('throws 404 for an unknown case', async () => {
-    const db = openTestDb();
-    await expect(runEval(db, 'nope', async () => ({ content: '{}', model: 'x' })))
+    const { ctx } = newCtx();
+    await expect(runEval(ctx, '00000000-0000-4000-8000-0000000000ff', async () => ({ content: '{}', model: 'x' })))
       .rejects.toThrowError(EvalError);
-    db.close();
   });
 });
 
 describe('aggregate + summaries', () => {
   it('reports per-dimension averages, failure mode counts and case summaries', async () => {
-    const db = openTestDb();
-    const ids = seedSources(db);
-    const c = mkCase(db, ids);
+    const { ctx } = newCtx();
+    const ids = await seedSources(ctx);
+    const c = await mkCase(ctx, ids);
     const { llm: llm1 } = twoStageLlm(GOOD_MEMO, GOOD_VERDICT);
-    await runEval(db, c.id, llm1);
+    await runEval(ctx, c.id, llm1);
     const { llm: llm2 } = twoStageLlm(GOOD_MEMO, {
       ...GOOD_VERDICT,
       scores: { ...GOOD_VERDICT.scores, factual_accuracy: 4 },
       failure_modes: ['missed_china_risk', 'overconfident_tone'],
     });
-    await runEval(db, c.id, llm2);
+    await runEval(ctx, c.id, llm2);
 
-    const agg = evalAggregate(db);
+    const agg = await evalAggregate(ctx);
     expect(agg.case_count).toBe(1);
     expect(agg.run_count).toBe(2);
     expect(agg.dimension_averages.factual_accuracy).toBe(6);
@@ -252,19 +249,17 @@ describe('aggregate + summaries', () => {
     expect(agg.failure_mode_top).toContainEqual({ mode: 'overconfident_tone', count: 1 });
     expect(agg.avg_total).toBeGreaterThan(0);
 
-    const summaries = listEvalCaseSummaries(db);
+    const summaries = await listEvalCaseSummaries(ctx);
     expect(summaries).toHaveLength(1);
     expect(summaries[0].run_count).toBe(2);
     expect(summaries[0].last_total).toBeGreaterThan(0);
-    db.close();
   });
 
-  it('is empty-safe with no cases or runs', () => {
-    const db = openTestDb();
-    const agg = evalAggregate(db);
+  it('is empty-safe with no cases or runs', async () => {
+    const { ctx } = newCtx();
+    const agg = await evalAggregate(ctx);
     expect(agg).toMatchObject({ case_count: 0, run_count: 0, avg_total: null });
     expect(agg.failure_mode_top).toEqual([]);
-    expect(listEvalCaseSummaries(db)).toEqual([]);
-    db.close();
+    expect(await listEvalCaseSummaries(ctx)).toEqual([]);
   });
 });

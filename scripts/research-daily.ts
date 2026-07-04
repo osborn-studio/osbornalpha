@@ -1,20 +1,22 @@
 /**
  * Research OS — daily pipeline. Run locally with:
- *   RESEARCH_OS_ENABLED=1 npx tsx scripts/research-daily.ts
+ *   RESEARCH_OWNER_USER_ID=<owner> npx tsx scripts/research-daily.ts
  *
  * ingest latest radar day → extract signals (LLM) → monitor all
  * ACTIVE/WATCH/AT_RISK theses (LLM, pending alerts only — human adjudicates
- * in /research/theses) → console digest.
+ * in /research/theses) → console digest. Writes to production Supabase via
+ * the service-role ctx (radar files are local-only, so ingest runs here — the
+ * Vercel cron does extract + monitor only).
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadEnvConfig } from '@next/env';
-import { getDb } from '../src/lib/research/db';
 
 // Plain tsx does not read .env.local (Next only does inside the app) — the
-// LLM steps need DEEPSEEK_API_KEY from there.
+// LLM steps need DEEPSEEK_API_KEY and the Supabase service key from there.
 loadEnvConfig(process.cwd());
+import { getServiceResearchCtx } from '../src/lib/research/service';
 import { ingestRadarDay } from '../src/lib/research/ingest/github-radar';
 import { extractSignals } from '../src/lib/research/signals';
 import { monitorAllTheses, listPendingAlerts } from '../src/lib/research/monitor';
@@ -32,17 +34,13 @@ function latestDayDir(root: string): string | null {
 }
 
 async function main() {
-  if (process.env.RESEARCH_OS_ENABLED !== '1') {
-    // Convenience: the daily script is inherently local-only, so enable inline.
-    process.env.RESEARCH_OS_ENABLED = '1';
-  }
-  const db = getDb();
+  const ctx = getServiceResearchCtx();
 
   // 1. Ingest the latest radar day.
   const root = process.env.RADAR_REPORTS_DIR ?? DEFAULT_REPORTS_ROOT;
   const dayDir = latestDayDir(root);
   if (dayDir) {
-    const r = ingestRadarDay(db, dayDir);
+    const r = await ingestRadarDay(ctx, dayDir);
     console.log(
       `[research-daily] ingest ${r.day}: inserted=${r.inserted} duplicates=${r.duplicates} ` +
       `skipped_low_relevance=${r.skippedLowRelevance}`,
@@ -52,7 +50,7 @@ async function main() {
   }
 
   // 2. Extract signals from pending sources.
-  const extraction = await extractSignals(db);
+  const extraction = await extractSignals(ctx);
   if (extraction.llm.source === 'llm' || extraction.llm.source === 'none') {
     console.log(
       `[research-daily] signals: created=${extraction.created.length} ` +
@@ -66,7 +64,7 @@ async function main() {
   }
 
   // 3. Monitor all ACTIVE / WATCH / AT_RISK theses (pending alerts only).
-  const results = await monitorAllTheses(db);
+  const results = await monitorAllTheses(ctx);
   const alerts = results.filter((r) => r.event !== null);
   console.log(`[research-daily] monitor: theses=${results.length} new_alerts=${alerts.length}`);
   for (const r of alerts) {
@@ -74,7 +72,7 @@ async function main() {
   }
 
   // 4. Digest.
-  const pending = listPendingAlerts(db);
+  const pending = await listPendingAlerts(ctx);
   console.log(
     `[research-daily] done. pending alerts total=${pending.length} — 去 /research 裁决（系统不会自动改 thesis 状态）`,
   );

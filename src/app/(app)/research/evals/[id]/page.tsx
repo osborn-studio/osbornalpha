@@ -117,7 +117,7 @@ export default function EvalCaseDetailPage() {
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/research/evals/cases/${params.id}`);
-    if (res.status === 501) { setStatus('disabled'); return; }
+    if (res.status === 401 || res.status === 403) { setStatus("disabled"); return; }
     if (res.status === 404) { setStatus('not-found'); return; }
     const data = await res.json().catch(() => ({}));
     setEvalCase(data.case ?? null);

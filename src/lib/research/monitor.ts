@@ -1,5 +1,5 @@
 /**
- * Thesis monitor (Research OS Phase 2).
+ * Thesis monitor (Research OS Phase 5 — Supabase Postgres).
  * New signals + sources (7-day window, small data → full scan) are reviewed
  * against each ACTIVE/WATCH/AT_RISK thesis by the LLM. Non-NONE verdicts are
  * written as PENDING thesis_events — the monitor NEVER changes thesis status
@@ -7,26 +7,22 @@
  * T3 guard table.
  */
 
-import { logAudit, type ResearchDb } from './db';
+import { audit, isUuid, type ResearchCtx } from './store';
 import { defaultLlm, type LlmFn } from './memos';
 import { listSignalsSince } from './signals';
+import { rowToSource } from './sources';
 import {
   ThesisError,
+  eventDetail,
   getThesis,
   listThesesByStatus,
   rowToThesisEvent,
   transitionThesis,
 } from './theses';
 import { buildMonitorPrompt, validateMonitorVerdict, type MonitorVerdictKind } from './monitor-prompt';
-import {
-  readJson,
-  writeJson,
-  type SourceDocument,
-  type Thesis,
-  type ThesisEvent,
-  type ThesisStatus,
-} from './types';
+import type { SourceDocument, Thesis, ThesisEvent, ThesisStatus } from './types';
 
+const EVENTS = 'research_thesis_events';
 const MONITOR_WINDOW_DAYS = 7;
 const MONITOR_EVENT_TYPES = ['SUPPORT', 'WEAKEN', 'INVALIDATE'] as const;
 
@@ -44,14 +40,32 @@ function windowStartIso(): string {
   return new Date(Date.now() - MONITOR_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
 }
 
-function listSourcesSince(db: ResearchDb, sinceIso: string): SourceDocument[] {
-  const rows: any[] = db
-    .prepare(`select * from source_documents where ingested_at >= ? order by ingested_at desc`)
-    .all(sinceIso);
-  return rows.map((row) => ({
-    ...row,
-    entity_ids: readJson<string[]>(row.entity_ids, []),
-  })) as SourceDocument[];
+async function listSourcesSince(ctx: ResearchCtx, sinceIso: string): Promise<SourceDocument[]> {
+  const { data, error } = await ctx.supabase
+    .from('research_source_documents')
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .gte('ingested_at', sinceIso)
+    .order('ingested_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as any[]).map(rowToSource);
+}
+
+async function getThesisEvent(
+  ctx: ResearchCtx,
+  eventId: string,
+  thesisId?: string,
+): Promise<ThesisEvent | null> {
+  if (!isUuid(eventId)) return null;
+  let q = ctx.supabase
+    .from(EVENTS)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .eq('id', eventId);
+  if (thesisId !== undefined) q = q.eq('thesis_id', thesisId);
+  const { data, error } = await q.maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? rowToThesisEvent(data) : null;
 }
 
 /**
@@ -60,13 +74,13 @@ function listSourcesSince(db: ResearchDb, sinceIso: string): SourceDocument[] {
  * rationale, validated citations, suggested_status and llm_provenance.
  */
 export async function monitorThesis(
-  db: ResearchDb,
+  ctx: ResearchCtx,
   thesis: Thesis,
   llm: LlmFn = defaultLlm,
 ): Promise<MonitorResult> {
   const since = windowStartIso();
-  const signals = listSignalsSince(db, since);
-  const sources = listSourcesSince(db, since);
+  const signals = await listSignalsSince(ctx, since);
+  const sources = await listSourcesSince(ctx, since);
   if (signals.length === 0 && sources.length === 0) {
     return {
       thesis_id: thesis.id, verdict: 'NONE', event: null,
@@ -101,7 +115,7 @@ export async function monitorThesis(
   }
 
   if (verdict.verdict === 'NONE') {
-    logAudit(db, 'thesis.monitor', thesis.id, {
+    await audit(ctx, 'thesis.monitor', thesis.id, {
       verdict: 'NONE', model, prompt_sha256: prompt.prompt_sha256,
       dropped_cited_ids: verdict.dropped_cited_ids,
     });
@@ -120,18 +134,16 @@ export async function monitorThesis(
     detail.dropped_cited_ids = verdict.dropped_cited_ids;
   }
   const eventId = crypto.randomUUID();
-  db.prepare(
-    `insert into thesis_events (id, thesis_id, event_type, detail, source_document_ids, created_at)
-     values (?, ?, ?, ?, ?, ?)`,
-  ).run(
-    eventId,
-    thesis.id,
-    verdict.verdict,
-    writeJson(detail),
-    writeJson(prompt.source_document_ids),
-    now,
-  );
-  logAudit(db, 'thesis.monitor', thesis.id, {
+  const { error } = await ctx.supabase.from(EVENTS).insert({
+    id: eventId,
+    user_id: ctx.userId,
+    thesis_id: thesis.id,
+    kind: verdict.verdict,
+    detail: eventDetail(detail, prompt.source_document_ids),
+    created_at: now,
+  });
+  if (error) throw new Error(error.message);
+  await audit(ctx, 'thesis.monitor', thesis.id, {
     verdict: verdict.verdict,
     event_id: eventId,
     model,
@@ -139,24 +151,23 @@ export async function monitorThesis(
     cited_signal_ids: verdict.cited_signal_ids,
     dropped_cited_ids: verdict.dropped_cited_ids,
   });
-  const row = db.prepare(`select * from thesis_events where id = ?`).get(eventId);
   return {
     thesis_id: thesis.id,
     verdict: verdict.verdict,
-    event: rowToThesisEvent(row),
+    event: await getThesisEvent(ctx, eventId),
     llm: { source: 'llm', model },
   };
 }
 
-/** Monitor every ACTIVE / WATCH / AT_RISK thesis (the daily script entry). */
+/** Monitor every ACTIVE / WATCH / AT_RISK thesis (the daily script/cron entry). */
 export async function monitorAllTheses(
-  db: ResearchDb,
+  ctx: ResearchCtx,
   llm: LlmFn = defaultLlm,
 ): Promise<MonitorResult[]> {
-  const theses = listThesesByStatus(db, ['ACTIVE', 'WATCH', 'AT_RISK']);
+  const theses = await listThesesByStatus(ctx, ['ACTIVE', 'WATCH', 'AT_RISK']);
   const results: MonitorResult[] = [];
   for (const thesis of theses) {
-    results.push(await monitorThesis(db, thesis, llm));
+    results.push(await monitorThesis(ctx, thesis, llm));
   }
   return results;
 }
@@ -171,24 +182,40 @@ export interface PendingAlert {
   event: ThesisEvent;
 }
 
-export function listPendingAlerts(db: ResearchDb): PendingAlert[] {
-  const rows: any[] = db
-    .prepare(
-      `select te.*, t.title as thesis_title, t.status as thesis_status
-       from thesis_events te
-       join theses t on t.id = te.thesis_id
-       where te.event_type in ('SUPPORT', 'WEAKEN', 'INVALIDATE')
-         and (case when json_valid(te.detail)
-              then json_extract(te.detail, '$.pending') end) = 1
-       order by te.created_at desc, te.id desc`,
-    )
-    .all();
-  return rows.map((row) => ({
-    thesis_id: row.thesis_id,
-    thesis_title: row.thesis_title,
-    thesis_status: row.thesis_status,
-    event: rowToThesisEvent(row),
-  }));
+export async function listPendingAlerts(ctx: ResearchCtx): Promise<PendingAlert[]> {
+  const { data, error } = await ctx.supabase
+    .from(EVENTS)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .in('kind', [...MONITOR_EVENT_TYPES])
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false });
+  if (error) throw new Error(error.message);
+  const pending = ((data ?? []) as any[])
+    .map(rowToThesisEvent)
+    .filter((e) => e.detail.pending === true);
+  if (pending.length === 0) return [];
+
+  const thesisIds = [...new Set(pending.map((e) => e.thesis_id))];
+  const { data: theses, error: tErr } = await ctx.supabase
+    .from('research_theses')
+    .select('id, title, status')
+    .eq('user_id', ctx.userId)
+    .in('id', thesisIds);
+  if (tErr) throw new Error(tErr.message);
+  const byId = new Map(
+    ((theses ?? []) as Array<{ id: string; title: string; status: ThesisStatus }>).map(
+      (t) => [t.id, t] as const,
+    ),
+  );
+  return pending
+    .filter((e) => byId.has(e.thesis_id))
+    .map((event) => ({
+      thesis_id: event.thesis_id,
+      thesis_title: byId.get(event.thesis_id)!.title,
+      thesis_status: byId.get(event.thesis_id)!.status,
+      event,
+    }));
 }
 
 export type AdjudicationAction =
@@ -218,27 +245,24 @@ export interface AdjudicationResult {
  * reuse transitionThesis (T3 guards apply — an illegal edge throws 422 and
  * leaves the alert pending). Resolution is recorded on the event detail.
  */
-export function adjudicateAlert(
-  db: ResearchDb,
+export async function adjudicateAlert(
+  ctx: ResearchCtx,
   thesisId: string,
   eventId: string,
   action: AdjudicationAction,
   reason: string,
-): AdjudicationResult {
+): Promise<AdjudicationResult> {
   if (!ADJUDICATION_ACTIONS.includes(action)) {
     throw new ThesisError(
       `action must be one of ${ADJUDICATION_ACTIONS.join(', ')}`, 422,
     );
   }
-  const thesis = getThesis(db, thesisId);
+  const thesis = await getThesis(ctx, thesisId);
   if (!thesis) throw new ThesisError('thesis not found', 404);
-  const row = db
-    .prepare(`select * from thesis_events where id = ? and thesis_id = ?`)
-    .get(eventId, thesisId);
-  if (!row || !(MONITOR_EVENT_TYPES as readonly string[]).includes(row.event_type)) {
+  const event = await getThesisEvent(ctx, eventId, thesisId);
+  if (!event || !(MONITOR_EVENT_TYPES as readonly string[]).includes(event.event_type)) {
     throw new ThesisError('alert event not found', 404);
   }
-  const event = rowToThesisEvent(row);
   if (event.detail.pending !== true) {
     throw new ThesisError('alert already adjudicated', 409);
   }
@@ -247,21 +271,30 @@ export function adjudicateAlert(
   // alert stays pending (nothing half-applied).
   const targetStatus = ACTION_TO_STATUS[action];
   if (targetStatus) {
-    transitionThesis(db, thesisId, targetStatus, `alert adjudication: ${action}${reason ? ` — ${reason}` : ''}`);
+    await transitionThesis(ctx, thesisId, targetStatus, `alert adjudication: ${action}${reason ? ` — ${reason}` : ''}`);
   }
 
+  // event.detail already carries source_document_ids (folded jsonb) — the
+  // spread keeps it intact across the resolution update.
   const detail: Record<string, unknown> = {
     ...event.detail,
     pending: false,
     resolution: { action, reason, at: new Date().toISOString() },
   };
-  db.prepare(`update thesis_events set detail = ? where id = ?`).run(writeJson(detail), eventId);
-  logAudit(db, 'thesis.adjudicate', eventId, {
+  const { error } = await ctx.supabase
+    .from(EVENTS)
+    .update({ detail })
+    .eq('user_id', ctx.userId)
+    .eq('id', eventId);
+  if (error) throw new Error(error.message);
+  await audit(ctx, 'thesis.adjudicate', eventId, {
     thesis_id: thesisId,
     action,
     reason,
     verdict: event.event_type,
   });
-  const updated = db.prepare(`select * from thesis_events where id = ?`).get(eventId);
-  return { thesis: getThesis(db, thesisId)!, event: rowToThesisEvent(updated) };
+  return {
+    thesis: (await getThesis(ctx, thesisId))!,
+    event: (await getThesisEvent(ctx, eventId))!,
+  };
 }

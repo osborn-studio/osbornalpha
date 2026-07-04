@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { assertEnabled, getDb } from '@/lib/research/db';
+import { requireResearchUser } from '@/lib/research/store';
 import { ingestSource, listSources } from '@/lib/research/sources';
 import { withResearch } from '@/lib/research/api';
 import type { SourceType } from '@/lib/research/types';
@@ -7,21 +7,19 @@ import type { SourceType } from '@/lib/research/types';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request) {
-  return withResearch(() => {
-    assertEnabled();
+  return withResearch(async () => {
+    const ctx = await requireResearchUser();
     const url = new URL(req.url);
     const type = (url.searchParams.get('type') || undefined) as SourceType | undefined;
-    const db = getDb();
-    return { sources: listSources(db, { type }) };
+    return { sources: await listSources(ctx, { type }) };
   });
 }
 
 export async function POST(req: Request) {
   return withResearch(async () => {
-    assertEnabled();
+    const ctx = await requireResearchUser();
     const body = await req.json().catch(() => ({}));
-    const db = getDb();
-    const result = ingestSource(db, body);
+    const result = await ingestSource(ctx, body);
     return NextResponse.json(result, { status: result.duplicate ? 200 : 201 });
   });
 }

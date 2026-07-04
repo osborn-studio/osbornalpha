@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { assertEnabled, getDb } from '@/lib/research/db';
+import { requireResearchUser } from '@/lib/research/store';
 import { reviewMemo, MemoError } from '@/lib/research/memos';
 import { researchError } from '@/lib/research/api';
 
@@ -8,9 +8,8 @@ export const dynamic = 'force-dynamic';
 /** Review gate: 422 while any BLOCK axiom fails; otherwise memo → REVIEWED. */
 export async function POST(_req: Request, { params }: { params: { id: string } }) {
   try {
-    assertEnabled();
-    const db = getDb();
-    const result = reviewMemo(db, params.id);
+    const ctx = await requireResearchUser();
+    const result = await reviewMemo(ctx, params.id);
     if (!result.ok) {
       return NextResponse.json(
         {

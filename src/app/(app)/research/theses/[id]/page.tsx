@@ -49,7 +49,7 @@ export default function ResearchThesisDetailPage() {
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/research/theses/${params.id}`);
-    if (res.status === 501) { setDisabled(true); return; }
+    if (res.status === 401 || res.status === 403) { setDisabled(true); return; }
     if (res.status === 404) { setNotFound(true); return; }
     const data = await res.json().catch(() => ({}));
     setThesis(data.thesis ?? null);

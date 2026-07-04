@@ -1,27 +1,26 @@
 /**
  * Research OS — GitHub Radar ingest script. Run locally with:
- *   RESEARCH_OS_ENABLED=1 npx tsx scripts/research-ingest-radar.ts [dayDir]
- *   RESEARCH_OS_ENABLED=1 npx tsx scripts/research-ingest-radar.ts --all
+ *   RESEARCH_OWNER_USER_ID=<owner> npx tsx scripts/research-ingest-radar.ts [dayDir]
+ *   RESEARCH_OWNER_USER_ID=<owner> npx tsx scripts/research-ingest-radar.ts --all
  *
  * With no args (or --all) it scans every YYYY-MM-DD directory under the
  * radar reports root (env RADAR_REPORTS_DIR, default: the local
- * github-research-agent reports directory) and ingests each day.
+ * github-research-agent reports directory) and ingests each day into the
+ * production Supabase via the service-role ctx.
  * Idempotent: re-runs count duplicates instead of inserting.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { getDb } from '../src/lib/research/db';
+import { loadEnvConfig } from '@next/env';
+loadEnvConfig(process.cwd());
+import { getServiceResearchCtx } from '../src/lib/research/service';
 import { ingestRadarDay } from '../src/lib/research/ingest/github-radar';
 
 const DEFAULT_REPORTS_ROOT =
   '/Volumes/AIMATE_WORK/Developer/ClaudeCode/01_active/github-research-agent/reports';
 
-function main() {
-  if (process.env.RESEARCH_OS_ENABLED !== '1') {
-    // Convenience: the ingest script is inherently local-only, so enable inline.
-    process.env.RESEARCH_OS_ENABLED = '1';
-  }
+async function main() {
   const arg = process.argv[2];
   const root = process.env.RADAR_REPORTS_DIR ?? DEFAULT_REPORTS_ROOT;
 
@@ -44,11 +43,11 @@ function main() {
     process.exit(1);
   }
 
-  const db = getDb();
+  const ctx = getServiceResearchCtx();
   let inserted = 0;
   let duplicates = 0;
   for (const dayDir of dayDirs) {
-    const r = ingestRadarDay(db, dayDir);
+    const r = await ingestRadarDay(ctx, dayDir);
     inserted += r.inserted;
     duplicates += r.duplicates;
     console.log(
@@ -61,4 +60,4 @@ function main() {
   );
 }
 
-main();
+void main();

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { assertEnabled, getDb } from '@/lib/research/db';
+import { requireResearchUser } from '@/lib/research/store';
 import { adjudicateAlert, type AdjudicationAction } from '@/lib/research/monitor';
 import { withResearch } from '@/lib/research/api';
 
@@ -14,11 +14,10 @@ export async function PATCH(
   { params }: { params: { id: string; eventId: string } },
 ) {
   return withResearch(async () => {
-    assertEnabled();
+    const ctx = await requireResearchUser();
     const body = await req.json().catch(() => ({}));
-    const db = getDb();
-    const result = adjudicateAlert(
-      db,
+    const result = await adjudicateAlert(
+      ctx,
       params.id,
       params.eventId,
       body.action as AdjudicationAction,

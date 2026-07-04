@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { assertEnabled, getDb } from '@/lib/research/db';
+import { requireResearchUser } from '@/lib/research/store';
 import { createPlaybookRun, listPlaybookRuns } from '@/lib/research/playbooks';
 import { withResearch } from '@/lib/research/api';
 import { APPROVAL_STATUSES, type ApprovalStatus } from '@/lib/research/types';
@@ -7,13 +7,12 @@ import { APPROVAL_STATUSES, type ApprovalStatus } from '@/lib/research/types';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request) {
-  return withResearch(() => {
-    assertEnabled();
-    const db = getDb();
+  return withResearch(async () => {
+    const ctx = await requireResearchUser();
     const status = new URL(req.url).searchParams.get('status');
     const runs = APPROVAL_STATUSES.includes(status as ApprovalStatus)
-      ? listPlaybookRuns(db, { status: status as ApprovalStatus })
-      : listPlaybookRuns(db);
+      ? await listPlaybookRuns(ctx, { status: status as ApprovalStatus })
+      : await listPlaybookRuns(ctx);
     return { runs };
   });
 }
@@ -21,10 +20,9 @@ export async function GET(req: Request) {
 /** Create a run: axiom BLOCK → 422 AXIOM_BLOCKED and NOTHING is persisted. */
 export async function POST(req: Request) {
   return withResearch(async () => {
-    assertEnabled();
+    const ctx = await requireResearchUser();
     const body = await req.json().catch(() => ({}));
-    const db = getDb();
-    const { run, axiom_results } = createPlaybookRun(db, body);
+    const { run, axiom_results } = await createPlaybookRun(ctx, body);
     return NextResponse.json({ run, axiom_results }, { status: 201 });
   });
 }

@@ -34,7 +34,7 @@ export default function ResearchCompanyPage() {
     (async () => {
       const res = await fetch(`/api/research/entities/${params.id}`);
       if (!res.ok) {
-        setError(res.status === 501 ? 'Research OS 未启用（本地专用）' : `加载失败：${res.status}`);
+        setError(res.status === 401 || res.status === 403 ? 'Research OS 该模块暂未开放（需 admin 登录）' : `加载失败：${res.status}`);
         return;
       }
       setData(await res.json());

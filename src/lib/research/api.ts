@@ -1,19 +1,28 @@
 /**
  * Shared API helpers for /api/research/* routes.
- * Every route body runs behind assertEnabled(); when RESEARCH_OS_ENABLED is
- * not '1' the handler responds 501 without ever touching better-sqlite3.
+ * Access control: every route body calls requireResearchUser() first —
+ * no session → 401, session without profiles.role==='admin' → 403.
  */
 
 import { NextResponse } from 'next/server';
-import { ResearchDisabled } from './db';
+import { ResearchForbidden } from './store';
 import { SourceValidationError } from './sources';
 import { ThesisError } from './theses';
 import { AxiomBlocked, PlaybookError } from './playbooks';
 import { EvalError } from './evals';
 
 export function researchError(e: unknown): NextResponse {
-  if (e instanceof ResearchDisabled) {
-    return NextResponse.json({ error: 'research os is local-only' }, { status: 501 });
+  if (e instanceof ResearchForbidden) {
+    return NextResponse.json(
+      { error: { code: 'FORBIDDEN', message: 'research os requires admin role' } },
+      { status: 403 },
+    );
+  }
+  if (e instanceof Error && e.message === 'not authenticated') {
+    return NextResponse.json(
+      { error: { code: 'UNAUTHORIZED', message: 'not authenticated' } },
+      { status: 401 },
+    );
   }
   if (e instanceof SourceValidationError) {
     return NextResponse.json(
@@ -53,7 +62,7 @@ export function researchError(e: unknown): NextResponse {
   );
 }
 
-/** Wrap a route handler with the Research OS gate + uniform error mapping. */
+/** Wrap a route handler with uniform error mapping (401/403 included). */
 export async function withResearch<T>(fn: () => T | Promise<T>): Promise<NextResponse> {
   try {
     const data = await fn();

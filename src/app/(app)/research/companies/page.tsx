@@ -15,7 +15,7 @@ export default function ResearchCompaniesPage() {
   useEffect(() => {
     (async () => {
       const res = await fetch('/api/research/entities?type=COMPANY');
-      if (res.status === 501) { setDisabled(true); return; }
+      if (res.status === 401 || res.status === 403) { setDisabled(true); return; }
       const data = await res.json().catch(() => ({ entities: [] }));
       setCompanies(data.entities ?? []);
       const tRes = await fetch('/api/research/entities?type=THEME');
@@ -27,7 +27,7 @@ export default function ResearchCompaniesPage() {
   if (disabled) {
     return (
       <div className="rounded-lg border border-amber-300 bg-amber-50 p-6 text-sm text-amber-900">
-        Research OS 为本地专用模式，未启用。请在本地 .env.local 设置 RESEARCH_OS_ENABLED=1。
+        Research OS 该模块暂未开放——需以 admin 角色登录后访问（个人云工具规格）。
       </div>
     );
   }
@@ -37,7 +37,7 @@ export default function ResearchCompaniesPage() {
       <h1 className="text-xl font-semibold">Companies 公司档案（{companies.length}）</h1>
       {companies.length === 0 && (
         <p className="text-sm text-gray-500">
-          暂无公司。先运行种子脚本：RESEARCH_OS_ENABLED=1 npx tsx scripts/research-seed.ts
+          暂无公司。先运行种子脚本：RESEARCH_OWNER_USER_ID=&lt;owner&gt; npx tsx scripts/research-seed.ts
         </p>
       )}
       <ul className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
