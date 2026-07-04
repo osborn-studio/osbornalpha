@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { useTranslations } from 'next-intl';
 import { Panel } from '@/components/ui';
 
 export interface QuotaNoticeProps {
@@ -13,28 +14,31 @@ export interface QuotaNoticeProps {
 // perspectives 'quota' response, brief/preview 429). Deliberately feature-
 // agnostic copy — the same card renders under the copilot stream, the AI 观点
 // tab, and the daily brief preview without needing per-surface strings.
+//
+// i18n note (G1b): every string here already exists verbatim under
+// common.quota.* (wired in G1a). Extending that single source in place
+// rather than duplicating under components.quotaNotice.
 export function QuotaNotice({ used, limit, plan }: QuotaNoticeProps) {
+  const t = useTranslations('common.quota');
   const isPro = plan === 'pro';
   return (
-    <Panel title={`今日平台额度已用完（${used}/${limit}）`} className="border-accent-dim/40">
+    <Panel title={t('title', { used, limit })} className="border-accent-dim/40">
       <div className="text-sm text-text-dim">
-        {isPro
-          ? 'Pro 额度也用完了——填入自己的 API Key 即可不限量使用，或等待明日 00:00（北京时间）重置。'
-          : '填入自己的 API Key 即可不限量使用，或等待明日 00:00（北京时间）重置。'}
+        {isPro ? t('descriptionPro') : t('descriptionFree')}
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         <Link
           href="/settings"
           className="inline-block rounded-md bg-accent-dim px-3 py-1.5 text-xs font-semibold text-white"
         >
-          去设置 →
+          {t('goToSettings')}
         </Link>
         {!isPro && (
           <Link
             href="/settings#upgrade"
             className="inline-block rounded-md border border-accent-dim/60 px-3 py-1.5 text-xs font-semibold text-accent-dim"
           >
-            升级 Pro →
+            {t('upgradePro')}
           </Link>
         )}
       </div>
