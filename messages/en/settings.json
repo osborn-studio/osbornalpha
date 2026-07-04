@@ -4,5 +4,15 @@
     "heading": "🌐 Language",
     "zh": "🇨🇳 中文",
     "en": "🇺🇸 English"
+  },
+  "timezone": {
+    "heading": "🕐 Timezone",
+    "auto": "Auto (follow browser)",
+    "hint": "Affects all displayed times; market-hours detection always uses each exchange's local time."
+  },
+  "brief": {
+    "heading": "⏰ Brief Delivery",
+    "schedule": "Delivered daily at 08:30 Beijing time (UTC+8)",
+    "localEquiv": "≈ {time} in your local time"
   }
 }

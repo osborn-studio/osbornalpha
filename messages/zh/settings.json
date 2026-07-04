@@ -4,5 +4,15 @@
     "heading": "🌐 语言",
     "zh": "🇨🇳 中文",
     "en": "🇺🇸 English"
+  },
+  "timezone": {
+    "heading": "🕐 时区",
+    "auto": "自动（跟随浏览器）",
+    "hint": "影响全站时间显示；行情时段判定始终按各交易所当地时间。"
+  },
+  "brief": {
+    "heading": "⏰ 简报投递",
+    "schedule": "每日 08:30 北京时间（UTC+8）投递",
+    "localEquiv": "≈ 你的本地时间 {time}"
   }
 }

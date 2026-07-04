@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useLocale } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import Link from 'next/link';
 import { useToast } from '@/components/Toast';
 import { Disclaimer } from '@/components/Disclaimer';
@@ -13,19 +13,44 @@ import { UpgradeCard } from '@/components/UpgradeCard';
 import { getBrowserSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import type { AppLocale } from '@/lib/i18n/locale';
 
+// Fixed timezone choices (IANA ids are shown untranslated; '' = auto).
+const TIMEZONE_OPTIONS = [
+  'Asia/Shanghai',
+  'Asia/Hong_Kong',
+  'Asia/Taipei',
+  'Asia/Tokyo',
+  'Asia/Seoul',
+  'America/New_York',
+  'America/Los_Angeles',
+  'Europe/London',
+  'UTC',
+];
+
 export default function SettingsPage() {
   const { show } = useToast();
   const router = useRouter();
+  const t = useTranslations('settings');
   const currentLocale = useLocale() as AppLocale;
   const [language, setLanguage] = useState<AppLocale>(currentLocale);
+  const [timezone, setTimezone] = useState(''); // '' = auto (follow browser)
   const [tgChatId, setTgChatId] = useState('');
   const [emailNotif, setEmailNotif] = useState(true);
-  const [briefTime, setBriefTime] = useState('08:30');
 
   useEffect(() => {
     setTgChatId(localStorage.getItem('tg-chat-id') || '');
     setEmailNotif(localStorage.getItem('email-notif') !== 'false');
-    setBriefTime(localStorage.getItem('brief-time') || '08:30');
+  }, []);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+    const sb = getBrowserSupabase();
+    sb.auth.getUser().then(async ({ data: { user } }) => {
+      if (!user) return;
+      const { data } = await sb.from('user_preferences')
+        .select('timezone').eq('user_id', user.id).maybeSingle();
+      const v = (data as any)?.timezone;
+      if (v) setTimezone(v);
+    });
   }, []);
 
   async function selectLanguage(l: AppLocale) {
@@ -44,10 +69,34 @@ export default function SettingsPage() {
     router.refresh();
   }
 
+  async function selectTimezone(v: string) {
+    setTimezone(v);
+    if (isSupabaseConfigured()) {
+      const sb = getBrowserSupabase();
+      const { data: { user } } = await sb.auth.getUser();
+      if (user) {
+        await (sb as any).from('user_preferences').upsert(
+          { user_id: user.id, timezone: v }, // '' = auto
+          { onConflict: 'user_id' }
+        );
+      }
+    }
+    router.refresh();
+  }
+
+  // Brief cron fires at 00:30 UTC (= 08:30 Beijing); show the equivalent in
+  // the user's display timezone (override if set, else browser default).
+  const briefUtc = new Date();
+  briefUtc.setUTCHours(0, 30, 0, 0);
+  const briefLocalTime = new Intl.DateTimeFormat(undefined, {
+    timeZone: timezone || undefined,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(briefUtc);
+
   function save() {
     localStorage.setItem('tg-chat-id', tgChatId);
     localStorage.setItem('email-notif', String(emailNotif));
-    localStorage.setItem('brief-time', briefTime);
     show('✓ 设置已保存到本地');
   }
 
@@ -91,6 +140,21 @@ export default function SettingsPage() {
             🇺🇸 English
           </button>
         </div>
+      </div>
+
+      <div className="card-base">
+        <div className="mb-3 text-sm font-semibold text-text-dim">{t('timezone.heading')}</div>
+        <select
+          value={timezone}
+          onChange={(e) => selectTimezone(e.target.value)}
+          className="w-full rounded border border-border bg-bg-card px-3 py-1.5 text-sm"
+        >
+          <option value="">{t('timezone.auto')}</option>
+          {TIMEZONE_OPTIONS.map((z) => (
+            <option key={z} value={z}>{z}</option>
+          ))}
+        </select>
+        <div className="mt-2 text-[10px] text-text-muted">{t('timezone.hint')}</div>
       </div>
 
       <div className="card-base">
@@ -231,11 +295,9 @@ export default function SettingsPage() {
       </div>
 
       <div className="card-base">
-        <div className="mb-3 text-sm font-semibold text-text-dim">⏰ 简报时间</div>
-        <div className="flex items-center gap-2">
-          <input type="time" value={briefTime} onChange={(e) => setBriefTime(e.target.value)} className="w-32" />
-          <span className="text-xs text-text-dim">CST (Asia/Shanghai)</span>
-        </div>
+        <div className="mb-3 text-sm font-semibold text-text-dim">{t('brief.heading')}</div>
+        <div className="text-sm">{t('brief.schedule')}</div>
+        <div className="mt-1 text-xs text-text-dim">{t('brief.localEquiv', { time: briefLocalTime })}</div>
       </div>
 
       <button onClick={save} className="mb-4 w-full rounded-lg bg-accent-dim py-3 text-sm font-semibold text-white">
