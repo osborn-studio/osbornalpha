@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import type { InvestmentMemo, Signal, SourceDocument, ThesisEvent, ThesisStatus } from '@/lib/research/types';
+import type { InvestmentMemo, PlaybookRun, Signal, SourceDocument, ThesisEvent, ThesisStatus } from '@/lib/research/types';
 
 interface PendingAlert {
   thesis_id: string;
@@ -25,6 +25,7 @@ export default function ResearchDashboardPage() {
   const [memos, setMemos] = useState<InvestmentMemo[] | null>(null);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [alerts, setAlerts] = useState<PendingAlert[]>([]);
+  const [pendingPlaybooks, setPendingPlaybooks] = useState<PlaybookRun[]>([]);
   const [disabled, setDisabled] = useState(false);
 
   useEffect(() => {
@@ -42,6 +43,9 @@ export default function ResearchDashboardPage() {
       const aRes = await fetch('/api/research/theses/alerts');
       const aData = await aRes.json().catch(() => ({ alerts: [] }));
       setAlerts(aData.alerts ?? []);
+      const pRes = await fetch('/api/research/playbooks?status=PENDING');
+      const pData = await pRes.json().catch(() => ({ runs: [] }));
+      setPendingPlaybooks(pData.runs ?? []);
     })();
   }, []);
 
@@ -91,7 +95,28 @@ export default function ResearchDashboardPage() {
               <div className="text-3xl font-semibold">{memos.length}</div>
               <div className="text-sm text-gray-500">Investment memos</div>
             </Link>
+            <Link href="/research/playbooks" className="rounded-lg border p-4 hover:bg-gray-50">
+              <div className="text-3xl font-semibold">{pendingPlaybooks.length}</div>
+              <div className="text-sm text-gray-500">📋 待审批 playbook</div>
+            </Link>
           </div>
+
+          {pendingPlaybooks.length > 0 && (
+            <section className="rounded-lg border border-yellow-300 bg-yellow-50 p-4">
+              <h2 className="mb-2 text-base font-medium">📋 待审批 playbook（{pendingPlaybooks.length}）— 高风险动作需人工裁决</h2>
+              <ul className="space-y-2">
+                {pendingPlaybooks.slice(0, 3).map((run) => (
+                  <li key={run.id} className="rounded border border-yellow-200 bg-white p-3 text-sm">
+                    <Link href="/research/playbooks" className="font-medium underline">
+                      {run.proposed_action}
+                    </Link>
+                    <span className="ml-2 text-xs text-gray-500">{run.created_at}</span>
+                    <p className="mt-1 text-xs text-gray-600">{run.rationale}</p>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           {alerts.length > 0 && (
             <section className="rounded-lg border border-orange-300 bg-orange-50 p-4">
