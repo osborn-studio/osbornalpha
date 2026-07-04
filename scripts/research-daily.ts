@@ -9,7 +9,12 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { loadEnvConfig } from '@next/env';
 import { getDb } from '../src/lib/research/db';
+
+// Plain tsx does not read .env.local (Next only does inside the app) — the
+// LLM steps need DEEPSEEK_API_KEY from there.
+loadEnvConfig(process.cwd());
 import { ingestRadarDay } from '../src/lib/research/ingest/github-radar';
 import { extractSignals } from '../src/lib/research/signals';
 import { monitorAllTheses, listPendingAlerts } from '../src/lib/research/monitor';
