@@ -11,8 +11,11 @@
  * phase. Acceptable for current scope; a holiday calendar can be layered
  * on later (tracked debt, now ×3 markets).
  *
- * G3 extension point: 'JP' | 'KR' | 'TW' only need a MARKET_SESSIONS row.
+ * G3: JP/KR/TW added — Market union from database.types is the single
+ * market type; marketOfTicker re-exports classifyMarket (utils.ts).
  */
+
+import type { Market } from '@/lib/supabase/database.types';
 
 // phaseKey disambiguates the two 'open' sub-phases (morning session vs
 // afternoon session) that share `phase: 'open'` but have different label
@@ -29,17 +32,18 @@ export interface MarketPhase {
   minutes?: number; // minutes remaining to the next transition (absent for closed/weekend)
 }
 
-export type ClockMarket = 'A' | 'HK' | 'US'; // G3: 'JP' | 'KR' | 'TW' 只加表行
-
 interface MarketSessionSpec {
   tz: string; // IANA timezone, judged via Intl (US DST automatically correct)
   sessions: Array<{ open: number; close: number }>; // 当地分钟数；2 段=有午休
 }
 
-const MARKET_SESSIONS: Record<ClockMarket, MarketSessionSpec> = {
+const MARKET_SESSIONS: Record<Market, MarketSessionSpec> = {
   A:  { tz: 'Asia/Shanghai',    sessions: [{ open: 570, close: 690 }, { open: 780, close: 900 }] }, // 09:30–11:30, 13:00–15:00
   HK: { tz: 'Asia/Hong_Kong',   sessions: [{ open: 570, close: 720 }, { open: 780, close: 960 }] }, // 09:30–12:00, 13:00–16:00
   US: { tz: 'America/New_York', sessions: [{ open: 570, close: 960 }] },                            // 09:30–16:00 单段
+  JP: { tz: 'Asia/Tokyo',       sessions: [{ open: 540, close: 690 }, { open: 750, close: 930 }] }, // 09:00–11:30, 12:30–15:30（2024-11 起收盘 15:30）
+  KR: { tz: 'Asia/Seoul',       sessions: [{ open: 540, close: 930 }] },                            // 09:00–15:30 单段
+  TW: { tz: 'Asia/Taipei',      sessions: [{ open: 540, close: 810 }] },                            // 09:00–13:30 单段
 };
 
 export interface MarketPhaseV2 {
@@ -80,7 +84,7 @@ function toZoneParts(now: Date, tz: string): ZoneParts {
   return { weekday: WEEKDAY_INDEX[weekdayStr] ?? 0, hour, minute };
 }
 
-export function marketPhase(market: ClockMarket, now: Date): MarketPhaseV2 {
+export function marketPhase(market: Market, now: Date): MarketPhaseV2 {
   const spec = MARKET_SESSIONS[market];
   const { weekday, hour, minute } = toZoneParts(now, spec.tz);
   // Weekend is judged in the MARKET's local weekday (北京周六清晨 = 纽约周五晚,
@@ -99,11 +103,8 @@ export function marketPhase(market: ClockMarket, now: Date): MarketPhaseV2 {
   return { phase: 'closed', phaseKey: 'closed' };
 }
 
-export function marketOfTicker(ticker: string): ClockMarket {
-  if (/\.(SH|SZ|BJ)$/i.test(ticker)) return 'A';
-  if (/\.HK$/i.test(ticker)) return 'HK';
-  return 'US';
-}
+// Single source of truth lives in utils.ts; re-exported under the legacy name.
+export { classifyMarket as marketOfTicker } from '@/lib/utils';
 
 // Thin wrapper preserving the legacy A-share API (return type / zh labels
 // byte-compatible with the pre-G2 implementation and its 8 tests).

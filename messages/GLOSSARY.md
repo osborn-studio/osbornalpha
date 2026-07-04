@@ -54,6 +54,10 @@
 | 设置 | Settings | |
 | 通知 | Notification | |
 | 推送 | Push (as in push notification) | |
+| 日股 | Japan | G3 市场标签；货币符号用 JP¥（避免与人民币 ¥ 混淆） |
+| 韩股 | Korea | G3 市场标签；货币符号 ₩ |
+| 台股 | Taiwan | G3 市场标签；货币符号 NT$ |
+| 数据源未接入 | Data source not connected | G3 JP/KR 占位态（market.stock.sourcePending） |
 
 ## 使用规则
 

@@ -4,7 +4,7 @@
 // + 20260703120000_stripe_billing.sql (profiles.plan_expires_at, stripe_events)
 // Regenerate with: npm run supabase:types (after supabase link)
 
-export type Market = 'A' | 'HK' | 'US';
+export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
 export type Stance = 'bullish' | 'neutral' | 'bearish';
 export type Persona =
   | 'buffett' | 'munger' | 'druckenmiller' | 'marks' | 'lynch'

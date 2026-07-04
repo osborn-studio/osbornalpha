@@ -231,7 +231,8 @@
       "usBody": "关注的对冲基金（Berkshire / Bridgewater / Burry 等）13F 持仓变动数据待接入。",
       "nonUsBody": "此标的非美股，无 13F 数据。",
       "dataSource": "数据源：EDGAR 13F-HR · 季度更新"
-    }
+    },
+    "sourcePending": "数据源未接入"
   },
   "dcf": {
     "variants": {

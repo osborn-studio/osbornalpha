@@ -12,7 +12,16 @@
     "closed": "Closed",
     "weekend": "Weekend — closed"
   },
-  "clock": { "market": { "A": "A-shares", "HK": "Hong Kong", "US": "US" } },
+  "clock": {
+    "market": {
+      "A": "A-shares",
+      "HK": "Hong Kong",
+      "US": "US",
+      "JP": "Japan",
+      "KR": "Korea",
+      "TW": "Taiwan"
+    }
+  },
   "radar": {
     "emptyPrefix": "Your watchlist is empty. Go to ",
     "emptyLink": "📋 Watchlist",

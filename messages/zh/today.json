@@ -12,7 +12,16 @@
     "closed": "已收盘",
     "weekend": "周末休市"
   },
-  "clock": { "market": { "A": "A股", "HK": "港股", "US": "美股" } },
+  "clock": {
+    "market": {
+      "A": "A股",
+      "HK": "港股",
+      "US": "美股",
+      "JP": "日股",
+      "KR": "韩股",
+      "TW": "台股"
+    }
+  },
   "radar": {
     "emptyPrefix": "股票池是空的。先去 ",
     "emptyLink": "📋 股票池",

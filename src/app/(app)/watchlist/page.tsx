@@ -5,7 +5,7 @@ import { MarketLabel } from '@/components/MarketLabel';
 import Link from 'next/link';
 import { useLocale, useTranslations } from 'next-intl';
 import { addCustomStock } from '@/lib/data/custom-stocks';
-import { formatPrice, formatPct, changeClass, classifyMarket } from '@/lib/utils';
+import { formatPrice, formatPct, changeClass, classifyMarket, currencyOfMarket } from '@/lib/utils';
 import { Disclaimer } from '@/components/Disclaimer';
 import { useToast } from '@/components/Toast';
 import { useBatchQuotes, type LiveQuote } from '@/lib/hooks/useQuote';
@@ -670,7 +670,7 @@ function StockCard({
   const t = useTranslations('market.watchlist.kanban');
   const market = quote?.market || classifyMarket(ticker);
   const name = quote?.name || ticker;
-  const currency = quote?.currency || (market === 'A' ? '¥' : market === 'HK' ? 'HK$' : '$');
+  const currency = quote?.currency || currencyOfMarket(market);
   const hasPrice = !!quote && quote.price > 0;
   // Distinguish "still loading first batch" from "loaded but failed":
   // - loadedAt === null  → first batch hasn't returned yet → 加载中…

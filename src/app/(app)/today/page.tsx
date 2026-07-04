@@ -5,13 +5,14 @@ import { useTranslations } from 'next-intl';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
 import { usePortfolio } from '@/lib/hooks/usePortfolio';
 import { uniqueWatchlistTickers } from '@/lib/watchlist/store';
-import { marketPhase, marketOfTicker, type ClockMarket, type MarketPhaseV2 } from '@/lib/today/clock';
+import { marketPhase, marketOfTicker, type MarketPhaseV2 } from '@/lib/today/clock';
+import type { Market } from '@/lib/supabase/database.types';
 import { RadarStream } from '@/components/today/RadarStream';
 import { PortfolioGlance } from '@/components/today/PortfolioGlance';
 import { MacroGlance } from '@/components/today/MacroGlance';
 import { BriefGlance } from '@/components/today/BriefGlance';
 
-const MARKET_ORDER: ClockMarket[] = ['A', 'HK', 'US'];
+const MARKET_ORDER: Market[] = ['A', 'HK', 'US', 'JP', 'KR', 'TW'];
 
 export default function TodayPage() {
   const t = useTranslations('today');
@@ -33,10 +34,10 @@ export default function TodayPage() {
   const markets = useMemo(() => {
     const s = new Set(allTickers.map(marketOfTicker));
     const list = MARKET_ORDER.filter((m) => s.has(m));
-    return list.length > 0 ? list : (['A'] as ClockMarket[]);
+    return list.length > 0 ? list : (['A'] as Market[]);
   }, [allTickers]);
 
-  const [phases, setPhases] = useState<Partial<Record<ClockMarket, MarketPhaseV2>>>({});
+  const [phases, setPhases] = useState<Partial<Record<Market, MarketPhaseV2>>>({});
   useEffect(() => {
     const tick = () => setPhases(Object.fromEntries(markets.map((m) => [m, marketPhase(m, new Date())])));
     tick();

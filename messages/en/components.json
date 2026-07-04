@@ -95,6 +95,9 @@
   "market": {
     "A": "A-shares",
     "HK": "HK",
-    "US": "US"
+    "US": "US",
+    "JP": "Japan",
+    "KR": "Korea",
+    "TW": "Taiwan"
   }
 }
