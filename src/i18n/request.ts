@@ -7,7 +7,11 @@ import { resolveLocale } from '@/lib/i18n/locale';
 // middleware when rewriting /en/* to the unprefixed path), the NEXT_LOCALE
 // cookie (in-app preference, written by the settings-page language switcher),
 // then Accept-Language, then DEFAULT_LOCALE. See src/lib/i18n/locale.ts.
-const MESSAGE_DOMAINS = ['common', 'landing', 'auth', 'errors', 'settings'] as const;
+const MESSAGE_DOMAINS = [
+  'common', 'landing', 'auth', 'errors', 'settings',
+  // G1b domains (pre-registered for the parallel extraction fan-out):
+  'today', 'portfolio', 'intel', 'tools', 'market', 'components',
+] as const;
 
 export default getRequestConfig(async () => {
   const h = await headers();
