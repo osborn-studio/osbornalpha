@@ -95,6 +95,7 @@ create table if not exists memos (
   key_variables            text not null default '[]',  -- Json<string[]>
   invalidation_conditions  text not null default '[]',  -- Json<string[]>
   open_questions           text not null default '[]',  -- Json<string[]>
+  related_impacts          text not null default '[]',  -- Json<string[]> §4.4-8 相关公司/产业链影响
   confidence               text not null default 'LOW'
                              check (confidence in ('LOW','MEDIUM','HIGH')),
   axiom_check_results      text not null default '[]',  -- Json<AxiomCheckResult[]>

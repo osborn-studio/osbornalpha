@@ -1,0 +1,363 @@
+/**
+ * Memo engine (Research OS Phase 1).
+ * generate → LLM (existing src/lib/data/sources/llm stack) → validate citations
+ * → axiom check → persist with provenance {model, prompt_sha256,
+ * source_document_ids, generated_at, edits[]} → audit_log.
+ */
+
+import { logAudit, type ResearchDb } from './db';
+import { getEntity } from './entities';
+import { listSourcesForEntity } from './sources';
+import { checkMemoAxioms, hasBlockingFailure } from './axioms';
+import { buildMemoPrompt, validateMemoDraft, type MemoDraft } from './memo-prompt';
+import {
+  RESEARCH_DISCLAIMER,
+  readJson,
+  writeJson,
+  type Axiom,
+  type AxiomCheckResult,
+  type EvidenceItem,
+  type InvestmentMemo,
+  type MemoProvenance,
+  type SourceDocument,
+} from './types';
+
+export class MemoError extends Error {
+  constructor(message: string, public status: number = 400) {
+    super(message);
+    this.name = 'MemoError';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Row mapping
+
+function rowToMemo(row: any): InvestmentMemo {
+  return {
+    id: row.id,
+    title: row.title,
+    company_ids: readJson<string[]>(row.company_ids, []),
+    theme_ids: readJson<string[]>(row.theme_ids, []),
+    one_line_conclusion: row.one_line_conclusion,
+    thesis: row.thesis,
+    supporting_evidence: readJson<EvidenceItem[]>(row.supporting_evidence, []),
+    counter_arguments: readJson<EvidenceItem[]>(row.counter_arguments, []),
+    key_variables: readJson<string[]>(row.key_variables, []),
+    invalidation_conditions: readJson<string[]>(row.invalidation_conditions, []),
+    open_questions: readJson<string[]>(row.open_questions, []),
+    related_impacts: readJson<string[]>(row.related_impacts, []),
+    confidence: row.confidence,
+    axiom_check_results: readJson<AxiomCheckResult[]>(row.axiom_check_results, []),
+    provenance: readJson<MemoProvenance>(row.provenance, {}),
+    status: row.status,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+export function loadAxioms(db: ResearchDb): Axiom[] {
+  return db.prepare(`select * from axioms order by code asc`).all().map((row: any) => ({
+    id: row.id,
+    code: row.code,
+    title: row.title,
+    description: row.description,
+    severity: row.severity,
+    enabled: !!row.enabled,
+    created_at: row.created_at,
+  }));
+}
+
+export function getMemo(db: ResearchDb, id: string): InvestmentMemo | null {
+  const row = db.prepare(`select * from memos where id = ?`).get(id);
+  return row ? rowToMemo(row) : null;
+}
+
+export function listMemos(db: ResearchDb): InvestmentMemo[] {
+  return db.prepare(`select * from memos order by created_at desc`).all().map(rowToMemo);
+}
+
+// ---------------------------------------------------------------------------
+// Generation
+
+export interface LlmChatResult {
+  content: string;
+  model: string;
+}
+
+/** Injectable for tests; defaultLlm routes through the existing LLM stack. */
+export type LlmFn = (prompt: { system: string; user: string }) => Promise<LlmChatResult>;
+
+/** Production adapter: reuses src/lib/data/sources/llm (resolveLlm → env DeepSeek). */
+export const defaultLlm: LlmFn = async ({ system, user }) => {
+  const { chat } = await import('@/lib/data/sources/llm');
+  const r = await chat({
+    system,
+    messages: [{ role: 'user', content: user }],
+    max_tokens: 3000,
+    temperature: 0.3,
+    responseJson: true,
+    timeoutMs: 120_000,
+  });
+  return { content: r.content, model: r.model };
+};
+
+export interface GenerateMemoInput {
+  entity_id: string;
+  question?: string;
+}
+
+export type GenerateMemoResult =
+  | { memo: InvestmentMemo; llm: { source: 'llm'; model: string } }
+  | { memo: null; llm: { source: 'no-key' | 'error'; message: string } };
+
+/**
+ * Generate a memo for an entity from its linked sources.
+ * LLM failure / missing key returns a structured result — never throws for
+ * provider problems (plan T5: {source:'no-key'|'error'} 不崩).
+ */
+export async function generateMemo(
+  db: ResearchDb,
+  input: GenerateMemoInput,
+  llm: LlmFn = defaultLlm,
+): Promise<GenerateMemoResult> {
+  const entity = getEntity(db, input.entity_id);
+  if (!entity) throw new MemoError('entity not found', 404);
+
+  const sources = listSourcesForEntity(db, entity.id);
+  const prompt = buildMemoPrompt({ entity, sources, question: input.question });
+
+  let content: string;
+  let model: string;
+  try {
+    const r = await llm({ system: prompt.system, user: prompt.user });
+    content = r.content;
+    model = r.model;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    const noKey = /no llm provider configured/i.test(message);
+    return { memo: null, llm: { source: noKey ? 'no-key' : 'error', message } };
+  }
+
+  const { extractJson } = await import('@/lib/data/sources/llm');
+  const parsed = extractJson(content);
+  if (!parsed) {
+    return { memo: null, llm: { source: 'error', message: 'LLM output was not parseable JSON' } };
+  }
+  const draft = validateMemoDraft(parsed, prompt.source_document_ids);
+
+  const citedSources = collectCitedSources(db, draft);
+  const axiomResults = checkMemoAxioms(draft, citedSources, loadAxioms(db));
+
+  const now = new Date().toISOString();
+  const provenance: MemoProvenance = {
+    model,
+    prompt_sha256: prompt.prompt_sha256,
+    source_document_ids: prompt.source_document_ids,
+    generated_at: now,
+    edits: [],
+  };
+  const id = crypto.randomUUID();
+  db.prepare(
+    `insert into memos
+       (id, title, company_ids, theme_ids, one_line_conclusion, thesis,
+        supporting_evidence, counter_arguments, key_variables,
+        invalidation_conditions, open_questions, related_impacts, confidence,
+        axiom_check_results, provenance, status, created_at, updated_at)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?, ?)`,
+  ).run(
+    id,
+    draft.title,
+    writeJson(entity.type === 'THEME' ? [] : [entity.id]),
+    writeJson(entity.type === 'THEME' ? [entity.id] : []),
+    draft.one_line_conclusion,
+    draft.thesis,
+    writeJson(draft.supporting_evidence),
+    writeJson(draft.counter_arguments),
+    writeJson(draft.key_variables),
+    writeJson(draft.invalidation_conditions),
+    writeJson(draft.open_questions),
+    writeJson(draft.related_impacts),
+    draft.confidence,
+    writeJson(axiomResults),
+    writeJson(provenance),
+    now,
+    now,
+  );
+  logAudit(db, 'memo.generate', id, {
+    entity_id: entity.id,
+    model,
+    prompt_sha256: prompt.prompt_sha256,
+    source_count: prompt.source_document_ids.length,
+  });
+  return { memo: getMemo(db, id)!, llm: { source: 'llm', model } };
+}
+
+function collectCitedSources(db: ResearchDb, draft: Pick<MemoDraft, 'supporting_evidence' | 'counter_arguments'>): SourceDocument[] {
+  const ids = new Set<string>();
+  for (const ev of [...draft.supporting_evidence, ...draft.counter_arguments]) {
+    for (const id of ev.source_document_ids) ids.add(id);
+  }
+  const out: SourceDocument[] = [];
+  for (const id of ids) {
+    const row = db.prepare(`select * from source_documents where id = ?`).get(id);
+    if (row) out.push({ ...row, entity_ids: readJson<string[]>(row.entity_ids, []) });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Editing + review
+
+const PATCHABLE_FIELDS = [
+  'title', 'one_line_conclusion', 'thesis', 'supporting_evidence',
+  'counter_arguments', 'key_variables', 'invalidation_conditions',
+  'open_questions', 'related_impacts', 'confidence',
+] as const;
+type PatchableField = (typeof PATCHABLE_FIELDS)[number];
+
+const JSON_FIELDS: ReadonlySet<string> = new Set([
+  'supporting_evidence', 'counter_arguments', 'key_variables',
+  'invalidation_conditions', 'open_questions', 'related_impacts',
+]);
+
+/**
+ * Patch editable memo fields; appends {at, fields} to provenance.edits and
+ * re-runs the axiom check so the panel is always current.
+ */
+export function patchMemo(
+  db: ResearchDb,
+  id: string,
+  patch: Partial<Record<PatchableField, unknown>>,
+): InvestmentMemo {
+  const memo = getMemo(db, id);
+  if (!memo) throw new MemoError('memo not found', 404);
+  if (memo.status === 'ARCHIVED') throw new MemoError('memo is archived', 409);
+
+  const fields = PATCHABLE_FIELDS.filter((f) => patch[f] !== undefined);
+  if (fields.length === 0) throw new MemoError('no editable fields in patch', 400);
+  if (patch.confidence !== undefined && !['LOW', 'MEDIUM', 'HIGH'].includes(patch.confidence as string)) {
+    throw new MemoError('confidence must be LOW | MEDIUM | HIGH', 400);
+  }
+
+  const now = new Date().toISOString();
+  const next: Record<string, unknown> = {};
+  for (const f of fields) next[f] = patch[f];
+
+  const merged = { ...memo, ...next } as InvestmentMemo;
+  const axiomResults = checkMemoAxioms(merged, collectCitedSources(db, merged), loadAxioms(db));
+  const provenance: MemoProvenance = {
+    ...memo.provenance,
+    edits: [...(memo.provenance.edits ?? []), { at: now, fields: [...fields] }],
+  };
+
+  const sets = fields.map((f) => `${f} = ?`).join(', ');
+  const values = fields.map((f) => (JSON_FIELDS.has(f) ? writeJson(next[f]) : next[f]));
+  db.prepare(
+    `update memos set ${sets}, axiom_check_results = ?, provenance = ?, updated_at = ? where id = ?`,
+  ).run(...values, writeJson(axiomResults), writeJson(provenance), now, id);
+  logAudit(db, 'memo.update', id, { fields: [...fields] });
+  return getMemo(db, id)!;
+}
+
+export interface ReviewResult {
+  ok: boolean;
+  memo: InvestmentMemo;
+  results: AxiomCheckResult[];
+}
+
+/**
+ * Review gate: re-runs axioms; any BLOCK failure rejects (API → 422),
+ * otherwise the memo becomes REVIEWED with an audit trail.
+ */
+export function reviewMemo(db: ResearchDb, id: string): ReviewResult {
+  const memo = getMemo(db, id);
+  if (!memo) throw new MemoError('memo not found', 404);
+
+  const results = checkMemoAxioms(memo, collectCitedSources(db, memo), loadAxioms(db));
+  const now = new Date().toISOString();
+  if (hasBlockingFailure(results)) {
+    db.prepare(`update memos set axiom_check_results = ?, updated_at = ? where id = ?`)
+      .run(writeJson(results), now, id);
+    logAudit(db, 'memo.review', id, { outcome: 'REJECTED_BY_AXIOMS', results });
+    return { ok: false, memo: getMemo(db, id)!, results };
+  }
+  db.prepare(`update memos set status = 'REVIEWED', axiom_check_results = ?, updated_at = ? where id = ?`)
+    .run(writeJson(results), now, id);
+  logAudit(db, 'memo.review', id, { outcome: 'REVIEWED', results });
+  return { ok: true, memo: getMemo(db, id)!, results };
+}
+
+// ---------------------------------------------------------------------------
+// Markdown export
+
+function evidenceLines(items: EvidenceItem[], srcIndex: Map<string, number>): string {
+  if (items.length === 0) return '- （无）';
+  return items.map((ev) => {
+    const refs = ev.source_document_ids.map((id) => `[${srcIndex.get(id) ?? '?'}]`).join('');
+    const tag = ev.low_confidence ? ' **[LOW_CONFIDENCE：无来源]**' : '';
+    return `- ${ev.claim} ${refs}${tag}`.trimEnd();
+  }).join('\n');
+}
+
+function listLines(items: string[]): string {
+  return items.length ? items.map((s) => `- ${s}`).join('\n') : '- （无）';
+}
+
+/** Ten-section markdown export with mandatory disclaimer footer. */
+export function memoToMarkdown(memo: InvestmentMemo, sources: SourceDocument[]): string {
+  const cited = new Set<string>();
+  for (const ev of [...memo.supporting_evidence, ...memo.counter_arguments]) {
+    for (const id of ev.source_document_ids) cited.add(id);
+  }
+  const citedSources = sources.filter((s) => cited.has(s.id));
+  const srcIndex = new Map(citedSources.map((s, i) => [s.id, i + 1] as const));
+
+  const axiomLines = memo.axiom_check_results.length
+    ? memo.axiom_check_results.map((r) =>
+        `- ${r.passed ? '✅' : r.severity === 'BLOCK' ? '⛔' : '⚠️'} ${r.axiom_code} (${r.severity}): ${r.message}`,
+      ).join('\n')
+    : '- （未运行）';
+
+  const refLines = citedSources.length
+    ? citedSources.map((s) => `${srcIndex.get(s.id)}. ${s.title}${s.url ? ` — ${s.url}` : ''}（${s.source_type}, trust ${s.trust_level}）`).join('\n')
+    : '（无引用来源）';
+
+  return `# ${memo.title}
+
+> status: ${memo.status} · confidence: ${memo.confidence} · generated: ${memo.provenance.generated_at ?? memo.created_at} · model: ${memo.provenance.model ?? 'n/a'}
+
+## 1. 一句话结论
+${memo.one_line_conclusion || '（无）'}
+
+## 2. 核心 Thesis
+${memo.thesis || '（无）'}
+
+## 3. 支持证据
+${evidenceLines(memo.supporting_evidence, srcIndex)}
+
+## 4. 反方观点
+${evidenceLines(memo.counter_arguments, srcIndex)}
+
+## 5. 关键变量
+${listLines(memo.key_variables)}
+
+## 6. 失效条件
+${listLines(memo.invalidation_conditions)}
+
+## 7. 需要继续验证的问题
+${listLines(memo.open_questions)}
+
+## 8. 相关公司/产业链影响
+${listLines(memo.related_impacts)}
+
+## 9. 引用来源
+${refLines}
+
+## 10. Axiom 检查结果
+${axiomLines}
+
+---
+
+> 免责声明：${RESEARCH_DISCLAIMER}
+`;
+}

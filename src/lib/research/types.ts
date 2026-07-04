@@ -112,6 +112,8 @@ export interface InvestmentMemo {
   key_variables: string[];
   invalidation_conditions: string[];
   open_questions: string[];
+  /** §4.4-8 相关公司/产业链影响 */
+  related_impacts: string[];
   confidence: Confidence;
   axiom_check_results: AxiomCheckResult[];
   provenance: MemoProvenance;
