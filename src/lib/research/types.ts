@@ -122,6 +122,52 @@ export interface InvestmentMemo {
   updated_at: string;
 }
 
+// ---------------------------------------------------------------------------
+// Signals (Phase 2)
+
+export type SignalType =
+  | 'DEVELOPER'
+  | 'MODEL_USAGE'
+  | 'PRODUCT'
+  | 'COMPANY'
+  | 'SUPPLY_CHAIN'
+  | 'POLICY';
+
+export const SIGNAL_TYPES: readonly SignalType[] = [
+  'DEVELOPER', 'MODEL_USAGE', 'PRODUCT', 'COMPANY', 'SUPPLY_CHAIN', 'POLICY',
+] as const;
+
+export type SignalDirection = 'POSITIVE' | 'NEGATIVE' | 'MIXED' | 'UNKNOWN';
+
+export const SIGNAL_DIRECTIONS: readonly SignalDirection[] = [
+  'POSITIVE', 'NEGATIVE', 'MIXED', 'UNKNOWN',
+] as const;
+
+/** Per-row LLM provenance for generated artifacts (signals, monitor alerts). */
+export interface LlmProvenance {
+  model?: string;
+  prompt_sha256?: string;
+  generated_at?: string;
+}
+
+export interface Signal {
+  id: string;
+  title: string;
+  summary: string;
+  signal_type: SignalType;
+  direction: SignalDirection;
+  confidence: Confidence;
+  entity_ids: string[];
+  source_document_ids: string[];
+  affected_company_ids: string[];
+  research_questions: string[];
+  /** v2 — extraction bookkeeping, e.g. {unmatched_names, unmatched_company_names}. */
+  metadata: Record<string, unknown>;
+  /** v2 — LLM provenance for the extraction that produced this row. */
+  llm_provenance: LlmProvenance;
+  created_at: string;
+}
+
 export interface AuditLogEntry {
   id: string;
   action: string;

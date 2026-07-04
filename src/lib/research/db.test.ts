@@ -1,5 +1,9 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { openTestDb, assertEnabled, isResearchEnabled, ResearchDisabled, logAudit, type ResearchDb } from './db';
+import Database from 'better-sqlite3';
+import {
+  openTestDb, assertEnabled, isResearchEnabled, ResearchDisabled, logAudit,
+  applyMigrations, MIGRATIONS, SCHEMA_VERSION, type ResearchDb,
+} from './db';
 import { readJson, writeJson } from './types';
 
 function insertSource(db: ResearchDb, overrides: Partial<Record<string, unknown>> = {}) {
@@ -82,6 +86,57 @@ describe('research db schema', () => {
     expect(rows[0].action).toBe('source.ingest');
     expect(rows[0].target_id).toBe('src-1');
     expect(JSON.parse(rows[0].detail)).toEqual({ note: 'test' });
+    db.close();
+  });
+});
+
+describe('schema migrations (v1 → v2)', () => {
+  function signalColumns(db: ResearchDb): string[] {
+    return db.prepare(`select name from pragma_table_info('signals')`)
+      .all()
+      .map((r: { name: string }) => r.name);
+  }
+
+  it('openTestDb lands on the latest schema version with v2 columns', () => {
+    const db = openTestDb();
+    expect(db.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION);
+    expect(SCHEMA_VERSION).toBe(2);
+    expect(signalColumns(db)).toEqual(
+      expect.arrayContaining(['metadata', 'llm_provenance']),
+    );
+    db.close();
+  });
+
+  it('upgrades an existing v1 database cleanly, defaulting old rows to {}', () => {
+    // Simulate a Phase 1 database: run only the v1 migration.
+    const db = new Database(':memory:') as unknown as ResearchDb;
+    MIGRATIONS[0](db);
+    db.pragma('user_version = 1');
+    expect(signalColumns(db)).not.toContain('metadata');
+
+    // A signal written under v1 (no metadata / llm_provenance columns).
+    db.prepare(
+      `insert into signals
+         (id, title, summary, signal_type, direction, confidence, created_at)
+       values ('sig-v1', 'old signal', 'written under schema v1',
+               'DEVELOPER', 'POSITIVE', 'MEDIUM', '2026-07-01T00:00:00Z')`,
+    ).run();
+
+    applyMigrations(db);
+    expect(db.pragma('user_version', { simple: true })).toBe(2);
+    const row = db.prepare(`select * from signals where id = 'sig-v1'`).get();
+    expect(row.metadata).toBe('{}');
+    expect(row.llm_provenance).toBe('{}');
+    // v1 data is untouched.
+    expect(row.title).toBe('old signal');
+    db.close();
+  });
+
+  it('applyMigrations is idempotent at the latest version', () => {
+    const db = openTestDb();
+    applyMigrations(db);
+    applyMigrations(db);
+    expect(db.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION);
     db.close();
   });
 });

@@ -38,18 +38,35 @@ export function assertEnabled(): void {
   if (!isResearchEnabled()) throw new ResearchDisabled();
 }
 
-const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 function schemaSql(): string {
   const p = path.join(process.cwd(), 'src', 'lib', 'research', 'schema.sql');
   return fs.readFileSync(p, 'utf8');
 }
 
-function applySchema(db: ResearchDb): void {
-  const version = db.pragma('user_version', { simple: true }) as number;
-  if (version < SCHEMA_VERSION) {
-    db.exec(schemaSql());
-    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+/**
+ * Ordered migrations; PRAGMA user_version N means MIGRATIONS[0..N-1] applied.
+ * MIGRATIONS[0] = full Phase 1 schema (v1), MIGRATIONS[1] = Phase 2 signal
+ * columns (v2). Never edit a shipped migration — append a new one.
+ */
+export const MIGRATIONS: ReadonlyArray<(db: ResearchDb) => void> = [
+  // v1: Phase 1 schema (schema.sql is frozen at v1; later versions are alters).
+  (db) => db.exec(schemaSql()),
+  // v2: signal extraction bookkeeping — unmatched entity names etc. (metadata)
+  // and per-row LLM provenance {model, prompt_sha256, generated_at}.
+  (db) => db.exec(
+    `alter table signals add column metadata text not null default '{}';
+     alter table signals add column llm_provenance text not null default '{}';`,
+  ),
+];
+
+export function applyMigrations(db: ResearchDb): void {
+  let version = db.pragma('user_version', { simple: true }) as number;
+  while (version < MIGRATIONS.length) {
+    MIGRATIONS[version](db);
+    version += 1;
+    db.pragma(`user_version = ${version}`);
   }
 }
 
@@ -70,8 +87,9 @@ export function defaultDbPath(): string {
 }
 
 /**
- * Lazy singleton. First connection enables WAL + foreign keys and applies
- * schema.sql (user_version 0 → 1). Throws ResearchDisabled when the gate is off.
+ * Lazy singleton. First connection enables WAL + foreign keys and runs any
+ * pending MIGRATIONS (user_version 0 → SCHEMA_VERSION). Throws
+ * ResearchDisabled when the gate is off.
  */
 export function getDb(dbPath: string = defaultDbPath()): ResearchDb {
   assertEnabled();
@@ -82,7 +100,7 @@ export function getDb(dbPath: string = defaultDbPath()): ResearchDb {
   const db: ResearchDb = new Database(abs);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
-  applySchema(db);
+  applyMigrations(db);
   singleton = db;
   singletonPath = dbPath;
   return db;
@@ -93,7 +111,7 @@ export function openTestDb(): ResearchDb {
   const Database = loadBetterSqlite3();
   const db: ResearchDb = new Database(':memory:');
   db.pragma('foreign_keys = ON');
-  applySchema(db);
+  applyMigrations(db);
   return db;
 }
 
