@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslations } from 'next-intl';
 
 interface Variant { ev: number; equity: number; perShare: number; pvExplicit: number; pvTerminal: number; terminalPctEv: number; }
 interface DcfResult {
@@ -11,17 +12,13 @@ interface DcfResult {
 }
 interface DcfResponse { ticker: string; assumptions: any; result: DcfResult; warnings: string[]; }
 
-const VARIANTS: Array<{ key: keyof DcfResult['valuation']; label: string }> = [
-  { key: 'fcff', label: 'FCFF 标准' },
-  { key: 'adjusted', label: '扣非' },
-  { key: 'exSbc', label: '扣 SBC' },
-  { key: 'ebitda', label: 'EBITDA 退出' },
-];
+const VARIANT_KEYS: Array<keyof DcfResult['valuation']> = ['fcff', 'adjusted', 'exSbc', 'ebitda'];
 
 const fmt = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : '—');
 const pct = (n: number) => (Number.isFinite(n) ? `${(n * 100).toFixed(0)}%` : '—');
 
 export function DcfStudio({ ticker }: { ticker: string }) {
+  const t = useTranslations('market.dcf');
   const [data, setData] = useState<DcfResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
@@ -58,15 +55,15 @@ export function DcfStudio({ ticker }: { ticker: string }) {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <div className="text-sm font-semibold">🧮 DCF 估值</div>
-        {loading && <span className="text-xs text-text-dim">计算中…</span>}
+        <div className="text-sm font-semibold">{t('heading')}</div>
+        {loading && <span className="text-xs text-text-dim">{t('calculating')}</span>}
       </div>
 
       {err && <div className="card-base text-sm text-down">⚠️ {err}</div>}
 
       {range && (
         <div className="card-base">
-          <div className="text-xs text-text-dim">每股价值区间</div>
+          <div className="text-xs text-text-dim">{t('rangeHeading')}</div>
           <div className="mt-1 flex items-baseline gap-3">
             <span className="text-sm text-text-dim">{fmt(range.min)}</span>
             <span className="text-2xl font-bold text-accent">{fmt(range.median)}</span>
@@ -77,13 +74,13 @@ export function DcfStudio({ ticker }: { ticker: string }) {
 
       {v && (
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {VARIANTS.map(({ key, label }) => {
+          {VARIANT_KEYS.map((key) => {
             const vv = v[key] as Variant;
             return (
               <div key={key} className="rounded-md bg-bg-card p-3 text-center">
-                <div className="text-[11px] text-text-dim">{label}</div>
+                <div className="text-[11px] text-text-dim">{t(`variants.${key}`)}</div>
                 <div className="text-lg font-bold tabular-nums">{fmt(vv.perShare)}</div>
-                <div className="text-[10px] text-text-muted">终值 {pct(vv.terminalPctEv)}</div>
+                <div className="text-[10px] text-text-muted">{t('terminalPct', { pct: pct(vv.terminalPctEv) })}</div>
               </div>
             );
           })}
@@ -92,19 +89,19 @@ export function DcfStudio({ ticker }: { ticker: string }) {
 
       {/* Editable assumptions */}
       <div className="card-base">
-        <div className="mb-2 text-xs font-semibold text-text-dim">假设（可调）</div>
+        <div className="mb-2 text-xs font-semibold text-text-dim">{t('assumptionsHeading')}</div>
         <div className="grid grid-cols-3 gap-3">
-          <label className="text-xs">WACC
+          <label className="text-xs">{t('wacc')}
             <input type="number" step="0.005" value={wacc}
               onChange={(e) => setWacc(parseFloat(e.target.value))}
               className="mt-1 w-full rounded bg-bg-card px-2 py-1 text-sm" />
           </label>
-          <label className="text-xs">永续增长 g
+          <label className="text-xs">{t('terminalG')}
             <input type="number" step="0.005" value={terminalG}
               onChange={(e) => setTerminalG(parseFloat(e.target.value))}
               className="mt-1 w-full rounded bg-bg-card px-2 py-1 text-sm" />
           </label>
-          <label className="text-xs">预测年数
+          <label className="text-xs">{t('forecastYears')}
             <input type="number" step="1" value={forecastYears}
               onChange={(e) => setForecastYears(parseInt(e.target.value, 10))}
               className="mt-1 w-full rounded bg-bg-card px-2 py-1 text-sm" />
@@ -114,7 +111,7 @@ export function DcfStudio({ ticker }: { ticker: string }) {
           onClick={() => run({ wacc, terminalG, forecastYears })}
           disabled={loading}
           className="mt-3 rounded-md bg-accent px-4 py-2 text-sm font-semibold disabled:opacity-50">
-          重新计算
+          {t('recalculate')}
         </button>
       </div>
 

@@ -1,4 +1,15 @@
 {
+  "personas": {
+    "buffett": "巴菲特",
+    "munger": "芒格",
+    "druckenmiller": "德鲁肯米勒",
+    "marks": "霍华德·马克斯",
+    "lynch": "彼得·林奇",
+    "burry": "迈克尔·伯里",
+    "zhang_kun": "张坤",
+    "li_lu": "李录",
+    "duan_yongping": "段永平"
+  },
   "themeToggle": {
     "appearanceSettings": "外观设置",
     "themeToggleAria": "主题切换",

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { generateDailyBrief, DEFAULT_WATCHLIST } from '@/lib/brief/composer';
 import { resolveLlm } from '@/lib/llm/resolve';
 import { checkQuota, recordUsage } from '@/lib/billing/quota';
+import { getRequestLocale, apiMessage } from '@/lib/i18n/server';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -47,8 +48,9 @@ export async function GET(req: Request) {
     }
   }
   if (quota && !quota.allowed) {
+    const locale = await getRequestLocale();
     return NextResponse.json({
-      error: '今日平台额度已用完',
+      error: apiMessage(locale, 'quotaExhausted'),
       quota: { used: quota.used, limit: quota.limit, plan: quota.plan },
     }, { status: 429 });
   }

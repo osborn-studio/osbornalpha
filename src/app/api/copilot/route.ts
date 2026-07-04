@@ -7,6 +7,7 @@ import { JOHN_CAMERON_5STEP } from '@/lib/agent/methods/john-cameron-5step';
 import { AGENT_METHODS } from '@/lib/agent/methods/registry';
 import { createArtifact } from '@/lib/portfolio/artifacts-store';
 import { checkQuota, recordUsage, type QuotaResult } from '@/lib/billing/quota';
+import { getRequestLocale, apiMessage } from '@/lib/i18n/server';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -25,6 +26,17 @@ export async function POST(req: Request) {
   const origin = new URL(req.url).origin;
   const enc = new TextEncoder();
   const resolvedMethod = method ?? JOHN_CAMERON_5STEP;
+  const locale = await getRequestLocale();
+  // Output-language directive: prompt bodies stay Chinese (method files are
+  // not modified — see docs/superpowers/plans/2026-07-03-g1c-dynamic-content.md
+  // T2); only the *output* language is steered, via a directive appended to
+  // the system prompt at this single call site (shared by both the OpenAI-
+  // compat and Anthropic-compat protocol branches below).
+  const EN_OUTPUT_DIRECTIVE =
+    "\n\nIMPORTANT: The user's interface language is English. Write your ENTIRE analysis, all section content, and the final verdict summary in English. Keep the verdict JSON schema keys unchanged.";
+  const systemPrompt = locale === 'en'
+    ? resolvedMethod.systemPrompt + EN_OUTPUT_DIRECTIVE
+    : resolvedMethod.systemPrompt;
 
   // Resolve the user's (or env) LLM provider config.
   const llm = await resolveLlm();
@@ -56,7 +68,7 @@ export async function POST(req: Request) {
       controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'steps', steps: resolvedMethod.steps })}\n\n`));
 
       if (!llm) {
-        send({ type: 'error', message: '未配置 AI Provider。请在「设置 → AI 模型」中选择提供商并填入 API Key。' });
+        send({ type: 'error', message: apiMessage(locale, 'providerNotConfigured') });
         send({ type: 'done' });
         controller.close();
         return;
@@ -68,7 +80,7 @@ export async function POST(req: Request) {
         // detect it and render the QuotaNotice upgrade card instead).
         send({
           type: 'error',
-          message: '今日平台额度已用完',
+          message: apiMessage(locale, 'quotaExhausted'),
           quota: { used: quota.used, limit: quota.limit, plan: quota.plan },
         });
         send({ type: 'done' });
@@ -90,7 +102,7 @@ export async function POST(req: Request) {
         model: async (messages: OaiMessage[]) => {
           const cfg = { baseUrl: llm.baseUrl, apiKey: llm.apiKey, model: llm.model, chatPath: llm.chatPath };
           const call = llm.protocol === 'anthropic' ? anthropicToolChat : toolChat;
-          const r = await call(cfg, { system: resolvedMethod.systemPrompt, messages, tools: OPENAI_TOOL_DEFS, max_tokens: 1500 });
+          const r = await call(cfg, { system: systemPrompt, messages, tools: OPENAI_TOOL_DEFS, max_tokens: 1500 });
           return { content: r.content, toolCalls: r.toolCalls, finishReason: r.finishReason };
         },
         runTool: (name, args) => {

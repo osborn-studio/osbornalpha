@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { buildRadar } from '@/lib/brief/radar';
+import { getRequestLocale } from '@/lib/i18n/server';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 1800;  // 30 min
@@ -24,7 +25,8 @@ export async function GET(_req: Request, { params }: Ctx) {
   const ticker = decodeURIComponent(raw);
 
   try {
-    const payload = await buildRadar(ticker);
+    const locale = await getRequestLocale();
+    const payload = await buildRadar(ticker, locale);
     return NextResponse.json(payload);
   } catch (e: any) {
     return NextResponse.json(

@@ -10,9 +10,18 @@
  * for P3 scope; a holiday calendar can be layered on later (tracked debt).
  */
 
+// phaseKey disambiguates the two 'open' sub-phases (morning session vs
+// afternoon session) that share `phase: 'open'` but have different label
+// templates ("到午休" vs "到收盘"). UI code should render off `phaseKey` +
+// `minutes` via t('phase.' + phaseKey, { minutes }); `label` is kept
+// additively for back-compat with any existing zh-only call sites.
+export type MarketPhaseKey = 'pre' | 'openMorning' | 'lunch' | 'openAfternoon' | 'closed' | 'weekend';
+
 export interface MarketPhase {
   phase: 'pre' | 'open' | 'lunch' | 'closed' | 'weekend';
   label: string; // e.g. '盘前 · A股开盘还有 48 分钟'
+  phaseKey: MarketPhaseKey;
+  minutes?: number; // minutes remaining to the next transition (absent for closed/weekend)
 }
 
 interface BeijingParts {
@@ -52,7 +61,7 @@ export function aShareMarketPhase(now: Date): MarketPhase {
   const minutesOfDay = hour * 60 + minute;
 
   if (weekday === 0 || weekday === 6) {
-    return { phase: 'weekend', label: '周末休市' };
+    return { phase: 'weekend', phaseKey: 'weekend', label: '周末休市' };
   }
 
   const OPEN_AM = 9 * 60 + 30;   // 09:30
@@ -62,23 +71,23 @@ export function aShareMarketPhase(now: Date): MarketPhase {
 
   if (minutesOfDay < OPEN_AM) {
     const mins = OPEN_AM - minutesOfDay;
-    return { phase: 'pre', label: `盘前 · A股开盘还有 ${mins} 分钟` };
+    return { phase: 'pre', phaseKey: 'pre', minutes: mins, label: `盘前 · A股开盘还有 ${mins} 分钟` };
   }
 
   if (minutesOfDay < LUNCH_START) {
     const mins = LUNCH_START - minutesOfDay;
-    return { phase: 'open', label: `盘中 · 午休还有 ${mins} 分钟` };
+    return { phase: 'open', phaseKey: 'openMorning', minutes: mins, label: `盘中 · 午休还有 ${mins} 分钟` };
   }
 
   if (minutesOfDay < LUNCH_END) {
     const mins = LUNCH_END - minutesOfDay;
-    return { phase: 'lunch', label: `午休 · 下午开盘还有 ${mins} 分钟` };
+    return { phase: 'lunch', phaseKey: 'lunch', minutes: mins, label: `午休 · 下午开盘还有 ${mins} 分钟` };
   }
 
   if (minutesOfDay < CLOSE) {
     const mins = CLOSE - minutesOfDay;
-    return { phase: 'open', label: `盘中 · 收盘还有 ${mins} 分钟` };
+    return { phase: 'open', phaseKey: 'openAfternoon', minutes: mins, label: `盘中 · 收盘还有 ${mins} 分钟` };
   }
 
-  return { phase: 'closed', label: '已收盘' };
+  return { phase: 'closed', phaseKey: 'closed', label: '已收盘' };
 }

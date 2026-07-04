@@ -3,6 +3,10 @@ import type { Stance } from '@/lib/supabase/database.types';
 import { aggregateConfidence, classifyCite, type ConfidenceLevel } from '@/lib/data/evidence-confidence';
 
 interface Props {
+  // Typed as `string` (not the `Persona` union) because the mock/stub data
+  // path (src/lib/data/mock.ts) also feeds this component and types its
+  // persona ids as plain strings — see GLOSSARY.md "mock data stays dynamic".
+  persona: string;
   name: string;
   stance: Stance;
   confidence: number;
@@ -30,14 +34,19 @@ const LEVEL_BG: Record<ConfidenceLevel, string> = {
   unknown: 'bg-bg-card text-text-muted border-border',
 };
 
-export function PerspectiveCard({ name, stance, confidence, summary, cites }: Props) {
+export function PerspectiveCard({ persona, name, stance, confidence, summary, cites }: Props) {
   const t = useTranslations('components.perspectiveCard');
+  const tPersonas = useTranslations('components.personas');
   const evidence = aggregateConfidence(cites);
+  // Prefer the localized display name keyed by persona id; fall back to the
+  // raw `name` (already-resolved Chinese name from the API payload) if the
+  // id isn't in the dictionary — defensive against future personas.
+  const displayName = tPersonas.has(persona) ? tPersonas(persona) : name;
 
   return (
     <div className={`mb-2.5 rounded-md border-l-[3px] bg-bg-card p-3.5 ${STANCE_BORDER[stance]}`}>
       <div className="mb-1.5 flex items-center justify-between gap-2 text-sm">
-        <span className="font-semibold">{name}</span>
+        <span className="font-semibold">{displayName}</span>
         <div className="flex items-center gap-2 text-xs">
           <span className="text-text-dim">{t('confidence')} {confidence.toFixed(1)}/10</span>
           {/* Evidence-confidence badge — evidence.label/kind/counts are dynamic

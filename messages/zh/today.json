@@ -3,6 +3,14 @@
     "title": "今日",
     "loading": "加载中…"
   },
+  "phase": {
+    "pre": "盘前 · A股开盘还有 {minutes} 分钟",
+    "openMorning": "盘中 · 午休还有 {minutes} 分钟",
+    "lunch": "午休 · 下午开盘还有 {minutes} 分钟",
+    "openAfternoon": "盘中 · 收盘还有 {minutes} 分钟",
+    "closed": "已收盘",
+    "weekend": "周末休市"
+  },
   "radar": {
     "emptyPrefix": "股票池是空的。先去 ",
     "emptyLink": "📋 股票池",

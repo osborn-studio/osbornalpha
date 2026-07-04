@@ -1,4 +1,15 @@
 {
+  "personas": {
+    "buffett": "Warren Buffett",
+    "munger": "Charlie Munger",
+    "druckenmiller": "Stanley Druckenmiller",
+    "marks": "Howard Marks",
+    "lynch": "Peter Lynch",
+    "burry": "Michael Burry",
+    "zhang_kun": "Zhang Kun",
+    "li_lu": "Li Lu",
+    "duan_yongping": "Duan Yongping"
+  },
   "themeToggle": {
     "appearanceSettings": "Appearance settings",
     "themeToggleAria": "Toggle theme",

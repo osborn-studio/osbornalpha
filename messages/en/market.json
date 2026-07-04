@@ -141,5 +141,113 @@
     "closeAria": "Close Copilot",
     "title": "🎩 Copilot",
     "expand": "Expand"
+  },
+  "stock": {
+    "tabs": {
+      "overview": "Overview",
+      "ai": "AI Perspectives",
+      "fundamentals": "Fundamentals",
+      "news": "News / Reports",
+      "signals": "Sentinel Signals",
+      "holdings": "Holdings"
+    },
+    "notFound": {
+      "title": "Instrument {ticker} not found",
+      "bodyPrefix": "This demo only includes limited mock data. Back to ",
+      "home": "Home",
+      "or": " or ",
+      "watchlist": "Watchlist"
+    },
+    "removedToast": "✓ Removed: {ticker}",
+    "addedToast": "✓ Added to \"{group}\"",
+    "inWatchlist": "⭐ Added",
+    "addToWatchlist": "+ Add to Watchlist",
+    "analyzeWithJohn": "🎩 Analyze with John",
+    "deepDive": "🔬 Deep Dive",
+    "delayedQuote": "15min delayed",
+    "meta": {
+      "open": "Open",
+      "high": "High",
+      "low": "Low",
+      "prevClose": "Prev Close",
+      "turnoverValue": "Turnover",
+      "amplitude": "Amplitude"
+    },
+    "overview": {
+      "klineHeading": "📊 Candlestick (Daily)",
+      "metricsHeading": "📐 Key Metrics",
+      "peTtm": "PE (TTM)",
+      "pb": "PB",
+      "roe": "ROE",
+      "dividendYield": "Dividend Yield",
+      "marketCap": "Market Cap",
+      "high52w": "52W High",
+      "low52w": "52W Low",
+      "nextEarnings": "Next Earnings",
+      "signalsHeading": "🎯 Sentinel Signal · {score}/10 {stars}",
+      "noTriggersToday": "No significant triggers today"
+    },
+    "ai": {
+      "heading": "🤖 Committee Perspectives",
+      "pendingLine1": "Perspective debate for this instrument is pending generation.",
+      "refreshPlaceholder": "🔄 Refresh Perspectives (v0.3)",
+      "consensusSummary": "Consensus: {consensus}/10 · {bullish} Bullish / {neutral} Neutral / {bearish} Bearish",
+      "bullishHeading": "🟢 Bullish ({count})",
+      "neutralHeading": "🟡 Neutral ({count})",
+      "bearishHeading": "🔴 Bearish ({count})"
+    },
+    "fundamentals": {
+      "calendarHeading": "📅 Earnings Calendar",
+      "nextRelease": "Next Release",
+      "trendHeading": "📊 5-Year Financial Trend",
+      "revenueLabel": "Revenue ({currency}100M)",
+      "netIncomeLabel": "Net Income ({currency}100M)",
+      "roeLabel": "ROE (%)",
+      "summaryHeading": "📄 Financial Summary",
+      "metricHeader": "Metric",
+      "revenueRow": "Revenue",
+      "netIncomeRow": "Net Income",
+      "roeRow": "ROE"
+    },
+    "news": {
+      "brokerReportsHeading": "📑 Broker Reports ({count})",
+      "consensusSourceTitle": "Source: Tushare sell-side consensus",
+      "consensusTarget": "Sell-side consensus target {price}",
+      "reportCount": "{n} reports",
+      "range": " · Range {min} – {max}",
+      "noRecentReports": "No recent reports",
+      "targetLabel": "Target {target}",
+      "newsHeading": "📰 News ({count})",
+      "noNews": "No recent news"
+    },
+    "signals": {
+      "heading": "🎯 Sentinel Signal History",
+      "pending": "90-day signal lookback for this instrument is pending (v1.0).",
+      "pendingDetail": "Shows: signal trigger date + same-day brief excerpt + N-day forward price performance + hit-rate stats"
+    },
+    "holdings": {
+      "headingSuffix": " (US stocks only)",
+      "heading": "🏛 13F Holdings Changes{suffix}",
+      "usBody": "13F holdings changes for tracked hedge funds (Berkshire / Bridgewater / Burry, etc.) are pending integration.",
+      "nonUsBody": "This instrument is not a US stock — no 13F data.",
+      "dataSource": "Source: EDGAR 13F-HR · Quarterly"
+    }
+  },
+  "dcf": {
+    "variants": {
+      "fcff": "FCFF Standard",
+      "adjusted": "Adjusted",
+      "exSbc": "Ex-SBC",
+      "ebitda": "EBITDA Exit"
+    },
+    "heading": "🧮 DCF Valuation",
+    "calculating": "Calculating…",
+    "rangeHeading": "Per-Share Value Range",
+    "terminalPct": "Terminal {pct}",
+    "assumptionsHeading": "Assumptions (Editable)",
+    "wacc": "WACC",
+    "terminalG": "Terminal Growth g",
+    "forecastYears": "Forecast Years",
+    "recalculate": "Recalculate"
   }
 }
