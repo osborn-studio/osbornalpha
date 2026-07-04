@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 
 interface WizardCardProps {
   icon: string;
@@ -13,6 +14,7 @@ interface WizardCardProps {
 
 /** Discovery-wizard launcher card: a keyword input that hands off to Copilot via ?method=&q=. */
 export function WizardCard({ icon, title, desc, placeholder, methodId }: WizardCardProps) {
+  const t = useTranslations('intel');
   const router = useRouter();
   const [value, setValue] = useState('');
 
@@ -42,7 +44,7 @@ export function WizardCard({ icon, title, desc, placeholder, methodId }: WizardC
           disabled={!value.trim()}
           className="rounded-md bg-accent px-3 py-2 text-sm font-semibold disabled:opacity-50"
         >
-          启动 →
+          {t('wizards.launch')}
         </button>
       </div>
     </div>

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useTranslations } from 'next-intl';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
 import { uniqueWatchlistTickers } from '@/lib/watchlist/store';
 import { useBatchQuotes } from '@/lib/hooks/useQuote';
@@ -18,6 +19,7 @@ type ChangeDirection = 'any' | 'up' | 'down';
  * Tushare data upgrade — the note below makes that explicit in the UI.
  */
 export function WatchlistScreener() {
+  const t = useTranslations('intel');
   const { groups, hydrated } = useWatchlist();
   const allTickers = useMemo(() => uniqueWatchlistTickers(groups), [groups]);
   const { quotes, loading } = useBatchQuotes(allTickers);
@@ -60,16 +62,16 @@ export function WatchlistScreener() {
   return (
     <div className="card-base">
       <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
-        <span className="text-lg">🧮</span>股票池筛选器
+        <span className="text-lg">🧮</span>{t('screener.title')}
       </div>
       <div className="mb-3 text-[11px] text-text-muted">
-        范围：你的股票池（全市场筛选将随 P5 数据升级开放）
+        {t('screener.scopeNote')}
       </div>
 
       {/* Filter row */}
       <div className="mb-3 flex flex-wrap items-end gap-3 text-xs">
         <div>
-          <div className="mb-1 text-text-dim">市场</div>
+          <div className="mb-1 text-text-dim">{t('screener.filters.market')}</div>
           <div className="flex gap-1">
             {ALL_MARKETS.map((m) => (
               <button
@@ -86,68 +88,68 @@ export function WatchlistScreener() {
           </div>
         </div>
         <label className="flex flex-col gap-1">
-          <span className="text-text-dim">PE 上限</span>
+          <span className="text-text-dim">{t('screener.filters.peMax')}</span>
           <input
             type="number"
             value={peMax}
             onChange={(e) => setPeMax(e.target.value)}
-            placeholder="不限"
+            placeholder={t('screener.filters.unlimited')}
             className="w-20 rounded-md bg-bg-card px-2 py-1"
           />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-text-dim">PB 上限</span>
+          <span className="text-text-dim">{t('screener.filters.pbMax')}</span>
           <input
             type="number"
             value={pbMax}
             onChange={(e) => setPbMax(e.target.value)}
-            placeholder="不限"
+            placeholder={t('screener.filters.unlimited')}
             className="w-20 rounded-md bg-bg-card px-2 py-1"
           />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-text-dim">市值下限（亿）</span>
+          <span className="text-text-dim">{t('screener.filters.marketCapMinYi')}</span>
           <input
             type="number"
             value={marketCapMinYi}
             onChange={(e) => setMarketCapMinYi(e.target.value)}
-            placeholder="不限"
+            placeholder={t('screener.filters.unlimited')}
             className="w-24 rounded-md bg-bg-card px-2 py-1"
           />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-text-dim">今日涨跌</span>
+          <span className="text-text-dim">{t('screener.filters.changeToday')}</span>
           <select
             value={direction}
             onChange={(e) => setDirection(e.target.value as ChangeDirection)}
             className="rounded-md bg-bg-card px-2 py-1"
           >
-            <option value="any">不限</option>
-            <option value="up">上涨</option>
-            <option value="down">下跌</option>
+            <option value="any">{t('screener.filters.unlimited')}</option>
+            <option value="up">{t('screener.filters.up')}</option>
+            <option value="down">{t('screener.filters.down')}</option>
           </select>
         </label>
       </div>
 
       {/* Results */}
       {!hydrated || (loading && allTickers.length > 0) ? (
-        <div className="py-6 text-center text-xs text-text-muted">加载中…</div>
+        <div className="py-6 text-center text-xs text-text-muted">{t('screener.states.loading')}</div>
       ) : allTickers.length === 0 ? (
-        <div className="py-6 text-center text-xs text-text-muted">股票池是空的，先去「股票池」添加几只标的。</div>
+        <div className="py-6 text-center text-xs text-text-muted">{t('screener.states.emptyWatchlist')}</div>
       ) : rows.length === 0 ? (
-        <div className="py-6 text-center text-xs text-text-muted">没有符合条件的标的。</div>
+        <div className="py-6 text-center text-xs text-text-muted">{t('screener.states.noMatches')}</div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-border text-left text-text-dim">
-                <th className="py-1.5 pr-2">名称</th>
-                <th className="py-1.5 pr-2">代码</th>
-                <th className="py-1.5 pr-2 text-right">价格</th>
-                <th className="py-1.5 pr-2 text-right">涨跌</th>
-                <th className="py-1.5 pr-2 text-right">PE</th>
-                <th className="py-1.5 pr-2 text-right">PB</th>
-                <th className="py-1.5 text-right">市值</th>
+                <th className="py-1.5 pr-2">{t('screener.columns.name')}</th>
+                <th className="py-1.5 pr-2">{t('screener.columns.ticker')}</th>
+                <th className="py-1.5 pr-2 text-right">{t('screener.columns.price')}</th>
+                <th className="py-1.5 pr-2 text-right">{t('screener.columns.change')}</th>
+                <th className="py-1.5 pr-2 text-right">{t('screener.columns.pe')}</th>
+                <th className="py-1.5 pr-2 text-right">{t('screener.columns.pb')}</th>
+                <th className="py-1.5 text-right">{t('screener.columns.marketCap')}</th>
               </tr>
             </thead>
             <tbody>
