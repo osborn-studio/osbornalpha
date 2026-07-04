@@ -12,12 +12,12 @@
     "whiteCollapsed": "⚪ Calm {count} (expand)"
   },
   "portfolio": {
-    "title": "Holdings at a Glance",
+    "title": "Positions at a Glance",
     "loading": "Loading…",
     "unrealized": "Total Unrealized P&L",
     "unrealizedPct": "Unrealized %",
     "marketValue": "Market Value",
-    "openCount": "Holdings",
+    "openCount": "Positions",
     "openDecisions": "{count} open decisions",
     "viewAll": "View Holdings →"
   },
