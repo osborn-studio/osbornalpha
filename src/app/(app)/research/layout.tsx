@@ -9,10 +9,11 @@ const NAV = [
   { href: '/research/companies', label: 'Companies' },
   { href: '/research/sources', label: 'Sources' },
   { href: '/research/signals', label: 'Signals' },
+  { href: '/research/theses', label: 'Theses' },
   { href: '/research/memos', label: 'Memos' },
 ];
 
-const PHASE3 = ['Theses', 'Playbooks', 'Evals'];
+const PHASE3 = ['Playbooks', 'Evals'];
 
 export default function ResearchLayout({ children }: { children: React.ReactNode }) {
   return (

@@ -7,6 +7,7 @@
 import { NextResponse } from 'next/server';
 import { ResearchDisabled } from './db';
 import { SourceValidationError } from './sources';
+import { ThesisError } from './theses';
 
 export function researchError(e: unknown): NextResponse {
   if (e instanceof ResearchDisabled) {
@@ -16,6 +17,12 @@ export function researchError(e: unknown): NextResponse {
     return NextResponse.json(
       { error: { code: 'VALIDATION_ERROR', message: e.message } },
       { status: 400 },
+    );
+  }
+  if (e instanceof ThesisError) {
+    return NextResponse.json(
+      { error: { code: 'THESIS_ERROR', message: e.message } },
+      { status: e.status },
     );
   }
   const message = e instanceof Error ? e.message : 'internal error';

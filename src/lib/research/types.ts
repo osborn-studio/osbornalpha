@@ -168,6 +168,69 @@ export interface Signal {
   created_at: string;
 }
 
+// ---------------------------------------------------------------------------
+// Theses (Phase 2)
+
+export type ThesisStatus =
+  | 'DRAFT'
+  | 'ACTIVE'
+  | 'WATCH'
+  | 'AT_RISK'
+  | 'INVALIDATED'
+  | 'CLOSED';
+
+export const THESIS_STATUSES: readonly ThesisStatus[] = [
+  'DRAFT', 'ACTIVE', 'WATCH', 'AT_RISK', 'INVALIDATED', 'CLOSED',
+] as const;
+
+/**
+ * Allowed status transitions (plan T3). Anything not listed → 422.
+ * Lives in types.ts (client-safe module) so pages can render only legal
+ * actions; transitionThesis() in theses.ts is the single enforcement point.
+ */
+export const THESIS_TRANSITIONS: Readonly<Record<ThesisStatus, readonly ThesisStatus[]>> = {
+  DRAFT: ['ACTIVE', 'CLOSED'],
+  ACTIVE: ['WATCH', 'AT_RISK', 'INVALIDATED', 'CLOSED'],
+  WATCH: ['ACTIVE', 'AT_RISK', 'INVALIDATED', 'CLOSED'],
+  AT_RISK: ['ACTIVE', 'WATCH', 'INVALIDATED', 'CLOSED'],
+  INVALIDATED: ['CLOSED'],
+  CLOSED: [],
+};
+
+export interface Thesis {
+  id: string;
+  title: string;
+  body: string;
+  company_ids: string[];
+  theme_ids: string[];
+  supporting_evidence_ids: string[];
+  /** ≥1 required at creation — AX001 spirit: 无失效条件不允许存在. */
+  invalidation_conditions: string[];
+  /** ≥1 required at creation. */
+  watch_metrics: string[];
+  status: ThesisStatus;
+  next_review_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ThesisEventType =
+  | 'SUPPORT'
+  | 'WEAKEN'
+  | 'INVALIDATE'
+  | 'STATUS_CHANGE'
+  | 'NOTE';
+
+export interface ThesisEvent {
+  id: string;
+  thesis_id: string;
+  event_type: ThesisEventType;
+  /** JSON detail; STATUS_CHANGE: {from,to,reason} — monitor alerts: {rationale, cited_signal_ids, suggested_status, pending, ...}. */
+  detail: Record<string, unknown>;
+  source_document_ids: string[];
+  created_at: string;
+}
+
 export interface AuditLogEntry {
   id: string;
   action: string;
