@@ -4,13 +4,15 @@
     "loading": "Loading…"
   },
   "phase": {
-    "pre": "Pre-market · {minutes} min to A-share open",
+    "pre": "Pre-market · opens in {minutes} min",
     "openMorning": "Trading · {minutes} min to lunch break",
-    "lunch": "Lunch break · {minutes} min to afternoon open",
+    "lunch": "Lunch break · opens in {minutes} min",
     "openAfternoon": "Trading · {minutes} min to close",
-    "closed": "Market closed",
-    "weekend": "Weekend — market closed"
+    "open": "Trading · {minutes} min to close",
+    "closed": "Closed",
+    "weekend": "Weekend — closed"
   },
+  "clock": { "market": { "A": "A-shares", "HK": "Hong Kong", "US": "US" } },
   "radar": {
     "emptyPrefix": "Your watchlist is empty. Go to ",
     "emptyLink": "📋 Watchlist",
