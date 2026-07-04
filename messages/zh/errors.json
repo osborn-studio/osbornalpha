@@ -1,0 +1,16 @@
+{
+  "generic": "出错了，请稍后重试。",
+  "network": "网络请求失败，请检查网络连接后重试。",
+  "unauthorized": "请先登录后再试。",
+  "forbidden": "没有权限执行此操作。",
+  "notFound": "未找到相关内容。",
+  "supabaseNotConfigured": "Supabase 未配置，请联系管理员。",
+  "auth": {
+    "passwordTooShort": "密码至少 8 位",
+    "passwordMismatch": "两次密码不一致",
+    "loginFailed": "登录失败",
+    "registerFailed": "注册失败",
+    "sendFailed": "发送失败",
+    "resetLinkExpired": "链接可能已过期，请重新申请"
+  }
+}

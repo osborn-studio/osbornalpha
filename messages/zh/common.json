@@ -1,0 +1,35 @@
+{
+  "nav": {
+    "today": "今日",
+    "watchlist": "股票池",
+    "intel": "情报",
+    "portfolio": "我的投资",
+    "tools": "工具",
+    "settings": "设置"
+  },
+  "actions": {
+    "save": "保存",
+    "cancel": "取消",
+    "confirm": "确认",
+    "delete": "删除",
+    "edit": "编辑",
+    "close": "关闭",
+    "back": "返回",
+    "next": "下一步",
+    "submit": "提交",
+    "retry": "重试",
+    "loading": "加载中…",
+    "processing": "处理中…"
+  },
+  "quota": {
+    "title": "今日平台额度已用完（{used}/{limit}）",
+    "descriptionFree": "填入自己的 API Key 即可不限量使用，或等待明日 00:00（北京时间）重置。",
+    "descriptionPro": "Pro 额度也用完了——填入自己的 API Key 即可不限量使用，或等待明日 00:00（北京时间）重置。",
+    "goToSettings": "去设置 →",
+    "upgradePro": "升级 Pro →"
+  },
+  "footer": {
+    "copyright": "© 2026 osbornalpha",
+    "about": "关于"
+  }
+}

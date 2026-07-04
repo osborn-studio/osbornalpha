@@ -1,0 +1,16 @@
+{
+  "generic": "Something went wrong. Please try again later.",
+  "network": "Network request failed. Please check your connection and try again.",
+  "unauthorized": "Please sign in first.",
+  "forbidden": "You don't have permission to do this.",
+  "notFound": "Not found.",
+  "supabaseNotConfigured": "Supabase is not configured. Please contact the administrator.",
+  "auth": {
+    "passwordTooShort": "Password must be at least 8 characters",
+    "passwordMismatch": "Passwords do not match",
+    "loginFailed": "Sign-in failed",
+    "registerFailed": "Registration failed",
+    "sendFailed": "Failed to send",
+    "resetLinkExpired": "The link may have expired. Please request a new one"
+  }
+}
