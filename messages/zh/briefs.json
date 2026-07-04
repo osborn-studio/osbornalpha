@@ -1,1 +1,17 @@
-{}
+{
+  "metaTitle": "简报",
+  "list": {
+    "heading": "📰 简报历史",
+    "recentDays": "📅 最近 30 天 ({count} 份)",
+    "confidence": "信心 {value}",
+    "hitRateHeading": "📈 信号命中率（30 天）",
+    "hitRate": "命中率",
+    "totalSignals": "总信号数",
+    "hitMiss": "中 / 错",
+    "futureNote": "(v1.0 将真实实现：基于历史 brief + 后续 N 天股价表现自动 backtest)"
+  },
+  "detail": {
+    "back": "← 返回简报列表",
+    "heading": "📰 {date} 简报"
+  }
+}

@@ -26,6 +26,53 @@
     "loading": "加载中…",
     "empty": "还没有产出。使用上面的入口运行一次分析后，报告会自动归档在这里。"
   },
+  "backtest": {
+    "heading": "🧪 Backtest 排行榜",
+    "daysLabel": "天数：",
+    "running": "⏳ 跑中",
+    "rerun": "🔄 重跑",
+    "intro": "对你 watchlist 里所有股票并发跑 Sentinel 信号回测，按\"质量分\"（Wilson 置信下限 60% + 信号活跃度 20% + 平均收益 20%）排名，找出**哪些股票上 Sentinel 历史最准**。",
+    "loadingBody": "⏳ 并发跑 {count} 只股票的 {days} 天回测...",
+    "loadingHint": "通常 10-30 秒",
+    "error": "⚠ {error}",
+    "stats": {
+      "coverage": "watchlist 覆盖",
+      "totalSignals": "总信号数",
+      "avgHitRate": "平均命中率",
+      "avgFwd5": "平均 5d 收益"
+    },
+    "headline": {
+      "best": "🏆 命中率最高",
+      "worst": "💥 命中率最低",
+      "mostActive": "📊 信号最活跃",
+      "signalCount": "{count} 个信号",
+      "signalCount60d": "60 天信号数"
+    },
+    "marketLabel": "市场：",
+    "marketAll": "全部",
+    "sortLabel": "排序：",
+    "sort": {
+      "quality": "质量分",
+      "ciLower": "置信下限",
+      "hitRate": "命中率",
+      "signals": "信号数",
+      "fwd5": "5d 平均",
+      "fwd20": "20d 平均"
+    },
+    "table": {
+      "ticker": "标的",
+      "price": "价格",
+      "quality": "质量分",
+      "ciLower": "置信下限",
+      "hitRate": "命中率",
+      "signals": "信号",
+      "fwd5": "5d 均",
+      "fwd20": "20d 均",
+      "latest": "最近",
+      "empty": "此筛选条件下无数据"
+    },
+    "algoNote": "算法：runBacktest({days} 天) × {count} 个标的并发 · Wilson 95% CI 缓解小样本噪声 · 质量分 = 60×ciLower + 20×log10(1+signals)×1.2 + 20×min(5d_avg_return×5, 1)"
+  },
   "dcf": {
     "heading": "🧮 DCF 工作台",
     "subheading": "搜索或直接输入 ticker，独立运行现金流折现估值。",

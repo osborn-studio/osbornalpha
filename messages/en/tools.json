@@ -26,6 +26,53 @@
     "loading": "Loading…",
     "empty": "No output yet. Run an analysis from an entry point above and reports will be archived here automatically."
   },
+  "backtest": {
+    "heading": "🧪 Backtest Leaderboard",
+    "daysLabel": "Days:",
+    "running": "⏳ Running",
+    "rerun": "🔄 Rerun",
+    "intro": "Runs Sentinel signal backtests concurrently on every stock in your watchlist, ranked by \"Quality Score\" (Wilson confidence lower bound 60% + signal activity 20% + average return 20%) to find **which tickers Sentinel has historically been most accurate on**.",
+    "loadingBody": "⏳ Running {days}-day backtests on {count} stocks concurrently...",
+    "loadingHint": "Usually 10-30 seconds",
+    "error": "⚠ {error}",
+    "stats": {
+      "coverage": "Watchlist Coverage",
+      "totalSignals": "Total Signals",
+      "avgHitRate": "Avg Hit Rate",
+      "avgFwd5": "Avg 5d Return"
+    },
+    "headline": {
+      "best": "🏆 Highest Hit Rate",
+      "worst": "💥 Lowest Hit Rate",
+      "mostActive": "📊 Most Active Signals",
+      "signalCount": "{count} signals",
+      "signalCount60d": "Signals in 60 days"
+    },
+    "marketLabel": "Market:",
+    "marketAll": "All",
+    "sortLabel": "Sort:",
+    "sort": {
+      "quality": "Quality Score",
+      "ciLower": "CI Lower Bound",
+      "hitRate": "Hit Rate",
+      "signals": "Signals",
+      "fwd5": "5d Avg",
+      "fwd20": "20d Avg"
+    },
+    "table": {
+      "ticker": "Ticker",
+      "price": "Price",
+      "quality": "Quality Score",
+      "ciLower": "CI Lower Bound",
+      "hitRate": "Hit Rate",
+      "signals": "Signals",
+      "fwd5": "5d Avg",
+      "fwd20": "20d Avg",
+      "latest": "Latest",
+      "empty": "No data under this filter"
+    },
+    "algoNote": "Algorithm: runBacktest({days} days) × {count} tickers concurrently · Wilson 95% CI mitigates small-sample noise · Quality Score = 60×ciLower + 20×log10(1+signals)×1.2 + 20×min(5d_avg_return×5, 1)"
+  },
   "dcf": {
     "heading": "🧮 DCF Workbench",
     "subheading": "Search or enter a ticker directly to run a standalone discounted cash flow valuation.",

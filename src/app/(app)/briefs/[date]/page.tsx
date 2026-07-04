@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { getTranslations } from 'next-intl/server';
 import { Disclaimer } from '@/components/Disclaimer';
 
 // Auth-gated server component — must render dynamically per request (see briefs/page.tsx).
@@ -8,11 +9,12 @@ interface Props { params: Promise<{ date: string }> }
 
 export default async function BriefDetailPage({ params }: Props) {
   const { date } = await params;
+  const t = await getTranslations('briefs');
 
   return (
     <>
-      <Link href="/briefs" className="text-sm">← 返回简报列表</Link>
-      <h1 className="mt-2 mb-3 text-xl font-bold">📰 {date} 简报</h1>
+      <Link href="/briefs" className="text-sm">{t('detail.back')}</Link>
+      <h1 className="mt-2 mb-3 text-xl font-bold">{t('detail.heading', { date })}</h1>
 
       <div className="card-base">
         <div className="prose prose-invert max-w-none text-sm">
