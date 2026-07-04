@@ -1,19 +1,21 @@
 /**
- * Memo engine (Research OS Phase 1).
+ * Memo engine (Research OS Phase 5 — Supabase Postgres).
  * generate → LLM (existing src/lib/data/sources/llm stack) → validate citations
  * → axiom check → persist with provenance {model, prompt_sha256,
- * source_document_ids, generated_at, edits[]} → audit_log.
+ * source_document_ids, generated_at, edits[]} → research_audit_log.
+ *
+ * Column mapping: the app-level `provenance` field lives in the
+ * research_memos.llm_provenance jsonb column; `enabled` on axioms maps to
+ * research_axioms.active.
  */
 
-import { logAudit, type ResearchDb } from './db';
+import { audit, isUuid, type ResearchCtx } from './store';
 import { getEntity } from './entities';
-import { listSourcesForEntity } from './sources';
+import { listSourcesByIds, listSourcesForEntity } from './sources';
 import { checkMemoAxioms, hasBlockingFailure } from './axioms';
 import { buildMemoPrompt, validateMemoDraft, type MemoDraft } from './memo-prompt';
 import {
   RESEARCH_DISCLAIMER,
-  readJson,
-  writeJson,
   type Axiom,
   type AxiomCheckResult,
   type EvidenceItem,
@@ -21,6 +23,8 @@ import {
   type MemoProvenance,
   type SourceDocument,
 } from './types';
+
+const TABLE = 'research_memos';
 
 export class MemoError extends Error {
   constructor(message: string, public status: number = 400) {
@@ -32,48 +36,95 @@ export class MemoError extends Error {
 // ---------------------------------------------------------------------------
 // Row mapping
 
+function arr<T>(v: unknown): T[] {
+  return Array.isArray(v) ? (v as T[]) : [];
+}
+
 function rowToMemo(row: any): InvestmentMemo {
   return {
     id: row.id,
     title: row.title,
-    company_ids: readJson<string[]>(row.company_ids, []),
-    theme_ids: readJson<string[]>(row.theme_ids, []),
+    company_ids: arr<string>(row.company_ids),
+    theme_ids: arr<string>(row.theme_ids),
     one_line_conclusion: row.one_line_conclusion,
     thesis: row.thesis,
-    supporting_evidence: readJson<EvidenceItem[]>(row.supporting_evidence, []),
-    counter_arguments: readJson<EvidenceItem[]>(row.counter_arguments, []),
-    key_variables: readJson<string[]>(row.key_variables, []),
-    invalidation_conditions: readJson<string[]>(row.invalidation_conditions, []),
-    open_questions: readJson<string[]>(row.open_questions, []),
-    related_impacts: readJson<string[]>(row.related_impacts, []),
+    supporting_evidence: arr<EvidenceItem>(row.supporting_evidence),
+    counter_arguments: arr<EvidenceItem>(row.counter_arguments),
+    key_variables: arr<string>(row.key_variables),
+    invalidation_conditions: arr<string>(row.invalidation_conditions),
+    open_questions: arr<string>(row.open_questions),
+    related_impacts: arr<string>(row.related_impacts),
     confidence: row.confidence,
-    axiom_check_results: readJson<AxiomCheckResult[]>(row.axiom_check_results, []),
-    provenance: readJson<MemoProvenance>(row.provenance, {}),
+    axiom_check_results: arr<AxiomCheckResult>(row.axiom_check_results),
+    provenance:
+      row.llm_provenance && typeof row.llm_provenance === 'object'
+        ? (row.llm_provenance as MemoProvenance)
+        : {},
     status: row.status,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
 }
 
-export function loadAxioms(db: ResearchDb): Axiom[] {
-  return db.prepare(`select * from axioms order by code asc`).all().map((row: any) => ({
+/** research_axioms.active ↔ app-level Axiom.enabled. */
+export async function loadAxioms(ctx: ResearchCtx): Promise<Axiom[]> {
+  const { data, error } = await ctx.supabase
+    .from('research_axioms')
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .order('code', { ascending: true });
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as any[]).map((row) => ({
     id: row.id,
     code: row.code,
     title: row.title,
     description: row.description,
     severity: row.severity,
-    enabled: !!row.enabled,
+    enabled: !!row.active,
     created_at: row.created_at,
   }));
 }
 
-export function getMemo(db: ResearchDb, id: string): InvestmentMemo | null {
-  const row = db.prepare(`select * from memos where id = ?`).get(id);
-  return row ? rowToMemo(row) : null;
+export async function getMemo(ctx: ResearchCtx, id: string): Promise<InvestmentMemo | null> {
+  if (!isUuid(id)) return null;
+  const { data, error } = await ctx.supabase
+    .from(TABLE)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? rowToMemo(data) : null;
 }
 
-export function listMemos(db: ResearchDb): InvestmentMemo[] {
-  return db.prepare(`select * from memos order by created_at desc`).all().map(rowToMemo);
+export async function listMemos(ctx: ResearchCtx): Promise<InvestmentMemo[]> {
+  const { data, error } = await ctx.supabase
+    .from(TABLE)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as any[]).map(rowToMemo);
+}
+
+/**
+ * Memos that reference an entity in either company_ids or theme_ids (jsonb
+ * arrays). PostgREST `cs` (contains) matches a jsonb array containing the given
+ * element; the two column filters are merged by id, newest first.
+ */
+export async function listMemosForEntity(
+  ctx: ResearchCtx,
+  entityId: string,
+): Promise<InvestmentMemo[]> {
+  if (!isUuid(entityId)) return [];
+  const { data, error } = await ctx.supabase
+    .from(TABLE)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .or(`company_ids.cs.["${entityId}"],theme_ids.cs.["${entityId}"]`)
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as any[]).map(rowToMemo);
 }
 
 // ---------------------------------------------------------------------------
@@ -116,14 +167,14 @@ export type GenerateMemoResult =
  * provider problems (plan T5: {source:'no-key'|'error'} 不崩).
  */
 export async function generateMemo(
-  db: ResearchDb,
+  ctx: ResearchCtx,
   input: GenerateMemoInput,
   llm: LlmFn = defaultLlm,
 ): Promise<GenerateMemoResult> {
-  const entity = getEntity(db, input.entity_id);
+  const entity = await getEntity(ctx, input.entity_id);
   if (!entity) throw new MemoError('entity not found', 404);
 
-  const sources = listSourcesForEntity(db, entity.id);
+  const sources = await listSourcesForEntity(ctx, entity.id);
   const prompt = buildMemoPrompt({ entity, sources, question: input.question });
 
   let content: string;
@@ -145,8 +196,8 @@ export async function generateMemo(
   }
   const draft = validateMemoDraft(parsed, prompt.source_document_ids);
 
-  const citedSources = collectCitedSources(db, draft);
-  const axiomResults = checkMemoAxioms(draft, citedSources, loadAxioms(db));
+  const citedSources = await collectCitedSources(ctx, draft);
+  const axiomResults = checkMemoAxioms(draft, citedSources, await loadAxioms(ctx));
 
   const now = new Date().toISOString();
   const provenance: MemoProvenance = {
@@ -157,52 +208,46 @@ export async function generateMemo(
     edits: [],
   };
   const id = crypto.randomUUID();
-  db.prepare(
-    `insert into memos
-       (id, title, company_ids, theme_ids, one_line_conclusion, thesis,
-        supporting_evidence, counter_arguments, key_variables,
-        invalidation_conditions, open_questions, related_impacts, confidence,
-        axiom_check_results, provenance, status, created_at, updated_at)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?, ?)`,
-  ).run(
+  const { error } = await ctx.supabase.from(TABLE).insert({
     id,
-    draft.title,
-    writeJson(entity.type === 'THEME' ? [] : [entity.id]),
-    writeJson(entity.type === 'THEME' ? [entity.id] : []),
-    draft.one_line_conclusion,
-    draft.thesis,
-    writeJson(draft.supporting_evidence),
-    writeJson(draft.counter_arguments),
-    writeJson(draft.key_variables),
-    writeJson(draft.invalidation_conditions),
-    writeJson(draft.open_questions),
-    writeJson(draft.related_impacts),
-    draft.confidence,
-    writeJson(axiomResults),
-    writeJson(provenance),
-    now,
-    now,
-  );
-  logAudit(db, 'memo.generate', id, {
+    user_id: ctx.userId,
+    title: draft.title,
+    company_ids: entity.type === 'THEME' ? [] : [entity.id],
+    theme_ids: entity.type === 'THEME' ? [entity.id] : [],
+    one_line_conclusion: draft.one_line_conclusion,
+    thesis: draft.thesis,
+    supporting_evidence: draft.supporting_evidence,
+    counter_arguments: draft.counter_arguments,
+    key_variables: draft.key_variables,
+    invalidation_conditions: draft.invalidation_conditions,
+    open_questions: draft.open_questions,
+    related_impacts: draft.related_impacts,
+    confidence: draft.confidence,
+    axiom_check_results: axiomResults,
+    llm_provenance: provenance,
+    status: 'DRAFT',
+    created_at: now,
+    updated_at: now,
+  });
+  if (error) throw new Error(error.message);
+  await audit(ctx, 'memo.generate', id, {
     entity_id: entity.id,
     model,
     prompt_sha256: prompt.prompt_sha256,
     source_count: prompt.source_document_ids.length,
   });
-  return { memo: getMemo(db, id)!, llm: { source: 'llm', model } };
+  return { memo: (await getMemo(ctx, id))!, llm: { source: 'llm', model } };
 }
 
-function collectCitedSources(db: ResearchDb, draft: Pick<MemoDraft, 'supporting_evidence' | 'counter_arguments'>): SourceDocument[] {
+async function collectCitedSources(
+  ctx: ResearchCtx,
+  draft: Pick<MemoDraft, 'supporting_evidence' | 'counter_arguments'>,
+): Promise<SourceDocument[]> {
   const ids = new Set<string>();
   for (const ev of [...draft.supporting_evidence, ...draft.counter_arguments]) {
     for (const id of ev.source_document_ids) ids.add(id);
   }
-  const out: SourceDocument[] = [];
-  for (const id of ids) {
-    const row = db.prepare(`select * from source_documents where id = ?`).get(id);
-    if (row) out.push({ ...row, entity_ids: readJson<string[]>(row.entity_ids, []) });
-  }
-  return out;
+  return listSourcesByIds(ctx, [...ids]);
 }
 
 // ---------------------------------------------------------------------------
@@ -215,21 +260,16 @@ const PATCHABLE_FIELDS = [
 ] as const;
 type PatchableField = (typeof PATCHABLE_FIELDS)[number];
 
-const JSON_FIELDS: ReadonlySet<string> = new Set([
-  'supporting_evidence', 'counter_arguments', 'key_variables',
-  'invalidation_conditions', 'open_questions', 'related_impacts',
-]);
-
 /**
  * Patch editable memo fields; appends {at, fields} to provenance.edits and
  * re-runs the axiom check so the panel is always current.
  */
-export function patchMemo(
-  db: ResearchDb,
+export async function patchMemo(
+  ctx: ResearchCtx,
   id: string,
   patch: Partial<Record<PatchableField, unknown>>,
-): InvestmentMemo {
-  const memo = getMemo(db, id);
+): Promise<InvestmentMemo> {
+  const memo = await getMemo(ctx, id);
   if (!memo) throw new MemoError('memo not found', 404);
   if (memo.status === 'ARCHIVED') throw new MemoError('memo is archived', 409);
 
@@ -244,19 +284,25 @@ export function patchMemo(
   for (const f of fields) next[f] = patch[f];
 
   const merged = { ...memo, ...next } as InvestmentMemo;
-  const axiomResults = checkMemoAxioms(merged, collectCitedSources(db, merged), loadAxioms(db));
+  const axiomResults = checkMemoAxioms(merged, await collectCitedSources(ctx, merged), await loadAxioms(ctx));
   const provenance: MemoProvenance = {
     ...memo.provenance,
     edits: [...(memo.provenance.edits ?? []), { at: now, fields: [...fields] }],
   };
 
-  const sets = fields.map((f) => `${f} = ?`).join(', ');
-  const values = fields.map((f) => (JSON_FIELDS.has(f) ? writeJson(next[f]) : next[f]));
-  db.prepare(
-    `update memos set ${sets}, axiom_check_results = ?, provenance = ?, updated_at = ? where id = ?`,
-  ).run(...values, writeJson(axiomResults), writeJson(provenance), now, id);
-  logAudit(db, 'memo.update', id, { fields: [...fields] });
-  return getMemo(db, id)!;
+  const { error } = await ctx.supabase
+    .from(TABLE)
+    .update({
+      ...next,
+      axiom_check_results: axiomResults,
+      llm_provenance: provenance,
+      updated_at: now,
+    })
+    .eq('user_id', ctx.userId)
+    .eq('id', id);
+  if (error) throw new Error(error.message);
+  await audit(ctx, 'memo.update', id, { fields: [...fields] });
+  return (await getMemo(ctx, id))!;
 }
 
 export interface ReviewResult {
@@ -269,22 +315,30 @@ export interface ReviewResult {
  * Review gate: re-runs axioms; any BLOCK failure rejects (API → 422),
  * otherwise the memo becomes REVIEWED with an audit trail.
  */
-export function reviewMemo(db: ResearchDb, id: string): ReviewResult {
-  const memo = getMemo(db, id);
+export async function reviewMemo(ctx: ResearchCtx, id: string): Promise<ReviewResult> {
+  const memo = await getMemo(ctx, id);
   if (!memo) throw new MemoError('memo not found', 404);
 
-  const results = checkMemoAxioms(memo, collectCitedSources(db, memo), loadAxioms(db));
+  const results = checkMemoAxioms(memo, await collectCitedSources(ctx, memo), await loadAxioms(ctx));
   const now = new Date().toISOString();
   if (hasBlockingFailure(results)) {
-    db.prepare(`update memos set axiom_check_results = ?, updated_at = ? where id = ?`)
-      .run(writeJson(results), now, id);
-    logAudit(db, 'memo.review', id, { outcome: 'REJECTED_BY_AXIOMS', results });
-    return { ok: false, memo: getMemo(db, id)!, results };
+    const { error } = await ctx.supabase
+      .from(TABLE)
+      .update({ axiom_check_results: results, updated_at: now })
+      .eq('user_id', ctx.userId)
+      .eq('id', id);
+    if (error) throw new Error(error.message);
+    await audit(ctx, 'memo.review', id, { outcome: 'REJECTED_BY_AXIOMS', results });
+    return { ok: false, memo: (await getMemo(ctx, id))!, results };
   }
-  db.prepare(`update memos set status = 'REVIEWED', axiom_check_results = ?, updated_at = ? where id = ?`)
-    .run(writeJson(results), now, id);
-  logAudit(db, 'memo.review', id, { outcome: 'REVIEWED', results });
-  return { ok: true, memo: getMemo(db, id)!, results };
+  const { error } = await ctx.supabase
+    .from(TABLE)
+    .update({ status: 'REVIEWED', axiom_check_results: results, updated_at: now })
+    .eq('user_id', ctx.userId)
+    .eq('id', id);
+  if (error) throw new Error(error.message);
+  await audit(ctx, 'memo.review', id, { outcome: 'REVIEWED', results });
+  return { ok: true, memo: (await getMemo(ctx, id))!, results };
 }
 
 // ---------------------------------------------------------------------------

@@ -38,7 +38,7 @@ export default function ResearchDashboardPage() {
   useEffect(() => {
     (async () => {
       const res = await fetch('/api/research/sources');
-      if (res.status === 501) { setDisabled(true); return; }
+      if (res.status === 401 || res.status === 403) { setDisabled(true); return; }
       const data = await res.json().catch(() => ({ sources: [] }));
       setSources(data.sources ?? []);
       const mRes = await fetch('/api/research/memos');
@@ -62,17 +62,12 @@ export default function ResearchDashboardPage() {
   if (disabled) {
     return (
       <div className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-6 text-sm text-amber-900">
-        <h1 className="text-base font-semibold">Research OS：本地专用模式未启用</h1>
+        <h1 className="text-base font-semibold">Research OS：该模块暂未开放</h1>
         <p>
-          Research OS 是随 stock-monitor 一起分发的<strong>本地单用户研究工具</strong>，
-          数据存在本机 SQLite（research-data/research.db），不部署到生产环境。
+          Research OS 目前为<strong>管理员专用</strong>研究模块（个人云工具规格）。
+          需要以 admin 角色登录后才能访问；开放更多用户是权限决策，而非功能缺失。
         </p>
-        <ol className="list-decimal space-y-1 pl-5">
-          <li>在项目根目录 .env.local 添加：<code className="rounded bg-amber-100 px-1">RESEARCH_OS_ENABLED=1</code></li>
-          <li>重启 dev server（npm run dev）</li>
-          <li>运行种子：<code className="rounded bg-amber-100 px-1">RESEARCH_OS_ENABLED=1 npx tsx scripts/research-seed.ts</code></li>
-        </ol>
-        <p>未启用时所有 /api/research/* 返回 501，生产部署不受影响。</p>
+        <p>若你认为应有权限，请登录后联系管理员开通 profiles.role = &apos;admin&apos;。</p>
       </div>
     );
   }

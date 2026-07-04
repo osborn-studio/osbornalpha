@@ -1,9 +1,18 @@
 /**
- * Eval harness service (Research OS Phase 4, spec §4.8/§10).
+ * Eval harness service (Research OS Phase 5 — Supabase Postgres, spec §4.8/§10).
  * Historical time-point evaluation: as_of + then-visible materials → the agent
  * writes a memo (NOT persisted to memos) → a SEPARATE judge LLM call scores it
  * against the real subsequent events on the case rubric → run + failure modes
  * are persisted with double provenance {gen, judge}.
+ *
+ * Column mapping: app EvalCase.as_of ↔ research_eval_cases.as_of_date (date);
+ * EvalCase.expected {notes} + EvalCase.outcome live together in the `expected`
+ * jsonb column ({notes, outcome}); EvalRun.output ↔ agent_output jsonb;
+ * EvalRun.total ↔ total_score numeric.
+ *
+ * ⚠️ research_eval_runs.total_score is Postgres `numeric` — PostgREST
+ * serializes it as a JSON STRING, so every read goes through coerceEvalRunRow
+ * (Number()), exactly like portfolio/store.ts coerce*Row. Do not bypass it.
  *
  * Red lines honored here:
  * - builder≠judge: two independent prompts/calls; the judge never sees the gen
@@ -13,9 +22,10 @@
  * - audit_log on case create + run.
  */
 
-import { logAudit, type ResearchDb } from './db';
+import { audit, isUuid, type ResearchCtx } from './store';
 import { defaultLlm, type LlmFn } from './memos';
 import { validateMemoDraft } from './memo-prompt';
+import { listSourcesByIds } from './sources';
 import {
   buildEvalGenPrompt,
   buildEvalJudgePrompt,
@@ -24,13 +34,14 @@ import {
 } from './eval-prompt';
 import {
   DEFAULT_EVAL_RUBRIC,
-  readJson,
-  writeJson,
   type EvalCase,
   type EvalRun,
   type EvalRunOutput,
   type SourceDocument,
 } from './types';
+
+const CASES = 'research_eval_cases';
+const RUNS = 'research_eval_runs';
 
 export class EvalError extends Error {
   constructor(message: string, public status: number = 400) {
@@ -43,37 +54,49 @@ export class EvalError extends Error {
 // Row mapping
 
 function rowToEvalCase(row: any): EvalCase {
+  const expected =
+    row.expected && typeof row.expected === 'object' ? (row.expected as Record<string, unknown>) : {};
+  const rubric =
+    row.rubric && typeof row.rubric === 'object' && Object.keys(row.rubric).length > 0
+      ? (row.rubric as Record<string, number>)
+      : { ...DEFAULT_EVAL_RUBRIC };
   return {
     id: row.id,
     title: row.title,
-    as_of: row.as_of,
-    visible_material: readJson<string[]>(row.visible_material, []),
-    expected: readJson<{ notes: string }>(row.expected_output, { notes: '' }),
-    outcome: row.outcome ?? '',
-    rubric: readJson<Record<string, number>>(row.rubric, { ...DEFAULT_EVAL_RUBRIC }),
+    // Postgres `date` comes back as YYYY-MM-DD.
+    as_of: typeof row.as_of_date === 'string' ? row.as_of_date.slice(0, 10) : row.as_of_date,
+    visible_material: Array.isArray(row.visible_material) ? (row.visible_material as string[]) : [],
+    expected: { notes: typeof expected.notes === 'string' ? expected.notes : '' },
+    outcome: typeof expected.outcome === 'string' ? expected.outcome : '',
+    rubric,
     created_at: row.created_at,
   };
 }
 
-function rowToEvalRun(row: any): EvalRun {
-  // total travels inside the scores JSON column (schema v2 has no extra column).
-  const { total = 0, ...scores } = readJson<Record<string, number>>(row.scores, {});
+const EMPTY_OUTPUT: EvalRunOutput = {
+  memo: {
+    title: '', one_line_conclusion: '', thesis: '',
+    supporting_evidence: [], counter_arguments: [], key_variables: [],
+    invalidation_conditions: [], open_questions: [], related_impacts: [],
+    confidence: 'LOW',
+  },
+  rationale_per_dimension: {},
+  provenance: { gen: {}, judge: {} },
+};
+
+/** ⚠️ numeric coercion boundary: total_score arrives as a JSON string. */
+export function coerceEvalRunRow(row: any): EvalRun {
   return {
     id: row.id,
     case_id: row.case_id,
-    output: readJson<EvalRunOutput>(row.output, {
-      memo: {
-        title: '', one_line_conclusion: '', thesis: '',
-        supporting_evidence: [], counter_arguments: [], key_variables: [],
-        invalidation_conditions: [], open_questions: [], related_impacts: [],
-        confidence: 'LOW',
-      },
-      rationale_per_dimension: {},
-      provenance: { gen: {}, judge: {} },
-    }),
-    scores,
-    total,
-    failure_modes: readJson<string[]>(row.failure_modes, []),
+    output:
+      row.agent_output && typeof row.agent_output === 'object' && !Array.isArray(row.agent_output)
+        ? (row.agent_output as EvalRunOutput)
+        : EMPTY_OUTPUT,
+    scores:
+      row.scores && typeof row.scores === 'object' ? (row.scores as Record<string, number>) : {},
+    total: row.total_score == null ? 0 : Number(row.total_score),
+    failure_modes: Array.isArray(row.failure_modes) ? (row.failure_modes as string[]) : [],
     created_at: row.created_at,
   };
 }
@@ -114,8 +137,8 @@ function validAsOfDate(s: string): boolean {
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
 }
 
-/** Validate → insert eval_cases → audit_log('eval.case_create'). */
-export function createEvalCase(db: ResearchDb, input: CreateEvalCaseInput): EvalCase {
+/** Validate → insert research_eval_cases → audit('eval.case_create'). */
+export async function createEvalCase(ctx: ResearchCtx, input: CreateEvalCaseInput): Promise<EvalCase> {
   const title = typeof input.title === 'string' ? input.title.trim() : '';
   if (!title) throw new EvalError('title is required');
   if (typeof input.as_of_date !== 'string' || !validAsOfDate(input.as_of_date)) {
@@ -127,36 +150,53 @@ export function createEvalCase(db: ResearchDb, input: CreateEvalCaseInput): Eval
   if (sourceIds.length === 0) {
     throw new EvalError('source_document_ids must contain at least 1 source');
   }
-  const existsStmt = db.prepare(`select 1 from source_documents where id = ?`);
+  const found = await listSourcesByIds(ctx, sourceIds);
+  const foundIds = new Set(found.map((s) => s.id));
   for (const id of sourceIds) {
-    if (!existsStmt.get(id)) throw new EvalError(`source document not found: ${id}`, 404);
+    if (!foundIds.has(id)) throw new EvalError(`source document not found: ${id}`, 404);
   }
   const rubric = normalizeRubric(input.rubric);
   const expectedNotes = typeof input.expected_notes === 'string' ? input.expected_notes.trim() : '';
 
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  db.prepare(
-    `insert into eval_cases
-       (id, title, as_of, visible_material, expected_output, outcome, rubric, created_at)
-     values (?, ?, ?, ?, ?, '', ?, ?)`,
-  ).run(
-    id, title, input.as_of_date,
-    writeJson(sourceIds), writeJson({ notes: expectedNotes }), writeJson(rubric), now,
-  );
-  logAudit(db, 'eval.case_create', id, {
+  const { error } = await ctx.supabase.from(CASES).insert({
+    id,
+    user_id: ctx.userId,
+    title,
+    as_of_date: input.as_of_date,
+    visible_material: sourceIds,
+    expected: { notes: expectedNotes, outcome: '' },
+    rubric,
+    created_at: now,
+  });
+  if (error) throw new Error(error.message);
+  await audit(ctx, 'eval.case_create', id, {
     title, as_of: input.as_of_date, source_count: sourceIds.length,
   });
-  return getEvalCase(db, id)!;
+  return (await getEvalCase(ctx, id))!;
 }
 
-export function getEvalCase(db: ResearchDb, id: string): EvalCase | null {
-  const row = db.prepare(`select * from eval_cases where id = ?`).get(id);
-  return row ? rowToEvalCase(row) : null;
+export async function getEvalCase(ctx: ResearchCtx, id: string): Promise<EvalCase | null> {
+  if (!isUuid(id)) return null;
+  const { data, error } = await ctx.supabase
+    .from(CASES)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? rowToEvalCase(data) : null;
 }
 
-export function listEvalCases(db: ResearchDb): EvalCase[] {
-  return db.prepare(`select * from eval_cases order by created_at desc`).all().map(rowToEvalCase);
+export async function listEvalCases(ctx: ResearchCtx): Promise<EvalCase[]> {
+  const { data, error } = await ctx.supabase
+    .from(CASES)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as any[]).map(rowToEvalCase);
 }
 
 export interface EvalCaseSummary extends EvalCase {
@@ -166,26 +206,23 @@ export interface EvalCaseSummary extends EvalCase {
 }
 
 /** Cases + run count + most recent run's total (for the Eval Lab list). */
-export function listEvalCaseSummaries(db: ResearchDb): EvalCaseSummary[] {
-  const rows: any[] = db
-    .prepare(
-      `select c.*,
-              (select count(*) from eval_runs r where r.case_id = c.id) as run_count,
-              (select r.created_at from eval_runs r where r.case_id = c.id
-                 order by r.created_at desc, r.id desc limit 1) as last_run_at,
-              (select r.scores from eval_runs r where r.case_id = c.id
-                 order by r.created_at desc, r.id desc limit 1) as last_scores
-       from eval_cases c
-       order by c.created_at desc`,
-    )
-    .all();
-  return rows.map((row) => {
-    const lastScores = readJson<Record<string, number>>(row.last_scores, {});
+export async function listEvalCaseSummaries(ctx: ResearchCtx): Promise<EvalCaseSummary[]> {
+  const cases = await listEvalCases(ctx);
+  if (cases.length === 0) return [];
+  const runs = await listEvalRuns(ctx);
+  const byCase = new Map<string, EvalRun[]>();
+  for (const run of runs) {
+    const list = byCase.get(run.case_id) ?? [];
+    list.push(run);
+    byCase.set(run.case_id, list);
+  }
+  return cases.map((c) => {
+    const caseRuns = byCase.get(c.id) ?? []; // listEvalRuns is newest-first
     return {
-      ...rowToEvalCase(row),
-      run_count: row.run_count as number,
-      last_run_at: (row.last_run_at as string | null) ?? null,
-      last_total: row.last_scores == null ? null : lastScores.total ?? null,
+      ...c,
+      run_count: caseRuns.length,
+      last_run_at: caseRuns[0]?.created_at ?? null,
+      last_total: caseRuns.length ? caseRuns[0].total : null,
     };
   });
 }
@@ -193,25 +230,39 @@ export function listEvalCaseSummaries(db: ResearchDb): EvalCaseSummary[] {
 // ---------------------------------------------------------------------------
 // Runs
 
-export function getEvalRun(db: ResearchDb, id: string): EvalRun | null {
-  const row = db.prepare(`select * from eval_runs where id = ?`).get(id);
-  return row ? rowToEvalRun(row) : null;
+export async function getEvalRun(ctx: ResearchCtx, id: string): Promise<EvalRun | null> {
+  if (!isUuid(id)) return null;
+  const { data, error } = await ctx.supabase
+    .from(RUNS)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? coerceEvalRunRow(data) : null;
 }
 
-export function listEvalRuns(db: ResearchDb, caseId?: string): EvalRun[] {
-  const rows: any[] = caseId
-    ? db.prepare(`select * from eval_runs where case_id = ? order by created_at desc, id desc`).all(caseId)
-    : db.prepare(`select * from eval_runs order by created_at desc, id desc`).all();
-  return rows.map(rowToEvalRun);
+export async function listEvalRuns(ctx: ResearchCtx, caseId?: string): Promise<EvalRun[]> {
+  let q = ctx.supabase
+    .from(RUNS)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false });
+  if (caseId) q = q.eq('case_id', caseId);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as any[]).map(coerceEvalRunRow);
 }
 
-function loadCaseSources(db: ResearchDb, evalCase: EvalCase): SourceDocument[] {
-  const stmt = db.prepare(`select * from source_documents where id = ?`);
+async function loadCaseSources(ctx: ResearchCtx, evalCase: EvalCase): Promise<SourceDocument[]> {
+  const found = await listSourcesByIds(ctx, evalCase.visible_material);
+  const byId = new Map(found.map((s) => [s.id, s] as const));
   const sources: SourceDocument[] = [];
   for (const id of evalCase.visible_material) {
-    const row = stmt.get(id);
-    if (!row) throw new EvalError(`case material missing from library: ${id}`, 409);
-    sources.push({ ...row, entity_ids: readJson<string[]>(row.entity_ids, []) });
+    const src = byId.get(id);
+    if (!src) throw new EvalError(`case material missing from library: ${id}`, 409);
+    sources.push(src);
   }
   return sources;
 }
@@ -228,18 +279,18 @@ function llmFailure(stage: 'gen' | 'judge', e: unknown): RunEvalResult {
 
 /**
  * Execute one eval run: time-boxed gen call → separated judge call → validated
- * scores → persist eval_runs + audit_log('eval.run').
+ * scores → persist research_eval_runs + audit('eval.run').
  * Provider/parse failures at either stage return a structured result and
  * persist NOTHING (no half-runs). Unknown case → EvalError 404.
  */
 export async function runEval(
-  db: ResearchDb,
+  ctx: ResearchCtx,
   caseId: string,
   llm: LlmFn = defaultLlm,
 ): Promise<RunEvalResult> {
-  const evalCase = getEvalCase(db, caseId);
+  const evalCase = await getEvalCase(ctx, caseId);
   if (!evalCase) throw new EvalError('eval case not found', 404);
-  const sources = loadCaseSources(db, evalCase);
+  const sources = await loadCaseSources(ctx, evalCase);
 
   // Stage 1 — builder (time-boxed gen).
   const genPrompt = buildEvalGenPrompt(evalCase, sources);
@@ -292,17 +343,19 @@ export async function runEval(
     },
   };
   const id = crypto.randomUUID();
-  db.prepare(
-    `insert into eval_runs (id, case_id, output, scores, failure_modes, created_at)
-     values (?, ?, ?, ?, ?, ?)`,
-  ).run(
-    id, caseId,
-    writeJson(output),
-    writeJson({ ...verdict.scores, total }),
-    writeJson(verdict.failure_modes),
-    now,
-  );
-  logAudit(db, 'eval.run', id, {
+  const { error } = await ctx.supabase.from(RUNS).insert({
+    id,
+    user_id: ctx.userId,
+    case_id: caseId,
+    agent_output: output,
+    scores: verdict.scores,
+    total_score: total,
+    failure_modes: verdict.failure_modes,
+    llm_provenance: output.provenance,
+    created_at: now,
+  });
+  if (error) throw new Error(error.message);
+  await audit(ctx, 'eval.run', id, {
     case_id: caseId,
     total,
     gen_model: genModel,
@@ -311,7 +364,10 @@ export async function runEval(
     judge_prompt_sha256: judgePrompt.prompt_sha256,
     failure_modes: verdict.failure_modes,
   });
-  return { run: getEvalRun(db, id)!, llm: { source: 'llm', gen_model: genModel, judge_model: judgeModel } };
+  return {
+    run: (await getEvalRun(ctx, id))!,
+    llm: { source: 'llm', gen_model: genModel, judge_model: judgeModel },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -328,9 +384,14 @@ export interface EvalAggregate {
   failure_mode_top: Array<{ mode: string; count: number }>;
 }
 
-export function evalAggregate(db: ResearchDb): EvalAggregate {
-  const caseCount = (db.prepare(`select count(*) c from eval_cases`).get() as any).c as number;
-  const runs = listEvalRuns(db);
+export async function evalAggregate(ctx: ResearchCtx): Promise<EvalAggregate> {
+  const { data: caseRows, error: cErr } = await ctx.supabase
+    .from(CASES)
+    .select('id')
+    .eq('user_id', ctx.userId);
+  if (cErr) throw new Error(cErr.message);
+  const caseCount = ((caseRows ?? []) as any[]).length;
+  const runs = await listEvalRuns(ctx);
 
   const dimSums = new Map<string, { sum: number; n: number }>();
   const failureCounts = new Map<string, number>();

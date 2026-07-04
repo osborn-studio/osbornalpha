@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { openTestDb, type ResearchDb } from './db';
+import { describe, it, expect, beforeAll } from 'vitest';
+import { makeMockCtx, type MockStore } from './test-support';
+import type { ResearchCtx } from './store';
 import { seedResearchData } from './seed';
 import { createThesis, getThesis, listThesisEvents, transitionThesis } from './theses';
 import {
@@ -18,49 +19,50 @@ import {
 import { loadAxioms, type LlmFn } from './memos';
 import type { Axiom, ProposedAction, Thesis } from './types';
 
-function mkDb(): ResearchDb {
-  const db = openTestDb();
-  seedResearchData(db);
-  return db;
+async function mkCtx(): Promise<{ ctx: ResearchCtx; store: MockStore }> {
+  const { ctx, store } = makeMockCtx() as unknown as { ctx: ResearchCtx; store: MockStore };
+  await seedResearchData(ctx);
+  return { ctx, store };
 }
 
-function mkActiveThesis(db: ResearchDb): Thesis {
-  const t = createThesis(db, {
+async function mkActiveThesis(ctx: ResearchCtx): Promise<Thesis> {
+  const t = await createThesis(ctx, {
     title: 'NVIDIA 推理需求可持续增长',
     body: '推理 token 经济学支撑数据中心 capex。',
     invalidation_conditions: ['token 单价跌破成本线'],
     watch_metrics: ['NVDA DC 营收 QoQ'],
     next_review_at: '2026-07-18',
   });
-  return transitionThesis(db, t.id, 'ACTIVE', 'activate for test');
+  return transitionThesis(ctx, t.id, 'ACTIVE', 'activate for test');
 }
 
 /** Raw insert — bypasses createThesis's own AX001-spirit guard on purpose. */
-function insertThesisWithoutInvalidation(db: ResearchDb): string {
+function insertThesisWithoutInvalidation(ctx: ResearchCtx, store: MockStore): string {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  db.prepare(
-    `insert into theses (id, title, body, invalidation_conditions, watch_metrics,
-       status, created_at, updated_at)
-     values (?, '裸奔 thesis', 'no invalidation', '[]', '["m"]', 'ACTIVE', ?, ?)`,
-  ).run(id, now, now);
+  store.seed('research_theses', [{
+    id, user_id: ctx.userId, title: '裸奔 thesis', body: 'no invalidation',
+    company_ids: [], theme_ids: [], supporting_evidence_ids: [],
+    invalidation_conditions: [], watch_metrics: ['m'], status: 'ACTIVE',
+    next_review_at: null, last_assessment: {}, created_at: now, updated_at: now,
+  }]);
   return id;
 }
 
-function insertMemo(db: ResearchDb, opts: { counterArgs?: boolean; invalidation?: boolean } = {}): string {
+function insertMemo(ctx: ResearchCtx, store: MockStore, opts: { counterArgs?: boolean; invalidation?: boolean } = {}): string {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  db.prepare(
-    `insert into memos (id, title, counter_arguments, invalidation_conditions,
-       status, created_at, updated_at)
-     values (?, 'test memo', ?, ?, 'REVIEWED', ?, ?)`,
-  ).run(
-    id,
-    JSON.stringify(opts.counterArgs === false ? [] : [{ claim: '反方', source_document_ids: [] }]),
-    JSON.stringify(opts.invalidation === false ? [] : ['失效条件一']),
-    now,
-    now,
-  );
+  store.seed('research_memos', [{
+    id, user_id: ctx.userId, title: 'test memo', company_ids: [], theme_ids: [],
+    one_line_conclusion: '', thesis: '',
+    supporting_evidence: [],
+    counter_arguments: opts.counterArgs === false ? [] : [{ claim: '反方', source_document_ids: [] }],
+    key_variables: [],
+    invalidation_conditions: opts.invalidation === false ? [] : ['失效条件一'],
+    open_questions: [], related_impacts: [], confidence: 'LOW',
+    axiom_check_results: [], status: 'REVIEWED', llm_provenance: {},
+    created_at: now, updated_at: now,
+  }]);
   return id;
 }
 
@@ -88,11 +90,10 @@ describe('ACTION_POLICY', () => {
 
 describe('checkPlaybookAxioms (pure)', () => {
   let axioms: Axiom[];
-  {
-    const db = mkDb();
-    axioms = loadAxioms(db);
-    db.close();
-  }
+  beforeAll(async () => {
+    const { ctx } = await mkCtx();
+    axioms = await loadAxioms(ctx);
+  });
   const input = (action: ProposedAction, rationale = '合理的研究理由') =>
     ({ proposed_action: action, rationale });
 
@@ -161,37 +162,35 @@ describe('checkPlaybookAxioms (pure)', () => {
 describe('createPlaybookRun', () => {
   const base = { rationale: '基于观察指标的研究判断', risks: ['需求不及预期'] };
 
-  it('persists a NOT_REQUIRED run for low-risk actions with an audit trail', () => {
-    const db = mkDb();
-    const thesis = mkActiveThesis(db);
-    const { run, axiom_results } = createPlaybookRun(db, {
+  it('persists a NOT_REQUIRED run for low-risk actions with an audit trail', async () => {
+    const { ctx, store } = await mkCtx();
+    const thesis = await mkActiveThesis(ctx);
+    const { run, axiom_results } = await createPlaybookRun(ctx, {
       thesis_id: thesis.id, proposed_action: 'WATCHLIST', ...base,
     });
     expect(run.approval_status).toBe('NOT_REQUIRED');
     expect(run.thesis_id).toBe(thesis.id);
     expect(run.risks).toEqual(['需求不及预期']);
     expect(axiom_results.every((r) => r.passed || r.severity !== 'BLOCK')).toBe(true);
-    expect(getPlaybookRun(db, run.id)).not.toBeNull();
-    const audits = db.prepare(`select * from audit_log where action = 'playbook.create'`).all();
+    expect(await getPlaybookRun(ctx, run.id)).not.toBeNull();
+    const audits = store.rows('research_audit_log').filter((a) => a.action === 'playbook.create');
     expect(audits).toHaveLength(1);
-    db.close();
   });
 
-  it('routes high-risk actions to PENDING approval', () => {
-    const db = mkDb();
-    const thesis = mkActiveThesis(db);
-    const { run } = createPlaybookRun(db, {
+  it('routes high-risk actions to PENDING approval', async () => {
+    const { ctx } = await mkCtx();
+    const thesis = await mkActiveThesis(ctx);
+    const { run } = await createPlaybookRun(ctx, {
       thesis_id: thesis.id, proposed_action: 'PAPER_TRADE', ...base,
     });
     expect(run.approval_status).toBe('PENDING');
-    db.close();
   });
 
-  it('SPEC ACCEPTANCE 1: a thesis without invalidation conditions cannot enter the playbook (422, not persisted)', () => {
-    const db = mkDb();
-    const nakedId = insertThesisWithoutInvalidation(db);
+  it('SPEC ACCEPTANCE 1: a thesis without invalidation conditions cannot enter the playbook (422, not persisted)', async () => {
+    const { ctx, store } = await mkCtx();
+    const nakedId = insertThesisWithoutInvalidation(ctx, store);
     try {
-      createPlaybookRun(db, { thesis_id: nakedId, proposed_action: 'WATCHLIST', ...base });
+      await createPlaybookRun(ctx, { thesis_id: nakedId, proposed_action: 'WATCHLIST', ...base });
       expect.unreachable('should have thrown AxiomBlocked');
     } catch (e) {
       expect(e).toBeInstanceOf(AxiomBlocked);
@@ -200,44 +199,41 @@ describe('createPlaybookRun', () => {
       expect(ax1.passed).toBe(false);
     }
     // The run must NOT be persisted.
-    expect(listPlaybookRuns(db)).toHaveLength(0);
-    db.close();
+    expect(await listPlaybookRuns(ctx)).toHaveLength(0);
   });
 
-  it('blocks profit-promise rationale via AX005 without persisting', () => {
-    const db = mkDb();
-    const thesis = mkActiveThesis(db);
-    expect(() => createPlaybookRun(db, {
+  it('blocks profit-promise rationale via AX005 without persisting', async () => {
+    const { ctx } = await mkCtx();
+    const thesis = await mkActiveThesis(ctx);
+    await expect(createPlaybookRun(ctx, {
       thesis_id: thesis.id, proposed_action: 'WATCHLIST',
       rationale: '保证翻倍', risks: ['无'],
-    })).toThrow(AxiomBlocked);
-    expect(listPlaybookRuns(db)).toHaveLength(0);
-    db.close();
+    })).rejects.toThrow(AxiomBlocked);
+    expect(await listPlaybookRuns(ctx)).toHaveLength(0);
   });
 
-  it('blocks an approval-required action from a memo without counter-arguments (AX003)', () => {
-    const db = mkDb();
-    const memoId = insertMemo(db, { counterArgs: false });
-    expect(() => createPlaybookRun(db, {
+  it('blocks an approval-required action from a memo without counter-arguments (AX003)', async () => {
+    const { ctx, store } = await mkCtx();
+    const memoId = insertMemo(ctx, store, { counterArgs: false });
+    await expect(createPlaybookRun(ctx, {
       memo_id: memoId, proposed_action: 'PAPER_TRADE', ...base,
-    })).toThrow(AxiomBlocked);
+    })).rejects.toThrow(AxiomBlocked);
     // The same memo can still enter with a low-risk action.
-    const { run } = createPlaybookRun(db, {
+    const { run } = await createPlaybookRun(ctx, {
       memo_id: memoId, proposed_action: 'RESEARCH_MORE', ...base,
     });
     expect(run.approval_status).toBe('NOT_REQUIRED');
-    db.close();
   });
 
-  it('validates input: source choice, existence, action enum, rationale, risks', () => {
-    const db = mkDb();
-    const thesis = mkActiveThesis(db);
-    const memoId = insertMemo(db);
+  it('validates input: source choice, existence, action enum, rationale, risks', async () => {
+    const { ctx, store } = await mkCtx();
+    const thesis = await mkActiveThesis(ctx);
+    const memoId = insertMemo(ctx, store);
     const cases: Array<[Record<string, unknown>, number]> = [
       [{ proposed_action: 'WATCHLIST', ...base }, 422],                       // neither source
       [{ thesis_id: thesis.id, memo_id: memoId, proposed_action: 'WATCHLIST', ...base }, 422], // both
-      [{ thesis_id: 'nope', proposed_action: 'WATCHLIST', ...base }, 404],    // missing thesis
-      [{ memo_id: 'nope', proposed_action: 'WATCHLIST', ...base }, 404],      // missing memo
+      [{ thesis_id: '00000000-0000-4000-8000-0000000000a1', proposed_action: 'WATCHLIST', ...base }, 404],    // missing thesis
+      [{ memo_id: '00000000-0000-4000-8000-0000000000a2', proposed_action: 'WATCHLIST', ...base }, 404],      // missing memo
       [{ thesis_id: thesis.id, proposed_action: 'YOLO', ...base }, 422],      // bad action
       [{ thesis_id: thesis.id, proposed_action: 'WATCHLIST', rationale: ' ', risks: ['r'] }, 422],
       [{ thesis_id: thesis.id, proposed_action: 'WATCHLIST', rationale: 'r', risks: [] }, 422],
@@ -245,140 +241,131 @@ describe('createPlaybookRun', () => {
     ];
     for (const [input, status] of cases) {
       try {
-        createPlaybookRun(db, input as never);
+        await createPlaybookRun(ctx, input as never);
         expect.unreachable(`should have thrown for ${JSON.stringify(input)}`);
       } catch (e) {
         expect(e).toBeInstanceOf(PlaybookError);
         expect((e as PlaybookError).status).toBe(status);
       }
     }
-    expect(listPlaybookRuns(db)).toHaveLength(0);
-    db.close();
+    expect(await listPlaybookRuns(ctx)).toHaveLength(0);
   });
 });
 
 describe('approvePlaybook / rejectPlaybook state machine', () => {
-  function mkPending(db: ResearchDb, action: ProposedAction = 'PAPER_TRADE', thesis?: Thesis) {
-    const t = thesis ?? mkActiveThesis(db);
-    return createPlaybookRun(db, {
+  async function mkPending(ctx: ResearchCtx, action: ProposedAction = 'PAPER_TRADE', thesis?: Thesis) {
+    const t = thesis ?? await mkActiveThesis(ctx);
+    return (await createPlaybookRun(ctx, {
       thesis_id: t.id, proposed_action: action,
       rationale: '研究理由', risks: ['风险一'],
-    }).run;
+    })).run;
   }
 
-  it('approves a PENDING run with a mandatory decision and audits it', () => {
-    const db = mkDb();
-    const run = mkPending(db);
-    const { run: approved } = approvePlaybook(db, run.id, { decision: '同意纸面记录' });
+  it('approves a PENDING run with a mandatory decision and audits it', async () => {
+    const { ctx, store } = await mkCtx();
+    const run = await mkPending(ctx);
+    const { run: approved } = await approvePlaybook(ctx, run.id, { decision: '同意纸面记录' });
     expect(approved.approval_status).toBe('APPROVED');
     expect(approved.human_decision).toBe('同意纸面记录');
     expect(approved.review_at).toBeTruthy();
-    const audits = db.prepare(`select * from audit_log where action = 'playbook.approve'`).all();
+    const audits = store.rows('research_audit_log').filter((a) => a.action === 'playbook.approve');
     expect(audits).toHaveLength(1);
-    db.close();
   });
 
-  it('requires a non-empty decision (422)', () => {
-    const db = mkDb();
-    const run = mkPending(db);
-    expect(() => approvePlaybook(db, run.id, { decision: '  ' })).toThrow(PlaybookError);
-    expect(() => rejectPlaybook(db, run.id, { decision: '' })).toThrow(PlaybookError);
-    expect(getPlaybookRun(db, run.id)!.approval_status).toBe('PENDING');
-    db.close();
+  it('requires a non-empty decision (422)', async () => {
+    const { ctx } = await mkCtx();
+    const run = await mkPending(ctx);
+    await expect(approvePlaybook(ctx, run.id, { decision: '  ' })).rejects.toThrow(PlaybookError);
+    await expect(rejectPlaybook(ctx, run.id, { decision: '' })).rejects.toThrow(PlaybookError);
+    expect((await getPlaybookRun(ctx, run.id))!.approval_status).toBe('PENDING');
   });
 
-  it('only PENDING can be approved: double-approve, approve-after-reject, NOT_REQUIRED all 422', () => {
-    const db = mkDb();
-    const a = mkPending(db);
-    approvePlaybook(db, a.id, { decision: 'ok' });
+  it('only PENDING can be approved: double-approve, approve-after-reject, NOT_REQUIRED all 422', async () => {
+    const { ctx } = await mkCtx();
+    const a = await mkPending(ctx);
+    await approvePlaybook(ctx, a.id, { decision: 'ok' });
     for (const fn of [
-      () => approvePlaybook(db, a.id, { decision: 'again' }),
-      () => rejectPlaybook(db, a.id, { decision: 'flip' }),
+      () => approvePlaybook(ctx, a.id, { decision: 'again' }),
+      () => rejectPlaybook(ctx, a.id, { decision: 'flip' }),
     ]) {
-      try { fn(); expect.unreachable('should throw'); }
+      try { await fn(); expect.unreachable('should throw'); }
       catch (e) { expect((e as PlaybookError).status).toBe(422); }
     }
-    const b = mkPending(db, 'PAPER_TRADE', getThesis(db, a.thesis_id!)!);
-    rejectPlaybook(db, b.id, { decision: '证据不足' });
-    expect(getPlaybookRun(db, b.id)!.approval_status).toBe('REJECTED');
-    try { approvePlaybook(db, b.id, { decision: 'late' }); expect.unreachable('should throw'); }
+    const b = await mkPending(ctx, 'PAPER_TRADE', (await getThesis(ctx, a.thesis_id!))!);
+    await rejectPlaybook(ctx, b.id, { decision: '证据不足' });
+    expect((await getPlaybookRun(ctx, b.id))!.approval_status).toBe('REJECTED');
+    try { await approvePlaybook(ctx, b.id, { decision: 'late' }); expect.unreachable('should throw'); }
     catch (e) { expect((e as PlaybookError).status).toBe(422); }
     // NOT_REQUIRED runs never enter the approval machine.
-    const t = getThesis(db, a.thesis_id!)!;
-    const c = createPlaybookRun(db, {
+    const t = (await getThesis(ctx, a.thesis_id!))!;
+    const c = (await createPlaybookRun(ctx, {
       thesis_id: t.id, proposed_action: 'WATCHLIST', rationale: 'r', risks: ['x'],
-    }).run;
-    try { approvePlaybook(db, c.id, { decision: 'n/a' }); expect.unreachable('should throw'); }
+    })).run;
+    try { await approvePlaybook(ctx, c.id, { decision: 'n/a' }); expect.unreachable('should throw'); }
     catch (e) { expect((e as PlaybookError).status).toBe(422); }
     // Missing run → 404.
-    try { approvePlaybook(db, 'no-such-run', { decision: 'x' }); expect.unreachable('should throw'); }
+    try { await approvePlaybook(ctx, '00000000-0000-4000-8000-0000000000b9', { decision: 'x' }); expect.unreachable('should throw'); }
     catch (e) { expect((e as PlaybookError).status).toBe(404); }
-    db.close();
   });
 
-  it('reject audits playbook.reject and records the decision', () => {
-    const db = mkDb();
-    const run = mkPending(db);
-    const { run: rejected } = rejectPlaybook(db, run.id, { decision: '风险过高' });
+  it('reject audits playbook.reject and records the decision', async () => {
+    const { ctx, store } = await mkCtx();
+    const run = await mkPending(ctx);
+    const { run: rejected } = await rejectPlaybook(ctx, run.id, { decision: '风险过高' });
     expect(rejected.approval_status).toBe('REJECTED');
     expect(rejected.human_decision).toBe('风险过高');
-    const audits = db.prepare(`select * from audit_log where action = 'playbook.reject'`).all();
+    const audits = store.rows('research_audit_log').filter((a) => a.action === 'playbook.reject');
     expect(audits).toHaveLength(1);
-    db.close();
   });
 });
 
 describe('executeApproved (restricted effects)', () => {
-  it('CLOSE_THESIS approval closes the thesis through the transition guard', () => {
-    const db = mkDb();
-    const thesis = mkActiveThesis(db);
-    const { run } = createPlaybookRun(db, {
+  it('CLOSE_THESIS approval closes the thesis through the transition guard', async () => {
+    const { ctx } = await mkCtx();
+    const thesis = await mkActiveThesis(ctx);
+    const { run } = await createPlaybookRun(ctx, {
       thesis_id: thesis.id, proposed_action: 'CLOSE_THESIS',
       rationale: '逻辑已兑现', risks: ['过早关闭'],
     });
-    const { run: approved, execution } = approvePlaybook(db, run.id, { decision: '同意关闭' });
+    const { run: approved, execution } = await approvePlaybook(ctx, run.id, { decision: '同意关闭' });
     expect(approved.approval_status).toBe('APPROVED');
     expect(execution.executed).toBe(true);
-    expect(getThesis(db, thesis.id)!.status).toBe('CLOSED');
+    expect((await getThesis(ctx, thesis.id))!.status).toBe('CLOSED');
     // The guard path wrote its own STATUS_CHANGE event.
-    const changes = listThesisEvents(db, thesis.id).filter((e) => e.event_type === 'STATUS_CHANGE');
+    const changes = (await listThesisEvents(ctx, thesis.id)).filter((e) => e.event_type === 'STATUS_CHANGE');
     expect(changes.some((e) => e.detail.to === 'CLOSED')).toBe(true);
-    db.close();
   });
 
-  it('a guard rejection leaves the playbook APPROVED and records execution_error in audit_log', () => {
-    const db = mkDb();
-    const thesis = mkActiveThesis(db);
-    const { run } = createPlaybookRun(db, {
+  it('a guard rejection leaves the playbook APPROVED and records execution_error in audit_log', async () => {
+    const { ctx, store } = await mkCtx();
+    const thesis = await mkActiveThesis(ctx);
+    const { run } = await createPlaybookRun(ctx, {
       thesis_id: thesis.id, proposed_action: 'CLOSE_THESIS',
       rationale: '关闭', risks: ['r'],
     });
     // Force the thesis CLOSED behind the run's back → CLOSED→CLOSED is illegal.
-    transitionThesis(db, thesis.id, 'CLOSED', 'raced');
-    const { run: approved, execution } = approvePlaybook(db, run.id, { decision: '关闭它' });
+    await transitionThesis(ctx, thesis.id, 'CLOSED', 'raced');
+    const { run: approved, execution } = await approvePlaybook(ctx, run.id, { decision: '关闭它' });
     expect(approved.approval_status).toBe('APPROVED'); // approval stands
     expect(execution.executed).toBe(false);
     expect(execution.execution_error).toMatch(/illegal transition/);
-    const audits: any[] = db
-      .prepare(`select * from audit_log where action = 'playbook.execute' and target_id = ?`)
-      .all(run.id);
+    const audits = store.rows('research_audit_log')
+      .filter((a) => a.action === 'playbook.execute' && a.object_id === run.id);
     expect(audits).toHaveLength(1);
-    expect(JSON.parse(audits[0].detail).execution_error).toMatch(/illegal transition/);
-    db.close();
+    expect(audits[0].detail.execution_error).toMatch(/illegal transition/);
   });
 
-  it('PAPER_TRADE approval is a record only — no automated effect, no real trading', () => {
-    const db = mkDb();
-    const thesis = mkActiveThesis(db);
-    const { run } = createPlaybookRun(db, {
+  it('PAPER_TRADE approval is a record only — no automated effect, no real trading', async () => {
+    const { ctx } = await mkCtx();
+    const thesis = await mkActiveThesis(ctx);
+    const { run } = await createPlaybookRun(ctx, {
       thesis_id: thesis.id, proposed_action: 'PAPER_TRADE',
       rationale: '纸面跟踪', risks: ['r'],
     });
-    const { execution } = approvePlaybook(db, run.id, { decision: '纸面记录' });
+    const { execution } = await approvePlaybook(ctx, run.id, { decision: '纸面记录' });
     expect(execution.executed).toBe(false);
     expect(execution.note).toMatch(/record/i);
-    expect(getThesis(db, thesis.id)!.status).toBe('ACTIVE'); // untouched
-    db.close();
+    expect((await getThesis(ctx, thesis.id))!.status).toBe('ACTIVE'); // untouched
   });
 });
 
@@ -387,9 +374,9 @@ describe('suggestPlaybookAction', () => {
     async () => ({ content: JSON.stringify(payload), model: 'fake-suggest-model' });
 
   it('returns an LLM suggestion with provenance and audits it — WITHOUT persisting a run', async () => {
-    const db = mkDb();
-    const thesis = mkActiveThesis(db);
-    const r = await suggestPlaybookAction(db, { thesis_id: thesis.id }, fakeLlm({
+    const { ctx, store } = await mkCtx();
+    const thesis = await mkActiveThesis(ctx);
+    const r = await suggestPlaybookAction(ctx, { thesis_id: thesis.id }, fakeLlm({
       proposed_action: 'WATCHLIST',
       rationale: '继续观察指标',
       risks: ['需求不及预期', '竞争加剧'],
@@ -406,71 +393,66 @@ describe('suggestPlaybookAction', () => {
       expect(r.provenance.prompt_sha256).toMatch(/^[0-9a-f]{64}$/);
     }
     // Suggestion is NOT persisted — creation is a separate gated step.
-    expect(listPlaybookRuns(db)).toHaveLength(0);
-    const audits = db.prepare(`select * from audit_log where action = 'playbook.suggest'`).all();
+    expect(await listPlaybookRuns(ctx)).toHaveLength(0);
+    const audits = store.rows('research_audit_log').filter((a) => a.action === 'playbook.suggest');
     expect(audits).toHaveLength(1);
-    db.close();
   });
 
   it('downgrades a non-enum action to RESEARCH_MORE and records it in metadata + audit', async () => {
-    const db = mkDb();
-    const thesis = mkActiveThesis(db);
-    const r = await suggestPlaybookAction(db, { thesis_id: thesis.id }, fakeLlm({
+    const { ctx, store } = await mkCtx();
+    const thesis = await mkActiveThesis(ctx);
+    const r = await suggestPlaybookAction(ctx, { thesis_id: thesis.id }, fakeLlm({
       proposed_action: 'BUY_THE_DIP', rationale: 'r', risks: ['a', 'b'], confidence_note: 'c',
     }));
     expect(r.suggestion!.proposed_action).toBe('RESEARCH_MORE');
     expect(r.suggestion!.metadata.downgraded_from).toBe('BUY_THE_DIP');
-    const audit: any = db.prepare(`select * from audit_log where action = 'playbook.suggest'`).get();
-    expect(JSON.parse(audit.detail).downgraded_from).toBe('BUY_THE_DIP');
-    db.close();
+    const audit = store.rows('research_audit_log').find((a) => a.action === 'playbook.suggest')!;
+    expect(audit.detail.downgraded_from).toBe('BUY_THE_DIP');
   });
 
   it('maps LLM failure / garbage output to structured results (never throws)', async () => {
-    const db = mkDb();
-    const thesis = mkActiveThesis(db);
+    const { ctx } = await mkCtx();
+    const thesis = await mkActiveThesis(ctx);
     const failing: LlmFn = async () => { throw new Error('boom'); };
-    const r1 = await suggestPlaybookAction(db, { thesis_id: thesis.id }, failing);
+    const r1 = await suggestPlaybookAction(ctx, { thesis_id: thesis.id }, failing);
     expect(r1.suggestion).toBeNull();
     expect(r1.llm.source).toBe('error');
     const noKey: LlmFn = async () => { throw new Error('no LLM provider configured'); };
-    const r2 = await suggestPlaybookAction(db, { thesis_id: thesis.id }, noKey);
+    const r2 = await suggestPlaybookAction(ctx, { thesis_id: thesis.id }, noKey);
     expect(r2.llm.source).toBe('no-key');
     const garbage: LlmFn = async () => ({ content: 'not json at all', model: 'x' });
-    const r3 = await suggestPlaybookAction(db, { thesis_id: thesis.id }, garbage);
+    const r3 = await suggestPlaybookAction(ctx, { thesis_id: thesis.id }, garbage);
     expect(r3.suggestion).toBeNull();
     expect(r3.llm.source).toBe('error');
-    db.close();
   });
 
   it('rejects bad source refs: neither/both (422), missing (404)', async () => {
-    const db = mkDb();
-    const thesis = mkActiveThesis(db);
+    const { ctx } = await mkCtx();
+    const thesis = await mkActiveThesis(ctx);
     const llm = fakeLlm({ proposed_action: 'RESEARCH_MORE', rationale: 'r', risks: ['a', 'b'], confidence_note: 'c' });
-    await expect(suggestPlaybookAction(db, {}, llm)).rejects.toMatchObject({ status: 422 });
+    await expect(suggestPlaybookAction(ctx, {}, llm)).rejects.toMatchObject({ status: 422 });
     await expect(
-      suggestPlaybookAction(db, { thesis_id: thesis.id, memo_id: 'm' }, llm),
+      suggestPlaybookAction(ctx, { thesis_id: thesis.id, memo_id: 'm' }, llm),
     ).rejects.toMatchObject({ status: 422 });
     await expect(
-      suggestPlaybookAction(db, { thesis_id: 'missing' }, llm),
+      suggestPlaybookAction(ctx, { thesis_id: '00000000-0000-4000-8000-0000000000c3' }, llm),
     ).rejects.toMatchObject({ status: 404 });
-    db.close();
   });
 });
 
 describe('listPlaybookRuns', () => {
-  it('lists newest first and filters by approval status', () => {
-    const db = mkDb();
-    const thesis = mkActiveThesis(db);
-    createPlaybookRun(db, {
+  it('lists newest first and filters by approval status', async () => {
+    const { ctx } = await mkCtx();
+    const thesis = await mkActiveThesis(ctx);
+    await createPlaybookRun(ctx, {
       thesis_id: thesis.id, proposed_action: 'WATCHLIST', rationale: 'r', risks: ['x'],
     });
-    createPlaybookRun(db, {
+    await createPlaybookRun(ctx, {
       thesis_id: thesis.id, proposed_action: 'PAPER_TRADE', rationale: 'r', risks: ['x'],
     });
-    expect(listPlaybookRuns(db)).toHaveLength(2);
-    const pending = listPlaybookRuns(db, { status: 'PENDING' });
+    expect(await listPlaybookRuns(ctx)).toHaveLength(2);
+    const pending = await listPlaybookRuns(ctx, { status: 'PENDING' });
     expect(pending).toHaveLength(1);
     expect(pending[0].proposed_action).toBe('PAPER_TRADE');
-    db.close();
   });
 });

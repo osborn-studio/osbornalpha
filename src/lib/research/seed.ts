@@ -4,7 +4,7 @@
  * (type, lower(name)); axioms upsert by code.
  */
 
-import { type ResearchDb } from './db';
+import { type ResearchCtx } from './store';
 import { upsertEntity } from './entities';
 
 interface CompanySeed {
@@ -91,9 +91,9 @@ export interface SeedResult {
   axioms: number;
 }
 
-export function seedResearchData(db: ResearchDb): SeedResult {
+export async function seedResearchData(ctx: ResearchCtx): Promise<SeedResult> {
   for (const c of COMPANY_SEEDS) {
-    upsertEntity(db, {
+    await upsertEntity(ctx, {
       type: 'COMPANY',
       name: c.name,
       ticker: c.ticker ?? null,
@@ -101,19 +101,42 @@ export function seedResearchData(db: ResearchDb): SeedResult {
     });
   }
   for (const t of THEME_SEEDS) {
-    upsertEntity(db, { type: 'THEME', name: t.name, description: t.description });
+    await upsertEntity(ctx, { type: 'THEME', name: t.name, description: t.description });
   }
+  // Axiom upsert by (user_id, code): update the mutable columns on existing
+  // rows (never their id — same semantics as the old ON CONFLICT DO UPDATE),
+  // insert the rest. `active` is the Postgres column for the app's `enabled`.
   const now = new Date().toISOString();
-  const upsertAxiom = db.prepare(
-    `insert into axioms (id, code, title, description, severity, enabled, created_at)
-     values (?, ?, ?, ?, ?, 1, ?)
-     on conflict(code) do update set
-       title = excluded.title,
-       description = excluded.description,
-       severity = excluded.severity`,
+  const { data: existingRows, error: selErr } = await ctx.supabase
+    .from('research_axioms')
+    .select('id, code')
+    .eq('user_id', ctx.userId);
+  if (selErr) throw new Error(selErr.message);
+  const byCode = new Map(
+    ((existingRows ?? []) as Array<{ id: string; code: string }>).map((r) => [r.code, r.id]),
   );
   for (const a of AXIOM_SEEDS) {
-    upsertAxiom.run(crypto.randomUUID(), a.code, a.title, a.description, a.severity, now);
+    const existingId = byCode.get(a.code);
+    if (existingId) {
+      const { error } = await ctx.supabase
+        .from('research_axioms')
+        .update({ title: a.title, description: a.description, severity: a.severity })
+        .eq('user_id', ctx.userId)
+        .eq('id', existingId);
+      if (error) throw new Error(error.message);
+    } else {
+      const { error } = await ctx.supabase.from('research_axioms').insert({
+        id: crypto.randomUUID(),
+        user_id: ctx.userId,
+        code: a.code,
+        title: a.title,
+        description: a.description,
+        severity: a.severity,
+        active: true,
+        created_at: now,
+      });
+      if (error) throw new Error(error.message);
+    }
   }
   return {
     companies: COMPANY_SEEDS.length,

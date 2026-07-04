@@ -1,23 +1,28 @@
 /**
- * Thesis lifecycle service (Research OS Phase 2).
+ * Thesis lifecycle service (Research OS Phase 5 — Supabase Postgres).
  * A thesis may not exist without invalidation conditions + watch metrics +
  * a next review date (AX001 spirit). Status changes only flow through the
  * guarded transition table below — the monitor NEVER calls transitionThesis;
  * only human adjudication does (spec §3.3).
+ *
+ * Column mapping: app-level ThesisEvent.event_type ↔ research_thesis_events.kind;
+ * source_document_ids has no dedicated column — non-empty arrays are folded
+ * into detail.source_document_ids and surfaced back as the typed field.
  */
 
-import { logAudit, type ResearchDb } from './db';
+import { audit, isUuid, type ResearchCtx } from './store';
 import {
   THESIS_STATUSES,
   THESIS_TRANSITIONS,
-  readJson,
-  writeJson,
   type Thesis,
   type ThesisEvent,
   type ThesisStatus,
 } from './types';
 
 export { THESIS_TRANSITIONS };
+
+const TABLE = 'research_theses';
+const EVENTS = 'research_thesis_events';
 
 export class ThesisError extends Error {
   constructor(message: string, public status: number = 400) {
@@ -29,16 +34,20 @@ export class ThesisError extends Error {
 // ---------------------------------------------------------------------------
 // Row mapping
 
+function arr<T>(v: unknown): T[] {
+  return Array.isArray(v) ? (v as T[]) : [];
+}
+
 function rowToThesis(row: any): Thesis {
   return {
     id: row.id,
     title: row.title,
     body: row.body,
-    company_ids: readJson<string[]>(row.company_ids, []),
-    theme_ids: readJson<string[]>(row.theme_ids, []),
-    supporting_evidence_ids: readJson<string[]>(row.supporting_evidence_ids, []),
-    invalidation_conditions: readJson<string[]>(row.invalidation_conditions, []),
-    watch_metrics: readJson<string[]>(row.watch_metrics, []),
+    company_ids: arr<string>(row.company_ids),
+    theme_ids: arr<string>(row.theme_ids),
+    supporting_evidence_ids: arr<string>(row.supporting_evidence_ids),
+    invalidation_conditions: arr<string>(row.invalidation_conditions),
+    watch_metrics: arr<string>(row.watch_metrics),
     status: row.status,
     next_review_at: row.next_review_at,
     created_at: row.created_at,
@@ -47,38 +56,72 @@ function rowToThesis(row: any): Thesis {
 }
 
 export function rowToThesisEvent(row: any): ThesisEvent {
+  const detail =
+    row.detail && typeof row.detail === 'object' ? (row.detail as Record<string, unknown>) : {};
   return {
     id: row.id,
     thesis_id: row.thesis_id,
-    event_type: row.event_type,
-    detail: readJson<Record<string, unknown>>(row.detail, {}),
-    source_document_ids: readJson<string[]>(row.source_document_ids, []),
+    event_type: row.kind,
+    detail,
+    source_document_ids: arr<string>(detail.source_document_ids),
     created_at: row.created_at,
   };
 }
 
-export function getThesis(db: ResearchDb, id: string): Thesis | null {
-  const row = db.prepare(`select * from theses where id = ?`).get(id);
-  return row ? rowToThesis(row) : null;
+/** Build the detail jsonb for an event: non-empty source ids fold into detail. */
+export function eventDetail(
+  detail: Record<string, unknown>,
+  sourceDocumentIds: string[],
+): Record<string, unknown> {
+  return sourceDocumentIds.length > 0
+    ? { ...detail, source_document_ids: sourceDocumentIds }
+    : detail;
 }
 
-export function listTheses(db: ResearchDb): Thesis[] {
-  return db.prepare(`select * from theses order by created_at desc`).all().map(rowToThesis);
+export async function getThesis(ctx: ResearchCtx, id: string): Promise<Thesis | null> {
+  if (!isUuid(id)) return null;
+  const { data, error } = await ctx.supabase
+    .from(TABLE)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? rowToThesis(data) : null;
 }
 
-export function listThesesByStatus(db: ResearchDb, statuses: ThesisStatus[]): Thesis[] {
-  const marks = statuses.map(() => '?').join(', ');
-  return db
-    .prepare(`select * from theses where status in (${marks}) order by created_at desc`)
-    .all(...statuses)
-    .map(rowToThesis);
+export async function listTheses(ctx: ResearchCtx): Promise<Thesis[]> {
+  const { data, error } = await ctx.supabase
+    .from(TABLE)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as any[]).map(rowToThesis);
 }
 
-export function listThesisEvents(db: ResearchDb, thesisId: string): ThesisEvent[] {
-  return db
-    .prepare(`select * from thesis_events where thesis_id = ? order by created_at desc, id desc`)
-    .all(thesisId)
-    .map(rowToThesisEvent);
+export async function listThesesByStatus(ctx: ResearchCtx, statuses: ThesisStatus[]): Promise<Thesis[]> {
+  const { data, error } = await ctx.supabase
+    .from(TABLE)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .in('status', statuses)
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as any[]).map(rowToThesis);
+}
+
+export async function listThesisEvents(ctx: ResearchCtx, thesisId: string): Promise<ThesisEvent[]> {
+  if (!isUuid(thesisId)) return [];
+  const { data, error } = await ctx.supabase
+    .from(EVENTS)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .eq('thesis_id', thesisId)
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false });
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as any[]).map(rowToThesisEvent);
 }
 
 // ---------------------------------------------------------------------------
@@ -96,13 +139,13 @@ export interface CreateThesisInput {
 }
 
 function requireStringArray(v: unknown, field: string): string[] {
-  const arr = Array.isArray(v)
+  const arr2 = Array.isArray(v)
     ? v.filter((x): x is string => typeof x === 'string' && x.trim() !== '').map((x) => x.trim())
     : [];
-  if (arr.length === 0) {
+  if (arr2.length === 0) {
     throw new ThesisError(`${field} requires at least one non-empty entry`, 422);
   }
-  return arr;
+  return arr2;
 }
 
 /**
@@ -110,7 +153,7 @@ function requireStringArray(v: unknown, field: string): string[] {
  * watch_metrics/next_review_at → 422: a thesis without invalidation
  * conditions is not allowed to exist (AX001 spirit).
  */
-export function createThesis(db: ResearchDb, input: CreateThesisInput): Thesis {
+export async function createThesis(ctx: ResearchCtx, input: CreateThesisInput): Promise<Thesis> {
   if (typeof input.title !== 'string' || input.title.trim() === '') {
     throw new ThesisError('title is required', 422);
   }
@@ -125,43 +168,40 @@ export function createThesis(db: ResearchDb, input: CreateThesisInput): Thesis {
 
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  db.prepare(
-    `insert into theses
-       (id, title, body, company_ids, theme_ids, supporting_evidence_ids,
-        invalidation_conditions, watch_metrics, status, next_review_at,
-        created_at, updated_at)
-     values (?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?, ?, ?)`,
-  ).run(
+  const { error } = await ctx.supabase.from(TABLE).insert({
     id,
-    input.title.trim(),
-    input.body.trim(),
-    writeJson(input.company_ids ?? []),
-    writeJson(input.theme_ids ?? []),
-    writeJson(input.supporting_evidence_ids ?? []),
-    writeJson(invalidation),
-    writeJson(metrics),
-    input.next_review_at.trim(),
-    now,
-    now,
-  );
-  logAudit(db, 'thesis.create', id, {
+    user_id: ctx.userId,
+    title: input.title.trim(),
+    body: input.body.trim(),
+    company_ids: input.company_ids ?? [],
+    theme_ids: input.theme_ids ?? [],
+    supporting_evidence_ids: input.supporting_evidence_ids ?? [],
+    invalidation_conditions: invalidation,
+    watch_metrics: metrics,
+    status: 'DRAFT',
+    next_review_at: input.next_review_at.trim(),
+    created_at: now,
+    updated_at: now,
+  });
+  if (error) throw new Error(error.message);
+  await audit(ctx, 'thesis.create', id, {
     title: input.title.trim(),
     invalidation_conditions: invalidation.length,
     watch_metrics: metrics.length,
   });
-  return getThesis(db, id)!;
+  return (await getThesis(ctx, id))!;
 }
 
 // ---------------------------------------------------------------------------
 // Transition (the only path that changes thesis status)
 
-export function transitionThesis(
-  db: ResearchDb,
+export async function transitionThesis(
+  ctx: ResearchCtx,
   id: string,
   to: ThesisStatus,
   reason: string,
-): Thesis {
-  const thesis = getThesis(db, id);
+): Promise<Thesis> {
+  const thesis = await getThesis(ctx, id);
   if (!thesis) throw new ThesisError('thesis not found', 404);
   if (!THESIS_STATUSES.includes(to)) {
     throw new ThesisError(`unknown status: ${String(to)}`, 422);
@@ -174,16 +214,21 @@ export function transitionThesis(
     );
   }
   const now = new Date().toISOString();
-  db.prepare(`update theses set status = ?, updated_at = ? where id = ?`).run(to, now, id);
-  db.prepare(
-    `insert into thesis_events (id, thesis_id, event_type, detail, source_document_ids, created_at)
-     values (?, ?, 'STATUS_CHANGE', ?, '[]', ?)`,
-  ).run(
-    crypto.randomUUID(),
-    id,
-    writeJson({ from: thesis.status, to, reason }),
-    now,
-  );
-  logAudit(db, 'thesis.transition', id, { from: thesis.status, to, reason });
-  return getThesis(db, id)!;
+  const { error: upErr } = await ctx.supabase
+    .from(TABLE)
+    .update({ status: to, updated_at: now })
+    .eq('user_id', ctx.userId)
+    .eq('id', id);
+  if (upErr) throw new Error(upErr.message);
+  const { error: evErr } = await ctx.supabase.from(EVENTS).insert({
+    id: crypto.randomUUID(),
+    user_id: ctx.userId,
+    thesis_id: id,
+    kind: 'STATUS_CHANGE',
+    detail: { from: thesis.status, to, reason },
+    created_at: now,
+  });
+  if (evErr) throw new Error(evErr.message);
+  await audit(ctx, 'thesis.transition', id, { from: thesis.status, to, reason });
+  return (await getThesis(ctx, id))!;
 }

@@ -1,12 +1,13 @@
 /**
- * Signal extraction service (Research OS Phase 2).
+ * Signal extraction service (Research OS Phase 5 — Supabase Postgres).
  * pending sources → buildSignalPrompt → LLM → validateSignalDrafts
  * (anti-hallucination drops) → entity resolution → persist with metadata +
- * llm_provenance → audit_log('signal.extract').
+ * llm_provenance → research_audit_log('signal.extract').
  */
 
-import { logAudit, type ResearchDb } from './db';
+import { audit, isUuid, type ResearchCtx } from './store';
 import { listEntities } from './entities';
+import { rowToSource } from './sources';
 import { defaultLlm, type LlmFn } from './memos';
 import {
   buildSignalPrompt,
@@ -15,16 +16,21 @@ import {
   type SignalDraft,
 } from './signal-prompt';
 import {
-  readJson,
-  writeJson,
   type Entity,
   type LlmProvenance,
   type Signal,
   type SourceDocument,
 } from './types';
 
+const TABLE = 'research_signals';
+const SOURCES = 'research_source_documents';
+
 // ---------------------------------------------------------------------------
 // Row mapping + queries
+
+function arr<T>(v: unknown): T[] {
+  return Array.isArray(v) ? (v as T[]) : [];
+}
 
 function rowToSignal(row: any): Signal {
   return {
@@ -34,59 +40,84 @@ function rowToSignal(row: any): Signal {
     signal_type: row.signal_type,
     direction: row.direction,
     confidence: row.confidence,
-    entity_ids: readJson<string[]>(row.entity_ids, []),
-    source_document_ids: readJson<string[]>(row.source_document_ids, []),
-    affected_company_ids: readJson<string[]>(row.affected_company_ids, []),
-    research_questions: readJson<string[]>(row.research_questions, []),
-    metadata: readJson<Record<string, unknown>>(row.metadata, {}),
-    llm_provenance: readJson<LlmProvenance>(row.llm_provenance, {}),
+    entity_ids: arr<string>(row.entity_ids),
+    source_document_ids: arr<string>(row.source_document_ids),
+    affected_company_ids: arr<string>(row.affected_company_ids),
+    research_questions: arr<string>(row.research_questions),
+    metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : {},
+    llm_provenance:
+      row.llm_provenance && typeof row.llm_provenance === 'object'
+        ? (row.llm_provenance as LlmProvenance)
+        : {},
     created_at: row.created_at,
   };
 }
 
-export function listSignals(db: ResearchDb, opts: { limit?: number } = {}): Signal[] {
+export async function listSignals(ctx: ResearchCtx, opts: { limit?: number } = {}): Promise<Signal[]> {
   const limit = Math.min(Math.max(opts.limit ?? 500, 1), 2000);
-  return db
-    .prepare(`select * from signals order by created_at desc limit ?`)
-    .all(limit)
-    .map(rowToSignal);
+  const { data, error } = await ctx.supabase
+    .from(TABLE)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as any[]).map(rowToSignal);
 }
 
-export function getSignal(db: ResearchDb, id: string): Signal | null {
-  const row = db.prepare(`select * from signals where id = ?`).get(id);
-  return row ? rowToSignal(row) : null;
+export async function getSignal(ctx: ResearchCtx, id: string): Promise<Signal | null> {
+  if (!isUuid(id)) return null;
+  const { data, error } = await ctx.supabase
+    .from(TABLE)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? rowToSignal(data) : null;
 }
 
 /** Signals created on or after the given ISO timestamp (newest first). */
-export function listSignalsSince(db: ResearchDb, sinceIso: string): Signal[] {
-  return db
-    .prepare(`select * from signals where created_at >= ? order by created_at desc`)
-    .all(sinceIso)
-    .map(rowToSignal);
+export async function listSignalsSince(ctx: ResearchCtx, sinceIso: string): Promise<Signal[]> {
+  const { data, error } = await ctx.supabase
+    .from(TABLE)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .gte('created_at', sinceIso)
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as any[]).map(rowToSignal);
 }
 
 const PENDING_BATCH_LIMIT = 20;
 
 /**
- * Sources not yet cited by any signal (small data volume — the json_each
- * anti-join from the plan is plenty). Capped at 20 per batch.
+ * Sources not yet cited by any signal. Small data volume — the cited-id set is
+ * built client-side from signals.source_document_ids (the SQLite json_each
+ * anti-join equivalent). Capped at 20 per batch, oldest first.
  */
-export function listPendingSources(
-  db: ResearchDb,
+export async function listPendingSources(
+  ctx: ResearchCtx,
   limit: number = PENDING_BATCH_LIMIT,
-): SourceDocument[] {
-  const rows: any[] = db
-    .prepare(
-      `select * from source_documents
-       where id not in (select je.value from signals s, json_each(s.source_document_ids) je)
-       order by ingested_at asc
-       limit ?`,
-    )
-    .all(limit);
-  return rows.map((row) => ({
-    ...row,
-    entity_ids: readJson<string[]>(row.entity_ids, []),
-  })) as SourceDocument[];
+): Promise<SourceDocument[]> {
+  const { data: sigRows, error: sigErr } = await ctx.supabase
+    .from(TABLE)
+    .select('source_document_ids')
+    .eq('user_id', ctx.userId);
+  if (sigErr) throw new Error(sigErr.message);
+  const cited = new Set<string>(
+    ((sigRows ?? []) as any[]).flatMap((r) => arr<string>(r.source_document_ids)),
+  );
+  const { data, error } = await ctx.supabase
+    .from(SOURCES)
+    .select('*')
+    .eq('user_id', ctx.userId)
+    .order('ingested_at', { ascending: true });
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as any[])
+    .filter((row) => !cited.has(row.id))
+    .slice(0, limit)
+    .map(rowToSource);
 }
 
 // ---------------------------------------------------------------------------
@@ -144,10 +175,10 @@ export interface ExtractSignalsResult {
  * problems (Phase 1 convention).
  */
 export async function extractSignals(
-  db: ResearchDb,
+  ctx: ResearchCtx,
   llm: LlmFn = defaultLlm,
 ): Promise<ExtractSignalsResult> {
-  const sources = listPendingSources(db);
+  const sources = await listPendingSources(ctx);
   if (sources.length === 0) {
     return {
       created: [], dropped: [], sourcesProcessed: 0, skippedSources: 0,
@@ -155,7 +186,7 @@ export async function extractSignals(
     };
   }
 
-  const entities = listEntities(db);
+  const entities = await listEntities(ctx);
   const prompt = buildSignalPrompt(sources, entities);
 
   let content: string;
@@ -194,38 +225,33 @@ export async function extractSignals(
   };
 
   const created: Signal[] = [];
-  const insert = db.prepare(
-    `insert into signals
-       (id, title, summary, signal_type, direction, confidence, entity_ids,
-        source_document_ids, affected_company_ids, research_questions,
-        metadata, llm_provenance, created_at)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  );
   for (const draft of drafts) {
     const id = crypto.randomUUID();
     const row = draftToRow(draft, entities, companies);
-    insert.run(
+    const { error } = await ctx.supabase.from(TABLE).insert({
       id,
-      draft.title,
-      draft.summary,
-      draft.signal_type,
-      draft.direction,
-      draft.confidence,
-      writeJson(row.entity_ids),
-      writeJson(draft.source_ids),
-      writeJson(row.affected_company_ids),
-      writeJson(draft.research_questions),
-      writeJson(row.metadata),
-      writeJson(provenance),
-      now,
-    );
-    created.push(getSignal(db, id)!);
+      user_id: ctx.userId,
+      title: draft.title,
+      summary: draft.summary,
+      signal_type: draft.signal_type,
+      direction: draft.direction,
+      confidence: draft.confidence,
+      entity_ids: row.entity_ids,
+      source_document_ids: draft.source_ids,
+      affected_company_ids: row.affected_company_ids,
+      research_questions: draft.research_questions,
+      metadata: row.metadata,
+      llm_provenance: provenance,
+      created_at: now,
+    });
+    if (error) throw new Error(error.message);
+    created.push((await getSignal(ctx, id))!);
   }
 
   const citedIds = new Set(created.flatMap((s) => s.source_document_ids));
-  const skippedSources = sources.filter((s: any) => !citedIds.has(s.id)).length;
+  const skippedSources = sources.filter((s) => !citedIds.has(s.id)).length;
 
-  logAudit(db, 'signal.extract', null, {
+  await audit(ctx, 'signal.extract', null, {
     created: created.length,
     created_ids: created.map((s) => s.id),
     dropped,

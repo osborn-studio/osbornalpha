@@ -2,8 +2,13 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { openTestDb } from '../db';
+import { makeMockCtx, type MockStore } from '../test-support';
+import type { ResearchCtx } from '../store';
 import { parseCardMarkdown, ingestRadarDay } from './github-radar';
+
+function newCtx(): { ctx: ResearchCtx; store: MockStore } {
+  return makeMockCtx() as unknown as { ctx: ResearchCtx; store: MockStore };
+}
 
 // ---------------------------------------------------------------------------
 // Real radar cards from github-research-agent/reports/2026-07-04/cards/,
@@ -143,72 +148,64 @@ function makeDayDir(): string {
 }
 
 describe('ingestRadarDay', () => {
-  it('ingests the report + cards above the relevance threshold', () => {
-    const db = openTestDb();
-    const result = ingestRadarDay(db, makeDayDir());
+  it('ingests the report + cards above the relevance threshold', async () => {
+    const { ctx, store } = newCtx();
+    const result = await ingestRadarDay(ctx, makeDayDir());
     // report.md + gbrain (9) + ords (6, = default minRelevance 6); libarchive (0) skipped.
     expect(result.day).toBe('2026-07-04');
     expect(result.inserted).toBe(3);
     expect(result.duplicates).toBe(0);
     expect(result.skippedLowRelevance).toBe(1);
 
-    const sources = db.prepare(`select * from source_documents order by title`).all();
+    const sources = [...store.rows('research_source_documents')].sort((a, b) => (a.title < b.title ? -1 : 1));
     expect(sources).toHaveLength(3);
     const report = sources.find((s: any) => s.title === 'GitHub Radar 日报 2026-07-04');
     expect(report).toBeTruthy();
-    expect(report.source_type).toBe('GITHUB_RADAR');
-    expect(report.published_at).toBe('2026-07-04');
-    expect(report.trust_level).toBe('MEDIUM');
+    expect(report!.source_type).toBe('GITHUB_RADAR');
+    expect(report!.published_at).toBe('2026-07-04');
+    expect(report!.trust_level).toBe('MEDIUM');
 
-    const gbrain = sources.find((s: any) => s.title.startsWith('Radar: garrytan/gbrain'));
+    const gbrain = sources.find((s: any) => s.title.startsWith('Radar: garrytan/gbrain'))!;
     expect(gbrain.title).toBe(
       'Radar: garrytan/gbrain — Postgres-native personal knowledge brain with autonomous ingestion and hybrid RAG',
     );
     expect(gbrain.url).toBe('https://github.com/garrytan/gbrain');
     // Card raw_text keeps the full markdown (frontmatter preserved verbatim).
     expect(gbrain.raw_text).toContain('relevance: 9');
-    db.close();
   });
 
-  it('respects a custom minRelevance', () => {
-    const db = openTestDb();
-    const result = ingestRadarDay(db, makeDayDir(), { minRelevance: 8 });
+  it('respects a custom minRelevance', async () => {
+    const { ctx } = newCtx();
+    const result = await ingestRadarDay(ctx, makeDayDir(), { minRelevance: 8 });
     // report + gbrain only; ords (6) and libarchive (0) below threshold.
     expect(result.inserted).toBe(2);
     expect(result.skippedLowRelevance).toBe(2);
-    db.close();
   });
 
-  it('is idempotent across re-runs via content_hash', () => {
-    const db = openTestDb();
+  it('is idempotent across re-runs via content_hash', async () => {
+    const { ctx, store } = newCtx();
     const dayDir = makeDayDir();
-    const first = ingestRadarDay(db, dayDir);
+    const first = await ingestRadarDay(ctx, dayDir);
     expect(first.inserted).toBe(3);
-    const second = ingestRadarDay(db, dayDir);
+    const second = await ingestRadarDay(ctx, dayDir);
     expect(second.inserted).toBe(0);
     expect(second.duplicates).toBe(3);
-    const count = db.prepare(`select count(*) c from source_documents`).get() as { c: number };
-    expect(count.c).toBe(3);
-    db.close();
+    expect(store.count('research_source_documents')).toBe(3);
   });
 
-  it('writes an audit_log entry with day + counts', () => {
-    const db = openTestDb();
-    ingestRadarDay(db, makeDayDir());
-    const rows = db
-      .prepare(`select * from audit_log where action = 'source.ingest_radar'`)
-      .all();
+  it('writes an audit_log entry with day + counts', async () => {
+    const { ctx, store } = newCtx();
+    await ingestRadarDay(ctx, makeDayDir());
+    const rows = store.rows('research_audit_log').filter((a) => a.action === 'source.ingest_radar');
     expect(rows).toHaveLength(1);
-    const detail = JSON.parse(rows[0].detail);
+    const detail = rows[0].detail;
     expect(detail.day).toBe('2026-07-04');
     expect(detail.inserted).toBe(3);
     expect(detail.duplicates).toBe(0);
-    db.close();
   });
 
-  it('throws a validation error for a missing day directory', () => {
-    const db = openTestDb();
-    expect(() => ingestRadarDay(db, '/nonexistent/2026-01-01')).toThrow(/day directory/i);
-    db.close();
+  it('throws a validation error for a missing day directory', async () => {
+    const { ctx } = newCtx();
+    await expect(ingestRadarDay(ctx, '/nonexistent/2026-01-01')).rejects.toThrow(/day directory/i);
   });
 });

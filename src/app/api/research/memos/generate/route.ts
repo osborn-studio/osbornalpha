@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { assertEnabled, getDb } from '@/lib/research/db';
+import { requireResearchUser } from '@/lib/research/store';
 import { generateMemo, MemoError } from '@/lib/research/memos';
 import { researchError } from '@/lib/research/api';
 
@@ -9,7 +9,7 @@ export const maxDuration = 120;
 
 export async function POST(req: Request) {
   try {
-    assertEnabled();
+    const ctx = await requireResearchUser();
     const body = await req.json().catch(() => ({}));
     if (typeof body.entity_id !== 'string' || !body.entity_id) {
       return NextResponse.json(
@@ -17,8 +17,7 @@ export async function POST(req: Request) {
         { status: 400 },
       );
     }
-    const db = getDb();
-    const result = await generateMemo(db, {
+    const result = await generateMemo(ctx, {
       entity_id: body.entity_id,
       question: typeof body.question === 'string' ? body.question : undefined,
     });

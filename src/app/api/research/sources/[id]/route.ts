@@ -1,15 +1,14 @@
 import { NextResponse } from 'next/server';
-import { assertEnabled, getDb } from '@/lib/research/db';
+import { requireResearchUser, isUuid } from '@/lib/research/store';
 import { getSource } from '@/lib/research/sources';
 import { withResearch } from '@/lib/research/api';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
-  return withResearch(() => {
-    assertEnabled();
-    const db = getDb();
-    const source = getSource(db, params.id);
+  return withResearch(async () => {
+    const ctx = await requireResearchUser();
+    const source = isUuid(params.id) ? await getSource(ctx, params.id) : null;
     if (!source) {
       return NextResponse.json(
         { error: { code: 'NOT_FOUND', message: 'source not found' } },

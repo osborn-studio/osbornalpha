@@ -21,7 +21,7 @@ export default function ResearchSourcesPage() {
 
   const load = useCallback(async () => {
     const res = await fetch('/api/research/sources');
-    if (res.status === 501) { setDisabled(true); return; }
+    if (res.status === 401 || res.status === 403) { setDisabled(true); return; }
     const data = await res.json().catch(() => ({ sources: [] }));
     setSources(data.sources ?? []);
   }, []);
@@ -62,7 +62,7 @@ export default function ResearchSourcesPage() {
   if (disabled) {
     return (
       <div className="rounded-lg border border-amber-300 bg-amber-50 p-6 text-sm text-amber-900">
-        Research OS 为本地专用模式，未启用。请在本地 .env.local 设置 RESEARCH_OS_ENABLED=1 后重启 dev server。
+        Research OS 该模块暂未开放——需以 admin 角色登录后访问（个人云工具规格）。
       </div>
     );
   }
