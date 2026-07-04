@@ -1,1 +1,179 @@
-{}
+{
+  "nav": {
+    "cockpit": "驾驶舱",
+    "decisions": "决策日志",
+    "positions": "持仓明细",
+    "review": "复盘"
+  },
+  "common": {
+    "loading": "加载中…",
+    "cancel": "取消",
+    "delete": "删除",
+    "deleting": "删除中…"
+  },
+  "direction": {
+    "buy": "买入",
+    "sell": "卖出"
+  },
+  "action": {
+    "buy": "买入",
+    "sell": "卖出",
+    "trim": "减仓",
+    "add": "加仓",
+    "hold": "持有",
+    "pass": "观望"
+  },
+  "decisionStatus": {
+    "open": "待执行",
+    "executed": "已执行",
+    "expired": "已过期",
+    "cancelled": "已取消"
+  },
+  "cockpit": {
+    "emptyWatchlist": "股票池为空——先到 📋 股票池 添加观察标的"
+  },
+  "positionsRail": {
+    "positionsTitle": "持仓 · {count}",
+    "emptyPositions": "暂无持仓——从决策条开始记录你的第一笔",
+    "totalUnrealized": "总浮盈",
+    "totalMarketValue": "总市值",
+    "totalRealized": "已实现",
+    "watchlistTitle": "股票池 · 观察中"
+  },
+  "focusPanel": {
+    "positionCost": "持仓成本",
+    "unrealized": "浮盈",
+    "targetPrice": "目标价",
+    "stopLoss": "止损",
+    "confidence": "信心度",
+    "openDecisionPrefix": "📌 未平决策：",
+    "confidenceInline": " · 信心 {pct}%",
+    "thesisInline": " · 「{thesis}」",
+    "distanceToTarget": "距目标价 {pct}"
+  },
+  "decisionForm": {
+    "label": "决策条",
+    "thesis": "理由",
+    "thesisPlaceholder": "一句话理由",
+    "confidence": "信心 {pct}%",
+    "targetPrice": "目标价",
+    "stopLoss": "止损",
+    "submitting": "记录中…",
+    "submit": "记录决策"
+  },
+  "tradeForm": {
+    "label": "成交录入",
+    "buyTrade": "买入成交",
+    "sellTrade": "卖出成交",
+    "willLinkOpenDecision": "将关联未平决策",
+    "price": "价格",
+    "quantity": "数量",
+    "fee": "费用",
+    "executedAt": "成交时间（默认现在）",
+    "submitting": "提交中…",
+    "submit": "确认成交",
+    "cancel": "取消"
+  },
+  "signalsRail": {
+    "signalsTitle": "信号",
+    "signalsTitleWithTicker": "信号 · {ticker}",
+    "loading": "加载中…",
+    "noRecentSignals": "近期无信号",
+    "biasBull": "多",
+    "biasBear": "空",
+    "biasNeutral": "中",
+    "hitRateSummary": "5日胜率 {hitRate}% · 均5日 {avgForward5d}%",
+    "openDecisionsTitle": "未平决策 · {count}",
+    "noOpenDecisions": "暂无未平决策",
+    "copilotHint": "🎩 按 ⌘K 呼出 Copilot 分析当前标的"
+  },
+  "decisions": {
+    "filterAll": "全部",
+    "loading": "加载中…",
+    "empty": "暂无决策记录",
+    "title": "决策日志 · {count}",
+    "columns": {
+      "date": "日期",
+      "ticker": "标的",
+      "action": "动作",
+      "thesis": "理由",
+      "confidence": "信心",
+      "targetPrice": "目标价",
+      "stopLoss": "止损",
+      "status": "状态"
+    },
+    "cancel": "取消"
+  },
+  "positions": {
+    "overviewTitle": "持仓概览",
+    "positionCount": "持仓数",
+    "realizedPnl": "已实现盈亏",
+    "loading": "加载中…",
+    "emptyPositions": "暂无持仓记录",
+    "positionsTitle": "持仓明细 · {count}",
+    "positionColumns": {
+      "ticker": "标的",
+      "shares": "股数",
+      "avgCost": "成本价",
+      "realizedPnl": "已实现盈亏",
+      "currency": "币种",
+      "openedAt": "建仓日",
+      "closedAt": "平仓日"
+    },
+    "emptyTrades": "暂无成交记录",
+    "tradesTitle": "成交流水 · {count}",
+    "tradeColumns": {
+      "executedAt": "成交时间",
+      "ticker": "标的",
+      "direction": "方向",
+      "price": "价格",
+      "quantity": "数量",
+      "fee": "费用",
+      "linkedDecision": "关联决策",
+      "actions": "操作"
+    },
+    "delete": "删除",
+    "deleting": "删除中…",
+    "reentryHint": "录错了？删除该笔成交后在驾驶舱重新录入（可指定成交时间）；持仓由成交流水自动重算。"
+  },
+  "review": {
+    "loading": "加载中…",
+    "empty": "暂无可评分决策——决策录入满 5 个交易日后自动出现评分",
+    "refreshing": "正在刷新评分…",
+    "overviewTitle": "复盘概览",
+    "scored": "已评分",
+    "hitRate": "胜率",
+    "avg5d": "均 5d",
+    "avg20d": "均 20d",
+    "calibrationTitle": "信心校准",
+    "calibrationColumns": {
+      "bucket": "信心区间",
+      "count": "决策数",
+      "hitRate": "命中率"
+    },
+    "detailTitle": "评分明细",
+    "detailColumns": {
+      "date": "日期",
+      "ticker": "标的",
+      "action": "动作",
+      "confidence": "信心",
+      "d5": "5d",
+      "d20": "20d",
+      "d60": "60d",
+      "hit": "命中",
+      "score": "评分"
+    },
+    "vsSignalTitle": "决策 vs 信号",
+    "vsSignalEmpty": "暂无可评分决策，无法对照信号胜率",
+    "myOverallHitRate": "我的总胜率",
+    "signalAvgHitRate": "信号平均胜率",
+    "copilotHitRate": "Copilot决策胜率{countSuffix}",
+    "vsSignalColumns": {
+      "ticker": "标的",
+      "scoredCount": "已评分决策数",
+      "myHitRate": "我的决策命中率",
+      "signalHitRate5d": "信号5日胜率",
+      "diff": "差值"
+    }
+  }
+}

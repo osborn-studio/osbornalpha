@@ -1,1 +1,117 @@
-{}
+{
+  "portal": {
+    "heading": "🧰 Tools",
+    "subheading": "Skill hub, backtesting, valuation workbench, and primary market research entry points.",
+    "cards": {
+      "skills": {
+        "title": "Skill Hub",
+        "desc": "Copilot's analysis methods + tool list."
+      },
+      "backtest": {
+        "title": "Backtest Lab",
+        "desc": "Batch-backtest watchlist signal hit rate and forward returns."
+      },
+      "dcf": {
+        "title": "DCF Workbench",
+        "desc": "A standalone discounted cash flow valuation desk — search any ticker to use it."
+      },
+      "primary": {
+        "title": "Primary Market",
+        "desc": "IC Memo / PE Portfolio / LP Tracking outline generator."
+      }
+    },
+    "enter": "Enter →",
+    "recentOutputs": "📁 Recent Tool Output",
+    "loadFailed": "Failed to load: {error}",
+    "loading": "Loading…",
+    "empty": "No output yet. Run an analysis from an entry point above and reports will be archived here automatically."
+  },
+  "dcf": {
+    "heading": "🧮 DCF Workbench",
+    "subheading": "Search or enter a ticker directly to run a standalone discounted cash flow valuation.",
+    "pickStock": "🔎 Pick a Stock",
+    "searchPlaceholder": "Ticker / name (e.g. Perfect World / AAPL / 600519), press Enter to use directly",
+    "searching": "Searching…",
+    "noMatch": "No matches. Press Enter to query directly with what you typed.",
+    "emptyState": "Pick a stock and its DCF valuation will show up here."
+  },
+  "primary": {
+    "heading": "🏛️ Primary Market Workbench",
+    "subheading": "A research skeleton — use alongside external research. After generating a deterministic outline, fill in your own research findings; the result can be saved to Archive.",
+    "icMemo": {
+      "icon": "📋",
+      "title": "IC Memo Outline",
+      "desc": "8-section standard investment committee memo skeleton: Overview → Deal Structure → Industry → Target Analysis → Financials & Valuation → Highlights & Synergy → Risks → Recommendation & Exit.",
+      "fields": {
+        "target": {
+          "label": "Target Company / Project Name",
+          "placeholder": "e.g. Sunniwell Tech"
+        },
+        "dealContext": {
+          "label": "Known Deal Context / Terms (optional)",
+          "placeholder": "e.g. Cash acquisition, valued at $1B"
+        }
+      }
+    },
+    "pePortfolio": {
+      "icon": "📊",
+      "title": "PE Portfolio Outline",
+      "desc": "3-section fund portfolio skeleton: Fund & Portfolio Overview → Key Portfolio Company Detail → Recent Activity & Exits.",
+      "fields": {
+        "fund": {
+          "label": "Fund / Institution Name",
+          "placeholder": "e.g. Acme Ventures Fund"
+        }
+      }
+    },
+    "lpTracking": {
+      "icon": "🕵️",
+      "title": "LP Tracking Outline",
+      "desc": "One section per tracked entity, covering five kinds of activity: new investments / market expansion / divestments & exits / investment outcomes / public statements. Up to 20 entities.",
+      "fields": {
+        "names": {
+          "label": "Tracked Entities (one per line, up to 20)",
+          "placeholder": "Institution A\nInstitution B"
+        },
+        "windowLabel": {
+          "label": "Tracking Window (optional, defaults to \"last month\")",
+          "placeholder": "e.g. last week"
+        }
+      }
+    },
+    "archive": "📁 Primary Market Archive",
+    "loadFailed": "Failed to load: {error}",
+    "loading": "Loading…",
+    "empty": "No archived items yet. Generate an outline and click \"Save to Archive\" — it will show up here."
+  },
+  "wizard": {
+    "generate": "Generate Outline",
+    "generateError": "⚠️ {error}",
+    "saving": "Saving…",
+    "save": "Save to Archive",
+    "saved": "✅ Saved to Archive{idSuffix}",
+    "saveError": "⚠️ Save failed: {error}"
+  },
+  "skills": {
+    "metaTitle": "Skill Hub",
+    "heading": "🧰 Skill Hub",
+    "subheading": "Copilot's capability list: executable analysis methods + the tools it can call.",
+    "methodsHeading": "🪜 Methods",
+    "run": "Run →",
+    "toolsHeading": "🔧 Tools",
+    "aShareBadge": "A-Share",
+    "footerSummary": "{toolCount} tools · {methodCount} methods in total. Tools are called by Copilot as needed during reasoning.",
+    "categories": {
+      "quotes": "Quotes",
+      "research": "Research",
+      "valuation": "Valuation",
+      "funds": "Fund Flows"
+    }
+  },
+  "artifacts": {
+    "heading": "📁 My Research Archive",
+    "loadFailed": "Failed to load: {error}",
+    "loading": "Loading…",
+    "empty": "No archived items yet. Run a deep research method and reports will be archived here automatically."
+  }
+}

@@ -1,1 +1,38 @@
-{}
+{
+  "page": {
+    "title": "Today",
+    "loading": "Loading…"
+  },
+  "radar": {
+    "emptyPrefix": "Your watchlist is empty. Go to ",
+    "emptyLink": "📋 Watchlist",
+    "emptySuffix": " to add some tickers.",
+    "loading": "Loading radar…",
+    "loadFailed": "Failed to load",
+    "whiteCollapsed": "⚪ Calm {count} (expand)"
+  },
+  "portfolio": {
+    "title": "Holdings at a Glance",
+    "loading": "Loading…",
+    "unrealized": "Total Unrealized P&L",
+    "unrealizedPct": "Unrealized %",
+    "marketValue": "Market Value",
+    "openCount": "Holdings",
+    "openDecisions": "{count} open decisions",
+    "viewAll": "View Holdings →"
+  },
+  "macro": {
+    "title": "Macro at a Glance",
+    "sse": "SSE",
+    "hsi": "HSI",
+    "nasdaq": "Nasdaq",
+    "us10y": "US 10Y",
+    "dxy": "DXY"
+  },
+  "brief": {
+    "title": "AI Brief",
+    "quotaExceeded": "Today's platform quota has been used up",
+    "loadFailed": "Failed to load brief",
+    "viewFull": "View Full Brief →"
+  }
+}

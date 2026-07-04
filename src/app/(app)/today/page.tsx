@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
 import { usePortfolio } from '@/lib/hooks/usePortfolio';
 import { uniqueWatchlistTickers } from '@/lib/watchlist/store';
@@ -11,6 +12,7 @@ import { MacroGlance } from '@/components/today/MacroGlance';
 import { BriefGlance } from '@/components/today/BriefGlance';
 
 export default function TodayPage() {
+  const t = useTranslations('today');
   const { groups, hydrated } = useWatchlist();
   const { data: portfolio, loading: portfolioLoading } = usePortfolio();
   const [phaseLabel, setPhaseLabel] = useState(() => aShareMarketPhase(new Date()).label);
@@ -35,7 +37,7 @@ export default function TodayPage() {
   return (
     <div>
       <div className="mb-3">
-        <h1 className="text-xl font-bold">今日</h1>
+        <h1 className="text-xl font-bold">{t('page.title')}</h1>
         <div className="mt-0.5 text-[11px] text-text-dim">{phaseLabel}</div>
       </div>
 
@@ -45,7 +47,7 @@ export default function TodayPage() {
           {hydrated && !portfolioLoading ? (
             <RadarStream tickers={allTickers} />
           ) : (
-            <p className="text-xs text-[var(--text-dim)]">加载中…</p>
+            <p className="text-xs text-[var(--text-dim)]">{t('page.loading')}</p>
           )}
         </div>
         <div className="space-y-3">

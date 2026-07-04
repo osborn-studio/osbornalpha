@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui';
 import { CopilotClient } from '@/app/(app)/copilot/CopilotClient';
 
@@ -20,6 +21,7 @@ function tickerFromPathname(pathname: string | null): string | undefined {
 
 /** Global Copilot overlay: floating action button + ⌘K drawer. */
 export function CopilotFab() {
+  const t = useTranslations('market.fab');
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
   const ticker = tickerFromPathname(pathname);
@@ -40,7 +42,7 @@ export function CopilotFab() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        aria-label="打开 Copilot"
+        aria-label={t('openAria')}
         className="fixed bottom-20 right-4 z-50 flex h-12 w-12 items-center justify-center rounded-full border border-accent-dim bg-bg-elevated text-2xl shadow-lg transition-transform hover:scale-105"
       >
         🎩
@@ -50,16 +52,16 @@ export function CopilotFab() {
         <div className="fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-[var(--border)] bg-[var(--bg-elevated)] shadow-2xl sm:w-[420px]">
           <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
             <div className="flex items-center gap-2 text-sm font-semibold">
-              <span>🎩 Copilot</span>
+              <span>{t('title')}</span>
               <Link href="/copilot" className="text-xs font-normal text-accent hover:underline">
-                展开
+                {t('expand')}
               </Link>
             </div>
             <Button
               variant="ghost"
               size="sm"
               onClick={() => setOpen(false)}
-              aria-label="关闭 Copilot"
+              aria-label={t('closeAria')}
             >
               ✕
             </Button>

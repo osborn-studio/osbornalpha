@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { isSupabaseConfigured } from '@/lib/supabase/client';
 import { useToast } from '@/components/Toast';
 
@@ -22,6 +23,7 @@ function formatDate(iso: string): string {
 // 30-day pass vs. monthly auto-renewing subscription), and shows a success
 // banner when redirected back with ?upgraded=1.
 export function UpgradeCard() {
+  const t = useTranslations('components.upgradeCard');
   const { show } = useToast();
   const [data, setData] = useState<UsageResp | null>(null);
   const [busy, setBusy] = useState<CheckoutMode | null>(null);
@@ -47,13 +49,13 @@ export function UpgradeCard() {
       });
       const body = await resp.json().catch(() => ({}));
       if (!resp.ok || !body.url) {
-        show(`✗ ${body.error || '暂时无法发起支付'}`);
+        show(`✗ ${body.error || t('checkoutFailed')}`);
         setBusy(null);
         return;
       }
       window.location.href = body.url;
     } catch (e: any) {
-      show(`✗ ${e?.message || '暂时无法发起支付'}`);
+      show(`✗ ${e?.message || t('checkoutFailed')}`);
       setBusy(null);
     }
   }
@@ -66,20 +68,20 @@ export function UpgradeCard() {
     <div id="upgrade" className="space-y-3 text-sm">
       {justUpgraded && (
         <div className="rounded-md border border-up/40 bg-up/10 px-3 py-2 text-xs text-up">
-          ✅ 支付成功！Pro 权益已生效（如未立即显示，请刷新页面）。
+          ✅ {t('upgradeSuccess')}
         </div>
       )}
 
       <div className="flex items-center justify-between">
         <div>
           <div className="font-semibold">
-            当前套餐：{isPro ? 'Pro' : 'Free'}
+            {t('currentPlan')}：{isPro ? 'Pro' : 'Free'}
           </div>
           {isPro && data?.plan_expires_at && (
-            <div className="mt-0.5 text-[11px] text-text-dim">到期日：{formatDate(data.plan_expires_at)}</div>
+            <div className="mt-0.5 text-[11px] text-text-dim">{t('expiresOn')}：{formatDate(data.plan_expires_at)}</div>
           )}
           {isPro && !data?.plan_expires_at && (
-            <div className="mt-0.5 text-[11px] text-text-dim">按月自动续费中</div>
+            <div className="mt-0.5 text-[11px] text-text-dim">{t('autoRenewing')}</div>
           )}
         </div>
       </div>
@@ -90,18 +92,18 @@ export function UpgradeCard() {
           disabled={busy !== null}
           className="rounded-md bg-bg-card border border-border px-3 py-2 text-left text-xs disabled:opacity-50"
         >
-          <div className="font-semibold">时长卡 · 30 天</div>
-          <div className="mt-0.5 text-text-dim">支付宝 / 微信 / 银行卡，不自动续费</div>
-          {busy === 'pass' && <div className="mt-1 text-accent-dim">跳转支付中…</div>}
+          <div className="font-semibold">{t('timePass30d')}</div>
+          <div className="mt-0.5 text-text-dim">{t('timePassDescription')}</div>
+          {busy === 'pass' && <div className="mt-1 text-accent-dim">{t('redirectingToCheckout')}</div>}
         </button>
         <button
           onClick={() => checkout('subscription')}
           disabled={busy !== null}
           className="rounded-md bg-accent-dim px-3 py-2 text-left text-xs text-white disabled:opacity-50"
         >
-          <div className="font-semibold">连续包月</div>
-          <div className="mt-0.5 opacity-90">仅支持银行卡，自动续费可随时取消</div>
-          {busy === 'subscription' && <div className="mt-1">跳转支付中…</div>}
+          <div className="font-semibold">{t('monthlySubscription')}</div>
+          <div className="mt-0.5 opacity-90">{t('monthlySubscriptionDescription')}</div>
+          {busy === 'subscription' && <div className="mt-1">{t('redirectingToCheckout')}</div>}
         </button>
       </div>
     </div>

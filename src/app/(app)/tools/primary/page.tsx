@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { OutlineWizard } from '@/components/tools/OutlineWizard';
 import { icMemoOutline } from '@/lib/skills/primary/ic-memo';
 import { pePortfolioOutline } from '@/lib/skills/primary/pe-portfolio';
@@ -20,6 +21,7 @@ interface Artifact {
 const SKILL_IDS = ['ic-memo', 'pe-portfolio', 'lp-tracking'] as const;
 
 export default function PrimaryMarketWorkbenchPage() {
+  const t = useTranslations('tools.primary');
   const [artifacts, setArtifacts] = useState<Artifact[] | null>(null);
   const [err, setErr] = useState('');
   const [openId, setOpenId] = useState<string | null>(null);
@@ -44,43 +46,43 @@ export default function PrimaryMarketWorkbenchPage() {
 
   return (
     <>
-      <h1 className="mb-1 text-xl font-bold">🏛️ 一级市场工作台</h1>
+      <h1 className="mb-1 text-xl font-bold">{t('heading')}</h1>
       <p className="mb-4 text-sm text-text-dim">
-        研究骨架——配合外部检索使用。生成确定性大纲后自行补充检索结果，产出可存入档案。
+        {t('subheading')}
       </p>
 
       <div className="space-y-3">
         <OutlineWizard
           icon="📋"
-          title="IC Memo 大纲"
-          desc="8 节标准投资上会报告骨架：项目概述 → 交易结构 → 行业 → 标的分析 → 财务估值 → 亮点协同 → 风险 → 建议与退出。"
+          title={t('icMemo.title')}
+          desc={t('icMemo.desc')}
           skillId="ic-memo"
           fields={[
-            { key: 'target', label: '标的公司 / 项目名称', placeholder: '如：隼鹰科技', required: true },
-            { key: 'dealContext', label: '已知交易背景/条款（可选）', placeholder: '如：现金收购，估值 10 亿', textarea: true },
+            { key: 'target', label: t('icMemo.fields.target.label'), placeholder: t('icMemo.fields.target.placeholder'), required: true },
+            { key: 'dealContext', label: t('icMemo.fields.dealContext.label'), placeholder: t('icMemo.fields.dealContext.placeholder'), textarea: true },
           ]}
           generate={(v) => icMemoOutline(v.target, v.dealContext)}
         />
 
         <OutlineWizard
           icon="📊"
-          title="PE Portfolio 大纲"
-          desc="3 节基金组合骨架：基金与组合概览 → 主要被投项目明细 → 近期动态与退出。"
+          title={t('pePortfolio.title')}
+          desc={t('pePortfolio.desc')}
           skillId="pe-portfolio"
           fields={[
-            { key: 'fund', label: '基金 / 机构名称', placeholder: '如：某某创投基金', required: true },
+            { key: 'fund', label: t('pePortfolio.fields.fund.label'), placeholder: t('pePortfolio.fields.fund.placeholder'), required: true },
           ]}
           generate={(v) => pePortfolioOutline(v.fund)}
         />
 
         <OutlineWizard
           icon="🕵️"
-          title="LP 追踪大纲"
-          desc="每个追踪对象一节，覆盖新增投资/市场拓展/撤资退出/投资成果/对外表态五类动向。最多 20 个对象。"
+          title={t('lpTracking.title')}
+          desc={t('lpTracking.desc')}
           skillId="lp-tracking"
           fields={[
-            { key: 'names', label: '追踪对象（每行一个，最多 20 个）', placeholder: '机构A\n机构B', required: true, textarea: true },
-            { key: 'windowLabel', label: '追踪窗口（可选，默认「近一个月」）', placeholder: '如：近一周' },
+            { key: 'names', label: t('lpTracking.fields.names.label'), placeholder: t('lpTracking.fields.names.placeholder'), required: true, textarea: true },
+            { key: 'windowLabel', label: t('lpTracking.fields.windowLabel.label'), placeholder: t('lpTracking.fields.windowLabel.placeholder') },
           ]}
           generate={(v) =>
             lpTrackingOutline(
@@ -91,11 +93,11 @@ export default function PrimaryMarketWorkbenchPage() {
         />
       </div>
 
-      <Panel title="📁 一级市场档案" className="mt-4">
-        {err && <div className="text-xs text-down">加载失败：{err}</div>}
-        {!err && artifacts === null && <div className="text-xs text-text-muted">加载中…</div>}
+      <Panel title={t('archive')} className="mt-4">
+        {err && <div className="text-xs text-down">{t('loadFailed', { error: err })}</div>}
+        {!err && artifacts === null && <div className="text-xs text-text-muted">{t('loading')}</div>}
         {!err && artifacts !== null && artifacts.length === 0 && (
-          <div className="text-xs text-text-muted">还没有存档。生成大纲并「存入档案」后，会显示在这里。</div>
+          <div className="text-xs text-text-muted">{t('empty')}</div>
         )}
         {artifacts && artifacts.length > 0 && (
           <div className="space-y-1">
