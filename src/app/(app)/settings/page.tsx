@@ -97,47 +97,47 @@ export default function SettingsPage() {
   function save() {
     localStorage.setItem('tg-chat-id', tgChatId);
     localStorage.setItem('email-notif', String(emailNotif));
-    show('✓ 设置已保存到本地');
+    show(t('saveToast'));
   }
 
   return (
     <>
-      <h1 className="mb-3 text-xl font-bold">⚙️ 设置</h1>
+      <h1 className="mb-3 text-xl font-bold">{t('title')}</h1>
 
       <div className="card-base">
-        <div className="mb-3 text-sm font-semibold text-text-dim">👤 账号</div>
+        <div className="mb-3 text-sm font-semibold text-text-dim">{t('account.heading')}</div>
         <AccountSettings />
       </div>
 
       <div className="card-base">
-        <div className="mb-3 text-sm font-semibold text-text-dim">📊 今日用量</div>
+        <div className="mb-3 text-sm font-semibold text-text-dim">{t('usage.heading')}</div>
         <UsageToday />
       </div>
 
       <div className="card-base">
-        <div className="mb-3 text-sm font-semibold text-text-dim">⭐ 升级 Pro</div>
+        <div className="mb-3 text-sm font-semibold text-text-dim">{t('upgrade.heading')}</div>
         <UpgradeCard />
       </div>
 
       <div className="card-base">
-        <div className="mb-3 text-sm font-semibold text-text-dim">🤖 AI 模型</div>
+        <div className="mb-3 text-sm font-semibold text-text-dim">{t('llm.heading')}</div>
         <LlmSettings />
       </div>
 
       <div className="card-base">
-        <div className="mb-3 text-sm font-semibold text-text-dim">🌐 语言</div>
+        <div className="mb-3 text-sm font-semibold text-text-dim">{t('language.heading')}</div>
         <div className="flex gap-2">
           <button
             onClick={() => selectLanguage('zh')}
             className={`rounded px-4 py-1.5 text-sm ${language === 'zh' ? 'bg-accent-dim text-white' : 'bg-bg-card text-text-dim'}`}
           >
-            🇨🇳 中文
+            {t('language.zh')}
           </button>
           <button
             onClick={() => selectLanguage('en')}
             className={`rounded px-4 py-1.5 text-sm ${language === 'en' ? 'bg-accent-dim text-white' : 'bg-bg-card text-text-dim'}`}
           >
-            🇺🇸 English
+            {t('language.en')}
           </button>
         </div>
       </div>
@@ -158,44 +158,44 @@ export default function SettingsPage() {
       </div>
 
       <div className="card-base">
-        <div className="mb-3 text-sm font-semibold text-text-dim">📬 推送渠道</div>
+        <div className="mb-3 text-sm font-semibold text-text-dim">{t('channels.heading')}</div>
         <div className="mb-3">
           <label className="mb-1 block text-xs text-text-dim">Telegram Chat ID</label>
           <input
             type="text"
             value={tgChatId}
             onChange={(e) => setTgChatId(e.target.value)}
-            placeholder="例如 123456789（从 @userinfobot 获取）"
+            placeholder={t('channels.tgPlaceholder')}
             className="w-full"
           />
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
               onClick={async () => {
                 try {
-                  show('⏳ 测试发送中...');
+                  show(t('channels.tgSending'));
                   const resp = await fetch('/api/brief/send', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                       chatId: tgChatId || undefined,
-                      text: '🧪 *Sentinel 测试消息*\n\n如果你看到这条消息，说明 Telegram 推送配置成功！\n\nhttps://stock-monitor-nu.vercel.app/',
+                      text: t('channels.tgTestText'),
                     }),
                   });
                   const data = await resp.json();
-                  if (data.ok) show(`✅ 测试消息已发送（msg_id ${data.message_id}）`);
-                  else show(`✗ ${data.error || '发送失败'}`);
+                  if (data.ok) show(t('channels.tgTestSent', { id: data.message_id }));
+                  else show(`✗ ${data.error || t('channels.sendFailed')}`);
                 } catch (e: any) {
-                  show(`✗ ${e?.message || '发送失败'}`);
+                  show(`✗ ${e?.message || t('channels.sendFailed')}`);
                 }
               }}
               className="rounded bg-accent-dim px-3 py-1.5 text-xs text-white"
             >
-              ✉️ 发测试消息
+              {t('channels.tgTestButton')}
             </button>
             <button
               onClick={async () => {
                 try {
-                  show('⏳ 生成并发送今日简报中（约 10-20s）...');
+                  show(t('channels.tgBriefSending'));
                   const resp = await fetch('/api/brief/send', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -205,26 +205,26 @@ export default function SettingsPage() {
                     }),
                   });
                   const data = await resp.json();
-                  if (data.sent) show(`✅ 已发送 ${data.chunks_sent} 条消息`);
-                  else show(`✗ ${data.error || data.reason || '失败'}`);
+                  if (data.sent) show(t('channels.tgBriefSent', { count: data.chunks_sent }));
+                  else show(`✗ ${data.error || data.reason || t('channels.failed')}`);
                 } catch (e: any) {
-                  show(`✗ ${e?.message || '失败'}`);
+                  show(`✗ ${e?.message || t('channels.failed')}`);
                 }
               }}
               className="rounded bg-bg-card border border-border px-3 py-1.5 text-xs text-text-dim"
             >
-              🚀 立即生成并推送
+              {t('channels.tgBriefButton')}
             </button>
           </div>
           <div className="mt-2 text-[10px] text-text-muted">
-            提示：① 找 @BotFather 创建 bot 拿 token  ②  和 bot 说 hi  ③  从 @userinfobot 拿 chat_id  ④ 在 Vercel env 加 TELEGRAM_BOT_TOKEN
+            {t('channels.tgHint')}
           </div>
         </div>
         <div className="mt-4 border-t border-border pt-4">
-          <label className="mb-1 block text-xs text-text-dim">📧 Email 收件人</label>
+          <label className="mb-1 block text-xs text-text-dim">{t('channels.emailRecipientLabel')}</label>
           <input
             type="email"
-            placeholder="you@example.com（不填则用 EMAIL_TO env）"
+            placeholder={t('channels.emailPlaceholder')}
             id="email-to-input"
             className="w-full"
           />
@@ -233,33 +233,33 @@ export default function SettingsPage() {
               onClick={async () => {
                 const to = (document.getElementById('email-to-input') as HTMLInputElement)?.value || undefined;
                 try {
-                  show('⏳ 发送测试邮件中...');
+                  show(t('channels.emailSending'));
                   const resp = await fetch('/api/brief/send', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                       to,
                       channels: ['email'],
-                      subject: 'Sentinel · 邮件测试',
-                      text: '🧪 Sentinel email 测试\n\n如果你看到这封邮件，说明 Resend 推送配置成功！\n\nhttps://stock-monitor-nu.vercel.app/',
+                      subject: t('channels.emailTestSubject'),
+                      text: t('channels.emailTestText'),
                     }),
                   });
                   const data = await resp.json();
-                  if (data.channels?.email?.ok) show(`✅ 邮件已发送 (id ${data.channels.email.id?.slice(0, 8)}...)`);
-                  else show(`✗ ${data.channels?.email?.error || data.channels?.email?.skipped || '发送失败'}`);
+                  if (data.channels?.email?.ok) show(t('channels.emailSent', { id: data.channels.email.id?.slice(0, 8) }));
+                  else show(`✗ ${data.channels?.email?.error || data.channels?.email?.skipped || t('channels.sendFailed')}`);
                 } catch (e: any) {
-                  show(`✗ ${e?.message || '发送失败'}`);
+                  show(`✗ ${e?.message || t('channels.sendFailed')}`);
                 }
               }}
               className="rounded bg-accent-dim px-3 py-1.5 text-xs text-white"
             >
-              ✉️ 发邮件测试
+              {t('channels.emailTestButton')}
             </button>
             <button
               onClick={async () => {
                 const to = (document.getElementById('email-to-input') as HTMLInputElement)?.value || undefined;
                 try {
-                  show('⏳ 生成并发邮件简报中（约 20-30s）...');
+                  show(t('channels.emailBriefSending'));
                   const resp = await fetch('/api/brief/send', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -271,26 +271,28 @@ export default function SettingsPage() {
                   });
                   const data = await resp.json();
                   if (data.channels?.email?.ok) {
-                    show(`✅ 简报邮件已发送（主题：${data.brief_meta?.subject?.slice(0, 30)}...）`);
-                  } else show(`✗ ${data.channels?.email?.error || data.channels?.email?.skipped || '失败'}`);
+                    show(t('channels.emailBriefSent', { subject: data.brief_meta?.subject?.slice(0, 30) }));
+                  } else show(`✗ ${data.channels?.email?.error || data.channels?.email?.skipped || t('channels.failed')}`);
                 } catch (e: any) {
-                  show(`✗ ${e?.message || '失败'}`);
+                  show(`✗ ${e?.message || t('channels.failed')}`);
                 }
               }}
               className="rounded bg-bg-card border border-border px-3 py-1.5 text-xs text-text-dim"
             >
-              🚀 立即生成 brief 并发邮件
+              {t('channels.emailBriefButton')}
             </button>
           </div>
           <div className="mt-2 text-[10px] text-text-muted">
-            提示：① 注册 <a href="https://resend.com" target="_blank" className="text-accent">resend.com</a>（免费 100 邮件/日）② 拿 API key ③ vercel env add RESEND_API_KEY + EMAIL_TO + EMAIL_FROM
-            <br />④ 沙箱测试可用 EMAIL_FROM=onboarding@resend.dev（接收方必须是 Resend 账号邮箱）
+            {t.rich('channels.emailHint', {
+              link: (chunks) => <a href="https://resend.com" target="_blank" className="text-accent">{chunks}</a>,
+              br: () => <br />,
+            })}
           </div>
         </div>
 
         <label className="mt-3 flex items-center gap-2 text-sm">
           <input type="checkbox" checked={emailNotif} onChange={(e) => setEmailNotif(e.target.checked)} />
-          启用每日邮件推送（与 Telegram 并行）
+          {t('channels.emailNotifLabel')}
         </label>
       </div>
 
@@ -301,7 +303,7 @@ export default function SettingsPage() {
       </div>
 
       <button onClick={save} className="mb-4 w-full rounded-lg bg-accent-dim py-3 text-sm font-semibold text-white">
-        💾 保存所有设置
+        {t('saveButton')}
       </button>
 
       <Disclaimer />
