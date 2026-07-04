@@ -190,11 +190,14 @@
     "ai": {
       "heading": "🤖 AI 委员会观点",
       "pendingLine1": "该标的视角辩论待生成。",
-      "refreshPlaceholder": "🔄 刷新观点（v0.3 实装）",
       "consensusSummary": "共识：{consensus}/10 · {bullish} 多 / {neutral} 中 / {bearish} 空",
       "bullishHeading": "🟢 看多 ({count})",
       "neutralHeading": "🟡 中性 ({count})",
-      "bearishHeading": "🔴 看空 ({count})"
+      "bearishHeading": "🔴 看空 ({count})",
+      "generate": "🤖 生成委员会观点（消耗 1 次今日额度）",
+      "regenerate": "🔄 重新生成",
+      "generating": "委员会辩论中，约需 30–60 秒…",
+      "errorLine": "生成失败：{error}"
     },
     "fundamentals": {
       "calendarHeading": "📅 财报日历",

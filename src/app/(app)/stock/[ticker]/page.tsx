@@ -13,6 +13,8 @@ import { DcfStudio } from '@/components/DcfStudio';
 import { Disclaimer } from '@/components/Disclaimer';
 import { useToast } from '@/components/Toast';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
+import { usePerspectives } from '@/lib/hooks/useQuote';
+import { QuotaNotice } from '@/components/QuotaNotice';
 
 type Tab = 'overview' | 'ai' | 'fundamentals' | 'news' | 'signals' | 'holdings';
 
@@ -32,6 +34,9 @@ export default function StockDetailPage() {
   const { show } = useToast();
   const { groups, hydrated, setGroups } = useWatchlist();
   const [inWatchlist, setInWatchlist] = useState(false);
+  // Live committee perspectives — button-triggered (each run costs one daily
+  // quota unit on the platform key), never auto-loaded on tab open.
+  const pers = usePerspectives(ticker);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -97,15 +102,18 @@ export default function StockDetailPage() {
     }
   }
 
-  const bullish = stock.perspectives.filter((p) => p.stance === 'bullish');
-  const neutral = stock.perspectives.filter((p) => p.stance === 'neutral');
-  const bearish = stock.perspectives.filter((p) => p.stance === 'bearish');
-  const consensus = stock.perspectives.length === 0
+  // Live rows only — the canned mock perspectives are no longer rendered
+  // (honest empty state + generate button instead of fake data).
+  const perspectives = pers.perspectives;
+  const bullish = perspectives.filter((p) => p.stance === 'bullish');
+  const neutral = perspectives.filter((p) => p.stance === 'neutral');
+  const bearish = perspectives.filter((p) => p.stance === 'bearish');
+  const consensus = perspectives.length === 0
     ? 0
-    : stock.perspectives.reduce((sum, p) => {
+    : perspectives.reduce((sum, p) => {
         const v = p.stance === 'bullish' ? p.confidence : p.stance === 'bearish' ? -p.confidence : 0;
         return sum + v;
-      }, 0) / stock.perspectives.length + 5;
+      }, 0) / perspectives.length + 5;
 
   return (
     <>
@@ -216,11 +224,16 @@ export default function StockDetailPage() {
       {tab === 'ai' && (
         <div className="card-base">
           <div className="mb-3 text-sm font-semibold text-text-dim">{t('ai.heading')}</div>
-          {stock.perspectives.length === 0 ? (
+          {pers.quota && <div className="mb-3"><QuotaNotice {...pers.quota} /></div>}
+          {pers.loading ? (
+            <div className="py-8 text-center text-sm text-text-dim">{t('ai.generating')}</div>
+          ) : perspectives.length === 0 ? (
             <div className="py-8 text-center text-sm text-text-dim">
-              {t('ai.pendingLine1')}<br />
-              <button disabled className="mt-3 rounded bg-accent-dim/50 px-4 py-2 text-white opacity-50">
-                {t('ai.refreshPlaceholder')}
+              {t('ai.pendingLine1')}
+              {pers.error && <div className="mt-2 text-xs text-down">{t('ai.errorLine', { error: pers.error })}</div>}
+              <br />
+              <button onClick={pers.refetch} className="mt-3 rounded bg-accent-dim px-4 py-2 text-white">
+                {t('ai.generate')}
               </button>
             </div>
           ) : (
@@ -234,6 +247,9 @@ export default function StockDetailPage() {
               {neutral.map((p) => <PerspectiveCard key={p.persona} {...p} />)}
               {bearish.length > 0 && <h3 className="mb-2 mt-3 text-sm font-semibold text-bearish">{t('ai.bearishHeading', { count: bearish.length })}</h3>}
               {bearish.map((p) => <PerspectiveCard key={p.persona} {...p} />)}
+              <button onClick={pers.refetch} className="mt-3 rounded border border-accent-dim/60 px-3 py-1.5 text-xs font-semibold text-accent-dim">
+                {t('ai.regenerate')}
+              </button>
             </>
           )}
         </div>

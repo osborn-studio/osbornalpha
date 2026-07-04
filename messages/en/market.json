@@ -190,11 +190,14 @@
     "ai": {
       "heading": "🤖 Committee Perspectives",
       "pendingLine1": "Perspective debate for this instrument is pending generation.",
-      "refreshPlaceholder": "🔄 Refresh Perspectives (v0.3)",
       "consensusSummary": "Consensus: {consensus}/10 · {bullish} Bullish / {neutral} Neutral / {bearish} Bearish",
       "bullishHeading": "🟢 Bullish ({count})",
       "neutralHeading": "🟡 Neutral ({count})",
-      "bearishHeading": "🔴 Bearish ({count})"
+      "bearishHeading": "🔴 Bearish ({count})",
+      "generate": "🤖 Generate Perspectives (uses 1 daily credit)",
+      "regenerate": "🔄 Regenerate",
+      "generating": "Committee deliberating, ~30–60s…",
+      "errorLine": "Generation failed: {error}"
     },
     "fundamentals": {
       "calendarHeading": "📅 Earnings Calendar",

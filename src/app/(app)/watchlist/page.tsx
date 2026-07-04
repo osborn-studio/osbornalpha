@@ -952,7 +952,8 @@ function parseTickerInput(raw: string): string[] {
     if (parts.length > 0) cells.push(...parts);
   }
 
-  const tickerRegex = /^(\d{6}\.(SH|SZ|BJ)|\d{5}\.HK|[A-Z][A-Z.]{0,9})$/;
+  // Digit-led shapes: A (6 digits), HK (5), JP .T (4), KR .KS/.KQ (6), TW .TW/.TWO (4-6).
+  const tickerRegex = /^(\d{6}\.(SH|SZ|BJ)|\d{5}\.HK|\d{4}\.T|\d{6}\.(KS|KQ)|\d{4,6}\.(TW|TWO)|[A-Z][A-Z.]{0,9})$/;
   const looksLikeTicker = (s: string) => tickerRegex.test(s.toUpperCase());
 
   // Drop the first cell if it's clearly a header label, not a ticker.
