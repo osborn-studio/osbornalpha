@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useTranslations } from 'next-intl';
 import { Panel } from '@/components/ui';
 import { Disclaimer } from '@/components/Disclaimer';
 
@@ -13,14 +14,15 @@ interface Artifact {
   created_at: string;
 }
 
-const CARDS = [
-  { icon: '🧰', title: '技能库', desc: 'Copilot 的分析方法 + 工具清单。', href: '/skills' },
-  { icon: '🧪', title: '回测实验室', desc: '批量回测股票池信号命中率与前瞻收益。', href: '/backtest' },
-  { icon: '🧮', title: 'DCF 工作台', desc: '独立的现金流折现估值台，搜索个股即可用。', href: '/tools/dcf' },
-  { icon: '🏛️', title: '一级市场', desc: 'IC Memo / PE Portfolio / LP 追踪 大纲生成器。', href: '/tools/primary' },
+const CARD_DEFS = [
+  { icon: '🧰', key: 'skills', href: '/skills' },
+  { icon: '🧪', key: 'backtest', href: '/backtest' },
+  { icon: '🧮', key: 'dcf', href: '/tools/dcf' },
+  { icon: '🏛️', key: 'primary', href: '/tools/primary' },
 ] as const;
 
 export default function ToolsPage() {
+  const t = useTranslations('tools.portal');
   const [artifacts, setArtifacts] = useState<Artifact[] | null>(null);
   const [err, setErr] = useState('');
 
@@ -35,26 +37,26 @@ export default function ToolsPage() {
 
   return (
     <>
-      <h1 className="mb-1 text-xl font-bold">🧰 工具</h1>
-      <p className="mb-4 text-sm text-text-dim">技能库、回测、估值工作台与一级市场研究入口。</p>
+      <h1 className="mb-1 text-xl font-bold">{t('heading')}</h1>
+      <p className="mb-4 text-sm text-text-dim">{t('subheading')}</p>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        {CARDS.map((c) => (
+        {CARD_DEFS.map((c) => (
           <Link key={c.href} href={c.href} className="card-base block transition-colors hover:bg-bg-card">
             <div className="flex items-center gap-2 text-sm font-semibold">
-              <span className="text-lg">{c.icon}</span>{c.title}
+              <span className="text-lg">{c.icon}</span>{t(`cards.${c.key}.title`)}
             </div>
-            <div className="mt-1 text-xs text-text-muted">{c.desc}</div>
-            <div className="mt-2 text-xs font-semibold text-accent">进入 →</div>
+            <div className="mt-1 text-xs text-text-muted">{t(`cards.${c.key}.desc`)}</div>
+            <div className="mt-2 text-xs font-semibold text-accent">{t('enter')}</div>
           </Link>
         ))}
       </div>
 
-      <Panel title="📁 最近工具产出" className="mt-4">
-        {err && <div className="text-xs text-down">加载失败：{err}</div>}
-        {!err && artifacts === null && <div className="text-xs text-text-muted">加载中…</div>}
+      <Panel title={t('recentOutputs')} className="mt-4">
+        {err && <div className="text-xs text-down">{t('loadFailed', { error: err })}</div>}
+        {!err && artifacts === null && <div className="text-xs text-text-muted">{t('loading')}</div>}
         {!err && artifacts !== null && artifacts.length === 0 && (
-          <div className="text-xs text-text-muted">还没有产出。使用上面的入口运行一次分析后，报告会自动归档在这里。</div>
+          <div className="text-xs text-text-muted">{t('empty')}</div>
         )}
         {artifacts && artifacts.length > 0 && (
           <div className="space-y-1">

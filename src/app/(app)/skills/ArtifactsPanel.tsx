@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { useTranslations } from 'next-intl';
 
 interface Artifact {
   id: string;
@@ -11,6 +12,7 @@ interface Artifact {
 }
 
 export function ArtifactsPanel() {
+  const t = useTranslations('tools.artifacts');
   const [artifacts, setArtifacts] = useState<Artifact[] | null>(null);
   const [err, setErr] = useState('');
   const [openId, setOpenId] = useState<string | null>(null);
@@ -26,11 +28,11 @@ export function ArtifactsPanel() {
 
   return (
     <div className="card-base">
-      <div className="mb-2 text-sm font-semibold text-text-dim">📁 我的研究档案</div>
-      {err && <div className="text-xs text-down">加载失败：{err}</div>}
-      {!err && artifacts === null && <div className="text-xs text-text-muted">加载中…</div>}
+      <div className="mb-2 text-sm font-semibold text-text-dim">{t('heading')}</div>
+      {err && <div className="text-xs text-down">{t('loadFailed', { error: err })}</div>}
+      {!err && artifacts === null && <div className="text-xs text-text-muted">{t('loading')}</div>}
       {!err && artifacts !== null && artifacts.length === 0 && (
-        <div className="text-xs text-text-muted">还没有存档。运行一次深度研究方法后，报告会自动归档在这里。</div>
+        <div className="text-xs text-text-muted">{t('empty')}</div>
       )}
       {artifacts && artifacts.length > 0 && (
         <div className="space-y-1">

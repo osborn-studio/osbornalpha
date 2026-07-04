@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { Panel, Button } from '@/components/ui';
 import { outlineToMarkdown, type Outline } from '@/lib/skills/primary/ic-memo';
 
@@ -24,6 +25,7 @@ export interface OutlineWizardProps {
 type Status = 'idle' | 'saving' | 'saved' | 'error';
 
 export function OutlineWizard({ icon, title, desc, fields, generate, skillId }: OutlineWizardProps) {
+  const t = useTranslations('tools.wizard');
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(fields.map((f) => [f.key, ''])),
   );
@@ -115,10 +117,10 @@ export function OutlineWizard({ icon, title, desc, fields, generate, skillId }: 
         disabled={missingRequired}
         onClick={onGenerate}
       >
-        生成大纲
+        {t('generate')}
       </Button>
 
-      {genErr && <div className="mt-2 text-xs text-down">⚠️ {genErr}</div>}
+      {genErr && <div className="mt-2 text-xs text-down">{t('generateError', { error: genErr })}</div>}
 
       {outline && (
         <div className="mt-3 space-y-2">
@@ -131,14 +133,14 @@ export function OutlineWizard({ icon, title, desc, fields, generate, skillId }: 
             disabled={status === 'saving'}
             onClick={onSave}
           >
-            {status === 'saving' ? '存档中…' : '存入档案'}
+            {status === 'saving' ? t('saving') : t('save')}
           </Button>
           {status === 'saved' && (
             <div className="text-xs text-accent">
-              ✅ 已存入档案{artifactId ? `（${artifactId.slice(0, 8)}…）` : ''}
+              {t('saved', { idSuffix: artifactId ? `（${artifactId.slice(0, 8)}…）` : '' })}
             </div>
           )}
-          {status === 'error' && <div className="text-xs text-down">⚠️ 存档失败：{saveErr}</div>}
+          {status === 'error' && <div className="text-xs text-down">{t('saveError', { error: saveErr })}</div>}
         </div>
       )}
     </Panel>
