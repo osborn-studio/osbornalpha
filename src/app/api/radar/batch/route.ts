@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { buildRadar, type RadarPayload } from '@/lib/brief/radar';
+import { quoteSourcesFor } from '@/lib/data/sources/registry';
+import { classifyMarket } from '@/lib/utils';
 import { getRequestLocale } from '@/lib/i18n/server';
 
 export const dynamic = 'force-dynamic';
@@ -29,13 +31,24 @@ export async function GET(req: Request) {
   }
 
   const locale = await getRequestLocale();
-  const results = await Promise.allSettled(tickers.map((t) => buildRadar(t, locale)));
-  const radars: Record<string, RadarPayload | { error: string }> = {};
+  const radars: Record<string, RadarPayload | { error: string } | { skipped: string }> = {};
+
+  // Markets with no configured quote source (JP/KR until EODHD is subscribed)
+  // are marked skipped up-front — don't burn time/quota inside buildRadar.
+  const buildable = tickers.filter((t) => {
+    if (quoteSourcesFor(classifyMarket(t)).length === 0) {
+      radars[t] = { skipped: 'source-pending' };
+      return false;
+    }
+    return true;
+  });
+
+  const results = await Promise.allSettled(buildable.map((t) => buildRadar(t, locale)));
   results.forEach((r, i) => {
     if (r.status === 'fulfilled') {
-      radars[tickers[i]] = r.value;
+      radars[buildable[i]] = r.value;
     } else {
-      radars[tickers[i]] = { error: r.reason?.message || 'unknown' };
+      radars[buildable[i]] = { error: r.reason?.message || 'unknown' };
     }
   });
 

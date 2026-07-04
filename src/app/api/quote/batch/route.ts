@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { fetchEastmoneyQuote } from '@/lib/data/sources/eastmoney';
-import { fetchSinaQuote } from '@/lib/data/sources/sina';
-import { fetchTencentQuote } from '@/lib/data/sources/tencent';
+import { quoteSourcesFor } from '@/lib/data/sources/registry';
+import { fetchTwseQuotesBatch } from '@/lib/data/sources/twse';
+import { classifyMarket } from '@/lib/utils';
 import {
   isTushareConfigured,
   fetchTushareDaily,
@@ -120,8 +120,9 @@ async function withRetry<T>(fn: () => Promise<T | null>): Promise<T | null> {
 }
 
 /**
- * Resolve a quote via the cascading chain. Each layer is a separate
- * network call — we stop at the first one that returns a usable quote.
+ * Resolve a quote via the market-routed registry cascade. Each layer is a
+ * separate network call — we stop at the first one that returns a usable
+ * quote. For A/HK/US the order is unchanged:
  *
  *   Eastmoney (push2delay)   ← fastest when reachable; blocked from Vercel for A-share
  *   Sina (hq.sinajs.cn)      ← free, no auth, GBK; AKShare's underlying A/HK/US source
@@ -129,21 +130,16 @@ async function withRetry<T>(fn: () => Promise<T | null>): Promise<T | null> {
  *   Tushare daily            ← costs 积分; only fires if all three free sources fail
  *
  * Each individual call has a 1-retry wrapper for transient hiccups.
+ * (TW tickers are handled by fetchTwseQuotesBatch in GET — one native
+ * multi-symbol mis request — and never reach this function.)
  */
 async function resolveQuote(ticker: string): Promise<QuoteShape | null> {
-  // Layer 1: Eastmoney
-  const em = await withRetry(() => fetchEastmoneyQuote(ticker));
-  if (em) return em as unknown as QuoteShape;
+  for (const s of quoteSourcesFor(classifyMarket(ticker))) {
+    const q = await withRetry(() => s.fetch(ticker));
+    if (q) return q as unknown as QuoteShape;
+  }
 
-  // Layer 2: Sina
-  const sina = await withRetry(() => fetchSinaQuote(ticker));
-  if (sina) return sina as unknown as QuoteShape;
-
-  // Layer 3: Tencent
-  const tencent = await withRetry(() => fetchTencentQuote(ticker));
-  if (tencent) return tencent as unknown as QuoteShape;
-
-  // Layer 4: Tushare (A-share only, costs 积分)
+  // Final layer: Tushare (A-share only, costs 积分)
   if (/\.(SH|SZ|BJ)$/i.test(ticker)) {
     return tushareFallback(ticker);
   }
@@ -164,12 +160,25 @@ export async function GET(req: Request) {
     return NextResponse.json({ quotes: {} });
   }
 
-  const results = await Promise.allSettled(tickers.map(resolveQuote));
+  // TW group: one native multi-symbol mis request (rate limit ~3 req/5 s);
+  // everything else goes through the per-ticker registry cascade.
+  const twTickers = tickers.filter((t) => classifyMarket(t) === 'TW');
+  const otherTickers = tickers.filter((t) => classifyMarket(t) !== 'TW');
+
+  const [twMap, results] = await Promise.all([
+    twTickers.length > 0
+      ? fetchTwseQuotesBatch(twTickers).catch(() => new Map<string, QuoteShape | null>())
+      : Promise.resolve(new Map<string, QuoteShape | null>()),
+    Promise.allSettled(otherTickers.map(resolveQuote)),
+  ]);
 
   const quotes: Record<string, QuoteShape | null> = {};
   results.forEach((r, i) => {
-    quotes[tickers[i]] = r.status === 'fulfilled' && r.value ? r.value : null;
+    quotes[otherTickers[i]] = r.status === 'fulfilled' && r.value ? r.value : null;
   });
+  for (const t of twTickers) {
+    quotes[t] = (twMap.get(t) as QuoteShape | undefined) ?? null;
+  }
 
   return NextResponse.json({ quotes });
 }

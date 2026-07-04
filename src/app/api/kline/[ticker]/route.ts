@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { fetchEastmoneyKline } from '@/lib/data/sources/eastmoney';
+import { fetchTwseKline } from '@/lib/data/sources/twse';
+import { classifyMarket } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 300;
@@ -15,7 +17,11 @@ export async function GET(req: Request, { params }: Ctx) {
   const limit = Math.min(parseInt(url.searchParams.get('limit') || '120', 10), 500);
 
   try {
-    const result = await fetchEastmoneyKline(ticker, period, limit);
+    // TW → TWSE STOCK_DAY (listed .TW only; .TWO returns null → 404 for now).
+    // Everything else keeps the existing Eastmoney path.
+    const result = classifyMarket(ticker) === 'TW'
+      ? await fetchTwseKline(ticker, period, limit)
+      : await fetchEastmoneyKline(ticker, period, limit);
     if (!result || result.bars.length === 0) {
       return NextResponse.json({ source: 'none', ticker, bars: [] }, { status: 404 });
     }
