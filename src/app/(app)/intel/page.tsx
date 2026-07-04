@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 import { WizardCard } from '@/components/intel/WizardCard';
 import { WatchlistScreener } from '@/components/intel/WatchlistScreener';
 import { marketLabel } from '@/lib/utils';
@@ -15,12 +16,13 @@ interface Artifact { id: string; skill_id: string; ticker: string | null; title:
 type Tab = 'discover' | 'research';
 
 export default function IntelPage() {
+  const t = useTranslations('intel');
   const [tab, setTab] = useState<Tab>('discover');
 
   return (
     <>
-      <h1 className="mb-1 text-xl font-bold">📡 情报</h1>
-      <p className="mb-4 text-sm text-text-dim">发现新方向的向导 + 直达个股的研究入口。</p>
+      <h1 className="mb-1 text-xl font-bold">{t('page.title')}</h1>
+      <p className="mb-4 text-sm text-text-dim">{t('page.subtitle')}</p>
 
       <div className="mb-4 flex gap-1 rounded-md border border-border p-1 text-sm">
         <button
@@ -28,14 +30,14 @@ export default function IntelPage() {
           onClick={() => setTab('discover')}
           className={`flex-1 rounded px-3 py-1.5 font-semibold ${tab === 'discover' ? 'bg-accent-dim/20 text-accent' : 'text-text-dim'}`}
         >
-          🧭 发现
+          {t('tabs.discover')}
         </button>
         <button
           type="button"
           onClick={() => setTab('research')}
           className={`flex-1 rounded px-3 py-1.5 font-semibold ${tab === 'research' ? 'bg-accent-dim/20 text-accent' : 'text-text-dim'}`}
         >
-          🔬 研究
+          {t('tabs.research')}
         </button>
       </div>
 
@@ -47,21 +49,22 @@ export default function IntelPage() {
 }
 
 function DiscoverTab() {
+  const t = useTranslations('intel');
   return (
     <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-2">
         <WizardCard
           icon="🔭"
-          title="瓶颈选股向导"
-          desc="从赛道/终端系统关键词出发，拆产业链找最窄约束，给出候选清单。"
-          placeholder="如：AI 光通信 / 人形机器人 / 储能"
+          title={t('wizards.bottleneck.title')}
+          desc={t('wizards.bottleneck.desc')}
+          placeholder={t('wizards.bottleneck.placeholder')}
           methodId="stock-bottleneck-picker"
         />
         <WizardCard
           icon="🕸"
-          title="产业链尽调向导"
-          desc="上中下游全景尽调：规模/技术路线/壁垒/格局/风险，按环节给龙头清单。"
-          placeholder="如：光伏胶膜 / 800V 高压平台"
+          title={t('wizards.industryChain.title')}
+          desc={t('wizards.industryChain.desc')}
+          placeholder={t('wizards.industryChain.placeholder')}
           methodId="industry-chain-diligence"
         />
       </div>
@@ -71,6 +74,7 @@ function DiscoverTab() {
 }
 
 function ResearchTab() {
+  const t = useTranslations('intel');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -116,14 +120,14 @@ function ResearchTab() {
   return (
     <div className="space-y-3">
       <div className="card-base">
-        <div className="mb-2 text-sm font-semibold text-text-dim">🔎 搜索直达个股</div>
+        <div className="mb-2 text-sm font-semibold text-text-dim">{t('research.search.title')}</div>
         <input
           value={query}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="代码 / 名称（如 完美世界 / AAPL / 600519）"
+          placeholder={t('research.search.placeholder')}
           className="w-full rounded-md bg-bg-card px-3 py-2 text-sm"
         />
-        {loading && <div className="mt-1.5 text-xs text-text-muted">搜索中…</div>}
+        {loading && <div className="mt-1.5 text-xs text-text-muted">{t('research.search.searching')}</div>}
         {results.length > 0 && (
           <div className="mt-2 space-y-1">
             {results.map((r) => (
@@ -145,16 +149,16 @@ function ResearchTab() {
           </div>
         )}
         {query.trim() && !loading && results.length === 0 && (
-          <div className="mt-1.5 text-xs text-text-muted">没有匹配。</div>
+          <div className="mt-1.5 text-xs text-text-muted">{t('research.search.noMatches')}</div>
         )}
       </div>
 
       <div className="card-base">
-        <div className="mb-2 text-sm font-semibold text-text-dim">📁 最近研究档案</div>
-        {artErr && <div className="text-xs text-down">加载失败：{artErr}</div>}
-        {!artErr && artifacts === null && <div className="text-xs text-text-muted">加载中…</div>}
+        <div className="mb-2 text-sm font-semibold text-text-dim">{t('research.artifacts.title')}</div>
+        {artErr && <div className="text-xs text-down">{t('research.artifacts.loadFailed', { error: artErr })}</div>}
+        {!artErr && artifacts === null && <div className="text-xs text-text-muted">{t('research.artifacts.loading')}</div>}
         {!artErr && artifacts !== null && artifacts.length === 0 && (
-          <div className="text-xs text-text-muted">还没有存档。运行一次深度研究方法或发现向导后，报告会自动归档在这里。</div>
+          <div className="text-xs text-text-muted">{t('research.artifacts.empty')}</div>
         )}
         {artifacts && artifacts.length > 0 && (
           <div className="space-y-1">
@@ -185,7 +189,7 @@ function ResearchTab() {
         )}
         <div className="mt-2 text-right">
           <Link href="/skills" className="text-xs text-accent">
-            查看全部档案 →
+            {t('research.artifacts.viewAll')}
           </Link>
         </div>
       </div>
