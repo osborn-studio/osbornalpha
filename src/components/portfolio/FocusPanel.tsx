@@ -1,6 +1,6 @@
 'use client';
 
-import { useLocale } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { Card, Metric, Tag } from '@/components/ui';
 import { KlineChart } from '@/components/KlineChart';
 import { DecisionForm } from './DecisionForm';
@@ -18,6 +18,7 @@ export function FocusPanel({ ticker, quote, position, decisions, onChanged }: {
   decisions: Decision[];
   onChanged: () => void;
 }) {
+  const t = useTranslations('portfolio');
   const locale = useLocale() as AppLocale;
   const open = latestOpenDecision(decisions, ticker);
   const u = position ? unrealizedPnl(position, quote?.price ?? null) : null;
@@ -41,11 +42,11 @@ export function FocusPanel({ ticker, quote, position, decisions, onChanged }: {
       {quote && <KlineChart ticker={ticker} basePrice={quote.price} />}
 
       <div data-density="data" className="grid grid-cols-2 gap-[var(--row-gap)] sm:grid-cols-5">
-        <Metric label="持仓成本" value={position ? formatPrice(position.avg_cost) : '--'} />
-        <Metric label="浮盈" value={u ? formatPct(u.pct) : '--'} change={u?.value} />
-        <Metric label="目标价" value={open?.target_price ? formatPrice(open.target_price) : '--'} />
-        <Metric label="止损" value={open?.stop_loss ? formatPrice(open.stop_loss) : '--'} />
-        <Metric label="信心度" value={open?.confidence != null ? `${open.confidence}%` : '--'} />
+        <Metric label={t('focusPanel.positionCost')} value={position ? formatPrice(position.avg_cost) : '--'} />
+        <Metric label={t('focusPanel.unrealized')} value={u ? formatPct(u.pct) : '--'} change={u?.value} />
+        <Metric label={t('focusPanel.targetPrice')} value={open?.target_price ? formatPrice(open.target_price) : '--'} />
+        <Metric label={t('focusPanel.stopLoss')} value={open?.stop_loss ? formatPrice(open.stop_loss) : '--'} />
+        <Metric label={t('focusPanel.confidence')} value={open?.confidence != null ? `${open.confidence}%` : '--'} />
       </div>
 
       <DecisionForm ticker={ticker} onDone={onChanged} />
@@ -53,13 +54,13 @@ export function FocusPanel({ ticker, quote, position, decisions, onChanged }: {
 
       {open && (
         <div className="rounded border border-[var(--border)] bg-[var(--bg)] p-2 text-xs text-[var(--text-dim)]">
-          📌 未平决策：{formatDateLocale(open.decided_at, locale)}
-          {' '}{open.action === 'buy' ? '买入' : open.action === 'sell' ? '卖出' : open.action}
-          {open.confidence != null && ` · 信心 ${open.confidence}%`}
-          {open.thesis && ` · 「${open.thesis}」`}
+          {t('focusPanel.openDecisionPrefix')}{formatDateLocale(open.decided_at, locale)}
+          {' '}{open.action === 'buy' ? t('direction.buy') : open.action === 'sell' ? t('direction.sell') : open.action}
+          {open.confidence != null && t('focusPanel.confidenceInline', { pct: open.confidence })}
+          {open.thesis && t('focusPanel.thesisInline', { thesis: open.thesis })}
           {open.target_price && quote ? (
             <Tag tone={quote.price >= open.target_price ? 'up' : 'accent'} className="ml-1">
-              距目标价 {formatPct(((open.target_price - quote.price) / quote.price) * 100)}
+              {t('focusPanel.distanceToTarget', { pct: formatPct(((open.target_price - quote.price) / quote.price) * 100) })}
             </Tag>
           ) : null}
         </div>

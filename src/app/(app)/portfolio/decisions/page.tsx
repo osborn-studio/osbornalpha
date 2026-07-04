@@ -2,16 +2,18 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { Panel, Button, Tag } from '@/components/ui';
 import { formatPrice } from '@/lib/utils';
 import type { Decision, DecisionStatus } from '@/lib/supabase/database.types';
 
 function SubNav({ current }: { current: 'cockpit' | 'decisions' | 'positions' | 'review' }) {
+  const t = useTranslations('portfolio');
   const items: Array<{ key: typeof current; href: string; label: string }> = [
-    { key: 'cockpit', href: '/portfolio', label: '驾驶舱' },
-    { key: 'decisions', href: '/portfolio/decisions', label: '决策日志' },
-    { key: 'positions', href: '/portfolio/positions', label: '持仓明细' },
-    { key: 'review', href: '/portfolio/review', label: '复盘' },
+    { key: 'cockpit', href: '/portfolio', label: t('nav.cockpit') },
+    { key: 'decisions', href: '/portfolio/decisions', label: t('nav.decisions') },
+    { key: 'positions', href: '/portfolio/positions', label: t('nav.positions') },
+    { key: 'review', href: '/portfolio/review', label: t('nav.review') },
   ];
   return (
     <nav className="flex items-center gap-3 text-sm">
@@ -30,27 +32,31 @@ function SubNav({ current }: { current: 'cockpit' | 'decisions' | 'positions' | 
   );
 }
 
-const ACTION_LABEL: Record<Decision['action'], string> = {
-  buy: '买入', sell: '卖出', trim: '减仓', add: '加仓', hold: '持有', pass: '观望',
-};
-
-const STATUS_LABEL: Record<DecisionStatus, string> = {
-  open: '待执行', executed: '已执行', expired: '已过期', cancelled: '已取消',
-};
-
-const STATUS_TONE: Record<DecisionStatus, 'accent' | 'up' | 'neutral' | 'down'> = {
-  open: 'accent', executed: 'up', expired: 'neutral', cancelled: 'down',
-};
-
-const FILTERS: Array<{ key: DecisionStatus | 'all'; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'open', label: 'open' },
-  { key: 'executed', label: 'executed' },
-  { key: 'expired', label: 'expired' },
-  { key: 'cancelled', label: 'cancelled' },
-];
-
 export default function DecisionsPage() {
+  const t = useTranslations('portfolio');
+
+  const ACTION_LABEL: Record<Decision['action'], string> = {
+    buy: t('action.buy'), sell: t('action.sell'), trim: t('action.trim'),
+    add: t('action.add'), hold: t('action.hold'), pass: t('action.pass'),
+  };
+
+  const STATUS_LABEL: Record<DecisionStatus, string> = {
+    open: t('decisionStatus.open'), executed: t('decisionStatus.executed'),
+    expired: t('decisionStatus.expired'), cancelled: t('decisionStatus.cancelled'),
+  };
+
+  const STATUS_TONE: Record<DecisionStatus, 'accent' | 'up' | 'neutral' | 'down'> = {
+    open: 'accent', executed: 'up', expired: 'neutral', cancelled: 'down',
+  };
+
+  const FILTERS: Array<{ key: DecisionStatus | 'all'; label: string }> = [
+    { key: 'all', label: t('decisions.filterAll') },
+    { key: 'open', label: 'open' },
+    { key: 'executed', label: 'executed' },
+    { key: 'expired', label: 'expired' },
+    { key: 'cancelled', label: 'cancelled' },
+  ];
+
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -114,26 +120,26 @@ export default function DecisionsPage() {
       </div>
 
       {loading ? (
-        <p className="text-sm text-[var(--text-dim)]">加载中…</p>
+        <p className="text-sm text-[var(--text-dim)]">{t('decisions.loading')}</p>
       ) : error ? (
         <p className="text-sm text-[var(--down)]">{error}</p>
       ) : filtered.length === 0 ? (
         <Panel>
-          <p className="text-sm text-[var(--text-dim)]">暂无决策记录</p>
+          <p className="text-sm text-[var(--text-dim)]">{t('decisions.empty')}</p>
         </Panel>
       ) : (
-        <Panel title={`决策日志 · ${filtered.length}`}>
+        <Panel title={t('decisions.title', { count: filtered.length })}>
           <table className="num w-full text-left text-xs">
             <thead>
               <tr className="text-[var(--text-dim)]">
-                <th className="pb-1 font-normal">日期</th>
-                <th className="pb-1 font-normal">标的</th>
-                <th className="pb-1 font-normal">动作</th>
-                <th className="pb-1 font-normal">理由</th>
-                <th className="pb-1 font-normal">信心</th>
-                <th className="pb-1 font-normal">目标价</th>
-                <th className="pb-1 font-normal">止损</th>
-                <th className="pb-1 font-normal">状态</th>
+                <th className="pb-1 font-normal">{t('decisions.columns.date')}</th>
+                <th className="pb-1 font-normal">{t('decisions.columns.ticker')}</th>
+                <th className="pb-1 font-normal">{t('decisions.columns.action')}</th>
+                <th className="pb-1 font-normal">{t('decisions.columns.thesis')}</th>
+                <th className="pb-1 font-normal">{t('decisions.columns.confidence')}</th>
+                <th className="pb-1 font-normal">{t('decisions.columns.targetPrice')}</th>
+                <th className="pb-1 font-normal">{t('decisions.columns.stopLoss')}</th>
+                <th className="pb-1 font-normal">{t('decisions.columns.status')}</th>
                 <th className="pb-1 font-normal"></th>
               </tr>
             </thead>
@@ -151,7 +157,7 @@ export default function DecisionsPage() {
                   <td className="py-1">
                     {d.status === 'open' && (
                       <Button size="sm" variant="danger" disabled={cancellingId === d.id} onClick={() => cancel(d.id)}>
-                        取消
+                        {t('decisions.cancel')}
                       </Button>
                     )}
                   </td>

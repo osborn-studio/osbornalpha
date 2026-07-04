@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { Panel, Metric, Tag } from '@/components/ui';
 import { formatPct } from '@/lib/utils';
 import type { Decision, DecisionReview } from '@/lib/supabase/database.types';
@@ -9,11 +10,12 @@ import type { Decision, DecisionReview } from '@/lib/supabase/database.types';
 interface SignalStatsLite { hit_rate_5d: number }
 
 function SubNav({ current }: { current: 'cockpit' | 'decisions' | 'positions' | 'review' }) {
+  const t = useTranslations('portfolio');
   const items: Array<{ key: typeof current; href: string; label: string }> = [
-    { key: 'cockpit', href: '/portfolio', label: '驾驶舱' },
-    { key: 'decisions', href: '/portfolio/decisions', label: '决策日志' },
-    { key: 'positions', href: '/portfolio/positions', label: '持仓明细' },
-    { key: 'review', href: '/portfolio/review', label: '复盘' },
+    { key: 'cockpit', href: '/portfolio', label: t('nav.cockpit') },
+    { key: 'decisions', href: '/portfolio/decisions', label: t('nav.decisions') },
+    { key: 'positions', href: '/portfolio/positions', label: t('nav.positions') },
+    { key: 'review', href: '/portfolio/review', label: t('nav.review') },
   ];
   return (
     <nav className="flex items-center gap-3 text-sm">
@@ -32,10 +34,6 @@ function SubNav({ current }: { current: 'cockpit' | 'decisions' | 'positions' | 
   );
 }
 
-const ACTION_LABEL: Record<Decision['action'], string> = {
-  buy: '买入', sell: '卖出', trim: '减仓', add: '加仓', hold: '持有', pass: '观望',
-};
-
 const BUCKET_ORDER = ['0-20', '20-40', '40-60', '60-80', '80-100'];
 
 interface ReviewedRow {
@@ -44,6 +42,11 @@ interface ReviewedRow {
 }
 
 export default function ReviewPage() {
+  const t = useTranslations('portfolio');
+  const ACTION_LABEL: Record<Decision['action'], string> = {
+    buy: t('action.buy'), sell: t('action.sell'), trim: t('action.trim'),
+    add: t('action.add'), hold: t('action.hold'), pass: t('action.pass'),
+  };
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [reviews, setReviews] = useState<DecisionReview[]>([]);
   const [loading, setLoading] = useState(true);
@@ -202,35 +205,35 @@ export default function ReviewPage() {
       <SubNav current="review" />
 
       {loading ? (
-        <p className="text-sm text-[var(--text-dim)]">加载中…</p>
+        <p className="text-sm text-[var(--text-dim)]">{t('review.loading')}</p>
       ) : error ? (
         <p className="text-sm text-[var(--down)]">{error}</p>
       ) : rows.length === 0 ? (
         <Panel>
           <p className="text-sm text-[var(--text-dim)]">
-            暂无可评分决策——决策录入满 5 个交易日后自动出现评分
+            {t('review.empty')}
           </p>
         </Panel>
       ) : (
         <>
-          {refreshing && <p className="text-xs text-[var(--text-dim)]">正在刷新评分…</p>}
+          {refreshing && <p className="text-xs text-[var(--text-dim)]">{t('review.refreshing')}</p>}
 
-          <Panel title="复盘概览">
+          <Panel title={t('review.overviewTitle')}>
             <div className="flex flex-wrap gap-6">
-              <Metric label="已评分" value={String(summary.n)} />
-              <Metric label="胜率" value={summary.hitRate !== null ? formatPct(summary.hitRate, false) : '--'} change={summary.hitRate !== null ? summary.hitRate - 50 : undefined} />
-              <Metric label="均 5d" value={summary.avg5d !== null ? formatPct(summary.avg5d) : '--'} change={summary.avg5d ?? undefined} />
-              <Metric label="均 20d" value={summary.avg20d !== null ? formatPct(summary.avg20d) : '--'} change={summary.avg20d ?? undefined} />
+              <Metric label={t('review.scored')} value={String(summary.n)} />
+              <Metric label={t('review.hitRate')} value={summary.hitRate !== null ? formatPct(summary.hitRate, false) : '--'} change={summary.hitRate !== null ? summary.hitRate - 50 : undefined} />
+              <Metric label={t('review.avg5d')} value={summary.avg5d !== null ? formatPct(summary.avg5d) : '--'} change={summary.avg5d ?? undefined} />
+              <Metric label={t('review.avg20d')} value={summary.avg20d !== null ? formatPct(summary.avg20d) : '--'} change={summary.avg20d ?? undefined} />
             </div>
           </Panel>
 
-          <Panel title="信心校准">
+          <Panel title={t('review.calibrationTitle')}>
             <table className="num w-full text-left text-xs">
               <thead>
                 <tr className="text-[var(--text-dim)]">
-                  <th className="pb-1 font-normal">信心区间</th>
-                  <th className="pb-1 font-normal">决策数</th>
-                  <th className="pb-1 font-normal">命中率</th>
+                  <th className="pb-1 font-normal">{t('review.calibrationColumns.bucket')}</th>
+                  <th className="pb-1 font-normal">{t('review.calibrationColumns.count')}</th>
+                  <th className="pb-1 font-normal">{t('review.calibrationColumns.hitRate')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -245,19 +248,19 @@ export default function ReviewPage() {
             </table>
           </Panel>
 
-          <Panel title="评分明细">
+          <Panel title={t('review.detailTitle')}>
             <table className="num w-full text-left text-xs">
               <thead>
                 <tr className="text-[var(--text-dim)]">
-                  <th className="pb-1 font-normal">日期</th>
-                  <th className="pb-1 font-normal">标的</th>
-                  <th className="pb-1 font-normal">动作</th>
-                  <th className="pb-1 font-normal">信心</th>
-                  <th className="pb-1 font-normal">5d</th>
-                  <th className="pb-1 font-normal">20d</th>
-                  <th className="pb-1 font-normal">60d</th>
-                  <th className="pb-1 font-normal">命中</th>
-                  <th className="pb-1 font-normal">评分</th>
+                  <th className="pb-1 font-normal">{t('review.detailColumns.date')}</th>
+                  <th className="pb-1 font-normal">{t('review.detailColumns.ticker')}</th>
+                  <th className="pb-1 font-normal">{t('review.detailColumns.action')}</th>
+                  <th className="pb-1 font-normal">{t('review.detailColumns.confidence')}</th>
+                  <th className="pb-1 font-normal">{t('review.detailColumns.d5')}</th>
+                  <th className="pb-1 font-normal">{t('review.detailColumns.d20')}</th>
+                  <th className="pb-1 font-normal">{t('review.detailColumns.d60')}</th>
+                  <th className="pb-1 font-normal">{t('review.detailColumns.hit')}</th>
+                  <th className="pb-1 font-normal">{t('review.detailColumns.score')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -286,33 +289,33 @@ export default function ReviewPage() {
             </table>
           </Panel>
 
-          <Panel title="决策 vs 信号">
+          <Panel title={t('review.vsSignalTitle')}>
             {scoredRows.length === 0 ? (
-              <p className="text-sm text-[var(--text-dim)]">暂无可评分决策，无法对照信号胜率</p>
+              <p className="text-sm text-[var(--text-dim)]">{t('review.vsSignalEmpty')}</p>
             ) : (
               <div className="space-y-3">
                 <div className="flex flex-wrap gap-6">
                   <Metric
-                    label="我的总胜率"
+                    label={t('review.myOverallHitRate')}
                     value={threeWaySummary.myOverall !== null ? formatPct(threeWaySummary.myOverall, false) : '--'}
                   />
                   <Metric
-                    label="信号平均胜率"
+                    label={t('review.signalAvgHitRate')}
                     value={threeWaySummary.signalAvg !== null ? formatPct(threeWaySummary.signalAvg, false) : '--'}
                   />
                   <Metric
-                    label={`Copilot决策胜率${threeWaySummary.copilotN ? ` (${threeWaySummary.copilotN})` : ''}`}
+                    label={t('review.copilotHitRate', { countSuffix: threeWaySummary.copilotN ? ` (${threeWaySummary.copilotN})` : '' })}
                     value={threeWaySummary.copilotHitRate !== null ? formatPct(threeWaySummary.copilotHitRate, false) : '--'}
                   />
                 </div>
                 <table className="num w-full text-left text-xs">
                   <thead>
                     <tr className="text-[var(--text-dim)]">
-                      <th className="pb-1 font-normal">标的</th>
-                      <th className="pb-1 font-normal">已评分决策数</th>
-                      <th className="pb-1 font-normal">我的决策命中率</th>
-                      <th className="pb-1 font-normal">信号5日胜率</th>
-                      <th className="pb-1 font-normal">差值</th>
+                      <th className="pb-1 font-normal">{t('review.vsSignalColumns.ticker')}</th>
+                      <th className="pb-1 font-normal">{t('review.vsSignalColumns.scoredCount')}</th>
+                      <th className="pb-1 font-normal">{t('review.vsSignalColumns.myHitRate')}</th>
+                      <th className="pb-1 font-normal">{t('review.vsSignalColumns.signalHitRate5d')}</th>
+                      <th className="pb-1 font-normal">{t('review.vsSignalColumns.diff')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -322,7 +325,7 @@ export default function ReviewPage() {
                         <td className="py-1">{r.n}</td>
                         <td className="py-1">{r.myHitRate !== null ? formatPct(r.myHitRate, false) : '--'}</td>
                         <td className="py-1">
-                          {r.signalHitRate === undefined ? '加载中…' : r.signalHitRate !== null ? formatPct(r.signalHitRate, false) : '--'}
+                          {r.signalHitRate === undefined ? t('review.loading') : r.signalHitRate !== null ? formatPct(r.signalHitRate, false) : '--'}
                         </td>
                         <td className="py-1">
                           {r.diff !== null ? (

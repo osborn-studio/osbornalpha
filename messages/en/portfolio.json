@@ -1,1 +1,179 @@
-{}
+{
+  "nav": {
+    "cockpit": "Cockpit",
+    "decisions": "Decision Log",
+    "positions": "Positions",
+    "review": "Review"
+  },
+  "common": {
+    "loading": "Loading…",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "deleting": "Deleting…"
+  },
+  "direction": {
+    "buy": "Buy",
+    "sell": "Sell"
+  },
+  "action": {
+    "buy": "Buy",
+    "sell": "Sell",
+    "trim": "Trim",
+    "add": "Add",
+    "hold": "Hold",
+    "pass": "Pass"
+  },
+  "decisionStatus": {
+    "open": "Open",
+    "executed": "Executed",
+    "expired": "Expired",
+    "cancelled": "Cancelled"
+  },
+  "cockpit": {
+    "emptyWatchlist": "Your watchlist is empty — go to 📋 Watchlist to add tickers to watch"
+  },
+  "positionsRail": {
+    "positionsTitle": "Positions · {count}",
+    "emptyPositions": "No positions yet — record your first one from the decision bar",
+    "totalUnrealized": "Total Unrealized",
+    "totalMarketValue": "Total Market Value",
+    "totalRealized": "Total Realized",
+    "watchlistTitle": "Watchlist · Watching"
+  },
+  "focusPanel": {
+    "positionCost": "Position Cost",
+    "unrealized": "Unrealized P&L",
+    "targetPrice": "Target Price",
+    "stopLoss": "Stop Loss",
+    "confidence": "Confidence",
+    "openDecisionPrefix": "📌 Open Decision: ",
+    "confidenceInline": " · Confidence {pct}%",
+    "thesisInline": " · \"{thesis}\"",
+    "distanceToTarget": "{pct} from target"
+  },
+  "decisionForm": {
+    "label": "Decision Bar",
+    "thesis": "Thesis",
+    "thesisPlaceholder": "One-line thesis",
+    "confidence": "Confidence {pct}%",
+    "targetPrice": "Target Price",
+    "stopLoss": "Stop Loss",
+    "submitting": "Recording…",
+    "submit": "Record Decision"
+  },
+  "tradeForm": {
+    "label": "Trade Entry",
+    "buyTrade": "Buy Trade",
+    "sellTrade": "Sell Trade",
+    "willLinkOpenDecision": "Will link to open decision",
+    "price": "Price",
+    "quantity": "Quantity",
+    "fee": "Fee",
+    "executedAt": "Trade Time (default now)",
+    "submitting": "Submitting…",
+    "submit": "Confirm Trade",
+    "cancel": "Cancel"
+  },
+  "signalsRail": {
+    "signalsTitle": "Signals",
+    "signalsTitleWithTicker": "Signals · {ticker}",
+    "loading": "Loading…",
+    "noRecentSignals": "No recent signals",
+    "biasBull": "Bull",
+    "biasBear": "Bear",
+    "biasNeutral": "Neutral",
+    "hitRateSummary": "5d Hit Rate {hitRate}% · Avg 5d {avgForward5d}%",
+    "openDecisionsTitle": "Open Decisions · {count}",
+    "noOpenDecisions": "No open decisions",
+    "copilotHint": "🎩 Press ⌘K to bring up Copilot to analyze the current ticker"
+  },
+  "decisions": {
+    "filterAll": "All",
+    "loading": "Loading…",
+    "empty": "No decision records yet",
+    "title": "Decision Log · {count}",
+    "columns": {
+      "date": "Date",
+      "ticker": "Ticker",
+      "action": "Action",
+      "thesis": "Thesis",
+      "confidence": "Confidence",
+      "targetPrice": "Target Price",
+      "stopLoss": "Stop Loss",
+      "status": "Status"
+    },
+    "cancel": "Cancel"
+  },
+  "positions": {
+    "overviewTitle": "Positions Overview",
+    "positionCount": "Position Count",
+    "realizedPnl": "Realized P&L",
+    "loading": "Loading…",
+    "emptyPositions": "No position records yet",
+    "positionsTitle": "Positions · {count}",
+    "positionColumns": {
+      "ticker": "Ticker",
+      "shares": "Shares",
+      "avgCost": "Avg Cost",
+      "realizedPnl": "Realized P&L",
+      "currency": "Currency",
+      "openedAt": "Opened",
+      "closedAt": "Closed"
+    },
+    "emptyTrades": "No trade records yet",
+    "tradesTitle": "Trade History · {count}",
+    "tradeColumns": {
+      "executedAt": "Executed At",
+      "ticker": "Ticker",
+      "direction": "Direction",
+      "price": "Price",
+      "quantity": "Quantity",
+      "fee": "Fee",
+      "linkedDecision": "Linked Decision",
+      "actions": "Actions"
+    },
+    "delete": "Delete",
+    "deleting": "Deleting…",
+    "reentryHint": "Made a mistake? Delete the trade and re-enter it from the Cockpit (you can specify the trade time); positions are automatically recalculated from trade history."
+  },
+  "review": {
+    "loading": "Loading…",
+    "empty": "No scorable decisions yet — a decision is scored automatically once it has been open for 5 trading days",
+    "refreshing": "Refreshing scores…",
+    "overviewTitle": "Review Overview",
+    "scored": "Scored",
+    "hitRate": "Hit Rate",
+    "avg5d": "Avg 5d",
+    "avg20d": "Avg 20d",
+    "calibrationTitle": "Confidence Calibration",
+    "calibrationColumns": {
+      "bucket": "Confidence Range",
+      "count": "Decisions",
+      "hitRate": "Hit Rate"
+    },
+    "detailTitle": "Score Detail",
+    "detailColumns": {
+      "date": "Date",
+      "ticker": "Ticker",
+      "action": "Action",
+      "confidence": "Confidence",
+      "d5": "5d",
+      "d20": "20d",
+      "d60": "60d",
+      "hit": "Hit",
+      "score": "Score"
+    },
+    "vsSignalTitle": "Decisions vs Signals",
+    "vsSignalEmpty": "No scorable decisions yet, cannot compare against signal hit rate",
+    "myOverallHitRate": "My Overall Hit Rate",
+    "signalAvgHitRate": "Signal Avg Hit Rate",
+    "copilotHitRate": "Copilot Decision Hit Rate{countSuffix}",
+    "vsSignalColumns": {
+      "ticker": "Ticker",
+      "scoredCount": "Scored Decisions",
+      "myHitRate": "My Hit Rate",
+      "signalHitRate5d": "Signal 5d Hit Rate",
+      "diff": "Diff"
+    }
+  }
+}
