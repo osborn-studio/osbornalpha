@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useTranslations } from 'next-intl';
 import { useBatchBacktest } from '@/lib/hooks/useBatchBacktest';
 import type { RankedTicker } from '@/lib/signals/batchBacktest';
 import { formatPct, formatPrice, changeClass, marketLabel } from '@/lib/utils';
@@ -12,6 +13,7 @@ import { uniqueWatchlistTickers } from '@/lib/watchlist/store';
 type SortKey = 'quality' | 'hit_rate' | 'signals' | 'fwd5' | 'fwd20' | 'ci_lower';
 
 export default function BacktestPage() {
+  const t = useTranslations('tools.backtest');
   const { groups, hydrated } = useWatchlist();
   const [days, setDays] = useState(60);
   const [sortKey, setSortKey] = useState<SortKey>('quality');
@@ -45,10 +47,10 @@ export default function BacktestPage() {
   return (
     <>
       <div className="mb-3 flex items-baseline justify-between">
-        <h1 className="text-xl font-bold">🧪 Backtest 排行榜</h1>
+        <h1 className="text-xl font-bold">{t('heading')}</h1>
         <div className="flex items-center gap-2 text-xs">
           <label className="flex items-center gap-1 text-text-dim">
-            天数：
+            {t('daysLabel')}
             <select
               value={days}
               onChange={(e) => setDays(parseInt(e.target.value, 10))}
@@ -65,35 +67,35 @@ export default function BacktestPage() {
             disabled={loading}
             className="rounded bg-accent-dim px-2.5 py-1 text-white disabled:opacity-50"
           >
-            {loading ? '⏳ 跑中' : '🔄 重跑'}
+            {loading ? t('running') : t('rerun')}
           </button>
         </div>
       </div>
 
       <p className="mb-3 text-xs text-text-dim">
-        对你 watchlist 里所有股票并发跑 Sentinel 信号回测，按"质量分"（Wilson 置信下限 60% + 信号活跃度 20% + 平均收益 20%）排名，找出**哪些股票上 Sentinel 历史最准**。
+        {t('intro')}
       </p>
 
       {loading && !data && (
         <div className="card-base py-12 text-center text-sm text-text-dim">
-          ⏳ 并发跑 {tickers?.length || 0} 只股票的 {days} 天回测...
-          <div className="mt-2 text-[11px] text-text-muted">通常 10-30 秒</div>
+          {t('loadingBody', { count: tickers?.length || 0, days })}
+          <div className="mt-2 text-[11px] text-text-muted">{t('loadingHint')}</div>
         </div>
       )}
 
       {error && (
-        <div className="card-base bg-down/10 text-sm text-down">⚠ {error}</div>
+        <div className="card-base bg-down/10 text-sm text-down">{t('error', { error })}</div>
       )}
 
       {data && (
         <>
           {/* Aggregate headline */}
           <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <Stat label="watchlist 覆盖" value={`${data.tickers_succeeded}/${data.tickers_attempted}`} />
-            <Stat label="总信号数" value={String(data.aggregate.total_signals)} />
-            <Stat label="平均命中率" value={`${(data.aggregate.avg_hit_rate_5d * 100).toFixed(0)}%`}
+            <Stat label={t('stats.coverage')} value={`${data.tickers_succeeded}/${data.tickers_attempted}`} />
+            <Stat label={t('stats.totalSignals')} value={String(data.aggregate.total_signals)} />
+            <Stat label={t('stats.avgHitRate')} value={`${(data.aggregate.avg_hit_rate_5d * 100).toFixed(0)}%`}
                   accent={data.aggregate.avg_hit_rate_5d >= 0.5 ? 'good' : 'bad'} />
-            <Stat label="平均 5d 收益" value={`${data.aggregate.avg_forward_5d_pct >= 0 ? '+' : ''}${data.aggregate.avg_forward_5d_pct.toFixed(2)}%`}
+            <Stat label={t('stats.avgFwd5')} value={`${data.aggregate.avg_forward_5d_pct >= 0 ? '+' : ''}${data.aggregate.avg_forward_5d_pct.toFixed(2)}%`}
                   accent={data.aggregate.avg_forward_5d_pct >= 0 ? 'good' : 'bad'} />
           </div>
 
@@ -102,31 +104,31 @@ export default function BacktestPage() {
             <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
               {data.aggregate.best_overall && (
                 <HeadlineCard
-                  label="🏆 命中率最高"
+                  label={t('headline.best')}
                   ticker={data.aggregate.best_overall.ticker}
                   name={data.aggregate.best_overall.name}
                   value={`${(data.aggregate.best_overall.hit_rate_5d * 100).toFixed(0)}%`}
-                  sub={`${data.aggregate.best_overall.total_signals} 个信号`}
+                  sub={t('headline.signalCount', { count: data.aggregate.best_overall.total_signals })}
                   variant="good"
                 />
               )}
               {data.aggregate.worst_overall && (
                 <HeadlineCard
-                  label="💥 命中率最低"
+                  label={t('headline.worst')}
                   ticker={data.aggregate.worst_overall.ticker}
                   name={data.aggregate.worst_overall.name}
                   value={`${(data.aggregate.worst_overall.hit_rate_5d * 100).toFixed(0)}%`}
-                  sub={`${data.aggregate.worst_overall.total_signals} 个信号`}
+                  sub={t('headline.signalCount', { count: data.aggregate.worst_overall.total_signals })}
                   variant="bad"
                 />
               )}
               {data.aggregate.most_active && (
                 <HeadlineCard
-                  label="📊 信号最活跃"
+                  label={t('headline.mostActive')}
                   ticker={data.aggregate.most_active.ticker}
                   name={data.aggregate.most_active.name}
                   value={String(data.aggregate.most_active.total_signals)}
-                  sub="60 天信号数"
+                  sub={t('headline.signalCount60d')}
                   variant="neutral"
                 />
               )}
@@ -135,7 +137,7 @@ export default function BacktestPage() {
 
           {/* Filter + sort */}
           <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-text-dim">市场：</span>
+            <span className="text-text-dim">{t('marketLabel')}</span>
             {(['all', 'A', 'HK', 'US'] as const).map((m) => (
               <button
                 key={m}
@@ -146,18 +148,18 @@ export default function BacktestPage() {
                     : 'border-border bg-bg-card text-text-dim'
                 }`}
               >
-                {m === 'all' ? '全部' : marketLabel(m)}
+                {m === 'all' ? t('marketAll') : marketLabel(m)}
               </button>
             ))}
-            <span className="ml-2 text-text-dim">排序：</span>
+            <span className="ml-2 text-text-dim">{t('sortLabel')}</span>
             {(
               [
-                ['quality', '质量分'],
-                ['ci_lower', '置信下限'],
-                ['hit_rate', '命中率'],
-                ['signals', '信号数'],
-                ['fwd5', '5d 平均'],
-                ['fwd20', '20d 平均'],
+                ['quality', t('sort.quality')],
+                ['ci_lower', t('sort.ciLower')],
+                ['hit_rate', t('sort.hitRate')],
+                ['signals', t('sort.signals')],
+                ['fwd5', t('sort.fwd5')],
+                ['fwd20', t('sort.fwd20')],
               ] as Array<[SortKey, string]>
             ).map(([k, label]) => (
               <button
@@ -180,15 +182,15 @@ export default function BacktestPage() {
               <thead className="sticky top-0 bg-bg-elevated text-text-muted">
                 <tr>
                   <th className="py-2 pl-3 pr-2 text-left">#</th>
-                  <th className="py-2 pr-2 text-left">标的</th>
-                  <th className="py-2 pr-2 text-right">价格</th>
-                  <th className="py-2 pr-2 text-right" title="composite quality score 0-100">质量分</th>
-                  <th className="py-2 pr-2 text-right" title="Wilson 95% confidence lower bound">置信下限</th>
-                  <th className="py-2 pr-2 text-right">命中率</th>
-                  <th className="py-2 pr-2 text-right">信号</th>
-                  <th className="py-2 pr-2 text-right">5d 均</th>
-                  <th className="py-2 pr-2 text-right">20d 均</th>
-                  <th className="py-2 pr-3 text-right">最近</th>
+                  <th className="py-2 pr-2 text-left">{t('table.ticker')}</th>
+                  <th className="py-2 pr-2 text-right">{t('table.price')}</th>
+                  <th className="py-2 pr-2 text-right" title="composite quality score 0-100">{t('table.quality')}</th>
+                  <th className="py-2 pr-2 text-right" title="Wilson 95% confidence lower bound">{t('table.ciLower')}</th>
+                  <th className="py-2 pr-2 text-right">{t('table.hitRate')}</th>
+                  <th className="py-2 pr-2 text-right">{t('table.signals')}</th>
+                  <th className="py-2 pr-2 text-right">{t('table.fwd5')}</th>
+                  <th className="py-2 pr-2 text-right">{t('table.fwd20')}</th>
+                  <th className="py-2 pr-3 text-right">{t('table.latest')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -198,7 +200,7 @@ export default function BacktestPage() {
                 {filtered.length === 0 && (
                   <tr>
                     <td colSpan={10} className="py-8 text-center text-xs text-text-dim">
-                      此筛选条件下无数据
+                      {t('table.empty')}
                     </td>
                   </tr>
                 )}
@@ -207,8 +209,7 @@ export default function BacktestPage() {
           </div>
 
           <div className="mt-3 text-[10px] text-text-muted">
-            算法：runBacktest({days} 天) × {data.tickers_attempted} 个标的并发 · Wilson 95% CI 缓解小样本噪声 ·
-            质量分 = 60×ciLower + 20×log10(1+signals)×1.2 + 20×min(5d_avg_return×5, 1)
+            {t('algoNote', { days, count: data.tickers_attempted })}
           </div>
         </>
       )}
