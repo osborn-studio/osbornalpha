@@ -2,11 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useTranslations } from 'next-intl';
 import { Panel, Tag } from '@/components/ui';
 import { QuotaNotice } from '@/components/QuotaNotice';
 import type { DailyBrief } from '@/lib/brief/composer';
 
 export function BriefGlance() {
+  const t = useTranslations('today');
   const [brief, setBrief] = useState<DailyBrief | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -21,7 +23,7 @@ export function BriefGlance() {
       .then(async (r) => {
         if (r.status === 429) {
           const body = await r.json().catch(() => ({}));
-          throw Object.assign(new Error(body?.error || '今日平台额度已用完'), { quota: body?.quota });
+          throw Object.assign(new Error(body?.error || t('brief.quotaExceeded')), { quota: body?.quota });
         }
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
@@ -33,7 +35,7 @@ export function BriefGlance() {
       .catch((e: any) => {
         if (cancelled) return;
         if (e?.quota) setQuota(e.quota);
-        setError(e?.message || '简报加载失败');
+        setError(e?.message || t('brief.loadFailed'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -42,7 +44,7 @@ export function BriefGlance() {
   }, []);
 
   return (
-    <Panel title="AI 简报">
+    <Panel title={t('brief.title')}>
       {loading && (
         <div className="space-y-2 animate-pulse">
           <div className="h-4 w-2/3 rounded bg-bg-card" />
@@ -70,7 +72,7 @@ export function BriefGlance() {
             </div>
           ))}
           <Link href="/briefs" className="block text-right text-xs text-accent hover:underline">
-            查看完整简报 →
+            {t('brief.viewFull')}
           </Link>
         </div>
       )}
