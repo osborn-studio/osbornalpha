@@ -27,6 +27,16 @@ export async function POST(req: Request) {
   const enc = new TextEncoder();
   const resolvedMethod = method ?? JOHN_CAMERON_5STEP;
   const locale = await getRequestLocale();
+  // Output-language directive: prompt bodies stay Chinese (method files are
+  // not modified — see docs/superpowers/plans/2026-07-03-g1c-dynamic-content.md
+  // T2); only the *output* language is steered, via a directive appended to
+  // the system prompt at this single call site (shared by both the OpenAI-
+  // compat and Anthropic-compat protocol branches below).
+  const EN_OUTPUT_DIRECTIVE =
+    "\n\nIMPORTANT: The user's interface language is English. Write your ENTIRE analysis, all section content, and the final verdict summary in English. Keep the verdict JSON schema keys unchanged.";
+  const systemPrompt = locale === 'en'
+    ? resolvedMethod.systemPrompt + EN_OUTPUT_DIRECTIVE
+    : resolvedMethod.systemPrompt;
 
   // Resolve the user's (or env) LLM provider config.
   const llm = await resolveLlm();
@@ -92,7 +102,7 @@ export async function POST(req: Request) {
         model: async (messages: OaiMessage[]) => {
           const cfg = { baseUrl: llm.baseUrl, apiKey: llm.apiKey, model: llm.model, chatPath: llm.chatPath };
           const call = llm.protocol === 'anthropic' ? anthropicToolChat : toolChat;
-          const r = await call(cfg, { system: resolvedMethod.systemPrompt, messages, tools: OPENAI_TOOL_DEFS, max_tokens: 1500 });
+          const r = await call(cfg, { system: systemPrompt, messages, tools: OPENAI_TOOL_DEFS, max_tokens: 1500 });
           return { content: r.content, toolCalls: r.toolCalls, finishReason: r.finishReason };
         },
         runTool: (name, args) => {
