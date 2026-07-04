@@ -5,11 +5,26 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import type { InvestmentMemo, SourceDocument } from '@/lib/research/types';
+import type { InvestmentMemo, Signal, SourceDocument, ThesisEvent, ThesisStatus } from '@/lib/research/types';
+
+interface PendingAlert {
+  thesis_id: string;
+  thesis_title: string;
+  thesis_status: ThesisStatus;
+  event: ThesisEvent;
+}
+
+const VERDICT_BADGES: Record<string, string> = {
+  SUPPORT: 'bg-green-100 text-green-800',
+  WEAKEN: 'bg-orange-100 text-orange-800',
+  INVALIDATE: 'bg-red-100 text-red-800',
+};
 
 export default function ResearchDashboardPage() {
   const [sources, setSources] = useState<SourceDocument[] | null>(null);
   const [memos, setMemos] = useState<InvestmentMemo[] | null>(null);
+  const [signals, setSignals] = useState<Signal[]>([]);
+  const [alerts, setAlerts] = useState<PendingAlert[]>([]);
   const [disabled, setDisabled] = useState(false);
 
   useEffect(() => {
@@ -21,6 +36,12 @@ export default function ResearchDashboardPage() {
       const mRes = await fetch('/api/research/memos');
       const mData = await mRes.json().catch(() => ({ memos: [] }));
       setMemos(mData.memos ?? []);
+      const sRes = await fetch('/api/research/signals');
+      const sData = await sRes.json().catch(() => ({ signals: [] }));
+      setSignals(sData.signals ?? []);
+      const aRes = await fetch('/api/research/theses/alerts');
+      const aData = await aRes.json().catch(() => ({ alerts: [] }));
+      setAlerts(aData.alerts ?? []);
     })();
   }, []);
 
@@ -51,16 +72,48 @@ export default function ResearchDashboardPage() {
         <p className="text-sm text-gray-500">加载中…</p>
       ) : (
         <>
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
             <Link href="/research/sources" className="rounded-lg border p-4 hover:bg-gray-50">
               <div className="text-3xl font-semibold">{sources.length}</div>
               <div className="text-sm text-gray-500">Source documents</div>
+            </Link>
+            <Link href="/research/signals" className="rounded-lg border p-4 hover:bg-gray-50">
+              <div className="text-3xl font-semibold">
+                {signals.filter((s) => s.created_at.slice(0, 10) === new Date().toISOString().slice(0, 10)).length}
+              </div>
+              <div className="text-sm text-gray-500">今日 signals（共 {signals.length}）</div>
+            </Link>
+            <Link href="/research/theses" className="rounded-lg border p-4 hover:bg-gray-50">
+              <div className="text-3xl font-semibold">{alerts.length}</div>
+              <div className="text-sm text-gray-500">待裁决 alerts</div>
             </Link>
             <Link href="/research/memos" className="rounded-lg border p-4 hover:bg-gray-50">
               <div className="text-3xl font-semibold">{memos.length}</div>
               <div className="text-sm text-gray-500">Investment memos</div>
             </Link>
           </div>
+
+          {alerts.length > 0 && (
+            <section className="rounded-lg border border-orange-300 bg-orange-50 p-4">
+              <h2 className="mb-2 text-base font-medium">⚠️ 待裁决 alerts（{alerts.length}）— 系统不会自动改 thesis 状态</h2>
+              <ul className="space-y-2">
+                {alerts.map((a) => (
+                  <li key={a.event.id} className="rounded border border-orange-200 bg-white p-3 text-sm">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`rounded px-2 py-0.5 text-xs ${VERDICT_BADGES[a.event.event_type] ?? 'bg-gray-100'}`}>
+                        {a.event.event_type}
+                      </span>
+                      <Link href={`/research/theses/${a.thesis_id}`} className="font-medium underline">
+                        {a.thesis_title}
+                      </Link>
+                      <span className="text-xs text-gray-500">{a.thesis_status} · {a.event.created_at}</span>
+                    </div>
+                    <p className="mt-1 text-xs text-gray-600">{String(a.event.detail.rationale ?? '')}</p>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           <section>
             <h2 className="mb-2 text-base font-medium">最近 Sources</h2>

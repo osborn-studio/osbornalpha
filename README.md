@@ -288,6 +288,10 @@ stock-monitor/
 - [Hiphon PM 设计](docs/superpowers/specs/2026-06-02-hiphon-pm-design.md) · [Hermes 融合设计](docs/superpowers/specs/2026-06-12-hermes-integration-design.md)
 - [问责层 CEO Plan](docs/designs/hiphon-pm-accountability.md) · [chokepoint-atlas 集成](docs/designs/chokepoint-pipeline-integration.md)
 
+**Research OS（本地专用，RESEARCH_OS_ENABLED=1）**
+- [产品/技术 Spec](docs/research-os/product-technical-spec.md) · [Phase 1 skeleton](docs/research-os/2026-07-04-phase1-skeleton.md) · [Phase 2 signals+thesis](docs/research-os/2026-07-04-phase2-signals-thesis.md)
+- 每日流水线 `scripts/research-daily.ts`（radar 导入 → signal 提炼 → thesis 监控；alerts 一律待人工裁决）。可自行挂 cron/launchd，例：`30 8 * * * cd <repo> && RESEARCH_OS_ENABLED=1 npx tsx scripts/research-daily.ts`（用户自选，不代配）
+
 **Hedge Fund AI（设计阶段）**
 - [PRD v2](docs/designs/hedge-fund-ai-prd.md) — 顶层
 - annex：[playbook runtime](docs/designs/hedge-fund-ai/playbook-runtime-spec.md) · [可转债策略](docs/designs/hedge-fund-ai/convertible-bond-strategy-spec.md) · [私募合规与审批](docs/designs/hedge-fund-ai/compliance-and-approval-spec.md) · [risk-parity+回测](docs/designs/hedge-fund-ai/risk-parity-and-backtest-spec.md) · [数据 Skill 与本地化](docs/designs/hedge-fund-ai/data-skills-and-localization-spec.md)
