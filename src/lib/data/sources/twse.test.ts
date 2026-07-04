@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { parseMisQuote, parseStockDayBars, twseExCh, aggregateBars } from './twse';
 
 describe('twseExCh', () => {
@@ -52,5 +52,28 @@ describe('aggregateBars', () => {
     expect(m).toHaveLength(2);
     expect(m[0]).toMatchObject({ date: '2026-07-13', open: 100, high: 125, low: 95, close: 121, volume: 35 });
     expect(m[1]).toMatchObject({ date: '2026-08-03', open: 121, high: 130, low: 120, close: 128, volume: 7 });
+  });
+});
+
+describe('fetchTwseQuotesBatch — board demux (tse vs otc code collision)', () => {
+  it('does not clobber quotes when a TSE and TPEx listing share a numeric code', async () => {
+    const { fetchTwseQuotesBatch } = await import('./twse');
+    const msg = (ex: string, c: string, z: string) => ({
+      ex, c, n: ex === 'tse' ? '上市同碼' : '上櫃同碼',
+      z, y: '100.00', o: '100.00', h: '110.00', l: '95.00', v: '1,000',
+      d: '20260706', t: '13:30:00',
+    });
+    const stub = vi.fn(async () => new Response(JSON.stringify({
+      msgArray: [msg('tse', '9999', '105.00'), msg('otc', '9999', '55.00')],
+    }), { status: 200 }));
+    vi.stubGlobal('fetch', stub);
+    try {
+      const m = await fetchTwseQuotesBatch(['9999.TW', '9999.TWO']);
+      expect(m.get('9999.TW')?.price).toBe(105);
+      expect(m.get('9999.TWO')?.price).toBe(55);
+      expect(stub).toHaveBeenCalledTimes(1); // one mis request for both
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

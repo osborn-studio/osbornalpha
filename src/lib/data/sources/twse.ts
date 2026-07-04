@@ -248,15 +248,19 @@ export async function fetchTwseQuotesBatch(tickers: string[]): Promise<Map<strin
     return result;
   }
 
-  // Map responses back by code (msg.c) — mis returns entries in request order
-  // but matching by code is robust to dropped symbols.
-  const byCode = new Map<string, MisMsg>();
+  // Map responses back by board+code — mis echoes the board in `ex`
+  // ('tse'|'otc'); keying on bare code would let a TSE and a TPEx listing
+  // sharing the same numeric code clobber each other (ranges not disjoint).
+  const byKey = new Map<string, MisMsg>();
   for (const m of msgArray) {
-    if (m.c) byCode.set(String(m.c).toUpperCase(), m);
+    if (!m.c) continue;
+    const code = String(m.c).toUpperCase();
+    byKey.set(m.ex ? `${String(m.ex).toLowerCase()}_${code}` : code, m);
   }
   for (const t of misses) {
-    const code = t.toUpperCase().replace(/\.(TW|TWO)$/, '');
-    const msg = byCode.get(code);
+    const [board, codePart] = twseExCh(t)!.split('_'); // 'tse_2330.tw'
+    const code = codePart.replace(/\.tw$/i, '').toUpperCase();
+    const msg = byKey.get(`${board}_${code}`) ?? byKey.get(code);
     const q = msg ? parseMisQuote(msg, t) : null;
     if (q) quoteCache.set(t, { q, at: Date.now() });
     result.set(t, q);
