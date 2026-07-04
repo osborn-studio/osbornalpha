@@ -62,3 +62,17 @@
 3. **无对应词条时**：按此表格式追加一行，注明选择理由，再使用。
 4. **人名不译**：投资大师人名（巴菲特、芒格等）在英文版可保留拼音/威妥玛拼写或通用英文名（Warren Buffett、Charlie Munger），由 G1b/c 具体页面翻译时统一查证补充至本表，不在此提前列出人名全表。
 5. **代码内部保持中文**：agent 工具描述、LLM prompt、代码注释、mock 数据默认不受本表约束（见 spec §1 "明确不动"）。
+
+## 九人投资委员会人名对照（G1a about 页确立）
+
+| 中文 | English |
+|---|---|
+| 巴菲特 | Warren Buffett / Buffett |
+| 芒格 | Charlie Munger / Munger |
+| 德鲁肯米勒 | Stanley Druckenmiller / Druckenmiller |
+| 霍华德·马克斯 | Howard Marks |
+| 彼得·林奇 | Peter Lynch |
+| 迈克尔·伯里 | Michael Burry |
+| 张坤 | Zhang Kun |
+| 李录 | Li Lu |
+| 段永平 | Duan Yongping |

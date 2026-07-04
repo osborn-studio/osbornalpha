@@ -1,1 +1,132 @@
-{}
+{
+  "meta": {
+    "title": "osbornalpha · AI Investment Cockpit",
+    "description": "AI Investment Cockpit · Daily AI monitoring for your personal watchlist · A-shares / HK / US stocks"
+  },
+  "nav": {
+    "enterWorkbench": "Enter Workbench",
+    "login": "Log in",
+    "register": "Sign up free"
+  },
+  "hero": {
+    "badge": "A-shares · HK · US · Daily AI Monitoring",
+    "titleLine1": "Your AI",
+    "titleLine2Pre": "Investment ",
+    "titleLine2Accent": "PM",
+    "subtitle": "Stock picking, monitoring, and decisions — all in one workbench. Daily AI briefs, perspectives from multiple investment masters, signal radar, and historical backtests.",
+    "ctaRegister": "Sign up free →",
+    "ctaLogin": "Log in",
+    "ctaEnter": "Enter Workbench →",
+    "note": "Sign in to enter the product · Your data is stored and isolated per account"
+  },
+  "sampleBrief": {
+    "label": "Today's AI Brief",
+    "confidence": "Confidence 7.8",
+    "committeeLabel": "Committee view:",
+    "committeeText": "Most masters remain neutral-to-bullish on core holdings, watching this week's liquidity and earnings catalysts."
+  },
+  "features": {
+    "watchlistBrief": {
+      "title": "Personal Watchlist + Daily AI Brief",
+      "desc": "Track A-shares / HK / US tickers of your choice — get an automatic monitoring brief and anomaly alerts every day."
+    },
+    "committee": {
+      "title": "AI Investment Committee",
+      "desc": "Perspectives from Buffett, Munger, Druckenmiller, and more — independent takes on the same ticker."
+    },
+    "radar": {
+      "title": "Signal Radar + Backtesting",
+      "desc": "Real-time scanning for rule-triggered opportunity signals, with historical backtests validating win rate and drawdown."
+    },
+    "pm": {
+      "title": "John Cameron · PM Decisions",
+      "desc": "A Druckenmiller-inspired PM agent — a five-stage decision pipeline producing traceable buy/sell calls."
+    }
+  },
+  "pricing": {
+    "heading": "Pricing",
+    "free": {
+      "name": "Free",
+      "price": "$0",
+      "feature1": "· Personal watchlist",
+      "feature2": "· Daily AI brief",
+      "feature3": "· Basic signal radar",
+      "cta": "Start for free"
+    },
+    "pro": {
+      "badge": "Coming soon",
+      "name": "Pro",
+      "price": "$— ",
+      "priceSuffix": "/ mo",
+      "feature1": "· Unlimited AI Investment Committee",
+      "feature2": "· Full backtesting + data export",
+      "feature3": "· John Cameron PM decisions",
+      "cta": "Stay tuned"
+    }
+  },
+  "footer": {
+    "disclaimerLabel": "Disclaimer:",
+    "disclaimer": "All content on this site is generated automatically by AI and is provided solely as an aid to investment decisions. It does not constitute investment advice, an offer, or a recommendation of any kind. AI-generated views may contain errors, omissions, or bias; past data does not guarantee future performance. Investment decisions should be based on your own research and judgment, and you alone bear all investment risk. osbornalpha is a personal tool and does not provide any licensed investment advisory service.",
+    "copyright": "© 2026 osbornalpha",
+    "about": "About"
+  },
+  "languageSwitcher": {
+    "zh": "中文",
+    "en": "EN"
+  },
+  "about": {
+    "meta": {
+      "title": "About",
+      "description": "About osbornalpha · Daily AI monitoring for your personal watchlist · A-shares / HK / US stocks"
+    },
+    "heading": "Daily AI monitoring for your personal watchlist · A-shares / HK / US stocks",
+    "intro": "Every day, on schedule, your watchlist is handed to an LLM that simulates a debate among multiple investment masters, producing a 5-minute decision-support brief delivered to Telegram, email, and the web.",
+    "featuresHeading": "✨ Key Features",
+    "features": {
+      "schedule": "🌅 Daily schedule (08:30 CST pre-market + 22:00 CST pre-US-open)",
+      "signals": "🎯 Smart signals: earnings approaching / unusual volume / rating changes / news sentiment / 13F holding changes",
+      "committee": "🧠 Multi-perspective synthesis: 9 investment masters debating concurrently",
+      "webUi": "📊 Trading-terminal-grade web UI: candlesticks / financials / news / AI views in one place",
+      "delivery": "📬 Multi-channel delivery: Telegram + email + static web",
+      "backtest": "📈 Track record: 30-day signal backtesting with public hit rate",
+      "compliance": "🛡️ Compliance baseline: always cites sources, always includes a disclaimer"
+    },
+    "committeeHeading": "🧠 9 AI Investment Committee Members",
+    "committee": {
+      "buffett": "Value investing / Moats",
+      "munger": "Multidisciplinary thinking / Inversion",
+      "druckenmiller": "Macro hedging / Trend-following",
+      "marks": "Cycles / Pendulum thinking",
+      "lynch": "Growth stocks / Tenbaggers",
+      "burry": "Contrarian / Crisis insight",
+      "zhangKun": "Quality growth / Consumer & healthcare",
+      "liLu": "Value investing / China perspective",
+      "duanYongping": "Equanimity / Principled investing"
+    },
+    "techStackHeading": "⚙️ Tech Stack",
+    "techStack": {
+      "webFrontend": "Web Frontend",
+      "backendDb": "Backend / DB",
+      "deployment": "Deployment",
+      "llm": "LLM",
+      "data": "Data (planned)",
+      "scheduling": "Scheduling"
+    },
+    "principlesHeading": "📐 Design Principles",
+    "principlesIs": "What it is",
+    "principlesIsNot": "What it isn't",
+    "principles": {
+      "decisionAid": "✅ A decision-support tool",
+      "noExecution": "❌ Not connected to a broker, does not execute trades",
+      "multiPerspective": "✅ Information synthesis + multiple perspectives",
+      "notPredictor": "❌ Not a price-prediction fortune teller",
+      "personalUse": "✅ Personal use",
+      "notPublic": "❌ Not distributed to the general public",
+      "citesSources": "✅ Always cites sources in full",
+      "notAdvice": "❌ Does not constitute investment advice"
+    },
+    "linksHeading": "🔗 Links",
+    "githubRepo": "GitHub repository",
+    "legacyDemo": "v0.1 static version (archived)"
+  }
+}
