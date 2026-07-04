@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import Link from 'next/link';
-import { useLocale } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { addCustomStock } from '@/lib/data/custom-stocks';
 import { formatPrice, formatPct, changeClass, marketLabel, classifyMarket } from '@/lib/utils';
 import { Disclaimer } from '@/components/Disclaimer';
@@ -23,6 +23,7 @@ interface SearchResult { t: string; n: string; py: string; m: Market }
 
 export default function WatchlistPage() {
   const { show } = useToast();
+  const t = useTranslations('market.watchlist');
   const locale = useLocale() as AppLocale;
   const { groups, hydrated, setGroups } = useWatchlist();
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
@@ -194,7 +195,7 @@ export default function WatchlistPage() {
     });
     persist(next);
     const toName = groups.find((g) => g.id === toGroup)?.name || toGroup;
-    show(`✓ ${ticker} → ${toName}`);
+    show(t('movedTo', { ticker, group: toName }));
   }
 
   function reorderColumn(fromId: string, toId: string) {
@@ -205,21 +206,21 @@ export default function WatchlistPage() {
     const [moved] = next.splice(fromIdx, 1);
     next.splice(toIdx, 0, moved);
     persist(next);
-    show(`✓ 看板已重排：${moved.name}`);
+    show(t('reordered', { name: moved.name }));
   }
 
   // Manually refresh all quotes (e.g. after a transient API failure)
   function refreshQuotes() {
     refetch();
-    show('🔄 正在刷新行情…');
+    show(t('refreshing'));
   }
 
   // ─── Card actions ───
   function removeTicker(ticker: string) {
-    if (!confirm(`从股票池移除 ${ticker} ?`)) return;
+    if (!confirm(t('confirmRemove', { ticker }))) return;
     const next = groups.map((g) => ({ ...g, tickers: g.tickers.filter((t) => t !== ticker) }));
     persist(next);
-    show(`✓ 已移除：${ticker}`);
+    show(t('removed', { ticker }));
   }
 
   // ─── Column management ───
@@ -230,13 +231,13 @@ export default function WatchlistPage() {
     persist([...groups, { id, name, tickers: [] }]);
     setNewColumnName('');
     setNewColumnOpen(false);
-    show(`✓ 已新增看板：${name}`);
+    show(t('columnAdded', { name }));
   }
 
   function renameColumn(id: string) {
     const cur = groups.find((g) => g.id === id);
     if (!cur) return;
-    const next = prompt(`重命名「${cur.name}」`, cur.name);
+    const next = prompt(t('renamePrompt', { name: cur.name }), cur.name);
     if (!next || !next.trim() || next.trim() === cur.name) return;
     persist(groups.map((g) => (g.id === id ? { ...g, name: next.trim() } : g)));
   }
@@ -245,8 +246,8 @@ export default function WatchlistPage() {
     const cur = groups.find((g) => g.id === id);
     if (!cur) return;
     if (cur.tickers.length > 0) {
-      if (!confirm(`删除「${cur.name}」？该列还有 ${cur.tickers.length} 只股票，将一并移除。`)) return;
-    } else if (!confirm(`删除「${cur.name}」？`)) return;
+      if (!confirm(t('deleteConfirmWithStocks', { name: cur.name, count: cur.tickers.length }))) return;
+    } else if (!confirm(t('deleteConfirmEmpty', { name: cur.name }))) return;
     persist(groups.filter((g) => g.id !== id));
   }
 
@@ -271,18 +272,18 @@ export default function WatchlistPage() {
     }
 
     if (fresh.length === 0) {
-      show(`没有新代码可导入（全部 ${skipped.length} 个已存在于股票池）`);
+      show(t('importNoNew', { skipped: skipped.length }));
       return;
     }
 
     const id = `import_${Date.now()}`;
-    const finalName = boardName.trim() || `批量导入 ${formatDateLocale(new Date().toISOString(), locale)}`;
+    const finalName = boardName.trim() || t('importDefaultName', { date: formatDateLocale(new Date().toISOString(), locale) });
     persist([...groups, { id, name: finalName, tickers: fresh }]);
     setImportOpen(false);
     show(
       skipped.length > 0
-        ? `✓ 已导入 ${fresh.length} 只到「${finalName}」，去重 ${skipped.length} 个`
-        : `✓ 已导入 ${fresh.length} 只到「${finalName}」`
+        ? t('importDoneDedup', { fresh: fresh.length, name: finalName, skipped: skipped.length })
+        : t('importDone', { fresh: fresh.length, name: finalName })
     );
   }
 
@@ -293,7 +294,7 @@ export default function WatchlistPage() {
       lines.push(`  - id: ${g.id}`);
       lines.push(`    name: "${g.name}"`);
       lines.push(`    tickers:`);
-      for (const t of g.tickers) lines.push(`      - "${t}"`);
+      for (const tk of g.tickers) lines.push(`      - "${tk}"`);
     }
     const blob = new Blob([lines.join('\n')], { type: 'text/yaml' });
     const url = URL.createObjectURL(blob);
@@ -302,25 +303,23 @@ export default function WatchlistPage() {
     a.download = `watchlist-${new Date().toISOString().slice(0, 10)}.yml`;
     a.click();
     URL.revokeObjectURL(url);
-    show('✓ YAML 已导出');
+    show(t('exportDone'));
   }
 
   return (
     <>
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold">📋 股票池</h1>
+          <h1 className="text-xl font-bold">{t('heading')}</h1>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-text-dim">
             <span>
-              {viewMode === 'kanban'
-                ? '拖拽卡片在看板间移动 · 拖拽列头重排看板'
-                : '点击表头排序 · 评级/风险/目标价/估值区间'}
-              {' · '}每 {REFRESH_MS / 1000}s 自动刷新
+              {viewMode === 'kanban' ? t('hintKanban') : t('hintTable')}
+              {' · '}{t('autoRefresh', { seconds: REFRESH_MS / 1000 })}
             </span>
-            {quotesLoading && allTickers.length > 0 && <span className="text-accent">⏳ 加载报价…</span>}
+            {quotesLoading && allTickers.length > 0 && <span className="text-accent">{t('loadingQuotes')}</span>}
             {!quotesLoading && failedTickers.length > 0 && (
               <span className="text-down">
-                ⚠ {failedTickers.length} 只行情拉取失败
+                {t('quotesFailed', { count: failedTickers.length })}
               </span>
             )}
           </div>
@@ -330,38 +329,38 @@ export default function WatchlistPage() {
             <button
               onClick={() => setView('kanban')}
               className={`px-3 py-1.5 ${viewMode === 'kanban' ? 'bg-accent-dim/20 font-semibold text-accent' : 'text-text-dim hover:text-text'}`}
-              title="看板视图（拖拽分组）"
+              title={t('viewKanbanTitle')}
             >
-              📋 看板
+              {t('viewKanban')}
             </button>
             <button
               onClick={() => setView('table')}
               className={`border-l border-border px-3 py-1.5 ${viewMode === 'table' ? 'bg-accent-dim/20 font-semibold text-accent' : 'text-text-dim hover:text-text'}`}
-              title="表格视图（评级 / 风险 / 目标价 / 估值区间）"
+              title={t('viewTableTitle')}
             >
-              📊 表格
+              {t('viewTable')}
             </button>
           </div>
           <button
             onClick={refreshQuotes}
             disabled={allTickers.length === 0 || quotesLoading}
             className="rounded-md bg-bg-card px-3 py-1.5 text-xs text-text-dim hover:text-text disabled:opacity-50"
-            title="重新拉取所有行情"
+            title={t('refreshTitle')}
           >
-            🔄 刷新
+            {t('refresh')}
           </button>
           <button
             onClick={() => setImportOpen(true)}
             className="rounded-md bg-accent-dim/15 px-3 py-1.5 text-xs font-semibold text-accent hover:bg-accent-dim/25"
-            title="从 CSV / Excel 文件或粘贴文本批量导入"
+            title={t('importBatchTitle')}
           >
-            📥 批量导入
+            {t('importBatch')}
           </button>
           <button
             onClick={exportYaml}
             className="rounded-md bg-bg-card px-3 py-1.5 text-xs text-text-dim hover:text-text"
           >
-            📤 导出
+            {t('export')}
           </button>
         </div>
       </div>
@@ -369,8 +368,8 @@ export default function WatchlistPage() {
       {!user && isSupabaseConfigured() && (
         <div className="card-base mb-3 flex items-center justify-between bg-accent-dim/10 text-sm">
           <span>
-            👤 访客模式（数据存浏览器本地）。
-            <Link href="/login" className="font-semibold">登录</Link> 后多设备同步。
+            {t('guestBanner')}
+            <Link href="/login" className="font-semibold">{t('guestLogin')}</Link>{t('guestSuffix')}
           </span>
         </div>
       )}
@@ -416,14 +415,14 @@ export default function WatchlistPage() {
             onTickerAdded={(info) => {
               const exists = groups.some((gg) => gg.tickers.includes(info.t));
               if (exists) {
-                show(`${info.t} 已经在股票池中`);
+                show(t('alreadyInWatchlist', { ticker: info.t }));
                 return;
               }
               addCustomStock({ t: info.t, n: info.n, py: info.py, m: info.m });
               persist(
                 groups.map((gg) => (gg.id === g.id ? { ...gg, tickers: [...gg.tickers, info.t] } : gg))
               );
-              show(`✓ 已加入「${g.name}」：${info.n} (${info.t})`);
+              show(t('addedTo', { group: g.name, name: info.n, ticker: info.t }));
             }}
           />
         ))}
@@ -443,7 +442,7 @@ export default function WatchlistPage() {
                   if (e.key === 'Enter') addColumn();
                   if (e.key === 'Escape') { setNewColumnOpen(false); setNewColumnName(''); }
                 }}
-                placeholder="新看板名称（如：基本盘 / 短线机会）"
+                placeholder={t('newColumnPlaceholder')}
                 className="w-full text-sm"
               />
               <div className="mt-2 flex gap-2">
@@ -452,13 +451,13 @@ export default function WatchlistPage() {
                   disabled={!newColumnName.trim()}
                   className="flex-1 rounded bg-accent-dim px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
                 >
-                  + 新增看板
+                  {t('addColumnCta')}
                 </button>
                 <button
                   onClick={() => { setNewColumnOpen(false); setNewColumnName(''); }}
                   className="rounded border border-border px-3 py-1.5 text-xs text-text-dim"
                 >
-                  取消
+                  {t('cancel')}
                 </button>
               </div>
             </div>
@@ -467,7 +466,7 @@ export default function WatchlistPage() {
               onClick={() => setNewColumnOpen(true)}
               className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border bg-transparent py-3 text-sm text-text-dim hover:border-accent-dim hover:text-accent"
             >
-              <span>＋</span><span>新增看板</span>
+              <span>＋</span><span>{t('addColumnLabel')}</span>
             </button>
           )}
         </div>
@@ -476,13 +475,13 @@ export default function WatchlistPage() {
 
       {!hydrated && (
         <div className="card-base bg-bg-card py-8 text-center text-sm text-text-dim">
-          加载股票池…
+          {t('loadingWatchlist')}
         </div>
       )}
 
       {hydrated && allTickers.length === 0 && (
         <div className="card-base bg-bg-card py-8 text-center text-sm text-text-dim">
-          股票池是空的。点任意看板上的「＋ 加入股票」开始添加。
+          {t('emptyWatchlist')}
         </div>
       )}
 
@@ -543,6 +542,7 @@ function KanbanColumn(props: ColumnProps) {
     onAddOpen, onAddClose, onCardMove, onCardRemove, onOpenMenu,
     onRename, onDelete, onTickerAdded,
   } = props;
+  const t = useTranslations('market.watchlist.kanban');
 
   // Visual states stack:
   //   - isBeingDragged: this column is the one being dragged → fade out
@@ -572,7 +572,7 @@ function KanbanColumn(props: ColumnProps) {
         onDragEnd={onCardDragEnd}
         className="flex items-center justify-between border-b border-border px-3 py-2.5 select-none"
         style={{ cursor: 'grab' }}
-        title="拖拽此处重排看板"
+        title={t('reorderTitle')}
       >
         <div className="flex items-center gap-2">
           <span className="text-text-muted" aria-hidden="true">⠿</span>
@@ -584,14 +584,14 @@ function KanbanColumn(props: ColumnProps) {
         <div className="flex gap-0.5" onDragStart={(e) => e.preventDefault()}>
           <button
             onClick={(e) => { e.stopPropagation(); onRename(); }}
-            title="重命名"
+            title={t('rename')}
             className="rounded p-1 text-text-dim hover:bg-bg-elevated hover:text-text"
           >
             ✎
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onDelete(); }}
-            title="删除看板"
+            title={t('delete')}
             className="rounded p-1 text-text-dim hover:bg-down/10 hover:text-down"
           >
             ×
@@ -603,8 +603,8 @@ function KanbanColumn(props: ColumnProps) {
       <div className="flex-1 space-y-1.5 overflow-y-auto p-2">
         {group.tickers.length === 0 && !isAdding && (
           <div className="rounded border border-dashed border-border/60 py-6 text-center text-[11px] text-text-muted">
-            拖拽卡片到此处<br />
-            或点下方 + 加入
+            {t('dropHint')}<br />
+            {t('orAddBelow')}
           </div>
         )}
 
@@ -634,7 +634,7 @@ function KanbanColumn(props: ColumnProps) {
             onClick={onAddOpen}
             className="w-full rounded border border-dashed border-border bg-transparent px-2 py-1.5 text-xs text-text-dim hover:border-accent-dim hover:text-accent"
           >
-            ＋ 加入股票
+            {t('addStock')}
           </button>
         )}
       </div>
@@ -666,6 +666,7 @@ function StockCard({
   ticker, quote, loadedAt, isDragging, menuOpen, currentGroupId, allGroups,
   onDragStart, onDragEnd, onMove, onRemove, onRetry, onToggleMenu,
 }: CardProps) {
+  const t = useTranslations('market.watchlist.kanban');
   const market = quote?.market || classifyMarket(ticker);
   const name = quote?.name || ticker;
   const currency = quote?.currency || (market === 'A' ? '¥' : market === 'HK' ? 'HK$' : '$');
@@ -707,7 +708,7 @@ function StockCard({
         <button
           onClick={(e) => { e.stopPropagation(); e.preventDefault(); onToggleMenu(); }}
           className="rounded p-1 text-text-dim hover:bg-bg-card hover:text-text"
-          title="移动 / 删除"
+          title={t('moveMenu')}
         >
           ⋯
         </button>
@@ -725,21 +726,21 @@ function StockCard({
           </>
         ) : isFailed ? (
           <>
-            <span className="text-[11px] text-down" title="行情数据拉取失败">
-              ⚠ 拉取失败
+            <span className="text-[11px] text-down" title={t('fetchFailedTitle')}>
+              {t('fetchFailed')}
             </span>
             <button
               onClick={(e) => { e.stopPropagation(); e.preventDefault(); onRetry(); }}
               className="rounded border border-down/40 px-1.5 py-0.5 text-[10px] text-down hover:bg-down/10"
-              title="重试拉取这只股票"
+              title={t('retryTitle')}
             >
-              重试
+              {t('retry')}
             </button>
           </>
         ) : (
           <>
             <span className="text-text-muted">—</span>
-            <span className="text-xs text-text-muted">加载中…</span>
+            <span className="text-xs text-text-muted">{t('loading')}</span>
           </>
         )}
       </div>
@@ -749,9 +750,9 @@ function StockCard({
           className="absolute right-2 top-9 z-20 w-40 rounded-lg border border-border bg-bg-elevated p-1 shadow-lg"
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="px-2 py-1 text-[10px] font-semibold uppercase text-text-muted">移到看板</div>
+          <div className="px-2 py-1 text-[10px] font-semibold uppercase text-text-muted">{t('moveTo')}</div>
           {otherGroups.length === 0 && (
-            <div className="px-2 py-1 text-[11px] text-text-muted">没有其他看板</div>
+            <div className="px-2 py-1 text-[11px] text-text-muted">{t('noOtherColumns')}</div>
           )}
           {otherGroups.map((g) => (
             <button
@@ -759,7 +760,7 @@ function StockCard({
               onClick={() => { onMove(g.id); onToggleMenu(); }}
               className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-bg-card"
             >
-              → {g.name}
+              {t('moveToArrow', { name: g.name })}
             </button>
           ))}
           <div className="my-1 border-t border-border" />
@@ -767,7 +768,7 @@ function StockCard({
             onClick={() => { onRemove(); onToggleMenu(); }}
             className="block w-full rounded px-2 py-1.5 text-left text-xs text-down hover:bg-down/10"
           >
-            🗑 从股票池移除
+            {t('removeFromWatchlist')}
           </button>
         </div>
       )}
@@ -786,6 +787,7 @@ interface AddInlineProps {
 }
 
 function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
+  const t = useTranslations('market.watchlist.kanban');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -836,8 +838,8 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
     const q = query.trim();
     if (!q) return;
     const canonical = normalizeWindTicker(q) || q.toUpperCase();
-    const note = canonical !== q.toUpperCase() ? `\n（已规范化为 ${canonical}）` : '';
-    if (confirm(`未在数据库中找到 "${q}"。${note}\n仍然加入到「${groupName}」？\n（建议先检查拼写或试试英文代码）`)) {
+    const note = canonical !== q.toUpperCase() ? t('normalizedNote', { canonical }) : '';
+    if (confirm(t('confirmForceAdd', { query: q, note, group: groupName }))) {
       onAdd({ t: canonical, n: q, py: '', m: classifyMarket(canonical) as Market });
       setQuery('');
       setResults([]);
@@ -863,7 +865,7 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
         value={query}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}
-        placeholder="代码 / 名称（如 完美世界 / AAPL / 600519）"
+        placeholder={t('searchPlaceholder')}
         className="w-full text-xs"
         autoComplete="off"
       />
@@ -891,7 +893,7 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
       )}
       {query.trim() && !loading && results.length === 0 && (
         <div className="mt-1.5 text-[10px] text-text-muted">
-          没有匹配。回车以「{query.trim()}」强制加入。
+          {t('noMatch', { query: query.trim() })}
         </div>
       )}
       <div className="mt-1.5 flex gap-1.5">
@@ -900,10 +902,10 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
           disabled={loading || !query.trim()}
           className="flex-1 rounded bg-accent-dim px-2 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
         >
-          {loading ? '搜索中…' : '+ 加入'}
+          {loading ? t('searching') : t('add')}
         </button>
         <button onClick={onClose} className="rounded border border-border px-2 py-1 text-[11px] text-text-dim">
-          完成
+          {t('done')}
         </button>
       </div>
     </div>
@@ -974,6 +976,8 @@ function parseTickerInput(raw: string): string[] {
 }
 
 function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfirm }: ImportDialogProps) {
+  const t = useTranslations('market.watchlist.import');
+  const tw = useTranslations('market.watchlist');
   const locale = useLocale() as AppLocale;
   const [text, setText] = useState('');
   const [boardName, setBoardName] = useState('');
@@ -1004,7 +1008,7 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
     // Excel files compress well — allow 2 MB
     const maxSize = 1024 * 1024 * 2;
     if (file.size > maxSize) {
-      setFileError(`文件过大（${(file.size / 1024 / 1024).toFixed(1)} MB）。上限 2 MB。`);
+      setFileError(t('fileTooLarge', { size: (file.size / 1024 / 1024).toFixed(1) }));
       e.target.value = '';
       return;
     }
@@ -1027,7 +1031,7 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
         }
         const content = lines.join('\n');
         if (!content.trim()) {
-          setFileError('Excel 文件为空或没有数据');
+          setFileError(t('excelEmpty'));
           e.target.value = '';
           return;
         }
@@ -1038,7 +1042,7 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
         setText((cur) => (cur.trim() ? cur + '\n' + content : content));
       }
     } catch (err: any) {
-      setFileError(`读取失败：${err?.message || '未知错误'}`);
+      setFileError(t('readFailed', { message: err?.message || t('unknownError') }));
     }
     e.target.value = '';  // allow re-select same file
   }
@@ -1055,7 +1059,7 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-base font-semibold">📥 批量导入股票</h2>
+          <h2 className="text-base font-semibold">{t('title')}</h2>
           <button
             onClick={onCancel}
             className="rounded p-1 text-text-dim hover:bg-bg-card hover:text-text"
@@ -1065,29 +1069,28 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
         </div>
 
         <div className="mb-3 text-[11px] text-text-dim">
-          股票池现有 <span className="font-semibold tabular-nums text-text">{existingTickerCount}</span> 只股票。
-          导入后将自动建立新看板，已存在的代码会跳过。
+          {t('existingCountPrefix')} <span className="font-semibold tabular-nums text-text">{existingTickerCount}</span> {t('existingCountSuffix')}
         </div>
 
         {/* Board name */}
         <label className="mb-3 block">
-          <span className="mb-1 block text-xs text-text-dim">新看板名称（可选）</span>
+          <span className="mb-1 block text-xs text-text-dim">{t('boardNameLabel')}</span>
           <input
             type="text"
             value={boardName}
             onChange={(e) => setBoardName(e.target.value)}
-            placeholder={`默认：批量导入 ${formatDateLocale(new Date().toISOString(), locale)}`}
+            placeholder={t('boardNamePlaceholder', { defaultName: tw('importDefaultName', { date: formatDateLocale(new Date().toISOString(), locale) }) })}
             className="w-full text-sm"
           />
         </label>
 
         {/* Text paste */}
         <label className="mb-2 block">
-          <span className="mb-1 block text-xs text-text-dim">粘贴代码（每行一个或逗号分隔）</span>
+          <span className="mb-1 block text-xs text-text-dim">{t('pasteLabel')}</span>
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder={`600519.SH\n002594.SZ\nAAPL.O      ← 自动识别 Wind 后缀\nsh000333    ← Sina 前缀也能用\n00700.HK\n\n或：600519.SH, 002594.SZ, AAPL`}
+            placeholder={t('pastePlaceholder')}
             rows={6}
             className="w-full font-mono text-xs"
             style={{ resize: 'vertical' }}
@@ -1097,7 +1100,7 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
         {/* File upload */}
         <div className="mb-3">
           <label className="inline-flex cursor-pointer items-center gap-2 rounded border border-border bg-bg-card px-3 py-1.5 text-xs text-text-dim hover:text-text">
-            <span>📎 上传文件</span>
+            <span>{t('uploadFile')}</span>
             <input
               type="file"
               accept=".csv,.txt,.xlsx,.xls,.xlsm,.xlsb,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/vnd.ms-excel.sheet.macroenabled.12"
@@ -1109,12 +1112,10 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
             <span className="ml-2 text-[11px] text-down">{fileError}</span>
           )}
           <div className="mt-1 text-[10px] text-text-muted">
-            支持 CSV / TXT / XLSX / XLS / XLSM。自动取第一列，带表头会跳过。Excel 多个工作表会全部读取。
+            {t('supportedFormats')}
           </div>
           <div className="mt-1 text-[10px] text-text-muted">
-            🌐 自动识别 <span className="font-semibold">万得 Wind</span>（<code>AAPL.O</code> / <code>JPM.N</code>）·
-            Yahoo（<code>600519.SS</code>）· Sina（<code>sh600519</code>）·
-            雪球（<code>SH600519</code>）· 同花顺裸数字（<code>600519</code>）
+            {t('dialectHint')}
           </div>
         </div>
 
@@ -1122,27 +1123,27 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
         {parsed.length > 0 && (
           <div className="mb-3 rounded border border-border bg-bg-card p-2.5 text-[11px]">
             <div className="mb-1.5 flex items-baseline gap-3 text-text-dim">
-              <span>解析：<span className="font-semibold tabular-nums text-text">{dedupStats.total}</span> 个</span>
-              <span className="text-up">+ <span className="font-semibold tabular-nums">{dedupStats.fresh}</span> 新增</span>
+              <span>{t('parsedTotal', { total: dedupStats.total })}</span>
+              <span className="text-up">{t('parsedFresh', { fresh: dedupStats.fresh })}</span>
               {dedupStats.duplicateOfExisting > 0 && (
                 <span className="text-text-muted">
-                  − <span className="font-semibold tabular-nums">{dedupStats.duplicateOfExisting}</span> 与已有重复
+                  {t('parsedDupExisting', { count: dedupStats.duplicateOfExisting })}
                 </span>
               )}
               {dedupStats.duplicateWithinInput > 0 && (
                 <span className="text-text-muted">
-                  − <span className="font-semibold tabular-nums">{dedupStats.duplicateWithinInput}</span> 输入内重复
+                  {t('parsedDupWithinInput', { count: dedupStats.duplicateWithinInput })}
                 </span>
               )}
             </div>
             <div className="max-h-28 overflow-y-auto rounded bg-bg-elevated p-1.5 font-mono text-[10px] leading-relaxed">
-              {Array.from(new Set(parsed)).map((t) => (
+              {Array.from(new Set(parsed)).map((tk) => (
                 <span
-                  key={t}
-                  className={`mr-1.5 inline-block ${existingTickers.has(t) ? 'text-text-muted line-through' : 'text-text'}`}
-                  title={existingTickers.has(t) ? '已存在于股票池，将跳过' : '将导入'}
+                  key={tk}
+                  className={`mr-1.5 inline-block ${existingTickers.has(tk) ? 'text-text-muted line-through' : 'text-text'}`}
+                  title={existingTickers.has(tk) ? t('willSkipTitle') : t('willImportTitle')}
                 >
-                  {t}
+                  {tk}
                 </span>
               ))}
             </div>
@@ -1155,23 +1156,23 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
             onClick={onCancel}
             className="rounded border border-border px-3 py-1.5 text-xs text-text-dim"
           >
-            取消
+            {tw('cancel')}
           </button>
           <button
             onClick={() => {
               const seen = new Set<string>();
               const fresh: string[] = [];
-              for (const t of parsed) {
-                if (existingTickers.has(t) || seen.has(t)) continue;
-                seen.add(t);
-                fresh.push(t);
+              for (const tk of parsed) {
+                if (existingTickers.has(tk) || seen.has(tk)) continue;
+                seen.add(tk);
+                fresh.push(tk);
               }
               onConfirm(fresh, boardName);
             }}
             disabled={!canConfirm}
             className="rounded bg-accent-dim px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
           >
-            {canConfirm ? `导入 ${dedupStats.fresh} 个到新看板` : '没有可导入的代码'}
+            {canConfirm ? t('confirmImport', { count: dedupStats.fresh }) : t('noneToImport')}
           </button>
         </div>
       </div>

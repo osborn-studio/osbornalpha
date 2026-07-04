@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useTranslations } from 'next-intl';
 import { getStockOrStub } from '@/lib/data/mock';
 import { formatPrice, formatPct, changeClass } from '@/lib/utils';
 import type { LiveQuote } from '@/lib/hooks/useQuote';
@@ -46,25 +47,27 @@ function RatingBadge({ rating }: { rating: Rating | null }) {
 }
 
 function RiskBars({ level }: { level: number | null }) {
+  const t = useTranslations('market.table');
   if (!level) return <span className="text-text-muted">--</span>;
   // Fixed semantic colors: low risk green, mid amber, high red (scheme-independent).
   const color = level <= 2 ? 'bg-emerald-500' : level === 3 ? 'bg-amber-500' : 'bg-red-500';
   const textColor = level <= 2 ? 'text-emerald-500' : level === 3 ? 'text-amber-500' : 'text-red-500';
   return (
     <div className="flex items-center gap-1.5">
-      <div className="flex items-end gap-[2px]" aria-label={`风险 ${level} 级`}>
+      <div className="flex items-end gap-[2px]" aria-label={t('riskLevelAria', { level })}>
         {[1, 2, 3, 4, 5].map((i) => (
           <span key={i}
             className={`w-[3px] rounded-sm ${i <= level ? color : 'bg-bg-elevated'}`}
             style={{ height: `${4 + i * 2}px` }} />
         ))}
       </div>
-      <span className={`text-[11px] ${textColor}`}>{level}级</span>
+      <span className={`text-[11px] ${textColor}`}>{t('riskLevelLabel', { level })}</span>
     </div>
   );
 }
 
 function ValuationCell({ price, range, currency }: { price: number; range: Row['range']; currency: string }) {
+  const t = useTranslations('market.table');
   if (!range) return <span className="text-text-muted">--</span>;
   const pos = rangePosition(price, range);
   return (
@@ -77,7 +80,7 @@ function ValuationCell({ price, range, currency }: { price: number; range: Row['
         <span
           className="absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-bg bg-accent"
           style={{ left: `${pos * 100}%` }}
-          title={`现价 ${currency}${formatPrice(price)}`}
+          title={t('currentPriceTitle', { price: `${currency}${formatPrice(price)}` })}
         />
       </div>
     </div>
@@ -85,6 +88,7 @@ function ValuationCell({ price, range, currency }: { price: number; range: Row['
 }
 
 export function WatchlistTable({ groups, quotes, loading = false }: { groups: Group[]; quotes: Record<string, LiveQuote | null>; loading?: boolean }) {
+  const t = useTranslations('market.table');
   const [sortKey, setSortKey] = useState<SortKey>('none');
   const [asc, setAsc] = useState(false);
   const [consensus, setConsensus] = useState<Record<string, ConsensusInfo>>({});
@@ -126,7 +130,7 @@ export function WatchlistTable({ groups, quotes, loading = false }: { groups: Gr
   );
 
   useEffect(() => {
-    const toFetch = missingTargetAShares.filter((t) => !(t in consensus));
+    const toFetch = missingTargetAShares.filter((tk) => !(tk in consensus));
     if (toFetch.length === 0) return;
     let cancelled = false;
     (async () => {
@@ -217,54 +221,54 @@ export function WatchlistTable({ groups, quotes, loading = false }: { groups: Gr
     <th aria-sort={ariaSort(k)} className={`px-3 py-2.5 font-medium ${align === 'right' ? 'text-right' : 'text-left'}`}>
       <button type="button" onClick={() => sort(k)}
         className={`inline-flex items-center gap-0.5 hover:text-text focus:outline-none focus-visible:underline ${align === 'right' ? 'flex-row-reverse' : ''}`}
-        aria-label={`按${label}排序`}>
+        aria-label={t('sortAriaLabel', { label })}>
         {label}<span aria-hidden="true">{arrow(k)}</span>
       </button>
     </th>
   );
 
   if (rows.length === 0) {
-    return <div className="card-base text-center text-sm text-text-dim">股票池为空，先到看板视图添加标的。</div>;
+    return <div className="card-base text-center text-sm text-text-dim">{t('empty')}</div>;
   }
 
   return (
     <div className="card-base overflow-x-auto p-0">
       <div className="mb-3 flex gap-2">
         <div className="flex-1 rounded-md bg-bg-card px-3 py-2">
-          <div className="text-[11px] text-text-dim">跟踪标的</div>
+          <div className="text-[11px] text-text-dim">{t('summary.tracked')}</div>
           <div className="text-lg font-bold">{summary.tracked}</div>
         </div>
         <div className="flex-1 rounded-md bg-bg-card px-3 py-2">
-          <div className="text-[11px] text-text-dim">强烈买入</div>
+          <div className="text-[11px] text-text-dim">{t('summary.strongBuy')}</div>
           <div className="text-lg font-bold">{summary.strongBuy}</div>
         </div>
         <div className="flex-1 rounded-md bg-bg-card px-3 py-2">
-          <div className="text-[11px] text-text-dim">平均风险</div>
+          <div className="text-[11px] text-text-dim">{t('summary.avgRisk')}</div>
           <div className="text-lg font-bold">{summary.avgRisk}</div>
         </div>
         <div className="flex-1 rounded-md bg-bg-card px-3 py-2">
-          <div className="text-[11px] text-text-dim">上行空间</div>
+          <div className="text-[11px] text-text-dim">{t('summary.upside')}</div>
           <div className="text-lg font-bold">{summary.upside}</div>
         </div>
       </div>
       {loading && (
         <div className="border-b border-border px-3 py-1.5 text-[11px] text-text-dim" role="status">
-          ⏳ 报价加载中…
+          {t('loadingQuotes')}
         </div>
       )}
-      <table aria-label="股票池表格视图" className="w-full min-w-[860px] text-sm">
-        <caption className="sr-only">股票池表格视图：评级、风险、目标价、估值区间，可按表头排序</caption>
+      <table aria-label={t('ariaLabel')} className="w-full min-w-[860px] text-sm">
+        <caption className="sr-only">{t('caption')}</caption>
         <thead>
           <tr className="border-b border-border text-[11px] text-text-dim">
-            <th className="px-3 py-2.5 text-left font-medium" scope="col">股票代码</th>
-            <th className="px-3 py-2.5 text-left font-medium" scope="col">公司名称</th>
-            <SortTh k="price" label="当前价格" align="right" />
-            <SortTh k="change" label="涨跌幅" align="right" />
-            <SortTh k="rating" label="投资评级" />
-            <SortTh k="risk" label="风险等级" />
-            <SortTh k="target" label="目标价" align="right" />
-            <th className="px-3 py-2.5 text-left font-medium" scope="col">估值区间</th>
-            <th className="px-3 py-2.5 text-left font-medium" scope="col">分组</th>
+            <th className="px-3 py-2.5 text-left font-medium" scope="col">{t('headers.ticker')}</th>
+            <th className="px-3 py-2.5 text-left font-medium" scope="col">{t('headers.name')}</th>
+            <SortTh k="price" label={t('headers.price')} align="right" />
+            <SortTh k="change" label={t('headers.change')} align="right" />
+            <SortTh k="rating" label={t('headers.rating')} />
+            <SortTh k="risk" label={t('headers.risk')} />
+            <SortTh k="target" label={t('headers.target')} align="right" />
+            <th className="px-3 py-2.5 text-left font-medium" scope="col">{t('headers.range')}</th>
+            <th className="px-3 py-2.5 text-left font-medium" scope="col">{t('headers.group')}</th>
           </tr>
         </thead>
         <tbody>
@@ -287,7 +291,7 @@ export function WatchlistTable({ groups, quotes, loading = false }: { groups: Gr
               <td className="px-3 py-2.5 text-right tabular-nums">
                 {r.target != null ? (
                   <span
-                    title={r.consensusSource === 'tushare' ? '来源：Tushare 卖方一致预期' : undefined}
+                    title={r.consensusSource === 'tushare' ? t('consensusSourceTitle') : undefined}
                   >
                     {r.currency}{Math.round(r.target)}
                     {r.consensusSource === 'tushare' && (
