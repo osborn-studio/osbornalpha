@@ -1,1 +1,6 @@
-{}
+{
+  "sidebar": {
+    "manage": "Manage →",
+    "all": "All"
+  }
+}

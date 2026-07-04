@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import Link from 'next/link';
+import { useTranslations } from 'next-intl';
 import { getStockOrStub } from '@/lib/data/mock';
 import { useBatchQuotes } from '@/lib/hooks/useQuote';
 import { Sparkline } from './Sparkline';
@@ -16,6 +17,7 @@ interface Props {
 }
 
 export function WatchlistSidebar({ selectedTicker, onSelect, variant = 'sidebar' }: Props) {
+  const t = useTranslations('watchlist.sidebar');
   const { groups } = useWatchlist();
   const [activeGroup, setActiveGroup] = useState<string>('all');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -45,7 +47,7 @@ export function WatchlistSidebar({ selectedTicker, onSelect, variant = 'sidebar'
             Watchlist · {totalCount}
             {quotesLoading && <span className="ml-1 text-text-muted">⏳</span>}
           </span>
-          <Link href="/watchlist" className="text-[11px] text-accent">管理 →</Link>
+          <Link href="/watchlist" className="text-[11px] text-accent">{t('manage')}</Link>
         </div>
 
         <div className="mb-2 flex gap-1 overflow-x-auto pb-1 px-1">
@@ -55,7 +57,7 @@ export function WatchlistSidebar({ selectedTicker, onSelect, variant = 'sidebar'
               activeGroup === 'all' ? 'bg-accent-dim text-white' : 'text-text-dim hover:bg-bg-card'
             }`}
           >
-            全部
+            {t('all')}
           </button>
           {groups.map((g) => (
             <button

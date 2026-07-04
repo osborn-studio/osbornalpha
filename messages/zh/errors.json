@@ -12,5 +12,19 @@
     "registerFailed": "注册失败",
     "sendFailed": "发送失败",
     "resetLinkExpired": "链接可能已过期，请重新申请"
-  }
+  },
+  "appError": {
+    "title": "出错了",
+    "description": "页面加载时遇到问题，已记录。你可以重试或返回首页。",
+    "digest": "错误码 {digest}",
+    "retry": "重试",
+    "backHome": "返回首页"
+  },
+  "notFoundPage": {
+    "title": "页面不存在",
+    "description": "你访问的页面已移动或从未存在。",
+    "backHome": "返回首页",
+    "watchlist": "股票池"
+  },
+  "loadingAria": "加载中"
 }

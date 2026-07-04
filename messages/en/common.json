@@ -1,4 +1,8 @@
 {
+  "meta": {
+    "title": "osbornalpha · AI Investment Monitoring Workbench",
+    "description": "AI investment monitoring workbench · Daily AI monitoring for your personal watchlist · A-shares / HK / US"
+  },
   "nav": {
     "today": "Today",
     "watchlist": "Watchlist",

@@ -86,5 +86,10 @@
   "disclaimer": {
     "heading": "Disclaimer",
     "body": "All content on this site is generated automatically by AI and is intended only as a supplementary reference for investment decisions. It does not constitute investment advice, an offer, or a recommendation of any kind. AI-generated views may contain errors, omissions, or bias. Historical data is not indicative of future performance. Investment decisions should be based on your own research and judgment, and you bear sole responsibility for all investment risk. osbornalpha is a personal open-source tool and does not provide any licensed investment advisory service."
+  },
+  "search": {
+    "placeholder": "Search by ticker or name (⌘+K · A/H/US · e.g. AAPL / 600519)",
+    "searching": "Searching...",
+    "noResults": "No matching results"
   }
 }
