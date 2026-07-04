@@ -14,6 +14,12 @@ interface PendingAlert {
   event: ThesisEvent;
 }
 
+interface EvalAggregate {
+  case_count: number;
+  run_count: number;
+  avg_total: number | null;
+}
+
 const VERDICT_BADGES: Record<string, string> = {
   SUPPORT: 'bg-green-100 text-green-800',
   WEAKEN: 'bg-orange-100 text-orange-800',
@@ -26,6 +32,7 @@ export default function ResearchDashboardPage() {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [alerts, setAlerts] = useState<PendingAlert[]>([]);
   const [pendingPlaybooks, setPendingPlaybooks] = useState<PlaybookRun[]>([]);
+  const [evalAgg, setEvalAgg] = useState<EvalAggregate | null>(null);
   const [disabled, setDisabled] = useState(false);
 
   useEffect(() => {
@@ -46,6 +53,9 @@ export default function ResearchDashboardPage() {
       const pRes = await fetch('/api/research/playbooks?status=PENDING');
       const pData = await pRes.json().catch(() => ({ runs: [] }));
       setPendingPlaybooks(pData.runs ?? []);
+      const eRes = await fetch('/api/research/evals/cases');
+      const eData = await eRes.json().catch(() => ({ aggregate: null }));
+      setEvalAgg(eData.aggregate ?? null);
     })();
   }, []);
 
@@ -98,6 +108,14 @@ export default function ResearchDashboardPage() {
             <Link href="/research/playbooks" className="rounded-lg border p-4 hover:bg-gray-50">
               <div className="text-3xl font-semibold">{pendingPlaybooks.length}</div>
               <div className="text-sm text-gray-500">📋 待审批 playbook</div>
+            </Link>
+            <Link href="/research/evals" className="rounded-lg border p-4 hover:bg-gray-50">
+              <div className="text-3xl font-semibold">
+                {evalAgg ? `${evalAgg.case_count}/${evalAgg.run_count}` : '—'}
+              </div>
+              <div className="text-sm text-gray-500">
+                🧪 Eval cases/runs{evalAgg?.avg_total != null && <>（平均 {evalAgg.avg_total}/10）</>}
+              </div>
             </Link>
           </div>
 

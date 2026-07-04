@@ -268,6 +268,83 @@ export interface PlaybookRun {
   created_at: string;
 }
 
+// ---------------------------------------------------------------------------
+// Evals (Phase 4)
+
+/**
+ * §4.4 memo draft shape — the eval gen output and the memo generator output
+ * share this exact structure (client-safe home; memo-prompt re-exports it).
+ */
+export interface MemoDraft {
+  title: string;
+  one_line_conclusion: string;
+  thesis: string;
+  supporting_evidence: EvidenceItem[];
+  counter_arguments: EvidenceItem[];
+  key_variables: string[];
+  invalidation_conditions: string[];
+  open_questions: string[];
+  related_impacts: string[];
+  confidence: Confidence;
+}
+
+/**
+ * Default 6-dimension rubric (spec §4.8), dimension → weight (equal).
+ * overconfidence is REVERSE-scored: the more unfounded confidence the memo
+ * shows, the LOWER the score. Cases may override via eval_cases.rubric.
+ */
+export const DEFAULT_EVAL_RUBRIC: Readonly<Record<string, number>> = {
+  factual_accuracy: 1,
+  citation_quality: 1,
+  counter_arguments: 1,
+  risk_identification: 1,
+  invalidation_quality: 1,
+  overconfidence: 1,
+};
+
+export interface EvalCase {
+  id: string;
+  title: string;
+  /** Historical point in time (YYYY-MM-DD) the agent is boxed into. */
+  as_of: string;
+  /** source_document ids visible to the agent at as_of. */
+  visible_material: string[];
+  /** What actually happened afterwards — the judge's ground truth. */
+  expected: { notes: string };
+  /** Optional free-form outcome record (what actually happened). */
+  outcome: string;
+  /** dimension → weight. */
+  rubric: Record<string, number>;
+  created_at: string;
+}
+
+/** Full agent output + double provenance persisted on eval_runs.output. */
+export interface EvalRunOutput {
+  memo: MemoDraft;
+  rationale_per_dimension: Record<string, string>;
+  /** builder≠judge: two separate LLM calls, both provenances kept. */
+  provenance: { gen: LlmProvenance; judge: LlmProvenance };
+}
+
+export interface EvalRun {
+  id: string;
+  case_id: string;
+  output: EvalRunOutput;
+  /** dimension → 0-10 (validated + clamped). */
+  scores: Record<string, number>;
+  /** Weighted mean of scores under the case rubric. */
+  total: number;
+  failure_modes: string[];
+  created_at: string;
+}
+
+/**
+ * Honest limitation statement (spec Phase 4) — rendered VERBATIM as the Eval
+ * Lab footnote. Do not reword.
+ */
+export const EVAL_TIMEBOX_LIMITATION =
+  '已知局限：预训练 LLM 自带 as_of_date 之后的世界知识，无法真正"时间盒"——缓解手段=生成 prompt 强制"假设今天是 {as_of_date}，只准使用提供材料，材料外断言一律标 LOW_CONFIDENCE"，评审维度"引用质量/过度自信"专门惩罚无据断言。这不是完美回测，是研究纪律评测。';
+
 export interface AuditLogEntry {
   id: string;
   action: string;

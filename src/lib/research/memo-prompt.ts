@@ -6,7 +6,11 @@
  */
 
 import { createHash } from 'node:crypto';
-import type { Confidence, Entity, EvidenceItem, SourceDocument } from './types';
+import type { Confidence, Entity, EvidenceItem, MemoDraft, SourceDocument } from './types';
+
+// Re-export: MemoDraft moved to types.ts (Phase 4) so client pages can type
+// eval run outputs without pulling node:crypto into their bundle graph.
+export type { MemoDraft } from './types';
 
 export interface MemoPrompt {
   system: string;
@@ -27,15 +31,12 @@ export interface BuildMemoPromptOpts {
   perSourceChars?: number;
 }
 
-const SYSTEM_PROMPT = `你是一名严谨的 TMT/AI 行业投资研究员。你的任务是基于给定的 source documents 生成一份结构化投资 memo 草稿。
-
-硬性规则：
-1. 只能使用提供的 source documents 作为事实依据；每条 supporting_evidence 和 counter_arguments 必须在 source_document_ids 中引用来源清单里的 id。
-2. 无法从 source 中找到依据的判断，不要写进 evidence，改写成 open_questions 里需要验证的问题。
-3. 必须给出至少 2 条反方观点（counter_arguments）和至少 1 条失效条件（invalidation_conditions）。
-4. 禁止任何收益承诺话术（必涨、保证、稳赚、无风险等）。这是研究辅助，不是投资建议。
-5. 输出严格 JSON（不要 markdown code fence），schema 如下：
-{
+/**
+ * The §4.4 ten-section memo output schema, shared VERBATIM by the memo
+ * generator (Phase 1) and the eval harness gen prompt (Phase 4) — single
+ * source of truth, do not fork/copy.
+ */
+export const MEMO_OUTPUT_SCHEMA = `{
   "title": string,                        // memo 标题
   "one_line_conclusion": string,          // 1. 一句话结论
   "thesis": string,                       // 2. 核心 thesis
@@ -52,9 +53,64 @@ const SYSTEM_PROMPT = `你是一名严谨的 TMT/AI 行业投资研究员。你�
   "confidence": "LOW" | "MEDIUM" | "HIGH" // 整体置信度（引用少时必须 LOW/MEDIUM）
 }`;
 
+const SYSTEM_PROMPT = `你是一名严谨的 TMT/AI 行业投资研究员。你的任务是基于给定的 source documents 生成一份结构化投资 memo 草稿。
+
+硬性规则：
+1. 只能使用提供的 source documents 作为事实依据；每条 supporting_evidence 和 counter_arguments 必须在 source_document_ids 中引用来源清单里的 id。
+2. 无法从 source 中找到依据的判断，不要写进 evidence，改写成 open_questions 里需要验证的问题。
+3. 必须给出至少 2 条反方观点（counter_arguments）和至少 1 条失效条件（invalidation_conditions）。
+4. 禁止任何收益承诺话术（必涨、保证、稳赚、无风险等）。这是研究辅助，不是投资建议。
+5. 输出严格 JSON（不要 markdown code fence），schema 如下：
+${MEMO_OUTPUT_SCHEMA}`;
+
 function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
   return `${text.slice(0, max)}\n…[截断，原文 ${text.length} 字符]`;
+}
+
+/** Budgeted source injection shared by memo + eval gen prompts (Phase 4). */
+export interface SourceCorpus {
+  /** id+title manifest — the model must cite these ids verbatim. */
+  manifest: string;
+  /** <source> blocks, newest first, truncated against the char budget. */
+  corpus: string;
+  /** Sources actually injected (newest first, post-budget). */
+  source_document_ids: string[];
+}
+
+/**
+ * Sort sources newest-first, truncate against budgetChars / perSourceChars,
+ * and render the citation manifest + corpus blocks.
+ */
+export function buildSourceCorpus(
+  sources: SourceDocument[],
+  budgetChars = 24_000,
+  perSourceChars = 8_000,
+): SourceCorpus {
+  const newestFirst = [...sources].sort((a, b) =>
+    (b.published_at ?? b.ingested_at).localeCompare(a.published_at ?? a.ingested_at),
+  );
+
+  const included: Array<{ src: SourceDocument; body: string }> = [];
+  let used = 0;
+  for (const src of newestFirst) {
+    if (used >= budgetChars) break;
+    const body = truncate(src.raw_text, Math.min(perSourceChars, budgetChars - used));
+    included.push({ src, body });
+    used += body.length;
+  }
+
+  return {
+    manifest: included
+      .map(({ src }) => `- ${src.id} | ${src.source_type} | trust=${src.trust_level} | ${src.title}`)
+      .join('\n'),
+    corpus: included
+      .map(({ src, body }) =>
+        `<source id="${src.id}" title="${src.title}" published_at="${src.published_at ?? 'unknown'}">\n${body}\n</source>`,
+      )
+      .join('\n\n'),
+    source_document_ids: included.map(({ src }) => src.id),
+  };
 }
 
 /**
@@ -63,29 +119,9 @@ function truncate(text: string, max: number): string {
  * injected source so the model can cite ids verbatim.
  */
 export function buildMemoPrompt(opts: BuildMemoPromptOpts): MemoPrompt {
-  const budget = opts.budgetChars ?? 24_000;
-  const perSource = opts.perSourceChars ?? 8_000;
-  const newestFirst = [...opts.sources].sort((a, b) =>
-    (b.published_at ?? b.ingested_at).localeCompare(a.published_at ?? a.ingested_at),
+  const { manifest, corpus, source_document_ids } = buildSourceCorpus(
+    opts.sources, opts.budgetChars ?? 24_000, opts.perSourceChars ?? 8_000,
   );
-
-  const included: Array<{ src: SourceDocument; body: string }> = [];
-  let used = 0;
-  for (const src of newestFirst) {
-    if (used >= budget) break;
-    const body = truncate(src.raw_text, Math.min(perSource, budget - used));
-    included.push({ src, body });
-    used += body.length;
-  }
-
-  const manifest = included
-    .map(({ src }) => `- ${src.id} | ${src.source_type} | trust=${src.trust_level} | ${src.title}`)
-    .join('\n');
-  const corpus = included
-    .map(({ src, body }) =>
-      `<source id="${src.id}" title="${src.title}" published_at="${src.published_at ?? 'unknown'}">\n${body}\n</source>`,
-    )
-    .join('\n\n');
 
   const questionLine = opts.question?.trim()
     ? `研究问题：${opts.question.trim()}`
@@ -107,21 +143,8 @@ ${corpus || '（无）'}
     system: SYSTEM_PROMPT,
     user,
     prompt_sha256,
-    source_document_ids: included.map(({ src }) => src.id),
+    source_document_ids,
   };
-}
-
-export interface MemoDraft {
-  title: string;
-  one_line_conclusion: string;
-  thesis: string;
-  supporting_evidence: EvidenceItem[];
-  counter_arguments: EvidenceItem[];
-  key_variables: string[];
-  invalidation_conditions: string[];
-  open_questions: string[];
-  related_impacts: string[];
-  confidence: Confidence;
 }
 
 function asStringArray(v: unknown): string[] {
