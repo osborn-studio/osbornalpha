@@ -12,9 +12,10 @@ import {
   getPlaybookRun,
   listPlaybookRuns,
   rejectPlaybook,
+  suggestPlaybookAction,
   type PlaybookSource,
 } from './playbooks';
-import { loadAxioms } from './memos';
+import { loadAxioms, type LlmFn } from './memos';
 import type { Axiom, ProposedAction, Thesis } from './types';
 
 function mkDb(): ResearchDb {
@@ -377,6 +378,81 @@ describe('executeApproved (restricted effects)', () => {
     expect(execution.executed).toBe(false);
     expect(execution.note).toMatch(/record/i);
     expect(getThesis(db, thesis.id)!.status).toBe('ACTIVE'); // untouched
+    db.close();
+  });
+});
+
+describe('suggestPlaybookAction', () => {
+  const fakeLlm = (payload: unknown): LlmFn =>
+    async () => ({ content: JSON.stringify(payload), model: 'fake-suggest-model' });
+
+  it('returns an LLM suggestion with provenance and audits it — WITHOUT persisting a run', async () => {
+    const db = mkDb();
+    const thesis = mkActiveThesis(db);
+    const r = await suggestPlaybookAction(db, { thesis_id: thesis.id }, fakeLlm({
+      proposed_action: 'WATCHLIST',
+      rationale: '继续观察指标',
+      risks: ['需求不及预期', '竞争加剧'],
+      confidence_note: '中等置信',
+    }));
+    expect(r.suggestion).not.toBeNull();
+    if (r.suggestion) {
+      expect(r.suggestion.proposed_action).toBe('WATCHLIST');
+      expect(r.suggestion.risks).toHaveLength(2);
+    }
+    expect(r.llm).toEqual({ source: 'llm', model: 'fake-suggest-model' });
+    if ('provenance' in r) {
+      expect(r.provenance.model).toBe('fake-suggest-model');
+      expect(r.provenance.prompt_sha256).toMatch(/^[0-9a-f]{64}$/);
+    }
+    // Suggestion is NOT persisted — creation is a separate gated step.
+    expect(listPlaybookRuns(db)).toHaveLength(0);
+    const audits = db.prepare(`select * from audit_log where action = 'playbook.suggest'`).all();
+    expect(audits).toHaveLength(1);
+    db.close();
+  });
+
+  it('downgrades a non-enum action to RESEARCH_MORE and records it in metadata + audit', async () => {
+    const db = mkDb();
+    const thesis = mkActiveThesis(db);
+    const r = await suggestPlaybookAction(db, { thesis_id: thesis.id }, fakeLlm({
+      proposed_action: 'BUY_THE_DIP', rationale: 'r', risks: ['a', 'b'], confidence_note: 'c',
+    }));
+    expect(r.suggestion!.proposed_action).toBe('RESEARCH_MORE');
+    expect(r.suggestion!.metadata.downgraded_from).toBe('BUY_THE_DIP');
+    const audit: any = db.prepare(`select * from audit_log where action = 'playbook.suggest'`).get();
+    expect(JSON.parse(audit.detail).downgraded_from).toBe('BUY_THE_DIP');
+    db.close();
+  });
+
+  it('maps LLM failure / garbage output to structured results (never throws)', async () => {
+    const db = mkDb();
+    const thesis = mkActiveThesis(db);
+    const failing: LlmFn = async () => { throw new Error('boom'); };
+    const r1 = await suggestPlaybookAction(db, { thesis_id: thesis.id }, failing);
+    expect(r1.suggestion).toBeNull();
+    expect(r1.llm.source).toBe('error');
+    const noKey: LlmFn = async () => { throw new Error('no LLM provider configured'); };
+    const r2 = await suggestPlaybookAction(db, { thesis_id: thesis.id }, noKey);
+    expect(r2.llm.source).toBe('no-key');
+    const garbage: LlmFn = async () => ({ content: 'not json at all', model: 'x' });
+    const r3 = await suggestPlaybookAction(db, { thesis_id: thesis.id }, garbage);
+    expect(r3.suggestion).toBeNull();
+    expect(r3.llm.source).toBe('error');
+    db.close();
+  });
+
+  it('rejects bad source refs: neither/both (422), missing (404)', async () => {
+    const db = mkDb();
+    const thesis = mkActiveThesis(db);
+    const llm = fakeLlm({ proposed_action: 'RESEARCH_MORE', rationale: 'r', risks: ['a', 'b'], confidence_note: 'c' });
+    await expect(suggestPlaybookAction(db, {}, llm)).rejects.toMatchObject({ status: 422 });
+    await expect(
+      suggestPlaybookAction(db, { thesis_id: thesis.id, memo_id: 'm' }, llm),
+    ).rejects.toMatchObject({ status: 422 });
+    await expect(
+      suggestPlaybookAction(db, { thesis_id: 'missing' }, llm),
+    ).rejects.toMatchObject({ status: 404 });
     db.close();
   });
 });

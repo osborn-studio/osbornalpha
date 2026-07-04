@@ -11,8 +11,15 @@
  */
 
 import { logAudit, type ResearchDb } from './db';
-import { getMemo, loadAxioms } from './memos';
+import { defaultLlm, getMemo, loadAxioms, type LlmFn } from './memos';
+import { listSignalsSince } from './signals';
 import { ThesisError, getThesis, transitionThesis } from './theses';
+import {
+  buildPlaybookSuggestPrompt,
+  validatePlaybookSuggestion,
+  type PlaybookSuggestSource,
+  type PlaybookSuggestion,
+} from './playbook-prompt';
 import {
   PROPOSED_ACTIONS,
   readJson,
@@ -20,6 +27,7 @@ import {
   type Axiom,
   type AxiomCheckResult,
   type EvidenceItem,
+  type LlmProvenance,
   type PlaybookRun,
   type ApprovalStatus,
   type ProposedAction,
@@ -416,4 +424,96 @@ export function rejectPlaybook(
     decision,
   });
   return { run: getPlaybookRun(db, id)! };
+}
+
+// ---------------------------------------------------------------------------
+// LLM action suggester (T2) — suggestion only, never persisted directly:
+// the human edits it in the UI and goes through createPlaybookRun (the gate).
+
+const SUGGEST_WINDOW_DAYS = 7;
+
+export type SuggestPlaybookResult =
+  | {
+      suggestion: PlaybookSuggestion;
+      provenance: LlmProvenance;
+      llm: { source: 'llm'; model: string };
+    }
+  | { suggestion: null; llm: { source: 'no-key' | 'error'; message: string } };
+
+function loadSuggestSource(
+  db: ResearchDb,
+  ref: { memo_id?: string | null; thesis_id?: string | null },
+): PlaybookSuggestSource {
+  const hasMemo = typeof ref.memo_id === 'string' && ref.memo_id.trim() !== '';
+  const hasThesis = typeof ref.thesis_id === 'string' && ref.thesis_id.trim() !== '';
+  if (hasMemo === hasThesis) {
+    throw new PlaybookError('exactly one of memo_id or thesis_id is required', 422);
+  }
+  if (hasMemo) {
+    const memo = getMemo(db, ref.memo_id!.trim());
+    if (!memo) throw new PlaybookError('memo not found', 404);
+    return { kind: 'memo', memo };
+  }
+  const thesis = getThesis(db, ref.thesis_id!.trim());
+  if (!thesis) throw new PlaybookError('thesis not found', 404);
+  return { kind: 'thesis', thesis };
+}
+
+/**
+ * LLM-suggest the next action for a memo/thesis using the last 7 days of
+ * signals. Provider failures return structured results (never throw); the
+ * suggestion is returned with provenance and audited, but NOT written to
+ * playbook_runs — creation is a separate, human-initiated, axiom-gated step.
+ */
+export async function suggestPlaybookAction(
+  db: ResearchDb,
+  ref: { memo_id?: string | null; thesis_id?: string | null },
+  llm: LlmFn = defaultLlm,
+): Promise<SuggestPlaybookResult> {
+  const source = loadSuggestSource(db, ref); // 422 / 404 on bad refs
+  const since = new Date(Date.now() - SUGGEST_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const prompt = buildPlaybookSuggestPrompt({
+    source,
+    recentSignals: listSignalsSince(db, since),
+    axioms: loadAxioms(db),
+  });
+
+  let content: string;
+  let model: string;
+  try {
+    const r = await llm({ system: prompt.system, user: prompt.user });
+    content = r.content;
+    model = r.model;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    const noKey = /no llm provider configured/i.test(message);
+    return { suggestion: null, llm: { source: noKey ? 'no-key' : 'error', message } };
+  }
+
+  const { extractJson } = await import('@/lib/data/sources/llm');
+  const suggestion = validatePlaybookSuggestion(extractJson(content));
+  if (!suggestion) {
+    return {
+      suggestion: null,
+      llm: { source: 'error', message: 'LLM output was not a valid playbook suggestion' },
+    };
+  }
+
+  const now = new Date().toISOString();
+  const provenance: LlmProvenance = {
+    model,
+    prompt_sha256: prompt.prompt_sha256,
+    generated_at: now,
+  };
+  const sourceId = source.kind === 'memo' ? source.memo.id : source.thesis.id;
+  logAudit(db, 'playbook.suggest', sourceId, {
+    source_kind: source.kind,
+    proposed_action: suggestion.proposed_action,
+    model,
+    prompt_sha256: prompt.prompt_sha256,
+    ...(suggestion.metadata.downgraded_from !== undefined
+      ? { downgraded_from: suggestion.metadata.downgraded_from }
+      : {}),
+  });
+  return { suggestion, provenance, llm: { source: 'llm', model } };
 }
