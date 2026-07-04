@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { useTranslations } from 'next-intl';
 import { classifyMarket } from '@/lib/utils';
 import { QuotaNotice } from '@/components/QuotaNotice';
 
@@ -25,6 +26,7 @@ function mapRatingToAction(rating: string | undefined): 'buy' | 'hold' | 'sell' 
 }
 
 export function CopilotClient({ initialTicker = '', initialQuestion = '', autoStart = true, methodId }: { initialTicker?: string; initialQuestion?: string; autoStart?: boolean; methodId?: string }) {
+  const t = useTranslations('market.copilot');
   const [ticker, setTicker] = useState(initialTicker);
   const [running, setRunning] = useState(false);
   const [text, setText] = useState('');
@@ -69,14 +71,14 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
     });
   }, []);
 
-  const run = useCallback(async (t: string, q?: string) => {
-    if ((!t && !q) || running) return;
+  const run = useCallback(async (tk: string, q?: string) => {
+    if ((!tk && !q) || running) return;
     setRunning(true); setText(''); setCalls([]); setVerdict(null); setErr(''); setQuota(null); setAdopted(''); setAdopting(false);
     const resp = await fetch('/api/copilot', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ticker: t || undefined, question: q, methodId }),
+      body: JSON.stringify({ ticker: tk || undefined, question: q, methodId }),
     });
-    if (!resp.body) { setErr('无响应流'); setRunning(false); return; }
+    if (!resp.body) { setErr(t('noResponseStream')); setRunning(false); return; }
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
     let buf = '';
@@ -103,7 +105,7 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
       }
     }
     setRunning(false);
-  }, [running, appendHistory]);
+  }, [running, appendHistory, t]);
 
   useEffect(() => {
     // A wizard hand-off (?q=…, optionally with ?method=) should fire immediately,
@@ -153,7 +155,7 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
     <div className="space-y-3">
       {history.length > 0 && (
         <div className="card-base">
-          <div className="mb-2 text-xs font-semibold text-text-dim">🕘 最近分析</div>
+          <div className="mb-2 text-xs font-semibold text-text-dim">{t('recentRuns')}</div>
           <div className="flex flex-wrap gap-1">
             {history.map((h, i) => (
               <button
@@ -172,11 +174,11 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
 
       <div className="card-base flex gap-2">
         <input value={ticker} onChange={(e) => setTicker(e.target.value)}
-          placeholder="输入代码，如 00700.HK / 600519.SH / NVDA"
+          placeholder={t('tickerPlaceholder')}
           className="flex-1 rounded-md bg-bg-card px-3 py-2 text-sm" />
         <button onClick={() => run(ticker)} disabled={running || !ticker}
           className="rounded-md bg-accent px-4 py-2 text-sm font-semibold disabled:opacity-50">
-          {running ? '分析中…' : '让 John 分析'}
+          {running ? t('running') : t('runCta')}
         </button>
       </div>
 
@@ -184,14 +186,14 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
 
       {(text || calls.length > 0) && (
         <div className="card-base">
-          <div className="mb-2 text-sm font-semibold text-text-dim">🪜 推理过程</div>
+          <div className="mb-2 text-sm font-semibold text-text-dim">{t('reasoning')}</div>
           <div className="whitespace-pre-wrap text-sm leading-relaxed">{text}</div>
           {calls.length > 0 && (
             <div className="mt-3 space-y-1">
               {calls.map((c, i) => (
                 <details key={i} className="rounded bg-bg-card px-2 py-1 text-xs">
                   <summary className="cursor-pointer">
-                    {c.ok === undefined ? '⏳' : c.ok ? '✅' : '❌'} 工具 <b>{c.name}</b>
+                    {c.ok === undefined ? '⏳' : c.ok ? '✅' : '❌'} {t('tool')} <b>{c.name}</b>
                     {c.summary ? ` — ${c.summary}` : ''}
                   </summary>
                   <pre className="mt-1 overflow-auto text-[11px] text-text-muted">{JSON.stringify(c.args, null, 2)}</pre>
@@ -204,18 +206,18 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
 
       {verdict && (
         <div className="card-base border border-accent-dim">
-          <div className="mb-1 text-sm font-semibold">📌 结论 · {verdict.name ?? verdict.ticker}</div>
+          <div className="mb-1 text-sm font-semibold">{t('verdictHeading', { name: verdict.name ?? verdict.ticker ?? '' })}</div>
           <div className="text-lg font-bold text-accent">{verdict.rating}</div>
           {verdict.thesis && <div className="mt-2 whitespace-pre-wrap text-sm">{verdict.thesis}</div>}
           <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
-            {verdict.positionPct != null && <div>仓位：<b>{verdict.positionPct}%</b></div>}
-            {verdict.stop && <div>止损：{verdict.stop}</div>}
+            {verdict.positionPct != null && <div>{t('position')}<b>{verdict.positionPct}%</b></div>}
+            {verdict.stop && <div>{t('stopLoss')}{verdict.stop}</div>}
           </div>
           {verdict.confidence != null && (
             <div className="mt-1 text-xs text-text-dim">
               {typeof verdict.confidence === 'number'
-                ? `置信 ${verdict.confidence}`
-                : `置信 ${verdict.confidence.score}（n=${verdict.confidence.n}）${verdict.confidence.note}`}
+                ? t('confidence', { score: verdict.confidence })
+                : t('confidenceWithNote', { score: verdict.confidence.score, n: verdict.confidence.n, note: verdict.confidence.note })}
             </div>
           )}
           {verdict.compliance && <div className="mt-2 text-[11px] text-text-muted">{verdict.compliance}</div>}
@@ -230,9 +232,9 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
                 disabled={adopting || adopted === 'ok'}
                 className="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
               >
-                {adopting ? '记录中…' : '✅ 采纳 → 记录决策'}
+                {adopting ? t('adopting') : t('adopt')}
               </button>
-              {adopted === 'ok' && <span className="text-xs text-up">已记录 ✓</span>}
+              {adopted === 'ok' && <span className="text-xs text-up">{t('adopted')}</span>}
               {adopted.startsWith('error:') && <span className="text-xs text-down">{adopted.slice(6)}</span>}
             </div>
           ) : null}
