@@ -64,10 +64,12 @@ export function resolveLocale(opts: {
   return DEFAULT_LOCALE;
 }
 
-export function formatDateLocale(iso: string, locale: AppLocale): string {
-  return new Date(iso).toLocaleDateString(INTL_TAG[locale]);
+// Optional `tz` (IANA id, e.g. 'America/New_York') overrides the display
+// timezone; undefined keeps prior behavior (browser/system timezone).
+export function formatDateLocale(iso: string, locale: AppLocale, tz?: string): string {
+  return new Date(iso).toLocaleDateString(INTL_TAG[locale], tz ? { timeZone: tz } : undefined);
 }
 
-export function formatDateTimeLocale(iso: string, locale: AppLocale): string {
-  return new Date(iso).toLocaleString(INTL_TAG[locale]);
+export function formatDateTimeLocale(iso: string, locale: AppLocale, tz?: string): string {
+  return new Date(iso).toLocaleString(INTL_TAG[locale], tz ? { timeZone: tz } : undefined);
 }
