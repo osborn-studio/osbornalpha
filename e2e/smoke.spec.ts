@@ -47,3 +47,25 @@ test('/login shows email and password inputs', async ({ page }) => {
   await expect(page.locator('input[type="email"]')).toBeVisible();
   await expect(page.locator('input[type="password"]')).toBeVisible();
 });
+
+// --- G1a i18n: /en public prefix (middleware-rewrite strategy) ---
+
+test('/en serves the English landing page', async ({ page }) => {
+  const response = await page.goto('/en');
+  expect(response?.status()).toBe(200);
+  await expect(page).toHaveTitle(/AI Investment Cockpit/);
+  expect(await page.locator('html').getAttribute('lang')).toBe('en');
+});
+
+test('/ stays Chinese by default', async ({ page }) => {
+  await page.goto('/');
+  await expect(page).toHaveTitle(/AI 投资监控工作台/);
+  expect(await page.locator('html').getAttribute('lang')).toBe('zh-CN');
+});
+
+test('/en/<protected> lands on login without /en polluting the next param', async ({ page }) => {
+  await page.goto('/en/portfolio');
+  const url = new URL(page.url());
+  expect(url.pathname).toBe('/login');
+  expect(url.searchParams.get('next')).toBe('/portfolio');
+});
