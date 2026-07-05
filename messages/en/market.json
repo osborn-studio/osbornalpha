@@ -134,7 +134,8 @@
     "confidenceWithNote": "Confidence {score} (n={n}) {note}",
     "adopt": "✅ Adopt → Record Decision",
     "adopting": "Recording…",
-    "adopted": "Recorded ✓"
+    "adopted": "Recorded ✓",
+    "methodLabel": "Method"
   },
   "fab": {
     "openAria": "Open Copilot",

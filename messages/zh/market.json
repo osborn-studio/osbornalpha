@@ -134,7 +134,8 @@
     "confidenceWithNote": "置信 {score}（n={n}）{note}",
     "adopt": "✅ 采纳 → 记录决策",
     "adopting": "记录中…",
-    "adopted": "已记录 ✓"
+    "adopted": "已记录 ✓",
+    "methodLabel": "分析方法"
   },
   "fab": {
     "openAria": "打开 Copilot",

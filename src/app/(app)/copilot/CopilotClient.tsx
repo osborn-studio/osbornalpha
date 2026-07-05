@@ -1,11 +1,17 @@
 'use client';
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useTranslations } from 'next-intl';
 import { classifyMarket } from '@/lib/utils';
 import { QuotaNotice } from '@/components/QuotaNotice';
+import { AGENT_METHODS, METHODS } from '@/lib/agent/methods/registry';
+import { currentStepIndex } from '@/lib/agent/methods/step-tracker';
 
 const HISTORY_KEY = 'osbornalpha:copilot:history:v1';
 const HISTORY_MAX = 20;
+
+// The copilot route defaults an absent methodId to john-cameron-5step — mirror
+// that here so the header always names the method that will actually run.
+const DEFAULT_METHOD_ID = 'john-cameron-5step';
 
 interface ToolCall { name: string; args: unknown; ok?: boolean; summary?: string; }
 interface Verdict {
@@ -38,6 +44,18 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
   const [adopting, setAdopting] = useState(false);
   const [adopted, setAdopted] = useState<string>('');
   const startedRef = useRef(false);
+
+  // Which method is actually running (route defaults absent methodId to john).
+  const activeId = methodId ?? DEFAULT_METHOD_ID;
+  const method = AGENT_METHODS[activeId];
+  const methodIcon = useMemo(
+    () => METHODS.find((m) => m.id === activeId)?.icon ?? '🧭',
+    [activeId],
+  );
+  const stepIdx = useMemo(
+    () => (method ? currentStepIndex(method.steps, text) : 0),
+    [method, text],
+  );
 
   // Load persisted run-history on mount (SSR-safe).
   useEffect(() => {
@@ -181,6 +199,42 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
           {running ? t('running') : t('runCta')}
         </button>
       </div>
+
+      {/* Active-method header + step tracker — makes the running method (five-step
+          vs deep-dive vs a wizard) legible; the two share the John Cameron voice
+          and otherwise look identical. Shown once a run is active. */}
+      {method && (running || text || verdict) && (
+        <div className="card-base">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">{methodIcon}</span>
+            <span className="text-sm font-semibold">{method.name}</span>
+            <span className="text-[11px] text-text-dim">{t('methodLabel')}</span>
+          </div>
+          {method.steps.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {method.steps.map((s, i) => {
+                const done = verdict ? true : i + 1 < stepIdx;
+                const active = !verdict && i + 1 === stepIdx;
+                return (
+                  <span
+                    key={s.id}
+                    className={
+                      'rounded px-1.5 py-0.5 text-[11px] ' +
+                      (done
+                        ? 'bg-[color-mix(in_srgb,var(--accent)_18%,transparent)] text-accent'
+                        : active
+                          ? 'bg-accent text-white'
+                          : 'bg-bg-card text-text-dim')
+                    }
+                  >
+                    {done ? '✓ ' : ''}{s.title}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {err && (quota ? <QuotaNotice {...quota} /> : <div className="card-base text-sm text-down">⚠️ {err}</div>)}
 
