@@ -236,7 +236,8 @@
       "nonUsBody": "此标的非美股，无 13F 数据。",
       "dataSource": "数据源：EDGAR 13F-HR · 季度更新"
     },
-    "sourcePending": "数据源未接入"
+    "sourcePending": "数据源未接入",
+    "companyDiligence": "🏢 公司调研"
   },
   "dcf": {
     "variants": {

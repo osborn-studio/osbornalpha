@@ -145,6 +145,12 @@ export default function StockDetailPage() {
         >
           {t('deepDive')}
         </Link>
+        <Link
+          href={`/copilot?method=company-diligence&ticker=${encodeURIComponent(ticker)}` as any}
+          className="inline-block rounded-md bg-bg-card px-3 py-1 text-xs font-semibold text-accent"
+        >
+          {t('companyDiligence')}
+        </Link>
       </div>
       <div className="mb-1.5 flex flex-wrap items-baseline gap-4">
         <span className="text-3xl font-bold tabular-nums">{stock.currency}{formatPrice(stock.price)}</span>

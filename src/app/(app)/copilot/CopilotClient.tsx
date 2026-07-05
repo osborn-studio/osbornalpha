@@ -276,9 +276,11 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
           )}
           {verdict.compliance && <div className="mt-2 text-[11px] text-text-muted">{verdict.compliance}</div>}
 
-          {/* Wizard verdicts (bottleneck/industry-chain) carry no single actionable
-              ticker — hide the adopt CTA instead of offering a dead-end 400. */}
-          {(verdict.ticker || ticker) ? (
+          {/* Adopt-as-decision only makes sense for a rated verdict. Wizard runs
+              (bottleneck/industry-chain) carry no single ticker, and the
+              company-diligence brief is deliberately rating-less (a brief, not a
+              recommendation) — both hide the CTA instead of a dead-end adopt. */}
+          {verdict.rating && (verdict.ticker || ticker) ? (
             <div className="mt-3 flex items-center gap-2">
               <button
                 type="button"

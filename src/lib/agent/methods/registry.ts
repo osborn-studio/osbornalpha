@@ -3,11 +3,13 @@ import { JOHN_CAMERON_5STEP } from './john-cameron-5step';
 import { HIPHON_PM_DEEPDIVE } from './hiphon-pm-deepdive';
 import { BOTTLENECK_PICKER } from './bottleneck-picker';
 import { INDUSTRY_CHAIN } from './industry-chain';
+import { COMPANY_DILIGENCE } from './company-diligence';
 
 /** Executable AgentMethods keyed by id — resolved by the copilot route from methodId. */
 export const AGENT_METHODS: Record<string, AgentMethod> = {
   [JOHN_CAMERON_5STEP.id]: JOHN_CAMERON_5STEP,
   [HIPHON_PM_DEEPDIVE.id]: HIPHON_PM_DEEPDIVE,
+  [COMPANY_DILIGENCE.id]: COMPANY_DILIGENCE,
   [BOTTLENECK_PICKER.id]: BOTTLENECK_PICKER,
   [INDUSTRY_CHAIN.id]: INDUSTRY_CHAIN,
 };
@@ -36,6 +38,13 @@ export const METHODS: SkillMethod[] = [
     description: HIPHON_PM_DEEPDIVE.description,
     icon: '🔬',
     href: '/copilot?method=hiphon-pm-deepdive',
+  },
+  {
+    id: COMPANY_DILIGENCE.id,
+    name: COMPANY_DILIGENCE.name,
+    description: COMPANY_DILIGENCE.description,
+    icon: '🏢',
+    href: '/copilot?method=company-diligence',
   },
   {
     id: 'dcf-valuation',
