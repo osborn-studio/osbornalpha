@@ -98,7 +98,7 @@ export async function POST(req: Request) {
       };
 
       await runCopilotLoop({
-        ticker: ticker || undefined, question, maxHops: 12, onEvent,
+        ticker: ticker || undefined, question, maxHops: resolvedMethod.maxHops ?? 12, onEvent,
         model: async (messages: OaiMessage[]) => {
           const cfg = { baseUrl: llm.baseUrl, apiKey: llm.apiKey, model: llm.model, chatPath: llm.chatPath };
           const call = llm.protocol === 'anthropic' ? anthropicToolChat : toolChat;

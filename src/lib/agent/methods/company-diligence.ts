@@ -20,6 +20,7 @@ export const COMPANY_DILIGENCE: AgentMethod = {
   name: '公司调研（尽调简报）',
   description: '单公司投资级尽调简报：实体消歧→主体股权/业务地位/运营/财务/治理/风险/前景七段，逐条标注事实(带来源)/假设/推断，交叉核验。不出买卖评级——这是简报不是推荐。',
   archive: true,
+  maxHops: 14,
   steps: [
     { id: 'g1', title: '§1 主体与股权' },
     { id: 'g2', title: '§2 主营与市场地位' },

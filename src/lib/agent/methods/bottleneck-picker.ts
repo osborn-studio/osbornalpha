@@ -11,6 +11,7 @@ export const BOTTLENECK_PICKER: AgentMethod = {
   name: '瓶颈选股向导',
   description: '从赛道/终端系统关键词出发，拆产业链找最窄约束，核验证据后给出候选清单（角色 + 证据强度）。',
   archive: true,
+  maxHops: 14,
   steps: [
     { id: 'b1', title: '终端系统定义' },
     { id: 'b2', title: '价值链分层' },

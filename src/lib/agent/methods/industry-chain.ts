@@ -14,6 +14,7 @@ export const INDUSTRY_CHAIN: AgentMethod = {
   name: '产业链全景尽调',
   description: '上中下游 × 15 维标准框架 × 多区域全景尽调：市场规模/增速/生命周期/政策/技术路线/壁垒/价值分配/供需/竞争/风险/高频指标，按环节给龙头清单。数据中心/算力走内置 10 段链。',
   archive: true,
+  maxHops: 14,
   steps: [
     { id: 'c1', title: '§1 链条全景与分层' },
     { id: 'c2', title: '§2 上游' },

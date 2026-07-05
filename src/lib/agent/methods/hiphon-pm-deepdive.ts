@@ -9,6 +9,7 @@ export const HIPHON_PM_DEEPDIVE: AgentMethod = {
   name: 'Hiphon PM 深度研究',
   description: 'John Cameron 的个股深度研究：商业模式/护城河/财务质量/估值/产业链位置/催化剂/风险，产出完整投资报告 + 操作建议。',
   archive: true,
+  maxHops: 14,
   steps: [
     { id: 'd1', title: '§1 解析与数据' },
     { id: 'd2', title: '§2 商业模式与护城河' },

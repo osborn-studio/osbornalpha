@@ -5,6 +5,14 @@ export interface AgentMethod {
   systemPrompt: string;
   /** When true, the copilot route auto-archives the run via createArtifact. */
   archive?: boolean;
+  /**
+   * Tool-call budget (model turns). Absent → route default (12). The richer
+   * catalog ports (15-dimension chain, 7-section diligence) gather more, so
+   * they get a modest bump; the loop's budget-guard still forces synthesis in
+   * the final 2 hops so a run can never burn the whole budget on tool calls.
+   * Kept ≤14 to stay under the copilot route's 60s Vercel maxDuration.
+   */
+  maxHops?: number;
 }
 
 export const VERDICT_INSTRUCTION = `
