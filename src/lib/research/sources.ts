@@ -25,6 +25,7 @@ export interface IngestSourceInput {
   published_at?: string | null;
   trust_level?: TrustLevel;
   entity_ids?: string[];
+  metadata?: Record<string, unknown>;
 }
 
 export interface IngestResult {
@@ -59,6 +60,7 @@ export function rowToSource(row: any): SourceDocument {
     content_hash: row.content_hash,
     trust_level: row.trust_level,
     entity_ids: Array.isArray(row.entity_ids) ? (row.entity_ids as string[]) : [],
+    metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : {},
   };
 }
 
@@ -116,6 +118,7 @@ export async function ingestSource(ctx: ResearchCtx, input: IngestSourceInput): 
     content_hash: hash,
     trust_level: trust,
     entity_ids: input.entity_ids ?? [],
+    metadata: input.metadata ?? {},
   });
   if (error) {
     // Unique (user_id, content_hash) race: someone inserted the same text

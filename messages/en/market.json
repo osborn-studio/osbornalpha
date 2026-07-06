@@ -135,7 +135,11 @@
     "adopt": "✅ Adopt → Record Decision",
     "adopting": "Recording…",
     "adopted": "Recorded ✓",
-    "methodLabel": "Method"
+    "methodLabel": "Method",
+    "saveToBrain": "📥 Save to Research Brain",
+    "savingBrain": "Saving…",
+    "savedToBrain": "✓ Saved · v{version}",
+    "needAdmin": "Admin only"
   },
   "fab": {
     "openAria": "Open Copilot",

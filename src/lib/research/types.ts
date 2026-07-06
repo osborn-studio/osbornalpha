@@ -54,6 +54,7 @@ export interface SourceDocument {
   content_hash: string;
   trust_level: TrustLevel;
   entity_ids: string[];
+  metadata?: Record<string, unknown>;
 }
 
 export type Confidence = 'LOW' | 'MEDIUM' | 'HIGH';
