@@ -134,17 +134,32 @@ export default function ResearchSourcesPage() {
       <section>
         <h2 className="mb-2 text-base font-medium">已导入（{sources.length}）</h2>
         <ul className="divide-y rounded-lg border">
-          {sources.map((s) => (
-            <li key={s.id} className="p-3 text-sm">
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-medium">{s.title}</span>
-                <span className="shrink-0 rounded bg-gray-100 px-2 py-0.5 text-xs">{s.source_type}</span>
-              </div>
-              <div className="mt-1 text-xs text-gray-500">
-                {s.ingested_at} · trust {s.trust_level} · hash {s.content_hash.slice(0, 12)}…
-              </div>
-            </li>
-          ))}
+          {sources.map((s) => {
+            const meta = (s.metadata ?? {}) as Record<string, unknown>;
+            const isDiligence = meta.kind === 'diligence';
+            const stale = isDiligence && Date.now() - Date.parse(s.ingested_at) > 30 * 86400e3;
+            return (
+              <li key={s.id} className="p-3 text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium">{s.title}</span>
+                  {isDiligence ? (
+                    <span className="shrink-0 rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-800">🏢 尽调 v{String(meta.version ?? 1)}</span>
+                  ) : (
+                    <span className="shrink-0 rounded bg-gray-100 px-2 py-0.5 text-xs">{s.source_type}</span>
+                  )}
+                </div>
+                <div className="mt-1 text-xs text-gray-500">
+                  {s.ingested_at} · trust {s.trust_level} · hash {s.content_hash.slice(0, 12)}…
+                </div>
+                {isDiligence && (
+                  <div className="mt-1 flex items-center gap-3 text-xs">
+                    {stale && <span className="text-amber-700">简报可能已过时</span>}
+                    <a href={`/copilot?method=company-diligence&ticker=${encodeURIComponent(String(meta.ticker ?? ''))}`} className="text-accent">🔄 重新生成</a>
+                  </div>
+                )}
+              </li>
+            );
+          })}
           {sources.length === 0 && <li className="p-3 text-sm text-gray-500">暂无 source</li>}
         </ul>
       </section>
