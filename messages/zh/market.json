@@ -135,7 +135,11 @@
     "adopt": "✅ 采纳 → 记录决策",
     "adopting": "记录中…",
     "adopted": "已记录 ✓",
-    "methodLabel": "分析方法"
+    "methodLabel": "分析方法",
+    "saveToBrain": "📥 存入研究脑",
+    "savingBrain": "存入中…",
+    "savedToBrain": "✓ 已存入研究脑 · 第 {version} 版",
+    "needAdmin": "需 admin 权限"
   },
   "fab": {
     "openAria": "打开 Copilot",

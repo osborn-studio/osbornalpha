@@ -20,6 +20,8 @@ interface Verdict {
   confidence?: { score: number; n: number; note: string } | number;
   // hiphon-pm-deepdive verdict shape (see skills/hiphon-pm-deepdive/SKILL.md derived method):
   position_pct?: number; entry_low?: number; entry_high?: number; stop_loss?: number; summary?: string;
+  // company-diligence summary shape (no rating — a brief, not a recommendation):
+  canonical_name?: string; one_line?: string; unverified?: string[];
 }
 interface HistoryEntry { ticker: string; rating: string; positionPct?: number; at: string; }
 
@@ -43,6 +45,8 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [adopting, setAdopting] = useState(false);
   const [adopted, setAdopted] = useState<string>('');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<string>(''); // '' | 'v:<n>' | 'error:<msg>' | 'forbidden'
   const startedRef = useRef(false);
 
   // Which method is actually running (route defaults absent methodId to john).
@@ -91,7 +95,7 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
 
   const run = useCallback(async (tk: string, q?: string) => {
     if ((!tk && !q) || running) return;
-    setRunning(true); setText(''); setCalls([]); setVerdict(null); setErr(''); setQuota(null); setAdopted(''); setAdopting(false);
+    setRunning(true); setText(''); setCalls([]); setVerdict(null); setErr(''); setQuota(null); setAdopted(''); setAdopting(false); setSaved(''); setSaving(false);
     const resp = await fetch('/api/copilot', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ ticker: tk || undefined, question: q, methodId }),
@@ -168,6 +172,39 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
       setAdopting(false);
     }
   }, [verdict, ticker, methodId, adopting]);
+
+  // Save a company-diligence brief into Research OS as a versioned source.
+  // Admin-gated server-side (403 for non-admins) — a brief, not a decision.
+  const saveToBrain = useCallback(async () => {
+    if (!verdict || saving) return;
+    setSaving(true); setSaved('');
+    try {
+      const resp = await fetch('/api/research/sources/from-diligence', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ticker: verdict.ticker || ticker,
+          canonical_name: verdict.canonical_name,
+          one_line: verdict.one_line,
+          unverified: verdict.unverified,
+          markdown: text,
+          tool_refs: calls.map((c) => c.name),
+          provenance: { generated_at: new Date().toISOString() },
+        }),
+      });
+      if (resp.status === 403) { setSaved('forbidden'); return; }
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        setSaved(`error:${body?.error?.message ?? resp.statusText}`);
+        return;
+      }
+      const body = await resp.json().catch(() => ({}));
+      setSaved(`v:${body.version ?? 1}`);
+    } catch (e) {
+      setSaved(`error:${String(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  }, [verdict, ticker, text, calls, saving]);
 
   return (
     <div className="space-y-3">
@@ -292,6 +329,27 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
               </button>
               {adopted === 'ok' && <span className="text-xs text-up">{t('adopted')}</span>}
               {adopted.startsWith('error:') && <span className="text-xs text-down">{adopted.slice(6)}</span>}
+            </div>
+          ) : null}
+
+          {/* company-diligence brief → save into Research OS as a versioned
+              source (admin-gated server-side). A brief is research material,
+              not a decision, so this replaces the adopt CTA for this method. */}
+          {activeId === 'company-diligence' && (verdict.ticker || ticker) ? (
+            <div className="mt-3 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={saveToBrain}
+                disabled={saving || saved.startsWith('v:')}
+                className="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
+              >
+                {saving ? t('savingBrain') : t('saveToBrain')}
+              </button>
+              {saved.startsWith('v:') && (
+                <a href="/research/sources" className="text-xs text-up">{t('savedToBrain', { version: saved.slice(2) })}</a>
+              )}
+              {saved === 'forbidden' && <span className="text-xs text-down">{t('needAdmin')}</span>}
+              {saved.startsWith('error:') && <span className="text-xs text-down">{saved.slice(6)}</span>}
             </div>
           ) : null}
         </div>
