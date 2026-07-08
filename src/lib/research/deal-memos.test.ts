@@ -9,6 +9,7 @@ import {
   DealMemoError,
   type DealLlmFn,
 } from './deal-memos';
+import { listMemos, getMemo } from './memos';
 import type { DealMemoDraft } from './types';
 
 let ctx: ResearchCtx;
@@ -149,6 +150,20 @@ describe('generateDealMemo', () => {
     expect(r3.error!.source).toBe('error');
 
     expect(store.count('research_memos')).toBe(0);
+  });
+
+  it('is read back through listMemos/getMemo with its deal fields intact (T4)', async () => {
+    const res = await generateDealMemo(ctx, { target: '示例标的', deal_context: '现金收购' }, fakeLlm(goodPayload()));
+    const id = res.memo!.id;
+    const listed = (await listMemos(ctx)).find((m) => m.id === id)!;
+    expect(listed.memo_type).toBe('deal');
+    expect(listed.sections).toHaveLength(8);
+    expect(listed.recommendation!.verdict).toBe('invest');
+    expect(listed.valuation!.valuation_basis).toEqual(['DCF', '可比交易']);
+    const got = await getMemo(ctx, id);
+    expect(got!.memo_type).toBe('deal');
+    expect(got!.deal_context).toBe('现金收购');
+    expect(got!.valuation!.entry_valuation.pre_money).toBe(2800);
   });
 
   it('validates target length and deal_context length', async () => {

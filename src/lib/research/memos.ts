@@ -18,9 +18,13 @@ import {
   RESEARCH_DISCLAIMER,
   type Axiom,
   type AxiomCheckResult,
+  type DealRecommendation,
+  type DealSection,
+  type DealValuation,
   type EvidenceItem,
   type InvestmentMemo,
   type MemoProvenance,
+  type MemoType,
   type SourceDocument,
 } from './types';
 
@@ -63,6 +67,19 @@ function rowToMemo(row: any): InvestmentMemo {
     status: row.status,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    // Deal-memo (memo_type='deal') fields pass through transparently; a thesis
+    // memo (default) leaves them absent so existing reads are unaffected (T4).
+    memo_type: (row.memo_type as MemoType) ?? 'thesis',
+    ...(row.deal_context !== undefined ? { deal_context: row.deal_context } : {}),
+    ...(Array.isArray(row.sections) && row.sections.length
+      ? { sections: row.sections as DealSection[] }
+      : {}),
+    ...(row.recommendation && typeof row.recommendation === 'object' && row.recommendation.verdict
+      ? { recommendation: row.recommendation as DealRecommendation }
+      : {}),
+    ...(row.valuation && typeof row.valuation === 'object' && Object.keys(row.valuation).length
+      ? { valuation: row.valuation as DealValuation }
+      : {}),
   };
 }
 
