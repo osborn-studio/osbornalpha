@@ -121,6 +121,122 @@ export interface InvestmentMemo {
   status: MemoStatus;
   created_at: string;
   updated_at: string;
+  // --- Deal-memo (memo_type='deal') additive fields (T4). Optional so existing
+  // thesis-memo reads are unaffected; a thesis memo defaults memo_type='thesis'
+  // and leaves these empty. ---
+  memo_type?: MemoType;
+  deal_context?: string | null;
+  sections?: DealSection[];
+  recommendation?: DealRecommendation;
+  valuation?: DealValuation;
+}
+
+// ---------------------------------------------------------------------------
+// Deal memo (一级市场兼容 IC memo) — additive memo_type='deal' variant.
+// Spec: docs/research-os/2026-07-06-ic-memo-deal-variant-spec.md. The
+// primary-market valuation system (8 fields) is the core: schema/prompt/types/UI
+// MUST structurally carry all 8 fields even when empty (rendered 待核实/未提供,
+// never hidden). public_market_crosscheck is a CHECK only — it must never
+// override primary-market valuation logic.
+
+export type MemoType = 'thesis' | 'deal';
+
+/** One of the 8 narrative sections; claims tagged fact / assumption / inference. */
+export interface DealSection {
+  id: string;
+  title: string;
+  body_md: string;
+  tags: { facts: string[]; assumptions: string[]; inferences: string[] };
+}
+
+/** Primary-market entry valuation — every sub-field nullable (待核实 when absent). */
+export interface DealEntryValuation {
+  pre_money?: number | null;
+  post_money?: number | null;
+  ev?: number | null;
+  equity_value?: number | null;
+  per_share?: number | null;
+  transaction_value?: number | null;
+  currency?: string | null;
+}
+
+export interface DealOwnershipAndDilution {
+  stake_pct?: number | null;
+  dilution?: string | null;
+  swap_or_raise_note?: string | null;
+}
+
+export interface DealReturnScenarios {
+  base?: string | null;
+  upside?: string | null;
+  downside?: string | null;
+}
+
+export interface DealReturnProfile {
+  irr?: number | null;
+  moic?: number | null;
+  payback?: string | null;
+  scenarios?: DealReturnScenarios;
+}
+
+export interface DealExitPath {
+  type: string;   // 'IPO' | '并购转让' | '回购' | '二级转让' | string
+  window?: string | null;
+}
+
+export interface DealExitAssumptions {
+  paths: DealExitPath[];
+}
+
+export interface DealSensitivityItem {
+  variable: string;
+  effect: string;
+}
+
+export interface DealValuationRisk {
+  risk: string;
+  mitigant: string;
+}
+
+export interface DealComp {
+  ticker?: string | null;
+  name?: string | null;
+  multiple?: string | null;
+}
+
+/** Secondary-market crosscheck — a CHECK only, never overrides primary logic. */
+export interface DealPublicMarketCrosscheck {
+  applicable: boolean;
+  comps: DealComp[];
+  note?: string | null;
+}
+
+/** The structured primary-market valuation system — all 8 fields always present. */
+export interface DealValuation {
+  valuation_basis: string[];
+  entry_valuation: DealEntryValuation;
+  ownership_and_dilution: DealOwnershipAndDilution;
+  return_profile: DealReturnProfile;
+  exit_assumptions: DealExitAssumptions;
+  sensitivity: DealSensitivityItem[];
+  valuation_risks: DealValuationRisk[];
+  public_market_crosscheck: DealPublicMarketCrosscheck;
+}
+
+export type DealVerdict = 'invest' | 'pass' | 'conditional';
+
+export interface DealRecommendation {
+  verdict: DealVerdict;
+  conditions: string[];
+  rationale: string;
+}
+
+/** LLM draft shape for a deal memo (pre-persist). */
+export interface DealMemoDraft {
+  title: string;
+  sections: DealSection[];
+  recommendation: DealRecommendation;
+  valuation: DealValuation;
 }
 
 // ---------------------------------------------------------------------------

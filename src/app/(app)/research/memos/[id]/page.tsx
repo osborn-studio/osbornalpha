@@ -6,12 +6,210 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
-import type { AxiomCheckResult, EvidenceItem, InvestmentMemo, SourceDocument } from '@/lib/research/types';
+import type {
+  AxiomCheckResult,
+  DealSection,
+  DealValuation,
+  EvidenceItem,
+  InvestmentMemo,
+  SourceDocument,
+} from '@/lib/research/types';
 import { RESEARCH_DISCLAIMER } from '@/lib/research/types';
 
 interface MemoResponse {
   memo: InvestmentMemo;
   sources: SourceDocument[];
+}
+
+// --- Deal-memo (memo_type='deal') read view. Empty fields render as
+// 待核实/未提供, never hidden — the primary-market valuation structure is always
+// visible. Secondary-market comps are labelled 仅交叉验证 · 不覆盖一级逻辑. ---
+
+const DEAL_VERDICT: Record<string, { label: string; cls: string }> = {
+  invest: { label: '投', cls: 'bg-green-100 text-green-800' },
+  conditional: { label: '有条件投', cls: 'bg-amber-100 text-amber-800' },
+  pass: { label: '不投', cls: 'bg-red-100 text-red-800' },
+};
+
+function na(v: unknown): string {
+  return v == null || v === '' ? '待核实' : String(v);
+}
+
+function Field({ label, value }: { label: string; value: unknown }) {
+  return (
+    <div className="flex justify-between gap-2 border-b py-1 last:border-0">
+      <span className="text-gray-500">{label}</span>
+      <span className={value == null || value === '' ? 'text-gray-400' : 'font-medium'}>
+        {value == null || value === '' ? '待核实' : String(value)}
+      </span>
+    </div>
+  );
+}
+
+function DealSectionBlock({ section, index }: { section: DealSection; index: number }) {
+  const tag = (label: string, items: string[], cls: string) =>
+    items.length > 0 && (
+      <div className="mt-1 flex flex-wrap gap-1">
+        {items.map((t, i) => (
+          <span key={i} className={`rounded px-1.5 py-0.5 text-xs ${cls}`}>{label}：{t}</span>
+        ))}
+      </div>
+    );
+  return (
+    <div className="rounded border p-3">
+      <h3 className="text-sm font-semibold">{index + 1}. {section.title}</h3>
+      <p className="mt-1 whitespace-pre-wrap text-sm text-gray-700">{section.body_md || '（待补充）'}</p>
+      {tag('事实', section.tags.facts, 'bg-green-50 text-green-700')}
+      {tag('假设', section.tags.assumptions, 'bg-amber-50 text-amber-700')}
+      {tag('推断', section.tags.inferences, 'bg-blue-50 text-blue-700')}
+    </div>
+  );
+}
+
+function ValuationCard({ v }: { v: DealValuation }) {
+  const ev = v.entry_valuation;
+  const rp = v.return_profile;
+  const sc = rp.scenarios ?? {};
+  return (
+    <section className="space-y-4 rounded-lg border-2 border-indigo-200 bg-indigo-50/30 p-4">
+      <h2 className="text-sm font-semibold text-indigo-900">一级市场估值体系（一等露出）</h2>
+
+      <div>
+        <h4 className="text-xs font-medium text-gray-500">估值依据</h4>
+        <div className="mt-1 flex flex-wrap gap-1">
+          {v.valuation_basis.length
+            ? v.valuation_basis.map((b, i) => (
+                <span key={i} className="rounded bg-white px-2 py-0.5 text-xs">{b}</span>
+              ))
+            : <span className="text-xs text-gray-400">待核实</span>}
+        </div>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="rounded bg-white p-2 text-xs">
+          <h4 className="mb-1 font-medium">进入估值</h4>
+          <Field label="pre-money" value={ev.pre_money} />
+          <Field label="post-money" value={ev.post_money} />
+          <Field label="EV" value={ev.ev} />
+          <Field label="equity value" value={ev.equity_value} />
+          <Field label="per share" value={ev.per_share} />
+          <Field label="交易对价" value={ev.transaction_value} />
+          <Field label="币种" value={ev.currency} />
+        </div>
+
+        <div className="rounded bg-white p-2 text-xs">
+          <h4 className="mb-1 font-medium">持股与稀释</h4>
+          <Field label="持股比例 %" value={v.ownership_and_dilution.stake_pct} />
+          <Field label="稀释" value={v.ownership_and_dilution.dilution} />
+          <Field label="换股/增资影响" value={v.ownership_and_dilution.swap_or_raise_note} />
+        </div>
+
+        <div className="rounded bg-white p-2 text-xs">
+          <h4 className="mb-1 font-medium">回报画像</h4>
+          <Field label="IRR" value={rp.irr} />
+          <Field label="MOIC" value={rp.moic} />
+          <Field label="回收期" value={rp.payback} />
+          <Field label="情景 · base" value={sc.base} />
+          <Field label="情景 · upside" value={sc.upside} />
+          <Field label="情景 · downside" value={sc.downside} />
+        </div>
+
+        <div className="rounded bg-white p-2 text-xs">
+          <h4 className="mb-1 font-medium">退出假设</h4>
+          {v.exit_assumptions.paths.length
+            ? v.exit_assumptions.paths.map((p, i) => (
+                <Field key={i} label={p.type} value={p.window ?? '待核实'} />
+              ))
+            : <p className="text-gray-400">待核实</p>}
+        </div>
+      </div>
+
+      <div className="rounded bg-white p-2 text-xs">
+        <h4 className="mb-1 font-medium">敏感性</h4>
+        {v.sensitivity.length
+          ? v.sensitivity.map((s, i) => <Field key={i} label={s.variable} value={s.effect} />)
+          : <p className="text-gray-400">待核实</p>}
+      </div>
+
+      <div className="rounded bg-white p-2 text-xs">
+        <h4 className="mb-1 font-medium">估值风险 → 缓释</h4>
+        {v.valuation_risks.length
+          ? v.valuation_risks.map((r, i) => (
+              <div key={i} className="border-b py-1 last:border-0">
+                <span className="font-medium">{r.risk}</span> → {na(r.mitigant)}
+              </div>
+            ))
+          : <p className="text-gray-400">待核实</p>}
+      </div>
+
+      <div className="rounded bg-white p-2 text-xs">
+        <h4 className="mb-1 font-medium">
+          二级市场交叉验证
+          <span className="ml-2 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500">仅交叉验证 · 不覆盖一级逻辑</span>
+        </h4>
+        <Field label="是否适用" value={v.public_market_crosscheck.applicable ? '是' : '否'} />
+        {v.public_market_crosscheck.comps.length
+          ? v.public_market_crosscheck.comps.map((c, i) => (
+              <Field key={i} label={na(c.name ?? c.ticker)} value={c.multiple} />
+            ))
+          : <Field label="可比" value={null} />}
+        <Field label="备注" value={v.public_market_crosscheck.note} />
+      </div>
+    </section>
+  );
+}
+
+function DealMemoView({ memo }: { memo: InvestmentMemo }) {
+  const sections = memo.sections ?? [];
+  const rec = memo.recommendation ?? { verdict: 'conditional', conditions: [], rationale: '' };
+  const valuation = memo.valuation;
+  const verdict = DEAL_VERDICT[rec.verdict] ?? { label: rec.verdict, cls: 'bg-gray-100 text-gray-700' };
+
+  return (
+    <div className="space-y-5">
+      <header className="rounded-lg border p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <h1 className="text-lg font-semibold">{memo.title}</h1>
+          <span className="rounded bg-indigo-100 px-2 py-0.5 text-xs text-indigo-800">📋 上会 deal memo</span>
+          <span className="rounded bg-gray-100 px-2 py-0.5 text-xs">{memo.status}</span>
+          <a className="ml-auto rounded bg-black px-3 py-1 text-xs text-white" href={`/api/research/memos/${memo.id}?format=markdown`}>
+            导出 Markdown
+          </a>
+        </div>
+        {memo.deal_context && (
+          <p className="mt-2 rounded bg-gray-50 p-2 text-xs text-gray-600">
+            <span className="font-medium">交易条款（权威）：</span>{memo.deal_context}
+          </p>
+        )}
+      </header>
+
+      {/* Recommendation card — Section 8 is the soul of the memo. */}
+      <section className="rounded-lg border-2 border-gray-200 p-4">
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold">投资建议</h2>
+          <span className={`rounded px-2 py-0.5 text-xs font-medium ${verdict.cls}`}>{verdict.label}</span>
+        </div>
+        <p className="mt-2 text-sm text-gray-700">{rec.rationale || '待核实'}</p>
+        {rec.conditions.length > 0 && (
+          <ul className="mt-2 list-disc pl-5 text-sm text-gray-600">
+            {rec.conditions.map((c, i) => <li key={i}>{c}</li>)}
+          </ul>
+        )}
+      </section>
+
+      {valuation && <ValuationCard v={valuation} />}
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold">八段叙事</h2>
+        {sections.map((s, i) => <DealSectionBlock key={s.id ?? i} section={s} index={i} />)}
+        {sections.length === 0 && <p className="text-sm text-gray-500">（无段落）</p>}
+      </section>
+
+      <footer className="rounded-lg border bg-gray-50 p-3 text-xs text-gray-500">
+        AI 初稿，关键数据/估值人工复核后用于投委会决策。免责声明：{RESEARCH_DISCLAIMER}
+      </footer>
+    </div>
+  );
 }
 
 function EvidenceBlock({ label, items, sources, onOpenSource }: {
@@ -122,6 +320,10 @@ export default function ResearchMemoPage() {
   if (!data) return <p className="p-6 text-sm text-gray-500">加载中…</p>;
 
   const { memo, sources } = data;
+  // Deal memos get a dedicated read view (8 sections + recommendation + the
+  // primary-market valuation card); the thesis editor below is untouched.
+  if (memo.memo_type === 'deal') return <DealMemoView memo={memo} />;
+
   const blocked = memo.axiom_check_results.some((r) => r.severity === 'BLOCK' && !r.passed);
 
   return (
