@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireResearchUser } from '@/lib/research/store';
 import { getMemo, patchMemo, memoToMarkdown, MemoError } from '@/lib/research/memos';
+import { dealMemoToMarkdown } from '@/lib/research/deal-memos';
 import { listSources } from '@/lib/research/sources';
 import { researchError } from '@/lib/research/api';
 
@@ -19,7 +20,9 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     }
     const url = new URL(req.url);
     if (url.searchParams.get('format') === 'markdown') {
-      const md = memoToMarkdown(memo, await listSources(ctx));
+      const md = memo.memo_type === 'deal'
+        ? dealMemoToMarkdown(memo)
+        : memoToMarkdown(memo, await listSources(ctx));
       return new NextResponse(md, {
         status: 200,
         headers: {
