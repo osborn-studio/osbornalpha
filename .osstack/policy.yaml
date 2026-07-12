@@ -1,0 +1,33 @@
+schema_version: 1
+mode: propose
+auto_apply: false
+
+# Doc 16 §7 defaults. First-round onboarding uses mode: propose with no
+# auto-apply; execute-mode for low-risk categories is opened only after >= 2
+# successful deliveries backed by real evidence.
+allowed_auto_changes:
+  - docs
+  - tests
+  - lint
+
+# This repo has a production Supabase Postgres (RLS) with git-tracked migrations
+# under supabase/migrations and Vercel auto-deploy from main, so database_migrations,
+# production_deploy, and production_config all require human approval.
+requires_approval:
+  - product_scope
+  - source
+  - dependencies
+  - ci
+  - database_migrations
+  - production_deploy
+  - production_config
+
+forbidden:
+  - secrets
+  - destructive_git
+  - unreviewed_external_actions
+
+budgets:
+  max_iterations: 5
+  max_runtime_minutes: 45
+  max_cost_usd: 20
