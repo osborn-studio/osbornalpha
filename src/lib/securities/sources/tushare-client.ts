@@ -29,6 +29,7 @@ export interface TushareCallOptions {
 export interface TushareAdapterOptions {
   token?: string;
   asOf?: string;
+  tsCode?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }

@@ -1,175 +1,60 @@
 import { NextResponse } from 'next/server';
 import { MOCK_UNIVERSE } from '@/lib/data/mock';
-import { searchUniverse } from '@/lib/stocks/search';
-import { normalizeWindTicker } from '@/lib/stocks/wind-normalize';
+import { legacySearchGET } from '@/lib/securities/legacy-search';
+import { inferCoreMarket, normalizeSecurityTicker } from '@/lib/securities/normalize';
+import { searchSecurities } from '@/lib/securities/search';
+import { serverIsSupabaseConfigured, getServerSupabase } from '@/lib/supabase/server';
 import { classifyAssetType } from '@/lib/stocks/asset-type';
-import { fetchTwseUniverse } from '@/lib/data/sources/twse';
-import type { AssetType, Market } from '@/lib/supabase/database.types';
+import { searchUniverse } from '@/lib/stocks/search';
 
 export const dynamic = 'force-dynamic';
-export const revalidate = 60;  // cache 60s per query
+export const revalidate = 60;
 
-interface EastmoneyItem {
-  Code: string;
-  Name: string;
-  PinYin?: string;
-  Classify: string;
-  SecurityTypeName: string;
-  UnifiedCode: string;
-  QuoteID: string;
-  MktNum: string;
+function normalizeQuery(query: string): string {
+  const market = inferCoreMarket(query);
+  return market ? (normalizeSecurityTicker(query, market) ?? query) : query;
 }
 
-interface UniverseRow {
-  t: string;       // canonical ticker (e.g. "002624.SZ", "00700.HK", "AAPL")
-  n: string;       // name
-  py: string;      // pinyin
-  m: Market;
-  asset_type: AssetType;
-}
-
-type TypedLocalHit = ReturnType<typeof searchUniverse>[number] & { asset_type: AssetType };
-
-function withAssetType<T extends { t: string; n: string }>(row: T): T & { asset_type: AssetType } {
-  return {
+function developerFallback(query: string, limit: number) {
+  return searchUniverse(MOCK_UNIVERSE, query, limit).map((row) => ({
     ...row,
     asset_type: classifyAssetType({ ticker: row.t, name: row.n }),
-  };
-}
-
-/**
- * Parse Eastmoney suggest result.
- * QuoteID format: "{marketCode}.{code}" — marketCode:
- *   0   = 深圳 (SZ)
- *   1   = 上海 (SH)
- *   116 = 港股 (HK)
- *   105 = NASDAQ
- *   106 = NYSE
- *   107 = AMEX
- *   90  = 北交所 (BJ)
- */
-function parseEastmoney(item: EastmoneyItem): UniverseRow | null {
-  const { Code, Name, PinYin, QuoteID } = item;
-  if (!QuoteID || !Code || !Name) return null;
-  const dotIdx = QuoteID.indexOf('.');
-  if (dotIdx < 0) return null;
-  const marketCode = QuoteID.slice(0, dotIdx);
-  let market: Market | null = null;
-  let ticker = Code;
-  switch (marketCode) {
-    case '0':   market = 'A';  ticker = `${Code}.SZ`; break;
-    case '1':   market = 'A';  ticker = `${Code}.SH`; break;
-    case '90':  market = 'A';  ticker = `${Code}.BJ`; break;
-    case '116': market = 'HK'; ticker = `${Code}.HK`; break;
-    case '105': case '106': case '107':
-      market = 'US'; ticker = Code; break;
-    default: return null;
-  }
-  return {
-    t: ticker,
-    n: Name,
-    py: PinYin || '',
-    m: market,
-    asset_type: classifyAssetType({
-      ticker,
-      name: Name,
-      securityTypeName: item.SecurityTypeName,
-      classify: item.Classify,
-    }),
-  };
-}
-
-async function searchEastmoney(query: string): Promise<UniverseRow[]> {
-  const url = new URL('https://searchapi.eastmoney.com/api/suggest/get');
-  url.searchParams.set('cb', 'cb');
-  url.searchParams.set('input', query);
-  url.searchParams.set('type', '14');
-  url.searchParams.set('count', '15');
-  url.searchParams.set('_', String(Date.now()));
-
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 4000);
-  let resp: Response;
-  try {
-    resp = await fetch(url.toString(), {
-      headers: {
-        'Referer': 'https://www.eastmoney.com/',
-        'User-Agent': 'Mozilla/5.0 (compatible; StockMonitor/1.0)',
-      },
-      next: { revalidate: 60 },
-      signal: ctrl.signal,
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-  if (!resp.ok) throw new Error(`Eastmoney HTTP ${resp.status}`);
-  const text = await resp.text();
-
-  // Strip JSONP wrapper: "cb({...})"
-  const match = text.match(/^cb\((.*)\)\s*$/s);
-  const jsonStr = match ? match[1] : text;
-  const data = JSON.parse(jsonStr);
-
-  const items: EastmoneyItem[] = data?.QuotationCodeTable?.Data || [];
-  return items
-    .map(parseEastmoney)
-    .filter((x): x is UniverseRow => x !== null);
+    exchange: null,
+    list_status: 'listed',
+    match_kind: 'developer_fallback',
+    verification_status: 'development',
+    selectable: true,
+  }));
 }
 
 export async function GET(request: Request) {
+  if (process.env.SECURITY_MASTER_SEARCH_ENABLED === 'false') return legacySearchGET(request);
+
   const { searchParams } = new URL(request.url);
-  const rawQ = (searchParams.get('q') || '').trim();
-  const limit = Math.min(parseInt(searchParams.get('limit') || '10', 10), 30);
-
-  if (rawQ.length === 0) {
-    return NextResponse.json({ source: 'empty', results: [] });
+  const rawQuery = (searchParams.get('q') ?? '').trim();
+  if (!rawQuery) return NextResponse.json({ source: 'empty', results: [] });
+  if (rawQuery.length > 80) {
+    return NextResponse.json({ error: 'invalid_query' }, { status: 400 });
   }
 
-  // Wind / Sina / Yahoo / Snowball dialect normalization. The Eastmoney
-  // suggest API only understands the canonical form (or plain text).
-  // `AAPL.O` → `AAPL`, `sh600519` → `600519.SH`, `700.HK` → `00700.HK`.
-  const normalized = normalizeWindTicker(rawQ);
-  const q = normalized !== rawQ.toUpperCase() ? normalized : rawQ;
-
-  // Try local mock first (instant for the curated 30)
-  const localHits = searchUniverse(MOCK_UNIVERSE, q, limit).map(withAssetType);
-
-  // TW universe (TWSE 上市 + TPEx 上柜, 24h-cached registry) — Eastmoney has
-  // no Taiwan equities, so TW hits come exclusively from this local scorer.
-  // Searchable by code prefix (2330) and Chinese (繁体) name (台積電).
-  let twHits: TypedLocalHit[] = [];
-  try {
-    twHits = searchUniverse(await fetchTwseUniverse(), q, limit).map(withAssetType);
-  } catch {
-    // TW universe unavailable — degrade to Eastmoney + local as before
+  const rawLimit = Number(searchParams.get('limit') ?? '10');
+  if (!Number.isInteger(rawLimit) || rawLimit < 1 || rawLimit > 30) {
+    return NextResponse.json({ error: 'invalid_limit' }, { status: 400 });
   }
+  const query = normalizeQuery(rawQuery);
 
-  // Always try Eastmoney too — its results take precedence for completeness
-  try {
-    const emHits = await searchEastmoney(q);
-    // Merge: Eastmoney first (broader), then TW, then local — deduped by ticker
-    const seen = new Set(emHits.map((r) => r.t));
-    const merged = [...emHits];
-    for (const r of [...twHits, ...localHits]) {
-      if (!seen.has(r.t)) {
-        seen.add(r.t);
-        merged.push(r);
-      }
+  if (!serverIsSupabaseConfigured()) {
+    if (process.env.NODE_ENV !== 'production') {
+      return NextResponse.json({ source: 'developer-fallback', results: developerFallback(query, rawLimit) });
     }
-    return NextResponse.json({ source: 'eastmoney+local', results: merged.slice(0, limit) });
-  } catch (err) {
-    console.error('Eastmoney search failed:', err);
-    // Fall back to TW + local only
-    const seen = new Set<string>();
-    const merged = [...twHits, ...localHits].filter((r) => {
-      if (seen.has(r.t)) return false;
-      seen.add(r.t);
-      return true;
-    });
-    return NextResponse.json({
-      source: 'local-fallback',
-      results: merged.slice(0, limit),
-      error: 'Eastmoney unavailable',
-    });
+    return NextResponse.json({ error: 'security_master_unavailable' }, { status: 503 });
+  }
+
+  try {
+    const client = await getServerSupabase();
+    const results = await searchSecurities(client as any, query, rawLimit);
+    return NextResponse.json({ source: 'security-master', results });
+  } catch {
+    return NextResponse.json({ error: 'security_master_unavailable' }, { status: 503 });
   }
 }

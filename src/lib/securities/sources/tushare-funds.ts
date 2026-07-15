@@ -50,8 +50,8 @@ export async function fetchExchangeFundSnapshot(options: TushareAdapterOptions =
     fetchImpl: options.fetchImpl,
   };
   const [fundRows, etfRows] = await Promise.all([
-    callTushare<FundRow>({ apiName: 'fund_basic', params: { market: 'E', status: 'L' }, fields: FUND_FIELDS, ...common }),
-    callTushare<EtfRow>({ apiName: 'etf_basic', params: { list_status: 'L' }, fields: ETF_FIELDS, ...common }),
+    callTushare<FundRow>({ apiName: 'fund_basic', params: { market: 'E', status: 'L', ts_code: options.tsCode }, fields: FUND_FIELDS, ...common }),
+    callTushare<EtfRow>({ apiName: 'etf_basic', params: { list_status: 'L', ts_code: options.tsCode }, fields: ETF_FIELDS, ...common }),
   ]);
 
   const etfs = new Map(etfRows.filter((row) => row.list_status === 'L').map((row) => [row.ts_code, row]));

@@ -26,7 +26,7 @@ export async function fetchConvertibleBondSnapshot(options: TushareAdapterOption
   const asOf = resolveAsOf(options.asOf);
   const rows = await callTushare<ConvertibleBondRow>({
     apiName: 'cb_basic',
-    params: {},
+    params: { ts_code: options.tsCode },
     fields: FIELDS,
     token: options.token,
     timeoutMs: options.timeoutMs,

@@ -23,7 +23,7 @@ export async function fetchHongKongMainBoardSnapshot(options: TushareAdapterOpti
   const asOf = resolveAsOf(options.asOf);
   const rows = await callTushare<HongKongRow>({
     apiName: 'hk_basic',
-    params: { list_status: 'L' },
+    params: { list_status: 'L', ts_code: options.tsCode },
     fields: FIELDS,
     token: options.token,
     timeoutMs: options.timeoutMs,

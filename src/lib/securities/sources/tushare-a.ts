@@ -32,7 +32,7 @@ export async function fetchAShareSnapshot(options: TushareAdapterOptions = {}): 
   const asOf = resolveAsOf(options.asOf);
   const rows = await callTushare<AShareRow>({
     apiName: 'stock_basic',
-    params: { list_status: 'L' },
+    params: { list_status: 'L', ts_code: options.tsCode },
     fields: FIELDS,
     token: options.token,
     timeoutMs: options.timeoutMs,
