@@ -37,6 +37,7 @@ export async function getRequestLocale(): Promise<AppLocale> {
 export type ApiMessageKey =
   | 'quotaExhausted'
   | 'providerNotConfigured'
+  | 'providerFailed'
   | 'oversellBlocked';
 
 const API_MESSAGES: Record<ApiMessageKey, Record<AppLocale, string>> = {
@@ -47,6 +48,10 @@ const API_MESSAGES: Record<ApiMessageKey, Record<AppLocale, string>> = {
   providerNotConfigured: {
     zh: '未配置 AI Provider。请在「设置 → AI 模型」中选择提供商并填入 API Key。',
     en: 'No AI provider configured. Please choose a provider and enter an API key under "Settings → AI Model".',
+  },
+  providerFailed: {
+    zh: 'AI 分析暂时失败，请稍后重试。',
+    en: 'AI analysis failed temporarily. Please try again.',
   },
   oversellBlocked: {
     zh: '删除该笔买入会导致后续卖出超过持仓，请先删除相关卖出记录',

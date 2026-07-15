@@ -5,6 +5,7 @@ import { sanitizeAiText } from '@/lib/llm/sanitize';
 // protocol (works against ARK/DeepSeek/OpenAI/Kimi/MiniMax via openai-compat).
 
 export type CopilotEvent =
+  | { type: 'run'; run_id: string }
   | { type: 'token'; text: string }
   | { type: 'tool_call'; name: string; args: unknown }
   | { type: 'tool_result'; name: string; ok: boolean; summary: string }

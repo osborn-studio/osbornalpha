@@ -8,6 +8,13 @@ import { AGENT_METHODS } from '@/lib/agent/methods/registry';
 import { createArtifact } from '@/lib/portfolio/artifacts-store';
 import { checkQuota, recordUsage, type QuotaResult } from '@/lib/billing/quota';
 import { getRequestLocale, apiMessage } from '@/lib/i18n/server';
+import { getServerSupabase } from '@/lib/supabase/server';
+import {
+  completeAiRun,
+  createAiRun,
+  failAiRun,
+  stableAiErrorCode,
+} from '@/lib/copilot/runs';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -61,6 +68,27 @@ export async function POST(req: Request) {
     }
   }
 
+  const runStartedAt = Date.now();
+  let runId: string | null = null;
+  let runDb: Awaited<ReturnType<typeof getServerSupabase>> | null = null;
+  if (llm && (!quota || quota.allowed)) {
+    try {
+      runDb = await getServerSupabase();
+      const { data: { user } } = await runDb.auth.getUser();
+      if (user) {
+        runId = await createAiRun(runDb as any, {
+          userId: user.id,
+          ticker: ticker || null,
+          methodId: resolvedMethod.id,
+          question,
+        });
+      }
+    } catch {
+      runDb = null;
+      console.warn('ai run create failed', { code: 'storage_unavailable' });
+    }
+  }
+
   const stream = new ReadableStream({
     async start(controller) {
       const send = (e: CopilotEvent) => controller.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n\n`));
@@ -88,52 +116,91 @@ export async function POST(req: Request) {
         return;
       }
 
+      if (runId) send({ type: 'run', run_id: runId });
+
       // Accumulate token text + verdict for optional post-run archiving.
       let archivedText = '';
       let archivedVerdict: unknown = null;
+      let runFailed = false;
+      let runErrorCode = 'provider_error';
       const onEvent = (e: CopilotEvent) => {
         if (e.type === 'token') archivedText += e.text;
         if (e.type === 'verdict') archivedVerdict = e.data;
+        if (e.type === 'error') {
+          runFailed = true;
+          runErrorCode = stableAiErrorCode(e.message);
+          send({ ...e, message: apiMessage(locale, 'providerFailed') });
+          return;
+        }
         send(e);
       };
 
-      await runCopilotLoop({
-        ticker: ticker || undefined, question, maxHops: resolvedMethod.maxHops ?? 12, onEvent,
-        model: async (messages: OaiMessage[]) => {
-          const cfg = { baseUrl: llm.baseUrl, apiKey: llm.apiKey, model: llm.model, chatPath: llm.chatPath };
-          const call = llm.protocol === 'anthropic' ? anthropicToolChat : toolChat;
-          const r = await call(cfg, { system: systemPrompt, messages, tools: OPENAI_TOOL_DEFS, max_tokens: 1500 });
-          return { content: r.content, toolCalls: r.toolCalls, finishReason: r.finishReason };
-        },
-        runTool: (name, args) => {
-          const tool = TOOLS_BY_NAME[name];
-          if (!tool) return Promise.resolve({ error: `unknown tool ${name}` });
-          return tool.handler(args, { origin });
-        },
-      });
+      try {
+        await runCopilotLoop({
+          ticker: ticker || undefined, question, maxHops: resolvedMethod.maxHops ?? 12, onEvent,
+          model: async (messages: OaiMessage[]) => {
+            const cfg = { baseUrl: llm.baseUrl, apiKey: llm.apiKey, model: llm.model, chatPath: llm.chatPath };
+            const call = llm.protocol === 'anthropic' ? anthropicToolChat : toolChat;
+            const r = await call(cfg, { system: systemPrompt, messages, tools: OPENAI_TOOL_DEFS, max_tokens: 1500 });
+            return { content: r.content, toolCalls: r.toolCalls, finishReason: r.finishReason };
+          },
+          runTool: (name, args) => {
+            const tool = TOOLS_BY_NAME[name];
+            if (!tool) return Promise.resolve({ error: `unknown tool ${name}` });
+            return tool.handler(args, { origin });
+          },
+        });
 
-      // Best-effort ledger entry — tokens aren't surfaced through the tool-call
-      // loop today, so tokensIn/tokensOut are recorded as 0 (spec-accepted:
-      // usage_events is a count-based quota ledger first, token audit second).
-      // recordUsage() never throws (see quota.ts) so this can't break the stream.
-      await recordUsage('copilot', { ticker: ticker || undefined, byo });
+        // Best-effort ledger entry — tokens aren't surfaced through the tool-call
+        // loop today, so tokensIn/tokensOut are recorded as 0 (spec-accepted:
+        // usage_events is a count-based quota ledger first, token audit second).
+        // recordUsage() never throws (see quota.ts) so this can't break the stream.
+        await recordUsage('copilot', { ticker: ticker || undefined, byo });
 
-      if (resolvedMethod.archive && archivedText.length > MIN_ARCHIVE_CHARS) {
-        try {
-          const label = ticker || question?.slice(0, 40) || resolvedMethod.name;
-          await createArtifact({
-            skill_id: resolvedMethod.id,
-            ticker: ticker || null,
-            title: `${label} ${resolvedMethod.name} ${new Date().toISOString().slice(0, 10)}`,
-            content_md: archivedText,
-            params: { question, verdict: archivedVerdict },
-          });
-        } catch {
-          // Archiving is best-effort — a failure here must not prevent the stream from closing below.
+        if (resolvedMethod.archive && archivedText.length > MIN_ARCHIVE_CHARS) {
+          try {
+            const label = ticker || question?.slice(0, 40) || resolvedMethod.name;
+            await createArtifact({
+              skill_id: resolvedMethod.id,
+              ticker: ticker || null,
+              title: `${label} ${resolvedMethod.name} ${new Date().toISOString().slice(0, 10)}`,
+              content_md: archivedText,
+              params: { question, verdict: archivedVerdict },
+            });
+          } catch {
+            // Archiving is best-effort — a failure here must not prevent the stream from closing below.
+          }
         }
+      } catch (error) {
+        runFailed = true;
+        runErrorCode = stableAiErrorCode(error);
+        send({ type: 'error', message: apiMessage(locale, 'providerFailed') });
+      } finally {
+        if (runId && runDb) {
+          try {
+            const durationMs = Date.now() - runStartedAt;
+            if (runFailed) {
+              await failAiRun(runDb as any, runId, {
+                errorCode: runErrorCode,
+                partialContent: archivedText,
+                durationMs,
+              });
+            } else {
+              const verdict = archivedVerdict && typeof archivedVerdict === 'object' && !Array.isArray(archivedVerdict)
+                ? archivedVerdict as Record<string, unknown>
+                : null;
+              await completeAiRun(runDb as any, runId, {
+                contentMd: archivedText,
+                verdict,
+                durationMs,
+              });
+            }
+          } catch {
+            console.warn('ai run finalize failed', { run_id: runId, code: 'storage_unavailable' });
+          }
+        }
+        controller.close();
       }
-
-      controller.close();
     },
   });
 

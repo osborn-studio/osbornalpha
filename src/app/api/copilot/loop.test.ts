@@ -2,6 +2,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { runCopilotLoop, type CopilotEvent } from './loop';
 
 describe('runCopilotLoop (OpenAI tool-calling)', () => {
+  it('supports an additive run identity event', () => {
+    const event: CopilotEvent = {
+      type: 'run',
+      run_id: '00000000-0000-0000-0000-000000000001',
+    };
+
+    expect(event.type).toBe('run');
+  });
+
   it('executes a tool_call then emits a verdict', async () => {
     const model = vi.fn()
       .mockResolvedValueOnce({
