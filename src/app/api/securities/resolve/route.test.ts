@@ -81,6 +81,13 @@ describe('POST /api/securities/resolve', () => {
     expect(promoteTrustedSecurity).toHaveBeenCalledTimes(1);
   });
 
+  it('clears the timeout after a successful resolution', async () => {
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+    const response = await POST(request({ query: '002463' }));
+    expect(response.status).toBe(200);
+    expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('queues external-only discovery as non-selectable', async () => {
     vi.mocked(resolveTrustedSecurity).mockResolvedValue(null);
     vi.mocked(discoverExternalCandidate).mockResolvedValue({

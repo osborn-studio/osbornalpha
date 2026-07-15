@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "kind": "osstack.contract_manifest",
+  "service": "osbornalpha-security-master",
+  "endpoints": [
+    { "id": "search-securities", "method": "GET", "path": "/api/search", "owner": "security-master" },
+    { "id": "resolve-security", "method": "POST", "path": "/api/securities/resolve", "owner": "security-master" },
+    { "id": "security-health", "method": "GET", "path": "/api/admin/securities", "owner": "admin" },
+    { "id": "sync-securities", "method": "GET", "path": "/api/cron/securities-sync", "owner": "security-master" },
+    { "id": "add-watchlist-item", "method": "POST", "path": "/api/watchlist", "owner": "watchlist" },
+    { "id": "sync-watchlist", "method": "PUT", "path": "/api/watchlist/sync", "owner": "watchlist" }
+  ]
+}

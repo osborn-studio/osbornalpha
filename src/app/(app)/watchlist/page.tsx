@@ -41,6 +41,21 @@ interface SearchResult {
   list_status?: string;
 }
 
+interface WatchlistDbRow {
+  id: string;
+  name: string;
+  watchlist_items: Array<{ ticker: string; sort_order: number }> | null;
+}
+
+interface SecurityIdentityRow {
+  ticker: string;
+  name: string;
+  pinyin: string | null;
+  market: Market;
+  asset_type: AssetType;
+  list_status: string;
+}
+
 export default function WatchlistPage() {
   const router = useRouter();
   const { show } = useToast();
@@ -87,6 +102,7 @@ export default function WatchlistPage() {
   // Mobile move menu (per-card kebab) — which ticker's menu is open
   const [openMenuTicker, setOpenMenuTicker] = useState<string | null>(null);
   const [lastAdded, setLastAdded] = useState<SearchResult | null>(null);
+  const [securityIdentities, setSecurityIdentities] = useState<Record<string, SearchResult>>({});
   const watchlistViewTracked = useRef(false);
   const postAddTracked = useRef<string | null>(null);
 
@@ -105,12 +121,12 @@ export default function WatchlistPage() {
               .select('id, name, watchlist_items (ticker, sort_order)')
               .order('sort_order');
             if (wl && wl.length > 0) {
-              const groupsFromDb: Group[] = wl.map((w: any) => ({
+              const groupsFromDb: Group[] = (wl as unknown as WatchlistDbRow[]).map((w) => ({
                 id: w.id,
                 name: w.name,
                 tickers: (w.watchlist_items || [])
-                  .sort((a: any, b: any) => a.sort_order - b.sort_order)
-                  .map((it: any) => it.ticker),
+                  .sort((a, b) => a.sort_order - b.sort_order)
+                  .map((item) => item.ticker),
               }));
               setGroups(groupsFromDb);
               return;
@@ -128,6 +144,45 @@ export default function WatchlistPage() {
 
   // ─── Live quotes (batch) ───
   const allTickers = useMemo(() => uniqueWatchlistTickers(groups), [groups]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured() || allTickers.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const sb = getBrowserSupabase();
+        const rows: SearchResult[] = [];
+        for (let index = 0; index < allTickers.length; index += 100) {
+          const { data, error } = await sb
+            .from('stocks_universe')
+            .select('ticker,name,pinyin,market,asset_type,list_status')
+            .in('ticker', allTickers.slice(index, index + 100))
+            .eq('is_active', true);
+          if (error) throw error;
+          const identityRows = (data ?? []) as unknown as SecurityIdentityRow[];
+          rows.push(...identityRows.map((row) => ({
+            t: row.ticker,
+            n: row.name,
+            py: row.pinyin ?? '',
+            m: row.market,
+            asset_type: row.asset_type,
+            list_status: row.list_status,
+            selectable: true,
+            verification_status: 'verified',
+          })));
+        }
+        if (!cancelled) {
+          setSecurityIdentities((current) => ({
+            ...current,
+            ...Object.fromEntries(rows.map((row) => [row.t, row])),
+          }));
+        }
+      } catch {
+        // Quotes and cards remain usable with ticker-only fallback.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [allTickers]);
 
   const { quotes, loading: quotesLoading, loadedAt, refetch } = useBatchQuotes(allTickers, {
     refreshIntervalMs: REFRESH_MS,
@@ -469,6 +524,7 @@ export default function WatchlistPage() {
             group={g}
             allGroups={groups}
             quotes={quotes}
+            securityIdentities={securityIdentities}
             loadedAt={loadedAt}
             isDropTarget={dropTargetGroup === g.id && dragKind === 'card'}
             isColumnDropTarget={dropTargetColumnId === g.id && dragKind === 'column'}
@@ -500,6 +556,7 @@ export default function WatchlistPage() {
               }
               trackEvent('watchlist_stock_added', { ticker: info.t, group: g.name, market: info.m });
               setLastAdded(info);
+              setSecurityIdentities((current) => ({ ...current, [info.t]: info }));
               persist(
                 groups.map((gg) => (gg.id === g.id ? { ...gg, tickers: [...gg.tickers, info.t] } : gg))
               );
@@ -590,6 +647,7 @@ interface ColumnProps {
   group: Group;
   allGroups: Group[];
   quotes: Record<string, LiveQuote | null>;
+  securityIdentities: Record<string, SearchResult>;
   loadedAt: number | null;
   isDropTarget: boolean;            // card being dragged into this column
   isColumnDropTarget: boolean;      // another column being dragged onto this one
@@ -617,7 +675,7 @@ interface ColumnProps {
 
 function KanbanColumn(props: ColumnProps) {
   const {
-    group, allGroups, quotes, loadedAt,
+    group, allGroups, quotes, securityIdentities, loadedAt,
     isDropTarget, isColumnDropTarget, isBeingDragged,
     dragTicker, isAdding, openMenuTicker,
     onDragOver, onDragEnter, onDragLeave, onDrop,
@@ -696,6 +754,7 @@ function KanbanColumn(props: ColumnProps) {
             key={ticker}
             ticker={ticker}
             quote={quotes[ticker] || null}
+            identity={securityIdentities[ticker]}
             loadedAt={loadedAt}
             isDragging={dragTicker === ticker}
             menuOpen={openMenuTicker === ticker}
@@ -732,6 +791,7 @@ function KanbanColumn(props: ColumnProps) {
 interface CardProps {
   ticker: string;
   quote: LiveQuote | null;
+  identity?: SearchResult;
   loadedAt: number | null;
   isDragging: boolean;
   menuOpen: boolean;
@@ -746,12 +806,12 @@ interface CardProps {
 }
 
 function StockCard({
-  ticker, quote, loadedAt, isDragging, menuOpen, currentGroupId, allGroups,
+  ticker, quote, identity, loadedAt, isDragging, menuOpen, currentGroupId, allGroups,
   onDragStart, onDragEnd, onMove, onRemove, onRetry, onToggleMenu,
 }: CardProps) {
   const t = useTranslations('market.watchlist.kanban');
-  const market = quote?.market || classifyMarket(ticker);
-  const name = quote?.name || ticker;
+  const market = quote?.market || identity?.m || classifyMarket(ticker);
+  const name = quote?.name || identity?.n || ticker;
   const currency = quote?.currency || currencyOfMarket(market);
   const hasPrice = !!quote && quote.price > 0;
   // Distinguish "still loading first batch" from "loaded but failed":
@@ -1173,8 +1233,9 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
         const content = await file.text();
         setText((cur) => (cur.trim() ? cur + '\n' + content : content));
       }
-    } catch (err: any) {
-      setFileError(t('readFailed', { message: err?.message || t('unknownError') }));
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : t('unknownError');
+      setFileError(t('readFailed', { message }));
     }
     e.target.value = '';  // allow re-select same file
   }

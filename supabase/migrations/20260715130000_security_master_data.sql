@@ -172,6 +172,7 @@ grant select on public.stocks_universe, public.security_aliases,
 grant all on public.stocks_universe, public.security_aliases, public.security_universe_memberships,
   public.security_sync_runs, public.security_discovery_candidates,
   public.security_sync_staging, public.security_resolve_rate_limits to service_role;
+grant select on public.watchlist_items to service_role;
 revoke all on public.security_sync_runs, public.security_discovery_candidates,
   public.security_sync_staging, public.security_resolve_rate_limits from anon, authenticated;
 

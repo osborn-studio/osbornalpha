@@ -27,7 +27,8 @@ describe('security master migration contract', () => {
 
     for (const token of required) expect(sql).toContain(token);
     expect(sql).toContain('enable row level security');
-    expect(sql).toContain('grant all on public.security_aliases');
+    expect(sql).toMatch(/grant all on public\.stocks_universe,\s+public\.security_aliases/);
+    expect(sql).toContain('grant select on public.watchlist_items to service_role');
     expect(sql).toContain('revoke all on public.security_sync_runs');
     expect(sql).toContain('security definer');
     expect(sql).toContain('set search_path');

@@ -20,12 +20,13 @@ const RESOLVE_TIMEOUT_MS = 1500;
 class ResolveTimeoutError extends Error {}
 
 function withTimeout<T>(work: Promise<T>): Promise<T> {
-  return Promise.race([
-    work,
-    new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new ResolveTimeoutError()), RESOLVE_TIMEOUT_MS);
-    }),
-  ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new ResolveTimeoutError()), RESOLVE_TIMEOUT_MS);
+  });
+  return Promise.race([work, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 function subjectHash(secret: string, value: string): string {
