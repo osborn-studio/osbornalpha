@@ -40,6 +40,19 @@
     "importDone": "✓ 已导入 {fresh} 只到「{name}」",
     "importDoneDedup": "✓ 已导入 {fresh} 只到「{name}」，去重 {skipped} 个",
     "importDefaultName": "批量导入 {date}",
+    "onboarding": {
+      "title": "建立你的第一份监控清单",
+      "description": "加入真实关注的标的，行情和 AI 分析会从这里开始。",
+      "search": "搜索并添加",
+      "searchTitle": "搜索代码或名称并加入股票池",
+      "import": "批量导入",
+      "importTitle": "从文本、CSV 或 Excel 导入自选标的",
+      "sample": "使用示例股票池",
+      "sampleTitle": "加入一组跨市场示例标的",
+      "defaultBoard": "我的股票池",
+      "sampleBoard": "跨市场示例",
+      "installed": "示例股票池已加入"
+    },
     "kanban": {
       "reorderTitle": "拖拽此处重排看板",
       "rename": "重命名",

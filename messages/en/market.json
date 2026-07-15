@@ -40,6 +40,19 @@
     "importDone": "✓ Imported {fresh} to \"{name}\"",
     "importDoneDedup": "✓ Imported {fresh} to \"{name}\", deduped {skipped}",
     "importDefaultName": "Bulk import {date}",
+    "onboarding": {
+      "title": "Build your first watchlist",
+      "description": "Add assets you actually follow. Quotes and AI analysis start here.",
+      "search": "Search and add",
+      "searchTitle": "Search by ticker or name and add an asset",
+      "import": "Bulk import",
+      "importTitle": "Import assets from text, CSV, or Excel",
+      "sample": "Use a sample watchlist",
+      "sampleTitle": "Add a small cross-market sample",
+      "defaultBoard": "My Watchlist",
+      "sampleBoard": "Cross-market Sample",
+      "installed": "Sample watchlist added"
+    },
     "kanban": {
       "reorderTitle": "Drag here to reorder boards",
       "rename": "Rename",

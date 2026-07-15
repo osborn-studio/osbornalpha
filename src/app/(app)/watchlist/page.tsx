@@ -11,12 +11,18 @@ import { useToast } from '@/components/Toast';
 import { useBatchQuotes, type LiveQuote } from '@/lib/hooks/useQuote';
 import { normalizeWindTicker } from '@/lib/stocks/wind-normalize';
 import { WatchlistTable } from '@/components/WatchlistTable';
+import { WatchlistOnboarding } from '@/components/WatchlistOnboarding';
 import { getBrowserSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import type { Market } from '@/lib/supabase/database.types';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
 import { uniqueWatchlistTickers, type WatchlistGroup } from '@/lib/watchlist/store';
 import { formatDateLocale, type AppLocale } from '@/lib/i18n/locale';
 import { trackEvent } from '@/lib/analytics/client';
+import {
+  SAMPLE_TICKERS,
+  createPrimaryBoard,
+  installSampleBoard,
+} from '@/lib/watchlist/onboarding';
 
 const REFRESH_MS = 60_000;
 
@@ -67,6 +73,7 @@ export default function WatchlistPage() {
 
   // Mobile move menu (per-card kebab) — which ticker's menu is open
   const [openMenuTicker, setOpenMenuTicker] = useState<string | null>(null);
+  const watchlistViewTracked = useRef(false);
 
   // ─── Optional Supabase overlay for signed-in users ───
   useEffect(() => {
@@ -115,6 +122,34 @@ export default function WatchlistPage() {
     if (!loadedAt) return [];  // still loading first batch
     return allTickers.filter((t) => !quotes[t] || (quotes[t] as any)?.price === 0);
   }, [allTickers, quotes, loadedAt]);
+
+  useEffect(() => {
+    if (!hydrated || watchlistViewTracked.current) return;
+    watchlistViewTracked.current = true;
+    trackEvent('watchlist_viewed', { groups: groups.length, tickers: allTickers.length });
+  }, [hydrated, groups.length, allTickers.length]);
+
+  function openPrimaryAdd() {
+    const next = createPrimaryBoard(groups, t('onboarding.defaultBoard'));
+    if (next !== groups) persist(next);
+    setView('kanban');
+    setAddingInGroup(next[0].id);
+    trackEvent('watchlist_empty_action_selected', { action: 'search' });
+  }
+
+  function openImportFromEmpty() {
+    setImportOpen(true);
+    trackEvent('watchlist_empty_action_selected', { action: 'import' });
+  }
+
+  function installSample() {
+    const next = installSampleBoard(groups, t('onboarding.sampleBoard'));
+    if (next === groups) return;
+    persist(next);
+    trackEvent('watchlist_empty_action_selected', { action: 'sample' });
+    trackEvent('watchlist_sample_installed', { tickers: SAMPLE_TICKERS });
+    show(t('onboarding.installed'));
+  }
 
   // ─── Drag-and-drop handlers ───
   // Card drag (within column body)
@@ -486,9 +521,11 @@ export default function WatchlistPage() {
       )}
 
       {hydrated && allTickers.length === 0 && (
-        <div className="card-base bg-bg-card py-8 text-center text-sm text-text-dim">
-          {t('emptyWatchlist')}
-        </div>
+        <WatchlistOnboarding
+          onSearch={openPrimaryAdd}
+          onImport={openImportFromEmpty}
+          onSample={installSample}
+        />
       )}
 
       <Disclaimer />
