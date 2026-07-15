@@ -26,4 +26,12 @@ describe('classifyAssetType', () => {
       classify: '基金',
     })).toBe('etf');
   });
+
+  it('accepts an explicit normalized provider asset type without extending the union', () => {
+    expect(classifyAssetType({
+      ticker: '510300.SH',
+      name: 'provider classified fund',
+      assetType: 'fund',
+    })).toBe('fund');
+  });
 });
