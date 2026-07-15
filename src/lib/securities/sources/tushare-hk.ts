@@ -64,11 +64,7 @@ export async function fetchHongKongMainBoardSnapshot(options: TushareAdapterOpti
     scope: 'hk_main',
     asOf,
     securities,
-    aliases: securities.flatMap((security) => buildAliases({
-      ...security,
-      source: 'tushare',
-      vendorAliases: security.pinyin ? [security.pinyin] : [],
-    })),
+    aliases: securities.flatMap((security) => buildAliases({ ...security, source: 'tushare' })),
     memberships: securities.map((security) => ({
       ticker: security.ticker,
       universe: 'hk_main',

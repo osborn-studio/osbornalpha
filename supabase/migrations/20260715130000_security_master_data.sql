@@ -167,6 +167,13 @@ alter table public.security_discovery_candidates enable row level security;
 alter table public.security_sync_staging enable row level security;
 alter table public.security_resolve_rate_limits enable row level security;
 
+grant select on public.security_aliases, public.security_universe_memberships to anon, authenticated;
+grant all on public.security_aliases, public.security_universe_memberships,
+  public.security_sync_runs, public.security_discovery_candidates,
+  public.security_sync_staging, public.security_resolve_rate_limits to service_role;
+revoke all on public.security_sync_runs, public.security_discovery_candidates,
+  public.security_sync_staging, public.security_resolve_rate_limits from anon, authenticated;
+
 create policy "security aliases public read"
   on public.security_aliases for select using (true);
 create policy "active security memberships public read"

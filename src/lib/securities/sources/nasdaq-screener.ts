@@ -48,7 +48,7 @@ export function parseNasdaqScreener(
   const rows = data && typeof data === 'object' ? (data as { rows?: unknown }).rows : null;
   if (!Array.isArray(rows)) throw new SecuritySourceError('source_schema', 'nasdaq-screener');
 
-  return rows.map((row) => {
+  return rows.flatMap((row): UsScreenerRecord[] => {
     if (!row || typeof row !== 'object') throw new SecuritySourceError('source_schema', 'nasdaq-screener');
     const value = row as Record<string, unknown>;
     for (const field of ['symbol', 'name', 'marketCap', 'country', 'sector', 'industry']) {
@@ -56,8 +56,10 @@ export function parseNasdaqScreener(
     }
     const ticker = normalizeSecurityTicker(String(value.symbol ?? ''), 'US');
     const name = nullableText(value.name);
-    if (!ticker || !name) throw new SecuritySourceError('source_schema', 'nasdaq-screener');
-    return {
+    if (!name) throw new SecuritySourceError('source_schema', 'nasdaq-screener');
+    // Caret-form preferred securities are valid provider rows but outside the approved equity universe.
+    if (!ticker) return [];
+    return [{
       ticker,
       name,
       exchange,
@@ -65,6 +67,47 @@ export function parseNasdaqScreener(
       country_code: countryCode(value.country),
       sector: nullableText(value.sector),
       industry: nullableText(value.industry),
-    };
+    }];
   });
+}
+
+const SCREENER_EXCHANGE: Record<UsScreenerRecord['exchange'], string> = {
+  NASDAQ: 'nasdaq',
+  NYSE: 'nyse',
+  AMEX: 'amex',
+};
+
+export async function fetchNasdaqScreener(
+  exchange: UsScreenerRecord['exchange'],
+  fetchImpl: typeof fetch = fetch,
+): Promise<UsScreenerRecord[]> {
+  const url = new URL('https://api.nasdaq.com/api/screener/stocks');
+  url.searchParams.set('tableonly', 'true');
+  url.searchParams.set('limit', '10000');
+  url.searchParams.set('download', 'true');
+  url.searchParams.set('exchange', SCREENER_EXCHANGE[exchange]);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20_000);
+  let response: Response;
+  try {
+    response = await fetchImpl(url, {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'Mozilla/5.0 osbornalpha-security-master/1.0',
+      },
+      signal: controller.signal,
+    });
+  } catch {
+    throw new SecuritySourceError('source_http', 'nasdaq-screener');
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!response.ok || response.redirected) throw new SecuritySourceError('source_http', 'nasdaq-screener');
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new SecuritySourceError('source_schema', 'nasdaq-screener');
+  }
+  return parseNasdaqScreener(payload, exchange);
 }
