@@ -2,8 +2,9 @@ import { NextResponse } from 'next/server';
 import { MOCK_UNIVERSE } from '@/lib/data/mock';
 import { searchUniverse } from '@/lib/stocks/search';
 import { normalizeWindTicker } from '@/lib/stocks/wind-normalize';
+import { classifyAssetType } from '@/lib/stocks/asset-type';
 import { fetchTwseUniverse } from '@/lib/data/sources/twse';
-import type { Market } from '@/lib/supabase/database.types';
+import type { AssetType, Market } from '@/lib/supabase/database.types';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 60;  // cache 60s per query
@@ -24,6 +25,16 @@ interface UniverseRow {
   n: string;       // name
   py: string;      // pinyin
   m: Market;
+  asset_type: AssetType;
+}
+
+type TypedLocalHit = ReturnType<typeof searchUniverse>[number] & { asset_type: AssetType };
+
+function withAssetType<T extends { t: string; n: string }>(row: T): T & { asset_type: AssetType } {
+  return {
+    ...row,
+    asset_type: classifyAssetType({ ticker: row.t, name: row.n }),
+  };
 }
 
 /**
@@ -54,7 +65,18 @@ function parseEastmoney(item: EastmoneyItem): UniverseRow | null {
       market = 'US'; ticker = Code; break;
     default: return null;
   }
-  return { t: ticker, n: Name, py: PinYin || '', m: market };
+  return {
+    t: ticker,
+    n: Name,
+    py: PinYin || '',
+    m: market,
+    asset_type: classifyAssetType({
+      ticker,
+      name: Name,
+      securityTypeName: item.SecurityTypeName,
+      classify: item.Classify,
+    }),
+  };
 }
 
 async function searchEastmoney(query: string): Promise<UniverseRow[]> {
@@ -110,14 +132,14 @@ export async function GET(request: Request) {
   const q = normalized !== rawQ.toUpperCase() ? normalized : rawQ;
 
   // Try local mock first (instant for the curated 30)
-  const localHits = searchUniverse(MOCK_UNIVERSE, q, limit);
+  const localHits = searchUniverse(MOCK_UNIVERSE, q, limit).map(withAssetType);
 
   // TW universe (TWSE 上市 + TPEx 上柜, 24h-cached registry) — Eastmoney has
   // no Taiwan equities, so TW hits come exclusively from this local scorer.
   // Searchable by code prefix (2330) and Chinese (繁体) name (台積電).
-  let twHits: ReturnType<typeof searchUniverse> = [];
+  let twHits: TypedLocalHit[] = [];
   try {
-    twHits = searchUniverse(await fetchTwseUniverse(), q, limit);
+    twHits = searchUniverse(await fetchTwseUniverse(), q, limit).map(withAssetType);
   } catch {
     // TW universe unavailable — degrade to Eastmoney + local as before
   }
