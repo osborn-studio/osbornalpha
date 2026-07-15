@@ -1,7 +1,7 @@
 import { buildAliases, normalizeSecurityTicker } from '../normalize';
 import type { NormalizedMembership, NormalizedSecurity, SecuritySnapshot } from '../model';
-import type { UsDirectoryIdentity } from './nasdaq-directory';
-import type { UsScreenerRecord } from './nasdaq-screener';
+import { fetchNasdaqDirectory, type UsDirectoryIdentity } from './nasdaq-directory';
+import { fetchNasdaqScreener, type UsScreenerRecord } from './nasdaq-screener';
 import { SecuritySourceError, sourceTimestamp } from './tushare-client';
 
 export interface UsUniverseCandidate {
@@ -171,4 +171,22 @@ export function buildUsUniverseSnapshot(
     aliases: securities.flatMap((security) => buildAliases({ ...security, source: 'nasdaq' })),
     memberships,
   };
+}
+
+export async function fetchUsUniverseCandidates(
+  asOf: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<UsUniverseCandidate[]> {
+  const [nasdaqDirectory, otherDirectory, nasdaqRows, nyseRows, amexRows] = await Promise.all([
+    fetchNasdaqDirectory('nasdaq', fetchImpl),
+    fetchNasdaqDirectory('other', fetchImpl),
+    fetchNasdaqScreener('NASDAQ', fetchImpl),
+    fetchNasdaqScreener('NYSE', fetchImpl),
+    fetchNasdaqScreener('AMEX', fetchImpl),
+  ]);
+  return buildUsCandidates(
+    [...nasdaqDirectory, ...otherDirectory],
+    [...nasdaqRows, ...nyseRows, ...amexRows],
+    asOf,
+  );
 }

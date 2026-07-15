@@ -12,6 +12,14 @@
     {
       "path": "/api/cron/research-daily",
       "schedule": "30 1 * * *"
+    },
+    {
+      "path": "/api/cron/securities-sync?region=asia",
+      "schedule": "30 21 * * *"
+    },
+    {
+      "path": "/api/cron/securities-sync?region=us",
+      "schedule": "30 0 * * *"
     }
   ]
 }

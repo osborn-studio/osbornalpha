@@ -11,6 +11,11 @@ export interface UsDirectoryIdentity {
 
 export type NasdaqDirectoryKind = 'nasdaq' | 'other';
 
+const DIRECTORY_URLS: Record<NasdaqDirectoryKind, string> = {
+  nasdaq: 'https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt',
+  other: 'https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt',
+};
+
 function requireField(index: Map<string, number>, name: string): number {
   const value = index.get(name);
   if (value === undefined) throw new SecuritySourceError('source_schema', 'nasdaq-directory');
@@ -52,4 +57,25 @@ export function parseNasdaqDirectory(contents: string, kind: NasdaqDirectoryKind
   }
 
   return identities.sort((a, b) => a.ticker.localeCompare(b.ticker));
+}
+
+export async function fetchNasdaqDirectory(
+  kind: NasdaqDirectoryKind,
+  fetchImpl: typeof fetch = fetch,
+): Promise<UsDirectoryIdentity[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  let response: Response;
+  try {
+    response = await fetchImpl(DIRECTORY_URLS[kind], {
+      headers: { 'User-Agent': 'osbornalpha-security-master/1.0' },
+      signal: controller.signal,
+    });
+  } catch {
+    throw new SecuritySourceError('source_http', 'nasdaq-directory');
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!response.ok || response.redirected) throw new SecuritySourceError('source_http', 'nasdaq-directory');
+  return parseNasdaqDirectory(await response.text(), kind);
 }
