@@ -55,5 +55,49 @@
     "emptyPopular": "No ticker adds in this window.",
     "emptySources": "No quote batches in this window.",
     "emptyFailures": "No AI failures in this window."
+  },
+  "securities": {
+    "title": "Securities Data Health",
+    "subtitle": "Sync scopes, search quality, and critical ticker availability",
+    "deniedTitle": "Access denied",
+    "deniedBody": "This page is available to administrators only.",
+    "usageLink": "Beta operations",
+    "securitiesLink": "Securities data",
+    "refresh": "Refresh securities health",
+    "loading": "Updating securities data…",
+    "refreshFailed": "Securities health could not be updated. Please try again.",
+    "updated": "Updated {time}",
+    "hours": "{value}h",
+    "scopeTitle": "Sync scopes",
+    "canaryTitle": "Critical ticker canaries",
+    "available": "Available",
+    "unavailable": "Unavailable",
+    "metrics": {
+      "backlog": "Pending candidates",
+      "hitRate": "Search hit rate",
+      "zeroRate": "Zero-result rate",
+      "resolveRate": "Resolver completion",
+      "forceRatio": "Legacy forced-add ratio"
+    },
+    "columns": {
+      "scope": "Scope",
+      "status": "Status",
+      "active": "Active",
+      "age": "Data age",
+      "changed": "Changed",
+      "deactivated": "Deactivated",
+      "lastResult": "Last result",
+      "error": "Error code"
+    },
+    "statuses": { "healthy": "Healthy", "warning": "Review", "error": "Error", "unknown": "Not run" },
+    "scopes": {
+      "a_stock": "A shares",
+      "a_exchange_fund": "A-share exchange funds",
+      "a_cb": "Convertible bonds",
+      "hk_main": "Hong Kong Main Board",
+      "sp500": "S&P 500",
+      "nasdaq_top500": "NASDAQ top 500 by market cap",
+      "us_china": "US-listed China equities and ADRs"
+    }
   }
 }

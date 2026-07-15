@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useLocale, useTranslations } from 'next-intl';
 import type { AdminUsageResponse, UsageWindowKey } from '@/lib/admin/usage';
 
@@ -36,6 +37,7 @@ function duration(value: number | null): string {
 
 export function AdminUsageClient() {
   const t = useTranslations('admin.usage');
+  const securitiesT = useTranslations('admin.securities');
   const locale = useLocale();
   const [range, setRange] = useState<UsageWindowKey>('7d');
   const [state, setState] = useState<ViewState>({ status: 'loading', data: null });
@@ -68,6 +70,10 @@ export function AdminUsageClient() {
     <div data-density="data" className="mx-auto max-w-7xl">
       <header className="mb-4 flex flex-wrap items-end justify-between gap-3 border-b border-border pb-4">
         <div>
+          <div className="mb-2 flex gap-3 text-xs">
+            <span className="font-medium text-accent">{securitiesT('usageLink')}</span>
+            <Link href="/admin/securities" className="text-text-dim hover:text-text">{securitiesT('securitiesLink')}</Link>
+          </div>
           <h1 className="text-xl font-bold">{t('title')}</h1>
           <p className="mt-1 text-xs text-text-dim">{t('subtitle')}</p>
         </div>

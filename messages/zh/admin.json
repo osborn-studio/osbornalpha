@@ -55,5 +55,49 @@
     "emptyPopular": "当前区间暂无标的添加记录。",
     "emptySources": "当前区间暂无行情批次记录。",
     "emptyFailures": "当前区间没有 AI 失败记录。"
+  },
+  "securities": {
+    "title": "证券主数据健康度",
+    "subtitle": "同步范围、搜索质量与关键代码可用性",
+    "deniedTitle": "无权访问",
+    "deniedBody": "此页面仅对管理员开放。",
+    "usageLink": "内测运营",
+    "securitiesLink": "证券数据",
+    "refresh": "刷新证券健康度",
+    "loading": "正在更新证券数据…",
+    "refreshFailed": "证券健康度更新失败，请稍后重试。",
+    "updated": "更新于 {time}",
+    "hours": "{value} 小时",
+    "scopeTitle": "同步范围",
+    "canaryTitle": "关键代码探针",
+    "available": "可用",
+    "unavailable": "不可用",
+    "metrics": {
+      "backlog": "待验证候选",
+      "hitRate": "搜索命中率",
+      "zeroRate": "零结果率",
+      "resolveRate": "解析完成率",
+      "forceRatio": "历史强制加入占比"
+    },
+    "columns": {
+      "scope": "范围",
+      "status": "状态",
+      "active": "有效数量",
+      "age": "数据年龄",
+      "changed": "本次变更",
+      "deactivated": "本次下线",
+      "lastResult": "最近结果",
+      "error": "错误码"
+    },
+    "statuses": { "healthy": "正常", "warning": "需关注", "error": "异常", "unknown": "未运行" },
+    "scopes": {
+      "a_stock": "A 股",
+      "a_exchange_fund": "A 股场内基金",
+      "a_cb": "可转债",
+      "hk_main": "港股主板",
+      "sp500": "标普 500",
+      "nasdaq_top500": "NASDAQ 市值前 500",
+      "us_china": "美股中概与 ADR"
+    }
   }
 }
