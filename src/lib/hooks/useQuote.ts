@@ -150,6 +150,9 @@ export function useBatchQuotes(
             failed: meta.failed ?? Object.values(quotes).filter((q) => !q).length,
             stale: meta.stale ?? 0,
             duration_ms: meta.duration_ms,
+            sources: meta.sources ?? {},
+            failed_tickers: meta.failed_tickers ?? [],
+            selected_sources: meta.selected_sources ?? {},
           });
           setState({ quotes, loading: false, loadedAt: Date.now() });
         })
