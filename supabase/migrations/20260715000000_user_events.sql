@@ -9,6 +9,9 @@ create table if not exists public.user_events (
   created_at timestamptz not null default now()
 );
 
+alter table public.user_events
+  add column if not exists metadata jsonb not null default '{}'::jsonb;
+
 alter table public.user_events enable row level security;
 
 create index if not exists user_events_created_idx on public.user_events (created_at desc);
