@@ -84,3 +84,17 @@ export function stableAiErrorCode(error: unknown): string {
   if (/abort|stream|socket/i.test(message)) return 'stream_error';
   return 'provider_error';
 }
+
+export function aiEventMetadata(input: {
+  runId: string | null;
+  ticker: string | null;
+  methodId: string;
+  durationMs?: number;
+}): Record<string, unknown> {
+  return {
+    run_id: input.runId,
+    ticker: input.ticker,
+    method_id: input.methodId,
+    ...(input.durationMs === undefined ? {} : { duration_ms: safeDuration(input.durationMs) }),
+  };
+}

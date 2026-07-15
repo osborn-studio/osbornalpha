@@ -5,6 +5,8 @@ import { classifyMarket } from '@/lib/utils';
 import { QuotaNotice } from '@/components/QuotaNotice';
 import { AGENT_METHODS, METHODS } from '@/lib/agent/methods/registry';
 import { currentStepIndex } from '@/lib/agent/methods/step-tracker';
+import { trackEvent } from '@/lib/analytics/client';
+import { aiEventMetadata } from '@/lib/copilot/runs';
 
 const HISTORY_KEY = 'osbornalpha:copilot:history:v1';
 const HISTORY_MAX = 20;
@@ -47,6 +49,8 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
   const [adopted, setAdopted] = useState<string>('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<string>(''); // '' | 'v:<n>' | 'error:<msg>' | 'forbidden'
+  const [runId, setRunId] = useState<string | null>(null);
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const startedRef = useRef(false);
 
   // Which method is actually running (route defaults absent methodId to john).
@@ -95,39 +99,81 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
 
   const run = useCallback(async (tk: string, q?: string) => {
     if ((!tk && !q) || running) return;
-    setRunning(true); setText(''); setCalls([]); setVerdict(null); setErr(''); setQuota(null); setAdopted(''); setAdopting(false); setSaved(''); setSaving(false);
-    const resp = await fetch('/api/copilot', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ticker: tk || undefined, question: q, methodId }),
-    });
-    if (!resp.body) { setErr(t('noResponseStream')); setRunning(false); return; }
-    const reader = resp.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const parts = buf.split('\n\n'); buf = parts.pop() ?? '';
-      for (const p of parts) {
-        const line = p.replace(/^data: /, '').trim();
-        if (!line) continue;
-        let e: any; try { e = JSON.parse(line); } catch { continue; }
-        if (e.type === 'token') setText((s) => s + e.text);
-        else if (e.type === 'tool_call') setCalls((c) => [...c, { name: e.name, args: e.args }]);
-        else if (e.type === 'tool_result') setCalls((c) => {
-          const u = [...c];
-          for (let i = u.length - 1; i >= 0; i--) {
-            if (u[i].name === e.name && u[i].ok === undefined) { u[i] = { ...u[i], ok: e.ok, summary: e.summary }; break; }
-          }
-          return u;
-        });
-        else if (e.type === 'verdict') { setVerdict(e.data); appendHistory(e.data); }
-        else if (e.type === 'error') { setErr(e.message); if (e.quota) setQuota(e.quota); }
+    setRunning(true); setText(''); setCalls([]); setVerdict(null); setErr(''); setQuota(null); setAdopted(''); setAdopting(false); setSaved(''); setSaving(false); setRunId(null); setCopyState('idle');
+    const startedAt = Date.now();
+    let currentRunId: string | null = null;
+    let failureMessage = '';
+    let streamStarted = false;
+    try {
+      const resp = await fetch('/api/copilot', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ticker: tk || undefined, question: q, methodId }),
+      });
+      if (!resp.ok) {
+        failureMessage = t('requestFailed');
+        setErr(failureMessage);
+        return;
       }
+      if (!resp.body) {
+        failureMessage = t('noResponseStream');
+        setErr(failureMessage);
+        return;
+      }
+
+      streamStarted = true;
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split('\n\n'); buf = parts.pop() ?? '';
+        for (const p of parts) {
+          const line = p.replace(/^data: /, '').trim();
+          if (!line) continue;
+          let e: any; try { e = JSON.parse(line); } catch { continue; }
+          if (e.type === 'run') {
+            currentRunId = e.run_id;
+            setRunId(e.run_id);
+            trackEvent('ai_analysis_started', aiEventMetadata({
+              runId: e.run_id,
+              ticker: tk || null,
+              methodId: activeId,
+            }));
+          }
+          else if (e.type === 'token') setText((s) => s + e.text);
+          else if (e.type === 'tool_call') setCalls((c) => [...c, { name: e.name, args: e.args }]);
+          else if (e.type === 'tool_result') setCalls((c) => {
+            const u = [...c];
+            for (let i = u.length - 1; i >= 0; i--) {
+              if (u[i].name === e.name && u[i].ok === undefined) { u[i] = { ...u[i], ok: e.ok, summary: e.summary }; break; }
+            }
+            return u;
+          });
+          else if (e.type === 'verdict') { setVerdict(e.data); appendHistory(e.data); }
+          else if (e.type === 'error') {
+            failureMessage = e.message || t('requestFailed');
+            setErr(failureMessage);
+            if (e.quota) setQuota(e.quota);
+          }
+        }
+      }
+    } catch {
+      failureMessage = t('requestFailed');
+      setErr(failureMessage);
+    } finally {
+      const metadata = aiEventMetadata({
+        runId: currentRunId,
+        ticker: tk || null,
+        methodId: activeId,
+        durationMs: Date.now() - startedAt,
+      });
+      if (failureMessage) trackEvent('ai_analysis_failed', metadata);
+      else if (streamStarted) trackEvent('ai_analysis_completed', metadata);
+      setRunning(false);
     }
-    setRunning(false);
-  }, [running, appendHistory, t]);
+  }, [running, appendHistory, t, methodId, activeId]);
 
   useEffect(() => {
     // A wizard hand-off (?q=…, optionally with ?method=) should fire immediately,
@@ -138,6 +184,21 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
       run(initialTicker, initialQuestion || undefined);
     }
   }, [autoStart, initialTicker, initialQuestion, run]);
+
+  const copyAnalysis = useCallback(async () => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyState('copied');
+      trackEvent('ai_analysis_copied', aiEventMetadata({
+        runId,
+        ticker: ticker || null,
+        methodId: activeId,
+      }));
+    } catch {
+      setCopyState('failed');
+    }
+  }, [text, runId, ticker, activeId]);
 
   const adoptVerdict = useCallback(async () => {
     if (!verdict || adopting) return;
@@ -277,7 +338,20 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
 
       {(text || calls.length > 0) && (
         <div className="card-base">
-          <div className="mb-2 text-sm font-semibold text-text-dim">{t('reasoning')}</div>
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="text-sm font-semibold text-text-dim">{t('reasoning')}</div>
+            {text && (
+              <button
+                type="button"
+                onClick={copyAnalysis}
+                className="shrink-0 rounded px-2 py-1 text-xs text-text-dim hover:bg-bg-card hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                title={t('copyAnalysis')}
+              >
+                ⧉ {copyState === 'copied' ? t('copied') : t('copyAnalysis')}
+              </button>
+            )}
+          </div>
+          {copyState === 'failed' && <div className="mb-2 text-xs text-down">{t('copyFailed')}</div>}
           <div className="whitespace-pre-wrap text-sm leading-relaxed">{text}</div>
           {calls.length > 0 && (
             <div className="mt-3 space-y-1">

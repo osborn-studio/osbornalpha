@@ -3,6 +3,7 @@ import {
   completeAiRun,
   createAiRun,
   failAiRun,
+  aiEventMetadata,
   stableAiErrorCode,
 } from './runs';
 
@@ -85,5 +86,19 @@ describe('ai run lifecycle', () => {
     expect(stableAiErrorCode(new Error('quota exhausted'))).toBe('quota_exhausted');
     expect(stableAiErrorCode(new Error('socket stream aborted'))).toBe('stream_error');
     expect(stableAiErrorCode(new Error('sensitive provider detail'))).toBe('provider_error');
+  });
+
+  it('uses one stable metadata shape for client lifecycle events', () => {
+    expect(aiEventMetadata({
+      runId: 'run-1',
+      ticker: 'AAPL',
+      methodId: 'john-cameron-5step',
+      durationMs: 1250.6,
+    })).toEqual({
+      run_id: 'run-1',
+      ticker: 'AAPL',
+      method_id: 'john-cameron-5step',
+      duration_ms: 1251,
+    });
   });
 });
