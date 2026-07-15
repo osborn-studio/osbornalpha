@@ -17,11 +17,11 @@ This release moves search and watchlist writes onto a verified local securities 
 | Type safety | `tsc --noEmit` | Passed |
 | Production build | Next.js optimized build, 33 static pages | Passed |
 | Database lint | Clean reset through both migrations; no schema errors | Passed |
-| Search benchmark | Exact P95 45.35 ms; name/pinyin P95 50.06 ms | Passed |
-| Browser regression | 10 auth/public smoke tests plus desktop 1440x900 and mobile 390x844 search flows | Passed |
+| Search benchmark | Exact P95 45.51 ms; name/pinyin P95 50.37 ms | Passed |
+| Browser regression | 10 auth/public smoke tests; local and live-production desktop/mobile search flows | Passed |
 | osstack policy/contracts | No governance findings; six contracts aligned | Passed |
-| Preview | Feature-off rollback and feature-on canaries; Tokyo redeploy pending | In progress |
-| Production | Migration, snapshots, Vercel deploy, public and authenticated canaries | Pending |
+| Preview | Feature-off rollback, Tokyo runtime inspection, feature-on canaries and trace | Passed |
+| Production | Migration, snapshots, guarded Vercel deploy, public/authenticated canaries and log observation | Passed for authorized scopes |
 
 ## Data Evidence
 
@@ -37,7 +37,7 @@ This release moves search and watchlist writes onto a verified local securities 
 
 Canaries observed during local source verification: `002463.SZ`, `00700.HK`, `AAPL`, `BABA`, and `PDD`.
 
-Local benchmark used 20 discarded warmups plus 200 measured calls per query class. Exact search measured P50 42.24 ms/P95 45.35 ms; name or pinyin measured P50 45.18 ms/P95 50.06 ms. A direct Shanghai-to-Tokyo production database measurement recorded about 512 ms P95 for both classes; this includes the public internet round trip and is retained as network evidence, not treated as an application-side pass.
+Local benchmark used 20 discarded warmups plus 200 measured calls per query class. Exact search measured P50 42.40 ms/P95 45.51 ms; name or pinyin measured P50 45.16 ms/P95 50.37 ms. A direct Shanghai-to-Tokyo production database measurement recorded about 512 ms P95 for both classes; this includes the public internet round trip and is retained as network evidence, not treated as an application-side pass.
 
 The production Supabase project is in Tokyo (`ap-northeast-1`). Vercel Functions are pinned to Tokyo (`hnd1`) so database-backed routes do not traverse the default Washington, D.C. region.
 
@@ -58,20 +58,22 @@ The production Supabase project is in Tokyo (`ap-northeast-1`). Vercel Functions
 - Data rollback: restore the pre-migration Supabase checkpoint only if additive schema rollback is required. A rejected or failed scope never deactivates its previous membership snapshot.
 - Application rollback: promote the previous Vercel production deployment.
 
-Preview rehearsal evidence: with the feature flag disabled, `002463` returned the isolated legacy empty result while resolver, cron, and admin routes rejected unauthenticated requests. With the flag enabled, `002463`, `00700`, `AAPL`, and `BABA` all returned canonical, selectable securities from the master. The pre-locality trace placed the function in Washington, D.C. and spent about 1.0 seconds in the Tokyo database call; the Tokyo deployment is measured separately before production promotion.
+Preview rehearsal evidence: with the feature flag disabled, `002463` returned the isolated legacy empty result while resolver, cron, and admin routes rejected unauthenticated requests. With the flag enabled, `002463`, `00700`, `AAPL`, and `BABA` all returned canonical, selectable securities from the master. The pre-locality trace placed the function in Washington, D.C. and spent about 1.0 seconds in the Tokyo database call. The promoted preview ran its functions in Tokyo; a warm trace measured 584.5 ms end to end with 210.0 ms in the Supabase RPC.
 
 ## Production Evidence
 
-- Commit SHA: Pending.
+- Application commit SHA: `4457e6a`.
 - Migration versions: `20260715130000`, `20260715140000` (production migration history aligned).
 - Pre-migration backups: `/tmp/osbornalpha-pre-security-master-schema-20260715.sql`, `/tmp/osbornalpha-pre-security-master-data-20260715.sql`.
-- Preview URLs: rollback `https://stock-monitor-omj1n5m9c-gilosbornhellos-projects.vercel.app`; feature-on pre-locality `https://stock-monitor-3k0mziaa4-gilosbornhellos-projects.vercel.app`; Tokyo preview pending.
-- Production URL: Pending.
-- Browser screenshots: `test-results/security-search-desktop.png`, `test-results/security-search-mobile.png` (visually inspected).
+- Preview URLs: rollback `https://stock-monitor-omj1n5m9c-gilosbornhellos-projects.vercel.app`; feature-on pre-locality `https://stock-monitor-3k0mziaa4-gilosbornhellos-projects.vercel.app`; Tokyo `https://stock-monitor-hnfgx2z0g-gilosbornhellos-projects.vercel.app`.
+- Production URL: `https://osbornalpha.com` (deployment `dpl_8f75ciFN1FMiFEKpAyYuvvfroKkY`).
+- Production feature flag: `SECURITY_MASTER_SEARCH_ENABLED=true`; the same commit was first deployed with the flag disabled and reproduced the legacy empty `002463` result before activation.
+- Browser screenshots: `test-results/security-search-desktop.png`, `test-results/security-search-mobile.png`, `test-results/security-search-production.png`, `test-results/security-search-production-mobile.png` (visually inspected).
 - Database canaries: `002463.SZ`, `00700.HK`, `AAPL`, `BABA`, and `PDD` selectable; 40 historical watchlist rows have zero orphaned identities.
 - Import idempotency: repeated A-share apply made zero inserts, updates, or deactivations.
-- Search latency and deployment canaries: Pending Tokyo preview and production trace.
-- Sync health observation: Pending.
+- Search latency and deployment canaries: production warm trace measured 743.8 ms end to end with 256.0 ms in the Supabase RPC. Exact code and Chinese-name searches returned verified master-data results.
+- Authenticated browser canary: a temporary production user added `002463` without a force-add dialog, persisted it through a local-cache clear and reload, and passed desktop/mobile overflow and console checks. The temporary user and its cascaded data were deleted after verification.
+- Sync health observation: active memberships remain 5,528 A shares, 2,142 A funds, 325 convertible bonds, 2,444 HK Main Board, 500 NASDAQ Top 500, and 324 U.S.-listed China/ADR. Pending discovery candidates: 0. No production error-level or HTTP 500 Vercel logs were found in the 30-minute post-deploy window.
 
 ## Deferred Scope
 
