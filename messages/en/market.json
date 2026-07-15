@@ -53,6 +53,24 @@
       "sampleBoard": "Cross-market Sample",
       "installed": "Sample watchlist added"
     },
+    "assetTypes": {
+      "stock": "Stock",
+      "etf": "ETF",
+      "convertible_bond": "Convertible",
+      "fund": "Fund",
+      "index": "Index",
+      "unknown": "Other"
+    },
+    "postAdd": {
+      "title": "Now monitoring {ticker}",
+      "positive": "Up {change}; watch whether price and volume follow through.",
+      "negative": "Down {change}; watch whether downside pressure expands.",
+      "flat": "Price movement is limited; wait for a new price or event signal.",
+      "unavailable": "Added to your watchlist; quote data is temporarily unavailable.",
+      "stale": "Using delayed quote data",
+      "analyze": "Run a John analysis",
+      "dismiss": "Dismiss monitoring insight"
+    },
     "kanban": {
       "reorderTitle": "Drag here to reorder boards",
       "rename": "Rename",
@@ -76,6 +94,7 @@
       "searchPlaceholder": "Ticker / name (e.g. AAPL / 600519)",
       "noMatch": "No matches. Press Enter to force-add \"{query}\".",
       "normalizedNote": " (normalized to {canonical})",
+      "fallbackType": "Will be added as {market} · {assetType}",
       "confirmForceAdd": "\"{query}\" not found in the database.{note}\nAdd it to \"{group}\" anyway?\n(Check the spelling or try the English ticker first)"
     },
     "import": {

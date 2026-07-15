@@ -53,6 +53,24 @@
       "sampleBoard": "跨市场示例",
       "installed": "示例股票池已加入"
     },
+    "assetTypes": {
+      "stock": "股票",
+      "etf": "ETF",
+      "convertible_bond": "可转债",
+      "fund": "基金",
+      "index": "指数",
+      "unknown": "其他"
+    },
+    "postAdd": {
+      "title": "已开始监控 {ticker}",
+      "positive": "当前涨幅 {change}，留意后续量价是否持续。",
+      "negative": "当前跌幅 {change}，留意下行是否继续扩大。",
+      "flat": "当前波动有限，等待新的价格或事件信号。",
+      "unavailable": "已加入股票池，行情暂不可用。",
+      "stale": "当前使用延迟行情",
+      "analyze": "用 John 深度分析",
+      "dismiss": "关闭监控提示"
+    },
     "kanban": {
       "reorderTitle": "拖拽此处重排看板",
       "rename": "重命名",
@@ -76,6 +94,7 @@
       "searchPlaceholder": "代码 / 名称（如 完美世界 / AAPL / 600519）",
       "noMatch": "没有匹配。回车以「{query}」强制加入。",
       "normalizedNote": "（已规范化为 {canonical}）",
+      "fallbackType": "将作为 {market} · {assetType} 加入",
       "confirmForceAdd": "未在数据库中找到 \"{query}\"。{note}\n仍然加入到「{group}」？\n（建议先检查拼写或试试英文代码）"
     },
     "import": {

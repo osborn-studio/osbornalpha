@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { MarketLabel } from '@/components/MarketLabel';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useLocale, useTranslations } from 'next-intl';
 import { addCustomStock } from '@/lib/data/custom-stocks';
 import { formatPrice, formatPct, changeClass, classifyMarket, currencyOfMarket } from '@/lib/utils';
@@ -12,8 +13,9 @@ import { useBatchQuotes, type LiveQuote } from '@/lib/hooks/useQuote';
 import { normalizeWindTicker } from '@/lib/stocks/wind-normalize';
 import { WatchlistTable } from '@/components/WatchlistTable';
 import { WatchlistOnboarding } from '@/components/WatchlistOnboarding';
+import { PostAddInsight } from '@/components/PostAddInsight';
 import { getBrowserSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
-import type { Market } from '@/lib/supabase/database.types';
+import type { AssetType, Market } from '@/lib/supabase/database.types';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
 import { uniqueWatchlistTickers, type WatchlistGroup } from '@/lib/watchlist/store';
 import { formatDateLocale, type AppLocale } from '@/lib/i18n/locale';
@@ -23,13 +25,15 @@ import {
   createPrimaryBoard,
   installSampleBoard,
 } from '@/lib/watchlist/onboarding';
+import { classifyAssetType } from '@/lib/stocks/asset-type';
 
 const REFRESH_MS = 60_000;
 
 type Group = WatchlistGroup;
-interface SearchResult { t: string; n: string; py: string; m: Market }
+interface SearchResult { t: string; n: string; py: string; m: Market; asset_type: AssetType }
 
 export default function WatchlistPage() {
+  const router = useRouter();
   const { show } = useToast();
   const t = useTranslations('market.watchlist');
   const locale = useLocale() as AppLocale;
@@ -73,7 +77,9 @@ export default function WatchlistPage() {
 
   // Mobile move menu (per-card kebab) — which ticker's menu is open
   const [openMenuTicker, setOpenMenuTicker] = useState<string | null>(null);
+  const [lastAdded, setLastAdded] = useState<SearchResult | null>(null);
   const watchlistViewTracked = useRef(false);
+  const postAddTracked = useRef<string | null>(null);
 
   // ─── Optional Supabase overlay for signed-in users ───
   useEffect(() => {
@@ -128,6 +134,16 @@ export default function WatchlistPage() {
     watchlistViewTracked.current = true;
     trackEvent('watchlist_viewed', { groups: groups.length, tickers: allTickers.length });
   }, [hydrated, groups.length, allTickers.length]);
+
+  useEffect(() => {
+    if (!lastAdded || postAddTracked.current === lastAdded.t) return;
+    postAddTracked.current = lastAdded.t;
+    trackEvent('post_add_insight_viewed', {
+      ticker: lastAdded.t,
+      market: lastAdded.m,
+      asset_type: lastAdded.asset_type,
+    });
+  }, [lastAdded]);
 
   function openPrimaryAdd() {
     const next = createPrimaryBoard(groups, t('onboarding.defaultBoard'));
@@ -413,8 +429,24 @@ export default function WatchlistPage() {
         </div>
       )}
 
+      {lastAdded && (
+        <PostAddInsight
+          asset={lastAdded}
+          quote={quotes[lastAdded.t]}
+          onDismiss={() => setLastAdded(null)}
+          onAnalyze={() => {
+            trackEvent('post_add_ai_clicked', {
+              ticker: lastAdded.t,
+              market: lastAdded.m,
+              asset_type: lastAdded.asset_type,
+            });
+            router.push(`/copilot?ticker=${encodeURIComponent(lastAdded.t)}`);
+          }}
+        />
+      )}
+
       {/* ─── Table view (评级 / 风险 / 目标价 / 估值区间) ─── */}
-      {hydrated && viewMode === 'table' && <WatchlistTable groups={groups} quotes={quotes} loading={quotesLoading} />}
+      {hydrated && allTickers.length > 0 && viewMode === 'table' && <WatchlistTable groups={groups} quotes={quotes} loading={quotesLoading} />}
 
       {/* ─── Kanban Board ─── */}
       {hydrated && viewMode === 'kanban' && (
@@ -460,6 +492,7 @@ export default function WatchlistPage() {
               }
               addCustomStock({ t: info.t, n: info.n, py: info.py, m: info.m });
               trackEvent('watchlist_stock_added', { ticker: info.t, group: g.name, market: info.m });
+              setLastAdded(info);
               persist(
                 groups.map((gg) => (gg.id === g.id ? { ...gg, tickers: [...gg.tickers, info.t] } : gg))
               );
@@ -831,6 +864,7 @@ interface AddInlineProps {
 
 function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
   const t = useTranslations('market.watchlist.kanban');
+  const assetTypes = useTranslations('market.watchlist.assetTypes');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -844,7 +878,7 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
   }, []);
 
   function runSearch(q: string) {
-    trackEvent('watchlist_search_submitted', { query_length: q.length });
+    trackEvent('stock_search_submitted', { query_length: q.length });
     if (abortRef.current) abortRef.current.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -852,14 +886,18 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
     fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
-        setResults(d.results || []);
-        trackEvent('watchlist_search_completed', { query_length: q.length, results: (d.results || []).length });
-        setFocusIdx((d.results || []).length > 0 ? 0 : -1);
+        const nextResults = (d.results || []).map((result: Omit<SearchResult, 'asset_type'> & { asset_type?: AssetType }) => ({
+          ...result,
+          asset_type: result.asset_type ?? classifyAssetType({ ticker: result.t, name: result.n }),
+        }));
+        setResults(nextResults);
+        trackEvent('stock_search_completed', { query_length: q.length, results: nextResults.length });
+        setFocusIdx(nextResults.length > 0 ? 0 : -1);
         setLoading(false);
       })
       .catch((err) => {
         if (err.name === 'AbortError') return;
-        trackEvent('watchlist_search_failed', { query_length: q.length });
+        trackEvent('stock_search_failed', { query_length: q.length });
         setResults([]);
         setLoading(false);
       });
@@ -875,7 +913,7 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
   function confirmAdd() {
     if (results.length > 0) {
       const target = focusIdx >= 0 ? results[focusIdx] : results[0];
-      onAdd(target);
+      selectResult(target);
       setQuery('');
       setResults([]);
       inputRef.current?.focus();
@@ -884,13 +922,25 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
     const q = query.trim();
     if (!q) return;
     const canonical = normalizeWindTicker(q) || q.toUpperCase();
+    const market = classifyMarket(canonical) as Market;
+    const assetType = classifyAssetType({ ticker: canonical, name: q });
     const note = canonical !== q.toUpperCase() ? t('normalizedNote', { canonical }) : '';
     if (confirm(t('confirmForceAdd', { query: q, note, group: groupName }))) {
-      trackEvent('watchlist_force_added', { query: q, canonical });
-      onAdd({ t: canonical, n: q, py: '', m: classifyMarket(canonical) as Market });
+      trackEvent('stock_force_added', { canonical, market, asset_type: assetType });
+      onAdd({ t: canonical, n: q, py: '', m: market, asset_type: assetType });
       setQuery('');
       setResults([]);
     }
+  }
+
+  function selectResult(result: SearchResult) {
+    trackEvent('stock_search_result_clicked', {
+      ticker: result.t,
+      market: result.m,
+      asset_type: result.asset_type,
+      rank: Math.max(0, results.findIndex((row) => row.t === result.t)),
+    });
+    onAdd(result);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -921,7 +971,7 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
           {results.map((r, i) => (
             <button
               key={`${r.t}-${i}`}
-              onClick={() => { onAdd(r); setQuery(''); setResults([]); inputRef.current?.focus(); }}
+              onClick={() => { selectResult(r); setQuery(''); setResults([]); inputRef.current?.focus(); }}
               onMouseEnter={() => setFocusIdx(i)}
               className={`grid w-full grid-cols-[auto_1fr] items-center gap-2 border-b border-border px-2 py-1.5 text-left last:border-b-0 ${
                 i === focusIdx ? 'bg-bg-elevated' : 'hover:bg-bg-elevated'
@@ -932,7 +982,11 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
               </span>
               <div className="min-w-0">
                 <div className="truncate text-xs font-semibold">{r.n}</div>
-                <div className="truncate text-[10px] text-text-dim">{r.t}</div>
+                <div className="flex flex-wrap items-center gap-1 text-[10px] text-text-dim">
+                  <span className="truncate">{r.t}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>{assetTypes(r.asset_type)}</span>
+                </div>
               </div>
             </button>
           ))}
@@ -944,6 +998,15 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
           {normalizeWindTicker(query.trim()) !== query.trim().toUpperCase()
             ? ` ${t('normalizedNote', { canonical: normalizeWindTicker(query.trim()) })}`
             : ''}
+          <div className="mt-0.5">
+            {t('fallbackType', {
+              market: classifyMarket(normalizeWindTicker(query.trim()) || query.trim().toUpperCase()),
+              assetType: assetTypes(classifyAssetType({
+                ticker: normalizeWindTicker(query.trim()) || query.trim().toUpperCase(),
+                name: query.trim(),
+              })),
+            })}
+          </div>
         </div>
       )}
       <div className="mt-1.5 flex gap-1.5">
