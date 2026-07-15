@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server';
 import { getServerSupabase, serverIsSupabaseConfigured } from '@/lib/supabase/server';
 import { parseWatchlistGroups } from '@/lib/watchlist/store';
 import { groupsToMutations, serverToGroups, type ServerWatchlistRow } from '@/lib/watchlist/sync';
+import {
+  canonicalizeSecurityTicker,
+  validateSelectableSecuritiesWithClient,
+} from '@/lib/watchlist/security-validation';
 
 export const dynamic = 'force-dynamic';
 
@@ -59,7 +63,18 @@ export async function PUT(req: Request) {
   if (parsed === null) {
     return NextResponse.json({ error: 'groups payload malformed' }, { status: 400 });
   }
-  const groups = parsed;
+  const requestedTickers = Array.from(new Set(parsed.flatMap((group) => group.tickers)));
+  const validation = await validateSelectableSecuritiesWithClient(sb as any, requestedTickers);
+  if (!validation.valid) {
+    return NextResponse.json(
+      { error: 'security_not_selectable', tickers: validation.rejected },
+      { status: 422 },
+    );
+  }
+  const groups = parsed.map((group) => ({
+    ...group,
+    tickers: group.tickers.map((ticker) => canonicalizeSecurityTicker(ticker)!),
+  }));
 
   try {
     const current = await loadRows(sb);

@@ -92,10 +92,9 @@
       "add": "+ 加入",
       "done": "完成",
       "searchPlaceholder": "代码 / 名称（如 完美世界 / AAPL / 600519）",
-      "noMatch": "没有匹配。回车以「{query}」强制加入。",
+      "noMatch": "暂未找到「{query}」。",
       "normalizedNote": "（已规范化为 {canonical}）",
-      "fallbackType": "将作为 {market} · {assetType} 加入",
-      "confirmForceAdd": "未在数据库中找到 \"{query}\"。{note}\n仍然加入到「{group}」？\n（建议先检查拼写或试试英文代码）"
+      "pendingVerification": "待验证"
     },
     "import": {
       "title": "📥 批量导入股票",

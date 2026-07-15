@@ -92,10 +92,9 @@
       "add": "+ Add",
       "done": "Done",
       "searchPlaceholder": "Ticker / name (e.g. AAPL / 600519)",
-      "noMatch": "No matches. Press Enter to force-add \"{query}\".",
+      "noMatch": "No verified match for \"{query}\" yet.",
       "normalizedNote": " (normalized to {canonical})",
-      "fallbackType": "Will be added as {market} · {assetType}",
-      "confirmForceAdd": "\"{query}\" not found in the database.{note}\nAdd it to \"{group}\" anyway?\n(Check the spelling or try the English ticker first)"
+      "pendingVerification": "Pending verification"
     },
     "import": {
       "title": "📥 Bulk Import Stocks",
