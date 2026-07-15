@@ -5,6 +5,7 @@
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
+export type AssetType = 'stock' | 'etf' | 'convertible_bond' | 'fund' | 'index' | 'unknown';
 export type Stance = 'bullish' | 'neutral' | 'bearish';
 export type Persona =
   | 'buffett' | 'munger' | 'druckenmiller' | 'marks' | 'lynch'
@@ -236,11 +237,29 @@ export interface UsageEvent {
 export interface UserEvent {
   id: string;
   user_id: string | null;
+  anonymous_id: string | null;
   session_id: string | null;
   event_name: string;
   path: string | null;
   metadata: Record<string, unknown>;
+  user_agent: string | null;
+  referrer: string | null;
   created_at: string;
+}
+
+export interface AiRun {
+  id: string;
+  user_id: string;
+  ticker: string | null;
+  method_id: string;
+  question: string | null;
+  status: 'running' | 'completed' | 'failed';
+  content_md: string | null;
+  verdict: Record<string, unknown> | null;
+  error_code: string | null;
+  duration_ms: number | null;
+  created_at: string;
+  completed_at: string | null;
 }
 
 // Webhook idempotency ledger — service-role only (no RLS), see
@@ -271,6 +290,7 @@ export type Database = {
       artifacts: { Row: Artifact; Insert: Partial<Artifact>; Update: Partial<Artifact> };
       usage_events: { Row: UsageEvent; Insert: Partial<UsageEvent>; Update: Partial<UsageEvent> };
       user_events: { Row: UserEvent; Insert: Partial<UserEvent>; Update: Partial<UserEvent> };
+      ai_runs: { Row: AiRun; Insert: Partial<AiRun>; Update: Partial<AiRun> };
       stripe_events: { Row: StripeEvent; Insert: Partial<StripeEvent>; Update: Partial<StripeEvent> };
     };
   };

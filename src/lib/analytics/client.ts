@@ -1,17 +1,42 @@
 'use client';
 
+import { sanitizeEventMetadata } from './sanitize';
+
 const SESSION_KEY = 'osbornalpha:session-id';
+const ANONYMOUS_KEY = 'osbornalpha:anonymous-id';
+
+let memorySessionId: string | null = null;
+let memoryAnonymousId: string | null = null;
+
+function newId(): string {
+  return crypto.randomUUID();
+}
 
 function sessionId(): string {
   try {
     let id = window.sessionStorage.getItem(SESSION_KEY);
     if (!id) {
-      id = crypto.randomUUID();
+      id = newId();
       window.sessionStorage.setItem(SESSION_KEY, id);
     }
     return id;
   } catch {
-    return 'unknown';
+    memorySessionId ||= newId();
+    return memorySessionId;
+  }
+}
+
+function anonymousId(): string {
+  try {
+    let id = window.localStorage.getItem(ANONYMOUS_KEY);
+    if (!id) {
+      id = newId();
+      window.localStorage.setItem(ANONYMOUS_KEY, id);
+    }
+    return id;
+  } catch {
+    memoryAnonymousId ||= newId();
+    return memoryAnonymousId;
   }
 }
 
@@ -21,7 +46,8 @@ export function trackEvent(event_name: string, metadata: Record<string, unknown>
     event_name,
     path: window.location.pathname,
     session_id: sessionId(),
-    metadata,
+    anonymous_id: anonymousId(),
+    metadata: sanitizeEventMetadata(metadata),
   };
 
   const body = JSON.stringify(payload);
