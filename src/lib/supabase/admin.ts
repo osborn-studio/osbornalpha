@@ -2,14 +2,12 @@
 //
 // This client authenticates as the Supabase service_role and can read/write
 // ANY row in ANY table, ignoring every RLS policy. It must ONLY be imported
-// from trusted, unauthenticated-by-user system contexts — currently just the
-// Stripe webhook route (src/app/api/stripe/webhook/route.ts), which has no
-// user session to scope a request to and needs to write another user's
-// profile (identified via Stripe metadata, not a cookie).
+// from trusted system contexts: unauthenticated webhooks that verify their own
+// signatures, or admin routes after a user-session and role check has passed.
 //
-// Do NOT import this from any route that serves a browser-originated request
-// with a user session — use getServerSupabase() (src/lib/supabase/server.ts)
-// there instead, so RLS keeps doing its job.
+// Browser-originated routes must use getServerSupabase() for their access
+// checks before constructing this client. Never use a request parameter or
+// cookie value alone to authorize service-role access.
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from './database.types';
 
