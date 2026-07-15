@@ -1,0 +1,86 @@
+import { sanitizeEventMetadata } from '@/lib/analytics/sanitize';
+import { sanitizeAiText } from '@/lib/llm/sanitize';
+
+export interface RunDb {
+  from(table: string): any;
+}
+
+export interface CreateRunInput {
+  userId: string;
+  ticker?: string | null;
+  methodId: string;
+  question?: string | null;
+}
+
+export interface CompleteRunInput {
+  contentMd: string;
+  verdict: Record<string, unknown> | null;
+  durationMs: number;
+}
+
+export interface FailedRunInput {
+  errorCode: string;
+  partialContent: string;
+  durationMs: number;
+}
+
+const SECRET_ASSIGNMENT = /\b(api[_ -]?key|access[_ -]?token|refresh[_ -]?token|secret|authorization)\s*[:=]\s*\S+/gi;
+const PROVIDER_KEY = /\bsk-[A-Za-z0-9_-]{12,}\b/g;
+
+function safeText(value: string | null | undefined, max: number): string | null {
+  if (!value) return null;
+  const redacted = value
+    .replace(SECRET_ASSIGNMENT, '$1=[redacted]')
+    .replace(PROVIDER_KEY, '[redacted]');
+  const sanitized = sanitizeAiText(redacted).slice(0, max);
+  return sanitized || null;
+}
+
+function safeDuration(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+}
+
+export async function createAiRun(db: RunDb, input: CreateRunInput): Promise<string> {
+  const { data, error } = await db.from('ai_runs').insert({
+    user_id: input.userId,
+    ticker: input.ticker ?? null,
+    method_id: input.methodId,
+    question: safeText(input.question, 2_000),
+    status: 'running',
+  }).select('id').single();
+  if (error) throw new Error(error.message);
+  if (!data?.id) throw new Error('ai run insert returned no id');
+  return data.id as string;
+}
+
+export async function completeAiRun(db: RunDb, id: string, input: CompleteRunInput): Promise<void> {
+  const { error } = await db.from('ai_runs').update({
+    status: 'completed',
+    content_md: safeText(input.contentMd, 200_000),
+    verdict: input.verdict ? sanitizeEventMetadata(input.verdict) : null,
+    error_code: null,
+    duration_ms: safeDuration(input.durationMs),
+    completed_at: new Date().toISOString(),
+  }).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+export async function failAiRun(db: RunDb, id: string, input: FailedRunInput): Promise<void> {
+  const { error } = await db.from('ai_runs').update({
+    status: 'failed',
+    content_md: safeText(input.partialContent, 200_000),
+    error_code: input.errorCode.slice(0, 80),
+    duration_ms: safeDuration(input.durationMs),
+    completed_at: new Date().toISOString(),
+  }).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+export function stableAiErrorCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/quota|额度/i.test(message)) return 'quota_exhausted';
+  if (/not configured|未配置/i.test(message)) return 'provider_not_configured';
+  if (/timeout|timed out/i.test(message)) return 'provider_timeout';
+  if (/abort|stream|socket/i.test(message)) return 'stream_error';
+  return 'provider_error';
+}
