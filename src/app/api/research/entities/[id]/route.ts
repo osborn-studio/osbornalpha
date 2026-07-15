@@ -9,10 +9,11 @@ import type { InvestmentMemo } from '@/lib/research/types';
 export const dynamic = 'force-dynamic';
 
 /** Entity profile + related sources + related memos + open questions rollup. */
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
+export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   return withResearch(async () => {
     const ctx = await requireResearchUser();
-    const entity = isUuid(params.id) ? await getEntity(ctx, params.id) : null;
+    const entity = isUuid(id) ? await getEntity(ctx, id) : null;
     if (!entity) {
       return NextResponse.json(
         { error: { code: 'NOT_FOUND', message: 'entity not found' } },

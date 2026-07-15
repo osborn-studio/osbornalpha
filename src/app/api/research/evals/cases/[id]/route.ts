@@ -7,10 +7,11 @@ import { withResearch } from '@/lib/research/api';
 export const dynamic = 'force-dynamic';
 
 /** Case detail: case + run history + the visible material source rows. */
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
+export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   return withResearch(async () => {
     const ctx = await requireResearchUser();
-    const evalCase = isUuid(params.id) ? await getEvalCase(ctx, params.id) : null;
+    const evalCase = isUuid(id) ? await getEvalCase(ctx, id) : null;
     if (!evalCase) {
       return NextResponse.json(
         { error: { code: 'NOT_FOUND', message: 'eval case not found' } },

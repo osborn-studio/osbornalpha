@@ -11,15 +11,16 @@ export const dynamic = 'force-dynamic';
  */
 export async function PATCH(
   req: Request,
-  { params }: { params: { id: string; eventId: string } },
+  { params }: { params: Promise<{ id: string; eventId: string }> },
 ) {
+  const { id, eventId } = await params;
   return withResearch(async () => {
     const ctx = await requireResearchUser();
     const body = await req.json().catch(() => ({}));
     const result = await adjudicateAlert(
       ctx,
-      params.id,
-      params.eventId,
+      id,
+      eventId,
       body.action as AdjudicationAction,
       typeof body.reason === 'string' ? body.reason : '',
     );

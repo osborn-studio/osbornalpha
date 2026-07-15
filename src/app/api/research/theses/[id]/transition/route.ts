@@ -7,13 +7,14 @@ import type { ThesisStatus } from '@/lib/research/types';
 export const dynamic = 'force-dynamic';
 
 /** Guarded status transition — illegal edges → 422 via ThesisError. */
-export async function POST(req: Request, { params }: { params: { id: string } }) {
+export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   return withResearch(async () => {
     const ctx = await requireResearchUser();
     const body = await req.json().catch(() => ({}));
     const thesis = await transitionThesis(
       ctx,
-      params.id,
+      id,
       body.to as ThesisStatus,
       typeof body.reason === 'string' ? body.reason : '',
     );

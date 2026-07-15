@@ -8,10 +8,11 @@ import { researchError } from '@/lib/research/api';
 export const dynamic = 'force-dynamic';
 
 /** GET memo JSON; ?format=markdown returns the ten-section export with disclaimer. */
-export async function GET(req: Request, { params }: { params: { id: string } }) {
+export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await params;
     const ctx = await requireResearchUser();
-    const memo = await getMemo(ctx, params.id);
+    const memo = await getMemo(ctx, id);
     if (!memo) {
       return NextResponse.json(
         { error: { code: 'NOT_FOUND', message: 'memo not found' } },
@@ -43,11 +44,12 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   }
 }
 
-export async function PATCH(req: Request, { params }: { params: { id: string } }) {
+export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await params;
     const ctx = await requireResearchUser();
     const body = await req.json().catch(() => ({}));
-    const memo = await patchMemo(ctx, params.id, body);
+    const memo = await patchMemo(ctx, id, body);
     return NextResponse.json({ memo });
   } catch (e) {
     if (e instanceof MemoError) {

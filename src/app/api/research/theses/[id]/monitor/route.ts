@@ -9,10 +9,11 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
 
 /** Run the monitor for one thesis. Alerts are PENDING — status never changes here. */
-export async function POST(_req: Request, { params }: { params: { id: string } }) {
+export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await params;
     const ctx = await requireResearchUser();
-    const thesis = isUuid(params.id) ? await getThesis(ctx, params.id) : null;
+    const thesis = isUuid(id) ? await getThesis(ctx, id) : null;
     if (!thesis) {
       return NextResponse.json(
         { error: { code: 'NOT_FOUND', message: 'thesis not found' } },

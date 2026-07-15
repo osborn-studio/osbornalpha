@@ -1,6 +1,7 @@
 'use client';
 
 import { sanitizeEventMetadata } from './sanitize';
+import { createAnalyticsId } from './id';
 
 const SESSION_KEY = 'osbornalpha:session-id';
 const ANONYMOUS_KEY = 'osbornalpha:anonymous-id';
@@ -9,7 +10,7 @@ let memorySessionId: string | null = null;
 let memoryAnonymousId: string | null = null;
 
 function newId(): string {
-  return crypto.randomUUID();
+  return createAnalyticsId();
 }
 
 function sessionId(): string {

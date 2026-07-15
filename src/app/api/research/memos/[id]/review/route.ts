@@ -6,10 +6,11 @@ import { researchError } from '@/lib/research/api';
 export const dynamic = 'force-dynamic';
 
 /** Review gate: 422 while any BLOCK axiom fails; otherwise memo → REVIEWED. */
-export async function POST(_req: Request, { params }: { params: { id: string } }) {
+export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await params;
     const ctx = await requireResearchUser();
-    const result = await reviewMemo(ctx, params.id);
+    const result = await reviewMemo(ctx, id);
     if (!result.ok) {
       return NextResponse.json(
         {

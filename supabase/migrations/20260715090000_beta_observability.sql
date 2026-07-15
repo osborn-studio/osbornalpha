@@ -3,6 +3,15 @@ alter table public.user_events add column if not exists anonymous_id text;
 alter table public.user_events add column if not exists user_agent text;
 alter table public.user_events add column if not exists referrer text;
 
+drop policy if exists "user_events insert beta telemetry" on public.user_events;
+create policy "user_events insert beta telemetry"
+  on public.user_events
+  for insert
+  with check (
+    (auth.uid() is null and user_id is null)
+    or auth.uid() = user_id
+  );
+
 create table if not exists public.ai_runs (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,

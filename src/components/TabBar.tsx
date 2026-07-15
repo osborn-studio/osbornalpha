@@ -3,13 +3,14 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useTranslations } from 'next-intl';
+import type { ReactElement } from 'react';
 
 interface TabDef {
   id: string;
   navKey: 'today' | 'watchlist' | 'intel' | 'portfolio' | 'tools' | 'settings';
   href: string;
   /** Line-art icon — 24×24, 1.5px stroke, currentColor */
-  Icon: (props: { className?: string }) => JSX.Element;
+  Icon: (props: { className?: string }) => ReactElement;
 }
 
 const stroke = {

@@ -8,10 +8,11 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
 /** ▶️ 运行评测: gen + judge double call. LLM failure → 502 structured, no half-run. */
-export async function POST(_req: Request, { params }: { params: { id: string } }) {
+export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   return withResearch(async () => {
     const ctx = await requireResearchUser();
-    const result = await runEval(ctx, params.id);
+    const result = await runEval(ctx, id);
     if (!result.run) {
       // Structured LLM failure (no key / provider error) — not a crash.
       return NextResponse.json(result, { status: 502 });
