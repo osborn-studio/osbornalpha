@@ -8,6 +8,7 @@ import {
   type WatchlistGroup,
 } from '@/lib/watchlist/store';
 import { isDefaultWatchlist } from '@/lib/watchlist/sync';
+import { trackEvent } from '@/lib/analytics/client';
 
 const SYNC_DEBOUNCE_MS = 600;
 
@@ -70,6 +71,10 @@ export function useWatchlist() {
   }, []);
 
   const persistGroups = useCallback((next: WatchlistGroup[]) => {
+    trackEvent('watchlist_changed', {
+      groups: next.length,
+      tickers: next.reduce((sum, g) => sum + g.tickers.length, 0),
+    });
     setGroups(next);
     setHydrated(true);
     writeLocalWatchlist(next);

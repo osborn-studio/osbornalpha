@@ -16,6 +16,7 @@ import type { Market } from '@/lib/supabase/database.types';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
 import { uniqueWatchlistTickers, type WatchlistGroup } from '@/lib/watchlist/store';
 import { formatDateLocale, type AppLocale } from '@/lib/i18n/locale';
+import { trackEvent } from '@/lib/analytics/client';
 
 const REFRESH_MS = 60_000;
 
@@ -212,6 +213,7 @@ export default function WatchlistPage() {
 
   // Manually refresh all quotes (e.g. after a transient API failure)
   function refreshQuotes() {
+    trackEvent('watchlist_refresh_clicked', { tickers: allTickers.length });
     refetch();
     show(t('refreshing'));
   }
@@ -255,6 +257,7 @@ export default function WatchlistPage() {
   // ─── Batch import ───
   function importBatch(tickers: string[], boardName: string) {
     if (tickers.length === 0) return;
+    trackEvent('watchlist_import_submitted', { input_count: tickers.length, board_name_set: !!boardName.trim() });
     const existing = new Set<string>();
     for (const g of groups) for (const t of g.tickers) existing.add(t.toUpperCase());
 
@@ -309,8 +312,8 @@ export default function WatchlistPage() {
 
   return (
     <>
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div>
+      <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-xl font-bold">{t('heading')}</h1>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-text-dim">
             <span>
@@ -325,18 +328,18 @@ export default function WatchlistPage() {
             )}
           </div>
         </div>
-        <div className="flex shrink-0 gap-1.5">
-          <div className="flex overflow-hidden rounded-md border border-border text-xs">
+        <div className="flex w-full gap-1.5 overflow-x-auto pb-1 sm:w-auto sm:shrink-0 sm:overflow-visible sm:pb-0">
+          <div className="flex shrink-0 overflow-hidden rounded-md border border-border text-xs">
             <button
               onClick={() => setView('kanban')}
-              className={`px-3 py-1.5 ${viewMode === 'kanban' ? 'bg-accent-dim/20 font-semibold text-accent' : 'text-text-dim hover:text-text'}`}
+              className={`whitespace-nowrap px-3 py-1.5 ${viewMode === 'kanban' ? 'bg-accent-dim/20 font-semibold text-accent' : 'text-text-dim hover:text-text'}`}
               title={t('viewKanbanTitle')}
             >
               {t('viewKanban')}
             </button>
             <button
               onClick={() => setView('table')}
-              className={`border-l border-border px-3 py-1.5 ${viewMode === 'table' ? 'bg-accent-dim/20 font-semibold text-accent' : 'text-text-dim hover:text-text'}`}
+              className={`whitespace-nowrap border-l border-border px-3 py-1.5 ${viewMode === 'table' ? 'bg-accent-dim/20 font-semibold text-accent' : 'text-text-dim hover:text-text'}`}
               title={t('viewTableTitle')}
             >
               {t('viewTable')}
@@ -345,21 +348,21 @@ export default function WatchlistPage() {
           <button
             onClick={refreshQuotes}
             disabled={allTickers.length === 0 || quotesLoading}
-            className="rounded-md bg-bg-card px-3 py-1.5 text-xs text-text-dim hover:text-text disabled:opacity-50"
+            className="whitespace-nowrap rounded-md bg-bg-card px-3 py-1.5 text-xs text-text-dim hover:text-text disabled:opacity-50"
             title={t('refreshTitle')}
           >
             {t('refresh')}
           </button>
           <button
             onClick={() => setImportOpen(true)}
-            className="rounded-md bg-accent-dim/15 px-3 py-1.5 text-xs font-semibold text-accent hover:bg-accent-dim/25"
+            className="whitespace-nowrap rounded-md bg-accent-dim/15 px-3 py-1.5 text-xs font-semibold text-accent hover:bg-accent-dim/25"
             title={t('importBatchTitle')}
           >
             {t('importBatch')}
           </button>
           <button
             onClick={exportYaml}
-            className="rounded-md bg-bg-card px-3 py-1.5 text-xs text-text-dim hover:text-text"
+            className="whitespace-nowrap rounded-md bg-bg-card px-3 py-1.5 text-xs text-text-dim hover:text-text"
           >
             {t('export')}
           </button>
@@ -416,10 +419,12 @@ export default function WatchlistPage() {
             onTickerAdded={(info) => {
               const exists = groups.some((gg) => gg.tickers.includes(info.t));
               if (exists) {
+                trackEvent('watchlist_add_duplicate', { ticker: info.t });
                 show(t('alreadyInWatchlist', { ticker: info.t }));
                 return;
               }
               addCustomStock({ t: info.t, n: info.n, py: info.py, m: info.m });
+              trackEvent('watchlist_stock_added', { ticker: info.t, group: g.name, market: info.m });
               persist(
                 groups.map((gg) => (gg.id === g.id ? { ...gg, tickers: [...gg.tickers, info.t] } : gg))
               );
@@ -802,6 +807,7 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
   }, []);
 
   function runSearch(q: string) {
+    trackEvent('watchlist_search_submitted', { query_length: q.length });
     if (abortRef.current) abortRef.current.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -810,11 +816,13 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
       .then((r) => r.json())
       .then((d) => {
         setResults(d.results || []);
+        trackEvent('watchlist_search_completed', { query_length: q.length, results: (d.results || []).length });
         setFocusIdx((d.results || []).length > 0 ? 0 : -1);
         setLoading(false);
       })
       .catch((err) => {
         if (err.name === 'AbortError') return;
+        trackEvent('watchlist_search_failed', { query_length: q.length });
         setResults([]);
         setLoading(false);
       });
@@ -841,6 +849,7 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
     const canonical = normalizeWindTicker(q) || q.toUpperCase();
     const note = canonical !== q.toUpperCase() ? t('normalizedNote', { canonical }) : '';
     if (confirm(t('confirmForceAdd', { query: q, note, group: groupName }))) {
+      trackEvent('watchlist_force_added', { query: q, canonical });
       onAdd({ t: canonical, n: q, py: '', m: classifyMarket(canonical) as Market });
       setQuery('');
       setResults([]);
@@ -895,6 +904,9 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
       {query.trim() && !loading && results.length === 0 && (
         <div className="mt-1.5 text-[10px] text-text-muted">
           {t('noMatch', { query: query.trim() })}
+          {normalizeWindTicker(query.trim()) !== query.trim().toUpperCase()
+            ? ` ${t('normalizedNote', { canonical: normalizeWindTicker(query.trim()) })}`
+            : ''}
         </div>
       )}
       <div className="mt-1.5 flex gap-1.5">

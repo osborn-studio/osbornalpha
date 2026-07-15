@@ -10,6 +10,13 @@ export async function GET(request: Request) {
     const supabase = await getServerSupabase();
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (!error) {
+      const { data: { user } } = await supabase.auth.getUser();
+      await (supabase.from('user_events') as any).insert({
+        user_id: user?.id ?? null,
+        event_name: 'auth_callback_succeeded',
+        path: '/auth/callback',
+        metadata: { next },
+      });
       return NextResponse.redirect(`${origin}${next}`);
     }
   }

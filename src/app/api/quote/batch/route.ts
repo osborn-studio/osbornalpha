@@ -12,6 +12,10 @@ import type { Market } from '@/lib/supabase/database.types';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 30;
+export const maxDuration = 30;
+
+const FRESH_TTL_MS = 60_000;
+const STALE_TTL_MS = 15 * 60_000;
 
 interface QuoteShape {
   source: string;
@@ -38,6 +42,8 @@ interface QuoteShape {
   updated_at: string;
   delayed: boolean;
 }
+
+const quoteCache = new Map<string, { quote: QuoteShape; ts: number }>();
 
 function lookupName(ticker: string): string {
   const hit = MOCK_UNIVERSE.find((u) => u.t === ticker);
@@ -148,6 +154,7 @@ async function resolveQuote(ticker: string): Promise<QuoteShape | null> {
 }
 
 export async function GET(req: Request) {
+  const startedAt = Date.now();
   const url = new URL(req.url);
   const tickersParam = url.searchParams.get('tickers') || '';
   const tickers = tickersParam
@@ -157,13 +164,26 @@ export async function GET(req: Request) {
     .slice(0, 40);  // cap
 
   if (tickers.length === 0) {
-    return NextResponse.json({ quotes: {} });
+    return NextResponse.json({ quotes: {}, meta: { attempted: 0, failed: 0, stale: 0, duration_ms: 0 } });
+  }
+
+  const force = url.searchParams.has('_');
+  const now = Date.now();
+  const freshQuotes: Record<string, QuoteShape> = {};
+  const toFetch: string[] = [];
+  for (const ticker of tickers) {
+    const cached = quoteCache.get(ticker);
+    if (!force && cached && now - cached.ts < FRESH_TTL_MS) {
+      freshQuotes[ticker] = cached.quote;
+    } else {
+      toFetch.push(ticker);
+    }
   }
 
   // TW group: one native multi-symbol mis request (rate limit ~3 req/5 s);
   // everything else goes through the per-ticker registry cascade.
-  const twTickers = tickers.filter((t) => classifyMarket(t) === 'TW');
-  const otherTickers = tickers.filter((t) => classifyMarket(t) !== 'TW');
+  const twTickers = toFetch.filter((t) => classifyMarket(t) === 'TW');
+  const otherTickers = toFetch.filter((t) => classifyMarket(t) !== 'TW');
 
   const [twMap, results] = await Promise.all([
     twTickers.length > 0
@@ -172,13 +192,52 @@ export async function GET(req: Request) {
     Promise.allSettled(otherTickers.map(resolveQuote)),
   ]);
 
-  const quotes: Record<string, QuoteShape | null> = {};
+  const quotes: Record<string, QuoteShape | null> = { ...freshQuotes };
+  let stale = 0;
   results.forEach((r, i) => {
-    quotes[otherTickers[i]] = r.status === 'fulfilled' && r.value ? r.value : null;
+    const ticker = otherTickers[i];
+    const value = r.status === 'fulfilled' && r.value ? r.value : null;
+    if (value) {
+      quoteCache.set(ticker, { quote: value, ts: Date.now() });
+      quotes[ticker] = value;
+      return;
+    }
+    const cached = quoteCache.get(ticker);
+    if (cached && Date.now() - cached.ts < STALE_TTL_MS) {
+      stale += 1;
+      quotes[ticker] = { ...cached.quote, delayed: true };
+    } else {
+      quotes[ticker] = null;
+    }
   });
   for (const t of twTickers) {
-    quotes[t] = (twMap.get(t) as QuoteShape | undefined) ?? null;
+    const value = (twMap.get(t) as QuoteShape | undefined) ?? null;
+    if (value) {
+      quoteCache.set(t, { quote: value, ts: Date.now() });
+      quotes[t] = value;
+      continue;
+    }
+    const cached = quoteCache.get(t);
+    if (cached && Date.now() - cached.ts < STALE_TTL_MS) {
+      stale += 1;
+      quotes[t] = { ...cached.quote, delayed: true };
+    } else {
+      quotes[t] = null;
+    }
   }
 
-  return NextResponse.json({ quotes });
+  const failed = tickers.filter((t) => !quotes[t]).length;
+  if (failed > 0) {
+    console.warn('quote batch degraded', { attempted: tickers.length, failed, stale });
+  }
+
+  return NextResponse.json({
+    quotes,
+    meta: {
+      attempted: tickers.length,
+      failed,
+      stale,
+      duration_ms: Date.now() - startedAt,
+    },
+  });
 }

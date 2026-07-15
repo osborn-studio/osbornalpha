@@ -4,6 +4,7 @@ import { quoteSourcesFor } from '@/lib/data/sources/registry';
 import { fetchTwseQuotesBatch } from '@/lib/data/sources/twse';
 import { classifyMarket } from '@/lib/utils';
 import { getRequestLocale } from '@/lib/i18n/server';
+import { sanitizeAiText } from '@/lib/llm/sanitize';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 1800;
@@ -53,7 +54,11 @@ export async function GET(req: Request) {
   const results = await Promise.allSettled(buildable.map((t) => buildRadar(t, locale)));
   results.forEach((r, i) => {
     if (r.status === 'fulfilled') {
-      radars[buildable[i]] = r.value;
+      radars[buildable[i]] = {
+        ...r.value,
+        headline: sanitizeAiText((r.value as any).headline),
+        markdown: sanitizeAiText((r.value as any).markdown),
+      };
     } else {
       radars[buildable[i]] = { error: r.reason?.message || 'unknown' };
     }

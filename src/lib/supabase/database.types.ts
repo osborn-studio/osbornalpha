@@ -233,6 +233,16 @@ export interface UsageEvent {
   created_at: string;
 }
 
+export interface UserEvent {
+  id: string;
+  user_id: string | null;
+  session_id: string | null;
+  event_name: string;
+  path: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
 // Webhook idempotency ledger — service-role only (no RLS), see
 // supabase/migrations/20260703120000_stripe_billing.sql.
 export interface StripeEvent {
@@ -260,6 +270,7 @@ export type Database = {
       decision_reviews: { Row: DecisionReview; Insert: Partial<DecisionReview>; Update: Partial<DecisionReview> };
       artifacts: { Row: Artifact; Insert: Partial<Artifact>; Update: Partial<Artifact> };
       usage_events: { Row: UsageEvent; Insert: Partial<UsageEvent>; Update: Partial<UsageEvent> };
+      user_events: { Row: UserEvent; Insert: Partial<UserEvent>; Update: Partial<UserEvent> };
       stripe_events: { Row: StripeEvent; Insert: Partial<StripeEvent>; Update: Partial<StripeEvent> };
     };
   };

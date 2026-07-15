@@ -11,6 +11,7 @@ import { PERSONAS, buildUserMessage, type StockContext, type PerspectiveResult }
 import { resolveLlm } from '@/lib/llm/resolve';
 import { checkQuota, recordUsage } from '@/lib/billing/quota';
 import { getRequestLocale, apiMessage } from '@/lib/i18n/server';
+import { sanitizeAiList, sanitizeAiText } from '@/lib/llm/sanitize';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 86400;
@@ -147,8 +148,8 @@ export async function GET(req: Request, { params }: Ctx) {
         ? parsed.stance
         : 'neutral';
       const confidence = Math.max(0, Math.min(10, Number(parsed.confidence) || 5));
-      const summary = String(parsed.summary || '').slice(0, 300);
-      const cites = Array.isArray(parsed.cites) ? parsed.cites.slice(0, 6).map(String) : [];
+      const summary = sanitizeAiText(String(parsed.summary || '')).slice(0, 300);
+      const cites = sanitizeAiList(Array.isArray(parsed.cites) ? parsed.cites.slice(0, 6).map(String) : []);
 
       return {
         persona: p.id,

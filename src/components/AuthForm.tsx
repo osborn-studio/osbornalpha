@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { getBrowserSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import { useToast } from '@/components/Toast';
+import { trackEvent } from '@/lib/analytics/client';
 
 type Mode = 'login' | 'register';
 type Provider = 'google' | 'github' | 'apple';
@@ -31,11 +32,16 @@ export function AuthForm({ mode }: { mode: Mode }) {
     if (!configured) return show(t('form.supabaseNotConfigured'));
     if (password.length < 8) return show(tErrors('auth.passwordTooShort'));
     setBusy(true);
+    trackEvent(isLogin ? 'login_submitted' : 'signup_submitted', { provider: 'email' });
     const sb = getBrowserSupabase();
     if (isLogin) {
       const { error } = await sb.auth.signInWithPassword({ email, password });
       setBusy(false);
-      if (error) return show(`✗ ${error.message}`);
+      if (error) {
+        trackEvent('login_failed', { provider: 'email', error: error.message });
+        return show(`✗ ${error.message}`);
+      }
+      trackEvent('login_succeeded', { provider: 'email' });
       show(t('toasts.loginSuccess'));
       window.location.href = '/today';
     } else {
@@ -45,7 +51,11 @@ export function AuthForm({ mode }: { mode: Mode }) {
         options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
       });
       setBusy(false);
-      if (error) return show(`✗ ${error.message}`);
+      if (error) {
+        trackEvent('signup_failed', { provider: 'email', error: error.message });
+        return show(`✗ ${error.message}`);
+      }
+      trackEvent('signup_email_sent', { provider: 'email' });
       setRegistered(true);
       show(t('toasts.confirmEmailSent'));
     }
@@ -53,12 +63,16 @@ export function AuthForm({ mode }: { mode: Mode }) {
 
   async function oauth(provider: Provider) {
     if (!configured) return show(t('form.supabaseNotConfigured'));
+    trackEvent(isLogin ? 'login_submitted' : 'signup_submitted', { provider });
     const sb = getBrowserSupabase();
     const { error } = await sb.auth.signInWithOAuth({
       provider,
       options: { redirectTo: `${window.location.origin}/auth/callback` },
     });
-    if (error) show(`✗ ${error.message}`);
+    if (error) {
+      trackEvent(isLogin ? 'login_failed' : 'signup_failed', { provider, error: error.message });
+      show(`✗ ${error.message}`);
+    }
   }
 
   if (registered) {

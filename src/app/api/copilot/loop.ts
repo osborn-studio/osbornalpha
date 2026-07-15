@@ -1,4 +1,5 @@
 import { extractJson } from '@/lib/data/sources/llm';
+import { sanitizeAiText } from '@/lib/llm/sanitize';
 
 // Copilot agent loop — provider-agnostic, speaks the OpenAI chat/tool-calling
 // protocol (works against ARK/DeepSeek/OpenAI/Kimi/MiniMax via openai-compat).
@@ -52,7 +53,8 @@ export async function runCopilotLoop(o: LoopOpts): Promise<void> {
   try {
     for (let hop = 0; hop < o.maxHops; hop++) {
       const turn = await o.model(messages);
-      if (turn.content) o.onEvent({ type: 'token', text: turn.content });
+      const cleanedContent = sanitizeAiText(turn.content);
+      if (cleanedContent) o.onEvent({ type: 'token', text: cleanedContent });
 
       if (turn.toolCalls.length > 0) {
         // Append the assistant turn carrying the tool calls (OpenAI requires the
@@ -72,7 +74,7 @@ export async function runCopilotLoop(o: LoopOpts): Promise<void> {
           let result: unknown; let ok = true;
           try { result = await o.runTool(tc.name, tc.arguments); }
           catch (e) { ok = false; result = { error: String(e) }; }
-          o.onEvent({ type: 'tool_result', name: tc.name, ok, summary: summarize(result) });
+          o.onEvent({ type: 'tool_result', name: tc.name, ok, summary: ok ? '完成' : '失败' });
           messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(result).slice(0, 6000) });
         }
         // Budget guard: the richer methods (15-dimension chain, 7-section
@@ -102,8 +104,4 @@ export async function runCopilotLoop(o: LoopOpts): Promise<void> {
 
 function safeJson(text: string): any | null {
   try { return extractJson(text); } catch { return null; }
-}
-function summarize(result: unknown): string {
-  const s = typeof result === 'string' ? result : JSON.stringify(result);
-  return s.length > 160 ? s.slice(0, 157) + '…' : s;
 }

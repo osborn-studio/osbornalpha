@@ -287,7 +287,6 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
                     {c.ok === undefined ? '⏳' : c.ok ? '✅' : '❌'} {t('tool')} <b>{c.name}</b>
                     {c.summary ? ` — ${c.summary}` : ''}
                   </summary>
-                  <pre className="mt-1 overflow-auto text-[11px] text-text-muted">{JSON.stringify(c.args, null, 2)}</pre>
                 </details>
               ))}
             </div>
