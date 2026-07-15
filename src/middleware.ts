@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
+import { isScannerPath } from '@/lib/security/scanner-paths';
 
 /**
  * Auth gate. The product is NOT publicly browsable — only the marketing landing
@@ -48,6 +49,13 @@ function rewriteWithLocale(request: NextRequest, pathname: string, locale: strin
 
 export async function middleware(request: NextRequest) {
   const { pathname: rawPathname } = request.nextUrl;
+
+  if (isScannerPath(rawPathname)) {
+    return new NextResponse('Not Found', {
+      status: 404,
+      headers: { 'cache-control': 'public, max-age=3600' },
+    });
+  }
 
   const isEnPrefixed = EN_PREFIX.test(rawPathname);
   const pathname = isEnPrefixed ? stripEnPrefix(rawPathname) : rawPathname;

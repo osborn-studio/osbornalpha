@@ -60,3 +60,4 @@ research-data/
 # Playwright
 playwright-report/
 test-results/
+.env*

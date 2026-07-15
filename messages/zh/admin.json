@@ -1,0 +1,59 @@
+{
+  "usage": {
+    "title": "内测运营看板",
+    "subtitle": "激活、AI 使用与行情源健康度",
+    "deniedTitle": "无权访问",
+    "deniedBody": "此页面仅对管理员开放。",
+    "loading": "正在更新数据…",
+    "refreshFailed": "数据更新失败，请稍后重试。",
+    "updated": "统计区间 {from} 至 {to}",
+    "ranges": {
+      "24h": "24 小时",
+      "7d": "7 天",
+      "30d": "30 天"
+    },
+    "sections": {
+      "funnel": "激活漏斗",
+      "search": "搜索与添加",
+      "ai": "AI 分析",
+      "popular": "热门标的",
+      "sources": "行情源健康度",
+      "failures": "近期 AI 失败"
+    },
+    "metrics": {
+      "registrations": "注册用户",
+      "watchlistViewers": "股票池访客",
+      "activatedUsers": "已激活用户",
+      "activationRate": "激活率",
+      "searchSubmitted": "发起搜索",
+      "searchClicked": "点击结果",
+      "forceAdded": "强制加入",
+      "stocksAdded": "加入标的",
+      "aiTotal": "分析总数",
+      "aiCompleted": "分析完成",
+      "aiFailed": "分析失败",
+      "completionRate": "完成率",
+      "medianDuration": "中位耗时",
+      "postAddClickRate": "添加后 AI 点击率",
+      "quoteBatches": "行情批次",
+      "quoteFailed": "失败标的",
+      "quoteStale": "过期缓存回退"
+    },
+    "columns": {
+      "ticker": "代码",
+      "adds": "加入次数",
+      "source": "来源",
+      "attempted": "尝试",
+      "succeeded": "成功",
+      "failed": "失败",
+      "duration": "总耗时",
+      "method": "方法",
+      "error": "错误码",
+      "time": "时间"
+    },
+    "methods": "方法分布",
+    "emptyPopular": "当前区间暂无标的添加记录。",
+    "emptySources": "当前区间暂无行情批次记录。",
+    "emptyFailures": "当前区间没有 AI 失败记录。"
+  }
+}

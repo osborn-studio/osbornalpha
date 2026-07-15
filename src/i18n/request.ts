@@ -13,6 +13,8 @@ const MESSAGE_DOMAINS = [
   'today', 'portfolio', 'intel', 'tools', 'market', 'components',
   // G1d domains (pre-registered, same fan-out pattern):
   'briefs', 'radar', 'watchlist',
+  // Internal operations dashboard:
+  'admin',
 ] as const;
 
 export default getRequestConfig(async () => {
