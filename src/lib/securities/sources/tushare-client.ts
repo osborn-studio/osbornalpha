@@ -2,6 +2,7 @@ const TUSHARE_ENDPOINT = 'https://api.tushare.pro';
 
 export type SecuritySourceErrorCode =
   | 'source_auth'
+  | 'source_authorization_required'
   | 'source_schema'
   | 'source_timeout'
   | 'source_http';
