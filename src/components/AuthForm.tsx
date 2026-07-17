@@ -6,6 +6,7 @@ import { useTranslations } from 'next-intl';
 import { getBrowserSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import { useToast } from '@/components/Toast';
 import { trackEvent } from '@/lib/analytics/client';
+import { useEmailRequestCooldown } from '@/lib/hooks/useEmailRequestCooldown';
 
 type Mode = 'login' | 'register';
 type Provider = 'google' | 'github' | 'apple';
@@ -18,6 +19,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [registered, setRegistered] = useState(false);
+  const signupCooldown = useEmailRequestCooldown('signup');
 
   const PROVIDERS: { id: Provider; label: string; icon: string }[] = [
     { id: 'google', label: t('form.providerGoogle'), icon: 'G' },
@@ -31,6 +33,9 @@ export function AuthForm({ mode }: { mode: Mode }) {
   async function submitEmail() {
     if (!configured) return show(t('form.supabaseNotConfigured'));
     if (password.length < 8) return show(tErrors('auth.passwordTooShort'));
+    if (!isLogin && signupCooldown.active) {
+      return show(t('form.emailCooldown', { seconds: signupCooldown.remainingSeconds }));
+    }
     setBusy(true);
     trackEvent(isLogin ? 'login_submitted' : 'signup_submitted', { provider: 'email' });
     const sb = getBrowserSupabase();
@@ -56,6 +61,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
         return show(`✗ ${error.message}`);
       }
       trackEvent('signup_email_sent', { provider: 'email' });
+      signupCooldown.startCooldown();
       setRegistered(true);
       show(t('toasts.confirmEmailSent'));
     }
@@ -124,9 +130,13 @@ export function AuthForm({ mode }: { mode: Mode }) {
           onKeyDown={(e) => e.key === 'Enter' && submitEmail()} />
       </div>
 
-      <button onClick={submitEmail} disabled={!email || !password || busy || !configured}
+      <button onClick={submitEmail} disabled={!email || !password || busy || !configured || (!isLogin && signupCooldown.active)}
         className="w-full rounded-lg bg-accent-dim py-3 text-sm font-semibold text-white disabled:opacity-50">
-        {busy ? t('form.processing') : isLogin ? t('form.loginButton') : t('form.registerButton')}
+        {busy
+          ? t('form.processing')
+          : !isLogin && signupCooldown.active
+            ? t('form.emailCooldown', { seconds: signupCooldown.remainingSeconds })
+            : isLogin ? t('form.loginButton') : t('form.registerButton')}
       </button>
 
       <div className="mt-4 flex justify-between text-xs text-text-dim">

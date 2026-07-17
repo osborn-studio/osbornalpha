@@ -119,6 +119,7 @@ export async function toolChat(
     tools: ToolDef[];
     max_tokens?: number;
     timeoutMs?: number;
+    thinking?: 'enabled' | 'disabled';
   },
 ): Promise<{
   content: string;
@@ -146,6 +147,7 @@ export async function toolChat(
     tool_choice: 'auto',
   };
   if (typeof opts.max_tokens === 'number') body.max_tokens = opts.max_tokens;
+  if (opts.thinking) body.thinking = { type: opts.thinking };
 
   const data = (await postJson(buildUrl(cfg), cfg.apiKey, body, timeoutMs)) as {
     choices?: Array<{

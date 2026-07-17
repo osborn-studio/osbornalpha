@@ -56,6 +56,10 @@ export async function resolveLlm(): Promise<ResolvedLlm | null> {
   }
 
   // (2) Environment fallback.
+  return resolvePlatformLlm();
+}
+
+export function resolvePlatformLlm(): ResolvedLlm | null {
   const envProvider = process.env.LLM_PROVIDER || 'ark';
   const def = getProvider(envProvider);
   const key = def ? process.env[ENV_KEY[def.id]] : undefined;
@@ -71,6 +75,6 @@ export async function resolveLlm(): Promise<ResolvedLlm | null> {
     };
   }
 
-  // (3) Nothing configured.
+  // Nothing configured.
   return null;
 }

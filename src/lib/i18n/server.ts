@@ -38,6 +38,7 @@ export type ApiMessageKey =
   | 'quotaExhausted'
   | 'providerNotConfigured'
   | 'providerFailed'
+  | 'providerFallback'
   | 'oversellBlocked';
 
 const API_MESSAGES: Record<ApiMessageKey, Record<AppLocale, string>> = {
@@ -52,6 +53,10 @@ const API_MESSAGES: Record<ApiMessageKey, Record<AppLocale, string>> = {
   providerFailed: {
     zh: 'AI 分析暂时失败，请稍后重试。',
     en: 'AI analysis failed temporarily. Please try again.',
+  },
+  providerFallback: {
+    zh: '你的个人 AI 模型暂时不可用，已自动切换到平台模型继续分析。',
+    en: 'Your personal AI model is unavailable, so the analysis has continued with the platform model.',
   },
   oversellBlocked: {
     zh: '删除该笔买入会导致后续卖出超过持仓，请先删除相关卖出记录',

@@ -43,6 +43,7 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
   const [calls, setCalls] = useState<ToolCall[]>([]);
   const [verdict, setVerdict] = useState<Verdict | null>(null);
   const [err, setErr] = useState('');
+  const [notice, setNotice] = useState('');
   const [quota, setQuota] = useState<{ used: number; limit: number; plan: string } | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [adopting, setAdopting] = useState(false);
@@ -99,7 +100,7 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
 
   const run = useCallback(async (tk: string, q?: string) => {
     if ((!tk && !q) || running) return;
-    setRunning(true); setText(''); setCalls([]); setVerdict(null); setErr(''); setQuota(null); setAdopted(''); setAdopting(false); setSaved(''); setSaving(false); setRunId(null); setCopyState('idle');
+    setRunning(true); setText(''); setCalls([]); setVerdict(null); setErr(''); setNotice(''); setQuota(null); setAdopted(''); setAdopting(false); setSaved(''); setSaving(false); setRunId(null); setCopyState('idle');
     const startedAt = Date.now();
     let currentRunId: string | null = null;
     let failureMessage = '';
@@ -142,6 +143,7 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
               methodId: activeId,
             }));
           }
+          else if (e.type === 'notice') setNotice(e.message || '');
           else if (e.type === 'token') setText((s) => s + e.text);
           else if (e.type === 'tool_call') setCalls((c) => [...c, { name: e.name, args: e.args }]);
           else if (e.type === 'tool_result') setCalls((c) => {
@@ -335,6 +337,7 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
       )}
 
       {err && (quota ? <QuotaNotice {...quota} /> : <div className="card-base text-sm text-down">⚠️ {err}</div>)}
+      {notice && <div className="card-base border border-warn/40 text-sm text-warn">{notice}</div>}
 
       {(text || calls.length > 0) && (
         <div className="card-base">

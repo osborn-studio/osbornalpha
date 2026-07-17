@@ -6,6 +6,7 @@ import { sanitizeAiText } from '@/lib/llm/sanitize';
 
 export type CopilotEvent =
   | { type: 'run'; run_id: string }
+  | { type: 'notice'; code: 'provider_fallback'; message: string }
   | { type: 'token'; text: string }
   | { type: 'tool_call'; name: string; args: unknown }
   | { type: 'tool_result'; name: string; ok: boolean; summary: string }
@@ -69,13 +70,22 @@ export async function runCopilotLoop(o: LoopOpts): Promise<void> {
             function: { name: tc.name, arguments: JSON.stringify(tc.arguments ?? {}) },
           })),
         });
-        // Execute each tool and append its result as a `tool` message.
+        // Tools emitted in one model turn are independent reads. Start them
+        // together so a slow endpoint does not make the whole John workflow
+        // exceed the serverless request budget.
         for (const tc of turn.toolCalls) {
           o.onEvent({ type: 'tool_call', name: tc.name, args: tc.arguments });
+        }
+        const toolResults = await Promise.all(turn.toolCalls.map(async (tc) => {
           let result: unknown; let ok = true;
           try { result = await o.runTool(tc.name, tc.arguments); }
           catch (e) { ok = false; result = { error: String(e) }; }
           o.onEvent({ type: 'tool_result', name: tc.name, ok, summary: ok ? '完成' : '失败' });
+          return { tc, result };
+        }));
+        // Preserve the provider's original tool-call order in conversation
+        // history even though execution completes concurrently.
+        for (const { tc, result } of toolResults) {
           messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(result).slice(0, 6000) });
         }
         // Budget guard: the richer methods (15-dimension chain, 7-section
@@ -92,6 +102,9 @@ export async function runCopilotLoop(o: LoopOpts): Promise<void> {
       }
 
       // No tool calls → final turn. Extract the verdict JSON from the text.
+      if (!cleanedContent) {
+        throw new Error(`provider empty response (finish_reason=${turn.finishReason || 'unknown'})`);
+      }
       const verdict = safeJson(turn.content);
       if (verdict) o.onEvent({ type: 'verdict', data: verdict });
       break;

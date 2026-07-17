@@ -84,6 +84,10 @@ describe('ai run lifecycle', () => {
   it('maps provider failures without storing raw messages', () => {
     expect(stableAiErrorCode(new Error('connect timeout to upstream'))).toBe('provider_timeout');
     expect(stableAiErrorCode(new Error('quota exhausted'))).toBe('quota_exhausted');
+    expect(stableAiErrorCode(new Error('llm 401: invalid api key'))).toBe('provider_auth');
+    expect(stableAiErrorCode(new Error('llm 404: model not found'))).toBe('provider_model_invalid');
+    expect(stableAiErrorCode(new Error('llm 429: rate limit exceeded'))).toBe('provider_rate_limited');
+    expect(stableAiErrorCode(new DOMException('This operation was aborted', 'AbortError'))).toBe('provider_timeout');
     expect(stableAiErrorCode(new Error('socket stream aborted'))).toBe('stream_error');
     expect(stableAiErrorCode(new Error('sensitive provider detail'))).toBe('provider_error');
   });

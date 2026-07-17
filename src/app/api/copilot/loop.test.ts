@@ -45,6 +45,41 @@ describe('runCopilotLoop (OpenAI tool-calling)', () => {
     expect(toolMsg.tool_call_id).toBe('tc1');
   });
 
+  it('starts independent tool calls from the same model turn concurrently', async () => {
+    const model = vi.fn()
+      .mockResolvedValueOnce({
+        content: '',
+        toolCalls: [
+          { id: 'tc-quote', name: 'quote', arguments: { ticker: 'NVDA' } },
+          { id: 'tc-radar', name: 'radar', arguments: { ticker: 'NVDA' } },
+        ],
+        finishReason: 'tool_calls',
+      })
+      .mockResolvedValueOnce({
+        content: '完成。',
+        toolCalls: [],
+        finishReason: 'stop',
+      });
+    const started: string[] = [];
+    const release: Array<() => void> = [];
+    const runTool = vi.fn((name: string) => new Promise((resolve) => {
+      started.push(name);
+      release.push(() => resolve({ ok: true }));
+    }));
+
+    const pending = runCopilotLoop({
+      ticker: 'NVDA',
+      model,
+      runTool,
+      maxHops: 5,
+      onEvent: () => {},
+    });
+
+    await vi.waitFor(() => expect(started).toEqual(['quote', 'radar']));
+    release.forEach((resolve) => resolve());
+    await pending;
+  });
+
   it('stops at maxHops and still emits done', async () => {
     const model = vi.fn().mockResolvedValue({
       content: '', toolCalls: [{ id: 'x', name: 'radar', arguments: { ticker: 'NVDA' } }], finishReason: 'tool_calls',
@@ -53,5 +88,21 @@ describe('runCopilotLoop (OpenAI tool-calling)', () => {
     await runCopilotLoop({ ticker: 'NVDA', model, runTool: async () => ({}), maxHops: 2, onEvent: (e) => events.push(e) });
     expect(model).toHaveBeenCalledTimes(2);
     expect(events[events.length - 1].type).toBe('done');
+  });
+
+  it('treats an empty final response as a provider failure', async () => {
+    const events: CopilotEvent[] = [];
+    await runCopilotLoop({
+      ticker: 'NVDA',
+      model: async () => ({ content: '', toolCalls: [], finishReason: 'length' }),
+      runTool: async () => ({}),
+      maxHops: 2,
+      onEvent: (event) => events.push(event),
+    });
+
+    const error = events.find((event) => event.type === 'error');
+    expect(error).toMatchObject({ type: 'error' });
+    expect((error as Extract<CopilotEvent, { type: 'error' }>).message).toContain('empty response');
+    expect(events.at(-1)?.type).toBe('done');
   });
 });

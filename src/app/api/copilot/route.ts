@@ -1,7 +1,7 @@
 import { runCopilotLoop, type CopilotEvent, type OaiMessage } from './loop';
 import { toolChat } from '@/lib/llm/openai-compat';
 import { anthropicToolChat } from '@/lib/llm/anthropic-compat';
-import { resolveLlm } from '@/lib/llm/resolve';
+import { resolveLlm, resolvePlatformLlm, type ResolvedLlm } from '@/lib/llm/resolve';
 import { TOOLS_BY_NAME, OPENAI_TOOL_DEFS } from '@/lib/agent/tools';
 import { JOHN_CAMERON_5STEP } from '@/lib/agent/methods/john-cameron-5step';
 import { AGENT_METHODS } from '@/lib/agent/methods/registry';
@@ -15,9 +15,10 @@ import {
   failAiRun,
   stableAiErrorCode,
 } from '@/lib/copilot/runs';
+import { createModelInvoker } from '@/lib/copilot/provider-fallback';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+export const maxDuration = 180;
 
 // Auto-archive threshold: skip near-empty runs (e.g. immediate errors).
 const MIN_ARCHIVE_CHARS = 200;
@@ -48,6 +49,7 @@ export async function POST(req: Request) {
   // Resolve the user's (or env) LLM provider config.
   const llm = await resolveLlm();
   const byo = llm?.source === 'user';
+  const platformFallback = byo ? resolvePlatformLlm() : null;
 
   // Non-BYO calls are subject to the daily platform quota. This route is
   // public in middleware, so 'not authenticated' from checkQuota() fails
@@ -123,27 +125,91 @@ export async function POST(req: Request) {
       let archivedVerdict: unknown = null;
       let runFailed = false;
       let runErrorCode = 'provider_error';
+      let fallbackQuota: QuotaResult | null = null;
+      let usedPlatformFallback = false;
       const onEvent = (e: CopilotEvent) => {
         if (e.type === 'token') archivedText += e.text;
         if (e.type === 'verdict') archivedVerdict = e.data;
         if (e.type === 'error') {
           runFailed = true;
           runErrorCode = stableAiErrorCode(e.message);
+          if (runErrorCode === 'quota_exhausted' && fallbackQuota) {
+            send({
+              ...e,
+              message: apiMessage(locale, 'quotaExhausted'),
+              quota: {
+                used: fallbackQuota.used,
+                limit: fallbackQuota.limit,
+                plan: fallbackQuota.plan,
+              },
+            });
+            return;
+          }
           send({ ...e, message: apiMessage(locale, 'providerFailed') });
           return;
         }
         send(e);
       };
 
+      const callModel = async (provider: ResolvedLlm, messages: OaiMessage[]) => {
+        const cfg = {
+          baseUrl: provider.baseUrl,
+          apiKey: provider.apiKey,
+          model: provider.model,
+          chatPath: provider.chatPath,
+        };
+        const common = {
+          system: systemPrompt,
+          messages,
+          tools: OPENAI_TOOL_DEFS,
+          max_tokens: 3000,
+        };
+        const r = provider.protocol === 'anthropic'
+          ? await anthropicToolChat(cfg, common)
+          : await toolChat(cfg, {
+              ...common,
+              // DeepSeek V4 thinking mode requires reasoning_content to be
+              // replayed after tool calls and spends the same max_tokens
+              // budget on hidden reasoning. This adapter intentionally uses
+              // non-thinking mode for deterministic multi-turn tool work.
+              thinking: provider.provider === 'deepseek' ? 'disabled' : undefined,
+            });
+        return { content: r.content, toolCalls: r.toolCalls, finishReason: r.finishReason };
+      };
+
+      const invokeModel = createModelInvoker<ResolvedLlm, [OaiMessage[]], Awaited<ReturnType<typeof callModel>>>({
+        primary: llm,
+        fallback: platformFallback,
+        beforeFallback: async () => {
+          try {
+            fallbackQuota = await checkQuota('copilot');
+          } catch (error) {
+            if ((error as Error).message === 'not authenticated') throw error;
+            fallbackQuota = null;
+          }
+          if (fallbackQuota && !fallbackQuota.allowed) throw new Error('quota exhausted');
+        },
+        onFallback: (error) => {
+          usedPlatformFallback = true;
+          console.warn('copilot provider fallback', {
+            from: llm.provider,
+            to: platformFallback?.provider,
+            code: stableAiErrorCode(error),
+            method_id: resolvedMethod.id,
+          });
+          send({
+            type: 'notice',
+            code: 'provider_fallback',
+            message: apiMessage(locale, 'providerFallback'),
+          });
+        },
+        call: callModel,
+      });
+
       try {
         await runCopilotLoop({
           ticker: ticker || undefined, question, maxHops: resolvedMethod.maxHops ?? 12, onEvent,
-          model: async (messages: OaiMessage[]) => {
-            const cfg = { baseUrl: llm.baseUrl, apiKey: llm.apiKey, model: llm.model, chatPath: llm.chatPath };
-            const call = llm.protocol === 'anthropic' ? anthropicToolChat : toolChat;
-            const r = await call(cfg, { system: systemPrompt, messages, tools: OPENAI_TOOL_DEFS, max_tokens: 1500 });
-            return { content: r.content, toolCalls: r.toolCalls, finishReason: r.finishReason };
-          },
+          model: invokeModel,
           runTool: (name, args) => {
             const tool = TOOLS_BY_NAME[name];
             if (!tool) return Promise.resolve({ error: `unknown tool ${name}` });
@@ -155,7 +221,10 @@ export async function POST(req: Request) {
         // loop today, so tokensIn/tokensOut are recorded as 0 (spec-accepted:
         // usage_events is a count-based quota ledger first, token audit second).
         // recordUsage() never throws (see quota.ts) so this can't break the stream.
-        await recordUsage('copilot', { ticker: ticker || undefined, byo });
+        await recordUsage('copilot', {
+          ticker: ticker || undefined,
+          byo: byo && !usedPlatformFallback,
+        });
 
         if (resolvedMethod.archive && archivedText.length > MIN_ARCHIVE_CHARS) {
           try {
