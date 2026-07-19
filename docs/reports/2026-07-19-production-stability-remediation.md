@@ -53,8 +53,10 @@
 - 生产构建：Next.js 构建通过。
 - 浏览器 E2E：真实 Supabase 鉴权环境的公开页、登录页和未登录跳转 10/10 通过；无鉴权 mock 环境的 OAuth 展示、50 股票分片、`002463` 桌面和移动搜索 4/4 通过。
 - 历史数据：5 条超过 10 分钟的悬空 AI 任务已标记为 `run_interrupted`，复查剩余 0 条。
-- Vercel Preview：部署状态 Ready；`favicon`、登录页均返回 200；`002463` 精确搜索成功；A 股、美股、港股三市场行情 3/3 返回且 0 失败。
-- 生产验收：见本次 osstack 卡片 `card_9dc1ed96` 的部署、探针和日志记录。
+- Vercel Preview：最终候选 `dpl_H8my1PDovdvtTtuECyiyyfQGSWLX` 状态 Ready；A 股、港股、美股冷行情 38/38 返回，失败 0、陈旧 0；等待 15 秒后部署日志 error 0、5xx 0。
+- 生产认证探针：未确认邮箱进入恢复界面，重发与更换邮箱可用，页面不暴露供应商原始错误；临时用户已删除。
+- 生产 AI 探针：`AAPL` John Cameron 分析完成，数据库耗时 58,385ms、正文 3,801 字符，页面无失败提示；临时用户已删除。
+- 生产验收：`dpl_HYGg1VaZkjsKBN37rJYLGFHd9mYn` 已 Ready 并绑定 `https://osbornalpha.com`；公开域名烟雾测试 10/10；冷行情 38/38、失败 0、陈旧 0，最慢分片 2,060ms；延迟观察后部署日志 error 0、5xx 0。
 
 ## 四、下一阶段建议
 
