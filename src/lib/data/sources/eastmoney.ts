@@ -97,7 +97,8 @@ async function fetchJsonp(url: string, timeoutMs = 5000, externalSignal?: AbortS
       },
       signal,
       redirect: 'follow',
-      next: { revalidate: 30 },
+      cache: externalSignal ? 'no-store' : undefined,
+      next: externalSignal ? undefined : { revalidate: 30 },
     });
   } finally {
     clearTimeout(timer);

@@ -180,7 +180,8 @@ export async function fetchTencentQuote(ticker: string, timeoutMs = 4000, extern
         'User-Agent': 'Mozilla/5.0 (compatible; StockMonitor/1.0)',
       },
       signal,
-      next: { revalidate: 30 },
+      cache: externalSignal ? 'no-store' : undefined,
+      next: externalSignal ? undefined : { revalidate: 30 },
     });
   } catch {
     return null;

@@ -252,8 +252,8 @@ export async function fetchSinaQuote(ticker: string, timeoutMs = 4000, externalS
         'User-Agent': 'Mozilla/5.0 (compatible; StockMonitor/1.0)',
       },
       signal,
-      // Sina serves a Cache-Control: max-age=0 — let the fetch layer cache 30s
-      next: { revalidate: 30 },
+      cache: externalSignal ? 'no-store' : undefined,
+      next: externalSignal ? undefined : { revalidate: 30 },
     });
   } catch {
     return null;
