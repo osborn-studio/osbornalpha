@@ -129,13 +129,16 @@ export function aggregateUsage(input: AggregateUsageInput): AdminUsageResponse {
   }
 
   const quoteSources: Record<string, SourceHealth> = {};
-  const quoteEvents = input.events.filter((event) => event.event_name === 'quote_batch_loaded');
+  const quoteEventNames = new Set(['quote_batch_loaded', 'quote_batch_degraded', 'quote_batch_failed']);
+  const quoteEvents = input.events.filter((event) => quoteEventNames.has(event.event_name));
   let failedTickers = 0;
   let stale = 0;
   for (const event of quoteEvents) {
     const metadata = event.metadata ?? {};
     const failedList = Array.isArray(metadata.failed_tickers) ? metadata.failed_tickers.length : 0;
-    failedTickers += safeCount(metadata.failed) || failedList;
+    failedTickers += safeCount(metadata.failed)
+      || failedList
+      || (event.event_name === 'quote_batch_failed' ? safeCount(metadata.count) : 0);
     stale += safeCount(metadata.stale);
     const sources = metadata.sources;
     if (!sources || typeof sources !== 'object' || Array.isArray(sources)) continue;

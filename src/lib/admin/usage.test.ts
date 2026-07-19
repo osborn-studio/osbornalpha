@@ -77,14 +77,19 @@ describe('aggregateUsage', () => {
             sina: { attempted: 2, succeeded: 2, failed: 0, retries: 0, duration_ms: 20 },
           },
         }),
+        event('quote_batch_degraded', null, {
+          failed: 1,
+          stale: 1,
+          failed_tickers: ['600000.SH'],
+        }),
       ],
       aiRuns: [],
     });
     expect(result.funnel).toMatchObject({ watchlist_viewers: 1, activated_users: 1 });
     expect(result.quotes).toEqual({
-      batches: 1,
-      failed_tickers: 2,
-      stale: 1,
+      batches: 2,
+      failed_tickers: 3,
+      stale: 2,
       sources: {
         eastmoney: { attempted: 3, succeeded: 1, failed: 2, duration_ms: 50 },
         sina: { attempted: 2, succeeded: 2, failed: 0, duration_ms: 20 },

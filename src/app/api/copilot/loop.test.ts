@@ -80,13 +80,14 @@ describe('runCopilotLoop (OpenAI tool-calling)', () => {
     await pending;
   });
 
-  it('stops at maxHops and still emits done', async () => {
+  it('marks max-hop exhaustion as a failure before emitting done', async () => {
     const model = vi.fn().mockResolvedValue({
       content: '', toolCalls: [{ id: 'x', name: 'radar', arguments: { ticker: 'NVDA' } }], finishReason: 'tool_calls',
     });
     const events: CopilotEvent[] = [];
     await runCopilotLoop({ ticker: 'NVDA', model, runTool: async () => ({}), maxHops: 2, onEvent: (e) => events.push(e) });
     expect(model).toHaveBeenCalledTimes(2);
+    expect(events.some((event) => event.type === 'error')).toBe(true);
     expect(events[events.length - 1].type).toBe('done');
   });
 

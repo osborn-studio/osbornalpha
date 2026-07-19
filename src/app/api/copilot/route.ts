@@ -13,9 +13,11 @@ import {
   completeAiRun,
   createAiRun,
   failAiRun,
+  failStaleAiRuns,
   stableAiErrorCode,
 } from '@/lib/copilot/runs';
 import { createModelInvoker } from '@/lib/copilot/provider-fallback';
+import { normalizeCopilotTicker } from '@/lib/copilot/request';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 180;
@@ -24,12 +26,16 @@ export const maxDuration = 180;
 const MIN_ARCHIVE_CHARS = 200;
 
 export async function POST(req: Request) {
-  const { ticker, question, methodId } = await req.json().catch(() => ({}));
+  const body = await req.json().catch(() => ({}));
+  const { question, methodId } = body;
+  const requestedTicker = typeof body.ticker === 'string' && body.ticker.trim() ? body.ticker : null;
+  const ticker = requestedTicker ? normalizeCopilotTicker(requestedTicker) : null;
   const method = methodId ? AGENT_METHODS[methodId as string] : undefined;
   // No-ticker discovery methods (e.g. bottleneck-picker / industry-chain) are
   // allowed through when a known methodId pairs with a non-empty question —
   // the loop's task template falls back to the question itself in that case.
   const noTickerAllowed = !!method && typeof question === 'string' && question.trim().length > 0;
+  if (requestedTicker && !ticker) return new Response('invalid ticker', { status: 400 });
   if (!ticker && !noTickerAllowed) return new Response('missing ticker', { status: 400 });
   const origin = new URL(req.url).origin;
   const enc = new TextEncoder();
@@ -78,6 +84,11 @@ export async function POST(req: Request) {
       runDb = await getServerSupabase();
       const { data: { user } } = await runDb.auth.getUser();
       if (user) {
+        try {
+          await failStaleAiRuns(runDb as any, user.id, new Date(Date.now() - 10 * 60_000));
+        } catch {
+          console.warn('stale ai run reconciliation failed', { code: 'storage_unavailable' });
+        }
         runId = await createAiRun(runDb as any, {
           userId: user.id,
           ticker: ticker || null,
@@ -98,7 +109,7 @@ export async function POST(req: Request) {
       controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'steps', steps: resolvedMethod.steps })}\n\n`));
 
       if (!llm) {
-        send({ type: 'error', message: apiMessage(locale, 'providerNotConfigured') });
+        send({ type: 'error', code: 'provider_not_configured', message: apiMessage(locale, 'providerNotConfigured') });
         send({ type: 'done' });
         controller.close();
         return;
@@ -110,6 +121,7 @@ export async function POST(req: Request) {
         // detect it and render the QuotaNotice upgrade card instead).
         send({
           type: 'error',
+          code: 'quota_exhausted',
           message: apiMessage(locale, 'quotaExhausted'),
           quota: { used: quota.used, limit: quota.limit, plan: quota.plan },
         });
@@ -132,10 +144,11 @@ export async function POST(req: Request) {
         if (e.type === 'verdict') archivedVerdict = e.data;
         if (e.type === 'error') {
           runFailed = true;
-          runErrorCode = stableAiErrorCode(e.message);
+          runErrorCode = e.code ?? stableAiErrorCode(e.message);
           if (runErrorCode === 'quota_exhausted' && fallbackQuota) {
             send({
               ...e,
+              code: runErrorCode,
               message: apiMessage(locale, 'quotaExhausted'),
               quota: {
                 used: fallbackQuota.used,
@@ -145,7 +158,7 @@ export async function POST(req: Request) {
             });
             return;
           }
-          send({ ...e, message: apiMessage(locale, 'providerFailed') });
+          send({ ...e, code: runErrorCode, message: apiMessage(locale, 'providerFailed') });
           return;
         }
         send(e);
@@ -243,7 +256,7 @@ export async function POST(req: Request) {
       } catch (error) {
         runFailed = true;
         runErrorCode = stableAiErrorCode(error);
-        send({ type: 'error', message: apiMessage(locale, 'providerFailed') });
+        send({ type: 'error', code: runErrorCode, message: apiMessage(locale, 'providerFailed') });
       } finally {
         if (runId && runDb) {
           try {

@@ -7,6 +7,7 @@ import { AGENT_METHODS, METHODS } from '@/lib/agent/methods/registry';
 import { currentStepIndex } from '@/lib/agent/methods/step-tracker';
 import { trackEvent } from '@/lib/analytics/client';
 import { aiEventMetadata } from '@/lib/copilot/runs';
+import { classifyAiStreamOutcome } from '@/lib/copilot/client-outcome';
 
 const HISTORY_KEY = 'osbornalpha:copilot:history:v1';
 const HISTORY_MAX = 20;
@@ -104,7 +105,9 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
     const startedAt = Date.now();
     let currentRunId: string | null = null;
     let failureMessage = '';
+    let failureCode: string | null = null;
     let streamStarted = false;
+    let doneReceived = false;
     try {
       const resp = await fetch('/api/copilot', {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -112,11 +115,13 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
       });
       if (!resp.ok) {
         failureMessage = t('requestFailed');
+        failureCode = `http_${resp.status}`;
         setErr(failureMessage);
         return;
       }
       if (!resp.body) {
         failureMessage = t('noResponseStream');
+        failureCode = 'stream_missing';
         setErr(failureMessage);
         return;
       }
@@ -156,23 +161,36 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
           else if (e.type === 'verdict') { setVerdict(e.data); appendHistory(e.data); }
           else if (e.type === 'error') {
             failureMessage = e.message || t('requestFailed');
+            failureCode = e.code || 'provider_error';
             setErr(failureMessage);
             if (e.quota) setQuota(e.quota);
           }
+          else if (e.type === 'done') doneReceived = true;
         }
       }
     } catch {
       failureMessage = t('requestFailed');
+      failureCode = 'network_error';
       setErr(failureMessage);
     } finally {
+      const outcome = classifyAiStreamOutcome({
+        streamStarted,
+        doneReceived,
+        errorCode: failureCode,
+      });
+      if (outcome.status === 'failed' && !failureMessage) {
+        failureMessage = t('requestFailed');
+        setErr(failureMessage);
+      }
       const metadata = aiEventMetadata({
         runId: currentRunId,
         ticker: tk || null,
         methodId: activeId,
         durationMs: Date.now() - startedAt,
+        errorCode: outcome.errorCode,
       });
-      if (failureMessage) trackEvent('ai_analysis_failed', metadata);
-      else if (streamStarted) trackEvent('ai_analysis_completed', metadata);
+      if (outcome.status === 'failed') trackEvent('ai_analysis_failed', metadata);
+      else if (outcome.status === 'completed') trackEvent('ai_analysis_completed', metadata);
       setRunning(false);
     }
   }, [running, appendHistory, t, methodId, activeId]);

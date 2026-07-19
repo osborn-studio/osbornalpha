@@ -12,7 +12,7 @@ export type CopilotEvent =
   | { type: 'tool_result'; name: string; ok: boolean; summary: string }
   | { type: 'verdict'; data: any }
   | { type: 'done' }
-  | { type: 'error'; message: string; quota?: { used: number; limit: number; plan: string } };
+  | { type: 'error'; message: string; code?: string; quota?: { used: number; limit: number; plan: string } };
 
 /** One model turn in OpenAI shape (from openai-compat toolChat). */
 export interface ModelTurn {
@@ -53,6 +53,7 @@ export async function runCopilotLoop(o: LoopOpts): Promise<void> {
   const messages: OaiMessage[] = [{ role: 'user', content: task }];
 
   try {
+    let finalResponseReceived = false;
     for (let hop = 0; hop < o.maxHops; hop++) {
       const turn = await o.model(messages);
       const cleanedContent = sanitizeAiText(turn.content);
@@ -107,8 +108,10 @@ export async function runCopilotLoop(o: LoopOpts): Promise<void> {
       }
       const verdict = safeJson(turn.content);
       if (verdict) o.onEvent({ type: 'verdict', data: verdict });
+      finalResponseReceived = true;
       break;
     }
+    if (!finalResponseReceived) throw new Error('model hop budget exhausted before final response');
   } catch (e) {
     o.onEvent({ type: 'error', message: e instanceof Error ? e.message : String(e) });
   } finally {

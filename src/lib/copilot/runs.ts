@@ -76,6 +76,19 @@ export async function failAiRun(db: RunDb, id: string, input: FailedRunInput): P
   if (error) throw new Error(error.message);
 }
 
+export async function failStaleAiRuns(db: RunDb, userId: string, cutoff: Date): Promise<number> {
+  const { error, count } = await db.from('ai_runs').update({
+    status: 'failed',
+    error_code: 'run_interrupted',
+    completed_at: new Date().toISOString(),
+  }, { count: 'exact' })
+    .eq('status', 'running')
+    .eq('user_id', userId)
+    .lt('created_at', cutoff.toISOString());
+  if (error) throw new Error(error.message);
+  return count ?? 0;
+}
+
 export function stableAiErrorCode(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const name = error instanceof Error ? error.name : '';
@@ -86,6 +99,7 @@ export function stableAiErrorCode(error: unknown): string {
   if (/\b429\b|rate.?limit|too many requests/i.test(message)) return 'provider_rate_limited';
   if (name === 'AbortError' || /timeout|timed out|operation was aborted/i.test(message)) return 'provider_timeout';
   if (/abort|stream|socket/i.test(message)) return 'stream_error';
+  if (/hop budget exhausted/i.test(message)) return 'hop_budget_exhausted';
   return 'provider_error';
 }
 
@@ -94,11 +108,13 @@ export function aiEventMetadata(input: {
   ticker: string | null;
   methodId: string;
   durationMs?: number;
+  errorCode?: string | null;
 }): Record<string, unknown> {
   return {
     run_id: input.runId,
     ticker: input.ticker,
     method_id: input.methodId,
     ...(input.durationMs === undefined ? {} : { duration_ms: safeDuration(input.durationMs) }),
+    ...(input.errorCode ? { error_code: input.errorCode.slice(0, 80) } : {}),
   };
 }
