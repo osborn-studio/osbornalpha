@@ -123,7 +123,7 @@ async function tushareFallback(ticker: string): Promise<QuoteShape | null> {
 async function withRetry<T>(
   ticker: string,
   source: string,
-  fn: () => Promise<T | null>
+  fn: (signal: AbortSignal) => Promise<T | null>
 ): Promise<{ value: T | null; attempt: SourceAttempt }> {
   const startedAt = Date.now();
   let attempts = 0;
@@ -180,7 +180,7 @@ interface QuoteResolution {
 async function resolveQuote(ticker: string): Promise<QuoteResolution> {
   const attempts: SourceAttempt[] = [];
   for (const s of quoteSourcesFor(classifyMarket(ticker))) {
-    const result = await withRetry(ticker, s.name, () => s.fetch(ticker));
+    const result = await withRetry(ticker, s.name, (signal) => s.fetch(ticker, signal));
     attempts.push(result.attempt);
     if (result.value) {
       return { quote: result.value as unknown as QuoteShape, attempts, selectedSource: s.name };

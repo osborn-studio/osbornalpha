@@ -9,10 +9,14 @@ describe('quote source timeout', () => {
   it('stops awaiting a source that exceeds its budget', async () => {
     vi.useFakeTimers();
     try {
-      const pending = withQuoteSourceTimeout(() => new Promise<string>(() => {}), 2_500);
+      let sourceAborted = false;
+      const pending = withQuoteSourceTimeout((signal) => new Promise<string>(() => {
+        signal.addEventListener('abort', () => { sourceAborted = true; }, { once: true });
+      }), 2_500);
       const assertion = expect(pending).rejects.toMatchObject({ name: 'TimeoutError' });
       await vi.advanceTimersByTimeAsync(2_500);
       await assertion;
+      expect(sourceAborted).toBe(true);
     } finally {
       vi.useRealTimers();
     }

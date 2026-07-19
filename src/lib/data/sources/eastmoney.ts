@@ -84,9 +84,10 @@ export interface EastmoneyQuote {
 
 const QUOTE_FIELDS = 'f43,f44,f45,f46,f47,f48,f50,f57,f58,f60,f86,f117,f152,f162,f167,f168,f169,f170';
 
-async function fetchJsonp(url: string, timeoutMs = 5000): Promise<any> {
+async function fetchJsonp(url: string, timeoutMs = 5000, externalSignal?: AbortSignal): Promise<any> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const signal = externalSignal ? AbortSignal.any([ctrl.signal, externalSignal]) : ctrl.signal;
   let resp: Response;
   try {
     resp = await fetch(url, {
@@ -94,7 +95,7 @@ async function fetchJsonp(url: string, timeoutMs = 5000): Promise<any> {
         'Referer': 'https://quote.eastmoney.com/',
         'User-Agent': 'Mozilla/5.0 (compatible; StockMonitor/1.0)',
       },
-      signal: ctrl.signal,
+      signal,
       redirect: 'follow',
       next: { revalidate: 30 },
     });
@@ -168,14 +169,14 @@ function parseQuoteData(data: any, market: Market, scale: number, ticker: string
   };
 }
 
-export async function fetchEastmoneyQuote(ticker: string): Promise<EastmoneyQuote | null> {
+export async function fetchEastmoneyQuote(ticker: string, signal?: AbortSignal): Promise<EastmoneyQuote | null> {
   const parsed = tickerToSecid(ticker);
   if (!parsed) return null;
 
   const tryFetch = async (secid: string): Promise<EastmoneyQuote | null> => {
     const url = `https://push2delay.eastmoney.com/api/qt/stock/get?invt=2&fltt=1&cb=cb&secid=${secid}&fields=${QUOTE_FIELDS}`;
     try {
-      const json = await fetchJsonp(url);
+      const json = await fetchJsonp(url, 5000, signal);
       if (json && json.data) {
         return parseQuoteData(json.data, parsed.market, parsed.scale, ticker);
       }

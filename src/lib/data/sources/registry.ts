@@ -19,12 +19,12 @@ import { fetchEodhdQuote, isEodhdConfigured } from './eodhd';
 
 export interface NamedFetcher {
   name: string;
-  fetch(ticker: string): Promise<any | null>;
+  fetch(ticker: string, signal?: AbortSignal): Promise<any | null>;
 }
 
-const eastmoney: NamedFetcher = { name: 'eastmoney', fetch: (t) => fetchEastmoneyQuote(t) };
-const sina: NamedFetcher = { name: 'sina', fetch: (t) => fetchSinaQuote(t) };
-const tencent: NamedFetcher = { name: 'tencent', fetch: (t) => fetchTencentQuote(t) };
+const eastmoney: NamedFetcher = { name: 'eastmoney', fetch: (t, signal) => fetchEastmoneyQuote(t, signal) };
+const sina: NamedFetcher = { name: 'sina', fetch: (t, signal) => fetchSinaQuote(t, 4000, signal) };
+const tencent: NamedFetcher = { name: 'tencent', fetch: (t, signal) => fetchTencentQuote(t, 4000, signal) };
 const twse: NamedFetcher = { name: 'twse', fetch: (t) => fetchTwseQuote(t) };
 const eodhd: NamedFetcher = { name: 'eodhd', fetch: (t) => fetchEodhdQuote(t) };
 
