@@ -48,6 +48,6 @@ test('a 50-stock watchlist is fetched in bounded chunks without dropping tickers
   await page.goto('/watchlist');
   await expect.poll(() => new Set(requestedChunks.flat()).size).toBe(50);
 
-  expect(requestedChunks.every((chunk) => chunk.length <= 20)).toBe(true);
-  expect(new Set(requestedChunks.map((chunk) => chunk.join(','))).size).toBe(3);
+  expect(requestedChunks.every((chunk) => chunk.length <= 10)).toBe(true);
+  expect(new Set(requestedChunks.map((chunk) => chunk.join(','))).size).toBe(5);
 });

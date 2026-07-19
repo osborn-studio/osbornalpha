@@ -15,6 +15,7 @@ import {
   type SourceAttempt,
   type SourceOutcome,
 } from '@/lib/quotes/diagnostics';
+import { withQuoteSourceTimeout } from '@/lib/quotes/source-timeout';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 30;
@@ -22,6 +23,7 @@ export const maxDuration = 30;
 
 const FRESH_TTL_MS = 60_000;
 const STALE_TTL_MS = 15 * 60_000;
+const SOURCE_ATTEMPT_TIMEOUT_MS = 2_500;
 
 interface QuoteShape {
   source: string;
@@ -130,7 +132,7 @@ async function withRetry<T>(
   for (let index = 0; index < 2; index += 1) {
     attempts += 1;
     try {
-      const value = await fn();
+      const value = await withQuoteSourceTimeout(fn, SOURCE_ATTEMPT_TIMEOUT_MS);
       if (value) {
         return {
           value,

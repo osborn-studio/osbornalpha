@@ -1,4 +1,4 @@
-export const QUOTE_BATCH_CHUNK_SIZE = 20;
+export const QUOTE_BATCH_CHUNK_SIZE = 10;
 export const QUOTE_TELEMETRY_INTERVAL_MS = 10 * 60_000;
 export const QUOTE_SLOW_REQUEST_MS = 1_000;
 

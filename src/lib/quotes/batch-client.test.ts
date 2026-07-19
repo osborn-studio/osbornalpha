@@ -8,9 +8,9 @@ import {
 describe('quote batch client resilience', () => {
   it('splits a 50-stock watchlist into bounded requests without dropping tickers', () => {
     const tickers = Array.from({ length: 50 }, (_, index) => `T${index}`);
-    const chunks = chunkQuoteTickers(tickers, 20);
+    const chunks = chunkQuoteTickers(tickers);
 
-    expect(chunks.map((chunk) => chunk.length)).toEqual([20, 20, 10]);
+    expect(chunks.map((chunk) => chunk.length)).toEqual([10, 10, 10, 10, 10]);
     expect(chunks.flat()).toEqual(tickers);
   });
 
