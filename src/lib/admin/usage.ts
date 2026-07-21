@@ -18,6 +18,23 @@ export interface AiRunInput {
   created_at: string;
 }
 
+export interface ServiceAlertRunInput {
+  check_name: 'ai_daily' | 'quote_15m' | 'auth_email_daily';
+  status: 'healthy' | 'alerting' | 'error';
+  window_start: string;
+  window_end: string;
+  violations: Array<{ code?: unknown }> | null;
+  created_at: string;
+}
+
+export interface AuthEmailProbeInput {
+  recipient_hash: string;
+  domain: string;
+  probe_date: string;
+  signup_delivery: 'pending' | 'delayed' | 'delivered' | 'failed';
+  recovery_delivery: 'pending' | 'delayed' | 'delivered' | 'failed';
+}
+
 interface SourceHealth {
   attempted: number;
   succeeded: number;
@@ -27,6 +44,14 @@ interface SourceHealth {
 
 export interface AdminUsageResponse {
   window: { key: UsageWindowKey; from: string; to: string };
+  auth_funnel: {
+    signup_email_sent: number;
+    confirmation_resenders: number;
+    confirmed_users: number;
+    first_login_users: number;
+    email_to_confirmation_rate: number;
+    confirmation_to_first_login_rate: number;
+  };
   funnel: {
     registrations: number;
     watchlist_viewers: number;
@@ -50,6 +75,22 @@ export interface AdminUsageResponse {
     stale: number;
     sources: Record<string, SourceHealth>;
   };
+  operational: {
+    latest_checks: Array<{
+      check_name: ServiceAlertRunInput['check_name'];
+      status: ServiceAlertRunInput['status'];
+      window_start: string;
+      window_end: string;
+      violation_codes: string[];
+      created_at: string;
+    }>;
+    auth_email_probes: Array<{
+      domain: string;
+      probe_date: string;
+      signup_delivery: AuthEmailProbeInput['signup_delivery'];
+      recovery_delivery: AuthEmailProbeInput['recovery_delivery'];
+    }>;
+  };
   recent_ai_failures: Array<{
     ticker: string | null;
     method_id: string;
@@ -62,6 +103,8 @@ interface AggregateUsageInput {
   confirmedUsers: Array<{ id: string }>;
   events: UsageEventInput[];
   aiRuns: AiRunInput[];
+  serviceAlertRuns?: ServiceAlertRunInput[];
+  authEmailProbes?: AuthEmailProbeInput[];
   window?: AdminUsageResponse['window'];
 }
 
@@ -87,6 +130,16 @@ function uniqueIdentities(events: UsageEventInput[], eventName: string): Set<str
   return ids;
 }
 
+function uniqueIdentitiesForNames(events: UsageEventInput[], eventNames: Set<string>): Set<string> {
+  const ids = new Set<string>();
+  for (const event of events) {
+    if (!eventNames.has(event.event_name)) continue;
+    const id = identity(event);
+    if (id) ids.add(id);
+  }
+  return ids;
+}
+
 function defaultWindow(): AdminUsageResponse['window'] {
   const to = new Date();
   const from = new Date(to.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -95,6 +148,10 @@ function defaultWindow(): AdminUsageResponse['window'] {
 
 export function aggregateUsage(input: AggregateUsageInput): AdminUsageResponse {
   const registrations = new Set(input.confirmedUsers.map((user) => user.id)).size;
+  const signupEmailRecipients = uniqueIdentities(input.events, 'signup_email_sent');
+  const confirmationResenders = uniqueIdentities(input.events, 'confirmation_resend_sent');
+  const confirmedUsers = uniqueIdentities(input.events, 'email_confirmation_succeeded');
+  const firstLoginUsers = uniqueIdentities(input.events, 'first_login_succeeded');
   const watchlistViewers = uniqueIdentities(input.events, 'watchlist_viewed');
   const activatedUsers = uniqueIdentities(input.events, 'watchlist_stock_added');
   const insightViewers = uniqueIdentities(input.events, 'post_add_insight_viewed');
@@ -156,6 +213,14 @@ export function aggregateUsage(input: AggregateUsageInput): AdminUsageResponse {
 
   return {
     window: input.window ?? defaultWindow(),
+    auth_funnel: {
+      signup_email_sent: signupEmailRecipients.size,
+      confirmation_resenders: confirmationResenders.size,
+      confirmed_users: confirmedUsers.size,
+      first_login_users: firstLoginUsers.size,
+      email_to_confirmation_rate: ratio(confirmedUsers.size, signupEmailRecipients.size),
+      confirmation_to_first_login_rate: ratio(firstLoginUsers.size, confirmedUsers.size),
+    },
     funnel: {
       registrations,
       watchlist_viewers: watchlistViewers.size,
@@ -186,6 +251,30 @@ export function aggregateUsage(input: AggregateUsageInput): AdminUsageResponse {
       failed_tickers: failedTickers,
       stale,
       sources: quoteSources,
+    },
+    operational: {
+      latest_checks: [...(input.serviceAlertRuns ?? [])]
+        .sort((a, b) => b.created_at.localeCompare(a.created_at))
+        .slice(0, 20)
+        .map((run) => ({
+          check_name: run.check_name,
+          status: run.status,
+          window_start: run.window_start,
+          window_end: run.window_end,
+          violation_codes: (run.violations ?? [])
+            .map((violation) => typeof violation.code === 'string' ? violation.code : null)
+            .filter((code): code is string => Boolean(code)),
+          created_at: run.created_at,
+        })),
+      auth_email_probes: [...(input.authEmailProbes ?? [])]
+        .sort((a, b) => b.probe_date.localeCompare(a.probe_date) || a.domain.localeCompare(b.domain))
+        .slice(0, 20)
+        .map((probe) => ({
+          domain: probe.domain,
+          probe_date: probe.probe_date,
+          signup_delivery: probe.signup_delivery,
+          recovery_delivery: probe.recovery_delivery,
+        })),
     },
     recent_ai_failures: input.aiRuns
       .filter((run) => run.status === 'failed')

@@ -355,6 +355,43 @@ export interface AiRun {
   completed_at: string | null;
 }
 
+export interface ServiceAlertRun {
+  id: string;
+  check_name: 'ai_daily' | 'quote_15m' | 'auth_email_daily';
+  window_start: string;
+  window_end: string;
+  status: 'healthy' | 'alerting' | 'error';
+  metrics: Record<string, unknown>;
+  violations: Array<Record<string, unknown>>;
+  delivery: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface AuthEmailProbeRun {
+  id: string;
+  recipient_hash: string;
+  domain: string;
+  probe_date: string;
+  signup_requested_at: string | null;
+  signup_delivery: 'pending' | 'delayed' | 'delivered' | 'failed';
+  signup_delivery_at: string | null;
+  recovery_requested_at: string | null;
+  recovery_delivery: 'pending' | 'delayed' | 'delivered' | 'failed';
+  recovery_delivery_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ResendWebhookEvent {
+  svix_id: string;
+  recipient_hash: string;
+  email_id: string | null;
+  event_type: string;
+  category: 'signup' | 'recovery';
+  occurred_at: string;
+  created_at: string;
+}
+
 // Webhook idempotency ledger — service-role only (no RLS), see
 // supabase/migrations/20260703120000_stripe_billing.sql.
 export interface StripeEvent {
@@ -390,6 +427,9 @@ export type Database = {
       usage_events: { Row: UsageEvent; Insert: Partial<UsageEvent>; Update: Partial<UsageEvent> };
       user_events: { Row: UserEvent; Insert: Partial<UserEvent>; Update: Partial<UserEvent> };
       ai_runs: { Row: AiRun; Insert: Partial<AiRun>; Update: Partial<AiRun> };
+      service_alert_runs: { Row: ServiceAlertRun; Insert: Partial<ServiceAlertRun>; Update: Partial<ServiceAlertRun> };
+      auth_email_probe_runs: { Row: AuthEmailProbeRun; Insert: Partial<AuthEmailProbeRun>; Update: Partial<AuthEmailProbeRun> };
+      resend_webhook_events: { Row: ResendWebhookEvent; Insert: Partial<ResendWebhookEvent>; Update: Partial<ResendWebhookEvent> };
       stripe_events: { Row: StripeEvent; Insert: Partial<StripeEvent>; Update: Partial<StripeEvent> };
     };
     Functions: {

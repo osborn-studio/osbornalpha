@@ -6,6 +6,7 @@ import {
   sanitizeEventMetadata,
   sanitizeEventName,
 } from '@/lib/analytics/sanitize';
+import { isDuplicateAuthMilestone } from '@/lib/analytics/auth-funnel';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,6 +51,9 @@ export async function POST(req: Request) {
   });
 
   if (error) {
+    if (isDuplicateAuthMilestone(eventName, error.code)) {
+      return NextResponse.json({ ok: true, deduplicated: true });
+    }
     console.warn('event storage unavailable', { code: error.code });
     return NextResponse.json({ ok: false, error: 'storage unavailable' }, { status: 200 });
   }

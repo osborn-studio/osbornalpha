@@ -44,6 +44,10 @@
 
 ## Delivery verification
 
+Automated delivery probes and service alerts are defined in [production-observability-alerts.md](./production-observability-alerts.md). Production uses QQ and 126 synthetic accounts for daily signup-confirmation and recovery delivery checks. Raw target addresses remain in encrypted Vercel environment variables; Supabase stores only recipient HMACs and domains.
+
+The table below remains the weekly human inbox-placement check. Automation does not replace it.
+
 Use three fresh test addresses and perform both flows for each provider:
 
 | Provider | Signup confirmation | Password reset | Spam check | Link returns to production |

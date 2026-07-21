@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { getBrowserSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import { useToast } from '@/components/Toast';
-import { trackEvent } from '@/lib/analytics/client';
+import { getAnonymousAnalyticsId, trackEvent } from '@/lib/analytics/client';
+import { authCallbackUrl } from '@/lib/analytics/auth-funnel';
 import { useEmailRequestCooldown } from '@/lib/hooks/useEmailRequestCooldown';
 import { stableAuthErrorCode } from '@/lib/auth/errors';
 import { configuredOAuthProviders, type OAuthProvider } from '@/lib/auth/providers';
@@ -61,7 +62,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
       const { error } = await sb.auth.signUp({
         email,
         password,
-        options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+        options: { emailRedirectTo: authCallbackUrl(window.location.origin, getAnonymousAnalyticsId()) },
       });
       setBusy(false);
       if (error) {
@@ -84,7 +85,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
     const { error } = await sb.auth.resend({
       type: 'signup',
       email: confirmationEmail,
-      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+      options: { emailRedirectTo: authCallbackUrl(window.location.origin, getAnonymousAnalyticsId()) },
     });
     setBusy(false);
     if (error) {

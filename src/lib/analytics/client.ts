@@ -27,7 +27,7 @@ function sessionId(): string {
   }
 }
 
-function anonymousId(): string {
+export function getAnonymousAnalyticsId(): string {
   try {
     let id = window.localStorage.getItem(ANONYMOUS_KEY);
     if (!id) {
@@ -47,7 +47,7 @@ export function trackEvent(event_name: string, metadata: Record<string, unknown>
     event_name,
     path: window.location.pathname,
     session_id: sessionId(),
-    anonymous_id: anonymousId(),
+    anonymous_id: getAnonymousAnalyticsId(),
     metadata: sanitizeEventMetadata(metadata),
   };
 

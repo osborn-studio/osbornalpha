@@ -13,14 +13,22 @@
       "30d": "30 天"
     },
     "sections": {
+      "authFunnel": "邮箱注册转化漏斗（唯一人数）",
       "funnel": "激活漏斗",
       "search": "搜索与添加",
       "ai": "AI 分析",
       "popular": "热门标的",
       "sources": "行情源健康度",
-      "failures": "近期 AI 失败"
+      "failures": "近期 AI 失败",
+      "operational": "服务告警与邮件探针"
     },
     "metrics": {
+      "signupEmailSent": "确认邮件已发送",
+      "confirmationResenders": "使用过重发",
+      "confirmedUsers": "完成邮箱确认",
+      "firstLoginUsers": "完成首次登录",
+      "emailConfirmationRate": "邮件到确认率",
+      "firstLoginRate": "确认到登录率",
       "registrations": "注册用户",
       "watchlistViewers": "股票池访客",
       "activatedUsers": "已激活用户",
@@ -49,12 +57,23 @@
       "duration": "总耗时",
       "method": "方法",
       "error": "错误码",
-      "time": "时间"
+      "time": "时间",
+      "check": "检查项",
+      "status": "状态",
+      "violations": "触发条件",
+      "domain": "邮箱域",
+      "signupDelivery": "注册确认",
+      "recoveryDelivery": "密码重置",
+      "date": "日期"
     },
     "methods": "方法分布",
     "emptyPopular": "当前区间暂无标的添加记录。",
     "emptySources": "当前区间暂无行情批次记录。",
-    "emptyFailures": "当前区间没有 AI 失败记录。"
+    "emptyFailures": "当前区间没有 AI 失败记录。",
+    "checksTitle": "最近检查窗口",
+    "probesTitle": "Auth 邮件送达",
+    "emptyChecks": "当前区间暂无服务检查记录。",
+    "emptyProbes": "当前区间暂无邮件探针记录。"
   },
   "securities": {
     "title": "证券主数据健康度",
