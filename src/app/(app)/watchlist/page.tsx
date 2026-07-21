@@ -5,7 +5,6 @@ import { MarketLabel } from '@/components/MarketLabel';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useLocale, useTranslations } from 'next-intl';
-import { addCustomStock } from '@/lib/data/custom-stocks';
 import { formatPrice, formatPct, changeClass, classifyMarket, currencyOfMarket } from '@/lib/utils';
 import { Disclaimer } from '@/components/Disclaimer';
 import { useToast } from '@/components/Toast';
@@ -26,11 +25,36 @@ import {
   installSampleBoard,
 } from '@/lib/watchlist/onboarding';
 import { classifyAssetType } from '@/lib/stocks/asset-type';
+import { canAddResult, nextSearchAction } from '@/lib/watchlist/security-validation';
 
 const REFRESH_MS = 60_000;
 
 type Group = WatchlistGroup;
-interface SearchResult { t: string; n: string; py: string; m: Market; asset_type: AssetType }
+interface SearchResult {
+  t: string;
+  n: string;
+  py: string;
+  m: Market;
+  asset_type: AssetType;
+  selectable?: boolean;
+  verification_status?: string;
+  list_status?: string;
+}
+
+interface WatchlistDbRow {
+  id: string;
+  name: string;
+  watchlist_items: Array<{ ticker: string; sort_order: number }> | null;
+}
+
+interface SecurityIdentityRow {
+  ticker: string;
+  name: string;
+  pinyin: string | null;
+  market: Market;
+  asset_type: AssetType;
+  list_status: string;
+}
 
 export default function WatchlistPage() {
   const router = useRouter();
@@ -78,6 +102,7 @@ export default function WatchlistPage() {
   // Mobile move menu (per-card kebab) — which ticker's menu is open
   const [openMenuTicker, setOpenMenuTicker] = useState<string | null>(null);
   const [lastAdded, setLastAdded] = useState<SearchResult | null>(null);
+  const [securityIdentities, setSecurityIdentities] = useState<Record<string, SearchResult>>({});
   const watchlistViewTracked = useRef(false);
   const postAddTracked = useRef<string | null>(null);
 
@@ -96,12 +121,12 @@ export default function WatchlistPage() {
               .select('id, name, watchlist_items (ticker, sort_order)')
               .order('sort_order');
             if (wl && wl.length > 0) {
-              const groupsFromDb: Group[] = wl.map((w: any) => ({
+              const groupsFromDb: Group[] = (wl as unknown as WatchlistDbRow[]).map((w) => ({
                 id: w.id,
                 name: w.name,
                 tickers: (w.watchlist_items || [])
-                  .sort((a: any, b: any) => a.sort_order - b.sort_order)
-                  .map((it: any) => it.ticker),
+                  .sort((a, b) => a.sort_order - b.sort_order)
+                  .map((item) => item.ticker),
               }));
               setGroups(groupsFromDb);
               return;
@@ -119,6 +144,45 @@ export default function WatchlistPage() {
 
   // ─── Live quotes (batch) ───
   const allTickers = useMemo(() => uniqueWatchlistTickers(groups), [groups]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured() || allTickers.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const sb = getBrowserSupabase();
+        const rows: SearchResult[] = [];
+        for (let index = 0; index < allTickers.length; index += 100) {
+          const { data, error } = await sb
+            .from('stocks_universe')
+            .select('ticker,name,pinyin,market,asset_type,list_status')
+            .in('ticker', allTickers.slice(index, index + 100))
+            .eq('is_active', true);
+          if (error) throw error;
+          const identityRows = (data ?? []) as unknown as SecurityIdentityRow[];
+          rows.push(...identityRows.map((row) => ({
+            t: row.ticker,
+            n: row.name,
+            py: row.pinyin ?? '',
+            m: row.market,
+            asset_type: row.asset_type,
+            list_status: row.list_status,
+            selectable: true,
+            verification_status: 'verified',
+          })));
+        }
+        if (!cancelled) {
+          setSecurityIdentities((current) => ({
+            ...current,
+            ...Object.fromEntries(rows.map((row) => [row.t, row])),
+          }));
+        }
+      } catch {
+        // Quotes and cards remain usable with ticker-only fallback.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [allTickers]);
 
   const { quotes, loading: quotesLoading, loadedAt, refetch } = useBatchQuotes(allTickers, {
     refreshIntervalMs: REFRESH_MS,
@@ -322,7 +386,6 @@ export default function WatchlistPage() {
       } else {
         seen.add(t);
         fresh.push(t);
-        addCustomStock({ t, n: t, py: '', m: classifyMarket(t) as Market });
       }
     }
 
@@ -461,6 +524,7 @@ export default function WatchlistPage() {
             group={g}
             allGroups={groups}
             quotes={quotes}
+            securityIdentities={securityIdentities}
             loadedAt={loadedAt}
             isDropTarget={dropTargetGroup === g.id && dragKind === 'card'}
             isColumnDropTarget={dropTargetColumnId === g.id && dragKind === 'column'}
@@ -490,9 +554,9 @@ export default function WatchlistPage() {
                 show(t('alreadyInWatchlist', { ticker: info.t }));
                 return;
               }
-              addCustomStock({ t: info.t, n: info.n, py: info.py, m: info.m });
               trackEvent('watchlist_stock_added', { ticker: info.t, group: g.name, market: info.m });
               setLastAdded(info);
+              setSecurityIdentities((current) => ({ ...current, [info.t]: info }));
               persist(
                 groups.map((gg) => (gg.id === g.id ? { ...gg, tickers: [...gg.tickers, info.t] } : gg))
               );
@@ -583,6 +647,7 @@ interface ColumnProps {
   group: Group;
   allGroups: Group[];
   quotes: Record<string, LiveQuote | null>;
+  securityIdentities: Record<string, SearchResult>;
   loadedAt: number | null;
   isDropTarget: boolean;            // card being dragged into this column
   isColumnDropTarget: boolean;      // another column being dragged onto this one
@@ -610,7 +675,7 @@ interface ColumnProps {
 
 function KanbanColumn(props: ColumnProps) {
   const {
-    group, allGroups, quotes, loadedAt,
+    group, allGroups, quotes, securityIdentities, loadedAt,
     isDropTarget, isColumnDropTarget, isBeingDragged,
     dragTicker, isAdding, openMenuTicker,
     onDragOver, onDragEnter, onDragLeave, onDrop,
@@ -689,6 +754,7 @@ function KanbanColumn(props: ColumnProps) {
             key={ticker}
             ticker={ticker}
             quote={quotes[ticker] || null}
+            identity={securityIdentities[ticker]}
             loadedAt={loadedAt}
             isDragging={dragTicker === ticker}
             menuOpen={openMenuTicker === ticker}
@@ -704,7 +770,7 @@ function KanbanColumn(props: ColumnProps) {
         ))}
 
         {isAdding ? (
-          <AddStockInline groupName={group.name} onAdd={onTickerAdded} onClose={onAddClose} />
+          <AddStockInline onAdd={onTickerAdded} onClose={onAddClose} />
         ) : (
           <button
             onClick={onAddOpen}
@@ -725,6 +791,7 @@ function KanbanColumn(props: ColumnProps) {
 interface CardProps {
   ticker: string;
   quote: LiveQuote | null;
+  identity?: SearchResult;
   loadedAt: number | null;
   isDragging: boolean;
   menuOpen: boolean;
@@ -739,12 +806,12 @@ interface CardProps {
 }
 
 function StockCard({
-  ticker, quote, loadedAt, isDragging, menuOpen, currentGroupId, allGroups,
+  ticker, quote, identity, loadedAt, isDragging, menuOpen, currentGroupId, allGroups,
   onDragStart, onDragEnd, onMove, onRemove, onRetry, onToggleMenu,
 }: CardProps) {
   const t = useTranslations('market.watchlist.kanban');
-  const market = quote?.market || classifyMarket(ticker);
-  const name = quote?.name || ticker;
+  const market = quote?.market || identity?.m || classifyMarket(ticker);
+  const name = quote?.name || identity?.n || ticker;
   const currency = quote?.currency || currencyOfMarket(market);
   const hasPrice = !!quote && quote.price > 0;
   // Distinguish "still loading first batch" from "loaded but failed":
@@ -857,12 +924,11 @@ function StockCard({
 // ──────────────────────────────────────────────────────────────────────────
 
 interface AddInlineProps {
-  groupName: string;
   onAdd: (info: SearchResult) => void;
   onClose: () => void;
 }
 
-function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
+function AddStockInline({ onAdd, onClose }: AddInlineProps) {
   const t = useTranslations('market.watchlist.kanban');
   const assetTypes = useTranslations('market.watchlist.assetTypes');
   const [query, setQuery] = useState('');
@@ -877,30 +943,54 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
     inputRef.current?.focus();
   }, []);
 
-  function runSearch(q: string) {
+  async function runSearch(q: string) {
     trackEvent('stock_search_submitted', { query_length: q.length });
     if (abortRef.current) abortRef.current.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setLoading(true);
-    fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: ctrl.signal })
-      .then((r) => r.json())
-      .then((d) => {
-        const nextResults = (d.results || []).map((result: Omit<SearchResult, 'asset_type'> & { asset_type?: AssetType }) => ({
+    try {
+      const searchResponse = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: ctrl.signal });
+      const data = await searchResponse.json();
+      let nextResults = (data.results || []).map((result: Omit<SearchResult, 'asset_type'> & { asset_type?: AssetType }) => ({
           ...result,
           asset_type: result.asset_type ?? classifyAssetType({ ticker: result.t, name: result.n }),
-        }));
-        setResults(nextResults);
-        trackEvent('stock_search_completed', { query_length: q.length, results: nextResults.length });
-        setFocusIdx(nextResults.length > 0 ? 0 : -1);
-        setLoading(false);
-      })
-      .catch((err) => {
-        if (err.name === 'AbortError') return;
-        trackEvent('stock_search_failed', { query_length: q.length });
-        setResults([]);
-        setLoading(false);
-      });
+      }));
+      trackEvent('stock_search_completed', { query_length: q.length, results: nextResults.length });
+
+      if (nextSearchAction({ localResults: nextResults, query: q }) === 'resolve') {
+        trackEvent('security_resolve_started', { query_length: q.length });
+        const resolveResponse = await fetch('/api/securities/resolve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: q }),
+          signal: ctrl.signal,
+        });
+        if (resolveResponse.ok) {
+          const resolved = await resolveResponse.json();
+          nextResults = resolved.result ? [{
+            ...resolved.result,
+            asset_type: resolved.result.asset_type
+              ?? classifyAssetType({ ticker: resolved.result.t, name: resolved.result.n }),
+          }] : [];
+          trackEvent('security_resolve_completed', {
+            query_length: q.length,
+            selectable: nextResults.some(canAddResult),
+          });
+        } else {
+          trackEvent('security_resolve_failed', { query_length: q.length, status: resolveResponse.status });
+        }
+      }
+
+      setResults(nextResults);
+      setFocusIdx(nextResults.findIndex(canAddResult));
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return;
+      trackEvent('stock_search_failed', { query_length: q.length });
+      setResults([]);
+    } finally {
+      if (!ctrl.signal.aborted) setLoading(false);
+    }
   }
 
   function onChange(v: string) {
@@ -911,29 +1001,21 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
   }
 
   function confirmAdd() {
-    if (results.length > 0) {
-      const target = focusIdx >= 0 ? results[focusIdx] : results[0];
+    const selectableResults = results.filter(canAddResult);
+    if (selectableResults.length > 0) {
+      const focused = focusIdx >= 0 ? results[focusIdx] : undefined;
+      const target = focused && canAddResult(focused) ? focused : selectableResults[0];
       selectResult(target);
       setQuery('');
       setResults([]);
       inputRef.current?.focus();
       return;
     }
-    const q = query.trim();
-    if (!q) return;
-    const canonical = normalizeWindTicker(q) || q.toUpperCase();
-    const market = classifyMarket(canonical) as Market;
-    const assetType = classifyAssetType({ ticker: canonical, name: q });
-    const note = canonical !== q.toUpperCase() ? t('normalizedNote', { canonical }) : '';
-    if (confirm(t('confirmForceAdd', { query: q, note, group: groupName }))) {
-      trackEvent('stock_force_added', { canonical, market, asset_type: assetType });
-      onAdd({ t: canonical, n: q, py: '', m: market, asset_type: assetType });
-      setQuery('');
-      setResults([]);
-    }
+    if (query.trim()) void runSearch(query.trim());
   }
 
   function selectResult(result: SearchResult) {
+    if (!canAddResult(result)) return;
     trackEvent('stock_search_result_clicked', {
       ticker: result.t,
       market: result.m,
@@ -971,11 +1053,15 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
           {results.map((r, i) => (
             <button
               key={`${r.t}-${i}`}
-              onClick={() => { selectResult(r); setQuery(''); setResults([]); inputRef.current?.focus(); }}
+              onClick={() => {
+                if (!canAddResult(r)) return;
+                selectResult(r); setQuery(''); setResults([]); inputRef.current?.focus();
+              }}
               onMouseEnter={() => setFocusIdx(i)}
+              disabled={!canAddResult(r)}
               className={`grid w-full grid-cols-[auto_1fr] items-center gap-2 border-b border-border px-2 py-1.5 text-left last:border-b-0 ${
                 i === focusIdx ? 'bg-bg-elevated' : 'hover:bg-bg-elevated'
-              }`}
+              } disabled:cursor-not-allowed disabled:opacity-50`}
             >
               <span className="rounded bg-bg-elevated px-1 py-0.5 text-[9px] font-semibold text-text-dim">
                 <MarketLabel m={r.m} />
@@ -986,6 +1072,7 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
                   <span className="truncate">{r.t}</span>
                   <span aria-hidden="true">·</span>
                   <span>{assetTypes(r.asset_type)}</span>
+                  {!canAddResult(r) && <span>{t('pendingVerification')}</span>}
                 </div>
               </div>
             </button>
@@ -998,21 +1085,12 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
           {normalizeWindTicker(query.trim()) !== query.trim().toUpperCase()
             ? ` ${t('normalizedNote', { canonical: normalizeWindTicker(query.trim()) })}`
             : ''}
-          <div className="mt-0.5">
-            {t('fallbackType', {
-              market: classifyMarket(normalizeWindTicker(query.trim()) || query.trim().toUpperCase()),
-              assetType: assetTypes(classifyAssetType({
-                ticker: normalizeWindTicker(query.trim()) || query.trim().toUpperCase(),
-                name: query.trim(),
-              })),
-            })}
-          </div>
         </div>
       )}
       <div className="mt-1.5 flex gap-1.5">
         <button
           onClick={confirmAdd}
-          disabled={loading || !query.trim()}
+          disabled={loading || !results.some(canAddResult)}
           className="flex-1 rounded bg-accent-dim px-2 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
         >
           {loading ? t('searching') : t('add')}
@@ -1155,8 +1233,9 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
         const content = await file.text();
         setText((cur) => (cur.trim() ? cur + '\n' + content : content));
       }
-    } catch (err: any) {
-      setFileError(t('readFailed', { message: err?.message || t('unknownError') }));
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : t('unknownError');
+      setFileError(t('readFailed', { message }));
     }
     e.target.value = '';  // allow re-select same file
   }

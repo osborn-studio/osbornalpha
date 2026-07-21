@@ -73,6 +73,18 @@ describe('toolChat', () => {
     const r = await toolChat(CFG, { messages: [], tools: [] });
     expect(r.toolCalls[0].arguments).toEqual({});
   });
+
+  it('can disable DeepSeek thinking mode for multi-turn tool workflows', async () => {
+    const fn = mockFetch({
+      choices: [{ message: { content: '完成', tool_calls: [] }, finish_reason: 'stop' }],
+      usage: {},
+    });
+
+    await toolChat(CFG, { messages: [], tools: [], thinking: 'disabled' });
+
+    const body = JSON.parse((fn.mock.calls[0] as any)[1].body);
+    expect(body.thinking).toEqual({ type: 'disabled' });
+  });
 });
 
 describe('error handling', () => {

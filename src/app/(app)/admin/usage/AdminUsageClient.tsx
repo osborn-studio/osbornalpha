@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useLocale, useTranslations } from 'next-intl';
 import type { AdminUsageResponse, UsageWindowKey } from '@/lib/admin/usage';
 
@@ -36,6 +37,7 @@ function duration(value: number | null): string {
 
 export function AdminUsageClient() {
   const t = useTranslations('admin.usage');
+  const securitiesT = useTranslations('admin.securities');
   const locale = useLocale();
   const [range, setRange] = useState<UsageWindowKey>('7d');
   const [state, setState] = useState<ViewState>({ status: 'loading', data: null });
@@ -68,6 +70,10 @@ export function AdminUsageClient() {
     <div data-density="data" className="mx-auto max-w-7xl">
       <header className="mb-4 flex flex-wrap items-end justify-between gap-3 border-b border-border pb-4">
         <div>
+          <div className="mb-2 flex gap-3 text-xs">
+            <span className="font-medium text-accent">{securitiesT('usageLink')}</span>
+            <Link href="/admin/securities" className="text-text-dim hover:text-text">{securitiesT('securitiesLink')}</Link>
+          </div>
           <h1 className="text-xl font-bold">{t('title')}</h1>
           <p className="mt-1 text-xs text-text-dim">{t('subtitle')}</p>
         </div>
@@ -100,6 +106,18 @@ export function AdminUsageClient() {
       {data && (
         <>
           <section className="border-y border-border py-4">
+            <h2 className="mb-3 text-sm font-semibold">{t('sections.authFunnel')}</h2>
+            <div className="grid grid-cols-2 gap-y-4 sm:grid-cols-4 lg:grid-cols-6">
+              <Metric label={t('metrics.signupEmailSent')} value={data.auth_funnel.signup_email_sent} />
+              <Metric label={t('metrics.confirmationResenders')} value={data.auth_funnel.confirmation_resenders} />
+              <Metric label={t('metrics.confirmedUsers')} value={data.auth_funnel.confirmed_users} tone="positive" />
+              <Metric label={t('metrics.firstLoginUsers')} value={data.auth_funnel.first_login_users} tone="positive" />
+              <Metric label={t('metrics.emailConfirmationRate')} value={percent(data.auth_funnel.email_to_confirmation_rate)} />
+              <Metric label={t('metrics.firstLoginRate')} value={percent(data.auth_funnel.confirmation_to_first_login_rate)} />
+            </div>
+          </section>
+
+          <section className="border-b border-border py-4">
             <h2 className="mb-3 text-sm font-semibold">{t('sections.funnel')}</h2>
             <div className="grid grid-cols-2 gap-y-4 sm:grid-cols-4">
               <Metric label={t('metrics.registrations')} value={data.funnel.registrations} />
@@ -222,6 +240,61 @@ export function AdminUsageClient() {
                 </table>
               </div>
             )}
+          </section>
+
+          <section className="border-t border-border py-4">
+            <h2 className="mb-3 text-sm font-semibold">{t('sections.operational')}</h2>
+            <div className="grid grid-cols-1 gap-0 lg:grid-cols-2 lg:gap-8">
+              <div className="min-w-0 border-b border-border pb-4 lg:border-b-0">
+                <h3 className="mb-2 text-xs font-medium text-text-dim">{t('checksTitle')}</h3>
+                {data.operational.latest_checks.length === 0 ? (
+                  <p className="text-xs text-text-dim">{t('emptyChecks')}</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[520px] text-left text-xs">
+                      <thead className="text-text-dim"><tr>
+                        <th className="pb-2 font-medium">{t('columns.check')}</th>
+                        <th className="pb-2 font-medium">{t('columns.status')}</th>
+                        <th className="pb-2 font-medium">{t('columns.violations')}</th>
+                        <th className="pb-2 text-right font-medium">{t('columns.time')}</th>
+                      </tr></thead>
+                      <tbody>{data.operational.latest_checks.map((check) => (
+                        <tr key={`${check.check_name}-${check.window_start}`} className="border-t border-border">
+                          <td className="py-2 font-medium">{check.check_name}</td>
+                          <td className={`py-2 ${check.status === 'alerting' ? 'text-down' : 'text-up'}`}>{check.status}</td>
+                          <td className="py-2 pr-3">{check.violation_codes.join(', ') || '—'}</td>
+                          <td className="py-2 text-right tabular-nums text-text-dim">{dateFormatter.format(new Date(check.created_at))}</td>
+                        </tr>
+                      ))}</tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              <div className="min-w-0 pt-4 lg:pt-0">
+                <h3 className="mb-2 text-xs font-medium text-text-dim">{t('probesTitle')}</h3>
+                {data.operational.auth_email_probes.length === 0 ? (
+                  <p className="text-xs text-text-dim">{t('emptyProbes')}</p>
+                ) : (
+                  <table className="w-full text-left text-xs">
+                    <thead className="text-text-dim"><tr>
+                      <th className="pb-2 font-medium">{t('columns.domain')}</th>
+                      <th className="pb-2 font-medium">{t('columns.signupDelivery')}</th>
+                      <th className="pb-2 font-medium">{t('columns.recoveryDelivery')}</th>
+                      <th className="pb-2 text-right font-medium">{t('columns.date')}</th>
+                    </tr></thead>
+                    <tbody>{data.operational.auth_email_probes.map((probe) => (
+                      <tr key={`${probe.probe_date}-${probe.domain}`} className="border-t border-border">
+                        <td className="py-2 font-medium">{probe.domain}</td>
+                        <td className="py-2">{probe.signup_delivery}</td>
+                        <td className="py-2">{probe.recovery_delivery}</td>
+                        <td className="py-2 text-right tabular-nums text-text-dim">{probe.probe_date}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                )}
+              </div>
+            </div>
           </section>
         </>
       )}

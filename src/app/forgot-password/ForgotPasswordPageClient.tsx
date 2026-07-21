@@ -6,6 +6,7 @@ import { useTranslations } from 'next-intl';
 import { getBrowserSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import { useToast } from '@/components/Toast';
 import { Disclaimer } from '@/components/Disclaimer';
+import { useEmailRequestCooldown } from '@/lib/hooks/useEmailRequestCooldown';
 
 export default function ForgotPasswordPageClient() {
   const { show } = useToast();
@@ -13,9 +14,13 @@ export default function ForgotPasswordPageClient() {
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
+  const recoveryCooldown = useEmailRequestCooldown('recovery');
 
   async function send() {
     if (!isSupabaseConfigured()) return show(t('form.supabaseNotConfigured'));
+    if (recoveryCooldown.active) {
+      return show(t('form.emailCooldown', { seconds: recoveryCooldown.remainingSeconds }));
+    }
     setBusy(true);
     const sb = getBrowserSupabase();
     const { error } = await sb.auth.resetPasswordForEmail(email, {
@@ -23,6 +28,7 @@ export default function ForgotPasswordPageClient() {
     });
     setBusy(false);
     if (error) return show(`✗ ${error.message}`);
+    recoveryCooldown.startCooldown();
     setSent(true);
     show(t('forgotPassword.sentToast'));
   }
@@ -46,9 +52,13 @@ export default function ForgotPasswordPageClient() {
                 placeholder={t('form.emailPlaceholder')} className="w-full"
                 onKeyDown={(e) => e.key === 'Enter' && send()} />
             </div>
-            <button onClick={send} disabled={!email || busy || !isSupabaseConfigured()}
+            <button onClick={send} disabled={!email || busy || !isSupabaseConfigured() || recoveryCooldown.active}
               className="w-full rounded-lg bg-accent-dim py-3 text-sm font-semibold text-white disabled:opacity-50">
-              {busy ? t('forgotPassword.sending') : t('forgotPassword.sendButton')}
+              {busy
+                ? t('forgotPassword.sending')
+                : recoveryCooldown.active
+                  ? t('form.emailCooldown', { seconds: recoveryCooldown.remainingSeconds })
+                  : t('forgotPassword.sendButton')}
             </button>
           </>
         )}

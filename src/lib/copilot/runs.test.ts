@@ -3,6 +3,7 @@ import {
   completeAiRun,
   createAiRun,
   failAiRun,
+  failStaleAiRuns,
   aiEventMetadata,
   stableAiErrorCode,
 } from './runs';
@@ -81,10 +82,37 @@ describe('ai run lifecycle', () => {
     }));
   });
 
+  it('reconciles interrupted running rows before a new run starts', async () => {
+    const update = vi.fn();
+    const eqStatus = vi.fn();
+    const eqUser = vi.fn();
+    const lt = vi.fn().mockResolvedValue({ error: null, count: 2 });
+    update.mockReturnValue({ eq: eqStatus });
+    eqStatus.mockReturnValue({ eq: eqUser });
+    eqUser.mockReturnValue({ lt });
+    const db = { from: vi.fn(() => ({ update })) } as any;
+
+    const count = await failStaleAiRuns(db, 'user-1', new Date('2026-07-19T00:00:00Z'));
+
+    expect(count).toBe(2);
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed',
+      error_code: 'run_interrupted',
+    }), { count: 'exact' });
+    expect(eqStatus).toHaveBeenCalledWith('status', 'running');
+    expect(eqUser).toHaveBeenCalledWith('user_id', 'user-1');
+    expect(lt).toHaveBeenCalledWith('created_at', '2026-07-19T00:00:00.000Z');
+  });
+
   it('maps provider failures without storing raw messages', () => {
     expect(stableAiErrorCode(new Error('connect timeout to upstream'))).toBe('provider_timeout');
     expect(stableAiErrorCode(new Error('quota exhausted'))).toBe('quota_exhausted');
+    expect(stableAiErrorCode(new Error('llm 401: invalid api key'))).toBe('provider_auth');
+    expect(stableAiErrorCode(new Error('llm 404: model not found'))).toBe('provider_model_invalid');
+    expect(stableAiErrorCode(new Error('llm 429: rate limit exceeded'))).toBe('provider_rate_limited');
+    expect(stableAiErrorCode(new DOMException('This operation was aborted', 'AbortError'))).toBe('provider_timeout');
     expect(stableAiErrorCode(new Error('socket stream aborted'))).toBe('stream_error');
+    expect(stableAiErrorCode(new Error('model hop budget exhausted before final response'))).toBe('hop_budget_exhausted');
     expect(stableAiErrorCode(new Error('sensitive provider detail'))).toBe('provider_error');
   });
 
@@ -100,5 +128,14 @@ describe('ai run lifecycle', () => {
       method_id: 'john-cameron-5step',
       duration_ms: 1251,
     });
+  });
+
+  it('includes a stable error code in failed client lifecycle events', () => {
+    expect(aiEventMetadata({
+      runId: 'run-1',
+      ticker: 'AAPL',
+      methodId: 'john-cameron-5step',
+      errorCode: 'stream_incomplete',
+    })).toMatchObject({ error_code: 'stream_incomplete' });
   });
 });

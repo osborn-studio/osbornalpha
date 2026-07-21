@@ -53,6 +53,51 @@ describe('aggregateUsage', () => {
     expect(result.ai.post_add_click_rate).toBe(1);
   });
 
+  it('counts auth funnel people once instead of counting repeated submissions', () => {
+    const result = aggregateUsage({
+      confirmedUsers: [{ id: 'u1' }, { id: 'u2' }],
+      events: [
+        event('signup_email_sent', null, {}, 'anon-1'),
+        event('signup_email_sent', null, {}, 'anon-1'),
+        event('signup_email_sent', null, {}, 'anon-2'),
+        event('confirmation_resend_sent', null, {}, 'anon-1'),
+        event('confirmation_resend_sent', null, {}, 'anon-1'),
+        event('email_confirmation_succeeded', 'u1', {}, 'anon-1'),
+        event('email_confirmation_succeeded', 'u1', {}, 'anon-1'),
+        event('first_login_succeeded', 'u1'),
+        event('first_login_succeeded', 'u1'),
+      ],
+      aiRuns: [],
+    });
+
+    expect(result.auth_funnel).toEqual({
+      signup_email_sent: 2,
+      confirmation_resenders: 1,
+      confirmed_users: 1,
+      first_login_users: 1,
+      email_to_confirmation_rate: 0.5,
+      confirmation_to_first_login_rate: 1,
+    });
+  });
+
+  it('does not count OAuth callbacks as email confirmations', () => {
+    const result = aggregateUsage({
+      confirmedUsers: [{ id: 'u1' }],
+      events: [
+        event('signup_email_sent', null, {}, 'anon-1'),
+        event('auth_callback_succeeded', 'u1'),
+        event('first_login_succeeded', 'u1'),
+      ],
+      aiRuns: [],
+    });
+
+    expect(result.auth_funnel).toMatchObject({
+      signup_email_sent: 1,
+      confirmed_users: 0,
+      email_to_confirmation_rate: 0,
+    });
+  });
+
   it('excludes unknown event names from funnel metrics', () => {
     const result = aggregateUsage({
       confirmedUsers: [],
@@ -77,14 +122,19 @@ describe('aggregateUsage', () => {
             sina: { attempted: 2, succeeded: 2, failed: 0, retries: 0, duration_ms: 20 },
           },
         }),
+        event('quote_batch_degraded', null, {
+          failed: 1,
+          stale: 1,
+          failed_tickers: ['600000.SH'],
+        }),
       ],
       aiRuns: [],
     });
     expect(result.funnel).toMatchObject({ watchlist_viewers: 1, activated_users: 1 });
     expect(result.quotes).toEqual({
-      batches: 1,
-      failed_tickers: 2,
-      stale: 1,
+      batches: 2,
+      failed_tickers: 3,
+      stale: 2,
       sources: {
         eastmoney: { attempted: 3, succeeded: 1, failed: 2, duration_ms: 50 },
         sina: { attempted: 2, succeeded: 2, failed: 0, duration_ms: 20 },
@@ -110,5 +160,40 @@ describe('aggregateUsage', () => {
       created_at: '2026-07-15T00:00:00Z',
     }]);
     expect(result.recent_ai_failures[0]).not.toHaveProperty('user_id');
+  });
+
+  it('returns recent service checks and probe status without recipient hashes', () => {
+    const result = aggregateUsage({
+      confirmedUsers: [],
+      events: [],
+      aiRuns: [],
+      serviceAlertRuns: [{
+        check_name: 'quote_15m',
+        status: 'alerting',
+        window_start: '2026-07-21T01:45:00Z',
+        window_end: '2026-07-21T02:00:00Z',
+        violations: [{ code: 'quote_batch_degraded' }],
+        created_at: '2026-07-21T02:00:01Z',
+      }],
+      authEmailProbes: [{
+        recipient_hash: 'secret-hash',
+        domain: 'qq.com',
+        probe_date: '2026-07-21',
+        signup_delivery: 'delivered',
+        recovery_delivery: 'pending',
+      }],
+    });
+    expect(result.operational.latest_checks[0]).toMatchObject({
+      check_name: 'quote_15m',
+      status: 'alerting',
+      violation_codes: ['quote_batch_degraded'],
+    });
+    expect(result.operational.auth_email_probes[0]).toEqual({
+      domain: 'qq.com',
+      probe_date: '2026-07-21',
+      signup_delivery: 'delivered',
+      recovery_delivery: 'pending',
+    });
+    expect(result.operational.auth_email_probes[0]).not.toHaveProperty('recipient_hash');
   });
 });

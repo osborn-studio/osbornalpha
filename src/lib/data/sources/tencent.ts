@@ -162,7 +162,7 @@ function parsePayload(ticker: string, raw: string, p: ParsedTencent): TencentQuo
   };
 }
 
-export async function fetchTencentQuote(ticker: string, timeoutMs = 4000): Promise<TencentQuote | null> {
+export async function fetchTencentQuote(ticker: string, timeoutMs = 4000, externalSignal?: AbortSignal): Promise<TencentQuote | null> {
   const p = tickerToTencent(ticker);
   if (!p) return null;
 
@@ -170,6 +170,7 @@ export async function fetchTencentQuote(ticker: string, timeoutMs = 4000): Promi
   const url = `http://qt.gtimg.cn/q=${symbol}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const signal = externalSignal ? AbortSignal.any([ctrl.signal, externalSignal]) : ctrl.signal;
 
   let resp: Response;
   try {
@@ -178,8 +179,9 @@ export async function fetchTencentQuote(ticker: string, timeoutMs = 4000): Promi
         'Referer': 'https://stockapp.finance.qq.com/',
         'User-Agent': 'Mozilla/5.0 (compatible; StockMonitor/1.0)',
       },
-      signal: ctrl.signal,
-      next: { revalidate: 30 },
+      signal,
+      cache: externalSignal ? 'no-store' : undefined,
+      next: externalSignal ? undefined : { revalidate: 30 },
     });
   } catch {
     return null;

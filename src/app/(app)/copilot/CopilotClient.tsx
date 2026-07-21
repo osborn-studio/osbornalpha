@@ -7,6 +7,7 @@ import { AGENT_METHODS, METHODS } from '@/lib/agent/methods/registry';
 import { currentStepIndex } from '@/lib/agent/methods/step-tracker';
 import { trackEvent } from '@/lib/analytics/client';
 import { aiEventMetadata } from '@/lib/copilot/runs';
+import { classifyAiStreamOutcome } from '@/lib/copilot/client-outcome';
 
 const HISTORY_KEY = 'osbornalpha:copilot:history:v1';
 const HISTORY_MAX = 20;
@@ -43,6 +44,7 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
   const [calls, setCalls] = useState<ToolCall[]>([]);
   const [verdict, setVerdict] = useState<Verdict | null>(null);
   const [err, setErr] = useState('');
+  const [notice, setNotice] = useState('');
   const [quota, setQuota] = useState<{ used: number; limit: number; plan: string } | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [adopting, setAdopting] = useState(false);
@@ -99,11 +101,13 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
 
   const run = useCallback(async (tk: string, q?: string) => {
     if ((!tk && !q) || running) return;
-    setRunning(true); setText(''); setCalls([]); setVerdict(null); setErr(''); setQuota(null); setAdopted(''); setAdopting(false); setSaved(''); setSaving(false); setRunId(null); setCopyState('idle');
+    setRunning(true); setText(''); setCalls([]); setVerdict(null); setErr(''); setNotice(''); setQuota(null); setAdopted(''); setAdopting(false); setSaved(''); setSaving(false); setRunId(null); setCopyState('idle');
     const startedAt = Date.now();
     let currentRunId: string | null = null;
     let failureMessage = '';
+    let failureCode: string | null = null;
     let streamStarted = false;
+    let doneReceived = false;
     try {
       const resp = await fetch('/api/copilot', {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -111,11 +115,13 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
       });
       if (!resp.ok) {
         failureMessage = t('requestFailed');
+        failureCode = `http_${resp.status}`;
         setErr(failureMessage);
         return;
       }
       if (!resp.body) {
         failureMessage = t('noResponseStream');
+        failureCode = 'stream_missing';
         setErr(failureMessage);
         return;
       }
@@ -142,6 +148,7 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
               methodId: activeId,
             }));
           }
+          else if (e.type === 'notice') setNotice(e.message || '');
           else if (e.type === 'token') setText((s) => s + e.text);
           else if (e.type === 'tool_call') setCalls((c) => [...c, { name: e.name, args: e.args }]);
           else if (e.type === 'tool_result') setCalls((c) => {
@@ -154,23 +161,36 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
           else if (e.type === 'verdict') { setVerdict(e.data); appendHistory(e.data); }
           else if (e.type === 'error') {
             failureMessage = e.message || t('requestFailed');
+            failureCode = e.code || 'provider_error';
             setErr(failureMessage);
             if (e.quota) setQuota(e.quota);
           }
+          else if (e.type === 'done') doneReceived = true;
         }
       }
     } catch {
       failureMessage = t('requestFailed');
+      failureCode = 'network_error';
       setErr(failureMessage);
     } finally {
+      const outcome = classifyAiStreamOutcome({
+        streamStarted,
+        doneReceived,
+        errorCode: failureCode,
+      });
+      if (outcome.status === 'failed' && !failureMessage) {
+        failureMessage = t('requestFailed');
+        setErr(failureMessage);
+      }
       const metadata = aiEventMetadata({
         runId: currentRunId,
         ticker: tk || null,
         methodId: activeId,
         durationMs: Date.now() - startedAt,
+        errorCode: outcome.errorCode,
       });
-      if (failureMessage) trackEvent('ai_analysis_failed', metadata);
-      else if (streamStarted) trackEvent('ai_analysis_completed', metadata);
+      if (outcome.status === 'failed') trackEvent('ai_analysis_failed', metadata);
+      else if (outcome.status === 'completed') trackEvent('ai_analysis_completed', metadata);
       setRunning(false);
     }
   }, [running, appendHistory, t, methodId, activeId]);
@@ -335,6 +355,7 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
       )}
 
       {err && (quota ? <QuotaNotice {...quota} /> : <div className="card-base text-sm text-down">⚠️ {err}</div>)}
+      {notice && <div className="card-base border border-warn/40 text-sm text-warn">{notice}</div>}
 
       {(text || calls.length > 0) && (
         <div className="card-base">

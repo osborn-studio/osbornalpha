@@ -13,13 +13,106 @@ export type Persona =
 
 export interface StockUniverse {
   ticker: string;
+  symbol: string;
   name: string;
+  name_en: string | null;
+  full_name: string | null;
   pinyin: string | null;
   market: Market;
+  exchange: string | null;
+  asset_type: AssetType;
+  fund_subtype: string | null;
+  instrument_form: string | null;
+  currency: string | null;
+  country_code: string | null;
   industry: string | null;
+  list_status: string;
+  list_date: string | null;
+  delist_date: string | null;
   is_active: boolean;
+  source: string | null;
+  source_updated_at: string | null;
+  metadata: Record<string, unknown>;
   last_price: number | null;
   updated_at: string;
+}
+
+export interface SecurityAlias {
+  alias: string;
+  ticker: string;
+  alias_type: string;
+  source: string;
+  created_at: string;
+}
+
+export interface SecurityUniverseMembership {
+  ticker: string;
+  universe: string;
+  rank: number | null;
+  market_cap_usd: number | null;
+  as_of_date: string;
+  is_active: boolean;
+  source: string;
+  updated_at: string;
+}
+
+export interface SecuritySyncRun {
+  id: string;
+  source: string;
+  scope: string;
+  status: 'running' | 'staged' | 'success' | 'rejected' | 'failed';
+  started_at: string;
+  completed_at: string | null;
+  source_as_of: string | null;
+  fetched_count: number;
+  accepted_count: number;
+  inserted_count: number;
+  updated_count: number;
+  deactivated_count: number;
+  error_code: string | null;
+  error_message: string | null;
+  checksum: string | null;
+  snapshot_path: string | null;
+}
+
+export interface SecurityDiscoveryCandidate {
+  id: string;
+  normalized_query: string;
+  proposed_ticker: string;
+  source: string;
+  normalized_payload: Record<string, unknown>;
+  status: 'pending' | 'verified' | 'promoted' | 'rejected';
+  seen_count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  review_reason: string | null;
+}
+
+export interface SecuritySyncStaging {
+  run_id: string;
+  record_kind: 'security' | 'alias' | 'membership';
+  natural_key: string;
+  normalized_payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface SecurityResolveRateLimit {
+  subject_hash: string;
+  window_started_at: string;
+  attempts: number;
+}
+
+export interface SecuritySearchRow {
+  t: string;
+  n: string;
+  py: string;
+  m: Market;
+  asset_type: AssetType;
+  exchange: string | null;
+  list_status: string;
+  match_kind: string;
+  verification_status: string;
+  selectable: boolean;
 }
 
 export interface FinancialHistory {
@@ -262,6 +355,43 @@ export interface AiRun {
   completed_at: string | null;
 }
 
+export interface ServiceAlertRun {
+  id: string;
+  check_name: 'ai_daily' | 'quote_15m' | 'auth_email_daily';
+  window_start: string;
+  window_end: string;
+  status: 'healthy' | 'alerting' | 'error';
+  metrics: Record<string, unknown>;
+  violations: Array<Record<string, unknown>>;
+  delivery: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface AuthEmailProbeRun {
+  id: string;
+  recipient_hash: string;
+  domain: string;
+  probe_date: string;
+  signup_requested_at: string | null;
+  signup_delivery: 'pending' | 'delayed' | 'delivered' | 'failed';
+  signup_delivery_at: string | null;
+  recovery_requested_at: string | null;
+  recovery_delivery: 'pending' | 'delayed' | 'delivered' | 'failed';
+  recovery_delivery_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ResendWebhookEvent {
+  svix_id: string;
+  recipient_hash: string;
+  email_id: string | null;
+  event_type: string;
+  category: 'signup' | 'recovery';
+  occurred_at: string;
+  created_at: string;
+}
+
 // Webhook idempotency ledger — service-role only (no RLS), see
 // supabase/migrations/20260703120000_stripe_billing.sql.
 export interface StripeEvent {
@@ -273,6 +403,12 @@ export type Database = {
   public: {
     Tables: {
       stocks_universe: { Row: StockUniverse; Insert: Partial<StockUniverse>; Update: Partial<StockUniverse> };
+      security_aliases: { Row: SecurityAlias; Insert: Partial<SecurityAlias>; Update: Partial<SecurityAlias> };
+      security_universe_memberships: { Row: SecurityUniverseMembership; Insert: Partial<SecurityUniverseMembership>; Update: Partial<SecurityUniverseMembership> };
+      security_sync_runs: { Row: SecuritySyncRun; Insert: Partial<SecuritySyncRun>; Update: Partial<SecuritySyncRun> };
+      security_discovery_candidates: { Row: SecurityDiscoveryCandidate; Insert: Partial<SecurityDiscoveryCandidate>; Update: Partial<SecurityDiscoveryCandidate> };
+      security_sync_staging: { Row: SecuritySyncStaging; Insert: Partial<SecuritySyncStaging>; Update: Partial<SecuritySyncStaging> };
+      security_resolve_rate_limits: { Row: SecurityResolveRateLimit; Insert: Partial<SecurityResolveRateLimit>; Update: Partial<SecurityResolveRateLimit> };
       financial_history: { Row: FinancialHistory; Insert: Partial<FinancialHistory>; Update: Partial<FinancialHistory> };
       watchlists: { Row: Watchlist; Insert: Partial<Watchlist>; Update: Partial<Watchlist> };
       watchlist_items: { Row: WatchlistItem; Insert: Partial<WatchlistItem>; Update: Partial<WatchlistItem> };
@@ -291,7 +427,32 @@ export type Database = {
       usage_events: { Row: UsageEvent; Insert: Partial<UsageEvent>; Update: Partial<UsageEvent> };
       user_events: { Row: UserEvent; Insert: Partial<UserEvent>; Update: Partial<UserEvent> };
       ai_runs: { Row: AiRun; Insert: Partial<AiRun>; Update: Partial<AiRun> };
+      service_alert_runs: { Row: ServiceAlertRun; Insert: Partial<ServiceAlertRun>; Update: Partial<ServiceAlertRun> };
+      auth_email_probe_runs: { Row: AuthEmailProbeRun; Insert: Partial<AuthEmailProbeRun>; Update: Partial<AuthEmailProbeRun> };
+      resend_webhook_events: { Row: ResendWebhookEvent; Insert: Partial<ResendWebhookEvent>; Update: Partial<ResendWebhookEvent> };
       stripe_events: { Row: StripeEvent; Insert: Partial<StripeEvent>; Update: Partial<StripeEvent> };
+    };
+    Functions: {
+      search_securities: {
+        Args: { p_query: string; p_limit?: number };
+        Returns: SecuritySearchRow[];
+      };
+      consume_security_resolve_quota: {
+        Args: { p_subject_hash: string; p_limit: number; p_window_seconds: number };
+        Returns: boolean;
+      };
+      promote_verified_security: {
+        Args: {
+          p_security: Record<string, unknown>;
+          p_aliases: Array<Record<string, unknown>>;
+          p_memberships: Array<Record<string, unknown>>;
+        };
+        Returns: string;
+      };
+      commit_security_sync: {
+        Args: { p_run_id: string };
+        Returns: undefined;
+      };
     };
   };
 };

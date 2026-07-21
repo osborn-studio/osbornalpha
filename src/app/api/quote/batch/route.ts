@@ -15,6 +15,7 @@ import {
   type SourceAttempt,
   type SourceOutcome,
 } from '@/lib/quotes/diagnostics';
+import { withQuoteSourceTimeout } from '@/lib/quotes/source-timeout';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 30;
@@ -22,6 +23,7 @@ export const maxDuration = 30;
 
 const FRESH_TTL_MS = 60_000;
 const STALE_TTL_MS = 15 * 60_000;
+const SOURCE_ATTEMPT_TIMEOUT_MS = 2_500;
 
 interface QuoteShape {
   source: string;
@@ -121,7 +123,7 @@ async function tushareFallback(ticker: string): Promise<QuoteShape | null> {
 async function withRetry<T>(
   ticker: string,
   source: string,
-  fn: () => Promise<T | null>
+  fn: (signal: AbortSignal) => Promise<T | null>
 ): Promise<{ value: T | null; attempt: SourceAttempt }> {
   const startedAt = Date.now();
   let attempts = 0;
@@ -130,7 +132,7 @@ async function withRetry<T>(
   for (let index = 0; index < 2; index += 1) {
     attempts += 1;
     try {
-      const value = await fn();
+      const value = await withQuoteSourceTimeout(fn, SOURCE_ATTEMPT_TIMEOUT_MS);
       if (value) {
         return {
           value,
@@ -178,7 +180,7 @@ interface QuoteResolution {
 async function resolveQuote(ticker: string): Promise<QuoteResolution> {
   const attempts: SourceAttempt[] = [];
   for (const s of quoteSourcesFor(classifyMarket(ticker))) {
-    const result = await withRetry(ticker, s.name, () => s.fetch(ticker));
+    const result = await withRetry(ticker, s.name, (signal) => s.fetch(ticker, signal));
     attempts.push(result.attempt);
     if (result.value) {
       return { quote: result.value as unknown as QuoteShape, attempts, selectedSource: s.name };

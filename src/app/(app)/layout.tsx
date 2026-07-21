@@ -3,6 +3,7 @@ import { TopBar } from '@/components/TopBar';
 import { TabBar } from '@/components/TabBar';
 import { CopilotFab } from '@/components/CopilotFab';
 import { TimezoneProvider } from '@/components/TimezoneProvider';
+import { FirstLoginTracker } from '@/components/FirstLoginTracker';
 import { getServerSupabase, serverIsSupabaseConfigured } from '@/lib/supabase/server';
 
 // Protected route group. Unauthenticated users are kept out (middleware redirects
@@ -17,6 +18,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }
   return (
     <TimezoneProvider>
+      <FirstLoginTracker />
       <TopBar />
       <main className="mx-auto w-full max-w-[1600px] p-3 lg:p-4">{children}</main>
       <TabBar />

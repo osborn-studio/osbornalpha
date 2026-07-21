@@ -5,9 +5,11 @@ export interface AssetTypeInput {
   name?: string;
   securityTypeName?: string;
   classify?: string;
+  assetType?: AssetType;
 }
 
 export function classifyAssetType(input: AssetTypeInput): AssetType {
+  if (input.assetType && input.assetType !== 'unknown') return input.assetType;
   const text = [input.name, input.securityTypeName, input.classify]
     .filter(Boolean)
     .join(' ');
