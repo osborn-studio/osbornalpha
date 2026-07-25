@@ -4,8 +4,10 @@ import { useEffect, useState, useRef } from 'react';
 import type { Market } from '@/lib/supabase/database.types';
 import { trackEvent } from '@/lib/analytics/client';
 import {
+  classifyQuoteBatchOutcome,
   chunkQuoteTickers,
   mergeQuoteBatchResults,
+  shouldRetryQuoteBatchError,
   shouldReportQuoteBatch,
   type QuoteBatchPayload,
 } from '@/lib/quotes/batch-client';
@@ -44,6 +46,7 @@ interface State {
   data: LiveQuote | null;
   loading: boolean;
   error: string | null;
+  notFound: boolean;
 }
 
 // In-flight cache to dedupe concurrent requests for the same ticker
@@ -78,27 +81,41 @@ async function fetchQuote(ticker: string): Promise<LiveQuote | null> {
 }
 
 export function useQuote(ticker: string | null, opts?: { refreshIntervalMs?: number }): State {
-  const [state, setState] = useState<State>({ data: null, loading: !!ticker, error: null });
-  const abortRef = useRef<boolean>(false);
+  const [state, setState] = useState<State>({
+    data: null,
+    loading: !!ticker,
+    error: null,
+    notFound: false,
+  });
   const refreshMs = opts?.refreshIntervalMs ?? 0;
 
   useEffect(() => {
     if (!ticker) {
-      setState({ data: null, loading: false, error: null });
+      setState({ data: null, loading: false, error: null, notFound: false });
       return;
     }
-    abortRef.current = false;
-    setState((prev) => ({ ...prev, loading: !prev.data, error: null }));
+    let cancelled = false;
+    setState({ data: null, loading: true, error: null, notFound: false });
 
     const run = async (forceBypass = false) => {
       if (forceBypass) cache.delete(ticker);
       try {
         const data = await fetchQuote(ticker);
-        if (abortRef.current) return;
-        setState({ data, loading: false, error: data ? null : '未找到该标的的报价' });
+        if (cancelled) return;
+        setState({
+          data,
+          loading: false,
+          error: data ? null : 'quote_not_found',
+          notFound: !data,
+        });
       } catch (err: any) {
-        if (abortRef.current) return;
-        setState((prev) => ({ data: prev.data, loading: false, error: err?.message || '获取失败' }));
+        if (cancelled) return;
+        setState((prev) => ({
+          data: prev.data,
+          loading: false,
+          error: err?.message || 'quote_fetch_failed',
+          notFound: false,
+        }));
       }
     };
     run();
@@ -109,7 +126,7 @@ export function useQuote(ticker: string | null, opts?: { refreshIntervalMs?: num
     }
 
     return () => {
-      abortRef.current = true;
+      cancelled = true;
       if (timer) clearInterval(timer);
     };
   }, [ticker, refreshMs]);
@@ -132,18 +149,23 @@ async function fetchQuoteBatchChunk(url: string): Promise<QuoteBatchPayload<Live
   if (existing) return existing;
 
   const request = (async () => {
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), BATCH_REQUEST_TIMEOUT_MS);
-    try {
-      const response = await fetch(url, { signal: controller.signal });
-      if (!response.ok) throw new Error(`quote batch HTTP ${response.status}`);
-      const payload = await response.json();
-      if (!payload || typeof payload !== 'object') throw new Error('invalid quote batch response');
-      const typedPayload = payload as QuoteBatchPayload<LiveQuote>;
-      batchResultCache.set(url, { payload: typedPayload, ts: Date.now() });
-      return typedPayload;
-    } finally {
-      window.clearTimeout(timeout);
+    for (let attempt = 0; ; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), BATCH_REQUEST_TIMEOUT_MS);
+      try {
+        const response = await fetch(url, { signal: controller.signal });
+        if (!response.ok) throw new Error(`quote batch HTTP ${response.status}`);
+        const payload = await response.json();
+        if (!payload || typeof payload !== 'object') throw new Error('invalid quote batch response');
+        const typedPayload = payload as QuoteBatchPayload<LiveQuote>;
+        batchResultCache.set(url, { payload: typedPayload, ts: Date.now() });
+        return typedPayload;
+      } catch (error) {
+        if (!shouldRetryQuoteBatchError(error, attempt)) throw error;
+        await new Promise((resolve) => window.setTimeout(resolve, 250));
+      } finally {
+        window.clearTimeout(timeout);
+      }
     }
   })();
   batchInflight.set(url, request);
@@ -208,6 +230,12 @@ export function useBatchQuotes(
 
         const allChunksFailed = chunks.length > 0 && merged.meta.failed_chunks === chunks.length;
         const allTickersUnavailable = tickers.length > 0 && merged.meta.failed >= tickers.length;
+        const outcome = classifyQuoteBatchOutcome({
+          allChunksFailed,
+          allTickersUnavailable,
+          failed: merged.meta.failed,
+          durationMs: merged.meta.duration_ms,
+        });
         const eventMetadata = {
           count: tickers.length,
           failed: merged.meta.failed,
@@ -216,6 +244,7 @@ export function useBatchQuotes(
           failed_chunks: merged.meta.failed_chunks,
           sources: merged.meta.sources,
           failed_tickers: merged.meta.failed_tickers,
+          error_codes: merged.meta.error_codes,
           selected_sources: merged.meta.selected_sources,
         };
         const shouldReport = shouldReportQuoteBatch({
@@ -227,15 +256,16 @@ export function useBatchQuotes(
           durationMs: merged.meta.duration_ms,
         });
 
-        if (allChunksFailed || allTickersUnavailable) trackEvent('quote_batch_failed', eventMetadata);
-        else if (merged.meta.failed > 0) trackEvent('quote_batch_degraded', eventMetadata);
+        if (outcome === 'suspended') trackEvent('quote_batch_suspended', eventMetadata);
+        else if (outcome === 'failed') trackEvent('quote_batch_failed', eventMetadata);
+        else if (outcome === 'degraded') trackEvent('quote_batch_degraded', eventMetadata);
         else if (shouldReport) trackEvent('quote_batch_loaded', eventMetadata);
         if (shouldReport) lastReportedAtRef.current = Date.now();
 
         setState((prev) => ({
           quotes: merged.quotes,
           loading: false,
-          loadedAt: allChunksFailed || allTickersUnavailable ? prev.loadedAt : Date.now(),
+          loadedAt: outcome === 'failed' || outcome === 'suspended' ? prev.loadedAt : Date.now(),
         }));
       } catch {
         if (!cancelled) {

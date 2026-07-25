@@ -17,7 +17,8 @@ import {
   stableAiErrorCode,
 } from '@/lib/copilot/runs';
 import { createModelInvoker } from '@/lib/copilot/provider-fallback';
-import { normalizeCopilotTicker } from '@/lib/copilot/request';
+import { normalizeCopilotTicker, resolveCopilotTicker } from '@/lib/copilot/request';
+import { searchSecurities } from '@/lib/securities/search';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 180;
@@ -29,7 +30,21 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const { question, methodId } = body;
   const requestedTicker = typeof body.ticker === 'string' && body.ticker.trim() ? body.ticker : null;
-  const ticker = requestedTicker ? normalizeCopilotTicker(requestedTicker) : null;
+  let ticker: string | null = null;
+  if (requestedTicker) {
+    ticker = normalizeCopilotTicker(requestedTicker);
+    if (!ticker) {
+      try {
+        const searchDb = await getServerSupabase();
+        ticker = await resolveCopilotTicker(
+          requestedTicker,
+          (query, limit) => searchSecurities(searchDb as any, query, limit),
+        );
+      } catch {
+        return new Response('security master unavailable', { status: 503 });
+      }
+    }
+  }
   const method = methodId ? AGENT_METHODS[methodId as string] : undefined;
   // No-ticker discovery methods (e.g. bottleneck-picker / industry-chain) are
   // allowed through when a known methodId pairs with a non-empty question —

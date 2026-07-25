@@ -6,6 +6,7 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { getStockOrStub } from '@/lib/data/mock';
+import { mergeStockDetail } from '@/lib/stocks/detail';
 import { formatPrice, formatPct, formatChange, formatVolume, changeClass, stars, classifyMarket } from '@/lib/utils';
 import { KlineChart } from '@/components/KlineChart';
 import { PerspectiveCard } from '@/components/PerspectiveCard';
@@ -13,7 +14,7 @@ import { DcfStudio } from '@/components/DcfStudio';
 import { Disclaimer } from '@/components/Disclaimer';
 import { useToast } from '@/components/Toast';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
-import { usePerspectives } from '@/lib/hooks/useQuote';
+import { usePerspectives, useQuote } from '@/lib/hooks/useQuote';
 import { QuotaNotice } from '@/components/QuotaNotice';
 
 type Tab = 'overview' | 'ai' | 'fundamentals' | 'news' | 'signals' | 'holdings';
@@ -29,7 +30,9 @@ export default function StockDetailPage() {
   const t = useTranslations('market.stock');
   const params = useParams<{ ticker: string }>();
   const ticker = decodeURIComponent(params.ticker);
-  const stock = getStockOrStub(ticker);
+  const fallbackStock = getStockOrStub(ticker);
+  const quote = useQuote(ticker, { refreshIntervalMs: 30_000 });
+  const stock = mergeStockDetail(ticker, fallbackStock, quote.data);
   const [tab, setTab] = useState<Tab>('overview');
   const { show } = useToast();
   const { groups, hydrated, setGroups } = useWatchlist();
@@ -69,12 +72,21 @@ export default function StockDetailPage() {
     return () => { cancelled = true; };
   }, [ticker, hasBrokerReports]);
 
+  if (!stock && quote.loading) {
+    return (
+      <div className="card-base py-10 text-center text-sm text-text-dim">
+        {t('loadingQuote', { ticker })}
+      </div>
+    );
+  }
+
   if (!stock) {
+    const messageKey = quote.notFound ? 'notFound' : 'unavailable';
     return (
       <div className="card-base text-center">
-        <h2 className="mb-2 text-lg font-bold">{t('notFound.title', { ticker })}</h2>
+        <h2 className="mb-2 text-lg font-bold">{t(`${messageKey}.title`, { ticker })}</h2>
         <p>
-          {t('notFound.bodyPrefix')}
+          {t(`${messageKey}.bodyPrefix`)}
           <Link href="/">{t('notFound.home')}</Link>
           {t('notFound.or')}
           <Link href="/watchlist">{t('notFound.watchlist')}</Link>
