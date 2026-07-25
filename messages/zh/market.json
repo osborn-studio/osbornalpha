@@ -183,6 +183,7 @@
     "expand": "展开"
   },
   "stock": {
+    "loadingQuote": "正在加载 {ticker} 的实时行情…",
     "tabs": {
       "overview": "行情",
       "ai": "AI 观点",
@@ -193,10 +194,14 @@
     },
     "notFound": {
       "title": "未找到标的 {ticker}",
-      "bodyPrefix": "本 demo 仅含有限的 mock 数据。回 ",
+      "bodyPrefix": "没有找到可用的标的信息。回 ",
       "home": "首页",
       "or": " 或 ",
       "watchlist": "股票池"
+    },
+    "unavailable": {
+      "title": "暂时无法加载 {ticker}",
+      "bodyPrefix": "实时行情服务暂时不可用，请稍后重试。回 "
     },
     "removedToast": "✓ 已移出：{ticker}",
     "addedToast": "✓ 已加入「{group}」",

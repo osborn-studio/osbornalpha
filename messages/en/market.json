@@ -183,6 +183,7 @@
     "expand": "Expand"
   },
   "stock": {
+    "loadingQuote": "Loading the live quote for {ticker}…",
     "tabs": {
       "overview": "Overview",
       "ai": "AI Perspectives",
@@ -193,10 +194,14 @@
     },
     "notFound": {
       "title": "Instrument {ticker} not found",
-      "bodyPrefix": "This demo only includes limited mock data. Back to ",
+      "bodyPrefix": "No usable information was found for this ticker. Back to ",
       "home": "Home",
       "or": " or ",
       "watchlist": "Watchlist"
+    },
+    "unavailable": {
+      "title": "Unable to load {ticker}",
+      "bodyPrefix": "The live quote service is temporarily unavailable. Try again shortly, or return to "
     },
     "removedToast": "✓ Removed: {ticker}",
     "addedToast": "✓ Added to \"{group}\"",
