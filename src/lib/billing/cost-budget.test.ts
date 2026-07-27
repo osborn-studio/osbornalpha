@@ -48,7 +48,38 @@ function terminalRow(
   status: 'settled' | 'released',
   settledMicrormb: number | null = status === 'settled' ? 118_944 : null,
 ) {
-  return { reservation_id: reservationId, status, settled_micrormb: settledMicrormb };
+  return {
+    reservation_id: reservationId,
+    user_id: 'user-1',
+    feature: 'copilot',
+    provider: 'deepseek',
+    model: 'deepseek-v4-flash',
+    reserved_micrormb: 118_944,
+    settled_micrormb: settledMicrormb,
+    status,
+    expires_at: '2026-07-28T00:05:00.000Z',
+    created_at: '2026-07-28T00:00:00.000Z',
+    settled_at: status === 'settled' ? '2026-07-28T00:01:00.000Z' : null,
+  };
+}
+
+function reservationRow(reservationId = 'reservation-1', allowed = true) {
+  return {
+    allowed,
+    reservation_id: allowed ? reservationId : null,
+    used_micrormb: allowed ? 0 : 8_800_000,
+    limit_micrormb: 8_800_000,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 describe('getBudgetConfig', () => {
@@ -73,12 +104,19 @@ describe('getBudgetConfig', () => {
       LLM_RESERVATION_TTL_SECONDS: '9007199254740992',
     })).toEqual({ dailyLimitMicrormb: 8_800_000, usdCnyMicros: 7_200_000, reservationTtlSeconds: 300 });
   });
+
+  it('limits reservation TTL to the PostgreSQL function range', () => {
+    expect(getBudgetConfig({ LLM_RESERVATION_TTL_SECONDS: '86400' }).reservationTtlSeconds).toBe(86400);
+    for (const value of ['86401', '2147483648', '9007199254740992']) {
+      expect(getBudgetConfig({ LLM_RESERVATION_TTL_SECONDS: value }).reservationTtlSeconds).toBe(300);
+    }
+  });
 });
 
 describe('reserveCostBudget', () => {
   it('reserves the conservative priced amount with exact RPC arguments', async () => {
     const supabase = fakeSupabase({
-      data: [{ allowed: true, reservation_id: 'reservation-1', used_micrormb: 0, limit_micrormb: 8_800_000 }],
+      data: [reservationRow()],
       error: null,
     });
 
@@ -101,7 +139,7 @@ describe('reserveCostBudget', () => {
   });
 
   it('maps a denied reservation to a stable exhaustion error', async () => {
-    const supabase = fakeSupabase({ data: [{ allowed: false }], error: null });
+    const supabase = fakeSupabase({ data: [reservationRow('unused', false)], error: null });
 
     await expect(reserveCostBudget(supabase, 'user-1', request)).rejects.toThrow('daily_cost_exhausted');
   });
@@ -111,6 +149,22 @@ describe('reserveCostBudget', () => {
       .rejects.toThrow('budget_unavailable');
     await expect(reserveCostBudget(fakeSupabase({ data: [{ allowed: true, reservation_id: '' }], error: null }), 'user-1', request))
       .rejects.toThrow('budget_unavailable');
+  });
+
+  it('requires one complete reservation tuple with consistent limits', async () => {
+    const malformedRows = [
+      [],
+      [reservationRow(), reservationRow('another')],
+      [{ ...reservationRow(), used_micrormb: -1 }],
+      [{ ...reservationRow(), limit_micrormb: 1 }],
+      [{ ...reservationRow(), used_micrormb: 8_800_000 }],
+      [{ ...reservationRow(), reservation_id: null }],
+    ];
+
+    for (const data of malformedRows) {
+      await expect(reserveCostBudget(fakeSupabase({ data, error: null }), 'user-1', request))
+        .rejects.toThrow('budget_unavailable');
+    }
   });
 
   it('rejects unknown pricing before making an RPC call', async () => {
@@ -123,7 +177,7 @@ describe('reserveCostBudget', () => {
 
   it('settles a complete actual usage amount', async () => {
     const supabase = fakeSupabase(
-      { data: [{ allowed: true, reservation_id: 'reservation-1' }], error: null },
+      { data: [reservationRow()], error: null },
       { data: [terminalRow('reservation-1', 'settled')], error: null },
     );
     const reservation = await reserveCostBudget(supabase, 'user-1', request);
@@ -137,7 +191,7 @@ describe('reserveCostBudget', () => {
 
   it('settles the full reservation when provider usage is estimated or incomplete', async () => {
     const supabase = fakeSupabase(
-      { data: [{ allowed: true, reservation_id: 'reservation-1' }], error: null },
+      { data: [reservationRow()], error: null },
       { data: [terminalRow('reservation-1', 'settled')], error: null },
     );
     const reservation = await reserveCostBudget(supabase, 'user-1', request);
@@ -148,7 +202,7 @@ describe('reserveCostBudget', () => {
   });
 
   it('never sends an actual settlement exceeding the reservation', async () => {
-    const supabase = fakeSupabase({ data: [{ allowed: true, reservation_id: 'reservation-1' }], error: null });
+    const supabase = fakeSupabase({ data: [reservationRow()], error: null });
     const reservation = await reserveCostBudget(supabase, 'user-1', request);
 
     await expect(reservation.settle({ ...completeUsage, outputTokens: 9_001 }))
@@ -158,7 +212,7 @@ describe('reserveCostBudget', () => {
 
   it('settles at most once and returns its first result thereafter', async () => {
     const supabase = fakeSupabase(
-      { data: [{ allowed: true, reservation_id: 'reservation-1' }], error: null },
+      { data: [reservationRow()], error: null },
       { data: [terminalRow('reservation-1', 'settled')], error: null },
     );
     const reservation = await reserveCostBudget(supabase, 'user-1', request);
@@ -170,7 +224,7 @@ describe('reserveCostBudget', () => {
 
   it('releases at most once', async () => {
     const supabase = fakeSupabase(
-      { data: [{ allowed: true, reservation_id: 'reservation-1' }], error: null },
+      { data: [reservationRow()], error: null },
       { data: [terminalRow('reservation-1', 'released')], error: null },
     );
     const reservation = await reserveCostBudget(supabase, 'user-1', request);
@@ -183,7 +237,7 @@ describe('reserveCostBudget', () => {
 
   it('makes terminal cross-calls deterministic', async () => {
     const settled = fakeSupabase(
-      { data: [{ allowed: true, reservation_id: 'settled-id' }], error: null },
+      { data: [reservationRow('settled-id')], error: null },
       { data: [terminalRow('settled-id', 'settled')], error: null },
     );
     const settledReservation = await reserveCostBudget(settled, 'user-1', request);
@@ -192,7 +246,7 @@ describe('reserveCostBudget', () => {
     expect(settled.calls).toHaveLength(2);
 
     const released = fakeSupabase(
-      { data: [{ allowed: true, reservation_id: 'released-id' }], error: null },
+      { data: [reservationRow('released-id')], error: null },
       { data: [terminalRow('released-id', 'released')], error: null },
     );
     const releasedReservation = await reserveCostBudget(released, 'user-1', request);
@@ -203,7 +257,7 @@ describe('reserveCostBudget', () => {
 
   it('maps settlement and release RPC failures to budget_unavailable while allowing retry', async () => {
     const settlementFailure = fakeSupabase(
-      { data: [{ allowed: true, reservation_id: 'settlement-failure' }], error: null },
+      { data: [reservationRow('settlement-failure')], error: null },
       { data: null, error: new Error('raw database message') },
       { data: [terminalRow('settlement-failure', 'settled')], error: null },
     );
@@ -213,7 +267,7 @@ describe('reserveCostBudget', () => {
     expect(settlementFailure.calls).toHaveLength(3);
 
     const releaseFailure = fakeSupabase(
-      { data: [{ allowed: true, reservation_id: 'release-failure' }], error: null },
+      { data: [reservationRow('release-failure')], error: null },
       { data: null, error: new Error('raw database message') },
       { data: [terminalRow('release-failure', 'released')], error: null },
     );
@@ -232,11 +286,15 @@ describe('reserveCostBudget', () => {
       [terminalRow('other-reservation', 'settled')],
       [terminalRow('reservation-1', 'released')],
       [terminalRow('reservation-1', 'settled', 1)],
+      [{ ...terminalRow('reservation-1', 'settled'), user_id: 'other-user' }],
+      [{ ...terminalRow('reservation-1', 'settled'), reserved_micrormb: 1 }],
+      [{ ...terminalRow('reservation-1', 'settled'), settled_at: null }],
+      [{ ...terminalRow('reservation-1', 'settled'), expires_at: 'not-a-timestamp' }],
     ];
 
     for (const responseData of cases) {
       const supabase = fakeSupabase(
-        { data: [{ allowed: true, reservation_id: 'reservation-1' }], error: null },
+        { data: [reservationRow()], error: null },
         { data: responseData, error: null },
         { data: [terminalRow('reservation-1', 'settled')], error: null },
       );
@@ -255,11 +313,14 @@ describe('reserveCostBudget', () => {
       [{ reservation_id: 'reservation-1', settled_micrormb: null }],
       [terminalRow('other-reservation', 'released')],
       [{ reservation_id: 'reservation-1', status: 'reserved', settled_micrormb: null }],
+      [{ ...terminalRow('reservation-1', 'released'), settled_micrormb: 1 }],
+      [{ ...terminalRow('reservation-1', 'released'), settled_at: '2026-07-28T00:01:00.000Z' }],
+      [{ ...terminalRow('reservation-1', 'released'), created_at: 'not-a-timestamp' }],
     ];
 
     for (const responseData of cases) {
       const supabase = fakeSupabase(
-        { data: [{ allowed: true, reservation_id: 'reservation-1' }], error: null },
+        { data: [reservationRow()], error: null },
         { data: responseData, error: null },
         { data: [terminalRow('reservation-1', 'released')], error: null },
       );
@@ -273,7 +334,7 @@ describe('reserveCostBudget', () => {
 
   it('does not mark a reservation released when the database reports it settled', async () => {
     const supabase = fakeSupabase(
-      { data: [{ allowed: true, reservation_id: 'reservation-1' }], error: null },
+      { data: [reservationRow()], error: null },
       { data: [terminalRow('reservation-1', 'settled')], error: null },
     );
     const reservation = await reserveCostBudget(supabase, 'user-1', request);
@@ -281,5 +342,103 @@ describe('reserveCostBudget', () => {
     await expect(reservation.release()).rejects.toThrow('budget_invariant_violation');
     await expect(reservation.settle(completeUsage)).rejects.toThrow('budget_unavailable');
     expect(supabase.calls).toHaveLength(3);
+  });
+
+  it('shares a single in-flight settlement across overlapping callers', async () => {
+    const settleGate = deferred<RpcResponse>();
+    let settleCalls = 0;
+    const supabase: BudgetRpcAdapter = {
+      reserve: async () => ({ data: [reservationRow()], error: null }),
+      settle: async () => {
+        settleCalls += 1;
+        return settleGate.promise;
+      },
+      release: async () => ({ data: [terminalRow('reservation-1', 'released')], error: null }),
+    };
+    const reservation = await reserveCostBudget(supabase, 'user-1', request);
+
+    const first = reservation.settle(completeUsage);
+    const second = reservation.settle({ ...completeUsage, outputTokens: 0 });
+    expect(settleCalls).toBe(1);
+    settleGate.resolve({ data: [terminalRow('reservation-1', 'settled')], error: null });
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { costMicrormb: 118_944, usageEstimated: false },
+      { costMicrormb: 118_944, usageEstimated: false },
+    ]);
+  });
+
+  it('shares a single in-flight release across overlapping callers', async () => {
+    const releaseGate = deferred<RpcResponse>();
+    let releaseCalls = 0;
+    const supabase: BudgetRpcAdapter = {
+      reserve: async () => ({ data: [reservationRow()], error: null }),
+      settle: async () => ({ data: [terminalRow('reservation-1', 'settled')], error: null }),
+      release: async () => {
+        releaseCalls += 1;
+        return releaseGate.promise;
+      },
+    };
+    const reservation = await reserveCostBudget(supabase, 'user-1', request);
+
+    const first = reservation.release();
+    const second = reservation.release();
+    expect(releaseCalls).toBe(1);
+    releaseGate.resolve({ data: [terminalRow('reservation-1', 'released')], error: null });
+
+    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+  });
+
+  it('settles before an overlapping release without dispatching a second transition', async () => {
+    const settleGate = deferred<RpcResponse>();
+    let settleCalls = 0;
+    let releaseCalls = 0;
+    const supabase: BudgetRpcAdapter = {
+      reserve: async () => ({ data: [reservationRow()], error: null }),
+      settle: async () => {
+        settleCalls += 1;
+        return settleGate.promise;
+      },
+      release: async () => {
+        releaseCalls += 1;
+        return { data: [terminalRow('reservation-1', 'released')], error: null };
+      },
+    };
+    const reservation = await reserveCostBudget(supabase, 'user-1', request);
+
+    const settled = reservation.settle(completeUsage);
+    const released = reservation.release();
+    expect({ settleCalls, releaseCalls }).toEqual({ settleCalls: 1, releaseCalls: 0 });
+    settleGate.resolve({ data: [terminalRow('reservation-1', 'settled')], error: null });
+
+    await expect(settled).resolves.toEqual({ costMicrormb: 118_944, usageEstimated: false });
+    await expect(released).resolves.toBeUndefined();
+    expect(releaseCalls).toBe(0);
+  });
+
+  it('releases a failed in-flight settlement for a later retry', async () => {
+    const firstSettle = deferred<RpcResponse>();
+    let settleCalls = 0;
+    const supabase: BudgetRpcAdapter = {
+      reserve: async () => ({ data: [reservationRow()], error: null }),
+      settle: async () => {
+        settleCalls += 1;
+        return settleCalls === 1
+          ? firstSettle.promise
+          : { data: [terminalRow('reservation-1', 'settled')], error: null };
+      },
+      release: async () => ({ data: [terminalRow('reservation-1', 'released')], error: null }),
+    };
+    const reservation = await reserveCostBudget(supabase, 'user-1', request);
+
+    const first = reservation.settle(completeUsage);
+    const overlapping = reservation.settle(completeUsage);
+    expect(settleCalls).toBe(1);
+    firstSettle.resolve({ data: null, error: new Error('database unavailable') });
+    await expect(first).rejects.toThrow('budget_unavailable');
+    await expect(overlapping).rejects.toThrow('budget_unavailable');
+
+    await expect(reservation.settle(completeUsage)).resolves.toEqual({ costMicrormb: 118_944, usageEstimated: false });
+    expect(settleCalls).toBe(2);
   });
 });
