@@ -135,13 +135,18 @@ export interface DealLlmChatResult {
   model: string;
 }
 
-/** Injectable for tests; defaultDealLlm routes through the existing LLM stack. */
+/** Injectable for tests; browser-triggered defaults are strictly BYO. */
 export type DealLlmFn = (prompt: { system: string; user: string }) => Promise<DealLlmChatResult>;
 
-/** Production adapter: reuses src/lib/data/sources/llm (resolveLlm → env DeepSeek). */
+/** User production adapter; never falls back to a shared platform key. */
 export const defaultDealLlm: DealLlmFn = async ({ system, user }) => {
-  const { chat } = await import('@/lib/data/sources/llm');
-  const r = await chat({
+  const [{ resolveUserLlm }, { chatResolved }] = await Promise.all([
+    import('@/lib/llm/resolve'),
+    import('@/lib/data/sources/llm'),
+  ]);
+  const resolved = await resolveUserLlm();
+  if (!resolved) throw new Error('No user LLM provider configured');
+  const r = await chatResolved(resolved, {
     system,
     messages: [{ role: 'user', content: user }],
     max_tokens: 4000,
@@ -149,7 +154,7 @@ export const defaultDealLlm: DealLlmFn = async ({ system, user }) => {
     responseJson: true,
     timeoutMs: 120_000,
   });
-  return { content: r.content, model: r.model };
+  return { content: r.content, model: resolved.model };
 };
 
 export interface GenerateDealMemoInput {

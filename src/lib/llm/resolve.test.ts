@@ -8,7 +8,7 @@ vi.mock('./crypto', () => ({
   decrypt: vi.fn(),
 }));
 
-import { resolveLlm } from './resolve';
+import { resolveLlm, resolveUserLlm } from './resolve';
 import { getUserLlm } from './settings-store';
 import { decrypt } from './crypto';
 
@@ -90,6 +90,32 @@ describe('resolveLlm', () => {
       provider: 'deepseek',
       model: 'deepseek-v4-flash',
       source: 'env',
+    }));
+  });
+});
+
+describe('resolveUserLlm', () => {
+  it('never falls back to the platform key when the user has no BYO settings', async () => {
+    vi.mocked(getUserLlm).mockResolvedValue(null);
+    process.env.LLM_PROVIDER = 'deepseek';
+    process.env.DEEPSEEK_API_KEY = 'platform-key';
+
+    await expect(resolveUserLlm()).resolves.toBeNull();
+  });
+
+  it('returns a decryptable user provider without consulting platform credentials', async () => {
+    vi.mocked(getUserLlm).mockResolvedValue({
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      apiKeyCipher: 'cipher',
+    });
+    vi.mocked(decrypt).mockReturnValue('sk-user');
+    process.env.DEEPSEEK_API_KEY = 'platform-key';
+
+    await expect(resolveUserLlm()).resolves.toEqual(expect.objectContaining({
+      provider: 'deepseek',
+      apiKey: 'sk-user',
+      source: 'user',
     }));
   });
 });

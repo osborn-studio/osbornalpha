@@ -3,16 +3,26 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('@/lib/llm/resolve', () => ({ resolveLlm: vi.fn() }));
 vi.mock('@/lib/llm/openai-compat', () => ({ chat: vi.fn() }));
 vi.mock('@/lib/llm/anthropic-compat', () => ({ anthropicChat: vi.fn() }));
+vi.mock('./deepseek', () => ({
+  deepseekChat: vi.fn(),
+  isDeepSeekConfigured: vi.fn(() => true),
+}));
+vi.mock('./anthropic', () => ({
+  anthropicChat: vi.fn(),
+  isAnthropicConfigured: vi.fn(() => false),
+}));
 
 import { chat } from './llm';
 import { resolveLlm } from '@/lib/llm/resolve';
 import { chat as openAiChat } from '@/lib/llm/openai-compat';
 import { anthropicChat } from '@/lib/llm/anthropic-compat';
+import { deepseekChat } from './deepseek';
 
 beforeEach(() => {
   vi.mocked(resolveLlm).mockReset();
   vi.mocked(openAiChat).mockReset();
   vi.mocked(anthropicChat).mockReset();
+  vi.mocked(deepseekChat).mockReset();
 });
 
 describe('chat', () => {
@@ -66,5 +76,21 @@ describe('chat', () => {
 
     expect(result.usage).toEqual({ input_tokens: 100_075, output_tokens: 25 });
     expect(result.est_cost_usd).toBe(0);
+  });
+
+  it('never falls back to a platform provider after a resolved BYO call fails', async () => {
+    vi.mocked(resolveLlm).mockResolvedValue({
+      provider: 'deepseek',
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'sk-user',
+      model: 'deepseek-chat',
+      protocol: 'openai',
+      source: 'user',
+    });
+    vi.mocked(openAiChat).mockRejectedValue(new Error('user provider unavailable'));
+
+    await expect(chat({ messages: [{ role: 'user', content: 'hi' }] }))
+      .rejects.toThrow('user provider unavailable');
+    expect(deepseekChat).not.toHaveBeenCalled();
   });
 });

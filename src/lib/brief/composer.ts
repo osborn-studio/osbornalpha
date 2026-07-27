@@ -425,9 +425,9 @@ export async function generateDailyBrief(
   });
   const top = ranked.slice(0, topN);
 
-  // 3. AI committee per top. User preview injects its durable per-call
-  // metering boundary. Cron and send omit it and retain their existing
-  // platform-owned behavior.
+  // 3. AI committee per top. User preview/manual send inject their durable
+  // per-call metering boundary. Only the bearer-authenticated cron selects
+  // trusted_unmetered and reaches the platform-owned default.
   const llmResults: BriefLlmResponse[] = [];
   let llmFailures = 0;
   const rawLlmCall = opts.mode === 'metered'

@@ -1,8 +1,10 @@
 # AI 平台额度、Token 成本计量与单用户日成本上限设计
 
 **日期**：2026-07-28  
-**状态**：已获口头设计批准，等待书面规格复核  
+**状态**：已获口头设计批准；仓库实现完成并进入最终验证（不代表已部署生产）
 **适用分支**：`codex/stock-detail-live`
+
+> 实现说明：第 14 节记录设计批准后为满足“网络支出前持久审计”和生产权限边界而采纳的实现偏差。若与前文的初始预留/释放描述冲突，以第 14 节为准。
 
 ## 1. 目标与政策
 
@@ -261,3 +263,58 @@ BYO 供应商失败后若尝试平台回退，必须在回退前同时检查平�
 - 不建立全局平台月预算或组织级预算。
 - 不按股票、IP 或设备额外限流。
 - 不实现动态外汇行情抓取。
+
+## 14. 已采纳实现偏差与仓库验证
+
+以下偏差均已在 `codex/stock-detail-live` 仓库实现；本节只陈述代码和迁移状态，不声明生产环境已经发布。
+
+### 14.1 支出前持久化 incurred 快照
+
+初始设计允许“调用失败时释放当前预留”。实际实现采用更保守的两阶段边界：普通平台调用先原子创建 `reserved`，随后在任何供应商网络请求前写入 `incurred`，并同时持久化最大输入、最大输出、价格版本、汇率及 `usage_estimated=true` 的保守快照。进入 `incurred` 后不再允许释放或因 TTL 失效；供应商失败和结算失败都保留这笔保守支出，等待后续核对。只有尚未进入网络调用的 `reserved` 可以 `released`。
+
+这样避免“供应商已产生费用，但进程在 usage 返回前失败”造成无审计支出。数据库状态为 `reserved | incurred | settled | released`，结算/释放及完全相同的重试保持幂等，身份或金额不同的重试返回不变量错误。
+
+### 14.2 `usage_events` 的 pending 运行生命周期
+
+功能级流水不再只在运行结束后写入。每个 Copilot、九人观点或简报预览运行在支出前通过服务角色创建 `pending` 行，并固化用户、功能、ticker、provider/model、价格/汇率和 BYO 身份；完成后精确终结为 `completed` 或 `failed`。只有 `completed AND byo=false` 计入次数。
+
+完全相同的 begin/finalize 重试是幂等的；任何身份或终结载荷差异都拒绝。超过 15 分钟的遗留 `pending` 可由有界、`skip locked` 的 `fail_stale_usage_runs` 标记为 `failed`，用于崩溃恢复和运维核对。
+
+### 14.3 Admin、手动发送与可信 Cron
+
+- Admin 的平台调用继续无限次数且不占 8.8 元 cap，但每次供应商调用先创建 `cap_exempt=true` 的不可变、幂等 incurred 审计，并在 UI 总平台成本中可见。
+- `/api/brief/send` 已收紧为服务端验证的 admin-only 路径；请求不能覆盖邮件或 Telegram 收件人。
+- 平台 Key 的定时简报、雷达 take 和 Research OS 日任务只允许 `CRON_SECRET` Bearer 验证后的可信 Cron/操作入口。缺少 secret、preview 或手动参数都不能绕过认证。
+- DCF 和浏览器触发的 Research OS LLM 路径只解析用户 BYO Key；BYO 失败不会回退到共享平台 Key。
+
+### 14.4 Profile 权益保护
+
+客户端仍可自助更新 `display_name`，但 `role`、`plan`、`plan_expires_at`、Stripe 标识和 usage 权益字段由后端管理。数据库列权限撤销 authenticated 的广泛更新权，触发器作为第二道保护；额度检查只读取受保护的 profile 状态，并对未知或过期 plan 回退 Free。
+
+### 14.5 UI 的总成本与 cap-used 成本
+
+用户当日用量接口以 `llm_cost_reservations` 为权威成本账本，同时返回：
+
+- `usedMicrormb`：包含普通和 cap-exempt 的平台总支出；
+- `capUsedMicrormb`：只包含实际参与 8.8 元硬上限的非豁免支出；
+- `limitMicrormb`：普通用户为 8,800,000，Admin 为 `-1`。
+
+当存在豁免支出时，设置页分别展示“计入上限成本”和“平台总成本”，避免把 Admin 审计成本误解为硬上限消耗。
+
+### 14.6 实现与验证证据
+
+实现证据由以下自动化约束覆盖：
+
+- TypeScript/Vitest：显式 Free/Pro/Admin 配额、北京时间边界、DeepSeek 价格与 FX、9000 Copilot 输出、BYO、admin cap-exempt、pre-network incurred、pending/finalize 生命周期、精确幂等、受保护 profile、手动发送权限和 Cron fail-closed。
+- Supabase SQL：8.8 元并发原子上限、状态转换、过期/跨日、service-role 权限、cap-exempt 排除、pending 恢复与 profile 权限。
+- 完整验证门：`npm test`、`npm run typecheck`、`npm run build`、`git diff --check`、本地数据库重置、全部 SQL 测试、并发 harness、数据库 lint 和生产 LLM 调用点审计。
+
+最终验证结果和提交 SHA 记录在本任务交付说明中；在实际部署与生产 smoke test 完成前，文档状态保持“仓库实现”，不标记“已生产发布”。
+
+2026-07-28 的本地新鲜验证证据：
+
+- Vitest：124 个测试文件、936 个测试全部通过。
+- TypeScript：独立运行 `npm run typecheck` 通过；Next 生产构建通过并生成 33/33 静态页。
+- 数据库：24 个迁移可从空本地库重置；2 个 pgTAP 文件共 185 项通过；并发 harness 的 4 个竞争场景通过；数据库 lint 无错误。
+- 生产 LLM 调用点：`rg` 覆盖 `toolChat`、`anthropicToolChat`、`chat`、`chatResolved`、直接 provider endpoint 及 API/Cron 入口；未发现未计量的公开或用户平台 Key 路径。
+- `npm audit` 仅报告既有依赖链中的 3 个 high advisories（Next.js/PostCSS/sharp）；本任务按范围未执行强制依赖升级。

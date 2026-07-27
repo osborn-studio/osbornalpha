@@ -14,6 +14,91 @@ Every check window is inserted into `service_alert_runs` before delivery. The un
 
 The quote check uses GitHub Actions because Vercel Hobby only permits daily Cron schedules. The workflow calls the same bearer-protected production endpoint, while Vercel remains responsible for execution and logs.
 
+## AI budget operations
+
+### Policy and reset
+
+| Feature | Free | Pro | Admin |
+|---|---:|---:|---:|
+| Copilot | 20/day | 100/day | Unlimited |
+| Nine perspectives | 5/day | 50/day | Unlimited |
+| Brief preview/manual generated brief | 2/day | 20/day | Unlimited |
+
+- Non-admin platform-key calls share one `¥8.80` daily cost cap per user across all three features. Both count quotas and the cost cap reset at `00:00 Asia/Shanghai`.
+- Copilot permits at most 12 model turns with `max_tokens=9000` per turn.
+- Admin platform calls are count- and cap-exempt, but each call must still create and settle a durable `cap_exempt=true` cost audit.
+- BYO calls are outside platform count and cost enforcement. Terminal BYO runs retain token audit with zero platform cost.
+- User-triggered LLM features outside the three-feature matrix must be BYO-only. Shared-key daily brief, radar, and Research OS jobs are restricted to bearer-authenticated cron/operator entry points.
+- `/api/brief/send` is admin-only. Cron previews and manual invocations use the same `CRON_SECRET` bearer check as scheduled execution and fail closed when the secret is absent.
+
+### Stable failures
+
+| Error code | JSON HTTP | Meaning / first action |
+|---|---:|---|
+| `quota_exhausted` | 429 where returned as an error response | Feature run count is exhausted; confirm the Beijing-day window and effective plan. |
+| `daily_cost_exhausted` | 429 | Non-exempt platform cost capacity is exhausted; use BYO or wait for Beijing midnight. |
+| `pricing_unavailable` | 500 | Provider/model lacks a reviewed price; do not bypass pricing. |
+| `budget_unavailable` | 503 | Cost ledger/RPC unavailable; platform calls fail closed. |
+| `usage_audit_unavailable` | 503 | Durable feature-run audit unavailable; do not retry blindly. |
+| `budget_invariant_violation` / `usage_audit_invariant` | 500 | Exact retry identity or ledger state conflicts; escalate before replay. |
+
+Copilot starts an SSE response after its durable run audit is created. Errors discovered during later model turns therefore arrive as `type=error` events with the same stable `code` on an HTTP 200 stream, followed by `type=done`; clients must inspect the SSE event rather than only the HTTP status. The perspectives count-exhausted response is an intentional HTTP 200 degradation with `source=quota` and `quota.reason=quota_exhausted`. Authentication failures remain `401`; admin-only manual send returns `403` for an authenticated non-admin.
+
+### Ledger lifecycle and reconciliation
+
+`usage_events` is the feature-run ledger. A run is inserted as `pending` before model spend, with immutable user, feature, provider/model, pricing/FX, and BYO identity. It is finalized exactly once as `completed` or `failed`; an identical finalization retry is idempotent, while any changed retry is an invariant error. Only `completed AND byo=false` rows count toward feature quotas. `fail_stale_usage_runs(900, 100)` deterministically marks old pending rows failed; inspect them before and after reconciliation.
+
+`llm_cost_reservations` is the per-provider-call ledger:
+
+- `reserved`: capacity held, no provider call yet; unexpired non-exempt rows count against the cap and expired rows do not.
+- `incurred`: conservative usage/pricing snapshot was committed before network spend; it always counts and must never be released.
+- `settled`: provider usage was accepted and actual cost replaced the conservative amount.
+- `released`: pre-network reservation was safely abandoned.
+- `cap_exempt=true`: admin platform spend is visible in total cost but excluded from cap-used cost.
+
+An `incurred` row left after provider or settlement failure is a durable conservative charge. Reconcile it from provider/request evidence when available; otherwise keep the conservative snapshot. Never change it to `released`. The settings UI deliberately distinguishes total platform spend (`usedMicrormb`) from non-exempt cap consumption (`capUsedMicrormb`).
+
+Safe triage query concepts (run with an authorized database role; substitute bounded user/day values):
+
+```sql
+-- Run lifecycle by feature; pending older than 15 minutes needs review.
+select feature, status, byo, count(*)
+from usage_events
+where user_id = '<user_uuid>'
+  and created_at >= '<beijing_day_start_utc>'
+  and created_at < '<beijing_day_end_utc>'
+group by feature, status, byo;
+
+-- Cost lifecycle and cap exemption; compare settled actual vs conservative held/incurred.
+select status, cap_exempt, count(*),
+       sum(case when status = 'settled' then settled_micrormb
+                when status in ('reserved', 'incurred') then reserved_micrormb
+                else 0 end) as micrormb
+from llm_cost_reservations
+where user_id = '<user_uuid>'
+  and created_at >= '<beijing_day_start_utc>'
+  and created_at < '<beijing_day_end_utc>'
+group by status, cap_exempt;
+
+-- Reconciliation queues.
+select id, feature, created_at
+from usage_events
+where status = 'pending' and created_at < now() - interval '15 minutes'
+order by created_at, id;
+
+select id, feature, cap_exempt, created_at, pricing_version, usd_cny_micros
+from llm_cost_reservations
+where status = 'incurred'
+order by created_at, id;
+```
+
+### Release order and pricing review
+
+1. Deploy all Supabase migrations through the profile-entitlement and usage-lifecycle migrations before deploying application code.
+2. Confirm `LLM_DAILY_COST_LIMIT_MICRORMB=8800000`, reviewed FX configuration, and `CRON_SECRET`; never expose these through client configuration.
+3. Deploy the app, then smoke-test a BYO call, a metered platform call, an admin cap-exempt call, and a bearer-authenticated cron without logging prompts or keys.
+4. Check the official DeepSeek model pricing and the approved USD/CNY policy before each release and after any provider pricing notice. Update `PRICING_VERSION` and the FX snapshot version/config through code review; historical rows are never repriced.
+
 ## Delivery
 
 - Primary: Resend email to `ALERT_EMAIL_TO`.

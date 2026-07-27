@@ -20,6 +20,7 @@ import { getServiceResearchCtx } from '../src/lib/research/service';
 import { ingestRadarDay } from '../src/lib/research/ingest/github-radar';
 import { extractSignals } from '../src/lib/research/signals';
 import { monitorAllTheses, listPendingAlerts } from '../src/lib/research/monitor';
+import { trustedPlatformLlm } from '../src/lib/research/memos';
 
 const DEFAULT_REPORTS_ROOT =
   '/Volumes/AIMATE_WORK/Developer/ClaudeCode/01_active/github-research-agent/reports';
@@ -50,7 +51,7 @@ async function main() {
   }
 
   // 2. Extract signals from pending sources.
-  const extraction = await extractSignals(ctx);
+  const extraction = await extractSignals(ctx, trustedPlatformLlm);
   if (extraction.llm.source === 'llm' || extraction.llm.source === 'none') {
     console.log(
       `[research-daily] signals: created=${extraction.created.length} ` +
@@ -64,7 +65,7 @@ async function main() {
   }
 
   // 3. Monitor all ACTIVE / WATCH / AT_RISK theses (pending alerts only).
-  const results = await monitorAllTheses(ctx);
+  const results = await monitorAllTheses(ctx, trustedPlatformLlm);
   const alerts = results.filter((r) => r.event !== null);
   console.log(`[research-daily] monitor: theses=${results.length} new_alerts=${alerts.length}`);
   for (const r of alerts) {

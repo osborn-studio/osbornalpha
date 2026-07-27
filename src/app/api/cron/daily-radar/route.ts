@@ -3,6 +3,7 @@ import { buildRadarDigest } from '@/lib/brief/radar-digest';
 import { DEFAULT_WATCHLIST } from '@/lib/brief/composer';
 import { sendTelegram, isTelegramConfigured } from '@/lib/data/sources/telegram';
 import { sendEmail, isResendConfigured } from '@/lib/data/sources/resend';
+import { authorizedCronRequest } from '@/lib/observability/cron-auth';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -17,26 +18,22 @@ export const maxDuration = 60;
  *
  * Channels: Telegram + Email (both gated by env vars; either can be off).
  *
- * Manual preview:
- *   GET /api/cron/daily-radar?preview=1
+ * Authenticated manual preview:
+ *   GET /api/cron/daily-radar?preview=1 (with CRON_SECRET)
  *   Returns the digest JSON without sending anything.
  *
- * Manual send (e.g. test after env var change):
- *   GET /api/cron/daily-radar?force=1  (with CRON_SECRET if set)
+ * A manual send uses the same bearer authentication as scheduled execution.
  */
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const isPreview = url.searchParams.get('preview') === '1';
-  const isForce = url.searchParams.get('force') === '1';
 
-  // Auth gate — only when actually sending. Preview skips auth so the
-  // /radar tab or a quick curl with the site cookie can call it.
-  if (!isPreview) {
-    const auth = req.headers.get('authorization');
-    const secret = process.env.CRON_SECRET;
-    if (secret && auth !== `Bearer ${secret}` && !isForce) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+  const secret = process.env.CRON_SECRET;
+  if (!secret) {
+    return NextResponse.json({ error: 'Cron unavailable' }, { status: 503 });
+  }
+  if (!authorizedCronRequest(req.headers.get('authorization'), secret)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const startedAt = Date.now();

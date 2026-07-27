@@ -107,22 +107,26 @@ function estimateCost(provider: string, model: string, usage: NormalizedUsage): 
  * out of the module graph for unit tests.
  */
 async function tryUserResolvedChat(opts: UnifiedChatOpts): Promise<UnifiedChatResp | null> {
+  let resolved: ResolvedLlm | null;
   try {
     const { resolveLlm } = await import('@/lib/llm/resolve');
-    const resolved = await resolveLlm();
-    if (!resolved) return null;
-    const r = await chatResolved(resolved, opts);
-    const usage = { input_tokens: r.usage.inputTokens, output_tokens: r.usage.outputTokens };
-    return {
-      provider: resolved.provider,
-      model: resolved.model,
-      content: r.content,
-      usage,
-      est_cost_usd: estimateCost(resolved.provider, resolved.model, r.usage),
-    };
+    resolved = await resolveLlm();
   } catch {
-    return null; // any resolution/override failure → legacy env path
+    return null;
   }
+  if (!resolved) return null;
+
+  // Once credentials have been resolved, provider errors must propagate.
+  // Falling through here would turn a failed BYO request into shared-key spend.
+  const r = await chatResolved(resolved, opts);
+  const usage = { input_tokens: r.usage.inputTokens, output_tokens: r.usage.outputTokens };
+  return {
+    provider: resolved.provider,
+    model: resolved.model,
+    content: r.content,
+    usage,
+    est_cost_usd: estimateCost(resolved.provider, resolved.model, r.usage),
+  };
 }
 
 export async function chat(opts: UnifiedChatOpts): Promise<UnifiedChatResp> {

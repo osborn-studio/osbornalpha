@@ -29,8 +29,12 @@ const ENV_KEY: Record<string, string> = {
   minimax: 'MINIMAX_API_KEY',
 };
 
-export async function resolveLlm(): Promise<ResolvedLlm | null> {
-  // (1) Per-user settings take precedence.
+/**
+ * Resolve only the authenticated user's own key. User-triggered features that
+ * are outside the platform metering matrix must use this boundary so they can
+ * never silently spend the shared environment credential.
+ */
+export async function resolveUserLlm(): Promise<ResolvedLlm | null> {
   const u = await getUserLlm();
   if (u) {
     const def = getProvider(u.provider);
@@ -54,6 +58,13 @@ export async function resolveLlm(): Promise<ResolvedLlm | null> {
       }
     }
   }
+  return null;
+}
+
+export async function resolveLlm(): Promise<ResolvedLlm | null> {
+  // (1) Per-user settings take precedence.
+  const user = await resolveUserLlm();
+  if (user) return user;
 
   // (2) Environment fallback.
   return resolvePlatformLlm();

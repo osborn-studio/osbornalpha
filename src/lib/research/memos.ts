@@ -152,13 +152,21 @@ export interface LlmChatResult {
   model: string;
 }
 
-/** Injectable for tests; defaultLlm routes through the existing LLM stack. */
+/** Injectable for tests; browser-triggered defaults are strictly BYO. */
 export type LlmFn = (prompt: { system: string; user: string }) => Promise<LlmChatResult>;
 
-/** Production adapter: reuses src/lib/data/sources/llm (resolveLlm → env DeepSeek). */
+/**
+ * Browser/user production adapter. Research OS is outside the three platform
+ * quota features, so this path must never fall back to a shared platform key.
+ */
 export const defaultLlm: LlmFn = async ({ system, user }) => {
-  const { chat } = await import('@/lib/data/sources/llm');
-  const r = await chat({
+  const [{ resolveUserLlm }, { chatResolved }] = await Promise.all([
+    import('@/lib/llm/resolve'),
+    import('@/lib/data/sources/llm'),
+  ]);
+  const resolved = await resolveUserLlm();
+  if (!resolved) throw new Error('No user LLM provider configured');
+  const r = await chatResolved(resolved, {
     system,
     messages: [{ role: 'user', content: user }],
     max_tokens: 3000,
@@ -166,7 +174,29 @@ export const defaultLlm: LlmFn = async ({ system, user }) => {
     responseJson: true,
     timeoutMs: 120_000,
   });
-  return { content: r.content, model: r.model };
+  return { content: r.content, model: resolved.model };
+};
+
+/**
+ * Explicit shared-key adapter for trusted service entry points only. Callers
+ * must authenticate before passing this function into a research workflow.
+ */
+export const trustedPlatformLlm: LlmFn = async ({ system, user }) => {
+  const [{ resolvePlatformLlm }, { chatResolved }] = await Promise.all([
+    import('@/lib/llm/resolve'),
+    import('@/lib/data/sources/llm'),
+  ]);
+  const resolved = resolvePlatformLlm();
+  if (!resolved) throw new Error('No LLM provider configured');
+  const r = await chatResolved(resolved, {
+    system,
+    messages: [{ role: 'user', content: user }],
+    max_tokens: 3000,
+    temperature: 0.3,
+    responseJson: true,
+    timeoutMs: 120_000,
+  });
+  return { content: r.content, model: resolved.model };
 };
 
 export interface GenerateMemoInput {

@@ -1,5 +1,6 @@
 import type { DcfAssumptions } from './engine';
-import { chat, extractJson, isLLMConfigured } from '@/lib/data/sources/llm';
+import { chatResolved, extractJson } from '@/lib/data/sources/llm';
+import { resolveUserLlm } from '@/lib/llm/resolve';
 
 export const DEFAULT_ASSUMPTIONS: DcfAssumptions = {
   revenueLines: [{ name: '主营业务', baseRevenue: 100, cagr: 0.08 }],
@@ -47,9 +48,10 @@ export async function assembleAssumptions(
   const seed = seedFromFinancials(financials, warnings);
 
   let llmSeed: Partial<DcfAssumptions> = {};
-  if (isLLMConfigured()) {
+  const llm = await resolveUserLlm();
+  if (llm) {
     try {
-      const resp = await chat({
+      const resp = await chatResolved(llm, {
         system: 'You are a sell-side analyst. Output ONLY JSON matching the requested shape. Numbers in 亿 (CNY 100M) unless told otherwise.',
         messages: [{ role: 'user', content: extractPrompt(ticker, seed) }],
         max_tokens: 700,
@@ -60,7 +62,7 @@ export async function assembleAssumptions(
       warnings.push('AI 假设抽取失败，使用财报种子 + 默认值。');
     }
   } else {
-    warnings.push('未配置 LLM，使用财报种子 + 默认假设。');
+    warnings.push('未配置用户 LLM，使用财报种子 + 默认假设。');
   }
 
   const assumptions = mergeAssumptions({ ...seed, ...llmSeed }, overrides);
