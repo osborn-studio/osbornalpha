@@ -73,6 +73,44 @@ describe('normalizeUsage', () => {
     });
   });
 
+  it('rejects fractional and overflowing token counts while using valid fallback aliases', () => {
+    expect(normalizeUsage({
+      input_tokens: 1.5,
+      prompt_tokens: 1_000,
+      completion_tokens: 1,
+    })).toEqual({
+      inputTokens: 1_000,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 1_000,
+      outputTokens: 1,
+      estimated: true,
+    });
+    expect(normalizeUsage({
+      prompt_tokens: Number.MAX_SAFE_INTEGER + 1,
+      completion_tokens: 1,
+    })).toEqual({
+      inputTokens: 0,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 0,
+      outputTokens: 1,
+      estimated: true,
+    });
+  });
+
+  it('marks non-plain cache detail containers as estimated', () => {
+    expect(normalizeUsage({
+      prompt_tokens: 1_000,
+      completion_tokens: 1,
+      prompt_tokens_details: [],
+    })).toEqual({
+      inputTokens: 1_000,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 1_000,
+      outputTokens: 1,
+      estimated: true,
+    });
+  });
+
   it('clamps invalid negative and non-finite usage to zero', () => {
     expect(normalizeUsage({
       prompt_tokens: -1,

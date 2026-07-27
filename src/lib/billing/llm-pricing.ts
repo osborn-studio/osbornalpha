@@ -56,9 +56,16 @@ function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === 'object' && value !== null;
 }
 
+function isPlainRecord(value: unknown): value is UnknownRecord {
+  if (!isRecord(value) || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 function validNonNegativeInteger(value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return undefined;
-  return Math.min(Math.ceil(value), MAX_SAFE_INTEGER);
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined;
 }
 
 function safeNonNegativeInteger(value: unknown): number {
@@ -87,13 +94,13 @@ function hasMalformedUsageField(raw: UnknownRecord): boolean {
   ) return true;
 
   if (!Object.prototype.hasOwnProperty.call(raw, 'prompt_tokens_details')) return false;
-  if (!isRecord(raw.prompt_tokens_details)) return true;
+  if (!isPlainRecord(raw.prompt_tokens_details)) return true;
   return hasMalformedTokenValue(raw.prompt_tokens_details, DETAIL_CACHE_HIT_TOKEN_KEYS)
     || hasMalformedTokenValue(raw.prompt_tokens_details, DETAIL_CACHE_MISS_TOKEN_KEYS);
 }
 
 function cacheBreakdown(raw: UnknownRecord): { hit?: number; miss?: number; present: boolean } {
-  const details = isRecord(raw.prompt_tokens_details) ? raw.prompt_tokens_details : {};
+  const details = isPlainRecord(raw.prompt_tokens_details) ? raw.prompt_tokens_details : {};
   const hit = firstValidNonNegativeInteger(raw, CACHE_HIT_TOKEN_KEYS)
     ?? firstValidNonNegativeInteger(details, DETAIL_CACHE_HIT_TOKEN_KEYS);
   const miss = firstValidNonNegativeInteger(raw, CACHE_MISS_TOKEN_KEYS)
