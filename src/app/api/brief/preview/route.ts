@@ -3,9 +3,61 @@ import { generateDailyBrief, DEFAULT_WATCHLIST } from '@/lib/brief/composer';
 import { resolveLlm } from '@/lib/llm/resolve';
 import { checkQuota, recordUsage } from '@/lib/billing/quota';
 import { getRequestLocale, apiMessage } from '@/lib/i18n/server';
+import { chatResolved } from '@/lib/data/sources/llm';
+import { getServerSupabase } from '@/lib/supabase/server';
+import {
+  aggregateMeteredUsage,
+  meteredUsageFromError,
+  runMeteredLlmCall,
+  type MeteredUsage,
+} from '@/lib/billing/metered-llm';
+import { getBudgetConfig } from '@/lib/billing/cost-budget';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
+
+const COST_ERROR_CODES = new Set([
+  'daily_cost_exhausted',
+  'pricing_unavailable',
+  'budget_unavailable',
+  'budget_invariant_violation',
+]);
+
+function costErrorCode(error: unknown): string | null {
+  const code = error instanceof Error ? error.message : String(error);
+  return COST_ERROR_CODES.has(code) ? code : null;
+}
+
+function briefResponse(
+  brief: Awaited<ReturnType<typeof generateDailyBrief>>,
+  format: string,
+): Response {
+  if (format === 'markdown' || format === 'md') {
+    return new NextResponse(brief.markdown, {
+      headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
+    });
+  }
+  return NextResponse.json(brief);
+}
+
+async function recordAccounting(accounting: MeteredUsage[], failed: boolean): Promise<void> {
+  if (accounting.length === 0) return;
+  const aggregate = aggregateMeteredUsage(accounting);
+  await recordUsage('brief_preview', {
+    provider: aggregate.provider,
+    model: aggregate.model,
+    inputTokens: aggregate.usage.inputTokens,
+    cacheHitInputTokens: aggregate.usage.cacheHitInputTokens,
+    cacheMissInputTokens: aggregate.usage.cacheMissInputTokens,
+    outputTokens: aggregate.usage.outputTokens,
+    costMicrormb: aggregate.costMicrormb,
+    pricingVersion: aggregate.pricingVersion,
+    usdCnyMicros: aggregate.usdCnyMicros,
+    usageEstimated: aggregate.usageEstimated,
+    byo: aggregate.byo,
+    status: failed ? 'failed' : 'completed',
+  });
+}
 
 /**
  * GET /api/brief/preview
@@ -25,6 +77,22 @@ export async function GET(req: Request) {
     ? watchlistParam.split(',').map((s) => s.trim()).filter(Boolean)
     : DEFAULT_WATCHLIST;
 
+  // Deterministic composition is explicitly outside both count and cost
+  // accounting and does not need to resolve provider/auth state.
+  if (skipLLM) {
+    try {
+      return briefResponse(
+        await generateDailyBrief(watchlist, { topN, skipLLM: true }),
+        format,
+      );
+    } catch (e: any) {
+      return NextResponse.json(
+        { error: e?.message || 'brief generation failed', stack: e?.stack?.slice(0, 500) },
+        { status: 500 },
+      );
+    }
+  }
+
   // Quota rules:
   //  - skipLLM=true costs nothing (composition only) → never metered, never
   //    blocked (BriefGlance on /today uses this).
@@ -35,7 +103,7 @@ export async function GET(req: Request) {
   //    Other checkQuota failures (e.g. transient DB) fail open.
   const llm = await resolveLlm();
   const byo = llm?.source === 'user';
-  const metered = !skipLLM && !byo;
+  const metered = !byo;
   let quota: Awaited<ReturnType<typeof checkQuota>> | null = null;
   if (metered) {
     try {
@@ -55,16 +123,90 @@ export async function GET(req: Request) {
     }, { status: 429 });
   }
 
-  try {
-    const brief = await generateDailyBrief(watchlist, { topN, skipLLM });
-    if (metered) await recordUsage('brief_preview', { byo });
-    if (format === 'markdown' || format === 'md') {
-      return new NextResponse(brief.markdown, {
-        headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
-      });
+  const budgetExempt = !!llm && llm.source === 'env' && quota?.limit === -1;
+  let userId: string | undefined;
+  if (llm?.source === 'env' && !budgetExempt) {
+    try {
+      const authDb = await getServerSupabase();
+      const { data, error } = await authDb.auth.getUser();
+      if (error || !data.user) {
+        return NextResponse.json({ error: 'not authenticated' }, { status: 401 });
+      }
+      userId = data.user.id;
+    } catch {
+      const locale = await getRequestLocale();
+      const budget = getBudgetConfig();
+      return NextResponse.json({
+        source: 'cost_quota',
+        error: apiMessage(locale, 'budgetUnavailable'),
+        errorCode: 'budget_unavailable',
+        costLimit: {
+          dailyMicrormb: budget.dailyLimitMicrormb,
+          timezone: 'Asia/Shanghai',
+        },
+      }, { status: 429 });
     }
-    return NextResponse.json(brief);
+  }
+
+  const accounting: MeteredUsage[] = [];
+  try {
+    const llmCall = llm
+      ? async (opts: Parameters<typeof chatResolved>[1]) => {
+          try {
+            const meteredCall = await runMeteredLlmCall({
+              feature: 'brief_preview',
+              provider: llm,
+              userId,
+              budgetExempt,
+              maxOutputTokens: opts.max_tokens ?? 400,
+              call: () => chatResolved(llm, opts),
+            });
+            accounting.push(meteredCall.accounting);
+            return {
+              ...meteredCall.value,
+              provider: llm.provider,
+              model: llm.model,
+            };
+          } catch (error) {
+            const failedUsage = meteredUsageFromError(error);
+            if (failedUsage) accounting.push(failedUsage);
+            throw error;
+          }
+        }
+      : undefined;
+    const brief = await generateDailyBrief(watchlist, {
+      topN,
+      skipLLM: false,
+      ...(llmCall ? { llmCall } : {}),
+    });
+    await recordAccounting(
+      accounting,
+      accounting.some((item) => item.status === 'failed') || (brief.meta.failures ?? 0) > 0,
+    );
+    return briefResponse(brief, format);
   } catch (e: any) {
+    await recordAccounting(accounting, true);
+    const code = costErrorCode(e);
+    if (code) {
+      const locale = await getRequestLocale();
+      const budget = getBudgetConfig();
+      const messageKey = code === 'daily_cost_exhausted'
+        ? 'dailyCostExhausted'
+        : code === 'pricing_unavailable'
+          ? 'pricingUnavailable'
+          : code === 'budget_invariant_violation'
+            ? 'budgetInvariantViolation'
+            : 'budgetUnavailable';
+      return NextResponse.json({
+        source: 'cost_quota',
+        error: apiMessage(locale, messageKey),
+        errorCode: code,
+        costLimit: {
+          dailyMicrormb: budget.dailyLimitMicrormb,
+          timezone: 'Asia/Shanghai',
+        },
+      }, { status: 429 });
+    }
     return NextResponse.json(
       { error: e?.message || 'brief generation failed', stack: e?.stack?.slice(0, 500) },
       { status: 500 }

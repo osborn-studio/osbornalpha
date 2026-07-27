@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { chat, extractJson, isLLMConfigured, getActiveProvider } from '@/lib/data/sources/llm';
+import { chatResolved, extractJson } from '@/lib/data/sources/llm';
 import { fetchEastmoneyQuote } from '@/lib/data/sources/eastmoney';
 import {
   isTushareConfigured,
@@ -12,6 +12,14 @@ import { resolveLlm } from '@/lib/llm/resolve';
 import { checkQuota, recordUsage } from '@/lib/billing/quota';
 import { getRequestLocale, apiMessage } from '@/lib/i18n/server';
 import { sanitizeAiList, sanitizeAiText } from '@/lib/llm/sanitize';
+import { getServerSupabase } from '@/lib/supabase/server';
+import {
+  aggregateMeteredUsage,
+  meteredUsageFromError,
+  runMeteredLlmCall,
+  type MeteredUsage,
+} from '@/lib/billing/metered-llm';
+import { getBudgetConfig } from '@/lib/billing/cost-budget';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 86400;
@@ -19,13 +27,51 @@ export const maxDuration = 60;  // Vercel function timeout
 
 interface Ctx { params: Promise<{ ticker: string }> }
 
+const MAX_PERSONA_OUTPUT_TOKENS = 400;
+const COST_ERROR_CODES = new Set([
+  'daily_cost_exhausted',
+  'pricing_unavailable',
+  'budget_unavailable',
+  'budget_invariant_violation',
+]);
+
+function costErrorCode(error: unknown): string | null {
+  const code = error instanceof Error ? error.message : String(error);
+  return COST_ERROR_CODES.has(code) ? code : null;
+}
+
+async function recordAccounting(
+  ticker: string,
+  accounting: MeteredUsage[],
+  status: 'completed' | 'failed',
+): Promise<void> {
+  if (accounting.length === 0) return;
+  const aggregate = aggregateMeteredUsage(accounting);
+  await recordUsage('perspectives', {
+    ticker,
+    provider: aggregate.provider,
+    model: aggregate.model,
+    inputTokens: aggregate.usage.inputTokens,
+    cacheHitInputTokens: aggregate.usage.cacheHitInputTokens,
+    cacheMissInputTokens: aggregate.usage.cacheMissInputTokens,
+    outputTokens: aggregate.usage.outputTokens,
+    costMicrormb: aggregate.costMicrormb,
+    pricingVersion: aggregate.pricingVersion,
+    usdCnyMicros: aggregate.usdCnyMicros,
+    usageEstimated: aggregate.usageEstimated,
+    byo: aggregate.byo,
+    status,
+  });
+}
+
 export async function GET(req: Request, { params }: Ctx) {
   const { ticker: raw } = await params;
   const ticker = decodeURIComponent(raw);
   const url = new URL(req.url);
   const personaFilter = url.searchParams.get('personas')?.split(',').filter(Boolean);
 
-  if (!isLLMConfigured()) {
+  const llm = await resolveLlm();
+  if (!llm) {
     return NextResponse.json({
       source: 'no-key',
       ticker,
@@ -38,8 +84,7 @@ export async function GET(req: Request, { params }: Ctx) {
   // platform key is subject to the daily quota. This route is public in
   // middleware, so 'not authenticated' fails CLOSED (401) — anonymous callers
   // get no platform-key budget. Other checkQuota failures fail open.
-  const llm = await resolveLlm();
-  const byo = llm?.source === 'user';
+  const byo = llm.source === 'user';
   let quota: Awaited<ReturnType<typeof checkQuota>> | null = null;
   if (!byo) {
     try {
@@ -64,7 +109,32 @@ export async function GET(req: Request, { params }: Ctx) {
     }, { status: 200 });
   }
 
-  const provider = getActiveProvider();
+  const budgetExempt = !byo && quota?.limit === -1;
+  let userId: string | undefined;
+  if (!byo && !budgetExempt) {
+    try {
+      const authDb = await getServerSupabase();
+      const { data, error } = await authDb.auth.getUser();
+      if (error || !data.user) {
+        return NextResponse.json({ error: 'not authenticated' }, { status: 401 });
+      }
+      userId = data.user.id;
+    } catch {
+      const locale = await getRequestLocale();
+      const budget = getBudgetConfig();
+      return NextResponse.json({
+        source: 'cost_quota',
+        ticker,
+        error: apiMessage(locale, 'budgetUnavailable'),
+        errorCode: 'budget_unavailable',
+        perspectives: [],
+        costLimit: {
+          dailyMicrormb: budget.dailyLimitMicrormb,
+          timezone: 'Asia/Shanghai',
+        },
+      }, { status: 429 });
+    }
+  }
 
   // 1. Gather context
   const quote = await fetchEastmoneyQuote(ticker).catch(() => null);
@@ -121,25 +191,34 @@ export async function GET(req: Request, { params }: Ctx) {
 
   const userMessage = buildUserMessage(ctx);
   const startedAt = Date.now();
-  let totalInputTokens = 0;
-  let totalOutputTokens = 0;
-  let totalCost = 0;
-  let usedModel = '';
+  const accounting: MeteredUsage[] = [];
 
   const settled = await Promise.allSettled(
     enabled.map(async (p): Promise<PerspectiveResult | null> => {
-      const resp = await chat({
-        system: p.prompt,
-        messages: [{ role: 'user', content: userMessage }],
-        max_tokens: 400,
-        temperature: 0.7,
-        timeoutMs: 30_000,
-        responseJson: true,  // DeepSeek honors this; Anthropic ignores gracefully
-      });
-      totalInputTokens += resp.usage.input_tokens;
-      totalOutputTokens += resp.usage.output_tokens;
-      totalCost += resp.est_cost_usd;
-      usedModel = resp.model;
+      let resp;
+      try {
+        const metered = await runMeteredLlmCall({
+          feature: 'perspectives',
+          provider: llm,
+          userId,
+          budgetExempt,
+          maxOutputTokens: MAX_PERSONA_OUTPUT_TOKENS,
+          call: () => chatResolved(llm, {
+            system: p.prompt,
+            messages: [{ role: 'user', content: userMessage }],
+            max_tokens: MAX_PERSONA_OUTPUT_TOKENS,
+            temperature: 0.7,
+            timeoutMs: 30_000,
+            responseJson: true,
+          }),
+        });
+        accounting.push(metered.accounting);
+        resp = metered.value;
+      } catch (error) {
+        const failedUsage = meteredUsageFromError(error);
+        if (failedUsage) accounting.push(failedUsage);
+        throw error;
+      }
 
       const parsed = extractJson(resp.content);
       if (!parsed) return null;
@@ -171,27 +250,61 @@ export async function GET(req: Request, { params }: Ctx) {
     .map((s, i) => (s.status === 'rejected' ? { persona: enabled[i].id, err: (s.reason as any)?.message || String(s.reason) } : null))
     .filter(Boolean);
 
-  await recordUsage('perspectives', {
-    ticker,
-    tokensIn: totalInputTokens,
-    tokensOut: totalOutputTokens,
-    byo,
-  });
+  const rejectedCostError = settled
+    .filter((item): item is PromiseRejectedResult => item.status === 'rejected')
+    .map((item) => costErrorCode(item.reason))
+    .find((code): code is string => code !== null);
+  const auditStatus = failures.length > 0 || perspectives.length !== enabled.length
+    ? 'failed'
+    : 'completed';
+  await recordAccounting(ticker, accounting, auditStatus);
+
+  if (rejectedCostError) {
+    const locale = await getRequestLocale();
+    const budget = getBudgetConfig();
+    const messageKey = rejectedCostError === 'daily_cost_exhausted'
+      ? 'dailyCostExhausted'
+      : rejectedCostError === 'pricing_unavailable'
+        ? 'pricingUnavailable'
+        : rejectedCostError === 'budget_invariant_violation'
+          ? 'budgetInvariantViolation'
+          : 'budgetUnavailable';
+    return NextResponse.json({
+      source: 'cost_quota',
+      ticker,
+      error: apiMessage(locale, messageKey),
+      errorCode: rejectedCostError,
+      perspectives: [],
+      costLimit: {
+        dailyMicrormb: budget.dailyLimitMicrormb,
+        timezone: 'Asia/Shanghai',
+      },
+    }, { status: 429 });
+  }
+
+  const aggregate = accounting.length > 0 ? aggregateMeteredUsage(accounting) : null;
+  const budgetConfig = getBudgetConfig();
 
   return NextResponse.json({
-    source: `${provider}+eastmoney` + (isA && isTushareConfigured() ? '+tushare' : ''),
+    source: `${llm.provider}+eastmoney` + (isA && isTushareConfigured() ? '+tushare' : ''),
     ticker,
     context: ctx,
     perspectives,
     meta: {
       generated_at: new Date().toISOString(),
       duration_ms: Date.now() - startedAt,
-      provider,
-      model: usedModel,
+      provider: llm.provider,
+      model: llm.model,
       personas_attempted: enabled.length,
       personas_succeeded: perspectives.length,
-      tokens: { input: totalInputTokens, output: totalOutputTokens },
-      est_cost_usd: Number(totalCost.toFixed(5)),
+      tokens: {
+        input: aggregate?.usage.inputTokens ?? 0,
+        output: aggregate?.usage.outputTokens ?? 0,
+      },
+      cost_micrormb: aggregate?.costMicrormb ?? 0,
+      est_cost_usd: Number(
+        ((aggregate?.costMicrormb ?? 0) / budgetConfig.usdCnyMicros).toFixed(5),
+      ),
       failures: failures.length > 0 ? failures.slice(0, 3) : undefined,
     },
   });

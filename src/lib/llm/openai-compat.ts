@@ -76,6 +76,7 @@ export async function chat(
     max_tokens?: number;
     temperature?: number;
     timeoutMs?: number;
+    responseJson?: boolean;
   },
 ): Promise<{ content: string; usage: NormalizedUsage }> {
   const timeoutMs = opts.timeoutMs ?? 60000;
@@ -89,6 +90,7 @@ export async function chat(
   };
   if (typeof opts.max_tokens === 'number') body.max_tokens = opts.max_tokens;
   if (typeof opts.temperature === 'number') body.temperature = opts.temperature;
+  if (opts.responseJson) body.response_format = { type: 'json_object' };
 
   const data = (await postJson(buildUrl(cfg), cfg.apiKey, body, timeoutMs)) as {
     choices?: Array<{ message?: { content?: string } }>;

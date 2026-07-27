@@ -14,6 +14,7 @@
 import { deepseekChat, isDeepSeekConfigured, type DeepSeekChatOpts } from './deepseek';
 import { anthropicChat, isAnthropicConfigured, type ChatOpts as AnthropicOpts } from './anthropic';
 import { calculateCostUsd, normalizeUsage, type NormalizedUsage } from '@/lib/billing/llm-pricing';
+import type { ResolvedLlm } from '@/lib/llm/resolve';
 
 export type LLMProvider = 'deepseek' | 'anthropic' | 'none';
 
@@ -49,6 +50,47 @@ export interface UnifiedChatResp {
   est_cost_usd: number;
 }
 
+export interface ResolvedChatResp {
+  content: string;
+  usage: NormalizedUsage;
+}
+
+/**
+ * Calls one already-resolved provider without silently switching credentials.
+ * Billing-sensitive routes use this after deciding whether the resolved key is
+ * BYO or platform-owned.
+ */
+export async function chatResolved(
+  resolved: ResolvedLlm,
+  opts: UnifiedChatOpts,
+): Promise<ResolvedChatResp> {
+  const cfg = {
+    baseUrl: resolved.baseUrl,
+    apiKey: resolved.apiKey,
+    model: resolved.model,
+    chatPath: resolved.chatPath,
+  };
+  if (resolved.protocol === 'anthropic') {
+    const { anthropicChat: compatChat } = await import('@/lib/llm/anthropic-compat');
+    return compatChat(cfg, {
+      system: opts.system,
+      messages: opts.messages,
+      max_tokens: opts.max_tokens,
+      timeoutMs: opts.timeoutMs,
+    });
+  }
+
+  const { chat: compatChat } = await import('@/lib/llm/openai-compat');
+  return compatChat(cfg, {
+    system: opts.system,
+    messages: opts.messages,
+    max_tokens: opts.max_tokens,
+    temperature: opts.temperature,
+    timeoutMs: opts.timeoutMs,
+    responseJson: opts.responseJson,
+  });
+}
+
 function estimateCost(provider: string, model: string, usage: NormalizedUsage): number {
   try {
     return Number(calculateCostUsd(provider, model, usage).toFixed(5));
@@ -69,32 +111,7 @@ async function tryUserResolvedChat(opts: UnifiedChatOpts): Promise<UnifiedChatRe
     const { resolveLlm } = await import('@/lib/llm/resolve');
     const resolved = await resolveLlm();
     if (!resolved) return null;
-    const cfg = { baseUrl: resolved.baseUrl, apiKey: resolved.apiKey, model: resolved.model, chatPath: resolved.chatPath };
-    if (resolved.protocol === 'anthropic') {
-      const { anthropicChat: compatChat } = await import('@/lib/llm/anthropic-compat');
-      const r = await compatChat(cfg, {
-        system: opts.system,
-        messages: opts.messages,
-        max_tokens: opts.max_tokens,
-        timeoutMs: opts.timeoutMs,
-      });
-      const usage = { input_tokens: r.usage.inputTokens, output_tokens: r.usage.outputTokens };
-      return {
-        provider: resolved.provider,
-        model: resolved.model,
-        content: r.content,
-        usage,
-        est_cost_usd: estimateCost(resolved.provider, resolved.model, r.usage),
-      };
-    }
-    const { chat: compatChat } = await import('@/lib/llm/openai-compat');
-    const r = await compatChat(cfg, {
-      system: opts.system,
-      messages: opts.messages,
-      max_tokens: opts.max_tokens,
-      temperature: opts.temperature,
-      timeoutMs: opts.timeoutMs,
-    });
+    const r = await chatResolved(resolved, opts);
     const usage = { input_tokens: r.usage.inputTokens, output_tokens: r.usage.outputTokens };
     return {
       provider: resolved.provider,

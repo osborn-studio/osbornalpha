@@ -18,7 +18,13 @@ import {
   fetchTushareFinaIndicator,
 } from '@/lib/data/sources/tushare-cached';
 import { PERSONAS, buildUserMessage, type StockContext, type PerspectiveResult } from '@/lib/data/personas';
-import { chat, extractJson, isLLMConfigured } from '@/lib/data/sources/llm';
+import {
+  chat,
+  extractJson,
+  isLLMConfigured,
+  type UnifiedChatOpts,
+} from '@/lib/data/sources/llm';
+import { normalizeUsage, type NormalizedUsage } from '@/lib/billing/llm-pricing';
 
 // ─── Morning-note guardrails (adapted from anthropics/financial-services
 //     plugins/agent-plugins/earnings-reviewer/skills/morning-note/SKILL.md,
@@ -137,8 +143,41 @@ function computeTriggers(q: EastmoneyQuote, fund: { pe_ttm: number | null; pb: n
 }
 
 // ─── Per-stock AI committee (9 personas) ───
-async function runCommittee(en: EnrichedQuote): Promise<PerspectiveResult[]> {
-  if (!isLLMConfigured()) return [];
+export interface BriefLlmResponse {
+  content: string;
+  usage: NormalizedUsage;
+  provider?: string;
+  model?: string;
+}
+
+export type BriefLlmCall = (opts: UnifiedChatOpts) => Promise<BriefLlmResponse>;
+
+const COST_ERROR_CODES = new Set([
+  'daily_cost_exhausted',
+  'pricing_unavailable',
+  'budget_unavailable',
+  'budget_invariant_violation',
+]);
+
+function isCostError(error: unknown): boolean {
+  return COST_ERROR_CODES.has(error instanceof Error ? error.message : String(error));
+}
+
+const defaultBriefLlmCall: BriefLlmCall = async (opts) => {
+  const response = await chat(opts);
+  return {
+    content: response.content,
+    usage: normalizeUsage(response.usage),
+    provider: response.provider,
+    model: response.model,
+  };
+};
+
+async function runCommittee(
+  en: EnrichedQuote,
+  llmCall: BriefLlmCall | undefined,
+): Promise<PerspectiveResult[]> {
+  if (!llmCall) return [];
 
   const ctx: StockContext = {
     ticker: en.quote.ticker,
@@ -158,7 +197,7 @@ async function runCommittee(en: EnrichedQuote): Promise<PerspectiveResult[]> {
 
   const settled = await Promise.allSettled(
     PERSONAS.map(async (p): Promise<PerspectiveResult | null> => {
-      const resp = await chat({
+      const resp = await llmCall({
         system: p.prompt,
         messages: [{ role: 'user', content: userMessage }],
         max_tokens: 400,
@@ -179,6 +218,12 @@ async function runCommittee(en: EnrichedQuote): Promise<PerspectiveResult[]> {
       };
     })
   );
+
+  const budgetError = settled
+    .filter((item): item is PromiseRejectedResult => item.status === 'rejected')
+    .map((item) => item.reason)
+    .find(isCostError);
+  if (budgetError) throw budgetError;
 
   return settled
     .map((s) => (s.status === 'fulfilled' ? s.value : null))
@@ -230,6 +275,7 @@ export interface DailyBrief {
   meta: {
     duration_ms: number;
     tokens?: { input: number; output: number };
+    normalized_usage?: NormalizedUsage;
     est_cost_usd?: number;
     failures?: number;
     /** Which provider+model generated the brief (deepseek-chat / claude-sonnet etc) */
@@ -264,8 +310,11 @@ function applyCompliance(text: string): string {
  * institutional morning notes. Synthesizes signals + perspectives into a
  * single opinionated 2-sentence headline.
  */
-async function generateTopCall(top: BriefStockBlock): Promise<DailyBrief['top_call'] | null> {
-  if (!isLLMConfigured()) return null;
+async function generateTopCall(
+  top: BriefStockBlock,
+  llmCall: BriefLlmCall | undefined,
+): Promise<DailyBrief['top_call'] | null> {
+  if (!llmCall) return null;
   if (top.perspectives.length === 0) return null;
 
   const today = new Date().toISOString().slice(0, 10);
@@ -296,7 +345,7 @@ ${repBear ? `空方代表（${repBear.name}）：${repBear.summary}` : ''}
 - 引用至少 1 个具体数字`;
 
   try {
-    const resp = await chat({
+    const resp = await llmCall({
       system: MORNING_NOTE_DOCTRINE,
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 300,
@@ -311,7 +360,8 @@ ${repBear ? `空方代表（${repBear.name}）：${repBear.summary}` : ''}
       rationale: String(parsed.rationale || '').slice(0, 200),
       ticker: top.ticker,
     };
-  } catch {
+  } catch (error) {
+    if (isCostError(error)) throw error;
     return null;
   }
 }
@@ -347,7 +397,7 @@ function deriveTradeIdeas(blocks: BriefStockBlock[]): DailyBrief['trade_ideas'] 
 
 export async function generateDailyBrief(
   watchlist: string[] = DEFAULT_WATCHLIST,
-  opts: { topN?: number; skipLLM?: boolean } = {}
+  opts: { topN?: number; skipLLM?: boolean; llmCall?: BriefLlmCall } = {}
 ): Promise<DailyBrief> {
   const startedAt = Date.now();
   const topN = opts.topN ?? 5;
@@ -363,12 +413,28 @@ export async function generateDailyBrief(
   });
   const top = ranked.slice(0, topN);
 
-  // 3. AI committee per top
-  let totalInputTok = 0;
-  let totalOutputTok = 0;
+  // 3. AI committee per top. User preview injects its durable per-call
+  // metering boundary. Cron and send omit it and retain their existing
+  // platform-owned behavior.
+  const llmResults: BriefLlmResponse[] = [];
+  let llmFailures = 0;
+  const rawLlmCall = opts.llmCall
+    ?? (isLLMConfigured() ? defaultBriefLlmCall : undefined);
+  const trackedLlmCall: BriefLlmCall | undefined = rawLlmCall
+    ? async (callOpts) => {
+        try {
+          const result = await rawLlmCall(callOpts);
+          llmResults.push(result);
+          return result;
+        } catch (error) {
+          llmFailures += 1;
+          throw error;
+        }
+      }
+    : undefined;
   const blocks: BriefStockBlock[] = await Promise.all(
     top.map(async (en) => {
-      const perspectives = opts.skipLLM ? [] : await runCommittee(en);
+      const perspectives = opts.skipLLM ? [] : await runCommittee(en, trackedLlmCall);
       return {
         ticker: en.quote.ticker,
         name: en.quote.name,
@@ -398,7 +464,9 @@ export async function generateDailyBrief(
     overall >= 4 ? '偏空' : '偏空偏强';
 
   // 5a. Generate Top Call (LLM headline for #1 priority)
-  const topCall = (!opts.skipLLM && blocks.length > 0) ? await generateTopCall(blocks[0]) : null;
+  const topCall = (!opts.skipLLM && blocks.length > 0)
+    ? await generateTopCall(blocks[0], trackedLlmCall)
+    : null;
 
   // 5b. Derive trade ideas from high-conviction perspectives
   const tradeIdeas = deriveTradeIdeas(blocks);
@@ -422,6 +490,21 @@ export async function generateDailyBrief(
   const subject = topCall
     ? `Sentinel ${date} · ${topCall.headline}`
     : `Sentinel Morning Note · ${date} · ${overall_label}`;
+  const normalizedUsage = llmResults.reduce<NormalizedUsage>((total, call) => ({
+    inputTokens: total.inputTokens + call.usage.inputTokens,
+    cacheHitInputTokens: total.cacheHitInputTokens + call.usage.cacheHitInputTokens,
+    cacheMissInputTokens: total.cacheMissInputTokens + call.usage.cacheMissInputTokens,
+    outputTokens: total.outputTokens + call.usage.outputTokens,
+    estimated: total.estimated || call.usage.estimated,
+  }), {
+    inputTokens: 0,
+    cacheHitInputTokens: 0,
+    cacheMissInputTokens: 0,
+    outputTokens: 0,
+    estimated: false,
+  });
+  const providers = [...new Set(llmResults.map((call) => call.provider).filter(Boolean))];
+  const models = [...new Set(llmResults.map((call) => call.model).filter(Boolean))];
 
   return {
     date,
@@ -437,7 +520,11 @@ export async function generateDailyBrief(
     subject,
     meta: {
       duration_ms: Date.now() - startedAt,
-      tokens: { input: totalInputTok, output: totalOutputTok },
+      tokens: { input: normalizedUsage.inputTokens, output: normalizedUsage.outputTokens },
+      normalized_usage: normalizedUsage,
+      failures: llmFailures,
+      provider: providers.length === 1 ? providers[0] : providers.length > 1 ? 'mixed' : undefined,
+      model: models.length === 1 ? models[0] : models.length > 1 ? models.join('+') : undefined,
     },
   };
 }

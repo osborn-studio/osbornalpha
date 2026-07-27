@@ -45,6 +45,24 @@ describe('usage ledger count and audit fields', () => {
     expect(events.eq).toHaveBeenCalledWith('status', 'completed');
   });
 
+  it('applies completed-only counting to perspectives so failed audits do not consume its 5-call limit', async () => {
+    const profile = queryBuilder();
+    const events = queryBuilder({ count: 4, error: null });
+    mocks.getServerSupabase.mockResolvedValue({
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null }) },
+      from: vi.fn((table: string) => table === 'profiles' ? profile : events),
+    });
+
+    await expect(checkQuota('perspectives')).resolves.toMatchObject({
+      allowed: true,
+      used: 4,
+      limit: 5,
+    });
+
+    expect(events.eq).toHaveBeenCalledWith('feature', 'perspectives');
+    expect(events.eq).toHaveBeenCalledWith('status', 'completed');
+  });
+
   it('persists normalized audit fields and compatible legacy token totals', async () => {
     const insert = vi.fn().mockResolvedValue({ error: null });
     mocks.getServerSupabase.mockResolvedValue({
