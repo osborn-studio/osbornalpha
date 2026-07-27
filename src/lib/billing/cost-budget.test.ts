@@ -201,6 +201,23 @@ describe('reserveCostBudget', () => {
     expect(supabase.calls[1]?.args).toEqual({ p_reservation_id: 'reservation-1', p_actual_micrormb: 118_944 });
   });
 
+  it('retains the reservation for contradictory cache usage even when marked real', async () => {
+    const supabase = fakeSupabase(
+      { data: [reservationRow()], error: null },
+      { data: [terminalRow('reservation-1', 'settled')], error: null },
+    );
+    const reservation = await reserveCostBudget(supabase, 'user-1', request);
+
+    await expect(reservation.settle({
+      ...completeUsage,
+      inputTokens: 0,
+      cacheHitInputTokens: 1_000,
+      cacheMissInputTokens: 0,
+      estimated: false,
+    })).resolves.toEqual({ costMicrormb: 118_944, usageEstimated: true });
+    expect(supabase.calls[1]?.args).toEqual({ p_reservation_id: 'reservation-1', p_actual_micrormb: 118_944 });
+  });
+
   it('never sends an actual settlement exceeding the reservation', async () => {
     const supabase = fakeSupabase({ data: [reservationRow()], error: null });
     const reservation = await reserveCostBudget(supabase, 'user-1', request);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   calculateCostMicrormb,
+  calculateCostUsd,
   DEFAULT_DAILY_LIMIT_MICRORMB,
   DEFAULT_USD_CNY_MICROS,
   normalizeUsage,
@@ -143,6 +144,33 @@ describe('normalizeUsage', () => {
       estimated: true,
     });
   });
+
+  it('marks contradictory cache detail as estimated while preserving conservative totals', () => {
+    expect(normalizeUsage({
+      prompt_tokens: 0,
+      completion_tokens: 1,
+      prompt_cache_hit_tokens: 1_000,
+      prompt_cache_miss_tokens: 0,
+    })).toEqual({
+      inputTokens: 0,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 0,
+      outputTokens: 1,
+      estimated: true,
+    });
+    expect(normalizeUsage({
+      prompt_tokens: 100,
+      completion_tokens: 1,
+      prompt_cache_hit_tokens: 40,
+      prompt_cache_miss_tokens: 40,
+    })).toEqual({
+      inputTokens: 100,
+      cacheHitInputTokens: 40,
+      cacheMissInputTokens: 60,
+      outputTokens: 1,
+      estimated: true,
+    });
+  });
 });
 
 describe('DeepSeek pricing', () => {
@@ -164,6 +192,16 @@ describe('DeepSeek pricing', () => {
       outputTokens: 1_000_000,
       estimated: false,
     }, DEFAULT_USD_CNY_MICROS)).toBe(3_024_000);
+  });
+
+  it('calculates USD from the reviewed registry without a currency conversion dependency', () => {
+    expect(calculateCostUsd('deepseek', 'deepseek-v4-flash', {
+      inputTokens: 2_000_000,
+      cacheHitInputTokens: 1_000_000,
+      cacheMissInputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      estimated: false,
+    })).toBe(0.4228);
   });
 
   it('rounds a fractional micro-RMB cost up', () => {

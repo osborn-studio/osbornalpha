@@ -193,14 +193,16 @@ function terminalResponse(
   return 'invalid';
 }
 
-function isCompleteRealUsage(usage: NormalizedUsage): boolean {
+export function isCompleteRealUsage(usage: NormalizedUsage): boolean {
   if (usage.estimated !== false) return false;
-  return [
+  const values = [
     usage.inputTokens,
     usage.cacheHitInputTokens,
     usage.cacheMissInputTokens,
     usage.outputTokens,
-  ].every((value) => Number.isSafeInteger(value) && value >= 0 && value <= MAX_SAFE_INTEGER);
+  ];
+  return values.every((value) => Number.isSafeInteger(value) && value >= 0 && value <= MAX_SAFE_INTEGER)
+    && usage.cacheHitInputTokens + usage.cacheMissInputTokens === usage.inputTokens;
 }
 
 type ReservationState = 'active' | 'settling' | 'settled' | 'releasing' | 'released';

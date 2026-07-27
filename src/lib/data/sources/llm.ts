@@ -13,6 +13,7 @@
 
 import { deepseekChat, isDeepSeekConfigured, type DeepSeekChatOpts } from './deepseek';
 import { anthropicChat, isAnthropicConfigured, type ChatOpts as AnthropicOpts } from './anthropic';
+import { calculateCostUsd, normalizeUsage, type NormalizedUsage } from '@/lib/billing/llm-pricing';
 
 export type LLMProvider = 'deepseek' | 'anthropic' | 'none';
 
@@ -48,18 +49,12 @@ export interface UnifiedChatResp {
   est_cost_usd: number;
 }
 
-// Per-million-token costs (USD); used to estimate per-call cost.
-const PRICING: Record<string, { in: number; out: number }> = {
-  'deepseek-chat':     { in: 0.27, out: 1.10 },
-  'deepseek-reasoner': { in: 0.55, out: 2.19 },
-  'claude-sonnet-4-6': { in: 3,    out: 15 },
-  'claude-haiku-4-5':  { in: 0.80, out: 4 },
-  'claude-opus-4-7':   { in: 15,   out: 75 },
-};
-
-function estimateCost(model: string, usage: { input_tokens: number; output_tokens: number }): number {
-  const p = PRICING[model] || PRICING['deepseek-chat'];
-  return (usage.input_tokens / 1e6) * p.in + (usage.output_tokens / 1e6) * p.out;
+function estimateCost(provider: string, model: string, usage: NormalizedUsage): number {
+  try {
+    return Number(calculateCostUsd(provider, model, usage).toFixed(5));
+  } catch {
+    return 0;
+  }
 }
 
 /**
@@ -83,12 +78,13 @@ async function tryUserResolvedChat(opts: UnifiedChatOpts): Promise<UnifiedChatRe
         max_tokens: opts.max_tokens,
         timeoutMs: opts.timeoutMs,
       });
+      const usage = { input_tokens: r.usage.inputTokens, output_tokens: r.usage.outputTokens };
       return {
         provider: resolved.provider,
         model: resolved.model,
         content: r.content,
-        usage: { input_tokens: 0, output_tokens: 0 },
-        est_cost_usd: 0,
+        usage,
+        est_cost_usd: estimateCost(resolved.provider, resolved.model, r.usage),
       };
     }
     const { chat: compatChat } = await import('@/lib/llm/openai-compat');
@@ -105,7 +101,7 @@ async function tryUserResolvedChat(opts: UnifiedChatOpts): Promise<UnifiedChatRe
       model: resolved.model,
       content: r.content,
       usage,
-      est_cost_usd: Number(estimateCost(resolved.model, usage).toFixed(5)),
+      est_cost_usd: estimateCost(resolved.provider, resolved.model, r.usage),
     };
   } catch {
     return null; // any resolution/override failure → legacy env path
@@ -129,12 +125,13 @@ export async function chat(opts: UnifiedChatOpts): Promise<UnifiedChatResp> {
       responseJson: opts.responseJson,
     };
     const r = await deepseekChat(dsOpts);
+    const normalizedUsage = normalizeUsage(r.usage);
     return {
       provider: 'deepseek',
       model: r.model,
       content: r.content,
       usage: r.usage,
-      est_cost_usd: Number(estimateCost(r.model, r.usage).toFixed(5)),
+      est_cost_usd: estimateCost('deepseek', r.model, normalizedUsage),
     };
   }
 
@@ -148,12 +145,13 @@ export async function chat(opts: UnifiedChatOpts): Promise<UnifiedChatResp> {
   };
   const r = await anthropicChat(acOpts);
   const model = 'claude-sonnet-4-6';
+  const normalizedUsage = normalizeUsage(r.usage);
   return {
     provider: 'anthropic',
     model,
     content: r.content,
     usage: r.usage,
-    est_cost_usd: Number(estimateCost(model, r.usage).toFixed(5)),
+    est_cost_usd: estimateCost('anthropic', model, normalizedUsage),
   };
 }
 

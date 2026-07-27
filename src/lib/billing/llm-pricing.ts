@@ -89,6 +89,16 @@ export function normalizeUsage(raw: unknown): NormalizedUsage {
   const outputTokens = reportedOutputTokens ?? 0;
   const hasCompleteInputTotal = reportedInputTokens !== undefined
     || (breakdown.hit !== undefined && breakdown.miss !== undefined);
+  const hasContradictoryBreakdown = reportedInputTokens !== undefined && breakdown.present
+    && (
+      (breakdown.hit !== undefined && breakdown.hit > reportedInputTokens)
+      || (breakdown.miss !== undefined && breakdown.miss > reportedInputTokens)
+      || (
+        breakdown.hit !== undefined
+        && breakdown.miss !== undefined
+        && breakdown.hit !== reportedInputTokens - breakdown.miss
+      )
+    );
 
   let cacheHitInputTokens = 0;
   let cacheMissInputTokens = inputTokens;
@@ -112,7 +122,8 @@ export function normalizeUsage(raw: unknown): NormalizedUsage {
     outputTokens,
     estimated: usage.estimated === true
       || !hasCompleteInputTotal
-      || reportedOutputTokens === undefined,
+      || reportedOutputTokens === undefined
+      || hasContradictoryBreakdown,
   };
 }
 
@@ -166,6 +177,15 @@ export function calculateCostMicrormb(
     outputTokens,
     validFx(usdCnyMicros),
   );
+}
+
+/** Calculates reviewed provider cost in USD without depending on an FX rate. */
+export function calculateCostUsd(
+  provider: string,
+  model: string,
+  usage: NormalizedUsage,
+): number {
+  return calculateCostMicrormb(provider, model, usage, MICRO_USD_PER_USD) / MICRO_USD_PER_USD;
 }
 
 export function reservationCostMicrormb(

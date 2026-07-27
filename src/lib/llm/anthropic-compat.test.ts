@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest';
-import { oaiToAnthropic, toolDefsToAnthropic, responseToTurn } from './anthropic-compat';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { anthropicChat, oaiToAnthropic, toolDefsToAnthropic, responseToTurn } from './anthropic-compat';
+
+afterEach(() => { vi.restoreAllMocks(); });
 
 describe('oaiToAnthropic', () => {
   it('converts user/assistant text messages', () => {
@@ -91,21 +93,21 @@ describe('responseToTurn', () => {
     });
   });
 
-  it('maps Anthropic cache reads to hits and cache creation to misses', () => {
+  it('adds Anthropic input and cache counters into one normalized total', () => {
     const turn = responseToTurn({
       content: [],
       usage: {
-        input_tokens: 100,
+        input_tokens: 50,
         output_tokens: 25,
-        cache_read_input_tokens: 60,
-        cache_creation_input_tokens: 40,
+        cache_read_input_tokens: 100_000,
+        cache_creation_input_tokens: 25,
       },
     });
 
     expect(turn.usage).toEqual({
-      inputTokens: 100,
-      cacheHitInputTokens: 60,
-      cacheMissInputTokens: 40,
+      inputTokens: 100_075,
+      cacheHitInputTokens: 100_000,
+      cacheMissInputTokens: 75,
       outputTokens: 25,
       estimated: false,
     });
@@ -118,6 +120,33 @@ describe('responseToTurn', () => {
       cacheMissInputTokens: 0,
       outputTokens: 0,
       estimated: true,
+    });
+  });
+});
+
+describe('anthropicChat', () => {
+  it('preserves normalized usage for plain-text completions', async () => {
+    // @ts-expect-error test stub
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        content: [{ type: 'text', text: 'answer' }],
+        usage: { input_tokens: 100, output_tokens: 25 },
+      }),
+    }));
+
+    await expect(anthropicChat(
+      { baseUrl: 'https://api.example.com', apiKey: 'sk-test', model: 'claude-test' },
+      { messages: [{ role: 'user', content: 'hi' }] },
+    )).resolves.toEqual({
+      content: 'answer',
+      usage: {
+        inputTokens: 100,
+        cacheHitInputTokens: 0,
+        cacheMissInputTokens: 100,
+        outputTokens: 25,
+        estimated: false,
+      },
     });
   });
 });

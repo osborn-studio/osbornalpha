@@ -47,6 +47,54 @@ export function toolDefsToAnthropic(tools: ToolDef[]) {
   return tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function tokenCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function sumTokens(...values: number[]): { value: number; overflowed: boolean } {
+  const total = values.reduce((sum, value) => sum + value, 0);
+  return Number.isSafeInteger(total)
+    ? { value: total, overflowed: false }
+    : { value: Number.MAX_SAFE_INTEGER, overflowed: true };
+}
+
+/** Anthropic reports uncached input and cache counters separately, not as one total. */
+function normalizeAnthropicUsage(raw: unknown): NormalizedUsage {
+  if (!isRecord(raw)) return normalizeUsage(raw);
+
+  const inputTokens = tokenCount(raw.input_tokens);
+  const outputTokens = tokenCount(raw.output_tokens);
+  const cacheReadTokens = raw.cache_read_input_tokens === undefined
+    ? 0
+    : tokenCount(raw.cache_read_input_tokens);
+  const cacheCreationTokens = raw.cache_creation_input_tokens === undefined
+    ? 0
+    : tokenCount(raw.cache_creation_input_tokens);
+  const input = inputTokens ?? 0;
+  const hit = cacheReadTokens ?? 0;
+  const creation = cacheCreationTokens ?? 0;
+  const total = sumTokens(input, hit, creation);
+  const miss = sumTokens(input, creation);
+  const malformed = inputTokens === undefined
+    || outputTokens === undefined
+    || cacheReadTokens === undefined
+    || cacheCreationTokens === undefined
+    || total.overflowed
+    || miss.overflowed;
+
+  return normalizeUsage({
+    input_tokens: total.value,
+    output_tokens: outputTokens ?? 0,
+    prompt_cache_hit_tokens: hit,
+    prompt_cache_miss_tokens: miss.value,
+    estimated: raw.estimated === true || malformed,
+  });
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function responseToTurn(data: { content?: any[]; stop_reason?: string; usage?: unknown }): {
   content: string; toolCalls: ToolCall[]; finishReason: string; usage: NormalizedUsage;
@@ -56,14 +104,7 @@ export function responseToTurn(data: { content?: any[]; stop_reason?: string; us
   const toolCalls: ToolCall[] = blocks
     .filter((b) => b.type === 'tool_use')
     .map((b) => ({ id: b.id, name: b.name, arguments: b.input ?? {} }));
-  const rawUsage = data.usage;
-  const usage = rawUsage && typeof rawUsage === 'object'
-    ? normalizeUsage({
-      ...rawUsage,
-      prompt_cache_hit_tokens: (rawUsage as Record<string, unknown>).cache_read_input_tokens,
-      prompt_cache_miss_tokens: (rawUsage as Record<string, unknown>).cache_creation_input_tokens,
-    })
-    : normalizeUsage(rawUsage);
+  const usage = normalizeAnthropicUsage(data.usage);
   return { content, toolCalls, finishReason: data.stop_reason ?? '', usage };
 }
 
@@ -101,7 +142,7 @@ export async function anthropicToolChat(
 export async function anthropicChat(
   cfg: LlmConfig,
   opts: { system?: string; messages: Array<{ role: 'user' | 'assistant'; content: string }>; max_tokens?: number; timeoutMs?: number },
-): Promise<{ content: string }> {
+): Promise<{ content: string; usage: NormalizedUsage }> {
   const r = await anthropicToolChat(cfg, { system: opts.system, messages: opts.messages, tools: [], max_tokens: opts.max_tokens ?? 64, timeoutMs: opts.timeoutMs });
-  return { content: r.content };
+  return { content: r.content, usage: r.usage };
 }
