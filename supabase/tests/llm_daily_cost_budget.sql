@@ -3,13 +3,14 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions, pg_catalog;
 
-select plan(32);
+select plan(45);
 
 insert into auth.users (id, email)
 values
   ('10000000-0000-0000-0000-000000000001', 'budget-one@example.test'),
   ('10000000-0000-0000-0000-000000000002', 'budget-expired@example.test'),
-  ('10000000-0000-0000-0000-000000000003', 'budget-beijing@example.test');
+  ('10000000-0000-0000-0000-000000000003', 'budget-beijing@example.test'),
+  ('10000000-0000-0000-0000-000000000004', 'budget-overflow@example.test');
 
 create temporary table budget_test_results (
   label text primary key,
@@ -464,6 +465,134 @@ select throws_ok(
   'negative settlement costs are rejected'
 );
 
+insert into budget_test_results (
+  label, allowed, reservation_id, used_micrormb, limit_micrormb
+)
+select
+  'over-settlement candidate', allowed, reservation_id, used_micrormb, limit_micrormb
+from public.reserve_llm_daily_budget(
+  '10000000-0000-0000-0000-000000000001',
+  'copilot',
+  'openai',
+  'gpt-test',
+  200,
+  1000,
+  300
+);
+
+select throws_ok(
+  format(
+    'select * from public.settle_llm_budget(%L::uuid, 201)',
+    (
+      select reservation_id
+      from budget_test_results
+      where label = 'over-settlement candidate'
+    )
+  ),
+  '22023',
+  'actual cost exceeds reserved cost',
+  'settlement cannot exceed its reserved upper bound'
+);
+select is(
+  (
+    select status
+    from public.llm_cost_reservations
+    where id = (
+      select reservation_id
+      from budget_test_results
+      where label = 'over-settlement candidate'
+    )
+  ),
+  'reserved',
+  'rejected over-settlement leaves the reservation active'
+);
+select is(
+  (
+    select settled_micrormb
+    from public.llm_cost_reservations
+    where id = (
+      select reservation_id
+      from budget_test_results
+      where label = 'over-settlement candidate'
+    )
+  ),
+  null::bigint,
+  'rejected over-settlement leaves actual cost unchanged'
+);
+
+insert into public.llm_cost_reservations (
+  user_id,
+  feature,
+  provider,
+  model,
+  reserved_micrormb,
+  settled_micrormb,
+  status,
+  expires_at,
+  settled_at
+)
+values
+  (
+    '10000000-0000-0000-0000-000000000004',
+    'copilot',
+    'openai',
+    'gpt-test',
+    9223372036854775807,
+    9223372036854775807,
+    'settled',
+    now() + interval '1 hour',
+    now()
+  ),
+  (
+    '10000000-0000-0000-0000-000000000004',
+    'copilot',
+    'openai',
+    'gpt-test',
+    1,
+    1,
+    'settled',
+    now() + interval '1 hour',
+    now()
+  );
+
+insert into budget_test_results (
+  label, allowed, reservation_id, used_micrormb, limit_micrormb
+)
+select
+  'aggregate overflow boundary',
+  allowed,
+  reservation_id,
+  used_micrormb,
+  limit_micrormb
+from public.reserve_llm_daily_budget(
+  '10000000-0000-0000-0000-000000000004',
+  'copilot',
+  'openai',
+  'gpt-test',
+  1,
+  9223372036854775807,
+  300
+);
+
+select is(
+  (
+    select allowed
+    from budget_test_results
+    where label = 'aggregate overflow boundary'
+  ),
+  false,
+  'an aggregate above bigint max is denied without arithmetic overflow'
+);
+select is(
+  (
+    select used_micrormb
+    from budget_test_results
+    where label = 'aggregate overflow boundary'
+  ),
+  9223372036854775807::bigint,
+  'reported usage saturates at bigint max'
+);
+
 select is(
   has_function_privilege(
     'authenticated',
@@ -500,6 +629,50 @@ select is(
   has_table_privilege('authenticated', 'public.llm_cost_reservations', 'INSERT'),
   false,
   'authenticated cannot directly insert reservations'
+);
+select is(
+  has_table_privilege('service_role', 'public.llm_cost_reservations', 'SELECT'),
+  true,
+  'service_role can inspect reservation state'
+);
+select is(
+  has_table_privilege('service_role', 'public.llm_cost_reservations', 'INSERT'),
+  false,
+  'service_role cannot directly insert reservations'
+);
+select is(
+  has_table_privilege('service_role', 'public.llm_cost_reservations', 'UPDATE'),
+  false,
+  'service_role cannot directly update reservations'
+);
+select is(
+  has_table_privilege('service_role', 'public.llm_cost_reservations', 'DELETE'),
+  false,
+  'service_role cannot directly delete reservations'
+);
+select is(
+  has_table_privilege('service_role', 'public.llm_cost_reservations', 'TRUNCATE'),
+  false,
+  'service_role cannot truncate reservations'
+);
+select is(
+  has_table_privilege('service_role', 'public.llm_cost_reservations', 'REFERENCES'),
+  false,
+  'service_role cannot create references to reservations'
+);
+select is(
+  has_table_privilege('service_role', 'public.llm_cost_reservations', 'TRIGGER'),
+  false,
+  'service_role cannot create reservation triggers'
+);
+select is(
+  has_function_privilege(
+    'service_role',
+    'public.reserve_llm_daily_budget(uuid,text,text,text,bigint,bigint,integer)',
+    'EXECUTE'
+  ),
+  true,
+  'service_role can reserve budget through the RPC'
 );
 
 select * from finish();

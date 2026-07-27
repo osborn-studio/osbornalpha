@@ -23,7 +23,10 @@ create table if not exists public.llm_cost_reservations (
     check (reserved_micrormb >= 0),
   settled_micrormb bigint
     constraint llm_cost_reservations_settled_cost_check
-    check (settled_micrormb >= 0),
+    check (
+      settled_micrormb >= 0
+      and settled_micrormb <= reserved_micrormb
+    ),
   status text not null default 'reserved'
     constraint llm_cost_reservations_status_check
     check (status in ('reserved', 'settled', 'released')),
@@ -53,8 +56,9 @@ create index if not exists llm_cost_reservations_active_idx
 
 alter table public.llm_cost_reservations enable row level security;
 
-revoke all on table public.llm_cost_reservations from public, anon, authenticated;
-grant select, insert, update, delete on table public.llm_cost_reservations to service_role;
+revoke all on table public.llm_cost_reservations
+  from public, anon, authenticated, service_role;
+grant select on table public.llm_cost_reservations to service_role;
 
 create or replace function public.reserve_llm_daily_budget(
   p_user_id uuid,
@@ -143,7 +147,13 @@ begin
   allowed := v_used + p_requested_micrormb::numeric
     <= p_daily_limit_micrormb::numeric;
   reservation_id := null;
-  used_micrormb := v_used::bigint;
+  used_micrormb := (
+    case
+      when v_used > 9223372036854775807::numeric
+        then 9223372036854775807::numeric
+      else v_used
+    end
+  )::bigint;
   limit_micrormb := p_daily_limit_micrormb;
 
   if allowed then
@@ -192,6 +202,7 @@ security definer
 set search_path = pg_catalog
 as $$
 declare
+  v_user_id uuid;
   v_reservation public.llm_cost_reservations%rowtype;
 begin
   if p_reservation_id is null then
@@ -202,6 +213,19 @@ begin
     raise exception using errcode = '22023', message = 'actual cost must be non-negative';
   end if;
 
+  select r.user_id
+  into v_user_id
+  from public.llm_cost_reservations as r
+  where r.id = p_reservation_id;
+
+  if not found then
+    raise exception using errcode = 'P0002', message = 'LLM cost reservation not found';
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(v_user_id::text, 0)
+  );
+
   select r.*
   into v_reservation
   from public.llm_cost_reservations as r
@@ -210,6 +234,12 @@ begin
 
   if not found then
     raise exception using errcode = 'P0002', message = 'LLM cost reservation not found';
+  end if;
+
+  if p_actual_micrormb > v_reservation.reserved_micrormb then
+    raise exception using
+      errcode = '22023',
+      message = 'actual cost exceeds reserved cost';
   end if;
 
   if v_reservation.status = 'reserved' then
@@ -259,11 +289,25 @@ security definer
 set search_path = pg_catalog
 as $$
 declare
+  v_user_id uuid;
   v_reservation public.llm_cost_reservations%rowtype;
 begin
   if p_reservation_id is null then
     raise exception using errcode = '22023', message = 'p_reservation_id is required';
   end if;
+
+  select r.user_id
+  into v_user_id
+  from public.llm_cost_reservations as r
+  where r.id = p_reservation_id;
+
+  if not found then
+    raise exception using errcode = 'P0002', message = 'LLM cost reservation not found';
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(v_user_id::text, 0)
+  );
 
   select r.*
   into v_reservation
@@ -297,6 +341,12 @@ begin
     v_reservation.settled_at;
 end;
 $$;
+
+alter function public.reserve_llm_daily_budget(
+  uuid, text, text, text, bigint, bigint, integer
+) owner to postgres;
+alter function public.settle_llm_budget(uuid, bigint) owner to postgres;
+alter function public.release_llm_budget(uuid) owner to postgres;
 
 revoke execute on function public.reserve_llm_daily_budget(
   uuid, text, text, text, bigint, bigint, integer
