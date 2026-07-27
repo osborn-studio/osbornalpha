@@ -1,4 +1,4 @@
-<!-- 03_USER_JOURNEY_AND_USE_CASES — osbornalpha 端到端用户旅程、首登/复访/多端场景与用例表 — 最后更新 2026-06-20 -->
+<!-- 03_USER_JOURNEY_AND_USE_CASES — osbornalpha 端到端用户旅程、首登/复访/多端场景与用例表 — 最后更新 2026-07-28 -->
 
 # 03 · 用户旅程与用例（User Journey & Use Cases）
 
@@ -34,15 +34,15 @@ osbornalpha 是多租户 AI 投研监控 SaaS。**公开面只有落地页 `/`�
 建股票池 /watchlist  ── 看板（Kanban）拖拽组织；搜索/批量导入 A/H/US 标的
   │  登录用户 → 写 Supabase（watchlists + watchlist_items，多端同步）
   ▼
-收每日 AI 简报 /briefs  ── Sentinel Morning Note：Top Call + Top5 异动 + Trade Ideas + 委员会信心
-  │  也可经 Telegram / Email 推送（/settings 配置）
+阅读每日 AI 简报 /briefs  ── Sentinel Morning Note：Top Call + Top5 异动 + Trade Ideas + 委员会信心
+  │  普通用户只阅读；管理员可在 /settings 手动推送到服务端托管的 Telegram / Email 目的地
   ▼
 看雷达 /radar  ── 每只股一份 morning note，按 🔴关注/🟡留意/⚪️平静 分级
   │  ─→ 看委员会 /stock/[ticker] 的「AI 观点」标签：9 位大师独立研判
   ▼
 回测 /backtest  ── 全股票池并发回测排行榜：质量分 / 命中率 / 信号活跃度
   ▼
-设置 /settings  ── 账号管理（改邮箱/密码、绑定第三方、登出）+ 推送渠道 + 语言 + 简报时间
+设置 /settings  ── 账号管理（改邮箱/密码、绑定第三方、登出）+ 语言/时区 + 固定简报时间换算；管理员另见托管推送控件
 ```
 
 ---
@@ -92,7 +92,7 @@ osbornalpha 是多租户 AI 投研监控 SaaS。**公开面只有落地页 `/`�
   - 未登录/未配置 Supabase → 退化为浏览器 `localStorage`（键 `stock-monitor:watchlist:v2`），并显示「👤 访客模式（数据存浏览器本地）」横幅引导登录。
   - 该 `localStorage` 键被 watchlist / radar / backtest / stock-detail 四处共享读取。
 
-### 2.5 收每日 AI 简报（`/briefs`）
+### 2.5 阅读每日 AI 简报（`/briefs`）
 
 - 简报历史页列出最近 30 天，每行链到 `/briefs/{date}` 详情；含信号命中率统计卡。
 - 简报由 `src/lib/brief/composer.ts → generateDailyBrief()` 生成（结构见 [`21_REPORT_TEMPLATES_AND_OUTPUTS.md`](./21_REPORT_TEMPLATES_AND_OUTPUTS.md)）：Sentinel Morning Note 风格，含 Top Call、Overnight & Pre-Market（Top5）、Trade Ideas（置信 ≥7 才出）、委员会信心 X/10 + 标签。
@@ -113,7 +113,7 @@ osbornalpha 是多租户 AI 投研监控 SaaS。**公开面只有落地页 `/`�
 
 - 账号区 `AccountSettings`：显示邮箱 + 套餐（Free/Pro，读 `profiles.plan`）+ 用户 ID 前 8 位；改邮箱、改密码、绑定/解绑第三方（google/github/apple，至少保留一种登录方式）、登出。
 - 推送渠道：仅管理员显示 Telegram/Email「发测试」「立即生成并推送」；目的地明确标注为服务端托管，不提供收件人输入框、客户端存储或请求覆盖。普通用户调用发送 API 返回 `403`，不能代发/转发。
-- 语言、时区即时保存；管理员身份来自已认证服务端响应，不读取客户端存储。
+- 语言切换即时写入浏览器 `NEXT_LOCALE` cookie，并在已登录且 Supabase 已配置时同步写入 `user_preferences.language`；时区写入 `user_preferences.timezone` 并可跨端加载。简报时间不是可编辑偏好，页面只把固定的 00:30 UTC cron 换算为当前显示时区。管理员身份来自已认证服务端响应，不读取客户端存储。
 
 ---
 
@@ -128,7 +128,8 @@ osbornalpha 是多租户 AI 投研监控 SaaS。**公开面只有落地页 `/`�
 ## 4. 多端 / 跨设备（Multi-Device）
 
 - **登录用户**：股票池存 Supabase（RLS 隔离），换设备登录即同步；账号、邮箱、绑定关系、套餐随账户走。
-- **账户设置**：登录用户的语言/时区写入服务端偏好并随账户使用；推送收件人不是用户偏好，客户端不保存、不输入，始终由服务端部署配置管理。
+- **语言与时区**：时区保存到 `user_preferences` 并跨端加载；语言切换同时写 `user_preferences` 和浏览器 `NEXT_LOCALE` cookie，但当前界面 locale 仍由各浏览器的 cookie 解析。
+- **简报时间与目的地**：每日简报固定 00:30 UTC 调度，设置页只显示对应本地时间；Telegram/Email 目的地是服务端部署配置，不是用户偏好，客户端不提供输入或存储。
 - **未登录**：股票池仅在当前浏览器（`localStorage`），换设备不可见 —— 这是引导注册的核心动机。
 - 会话由 Supabase SSR cookie 维持，中间件在每次请求刷新 user。
 
@@ -162,11 +163,11 @@ osbornalpha 是多租户 AI 投研监控 SaaS。**公开面只有落地页 `/`�
 | UC-08 | 查看个股全景 | 用户 | `/stock/[ticker]` | 已登录 | 行情/AI 观点/财报/新闻/信号/持仓 6 标签 | `stock/[ticker]/page.tsx`, `StockCenterPanel` | mock 缺数据→「未找到标的」 |
 | UC-09 | 调阅 AI 投资委员会 | 用户 | 个股「AI 观点」 | 已登录、已配 LLM | 9 大师并发研判 → 看多/中性/看空 分组 | `/api/perspectives/[ticker]`, `personas.ts` | 无 LLM key → 配置引导块 |
 | UC-10 | 生成每日雷达 | 用户 | `/radar` | 已登录、股票池非空 | 刷新 → 每股 morning note → 按级别筛选 | `/api/radar/batch`, `radar.ts` | 空池引导去 watchlist；单股失败单独标错 |
-| UC-11 | 阅读 / 推送每日简报 | 用户 | `/briefs`、`/settings` | 已登录 | 看历史/详情；配 TG/Email → 立即推送 | `composer.ts`, `/api/brief/*` | 未配渠道则跳过该 channel |
+| UC-11 | 阅读每日简报 / 管理员手动推送 | 用户（阅读）/管理员（推送） | `/briefs`；管理员 `/settings` | 阅读需登录；手动推送需管理员 | 用户看历史/详情；管理员向服务端托管的 TG/Email 目的地立即推送 | `composer.ts`, `/api/brief/*` | 普通用户调用发送 API 返回 `403`；服务端未配渠道则跳过该 channel |
 | UC-12 | 跑回测排行榜 | 用户 | `/backtest` | 已登录、股票池非空 | 选天数 → 并发回测 → 排序/筛选/看 headline | `useBatchBacktest`, `/api/backtest` | 跑中 loading；错误红卡 |
 | UC-13 | 全局搜索跳转 | 用户 | TopBar 搜索（⌘K） | 已登录 | 输代码/名称 → 选结果 → `/stock/{ticker}` | `SearchInput`, `/api/search` | 无匹配显示「没有匹配结果」 |
 | UC-14 | 管理账号 | 用户 | `/settings` 账号区 | 已登录 | 改邮箱/密码、绑定/解绑第三方、登出 | `AccountSettings` | 解绑后须留≥1 种登录方式 |
-| UC-15 | 跨设备同步股票池 | 用户 | 任意设备 `/watchlist` | 已登录 | 换端登录 → 从 Supabase 拉取一致股票池 | Supabase RLS | 本地设置不跨端（已知限制） |
+| UC-15 | 跨设备同步股票池 | 用户 | 任意设备 `/watchlist` | 已登录 | 换端登录 → 从 Supabase 拉取一致股票池 | Supabase RLS | 时区从服务端偏好加载；语言显示仍依赖各浏览器的 `NEXT_LOCALE` cookie |
 | UC-16 | 访客被拦 | 访客 | 任意 `(app)` 路径 | 未登录 | 中间件 + 布局双重 `redirect('/login')` | `middleware.ts`, `(app)/layout.tsx` | 本地 dev 放行 |
 
 ---
@@ -176,4 +177,4 @@ osbornalpha 是多租户 AI 投研监控 SaaS。**公开面只有落地页 `/`�
 - 公开仅 `/`、`/about` 与 auth 页族；其余皆需登录。
 - 访客模式已下线；未登录的本地 `localStorage` 仅为「未配置 Supabase 的 dev 退化」与提示用，不是正式产品形态。
 - 业务数据 Supabase RLS 隔离；行情/财报/新闻等公开数据共享。
-- 本地偏好（语言/收件人/简报时间）尚未上云，多端不同步（待办）。
+- 时区是服务端账户偏好；语言选择虽同步写入服务端，但当前界面解析仍依赖浏览器 `NEXT_LOCALE` cookie。简报调度固定为 00:30 UTC，Telegram/Email 目的地仅由服务端部署配置管理，二者都不是本地用户偏好。
