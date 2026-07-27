@@ -177,7 +177,7 @@ export default function SettingsPage() {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                      chatId: tgChatId || undefined,
+                      channels: ['telegram'],
                       text: t('channels.tgTestText'),
                     }),
                   });
@@ -200,7 +200,7 @@ export default function SettingsPage() {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                      chatId: tgChatId || undefined,
+                      channels: ['telegram'],
                       topN: 5,
                     }),
                   });
@@ -231,14 +231,12 @@ export default function SettingsPage() {
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
               onClick={async () => {
-                const to = (document.getElementById('email-to-input') as HTMLInputElement)?.value || undefined;
                 try {
                   show(t('channels.emailSending'));
                   const resp = await fetch('/api/brief/send', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                      to,
                       channels: ['email'],
                       subject: t('channels.emailTestSubject'),
                       text: t('channels.emailTestText'),
@@ -257,14 +255,12 @@ export default function SettingsPage() {
             </button>
             <button
               onClick={async () => {
-                const to = (document.getElementById('email-to-input') as HTMLInputElement)?.value || undefined;
                 try {
                   show(t('channels.emailBriefSending'));
                   const resp = await fetch('/api/brief/send', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                      to,
                       channels: ['email'],
                       topN: 5,
                     }),

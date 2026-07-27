@@ -9,7 +9,7 @@ import {
 } from '@/lib/data/sources/tushare-cached';
 import { PERSONAS, buildUserMessage, type StockContext, type PerspectiveResult } from '@/lib/data/personas';
 import { resolveLlm } from '@/lib/llm/resolve';
-import { checkQuota, recordUsageForUser } from '@/lib/billing/quota';
+import { beginUsageRun, checkQuota, finalizeUsageRun } from '@/lib/billing/quota';
 import { getRequestLocale, apiMessage } from '@/lib/i18n/server';
 import { sanitizeAiList, sanitizeAiText } from '@/lib/llm/sanitize';
 import { getServerSupabase } from '@/lib/supabase/server';
@@ -25,6 +25,7 @@ import {
   createPersonaConcurrencyLimiter,
   PERSONA_CONCURRENCY_HARD_CAP,
 } from '@/lib/billing/llm-concurrency';
+import { PRICING_VERSION } from '@/lib/billing/llm-pricing';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 86400;
@@ -38,6 +39,8 @@ const COST_ERROR_CODES = new Set([
   'pricing_unavailable',
   'budget_unavailable',
   'budget_invariant_violation',
+  'usage_audit_unavailable',
+  'usage_audit_invariant',
 ]);
 
 function costErrorCode(error: unknown): string | null {
@@ -47,32 +50,33 @@ function costErrorCode(error: unknown): string | null {
 
 function costErrorStatus(code: string): number {
   if (code === 'daily_cost_exhausted') return 429;
-  if (code === 'budget_unavailable') return 503;
+  if (code === 'budget_unavailable' || code === 'usage_audit_unavailable') return 503;
   return 500;
 }
 
-async function recordAccounting(
+async function finalizeAccounting(
   userId: string,
   idempotencyKey: string,
   ticker: string,
+  initial: { provider: string; model: string; byo: boolean },
   accounting: MeteredUsage[],
   status: 'completed' | 'failed',
 ): Promise<void> {
-  if (accounting.length === 0) return;
-  const aggregate = aggregateMeteredUsage(accounting);
-  await recordUsageForUser(userId, idempotencyKey, 'perspectives', {
+  const aggregate = accounting.length > 0 ? aggregateMeteredUsage(accounting) : null;
+  const budget = getBudgetConfig();
+  await finalizeUsageRun(userId, idempotencyKey, 'perspectives', {
     ticker,
-    provider: aggregate.provider,
-    model: aggregate.model,
-    inputTokens: aggregate.usage.inputTokens,
-    cacheHitInputTokens: aggregate.usage.cacheHitInputTokens,
-    cacheMissInputTokens: aggregate.usage.cacheMissInputTokens,
-    outputTokens: aggregate.usage.outputTokens,
-    costMicrormb: aggregate.costMicrormb,
-    pricingVersion: aggregate.pricingVersion,
-    usdCnyMicros: aggregate.usdCnyMicros,
-    usageEstimated: aggregate.usageEstimated,
-    byo: aggregate.byo,
+    provider: aggregate?.provider ?? initial.provider,
+    model: aggregate?.model ?? initial.model,
+    inputTokens: aggregate?.usage.inputTokens ?? 0,
+    cacheHitInputTokens: aggregate?.usage.cacheHitInputTokens ?? 0,
+    cacheMissInputTokens: aggregate?.usage.cacheMissInputTokens ?? 0,
+    outputTokens: aggregate?.usage.outputTokens ?? 0,
+    costMicrormb: aggregate?.costMicrormb ?? 0,
+    pricingVersion: aggregate?.pricingVersion ?? (initial.byo ? undefined : PRICING_VERSION),
+    usdCnyMicros: aggregate?.usdCnyMicros ?? (initial.byo ? undefined : budget.usdCnyMicros),
+    usageEstimated: aggregate?.usageEstimated ?? true,
+    byo: aggregate?.byo ?? initial.byo,
     status,
   });
 }
@@ -230,11 +234,41 @@ export async function GET(req: Request, { params }: Ctx) {
     }, { status: costErrorStatus(code) });
   }
 
+  try {
+    const budget = getBudgetConfig();
+    await beginUsageRun(userId, usageAuditKey, 'perspectives', {
+      ticker,
+      provider: llm.provider,
+      model: llm.model,
+      pricingVersion: byo ? undefined : PRICING_VERSION,
+      usdCnyMicros: byo ? undefined : budget.usdCnyMicros,
+      byo,
+    });
+  } catch (error) {
+    const code = costErrorCode(error) ?? 'usage_audit_unavailable';
+    const locale = await getRequestLocale();
+    const budget = getBudgetConfig();
+    return NextResponse.json({
+      source: 'cost_quota',
+      ticker,
+      error: apiMessage(
+        locale,
+        code === 'usage_audit_invariant' ? 'budgetInvariantViolation' : 'budgetUnavailable',
+      ),
+      errorCode: code,
+      perspectives: [],
+      costLimit: {
+        dailyMicrormb: budget.dailyLimitMicrormb,
+        timezone: 'Asia/Shanghai',
+      },
+    }, { status: costErrorStatus(code) });
+  }
+
   const settled = await Promise.allSettled(
     enabled.map(async (p): Promise<PerspectiveResult | null> => {
       let resp;
       try {
-        const metered = await limiter.run(() => runMeteredLlmCall({
+        const metered = await limiter.runWithBudgetRetry(() => runMeteredLlmCall({
           feature: 'perspectives',
           provider: llm,
           userId,
@@ -291,14 +325,25 @@ export async function GET(req: Request, { params }: Ctx) {
       : null))
     .filter(Boolean);
 
-  const rejectedCostError = settled
+  let rejectedCostError = settled
     .filter((item): item is PromiseRejectedResult => item.status === 'rejected')
     .map((item) => costErrorCode(item.reason))
     .find((code): code is string => code !== null);
   const auditStatus = failures.length > 0 || perspectives.length !== enabled.length
     ? 'failed'
     : 'completed';
-  await recordAccounting(userId, usageAuditKey, ticker, accounting, auditStatus);
+  try {
+    await finalizeAccounting(
+      userId,
+      usageAuditKey,
+      ticker,
+      { provider: llm.provider, model: llm.model, byo },
+      accounting,
+      auditStatus,
+    );
+  } catch (error) {
+    rejectedCostError = costErrorCode(error) ?? 'usage_audit_unavailable';
+  }
 
   if (rejectedCostError) {
     const locale = await getRequestLocale();
@@ -308,6 +353,7 @@ export async function GET(req: Request, { params }: Ctx) {
       : rejectedCostError === 'pricing_unavailable'
         ? 'pricingUnavailable'
         : rejectedCostError === 'budget_invariant_violation'
+          || rejectedCostError === 'usage_audit_invariant'
           ? 'budgetInvariantViolation'
           : 'budgetUnavailable';
     return NextResponse.json({

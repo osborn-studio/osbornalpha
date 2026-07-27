@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions, pg_catalog;
 
-select plan(117);
+select plan(144);
 
 insert into auth.users (id, email)
 values
@@ -1244,6 +1244,42 @@ select is(
   false,
   'the audited settlement stores the estimation flag'
 );
+select lives_ok(
+  $sql$
+    select *
+    from public.settle_llm_budget(
+      '20000000-0000-0000-0000-000000000001',
+      550,
+      100,
+      40,
+      60,
+      25,
+      'pricing-v1',
+      7200000,
+      false
+    )
+  $sql$,
+  'an exact audited settlement retry is idempotent'
+);
+select throws_ok(
+  $sql$
+    select *
+    from public.settle_llm_budget(
+      '20000000-0000-0000-0000-000000000001',
+      551,
+      100,
+      40,
+      60,
+      25,
+      'pricing-v1',
+      7200000,
+      false
+    )
+  $sql$,
+  '55000',
+  'settled reservation audit conflict',
+  'a conflicting audited settlement retry is rejected'
+);
 
 select throws_ok(
   $sql$
@@ -1311,6 +1347,22 @@ select lives_ok(
     select *
     from public.finalize_llm_budget_incurred(
       '20000000-0000-0000-0000-000000000003',
+      1000000,
+      0,
+      1000000,
+      9000,
+      'pricing-v1',
+      7200000,
+      true
+    )
+  $sql$,
+  'an exact conservative finalization retry is idempotent'
+);
+select throws_ok(
+  $sql$
+    select *
+    from public.finalize_llm_budget_incurred(
+      '20000000-0000-0000-0000-000000000003',
       1,
       0,
       1,
@@ -1320,7 +1372,9 @@ select lives_ok(
       true
     )
   $sql$,
-  'conservative finalization is idempotent'
+  '55000',
+  'incurred finalization audit conflict',
+  'a conflicting conservative finalization retry is rejected'
 );
 select is(
   (select output_tokens from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000003'),
@@ -1380,6 +1434,303 @@ select is(
   ),
   1::bigint,
   'aggregate audit retries produce exactly one usage event'
+);
+
+select lives_ok(
+  $sql$
+    select *
+    from public.begin_usage_run(
+      '30000000-0000-0000-0000-000000000002',
+      '10000000-0000-0000-0000-000000000001',
+      'copilot',
+      'NVDA',
+      'deepseek',
+      'deepseek-v4-flash',
+      'pricing-v1',
+      7200000,
+      false
+    )
+  $sql$,
+  'a trusted usage run begins durably'
+);
+select is(
+  (
+    select status
+    from public.usage_events
+    where idempotency_key = '30000000-0000-0000-0000-000000000002'
+  ),
+  'pending',
+  'a begun usage run is pending before provider completion'
+);
+select lives_ok(
+  $sql$
+    select *
+    from public.begin_usage_run(
+      '30000000-0000-0000-0000-000000000002',
+      '10000000-0000-0000-0000-000000000001',
+      'copilot',
+      'NVDA',
+      'deepseek',
+      'deepseek-v4-flash',
+      'pricing-v1',
+      7200000,
+      false
+    )
+  $sql$,
+  'an exact usage-run begin retry is idempotent'
+);
+select throws_ok(
+  $sql$
+    select *
+    from public.begin_usage_run(
+      '30000000-0000-0000-0000-000000000002',
+      '10000000-0000-0000-0000-000000000001',
+      'copilot',
+      'NVDA',
+      'deepseek',
+      'different-model',
+      'pricing-v1',
+      7200000,
+      false
+    )
+  $sql$,
+  '55000',
+  'usage run begin conflict',
+  'a conflicting usage-run begin retry is rejected'
+);
+select is(
+  (
+    select count(*)
+    from public.usage_events
+    where idempotency_key = '30000000-0000-0000-0000-000000000002'
+  ),
+  1::bigint,
+  'usage-run begin retries retain exactly one pending row'
+);
+select throws_ok(
+  $sql$
+    select *
+    from public.finalize_usage_run(
+      '30000000-0000-0000-0000-000000000002',
+      '10000000-0000-0000-0000-000000000001',
+      'copilot',
+      'NVDA',
+      'deepseek',
+      'deepseek-v4-flash',
+      100,
+      40,
+      61,
+      25,
+      550,
+      'pricing-v1',
+      7200000,
+      false,
+      false,
+      'completed'
+    )
+  $sql$,
+  '22023',
+  'invalid usage run finalization totals',
+  'a failed finalization attempt cannot partially terminate the run'
+);
+select is(
+  (
+    select status
+    from public.usage_events
+    where idempotency_key = '30000000-0000-0000-0000-000000000002'
+  ),
+  'pending',
+  'a failed finalization attempt leaves the durable run pending'
+);
+select lives_ok(
+  $sql$
+    select *
+    from public.finalize_usage_run(
+      '30000000-0000-0000-0000-000000000002',
+      '10000000-0000-0000-0000-000000000001',
+      'copilot',
+      'NVDA',
+      'deepseek',
+      'deepseek-v4-flash',
+      100,
+      40,
+      60,
+      25,
+      550,
+      'pricing-v1',
+      7200000,
+      false,
+      false,
+      'completed'
+    )
+  $sql$,
+  'a pending usage run finalizes atomically'
+);
+select is(
+  (
+    select status
+    from public.usage_events
+    where idempotency_key = '30000000-0000-0000-0000-000000000002'
+  ),
+  'completed',
+  'successful finalization writes the terminal status'
+);
+select lives_ok(
+  $sql$
+    select *
+    from public.finalize_usage_run(
+      '30000000-0000-0000-0000-000000000002',
+      '10000000-0000-0000-0000-000000000001',
+      'copilot',
+      'NVDA',
+      'deepseek',
+      'deepseek-v4-flash',
+      100,
+      40,
+      60,
+      25,
+      550,
+      'pricing-v1',
+      7200000,
+      false,
+      false,
+      'completed'
+    )
+  $sql$,
+  'an exact terminal usage-run retry is idempotent'
+);
+select throws_ok(
+  $sql$
+    select *
+    from public.finalize_usage_run(
+      '30000000-0000-0000-0000-000000000002',
+      '10000000-0000-0000-0000-000000000001',
+      'copilot',
+      'NVDA',
+      'deepseek',
+      'deepseek-v4-flash',
+      100,
+      40,
+      60,
+      25,
+      551,
+      'pricing-v1',
+      7200000,
+      false,
+      false,
+      'completed'
+    )
+  $sql$,
+  '55000',
+  'usage run finalize conflict',
+  'a conflicting terminal usage-run retry is rejected'
+);
+select is(
+  (
+    select cost_micrormb
+    from public.usage_events
+    where idempotency_key = '30000000-0000-0000-0000-000000000002'
+  ),
+  550::bigint,
+  'a rejected terminal retry cannot overwrite aggregate cost'
+);
+
+select lives_ok(
+  $sql$
+    select *
+    from public.begin_usage_run(
+      '30000000-0000-0000-0000-000000000003',
+      '10000000-0000-0000-0000-000000000001',
+      'copilot',
+      'NVDA',
+      'ark',
+      'private-model',
+      null,
+      null,
+      true
+    )
+  $sql$,
+  'a BYO usage run begins without platform pricing'
+);
+select lives_ok(
+  $sql$
+    select *
+    from public.finalize_usage_run(
+      '30000000-0000-0000-0000-000000000003',
+      '10000000-0000-0000-0000-000000000001',
+      'copilot',
+      'NVDA',
+      'deepseek',
+      'deepseek-v4-flash',
+      10,
+      0,
+      10,
+      2,
+      20,
+      'pricing-v1',
+      7200000,
+      false,
+      false,
+      'completed'
+    )
+  $sql$,
+  'a BYO run may finalize with an audited platform fallback'
+);
+select is(
+  (
+    select byo
+    from public.usage_events
+    where idempotency_key = '30000000-0000-0000-0000-000000000003'
+  ),
+  false,
+  'the terminal aggregate records actual mixed-run billing ownership'
+);
+
+select lives_ok(
+  $sql$
+    select *
+    from public.begin_usage_run(
+      '30000000-0000-0000-0000-000000000004',
+      '10000000-0000-0000-0000-000000000001',
+      'brief_preview',
+      null,
+      'deepseek',
+      'deepseek-v4-flash',
+      'pricing-v1',
+      7200000,
+      false
+    )
+  $sql$,
+  'a later interrupted usage run begins pending'
+);
+update public.usage_events
+set created_at = now() - interval '20 minutes'
+where idempotency_key = '30000000-0000-0000-0000-000000000004';
+select lives_ok(
+  $sql$
+    select *
+    from public.begin_usage_run(
+      '30000000-0000-0000-0000-000000000005',
+      '10000000-0000-0000-0000-000000000001',
+      'brief_preview',
+      null,
+      'deepseek',
+      'deepseek-v4-flash',
+      'pricing-v1',
+      7200000,
+      false
+    )
+  $sql$,
+  'starting a new run reconciles stale pending usage'
+);
+select is(
+  (
+    select status
+    from public.usage_events
+    where idempotency_key = '30000000-0000-0000-0000-000000000004'
+  ),
+  'failed',
+  'stale usage reconciliation records a failed terminal state'
 );
 
 select is(
@@ -1463,6 +1814,60 @@ select is(
   ),
   true,
   'service_role can write trusted aggregate usage'
+);
+select is(
+  has_function_privilege(
+    'service_role',
+    'public.begin_usage_run(uuid,uuid,text,text,text,text,text,bigint,boolean)',
+    'EXECUTE'
+  ),
+  true,
+  'service_role can begin a durable usage run'
+);
+select is(
+  has_function_privilege(
+    'authenticated',
+    'public.begin_usage_run(uuid,uuid,text,text,text,text,text,bigint,boolean)',
+    'EXECUTE'
+  ),
+  false,
+  'authenticated callers cannot begin a trusted usage run'
+);
+select is(
+  has_function_privilege(
+    'service_role',
+    'public.finalize_usage_run(uuid,uuid,text,text,text,text,bigint,bigint,bigint,bigint,bigint,text,bigint,boolean,boolean,text)',
+    'EXECUTE'
+  ),
+  true,
+  'service_role can finalize a durable usage run'
+);
+select is(
+  has_function_privilege(
+    'authenticated',
+    'public.finalize_usage_run(uuid,uuid,text,text,text,text,bigint,bigint,bigint,bigint,bigint,text,bigint,boolean,boolean,text)',
+    'EXECUTE'
+  ),
+  false,
+  'authenticated callers cannot finalize a trusted usage run'
+);
+select is(
+  has_function_privilege(
+    'service_role',
+    'public.fail_stale_usage_runs(integer,integer)',
+    'EXECUTE'
+  ),
+  true,
+  'service_role can reconcile stale usage runs'
+);
+select is(
+  has_function_privilege(
+    'authenticated',
+    'public.fail_stale_usage_runs(integer,integer)',
+    'EXECUTE'
+  ),
+  false,
+  'authenticated callers cannot reconcile stale usage runs'
 );
 select is(
   has_function_privilege(

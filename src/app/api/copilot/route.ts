@@ -6,7 +6,12 @@ import { TOOLS_BY_NAME, OPENAI_TOOL_DEFS } from '@/lib/agent/tools';
 import { JOHN_CAMERON_5STEP } from '@/lib/agent/methods/john-cameron-5step';
 import { AGENT_METHODS } from '@/lib/agent/methods/registry';
 import { createArtifact } from '@/lib/portfolio/artifacts-store';
-import { checkQuota, recordUsageForUser, type QuotaResult } from '@/lib/billing/quota';
+import {
+  beginUsageRun,
+  checkQuota,
+  finalizeUsageRun,
+  type QuotaResult,
+} from '@/lib/billing/quota';
 import {
   getBudgetConfig,
   isCompleteRealUsage,
@@ -71,8 +76,21 @@ function costMessageKey(code: string): ApiMessageKey | null {
     case 'pricing_unavailable': return 'pricingUnavailable';
     case 'budget_unavailable': return 'budgetUnavailable';
     case 'budget_invariant_violation': return 'budgetInvariantViolation';
+    case 'usage_audit_unavailable': return 'budgetUnavailable';
+    case 'usage_audit_invariant': return 'budgetInvariantViolation';
     default: return null;
   }
+}
+
+function resolveRunErrorCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return costMessageKey(message) ? message : stableAiErrorCode(error);
+}
+
+function costResponseStatus(code: string): number {
+  if (code === 'daily_cost_exhausted') return 429;
+  if (code === 'budget_unavailable' || code === 'usage_audit_unavailable') return 503;
+  return 500;
 }
 
 // Auto-archive threshold: skip near-empty runs (e.g. immediate errors).
@@ -184,6 +202,42 @@ export async function POST(req: Request) {
     }
   }
   const usageAuditKey = crypto.randomUUID();
+  let usageRunBegun = false;
+  if (llm && (!quota || quota.allowed) && authenticatedUserId) {
+    try {
+      const budget = getBudgetConfig();
+      await beginUsageRun(authenticatedUserId, usageAuditKey, 'copilot', {
+        ticker: ticker || undefined,
+        provider: llm.provider,
+        model: llm.model,
+        pricingVersion: byo ? undefined : PRICING_VERSION,
+        usdCnyMicros: byo ? undefined : budget.usdCnyMicros,
+        byo,
+      });
+      usageRunBegun = true;
+    } catch (error) {
+      const code = resolveRunErrorCode(error);
+      if (runId && runDb) {
+        try {
+          await failAiRun(runDb as any, runId, {
+            errorCode: code,
+            partialContent: '',
+            durationMs: Date.now() - runStartedAt,
+          });
+        } catch {
+          console.warn('ai run finalize failed', { run_id: runId, code: 'storage_unavailable' });
+        }
+      }
+      return new Response(JSON.stringify({
+        source: 'cost_quota',
+        error: apiMessage(locale, costMessageKey(code) ?? 'budgetUnavailable'),
+        errorCode: code,
+      }), {
+        status: costResponseStatus(code),
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+  }
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -222,6 +276,7 @@ export async function POST(req: Request) {
       let runErrorCode = 'provider_error';
       let fallbackQuota: QuotaResult | null = null;
       let platformBudgetExempt = !byo && quota?.limit === -1;
+      let usageFinalizationAttempted = false;
       const runUsage: RunUsage[] = [];
       const attemptedModels = new Map<string, Pick<ResolvedLlm, 'source' | 'provider' | 'model'>>();
       const addUsage = (
@@ -244,6 +299,8 @@ export async function POST(req: Request) {
         return entry;
       };
       const writeUsage = async (status: 'completed' | 'failed') => {
+        if (!usageRunBegun || !authenticatedUserId) return;
+        usageFinalizationAttempted = true;
         const usageGroups = runUsage;
         const attempted = [...attemptedModels.values()];
         const labels = copilotUsageLabels(
@@ -293,8 +350,7 @@ export async function POST(req: Request) {
           byo: runByo,
         });
         const budgetConfig = getBudgetConfig();
-        if (!authenticatedUserId) return;
-        await recordUsageForUser(authenticatedUserId, usageAuditKey, 'copilot', {
+        await finalizeUsageRun(authenticatedUserId, usageAuditKey, 'copilot', {
           ticker: ticker || undefined,
           provider: aggregate.provider,
           model: aggregate.model,
@@ -391,7 +447,7 @@ export async function POST(req: Request) {
             });
             await reservation.markIncurred();
           } catch (error) {
-            const code = stableAiErrorCode(error);
+            const code = resolveRunErrorCode(error);
             if (costMessageKey(code)) throw new Error(code);
             throw new Error('budget_unavailable');
           }
@@ -483,7 +539,7 @@ export async function POST(req: Request) {
           console.warn('copilot provider fallback', {
             from: llm.provider,
             to: platformFallback?.provider,
-            code: stableAiErrorCode(error),
+            code: resolveRunErrorCode(error),
             method_id: resolvedMethod.id,
           });
           send({
@@ -524,7 +580,7 @@ export async function POST(req: Request) {
         }
       } catch (error) {
         runFailed = true;
-        runErrorCode = stableAiErrorCode(error);
+        runErrorCode = resolveRunErrorCode(error);
         const messageKey = costMessageKey(runErrorCode);
         send({
           type: 'error',
@@ -532,7 +588,18 @@ export async function POST(req: Request) {
           message: apiMessage(locale, messageKey ?? 'providerFailed'),
         });
       } finally {
-        if (runFailed) await writeUsage('failed');
+        if (runFailed && !usageFinalizationAttempted) {
+          try {
+            await writeUsage('failed');
+          } catch (error) {
+            runErrorCode = resolveRunErrorCode(error);
+            send({
+              type: 'error',
+              code: runErrorCode,
+              message: apiMessage(locale, costMessageKey(runErrorCode) ?? 'budgetUnavailable'),
+            });
+          }
+        }
         if (runId && runDb) {
           try {
             const durationMs = Date.now() - runStartedAt;

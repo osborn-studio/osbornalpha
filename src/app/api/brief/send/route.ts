@@ -2,10 +2,9 @@ import { NextResponse } from 'next/server';
 import { generateDailyBrief, DEFAULT_WATCHLIST, type DailyBrief } from '@/lib/brief/composer';
 import { sendTelegram, isTelegramConfigured } from '@/lib/data/sources/telegram';
 import { sendEmail, isResendConfigured } from '@/lib/data/sources/resend';
-import { getServerSupabase } from '@/lib/supabase/server';
 import { resolveLlm } from '@/lib/llm/resolve';
 import { chatResolved } from '@/lib/data/sources/llm';
-import { checkQuota, recordUsageForUser } from '@/lib/billing/quota';
+import { beginUsageRun, checkQuota, finalizeUsageRun } from '@/lib/billing/quota';
 import {
   aggregateMeteredUsage,
   meteredUsageFromError,
@@ -19,18 +18,30 @@ import {
 } from '@/lib/billing/llm-concurrency';
 import { getBudgetConfig } from '@/lib/billing/cost-budget';
 import { getRequestLocale, apiMessage } from '@/lib/i18n/server';
+import {
+  AdminForbidden,
+  AdminUnauthenticated,
+  requireAdminUser,
+} from '@/lib/admin/auth';
+import { PRICING_VERSION } from '@/lib/billing/llm-pricing';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 const MAX_MANUAL_BRIEF_WATCHLIST = 10;
 const MAX_MANUAL_BRIEF_TOP_N = 5;
+const MAX_MANUAL_TEXT_LENGTH = 4_000;
+const MAX_MANUAL_SUBJECT_LENGTH = 200;
+const ALLOWED_CHANNELS = new Set(['telegram', 'email']);
+const SAFE_TICKER = /^[A-Za-z0-9.^_-]{1,32}$/;
 
 const COST_ERROR_CODES = new Set([
   'daily_cost_exhausted',
   'pricing_unavailable',
   'budget_unavailable',
   'budget_invariant_violation',
+  'usage_audit_unavailable',
+  'usage_audit_invariant',
 ]);
 
 function costErrorCode(error: unknown): string | null {
@@ -40,30 +51,31 @@ function costErrorCode(error: unknown): string | null {
 
 function costErrorStatus(code: string): number {
   if (code === 'daily_cost_exhausted') return 429;
-  if (code === 'budget_unavailable') return 503;
+  if (code === 'budget_unavailable' || code === 'usage_audit_unavailable') return 503;
   return 500;
 }
 
-async function recordAccounting(
+async function finalizeAccounting(
   userId: string,
   idempotencyKey: string,
+  initial: { provider: string; model: string; byo: boolean },
   accounting: MeteredUsage[],
   failed: boolean,
 ): Promise<void> {
-  if (accounting.length === 0) return;
-  const aggregate = aggregateMeteredUsage(accounting);
-  await recordUsageForUser(userId, idempotencyKey, 'brief_preview', {
-    provider: aggregate.provider,
-    model: aggregate.model,
-    inputTokens: aggregate.usage.inputTokens,
-    cacheHitInputTokens: aggregate.usage.cacheHitInputTokens,
-    cacheMissInputTokens: aggregate.usage.cacheMissInputTokens,
-    outputTokens: aggregate.usage.outputTokens,
-    costMicrormb: aggregate.costMicrormb,
-    pricingVersion: aggregate.pricingVersion,
-    usdCnyMicros: aggregate.usdCnyMicros,
-    usageEstimated: aggregate.usageEstimated,
-    byo: aggregate.byo,
+  const aggregate = accounting.length > 0 ? aggregateMeteredUsage(accounting) : null;
+  const budget = getBudgetConfig();
+  await finalizeUsageRun(userId, idempotencyKey, 'brief_preview', {
+    provider: aggregate?.provider ?? initial.provider,
+    model: aggregate?.model ?? initial.model,
+    inputTokens: aggregate?.usage.inputTokens ?? 0,
+    cacheHitInputTokens: aggregate?.usage.cacheHitInputTokens ?? 0,
+    cacheMissInputTokens: aggregate?.usage.cacheMissInputTokens ?? 0,
+    outputTokens: aggregate?.usage.outputTokens ?? 0,
+    costMicrormb: aggregate?.costMicrormb ?? 0,
+    pricingVersion: aggregate?.pricingVersion ?? (initial.byo ? undefined : PRICING_VERSION),
+    usdCnyMicros: aggregate?.usdCnyMicros ?? (initial.byo ? undefined : budget.usdCnyMicros),
+    usageEstimated: aggregate?.usageEstimated ?? true,
+    byo: aggregate?.byo ?? initial.byo,
     status: failed ? 'failed' : 'completed',
   });
 }
@@ -71,22 +83,19 @@ async function recordAccounting(
 async function deliverBrief(
   brief: DailyBrief,
   requestedChannels: string[],
-  overrides: { chatId?: string; to?: string | string[] },
 ) {
   const channels: Record<string, unknown> = {};
   if (requestedChannels.includes('telegram')) {
-    channels.telegram = isTelegramConfigured() || overrides.chatId
+    channels.telegram = isTelegramConfigured()
       ? await sendTelegram(brief.markdown, {
-          chatId: overrides.chatId,
           parseMode: 'Markdown',
           disableWebPagePreview: true,
         })
       : { skipped: 'TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not configured' };
   }
   if (requestedChannels.includes('email')) {
-    channels.email = isResendConfigured() || overrides.to
+    channels.email = isResendConfigured()
       ? await sendEmail({
-          to: overrides.to,
           subject: brief.subject || `Sentinel Morning Note · ${brief.date}`,
           html: brief.html || `<pre>${brief.markdown}</pre>`,
           text: brief.markdown,
@@ -99,29 +108,63 @@ async function deliverBrief(
 export async function POST(req: Request) {
   let userId: string;
   try {
-    const authDb = await getServerSupabase();
-    const { data, error } = await authDb.auth.getUser();
-    if (error || !data.user) return NextResponse.json({ error: 'not authenticated' }, { status: 401 });
-    userId = data.user.id;
-  } catch {
+    userId = (await requireAdminUser()).id;
+  } catch (error) {
+    if (error instanceof AdminUnauthenticated) {
+      return NextResponse.json({ error: 'not authenticated' }, { status: 401 });
+    }
+    if (error instanceof AdminForbidden) {
+      return NextResponse.json({ error: 'admin role required' }, { status: 403 });
+    }
     return NextResponse.json({ error: 'authentication unavailable' }, { status: 503 });
   }
 
-  const body = await req.json().catch(() => ({}));
-  const requestedChannels: string[] = Array.isArray(body.channels) && body.channels.length > 0
-    ? body.channels.filter((channel: unknown): channel is string => typeof channel === 'string')
+  const parsedBody: unknown = await req.json().catch(() => null);
+  if (typeof parsedBody !== 'object' || parsedBody === null || Array.isArray(parsedBody)) {
+    return NextResponse.json({ error: 'invalid request body' }, { status: 400 });
+  }
+  const body = parsedBody as Record<string, unknown>;
+  if ('chatId' in body || 'to' in body) {
+    return NextResponse.json({ error: 'recipient overrides are not allowed' }, { status: 400 });
+  }
+  if (
+    (body.channels !== undefined && !Array.isArray(body.channels))
+    || (Array.isArray(body.channels) && body.channels.some((channel) => typeof channel !== 'string'))
+  ) {
+    return NextResponse.json({ error: 'invalid channels' }, { status: 400 });
+  }
+  if (
+    (body.text !== undefined && typeof body.text !== 'string')
+    || (body.subject !== undefined && typeof body.subject !== 'string')
+    || (body.watchlist !== undefined && !Array.isArray(body.watchlist))
+    || (body.topN !== undefined && !Number.isFinite(Number(body.topN)))
+    || (body.skipLLM !== undefined && typeof body.skipLLM !== 'boolean')
+  ) {
+    return NextResponse.json({ error: 'invalid manual brief fields' }, { status: 400 });
+  }
+  const requestedChannels: string[] = Array.isArray(body.channels)
+    ? body.channels as string[]
     : ['telegram', 'email'];
   const text = typeof body.text === 'string' ? body.text : undefined;
   const subject = typeof body.subject === 'string' ? body.subject : 'Sentinel · 测试消息';
+  if (
+    requestedChannels.length > ALLOWED_CHANNELS.size
+    || requestedChannels.some((channel) => !ALLOWED_CHANNELS.has(channel))
+    || new Set(requestedChannels).size !== requestedChannels.length
+  ) {
+    return NextResponse.json({ error: 'invalid channels' }, { status: 400 });
+  }
+  if ((text?.length ?? 0) > MAX_MANUAL_TEXT_LENGTH || subject.length > MAX_MANUAL_SUBJECT_LENGTH) {
+    return NextResponse.json({ error: 'manual message too large' }, { status: 400 });
+  }
 
   if (text) {
     const results: Record<string, unknown> = {};
-    if (requestedChannels.includes('telegram') && (isTelegramConfigured() || body.chatId)) {
-      results.telegram = await sendTelegram(text, { chatId: body.chatId, parseMode: 'Markdown' });
+    if (requestedChannels.includes('telegram') && isTelegramConfigured()) {
+      results.telegram = await sendTelegram(text, { parseMode: 'Markdown' });
     }
-    if (requestedChannels.includes('email') && (isResendConfigured() || body.to)) {
+    if (requestedChannels.includes('email') && isResendConfigured()) {
       results.email = await sendEmail({
-        to: body.to,
         subject,
         text,
         html: `<pre style="font-family:monospace;white-space:pre-wrap;font-size:13px">${text.replace(/</g, '&lt;')}</pre>`,
@@ -132,6 +175,14 @@ export async function POST(req: Request) {
 
   if (Array.isArray(body.watchlist) && body.watchlist.length > MAX_MANUAL_BRIEF_WATCHLIST) {
     return NextResponse.json({ error: 'watchlist too large' }, { status: 400 });
+  }
+  if (
+    Array.isArray(body.watchlist)
+    && body.watchlist.some(
+      (ticker: unknown) => typeof ticker !== 'string' || !SAFE_TICKER.test(ticker.trim()),
+    )
+  ) {
+    return NextResponse.json({ error: 'invalid watchlist' }, { status: 400 });
   }
   const watchlist = Array.isArray(body.watchlist) && body.watchlist.length > 0
     ? body.watchlist
@@ -147,7 +198,7 @@ export async function POST(req: Request) {
   try {
     if (skipLLM) {
       const brief = await generateDailyBrief(watchlist, { topN, mode: 'skip_llm' });
-      const channels = await deliverBrief(brief, requestedChannels, { chatId: body.chatId, to: body.to });
+      const channels = await deliverBrief(brief, requestedChannels);
       return NextResponse.json({
         mode: 'brief',
         channels,
@@ -192,10 +243,22 @@ export async function POST(req: Request) {
         })
       : createConcurrencyLimiter(PERSONA_CONCURRENCY_HARD_CAP);
     const accounting: MeteredUsage[] = [];
+    let usageRunBegun = false;
+    let usageFinalizationAttempted = false;
     try {
+      const budget = getBudgetConfig();
+      const byo = llm.source === 'user';
+      await beginUsageRun(userId, usageAuditKey, 'brief_preview', {
+        provider: llm.provider,
+        model: llm.model,
+        pricingVersion: byo ? undefined : PRICING_VERSION,
+        usdCnyMicros: byo ? undefined : budget.usdCnyMicros,
+        byo,
+      });
+      usageRunBegun = true;
       const llmCall = async (opts: Parameters<typeof chatResolved>[1]) => {
         try {
-          const result = await limiter.run(() => runMeteredLlmCall({
+          const result = await limiter.runWithBudgetRetry(() => runMeteredLlmCall({
             feature: 'brief_preview',
             provider: llm,
             userId,
@@ -212,13 +275,15 @@ export async function POST(req: Request) {
         }
       };
       const brief = await generateDailyBrief(watchlist, { topN, mode: 'metered', llmCall });
-      await recordAccounting(
+      usageFinalizationAttempted = true;
+      await finalizeAccounting(
         userId,
         usageAuditKey,
+        { provider: llm.provider, model: llm.model, byo },
         accounting,
         accounting.some((item) => item.status === 'failed') || (brief.meta.failures ?? 0) > 0,
       );
-      const channels = await deliverBrief(brief, requestedChannels, { chatId: body.chatId, to: body.to });
+      const channels = await deliverBrief(brief, requestedChannels);
       return NextResponse.json({
         mode: 'brief',
         channels,
@@ -234,8 +299,22 @@ export async function POST(req: Request) {
         },
       });
     } catch (error) {
-      await recordAccounting(userId, usageAuditKey, accounting, true);
-      throw error;
+      let terminalError = error;
+      if (usageRunBegun && !usageFinalizationAttempted) {
+        usageFinalizationAttempted = true;
+        try {
+          await finalizeAccounting(
+            userId,
+            usageAuditKey,
+            { provider: llm.provider, model: llm.model, byo: llm.source === 'user' },
+            accounting,
+            true,
+          );
+        } catch (auditError) {
+          terminalError = auditError;
+        }
+      }
+      throw terminalError;
     }
   } catch (error) {
     const code = costErrorCode(error);

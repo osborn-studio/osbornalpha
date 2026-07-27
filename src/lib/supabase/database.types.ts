@@ -338,7 +338,13 @@ export interface UsageEvent {
   usd_cny_micros: number | null;
   usage_estimated: boolean;
   byo: boolean;
-  status: 'completed' | 'failed';
+  status: 'pending' | 'completed' | 'failed';
+  run_provider: string;
+  run_model: string;
+  run_pricing_version: string | null;
+  run_usd_cny_micros: number | null;
+  run_byo: boolean;
+  finalized_at: string | null;
   created_at: string;
 }
 
@@ -587,6 +593,45 @@ export type Database = {
           p_status: 'completed' | 'failed';
         };
         Returns: boolean;
+      };
+      begin_usage_run: {
+        Args: {
+          p_idempotency_key: string;
+          p_user_id: string;
+          p_feature: UsageFeature;
+          p_ticker: string | null;
+          p_provider: string;
+          p_model: string;
+          p_pricing_version: string | null;
+          p_usd_cny_micros: number | null;
+          p_byo: boolean;
+        };
+        Returns: Array<{ id: string; status: 'pending' | 'completed' | 'failed' }>;
+      };
+      finalize_usage_run: {
+        Args: {
+          p_idempotency_key: string;
+          p_user_id: string;
+          p_feature: UsageFeature;
+          p_ticker: string | null;
+          p_provider: string;
+          p_model: string;
+          p_input_tokens: number;
+          p_cache_hit_input_tokens: number;
+          p_cache_miss_input_tokens: number;
+          p_output_tokens: number;
+          p_cost_micrormb: number;
+          p_pricing_version: string | null;
+          p_usd_cny_micros: number | null;
+          p_usage_estimated: boolean;
+          p_byo: boolean;
+          p_status: 'completed' | 'failed';
+        };
+        Returns: Array<{ id: string; status: 'completed' | 'failed' }>;
+      };
+      fail_stale_usage_runs: {
+        Args: { p_stale_after_seconds: number; p_limit: number };
+        Returns: number;
       };
     };
   };

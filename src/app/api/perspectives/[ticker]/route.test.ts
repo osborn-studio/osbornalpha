@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   chatResolved: vi.fn(),
   checkQuota: vi.fn(),
   recordUsageForUser: vi.fn(),
+  beginUsageRun: vi.fn(),
+  finalizeUsageRun: vi.fn(),
   getServerSupabase: vi.fn(),
   getAdminSupabase: vi.fn(() => ({ kind: 'admin-db' })),
   reserveCostBudget: vi.fn(),
@@ -24,6 +26,8 @@ vi.mock('@/lib/data/sources/llm', () => ({
 vi.mock('@/lib/billing/quota', () => ({
   checkQuota: mocks.checkQuota,
   recordUsageForUser: mocks.recordUsageForUser,
+  beginUsageRun: mocks.beginUsageRun,
+  finalizeUsageRun: mocks.finalizeUsageRun,
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -119,6 +123,10 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
     vi.clearAllMocks();
     mocks.resolveLlm.mockResolvedValue(provider);
     mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: 5, plan: 'free' });
+    mocks.beginUsageRun.mockResolvedValue(undefined);
+    mocks.finalizeUsageRun.mockImplementation(
+      async (...args) => mocks.recordUsageForUser(...args),
+    );
     mocks.getServerSupabase.mockResolvedValue({
       auth: {
         getUser: vi.fn().mockResolvedValue({
@@ -310,6 +318,19 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
     expect(response.status).toBe(200);
     expect(mocks.checkQuota).not.toHaveBeenCalled();
     expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
+    expect(mocks.beginUsageRun).toHaveBeenCalledWith(
+      'server-user',
+      expect.any(String),
+      'perspectives',
+      expect.objectContaining({
+        ticker: 'AAPL',
+        provider: 'custom',
+        model: 'private-model',
+        byo: true,
+      }),
+    );
+    expect(mocks.beginUsageRun.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.chatResolved.mock.invocationCallOrder[0]);
     expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
       'server-user',
       expect.any(String),
@@ -338,6 +359,19 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
 
     expect(response.status).toBe(200);
     expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
+    expect(mocks.beginUsageRun).toHaveBeenCalledWith(
+      'server-user',
+      expect.any(String),
+      'perspectives',
+      expect.objectContaining({
+        ticker: 'AAPL',
+        provider: 'deepseek',
+        model: 'deepseek-v4-flash',
+        byo: false,
+      }),
+    );
+    expect(mocks.beginUsageRun.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.chatResolved.mock.invocationCallOrder[0]);
     expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
       'server-user',
       expect.any(String),

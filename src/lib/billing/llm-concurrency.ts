@@ -32,12 +32,15 @@ export function personaConcurrencyFor(input: PersonaConcurrencyInput): number {
 export interface ConcurrencyLimiter {
   readonly limit: number;
   run<T>(task: () => Promise<T>): Promise<T>;
+  runWithBudgetRetry<T>(task: () => Promise<T>): Promise<T>;
 }
 
 export function createConcurrencyLimiter(limit: number): ConcurrencyLimiter {
   const safeLimit = Number.isSafeInteger(limit) && limit > 0 ? limit : 1;
   let active = 0;
+  let budgetBlocked = 0;
   const queue: Array<() => void> = [];
+  const budgetWaiters: Array<(canRetry: boolean) => void> = [];
 
   const acquire = (): Promise<void> => {
     if (active < safeLimit) {
@@ -54,15 +57,44 @@ export function createConcurrencyLimiter(limit: number): ConcurrencyLimiter {
 
   const release = () => {
     active -= 1;
+    budgetWaiters.shift()?.(true);
     queue.shift()?.();
+  };
+
+  const run = async <T>(task: () => Promise<T>): Promise<T> => {
+    await acquire();
+    try {
+      return await task();
+    } finally {
+      release();
+    }
   };
 
   return {
     limit: safeLimit,
-    async run<T>(task: () => Promise<T>): Promise<T> {
+    run,
+    async runWithBudgetRetry<T>(task: () => Promise<T>): Promise<T> {
       await acquire();
       try {
-        return await task();
+        while (true) {
+          try {
+            return await task();
+          } catch (error) {
+            if (!(error instanceof Error) || error.message !== 'daily_cost_exhausted') {
+              throw error;
+            }
+
+            budgetBlocked += 1;
+            if (active - budgetBlocked <= 0) {
+              budgetBlocked -= 1;
+              for (const waiter of budgetWaiters.splice(0)) waiter(false);
+              throw error;
+            }
+            const canRetry = await new Promise<boolean>((resolve) => budgetWaiters.push(resolve));
+            budgetBlocked -= 1;
+            if (!canRetry) throw error;
+          }
+        }
       } finally {
         release();
       }

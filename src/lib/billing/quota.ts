@@ -127,6 +127,8 @@ export async function recordUsage(feature: QuotaFeature, meta: RecordUsageMeta):
     const { supabase, userId } = await requireUser();
     const inputTokens = boundedInteger(meta.inputTokens ?? meta.tokensIn);
     const outputTokens = boundedInteger(meta.outputTokens ?? meta.tokensOut);
+    const runProvider = meta.provider ?? 'unknown';
+    const runModel = meta.model ?? 'unknown';
     const { error } = await (supabase as any).from('usage_events').insert({
       user_id: userId,
       feature,
@@ -147,6 +149,14 @@ export async function recordUsage(feature: QuotaFeature, meta: RecordUsageMeta):
       usage_estimated: meta.usageEstimated ?? false,
       byo: meta.byo,
       status: meta.status ?? 'completed',
+      run_provider: runProvider,
+      run_model: runModel,
+      run_pricing_version: meta.pricingVersion ?? null,
+      run_usd_cny_micros: meta.usdCnyMicros === undefined
+        ? null
+        : boundedInteger(meta.usdCnyMicros),
+      run_byo: meta.byo,
+      finalized_at: new Date().toISOString(),
     });
     if (error) throw new Error(error.message);
   } catch (err) {
@@ -196,4 +206,101 @@ export async function recordUsageForUser(
   } catch {
     console.warn('recordUsageForUser failed', { code: 'usage_audit_failed' });
   }
+}
+
+export interface BeginUsageRunMeta {
+  ticker?: string;
+  provider: string;
+  model: string;
+  pricingVersion?: string;
+  usdCnyMicros?: number;
+  byo: boolean;
+}
+
+function usageRunError(error: unknown): Error {
+  const code = (
+    typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && typeof error.code === 'string'
+  ) ? error.code : '';
+  return new Error(code === '55000' ? 'usage_audit_invariant' : 'usage_audit_unavailable');
+}
+
+export async function beginUsageRun(
+  userId: string,
+  idempotencyKey: string,
+  feature: QuotaFeature,
+  meta: BeginUsageRunMeta,
+): Promise<void> {
+  let response: { data: unknown; error: unknown };
+  try {
+    response = await (getAdminSupabase() as any).rpc('begin_usage_run', {
+      p_idempotency_key: idempotencyKey,
+      p_user_id: userId,
+      p_feature: feature,
+      p_ticker: meta.ticker ?? null,
+      p_provider: meta.provider,
+      p_model: meta.model,
+      p_pricing_version: meta.pricingVersion ?? null,
+      p_usd_cny_micros: meta.usdCnyMicros ?? null,
+      p_byo: meta.byo,
+    });
+  } catch (error) {
+    throw usageRunError(error);
+  }
+  if (!response || response.error) throw usageRunError(response?.error);
+}
+
+export async function finalizeUsageRun(
+  userId: string,
+  idempotencyKey: string,
+  feature: QuotaFeature,
+  meta: RecordUsageMeta,
+): Promise<void> {
+  const inputTokens = boundedInteger(meta.inputTokens ?? meta.tokensIn);
+  const cacheHitInputTokens = boundedInteger(meta.cacheHitInputTokens);
+  const cacheMissInputTokens = meta.cacheMissInputTokens === undefined
+    ? Math.max(0, inputTokens - cacheHitInputTokens)
+    : boundedInteger(meta.cacheMissInputTokens);
+  const outputTokens = boundedInteger(meta.outputTokens ?? meta.tokensOut);
+  const args = {
+    p_idempotency_key: idempotencyKey,
+    p_user_id: userId,
+    p_feature: feature,
+    p_ticker: meta.ticker ?? null,
+    p_provider: meta.provider ?? 'unknown',
+    p_model: meta.model ?? 'unknown',
+    p_input_tokens: inputTokens,
+    p_cache_hit_input_tokens: cacheHitInputTokens,
+    p_cache_miss_input_tokens: cacheMissInputTokens,
+    p_output_tokens: outputTokens,
+    p_cost_micrormb: boundedInteger(meta.costMicrormb),
+    p_pricing_version: meta.pricingVersion ?? null,
+    p_usd_cny_micros: meta.usdCnyMicros === undefined
+      ? null
+      : boundedInteger(meta.usdCnyMicros),
+    p_usage_estimated: meta.usageEstimated ?? false,
+    p_byo: meta.byo,
+    p_status: meta.status ?? 'completed',
+  };
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await (getAdminSupabase() as any).rpc('finalize_usage_run', args);
+      if (response && !response.error) return;
+      lastError = response?.error;
+      if (usageRunError(lastError).message === 'usage_audit_invariant') {
+        throw usageRunError(lastError);
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message === 'usage_audit_invariant') throw error;
+      lastError = error;
+      if (usageRunError(error).message === 'usage_audit_invariant') {
+        throw usageRunError(error);
+      }
+    }
+  }
+  throw usageRunError(lastError);
 }

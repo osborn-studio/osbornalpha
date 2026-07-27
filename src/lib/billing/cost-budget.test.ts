@@ -422,6 +422,28 @@ describe('reserveCostBudget', () => {
     expect(releaseFailure.calls).toHaveLength(3);
   });
 
+  it('maps audited terminal RPC conflicts to budget_invariant_violation', async () => {
+    const settlementConflict = fakeSupabase(
+      { data: [reservationRow('settlement-conflict')], error: null },
+      { data: [terminalRow('settlement-conflict', 'incurred')], error: null },
+      { data: null, error: { code: '55000', message: 'settled reservation audit conflict' } },
+    );
+    const settlementReservation = await reserveCostBudget(settlementConflict, 'user-1', request);
+    await settlementReservation.markIncurred();
+    await expect(settlementReservation.settle(completeUsage))
+      .rejects.toThrow('budget_invariant_violation');
+
+    const finalizationConflict = fakeSupabase(
+      { data: [reservationRow('finalization-conflict')], error: null },
+      { data: [terminalRow('finalization-conflict', 'incurred')], error: null },
+      { data: null, error: { code: '55000', message: 'incurred finalization audit conflict' } },
+    );
+    const finalizationReservation = await reserveCostBudget(finalizationConflict, 'user-1', request);
+    await finalizationReservation.markIncurred();
+    await expect(finalizationReservation.finalizeIncurred())
+      .rejects.toThrow('budget_invariant_violation');
+  });
+
   it('rejects malformed settlement responses and permits a later retry', async () => {
     const cases = [
       null,

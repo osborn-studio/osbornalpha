@@ -1,17 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({
-  generateDailyBrief: vi.fn(),
-  resolveLlm: vi.fn(),
-  chatResolved: vi.fn(),
-  checkQuota: vi.fn(),
-  recordUsageForUser: vi.fn(),
-  getServerSupabase: vi.fn(),
-  getAdminSupabase: vi.fn(() => ({ kind: 'admin-db' })),
-  reserveCostBudget: vi.fn(),
-  sendTelegram: vi.fn(),
-  sendEmail: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  class AdminUnauthenticated extends Error {}
+  class AdminForbidden extends Error {}
+  return {
+    AdminUnauthenticated,
+    AdminForbidden,
+    requireAdminUser: vi.fn(),
+    generateDailyBrief: vi.fn(),
+    resolveLlm: vi.fn(),
+    chatResolved: vi.fn(),
+    checkQuota: vi.fn(),
+    recordUsageForUser: vi.fn(),
+    beginUsageRun: vi.fn(),
+    finalizeUsageRun: vi.fn(),
+    getServerSupabase: vi.fn(),
+    getAdminSupabase: vi.fn(() => ({ kind: 'admin-db' })),
+    reserveCostBudget: vi.fn(),
+    sendTelegram: vi.fn(),
+    sendEmail: vi.fn(),
+    isTelegramConfigured: vi.fn(),
+    isResendConfigured: vi.fn(),
+  };
+});
 
 vi.mock('@/lib/brief/composer', () => ({
   DEFAULT_WATCHLIST: ['AAPL'],
@@ -22,19 +33,26 @@ vi.mock('@/lib/data/sources/llm', () => ({ chatResolved: mocks.chatResolved }));
 vi.mock('@/lib/billing/quota', () => ({
   checkQuota: mocks.checkQuota,
   recordUsageForUser: mocks.recordUsageForUser,
+  beginUsageRun: mocks.beginUsageRun,
+  finalizeUsageRun: mocks.finalizeUsageRun,
 }));
 vi.mock('@/lib/supabase/server', () => ({ getServerSupabase: mocks.getServerSupabase }));
 vi.mock('@/lib/supabase/admin', () => ({ getAdminSupabase: mocks.getAdminSupabase }));
+vi.mock('@/lib/admin/auth', () => ({
+  AdminUnauthenticated: mocks.AdminUnauthenticated,
+  AdminForbidden: mocks.AdminForbidden,
+  requireAdminUser: mocks.requireAdminUser,
+}));
 vi.mock('@/lib/billing/cost-budget', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/billing/cost-budget')>();
   return { ...actual, reserveCostBudget: mocks.reserveCostBudget };
 });
 vi.mock('@/lib/data/sources/telegram', () => ({
-  isTelegramConfigured: () => false,
+  isTelegramConfigured: mocks.isTelegramConfigured,
   sendTelegram: mocks.sendTelegram,
 }));
 vi.mock('@/lib/data/sources/resend', () => ({
-  isResendConfigured: () => false,
+  isResendConfigured: mocks.isResendConfigured,
   sendEmail: mocks.sendEmail,
 }));
 
@@ -84,7 +102,7 @@ function brief() {
   };
 }
 
-function request(body: Record<string, unknown>) {
+function request(body: unknown) {
   return new Request('http://localhost/api/brief/send', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -95,6 +113,7 @@ function request(body: Record<string, unknown>) {
 describe('POST /api/brief/send security and metering', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.requireAdminUser.mockResolvedValue({ id: 'server-user' });
     mocks.getServerSupabase.mockResolvedValue({
       auth: {
         getUser: vi.fn().mockResolvedValue({
@@ -105,8 +124,13 @@ describe('POST /api/brief/send security and metering', () => {
     });
     mocks.resolveLlm.mockResolvedValue(provider);
     mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: 2, plan: 'free' });
+    mocks.isTelegramConfigured.mockReturnValue(true);
+    mocks.isResendConfigured.mockReturnValue(true);
     mocks.reserveCostBudget.mockResolvedValue(reservation());
     mocks.chatResolved.mockResolvedValue({ content: '{}', usage: normalizedUsage });
+    mocks.finalizeUsageRun.mockImplementation(async (...args) => {
+      await mocks.recordUsageForUser(...args);
+    });
     mocks.generateDailyBrief.mockImplementation(async (_watchlist, opts) => {
       if (opts.mode === 'metered') {
         await opts.llmCall({
@@ -119,14 +143,7 @@ describe('POST /api/brief/send security and metering', () => {
   });
 
   it('requires authentication even for raw send mode', async () => {
-    mocks.getServerSupabase.mockResolvedValue({
-      auth: {
-        getUser: vi.fn().mockResolvedValue({
-          data: { user: null },
-          error: new Error('private auth detail'),
-        }),
-      },
-    });
+    mocks.requireAdminUser.mockRejectedValue(new mocks.AdminUnauthenticated());
 
     const response = await POST(request({ text: 'ping', channels: ['telegram'] }));
 
@@ -136,12 +153,45 @@ describe('POST /api/brief/send security and metering', () => {
   });
 
   it('returns 503 rather than 401 when authentication storage is unavailable', async () => {
-    mocks.getServerSupabase.mockRejectedValue(new Error('database connection detail'));
+    mocks.requireAdminUser.mockRejectedValue(new Error('database connection detail'));
 
     const response = await POST(request({ text: 'hello', channels: [] }));
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({ error: 'authentication unavailable' });
+  });
+
+  it('forbids authenticated non-admin users', async () => {
+    mocks.requireAdminUser.mockRejectedValue(new mocks.AdminForbidden());
+
+    const response = await POST(request({ text: 'hello', channels: ['telegram'] }));
+
+    expect(response.status).toBe(403);
+    expect(mocks.sendTelegram).not.toHaveBeenCalled();
+  });
+
+  it('rejects recipient overrides and malformed manual payloads', async () => {
+    for (const body of [
+      { text: 'ping', chatId: 'attacker-chat' },
+      { text: 'ping', to: 'attacker@example.test' },
+      { text: 'x'.repeat(4_001) },
+      { text: 'ping', subject: 'x'.repeat(201) },
+      { text: 'ping', channels: ['telegram', 'sms'] },
+      { text: 'ping', channels: [1] },
+      { text: 123 },
+      { text: 'ping', subject: 123 },
+      { watchlist: 'AAPL' },
+      { topN: 'not-a-number' },
+      { skipLLM: 'true' },
+      { watchlist: ['AAPL', 'bad ticker'] },
+      null,
+    ]) {
+      const response = await POST(request(body));
+      expect(response.status).toBe(400);
+    }
+    expect(mocks.sendTelegram).not.toHaveBeenCalled();
+    expect(mocks.sendEmail).not.toHaveBeenCalled();
+    expect(mocks.generateDailyBrief).not.toHaveBeenCalled();
   });
 
   it('rejects an oversized watchlist and clamps topN to the safe maximum', async () => {
@@ -169,6 +219,17 @@ describe('POST /api/brief/send security and metering', () => {
     expect(mocks.checkQuota).toHaveBeenCalledWith('brief_preview');
     expect(current.markIncurred).toHaveBeenCalledTimes(1);
     expect(current.settle).toHaveBeenCalledWith(normalizedUsage);
+    expect(mocks.beginUsageRun).toHaveBeenCalledWith(
+      'server-user',
+      expect.any(String),
+      'brief_preview',
+      expect.objectContaining({
+        provider: 'deepseek',
+        model: 'deepseek-v4-flash',
+        byo: false,
+      }),
+    );
+    expect(mocks.finalizeUsageRun).toHaveBeenCalledTimes(1);
     expect(mocks.recordUsageForUser).toHaveBeenCalledTimes(1);
     expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
       'server-user',
@@ -186,6 +247,53 @@ describe('POST /api/brief/send security and metering', () => {
     );
   });
 
+  it('durably begins BYO and admin-exempt runs before provider network activity', async () => {
+    const byo = { ...provider, source: 'user' as const };
+    mocks.resolveLlm.mockResolvedValue(byo);
+    mocks.chatResolved.mockImplementation(async () => {
+      expect(mocks.beginUsageRun).toHaveBeenCalledTimes(1);
+      return { content: '{}', usage: normalizedUsage };
+    });
+
+    const byoResponse = await POST(request({ channels: ['telegram'] }));
+    expect(byoResponse.status).toBe(200);
+    expect(mocks.checkQuota).not.toHaveBeenCalled();
+    expect(mocks.beginUsageRun).toHaveBeenCalledWith(
+      'server-user',
+      expect.any(String),
+      'brief_preview',
+      expect.objectContaining({ byo: true }),
+    );
+
+    vi.clearAllMocks();
+    mocks.requireAdminUser.mockResolvedValue({ id: 'server-admin' });
+    mocks.resolveLlm.mockResolvedValue(provider);
+    mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: -1, plan: 'free' });
+    mocks.reserveCostBudget.mockResolvedValue(reservation());
+    mocks.isTelegramConfigured.mockReturnValue(true);
+    mocks.isResendConfigured.mockReturnValue(true);
+    mocks.finalizeUsageRun.mockImplementation(async (...args) => {
+      await mocks.recordUsageForUser(...args);
+    });
+    mocks.generateDailyBrief.mockImplementation(async (_watchlist, opts) => {
+      await opts.llmCall({ messages: [{ role: 'user', content: 'context' }], max_tokens: 400 });
+      return brief();
+    });
+    mocks.chatResolved.mockImplementation(async () => {
+      expect(mocks.beginUsageRun).toHaveBeenCalledTimes(1);
+      return { content: '{}', usage: normalizedUsage };
+    });
+
+    const adminResponse = await POST(request({ channels: ['telegram'] }));
+    expect(adminResponse.status).toBe(200);
+    expect(mocks.beginUsageRun).toHaveBeenCalledWith(
+      'server-admin',
+      expect.any(String),
+      'brief_preview',
+      expect.objectContaining({ byo: false }),
+    );
+  });
+
   it('keeps authenticated skipLLM sends outside count and cost accounting', async () => {
     const response = await POST(request({ skipLLM: true, channels: ['telegram'] }));
 
@@ -197,6 +305,7 @@ describe('POST /api/brief/send security and metering', () => {
     expect(mocks.checkQuota).not.toHaveBeenCalled();
     expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
     expect(mocks.recordUsageForUser).not.toHaveBeenCalled();
+    expect(mocks.beginUsageRun).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -204,8 +313,14 @@ describe('POST /api/brief/send security and metering', () => {
     ['budget_unavailable', 503],
     ['pricing_unavailable', 500],
     ['budget_invariant_violation', 500],
+    ['usage_audit_unavailable', 503],
+    ['usage_audit_invariant', 500],
   ])('maps %s to HTTP %s without exposing a stack', async (errorCode, status) => {
-    mocks.reserveCostBudget.mockRejectedValue(new Error(errorCode));
+    if (String(errorCode).startsWith('usage_audit')) {
+      mocks.beginUsageRun.mockRejectedValue(new Error(errorCode));
+    } else {
+      mocks.reserveCostBudget.mockRejectedValue(new Error(errorCode));
+    }
 
     const response = await POST(request({ channels: ['telegram'] }));
     const body = await response.json();

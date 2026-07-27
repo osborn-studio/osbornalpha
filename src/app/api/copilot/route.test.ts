@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   checkQuota: vi.fn(),
   recordUsage: vi.fn(),
   recordUsageForUser: vi.fn(),
+  beginUsageRun: vi.fn(),
+  finalizeUsageRun: vi.fn(),
   reserveCostBudget: vi.fn(),
   getBudgetConfig: vi.fn(() => ({
     dailyLimitMicrormb: 8_800_000,
@@ -37,6 +39,8 @@ vi.mock('@/lib/billing/quota', () => ({
   checkQuota: mocks.checkQuota,
   recordUsage: mocks.recordUsage,
   recordUsageForUser: mocks.recordUsageForUser,
+  beginUsageRun: mocks.beginUsageRun,
+  finalizeUsageRun: mocks.finalizeUsageRun,
 }));
 vi.mock('@/lib/billing/cost-budget', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/billing/cost-budget')>();
@@ -165,9 +169,13 @@ describe('Copilot platform cost budget', () => {
     mocks.resolveLlm.mockResolvedValue(PLATFORM);
     mocks.resolvePlatformLlm.mockReturnValue(null);
     mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: 20, plan: 'free' });
+    mocks.beginUsageRun.mockResolvedValue(undefined);
     mocks.recordUsage.mockResolvedValue(undefined);
     mocks.recordUsageForUser.mockImplementation(
       async (_userId, _idempotencyKey, feature, meta) => mocks.recordUsage(feature, meta),
+    );
+    mocks.finalizeUsageRun.mockImplementation(
+      async (...args) => mocks.recordUsageForUser(...args),
     );
     mocks.getRequestLocale.mockResolvedValue('en');
     mocks.getServerSupabase.mockResolvedValue({
@@ -258,7 +266,36 @@ describe('Copilot platform cost budget', () => {
       'copilot',
       expect.objectContaining({ status: 'completed', costMicrormb: 333 }),
     );
+    expect(mocks.beginUsageRun).toHaveBeenCalledWith(
+      'user-1',
+      expect.any(String),
+      'copilot',
+      expect.objectContaining({
+        ticker: 'NVDA',
+        provider: 'deepseek',
+        model: 'deepseek-v4-flash',
+        byo: false,
+      }),
+    );
+    expect(mocks.finalizeUsageRun).toHaveBeenCalledTimes(1);
     expect(mocks.checkQuota).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed before provider network activity when the usage run cannot begin', async () => {
+    mocks.createAiRun.mockResolvedValue('run-usage-audit');
+    mocks.beginUsageRun.mockRejectedValue(new Error('usage_audit_unavailable'));
+
+    const { response, text } = await runRoute();
+
+    expect(response.status).toBe(503);
+    expect(text).toContain('usage_audit_unavailable');
+    expect(mocks.toolChat).not.toHaveBeenCalled();
+    expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
+    expect(mocks.failAiRun).toHaveBeenCalledWith(
+      expect.anything(),
+      'run-usage-audit',
+      expect.objectContaining({ errorCode: 'usage_audit_unavailable' }),
+    );
   });
 
   it('returns 503 when authenticated run storage is unavailable', async () => {
@@ -387,11 +424,14 @@ describe('Copilot platform cost budget', () => {
   it('does not reserve a BYO-only run and records it as BYO', async () => {
     mocks.resolveLlm.mockResolvedValue(BYO);
     mocks.resolvePlatformLlm.mockReturnValue(PLATFORM);
-    mocks.toolChat.mockResolvedValue({
-      content: 'BYO answer',
-      toolCalls: [],
-      finishReason: 'stop',
-      usage: usage(25, 0, 5),
+    mocks.toolChat.mockImplementation(async () => {
+      expect(mocks.beginUsageRun).toHaveBeenCalledTimes(1);
+      return {
+        content: 'BYO answer',
+        toolCalls: [],
+        finishReason: 'stop',
+        usage: usage(25, 0, 5),
+      };
     });
 
     await runRoute();
@@ -408,6 +448,12 @@ describe('Copilot platform cost budget', () => {
       byo: true,
       status: 'completed',
     }));
+    expect(mocks.beginUsageRun).toHaveBeenCalledWith(
+      'user-1',
+      expect.any(String),
+      'copilot',
+      expect.objectContaining({ provider: 'ark', model: 'byo-model', byo: true }),
+    );
   });
 
   it('reserves before a platform fallback and records the completed platform row as non-BYO', async () => {
@@ -492,11 +538,14 @@ describe('Copilot platform cost budget', () => {
 
   it('lets an admin use the direct platform model without budget RPCs while auditing actual cost', async () => {
     mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: -1, plan: 'free' });
-    mocks.toolChat.mockResolvedValue({
-      content: 'Admin answer',
-      toolCalls: [],
-      finishReason: 'stop',
-      usage: usage(100, 0, 10),
+    mocks.toolChat.mockImplementation(async () => {
+      expect(mocks.beginUsageRun).toHaveBeenCalledTimes(1);
+      return {
+        content: 'Admin answer',
+        toolCalls: [],
+        finishReason: 'stop',
+        usage: usage(100, 0, 10),
+      };
     });
 
     await runRoute();

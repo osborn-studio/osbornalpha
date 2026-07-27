@@ -127,6 +127,12 @@ function stableError(code: 'budget_unavailable' | 'daily_cost_exhausted' | 'budg
   return new Error(code);
 }
 
+function auditedRpcError(error: unknown): Error {
+  return isRecord(error) && error.code === '55000'
+    ? stableError('budget_invariant_violation')
+    : stableError('budget_unavailable');
+}
+
 function reservationIdFrom(
   data: unknown,
   requestedMicrormb: number,
@@ -304,13 +310,15 @@ function managedReservation(
           p_reservation_id: reservationId,
           ...usageArgs(conservativeUsage, true),
         });
-        if (!response || response.error) throw stableError('budget_unavailable');
+        if (!response) throw stableError('budget_unavailable');
+        if (response.error) throw auditedRpcError(response.error);
         if (terminalResponse(response.data, expectedReservation, 'incurred') !== 'valid') {
           throw stableError('budget_unavailable');
         }
         state = 'incurred';
-      } catch {
+      } catch (error) {
         state = 'active';
+        if (error instanceof Error && error.message === 'budget_invariant_violation') throw error;
         throw stableError('budget_unavailable');
       }
     })();
@@ -331,7 +339,8 @@ function managedReservation(
           ...usageArgs(conservativeUsage, true),
         };
         const response = await finalizeIncurredRpc(supabase, args);
-        if (!response || response.error) throw stableError('budget_unavailable');
+        if (!response) throw stableError('budget_unavailable');
+        if (response.error) throw auditedRpcError(response.error);
         if (terminalResponse(response.data, expectedReservation, 'incurred') !== 'valid') {
           throw stableError('budget_unavailable');
         }
@@ -378,7 +387,8 @@ function managedReservation(
           ...usageArgs(auditedUsage, usageEstimated),
         };
         const response = await settleRpc(supabase, args);
-        if (!response || response.error) throw stableError('budget_unavailable');
+        if (!response) throw stableError('budget_unavailable');
+        if (response.error) throw auditedRpcError(response.error);
         if (terminalResponse(response.data, expectedReservation, 'settled', costMicrormb) !== 'valid') {
           throw stableError('budget_unavailable');
         }
