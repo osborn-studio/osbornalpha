@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   resolveLlm: vi.fn(),
   chatResolved: vi.fn(),
   checkQuota: vi.fn(),
-  recordUsageForUser: vi.fn(),
+  usageFinalized: vi.fn(),
   beginUsageRun: vi.fn(),
   finalizeUsageRun: vi.fn(),
   getServerSupabase: vi.fn(),
@@ -32,7 +32,6 @@ vi.mock('@/lib/data/sources/llm', () => ({
 
 vi.mock('@/lib/billing/quota', () => ({
   checkQuota: mocks.checkQuota,
-  recordUsageForUser: mocks.recordUsageForUser,
   beginUsageRun: mocks.beginUsageRun,
   finalizeUsageRun: mocks.finalizeUsageRun,
 }));
@@ -126,7 +125,7 @@ describe('GET /api/brief/preview durable cost budget', () => {
     mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: 2, plan: 'free' });
     mocks.beginUsageRun.mockResolvedValue(undefined);
     mocks.finalizeUsageRun.mockImplementation(
-      async (...args) => mocks.recordUsageForUser(...args),
+      async (...args) => mocks.usageFinalized(...args),
     );
     mocks.getServerSupabase.mockResolvedValue({
       auth: {
@@ -160,7 +159,7 @@ describe('GET /api/brief/preview durable cost budget', () => {
     expect(mocks.checkQuota).not.toHaveBeenCalled();
     expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
     expect(mocks.chatResolved).not.toHaveBeenCalled();
-    expect(mocks.recordUsageForUser).not.toHaveBeenCalled();
+    expect(mocks.usageFinalized).not.toHaveBeenCalled();
     expect(mocks.generateDailyBrief).toHaveBeenCalledWith(['AAPL'], {
       topN: 5,
       mode: 'skip_llm',
@@ -175,7 +174,7 @@ describe('GET /api/brief/preview durable cost budget', () => {
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({ error: 'provider not configured' });
     expect(mocks.generateDailyBrief).not.toHaveBeenCalled();
-    expect(mocks.recordUsageForUser).not.toHaveBeenCalled();
+    expect(mocks.usageFinalized).not.toHaveBeenCalled();
   });
 
   it('distinguishes authentication outage from an unauthenticated caller', async () => {
@@ -211,8 +210,8 @@ describe('GET /api/brief/preview durable cost budget', () => {
     expect(reservations[1].markIncurred).toHaveBeenCalledTimes(1);
     expect(reservations[0].settle).toHaveBeenCalledWith(usage(100, 20, 15));
     expect(reservations[1].settle).toHaveBeenCalledWith(usage(60, 0, 10));
-    expect(mocks.recordUsageForUser).toHaveBeenCalledTimes(1);
-    expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
+    expect(mocks.usageFinalized).toHaveBeenCalledTimes(1);
+    expect(mocks.usageFinalized).toHaveBeenCalledWith(
       'server-user',
       expect.any(String),
       'brief_preview',
@@ -285,7 +284,7 @@ describe('GET /api/brief/preview durable cost budget', () => {
     expect(current.markIncurred).toHaveBeenCalledTimes(1);
     expect(current.settle).not.toHaveBeenCalled();
     expect(current.release).not.toHaveBeenCalled();
-    expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
+    expect(mocks.usageFinalized).toHaveBeenCalledWith(
       'server-user',
       expect.any(String),
       'brief_preview',
@@ -335,7 +334,7 @@ describe('GET /api/brief/preview durable cost budget', () => {
     await vi.waitFor(() => expect(mocks.chatResolved).toHaveBeenCalledTimes(2));
     await Promise.resolve();
     expect(returned).toBe(false);
-    expect(mocks.recordUsageForUser).not.toHaveBeenCalled();
+    expect(mocks.usageFinalized).not.toHaveBeenCalled();
 
     later.resolve({ content: '{}', usage: usage(60, 10, 12) });
     const response = await responsePromise;
@@ -343,8 +342,8 @@ describe('GET /api/brief/preview durable cost budget', () => {
     expect(response.status).toBe(500);
     expect((await response.json()).errorCode).toBe('budget_invariant_violation');
     expect(sibling.settle).toHaveBeenCalledWith(usage(60, 10, 12));
-    expect(mocks.recordUsageForUser).toHaveBeenCalledTimes(1);
-    expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
+    expect(mocks.usageFinalized).toHaveBeenCalledTimes(1);
+    expect(mocks.usageFinalized).toHaveBeenCalledWith(
       'server-user',
       expect.any(String),
       'brief_preview',
@@ -382,7 +381,7 @@ describe('GET /api/brief/preview durable cost budget', () => {
     );
     expect(mocks.beginUsageRun.mock.invocationCallOrder[0])
       .toBeLessThan(mocks.chatResolved.mock.invocationCallOrder[0]);
-    expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
+    expect(mocks.usageFinalized).toHaveBeenCalledWith(
       'server-user',
       expect.any(String),
       'brief_preview',
@@ -421,7 +420,7 @@ describe('GET /api/brief/preview durable cost budget', () => {
     );
     expect(mocks.beginUsageRun.mock.invocationCallOrder[0])
       .toBeLessThan(mocks.chatResolved.mock.invocationCallOrder[0]);
-    expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
+    expect(mocks.usageFinalized).toHaveBeenCalledWith(
       'server-user',
       expect.any(String),
       'brief_preview',
@@ -481,6 +480,6 @@ describe('daily brief non-preview separation', () => {
     expect(mocks.resolveLlm).not.toHaveBeenCalled();
     expect(mocks.checkQuota).not.toHaveBeenCalled();
     expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
-    expect(mocks.recordUsageForUser).not.toHaveBeenCalled();
+    expect(mocks.usageFinalized).not.toHaveBeenCalled();
   });
 });

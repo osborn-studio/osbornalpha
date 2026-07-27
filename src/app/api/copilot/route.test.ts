@@ -7,8 +7,8 @@ const mocks = vi.hoisted(() => ({
   resolveLlm: vi.fn(),
   resolvePlatformLlm: vi.fn(),
   checkQuota: vi.fn(),
-  recordUsage: vi.fn(),
-  recordUsageForUser: vi.fn(),
+  usageFinalized: vi.fn(),
+  usageFinalizedForUser: vi.fn(),
   beginUsageRun: vi.fn(),
   finalizeUsageRun: vi.fn(),
   reserveCostBudget: vi.fn(),
@@ -38,8 +38,6 @@ vi.mock('@/lib/llm/resolve', () => ({
 }));
 vi.mock('@/lib/billing/quota', () => ({
   checkQuota: mocks.checkQuota,
-  recordUsage: mocks.recordUsage,
-  recordUsageForUser: mocks.recordUsageForUser,
   beginUsageRun: mocks.beginUsageRun,
   finalizeUsageRun: mocks.finalizeUsageRun,
 }));
@@ -172,12 +170,12 @@ describe('Copilot platform cost budget', () => {
     mocks.resolvePlatformLlm.mockReturnValue(null);
     mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: 20, plan: 'free' });
     mocks.beginUsageRun.mockResolvedValue(undefined);
-    mocks.recordUsage.mockResolvedValue(undefined);
-    mocks.recordUsageForUser.mockImplementation(
-      async (_userId, _idempotencyKey, feature, meta) => mocks.recordUsage(feature, meta),
+    mocks.usageFinalized.mockResolvedValue(undefined);
+    mocks.usageFinalizedForUser.mockImplementation(
+      async (_userId, _idempotencyKey, feature, meta) => mocks.usageFinalized(feature, meta),
     );
     mocks.finalizeUsageRun.mockImplementation(
-      async (...args) => mocks.recordUsageForUser(...args),
+      async (...args) => mocks.usageFinalizedForUser(...args),
     );
     mocks.getRequestLocale.mockResolvedValue('en');
     mocks.getServerSupabase.mockResolvedValue({
@@ -246,8 +244,8 @@ describe('Copilot platform cost budget', () => {
     expect(second.markIncurred).toHaveBeenCalledTimes(1);
     expect(first.settle).toHaveBeenCalledWith(usage(100, 40, 10));
     expect(second.settle).toHaveBeenCalledWith(usage(80, 0, 20, true));
-    expect(mocks.recordUsage).toHaveBeenCalledTimes(1);
-    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', {
+    expect(mocks.usageFinalized).toHaveBeenCalledTimes(1);
+    expect(mocks.usageFinalized).toHaveBeenCalledWith('copilot', {
       ticker: 'NVDA',
       provider: 'deepseek',
       model: 'deepseek-v4-flash',
@@ -262,7 +260,7 @@ describe('Copilot platform cost budget', () => {
       byo: false,
       status: 'completed',
     });
-    expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
+    expect(mocks.usageFinalizedForUser).toHaveBeenCalledWith(
       'user-1',
       expect.any(String),
       'copilot',
@@ -308,7 +306,7 @@ describe('Copilot platform cost budget', () => {
     expect(response.status).toBe(503);
     expect(text).toBe('authentication unavailable');
     expect(mocks.toolChat).not.toHaveBeenCalled();
-    expect(mocks.recordUsageForUser).not.toHaveBeenCalled();
+    expect(mocks.usageFinalizedForUser).not.toHaveBeenCalled();
   });
 
   it('keeps an incurred reservation durable when the provider call throws', async () => {
@@ -334,8 +332,8 @@ describe('Copilot platform cost budget', () => {
     expect(current.release).not.toHaveBeenCalled();
     expect(current.settle).not.toHaveBeenCalled();
     expect(current.durableAudit?.usageEstimated).toBe(true);
-    expect(mocks.recordUsage).toHaveBeenCalledTimes(1);
-    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+    expect(mocks.usageFinalized).toHaveBeenCalledTimes(1);
+    expect(mocks.usageFinalized).toHaveBeenCalledWith('copilot', expect.objectContaining({
       provider: 'deepseek',
       model: 'deepseek-v4-flash',
       inputTokens: 1_000_000,
@@ -388,7 +386,7 @@ describe('Copilot platform cost budget', () => {
     expect(text).toContain('"code":"budget_unavailable"');
     expect(current.release).not.toHaveBeenCalled();
     expect(current.durableAudit?.outputTokens).toBe(MAX_OUTPUT_TOKENS);
-    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+    expect(mocks.usageFinalized).toHaveBeenCalledWith('copilot', expect.objectContaining({
       inputTokens: 45,
       cacheHitInputTokens: 5,
       cacheMissInputTokens: 40,
@@ -413,8 +411,8 @@ describe('Copilot platform cost budget', () => {
     expect(text).toContain(`"code":"${code}"`);
     expect(text).toContain(`localized:${messageKey}`);
     expect(text).not.toContain('localized:providerFailed');
-    expect(mocks.recordUsage).toHaveBeenCalledTimes(1);
-    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+    expect(mocks.usageFinalized).toHaveBeenCalledTimes(1);
+    expect(mocks.usageFinalized).toHaveBeenCalledWith('copilot', expect.objectContaining({
       provider: 'deepseek',
       model: 'deepseek-v4-flash',
       costMicrormb: 0,
@@ -440,8 +438,8 @@ describe('Copilot platform cost budget', () => {
 
     expect(mocks.checkQuota).not.toHaveBeenCalled();
     expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
-    expect(mocks.recordUsage).toHaveBeenCalledOnce();
-    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+    expect(mocks.usageFinalized).toHaveBeenCalledOnce();
+    expect(mocks.usageFinalized).toHaveBeenCalledWith('copilot', expect.objectContaining({
       provider: 'ark',
       model: 'byo-model',
       inputTokens: 25,
@@ -480,8 +478,8 @@ describe('Copilot platform cost budget', () => {
     expect(mocks.reserveCostBudget).toHaveBeenCalledTimes(1);
     expect(mocks.reserveCostBudget.mock.invocationCallOrder[0])
       .toBeLessThan(mocks.toolChat.mock.invocationCallOrder[1]);
-    expect(mocks.recordUsage).toHaveBeenCalledOnce();
-    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+    expect(mocks.usageFinalized).toHaveBeenCalledOnce();
+    expect(mocks.usageFinalized).toHaveBeenCalledWith('copilot', expect.objectContaining({
       provider: 'deepseek',
       model: 'deepseek-v4-flash',
       costMicrormb: 321,
@@ -519,8 +517,8 @@ describe('Copilot platform cost budget', () => {
 
     await runRoute();
 
-    expect(mocks.recordUsage).toHaveBeenCalledTimes(1);
-    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', {
+    expect(mocks.usageFinalized).toHaveBeenCalledTimes(1);
+    expect(mocks.usageFinalized).toHaveBeenCalledWith('copilot', {
       ticker: 'NVDA',
       provider: 'mixed',
       model: 'byo-model+deepseek-v4-flash',
@@ -569,7 +567,7 @@ describe('Copilot platform cost budget', () => {
       .toBeLessThan(mocks.toolChat.mock.invocationCallOrder[0]);
     expect(exemptAudit.settle).toHaveBeenCalledWith(usage(100, 0, 10));
     expect(mocks.toolChat).toHaveBeenCalledTimes(1);
-    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+    expect(mocks.usageFinalized).toHaveBeenCalledWith('copilot', expect.objectContaining({
       inputTokens: 100,
       outputTokens: 10,
       costMicrormb: 121,
@@ -604,7 +602,7 @@ describe('Copilot platform cost budget', () => {
     expect(mocks.createCapExemptCostAudit).toHaveBeenCalledTimes(1);
     expect(exemptAudit.settle).not.toHaveBeenCalled();
     expect(mocks.toolChat).toHaveBeenCalledTimes(1);
-    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+    expect(mocks.usageFinalized).toHaveBeenCalledWith('copilot', expect.objectContaining({
       inputTokens: 1_000_000,
       cacheHitInputTokens: 0,
       cacheMissInputTokens: 1_000_000,
@@ -634,7 +632,7 @@ describe('Copilot platform cost budget', () => {
     await runRoute();
 
     expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
-    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+    expect(mocks.usageFinalized).toHaveBeenCalledWith('copilot', expect.objectContaining({
       inputTokens: 1_000_000,
       cacheHitInputTokens: 0,
       cacheMissInputTokens: 1_000_000,
@@ -669,7 +667,7 @@ describe('Copilot platform cost budget', () => {
     expect(mocks.createCapExemptCostAudit.mock.invocationCallOrder[0])
       .toBeLessThan(mocks.toolChat.mock.invocationCallOrder[1]);
     expect(exemptAudit.settle).toHaveBeenCalledWith(usage(55, 5, 11));
-    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+    expect(mocks.usageFinalized).toHaveBeenCalledWith('copilot', expect.objectContaining({
       provider: 'deepseek',
       model: 'deepseek-v4-flash',
       inputTokens: 55,
@@ -715,7 +713,7 @@ describe('Copilot platform cost budget', () => {
 
     expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
     expect(mocks.toolChat).toHaveBeenCalledTimes(2);
-    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+    expect(mocks.usageFinalized).toHaveBeenCalledWith('copilot', expect.objectContaining({
       inputTokens: 1_000_000,
       cacheHitInputTokens: 0,
       cacheMissInputTokens: 1_000_000,
@@ -750,7 +748,7 @@ describe('Copilot platform cost budget', () => {
     await runRoute();
 
     expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
-    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+    expect(mocks.usageFinalized).toHaveBeenCalledWith('copilot', expect.objectContaining({
       inputTokens: 1_000_000,
       cacheHitInputTokens: 0,
       cacheMissInputTokens: 1_000_000,
@@ -783,8 +781,8 @@ describe('Copilot platform cost budget', () => {
     expect(failedRound.markIncurred).toHaveBeenCalledTimes(1);
     expect(failedRound.finalizeIncurred).not.toHaveBeenCalled();
     expect(failedRound.release).not.toHaveBeenCalled();
-    expect(mocks.recordUsage).toHaveBeenCalledOnce();
-    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+    expect(mocks.usageFinalized).toHaveBeenCalledOnce();
+    expect(mocks.usageFinalized).toHaveBeenCalledWith('copilot', expect.objectContaining({
       inputTokens: 1_000_070,
       outputTokens: 9_007,
       costMicrormb: 433,
@@ -792,7 +790,7 @@ describe('Copilot platform cost budget', () => {
       byo: false,
       status: 'failed',
     }));
-    expect(mocks.recordUsage).not.toHaveBeenCalledWith(
+    expect(mocks.usageFinalized).not.toHaveBeenCalledWith(
       'copilot',
       expect.objectContaining({ status: 'completed' }),
     );
@@ -840,8 +838,8 @@ describe('Copilot platform cost budget', () => {
     expect(failedPlatformRound.markIncurred).toHaveBeenCalledTimes(1);
     expect(failedPlatformRound.finalizeIncurred).not.toHaveBeenCalled();
     expect(failedPlatformRound.release).not.toHaveBeenCalled();
-    expect(mocks.recordUsage).toHaveBeenCalledTimes(1);
-    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+    expect(mocks.usageFinalized).toHaveBeenCalledTimes(1);
+    expect(mocks.usageFinalized).toHaveBeenCalledWith('copilot', expect.objectContaining({
       provider: 'mixed',
       model: 'byo-model+deepseek-v4-flash',
       inputTokens: 1_000_060,

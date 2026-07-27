@@ -113,99 +113,9 @@ export interface RecordUsageMeta {
   status?: 'completed' | 'failed';
 }
 
-const LEGACY_INTEGER_MAX = 2_147_483_647;
-
 function boundedInteger(value: number | undefined, maximum = Number.MAX_SAFE_INTEGER): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
   return Math.min(Math.max(0, Math.trunc(value)), maximum);
-}
-
-// Accounting failures must never block the caller — record-keeping is
-// best-effort; swallow errors with a warning instead of throwing.
-export async function recordUsage(feature: QuotaFeature, meta: RecordUsageMeta): Promise<void> {
-  try {
-    const { supabase, userId } = await requireUser();
-    const inputTokens = boundedInteger(meta.inputTokens ?? meta.tokensIn);
-    const outputTokens = boundedInteger(meta.outputTokens ?? meta.tokensOut);
-    const runProvider = meta.provider ?? 'unknown';
-    const runModel = meta.model ?? 'unknown';
-    const { error } = await (supabase as any).from('usage_events').insert({
-      user_id: userId,
-      feature,
-      ticker: meta.ticker ?? null,
-      tokens_in: boundedInteger(inputTokens, LEGACY_INTEGER_MAX),
-      tokens_out: boundedInteger(outputTokens, LEGACY_INTEGER_MAX),
-      provider: meta.provider ?? null,
-      model: meta.model ?? null,
-      input_tokens: inputTokens,
-      cache_hit_input_tokens: boundedInteger(meta.cacheHitInputTokens),
-      cache_miss_input_tokens: boundedInteger(meta.cacheMissInputTokens ?? inputTokens),
-      output_tokens: outputTokens,
-      cost_micrormb: boundedInteger(meta.costMicrormb),
-      pricing_version: meta.pricingVersion ?? null,
-      usd_cny_micros: meta.usdCnyMicros === undefined
-        ? null
-        : boundedInteger(meta.usdCnyMicros),
-      usage_estimated: meta.usageEstimated ?? false,
-      byo: meta.byo,
-      status: meta.status ?? 'completed',
-      run_provider: runProvider,
-      run_model: runModel,
-      run_pricing_version: meta.pricingVersion ?? null,
-      run_usd_cny_micros: meta.usdCnyMicros === undefined
-        ? null
-        : boundedInteger(meta.usdCnyMicros),
-      run_byo: meta.byo,
-      finalized_at: new Date().toISOString(),
-    });
-    if (error) throw new Error(error.message);
-  } catch (err) {
-    console.warn('recordUsage failed:', err instanceof Error ? err.message : err);
-  }
-}
-
-/**
- * Writes a server-authenticated aggregate event through the service-role RPC.
- * The caller must derive `userId` from the server session and retain the same
- * idempotency key when retrying the same logical event.
- */
-export async function recordUsageForUser(
-  userId: string,
-  idempotencyKey: string,
-  feature: QuotaFeature,
-  meta: RecordUsageMeta,
-): Promise<void> {
-  try {
-    const inputTokens = boundedInteger(meta.inputTokens ?? meta.tokensIn);
-    const cacheHitInputTokens = boundedInteger(meta.cacheHitInputTokens);
-    const cacheMissInputTokens = meta.cacheMissInputTokens === undefined
-      ? Math.max(0, inputTokens - cacheHitInputTokens)
-      : boundedInteger(meta.cacheMissInputTokens);
-    const outputTokens = boundedInteger(meta.outputTokens ?? meta.tokensOut);
-    const { error } = await (getAdminSupabase() as any).rpc('record_usage_event', {
-      p_idempotency_key: idempotencyKey,
-      p_user_id: userId,
-      p_feature: feature,
-      p_ticker: meta.ticker ?? null,
-      p_provider: meta.provider ?? null,
-      p_model: meta.model ?? null,
-      p_input_tokens: inputTokens,
-      p_cache_hit_input_tokens: cacheHitInputTokens,
-      p_cache_miss_input_tokens: cacheMissInputTokens,
-      p_output_tokens: outputTokens,
-      p_cost_micrormb: boundedInteger(meta.costMicrormb),
-      p_pricing_version: meta.pricingVersion ?? null,
-      p_usd_cny_micros: meta.usdCnyMicros === undefined
-        ? null
-        : boundedInteger(meta.usdCnyMicros),
-      p_usage_estimated: meta.usageEstimated ?? false,
-      p_byo: meta.byo,
-      p_status: meta.status ?? 'completed',
-    });
-    if (error) throw new Error('usage_audit_rpc_failed');
-  } catch {
-    console.warn('recordUsageForUser failed', { code: 'usage_audit_failed' });
-  }
 }
 
 export interface BeginUsageRunMeta {

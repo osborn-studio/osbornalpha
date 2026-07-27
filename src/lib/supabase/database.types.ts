@@ -6,6 +6,7 @@
 // + 20260728100000_usage_event_status.sql (successful-run quota semantics)
 // + 20260728110000_llm_incurred_budget.sql (durable pre-network spend state)
 // + 20260728140000_cap_exempt_platform_audit.sql (cap-exempt durable accounting)
+// + 20260728150000_profile_entitlement_security.sql (backend-managed entitlements)
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -594,27 +595,6 @@ export type Database = {
       release_llm_budget: {
         Args: { p_reservation_id: string };
         Returns: LlmBudgetReservationState[];
-      };
-      record_usage_event: {
-        Args: {
-          p_idempotency_key: string;
-          p_user_id: string;
-          p_feature: UsageFeature;
-          p_ticker: string | null;
-          p_provider: string | null;
-          p_model: string | null;
-          p_input_tokens: number;
-          p_cache_hit_input_tokens: number;
-          p_cache_miss_input_tokens: number;
-          p_output_tokens: number;
-          p_cost_micrormb: number;
-          p_pricing_version: string | null;
-          p_usd_cny_micros: number | null;
-          p_usage_estimated: boolean;
-          p_byo: boolean;
-          p_status: 'completed' | 'failed';
-        };
-        Returns: boolean;
       };
       begin_usage_run: {
         Args: {

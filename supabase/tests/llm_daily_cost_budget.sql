@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions, pg_catalog;
 
-select plan(159);
+select plan(157);
 
 insert into auth.users (id, email)
 values
@@ -1384,57 +1384,39 @@ select is(
 );
 
 select is(
-  public.record_usage_event(
-    '30000000-0000-0000-0000-000000000001',
-    '10000000-0000-0000-0000-000000000001',
-    'copilot',
-    'NVDA',
-    'deepseek',
-    'deepseek-v4-flash',
-    100,
-    40,
-    60,
-    25,
-    550,
-    'pricing-v1',
-    7200000,
-    false,
-    false,
-    'completed'
-  ),
-  true,
-  'the first trusted aggregate audit is inserted'
+  pg_catalog.to_regprocedure(
+    'public.record_usage_event(uuid,uuid,text,text,text,text,bigint,bigint,bigint,bigint,bigint,text,bigint,boolean,boolean,text)'
+  )::text,
+  null::text,
+  'the obsolete terminal aggregate writer is absent'
 );
 select is(
-  public.record_usage_event(
-    '30000000-0000-0000-0000-000000000001',
-    '10000000-0000-0000-0000-000000000001',
-    'copilot',
-    'NVDA',
-    'deepseek',
-    'deepseek-v4-flash',
-    100,
-    40,
-    60,
-    25,
-    550,
-    'pricing-v1',
-    7200000,
-    false,
-    false,
-    'completed'
+  coalesce(
+    has_function_privilege(
+      'authenticated',
+      pg_catalog.to_regprocedure(
+        'public.record_usage_event(uuid,uuid,text,text,text,text,bigint,bigint,bigint,bigint,bigint,text,bigint,boolean,boolean,text)'
+      ),
+      'EXECUTE'
+    ),
+    false
   ),
   false,
-  'a retry with the same aggregate idempotency key is ignored'
+  'authenticated cannot call the obsolete aggregate bypass'
 );
 select is(
-  (
-    select count(*)
-    from public.usage_events
-    where idempotency_key = '30000000-0000-0000-0000-000000000001'
+  coalesce(
+    has_function_privilege(
+      'service_role',
+      pg_catalog.to_regprocedure(
+        'public.record_usage_event(uuid,uuid,text,text,text,text,bigint,bigint,bigint,bigint,bigint,text,bigint,boolean,boolean,text)'
+      ),
+      'EXECUTE'
+    ),
+    false
   ),
-  1::bigint,
-  'aggregate audit retries produce exactly one usage event'
+  false,
+  'service_role cannot call the obsolete aggregate bypass'
 );
 
 select lives_ok(
@@ -2012,15 +1994,6 @@ select is(
 select is(
   has_function_privilege(
     'service_role',
-    'public.record_usage_event(uuid,uuid,text,text,text,text,bigint,bigint,bigint,bigint,bigint,text,bigint,boolean,boolean,text)',
-    'EXECUTE'
-  ),
-  true,
-  'service_role can write trusted aggregate usage'
-);
-select is(
-  has_function_privilege(
-    'service_role',
     'public.begin_usage_run(uuid,uuid,text,text,text,text,text,bigint,boolean)',
     'EXECUTE'
   ),
@@ -2089,15 +2062,6 @@ select is(
   ),
   false,
   'authenticated callers cannot create cap-exempt audits'
-);
-select is(
-  has_function_privilege(
-    'authenticated',
-    'public.record_usage_event(uuid,uuid,text,text,text,text,bigint,bigint,bigint,bigint,bigint,text,bigint,boolean,boolean,text)',
-    'EXECUTE'
-  ),
-  false,
-  'authenticated callers cannot invoke the trusted aggregate audit RPC'
 );
 select is(
   has_function_privilege(

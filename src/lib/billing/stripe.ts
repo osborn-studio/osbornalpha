@@ -4,6 +4,7 @@
 // import/module-init time, so routes can catch it and return 503.
 import Stripe from 'stripe';
 import type { getServerSupabase } from '@/lib/supabase/server';
+import { getAdminSupabase } from '@/lib/supabase/admin';
 
 // Typed against getServerSupabase()'s exact return type (rather than the
 // generic SupabaseClient<Database> from @supabase/supabase-js) — @supabase/ssr
@@ -50,7 +51,7 @@ export async function getOrCreateCustomer(
     metadata: { user_id: userId },
   });
 
-  const { error: updateErr } = await (supabase as any)
+  const { error: updateErr } = await (getAdminSupabase() as any)
     .from('profiles')
     .update({ stripe_customer_id: customer.id })
     .eq('id', userId);

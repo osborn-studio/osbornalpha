@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   resolveLlm: vi.fn(),
   chatResolved: vi.fn(),
   checkQuota: vi.fn(),
-  recordUsageForUser: vi.fn(),
+  usageFinalized: vi.fn(),
   beginUsageRun: vi.fn(),
   finalizeUsageRun: vi.fn(),
   getServerSupabase: vi.fn(),
@@ -26,7 +26,6 @@ vi.mock('@/lib/data/sources/llm', () => ({
 
 vi.mock('@/lib/billing/quota', () => ({
   checkQuota: mocks.checkQuota,
-  recordUsageForUser: mocks.recordUsageForUser,
   beginUsageRun: mocks.beginUsageRun,
   finalizeUsageRun: mocks.finalizeUsageRun,
 }));
@@ -127,7 +126,7 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
     mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: 5, plan: 'free' });
     mocks.beginUsageRun.mockResolvedValue(undefined);
     mocks.finalizeUsageRun.mockImplementation(
-      async (...args) => mocks.recordUsageForUser(...args),
+      async (...args) => mocks.usageFinalized(...args),
     );
     mocks.getServerSupabase.mockResolvedValue({
       auth: {
@@ -164,8 +163,8 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
     expect(reservations[1].settle).toHaveBeenCalledWith(usage(80, 0, 15));
     expect(reservations[0].release).not.toHaveBeenCalled();
     expect(reservations[1].release).not.toHaveBeenCalled();
-    expect(mocks.recordUsageForUser).toHaveBeenCalledTimes(1);
-    expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
+    expect(mocks.usageFinalized).toHaveBeenCalledTimes(1);
+    expect(mocks.usageFinalized).toHaveBeenCalledWith(
       'server-user',
       expect.any(String),
       'perspectives',
@@ -258,7 +257,7 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
     expect(current.markIncurred).toHaveBeenCalledTimes(1);
     expect(current.settle).not.toHaveBeenCalled();
     expect(current.release).not.toHaveBeenCalled();
-    expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
+    expect(mocks.usageFinalized).toHaveBeenCalledWith(
       'server-user',
       expect.any(String),
       'perspectives',
@@ -287,7 +286,7 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
 
     expect(response.status).toBe(200);
     expect((await response.json()).perspectives).toEqual([]);
-    expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
+    expect(mocks.usageFinalized).toHaveBeenCalledWith(
       'server-user',
       expect.any(String),
       'perspectives',
@@ -333,7 +332,7 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
     );
     expect(mocks.beginUsageRun.mock.invocationCallOrder[0])
       .toBeLessThan(mocks.chatResolved.mock.invocationCallOrder[0]);
-    expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
+    expect(mocks.usageFinalized).toHaveBeenCalledWith(
       'server-user',
       expect.any(String),
       'perspectives',
@@ -379,7 +378,7 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
     );
     expect(mocks.beginUsageRun.mock.invocationCallOrder[0])
       .toBeLessThan(mocks.chatResolved.mock.invocationCallOrder[0]);
-    expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
+    expect(mocks.usageFinalized).toHaveBeenCalledWith(
       'server-user',
       expect.any(String),
       'perspectives',

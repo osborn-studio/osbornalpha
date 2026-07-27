@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => {
     resolveLlm: vi.fn(),
     chatResolved: vi.fn(),
     checkQuota: vi.fn(),
-    recordUsageForUser: vi.fn(),
+    usageFinalized: vi.fn(),
     beginUsageRun: vi.fn(),
     finalizeUsageRun: vi.fn(),
     getServerSupabase: vi.fn(),
@@ -33,7 +33,6 @@ vi.mock('@/lib/llm/resolve', () => ({ resolveLlm: mocks.resolveLlm }));
 vi.mock('@/lib/data/sources/llm', () => ({ chatResolved: mocks.chatResolved }));
 vi.mock('@/lib/billing/quota', () => ({
   checkQuota: mocks.checkQuota,
-  recordUsageForUser: mocks.recordUsageForUser,
   beginUsageRun: mocks.beginUsageRun,
   finalizeUsageRun: mocks.finalizeUsageRun,
 }));
@@ -134,7 +133,7 @@ describe('POST /api/brief/send security and metering', () => {
     mocks.reserveCostBudget.mockResolvedValue(reservation());
     mocks.chatResolved.mockResolvedValue({ content: '{}', usage: normalizedUsage });
     mocks.finalizeUsageRun.mockImplementation(async (...args) => {
-      await mocks.recordUsageForUser(...args);
+      await mocks.usageFinalized(...args);
     });
     mocks.generateDailyBrief.mockImplementation(async (_watchlist, opts) => {
       if (opts.mode === 'metered') {
@@ -235,8 +234,8 @@ describe('POST /api/brief/send security and metering', () => {
       }),
     );
     expect(mocks.finalizeUsageRun).toHaveBeenCalledTimes(1);
-    expect(mocks.recordUsageForUser).toHaveBeenCalledTimes(1);
-    expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
+    expect(mocks.usageFinalized).toHaveBeenCalledTimes(1);
+    expect(mocks.usageFinalized).toHaveBeenCalledWith(
       'server-user',
       expect.any(String),
       'brief_preview',
@@ -280,7 +279,7 @@ describe('POST /api/brief/send security and metering', () => {
     mocks.isTelegramConfigured.mockReturnValue(true);
     mocks.isResendConfigured.mockReturnValue(true);
     mocks.finalizeUsageRun.mockImplementation(async (...args) => {
-      await mocks.recordUsageForUser(...args);
+      await mocks.usageFinalized(...args);
     });
     mocks.generateDailyBrief.mockImplementation(async (_watchlist, opts) => {
       await opts.llmCall({ messages: [{ role: 'user', content: 'context' }], max_tokens: 400 });
@@ -324,7 +323,7 @@ describe('POST /api/brief/send security and metering', () => {
     });
     expect(mocks.checkQuota).not.toHaveBeenCalled();
     expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
-    expect(mocks.recordUsageForUser).not.toHaveBeenCalled();
+    expect(mocks.usageFinalized).not.toHaveBeenCalled();
     expect(mocks.beginUsageRun).not.toHaveBeenCalled();
   });
 
