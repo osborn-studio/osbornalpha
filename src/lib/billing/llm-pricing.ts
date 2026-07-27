@@ -154,7 +154,7 @@ export function calculateCostMicrormb(
   // remainder as a cache miss.
   const declaredCacheTokens = claimedHitTokens + claimedMissTokens;
   const effectiveInputTokens = Math.max(inputTokens, declaredCacheTokens);
-  const cacheHitInputTokens = inputTokens > 0 && declaredCacheTokens > inputTokens
+  const cacheHitInputTokens = declaredCacheTokens > inputTokens
     ? 0
     : Math.min(claimedHitTokens, effectiveInputTokens);
   const cacheMissInputTokens = effectiveInputTokens - cacheHitInputTokens;
