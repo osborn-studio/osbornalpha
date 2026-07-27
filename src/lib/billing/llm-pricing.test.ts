@@ -1,10 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
   calculateCostMicrormb,
+  DEFAULT_DAILY_LIMIT_MICRORMB,
   DEFAULT_USD_CNY_MICROS,
   normalizeUsage,
+  PRICING_VERSION,
   reservationCostMicrormb,
 } from './llm-pricing';
+
+describe('pricing defaults', () => {
+  it('pins the reviewed pricing version and operational defaults', () => {
+    expect(PRICING_VERSION).toBe('deepseek-2026-04-24');
+    expect(DEFAULT_USD_CNY_MICROS).toBe(7_200_000);
+    expect(DEFAULT_DAILY_LIMIT_MICRORMB).toBe(8_800_000);
+  });
+});
 
 describe('normalizeUsage', () => {
   it('normalizes DeepSeek cache-hit and cache-miss detail', () => {
@@ -63,6 +73,16 @@ describe('normalizeUsage', () => {
 });
 
 describe('DeepSeek pricing', () => {
+  it('calculates the exact cache-hit input cost', () => {
+    expect(calculateCostMicrormb('deepseek', 'deepseek-v4-flash', {
+      inputTokens: 1_000_000,
+      cacheHitInputTokens: 1_000_000,
+      cacheMissInputTokens: 0,
+      outputTokens: 0,
+      estimated: false,
+    }, DEFAULT_USD_CNY_MICROS)).toBe(20_160);
+  });
+
   it('calculates the exact cost of 1M cache-miss input tokens plus 1M output tokens', () => {
     expect(calculateCostMicrormb('deepseek', 'deepseek-v4-flash', {
       inputTokens: 1_000_000,
@@ -71,6 +91,16 @@ describe('DeepSeek pricing', () => {
       outputTokens: 1_000_000,
       estimated: false,
     }, DEFAULT_USD_CNY_MICROS)).toBe(3_024_000);
+  });
+
+  it('rounds a fractional micro-RMB cost up', () => {
+    expect(calculateCostMicrormb('deepseek', 'deepseek-v4-flash', {
+      inputTokens: 1,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 1,
+      outputTokens: 0,
+      estimated: false,
+    }, DEFAULT_USD_CNY_MICROS)).toBe(2);
   });
 
   it('reserves the exact positive cost for estimated input plus 9,000 output tokens', () => {
