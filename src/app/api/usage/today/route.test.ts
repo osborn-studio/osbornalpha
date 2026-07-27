@@ -58,6 +58,7 @@ describe('GET /api/usage/today status semantics', () => {
     const response = await GET();
 
     expect(response.status).toBe(200);
+    expect((await response.clone().json()).isAdmin).toBe(false);
     for (const query of featureQueries) {
       expect(query.eq).toHaveBeenCalledWith('status', 'completed');
     }
@@ -291,6 +292,7 @@ describe('GET /api/usage/today status semantics', () => {
       brief_preview: { used: 5, limit: -1 },
     });
     expect(body.byoCalls).toBe(4);
+    expect(body.isAdmin).toBe(true);
     for (const query of queries.slice(0, 3)) {
       expect(query.eq).toHaveBeenCalledWith('status', 'completed');
     }

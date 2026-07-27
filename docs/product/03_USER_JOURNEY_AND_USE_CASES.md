@@ -96,7 +96,7 @@ osbornalpha 是多租户 AI 投研监控 SaaS。**公开面只有落地页 `/`�
 
 - 简报历史页列出最近 30 天，每行链到 `/briefs/{date}` 详情；含信号命中率统计卡。
 - 简报由 `src/lib/brief/composer.ts → generateDailyBrief()` 生成（结构见 [`21_REPORT_TEMPLATES_AND_OUTPUTS.md`](./21_REPORT_TEMPLATES_AND_OUTPUTS.md)）：Sentinel Morning Note 风格，含 Top Call、Overnight & Pre-Market（Top5）、Trade Ideas（置信 ≥7 才出）、委员会信心 X/10 + 标签。
-- 推送：`/settings` 配 Telegram Chat ID / Email 收件人后，可「立即生成并推送」或定时（Vercel cron）。
+- 推送目的地由服务端环境变量管理。管理员可在 `/settings` 发测试消息或立即生成并推送；普通用户不显示手动发送控件，任何页面都不展示完整收件地址/Chat ID。
 
 ### 2.6 看雷达 / 委员会（`/radar`、`/stock/[ticker]` 的「AI 观点」）
 
@@ -112,8 +112,8 @@ osbornalpha 是多租户 AI 投研监控 SaaS。**公开面只有落地页 `/`�
 ### 2.8 设置 / 账号管理（`/settings`）
 
 - 账号区 `AccountSettings`：显示邮箱 + 套餐（Free/Pro，读 `profiles.plan`）+ 用户 ID 前 8 位；改邮箱、改密码、绑定/解绑第三方（google/github/apple，至少保留一种登录方式）、登出。
-- 推送渠道：Telegram Chat ID（@userinfobot 获取）+ Email 收件人（Resend），各有「发测试」「立即生成并推送」。
-- 语言（中文 / English stub）、简报时间（time，CST）。本地设置存 `localStorage`，保存 toast「✓ 设置已保存到本地」。
+- 推送渠道：仅管理员显示 Telegram/Email「发测试」「立即生成并推送」；目的地明确标注为服务端托管，不提供收件人输入框或客户端覆盖。
+- 语言、时区即时保存；管理员身份来自已认证服务端响应，不读取客户端存储。
 
 ---
 

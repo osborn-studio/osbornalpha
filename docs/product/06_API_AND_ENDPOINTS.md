@@ -148,7 +148,8 @@
 - 响应：JSON 简报或 markdown 文本（`text/markdown`）。`force-dynamic`，`maxDuration=60`。
 
 ### `POST /api/brief/send`
-- Body：`{ watchlist?[], topN?, skipLLM?, channels?:('telegram'|'email')[], chatId?(Telegram 覆盖), to?(Email 覆盖), text?(原始文本模式跳过 composer), subject? }`。所有模式均要求登录；LLM 模式执行次数配额、每日成本上限和逐调用审计。
+- 鉴权：仅 admin；未登录 `401`，已登录非 admin `403`。
+- Body：`{ watchlist?[], topN?, skipLLM?, channels?:('telegram'|'email')[], text?(受限原始文本), subject? }`。`watchlist` 最多 10、`topN` 钳制到 1–5、文本最多 4000 字符、主题最多 200 字符；`chatId`/`to` 等收件人覆盖一律 `400`。
 - 数据源：`generateDailyBrief()` + `sendTelegram` + `sendEmail`（按环境变量门控）。
 - 响应：`{ mode:'raw'|'brief', channels:{telegram?,email?}, brief_meta? }`。`force-dynamic`，`maxDuration=60`。
 
@@ -215,7 +216,7 @@
 | `/api/search` | GET | 无 | 东财+本地 | 60s |
 | `/api/stocks/[ticker]` | GET | 无 | mock | — |
 | `/api/brief/preview` | GET | 无 | generateDailyBrief | — |
-| `/api/brief/send` | POST | 无 | brief+Telegram+Email | — |
+| `/api/brief/send` | POST | admin | brief+Telegram+Email（服务端目的地） | — |
 | `/api/cron/daily-radar` | GET | Bearer CRON_SECRET | radarDigest+投递 | — |
 | `/api/cron/daily-brief` | GET | Bearer CRON_SECRET | brief+投递 | — |
 | `/api/diag/tushare` | GET | env token（不回显） | Tushare 透传 | — |

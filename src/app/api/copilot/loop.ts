@@ -21,6 +21,8 @@ export type CopilotEvent =
     };
   };
 
+export type CopilotProgressEvent = Exclude<CopilotEvent, { type: 'done' | 'error' }>;
+
 /** One model turn in OpenAI shape (from openai-compat toolChat). */
 export interface ModelTurn {
   content: string;
@@ -43,7 +45,7 @@ export interface LoopOpts {
   model: (messages: OaiMessage[]) => Promise<ModelTurn>;
   runTool: (name: string, args: any) => Promise<unknown>;
   maxHops: number;
-  onEvent: (e: CopilotEvent) => void;
+  onEvent: (e: CopilotProgressEvent) => void;
 }
 
 export async function runCopilotLoop(o: LoopOpts): Promise<void> {
@@ -59,71 +61,65 @@ export async function runCopilotLoop(o: LoopOpts): Promise<void> {
     : `请对标的 ${o.ticker} 执行你的分析框架并给出结论。`;
   const messages: OaiMessage[] = [{ role: 'user', content: task }];
 
-  try {
-    let finalResponseReceived = false;
-    for (let hop = 0; hop < o.maxHops; hop++) {
-      const turn = await o.model(messages);
-      const cleanedContent = sanitizeAiText(turn.content);
-      if (cleanedContent) o.onEvent({ type: 'token', text: cleanedContent });
+  let finalResponseReceived = false;
+  for (let hop = 0; hop < o.maxHops; hop++) {
+    const turn = await o.model(messages);
+    const cleanedContent = sanitizeAiText(turn.content);
+    if (cleanedContent) o.onEvent({ type: 'token', text: cleanedContent });
 
-      if (turn.toolCalls.length > 0) {
-        // Append the assistant turn carrying the tool calls (OpenAI requires the
-        // arguments serialized as a JSON string on the assistant message).
+    if (turn.toolCalls.length > 0) {
+      // Append the assistant turn carrying the tool calls (OpenAI requires the
+      // arguments serialized as a JSON string on the assistant message).
+      messages.push({
+        role: 'assistant',
+        content: turn.content || '',
+        tool_calls: turn.toolCalls.map((tc) => ({
+          id: tc.id,
+          type: 'function',
+          function: { name: tc.name, arguments: JSON.stringify(tc.arguments ?? {}) },
+        })),
+      });
+      // Tools emitted in one model turn are independent reads. Start them
+      // together so a slow endpoint does not make the whole John workflow
+      // exceed the serverless request budget.
+      for (const tc of turn.toolCalls) {
+        o.onEvent({ type: 'tool_call', name: tc.name, args: tc.arguments });
+      }
+      const toolResults = await Promise.all(turn.toolCalls.map(async (tc) => {
+        let result: unknown; let ok = true;
+        try { result = await o.runTool(tc.name, tc.arguments); }
+        catch (e) { ok = false; result = { error: String(e) }; }
+        o.onEvent({ type: 'tool_result', name: tc.name, ok, summary: ok ? '完成' : '失败' });
+        return { tc, result };
+      }));
+      // Preserve the provider's original tool-call order in conversation
+      // history even though execution completes concurrently.
+      for (const { tc, result } of toolResults) {
+        messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(result).slice(0, 6000) });
+      }
+      // Budget guard: the richer methods (15-dimension chain, 7-section
+      // diligence) gather greedily and could burn every hop on tool calls,
+      // leaving no turn to write the report. In the final hops, force
+      // synthesis with whatever data is in hand — missing items get 待核实.
+      if (hop >= o.maxHops - 2) {
         messages.push({
-          role: 'assistant',
-          content: turn.content || '',
-          tool_calls: turn.toolCalls.map((tc) => ({
-            id: tc.id,
-            type: 'function',
-            function: { name: tc.name, arguments: JSON.stringify(tc.arguments ?? {}) },
-          })),
+          role: 'user',
+          content: '⚠️ 取数预算即将耗尽：请立即停止调用任何工具，用现有数据完成并输出完整报告正文，未取到的项标「待核实」，最后附上本方法规定的 JSON 收尾块。',
         });
-        // Tools emitted in one model turn are independent reads. Start them
-        // together so a slow endpoint does not make the whole John workflow
-        // exceed the serverless request budget.
-        for (const tc of turn.toolCalls) {
-          o.onEvent({ type: 'tool_call', name: tc.name, args: tc.arguments });
-        }
-        const toolResults = await Promise.all(turn.toolCalls.map(async (tc) => {
-          let result: unknown; let ok = true;
-          try { result = await o.runTool(tc.name, tc.arguments); }
-          catch (e) { ok = false; result = { error: String(e) }; }
-          o.onEvent({ type: 'tool_result', name: tc.name, ok, summary: ok ? '完成' : '失败' });
-          return { tc, result };
-        }));
-        // Preserve the provider's original tool-call order in conversation
-        // history even though execution completes concurrently.
-        for (const { tc, result } of toolResults) {
-          messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(result).slice(0, 6000) });
-        }
-        // Budget guard: the richer methods (15-dimension chain, 7-section
-        // diligence) gather greedily and could burn every hop on tool calls,
-        // leaving no turn to write the report. In the final hops, force
-        // synthesis with whatever data is in hand — missing items get 待核实.
-        if (hop >= o.maxHops - 2) {
-          messages.push({
-            role: 'user',
-            content: '⚠️ 取数预算即将耗尽：请立即停止调用任何工具，用现有数据完成并输出完整报告正文，未取到的项标「待核实」，最后附上本方法规定的 JSON 收尾块。',
-          });
-        }
-        continue;
       }
-
-      // No tool calls → final turn. Extract the verdict JSON from the text.
-      if (!cleanedContent) {
-        throw new Error(`provider empty response (finish_reason=${turn.finishReason || 'unknown'})`);
-      }
-      const verdict = safeJson(turn.content);
-      if (verdict) o.onEvent({ type: 'verdict', data: verdict });
-      finalResponseReceived = true;
-      break;
+      continue;
     }
-    if (!finalResponseReceived) throw new Error('model hop budget exhausted before final response');
-  } catch (e) {
-    o.onEvent({ type: 'error', message: e instanceof Error ? e.message : String(e) });
-  } finally {
-    o.onEvent({ type: 'done' });
+
+    // No tool calls → final turn. Extract the verdict JSON from the text.
+    if (!cleanedContent) {
+      throw new Error(`provider empty response (finish_reason=${turn.finishReason || 'unknown'})`);
+    }
+    const verdict = safeJson(turn.content);
+    if (verdict) o.onEvent({ type: 'verdict', data: verdict });
+    finalResponseReceived = true;
+    break;
   }
+  if (!finalResponseReceived) throw new Error('model hop budget exhausted before final response');
 }
 
 function safeJson(text: string): any | null {

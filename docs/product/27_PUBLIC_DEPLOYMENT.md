@@ -18,14 +18,17 @@ osbornalpha 生产上线全流程。当前线上：托管 **Vercel**，域名 **
 NEXT_PUBLIC_SUPABASE_URL=https://mzfcaabhuwtfvsvadvsv.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_...
 NEXT_PUBLIC_APP_URL=https://www.osbornalpha.com
-SUPABASE_SERVICE_ROLE_KEY=sb_secret_...        # 仅服务端，按需
-DEEPSEEK_API_KEY=...                            # LLM
+SUPABASE_SERVICE_ROLE_KEY=sb_secret_...        # 必需，仅服务端
+LLM_PROVIDER=deepseek                          # 生产显式 pin
+LLM_MODEL=deepseek-v4-flash                    # 已复核定价模型
+DEEPSEEK_API_KEY=...                            # 仅部署 secret
 TUSHARE_TOKEN=...                               # 数据
 CRON_SECRET=...                                 # cron 鉴权（建议）
 # 通知（可选）：TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID / RESEND_API_KEY / EMAIL_FROM / EMAIL_TO
 ```
-   完整变量表见 `13_RUNBOOK.md` §2。**务必不要**再设 `SITE_PASSWORD` / `SITE_AUTH_SECRET`（已废弃）。
-4. 部署。`vercel.json` 已定义两个 cron（`/api/cron/daily-radar` 00:00 UTC、`/api/cron/daily-brief` 00:30 UTC），Vercel 自动接管。
+   `SUPABASE_SERVICE_ROLE_KEY` 对平台计量/成本审计是必需项，不是按需项；只放 Vercel 服务端 secret。完整变量表见 `13_RUNBOOK.md` §2。**务必不要**再设 `SITE_PASSWORD` / `SITE_AUTH_SECRET`（已废弃）。
+4. 在生产变量已注入的受控环境运行 `npm run preflight:release`，确认解析为 `deepseek / deepseek-v4-flash`、价格注册表通过、service-role 已配置；输出不得包含 key。
+5. 部署。`vercel.json` 已定义两个 cron（`/api/cron/daily-radar` 00:00 UTC、`/api/cron/daily-brief` 00:30 UTC），Vercel 自动接管。
 
 ---
 
@@ -76,3 +79,4 @@ CRON_SECRET=...                                 # cron 鉴权（建议）
 5. [ ] 两账号 RLS 隔离：互不可见对方 watchlist。
 6. [ ] `GET /api/brief/preview?skipLLM=true` 返回 200。
 7. [ ] Vercel Crons 面板确认两个 daily job 已注册；裸调 `/api/cron/*` 返回 401（已设 `CRON_SECRET`）。
+8. [ ] `npm run preflight:release` 在生产 env 下通过，且输出的 provider/model 与已复核价格键一致。

@@ -1,4 +1,9 @@
-import { runCopilotLoop, type CopilotEvent, type OaiMessage } from './loop';
+import {
+  runCopilotLoop,
+  type CopilotEvent,
+  type CopilotProgressEvent,
+  type OaiMessage,
+} from './loop';
 import { toolChat } from '@/lib/llm/openai-compat';
 import { anthropicToolChat } from '@/lib/llm/anthropic-compat';
 import { resolveLlm, resolvePlatformLlm, type ResolvedLlm } from '@/lib/llm/resolve';
@@ -254,7 +259,12 @@ export async function POST(req: Request) {
 
   const stream = new ReadableStream({
     async start(controller) {
-      const send = (e: CopilotEvent) => controller.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n\n`));
+      let terminalSent = false;
+      const send = (e: CopilotEvent) => {
+        if (terminalSent) return;
+        controller.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n\n`));
+        if (e.type === 'done') terminalSent = true;
+      };
       // Step scaffold first so the UI can render the method's step placeholders.
       controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'steps', steps: resolvedMethod.steps })}\n\n`));
 
@@ -379,36 +389,9 @@ export async function POST(req: Request) {
           status,
         });
       };
-      const onEvent = (e: CopilotEvent) => {
+      const onEvent = (e: CopilotProgressEvent) => {
         if (e.type === 'token') archivedText += e.text;
         if (e.type === 'verdict') archivedVerdict = e.data;
-        if (e.type === 'error') {
-          runFailed = true;
-          runErrorCode = e.code ?? stableAiErrorCode(e.message);
-          if (runErrorCode === 'quota_exhausted' && fallbackQuota) {
-            send({
-              ...e,
-              code: runErrorCode,
-              message: apiMessage(locale, 'quotaExhausted'),
-              quota: countQuotaNotice(fallbackQuota),
-            });
-            return;
-          }
-          const messageKey = costMessageKey(runErrorCode);
-          if (messageKey) {
-            send({
-              ...e,
-              code: runErrorCode,
-              message: apiMessage(locale, messageKey),
-              ...(runErrorCode === 'daily_cost_exhausted'
-                ? { quota: costQuotaNotice(quota?.plan) }
-                : {}),
-            });
-            return;
-          }
-          send({ ...e, code: runErrorCode, message: apiMessage(locale, 'providerFailed') });
-          return;
-        }
         send(e);
       };
 
@@ -544,6 +527,7 @@ export async function POST(req: Request) {
         call: callModel,
       });
 
+      let terminalError: Extract<CopilotEvent, { type: 'error' }> | null = null;
       try {
         await runCopilotLoop({
           ticker: ticker || undefined, question, maxHops: resolvedMethod.maxHops ?? 12, onEvent,
@@ -575,22 +559,31 @@ export async function POST(req: Request) {
         runFailed = true;
         runErrorCode = resolveRunErrorCode(error);
         const messageKey = costMessageKey(runErrorCode);
-        send({
+        terminalError = {
           type: 'error',
           code: runErrorCode,
           message: apiMessage(locale, messageKey ?? 'providerFailed'),
-        });
+          ...(runErrorCode === 'quota_exhausted' && fallbackQuota
+            ? { message: apiMessage(locale, 'quotaExhausted'), quota: countQuotaNotice(fallbackQuota) }
+            : {}),
+          ...(runErrorCode === 'daily_cost_exhausted'
+            ? { quota: costQuotaNotice(quota?.plan) }
+            : {}),
+        };
       } finally {
         if (runFailed && !usageFinalizationAttempted) {
           try {
             await writeUsage('failed');
           } catch (error) {
             runErrorCode = resolveRunErrorCode(error);
-            send({
+            terminalError = {
               type: 'error',
               code: runErrorCode,
               message: apiMessage(locale, costMessageKey(runErrorCode) ?? 'budgetUnavailable'),
-            });
+              ...(runErrorCode === 'daily_cost_exhausted'
+                ? { quota: costQuotaNotice(quota?.plan) }
+                : {}),
+            };
           }
         }
         if (runId && runDb) {
@@ -616,6 +609,8 @@ export async function POST(req: Request) {
             console.warn('ai run finalize failed', { run_id: runId, code: 'storage_unavailable' });
           }
         }
+        if (terminalError) send(terminalError);
+        send({ type: 'done' });
         controller.close();
       }
     },

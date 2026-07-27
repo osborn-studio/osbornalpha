@@ -45,7 +45,7 @@ TUSHARE_TOKEN=...
 ```
 
 > **门禁在 Supabase 未配置时的行为**：`middleware.ts` 与 `(app)/layout.tsx` 检测到 `NEXT_PUBLIC_SUPABASE_URL` 缺失或含 `placeholder` 时**直接放行**，所有页面可访问、不强制登录——方便纯 UI 开发。一旦填了真实 Supabase URL/Key，门禁立即生效，未登录访问 `/dashboard` 会跳 `/login`。
-> 安全提示：`SUPABASE_SERVICE_ROLE_KEY` / `sb_secret_…` 不要写进 `.env.local` 提交；`.env.local` 已被 gitignore。
+> 安全提示：本地验证平台计量/成本审计时需要服务端 `SUPABASE_SERVICE_ROLE_KEY`；只通过未提交的本地 secret 或受控环境注入，绝不写进仓库或输出。纯 UI/数据管线开发可不启用平台 LLM 路径。
 
 ---
 

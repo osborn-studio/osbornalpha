@@ -73,7 +73,7 @@ osbornalpha 是一个多租户、可售卖的 AI 投资监控工作台：用户�
 - 行情 + 财务 + 委员会观点 + 信号/事件日历，单标的聚合视图。
 
 ### F-9 设置（Settings）— `/settings`
-- 偏好：语言、涨跌配色（cn 红涨/us 绿涨）、推送时间、时区、Telegram chat_id、邮件开关（表 `user_preferences`）。+ F-1.3 账号分区。
+- 偏好：语言、涨跌配色（cn 红涨/us 绿涨）、推送时间、时区（表 `user_preferences`）+ F-1.3 账号分区。Email/Telegram 目的地由服务端配置；手动发送仅对服务端鉴权确认的 admin 显示，UI 不接收或展示完整收件地址/Chat ID。
 
 ### F-10 John Cameron / Hiphon PM Agent — `skills/hiphon-pm*`（CLI / Hermes）
 - 五段式决策管线（取数+读持仓战绩 → 宏观总闸择时 → 卡脖子选股漏斗 → 评级排序 → 持仓/校准叠加 + 组合建议）。

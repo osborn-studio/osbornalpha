@@ -1,8 +1,8 @@
-<!-- 13 运维手册 · 用途：部署/env/迁移/换密钥/故障处置/监控/on-call · 最后更新 2026-06-20 -->
+<!-- 13 运维手册 · 用途：部署/env/迁移/换密钥/故障处置/监控/on-call · 最后更新 2026-07-28 -->
 
 # 13 · 运维手册（Runbook）
 
-osbornalpha 生产运维。托管 Vercel（osbornalpha.com，阿里云 DNS）；数据层 Supabase（ref `mzfcaabhuwtfvsvadvsv`，Tokyo / Free）；LLM DeepSeek（Anthropic 回退）；数据源 Tushare + Eastmoney/Sina/Tencent。
+osbornalpha 生产运维。托管 Vercel（osbornalpha.com，阿里云 DNS）；数据层 Supabase（ref `mzfcaabhuwtfvsvadvsv`，Tokyo / Free）；计量平台 LLM 为已复核定价的 DeepSeek V4 Flash；数据源 Tushare + Eastmoney/Sina/Tencent。
 
 ---
 
@@ -11,11 +11,14 @@ osbornalpha 生产运维。托管 Vercel（osbornalpha.com，阿里云 DNS）；
 正常发布走 Git → Vercel 自动构建（push 到 `main` 触发 Production）。手动发布：
 
 ```bash
-npm run typecheck && npm run build   # 本地预检（见 11_TEST_AND_EVAL_PLAN.md）
+npm test
+npm run typecheck
+npm run build
+npm run preflight:release            # 在已注入生产 env 的受控环境运行；只输出 provider/model 等非秘密信息
 vercel --prod --yes                  # 直接发 Production
 ```
 
-部署后冒烟：打开 https://www.osbornalpha.com → 未登录见落地页 → 登录 → `/dashboard`。回滚：Vercel Dashboard → Deployments → 选上一个绿的 → **Promote to Production**（或 `vercel rollback`）。
+`preflight:release` 必须解析出 `deepseek / deepseek-v4-flash`、通过精确价格注册表校验，并确认 service-role key 已注入；命令不会打印任何 key 或指纹。部署后冒烟：打开 https://www.osbornalpha.com → 未登录见落地页 → 登录 → `/dashboard`。回滚：Vercel Dashboard → Deployments → 选上一个绿的 → **Promote to Production**（或 `vercel rollback`）。
 
 ---
 
@@ -27,12 +30,15 @@ vercel --prod --yes                  # 直接发 Production
 |------|------|------|
 | `NEXT_PUBLIC_SUPABASE_URL` | ✅ | Supabase 项目 URL（`https://mzfcaabhuwtfvsvadvsv.supabase.co`） |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | ✅ | 前端 anon/publishable key（`sb_publishable_…`） |
-| `SUPABASE_SERVICE_ROLE_KEY` | ⚠️ | 高权限密钥（`sb_secret_…`），仅服务端，绝不入库/暴露；当前代码未用，按需 |
+| `SUPABASE_SERVICE_ROLE_KEY` | ✅ | 平台计量、成本预留/审计、管理路由所需；仅服务端，绝不入库/暴露 |
 | `NEXT_PUBLIC_APP_URL` | ✅ | `https://www.osbornalpha.com`（生产） |
-| `DEEPSEEK_API_KEY` | LLM | 默认 LLM provider |
-| `DEEPSEEK_MODEL` | 可选 | `deepseek-chat` 或 `deepseek-reasoner` |
-| `ANTHROPIC_API_KEY` | 可选 | LLM 回退 |
-| `LLM_PROVIDER` | 可选 | 钉死 `deepseek\|anthropic`（不设则自动选） |
+| `LLM_PROVIDER` | ✅（推荐显式） | 生产设为 `deepseek`；显式 provider 缺自己的 key 时失败关闭，不自动换 provider |
+| `LLM_MODEL` | ✅（推荐显式） | 生产设为已复核定价的 `deepseek-v4-flash` |
+| `DEEPSEEK_API_KEY` | ✅（平台 AI） | DeepSeek 服务端密钥；值仅存部署平台 secret |
+| `DEEPSEEK_MODEL` / `ANTHROPIC_API_KEY` | 旧 facade 按需 | 仅旧 `data/sources/llm.ts` 路径；不能替代上述平台计量配置 |
+| `LLM_DAILY_COST_LIMIT_MICRORMB` | ✅ | 生产 `8800000`（¥8.80） |
+| `LLM_USD_CNY_MICROS` | ✅ | 经评审的 USD/CNY 微单位值，当前 `7200000` |
+| `LLM_RESERVATION_TTL_SECONDS` | ✅ | 成本预留 TTL，当前 `300` |
 | `TUSHARE_TOKEN` | 数据 | A 股深度数据 |
 | `CRON_SECRET` | 建议 | `/api/cron/*` 的 Bearer 鉴权 |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | 通知 | 简报/告警推送 |
@@ -86,8 +92,8 @@ supabase db push                                    # 应用所有未应用迁�
 
 ### 5.3 LLM 失败（简报/委员会）
 - 症状：`/api/brief/preview` 或 cron 简报 500/超时。
-- 排查：DeepSeek 配额/超时；用 `?skipLLM=true` 隔离判断是数据还是 LLM 问题。
-- 缓解：设 `LLM_PROVIDER=anthropic` 切回退；或降 `topN`；cron 失败会自动 Telegram/Email 告警（路由内置）。
+- 排查：先在受控环境运行 `npm run preflight:release`；若是 `pricing_unavailable`，核对实际解析出的 provider/model 与价格注册表；若是 `budget_unavailable` / `usage_audit_unavailable`，核对 service-role key 与 Supabase RPC/迁移；再检查 DeepSeek 配额/超时。
+- 缓解：保持 `LLM_PROVIDER=deepseek`、`LLM_MODEL=deepseek-v4-flash`，必要时降 `topN` 或用 `?skipLLM=true` 隔离数据管线；不得通过切换到未复核定价的模型绕过门禁。
 
 ### 5.4 cron 未跑 / 被滥用
 - 排查：Vercel cron 在 `vercel.json`（`daily-radar` 00:00 UTC、`daily-brief` 00:30 UTC）；Vercel Dashboard → Crons 看执行记录。

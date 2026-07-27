@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "playwright test",
+    "preflight:release": "tsx scripts/release-preflight.ts",
     "securities:sync": "tsx scripts/securities-sync.ts",
     "securities:reconcile": "tsx scripts/securities-reconcile.ts"
   },

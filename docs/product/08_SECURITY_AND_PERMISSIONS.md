@@ -85,7 +85,7 @@ Supabase Postgres (可信，最终防线)
 要点：
 - **anon key 公开是正常的、安全的** —— 它的权限完全由 RLS 决定。把它当机密反而是误解。
 - **service_role key 会绕过所有 RLS。** 一旦泄露到客户端 = 全库裸奔。规则：永不带 `NEXT_PUBLIC_` 前缀，永不出现在任何会进 bundle 的代码里。
-- **现状（重要事实）**：`SUPABASE_SERVICE_ROLE_KEY` 在 `.env.example` 中列为"必需"，但全仓 `src/` 与 `supabase/` 中**没有任何代码引用它**（已 grep 验证）。即当前它是预留/死配置 —— 这反而降低了泄露面（无代码路径会用到它）。Phase 2（Stripe webhook 等）若需绕 RLS 写库再引入，届时必须确保只在服务端运行时读取。
+- **现状（重要事实）**：`SUPABASE_SERVICE_ROLE_KEY` 已由服务端 admin client 用于平台计量/成本审计、Stripe webhook 与管理路径，因此生产必需。缺失时相关高权限路径失败关闭；它仍然只能存在于服务端 secret store，绝不进入客户端 bundle。
 
 ---
 
@@ -142,7 +142,7 @@ middleware 对 `/api/*` 整体放行（前缀豁免），因此**每个需要保
 | 风险 | 缓解 |
 |---|---|
 | 生产 Supabase env 缺失 → auth gate 自动关闭 → 全站公开 | 部署校验：上线前确认 `NEXT_PUBLIC_SUPABASE_URL/ANON_KEY` 已设且不含 `placeholder`；监控首屏是否要求登录 |
-| service_role key 泄露 → 绕过全部 RLS | 永不加 `NEXT_PUBLIC_`；当前无代码引用；Phase 2 引入时仅服务端读取 |
+| service_role key 泄露 → 绕过全部 RLS | 永不加 `NEXT_PUBLIC_`；仅服务端 admin client 读取；发布前只验证存在性，不输出值/指纹 |
 | API 路由漏写鉴权 → 数据越权 | RLS 兜底（越权写入被拒）；新增 `/api` 路由 checklist 必含 `getUser()` + 401 |
 | Cron / 缓存清除端点 secret 未设 → 公开触发 | 生产必设 `CRON_SECRET`、`CACHE_PURGE_SECRET`；§7 已标注 |
 | OAuth 回调白名单过宽 → 开放重定向 | 域名前缀通配 + 显式路径；回调失败统一跳 `/login?error=auth_failed` |

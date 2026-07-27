@@ -143,6 +143,7 @@ export async function GET() {
     plan,
     plan_effective: plan,
     plan_expires_at: planExpiresAt,
+    isAdmin: role === 'admin',
     usage,
     byoCalls: byoCalls ?? 0,
     cost,

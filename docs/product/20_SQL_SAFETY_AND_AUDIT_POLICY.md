@@ -45,8 +45,8 @@ supabase/migrations/
 
 - `SUPABASE_SERVICE_ROLE_KEY`（新版 `sb_secret_…`）**绕过所有 RLS**。
 - **禁止**出现在任何会进前端 bundle 的位置；**禁止**带 `NEXT_PUBLIC_` 前缀；**禁止**在客户端组件（`'use client'`）中引用。
-- 现状（事实）：全仓 `src/` 与 `supabase/` **无任何代码引用** service_role key（已 grep 验证）。它仅在 `.env.example` 中作为预留变量列出。当前应用的所有 DB 访问都走 anon key + 用户会话 + RLS。
-- Phase 2 若需服务端特权写库（如 Stripe webhook 写 `profiles.plan`），只能：在服务端运行时（Route Handler / Server Action / 后端 cron）读取该 env 建专用 client，且该 client 实例绝不下传客户端。
+- 现状（事实）：`src/lib/supabase/admin.ts` 在服务端读取 service-role key；平台计量/成本审计、Stripe webhook、管理与运维路径均使用它。生产因此必须配置该 key，缺失时相关路径失败关闭。
+- 所有 service-role 使用只能位于受信服务端运行时（已鉴权/已验签的 Route Handler、后端 cron 或运维任务）；client 实例与 key 绝不下传客户端。
 
 ---
 
@@ -92,14 +92,14 @@ supabase/migrations/
 ## 7. 审计与日志期望（Audit & Logging）
 
 现状（事实）：
-- **数据库层无应用级审计表**（无 `audit_log` 等表；schema 中不存在）。变更可追溯性当前依赖：① 迁移文件的 git 历史；② Supabase 平台自带的 Postgres / Auth 日志。
+- 平台 LLM 运行与成本分别写入 `usage_events`、`llm_cost_reservations` 持久化审计；通用业务变更仍依赖迁移 git 历史与 Supabase 平台 Postgres/Auth 日志。
 - 应用层关键操作有运行时日志：cron 路由（`daily-radar`/`daily-brief`）在失败时跨渠道告警（Telegram + Email），并返回 `duration_ms`、`errors`、成本等结构化字段。
 - Supabase Dashboard 的 Auth 日志可查注册 / 登录 / 失败等认证事件。
 
 期望（规范）：
 - **所有 schema 变更必须可在 git 中追溯到一个迁移文件 + commit。** 不留"幽灵改动"。
 - 在生产 SQL Editor 执行的任何非只读语句，应在 PR / 变更记录中留痕（贴出执行的 SQL + 时间 + 执行人 + 影响行数）。
-- Phase 2 引入计费 / admin 能力时，建议为 `profiles.plan/role` 等敏感列变更加审计触发器（写入专用 audit 表），因为这些列直接关系收费与权限。
+- 对 `profiles.plan/role` 等敏感列继续保留专门的权限与变更审计要求，因为这些列直接关系收费与权限。
 
 ---
 

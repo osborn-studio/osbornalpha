@@ -8,7 +8,7 @@ vi.mock('./crypto', () => ({
   decrypt: vi.fn(),
 }));
 
-import { resolveLlm, resolveUserLlm } from './resolve';
+import { resolveLlm, resolvePlatformLlm, resolveUserLlm } from './resolve';
 import { getUserLlm } from './settings-store';
 import { decrypt } from './crypto';
 
@@ -44,7 +44,7 @@ afterEach(() => {
 });
 
 describe('resolveLlm', () => {
-  it('falls back to env (ARK default) when no per-user row exists', async () => {
+  it('uses the only configured ARK environment key when no per-user row exists', async () => {
     vi.mocked(getUserLlm).mockResolvedValue(null);
     process.env.ARK_API_KEY = 'ark-test';
 
@@ -90,6 +90,52 @@ describe('resolveLlm', () => {
       provider: 'deepseek',
       model: 'deepseek-v4-flash',
       source: 'env',
+    }));
+  });
+});
+
+describe('resolvePlatformLlm', () => {
+  it('selects DeepSeek V4 Flash when DeepSeek is the only configured platform key', () => {
+    process.env.DEEPSEEK_API_KEY = 'deepseek-test';
+
+    expect(resolvePlatformLlm()).toEqual(expect.objectContaining({
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      apiKey: 'deepseek-test',
+      source: 'env',
+    }));
+  });
+
+  it('keeps an explicit ARK provider authoritative when its key is configured', () => {
+    process.env.LLM_PROVIDER = 'ark';
+    process.env.ARK_API_KEY = 'ark-test';
+    process.env.DEEPSEEK_API_KEY = 'deepseek-test';
+
+    expect(resolvePlatformLlm()).toEqual(expect.objectContaining({
+      provider: 'ark',
+      model: 'doubao-seed-code',
+      apiKey: 'ark-test',
+    }));
+  });
+
+  it('fails closed when an explicit provider is missing its own key', () => {
+    process.env.LLM_PROVIDER = 'ark';
+    process.env.DEEPSEEK_API_KEY = 'deepseek-test';
+
+    expect(resolvePlatformLlm()).toBeNull();
+  });
+
+  it('returns null when no supported platform key is configured', () => {
+    expect(resolvePlatformLlm()).toBeNull();
+  });
+
+  it('applies LLM_MODEL only after selecting the configured provider', () => {
+    process.env.DEEPSEEK_API_KEY = 'deepseek-test';
+    process.env.LLM_MODEL = 'reviewed-model-override';
+
+    expect(resolvePlatformLlm()).toEqual(expect.objectContaining({
+      provider: 'deepseek',
+      model: 'reviewed-model-override',
     }));
   });
 });

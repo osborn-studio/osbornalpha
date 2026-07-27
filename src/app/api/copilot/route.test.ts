@@ -131,6 +131,25 @@ async function runRoute() {
   return { response, text: await response.text() };
 }
 
+function sseEvents(text: string): Array<Record<string, unknown>> {
+  return text
+    .split('\n')
+    .filter((line) => line.startsWith('data: '))
+    .map((line) => JSON.parse(line.slice('data: '.length)));
+}
+
+function expectDoneExactlyOnceAndLast(events: Array<Record<string, unknown>>) {
+  const types = events.map((event) => event.type);
+  expect(types.filter((type) => type === 'done')).toHaveLength(1);
+  expect(types.at(-1)).toBe('done');
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((release) => { resolve = release; });
+  return { promise, resolve };
+}
+
 function reservation(costMicrormb: number, reservedMicrormb = costMicrormb + 100) {
   const current = {
     reservationId: `reservation-${costMicrormb}`,
@@ -187,6 +206,86 @@ describe('Copilot platform cost budget', () => {
     mocks.failAiRun.mockResolvedValue(undefined);
     mocks.failStaleAiRuns.mockResolvedValue(0);
     mocks.radarHandler.mockResolvedValue({ score: 1 });
+  });
+
+  it('emits success done exactly once and only after durable usage finalization', async () => {
+    const audit = deferred();
+    mocks.finalizeUsageRun.mockImplementation(async () => audit.promise);
+    mocks.reserveCostBudget.mockResolvedValue(reservation(100));
+    mocks.toolChat.mockResolvedValue({
+      content: 'Provider answer',
+      toolCalls: [],
+      finishReason: 'stop',
+      usage: usage(20, 0, 4),
+    });
+
+    const response = await POST(request());
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    const first = decoder.decode((await reader.read()).value);
+    const second = decoder.decode((await reader.read()).value);
+    expect(first).toContain('"type":"steps"');
+    expect(second).toContain('"type":"token"');
+    await vi.waitFor(() => expect(mocks.finalizeUsageRun).toHaveBeenCalledTimes(1));
+
+    let terminalReadable = false;
+    const terminalRead = reader.read().then((chunk) => {
+      terminalReadable = true;
+      return chunk;
+    });
+    await Promise.resolve();
+    expect(terminalReadable).toBe(false);
+
+    audit.resolve();
+    const terminal = decoder.decode((await terminalRead).value)
+      + decoder.decode((await reader.read()).value);
+    expectDoneExactlyOnceAndLast(sseEvents(terminal));
+  });
+
+  it('emits provider error then done only after failed usage is durably finalized', async () => {
+    const audit = deferred();
+    mocks.finalizeUsageRun.mockImplementation(async () => audit.promise);
+    mocks.reserveCostBudget.mockResolvedValue(reservation(100));
+    mocks.toolChat.mockRejectedValue(new Error('llm 500: failed'));
+
+    const response = await POST(request());
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    const first = decoder.decode((await reader.read()).value);
+    expect(first).toContain('"type":"steps"');
+    await vi.waitFor(() => expect(mocks.finalizeUsageRun).toHaveBeenCalledTimes(1));
+
+    let terminalReadable = false;
+    const terminalRead = reader.read().then((chunk) => {
+      terminalReadable = true;
+      return chunk;
+    });
+    await Promise.resolve();
+    expect(terminalReadable).toBe(false);
+
+    audit.resolve();
+    const terminal = decoder.decode((await terminalRead).value)
+      + decoder.decode((await reader.read()).value);
+    const events = sseEvents(terminal);
+    expect(events.map((event) => event.type)).toEqual(['error', 'done']);
+    expectDoneExactlyOnceAndLast(events);
+  });
+
+  it('emits a stable finalization error then one last done when durable usage finalization fails', async () => {
+    mocks.reserveCostBudget.mockResolvedValue(reservation(100));
+    mocks.toolChat.mockResolvedValue({
+      content: 'Provider answer',
+      toolCalls: [],
+      finishReason: 'stop',
+      usage: usage(20, 0, 4),
+    });
+    mocks.finalizeUsageRun.mockRejectedValue(new Error('usage_audit_unavailable'));
+
+    const { text } = await runRoute();
+    const events = sseEvents(text);
+
+    expect(events.at(-2)).toMatchObject({ type: 'error', code: 'usage_audit_unavailable' });
+    expectDoneExactlyOnceAndLast(events);
   });
 
   it('uses the reviewed 1M input ceiling and 9000 output tokens for every platform turn regardless of serialized text', async () => {

@@ -11,7 +11,7 @@ describe('runCopilotLoop (OpenAI tool-calling)', () => {
     expect(event.type).toBe('run');
   });
 
-  it('executes a tool_call then emits a verdict', async () => {
+  it('executes a tool_call then emits a verdict without owning the route terminal event', async () => {
     const model = vi.fn()
       .mockResolvedValueOnce({
         content: '先看雷达。',
@@ -34,7 +34,8 @@ describe('runCopilotLoop (OpenAI tool-calling)', () => {
     expect(types).toContain('verdict');
     const verdict = events.find((e) => e.type === 'verdict') as any;
     expect(verdict.data.rating).toBe('增持');
-    expect(types[types.length - 1]).toBe('done');
+    expect(types).not.toContain('done');
+    expect(types).not.toContain('error');
 
     // The assistant tool_calls message must serialize arguments as a JSON string,
     // and a `tool` result message must follow with the matching tool_call_id.
@@ -80,30 +81,34 @@ describe('runCopilotLoop (OpenAI tool-calling)', () => {
     await pending;
   });
 
-  it('marks max-hop exhaustion as a failure before emitting done', async () => {
+  it('throws max-hop exhaustion to the route without emitting terminal events', async () => {
     const model = vi.fn().mockResolvedValue({
       content: '', toolCalls: [{ id: 'x', name: 'radar', arguments: { ticker: 'NVDA' } }], finishReason: 'tool_calls',
     });
     const events: CopilotEvent[] = [];
-    await runCopilotLoop({ ticker: 'NVDA', model, runTool: async () => ({}), maxHops: 2, onEvent: (e) => events.push(e) });
+    await expect(runCopilotLoop({
+      ticker: 'NVDA',
+      model,
+      runTool: async () => ({}),
+      maxHops: 2,
+      onEvent: (e) => events.push(e),
+    })).rejects.toThrow('model hop budget exhausted');
     expect(model).toHaveBeenCalledTimes(2);
-    expect(events.some((event) => event.type === 'error')).toBe(true);
-    expect(events[events.length - 1].type).toBe('done');
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(events.some((event) => event.type === 'done')).toBe(false);
   });
 
-  it('treats an empty final response as a provider failure', async () => {
+  it('throws an empty final response to the route without emitting terminal events', async () => {
     const events: CopilotEvent[] = [];
-    await runCopilotLoop({
+    await expect(runCopilotLoop({
       ticker: 'NVDA',
       model: async () => ({ content: '', toolCalls: [], finishReason: 'length' }),
       runTool: async () => ({}),
       maxHops: 2,
       onEvent: (event) => events.push(event),
-    });
+    })).rejects.toThrow('empty response');
 
-    const error = events.find((event) => event.type === 'error');
-    expect(error).toMatchObject({ type: 'error' });
-    expect((error as Extract<CopilotEvent, { type: 'error' }>).message).toContain('empty response');
-    expect(events.at(-1)?.type).toBe('done');
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(events.some((event) => event.type === 'done')).toBe(false);
   });
 });

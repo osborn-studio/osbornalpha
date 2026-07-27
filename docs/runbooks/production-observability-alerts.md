@@ -43,7 +43,7 @@ The quote check uses GitHub Actions because Vercel Hobby only permits daily Cron
 | `usage_audit_unavailable` | 503 | Durable feature-run audit unavailable; do not retry blindly. |
 | `budget_invariant_violation` / `usage_audit_invariant` | 500 | Exact retry identity or ledger state conflicts; escalate before replay. |
 
-Copilot starts an SSE response after its durable run audit is created. Errors discovered during later model turns therefore arrive as `type=error` events with the same stable `code` on an HTTP 200 stream, followed by `type=done`; clients must inspect the SSE event rather than only the HTTP status. The perspectives count-exhausted response is an intentional HTTP 200 degradation with `source=quota` and `quota.reason=quota_exhausted`. Authentication failures remain `401`; admin-only manual send returns `403` for an authenticated non-admin.
+Copilot starts an SSE response after its durable run audit is created. The route owns the terminal sequence: it finalizes durable usage first, then emits either a stable `type=error` followed by `type=done`, or only `type=done` on success. `done` is emitted exactly once, is always last, and no token/verdict/error may follow it. Clients must inspect SSE errors because post-start failures retain HTTP 200. The perspectives count-exhausted response is an intentional HTTP 200 degradation with `source=quota` and `quota.reason=quota_exhausted`. Authentication failures remain `401`; admin-only manual send returns `403` for an authenticated non-admin.
 
 ### Ledger lifecycle and reconciliation
 
@@ -131,11 +131,12 @@ from (
 ### Release order and pricing review
 
 1. Apply Supabase migrations through `20260728150000_profile_entitlement_security.sql` before deploying application code.
-2. Verify the pricing registry contains the exact key `deepseek:deepseek-v4-flash`; the configured platform provider/model must resolve to `deepseek` / `deepseek-v4-flash`.
-3. Verify `LLM_DAILY_COST_LIMIT_MICRORMB=8800000`, `LLM_USD_CNY_MICROS=7200000`, `LLM_RESERVATION_TTL_SECONDS=300`, and `CRON_SECRET`; never expose these through client configuration.
-4. The rates were reviewed on 2026-07-28. `PRICING_VERSION=deepseek-2026-04-24` is the provider effective/release version key, not the review date.
-5. Deploy the app, then smoke-test a BYO call, a metered platform call, an admin cap-exempt call, and a bearer-authenticated cron without logging prompts or keys.
-6. Check the official DeepSeek model pricing and the approved USD/CNY policy before each release and after any provider pricing notice. Update the registry/version and FX configuration through code review; historical rows are never repriced.
+2. In the deployment secret store, configure `SUPABASE_SERVICE_ROLE_KEY`, `LLM_PROVIDER=deepseek`, `LLM_MODEL=deepseek-v4-flash`, and `DEEPSEEK_API_KEY`. Keep values secret; never paste them into tickets or logs.
+3. With those production variables injected, run `npm run preflight:release`. It must report `provider=deepseek`, `model=deepseek-v4-flash`, the reviewed pricing version/input ceiling, and `serviceRoleConfigured=true`; it never prints secret values. A missing pinned-provider key, missing service key, or unpriced pair blocks release.
+4. Verify `LLM_DAILY_COST_LIMIT_MICRORMB=8800000`, `LLM_USD_CNY_MICROS=7200000`, `LLM_RESERVATION_TTL_SECONDS=300`, and `CRON_SECRET`; never expose these through client configuration.
+5. The rates were reviewed on 2026-07-28. `PRICING_VERSION=deepseek-2026-04-24` is the provider effective/release version key, not the review date.
+6. Deploy the app, then smoke-test a BYO call, a metered platform call, an admin cap-exempt call, and a bearer-authenticated cron without logging prompts or keys.
+7. Check the official DeepSeek model pricing and the approved USD/CNY policy before each release and after any provider pricing notice. Update the registry/version and FX configuration through code review; historical rows are never repriced.
 
 ### Repository verification status
 

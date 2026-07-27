@@ -25,7 +25,7 @@
   },
   "channels": {
     "heading": "📬 推送渠道",
-    "tgPlaceholder": "例如 123456789（从 @userinfobot 获取）",
+    "managedDestination": "Email 与 Telegram 目的地由服务端统一配置，收件信息不会在此处显示。",
     "tgSending": "⏳ 测试发送中...",
     "tgTestText": "🧪 *Sentinel 测试消息*\n\n如果你看到这条消息，说明 Telegram 推送配置成功！\n\nhttps://stock-monitor-nu.vercel.app/",
     "tgTestSent": "✅ 测试消息已发送（msg_id {id}）",
@@ -33,9 +33,6 @@
     "tgBriefSending": "⏳ 生成并发送今日简报中（约 10-20s）...",
     "tgBriefSent": "✅ 已发送 {count} 条消息",
     "tgBriefButton": "🚀 立即生成并推送",
-    "tgHint": "提示：① 找 @BotFather 创建 bot 拿 token  ②  和 bot 说 hi  ③  从 @userinfobot 拿 chat_id  ④ 在 Vercel env 加 TELEGRAM_BOT_TOKEN",
-    "emailRecipientLabel": "📧 Email 收件人",
-    "emailPlaceholder": "you@example.com（不填则用 EMAIL_TO env）",
     "emailSending": "⏳ 发送测试邮件中...",
     "emailTestSubject": "Sentinel · 邮件测试",
     "emailTestText": "🧪 Sentinel email 测试\n\n如果你看到这封邮件，说明 Resend 推送配置成功！\n\nhttps://stock-monitor-nu.vercel.app/",
@@ -44,8 +41,6 @@
     "emailBriefSending": "⏳ 生成并发邮件简报中（约 20-30s）...",
     "emailBriefSent": "✅ 简报邮件已发送（主题：{subject}...）",
     "emailBriefButton": "🚀 立即生成 brief 并发邮件",
-    "emailHint": "提示：① 注册 <link>resend.com</link>（免费 100 邮件/日）② 拿 API key ③ vercel env add RESEND_API_KEY + EMAIL_TO + EMAIL_FROM<br></br>④ 沙箱测试可用 EMAIL_FROM=onboarding@resend.dev（接收方必须是 Resend 账号邮箱）",
-    "emailNotifLabel": "启用每日邮件推送（与 Telegram 并行）",
     "sendFailed": "发送失败",
     "failed": "失败"
   },
@@ -53,7 +48,5 @@
     "heading": "⏰ 简报投递",
     "schedule": "每日 08:30 北京时间（UTC+8）投递",
     "localEquiv": "≈ 你的本地时间 {time}"
-  },
-  "saveToast": "✓ 设置已保存到本地",
-  "saveButton": "💾 保存所有设置"
+  }
 }

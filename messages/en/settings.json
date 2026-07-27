@@ -25,7 +25,7 @@
   },
   "channels": {
     "heading": "📬 Push Channels",
-    "tgPlaceholder": "e.g. 123456789 (get it from @userinfobot)",
+    "managedDestination": "Email and Telegram destinations are configured on the server. Recipient details are hidden.",
     "tgSending": "⏳ Sending test message...",
     "tgTestText": "🧪 *Sentinel test message*\n\nIf you can see this message, your Telegram push is configured correctly!\n\nhttps://stock-monitor-nu.vercel.app/",
     "tgTestSent": "✅ Test message sent (msg_id {id})",
@@ -33,9 +33,6 @@
     "tgBriefSending": "⏳ Generating and sending today's brief (~10-20s)...",
     "tgBriefSent": "✅ Sent {count} messages",
     "tgBriefButton": "🚀 Generate & push now",
-    "tgHint": "Tip: ① Create a bot with @BotFather to get a token ② Say hi to your bot ③ Get your chat_id from @userinfobot ④ Add TELEGRAM_BOT_TOKEN in Vercel env",
-    "emailRecipientLabel": "📧 Email recipient",
-    "emailPlaceholder": "you@example.com (defaults to EMAIL_TO env)",
     "emailSending": "⏳ Sending test email...",
     "emailTestSubject": "Sentinel · Email Test",
     "emailTestText": "🧪 Sentinel email test\n\nIf you received this email, your Resend push is configured correctly!\n\nhttps://stock-monitor-nu.vercel.app/",
@@ -44,8 +41,6 @@
     "emailBriefSending": "⏳ Generating and emailing the brief (~20-30s)...",
     "emailBriefSent": "✅ Brief email sent (subject: {subject}...)",
     "emailBriefButton": "🚀 Generate brief & email now",
-    "emailHint": "Tip: ① Sign up at <link>resend.com</link> (free 100 emails/day) ② Get an API key ③ vercel env add RESEND_API_KEY + EMAIL_TO + EMAIL_FROM<br></br>④ For sandbox testing use EMAIL_FROM=onboarding@resend.dev (recipient must be your Resend account email)",
-    "emailNotifLabel": "Enable daily email delivery (in parallel with Telegram)",
     "sendFailed": "Send failed",
     "failed": "Failed"
   },
@@ -53,7 +48,5 @@
     "heading": "⏰ Brief Delivery",
     "schedule": "Delivered daily at 08:30 Beijing time (UTC+8)",
     "localEquiv": "≈ {time} in your local time"
-  },
-  "saveToast": "✓ Settings saved locally",
-  "saveButton": "💾 Save all settings"
+  }
 }

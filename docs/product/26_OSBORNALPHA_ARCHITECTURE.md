@@ -50,12 +50,12 @@
 |---|---|---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | ✅ | Supabase 项目 URL（`https://mzfcaabhuwtfvsvadvsv.supabase.co`） | 是 |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | ✅ | anon/publishable key（新版 `sb_publishable_…`） | 是 |
-| `SUPABASE_SERVICE_ROLE_KEY` | 按需 | service_role 高权限（`sb_secret_…`），当前代码未用，勿入库 | 否 |
+| `SUPABASE_SERVICE_ROLE_KEY` | ✅ | 平台计量、成本审计与管理路径使用的 service-role 高权限密钥；仅服务端、勿入库 | 否 |
 | `NEXT_PUBLIC_APP_URL` | 建议 | 应用基址（本地 `http://localhost:3000`） | 是 |
-| `DEEPSEEK_API_KEY` | LLM 二选一 | DeepSeek（默认 LLM） | 否 |
-| `DEEPSEEK_MODEL` | 可选 | `deepseek-chat`(默认) / `deepseek-reasoner` | 否 |
-| `ANTHROPIC_API_KEY` | LLM 兜底 | Claude（perspectives 兜底/合成） | 否 |
-| `LLM_PROVIDER` | 可选 | 固定 `deepseek`\|`anthropic`（不设则自动） | 否 |
+| `LLM_PROVIDER` | ✅（推荐显式） | 生产 `deepseek`；显式 provider 缺 key 时失败关闭 | 否 |
+| `LLM_MODEL` | ✅（推荐显式） | 生产 `deepseek-v4-flash`（已复核定价） | 否 |
+| `DEEPSEEK_API_KEY` | 平台 AI 需 | DeepSeek 服务端 key | 否 |
+| `DEEPSEEK_MODEL` / `ANTHROPIC_API_KEY` | 旧 facade 按需 | 旧数据源 LLM facade，不替代平台计量配置 | 否 |
 | `TUSHARE_TOKEN` | A 股深度数据需 | Tushare Pro token | 否 |
 | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | 推送需 | Telegram 投递 | 否 |
 | `RESEND_API_KEY` + `EMAIL_FROM` + `EMAIL_TO` | 邮件需 | Resend 邮件投递 | 否 |
@@ -65,7 +65,7 @@
 
 **已移除（不再使用）**：`SITE_PASSWORD`、`SITE_AUTH_SECRET`（共享口令门已删，改 Supabase 会话 + RLS）。Vercel Production 已删除这两项并重新部署。
 
-> 未配置降级：Supabase 变量缺失/含 `placeholder` 时，中间件认证门自动关闭、`(app)/layout.tsx` 守卫放行，便于本地零变量启动；LLM 变量缺失时 `getActiveProvider()` 返回 `none`。
+> 本地零变量开发仍可降级，但生产缺 `SUPABASE_SERVICE_ROLE_KEY` 会使平台计量/审计失败关闭；发布前必须运行 `npm run preflight:release`，验证解析出的 provider/model、精确价格键与 service-role 配置。
 
 ---
 

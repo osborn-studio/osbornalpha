@@ -29,6 +29,11 @@ const ENV_KEY: Record<string, string> = {
   minimax: 'MINIMAX_API_KEY',
 };
 
+// Production preference is explicit and deterministic. DeepSeek is the
+// reviewed default, while the remaining providers preserve a stable fallback
+// order when operators configure a key without pinning LLM_PROVIDER.
+const AUTO_PROVIDER_PREFERENCE = ['deepseek', 'ark', 'openai', 'kimi', 'minimax'] as const;
+
 /**
  * Resolve only the authenticated user's own key. User-triggered features that
  * are outside the platform metering matrix must use this boundary so they can
@@ -71,10 +76,16 @@ export async function resolveLlm(): Promise<ResolvedLlm | null> {
 }
 
 export function resolvePlatformLlm(): ResolvedLlm | null {
-  const envProvider = process.env.LLM_PROVIDER || 'ark';
-  const def = getProvider(envProvider);
+  const explicitProvider = process.env.LLM_PROVIDER?.trim().toLowerCase();
+  const selectedProvider = explicitProvider || AUTO_PROVIDER_PREFERENCE.find((provider) => {
+    const keyName = ENV_KEY[provider];
+    return typeof process.env[keyName] === 'string' && process.env[keyName]!.trim().length > 0;
+  });
+  if (!selectedProvider) return null;
+
+  const def = getProvider(selectedProvider);
   const key = def ? process.env[ENV_KEY[def.id]] : undefined;
-  if (def && key) {
+  if (def && key?.trim()) {
     return {
       provider: def.id,
       baseUrl: def.baseUrl,

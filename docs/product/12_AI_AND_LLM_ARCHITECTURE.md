@@ -1,4 +1,4 @@
-<!-- 12_AI_AND_LLM_ARCHITECTURE.md · osbornalpha LLM/AI 架构（DeepSeek + 投资委员会 + John Cameron PM Agent） · 最后更新 2026-06-20 -->
+<!-- 12_AI_AND_LLM_ARCHITECTURE.md · osbornalpha LLM/AI 架构（DeepSeek + 投资委员会 + John Cameron PM Agent） · 最后更新 2026-07-28 -->
 
 # 12 · AI 与 LLM 架构
 
@@ -8,17 +8,31 @@
 
 osbornalpha 的 AI 能力分三层：
 
-1. **统一 LLM 门面（facade）** — `src/lib/data/sources/llm.ts`，对上层只暴露一个 `chat()` 函数，向下封装 DeepSeek 与 Anthropic 两个 provider，并统一做 token / cost 估算。
-2. **AI 产出管线** — `src/lib/brief/*`（每日简报 composer、雷达 digest-takes）与 `src/lib/data/personas.ts`（投资委员会 9 人 persona），通过 `chat()` 调 LLM 产出结构化结果。
-3. **PM Agent（Claude Code 侧）** — `.claude/agents/john-cameron.md`，基金经理 John Cameron 虚拟分身，编排 skills、遵守 doctrine 做决策。它运行在 Claude Code / Hermes 环境，与 Web App 共享同一套 `/api/*` 数据接口（详见文档 19、22）。
+1. **平台计量 LLM resolver** — `src/lib/llm/resolve.ts` 为 Copilot、观点与手动简报选择 BYO 或平台 provider；平台调用必须经过版本化价格注册表、成本预留与持久化 usage audit。
+2. **旧统一 LLM 门面（facade）** — `src/lib/data/sources/llm.ts`，封装 DeepSeek 与 Anthropic；仍服务于部分旧数据源路径。
+3. **AI 产出管线** — `src/lib/brief/*`（每日简报 composer、雷达 digest-takes）与 `src/lib/data/personas.ts`（投资委员会 9 人 persona）产出结构化结果。
+4. **PM Agent（Claude Code 侧）** — `.claude/agents/john-cameron.md`，基金经理 John Cameron 虚拟分身，编排 skills、遵守 doctrine 做决策。它运行在 Claude Code / Hermes 环境，与 Web App 共享同一套 `/api/*` 数据接口（详见文档 19、22）。
 
 数据事实校验：LLM = **DeepSeek（主）+ Anthropic（备/可选）**；行情与财务数据 = **Tushare + Eastmoney/Sina/Tencent**（见文档 23）；Anthropic 作为分析 provider 备选，三项均与代码一致。
 
-## 12.2 统一 LLM 门面 `llm.ts`
+## 12.2 平台 resolver 与旧 LLM 门面
+
+生产平台计量路径使用 `resolvePlatformLlm()`：显式 `LLM_PROVIDER` 始终权威，缺该 provider 自己的 key 时返回 `null`，不会静默切换；未设置 provider 时按确定顺序选已配置 key，DeepSeek 优先。生产推荐且发布前强制核对：
+
+```text
+LLM_PROVIDER=deepseek
+LLM_MODEL=deepseek-v4-flash
+DEEPSEEK_API_KEY=<deployment secret>
+SUPABASE_SERVICE_ROLE_KEY=<deployment secret>
+```
+
+`npm run preflight:release` 验证实际解析结果、精确价格注册表和 service-role 存在性，且不输出 secret。当前平台价格仅复核 `deepseek:deepseek-v4-flash`；不得把旧 facade 的模型/估价当作平台计量价格。
+
+旧 `src/lib/data/sources/llm.ts` 的 `getActiveProvider()` 仅描述 legacy facade：
 
 `getActiveProvider()` 决定调用哪个 provider：
 
-- 若设置 `LLM_PROVIDER=deepseek|anthropic`，则强制 pin。
+- 若设置 `LLM_PROVIDER=deepseek|anthropic`，则在该 legacy facade 内强制 pin；`anthropic` 不是当前已复核的平台计量配置。
 - 否则按解析顺序：`DEEPSEEK_API_KEY` → `ANTHROPIC_API_KEY` → `'none'`。即 **DeepSeek 优先**（成本最低），无 DeepSeek key 时回落 Anthropic。
 - `isLLMConfigured()` = `getActiveProvider() !== 'none'`；无任何 key 时上层会走 `skipLLM` 降级路径（只出行情+信号，不出 AI 观点）。
 
