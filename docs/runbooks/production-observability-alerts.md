@@ -99,6 +99,14 @@ order by created_at, id;
 3. Deploy the app, then smoke-test a BYO call, a metered platform call, an admin cap-exempt call, and a bearer-authenticated cron without logging prompts or keys.
 4. Check the official DeepSeek model pricing and the approved USD/CNY policy before each release and after any provider pricing notice. Update `PRICING_VERSION` and the FX snapshot version/config through code review; historical rows are never repriced.
 
+### Repository verification status
+
+The feature tests, standalone TypeScript check, production build, database reset, pgTAP suite, concurrency harness, database lint, diff hygiene, and LLM call-site audit pass locally. This does not mean every repository quality gate is available:
+
+- `CI=1 npm run lint` is **BLOCKED / not available non-interactively**. The script invokes deprecated `next lint`, the repository has no ESLint configuration, and Next prompts `How would you like to configure ESLint?`; under `CI=1` it exits 1 before linting files.
+- Therefore standalone application lint is not a passing gate. The passing production build and `npm run typecheck` are recorded separately and must not be presented as a substitute for standalone lint.
+- No ESLint configuration, codemod, or dependency upgrade was introduced in this AI-budget scope. Establishing the repository lint baseline requires a separate approved change.
+
 ## Delivery
 
 - Primary: Resend email to `ALERT_EMAIL_TO`.

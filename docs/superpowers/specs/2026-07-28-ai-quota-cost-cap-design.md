@@ -1,7 +1,7 @@
 # AI 平台额度、Token 成本计量与单用户日成本上限设计
 
 **日期**：2026-07-28  
-**状态**：已获口头设计批准；仓库实现完成并进入最终验证（不代表已部署生产）
+**状态**：已获口头设计批准；仓库实现完成，独立 lint 门因仓库缺少 ESLint 配置而阻塞（不代表已部署生产）
 **适用分支**：`codex/stock-detail-live`
 
 > 实现说明：第 14 节记录设计批准后为满足“网络支出前持久审计”和生产权限边界而采纳的实现偏差。若与前文的初始预留/释放描述冲突，以第 14 节为准。
@@ -307,7 +307,7 @@ BYO 供应商失败后若尝试平台回退，必须在回退前同时检查平�
 
 - TypeScript/Vitest：显式 Free/Pro/Admin 配额、北京时间边界、DeepSeek 价格与 FX、9000 Copilot 输出、BYO、admin cap-exempt、pre-network incurred、pending/finalize 生命周期、精确幂等、受保护 profile、手动发送权限和 Cron fail-closed。
 - Supabase SQL：8.8 元并发原子上限、状态转换、过期/跨日、service-role 权限、cap-exempt 排除、pending 恢复与 profile 权限。
-- 完整验证门：`npm test`、`npm run typecheck`、`npm run build`、`git diff --check`、本地数据库重置、全部 SQL 测试、并发 harness、数据库 lint 和生产 LLM 调用点审计。
+- 已执行验证矩阵：`npm test`、`npm run typecheck`、`npm run build`、`git diff --check`、本地数据库重置、全部 SQL 测试、并发 harness、数据库 lint 和生产 LLM 调用点审计。独立应用 lint 的阻塞状态单独记录，不能计为通过。
 
 最终验证结果和提交 SHA 记录在本任务交付说明中；在实际部署与生产 smoke test 完成前，文档状态保持“仓库实现”，不标记“已生产发布”。
 
@@ -317,4 +317,5 @@ BYO 供应商失败后若尝试平台回退，必须在回退前同时检查平�
 - TypeScript：独立运行 `npm run typecheck` 通过；Next 生产构建通过并生成 33/33 静态页。
 - 数据库：24 个迁移可从空本地库重置；2 个 pgTAP 文件共 185 项通过；并发 harness 的 4 个竞争场景通过；数据库 lint 无错误。
 - 生产 LLM 调用点：`rg` 覆盖 `toolChat`、`anthropicToolChat`、`chat`、`chatResolved`、直接 provider endpoint 及 API/Cron 入口；未发现未计量的公开或用户平台 Key 路径。
+- 独立应用 lint：`CI=1 npm run lint` 为 **BLOCKED / 非交互环境不可用**。当前脚本调用已弃用的 `next lint`，仓库没有 ESLint 配置，Next 在首次配置问题 `How would you like to configure ESLint?` 处退出 1，未实际完成 lint。生产构建和类型检查虽通过，但不代表该独立 lint 门通过；本期未擅自创建 ESLint 配置或升级依赖。
 - `npm audit` 仅报告既有依赖链中的 3 个 high advisories（Next.js/PostCSS/sharp）；本任务按范围未执行强制依赖升级。
