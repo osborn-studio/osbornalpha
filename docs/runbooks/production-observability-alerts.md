@@ -89,11 +89,17 @@ where status = 'pending'
 order by created_at, id
 limit 100;
 
--- Read-only incurred candidates. Age alone never authorizes settlement/release.
+-- Read-only incurred candidates. Resolve <user_uuid>, <day_start_utc>, and
+-- <day_end_utc> from the incident/user before querying; never run globally.
+-- The time bounds are UTC instants for one Asia/Shanghai calendar day.
+-- Age alone never authorizes settlement/release; require provider/request evidence.
 select id, feature, cap_exempt, created_at, pricing_version, usd_cny_micros
 from llm_cost_reservations
-where status = 'incurred'
+where user_id = '<user_uuid>'
+  and created_at >= '<day_start_utc>'
+  and created_at < '<day_end_utc>'
   and created_at < now() - interval '15 minutes'
+  and status = 'incurred'
 order by created_at, id
 limit 100;
 
