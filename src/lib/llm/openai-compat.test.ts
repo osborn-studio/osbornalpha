@@ -17,14 +17,25 @@ function mockFetch(canned: unknown) {
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('chat', () => {
-  it('parses content + usage and sends Bearer auth to the right URL', async () => {
+  it('preserves DeepSeek cache usage and sends Bearer auth to the right URL', async () => {
     const fn = mockFetch({
       choices: [{ message: { content: '你好' } }],
-      usage: { prompt_tokens: 12, completion_tokens: 7 },
+      usage: {
+        prompt_tokens: 100,
+        prompt_cache_hit_tokens: 60,
+        prompt_cache_miss_tokens: 40,
+        completion_tokens: 25,
+      },
     });
     const r = await chat(CFG, { system: 'sys', messages: [{ role: 'user', content: 'hi' }] });
     expect(r.content).toBe('你好');
-    expect(r.usage).toEqual({ input_tokens: 12, output_tokens: 7 });
+    expect(r.usage).toEqual({
+      inputTokens: 100,
+      cacheHitInputTokens: 60,
+      cacheMissInputTokens: 40,
+      outputTokens: 25,
+      estimated: false,
+    });
     const [url, init] = fn.mock.calls[0] as unknown as [string, any];
     expect(url).toBe('https://api.example.com/v1/chat/completions');
     expect(init.headers.Authorization).toBe('Bearer sk-test-123');
@@ -37,6 +48,37 @@ describe('chat', () => {
     const fn = mockFetch({ choices: [{ message: { content: 'x' } }], usage: {} });
     await chat({ ...CFG, chatPath: '/text/chatcompletion_v2' }, { messages: [{ role: 'user', content: 'hi' }] });
     expect((fn.mock.calls[0] as any)[0]).toBe('https://api.example.com/v1/text/chatcompletion_v2');
+  });
+
+  it('treats OpenAI prompt tokens without cache breakdown as cache misses', async () => {
+    mockFetch({
+      choices: [{ message: { content: 'x' } }],
+      usage: { prompt_tokens: 100, completion_tokens: 25 },
+    });
+
+    const r = await chat(CFG, { messages: [{ role: 'user', content: 'hi' }] });
+
+    expect(r.usage).toEqual({
+      inputTokens: 100,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 100,
+      outputTokens: 25,
+      estimated: false,
+    });
+  });
+
+  it('marks malformed provider usage as estimated', async () => {
+    mockFetch({ choices: [{ message: { content: 'x' } }], usage: { prompt_tokens: '100' } });
+
+    const r = await chat(CFG, { messages: [{ role: 'user', content: 'hi' }] });
+
+    expect(r.usage).toEqual({
+      inputTokens: 0,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 0,
+      outputTokens: 0,
+      estimated: true,
+    });
   });
 });
 
@@ -59,6 +101,13 @@ describe('toolChat', () => {
     expect(r.content).toBe('');
     expect(r.toolCalls).toEqual([{ id: 't1', name: 'radar', arguments: { ticker: 'NVDA' } }]);
     expect(r.finishReason).toBe('tool_calls');
+    expect(r.usage).toEqual({
+      inputTokens: 5,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 5,
+      outputTokens: 3,
+      estimated: false,
+    });
     const body = JSON.parse((fn.mock.calls[0] as any)[1].body);
     expect(body.tools[0].type).toBe('function');
     expect(body.tools[0].function.name).toBe('radar');

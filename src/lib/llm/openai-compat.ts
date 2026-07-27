@@ -9,6 +9,8 @@
  * other provider that speaks the OpenAI /chat/completions wire format.
  */
 
+import { normalizeUsage, type NormalizedUsage } from '../billing/llm-pricing';
+
 export interface LlmConfig {
   baseUrl: string;
   apiKey: string;
@@ -34,21 +36,8 @@ interface ChatMessage {
   content: string;
 }
 
-interface Usage {
-  input_tokens: number;
-  output_tokens: number;
-}
-
 function buildUrl(cfg: LlmConfig): string {
   return cfg.baseUrl + (cfg.chatPath ?? '/chat/completions');
-}
-
-function parseUsage(raw: unknown): Usage {
-  const u = (raw ?? {}) as { prompt_tokens?: number; completion_tokens?: number };
-  return {
-    input_tokens: typeof u.prompt_tokens === 'number' ? u.prompt_tokens : 0,
-    output_tokens: typeof u.completion_tokens === 'number' ? u.completion_tokens : 0,
-  };
 }
 
 async function postJson(
@@ -88,7 +77,7 @@ export async function chat(
     temperature?: number;
     timeoutMs?: number;
   },
-): Promise<{ content: string; usage: Usage }> {
+): Promise<{ content: string; usage: NormalizedUsage }> {
   const timeoutMs = opts.timeoutMs ?? 60000;
   const messages: ChatMessage[] = [];
   if (opts.system) messages.push({ role: 'system', content: opts.system });
@@ -106,7 +95,7 @@ export async function chat(
     usage?: unknown;
   };
   const content = data?.choices?.[0]?.message?.content ?? '';
-  const usage = parseUsage(data?.usage);
+  const usage = normalizeUsage(data?.usage);
   return { content, usage };
 }
 
@@ -125,7 +114,7 @@ export async function toolChat(
   content: string;
   toolCalls: ToolCall[];
   finishReason: string;
-  usage: Usage;
+  usage: NormalizedUsage;
 }> {
   const timeoutMs = opts.timeoutMs ?? 60000;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -175,6 +164,6 @@ export async function toolChat(
     return { id: tc.id, name: tc.function.name, arguments: args };
   });
   const finishReason = choice?.finish_reason ?? '';
-  const usage = parseUsage(data?.usage);
+  const usage = normalizeUsage(data?.usage);
   return { content, toolCalls, finishReason, usage };
 }

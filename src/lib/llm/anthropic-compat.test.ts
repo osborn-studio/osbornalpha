@@ -75,11 +75,49 @@ describe('responseToTurn', () => {
         { type: 'tool_use', id: 'c9', name: 'get_quote', input: { ticker: '0700' } },
       ],
       stop_reason: 'tool_use',
+      usage: { input_tokens: 100, output_tokens: 25 },
     });
     expect(turn).toEqual({
       content: '结论',
       toolCalls: [{ id: 'c9', name: 'get_quote', arguments: { ticker: '0700' } }],
       finishReason: 'tool_use',
+      usage: {
+        inputTokens: 100,
+        cacheHitInputTokens: 0,
+        cacheMissInputTokens: 100,
+        outputTokens: 25,
+        estimated: false,
+      },
+    });
+  });
+
+  it('maps Anthropic cache reads to hits and cache creation to misses', () => {
+    const turn = responseToTurn({
+      content: [],
+      usage: {
+        input_tokens: 100,
+        output_tokens: 25,
+        cache_read_input_tokens: 60,
+        cache_creation_input_tokens: 40,
+      },
+    });
+
+    expect(turn.usage).toEqual({
+      inputTokens: 100,
+      cacheHitInputTokens: 60,
+      cacheMissInputTokens: 40,
+      outputTokens: 25,
+      estimated: false,
+    });
+  });
+
+  it('marks missing Anthropic usage as estimated', () => {
+    expect(responseToTurn({ content: [] }).usage).toEqual({
+      inputTokens: 0,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 0,
+      outputTokens: 0,
+      estimated: true,
     });
   });
 });

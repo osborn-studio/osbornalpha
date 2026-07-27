@@ -99,12 +99,13 @@ async function tryUserResolvedChat(opts: UnifiedChatOpts): Promise<UnifiedChatRe
       temperature: opts.temperature,
       timeoutMs: opts.timeoutMs,
     });
+    const usage = { input_tokens: r.usage.inputTokens, output_tokens: r.usage.outputTokens };
     return {
       provider: resolved.provider,
       model: resolved.model,
       content: r.content,
-      usage: r.usage,
-      est_cost_usd: Number(estimateCost(resolved.model, r.usage).toFixed(5)),
+      usage,
+      est_cost_usd: Number(estimateCost(resolved.model, usage).toFixed(5)),
     };
   } catch {
     return null; // any resolution/override failure → legacy env path

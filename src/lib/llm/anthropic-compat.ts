@@ -3,6 +3,7 @@
 // boundary. Used for providers with protocol: 'anthropic' (ARK Agent Plan).
 
 import type { LlmConfig, ToolDef, ToolCall } from './openai-compat';
+import { normalizeUsage, type NormalizedUsage } from '../billing/llm-pricing';
 
 type Block =
   | { type: 'text'; text: string }
@@ -47,21 +48,29 @@ export function toolDefsToAnthropic(tools: ToolDef[]) {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function responseToTurn(data: { content?: any[]; stop_reason?: string }): {
-  content: string; toolCalls: ToolCall[]; finishReason: string;
+export function responseToTurn(data: { content?: any[]; stop_reason?: string; usage?: unknown }): {
+  content: string; toolCalls: ToolCall[]; finishReason: string; usage: NormalizedUsage;
 } {
   const blocks = data.content ?? [];
   const content = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('');
   const toolCalls: ToolCall[] = blocks
     .filter((b) => b.type === 'tool_use')
     .map((b) => ({ id: b.id, name: b.name, arguments: b.input ?? {} }));
-  return { content, toolCalls, finishReason: data.stop_reason ?? '' };
+  const rawUsage = data.usage;
+  const usage = rawUsage && typeof rawUsage === 'object'
+    ? normalizeUsage({
+      ...rawUsage,
+      prompt_cache_hit_tokens: (rawUsage as Record<string, unknown>).cache_read_input_tokens,
+      prompt_cache_miss_tokens: (rawUsage as Record<string, unknown>).cache_creation_input_tokens,
+    })
+    : normalizeUsage(rawUsage);
+  return { content, toolCalls, finishReason: data.stop_reason ?? '', usage };
 }
 
 export async function anthropicToolChat(
   cfg: LlmConfig,
   opts: { system?: string; messages: any[]; tools: ToolDef[]; max_tokens?: number; timeoutMs?: number }, // eslint-disable-line @typescript-eslint/no-explicit-any
-): Promise<{ content: string; toolCalls: ToolCall[]; finishReason: string }> {
+): Promise<{ content: string; toolCalls: ToolCall[]; finishReason: string; usage: NormalizedUsage }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 60000);
   try {
