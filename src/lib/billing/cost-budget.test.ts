@@ -24,6 +24,7 @@ function fakeSupabase(...responses: RpcResponse[]): BudgetRpcAdapter & { calls: 
     reserve: (args) => respond('reserve_llm_daily_budget', args),
     markIncurred: (args) => respond('mark_llm_budget_incurred', args),
     settle: (args) => respond('settle_llm_budget', args),
+    finalizeIncurred: (args) => respond('finalize_llm_budget_incurred', args),
     release: (args) => respond('release_llm_budget', args),
   };
 }
@@ -192,7 +193,43 @@ describe('reserveCostBudget', () => {
     });
     expect(supabase.calls[2]).toEqual({
       fn: 'settle_llm_budget',
-      args: { p_reservation_id: 'reservation-1', p_actual_micrormb: 118_944 },
+      args: {
+        p_reservation_id: 'reservation-1',
+        p_actual_micrormb: 118_944,
+        p_input_tokens: 100_000,
+        p_cache_hit_input_tokens: 0,
+        p_cache_miss_input_tokens: 100_000,
+        p_output_tokens: 9_000,
+        p_pricing_version: 'deepseek-2026-04-24',
+        p_usd_cny_micros: 7_200_000,
+        p_usage_estimated: false,
+      },
+    });
+  });
+
+  it('durably finalizes conservative usage when incurred provider usage is unavailable', async () => {
+    const supabase = fakeSupabase(
+      { data: [reservationRow()], error: null },
+      { data: [terminalRow('reservation-1', 'incurred')], error: null },
+      { data: [terminalRow('reservation-1', 'incurred')], error: null },
+    );
+    const reservation = await reserveCostBudget(supabase, 'user-1', request);
+
+    await reservation.markIncurred();
+    await reservation.finalizeIncurred();
+
+    expect(supabase.calls[2]).toEqual({
+      fn: 'finalize_llm_budget_incurred',
+      args: {
+        p_reservation_id: 'reservation-1',
+        p_input_tokens: 100_000,
+        p_cache_hit_input_tokens: 0,
+        p_cache_miss_input_tokens: 100_000,
+        p_output_tokens: 9_000,
+        p_pricing_version: 'deepseek-2026-04-24',
+        p_usd_cny_micros: 7_200_000,
+        p_usage_estimated: true,
+      },
     });
   });
 
@@ -250,7 +287,15 @@ describe('reserveCostBudget', () => {
     await reservation.markIncurred();
     await expect(reservation.settle({ ...completeUsage, outputTokens: Number.NaN, estimated: true }))
       .resolves.toEqual({ costMicrormb: 118_944, usageEstimated: true });
-    expect(supabase.calls[2]?.args).toEqual({ p_reservation_id: 'reservation-1', p_actual_micrormb: 118_944 });
+    expect(supabase.calls[2]?.args).toEqual(expect.objectContaining({
+      p_reservation_id: 'reservation-1',
+      p_actual_micrormb: 118_944,
+      p_input_tokens: 100_000,
+      p_cache_hit_input_tokens: 0,
+      p_cache_miss_input_tokens: 100_000,
+      p_output_tokens: 9_000,
+      p_usage_estimated: true,
+    }));
   });
 
   it('retains the reservation for contradictory cache usage even when marked real', async () => {
@@ -269,7 +314,15 @@ describe('reserveCostBudget', () => {
       cacheMissInputTokens: 0,
       estimated: false,
     })).resolves.toEqual({ costMicrormb: 118_944, usageEstimated: true });
-    expect(supabase.calls[2]?.args).toEqual({ p_reservation_id: 'reservation-1', p_actual_micrormb: 118_944 });
+    expect(supabase.calls[2]?.args).toEqual(expect.objectContaining({
+      p_reservation_id: 'reservation-1',
+      p_actual_micrormb: 118_944,
+      p_input_tokens: 100_000,
+      p_cache_hit_input_tokens: 0,
+      p_cache_miss_input_tokens: 100_000,
+      p_output_tokens: 9_000,
+      p_usage_estimated: true,
+    }));
   });
 
   it('never sends an actual settlement exceeding the reservation', async () => {

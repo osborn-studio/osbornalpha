@@ -154,8 +154,8 @@ interface BriefStockBlock {
 
 ### 2.8 API 形态
 
-- **`GET /api/brief/preview`** —— params `watchlist=A,B,C`、`topN`、`skipLLM=true`、`format=json|markdown|md`。`format=markdown` 返回 `brief.markdown`（`text/markdown`）；否则返回完整 `DailyBrief`；出错 `{ error, stack }` (500)。
-- **`POST /api/brief/send`** —— body `{ watchlist?, topN?, skipLLM?, channels?:('telegram'|'email')[], chatId?, to?, text?, subject? }`。
+- **`GET /api/brief/preview`** —— params `watchlist=A,B,C`、`topN`、`skipLLM=true`、`format=json|markdown|md`。`format=markdown` 返回 `brief.markdown`（`text/markdown`）；否则返回完整 `DailyBrief`。纯数据 `skipLLM` 路径公开，LLM 路径要求登录并执行配额/成本审计；错误响应不返回内部异常或堆栈。
+- **`POST /api/brief/send`** —— body `{ watchlist?, topN?, skipLLM?, channels?:('telegram'|'email')[], chatId?, to?, text?, subject? }`；所有模式均要求登录，LLM 路径执行配额/成本审计。
   - 有 `text` → raw 模式：`{ mode:'raw', channels:{ telegram, email } }`。
   - 否则 brief 模式：`{ mode:'brief', channels:{ telegram?, email? }, brief_meta:{ date, subject, overall_confidence, overall_label, top_count, has_top_call, trade_ideas_count, duration_ms } }`（注意：返回的是 `brief_meta` 摘要，非全量简报）。
 

@@ -90,13 +90,18 @@ describe('generateDailyBrief metered-call boundary', () => {
 
     const brief = await generateDailyBrief(['AAPL'], {
       topN: 1,
-      skipLLM: true,
-      llmCall,
+      mode: 'skip_llm',
     });
 
     expect(llmCall).not.toHaveBeenCalled();
     expect(brief.meta.tokens).toEqual({ input: 0, output: 0 });
     expect(brief.meta.failures).toBe(0);
+  });
+
+  it('rejects composition without an explicit LLM ownership mode before fetching data', async () => {
+    await expect(generateDailyBrief(['AAPL'], {} as never))
+      .rejects.toThrow('brief_llm_mode_required');
+    expect(mocks.fetchEastmoneyQuote).not.toHaveBeenCalled();
   });
 
   it('runs every committee/headline request through the injected boundary and aggregates normalized usage', async () => {
@@ -127,6 +132,7 @@ describe('generateDailyBrief metered-call boundary', () => {
 
     const brief = await generateDailyBrief(['AAPL'], {
       topN: 1,
+      mode: 'metered',
       llmCall,
     });
 
@@ -150,6 +156,7 @@ describe('generateDailyBrief metered-call boundary', () => {
 
     await expect(generateDailyBrief(['AAPL'], {
       topN: 1,
+      mode: 'metered',
       llmCall,
     })).rejects.toThrow('daily_cost_exhausted');
   });
@@ -167,6 +174,7 @@ describe('generateDailyBrief metered-call boundary', () => {
 
     const generation = generateDailyBrief(['FIRST', 'SECOND'], {
       topN: 2,
+      mode: 'metered',
       llmCall,
     });
     let outcome: 'pending' | 'fulfilled' | 'rejected' = 'pending';
@@ -198,6 +206,7 @@ describe('generateDailyBrief metered-call boundary', () => {
 
     const generation = generateDailyBrief(['FIRST', 'SECOND'], {
       topN: 2,
+      mode: 'metered',
       llmCall,
     });
     let outcome: 'pending' | 'fulfilled' | 'rejected' = 'pending';
@@ -223,6 +232,7 @@ describe('generateDailyBrief metered-call boundary', () => {
 
     const result = await generateDailyBrief(['FIRST', 'SECOND'], {
       topN: 2,
+      mode: 'metered',
       llmCall,
     });
 

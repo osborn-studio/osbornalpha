@@ -395,12 +395,24 @@ function deriveTradeIdeas(blocks: BriefStockBlock[]): DailyBrief['trade_ideas'] 
   return ideas.length > 0 ? ideas : undefined;
 }
 
+export type BriefGenerationOptions =
+  | { topN?: number; mode: 'skip_llm' }
+  | { topN?: number; mode: 'trusted_unmetered' }
+  | { topN?: number; mode: 'metered'; llmCall: BriefLlmCall };
+
 export async function generateDailyBrief(
-  watchlist: string[] = DEFAULT_WATCHLIST,
-  opts: { topN?: number; skipLLM?: boolean; llmCall?: BriefLlmCall } = {}
+  watchlist: string[],
+  opts: BriefGenerationOptions,
 ): Promise<DailyBrief> {
+  if (!opts || !['skip_llm', 'trusted_unmetered', 'metered'].includes(opts.mode)) {
+    throw new Error('brief_llm_mode_required');
+  }
+  if (opts.mode === 'metered' && typeof opts.llmCall !== 'function') {
+    throw new Error('brief_llm_boundary_required');
+  }
   const startedAt = Date.now();
   const topN = opts.topN ?? 5;
+  const skipLLM = opts.mode === 'skip_llm';
 
   // 1+2. Enrich + score
   const enrichedAll = await Promise.all(watchlist.map((t) => enrich(t)));
@@ -418,8 +430,11 @@ export async function generateDailyBrief(
   // platform-owned behavior.
   const llmResults: BriefLlmResponse[] = [];
   let llmFailures = 0;
-  const rawLlmCall = opts.llmCall
-    ?? (isLLMConfigured() ? defaultBriefLlmCall : undefined);
+  const rawLlmCall = opts.mode === 'metered'
+    ? opts.llmCall
+    : opts.mode === 'trusted_unmetered' && isLLMConfigured()
+      ? defaultBriefLlmCall
+      : undefined;
   const trackedLlmCall: BriefLlmCall | undefined = rawLlmCall
     ? async (callOpts) => {
         try {
@@ -434,7 +449,7 @@ export async function generateDailyBrief(
     : undefined;
   const blockResults = await Promise.allSettled(
     top.map(async (en) => {
-      const perspectives = opts.skipLLM ? [] : await runCommittee(en, trackedLlmCall);
+      const perspectives = skipLLM ? [] : await runCommittee(en, trackedLlmCall);
       return {
         ticker: en.quote.ticker,
         name: en.quote.name,
@@ -475,7 +490,7 @@ export async function generateDailyBrief(
     overall >= 4 ? '偏空' : '偏空偏强';
 
   // 5a. Generate Top Call (LLM headline for #1 priority)
-  const topCall = (!opts.skipLLM && blocks.length > 0)
+  const topCall = (!skipLLM && blocks.length > 0)
     ? await generateTopCall(blocks[0], trackedLlmCall)
     : null;
 

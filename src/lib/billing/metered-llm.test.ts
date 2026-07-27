@@ -41,6 +41,7 @@ function reservation(costMicrormb = 321) {
     reservationId: 'reservation-1',
     reservedMicrormb: 999,
     markIncurred: vi.fn(),
+    finalizeIncurred: vi.fn(),
     settle: vi.fn().mockResolvedValue({ costMicrormb, usageEstimated: false }),
     release: vi.fn(),
   };
@@ -153,6 +154,7 @@ describe('runMeteredLlmCall', () => {
 
     expect(caught).toBe(providerError);
     expect(current.markIncurred).toHaveBeenCalledTimes(1);
+    expect(current.finalizeIncurred).toHaveBeenCalledTimes(1);
     expect(current.settle).not.toHaveBeenCalled();
     expect(current.release).not.toHaveBeenCalled();
     expect(meteredUsageFromError(caught)).toMatchObject({

@@ -2,13 +2,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   getServerSupabase: vi.fn(),
+  getAdminSupabase: vi.fn(),
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
   getServerSupabase: mocks.getServerSupabase,
 }));
 
-import { checkQuota, recordUsage } from './quota';
+vi.mock('@/lib/supabase/admin', () => ({
+  getAdminSupabase: mocks.getAdminSupabase,
+}));
+
+import { checkQuota, recordUsage, recordUsageForUser } from './quota';
 
 function queryBuilder(result: object = { count: 3, error: null }) {
   const builder: Record<string, ReturnType<typeof vi.fn>> = {};
@@ -104,6 +109,51 @@ describe('usage ledger count and audit fields', () => {
       usage_estimated: true,
       byo: false,
       status: 'failed',
+    });
+  });
+
+  it('writes trusted aggregate usage through the idempotent service-role RPC', async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: true, error: null });
+    mocks.getAdminSupabase.mockReturnValue({ rpc });
+
+    await recordUsageForUser(
+      'user-1',
+      '13a8f7e6-39cc-4c56-a79b-8d9c972f5591',
+      'brief_preview',
+      {
+        ticker: 'NVDA',
+        provider: 'deepseek',
+        model: 'deepseek-v4-flash',
+        inputTokens: 100,
+        cacheHitInputTokens: 40,
+        cacheMissInputTokens: 60,
+        outputTokens: 25,
+        costMicrormb: 1234,
+        pricingVersion: 'pricing-v1',
+        usdCnyMicros: 7_200_000,
+        usageEstimated: true,
+        byo: false,
+        status: 'failed',
+      },
+    );
+
+    expect(rpc).toHaveBeenCalledWith('record_usage_event', {
+      p_idempotency_key: '13a8f7e6-39cc-4c56-a79b-8d9c972f5591',
+      p_user_id: 'user-1',
+      p_feature: 'brief_preview',
+      p_ticker: 'NVDA',
+      p_provider: 'deepseek',
+      p_model: 'deepseek-v4-flash',
+      p_input_tokens: 100,
+      p_cache_hit_input_tokens: 40,
+      p_cache_miss_input_tokens: 60,
+      p_output_tokens: 25,
+      p_cost_micrormb: 1234,
+      p_pricing_version: 'pricing-v1',
+      p_usd_cny_micros: 7_200_000,
+      p_usage_estimated: true,
+      p_byo: false,
+      p_status: 'failed',
     });
   });
 });

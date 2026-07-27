@@ -6,7 +6,7 @@ import { TOOLS_BY_NAME, OPENAI_TOOL_DEFS } from '@/lib/agent/tools';
 import { JOHN_CAMERON_5STEP } from '@/lib/agent/methods/john-cameron-5step';
 import { AGENT_METHODS } from '@/lib/agent/methods/registry';
 import { createArtifact } from '@/lib/portfolio/artifacts-store';
-import { checkQuota, recordUsage, type QuotaResult } from '@/lib/billing/quota';
+import { checkQuota, recordUsageForUser, type QuotaResult } from '@/lib/billing/quota';
 import {
   getBudgetConfig,
   isCompleteRealUsage,
@@ -146,28 +146,44 @@ export async function POST(req: Request) {
   const runStartedAt = Date.now();
   let runId: string | null = null;
   let runDb: Awaited<ReturnType<typeof getServerSupabase>> | null = null;
+  let authenticatedUserId: string | null = null;
   if (llm && (!quota || quota.allowed)) {
     try {
       runDb = await getServerSupabase();
-      const { data: { user } } = await runDb.auth.getUser();
-      if (user) {
-        try {
-          await failStaleAiRuns(runDb as any, user.id, new Date(Date.now() - 10 * 60_000));
-        } catch {
-          console.warn('stale ai run reconciliation failed', { code: 'storage_unavailable' });
-        }
-        runId = await createAiRun(runDb as any, {
-          userId: user.id,
-          ticker: ticker || null,
-          methodId: resolvedMethod.id,
-          question,
+      const { data: { user }, error } = await runDb.auth.getUser();
+      if (error || !user) {
+        return new Response(JSON.stringify({ error: 'not authenticated' }), {
+          status: 401,
+          headers: { 'content-type': 'application/json' },
         });
       }
+      authenticatedUserId = user.id;
     } catch {
-      runDb = null;
+      return new Response('authentication unavailable', { status: 503 });
+    }
+
+    try {
+      await failStaleAiRuns(
+        runDb as any,
+        authenticatedUserId,
+        new Date(Date.now() - 10 * 60_000),
+      );
+    } catch {
+      console.warn('stale ai run reconciliation failed', { code: 'storage_unavailable' });
+    }
+    try {
+      runId = await createAiRun(runDb as any, {
+        userId: authenticatedUserId,
+        ticker: ticker || null,
+        methodId: resolvedMethod.id,
+        question,
+      });
+    } catch {
+      runId = null;
       console.warn('ai run create failed', { code: 'storage_unavailable' });
     }
   }
+  const usageAuditKey = crypto.randomUUID();
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -277,7 +293,8 @@ export async function POST(req: Request) {
           byo: runByo,
         });
         const budgetConfig = getBudgetConfig();
-        await recordUsage('copilot', {
+        if (!authenticatedUserId) return;
+        await recordUsageForUser(authenticatedUserId, usageAuditKey, 'copilot', {
           ticker: ticker || undefined,
           provider: aggregate.provider,
           model: aggregate.model,
@@ -398,13 +415,16 @@ export async function POST(req: Request) {
               });
         } catch (error) {
           if (reservation) {
-            addUsage(provider, {
-              inputTokens: 0,
-              cacheHitInputTokens: 0,
-              cacheMissInputTokens: 0,
-              outputTokens: 0,
-              estimated: true,
-            }, {
+            try {
+              await reservation.finalizeIncurred();
+            } catch {
+              addUsage(provider, conservativePlatformUsage(), {
+                costMicrormb: reservation.reservedMicrormb,
+                usageEstimated: true,
+              });
+              throw new Error('budget_unavailable');
+            }
+            addUsage(provider, conservativePlatformUsage(), {
               costMicrormb: reservation.reservedMicrormb,
               usageEstimated: true,
             });

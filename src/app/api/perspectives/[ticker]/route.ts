@@ -9,7 +9,7 @@ import {
 } from '@/lib/data/sources/tushare-cached';
 import { PERSONAS, buildUserMessage, type StockContext, type PerspectiveResult } from '@/lib/data/personas';
 import { resolveLlm } from '@/lib/llm/resolve';
-import { checkQuota, recordUsage } from '@/lib/billing/quota';
+import { checkQuota, recordUsageForUser } from '@/lib/billing/quota';
 import { getRequestLocale, apiMessage } from '@/lib/i18n/server';
 import { sanitizeAiList, sanitizeAiText } from '@/lib/llm/sanitize';
 import { getServerSupabase } from '@/lib/supabase/server';
@@ -20,6 +20,11 @@ import {
   type MeteredUsage,
 } from '@/lib/billing/metered-llm';
 import { getBudgetConfig } from '@/lib/billing/cost-budget';
+import {
+  createConcurrencyLimiter,
+  createPersonaConcurrencyLimiter,
+  PERSONA_CONCURRENCY_HARD_CAP,
+} from '@/lib/billing/llm-concurrency';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 86400;
@@ -40,14 +45,22 @@ function costErrorCode(error: unknown): string | null {
   return COST_ERROR_CODES.has(code) ? code : null;
 }
 
+function costErrorStatus(code: string): number {
+  if (code === 'daily_cost_exhausted') return 429;
+  if (code === 'budget_unavailable') return 503;
+  return 500;
+}
+
 async function recordAccounting(
+  userId: string,
+  idempotencyKey: string,
   ticker: string,
   accounting: MeteredUsage[],
   status: 'completed' | 'failed',
 ): Promise<void> {
   if (accounting.length === 0) return;
   const aggregate = aggregateMeteredUsage(accounting);
-  await recordUsage('perspectives', {
+  await recordUsageForUser(userId, idempotencyKey, 'perspectives', {
     ticker,
     provider: aggregate.provider,
     model: aggregate.model,
@@ -85,6 +98,29 @@ export async function GET(req: Request, { params }: Ctx) {
   // middleware, so 'not authenticated' fails CLOSED (401) — anonymous callers
   // get no platform-key budget. Other checkQuota failures fail open.
   const byo = llm.source === 'user';
+  let userId: string;
+  try {
+    const authDb = await getServerSupabase();
+    const { data, error } = await authDb.auth.getUser();
+    if (error || !data.user) {
+      return NextResponse.json({ error: 'not authenticated' }, { status: 401 });
+    }
+    userId = data.user.id;
+  } catch {
+    const locale = await getRequestLocale();
+    const budget = getBudgetConfig();
+    return NextResponse.json({
+      source: 'cost_quota',
+      ticker,
+      error: apiMessage(locale, 'budgetUnavailable'),
+      errorCode: 'budget_unavailable',
+      perspectives: [],
+      costLimit: {
+        dailyMicrormb: budget.dailyLimitMicrormb,
+        timezone: 'Asia/Shanghai',
+      },
+    }, { status: 503 });
+  }
   let quota: Awaited<ReturnType<typeof checkQuota>> | null = null;
   if (!byo) {
     try {
@@ -110,32 +146,6 @@ export async function GET(req: Request, { params }: Ctx) {
   }
 
   const budgetExempt = !byo && quota?.limit === -1;
-  let userId: string | undefined;
-  if (!byo && !budgetExempt) {
-    try {
-      const authDb = await getServerSupabase();
-      const { data, error } = await authDb.auth.getUser();
-      if (error || !data.user) {
-        return NextResponse.json({ error: 'not authenticated' }, { status: 401 });
-      }
-      userId = data.user.id;
-    } catch {
-      const locale = await getRequestLocale();
-      const budget = getBudgetConfig();
-      return NextResponse.json({
-        source: 'cost_quota',
-        ticker,
-        error: apiMessage(locale, 'budgetUnavailable'),
-        errorCode: 'budget_unavailable',
-        perspectives: [],
-        costLimit: {
-          dailyMicrormb: budget.dailyLimitMicrormb,
-          timezone: 'Asia/Shanghai',
-        },
-      }, { status: 429 });
-    }
-  }
-
   // 1. Gather context
   const quote = await fetchEastmoneyQuote(ticker).catch(() => null);
   if (!quote) {
@@ -192,12 +202,39 @@ export async function GET(req: Request, { params }: Ctx) {
   const userMessage = buildUserMessage(ctx);
   const startedAt = Date.now();
   const accounting: MeteredUsage[] = [];
+  const usageAuditKey = crypto.randomUUID();
+  let limiter: ReturnType<typeof createConcurrencyLimiter>;
+  try {
+    limiter = llm.source === 'env'
+      ? createPersonaConcurrencyLimiter({
+          provider: llm.provider,
+          model: llm.model,
+          maxOutputTokens: MAX_PERSONA_OUTPUT_TOKENS,
+        })
+      : createConcurrencyLimiter(PERSONA_CONCURRENCY_HARD_CAP);
+  } catch (error) {
+    const code = costErrorCode(error);
+    if (!code) throw error;
+    const locale = await getRequestLocale();
+    const budget = getBudgetConfig();
+    return NextResponse.json({
+      source: 'cost_quota',
+      ticker,
+      error: apiMessage(locale, code === 'pricing_unavailable' ? 'pricingUnavailable' : 'budgetUnavailable'),
+      errorCode: code,
+      perspectives: [],
+      costLimit: {
+        dailyMicrormb: budget.dailyLimitMicrormb,
+        timezone: 'Asia/Shanghai',
+      },
+    }, { status: costErrorStatus(code) });
+  }
 
   const settled = await Promise.allSettled(
     enabled.map(async (p): Promise<PerspectiveResult | null> => {
       let resp;
       try {
-        const metered = await runMeteredLlmCall({
+        const metered = await limiter.run(() => runMeteredLlmCall({
           feature: 'perspectives',
           provider: llm,
           userId,
@@ -211,7 +248,7 @@ export async function GET(req: Request, { params }: Ctx) {
             timeoutMs: 30_000,
             responseJson: true,
           }),
-        });
+        }));
         accounting.push(metered.accounting);
         resp = metered.value;
       } catch (error) {
@@ -245,9 +282,13 @@ export async function GET(req: Request, { params }: Ctx) {
     .map((s) => (s.status === 'fulfilled' ? s.value : null))
     .filter((p): p is PerspectiveResult => p !== null);
 
-  // Collect any error messages for debugging
   const failures = settled
-    .map((s, i) => (s.status === 'rejected' ? { persona: enabled[i].id, err: (s.reason as any)?.message || String(s.reason) } : null))
+    .map((s, i) => (s.status === 'rejected'
+      ? {
+          persona: enabled[i].id,
+          code: costErrorCode(s.reason) ?? 'provider_error',
+        }
+      : null))
     .filter(Boolean);
 
   const rejectedCostError = settled
@@ -257,7 +298,7 @@ export async function GET(req: Request, { params }: Ctx) {
   const auditStatus = failures.length > 0 || perspectives.length !== enabled.length
     ? 'failed'
     : 'completed';
-  await recordAccounting(ticker, accounting, auditStatus);
+  await recordAccounting(userId, usageAuditKey, ticker, accounting, auditStatus);
 
   if (rejectedCostError) {
     const locale = await getRequestLocale();
@@ -279,7 +320,7 @@ export async function GET(req: Request, { params }: Ctx) {
         dailyMicrormb: budget.dailyLimitMicrormb,
         timezone: 'Asia/Shanghai',
       },
-    }, { status: 429 });
+    }, { status: costErrorStatus(rejectedCostError) });
   }
 
   const aggregate = accounting.length > 0 ? aggregateMeteredUsage(accounting) : null;

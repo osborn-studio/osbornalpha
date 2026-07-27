@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions, pg_catalog;
 
-select plan(77);
+select plan(104);
 
 insert into auth.users (id, email)
 values
@@ -1041,6 +1041,241 @@ select is(
   'counted daily cost remains the replacement amount after stale settlement rejection'
 );
 
+insert into public.llm_cost_reservations (
+  id, user_id, feature, provider, model, reserved_micrormb, status, expires_at
+)
+values
+  (
+    '20000000-0000-0000-0000-000000000001',
+    '10000000-0000-0000-0000-000000000001',
+    'copilot',
+    'deepseek',
+    'deepseek-v4-flash',
+    1000,
+    'incurred',
+    now() + interval '5 minutes'
+  ),
+  (
+    '20000000-0000-0000-0000-000000000002',
+    '10000000-0000-0000-0000-000000000001',
+    'perspectives',
+    'deepseek',
+    'deepseek-v4-flash',
+    1000,
+    'incurred',
+    now() + interval '5 minutes'
+  ),
+  (
+    '20000000-0000-0000-0000-000000000003',
+    '10000000-0000-0000-0000-000000000001',
+    'brief_preview',
+    'deepseek',
+    'deepseek-v4-flash',
+    1000,
+    'incurred',
+    now() + interval '5 minutes'
+  );
+
+select lives_ok(
+  $sql$
+    select *
+    from public.settle_llm_budget(
+      '20000000-0000-0000-0000-000000000001',
+      550,
+      100,
+      40,
+      60,
+      25,
+      'pricing-v1',
+      7200000,
+      false
+    )
+  $sql$,
+  'the audited settlement RPC commits cost and usage'
+);
+select is(
+  (select status from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000001'),
+  'settled',
+  'the audited settlement marks the reservation settled'
+);
+select is(
+  (select settled_micrormb from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000001'),
+  550::bigint,
+  'the audited settlement stores actual cost'
+);
+select is(
+  (select input_tokens from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000001'),
+  100::bigint,
+  'the audited settlement stores input tokens'
+);
+select is(
+  (select cache_hit_input_tokens from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000001'),
+  40::bigint,
+  'the audited settlement stores cache-hit tokens'
+);
+select is(
+  (select cache_miss_input_tokens from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000001'),
+  60::bigint,
+  'the audited settlement stores cache-miss tokens'
+);
+select is(
+  (select output_tokens from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000001'),
+  25::bigint,
+  'the audited settlement stores output tokens'
+);
+select is(
+  (select pricing_version from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000001'),
+  'pricing-v1',
+  'the audited settlement stores the pricing version'
+);
+select is(
+  (select usd_cny_micros from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000001'),
+  7200000::bigint,
+  'the audited settlement stores the FX snapshot'
+);
+select is(
+  (select usage_estimated from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000001'),
+  false,
+  'the audited settlement stores the estimation flag'
+);
+
+select throws_ok(
+  $sql$
+    select *
+    from public.settle_llm_budget(
+      '20000000-0000-0000-0000-000000000002',
+      550,
+      100,
+      40,
+      61,
+      25,
+      'pricing-v1',
+      7200000,
+      false
+    )
+  $sql$,
+  '22023',
+  'invalid normalized usage',
+  'an invalid usage tuple rolls the audited settlement back'
+);
+select is(
+  (select status from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000002'),
+  'incurred',
+  'a failed audited settlement leaves incurred status unchanged'
+);
+select is(
+  (select input_tokens from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000002'),
+  null::bigint,
+  'a failed audited settlement writes no partial token state'
+);
+
+select lives_ok(
+  $sql$
+    select *
+    from public.finalize_llm_budget_incurred(
+      '20000000-0000-0000-0000-000000000003',
+      1000000,
+      0,
+      1000000,
+      9000,
+      'pricing-v1',
+      7200000,
+      true
+    )
+  $sql$,
+  'an incurred provider failure can be finalized conservatively'
+);
+select is(
+  (select status from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000003'),
+  'incurred',
+  'conservative finalization preserves incurred cost state'
+);
+select is(
+  (select input_tokens from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000003'),
+  1000000::bigint,
+  'conservative finalization stores the reviewed input ceiling'
+);
+select is(
+  (select usage_estimated from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000003'),
+  true,
+  'conservative finalization identifies estimated usage'
+);
+select lives_ok(
+  $sql$
+    select *
+    from public.finalize_llm_budget_incurred(
+      '20000000-0000-0000-0000-000000000003',
+      1,
+      0,
+      1,
+      1,
+      'different-pricing',
+      1,
+      true
+    )
+  $sql$,
+  'conservative finalization is idempotent'
+);
+select is(
+  (select output_tokens from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000003'),
+  9000::bigint,
+  'a repeated conservative finalization does not overwrite its first audit'
+);
+
+select is(
+  public.record_usage_event(
+    '30000000-0000-0000-0000-000000000001',
+    '10000000-0000-0000-0000-000000000001',
+    'copilot',
+    'NVDA',
+    'deepseek',
+    'deepseek-v4-flash',
+    100,
+    40,
+    60,
+    25,
+    550,
+    'pricing-v1',
+    7200000,
+    false,
+    false,
+    'completed'
+  ),
+  true,
+  'the first trusted aggregate audit is inserted'
+);
+select is(
+  public.record_usage_event(
+    '30000000-0000-0000-0000-000000000001',
+    '10000000-0000-0000-0000-000000000001',
+    'copilot',
+    'NVDA',
+    'deepseek',
+    'deepseek-v4-flash',
+    100,
+    40,
+    60,
+    25,
+    550,
+    'pricing-v1',
+    7200000,
+    false,
+    false,
+    'completed'
+  ),
+  false,
+  'a retry with the same aggregate idempotency key is ignored'
+);
+select is(
+  (
+    select count(*)
+    from public.usage_events
+    where idempotency_key = '30000000-0000-0000-0000-000000000001'
+  ),
+  1::bigint,
+  'aggregate audit retries produce exactly one usage event'
+);
+
 select is(
   has_function_privilege(
     'authenticated',
@@ -1077,6 +1312,51 @@ select is(
   ),
   false,
   'authenticated cannot settle budget'
+);
+select is(
+  has_function_privilege(
+    'service_role',
+    'public.settle_llm_budget(uuid,bigint)',
+    'EXECUTE'
+  ),
+  false,
+  'service_role cannot call the legacy unaudited settlement RPC'
+);
+select is(
+  has_function_privilege(
+    'service_role',
+    'public.settle_llm_budget(uuid,bigint,bigint,bigint,bigint,bigint,text,bigint,boolean)',
+    'EXECUTE'
+  ),
+  true,
+  'service_role can call the audited settlement RPC'
+);
+select is(
+  has_function_privilege(
+    'service_role',
+    'public.finalize_llm_budget_incurred(uuid,bigint,bigint,bigint,bigint,text,bigint,boolean)',
+    'EXECUTE'
+  ),
+  true,
+  'service_role can finalize conservative incurred usage'
+);
+select is(
+  has_function_privilege(
+    'service_role',
+    'public.record_usage_event(uuid,uuid,text,text,text,text,bigint,bigint,bigint,bigint,bigint,text,bigint,boolean,boolean,text)',
+    'EXECUTE'
+  ),
+  true,
+  'service_role can write trusted aggregate usage'
+);
+select is(
+  has_function_privilege(
+    'authenticated',
+    'public.record_usage_event(uuid,uuid,text,text,text,text,bigint,bigint,bigint,bigint,bigint,text,bigint,boolean,boolean,text)',
+    'EXECUTE'
+  ),
+  false,
+  'authenticated callers cannot invoke the trusted aggregate audit RPC'
 );
 select is(
   has_function_privilege(

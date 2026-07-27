@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   resolveLlm: vi.fn(),
   chatResolved: vi.fn(),
   checkQuota: vi.fn(),
-  recordUsage: vi.fn(),
+  recordUsageForUser: vi.fn(),
   getServerSupabase: vi.fn(),
   getAdminSupabase: vi.fn(() => ({ kind: 'admin-db' })),
   reserveCostBudget: vi.fn(),
@@ -23,7 +23,7 @@ vi.mock('@/lib/data/sources/llm', () => ({
 
 vi.mock('@/lib/billing/quota', () => ({
   checkQuota: mocks.checkQuota,
-  recordUsage: mocks.recordUsage,
+  recordUsageForUser: mocks.recordUsageForUser,
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -99,6 +99,7 @@ function reservation(id: string, costMicrormb: number) {
     reservationId: id,
     reservedMicrormb: 1_500,
     markIncurred: vi.fn(),
+    finalizeIncurred: vi.fn(),
     settle: vi.fn().mockResolvedValue({ costMicrormb, usageEstimated: false }),
     release: vi.fn(),
   };
@@ -153,8 +154,12 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
     expect(reservations[1].settle).toHaveBeenCalledWith(usage(80, 0, 15));
     expect(reservations[0].release).not.toHaveBeenCalled();
     expect(reservations[1].release).not.toHaveBeenCalled();
-    expect(mocks.recordUsage).toHaveBeenCalledTimes(1);
-    expect(mocks.recordUsage).toHaveBeenCalledWith('perspectives', expect.objectContaining({
+    expect(mocks.recordUsageForUser).toHaveBeenCalledTimes(1);
+    expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
+      'server-user',
+      expect.any(String),
+      'perspectives',
+      expect.objectContaining({
       ticker: 'AAPL',
       provider: 'deepseek',
       model: 'deepseek-v4-flash',
@@ -166,7 +171,26 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
       pricingVersion: 'deepseek-2026-04-24',
       byo: false,
       status: 'completed',
-    }));
+      }),
+    );
+  });
+
+  it('returns a sanitized 503 when server authentication storage is unavailable', async () => {
+    mocks.getServerSupabase.mockRejectedValue(new Error('database connection detail'));
+
+    const response = await GET(
+      new Request('http://localhost/api/perspectives/AAPL'),
+      { params: Promise.resolve({ ticker: 'AAPL' }) },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(body).toMatchObject({
+      source: 'cost_quota',
+      errorCode: 'budget_unavailable',
+      perspectives: [],
+    });
+    expect(JSON.stringify(body)).not.toContain('database connection detail');
   });
 
   it('returns a stable cost-quota response and never calls the provider when reservation is denied', async () => {
@@ -192,6 +216,24 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
     expect(mocks.chatResolved).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['budget_unavailable', 503],
+    ['pricing_unavailable', 500],
+    ['budget_invariant_violation', 500],
+  ])('maps stable %s to HTTP %s', async (errorCode, status) => {
+    mocks.reserveCostBudget.mockRejectedValue(new Error(errorCode));
+
+    const response = await GET(
+      new Request('http://localhost/api/perspectives/AAPL?personas=value'),
+      { params: Promise.resolve({ ticker: 'AAPL' }) },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(status);
+    expect(body).toMatchObject({ source: 'cost_quota', errorCode });
+    expect(body).not.toHaveProperty('stack');
+  });
+
   it('keeps failed incurred spend and writes a failed conservative audit that does not count quota', async () => {
     const current = reservation('r1', 110);
     mocks.reserveCostBudget.mockResolvedValue(current);
@@ -206,7 +248,11 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
     expect(current.markIncurred).toHaveBeenCalledTimes(1);
     expect(current.settle).not.toHaveBeenCalled();
     expect(current.release).not.toHaveBeenCalled();
-    expect(mocks.recordUsage).toHaveBeenCalledWith('perspectives', expect.objectContaining({
+    expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
+      'server-user',
+      expect.any(String),
+      'perspectives',
+      expect.objectContaining({
       ticker: 'AAPL',
       inputTokens: 1_000_000,
       cacheMissInputTokens: 1_000_000,
@@ -215,7 +261,8 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
       usageEstimated: true,
       byo: false,
       status: 'failed',
-    }));
+      }),
+    );
   });
 
   it('does not count a completed provider call as feature success when its perspective is unusable', async () => {
@@ -230,12 +277,17 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
 
     expect(response.status).toBe(200);
     expect((await response.json()).perspectives).toEqual([]);
-    expect(mocks.recordUsage).toHaveBeenCalledWith('perspectives', expect.objectContaining({
+    expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
+      'server-user',
+      expect.any(String),
+      'perspectives',
+      expect.objectContaining({
       status: 'failed',
       inputTokens: 40,
       outputTokens: 5,
       costMicrormb: 110,
-    }));
+      }),
+    );
   });
 
   it('keeps BYO calls outside platform pricing and budget', async () => {
@@ -258,13 +310,18 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
     expect(response.status).toBe(200);
     expect(mocks.checkQuota).not.toHaveBeenCalled();
     expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
-    expect(mocks.recordUsage).toHaveBeenCalledWith('perspectives', expect.objectContaining({
+    expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
+      'server-user',
+      expect.any(String),
+      'perspectives',
+      expect.objectContaining({
       provider: 'custom',
       model: 'private-model',
       costMicrormb: 0,
       byo: true,
       status: 'completed',
-    }));
+      }),
+    );
   });
 
   it('price-reviews and audits admin calls without the cap RPC', async () => {
@@ -281,12 +338,17 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
 
     expect(response.status).toBe(200);
     expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
-    expect(mocks.recordUsage).toHaveBeenCalledWith('perspectives', expect.objectContaining({
+    expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
+      'server-user',
+      expect.any(String),
+      'perspectives',
+      expect.objectContaining({
       provider: 'deepseek',
       model: 'deepseek-v4-flash',
       costMicrormb: expect.any(Number),
       byo: false,
       status: 'completed',
-    }));
+      }),
+    );
   });
 });

@@ -1,0 +1,218 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  generateDailyBrief: vi.fn(),
+  resolveLlm: vi.fn(),
+  chatResolved: vi.fn(),
+  checkQuota: vi.fn(),
+  recordUsageForUser: vi.fn(),
+  getServerSupabase: vi.fn(),
+  getAdminSupabase: vi.fn(() => ({ kind: 'admin-db' })),
+  reserveCostBudget: vi.fn(),
+  sendTelegram: vi.fn(),
+  sendEmail: vi.fn(),
+}));
+
+vi.mock('@/lib/brief/composer', () => ({
+  DEFAULT_WATCHLIST: ['AAPL'],
+  generateDailyBrief: mocks.generateDailyBrief,
+}));
+vi.mock('@/lib/llm/resolve', () => ({ resolveLlm: mocks.resolveLlm }));
+vi.mock('@/lib/data/sources/llm', () => ({ chatResolved: mocks.chatResolved }));
+vi.mock('@/lib/billing/quota', () => ({
+  checkQuota: mocks.checkQuota,
+  recordUsageForUser: mocks.recordUsageForUser,
+}));
+vi.mock('@/lib/supabase/server', () => ({ getServerSupabase: mocks.getServerSupabase }));
+vi.mock('@/lib/supabase/admin', () => ({ getAdminSupabase: mocks.getAdminSupabase }));
+vi.mock('@/lib/billing/cost-budget', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/billing/cost-budget')>();
+  return { ...actual, reserveCostBudget: mocks.reserveCostBudget };
+});
+vi.mock('@/lib/data/sources/telegram', () => ({
+  isTelegramConfigured: () => false,
+  sendTelegram: mocks.sendTelegram,
+}));
+vi.mock('@/lib/data/sources/resend', () => ({
+  isResendConfigured: () => false,
+  sendEmail: mocks.sendEmail,
+}));
+
+import { POST } from './route';
+
+const provider = {
+  provider: 'deepseek',
+  baseUrl: 'https://api.deepseek.test',
+  apiKey: 'secret',
+  model: 'deepseek-v4-flash',
+  chatPath: '/chat/completions',
+  protocol: 'openai' as const,
+  source: 'env' as const,
+};
+
+const normalizedUsage = {
+  inputTokens: 40,
+  cacheHitInputTokens: 10,
+  cacheMissInputTokens: 30,
+  outputTokens: 8,
+  estimated: false,
+};
+
+function reservation() {
+  return {
+    reservationId: 'r1',
+    reservedMicrormb: 1_500,
+    markIncurred: vi.fn(),
+    finalizeIncurred: vi.fn(),
+    settle: vi.fn().mockResolvedValue({ costMicrormb: 123, usageEstimated: false }),
+    release: vi.fn(),
+  };
+}
+
+function brief() {
+  return {
+    date: '2026-07-28',
+    generated_at: '2026-07-28T00:00:00.000Z',
+    watchlist_count: 1,
+    top: [],
+    overall_confidence: 5,
+    overall_label: '中性',
+    markdown: '# brief',
+    html: '<h1>brief</h1>',
+    subject: 'brief',
+    meta: { duration_ms: 1, failures: 0 },
+  };
+}
+
+function request(body: Record<string, unknown>) {
+  return new Request('http://localhost/api/brief/send', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+describe('POST /api/brief/send security and metering', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getServerSupabase.mockResolvedValue({
+      auth: {
+        getUser: vi.fn().mockResolvedValue({
+          data: { user: { id: 'server-user' } },
+          error: null,
+        }),
+      },
+    });
+    mocks.resolveLlm.mockResolvedValue(provider);
+    mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: 2, plan: 'free' });
+    mocks.reserveCostBudget.mockResolvedValue(reservation());
+    mocks.chatResolved.mockResolvedValue({ content: '{}', usage: normalizedUsage });
+    mocks.generateDailyBrief.mockImplementation(async (_watchlist, opts) => {
+      if (opts.mode === 'metered') {
+        await opts.llmCall({
+          messages: [{ role: 'user', content: 'context' }],
+          max_tokens: 400,
+        });
+      }
+      return brief();
+    });
+  });
+
+  it('requires authentication even for raw send mode', async () => {
+    mocks.getServerSupabase.mockResolvedValue({
+      auth: {
+        getUser: vi.fn().mockResolvedValue({
+          data: { user: null },
+          error: new Error('private auth detail'),
+        }),
+      },
+    });
+
+    const response = await POST(request({ text: 'ping', channels: ['telegram'] }));
+
+    expect(response.status).toBe(401);
+    expect(mocks.sendTelegram).not.toHaveBeenCalled();
+    expect(mocks.generateDailyBrief).not.toHaveBeenCalled();
+  });
+
+  it('returns 503 rather than 401 when authentication storage is unavailable', async () => {
+    mocks.getServerSupabase.mockRejectedValue(new Error('database connection detail'));
+
+    const response = await POST(request({ text: 'hello', channels: [] }));
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ error: 'authentication unavailable' });
+  });
+
+  it('rejects an oversized watchlist and clamps topN to the safe maximum', async () => {
+    const oversized = await POST(request({
+      watchlist: Array.from({ length: 11 }, (_, index) => `T${index}`),
+    }));
+    expect(oversized.status).toBe(400);
+    expect(mocks.generateDailyBrief).not.toHaveBeenCalled();
+
+    const bounded = await POST(request({ watchlist: ['AAPL'], topN: 999 }));
+    expect(bounded.status).toBe(200);
+    expect(mocks.generateDailyBrief).toHaveBeenCalledWith(['AAPL'], expect.objectContaining({
+      topN: 5,
+      mode: 'metered',
+    }));
+  });
+
+  it('uses the brief_preview count and per-call durable cost budget', async () => {
+    const current = reservation();
+    mocks.reserveCostBudget.mockResolvedValue(current);
+
+    const response = await POST(request({ channels: ['telegram'] }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.checkQuota).toHaveBeenCalledWith('brief_preview');
+    expect(current.markIncurred).toHaveBeenCalledTimes(1);
+    expect(current.settle).toHaveBeenCalledWith(normalizedUsage);
+    expect(mocks.recordUsageForUser).toHaveBeenCalledTimes(1);
+    expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
+      'server-user',
+      expect.any(String),
+      'brief_preview',
+      expect.objectContaining({
+      inputTokens: 40,
+      cacheHitInputTokens: 10,
+      cacheMissInputTokens: 30,
+      outputTokens: 8,
+      costMicrormb: 123,
+      byo: false,
+      status: 'completed',
+      }),
+    );
+  });
+
+  it('keeps authenticated skipLLM sends outside count and cost accounting', async () => {
+    const response = await POST(request({ skipLLM: true, channels: ['telegram'] }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.generateDailyBrief).toHaveBeenCalledWith(['AAPL'], {
+      topN: 5,
+      mode: 'skip_llm',
+    });
+    expect(mocks.checkQuota).not.toHaveBeenCalled();
+    expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
+    expect(mocks.recordUsageForUser).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['daily_cost_exhausted', 429],
+    ['budget_unavailable', 503],
+    ['pricing_unavailable', 500],
+    ['budget_invariant_violation', 500],
+  ])('maps %s to HTTP %s without exposing a stack', async (errorCode, status) => {
+    mocks.reserveCostBudget.mockRejectedValue(new Error(errorCode));
+
+    const response = await POST(request({ channels: ['telegram'] }));
+    const body = await response.json();
+
+    expect(response.status).toBe(status);
+    expect(body).toMatchObject({ source: 'cost_quota', errorCode });
+    expect(body).not.toHaveProperty('stack');
+    expect(mocks.chatResolved).not.toHaveBeenCalled();
+  });
+});

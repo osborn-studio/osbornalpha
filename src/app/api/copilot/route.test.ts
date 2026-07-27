@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   resolvePlatformLlm: vi.fn(),
   checkQuota: vi.fn(),
   recordUsage: vi.fn(),
+  recordUsageForUser: vi.fn(),
   reserveCostBudget: vi.fn(),
   getBudgetConfig: vi.fn(() => ({
     dailyLimitMicrormb: 8_800_000,
@@ -35,6 +36,7 @@ vi.mock('@/lib/llm/resolve', () => ({
 vi.mock('@/lib/billing/quota', () => ({
   checkQuota: mocks.checkQuota,
   recordUsage: mocks.recordUsage,
+  recordUsageForUser: mocks.recordUsageForUser,
 }));
 vi.mock('@/lib/billing/cost-budget', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/billing/cost-budget')>();
@@ -130,6 +132,7 @@ function reservation(costMicrormb: number) {
     reservationId: `reservation-${costMicrormb}`,
     reservedMicrormb: costMicrormb + 100,
     markIncurred: vi.fn().mockResolvedValue(undefined),
+    finalizeIncurred: vi.fn().mockResolvedValue(undefined),
     settle: vi.fn().mockResolvedValue({ costMicrormb, usageEstimated: false }),
     release: vi.fn().mockResolvedValue(undefined),
   };
@@ -142,6 +145,9 @@ describe('Copilot platform cost budget', () => {
     mocks.resolvePlatformLlm.mockReturnValue(null);
     mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: 20, plan: 'free' });
     mocks.recordUsage.mockResolvedValue(undefined);
+    mocks.recordUsageForUser.mockImplementation(
+      async (_userId, _idempotencyKey, feature, meta) => mocks.recordUsage(feature, meta),
+    );
     mocks.getRequestLocale.mockResolvedValue('en');
     mocks.getServerSupabase.mockResolvedValue({
       auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null }) },
@@ -225,7 +231,24 @@ describe('Copilot platform cost budget', () => {
       byo: false,
       status: 'completed',
     });
+    expect(mocks.recordUsageForUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.any(String),
+      'copilot',
+      expect.objectContaining({ status: 'completed', costMicrormb: 333 }),
+    );
     expect(mocks.checkQuota).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 503 when authenticated run storage is unavailable', async () => {
+    mocks.getServerSupabase.mockRejectedValue(new Error('database connection detail'));
+
+    const { response, text } = await runRoute();
+
+    expect(response.status).toBe(503);
+    expect(text).toBe('authentication unavailable');
+    expect(mocks.toolChat).not.toHaveBeenCalled();
+    expect(mocks.recordUsageForUser).not.toHaveBeenCalled();
   });
 
   it('keeps an incurred reservation durable when the provider call throws', async () => {
@@ -236,14 +259,15 @@ describe('Copilot platform cost budget', () => {
     const { text } = await runRoute();
 
     expect(current.markIncurred).toHaveBeenCalledTimes(1);
+    expect(current.finalizeIncurred).toHaveBeenCalledTimes(1);
     expect(current.release).not.toHaveBeenCalled();
     expect(current.settle).not.toHaveBeenCalled();
     expect(mocks.recordUsage).toHaveBeenCalledTimes(1);
     expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
       provider: 'deepseek',
       model: 'deepseek-v4-flash',
-      inputTokens: 0,
-      outputTokens: 0,
+      inputTokens: 1_000_000,
+      outputTokens: MAX_OUTPUT_TOKENS,
       costMicrormb: current.reservedMicrormb,
       usageEstimated: true,
       byo: false,
@@ -622,11 +646,12 @@ describe('Copilot platform cost budget', () => {
 
     expect(completedRound.settle).toHaveBeenCalledTimes(1);
     expect(failedRound.markIncurred).toHaveBeenCalledTimes(1);
+    expect(failedRound.finalizeIncurred).toHaveBeenCalledTimes(1);
     expect(failedRound.release).not.toHaveBeenCalled();
     expect(mocks.recordUsage).toHaveBeenCalledOnce();
     expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
-      inputTokens: 70,
-      outputTokens: 7,
+      inputTokens: 1_000_070,
+      outputTokens: 9_007,
       costMicrormb: 433,
       usageEstimated: true,
       byo: false,
@@ -678,15 +703,16 @@ describe('Copilot platform cost budget', () => {
 
     expect(completedPlatformRound.settle).toHaveBeenCalledTimes(1);
     expect(failedPlatformRound.markIncurred).toHaveBeenCalledTimes(1);
+    expect(failedPlatformRound.finalizeIncurred).toHaveBeenCalledTimes(1);
     expect(failedPlatformRound.release).not.toHaveBeenCalled();
     expect(mocks.recordUsage).toHaveBeenCalledTimes(1);
     expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
       provider: 'mixed',
       model: 'byo-model+deepseek-v4-flash',
-      inputTokens: 60,
+      inputTokens: 1_000_060,
       cacheHitInputTokens: 15,
-      cacheMissInputTokens: 45,
-      outputTokens: 6,
+      cacheMissInputTokens: 1_000_045,
+      outputTokens: 9_006,
       costMicrormb: 655,
       usageEstimated: true,
       byo: false,

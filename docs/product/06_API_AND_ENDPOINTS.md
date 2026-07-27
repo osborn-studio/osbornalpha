@@ -143,12 +143,12 @@
 ## 10. Brief（简报，手动触发）
 
 ### `GET /api/brief/preview`
-- 查询参数：`watchlist`（逗号分隔，默认 `DEFAULT_WATCHLIST`）、`topN`（默认 5）、`skipLLM`（布尔）、`format`（`json`|`markdown`）。鉴权：无。
+- 查询参数：`watchlist`（逗号分隔，默认 `DEFAULT_WATCHLIST`）、`topN`（默认 5）、`skipLLM`（布尔）、`format`（`json`|`markdown`）。`skipLLM=true` 的纯数据路径公开；启用 LLM 时要求登录，并执行次数配额、每日成本上限和逐调用审计。
 - 数据源：`generateDailyBrief()`（quote 级联 + radar +（非 skip 时）perspectives）。
 - 响应：JSON 简报或 markdown 文本（`text/markdown`）。`force-dynamic`，`maxDuration=60`。
 
 ### `POST /api/brief/send`
-- Body：`{ watchlist?[], topN?, skipLLM?, channels?:('telegram'|'email')[], chatId?(Telegram 覆盖), to?(Email 覆盖), text?(原始文本模式跳过 composer), subject? }`。鉴权：无。
+- Body：`{ watchlist?[], topN?, skipLLM?, channels?:('telegram'|'email')[], chatId?(Telegram 覆盖), to?(Email 覆盖), text?(原始文本模式跳过 composer), subject? }`。所有模式均要求登录；LLM 模式执行次数配额、每日成本上限和逐调用审计。
 - 数据源：`generateDailyBrief()` + `sendTelegram` + `sendEmail`（按环境变量门控）。
 - 响应：`{ mode:'raw'|'brief', channels:{telegram?,email?}, brief_meta? }`。`force-dynamic`，`maxDuration=60`。
 
@@ -163,8 +163,8 @@
 - 调度：`vercel.json` cron `0 0 * * *`（UTC 00:00 = 北京 08:00）。`maxDuration=60`。
 
 ### `GET /api/cron/daily-brief`
-- 鉴权：`Authorization: Bearer ${CRON_SECRET}`（`if (secret && auth !== Bearer secret) 拒绝`）。
-- 数据源：`generateDailyBrief(DEFAULT_WATCHLIST, {topN:5})` + Telegram + Email。
+- 鉴权：必须配置 `CRON_SECRET`，并要求 `Authorization: Bearer ${CRON_SECRET}` 完全匹配；缺少服务端 secret 时返回 503。
+- 数据源：受信 cron 以显式 `trusted_unmetered` 模式调用 `generateDailyBrief` + Telegram + Email。
 - 响应：`{ ok, date, subject, overall_confidence, overall_label, top:[{ticker,name,consensus}], duration_ms, channels }`。
 - 调度：cron `30 0 * * *`（UTC 00:30 = 北京 08:30）。`maxDuration=60`。
 

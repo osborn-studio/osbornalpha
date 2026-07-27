@@ -3,6 +3,7 @@
 // unlimited. BYO-key calls (source==='user' in ResolvedLlm) are recorded for
 // audit but never counted against quota and never block the caller.
 import { getServerSupabase } from '@/lib/supabase/server';
+import { getAdminSupabase } from '@/lib/supabase/admin';
 import type { UsageFeature } from '@/lib/supabase/database.types';
 import { effectivePlan } from '@/lib/billing/plan';
 
@@ -150,5 +151,49 @@ export async function recordUsage(feature: QuotaFeature, meta: RecordUsageMeta):
     if (error) throw new Error(error.message);
   } catch (err) {
     console.warn('recordUsage failed:', err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * Writes a server-authenticated aggregate event through the service-role RPC.
+ * The caller must derive `userId` from the server session and retain the same
+ * idempotency key when retrying the same logical event.
+ */
+export async function recordUsageForUser(
+  userId: string,
+  idempotencyKey: string,
+  feature: QuotaFeature,
+  meta: RecordUsageMeta,
+): Promise<void> {
+  try {
+    const inputTokens = boundedInteger(meta.inputTokens ?? meta.tokensIn);
+    const cacheHitInputTokens = boundedInteger(meta.cacheHitInputTokens);
+    const cacheMissInputTokens = meta.cacheMissInputTokens === undefined
+      ? Math.max(0, inputTokens - cacheHitInputTokens)
+      : boundedInteger(meta.cacheMissInputTokens);
+    const outputTokens = boundedInteger(meta.outputTokens ?? meta.tokensOut);
+    const { error } = await (getAdminSupabase() as any).rpc('record_usage_event', {
+      p_idempotency_key: idempotencyKey,
+      p_user_id: userId,
+      p_feature: feature,
+      p_ticker: meta.ticker ?? null,
+      p_provider: meta.provider ?? null,
+      p_model: meta.model ?? null,
+      p_input_tokens: inputTokens,
+      p_cache_hit_input_tokens: cacheHitInputTokens,
+      p_cache_miss_input_tokens: cacheMissInputTokens,
+      p_output_tokens: outputTokens,
+      p_cost_micrormb: boundedInteger(meta.costMicrormb),
+      p_pricing_version: meta.pricingVersion ?? null,
+      p_usd_cny_micros: meta.usdCnyMicros === undefined
+        ? null
+        : boundedInteger(meta.usdCnyMicros),
+      p_usage_estimated: meta.usageEstimated ?? false,
+      p_byo: meta.byo,
+      p_status: meta.status ?? 'completed',
+    });
+    if (error) throw new Error('usage_audit_rpc_failed');
+  } catch {
+    console.warn('recordUsageForUser failed', { code: 'usage_audit_failed' });
   }
 }

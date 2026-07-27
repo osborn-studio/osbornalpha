@@ -2,6 +2,7 @@ import {
   calculateCostMicrormb,
   DEFAULT_DAILY_LIMIT_MICRORMB,
   DEFAULT_USD_CNY_MICROS,
+  PRICING_VERSION,
   reservationCostMicrormb,
   type NormalizedUsage,
 } from './llm-pricing';
@@ -11,6 +12,7 @@ import type { Database, UsageFeature } from '@/lib/supabase/database.types';
 type ReserveBudgetArgs = Database['public']['Functions']['reserve_llm_daily_budget']['Args'];
 type MarkIncurredArgs = Database['public']['Functions']['mark_llm_budget_incurred']['Args'];
 type SettleBudgetArgs = Database['public']['Functions']['settle_llm_budget']['Args'];
+type FinalizeIncurredArgs = Database['public']['Functions']['finalize_llm_budget_incurred']['Args'];
 type ReleaseBudgetArgs = Database['public']['Functions']['release_llm_budget']['Args'];
 
 /** Production clients can be passed directly; this adapter keeps unit fakes small. */
@@ -18,6 +20,7 @@ export interface BudgetRpcAdapter {
   reserve(args: ReserveBudgetArgs): Promise<{ data: unknown; error: unknown }>;
   markIncurred(args: MarkIncurredArgs): Promise<{ data: unknown; error: unknown }>;
   settle(args: SettleBudgetArgs): Promise<{ data: unknown; error: unknown }>;
+  finalizeIncurred?(args: FinalizeIncurredArgs): Promise<{ data: unknown; error: unknown }>;
   release(args: ReleaseBudgetArgs): Promise<{ data: unknown; error: unknown }>;
 }
 
@@ -47,6 +50,15 @@ function settleRpc(client: BudgetRpcClient, args: SettleBudgetArgs) {
   return 'settle' in client
     ? client.settle(args)
     : client.rpc<'settle_llm_budget', SettleBudgetArgs>('settle_llm_budget', args);
+}
+
+function finalizeIncurredRpc(client: BudgetRpcClient, args: FinalizeIncurredArgs) {
+  return 'finalizeIncurred' in client && typeof client.finalizeIncurred === 'function'
+    ? client.finalizeIncurred(args)
+    : (client as BudgetSupabaseClient).rpc<
+        'finalize_llm_budget_incurred',
+        FinalizeIncurredArgs
+      >('finalize_llm_budget_incurred', args);
 }
 
 function markIncurredRpc(client: BudgetRpcClient, args: MarkIncurredArgs) {
@@ -84,6 +96,7 @@ export interface CostReservation {
   reservationId: string;
   reservedMicrormb: number;
   markIncurred(): Promise<void>;
+  finalizeIncurred(): Promise<void>;
   settle(usage: NormalizedUsage): Promise<CostSettlement>;
   release(): Promise<void>;
 }
@@ -223,6 +236,7 @@ type ReservationState =
   | 'active'
   | 'marking'
   | 'incurred'
+  | 'finalizing'
   | 'settling'
   | 'settled'
   | 'releasing'
@@ -247,6 +261,7 @@ function managedReservation(
   let state: ReservationState = 'active';
   let settlement: CostSettlement | undefined;
   let markPromise: Promise<void> | undefined;
+  let finalizePromise: Promise<void> | undefined;
   let settlePromise: Promise<CostSettlement> | undefined;
   let releasePromise: Promise<void> | undefined;
 
@@ -278,6 +293,58 @@ function managedReservation(
     return markPromise;
   };
 
+  const conservativeUsage: NormalizedUsage = {
+    inputTokens: request.maxInputTokens,
+    cacheHitInputTokens: 0,
+    cacheMissInputTokens: request.maxInputTokens,
+    outputTokens: request.maxOutputTokens,
+    estimated: true,
+  };
+
+  const usageArgs = (
+    usage: NormalizedUsage,
+    usageEstimated: boolean,
+  ): Omit<SettleBudgetArgs, 'p_reservation_id' | 'p_actual_micrormb'> => ({
+    p_input_tokens: usage.inputTokens,
+    p_cache_hit_input_tokens: usage.cacheHitInputTokens,
+    p_cache_miss_input_tokens: usage.cacheMissInputTokens,
+    p_output_tokens: usage.outputTokens,
+    p_pricing_version: PRICING_VERSION,
+    p_usd_cny_micros: usdCnyMicros,
+    p_usage_estimated: usageEstimated,
+  });
+
+  const finalizeIncurred = async (): Promise<void> => {
+    if (state === 'settled') return;
+    if (state === 'finalizing') return finalizePromise!;
+    if (state === 'marking') await markPromise!;
+    if (state !== 'incurred') throw stableError('budget_invariant_violation');
+
+    state = 'finalizing';
+    finalizePromise = (async () => {
+      try {
+        const args: FinalizeIncurredArgs = {
+          p_reservation_id: reservationId,
+          ...usageArgs(conservativeUsage, true),
+        };
+        const response = await finalizeIncurredRpc(supabase, args);
+        if (!response || response.error) throw stableError('budget_unavailable');
+        if (terminalResponse(response.data, expectedReservation, 'incurred') !== 'valid') {
+          throw stableError('budget_unavailable');
+        }
+        state = 'incurred';
+      } catch (error) {
+        state = 'incurred';
+        if (
+          error instanceof Error
+          && error.message === 'budget_invariant_violation'
+        ) throw error;
+        throw stableError('budget_unavailable');
+      }
+    })();
+    return finalizePromise;
+  };
+
   const settle = async (usage: NormalizedUsage): Promise<CostSettlement> => {
     if (state === 'settled') return settlement!;
     if (state === 'settling') return settlePromise!;
@@ -287,6 +354,7 @@ function managedReservation(
       throw stableError('budget_reservation_released');
     }
     if (state === 'marking') await markPromise!;
+    if (state === 'finalizing') await finalizePromise!;
     if (state !== 'incurred') throw stableError('budget_invariant_violation');
 
     const stateBeforeSettlement = state;
@@ -294,6 +362,7 @@ function managedReservation(
     settlePromise = (async () => {
       try {
         const usageEstimated = !isCompleteRealUsage(usage);
+        const auditedUsage = usageEstimated ? conservativeUsage : usage;
         const costMicrormb = usageEstimated
           ? reservedMicrormb
           : calculateCostMicrormb(request.provider, request.model, usage, usdCnyMicros);
@@ -303,6 +372,7 @@ function managedReservation(
         const args: SettleBudgetArgs = {
           p_reservation_id: reservationId,
           p_actual_micrormb: costMicrormb,
+          ...usageArgs(auditedUsage, usageEstimated),
         };
         const response = await settleRpc(supabase, args);
         if (!response || response.error) throw stableError('budget_unavailable');
@@ -333,6 +403,9 @@ function managedReservation(
     if (state === 'marking') {
       await markPromise!;
     }
+    if (state === 'finalizing') {
+      await finalizePromise!;
+    }
     if (state === 'incurred') throw stableError('budget_reservation_incurred');
 
     state = 'releasing';
@@ -362,7 +435,14 @@ function managedReservation(
     return releasePromise;
   };
 
-  return { reservationId, reservedMicrormb, markIncurred, settle, release };
+  return {
+    reservationId,
+    reservedMicrormb,
+    markIncurred,
+    finalizeIncurred,
+    settle,
+    release,
+  };
 }
 
 export async function reserveCostBudget(

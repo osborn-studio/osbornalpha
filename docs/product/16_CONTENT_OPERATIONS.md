@@ -30,7 +30,7 @@
 
 文件 `src/app/api/cron/daily-brief/route.ts`。全市场 morning note + AI 委员会共识：
 
-1. `generateDailyBrief(DEFAULT_WATCHLIST, { topN: 5 })`。
+1. 仅在已校验 `CRON_SECRET` 的 cron 内调用 `generateDailyBrief(DEFAULT_WATCHLIST, { topN: 5, mode: 'trusted_unmetered' })`。
 2. 对 topN 个股：Eastmoney 行情 + Tushare 补充（A 股）→ `computeTriggers()` → 9-persona 委员会并行（DeepSeek/Claude）→ 由 perspectives 算共识分。
 3. 生成 **Top Call** 头条（LLM 1–2 句）与 **Trade Ideas**（`confidence≥7` 高信念项）。
 4. 推送 Telegram + Email；邮件标题 `Sentinel Morning Note · ${date}`。

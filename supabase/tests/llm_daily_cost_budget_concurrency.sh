@@ -175,7 +175,14 @@ set local role service_role;
 select status || ',' || settled_micrormb::text
 from public.settle_llm_budget(
   '$settle_reservation_id',
-  500
+  500,
+  100,
+  0,
+  100,
+  10,
+  'concurrency-test-v1',
+  7200000,
+  false
 );
 select pg_catalog.pg_sleep(2);
 commit;
@@ -404,7 +411,17 @@ if docker exec -i -e PGAPPNAME=llm_budget_stale_settle "$db_container" \
   >"$stale_settle_out" 2>"$stale_settle_err" <<SQL
 set role service_role;
 select status
-from public.settle_llm_budget('$stale_settle_reservation_id', 500);
+from public.settle_llm_budget(
+  '$stale_settle_reservation_id',
+  500,
+  100,
+  0,
+  100,
+  10,
+  'concurrency-test-v1',
+  7200000,
+  false
+);
 SQL
 then
   stale_settle_rejected="false"

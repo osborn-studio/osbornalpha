@@ -162,13 +162,22 @@ export async function runMeteredLlmCall<T extends { usage: NormalizedUsage }>(
   try {
     value = await args.call();
   } catch (error) {
-    attachUsage(error, platformUsage(
+    const accounting = platformUsage(
       'failed',
       provider,
       conservative,
       reservation?.reservedMicrormb ?? maxCostMicrormb,
       true,
-    ));
+    );
+    if (reservation) {
+      try {
+        await reservation.finalizeIncurred();
+      } catch (finalizationError) {
+        attachUsage(finalizationError, accounting);
+        throw finalizationError;
+      }
+    }
+    attachUsage(error, accounting);
     throw error;
   }
 

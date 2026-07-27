@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { generateDailyBrief, DEFAULT_WATCHLIST } from '@/lib/brief/composer';
 import { resolveLlm } from '@/lib/llm/resolve';
-import { checkQuota, recordUsage } from '@/lib/billing/quota';
+import { checkQuota, recordUsageForUser } from '@/lib/billing/quota';
 import { getRequestLocale, apiMessage } from '@/lib/i18n/server';
 import { chatResolved } from '@/lib/data/sources/llm';
 import { getServerSupabase } from '@/lib/supabase/server';
@@ -12,6 +12,11 @@ import {
   type MeteredUsage,
 } from '@/lib/billing/metered-llm';
 import { getBudgetConfig } from '@/lib/billing/cost-budget';
+import {
+  createConcurrencyLimiter,
+  createPersonaConcurrencyLimiter,
+  PERSONA_CONCURRENCY_HARD_CAP,
+} from '@/lib/billing/llm-concurrency';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -28,6 +33,12 @@ function costErrorCode(error: unknown): string | null {
   return COST_ERROR_CODES.has(code) ? code : null;
 }
 
+function costErrorStatus(code: string): number {
+  if (code === 'daily_cost_exhausted') return 429;
+  if (code === 'budget_unavailable') return 503;
+  return 500;
+}
+
 function briefResponse(
   brief: Awaited<ReturnType<typeof generateDailyBrief>>,
   format: string,
@@ -40,10 +51,15 @@ function briefResponse(
   return NextResponse.json(brief);
 }
 
-async function recordAccounting(accounting: MeteredUsage[], failed: boolean): Promise<void> {
+async function recordAccounting(
+  userId: string,
+  idempotencyKey: string,
+  accounting: MeteredUsage[],
+  failed: boolean,
+): Promise<void> {
   if (accounting.length === 0) return;
   const aggregate = aggregateMeteredUsage(accounting);
-  await recordUsage('brief_preview', {
+  await recordUsageForUser(userId, idempotencyKey, 'brief_preview', {
     provider: aggregate.provider,
     model: aggregate.model,
     inputTokens: aggregate.usage.inputTokens,
@@ -82,14 +98,12 @@ export async function GET(req: Request) {
   if (skipLLM) {
     try {
       return briefResponse(
-        await generateDailyBrief(watchlist, { topN, skipLLM: true }),
+        await generateDailyBrief(watchlist, { topN, mode: 'skip_llm' }),
         format,
       );
-    } catch (e: any) {
-      return NextResponse.json(
-        { error: e?.message || 'brief generation failed', stack: e?.stack?.slice(0, 500) },
-        { status: 500 },
-      );
+    } catch {
+      console.error('brief preview failed', { code: 'brief_generation_failed' });
+      return NextResponse.json({ error: 'brief generation failed' }, { status: 500 });
     }
   }
 
@@ -102,8 +116,32 @@ export async function GET(req: Request) {
   //    — fail-open here would let bare curl burn the platform key unmetered.
   //    Other checkQuota failures (e.g. transient DB) fail open.
   const llm = await resolveLlm();
+  if (!llm) {
+    return NextResponse.json({ error: 'provider not configured' }, { status: 503 });
+  }
   const byo = llm?.source === 'user';
   const metered = !byo;
+  let userId: string;
+  try {
+    const authDb = await getServerSupabase();
+    const { data, error } = await authDb.auth.getUser();
+    if (error || !data.user) {
+      return NextResponse.json({ error: 'not authenticated' }, { status: 401 });
+    }
+    userId = data.user.id;
+  } catch {
+    const locale = await getRequestLocale();
+    const budget = getBudgetConfig();
+    return NextResponse.json({
+      source: 'cost_quota',
+      error: apiMessage(locale, 'budgetUnavailable'),
+      errorCode: 'budget_unavailable',
+      costLimit: {
+        dailyMicrormb: budget.dailyLimitMicrormb,
+        timezone: 'Asia/Shanghai',
+      },
+    }, { status: 503 });
+  }
   let quota: Awaited<ReturnType<typeof checkQuota>> | null = null;
   if (metered) {
     try {
@@ -124,43 +162,27 @@ export async function GET(req: Request) {
   }
 
   const budgetExempt = !!llm && llm.source === 'env' && quota?.limit === -1;
-  let userId: string | undefined;
-  if (llm?.source === 'env' && !budgetExempt) {
-    try {
-      const authDb = await getServerSupabase();
-      const { data, error } = await authDb.auth.getUser();
-      if (error || !data.user) {
-        return NextResponse.json({ error: 'not authenticated' }, { status: 401 });
-      }
-      userId = data.user.id;
-    } catch {
-      const locale = await getRequestLocale();
-      const budget = getBudgetConfig();
-      return NextResponse.json({
-        source: 'cost_quota',
-        error: apiMessage(locale, 'budgetUnavailable'),
-        errorCode: 'budget_unavailable',
-        costLimit: {
-          dailyMicrormb: budget.dailyLimitMicrormb,
-          timezone: 'Asia/Shanghai',
-        },
-      }, { status: 429 });
-    }
-  }
-
+  const usageAuditKey = crypto.randomUUID();
   const accounting: MeteredUsage[] = [];
   try {
+    const limiter = llm?.source === 'env'
+      ? createPersonaConcurrencyLimiter({
+          provider: llm.provider,
+          model: llm.model,
+          maxOutputTokens: 400,
+        })
+      : createConcurrencyLimiter(PERSONA_CONCURRENCY_HARD_CAP);
     const llmCall = llm
       ? async (opts: Parameters<typeof chatResolved>[1]) => {
           try {
-            const meteredCall = await runMeteredLlmCall({
+            const meteredCall = await limiter.run(() => runMeteredLlmCall({
               feature: 'brief_preview',
               provider: llm,
               userId,
               budgetExempt,
               maxOutputTokens: opts.max_tokens ?? 400,
               call: () => chatResolved(llm, opts),
-            });
+            }));
             accounting.push(meteredCall.accounting);
             return {
               ...meteredCall.value,
@@ -176,16 +198,18 @@ export async function GET(req: Request) {
       : undefined;
     const brief = await generateDailyBrief(watchlist, {
       topN,
-      skipLLM: false,
-      ...(llmCall ? { llmCall } : {}),
+      mode: 'metered',
+      llmCall: llmCall!,
     });
     await recordAccounting(
+      userId,
+      usageAuditKey,
       accounting,
       accounting.some((item) => item.status === 'failed') || (brief.meta.failures ?? 0) > 0,
     );
     return briefResponse(brief, format);
   } catch (e: any) {
-    await recordAccounting(accounting, true);
+    await recordAccounting(userId, usageAuditKey, accounting, true);
     const code = costErrorCode(e);
     if (code) {
       const locale = await getRequestLocale();
@@ -205,10 +229,11 @@ export async function GET(req: Request) {
           dailyMicrormb: budget.dailyLimitMicrormb,
           timezone: 'Asia/Shanghai',
         },
-      }, { status: 429 });
+      }, { status: costErrorStatus(code) });
     }
+    console.error('brief preview failed', { code: 'brief_generation_failed' });
     return NextResponse.json(
-      { error: e?.message || 'brief generation failed', stack: e?.stack?.slice(0, 500) },
+      { error: 'brief generation failed' },
       { status: 500 }
     );
   }

@@ -321,6 +321,7 @@ export type UsageFeature = 'copilot' | 'perspectives' | 'brief_preview';
 
 export interface UsageEvent {
   id: string;
+  idempotency_key: string | null;
   user_id: string;
   feature: UsageFeature;
   ticker: string | null;
@@ -351,6 +352,13 @@ export interface LlmCostReservation {
   model: string;
   reserved_micrormb: number;
   settled_micrormb: number | null;
+  input_tokens: number | null;
+  cache_hit_input_tokens: number | null;
+  cache_miss_input_tokens: number | null;
+  output_tokens: number | null;
+  pricing_version: string | null;
+  usd_cny_micros: number | null;
+  usage_estimated: boolean | null;
   status: LlmCostReservationStatus;
   expires_at: string;
   created_at: string;
@@ -516,7 +524,30 @@ export type Database = {
         }>;
       };
       settle_llm_budget: {
-        Args: { p_reservation_id: string; p_actual_micrormb: number };
+        Args: {
+          p_reservation_id: string;
+          p_actual_micrormb: number;
+          p_input_tokens: number;
+          p_cache_hit_input_tokens: number;
+          p_cache_miss_input_tokens: number;
+          p_output_tokens: number;
+          p_pricing_version: string;
+          p_usd_cny_micros: number;
+          p_usage_estimated: boolean;
+        };
+        Returns: LlmBudgetReservationState[];
+      };
+      finalize_llm_budget_incurred: {
+        Args: {
+          p_reservation_id: string;
+          p_input_tokens: number;
+          p_cache_hit_input_tokens: number;
+          p_cache_miss_input_tokens: number;
+          p_output_tokens: number;
+          p_pricing_version: string;
+          p_usd_cny_micros: number;
+          p_usage_estimated: boolean;
+        };
         Returns: LlmBudgetReservationState[];
       };
       mark_llm_budget_incurred: {
@@ -526,6 +557,27 @@ export type Database = {
       release_llm_budget: {
         Args: { p_reservation_id: string };
         Returns: LlmBudgetReservationState[];
+      };
+      record_usage_event: {
+        Args: {
+          p_idempotency_key: string;
+          p_user_id: string;
+          p_feature: UsageFeature;
+          p_ticker: string | null;
+          p_provider: string | null;
+          p_model: string | null;
+          p_input_tokens: number;
+          p_cache_hit_input_tokens: number;
+          p_cache_miss_input_tokens: number;
+          p_output_tokens: number;
+          p_cost_micrormb: number;
+          p_pricing_version: string | null;
+          p_usd_cny_micros: number | null;
+          p_usage_estimated: boolean;
+          p_byo: boolean;
+          p_status: 'completed' | 'failed';
+        };
+        Returns: boolean;
       };
     };
   };
