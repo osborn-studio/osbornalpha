@@ -92,6 +92,10 @@ export async function failStaleAiRuns(db: RunDb, userId: string, cutoff: Date): 
 export function stableAiErrorCode(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const name = error instanceof Error ? error.name : '';
+  if (message === 'daily_cost_exhausted') return 'daily_cost_exhausted';
+  if (message === 'pricing_unavailable') return 'pricing_unavailable';
+  if (message === 'budget_unavailable') return 'budget_unavailable';
+  if (message === 'budget_invariant_violation') return 'budget_invariant_violation';
   if (/quota|额度/i.test(message)) return 'quota_exhausted';
   if (/not configured|未配置/i.test(message)) return 'provider_not_configured';
   if (/\b(?:401|403)\b|invalid api key|unauthori[sz]ed|authentication/i.test(message)) return 'provider_auth';

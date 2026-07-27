@@ -7,8 +7,14 @@ import { JOHN_CAMERON_5STEP } from '@/lib/agent/methods/john-cameron-5step';
 import { AGENT_METHODS } from '@/lib/agent/methods/registry';
 import { createArtifact } from '@/lib/portfolio/artifacts-store';
 import { checkQuota, recordUsage, type QuotaResult } from '@/lib/billing/quota';
-import { getRequestLocale, apiMessage } from '@/lib/i18n/server';
+import { getBudgetConfig, reserveCostBudget, type CostSettlement } from '@/lib/billing/cost-budget';
+import {
+  PRICING_VERSION,
+  type NormalizedUsage,
+} from '@/lib/billing/llm-pricing';
+import { getRequestLocale, apiMessage, type ApiMessageKey } from '@/lib/i18n/server';
 import { getServerSupabase } from '@/lib/supabase/server';
+import { getAdminSupabase } from '@/lib/supabase/admin';
 import {
   completeAiRun,
   createAiRun,
@@ -19,9 +25,42 @@ import {
 import { createModelInvoker } from '@/lib/copilot/provider-fallback';
 import { normalizeCopilotTicker, resolveCopilotTicker } from '@/lib/copilot/request';
 import { searchSecurities } from '@/lib/securities/search';
+import {
+  MAX_OUTPUT_TOKENS,
+  conservativeInputTokenEstimate,
+} from '@/lib/copilot/cost-accounting';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 180;
+
+interface RunUsage {
+  provider: string;
+  model: string;
+  inputTokens: number;
+  cacheHitInputTokens: number;
+  cacheMissInputTokens: number;
+  outputTokens: number;
+  costMicrormb: number;
+  usageEstimated: boolean;
+  byo: boolean;
+}
+
+function safeSum(left: number, right: number): number {
+  if (!Number.isSafeInteger(left) || left < 0 || !Number.isSafeInteger(right) || right < 0) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  return Math.min(Number.MAX_SAFE_INTEGER, left + right);
+}
+
+function costMessageKey(code: string): ApiMessageKey | null {
+  switch (code) {
+    case 'daily_cost_exhausted': return 'dailyCostExhausted';
+    case 'pricing_unavailable': return 'pricingUnavailable';
+    case 'budget_unavailable': return 'budgetUnavailable';
+    case 'budget_invariant_violation': return 'budgetInvariantViolation';
+    default: return null;
+  }
+}
 
 // Auto-archive threshold: skip near-empty runs (e.g. immediate errors).
 const MIN_ARCHIVE_CHARS = 200;
@@ -153,7 +192,63 @@ export async function POST(req: Request) {
       let runFailed = false;
       let runErrorCode = 'provider_error';
       let fallbackQuota: QuotaResult | null = null;
-      let usedPlatformFallback = false;
+      const runUsage = new Map<string, RunUsage>();
+      const addUsage = (
+        provider: ResolvedLlm,
+        usage: NormalizedUsage,
+        settlement?: CostSettlement,
+      ) => {
+        const key = `${provider.source}\u0000${provider.provider}\u0000${provider.model}`;
+        const current = runUsage.get(key) ?? {
+          provider: provider.provider,
+          model: provider.model,
+          inputTokens: 0,
+          cacheHitInputTokens: 0,
+          cacheMissInputTokens: 0,
+          outputTokens: 0,
+          costMicrormb: 0,
+          usageEstimated: false,
+          byo: provider.source === 'user',
+        };
+        current.inputTokens = safeSum(current.inputTokens, usage.inputTokens);
+        current.cacheHitInputTokens = safeSum(current.cacheHitInputTokens, usage.cacheHitInputTokens);
+        current.cacheMissInputTokens = safeSum(current.cacheMissInputTokens, usage.cacheMissInputTokens);
+        current.outputTokens = safeSum(current.outputTokens, usage.outputTokens);
+        current.costMicrormb = safeSum(current.costMicrormb, settlement?.costMicrormb ?? 0);
+        current.usageEstimated ||= usage.estimated || settlement?.usageEstimated === true;
+        runUsage.set(key, current);
+      };
+      const writeUsage = async (status: 'completed' | 'failed') => {
+        const budgetConfig = getBudgetConfig();
+        for (const usage of runUsage.values()) {
+          if (
+            status === 'failed'
+            && (
+              usage.byo
+              || (
+                usage.costMicrormb === 0
+                && usage.inputTokens === 0
+                && usage.outputTokens === 0
+              )
+            )
+          ) continue;
+          await recordUsage('copilot', {
+            ticker: ticker || undefined,
+            provider: usage.provider,
+            model: usage.model,
+            inputTokens: usage.inputTokens,
+            cacheHitInputTokens: usage.cacheHitInputTokens,
+            cacheMissInputTokens: usage.cacheMissInputTokens,
+            outputTokens: usage.outputTokens,
+            costMicrormb: usage.costMicrormb,
+            pricingVersion: usage.byo ? undefined : PRICING_VERSION,
+            usdCnyMicros: usage.byo ? undefined : budgetConfig.usdCnyMicros,
+            usageEstimated: usage.usageEstimated,
+            byo: usage.byo,
+            status,
+          });
+        }
+      };
       const onEvent = (e: CopilotEvent) => {
         if (e.type === 'token') archivedText += e.text;
         if (e.type === 'verdict') archivedVerdict = e.data;
@@ -173,6 +268,11 @@ export async function POST(req: Request) {
             });
             return;
           }
+          const messageKey = costMessageKey(runErrorCode);
+          if (messageKey) {
+            send({ ...e, code: runErrorCode, message: apiMessage(locale, messageKey) });
+            return;
+          }
           send({ ...e, code: runErrorCode, message: apiMessage(locale, 'providerFailed') });
           return;
         }
@@ -190,19 +290,63 @@ export async function POST(req: Request) {
           system: systemPrompt,
           messages,
           tools: OPENAI_TOOL_DEFS,
-          max_tokens: 3000,
+          max_tokens: MAX_OUTPUT_TOKENS,
         };
-        const r = provider.protocol === 'anthropic'
-          ? await anthropicToolChat(cfg, common)
-          : await toolChat(cfg, {
-              ...common,
-              // DeepSeek V4 thinking mode requires reasoning_content to be
-              // replayed after tool calls and spends the same max_tokens
-              // budget on hidden reasoning. This adapter intentionally uses
-              // non-thinking mode for deterministic multi-turn tool work.
-              thinking: provider.provider === 'deepseek' ? 'disabled' : undefined,
+        let reservation: Awaited<ReturnType<typeof reserveCostBudget>> | null = null;
+        if (provider.source === 'env') {
+          try {
+            const authDb = await getServerSupabase();
+            const { data, error } = await authDb.auth.getUser();
+            if (error || !data.user) throw new Error('budget_unavailable');
+            reservation = await reserveCostBudget(getAdminSupabase(), data.user.id, {
+              feature: 'copilot',
+              provider: provider.provider,
+              model: provider.model,
+              estimatedInputTokens: conservativeInputTokenEstimate(systemPrompt, messages),
+              maxOutputTokens: MAX_OUTPUT_TOKENS,
             });
-        return { content: r.content, toolCalls: r.toolCalls, finishReason: r.finishReason };
+          } catch (error) {
+            const code = stableAiErrorCode(error);
+            if (costMessageKey(code)) throw new Error(code);
+            throw new Error('budget_unavailable');
+          }
+        }
+
+        let r;
+        try {
+          r = provider.protocol === 'anthropic'
+            ? await anthropicToolChat(cfg, common)
+            : await toolChat(cfg, {
+                ...common,
+                // DeepSeek V4 thinking mode requires reasoning_content to be
+                // replayed after tool calls and spends the same max_tokens
+                // budget on hidden reasoning. This adapter intentionally uses
+                // non-thinking mode for deterministic multi-turn tool work.
+                thinking: provider.provider === 'deepseek' ? 'disabled' : undefined,
+              });
+        } catch (error) {
+          if (reservation) {
+            try {
+              await reservation.release();
+            } catch (releaseError) {
+              throw releaseError;
+            }
+          }
+          throw error;
+        }
+
+        if (reservation) {
+          const settlement = await reservation.settle(r.usage);
+          addUsage(provider, r.usage, settlement);
+        } else {
+          addUsage(provider, r.usage);
+        }
+        return {
+          content: r.content,
+          toolCalls: r.toolCalls,
+          finishReason: r.finishReason,
+          usage: r.usage,
+        };
       };
 
       const invokeModel = createModelInvoker<ResolvedLlm, [OaiMessage[]], Awaited<ReturnType<typeof callModel>>>({
@@ -218,7 +362,6 @@ export async function POST(req: Request) {
           if (fallbackQuota && !fallbackQuota.allowed) throw new Error('quota exhausted');
         },
         onFallback: (error) => {
-          usedPlatformFallback = true;
           console.warn('copilot provider fallback', {
             from: llm.provider,
             to: platformFallback?.provider,
@@ -245,14 +388,7 @@ export async function POST(req: Request) {
           },
         });
 
-        // Best-effort ledger entry — tokens aren't surfaced through the tool-call
-        // loop today, so tokensIn/tokensOut are recorded as 0 (spec-accepted:
-        // usage_events is a count-based quota ledger first, token audit second).
-        // recordUsage() never throws (see quota.ts) so this can't break the stream.
-        await recordUsage('copilot', {
-          ticker: ticker || undefined,
-          byo: byo && !usedPlatformFallback,
-        });
+        if (!runFailed) await writeUsage('completed');
 
         if (resolvedMethod.archive && archivedText.length > MIN_ARCHIVE_CHARS) {
           try {
@@ -271,8 +407,14 @@ export async function POST(req: Request) {
       } catch (error) {
         runFailed = true;
         runErrorCode = stableAiErrorCode(error);
-        send({ type: 'error', code: runErrorCode, message: apiMessage(locale, 'providerFailed') });
+        const messageKey = costMessageKey(runErrorCode);
+        send({
+          type: 'error',
+          code: runErrorCode,
+          message: apiMessage(locale, messageKey ?? 'providerFailed'),
+        });
       } finally {
+        if (runFailed) await writeUsage('failed');
         if (runId && runDb) {
           try {
             const durationMs = Date.now() - runStartedAt;

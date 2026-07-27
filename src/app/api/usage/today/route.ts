@@ -46,12 +46,15 @@ export async function GET() {
       .eq('user_id', user.id)
       .eq('feature', feature)
       .eq('byo', false)
+      .eq('status', 'completed')
       .gte('created_at', startIso)
       .lt('created_at', endIso);
     if (countErr) return NextResponse.json({ error: countErr.message }, { status: 500 });
     usage[feature] = { used: count ?? 0, limit };
   }
 
+  // BYO is informational rather than a quota. Include both completed and
+  // failed audit rows so the settings summary reflects all personal-key use.
   const { count: byoCalls, error: byoErr } = await supabase
     .from('usage_events')
     .select('*', { count: 'exact', head: true })

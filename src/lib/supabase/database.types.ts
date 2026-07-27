@@ -3,6 +3,7 @@
 // + 20260703090000_usage_events.sql (usage_events)
 // + 20260703120000_stripe_billing.sql (profiles.plan_expires_at, stripe_events)
 // + 20260728090000_llm_daily_cost_budget.sql (LLM cost accounting and reservations)
+// + 20260728100000_usage_event_status.sql (successful-run quota semantics)
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -335,6 +336,7 @@ export interface UsageEvent {
   usd_cny_micros: number | null;
   usage_estimated: boolean;
   byo: boolean;
+  status: 'completed' | 'failed';
   created_at: string;
 }
 

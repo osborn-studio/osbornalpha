@@ -39,6 +39,10 @@ export type ApiMessageKey =
   | 'providerNotConfigured'
   | 'providerFailed'
   | 'providerFallback'
+  | 'dailyCostExhausted'
+  | 'pricingUnavailable'
+  | 'budgetUnavailable'
+  | 'budgetInvariantViolation'
   | 'oversellBlocked';
 
 const API_MESSAGES: Record<ApiMessageKey, Record<AppLocale, string>> = {
@@ -57,6 +61,22 @@ const API_MESSAGES: Record<ApiMessageKey, Record<AppLocale, string>> = {
   providerFallback: {
     zh: '你的个人 AI 模型暂时不可用，已自动切换到平台模型继续分析。',
     en: 'Your personal AI model is unavailable, so the analysis has continued with the platform model.',
+  },
+  dailyCostExhausted: {
+    zh: '今日平台 AI 成本额度已用完（8.8 元/天）。可使用自己的 API Key，或等待北京时间 00:00 重置。',
+    en: 'Today’s platform AI cost budget has been used up (CNY 8.8/day). Use your own API key or wait for the reset at 00:00 Beijing time.',
+  },
+  pricingUnavailable: {
+    zh: '当前平台 AI 模型暂不可用，请稍后重试或使用自己的 API Key。',
+    en: 'The current platform AI model is unavailable. Please try again later or use your own API key.',
+  },
+  budgetUnavailable: {
+    zh: '平台 AI 成本预算服务暂不可用，请稍后重试。',
+    en: 'The platform AI cost budget service is temporarily unavailable. Please try again later.',
+  },
+  budgetInvariantViolation: {
+    zh: '平台 AI 成本校验失败，请稍后重试。',
+    en: 'Platform AI cost validation failed. Please try again later.',
   },
   oversellBlocked: {
     zh: '删除该笔买入会导致后续卖出超过持仓，请先删除相关卖出记录',

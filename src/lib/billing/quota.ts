@@ -85,6 +85,7 @@ export async function checkQuota(feature: QuotaFeature): Promise<QuotaResult> {
     .eq('user_id', userId)
     .eq('feature', feature)
     .eq('byo', false)
+    .eq('status', 'completed')
     .gte('created_at', startIso)
     .lt('created_at', endIso);
   if (countErr) throw new Error(countErr.message);
@@ -97,7 +98,25 @@ export interface RecordUsageMeta {
   ticker?: string;
   tokensIn?: number;
   tokensOut?: number;
+  provider?: string;
+  model?: string;
+  inputTokens?: number;
+  cacheHitInputTokens?: number;
+  cacheMissInputTokens?: number;
+  outputTokens?: number;
+  costMicrormb?: number;
+  pricingVersion?: string;
+  usdCnyMicros?: number;
+  usageEstimated?: boolean;
   byo: boolean;
+  status?: 'completed' | 'failed';
+}
+
+const LEGACY_INTEGER_MAX = 2_147_483_647;
+
+function boundedInteger(value: number | undefined, maximum = Number.MAX_SAFE_INTEGER): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  return Math.min(Math.max(0, Math.trunc(value)), maximum);
 }
 
 // Accounting failures must never block the caller — record-keeping is
@@ -105,13 +124,28 @@ export interface RecordUsageMeta {
 export async function recordUsage(feature: QuotaFeature, meta: RecordUsageMeta): Promise<void> {
   try {
     const { supabase, userId } = await requireUser();
+    const inputTokens = boundedInteger(meta.inputTokens ?? meta.tokensIn);
+    const outputTokens = boundedInteger(meta.outputTokens ?? meta.tokensOut);
     const { error } = await (supabase as any).from('usage_events').insert({
       user_id: userId,
       feature,
       ticker: meta.ticker ?? null,
-      tokens_in: meta.tokensIn ?? 0,
-      tokens_out: meta.tokensOut ?? 0,
+      tokens_in: boundedInteger(inputTokens, LEGACY_INTEGER_MAX),
+      tokens_out: boundedInteger(outputTokens, LEGACY_INTEGER_MAX),
+      provider: meta.provider ?? null,
+      model: meta.model ?? null,
+      input_tokens: inputTokens,
+      cache_hit_input_tokens: boundedInteger(meta.cacheHitInputTokens),
+      cache_miss_input_tokens: boundedInteger(meta.cacheMissInputTokens ?? inputTokens),
+      output_tokens: outputTokens,
+      cost_micrormb: boundedInteger(meta.costMicrormb),
+      pricing_version: meta.pricingVersion ?? null,
+      usd_cny_micros: meta.usdCnyMicros === undefined
+        ? null
+        : boundedInteger(meta.usdCnyMicros),
+      usage_estimated: meta.usageEstimated ?? false,
       byo: meta.byo,
+      status: meta.status ?? 'completed',
     });
     if (error) throw new Error(error.message);
   } catch (err) {
