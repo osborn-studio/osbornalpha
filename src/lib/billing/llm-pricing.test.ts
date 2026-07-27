@@ -55,7 +55,22 @@ describe('normalizeUsage', () => {
 
       expect(usage.cacheHitInputTokens + usage.cacheMissInputTokens).toBe(1_000);
       expect(usage.cacheMissInputTokens).toBe(1_000);
+      expect(usage.estimated).toBe(true);
     }
+  });
+
+  it('marks malformed cache fields as estimated while retaining conservative totals', () => {
+    expect(normalizeUsage({
+      prompt_tokens: 1_000,
+      completion_tokens: 1,
+      prompt_cache_hit_tokens: '900',
+    })).toEqual({
+      inputTokens: 1_000,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 1_000,
+      outputTokens: 1,
+      estimated: true,
+    });
   });
 
   it('clamps invalid negative and non-finite usage to zero', () => {
@@ -87,7 +102,7 @@ describe('normalizeUsage', () => {
       cacheHitInputTokens: 300,
       cacheMissInputTokens: 700,
       outputTokens: 20,
-      estimated: false,
+      estimated: true,
     });
   });
 

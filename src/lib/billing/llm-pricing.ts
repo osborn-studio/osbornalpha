@@ -37,6 +37,21 @@ export const PRICE_REGISTRY: Record<string, ModelPricing> = {
 
 type UnknownRecord = Record<string, unknown>;
 
+const INPUT_TOKEN_KEYS = ['input_tokens', 'prompt_tokens'];
+const OUTPUT_TOKEN_KEYS = ['output_tokens', 'completion_tokens'];
+const CACHE_HIT_TOKEN_KEYS = [
+  'prompt_cache_hit_tokens',
+  'cache_hit_input_tokens',
+  'cache_hit_tokens',
+];
+const CACHE_MISS_TOKEN_KEYS = [
+  'prompt_cache_miss_tokens',
+  'cache_miss_input_tokens',
+  'cache_miss_tokens',
+];
+const DETAIL_CACHE_HIT_TOKEN_KEYS = ['cache_hit_tokens', 'cache_hit_input_tokens', 'cached_tokens'];
+const DETAIL_CACHE_MISS_TOKEN_KEYS = ['cache_miss_tokens', 'cache_miss_input_tokens'];
+
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === 'object' && value !== null;
 }
@@ -58,20 +73,31 @@ function firstValidNonNegativeInteger(record: UnknownRecord, keys: string[]): nu
   return undefined;
 }
 
+function hasMalformedTokenValue(record: UnknownRecord, keys: string[]): boolean {
+  return keys.some((key) => Object.prototype.hasOwnProperty.call(record, key)
+    && validNonNegativeInteger(record[key]) === undefined);
+}
+
+function hasMalformedUsageField(raw: UnknownRecord): boolean {
+  if (
+    hasMalformedTokenValue(raw, INPUT_TOKEN_KEYS)
+    || hasMalformedTokenValue(raw, OUTPUT_TOKEN_KEYS)
+    || hasMalformedTokenValue(raw, CACHE_HIT_TOKEN_KEYS)
+    || hasMalformedTokenValue(raw, CACHE_MISS_TOKEN_KEYS)
+  ) return true;
+
+  if (!Object.prototype.hasOwnProperty.call(raw, 'prompt_tokens_details')) return false;
+  if (!isRecord(raw.prompt_tokens_details)) return true;
+  return hasMalformedTokenValue(raw.prompt_tokens_details, DETAIL_CACHE_HIT_TOKEN_KEYS)
+    || hasMalformedTokenValue(raw.prompt_tokens_details, DETAIL_CACHE_MISS_TOKEN_KEYS);
+}
+
 function cacheBreakdown(raw: UnknownRecord): { hit?: number; miss?: number; present: boolean } {
   const details = isRecord(raw.prompt_tokens_details) ? raw.prompt_tokens_details : {};
-  const hit = firstValidNonNegativeInteger(raw, [
-    'prompt_cache_hit_tokens',
-    'cache_hit_input_tokens',
-    'cache_hit_tokens',
-  ])
-    ?? firstValidNonNegativeInteger(details, ['cache_hit_tokens', 'cache_hit_input_tokens', 'cached_tokens']);
-  const miss = firstValidNonNegativeInteger(raw, [
-    'prompt_cache_miss_tokens',
-    'cache_miss_input_tokens',
-    'cache_miss_tokens',
-  ])
-    ?? firstValidNonNegativeInteger(details, ['cache_miss_tokens', 'cache_miss_input_tokens']);
+  const hit = firstValidNonNegativeInteger(raw, CACHE_HIT_TOKEN_KEYS)
+    ?? firstValidNonNegativeInteger(details, DETAIL_CACHE_HIT_TOKEN_KEYS);
+  const miss = firstValidNonNegativeInteger(raw, CACHE_MISS_TOKEN_KEYS)
+    ?? firstValidNonNegativeInteger(details, DETAIL_CACHE_MISS_TOKEN_KEYS);
 
   return { hit, miss, present: hit !== undefined || miss !== undefined };
 }
@@ -79,8 +105,9 @@ function cacheBreakdown(raw: UnknownRecord): { hit?: number; miss?: number; pres
 /** Normalizes OpenAI-compatible usage, defaulting uncertain prompt tokens to cache misses. */
 export function normalizeUsage(raw: unknown): NormalizedUsage {
   const usage = isRecord(raw) ? raw : {};
-  const reportedInputTokens = firstValidNonNegativeInteger(usage, ['input_tokens', 'prompt_tokens']);
-  const reportedOutputTokens = firstValidNonNegativeInteger(usage, ['output_tokens', 'completion_tokens']);
+  const reportedInputTokens = firstValidNonNegativeInteger(usage, INPUT_TOKEN_KEYS);
+  const reportedOutputTokens = firstValidNonNegativeInteger(usage, OUTPUT_TOKEN_KEYS);
+  const hasMalformedField = hasMalformedUsageField(usage);
   const breakdown = cacheBreakdown(usage);
   const inputTokens = reportedInputTokens ?? Math.min(
     (breakdown.hit ?? 0) + (breakdown.miss ?? 0),
@@ -123,7 +150,8 @@ export function normalizeUsage(raw: unknown): NormalizedUsage {
     estimated: usage.estimated === true
       || !hasCompleteInputTotal
       || reportedOutputTokens === undefined
-      || hasContradictoryBreakdown,
+      || hasContradictoryBreakdown
+      || hasMalformedField,
   };
 }
 
