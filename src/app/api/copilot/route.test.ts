@@ -65,7 +65,7 @@ vi.mock('@/lib/agent/tools', () => ({
 import { POST } from './route';
 import {
   MAX_OUTPUT_TOKENS,
-  conservativeInputTokenEstimate,
+  estimateSerializedTokens,
 } from '@/lib/copilot/cost-accounting';
 
 const PLATFORM = {
@@ -118,6 +118,7 @@ function reservation(costMicrormb: number) {
   return {
     reservationId: `reservation-${costMicrormb}`,
     reservedMicrormb: costMicrormb + 100,
+    markIncurred: vi.fn().mockResolvedValue(undefined),
     settle: vi.fn().mockResolvedValue({ costMicrormb, usageEstimated: false }),
     release: vi.fn().mockResolvedValue(undefined),
   };
@@ -142,9 +143,10 @@ describe('Copilot platform cost budget', () => {
     mocks.radarHandler.mockResolvedValue({ score: 1 });
   });
 
-  it('uses 9000 output tokens, reserves before every platform turn, settles, and aggregates one successful ledger row', async () => {
+  it('uses the reviewed 1M input ceiling and 9000 output tokens for every platform turn regardless of serialized text', async () => {
     const first = reservation(111);
     const second = reservation(222);
+    mocks.radarHandler.mockResolvedValue({ analysis: '复杂中文工具结果'.repeat(800) });
     mocks.reserveCostBudget.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
     mocks.toolChat
       .mockResolvedValueOnce({
@@ -176,15 +178,24 @@ describe('Copilot platform cost budget', () => {
         feature: 'copilot',
         provider: 'deepseek',
         model: 'deepseek-v4-flash',
-        estimatedInputTokens: conservativeInputTokenEstimate(
-          modelOptions.system,
-          modelOptions.messages.slice(0, index === 0 ? 1 : 3),
-        ),
+        maxInputTokens: 1_000_000,
         maxOutputTokens: 9000,
       });
+      const currentReservation = index === 0 ? first : second;
       expect(mocks.reserveCostBudget.mock.invocationCallOrder[index])
+        .toBeLessThan(currentReservation.markIncurred.mock.invocationCallOrder[0]);
+      expect(currentReservation.markIncurred.mock.invocationCallOrder[0])
         .toBeLessThan(mocks.toolChat.mock.invocationCallOrder[index]);
     }
+    expect(estimateSerializedTokens(
+      mocks.toolChat.mock.calls[0][1].system,
+      mocks.toolChat.mock.calls[0][1].messages.slice(0, 1),
+    )).not.toBe(estimateSerializedTokens(
+      mocks.toolChat.mock.calls[1][1].system,
+      mocks.toolChat.mock.calls[1][1].messages,
+    ));
+    expect(first.markIncurred).toHaveBeenCalledTimes(1);
+    expect(second.markIncurred).toHaveBeenCalledTimes(1);
     expect(first.settle).toHaveBeenCalledWith(usage(100, 40, 10));
     expect(second.settle).toHaveBeenCalledWith(usage(80, 0, 20, true));
     expect(mocks.recordUsage).toHaveBeenCalledTimes(1);
@@ -206,14 +217,15 @@ describe('Copilot platform cost budget', () => {
     expect(mocks.checkQuota).toHaveBeenCalledTimes(1);
   });
 
-  it('releases the current reservation when the provider call throws', async () => {
+  it('keeps an incurred reservation durable when the provider call throws', async () => {
     const current = reservation(100);
     mocks.reserveCostBudget.mockResolvedValue(current);
     mocks.toolChat.mockRejectedValue(new Error('llm 500: failed'));
 
     const { text } = await runRoute();
 
-    expect(current.release).toHaveBeenCalledTimes(1);
+    expect(current.markIncurred).toHaveBeenCalledTimes(1);
+    expect(current.release).not.toHaveBeenCalled();
     expect(current.settle).not.toHaveBeenCalled();
     expect(mocks.recordUsage).toHaveBeenCalledTimes(1);
     expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
@@ -221,12 +233,51 @@ describe('Copilot platform cost budget', () => {
       model: 'deepseek-v4-flash',
       inputTokens: 0,
       outputTokens: 0,
-      costMicrormb: 0,
+      costMicrormb: current.reservedMicrormb,
+      usageEstimated: true,
       byo: false,
       status: 'failed',
     }));
     expect(text).toContain('"code":"provider_error"');
     expect(text).toContain('localized:providerFailed');
+  });
+
+  it('does not call the provider when marking the reservation incurred fails', async () => {
+    const current = reservation(100);
+    current.markIncurred.mockRejectedValue(new Error('budget_unavailable'));
+    mocks.reserveCostBudget.mockResolvedValue(current);
+
+    const { text } = await runRoute();
+
+    expect(mocks.toolChat).not.toHaveBeenCalled();
+    expect(current.release).not.toHaveBeenCalled();
+    expect(text).toContain('"code":"budget_unavailable"');
+  });
+
+  it('audits returned usage at full reserved cost when settlement fails transiently', async () => {
+    const current = reservation(100);
+    current.settle.mockRejectedValue(new Error('budget_unavailable'));
+    mocks.reserveCostBudget.mockResolvedValue(current);
+    mocks.toolChat.mockResolvedValue({
+      content: 'Provider returned this answer',
+      toolCalls: [],
+      finishReason: 'stop',
+      usage: usage(45, 5, 9),
+    });
+
+    const { text } = await runRoute();
+
+    expect(text).toContain('"code":"budget_unavailable"');
+    expect(current.release).not.toHaveBeenCalled();
+    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+      inputTokens: 45,
+      cacheHitInputTokens: 5,
+      cacheMissInputTokens: 40,
+      outputTokens: 9,
+      costMicrormb: current.reservedMicrormb,
+      usageEstimated: true,
+      status: 'failed',
+    }));
   });
 
   it.each([
@@ -359,6 +410,56 @@ describe('Copilot platform cost budget', () => {
     expect(fallbackReservation.settle).toHaveBeenCalledTimes(1);
   });
 
+  it('lets an admin use the direct platform model without budget RPCs while auditing actual cost', async () => {
+    mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: -1, plan: 'free' });
+    mocks.toolChat.mockResolvedValue({
+      content: 'Admin answer',
+      toolCalls: [],
+      finishReason: 'stop',
+      usage: usage(100, 0, 10),
+    });
+
+    await runRoute();
+
+    expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
+    expect(mocks.toolChat).toHaveBeenCalledTimes(1);
+    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+      inputTokens: 100,
+      outputTokens: 10,
+      costMicrormb: 121,
+      byo: false,
+      status: 'completed',
+    }));
+  });
+
+  it('lets an admin fallback from BYO to platform without budget RPCs while auditing actual cost', async () => {
+    mocks.resolveLlm.mockResolvedValue(BYO);
+    mocks.resolvePlatformLlm.mockReturnValue(PLATFORM);
+    mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: -1, plan: 'free' });
+    mocks.toolChat.mockImplementation(async (cfg) => {
+      if (cfg.apiKey === 'byo-key') throw new Error('llm 401: invalid api key');
+      return {
+        content: 'Admin fallback answer',
+        toolCalls: [],
+        finishReason: 'stop',
+        usage: usage(55, 5, 11),
+      };
+    });
+
+    await runRoute();
+
+    expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
+    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      inputTokens: 55,
+      outputTokens: 11,
+      costMicrormb: 73,
+      byo: false,
+      status: 'completed',
+    }));
+  });
+
   it('audits settled platform rounds on a failed run without writing a completed count event', async () => {
     const completedRound = reservation(111);
     const failedRound = reservation(222);
@@ -377,12 +478,14 @@ describe('Copilot platform cost budget', () => {
     await runRoute();
 
     expect(completedRound.settle).toHaveBeenCalledTimes(1);
-    expect(failedRound.release).toHaveBeenCalledTimes(1);
+    expect(failedRound.markIncurred).toHaveBeenCalledTimes(1);
+    expect(failedRound.release).not.toHaveBeenCalled();
     expect(mocks.recordUsage).toHaveBeenCalledOnce();
     expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
       inputTokens: 70,
       outputTokens: 7,
-      costMicrormb: 111,
+      costMicrormb: 433,
+      usageEstimated: true,
       byo: false,
       status: 'failed',
     }));
@@ -431,7 +534,8 @@ describe('Copilot platform cost budget', () => {
     await runRoute();
 
     expect(completedPlatformRound.settle).toHaveBeenCalledTimes(1);
-    expect(failedPlatformRound.release).toHaveBeenCalledTimes(1);
+    expect(failedPlatformRound.markIncurred).toHaveBeenCalledTimes(1);
+    expect(failedPlatformRound.release).not.toHaveBeenCalled();
     expect(mocks.recordUsage).toHaveBeenCalledTimes(1);
     expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
       provider: 'mixed',
@@ -440,19 +544,20 @@ describe('Copilot platform cost budget', () => {
       cacheHitInputTokens: 15,
       cacheMissInputTokens: 45,
       outputTokens: 6,
-      costMicrormb: 222,
+      costMicrormb: 655,
+      usageEstimated: true,
       byo: false,
       status: 'failed',
     }));
   });
 });
 
-describe('conservativeInputTokenEstimate', () => {
+describe('estimateSerializedTokens', () => {
   it('estimates the exact serialized system-plus-message payload at three characters per token', () => {
     const system = 'system';
     const messages = [{ role: 'user' as const, content: 'hello' }];
 
-    expect(conservativeInputTokenEstimate(system, messages)).toBe(
+    expect(estimateSerializedTokens(system, messages)).toBe(
       Math.ceil(JSON.stringify([{ role: 'system', content: system }, ...messages]).length / 3),
     );
   });
@@ -460,6 +565,6 @@ describe('conservativeInputTokenEstimate', () => {
   it('returns a bounded safe non-negative integer when serialization fails or is huge', () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
-    expect(conservativeInputTokenEstimate('system', [cyclic as never])).toBe(Number.MAX_SAFE_INTEGER);
+    expect(estimateSerializedTokens('system', [cyclic as never])).toBe(Number.MAX_SAFE_INTEGER);
   });
 });

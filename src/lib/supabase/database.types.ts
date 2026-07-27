@@ -4,6 +4,7 @@
 // + 20260703120000_stripe_billing.sql (profiles.plan_expires_at, stripe_events)
 // + 20260728090000_llm_daily_cost_budget.sql (LLM cost accounting and reservations)
 // + 20260728100000_usage_event_status.sql (successful-run quota semantics)
+// + 20260728110000_llm_incurred_budget.sql (durable pre-network spend state)
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -340,7 +341,7 @@ export interface UsageEvent {
   created_at: string;
 }
 
-export type LlmCostReservationStatus = 'reserved' | 'settled' | 'released';
+export type LlmCostReservationStatus = 'reserved' | 'incurred' | 'settled' | 'released';
 
 export interface LlmCostReservation {
   id: string;
@@ -516,6 +517,10 @@ export type Database = {
       };
       settle_llm_budget: {
         Args: { p_reservation_id: string; p_actual_micrormb: number };
+        Returns: LlmBudgetReservationState[];
+      };
+      mark_llm_budget_incurred: {
+        Args: { p_reservation_id: string };
         Returns: LlmBudgetReservationState[];
       };
       release_llm_budget: {

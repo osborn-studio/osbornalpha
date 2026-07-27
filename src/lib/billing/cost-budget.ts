@@ -9,12 +9,14 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database, UsageFeature } from '@/lib/supabase/database.types';
 
 type ReserveBudgetArgs = Database['public']['Functions']['reserve_llm_daily_budget']['Args'];
+type MarkIncurredArgs = Database['public']['Functions']['mark_llm_budget_incurred']['Args'];
 type SettleBudgetArgs = Database['public']['Functions']['settle_llm_budget']['Args'];
 type ReleaseBudgetArgs = Database['public']['Functions']['release_llm_budget']['Args'];
 
 /** Production clients can be passed directly; this adapter keeps unit fakes small. */
 export interface BudgetRpcAdapter {
   reserve(args: ReserveBudgetArgs): Promise<{ data: unknown; error: unknown }>;
+  markIncurred(args: MarkIncurredArgs): Promise<{ data: unknown; error: unknown }>;
   settle(args: SettleBudgetArgs): Promise<{ data: unknown; error: unknown }>;
   release(args: ReleaseBudgetArgs): Promise<{ data: unknown; error: unknown }>;
 }
@@ -47,6 +49,12 @@ function settleRpc(client: BudgetRpcClient, args: SettleBudgetArgs) {
     : client.rpc<'settle_llm_budget', SettleBudgetArgs>('settle_llm_budget', args);
 }
 
+function markIncurredRpc(client: BudgetRpcClient, args: MarkIncurredArgs) {
+  return 'markIncurred' in client
+    ? client.markIncurred(args)
+    : client.rpc<'mark_llm_budget_incurred', MarkIncurredArgs>('mark_llm_budget_incurred', args);
+}
+
 function releaseRpc(client: BudgetRpcClient, args: ReleaseBudgetArgs) {
   return 'release' in client
     ? client.release(args)
@@ -63,7 +71,7 @@ export interface CostBudgetRequest {
   feature: UsageFeature;
   provider: string;
   model: string;
-  estimatedInputTokens: number;
+  maxInputTokens: number;
   maxOutputTokens: number;
 }
 
@@ -75,6 +83,7 @@ export interface CostSettlement {
 export interface CostReservation {
   reservationId: string;
   reservedMicrormb: number;
+  markIncurred(): Promise<void>;
   settle(usage: NormalizedUsage): Promise<CostSettlement>;
   release(): Promise<void>;
 }
@@ -101,7 +110,7 @@ export function getBudgetConfig(env: Record<string, string | undefined> = proces
   };
 }
 
-function stableError(code: 'budget_unavailable' | 'daily_cost_exhausted' | 'budget_invariant_violation' | 'budget_reservation_released'): Error {
+function stableError(code: 'budget_unavailable' | 'daily_cost_exhausted' | 'budget_invariant_violation' | 'budget_reservation_released' | 'budget_reservation_incurred'): Error {
   return new Error(code);
 }
 
@@ -133,7 +142,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-type TerminalResponse = 'valid' | 'settled' | 'invalid';
+type TerminalResponse = 'valid' | 'settled' | 'incurred' | 'invalid';
 
 interface ExpectedReservation {
   reservationId: string;
@@ -153,7 +162,7 @@ function timestampMs(value: unknown): number | undefined {
 function terminalResponse(
   data: unknown,
   expected: ExpectedReservation,
-  expectedStatus: 'settled' | 'released',
+  expectedStatus: 'incurred' | 'settled' | 'released',
   expectedSettledMicrormb?: number,
 ): TerminalResponse {
   if (!Array.isArray(data) || data.length !== 1 || !isRecord(data[0])) return 'invalid';
@@ -175,6 +184,11 @@ function terminalResponse(
   if (row.status === 'released') {
     if (row.settled_micrormb !== null || row.settled_at !== null) return 'invalid';
     return expectedStatus === 'released' ? 'valid' : 'invalid';
+  }
+
+  if (row.status === 'incurred') {
+    if (row.settled_micrormb !== null || row.settled_at !== null) return 'invalid';
+    return expectedStatus === 'incurred' ? 'valid' : 'incurred';
   }
 
   if (row.status === 'settled') {
@@ -205,7 +219,14 @@ export function isCompleteRealUsage(usage: NormalizedUsage): boolean {
     && usage.cacheHitInputTokens + usage.cacheMissInputTokens === usage.inputTokens;
 }
 
-type ReservationState = 'active' | 'settling' | 'settled' | 'releasing' | 'released';
+type ReservationState =
+  | 'active'
+  | 'marking'
+  | 'incurred'
+  | 'settling'
+  | 'settled'
+  | 'releasing'
+  | 'released';
 
 function managedReservation(
   supabase: BudgetRpcClient,
@@ -225,8 +246,37 @@ function managedReservation(
   };
   let state: ReservationState = 'active';
   let settlement: CostSettlement | undefined;
+  let markPromise: Promise<void> | undefined;
   let settlePromise: Promise<CostSettlement> | undefined;
   let releasePromise: Promise<void> | undefined;
+
+  const markIncurred = async (): Promise<void> => {
+    if (state === 'incurred' || state === 'settled') return;
+    if (state === 'marking') return markPromise!;
+    if (state === 'released' || state === 'releasing') {
+      throw stableError('budget_reservation_released');
+    }
+    if (state === 'settling') {
+      await settlePromise!;
+      return;
+    }
+
+    state = 'marking';
+    markPromise = (async () => {
+      try {
+        const response = await markIncurredRpc(supabase, { p_reservation_id: reservationId });
+        if (!response || response.error) throw stableError('budget_unavailable');
+        if (terminalResponse(response.data, expectedReservation, 'incurred') !== 'valid') {
+          throw stableError('budget_unavailable');
+        }
+        state = 'incurred';
+      } catch {
+        state = 'active';
+        throw stableError('budget_unavailable');
+      }
+    })();
+    return markPromise;
+  };
 
   const settle = async (usage: NormalizedUsage): Promise<CostSettlement> => {
     if (state === 'settled') return settlement!;
@@ -236,7 +286,9 @@ function managedReservation(
       await releasePromise!;
       throw stableError('budget_reservation_released');
     }
+    if (state === 'marking') await markPromise!;
 
+    const stateBeforeSettlement = state;
     state = 'settling';
     settlePromise = (async () => {
       try {
@@ -261,7 +313,7 @@ function managedReservation(
         state = 'settled';
         return settlement;
       } catch (error) {
-        state = 'active';
+        state = stateBeforeSettlement === 'incurred' ? 'incurred' : 'active';
         if (error instanceof Error && error.message === 'budget_invariant_violation') throw error;
         if (error instanceof Error && error.message === 'pricing_unavailable') throw error;
         throw stableError('budget_unavailable');
@@ -277,6 +329,10 @@ function managedReservation(
       await settlePromise!;
       return;
     }
+    if (state === 'marking') {
+      await markPromise!;
+    }
+    if (state === 'incurred') throw stableError('budget_reservation_incurred');
 
     state = 'releasing';
     releasePromise = (async () => {
@@ -286,18 +342,26 @@ function managedReservation(
         if (!response || response.error) throw stableError('budget_unavailable');
         const outcome = terminalResponse(response.data, expectedReservation, 'released');
         if (outcome === 'settled') throw stableError('budget_invariant_violation');
+        if (outcome === 'incurred') throw stableError('budget_reservation_incurred');
         if (outcome !== 'valid') throw stableError('budget_unavailable');
         state = 'released';
       } catch (error) {
+        if (error instanceof Error && error.message === 'budget_reservation_incurred') {
+          state = 'incurred';
+          throw error;
+        }
         state = 'active';
-        if (error instanceof Error && error.message === 'budget_invariant_violation') throw error;
+        if (
+          error instanceof Error
+          && error.message === 'budget_invariant_violation'
+        ) throw error;
         throw stableError('budget_unavailable');
       }
     })();
     return releasePromise;
   };
 
-  return { reservationId, reservedMicrormb, settle, release };
+  return { reservationId, reservedMicrormb, markIncurred, settle, release };
 }
 
 export async function reserveCostBudget(
@@ -309,7 +373,7 @@ export async function reserveCostBudget(
   const reservedMicrormb = reservationCostMicrormb(
     request.provider,
     request.model,
-    request.estimatedInputTokens,
+    request.maxInputTokens,
     request.maxOutputTokens,
     config.usdCnyMicros,
   );

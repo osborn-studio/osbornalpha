@@ -153,6 +153,12 @@ settle_reservation_id="$(
   "
 )"
 
+psql_admin -c "
+  set role service_role;
+  select status
+  from public.mark_llm_budget_incurred('$settle_reservation_id')
+" >/dev/null
+
 settle_out="$test_tmp/settle.out"
 settle_err="$test_tmp/settle.err"
 reserve_after_settle_out="$test_tmp/reserve-after-settle.out"
@@ -203,6 +209,7 @@ committed_total="$(
     select sum(
       case
         when status = 'settled' then settled_micrormb
+        when status = 'incurred' then reserved_micrormb
         when status = 'reserved' and expires_at > now() then reserved_micrormb
         else 0
       end
@@ -221,4 +228,4 @@ if [[ "$settle_result" != "settled,500" \
 fi
 
 echo "PASS: concurrent reservations serialize to one winner"
-echo "PASS: concurrent settle/reserve remains within the daily cap"
+echo "PASS: concurrent incurred settle/reserve remains within the daily cap"

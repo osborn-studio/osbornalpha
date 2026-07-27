@@ -9,6 +9,7 @@ export interface NormalizedUsage {
 export const PRICING_VERSION = 'deepseek-2026-04-24';
 export const DEFAULT_USD_CNY_MICROS = 7_200_000;
 export const DEFAULT_DAILY_LIMIT_MICRORMB = 8_800_000;
+export const MAX_INPUT_TOKENS = 1_000_000;
 
 const MICRO_USD_PER_USD = 1_000_000;
 const TOKENS_PER_MILLION = 1_000_000;
@@ -17,6 +18,7 @@ const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 
 interface ModelPricing {
   version: typeof PRICING_VERSION;
+  maxInputTokens: number;
   cacheHitInputMicroUsdPerMillionTokens: number;
   cacheMissInputMicroUsdPerMillionTokens: number;
   outputMicroUsdPerMillionTokens: number;
@@ -29,6 +31,7 @@ interface ModelPricing {
 export const PRICE_REGISTRY: Record<string, ModelPricing> = {
   'deepseek:deepseek-v4-flash': {
     version: PRICING_VERSION,
+    maxInputTokens: MAX_INPUT_TOKENS,
     cacheHitInputMicroUsdPerMillionTokens: 2_800,
     cacheMissInputMicroUsdPerMillionTokens: 140_000,
     outputMicroUsdPerMillionTokens: 280_000,
@@ -166,6 +169,10 @@ function pricingFor(provider: string, model: string): ModelPricing {
   const pricing = PRICE_REGISTRY[`${provider}:${model}`];
   if (!pricing) throw new Error('pricing_unavailable');
   return pricing;
+}
+
+export function maxInputTokensFor(provider: string, model: string): number {
+  return pricingFor(provider, model).maxInputTokens;
 }
 
 function validFx(value: unknown): number {

@@ -3,14 +3,15 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions, pg_catalog;
 
-select plan(52);
+select plan(66);
 
 insert into auth.users (id, email)
 values
   ('10000000-0000-0000-0000-000000000001', 'budget-one@example.test'),
   ('10000000-0000-0000-0000-000000000002', 'budget-expired@example.test'),
   ('10000000-0000-0000-0000-000000000003', 'budget-beijing@example.test'),
-  ('10000000-0000-0000-0000-000000000004', 'budget-overflow@example.test');
+  ('10000000-0000-0000-0000-000000000004', 'budget-overflow@example.test'),
+  ('10000000-0000-0000-0000-000000000005', 'budget-incurred@example.test');
 
 create temporary table budget_test_results (
   label text primary key,
@@ -670,6 +671,183 @@ select is(
   ),
   9223372036854775807::bigint,
   'reported usage saturates at bigint max'
+);
+
+insert into budget_test_results (
+  label, allowed, reservation_id, used_micrormb, limit_micrormb
+)
+select
+  'incurred candidate', allowed, reservation_id, used_micrormb, limit_micrormb
+from public.reserve_llm_daily_budget(
+  '10000000-0000-0000-0000-000000000005',
+  'copilot',
+  'deepseek',
+  'deepseek-v4-flash',
+  600,
+  1000,
+  1
+);
+
+insert into budget_test_results (
+  label, reservation_id, status, reserved_micrormb, settled_micrormb, settled_at
+)
+select
+  'first incurred mark',
+  reservation_id,
+  status,
+  reserved_micrormb,
+  settled_micrormb,
+  settled_at
+from public.mark_llm_budget_incurred(
+  (select reservation_id from budget_test_results where label = 'incurred candidate')
+);
+
+select is(
+  (select status from budget_test_results where label = 'first incurred mark'),
+  'incurred',
+  'marking a reservation records durable incurred state'
+);
+select is(
+  (
+    select status
+    from public.mark_llm_budget_incurred(
+      (select reservation_id from budget_test_results where label = 'incurred candidate')
+    )
+  ),
+  'incurred',
+  'marking incurred is idempotent'
+);
+
+update public.llm_cost_reservations
+set expires_at = now() - interval '1 second'
+where id = (select reservation_id from budget_test_results where label = 'incurred candidate');
+
+insert into budget_test_results (
+  label, allowed, reservation_id, used_micrormb, limit_micrormb
+)
+select
+  'after incurred expiration', allowed, reservation_id, used_micrormb, limit_micrormb
+from public.reserve_llm_daily_budget(
+  '10000000-0000-0000-0000-000000000005',
+  'copilot',
+  'deepseek',
+  'deepseek-v4-flash',
+  401,
+  1000,
+  300
+);
+
+select is(
+  (select allowed from budget_test_results where label = 'after incurred expiration'),
+  false,
+  'incurred cost remains counted after reservation TTL'
+);
+select is(
+  (select used_micrormb from budget_test_results where label = 'after incurred expiration'),
+  600::bigint,
+  'expired incurred cost reports its full reserved amount'
+);
+select is(
+  (
+    select status
+    from public.release_llm_budget(
+      (select reservation_id from budget_test_results where label = 'incurred candidate')
+    )
+  ),
+  'incurred',
+  'release never changes an incurred reservation'
+);
+select throws_ok(
+  format(
+    'select * from public.settle_llm_budget(%L::uuid, 601)',
+    (select reservation_id from budget_test_results where label = 'incurred candidate')
+  ),
+  '22023',
+  'actual cost exceeds reserved cost',
+  'an incurred reservation rejects settlement above its cap'
+);
+select is(
+  (
+    select status
+    from public.llm_cost_reservations
+    where id = (select reservation_id from budget_test_results where label = 'incurred candidate')
+  ),
+  'incurred',
+  'failed settlement leaves durable incurred state'
+);
+select is(
+  (
+    select allowed
+    from public.reserve_llm_daily_budget(
+      '10000000-0000-0000-0000-000000000005',
+      'copilot',
+      'deepseek',
+      'deepseek-v4-flash',
+      401,
+      1000,
+      300
+    )
+  ),
+  false,
+  'later budget checks continue to include failed incurred settlement'
+);
+select is(
+  (
+    select status
+    from public.settle_llm_budget(
+      (select reservation_id from budget_test_results where label = 'incurred candidate'),
+      500
+    )
+  ),
+  'settled',
+  'incurred reservations settle to actual cost'
+);
+select is(
+  (
+    select settled_micrormb
+    from public.llm_cost_reservations
+    where id = (select reservation_id from budget_test_results where label = 'incurred candidate')
+  ),
+  500::bigint,
+  'successful settlement reduces incurred reserve to actual cost'
+);
+select is(
+  (
+    select status
+    from public.mark_llm_budget_incurred(
+      (select reservation_id from budget_test_results where label = 'incurred candidate')
+    )
+  ),
+  'settled',
+  'marking a settled reservation preserves its terminal state'
+);
+select is(
+  (
+    select status
+    from public.mark_llm_budget_incurred(
+      (select reservation_id from budget_test_results where label = 'release candidate')
+    )
+  ),
+  'released',
+  'marking a released reservation preserves its terminal state'
+);
+select is(
+  has_function_privilege(
+    'authenticated',
+    'public.mark_llm_budget_incurred(uuid)',
+    'EXECUTE'
+  ),
+  false,
+  'authenticated cannot mark budget incurred'
+);
+select is(
+  has_function_privilege(
+    'service_role',
+    'public.mark_llm_budget_incurred(uuid)',
+    'EXECUTE'
+  ),
+  true,
+  'service_role can mark budget incurred'
 );
 
 select is(

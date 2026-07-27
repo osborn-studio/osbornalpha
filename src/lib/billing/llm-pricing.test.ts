@@ -4,6 +4,8 @@ import {
   calculateCostUsd,
   DEFAULT_DAILY_LIMIT_MICRORMB,
   DEFAULT_USD_CNY_MICROS,
+  MAX_INPUT_TOKENS,
+  maxInputTokensFor,
   normalizeUsage,
   PRICING_VERSION,
   reservationCostMicrormb,
@@ -14,6 +16,8 @@ describe('pricing defaults', () => {
     expect(PRICING_VERSION).toBe('deepseek-2026-04-24');
     expect(DEFAULT_USD_CNY_MICROS).toBe(7_200_000);
     expect(DEFAULT_DAILY_LIMIT_MICRORMB).toBe(8_800_000);
+    expect(MAX_INPUT_TOKENS).toBe(1_000_000);
+    expect(maxInputTokensFor('deepseek', 'deepseek-v4-flash')).toBe(1_000_000);
   });
 });
 
@@ -315,5 +319,6 @@ describe('DeepSeek pricing', () => {
       outputTokens: 1,
       estimated: false,
     }, DEFAULT_USD_CNY_MICROS)).toThrow('pricing_unavailable');
+    expect(() => maxInputTokensFor('openai', 'gpt-4o')).toThrow('pricing_unavailable');
   });
 });

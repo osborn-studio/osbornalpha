@@ -9,6 +9,8 @@ import { createArtifact } from '@/lib/portfolio/artifacts-store';
 import { checkQuota, recordUsage, type QuotaResult } from '@/lib/billing/quota';
 import { getBudgetConfig, reserveCostBudget, type CostSettlement } from '@/lib/billing/cost-budget';
 import {
+  calculateCostMicrormb,
+  maxInputTokensFor,
   PRICING_VERSION,
   type NormalizedUsage,
 } from '@/lib/billing/llm-pricing';
@@ -27,8 +29,8 @@ import { normalizeCopilotTicker, resolveCopilotTicker } from '@/lib/copilot/requ
 import { searchSecurities } from '@/lib/securities/search';
 import {
   MAX_OUTPUT_TOKENS,
+  aggregateNormalizedUsage,
   copilotUsageLabels,
-  conservativeInputTokenEstimate,
 } from '@/lib/copilot/cost-accounting';
 
 export const dynamic = 'force-dynamic';
@@ -46,11 +48,15 @@ interface RunUsage {
   byo: boolean;
 }
 
-function safeSum(left: number, right: number): number {
-  if (!Number.isSafeInteger(left) || left < 0 || !Number.isSafeInteger(right) || right < 0) {
-    return Number.MAX_SAFE_INTEGER;
-  }
-  return Math.min(Number.MAX_SAFE_INTEGER, left + right);
+function saturatedSum(left: number, right: number): { value: number; saturated: boolean } {
+  if (
+    !Number.isSafeInteger(left)
+    || left < 0
+    || !Number.isSafeInteger(right)
+    || right < 0
+    || left > Number.MAX_SAFE_INTEGER - right
+  ) return { value: Number.MAX_SAFE_INTEGER, saturated: true };
+  return { value: left + right, saturated: false };
 }
 
 function costMessageKey(code: string): ApiMessageKey | null {
@@ -193,35 +199,30 @@ export async function POST(req: Request) {
       let runFailed = false;
       let runErrorCode = 'provider_error';
       let fallbackQuota: QuotaResult | null = null;
-      const runUsage = new Map<string, RunUsage>();
+      let platformBudgetExempt = !byo && quota?.limit === -1;
+      const runUsage: RunUsage[] = [];
       const attemptedModels = new Map<string, Pick<ResolvedLlm, 'source' | 'provider' | 'model'>>();
       const addUsage = (
         provider: ResolvedLlm,
         usage: NormalizedUsage,
         settlement?: CostSettlement,
       ) => {
-        const key = `${provider.source}\u0000${provider.provider}\u0000${provider.model}`;
-        const current = runUsage.get(key) ?? {
+        const entry: RunUsage = {
           provider: provider.provider,
           model: provider.model,
-          inputTokens: 0,
-          cacheHitInputTokens: 0,
-          cacheMissInputTokens: 0,
-          outputTokens: 0,
-          costMicrormb: 0,
-          usageEstimated: false,
+          inputTokens: usage.inputTokens,
+          cacheHitInputTokens: usage.cacheHitInputTokens,
+          cacheMissInputTokens: usage.cacheMissInputTokens,
+          outputTokens: usage.outputTokens,
+          costMicrormb: settlement?.costMicrormb ?? 0,
+          usageEstimated: usage.estimated || settlement?.usageEstimated === true,
           byo: provider.source === 'user',
         };
-        current.inputTokens = safeSum(current.inputTokens, usage.inputTokens);
-        current.cacheHitInputTokens = safeSum(current.cacheHitInputTokens, usage.cacheHitInputTokens);
-        current.cacheMissInputTokens = safeSum(current.cacheMissInputTokens, usage.cacheMissInputTokens);
-        current.outputTokens = safeSum(current.outputTokens, usage.outputTokens);
-        current.costMicrormb = safeSum(current.costMicrormb, settlement?.costMicrormb ?? 0);
-        current.usageEstimated ||= usage.estimated || settlement?.usageEstimated === true;
-        runUsage.set(key, current);
+        runUsage.push(entry);
+        return entry;
       };
       const writeUsage = async (status: 'completed' | 'failed') => {
-        const usageGroups = [...runUsage.values()];
+        const usageGroups = runUsage;
         const attempted = [...attemptedModels.values()];
         const labels = copilotUsageLabels(
           usageGroups.length > 0
@@ -232,17 +233,33 @@ export async function POST(req: Request) {
         );
         const runByo = (attempted.length > 0 ? attempted : [llm])
           .every((provider) => provider.source === 'user');
-        const aggregate = usageGroups.reduce<RunUsage>((total, usage) => ({
-          provider: labels.provider,
-          model: labels.model,
-          inputTokens: safeSum(total.inputTokens, usage.inputTokens),
-          cacheHitInputTokens: safeSum(total.cacheHitInputTokens, usage.cacheHitInputTokens),
-          cacheMissInputTokens: safeSum(total.cacheMissInputTokens, usage.cacheMissInputTokens),
-          outputTokens: safeSum(total.outputTokens, usage.outputTokens),
-          costMicrormb: safeSum(total.costMicrormb, usage.costMicrormb),
-          usageEstimated: total.usageEstimated || usage.usageEstimated,
-          byo: runByo,
-        }), {
+        const aggregate = usageGroups.reduce<RunUsage>((total, usage) => {
+          const tokens = aggregateNormalizedUsage({
+            inputTokens: total.inputTokens,
+            cacheHitInputTokens: total.cacheHitInputTokens,
+            cacheMissInputTokens: total.cacheMissInputTokens,
+            outputTokens: total.outputTokens,
+            estimated: total.usageEstimated,
+          }, {
+            inputTokens: usage.inputTokens,
+            cacheHitInputTokens: usage.cacheHitInputTokens,
+            cacheMissInputTokens: usage.cacheMissInputTokens,
+            outputTokens: usage.outputTokens,
+            estimated: usage.usageEstimated,
+          });
+          const cost = saturatedSum(total.costMicrormb, usage.costMicrormb);
+          return {
+            provider: labels.provider,
+            model: labels.model,
+            inputTokens: tokens.inputTokens,
+            cacheHitInputTokens: tokens.cacheHitInputTokens,
+            cacheMissInputTokens: tokens.cacheMissInputTokens,
+            outputTokens: tokens.outputTokens,
+            costMicrormb: cost.value,
+            usageEstimated: tokens.estimated || cost.saturated,
+            byo: runByo,
+          };
+        }, {
           provider: labels.provider,
           model: labels.model,
           inputTokens: 0,
@@ -314,7 +331,7 @@ export async function POST(req: Request) {
           max_tokens: MAX_OUTPUT_TOKENS,
         };
         let reservation: Awaited<ReturnType<typeof reserveCostBudget>> | null = null;
-        if (provider.source === 'env') {
+        if (provider.source === 'env' && !platformBudgetExempt) {
           try {
             const authDb = await getServerSupabase();
             const { data, error } = await authDb.auth.getUser();
@@ -323,9 +340,10 @@ export async function POST(req: Request) {
               feature: 'copilot',
               provider: provider.provider,
               model: provider.model,
-              estimatedInputTokens: conservativeInputTokenEstimate(systemPrompt, messages),
+              maxInputTokens: maxInputTokensFor(provider.provider, provider.model),
               maxOutputTokens: MAX_OUTPUT_TOKENS,
             });
+            await reservation.markIncurred();
           } catch (error) {
             const code = stableAiErrorCode(error);
             if (costMessageKey(code)) throw new Error(code);
@@ -351,18 +369,43 @@ export async function POST(req: Request) {
               });
         } catch (error) {
           if (reservation) {
-            try {
-              await reservation.release();
-            } catch (releaseError) {
-              throw releaseError;
-            }
+            addUsage(provider, {
+              inputTokens: 0,
+              cacheHitInputTokens: 0,
+              cacheMissInputTokens: 0,
+              outputTokens: 0,
+              estimated: true,
+            }, {
+              costMicrormb: reservation.reservedMicrormb,
+              usageEstimated: true,
+            });
           }
           throw error;
         }
 
         if (reservation) {
+          const incurredUsage = addUsage(provider, { ...r.usage, estimated: true }, {
+            costMicrormb: reservation.reservedMicrormb,
+            usageEstimated: true,
+          });
           const settlement = await reservation.settle(r.usage);
-          addUsage(provider, r.usage, settlement);
+          incurredUsage.costMicrormb = settlement.costMicrormb;
+          incurredUsage.usageEstimated = r.usage.estimated || settlement.usageEstimated;
+        } else if (provider.source === 'env') {
+          const budgetConfig = getBudgetConfig();
+          let costMicrormb = 0;
+          let usageEstimated = r.usage.estimated;
+          try {
+            costMicrormb = calculateCostMicrormb(
+              provider.provider,
+              provider.model,
+              r.usage,
+              budgetConfig.usdCnyMicros,
+            );
+          } catch {
+            usageEstimated = true;
+          }
+          addUsage(provider, r.usage, { costMicrormb, usageEstimated });
         } else {
           addUsage(provider, r.usage);
         }
@@ -384,6 +427,7 @@ export async function POST(req: Request) {
             if ((error as Error).message === 'not authenticated') throw error;
             fallbackQuota = null;
           }
+          platformBudgetExempt = fallbackQuota?.limit === -1;
           if (fallbackQuota && !fallbackQuota.allowed) throw new Error('quota exhausted');
         },
         onFallback: (error) => {

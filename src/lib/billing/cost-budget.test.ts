@@ -22,6 +22,7 @@ function fakeSupabase(...responses: RpcResponse[]): BudgetRpcAdapter & { calls: 
   return {
     calls,
     reserve: (args) => respond('reserve_llm_daily_budget', args),
+    markIncurred: (args) => respond('mark_llm_budget_incurred', args),
     settle: (args) => respond('settle_llm_budget', args),
     release: (args) => respond('release_llm_budget', args),
   };
@@ -31,7 +32,7 @@ const request = {
   feature: 'copilot' as const,
   provider: 'deepseek',
   model: 'deepseek-v4-flash',
-  estimatedInputTokens: 100_000,
+  maxInputTokens: 100_000,
   maxOutputTokens: 9_000,
 };
 
@@ -45,7 +46,7 @@ const completeUsage = {
 
 function terminalRow(
   reservationId: string,
-  status: 'settled' | 'released',
+  status: 'incurred' | 'settled' | 'released',
   settledMicrormb: number | null = status === 'settled' ? 118_944 : null,
 ) {
   return {
@@ -178,15 +179,54 @@ describe('reserveCostBudget', () => {
   it('settles a complete actual usage amount', async () => {
     const supabase = fakeSupabase(
       { data: [reservationRow()], error: null },
+      { data: [terminalRow('reservation-1', 'incurred')], error: null },
       { data: [terminalRow('reservation-1', 'settled')], error: null },
     );
     const reservation = await reserveCostBudget(supabase, 'user-1', request);
 
+    await reservation.markIncurred();
     await expect(reservation.settle(completeUsage)).resolves.toEqual({ costMicrormb: 118_944, usageEstimated: false });
     expect(supabase.calls[1]).toEqual({
+      fn: 'mark_llm_budget_incurred',
+      args: { p_reservation_id: 'reservation-1' },
+    });
+    expect(supabase.calls[2]).toEqual({
       fn: 'settle_llm_budget',
       args: { p_reservation_id: 'reservation-1', p_actual_micrormb: 118_944 },
     });
+  });
+
+  it('marks incurred at most once and never permits release afterward', async () => {
+    const supabase = fakeSupabase(
+      { data: [reservationRow()], error: null },
+      { data: [terminalRow('reservation-1', 'incurred')], error: null },
+    );
+    const reservation = await reserveCostBudget(supabase, 'user-1', request);
+
+    await reservation.markIncurred();
+    await reservation.markIncurred();
+    await expect(reservation.release()).rejects.toThrow('budget_reservation_incurred');
+
+    expect(supabase.calls).toEqual([
+      expect.objectContaining({ fn: 'reserve_llm_daily_budget' }),
+      {
+        fn: 'mark_llm_budget_incurred',
+        args: { p_reservation_id: 'reservation-1' },
+      },
+    ]);
+  });
+
+  it('maps mark-incurred RPC failures to budget_unavailable and permits retry before spend', async () => {
+    const supabase = fakeSupabase(
+      { data: [reservationRow()], error: null },
+      { data: null, error: new Error('raw database message') },
+      { data: [terminalRow('reservation-1', 'incurred')], error: null },
+    );
+    const reservation = await reserveCostBudget(supabase, 'user-1', request);
+
+    await expect(reservation.markIncurred()).rejects.toThrow('budget_unavailable');
+    await expect(reservation.markIncurred()).resolves.toBeUndefined();
+    expect(supabase.calls).toHaveLength(3);
   });
 
   it('settles the full reservation when provider usage is estimated or incomplete', async () => {
@@ -366,6 +406,7 @@ describe('reserveCostBudget', () => {
     let settleCalls = 0;
     const supabase: BudgetRpcAdapter = {
       reserve: async () => ({ data: [reservationRow()], error: null }),
+      markIncurred: async () => ({ data: [terminalRow('reservation-1', 'incurred')], error: null }),
       settle: async () => {
         settleCalls += 1;
         return settleGate.promise;
@@ -390,6 +431,7 @@ describe('reserveCostBudget', () => {
     let releaseCalls = 0;
     const supabase: BudgetRpcAdapter = {
       reserve: async () => ({ data: [reservationRow()], error: null }),
+      markIncurred: async () => ({ data: [terminalRow('reservation-1', 'incurred')], error: null }),
       settle: async () => ({ data: [terminalRow('reservation-1', 'settled')], error: null }),
       release: async () => {
         releaseCalls += 1;
@@ -412,6 +454,7 @@ describe('reserveCostBudget', () => {
     let releaseCalls = 0;
     const supabase: BudgetRpcAdapter = {
       reserve: async () => ({ data: [reservationRow()], error: null }),
+      markIncurred: async () => ({ data: [terminalRow('reservation-1', 'incurred')], error: null }),
       settle: async () => {
         settleCalls += 1;
         return settleGate.promise;
@@ -438,6 +481,7 @@ describe('reserveCostBudget', () => {
     let settleCalls = 0;
     const supabase: BudgetRpcAdapter = {
       reserve: async () => ({ data: [reservationRow()], error: null }),
+      markIncurred: async () => ({ data: [terminalRow('reservation-1', 'incurred')], error: null }),
       settle: async () => {
         settleCalls += 1;
         return settleCalls === 1

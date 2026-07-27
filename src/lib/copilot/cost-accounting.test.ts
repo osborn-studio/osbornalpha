@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { copilotUsageLabels } from './cost-accounting';
+import { aggregateNormalizedUsage, copilotUsageLabels } from './cost-accounting';
 
 describe('copilotUsageLabels', () => {
   it('keeps the provider and model when every successful turn shares them', () => {
@@ -22,5 +22,29 @@ describe('copilotUsageLabels', () => {
       { provider: 'a', model: 'a'.repeat(150) },
       { provider: 'b', model: 'b'.repeat(150) },
     ])).toEqual({ provider: 'mixed', model: 'mixed' });
+  });
+});
+
+describe('aggregateNormalizedUsage', () => {
+  it('marks saturation estimated and conservatively reallocates all input to cache miss', () => {
+    expect(aggregateNormalizedUsage({
+      inputTokens: Number.MAX_SAFE_INTEGER - 5,
+      cacheHitInputTokens: Number.MAX_SAFE_INTEGER - 5,
+      cacheMissInputTokens: 0,
+      outputTokens: Number.MAX_SAFE_INTEGER - 5,
+      estimated: false,
+    }, {
+      inputTokens: 10,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 10,
+      outputTokens: 10,
+      estimated: false,
+    })).toEqual({
+      inputTokens: Number.MAX_SAFE_INTEGER,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: Number.MAX_SAFE_INTEGER,
+      outputTokens: Number.MAX_SAFE_INTEGER,
+      estimated: true,
+    });
   });
 });
