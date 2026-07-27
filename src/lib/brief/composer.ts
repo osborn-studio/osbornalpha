@@ -432,7 +432,7 @@ export async function generateDailyBrief(
         }
       }
     : undefined;
-  const blocks: BriefStockBlock[] = await Promise.all(
+  const blockResults = await Promise.allSettled(
     top.map(async (en) => {
       const perspectives = opts.skipLLM ? [] : await runCommittee(en, trackedLlmCall);
       return {
@@ -451,6 +451,17 @@ export async function generateDailyBrief(
         perspectives,
       };
     })
+  );
+  // Every top-level committee starts together. Drain all of them before
+  // returning so preview accounting observes every sibling that incurred or
+  // settled cost. Promise.allSettled preserves input order, making the chosen
+  // rejection deterministic even when a later committee fails first.
+  const blockError = blockResults.find(
+    (result): result is PromiseRejectedResult => result.status === 'rejected',
+  );
+  if (blockError) throw blockError.reason;
+  const blocks: BriefStockBlock[] = blockResults.map(
+    (result) => (result as PromiseFulfilledResult<BriefStockBlock>).value,
   );
 
   // 4. Overall confidence (avg of per-stock consensus, shifted to 0-10)

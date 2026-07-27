@@ -105,6 +105,14 @@ function brief() {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 describe('GET /api/brief/preview durable cost budget', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -234,6 +242,60 @@ describe('GET /api/brief/preview durable cost budget', () => {
       costMicrormb: 1_500,
       usageEstimated: true,
       byo: false,
+      status: 'failed',
+    }));
+  });
+
+  it('waits for a later sibling settlement and includes it in the single failed audit', async () => {
+    const failed = reservation('r1', 100);
+    failed.settle.mockRejectedValue(new Error('budget_invariant_violation'));
+    const sibling = reservation('r2', 222);
+    mocks.reserveCostBudget
+      .mockResolvedValueOnce(failed)
+      .mockResolvedValueOnce(sibling);
+    const later = deferred<{ content: string; usage: NormalizedUsage }>();
+    mocks.chatResolved
+      .mockResolvedValueOnce({ content: '{}', usage: usage(40, 0, 8) })
+      .mockImplementationOnce(() => later.promise);
+    mocks.generateDailyBrief.mockImplementation(async (_watchlist, opts) => {
+      const results = await Promise.allSettled([
+        opts.llmCall({
+          messages: [{ role: 'user', content: 'first' }],
+          max_tokens: 400,
+        }),
+        opts.llmCall({
+          messages: [{ role: 'user', content: 'second' }],
+          max_tokens: 300,
+        }),
+      ]);
+      expect(results[0].status).toBe('rejected');
+      expect(results[1].status).toBe('fulfilled');
+      throw (results[0] as PromiseRejectedResult).reason;
+    });
+
+    const responsePromise = preview(new Request('http://localhost/api/brief/preview'));
+    let returned = false;
+    void responsePromise.then(() => { returned = true; });
+
+    await vi.waitFor(() => expect(mocks.chatResolved).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+    expect(returned).toBe(false);
+    expect(mocks.recordUsage).not.toHaveBeenCalled();
+
+    later.resolve({ content: '{}', usage: usage(60, 10, 12) });
+    const response = await responsePromise;
+
+    expect(response.status).toBe(429);
+    expect((await response.json()).errorCode).toBe('budget_invariant_violation');
+    expect(sibling.settle).toHaveBeenCalledWith(usage(60, 10, 12));
+    expect(mocks.recordUsage).toHaveBeenCalledTimes(1);
+    expect(mocks.recordUsage).toHaveBeenCalledWith('brief_preview', expect.objectContaining({
+      inputTokens: 100,
+      cacheHitInputTokens: 10,
+      cacheMissInputTokens: 90,
+      outputTokens: 20,
+      costMicrormb: 1_722,
+      usageEstimated: true,
       status: 'failed',
     }));
   });
