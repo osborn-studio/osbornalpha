@@ -5,7 +5,9 @@
  *   1. DEEPSEEK_API_KEY  → DeepSeek (preferred for cost)
  *   2. ANTHROPIC_API_KEY → Claude (premium reasoning fallback)
  *
- * To pin a provider, set LLM_PROVIDER=deepseek|anthropic.
+ * To pin a provider, set LLM_PROVIDER=deepseek|anthropic. A pin is
+ * authoritative: if that provider's key is absent, resolution fails closed
+ * instead of spending through another configured provider.
  *
  * The router exposes a single chat() that callers use without knowing
  * which provider runs.
@@ -19,9 +21,12 @@ import type { ResolvedLlm } from '@/lib/llm/resolve';
 export type LLMProvider = 'deepseek' | 'anthropic' | 'none';
 
 export function getActiveProvider(): LLMProvider {
-  const pin = process.env.LLM_PROVIDER?.toLowerCase();
-  if (pin === 'deepseek' && isDeepSeekConfigured()) return 'deepseek';
-  if (pin === 'anthropic' && isAnthropicConfigured()) return 'anthropic';
+  const pin = process.env.LLM_PROVIDER?.trim().toLowerCase();
+  if (pin) {
+    if (pin === 'deepseek') return isDeepSeekConfigured() ? 'deepseek' : 'none';
+    if (pin === 'anthropic') return isAnthropicConfigured() ? 'anthropic' : 'none';
+    return 'none';
+  }
   if (isDeepSeekConfigured()) return 'deepseek';
   if (isAnthropicConfigured()) return 'anthropic';
   return 'none';

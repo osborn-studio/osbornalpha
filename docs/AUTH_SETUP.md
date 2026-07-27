@@ -7,11 +7,11 @@
   - Project ref：`mzfcaabhuwtfvsvadvsv`
   - Project URL：`https://mzfcaabhuwtfvsvadvsv.supabase.co`
   - **OAuth 回调地址（Google/GitHub 都填这个）**：`https://mzfcaabhuwtfvsvadvsv.supabase.co/auth/v1/callback`
-  - Key 体系：新版 `sb_publishable_…`（= anon，已写入 Vercel）/ `sb_secret_…`（= service_role，代码当前未用，按需自取）
+  - Key 体系：新版 `sb_publishable_…`（= anon/publishable）/ `sb_secret_…`（= service_role）。生产必须把 service-role key 配为仅服务端 secret，供平台计量、持久化审计和 admin DB RPC 使用；绝不带 `NEXT_PUBLIC_`、绝不进入客户端。
 - **DB 迁移**：✅ 已通过 SQL Editor 应用（11 表 / 26 RLS 策略 / `on_auth_user_created` 触发器）
 - **Auth URL**：✅ Site URL = `https://www.osbornalpha.com`；Redirect = `www.osbornalpha.com/**`、`osbornalpha.com/**`、`localhost:3000/**`
 - **Auth 开关**：✅ 允许注册、✅ 允许 manual linking（第三方绑定）、Confirm email = 开
-- **Vercel(Production)**：✅ `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` 已设；已删 `SITE_PASSWORD` / `SITE_AUTH_SECRET`；已重新部署并 alias 到 osbornalpha.com
+- **Vercel(Production)**：必须设置 `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` / 仅服务端 `SUPABASE_SERVICE_ROLE_KEY`；已删 `SITE_PASSWORD` / `SITE_AUTH_SECRET`。
 - **待办**：① 用户在 Google Cloud 建 OAuth Client → 填 Supabase Google provider；② 注册首测（需邮箱确认）；③ 可选自有 SMTP / 关 Confirm email 便于测试
 
 ## 0. 已实现（代码侧）
@@ -52,8 +52,9 @@ GitHub → Settings → Developer settings → OAuth Apps → 新建；callback 
 ```
 NEXT_PUBLIC_SUPABASE_URL
 NEXT_PUBLIC_SUPABASE_ANON_KEY
-SUPABASE_SERVICE_ROLE_KEY       # 高权限密钥，由你填，勿入库
+SUPABASE_SERVICE_ROLE_KEY       # 生产必需；仅服务端，用于 metering/audits/admin DB RPCs，勿入库/客户端
 ```
+发布前在部署 secret 已注入的受控环境运行 `npm run preflight:release`；只确认 service-role 存在性，不打印 key 或指纹。
 移除（不再使用）：
 ```
 SITE_PASSWORD

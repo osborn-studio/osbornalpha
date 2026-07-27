@@ -83,7 +83,7 @@
 - 项目名 `stock-monitor`（gilosbornhello's Org / Free / Tokyo）。
 - **ref**：`mzfcaabhuwtfvsvadvsv`；**URL**：`https://mzfcaabhuwtfvsvadvsv.supabase.co`。
 - **OAuth 回调（所有 provider 统一）**：`https://mzfcaabhuwtfvsvadvsv.supabase.co/auth/v1/callback`。
-- **Key 体系**：新版 `sb_publishable_…`（= anon，已写入 Vercel）/ `sb_secret_…`（= service_role，按需自取）。
+- **Key 体系**：新版 `sb_publishable_…`（= anon/publishable）/ `sb_secret_…`（= service_role）。生产 service-role 是平台计量、持久化审计和 admin DB RPC 的必需服务端 secret；绝不带 `NEXT_PUBLIC_` 或进入客户端 bundle。
 - **迁移状态**：已通过 SQL Editor 应用（11 表 / ~26 RLS 策略 / `on_auth_user_created` 触发器）。推送命令：`supabase link --project-ref mzfcaabhuwtfvsvadvsv && supabase db push`。
 - **Auth 开关**：允许注册、允许 manual linking（第三方绑定）、Confirm email = 开。默认 SMTP 配额低，正式上线建议接自有 SMTP（Resend/SES）。
 
@@ -103,7 +103,7 @@
 ## 7. 认证与隔离（部署视角）
 
 - 两道门：Edge middleware（`src/middleware.ts`，会话 cookie 校验 + 重定向）+ `(app)/layout.tsx` 服务端守卫。详见 `04_SYSTEM_ARCHITECTURE.md` §3。
-- 多租户隔离由 Postgres RLS（`auth.uid()`）在数据库层强制；service_role 当前未在运行时使用。
+- 多租户隔离由 Postgres RLS（`auth.uid()`）在数据库层强制；service-role 仅由受信服务端路径在完成用户/admin/签名鉴权后使用，用于计量、审计与管理 RPC，不下传浏览器。
 - 计费钩子 `src/lib/billing/entitlements.ts` 只读映射 `profiles.plan` → 能力位（free: maxWatchlistItems=50, aiCommitteePerDay=20, canExport=true；pro: 无限），Phase 1 不强制、未接 Stripe。
 
 ---

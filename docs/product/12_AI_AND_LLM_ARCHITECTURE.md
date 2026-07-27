@@ -32,7 +32,7 @@ SUPABASE_SERVICE_ROLE_KEY=<deployment secret>
 
 `getActiveProvider()` 决定调用哪个 provider：
 
-- 若设置 `LLM_PROVIDER=deepseek|anthropic`，则在该 legacy facade 内强制 pin；`anthropic` 不是当前已复核的平台计量配置。
+- 若设置 `LLM_PROVIDER=deepseek|anthropic`，则在该 legacy facade 内强制 pin；缺少被 pin provider 自己的 key 时返回 `none`，不会回落到另一把已配置 key。`anthropic` 不是当前已复核的平台计量配置。
 - 否则按解析顺序：`DEEPSEEK_API_KEY` → `ANTHROPIC_API_KEY` → `'none'`。即 **DeepSeek 优先**（成本最低），无 DeepSeek key 时回落 Anthropic。
 - `isLLMConfigured()` = `getActiveProvider() !== 'none'`；无任何 key 时上层会走 `skipLLM` 降级路径（只出行情+信号，不出 AI 观点）。
 

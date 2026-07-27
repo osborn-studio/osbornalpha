@@ -96,7 +96,7 @@ osbornalpha 是多租户 AI 投研监控 SaaS。**公开面只有落地页 `/`�
 
 - 简报历史页列出最近 30 天，每行链到 `/briefs/{date}` 详情；含信号命中率统计卡。
 - 简报由 `src/lib/brief/composer.ts → generateDailyBrief()` 生成（结构见 [`21_REPORT_TEMPLATES_AND_OUTPUTS.md`](./21_REPORT_TEMPLATES_AND_OUTPUTS.md)）：Sentinel Morning Note 风格，含 Top Call、Overnight & Pre-Market（Top5）、Trade Ideas（置信 ≥7 才出）、委员会信心 X/10 + 标签。
-- 推送目的地由服务端环境变量管理。管理员可在 `/settings` 发测试消息或立即生成并推送；普通用户不显示手动发送控件，任何页面都不展示完整收件地址/Chat ID。
+- 推送目的地由服务端环境变量管理。管理员可在 `/settings` 发测试消息或立即生成并推送；普通用户不显示手动发送控件，也不能把该端点当作任意内容/收件人的转发器。任何页面都不展示完整收件地址/Chat ID。
 
 ### 2.6 看雷达 / 委员会（`/radar`、`/stock/[ticker]` 的「AI 观点」）
 
@@ -112,7 +112,7 @@ osbornalpha 是多租户 AI 投研监控 SaaS。**公开面只有落地页 `/`�
 ### 2.8 设置 / 账号管理（`/settings`）
 
 - 账号区 `AccountSettings`：显示邮箱 + 套餐（Free/Pro，读 `profiles.plan`）+ 用户 ID 前 8 位；改邮箱、改密码、绑定/解绑第三方（google/github/apple，至少保留一种登录方式）、登出。
-- 推送渠道：仅管理员显示 Telegram/Email「发测试」「立即生成并推送」；目的地明确标注为服务端托管，不提供收件人输入框或客户端覆盖。
+- 推送渠道：仅管理员显示 Telegram/Email「发测试」「立即生成并推送」；目的地明确标注为服务端托管，不提供收件人输入框、客户端存储或请求覆盖。普通用户调用发送 API 返回 `403`，不能代发/转发。
 - 语言、时区即时保存；管理员身份来自已认证服务端响应，不读取客户端存储。
 
 ---
@@ -128,7 +128,7 @@ osbornalpha 是多租户 AI 投研监控 SaaS。**公开面只有落地页 `/`�
 ## 4. 多端 / 跨设备（Multi-Device）
 
 - **登录用户**：股票池存 Supabase（RLS 隔离），换设备登录即同步；账号、邮箱、绑定关系、套餐随账户走。
-- **本地设置**（语言 / 推送收件人 / 简报时间）目前存 `localStorage`，**不跨端**（代码内有 TODO：登录后落 Supabase）。
+- **账户设置**：登录用户的语言/时区写入服务端偏好并随账户使用；推送收件人不是用户偏好，客户端不保存、不输入，始终由服务端部署配置管理。
 - **未登录**：股票池仅在当前浏览器（`localStorage`），换设备不可见 —— 这是引导注册的核心动机。
 - 会话由 Supabase SSR cookie 维持，中间件在每次请求刷新 user。
 

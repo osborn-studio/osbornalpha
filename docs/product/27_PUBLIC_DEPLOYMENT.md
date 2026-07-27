@@ -26,7 +26,7 @@ TUSHARE_TOKEN=...                               # 数据
 CRON_SECRET=...                                 # cron 鉴权（建议）
 # 通知（可选）：TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID / RESEND_API_KEY / EMAIL_FROM / EMAIL_TO
 ```
-   `SUPABASE_SERVICE_ROLE_KEY` 对平台计量/成本审计是必需项，不是按需项；只放 Vercel 服务端 secret。完整变量表见 `13_RUNBOOK.md` §2。**务必不要**再设 `SITE_PASSWORD` / `SITE_AUTH_SECRET`（已废弃）。
+   `SUPABASE_SERVICE_ROLE_KEY` 是平台计量/成本审计的生产必需项，只放 Vercel 服务端 secret。完整变量表见 `13_RUNBOOK.md` §2。**务必不要**再设 `SITE_PASSWORD` / `SITE_AUTH_SECRET`（已废弃）。
 4. 在生产变量已注入的受控环境运行 `npm run preflight:release`，确认解析为 `deepseek / deepseek-v4-flash`、价格注册表通过、service-role 已配置；输出不得包含 key。
 5. 部署。`vercel.json` 已定义两个 cron（`/api/cron/daily-radar` 00:00 UTC、`/api/cron/daily-brief` 00:30 UTC），Vercel 自动接管。
 

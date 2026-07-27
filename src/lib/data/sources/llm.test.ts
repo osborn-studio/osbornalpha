@@ -1,28 +1,70 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/llm/resolve', () => ({ resolveLlm: vi.fn() }));
 vi.mock('@/lib/llm/openai-compat', () => ({ chat: vi.fn() }));
 vi.mock('@/lib/llm/anthropic-compat', () => ({ anthropicChat: vi.fn() }));
 vi.mock('./deepseek', () => ({
   deepseekChat: vi.fn(),
-  isDeepSeekConfigured: vi.fn(() => true),
+  isDeepSeekConfigured: vi.fn(() => Boolean(process.env.DEEPSEEK_API_KEY)),
 }));
 vi.mock('./anthropic', () => ({
   anthropicChat: vi.fn(),
-  isAnthropicConfigured: vi.fn(() => false),
+  isAnthropicConfigured: vi.fn(() => Boolean(process.env.ANTHROPIC_API_KEY)),
 }));
 
-import { chat } from './llm';
+import { chat, getActiveProvider } from './llm';
 import { resolveLlm } from '@/lib/llm/resolve';
 import { chat as openAiChat } from '@/lib/llm/openai-compat';
-import { anthropicChat } from '@/lib/llm/anthropic-compat';
+import { anthropicChat as compatAnthropicChat } from '@/lib/llm/anthropic-compat';
 import { deepseekChat } from './deepseek';
+import { anthropicChat as legacyAnthropicChat } from './anthropic';
+
+const ORIGINAL_ENV = {
+  LLM_PROVIDER: process.env.LLM_PROVIDER,
+  DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY,
+  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+};
 
 beforeEach(() => {
+  delete process.env.LLM_PROVIDER;
+  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
   vi.mocked(resolveLlm).mockReset();
   vi.mocked(openAiChat).mockReset();
-  vi.mocked(anthropicChat).mockReset();
+  vi.mocked(compatAnthropicChat).mockReset();
   vi.mocked(deepseekChat).mockReset();
+  vi.mocked(legacyAnthropicChat).mockReset();
+});
+
+afterAll(() => {
+  for (const [name, value] of Object.entries(ORIGINAL_ENV)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+});
+
+describe('getActiveProvider', () => {
+  it('fails closed when DeepSeek is explicitly pinned without its required key', () => {
+    process.env.LLM_PROVIDER = 'deepseek';
+    process.env.ANTHROPIC_API_KEY = 'anthropic-key';
+
+    expect(getActiveProvider()).toBe('none');
+  });
+
+  it('honors a valid explicit provider even when another provider is configured', () => {
+    process.env.LLM_PROVIDER = 'anthropic';
+    process.env.DEEPSEEK_API_KEY = 'deepseek-key';
+    process.env.ANTHROPIC_API_KEY = 'anthropic-key';
+
+    expect(getActiveProvider()).toBe('anthropic');
+  });
+
+  it('prefers configured DeepSeek deterministically when no provider is pinned', () => {
+    process.env.DEEPSEEK_API_KEY = 'deepseek-key';
+    process.env.ANTHROPIC_API_KEY = 'anthropic-key';
+
+    expect(getActiveProvider()).toBe('deepseek');
+  });
 });
 
 describe('chat', () => {
@@ -61,7 +103,7 @@ describe('chat', () => {
       protocol: 'anthropic',
       source: 'user',
     });
-    vi.mocked(anthropicChat).mockResolvedValue({
+    vi.mocked(compatAnthropicChat).mockResolvedValue({
       content: 'answer',
       usage: {
         inputTokens: 100_075,
@@ -92,5 +134,20 @@ describe('chat', () => {
     await expect(chat({ messages: [{ role: 'user', content: 'hi' }] }))
       .rejects.toThrow('user provider unavailable');
     expect(deepseekChat).not.toHaveBeenCalled();
+  });
+
+  it('does not let a cron-style env call relay through Anthropic after a missing DeepSeek pin', async () => {
+    vi.mocked(resolveLlm).mockResolvedValue(null);
+    process.env.LLM_PROVIDER = 'deepseek';
+    process.env.ANTHROPIC_API_KEY = 'anthropic-key';
+    vi.mocked(legacyAnthropicChat).mockResolvedValue({
+      content: 'must not be returned',
+      usage: { input_tokens: 1, output_tokens: 1 },
+      stop_reason: 'end_turn',
+    });
+
+    await expect(chat({ messages: [{ role: 'user', content: 'cron work' }] }))
+      .rejects.toThrow('No LLM provider configured');
+    expect(legacyAnthropicChat).not.toHaveBeenCalled();
   });
 });
