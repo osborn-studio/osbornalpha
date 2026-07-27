@@ -47,14 +47,14 @@ describe('dayWindowUtc8', () => {
 });
 
 describe('limitFor', () => {
-  it('free plan: copilot=3, perspectives=5, brief_preview=2', () => {
-    expect(limitFor('copilot', 'free', 'user')).toBe(3);
+  it('free plan: copilot=20, perspectives=5, brief_preview=2', () => {
+    expect(limitFor('copilot', 'free', 'user')).toBe(20);
     expect(limitFor('perspectives', 'free', 'user')).toBe(5);
     expect(limitFor('brief_preview', 'free', 'user')).toBe(2);
   });
 
-  it('pro plan: base x10', () => {
-    expect(limitFor('copilot', 'pro', 'user')).toBe(30);
+  it('pro plan: copilot=100, perspectives=50, brief_preview=20', () => {
+    expect(limitFor('copilot', 'pro', 'user')).toBe(100);
     expect(limitFor('perspectives', 'pro', 'user')).toBe(50);
     expect(limitFor('brief_preview', 'pro', 'user')).toBe(20);
   });
@@ -66,12 +66,12 @@ describe('limitFor', () => {
   });
 
   it('null plan falls back to free limits', () => {
-    expect(limitFor('copilot', null, 'user')).toBe(3);
+    expect(limitFor('copilot', null, 'user')).toBe(20);
     expect(limitFor('perspectives', null, null)).toBe(5);
   });
 
   it('unknown plan string falls back to free limits', () => {
     expect(limitFor('brief_preview', 'enterprise', 'user')).toBe(2);
-    expect(limitFor('copilot', 'unknown', null)).toBe(3);
+    expect(limitFor('copilot', 'unknown', null)).toBe(20);
   });
 });

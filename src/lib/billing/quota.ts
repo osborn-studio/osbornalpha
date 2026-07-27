@@ -1,5 +1,5 @@
-// Usage quota engine (replaces the entitlements.ts stub). Free-tier daily
-// limits reset at Asia/Shanghai midnight; pro = free x10; admin role is
+// Usage quota engine (replaces the entitlements.ts stub). Daily limits reset
+// at Asia/Shanghai midnight; admin role is
 // unlimited. BYO-key calls (source==='user' in ResolvedLlm) are recorded for
 // audit but never counted against quota and never block the caller.
 import { getServerSupabase } from '@/lib/supabase/server';
@@ -8,13 +8,20 @@ import { effectivePlan } from '@/lib/billing/plan';
 
 export type QuotaFeature = UsageFeature;
 
-const BASE_LIMITS: Record<QuotaFeature, number> = {
-  copilot: 3,
-  perspectives: 5,
-  brief_preview: 2,
-};
+type MeteredPlan = 'free' | 'pro';
 
-const PRO_MULTIPLIER = 10;
+const PLAN_LIMITS: Record<MeteredPlan, Record<QuotaFeature, number>> = {
+  free: {
+    copilot: 20,
+    perspectives: 5,
+    brief_preview: 2,
+  },
+  pro: {
+    copilot: 100,
+    perspectives: 50,
+    brief_preview: 20,
+  },
+};
 
 // Asia/Shanghai has no DST and is a fixed UTC+8 offset — no need for a
 // timezone library, plain millisecond arithmetic is exact and testable.
@@ -34,14 +41,12 @@ export function dayWindowUtc8(now: Date): { startIso: string; endIso: string } {
   };
 }
 
-// admin role is a full exemption regardless of plan; pro multiplies the base
-// free limit by 10; anything else (free / null / unrecognized plan strings)
-// falls back to the base free limit.
+// admin role is a full exemption regardless of plan; anything other than pro
+// (including free / null / unrecognized plan strings) falls back to free.
 export function limitFor(feature: QuotaFeature, plan: string | null, role: string | null): number {
   if (role === 'admin') return -1;
-  const base = BASE_LIMITS[feature];
-  if (plan === 'pro') return base * PRO_MULTIPLIER;
-  return base;
+  const meteredPlan: MeteredPlan = plan === 'pro' ? 'pro' : 'free';
+  return PLAN_LIMITS[meteredPlan][feature];
 }
 
 async function requireUser() {
