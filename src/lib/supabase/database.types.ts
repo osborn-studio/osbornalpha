@@ -2,6 +2,7 @@
 // + 20260702090000_decision_layer.sql (decisions/trades/positions/decision_reviews/artifacts)
 // + 20260703090000_usage_events.sql (usage_events)
 // + 20260703120000_stripe_billing.sql (profiles.plan_expires_at, stripe_events)
+// + 20260728090000_llm_daily_cost_budget.sql (LLM cost accounting and reservations)
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -323,8 +324,48 @@ export interface UsageEvent {
   ticker: string | null;
   tokens_in: number;
   tokens_out: number;
+  provider: string | null;
+  model: string | null;
+  input_tokens: number;
+  cache_hit_input_tokens: number;
+  cache_miss_input_tokens: number;
+  output_tokens: number;
+  cost_micrormb: number;
+  pricing_version: string | null;
+  usd_cny_micros: number | null;
+  usage_estimated: boolean;
   byo: boolean;
   created_at: string;
+}
+
+export type LlmCostReservationStatus = 'reserved' | 'settled' | 'released';
+
+export interface LlmCostReservation {
+  id: string;
+  user_id: string;
+  feature: UsageFeature;
+  provider: string;
+  model: string;
+  reserved_micrormb: number;
+  settled_micrormb: number | null;
+  status: LlmCostReservationStatus;
+  expires_at: string;
+  created_at: string;
+  settled_at: string | null;
+}
+
+export interface LlmBudgetReservationState {
+  reservation_id: string;
+  user_id: string;
+  feature: UsageFeature;
+  provider: string;
+  model: string;
+  reserved_micrormb: number;
+  settled_micrormb: number | null;
+  status: LlmCostReservationStatus;
+  expires_at: string;
+  created_at: string;
+  settled_at: string | null;
 }
 
 export interface UserEvent {
@@ -425,6 +466,7 @@ export type Database = {
       decision_reviews: { Row: DecisionReview; Insert: Partial<DecisionReview>; Update: Partial<DecisionReview> };
       artifacts: { Row: Artifact; Insert: Partial<Artifact>; Update: Partial<Artifact> };
       usage_events: { Row: UsageEvent; Insert: Partial<UsageEvent>; Update: Partial<UsageEvent> };
+      llm_cost_reservations: { Row: LlmCostReservation; Insert: Partial<LlmCostReservation>; Update: Partial<LlmCostReservation> };
       user_events: { Row: UserEvent; Insert: Partial<UserEvent>; Update: Partial<UserEvent> };
       ai_runs: { Row: AiRun; Insert: Partial<AiRun>; Update: Partial<AiRun> };
       service_alert_runs: { Row: ServiceAlertRun; Insert: Partial<ServiceAlertRun>; Update: Partial<ServiceAlertRun> };
@@ -452,6 +494,31 @@ export type Database = {
       commit_security_sync: {
         Args: { p_run_id: string };
         Returns: undefined;
+      };
+      reserve_llm_daily_budget: {
+        Args: {
+          p_user_id: string;
+          p_feature: UsageFeature;
+          p_provider: string;
+          p_model: string;
+          p_requested_micrormb: number;
+          p_daily_limit_micrormb: number;
+          p_ttl_seconds: number;
+        };
+        Returns: Array<{
+          allowed: boolean;
+          reservation_id: string | null;
+          used_micrormb: number;
+          limit_micrormb: number;
+        }>;
+      };
+      settle_llm_budget: {
+        Args: { p_reservation_id: string; p_actual_micrormb: number };
+        Returns: LlmBudgetReservationState[];
+      };
+      release_llm_budget: {
+        Args: { p_reservation_id: string };
+        Returns: LlmBudgetReservationState[];
       };
     };
   };
