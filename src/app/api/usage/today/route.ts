@@ -104,14 +104,14 @@ export async function GET() {
     usage[feature] = { used: count ?? 0, limit };
   }
 
-  // BYO is informational rather than a quota. Include both completed and
-  // failed audit rows so the settings summary reflects all personal-key use.
+  // BYO is informational rather than a quota. Include completed and failed
+  // terminal runs, but never in-flight pending rows.
   const { count: byoCalls, error: byoErr } = await supabase
     .from('usage_events')
     .select('*', { count: 'exact', head: true })
     .eq('user_id', user.id)
     .eq('byo', true)
-    .eq('status', 'completed')
+    .in('status', ['completed', 'failed'])
     .gte('created_at', startIso)
     .lt('created_at', endIso);
   if (byoErr) return NextResponse.json({ error: byoErr.message }, { status: 500 });
@@ -127,7 +127,7 @@ export async function GET() {
       .eq('user_id', user.id)
       .gte('created_at', startIso)
       .lt('created_at', endIso);
-    if (costErr) return NextResponse.json({ error: costErr.message }, { status: 500 });
+    if (costErr) return NextResponse.json({ error: 'Usage cost unavailable' }, { status: 503 });
     costRows = Array.isArray(data) ? data as CostReservationRow[] : [];
   } catch {
     return NextResponse.json({ error: 'Usage cost unavailable' }, { status: 503 });

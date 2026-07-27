@@ -10,8 +10,11 @@ import { AccountSettings } from '@/components/AccountSettings';
 import { LlmSettings } from '@/components/LlmSettings';
 import { UsageToday } from '@/components/UsageToday';
 import { UpgradeCard } from '@/components/UpgradeCard';
+import { QuotaNotice } from '@/components/QuotaNotice';
+import type { QuotaNoticeProps } from '@/components/QuotaNotice';
 import { getBrowserSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import type { AppLocale } from '@/lib/i18n/locale';
+import { briefSendFailure } from '@/lib/brief/send-response';
 
 // Fixed timezone choices (IANA ids are shown untranslated; '' = auto).
 const TIMEZONE_OPTIONS = [
@@ -35,6 +38,13 @@ export default function SettingsPage() {
   const [timezone, setTimezone] = useState(''); // '' = auto (follow browser)
   const [tgChatId, setTgChatId] = useState('');
   const [emailNotif, setEmailNotif] = useState(true);
+  const [briefQuota, setBriefQuota] = useState<QuotaNoticeProps | null>(null);
+
+  const showBriefSendFailure = (payload: unknown, fallback: string) => {
+    const failure = briefSendFailure(payload, fallback);
+    setBriefQuota(failure.quota);
+    show(`✗ ${failure.message}`);
+  };
 
   useEffect(() => {
     setTgChatId(localStorage.getItem('tg-chat-id') || '');
@@ -159,6 +169,7 @@ export default function SettingsPage() {
 
       <div className="card-base">
         <div className="mb-3 text-sm font-semibold text-text-dim">{t('channels.heading')}</div>
+        {briefQuota && <div className="mb-3"><QuotaNotice {...briefQuota} /></div>}
         <div className="mb-3">
           <label className="mb-1 block text-xs text-text-dim">Telegram Chat ID</label>
           <input
@@ -172,6 +183,7 @@ export default function SettingsPage() {
             <button
               onClick={async () => {
                 try {
+                  setBriefQuota(null);
                   show(t('channels.tgSending'));
                   const resp = await fetch('/api/brief/send', {
                     method: 'POST',
@@ -182,8 +194,8 @@ export default function SettingsPage() {
                     }),
                   });
                   const data = await resp.json();
-                  if (data.ok) show(t('channels.tgTestSent', { id: data.message_id }));
-                  else show(`✗ ${data.error || t('channels.sendFailed')}`);
+                  if (data.channels?.telegram?.ok) show(t('channels.tgTestSent', { id: data.channels.telegram.message_id }));
+                  else showBriefSendFailure(data, t('channels.sendFailed'));
                 } catch (e: any) {
                   show(`✗ ${e?.message || t('channels.sendFailed')}`);
                 }
@@ -195,6 +207,7 @@ export default function SettingsPage() {
             <button
               onClick={async () => {
                 try {
+                  setBriefQuota(null);
                   show(t('channels.tgBriefSending'));
                   const resp = await fetch('/api/brief/send', {
                     method: 'POST',
@@ -205,8 +218,8 @@ export default function SettingsPage() {
                     }),
                   });
                   const data = await resp.json();
-                  if (data.sent) show(t('channels.tgBriefSent', { count: data.chunks_sent }));
-                  else show(`✗ ${data.error || data.reason || t('channels.failed')}`);
+                  if (data.channels?.telegram?.ok) show(t('channels.tgBriefSent', { count: data.channels.telegram.chunks_sent ?? 1 }));
+                  else showBriefSendFailure(data, t('channels.failed'));
                 } catch (e: any) {
                   show(`✗ ${e?.message || t('channels.failed')}`);
                 }
@@ -232,6 +245,7 @@ export default function SettingsPage() {
             <button
               onClick={async () => {
                 try {
+                  setBriefQuota(null);
                   show(t('channels.emailSending'));
                   const resp = await fetch('/api/brief/send', {
                     method: 'POST',
@@ -244,7 +258,7 @@ export default function SettingsPage() {
                   });
                   const data = await resp.json();
                   if (data.channels?.email?.ok) show(t('channels.emailSent', { id: data.channels.email.id?.slice(0, 8) }));
-                  else show(`✗ ${data.channels?.email?.error || data.channels?.email?.skipped || t('channels.sendFailed')}`);
+                  else showBriefSendFailure(data, data.channels?.email?.error || data.channels?.email?.skipped || t('channels.sendFailed'));
                 } catch (e: any) {
                   show(`✗ ${e?.message || t('channels.sendFailed')}`);
                 }
@@ -256,6 +270,7 @@ export default function SettingsPage() {
             <button
               onClick={async () => {
                 try {
+                  setBriefQuota(null);
                   show(t('channels.emailBriefSending'));
                   const resp = await fetch('/api/brief/send', {
                     method: 'POST',
@@ -268,7 +283,7 @@ export default function SettingsPage() {
                   const data = await resp.json();
                   if (data.channels?.email?.ok) {
                     show(t('channels.emailBriefSent', { subject: data.brief_meta?.subject?.slice(0, 30) }));
-                  } else show(`✗ ${data.channels?.email?.error || data.channels?.email?.skipped || t('channels.failed')}`);
+                  } else showBriefSendFailure(data, data.channels?.email?.error || data.channels?.email?.skipped || t('channels.failed'));
                 } catch (e: any) {
                   show(`✗ ${e?.message || t('channels.failed')}`);
                 }

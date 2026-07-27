@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => {
     sendEmail: vi.fn(),
     isTelegramConfigured: vi.fn(),
     isResendConfigured: vi.fn(),
+    getRequestLocale: vi.fn(),
+    apiMessage: vi.fn(),
   };
 });
 
@@ -38,6 +40,10 @@ vi.mock('@/lib/billing/quota', () => ({
 }));
 vi.mock('@/lib/supabase/server', () => ({ getServerSupabase: mocks.getServerSupabase }));
 vi.mock('@/lib/supabase/admin', () => ({ getAdminSupabase: mocks.getAdminSupabase }));
+vi.mock('@/lib/i18n/server', () => ({
+  getRequestLocale: mocks.getRequestLocale,
+  apiMessage: mocks.apiMessage,
+}));
 vi.mock('@/lib/admin/auth', () => ({
   AdminUnauthenticated: mocks.AdminUnauthenticated,
   AdminForbidden: mocks.AdminForbidden,
@@ -127,10 +133,13 @@ describe('POST /api/brief/send security and metering', () => {
       },
     });
     mocks.resolveLlm.mockResolvedValue(provider);
+    mocks.getRequestLocale.mockResolvedValue('en');
+    mocks.apiMessage.mockImplementation((locale: string, key: string) => `localized:${locale}:${key}`);
     mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: 2, plan: 'free' });
     mocks.isTelegramConfigured.mockReturnValue(true);
     mocks.isResendConfigured.mockReturnValue(true);
     mocks.reserveCostBudget.mockResolvedValue(reservation());
+    mocks.beginUsageRun.mockResolvedValue(undefined);
     mocks.chatResolved.mockResolvedValue({ content: '{}', usage: normalizedUsage });
     mocks.finalizeUsageRun.mockImplementation(async (...args) => {
       await mocks.usageFinalized(...args);
@@ -354,5 +363,26 @@ describe('POST /api/brief/send security and metering', () => {
     });
     expect(body).not.toHaveProperty('stack');
     expect(mocks.chatResolved).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['en', 'daily_cost_exhausted', 'dailyCostExhausted'],
+    ['zh', 'budget_unavailable', 'budgetUnavailable'],
+  ])('returns a localized %s message and separate stable code for %s', async (locale, errorCode, messageKey) => {
+    mocks.getRequestLocale.mockResolvedValue(locale);
+    mocks.reserveCostBudget.mockRejectedValue(new Error(errorCode));
+
+    const response = await POST(request({ channels: ['telegram'] }));
+    const body = await response.json();
+
+    expect(body).toMatchObject({
+      source: 'cost_quota',
+      error: `localized:${locale}:${messageKey}`,
+      code: errorCode,
+      errorCode,
+      ...(errorCode === 'daily_cost_exhausted' ? {
+        quota: { reason: 'daily_cost_exhausted', costLimitMicrormb: 8_800_000 },
+      } : {}),
+    });
   });
 });

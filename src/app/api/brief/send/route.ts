@@ -17,7 +17,7 @@ import {
   PERSONA_CONCURRENCY_HARD_CAP,
 } from '@/lib/billing/llm-concurrency';
 import { getBudgetConfig } from '@/lib/billing/cost-budget';
-import { getRequestLocale, apiMessage } from '@/lib/i18n/server';
+import { getRequestLocale, apiMessage, type ApiMessageKey } from '@/lib/i18n/server';
 import {
   AdminForbidden,
   AdminUnauthenticated,
@@ -53,6 +53,18 @@ function costErrorStatus(code: string): number {
   if (code === 'daily_cost_exhausted') return 429;
   if (code === 'budget_unavailable' || code === 'usage_audit_unavailable') return 503;
   return 500;
+}
+
+function costMessageKey(code: string): ApiMessageKey {
+  switch (code) {
+    case 'daily_cost_exhausted': return 'dailyCostExhausted';
+    case 'pricing_unavailable': return 'pricingUnavailable';
+    case 'budget_invariant_violation':
+    case 'usage_audit_invariant': return 'budgetInvariantViolation';
+    case 'budget_unavailable':
+    case 'usage_audit_unavailable': return 'budgetUnavailable';
+    default: return 'budgetUnavailable';
+  }
 }
 
 function quotaNotice(
@@ -330,9 +342,11 @@ export async function POST(req: Request) {
     const code = costErrorCode(error);
     if (code) {
       const budget = getBudgetConfig();
+      const locale = await getRequestLocale();
       return NextResponse.json({
         source: 'cost_quota',
-        error: code,
+        error: apiMessage(locale, costMessageKey(code)),
+        code,
         errorCode: code,
         ...(code === 'daily_cost_exhausted' ? { quota: quotaNotice('daily_cost_exhausted', quota) } : {}),
         costLimit: {

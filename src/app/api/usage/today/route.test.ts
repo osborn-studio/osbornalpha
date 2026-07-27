@@ -17,16 +17,17 @@ import { GET } from './route';
 
 function countBuilder(count: number) {
   const builder: Record<string, ReturnType<typeof vi.fn>> = {};
-  for (const method of ['select', 'eq', 'gte', 'lt']) builder[method] = vi.fn();
+  for (const method of ['select', 'eq', 'in', 'gte', 'lt']) builder[method] = vi.fn();
   builder.select.mockReturnValue(builder);
   builder.eq.mockReturnValue(builder);
+  builder.in.mockReturnValue(builder);
   builder.gte.mockReturnValue(builder);
   builder.lt.mockResolvedValue({ count, error: null });
   return builder;
 }
 
 describe('GET /api/usage/today status semantics', () => {
-  it('counts only completed platform events while keeping all BYO rows informational', async () => {
+  it('counts only completed platform events while keeping completed and failed BYO rows informational', async () => {
     const profile = {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
@@ -60,7 +61,7 @@ describe('GET /api/usage/today status semantics', () => {
     for (const query of featureQueries) {
       expect(query.eq).toHaveBeenCalledWith('status', 'completed');
     }
-    expect(byoQuery.eq).toHaveBeenCalledWith('status', 'completed');
+    expect(byoQuery.in).toHaveBeenCalledWith('status', ['completed', 'failed']);
     expect((await response.json()).byoCalls).toBe(4);
   });
 
@@ -87,12 +88,17 @@ describe('GET /api/usage/today status semantics', () => {
       const builder = {
         select: vi.fn(),
         eq: vi.fn(),
+        in: vi.fn(),
         gte: vi.fn(),
         lt: vi.fn(),
       };
       builder.select.mockReturnValue(builder);
       builder.eq.mockImplementation((field: string, value: unknown) => {
         filtered = filtered.filter((row) => row[field as keyof typeof row] === value);
+        return builder;
+      });
+      builder.in.mockImplementation((field: string, values: unknown[]) => {
+        filtered = filtered.filter((row) => values.includes(row[field as keyof typeof row]));
         return builder;
       });
       builder.gte.mockReturnValue(builder);
@@ -115,6 +121,93 @@ describe('GET /api/usage/today status semantics', () => {
 
     expect(body.usage.copilot.used).toBe(1);
     expect(body.byoCalls).toBe(0);
+  });
+
+  it('counts completed and failed BYO runs but excludes pending runs', async () => {
+    const rows = [
+      { user_id: 'user-1', feature: 'copilot', byo: true, status: 'completed', created_at: new Date().toISOString() },
+      { user_id: 'user-1', feature: 'copilot', byo: true, status: 'failed', created_at: new Date().toISOString() },
+      { user_id: 'user-1', feature: 'copilot', byo: true, status: 'pending', created_at: new Date().toISOString() },
+    ];
+    const profile = {
+      select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: { plan: 'free', role: 'user', plan_expires_at: null }, error: null }),
+    };
+    function filteringBuilder() {
+      let filtered = rows;
+      const builder = { select: vi.fn(), eq: vi.fn(), in: vi.fn(), gte: vi.fn(), lt: vi.fn() };
+      builder.select.mockReturnValue(builder);
+      builder.eq.mockImplementation((field: string, value: unknown) => {
+        filtered = filtered.filter((row) => row[field as keyof typeof row] === value);
+        return builder;
+      });
+      builder.in.mockImplementation((field: string, values: unknown[]) => {
+        filtered = filtered.filter((row) => values.includes(row[field as keyof typeof row]));
+        return builder;
+      });
+      builder.gte.mockReturnValue(builder);
+      builder.lt.mockImplementation(async () => ({ count: filtered.length, error: null }));
+      return builder;
+    }
+    mocks.getServerSupabase.mockResolvedValue({
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }) },
+      from: vi.fn((table: string) => table === 'profiles' ? profile : filteringBuilder()),
+    });
+    mocks.getAdminSupabase.mockReturnValue({
+      from: vi.fn(() => ({ select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), gte: vi.fn().mockReturnThis(), lt: vi.fn().mockResolvedValue({ data: [], error: null }) })),
+    });
+
+    const response = await GET();
+
+    expect((await response.json()).byoCalls).toBe(2);
+  });
+
+  it('sanitizes returned reservation-ledger errors and scopes the query to the authenticated user', async () => {
+    const profile = {
+      select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: { plan: 'free', role: 'user', plan_expires_at: null }, error: null }),
+    };
+    const costQuery = { select: vi.fn(), eq: vi.fn(), gte: vi.fn(), lt: vi.fn() };
+    costQuery.select.mockReturnValue(costQuery);
+    costQuery.eq.mockReturnValue(costQuery);
+    costQuery.gte.mockReturnValue(costQuery);
+    costQuery.lt.mockResolvedValue({ data: null, error: { message: 'password=super-secret' } });
+    const queries = [countBuilder(0), countBuilder(0), countBuilder(0), countBuilder(0)];
+    let index = 0;
+    mocks.getServerSupabase.mockResolvedValue({
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-authenticated' } } }) },
+      from: vi.fn((table: string) => table === 'profiles' ? profile : queries[index++]),
+    });
+    mocks.getAdminSupabase.mockReturnValue({ from: vi.fn(() => costQuery) });
+
+    const response = await GET();
+    const body = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(body).toEqual({ error: 'Usage cost unavailable' });
+    expect(JSON.stringify(body)).not.toContain('super-secret');
+    expect(costQuery.eq).toHaveBeenCalledWith('user_id', 'user-authenticated');
+  });
+
+  it('sanitizes thrown reservation-ledger errors', async () => {
+    const profile = {
+      select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: { plan: 'free', role: 'user', plan_expires_at: null }, error: null }),
+    };
+    const queries = [countBuilder(0), countBuilder(0), countBuilder(0), countBuilder(0)];
+    let index = 0;
+    mocks.getServerSupabase.mockResolvedValue({
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }) },
+      from: vi.fn((table: string) => table === 'profiles' ? profile : queries[index++]),
+    });
+    mocks.getAdminSupabase.mockImplementation(() => { throw new Error('database token=secret'); });
+
+    const response = await GET();
+    const body = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(body).toEqual({ error: 'Usage cost unavailable' });
+    expect(JSON.stringify(body)).not.toContain('secret');
   });
 
   it('reports settled spend plus active reserved/incurred spend, without released or expired reservations', async () => {
@@ -198,9 +291,10 @@ describe('GET /api/usage/today status semantics', () => {
       brief_preview: { used: 5, limit: -1 },
     });
     expect(body.byoCalls).toBe(4);
-    for (const query of queries) {
+    for (const query of queries.slice(0, 3)) {
       expect(query.eq).toHaveBeenCalledWith('status', 'completed');
     }
+    expect(queries[3].in).toHaveBeenCalledWith('status', ['completed', 'failed']);
   });
 
   it('queries the reservation ledger inside the Beijing calendar-day boundary', async () => {
