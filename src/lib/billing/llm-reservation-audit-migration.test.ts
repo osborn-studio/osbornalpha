@@ -29,6 +29,14 @@ describe('durable LLM reservation usage audit migration', () => {
     expect(sql).toMatch(/update public\.llm_cost_reservations[\s\S]+settled_micrormb = p_actual_micrormb[\s\S]+input_tokens = p_input_tokens[\s\S]+status = 'settled'/);
   });
 
+  it('persists the conservative audit in the same transition that marks spend incurred', () => {
+    expect(sql).toContain('create or replace function public.mark_llm_budget_incurred(');
+    expect(sql).toMatch(
+      /update public\.llm_cost_reservations[\s\S]+status = 'incurred'[\s\S]+input_tokens = p_input_tokens[\s\S]+pricing_version = pg_catalog\.btrim\(p_pricing_version\)/,
+    );
+    expect(sql).toContain('incurred reservation audit snapshot mismatch');
+  });
+
   it('supports durable conservative finalization and trusted idempotent aggregate audit', () => {
     expect(sql).toContain('create or replace function public.finalize_llm_budget_incurred(');
     expect(sql).toContain('create unique index if not exists usage_events_idempotency_key_idx');

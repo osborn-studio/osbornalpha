@@ -128,14 +128,35 @@ async function runRoute() {
 }
 
 function reservation(costMicrormb: number) {
-  return {
+  const current = {
     reservationId: `reservation-${costMicrormb}`,
     reservedMicrormb: costMicrormb + 100,
+    durableAudit: undefined as undefined | {
+      inputTokens: number;
+      cacheHitInputTokens: number;
+      cacheMissInputTokens: number;
+      outputTokens: number;
+      pricingVersion: string;
+      usdCnyMicros: number;
+      usageEstimated: boolean;
+    },
     markIncurred: vi.fn().mockResolvedValue(undefined),
     finalizeIncurred: vi.fn().mockResolvedValue(undefined),
     settle: vi.fn().mockResolvedValue({ costMicrormb, usageEstimated: false }),
     release: vi.fn().mockResolvedValue(undefined),
   };
+  current.markIncurred.mockImplementation(async () => {
+    current.durableAudit = {
+      inputTokens: 1_000_000,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 1_000_000,
+      outputTokens: MAX_OUTPUT_TOKENS,
+      pricingVersion: 'deepseek-2026-04-24',
+      usdCnyMicros: 7_200_000,
+      usageEstimated: true,
+    };
+  });
+  return current;
 }
 
 describe('Copilot platform cost budget', () => {
@@ -254,14 +275,26 @@ describe('Copilot platform cost budget', () => {
   it('keeps an incurred reservation durable when the provider call throws', async () => {
     const current = reservation(100);
     mocks.reserveCostBudget.mockResolvedValue(current);
-    mocks.toolChat.mockRejectedValue(new Error('llm 500: failed'));
+    mocks.toolChat.mockImplementation(async () => {
+      expect(current.durableAudit).toEqual({
+        inputTokens: 1_000_000,
+        cacheHitInputTokens: 0,
+        cacheMissInputTokens: 1_000_000,
+        outputTokens: MAX_OUTPUT_TOKENS,
+        pricingVersion: 'deepseek-2026-04-24',
+        usdCnyMicros: 7_200_000,
+        usageEstimated: true,
+      });
+      throw new Error('llm 500: failed');
+    });
 
     const { text } = await runRoute();
 
     expect(current.markIncurred).toHaveBeenCalledTimes(1);
-    expect(current.finalizeIncurred).toHaveBeenCalledTimes(1);
+    expect(current.finalizeIncurred).not.toHaveBeenCalled();
     expect(current.release).not.toHaveBeenCalled();
     expect(current.settle).not.toHaveBeenCalled();
+    expect(current.durableAudit?.usageEstimated).toBe(true);
     expect(mocks.recordUsage).toHaveBeenCalledTimes(1);
     expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
       provider: 'deepseek',
@@ -293,17 +326,29 @@ describe('Copilot platform cost budget', () => {
     const current = reservation(100);
     current.settle.mockRejectedValue(new Error('budget_unavailable'));
     mocks.reserveCostBudget.mockResolvedValue(current);
-    mocks.toolChat.mockResolvedValue({
-      content: 'Provider returned this answer',
-      toolCalls: [],
-      finishReason: 'stop',
-      usage: usage(45, 5, 9),
+    mocks.toolChat.mockImplementation(async () => {
+      expect(current.durableAudit).toEqual({
+        inputTokens: 1_000_000,
+        cacheHitInputTokens: 0,
+        cacheMissInputTokens: 1_000_000,
+        outputTokens: MAX_OUTPUT_TOKENS,
+        pricingVersion: 'deepseek-2026-04-24',
+        usdCnyMicros: 7_200_000,
+        usageEstimated: true,
+      });
+      return {
+        content: 'Provider returned this answer',
+        toolCalls: [],
+        finishReason: 'stop',
+        usage: usage(45, 5, 9),
+      };
     });
 
     const { text } = await runRoute();
 
     expect(text).toContain('"code":"budget_unavailable"');
     expect(current.release).not.toHaveBeenCalled();
+    expect(current.durableAudit?.outputTokens).toBe(MAX_OUTPUT_TOKENS);
     expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
       inputTokens: 45,
       cacheHitInputTokens: 5,
@@ -646,7 +691,7 @@ describe('Copilot platform cost budget', () => {
 
     expect(completedRound.settle).toHaveBeenCalledTimes(1);
     expect(failedRound.markIncurred).toHaveBeenCalledTimes(1);
-    expect(failedRound.finalizeIncurred).toHaveBeenCalledTimes(1);
+    expect(failedRound.finalizeIncurred).not.toHaveBeenCalled();
     expect(failedRound.release).not.toHaveBeenCalled();
     expect(mocks.recordUsage).toHaveBeenCalledOnce();
     expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
@@ -703,7 +748,7 @@ describe('Copilot platform cost budget', () => {
 
     expect(completedPlatformRound.settle).toHaveBeenCalledTimes(1);
     expect(failedPlatformRound.markIncurred).toHaveBeenCalledTimes(1);
-    expect(failedPlatformRound.finalizeIncurred).toHaveBeenCalledTimes(1);
+    expect(failedPlatformRound.finalizeIncurred).not.toHaveBeenCalled();
     expect(failedPlatformRound.release).not.toHaveBeenCalled();
     expect(mocks.recordUsage).toHaveBeenCalledTimes(1);
     expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({

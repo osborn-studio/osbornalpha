@@ -415,15 +415,6 @@ export async function POST(req: Request) {
               });
         } catch (error) {
           if (reservation) {
-            try {
-              await reservation.finalizeIncurred();
-            } catch {
-              addUsage(provider, conservativePlatformUsage(), {
-                costMicrormb: reservation.reservedMicrormb,
-                usageEstimated: true,
-              });
-              throw new Error('budget_unavailable');
-            }
             addUsage(provider, conservativePlatformUsage(), {
               costMicrormb: reservation.reservedMicrormb,
               usageEstimated: true,

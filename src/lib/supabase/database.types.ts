@@ -551,7 +551,16 @@ export type Database = {
         Returns: LlmBudgetReservationState[];
       };
       mark_llm_budget_incurred: {
-        Args: { p_reservation_id: string };
+        Args: {
+          p_reservation_id: string;
+          p_input_tokens: number;
+          p_cache_hit_input_tokens: number;
+          p_cache_miss_input_tokens: number;
+          p_output_tokens: number;
+          p_pricing_version: string;
+          p_usd_cny_micros: number;
+          p_usage_estimated: boolean;
+        };
         Returns: LlmBudgetReservationState[];
       };
       release_llm_budget: {

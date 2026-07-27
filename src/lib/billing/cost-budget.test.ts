@@ -45,6 +45,17 @@ const completeUsage = {
   estimated: false,
 };
 
+const conservativeMarkArgs = {
+  p_reservation_id: 'reservation-1',
+  p_input_tokens: 100_000,
+  p_cache_hit_input_tokens: 0,
+  p_cache_miss_input_tokens: 100_000,
+  p_output_tokens: 9_000,
+  p_pricing_version: 'deepseek-2026-04-24',
+  p_usd_cny_micros: 7_200_000,
+  p_usage_estimated: true,
+};
+
 function terminalRow(
   reservationId: string,
   status: 'incurred' | 'settled' | 'released',
@@ -189,7 +200,7 @@ describe('reserveCostBudget', () => {
     await expect(reservation.settle(completeUsage)).resolves.toEqual({ costMicrormb: 118_944, usageEstimated: false });
     expect(supabase.calls[1]).toEqual({
       fn: 'mark_llm_budget_incurred',
-      args: { p_reservation_id: 'reservation-1' },
+      args: conservativeMarkArgs,
     });
     expect(supabase.calls[2]).toEqual({
       fn: 'settle_llm_budget',
@@ -258,7 +269,7 @@ describe('reserveCostBudget', () => {
       expect.objectContaining({ fn: 'reserve_llm_daily_budget' }),
       {
         fn: 'mark_llm_budget_incurred',
-        args: { p_reservation_id: 'reservation-1' },
+        args: conservativeMarkArgs,
       },
     ]);
   });

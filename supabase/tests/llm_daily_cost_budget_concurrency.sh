@@ -160,7 +160,16 @@ settle_reservation_id="$(
 psql_admin -c "
   set role service_role;
   select status
-  from public.mark_llm_budget_incurred('$settle_reservation_id')
+  from public.mark_llm_budget_incurred(
+    '$settle_reservation_id',
+    100,
+    0,
+    100,
+    10,
+    'concurrency-test-v1',
+    7200000,
+    true
+  )
 " >/dev/null
 
 settle_out="$test_tmp/settle.out"
@@ -303,7 +312,16 @@ if docker exec -i -e PGAPPNAME=llm_budget_stale_mark "$db_container" \
   >"$stale_mark_out" 2>"$stale_mark_err" <<SQL
 set role service_role;
 select status
-from public.mark_llm_budget_incurred('$stale_reservation_id');
+from public.mark_llm_budget_incurred(
+  '$stale_reservation_id',
+  100,
+  0,
+  100,
+  10,
+  'concurrency-test-v1',
+  7200000,
+  true
+);
 SQL
 then
   stale_mark_rejected="false"

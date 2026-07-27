@@ -169,14 +169,6 @@ export async function runMeteredLlmCall<T extends { usage: NormalizedUsage }>(
       reservation?.reservedMicrormb ?? maxCostMicrormb,
       true,
     );
-    if (reservation) {
-      try {
-        await reservation.finalizeIncurred();
-      } catch (finalizationError) {
-        attachUsage(finalizationError, accounting);
-        throw finalizationError;
-      }
-    }
     attachUsage(error, accounting);
     throw error;
   }

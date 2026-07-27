@@ -36,15 +36,36 @@ const realUsage = (
   estimated: false,
 });
 
-function reservation(costMicrormb = 321) {
-  return {
+function reservation(costMicrormb = 321, maxOutputTokens = 400) {
+  const current = {
     reservationId: 'reservation-1',
     reservedMicrormb: 999,
+    durableAudit: undefined as undefined | {
+      inputTokens: number;
+      cacheHitInputTokens: number;
+      cacheMissInputTokens: number;
+      outputTokens: number;
+      pricingVersion: string;
+      usdCnyMicros: number;
+      usageEstimated: boolean;
+    },
     markIncurred: vi.fn(),
     finalizeIncurred: vi.fn(),
     settle: vi.fn().mockResolvedValue({ costMicrormb, usageEstimated: false }),
     release: vi.fn(),
   };
+  current.markIncurred.mockImplementation(async () => {
+    current.durableAudit = {
+      inputTokens: 1_000_000,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 1_000_000,
+      outputTokens: maxOutputTokens,
+      pricingVersion: 'deepseek-2026-04-24',
+      usdCnyMicros: 7_200_000,
+      usageEstimated: true,
+    };
+  });
+  return current;
 }
 
 describe('runMeteredLlmCall', () => {
@@ -128,7 +149,7 @@ describe('runMeteredLlmCall', () => {
   });
 
   it('keeps incurred cost durable and attaches conservative failed accounting after provider failure', async () => {
-    const current = reservation();
+    const current = reservation(321, 300);
     mocks.reserveCostBudget.mockResolvedValue(current);
     const providerError = new Error('provider exploded');
 
@@ -145,6 +166,15 @@ describe('runMeteredLlmCall', () => {
         budgetExempt: false,
         maxOutputTokens: 300,
         call: async () => {
+          expect(current.durableAudit).toEqual({
+            inputTokens: 1_000_000,
+            cacheHitInputTokens: 0,
+            cacheMissInputTokens: 1_000_000,
+            outputTokens: 300,
+            pricingVersion: 'deepseek-2026-04-24',
+            usdCnyMicros: 7_200_000,
+            usageEstimated: true,
+          });
           throw providerError;
         },
       });
@@ -154,9 +184,10 @@ describe('runMeteredLlmCall', () => {
 
     expect(caught).toBe(providerError);
     expect(current.markIncurred).toHaveBeenCalledTimes(1);
-    expect(current.finalizeIncurred).toHaveBeenCalledTimes(1);
+    expect(current.finalizeIncurred).not.toHaveBeenCalled();
     expect(current.settle).not.toHaveBeenCalled();
     expect(current.release).not.toHaveBeenCalled();
+    expect(current.durableAudit?.usageEstimated).toBe(true);
     expect(meteredUsageFromError(caught)).toMatchObject({
       status: 'failed',
       provider: 'deepseek',
@@ -172,6 +203,41 @@ describe('runMeteredLlmCall', () => {
         estimated: true,
       },
     });
+  });
+
+  it('retains the pre-network conservative audit when actual settlement fails', async () => {
+    const current = reservation(321, 300);
+    current.settle.mockRejectedValue(new Error('budget_unavailable'));
+    mocks.reserveCostBudget.mockResolvedValue(current);
+    const actualUsage = realUsage(120, 20, 30);
+
+    await expect(runMeteredLlmCall({
+      feature: 'brief_preview',
+      provider: {
+        source: 'env',
+        provider: 'deepseek',
+        model: 'deepseek-v4-flash',
+      },
+      userId: 'server-derived-user',
+      budgetExempt: false,
+      maxOutputTokens: 300,
+      call: async () => {
+        expect(current.durableAudit).toEqual({
+          inputTokens: 1_000_000,
+          cacheHitInputTokens: 0,
+          cacheMissInputTokens: 1_000_000,
+          outputTokens: 300,
+          pricingVersion: 'deepseek-2026-04-24',
+          usdCnyMicros: 7_200_000,
+          usageEstimated: true,
+        });
+        return { content: 'provider completed', usage: actualUsage };
+      },
+    })).rejects.toThrow('budget_unavailable');
+
+    expect(current.durableAudit?.outputTokens).toBe(300);
+    expect(current.finalizeIncurred).not.toHaveBeenCalled();
+    expect(current.release).not.toHaveBeenCalled();
   });
 
   it('preflights and audits admins without calling the cap RPC', async () => {

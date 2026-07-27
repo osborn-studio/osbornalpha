@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions, pg_catalog;
 
-select plan(104);
+select plan(117);
 
 insert into auth.users (id, email)
 values
@@ -1074,7 +1074,113 @@ values
     1000,
     'incurred',
     now() + interval '5 minutes'
+  ),
+  (
+    '20000000-0000-0000-0000-000000000004',
+    '10000000-0000-0000-0000-000000000001',
+    'copilot',
+    'deepseek',
+    'deepseek-v4-flash',
+    1000,
+    'reserved',
+    now() + interval '5 minutes'
   );
+
+select lives_ok(
+  $sql$
+    select *
+    from public.mark_llm_budget_incurred(
+      '20000000-0000-0000-0000-000000000004',
+      1000000,
+      0,
+      1000000,
+      9000,
+      'pricing-v1',
+      7200000,
+      true
+    )
+  $sql$,
+  'mark-incurred atomically persists the conservative audit snapshot'
+);
+select is(
+  (select status from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000004'),
+  'incurred',
+  'the audited mark transition records incurred status'
+);
+select is(
+  (select input_tokens from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000004'),
+  1000000::bigint,
+  'the audited mark transition stores the reviewed input ceiling'
+);
+select is(
+  (select cache_hit_input_tokens from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000004'),
+  0::bigint,
+  'the audited mark transition stores conservative cache hits'
+);
+select is(
+  (select cache_miss_input_tokens from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000004'),
+  1000000::bigint,
+  'the audited mark transition stores conservative cache misses'
+);
+select is(
+  (select output_tokens from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000004'),
+  9000::bigint,
+  'the audited mark transition stores the output ceiling'
+);
+select is(
+  (select pricing_version from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000004'),
+  'pricing-v1',
+  'the audited mark transition stores the pricing version'
+);
+select is(
+  (select usd_cny_micros from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000004'),
+  7200000::bigint,
+  'the audited mark transition stores the FX snapshot'
+);
+select is(
+  (select usage_estimated from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000004'),
+  true,
+  'the audited mark transition identifies conservative usage'
+);
+select lives_ok(
+  $sql$
+    select *
+    from public.mark_llm_budget_incurred(
+      '20000000-0000-0000-0000-000000000004',
+      1000000,
+      0,
+      1000000,
+      9000,
+      'pricing-v1',
+      7200000,
+      true
+    )
+  $sql$,
+  'an exact audited mark retry is idempotent'
+);
+select throws_ok(
+  $sql$
+    select *
+    from public.mark_llm_budget_incurred(
+      '20000000-0000-0000-0000-000000000004',
+      1,
+      0,
+      1,
+      1,
+      'different-pricing',
+      1,
+      true
+    )
+  $sql$,
+  '55000',
+  'incurred reservation audit snapshot mismatch',
+  'an incompatible audited mark retry is rejected'
+);
+select is(
+  (select input_tokens from public.llm_cost_reservations where id = '20000000-0000-0000-0000-000000000004'),
+  1000000::bigint,
+  'a rejected audited mark retry cannot overwrite the durable snapshot'
+);
 
 select lives_ok(
   $sql$
@@ -1291,8 +1397,17 @@ select is(
     'public.mark_llm_budget_incurred(uuid)',
     'EXECUTE'
   ),
+  false,
+  'service_role cannot call the legacy unaudited incurred RPC'
+);
+select is(
+  has_function_privilege(
+    'service_role',
+    'public.mark_llm_budget_incurred(uuid,bigint,bigint,bigint,bigint,text,bigint,boolean)',
+    'EXECUTE'
+  ),
   true,
-  'service_role can mark budget incurred'
+  'service_role can atomically mark incurred with a conservative audit'
 );
 
 select is(

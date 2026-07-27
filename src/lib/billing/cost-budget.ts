@@ -265,34 +265,6 @@ function managedReservation(
   let settlePromise: Promise<CostSettlement> | undefined;
   let releasePromise: Promise<void> | undefined;
 
-  const markIncurred = async (): Promise<void> => {
-    if (state === 'incurred' || state === 'settled') return;
-    if (state === 'marking') return markPromise!;
-    if (state === 'released' || state === 'releasing') {
-      throw stableError('budget_reservation_released');
-    }
-    if (state === 'settling') {
-      await settlePromise!;
-      return;
-    }
-
-    state = 'marking';
-    markPromise = (async () => {
-      try {
-        const response = await markIncurredRpc(supabase, { p_reservation_id: reservationId });
-        if (!response || response.error) throw stableError('budget_unavailable');
-        if (terminalResponse(response.data, expectedReservation, 'incurred') !== 'valid') {
-          throw stableError('budget_unavailable');
-        }
-        state = 'incurred';
-      } catch {
-        state = 'active';
-        throw stableError('budget_unavailable');
-      }
-    })();
-    return markPromise;
-  };
-
   const conservativeUsage: NormalizedUsage = {
     inputTokens: request.maxInputTokens,
     cacheHitInputTokens: 0,
@@ -313,6 +285,37 @@ function managedReservation(
     p_usd_cny_micros: usdCnyMicros,
     p_usage_estimated: usageEstimated,
   });
+
+  const markIncurred = async (): Promise<void> => {
+    if (state === 'incurred' || state === 'settled') return;
+    if (state === 'marking') return markPromise!;
+    if (state === 'released' || state === 'releasing') {
+      throw stableError('budget_reservation_released');
+    }
+    if (state === 'settling') {
+      await settlePromise!;
+      return;
+    }
+
+    state = 'marking';
+    markPromise = (async () => {
+      try {
+        const response = await markIncurredRpc(supabase, {
+          p_reservation_id: reservationId,
+          ...usageArgs(conservativeUsage, true),
+        });
+        if (!response || response.error) throw stableError('budget_unavailable');
+        if (terminalResponse(response.data, expectedReservation, 'incurred') !== 'valid') {
+          throw stableError('budget_unavailable');
+        }
+        state = 'incurred';
+      } catch {
+        state = 'active';
+        throw stableError('budget_unavailable');
+      }
+    })();
+    return markPromise;
+  };
 
   const finalizeIncurred = async (): Promise<void> => {
     if (state === 'settled') return;
