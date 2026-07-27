@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions, pg_catalog;
 
-select plan(45);
+select plan(52);
 
 insert into auth.users (id, email)
 values
@@ -146,6 +146,52 @@ select is(
   (select settled_at from budget_test_results where label = 'first settlement'),
   'repeat settlement does not change its timestamp'
 );
+select lives_ok(
+  format(
+    'select * from public.settle_llm_budget(%L::uuid, 601)',
+    (select reservation_id from budget_test_results where label = 'first reservation')
+  ),
+  'a settled reservation ignores an oversized retry'
+);
+select is(
+  (
+    select status
+    from public.llm_cost_reservations
+    where id = (
+      select reservation_id
+      from budget_test_results
+      where label = 'first reservation'
+    )
+  ),
+  'settled',
+  'an oversized settled retry leaves terminal status unchanged'
+);
+select is(
+  (
+    select settled_micrormb
+    from public.llm_cost_reservations
+    where id = (
+      select reservation_id
+      from budget_test_results
+      where label = 'first reservation'
+    )
+  ),
+  550::bigint,
+  'an oversized settled retry leaves actual cost unchanged'
+);
+select is(
+  (
+    select settled_at
+    from public.llm_cost_reservations
+    where id = (
+      select reservation_id
+      from budget_test_results
+      where label = 'first reservation'
+    )
+  ),
+  (select settled_at from budget_test_results where label = 'first settlement'),
+  'an oversized settled retry leaves its timestamp unchanged'
+);
 
 insert into budget_test_results (
   label, allowed, reservation_id, used_micrormb, limit_micrormb
@@ -204,6 +250,39 @@ select is(
   (select settled_micrormb from budget_test_results where label = 'repeat release'),
   null::bigint,
   'release does not fabricate a settled cost'
+);
+select lives_ok(
+  format(
+    'select * from public.settle_llm_budget(%L::uuid, 101)',
+    (select reservation_id from budget_test_results where label = 'release candidate')
+  ),
+  'a released reservation ignores an oversized settlement retry'
+);
+select is(
+  (
+    select status
+    from public.llm_cost_reservations
+    where id = (
+      select reservation_id
+      from budget_test_results
+      where label = 'release candidate'
+    )
+  ),
+  'released',
+  'an oversized released retry leaves terminal status unchanged'
+);
+select is(
+  (
+    select settled_micrormb
+    from public.llm_cost_reservations
+    where id = (
+      select reservation_id
+      from budget_test_results
+      where label = 'release candidate'
+    )
+  ),
+  null::bigint,
+  'an oversized released retry leaves actual cost unchanged'
 );
 
 insert into public.llm_cost_reservations (

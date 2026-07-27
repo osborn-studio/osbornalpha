@@ -236,13 +236,13 @@ begin
     raise exception using errcode = 'P0002', message = 'LLM cost reservation not found';
   end if;
 
-  if p_actual_micrormb > v_reservation.reserved_micrormb then
-    raise exception using
-      errcode = '22023',
-      message = 'actual cost exceeds reserved cost';
-  end if;
-
   if v_reservation.status = 'reserved' then
+    if p_actual_micrormb > v_reservation.reserved_micrormb then
+      raise exception using
+        errcode = '22023',
+        message = 'actual cost exceeds reserved cost';
+    end if;
+
     update public.llm_cost_reservations as r
     set
       settled_micrormb = p_actual_micrormb,
