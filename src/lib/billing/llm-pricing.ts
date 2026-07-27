@@ -41,32 +41,37 @@ function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === 'object' && value !== null;
 }
 
-function safeNonNegativeInteger(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return 0;
+function validNonNegativeInteger(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return undefined;
   return Math.min(Math.ceil(value), MAX_SAFE_INTEGER);
 }
 
-function firstDefinedNumber(record: UnknownRecord, keys: string[]): unknown {
+function safeNonNegativeInteger(value: unknown): number {
+  return validNonNegativeInteger(value) ?? 0;
+}
+
+function firstValidNonNegativeInteger(record: UnknownRecord, keys: string[]): number | undefined {
   for (const key of keys) {
-    if (Object.prototype.hasOwnProperty.call(record, key)) return record[key];
+    const value = validNonNegativeInteger(record[key]);
+    if (value !== undefined) return value;
   }
   return undefined;
 }
 
-function cacheBreakdown(raw: UnknownRecord): { hit?: unknown; miss?: unknown; present: boolean } {
+function cacheBreakdown(raw: UnknownRecord): { hit?: number; miss?: number; present: boolean } {
   const details = isRecord(raw.prompt_tokens_details) ? raw.prompt_tokens_details : {};
-  const hit = firstDefinedNumber(raw, [
+  const hit = firstValidNonNegativeInteger(raw, [
     'prompt_cache_hit_tokens',
     'cache_hit_input_tokens',
     'cache_hit_tokens',
   ])
-    ?? firstDefinedNumber(details, ['cache_hit_tokens', 'cache_hit_input_tokens', 'cached_tokens']);
-  const miss = firstDefinedNumber(raw, [
+    ?? firstValidNonNegativeInteger(details, ['cache_hit_tokens', 'cache_hit_input_tokens', 'cached_tokens']);
+  const miss = firstValidNonNegativeInteger(raw, [
     'prompt_cache_miss_tokens',
     'cache_miss_input_tokens',
     'cache_miss_tokens',
   ])
-    ?? firstDefinedNumber(details, ['cache_miss_tokens', 'cache_miss_input_tokens']);
+    ?? firstValidNonNegativeInteger(details, ['cache_miss_tokens', 'cache_miss_input_tokens']);
 
   return { hit, miss, present: hit !== undefined || miss !== undefined };
 }
@@ -74,24 +79,25 @@ function cacheBreakdown(raw: UnknownRecord): { hit?: unknown; miss?: unknown; pr
 /** Normalizes OpenAI-compatible usage, defaulting uncertain prompt tokens to cache misses. */
 export function normalizeUsage(raw: unknown): NormalizedUsage {
   const usage = isRecord(raw) ? raw : {};
-  const inputTokens = safeNonNegativeInteger(firstDefinedNumber(usage, ['input_tokens', 'prompt_tokens']));
-  const outputTokens = safeNonNegativeInteger(firstDefinedNumber(usage, ['output_tokens', 'completion_tokens']));
+  const reportedInputTokens = firstValidNonNegativeInteger(usage, ['input_tokens', 'prompt_tokens']);
+  const reportedOutputTokens = firstValidNonNegativeInteger(usage, ['output_tokens', 'completion_tokens']);
   const breakdown = cacheBreakdown(usage);
+  const inputTokens = reportedInputTokens ?? Math.min(
+    (breakdown.hit ?? 0) + (breakdown.miss ?? 0),
+    MAX_SAFE_INTEGER,
+  );
+  const outputTokens = reportedOutputTokens ?? 0;
 
   let cacheHitInputTokens = 0;
   let cacheMissInputTokens = inputTokens;
 
   if (breakdown.present) {
-    const hitIsValid = breakdown.hit === undefined
-      || (typeof breakdown.hit === 'number' && Number.isFinite(breakdown.hit) && breakdown.hit >= 0);
-    const missIsValid = breakdown.miss === undefined
-      || (typeof breakdown.miss === 'number' && Number.isFinite(breakdown.miss) && breakdown.miss >= 0);
-    const hit = safeNonNegativeInteger(breakdown.hit);
-    const miss = safeNonNegativeInteger(breakdown.miss);
+    const hit = breakdown.hit ?? 0;
+    const miss = breakdown.miss ?? 0;
 
     // An overlap is ambiguous. Billing every input token as a miss avoids
     // trusting an inconsistent response to reduce the reserved charge.
-    if (hitIsValid && missIsValid && hit <= inputTokens && hit + miss <= inputTokens) {
+    if (hit <= inputTokens && hit + miss <= inputTokens) {
       cacheHitInputTokens = hit;
       cacheMissInputTokens = inputTokens - hit;
     }
@@ -102,7 +108,8 @@ export function normalizeUsage(raw: unknown): NormalizedUsage {
     cacheHitInputTokens,
     cacheMissInputTokens,
     outputTokens,
-    estimated: usage.estimated === true,
+    estimated: usage.estimated === true
+      || (reportedInputTokens === undefined && reportedOutputTokens === undefined && !breakdown.present),
   };
 }
 

@@ -67,7 +67,57 @@ describe('normalizeUsage', () => {
       cacheHitInputTokens: 0,
       cacheMissInputTokens: 0,
       outputTokens: 0,
+      estimated: true,
+    });
+  });
+
+  it('uses later valid aliases when earlier aliases are malformed', () => {
+    expect(normalizeUsage({
+      input_tokens: Number.NaN,
+      prompt_tokens: 1_000,
+      output_tokens: -1,
+      completion_tokens: 20,
+      prompt_cache_hit_tokens: Number.POSITIVE_INFINITY,
+      cache_hit_input_tokens: 300,
+      prompt_cache_miss_tokens: -1,
+      cache_miss_input_tokens: 700,
+    })).toEqual({
+      inputTokens: 1_000,
+      cacheHitInputTokens: 300,
+      cacheMissInputTokens: 700,
+      outputTokens: 20,
       estimated: false,
+    });
+  });
+
+  it('derives input total from a valid cache breakdown when prompt tokens are unavailable', () => {
+    expect(normalizeUsage({
+      completion_tokens: 20,
+      prompt_cache_hit_tokens: 300,
+      prompt_cache_miss_tokens: 700,
+    })).toEqual({
+      inputTokens: 1_000,
+      cacheHitInputTokens: 300,
+      cacheMissInputTokens: 700,
+      outputTokens: 20,
+      estimated: false,
+    });
+  });
+
+  it('marks absent or malformed usage as estimated', () => {
+    expect(normalizeUsage(undefined)).toEqual({
+      inputTokens: 0,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 0,
+      outputTokens: 0,
+      estimated: true,
+    });
+    expect(normalizeUsage({ prompt_tokens: 'invalid', completion_tokens: Number.NaN })).toEqual({
+      inputTokens: 0,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 0,
+      outputTokens: 0,
+      estimated: true,
     });
   });
 });

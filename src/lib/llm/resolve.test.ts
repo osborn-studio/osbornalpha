@@ -78,4 +78,18 @@ describe('resolveLlm', () => {
     expect(r!.protocol).toBe('openai');
     expect(r!.source).toBe('user');
   });
+
+  it('uses DeepSeek V4 Flash when the platform model is not overridden', async () => {
+    vi.mocked(getUserLlm).mockResolvedValue(null);
+    process.env.LLM_PROVIDER = 'deepseek';
+    process.env.DEEPSEEK_API_KEY = 'deepseek-test';
+
+    const r = await resolveLlm();
+
+    expect(r).toEqual(expect.objectContaining({
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      source: 'env',
+    }));
+  });
 });

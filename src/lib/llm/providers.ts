@@ -22,7 +22,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     id: 'deepseek',
     label: 'DeepSeek',
     baseUrl: 'https://api.deepseek.com',
-    defaultModel: 'deepseek-chat',
+    defaultModel: 'deepseek-v4-flash',
     chatPath: '/chat/completions',
     protocol: 'openai',
   },
