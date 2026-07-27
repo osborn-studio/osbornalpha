@@ -12,6 +12,7 @@ import {
   calculateCostMicrormb,
   maxInputTokensFor,
   PRICING_VERSION,
+  reservationCostMicrormb,
   type NormalizedUsage,
 } from '@/lib/billing/llm-pricing';
 import { getRequestLocale, apiMessage, type ApiMessageKey } from '@/lib/i18n/server';
@@ -318,6 +319,21 @@ export async function POST(req: Request) {
       };
 
       const callModel = async (provider: ResolvedLlm, messages: OaiMessage[]) => {
+        let reviewedMaxInputTokens: number | null = null;
+        if (provider.source === 'env') {
+          // Admins are exempt from budget enforcement, not pricing review.
+          // Quote the same conservative ceiling before every platform network
+          // call so an unknown model fails closed even when no RPC is needed.
+          const budgetConfig = getBudgetConfig();
+          reviewedMaxInputTokens = maxInputTokensFor(provider.provider, provider.model);
+          reservationCostMicrormb(
+            provider.provider,
+            provider.model,
+            reviewedMaxInputTokens,
+            MAX_OUTPUT_TOKENS,
+            budgetConfig.usdCnyMicros,
+          );
+        }
         const cfg = {
           baseUrl: provider.baseUrl,
           apiKey: provider.apiKey,
@@ -340,7 +356,7 @@ export async function POST(req: Request) {
               feature: 'copilot',
               provider: provider.provider,
               model: provider.model,
-              maxInputTokens: maxInputTokensFor(provider.provider, provider.model),
+              maxInputTokens: reviewedMaxInputTokens!,
               maxOutputTokens: MAX_OUTPUT_TOKENS,
             });
             await reservation.markIncurred();
@@ -393,19 +409,16 @@ export async function POST(req: Request) {
           incurredUsage.usageEstimated = r.usage.estimated || settlement.usageEstimated;
         } else if (provider.source === 'env') {
           const budgetConfig = getBudgetConfig();
-          let costMicrormb = 0;
-          let usageEstimated = r.usage.estimated;
-          try {
-            costMicrormb = calculateCostMicrormb(
-              provider.provider,
-              provider.model,
-              r.usage,
-              budgetConfig.usdCnyMicros,
-            );
-          } catch {
-            usageEstimated = true;
-          }
-          addUsage(provider, r.usage, { costMicrormb, usageEstimated });
+          const costMicrormb = calculateCostMicrormb(
+            provider.provider,
+            provider.model,
+            r.usage,
+            budgetConfig.usdCnyMicros,
+          );
+          addUsage(provider, r.usage, {
+            costMicrormb,
+            usageEstimated: r.usage.estimated,
+          });
         } else {
           addUsage(provider, r.usage);
         }

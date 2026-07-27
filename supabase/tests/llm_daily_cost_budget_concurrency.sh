@@ -20,7 +20,8 @@ cleanup() {
 delete from auth.users
 where id in (
   '20000000-0000-0000-0000-000000000001',
-  '20000000-0000-0000-0000-000000000002'
+  '20000000-0000-0000-0000-000000000002',
+  '20000000-0000-0000-0000-000000000003'
 );
 SQL
 
@@ -68,7 +69,8 @@ psql_admin <<'SQL'
 insert into auth.users (id, email)
 values
   ('20000000-0000-0000-0000-000000000001', 'budget-concurrency@example.test'),
-  ('20000000-0000-0000-0000-000000000002', 'budget-settle-race@example.test');
+  ('20000000-0000-0000-0000-000000000002', 'budget-settle-race@example.test'),
+  ('20000000-0000-0000-0000-000000000003', 'budget-stale-mark-race@example.test');
 SQL
 
 first_reserve_out="$test_tmp/first-reserve.out"
@@ -227,5 +229,114 @@ if [[ "$settle_result" != "settled,500" \
   exit 1
 fi
 
+stale_reservation_id="$(
+  psql_admin -c "
+    select reservation_id
+    from public.reserve_llm_daily_budget(
+      '20000000-0000-0000-0000-000000000003',
+      'copilot',
+      'openai',
+      'gpt-concurrency',
+      600,
+      1000,
+      300
+    )
+  "
+)"
+psql_admin -c "
+  update public.llm_cost_reservations
+  set expires_at = clock_timestamp() + interval '2 seconds'
+  where id = '$stale_reservation_id'
+" >/dev/null
+
+stale_holder_out="$test_tmp/stale-holder.out"
+stale_holder_err="$test_tmp/stale-holder.err"
+stale_mark_out="$test_tmp/stale-mark.out"
+stale_mark_err="$test_tmp/stale-mark.err"
+
+docker exec -i -e PGAPPNAME=llm_budget_stale_holder "$db_container" \
+  psql -X -A -t -U postgres -d postgres -v ON_ERROR_STOP=1 \
+  >"$stale_holder_out" 2>"$stale_holder_err" <<'SQL' &
+begin;
+select pg_catalog.pg_advisory_xact_lock(
+  pg_catalog.hashtextextended(
+    '20000000-0000-0000-0000-000000000003',
+    0
+  )
+);
+select pg_catalog.pg_sleep(3);
+insert into public.llm_cost_reservations (
+  user_id,
+  feature,
+  provider,
+  model,
+  reserved_micrormb,
+  status,
+  expires_at
+)
+values (
+  '20000000-0000-0000-0000-000000000003',
+  'copilot',
+  'openai',
+  'gpt-concurrency',
+  1000,
+  'reserved',
+  pg_catalog.clock_timestamp() + interval '5 minutes'
+);
+commit;
+SQL
+background_pid="$!"
+
+wait_for_advisory_lock "llm_budget_stale_holder"
+
+if docker exec -i -e PGAPPNAME=llm_budget_stale_mark "$db_container" \
+  psql -X -A -t -U postgres -d postgres -v ON_ERROR_STOP=1 \
+  >"$stale_mark_out" 2>"$stale_mark_err" <<SQL
+set role service_role;
+select status
+from public.mark_llm_budget_incurred('$stale_reservation_id');
+SQL
+then
+  stale_mark_rejected="false"
+else
+  stale_mark_rejected="true"
+fi
+
+wait "$background_pid"
+background_pid=""
+
+stale_status="$(
+  psql_admin -c "
+    select status
+    from public.llm_cost_reservations
+    where id = '$stale_reservation_id'
+  "
+)"
+stale_total="$(
+  psql_admin -c "
+    select sum(
+      case
+        when status = 'settled' then settled_micrormb
+        when status = 'incurred' then reserved_micrormb
+        when status = 'reserved' and expires_at > clock_timestamp() then reserved_micrormb
+        else 0
+      end
+    )
+    from public.llm_cost_reservations
+    where user_id = '20000000-0000-0000-0000-000000000003'
+  "
+)"
+
+if [[ "$stale_mark_rejected" != "true" \
+   || "$stale_status" != "reserved" \
+   || "$stale_total" != "1000" ]] \
+   || ! grep -q 'LLM cost reservation expired' "$stale_mark_err"; then
+  echo "Concurrent stale mark assertion failed" >&2
+  echo "rejected=$stale_mark_rejected status=$stale_status total=$stale_total" >&2
+  cat "$stale_mark_out" "$stale_mark_err" >&2
+  exit 1
+fi
+
 echo "PASS: concurrent reservations serialize to one winner"
 echo "PASS: concurrent incurred settle/reserve remains within the daily cap"
+echo "PASS: a lock-waiting stale mark cannot revive an expired reservation"

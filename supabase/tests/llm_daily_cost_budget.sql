@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions, pg_catalog;
 
-select plan(66);
+select plan(71);
 
 insert into auth.users (id, email)
 values
@@ -11,7 +11,8 @@ values
   ('10000000-0000-0000-0000-000000000002', 'budget-expired@example.test'),
   ('10000000-0000-0000-0000-000000000003', 'budget-beijing@example.test'),
   ('10000000-0000-0000-0000-000000000004', 'budget-overflow@example.test'),
-  ('10000000-0000-0000-0000-000000000005', 'budget-incurred@example.test');
+  ('10000000-0000-0000-0000-000000000005', 'budget-incurred@example.test'),
+  ('10000000-0000-0000-0000-000000000006', 'budget-stale-mark@example.test');
 
 create temporary table budget_test_results (
   label text primary key,
@@ -831,6 +832,97 @@ select is(
   'released',
   'marking a released reservation preserves its terminal state'
 );
+
+insert into budget_test_results (
+  label, allowed, reservation_id, used_micrormb, limit_micrormb
+)
+select
+  'stale mark candidate', allowed, reservation_id, used_micrormb, limit_micrormb
+from public.reserve_llm_daily_budget(
+  '10000000-0000-0000-0000-000000000006',
+  'copilot',
+  'deepseek',
+  'deepseek-v4-flash',
+  600,
+  1000,
+  300
+);
+
+update public.llm_cost_reservations
+set expires_at = now() - interval '1 second'
+where id = (select reservation_id from budget_test_results where label = 'stale mark candidate');
+
+insert into budget_test_results (
+  label, allowed, reservation_id, used_micrormb, limit_micrormb
+)
+select
+  'stale mark replacement', allowed, reservation_id, used_micrormb, limit_micrormb
+from public.reserve_llm_daily_budget(
+  '10000000-0000-0000-0000-000000000006',
+  'copilot',
+  'deepseek',
+  'deepseek-v4-flash',
+  1000,
+  1000,
+  300
+);
+
+select is(
+  (select allowed from budget_test_results where label = 'stale mark replacement'),
+  true,
+  'an expired reservation can be replaced up to the full daily limit'
+);
+select throws_ok(
+  format(
+    'select * from public.mark_llm_budget_incurred(%L::uuid)',
+    (select reservation_id from budget_test_results where label = 'stale mark candidate')
+  ),
+  '55000',
+  'LLM cost reservation expired',
+  'marking an expired reserved row is rejected'
+);
+select is(
+  (
+    select status
+    from public.llm_cost_reservations
+    where id = (select reservation_id from budget_test_results where label = 'stale mark candidate')
+  ),
+  'reserved',
+  'a rejected stale mark never revives the expired reservation'
+);
+select is(
+  (
+    select allowed
+    from public.reserve_llm_daily_budget(
+      '10000000-0000-0000-0000-000000000006',
+      'copilot',
+      'deepseek',
+      'deepseek-v4-flash',
+      1,
+      1000,
+      300
+    )
+  ),
+  false,
+  'the replacement consumes the full daily limit after stale mark rejection'
+);
+select is(
+  (
+    select used_micrormb
+    from public.reserve_llm_daily_budget(
+      '10000000-0000-0000-0000-000000000006',
+      'copilot',
+      'deepseek',
+      'deepseek-v4-flash',
+      1,
+      1000,
+      300
+    )
+  ),
+  1000::bigint,
+  'counted daily cost remains the replacement amount after stale mark rejection'
+);
+
 select is(
   has_function_privilege(
     'authenticated',

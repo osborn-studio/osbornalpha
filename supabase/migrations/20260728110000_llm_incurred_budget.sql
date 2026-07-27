@@ -184,6 +184,12 @@ begin
   end if;
 
   if v_reservation.status = 'reserved' then
+    if v_reservation.expires_at <= pg_catalog.clock_timestamp() then
+      raise exception using
+        errcode = '55000',
+        message = 'LLM cost reservation expired';
+    end if;
+
     update public.llm_cost_reservations as r
     set status = 'incurred'
     where r.id = p_reservation_id

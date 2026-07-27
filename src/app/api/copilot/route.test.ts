@@ -78,6 +78,11 @@ const PLATFORM = {
   chatPath: '/chat/completions',
 };
 
+const UNPRICED_PLATFORM = {
+  ...PLATFORM,
+  model: 'unreviewed-admin-model',
+};
+
 const BYO = {
   source: 'user' as const,
   provider: 'ark',
@@ -432,6 +437,20 @@ describe('Copilot platform cost budget', () => {
     }));
   });
 
+  it('rejects an unpriced direct admin platform model before any provider network call', async () => {
+    mocks.resolveLlm.mockResolvedValue(UNPRICED_PLATFORM);
+    mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: -1, plan: 'free' });
+
+    const { text } = await runRoute();
+
+    expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
+    expect(mocks.toolChat).not.toHaveBeenCalled();
+    expect(mocks.anthropicToolChat).not.toHaveBeenCalled();
+    expect(text).toContain('"code":"pricing_unavailable"');
+    expect(text).toContain('localized:pricingUnavailable');
+    expect(text).not.toContain('localized:providerFailed');
+  });
+
   it('lets an admin fallback from BYO to platform without budget RPCs while auditing actual cost', async () => {
     mocks.resolveLlm.mockResolvedValue(BYO);
     mocks.resolvePlatformLlm.mockReturnValue(PLATFORM);
@@ -458,6 +477,26 @@ describe('Copilot platform cost budget', () => {
       byo: false,
       status: 'completed',
     }));
+  });
+
+  it('rejects an unpriced admin platform fallback before its provider network call', async () => {
+    mocks.resolveLlm.mockResolvedValue(BYO);
+    mocks.resolvePlatformLlm.mockReturnValue(UNPRICED_PLATFORM);
+    mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: -1, plan: 'free' });
+    mocks.toolChat.mockRejectedValue(new Error('llm 401: invalid api key'));
+
+    const { text } = await runRoute();
+
+    expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
+    expect(mocks.toolChat).toHaveBeenCalledTimes(1);
+    expect(mocks.toolChat).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: 'byo-key' }),
+      expect.anything(),
+    );
+    expect(mocks.anthropicToolChat).not.toHaveBeenCalled();
+    expect(text).toContain('"code":"pricing_unavailable"');
+    expect(text).toContain('localized:pricingUnavailable');
+    expect(text).not.toContain('localized:providerFailed');
   });
 
   it('audits settled platform rounds on a failed run without writing a completed count event', async () => {
