@@ -5,14 +5,52 @@ import {
   reservationCostMicrormb,
   type NormalizedUsage,
 } from './llm-pricing';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database, UsageFeature } from '@/lib/supabase/database.types';
 
 type ReserveBudgetArgs = Database['public']['Functions']['reserve_llm_daily_budget']['Args'];
 type SettleBudgetArgs = Database['public']['Functions']['settle_llm_budget']['Args'];
 type ReleaseBudgetArgs = Database['public']['Functions']['release_llm_budget']['Args'];
 
-export interface BudgetRpcClient {
-  rpc(functionName: string, args: Record<string, unknown>): Promise<{ data: unknown; error: unknown }>;
+/** Production clients can be passed directly; this adapter keeps unit fakes small. */
+export interface BudgetRpcAdapter {
+  reserve(args: ReserveBudgetArgs): Promise<{ data: unknown; error: unknown }>;
+  settle(args: SettleBudgetArgs): Promise<{ data: unknown; error: unknown }>;
+  release(args: ReleaseBudgetArgs): Promise<{ data: unknown; error: unknown }>;
+}
+
+type BudgetDatabase = {
+  public: {
+    Tables: Record<string, {
+      Row: Record<string, unknown>;
+      Insert: Record<string, unknown>;
+      Update: Record<string, unknown>;
+      Relationships: [];
+    }>;
+    Views: Record<string, { Row: Record<string, unknown>; Relationships: [] }>;
+    Functions: Database['public']['Functions'];
+  };
+};
+
+type BudgetSupabaseClient = Pick<SupabaseClient<BudgetDatabase>, 'rpc'>;
+export type BudgetRpcClient = BudgetSupabaseClient | BudgetRpcAdapter;
+
+function reserveRpc(client: BudgetRpcClient, args: ReserveBudgetArgs) {
+  return 'reserve' in client
+    ? client.reserve(args)
+    : client.rpc<'reserve_llm_daily_budget', ReserveBudgetArgs>('reserve_llm_daily_budget', args);
+}
+
+function settleRpc(client: BudgetRpcClient, args: SettleBudgetArgs) {
+  return 'settle' in client
+    ? client.settle(args)
+    : client.rpc<'settle_llm_budget', SettleBudgetArgs>('settle_llm_budget', args);
+}
+
+function releaseRpc(client: BudgetRpcClient, args: ReleaseBudgetArgs) {
+  return 'release' in client
+    ? client.release(args)
+    : client.rpc<'release_llm_budget', ReleaseBudgetArgs>('release_llm_budget', args);
 }
 
 export interface BudgetConfig {
@@ -71,6 +109,38 @@ function reservationIdFrom(data: unknown): { allowed: boolean; reservationId?: s
   return typeof id === 'string' && id.trim().length > 0 ? { allowed: true, reservationId: id } : { allowed: true };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+type TerminalResponse = 'valid' | 'settled' | 'invalid';
+
+function terminalResponse(
+  data: unknown,
+  reservationId: string,
+  expectedStatus: 'settled' | 'released',
+  expectedSettledMicrormb?: number,
+): TerminalResponse {
+  if (!Array.isArray(data) || data.length !== 1 || !isRecord(data[0])) return 'invalid';
+  const row = data[0];
+  if (row.reservation_id !== reservationId || typeof row.status !== 'string') return 'invalid';
+
+  if (row.status === expectedStatus) {
+    if (expectedStatus === 'settled' && row.settled_micrormb !== expectedSettledMicrormb) return 'invalid';
+    return 'valid';
+  }
+
+  if (
+    expectedStatus === 'released'
+    && row.status === 'settled'
+    && typeof row.settled_micrormb === 'number'
+    && Number.isSafeInteger(row.settled_micrormb)
+    && row.settled_micrormb >= 0
+  ) return 'settled';
+
+  return 'invalid';
+}
+
 function isCompleteRealUsage(usage: NormalizedUsage): boolean {
   if (usage.estimated !== false) return false;
   return [
@@ -81,7 +151,7 @@ function isCompleteRealUsage(usage: NormalizedUsage): boolean {
   ].every((value) => Number.isSafeInteger(value) && value >= 0 && value <= MAX_SAFE_INTEGER);
 }
 
-type ReservationState = 'active' | 'settling' | 'settled' | 'settle_failed' | 'releasing' | 'released' | 'release_failed';
+type ReservationState = 'active' | 'settling' | 'settled' | 'releasing' | 'released';
 
 function managedReservation(
   supabase: BudgetRpcClient,
@@ -97,9 +167,9 @@ function managedReservation(
 
   const settle = async (usage: NormalizedUsage): Promise<CostSettlement> => {
     if (state === 'settled') return settlement!;
-    if (state === 'settling' || state === 'settle_failed') return settlePromise!;
+    if (state === 'settling') return settlePromise!;
     if (state === 'released') throw stableError('budget_reservation_released');
-    if (state === 'releasing' || state === 'release_failed') {
+    if (state === 'releasing') {
       await releasePromise!;
       throw stableError('budget_reservation_released');
     }
@@ -118,14 +188,17 @@ function managedReservation(
           p_reservation_id: reservationId,
           p_actual_micrormb: costMicrormb,
         };
-        const response = await supabase.rpc('settle_llm_budget', args);
-        if (response.error) throw stableError('budget_unavailable');
+        const response = await settleRpc(supabase, args);
+        if (!response || response.error) throw stableError('budget_unavailable');
+        if (terminalResponse(response.data, reservationId, 'settled', costMicrormb) !== 'valid') {
+          throw stableError('budget_unavailable');
+        }
 
         settlement = { costMicrormb, usageEstimated };
         state = 'settled';
         return settlement;
       } catch (error) {
-        state = 'settle_failed';
+        state = 'active';
         if (error instanceof Error && error.message === 'budget_invariant_violation') throw error;
         if (error instanceof Error && error.message === 'pricing_unavailable') throw error;
         throw stableError('budget_unavailable');
@@ -136,8 +209,8 @@ function managedReservation(
 
   const release = async (): Promise<void> => {
     if (state === 'settled' || state === 'released') return;
-    if (state === 'releasing' || state === 'release_failed') return releasePromise!;
-    if (state === 'settling' || state === 'settle_failed') {
+    if (state === 'releasing') return releasePromise!;
+    if (state === 'settling') {
       await settlePromise!;
       return;
     }
@@ -146,11 +219,15 @@ function managedReservation(
     releasePromise = (async () => {
       try {
         const args: ReleaseBudgetArgs = { p_reservation_id: reservationId };
-        const response = await supabase.rpc('release_llm_budget', args);
-        if (response.error) throw stableError('budget_unavailable');
+        const response = await releaseRpc(supabase, args);
+        if (!response || response.error) throw stableError('budget_unavailable');
+        const outcome = terminalResponse(response.data, reservationId, 'released');
+        if (outcome === 'settled') throw stableError('budget_invariant_violation');
+        if (outcome !== 'valid') throw stableError('budget_unavailable');
         state = 'released';
-      } catch {
-        state = 'release_failed';
+      } catch (error) {
+        state = 'active';
+        if (error instanceof Error && error.message === 'budget_invariant_violation') throw error;
         throw stableError('budget_unavailable');
       }
     })();
@@ -186,7 +263,7 @@ export async function reserveCostBudget(
 
   let response: { data: unknown; error: unknown };
   try {
-    response = await supabase.rpc('reserve_llm_daily_budget', args);
+    response = await reserveRpc(supabase, args);
   } catch {
     throw stableError('budget_unavailable');
   }
