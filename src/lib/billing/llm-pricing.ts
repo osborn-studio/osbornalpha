@@ -87,6 +87,8 @@ export function normalizeUsage(raw: unknown): NormalizedUsage {
     MAX_SAFE_INTEGER,
   );
   const outputTokens = reportedOutputTokens ?? 0;
+  const hasCompleteInputTotal = reportedInputTokens !== undefined
+    || (breakdown.hit !== undefined && breakdown.miss !== undefined);
 
   let cacheHitInputTokens = 0;
   let cacheMissInputTokens = inputTokens;
@@ -109,7 +111,8 @@ export function normalizeUsage(raw: unknown): NormalizedUsage {
     cacheMissInputTokens,
     outputTokens,
     estimated: usage.estimated === true
-      || (reportedInputTokens === undefined && reportedOutputTokens === undefined && !breakdown.present),
+      || !hasCompleteInputTotal
+      || reportedOutputTokens === undefined,
   };
 }
 
@@ -146,13 +149,12 @@ export function calculateCostMicrormb(
   const claimedMissTokens = safeNonNegativeInteger(usage.cacheMissInputTokens);
   const outputTokens = safeNonNegativeInteger(usage.outputTokens);
 
-  // The caller may provide a hand-built NormalizedUsage. Treat it with the
-  // same conservative rules as untrusted provider usage.
-  const cacheHitInputTokens = claimedHitTokens <= inputTokens
-    && claimedHitTokens + claimedMissTokens <= inputTokens
-    ? claimedHitTokens
-    : 0;
-  const cacheMissInputTokens = inputTokens - cacheHitInputTokens;
+  // Hand-built normalized usage can understate input while still carrying
+  // cache components. Account for every reported component and bill any
+  // remainder as a cache miss.
+  const effectiveInputTokens = Math.max(inputTokens, claimedHitTokens + claimedMissTokens);
+  const cacheHitInputTokens = Math.min(claimedHitTokens, effectiveInputTokens);
+  const cacheMissInputTokens = effectiveInputTokens - cacheHitInputTokens;
 
   return costFromTokenCounts(
     pricing,

@@ -120,6 +120,29 @@ describe('normalizeUsage', () => {
       estimated: true,
     });
   });
+
+  it('marks input-only, output-only, and single-breakdown usage as estimated', () => {
+    expect(normalizeUsage({ prompt_tokens: 100 })).toMatchObject({
+      inputTokens: 100,
+      outputTokens: 0,
+      estimated: true,
+    });
+    expect(normalizeUsage({ completion_tokens: 20 })).toMatchObject({
+      inputTokens: 0,
+      outputTokens: 20,
+      estimated: true,
+    });
+    expect(normalizeUsage({
+      completion_tokens: 20,
+      prompt_cache_hit_tokens: 100,
+    })).toMatchObject({
+      inputTokens: 100,
+      cacheHitInputTokens: 100,
+      cacheMissInputTokens: 0,
+      outputTokens: 20,
+      estimated: true,
+    });
+  });
 });
 
 describe('DeepSeek pricing', () => {
@@ -151,6 +174,16 @@ describe('DeepSeek pricing', () => {
       outputTokens: 0,
       estimated: false,
     }, DEFAULT_USD_CNY_MICROS)).toBe(2);
+  });
+
+  it('charges cache-miss tokens from an inconsistent hand-built usage total', () => {
+    expect(calculateCostMicrormb('deepseek', 'deepseek-v4-flash', {
+      inputTokens: 0,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 1_000,
+      outputTokens: 0,
+      estimated: false,
+    }, DEFAULT_USD_CNY_MICROS)).toBe(1_008);
   });
 
   it('reserves the exact positive cost for estimated input plus 9,000 output tokens', () => {
