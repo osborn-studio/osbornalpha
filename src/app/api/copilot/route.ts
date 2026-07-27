@@ -91,6 +91,20 @@ function costResponseStatus(code: string): number {
   return 500;
 }
 
+function countQuotaNotice(quota: QuotaResult) {
+  return { used: quota.used, limit: quota.limit, plan: quota.plan, reason: 'quota_exhausted' as const };
+}
+
+function costQuotaNotice(plan: string | undefined, dailyLimitMicrormb = getBudgetConfig().dailyLimitMicrormb) {
+  return {
+    used: 0,
+    limit: 0,
+    plan: plan ?? 'free',
+    reason: 'daily_cost_exhausted' as const,
+    costLimitMicrormb: dailyLimitMicrormb,
+  };
+}
+
 // Auto-archive threshold: skip near-empty runs (e.g. immediate errors).
 const MIN_ARCHIVE_CHARS = 200;
 
@@ -230,6 +244,7 @@ export async function POST(req: Request) {
         source: 'cost_quota',
         error: apiMessage(locale, costMessageKey(code) ?? 'budgetUnavailable'),
         errorCode: code,
+        ...(code === 'daily_cost_exhausted' ? { quota: costQuotaNotice(quota?.plan) } : {}),
       }), {
         status: costResponseStatus(code),
         headers: { 'content-type': 'application/json' },
@@ -258,7 +273,7 @@ export async function POST(req: Request) {
           type: 'error',
           code: 'quota_exhausted',
           message: apiMessage(locale, 'quotaExhausted'),
-          quota: { used: quota.used, limit: quota.limit, plan: quota.plan },
+          quota: countQuotaNotice(quota),
         });
         send({ type: 'done' });
         controller.close();
@@ -375,17 +390,20 @@ export async function POST(req: Request) {
               ...e,
               code: runErrorCode,
               message: apiMessage(locale, 'quotaExhausted'),
-              quota: {
-                used: fallbackQuota.used,
-                limit: fallbackQuota.limit,
-                plan: fallbackQuota.plan,
-              },
+              quota: countQuotaNotice(fallbackQuota),
             });
             return;
           }
           const messageKey = costMessageKey(runErrorCode);
           if (messageKey) {
-            send({ ...e, code: runErrorCode, message: apiMessage(locale, messageKey) });
+            send({
+              ...e,
+              code: runErrorCode,
+              message: apiMessage(locale, messageKey),
+              ...(runErrorCode === 'daily_cost_exhausted'
+                ? { quota: costQuotaNotice(quota?.plan) }
+                : {}),
+            });
             return;
           }
           send({ ...e, code: runErrorCode, message: apiMessage(locale, 'providerFailed') });

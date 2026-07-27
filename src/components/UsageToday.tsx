@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { isSupabaseConfigured } from '@/lib/supabase/client';
+import { formatCostUsage, type PlatformCostUsage } from './usage-today-format';
 
 type Feature = 'copilot' | 'perspectives' | 'brief_preview';
 
@@ -10,6 +11,7 @@ interface UsageResp {
   plan: string;
   usage: Record<Feature, { used: number; limit: number }>;
   byoCalls: number;
+  cost: PlatformCostUsage;
 }
 
 // Settings page "今日用量" section — GET /api/usage/today and render three
@@ -60,6 +62,15 @@ export function UsageToday() {
           </div>
         );
       })}
+      <div className="flex items-center justify-between border-t border-border pt-2">
+        <span className="text-text-dim">{t('platformCost')}</span>
+        <span className="tabular-nums" aria-label={data.cost.limitMicrormb === -1
+          ? t('platformCostUnlimitedAria', { used: (data.cost.usedMicrormb / 1_000_000).toFixed(2) })
+          : t('platformCostAria', {
+            used: (data.cost.usedMicrormb / 1_000_000).toFixed(2),
+            limit: (data.cost.limitMicrormb / 1_000_000).toFixed(2),
+          })}>{formatCostUsage(data.cost)}</span>
+      </div>
       <div className="flex items-center justify-between border-t border-border pt-2 text-xs text-text-dim">
         <span>{t('byoCalls')}</span>
         <span className="tabular-nums">{data.byoCalls}</span>

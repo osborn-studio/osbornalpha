@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useTranslations } from 'next-intl';
 import { classifyMarket } from '@/lib/utils';
 import { QuotaNotice } from '@/components/QuotaNotice';
+import type { QuotaNoticeProps } from '@/components/QuotaNotice';
 import { AGENT_METHODS, METHODS } from '@/lib/agent/methods/registry';
 import { currentStepIndex } from '@/lib/agent/methods/step-tracker';
 import { trackEvent } from '@/lib/analytics/client';
@@ -45,7 +46,7 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
   const [verdict, setVerdict] = useState<Verdict | null>(null);
   const [err, setErr] = useState('');
   const [notice, setNotice] = useState('');
-  const [quota, setQuota] = useState<{ used: number; limit: number; plan: string } | null>(null);
+  const [quota, setQuota] = useState<QuotaNoticeProps | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [adopting, setAdopting] = useState(false);
   const [adopted, setAdopted] = useState<string>('');

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
+import type { QuotaNoticeProps } from '@/components/QuotaNotice';
 import type { Market } from '@/lib/supabase/database.types';
 import { trackEvent } from '@/lib/analytics/client';
 import {
@@ -421,8 +422,8 @@ export interface PerspectivesState {
   meta: any;
   loading: boolean;
   error: string | null;
-  /** Present when source === 'quota' (daily platform quota exhausted) — render <QuotaNotice {...quota} />. */
-  quota: { used: number; limit: number; plan: string } | null;
+  /** Present for count or platform-cost exhaustion — render <QuotaNotice {...quota} />. */
+  quota: QuotaNoticeProps | null;
 }
 
 export function usePerspectives(ticker: string | null, autoLoad = false): PerspectivesState & { refetch: () => void } {

@@ -345,7 +345,13 @@ describe('POST /api/brief/send security and metering', () => {
     const body = await response.json();
 
     expect(response.status).toBe(status);
-    expect(body).toMatchObject({ source: 'cost_quota', errorCode });
+    expect(body).toMatchObject({
+      source: 'cost_quota',
+      errorCode,
+      ...(errorCode === 'daily_cost_exhausted' ? {
+        quota: { reason: 'daily_cost_exhausted', costLimitMicrormb: 8_800_000 },
+      } : {}),
+    });
     expect(body).not.toHaveProperty('stack');
     expect(mocks.chatResolved).not.toHaveBeenCalled();
   });

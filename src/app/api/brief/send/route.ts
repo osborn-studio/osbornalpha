@@ -55,6 +55,16 @@ function costErrorStatus(code: string): number {
   return 500;
 }
 
+function quotaNotice(
+  reason: 'quota_exhausted' | 'daily_cost_exhausted',
+  quota: Awaited<ReturnType<typeof checkQuota>> | null,
+) {
+  const budget = getBudgetConfig();
+  return reason === 'quota_exhausted'
+    ? { used: quota?.used ?? 0, limit: quota?.limit ?? 0, plan: quota?.plan ?? 'free', reason }
+    : { used: 0, limit: 0, plan: quota?.plan ?? 'free', reason, costLimitMicrormb: budget.dailyLimitMicrormb };
+}
+
 async function finalizeAccounting(
   userId: string,
   idempotencyKey: string,
@@ -194,6 +204,7 @@ export async function POST(req: Request) {
   const requestedTopN = Number.isFinite(Number(body.topN)) ? Math.trunc(Number(body.topN)) : 5;
   const topN = Math.max(1, Math.min(MAX_MANUAL_BRIEF_TOP_N, requestedTopN));
   const skipLLM = body.skipLLM === true;
+  let quota: Awaited<ReturnType<typeof checkQuota>> | null = null;
 
   try {
     if (skipLLM) {
@@ -217,7 +228,6 @@ export async function POST(req: Request) {
 
     const llm = await resolveLlm();
     if (!llm) return NextResponse.json({ error: 'provider not configured' }, { status: 503 });
-    let quota: Awaited<ReturnType<typeof checkQuota>> | null = null;
     if (llm.source === 'env') {
       try {
         quota = await checkQuota('brief_preview');
@@ -228,7 +238,7 @@ export async function POST(req: Request) {
         const locale = await getRequestLocale();
         return NextResponse.json({
           error: apiMessage(locale, 'quotaExhausted'),
-          quota: { used: quota.used, limit: quota.limit, plan: quota.plan },
+          quota: quotaNotice('quota_exhausted', quota),
         }, { status: 429 });
       }
     }
@@ -324,6 +334,7 @@ export async function POST(req: Request) {
         source: 'cost_quota',
         error: code,
         errorCode: code,
+        ...(code === 'daily_cost_exhausted' ? { quota: quotaNotice('daily_cost_exhausted', quota) } : {}),
         costLimit: {
           dailyMicrormb: budget.dailyLimitMicrormb,
           timezone: 'Asia/Shanghai',

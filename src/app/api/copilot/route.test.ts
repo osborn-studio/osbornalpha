@@ -410,6 +410,10 @@ describe('Copilot platform cost budget', () => {
     expect(mocks.toolChat).not.toHaveBeenCalled();
     expect(text).toContain(`"code":"${code}"`);
     expect(text).toContain(`localized:${messageKey}`);
+    if (code === 'daily_cost_exhausted') {
+      expect(text).toContain('"reason":"daily_cost_exhausted"');
+      expect(text).toContain('"costLimitMicrormb":8800000');
+    }
     expect(text).not.toContain('localized:providerFailed');
     expect(mocks.usageFinalized).toHaveBeenCalledTimes(1);
     expect(mocks.usageFinalized).toHaveBeenCalledWith('copilot', expect.objectContaining({

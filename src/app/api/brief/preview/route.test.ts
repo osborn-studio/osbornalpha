@@ -248,6 +248,12 @@ describe('GET /api/brief/preview durable cost budget', () => {
         dailyMicrormb: 8_800_000,
         timezone: 'Asia/Shanghai',
       },
+      ...(errorCode === 'daily_cost_exhausted' ? {
+        quota: {
+          reason: 'daily_cost_exhausted',
+          costLimitMicrormb: 8_800_000,
+        },
+      } : {}),
     });
     expect(mocks.chatResolved).not.toHaveBeenCalled();
   });

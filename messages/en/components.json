@@ -40,6 +40,9 @@
     "featureCopilot": "Copilot Analysis",
     "featurePerspectives": "Committee Perspectives",
     "featureBriefPreview": "Brief Preview",
+    "platformCost": "Platform AI cost",
+    "platformCostAria": "Platform AI cost: ¥{used} of ¥{limit} today",
+    "platformCostUnlimitedAria": "Platform AI cost: ¥{used} today, with no daily cap",
     "byoCalls": "BYO key calls (not counted against quota)"
   },
   "accountSettings": {

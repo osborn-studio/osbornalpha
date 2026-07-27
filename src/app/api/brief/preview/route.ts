@@ -42,6 +42,16 @@ function costErrorStatus(code: string): number {
   return 500;
 }
 
+function quotaNotice(
+  reason: 'quota_exhausted' | 'daily_cost_exhausted',
+  quota: Awaited<ReturnType<typeof checkQuota>> | null,
+) {
+  const budget = getBudgetConfig();
+  return reason === 'quota_exhausted'
+    ? { used: quota?.used ?? 0, limit: quota?.limit ?? 0, plan: quota?.plan ?? 'free', reason }
+    : { used: 0, limit: 0, plan: quota?.plan ?? 'free', reason, costLimitMicrormb: budget.dailyLimitMicrormb };
+}
+
 function briefResponse(
   brief: Awaited<ReturnType<typeof generateDailyBrief>>,
   format: string,
@@ -161,7 +171,7 @@ export async function GET(req: Request) {
     const locale = await getRequestLocale();
     return NextResponse.json({
       error: apiMessage(locale, 'quotaExhausted'),
-      quota: { used: quota.used, limit: quota.limit, plan: quota.plan },
+      quota: quotaNotice('quota_exhausted', quota),
     }, { status: 429 });
   }
 
@@ -254,8 +264,9 @@ export async function GET(req: Request) {
       return NextResponse.json({
         source: 'cost_quota',
         error: apiMessage(locale, messageKey),
-        errorCode: code,
-        costLimit: {
+      errorCode: code,
+      ...(code === 'daily_cost_exhausted' ? { quota: quotaNotice('daily_cost_exhausted', quota) } : {}),
+      costLimit: {
           dailyMicrormb: budget.dailyLimitMicrormb,
           timezone: 'Asia/Shanghai',
         },

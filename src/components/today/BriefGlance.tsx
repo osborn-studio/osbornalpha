@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { Panel, Tag } from '@/components/ui';
 import { QuotaNotice } from '@/components/QuotaNotice';
+import type { QuotaNoticeProps } from '@/components/QuotaNotice';
 import type { DailyBrief } from '@/lib/brief/composer';
 
 export function BriefGlance() {
@@ -12,7 +13,7 @@ export function BriefGlance() {
   const [brief, setBrief] = useState<DailyBrief | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [quota, setQuota] = useState<{ used: number; limit: number; plan: string } | null>(null);
+  const [quota, setQuota] = useState<QuotaNoticeProps | null>(null);
 
   useEffect(() => {
     let cancelled = false;

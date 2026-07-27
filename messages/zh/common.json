@@ -29,6 +29,8 @@
     "title": "今日平台额度已用完（{used}/{limit}）",
     "descriptionFree": "填入自己的 API Key 即可不限量使用，或等待明日 00:00（北京时间）重置。",
     "descriptionPro": "Pro 额度也用完了——填入自己的 API Key 即可不限量使用，或等待明日 00:00（北京时间）重置。",
+    "costTitle": "今日平台 AI 成本额度已用完",
+    "costDescription": "今日平台 AI 成本已达到 ¥{limit}/天。请在设置中填写自己的 API Key，或等待明日 00:00（北京时间）重置。",
     "goToSettings": "去设置 →",
     "upgradePro": "升级 Pro →"
   },

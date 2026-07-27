@@ -29,6 +29,8 @@
     "title": "Daily platform quota used up ({used}/{limit})",
     "descriptionFree": "Add your own API key for unlimited use, or wait for tomorrow's reset at 00:00 (Beijing time).",
     "descriptionPro": "Your Pro quota is also used up — add your own API key for unlimited use, or wait for tomorrow's reset at 00:00 (Beijing time).",
+    "costTitle": "Daily platform AI cost limit reached",
+    "costDescription": "Today's platform AI spend has reached ¥{limit}/day. Use your own API key in Settings or wait for tomorrow's reset at 00:00 (Beijing time).",
     "goToSettings": "Go to Settings →",
     "upgradePro": "Upgrade to Pro →"
   },

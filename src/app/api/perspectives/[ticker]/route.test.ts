@@ -221,6 +221,10 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
         dailyMicrormb: 8_800_000,
         timezone: 'Asia/Shanghai',
       },
+      quota: {
+        reason: 'daily_cost_exhausted',
+        costLimitMicrormb: 8_800_000,
+      },
     });
     expect(mocks.chatResolved).not.toHaveBeenCalled();
   });
