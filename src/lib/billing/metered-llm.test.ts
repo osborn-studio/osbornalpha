@@ -4,6 +4,7 @@ import type { NormalizedUsage } from './llm-pricing';
 const mocks = vi.hoisted(() => ({
   getAdminSupabase: vi.fn(() => ({ kind: 'admin-db' })),
   reserveCostBudget: vi.fn(),
+  createCapExemptCostAudit: vi.fn(),
 }));
 
 vi.mock('@/lib/supabase/admin', () => ({
@@ -15,6 +16,7 @@ vi.mock('./cost-budget', async (importOriginal) => {
   return {
     ...actual,
     reserveCostBudget: mocks.reserveCostBudget,
+    createCapExemptCostAudit: mocks.createCapExemptCostAudit,
   };
 });
 
@@ -240,7 +242,17 @@ describe('runMeteredLlmCall', () => {
     expect(current.release).not.toHaveBeenCalled();
   });
 
-  it('preflights and audits admins without calling the cap RPC', async () => {
+  it('creates a durable cap-exempt incurred audit before admin network and settles actual usage', async () => {
+    const events: string[] = [];
+    const current = reservation(321);
+    mocks.createCapExemptCostAudit.mockImplementation(async () => {
+      events.push('audit');
+      return current;
+    });
+    current.settle.mockImplementation(async () => {
+      events.push('settle');
+      return { costMicrormb: 321, usageEstimated: false };
+    });
     const usage = realUsage(100, 0, 25);
     const result = await runMeteredLlmCall({
       feature: 'perspectives',
@@ -249,19 +261,49 @@ describe('runMeteredLlmCall', () => {
         provider: 'deepseek',
         model: 'deepseek-v4-flash',
       },
+      userId: 'server-admin',
       budgetExempt: true,
       maxOutputTokens: 400,
-      call: async () => ({ content: 'ok', usage }),
+      call: async () => {
+        events.push('network');
+        return { content: 'ok', usage };
+      },
     });
 
+    expect(events).toEqual(['audit', 'network', 'settle']);
     expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
+    expect(mocks.createCapExemptCostAudit).toHaveBeenCalledWith(
+      { kind: 'admin-db' },
+      'server-admin',
+      {
+        feature: 'perspectives',
+        provider: 'deepseek',
+        model: 'deepseek-v4-flash',
+        maxInputTokens: 1_000_000,
+        maxOutputTokens: 400,
+      },
+      expect.any(String),
+    );
     expect(result.accounting.status).toBe('completed');
-    expect(result.accounting.costMicrormb).toBeGreaterThan(0);
+    expect(result.accounting.costMicrormb).toBe(321);
     expect(result.accounting.usage).toEqual(usage);
     expect(result.accounting.byo).toBe(false);
   });
 
   it('uses conservative reviewed cost when an admin provider call fails', async () => {
+    const current = reservation(321, 300);
+    mocks.createCapExemptCostAudit.mockImplementation(async () => {
+      current.durableAudit = {
+        inputTokens: 1_000_000,
+        cacheHitInputTokens: 0,
+        cacheMissInputTokens: 1_000_000,
+        outputTokens: 300,
+        pricingVersion: 'deepseek-2026-04-24',
+        usdCnyMicros: 7_200_000,
+        usageEstimated: true,
+      };
+      return current;
+    });
     const providerError = new Error('provider exploded');
     let caught: unknown;
 
@@ -273,9 +315,11 @@ describe('runMeteredLlmCall', () => {
           provider: 'deepseek',
           model: 'deepseek-v4-flash',
         },
+        userId: 'server-admin',
         budgetExempt: true,
         maxOutputTokens: 300,
         call: async () => {
+          expect(current.durableAudit?.usageEstimated).toBe(true);
           throw providerError;
         },
       });
@@ -284,6 +328,8 @@ describe('runMeteredLlmCall', () => {
     }
 
     expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
+    expect(mocks.createCapExemptCostAudit).toHaveBeenCalledTimes(1);
+    expect(current.settle).not.toHaveBeenCalled();
     expect(meteredUsageFromError(caught)).toMatchObject({
       status: 'failed',
       costMicrormb: expect.any(Number),
@@ -296,6 +342,29 @@ describe('runMeteredLlmCall', () => {
         estimated: true,
       },
     });
+  });
+
+  it('retains the cap-exempt conservative snapshot when actual settlement fails', async () => {
+    const current = reservation(321, 300);
+    current.settle.mockRejectedValue(new Error('budget_unavailable'));
+    mocks.createCapExemptCostAudit.mockResolvedValue(current);
+
+    await expect(runMeteredLlmCall({
+      feature: 'brief_preview',
+      provider: {
+        source: 'env',
+        provider: 'deepseek',
+        model: 'deepseek-v4-flash',
+      },
+      userId: 'server-admin',
+      budgetExempt: true,
+      maxOutputTokens: 300,
+      call: async () => ({ content: 'provider completed', usage: realUsage() }),
+    })).rejects.toThrow('budget_unavailable');
+
+    expect(mocks.createCapExemptCostAudit).toHaveBeenCalledTimes(1);
+    expect(current.finalizeIncurred).not.toHaveBeenCalled();
+    expect(current.release).not.toHaveBeenCalled();
   });
 
   it('charges the full reservation for incomplete provider usage', async () => {
@@ -346,6 +415,7 @@ describe('runMeteredLlmCall', () => {
         provider: 'deepseek',
         model: 'unreviewed-model',
       },
+      userId: 'server-admin',
       budgetExempt: true,
       maxOutputTokens: 400,
       call,
@@ -353,6 +423,7 @@ describe('runMeteredLlmCall', () => {
 
     expect(call).not.toHaveBeenCalled();
     expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
+    expect(mocks.createCapExemptCostAudit).not.toHaveBeenCalled();
   });
 
   it('leaves BYO calls outside pricing and budget while preserving usage for audit', async () => {

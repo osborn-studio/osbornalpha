@@ -1,15 +1,14 @@
 import { getAdminSupabase } from '@/lib/supabase/admin';
 import type { UsageFeature } from '@/lib/supabase/database.types';
 import {
+  createCapExemptCostAudit,
   getBudgetConfig,
   isCompleteRealUsage,
   reserveCostBudget,
 } from './cost-budget';
 import {
-  calculateCostMicrormb,
   maxInputTokensFor,
   PRICING_VERSION,
-  reservationCostMicrormb,
   type NormalizedUsage,
 } from './llm-pricing';
 
@@ -39,7 +38,7 @@ interface RunMeteredLlmCallArgs<T extends { usage: NormalizedUsage }> {
   provider: MeteredLlmProvider;
   /** Must be read from the authenticated server session, never request input. */
   userId?: string;
-  /** Admins skip the cap RPC but still require reviewed pricing and audit cost. */
+  /** Admins skip cap enforcement but still create a durable incurred audit. */
   budgetExempt: boolean;
   maxOutputTokens: number;
   call(): Promise<T>;
@@ -89,9 +88,8 @@ function platformUsage(
 /**
  * Durable accounting boundary for exactly one provider network call.
  *
- * Platform calls preflight reviewed pricing and, unless admin-exempt, reserve
- * and mark durable spend before entering `call`. Once incurred, this helper
- * never releases a reservation.
+ * Platform calls preflight reviewed pricing and create durable incurred spend
+ * before entering `call`. Once incurred, this helper never releases it.
  */
 export async function runMeteredLlmCall<T extends { usage: NormalizedUsage }>(
   args: RunMeteredLlmCallArgs<T>,
@@ -134,27 +132,22 @@ export async function runMeteredLlmCall<T extends { usage: NormalizedUsage }>(
   }
 
   // Pricing review is deliberately before both the cap RPC and the provider.
-  const config = getBudgetConfig();
   const maxInputTokens = maxInputTokensFor(provider.provider, provider.model);
-  const maxCostMicrormb = reservationCostMicrormb(
-    provider.provider,
-    provider.model,
-    maxInputTokens,
-    args.maxOutputTokens,
-    config.usdCnyMicros,
-  );
   const conservative = conservativeUsage(maxInputTokens, args.maxOutputTokens);
 
-  let reservation: Awaited<ReturnType<typeof reserveCostBudget>> | null = null;
+  if (!args.userId) throw new Error('budget_unavailable');
+  const admin = getAdminSupabase();
+  const request = {
+    feature: args.feature,
+    provider: provider.provider,
+    model: provider.model,
+    maxInputTokens,
+    maxOutputTokens: args.maxOutputTokens,
+  };
+  const reservation = args.budgetExempt
+    ? await createCapExemptCostAudit(admin, args.userId, request, crypto.randomUUID())
+    : await reserveCostBudget(admin, args.userId, request);
   if (!args.budgetExempt) {
-    if (!args.userId) throw new Error('budget_unavailable');
-    reservation = await reserveCostBudget(getAdminSupabase(), args.userId, {
-      feature: args.feature,
-      provider: provider.provider,
-      model: provider.model,
-      maxInputTokens,
-      maxOutputTokens: args.maxOutputTokens,
-    });
     await reservation.markIncurred();
   }
 
@@ -166,33 +159,11 @@ export async function runMeteredLlmCall<T extends { usage: NormalizedUsage }>(
       'failed',
       provider,
       conservative,
-      reservation?.reservedMicrormb ?? maxCostMicrormb,
+      reservation.reservedMicrormb,
       true,
     );
     attachUsage(error, accounting);
     throw error;
-  }
-
-  if (!reservation) {
-    const complete = isCompleteRealUsage(value.usage);
-    const auditedUsage = complete ? value.usage : conservative;
-    return {
-      value,
-      accounting: platformUsage(
-        'completed',
-        provider,
-        auditedUsage,
-        complete
-          ? calculateCostMicrormb(
-              provider.provider,
-              provider.model,
-              value.usage,
-              config.usdCnyMicros,
-            )
-          : maxCostMicrormb,
-        !complete,
-      ),
-    };
   }
 
   try {

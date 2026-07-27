@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   getServerSupabase: vi.fn(),
   getAdminSupabase: vi.fn(() => ({ kind: 'admin-db' })),
   reserveCostBudget: vi.fn(),
+  createCapExemptCostAudit: vi.fn(),
   sendTelegram: vi.fn(),
   sendEmail: vi.fn(),
 }));
@@ -49,6 +50,7 @@ vi.mock('@/lib/billing/cost-budget', async (importOriginal) => {
   return {
     ...actual,
     reserveCostBudget: mocks.reserveCostBudget,
+    createCapExemptCostAudit: mocks.createCapExemptCostAudit,
   };
 });
 
@@ -395,6 +397,10 @@ describe('GET /api/brief/preview durable cost budget', () => {
   });
 
   it('price-reviews and audits admins without the cap RPC', async () => {
+    const audits = [reservation('admin-audit-1', 100), reservation('admin-audit-2', 80)];
+    mocks.createCapExemptCostAudit
+      .mockResolvedValueOnce(audits[0])
+      .mockResolvedValueOnce(audits[1]);
     mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: -1, plan: 'free' });
     mocks.chatResolved.mockResolvedValue({ content: '{}', usage: usage(20, 0, 5) });
 
@@ -402,6 +408,11 @@ describe('GET /api/brief/preview durable cost budget', () => {
 
     expect(response.status).toBe(200);
     expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
+    expect(mocks.createCapExemptCostAudit).toHaveBeenCalledTimes(2);
+    expect(mocks.createCapExemptCostAudit.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.chatResolved.mock.invocationCallOrder[0]);
+    expect(mocks.createCapExemptCostAudit.mock.invocationCallOrder[1])
+      .toBeLessThan(mocks.chatResolved.mock.invocationCallOrder[1]);
     expect(mocks.beginUsageRun).toHaveBeenCalledWith(
       'server-user',
       expect.any(String),

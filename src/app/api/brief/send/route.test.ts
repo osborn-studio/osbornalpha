@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => {
     getServerSupabase: vi.fn(),
     getAdminSupabase: vi.fn(() => ({ kind: 'admin-db' })),
     reserveCostBudget: vi.fn(),
+    createCapExemptCostAudit: vi.fn(),
     sendTelegram: vi.fn(),
     sendEmail: vi.fn(),
     isTelegramConfigured: vi.fn(),
@@ -45,7 +46,11 @@ vi.mock('@/lib/admin/auth', () => ({
 }));
 vi.mock('@/lib/billing/cost-budget', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/billing/cost-budget')>();
-  return { ...actual, reserveCostBudget: mocks.reserveCostBudget };
+  return {
+    ...actual,
+    reserveCostBudget: mocks.reserveCostBudget,
+    createCapExemptCostAudit: mocks.createCapExemptCostAudit,
+  };
 });
 vi.mock('@/lib/data/sources/telegram', () => ({
   isTelegramConfigured: mocks.isTelegramConfigured,
@@ -270,6 +275,8 @@ describe('POST /api/brief/send security and metering', () => {
     mocks.resolveLlm.mockResolvedValue(provider);
     mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: -1, plan: 'free' });
     mocks.reserveCostBudget.mockResolvedValue(reservation());
+    const adminAudit = reservation();
+    mocks.createCapExemptCostAudit.mockResolvedValue(adminAudit);
     mocks.isTelegramConfigured.mockReturnValue(true);
     mocks.isResendConfigured.mockReturnValue(true);
     mocks.finalizeUsageRun.mockImplementation(async (...args) => {
@@ -292,6 +299,19 @@ describe('POST /api/brief/send security and metering', () => {
       'brief_preview',
       expect.objectContaining({ byo: false }),
     );
+    expect(mocks.createCapExemptCostAudit).toHaveBeenCalledWith(
+      { kind: 'admin-db' },
+      'server-admin',
+      expect.objectContaining({
+        feature: 'brief_preview',
+        provider: 'deepseek',
+        model: 'deepseek-v4-flash',
+      }),
+      expect.any(String),
+    );
+    expect(mocks.createCapExemptCostAudit.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.chatResolved.mock.invocationCallOrder[0]);
+    expect(adminAudit.settle).toHaveBeenCalledWith(normalizedUsage);
   });
 
   it('keeps authenticated skipLLM sends outside count and cost accounting', async () => {

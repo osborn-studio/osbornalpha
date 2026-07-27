@@ -5,6 +5,7 @@
 // + 20260728090000_llm_daily_cost_budget.sql (LLM cost accounting and reservations)
 // + 20260728100000_usage_event_status.sql (successful-run quota semantics)
 // + 20260728110000_llm_incurred_budget.sql (durable pre-network spend state)
+// + 20260728140000_cap_exempt_platform_audit.sql (cap-exempt durable accounting)
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -365,6 +366,9 @@ export interface LlmCostReservation {
   pricing_version: string | null;
   usd_cny_micros: number | null;
   usage_estimated: boolean | null;
+  cap_exempt: boolean;
+  cap_exempt_idempotency_key: string | null;
+  cap_exempt_snapshot: Record<string, unknown> | null;
   status: LlmCostReservationStatus;
   expires_at: string;
   created_at: string;
@@ -528,6 +532,24 @@ export type Database = {
           used_micrormb: number;
           limit_micrormb: number;
         }>;
+      };
+      create_cap_exempt_llm_audit: {
+        Args: {
+          p_idempotency_key: string;
+          p_user_id: string;
+          p_feature: UsageFeature;
+          p_provider: string;
+          p_model: string;
+          p_reserved_micrormb: number;
+          p_input_tokens: number;
+          p_cache_hit_input_tokens: number;
+          p_cache_miss_input_tokens: number;
+          p_output_tokens: number;
+          p_pricing_version: string;
+          p_usd_cny_micros: number;
+          p_usage_estimated: boolean;
+        };
+        Returns: Array<LlmBudgetReservationState & { cap_exempt: boolean }>;
       };
       settle_llm_budget: {
         Args: {

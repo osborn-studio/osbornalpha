@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { getServerSupabase } from '@/lib/supabase/server';
 import {
+  createCapExemptCostAudit,
   getBudgetConfig,
   reserveCostBudget,
   type BudgetRpcAdapter,
@@ -22,6 +23,7 @@ function fakeSupabase(...responses: RpcResponse[]): BudgetRpcAdapter & { calls: 
   return {
     calls,
     reserve: (args) => respond('reserve_llm_daily_budget', args),
+    createCapExemptAudit: (args) => respond('create_cap_exempt_llm_audit', args),
     markIncurred: (args) => respond('mark_llm_budget_incurred', args),
     settle: (args) => respond('settle_llm_budget', args),
     finalizeIncurred: (args) => respond('finalize_llm_budget_incurred', args),
@@ -149,6 +151,83 @@ describe('reserveCostBudget', () => {
         p_ttl_seconds: 300,
       },
     }]);
+  });
+
+  it('creates a cap-exempt incurred audit before network and settles through the same reservation state machine', async () => {
+    const supabase = fakeSupabase(
+      {
+        data: [{ ...terminalRow('cap-exempt-1', 'incurred'), cap_exempt: true }],
+        error: null,
+      },
+      { data: [terminalRow('cap-exempt-1', 'settled')], error: null },
+    );
+
+    const reservation = await createCapExemptCostAudit(
+      supabase,
+      'user-1',
+      request,
+      '40000000-0000-0000-0000-000000000001',
+    );
+
+    expect(reservation.reservationId).toBe('cap-exempt-1');
+    expect(reservation.reservedMicrormb).toBe(118_944);
+    expect(supabase.calls[0]).toEqual({
+      fn: 'create_cap_exempt_llm_audit',
+      args: {
+        p_idempotency_key: '40000000-0000-0000-0000-000000000001',
+        p_user_id: 'user-1',
+        p_feature: 'copilot',
+        p_provider: 'deepseek',
+        p_model: 'deepseek-v4-flash',
+        p_reserved_micrormb: 118_944,
+        p_input_tokens: 100_000,
+        p_cache_hit_input_tokens: 0,
+        p_cache_miss_input_tokens: 100_000,
+        p_output_tokens: 9_000,
+        p_pricing_version: 'deepseek-2026-04-24',
+        p_usd_cny_micros: 7_200_000,
+        p_usage_estimated: true,
+      },
+    });
+
+    await reservation.markIncurred();
+    expect(supabase.calls).toHaveLength(1);
+    await expect(reservation.settle(completeUsage)).resolves.toEqual({
+      costMicrormb: 118_944,
+      usageEstimated: false,
+    });
+    expect(supabase.calls[1]?.fn).toBe('settle_llm_budget');
+  });
+
+  it('retries cap-exempt audit creation with one idempotency key and maps conflicts', async () => {
+    const retrying = fakeSupabase(
+      { data: null, error: { code: '08006' } },
+      {
+        data: [{ ...terminalRow('cap-exempt-retry', 'incurred'), cap_exempt: true }],
+        error: null,
+      },
+    );
+
+    await expect(createCapExemptCostAudit(
+      retrying,
+      'user-1',
+      request,
+      '40000000-0000-0000-0000-000000000002',
+    )).resolves.toMatchObject({ reservationId: 'cap-exempt-retry' });
+    expect(retrying.calls).toHaveLength(2);
+    expect(retrying.calls[0]?.args).toEqual(retrying.calls[1]?.args);
+
+    const conflict = fakeSupabase({
+      data: null,
+      error: { code: '55000', message: 'cap-exempt audit retry conflict' },
+    });
+    await expect(createCapExemptCostAudit(
+      conflict,
+      'user-1',
+      request,
+      '40000000-0000-0000-0000-000000000003',
+    )).rejects.toThrow('budget_invariant_violation');
+    expect(conflict.calls).toHaveLength(1);
   });
 
   it('maps a denied reservation to a stable exhaustion error', async () => {

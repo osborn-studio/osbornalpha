@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   beginUsageRun: vi.fn(),
   finalizeUsageRun: vi.fn(),
   reserveCostBudget: vi.fn(),
+  createCapExemptCostAudit: vi.fn(),
   getBudgetConfig: vi.fn(() => ({
     dailyLimitMicrormb: 8_800_000,
     usdCnyMicros: 7_200_000,
@@ -47,6 +48,7 @@ vi.mock('@/lib/billing/cost-budget', async (importOriginal) => {
   return {
     ...actual,
     reserveCostBudget: mocks.reserveCostBudget,
+    createCapExemptCostAudit: mocks.createCapExemptCostAudit,
     getBudgetConfig: mocks.getBudgetConfig,
   };
 });
@@ -131,10 +133,10 @@ async function runRoute() {
   return { response, text: await response.text() };
 }
 
-function reservation(costMicrormb: number) {
+function reservation(costMicrormb: number, reservedMicrormb = costMicrormb + 100) {
   const current = {
     reservationId: `reservation-${costMicrormb}`,
-    reservedMicrormb: costMicrormb + 100,
+    reservedMicrormb,
     durableAudit: undefined as undefined | {
       inputTokens: number;
       cacheHitInputTokens: number;
@@ -537,6 +539,8 @@ describe('Copilot platform cost budget', () => {
   });
 
   it('lets an admin use the direct platform model without budget RPCs while auditing actual cost', async () => {
+    const exemptAudit = reservation(121, ADMIN_CEILING_COST_MICRORMB);
+    mocks.createCapExemptCostAudit.mockResolvedValue(exemptAudit);
     mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: -1, plan: 'free' });
     mocks.toolChat.mockImplementation(async () => {
       expect(mocks.beginUsageRun).toHaveBeenCalledTimes(1);
@@ -551,6 +555,19 @@ describe('Copilot platform cost budget', () => {
     await runRoute();
 
     expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
+    expect(mocks.createCapExemptCostAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      'user-1',
+      expect.objectContaining({
+        feature: 'copilot',
+        provider: 'deepseek',
+        model: 'deepseek-v4-flash',
+      }),
+      expect.any(String),
+    );
+    expect(mocks.createCapExemptCostAudit.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.toolChat.mock.invocationCallOrder[0]);
+    expect(exemptAudit.settle).toHaveBeenCalledWith(usage(100, 0, 10));
     expect(mocks.toolChat).toHaveBeenCalledTimes(1);
     expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
       inputTokens: 100,
@@ -576,12 +593,16 @@ describe('Copilot platform cost budget', () => {
   });
 
   it('audits the conservative ceiling when a direct admin platform call fails after network attempt', async () => {
+    const exemptAudit = reservation(121, ADMIN_CEILING_COST_MICRORMB);
+    mocks.createCapExemptCostAudit.mockResolvedValue(exemptAudit);
     mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: -1, plan: 'free' });
     mocks.toolChat.mockRejectedValue(new Error('llm 500: failed'));
 
     await runRoute();
 
     expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
+    expect(mocks.createCapExemptCostAudit).toHaveBeenCalledTimes(1);
+    expect(exemptAudit.settle).not.toHaveBeenCalled();
     expect(mocks.toolChat).toHaveBeenCalledTimes(1);
     expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
       inputTokens: 1_000_000,
@@ -596,6 +617,12 @@ describe('Copilot platform cost budget', () => {
   });
 
   it('audits the conservative ceiling when a direct admin response has incomplete usage', async () => {
+    const exemptAudit = reservation(121, ADMIN_CEILING_COST_MICRORMB);
+    exemptAudit.settle.mockResolvedValue({
+      costMicrormb: ADMIN_CEILING_COST_MICRORMB,
+      usageEstimated: true,
+    });
+    mocks.createCapExemptCostAudit.mockResolvedValue(exemptAudit);
     mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: -1, plan: 'free' });
     mocks.toolChat.mockResolvedValue({
       content: 'Admin answer with incomplete usage',
@@ -620,6 +647,8 @@ describe('Copilot platform cost budget', () => {
   });
 
   it('lets an admin fallback from BYO to platform without budget RPCs while auditing actual cost', async () => {
+    const exemptAudit = reservation(73, ADMIN_CEILING_COST_MICRORMB);
+    mocks.createCapExemptCostAudit.mockResolvedValue(exemptAudit);
     mocks.resolveLlm.mockResolvedValue(BYO);
     mocks.resolvePlatformLlm.mockReturnValue(PLATFORM);
     mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: -1, plan: 'free' });
@@ -636,6 +665,10 @@ describe('Copilot platform cost budget', () => {
     await runRoute();
 
     expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
+    expect(mocks.createCapExemptCostAudit).toHaveBeenCalledTimes(1);
+    expect(mocks.createCapExemptCostAudit.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.toolChat.mock.invocationCallOrder[1]);
+    expect(exemptAudit.settle).toHaveBeenCalledWith(usage(55, 5, 11));
     expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
       provider: 'deepseek',
       model: 'deepseek-v4-flash',
@@ -668,6 +701,8 @@ describe('Copilot platform cost budget', () => {
   });
 
   it('audits only the conservative platform ceiling when an admin fallback attempt fails', async () => {
+    const exemptAudit = reservation(73, ADMIN_CEILING_COST_MICRORMB);
+    mocks.createCapExemptCostAudit.mockResolvedValue(exemptAudit);
     mocks.resolveLlm.mockResolvedValue(BYO);
     mocks.resolvePlatformLlm.mockReturnValue(PLATFORM);
     mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: -1, plan: 'free' });
@@ -693,6 +728,12 @@ describe('Copilot platform cost budget', () => {
   });
 
   it('audits the conservative ceiling when an admin fallback response has incomplete usage', async () => {
+    const exemptAudit = reservation(73, ADMIN_CEILING_COST_MICRORMB);
+    exemptAudit.settle.mockResolvedValue({
+      costMicrormb: ADMIN_CEILING_COST_MICRORMB,
+      usageEstimated: true,
+    });
+    mocks.createCapExemptCostAudit.mockResolvedValue(exemptAudit);
     mocks.resolveLlm.mockResolvedValue(BYO);
     mocks.resolvePlatformLlm.mockReturnValue(PLATFORM);
     mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: -1, plan: 'free' });

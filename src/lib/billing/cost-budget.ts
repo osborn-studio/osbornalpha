@@ -10,6 +10,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database, UsageFeature } from '@/lib/supabase/database.types';
 
 type ReserveBudgetArgs = Database['public']['Functions']['reserve_llm_daily_budget']['Args'];
+type CreateCapExemptAuditArgs = Database['public']['Functions']['create_cap_exempt_llm_audit']['Args'];
 type MarkIncurredArgs = Database['public']['Functions']['mark_llm_budget_incurred']['Args'];
 type SettleBudgetArgs = Database['public']['Functions']['settle_llm_budget']['Args'];
 type FinalizeIncurredArgs = Database['public']['Functions']['finalize_llm_budget_incurred']['Args'];
@@ -18,6 +19,7 @@ type ReleaseBudgetArgs = Database['public']['Functions']['release_llm_budget']['
 /** Production clients can be passed directly; this adapter keeps unit fakes small. */
 export interface BudgetRpcAdapter {
   reserve(args: ReserveBudgetArgs): Promise<{ data: unknown; error: unknown }>;
+  createCapExemptAudit?(args: CreateCapExemptAuditArgs): Promise<{ data: unknown; error: unknown }>;
   markIncurred(args: MarkIncurredArgs): Promise<{ data: unknown; error: unknown }>;
   settle(args: SettleBudgetArgs): Promise<{ data: unknown; error: unknown }>;
   finalizeIncurred?(args: FinalizeIncurredArgs): Promise<{ data: unknown; error: unknown }>;
@@ -44,6 +46,15 @@ function reserveRpc(client: BudgetRpcClient, args: ReserveBudgetArgs) {
   return 'reserve' in client
     ? client.reserve(args)
     : client.rpc<'reserve_llm_daily_budget', ReserveBudgetArgs>('reserve_llm_daily_budget', args);
+}
+
+function createCapExemptAuditRpc(client: BudgetRpcClient, args: CreateCapExemptAuditArgs) {
+  return 'createCapExemptAudit' in client && typeof client.createCapExemptAudit === 'function'
+    ? client.createCapExemptAudit(args)
+    : (client as BudgetSupabaseClient).rpc<
+        'create_cap_exempt_llm_audit',
+        CreateCapExemptAuditArgs
+      >('create_cap_exempt_llm_audit', args);
 }
 
 function settleRpc(client: BudgetRpcClient, args: SettleBudgetArgs) {
@@ -255,6 +266,7 @@ function managedReservation(
   reservedMicrormb: number,
   request: CostBudgetRequest,
   usdCnyMicros: number,
+  initialState: 'active' | 'incurred' = 'active',
 ): CostReservation {
   const expectedReservation: ExpectedReservation = {
     reservationId,
@@ -264,7 +276,7 @@ function managedReservation(
     model: request.model,
     reservedMicrormb,
   };
-  let state: ReservationState = 'active';
+  let state: ReservationState = initialState;
   let settlement: CostSettlement | undefined;
   let markPromise: Promise<void> | undefined;
   let finalizePromise: Promise<void> | undefined;
@@ -496,4 +508,91 @@ export async function reserveCostBudget(
   if (!outcome.reservationId) throw stableError('budget_unavailable');
 
   return managedReservation(supabase, outcome.reservationId, userId, reservedMicrormb, request, config.usdCnyMicros);
+}
+
+export async function createCapExemptCostAudit(
+  supabase: BudgetRpcClient,
+  userId: string,
+  request: CostBudgetRequest,
+  idempotencyKey: string,
+): Promise<CostReservation> {
+  const config = getBudgetConfig();
+  const reservedMicrormb = reservationCostMicrormb(
+    request.provider,
+    request.model,
+    request.maxInputTokens,
+    request.maxOutputTokens,
+    config.usdCnyMicros,
+  );
+  const args: CreateCapExemptAuditArgs = {
+    p_idempotency_key: idempotencyKey,
+    p_user_id: userId,
+    p_feature: request.feature,
+    p_provider: request.provider,
+    p_model: request.model,
+    p_reserved_micrormb: reservedMicrormb,
+    p_input_tokens: request.maxInputTokens,
+    p_cache_hit_input_tokens: 0,
+    p_cache_miss_input_tokens: request.maxInputTokens,
+    p_output_tokens: request.maxOutputTokens,
+    p_pricing_version: PRICING_VERSION,
+    p_usd_cny_micros: config.usdCnyMicros,
+    p_usage_estimated: true,
+  };
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let response: { data: unknown; error: unknown } | undefined;
+    try {
+      response = await createCapExemptAuditRpc(supabase, args);
+    } catch {
+      if (attempt < 2) continue;
+      throw stableError('budget_unavailable');
+    }
+    if (!response) {
+      if (attempt < 2) continue;
+      throw stableError('budget_unavailable');
+    }
+    if (response.error) {
+      if (isRecord(response.error) && response.error.code === '55000') {
+        throw stableError('budget_invariant_violation');
+      }
+      if (attempt < 2) continue;
+      throw stableError('budget_unavailable');
+    }
+
+    if (
+      !Array.isArray(response.data)
+      || response.data.length !== 1
+      || !isRecord(response.data[0])
+      || response.data[0].cap_exempt !== true
+      || typeof response.data[0].reservation_id !== 'string'
+      || response.data[0].reservation_id.trim().length === 0
+    ) {
+      throw stableError('budget_unavailable');
+    }
+    const reservationId = response.data[0].reservation_id;
+    const expected: ExpectedReservation = {
+      reservationId,
+      userId,
+      feature: request.feature,
+      provider: request.provider,
+      model: request.model,
+      reservedMicrormb,
+    };
+    if (terminalResponse(response.data, expected, 'incurred') !== 'valid') {
+      throw stableError('budget_unavailable');
+    }
+
+    return managedReservation(
+      supabase,
+      reservationId,
+      userId,
+      reservedMicrormb,
+      request,
+      config.usdCnyMicros,
+      'incurred',
+    );
+  }
+
+  throw stableError('budget_unavailable');
 }

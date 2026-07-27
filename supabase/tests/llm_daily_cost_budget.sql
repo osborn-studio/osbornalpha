@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions, pg_catalog;
 
-select plan(144);
+select plan(159);
 
 insert into auth.users (id, email)
 values
@@ -13,7 +13,8 @@ values
   ('10000000-0000-0000-0000-000000000004', 'budget-overflow@example.test'),
   ('10000000-0000-0000-0000-000000000005', 'budget-incurred@example.test'),
   ('10000000-0000-0000-0000-000000000006', 'budget-stale-mark@example.test'),
-  ('10000000-0000-0000-0000-000000000007', 'budget-stale-settle@example.test');
+  ('10000000-0000-0000-0000-000000000007', 'budget-stale-settle@example.test'),
+  ('10000000-0000-0000-0000-000000000008', 'budget-cap-exempt@example.test');
 
 create temporary table budget_test_results (
   label text primary key,
@@ -1733,6 +1734,208 @@ select is(
   'stale usage reconciliation records a failed terminal state'
 );
 
+select lives_ok(
+  $sql$
+    select *
+    from public.create_cap_exempt_llm_audit(
+      '40000000-0000-0000-0000-000000000001',
+      '10000000-0000-0000-0000-000000000008',
+      'copilot',
+      'deepseek',
+      'deepseek-v4-flash',
+      600,
+      1000,
+      0,
+      1000,
+      400,
+      'pricing-v1',
+      7200000,
+      true
+    )
+  $sql$,
+  'a cap-exempt incurred audit is created before provider network'
+);
+select is(
+  (
+    select status
+    from public.llm_cost_reservations
+    where cap_exempt_idempotency_key = '40000000-0000-0000-0000-000000000001'
+  ),
+  'incurred',
+  'a cap-exempt audit begins in durable incurred state'
+);
+select is(
+  (
+    select cap_exempt
+    from public.llm_cost_reservations
+    where cap_exempt_idempotency_key = '40000000-0000-0000-0000-000000000001'
+  ),
+  true,
+  'the audit row is classified as cap exempt'
+);
+select is(
+  (
+    select input_tokens
+    from public.llm_cost_reservations
+    where cap_exempt_idempotency_key = '40000000-0000-0000-0000-000000000001'
+  ),
+  1000::bigint,
+  'the pre-network audit stores the conservative token ceiling'
+);
+select lives_ok(
+  $sql$
+    select *
+    from public.create_cap_exempt_llm_audit(
+      '40000000-0000-0000-0000-000000000001',
+      '10000000-0000-0000-0000-000000000008',
+      'copilot',
+      'deepseek',
+      'deepseek-v4-flash',
+      600,
+      1000,
+      0,
+      1000,
+      400,
+      'pricing-v1',
+      7200000,
+      true
+    )
+  $sql$,
+  'an exact cap-exempt audit retry is idempotent'
+);
+select throws_ok(
+  $sql$
+    select *
+    from public.create_cap_exempt_llm_audit(
+      '40000000-0000-0000-0000-000000000001',
+      '10000000-0000-0000-0000-000000000008',
+      'copilot',
+      'deepseek',
+      'deepseek-v4-flash',
+      601,
+      1000,
+      0,
+      1000,
+      400,
+      'pricing-v1',
+      7200000,
+      true
+    )
+  $sql$,
+  '55000',
+  'cap-exempt audit retry conflict',
+  'a conflicting cap-exempt audit retry is rejected'
+);
+select is(
+  (
+    select sum(reserved_micrormb)
+    from public.llm_cost_reservations
+    where user_id = '10000000-0000-0000-0000-000000000008'
+      and cap_exempt
+  ),
+  600::numeric,
+  'cap-exempt conservative cost remains visible in the audit ledger'
+);
+select is(
+  (
+    select used_micrormb
+    from public.reserve_llm_daily_budget(
+      '10000000-0000-0000-0000-000000000008',
+      'copilot',
+      'deepseek',
+      'deepseek-v4-flash',
+      1000,
+      1000,
+      300
+    )
+  ),
+  0::bigint,
+  'cap-exempt audit cost is excluded from daily cap usage'
+);
+select lives_ok(
+  $sql$
+    select *
+    from public.settle_llm_budget(
+      (
+        select id
+        from public.llm_cost_reservations
+        where cap_exempt_idempotency_key = '40000000-0000-0000-0000-000000000001'
+      ),
+      500,
+      100,
+      20,
+      80,
+      25,
+      'pricing-v1',
+      7200000,
+      false
+    )
+  $sql$,
+  'cap-exempt incurred audit settles through the audited settlement RPC'
+);
+select is(
+  (
+    select settled_micrormb
+    from public.llm_cost_reservations
+    where cap_exempt_idempotency_key = '40000000-0000-0000-0000-000000000001'
+  ),
+  500::bigint,
+  'cap-exempt settlement records actual cost for reporting'
+);
+select lives_ok(
+  $sql$
+    select *
+    from public.settle_llm_budget(
+      (
+        select id
+        from public.llm_cost_reservations
+        where cap_exempt_idempotency_key = '40000000-0000-0000-0000-000000000001'
+      ),
+      500,
+      100,
+      20,
+      80,
+      25,
+      'pricing-v1',
+      7200000,
+      false
+    )
+  $sql$,
+  'an exact cap-exempt settlement retry is idempotent'
+);
+select throws_ok(
+  $sql$
+    select *
+    from public.settle_llm_budget(
+      (
+        select id
+        from public.llm_cost_reservations
+        where cap_exempt_idempotency_key = '40000000-0000-0000-0000-000000000001'
+      ),
+      501,
+      100,
+      20,
+      80,
+      25,
+      'pricing-v1',
+      7200000,
+      false
+    )
+  $sql$,
+  '55000',
+  'settled reservation audit conflict',
+  'a conflicting cap-exempt settlement retry is rejected'
+);
+select ok(
+  (
+    select pg_get_indexdef(indexrelid) like '%(created_at, id)%'
+      and pg_get_expr(indpred, indrelid) = '(status = ''pending''::text)'
+    from pg_index
+    where indexrelid = 'public.usage_events_pending_reconcile_idx'::regclass
+  ),
+  'pending usage reconciliation has a matching partial order index'
+);
+
 select is(
   has_function_privilege(
     'authenticated',
@@ -1868,6 +2071,24 @@ select is(
   ),
   false,
   'authenticated callers cannot reconcile stale usage runs'
+);
+select is(
+  has_function_privilege(
+    'service_role',
+    'public.create_cap_exempt_llm_audit(uuid,uuid,text,text,text,bigint,bigint,bigint,bigint,bigint,text,bigint,boolean)',
+    'EXECUTE'
+  ),
+  true,
+  'service_role can create cap-exempt incurred audits'
+);
+select is(
+  has_function_privilege(
+    'authenticated',
+    'public.create_cap_exempt_llm_audit(uuid,uuid,text,text,text,bigint,bigint,bigint,bigint,bigint,text,bigint,boolean)',
+    'EXECUTE'
+  ),
+  false,
+  'authenticated callers cannot create cap-exempt audits'
 );
 select is(
   has_function_privilege(
