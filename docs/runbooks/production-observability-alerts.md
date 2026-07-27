@@ -26,9 +26,10 @@ The quote check uses GitHub Actions because Vercel Hobby only permits daily Cron
 
 - Non-admin platform-key calls share one `¥8.80` daily cost cap per user across all three features. Both count quotas and the cost cap reset at `00:00 Asia/Shanghai`.
 - Copilot permits at most 12 model turns with `max_tokens=9000` per turn.
-- Admin platform calls are count- and cap-exempt, but each call must still create and settle a durable `cap_exempt=true` cost audit.
+- Admin platform calls are count- and cap-exempt, but each call must create a durable `cap_exempt=true` incurred audit before the provider network request. Accepted provider usage is settled afterward; provider or settlement failure preserves the incurred conservative snapshot.
 - BYO calls are outside platform count and cost enforcement. Terminal BYO runs retain token audit with zero platform cost.
-- User-triggered LLM features outside the three-feature matrix must be BYO-only. Shared-key daily brief, radar, and Research OS jobs are restricted to bearer-authenticated cron/operator entry points.
+- User-triggered LLM features outside the three-feature matrix must be BYO-only. HTTP shared-key daily brief, radar, and Research OS jobs require a valid `CRON_SECRET` bearer token and fail closed when it is absent or invalid.
+- `scripts/research-daily.ts` is a separate operator-only local process with direct environment access; it is not an HTTP route and is not protected by `CRON_SECRET`. Restrict execution and environment credentials at the operator host/shell boundary.
 - `/api/brief/send` is admin-only. Cron previews and manual invocations use the same `CRON_SECRET` bearer check as scheduled execution and fail closed when the secret is absent.
 
 ### Stable failures
@@ -56,7 +57,7 @@ Copilot starts an SSE response after its durable run audit is created. Errors di
 - `released`: pre-network reservation was safely abandoned.
 - `cap_exempt=true`: admin platform spend is visible in total cost but excluded from cap-used cost.
 
-An `incurred` row left after provider or settlement failure is a durable conservative charge. Reconcile it from provider/request evidence when available; otherwise keep the conservative snapshot. Never change it to `released`. The settings UI deliberately distinguishes total platform spend (`usedMicrormb`) from non-exempt cap consumption (`capUsedMicrormb`).
+An `incurred` row left after provider or settlement failure is a durable conservative charge. Reconcile it only from provider/request evidence. Never settle or release an incurred row merely because it is old: settle only when accepted provider usage is available; otherwise preserve the conservative incurred snapshot. The settings UI deliberately distinguishes total platform spend (`usedMicrormb`) from non-exempt cap consumption (`capUsedMicrormb`).
 
 Safe triage query concepts (run with an authorized database role; substitute bounded user/day values):
 
@@ -80,24 +81,55 @@ where user_id = '<user_uuid>'
   and created_at < '<beijing_day_end_utc>'
 group by status, cap_exempt;
 
--- Reconciliation queues.
+-- Read-only stale pending candidates; this query does not mutate rows.
 select id, feature, created_at
 from usage_events
-where status = 'pending' and created_at < now() - interval '15 minutes'
-order by created_at, id;
+where status = 'pending'
+  and created_at < now() - interval '15 minutes'
+order by created_at, id
+limit 100;
 
+-- Read-only incurred candidates. Age alone never authorizes settlement/release.
 select id, feature, cap_exempt, created_at, pricing_version, usd_cny_micros
 from llm_cost_reservations
 where status = 'incurred'
-order by created_at, id;
+  and created_at < now() - interval '15 minutes'
+order by created_at, id
+limit 100;
+
+-- service_role only: count the bounded pending page, reconcile with the exact
+-- installed signature, then count the next bounded page. Review candidates first.
+select count(*) as stale_pending_before
+from (
+  select id
+  from usage_events
+  where status = 'pending'
+    and created_at < now() - interval '15 minutes'
+  order by created_at, id
+  limit 100
+) as candidates;
+
+select public.fail_stale_usage_runs(900, 100) as rows_marked_failed;
+
+select count(*) as stale_pending_after
+from (
+  select id
+  from usage_events
+  where status = 'pending'
+    and created_at < now() - interval '15 minutes'
+  order by created_at, id
+  limit 100
+) as candidates;
 ```
 
 ### Release order and pricing review
 
-1. Deploy all Supabase migrations through the profile-entitlement and usage-lifecycle migrations before deploying application code.
-2. Confirm `LLM_DAILY_COST_LIMIT_MICRORMB=8800000`, reviewed FX configuration, and `CRON_SECRET`; never expose these through client configuration.
-3. Deploy the app, then smoke-test a BYO call, a metered platform call, an admin cap-exempt call, and a bearer-authenticated cron without logging prompts or keys.
-4. Check the official DeepSeek model pricing and the approved USD/CNY policy before each release and after any provider pricing notice. Update `PRICING_VERSION` and the FX snapshot version/config through code review; historical rows are never repriced.
+1. Apply Supabase migrations through `20260728150000_profile_entitlement_security.sql` before deploying application code.
+2. Verify the pricing registry contains the exact key `deepseek:deepseek-v4-flash`; the configured platform provider/model must resolve to `deepseek` / `deepseek-v4-flash`.
+3. Verify `LLM_DAILY_COST_LIMIT_MICRORMB=8800000`, `LLM_USD_CNY_MICROS=7200000`, `LLM_RESERVATION_TTL_SECONDS=300`, and `CRON_SECRET`; never expose these through client configuration.
+4. The rates were reviewed on 2026-07-28. `PRICING_VERSION=deepseek-2026-04-24` is the provider effective/release version key, not the review date.
+5. Deploy the app, then smoke-test a BYO call, a metered platform call, an admin cap-exempt call, and a bearer-authenticated cron without logging prompts or keys.
+6. Check the official DeepSeek model pricing and the approved USD/CNY policy before each release and after any provider pricing notice. Update the registry/version and FX configuration through code review; historical rows are never repriced.
 
 ### Repository verification status
 
