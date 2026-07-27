@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { isSupabaseConfigured } from '@/lib/supabase/client';
-import { formatCostUsage, type PlatformCostUsage } from './usage-today-format';
+import { costUsageRows, type PlatformCostUsage } from './usage-today-format';
 
 type Feature = 'copilot' | 'perspectives' | 'brief_preview';
 
@@ -50,6 +50,10 @@ export function UsageToday() {
   if (error) return <div className="text-xs text-text-dim">{tSettings('usage.errorLine', { message: error === 'Not authenticated' ? t('signInToView') : error })}</div>;
   if (!data) return <div className="text-xs text-text-dim">{t('loading')}</div>;
 
+  const costRows = costUsageRows(data.cost);
+  const capUsed = (data.cost.capUsedMicrormb / 1_000_000).toFixed(2);
+  const limit = data.cost.limitMicrormb === -1 ? '0.00' : (data.cost.limitMicrormb / 1_000_000).toFixed(2);
+
   return (
     <div className="space-y-2 text-sm">
       {(Object.keys(FEATURE_LABELS) as Feature[]).map((f) => {
@@ -62,15 +66,20 @@ export function UsageToday() {
           </div>
         );
       })}
-      <div className="flex items-center justify-between border-t border-border pt-2">
-        <span className="text-text-dim">{t('platformCost')}</span>
-        <span className="tabular-nums" aria-label={data.cost.limitMicrormb === -1
-          ? t('platformCostUnlimitedAria', { used: (data.cost.usedMicrormb / 1_000_000).toFixed(2) })
-          : t('platformCostAria', {
-            used: (data.cost.usedMicrormb / 1_000_000).toFixed(2),
-            limit: (data.cost.limitMicrormb / 1_000_000).toFixed(2),
-          })}>{formatCostUsage(data.cost)}</span>
-      </div>
+      {costRows.map((row, index) => (
+        <div key={row.labelKey} className={`flex items-center justify-between ${index === 0 ? 'border-t border-border pt-2' : ''}`}>
+          <span className="text-text-dim">{t(row.labelKey)}</span>
+          <span className="tabular-nums" aria-label={row.labelKey === 'platformCapCost'
+            ? t('platformCapCostAria', { used: capUsed, limit })
+            : row.labelKey === 'platformTotalCost'
+              ? t('platformTotalCostAria', { used: (data.cost.usedMicrormb / 1_000_000).toFixed(2) })
+              : row.labelKey === 'platformNonExemptCost'
+                ? t('platformNonExemptCostAria', { used: capUsed })
+                : data.cost.limitMicrormb === -1
+                  ? t('platformCostUnlimitedAria', { used: capUsed })
+                  : t('platformCostAria', { used: capUsed, limit })}>{row.value}</span>
+        </div>
+      ))}
       <div className="flex items-center justify-between border-t border-border pt-2 text-xs text-text-dim">
         <span>{t('byoCalls')}</span>
         <span className="tabular-nums">{data.byoCalls}</span>

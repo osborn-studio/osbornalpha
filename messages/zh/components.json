@@ -41,8 +41,15 @@
     "featurePerspectives": "九人观点",
     "featureBriefPreview": "简报预览",
     "platformCost": "平台 AI 成本",
+    "platformCostUnlimited": "平台 AI 成本（不设每日上限）",
+    "platformCapCost": "计入每日额度的 AI 成本",
+    "platformNonExemptCost": "非豁免平台 AI 成本",
+    "platformTotalCost": "平台 AI 总成本",
     "platformCostAria": "今日平台 AI 成本：¥{used}/¥{limit}",
     "platformCostUnlimitedAria": "今日平台 AI 成本：¥{used}，不设每日上限",
+    "platformCapCostAria": "计入每日额度的 AI 成本：¥{used}/¥{limit}",
+    "platformNonExemptCostAria": "非豁免平台 AI 成本：¥{used}",
+    "platformTotalCostAria": "平台 AI 总成本：¥{used}",
     "byoCalls": "BYO Key 调用（不计配额）"
   },
   "accountSettings": {

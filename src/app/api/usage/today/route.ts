@@ -91,10 +91,6 @@ export async function GET() {
 
   for (const feature of FEATURES) {
     const limit = limitFor(feature, plan, role);
-    if (limit === -1) {
-      usage[feature] = { used: 0, limit: -1 };
-      continue;
-    }
     const { count, error: countErr } = await supabase
       .from('usage_events')
       .select('*', { count: 'exact', head: true })

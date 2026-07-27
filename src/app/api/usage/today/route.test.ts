@@ -158,7 +158,7 @@ describe('GET /api/usage/today status semantics', () => {
     });
   });
 
-  it('includes cap-exempt admin cost in the displayed spend but not cap-used, and shows unlimited', async () => {
+  it('includes cap-exempt admin cost in displayed spend, keeps non-exempt cap-used, and still counts completed runs', async () => {
     const profile = {
       select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(),
       maybeSingle: vi.fn().mockResolvedValue({
@@ -175,7 +175,7 @@ describe('GET /api/usage/today status semantics', () => {
       { status: 'settled', settled_micrormb: 3_000_000, reserved_micrormb: 3_000_000, cap_exempt: true, expires_at: null },
       { status: 'incurred', settled_micrormb: null, reserved_micrormb: 500_000, cap_exempt: false, expires_at: null },
     ], error: null });
-    const queries = [countBuilder(0), countBuilder(0), countBuilder(0), countBuilder(0)];
+    const queries = [countBuilder(7), countBuilder(6), countBuilder(5), countBuilder(4)];
     let index = 0;
     mocks.getServerSupabase.mockResolvedValue({
       auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }) },
@@ -192,6 +192,15 @@ describe('GET /api/usage/today status semantics', () => {
       limitMicrormb: -1,
       currency: 'CNY',
     });
+    expect(body.usage).toEqual({
+      copilot: { used: 7, limit: -1 },
+      perspectives: { used: 6, limit: -1 },
+      brief_preview: { used: 5, limit: -1 },
+    });
+    expect(body.byoCalls).toBe(4);
+    for (const query of queries) {
+      expect(query.eq).toHaveBeenCalledWith('status', 'completed');
+    }
   });
 
   it('queries the reservation ledger inside the Beijing calendar-day boundary', async () => {

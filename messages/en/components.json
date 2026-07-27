@@ -41,8 +41,15 @@
     "featurePerspectives": "Committee Perspectives",
     "featureBriefPreview": "Brief Preview",
     "platformCost": "Platform AI cost",
+    "platformCostUnlimited": "Platform AI cost (no daily cap)",
+    "platformCapCost": "AI cost charged to daily cap",
+    "platformNonExemptCost": "Non-exempt platform AI cost",
+    "platformTotalCost": "Total platform AI cost",
     "platformCostAria": "Platform AI cost: ¥{used} of ¥{limit} today",
     "platformCostUnlimitedAria": "Platform AI cost: ¥{used} today, with no daily cap",
+    "platformCapCostAria": "AI cost charged to the daily cap: ¥{used} of ¥{limit}",
+    "platformNonExemptCostAria": "Non-exempt platform AI cost: ¥{used}",
+    "platformTotalCostAria": "Total platform AI cost: ¥{used}",
     "byoCalls": "BYO key calls (not counted against quota)"
   },
   "accountSettings": {
