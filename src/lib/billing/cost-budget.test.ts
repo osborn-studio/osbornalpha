@@ -196,6 +196,16 @@ describe('reserveCostBudget', () => {
     });
   });
 
+  it('rejects settlement before a successful incurred mark without calling the settle RPC', async () => {
+    const supabase = fakeSupabase({ data: [reservationRow()], error: null });
+    const reservation = await reserveCostBudget(supabase, 'user-1', request);
+
+    await expect(reservation.settle(completeUsage)).rejects.toThrow('budget_invariant_violation');
+    expect(supabase.calls).toEqual([
+      expect.objectContaining({ fn: 'reserve_llm_daily_budget' }),
+    ]);
+  });
+
   it('marks incurred at most once and never permits release afterward', async () => {
     const supabase = fakeSupabase(
       { data: [reservationRow()], error: null },
@@ -232,22 +242,26 @@ describe('reserveCostBudget', () => {
   it('settles the full reservation when provider usage is estimated or incomplete', async () => {
     const supabase = fakeSupabase(
       { data: [reservationRow()], error: null },
+      { data: [terminalRow('reservation-1', 'incurred')], error: null },
       { data: [terminalRow('reservation-1', 'settled')], error: null },
     );
     const reservation = await reserveCostBudget(supabase, 'user-1', request);
 
+    await reservation.markIncurred();
     await expect(reservation.settle({ ...completeUsage, outputTokens: Number.NaN, estimated: true }))
       .resolves.toEqual({ costMicrormb: 118_944, usageEstimated: true });
-    expect(supabase.calls[1]?.args).toEqual({ p_reservation_id: 'reservation-1', p_actual_micrormb: 118_944 });
+    expect(supabase.calls[2]?.args).toEqual({ p_reservation_id: 'reservation-1', p_actual_micrormb: 118_944 });
   });
 
   it('retains the reservation for contradictory cache usage even when marked real', async () => {
     const supabase = fakeSupabase(
       { data: [reservationRow()], error: null },
+      { data: [terminalRow('reservation-1', 'incurred')], error: null },
       { data: [terminalRow('reservation-1', 'settled')], error: null },
     );
     const reservation = await reserveCostBudget(supabase, 'user-1', request);
 
+    await reservation.markIncurred();
     await expect(reservation.settle({
       ...completeUsage,
       inputTokens: 0,
@@ -255,28 +269,34 @@ describe('reserveCostBudget', () => {
       cacheMissInputTokens: 0,
       estimated: false,
     })).resolves.toEqual({ costMicrormb: 118_944, usageEstimated: true });
-    expect(supabase.calls[1]?.args).toEqual({ p_reservation_id: 'reservation-1', p_actual_micrormb: 118_944 });
+    expect(supabase.calls[2]?.args).toEqual({ p_reservation_id: 'reservation-1', p_actual_micrormb: 118_944 });
   });
 
   it('never sends an actual settlement exceeding the reservation', async () => {
-    const supabase = fakeSupabase({ data: [reservationRow()], error: null });
+    const supabase = fakeSupabase(
+      { data: [reservationRow()], error: null },
+      { data: [terminalRow('reservation-1', 'incurred')], error: null },
+    );
     const reservation = await reserveCostBudget(supabase, 'user-1', request);
 
+    await reservation.markIncurred();
     await expect(reservation.settle({ ...completeUsage, outputTokens: 9_001 }))
       .rejects.toThrow('budget_invariant_violation');
-    expect(supabase.calls).toHaveLength(1);
+    expect(supabase.calls).toHaveLength(2);
   });
 
   it('settles at most once and returns its first result thereafter', async () => {
     const supabase = fakeSupabase(
       { data: [reservationRow()], error: null },
+      { data: [terminalRow('reservation-1', 'incurred')], error: null },
       { data: [terminalRow('reservation-1', 'settled')], error: null },
     );
     const reservation = await reserveCostBudget(supabase, 'user-1', request);
 
+    await reservation.markIncurred();
     const first = await reservation.settle(completeUsage);
     await expect(reservation.settle({ ...completeUsage, outputTokens: 0 })).resolves.toEqual(first);
-    expect(supabase.calls).toHaveLength(2);
+    expect(supabase.calls).toHaveLength(3);
   });
 
   it('releases at most once', async () => {
@@ -295,12 +315,14 @@ describe('reserveCostBudget', () => {
   it('makes terminal cross-calls deterministic', async () => {
     const settled = fakeSupabase(
       { data: [reservationRow('settled-id')], error: null },
+      { data: [terminalRow('settled-id', 'incurred')], error: null },
       { data: [terminalRow('settled-id', 'settled')], error: null },
     );
     const settledReservation = await reserveCostBudget(settled, 'user-1', request);
+    await settledReservation.markIncurred();
     await settledReservation.settle(completeUsage);
     await expect(settledReservation.release()).resolves.toBeUndefined();
-    expect(settled.calls).toHaveLength(2);
+    expect(settled.calls).toHaveLength(3);
 
     const released = fakeSupabase(
       { data: [reservationRow('released-id')], error: null },
@@ -315,13 +337,15 @@ describe('reserveCostBudget', () => {
   it('maps settlement and release RPC failures to budget_unavailable while allowing retry', async () => {
     const settlementFailure = fakeSupabase(
       { data: [reservationRow('settlement-failure')], error: null },
+      { data: [terminalRow('settlement-failure', 'incurred')], error: null },
       { data: null, error: new Error('raw database message') },
       { data: [terminalRow('settlement-failure', 'settled')], error: null },
     );
     const settlementReservation = await reserveCostBudget(settlementFailure, 'user-1', request);
+    await settlementReservation.markIncurred();
     await expect(settlementReservation.settle(completeUsage)).rejects.toThrow('budget_unavailable');
     await expect(settlementReservation.settle(completeUsage)).resolves.toEqual({ costMicrormb: 118_944, usageEstimated: false });
-    expect(settlementFailure.calls).toHaveLength(3);
+    expect(settlementFailure.calls).toHaveLength(4);
 
     const releaseFailure = fakeSupabase(
       { data: [reservationRow('release-failure')], error: null },
@@ -352,14 +376,16 @@ describe('reserveCostBudget', () => {
     for (const responseData of cases) {
       const supabase = fakeSupabase(
         { data: [reservationRow()], error: null },
+        { data: [terminalRow('reservation-1', 'incurred')], error: null },
         { data: responseData, error: null },
         { data: [terminalRow('reservation-1', 'settled')], error: null },
       );
       const reservation = await reserveCostBudget(supabase, 'user-1', request);
 
+      await reservation.markIncurred();
       await expect(reservation.settle(completeUsage)).rejects.toThrow('budget_unavailable');
       await expect(reservation.settle(completeUsage)).resolves.toEqual({ costMicrormb: 118_944, usageEstimated: false });
-      expect(supabase.calls).toHaveLength(3);
+      expect(supabase.calls).toHaveLength(4);
     }
   });
 
@@ -397,8 +423,8 @@ describe('reserveCostBudget', () => {
     const reservation = await reserveCostBudget(supabase, 'user-1', request);
 
     await expect(reservation.release()).rejects.toThrow('budget_invariant_violation');
-    await expect(reservation.settle(completeUsage)).rejects.toThrow('budget_unavailable');
-    expect(supabase.calls).toHaveLength(3);
+    await expect(reservation.settle(completeUsage)).rejects.toThrow('budget_invariant_violation');
+    expect(supabase.calls).toHaveLength(2);
   });
 
   it('shares a single in-flight settlement across overlapping callers', async () => {
@@ -415,6 +441,7 @@ describe('reserveCostBudget', () => {
     };
     const reservation = await reserveCostBudget(supabase, 'user-1', request);
 
+    await reservation.markIncurred();
     const first = reservation.settle(completeUsage);
     const second = reservation.settle({ ...completeUsage, outputTokens: 0 });
     expect(settleCalls).toBe(1);
@@ -466,6 +493,7 @@ describe('reserveCostBudget', () => {
     };
     const reservation = await reserveCostBudget(supabase, 'user-1', request);
 
+    await reservation.markIncurred();
     const settled = reservation.settle(completeUsage);
     const released = reservation.release();
     expect({ settleCalls, releaseCalls }).toEqual({ settleCalls: 1, releaseCalls: 0 });
@@ -492,6 +520,7 @@ describe('reserveCostBudget', () => {
     };
     const reservation = await reserveCostBudget(supabase, 'user-1', request);
 
+    await reservation.markIncurred();
     const first = reservation.settle(completeUsage);
     const overlapping = reservation.settle(completeUsage);
     expect(settleCalls).toBe(1);

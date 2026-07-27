@@ -287,6 +287,7 @@ function managedReservation(
       throw stableError('budget_reservation_released');
     }
     if (state === 'marking') await markPromise!;
+    if (state !== 'incurred') throw stableError('budget_invariant_violation');
 
     const stateBeforeSettlement = state;
     state = 'settling';

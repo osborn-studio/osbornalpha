@@ -265,7 +265,13 @@ begin
     raise exception using errcode = 'P0002', message = 'LLM cost reservation not found';
   end if;
 
-  if v_reservation.status in ('reserved', 'incurred') then
+  if v_reservation.status = 'reserved' then
+    raise exception using
+      errcode = '55000',
+      message = 'LLM cost reservation is not incurred';
+  end if;
+
+  if v_reservation.status = 'incurred' then
     if p_actual_micrormb > v_reservation.reserved_micrormb then
       raise exception using
         errcode = '22023',

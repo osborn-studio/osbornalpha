@@ -21,7 +21,8 @@ delete from auth.users
 where id in (
   '20000000-0000-0000-0000-000000000001',
   '20000000-0000-0000-0000-000000000002',
-  '20000000-0000-0000-0000-000000000003'
+  '20000000-0000-0000-0000-000000000003',
+  '20000000-0000-0000-0000-000000000004'
 );
 SQL
 
@@ -70,7 +71,8 @@ insert into auth.users (id, email)
 values
   ('20000000-0000-0000-0000-000000000001', 'budget-concurrency@example.test'),
   ('20000000-0000-0000-0000-000000000002', 'budget-settle-race@example.test'),
-  ('20000000-0000-0000-0000-000000000003', 'budget-stale-mark-race@example.test');
+  ('20000000-0000-0000-0000-000000000003', 'budget-stale-mark-race@example.test'),
+  ('20000000-0000-0000-0000-000000000004', 'budget-stale-settle-race@example.test');
 SQL
 
 first_reserve_out="$test_tmp/first-reserve.out"
@@ -337,6 +339,115 @@ if [[ "$stale_mark_rejected" != "true" \
   exit 1
 fi
 
+stale_settle_reservation_id="$(
+  psql_admin -c "
+    select reservation_id
+    from public.reserve_llm_daily_budget(
+      '20000000-0000-0000-0000-000000000004',
+      'copilot',
+      'openai',
+      'gpt-concurrency',
+      600,
+      1000,
+      300
+    )
+  "
+)"
+psql_admin -c "
+  update public.llm_cost_reservations
+  set expires_at = clock_timestamp() + interval '2 seconds'
+  where id = '$stale_settle_reservation_id'
+" >/dev/null
+
+stale_settle_holder_out="$test_tmp/stale-settle-holder.out"
+stale_settle_holder_err="$test_tmp/stale-settle-holder.err"
+stale_settle_out="$test_tmp/stale-settle.out"
+stale_settle_err="$test_tmp/stale-settle.err"
+
+docker exec -i -e PGAPPNAME=llm_budget_stale_settle_holder "$db_container" \
+  psql -X -A -t -U postgres -d postgres -v ON_ERROR_STOP=1 \
+  >"$stale_settle_holder_out" 2>"$stale_settle_holder_err" <<'SQL' &
+begin;
+select pg_catalog.pg_advisory_xact_lock(
+  pg_catalog.hashtextextended(
+    '20000000-0000-0000-0000-000000000004',
+    0
+  )
+);
+select pg_catalog.pg_sleep(3);
+insert into public.llm_cost_reservations (
+  user_id,
+  feature,
+  provider,
+  model,
+  reserved_micrormb,
+  status,
+  expires_at
+)
+values (
+  '20000000-0000-0000-0000-000000000004',
+  'copilot',
+  'openai',
+  'gpt-concurrency',
+  1000,
+  'reserved',
+  pg_catalog.clock_timestamp() + interval '5 minutes'
+);
+commit;
+SQL
+background_pid="$!"
+
+wait_for_advisory_lock "llm_budget_stale_settle_holder"
+
+if docker exec -i -e PGAPPNAME=llm_budget_stale_settle "$db_container" \
+  psql -X -A -t -U postgres -d postgres -v ON_ERROR_STOP=1 \
+  >"$stale_settle_out" 2>"$stale_settle_err" <<SQL
+set role service_role;
+select status
+from public.settle_llm_budget('$stale_settle_reservation_id', 500);
+SQL
+then
+  stale_settle_rejected="false"
+else
+  stale_settle_rejected="true"
+fi
+
+wait "$background_pid"
+background_pid=""
+
+stale_settle_status="$(
+  psql_admin -c "
+    select status
+    from public.llm_cost_reservations
+    where id = '$stale_settle_reservation_id'
+  "
+)"
+stale_settle_total="$(
+  psql_admin -c "
+    select sum(
+      case
+        when status = 'settled' then settled_micrormb
+        when status = 'incurred' then reserved_micrormb
+        when status = 'reserved' and expires_at > clock_timestamp() then reserved_micrormb
+        else 0
+      end
+    )
+    from public.llm_cost_reservations
+    where user_id = '20000000-0000-0000-0000-000000000004'
+  "
+)"
+
+if [[ "$stale_settle_rejected" != "true" \
+   || "$stale_settle_status" != "reserved" \
+   || "$stale_settle_total" != "1000" ]] \
+   || ! grep -q 'LLM cost reservation is not incurred' "$stale_settle_err"; then
+  echo "Concurrent stale settlement assertion failed" >&2
+  echo "rejected=$stale_settle_rejected status=$stale_settle_status total=$stale_settle_total" >&2
+  cat "$stale_settle_out" "$stale_settle_err" >&2
+  exit 1
+fi
+
 echo "PASS: concurrent reservations serialize to one winner"
 echo "PASS: concurrent incurred settle/reserve remains within the daily cap"
 echo "PASS: a lock-waiting stale mark cannot revive an expired reservation"
+echo "PASS: a lock-waiting stale settlement cannot revive an expired reservation"

@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions, pg_catalog;
 
-select plan(71);
+select plan(77);
 
 insert into auth.users (id, email)
 values
@@ -12,7 +12,8 @@ values
   ('10000000-0000-0000-0000-000000000003', 'budget-beijing@example.test'),
   ('10000000-0000-0000-0000-000000000004', 'budget-overflow@example.test'),
   ('10000000-0000-0000-0000-000000000005', 'budget-incurred@example.test'),
-  ('10000000-0000-0000-0000-000000000006', 'budget-stale-mark@example.test');
+  ('10000000-0000-0000-0000-000000000006', 'budget-stale-mark@example.test'),
+  ('10000000-0000-0000-0000-000000000007', 'budget-stale-settle@example.test');
 
 create temporary table budget_test_results (
   label text primary key,
@@ -91,6 +92,18 @@ select is(
   600::bigint,
   'a denial reports current reserved daily usage'
 );
+
+do $$
+declare
+  v_reservation_id uuid;
+begin
+  select reservation_id
+  into v_reservation_id
+  from budget_test_results
+  where label = 'first reservation';
+  perform public.mark_llm_budget_incurred(v_reservation_id);
+end;
+$$;
 
 insert into budget_test_results (
   label, reservation_id, status, reserved_micrormb, settled_micrormb, settled_at
@@ -561,6 +574,18 @@ from public.reserve_llm_daily_budget(
   300
 );
 
+do $$
+declare
+  v_reservation_id uuid;
+begin
+  select reservation_id
+  into v_reservation_id
+  from budget_test_results
+  where label = 'over-settlement candidate';
+  perform public.mark_llm_budget_incurred(v_reservation_id);
+end;
+$$;
+
 select throws_ok(
   format(
     'select * from public.settle_llm_budget(%L::uuid, 201)',
@@ -584,8 +609,8 @@ select is(
       where label = 'over-settlement candidate'
     )
   ),
-  'reserved',
-  'rejected over-settlement leaves the reservation active'
+  'incurred',
+  'rejected over-settlement leaves the incurred reservation durable'
 );
 select is(
   (
@@ -921,6 +946,99 @@ select is(
   ),
   1000::bigint,
   'counted daily cost remains the replacement amount after stale mark rejection'
+);
+
+insert into budget_test_results (
+  label, allowed, reservation_id, used_micrormb, limit_micrormb
+)
+select
+  'stale settle candidate', allowed, reservation_id, used_micrormb, limit_micrormb
+from public.reserve_llm_daily_budget(
+  '10000000-0000-0000-0000-000000000007',
+  'copilot',
+  'deepseek',
+  'deepseek-v4-flash',
+  600,
+  1000,
+  300
+);
+
+select throws_ok(
+  format(
+    'select * from public.settle_llm_budget(%L::uuid, 500)',
+    (select reservation_id from budget_test_results where label = 'stale settle candidate')
+  ),
+  '55000',
+  'LLM cost reservation is not incurred',
+  'a live reserved row cannot settle before provider spend is marked'
+);
+select is(
+  (
+    select status
+    from public.llm_cost_reservations
+    where id = (select reservation_id from budget_test_results where label = 'stale settle candidate')
+  ),
+  'reserved',
+  'rejected live settlement leaves the reservation unchanged'
+);
+
+update public.llm_cost_reservations
+set expires_at = now() - interval '1 second'
+where id = (select reservation_id from budget_test_results where label = 'stale settle candidate');
+
+insert into budget_test_results (
+  label, allowed, reservation_id, used_micrormb, limit_micrormb
+)
+select
+  'stale settle replacement', allowed, reservation_id, used_micrormb, limit_micrormb
+from public.reserve_llm_daily_budget(
+  '10000000-0000-0000-0000-000000000007',
+  'copilot',
+  'deepseek',
+  'deepseek-v4-flash',
+  1000,
+  1000,
+  300
+);
+
+select is(
+  (select allowed from budget_test_results where label = 'stale settle replacement'),
+  true,
+  'an expired unsettled reservation can be replaced up to the full daily limit'
+);
+select throws_ok(
+  format(
+    'select * from public.settle_llm_budget(%L::uuid, 500)',
+    (select reservation_id from budget_test_results where label = 'stale settle candidate')
+  ),
+  '55000',
+  'LLM cost reservation is not incurred',
+  'an expired reserved row cannot settle after replacement'
+);
+select is(
+  (
+    select status
+    from public.llm_cost_reservations
+    where id = (select reservation_id from budget_test_results where label = 'stale settle candidate')
+  ),
+  'reserved',
+  'rejected stale settlement never revives the expired reservation'
+);
+select is(
+  (
+    select used_micrormb
+    from public.reserve_llm_daily_budget(
+      '10000000-0000-0000-0000-000000000007',
+      'copilot',
+      'deepseek',
+      'deepseek-v4-flash',
+      1,
+      1000,
+      300
+    )
+  ),
+  1000::bigint,
+  'counted daily cost remains the replacement amount after stale settlement rejection'
 );
 
 select is(

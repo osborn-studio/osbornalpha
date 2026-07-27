@@ -7,7 +7,12 @@ import { JOHN_CAMERON_5STEP } from '@/lib/agent/methods/john-cameron-5step';
 import { AGENT_METHODS } from '@/lib/agent/methods/registry';
 import { createArtifact } from '@/lib/portfolio/artifacts-store';
 import { checkQuota, recordUsage, type QuotaResult } from '@/lib/billing/quota';
-import { getBudgetConfig, reserveCostBudget, type CostSettlement } from '@/lib/billing/cost-budget';
+import {
+  getBudgetConfig,
+  isCompleteRealUsage,
+  reserveCostBudget,
+  type CostSettlement,
+} from '@/lib/billing/cost-budget';
 import {
   calculateCostMicrormb,
   maxInputTokensFor,
@@ -320,13 +325,14 @@ export async function POST(req: Request) {
 
       const callModel = async (provider: ResolvedLlm, messages: OaiMessage[]) => {
         let reviewedMaxInputTokens: number | null = null;
+        let maxReservationQuoteMicrormb: number | null = null;
         if (provider.source === 'env') {
           // Admins are exempt from budget enforcement, not pricing review.
           // Quote the same conservative ceiling before every platform network
           // call so an unknown model fails closed even when no RPC is needed.
           const budgetConfig = getBudgetConfig();
           reviewedMaxInputTokens = maxInputTokensFor(provider.provider, provider.model);
-          reservationCostMicrormb(
+          maxReservationQuoteMicrormb = reservationCostMicrormb(
             provider.provider,
             provider.model,
             reviewedMaxInputTokens,
@@ -334,6 +340,13 @@ export async function POST(req: Request) {
             budgetConfig.usdCnyMicros,
           );
         }
+        const conservativePlatformUsage = (): NormalizedUsage => ({
+          inputTokens: reviewedMaxInputTokens!,
+          cacheHitInputTokens: 0,
+          cacheMissInputTokens: reviewedMaxInputTokens!,
+          outputTokens: MAX_OUTPUT_TOKENS,
+          estimated: true,
+        });
         const cfg = {
           baseUrl: provider.baseUrl,
           apiKey: provider.apiKey,
@@ -395,6 +408,11 @@ export async function POST(req: Request) {
               costMicrormb: reservation.reservedMicrormb,
               usageEstimated: true,
             });
+          } else if (provider.source === 'env') {
+            addUsage(provider, conservativePlatformUsage(), {
+              costMicrormb: maxReservationQuoteMicrormb!,
+              usageEstimated: true,
+            });
           }
           throw error;
         }
@@ -408,17 +426,24 @@ export async function POST(req: Request) {
           incurredUsage.costMicrormb = settlement.costMicrormb;
           incurredUsage.usageEstimated = r.usage.estimated || settlement.usageEstimated;
         } else if (provider.source === 'env') {
-          const budgetConfig = getBudgetConfig();
-          const costMicrormb = calculateCostMicrormb(
-            provider.provider,
-            provider.model,
-            r.usage,
-            budgetConfig.usdCnyMicros,
-          );
-          addUsage(provider, r.usage, {
-            costMicrormb,
-            usageEstimated: r.usage.estimated,
-          });
+          if (!isCompleteRealUsage(r.usage)) {
+            addUsage(provider, conservativePlatformUsage(), {
+              costMicrormb: maxReservationQuoteMicrormb!,
+              usageEstimated: true,
+            });
+          } else {
+            const budgetConfig = getBudgetConfig();
+            const costMicrormb = calculateCostMicrormb(
+              provider.provider,
+              provider.model,
+              r.usage,
+              budgetConfig.usdCnyMicros,
+            );
+            addUsage(provider, r.usage, {
+              costMicrormb,
+              usageEstimated: false,
+            });
+          }
         } else {
           addUsage(provider, r.usage);
         }

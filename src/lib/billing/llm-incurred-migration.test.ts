@@ -20,6 +20,7 @@ describe('incurred LLM budget migration', () => {
   it('counts incurred reservations regardless of expiration and never releases them', () => {
     expect(sql).toMatch(/when r\.status = 'incurred' then r\.reserved_micrormb/);
     expect(sql).toMatch(/if v_reservation\.status = 'reserved' then[\s\S]*status = 'released'/);
-    expect(sql).toMatch(/if v_reservation\.status in \('reserved', 'incurred'\) then[\s\S]*status = 'settled'/);
+    expect(sql).toMatch(/if v_reservation\.status = 'reserved' then[\s\S]*llm cost reservation is not incurred/);
+    expect(sql).toMatch(/if v_reservation\.status = 'incurred' then[\s\S]*status = 'settled'/);
   });
 });

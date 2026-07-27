@@ -36,10 +36,14 @@ vi.mock('@/lib/billing/quota', () => ({
   checkQuota: mocks.checkQuota,
   recordUsage: mocks.recordUsage,
 }));
-vi.mock('@/lib/billing/cost-budget', () => ({
-  reserveCostBudget: mocks.reserveCostBudget,
-  getBudgetConfig: mocks.getBudgetConfig,
-}));
+vi.mock('@/lib/billing/cost-budget', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/billing/cost-budget')>();
+  return {
+    ...actual,
+    reserveCostBudget: mocks.reserveCostBudget,
+    getBudgetConfig: mocks.getBudgetConfig,
+  };
+});
 vi.mock('@/lib/supabase/server', () => ({ getServerSupabase: mocks.getServerSupabase }));
 vi.mock('@/lib/supabase/admin', () => ({ getAdminSupabase: mocks.getAdminSupabase }));
 vi.mock('@/lib/i18n/server', () => ({
@@ -82,6 +86,8 @@ const UNPRICED_PLATFORM = {
   ...PLATFORM,
   model: 'unreviewed-admin-model',
 };
+
+const ADMIN_CEILING_COST_MICRORMB = 1_026_144;
 
 const BYO = {
   source: 'user' as const,
@@ -451,6 +457,50 @@ describe('Copilot platform cost budget', () => {
     expect(text).not.toContain('localized:providerFailed');
   });
 
+  it('audits the conservative ceiling when a direct admin platform call fails after network attempt', async () => {
+    mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: -1, plan: 'free' });
+    mocks.toolChat.mockRejectedValue(new Error('llm 500: failed'));
+
+    await runRoute();
+
+    expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
+    expect(mocks.toolChat).toHaveBeenCalledTimes(1);
+    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+      inputTokens: 1_000_000,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 1_000_000,
+      outputTokens: 9_000,
+      costMicrormb: ADMIN_CEILING_COST_MICRORMB,
+      usageEstimated: true,
+      byo: false,
+      status: 'failed',
+    }));
+  });
+
+  it('audits the conservative ceiling when a direct admin response has incomplete usage', async () => {
+    mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: -1, plan: 'free' });
+    mocks.toolChat.mockResolvedValue({
+      content: 'Admin answer with incomplete usage',
+      toolCalls: [],
+      finishReason: 'stop',
+      usage: usage(12, 0, 0, true),
+    });
+
+    await runRoute();
+
+    expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
+    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+      inputTokens: 1_000_000,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 1_000_000,
+      outputTokens: 9_000,
+      costMicrormb: ADMIN_CEILING_COST_MICRORMB,
+      usageEstimated: true,
+      byo: false,
+      status: 'completed',
+    }));
+  });
+
   it('lets an admin fallback from BYO to platform without budget RPCs while auditing actual cost', async () => {
     mocks.resolveLlm.mockResolvedValue(BYO);
     mocks.resolvePlatformLlm.mockReturnValue(PLATFORM);
@@ -497,6 +547,60 @@ describe('Copilot platform cost budget', () => {
     expect(text).toContain('"code":"pricing_unavailable"');
     expect(text).toContain('localized:pricingUnavailable');
     expect(text).not.toContain('localized:providerFailed');
+  });
+
+  it('audits only the conservative platform ceiling when an admin fallback attempt fails', async () => {
+    mocks.resolveLlm.mockResolvedValue(BYO);
+    mocks.resolvePlatformLlm.mockReturnValue(PLATFORM);
+    mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: -1, plan: 'free' });
+    mocks.toolChat.mockImplementation(async (cfg) => {
+      if (cfg.apiKey === 'byo-key') throw new Error('llm 401: invalid api key');
+      throw new Error('llm 500: platform failed');
+    });
+
+    await runRoute();
+
+    expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
+    expect(mocks.toolChat).toHaveBeenCalledTimes(2);
+    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+      inputTokens: 1_000_000,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 1_000_000,
+      outputTokens: 9_000,
+      costMicrormb: ADMIN_CEILING_COST_MICRORMB,
+      usageEstimated: true,
+      byo: false,
+      status: 'failed',
+    }));
+  });
+
+  it('audits the conservative ceiling when an admin fallback response has incomplete usage', async () => {
+    mocks.resolveLlm.mockResolvedValue(BYO);
+    mocks.resolvePlatformLlm.mockReturnValue(PLATFORM);
+    mocks.checkQuota.mockResolvedValue({ allowed: true, used: 0, limit: -1, plan: 'free' });
+    mocks.toolChat.mockImplementation(async (cfg) => {
+      if (cfg.apiKey === 'byo-key') throw new Error('llm 401: invalid api key');
+      return {
+        content: 'Admin fallback with incomplete usage',
+        toolCalls: [],
+        finishReason: 'stop',
+        usage: usage(23, 0, 0, true),
+      };
+    });
+
+    await runRoute();
+
+    expect(mocks.reserveCostBudget).not.toHaveBeenCalled();
+    expect(mocks.recordUsage).toHaveBeenCalledWith('copilot', expect.objectContaining({
+      inputTokens: 1_000_000,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 1_000_000,
+      outputTokens: 9_000,
+      costMicrormb: ADMIN_CEILING_COST_MICRORMB,
+      usageEstimated: true,
+      byo: false,
+      status: 'completed',
+    }));
   });
 
   it('audits settled platform rounds on a failed run without writing a completed count event', async () => {
