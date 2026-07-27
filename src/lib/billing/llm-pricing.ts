@@ -152,8 +152,11 @@ export function calculateCostMicrormb(
   // Hand-built normalized usage can understate input while still carrying
   // cache components. Account for every reported component and bill any
   // remainder as a cache miss.
-  const effectiveInputTokens = Math.max(inputTokens, claimedHitTokens + claimedMissTokens);
-  const cacheHitInputTokens = Math.min(claimedHitTokens, effectiveInputTokens);
+  const declaredCacheTokens = claimedHitTokens + claimedMissTokens;
+  const effectiveInputTokens = Math.max(inputTokens, declaredCacheTokens);
+  const cacheHitInputTokens = inputTokens > 0 && declaredCacheTokens > inputTokens
+    ? 0
+    : Math.min(claimedHitTokens, effectiveInputTokens);
   const cacheMissInputTokens = effectiveInputTokens - cacheHitInputTokens;
 
   return costFromTokenCounts(

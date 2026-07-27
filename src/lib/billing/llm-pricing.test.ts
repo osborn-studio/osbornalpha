@@ -186,6 +186,16 @@ describe('DeepSeek pricing', () => {
     }, DEFAULT_USD_CNY_MICROS)).toBe(1_008);
   });
 
+  it('treats contradictory cache totals as entirely cache-miss input', () => {
+    expect(calculateCostMicrormb('deepseek', 'deepseek-v4-flash', {
+      inputTokens: 1_000,
+      cacheHitInputTokens: 1_000,
+      cacheMissInputTokens: 1,
+      outputTokens: 0,
+      estimated: false,
+    }, DEFAULT_USD_CNY_MICROS)).toBe(1_010);
+  });
+
   it('reserves the exact positive cost for estimated input plus 9,000 output tokens', () => {
     expect(reservationCostMicrormb(
       'deepseek',
