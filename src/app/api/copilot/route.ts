@@ -27,6 +27,7 @@ import { normalizeCopilotTicker, resolveCopilotTicker } from '@/lib/copilot/requ
 import { searchSecurities } from '@/lib/securities/search';
 import {
   MAX_OUTPUT_TOKENS,
+  copilotUsageLabels,
   conservativeInputTokenEstimate,
 } from '@/lib/copilot/cost-accounting';
 
@@ -193,6 +194,7 @@ export async function POST(req: Request) {
       let runErrorCode = 'provider_error';
       let fallbackQuota: QuotaResult | null = null;
       const runUsage = new Map<string, RunUsage>();
+      const attemptedModels = new Map<string, Pick<ResolvedLlm, 'source' | 'provider' | 'model'>>();
       const addUsage = (
         provider: ResolvedLlm,
         usage: NormalizedUsage,
@@ -219,35 +221,54 @@ export async function POST(req: Request) {
         runUsage.set(key, current);
       };
       const writeUsage = async (status: 'completed' | 'failed') => {
+        const usageGroups = [...runUsage.values()];
+        const attempted = [...attemptedModels.values()];
+        const labels = copilotUsageLabels(
+          usageGroups.length > 0
+            ? usageGroups
+            : attempted.length > 0
+              ? attempted
+              : [llm],
+        );
+        const runByo = (attempted.length > 0 ? attempted : [llm])
+          .every((provider) => provider.source === 'user');
+        const aggregate = usageGroups.reduce<RunUsage>((total, usage) => ({
+          provider: labels.provider,
+          model: labels.model,
+          inputTokens: safeSum(total.inputTokens, usage.inputTokens),
+          cacheHitInputTokens: safeSum(total.cacheHitInputTokens, usage.cacheHitInputTokens),
+          cacheMissInputTokens: safeSum(total.cacheMissInputTokens, usage.cacheMissInputTokens),
+          outputTokens: safeSum(total.outputTokens, usage.outputTokens),
+          costMicrormb: safeSum(total.costMicrormb, usage.costMicrormb),
+          usageEstimated: total.usageEstimated || usage.usageEstimated,
+          byo: runByo,
+        }), {
+          provider: labels.provider,
+          model: labels.model,
+          inputTokens: 0,
+          cacheHitInputTokens: 0,
+          cacheMissInputTokens: 0,
+          outputTokens: 0,
+          costMicrormb: 0,
+          usageEstimated: false,
+          byo: runByo,
+        });
         const budgetConfig = getBudgetConfig();
-        for (const usage of runUsage.values()) {
-          if (
-            status === 'failed'
-            && (
-              usage.byo
-              || (
-                usage.costMicrormb === 0
-                && usage.inputTokens === 0
-                && usage.outputTokens === 0
-              )
-            )
-          ) continue;
-          await recordUsage('copilot', {
-            ticker: ticker || undefined,
-            provider: usage.provider,
-            model: usage.model,
-            inputTokens: usage.inputTokens,
-            cacheHitInputTokens: usage.cacheHitInputTokens,
-            cacheMissInputTokens: usage.cacheMissInputTokens,
-            outputTokens: usage.outputTokens,
-            costMicrormb: usage.costMicrormb,
-            pricingVersion: usage.byo ? undefined : PRICING_VERSION,
-            usdCnyMicros: usage.byo ? undefined : budgetConfig.usdCnyMicros,
-            usageEstimated: usage.usageEstimated,
-            byo: usage.byo,
-            status,
-          });
-        }
+        await recordUsage('copilot', {
+          ticker: ticker || undefined,
+          provider: aggregate.provider,
+          model: aggregate.model,
+          inputTokens: aggregate.inputTokens,
+          cacheHitInputTokens: aggregate.cacheHitInputTokens,
+          cacheMissInputTokens: aggregate.cacheMissInputTokens,
+          outputTokens: aggregate.outputTokens,
+          costMicrormb: aggregate.costMicrormb,
+          pricingVersion: aggregate.byo ? undefined : PRICING_VERSION,
+          usdCnyMicros: aggregate.byo ? undefined : budgetConfig.usdCnyMicros,
+          usageEstimated: aggregate.usageEstimated,
+          byo: aggregate.byo,
+          status,
+        });
       };
       const onEvent = (e: CopilotEvent) => {
         if (e.type === 'token') archivedText += e.text;
@@ -312,6 +333,10 @@ export async function POST(req: Request) {
           }
         }
 
+        attemptedModels.set(
+          `${provider.source}\u0000${provider.provider}\u0000${provider.model}`,
+          { source: provider.source, provider: provider.provider, model: provider.model },
+        );
         let r;
         try {
           r = provider.protocol === 'anthropic'

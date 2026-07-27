@@ -50,4 +50,51 @@ describe('GET /api/usage/today status semantics', () => {
     expect(byoQuery.eq).not.toHaveBeenCalledWith('status', expect.anything());
     expect((await response.json()).byoCalls).toBe(4);
   });
+
+  it('counts one completed mixed-provider row as platform usage and not as a BYO call', async () => {
+    const rows = [{
+      user_id: 'user-1',
+      feature: 'copilot',
+      byo: false,
+      status: 'completed',
+      created_at: new Date().toISOString(),
+      provider: 'mixed',
+      model: 'byo-model+deepseek-v4-flash',
+    }];
+    const profile = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: { plan: 'free', role: 'user', plan_expires_at: null },
+        error: null,
+      }),
+    };
+    function filteringBuilder() {
+      let filtered = rows;
+      const builder = {
+        select: vi.fn(),
+        eq: vi.fn(),
+        gte: vi.fn(),
+        lt: vi.fn(),
+      };
+      builder.select.mockReturnValue(builder);
+      builder.eq.mockImplementation((field: string, value: unknown) => {
+        filtered = filtered.filter((row) => row[field as keyof typeof row] === value);
+        return builder;
+      });
+      builder.gte.mockReturnValue(builder);
+      builder.lt.mockImplementation(async () => ({ count: filtered.length, error: null }));
+      return builder;
+    }
+    mocks.getServerSupabase.mockResolvedValue({
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }) },
+      from: vi.fn((table: string) => table === 'profiles' ? profile : filteringBuilder()),
+    });
+
+    const response = await GET();
+    const body = await response.json();
+
+    expect(body.usage.copilot.used).toBe(1);
+    expect(body.byoCalls).toBe(0);
+  });
 });
