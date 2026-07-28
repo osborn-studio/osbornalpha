@@ -25,7 +25,7 @@ depends_on: []
 
 Original English:
 
-> 
+>
 
 Chinese Translation:
 
