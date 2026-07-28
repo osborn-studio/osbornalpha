@@ -127,6 +127,19 @@ export interface UserPreferences {
   timezone: string;
 }
 
+export interface UserEvent {
+  id: string;
+  user_id: string | null;
+  anonymous_id: string | null;
+  session_id: string | null;
+  event_name: string;
+  path: string | null;
+  properties: Record<string, unknown>;
+  user_agent: string | null;
+  referrer: string | null;
+  created_at: string;
+}
+
 // Convenient row aliases
 export type Database = {
   public: {
@@ -141,6 +154,7 @@ export type Database = {
       news_items: { Row: NewsItem; Insert: Partial<NewsItem>; Update: Partial<NewsItem> };
       broker_reports: { Row: BrokerReport; Insert: Partial<BrokerReport>; Update: Partial<BrokerReport> };
       user_preferences: { Row: UserPreferences; Insert: Partial<UserPreferences>; Update: Partial<UserPreferences> };
+      user_events: { Row: UserEvent; Insert: Partial<UserEvent>; Update: Partial<UserEvent> };
     };
   };
 };

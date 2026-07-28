@@ -10,6 +10,7 @@ import { useToast } from '@/components/Toast';
 import { useBatchQuotes, type LiveQuote } from '@/lib/hooks/useQuote';
 import { normalizeWindTicker } from '@/lib/stocks/wind-normalize';
 import { getBrowserSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
+import { trackEvent } from '@/lib/analytics/client';
 import type { Market } from '@/lib/supabase/database.types';
 
 const STORAGE_KEY = 'stock-monitor:watchlist:v2';
@@ -90,6 +91,27 @@ export default function WatchlistPage() {
   function persist(next: Group[]) {
     setGroups(next);
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch {}
+  }
+
+  function persistRemoteItem(groupId: string, ticker: string, sortOrder: number) {
+    if (!user || !isSupabaseConfigured()) return;
+    void fetch('/api/watchlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ watchlist_id: groupId, ticker, conviction: 5, sort_order: sortOrder }),
+    })
+      .then(async (resp) => {
+        if (!resp.ok) throw new Error((await resp.json().catch(() => null))?.error || `HTTP ${resp.status}`);
+        trackEvent('watchlist_stock_persisted', { ticker, watchlist_id: groupId });
+      })
+      .catch((err) => {
+        show(`⚠ ${ticker} 已本地加入，但云端同步失败`);
+        trackEvent('watchlist_stock_persist_failed', {
+          ticker,
+          watchlist_id: groupId,
+          reason: err?.message?.slice(0, 120) || 'unknown',
+        });
+      });
   }
 
   // ─── Live quotes (batch) ───
@@ -274,6 +296,11 @@ export default function WatchlistPage() {
     const finalName = boardName.trim() || `批量导入 ${new Date().toLocaleDateString('zh-CN')}`;
     persist([...groups, { id, name: finalName, tickers: fresh }]);
     setImportOpen(false);
+    trackEvent('watchlist_batch_imported', {
+      imported_count: fresh.length,
+      skipped_count: skipped.length,
+      board_name: finalName,
+    });
     show(
       skipped.length > 0
         ? `✓ 已导入 ${fresh.length} 只到「${finalName}」，去重 ${skipped.length} 个`
@@ -302,8 +329,8 @@ export default function WatchlistPage() {
 
   return (
     <>
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div>
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+        <div className="min-w-0">
           <h1 className="text-xl font-bold">📋 股票池</h1>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-text-dim">
             <span>拖拽卡片在看板间移动 · 拖拽列头重排看板 · 每 {REFRESH_MS / 1000}s 自动刷新</span>
@@ -315,25 +342,25 @@ export default function WatchlistPage() {
             )}
           </div>
         </div>
-        <div className="flex shrink-0 gap-1.5">
+        <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 sm:mx-0 sm:shrink-0 sm:overflow-visible sm:px-0">
           <button
             onClick={refreshQuotes}
             disabled={allTickers.length === 0 || quotesLoading}
-            className="rounded-md bg-bg-card px-3 py-1.5 text-xs text-text-dim hover:text-text disabled:opacity-50"
+            className="shrink-0 rounded-md bg-bg-card px-3 py-1.5 text-xs text-text-dim hover:text-text disabled:opacity-50"
             title="重新拉取所有行情"
           >
             🔄 刷新
           </button>
           <button
             onClick={() => setImportOpen(true)}
-            className="rounded-md bg-accent-dim/15 px-3 py-1.5 text-xs font-semibold text-accent hover:bg-accent-dim/25"
+            className="shrink-0 rounded-md bg-accent-dim/15 px-3 py-1.5 text-xs font-semibold text-accent hover:bg-accent-dim/25"
             title="从 CSV / Excel 文件或粘贴文本批量导入"
           >
             📥 批量导入
           </button>
           <button
             onClick={exportYaml}
-            className="rounded-md bg-bg-card px-3 py-1.5 text-xs text-text-dim hover:text-text"
+            className="shrink-0 rounded-md bg-bg-card px-3 py-1.5 text-xs text-text-dim hover:text-text"
           >
             📤 导出
           </button>
@@ -387,12 +414,21 @@ export default function WatchlistPage() {
               const exists = groups.some((gg) => gg.tickers.includes(info.t));
               if (exists) {
                 show(`${info.t} 已经在股票池中`);
+                trackEvent('watchlist_stock_add_duplicate', { ticker: info.t, watchlist_id: g.id });
                 return;
               }
               addCustomStock({ t: info.t, n: info.n, py: info.py, m: info.m });
+              const sortOrder = g.tickers.length;
               persist(
                 groups.map((gg) => (gg.id === g.id ? { ...gg, tickers: [...gg.tickers, info.t] } : gg))
               );
+              persistRemoteItem(g.id, info.t, sortOrder);
+              trackEvent('watchlist_stock_added', {
+                ticker: info.t,
+                market: info.m,
+                watchlist_id: g.id,
+                result_name: info.n,
+              });
               show(`✓ 已加入「${g.name}」：${info.n} (${info.t})`);
             }}
           />
@@ -756,6 +792,8 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const trimmedQuery = query.trim();
+  const fallbackTicker = trimmedQuery ? normalizeWindTicker(trimmedQuery) || trimmedQuery.toUpperCase() : '';
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -766,17 +804,32 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setLoading(true);
+    const submittedAt = Date.now();
+    trackEvent('stock_search_submitted', {
+      query_length: q.length,
+      normalized: normalizeWindTicker(q) || q.toUpperCase(),
+    });
     fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
-        setResults(d.results || []);
-        setFocusIdx((d.results || []).length > 0 ? 0 : -1);
+        const nextResults = d.results || [];
+        setResults(nextResults);
+        setFocusIdx(nextResults.length > 0 ? 0 : -1);
         setLoading(false);
+        trackEvent('stock_search_completed', {
+          result_count: nextResults.length,
+          source: d.source || null,
+          duration_ms: Date.now() - submittedAt,
+        });
       })
       .catch((err) => {
         if (err.name === 'AbortError') return;
         setResults([]);
         setLoading(false);
+        trackEvent('stock_search_failed', {
+          reason: err?.message?.slice(0, 120) || 'unknown',
+          duration_ms: Date.now() - submittedAt,
+        });
       });
   }
 
@@ -801,6 +854,7 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
     const canonical = normalizeWindTicker(q) || q.toUpperCase();
     const note = canonical !== q.toUpperCase() ? `\n（已规范化为 ${canonical}）` : '';
     if (confirm(`未在数据库中找到 "${q}"。${note}\n仍然加入到「${groupName}」？\n（建议先检查拼写或试试英文代码）`)) {
+      trackEvent('stock_force_added', { query: q, ticker: canonical, group_name: groupName });
       onAdd({ t: canonical, n: q, py: '', m: classifyMarket(canonical) as Market });
       setQuery('');
       setResults([]);
@@ -852,9 +906,9 @@ function AddStockInline({ groupName, onAdd, onClose }: AddInlineProps) {
           ))}
         </div>
       )}
-      {query.trim() && !loading && results.length === 0 && (
+      {trimmedQuery && !loading && results.length === 0 && (
         <div className="mt-1.5 text-[10px] text-text-muted">
-          没有匹配。回车以「{query.trim()}」强制加入。
+          没有匹配。回车以「{fallbackTicker}」强制加入。
         </div>
       )}
       <div className="mt-1.5 flex gap-1.5">

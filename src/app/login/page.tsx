@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { getBrowserSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import { useToast } from '@/components/Toast';
 import { Disclaimer } from '@/components/Disclaimer';
+import { trackEvent } from '@/lib/analytics/client';
 
 export default function LoginPage() {
   const { show } = useToast();
@@ -15,18 +16,22 @@ export default function LoginPage() {
   async function sendMagicLink() {
     if (!isSupabaseConfigured()) {
       show('Supabase 未配置，请联系管理员');
+      trackEvent('signup_magic_link_failed', { reason: 'supabase_not_configured' });
       return;
     }
     setSending(true);
+    trackEvent('signup_magic_link_requested', { email_domain: email.split('@')[1] || null });
     const sb = getBrowserSupabase();
     const redirectTo = `${window.location.origin}/auth/callback`;
     const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: redirectTo } });
     setSending(false);
     if (error) {
       show(`✗ ${error.message}`);
+      trackEvent('signup_magic_link_failed', { reason: error.message.slice(0, 120) });
       return;
     }
     setSent(true);
+    trackEvent('signup_magic_link_sent', { email_domain: email.split('@')[1] || null });
     show('✓ 魔法链接已发送至邮箱');
   }
 

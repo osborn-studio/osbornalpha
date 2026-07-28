@@ -1,0 +1,8 @@
+outputs/
+tmp/
+tasks/
+research-books/
+docs/research-library/
+LOOP-STATE.json
+STATE.md
+.DS_Store

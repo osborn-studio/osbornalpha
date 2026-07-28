@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { buildRadar, type RadarPayload } from '@/lib/brief/radar';
+import { sanitizeAiText } from '@/lib/llm/sanitize';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 1800;
@@ -31,7 +32,10 @@ export async function GET(req: Request) {
   const radars: Record<string, RadarPayload | { error: string }> = {};
   results.forEach((r, i) => {
     if (r.status === 'fulfilled') {
-      radars[tickers[i]] = r.value;
+      radars[tickers[i]] = {
+        ...r.value,
+        markdown: sanitizeAiText(r.value.markdown, 20_000),
+      };
     } else {
       radars[tickers[i]] = { error: r.reason?.message || 'unknown' };
     }

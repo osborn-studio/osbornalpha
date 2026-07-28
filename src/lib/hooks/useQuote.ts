@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react';
 import type { Market } from '@/lib/supabase/database.types';
+import { trackEvent } from '@/lib/analytics/client';
 
 export interface LiveQuote {
   source: string;
@@ -143,10 +144,17 @@ export function useBatchQuotes(
           for (const t in quotes) {
             if (quotes[t]) cache.set(t, { data: quotes[t], ts: Date.now() });
           }
+          trackEvent('quote_batch_loaded', {
+            attempted: data.meta?.attempted ?? tickers.length,
+            failed: data.meta?.failed ?? Object.values(quotes).filter((q) => !q).length,
+            stale: data.meta?.stale ?? 0,
+            duration_ms: data.meta?.duration_ms ?? null,
+          });
           setState({ quotes, loading: false, loadedAt: Date.now() });
         })
         .catch(() => {
           if (cancelled) return;
+          trackEvent('quote_batch_failed', { attempted: tickers.length });
           setState((prev) => ({ ...prev, loading: false }));
         });
     };

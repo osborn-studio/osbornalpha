@@ -29,12 +29,15 @@ export async function POST(request: Request) {
   if (!user) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
 
   const body = await request.json();
-  const { watchlist_id, ticker, conviction = 5 } = body;
+  const { watchlist_id, ticker, conviction = 5, sort_order = 0 } = body;
   if (!watchlist_id || !ticker) return NextResponse.json({ error: 'Missing fields' }, { status: 400 });
 
   // Cast to any: typed schema regen via `npm run supabase:types` fixes this later
   const { data, error } = await (sb.from('watchlist_items') as any)
-    .insert({ watchlist_id, ticker, conviction, user_id: user.id })
+    .upsert(
+      { watchlist_id, ticker, conviction, sort_order, user_id: user.id },
+      { onConflict: 'watchlist_id,ticker' }
+    )
     .select()
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

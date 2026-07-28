@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { buildRadar } from '@/lib/brief/radar';
+import { sanitizeAiText } from '@/lib/llm/sanitize';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 1800;  // 30 min
@@ -25,7 +26,10 @@ export async function GET(_req: Request, { params }: Ctx) {
 
   try {
     const payload = await buildRadar(ticker);
-    return NextResponse.json(payload);
+    return NextResponse.json({
+      ...payload,
+      markdown: sanitizeAiText(payload.markdown, 20_000),
+    });
   } catch (e: any) {
     return NextResponse.json(
       { error: e?.message || 'radar build failed', ticker },

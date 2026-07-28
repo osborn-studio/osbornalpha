@@ -63,6 +63,16 @@ const TABS: TabDef[] = [
     ),
   },
   {
+    id: 'research', emoji: '📚', label: '研究库', href: '/research',
+    Icon: ({ className }) => (
+      <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
+        <path d="M5 4h10a3 3 0 0 1 3 3v13H8a3 3 0 0 0-3-3V4Z" />
+        <path d="M8 7h7M8 11h7M8 15h5" />
+        <path d="M5 17V7a3 3 0 0 0-3-3v13a3 3 0 0 1 3 3" />
+      </svg>
+    ),
+  },
+  {
     id: 'backtest', emoji: '🧪', label: '回测', href: '/backtest',
     // Line chart
     Icon: ({ className }) => (

@@ -37,7 +37,12 @@ interface QuoteShape {
   volume_ratio: number | null;
   updated_at: string;
   delayed: boolean;
+  stale?: boolean;
 }
+
+const QUOTE_CACHE_TTL_MS = 60_000;
+const QUOTE_STALE_MAX_MS = 15 * 60_000;
+const quoteCache = new Map<string, { quote: QuoteShape; ts: number }>();
 
 function lookupName(ticker: string): string {
   const hit = MOCK_UNIVERSE.find((u) => u.t === ticker);
@@ -130,25 +135,57 @@ async function withRetry<T>(fn: () => Promise<T | null>): Promise<T | null> {
  *
  * Each individual call has a 1-retry wrapper for transient hiccups.
  */
-async function resolveQuote(ticker: string): Promise<QuoteShape | null> {
+async function resolveQuote(ticker: string): Promise<{ quote: QuoteShape | null; stale: boolean }> {
+  const cached = quoteCache.get(ticker);
+  if (cached && Date.now() - cached.ts < QUOTE_CACHE_TTL_MS) {
+    return { quote: cached.quote, stale: false };
+  }
+
   // Layer 1: Eastmoney
   const em = await withRetry(() => fetchEastmoneyQuote(ticker));
-  if (em) return em as unknown as QuoteShape;
+  if (em) {
+    const quote = em as unknown as QuoteShape;
+    quoteCache.set(ticker, { quote, ts: Date.now() });
+    return { quote, stale: false };
+  }
 
   // Layer 2: Sina
   const sina = await withRetry(() => fetchSinaQuote(ticker));
-  if (sina) return sina as unknown as QuoteShape;
+  if (sina) {
+    const quote = sina as unknown as QuoteShape;
+    quoteCache.set(ticker, { quote, ts: Date.now() });
+    return { quote, stale: false };
+  }
 
   // Layer 3: Tencent
   const tencent = await withRetry(() => fetchTencentQuote(ticker));
-  if (tencent) return tencent as unknown as QuoteShape;
+  if (tencent) {
+    const quote = tencent as unknown as QuoteShape;
+    quoteCache.set(ticker, { quote, ts: Date.now() });
+    return { quote, stale: false };
+  }
 
   // Layer 4: Tushare (A-share only, costs 积分)
   if (/\.(SH|SZ|BJ)$/i.test(ticker)) {
-    return tushareFallback(ticker);
+    const quote = await tushareFallback(ticker);
+    if (quote) {
+      quoteCache.set(ticker, { quote, ts: Date.now() });
+      return { quote, stale: false };
+    }
   }
 
-  return null;
+  if (cached && Date.now() - cached.ts < QUOTE_STALE_MAX_MS) {
+    return {
+      quote: {
+        ...cached.quote,
+        source: `${cached.quote.source}+stale`,
+        stale: true,
+      },
+      stale: true,
+    };
+  }
+
+  return { quote: null, stale: false };
 }
 
 export async function GET(req: Request) {
@@ -164,12 +201,35 @@ export async function GET(req: Request) {
     return NextResponse.json({ quotes: {} });
   }
 
+  const startedAt = Date.now();
   const results = await Promise.allSettled(tickers.map(resolveQuote));
 
   const quotes: Record<string, QuoteShape | null> = {};
+  let failed = 0;
+  let stale = 0;
   results.forEach((r, i) => {
-    quotes[tickers[i]] = r.status === 'fulfilled' && r.value ? r.value : null;
+    const resolved = r.status === 'fulfilled' ? r.value : null;
+    quotes[tickers[i]] = resolved?.quote || null;
+    if (!resolved?.quote) failed += 1;
+    if (resolved?.stale) stale += 1;
   });
 
-  return NextResponse.json({ quotes });
+  if (failed > 0 || stale > 0) {
+    console.warn('quote batch partial degradation', {
+      attempted: tickers.length,
+      failed,
+      stale,
+      duration_ms: Date.now() - startedAt,
+    });
+  }
+
+  return NextResponse.json({
+    quotes,
+    meta: {
+      attempted: tickers.length,
+      failed,
+      stale,
+      duration_ms: Date.now() - startedAt,
+    },
+  });
 }
