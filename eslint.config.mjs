@@ -7,6 +7,7 @@ const eslintConfig = defineConfig([
   globalIgnores(
     [
       ".next/**",
+      ".vercel/**",
       ".worktrees/**",
       "coverage/**",
       "node_modules/**",

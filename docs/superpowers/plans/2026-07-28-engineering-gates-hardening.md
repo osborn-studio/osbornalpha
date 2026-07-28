@@ -118,6 +118,7 @@ const eslintConfig = defineConfig([
   globalIgnores(
     [
       ".next/**",
+      ".vercel/**",
       ".worktrees/**",
       "coverage/**",
       "node_modules/**",
@@ -226,3 +227,4 @@ git commit -m "docs: record engineering gate verification"
 - `npm audit --audit-level=high` exited 0 with 0 vulnerabilities.
 - `npm ls next postcss sharp eslint minimatch brace-expansion --all` exited 0: Next.js 15.5.22, Next's PostCSS 8.5.19 override, Sharp 0.35.0, ESLint 10.8.0, Minimatch 10.2.6, Brace Expansion 5.0.8, and `minimatch@3` count 0.
 - `git diff --check` exited 0.
+- Main-tree re-verification exposed Git-ignored Vercel generated artifacts under `.vercel/output`; `.vercel/**` is now excluded from lint because deployment output is not source.
