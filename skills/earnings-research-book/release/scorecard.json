@@ -1,0 +1,9 @@
+{
+  "skill_id": "research.earnings-research-book",
+  "version": "0.1.0",
+  "status": "pass",
+  "quality_score": 100,
+  "release_gate": "client",
+  "eval_pass_rate": 1.0,
+  "reviewed_at": "2026-06-25"
+}
