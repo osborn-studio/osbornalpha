@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useTranslations } from 'next-intl';
 
 type Scheme = 'cn' | 'us';
 type Theme = 'dark' | 'light';
 
 export function ThemeToggle() {
+  const t = useTranslations('components.themeToggle');
   const [scheme, setScheme] = useState<Scheme>('cn');
   const [theme, setTheme] = useState<Theme>('dark');
   const [open, setOpen] = useState(false);
@@ -44,41 +46,41 @@ export function ThemeToggle() {
       <button
         onClick={() => setOpen(!open)}
         className="rounded p-2 text-text-dim hover:bg-bg-card hover:text-text"
-        title="外观设置"
-        aria-label="主题切换"
+        title={t('appearanceSettings')}
+        aria-label={t('themeToggleAria')}
       >
         🎨
       </button>
       {open && (
         <div className="absolute right-0 top-full z-50 mt-1 w-52 rounded-lg border border-border bg-bg-elevated p-2 shadow-lg">
-          <div className="mb-2 text-xs text-text-dim">配色方案</div>
+          <div className="mb-2 text-xs text-text-dim">{t('colorScheme')}</div>
           <div className="mb-3 grid grid-cols-2 gap-1">
             <button
               onClick={() => setS('cn')}
               className={`rounded px-2 py-1.5 text-xs ${scheme === 'cn' ? 'bg-accent-dim text-white' : 'bg-bg-card text-text-dim'}`}
             >
-              🇨🇳 红涨绿跌
+              🇨🇳 {t('schemeCn')}
             </button>
             <button
               onClick={() => setS('us')}
               className={`rounded px-2 py-1.5 text-xs ${scheme === 'us' ? 'bg-accent-dim text-white' : 'bg-bg-card text-text-dim'}`}
             >
-              🇺🇸 绿涨红跌
+              🇺🇸 {t('schemeUs')}
             </button>
           </div>
-          <div className="mb-2 text-xs text-text-dim">主题</div>
+          <div className="mb-2 text-xs text-text-dim">{t('theme')}</div>
           <div className="grid grid-cols-2 gap-1">
             <button
               onClick={() => setT('dark')}
               className={`rounded px-2 py-1.5 text-xs ${theme === 'dark' ? 'bg-accent-dim text-white' : 'bg-bg-card text-text-dim'}`}
             >
-              🌑 深色
+              🌑 {t('themeDark')}
             </button>
             <button
               onClick={() => setT('light')}
               className={`rounded px-2 py-1.5 text-xs ${theme === 'light' ? 'bg-accent-dim text-white' : 'bg-bg-card text-text-dim'}`}
             >
-              ☀️ 浅色
+              ☀️ {t('themeLight')}
             </button>
           </div>
         </div>

@@ -1,0 +1,66 @@
+{
+  "page": {
+    "title": "📡 Intel",
+    "subtitle": "Discovery wizards for new ideas, plus a fast lane to per-stock research."
+  },
+  "tabs": {
+    "discover": "🧭 Discover",
+    "research": "🔬 Research"
+  },
+  "wizards": {
+    "bottleneck": {
+      "title": "Bottleneck Picker Wizard",
+      "desc": "Start from a sector or end-system keyword, break down the industry chain to find the tightest constraint, and get a candidate shortlist.",
+      "placeholder": "e.g. AI optical comms / humanoid robots / energy storage"
+    },
+    "industryChain": {
+      "title": "Industry Chain Diligence Wizard",
+      "desc": "Full upstream-to-downstream diligence: scale / technology route / moat / landscape / risk, with a leader shortlist per segment.",
+      "placeholder": "e.g. solar encapsulant film / 800V high-voltage platform"
+    },
+    "launch": "Launch →"
+  },
+  "screener": {
+    "title": "Watchlist Screener",
+    "scopeNote": "Scope: your watchlist (full-market screening unlocks with the P5 data upgrade)",
+    "filters": {
+      "market": "Market",
+      "peMax": "Max PE",
+      "pbMax": "Max PB",
+      "marketCapMinYi": "Min Market Cap (100M)",
+      "changeToday": "Today's Change",
+      "unlimited": "Any",
+      "up": "Up",
+      "down": "Down"
+    },
+    "columns": {
+      "name": "Name",
+      "ticker": "Ticker",
+      "price": "Price",
+      "change": "Change",
+      "pe": "PE",
+      "pb": "PB",
+      "marketCap": "Market Cap"
+    },
+    "states": {
+      "loading": "Loading…",
+      "emptyWatchlist": "Your watchlist is empty. Add a few tickers on the Watchlist page first.",
+      "noMatches": "No tickers match these filters."
+    }
+  },
+  "research": {
+    "search": {
+      "title": "🔎 Search stocks directly",
+      "placeholder": "Ticker / name (e.g. Perfect World / AAPL / 600519)",
+      "searching": "Searching…",
+      "noMatches": "No matches."
+    },
+    "artifacts": {
+      "title": "📁 Recent Research Archive",
+      "loadFailed": "Failed to load: {error}",
+      "loading": "Loading…",
+      "empty": "No archives yet. Run a deep research method or discovery wizard and the report will be archived here automatically.",
+      "viewAll": "View all archives →"
+    }
+  }
+}

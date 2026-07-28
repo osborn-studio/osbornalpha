@@ -18,13 +18,19 @@ import {
   fetchTushareFinaIndicator,
 } from '@/lib/data/sources/tushare-cached';
 import { PERSONAS, buildUserMessage, type StockContext, type PerspectiveResult } from '@/lib/data/personas';
-import { chat, extractJson, isLLMConfigured } from '@/lib/data/sources/llm';
+import {
+  chat,
+  extractJson,
+  isLLMConfigured,
+  type UnifiedChatOpts,
+} from '@/lib/data/sources/llm';
+import { normalizeUsage, type NormalizedUsage } from '@/lib/billing/llm-pricing';
 
 // ─── Morning-note guardrails (adapted from anthropics/financial-services
 //     plugins/agent-plugins/earnings-reviewer/skills/morning-note/SKILL.md,
 //     Apache-2.0) ─────────────────────────────────────────────────────────
 const MORNING_NOTE_DOCTRINE = `
-你是 Stock Monitor 的早间研究主管。按机构 morning note 标准写作，规则如下：
+你是 osbornalpha 的早间研究主管。按机构 morning note 标准写作，规则如下：
 
 【数据来源 hierarchy】
 - 优先 MCP / 已验证数据（Tushare、东方财富、FRED、EDGAR）
@@ -137,8 +143,41 @@ function computeTriggers(q: EastmoneyQuote, fund: { pe_ttm: number | null; pb: n
 }
 
 // ─── Per-stock AI committee (9 personas) ───
-async function runCommittee(en: EnrichedQuote): Promise<PerspectiveResult[]> {
-  if (!isLLMConfigured()) return [];
+export interface BriefLlmResponse {
+  content: string;
+  usage: NormalizedUsage;
+  provider?: string;
+  model?: string;
+}
+
+export type BriefLlmCall = (opts: UnifiedChatOpts) => Promise<BriefLlmResponse>;
+
+const COST_ERROR_CODES = new Set([
+  'daily_cost_exhausted',
+  'pricing_unavailable',
+  'budget_unavailable',
+  'budget_invariant_violation',
+]);
+
+function isCostError(error: unknown): boolean {
+  return COST_ERROR_CODES.has(error instanceof Error ? error.message : String(error));
+}
+
+const defaultBriefLlmCall: BriefLlmCall = async (opts) => {
+  const response = await chat(opts);
+  return {
+    content: response.content,
+    usage: normalizeUsage(response.usage),
+    provider: response.provider,
+    model: response.model,
+  };
+};
+
+async function runCommittee(
+  en: EnrichedQuote,
+  llmCall: BriefLlmCall | undefined,
+): Promise<PerspectiveResult[]> {
+  if (!llmCall) return [];
 
   const ctx: StockContext = {
     ticker: en.quote.ticker,
@@ -158,7 +197,7 @@ async function runCommittee(en: EnrichedQuote): Promise<PerspectiveResult[]> {
 
   const settled = await Promise.allSettled(
     PERSONAS.map(async (p): Promise<PerspectiveResult | null> => {
-      const resp = await chat({
+      const resp = await llmCall({
         system: p.prompt,
         messages: [{ role: 'user', content: userMessage }],
         max_tokens: 400,
@@ -179,6 +218,12 @@ async function runCommittee(en: EnrichedQuote): Promise<PerspectiveResult[]> {
       };
     })
   );
+
+  const budgetError = settled
+    .filter((item): item is PromiseRejectedResult => item.status === 'rejected')
+    .map((item) => item.reason)
+    .find(isCostError);
+  if (budgetError) throw budgetError;
 
   return settled
     .map((s) => (s.status === 'fulfilled' ? s.value : null))
@@ -230,6 +275,7 @@ export interface DailyBrief {
   meta: {
     duration_ms: number;
     tokens?: { input: number; output: number };
+    normalized_usage?: NormalizedUsage;
     est_cost_usd?: number;
     failures?: number;
     /** Which provider+model generated the brief (deepseek-chat / claude-sonnet etc) */
@@ -264,8 +310,11 @@ function applyCompliance(text: string): string {
  * institutional morning notes. Synthesizes signals + perspectives into a
  * single opinionated 2-sentence headline.
  */
-async function generateTopCall(top: BriefStockBlock): Promise<DailyBrief['top_call'] | null> {
-  if (!isLLMConfigured()) return null;
+async function generateTopCall(
+  top: BriefStockBlock,
+  llmCall: BriefLlmCall | undefined,
+): Promise<DailyBrief['top_call'] | null> {
+  if (!llmCall) return null;
   if (top.perspectives.length === 0) return null;
 
   const today = new Date().toISOString().slice(0, 10);
@@ -296,7 +345,7 @@ ${repBear ? `空方代表（${repBear.name}）：${repBear.summary}` : ''}
 - 引用至少 1 个具体数字`;
 
   try {
-    const resp = await chat({
+    const resp = await llmCall({
       system: MORNING_NOTE_DOCTRINE,
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 300,
@@ -311,7 +360,8 @@ ${repBear ? `空方代表（${repBear.name}）：${repBear.summary}` : ''}
       rationale: String(parsed.rationale || '').slice(0, 200),
       ticker: top.ticker,
     };
-  } catch {
+  } catch (error) {
+    if (isCostError(error)) throw error;
     return null;
   }
 }
@@ -345,12 +395,24 @@ function deriveTradeIdeas(blocks: BriefStockBlock[]): DailyBrief['trade_ideas'] 
   return ideas.length > 0 ? ideas : undefined;
 }
 
+export type BriefGenerationOptions =
+  | { topN?: number; mode: 'skip_llm' }
+  | { topN?: number; mode: 'trusted_unmetered' }
+  | { topN?: number; mode: 'metered'; llmCall: BriefLlmCall };
+
 export async function generateDailyBrief(
-  watchlist: string[] = DEFAULT_WATCHLIST,
-  opts: { topN?: number; skipLLM?: boolean } = {}
+  watchlist: string[],
+  opts: BriefGenerationOptions,
 ): Promise<DailyBrief> {
+  if (!opts || !['skip_llm', 'trusted_unmetered', 'metered'].includes(opts.mode)) {
+    throw new Error('brief_llm_mode_required');
+  }
+  if (opts.mode === 'metered' && typeof opts.llmCall !== 'function') {
+    throw new Error('brief_llm_boundary_required');
+  }
   const startedAt = Date.now();
   const topN = opts.topN ?? 5;
+  const skipLLM = opts.mode === 'skip_llm';
 
   // 1+2. Enrich + score
   const enrichedAll = await Promise.all(watchlist.map((t) => enrich(t)));
@@ -363,12 +425,31 @@ export async function generateDailyBrief(
   });
   const top = ranked.slice(0, topN);
 
-  // 3. AI committee per top
-  let totalInputTok = 0;
-  let totalOutputTok = 0;
-  const blocks: BriefStockBlock[] = await Promise.all(
+  // 3. AI committee per top. User preview/manual send inject their durable
+  // per-call metering boundary. Only the bearer-authenticated cron selects
+  // trusted_unmetered and reaches the platform-owned default.
+  const llmResults: BriefLlmResponse[] = [];
+  let llmFailures = 0;
+  const rawLlmCall = opts.mode === 'metered'
+    ? opts.llmCall
+    : opts.mode === 'trusted_unmetered' && isLLMConfigured()
+      ? defaultBriefLlmCall
+      : undefined;
+  const trackedLlmCall: BriefLlmCall | undefined = rawLlmCall
+    ? async (callOpts) => {
+        try {
+          const result = await rawLlmCall(callOpts);
+          llmResults.push(result);
+          return result;
+        } catch (error) {
+          llmFailures += 1;
+          throw error;
+        }
+      }
+    : undefined;
+  const blockResults = await Promise.allSettled(
     top.map(async (en) => {
-      const perspectives = opts.skipLLM ? [] : await runCommittee(en);
+      const perspectives = skipLLM ? [] : await runCommittee(en, trackedLlmCall);
       return {
         ticker: en.quote.ticker,
         name: en.quote.name,
@@ -386,6 +467,17 @@ export async function generateDailyBrief(
       };
     })
   );
+  // Every top-level committee starts together. Drain all of them before
+  // returning so preview accounting observes every sibling that incurred or
+  // settled cost. Promise.allSettled preserves input order, making the chosen
+  // rejection deterministic even when a later committee fails first.
+  const blockError = blockResults.find(
+    (result): result is PromiseRejectedResult => result.status === 'rejected',
+  );
+  if (blockError) throw blockError.reason;
+  const blocks: BriefStockBlock[] = blockResults.map(
+    (result) => (result as PromiseFulfilledResult<BriefStockBlock>).value,
+  );
 
   // 4. Overall confidence (avg of per-stock consensus, shifted to 0-10)
   const overall = Number(
@@ -398,7 +490,9 @@ export async function generateDailyBrief(
     overall >= 4 ? '偏空' : '偏空偏强';
 
   // 5a. Generate Top Call (LLM headline for #1 priority)
-  const topCall = (!opts.skipLLM && blocks.length > 0) ? await generateTopCall(blocks[0]) : null;
+  const topCall = (!skipLLM && blocks.length > 0)
+    ? await generateTopCall(blocks[0], trackedLlmCall)
+    : null;
 
   // 5b. Derive trade ideas from high-conviction perspectives
   const tradeIdeas = deriveTradeIdeas(blocks);
@@ -422,6 +516,21 @@ export async function generateDailyBrief(
   const subject = topCall
     ? `Sentinel ${date} · ${topCall.headline}`
     : `Sentinel Morning Note · ${date} · ${overall_label}`;
+  const normalizedUsage = llmResults.reduce<NormalizedUsage>((total, call) => ({
+    inputTokens: total.inputTokens + call.usage.inputTokens,
+    cacheHitInputTokens: total.cacheHitInputTokens + call.usage.cacheHitInputTokens,
+    cacheMissInputTokens: total.cacheMissInputTokens + call.usage.cacheMissInputTokens,
+    outputTokens: total.outputTokens + call.usage.outputTokens,
+    estimated: total.estimated || call.usage.estimated,
+  }), {
+    inputTokens: 0,
+    cacheHitInputTokens: 0,
+    cacheMissInputTokens: 0,
+    outputTokens: 0,
+    estimated: false,
+  });
+  const providers = [...new Set(llmResults.map((call) => call.provider).filter(Boolean))];
+  const models = [...new Set(llmResults.map((call) => call.model).filter(Boolean))];
 
   return {
     date,
@@ -437,7 +546,11 @@ export async function generateDailyBrief(
     subject,
     meta: {
       duration_ms: Date.now() - startedAt,
-      tokens: { input: totalInputTok, output: totalOutputTok },
+      tokens: { input: normalizedUsage.inputTokens, output: normalizedUsage.outputTokens },
+      normalized_usage: normalizedUsage,
+      failures: llmFailures,
+      provider: providers.length === 1 ? providers[0] : providers.length > 1 ? 'mixed' : undefined,
+      model: models.length === 1 ? models[0] : models.length > 1 ? models.join('+') : undefined,
     },
   };
 }
@@ -466,7 +579,7 @@ function composeMarkdown(a: ComposeArgs): string {
 
   // ─── 1. Header ──────────────────────────────────────────────
   lines.push(`*Sentinel Morning Note · ${a.date}*`);
-  lines.push(`_由 Stock Monitor AI 委员会编辑 · 截至生成时刻数据_`);
+  lines.push(`_由 osbornalpha AI 委员会编辑 · 截至生成时刻数据_`);
   lines.push('');
   lines.push(`📊 委员会信心：*${a.overall.toFixed(1)} / 10* — ${a.overall_label}`);
   lines.push(`📋 ${a.watchlist_count} 只股票池 · Top ${a.blocks.length} 进入注意力优先级`);
@@ -594,7 +707,7 @@ function composeHTML(a: ComposeArgs): string {
       🎯 Sentinel Morning Note · ${esc(a.date)}
     </h1>
     <p style="margin:6px 0 0;color:${HTML_PALETTE.dim};font-size:12px">
-      由 Stock Monitor AI 委员会编辑 · 截至生成时刻数据
+      由 osbornalpha AI 委员会编辑 · 截至生成时刻数据
     </p>
     <div style="margin:14px 0 0;padding:10px 14px;background:${HTML_PALETTE.card};border-radius:8px;border:1px solid ${HTML_PALETTE.border};font-size:13px;color:${HTML_PALETTE.text}">
       📊 委员会信心：<strong style="color:${HTML_PALETTE.accent}">${a.overall.toFixed(1)} / 10</strong> — ${esc(a.overall_label)}<br>

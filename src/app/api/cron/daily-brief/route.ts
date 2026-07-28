@@ -14,14 +14,20 @@ export async function GET(req: Request) {
   // Validate cron secret
   const auth = req.headers.get('authorization');
   const secret = process.env.CRON_SECRET;
-  if (secret && auth !== `Bearer ${secret}`) {
+  if (!secret) {
+    return NextResponse.json({ error: 'cron unavailable' }, { status: 503 });
+  }
+  if (auth !== `Bearer ${secret}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const startedAt = Date.now();
 
   try {
-    const brief = await generateDailyBrief(DEFAULT_WATCHLIST, { topN: 5 });
+    const brief = await generateDailyBrief(DEFAULT_WATCHLIST, {
+      topN: 5,
+      mode: 'trusted_unmetered',
+    });
 
     const channels: Record<string, any> = {};
 
@@ -55,18 +61,19 @@ export async function GET(req: Request) {
       channels,
     });
   } catch (e: any) {
+    console.error('daily brief cron failed', { code: 'cron_failed' });
     // Try to alert via any channel
     if (isTelegramConfigured()) {
-      await sendTelegram(`⚠️ Sentinel cron failed: ${e?.message?.slice(0, 200)}`, { parseMode: 'none' });
+      await sendTelegram('⚠️ Sentinel cron failed', { parseMode: 'none' });
     }
     if (isResendConfigured()) {
       await sendEmail({
         subject: 'Sentinel cron failed',
-        html: `<p>Cron failed: <code>${(e?.message || '').slice(0, 500)}</code></p>`,
+        html: '<p>Sentinel daily brief cron failed.</p>',
       });
     }
     return NextResponse.json(
-      { error: e?.message || 'cron failed', stack: e?.stack?.slice(0, 500) },
+      { error: 'cron failed' },
       { status: 500 }
     );
   }

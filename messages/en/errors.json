@@ -1,0 +1,30 @@
+{
+  "generic": "Something went wrong. Please try again later.",
+  "network": "Network request failed. Please check your connection and try again.",
+  "unauthorized": "Please sign in first.",
+  "forbidden": "You don't have permission to do this.",
+  "notFound": "Not found.",
+  "supabaseNotConfigured": "Supabase is not configured. Please contact the administrator.",
+  "auth": {
+    "passwordTooShort": "Password must be at least 8 characters",
+    "passwordMismatch": "Passwords do not match",
+    "loginFailed": "Sign-in failed",
+    "registerFailed": "Registration failed",
+    "sendFailed": "Failed to send",
+    "resetLinkExpired": "The link may have expired. Please request a new one"
+  },
+  "appError": {
+    "title": "Something went wrong",
+    "description": "The page hit a problem while loading. It has been logged — you can retry or go back home.",
+    "digest": "Error code {digest}",
+    "retry": "Retry",
+    "backHome": "Back to Home"
+  },
+  "notFoundPage": {
+    "title": "Page not found",
+    "description": "The page you visited has moved or never existed.",
+    "backHome": "Back to Home",
+    "watchlist": "Watchlist"
+  },
+  "loadingAria": "Loading"
+}

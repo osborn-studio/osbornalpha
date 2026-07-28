@@ -37,16 +37,17 @@ NEXT_PUBLIC_SUPABASE_URL
 NEXT_PUBLIC_SUPABASE_ANON_KEY
 SUPABASE_SERVICE_ROLE_KEY
 NEXT_PUBLIC_APP_URL
-NEXT_PUBLIC_GUEST_MODE_ALLOWED
+LLM_PROVIDER=deepseek
+LLM_MODEL=deepseek-v4-flash
+DEEPSEEK_API_KEY
+LLM_DAILY_COST_LIMIT_MICRORMB=8800000
+LLM_USD_CNY_MICROS=7200000
+LLM_RESERVATION_TTL_SECONDS=300
 ```
 
-Optional, depending on enabled data and AI features:
+Optional data-provider variables:
 
 ```text
-DEEPSEEK_API_KEY
-DEEPSEEK_MODEL
-ANTHROPIC_API_KEY
-LLM_PROVIDER
 TUSHARE_TOKEN
 ALPHAVANTAGE_API_KEY
 ```
@@ -88,9 +89,10 @@ Run before deploying:
 npm install
 npm run typecheck
 npm run build
+npm run preflight:release
 ```
 
-If the build fails because of missing environment variables, add placeholder public Supabase values for build-time checks, then set real values in EdgeOne before production.
+Run the release preflight only with secrets injected by the deployment environment. It verifies the selected provider/model, reviewed pricing, and presence of the service-role key without printing any secret. Placeholder values are acceptable only for an isolated build check; they must never be promoted or used for release preflight.
 
 ## Notes
 

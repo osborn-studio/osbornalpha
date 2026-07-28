@@ -1,35 +1,21 @@
-const TOOL_BLOCK_PATTERNS = [
-  /^工具\s+\w+.*$/gim,
-  /^tool\s*[:：].*$/gim,
-  /^```(?:json)?\s*\{[\s\S]*?"(?:source|results|tool|tool_calls)"[\s\S]*?\}\s*```$/gim,
+const TOOL_LINE_PATTERNS = [
+  /^\s*(?:✅|❌|⏳)?\s*工具\s+[A-Za-z0-9_-]+\s*[—-]\s*\{.*\}\s*$/gm,
+  /^\s*(?:✅|❌|⏳)?\s*tool\s+[A-Za-z0-9_-]+\s*[—-]\s*\{.*\}\s*$/gim,
+  /^\s*(?:✅|❌|⏳)?\s*(?:工具|tool)\s+[A-Za-z0-9_-]+\s*\{.*\}\s*$/gim,
 ];
 
-export function sanitizeAiText(value: unknown, maxLength = 300): string {
-  let text = typeof value === 'string' ? value : value == null ? '' : String(value);
-  for (const pattern of TOOL_BLOCK_PATTERNS) {
-    text = text.replace(pattern, '');
-  }
+const SOURCE_JSON_PATTERN = /\{["']source["']\s*:\s*["'][^"']+["'][\s\S]{0,1200}?\}/g;
 
-  text = text
-    .split('\n')
-    .filter((line) => {
-      const trimmed = line.trim();
-      if (!trimmed) return true;
-      if (/^\{.*"(source|results|tool|tool_calls)"/.test(trimmed)) return false;
-      if (/^>\s*工具\s+/.test(trimmed)) return false;
-      return true;
-    })
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-
-  return text.slice(0, maxLength);
+export function sanitizeAiText(text: string | null | undefined): string {
+  if (!text) return '';
+  let out = String(text);
+  for (const pattern of TOOL_LINE_PATTERNS) out = out.replace(pattern, '');
+  out = out.replace(SOURCE_JSON_PATTERN, '');
+  return out.replace(/\n{3,}/g, '\n\n').trim();
 }
 
-export function sanitizeAiList(values: unknown, maxItems = 6): string[] {
-  if (!Array.isArray(values)) return [];
-  return values
-    .slice(0, maxItems)
-    .map((item) => sanitizeAiText(item, 160))
+export function sanitizeAiList(items: string[] | null | undefined): string[] {
+  return (items ?? [])
+    .map((item) => sanitizeAiText(item))
     .filter(Boolean);
 }

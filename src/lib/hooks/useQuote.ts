@@ -1,8 +1,17 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
+import type { QuotaNoticeProps } from '@/components/QuotaNotice';
 import type { Market } from '@/lib/supabase/database.types';
 import { trackEvent } from '@/lib/analytics/client';
+import {
+  classifyQuoteBatchOutcome,
+  chunkQuoteTickers,
+  mergeQuoteBatchResults,
+  shouldRetryQuoteBatchError,
+  shouldReportQuoteBatch,
+  type QuoteBatchPayload,
+} from '@/lib/quotes/batch-client';
 
 export interface LiveQuote {
   source: string;
@@ -38,6 +47,7 @@ interface State {
   data: LiveQuote | null;
   loading: boolean;
   error: string | null;
+  notFound: boolean;
 }
 
 // In-flight cache to dedupe concurrent requests for the same ticker
@@ -72,91 +82,42 @@ async function fetchQuote(ticker: string): Promise<LiveQuote | null> {
 }
 
 export function useQuote(ticker: string | null, opts?: { refreshIntervalMs?: number }): State {
-  const [state, setState] = useState<State>({ data: null, loading: !!ticker, error: null });
-  const abortRef = useRef<boolean>(false);
+  const [state, setState] = useState<State>({
+    data: null,
+    loading: !!ticker,
+    error: null,
+    notFound: false,
+  });
   const refreshMs = opts?.refreshIntervalMs ?? 0;
 
   useEffect(() => {
     if (!ticker) {
-      setState({ data: null, loading: false, error: null });
+      setState({ data: null, loading: false, error: null, notFound: false });
       return;
     }
-    abortRef.current = false;
-    setState((prev) => ({ ...prev, loading: !prev.data, error: null }));
+    let cancelled = false;
+    setState({ data: null, loading: true, error: null, notFound: false });
 
     const run = async (forceBypass = false) => {
       if (forceBypass) cache.delete(ticker);
       try {
         const data = await fetchQuote(ticker);
-        if (abortRef.current) return;
-        setState({ data, loading: false, error: data ? null : '未找到该标的的报价' });
-      } catch (err: any) {
-        if (abortRef.current) return;
-        setState((prev) => ({ data: prev.data, loading: false, error: err?.message || '获取失败' }));
-      }
-    };
-    run();
-
-    let timer: ReturnType<typeof setInterval> | null = null;
-    if (refreshMs > 0) {
-      timer = setInterval(() => run(true), refreshMs);
-    }
-
-    return () => {
-      abortRef.current = true;
-      if (timer) clearInterval(timer);
-    };
-  }, [ticker, refreshMs]);
-
-  return state;
-}
-
-// ─── Batch ───
-interface BatchState { quotes: Record<string, LiveQuote | null>; loading: boolean; loadedAt: number | null }
-
-export function useBatchQuotes(
-  tickers: string[],
-  opts?: { refreshIntervalMs?: number }
-): BatchState & { refetch: () => void } {
-  const [state, setState] = useState<BatchState>({ quotes: {}, loading: tickers.length > 0, loadedAt: null });
-  // `bump` lets callers trigger a manual refetch without changing tickers
-  const [bump, setBump] = useState(0);
-  const key = tickers.slice().sort().join(',');
-  const refreshMs = opts?.refreshIntervalMs ?? 0;
-
-  useEffect(() => {
-    if (tickers.length === 0) {
-      setState({ quotes: {}, loading: false, loadedAt: null });
-      return;
-    }
-    let cancelled = false;
-
-    const run = (isRefresh = false) => {
-      if (!isRefresh) setState((prev) => ({ ...prev, loading: !prev.quotes || Object.keys(prev.quotes).length === 0 }));
-      // Cache-bust on manual refetch (`bump > 0`); the API layer's
-      // unstable_cache TTL still kicks in for the underlying Tushare hits.
-      const url = `/api/quote/batch?tickers=${encodeURIComponent(tickers.join(','))}${bump > 0 ? `&_=${bump}` : ''}`;
-      fetch(url)
-        .then((r) => r.json())
-        .then((data) => {
-          if (cancelled) return;
-          const quotes = data.quotes || {};
-          for (const t in quotes) {
-            if (quotes[t]) cache.set(t, { data: quotes[t], ts: Date.now() });
-          }
-          trackEvent('quote_batch_loaded', {
-            attempted: data.meta?.attempted ?? tickers.length,
-            failed: data.meta?.failed ?? Object.values(quotes).filter((q) => !q).length,
-            stale: data.meta?.stale ?? 0,
-            duration_ms: data.meta?.duration_ms ?? null,
-          });
-          setState({ quotes, loading: false, loadedAt: Date.now() });
-        })
-        .catch(() => {
-          if (cancelled) return;
-          trackEvent('quote_batch_failed', { attempted: tickers.length });
-          setState((prev) => ({ ...prev, loading: false }));
+        if (cancelled) return;
+        setState({
+          data,
+          loading: false,
+          error: data ? null : 'quote_not_found',
+          notFound: !data,
         });
+      } catch (err: any) {
+        if (cancelled) return;
+        setState((prev) => ({
+          data: prev.data,
+          loading: false,
+          error: err?.message || 'quote_fetch_failed',
+          notFound: false,
+        }));
+      }
     };
     run();
 
@@ -168,6 +129,174 @@ export function useBatchQuotes(
     return () => {
       cancelled = true;
       if (timer) clearInterval(timer);
+    };
+  }, [ticker, refreshMs]);
+
+  return state;
+}
+
+// ─── Batch ───
+interface BatchState { quotes: Record<string, LiveQuote | null>; loading: boolean; loadedAt: number | null }
+
+const BATCH_REQUEST_TIMEOUT_MS = 25_000;
+const BATCH_RESULT_TTL_MS = 5_000;
+const batchInflight = new Map<string, Promise<QuoteBatchPayload<LiveQuote>>>();
+const batchResultCache = new Map<string, { payload: QuoteBatchPayload<LiveQuote>; ts: number }>();
+
+async function fetchQuoteBatchChunk(url: string): Promise<QuoteBatchPayload<LiveQuote>> {
+  const cached = batchResultCache.get(url);
+  if (cached && Date.now() - cached.ts < BATCH_RESULT_TTL_MS) return cached.payload;
+  const existing = batchInflight.get(url);
+  if (existing) return existing;
+
+  const request = (async () => {
+    for (let attempt = 0; ; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), BATCH_REQUEST_TIMEOUT_MS);
+      try {
+        const response = await fetch(url, { signal: controller.signal });
+        if (!response.ok) throw new Error(`quote batch HTTP ${response.status}`);
+        const payload = await response.json();
+        if (!payload || typeof payload !== 'object') throw new Error('invalid quote batch response');
+        const typedPayload = payload as QuoteBatchPayload<LiveQuote>;
+        batchResultCache.set(url, { payload: typedPayload, ts: Date.now() });
+        return typedPayload;
+      } catch (error) {
+        if (!shouldRetryQuoteBatchError(error, attempt)) throw error;
+        await new Promise((resolve) => window.setTimeout(resolve, 250));
+      } finally {
+        window.clearTimeout(timeout);
+      }
+    }
+  })();
+  batchInflight.set(url, request);
+  try {
+    return await request;
+  } finally {
+    if (batchInflight.get(url) === request) batchInflight.delete(url);
+  }
+}
+
+export function useBatchQuotes(
+  tickers: string[],
+  opts?: { refreshIntervalMs?: number }
+): BatchState & { refetch: () => void } {
+  const [state, setState] = useState<BatchState>({ quotes: {}, loading: tickers.length > 0, loadedAt: null });
+  // `bump` lets callers trigger a manual refetch without changing tickers
+  const [bump, setBump] = useState(0);
+  const key = tickers.slice().sort().join(',');
+  const refreshMs = opts?.refreshIntervalMs ?? 0;
+  const quotesRef = useRef<Record<string, LiveQuote | null>>({});
+  const lastReportedAtRef = useRef(0);
+  const lastHandledBumpRef = useRef(0);
+
+  useEffect(() => {
+    if (tickers.length === 0) {
+      quotesRef.current = {};
+      setState({ quotes: {}, loading: false, loadedAt: null });
+      return;
+    }
+    let cancelled = false;
+    let inFlight = false;
+
+    const fetchChunk = async (chunk: string[], manual: boolean): Promise<QuoteBatchPayload<LiveQuote>> => {
+      const url = `/api/quote/batch?tickers=${encodeURIComponent(chunk.join(','))}${manual ? `&_=${bump}` : ''}`;
+      return fetchQuoteBatchChunk(url);
+    };
+
+    const run = async (manual = false) => {
+      if (inFlight || cancelled) return;
+      inFlight = true;
+      if (!manual) {
+        setState((prev) => ({ ...prev, loading: Object.keys(prev.quotes).length === 0 }));
+      }
+
+      const startedAt = Date.now();
+      const chunks = chunkQuoteTickers(tickers);
+      try {
+        const settled = await Promise.allSettled(chunks.map((chunk) => fetchChunk(chunk, manual)));
+        if (cancelled) return;
+        const merged = mergeQuoteBatchResults({
+          tickers,
+          previousQuotes: quotesRef.current,
+          chunks,
+          settled,
+        });
+        merged.meta.duration_ms = Date.now() - startedAt;
+        quotesRef.current = merged.quotes;
+
+        for (const [ticker, quote] of Object.entries(merged.quotes)) {
+          if (quote) cache.set(ticker, { data: quote, ts: Date.now() });
+        }
+
+        const allChunksFailed = chunks.length > 0 && merged.meta.failed_chunks === chunks.length;
+        const allTickersUnavailable = tickers.length > 0 && merged.meta.failed >= tickers.length;
+        const outcome = classifyQuoteBatchOutcome({
+          allChunksFailed,
+          allTickersUnavailable,
+          failed: merged.meta.failed,
+          durationMs: merged.meta.duration_ms,
+        });
+        const eventMetadata = {
+          count: tickers.length,
+          failed: merged.meta.failed,
+          stale: merged.meta.stale,
+          duration_ms: merged.meta.duration_ms,
+          failed_chunks: merged.meta.failed_chunks,
+          sources: merged.meta.sources,
+          failed_tickers: merged.meta.failed_tickers,
+          error_codes: merged.meta.error_codes,
+          selected_sources: merged.meta.selected_sources,
+        };
+        const shouldReport = shouldReportQuoteBatch({
+          now: Date.now(),
+          lastReportedAt: lastReportedAtRef.current,
+          manual,
+          failed: merged.meta.failed,
+          stale: merged.meta.stale,
+          durationMs: merged.meta.duration_ms,
+        });
+
+        if (outcome === 'suspended') trackEvent('quote_batch_suspended', eventMetadata);
+        else if (outcome === 'failed') trackEvent('quote_batch_failed', eventMetadata);
+        else if (outcome === 'degraded') trackEvent('quote_batch_degraded', eventMetadata);
+        else if (shouldReport) trackEvent('quote_batch_loaded', eventMetadata);
+        if (shouldReport) lastReportedAtRef.current = Date.now();
+
+        setState((prev) => ({
+          quotes: merged.quotes,
+          loading: false,
+          loadedAt: outcome === 'failed' || outcome === 'suspended' ? prev.loadedAt : Date.now(),
+        }));
+      } catch {
+        if (!cancelled) {
+          trackEvent('quote_batch_failed', { count: tickers.length, error_code: 'client_processing_error' });
+          setState((prev) => ({ ...prev, loading: false }));
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const initialIsManual = bump > lastHandledBumpRef.current;
+    if (initialIsManual) lastHandledBumpRef.current = bump;
+    void run(initialIsManual);
+
+    let timer: ReturnType<typeof setInterval> | null = null;
+    if (refreshMs > 0) {
+      timer = setInterval(() => {
+        if (document.visibilityState === 'visible') void run(false);
+      }, refreshMs);
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void run(false);
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, refreshMs, bump]);
@@ -293,11 +422,13 @@ export interface PerspectivesState {
   meta: any;
   loading: boolean;
   error: string | null;
+  /** Present for count or platform-cost exhaustion — render <QuotaNotice {...quota} />. */
+  quota: QuotaNoticeProps | null;
 }
 
 export function usePerspectives(ticker: string | null, autoLoad = false): PerspectivesState & { refetch: () => void } {
   const [state, setState] = useState<PerspectivesState>({
-    perspectives: [], source: null, meta: null, loading: false, error: null,
+    perspectives: [], source: null, meta: null, loading: false, error: null, quota: null,
   });
 
   const fetcher = (t: string) => {
@@ -313,18 +444,19 @@ export function usePerspectives(ticker: string | null, autoLoad = false): Perspe
           meta: data.meta,
           loading: false,
           error: data.error || null,
+          quota: data.quota || null,
         });
       })
       .catch((err: any) => {
         if (cancelled) return;
-        setState({ perspectives: [], source: null, meta: null, loading: false, error: err?.message });
+        setState({ perspectives: [], source: null, meta: null, loading: false, error: err?.message, quota: null });
       });
     return () => { cancelled = true; };
   };
 
   useEffect(() => {
     if (!ticker || !autoLoad) {
-      setState({ perspectives: [], source: null, meta: null, loading: false, error: null });
+      setState({ perspectives: [], source: null, meta: null, loading: false, error: null, quota: null });
       return;
     }
     return fetcher(ticker);

@@ -233,7 +233,7 @@ function parseUS(ticker: string, raw: string, p: ParsedSinaTicker): SinaQuote | 
   };
 }
 
-export async function fetchSinaQuote(ticker: string, timeoutMs = 4000): Promise<SinaQuote | null> {
+export async function fetchSinaQuote(ticker: string, timeoutMs = 4000, externalSignal?: AbortSignal): Promise<SinaQuote | null> {
   const p = tickerToSina(ticker);
   if (!p) return null;
 
@@ -241,6 +241,7 @@ export async function fetchSinaQuote(ticker: string, timeoutMs = 4000): Promise<
   const url = `https://hq.sinajs.cn/list=${symbol}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const signal = externalSignal ? AbortSignal.any([ctrl.signal, externalSignal]) : ctrl.signal;
 
   let resp: Response;
   try {
@@ -250,9 +251,9 @@ export async function fetchSinaQuote(ticker: string, timeoutMs = 4000): Promise<
         'Referer': 'https://finance.sina.com.cn/',
         'User-Agent': 'Mozilla/5.0 (compatible; StockMonitor/1.0)',
       },
-      signal: ctrl.signal,
-      // Sina serves a Cache-Control: max-age=0 — let the fetch layer cache 30s
-      next: { revalidate: 30 },
+      signal,
+      cache: externalSignal ? 'no-store' : undefined,
+      next: externalSignal ? undefined : { revalidate: 30 },
     });
   } catch {
     return null;

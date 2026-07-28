@@ -7,6 +7,7 @@
 
 # Node / Next
 node_modules/
+node_modules
 .next/
 out/
 .cache/
@@ -35,17 +36,29 @@ Thumbs.db
 .idea/
 *.swp
 
-# Project local data
-.worktrees/
-briefs/
-raw/
-feedback/
-logs/
+# Project local data (repo-root only — leading slash so these don't match
+# nested source dirs like src/app/(app)/briefs/)
+/.worktrees/
+/briefs/
+/raw/
+/feedback/
+/logs/
 *.sqlite
 *.db
 config/watchlist.local.yml
+# Research OS local SQLite store (local-only module, never deployed)
+research-data/
 
 # Vercel
 .vercel
-.env.local
-.env.*.local
+/LOOP-STATE.json
+/STATE.md
+/tasks/
+/release/
+/reports/
+.superpowers/
+
+# Playwright
+playwright-report/
+test-results/
+.env*

@@ -1,15 +1,15 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
+import { MarketLabel } from '@/components/MarketLabel';
 import Link from 'next/link';
-import { MOCK_DATA, getStockOrStub } from '@/lib/data/mock';
+import { useTranslations } from 'next-intl';
+import { getStockOrStub } from '@/lib/data/mock';
 import { useBatchQuotes } from '@/lib/hooks/useQuote';
 import { Sparkline } from './Sparkline';
-import { formatPrice, formatPct, changeClass, marketLabel } from '@/lib/utils';
-
-const STORAGE_KEY = 'stock-monitor:watchlist:v2';
-
-interface Group { id: string; name: string; tickers: string[] }
+import { formatPrice, formatPct, changeClass } from '@/lib/utils';
+import { useWatchlist } from '@/lib/hooks/useWatchlist';
+import { uniqueWatchlistTickers } from '@/lib/watchlist/store';
 
 interface Props {
   selectedTicker: string;
@@ -18,23 +18,12 @@ interface Props {
 }
 
 export function WatchlistSidebar({ selectedTicker, onSelect, variant = 'sidebar' }: Props) {
-  const [groups, setGroups] = useState<Group[]>(() =>
-    MOCK_DATA.watchlist_groups.map((g) => ({ id: g.id, name: g.name, tickers: [...g.tickers] }))
-  );
+  const t = useTranslations('watchlist.sidebar');
+  const { groups } = useWatchlist();
   const [activeGroup, setActiveGroup] = useState<string>('all');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) setGroups(JSON.parse(raw));
-    } catch {}
-  }, []);
-
-  const allTickers = useMemo(
-    () => Array.from(new Set(groups.flatMap((g) => g.tickers))),
-    [groups]
-  );
+  const allTickers = useMemo(() => uniqueWatchlistTickers(groups), [groups]);
   const { quotes, loading: quotesLoading } = useBatchQuotes(allTickers, { refreshIntervalMs: 30_000 });
 
   const totalCount = groups.reduce((s, g) => s + g.tickers.length, 0);
@@ -59,7 +48,7 @@ export function WatchlistSidebar({ selectedTicker, onSelect, variant = 'sidebar'
             Watchlist · {totalCount}
             {quotesLoading && <span className="ml-1 text-text-muted">⏳</span>}
           </span>
-          <Link href="/watchlist" className="text-[11px] text-accent">管理 →</Link>
+          <Link href="/watchlist" className="text-[11px] text-accent">{t('manage')}</Link>
         </div>
 
         <div className="mb-2 flex gap-1 overflow-x-auto pb-1 px-1">
@@ -69,7 +58,7 @@ export function WatchlistSidebar({ selectedTicker, onSelect, variant = 'sidebar'
               activeGroup === 'all' ? 'bg-accent-dim text-white' : 'text-text-dim hover:bg-bg-card'
             }`}
           >
-            全部
+            {t('all')}
           </button>
           {groups.map((g) => (
             <button
@@ -132,7 +121,7 @@ export function WatchlistSidebar({ selectedTicker, onSelect, variant = 'sidebar'
                         <div className="font-semibold tabular-nums">
                           {price > 0 ? formatPrice(price) : '—'}
                         </div>
-                        <div className="text-[10px] text-text-muted">{marketLabel(market)}</div>
+                        <div className="text-[10px] text-text-muted"><MarketLabel m={market} /></div>
                       </div>
                       <div className="flex justify-end">
                         <Sparkline ticker={t} changePct={changePct} width={50} height={20} />

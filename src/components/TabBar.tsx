@@ -2,15 +2,15 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useDesignV2 } from '@/lib/hooks/useDesignV2';
+import { useTranslations } from 'next-intl';
+import type { ReactElement } from 'react';
 
 interface TabDef {
   id: string;
-  emoji: string;
-  label: string;
+  navKey: 'today' | 'watchlist' | 'intel' | 'portfolio' | 'tools' | 'settings';
   href: string;
-  /** Line-art icon (v2) — 24×24, 1.5px stroke, currentColor */
-  Icon: (props: { className?: string }) => JSX.Element;
+  /** Line-art icon — 24×24, 1.5px stroke, currentColor */
+  Icon: (props: { className?: string }) => ReactElement;
 }
 
 const stroke = {
@@ -23,16 +23,18 @@ const stroke = {
 
 const TABS: TabDef[] = [
   {
-    id: 'home', emoji: '🏠', label: '首页', href: '/',
+    id: 'home', navKey: 'today', href: '/today',
+    // Sunrise glyph — circle + horizon line + rays
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
-        <path d="M3 10.5 12 3l9 7.5" />
-        <path d="M5 9.5V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.5" />
+        <circle cx="12" cy="14" r="4" />
+        <path d="M3 18h18" />
+        <path d="M12 4v2M5 8l1.4 1.4M19 8l-1.4 1.4" />
       </svg>
     ),
   },
   {
-    id: 'watch', emoji: '📋', label: '股票池', href: '/watchlist',
+    id: 'watch', navKey: 'watchlist', href: '/watchlist',
     // Kanban columns glyph — three vertical bars
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
@@ -43,47 +45,39 @@ const TABS: TabDef[] = [
     ),
   },
   {
-    id: 'radar', emoji: '🌅', label: '雷达', href: '/radar',
-    // Concentric pulse rings
+    id: 'intel', navKey: 'intel', href: '/intel',
+    // Radar sweep glyph — concentric arcs + scan dot
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
-        <circle cx="12" cy="12" r="2" />
+        <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
         <path d="M12 4a8 8 0 0 1 8 8" />
         <path d="M12 7.5a4.5 4.5 0 0 1 4.5 4.5" />
+        <path d="M12 12l6-3.5" />
       </svg>
     ),
   },
   {
-    id: 'briefs', emoji: '📰', label: '简报', href: '/briefs',
+    id: 'portfolio', navKey: 'portfolio', href: '/portfolio',
+    // Briefcase glyph
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
-        <rect x="4" y="4" width="16" height="16" rx="2" />
-        <path d="M8 9h8M8 13h8M8 17h5" />
+        <rect x="3" y="7.5" width="18" height="12.5" rx="2" />
+        <path d="M9 7.5V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1.5M3 13h18" />
       </svg>
     ),
   },
   {
-    id: 'research', emoji: '📚', label: '研究库', href: '/research',
+    id: 'tools', navKey: 'tools', href: '/tools',
+    // Toolbox glyph (wrench + box line-art)
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
-        <path d="M5 4h10a3 3 0 0 1 3 3v13H8a3 3 0 0 0-3-3V4Z" />
-        <path d="M8 7h7M8 11h7M8 15h5" />
-        <path d="M5 17V7a3 3 0 0 0-3-3v13a3 3 0 0 1 3 3" />
+        <rect x="3" y="7" width="18" height="13" rx="2" />
+        <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 12h18" />
       </svg>
     ),
   },
   {
-    id: 'backtest', emoji: '🧪', label: '回测', href: '/backtest',
-    // Line chart
-    Icon: ({ className }) => (
-      <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
-        <path d="M4 4v16h16" />
-        <path d="M7 15l3.5-4 3 2.5L20 8" />
-      </svg>
-    ),
-  },
-  {
-    id: 'settings', emoji: '⚙️', label: '设置', href: '/settings',
+    id: 'settings', navKey: 'settings', href: '/settings',
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
         <circle cx="12" cy="12" r="3" />
@@ -95,7 +89,10 @@ const TABS: TabDef[] = [
 
 export function TabBar() {
   const pathname = usePathname();
-  const v2 = useDesignV2();
+  // Tab labels are the app's primary nav and already live in common.nav
+  // (established in G1a). Reuse that single source instead of duplicating
+  // the same six strings under components.tabBar.
+  const tNav = useTranslations('common.nav');
   return (
     <nav
       className="fixed bottom-0 left-0 right-0 z-40 flex border-t border-border bg-bg-elevated"
@@ -103,8 +100,8 @@ export function TabBar() {
     >
       {TABS.map((t) => {
         const active =
-          (t.href === '/' && pathname === '/') ||
-          (t.href !== '/' && pathname.startsWith(t.href));
+          (t.href === '/today' && pathname === '/today') ||
+          (t.href !== '/today' && pathname.startsWith(t.href));
         return (
           <Link
             key={t.id}
@@ -113,16 +110,12 @@ export function TabBar() {
               active ? 'text-accent' : 'text-text-dim'
             }`}
           >
-            {/* V2: brass top-edge bar over the active tab */}
-            {v2 && active && (
+            {/* Brass top-edge bar over the active tab */}
+            {active && (
               <span className="absolute left-1/2 top-0 h-0.5 w-8 -translate-x-1/2 rounded-full bg-accent" />
             )}
-            {v2 ? (
-              <t.Icon className="" />
-            ) : (
-              <span className="text-xl">{t.emoji}</span>
-            )}
-            <span>{t.label}</span>
+            <t.Icon className="" />
+            <span>{tNav(t.navKey)}</span>
           </Link>
         );
       })}

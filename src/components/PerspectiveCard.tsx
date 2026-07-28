@@ -1,7 +1,12 @@
+import { useTranslations } from 'next-intl';
 import type { Stance } from '@/lib/supabase/database.types';
 import { aggregateConfidence, classifyCite, type ConfidenceLevel } from '@/lib/data/evidence-confidence';
 
 interface Props {
+  // Typed as `string` (not the `Persona` union) because the mock/stub data
+  // path (src/lib/data/mock.ts) also feeds this component and types its
+  // persona ids as plain strings — see GLOSSARY.md "mock data stays dynamic".
+  persona: string;
   name: string;
   stance: Stance;
   confidence: number;
@@ -29,20 +34,34 @@ const LEVEL_BG: Record<ConfidenceLevel, string> = {
   unknown: 'bg-bg-card text-text-muted border-border',
 };
 
-export function PerspectiveCard({ name, stance, confidence, summary, cites }: Props) {
+export function PerspectiveCard({ persona, name, stance, confidence, summary, cites }: Props) {
+  const t = useTranslations('components.perspectiveCard');
+  const tPersonas = useTranslations('components.personas');
   const evidence = aggregateConfidence(cites);
+  // Prefer the localized display name keyed by persona id; fall back to the
+  // raw `name` (already-resolved Chinese name from the API payload) if the
+  // id isn't in the dictionary — defensive against future personas.
+  const displayName = tPersonas.has(persona) ? tPersonas(persona) : name;
 
   return (
     <div className={`mb-2.5 rounded-md border-l-[3px] bg-bg-card p-3.5 ${STANCE_BORDER[stance]}`}>
       <div className="mb-1.5 flex items-center justify-between gap-2 text-sm">
-        <span className="font-semibold">{name}</span>
+        <span className="font-semibold">{displayName}</span>
         <div className="flex items-center gap-2 text-xs">
-          <span className="text-text-dim">信心 {confidence.toFixed(1)}/10</span>
-          {/* Evidence-confidence badge */}
+          <span className="text-text-dim">{t('confidence')} {confidence.toFixed(1)}/10</span>
+          {/* Evidence-confidence badge — evidence.label/kind/counts are dynamic
+              values sourced from lib/data/evidence-confidence.ts (out of scope). */}
           {cites.length > 0 && (
             <span
               className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${LEVEL_BG[evidence.level]}`}
-              title={`证据强度：${evidence.label} (${(evidence.score * 100).toFixed(0)}%)\n${evidence.high_count} 强 · ${evidence.medium_count} 中 · ${evidence.low_count} 弱 · ${evidence.unknown_count} 未分类`}
+              title={t('evidenceStrengthTitle', {
+                label: evidence.label,
+                score: (evidence.score * 100).toFixed(0),
+                high: evidence.high_count,
+                medium: evidence.medium_count,
+                low: evidence.low_count,
+                unknown: evidence.unknown_count,
+              })}
             >
               📊 {evidence.label}
             </span>
@@ -52,7 +71,7 @@ export function PerspectiveCard({ name, stance, confidence, summary, cites }: Pr
       <div className="mb-1.5 text-sm leading-relaxed">{summary}</div>
       {cites.length > 0 && (
         <div className="text-[11px] italic text-text-muted">
-          <span className="not-italic mr-1">▸ cite:</span>
+          <span className="not-italic mr-1">▸ {t('cite')}:</span>
           {cites.map((cite, i) => {
             const v = classifyCite(cite);
             return (

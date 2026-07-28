@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
 import { buildRadar, type RadarPayload } from '@/lib/brief/radar';
+import { quoteSourcesFor } from '@/lib/data/sources/registry';
+import { fetchTwseQuotesBatch } from '@/lib/data/sources/twse';
+import { classifyMarket } from '@/lib/utils';
+import { getRequestLocale } from '@/lib/i18n/server';
 import { sanitizeAiText } from '@/lib/llm/sanitize';
 
 export const dynamic = 'force-dynamic';
@@ -28,16 +32,35 @@ export async function GET(req: Request) {
     return NextResponse.json({ radars: {} });
   }
 
-  const results = await Promise.allSettled(tickers.map((t) => buildRadar(t)));
-  const radars: Record<string, RadarPayload | { error: string }> = {};
+  const locale = await getRequestLocale();
+  const radars: Record<string, RadarPayload | { error: string } | { skipped: string }> = {};
+
+  // Markets with no configured quote source (JP/KR until EODHD is subscribed)
+  // are marked skipped up-front — don't burn time/quota inside buildRadar.
+  const buildable = tickers.filter((t) => {
+    if (quoteSourcesFor(classifyMarket(t)).length === 0) {
+      radars[t] = { skipped: 'source-pending' };
+      return false;
+    }
+    return true;
+  });
+
+  // Prime the TWSE 60s quote cache with ONE mis request before the fan-out —
+  // otherwise each buildRadar resolves its TW quote independently and a
+  // 20-ticker burst would fire 20 mis calls against a ~3 req/5 s limit.
+  const twTickers = buildable.filter((t) => classifyMarket(t) === 'TW');
+  if (twTickers.length > 0) await fetchTwseQuotesBatch(twTickers).catch(() => {});
+
+  const results = await Promise.allSettled(buildable.map((t) => buildRadar(t, locale)));
   results.forEach((r, i) => {
     if (r.status === 'fulfilled') {
-      radars[tickers[i]] = {
+      radars[buildable[i]] = {
         ...r.value,
-        markdown: sanitizeAiText(r.value.markdown, 20_000),
+        headline: sanitizeAiText((r.value as any).headline),
+        markdown: sanitizeAiText((r.value as any).markdown),
       };
     } else {
-      radars[tickers[i]] = { error: r.reason?.message || 'unknown' };
+      radars[buildable[i]] = { error: r.reason?.message || 'unknown' };
     }
   });
 

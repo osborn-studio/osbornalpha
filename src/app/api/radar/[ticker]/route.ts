@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { buildRadar } from '@/lib/brief/radar';
+import { getRequestLocale } from '@/lib/i18n/server';
 import { sanitizeAiText } from '@/lib/llm/sanitize';
 
 export const dynamic = 'force-dynamic';
@@ -25,10 +26,12 @@ export async function GET(_req: Request, { params }: Ctx) {
   const ticker = decodeURIComponent(raw);
 
   try {
-    const payload = await buildRadar(ticker);
+    const locale = await getRequestLocale();
+    const payload = await buildRadar(ticker, locale);
     return NextResponse.json({
       ...payload,
-      markdown: sanitizeAiText(payload.markdown, 20_000),
+      headline: sanitizeAiText((payload as any).headline),
+      markdown: sanitizeAiText((payload as any).markdown),
     });
   } catch (e: any) {
     return NextResponse.json(

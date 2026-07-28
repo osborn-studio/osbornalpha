@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
-import { fetchEastmoneyQuote } from '@/lib/data/sources/eastmoney';
-import { fetchSinaQuote } from '@/lib/data/sources/sina';
-import { fetchTencentQuote } from '@/lib/data/sources/tencent';
+import { quoteSourcesFor } from '@/lib/data/sources/registry';
+import { classifyMarket } from '@/lib/utils';
 import {
   isTushareConfigured,
   fetchTushareDaily,
@@ -35,8 +34,11 @@ async function withRetry<T>(fn: () => Promise<T | null>): Promise<T | null> {
 
 /**
  * Layered quote resolver for the headline (price / name / change_pct).
+ * Sources come from the market-routed registry (quoteSourcesFor):
  *
- *   Eastmoney  → Sina  → Tencent  → (A-share only) Tushare daily
+ *   A / HK / US:  Eastmoney → Sina → Tencent → (A-share only) Tushare daily
+ *   TW:           TWSE (mis, batched + 60 s cached)
+ *   JP / KR:      EODHD when configured, else no source ("pending")
  *
  * Fundamentals (PE / PB / ROE / market_cap / dividend) still come from
  * Tushare basic + indicator for A-share — those don't have a free
@@ -47,17 +49,17 @@ export async function GET(_req: Request, { params }: Ctx) {
   const { ticker: raw } = await params;
   const ticker = decodeURIComponent(raw);
   const isAShare = /\.(SH|SZ|BJ)$/i.test(ticker);
+  const sources = quoteSourcesFor(classifyMarket(ticker));
 
-  // ── Headline cascade ──
-  let headline: any = await withRetry(() => fetchEastmoneyQuote(ticker));
-  let headlineSource = 'eastmoney';
-  if (!headline) {
-    headline = await withRetry(() => fetchSinaQuote(ticker));
-    if (headline) headlineSource = 'sina';
-  }
-  if (!headline) {
-    headline = await withRetry(() => fetchTencentQuote(ticker));
-    if (headline) headlineSource = 'tencent';
+  // ── Headline cascade (registry-routed) ──
+  let headline: any = null;
+  let headlineSource = 'none';
+  for (const s of sources) {
+    headline = await withRetry(() => s.fetch(ticker));
+    if (headline) {
+      headlineSource = s.name;
+      break;
+    }
   }
 
   // ── Tushare supplements (A-share only) ──
@@ -88,7 +90,9 @@ export async function GET(_req: Request, { params }: Ctx) {
         ticker,
         error: 'No data source returned a quote',
         tushare_configured: isTushareConfigured(),
-        chain_tried: ['eastmoney', 'sina', 'tencent', isAShare ? 'tushare' : null].filter(Boolean),
+        chain_tried: [...sources.map((s) => s.name), isAShare ? 'tushare' : null].filter(Boolean),
+        // JP/KR with no configured source → let the frontend show "source pending"
+        pending: sources.length === 0,
       },
       { status: 404 }
     );

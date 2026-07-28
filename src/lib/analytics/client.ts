@@ -1,51 +1,70 @@
 'use client';
 
-const ANON_KEY = 'osbornalpha:anonymous-id:v1';
-const SESSION_KEY = 'osbornalpha:session-id:v1';
+import { sanitizeEventMetadata } from './sanitize';
+import { createAnalyticsId } from './id';
 
-type EventProperties = Record<string, string | number | boolean | null | undefined>;
+const SESSION_KEY = 'osbornalpha:session-id';
+const ANONYMOUS_KEY = 'osbornalpha:anonymous-id';
 
-function makeId(prefix: string) {
-  const cryptoObj = globalThis.crypto;
-  if (cryptoObj?.randomUUID) return `${prefix}_${cryptoObj.randomUUID()}`;
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+let memorySessionId: string | null = null;
+let memoryAnonymousId: string | null = null;
+
+function newId(): string {
+  return createAnalyticsId();
 }
 
-function getStoredId(key: string, prefix: string, storage: Storage) {
-  let value = storage.getItem(key);
-  if (!value) {
-    value = makeId(prefix);
-    storage.setItem(key, value);
-  }
-  return value;
-}
-
-export function trackEvent(eventName: string, properties: EventProperties = {}) {
-  if (typeof window === 'undefined') return;
-
+function sessionId(): string {
   try {
-    const payload = {
-      event_name: eventName,
-      anonymous_id: getStoredId(ANON_KEY, 'anon', window.localStorage),
-      session_id: getStoredId(SESSION_KEY, 'sess', window.sessionStorage),
-      path: `${window.location.pathname}${window.location.search}`,
-      referrer: document.referrer || null,
-      properties,
-    };
-
-    const body = JSON.stringify(payload);
-    if (navigator.sendBeacon) {
-      navigator.sendBeacon('/api/events', new Blob([body], { type: 'application/json' }));
-      return;
+    let id = window.sessionStorage.getItem(SESSION_KEY);
+    if (!id) {
+      id = newId();
+      window.sessionStorage.setItem(SESSION_KEY, id);
     }
-
-    void fetch('/api/events', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-      keepalive: true,
-    });
+    return id;
   } catch {
-    // Telemetry must never break product flows.
+    memorySessionId ||= newId();
+    return memorySessionId;
   }
+}
+
+export function getAnonymousAnalyticsId(): string {
+  try {
+    let id = window.localStorage.getItem(ANONYMOUS_KEY);
+    if (!id) {
+      id = newId();
+      window.localStorage.setItem(ANONYMOUS_KEY, id);
+    }
+    return id;
+  } catch {
+    memoryAnonymousId ||= newId();
+    return memoryAnonymousId;
+  }
+}
+
+export function trackEvent(event_name: string, metadata: Record<string, unknown> = {}) {
+  if (typeof window === 'undefined') return;
+  const payload = {
+    event_name,
+    path: window.location.pathname,
+    session_id: sessionId(),
+    anonymous_id: getAnonymousAnalyticsId(),
+    metadata: sanitizeEventMetadata(metadata),
+  };
+
+  const body = JSON.stringify(payload);
+  try {
+    if (navigator.sendBeacon) {
+      const blob = new Blob([body], { type: 'application/json' });
+      if (navigator.sendBeacon('/api/events', blob)) return;
+    }
+  } catch {
+    // fall back to fetch
+  }
+
+  fetch('/api/events', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body,
+    keepalive: true,
+  }).catch(() => {});
 }

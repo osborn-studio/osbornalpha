@@ -4,7 +4,7 @@ Date: 2026-06-25
 
 ## Product
 
-OsbornAlpha Research Library now has a `/research` entry for maintainable earnings research books. The first workflow is `research.earnings-research-book`, registered in the Osborn Studio Skill Hub with a local Stock Monitor fallback copy.
+OsbornAlpha Research Library is available at `/research/library` for maintainable earnings research books. The first workflow is `research.earnings-research-book`, registered in the Osborn Studio Skill Hub with a local Stock Monitor fallback copy.
 
 ## Skill Location
 

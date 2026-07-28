@@ -109,26 +109,28 @@ NEXT_PUBLIC_SUPABASE_URL
 NEXT_PUBLIC_SUPABASE_ANON_KEY
 SUPABASE_SERVICE_ROLE_KEY
 NEXT_PUBLIC_APP_URL
-NEXT_PUBLIC_GUEST_MODE_ALLOWED
+LLM_PROVIDER=deepseek
+LLM_MODEL=deepseek-v4-flash
+DEEPSEEK_API_KEY
+LLM_DAILY_COST_LIMIT_MICRORMB=8800000
+LLM_USD_CNY_MICROS=7200000
+LLM_RESERVATION_TTL_SECONDS=300
 ```
 
 For production domain:
 
 ```text
 NEXT_PUBLIC_APP_URL=https://osbornalpha.com
-NEXT_PUBLIC_GUEST_MODE_ALLOWED=true
 ```
 
-Optional but recommended if features are enabled:
+Optional data-provider variables:
 
 ```text
-DEEPSEEK_API_KEY
-DEEPSEEK_MODEL
-ANTHROPIC_API_KEY
-LLM_PROVIDER
 TUSHARE_TOKEN
 ALPHAVANTAGE_API_KEY
 ```
+
+`SUPABASE_SERVICE_ROLE_KEY` is required by platform metering and durable audits and must remain server-only. Before production deploy, run `npm run preflight:release` with deployment secrets injected; it must resolve `deepseek / deepseek-v4-flash`, validate reviewed pricing, and confirm the service key without printing values.
 
 6. Deploy and verify the EdgeOne preview URL.
 

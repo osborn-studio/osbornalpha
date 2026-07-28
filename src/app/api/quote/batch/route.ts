@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { fetchEastmoneyQuote } from '@/lib/data/sources/eastmoney';
-import { fetchSinaQuote } from '@/lib/data/sources/sina';
-import { fetchTencentQuote } from '@/lib/data/sources/tencent';
+import { quoteSourcesFor } from '@/lib/data/sources/registry';
+import { fetchTwseQuotesBatch } from '@/lib/data/sources/twse';
+import { classifyMarket } from '@/lib/utils';
 import {
   isTushareConfigured,
   fetchTushareDaily,
@@ -9,9 +9,21 @@ import {
 } from '@/lib/data/sources/tushare-cached';
 import { MOCK_UNIVERSE } from '@/lib/data/mock';
 import type { Market } from '@/lib/supabase/database.types';
+import {
+  aggregateSourceAttempts,
+  classifySourceFailure,
+  type SourceAttempt,
+  type SourceOutcome,
+} from '@/lib/quotes/diagnostics';
+import { withQuoteSourceTimeout } from '@/lib/quotes/source-timeout';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 30;
+export const maxDuration = 30;
+
+const FRESH_TTL_MS = 60_000;
+const STALE_TTL_MS = 15 * 60_000;
+const SOURCE_ATTEMPT_TIMEOUT_MS = 2_500;
 
 interface QuoteShape {
   source: string;
@@ -37,11 +49,8 @@ interface QuoteShape {
   volume_ratio: number | null;
   updated_at: string;
   delayed: boolean;
-  stale?: boolean;
 }
 
-const QUOTE_CACHE_TTL_MS = 60_000;
-const QUOTE_STALE_MAX_MS = 15 * 60_000;
 const quoteCache = new Map<string, { quote: QuoteShape; ts: number }>();
 
 function lookupName(ticker: string): string {
@@ -111,22 +120,47 @@ async function tushareFallback(ticker: string): Promise<QuoteShape | null> {
  * Run a single fetcher with one transient-failure retry.
  * Transient = throws OR returns null. Retry after 200ms.
  */
-async function withRetry<T>(fn: () => Promise<T | null>): Promise<T | null> {
-  try {
-    const first = await fn();
-    if (first) return first;
-  } catch { /* fall through */ }
-  await new Promise((r) => setTimeout(r, 200));
-  try {
-    return await fn();
-  } catch {
-    return null;
+async function withRetry<T>(
+  ticker: string,
+  source: string,
+  fn: (signal: AbortSignal) => Promise<T | null>
+): Promise<{ value: T | null; attempt: SourceAttempt }> {
+  const startedAt = Date.now();
+  let attempts = 0;
+  let failureOutcome: Exclude<SourceOutcome, 'success' | 'empty'> | null = null;
+
+  for (let index = 0; index < 2; index += 1) {
+    attempts += 1;
+    try {
+      const value = await withQuoteSourceTimeout(fn, SOURCE_ATTEMPT_TIMEOUT_MS);
+      if (value) {
+        return {
+          value,
+          attempt: { ticker, source, outcome: 'success', attempts, duration_ms: Date.now() - startedAt },
+        };
+      }
+    } catch (error) {
+      failureOutcome = classifySourceFailure(error);
+    }
+    if (index === 0) await new Promise((resolve) => setTimeout(resolve, 200));
   }
+
+  return {
+    value: null,
+    attempt: {
+      ticker,
+      source,
+      outcome: failureOutcome ?? 'empty',
+      attempts,
+      duration_ms: Date.now() - startedAt,
+    },
+  };
 }
 
 /**
- * Resolve a quote via the cascading chain. Each layer is a separate
- * network call — we stop at the first one that returns a usable quote.
+ * Resolve a quote via the market-routed registry cascade. Each layer is a
+ * separate network call — we stop at the first one that returns a usable
+ * quote. For A/HK/US the order is unchanged:
  *
  *   Eastmoney (push2delay)   ← fastest when reachable; blocked from Vercel for A-share
  *   Sina (hq.sinajs.cn)      ← free, no auth, GBK; AKShare's underlying A/HK/US source
@@ -134,61 +168,37 @@ async function withRetry<T>(fn: () => Promise<T | null>): Promise<T | null> {
  *   Tushare daily            ← costs 积分; only fires if all three free sources fail
  *
  * Each individual call has a 1-retry wrapper for transient hiccups.
+ * (TW tickers are handled by fetchTwseQuotesBatch in GET — one native
+ * multi-symbol mis request — and never reach this function.)
  */
-async function resolveQuote(ticker: string): Promise<{ quote: QuoteShape | null; stale: boolean }> {
-  const cached = quoteCache.get(ticker);
-  if (cached && Date.now() - cached.ts < QUOTE_CACHE_TTL_MS) {
-    return { quote: cached.quote, stale: false };
-  }
+interface QuoteResolution {
+  quote: QuoteShape | null;
+  attempts: SourceAttempt[];
+  selectedSource: string | null;
+}
 
-  // Layer 1: Eastmoney
-  const em = await withRetry(() => fetchEastmoneyQuote(ticker));
-  if (em) {
-    const quote = em as unknown as QuoteShape;
-    quoteCache.set(ticker, { quote, ts: Date.now() });
-    return { quote, stale: false };
-  }
-
-  // Layer 2: Sina
-  const sina = await withRetry(() => fetchSinaQuote(ticker));
-  if (sina) {
-    const quote = sina as unknown as QuoteShape;
-    quoteCache.set(ticker, { quote, ts: Date.now() });
-    return { quote, stale: false };
-  }
-
-  // Layer 3: Tencent
-  const tencent = await withRetry(() => fetchTencentQuote(ticker));
-  if (tencent) {
-    const quote = tencent as unknown as QuoteShape;
-    quoteCache.set(ticker, { quote, ts: Date.now() });
-    return { quote, stale: false };
-  }
-
-  // Layer 4: Tushare (A-share only, costs 积分)
-  if (/\.(SH|SZ|BJ)$/i.test(ticker)) {
-    const quote = await tushareFallback(ticker);
-    if (quote) {
-      quoteCache.set(ticker, { quote, ts: Date.now() });
-      return { quote, stale: false };
+async function resolveQuote(ticker: string): Promise<QuoteResolution> {
+  const attempts: SourceAttempt[] = [];
+  for (const s of quoteSourcesFor(classifyMarket(ticker))) {
+    const result = await withRetry(ticker, s.name, (signal) => s.fetch(ticker, signal));
+    attempts.push(result.attempt);
+    if (result.value) {
+      return { quote: result.value as unknown as QuoteShape, attempts, selectedSource: s.name };
     }
   }
 
-  if (cached && Date.now() - cached.ts < QUOTE_STALE_MAX_MS) {
-    return {
-      quote: {
-        ...cached.quote,
-        source: `${cached.quote.source}+stale`,
-        stale: true,
-      },
-      stale: true,
-    };
+  // Final layer: Tushare (A-share only, costs 积分)
+  if (/\.(SH|SZ|BJ)$/i.test(ticker)) {
+    const result = await withRetry(ticker, 'tushare', () => tushareFallback(ticker));
+    attempts.push(result.attempt);
+    if (result.value) return { quote: result.value, attempts, selectedSource: 'tushare' };
   }
 
-  return { quote: null, stale: false };
+  return { quote: null, attempts, selectedSource: null };
 }
 
 export async function GET(req: Request) {
+  const startedAt = Date.now();
   const url = new URL(req.url);
   const tickersParam = url.searchParams.get('tickers') || '';
   const tickers = tickersParam
@@ -198,29 +208,117 @@ export async function GET(req: Request) {
     .slice(0, 40);  // cap
 
   if (tickers.length === 0) {
-    return NextResponse.json({ quotes: {} });
+    return NextResponse.json({
+      quotes: {},
+      meta: {
+        attempted: 0,
+        failed: 0,
+        stale: 0,
+        duration_ms: 0,
+        sources: {},
+        failed_tickers: [],
+        selected_sources: {},
+      },
+    });
   }
 
-  const startedAt = Date.now();
-  const results = await Promise.allSettled(tickers.map(resolveQuote));
+  const force = url.searchParams.has('_');
+  const now = Date.now();
+  const freshQuotes: Record<string, QuoteShape> = {};
+  const selectedSources: Record<string, string> = {};
+  const toFetch: string[] = [];
+  for (const ticker of tickers) {
+    const cached = quoteCache.get(ticker);
+    if (!force && cached && now - cached.ts < FRESH_TTL_MS) {
+      freshQuotes[ticker] = cached.quote;
+      selectedSources[ticker] = 'cache';
+    } else {
+      toFetch.push(ticker);
+    }
+  }
 
-  const quotes: Record<string, QuoteShape | null> = {};
-  let failed = 0;
+  // TW group: one native multi-symbol mis request (rate limit ~3 req/5 s);
+  // everything else goes through the per-ticker registry cascade.
+  const twTickers = toFetch.filter((t) => classifyMarket(t) === 'TW');
+  const otherTickers = toFetch.filter((t) => classifyMarket(t) !== 'TW');
+
+  const twStartedAt = Date.now();
+  let twFailure: Exclude<SourceOutcome, 'success' | 'empty'> | null = null;
+  const [twMap, results] = await Promise.all([
+    twTickers.length > 0
+      ? fetchTwseQuotesBatch(twTickers).catch((error) => {
+          twFailure = classifySourceFailure(error);
+          return new Map<string, QuoteShape | null>();
+        })
+      : Promise.resolve(new Map<string, QuoteShape | null>()),
+    Promise.allSettled(otherTickers.map(resolveQuote)),
+  ]);
+
+  const quotes: Record<string, QuoteShape | null> = { ...freshQuotes };
+  const sourceAttempts: SourceAttempt[] = [];
   let stale = 0;
   results.forEach((r, i) => {
-    const resolved = r.status === 'fulfilled' ? r.value : null;
-    quotes[tickers[i]] = resolved?.quote || null;
-    if (!resolved?.quote) failed += 1;
-    if (resolved?.stale) stale += 1;
+    const ticker = otherTickers[i];
+    const resolution = r.status === 'fulfilled'
+      ? r.value
+      : {
+          quote: null,
+          attempts: [{
+            ticker,
+            source: 'resolver',
+            outcome: classifySourceFailure(r.reason),
+            attempts: 1,
+            duration_ms: Date.now() - startedAt,
+          }],
+          selectedSource: null,
+        } satisfies QuoteResolution;
+    sourceAttempts.push(...resolution.attempts);
+    const value = resolution.quote;
+    if (value) {
+      quoteCache.set(ticker, { quote: value, ts: Date.now() });
+      quotes[ticker] = value;
+      if (resolution.selectedSource) selectedSources[ticker] = resolution.selectedSource;
+      return;
+    }
+    const cached = quoteCache.get(ticker);
+    if (cached && Date.now() - cached.ts < STALE_TTL_MS) {
+      stale += 1;
+      quotes[ticker] = { ...cached.quote, delayed: true };
+      selectedSources[ticker] = 'stale-cache';
+    } else {
+      quotes[ticker] = null;
+    }
   });
-
-  if (failed > 0 || stale > 0) {
-    console.warn('quote batch partial degradation', {
-      attempted: tickers.length,
-      failed,
-      stale,
-      duration_ms: Date.now() - startedAt,
+  for (const t of twTickers) {
+    const value = (twMap.get(t) as QuoteShape | undefined) ?? null;
+    sourceAttempts.push({
+      ticker: t,
+      source: 'twse',
+      outcome: value ? 'success' : twFailure ?? 'empty',
+      attempts: 1,
+      duration_ms: Date.now() - twStartedAt,
     });
+    if (value) {
+      quoteCache.set(t, { quote: value, ts: Date.now() });
+      quotes[t] = value;
+      selectedSources[t] = 'twse';
+      continue;
+    }
+    const cached = quoteCache.get(t);
+    if (cached && Date.now() - cached.ts < STALE_TTL_MS) {
+      stale += 1;
+      quotes[t] = { ...cached.quote, delayed: true };
+      selectedSources[t] = 'stale-cache';
+    } else {
+      quotes[t] = null;
+    }
+  }
+
+  const failed = tickers.filter((t) => !quotes[t]).length;
+  const failedTickers = tickers.filter((t) => !quotes[t]);
+  const sources = aggregateSourceAttempts(sourceAttempts);
+  if (failed > 0) {
+    console.warn('quote batch degraded', { attempted: tickers.length, failed, stale, sources });
   }
 
   return NextResponse.json({
@@ -230,6 +328,9 @@ export async function GET(req: Request) {
       failed,
       stale,
       duration_ms: Date.now() - startedAt,
+      sources,
+      failed_tickers: failedTickers,
+      selected_sources: selectedSources,
     },
   });
 }

@@ -1,0 +1,83 @@
+import Link from 'next/link';
+import { getTranslations } from 'next-intl/server';
+import { METHODS } from '@/lib/agent/methods/registry';
+import { TOOLS, type AgentTool } from '@/lib/agent/tools';
+import { ArtifactsPanel } from './ArtifactsPanel';
+
+// Auth-gated server component — must render dynamically per request (see briefs/page.tsx).
+export const dynamic = 'force-dynamic';
+
+export async function generateMetadata() {
+  const t = await getTranslations('tools.skills');
+  return { title: t('metaTitle') };
+}
+
+const CATEGORIES: AgentTool['category'][] = ['行情', '研究', '估值', '资金'];
+const CATEGORY_ICON: Record<AgentTool['category'], string> = {
+  行情: '📈', 研究: '🔬', 估值: '🧮', 资金: '💰',
+};
+// The category union values are the tool registry's internal (Chinese) codes;
+// map them to translatable display keys (tools.skills.categories.*).
+const CATEGORY_KEY: Record<AgentTool['category'], string> = {
+  行情: 'quotes', 研究: 'research', 估值: 'valuation', 资金: 'funds',
+};
+
+export default async function SkillsPage() {
+  const t = await getTranslations('tools.skills');
+  return (
+    <>
+      <h1 className="mb-1 text-xl font-bold">{t('heading')}</h1>
+      <p className="mb-4 text-sm text-text-dim">
+        {t('subheading')}
+      </p>
+
+      {/* Methods — executable workflows */}
+      <div className="mb-2 text-sm font-semibold text-text-dim">{t('methodsHeading')}</div>
+      <div className="mb-6 grid gap-3 sm:grid-cols-2">
+        {METHODS.map((m) => (
+          <Link key={m.id} href={m.href as any}
+            className="card-base block transition-colors hover:bg-bg-card">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <span className="text-lg">{m.icon}</span>{m.name}
+            </div>
+            <div className="mt-1 text-xs text-text-muted">{m.description}</div>
+            <div className="mt-2 text-xs font-semibold text-accent">{t('run')}</div>
+          </Link>
+        ))}
+      </div>
+
+      {/* Tools — capabilities the agent can call */}
+      <div className="mb-2 text-sm font-semibold text-text-dim">{t('toolsHeading')}</div>
+      <div className="space-y-4">
+        {CATEGORIES.map((cat) => {
+          const tools = TOOLS.filter((t) => t.category === cat);
+          if (tools.length === 0) return null;
+          return (
+            <div key={cat} className="card-base">
+              <div className="mb-2 text-sm font-semibold">{CATEGORY_ICON[cat]} {t(`categories.${CATEGORY_KEY[cat]}`)}</div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {tools.map((tool) => (
+                  <div key={tool.name} className="rounded-md bg-bg-card px-3 py-2">
+                    <div className="flex items-center gap-2 text-xs font-semibold">
+                      <code>{tool.name}</code>
+                      {tool.aShareOnly && <span className="rounded bg-bg-elevated px-1 text-[10px] text-text-dim">{t('aShareBadge')}</span>}
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-text-muted">{tool.description}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <p className="mt-4 text-[11px] text-text-muted">
+        {t('footerSummary', { toolCount: TOOLS.length, methodCount: METHODS.length })}
+      </p>
+
+      <div className="mt-6">
+        <ArtifactsPanel />
+      </div>
+    </>
+  );
+}

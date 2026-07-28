@@ -1,63 +1,61 @@
 import { NextResponse } from 'next/server';
 import { getServerSupabase, serverIsSupabaseConfigured } from '@/lib/supabase/server';
+import {
+  normalizeReferrer,
+  safeHeader,
+  sanitizeEventMetadata,
+  sanitizeEventName,
+} from '@/lib/analytics/sanitize';
+import { isDuplicateAuthMilestone } from '@/lib/analytics/auth-funnel';
 
 export const dynamic = 'force-dynamic';
 
-const MAX_EVENT_NAME = 80;
-const MAX_PATH = 300;
-const MAX_ID = 120;
-const MAX_PROPERTIES_BYTES = 8_000;
+const MAX_PATH = 240;
 
-function cleanText(value: unknown, max: number): string | null {
+function safeString(value: unknown, max: number): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
-  return trimmed ? trimmed.slice(0, max) : null;
+  if (!trimmed) return null;
+  return trimmed.slice(0, max);
 }
 
-function cleanProperties(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  const json = JSON.stringify(value);
-  if (json.length > MAX_PROPERTIES_BYTES) return { truncated: true };
-  return JSON.parse(json);
-}
-
-export async function POST(request: Request) {
+export async function POST(req: Request) {
   if (!serverIsSupabaseConfigured()) {
-    return NextResponse.json({ ok: false, skipped: 'supabase_not_configured' }, { status: 200 });
+    return NextResponse.json({ ok: false, error: 'Supabase not configured' }, { status: 200 });
   }
 
-  let body: any;
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ ok: false, error: 'invalid_json' }, { status: 400 });
-  }
-
-  const eventName = cleanText(body.event_name, MAX_EVENT_NAME);
+  const body = await req.json().catch(() => ({}));
+  const eventName = sanitizeEventName(body.event_name ?? body.name);
   if (!eventName) {
-    return NextResponse.json({ ok: false, error: 'missing_event_name' }, { status: 400 });
+    return NextResponse.json({ ok: false, error: 'event_name required' }, { status: 400 });
   }
 
   const sb = await getServerSupabase();
   const { data: { user } } = await sb.auth.getUser();
-  const userAgent = request.headers.get('user-agent');
+  const path = safeString(body.path, MAX_PATH);
+  const sessionId = safeString(body.session_id, 120);
+  const anonymousId = safeString(body.anonymous_id, 120);
+  const metadata = sanitizeEventMetadata(body.metadata ?? body.properties);
+  const userAgent = safeHeader(req.headers.get('user-agent'));
+  const referrer = normalizeReferrer(req.headers.get('referer'));
 
-  const row = {
+  const { error } = await (sb.from('user_events') as any).insert({
     user_id: user?.id ?? null,
-    anonymous_id: cleanText(body.anonymous_id, MAX_ID),
-    session_id: cleanText(body.session_id, MAX_ID),
+    anonymous_id: anonymousId,
+    session_id: sessionId,
     event_name: eventName,
-    path: cleanText(body.path, MAX_PATH),
-    referrer: cleanText(body.referrer, MAX_PATH),
-    user_agent: userAgent ? userAgent.slice(0, 500) : null,
-    properties: cleanProperties(body.properties),
-  };
+    path,
+    metadata,
+    user_agent: userAgent,
+    referrer,
+  });
 
-  const { error } = await (sb.from('user_events') as any).insert(row);
   if (error) {
-    console.warn('analytics event insert failed', { eventName, error: error.message });
-    return NextResponse.json({ ok: false, error: 'insert_failed' }, { status: 200 });
+    if (isDuplicateAuthMilestone(eventName, error.code)) {
+      return NextResponse.json({ ok: true, deduplicated: true });
+    }
+    console.warn('event storage unavailable', { code: error.code });
+    return NextResponse.json({ ok: false, error: 'storage unavailable' }, { status: 200 });
   }
-
   return NextResponse.json({ ok: true });
 }

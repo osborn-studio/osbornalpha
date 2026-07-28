@@ -20,11 +20,18 @@ port = 54323
 [auth]
 enabled = true
 site_url = "http://localhost:3000"
-additional_redirect_urls = ["http://localhost:3000/auth/callback", "https://*.vercel.app/auth/callback"]
+additional_redirect_urls = ["http://localhost:3000/auth/callback", "https://osbornalpha.com/auth/callback", "https://www.osbornalpha.com/auth/callback", "https://*.vercel.app/auth/callback"]
 jwt_expiry = 3600
 enable_signup = true
+
+[auth.rate_limit]
+email_sent = 30
 
 [auth.email]
 enable_signup = true
 double_confirm_changes = false
-enable_confirmations = false
+enable_confirmations = true
+max_frequency = "60s"
+
+# Production SMTP is applied selectively through the Supabase Management API.
+# Do not run `supabase config push` against production with local-only URLs.

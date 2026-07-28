@@ -1,0 +1,66 @@
+{
+  "page": {
+    "title": "📡 情报",
+    "subtitle": "发现新方向的向导 + 直达个股的研究入口。"
+  },
+  "tabs": {
+    "discover": "🧭 发现",
+    "research": "🔬 研究"
+  },
+  "wizards": {
+    "bottleneck": {
+      "title": "瓶颈选股向导",
+      "desc": "从赛道/终端系统关键词出发，拆产业链找最窄约束，给出候选清单。",
+      "placeholder": "如：AI 光通信 / 人形机器人 / 储能"
+    },
+    "industryChain": {
+      "title": "产业链尽调向导",
+      "desc": "上中下游全景尽调：规模/技术路线/壁垒/格局/风险，按环节给龙头清单。",
+      "placeholder": "如：光伏胶膜 / 800V 高压平台"
+    },
+    "launch": "启动 →"
+  },
+  "screener": {
+    "title": "股票池筛选器",
+    "scopeNote": "范围：你的股票池（全市场筛选将随 P5 数据升级开放）",
+    "filters": {
+      "market": "市场",
+      "peMax": "PE 上限",
+      "pbMax": "PB 上限",
+      "marketCapMinYi": "市值下限（亿）",
+      "changeToday": "今日涨跌",
+      "unlimited": "不限",
+      "up": "上涨",
+      "down": "下跌"
+    },
+    "columns": {
+      "name": "名称",
+      "ticker": "代码",
+      "price": "价格",
+      "change": "涨跌",
+      "pe": "PE",
+      "pb": "PB",
+      "marketCap": "市值"
+    },
+    "states": {
+      "loading": "加载中…",
+      "emptyWatchlist": "股票池是空的，先去「股票池」添加几只标的。",
+      "noMatches": "没有符合条件的标的。"
+    }
+  },
+  "research": {
+    "search": {
+      "title": "🔎 搜索直达个股",
+      "placeholder": "代码 / 名称（如 完美世界 / AAPL / 600519）",
+      "searching": "搜索中…",
+      "noMatches": "没有匹配。"
+    },
+    "artifacts": {
+      "title": "📁 最近研究档案",
+      "loadFailed": "加载失败：{error}",
+      "loading": "加载中…",
+      "empty": "还没有存档。运行一次深度研究方法或发现向导后，报告会自动归档在这里。",
+      "viewAll": "查看全部档案 →"
+    }
+  }
+}

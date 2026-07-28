@@ -100,3 +100,42 @@ export function extractJson(text: string): any {
   try { return JSON.parse(cleaned); } catch {}
   return null;
 }
+
+// ── Tool-use capable call (for the agent loop) ──────────────────────────────
+export interface ToolDef { name: string; description: string; input_schema: Record<string, unknown>; }
+export interface TextBlock { type: 'text'; text: string; }
+export interface ToolUseBlock { type: 'tool_use'; id: string; name: string; input: any; }
+export type ContentBlock = TextBlock | ToolUseBlock;
+export interface AnthropicMessage { role: 'user' | 'assistant'; content: any; }
+export interface ToolChatResp { content: ContentBlock[]; stop_reason: string; usage: { input_tokens: number; output_tokens: number }; }
+
+export async function anthropicToolChat(opts: {
+  model?: 'claude-sonnet-4-6' | 'claude-opus-4-7';
+  system?: string;
+  messages: AnthropicMessage[];
+  tools: ToolDef[];
+  max_tokens?: number;
+  timeoutMs?: number;
+}): Promise<ToolChatResp> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured');
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 55_000);
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: opts.model || 'claude-sonnet-4-6',
+        max_tokens: opts.max_tokens ?? 1500,
+        system: opts.system,
+        tools: opts.tools,
+        messages: opts.messages,
+      }),
+      signal: ctrl.signal,
+    });
+    if (!resp.ok) throw new Error(`anthropic ${resp.status}: ${await resp.text()}`);
+    const j = await resp.json();
+    return { content: j.content as ContentBlock[], stop_reason: j.stop_reason, usage: j.usage };
+  } finally { clearTimeout(timer); }
+}
