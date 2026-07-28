@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import type { UserIdentity } from '@supabase/supabase-js';
 import { useTranslations } from 'next-intl';
@@ -26,7 +26,7 @@ export function AccountSettings() {
   const [busy, setBusy] = useState(false);
   const configured = isSupabaseConfigured();
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     if (!configured) return;
     const sb = getBrowserSupabase();
     const { data: { user: u } } = await sb.auth.getUser();
@@ -35,8 +35,8 @@ export function AccountSettings() {
     setIdentities(u.identities ?? []);
     const { data: prof } = await sb.from('profiles').select('plan').eq('id', u.id).maybeSingle<{ plan: string }>();
     if (prof?.plan) setPlan(prof.plan);
-  }
-  useEffect(() => { refresh(); }, []);
+  }, [configured]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   async function changeEmail() {
     if (!newEmail) return;

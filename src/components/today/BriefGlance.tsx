@@ -42,7 +42,7 @@ export function BriefGlance() {
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [t]);
 
   return (
     <Panel title={t('brief.title')}>

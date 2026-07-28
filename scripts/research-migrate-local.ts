@@ -176,7 +176,6 @@ const TABLES: Array<{ sqlite: string; prod: string; map: Mapper }> = [
 
 async function main() {
   const ctx = getServiceResearchCtx();
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const Database = require('better-sqlite3');
   const db = new Database(DB_PATH, { readonly: true });
 

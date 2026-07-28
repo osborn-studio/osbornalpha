@@ -14,7 +14,7 @@ export function PortfolioGlance() {
   const { data, loading } = usePortfolio();
   const { decisions } = useDecisions({ status: 'open' });
 
-  const positions = data?.positions ?? [];
+  const positions = useMemo(() => data?.positions ?? [], [data?.positions]);
   const openPositions = useMemo(
     () => positions.filter((p) => p.shares > 0 && !p.closed_at),
     [positions],

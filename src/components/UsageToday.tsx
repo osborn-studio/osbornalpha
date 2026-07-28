@@ -44,7 +44,7 @@ export function UsageToday() {
       .then((d: UsageResp) => { if (!cancelled) setData(d); })
       .catch((e: any) => { if (!cancelled) setError(e?.message || t('loadFailed')); });
     return () => { cancelled = true; };
-  }, [configured]);
+  }, [configured, t]);
 
   if (!configured) return null;
   if (error) return <div className="text-xs text-text-dim">{tSettings('usage.errorLine', { message: error === 'Not authenticated' ? t('signInToView') : error })}</div>;

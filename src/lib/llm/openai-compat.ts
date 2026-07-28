@@ -27,7 +27,6 @@ export interface ToolDef {
 export interface ToolCall {
   id: string;
   name: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   arguments: any;
 }
 
@@ -105,7 +104,6 @@ export async function toolChat(
   cfg: LlmConfig,
   opts: {
     system?: string;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     messages: any[];
     tools: ToolDef[];
     max_tokens?: number;
@@ -119,7 +117,6 @@ export async function toolChat(
   usage: NormalizedUsage;
 }> {
   const timeoutMs = opts.timeoutMs ?? 60000;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const messages: any[] = [];
   if (opts.system) messages.push({ role: 'system', content: opts.system });
   for (const m of opts.messages) messages.push(m);
@@ -156,7 +153,6 @@ export async function toolChat(
   const content = rawContent == null ? '' : rawContent;
   const rawCalls = choice?.message?.tool_calls ?? [];
   const toolCalls: ToolCall[] = rawCalls.map((tc) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let args: any = {};
     try {
       args = JSON.parse(tc.function.arguments);

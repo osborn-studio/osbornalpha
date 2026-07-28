@@ -12,7 +12,6 @@ type Block =
 
 export interface AnthropicMessage { role: 'user' | 'assistant'; content: Block[] }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function oaiToAnthropic(messages: any[]): AnthropicMessage[] {
   const out: AnthropicMessage[] = [];
   for (const m of messages) {
@@ -95,7 +94,6 @@ function normalizeAnthropicUsage(raw: unknown): NormalizedUsage {
   });
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function responseToTurn(data: { content?: any[]; stop_reason?: string; usage?: unknown }): {
   content: string; toolCalls: ToolCall[]; finishReason: string; usage: NormalizedUsage;
 } {
@@ -110,7 +108,7 @@ export function responseToTurn(data: { content?: any[]; stop_reason?: string; us
 
 export async function anthropicToolChat(
   cfg: LlmConfig,
-  opts: { system?: string; messages: any[]; tools: ToolDef[]; max_tokens?: number; timeoutMs?: number }, // eslint-disable-line @typescript-eslint/no-explicit-any
+  opts: { system?: string; messages: any[]; tools: ToolDef[]; max_tokens?: number; timeoutMs?: number },
 ): Promise<{ content: string; toolCalls: ToolCall[]; finishReason: string; usage: NormalizedUsage }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 60000);
