@@ -4,7 +4,7 @@
 
 **Goal:** Clear the three current high-severity npm advisories and replace the non-functional `next lint` script with a deterministic ESLint gate.
 
-**Architecture:** Keep the application on the patched Next.js 15.5 backport line, while using npm overrides for the vulnerable PostCSS and Sharp transitive versions still pinned by Next.js. Add a native ESLint 10 flat configuration using the version-matched Next plugin, React Hooks rules, and the TypeScript parser without pulling the legacy `minimatch@3` compatibility chain. Retain `tsc --noEmit` as the separate blocking TypeScript correctness gate. Enabling TypeScript lint recommendations is deliberately deferred to a dedicated migration because its first baseline exposed 281 pre-existing explicit-`any` violations; bulk-editing those types is outside this engineering-gate repair.
+**Architecture:** Keep the application on the patched Next.js 15.5 backport line, while using npm overrides for the vulnerable PostCSS and Sharp transitive versions still pinned by Next.js. Add a native ESLint 10 flat configuration using the version-matched Next plugin, React Hooks rules, and the TypeScript parser without pulling the legacy `minimatch@3` compatibility chain. Declare Node `>=22.13.0 <23` as the runtime contract so the supported Node 22 line also satisfies ESLint 10. Retain `tsc --noEmit` as the separate blocking TypeScript correctness gate. Enabling TypeScript lint recommendations is deliberately deferred to a dedicated migration because its first baseline exposed 281 pre-existing explicit-`any` violations; bulk-editing those types is outside this engineering-gate repair.
 
 **Tech Stack:** Next.js 15.5, npm overrides, ESLint 10, `@next/eslint-plugin-next`, `eslint-plugin-react-hooks`, `typescript-eslint`, TypeScript, Vitest.
 
@@ -219,6 +219,8 @@ git commit -m "docs: record engineering gate verification"
 - Before dependency remediation, `npm audit --audit-level=high` exited 1 with three high-severity findings rooted at `next@15.5.20`, its nested `postcss@8.4.31`, and `sharp@0.34.x`.
 - Before the ESLint repair, `npm run lint` exited 1 because the legacy `next lint` command could not provide a deterministic non-interactive gate and instead triggered configuration/failure.
 - The subsequent dependency remediation was committed in `5b6be5f`; the successful ESLint gate was committed in `615b127`.
+- Commit `10135b3` aligned `engines.node` to `>=22.13.0 <23`; verification used Node v22.19.0, which satisfies that declared runtime range.
+- After `10135b3`, the complete repository gates were rerun successfully: the declared typecheck/lint/test command, production build, high-severity audit, dependency-tree inspection, and `git diff --check` all exited 0.
 - `npm run typecheck && npm run lint && npm test` exited 0 with 125/125 test files and 952/952 tests passing.
 - `npm run build` exited 0 and generated 34/34 static pages.
 - `npm audit --audit-level=high` exited 0 with 0 vulnerabilities.
