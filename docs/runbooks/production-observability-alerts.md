@@ -155,7 +155,15 @@ The feature tests, standalone TypeScript check, production build, database reset
 
 ## Auth email probes
 
+> **Paused on 2026-08-02:** the daily signup and recovery probe crons are not
+> registered in `vercel.json`. The configured targets included personal
+> inboxes, so automated sending stays disabled until dedicated synthetic
+> inboxes are provisioned and the crons are explicitly restored. Normal user-
+> initiated signup confirmation and password recovery remain enabled.
+
 The probe targets are stored only in encrypted Vercel environment variables. Database rows contain an HMAC-SHA256 recipient identifier and the public email domain, never the raw address.
+
+When the probes are explicitly enabled:
 
 1. `02:00 UTC / 10:00 Beijing`: create or resend the signup confirmation for each synthetic account.
 2. `02:10 UTC / 10:10 Beijing`: request a password reset for each account.
