@@ -35,6 +35,9 @@
   "positionsRail": {
     "positionsTitle": "Positions · {count}",
     "emptyPositions": "No positions yet — record your first one from the decision bar",
+    "usMarketValue": "US Market Value",
+    "hkMarketValue": "Hong Kong Market Value",
+    "aShareMarketValue": "A-Share Market Value",
     "totalUnrealized": "Total Unrealized",
     "totalMarketValue": "Total Market Value",
     "totalRealized": "Total Realized",

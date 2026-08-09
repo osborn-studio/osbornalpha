@@ -35,6 +35,9 @@
   "positionsRail": {
     "positionsTitle": "持仓 · {count}",
     "emptyPositions": "暂无持仓——从决策条开始记录你的第一笔",
+    "usMarketValue": "美股市值",
+    "hkMarketValue": "港股市值",
+    "aShareMarketValue": "A股市值",
     "totalUnrealized": "总浮盈",
     "totalMarketValue": "总市值",
     "totalRealized": "已实现",

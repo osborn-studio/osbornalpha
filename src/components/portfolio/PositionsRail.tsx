@@ -1,8 +1,8 @@
 'use client';
 
 import { useTranslations } from 'next-intl';
-import { Panel, Metric } from '@/components/ui';
-import { unrealizedPnl, portfolioSummary } from '@/lib/portfolio/pnl';
+import { Panel } from '@/components/ui';
+import { portfolioMarketValueByCurrency, unrealizedPnl, type CurrencyMarketValue } from '@/lib/portfolio/pnl';
 import { cn, formatPct, formatPrice } from '@/lib/utils';
 import type { Position } from '@/lib/supabase/database.types';
 import type { LiveQuote } from '@/lib/hooks/useQuote';
@@ -16,7 +16,7 @@ export function PositionsRail({ positions, quotes, watchTickers, focus, onFocus 
 }) {
   const t = useTranslations('portfolio');
   const prices = Object.fromEntries(Object.entries(quotes).map(([tk, q]) => [tk, q?.price ?? null]));
-  const sum = portfolioSummary(positions, prices);
+  const marketValues = portfolioMarketValueByCurrency(positions, prices);
   const open = positions.filter((p) => p.shares > 0 && !p.closed_at);
   const held = new Set(open.map((p) => p.ticker));
 
@@ -44,10 +44,25 @@ export function PositionsRail({ positions, quotes, watchTickers, focus, onFocus 
           })}
           {!open.length && <p className="text-xs text-[var(--text-dim)]">{t('positionsRail.emptyPositions')}</p>}
         </div>
-        <div className="mt-2 flex gap-3 border-t border-[var(--border)] pt-2">
-          <Metric label={t('positionsRail.totalUnrealized')} value={formatPrice(sum.unrealized)} change={sum.unrealized} />
-          <Metric label={t('positionsRail.totalMarketValue')} value={formatPrice(sum.marketValue)} />
-          <Metric label={t('positionsRail.totalRealized')} value={formatPrice(sum.realized)} change={sum.realized} />
+        <div className="mt-3 space-y-1.5 border-t border-[var(--border)] pt-2">
+          <CurrencyMarketValueRow
+            label={t('positionsRail.usMarketValue')}
+            code="USD"
+            symbol="$"
+            bucket={marketValues.USD}
+          />
+          <CurrencyMarketValueRow
+            label={t('positionsRail.hkMarketValue')}
+            code="HKD"
+            symbol="HK$"
+            bucket={marketValues.HKD}
+          />
+          <CurrencyMarketValueRow
+            label={t('positionsRail.aShareMarketValue')}
+            code="RMB"
+            symbol="¥"
+            bucket={marketValues.CNY}
+          />
         </div>
       </Panel>
 
@@ -66,6 +81,24 @@ export function PositionsRail({ positions, quotes, watchTickers, focus, onFocus 
           })}
         </div>
       </Panel>
+    </div>
+  );
+}
+
+function CurrencyMarketValueRow({ label, code, symbol, bucket }: {
+  label: string;
+  code: string;
+  symbol: string;
+  bucket: CurrencyMarketValue;
+}) {
+  const value = bucket.complete ? formatPrice(bucket.value, symbol) : '--';
+  return (
+    <div className="flex items-center justify-between rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5">
+      <div className="min-w-0">
+        <div className="truncate text-[11px] text-[var(--text-dim)]">{label}</div>
+        <div className="mt-0.5 text-[10px] text-[var(--text-muted)]">{code}</div>
+      </div>
+      <div className="num text-sm font-medium text-[var(--text)]">{value}</div>
     </div>
   );
 }

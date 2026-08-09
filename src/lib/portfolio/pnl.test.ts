@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { unrealizedPnl, portfolioSummary, latestOpenDecision } from './pnl';
+import { unrealizedPnl, portfolioMarketValueByCurrency, portfolioSummary, latestOpenDecision } from './pnl';
 import type { Position, Decision } from '@/lib/supabase/database.types';
 
 const pos = (o: Partial<Position>): Position => ({
@@ -35,6 +35,44 @@ describe('portfolioSummary', () => {
     expect(s.unrealized).toBe(0); // no quote for X yet
     expect(s.realized).toBe(300);
     expect(s.marketValue).toBe(0);
+  });
+});
+
+describe('portfolioMarketValueByCurrency', () => {
+  it('keeps A-share, US, and Hong Kong market values in separate currencies', () => {
+    const values = portfolioMarketValueByCurrency(
+      [
+        pos({ ticker: '002624.SZ', shares: 1000, currency: 'CNY' }),
+        // Historical trade entry defaulted currency to CNY, so market identity
+        // must win over the stored value for US and Hong Kong tickers.
+        pos({ ticker: 'AAPL', shares: 10, currency: 'CNY' }),
+        pos({ ticker: '00700.HK', shares: 100, currency: 'CNY' }),
+      ],
+      { '002624.SZ': 18, AAPL: 200, '00700.HK': 500 },
+    );
+
+    expect(values).toEqual({
+      CNY: { value: 18000, positions: 1, complete: true },
+      USD: { value: 2000, positions: 1, complete: true },
+      HKD: { value: 50000, positions: 1, complete: true },
+    });
+  });
+
+  it('marks a currency incomplete when any open position lacks a quote', () => {
+    const values = portfolioMarketValueByCurrency(
+      [pos({ ticker: 'AAPL', currency: 'USD' }), pos({ ticker: 'MSFT', currency: 'USD' })],
+      { AAPL: 200 },
+    );
+    expect(values.USD).toEqual({ value: 20000, positions: 2, complete: false });
+    expect(values.CNY).toEqual({ value: 0, positions: 0, complete: true });
+  });
+
+  it('uses A-share market identity and ignores closed positions', () => {
+    const values = portfolioMarketValueByCurrency(
+      [pos({ ticker: '600519.SH', currency: 'RMB' }), pos({ ticker: '000001.SZ', currency: 'CNH', closed_at: 'x' })],
+      { '600519.SH': 1500, '000001.SZ': 10 },
+    );
+    expect(values.CNY).toEqual({ value: 150000, positions: 1, complete: true });
   });
 });
 

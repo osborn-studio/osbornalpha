@@ -2,6 +2,7 @@
 // Kept free of hooks/fetch so the node-env vitest covers it.
 
 import type { Position, Decision } from '@/lib/supabase/database.types';
+import { classifyMarket } from '@/lib/utils';
 
 export interface Pnl { value: number; pct: number }
 
@@ -32,6 +33,49 @@ export function portfolioSummary(
     if (u) unrealized += u.value;
   }
   return { marketValue, unrealized, realized, openCount };
+}
+
+export type PortfolioCurrency = 'CNY' | 'USD' | 'HKD';
+
+export interface CurrencyMarketValue {
+  value: number;
+  positions: number;
+  complete: boolean;
+}
+
+export function portfolioMarketValueByCurrency(
+  positions: Position[],
+  prices: Record<string, number | null | undefined>,
+): Record<PortfolioCurrency, CurrencyMarketValue> {
+  const buckets: Record<PortfolioCurrency, CurrencyMarketValue> = {
+    CNY: { value: 0, positions: 0, complete: true },
+    USD: { value: 0, positions: 0, complete: true },
+    HKD: { value: 0, positions: 0, complete: true },
+  };
+
+  for (const position of positions) {
+    if (position.shares <= 0 || position.closed_at) continue;
+    const market = classifyMarket(position.ticker);
+    const currency: PortfolioCurrency | null = market === 'A'
+      ? 'CNY'
+      : market === 'US'
+        ? 'USD'
+        : market === 'HK'
+          ? 'HKD'
+          : null;
+    if (!currency) continue;
+
+    const bucket = buckets[currency];
+    bucket.positions += 1;
+    const price = prices[position.ticker];
+    if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) {
+      bucket.complete = false;
+      continue;
+    }
+    bucket.value += price * position.shares;
+  }
+
+  return buckets;
 }
 
 export function latestOpenDecision(decisions: Decision[], ticker: string): Decision | null {
