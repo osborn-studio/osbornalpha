@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
 /**
  * Full-snapshot watchlist sync (W1 data-loss fix).
  *
- * GET  → { mode: 'server', groups } for the signed-in user;
+ * GET  → { mode: 'server', ownerId, groups } for the signed-in user;
  *        { mode: 'local', groups: null } when Supabase isn't configured
  *        (guest/localStorage mode keeps working).
  * PUT  → replace-all: body { groups: WatchlistGroup[] } becomes the user's
@@ -38,7 +38,7 @@ export async function GET() {
 
   try {
     const rows = await loadRows(sb);
-    return NextResponse.json({ mode: 'server', groups: serverToGroups(rows) });
+    return NextResponse.json({ mode: 'server', ownerId: user.id, groups: serverToGroups(rows) });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
@@ -114,7 +114,7 @@ export async function PUT(req: Request) {
     }
 
     const rows = await loadRows(sb);
-    return NextResponse.json({ mode: 'server', groups: serverToGroups(rows) });
+    return NextResponse.json({ mode: 'server', ownerId: user.id, groups: serverToGroups(rows) });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }

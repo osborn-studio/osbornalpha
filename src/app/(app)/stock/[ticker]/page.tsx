@@ -96,7 +96,7 @@ export default function StockDetailPage() {
   }
 
   function toggleWatchlist() {
-    if (!stock) return;
+    if (!stock || !hydrated) return;
     if (inWatchlist) {
       const next = groups.map((g) => ({ ...g, tickers: g.tickers.filter((t) => t !== ticker) }));
       setGroups(next);
@@ -137,7 +137,8 @@ export default function StockDetailPage() {
         </span>
         <button
           onClick={toggleWatchlist}
-          className={`ml-auto rounded px-3.5 py-2 text-sm ${
+          disabled={!hydrated}
+          className={`ml-auto rounded px-3.5 py-2 text-sm disabled:cursor-wait disabled:opacity-50 ${
             inWatchlist ? 'bg-bg-card text-warn' : 'bg-accent-dim text-white'
           }`}
         >

@@ -51,3 +51,48 @@ test('a 50-stock watchlist is fetched in bounded chunks without dropping tickers
   expect(requestedChunks.every((chunk) => chunk.length <= 10)).toBe(true);
   expect(new Set(requestedChunks.map((chunk) => chunk.join(','))).size).toBe(5);
 });
+
+test('adding from a stock page survives immediate navigation and reload', async ({ page }) => {
+  const ownerId = 'test-user';
+  let serverGroups = [{ id: 'server-board', name: '我的股票池', tickers: [] as string[] }];
+  let putCount = 0;
+
+  await page.addInitScript(() => {
+    localStorage.setItem('stock-monitor:watchlist:v2', JSON.stringify([
+      { id: 'server-board', name: '我的股票池', tickers: [] },
+    ]));
+    localStorage.removeItem('stock-monitor:watchlist-pending:v1:test-user');
+  });
+  await page.route('**/api/watchlist/sync', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ mode: 'server', ownerId, groups: serverGroups }),
+      });
+      return;
+    }
+
+    putCount += 1;
+    const body = route.request().postDataJSON() as { groups: typeof serverGroups };
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    serverGroups = body.groups;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ mode: 'server', ownerId, groups: serverGroups }),
+    });
+  });
+  await page.route('**/api/events', (route) => route.fulfill({ status: 204, body: '' }));
+
+  await page.goto('/stock/NVDA');
+  const addButton = page.getByRole('button', { name: '加入股票池' });
+  await expect(addButton).toBeEnabled();
+  await addButton.click();
+  await page.goto('/watchlist');
+
+  await expect(page.locator('a[href="/stock/NVDA"]')).toHaveCount(1);
+  await expect.poll(() => putCount).toBeGreaterThan(0);
+  await page.reload();
+  await expect(page.locator('a[href="/stock/NVDA"]')).toHaveCount(1);
+});

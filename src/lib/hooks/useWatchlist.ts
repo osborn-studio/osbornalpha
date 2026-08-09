@@ -2,91 +2,130 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  parseWatchlistGroups,
   resolveInitialWatchlist,
   subscribeToWatchlist,
   writeLocalWatchlist,
   type WatchlistGroup,
 } from '@/lib/watchlist/store';
+import { createWatchlistSyncQueue, watchlistPendingStorageKey } from '@/lib/watchlist/client-sync';
 import { isDefaultWatchlist } from '@/lib/watchlist/sync';
 import { trackEvent } from '@/lib/analytics/client';
 
-const SYNC_DEBOUNCE_MS = 600;
+type WatchlistSyncQueue = ReturnType<typeof createWatchlistSyncQueue>;
+
+const browserSyncQueues = new Map<string, WatchlistSyncQueue>();
+
+function getBrowserSyncQueue(ownerId: string) {
+  if (typeof window === 'undefined') return null;
+  const existing = browserSyncQueues.get(ownerId);
+  if (existing) return existing;
+
+  const queue = createWatchlistSyncQueue({
+    storage: window.localStorage,
+    storageKey: watchlistPendingStorageKey(ownerId),
+    put: async (groups) => {
+      const response = await fetch('/api/watchlist/sync', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ groups }),
+      });
+      if (!response.ok) return null;
+      const body = await response.json();
+      if (body?.ownerId !== ownerId || !Array.isArray(body?.groups)) return null;
+      return parseWatchlistGroups(JSON.stringify(body.groups));
+    },
+    applyCanonical: writeLocalWatchlist,
+  });
+
+  browserSyncQueues.set(ownerId, queue);
+  return queue;
+}
+
+async function fetchServerWatchlist() {
+  const response = await fetch('/api/watchlist/sync');
+  if (!response.ok) return null;
+  const body = await response.json();
+  if (body?.mode !== 'server' || typeof body?.ownerId !== 'string' || !Array.isArray(body?.groups)) {
+    return null;
+  }
+  const groups = parseWatchlistGroups(JSON.stringify(body.groups));
+  return groups === null ? null : { ownerId: body.ownerId, groups };
+}
 
 /**
  * Server-first watchlist (W1 data-loss fix), same return signature as v1.
  *
  * Mount: paint from localStorage immediately, then reconcile with the server —
+ *   pending local write → flush it before any server read;
  *   server has data → server wins (write-through to localStorage);
  *   server empty + local is user data (≠ mock defaults) → one-time migration
  *   PUT rescues the local pool onto the server;
  *   signed out / Supabase unconfigured / offline → localStorage mode as before.
- * Writes: optimistic localStorage + debounced PUT; PUT failures are silent
- *   (local copy survives, next mount retries the reconcile).
+ * Writes: optimistic localStorage + durable pending snapshot + immediate PUT.
+ *   Navigation cannot cancel the save; failures retry on the next mount.
  */
 export function useWatchlist() {
   const [groups, setGroups] = useState<WatchlistGroup[]>([]);
   const [hydrated, setHydrated] = useState(false);
-  const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const syncQueue = useRef<WatchlistSyncQueue | null>(null);
 
   useEffect(() => {
-    const local = resolveInitialWatchlist();
+    let local = resolveInitialWatchlist();
     setGroups(local);
-    setHydrated(true);
 
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch('/api/watchlist/sync');
-        if (!res.ok || cancelled) return; // 401 guest → stay local
-        const j = await res.json();
-        if (j?.mode !== 'server' || cancelled) return;
-        const server = (j.groups ?? []) as WatchlistGroup[];
-        if (server.length > 0) {
-          writeLocalWatchlist(server); // dispatches change event → setGroups below
+        let server = await fetchServerWatchlist();
+        if (!server || cancelled) return; // guest / local mode → stay local
+
+        const ownerId = server.ownerId;
+        const queue = getBrowserSyncQueue(ownerId);
+        syncQueue.current = queue;
+        if (queue?.hasPending()) {
+          const flushed = await queue.flush();
+          if (!flushed || cancelled) return;
+          local = resolveInitialWatchlist();
+          server = await fetchServerWatchlist();
+          if (!server || server.ownerId !== ownerId || cancelled) return;
+        }
+
+        if (server.groups.length > 0) {
+          writeLocalWatchlist(server.groups); // dispatches change event → setGroups below
         } else if (!isDefaultWatchlist(local)) {
-          const put = await fetch('/api/watchlist/sync', {
-            method: 'PUT',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ groups: local }),
-          });
-          if (put.ok && !cancelled) {
-            const pj = await put.json();
-            if (Array.isArray(pj?.groups)) writeLocalWatchlist(pj.groups);
-          }
+          await queue?.enqueue(local);
         }
       } catch {
         // offline / network error → localStorage mode
+      } finally {
+        if (!cancelled) setHydrated(true);
       }
     })();
 
     const unsubscribe = subscribeToWatchlist((next) => {
       setGroups(next);
-      setHydrated(true);
     });
     return () => {
       cancelled = true;
       unsubscribe();
-      if (syncTimer.current) clearTimeout(syncTimer.current);
     };
   }, []);
 
   const persistGroups = useCallback((next: WatchlistGroup[]) => {
+    if (!hydrated) return;
     trackEvent('watchlist_changed', {
       groups: next.length,
       tickers: next.reduce((sum, g) => sum + g.tickers.length, 0),
     });
     setGroups(next);
-    setHydrated(true);
     writeLocalWatchlist(next);
-    if (syncTimer.current) clearTimeout(syncTimer.current);
-    syncTimer.current = setTimeout(() => {
-      fetch('/api/watchlist/sync', {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ groups: next }),
-      }).catch((e) => console.warn('watchlist sync failed (kept locally):', e?.message));
-    }, SYNC_DEBOUNCE_MS);
-  }, []);
+    syncQueue.current?.enqueue(next).then((saved) => {
+      if (!saved) console.warn('watchlist sync failed (kept locally)');
+    }).catch((error) => {
+      console.warn('watchlist sync failed (kept locally):', error instanceof Error ? error.message : error);
+    });
+  }, [hydrated]);
 
   return { groups, hydrated, setGroups: persistGroups };
 }

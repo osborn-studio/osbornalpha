@@ -22,6 +22,7 @@ export function parseWatchlistGroups(raw: string | null): WatchlistGroup[] | nul
 
   const parsed = JSON.parse(raw);
   if (!Array.isArray(parsed)) return null;
+  if (parsed.length === 0) return [];
 
   // Salvage parsing: skip malformed entries instead of discarding the whole
   // list — an all-or-nothing null here silently reset users to the mock
@@ -55,7 +56,7 @@ export function readLocalWatchlist(): WatchlistGroup[] | null {
 }
 
 export function resolveInitialWatchlist(): WatchlistGroup[] {
-  return readLocalWatchlist() || defaultWatchlistGroups();
+  return readLocalWatchlist() ?? defaultWatchlistGroups();
 }
 
 export function writeLocalWatchlist(groups: WatchlistGroup[]): void {
