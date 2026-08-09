@@ -16,6 +16,20 @@ describe('watchlist security validation', () => {
     expect(canAddResult({ ...verified, selectable: false })).toBe(false);
   });
 
+  it('resolves a complete ticker when only unrelated fuzzy results exist', () => {
+    const fuzzyHongKongResult = {
+      t: '01072.HK',
+      n: '东方电气',
+      selectable: true,
+      verification_status: 'verified',
+    };
+
+    expect(nextSearchAction({
+      localResults: [fuzzyHongKongResult],
+      query: 'DFDV',
+    })).toBe('resolve');
+  });
+
   it('canonicalizes requested forms and accepts only active listed master rows', async () => {
     const load = vi.fn(async () => [
       { ticker: '002463.SZ', is_active: true, list_status: 'listed', source: 'tushare' },

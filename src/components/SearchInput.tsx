@@ -5,8 +5,16 @@ import { MarketLabel } from '@/components/MarketLabel';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import type { Market } from '@/lib/supabase/database.types';
+import { nextSearchAction } from '@/lib/watchlist/security-validation';
 
-interface ApiResult { t: string; n: string; py: string; m: Market }
+interface ApiResult {
+  t: string;
+  n: string;
+  py: string;
+  m: Market;
+  selectable?: boolean;
+  verification_status?: string;
+}
 
 export function SearchInput() {
   const t = useTranslations('components.search');
@@ -53,9 +61,24 @@ export function SearchInput() {
       const resp = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: ctrl.signal });
       if (!resp.ok) throw new Error('search failed');
       const data = await resp.json();
-      setResults(data.results || []);
-      setSource(data.source || '');
-      setOpen((data.results || []).length > 0);
+      let nextResults: ApiResult[] = data.results || [];
+      let nextSource = data.source || '';
+      if (nextSearchAction({ localResults: nextResults, query: q }) === 'resolve') {
+        const resolveResponse = await fetch('/api/securities/resolve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: q }),
+          signal: ctrl.signal,
+        });
+        if (resolveResponse.ok) {
+          const resolved = await resolveResponse.json();
+          nextResults = resolved.result ? [resolved.result] : [];
+          nextSource = resolved.source || nextSource;
+        }
+      }
+      setResults(nextResults);
+      setSource(nextSource);
+      setOpen(nextResults.length > 0);
       setFocusIdx(-1);
     } catch (e: any) {
       if (e.name !== 'AbortError') {

@@ -23,8 +23,14 @@ export function nextSearchAction(input: {
   localResults: SearchSelectionResult[];
   query: string;
 }): SearchAction {
-  if (input.localResults.some(canAddResult)) return 'select';
-  return isCompleteCodeQuery(input.query.trim()) ? 'resolve' : 'wait';
+  const query = input.query.trim();
+  if (isCompleteCodeQuery(query)) {
+    const canonical = canonicalizeSecurityTicker(query);
+    return input.localResults.some((result) => canAddResult(result) && result.t === canonical)
+      ? 'select'
+      : 'resolve';
+  }
+  return input.localResults.some(canAddResult) ? 'select' : 'wait';
 }
 
 export function canonicalizeSecurityTicker(value: string): string | null {

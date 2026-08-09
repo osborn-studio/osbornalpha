@@ -103,7 +103,7 @@ describe('POST /api/securities/resolve', () => {
     vi.useFakeTimers();
     vi.mocked(resolveTrustedSecurity).mockImplementation(() => new Promise(() => {}));
     const pending = POST(request({ query: '002463' }));
-    await vi.advanceTimersByTimeAsync(1600);
+    await vi.advanceTimersByTimeAsync(6100);
     const response = await pending;
     expect(response.status).toBe(504);
     expect(await response.json()).toEqual({ error: 'security_resolve_timeout' });

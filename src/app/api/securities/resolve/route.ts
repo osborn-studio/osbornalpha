@@ -15,7 +15,7 @@ import { getServerSupabase } from '@/lib/supabase/server';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 10;
 
-const RESOLVE_TIMEOUT_MS = 1500;
+const RESOLVE_TIMEOUT_MS = 6000;
 
 class ResolveTimeoutError extends Error {}
 

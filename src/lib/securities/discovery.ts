@@ -55,7 +55,12 @@ export function validateTrustedResolution(
   }
   const memberships = value.memberships.filter((row) => row.ticker === expectedTicker
     && row.is_active && APPROVED_UNIVERSES.has(row.universe));
-  if (memberships.length === 0) throw new Error('Trusted resolution requires an approved membership.');
+  const isExactNasdaqIdentity = security.market === 'US'
+    && security.source === 'nasdaq'
+    && ['NASDAQ', 'NYSE', 'AMEX'].includes(security.exchange);
+  if (memberships.length === 0 && !isExactNasdaqIdentity) {
+    throw new Error('Trusted resolution requires an approved membership.');
+  }
   if (value.aliases.some((alias) => alias.ticker !== expectedTicker)) {
     throw new Error('Trusted resolution contains an invalid alias.');
   }
@@ -99,7 +104,6 @@ export async function resolveTrustedSecurity(query: string, asOf: string): Promi
   const china = selectUsChina(candidates, overridesJson as UsChinaOverrides, asOf)
     .filter((row) => row.ticker === ticker);
   const memberships = [...top, ...china];
-  if (!memberships.length) return null;
   return validateTrustedResolution({
     securities: [candidate.security],
     aliases: buildAliases({ ...candidate.security, source: 'nasdaq' }),

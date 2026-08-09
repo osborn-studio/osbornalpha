@@ -27,6 +27,31 @@ describe('security discovery', () => {
     expect(() => validateTrustedResolution(invalid, '002463.SZ')).toThrowError(/approved membership/i);
   });
 
+  it('accepts an exact Nasdaq identity without inventing curated-universe membership', () => {
+    const exact = trustedSnapshot();
+    exact.securities[0] = {
+      ...exact.securities[0],
+      ticker: 'DFDV',
+      symbol: 'DFDV',
+      name: 'DeFi Development Corp. Common Stock',
+      name_en: 'DeFi Development Corp. Common Stock',
+      full_name: 'DeFi Development Corp. - Common Stock',
+      pinyin: null,
+      market: 'US',
+      exchange: 'NASDAQ',
+      currency: 'USD',
+      country_code: 'US',
+      source: 'nasdaq',
+    };
+    exact.aliases = [{ alias: 'dfdv', ticker: 'DFDV', alias_type: 'symbol', source: 'nasdaq' }];
+    exact.memberships = [];
+
+    expect(validateTrustedResolution(exact, 'DFDV')).toMatchObject({
+      ticker: 'DFDV',
+      memberships: [],
+    });
+  });
+
   it('maps Eastmoney-only matches to non-selectable candidates', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
       QuotationCodeTable: { Data: [{ Code: '002463', Name: '沪电股份', PinYin: 'HDGF', QuoteID: '0.002463', SecurityTypeName: 'A股', Classify: 'AStock' }] },
