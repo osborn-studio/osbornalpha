@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyMarket } from './utils';
+import { classifyMarket, currencyCodeOfMarket, formatSignedPrice } from './utils';
 
 describe('classifyMarket — six markets', () => {
   it.each([
@@ -10,4 +10,22 @@ describe('classifyMarket — six markets', () => {
   ])('%s → %s', (t, m) => expect(classifyMarket(t)).toBe(m));
   // 关键陷阱：.TW 不能被 .T 规则吃掉（$ 锚定保证，测试锁死）
   it('.TW is not JP', () => expect(classifyMarket('2330.TW')).not.toBe('JP'));
+});
+
+describe('currencyCodeOfMarket', () => {
+  it.each([
+    ['A', 'CNY'],
+    ['US', 'USD'],
+    ['HK', 'HKD'],
+  ] as const)('%s market uses %s', (market, currency) => {
+    expect(currencyCodeOfMarket(market)).toBe(currency);
+  });
+});
+
+describe('formatSignedPrice', () => {
+  it('places the sign before the currency symbol', () => {
+    expect(formatSignedPrice(10000, '¥')).toBe('+¥10,000.00');
+    expect(formatSignedPrice(-250.5, '$')).toBe('-$250.50');
+    expect(formatSignedPrice(0, 'HK$')).toBe('HK$0.00');
+  });
 });

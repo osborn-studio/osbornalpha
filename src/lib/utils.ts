@@ -10,6 +10,11 @@ export function formatPrice(v: number, currency = '') {
   return `${currency}${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+export function formatSignedPrice(v: number, currency = '') {
+  const sign = v > 0 ? '+' : v < 0 ? '-' : '';
+  return `${sign}${formatPrice(Math.abs(v), currency)}`;
+}
+
 export function formatPct(v: number, withSign = true) {
   const s = withSign && v > 0 ? '+' : '';
   return `${s}${v.toFixed(2)}%`;
@@ -43,8 +48,16 @@ export const MARKET_CURRENCY: Record<Market, string> = {
   A: '¥', HK: 'HK$', US: '$', JP: 'JP¥', KR: '₩', TW: 'NT$',
 };
 
+export const MARKET_CURRENCY_CODE: Record<Market, string> = {
+  A: 'CNY', HK: 'HKD', US: 'USD', JP: 'JPY', KR: 'KRW', TW: 'TWD',
+};
+
 export function currencyOfMarket(market: Market): string {
   return MARKET_CURRENCY[market];
+}
+
+export function currencyCodeOfMarket(market: Market): string {
+  return MARKET_CURRENCY_CODE[market];
 }
 
 /**

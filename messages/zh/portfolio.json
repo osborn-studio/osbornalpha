@@ -41,6 +41,24 @@
     "watchlistTitle": "股票池 · 观察中"
   },
   "focusPanel": {
+    "holding": "持仓",
+    "price": "价格",
+    "positionPnl": "持仓盈亏",
+    "totalMarketValue": "总市值",
+    "holdingQuantity": "持仓数量",
+    "currentPrice": "现价",
+    "averagePrice": "均价",
+    "pnlAmount": "盈亏金额",
+    "pnlPercent": "盈亏比例",
+    "currencyUnit": "货币单位",
+    "currencyUnits": {
+      "CNY": "人民币（CNY）",
+      "USD": "美元（USD）",
+      "HKD": "港币（HKD）",
+      "JPY": "日元（JPY）",
+      "KRW": "韩元（KRW）",
+      "TWD": "新台币（TWD）"
+    },
     "positionCost": "持仓成本",
     "unrealized": "浮盈",
     "targetPrice": "目标价",

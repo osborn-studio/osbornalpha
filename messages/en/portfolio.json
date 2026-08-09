@@ -41,6 +41,24 @@
     "watchlistTitle": "Watchlist · Watching"
   },
   "focusPanel": {
+    "holding": "Position",
+    "price": "Price",
+    "positionPnl": "Position P&L",
+    "totalMarketValue": "Market Value",
+    "holdingQuantity": "Shares Held",
+    "currentPrice": "Current Price",
+    "averagePrice": "Average Price",
+    "pnlAmount": "P&L Amount",
+    "pnlPercent": "P&L Percent",
+    "currencyUnit": "Currency",
+    "currencyUnits": {
+      "CNY": "Chinese yuan (CNY)",
+      "USD": "US dollar (USD)",
+      "HKD": "Hong Kong dollar (HKD)",
+      "JPY": "Japanese yen (JPY)",
+      "KRW": "South Korean won (KRW)",
+      "TWD": "New Taiwan dollar (TWD)"
+    },
     "positionCost": "Position Cost",
     "unrealized": "Unrealized P&L",
     "targetPrice": "Target Price",
