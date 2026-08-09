@@ -2,10 +2,16 @@
 
 import { useTranslations } from 'next-intl';
 import { Panel } from '@/components/ui';
-import { portfolioMarketValueByCurrency, unrealizedPnl, type CurrencyMarketValue } from '@/lib/portfolio/pnl';
-import { cn, formatPct, formatPrice } from '@/lib/utils';
+import { portfolioMarketValueByCurrency, unrealizedPnl } from '@/lib/portfolio/pnl';
+import { classifyMarket, cn, formatPct, formatPrice, formatSignedPrice } from '@/lib/utils';
 import type { Position } from '@/lib/supabase/database.types';
 import type { LiveQuote } from '@/lib/hooks/useQuote';
+
+const MARKET_GROUPS = [
+  { market: 'US', currency: 'USD', symbol: '$', flag: '🇺🇸', labelKey: 'usMarketValue' },
+  { market: 'HK', currency: 'HKD', symbol: 'HK$', flag: '🇭🇰', labelKey: 'hkMarketValue' },
+  { market: 'A', currency: 'CNY', symbol: '¥', flag: '🇨🇳', labelKey: 'aShareMarketValue' },
+] as const;
 
 export function PositionsRail({ positions, quotes, watchTickers, focus, onFocus }: {
   positions: Position[];
@@ -23,46 +29,75 @@ export function PositionsRail({ positions, quotes, watchTickers, focus, onFocus 
   return (
     <div className="space-y-3">
       <Panel title={t('positionsRail.positionsTitle', { count: open.length })}>
-        <div className="space-y-[var(--row-gap)]">
-          {open.map((p) => {
-            const q = quotes[p.ticker];
-            const u = unrealizedPnl(p, q?.price ?? null);
+        <div className="space-y-3">
+          {MARKET_GROUPS.map((group) => {
+            const groupPositions = open.filter((position) => classifyMarket(position.ticker) === group.market);
+            if (!groupPositions.length) return null;
+            const bucket = marketValues[group.currency];
+            const positionPnls = groupPositions.map((position) => unrealizedPnl(position, quotes[position.ticker]?.price));
+            const pnlComplete = positionPnls.every(Boolean);
+            const groupPnl = positionPnls.reduce((sum, pnl) => sum + (pnl?.value ?? 0), 0);
             return (
-              <button key={p.ticker} onClick={() => onFocus(p.ticker)}
-                className={cn(
-                  'num flex w-full items-center justify-between rounded border px-2 py-1.5 text-left text-xs',
-                  focus === p.ticker
-                    ? 'border-l-2 border-[var(--accent)] bg-[var(--bg-card)]'
-                    : 'border-[var(--border)] bg-[var(--bg)] hover:bg-[var(--bg-card)]',
-                )}>
-                <span>{q?.name ?? p.ticker}</span>
-                <span className={u && u.value >= 0 ? 'text-up' : 'text-down'}>
-                  {u ? formatPct(u.pct) : '--'}
-                </span>
-              </button>
+              <section key={group.market} className="overflow-hidden rounded border border-[var(--border)] bg-[var(--bg)]">
+                <div className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-card)] px-2.5 py-2">
+                  <div>
+                    <div className="text-xs font-medium text-[var(--text)]">
+                      <span className="mr-1.5">{group.flag}</span>
+                      {t(`positionsRail.${group.labelKey}`)}
+                      <span className="ml-1 text-[var(--text-dim)]">({group.currency === 'CNY' ? 'RMB' : group.currency})</span>
+                    </div>
+                    <div className="num mt-0.5 text-sm font-semibold text-[var(--text)]">
+                      {bucket.complete ? formatPrice(bucket.value, group.symbol) : '--'}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[10px] text-[var(--text-muted)]">{t('positionsRail.unrealizedPnl')}</div>
+                    <div className={cn('num text-xs font-medium', pnlComplete ? pnlClass(groupPnl) : 'text-[var(--text-dim)]')}>
+                      {pnlComplete ? formatSignedPrice(groupPnl, group.symbol) : '--'}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="divide-y divide-[var(--border)]">
+                  {groupPositions.map((position) => {
+                    const quote = quotes[position.ticker];
+                    const pnl = unrealizedPnl(position, quote?.price);
+                    const marketValue = quote ? quote.price * position.shares : null;
+                    return (
+                      <button
+                        key={position.ticker}
+                        onClick={() => onFocus(position.ticker)}
+                        className={cn(
+                          'w-full px-2.5 py-2 text-left hover:bg-[var(--bg-card)]',
+                          focus === position.ticker && 'border-l-2 border-[var(--accent)] bg-[var(--bg-card)]',
+                        )}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="truncate text-xs font-medium text-[var(--text)]">{quote?.name ?? position.ticker}</div>
+                            <div className="num mt-0.5 text-[10px] text-[var(--text-muted)]">{position.ticker}</div>
+                          </div>
+                          <div className={cn('text-right', pnl ? pnlClass(pnl.value) : 'text-[var(--text-dim)]')}>
+                            <div className="num text-xs font-medium">{pnl ? formatSignedPrice(pnl.value, group.symbol) : '--'}</div>
+                            <div className="num text-[10px]">{pnl ? formatPct(pnl.pct) : '--'}</div>
+                          </div>
+                        </div>
+                        <div className="mt-2 grid grid-cols-3 gap-2 text-[10px]">
+                          <PositionDatum label={t('focusPanel.holdingQuantity')} value={position.shares.toLocaleString()} />
+                          <PositionDatum label={t('focusPanel.totalMarketValue')} value={marketValue != null ? formatPrice(marketValue, group.symbol) : '--'} />
+                          <PositionDatum
+                            label={`${t('focusPanel.currentPrice')} / ${t('focusPanel.averagePrice')}`}
+                            value={`${quote ? formatPrice(quote.price) : '--'} / ${formatPrice(position.avg_cost)}`}
+                          />
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
             );
           })}
           {!open.length && <p className="text-xs text-[var(--text-dim)]">{t('positionsRail.emptyPositions')}</p>}
-        </div>
-        <div className="mt-3 space-y-1.5 border-t border-[var(--border)] pt-2">
-          <CurrencyMarketValueRow
-            label={t('positionsRail.usMarketValue')}
-            code="USD"
-            symbol="$"
-            bucket={marketValues.USD}
-          />
-          <CurrencyMarketValueRow
-            label={t('positionsRail.hkMarketValue')}
-            code="HKD"
-            symbol="HK$"
-            bucket={marketValues.HKD}
-          />
-          <CurrencyMarketValueRow
-            label={t('positionsRail.aShareMarketValue')}
-            code="RMB"
-            symbol="¥"
-            bucket={marketValues.CNY}
-          />
         </div>
       </Panel>
 
@@ -85,20 +120,18 @@ export function PositionsRail({ positions, quotes, watchTickers, focus, onFocus 
   );
 }
 
-function CurrencyMarketValueRow({ label, code, symbol, bucket }: {
+function PositionDatum({ label, value }: {
   label: string;
-  code: string;
-  symbol: string;
-  bucket: CurrencyMarketValue;
+  value: string;
 }) {
-  const value = bucket.complete ? formatPrice(bucket.value, symbol) : '--';
   return (
-    <div className="flex items-center justify-between rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5">
-      <div className="min-w-0">
-        <div className="truncate text-[11px] text-[var(--text-dim)]">{label}</div>
-        <div className="mt-0.5 text-[10px] text-[var(--text-muted)]">{code}</div>
-      </div>
-      <div className="num text-sm font-medium text-[var(--text)]">{value}</div>
+    <div className="min-w-0">
+      <div className="truncate text-[var(--text-muted)]">{label}</div>
+      <div className="num mt-0.5 truncate text-[var(--text-dim)]">{value}</div>
     </div>
   );
+}
+
+function pnlClass(value: number) {
+  return value > 0 ? 'text-up' : value < 0 ? 'text-down' : 'text-[var(--text)]';
 }

@@ -38,6 +38,7 @@
     "usMarketValue": "US Market Value",
     "hkMarketValue": "Hong Kong Market Value",
     "aShareMarketValue": "A-Share Market Value",
+    "unrealizedPnl": "Unrealized P&L",
     "totalUnrealized": "Total Unrealized",
     "totalMarketValue": "Total Market Value",
     "totalRealized": "Total Realized",
