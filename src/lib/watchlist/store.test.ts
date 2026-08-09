@@ -46,4 +46,8 @@ describe('watchlist store', () => {
   it('returns null only when every entry is malformed', () => {
     expect(parseWatchlistGroups(JSON.stringify([{ bad: true }, 42]))).toBeNull();
   });
+
+  it('preserves an explicitly empty watchlist', () => {
+    expect(parseWatchlistGroups('[]')).toEqual([]);
+  });
 });

@@ -41,12 +41,6 @@ interface SearchResult {
   list_status?: string;
 }
 
-interface WatchlistDbRow {
-  id: string;
-  name: string;
-  watchlist_items: Array<{ ticker: string; sort_order: number }> | null;
-}
-
 interface SecurityIdentityRow {
   ticker: string;
   name: string;
@@ -106,7 +100,8 @@ export default function WatchlistPage() {
   const watchlistViewTracked = useRef(false);
   const postAddTracked = useRef<string | null>(null);
 
-  // ─── Optional Supabase overlay for signed-in users ───
+  // The watchlist hook owns data reconciliation; this lookup only controls the
+  // signed-in banner and must never write a second watchlist snapshot.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -116,27 +111,12 @@ export default function WatchlistPage() {
           const { data: { user: u } } = await sb.auth.getUser();
           if (u && !cancelled) {
             setUser({ id: u.id, email: u.email });
-            const { data: wl } = await sb
-              .from('watchlists')
-              .select('id, name, watchlist_items (ticker, sort_order)')
-              .order('sort_order');
-            if (wl && wl.length > 0) {
-              const groupsFromDb: Group[] = (wl as unknown as WatchlistDbRow[]).map((w) => ({
-                id: w.id,
-                name: w.name,
-                tickers: (w.watchlist_items || [])
-                  .sort((a, b) => a.sort_order - b.sort_order)
-                  .map((item) => item.ticker),
-              }));
-              setGroups(groupsFromDb);
-              return;
-            }
           }
         }
       } catch {}
     })();
     return () => { cancelled = true; };
-  }, [setGroups]);
+  }, []);
 
   function persist(next: Group[]) {
     setGroups(next);
