@@ -40,9 +40,9 @@ test('groups holdings by market and sums each market value independently', async
 
   await page.goto('/portfolio');
 
-  const us = page.locator('section').filter({ hasText: '(USD)' });
-  const hk = page.locator('section').filter({ hasText: '(HKD)' });
-  const cn = page.locator('section').filter({ hasText: '(RMB)' });
+  const us = page.locator('[data-market-group="US"]');
+  const hk = page.locator('[data-market-group="HK"]');
+  const cn = page.locator('[data-market-group="A"]');
 
   await expect(us).toContainText('$2,000.00');
   await expect(us).toContainText('Apple');
@@ -51,6 +51,27 @@ test('groups holdings by market and sums each market value independently', async
   await expect(hk).toContainText('美团-W');
   await expect(cn).toContainText('¥18,000.00');
   await expect(cn).toContainText('完美世界');
-  await expect(page.getByText(/持仓数量|Shares Held/).first()).toBeVisible();
-  await expect(page.getByText(/现价 \/ 均价|Current Price \/ Average Price/).first()).toBeVisible();
+
+  const perfectWorld = cn.locator('[data-position-ticker="002624.SZ"]');
+  await expect(perfectWorld).toContainText('完美世界');
+  await expect(perfectWorld).toContainText('002624.SZ');
+  await expect(perfectWorld).toContainText('+¥1,000.00');
+  await expect(perfectWorld).toContainText('+5.88%');
+  await expect(perfectWorld).not.toContainText(/持仓数量|Shares Held/);
+  await expect(perfectWorld).not.toContainText(/总市值|Total Market Value/);
+  await expect(perfectWorld).not.toContainText(/现价|Current Price/);
+  await expect(perfectWorld).not.toContainText(/均价|Average Price/);
+
+  await expect(page.getByText(/^(持仓数量|Shares Held)$/).first()).toBeVisible();
+  await expect(page.getByText(/^(现价|Current Price)$/).first()).toBeVisible();
+  await expect(page.getByText(/^(均价|Average Price)$/).first()).toBeVisible();
+
+  const railBox = await page.locator('[data-positions-rail]').boundingBox();
+  expect(railBox?.width).toBe(320);
+  const screenshotPath = test.info().outputPath('simplified-cockpit.png');
+  await page.screenshot({ path: screenshotPath, fullPage: true });
+  await test.info().attach('simplified-cockpit', {
+    path: screenshotPath,
+    contentType: 'image/png',
+  });
 });

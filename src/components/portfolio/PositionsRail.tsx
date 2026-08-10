@@ -27,7 +27,7 @@ export function PositionsRail({ positions, quotes, watchTickers, focus, onFocus 
   const held = new Set(open.map((p) => p.ticker));
 
   return (
-    <div className="space-y-3">
+    <div data-positions-rail className="space-y-3">
       <Panel title={t('positionsRail.positionsTitle', { count: open.length })}>
         <div className="space-y-3">
           {MARKET_GROUPS.map((group) => {
@@ -38,7 +38,11 @@ export function PositionsRail({ positions, quotes, watchTickers, focus, onFocus 
             const pnlComplete = positionPnls.every(Boolean);
             const groupPnl = positionPnls.reduce((sum, pnl) => sum + (pnl?.value ?? 0), 0);
             return (
-              <section key={group.market} className="overflow-hidden rounded border border-[var(--border)] bg-[var(--bg)]">
+              <section
+                key={group.market}
+                data-market-group={group.market}
+                className="overflow-hidden rounded border border-[var(--border)] bg-[var(--bg)]"
+              >
                 <div className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-card)] px-2.5 py-2">
                   <div>
                     <div className="text-xs font-medium text-[var(--text)]">
@@ -62,14 +66,15 @@ export function PositionsRail({ positions, quotes, watchTickers, focus, onFocus 
                   {groupPositions.map((position) => {
                     const quote = quotes[position.ticker];
                     const pnl = unrealizedPnl(position, quote?.price);
-                    const marketValue = quote ? quote.price * position.shares : null;
                     return (
                       <button
                         key={position.ticker}
+                        data-position-ticker={position.ticker}
+                        aria-pressed={focus === position.ticker}
                         onClick={() => onFocus(position.ticker)}
                         className={cn(
-                          'w-full px-2.5 py-2 text-left hover:bg-[var(--bg-card)]',
-                          focus === position.ticker && 'border-l-2 border-[var(--accent)] bg-[var(--bg-card)]',
+                          'w-full border-l-2 border-transparent px-2.5 py-2 text-left hover:bg-[var(--bg-card)]',
+                          focus === position.ticker && 'border-[var(--accent)] bg-[var(--bg-card)] ring-1 ring-inset ring-[var(--border)]',
                         )}
                       >
                         <div className="flex items-start justify-between gap-2">
@@ -81,14 +86,6 @@ export function PositionsRail({ positions, quotes, watchTickers, focus, onFocus 
                             <div className="num text-xs font-medium">{pnl ? formatSignedPrice(pnl.value, group.symbol) : '--'}</div>
                             <div className="num text-[10px]">{pnl ? formatPct(pnl.pct) : '--'}</div>
                           </div>
-                        </div>
-                        <div className="mt-2 grid grid-cols-3 gap-2 text-[10px]">
-                          <PositionDatum label={t('focusPanel.holdingQuantity')} value={position.shares.toLocaleString()} />
-                          <PositionDatum label={t('focusPanel.totalMarketValue')} value={marketValue != null ? formatPrice(marketValue, group.symbol) : '--'} />
-                          <PositionDatum
-                            label={`${t('focusPanel.currentPrice')} / ${t('focusPanel.averagePrice')}`}
-                            value={`${quote ? formatPrice(quote.price) : '--'} / ${formatPrice(position.avg_cost)}`}
-                          />
                         </div>
                       </button>
                     );
@@ -116,18 +113,6 @@ export function PositionsRail({ positions, quotes, watchTickers, focus, onFocus 
           })}
         </div>
       </Panel>
-    </div>
-  );
-}
-
-function PositionDatum({ label, value }: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="min-w-0">
-      <div className="truncate text-[var(--text-muted)]">{label}</div>
-      <div className="num mt-0.5 truncate text-[var(--text-dim)]">{value}</div>
     </div>
   );
 }

@@ -41,7 +41,7 @@ function CockpitInner() {
         <a href="/portfolio/positions" className="text-[var(--text-dim)] hover:text-[var(--text)]">{t('nav.positions')}</a>
         <a href="/portfolio/review" className="text-[var(--text-dim)] hover:text-[var(--text)]">{t('nav.review')}</a>
       </nav>
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[360px_minmax(0,1fr)_320px]">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)_320px]">
       <PositionsRail positions={positions} quotes={quotes} watchTickers={watchTickers} focus={focus} onFocus={setFocus} />
       {focus ? (
         <FocusPanel
