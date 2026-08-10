@@ -60,9 +60,9 @@ export async function GET(req: Request, { params }: Ctx) {
     return NextResponse.json({ source: result.source, ticker, bars, meta }, {
       headers: { 'Cache-Control': `private, max-age=${meta.cacheTtlSeconds}` },
     });
-  } catch (error: unknown) {
+  } catch {
     return NextResponse.json(
-      { error: 'provider_error', ticker, range, message: error instanceof Error ? error.message : 'unknown', bars: [] },
+      { error: 'provider_error', ticker, range, bars: [] },
       { status: 502 }
     );
   }

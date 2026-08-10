@@ -81,7 +81,7 @@ export function KlineChart({ ticker }: { ticker: string }) {
 
   const errorMessage = errorCode && ['market_unsupported', 'intraday_unsupported', 'history_unsupported'].includes(errorCode)
     ? t(`errors.${errorCode}`)
-    : error ? t('errors.loadFailed', { error }) : t('errors.noData');
+    : error ? t('errors.loadFailed') : t('errors.noData');
 
   return (
     <div data-testid="kline-chart">

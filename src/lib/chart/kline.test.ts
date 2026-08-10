@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { klineRangeAvailability, parseKlineRange, toChartTimestamp } from './kline';
+import { klineRangeAvailability, marketTimezone, parseKlineRange, toChartTimestamp } from './kline';
 
 describe('kline range contract', () => {
   it('only accepts the public chart ranges', () => {
@@ -19,5 +19,12 @@ describe('kline range contract', () => {
   it('normalizes provider calendar strings without browser timezone parsing', () => {
     expect(toChartTimestamp('2026-08-10 09:30:00')).toBe(Date.UTC(2026, 7, 10, 9, 30, 0) / 1000);
     expect(toChartTimestamp('2026-08-10')).toBe(Date.UTC(2026, 7, 10) / 1000);
+  });
+
+  it('reports each supported market timezone accurately', () => {
+    expect(marketTimezone('A')).toBe('Asia/Shanghai');
+    expect(marketTimezone('HK')).toBe('Asia/Hong_Kong');
+    expect(marketTimezone('TW')).toBe('Asia/Taipei');
+    expect(marketTimezone('US')).toBe('America/New_York');
   });
 });

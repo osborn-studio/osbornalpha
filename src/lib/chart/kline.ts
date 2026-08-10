@@ -56,6 +56,8 @@ export function klineRangeAvailability(ticker: string, range: KlineRange): Kline
 
 export function marketTimezone(market: Market): string {
   if (market === 'US') return 'America/New_York';
+  if (market === 'HK') return 'Asia/Hong_Kong';
+  if (market === 'TW') return 'Asia/Taipei';
   if (market === 'JP') return 'Asia/Tokyo';
   if (market === 'KR') return 'Asia/Seoul';
   return 'Asia/Shanghai';

@@ -35,4 +35,12 @@ describe('GET /api/kline/[ticker]', () => {
     expect(response.status).toBe(200);
     expect(mocks.twse).toHaveBeenCalledWith('2330.TW', 'D', 66);
   });
+
+  it('does not expose upstream error details to clients', async () => {
+    mocks.eastmoney.mockRejectedValue(new Error('internal upstream URL and credentials'));
+
+    const response = await GET(new Request('https://example.test/api/kline/NVDA?range=3m'), ctx('NVDA'));
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: 'provider_error', ticker: 'NVDA', range: '3m', bars: [] });
+  });
 });
