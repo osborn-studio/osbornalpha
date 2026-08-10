@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import type { QuotaNoticeProps } from '@/components/QuotaNotice';
 import type { Market } from '@/lib/supabase/database.types';
+import type { KlineBar, KlineMeta, KlineRange } from '@/lib/chart/kline';
 import { trackEvent } from '@/lib/analytics/client';
 import {
   classifyQuoteBatchOutcome,
@@ -470,53 +471,57 @@ export function usePerspectives(ticker: string | null, autoLoad = false): Perspe
 
 // ─── K-line ───
 export interface KlineState {
-  bars: Array<{ time: string; open: number; high: number; low: number; close: number; volume: number }>;
+  bars: KlineBar[];
   loading: boolean;
   error: string | null;
+  errorCode: string | null;
   source: string | null;
+  meta: KlineMeta | null;
 }
 
 const klineCache = new Map<string, { state: KlineState; ts: number }>();
-const KLINE_TTL = 300_000; // 5 min
 
-export function useKline(ticker: string | null, period: '1' | 'D' | 'W' | 'M' = 'D', limit = 120): KlineState {
-  const [state, setState] = useState<KlineState>({ bars: [], loading: !!ticker, error: null, source: null });
+export function useKline(ticker: string | null, range: KlineRange = '3m'): KlineState {
+  const [state, setState] = useState<KlineState>({ bars: [], loading: !!ticker, error: null, errorCode: null, source: null, meta: null });
 
   useEffect(() => {
     if (!ticker) {
-      setState({ bars: [], loading: false, error: null, source: null });
+      setState({ bars: [], loading: false, error: null, errorCode: null, source: null, meta: null });
       return;
     }
-    const key = `${ticker}|${period}|${limit}`;
+    const key = `${ticker}|${range}`;
     const cached = klineCache.get(key);
-    if (cached && Date.now() - cached.ts < KLINE_TTL) {
+    if (cached?.state.meta && Date.now() - cached.ts < cached.state.meta.cacheTtlSeconds * 1000) {
       setState(cached.state);
       return;
     }
     let cancelled = false;
-    setState((prev) => ({ ...prev, loading: true, error: null }));
+    // Do not show bars from the previous range while this range is loading.
+    setState({ bars: [], loading: true, error: null, errorCode: null, source: null, meta: null });
 
-    fetch(`/api/kline/${encodeURIComponent(ticker)}?period=${period}&limit=${limit}`)
-      .then(async (r) => {
-        if (!r.ok) {
-          if (r.status === 404) return { bars: [], source: 'none' };
-          throw new Error(`HTTP ${r.status}`);
+    fetch(`/api/kline/${encodeURIComponent(ticker)}?range=${range}`)
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) {
+          const error = new Error(data.message || data.error || `HTTP ${response.status}`) as Error & { code?: string };
+          error.code = data.error;
+          throw error;
         }
-        return r.json();
+        return data;
       })
       .then((data) => {
         if (cancelled) return;
-        const next: KlineState = { bars: data.bars || [], loading: false, error: null, source: data.source || null };
+        const next: KlineState = { bars: data.bars || [], loading: false, error: null, errorCode: null, source: data.source || null, meta: data.meta || null };
         klineCache.set(key, { state: next, ts: Date.now() });
         setState(next);
       })
-      .catch((err: any) => {
+      .catch((err: Error & { code?: string }) => {
         if (cancelled) return;
-        setState({ bars: [], loading: false, error: err?.message || '获取失败', source: null });
+        setState({ bars: [], loading: false, error: err.message || 'Failed to load chart data', errorCode: err.code || null, source: null, meta: null });
       });
 
     return () => { cancelled = true; };
-  }, [ticker, period, limit]);
+  }, [ticker, range]);
 
   return state;
 }

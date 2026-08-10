@@ -232,6 +232,23 @@
       "signalsHeading": "🎯 Sentinel 信号 · {score}/10 {stars}",
       "noTriggersToday": "今日无显著触发信号"
     },
+    "chart": {
+      "rangeLabel": "\u8d70\u52bf\u533a\u95f4",
+      "rangeAriaLabel": "\u8d70\u52bf\u56fe\u5468\u671f",
+      "loading": "\u6b63\u5728\u52a0\u8f7d\u884c\u60c5\u2026",
+      "coverage": "\u8986\u76d6\u533a\u95f4 {start} \u2013 {end}",
+      "asOf": "\u622a\u81f3 {value} ({timezone})",
+      "delayed": "\u5ef6\u8fdf\u6570\u636e",
+      "live": "\u5b9e\u65f6\u6570\u636e",
+      "sources": { "eastmoney": "\u6765\u6e90\uff1a\u4e1c\u65b9\u8d22\u5bcc", "twse": "\u6765\u6e90\uff1a\u53f0\u6e7e\u8bc1\u5238\u4ea4\u6613\u6240" },
+      "errors": {
+        "loadFailed": "\u884c\u60c5\u52a0\u8f7d\u5931\u8d25\uff1a{error}",
+        "noData": "\u8be5\u5468\u671f\u6682\u65e0\u53ef\u7528\u884c\u60c5\u6570\u636e",
+        "market_unsupported": "\u5f53\u524d\u5e02\u573a\u6682\u4e0d\u652f\u6301\u5386\u53f2\u56fe\u8868\u6570\u636e\u3002",
+        "intraday_unsupported": "\u5f53\u524d\u5e02\u573a\u6682\u65e0\u53ef\u7528\u7684\u5206\u65f6\u5386\u53f2\u6570\u636e\u3002",
+        "history_unsupported": "\u5f53\u524d\u5e02\u573a\u6682\u65e0\u5b8c\u6574\u4e00\u5e74\u7684\u5386\u53f2\u6570\u636e\u3002"
+      }
+    },
     "ai": {
       "heading": "🤖 AI 委员会观点",
       "pendingLine1": "该标的视角辩论待生成。",

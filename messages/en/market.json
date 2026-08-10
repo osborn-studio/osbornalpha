@@ -232,6 +232,23 @@
       "signalsHeading": "🎯 Sentinel Signal · {score}/10 {stars}",
       "noTriggersToday": "No significant triggers today"
     },
+    "chart": {
+      "rangeLabel": "Trend range",
+      "rangeAriaLabel": "Chart period",
+      "loading": "Loading market data…",
+      "coverage": "Coverage {start} – {end}",
+      "asOf": "As of {value} ({timezone})",
+      "delayed": "Delayed data",
+      "live": "Live data",
+      "sources": { "eastmoney": "Source: Eastmoney", "twse": "Source: TWSE" },
+      "errors": {
+        "loadFailed": "Could not load market data: {error}",
+        "noData": "No market data is available for this period.",
+        "market_unsupported": "Chart history is not yet available for this market.",
+        "intraday_unsupported": "Intraday history is not available for this market.",
+        "history_unsupported": "A complete one-year history is not available for this market."
+      }
+    },
     "ai": {
       "heading": "🤖 Committee Perspectives",
       "pendingLine1": "Perspective debate for this instrument is pending generation.",

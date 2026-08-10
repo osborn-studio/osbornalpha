@@ -1,38 +1,68 @@
 import { NextResponse } from 'next/server';
 import { fetchEastmoneyKline } from '@/lib/data/sources/eastmoney';
 import { fetchTwseKline } from '@/lib/data/sources/twse';
+import {
+  KLINE_RANGE_CONFIG,
+  klineRangeAvailability,
+  marketTimezone,
+  parseKlineRange,
+  toChartTimestamp,
+  type KlineBar,
+  type KlineMeta,
+} from '@/lib/chart/kline';
 import { classifyMarket } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
-export const revalidate = 300;
 
 interface Ctx { params: Promise<{ ticker: string }> }
 
 export async function GET(req: Request, { params }: Ctx) {
   const { ticker: raw } = await params;
   const ticker = decodeURIComponent(raw);
+  const requestedRange = new URL(req.url).searchParams.get('range') ?? '3m';
+  const range = parseKlineRange(requestedRange);
+  if (!range) {
+    return NextResponse.json({ error: 'invalid_range', message: 'range must be one of 1d, 1m, 3m, 1y' }, { status: 400 });
+  }
 
-  const url = new URL(req.url);
-  const requestedPeriod = (url.searchParams.get('period') || 'D').toUpperCase();
-  const period = (['1', 'D', 'W', 'M'].includes(requestedPeriod) ? requestedPeriod : 'D') as '1' | 'D' | 'W' | 'M';
-  const requestedLimit = parseInt(url.searchParams.get('limit') || '120', 10);
-  const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 500) : 120;
+  const unavailable = klineRangeAvailability(ticker, range);
+  if (unavailable) {
+    return NextResponse.json({ error: unavailable, ticker, range, bars: [] }, { status: 422 });
+  }
 
+  const market = classifyMarket(ticker);
+  const config = KLINE_RANGE_CONFIG[range];
   try {
-    // TW → TWSE STOCK_DAY (listed .TW only; .TWO returns null → 404 for now).
-    // Everything else keeps the existing Eastmoney path.
-    const result = classifyMarket(ticker) === 'TW'
-      // TWSE only exposes daily history through the source currently in use.
-      // A 1D selection degrades to the latest daily bar rather than fabricated intraday data.
-      ? await fetchTwseKline(ticker, period === '1' ? 'D' : period, period === '1' ? 1 : limit)
-      : await fetchEastmoneyKline(ticker, period, limit);
+    const result = market === 'TW'
+      ? await fetchTwseKline(ticker, 'D', config.limit)
+      : await fetchEastmoneyKline(ticker, config.providerPeriod, config.limit);
     if (!result || result.bars.length === 0) {
-      return NextResponse.json({ source: 'none', ticker, bars: [] }, { status: 404 });
+      return NextResponse.json({ error: 'no_data', ticker, range, bars: [] }, { status: 404 });
     }
-    return NextResponse.json({ source: result.source, ticker, bars: result.bars });
-  } catch (e: any) {
+
+    const sourceBars = result.bars;
+    const bars: KlineBar[] = sourceBars.map((bar) => ({ ...bar, time: toChartTimestamp(bar.time) })).filter((bar) => bar.time > 0);
+    if (bars.length === 0) {
+      return NextResponse.json({ error: 'invalid_data', ticker, range, bars: [] }, { status: 502 });
+    }
+    const now = new Date().toISOString();
+    const meta: KlineMeta = {
+      range,
+      interval: config.interval,
+      coverageStart: sourceBars[0].time,
+      coverageEnd: sourceBars[sourceBars.length - 1].time,
+      asOf: sourceBars[sourceBars.length - 1].time,
+      timezone: marketTimezone(market),
+      fetchedAt: now,
+      delayed: true,
+      cacheTtlSeconds: config.interval === 'minute' ? 60 : 300,
+    };
+    return NextResponse.json({ source: result.source, ticker, bars, meta }, {
+      headers: { 'Cache-Control': `private, max-age=${meta.cacheTtlSeconds}` },
+    });
+  } catch (error: unknown) {
     return NextResponse.json(
-      { source: 'error', ticker, error: e?.message || 'unknown', bars: [] },
+      { error: 'provider_error', ticker, range, message: error instanceof Error ? error.message : 'unknown', bars: [] },
       { status: 502 }
     );
   }
