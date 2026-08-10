@@ -44,7 +44,7 @@ export function FocusPanel({ ticker, quote, position, decisions, onChanged }: {
         )}
       </div>
 
-      {quote && <KlineChart ticker={ticker} basePrice={quote.price} />}
+      {quote && <KlineChart ticker={ticker} />}
 
       <div data-density="data" className="grid grid-cols-1 gap-3 border-y border-[var(--border)] py-3 sm:grid-cols-3">
         <PositionMetricCard

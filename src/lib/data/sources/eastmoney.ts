@@ -202,15 +202,18 @@ export async function fetchEastmoneyQuote(ticker: string, signal?: AbortSignal):
 // ─── K-line ───
 export interface KlineBar { time: string; open: number; high: number; low: number; close: number; volume: number }
 
+export type KlineInterval = '1' | 'D' | 'W' | 'M';
+
 export async function fetchEastmoneyKline(
   ticker: string,
-  period: 'D' | 'W' | 'M' = 'D',
+  period: KlineInterval = 'D',
   limit = 120
 ): Promise<{ source: 'eastmoney'; bars: KlineBar[] } | null> {
   const parsed = tickerToSecid(ticker);
   if (!parsed) return null;
 
-  const klt = period === 'D' ? '101' : period === 'W' ? '102' : '103';
+  // Eastmoney uses 1 for one-minute bars and 101/102/103 for daily/weekly/monthly.
+  const klt = period === '1' ? '1' : period === 'D' ? '101' : period === 'W' ? '102' : '103';
   const tryFetch = async (secid: string): Promise<KlineBar[]> => {
     const url =
       `https://push2his.eastmoney.com/api/qt/stock/kline/get?cb=cb` +

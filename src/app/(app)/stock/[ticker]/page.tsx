@@ -207,7 +207,7 @@ export default function StockDetailPage() {
         <>
           <div className="card-base">
             <div className="mb-3 text-sm font-semibold text-text-dim">{t('overview.klineHeading')}</div>
-            <KlineChart ticker={stock.ticker} basePrice={stock.price} />
+            <KlineChart ticker={stock.ticker} />
           </div>
           <div className="card-base">
             <div className="mb-3 text-sm font-semibold text-text-dim">{t('overview.metricsHeading')}</div>

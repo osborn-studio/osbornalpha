@@ -479,7 +479,7 @@ export interface KlineState {
 const klineCache = new Map<string, { state: KlineState; ts: number }>();
 const KLINE_TTL = 300_000; // 5 min
 
-export function useKline(ticker: string | null, period: 'D' | 'W' | 'M' = 'D', limit = 120): KlineState {
+export function useKline(ticker: string | null, period: '1' | 'D' | 'W' | 'M' = 'D', limit = 120): KlineState {
   const [state, setState] = useState<KlineState>({ bars: [], loading: !!ticker, error: null, source: null });
 
   useEffect(() => {
