@@ -97,4 +97,12 @@ describe('GET /api/kline/[ticker]', () => {
     expect(response.status).toBe(status);
     expect(await response.json()).toEqual({ error: code, ticker: 'NVDA', range: '1m', bars: [] });
   });
+
+  it('does not expose upstream error details to clients', async () => {
+    mocks.resolve.mockRejectedValue(new Error('internal upstream URL and credentials'));
+
+    const response = await GET(new Request('https://example.test/api/kline/NVDA?range=3m'), ctx('NVDA'));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: 'provider_unavailable', ticker: 'NVDA', range: '3m', bars: [] });
+  });
 });

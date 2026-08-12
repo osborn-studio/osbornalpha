@@ -88,7 +88,7 @@ export function KlineChart({ ticker }: { ticker: string }) {
     'invalid_data',
   ].includes(errorCode)
     ? t(`errors.${errorCode}`)
-    : error ? t('errors.loadFailed', { error }) : t('errors.noData');
+    : error ? t('errors.loadFailed') : t('errors.noData');
 
   return (
     <div data-testid="kline-chart">

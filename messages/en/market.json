@@ -270,7 +270,7 @@
         "intraday": "Daily moving averages are hidden for minute data"
       },
       "errors": {
-        "loadFailed": "Could not load market data: {error}",
+        "loadFailed": "Could not load market data. Please try again.",
         "noData": "No market data is available for this period.",
         "market_unsupported": "Chart history is not yet available for this market.",
         "intraday_unsupported": "Intraday history is not available for this market.",

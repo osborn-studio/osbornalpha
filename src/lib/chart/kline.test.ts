@@ -17,12 +17,6 @@ describe('kline range contract', () => {
     expect(klineRangeAvailability('NVDA', '1y')).toBeNull();
   });
 
-  it('uses each market timezone in metadata', () => {
-    expect(marketTimezone('HK')).toBe('Asia/Hong_Kong');
-    expect(marketTimezone('TW')).toBe('Asia/Taipei');
-    expect(marketTimezone('US')).toBe('America/New_York');
-  });
-
   it('maps 1D to a full regular session for each supported market', () => {
     expect(klineBarLimit('600519.SH', '1d')).toBe(240);
     expect(klineBarLimit('00700.HK', '1d')).toBe(330);
@@ -33,5 +27,12 @@ describe('kline range contract', () => {
   it('normalizes provider calendar strings without browser timezone parsing', () => {
     expect(toChartTimestamp('2026-08-10 09:30:00')).toBe(Date.UTC(2026, 7, 10, 9, 30, 0) / 1000);
     expect(toChartTimestamp('2026-08-10')).toBe(Date.UTC(2026, 7, 10) / 1000);
+  });
+
+  it('reports each supported market timezone accurately', () => {
+    expect(marketTimezone('A')).toBe('Asia/Shanghai');
+    expect(marketTimezone('HK')).toBe('Asia/Hong_Kong');
+    expect(marketTimezone('TW')).toBe('Asia/Taipei');
+    expect(marketTimezone('US')).toBe('America/New_York');
   });
 });
