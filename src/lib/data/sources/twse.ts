@@ -6,7 +6,7 @@
  *     GET https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_2330.tw|otc_5483.tw&json=1&delay=0
  *     Rate limit ~3 req / 5 s → mitigated by (a) native multi-symbol batching
  *     via '|' and (b) a module-level 60 s in-memory cache.
- *   Daily kline (listed .TW only):
+ *   Daily kline (.TW listed and .TWO OTC):
  *     GET https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?date=YYYYMM01&stockNo=2330&response=json
  *   Company universe (for search):
  *     GET https://openapi.twse.com.tw/v1/opendata/t187ap03_L        (上市)
@@ -23,6 +23,7 @@
 import { unstable_cache } from 'next/cache';
 import type { Market } from '@/lib/supabase/database.types';
 import type { UniverseRow } from '@/lib/data/mock';
+import { KlineProviderError, type KlineAdjustment, type SourceKlineBar } from '@/lib/data/kline/types';
 
 export interface TwseQuote {
   source: 'twse';
@@ -76,6 +77,19 @@ function num(s: string | undefined): number | null {
   if (cleaned === '' || cleaned === '-' || cleaned === '--') return null;
   const n = Number(cleaned);
   return isFinite(n) ? n : null;
+}
+
+function rocDate(value: string): string | null {
+  const match = value.trim().match(/^(\d{2,3})\/(\d{2})\/(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]) + 1911;
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const candidate = new Date(Date.UTC(year, month - 1, day));
+  if (candidate.getUTCFullYear() !== year || candidate.getUTCMonth() !== month - 1 || candidate.getUTCDate() !== day) {
+    return null;
+  }
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
 interface MisMsg { [key: string]: string | undefined }
@@ -133,10 +147,8 @@ export function parseStockDayBars(rows: string[][]): TwseDailyBar[] {
   const bars: TwseDailyBar[] = [];
   for (const row of rows) {
     if (!row || row.length < 7) continue;
-    const dm = String(row[0]).trim().match(/^(\d{2,3})\/(\d{2})\/(\d{2})$/);
-    if (!dm) continue;
-    const year = Number(dm[1]) + 1911;
-    const date = `${year}-${dm[2]}-${dm[3]}`;
+    const date = rocDate(String(row[0]));
+    if (!date) continue;
     const open = num(row[3]);
     const high = num(row[4]);
     const low = num(row[5]);
@@ -145,6 +157,62 @@ export function parseStockDayBars(rows: string[][]): TwseDailyBar[] {
     bars.push({ date, open, high, low, close, volume: num(row[1]) ?? 0 });
   }
   return bars;
+}
+
+export function parseTpexTradingStockResponse(payload: unknown, expectedCode: string): TwseDailyBar[] {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new KlineProviderError('protocol', 'TPEx K-line response is not an object');
+  }
+  const root = payload as Record<string, unknown>;
+  if (!Array.isArray(root.tables)) {
+    throw new KlineProviderError('protocol', 'TPEx K-line response is missing tables');
+  }
+  if (root.tables.length === 0) return [];
+  const first = root.tables[0];
+  if (first === null || typeof first !== 'object' || Array.isArray(first)) {
+    throw new KlineProviderError('protocol', 'TPEx K-line table is invalid');
+  }
+  const table = first as Record<string, unknown>;
+  const subtitle = String(table.subtitle ?? '');
+  if (subtitle && !subtitle.trim().startsWith(expectedCode)) {
+    throw new KlineProviderError('invalid_data', 'TPEx K-line response returned a different security');
+  }
+  if (!Array.isArray(table.fields) || !table.fields.every((field) => typeof field === 'string')) {
+    throw new KlineProviderError('protocol', 'TPEx K-line table is missing fields');
+  }
+  if (!Array.isArray(table.data)) throw new KlineProviderError('protocol', 'TPEx K-line table is missing data');
+
+  const normalizedFields = (table.fields as string[]).map((field) => field.replace(/\s/g, ''));
+  const indexOf = (field: string) => normalizedFields.indexOf(field);
+  const indexes = {
+    date: indexOf('日期'),
+    volumeLots: indexOf('成交張數'),
+    open: indexOf('開盤'),
+    high: indexOf('最高'),
+    low: indexOf('最低'),
+    close: indexOf('收盤'),
+  };
+  if (Object.values(indexes).some((index) => index < 0)) {
+    throw new KlineProviderError('protocol', 'TPEx K-line field schema changed');
+  }
+
+  return table.data.map((rawRow) => {
+    if (!Array.isArray(rawRow) || !rawRow.every((cell) => typeof cell === 'string')) {
+      throw new KlineProviderError('invalid_data', 'TPEx K-line row is invalid');
+    }
+    const row = rawRow as string[];
+    const date = rocDate(row[indexes.date] ?? '');
+    const volumeLots = num(row[indexes.volumeLots]);
+    const open = num(row[indexes.open]);
+    const high = num(row[indexes.high]);
+    const low = num(row[indexes.low]);
+    const close = num(row[indexes.close]);
+    if (!date || volumeLots === null || open === null || high === null || low === null || close === null) {
+      throw new KlineProviderError('invalid_data', 'TPEx K-line row contains invalid required values');
+    }
+    // Official field is 成交張數. One board lot for the stock codes supported here is 1,000 shares.
+    return { date, open, high, low, close, volume: volumeLots * 1_000 };
+  });
 }
 
 /** ISO week key (YYYY-Www) for a YYYY-MM-DD date string. */
@@ -273,51 +341,148 @@ export async function fetchTwseQuote(ticker: string): Promise<TwseQuote | null> 
   return map.get(ticker) ?? null;
 }
 
-// ─── Daily kline (TWSE 上市 .TW only; TPEx 上柜 K 线本期不做) ───
+// ─── Daily kline (TWSE listed .TW and TPEx OTC .TWO) ───
 
-const MAX_KLINE_MONTHS = 8;
-const KLINE_MONTH_DELAY_MS = 300;
+const MAX_KLINE_MONTHS = 24;
+const KLINE_MONTH_DELAY_MS = 120;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+export interface TwseKlineOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  now?: Date;
+  monthDelayMs?: number;
+  concurrency?: number;
+}
+
+function taipeiYearMonth(now: Date): { year: number; month: number } {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: 'numeric',
+  }).formatToParts(now);
+  const value = (type: 'year' | 'month') => Number(parts.find((part) => part.type === type)?.value ?? 0);
+  return { year: value('year'), month: value('month') };
+}
+
+export function klineMonthKeys(now: Date, count: number): string[] {
+  const { year, month } = taipeiYearMonth(now);
+  const cursor = new Date(Date.UTC(year, month - 1, 1));
+  return Array.from({ length: count }, () => {
+    const key = `${cursor.getUTCFullYear()}${String(cursor.getUTCMonth() + 1).padStart(2, '0')}`;
+    cursor.setUTCMonth(cursor.getUTCMonth() - 1);
+    return key;
+  });
+}
+
+async function fetchKlineJson(url: string, referer: string, options: TwseKlineOptions): Promise<unknown> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), options.timeoutMs ?? 6000);
+  const signal = options.signal ? AbortSignal.any([ctrl.signal, options.signal]) : ctrl.signal;
+  try {
+    const response = await fetch(url, {
+      headers: { Referer: referer, 'User-Agent': UA },
+      signal,
+      cache: 'no-store',
+    });
+    if (!response.ok) {
+      const retryable = response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500;
+      throw new KlineProviderError(
+        response.status === 429 ? 'rate_limited' : retryable ? 'transient' : 'protocol',
+        `Taiwan K-line HTTP ${response.status}`,
+        retryable,
+        response.status,
+      );
+    }
+    try {
+      return await response.json() as unknown;
+    } catch {
+      throw new KlineProviderError('protocol', 'Taiwan K-line response is not JSON');
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function mapWithConcurrency<T, R>(
+  values: T[],
+  concurrency: number,
+  worker: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let cursor = 0;
+  const run = async () => {
+    while (cursor < values.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await worker(values[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, run));
+  return results;
+}
+
 export async function fetchTwseKline(
   ticker: string,
   period: 'D' | 'W' | 'M' = 'D',
-  limit = 120
-): Promise<{ source: 'twse'; bars: Array<{ time: string; open: number; high: number; low: number; close: number; volume: number }> } | null> {
-  const m = ticker.toUpperCase().match(/^(\d{4,6})\.TW$/); // .TWO not supported this phase
+  limit = 120,
+  options: TwseKlineOptions = {},
+): Promise<{ source: 'twse' | 'tpex'; bars: SourceKlineBar[]; adjustment: KlineAdjustment } | null> {
+  const m = ticker.toUpperCase().match(/^(\d{4,6})\.(TW|TWO)$/);
   if (!m) return null;
   const stockNo = m[1];
+  const board = m[2];
+  const dailyTarget = period === 'D' ? limit : period === 'W' ? limit * 5 : limit * 22;
+  const monthCount = Math.min(MAX_KLINE_MONTHS, Math.max(4, Math.ceil(dailyTarget / 18) + 3));
+  const monthKeys = klineMonthKeys(options.now ?? new Date(), monthCount);
+  const monthDelayMs = options.monthDelayMs ?? KLINE_MONTH_DELAY_MS;
 
-  const all: TwseDailyBar[] = [];
-  const cursor = new Date();
-  for (let i = 0; i < MAX_KLINE_MONTHS; i++) {
-    const yyyymm = `${cursor.getFullYear()}${String(cursor.getMonth() + 1).padStart(2, '0')}`;
-    const url = `https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?date=${yyyymm}01&stockNo=${stockNo}&response=json`;
-    const resp = await fetchWithTimeout(url, 'https://www.twse.com.tw/', 6000);
-    if (resp && resp.ok) {
-      try {
-        const json = await resp.json();
-        if (json?.stat === 'OK' && Array.isArray(json.data)) {
-          all.unshift(...parseStockDayBars(json.data)); // months fetched newest→oldest
+  const monthly = await mapWithConcurrency(monthKeys, Math.max(1, Math.min(options.concurrency ?? 2, 2)), async (yyyymm) => {
+    let bars: TwseDailyBar[];
+    if (board === 'TW') {
+      const url = `https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?date=${yyyymm}01&stockNo=${stockNo}&response=json`;
+      const payload = await fetchKlineJson(url, 'https://www.twse.com.tw/', options);
+      if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+        throw new KlineProviderError('protocol', 'TWSE K-line response is not an object');
+      }
+      const root = payload as Record<string, unknown>;
+      if (root.stat !== 'OK') {
+        if (typeof root.stat === 'string' && /(?:查無資料|沒有符合條件的資料|很抱歉)/.test(root.stat)) bars = [];
+        else throw new KlineProviderError('protocol', 'TWSE K-line response status changed');
+      } else if (Array.isArray(root.data)) {
+        if (!root.data.every((row) => Array.isArray(row) && row.every((cell) => typeof cell === 'string'))) {
+          throw new KlineProviderError('protocol', 'TWSE K-line row schema changed');
         }
-      } catch { /* skip month on parse failure */ }
+        const rows = root.data as string[][];
+        bars = parseStockDayBars(rows);
+        if (bars.length !== rows.length) {
+          throw new KlineProviderError('invalid_data', 'TWSE K-line row contains invalid required values');
+        }
+      } else {
+        throw new KlineProviderError('protocol', 'TWSE K-line response is missing data');
+      }
+    } else {
+      const date = `${yyyymm.slice(0, 4)}/${yyyymm.slice(4, 6)}/01`;
+      const url = `https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingStock?code=${stockNo}&date=${date}&id=&response=json`;
+      const payload = await fetchKlineJson(url, 'https://www.tpex.org.tw/', options);
+      bars = parseTpexTradingStockResponse(payload, stockNo);
     }
-    if (all.length >= limit && period === 'D') break;
-    // For W/M we still cap at MAX_KLINE_MONTHS of daily data.
-    cursor.setDate(1);
-    cursor.setMonth(cursor.getMonth() - 1);
-    if (i < MAX_KLINE_MONTHS - 1) await sleep(KLINE_MONTH_DELAY_MS); // 防限流
-  }
+    if (monthDelayMs > 0) await sleep(monthDelayMs);
+    return bars;
+  });
+
+  const all = monthly.flat();
 
   if (all.length === 0) return null;
-  all.sort((a, b) => (a.date < b.date ? -1 : 1));
+  all.sort((a, b) => a.date.localeCompare(b.date));
   const bars = (period === 'D' ? all : aggregateBars(all, period)).slice(-limit);
   return {
-    source: 'twse',
+    source: board === 'TW' ? 'twse' : 'tpex',
     bars: bars.map((b) => ({ time: b.date, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume })),
+    adjustment: 'none',
   };
 }
 

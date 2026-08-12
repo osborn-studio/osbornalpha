@@ -1,4 +1,13 @@
 import type { Market } from '@/lib/supabase/database.types';
+import type {
+  KlineAdjustment,
+  KlineSourceName,
+} from '@/lib/data/kline/types';
+import type {
+  KlineCacheStatus,
+  KlineFreshness,
+  KlineWarning,
+} from '@/lib/data/kline/reliability';
 import { classifyMarket } from '@/lib/utils';
 
 export const KLINE_RANGES = ['1d', '1m', '3m', '1y'] as const;
@@ -9,6 +18,7 @@ export type KlineUnavailableReason = 'market_unsupported' | 'intraday_unsupporte
 export interface KlineRangeConfig {
   range: KlineRange;
   interval: KlineInterval;
+  granularity: '1m' | '1d';
   providerPeriod: '1' | 'D';
   limit: number;
 }
@@ -26,6 +36,9 @@ export interface KlineBar {
 export interface KlineMeta {
   range: KlineRange;
   interval: KlineInterval;
+  granularity: '1m' | '1d';
+  source: KlineSourceName;
+  adjustment: KlineAdjustment;
   coverageStart: string;
   coverageEnd: string;
   asOf: string;
@@ -33,14 +46,29 @@ export interface KlineMeta {
   fetchedAt: string;
   delayed: boolean;
   cacheTtlSeconds: number;
+  freshness: KlineFreshness;
+  fallbackUsed: boolean;
+  cacheStatus: KlineCacheStatus;
+  completeness: 'complete' | 'partial';
+  partial: boolean;
+  warnings: KlineWarning[];
+  staleAgeSeconds?: number;
 }
 
 export const KLINE_RANGE_CONFIG: Record<KlineRange, KlineRangeConfig> = {
-  '1d': { range: '1d', interval: 'minute', providerPeriod: '1', limit: 240 },
-  '1m': { range: '1m', interval: 'day', providerPeriod: 'D', limit: 22 },
-  '3m': { range: '3m', interval: 'day', providerPeriod: 'D', limit: 66 },
-  '1y': { range: '1y', interval: 'day', providerPeriod: 'D', limit: 260 },
+  '1d': { range: '1d', interval: 'minute', granularity: '1m', providerPeriod: '1', limit: 240 },
+  '1m': { range: '1m', interval: 'day', granularity: '1d', providerPeriod: 'D', limit: 22 },
+  '3m': { range: '3m', interval: 'day', granularity: '1d', providerPeriod: 'D', limit: 66 },
+  '1y': { range: '1y', interval: 'day', granularity: '1d', providerPeriod: 'D', limit: 260 },
 };
+
+export function klineBarLimit(ticker: string, range: KlineRange): number {
+  if (range !== '1d') return KLINE_RANGE_CONFIG[range].limit;
+  const market = classifyMarket(ticker);
+  if (market === 'HK') return 330;
+  if (market === 'US') return 390;
+  return 240;
+}
 
 export function parseKlineRange(value: string | null): KlineRange | null {
   return value && (KLINE_RANGES as readonly string[]).includes(value) ? value as KlineRange : null;
@@ -48,9 +76,8 @@ export function parseKlineRange(value: string | null): KlineRange | null {
 
 export function klineRangeAvailability(ticker: string, range: KlineRange): KlineUnavailableReason | null {
   const market = classifyMarket(ticker);
-  if (market === 'JP' || market === 'KR' || /\.TWO$/i.test(ticker)) return 'market_unsupported';
+  if (market === 'JP' || market === 'KR') return 'market_unsupported';
   if (market === 'TW' && range === '1d') return 'intraday_unsupported';
-  if (market === 'TW' && range === '1y') return 'history_unsupported';
   return null;
 }
 

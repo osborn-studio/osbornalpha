@@ -1,5 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseMisQuote, parseStockDayBars, twseExCh, aggregateBars } from './twse';
+import {
+  aggregateBars,
+  fetchTwseKline,
+  klineMonthKeys,
+  parseMisQuote,
+  parseStockDayBars,
+  parseTpexTradingStockResponse,
+  twseExCh,
+} from './twse';
 
 describe('twseExCh', () => {
   it('maps .TW to tse and .TWO to otc', () => {
@@ -30,6 +38,69 @@ describe('parseStockDayBars', () => {
     const bars = parseStockDayBars(rows);
     expect(bars[0]).toMatchObject({ date: '2026-07-06', open: 1082, high: 1090, low: 1078, close: 1085 });
     expect(bars[0].volume).toBe(25331405);
+  });
+});
+
+describe('TPEx daily history', () => {
+  it('parses the official tradingStock table and checks the security code', () => {
+    const payload = {
+      tables: [{
+        subtitle: '5483 中美晶 115年07月',
+        fields: ['日 期', '成交張數', '成交仟元', '開盤', '最高', '最低', '收盤', '漲跌', '筆數'],
+        data: [['115/07/01', '51,279', '10,101,976', '189.50', '198.00', '189.00', '198.00', '18.00', '26,309']],
+      }],
+    };
+    expect(parseTpexTradingStockResponse(payload, '5483')[0]).toMatchObject({
+      date: '2026-07-01', open: 189.5, high: 198, low: 189, close: 198, volume: 51279000,
+    });
+    expect(() => parseTpexTradingStockResponse(payload, '9999')).toThrow(/different security/);
+    expect(() => parseTpexTradingStockResponse({
+      tables: [{ ...payload.tables[0], fields: ['日期'], data: [] }],
+    }, '5483')).toThrow(/schema changed/);
+    expect(() => parseTpexTradingStockResponse({
+      tables: [{ ...payload.tables[0], data: [['115/02/31', '1', '0', '100', '101', '99', '100', '0', '1']] }],
+    }, '5483')).toThrow(/invalid required values/);
+  });
+
+  it('fetches enough monthly pages to cover a 260-session .TWO range', async () => {
+    const requestedMonths: string[] = [];
+    const stub = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      const [year, month] = (url.searchParams.get('date') ?? '').split('/').map(Number);
+      requestedMonths.push(`${year}${String(month).padStart(2, '0')}`);
+      const rocYear = year - 1911;
+      const data = Array.from({ length: 20 }, (_, index) => {
+        const day = String(index + 1).padStart(2, '0');
+        return [`${rocYear}/${String(month).padStart(2, '0')}/${day}`, '1,000', '0', '100', '102', '99', '101', '1', '10'];
+      });
+      return new Response(JSON.stringify({
+        tables: [{
+          subtitle: '5483 中美晶',
+          fields: ['日 期', '成交張數', '成交仟元', '開盤', '最高', '最低', '收盤', '漲跌', '筆數'],
+          data,
+        }],
+      }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', stub);
+    try {
+      const result = await fetchTwseKline('5483.TWO', 'D', 260, {
+        now: new Date('2026-08-12T00:00:00Z'),
+        monthDelayMs: 0,
+        concurrency: 2,
+      });
+      expect(result).toMatchObject({ source: 'tpex', adjustment: 'none' });
+      expect(result?.bars).toHaveLength(260);
+      expect(requestedMonths).toHaveLength(18);
+      expect(new Set(requestedMonths).size).toBe(18);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('klineMonthKeys', () => {
+  it('uses the Taipei calendar month and walks backward', () => {
+    expect(klineMonthKeys(new Date('2026-08-12T00:00:00Z'), 3)).toEqual(['202608', '202607', '202606']);
   });
 });
 

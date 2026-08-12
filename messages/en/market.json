@@ -219,7 +219,7 @@
       "amplitude": "Amplitude"
     },
     "overview": {
-      "klineHeading": "📊 Candlestick (Daily)",
+      "klineHeading": "📊 Price Chart",
       "metricsHeading": "📐 Key Metrics",
       "peTtm": "PE (TTM)",
       "pb": "PB",
@@ -235,18 +235,48 @@
     "chart": {
       "rangeLabel": "Trend range",
       "rangeAriaLabel": "Chart period",
+      "granularity": "Bar interval: {value}",
       "loading": "Loading market data…",
       "coverage": "Coverage {start} – {end}",
       "asOf": "As of {value} ({timezone})",
+      "fetchedAt": "Fetched at {value}",
       "delayed": "Delayed data",
       "live": "Live data",
-      "sources": { "eastmoney": "Source: Eastmoney", "twse": "Source: TWSE" },
+      "sources": {
+        "eastmoney": "Source: Eastmoney",
+        "tencent": "Source: Tencent Finance",
+        "sina": "Source: Sina Finance",
+        "twse": "Source: TWSE",
+        "tpex": "Source: TPEx"
+      },
+      "adjustments": {
+        "qfq": "Forward-adjusted prices",
+        "none": "Unadjusted prices",
+        "intraday": "Intraday prices"
+      },
+      "freshness": {
+        "fresh": "Fresh provider data",
+        "stale": "Last-known-good data ({seconds}s old)"
+      },
+      "fallbackUsed": "Fallback source in use",
+      "cache": {
+        "shared-swr": "Shared SWR cache hit",
+        "memory-lkg": "Instance last-known-good cache"
+      },
+      "coveragePartial": "Partial range coverage",
+      "partialBar": "Current daily bar is incomplete",
+      "indicators": {
+        "daily": "MA5 / MA20 use daily closes",
+        "intraday": "Daily moving averages are hidden for minute data"
+      },
       "errors": {
         "loadFailed": "Could not load market data. Please try again.",
         "noData": "No market data is available for this period.",
         "market_unsupported": "Chart history is not yet available for this market.",
         "intraday_unsupported": "Intraday history is not available for this market.",
-        "history_unsupported": "A complete one-year history is not available for this market."
+        "history_unsupported": "A complete one-year history is not available for this market.",
+        "provider_unavailable": "Market-data providers are temporarily unavailable. Try again shortly.",
+        "invalid_data": "Providers returned data that failed chart validation."
       }
     },
     "ai": {

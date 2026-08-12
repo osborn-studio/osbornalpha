@@ -23,6 +23,7 @@
 
 import iconv from 'iconv-lite';
 import type { Market } from '@/lib/supabase/database.types';
+import { KlineProviderError, type KlineAdjustment, type SourceKlineBar } from '@/lib/data/kline/types';
 
 export interface SinaQuote {
   source: 'sina';
@@ -277,4 +278,88 @@ export async function fetchSinaQuote(ticker: string, timeoutMs = 4000, externalS
     case 'US': return parseUS(ticker, raw, p);
   }
   return null;
+}
+
+/** Sina's verified US daily endpoint accepts simple exchange tickers only. */
+export function sinaUsKlineSymbol(ticker: string): string | null {
+  const upper = ticker.toUpperCase().trim();
+  return /^[A-Z][A-Z0-9]{0,9}$/.test(upper) ? upper : null;
+}
+
+interface SinaUsDailyRow {
+  d?: unknown;
+  o?: unknown;
+  h?: unknown;
+  l?: unknown;
+  c?: unknown;
+  v?: unknown;
+}
+
+export function parseSinaUsKlineJsonp(text: string): SourceKlineBar[] {
+  const match = text.match(/var\s+[_$A-Za-z][\w$]*\s*=\s*\((\[[\s\S]*\])\);?\s*$/);
+  if (!match) throw new KlineProviderError('protocol', 'Sina US K-line JSONP wrapper changed');
+
+  let rows: unknown;
+  try {
+    rows = JSON.parse(match[1]);
+  } catch {
+    throw new KlineProviderError('protocol', 'Sina US K-line payload is invalid JSON');
+  }
+  if (!Array.isArray(rows)) throw new KlineProviderError('protocol', 'Sina US K-line payload is not an array');
+
+  return rows.map((value) => {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      throw new KlineProviderError('protocol', 'Sina US K-line row is not an object');
+    }
+    const row = value as SinaUsDailyRow;
+    return {
+      time: String(row.d ?? ''),
+      open: Number(row.o),
+      high: Number(row.h),
+      low: Number(row.l),
+      close: Number(row.c),
+      volume: Number(row.v),
+    };
+  });
+}
+
+export async function fetchSinaUsKline(
+  ticker: string,
+  limit: number,
+  externalSignal?: AbortSignal,
+  timeoutMs = 2500,
+): Promise<{ source: 'sina'; bars: SourceKlineBar[]; adjustment: KlineAdjustment } | null> {
+  const symbol = sinaUsKlineSymbol(ticker);
+  if (!symbol) return null;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const signal = externalSignal ? AbortSignal.any([ctrl.signal, externalSignal]) : ctrl.signal;
+  const url = `https://stock.finance.sina.com.cn/usstock/api/jsonp.php/var%20_data=/US_MinKService.getDailyK?symbol=${symbol}`;
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Referer: 'https://finance.sina.com.cn/stock/usstock/',
+        'User-Agent': 'Mozilla/5.0 (compatible; StockMonitor/1.0)',
+      },
+      signal,
+      cache: 'no-store',
+    });
+    if (!response.ok) {
+      const retryable = response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500;
+      throw new KlineProviderError(
+        response.status === 429 ? 'rate_limited' : retryable ? 'transient' : 'protocol',
+        `Sina US K-line HTTP ${response.status}`,
+        retryable,
+        response.status,
+      );
+    }
+    const declaredLength = Number(response.headers.get('content-length') ?? 0);
+    if (declaredLength > 2_000_000) throw new KlineProviderError('protocol', 'Sina US K-line payload is too large');
+    const text = await response.text();
+    if (text.length > 2_000_000) throw new KlineProviderError('protocol', 'Sina US K-line payload is too large');
+    const bars = parseSinaUsKlineJsonp(text).slice(-limit);
+    return bars.length > 0 ? { source: 'sina', bars, adjustment: 'none' } : null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
