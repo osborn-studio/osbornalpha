@@ -475,11 +475,32 @@ export interface KlineState {
   loading: boolean;
   error: string | null;
   errorCode: string | null;
-  source: string | null;
+  source: KlineMeta['source'] | null;
   meta: KlineMeta | null;
 }
 
 const klineCache = new Map<string, { state: KlineState; ts: number }>();
+
+export interface KlinePayload {
+  bars: KlineBar[];
+  source: KlineMeta['source'];
+  meta: KlineMeta;
+}
+
+export async function fetchKlinePayload(
+  ticker: string,
+  range: KlineRange,
+  signal?: AbortSignal,
+): Promise<KlinePayload> {
+  const response = await fetch(`/api/kline/${encodeURIComponent(ticker)}?range=${range}`, { signal });
+  const data = await response.json() as Partial<KlinePayload> & { error?: string; message?: string };
+  if (!response.ok) {
+    const error = new Error(data.message || data.error || `HTTP ${response.status}`) as Error & { code?: string };
+    error.code = data.error;
+    throw error;
+  }
+  return data as KlinePayload;
+}
 
 export function useKline(ticker: string | null, range: KlineRange = '3m'): KlineState {
   const [state, setState] = useState<KlineState>({ bars: [], loading: !!ticker, error: null, errorCode: null, source: null, meta: null });
@@ -496,19 +517,11 @@ export function useKline(ticker: string | null, range: KlineRange = '3m'): Kline
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
     // Do not show bars from the previous range while this range is loading.
     setState({ bars: [], loading: true, error: null, errorCode: null, source: null, meta: null });
 
-    fetch(`/api/kline/${encodeURIComponent(ticker)}?range=${range}`)
-      .then(async (response) => {
-        const data = await response.json();
-        if (!response.ok) {
-          const error = new Error(data.message || data.error || `HTTP ${response.status}`) as Error & { code?: string };
-          error.code = data.error;
-          throw error;
-        }
-        return data;
-      })
+    fetchKlinePayload(ticker, range, controller.signal)
       .then((data) => {
         if (cancelled) return;
         const next: KlineState = { bars: data.bars || [], loading: false, error: null, errorCode: null, source: data.source || null, meta: data.meta || null };
@@ -516,11 +529,14 @@ export function useKline(ticker: string | null, range: KlineRange = '3m'): Kline
         setState(next);
       })
       .catch((err: Error & { code?: string }) => {
-        if (cancelled) return;
+        if (cancelled || err.name === 'AbortError') return;
         setState({ bars: [], loading: false, error: err.message || 'Failed to load chart data', errorCode: err.code || null, source: null, meta: null });
       });
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [ticker, range]);
 
   return state;

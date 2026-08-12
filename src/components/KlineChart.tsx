@@ -5,6 +5,7 @@ import { useTranslations } from 'next-intl';
 import type { IChartApi, UTCTimestamp } from 'lightweight-charts';
 import { KLINE_RANGES, klineRangeAvailability, type KlineRange } from '@/lib/chart/kline';
 import { useKline } from '@/lib/hooks/useQuote';
+import { chartStatusKeys, sourceTranslationKey } from './kline-chart-meta';
 
 const RANGE_LABELS: Record<KlineRange, string> = { '1d': '1D', '1m': '1M', '3m': '3M', '1y': '1Y' };
 
@@ -22,7 +23,7 @@ export function KlineChart({ ticker }: { ticker: string }) {
   const t = useTranslations('market.stock.chart');
   const containerRef = useRef<HTMLDivElement>(null);
   const [range, setRange] = useState<KlineRange>('3m');
-  const { bars, loading, source, error, errorCode, meta } = useKline(ticker, range);
+  const { bars, loading, error, errorCode, meta } = useKline(ticker, range);
   const unsupportedReason = klineRangeAvailability(ticker, range);
 
   useEffect(() => {
@@ -79,7 +80,13 @@ export function KlineChart({ ticker }: { ticker: string }) {
     };
   }, [bars, meta?.interval]);
 
-  const errorMessage = errorCode && ['market_unsupported', 'intraday_unsupported', 'history_unsupported'].includes(errorCode)
+  const errorMessage = errorCode && [
+    'market_unsupported',
+    'intraday_unsupported',
+    'history_unsupported',
+    'provider_unavailable',
+    'invalid_data',
+  ].includes(errorCode)
     ? t(`errors.${errorCode}`)
     : error ? t('errors.loadFailed', { error }) : t('errors.noData');
 
@@ -93,7 +100,7 @@ export function KlineChart({ ticker }: { ticker: string }) {
             const reason = unavailable ? t(`errors.${unavailable}`) : undefined;
             return (
               <button key={item} type="button" onClick={() => setRange(item)} disabled={!!unavailable}
-                aria-pressed={range === item} title={reason}
+                aria-pressed={range === item} aria-label={reason ? `${RANGE_LABELS[item]}: ${reason}` : RANGE_LABELS[item]} title={reason}
                 className={`rounded px-2 py-1 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-45 ${range === item ? 'bg-accent-dim text-white' : 'text-text-dim hover:text-text'}`}>
                 {RANGE_LABELS[item]}
               </button>
@@ -108,10 +115,18 @@ export function KlineChart({ ticker }: { ticker: string }) {
       </div>
       <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px] text-text-muted" aria-live="polite">
         {meta ? <>
-          <span>{t(`sources.${source === 'twse' ? 'twse' : 'eastmoney'}`)}</span>
+          <span>{t(sourceTranslationKey(meta))}</span>
+          <span>{t('granularity', { value: meta.granularity })}</span>
+          <span>{t(`adjustments.${meta.adjustment}`)}</span>
           <span>{t('coverage', { start: meta.coverageStart, end: meta.coverageEnd })}</span>
           <span>{t('asOf', { value: meta.asOf, timezone: meta.timezone })}</span>
-          <span>{meta.delayed ? t('delayed') : t('live')}</span>
+          <span>{t('fetchedAt', { value: meta.fetchedAt })}</span>
+          {chartStatusKeys(meta).map((key) => (
+            <span key={key}>{key === 'freshness.stale'
+              ? t(key, { seconds: meta.staleAgeSeconds ?? 0 })
+              : t(key)}</span>
+          ))}
+          <span>{meta.interval === 'day' ? t('indicators.daily') : t('indicators.intraday')}</span>
         </> : <span>{loading ? t('loading') : errorMessage}</span>}
       </div>
     </div>

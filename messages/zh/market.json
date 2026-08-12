@@ -219,7 +219,7 @@
       "amplitude": "振幅"
     },
     "overview": {
-      "klineHeading": "📊 K 线（日）",
+      "klineHeading": "📊 价格走势",
       "metricsHeading": "📐 关键指标",
       "peTtm": "PE (TTM)",
       "pb": "PB",
@@ -235,18 +235,48 @@
     "chart": {
       "rangeLabel": "\u8d70\u52bf\u533a\u95f4",
       "rangeAriaLabel": "\u8d70\u52bf\u56fe\u5468\u671f",
+      "granularity": "K \u7ebf\u7c92\u5ea6\uff1a{value}",
       "loading": "\u6b63\u5728\u52a0\u8f7d\u884c\u60c5\u2026",
       "coverage": "\u8986\u76d6\u533a\u95f4 {start} \u2013 {end}",
       "asOf": "\u622a\u81f3 {value} ({timezone})",
+      "fetchedAt": "\u62c9\u53d6\u65f6\u95f4 {value}",
       "delayed": "\u5ef6\u8fdf\u6570\u636e",
       "live": "\u5b9e\u65f6\u6570\u636e",
-      "sources": { "eastmoney": "\u6765\u6e90\uff1a\u4e1c\u65b9\u8d22\u5bcc", "twse": "\u6765\u6e90\uff1a\u53f0\u6e7e\u8bc1\u5238\u4ea4\u6613\u6240" },
+      "sources": {
+        "eastmoney": "\u6765\u6e90\uff1a\u4e1c\u65b9\u8d22\u5bcc",
+        "tencent": "\u6765\u6e90\uff1a\u817e\u8baf\u8d22\u7ecf",
+        "sina": "\u6765\u6e90\uff1a\u65b0\u6d6a\u8d22\u7ecf",
+        "twse": "\u6765\u6e90\uff1a\u53f0\u6e7e\u8bc1\u5238\u4ea4\u6613\u6240",
+        "tpex": "\u6765\u6e90\uff1a\u8bc1\u5238\u67dc\u53f0\u4e70\u5356\u4e2d\u5fc3"
+      },
+      "adjustments": {
+        "qfq": "\u524d\u590d\u6743\u4ef7\u683c",
+        "none": "\u4e0d\u590d\u6743\u4ef7\u683c",
+        "intraday": "\u5206\u65f6\u4ef7\u683c"
+      },
+      "freshness": {
+        "fresh": "\u4f9b\u5e94\u5546\u6700\u65b0\u6570\u636e",
+        "stale": "\u6700\u540e\u53ef\u7528\u6570\u636e\uff08{seconds}\u79d2\u524d\uff09"
+      },
+      "fallbackUsed": "\u6b63\u5728\u4f7f\u7528\u5907\u7528\u6570\u636e\u6e90",
+      "cache": {
+        "shared-swr": "\u5171\u4eab SWR \u7f13\u5b58\u547d\u4e2d",
+        "memory-lkg": "\u5f53\u524d\u5b9e\u4f8b\u6700\u540e\u53ef\u7528\u7f13\u5b58"
+      },
+      "coveragePartial": "\u5468\u671f\u8986\u76d6\u4e0d\u5b8c\u6574",
+      "partialBar": "\u5f53\u65e5 K \u7ebf\u5c1a\u672a\u6536\u76d8",
+      "indicators": {
+        "daily": "MA5 / MA20 \u6309\u65e5\u7ebf\u6536\u76d8\u4ef7\u8ba1\u7b97",
+        "intraday": "\u5206\u949f\u6570\u636e\u4e0d\u663e\u793a\u65e5\u5747\u7ebf"
+      },
       "errors": {
         "loadFailed": "\u884c\u60c5\u52a0\u8f7d\u5931\u8d25\uff1a{error}",
         "noData": "\u8be5\u5468\u671f\u6682\u65e0\u53ef\u7528\u884c\u60c5\u6570\u636e",
         "market_unsupported": "\u5f53\u524d\u5e02\u573a\u6682\u4e0d\u652f\u6301\u5386\u53f2\u56fe\u8868\u6570\u636e\u3002",
         "intraday_unsupported": "\u5f53\u524d\u5e02\u573a\u6682\u65e0\u53ef\u7528\u7684\u5206\u65f6\u5386\u53f2\u6570\u636e\u3002",
-        "history_unsupported": "\u5f53\u524d\u5e02\u573a\u6682\u65e0\u5b8c\u6574\u4e00\u5e74\u7684\u5386\u53f2\u6570\u636e\u3002"
+        "history_unsupported": "\u5f53\u524d\u5e02\u573a\u6682\u65e0\u5b8c\u6574\u4e00\u5e74\u7684\u5386\u53f2\u6570\u636e\u3002",
+        "provider_unavailable": "\u884c\u60c5\u6570\u636e\u6e90\u6682\u65f6\u4e0d\u53ef\u7528\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
+        "invalid_data": "\u6570\u636e\u6e90\u8fd4\u56de\u7684\u884c\u60c5\u672a\u901a\u8fc7\u56fe\u8868\u6821\u9a8c\u3002"
       }
     },
     "ai": {

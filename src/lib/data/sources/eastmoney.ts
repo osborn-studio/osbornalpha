@@ -10,6 +10,7 @@
  */
 
 import type { Market } from '@/lib/supabase/database.types';
+import { KlineProviderError, type KlineAdjustment } from '@/lib/data/kline/types';
 
 // ─── Ticker → Eastmoney secid ───
 // secid format: "{marketCode}.{code}" where:
@@ -103,12 +104,24 @@ async function fetchJsonp(url: string, timeoutMs = 5000, externalSignal?: AbortS
   } finally {
     clearTimeout(timer);
   }
-  if (!resp.ok) throw new Error(`Eastmoney HTTP ${resp.status}`);
+  if (!resp.ok) {
+    const retryable = resp.status === 408 || resp.status === 425 || resp.status === 429 || resp.status >= 500;
+    throw new KlineProviderError(
+      resp.status === 429 ? 'rate_limited' : retryable || resp.status === 403 ? 'transient' : 'protocol',
+      `Eastmoney HTTP ${resp.status}`,
+      retryable,
+      resp.status,
+    );
+  }
   const text = await resp.text();
   // Strip JSONP wrapper if present
   const match = text.match(/^[a-zA-Z_$][\w$]*\((.*)\);?\s*$/s);
   const jsonStr = match ? match[1] : text;
-  return JSON.parse(jsonStr);
+  try {
+    return JSON.parse(jsonStr);
+  } catch {
+    throw new KlineProviderError('protocol', 'Eastmoney response is invalid JSON/JSONP');
+  }
 }
 
 function safeNum(v: any): number | null {
@@ -204,25 +217,37 @@ export interface KlineBar { time: string; open: number; high: number; low: numbe
 
 export type KlineInterval = '1' | 'D' | 'W' | 'M';
 
+export interface EastmoneyKlineOptions {
+  adjustment?: Extract<KlineAdjustment, 'qfq' | 'none' | 'intraday'>;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
 export async function fetchEastmoneyKline(
   ticker: string,
   period: KlineInterval = 'D',
-  limit = 120
-): Promise<{ source: 'eastmoney'; bars: KlineBar[] } | null> {
+  limit = 120,
+  options: EastmoneyKlineOptions = {},
+): Promise<{ source: 'eastmoney'; bars: KlineBar[]; adjustment: KlineAdjustment } | null> {
   const parsed = tickerToSecid(ticker);
   if (!parsed) return null;
+
+  const adjustment: KlineAdjustment = period === '1'
+    ? 'intraday'
+    : options.adjustment ?? (parsed.market === 'A' ? 'qfq' : 'none');
+  const fqt = adjustment === 'qfq' ? 1 : 0;
 
   // Eastmoney uses 1 for one-minute bars and 101/102/103 for daily/weekly/monthly.
   const klt = period === '1' ? '1' : period === 'D' ? '101' : period === 'W' ? '102' : '103';
   const tryFetch = async (secid: string): Promise<KlineBar[]> => {
     const url =
       `https://push2his.eastmoney.com/api/qt/stock/kline/get?cb=cb` +
-      `&secid=${secid}&klt=${klt}&fqt=1` +    // fqt=1 前复权
+      `&secid=${secid}&klt=${klt}&fqt=${fqt}` +
       `&lmt=${limit}&end=20500101` +
       `&fields1=f1,f2,f3,f4,f5,f6` +
       `&fields2=f51,f52,f53,f54,f55,f56,f57`;
-    const json = await fetchJsonp(url);
-    const klines: string[] = json?.data?.klines || [];
+    const json = await fetchJsonp(url, options.timeoutMs ?? 5000, options.signal);
+    const klines: string[] = Array.isArray(json?.data?.klines) ? json.data.klines : [];
     return klines.map((line) => {
       const [date, open, close, high, low, volume] = line.split(',');
       return {
@@ -237,17 +262,21 @@ export async function fetchEastmoneyKline(
   };
 
   let bars: KlineBar[] = [];
-  try {
-    bars = await tryFetch(parsed.secid);
-  } catch {}
-  if (bars.length === 0 && parsed.market === 'US') {
-    const code = parsed.secid.slice(parsed.secid.indexOf('.') + 1);
-    for (const prefix of US_FALLBACK_PREFIXES.slice(1)) {
-      try {
-        bars = await tryFetch(`${prefix}.${code}`);
-        if (bars.length > 0) break;
-      } catch {}
+  let lastError: unknown = null;
+  const code = parsed.secid.slice(parsed.secid.indexOf('.') + 1);
+  const secids = parsed.market === 'US'
+    ? US_FALLBACK_PREFIXES.map((prefix) => `${prefix}.${code}`)
+    : [parsed.secid];
+
+  for (const secid of secids) {
+    try {
+      bars = await tryFetch(secid);
+      if (bars.length > 0) break;
+    } catch (error) {
+      lastError = error;
     }
   }
-  return bars.length > 0 ? { source: 'eastmoney', bars } : null;
+
+  if (bars.length === 0 && lastError) throw lastError;
+  return bars.length > 0 ? { source: 'eastmoney', bars, adjustment } : null;
 }

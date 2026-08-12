@@ -37,6 +37,7 @@
 
 import iconv from 'iconv-lite';
 import type { Market } from '@/lib/supabase/database.types';
+import { KlineProviderError, type KlineAdjustment, type SourceKlineBar } from '@/lib/data/kline/types';
 
 export interface TencentQuote {
   source: 'tencent';
@@ -195,4 +196,115 @@ export async function fetchTencentQuote(ticker: string, timeoutMs = 4000, extern
   const match = text.match(/=\s*"([^"]*)"/);
   if (!match || !match[1]) return null;
   return parsePayload(ticker, match[1], p);
+}
+
+interface TencentKlineTarget {
+  symbol: string;
+  adjustment: Extract<KlineAdjustment, 'qfq' | 'none'>;
+  dataKey: 'qfqday' | 'day';
+  mode: 'qfq' | 'bfq';
+}
+
+/**
+ * Verified historical coverage:
+ * - Shanghai/Shenzhen A-shares: qfqday (front-adjusted)
+ * - Hong Kong: day (unadjusted)
+ * Tencent's public endpoint currently returns only two sentinel rows for US
+ * symbols, so US is intentionally unsupported here and uses Sina instead.
+ */
+export function tencentKlineTarget(
+  ticker: string,
+  adjustment: Extract<KlineAdjustment, 'qfq' | 'none'>,
+): TencentKlineTarget | null {
+  const upper = ticker.toUpperCase().trim();
+  const a = upper.match(/^(\d{6})\.(SH|SZ)$/);
+  if (a && adjustment === 'qfq') {
+    return { symbol: `${a[2].toLowerCase()}${a[1]}`, adjustment, dataKey: 'qfqday', mode: 'qfq' };
+  }
+  const hk = upper.match(/^(\d{5})\.HK$/);
+  if (hk && adjustment === 'none') {
+    return { symbol: `hk${hk[1]}`, adjustment, dataKey: 'day', mode: 'bfq' };
+  }
+  return null;
+}
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+export function parseTencentKlineResponse(
+  payload: unknown,
+  target: TencentKlineTarget,
+): SourceKlineBar[] {
+  const root = objectValue(payload);
+  if (!root || root.code !== 0) {
+    throw new KlineProviderError('protocol', 'Tencent K-line response reported an error');
+  }
+  const data = objectValue(root.data);
+  const node = data ? objectValue(data[target.symbol]) : null;
+  if (!node || !Array.isArray(node[target.dataKey])) {
+    throw new KlineProviderError('protocol', `Tencent K-line response is missing ${target.dataKey}`);
+  }
+
+  const bars: SourceKlineBar[] = [];
+  for (const row of node[target.dataKey] as unknown[]) {
+    if (!Array.isArray(row) || row.length < 6) {
+      throw new KlineProviderError('protocol', 'Tencent K-line row schema changed');
+    }
+    const time = String(row[0] ?? '');
+    const open = Number(row[1]);
+    const close = Number(row[2]);
+    const high = Number(row[3]);
+    const low = Number(row[4]);
+    const volume = Number(row[5]);
+    bars.push({ time, open, high, low, close, volume });
+  }
+  return bars;
+}
+
+export async function fetchTencentKline(
+  ticker: string,
+  limit: number,
+  adjustment: Extract<KlineAdjustment, 'qfq' | 'none'>,
+  externalSignal?: AbortSignal,
+  timeoutMs = 2500,
+): Promise<{ source: 'tencent'; bars: SourceKlineBar[]; adjustment: KlineAdjustment } | null> {
+  const target = tencentKlineTarget(ticker, adjustment);
+  if (!target) return null;
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const signal = externalSignal ? AbortSignal.any([ctrl.signal, externalSignal]) : ctrl.signal;
+  const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${target.symbol},day,,,${limit},${target.mode}`;
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Referer: 'https://gu.qq.com/',
+        'User-Agent': 'Mozilla/5.0 (compatible; StockMonitor/1.0)',
+      },
+      signal,
+      cache: 'no-store',
+    });
+    if (!response.ok) {
+      const retryable = response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500;
+      throw new KlineProviderError(
+        response.status === 429 ? 'rate_limited' : retryable ? 'transient' : 'protocol',
+        `Tencent K-line HTTP ${response.status}`,
+        retryable,
+        response.status,
+      );
+    }
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new KlineProviderError('protocol', 'Tencent K-line response is not JSON');
+    }
+    const bars = parseTencentKlineResponse(payload, target);
+    return bars.length > 0 ? { source: 'tencent', bars, adjustment } : null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
