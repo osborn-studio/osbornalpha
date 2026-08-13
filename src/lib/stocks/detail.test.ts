@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MockStock } from '@/lib/data/mock';
 import type { LiveQuote } from '@/lib/hooks/useQuote';
-import { mergeStockDetail } from './detail';
+import { createTickerPlaceholder, mergeStockDetail } from './detail';
 
 const liveQuote: LiveQuote = {
   source: 'eastmoney',
@@ -86,7 +86,18 @@ describe('mergeStockDetail', () => {
     expect(result?.low_52w).toBe(8);
   });
 
-  it('returns null only when neither live nor fallback data exists', () => {
+  it('creates an honest empty identity for a supported ticker without quote data', () => {
+    expect(createTickerPlaceholder('2330.TW')).toMatchObject({
+      ticker: '2330.TW',
+      name: '2330.TW',
+      market: 'TW',
+      currency: 'NT$',
+      price: 0,
+    });
+    expect(mergeStockDetail('2330.TW', null, null)).toMatchObject({ ticker: '2330.TW', market: 'TW' });
+  });
+
+  it('returns null for malformed identifiers when neither live nor fallback data exists', () => {
     expect(mergeStockDetail('MISSING', null, null)).toBeNull();
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { klineBarLimit, klineRangeAvailability, marketTimezone, parseKlineRange, toChartTimestamp } from './kline';
+import { inferKlinePricePrecision, klineBarLimit, klineRangeAvailability, marketTimezone, parseKlineRange, toChartTimestamp } from './kline';
 
 describe('kline range contract', () => {
   it('only accepts the public chart ranges', () => {
@@ -34,5 +34,10 @@ describe('kline range contract', () => {
     expect(marketTimezone('HK')).toBe('Asia/Hong_Kong');
     expect(marketTimezone('TW')).toBe('Asia/Taipei');
     expect(marketTimezone('US')).toBe('America/New_York');
+  });
+
+  it('declares provider price precision without rounding source values', () => {
+    expect(inferKlinePricePrecision([{ open: 10, high: 10.125, low: 9.5, close: 10.12 }])).toBe(3);
+    expect(inferKlinePricePrecision([{ open: 10, high: 11, low: 9, close: 10 }])).toBe(2);
   });
 });

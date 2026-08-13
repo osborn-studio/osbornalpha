@@ -209,7 +209,11 @@
     "addToWatchlist": "+ Add to Watchlist",
     "analyzeWithJohn": "🎩 Analyze with John",
     "deepDive": "🔬 Deep Dive",
-    "delayedQuote": "15min delayed",
+    "quoteLoading": "Loading live quote",
+    "quoteUnavailable": "Live quote unavailable",
+    "quoteUnavailableDetail": "The live quote could not be loaded. Sample prices are not substituted; the historical chart below remains governed by its own source and as-of time.",
+    "liveQuote": "Live quote",
+    "delayedQuote": "Delayed quote",
     "meta": {
       "open": "Open",
       "high": "High",
@@ -230,14 +234,20 @@
       "low52w": "52W Low",
       "nextEarnings": "Next Earnings",
       "signalsHeading": "🎯 Sentinel Signal · {score}/10 {stars}",
+      "signalsHeadingStatic": "🎯 Sentinel Signals",
       "noTriggersToday": "No significant triggers today"
     },
     "chart": {
       "rangeLabel": "Trend range",
       "rangeAriaLabel": "Chart period",
+      "resetView": "Reset view",
+      "retry": "Retry",
       "granularity": "Bar interval: {value}",
+      "currency": "Currency: {value}",
+      "volumeUnit": "Volume unit: {value}",
       "loading": "Loading market data…",
       "coverage": "Coverage {start} – {end}",
+      "barCoverage": "Data coverage {returned}/{requested} trading bars",
       "asOf": "As of {value} ({timezone})",
       "fetchedAt": "Fetched at {value}",
       "delayed": "Delayed data",
@@ -255,8 +265,8 @@
         "intraday": "Intraday prices"
       },
       "freshness": {
-        "fresh": "Fresh provider data",
-        "stale": "Last-known-good data ({seconds}s old)"
+        "fresh": "Market-data cache is current",
+        "stale": "Expired cache in use (generated {seconds}s ago)"
       },
       "fallbackUsed": "Fallback source in use",
       "cache": {
@@ -268,6 +278,19 @@
       "indicators": {
         "daily": "MA5 / MA20 use daily closes",
         "intraday": "Daily moving averages are hidden for minute data"
+      },
+      "volumeUnits": {
+        "shares": "shares",
+        "lots": "lots"
+      },
+      "tooltip": {
+        "open": "O",
+        "high": "H",
+        "low": "L",
+        "close": "C",
+        "change": "vs prev close",
+        "volume": "Volume",
+        "currency": "Currency"
       },
       "errors": {
         "loadFailed": "Could not load market data. Please try again.",

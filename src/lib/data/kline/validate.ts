@@ -53,6 +53,9 @@ export function validateKlineSeries(
   expectedAdjustment: KlineAdjustment,
   limit: number,
 ): ValidatedKlineSeries {
+  if (series.volumeUnit !== 'shares') {
+    throw new KlineProviderError('invalid_data', 'K-line volume must be normalized to shares');
+  }
   if (series.adjustment !== expectedAdjustment) {
     throw new KlineProviderError(
       'invalid_data',
@@ -61,6 +64,11 @@ export function validateKlineSeries(
   }
 
   const sorted = [...series.bars].sort((a, b) => a.time.localeCompare(b.time));
+  const hasClock = sorted.some((bar) => /[ T]\d{2}:\d{2}/.test(bar.time));
+  const hasDateOnly = sorted.some((bar) => /^\d{4}-\d{2}-\d{2}$/.test(bar.time));
+  if (hasClock && hasDateOnly) {
+    throw new KlineProviderError('invalid_data', 'K-line series mixes daily and intraday timestamps');
+  }
   const unique: SourceKlineBar[] = [];
   for (const bar of sorted) {
     assertValidBar(bar);

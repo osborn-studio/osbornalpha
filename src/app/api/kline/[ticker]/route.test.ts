@@ -17,6 +17,8 @@ function resolution(overrides: Record<string, unknown> = {}) {
     source: 'eastmoney',
     bars: minuteBars,
     adjustment: 'intraday',
+    volumeUnit: 'shares',
+    previousClose: 9,
     freshness: 'fresh',
     fallbackUsed: false,
     cacheStatus: 'shared-swr',
@@ -49,8 +51,18 @@ describe('GET /api/kline/[ticker]', () => {
       freshness: 'fresh',
       cacheStatus: 'shared-swr',
       completeness: 'partial',
+      market: 'US',
+      currency: '$',
+      currencyCode: 'USD',
+      volumeUnit: 'shares',
+      rangeBasis: 'trading-bars',
+      requestedBars: 390,
+      returnedBars: 1,
+      missingBars: 389,
     });
     expect(body.bars[0].time).toBe(Date.UTC(2026, 7, 10, 9, 30) / 1000);
+    expect(body.bars[0]).toMatchObject({ previousClose: 9, change: 2 });
+    expect(body.bars[0].changePct).toBeCloseTo(22.222222);
   });
 
   it('rejects invalid ranges and unsupported Taiwan intraday', async () => {

@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import type { QuotaNoticeProps } from '@/components/QuotaNotice';
 import type { Market } from '@/lib/supabase/database.types';
-import type { KlineBar, KlineMeta, KlineRange } from '@/lib/chart/kline';
+import { klineBarLimit, type KlineBar, type KlineMeta, type KlineRange } from '@/lib/chart/kline';
 import { trackEvent } from '@/lib/analytics/client';
 import {
   classifyQuoteBatchOutcome,
@@ -487,6 +487,54 @@ export interface KlinePayload {
   meta: KlineMeta;
 }
 
+function isValidKlinePayload(value: unknown): value is KlinePayload {
+  if (!value || typeof value !== 'object') return false;
+  const payload = value as Partial<KlinePayload>;
+  if (!Array.isArray(payload.bars) || !payload.meta || typeof payload.meta !== 'object') return false;
+  if (typeof payload.source !== 'string' || payload.source !== payload.meta.source) return false;
+  if (typeof payload.meta.cacheTtlSeconds !== 'number' || payload.meta.cacheTtlSeconds <= 0) return false;
+  if ((payload.meta.range === '1d' && (payload.meta.interval !== 'minute' || payload.meta.granularity !== '1m'))
+    || (payload.meta.range !== '1d' && (payload.meta.interval !== 'day' || payload.meta.granularity !== '1d'))) return false;
+  if (payload.meta.volumeUnit !== 'shares'
+    || typeof payload.meta.currencyCode !== 'string'
+    || !Number.isInteger(payload.meta.pricePrecision)
+    || payload.meta.pricePrecision < 0
+    || payload.meta.pricePrecision > 4
+    || !Number.isFinite(payload.meta.minMove)
+    || payload.meta.minMove <= 0
+    || !Number.isInteger(payload.meta.requestedBars)
+    || payload.meta.requestedBars <= 0
+    || payload.meta.returnedBars !== payload.bars.length
+    || payload.meta.missingBars !== Math.max(0, payload.meta.requestedBars - payload.bars.length)) return false;
+  let previousTime = 0;
+  for (let index = 0; index < payload.bars.length; index += 1) {
+    const bar = payload.bars[index];
+    if (!bar || typeof bar !== 'object') return false;
+    const candidate = bar as KlineBar;
+    const prices = [candidate.open, candidate.high, candidate.low, candidate.close];
+    if (!Number.isFinite(candidate.time) || candidate.time <= previousTime) return false;
+    if (prices.some((price) => !Number.isFinite(price) || price <= 0)) return false;
+    if (!Number.isFinite(candidate.volume) || candidate.volume < 0) return false;
+    if (candidate.high < Math.max(candidate.open, candidate.close)
+      || candidate.low > Math.min(candidate.open, candidate.close)
+      || candidate.high < candidate.low) return false;
+    if (candidate.previousClose === null) {
+      if (candidate.change !== null || candidate.changePct !== null) return false;
+    } else {
+      if (!Number.isFinite(candidate.previousClose) || candidate.previousClose <= 0
+        || !Number.isFinite(candidate.change) || !Number.isFinite(candidate.changePct)) return false;
+      const expectedChange = candidate.close - candidate.previousClose;
+      const expectedChangePct = (expectedChange / candidate.previousClose) * 100;
+      if (candidate.change === null || candidate.changePct === null
+        || Math.abs(candidate.change - expectedChange) > 1e-8
+        || Math.abs(candidate.changePct - expectedChangePct) > 1e-8) return false;
+    }
+    if (index > 0 && candidate.previousClose !== payload.bars[index - 1].close) return false;
+    previousTime = candidate.time;
+  }
+  return true;
+}
+
 export async function fetchKlinePayload(
   ticker: string,
   range: KlineRange,
@@ -499,11 +547,20 @@ export async function fetchKlinePayload(
     error.code = data.error;
     throw error;
   }
-  return data as KlinePayload;
+  if (!isValidKlinePayload(data)
+    || data.meta.range !== range
+    || data.meta.requestedBars !== klineBarLimit(ticker, range)) {
+    const error = new Error('Invalid chart response') as Error & { code?: string };
+    error.code = 'invalid_data';
+    throw error;
+  }
+  return data;
 }
 
-export function useKline(ticker: string | null, range: KlineRange = '3m'): KlineState {
+export function useKline(ticker: string | null, range: KlineRange = '3m'): KlineState & { refetch: () => void } {
   const [state, setState] = useState<KlineState>({ bars: [], loading: !!ticker, error: null, errorCode: null, source: null, meta: null });
+  const [refreshToken, setRefreshToken] = useState(0);
+  const handledRefreshToken = useRef(0);
 
   useEffect(() => {
     if (!ticker) {
@@ -511,8 +568,10 @@ export function useKline(ticker: string | null, range: KlineRange = '3m'): Kline
       return;
     }
     const key = `${ticker}|${range}`;
+    const manual = refreshToken !== handledRefreshToken.current;
+    if (manual) handledRefreshToken.current = refreshToken;
     const cached = klineCache.get(key);
-    if (cached?.state.meta && Date.now() - cached.ts < cached.state.meta.cacheTtlSeconds * 1000) {
+    if (!manual && cached?.state.meta && Date.now() - cached.ts < cached.state.meta.cacheTtlSeconds * 1000) {
       setState(cached.state);
       return;
     }
@@ -537,7 +596,7 @@ export function useKline(ticker: string | null, range: KlineRange = '3m'): Kline
       cancelled = true;
       controller.abort();
     };
-  }, [ticker, range]);
+  }, [ticker, range, refreshToken]);
 
-  return state;
+  return { ...state, refetch: () => setRefreshToken((token) => token + 1) };
 }

@@ -24,6 +24,8 @@ export interface SourceKlineSeries {
   source: KlineSourceName;
   bars: SourceKlineBar[];
   adjustment: KlineAdjustment;
+  /** All provider adapters normalize volume to individual traded shares. */
+  volumeUnit: 'shares';
 }
 
 export interface KlineProvider {

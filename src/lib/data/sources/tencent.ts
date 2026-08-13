@@ -203,6 +203,7 @@ interface TencentKlineTarget {
   adjustment: Extract<KlineAdjustment, 'qfq' | 'none'>;
   dataKey: 'qfqday' | 'day';
   mode: 'qfq' | 'bfq';
+  volumeMultiplier: 1 | 100;
 }
 
 /**
@@ -219,11 +220,11 @@ export function tencentKlineTarget(
   const upper = ticker.toUpperCase().trim();
   const a = upper.match(/^(\d{6})\.(SH|SZ)$/);
   if (a && adjustment === 'qfq') {
-    return { symbol: `${a[2].toLowerCase()}${a[1]}`, adjustment, dataKey: 'qfqday', mode: 'qfq' };
+    return { symbol: `${a[2].toLowerCase()}${a[1]}`, adjustment, dataKey: 'qfqday', mode: 'qfq', volumeMultiplier: 100 };
   }
   const hk = upper.match(/^(\d{5})\.HK$/);
   if (hk && adjustment === 'none') {
-    return { symbol: `hk${hk[1]}`, adjustment, dataKey: 'day', mode: 'bfq' };
+    return { symbol: `hk${hk[1]}`, adjustment, dataKey: 'day', mode: 'bfq', volumeMultiplier: 1 };
   }
   return null;
 }
@@ -258,7 +259,7 @@ export function parseTencentKlineResponse(
     const close = Number(row[2]);
     const high = Number(row[3]);
     const low = Number(row[4]);
-    const volume = Number(row[5]);
+    const volume = Number(row[5]) * target.volumeMultiplier;
     bars.push({ time, open, high, low, close, volume });
   }
   return bars;
@@ -270,7 +271,7 @@ export async function fetchTencentKline(
   adjustment: Extract<KlineAdjustment, 'qfq' | 'none'>,
   externalSignal?: AbortSignal,
   timeoutMs = 2500,
-): Promise<{ source: 'tencent'; bars: SourceKlineBar[]; adjustment: KlineAdjustment } | null> {
+): Promise<{ source: 'tencent'; bars: SourceKlineBar[]; adjustment: KlineAdjustment; volumeUnit: 'shares' } | null> {
   const target = tencentKlineTarget(ticker, adjustment);
   if (!target) return null;
 
@@ -303,7 +304,7 @@ export async function fetchTencentKline(
       throw new KlineProviderError('protocol', 'Tencent K-line response is not JSON');
     }
     const bars = parseTencentKlineResponse(payload, target);
-    return bars.length > 0 ? { source: 'tencent', bars, adjustment } : null;
+    return bars.length > 0 ? { source: 'tencent', bars, adjustment, volumeUnit: 'shares' } : null;
   } finally {
     clearTimeout(timer);
   }

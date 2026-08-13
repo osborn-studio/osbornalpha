@@ -3,6 +3,7 @@ import type { KlineMeta } from '@/lib/chart/kline';
 import { chartStatusKeys, sourceTranslationKey } from './kline-chart-meta';
 
 const meta: KlineMeta = {
+  market: 'A',
   range: '1m',
   interval: 'day',
   granularity: '1d',
@@ -14,6 +15,15 @@ const meta: KlineMeta = {
   timezone: 'Asia/Shanghai',
   fetchedAt: '2026-08-01T08:00:00.000Z',
   delayed: false,
+  currency: '¥',
+  currencyCode: 'CNY',
+  pricePrecision: 2,
+  minMove: 0.01,
+  volumeUnit: 'shares',
+  rangeBasis: 'trading-bars',
+  requestedBars: 22,
+  returnedBars: 20,
+  missingBars: 2,
   cacheTtlSeconds: 300,
   freshness: 'fresh',
   fallbackUsed: true,

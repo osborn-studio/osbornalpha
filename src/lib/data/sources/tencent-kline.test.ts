@@ -20,7 +20,7 @@ describe('Tencent historical K-line adapter', () => {
         },
       },
     }, target);
-    expect(bars).toEqual([{ time: '2026-08-11', open: 1348, close: 1346.5, high: 1352.65, low: 1338, volume: 27073 }]);
+    expect(bars).toEqual([{ time: '2026-08-11', open: 1348, close: 1346.5, high: 1352.65, low: 1338, volume: 2707300 }]);
   });
 
   it('fails closed when Tencent changes the expected response key', () => {

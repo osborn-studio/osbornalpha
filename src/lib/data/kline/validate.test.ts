@@ -3,7 +3,7 @@ import { assertCompatibleSeries, validateKlineSeries } from './validate';
 import type { SourceKlineSeries } from './types';
 
 function series(bars: SourceKlineSeries['bars']): SourceKlineSeries {
-  return { source: 'eastmoney', adjustment: 'qfq', bars };
+  return { source: 'eastmoney', adjustment: 'qfq', volumeUnit: 'shares', bars };
 }
 
 describe('K-line validation', () => {
@@ -35,6 +35,14 @@ describe('K-line validation', () => {
     expect(() => validateKlineSeries(series([
       { time: '2026-08-11 24:00:00', open: 10, high: 12, low: 9, close: 11, volume: 100 },
     ]), 'qfq', 1)).toThrow(/clock time/);
+  });
+
+  it('rejects mixed timestamp granularity and non-normalized volume units', () => {
+    expect(() => validateKlineSeries(series([
+      { time: '2026-08-10', open: 10, high: 12, low: 9, close: 11, volume: 100 },
+      { time: '2026-08-11 09:30:00', open: 11, high: 13, low: 10, close: 12, volume: 100 },
+    ]), 'qfq', 2)).toThrow(/mixes daily and intraday/);
+    expect(() => validateKlineSeries({ ...series([]), volumeUnit: 'lots' as never }, 'qfq', 1)).toThrow(/normalized to shares/);
   });
 
   it('blocks a fallback whose overlapping prices use a different scale', () => {

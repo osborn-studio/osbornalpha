@@ -328,7 +328,7 @@ export async function fetchSinaUsKline(
   limit: number,
   externalSignal?: AbortSignal,
   timeoutMs = 2500,
-): Promise<{ source: 'sina'; bars: SourceKlineBar[]; adjustment: KlineAdjustment } | null> {
+): Promise<{ source: 'sina'; bars: SourceKlineBar[]; adjustment: KlineAdjustment; volumeUnit: 'shares' } | null> {
   const symbol = sinaUsKlineSymbol(ticker);
   if (!symbol) return null;
   const ctrl = new AbortController();
@@ -358,7 +358,7 @@ export async function fetchSinaUsKline(
     const text = await response.text();
     if (text.length > 2_000_000) throw new KlineProviderError('protocol', 'Sina US K-line payload is too large');
     const bars = parseSinaUsKlineJsonp(text).slice(-limit);
-    return bars.length > 0 ? { source: 'sina', bars, adjustment: 'none' } : null;
+    return bars.length > 0 ? { source: 'sina', bars, adjustment: 'none', volumeUnit: 'shares' } : null;
   } finally {
     clearTimeout(timer);
   }

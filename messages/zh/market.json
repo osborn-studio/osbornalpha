@@ -209,7 +209,11 @@
     "addToWatchlist": "+ 加入股票池",
     "analyzeWithJohn": "🎩 用 John 分析这只股票",
     "deepDive": "🔬 深度研究",
-    "delayedQuote": "15min 延迟",
+    "quoteLoading": "实时行情加载中",
+    "quoteUnavailable": "实时行情不可用",
+    "quoteUnavailableDetail": "实时行情获取失败。页面不会使用示例价格代替；下方历史走势图仍按其独立的数据来源和截至时间展示。",
+    "liveQuote": "实时行情",
+    "delayedQuote": "延迟行情",
     "meta": {
       "open": "开",
       "high": "高",
@@ -230,14 +234,20 @@
       "low52w": "52 周低",
       "nextEarnings": "下次财报",
       "signalsHeading": "🎯 Sentinel 信号 · {score}/10 {stars}",
+      "signalsHeadingStatic": "🎯 Sentinel 信号",
       "noTriggersToday": "今日无显著触发信号"
     },
     "chart": {
       "rangeLabel": "\u8d70\u52bf\u533a\u95f4",
       "rangeAriaLabel": "\u8d70\u52bf\u56fe\u5468\u671f",
+      "resetView": "重置视图",
+      "retry": "重新加载",
       "granularity": "K \u7ebf\u7c92\u5ea6\uff1a{value}",
+      "currency": "币种：{value}",
+      "volumeUnit": "成交量单位：{value}",
       "loading": "\u6b63\u5728\u52a0\u8f7d\u884c\u60c5\u2026",
       "coverage": "\u8986\u76d6\u533a\u95f4 {start} \u2013 {end}",
+      "barCoverage": "\u6570\u636e\u8986\u76d6 {returned}/{requested} \u4e2a\u4ea4\u6613 K \u7ebf",
       "asOf": "\u622a\u81f3 {value} ({timezone})",
       "fetchedAt": "\u62c9\u53d6\u65f6\u95f4 {value}",
       "delayed": "\u5ef6\u8fdf\u6570\u636e",
@@ -255,8 +265,8 @@
         "intraday": "\u5206\u65f6\u4ef7\u683c"
       },
       "freshness": {
-        "fresh": "\u4f9b\u5e94\u5546\u6700\u65b0\u6570\u636e",
-        "stale": "\u6700\u540e\u53ef\u7528\u6570\u636e\uff08{seconds}\u79d2\u524d\uff09"
+        "fresh": "行情缓存未过期",
+        "stale": "正在使用过期缓存（缓存生成于 {seconds} 秒前）"
       },
       "fallbackUsed": "\u6b63\u5728\u4f7f\u7528\u5907\u7528\u6570\u636e\u6e90",
       "cache": {
@@ -268,6 +278,19 @@
       "indicators": {
         "daily": "MA5 / MA20 \u6309\u65e5\u7ebf\u6536\u76d8\u4ef7\u8ba1\u7b97",
         "intraday": "\u5206\u949f\u6570\u636e\u4e0d\u663e\u793a\u65e5\u5747\u7ebf"
+      },
+      "volumeUnits": {
+        "shares": "股",
+        "lots": "手"
+      },
+      "tooltip": {
+        "open": "开",
+        "high": "高",
+        "low": "低",
+        "close": "收",
+        "change": "较前收",
+        "volume": "成交量",
+        "currency": "币种"
       },
       "errors": {
         "loadFailed": "\u884c\u60c5\u52a0\u8f7d\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",

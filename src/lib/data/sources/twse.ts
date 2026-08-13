@@ -430,7 +430,7 @@ export async function fetchTwseKline(
   period: 'D' | 'W' | 'M' = 'D',
   limit = 120,
   options: TwseKlineOptions = {},
-): Promise<{ source: 'twse' | 'tpex'; bars: SourceKlineBar[]; adjustment: KlineAdjustment } | null> {
+): Promise<{ source: 'twse' | 'tpex'; bars: SourceKlineBar[]; adjustment: KlineAdjustment; volumeUnit: 'shares' } | null> {
   const m = ticker.toUpperCase().match(/^(\d{4,6})\.(TW|TWO)$/);
   if (!m) return null;
   const stockNo = m[1];
@@ -483,6 +483,7 @@ export async function fetchTwseKline(
     source: board === 'TW' ? 'twse' : 'tpex',
     bars: bars.map((b) => ({ time: b.date, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume })),
     adjustment: 'none',
+    volumeUnit: 'shares',
   };
 }
 

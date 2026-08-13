@@ -29,7 +29,7 @@ describe('KlineReliabilityEngine', () => {
   it('retries transient failures and records jittered backoff', async () => {
     const fetch = vi.fn()
       .mockRejectedValueOnce(new KlineProviderError('transient', 'timeout', true))
-      .mockResolvedValue({ source: 'eastmoney', adjustment: 'none', bars: completeBars() });
+      .mockResolvedValue({ source: 'eastmoney', adjustment: 'none', volumeUnit: 'shares', bars: completeBars() });
     const sleep = vi.fn().mockResolvedValue(undefined);
     const engine = new KlineReliabilityEngine({
       providersFor: () => [provider('eastmoney', fetch, 2)],
@@ -45,7 +45,7 @@ describe('KlineReliabilityEngine', () => {
 
   it('falls back without changing adjustment semantics', async () => {
     const primary = provider('eastmoney', vi.fn().mockRejectedValue(new KlineProviderError('transient', 'down')));
-    const secondary = provider('sina', vi.fn().mockResolvedValue({ source: 'sina', adjustment: 'none', bars: completeBars() }));
+    const secondary = provider('sina', vi.fn().mockResolvedValue({ source: 'sina', adjustment: 'none', volumeUnit: 'shares', bars: completeBars() }));
     const engine = new KlineReliabilityEngine({ providersFor: () => [primary, secondary] });
 
     const result = await engine.resolve({ ticker: 'NVDA', range: '1m' });
@@ -59,12 +59,25 @@ describe('KlineReliabilityEngine', () => {
       { time: '2026-08-11 09:30:00', open: 102, high: 103, low: 101, close: 102, volume: 10 },
       { time: '2026-08-11 09:31:00', open: 102, high: 104, low: 101, close: 103, volume: 10 },
     ];
-    const intraday = provider('eastmoney', vi.fn().mockResolvedValue({ source: 'eastmoney', adjustment: 'intraday', bars }));
+    const intraday = provider('eastmoney', vi.fn().mockResolvedValue({ source: 'eastmoney', adjustment: 'intraday', volumeUnit: 'shares', bars }));
     intraday.adjustment = 'intraday';
     const engine = new KlineReliabilityEngine({ providersFor: () => [intraday] });
     const result = await engine.resolve({ ticker: 'NVDA', range: '1d' });
     expect(result.bars.map((bar) => bar.time)).toEqual(['2026-08-11 09:30:00', '2026-08-11 09:31:00']);
+    expect(result.previousClose).toBe(101);
     expect(result.completeness).toBe('partial');
+  });
+
+  it('uses one look-back daily bar without expanding the visible business range', async () => {
+    const history = provider('eastmoney', vi.fn().mockResolvedValue({
+      source: 'eastmoney', adjustment: 'none', volumeUnit: 'shares', bars: completeBars(23),
+    }));
+    const engine = new KlineReliabilityEngine({ providersFor: () => [history] });
+    const result = await engine.resolve({ ticker: 'NVDA', range: '1m' });
+    expect(result.bars).toHaveLength(22);
+    expect(result.bars[0].time).toBe('2026-07-02');
+    expect(result.previousClose).toBe(101);
+    expect(result.completeness).toBe('complete');
   });
 
   it('returns last-known-good data as explicitly stale after providers fail', async () => {
@@ -72,7 +85,7 @@ describe('KlineReliabilityEngine', () => {
     let now = new Date('2026-08-12T00:00:00Z');
     const fetch = vi.fn(async () => {
       if (fail) throw new KlineProviderError('transient', 'down');
-      return { source: 'eastmoney' as const, adjustment: 'none' as const, bars: completeBars() };
+      return { source: 'eastmoney' as const, adjustment: 'none' as const, volumeUnit: 'shares' as const, bars: completeBars() };
     });
     const engine = new KlineReliabilityEngine({ providersFor: () => [provider('eastmoney', fetch)], now: () => now });
     await engine.resolve({ ticker: 'NVDA', range: '1m' });
@@ -89,7 +102,7 @@ describe('KlineReliabilityEngine', () => {
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const fetch = vi.fn(async () => {
       await gate;
-      return { source: 'eastmoney' as const, adjustment: 'none' as const, bars: completeBars() };
+      return { source: 'eastmoney' as const, adjustment: 'none' as const, volumeUnit: 'shares' as const, bars: completeBars() };
     });
     const engine = new KlineReliabilityEngine({ providersFor: () => [provider('eastmoney', fetch)] });
     const first = engine.resolve({ ticker: 'NVDA', range: '1m' });
@@ -118,7 +131,7 @@ describe('KlineReliabilityEngine', () => {
       maximum = Math.max(maximum, active);
       await new Promise((resolve) => setTimeout(resolve, 5));
       active -= 1;
-      return { source: 'eastmoney' as const, adjustment: 'none' as const, bars: completeBars() };
+      return { source: 'eastmoney' as const, adjustment: 'none' as const, volumeUnit: 'shares' as const, bars: completeBars() };
     });
     const engine = new KlineReliabilityEngine({
       providersFor: () => [provider('eastmoney', fetch)],
@@ -144,7 +157,7 @@ describe('KlineReliabilityEngine', () => {
     const fetch = vi.fn(async () => {
       call += 1;
       if (failingCalls.has(call)) throw new KlineProviderError('transient', 'down');
-      return { source: 'eastmoney' as const, adjustment: 'none' as const, bars: completeBars() };
+      return { source: 'eastmoney' as const, adjustment: 'none' as const, volumeUnit: 'shares' as const, bars: completeBars() };
     });
     const engine = new KlineReliabilityEngine({ providersFor: () => [provider('eastmoney', fetch)] });
     for (let index = 0; index < 10; index += 1) {
@@ -171,6 +184,8 @@ describe('shared cache metadata', () => {
     source: 'eastmoney',
     bars: completeBars(),
     adjustment: 'none',
+    volumeUnit: 'shares',
+    previousClose: null,
     freshness: 'fresh',
     fallbackUsed: false,
     cacheStatus: 'none',

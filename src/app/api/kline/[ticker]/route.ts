@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { KlineResolutionError, resolveKline } from '@/lib/data/kline/reliability';
 import {
   KLINE_RANGE_CONFIG,
+  inferKlinePricePrecision,
+  klineBarLimit,
   klineRangeAvailability,
   marketTimezone,
   parseKlineRange,
@@ -9,7 +11,7 @@ import {
   type KlineBar,
   type KlineMeta,
 } from '@/lib/chart/kline';
-import { classifyMarket } from '@/lib/utils';
+import { classifyMarket, currencyCodeOfMarket, currencyOfMarket } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 15;
@@ -36,11 +38,27 @@ export async function GET(req: Request, { params }: Ctx) {
     const result = await resolveKline({ ticker, range });
 
     const sourceBars = result.bars;
-    const bars: KlineBar[] = sourceBars.map((bar) => ({ ...bar, time: toChartTimestamp(bar.time) })).filter((bar) => bar.time > 0);
+    let previousClose = result.previousClose;
+    const bars: KlineBar[] = sourceBars.map((bar) => {
+      const change = previousClose === null ? null : bar.close - previousClose;
+      const changePct = previousClose && previousClose > 0 ? ((bar.close - previousClose) / previousClose) * 100 : null;
+      const normalized = {
+        ...bar,
+        time: toChartTimestamp(bar.time),
+        previousClose,
+        change,
+        changePct,
+      };
+      previousClose = bar.close;
+      return normalized;
+    }).filter((bar) => bar.time > 0);
     if (bars.length === 0) {
       return NextResponse.json({ error: 'invalid_data', ticker, range, bars: [] }, { status: 502 });
     }
+    const requestedBars = klineBarLimit(ticker, range);
+    const pricePrecision = inferKlinePricePrecision(bars);
     const meta: KlineMeta = {
+      market,
       range,
       interval: config.interval,
       granularity: config.granularity,
@@ -52,6 +70,15 @@ export async function GET(req: Request, { params }: Ctx) {
       timezone: marketTimezone(market),
       fetchedAt: result.fetchedAt,
       delayed: result.freshness === 'stale',
+      currency: currencyOfMarket(market),
+      currencyCode: currencyCodeOfMarket(market),
+      pricePrecision,
+      minMove: 10 ** -pricePrecision,
+      volumeUnit: result.volumeUnit,
+      rangeBasis: 'trading-bars',
+      requestedBars,
+      returnedBars: bars.length,
+      missingBars: Math.max(0, requestedBars - bars.length),
       cacheTtlSeconds: config.interval === 'minute' ? 60 : 300,
       freshness: result.freshness,
       fallbackUsed: result.fallbackUsed,
@@ -59,6 +86,7 @@ export async function GET(req: Request, { params }: Ctx) {
       completeness: result.completeness,
       partial: result.partial,
       warnings: result.warnings,
+      ...(result.cacheAgeSeconds === undefined ? {} : { cacheAgeSeconds: result.cacheAgeSeconds }),
       ...(result.staleAgeSeconds === undefined ? {} : { staleAgeSeconds: result.staleAgeSeconds }),
     };
     return NextResponse.json({ source: result.source, ticker, bars, meta }, {

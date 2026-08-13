@@ -7,7 +7,7 @@ import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { getStockOrStub } from '@/lib/data/mock';
 import { mergeStockDetail } from '@/lib/stocks/detail';
-import { formatPrice, formatPct, formatChange, formatVolume, changeClass, stars, classifyMarket } from '@/lib/utils';
+import { formatPrice, formatPct, formatChange, formatVolume, changeClass, classifyMarket } from '@/lib/utils';
 import { KlineChart } from '@/components/KlineChart';
 import { PerspectiveCard } from '@/components/PerspectiveCard';
 import { DcfStudio } from '@/components/DcfStudio';
@@ -33,6 +33,7 @@ export default function StockDetailPage() {
   const fallbackStock = getStockOrStub(ticker);
   const quote = useQuote(ticker, { refreshIntervalMs: 30_000 });
   const stock = mergeStockDetail(ticker, fallbackStock, quote.data);
+  const hasLiveQuote = quote.data !== null;
   const [tab, setTab] = useState<Tab>('overview');
   const { show } = useToast();
   const { groups, hydrated, setGroups } = useWatchlist();
@@ -166,25 +167,36 @@ export default function StockDetailPage() {
         </Link>
       </div>
       <div className="mb-1.5 flex flex-wrap items-baseline gap-4">
-        <span className="text-3xl font-bold tabular-nums">{stock.currency}{formatPrice(stock.price)}</span>
-        <span className={`text-lg font-semibold tabular-nums ${changeClass(stock.change_pct)}`}>
-          {formatChange(stock.change)} ({formatPct(stock.change_pct)})
-        </span>
-        {/* JP/KR have no quote source yet (EODHD not subscribed) — show a
-            "source pending" badge instead of the delayed-quote note. */}
-        {['JP', 'KR'].includes(classifyMarket(ticker)) ? (
+        {hasLiveQuote ? <>
+          <span className="text-3xl font-bold tabular-nums">{stock.currency}{formatPrice(stock.price)}</span>
+          <span className={`text-lg font-semibold tabular-nums ${changeClass(stock.change_pct)}`}>
+            {formatChange(stock.change)} ({formatPct(stock.change_pct)})
+          </span>
+        </> : (
+          <span className="text-3xl font-bold tabular-nums text-text-dim" aria-label={t('quoteUnavailable')}>—</span>
+        )}
+        {quote.loading ? (
+          <span className="text-[11px] text-text-muted">{t('quoteLoading')}</span>
+        ) : ['JP', 'KR'].includes(classifyMarket(ticker)) ? (
           <span className="rounded bg-bg-card px-1.5 py-0.5 text-[11px] text-text-muted">{t('sourcePending')}</span>
+        ) : quote.data ? (
+          <span className="text-[11px] text-text-muted">{quote.data.delayed ? t('delayedQuote') : t('liveQuote')}</span>
         ) : (
-          <span className="text-[11px] text-text-muted">{t('delayedQuote')}</span>
+          <span className="rounded bg-warn/10 px-1.5 py-0.5 text-[11px] text-warn" role="status">{t('quoteUnavailable')}</span>
         )}
       </div>
+      {!quote.loading && !hasLiveQuote && (
+        <div className="mb-3 rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-xs text-text-dim" role="status">
+          {t('quoteUnavailableDetail')}
+        </div>
+      )}
       <div className="mb-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3 md:grid-cols-6">
-        <MetaCell label={t('meta.open')} value={formatPrice(stock.open)} />
-        <MetaCell label={t('meta.high')} value={formatPrice(stock.high)} />
-        <MetaCell label={t('meta.low')} value={formatPrice(stock.low)} />
-        <MetaCell label={t('meta.prevClose')} value={formatPrice(stock.prev_close)} />
-        <MetaCell label={t('meta.turnoverValue')} value={formatVolume(stock.volume_value)} />
-        <MetaCell label={t('meta.amplitude')} value={`${stock.amplitude}%`} />
+        <MetaCell label={t('meta.open')} value={hasLiveQuote ? formatPrice(stock.open) : '—'} />
+        <MetaCell label={t('meta.high')} value={hasLiveQuote ? formatPrice(stock.high) : '—'} />
+        <MetaCell label={t('meta.low')} value={hasLiveQuote ? formatPrice(stock.low) : '—'} />
+        <MetaCell label={t('meta.prevClose')} value={hasLiveQuote ? formatPrice(stock.prev_close) : '—'} />
+        <MetaCell label={t('meta.turnoverValue')} value={hasLiveQuote ? formatVolume(stock.volume_value) : '—'} />
+        <MetaCell label={t('meta.amplitude')} value={hasLiveQuote ? `${stock.amplitude}%` : '—'} />
       </div>
 
       {/* Tabs */}
@@ -212,30 +224,19 @@ export default function StockDetailPage() {
           <div className="card-base">
             <div className="mb-3 text-sm font-semibold text-text-dim">{t('overview.metricsHeading')}</div>
             <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-              <MetricCard label={t('overview.peTtm')} value={String(stock.pe_ttm)} />
-              <MetricCard label={t('overview.pb')} value={String(stock.pb)} />
-              <MetricCard label={t('overview.roe')} value={`${stock.roe}%`} />
-              <MetricCard label={t('overview.dividendYield')} value={`${stock.dividend_yield}%`} />
-              <MetricCard label={t('overview.marketCap')} value={stock.market_cap} />
-              <MetricCard label={t('overview.high52w')} value={`${stock.currency}${formatPrice(stock.high_52w)}`} />
-              <MetricCard label={t('overview.low52w')} value={`${stock.currency}${formatPrice(stock.low_52w)}`} />
-              <MetricCard label={t('overview.nextEarnings')} value={stock.next_earnings} small />
+              <MetricCard label={t('overview.peTtm')} value={formatOptionalMetric(quote.data?.pe_ttm)} />
+              <MetricCard label={t('overview.pb')} value={formatOptionalMetric(quote.data?.pb)} />
+              <MetricCard label={t('overview.roe')} value={formatOptionalMetric(quote.data?.roe, '%')} />
+              <MetricCard label={t('overview.dividendYield')} value={formatOptionalMetric(quote.data?.dividend_yield, '%')} />
+              <MetricCard label={t('overview.marketCap')} value={quote.data?.market_cap_label || '—'} />
+              <MetricCard label={t('overview.high52w')} value="—" />
+              <MetricCard label={t('overview.low52w')} value="—" />
+              <MetricCard label={t('overview.nextEarnings')} value="—" small />
             </div>
           </div>
           <div className="card-base">
-            <div className="mb-3 text-sm font-semibold text-text-dim">
-              {t('overview.signalsHeading', { score: stock.sentinel_score.toFixed(1), stars: stars(Math.round(stock.sentinel_score / 2)) })}
-            </div>
-            {stock.triggers.length === 0 ? (
-              <div className="py-6 text-center text-sm text-text-dim">{t('overview.noTriggersToday')}</div>
-            ) : (
-              stock.triggers.map((trig, i) => (
-                <div key={i} className="mb-1.5 rounded-md bg-bg-card px-3 py-2 text-sm">
-                  <strong>+{trig.weight}</strong> · {trig.desc}{' '}
-                  <span className="text-[11px] text-text-muted">({trig.rule})</span>
-                </div>
-              ))
-            )}
+            <div className="mb-3 text-sm font-semibold text-text-dim">{t('overview.signalsHeadingStatic')}</div>
+            <div className="py-6 text-center text-sm text-text-dim">{t('overview.noTriggersToday')}</div>
           </div>
         </>
       )}
@@ -421,6 +422,10 @@ function MetricCard({ label, value, small = false }: { label: string; value: str
       <div className={`font-bold tabular-nums ${small ? 'text-sm' : 'text-lg'}`}>{value}</div>
     </div>
   );
+}
+
+function formatOptionalMetric(value: number | null | undefined, suffix = ''): string {
+  return value == null || !Number.isFinite(value) ? '—' : `${value}${suffix}`;
 }
 
 function MiniChart({ label, values, labels }: { label: string; values: number[]; labels: number[] }) {

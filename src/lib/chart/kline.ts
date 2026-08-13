@@ -31,9 +31,14 @@ export interface KlineBar {
   low: number;
   close: number;
   volume: number;
+  /** Previous comparable close used by the server for audited change calculations. */
+  previousClose: number | null;
+  change: number | null;
+  changePct: number | null;
 }
 
 export interface KlineMeta {
+  market: Market;
   range: KlineRange;
   interval: KlineInterval;
   granularity: '1m' | '1d';
@@ -45,6 +50,15 @@ export interface KlineMeta {
   timezone: string;
   fetchedAt: string;
   delayed: boolean;
+  currency: string;
+  currencyCode: string;
+  pricePrecision: number;
+  minMove: number;
+  volumeUnit: 'shares';
+  rangeBasis: 'trading-bars';
+  requestedBars: number;
+  returnedBars: number;
+  missingBars: number;
   cacheTtlSeconds: number;
   freshness: KlineFreshness;
   fallbackUsed: boolean;
@@ -52,6 +66,7 @@ export interface KlineMeta {
   completeness: 'complete' | 'partial';
   partial: boolean;
   warnings: KlineWarning[];
+  cacheAgeSeconds?: number;
   staleAgeSeconds?: number;
 }
 
@@ -100,4 +115,23 @@ export function toChartTimestamp(value: string): number {
   if (!match) return 0;
   const [, year, month, day, hour = '00', minute = '00', second = '00'] = match;
   return Math.floor(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)) / 1000);
+}
+
+/**
+ * Retains the precision present in the normalized provider payload, capped to
+ * the precision supported by this chart. This avoids silently rounding valid
+ * adjusted or sub-cent prices while giving the chart an explicit tick size.
+ */
+export function inferKlinePricePrecision(
+  bars: Array<Pick<KlineBar, 'open' | 'high' | 'low' | 'close'>>,
+): number {
+  let precision = 0;
+  for (const bar of bars) {
+    for (const value of [bar.open, bar.high, bar.low, bar.close]) {
+      const normalized = value.toFixed(6).replace(/0+$/, '');
+      const decimals = normalized.includes('.') ? normalized.split('.')[1].length : 0;
+      precision = Math.max(precision, decimals);
+    }
+  }
+  return Math.min(Math.max(precision, 2), 4);
 }

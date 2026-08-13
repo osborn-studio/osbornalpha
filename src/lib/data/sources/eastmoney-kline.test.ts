@@ -9,7 +9,8 @@ describe('Eastmoney K-line adapter', () => {
     vi.stubGlobal('fetch', fetchMock);
     const result = await fetchEastmoneyKline('600519.SH', 'D', 22, { adjustment: 'qfq' });
     expect(String(fetchMock.mock.calls[0][0])).toContain('&fqt=1');
-    expect(result).toMatchObject({ source: 'eastmoney', adjustment: 'qfq' });
+    expect(result).toMatchObject({ source: 'eastmoney', adjustment: 'qfq', volumeUnit: 'shares' });
+    expect(result?.bars[0].volume).toBe(10_000);
   });
 
   it('requests unadjusted HK history and intraday bars with explicit semantics', async () => {

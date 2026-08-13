@@ -1,12 +1,16 @@
 import type { MockStock } from '@/lib/data/mock';
 import type { LiveQuote } from '@/lib/hooks/useQuote';
+import { classifyMarket, currencyOfMarket } from '@/lib/utils';
 
-function emptyDetailFromQuote(ticker: string, quote: LiveQuote): MockStock {
+function emptyDetail(
+  ticker: string,
+  identity: Pick<LiveQuote, 'ticker' | 'name' | 'market' | 'currency'>,
+): MockStock {
   return {
-    ticker: quote.ticker || ticker,
-    name: quote.name || quote.ticker || ticker,
-    market: quote.market,
-    currency: quote.currency,
+    ticker: identity.ticker || ticker,
+    name: identity.name || identity.ticker || ticker,
+    market: identity.market,
+    currency: identity.currency,
     price: 0,
     change: 0,
     change_pct: 0,
@@ -33,14 +37,35 @@ function emptyDetailFromQuote(ticker: string, quote: LiveQuote): MockStock {
   };
 }
 
+function isRecognizedTicker(ticker: string): boolean {
+  const normalized = ticker.toUpperCase();
+  return /^\d{6}\.(?:SH|SZ|BJ|KS|KQ)$/.test(normalized)
+    || /^\d{5}\.HK$/.test(normalized)
+    || /^\d{4,6}\.(?:TW|TWO)$/.test(normalized)
+    || /^\d{4}\.T$/.test(normalized)
+    || /^[A-Z]{1,5}(?:[.-][A-Z])?$/.test(normalized);
+}
+
+export function createTickerPlaceholder(ticker: string): MockStock | null {
+  const normalized = ticker.toUpperCase();
+  if (!isRecognizedTicker(normalized)) return null;
+  const market = classifyMarket(normalized);
+  return emptyDetail(normalized, {
+    ticker: normalized,
+    name: normalized,
+    market,
+    currency: currencyOfMarket(market),
+  });
+}
+
 export function mergeStockDetail(
   ticker: string,
   fallback: MockStock | null,
   live: LiveQuote | null,
 ): MockStock | null {
-  if (!live) return fallback;
+  if (!live) return fallback ?? createTickerPlaceholder(ticker);
 
-  const base = fallback ?? emptyDetailFromQuote(ticker, live);
+  const base = fallback ?? emptyDetail(ticker, live);
   return {
     ...base,
     ticker: live.ticker || ticker,

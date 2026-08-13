@@ -32,6 +32,8 @@ export interface KlineResolution {
   bars: SourceKlineBar[];
   source: KlineSourceName;
   adjustment: KlineAdjustment;
+  volumeUnit: 'shares';
+  previousClose: number | null;
   freshness: KlineFreshness;
   fallbackUsed: boolean;
   cacheStatus: KlineCacheStatus;
@@ -39,6 +41,7 @@ export interface KlineResolution {
   partial: boolean;
   warnings: KlineWarning[];
   fetchedAt: string;
+  cacheAgeSeconds?: number;
   staleAgeSeconds?: number;
 }
 
@@ -125,7 +128,9 @@ export function klineProviderRoute(ticker: string, range: KlineRange): KlineSour
 function providerDefinitions(request: KlineRequest): KlineProvider[] {
   const market = classifyMarket(request.ticker);
   const config = KLINE_RANGE_CONFIG[request.range];
-  const limit = klineBarLimit(request.ticker, request.range);
+  // Fetch one look-back bar so the first visible bar can carry an audited
+  // previous-close comparison without expanding the requested display range.
+  const limit = klineBarLimit(request.ticker, request.range) + 1;
   const adjustment = expectedAdjustment(market, request.range);
   if (market === 'JP' || market === 'KR') return [];
 
@@ -314,6 +319,7 @@ export class KlineReliabilityEngine {
     const market = classifyMarket(request.ticker);
     const expected = expectedAdjustment(market, request.range);
     const limit = klineBarLimit(request.ticker, request.range);
+    const providerLimit = limit + 1;
     const prior = this.lastKnownGood.get(key);
     let calls = 0;
     let sawInvalidData = false;
@@ -328,36 +334,51 @@ export class KlineReliabilityEngine {
         try {
           const raw = await this.callProvider(provider, remainingMs);
           if (!raw) throw new KlineProviderError('empty', `${provider.name} returned no K-line data`);
-          let validated = validateKlineSeries(raw, expected, limit);
+          const validated = validateKlineSeries(raw, expected, providerLimit);
+          let visibleBars: SourceKlineBar[];
+          let previousClose: number | null;
           if (request.range === '1d') {
             const latestSession = validated.bars[validated.bars.length - 1].time.slice(0, 10);
             const sessionBars = validated.bars.filter((bar) => bar.time.startsWith(latestSession));
-            validated = {
-              ...validated,
-              bars: sessionBars,
-              completeness: sessionBars.length >= limit ? 'complete' : 'partial',
-            };
+            visibleBars = sessionBars.slice(-limit);
+            previousClose = validated.bars
+              .filter((bar) => bar.time.slice(0, 10) < latestSession)
+              .at(-1)?.close ?? null;
+          } else {
+            visibleBars = validated.bars.slice(-limit);
+            previousClose = validated.bars.length > visibleBars.length
+              ? validated.bars[validated.bars.length - visibleBars.length - 1].close
+              : null;
           }
-          if (providerIndex > 0 && prior) assertCompatibleSeries(validated, prior.result);
+          const completeness = visibleBars.length >= limit ? 'complete' : 'partial';
+          const selected: SourceKlineSeries = {
+            source: validated.source,
+            adjustment: validated.adjustment,
+            volumeUnit: validated.volumeUnit,
+            bars: visibleBars,
+          };
+          if (providerIndex > 0 && prior) assertCompatibleSeries(selected, prior.result);
           this.recordCircuit(provider, true);
 
           const now = this.now();
-          const lastDate = validated.bars[validated.bars.length - 1].time.slice(0, 10);
+          const lastDate = visibleBars[visibleBars.length - 1].time.slice(0, 10);
           const partial = KLINE_RANGE_CONFIG[request.range].interval === 'day'
             && lastDate === localDate(now, market)
             && marketPhase(market, now).phase === 'open';
           const warnings: KlineWarning[] = [];
           if (providerIndex > 0) warnings.push('fallback_used');
-          if (validated.completeness === 'partial') warnings.push('partial_coverage');
+          if (completeness === 'partial') warnings.push('partial_coverage');
           if (partial) warnings.push('partial_bar');
           const result: KlineResolution = {
-            bars: validated.bars,
-            source: validated.source,
-            adjustment: validated.adjustment,
+            bars: visibleBars,
+            source: selected.source,
+            adjustment: selected.adjustment,
+            volumeUnit: selected.volumeUnit,
+            previousClose,
             freshness: 'fresh',
             fallbackUsed: providerIndex > 0,
             cacheStatus: 'none',
-            completeness: validated.completeness,
+            completeness,
             partial,
             warnings,
             fetchedAt: now.toISOString(),
@@ -383,6 +404,7 @@ export class KlineReliabilityEngine {
         ...prior.result,
         freshness: 'stale',
         cacheStatus: 'memory-lkg',
+        cacheAgeSeconds: Math.max(0, Math.floor(staleAgeMs / 1_000)),
         staleAgeSeconds: Math.max(0, Math.floor(staleAgeMs / 1_000)),
         warnings: Array.from(new Set([...prior.result.warnings, 'stale_cache'])) as KlineWarning[],
       };
@@ -412,13 +434,13 @@ async function resolveCacheable(ticker: string, range: KlineRange): Promise<Klin
 
 const cachedIntraday = unstable_cache(
   resolveCacheable,
-  ['kline-reliability-intraday-v1'],
+  ['kline-reliability-intraday-v2'],
   { revalidate: 60 },
 );
 
 const cachedDaily = unstable_cache(
   resolveCacheable,
-  ['kline-reliability-daily-v1'],
+  ['kline-reliability-daily-v2'],
   { revalidate: 300 },
 );
 
@@ -436,6 +458,7 @@ export function decorateCachedResolution(
     ...result,
     freshness: expired ? 'stale' : result.freshness,
     cacheStatus: fromSharedCache ? 'shared-swr' : 'none',
+    ...(fromSharedCache ? { cacheAgeSeconds: Math.floor(cacheAgeMs / 1_000) } : {}),
     ...(expired ? { staleAgeSeconds: Math.floor(cacheAgeMs / 1_000) } : {}),
     warnings: expired
       ? Array.from(new Set([...result.warnings, 'stale_cache'])) as KlineWarning[]

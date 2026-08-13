@@ -228,7 +228,7 @@ export async function fetchEastmoneyKline(
   period: KlineInterval = 'D',
   limit = 120,
   options: EastmoneyKlineOptions = {},
-): Promise<{ source: 'eastmoney'; bars: KlineBar[]; adjustment: KlineAdjustment } | null> {
+): Promise<{ source: 'eastmoney'; bars: KlineBar[]; adjustment: KlineAdjustment; volumeUnit: 'shares' } | null> {
   const parsed = tickerToSecid(ticker);
   if (!parsed) return null;
 
@@ -256,7 +256,9 @@ export async function fetchEastmoneyKline(
         close: parseFloat(close),
         high: parseFloat(high),
         low: parseFloat(low),
-        volume: parseFloat(volume),
+        // Eastmoney reports A-share K-line volume in board lots (手), while
+        // Hong Kong and US history is already expressed in shares.
+        volume: parseFloat(volume) * (parsed.market === 'A' ? 100 : 1),
       };
     });
   };
@@ -278,5 +280,5 @@ export async function fetchEastmoneyKline(
   }
 
   if (bars.length === 0 && lastError) throw lastError;
-  return bars.length > 0 ? { source: 'eastmoney', bars, adjustment } : null;
+  return bars.length > 0 ? { source: 'eastmoney', bars, adjustment, volumeUnit: 'shares' } : null;
 }
