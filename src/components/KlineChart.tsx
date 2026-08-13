@@ -293,7 +293,7 @@ export function KlineChart({ ticker }: { ticker: string }) {
               : t(key)}</span>
           ))}
           <span>{displayMeta.interval === 'day' ? t('indicators.daily') : t('indicators.intraday')}</span>
-        </> : <span>{loading ? t('loading') : errorMessage}</span>}
+        </> : loading ? <span>{t('loading')}</span> : null}
       </div>
     </div>
   );
