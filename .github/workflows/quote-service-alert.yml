@@ -1,0 +1,27 @@
+name: Quote service alert
+
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quote-service-alert
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Evaluate the previous 15-minute quote window
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          test -n "$CRON_SECRET"
+          curl --fail-with-body --retry 2 --retry-all-errors --max-time 60 \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            https://osbornalpha.com/api/cron/alerts/quotes

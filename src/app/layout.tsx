@@ -1,0 +1,69 @@
+import type { Metadata, Viewport } from 'next';
+import { GeistSans } from 'geist/font/sans';
+import { GeistMono } from 'geist/font/mono';
+import { getLocale, getMessages, getTranslations } from 'next-intl/server';
+import { NextIntlClientProvider } from 'next-intl';
+import './globals.css';
+import { ToastProvider } from '@/components/Toast';
+
+// Geist (sans) + Geist Mono, per DESIGN.md §3. Self-hosted via the `geist`
+// package (Vercel's preferred path). CSS vars --font-geist-sans /
+// --font-geist-mono are emitted on <html> and consumed in globals.css.
+
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations('common.meta');
+  return {
+    title: { default: t('title'), template: '%s · osbornalpha' },
+    description: t('description'),
+    manifest: '/manifest.json',
+    appleWebApp: {
+      capable: true,
+      statusBarStyle: 'black-translucent',
+      title: 'osbornalpha',
+    },
+  };
+}
+
+export const viewport: Viewport = {
+  themeColor: '#0a0a0b',
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
+};
+
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const locale = await getLocale();
+  const messages = await getMessages();
+
+  return (
+    <html
+      lang={locale === 'en' ? 'en' : 'zh-CN'}
+      className={`theme-dark ${GeistSans.variable} ${GeistMono.variable}`}
+      data-color-scheme="cn"
+      suppressHydrationWarning
+    >
+      <head>
+        {/* Pre-hydration theme — runs BEFORE first paint so we get no FOUC. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              try {
+                var doc = document.documentElement;
+                var s = localStorage.getItem('color-scheme') || 'cn';
+                var t = localStorage.getItem('theme') || 'dark';
+                doc.setAttribute('data-color-scheme', s);
+                doc.classList.remove('theme-dark', 'theme-light');
+                doc.classList.add('theme-' + t);
+              } catch (e) {}
+            `,
+          }}
+        />
+      </head>
+      <body>
+        <NextIntlClientProvider locale={locale} messages={messages}>
+          <ToastProvider>{children}</ToastProvider>
+        </NextIntlClientProvider>
+      </body>
+    </html>
+  );
+}

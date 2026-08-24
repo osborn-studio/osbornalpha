@@ -1,0 +1,30 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["hnd1"],
+  "crons": [
+    {
+      "path": "/api/cron/daily-radar",
+      "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/daily-brief",
+      "schedule": "30 0 * * *"
+    },
+    {
+      "path": "/api/cron/research-daily",
+      "schedule": "30 1 * * *"
+    },
+    {
+      "path": "/api/cron/alerts/ai",
+      "schedule": "15 16 * * *"
+    },
+    {
+      "path": "/api/cron/securities-sync?region=asia",
+      "schedule": "30 21 * * *"
+    },
+    {
+      "path": "/api/cron/securities-sync?region=us",
+      "schedule": "30 0 * * *"
+    }
+  ]
+}

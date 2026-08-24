@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0d1117">
+  <title>Stock Monitor · 单股详情</title>
+  <link rel="stylesheet" href="./assets/css/style.css">
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <div class="app" id="app"></div>
+
+  <script src="./assets/js/app.js"></script>
+  <script>
+    let _activeTab = 'overview';
+
+    // Generate mock OHLCV data (random walk from current price backwards 120 days)
+    function generateMockKline(startPrice, days = 120, volatility = 0.02, trend = 0) {
+      const out = [];
+      let price = startPrice * 0.85;  // Start lower so we end near current
+      const now = Math.floor(Date.now() / 1000);
+      const dayInSec = 86400;
+      for (let i = days; i >= 0; i--) {
+        const ts = now - i * dayInSec;
+        const date = new Date(ts * 1000);
+        // Skip weekends
+        if (date.getDay() === 0 || date.getDay() === 6) continue;
+        const drift = trend / 100;
+        const change = (Math.random() - 0.5 + drift) * volatility;
+        const open = price;
+        const close = price * (1 + change);
+        const high = Math.max(open, close) * (1 + Math.random() * volatility * 0.5);
+        const low = Math.min(open, close) * (1 - Math.random() * volatility * 0.5);
+        const volume = Math.floor(1e6 + Math.random() * 5e6);
+        out.push({
+          time: date.toISOString().slice(0, 10),
+          open, high, low, close, volume
+        });
+        price = close;
+      }
+      return out;
+    }
+
+    function computeMA(data, period) {
+      return data.map((d, i) => {
+        if (i < period - 1) return { time: d.time, value: null };
+        let sum = 0;
+        for (let j = 0; j < period; j++) sum += data[i - j].close;
+        return { time: d.time, value: sum / period };
+      }).filter(d => d.value !== null);
+    }
+
+    async function renderPage() {
+      const params = new URLSearchParams(window.location.search);
+      const ticker = params.get('ticker') || '00700.HK';
+      const data = await loadData();
+      const s = data.stocks[ticker];
+      const shell = renderShell('detail');
+
+      if (!s) {
+        document.getElementById('app').innerHTML = `
+          ${shell.topbar}
+          <main class="main">
+            <div class="empty">
+              <h2 style="font-size:18px;margin-bottom:8px">未找到标的 ${ticker}</h2>
+              <p>本 demo 仅含有限的 mock 数据。回 <a href="./index.html">首页</a> 或 <a href="./watchlist.html">股票池</a></p>
+            </div>
+          </main>
+          ${shell.tabbar}
+        `;
+        wireGlobalSearch();
+        return;
+      }
+
+      const groups = await getEffectiveWatchlist();
+      const inWatchlist = isInWatchlist(groups, ticker);
+
+      // Header
+      const headerHtml = `
+        <div class="stock-header">
+          <span class="name">${s.name}</span>
+          <span class="ticker-code">${s.ticker} · ${marketTag(s.market)}</span>
+          <button class="add-watch ${inWatchlist ? 'added' : ''}" id="btn-toggle-watch">
+            ${inWatchlist ? '⭐ 已加入' : '+ 加入股票池'}
+          </button>
+        </div>
+        <div class="stock-quote">
+          <span class="price">${s.currency}${formatPrice(s.price)}</span>
+          <span class="chg ${changeClass(s.change_pct)}">${formatChange(s.change)} (${formatPct(s.change_pct)})</span>
+          <span style="font-size:11px;color:var(--text-muted)">15min 延迟</span>
+        </div>
+        <div class="stock-meta">
+          <div class="cell"><div class="l">开</div><div class="v">${formatPrice(s.open)}</div></div>
+          <div class="cell"><div class="l">高</div><div class="v">${formatPrice(s.high)}</div></div>
+          <div class="cell"><div class="l">低</div><div class="v">${formatPrice(s.low)}</div></div>
+          <div class="cell"><div class="l">昨</div><div class="v">${formatPrice(s.prev_close)}</div></div>
+          <div class="cell"><div class="l">成交额</div><div class="v">${formatVolume(s.volume_value)}</div></div>
+          <div class="cell"><div class="l">振幅</div><div class="v">${s.amplitude}%</div></div>
+        </div>
+      `;
+
+      // Tabs
+      const tabs = [
+        { id: 'overview', label: '行情' },
+        { id: 'ai', label: 'AI 观点' },
+        { id: 'fundamentals', label: '财报' },
+        { id: 'news', label: '新闻 / 研报' },
+        { id: 'signals', label: 'Sentinel 信号' },
+        { id: 'holdings', label: '股东持仓' }
+      ];
+      const tabsHtml = `
+        <div class="stock-tabs">
+          ${tabs.map(t => `<div class="stock-tab ${t.id === _activeTab ? 'active' : ''}" data-tab="${t.id}">${t.label}</div>`).join('')}
+        </div>
+      `;
+
+      // Tab content
+      let contentHtml = '';
+      if (_activeTab === 'overview') {
+        contentHtml = `
+          <div class="card">
+            <div class="card-title">📊 K 线（日 · 模拟数据）</div>
+            <div id="chart-container"></div>
+            <div style="margin-top:8px;font-size:11px;color:var(--text-muted);text-align:right">
+              数据为前端模拟生成（demo 用），生产版本接 Alpha Vantage / Akshare
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">📐 关键指标</div>
+            <div class="metrics-grid">
+              <div class="metric-card"><div class="l">PE (TTM)</div><div class="v">${s.pe_ttm}</div></div>
+              <div class="metric-card"><div class="l">PB</div><div class="v">${s.pb}</div></div>
+              <div class="metric-card"><div class="l">ROE</div><div class="v">${s.roe}%</div></div>
+              <div class="metric-card"><div class="l">股息率</div><div class="v">${s.dividend_yield}%</div></div>
+              <div class="metric-card"><div class="l">市值</div><div class="v">${s.market_cap}</div></div>
+              <div class="metric-card"><div class="l">52 周高</div><div class="v">${s.currency}${formatPrice(s.high_52w)}</div></div>
+              <div class="metric-card"><div class="l">52 周低</div><div class="v">${s.currency}${formatPrice(s.low_52w)}</div></div>
+              <div class="metric-card"><div class="l">下次财报</div><div class="v" style="font-size:13px">${s.next_earnings}</div></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">🎯 Sentinel 信号 · ${s.sentinel_score}/10 ${stars(Math.round(s.sentinel_score / 2))}</div>
+            ${s.triggers.length === 0 ? '<div class="empty">今日无显著触发信号</div>' :
+              s.triggers.map(t => `<div style="margin-bottom:6px;padding:8px 12px;background:var(--bg-card);border-radius:6px;font-size:13px"><strong>+${t.weight}</strong> · ${t.desc} <span style="color:var(--text-muted);font-size:11px">(${t.rule})</span></div>`).join('')}
+          </div>
+        `;
+      } else if (_activeTab === 'ai') {
+        const bullish = s.perspectives.filter(p => p.stance === 'bullish');
+        const neutral = s.perspectives.filter(p => p.stance === 'neutral');
+        const bearish = s.perspectives.filter(p => p.stance === 'bearish');
+        const consensusScore = s.perspectives.length === 0 ? 0 :
+          s.perspectives.reduce((sum, p) => {
+            const stanceVal = p.stance === 'bullish' ? p.confidence : (p.stance === 'bearish' ? -p.confidence : 0);
+            return sum + stanceVal;
+          }, 0) / s.perspectives.length + 5;
+
+        contentHtml = `
+          <div class="card">
+            <div class="card-title">🤖 AI 委员会观点</div>
+            ${s.perspectives.length === 0 ?
+              '<div class="empty">该标的视角辩论待生成。点击 [刷新观点] 即时跑一次（demo 模式不会真的调 LLM）。<br><br><button class="add-watch" disabled style="opacity:0.5">🔄 刷新观点（demo）</button></div>'
+              : `
+              <div style="margin-bottom:14px;font-size:13px;color:var(--text-dim)">
+                共识：${consensusScore.toFixed(1)}/10
+                · ${bullish.length} 多 / ${neutral.length} 中 / ${bearish.length} 空
+              </div>
+              ${bullish.length ? `<div class="persp-section-title" style="color:var(--bullish)">🟢 看多 (${bullish.length})</div>` : ''}
+              ${bullish.map(p => renderPerspective(p)).join('')}
+              ${neutral.length ? `<div class="persp-section-title" style="color:var(--neutral)">🟡 中性 (${neutral.length})</div>` : ''}
+              ${neutral.map(p => renderPerspective(p)).join('')}
+              ${bearish.length ? `<div class="persp-section-title" style="color:var(--bearish)">🔴 看空 (${bearish.length})</div>` : ''}
+              ${bearish.map(p => renderPerspective(p)).join('')}
+            `}
+          </div>
+        `;
+      } else if (_activeTab === 'fundamentals') {
+        const fin = s.financials;
+        const maxRev = Math.max(...fin.revenue);
+        const maxNi = Math.max(...fin.net_income);
+        contentHtml = `
+          <div class="card">
+            <div class="card-title">📅 财报日历</div>
+            <div style="padding:12px;background:var(--bg-card);border-radius:6px;font-size:13px">
+              <strong>下次发布</strong>：${s.next_earnings}
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">📊 5 年财务趋势</div>
+            <div style="margin-bottom:18px">
+              <div style="font-size:12px;color:var(--text-dim);margin-bottom:4px">营业收入（${s.currency}亿）</div>
+              <div class="minichart">
+                ${fin.revenue.map((v, i) => `<div class="bar" style="height:${(v / maxRev) * 100}%" title="${fin.years[i]}: ${v}"><span class="label">${fin.years[i]}</span></div>`).join('')}
+              </div>
+            </div>
+            <div style="margin-bottom:18px;margin-top:24px">
+              <div style="font-size:12px;color:var(--text-dim);margin-bottom:4px">净利润（${s.currency}亿）</div>
+              <div class="minichart">
+                ${fin.net_income.map((v, i) => `<div class="bar" style="height:${(Math.max(v,0) / Math.abs(maxNi)) * 100}%;background:${v < 0 ? 'var(--down)' : 'var(--accent-dim)'}" title="${fin.years[i]}: ${v}"><span class="label">${fin.years[i]}</span></div>`).join('')}
+              </div>
+            </div>
+            <div style="margin-top:24px">
+              <div style="font-size:12px;color:var(--text-dim);margin-bottom:4px">ROE（%）</div>
+              <div class="minichart">
+                ${fin.roe.map((v, i) => `<div class="bar" style="height:${(Math.max(v,0) / Math.max(...fin.roe)) * 100}%" title="${fin.years[i]}: ${v}%"><span class="label">${fin.years[i]}</span></div>`).join('')}
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">📄 财务摘要</div>
+            <table style="width:100%;font-size:13px;border-collapse:collapse">
+              <thead>
+                <tr style="color:var(--text-dim)">
+                  <th style="text-align:left;padding:8px 0">指标</th>
+                  ${fin.years.map(y => `<th style="text-align:right;padding:8px 0">${y}</th>`).join('')}
+                </tr>
+              </thead>
+              <tbody>
+                <tr style="border-top:1px solid var(--border)"><td style="padding:8px 0">营收</td>${fin.revenue.map(v => `<td style="text-align:right;font-variant-numeric:tabular-nums">${v}</td>`).join('')}</tr>
+                <tr style="border-top:1px solid var(--border)"><td style="padding:8px 0">净利</td>${fin.net_income.map(v => `<td style="text-align:right;font-variant-numeric:tabular-nums">${v}</td>`).join('')}</tr>
+                <tr style="border-top:1px solid var(--border)"><td style="padding:8px 0">ROE</td>${fin.roe.map(v => `<td style="text-align:right;font-variant-numeric:tabular-nums">${v}%</td>`).join('')}</tr>
+              </tbody>
+            </table>
+          </div>
+        `;
+      } else if (_activeTab === 'news') {
+        contentHtml = `
+          <div class="card">
+            <div class="card-title">📑 券商研报 (${s.broker_reports.length})</div>
+            ${s.broker_reports.length === 0 ? '<div class="empty">暂无近期研报</div>' :
+              s.broker_reports.map(r => {
+                const sign = r.target_change_pct > 0 ? '↑' : (r.target_change_pct < 0 ? '↓' : '→');
+                const cls = r.target_change_pct > 0 ? 'up' : (r.target_change_pct < 0 ? 'down' : '');
+                return `<div class="report-row">
+                  <div>
+                    <div style="font-weight:600">${r.broker}</div>
+                    <div style="font-size:11px;color:var(--text-dim)">${r.date} · ${r.rating}</div>
+                  </div>
+                  <div style="text-align:right">
+                    <div class="target">目标 ${r.target}</div>
+                    <div class="${cls}" style="font-size:11px">${sign} ${r.target_change_pct > 0 ? '+' : ''}${r.target_change_pct}%</div>
+                  </div>
+                </div>`;
+              }).join('')}
+          </div>
+          <div class="card">
+            <div class="card-title">📰 新闻动态 (${s.news.length})</div>
+            ${s.news.length === 0 ? '<div class="empty">暂无最新新闻</div>' :
+              s.news.map(n => `
+                <div class="news-item">
+                  <span class="time">${n.time}</span>
+                  <span>${n.title} <span style="color:var(--text-muted);font-size:11px">· ${n.source}</span></span>
+                  <span class="sent ${n.sentiment > 0.3 ? 'pos' : (n.sentiment < -0.3 ? 'neg' : 'neu')}">${n.sentiment > 0 ? '+' : ''}${n.sentiment.toFixed(1)}</span>
+                </div>
+              `).join('')}
+          </div>
+        `;
+      } else if (_activeTab === 'signals') {
+        contentHtml = `
+          <div class="card">
+            <div class="card-title">🎯 Sentinel 历史信号</div>
+            <div class="empty">
+              <p>该标的近 90 天信号回看待开发。</p>
+              <p style="margin-top:10px;font-size:11px">v1.0 将展示：每个信号触发日期 + 当日 brief 节选 + 后续 N 天股价表现 + 命中率统计</p>
+            </div>
+          </div>
+        `;
+      } else if (_activeTab === 'holdings') {
+        contentHtml = `
+          <div class="card">
+            <div class="card-title">🏛 13F 持仓变动${s.market === 'US' ? '' : '（仅美股可用）'}</div>
+            <div class="empty">
+              <p>${s.market === 'US' ? '关注的对冲基金（Berkshire / Bridgewater / Burry 等）13F 持仓变动数据待接入。' : '此标的非美股，无 13F 数据。'}</p>
+              <p style="margin-top:10px;font-size:11px">数据源：EDGAR 13F-HR · 季度更新</p>
+            </div>
+          </div>
+        `;
+      }
+
+      document.getElementById('app').innerHTML = `
+        ${shell.topbar}
+        <main class="main">
+          ${headerHtml}
+          ${tabsHtml}
+          ${contentHtml}
+          ${renderDisclaimer()}
+        </main>
+        ${shell.tabbar}
+      `;
+
+      wireGlobalSearch();
+
+      // Wire tabs
+      document.querySelectorAll('.stock-tab').forEach(t => {
+        t.addEventListener('click', () => {
+          _activeTab = t.dataset.tab;
+          renderPage();
+        });
+      });
+
+      // Wire watchlist toggle
+      document.getElementById('btn-toggle-watch')?.addEventListener('click', async () => {
+        const groups2 = await getEffectiveWatchlist();
+        if (isInWatchlist(groups2, ticker)) {
+          saveWatchlist(removeFromAllGroups(groups2, ticker));
+          showToast(`✓ 已移出股票池：${ticker}`);
+        } else {
+          saveWatchlist(addToGroup(groups2, ticker, 'opportunity'));
+          showToast(`✓ 已加入「机会跟踪」：${ticker}`);
+        }
+        renderPage();
+      });
+
+      // Draw chart if on overview tab
+      if (_activeTab === 'overview') {
+        setTimeout(() => drawChart(s), 50);
+      }
+    }
+
+    function renderPerspective(p) {
+      return `
+        <div class="perspective-card ${p.stance}">
+          <div class="head">
+            <span class="name">${p.name}</span>
+            <span class="conf">信心 ${p.confidence}/10</span>
+          </div>
+          <div class="summary">${p.summary}</div>
+          ${p.cites.length ? `<div class="cites">▸ cite: ${p.cites.join('; ')}</div>` : ''}
+        </div>
+      `;
+    }
+
+    function drawChart(stock) {
+      const container = document.getElementById('chart-container');
+      if (!container || !window.LightweightCharts) return;
+      container.innerHTML = '';
+
+      const klineData = generateMockKline(stock.price, 120, 0.022, 0.15);
+      const candleData = klineData.map(d => ({
+        time: d.time, open: d.open, high: d.high, low: d.low, close: d.close
+      }));
+      const volumeData = klineData.map(d => ({
+        time: d.time,
+        value: d.volume,
+        color: d.close >= d.open ? 'rgba(239,68,68,0.5)' : 'rgba(16,185,129,0.5)'
+      }));
+
+      const chart = LightweightCharts.createChart(container, {
+        width: container.clientWidth,
+        height: 380,
+        layout: {
+          background: { color: '#1c2128' },
+          textColor: '#e6edf3',
+          fontFamily: 'system-ui'
+        },
+        grid: {
+          vertLines: { color: '#30363d' },
+          horzLines: { color: '#30363d' }
+        },
+        timeScale: { timeVisible: false, borderColor: '#30363d' },
+        rightPriceScale: { borderColor: '#30363d' },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
+      });
+
+      const candleSeries = chart.addCandlestickSeries({
+        upColor: '#ef4444',
+        downColor: '#10b981',
+        borderUpColor: '#ef4444',
+        borderDownColor: '#10b981',
+        wickUpColor: '#ef4444',
+        wickDownColor: '#10b981'
+      });
+      candleSeries.setData(candleData);
+
+      // MA5 + MA20
+      const ma5 = chart.addLineSeries({ color: '#f59e0b', lineWidth: 1, title: 'MA5' });
+      ma5.setData(computeMA(candleData, 5));
+      const ma20 = chart.addLineSeries({ color: '#58a6ff', lineWidth: 1, title: 'MA20' });
+      ma20.setData(computeMA(candleData, 20));
+
+      // Volume on separate price scale
+      const volumeSeries = chart.addHistogramSeries({
+        priceFormat: { type: 'volume' },
+        priceScaleId: ''
+      });
+      volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+      volumeSeries.setData(volumeData);
+
+      chart.timeScale().fitContent();
+
+      // Responsive
+      window.addEventListener('resize', () => {
+        chart.applyOptions({ width: container.clientWidth });
+      }, { once: true });
+    }
+
+    renderPage();
+  </script>
+</body>
+</html>

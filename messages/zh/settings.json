@@ -1,0 +1,52 @@
+{
+  "title": "⚙️ 设置",
+  "account": {
+    "heading": "👤 账号"
+  },
+  "usage": {
+    "heading": "📊 今日用量",
+    "errorLine": "今日用量：{message}"
+  },
+  "upgrade": {
+    "heading": "⭐ 升级 Pro"
+  },
+  "llm": {
+    "heading": "🤖 AI 模型"
+  },
+  "language": {
+    "heading": "🌐 语言",
+    "zh": "🇨🇳 中文",
+    "en": "🇺🇸 English"
+  },
+  "timezone": {
+    "heading": "🕐 时区",
+    "auto": "自动（跟随浏览器）",
+    "hint": "影响全站时间显示；行情时段判定始终按各交易所当地时间。"
+  },
+  "channels": {
+    "heading": "📬 推送渠道",
+    "managedDestination": "Email 与 Telegram 目的地由服务端统一配置，收件信息不会在此处显示。",
+    "tgSending": "⏳ 测试发送中...",
+    "tgTestText": "🧪 *Sentinel 测试消息*\n\n如果你看到这条消息，说明 Telegram 推送配置成功！\n\nhttps://stock-monitor-nu.vercel.app/",
+    "tgTestSent": "✅ 测试消息已发送（msg_id {id}）",
+    "tgTestButton": "✉️ 发测试消息",
+    "tgBriefSending": "⏳ 生成并发送今日简报中（约 10-20s）...",
+    "tgBriefSent": "✅ 已发送 {count} 条消息",
+    "tgBriefButton": "🚀 立即生成并推送",
+    "emailSending": "⏳ 发送测试邮件中...",
+    "emailTestSubject": "Sentinel · 邮件测试",
+    "emailTestText": "🧪 Sentinel email 测试\n\n如果你看到这封邮件，说明 Resend 推送配置成功！\n\nhttps://stock-monitor-nu.vercel.app/",
+    "emailSent": "✅ 邮件已发送 (id {id}...)",
+    "emailTestButton": "✉️ 发邮件测试",
+    "emailBriefSending": "⏳ 生成并发邮件简报中（约 20-30s）...",
+    "emailBriefSent": "✅ 简报邮件已发送（主题：{subject}...）",
+    "emailBriefButton": "🚀 立即生成 brief 并发邮件",
+    "sendFailed": "发送失败",
+    "failed": "失败"
+  },
+  "brief": {
+    "heading": "⏰ 简报投递",
+    "schedule": "每日 08:30 北京时间（UTC+8）投递",
+    "localEquiv": "≈ 你的本地时间 {time}"
+  }
+}

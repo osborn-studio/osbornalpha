@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="Stock Monitor — 个人股票池每日 AI 监控工具。A 股 / 港股 / 美股。">
+  <meta name="theme-color" content="#0d1117">
+  <title>Stock Monitor · 今日简报</title>
+  <link rel="stylesheet" href="./assets/css/style.css">
+</head>
+<body>
+  <div class="app" id="app"></div>
+
+  <script src="./assets/js/app.js"></script>
+  <script>
+    (async () => {
+      const data = await loadData();
+      const shell = renderShell('home');
+
+      const macroHtml = `
+        <div class="macro-strip">
+          <div class="macro-cell"><div class="name">上证</div><div class="val">${data.macro.sse_index.value.toLocaleString()}</div><div class="chg ${changeClass(data.macro.sse_index.change_pct)}">${formatPct(data.macro.sse_index.change_pct)}</div></div>
+          <div class="macro-cell"><div class="name">恒生</div><div class="val">${data.macro.hsi_index.value.toLocaleString()}</div><div class="chg ${changeClass(data.macro.hsi_index.change_pct)}">${formatPct(data.macro.hsi_index.change_pct)}</div></div>
+          <div class="macro-cell"><div class="name">纳指</div><div class="val">${data.macro.nasdaq.value.toLocaleString()}</div><div class="chg ${changeClass(data.macro.nasdaq.change_pct)}">${formatPct(data.macro.nasdaq.change_pct)}</div></div>
+          <div class="macro-cell"><div class="name">美 10Y</div><div class="val">${data.macro.us_10y.value}%</div><div class="chg ${data.macro.us_10y.change_bp < 0 ? 'down' : 'up'}">${data.macro.us_10y.change_bp > 0 ? '+' : ''}${data.macro.us_10y.change_bp}bp</div></div>
+          <div class="macro-cell"><div class="name">DXY</div><div class="val">${data.macro.dxy.value}</div><div class="chg ${changeClass(data.macro.dxy.change_pct)}">${formatPct(data.macro.dxy.change_pct)}</div></div>
+          <div class="macro-cell"><div class="name">北向</div><div class="val">+¥${data.macro.north_bound}亿</div></div>
+          <div class="macro-cell"><div class="name">南向</div><div class="val">+HK$${data.macro.south_bound}亿</div></div>
+        </div>
+      `;
+
+      const heroHtml = `
+        <div class="hero">
+          <div class="hero-card">
+            <div class="label">今日 AI 委员会信心</div>
+            <div class="value">${data.ai_confidence} <span style="font-size:14px;color:var(--text-dim)">/ 10</span></div>
+            <div class="confidence-bar"><div style="width:${data.ai_confidence * 10}%"></div></div>
+            <div class="meta">${data.ai_confidence_label} · 9 位虚拟委员评议</div>
+          </div>
+          <div class="hero-card">
+            <div class="label">今日简报状态</div>
+            <div class="value" style="font-size:22px;">✅ 已生成 · ${new Date(data.generated_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</div>
+            <div class="meta">已推送 Telegram · 邮箱 · Web</div>
+          </div>
+        </div>
+      `;
+
+      const top5Html = `
+        <div class="card">
+          <div class="card-title">
+            🎯 今日注意力优先级 Top 5
+            <a href="./watchlist.html" style="font-size:12px">完整池 →</a>
+          </div>
+          ${data.top5.map((s, i) => `
+            <a href="./stock.html?ticker=${encodeURIComponent(s.ticker)}" class="priority-item">
+              <span class="rank">${i + 1}</span>
+              <span class="stars">${stars(s.stars)}</span>
+              <div class="meta">
+                <div class="name">${s.name} · ${s.score.toFixed(1)}</div>
+                <div class="ticker">${s.ticker} · ${marketTag(s.market)}</div>
+              </div>
+              <span class="trigger">${s.trigger}</span>
+              <span class="arrow">→</span>
+            </a>
+          `).join('')}
+        </div>
+      `;
+
+      // Watchlist snapshot
+      const groups = await getEffectiveWatchlist();
+      const flatTickers = groups.flatMap(g => g.tickers).slice(0, 8);
+      const watchSnapshotHtml = `
+        <div class="card">
+          <div class="card-title">
+            📊 我的股票池 (${groups.reduce((sum, g) => sum + g.tickers.length, 0)})
+            <a href="./watchlist.html" style="font-size:12px">管理 →</a>
+          </div>
+          ${flatTickers.map(t => {
+            const s = data.stocks[t];
+            if (!s) return '';
+            return `
+              <a href="./stock.html?ticker=${encodeURIComponent(t)}" class="watchlist-row">
+                <span class="market-tag">${marketTag(s.market)}</span>
+                <div><div class="name">${s.name}</div><div class="ticker">${s.ticker}</div></div>
+                <div class="price">${s.currency}${formatPrice(s.price)}</div>
+                <div class="chg ${changeClass(s.change_pct)}">${formatPct(s.change_pct)}</div>
+                <div class="stars">${'★'.repeat(Math.round(s.sentinel_score / 2))}</div>
+              </a>
+            `;
+          }).join('')}
+        </div>
+      `;
+
+      // News stream (aggregate from top stocks)
+      const newsItems = data.top5.slice(0, 3).flatMap(t => {
+        const s = data.stocks[t.ticker];
+        return s.news.slice(0, 1).map(n => ({ ...n, ticker: s.ticker, name: s.name }));
+      });
+      const newsHtml = `
+        <div class="card">
+          <div class="card-title">📰 今日要闻</div>
+          ${newsItems.map(n => `
+            <div class="news-item">
+              <span class="time">${n.time}</span>
+              <a href="./stock.html?ticker=${encodeURIComponent(n.ticker)}" style="color:inherit">${n.title} <span style="color:var(--text-dim);font-size:11px">· ${n.name}</span></a>
+              <span class="sent ${n.sentiment > 0.3 ? 'pos' : (n.sentiment < -0.3 ? 'neg' : 'neu')}">${n.sentiment > 0 ? '+' : ''}${n.sentiment.toFixed(1)}</span>
+            </div>
+          `).join('')}
+        </div>
+      `;
+
+      document.getElementById('app').innerHTML = `
+        ${shell.topbar}
+        <main class="main">
+          ${heroHtml}
+          ${macroHtml}
+          ${top5Html}
+          ${watchSnapshotHtml}
+          ${newsHtml}
+          ${renderDisclaimer()}
+        </main>
+        ${shell.tabbar}
+      `;
+
+      wireGlobalSearch();
+    })();
+  </script>
+</body>
+</html>

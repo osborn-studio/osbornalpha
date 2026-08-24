@@ -1,0 +1,14 @@
+schema_version: 1
+product: OsbornAlpha
+domain: stock-monitor-nu.vercel.app
+role: core_product
+priority: 100
+default_branch: main
+# No CI workflow exists (README: "GitHub Actions 已移除，替换为 Vercel auto-deploy").
+# The CI-equivalent gate is composed from the deterministic package.json scripts:
+# tsc --noEmit + next lint + vitest run. The e2e suite (playwright) is excluded
+# because it needs a running server / browsers and is not deterministic offline.
+verify_command: "npm run typecheck && npm run lint && npm test"
+build_command: "npm run build"
+# Vercel auto-deploys the main branch; the repo declares the Vercel default domain.
+production_environment: "Vercel (auto-deploy from main -> stock-monitor-nu.vercel.app)"

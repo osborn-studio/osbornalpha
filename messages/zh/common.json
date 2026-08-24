@@ -1,0 +1,41 @@
+{
+  "meta": {
+    "title": "osbornalpha · AI 投资监控工作台",
+    "description": "AI 投资监控工作台 · 个人股票池每日 AI 监控 · A 股 / 港股 / 美股"
+  },
+  "nav": {
+    "today": "今日",
+    "watchlist": "股票池",
+    "intel": "情报",
+    "portfolio": "我的投资",
+    "tools": "工具",
+    "settings": "设置"
+  },
+  "actions": {
+    "save": "保存",
+    "cancel": "取消",
+    "confirm": "确认",
+    "delete": "删除",
+    "edit": "编辑",
+    "close": "关闭",
+    "back": "返回",
+    "next": "下一步",
+    "submit": "提交",
+    "retry": "重试",
+    "loading": "加载中…",
+    "processing": "处理中…"
+  },
+  "quota": {
+    "title": "今日平台额度已用完（{used}/{limit}）",
+    "descriptionFree": "填入自己的 API Key 即可不限量使用，或等待明日 00:00（北京时间）重置。",
+    "descriptionPro": "Pro 额度也用完了——填入自己的 API Key 即可不限量使用，或等待明日 00:00（北京时间）重置。",
+    "costTitle": "今日平台 AI 成本额度已用完",
+    "costDescription": "今日平台 AI 成本已达到 ¥{limit}/天。请在设置中填写自己的 API Key，或等待明日 00:00（北京时间）重置。",
+    "goToSettings": "去设置 →",
+    "upgradePro": "升级 Pro →"
+  },
+  "footer": {
+    "copyright": "© 2026 osbornalpha",
+    "about": "关于"
+  }
+}

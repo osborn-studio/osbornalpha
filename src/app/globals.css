@@ -1,0 +1,166 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ────────────────────────────────────────────────────────────────────────
+ * Theme tokens — "quiet-luxury trader terminal" (Stitch redesign, DESIGN.md)
+ * ──────────────────────────────────────────────────────────────────────── */
+
+:root,
+:root.theme-dark {
+  --bg: #0a0a0b;                              /* Ink Charcoal */
+  --bg-elevated: #141417;                     /* Elevated Charcoal */
+  --bg-card: #1c1c20;                         /* Card Pewter */
+  --bg-hover: #23232a;                        /* Hover Lift */
+  --border: rgba(255, 255, 255, 0.06);        /* Whisper Border */
+  --border-active: rgba(202, 138, 4, 0.4);    /* Active Border (brass) */
+  --text: #fafafa;                            /* Bone White */
+  --text-dim: #a1a1aa;                        /* Pewter Steel */
+  --text-muted: #52525b;                      /* Distant Fog */
+  --accent: #ca8a04;                          /* Distressed Brass */
+  --accent-dim: #a16207;                      /* Brass darker (hover) */
+  --accent-wash: rgba(202, 138, 4, 0.12);     /* Brass Wash */
+  --warn: #eab308;
+  --bullish: #e11d48;                         /* Pulse Red (CN convention) */
+  --neutral: #eab308;                         /* Pulse Amber */
+  --bearish: #16a34a;                         /* Pulse Green (CN convention) */
+  --shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 4px 12px rgba(0,0,0,0.3);
+}
+
+/* ─── Light theme — quieter paper-cream surfaces ─── */
+:root.theme-light {
+  --bg: #fafaf9;
+  --bg-elevated: #f5f5f4;
+  --bg-card: #ffffff;
+  --bg-hover: #f0f0ee;
+  --border: rgba(10, 10, 11, 0.08);
+  --border-active: rgba(202, 138, 4, 0.5);
+  --text: #0a0a0b;
+  --text-dim: #52525b;
+  --text-muted: #a1a1aa;
+  --accent: #ca8a04;
+  --accent-dim: #a16207;
+  --accent-wash: rgba(202, 138, 4, 0.10);
+  --warn: #ca8a04;
+  --bullish: #e11d48;
+  --neutral: #eab308;
+  --bearish: #16a34a;
+  --shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+/* Color scheme: CN (red up, green down) — default. Sharpened to the
+ * Pulse Red / Pulse Green palette. */
+:root,
+:root[data-color-scheme="cn"] {
+  --up: #e11d48;
+  --down: #16a34a;
+}
+
+/* US (green up, red down) */
+:root[data-color-scheme="us"] {
+  --up: #16a34a;
+  --down: #e11d48;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+/* Geist + CJK fallback, per DESIGN.md §3. The CSS vars
+ * --font-geist-sans / --font-geist-mono are injected by next/font
+ * in src/app/layout.tsx. */
+body {
+  font-family: var(--font-geist-sans, -apple-system), "PingFang SC",
+               "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  padding-bottom: 60px;
+}
+
+:root {
+  --font-mono: var(--font-geist-mono, ui-monospace), "SF Mono", Menlo, monospace;
+}
+.tabular,
+.num,
+.tabular-nums,
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.text-up { color: var(--up); }
+.text-down { color: var(--down); }
+.bg-up { background-color: var(--up); }
+.bg-down { background-color: var(--down); }
+
+/* Reusable card styles — tighter radius, denser feel per DESIGN.md §4 "Cards" */
+.card-base {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  box-shadow: var(--shadow);
+}
+
+input, select {
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  outline: none;
+  font-family: inherit;
+}
+input:focus,
+select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-wash);
+}
+
+button { cursor: pointer; font-family: inherit; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+table { font-variant-numeric: tabular-nums; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ============================================================
+ * V3 dual-density layer (2026-07-02 refactor, spec §6B)
+ * Reading tier = defaults on :root. Any container with
+ * [data-density="data"] switches to the compact numeric tier.
+ * Components consume ONLY these five vars for density-aware
+ * spacing/typography; colors keep using the theme vars above.
+ * ============================================================ */
+:root {
+  --panel-pad: 16px;
+  --row-gap: 10px;
+  --num-font: inherit;
+  --label-size: 12px;
+  --value-size: 15px;
+}
+
+[data-density='data'] {
+  --panel-pad: 8px;
+  --row-gap: 4px;
+  --num-font: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --label-size: 10px;
+  --value-size: 13px;
+}
+
+/* Numeric text inside any density context */
+.num {
+  font-family: var(--num-font);
+  font-variant-numeric: tabular-nums;
+}

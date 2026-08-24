@@ -1,0 +1,164 @@
+{
+  "portal": {
+    "heading": "🧰 工具",
+    "subheading": "技能库、回测、估值工作台与一级市场研究入口。",
+    "cards": {
+      "skills": {
+        "title": "技能库",
+        "desc": "Copilot 的分析方法 + 工具清单。"
+      },
+      "backtest": {
+        "title": "回测实验室",
+        "desc": "批量回测股票池信号命中率与前瞻收益。"
+      },
+      "dcf": {
+        "title": "DCF 工作台",
+        "desc": "独立的现金流折现估值台，搜索个股即可用。"
+      },
+      "primary": {
+        "title": "一级市场",
+        "desc": "IC Memo / PE Portfolio / LP 追踪 大纲生成器。"
+      }
+    },
+    "enter": "进入 →",
+    "recentOutputs": "📁 最近工具产出",
+    "loadFailed": "加载失败：{error}",
+    "loading": "加载中…",
+    "empty": "还没有产出。使用上面的入口运行一次分析后，报告会自动归档在这里。"
+  },
+  "backtest": {
+    "heading": "🧪 Backtest 排行榜",
+    "daysLabel": "天数：",
+    "running": "⏳ 跑中",
+    "rerun": "🔄 重跑",
+    "intro": "对你 watchlist 里所有股票并发跑 Sentinel 信号回测，按\"质量分\"（Wilson 置信下限 60% + 信号活跃度 20% + 平均收益 20%）排名，找出**哪些股票上 Sentinel 历史最准**。",
+    "loadingBody": "⏳ 并发跑 {count} 只股票的 {days} 天回测...",
+    "loadingHint": "通常 10-30 秒",
+    "error": "⚠ {error}",
+    "stats": {
+      "coverage": "watchlist 覆盖",
+      "totalSignals": "总信号数",
+      "avgHitRate": "平均命中率",
+      "avgFwd5": "平均 5d 收益"
+    },
+    "headline": {
+      "best": "🏆 命中率最高",
+      "worst": "💥 命中率最低",
+      "mostActive": "📊 信号最活跃",
+      "signalCount": "{count} 个信号",
+      "signalCount60d": "60 天信号数"
+    },
+    "marketLabel": "市场：",
+    "marketAll": "全部",
+    "sortLabel": "排序：",
+    "sort": {
+      "quality": "质量分",
+      "ciLower": "置信下限",
+      "hitRate": "命中率",
+      "signals": "信号数",
+      "fwd5": "5d 平均",
+      "fwd20": "20d 平均"
+    },
+    "table": {
+      "ticker": "标的",
+      "price": "价格",
+      "quality": "质量分",
+      "ciLower": "置信下限",
+      "hitRate": "命中率",
+      "signals": "信号",
+      "fwd5": "5d 均",
+      "fwd20": "20d 均",
+      "latest": "最近",
+      "empty": "此筛选条件下无数据"
+    },
+    "algoNote": "算法：runBacktest({days} 天) × {count} 个标的并发 · Wilson 95% CI 缓解小样本噪声 · 质量分 = 60×ciLower + 20×log10(1+signals)×1.2 + 20×min(5d_avg_return×5, 1)"
+  },
+  "dcf": {
+    "heading": "🧮 DCF 工作台",
+    "subheading": "搜索或直接输入 ticker，独立运行现金流折现估值。",
+    "pickStock": "🔎 选择个股",
+    "searchPlaceholder": "代码 / 名称（如 完美世界 / AAPL / 600519），回车直接使用",
+    "searching": "搜索中…",
+    "noMatch": "没有匹配，回车可直接按输入的代码查询。",
+    "emptyState": "选择一支个股后，DCF 估值会显示在这里。"
+  },
+  "primary": {
+    "heading": "🏛️ 一级市场工作台",
+    "subheading": "研究骨架——配合外部检索使用。生成确定性大纲后自行补充检索结果，产出可存入档案。",
+    "icMemo": {
+      "icon": "📋",
+      "title": "IC Memo 大纲",
+      "desc": "8 节标准投资上会报告骨架：项目概述 → 交易结构 → 行业 → 标的分析 → 财务估值 → 亮点协同 → 风险 → 建议与退出。",
+      "fields": {
+        "target": {
+          "label": "标的公司 / 项目名称",
+          "placeholder": "如：隼鹰科技"
+        },
+        "dealContext": {
+          "label": "已知交易背景/条款（可选）",
+          "placeholder": "如：现金收购，估值 10 亿"
+        }
+      }
+    },
+    "pePortfolio": {
+      "icon": "📊",
+      "title": "PE Portfolio 大纲",
+      "desc": "3 节基金组合骨架：基金与组合概览 → 主要被投项目明细 → 近期动态与退出。",
+      "fields": {
+        "fund": {
+          "label": "基金 / 机构名称",
+          "placeholder": "如：某某创投基金"
+        }
+      }
+    },
+    "lpTracking": {
+      "icon": "🕵️",
+      "title": "LP 追踪大纲",
+      "desc": "每个追踪对象一节，覆盖新增投资/市场拓展/撤资退出/投资成果/对外表态五类动向。最多 20 个对象。",
+      "fields": {
+        "names": {
+          "label": "追踪对象（每行一个，最多 20 个）",
+          "placeholder": "机构A\n机构B"
+        },
+        "windowLabel": {
+          "label": "追踪窗口（可选，默认「近一个月」）",
+          "placeholder": "如：近一周"
+        }
+      }
+    },
+    "archive": "📁 一级市场档案",
+    "loadFailed": "加载失败：{error}",
+    "loading": "加载中…",
+    "empty": "还没有存档。生成大纲并「存入档案」后，会显示在这里。"
+  },
+  "wizard": {
+    "generate": "生成大纲",
+    "generateError": "⚠️ {error}",
+    "saving": "存档中…",
+    "save": "存入档案",
+    "saved": "✅ 已存入档案{idSuffix}",
+    "saveError": "⚠️ 存档失败：{error}"
+  },
+  "skills": {
+    "metaTitle": "技能中心",
+    "heading": "🧰 技能中心 · Skill Hub",
+    "subheading": "Copilot 的能力清单：可执行的分析方法 + 它能调用的工具。",
+    "methodsHeading": "🪜 分析方法",
+    "run": "运行 →",
+    "toolsHeading": "🔧 工具",
+    "aShareBadge": "A 股",
+    "footerSummary": "共 {toolCount} 个工具 · {methodCount} 个方法。工具由 Copilot 在推理时按需调用。",
+    "categories": {
+      "quotes": "行情",
+      "research": "研究",
+      "valuation": "估值",
+      "funds": "资金"
+    }
+  },
+  "artifacts": {
+    "heading": "📁 我的研究档案",
+    "loadFailed": "加载失败：{error}",
+    "loading": "加载中…",
+    "empty": "还没有存档。运行一次深度研究方法后，报告会自动归档在这里。"
+  }
+}

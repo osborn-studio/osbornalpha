@@ -1,0 +1,113 @@
+{
+  "personas": {
+    "buffett": "Warren Buffett",
+    "munger": "Charlie Munger",
+    "druckenmiller": "Stanley Druckenmiller",
+    "marks": "Howard Marks",
+    "lynch": "Peter Lynch",
+    "burry": "Michael Burry",
+    "zhang_kun": "Zhang Kun",
+    "li_lu": "Li Lu",
+    "duan_yongping": "Duan Yongping"
+  },
+  "themeToggle": {
+    "appearanceSettings": "Appearance settings",
+    "themeToggleAria": "Toggle theme",
+    "colorScheme": "Color scheme",
+    "schemeCn": "Red up / green down",
+    "schemeUs": "Green up / red down",
+    "theme": "Theme",
+    "themeDark": "Dark",
+    "themeLight": "Light"
+  },
+  "upgradeCard": {
+    "checkoutFailed": "Unable to start checkout right now",
+    "upgradeSuccess": "Payment successful! Your Pro benefits are now active (refresh the page if they don't appear immediately).",
+    "currentPlan": "Current plan",
+    "expiresOn": "Expires on",
+    "autoRenewing": "Auto-renewing monthly",
+    "timePass30d": "Time Pass · 30 days",
+    "timePassDescription": "Alipay / WeChat Pay / card, does not auto-renew",
+    "redirectingToCheckout": "Redirecting to checkout…",
+    "monthlySubscription": "Monthly subscription",
+    "monthlySubscriptionDescription": "Card only, auto-renews and can be canceled anytime"
+  },
+  "usageToday": {
+    "todayUsage": "Today's Usage",
+    "signInToView": "Sign in to view",
+    "loading": "Loading…",
+    "loadFailed": "Failed to load",
+    "featureCopilot": "Copilot Analysis",
+    "featurePerspectives": "Committee Perspectives",
+    "featureBriefPreview": "Brief Preview",
+    "platformCost": "Platform AI cost",
+    "platformCostUnlimited": "Platform AI cost (no daily cap)",
+    "platformCapCost": "AI cost charged to daily cap",
+    "platformNonExemptCost": "Non-exempt platform AI cost",
+    "platformTotalCost": "Total platform AI cost",
+    "platformCostAria": "Platform AI cost: ¥{used} of ¥{limit} today",
+    "platformCostUnlimitedAria": "Platform AI cost: ¥{used} today, with no daily cap",
+    "platformCapCostAria": "AI cost charged to the daily cap: ¥{used} of ¥{limit}",
+    "platformNonExemptCostAria": "Non-exempt platform AI cost: ¥{used}",
+    "platformTotalCostAria": "Total platform AI cost: ¥{used}",
+    "byoCalls": "BYO key calls (not counted against quota)"
+  },
+  "accountSettings": {
+    "emailConfirmSent": "A confirmation email was sent to both your old and new address — follow the instructions to confirm",
+    "passwordTooShort": "Password must be at least 8 characters",
+    "passwordUpdated": "Password updated",
+    "atLeastOneSignInMethod": "You must keep at least one sign-in method",
+    "unlinked": "Unlinked",
+    "loggedOut": "Logged out",
+    "guestMode": "Guest mode — data is stored locally in this browser",
+    "supabaseNotConfigured": "Supabase is not configured, sign-in is unavailable",
+    "loginOrRegister": "Sign in / Register",
+    "plan": "Plan",
+    "logout": "Log out",
+    "changeEmail": "Change email",
+    "newEmailPlaceholder": "New email",
+    "update": "Update",
+    "changePassword": "Change password",
+    "newPasswordPlaceholder": "New password (≥8 characters)",
+    "thirdPartyLinking": "Linked accounts",
+    "linked": "Linked",
+    "unlink": "Unlink",
+    "link": "Link"
+  },
+  "llmSettings": {
+    "connectionSuccess": "Connected ({ms}ms)",
+    "failed": "Failed",
+    "enterApiKey": "Please enter an API key",
+    "saved": "Saved",
+    "saveFailed": "Save failed",
+    "provider": "Provider",
+    "apiKeyConfiguredPlaceholder": "Configured ✓ •••• (leave blank to keep, or enter to update)",
+    "apiKeyPlaceholder": "Paste API key, e.g. ark-... / sk-...",
+    "model": "Model",
+    "testConnection": "Test Connection",
+    "save": "Save",
+    "description": "This configuration applies to Copilot, per-stock AI perspectives, DCF assumption autofill, and other AI features that require sign-in. Daily briefs/radar pushes are scheduled jobs that use the platform's shared model. When not configured, all features fall back to the platform default."
+  },
+  "perspectiveCard": {
+    "confidence": "Confidence",
+    "evidenceStrengthTitle": "Evidence strength: {label} ({score}%)\n{high} strong · {medium} medium · {low} weak · {unknown} unclassified",
+    "cite": "cite"
+  },
+  "disclaimer": {
+    "heading": "Disclaimer",
+    "body": "All content on this site is generated automatically by AI and is intended only as a supplementary reference for investment decisions. It does not constitute investment advice, an offer, or a recommendation of any kind. AI-generated views may contain errors, omissions, or bias. Historical data is not indicative of future performance. Investment decisions should be based on your own research and judgment, and you bear sole responsibility for all investment risk. osbornalpha is a personal open-source tool and does not provide any licensed investment advisory service."
+  },
+  "search": {
+    "placeholder": "Search by ticker or name (⌘+K · A/H/US · e.g. AAPL / 600519)",
+    "searching": "Searching...",
+    "noResults": "No matching results"
+  },
+  "market": {
+    "A": "A-shares",
+    "HK": "HK",
+    "US": "US",
+    "JP": "Japan",
+    "KR": "Korea",
+    "TW": "Taiwan"
+  }
+}

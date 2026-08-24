@@ -1,0 +1,57 @@
+{
+  "page": {
+    "title": "今日",
+    "loading": "加载中…"
+  },
+  "phase": {
+    "pre": "盘前 · {minutes} 分钟后开盘",
+    "openMorning": "盘中 · 午休还有 {minutes} 分钟",
+    "lunch": "午休 · {minutes} 分钟后开盘",
+    "openAfternoon": "盘中 · 收盘还有 {minutes} 分钟",
+    "open": "盘中 · 收盘还有 {minutes} 分钟",
+    "closed": "已收盘",
+    "weekend": "周末休市"
+  },
+  "clock": {
+    "market": {
+      "A": "A股",
+      "HK": "港股",
+      "US": "美股",
+      "JP": "日股",
+      "KR": "韩股",
+      "TW": "台股"
+    }
+  },
+  "radar": {
+    "emptyPrefix": "股票池是空的。先去 ",
+    "emptyLink": "📋 股票池",
+    "emptySuffix": " 添加几只股票。",
+    "loading": "加载雷达中…",
+    "loadFailed": "加载失败",
+    "whiteCollapsed": "⚪ 平静 {count} 只（展开）"
+  },
+  "portfolio": {
+    "title": "持仓速览",
+    "loading": "加载中…",
+    "unrealized": "总浮盈",
+    "unrealizedPct": "浮盈%",
+    "marketValue": "市值",
+    "openCount": "持仓数",
+    "openDecisions": "未平决策 {count} 条",
+    "viewAll": "查看持仓 →"
+  },
+  "macro": {
+    "title": "宏观速览",
+    "sse": "上证",
+    "hsi": "恒生",
+    "nasdaq": "纳指",
+    "us10y": "美 10Y",
+    "dxy": "DXY"
+  },
+  "brief": {
+    "title": "AI 简报",
+    "quotaExceeded": "今日平台额度已用完",
+    "loadFailed": "简报加载失败",
+    "viewFull": "查看完整简报 →"
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "title": "⚙️ Settings",
+  "account": {
+    "heading": "👤 Account"
+  },
+  "usage": {
+    "heading": "📊 Today's Usage",
+    "errorLine": "Today's Usage: {message}"
+  },
+  "upgrade": {
+    "heading": "⭐ Upgrade to Pro"
+  },
+  "llm": {
+    "heading": "🤖 AI Models"
+  },
+  "language": {
+    "heading": "🌐 Language",
+    "zh": "🇨🇳 中文",
+    "en": "🇺🇸 English"
+  },
+  "timezone": {
+    "heading": "🕐 Timezone",
+    "auto": "Auto (follow browser)",
+    "hint": "Affects all displayed times; market-hours detection always uses each exchange's local time."
+  },
+  "channels": {
+    "heading": "📬 Push Channels",
+    "managedDestination": "Email and Telegram destinations are configured on the server. Recipient details are hidden.",
+    "tgSending": "⏳ Sending test message...",
+    "tgTestText": "🧪 *Sentinel test message*\n\nIf you can see this message, your Telegram push is configured correctly!\n\nhttps://stock-monitor-nu.vercel.app/",
+    "tgTestSent": "✅ Test message sent (msg_id {id})",
+    "tgTestButton": "✉️ Send test message",
+    "tgBriefSending": "⏳ Generating and sending today's brief (~10-20s)...",
+    "tgBriefSent": "✅ Sent {count} messages",
+    "tgBriefButton": "🚀 Generate & push now",
+    "emailSending": "⏳ Sending test email...",
+    "emailTestSubject": "Sentinel · Email Test",
+    "emailTestText": "🧪 Sentinel email test\n\nIf you received this email, your Resend push is configured correctly!\n\nhttps://stock-monitor-nu.vercel.app/",
+    "emailSent": "✅ Email sent (id {id}...)",
+    "emailTestButton": "✉️ Send test email",
+    "emailBriefSending": "⏳ Generating and emailing the brief (~20-30s)...",
+    "emailBriefSent": "✅ Brief email sent (subject: {subject}...)",
+    "emailBriefButton": "🚀 Generate brief & email now",
+    "sendFailed": "Send failed",
+    "failed": "Failed"
+  },
+  "brief": {
+    "heading": "⏰ Brief Delivery",
+    "schedule": "Delivered daily at 08:30 Beijing time (UTC+8)",
+    "localEquiv": "≈ {time} in your local time"
+  }
+}

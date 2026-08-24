@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0d1117">
+  <title>Stock Monitor · 我的股票池</title>
+  <link rel="stylesheet" href="./assets/css/style.css">
+</head>
+<body>
+  <div class="app" id="app"></div>
+
+  <script src="./assets/js/app.js"></script>
+  <script>
+    let _editMode = false;
+    let _activeGroup = 'all';
+
+    function getEditMode() { return _editMode; }
+    function setEditMode(v) { _editMode = v; renderPage(); }
+
+    async function renderPage() {
+      const data = await loadData();
+      const groups = await getEffectiveWatchlist();
+      const shell = renderShell('watch');
+
+      const totalCount = groups.reduce((sum, g) => sum + g.tickers.length, 0);
+
+      const tabsHtml = `
+        <div class="watchlist-tabs">
+          <button class="tab-pill ${_activeGroup === 'all' ? 'active' : ''}" data-group="all">全部 ${totalCount}</button>
+          ${groups.map(g => `<button class="tab-pill ${_activeGroup === g.id ? 'active' : ''}" data-group="${g.id}">${g.name} ${g.tickers.length}</button>`).join('')}
+        </div>
+      `;
+
+      const toolbarHtml = `
+        <div class="edit-toolbar">
+          <div style="font-size:13px;color:var(--text-dim)">
+            ${_editMode ? '✏️ 编辑模式：点 × 删除' : '👆 点击进入详情，或开启编辑模式管理'}
+          </div>
+          <div>
+            <button class="ghost" id="btn-toggle-edit">${_editMode ? '完成' : '编辑模式'}</button>
+            <button id="btn-export">📤 导出 YAML</button>
+          </div>
+        </div>
+      `;
+
+      // Build add-stock card
+      const addCardHtml = `
+        <div class="card">
+          <div class="card-title">➕ 添加新标的</div>
+          <div style="position:relative">
+            <input id="add-input" type="text" placeholder="输入股票代码或名称，如 腾讯 / AAPL / 600519" style="width:100%" autocomplete="off" />
+            <div class="search-dropdown" id="add-dropdown"></div>
+          </div>
+          <div style="margin-top:10px;display:flex;gap:8px;align-items:center;font-size:12px;color:var(--text-dim)">
+            <span>加入分组：</span>
+            ${groups.map(g => `<label style="display:flex;align-items:center;gap:4px;cursor:pointer">
+              <input type="radio" name="add-group" value="${g.id}" ${g.id === 'opportunity' ? 'checked' : ''} /> ${g.name}
+            </label>`).join('')}
+          </div>
+        </div>
+      `;
+
+      // Build group rows
+      let groupsHtml = '';
+      const showGroups = _activeGroup === 'all' ? groups : groups.filter(g => g.id === _activeGroup);
+      for (const g of showGroups) {
+        groupsHtml += `
+          <div class="card">
+            <div class="card-title">${g.name} (${g.tickers.length})</div>
+            ${g.tickers.length === 0 ? '<div class="empty">这个分组还没有标的，去上面搜索加入吧。</div>' : ''}
+            ${g.tickers.map(t => {
+              const s = data.stocks[t];
+              const display = s || { name: t, ticker: t, market: '?', currency: '', price: 0, change_pct: 0, sentinel_score: 0 };
+              return `
+                <div class="watchlist-row" data-ticker="${t}">
+                  <span class="market-tag">${marketTag(display.market)}</span>
+                  <div onclick="goDetail('${t}')" style="cursor:pointer">
+                    <div class="name">${display.name}</div>
+                    <div class="ticker">${display.ticker}</div>
+                  </div>
+                  <div class="price" onclick="goDetail('${t}')" style="cursor:pointer">${s ? display.currency + formatPrice(display.price) : '—'}</div>
+                  <div class="chg ${s ? changeClass(display.change_pct) : ''}" onclick="goDetail('${t}')" style="cursor:pointer">${s ? formatPct(display.change_pct) : '—'}</div>
+                  <button class="menu" onclick="handleDelete('${t}', event)" title="${_editMode ? '删除' : '更多'}">${_editMode ? '×' : '⋯'}</button>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        `;
+      }
+
+      document.getElementById('app').innerHTML = `
+        ${shell.topbar}
+        <main class="main">
+          <h1 style="font-size:20px;font-weight:700;margin-bottom:12px">📋 我的股票池</h1>
+          ${addCardHtml}
+          ${tabsHtml}
+          ${toolbarHtml}
+          ${groupsHtml}
+          ${renderDisclaimer()}
+        </main>
+        ${shell.tabbar}
+      `;
+
+      wireGlobalSearch();
+      wirePageEvents(data, groups);
+    }
+
+    function wirePageEvents(data, groups) {
+      // Tab pills
+      document.querySelectorAll('.tab-pill').forEach(p => {
+        p.addEventListener('click', () => {
+          _activeGroup = p.dataset.group;
+          renderPage();
+        });
+      });
+
+      // Toolbar buttons
+      document.getElementById('btn-toggle-edit').addEventListener('click', () => setEditMode(!_editMode));
+      document.getElementById('btn-export').addEventListener('click', exportYaml);
+
+      // Add input
+      const addInput = document.getElementById('add-input');
+      const addDrop = document.getElementById('add-dropdown');
+      const universe = data.universe;
+      let lastResults = [];
+
+      function renderAddResults(results) {
+        lastResults = results;
+        if (!results.length) { addDrop.classList.remove('open'); addDrop.innerHTML = ''; return; }
+        addDrop.innerHTML = results.map(r => `
+          <div class="search-result" data-ticker="${r.t}">
+            <span class="market-tag">${marketTag(r.m)}</span>
+            <div>
+              <div class="ticker-text">${r.n}</div>
+              <div class="name-text">${r.t}</div>
+            </div>
+            <span style="color:var(--accent);font-size:11px">+ 加入</span>
+          </div>
+        `).join('');
+        addDrop.classList.add('open');
+      }
+
+      addInput.addEventListener('input', e => renderAddResults(searchUniverse(universe, e.target.value)));
+      addInput.addEventListener('focus', () => { if (addInput.value) renderAddResults(searchUniverse(universe, addInput.value)); });
+      addInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && lastResults.length) {
+          handleAdd(lastResults[0].t);
+        } else if (e.key === 'Escape') {
+          addDrop.classList.remove('open'); addInput.blur();
+        }
+      });
+      addDrop.addEventListener('click', e => {
+        const row = e.target.closest('.search-result');
+        if (row) handleAdd(row.dataset.ticker);
+      });
+      document.addEventListener('click', e => {
+        if (!addInput.contains(e.target) && !addDrop.contains(e.target)) addDrop.classList.remove('open');
+      });
+    }
+
+    async function handleAdd(ticker) {
+      const selectedGroup = document.querySelector('input[name="add-group"]:checked')?.value || 'opportunity';
+      const groups = await getEffectiveWatchlist();
+      if (isInWatchlist(groups, ticker)) {
+        showToast(`${ticker} 已经在股票池中`);
+        return;
+      }
+      const updated = addToGroup(groups, ticker, selectedGroup);
+      saveWatchlist(updated);
+      document.getElementById('add-input').value = '';
+      document.getElementById('add-dropdown').classList.remove('open');
+      showToast(`✓ 已加入：${ticker}`);
+      renderPage();
+    }
+
+    async function handleDelete(ticker, event) {
+      event.stopPropagation();
+      if (_editMode) {
+        const groups = await getEffectiveWatchlist();
+        const updated = removeFromAllGroups(groups, ticker);
+        saveWatchlist(updated);
+        showToast(`✓ 已删除：${ticker}`);
+        renderPage();
+      } else {
+        // Show simple action menu
+        if (confirm(`删除 ${ticker} ?\n\n（开启「编辑模式」可避免每次确认）`)) {
+          const groups = await getEffectiveWatchlist();
+          const updated = removeFromAllGroups(groups, ticker);
+          saveWatchlist(updated);
+          showToast(`✓ 已删除：${ticker}`);
+          renderPage();
+        }
+      }
+    }
+
+    function goDetail(ticker) {
+      window.location.href = `./stock.html?ticker=${encodeURIComponent(ticker)}`;
+    }
+
+    async function exportYaml() {
+      const groups = await getEffectiveWatchlist();
+      const yaml = [
+        '# Stock Monitor watchlist (导出 ' + new Date().toISOString().slice(0, 10) + ')',
+        'version: 1',
+        '',
+        'groups:'
+      ];
+      for (const g of groups) {
+        yaml.push(`  - id: ${g.id}`);
+        yaml.push(`    name: "${g.name}"`);
+        yaml.push(`    tickers:`);
+        for (const t of g.tickers) {
+          yaml.push(`      - "${t}"`);
+        }
+      }
+      const blob = new Blob([yaml.join('\n')], { type: 'text/yaml' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `watchlist-${new Date().toISOString().slice(0, 10)}.yml`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('✓ YAML 已导出到下载');
+    }
+
+    renderPage();
+  </script>
+</body>
+</html>

@@ -1,0 +1,51 @@
+{
+  "schema_version": "1.0",
+  "id": "research.earnings-research-book",
+  "name": "earnings-research-book",
+  "display_name": "Earnings Research Book Skill",
+  "summary": "Generate maintainable institutional earnings research books with source PDF capture, bilingual quote preservation, references databases, and incremental chapter updates.",
+  "version": "0.1.0",
+  "status": "client-ready",
+  "visibility": "client",
+  "category": "finance",
+  "capability_type": "domain-expert",
+  "source": {
+    "type": "clean-room",
+    "upstream_url": null,
+    "upstream_commit": null,
+    "fork_url": null,
+    "license_review": "owned"
+  },
+  "owners": [
+    {
+      "name": "Osborn Studio Finance Skill Maintainer",
+      "role": "maintainer"
+    }
+  ],
+  "audience": ["portfolio-manager", "hedge-fund-analyst", "semiconductor-investor", "ai-infrastructure-investor"],
+  "runtime": {
+    "clients": ["codex", "claude-code", "osstack", "stock-monitor"],
+    "requires_network": true,
+    "requires_credentials": false,
+    "required_tools": ["python3"],
+    "privacy_tier": "public-market-research"
+  },
+  "contracts": {
+    "inputs": ["company_name", "ticker", "fiscal_period", "source_urls", "research_scope"],
+    "outputs": ["markdown_research_book", "pdf_research_book", "source_inventory", "references_json", "references_bib", "incremental_chapters"],
+    "forbidden": ["fabricated_citations", "paid_research_redistribution_without_rights", "trading_execution", "personalized_investment_advice"]
+  },
+  "quality": {
+    "release_gate": "client",
+    "last_eval": "2026-06-25",
+    "eval_pass_rate": 1.0
+  },
+  "commercial": {
+    "allowed": false,
+    "reason": "Commercial release requires customer source-license policy, paid research handling policy, and production PDF renderer hardening."
+  },
+  "distribution": {
+    "package_name": "research.earnings-research-book.skill",
+    "pack_ids": ["stock-monitor-research-library"]
+  }
+}

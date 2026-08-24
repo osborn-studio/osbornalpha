@@ -1,0 +1,41 @@
+{
+  "meta": {
+    "title": "osbornalpha · AI Investment Monitoring Workbench",
+    "description": "AI investment monitoring workbench · Daily AI monitoring for your personal watchlist · A-shares / HK / US"
+  },
+  "nav": {
+    "today": "Today",
+    "watchlist": "Watchlist",
+    "intel": "Intel",
+    "portfolio": "Portfolio",
+    "tools": "Tools",
+    "settings": "Settings"
+  },
+  "actions": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "delete": "Delete",
+    "edit": "Edit",
+    "close": "Close",
+    "back": "Back",
+    "next": "Next",
+    "submit": "Submit",
+    "retry": "Retry",
+    "loading": "Loading…",
+    "processing": "Processing…"
+  },
+  "quota": {
+    "title": "Daily platform quota used up ({used}/{limit})",
+    "descriptionFree": "Add your own API key for unlimited use, or wait for tomorrow's reset at 00:00 (Beijing time).",
+    "descriptionPro": "Your Pro quota is also used up — add your own API key for unlimited use, or wait for tomorrow's reset at 00:00 (Beijing time).",
+    "costTitle": "Daily platform AI cost limit reached",
+    "costDescription": "Today's platform AI spend has reached ¥{limit}/day. Use your own API key in Settings or wait for tomorrow's reset at 00:00 (Beijing time).",
+    "goToSettings": "Go to Settings →",
+    "upgradePro": "Upgrade to Pro →"
+  },
+  "footer": {
+    "copyright": "© 2026 osbornalpha",
+    "about": "About"
+  }
+}

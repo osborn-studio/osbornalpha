@@ -1,0 +1,17 @@
+{
+  "metaTitle": "Briefs",
+  "list": {
+    "heading": "📰 Brief History",
+    "recentDays": "📅 Last 30 Days ({count} briefs)",
+    "confidence": "Confidence {value}",
+    "hitRateHeading": "📈 Signal Hit Rate (30 Days)",
+    "hitRate": "Hit Rate",
+    "totalSignals": "Total Signals",
+    "hitMiss": "Hit / Miss",
+    "futureNote": "(Coming in v1.0: automated backtest based on historical briefs + subsequent N-day price performance)"
+  },
+  "detail": {
+    "back": "← Back to Brief List",
+    "heading": "📰 {date} Brief"
+  }
+}

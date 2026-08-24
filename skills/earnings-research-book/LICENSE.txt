@@ -1,0 +1,6 @@
+Commercial evaluation license.
+
+This skill is owned by the Osborn Studio finance skill program and may be used
+for internal, client pilot, and OsbornAlpha research-library evaluation.
+Commercial redistribution requires a separate release approval, customer
+source-license policy, and support agreement.
