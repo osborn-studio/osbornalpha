@@ -21,7 +21,11 @@ jobs:
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          test -n "$CRON_SECRET"
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error title=Missing CRON_SECRET::Add the production CRON_SECRET value to the repository Actions secrets before enabling this check."
+            exit 1
+          fi
           curl --fail-with-body --retry 2 --retry-all-errors --max-time 60 \
             --header "Authorization: Bearer ${CRON_SECRET}" \
             https://osbornalpha.com/api/cron/alerts/quotes

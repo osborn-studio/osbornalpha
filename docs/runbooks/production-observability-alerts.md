@@ -14,6 +14,8 @@ Every check window is inserted into `service_alert_runs` before delivery. The un
 
 The quote check uses GitHub Actions because Vercel Hobby only permits daily Cron schedules. The workflow calls the same bearer-protected production endpoint, while Vercel remains responsible for execution and logs.
 
+Before enabling `.github/workflows/quote-service-alert.yml`, add a repository Actions secret named `CRON_SECRET` with the exact same value as Vercel Production `CRON_SECRET` (GitHub: **Settings -> Secrets and variables -> Actions -> New repository secret**). The workflow intentionally fails closed with a configuration error when this secret is absent; it must not be replaced with a plaintext value or a different token.
+
 ## AI budget operations
 
 ### Policy and reset
