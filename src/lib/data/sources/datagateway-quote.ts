@@ -121,12 +121,19 @@ function normalizeRows(payload: unknown): RecordValue[] {
 function matchRequestedTicker(reported: string | null, requestedTickers: string[]): string | undefined {
   if (!reported) return undefined;
   const normalized = reported.toUpperCase();
-  return requestedTickers.find((ticker) => {
-    const requested = ticker.toUpperCase();
-    return requested === normalized
-      || requested.split('.')[0] === normalized
-      || normalized.split('.')[0] === requested.split('.')[0];
-  });
+  const exact = requestedTickers.find((ticker) => ticker.toUpperCase() === normalized);
+  if (exact) return exact;
+
+  // Only accept explicit, reversible wire aliases (for example AAPL <->
+  // AAPL.O). A bare base code is safe only when it identifies one request;
+  // 000001.SH and 000001.SZ must never collapse into the same result key.
+  const wireMatches = requestedTickers.filter((ticker) => wireSymbol(ticker)?.toUpperCase() === normalized);
+  if (wireMatches.length === 1) return wireMatches[0];
+  if (!normalized.includes('.')) {
+    const baseMatches = requestedTickers.filter((ticker) => ticker.toUpperCase().split('.')[0] === normalized);
+    if (baseMatches.length === 1) return baseMatches[0];
+  }
+  return undefined;
 }
 
 function parseQuote(row: RecordValue, requestedTicker?: string): DatagatewayRealtimeQuote | null {
@@ -152,6 +159,23 @@ function parseQuote(row: RecordValue, requestedTicker?: string): DatagatewayReal
   const pb = number(first(row, ['pb', 'pb_ratio']));
   const turnover = number(first(row, ['turnover', 'turnover_rate']));
   const volumeRatio = number(first(row, ['volume_ratio', 'vol_ratio']));
+  if (
+    prevClose <= 0
+    || open <= 0
+    || high <= 0
+    || low <= 0
+    || low > high
+    || open < low
+    || open > high
+    || price < low
+    || price > high
+    || rawVolume < 0
+    || !Number.isFinite(volume)
+    || amount < 0
+    || (marketCap !== null && marketCap < 0)
+    || (turnover !== null && turnover < 0)
+    || (volumeRatio !== null && volumeRatio < 0)
+  ) return null;
   const updated = first(row, ['updated_at', 'fetched_at', 'timestamp', 'time', 'quote_time', 'rt_time']);
   const updatedAt = timestamp(updated);
   const delayed = delayedValue === true || updatedAt === null;
@@ -240,15 +264,19 @@ export async function fetchDatagatewayRealtimeQuotes(
   const config = datagatewayConfig();
   const requested = [...new Set(tickers.map((ticker) => ticker.trim().toUpperCase()).filter(Boolean))];
   if (!config || requested.length === 0) return new Map();
-  const symbols = requested.map(wireSymbol);
-  if (symbols.some((symbol) => !symbol)) return new Map();
+  const validRequests = requested.flatMap((ticker) => {
+    const symbol = wireSymbol(ticker);
+    return symbol ? [{ ticker, symbol }] : [];
+  });
+  if (validRequests.length === 0) return new Map();
+  const symbols = validRequests.map(({ symbol }) => symbol);
+  const validTickers = validRequests.map(({ ticker }) => ticker);
   const url = new URL(config.realtimeQuotePath, config.baseUrl);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
-  let response: Response;
   try {
-    response = await (options.fetchImpl ?? fetch)(url, {
+    const response = await (options.fetchImpl ?? fetch)(url, {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -259,6 +287,25 @@ export async function fetchDatagatewayRealtimeQuotes(
       signal,
       cache: 'no-store',
     });
+    if (!response.ok) {
+      const retryable = response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500;
+      throw new KlineProviderError(response.status === 429 ? 'rate_limited' : retryable ? 'transient' : 'protocol', `Datagateway quote HTTP ${response.status}`, retryable, response.status);
+    }
+    let text: string;
+    try {
+      text = await readLimitedText(response);
+    } catch (error) {
+      if (error instanceof KlineProviderError) throw error;
+      const aborted = controller.signal.aborted || options.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError');
+      throw new KlineProviderError('transient', aborted ? 'Datagateway quote request timed out' : 'Datagateway quote response body failed', true);
+    }
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new KlineProviderError('protocol', 'Datagateway quote response is invalid JSON');
+    }
+    return parseDatagatewayRealtimeQuotes(payload, validTickers);
   } catch (error) {
     if (error instanceof KlineProviderError) throw error;
     const aborted = controller.signal.aborted || options.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError');
@@ -266,18 +313,6 @@ export async function fetchDatagatewayRealtimeQuotes(
   } finally {
     clearTimeout(timer);
   }
-  if (!response.ok) {
-    const retryable = response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500;
-    throw new KlineProviderError(response.status === 429 ? 'rate_limited' : retryable ? 'transient' : 'protocol', `Datagateway quote HTTP ${response.status}`, retryable, response.status);
-  }
-  let payload: unknown;
-  try {
-    payload = JSON.parse(await readLimitedText(response));
-  } catch (error) {
-    if (error instanceof KlineProviderError) throw error;
-    throw new KlineProviderError('protocol', 'Datagateway quote response is invalid JSON');
-  }
-  return parseDatagatewayRealtimeQuotes(payload, requested);
 }
 
 export async function fetchDatagatewayRealtimeQuote(ticker: string, options: DatagatewayQuoteOptions = {}) {
