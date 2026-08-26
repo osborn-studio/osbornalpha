@@ -9,6 +9,7 @@ import { fetchEastmoneyKline } from '@/lib/data/sources/eastmoney';
 import { fetchSinaUsKline } from '@/lib/data/sources/sina';
 import { fetchTencentKline } from '@/lib/data/sources/tencent';
 import { fetchTwseKline } from '@/lib/data/sources/twse';
+import { fetchDatagatewayDailyKline, isDatagatewayConfigured } from '@/lib/data/sources/datagateway';
 import type { Market } from '@/lib/supabase/database.types';
 import { marketPhase } from '@/lib/today/clock';
 import { classifyMarket } from '@/lib/utils';
@@ -115,14 +116,15 @@ function expectedAdjustment(market: Market, range: KlineRange): KlineAdjustment 
 export function klineProviderRoute(ticker: string, range: KlineRange): KlineSourceName[] {
   const market = classifyMarket(ticker);
   const interval = KLINE_RANGE_CONFIG[range].interval;
-  if (market === 'JP' || market === 'KR') return [];
+  const gateway = interval === 'day' && isDatagatewayConfigured() ? ['datagateway'] as const : [];
+  if (market === 'JP' || market === 'KR') return [...gateway];
   if (market === 'TW') {
     if (interval !== 'day') return [];
-    return [/\.TWO$/i.test(ticker) ? 'tpex' : 'twse'];
+    return [...gateway, /\.TWO$/i.test(ticker) ? 'tpex' : 'twse'];
   }
   if (interval === 'minute') return ['eastmoney'];
-  if (market === 'A' || market === 'HK') return ['eastmoney', 'tencent'];
-  return ['eastmoney', 'sina'];
+  if (market === 'A' || market === 'HK') return [...gateway, 'eastmoney', 'tencent'];
+  return [...gateway, 'eastmoney', 'sina'];
 }
 
 function providerDefinitions(request: KlineRequest): KlineProvider[] {
@@ -132,11 +134,19 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
   // previous-close comparison without expanding the requested display range.
   const limit = klineBarLimit(request.ticker, request.range) + 1;
   const adjustment = expectedAdjustment(market, request.range);
-  if (market === 'JP' || market === 'KR') return [];
+  const gateway: KlineProvider[] = config.interval === 'day' && isDatagatewayConfigured() ? [{
+    name: 'datagateway',
+    market,
+    adjustment,
+    timeoutMs: 2_800,
+    maxAttempts: 1,
+    fetch: (signal) => fetchDatagatewayDailyKline(request.ticker, market, limit, adjustment, { signal, timeoutMs: 2_500 }),
+  }] : [];
+  if (market === 'JP' || market === 'KR') return gateway;
 
   if (market === 'TW') {
     if (config.interval !== 'day') return [];
-    return [{
+    return [...gateway, {
       name: /\.TWO$/i.test(request.ticker) ? 'tpex' : 'twse',
       market,
       adjustment,
@@ -163,7 +173,7 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
   if (config.interval === 'minute') return [primary];
 
   if (market === 'A' || market === 'HK') {
-    return [primary, {
+    return [...gateway, primary, {
       name: 'tencent',
       market,
       adjustment,
@@ -178,7 +188,7 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
       ),
     }];
   }
-  return [primary, {
+  return [...gateway, primary, {
     name: 'sina',
     market,
     adjustment,

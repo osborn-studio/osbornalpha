@@ -253,6 +253,8 @@
       "delayed": "Delayed data",
       "live": "Live data",
       "sources": {
+        "datagateway": "Source: Datagateway (daily)",
+        "datagateway-wind": "Source: Datagateway / Wind realtime",
         "eastmoney": "Source: Eastmoney",
         "tencent": "Source: Tencent Finance",
         "sina": "Source: Sina Finance",

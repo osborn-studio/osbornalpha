@@ -36,6 +36,7 @@ const meta: KlineMeta = {
 describe('chart metadata presentation', () => {
   it('maps every declared provider to an i18n source key', () => {
     expect(sourceTranslationKey(meta)).toBe('sources.tencent');
+    expect(sourceTranslationKey({ ...meta, source: 'datagateway' })).toBe('sources.datagateway');
     expect(sourceTranslationKey({ ...meta, source: 'sina' })).toBe('sources.sina');
     expect(sourceTranslationKey({ ...meta, source: 'tpex' })).toBe('sources.tpex');
   });

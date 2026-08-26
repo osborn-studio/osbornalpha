@@ -91,7 +91,10 @@ export function parseKlineRange(value: string | null): KlineRange | null {
 
 export function klineRangeAvailability(ticker: string, range: KlineRange): KlineUnavailableReason | null {
   const market = classifyMarket(ticker);
-  if (market === 'JP' || market === 'KR') return 'market_unsupported';
+  // Daily history for JP/KR is supplied by Datagateway when it is configured.
+  // Keep intraday disabled because the gateway integration is intentionally
+  // daily-only and there is no verified minute fallback for either market.
+  if ((market === 'JP' || market === 'KR') && range === '1d') return 'market_unsupported';
   if (market === 'TW' && range === '1d') return 'intraday_unsupported';
   return null;
 }

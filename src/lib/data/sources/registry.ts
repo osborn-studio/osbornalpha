@@ -3,11 +3,10 @@
  * eastmoney→sina→tencent cascade at each consumer with a single routing
  * table:
  *
- *   A / HK / US → [eastmoney, sina, tencent]  (unchanged order; A-share
- *                 tushare fallback stays at the /api/quote consumer layer)
- *   TW          → [twse]
- *   JP / KR     → [eodhd] when EODHD_API_TOKEN is configured, else []
- *                 (an empty list = "source pending" for the UI)
+ *   configured gateway → Datagateway/Wind is first for every market;
+ *   A / HK / US       → Eastmoney, Sina, Tencent fallback chain
+ *   TW                → TWSE fallback
+ *   JP / KR           → EODHD fallback when configured
  */
 
 import type { Market } from '@/lib/supabase/database.types';
@@ -16,6 +15,7 @@ import { fetchSinaQuote } from './sina';
 import { fetchTencentQuote } from './tencent';
 import { fetchTwseQuote } from './twse';
 import { fetchEodhdQuote, isEodhdConfigured } from './eodhd';
+import { fetchDatagatewayRealtimeQuote, isDatagatewayConfigured } from './datagateway-quote';
 
 export interface NamedFetcher {
   name: string;
@@ -27,19 +27,26 @@ const sina: NamedFetcher = { name: 'sina', fetch: (t, signal) => fetchSinaQuote(
 const tencent: NamedFetcher = { name: 'tencent', fetch: (t, signal) => fetchTencentQuote(t, 4000, signal) };
 const twse: NamedFetcher = { name: 'twse', fetch: (t) => fetchTwseQuote(t) };
 const eodhd: NamedFetcher = { name: 'eodhd', fetch: (t) => fetchEodhdQuote(t) };
+const datagatewayWind: NamedFetcher = { name: 'datagateway-wind', fetch: (t, signal) => fetchDatagatewayRealtimeQuote(t, { signal }) };
 
-const CN_CASCADE: NamedFetcher[] = [eastmoney, sina, tencent];
+function primaryCascade(): NamedFetcher[] {
+  return isDatagatewayConfigured()
+    ? [datagatewayWind, eastmoney, sina, tencent]
+    : [eastmoney, sina, tencent];
+}
 
 export function quoteSourcesFor(market: Market): NamedFetcher[] {
   switch (market) {
     case 'A':
     case 'HK':
     case 'US':
-      return CN_CASCADE;
+      return primaryCascade();
     case 'TW':
-      return [twse];
+      return isDatagatewayConfigured() ? [datagatewayWind, twse] : [twse];
     case 'JP':
     case 'KR':
-      return isEodhdConfigured() ? [eodhd] : [];
+      return isDatagatewayConfigured()
+        ? [datagatewayWind, ...(isEodhdConfigured() ? [eodhd] : [])]
+        : (isEodhdConfigured() ? [eodhd] : []);
   }
 }

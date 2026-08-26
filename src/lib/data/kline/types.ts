@@ -1,6 +1,6 @@
 import type { Market } from '@/lib/supabase/database.types';
 
-export type KlineSourceName = 'eastmoney' | 'sina' | 'tencent' | 'twse' | 'tpex';
+export type KlineSourceName = 'datagateway' | 'eastmoney' | 'sina' | 'tencent' | 'twse' | 'tpex';
 export type KlineAdjustment = 'qfq' | 'none' | 'intraday';
 export type KlineProviderFailureKind =
   | 'unsupported'

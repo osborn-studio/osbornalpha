@@ -585,10 +585,22 @@ export function useKline(ticker: string | null, range: KlineRange = '3m'): Kline
         if (cancelled) return;
         const next: KlineState = { bars: data.bars || [], loading: false, error: null, errorCode: null, source: data.source || null, meta: data.meta || null };
         klineCache.set(key, { state: next, ts: Date.now() });
+        // Operational telemetry deliberately excludes ticker and upstream URL;
+        // it is enough to monitor source availability, fallbacks, and caches.
+        trackEvent('kline_loaded', {
+          range,
+          market: data.meta.market,
+          source: data.meta.source,
+          freshness: data.meta.freshness,
+          cache_status: data.meta.cacheStatus,
+          fallback_used: data.meta.fallbackUsed,
+          partial: data.meta.partial,
+        });
         setState(next);
       })
       .catch((err: Error & { code?: string }) => {
         if (cancelled || err.name === 'AbortError') return;
+        trackEvent('kline_failed', { range, error_code: err.code || 'request_failed' });
         setState({ bars: [], loading: false, error: err.message || 'Failed to load chart data', errorCode: err.code || null, source: null, meta: null });
       });
 

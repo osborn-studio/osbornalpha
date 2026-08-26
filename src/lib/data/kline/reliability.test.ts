@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   decorateCachedResolution,
   klineProviderRoute,
@@ -208,6 +208,21 @@ describe('shared cache metadata', () => {
 });
 
 describe('provider route matrix', () => {
+  const originalBaseUrl = process.env.DATAGATEWAY_BASE_URL;
+  const originalApiKey = process.env.DATAGATEWAY_API_KEY;
+
+  beforeEach(() => {
+    delete process.env.DATAGATEWAY_BASE_URL;
+    delete process.env.DATAGATEWAY_API_KEY;
+  });
+
+  afterEach(() => {
+    if (originalBaseUrl === undefined) delete process.env.DATAGATEWAY_BASE_URL;
+    else process.env.DATAGATEWAY_BASE_URL = originalBaseUrl;
+    if (originalApiKey === undefined) delete process.env.DATAGATEWAY_API_KEY;
+    else process.env.DATAGATEWAY_API_KEY = originalApiKey;
+  });
+
   it.each([
     ['600519.SH', '1m', ['eastmoney', 'tencent']],
     ['00700.HK', '1y', ['eastmoney', 'tencent']],
@@ -219,5 +234,23 @@ describe('provider route matrix', () => {
     ['7203.T', '1m', []],
   ] as const)('routes %s %s only to verified historical providers', (ticker, range, expected) => {
     expect(klineProviderRoute(ticker, range)).toEqual(expected);
+  });
+
+  it('puts Datagateway first for daily series and enables JP/KR daily history', () => {
+    const base = process.env.DATAGATEWAY_BASE_URL;
+    const key = process.env.DATAGATEWAY_API_KEY;
+    process.env.DATAGATEWAY_BASE_URL = 'https://gateway.example.com';
+    process.env.DATAGATEWAY_API_KEY = 'test-key';
+    try {
+      expect(klineProviderRoute('600519.SH', '1m')).toEqual(['datagateway', 'eastmoney', 'tencent']);
+      expect(klineProviderRoute('7203.T', '1y')).toEqual(['datagateway']);
+      expect(klineProviderRoute('005930.KS', '3m')).toEqual(['datagateway']);
+      expect(klineProviderRoute('7203.T', '1d')).toEqual([]);
+    } finally {
+      if (base === undefined) delete process.env.DATAGATEWAY_BASE_URL;
+      else process.env.DATAGATEWAY_BASE_URL = base;
+      if (key === undefined) delete process.env.DATAGATEWAY_API_KEY;
+      else process.env.DATAGATEWAY_API_KEY = key;
+    }
   });
 });

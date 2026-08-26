@@ -146,12 +146,28 @@ supabase db reset --linked  # 或在 Studio 的 SQL Editor 粘贴 supabase/seed.
 | `NEXT_PUBLIC_SUPABASE_URL` | `https://YOUR-PROJECT.supabase.co` | Supabase Dashboard → Settings → API |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | `eyJ...` (anon public key) | 同上 |
 | `SUPABASE_SERVICE_ROLE_KEY` | `eyJ...` (service_role secret) | 同上（仅服务端用，**绝不暴露给前端**） |
+| `DATAGATEWAY_BASE_URL` | `https://gateway.example.com/` | Datagateway（服务端 HTTPS 地址） |
+| `DATAGATEWAY_API_KEY` | 网关 API Key | Datagateway（仅服务端用，**绝不暴露给前端**） |
+| `DATAGATEWAY_REALTIME_QUOTE_PATH` | `/v1/market-data/tickers/query` | Datagateway Wind 实时快照接口 |
 
 添加后触发重新部署：
 
 ```bash
 vercel --prod
 ```
+
+当 DataGateway 运行在本机而 stock-monitor 部署在 Vercel 时，使用 Tailscale Funnel 暴露受控 HTTPS 入口：
+
+```bash
+tailscale funnel --bg --https=443 http://127.0.0.1:<DATAGATEWAY_PORT>
+tailscale funnel status
+```
+
+将输出的 `https://<machine>.<tailnet>.ts.net/` 配置为 `DATAGATEWAY_BASE_URL`。Funnel 是公网入口，必须同时启用 `DATAGATEWAY_API_KEY`，且 DataGateway 只暴露 `/v1/market-data/tickers/query` 和日线接口；本机休眠或断网时，行情会自动回退到公开数据源/短期缓存。
+
+Wind 实时快照由服务端以 `POST /v1/market-data/tickers/query` 请求
+`{"symbols":["600519.SH","0700.HK"]}`，使用 `Authorization: Bearer <API key>`；响应读取
+DataGateway 的 `data[].symbol`、`data[].last_price` 和 `data[].fetched_at`。浏览器只访问本站 API，不会接触 Funnel 地址或密钥。
 
 完成后，登录功能就会生效，watchlist 会自动从 localStorage 切换到 Supabase 持久化（多设备同步）。
 
