@@ -50,7 +50,7 @@ describe('Datagateway Wind realtime adapter', () => {
         items: [['600519.SH', 1500, 1490, 1495, 1510, 1488, 1000]],
       },
     });
-    expect(result.get('600519.SH')).toMatchObject({ price: 1500, volume: 1000 });
+    expect(result.get('600519.SH')).toMatchObject({ price: 1500, volume: 1000, delayed: true });
   });
 
   it('posts one batch request with server-only Bearer authentication', async () => {
@@ -104,13 +104,74 @@ describe('Datagateway Wind realtime adapter', () => {
     expect(result.get('0700.HK')).toMatchObject({ ticker: '0700.HK', price: 512.4 });
   });
 
+  it('rejects impossible OHLCV rows so callers can fall back safely', () => {
+    const invalidRows = [
+      { ticker: '600519.SH', last: 10, pre_close: -1, open: 10, high: 11, low: 9, volume: 1 },
+      { ticker: '600519.SH', last: 10, pre_close: 9, open: 10, high: -1, low: 9, volume: 1 },
+      { ticker: '600519.SH', last: 10, pre_close: 9, open: 10, high: 9, low: 10, volume: 1 },
+      { ticker: '600519.SH', last: 10, pre_close: 9, open: 10, high: 11, low: 9, volume: -1 },
+    ];
+
+    for (const row of invalidRows) {
+      expect(parseDatagatewayRealtimeQuotes({ data: [row] })).toEqual(new Map());
+    }
+  });
+
+  it('maps same-base cross-market tickers without overwriting either quote', () => {
+    const result = parseDatagatewayRealtimeQuotes({
+      data: [
+        { ticker: '000001.SH', last: 10, pre_close: 9, open: 9.5, high: 10, low: 9, volume: 1 },
+        { ticker: '000001.SZ', last: 20, pre_close: 19, open: 19.5, high: 20, low: 19, volume: 2 },
+      ],
+    }, ['000001.SH', '000001.SZ']);
+
+    expect([...result.entries()].map(([ticker, quote]) => [ticker, quote.price])).toEqual([
+      ['000001.SH', 10],
+      ['000001.SZ', 20],
+    ]);
+  });
+
+  it('keeps valid symbols in a batch when another input is invalid', async () => {
+    process.env.DATAGATEWAY_BASE_URL = 'https://wind-gateway.example.ts.net';
+    process.env.DATAGATEWAY_API_KEY = 'test-secret';
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [rows.data[0]] }), { status: 200 }));
+
+    const result = await fetchDatagatewayRealtimeQuotes(['600519.SH', 'invalid ticker'], { fetchImpl });
+
+    expect(result.get('600519.SH')).toMatchObject({ price: 1500 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect((fetchImpl.mock.calls[0][1] as RequestInit).body).toBe(JSON.stringify({ symbols: ['600519.SH'] }));
+  });
+
   it('times out and classifies the gateway failure for fallback', async () => {
     process.env.DATAGATEWAY_BASE_URL = 'https://wind-gateway.example.ts.net';
     process.env.DATAGATEWAY_API_KEY = 'test-secret';
-    const fetchImpl = vi.fn((_url: URL, init: RequestInit) => new Promise<Response>((_, reject) => {
-      init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    const fetchImpl = vi.fn((_input: URL | RequestInfo, init?: RequestInit) => new Promise<Response>((_, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
     }));
     await expect(fetchDatagatewayRealtimeQuotes(['600519.SH'], { fetchImpl, timeoutMs: 5 }))
       .rejects.toMatchObject({ kind: 'transient', retryable: true });
+  });
+
+  it('keeps the timeout active while reading a streaming response body', async () => {
+    process.env.DATAGATEWAY_BASE_URL = 'https://wind-gateway.example.ts.net';
+    process.env.DATAGATEWAY_API_KEY = 'test-secret';
+    const fetchImpl = vi.fn((_input: URL | RequestInfo, init?: RequestInit) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"data":['));
+          init?.signal?.addEventListener('abort', () => {
+            controller.error(new DOMException('aborted', 'AbortError'));
+          });
+        },
+      });
+      return Promise.resolve(new Response(body, { status: 200 }));
+    });
+
+    const outcome = await Promise.race([
+      fetchDatagatewayRealtimeQuotes(['600519.SH'], { fetchImpl, timeoutMs: 5 }).catch((error) => error),
+      new Promise((resolve) => setTimeout(() => resolve('still-pending'), 50)),
+    ]);
+    expect(outcome).toMatchObject({ kind: 'transient', retryable: true });
   });
 });

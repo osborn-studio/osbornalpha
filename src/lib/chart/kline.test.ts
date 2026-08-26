@@ -14,7 +14,10 @@ describe('kline range contract', () => {
     expect(klineRangeAvailability('5483.TWO', '1m')).toBeNull();
     expect(klineRangeAvailability('5483.TWO', '1y')).toBeNull();
     expect(klineRangeAvailability('7203.T', '1d')).toBe('market_unsupported');
-    expect(klineRangeAvailability('7203.T', '1m')).toBeNull();
+    expect(klineRangeAvailability('7203.T', '1m', false)).toBe('market_unsupported');
+    expect(klineRangeAvailability('7203.T', '1m', true)).toBeNull();
+    expect(klineRangeAvailability('005930.KS', '1y', false)).toBe('market_unsupported');
+    expect(klineRangeAvailability('005930.KS', '1y', true)).toBeNull();
     expect(klineRangeAvailability('NVDA', '1y')).toBeNull();
   });
 
