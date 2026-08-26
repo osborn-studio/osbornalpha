@@ -80,4 +80,18 @@ describe('GET /api/quote/batch DataGateway routing', () => {
       MSFT: 'public-fallback',
     });
   });
+
+  it('falls back after one bounded DataGateway attempt', async () => {
+    mocks.fetchDatagatewayRealtimeQuotes.mockRejectedValue(
+      Object.assign(new Error('timed out'), { kind: 'transient', retryable: true }),
+    );
+
+    const response = await GET(new Request('https://example.test/api/quote/batch?tickers=AAPL&_=1'));
+    const body = await response.json();
+
+    expect(mocks.fetchDatagatewayRealtimeQuotes).toHaveBeenCalledTimes(1);
+    expect(mocks.fallbackFetch).toHaveBeenCalledTimes(1);
+    expect(body.quotes.AAPL).toMatchObject({ source: 'public-fallback', ticker: 'AAPL' });
+    expect(body.meta.sources['datagateway-wind']).toMatchObject({ attempted: 1, failed: 1, retries: 0 });
+  });
 });

@@ -10,6 +10,7 @@ const key = process.env.DATAGATEWAY_API_KEY;
 const path = process.env.DATAGATEWAY_REALTIME_QUOTE_PATH;
 
 afterEach(() => {
+  vi.useRealTimers();
   if (base === undefined) delete process.env.DATAGATEWAY_BASE_URL;
   else process.env.DATAGATEWAY_BASE_URL = base;
   if (key === undefined) delete process.env.DATAGATEWAY_API_KEY;
@@ -151,6 +152,29 @@ describe('Datagateway Wind realtime adapter', () => {
     }));
     await expect(fetchDatagatewayRealtimeQuotes(['600519.SH'], { fetchImpl, timeoutMs: 5 }))
       .rejects.toMatchObject({ kind: 'transient', retryable: true });
+  });
+
+  it('allows a 5.5 second cold response within the default timeout budget', async () => {
+    vi.useFakeTimers();
+    process.env.DATAGATEWAY_BASE_URL = 'https://wind-gateway.example.ts.net';
+    process.env.DATAGATEWAY_API_KEY = 'test-secret';
+    const fetchImpl = vi.fn((_input: URL | RequestInfo, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
+      const responseTimer = setTimeout(() => {
+        resolve(new Response(JSON.stringify({ data: [rows.data[0]] }), { status: 200 }));
+      }, 5_500);
+      init?.signal?.addEventListener('abort', () => {
+        clearTimeout(responseTimer);
+        reject(new DOMException('aborted', 'AbortError'));
+      });
+    }));
+
+    const outcome = fetchDatagatewayRealtimeQuotes(['600519.SH'], { fetchImpl })
+      .then((result) => ({ result }), (error) => ({ error }));
+    await vi.advanceTimersByTimeAsync(5_500);
+
+    await expect(outcome).resolves.toMatchObject({
+      result: expect.objectContaining({ size: 1 }),
+    });
   });
 
   it('keeps the timeout active while reading a streaming response body', async () => {
