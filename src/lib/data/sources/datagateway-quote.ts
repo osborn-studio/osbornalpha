@@ -19,7 +19,7 @@ import { datagatewayConfig, datagatewaySymbol } from './datagateway';
 export { isDatagatewayConfigured } from './datagateway';
 
 const MAX_RESPONSE_BYTES = 1_000_000;
-const DEFAULT_TIMEOUT_MS = 2_500;
+const DEFAULT_TIMEOUT_MS = 7_000;
 
 export interface DatagatewayRealtimeQuote {
   source: 'datagateway-wind';
