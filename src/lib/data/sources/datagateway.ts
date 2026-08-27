@@ -163,23 +163,36 @@ function normalizeAdjustment(value: unknown, expected: KlineAdjustment): KlineAd
 /** Parses and validates the small, provider-specific JSON boundary before shared validation. */
 export function parseDatagatewayDailyKline(payload: unknown, expectedAdjustment: KlineAdjustment): SourceKlineSeries {
   const root = record(payload);
-  const data = record(root?.data) ?? root;
-  if (!data) throw new KlineProviderError('protocol', 'Datagateway response is not an object');
-  let barsValue = field(data, 'bars', 'items', 'kline', 'rows', 'records');
-  const fields = field(data, 'fields') ?? (root ? field(root, 'fields') : undefined);
+  const rootData = root ? field(root, 'data', 'result', 'results') : undefined;
+  const data = record(rootData) ?? root;
+  if (!data && !Array.isArray(rootData) && !Array.isArray(payload)) {
+    throw new KlineProviderError('protocol', 'Datagateway response is not an object');
+  }
+  let barsValue: unknown = Array.isArray(rootData)
+    ? rootData
+    : Array.isArray(payload)
+      ? payload
+      : field(data!, 'bars', 'items', 'kline', 'rows', 'records');
+  if (data && !Array.isArray(barsValue) && barsValue === undefined) {
+    const keyedRows = Object.entries(data).filter(([, value]) => record(value));
+    if (keyedRows.length > 0) {
+      barsValue = keyedRows.map(([key, value]) => ({ date: key, ...(value as JsonRecord) }));
+    }
+  }
+  const fields = data ? field(data, 'fields') : (root ? field(root, 'fields') : undefined);
   if (Array.isArray(fields) && fields.every((name) => typeof name === 'string') && Array.isArray(barsValue)) {
     barsValue = barsValue.map((item) => Array.isArray(item)
       ? Object.fromEntries((fields as string[]).map((name, index) => [name, item[index]]))
       : item);
   }
   if (!Array.isArray(barsValue)) throw new KlineProviderError('protocol', 'Datagateway response is missing bars');
-  const volumeUnit = field(data, 'volume_unit', 'volumeUnit')
+  const volumeUnit = (data ? field(data, 'volume_unit', 'volumeUnit') : undefined)
     ?? (root ? field(root, 'volume_unit', 'volumeUnit') : undefined);
   if (volumeUnit !== undefined && String(volumeUnit).toLowerCase() !== 'shares') {
     throw new KlineProviderError('invalid_data', 'Datagateway volume must be denominated in shares');
   }
   const adjustment = normalizeAdjustment(
-    field(data, 'adjustment') ?? (root ? field(root, 'adjustment') : undefined),
+    (data ? field(data, 'adjustment') : undefined) ?? (root ? field(root, 'adjustment') : undefined),
     expectedAdjustment,
   );
   if (adjustment !== expectedAdjustment) {

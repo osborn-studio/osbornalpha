@@ -68,6 +68,14 @@ describe('Datagateway daily K-line adapter', () => {
     expect(result.bars).toEqual([{ time: '2026-08-11', open: 10, high: 12, low: 9, close: 11, volume: 1234 }]);
   });
 
+  it('accepts a direct data array and ISO timestamps', () => {
+    const result = parseDatagatewayDailyKline({
+      adjustment: 'none',
+      data: [{ TRADE_DT: '2026-08-11T00:00:00Z', OPEN: 10, HIGH: 12, LOW: 9, CLOSE: 11, VOL: 1234 }],
+    }, 'none');
+    expect(result.bars[0]).toEqual({ time: '2026-08-11', open: 10, high: 12, low: 9, close: 11, volume: 1234 });
+  });
+
   it('sends Bearer authentication only in the server-to-server header', async () => {
     process.env.DATAGATEWAY_BASE_URL = 'https://gateway.example.com';
     process.env.DATAGATEWAY_API_KEY = 'very-secret-key';
