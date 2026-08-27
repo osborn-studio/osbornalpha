@@ -210,10 +210,12 @@ describe('shared cache metadata', () => {
 describe('provider route matrix', () => {
   const originalBaseUrl = process.env.DATAGATEWAY_BASE_URL;
   const originalApiKey = process.env.DATAGATEWAY_API_KEY;
+  const originalIntraday = process.env.DATAGATEWAY_INTRADAY_KLINE_ENABLED;
 
   beforeEach(() => {
     delete process.env.DATAGATEWAY_BASE_URL;
     delete process.env.DATAGATEWAY_API_KEY;
+    delete process.env.DATAGATEWAY_INTRADAY_KLINE_ENABLED;
   });
 
   afterEach(() => {
@@ -221,6 +223,8 @@ describe('provider route matrix', () => {
     else process.env.DATAGATEWAY_BASE_URL = originalBaseUrl;
     if (originalApiKey === undefined) delete process.env.DATAGATEWAY_API_KEY;
     else process.env.DATAGATEWAY_API_KEY = originalApiKey;
+    if (originalIntraday === undefined) delete process.env.DATAGATEWAY_INTRADAY_KLINE_ENABLED;
+    else process.env.DATAGATEWAY_INTRADAY_KLINE_ENABLED = originalIntraday;
   });
 
   it.each([
@@ -241,6 +245,7 @@ describe('provider route matrix', () => {
     const key = process.env.DATAGATEWAY_API_KEY;
     process.env.DATAGATEWAY_BASE_URL = 'https://gateway.example.com';
     process.env.DATAGATEWAY_API_KEY = 'test-key';
+    process.env.DATAGATEWAY_INTRADAY_KLINE_ENABLED = 'true';
     try {
       expect(klineProviderRoute('600519.SH', '1m')).toEqual(['eastmoney', 'tencent', 'datagateway']);
       expect(klineProviderRoute('7203.T', '1y')).toEqual(['datagateway']);

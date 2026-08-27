@@ -73,6 +73,11 @@ export function isDatagatewayConfigured(): boolean {
   return datagatewayConfig() !== null;
 }
 
+/** Intraday WST is capability-gated in DataGateway and must be opted in. */
+export function isDatagatewayIntradayConfigured(env: Record<string, string | undefined> = process.env): boolean {
+  return datagatewayConfig(env) !== null && env.DATAGATEWAY_INTRADAY_KLINE_ENABLED?.trim().toLowerCase() === 'true';
+}
+
 export function datagatewaySymbol(ticker: string, market: Market): string | null {
   const symbol = ticker.trim().toUpperCase();
   if (!symbol || !/^[A-Z0-9.]{1,16}$/.test(symbol)) return null;

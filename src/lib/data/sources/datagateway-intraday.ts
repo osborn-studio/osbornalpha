@@ -10,7 +10,7 @@
 import type { Market } from '@/lib/supabase/database.types';
 import { marketTimezone } from '@/lib/chart/kline';
 import { KlineProviderError, type SourceKlineBar } from '@/lib/data/kline/types';
-import { datagatewayConfig, datagatewayWireSymbol } from './datagateway';
+import { datagatewayConfig, datagatewayWireSymbol, isDatagatewayIntradayConfigured } from './datagateway';
 
 const DEFAULT_PATH = '/v1/market-data/intraday/underlyings/query';
 const MAX_RESPONSE_BYTES = 2_000_000;
@@ -121,7 +121,7 @@ export async function fetchDatagatewayIntradayKline(
 ): Promise<{ source: 'datagateway'; bars: SourceKlineBar[]; adjustment: 'intraday'; volumeUnit: 'shares' } | null> {
   const config = datagatewayConfig();
   const symbol = datagatewayWireSymbol(ticker, market);
-  if (!config || !symbol) return null;
+  if (!config || !symbol || !isDatagatewayIntradayConfigured()) return null;
   const timezone = marketTimezone(market);
   const today = localDay(options.now ?? new Date(), timezone);
   const controller = new AbortController();

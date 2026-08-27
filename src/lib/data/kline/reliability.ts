@@ -11,7 +11,7 @@ import { fetchSinaIntradayKline } from '@/lib/data/sources/sina-kline';
 import { fetchDatagatewayIntradayKline } from '@/lib/data/sources/datagateway-intraday';
 import { fetchTencentKline } from '@/lib/data/sources/tencent';
 import { fetchTwseKline } from '@/lib/data/sources/twse';
-import { fetchDatagatewayDailyKline, isDatagatewayConfigured } from '@/lib/data/sources/datagateway';
+import { fetchDatagatewayDailyKline, isDatagatewayConfigured, isDatagatewayIntradayConfigured } from '@/lib/data/sources/datagateway';
 import type { Market } from '@/lib/supabase/database.types';
 import { marketPhase } from '@/lib/today/clock';
 import { classifyMarket } from '@/lib/utils';
@@ -127,7 +127,7 @@ export function klineProviderRoute(ticker: string, range: KlineRange): KlineSour
     return [/\.TWO$/i.test(ticker) ? 'tpex' : 'twse', ...gateway];
   }
   if (interval === 'minute') {
-    const intradayGateway = isDatagatewayConfigured() ? ['datagateway'] as const : [];
+    const intradayGateway = isDatagatewayIntradayConfigured() ? ['datagateway'] as const : [];
     return market === 'A' ? [...intradayGateway, 'eastmoney', 'sina'] : [...intradayGateway, 'eastmoney'];
   }
   // Public exchange feeds provide complete OHLCV. DataGateway's daily
@@ -144,7 +144,7 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
   // previous-close comparison without expanding the requested display range.
   const limit = klineBarLimit(request.ticker, request.range) + 1;
   const adjustment = expectedAdjustment(market, request.range);
-  const intradayGateway: KlineProvider[] = config.interval === 'minute' && isDatagatewayConfigured() ? [{
+  const intradayGateway: KlineProvider[] = config.interval === 'minute' && isDatagatewayIntradayConfigured() ? [{
     name: 'datagateway',
     market,
     adjustment,

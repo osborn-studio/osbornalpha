@@ -3,18 +3,22 @@ import { fetchDatagatewayIntradayKline } from './datagateway-intraday';
 
 const base = process.env.DATAGATEWAY_BASE_URL;
 const key = process.env.DATAGATEWAY_API_KEY;
+const intradayEnabled = process.env.DATAGATEWAY_INTRADAY_KLINE_ENABLED;
 
 afterEach(() => {
   if (base === undefined) delete process.env.DATAGATEWAY_BASE_URL;
   else process.env.DATAGATEWAY_BASE_URL = base;
   if (key === undefined) delete process.env.DATAGATEWAY_API_KEY;
   else process.env.DATAGATEWAY_API_KEY = key;
+  if (intradayEnabled === undefined) delete process.env.DATAGATEWAY_INTRADAY_KLINE_ENABLED;
+  else process.env.DATAGATEWAY_INTRADAY_KLINE_ENABLED = intradayEnabled;
 });
 
 describe('DataGateway intraday adapter', () => {
   it('aggregates Wind ticks into one-minute OHLCV bars', async () => {
     process.env.DATAGATEWAY_BASE_URL = 'https://gateway.example.com';
     process.env.DATAGATEWAY_API_KEY = 'secret';
+    process.env.DATAGATEWAY_INTRADAY_KLINE_ENABLED = 'true';
     const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [
       { symbol: '600519.SH', timestamp: '2026-08-27T01:31:05Z', last_price: 100, cumulative_volume: 1000 },
       { symbol: '600519.SH', timestamp: '2026-08-27T01:31:25Z', last_price: 102, cumulative_volume: 1100 },
