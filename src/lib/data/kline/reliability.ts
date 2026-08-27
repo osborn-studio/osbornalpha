@@ -449,13 +449,13 @@ async function resolveCacheable(ticker: string, range: KlineRange): Promise<Klin
 
 const cachedIntraday = unstable_cache(
   resolveCacheable,
-  ['kline-reliability-intraday-v2'],
+  ['kline-reliability-intraday-v3'],
   { revalidate: 60 },
 );
 
 const cachedDaily = unstable_cache(
   resolveCacheable,
-  ['kline-reliability-daily-v2'],
+  ['kline-reliability-daily-v3'],
   { revalidate: 300 },
 );
 
