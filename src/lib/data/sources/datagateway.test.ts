@@ -36,6 +36,11 @@ describe('Datagateway daily K-line adapter', () => {
     expect(datagatewayConfig({ DATAGATEWAY_BASE_URL: 'https://gateway.example.com', DATAGATEWAY_API_KEY: 'secret' })).toMatchObject({
       apiKey: 'secret', dailyKlinePath: '/v1/market-data/security-prices/history/query',
     });
+    expect(datagatewayConfig({
+      DATAGATEWAY_BASE_URL: 'https://gateway.example.com',
+      DATAGATEWAY_API_KEY: 'secret',
+      DATAGATEWAY_DAILY_KLINE_PATH: '/v1/market/kline/daily',
+    })?.dailyKlinePath).toBe('/v1/market-data/security-prices/history/query');
   });
 
   it('maps supported market symbols without putting credentials in the URL', () => {

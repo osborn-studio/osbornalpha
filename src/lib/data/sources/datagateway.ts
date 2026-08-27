@@ -21,6 +21,7 @@ import {
 } from '@/lib/data/kline/types';
 
 const DEFAULT_DAILY_KLINE_PATH = '/v1/market-data/security-prices/history/query';
+const LEGACY_DAILY_KLINE_PATH = '/v1/market/kline/daily';
 const MAX_RESPONSE_BYTES = 1_000_000;
 
 export interface DatagatewayConfig {
@@ -52,7 +53,13 @@ export function datagatewayConfig(env: Record<string, string | undefined> = proc
   try {
     const baseUrl = new URL(base.endsWith('/') ? base : `${base}/`);
     if (baseUrl.protocol !== 'https:') return null;
-    const dailyKlinePath = env.DATAGATEWAY_DAILY_KLINE_PATH?.trim() || DEFAULT_DAILY_KLINE_PATH;
+    const configuredDailyPath = env.DATAGATEWAY_DAILY_KLINE_PATH?.trim();
+    // Older deployments used an endpoint that is not present in the current
+    // DataGateway. Upgrade that known value so an existing Vercel variable
+    // does not silently force every request into a public fallback.
+    const dailyKlinePath = !configuredDailyPath || configuredDailyPath === LEGACY_DAILY_KLINE_PATH
+      ? DEFAULT_DAILY_KLINE_PATH
+      : configuredDailyPath;
     const realtimeQuotePath = env.DATAGATEWAY_REALTIME_QUOTE_PATH?.trim() || '/v1/market-data/tickers/query';
     if (!dailyKlinePath.startsWith('/') || dailyKlinePath.startsWith('//')) return null;
     if (!realtimeQuotePath.startsWith('/') || realtimeQuotePath.startsWith('//')) return null;
