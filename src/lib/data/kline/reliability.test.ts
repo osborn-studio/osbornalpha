@@ -247,7 +247,7 @@ describe('provider route matrix', () => {
       expect(klineProviderRoute('005930.KS', '3m')).toEqual(['datagateway']);
       expect(klineProviderRoute('2330.TW', '1y')).toEqual(['twse', 'datagateway']);
       expect(klineProviderRoute('7203.T', '1d')).toEqual([]);
-      expect(klineProviderRoute('600519.SH', '1d')).toEqual(['eastmoney', 'sina']);
+      expect(klineProviderRoute('600519.SH', '1d')).toEqual(['datagateway', 'eastmoney', 'sina']);
     } finally {
       if (base === undefined) delete process.env.DATAGATEWAY_BASE_URL;
       else process.env.DATAGATEWAY_BASE_URL = base;

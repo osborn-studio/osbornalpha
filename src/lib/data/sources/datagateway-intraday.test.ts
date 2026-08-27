@@ -1,0 +1,32 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fetchDatagatewayIntradayKline } from './datagateway-intraday';
+
+const base = process.env.DATAGATEWAY_BASE_URL;
+const key = process.env.DATAGATEWAY_API_KEY;
+
+afterEach(() => {
+  if (base === undefined) delete process.env.DATAGATEWAY_BASE_URL;
+  else process.env.DATAGATEWAY_BASE_URL = base;
+  if (key === undefined) delete process.env.DATAGATEWAY_API_KEY;
+  else process.env.DATAGATEWAY_API_KEY = key;
+});
+
+describe('DataGateway intraday adapter', () => {
+  it('aggregates Wind ticks into one-minute OHLCV bars', async () => {
+    process.env.DATAGATEWAY_BASE_URL = 'https://gateway.example.com';
+    process.env.DATAGATEWAY_API_KEY = 'secret';
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [
+      { symbol: '600519.SH', timestamp: '2026-08-27T01:31:05Z', last_price: 100, cumulative_volume: 1000 },
+      { symbol: '600519.SH', timestamp: '2026-08-27T01:31:25Z', last_price: 102, cumulative_volume: 1100 },
+      { symbol: '600519.SH', timestamp: '2026-08-27T01:32:05Z', last_price: 101, cumulative_volume: 1150 },
+    ], missing: [] }), { status: 200 }));
+    const result = await fetchDatagatewayIntradayKline('600519.SH', 'A', 240, { fetchImpl, now: new Date('2026-08-27T01:40:00Z') });
+    expect(result?.bars).toEqual([
+      { time: '2026-08-27 09:31', open: 100, high: 102, low: 100, close: 102, volume: 100 },
+      { time: '2026-08-27 09:32', open: 101, high: 101, low: 101, close: 101, volume: 0 },
+    ]);
+    const [url, init] = fetchImpl.mock.calls[0] as [URL, RequestInit];
+    expect(url.toString()).toBe('https://gateway.example.com/v1/market-data/intraday/underlyings/query');
+    expect(JSON.parse(String(init.body))).toMatchObject({ symbols: ['600519.SH'], depth: 1, purpose: 'execution_backtest' });
+  });
+});

@@ -8,6 +8,7 @@ import {
 import { fetchEastmoneyKline } from '@/lib/data/sources/eastmoney';
 import { fetchSinaUsKline } from '@/lib/data/sources/sina';
 import { fetchSinaIntradayKline } from '@/lib/data/sources/sina-kline';
+import { fetchDatagatewayIntradayKline } from '@/lib/data/sources/datagateway-intraday';
 import { fetchTencentKline } from '@/lib/data/sources/tencent';
 import { fetchTwseKline } from '@/lib/data/sources/twse';
 import { fetchDatagatewayDailyKline, isDatagatewayConfigured } from '@/lib/data/sources/datagateway';
@@ -125,7 +126,10 @@ export function klineProviderRoute(ticker: string, range: KlineRange): KlineSour
     // fallback when the exchange feed is unavailable.
     return [/\.TWO$/i.test(ticker) ? 'tpex' : 'twse', ...gateway];
   }
-  if (interval === 'minute') return market === 'A' ? ['eastmoney', 'sina'] : ['eastmoney'];
+  if (interval === 'minute') {
+    const intradayGateway = isDatagatewayConfigured() ? ['datagateway'] as const : [];
+    return market === 'A' ? [...intradayGateway, 'eastmoney', 'sina'] : [...intradayGateway, 'eastmoney'];
+  }
   // Public exchange feeds provide complete OHLCV. DataGateway's daily
   // history contains closes only, so keep it after those feeds to avoid
   // rendering synthetic candles when a complete series is available.
@@ -140,6 +144,14 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
   // previous-close comparison without expanding the requested display range.
   const limit = klineBarLimit(request.ticker, request.range) + 1;
   const adjustment = expectedAdjustment(market, request.range);
+  const intradayGateway: KlineProvider[] = config.interval === 'minute' && isDatagatewayConfigured() ? [{
+    name: 'datagateway',
+    market,
+    adjustment,
+    timeoutMs: 4_800,
+    maxAttempts: 1,
+    fetch: (signal) => fetchDatagatewayIntradayKline(request.ticker, market, limit, { signal, timeoutMs: 4_500 }),
+  }] : [];
   const gateway: KlineProvider[] = config.interval === 'day' && isDatagatewayConfigured() ? [{
     name: 'datagateway',
     market,
@@ -176,7 +188,7 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
       timeoutMs: 2_500,
     }),
   };
-  if (config.interval === 'minute') return [primary, ...(market === 'A' ? [{
+  if (config.interval === 'minute') return [...intradayGateway, primary, ...(market === 'A' ? [{
     name: 'sina' as const,
     market,
     adjustment,
