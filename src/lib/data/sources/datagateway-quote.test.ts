@@ -104,10 +104,24 @@ describe('Datagateway Wind realtime adapter', () => {
     expect(result.get('0700.HK')).toMatchObject({ ticker: '0700.HK', price: 512.4 });
   });
 
+  it('matches padded Hong Kong requests and reads uppercase Wind fields', () => {
+    const result = parseDatagatewayRealtimeQuotes({
+      data: [{
+        SYMBOL: '0700.HK', RT_LAST: 512.4, RT_PRE_CLOSE: 500, RT_OPEN: 501,
+        RT_HIGH: 515, RT_LOW: 499, RT_VOL: 12345, RT_AMT: 6_000_000,
+        RT_PCT_CHG: 2.48, RT_TIME: '2026-08-23T10:00:00Z',
+      }],
+    }, ['00700.HK']);
+    expect(result.get('00700.HK')).toMatchObject({
+      ticker: '00700.HK', price: 512.4, prev_close: 500, change_pct: 2.48,
+      volume: 12345, amount: 6_000_000,
+    });
+  });
+
   it('times out and classifies the gateway failure for fallback', async () => {
     process.env.DATAGATEWAY_BASE_URL = 'https://wind-gateway.example.ts.net';
     process.env.DATAGATEWAY_API_KEY = 'test-secret';
-    const fetchImpl = vi.fn((_url: URL, init: RequestInit) => new Promise<Response>((_, reject) => {
+    const fetchImpl = vi.fn((_url: URL | RequestInfo, init: RequestInit = {}) => new Promise<Response>((_, reject) => {
       init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
     }));
     await expect(fetchDatagatewayRealtimeQuotes(['600519.SH'], { fetchImpl, timeoutMs: 5 }))

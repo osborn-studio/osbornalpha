@@ -14,7 +14,7 @@
 import type { Market } from '@/lib/supabase/database.types';
 import { classifyMarket, currencyOfMarket } from '@/lib/utils';
 import { KlineProviderError } from '@/lib/data/kline/types';
-import { datagatewayConfig, datagatewaySymbol } from './datagateway';
+import { datagatewayConfig, datagatewaySymbol, datagatewayWireSymbol } from './datagateway';
 
 export { isDatagatewayConfigured } from './datagateway';
 
@@ -62,7 +62,8 @@ function asRecord(value: unknown): RecordValue | null {
 }
 
 function first(row: RecordValue, names: string[]): unknown {
-  for (const name of names) if (name in row) return row[name];
+  const lower = new Map(Object.entries(row).map(([key, value]) => [key.toLowerCase(), value]));
+  for (const name of names) if (lower.has(name.toLowerCase())) return lower.get(name.toLowerCase());
   return undefined;
 }
 
@@ -123,7 +124,10 @@ function matchRequestedTicker(reported: string | null, requestedTickers: string[
   const normalized = reported.toUpperCase();
   return requestedTickers.find((ticker) => {
     const requested = ticker.toUpperCase();
+    const reportedWire = datagatewayWireSymbol(normalized, classifyMarket(normalized));
+    const requestedWire = datagatewayWireSymbol(requested, classifyMarket(requested));
     return requested === normalized
+      || (!!reportedWire && reportedWire === requestedWire)
       || requested.split('.')[0] === normalized
       || normalized.split('.')[0] === requested.split('.')[0];
   });
@@ -136,16 +140,16 @@ function parseQuote(row: RecordValue, requestedTicker?: string): DatagatewayReal
   if (!datagatewaySymbol(rawTicker, market)) return null;
   const price = number(first(row, ['price', 'last_price', 'last', 'close', 'rt_last', 'rt_price']));
   if (price === null || price <= 0) return null;
-  const prevClose = number(first(row, ['prev_close', 'previous_close', 'pre_close', 'rt_pre_close'])) ?? price;
+  const prevClose = number(first(row, ['prev_close', 'previous_close', 'pre_close', 'rt_pre_close', 'rt_preclose'])) ?? price;
   const open = number(first(row, ['open', 'rt_open'])) ?? price;
   const high = number(first(row, ['high', 'rt_high'])) ?? price;
   const low = number(first(row, ['low', 'rt_low'])) ?? price;
-  const change = number(first(row, ['change', 'chg', 'rt_change'])) ?? price - prevClose;
-  const changePct = number(first(row, ['change_pct', 'change_percent', 'pct_change', 'pct_chg', 'rt_pct_chg'])) ?? (prevClose > 0 ? change / prevClose * 100 : 0);
-  const rawVolume = number(first(row, ['volume', 'vol', 'rt_vol'])) ?? 0;
+  const change = number(first(row, ['change', 'chg', 'rt_change', 'rt_chg'])) ?? price - prevClose;
+  const changePct = number(first(row, ['change_pct', 'change_percent', 'pct_change', 'pct_chg', 'rt_pct_chg', 'rt_pctchg'])) ?? (prevClose > 0 ? change / prevClose * 100 : 0);
+  const rawVolume = number(first(row, ['volume', 'vol', 'rt_vol', 'rt_volume'])) ?? 0;
   const volumeUnit = String(first(row, ['volume_unit', 'volumeUnit']) ?? 'shares').toLowerCase();
   const volume = volumeUnit === 'lots' || volumeUnit === 'lot' ? rawVolume * 100 : rawVolume;
-  const amount = number(first(row, ['amount', 'turnover_amount', 'rt_amt'])) ?? 0;
+  const amount = number(first(row, ['amount', 'turnover_amount', 'rt_amt', 'rt_amount'])) ?? 0;
   const delayedValue = first(row, ['delayed', 'is_delayed']);
   const delayed = typeof delayedValue === 'boolean' ? delayedValue : false;
   const marketCap = number(first(row, ['market_cap', 'marketCap', 'mkt_cap']));
@@ -183,7 +187,7 @@ function parseQuote(row: RecordValue, requestedTicker?: string): DatagatewayReal
 
 function wireSymbol(ticker: string): string | null {
   const market = classifyMarket(ticker);
-  const symbol = datagatewaySymbol(ticker, market);
+  const symbol = datagatewayWireSymbol(ticker, market);
   if (!symbol) return null;
   // Wind uses the .O suffix for US listed equities. The app keeps bare
   // tickers such as AAPL at its public boundary.

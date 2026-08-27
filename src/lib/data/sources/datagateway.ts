@@ -44,7 +44,7 @@ function record(value: unknown): JsonRecord | null {
 }
 
 /** Returns null for missing or unsafe configuration so public fallbacks stay usable. */
-export function datagatewayConfig(env: NodeJS.ProcessEnv = process.env): DatagatewayConfig | null {
+export function datagatewayConfig(env: Record<string, string | undefined> = process.env): DatagatewayConfig | null {
   const base = env.DATAGATEWAY_BASE_URL?.trim();
   const apiKey = env.DATAGATEWAY_API_KEY?.trim();
   if (!base || !apiKey) return null;
@@ -78,13 +78,21 @@ export function datagatewaySymbol(ticker: string, market: Market): string | null
   return /^[A-Z.]{1,10}$/.test(symbol) ? symbol : null;
 }
 
+/** Canonical symbol used on the gateway wire. Wind uses four-digit HK codes. */
+export function datagatewayWireSymbol(ticker: string, market: Market): string | null {
+  const symbol = datagatewaySymbol(ticker, market);
+  if (!symbol || market !== 'HK') return symbol;
+  const code = symbol.slice(0, -3);
+  return `${Number(code).toString().padStart(4, '0')}.HK`;
+}
+
 export function datagatewayDailyKlineUrl(config: DatagatewayConfig, input: {
   ticker: string;
   market: Market;
   limit: number;
   adjustment: KlineAdjustment;
 }): URL | null {
-  const symbol = datagatewaySymbol(input.ticker, input.market);
+  const symbol = datagatewayWireSymbol(input.ticker, input.market);
   if (!symbol || input.adjustment === 'intraday') return null;
   const url = new URL(config.dailyKlinePath, config.baseUrl);
   url.searchParams.set('symbol', symbol);
@@ -109,30 +117,35 @@ function dateFromTimestamp(value: number): string | null {
 }
 
 function valueAsDate(value: unknown): string | null {
-  if (typeof value === 'number') return dateFromTimestamp(value);
+  if (typeof value === 'number') {
+    const text = String(Math.trunc(value));
+    if (/^\d{8}$/.test(text)) return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
+    return dateFromTimestamp(value);
+  }
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   if (/^\d{8}$/.test(trimmed)) return `${trimmed.slice(0, 4)}-${trimmed.slice(4, 6)}-${trimmed.slice(6, 8)}`;
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  const parsed = new Date(trimmed);
+  if (Number.isFinite(parsed.getTime())) return parsed.toISOString().slice(0, 10);
   return null;
 }
 
 function field(row: JsonRecord, ...names: string[]): unknown {
-  for (const name of names) {
-    if (name in row) return row[name];
-  }
+  const lower = new Map(Object.entries(row).map(([key, value]) => [key.toLowerCase(), value]));
+  for (const name of names) if (lower.has(name.toLowerCase())) return lower.get(name.toLowerCase());
   return undefined;
 }
 
 function parseBar(value: unknown): SourceKlineBar {
   const row = record(value);
   if (!row) throw new KlineProviderError('invalid_data', 'Datagateway K-line row is invalid');
-  const time = valueAsDate(field(row, 'time', 'date', 'trade_date', 'timestamp'));
-  const open = valueAsNumber(field(row, 'open', 'o'));
-  const high = valueAsNumber(field(row, 'high', 'h'));
-  const low = valueAsNumber(field(row, 'low', 'l'));
-  const close = valueAsNumber(field(row, 'close', 'c'));
-  const volume = valueAsNumber(field(row, 'volume', 'vol', 'v'));
+  const time = valueAsDate(field(row, 'time', 'date', 'trade_date', 'trade_dt', 'timestamp'));
+  const open = valueAsNumber(field(row, 'open', 'o', 'rt_open'));
+  const high = valueAsNumber(field(row, 'high', 'h', 'rt_high'));
+  const low = valueAsNumber(field(row, 'low', 'l', 'rt_low'));
+  const close = valueAsNumber(field(row, 'close', 'c', 'rt_last', 'rt_close'));
+  const volume = valueAsNumber(field(row, 'volume', 'vol', 'v', 'rt_vol', 'rt_volume'));
   if (!time || open === null || high === null || low === null || close === null || volume === null) {
     throw new KlineProviderError('invalid_data', 'Datagateway K-line row is missing required fields');
   }
@@ -152,13 +165,23 @@ export function parseDatagatewayDailyKline(payload: unknown, expectedAdjustment:
   const root = record(payload);
   const data = record(root?.data) ?? root;
   if (!data) throw new KlineProviderError('protocol', 'Datagateway response is not an object');
-  const barsValue = data.bars ?? data.items ?? data.kline;
+  let barsValue = field(data, 'bars', 'items', 'kline', 'rows', 'records');
+  const fields = field(data, 'fields') ?? (root ? field(root, 'fields') : undefined);
+  if (Array.isArray(fields) && fields.every((name) => typeof name === 'string') && Array.isArray(barsValue)) {
+    barsValue = barsValue.map((item) => Array.isArray(item)
+      ? Object.fromEntries((fields as string[]).map((name, index) => [name, item[index]]))
+      : item);
+  }
   if (!Array.isArray(barsValue)) throw new KlineProviderError('protocol', 'Datagateway response is missing bars');
-  const volumeUnit = data.volume_unit ?? data.volumeUnit ?? root?.volume_unit ?? root?.volumeUnit;
+  const volumeUnit = field(data, 'volume_unit', 'volumeUnit')
+    ?? (root ? field(root, 'volume_unit', 'volumeUnit') : undefined);
   if (volumeUnit !== undefined && String(volumeUnit).toLowerCase() !== 'shares') {
     throw new KlineProviderError('invalid_data', 'Datagateway volume must be denominated in shares');
   }
-  const adjustment = normalizeAdjustment(data.adjustment ?? root?.adjustment, expectedAdjustment);
+  const adjustment = normalizeAdjustment(
+    field(data, 'adjustment') ?? (root ? field(root, 'adjustment') : undefined),
+    expectedAdjustment,
+  );
   if (adjustment !== expectedAdjustment) {
     throw new KlineProviderError('invalid_data', 'Datagateway adjustment does not match the requested series');
   }

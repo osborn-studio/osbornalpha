@@ -42,6 +42,7 @@ describe('Datagateway daily K-line adapter', () => {
     const url = datagatewayDailyKlineUrl(config, { ticker: '600519.sh', market: 'A', limit: 23, adjustment: 'qfq' })!;
     expect(url.toString()).toBe('https://gateway.example.com/v1/market/kline/daily?symbol=600519.SH&market=A&interval=1d&limit=23&adjustment=qfq');
     expect(url.toString()).not.toContain('secret');
+    expect(datagatewayDailyKlineUrl(config, { ticker: '00700.HK', market: 'HK', limit: 23, adjustment: 'none' })?.searchParams.get('symbol')).toBe('0700.HK');
     expect(datagatewaySymbol('7203.T', 'JP')).toBe('7203.T');
     expect(datagatewaySymbol('005930.KS', 'KR')).toBe('005930.KS');
     expect(datagatewaySymbol('broken value', 'US')).toBeNull();
@@ -54,6 +55,17 @@ describe('Datagateway daily K-line adapter', () => {
     });
     expect(() => parseDatagatewayDailyKline({ data: { ...payload.data, volume_unit: 'lots' } }, 'qfq')).toThrow(/shares/);
     expect(() => parseDatagatewayDailyKline({ data: { ...payload.data, adjustment: 'none' } }, 'qfq')).toThrow(/adjustment/);
+  });
+
+  it('accepts Wind-style uppercase fields, numeric YYYYMMDD dates, and tabular rows', () => {
+    const result = parseDatagatewayDailyKline({
+      DATA: 'ignored',
+      FIELDS: ['TRADE_DT', 'OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOL'],
+      ITEMS: [[20260811, 10, 12, 9, 11, 1234]],
+      ADJUSTMENT: 'qfq',
+      VOLUME_UNIT: 'shares',
+    }, 'qfq');
+    expect(result.bars).toEqual([{ time: '2026-08-11', open: 10, high: 12, low: 9, close: 11, volume: 1234 }]);
   });
 
   it('sends Bearer authentication only in the server-to-server header', async () => {
