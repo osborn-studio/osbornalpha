@@ -228,14 +228,18 @@ describe('provider route matrix', () => {
   });
 
   it.each([
+    ['600519.SH', '1d', ['eastmoney', 'sina']],
     ['600519.SH', '1m', ['eastmoney', 'tencent']],
+    ['00700.HK', '1d', ['eastmoney']],
     ['00700.HK', '1y', ['eastmoney', 'tencent']],
+    ['NVDA', '1d', ['eastmoney']],
     ['NVDA', '3m', ['eastmoney', 'sina']],
     ['2330.TW', '1y', ['twse']],
     ['5483.TWO', '1m', ['tpex']],
-    ['NVDA', '1d', ['eastmoney']],
     ['2330.TW', '1d', []],
+    ['7203.T', '1d', []],
     ['7203.T', '1m', []],
+    ['005930.KS', '1y', []],
   ] as const)('routes %s %s only to verified historical providers', (ticker, range, expected) => {
     expect(klineProviderRoute(ticker, range)).toEqual(expected);
   });
@@ -259,5 +263,13 @@ describe('provider route matrix', () => {
       if (key === undefined) delete process.env.DATAGATEWAY_API_KEY;
       else process.env.DATAGATEWAY_API_KEY = key;
     }
+  });
+
+  it('enables Wind intraday only when the capability flag is set', () => {
+    process.env.DATAGATEWAY_BASE_URL = 'https://gateway.example.com';
+    process.env.DATAGATEWAY_API_KEY = 'test-key';
+    expect(klineProviderRoute('600519.SH', '1d')).toEqual(['eastmoney', 'sina']);
+    process.env.DATAGATEWAY_INTRADAY_KLINE_ENABLED = 'true';
+    expect(klineProviderRoute('600519.SH', '1d')).toEqual(['datagateway', 'eastmoney', 'sina']);
   });
 });
