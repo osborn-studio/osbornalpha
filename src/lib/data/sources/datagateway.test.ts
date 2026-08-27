@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   datagatewayConfig,
+  datagatewayDailyKlineBody,
   datagatewayDailyKlineUrl,
   datagatewaySymbol,
   fetchDatagatewayDailyKline,
@@ -33,16 +34,20 @@ describe('Datagateway daily K-line adapter', () => {
     expect(datagatewayConfig({ DATAGATEWAY_BASE_URL: 'http://gateway.example.com', DATAGATEWAY_API_KEY: 'secret' })).toBeNull();
     expect(datagatewayConfig({ DATAGATEWAY_BASE_URL: 'https://gateway.example.com', DATAGATEWAY_API_KEY: '' })).toBeNull();
     expect(datagatewayConfig({ DATAGATEWAY_BASE_URL: 'https://gateway.example.com', DATAGATEWAY_API_KEY: 'secret' })).toMatchObject({
-      apiKey: 'secret', dailyKlinePath: '/v1/market/kline/daily',
+      apiKey: 'secret', dailyKlinePath: '/v1/market-data/security-prices/history/query',
     });
   });
 
   it('maps supported market symbols without putting credentials in the URL', () => {
     const config = datagatewayConfig({ DATAGATEWAY_BASE_URL: 'https://gateway.example.com/api/', DATAGATEWAY_API_KEY: 'secret' })!;
     const url = datagatewayDailyKlineUrl(config, { ticker: '600519.sh', market: 'A', limit: 23, adjustment: 'qfq' })!;
-    expect(url.toString()).toBe('https://gateway.example.com/v1/market/kline/daily?symbol=600519.SH&market=A&interval=1d&limit=23&adjustment=qfq');
+    expect(url.toString()).toBe('https://gateway.example.com/v1/market-data/security-prices/history/query');
     expect(url.toString()).not.toContain('secret');
-    expect(datagatewayDailyKlineUrl(config, { ticker: '00700.HK', market: 'HK', limit: 23, adjustment: 'none' })?.searchParams.get('symbol')).toBe('0700.HK');
+    expect(datagatewayDailyKlineBody({ ticker: '00700.HK', market: 'HK', limit: 23 })?.symbols).toEqual(['0700.HK']);
+    const body = datagatewayDailyKlineBody({ ticker: '00700.HK', market: 'HK', limit: 23 });
+    expect(body).toMatchObject({ symbols: ['0700.HK'], mode: 'strict_sync' });
+    expect(body?.startDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(body?.endDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(datagatewaySymbol('7203.T', 'JP')).toBe('7203.T');
     expect(datagatewaySymbol('005930.KS', 'KR')).toBe('005930.KS');
     expect(datagatewaySymbol('broken value', 'US')).toBeNull();
@@ -76,6 +81,25 @@ describe('Datagateway daily K-line adapter', () => {
     expect(result.bars[0]).toEqual({ time: '2026-08-11', open: 10, high: 12, low: 9, close: 11, volume: 1234 });
   });
 
+  it('converts DataGateway daily close history into simplified candles', () => {
+    const result = parseDatagatewayDailyKline({
+      request_id: 'test',
+      status: 'success',
+      data: [
+        { symbol: '600519.SH', date: '2026-08-10', value: 100, source: 'wind', quality: 'observed' },
+        { symbol: '600519.SH', date: '2026-08-11', value: 110, source: 'wind', quality: 'observed' },
+      ],
+      missing: [],
+    }, 'qfq');
+    expect(result).toEqual({
+      source: 'datagateway', adjustment: 'qfq', volumeUnit: 'shares',
+      bars: [
+        { time: '2026-08-10', open: 100, high: 100, low: 100, close: 100, volume: 0 },
+        { time: '2026-08-11', open: 100, high: 110, low: 100, close: 110, volume: 0 },
+      ],
+    });
+  });
+
   it('sends Bearer authentication only in the server-to-server header', async () => {
     process.env.DATAGATEWAY_BASE_URL = 'https://gateway.example.com';
     process.env.DATAGATEWAY_API_KEY = 'very-secret-key';
@@ -87,6 +111,9 @@ describe('Datagateway daily K-line adapter', () => {
     const [url, init] = fetchImpl.mock.calls[0] as [URL, RequestInit];
     expect(url.toString()).not.toContain('very-secret-key');
     expect(init.headers).toEqual(expect.objectContaining({ Authorization: 'Bearer very-secret-key' }));
+    expect(init.method).toBe('POST');
+    expect(init.headers).toEqual(expect.objectContaining({ 'Content-Type': 'application/json' }));
+    expect(JSON.parse(String(init.body))).toMatchObject({ symbols: ['600519.SH'], mode: 'strict_sync' });
     expect(init.cache).toBe('no-store');
   });
 

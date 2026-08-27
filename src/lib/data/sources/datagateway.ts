@@ -1,14 +1,15 @@
 /**
  * Server-only Datagateway adapter for daily OHLCV history.
  *
- * Expected contract (until the vendor-specific document is supplied):
- *   GET {DATAGATEWAY_BASE_URL}{DATAGATEWAY_DAILY_KLINE_PATH}
- *     ?symbol=600519.SH&market=A&interval=1d&limit=23&adjustment=qfq
+ * Daily history contract:
+ *   POST {DATAGATEWAY_BASE_URL}{DATAGATEWAY_DAILY_KLINE_PATH}
+ *     { symbols, startDate, endDate, mode }
  *   Authorization: Bearer {DATAGATEWAY_API_KEY}
  *
- * Successful payloads may wrap the payload in `data`, but must contain
- * `bars` and return individual-share volume. This module is deliberately
- * the only place that knows the upstream URL, credential, and wire shape.
+ * DataGateway returns daily closes (`data[]` with `symbol`, `date`, `value`),
+ * so those rows are converted into conservative candles with zero volume.
+ * This module is deliberately the only place that knows the upstream URL,
+ * credential, and wire shape.
  */
 
 import type { Market } from '@/lib/supabase/database.types';
@@ -19,7 +20,7 @@ import {
   type SourceKlineSeries,
 } from '@/lib/data/kline/types';
 
-const DEFAULT_DAILY_KLINE_PATH = '/v1/market/kline/daily';
+const DEFAULT_DAILY_KLINE_PATH = '/v1/market-data/security-prices/history/query';
 const MAX_RESPONSE_BYTES = 1_000_000;
 
 export interface DatagatewayConfig {
@@ -94,13 +95,23 @@ export function datagatewayDailyKlineUrl(config: DatagatewayConfig, input: {
 }): URL | null {
   const symbol = datagatewayWireSymbol(input.ticker, input.market);
   if (!symbol || input.adjustment === 'intraday') return null;
-  const url = new URL(config.dailyKlinePath, config.baseUrl);
-  url.searchParams.set('symbol', symbol);
-  url.searchParams.set('market', input.market);
-  url.searchParams.set('interval', '1d');
-  url.searchParams.set('limit', String(input.limit));
-  url.searchParams.set('adjustment', input.adjustment);
-  return url;
+  return new URL(config.dailyKlinePath, config.baseUrl);
+}
+
+export function datagatewayDailyKlineBody(input: {
+  ticker: string;
+  market: Market;
+  limit: number;
+}): { symbols: string[]; startDate: string; endDate: string; mode: 'strict_sync' } | null {
+  const symbol = datagatewayWireSymbol(input.ticker, input.market);
+  if (!symbol) return null;
+  const end = new Date();
+  const start = new Date(end);
+  // The history API accepts calendar dates, so request a generous window to
+  // obtain the requested number of trading sessions around holidays.
+  start.setUTCDate(start.getUTCDate() - Math.max(30, input.limit * 3));
+  const date = (value: Date) => value.toISOString().slice(0, 10);
+  return { symbols: [symbol], startDate: date(start), endDate: date(end), mode: 'strict_sync' };
 }
 
 function valueAsNumber(value: unknown): number | null {
@@ -152,6 +163,15 @@ function parseBar(value: unknown): SourceKlineBar {
   return { time, open, high, low, close, volume };
 }
 
+function parseCloseHistory(value: unknown): SourceKlineBar | null {
+  const row = record(value);
+  if (!row) return null;
+  const date = valueAsDate(field(row, 'date', 'value_date', 'trade_date'));
+  const close = valueAsNumber(field(row, 'value', 'close', 'close_price'));
+  if (!date || close === null || close <= 0) return null;
+  return { time: date, open: close, high: close, low: close, close, volume: 0 };
+}
+
 function normalizeAdjustment(value: unknown, expected: KlineAdjustment): KlineAdjustment {
   if (value === undefined || value === null || value === '') return expected;
   const normalized = String(value).trim().toLowerCase();
@@ -173,6 +193,24 @@ export function parseDatagatewayDailyKline(payload: unknown, expectedAdjustment:
     : Array.isArray(payload)
       ? payload
       : field(data!, 'bars', 'items', 'kline', 'rows', 'records');
+  // The production DataGateway history contract returns MarketDataItem rows
+  // ({ symbol, date, value }) rather than OHLCV bars. Preserve that close
+  // history as a conservative candle series with zero volume.
+  if (Array.isArray(barsValue) && barsValue.some((item) => {
+    const row = record(item);
+    return !!row && field(row, 'value', 'value_date', 'close_price') !== undefined;
+  })) {
+    const closes = barsValue.map(parseCloseHistory).filter((bar): bar is SourceKlineBar => !!bar);
+    if (closes.length > 0) {
+      let previous = closes[0].close;
+      barsValue = closes.map((bar) => {
+        const open = previous;
+        const next = { ...bar, open, high: Math.max(open, bar.close), low: Math.min(open, bar.close) };
+        previous = bar.close;
+        return next;
+      });
+    }
+  }
   if (data && !Array.isArray(barsValue) && barsValue === undefined) {
     const keyedRows = Object.entries(data).filter(([, value]) => record(value));
     if (keyedRows.length > 0) {
@@ -244,12 +282,16 @@ export async function fetchDatagatewayDailyKline(
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
   let response: Response;
   try {
+    const body = datagatewayDailyKlineBody({ ticker, market, limit });
+    if (!body) return null;
     response = await (options.fetchImpl ?? fetch)(url, {
-      method: 'GET',
+      method: 'POST',
       headers: {
         Accept: 'application/json',
+        'Content-Type': 'application/json',
         Authorization: `Bearer ${config.apiKey}`,
       },
+      body: JSON.stringify(body),
       signal,
       cache: 'no-store',
     });
