@@ -7,6 +7,7 @@ import {
 } from '@/lib/chart/kline';
 import { fetchEastmoneyKline } from '@/lib/data/sources/eastmoney';
 import { fetchSinaUsKline } from '@/lib/data/sources/sina';
+import { fetchSinaIntradayKline } from '@/lib/data/sources/sina-kline';
 import { fetchTencentKline } from '@/lib/data/sources/tencent';
 import { fetchTwseKline } from '@/lib/data/sources/twse';
 import { fetchDatagatewayDailyKline, isDatagatewayConfigured } from '@/lib/data/sources/datagateway';
@@ -124,7 +125,7 @@ export function klineProviderRoute(ticker: string, range: KlineRange): KlineSour
     // fallback when the exchange feed is unavailable.
     return [/\.TWO$/i.test(ticker) ? 'tpex' : 'twse', ...gateway];
   }
-  if (interval === 'minute') return ['eastmoney'];
+  if (interval === 'minute') return market === 'A' ? ['eastmoney', 'sina'] : ['eastmoney'];
   // Public exchange feeds provide complete OHLCV. DataGateway's daily
   // history contains closes only, so keep it after those feeds to avoid
   // rendering synthetic candles when a complete series is available.
@@ -175,7 +176,14 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
       timeoutMs: 2_500,
     }),
   };
-  if (config.interval === 'minute') return [primary];
+  if (config.interval === 'minute') return [primary, ...(market === 'A' ? [{
+    name: 'sina' as const,
+    market,
+    adjustment,
+    timeoutMs: 4_800,
+    maxAttempts: 1,
+    fetch: (signal: AbortSignal) => fetchSinaIntradayKline(request.ticker, market, limit, { signal, timeoutMs: 4_500 }),
+  }] : [])];
 
   if (market === 'A' || market === 'HK') {
     return [primary, {

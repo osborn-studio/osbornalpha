@@ -1,19 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { parseSinaUsKlineJsonp, sinaUsKlineSymbol } from './sina';
+import { parseSinaIntradayKline } from './sina-kline';
 
-describe('Sina US historical K-line adapter', () => {
-  it('only accepts the verified simple US symbol form', () => {
-    expect(sinaUsKlineSymbol('NVDA')).toBe('NVDA');
-    expect(sinaUsKlineSymbol('BRK.B')).toBeNull();
-    expect(sinaUsKlineSymbol('00700.HK')).toBeNull();
+describe('Sina minute K-line adapter', () => {
+  it('normalizes minute OHLCV rows', () => {
+    expect(parseSinaIntradayKline([
+      { day: '2026-08-27 09:31:00', open: '1304', high: '1305', low: '1300', close: '1301', volume: '6800' },
+    ])).toEqual([{ time: '2026-08-27T09:31:00', open: 1304, high: 1305, low: 1300, close: 1301, volume: 6800 }]);
   });
 
-  it('parses the anti-redirect-prefixed JSONP payload', () => {
-    const bars = parseSinaUsKlineJsonp(`/*<script>location.href='//sina.com';</script>*/\nvar _data=([{"d":"2026-08-11","o":"222.17","h":"222.20","l":"216.20","c":"217.50","v":"101273148"}]);`);
-    expect(bars).toEqual([{ time: '2026-08-11', open: 222.17, high: 222.2, low: 216.2, close: 217.5, volume: 101273148 }]);
-  });
-
-  it('fails closed on a changed wrapper', () => {
-    expect(() => parseSinaUsKlineJsonp('{"data":[]}')).toThrow(/wrapper changed/);
+  it('rejects an unexpected response envelope', () => {
+    expect(() => parseSinaIntradayKline({ data: [] })).toThrow(/not an array/);
   });
 });
