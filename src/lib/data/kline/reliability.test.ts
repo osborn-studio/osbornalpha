@@ -236,15 +236,16 @@ describe('provider route matrix', () => {
     expect(klineProviderRoute(ticker, range)).toEqual(expected);
   });
 
-  it('puts Datagateway first for daily series and enables JP/KR daily history', () => {
+  it('prefers complete OHLCV feeds and keeps Datagateway as a daily fallback', () => {
     const base = process.env.DATAGATEWAY_BASE_URL;
     const key = process.env.DATAGATEWAY_API_KEY;
     process.env.DATAGATEWAY_BASE_URL = 'https://gateway.example.com';
     process.env.DATAGATEWAY_API_KEY = 'test-key';
     try {
-      expect(klineProviderRoute('600519.SH', '1m')).toEqual(['datagateway', 'eastmoney', 'tencent']);
+      expect(klineProviderRoute('600519.SH', '1m')).toEqual(['eastmoney', 'tencent', 'datagateway']);
       expect(klineProviderRoute('7203.T', '1y')).toEqual(['datagateway']);
       expect(klineProviderRoute('005930.KS', '3m')).toEqual(['datagateway']);
+      expect(klineProviderRoute('2330.TW', '1y')).toEqual(['twse', 'datagateway']);
       expect(klineProviderRoute('7203.T', '1d')).toEqual([]);
     } finally {
       if (base === undefined) delete process.env.DATAGATEWAY_BASE_URL;

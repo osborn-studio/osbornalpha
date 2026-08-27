@@ -120,11 +120,16 @@ export function klineProviderRoute(ticker: string, range: KlineRange): KlineSour
   if (market === 'JP' || market === 'KR') return [...gateway];
   if (market === 'TW') {
     if (interval !== 'day') return [];
-    return [...gateway, /\.TWO$/i.test(ticker) ? 'tpex' : 'twse'];
+    // TWSE/TPEX provide complete OHLCV; DataGateway close history remains a
+    // fallback when the exchange feed is unavailable.
+    return [/\.TWO$/i.test(ticker) ? 'tpex' : 'twse', ...gateway];
   }
   if (interval === 'minute') return ['eastmoney'];
-  if (market === 'A' || market === 'HK') return [...gateway, 'eastmoney', 'tencent'];
-  return [...gateway, 'eastmoney', 'sina'];
+  // Public exchange feeds provide complete OHLCV. DataGateway's daily
+  // history contains closes only, so keep it after those feeds to avoid
+  // rendering synthetic candles when a complete series is available.
+  if (market === 'A' || market === 'HK') return ['eastmoney', 'tencent', ...gateway];
+  return ['eastmoney', 'sina', ...gateway];
 }
 
 function providerDefinitions(request: KlineRequest): KlineProvider[] {
@@ -146,14 +151,14 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
 
   if (market === 'TW') {
     if (config.interval !== 'day') return [];
-    return [...gateway, {
+    return [{
       name: /\.TWO$/i.test(request.ticker) ? 'tpex' : 'twse',
       market,
       adjustment,
       timeoutMs: 9_000,
       maxAttempts: 2,
       fetch: (signal) => fetchTwseKline(request.ticker, 'D', limit, { signal, timeoutMs: 6_000 }),
-    }];
+    }, ...gateway];
   }
 
   const primary: KlineProvider = {
@@ -173,7 +178,7 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
   if (config.interval === 'minute') return [primary];
 
   if (market === 'A' || market === 'HK') {
-    return [...gateway, primary, {
+    return [primary, {
       name: 'tencent',
       market,
       adjustment,
@@ -186,9 +191,9 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
         signal,
         2_500,
       ),
-    }];
+    }, ...gateway];
   }
-  return [...gateway, primary, {
+  return [primary, {
     name: 'sina',
     market,
     adjustment,
@@ -198,7 +203,7 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
     timeoutMs: 4_500,
     maxAttempts: 2,
     fetch: (signal) => fetchSinaUsKline(request.ticker, limit, signal, 4_200),
-  }];
+  }, ...gateway];
 }
 
 function localDate(now: Date, market: Market): string {
