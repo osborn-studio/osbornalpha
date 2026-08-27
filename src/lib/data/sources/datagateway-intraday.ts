@@ -85,7 +85,7 @@ function aggregate(rows: JsonRecord[], timezone: string): SourceKlineBar[] {
       price: number(row.last_price ?? row.last ?? row.price ?? row.close),
       cumulative: number(row.cumulative_volume ?? row.volume),
     }))
-    .filter((item): item is { date: Date; price: number; cumulative: number | null } => !!item.date && item.price > 0)
+    .filter((item): item is { date: Date; price: number; cumulative: number | null } => !!item.date && item.price !== null && item.price > 0)
     .sort((a, b) => a.date.getTime() - b.date.getTime());
   for (const item of sorted) {
     const key = localMinute(item.date, timezone);
