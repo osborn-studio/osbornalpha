@@ -279,7 +279,6 @@
       "partialBar": "Current bar is incomplete",
       "indicators": {
         "daily": "MA5 / MA20 use daily closes",
-        "monthly": "MA5 / MA20 use monthly closes",
         "intraday": "Daily moving averages are hidden for minute data"
       },
       "volumeUnits": {

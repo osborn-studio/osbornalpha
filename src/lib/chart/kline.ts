@@ -12,14 +12,14 @@ import { classifyMarket } from '@/lib/utils';
 
 export const KLINE_RANGES = ['1d', '1m', '3m', '1y'] as const;
 export type KlineRange = typeof KLINE_RANGES[number];
-export type KlineInterval = 'minute' | 'day' | 'month';
+export type KlineInterval = 'minute' | 'day';
 export type KlineUnavailableReason = 'market_unsupported' | 'intraday_unsupported' | 'history_unsupported';
 
 export interface KlineRangeConfig {
   range: KlineRange;
   interval: KlineInterval;
-  granularity: '1m' | '1d' | '1mo';
-  providerPeriod: '1' | 'D' | 'M';
+  granularity: '1m' | '1d';
+  providerPeriod: '1' | 'D';
   limit: number;
 }
 
@@ -41,7 +41,7 @@ export interface KlineMeta {
   market: Market;
   range: KlineRange;
   interval: KlineInterval;
-  granularity: '1m' | '1d' | '1mo';
+  granularity: '1m' | '1d';
   source: KlineSourceName;
   adjustment: KlineAdjustment;
   coverageStart: string;
@@ -72,9 +72,9 @@ export interface KlineMeta {
 
 export const KLINE_RANGE_CONFIG: Record<KlineRange, KlineRangeConfig> = {
   '1d': { range: '1d', interval: 'minute', granularity: '1m', providerPeriod: '1', limit: 240 },
-  '1m': { range: '1m', interval: 'month', granularity: '1mo', providerPeriod: 'M', limit: 1 },
-  '3m': { range: '3m', interval: 'month', granularity: '1mo', providerPeriod: 'M', limit: 3 },
-  '1y': { range: '1y', interval: 'month', granularity: '1mo', providerPeriod: 'M', limit: 12 },
+  '1m': { range: '1m', interval: 'day', granularity: '1d', providerPeriod: 'D', limit: 22 },
+  '3m': { range: '3m', interval: 'day', granularity: '1d', providerPeriod: 'D', limit: 66 },
+  '1y': { range: '1y', interval: 'day', granularity: '1d', providerPeriod: 'D', limit: 260 },
 };
 
 export function klineBarLimit(ticker: string, range: KlineRange): number {

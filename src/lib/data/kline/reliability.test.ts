@@ -68,34 +68,16 @@ describe('KlineReliabilityEngine', () => {
     expect(result.completeness).toBe('partial');
   });
 
-  it('aggregates daily source bars into one monthly candle without expanding the visible range', async () => {
+  it('uses one look-back daily bar without expanding the visible business range', async () => {
     const history = provider('eastmoney', vi.fn().mockResolvedValue({
-      source: 'eastmoney', adjustment: 'none', volumeUnit: 'shares', bars: [
-        ...completeBars(23),
-        { time: '2026-08-03', open: 123, high: 130, low: 120, close: 128, volume: 2_000 },
-      ],
+      source: 'eastmoney', adjustment: 'none', volumeUnit: 'shares', bars: completeBars(23),
     }));
     const engine = new KlineReliabilityEngine({ providersFor: () => [history] });
     const result = await engine.resolve({ ticker: 'NVDA', range: '1m' });
-    expect(result.bars).toHaveLength(1);
-    expect(result.bars[0]).toMatchObject({ time: '2026-08-03', open: 123, high: 130, low: 120, close: 128, volume: 2_000 });
-    expect(result.previousClose).toBe(122);
+    expect(result.bars).toHaveLength(22);
+    expect(result.bars[0].time).toBe('2026-07-02');
+    expect(result.previousClose).toBe(101);
     expect(result.completeness).toBe('complete');
-  });
-
-  it.each([
-    ['3m', 3],
-    ['1y', 12],
-  ] as const)('returns natural-month candles for %s', async (range, expectedCount) => {
-    const bars: SourceKlineBar[] = Array.from({ length: 14 }, (_, index) => {
-      const date = new Date(Date.UTC(2025, index, 3));
-      const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-      return { time: `${date.getUTCFullYear()}-${month}-03`, open: 100 + index, high: 102 + index, low: 99 + index, close: 101 + index, volume: 1_000 };
-    });
-    const history = provider('eastmoney', vi.fn().mockResolvedValue({ source: 'eastmoney', adjustment: 'none', volumeUnit: 'shares', bars }));
-    const result = await new KlineReliabilityEngine({ providersFor: () => [history] }).resolve({ ticker: 'NVDA', range });
-    expect(result.bars).toHaveLength(expectedCount);
-    expect(result.bars.every((bar) => /^\d{4}-\d{2}-\d{2}$/.test(bar.time))).toBe(true);
   });
 
   it('returns last-known-good data as explicitly stale after providers fail', async () => {

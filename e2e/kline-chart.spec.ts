@@ -12,15 +12,15 @@ test('ticker chart requests the selected business range and exposes provenance',
   await page.route('**/api/kline/**', async (route) => {
     const range = new URL(route.request().url()).searchParams.get('range');
     if (range) ranges.push(range);
-    const requestedBars = range === '1d' ? 390 : range === '1m' ? 1 : range === '1y' ? 12 : 3;
+    const requestedBars = range === '1d' ? 390 : range === '1m' ? 22 : range === '1y' ? 260 : 66;
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
         source: 'eastmoney', bars,
         meta: {
           range,
-          interval: range === '1d' ? 'minute' : 'month',
-          granularity: range === '1d' ? '1m' : '1mo',
+          interval: range === '1d' ? 'minute' : 'day',
+          granularity: range === '1d' ? '1m' : '1d',
           source: 'eastmoney',
           adjustment: range === '1d' ? 'intraday' : 'none',
           coverageStart: '2026-08-10 09:30:00',
@@ -90,12 +90,12 @@ test('ticker chart offers an explicit retry after a provider failure', async ({ 
         source: 'eastmoney',
         bars,
         meta: {
-          range: '3m', interval: 'month', granularity: '1mo', source: 'eastmoney', adjustment: 'none',
+          range: '3m', interval: 'day', granularity: '1d', source: 'eastmoney', adjustment: 'none',
           coverageStart: '2026-08-10', coverageEnd: '2026-08-11', asOf: '2026-08-11',
           timezone: 'America/New_York', fetchedAt: '2026-08-11T20:00:00.000Z', delayed: false,
           cacheTtlSeconds: 300, currency: '$', currencyCode: 'USD', pricePrecision: 2, minMove: 0.01,
-          market: 'US', volumeUnit: 'shares', rangeBasis: 'trading-bars', requestedBars: 3,
-          returnedBars: bars.length, missingBars: 3 - bars.length,
+          market: 'US', volumeUnit: 'shares', rangeBasis: 'trading-bars', requestedBars: 66,
+          returnedBars: bars.length, missingBars: 66 - bars.length,
           freshness: 'fresh', fallbackUsed: false, cacheStatus: 'none',
           completeness: 'partial', partial: false, warnings: ['partial_coverage'],
         },

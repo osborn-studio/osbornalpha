@@ -25,10 +25,10 @@ describe('kline range contract', () => {
     expect(klineBarLimit('NVDA', '1y')).toBe(12);
   });
 
-  it('declares long ranges as true monthly candles', () => {
-    expect(KLINE_RANGE_CONFIG['1m']).toMatchObject({ interval: 'month', granularity: '1mo', providerPeriod: 'M', limit: 1 });
-    expect(KLINE_RANGE_CONFIG['3m']).toMatchObject({ interval: 'month', granularity: '1mo', providerPeriod: 'M', limit: 3 });
-    expect(KLINE_RANGE_CONFIG['1y']).toMatchObject({ interval: 'month', granularity: '1mo', providerPeriod: 'M', limit: 12 });
+  it('declares long ranges as daily trading-bar windows', () => {
+    expect(KLINE_RANGE_CONFIG['1m']).toMatchObject({ interval: 'day', granularity: '1d', providerPeriod: 'D', limit: 22 });
+    expect(KLINE_RANGE_CONFIG['3m']).toMatchObject({ interval: 'day', granularity: '1d', providerPeriod: 'D', limit: 66 });
+    expect(KLINE_RANGE_CONFIG['1y']).toMatchObject({ interval: 'day', granularity: '1d', providerPeriod: 'D', limit: 260 });
   });
 
   it('normalizes provider calendar strings without browser timezone parsing', () => {

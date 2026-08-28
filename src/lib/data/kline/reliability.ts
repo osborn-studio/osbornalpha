@@ -26,7 +26,6 @@ import {
   type SourceKlineSeries,
 } from './types';
 import { assertCompatibleSeries, validateKlineSeries } from './validate';
-import { aggregateMonthlyBars } from './aggregate';
 
 export type KlineFreshness = 'fresh' | 'stale';
 export type KlineCacheStatus = 'none' | 'shared-swr' | 'memory-lkg';
@@ -119,7 +118,7 @@ function expectedAdjustment(market: Market, range: KlineRange): KlineAdjustment 
 export function klineProviderRoute(ticker: string, range: KlineRange): KlineSourceName[] {
   const market = classifyMarket(ticker);
   const interval = KLINE_RANGE_CONFIG[range].interval;
-  const history = interval === 'day' || interval === 'month';
+  const history = interval === 'day';
   const gateway = history && isDatagatewayConfigured() ? ['datagateway'] as const : [];
   if (market === 'JP' || market === 'KR') return [...gateway];
   if (market === 'TW') {
@@ -142,12 +141,9 @@ export function klineProviderRoute(ticker: string, range: KlineRange): KlineSour
 function providerDefinitions(request: KlineRequest): KlineProvider[] {
   const market = classifyMarket(request.ticker);
   const config = KLINE_RANGE_CONFIG[request.range];
-  // Fetch enough daily bars to build the requested monthly candles, plus a
-  // look-back month for the first visible previous-close comparison.
-  const limit = sourceBarLimit(request.ticker, request.range);
-  const nativeProviderLimit = config.providerPeriod === 'M'
-    ? klineBarLimit(request.ticker, request.range) + 1
-    : limit;
+  // Fetch one look-back daily bar so the first visible bar can carry an
+  // audited previous-close comparison without expanding the selected window.
+  const limit = klineBarLimit(request.ticker, request.range) + 1;
   const adjustment = expectedAdjustment(market, request.range);
   const intradayGateway: KlineProvider[] = config.interval === 'minute' && isDatagatewayIntradayConfigured() ? [{
     name: 'datagateway',
@@ -157,7 +153,7 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
     maxAttempts: 1,
     fetch: (signal) => fetchDatagatewayIntradayKline(request.ticker, market, limit, { signal, timeoutMs: 4_500 }),
   }] : [];
-  const gateway: KlineProvider[] = (config.interval === 'day' || config.interval === 'month') && isDatagatewayConfigured() ? [{
+  const gateway: KlineProvider[] = config.interval === 'day' && isDatagatewayConfigured() ? [{
     name: 'datagateway',
     market,
     adjustment,
@@ -168,7 +164,7 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
   if (market === 'JP' || market === 'KR') return gateway;
 
   if (market === 'TW') {
-    if (config.interval !== 'day' && config.interval !== 'month') return [];
+    if (config.interval !== 'day') return [];
     return [{
       name: /\.TWO$/i.test(request.ticker) ? 'tpex' : 'twse',
       market,
@@ -187,7 +183,7 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
     // A US attempt may probe Eastmoney's 105/106/107 market prefixes internally.
     // Keep it to one provider attempt so a cold US request remains within five HTTP calls.
     maxAttempts: market === 'US' ? 1 : 2,
-    fetch: (signal) => fetchEastmoneyKline(request.ticker, config.providerPeriod, nativeProviderLimit, {
+    fetch: (signal) => fetchEastmoneyKline(request.ticker, config.providerPeriod, limit, {
       adjustment,
       signal,
       timeoutMs: 2_500,
@@ -229,15 +225,6 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
     maxAttempts: 2,
     fetch: (signal) => fetchSinaUsKline(request.ticker, limit, signal, 4_200),
   }, ...gateway];
-}
-
-/** Number of source bars needed to produce the requested visible bars. */
-export function sourceBarLimit(ticker: string, range: KlineRange): number {
-  const visibleLimit = klineBarLimit(ticker, range);
-  if (KLINE_RANGE_CONFIG[range].interval !== 'month') return visibleLimit + 1;
-  // Around 22 trading sessions per month, plus a full extra month for the
-  // previous-close comparison and calendar-boundary safety.
-  return visibleLimit * 23 + 31;
 }
 
 function localDate(now: Date, market: Market): string {
@@ -368,7 +355,7 @@ export class KlineReliabilityEngine {
     const market = classifyMarket(request.ticker);
     const expected = expectedAdjustment(market, request.range);
     const limit = klineBarLimit(request.ticker, request.range);
-    const providerLimit = sourceBarLimit(request.ticker, request.range);
+    const providerLimit = limit + 1;
     const prior = this.lastKnownGood.get(key);
     let calls = 0;
     let sawInvalidData = false;
@@ -384,10 +371,7 @@ export class KlineReliabilityEngine {
           const raw = await this.callProvider(provider, remainingMs);
           if (!raw) throw new KlineProviderError('empty', `${provider.name} returned no K-line data`);
           const validated = validateKlineSeries(raw, expected, providerLimit);
-          const normalizedBars = KLINE_RANGE_CONFIG[request.range].interval === 'month'
-            ? aggregateMonthlyBars(validated.bars)
-            : validated.bars;
-          if (normalizedBars.length === 0) throw new KlineProviderError('empty', `${provider.name} returned no usable monthly bars`);
+          const normalizedBars = validated.bars;
           let visibleBars: SourceKlineBar[];
           let previousClose: number | null;
           if (request.range === '1d') {
@@ -416,10 +400,8 @@ export class KlineReliabilityEngine {
           const now = this.now();
           const lastDate = visibleBars[visibleBars.length - 1].time.slice(0, 10);
           const currentDate = localDate(now, market);
-          const partial = (KLINE_RANGE_CONFIG[request.range].interval === 'day'
+          const partial = KLINE_RANGE_CONFIG[request.range].interval === 'day'
             && lastDate === currentDate
-            || KLINE_RANGE_CONFIG[request.range].interval === 'month'
-            && lastDate.slice(0, 7) === currentDate.slice(0, 7))
             && marketPhase(market, now).phase === 'open';
           const warnings: KlineWarning[] = [];
           if (providerIndex > 0) warnings.push('fallback_used');

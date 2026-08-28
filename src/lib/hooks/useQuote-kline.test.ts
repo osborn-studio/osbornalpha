@@ -11,16 +11,16 @@ describe('fetchKlinePayload', () => {
       meta: {
         source: 'eastmoney',
         range: '1y',
-        interval: 'month',
-        granularity: '1mo',
+        interval: 'day',
+        granularity: '1d',
         cacheTtlSeconds: 60,
         currencyCode: 'CNY',
         pricePrecision: 2,
         minMove: 0.01,
         volumeUnit: 'shares',
-        requestedBars: 12,
+        requestedBars: 260,
         returnedBars: 0,
-        missingBars: 12,
+        missingBars: 260,
       },
     };
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 }));
@@ -41,9 +41,9 @@ describe('fetchKlinePayload', () => {
       bars: [],
       source: 'eastmoney',
       meta: {
-        source: 'eastmoney', range: '3m', interval: 'month', granularity: '1mo',
+        source: 'eastmoney', range: '3m', interval: 'day', granularity: '1d',
         cacheTtlSeconds: 300, currencyCode: 'USD', pricePrecision: 2, minMove: 0.01,
-        volumeUnit: 'shares', requestedBars: 3, returnedBars: 0, missingBars: 3,
+        volumeUnit: 'shares', requestedBars: 66, returnedBars: 0, missingBars: 66,
       },
     }), { status: 200 })));
 
@@ -71,9 +71,9 @@ describe('fetchKlinePayload', () => {
         previousClose: 10, change: 2, changePct: 20,
       }],
       meta: {
-        source: 'eastmoney', range: '1m', interval: 'month', granularity: '1mo', cacheTtlSeconds: 60, currencyCode: 'USD',
+        source: 'eastmoney', range: '1m', interval: 'day', granularity: '1d', cacheTtlSeconds: 60, currencyCode: 'USD',
         pricePrecision: 2, minMove: 0.01, volumeUnit: 'shares',
-        requestedBars: 1, returnedBars: 1, missingBars: 0,
+        requestedBars: 22, returnedBars: 1, missingBars: 21,
       },
     }), { status: 200 })));
 

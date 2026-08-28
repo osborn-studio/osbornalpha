@@ -279,7 +279,6 @@
       "partialBar": "\u5f53\u524d K \u7ebf\u5c1a\u672a\u6536\u76d8",
       "indicators": {
         "daily": "MA5 / MA20 \u6309\u65e5\u7ebf\u6536\u76d8\u4ef7\u8ba1\u7b97",
-        "monthly": "MA5 / MA20 \u6309\u6708\u7ebf\u6536\u76d8\u4ef7\u8ba1\u7b97",
         "intraday": "\u5206\u949f\u6570\u636e\u4e0d\u663e\u793a\u65e5\u5747\u7ebf"
       },
       "volumeUnits": {
