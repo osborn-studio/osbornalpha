@@ -494,7 +494,7 @@ function isValidKlinePayload(value: unknown): value is KlinePayload {
   if (typeof payload.source !== 'string' || payload.source !== payload.meta.source) return false;
   if (typeof payload.meta.cacheTtlSeconds !== 'number' || payload.meta.cacheTtlSeconds <= 0) return false;
   if ((payload.meta.range === '1d' && (payload.meta.interval !== 'minute' || payload.meta.granularity !== '1m'))
-    || (payload.meta.range !== '1d' && (payload.meta.interval !== 'day' || payload.meta.granularity !== '1d'))) return false;
+    || (payload.meta.range !== '1d' && (payload.meta.interval !== 'month' || payload.meta.granularity !== '1mo'))) return false;
   if (payload.meta.volumeUnit !== 'shares'
     || typeof payload.meta.currencyCode !== 'string'
     || !Number.isInteger(payload.meta.pricePrecision)

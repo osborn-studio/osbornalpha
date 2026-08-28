@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inferKlinePricePrecision, klineBarLimit, klineRangeAvailability, marketTimezone, parseKlineRange, toChartTimestamp } from './kline';
+import { inferKlinePricePrecision, KLINE_RANGE_CONFIG, klineBarLimit, klineRangeAvailability, marketTimezone, parseKlineRange, toChartTimestamp } from './kline';
 
 describe('kline range contract', () => {
   it('only accepts the public chart ranges', () => {
@@ -22,7 +22,13 @@ describe('kline range contract', () => {
     expect(klineBarLimit('600519.SH', '1d')).toBe(240);
     expect(klineBarLimit('00700.HK', '1d')).toBe(330);
     expect(klineBarLimit('NVDA', '1d')).toBe(390);
-    expect(klineBarLimit('NVDA', '1y')).toBe(260);
+    expect(klineBarLimit('NVDA', '1y')).toBe(12);
+  });
+
+  it('declares long ranges as true monthly candles', () => {
+    expect(KLINE_RANGE_CONFIG['1m']).toMatchObject({ interval: 'month', granularity: '1mo', limit: 1 });
+    expect(KLINE_RANGE_CONFIG['3m']).toMatchObject({ interval: 'month', granularity: '1mo', limit: 3 });
+    expect(KLINE_RANGE_CONFIG['1y']).toMatchObject({ interval: 'month', granularity: '1mo', limit: 12 });
   });
 
   it('normalizes provider calendar strings without browser timezone parsing', () => {

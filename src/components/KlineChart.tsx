@@ -150,7 +150,7 @@ export function KlineChart({ ticker }: { ticker: string }) {
         close,
       })));
 
-      if (displayMeta.interval === 'day') {
+      if (displayMeta.interval !== 'minute') {
         const ma5 = chart.addLineSeries({ color: '#f59e0b', lineWidth: 1, title: 'MA5', priceFormat: { type: 'price', precision, minMove } });
         ma5.setData(computeMA(bars, 5));
         const ma20 = chart.addLineSeries({ color: '#58a6ff', lineWidth: 1, title: 'MA20', priceFormat: { type: 'price', precision, minMove } });
@@ -292,7 +292,7 @@ export function KlineChart({ ticker }: { ticker: string }) {
               ? t(key, { seconds: displayMeta.cacheAgeSeconds ?? displayMeta.staleAgeSeconds ?? 0 })
               : t(key)}</span>
           ))}
-          <span>{displayMeta.interval === 'day' ? t('indicators.daily') : t('indicators.intraday')}</span>
+          <span>{displayMeta.interval === 'month' ? t('indicators.monthly') : displayMeta.interval === 'day' ? t('indicators.daily') : t('indicators.intraday')}</span>
         </> : loading ? <span>{t('loading')}</span> : null}
       </div>
     </div>

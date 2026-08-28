@@ -276,9 +276,10 @@
         "memory-lkg": "\u5f53\u524d\u5b9e\u4f8b\u6700\u540e\u53ef\u7528\u7f13\u5b58"
       },
       "coveragePartial": "\u5468\u671f\u8986\u76d6\u4e0d\u5b8c\u6574",
-      "partialBar": "\u5f53\u65e5 K \u7ebf\u5c1a\u672a\u6536\u76d8",
+      "partialBar": "\u5f53\u524d K \u7ebf\u5c1a\u672a\u6536\u76d8",
       "indicators": {
         "daily": "MA5 / MA20 \u6309\u65e5\u7ebf\u6536\u76d8\u4ef7\u8ba1\u7b97",
+        "monthly": "MA5 / MA20 \u6309\u6708\u7ebf\u6536\u76d8\u4ef7\u8ba1\u7b97",
         "intraday": "\u5206\u949f\u6570\u636e\u4e0d\u663e\u793a\u65e5\u5747\u7ebf"
       },
       "volumeUnits": {
