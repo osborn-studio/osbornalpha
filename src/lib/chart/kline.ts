@@ -41,7 +41,7 @@ export interface KlineMeta {
   market: Market;
   range: KlineRange;
   interval: KlineInterval;
-  granularity: '1m' | '1d';
+  granularity: '1m' | '1d' | '1mo';
   source: KlineSourceName;
   adjustment: KlineAdjustment;
   coverageStart: string;
