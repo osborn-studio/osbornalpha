@@ -253,7 +253,7 @@
       "delayed": "\u5ef6\u8fdf\u6570\u636e",
       "live": "\u5b9e\u65f6\u6570\u636e",
       "sources": {
-        "datagateway": "来源：Datagateway（日线）",
+        "datagateway": "来源：Datagateway（历史行情）",
         "datagateway-wind": "来源：Datagateway / Wind 实时",
         "eastmoney": "\u6765\u6e90\uff1a\u4e1c\u65b9\u8d22\u5bcc",
         "tencent": "\u6765\u6e90\uff1a\u817e\u8baf\u8d22\u7ecf",
