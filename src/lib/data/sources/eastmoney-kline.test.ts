@@ -21,6 +21,15 @@ describe('Eastmoney K-line adapter', () => {
     expect((await fetchEastmoneyKline('00700.HK', '1', 240))?.adjustment).toBe('intraday');
   });
 
+  it('uses Eastmoney native monthly bars when requested', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('cb({"data":{"klines":["2026-08-31,10,11,12,9,100"]}});', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await fetchEastmoneyKline('600519.SH', 'M', 12, { adjustment: 'qfq' });
+    expect(String(fetchMock.mock.calls[0][0])).toContain('&klt=103');
+    expect(result?.bars).toHaveLength(1);
+    expect(result?.adjustment).toBe('qfq');
+  });
+
   it('classifies retryable HTTP and malformed protocol responses', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 503 })));
     await expect(fetchEastmoneyKline('600519.SH', 'D', 22)).rejects.toMatchObject({ kind: 'transient', retryable: true, status: 503 });

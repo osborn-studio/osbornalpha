@@ -26,9 +26,9 @@ describe('kline range contract', () => {
   });
 
   it('declares long ranges as true monthly candles', () => {
-    expect(KLINE_RANGE_CONFIG['1m']).toMatchObject({ interval: 'month', granularity: '1mo', limit: 1 });
-    expect(KLINE_RANGE_CONFIG['3m']).toMatchObject({ interval: 'month', granularity: '1mo', limit: 3 });
-    expect(KLINE_RANGE_CONFIG['1y']).toMatchObject({ interval: 'month', granularity: '1mo', limit: 12 });
+    expect(KLINE_RANGE_CONFIG['1m']).toMatchObject({ interval: 'month', granularity: '1mo', providerPeriod: 'M', limit: 1 });
+    expect(KLINE_RANGE_CONFIG['3m']).toMatchObject({ interval: 'month', granularity: '1mo', providerPeriod: 'M', limit: 3 });
+    expect(KLINE_RANGE_CONFIG['1y']).toMatchObject({ interval: 'month', granularity: '1mo', providerPeriod: 'M', limit: 12 });
   });
 
   it('normalizes provider calendar strings without browser timezone parsing', () => {

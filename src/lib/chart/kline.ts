@@ -19,7 +19,7 @@ export interface KlineRangeConfig {
   range: KlineRange;
   interval: KlineInterval;
   granularity: '1m' | '1d' | '1mo';
-  providerPeriod: '1' | 'D';
+  providerPeriod: '1' | 'D' | 'M';
   limit: number;
 }
 
@@ -72,9 +72,9 @@ export interface KlineMeta {
 
 export const KLINE_RANGE_CONFIG: Record<KlineRange, KlineRangeConfig> = {
   '1d': { range: '1d', interval: 'minute', granularity: '1m', providerPeriod: '1', limit: 240 },
-  '1m': { range: '1m', interval: 'month', granularity: '1mo', providerPeriod: 'D', limit: 1 },
-  '3m': { range: '3m', interval: 'month', granularity: '1mo', providerPeriod: 'D', limit: 3 },
-  '1y': { range: '1y', interval: 'month', granularity: '1mo', providerPeriod: 'D', limit: 12 },
+  '1m': { range: '1m', interval: 'month', granularity: '1mo', providerPeriod: 'M', limit: 1 },
+  '3m': { range: '3m', interval: 'month', granularity: '1mo', providerPeriod: 'M', limit: 3 },
+  '1y': { range: '1y', interval: 'month', granularity: '1mo', providerPeriod: 'M', limit: 12 },
 };
 
 export function klineBarLimit(ticker: string, range: KlineRange): number {

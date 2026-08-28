@@ -145,6 +145,9 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
   // Fetch enough daily bars to build the requested monthly candles, plus a
   // look-back month for the first visible previous-close comparison.
   const limit = sourceBarLimit(request.ticker, request.range);
+  const nativeProviderLimit = config.providerPeriod === 'M'
+    ? klineBarLimit(request.ticker, request.range) + 1
+    : limit;
   const adjustment = expectedAdjustment(market, request.range);
   const intradayGateway: KlineProvider[] = config.interval === 'minute' && isDatagatewayIntradayConfigured() ? [{
     name: 'datagateway',
@@ -184,7 +187,7 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
     // A US attempt may probe Eastmoney's 105/106/107 market prefixes internally.
     // Keep it to one provider attempt so a cold US request remains within five HTTP calls.
     maxAttempts: market === 'US' ? 1 : 2,
-    fetch: (signal) => fetchEastmoneyKline(request.ticker, config.providerPeriod, limit, {
+    fetch: (signal) => fetchEastmoneyKline(request.ticker, config.providerPeriod, nativeProviderLimit, {
       adjustment,
       signal,
       timeoutMs: 2_500,
