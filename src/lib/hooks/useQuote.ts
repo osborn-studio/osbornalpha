@@ -11,6 +11,7 @@ import {
   mergeQuoteBatchResults,
   shouldRetryQuoteBatchError,
   shouldReportQuoteBatch,
+  type QuoteBatchMeta,
   type QuoteBatchPayload,
 } from '@/lib/quotes/batch-client';
 
@@ -137,7 +138,12 @@ export function useQuote(ticker: string | null, opts?: { refreshIntervalMs?: num
 }
 
 // ─── Batch ───
-interface BatchState { quotes: Record<string, LiveQuote | null>; loading: boolean; loadedAt: number | null }
+interface BatchState {
+  quotes: Record<string, LiveQuote | null>;
+  loading: boolean;
+  loadedAt: number | null;
+  meta: QuoteBatchMeta | null;
+}
 
 const BATCH_REQUEST_TIMEOUT_MS = 25_000;
 const BATCH_RESULT_TTL_MS = 5_000;
@@ -182,7 +188,7 @@ export function useBatchQuotes(
   tickers: string[],
   opts?: { refreshIntervalMs?: number }
 ): BatchState & { refetch: () => void } {
-  const [state, setState] = useState<BatchState>({ quotes: {}, loading: tickers.length > 0, loadedAt: null });
+  const [state, setState] = useState<BatchState>({ quotes: {}, loading: tickers.length > 0, loadedAt: null, meta: null });
   // `bump` lets callers trigger a manual refetch without changing tickers
   const [bump, setBump] = useState(0);
   const key = tickers.slice().sort().join(',');
@@ -194,7 +200,7 @@ export function useBatchQuotes(
   useEffect(() => {
     if (tickers.length === 0) {
       quotesRef.current = {};
-      setState({ quotes: {}, loading: false, loadedAt: null });
+      setState({ quotes: {}, loading: false, loadedAt: null, meta: null });
       return;
     }
     let cancelled = false;
@@ -268,6 +274,7 @@ export function useBatchQuotes(
           quotes: merged.quotes,
           loading: false,
           loadedAt: outcome === 'failed' || outcome === 'suspended' ? prev.loadedAt : Date.now(),
+          meta: merged.meta,
         }));
       } catch {
         if (!cancelled) {

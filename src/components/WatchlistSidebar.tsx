@@ -4,10 +4,8 @@ import { useState, useMemo } from 'react';
 import { MarketLabel } from '@/components/MarketLabel';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
-import { getStockOrStub } from '@/lib/data/mock';
 import { useBatchQuotes } from '@/lib/hooks/useQuote';
-import { Sparkline } from './Sparkline';
-import { formatPrice, formatPct, changeClass } from '@/lib/utils';
+import { formatPrice, formatPct, changeClass, classifyMarket, currencyOfMarket } from '@/lib/utils';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
 import { uniqueWatchlistTickers } from '@/lib/watchlist/store';
 
@@ -24,7 +22,7 @@ export function WatchlistSidebar({ selectedTicker, onSelect, variant = 'sidebar'
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   const allTickers = useMemo(() => uniqueWatchlistTickers(groups), [groups]);
-  const { quotes, loading: quotesLoading } = useBatchQuotes(allTickers, { refreshIntervalMs: 30_000 });
+  const { quotes, loading: quotesLoading, loadedAt } = useBatchQuotes(allTickers, { refreshIntervalMs: 30_000 });
 
   const totalCount = groups.reduce((s, g) => s + g.tickers.length, 0);
   const visibleGroups = useMemo(
@@ -73,10 +71,9 @@ export function WatchlistSidebar({ selectedTicker, onSelect, variant = 'sidebar'
           ))}
         </div>
 
-        <div className="grid grid-cols-[1fr_auto_60px_55px] gap-2 border-b border-border px-2 py-1 text-[10px] uppercase tracking-wider text-text-muted">
+        <div className="grid grid-cols-[1fr_auto_55px] gap-2 border-b border-border px-2 py-1 text-[10px] uppercase tracking-wider text-text-muted">
           <span>Symbol</span>
           <span className="text-right">Last</span>
-          <span className="text-right">Trend</span>
           <span className="text-right">Chg%</span>
         </div>
 
@@ -95,39 +92,39 @@ export function WatchlistSidebar({ selectedTicker, onSelect, variant = 'sidebar'
                     <span className="text-text-muted">({g.tickers.length})</span>
                   </button>
                 )}
-                {!isCollapsed && g.tickers.map((t) => {
-                  const live = quotes[t];
-                  const fallback = getStockOrStub(t);
-                  if (!live && !fallback) return null;
-                  const name = live?.name || fallback?.name || t;
-                  const market = live?.market || fallback?.market || 'A';
-                  const currency = live?.currency || fallback?.currency || '';
-                  const price = live?.price ?? fallback?.price ?? 0;
-                  const changePct = live?.change_pct ?? fallback?.change_pct ?? 0;
-                  const selected = t === selectedTicker;
+                {!isCollapsed && g.tickers.map((ticker) => {
+                  const live = quotes[ticker];
+                  const market = live?.market || classifyMarket(ticker);
+                  const currency = live?.currency || currencyOfMarket(market);
+                  const price = live?.price ?? 0;
+                  const changePct = live?.change_pct ?? 0;
+                  const hasQuote = price > 0;
+                  const status = !hasQuote && loadedAt !== null
+                    ? t('unavailable')
+                    : live?.delayed ? t('delayed') : live?.source || t('loading');
+                  const selected = ticker === selectedTicker;
                   return (
                     <button
-                      key={t}
-                      onClick={() => onSelect(t)}
-                      className={`grid w-full grid-cols-[1fr_auto_60px_55px] items-center gap-2 px-2 py-1.5 text-left text-[12px] transition ${
+                      key={ticker}
+                      onClick={() => onSelect(ticker)}
+                      className={`grid w-full grid-cols-[1fr_auto_55px] items-center gap-2 px-2 py-1.5 text-left text-[12px] transition ${
                         selected ? 'bg-accent-dim/20 ring-1 ring-accent-dim' : 'hover:bg-bg-card'
                       }`}
                     >
                       <div className="overflow-hidden">
-                        <div className="truncate font-semibold leading-tight">{name}</div>
-                        <div className="truncate text-[10px] text-text-dim">{t}</div>
+                        <div className="truncate font-semibold leading-tight">{live?.name || ticker}</div>
+                        <div className="truncate text-[10px] text-text-dim">{ticker}</div>
                       </div>
                       <div className="text-right font-mono text-[11px] leading-tight">
                         <div className="font-semibold tabular-nums">
-                          {price > 0 ? formatPrice(price) : '—'}
+                          {hasQuote ? formatPrice(price, currency) : '—'}
                         </div>
-                        <div className="text-[10px] text-text-muted"><MarketLabel m={market} /></div>
+                        <div className="truncate text-[10px] text-text-muted" title={live?.updated_at || status}>
+                          {hasQuote ? status : <MarketLabel m={market} />}
+                        </div>
                       </div>
-                      <div className="flex justify-end">
-                        <Sparkline ticker={t} changePct={changePct} width={50} height={20} />
-                      </div>
-                      <div className={`text-right font-mono text-[11px] tabular-nums ${price > 0 ? changeClass(changePct) : 'text-text-muted'}`}>
-                        {price > 0 ? formatPct(changePct) : '—'}
+                      <div className={`text-right font-mono text-[11px] tabular-nums ${hasQuote ? changeClass(changePct) : 'text-text-muted'}`}>
+                        {hasQuote ? formatPct(changePct) : '—'}
                       </div>
                     </button>
                   );

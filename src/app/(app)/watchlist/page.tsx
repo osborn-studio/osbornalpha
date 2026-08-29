@@ -57,8 +57,7 @@ export default function WatchlistPage() {
   const locale = useLocale() as AppLocale;
   const { groups, hydrated, setGroups } = useWatchlist();
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
-  // Default to the table view (评级/风险/目标价/估值区间 are the high-signal columns);
-  // the user's last choice is remembered.
+  // Default to the live-market table; the user's last choice is remembered.
   const VIEW_KEY = 'stock-monitor:watchlist:view';
   const [viewMode, setViewMode] = useState<'kanban' | 'table'>('table');
   useEffect(() => {
@@ -350,7 +349,7 @@ export default function WatchlistPage() {
   }
 
   // ─── Batch import ───
-  function importBatch(tickers: string[], boardName: string) {
+  function importBatch(tickers: string[], boardName: string, rejected: string[] = []) {
     if (tickers.length === 0) return;
     trackEvent('watchlist_import_submitted', { input_count: tickers.length, board_name_set: !!boardName.trim() });
     const existing = new Set<string>();
@@ -378,11 +377,15 @@ export default function WatchlistPage() {
     const finalName = boardName.trim() || t('importDefaultName', { date: formatDateLocale(new Date().toISOString(), locale) });
     persist([...groups, { id, name: finalName, tickers: fresh }]);
     setImportOpen(false);
-    show(
-      skipped.length > 0
-        ? t('importDoneDedup', { fresh: fresh.length, name: finalName, skipped: skipped.length })
-        : t('importDone', { fresh: fresh.length, name: finalName })
-    );
+    if (rejected.length > 0) {
+      show(t('importDoneValidated', { fresh: fresh.length, name: finalName, rejected: rejected.length }));
+    } else {
+      show(
+        skipped.length > 0
+          ? t('importDoneDedup', { fresh: fresh.length, name: finalName, skipped: skipped.length })
+          : t('importDone', { fresh: fresh.length, name: finalName })
+      );
+    }
   }
 
   // ─── Export ───
@@ -488,8 +491,16 @@ export default function WatchlistPage() {
         />
       )}
 
-      {/* ─── Table view (评级 / 风险 / 目标价 / 估值区间) ─── */}
-      {hydrated && allTickers.length > 0 && viewMode === 'table' && <WatchlistTable groups={groups} quotes={quotes} loading={quotesLoading} />}
+      {/* ─── Table view: real quote fields only ─── */}
+      {hydrated && allTickers.length > 0 && viewMode === 'table' && (
+        <WatchlistTable
+          groups={groups}
+          quotes={quotes}
+          identities={securityIdentities}
+          loadedAt={loadedAt}
+          loading={quotesLoading}
+        />
+      )}
 
       {/* ─── Kanban Board ─── */}
       {hydrated && viewMode === 'kanban' && (
@@ -914,6 +925,7 @@ function AddStockInline({ onAdd, onClose }: AddInlineProps) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
+  const [searchError, setSearchError] = useState<'unavailable' | 'failed' | null>(null);
   const [focusIdx, setFocusIdx] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -929,9 +941,15 @@ function AddStockInline({ onAdd, onClose }: AddInlineProps) {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setLoading(true);
+    setSearchError(null);
     try {
       const searchResponse = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: ctrl.signal });
-      const data = await searchResponse.json();
+      const data = await searchResponse.json().catch(() => ({}));
+      if (!searchResponse.ok) {
+        setResults([]);
+        setSearchError(data?.error === 'security_master_unavailable' ? 'unavailable' : 'failed');
+        return;
+      }
       let nextResults = (data.results || []).map((result: Omit<SearchResult, 'asset_type'> & { asset_type?: AssetType }) => ({
           ...result,
           asset_type: result.asset_type ?? classifyAssetType({ ticker: result.t, name: result.n }),
@@ -959,6 +977,7 @@ function AddStockInline({ onAdd, onClose }: AddInlineProps) {
           });
         } else {
           trackEvent('security_resolve_failed', { query_length: q.length, status: resolveResponse.status });
+          if (resolveResponse.status !== 404) setSearchError(resolveResponse.status === 503 ? 'unavailable' : 'failed');
         }
       }
 
@@ -968,6 +987,7 @@ function AddStockInline({ onAdd, onClose }: AddInlineProps) {
       if (err instanceof Error && err.name === 'AbortError') return;
       trackEvent('stock_search_failed', { query_length: q.length });
       setResults([]);
+      setSearchError('failed');
     } finally {
       if (!ctrl.signal.aborted) setLoading(false);
     }
@@ -975,6 +995,7 @@ function AddStockInline({ onAdd, onClose }: AddInlineProps) {
 
   function onChange(v: string) {
     setQuery(v);
+    setSearchError(null);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     if (!v.trim()) { setResults([]); return; }
     debounceRef.current = setTimeout(() => runSearch(v.trim()), 250);
@@ -1061,8 +1082,8 @@ function AddStockInline({ onAdd, onClose }: AddInlineProps) {
       )}
       {query.trim() && !loading && results.length === 0 && (
         <div className="mt-1.5 text-[10px] text-text-muted">
-          {t('noMatch', { query: query.trim() })}
-          {normalizeWindTicker(query.trim()) !== query.trim().toUpperCase()
+          {searchError === 'unavailable' ? t('searchUnavailable') : searchError ? t('searchFailed') : t('noMatch', { query: query.trim() })}
+          {!searchError && normalizeWindTicker(query.trim()) !== query.trim().toUpperCase()
             ? ` ${t('normalizedNote', { canonical: normalizeWindTicker(query.trim()) })}`
             : ''}
         </div>
@@ -1091,7 +1112,7 @@ interface ImportDialogProps {
   existingTickerCount: number;
   existingTickers: Set<string>;
   onCancel: () => void;
-  onConfirm: (tickers: string[], boardName: string) => void;
+  onConfirm: (tickers: string[], boardName: string, rejected: string[]) => void;
 }
 
 /**
@@ -1154,6 +1175,9 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
   const [text, setText] = useState('');
   const [boardName, setBoardName] = useState('');
   const [fileError, setFileError] = useState<string | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [rejected, setRejected] = useState<string[]>([]);
+  const [validating, setValidating] = useState(false);
 
   const parsed = useMemo(() => parseTickerInput(text), [text]);
   const dedupStats = useMemo(() => {
@@ -1221,6 +1245,45 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
   }
 
   const canConfirm = dedupStats.fresh > 0;
+
+  async function confirmImport() {
+    const seen = new Set<string>();
+    const fresh: string[] = [];
+    for (const ticker of parsed) {
+      if (existingTickers.has(ticker) || seen.has(ticker)) continue;
+      seen.add(ticker);
+      fresh.push(ticker);
+    }
+    if (fresh.length === 0) return;
+
+    setValidating(true);
+    setValidationError(null);
+    setRejected([]);
+    try {
+      const response = await fetch('/api/securities/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tickers: fresh }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setValidationError(data?.error === 'security_master_unavailable' ? t('validationUnavailable') : t('validationFailed'));
+        return;
+      }
+      const accepted = Array.isArray(data.accepted) ? data.accepted.filter((ticker: unknown): ticker is string => typeof ticker === 'string') : [];
+      const invalid = Array.isArray(data.rejected) ? data.rejected.filter((ticker: unknown): ticker is string => typeof ticker === 'string') : [];
+      setRejected(invalid);
+      if (accepted.length === 0) {
+        setValidationError(t('validationNoneAccepted'));
+        return;
+      }
+      onConfirm(accepted, boardName, invalid);
+    } catch {
+      setValidationError(t('validationFailed'));
+    } finally {
+      setValidating(false);
+    }
+  }
 
   return (
     <div
@@ -1290,6 +1353,8 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
           <div className="mt-1 text-[10px] text-text-muted">
             {t('dialectHint')}
           </div>
+          {validationError && <div className="mt-1 text-[11px] text-down">{validationError}</div>}
+          {rejected.length > 0 && <div className="mt-1 text-[11px] text-amber-500">{t('validationRejected', { count: rejected.length })}</div>}
         </div>
 
         {/* Preview */}
@@ -1332,20 +1397,11 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
             {tw('cancel')}
           </button>
           <button
-            onClick={() => {
-              const seen = new Set<string>();
-              const fresh: string[] = [];
-              for (const tk of parsed) {
-                if (existingTickers.has(tk) || seen.has(tk)) continue;
-                seen.add(tk);
-                fresh.push(tk);
-              }
-              onConfirm(fresh, boardName);
-            }}
-            disabled={!canConfirm}
+            onClick={() => void confirmImport()}
+            disabled={!canConfirm || validating}
             className="rounded bg-accent-dim px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
           >
-            {canConfirm ? t('confirmImport', { count: dedupStats.fresh }) : t('noneToImport')}
+            {validating ? t('validating') : canConfirm ? t('confirmImport', { count: dedupStats.fresh }) : t('noneToImport')}
           </button>
         </div>
       </div>

@@ -100,7 +100,9 @@
   "search": {
     "placeholder": "Search by ticker or name (⌘+K · A/H/US · e.g. AAPL / 600519)",
     "searching": "Searching...",
-    "noResults": "No matching results"
+    "noResults": "No matching results",
+    "unavailable": "Security search is temporarily unavailable. Please retry.",
+    "failed": "Search failed. Please retry."
   },
   "market": {
     "A": "A-shares",

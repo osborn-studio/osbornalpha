@@ -22,6 +22,7 @@ export function SearchInput() {
   const [results, setResults] = useState<ApiResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [source, setSource] = useState<string>('');
+  const [error, setError] = useState<'unavailable' | 'failed' | null>(null);
   const [open, setOpen] = useState(false);
   const [focusIdx, setFocusIdx] = useState(-1);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -57,10 +58,17 @@ export function SearchInput() {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setLoading(true);
+    setError(null);
     try {
       const resp = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: ctrl.signal });
-      if (!resp.ok) throw new Error('search failed');
-      const data = await resp.json();
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        setResults([]);
+        setSource('');
+        setError(data?.error === 'security_master_unavailable' ? 'unavailable' : 'failed');
+        setOpen(true);
+        return;
+      }
       let nextResults: ApiResult[] = data.results || [];
       let nextSource = data.source || '';
       if (nextSearchAction({ localResults: nextResults, query: q }) === 'resolve') {
@@ -74,16 +82,20 @@ export function SearchInput() {
           const resolved = await resolveResponse.json();
           nextResults = resolved.result ? [resolved.result] : [];
           nextSource = resolved.source || nextSource;
+        } else if (resolveResponse.status !== 404) {
+          setError(resolveResponse.status === 503 ? 'unavailable' : 'failed');
         }
       }
       setResults(nextResults);
       setSource(nextSource);
-      setOpen(nextResults.length > 0);
+      setOpen(true);
       setFocusIdx(-1);
     } catch (e: any) {
       if (e.name !== 'AbortError') {
         setResults([]);
-        setSource('error');
+        setSource('');
+        setError('failed');
+        setOpen(true);
       }
     } finally {
       setLoading(false);
@@ -92,6 +104,7 @@ export function SearchInput() {
 
   function onChange(v: string) {
     setQuery(v);
+    setError(null);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     if (v.trim().length === 0) {
       setResults([]);
@@ -143,7 +156,7 @@ export function SearchInput() {
         <div className="absolute left-0 right-0 top-full z-50 mt-1.5 max-h-[420px] overflow-y-auto rounded-lg border border-border bg-bg-elevated shadow-lg">
           {results.length === 0 && (
             <div className="px-3 py-4 text-center text-xs text-text-dim">
-              {loading ? t('searching') : t('noResults')}
+              {loading ? t('searching') : error === 'unavailable' ? t('unavailable') : error ? t('failed') : t('noResults')}
             </div>
           )}
           {results.map((r, i) => (

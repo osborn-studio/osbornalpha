@@ -1,6 +1,9 @@
 {
   "sidebar": {
     "manage": "Manage →",
-    "all": "All"
+    "all": "All",
+    "loading": "Loading",
+    "unavailable": "No quote",
+    "delayed": "Delayed"
   }
 }

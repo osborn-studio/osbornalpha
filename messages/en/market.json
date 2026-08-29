@@ -2,14 +2,14 @@
   "watchlist": {
     "heading": "📋 Watchlist",
     "hintKanban": "Drag cards between boards · drag column headers to reorder",
-    "hintTable": "Click headers to sort · Rating/Risk/Target Price/Valuation Range",
+    "hintTable": "Live quote monitor · click headers to sort",
     "autoRefresh": "Auto-refresh every {seconds}s",
     "loadingQuotes": "⏳ Loading quotes…",
     "quotesFailed": "⚠ {count} quotes failed to load",
     "viewKanban": "📋 Board",
     "viewKanbanTitle": "Board view (drag to group)",
     "viewTable": "📊 Table",
-    "viewTableTitle": "Table view (Rating / Risk / Target Price / Valuation Range)",
+    "viewTableTitle": "Table view (live quotes, session range, liquidity and source status)",
     "refresh": "🔄 Refresh",
     "refreshTitle": "Refetch all quotes",
     "refreshing": "🔄 Refreshing quotes…",
@@ -39,6 +39,7 @@
     "importNoNew": "No new tickers to import (all {skipped} already in your watchlist)",
     "importDone": "✓ Imported {fresh} to \"{name}\"",
     "importDoneDedup": "✓ Imported {fresh} to \"{name}\", deduped {skipped}",
+    "importDoneValidated": "✓ Imported {fresh} verified instruments to \"{name}\"; skipped {rejected} invalid or unavailable tickers",
     "importDefaultName": "Bulk import {date}",
     "onboarding": {
       "title": "Build your first watchlist",
@@ -93,6 +94,8 @@
       "done": "Done",
       "searchPlaceholder": "Ticker / name (e.g. AAPL / 600519)",
       "noMatch": "No verified match for \"{query}\" yet.",
+      "searchUnavailable": "Security search is temporarily unavailable. Please retry.",
+      "searchFailed": "Search failed. Please retry.",
       "normalizedNote": " (normalized to {canonical})",
       "pendingVerification": "Pending verification"
     },
@@ -118,36 +121,46 @@
       "willSkipTitle": "Already in watchlist, will be skipped",
       "willImportTitle": "Will be imported",
       "confirmImport": "Import {count} to new board",
-      "noneToImport": "Nothing to import"
+      "noneToImport": "Nothing to import",
+      "validating": "Validating instruments…",
+      "validationUnavailable": "Security validation is temporarily unavailable. Nothing was imported.",
+      "validationFailed": "Could not validate instruments. Nothing was imported.",
+      "validationNoneAccepted": "None of these tickers are active, verified instruments.",
+      "validationRejected": "{count} ticker(s) were rejected by the security master."
     }
   },
   "table": {
     "empty": "Watchlist is empty — add tickers from the board view first.",
     "summary": {
       "tracked": "Tracked",
-      "strongBuy": "Strong Buy",
-      "avgRisk": "Avg Risk",
-      "upside": "Upside"
+      "live": "Live",
+      "delayed": "Delayed",
+      "unavailable": "No quote"
     },
     "loadingQuotes": "⏳ Loading quotes…",
     "ariaLabel": "Watchlist table view",
-    "caption": "Watchlist table view: rating, risk, target price, valuation range; click headers to sort",
+    "caption": "Watchlist table view: live prices, session range, liquidity and quote status; click headers to sort",
     "headers": {
       "ticker": "Ticker",
       "name": "Company",
       "price": "Price",
-      "change": "Change %",
-      "rating": "Rating",
-      "risk": "Risk Level",
-      "target": "Target Price",
-      "range": "Valuation Range",
+      "change": "Change",
+      "open": "Open",
+      "dayRange": "High / Low",
+      "volume": "Volume",
+      "amount": "Turnover",
+      "status": "Quote status",
       "group": "Group"
     },
     "sortAriaLabel": "Sort by {label}",
-    "riskLevelAria": "Risk level {level}",
-    "riskLevelLabel": "Level {level}",
-    "currentPriceTitle": "Current price {price}",
-    "consensusSourceTitle": "Source: Tushare sell-side consensus"
+    "status": {
+      "loading": "Loading",
+      "unavailable": "Unavailable",
+      "delayed": "Delayed",
+      "live": "Current",
+      "unknownSource": "Unknown source",
+      "unknownTime": "Unknown time"
+    }
   },
   "copilot": {
     "pageTitle": "🎩 John Cameron · Research Copilot",

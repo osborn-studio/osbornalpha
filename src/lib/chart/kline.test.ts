@@ -22,7 +22,7 @@ describe('kline range contract', () => {
     expect(klineBarLimit('600519.SH', '1d')).toBe(240);
     expect(klineBarLimit('00700.HK', '1d')).toBe(330);
     expect(klineBarLimit('NVDA', '1d')).toBe(390);
-    expect(klineBarLimit('NVDA', '1y')).toBe(12);
+    expect(klineBarLimit('NVDA', '1y')).toBe(260);
   });
 
   it('declares long ranges as daily trading-bar windows', () => {

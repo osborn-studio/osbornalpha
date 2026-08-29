@@ -1,6 +1,9 @@
 {
   "sidebar": {
     "manage": "管理 →",
-    "all": "全部"
+    "all": "全部",
+    "loading": "加载中",
+    "unavailable": "无报价",
+    "delayed": "延迟"
   }
 }
