@@ -23,6 +23,7 @@ import {
 const DEFAULT_DAILY_KLINE_PATH = '/v1/market-data/security-prices/history/query';
 const LEGACY_DAILY_KLINE_PATH = '/v1/market/kline/daily';
 const MAX_RESPONSE_BYTES = 1_000_000;
+export const DATAGATEWAY_DAILY_TIMEOUT_MS = 7_000;
 
 export interface DatagatewayConfig {
   baseUrl: URL;
@@ -292,7 +293,7 @@ export async function fetchDatagatewayDailyKline(
   if (!config || !url) return null;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 2_500);
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DATAGATEWAY_DAILY_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
   try {
     const body = datagatewayDailyKlineBody({ ticker, market, limit });

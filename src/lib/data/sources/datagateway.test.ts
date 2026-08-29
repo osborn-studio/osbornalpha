@@ -154,4 +154,29 @@ describe('Datagateway daily K-line adapter', () => {
     ]);
     expect(outcome).toMatchObject({ kind: 'transient', retryable: true });
   });
+
+  it('allows a cold strict-sync history request to finish within the production latency budget', async () => {
+    process.env.DATAGATEWAY_BASE_URL = 'https://gateway.example.com';
+    process.env.DATAGATEWAY_API_KEY = 'very-secret-key';
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn((_input: URL | RequestInfo, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
+        const responseTimer = setTimeout(() => {
+          resolve(new Response(JSON.stringify(payload), { status: 200 }));
+        }, 4_500);
+        init?.signal?.addEventListener('abort', () => {
+          clearTimeout(responseTimer);
+          reject(new DOMException('aborted', 'AbortError'));
+        }, { once: true });
+      }));
+
+      const outcomePromise = fetchDatagatewayDailyKline('600519.SH', 'A', 23, 'qfq', { fetchImpl })
+        .then((result) => ({ result }), (error) => ({ error }));
+
+      await vi.advanceTimersByTimeAsync(4_500);
+      expect(await outcomePromise).toMatchObject({ result: { source: 'datagateway' } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
