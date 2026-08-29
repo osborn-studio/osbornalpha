@@ -12,6 +12,7 @@ import {
   type KlineMeta,
 } from '@/lib/chart/kline';
 import { classifyMarket, currencyCodeOfMarket, currencyOfMarket } from '@/lib/utils';
+import { isDatagatewayConfigured } from '@/lib/data/sources/datagateway';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 15;
@@ -27,7 +28,7 @@ export async function GET(req: Request, { params }: Ctx) {
     return NextResponse.json({ error: 'invalid_range', message: 'range must be one of 1d, 1m, 3m, 1y' }, { status: 400 });
   }
 
-  const unavailable = klineRangeAvailability(ticker, range);
+  const unavailable = klineRangeAvailability(ticker, range, isDatagatewayConfigured());
   if (unavailable) {
     return NextResponse.json({ error: unavailable, ticker, range, bars: [] }, { status: 422 });
   }

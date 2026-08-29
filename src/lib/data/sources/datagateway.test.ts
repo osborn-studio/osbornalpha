@@ -132,4 +132,26 @@ describe('Datagateway daily K-line adapter', () => {
       fetchImpl: vi.fn().mockResolvedValue(new Response('', { status: 200, headers: { 'content-length': '1000001' } })),
     })).rejects.toMatchObject({ kind: 'protocol' });
   });
+
+  it('keeps the timeout active while reading a streaming response body', async () => {
+    process.env.DATAGATEWAY_BASE_URL = 'https://gateway.example.com';
+    process.env.DATAGATEWAY_API_KEY = 'very-secret-key';
+    const fetchImpl = vi.fn((_input: URL | RequestInfo, init?: RequestInit) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"data":'));
+          init?.signal?.addEventListener('abort', () => {
+            controller.error(new DOMException('aborted', 'AbortError'));
+          });
+        },
+      });
+      return Promise.resolve(new Response(body, { status: 200 }));
+    });
+
+    const outcome = await Promise.race([
+      fetchDatagatewayDailyKline('NVDA', 'US', 23, 'none', { fetchImpl, timeoutMs: 5 }).catch((error) => error),
+      new Promise((resolve) => setTimeout(() => resolve('still-pending'), 50)),
+    ]);
+    expect(outcome).toMatchObject({ kind: 'transient', retryable: true });
+  });
 });

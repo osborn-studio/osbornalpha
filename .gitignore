@@ -46,6 +46,7 @@ Thumbs.db
 *.sqlite
 *.db
 config/watchlist.local.yml
+/config/vercel-production.env
 # Research OS local SQLite store (local-only module, never deployed)
 research-data/
 
