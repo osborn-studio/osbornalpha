@@ -11,7 +11,12 @@ import { fetchSinaIntradayKline } from '@/lib/data/sources/sina-kline';
 import { fetchDatagatewayIntradayKline } from '@/lib/data/sources/datagateway-intraday';
 import { fetchTencentKline } from '@/lib/data/sources/tencent';
 import { fetchTwseKline } from '@/lib/data/sources/twse';
-import { fetchDatagatewayDailyKline, isDatagatewayConfigured, isDatagatewayIntradayConfigured } from '@/lib/data/sources/datagateway';
+import {
+  DATAGATEWAY_DAILY_TIMEOUT_MS,
+  fetchDatagatewayDailyKline,
+  isDatagatewayConfigured,
+  isDatagatewayIntradayConfigured,
+} from '@/lib/data/sources/datagateway';
 import type { Market } from '@/lib/supabase/database.types';
 import { marketPhase } from '@/lib/today/clock';
 import { classifyMarket } from '@/lib/utils';
@@ -161,9 +166,12 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
     name: 'datagateway',
     market,
     adjustment,
-    timeoutMs: 2_800,
+    timeoutMs: DATAGATEWAY_DAILY_TIMEOUT_MS + 500,
     maxAttempts: 1,
-    fetch: (signal) => fetchDatagatewayDailyKline(request.ticker, market, limit, adjustment, { signal, timeoutMs: 2_500 }),
+    fetch: (signal) => fetchDatagatewayDailyKline(request.ticker, market, limit, adjustment, {
+      signal,
+      timeoutMs: DATAGATEWAY_DAILY_TIMEOUT_MS,
+    }),
   }] : [];
   if (market === 'JP' || market === 'KR') return gateway;
 
