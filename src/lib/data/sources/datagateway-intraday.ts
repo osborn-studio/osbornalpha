@@ -14,6 +14,7 @@ import { datagatewayConfig, datagatewayWireSymbol, isDatagatewayIntradayConfigur
 
 const DEFAULT_PATH = '/v1/market-data/intraday/underlyings/query';
 const MAX_RESPONSE_BYTES = 2_000_000;
+const MAX_CALENDAR_LOOKBACK_DAYS = 10;
 
 export interface DatagatewayIntradayOptions {
   signal?: AbortSignal;
@@ -128,9 +129,11 @@ export async function fetchDatagatewayIntradayKline(
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 4_500);
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
   try {
-    // Before the session opens, Wind may have no rows for today. Probe one
-    // prior calendar day as well; weekends/holidays simply return no rows.
-    for (const day of [today, shiftDay(today, -1)]) {
+    // A market can remain closed over weekends and multi-day holidays. Probe
+    // backwards until a real trading session is found; no synthetic candles
+    // are produced when the provider has no historical minute data.
+    for (let offset = 0; offset < MAX_CALENDAR_LOOKBACK_DAYS; offset += 1) {
+      const day = shiftDay(today, -offset);
       const bounds = isoBounds(day);
       const response = await (options.fetchImpl ?? fetch)(new URL(DEFAULT_PATH, config.baseUrl), {
         method: 'POST',

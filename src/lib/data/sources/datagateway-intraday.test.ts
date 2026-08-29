@@ -57,6 +57,27 @@ describe('DataGateway intraday adapter', () => {
     expect(JSON.parse(String((fetchImpl.mock.calls[1] as [URL, RequestInit])[1].body)).start).toBe('2026-08-26T00:00:00Z');
   });
 
+  it('walks across a weekend to preserve the latest completed trading session', async () => {
+    process.env.DATAGATEWAY_BASE_URL = 'https://gateway.example.com';
+    process.env.DATAGATEWAY_API_KEY = 'secret';
+    process.env.DATAGATEWAY_INTRADAY_KLINE_ENABLED = 'true';
+    const empty = () => new Response(JSON.stringify({ data: [], missing: [] }), { status: 200 });
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(empty())
+      .mockResolvedValueOnce(empty())
+      .mockResolvedValueOnce(empty())
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [
+        { symbol: '600519.SH', timestamp: '2026-08-28T01:31:05Z', last_price: 100, cumulative_volume: 10 },
+      ] }), { status: 200 }));
+    const result = await fetchDatagatewayIntradayKline('600519.SH', 'A', 240, {
+      fetchImpl,
+      now: new Date('2026-08-31T01:40:00Z'),
+    });
+    expect(result?.bars).toEqual([{ time: '2026-08-28 09:31', open: 100, high: 100, low: 100, close: 100, volume: 0 }]);
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(JSON.parse(String((fetchImpl.mock.calls[3] as [URL, RequestInit])[1].body)).start).toBe('2026-08-28T00:00:00Z');
+  });
+
   it('maps capability denials to a provider failure for the fallback chain', async () => {
     process.env.DATAGATEWAY_BASE_URL = 'https://gateway.example.com';
     process.env.DATAGATEWAY_API_KEY = 'secret';

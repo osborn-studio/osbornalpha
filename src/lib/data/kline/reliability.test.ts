@@ -68,6 +68,27 @@ describe('KlineReliabilityEngine', () => {
     expect(result.completeness).toBe('partial');
   });
 
+  it('keeps the most recent completed 1D session on a non-trading day', async () => {
+    const intraday = provider('eastmoney', vi.fn().mockResolvedValue({
+      source: 'eastmoney',
+      adjustment: 'intraday',
+      volumeUnit: 'shares',
+      bars: [
+        { time: '2026-08-28 15:58:00', open: 100, high: 101, low: 99, close: 100, volume: 10 },
+        { time: '2026-08-28 15:59:00', open: 100, high: 102, low: 99, close: 101, volume: 10 },
+      ],
+    }));
+    intraday.adjustment = 'intraday';
+    const engine = new KlineReliabilityEngine({
+      providersFor: () => [intraday],
+      now: () => new Date('2026-08-29T15:00:00Z'),
+    });
+    const result = await engine.resolve({ ticker: 'NVDA', range: '1d' });
+    expect(result.bars.map((bar) => bar.time)).toEqual(['2026-08-28 15:58:00', '2026-08-28 15:59:00']);
+    expect(result.freshness).toBe('fresh');
+    expect(result.partial).toBe(false);
+  });
+
   it('uses one look-back daily bar without expanding the visible business range', async () => {
     const history = provider('eastmoney', vi.fn().mockResolvedValue({
       source: 'eastmoney', adjustment: 'none', volumeUnit: 'shares', bars: completeBars(23),

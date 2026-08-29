@@ -144,6 +144,10 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
   // Fetch one look-back daily bar so the first visible bar can carry an
   // audited previous-close comparison without expanding the selected window.
   const limit = klineBarLimit(request.ticker, request.range) + 1;
+  // Request several sessions from intraday vendors. On a closed day this lets
+  // their history endpoint return the latest real session rather than empty
+  // data; the resolver below still renders only that one session.
+  const intradayLimit = config.interval === 'minute' ? Math.min(limit * 5, 2_000) : limit;
   const adjustment = expectedAdjustment(market, request.range);
   const intradayGateway: KlineProvider[] = config.interval === 'minute' && isDatagatewayIntradayConfigured() ? [{
     name: 'datagateway',
@@ -151,7 +155,7 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
     adjustment,
     timeoutMs: 4_800,
     maxAttempts: 1,
-    fetch: (signal) => fetchDatagatewayIntradayKline(request.ticker, market, limit, { signal, timeoutMs: 4_500 }),
+    fetch: (signal) => fetchDatagatewayIntradayKline(request.ticker, market, intradayLimit, { signal, timeoutMs: 4_500 }),
   }] : [];
   const gateway: KlineProvider[] = config.interval === 'day' && isDatagatewayConfigured() ? [{
     name: 'datagateway',
@@ -183,7 +187,7 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
     // A US attempt may probe Eastmoney's 105/106/107 market prefixes internally.
     // Keep it to one provider attempt so a cold US request remains within five HTTP calls.
     maxAttempts: market === 'US' ? 1 : 2,
-    fetch: (signal) => fetchEastmoneyKline(request.ticker, config.providerPeriod, limit, {
+    fetch: (signal) => fetchEastmoneyKline(request.ticker, config.providerPeriod, intradayLimit, {
       adjustment,
       signal,
       timeoutMs: 2_500,
@@ -195,7 +199,7 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
     adjustment,
     timeoutMs: 4_800,
     maxAttempts: 1,
-    fetch: (signal: AbortSignal) => fetchSinaIntradayKline(request.ticker, market, limit, { signal, timeoutMs: 4_500 }),
+    fetch: (signal: AbortSignal) => fetchSinaIntradayKline(request.ticker, market, intradayLimit, { signal, timeoutMs: 4_500 }),
   }] : [])];
 
   if (market === 'A' || market === 'HK') {
@@ -472,7 +476,7 @@ async function resolveCacheable(ticker: string, range: KlineRange): Promise<Klin
 
 const cachedIntraday = unstable_cache(
   resolveCacheable,
-  ['kline-reliability-intraday-v4'],
+  ['kline-reliability-intraday-v5'],
   { revalidate: 60 },
 );
 
