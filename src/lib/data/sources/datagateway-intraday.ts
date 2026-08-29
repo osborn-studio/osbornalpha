@@ -79,7 +79,7 @@ function rowsFromPayload(payload: unknown): JsonRecord[] {
 }
 
 function aggregate(rows: JsonRecord[], timezone: string): SourceKlineBar[] {
-  const buckets = new Map<string, { open: number; high: number; low: number; close: number; volume: number; lastVolume: number | null }>();
+  const buckets = new Map<string, { open: number; high: number; low: number; close: number; volume: number }>();
   const sorted = rows
     .map((row) => ({
       date: timestamp(row.timestamp),
@@ -88,20 +88,22 @@ function aggregate(rows: JsonRecord[], timezone: string): SourceKlineBar[] {
     }))
     .filter((item): item is { date: Date; price: number; cumulative: number | null } => !!item.date && item.price !== null && item.price > 0)
     .sort((a, b) => a.date.getTime() - b.date.getTime());
+  let previousCumulative: number | null = null;
   for (const item of sorted) {
     const key = localMinute(item.date, timezone);
     const previous = buckets.get(key);
+    const volumeDelta = item.cumulative !== null && previousCumulative !== null
+      ? Math.max(0, item.cumulative - previousCumulative)
+      : 0;
     if (!previous) {
-      buckets.set(key, { open: item.price, high: item.price, low: item.price, close: item.price, volume: 0, lastVolume: item.cumulative });
-      continue;
+      buckets.set(key, { open: item.price, high: item.price, low: item.price, close: item.price, volume: volumeDelta });
+    } else {
+      previous.high = Math.max(previous.high, item.price);
+      previous.low = Math.min(previous.low, item.price);
+      previous.close = item.price;
+      previous.volume += volumeDelta;
     }
-    previous.high = Math.max(previous.high, item.price);
-    previous.low = Math.min(previous.low, item.price);
-    previous.close = item.price;
-    if (item.cumulative !== null && previous.lastVolume !== null) {
-      previous.volume += Math.max(0, item.cumulative - previous.lastVolume);
-    }
-    previous.lastVolume = item.cumulative;
+    if (item.cumulative !== null) previousCumulative = item.cumulative;
   }
   return Array.from(buckets, ([time, bar]) => ({ time, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume }));
 }

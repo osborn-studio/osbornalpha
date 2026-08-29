@@ -35,7 +35,7 @@ describe('DataGateway intraday adapter', () => {
     const result = await fetchDatagatewayIntradayKline('600519.SH', 'A', 240, { fetchImpl, now: new Date('2026-08-27T01:40:00Z') });
     expect(result?.bars).toEqual([
       { time: '2026-08-27 09:31', open: 100, high: 102, low: 100, close: 102, volume: 100 },
-      { time: '2026-08-27 09:32', open: 101, high: 101, low: 101, close: 101, volume: 0 },
+      { time: '2026-08-27 09:32', open: 101, high: 101, low: 101, close: 101, volume: 50 },
     ]);
     const [url, init] = fetchImpl.mock.calls[0] as [URL, RequestInit];
     expect(url.toString()).toBe('https://gateway.example.com/v1/market-data/intraday/underlyings/query');
