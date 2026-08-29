@@ -148,6 +148,7 @@ supabase db reset --linked  # 或在 Studio 的 SQL Editor 粘贴 supabase/seed.
 | `SUPABASE_SERVICE_ROLE_KEY` | `eyJ...` (service_role secret) | 同上（仅服务端用，**绝不暴露给前端**） |
 | `DATAGATEWAY_BASE_URL` | `https://gateway.example.com/` | Datagateway（服务端 HTTPS 地址） |
 | `DATAGATEWAY_API_KEY` | 网关 API Key | Datagateway（仅服务端用，**绝不暴露给前端**） |
+| `NEXT_PUBLIC_DATAGATEWAY_ENABLED` | `true` / `false` | 是否向前端开放仅由 Datagateway 支持的 JP/KR 日线区间；必须与服务端配置保持一致 |
 | `DATAGATEWAY_REALTIME_QUOTE_PATH` | `/v1/market-data/tickers/query` | Datagateway Wind 实时快照接口 |
 
 添加后触发重新部署：

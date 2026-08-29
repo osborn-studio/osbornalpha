@@ -248,16 +248,12 @@ export async function GET(req: Request) {
   let windAttempts = 0;
   const windStartedAt = Date.now();
   if (isDatagatewayConfigured() && toFetch.length > 0) {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      windAttempts += 1;
-      try {
-        windMap = await fetchDatagatewayRealtimeQuotes(toFetch) as Map<string, QuoteShape | null>;
-        windFailure = null;
-        break;
-      } catch (error) {
-        windFailure = classifySourceFailure(error);
-        if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 200));
-      }
+    windAttempts = 1;
+    try {
+      windMap = await fetchDatagatewayRealtimeQuotes(toFetch) as Map<string, QuoteShape | null>;
+      windFailure = null;
+    } catch (error) {
+      windFailure = classifySourceFailure(error);
     }
   }
   const fallbackTickers = toFetch.filter((ticker) => !windMap.has(ticker.toUpperCase()));

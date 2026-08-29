@@ -14,7 +14,10 @@ describe('kline range contract', () => {
     expect(klineRangeAvailability('5483.TWO', '1m')).toBeNull();
     expect(klineRangeAvailability('5483.TWO', '1y')).toBeNull();
     expect(klineRangeAvailability('7203.T', '1d')).toBe('market_unsupported');
-    expect(klineRangeAvailability('7203.T', '1m')).toBeNull();
+    expect(klineRangeAvailability('7203.T', '1m', false)).toBe('market_unsupported');
+    expect(klineRangeAvailability('7203.T', '1m', true)).toBeNull();
+    expect(klineRangeAvailability('005930.KS', '1y', false)).toBe('market_unsupported');
+    expect(klineRangeAvailability('005930.KS', '1y', true)).toBeNull();
     expect(klineRangeAvailability('NVDA', '1y')).toBeNull();
   });
 
@@ -22,7 +25,7 @@ describe('kline range contract', () => {
     expect(klineBarLimit('600519.SH', '1d')).toBe(240);
     expect(klineBarLimit('00700.HK', '1d')).toBe(330);
     expect(klineBarLimit('NVDA', '1d')).toBe(390);
-    expect(klineBarLimit('NVDA', '1y')).toBe(12);
+    expect(klineBarLimit('NVDA', '1y')).toBe(260);
   });
 
   it('declares long ranges as daily trading-bar windows', () => {
