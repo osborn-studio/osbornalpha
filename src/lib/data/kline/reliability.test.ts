@@ -130,6 +130,22 @@ describe('KlineReliabilityEngine', () => {
     expect(result.adjustment).toBe('hfq');
   });
 
+  it('anchors YTD daily history at the market-local calendar year', async () => {
+    const history = provider('eastmoney', vi.fn().mockResolvedValue({
+      source: 'eastmoney', adjustment: 'none', volumeUnit: 'shares', bars: [
+        { time: '2025-12-31', open: 99, high: 100, low: 98, close: 99, volume: 10 },
+        { time: '2026-01-02', open: 100, high: 101, low: 99, close: 100, volume: 10 },
+        { time: '2026-08-14', open: 101, high: 102, low: 100, close: 101, volume: 10 },
+      ],
+    }));
+    history.returnsInterval = 'day';
+    const engine = new KlineReliabilityEngine({ providersFor: () => [history], now: () => NOW });
+
+    const result = await engine.resolve({ ticker: 'NVDA', range: 'ytd' });
+    expect(result.bars.map((bar) => bar.time)).toEqual(['2026-01-02', '2026-08-14']);
+    expect(result.previousClose).toBe(99);
+  });
+
   it('drops off-session auction bars before selecting the trading sessions', async () => {
     const bars: SourceKlineBar[] = [
       { time: '2026-08-14 09:25:00', open: 99, high: 99, low: 99, close: 99, volume: 10 },
@@ -243,14 +259,14 @@ describe('KlineReliabilityEngine', () => {
     expect(result.previousClose).toBeNull();
   });
 
-  it('marks Max complete when the aggregated fallback exhausts provider history', async () => {
+  it('marks All complete when the aggregated fallback exhausts provider history', async () => {
     // 40 daily bars (07-06..08-14) are far below the 1800-bar fetch cap, so
     // the aggregated monthly series is everything the provider has.
     const fallback = provider('sina', vi.fn().mockResolvedValue({ source: 'sina', adjustment: 'none', volumeUnit: 'shares', bars: completeBars(40) }));
     fallback.returnsInterval = 'day';
     const engine = new KlineReliabilityEngine({ providersFor: () => [fallback], now: () => NOW });
 
-    const result = await engine.resolve({ ticker: 'NVDA', range: 'max' });
+    const result = await engine.resolve({ ticker: 'NVDA', range: 'all' });
     expect(result.bars.map((bar) => bar.time)).toEqual(['2026-07-01', '2026-08-01']);
     expect(result.completeness).toBe('complete');
     expect(result.warnings).not.toContain('partial_coverage');
@@ -258,7 +274,7 @@ describe('KlineReliabilityEngine', () => {
     expect(result.partial).toBe(true);
   });
 
-  it('flags Max as partial when the aggregated fallback hits the daily fetch cap', async () => {
+  it('flags All as partial when the aggregated fallback hits the daily fetch cap', async () => {
     const daily = Array.from({ length: 2_000 }, (_, index) => ({
       time: dayString(index - 2_000),
       open: 100, high: 101, low: 99, close: 100, volume: 10,
@@ -267,13 +283,13 @@ describe('KlineReliabilityEngine', () => {
     fallback.returnsInterval = 'day';
     const engine = new KlineReliabilityEngine({ providersFor: () => [fallback], now: () => NOW });
 
-    const result = await engine.resolve({ ticker: 'NVDA', range: 'max' });
+    const result = await engine.resolve({ ticker: 'NVDA', range: 'all' });
     expect(result.completeness).toBe('partial');
     expect(result.warnings).toContain('partial_coverage');
     expect(result.availableBars).toBeLessThan(600);
   });
 
-  it('marks native Max monthly history complete regardless of depth', async () => {
+  it('marks native All monthly history complete regardless of depth', async () => {
     const monthly: SourceKlineBar[] = [
       { time: '2024-01-01', open: 10, high: 12, low: 9, close: 11, volume: 500 },
       { time: '2025-01-01', open: 11, high: 13, low: 10, close: 12, volume: 600 },
@@ -283,7 +299,7 @@ describe('KlineReliabilityEngine', () => {
     native.returnsInterval = 'month';
     const engine = new KlineReliabilityEngine({ providersFor: () => [native], now: () => NOW });
 
-    const result = await engine.resolve({ ticker: 'NVDA', range: 'max' });
+    const result = await engine.resolve({ ticker: 'NVDA', range: 'all' });
     expect(result.bars).toEqual(monthly);
     expect(result.completeness).toBe('complete');
     expect(result.partial).toBe(true);
@@ -455,11 +471,11 @@ describe('provider route matrix', () => {
     ['00700.HK', '5d', undefined, ['eastmoney']],
     ['00700.HK', '1y', undefined, ['eastmoney', 'tencent']],
     ['NVDA', '1d', undefined, ['eastmoney']],
-    ['NVDA', '3m', undefined, ['eastmoney', 'sina']],
+    ['NVDA', '6m', undefined, ['eastmoney', 'sina']],
     ['NVDA', '5y', undefined, ['eastmoney', 'sina']],
-    ['NVDA', 'max', undefined, ['eastmoney', 'sina']],
+    ['NVDA', 'all', undefined, ['eastmoney', 'sina']],
     ['2330.TW', '1y', undefined, ['twse']],
-    ['2330.TW', 'max', undefined, ['twse']],
+    ['2330.TW', 'all', undefined, ['twse']],
     ['5483.TWO', '1m', undefined, ['tpex']],
     ['2330.TW', '1d', undefined, []],
     ['2330.TW', '5d', undefined, []],
@@ -481,7 +497,7 @@ describe('provider route matrix', () => {
     try {
       expect(klineProviderRoute('600519.SH', '1m')).toEqual(['eastmoney', 'tencent', 'datagateway']);
       expect(klineProviderRoute('7203.T', '1y')).toEqual(['datagateway']);
-      expect(klineProviderRoute('005930.KS', '3m')).toEqual(['datagateway']);
+      expect(klineProviderRoute('005930.KS', '6m')).toEqual(['datagateway']);
       expect(klineProviderRoute('005930.KS', '5y')).toEqual(['datagateway']);
       expect(klineProviderRoute('2330.TW', '1y')).toEqual(['twse', 'datagateway']);
       expect(klineProviderRoute('7203.T', '1d')).toEqual([]);

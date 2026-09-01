@@ -505,10 +505,11 @@ function isValidKlinePayload(value: unknown): value is KlinePayload {
     '1d': { interval: 'minute', granularity: '1m', rangeBasis: 'trading-sessions' },
     '5d': { interval: 'minute', granularity: '5m', rangeBasis: 'trading-sessions' },
     '1m': { interval: 'day', granularity: '1d', rangeBasis: 'calendar-window' },
-    '3m': { interval: 'day', granularity: '1d', rangeBasis: 'calendar-window' },
+    '6m': { interval: 'day', granularity: '1d', rangeBasis: 'calendar-window' },
+    ytd: { interval: 'day', granularity: '1d', rangeBasis: 'calendar-window' },
     '1y': { interval: 'day', granularity: '1d', rangeBasis: 'calendar-window' },
     '5y': { interval: 'week', granularity: '1w', rangeBasis: 'calendar-window' },
-    'max': { interval: 'month', granularity: '1mo', rangeBasis: 'calendar-window' },
+    all: { interval: 'month', granularity: '1mo', rangeBasis: 'calendar-window' },
   };
   const shape = expectedShape[payload.meta.range ?? ''] ?? { interval: null, granularity: null, rangeBasis: null };
   if (payload.meta.interval !== shape.interval
@@ -591,7 +592,7 @@ export async function fetchKlinePayload(
 
 export function useKline(
   ticker: string | null,
-  range: KlineRange = '3m',
+  range: KlineRange = '1d',
   adjustment?: KlineAdjustmentChoice,
 ): KlineState & { refetch: () => void } {
   const [state, setState] = useState<KlineState>({ bars: [], loading: !!ticker, error: null, errorCode: null, source: null, meta: null });

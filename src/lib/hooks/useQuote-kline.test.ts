@@ -77,7 +77,7 @@ describe('fetchKlinePayload', () => {
       bars: [],
       source: 'eastmoney',
       meta: {
-        source: 'eastmoney', range: '3m', interval: 'day', granularity: '1d',
+        source: 'eastmoney', range: '6m', interval: 'day', granularity: '1d',
         cacheTtlSeconds: 300, currencyCode: 'USD', pricePrecision: 2, minMove: 0.01,
         volumeUnit: 'shares', requestedBars: 66, returnedBars: 0, missingBars: 66,
       },
@@ -121,7 +121,7 @@ describe('fetchKlinePayload', () => {
       init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
     })));
     const controller = new AbortController();
-    const pending = fetchKlinePayload('NVDA', '3m', controller.signal);
+    const pending = fetchKlinePayload('NVDA', '6m', controller.signal);
     controller.abort();
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
   });

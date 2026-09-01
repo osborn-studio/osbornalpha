@@ -10,12 +10,11 @@ import {
   type KlineMeta,
   type KlineRange,
 } from '@/lib/chart/kline';
-import { useKline, type KlineAdjustmentChoice } from '@/lib/hooks/useQuote';
+import { useKline } from '@/lib/hooks/useQuote';
 import { chartStatusKeys, sourceTranslationKey } from './kline-chart-meta';
-import { classifyMarket } from '@/lib/utils';
 import { computeSessionVwap } from '@/lib/chart/session-vwap';
 
-const RANGE_LABELS: Record<KlineRange, string> = { '1d': '1D', '5d': '5D', '1m': '1M', '3m': '3M', '1y': '1Y', '5y': '5Y', max: 'Max' };
+const RANGE_LABELS: Record<KlineRange, string> = { '1d': '1D', '5d': '5D', '1m': '1M', '6m': '6M', ytd: 'YTD', '1y': '1Y', '5y': '5Y', all: 'All' };
 
 type HoverSnapshot = KlineBar;
 
@@ -88,19 +87,15 @@ export function KlineChart({ ticker }: { ticker: string }) {
   const locale = useLocale();
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const [range, setRange] = useState<KlineRange>('3m');
-  const [adjustment, setAdjustment] = useState<KlineAdjustmentChoice | null>(null);
+  const [range, setRange] = useState<KlineRange>('1d');
   const [visualRevision, setVisualRevision] = useState(0);
   const [hovered, setHovered] = useState<HoverSnapshot | null>(null);
   // Crosshair anchor (chart-pane pixels) so the tooltip follows the cursor
   // like a trading terminal instead of sitting in the corner.
   const [hoverPoint, setHoverPoint] = useState<{ x: number; y: number } | null>(null);
-  const { bars, loading, error, errorCode, meta, refetch } = useKline(ticker, range, adjustment ?? undefined);
+  const { bars, loading, error, errorCode, meta, refetch } = useKline(ticker, range);
   const displayMeta = meta;
   const unsupportedReason = klineRangeAvailability(ticker, range);
-  const market = displayMeta?.market ?? classifyMarket(ticker);
-  const rangeIsMinute = range === '1d' || range === '5d';
-  const effectiveAdjustment = adjustment ?? (market === 'A' ? 'qfq' : 'none');
 
   useEffect(() => {
     const observer = new MutationObserver((mutations) => {
@@ -291,17 +286,6 @@ export function KlineChart({ ticker }: { ticker: string }) {
               );
             })}
           </div>
-          {(market === 'A' || market === 'HK') && !rangeIsMinute && (
-            <div className="inline-flex rounded-md bg-bg-card p-0.5" role="group" aria-label={t('adjustAriaLabel')}>
-              {(['qfq', 'none', 'hfq'] as const).map((mode) => (
-                <button key={mode} type="button" onClick={() => setAdjustment(mode)} aria-pressed={effectiveAdjustment === mode}
-                  title={t(`adjustments.${mode}`)}
-                  className={`rounded px-2 py-1 text-xs font-medium transition ${effectiveAdjustment === mode ? 'bg-accent-dim text-white' : 'text-text-dim hover:text-text'}`}>
-                  {t(`adjustOptions.${mode}`)}
-                </button>
-              ))}
-            </div>
-          )}
         </div>
       </div>
       <div className="relative h-[380px] w-full">

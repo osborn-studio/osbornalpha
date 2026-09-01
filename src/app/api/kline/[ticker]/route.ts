@@ -24,7 +24,7 @@ export async function GET(req: Request, { params }: Ctx) {
   const { ticker: raw } = await params;
   const ticker = decodeURIComponent(raw);
   const url = new URL(req.url);
-  const requestedRange = url.searchParams.get('range') ?? '3m';
+  const requestedRange = url.searchParams.get('range') ?? '1d';
   const range = parseKlineRange(requestedRange);
   if (!range) {
     return NextResponse.json({ error: 'invalid_range', message: `range must be one of ${KLINE_RANGES.join(', ')}` }, { status: 400 });
@@ -66,7 +66,7 @@ export async function GET(req: Request, { params }: Ctx) {
     // An empty window is a valid answer: the security simply has no bars
     // inside the selected calendar range (e.g. a long suspension). Surface it
     // as a successful empty series so the chart can say so.
-    const requestedBars = klineBarLimit(ticker, range);
+    const requestedBars = klineBarLimit(ticker, range, new Date(result.fetchedAt));
     const pricePrecision = inferKlinePricePrecision(bars);
     const coverageEdge = bars.length > 0
       ? { coverageStart: sourceBars[0].time, coverageEnd: sourceBars[sourceBars.length - 1].time, asOf: sourceBars[sourceBars.length - 1].time }
@@ -91,9 +91,9 @@ export async function GET(req: Request, { params }: Ctx) {
       requestedBars,
       returnedBars: bars.length,
       availableBars: result.availableBars,
-      // For an untruncated "Max" series the cap-based requestedBars would
+      // For an untruncated "All" series the cap-based requestedBars would
       // fabricate missing months; a truncated series keeps the lower bound.
-      missingBars: range === 'max' && result.completeness === 'complete'
+      missingBars: range === 'all' && result.completeness === 'complete'
         ? 0
         : Math.max(0, requestedBars - result.availableBars),
       ...(result.warmupCloses.length > 0 ? { maWarmupCloses: result.warmupCloses } : {}),

@@ -10,7 +10,8 @@ import type {
 } from '@/lib/data/kline/reliability';
 import { classifyMarket } from '@/lib/utils';
 
-export const KLINE_RANGES = ['1d', '5d', '1m', '3m', '1y', '5y', 'max'] as const;
+/** Public chart periods aligned with the standard Yahoo Finance range set. */
+export const KLINE_RANGES = ['1d', '5d', '1m', '6m', 'ytd', '1y', '5y', 'all'] as const;
 export type KlineRange = typeof KLINE_RANGES[number];
 export type KlineInterval = 'minute' | 'day' | 'week' | 'month';
 export type KlineGranularity = '1m' | '5m' | '1d' | '1w' | '1mo';
@@ -23,10 +24,10 @@ export interface KlineRangeConfig {
   providerPeriod: '1' | '5' | 'D' | 'W' | 'M';
   /**
    * Calendar length of the window in exchange-local days. `null` means the
-   * full history the providers can return ("Max"). Minute ranges select
+   * full history the providers can return ("All"). Minute ranges select
    * trading sessions instead and leave this null.
    */
-  calendarDays: number | null;
+  calendarDays: number | 'ytd' | null;
   /** Number of trading sessions an intraday range displays. */
   sessions: number;
   /**
@@ -95,10 +96,11 @@ export const KLINE_RANGE_CONFIG: Record<KlineRange, KlineRangeConfig> = {
   '1d': { range: '1d', interval: 'minute', granularity: '1m', providerPeriod: '1', calendarDays: null, sessions: 1, limit: 240 },
   '5d': { range: '5d', interval: 'minute', granularity: '5m', providerPeriod: '5', calendarDays: null, sessions: 5, limit: 240 },
   '1m': { range: '1m', interval: 'day', granularity: '1d', providerPeriod: 'D', calendarDays: 31, sessions: 0, limit: 32 },
-  '3m': { range: '3m', interval: 'day', granularity: '1d', providerPeriod: 'D', calendarDays: 92, sessions: 0, limit: 68 },
+  '6m': { range: '6m', interval: 'day', granularity: '1d', providerPeriod: 'D', calendarDays: 184, sessions: 0, limit: 140 },
+  ytd: { range: 'ytd', interval: 'day', granularity: '1d', providerPeriod: 'D', calendarDays: 'ytd', sessions: 0, limit: 260 },
   '1y': { range: '1y', interval: 'day', granularity: '1d', providerPeriod: 'D', calendarDays: 366, sessions: 0, limit: 260 },
   '5y': { range: '5y', interval: 'week', granularity: '1w', providerPeriod: 'W', calendarDays: 1_826, sessions: 0, limit: 275 },
-  'max': { range: 'max', interval: 'month', granularity: '1mo', providerPeriod: 'M', calendarDays: null, sessions: 0, limit: 600 },
+  all: { range: 'all', interval: 'month', granularity: '1mo', providerPeriod: 'M', calendarDays: null, sessions: 0, limit: 600 },
 };
 
 /** Regular-session minute counts used for intraday fetch sizing. */
@@ -108,8 +110,32 @@ export function marketSessionMinutes(market: Market): number {
   return 240;
 }
 
-export function klineBarLimit(ticker: string, range: KlineRange): number {
+function marketLocalDate(now: Date, market: Market): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: marketTimezone(market), year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now);
+  const value = (type: 'year' | 'month' | 'day') => parts.find((part) => part.type === type)?.value ?? '';
+  return `${value('year')}-${value('month')}-${value('day')}`;
+}
+
+function ytdTradingDayEstimate(now: Date, market: Market): number {
+  const localToday = marketLocalDate(now, market);
+  const yearStart = Date.parse(`${localToday.slice(0, 4)}-01-01T00:00:00Z`);
+  const elapsedDays = Math.floor((Date.parse(`${localToday}T00:00:00Z`) - yearStart) / 86_400_000) + 1;
+  const fullWeeks = Math.floor(elapsedDays / 7);
+  const remainder = elapsedDays % 7;
+  const firstWeekday = new Date(yearStart).getUTCDay();
+  let weekdays = fullWeeks * 5;
+  for (let day = 0; day < remainder; day += 1) {
+    const weekday = (firstWeekday + day) % 7;
+    if (weekday !== 0 && weekday !== 6) weekdays += 1;
+  }
+  return Math.max(1, weekdays);
+}
+
+export function klineBarLimit(ticker: string, range: KlineRange, now = new Date()): number {
   const config = KLINE_RANGE_CONFIG[range];
+  if (config.calendarDays === 'ytd') return ytdTradingDayEstimate(now, classifyMarket(ticker));
   if (config.interval !== 'minute') return config.limit;
   const barMinutes = config.granularity === '5m' ? 5 : 1;
   return (marketSessionMinutes(classifyMarket(ticker)) * config.sessions) / barMinutes;
@@ -125,6 +151,9 @@ export function parseKlineAdjustment(value: string | null): 'qfq' | 'hfq' | 'non
 }
 
 export function parseKlineRange(value: string | null): KlineRange | null {
+  // Retain compatibility with links created before the public label changed
+  // from Max to All.
+  if (value === 'max') return 'all';
   return value && (KLINE_RANGES as readonly string[]).includes(value) ? value as KlineRange : null;
 }
 

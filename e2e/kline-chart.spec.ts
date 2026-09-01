@@ -12,9 +12,9 @@ test('ticker chart requests the selected business range and exposes provenance',
   await page.route('**/api/kline/**', async (route) => {
     const range = new URL(route.request().url()).searchParams.get('range');
     if (range) ranges.push(range);
-    const interval = range === '1d' || range === '5d' ? 'minute' : range === '5y' ? 'week' : range === 'max' ? 'month' : 'day';
+    const interval = range === '1d' || range === '5d' ? 'minute' : range === '5y' ? 'week' : range === 'all' ? 'month' : 'day';
     const requestedBars = range === '1d' ? 390 : range === '5d' ? 390
-      : range === '1m' ? 32 : range === '3m' ? 68 : range === '1y' ? 260
+      : range === '1m' ? 32 : range === '6m' ? 140 : range === 'ytd' ? 175 : range === '1y' ? 260
       : range === '5y' ? 275 : 600;
     await route.fulfill({
       contentType: 'application/json',
@@ -94,12 +94,12 @@ test('ticker chart offers an explicit retry after a provider failure', async ({ 
         source: 'eastmoney',
         bars,
         meta: {
-          range: '3m', interval: 'day', granularity: '1d', source: 'eastmoney', adjustment: 'none',
-          rangeBasis: 'calendar-window',
+          range: '1d', interval: 'minute', granularity: '1m', source: 'eastmoney', adjustment: 'intraday',
+          rangeBasis: 'trading-sessions',
           coverageStart: '2026-08-10', coverageEnd: '2026-08-11', asOf: '2026-08-11',
           timezone: 'America/New_York', fetchedAt: '2026-08-11T20:00:00.000Z', delayed: false,
-          cacheTtlSeconds: 300, currency: '$', currencyCode: 'USD', pricePrecision: 2, minMove: 0.01,
-          market: 'US', volumeUnit: 'shares', requestedBars: 68,
+          cacheTtlSeconds: 60, currency: '$', currencyCode: 'USD', pricePrecision: 2, minMove: 0.01,
+          market: 'US', volumeUnit: 'shares', requestedBars: 390,
           returnedBars: bars.length, availableBars: 68, missingBars: 0,
           freshness: 'fresh', fallbackUsed: false, cacheStatus: 'none',
           completeness: 'partial', partial: false, warnings: ['partial_coverage'],

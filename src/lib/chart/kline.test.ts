@@ -18,8 +18,11 @@ describe('kline range contract', () => {
   it('only accepts the public chart ranges', () => {
     expect(parseKlineRange('1d')).toBe('1d');
     expect(parseKlineRange('5d')).toBe('5d');
+    expect(parseKlineRange('6m')).toBe('6m');
+    expect(parseKlineRange('ytd')).toBe('ytd');
     expect(parseKlineRange('5y')).toBe('5y');
-    expect(parseKlineRange('max')).toBe('max');
+    expect(parseKlineRange('all')).toBe('all');
+    expect(parseKlineRange('max')).toBe('all');
     expect(parseKlineRange('D')).toBeNull();
     expect(parseKlineRange('2y')).toBeNull();
   });
@@ -41,7 +44,7 @@ describe('kline range contract', () => {
     expect(klineRangeAvailability('2330.TW', '1d')).toBe('intraday_unsupported');
     expect(klineRangeAvailability('2330.TW', '5d')).toBe('intraday_unsupported');
     expect(klineRangeAvailability('2330.TW', '1y')).toBeNull();
-    expect(klineRangeAvailability('2330.TW', 'max')).toBeNull();
+    expect(klineRangeAvailability('2330.TW', 'all')).toBeNull();
     expect(klineRangeAvailability('5483.TWO', '1m')).toBeNull();
     expect(klineRangeAvailability('5483.TWO', '1y')).toBeNull();
     expect(klineRangeAvailability('7203.T', '1d')).toBe('market_unsupported');
@@ -49,7 +52,7 @@ describe('kline range contract', () => {
     expect(klineRangeAvailability('7203.T', '5y')).toBeNull();
     expect(klineRangeAvailability('7203.T', '1m')).toBeNull();
     expect(klineRangeAvailability('NVDA', '1y')).toBeNull();
-    expect(klineRangeAvailability('NVDA', 'max')).toBeNull();
+    expect(klineRangeAvailability('NVDA', 'all')).toBeNull();
   });
 
   it('maps intraday ranges to full regular sessions for each supported market', () => {
@@ -67,12 +70,20 @@ describe('kline range contract', () => {
 
   it('declares calendar windows with adaptive granularity per range', () => {
     expect(KLINE_RANGE_CONFIG['1m']).toMatchObject({ interval: 'day', granularity: '1d', providerPeriod: 'D', calendarDays: 31, limit: 32 });
-    expect(KLINE_RANGE_CONFIG['3m']).toMatchObject({ interval: 'day', granularity: '1d', providerPeriod: 'D', calendarDays: 92, limit: 68 });
+    expect(KLINE_RANGE_CONFIG['6m']).toMatchObject({ interval: 'day', granularity: '1d', providerPeriod: 'D', calendarDays: 184, limit: 140 });
+    expect(KLINE_RANGE_CONFIG.ytd).toMatchObject({ interval: 'day', granularity: '1d', providerPeriod: 'D', calendarDays: 'ytd', limit: 260 });
     expect(KLINE_RANGE_CONFIG['1y']).toMatchObject({ interval: 'day', granularity: '1d', providerPeriod: 'D', calendarDays: 366, limit: 260 });
     expect(KLINE_RANGE_CONFIG['5y']).toMatchObject({ interval: 'week', granularity: '1w', providerPeriod: 'W', calendarDays: 1_826, limit: 275 });
-    expect(KLINE_RANGE_CONFIG['max']).toMatchObject({ interval: 'month', granularity: '1mo', providerPeriod: 'M', calendarDays: null, limit: 600 });
+    expect(KLINE_RANGE_CONFIG.all).toMatchObject({ interval: 'month', granularity: '1mo', providerPeriod: 'M', calendarDays: null, limit: 600 });
     expect(KLINE_RANGE_CONFIG['5d']).toMatchObject({ interval: 'minute', granularity: '5m', providerPeriod: '5', sessions: 5 });
     expect(KLINE_RANGE_CONFIG['1d']).toMatchObject({ interval: 'minute', granularity: '1m', providerPeriod: '1', sessions: 1 });
+  });
+
+  it('sizes YTD coverage from the exchange-local calendar year', () => {
+    const janSecond = new Date('2026-01-02T15:00:00.000Z');
+    const sepFirst = new Date('2026-09-01T15:00:00.000Z');
+    expect(klineBarLimit('NVDA', 'ytd', janSecond)).toBe(2);
+    expect(klineBarLimit('NVDA', 'ytd', sepFirst)).toBeGreaterThan(170);
   });
 
   it('keeps regular-session minutes and drops auction or off-hours bars', () => {

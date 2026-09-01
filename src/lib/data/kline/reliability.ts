@@ -442,7 +442,7 @@ export class KlineReliabilityEngine {
     const market = classifyMarket(request.ticker);
     const config = KLINE_RANGE_CONFIG[request.range];
     const expected = expectedAdjustment(market, request.range, request.adjustment);
-    const need = klineBarLimit(request.ticker, request.range);
+    const need = klineBarLimit(request.ticker, request.range, this.now());
     const fetchDepth = klineFetchDepth(market, request.range);
     const prior = this.lastKnownGood.get(key);
     let calls = 0;
@@ -495,7 +495,9 @@ export class KlineReliabilityEngine {
             // suspensions and holidays simply leave fewer bars in the window.
             const windowStart = config.calendarDays === null
               ? null
-              : localDate(new Date(now.getTime() - config.calendarDays * 86_400_000), market);
+              : config.calendarDays === 'ytd'
+                ? `${localDate(now, market).slice(0, 4)}-01-01`
+                : localDate(new Date(now.getTime() - config.calendarDays * 86_400_000), market);
             let firstVisible = 0;
             if (windowStart !== null) {
               firstVisible = seriesBars.findIndex((bar) => bar.time.slice(0, 10) >= windowStart);
@@ -510,12 +512,12 @@ export class KlineReliabilityEngine {
 
           // Complete means upstream history reached the depth this range
           // needs — a calendar window holding fewer trading days (holidays,
-          // suspensions) is still complete, not partial. "Max" is different:
+          // suspensions) is still complete, not partial. "All" is different:
           // there is no fixed window, so it only counts as complete when the
           // series is untruncated — native monthly history, or an aggregated
           // fallback that exhausted the provider before our daily fetch cap.
           let completeness: 'complete' | 'partial';
-          if (request.range === 'max') {
+          if (request.range === 'all') {
             const aggregatedCapped = (config.interval === 'week' || config.interval === 'month')
               && provider.returnsInterval !== config.interval
               && validated.availableBars >= providerFetchLimit(market, request.range, false);
