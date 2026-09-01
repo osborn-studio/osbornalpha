@@ -500,8 +500,20 @@ function isValidKlinePayload(value: unknown): value is KlinePayload {
   if (!Array.isArray(payload.bars) || !payload.meta || typeof payload.meta !== 'object') return false;
   if (typeof payload.source !== 'string' || payload.source !== payload.meta.source) return false;
   if (typeof payload.meta.cacheTtlSeconds !== 'number' || payload.meta.cacheTtlSeconds <= 0) return false;
-  if ((payload.meta.range === '1d' && (payload.meta.interval !== 'minute' || payload.meta.granularity !== '1m'))
-    || (payload.meta.range !== '1d' && (payload.meta.interval !== 'day' || payload.meta.granularity !== '1d'))) return false;
+  // Each range fixes its interval/granularity pair and how the window is cut.
+  const expectedShape: Record<KlineMeta['range'], { interval: KlineMeta['interval']; granularity: KlineMeta['granularity']; rangeBasis: KlineMeta['rangeBasis'] }> = {
+    '1d': { interval: 'minute', granularity: '1m', rangeBasis: 'trading-sessions' },
+    '5d': { interval: 'minute', granularity: '1m', rangeBasis: 'trading-sessions' },
+    '1m': { interval: 'day', granularity: '1d', rangeBasis: 'calendar-window' },
+    '3m': { interval: 'day', granularity: '1d', rangeBasis: 'calendar-window' },
+    '1y': { interval: 'day', granularity: '1d', rangeBasis: 'calendar-window' },
+    '5y': { interval: 'week', granularity: '1w', rangeBasis: 'calendar-window' },
+    'max': { interval: 'month', granularity: '1mo', rangeBasis: 'calendar-window' },
+  };
+  const shape = expectedShape[payload.meta.range ?? ''] ?? { interval: null, granularity: null, rangeBasis: null };
+  if (payload.meta.interval !== shape.interval
+    || payload.meta.granularity !== shape.granularity
+    || payload.meta.rangeBasis !== shape.rangeBasis) return false;
   if (payload.meta.volumeUnit !== 'shares'
     || typeof payload.meta.currencyCode !== 'string'
     || !Number.isInteger(payload.meta.pricePrecision)
@@ -512,7 +524,12 @@ function isValidKlinePayload(value: unknown): value is KlinePayload {
     || !Number.isInteger(payload.meta.requestedBars)
     || payload.meta.requestedBars <= 0
     || payload.meta.returnedBars !== payload.bars.length
-    || payload.meta.missingBars !== Math.max(0, payload.meta.requestedBars - payload.bars.length)) return false;
+    || !Number.isInteger(payload.meta.missingBars)
+    || payload.meta.missingBars < 0
+    || !Number.isInteger(payload.meta.availableBars)
+    || payload.meta.availableBars < 0
+    || (payload.meta.maWarmupCloses !== undefined
+      && (!Array.isArray(payload.meta.maWarmupCloses) || payload.meta.maWarmupCloses.some((close) => !Number.isFinite(close))))) return false;
   let previousTime = 0;
   for (let index = 0; index < payload.bars.length; index += 1) {
     const bar = payload.bars[index];

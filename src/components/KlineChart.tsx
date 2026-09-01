@@ -13,15 +13,23 @@ import {
 import { useKline } from '@/lib/hooks/useQuote';
 import { chartStatusKeys, sourceTranslationKey } from './kline-chart-meta';
 
-const RANGE_LABELS: Record<KlineRange, string> = { '1d': '1D', '1m': '1M', '3m': '3M', '1y': '1Y' };
+const RANGE_LABELS: Record<KlineRange, string> = { '1d': '1D', '5d': '5D', '1m': '1M', '3m': '3M', '1y': '1Y', '5y': '5Y', max: 'Max' };
 
 type HoverSnapshot = KlineBar;
 
-function computeMA(data: Array<{ time: number; close: number }>, period: number) {
+/**
+ * Moving average over the visible bars, optionally seeded with warmup closes
+ * delivered ahead of the window so short ranges still get a full MA20 line.
+ */
+function computeMA(data: Array<{ time: number; close: number }>, period: number, warmupCloses: number[] = []) {
+  const closes = [...warmupCloses, ...data.map((bar) => bar.close)];
   const out: Array<{ time: UTCTimestamp; value: number }> = [];
-  for (let i = period - 1; i < data.length; i++) {
+  for (let i = 0; i < data.length; i++) {
+    const end = warmupCloses.length + i;
+    const start = end - period + 1;
+    if (start < 0) continue;
     let sum = 0;
-    for (let j = 0; j < period; j++) sum += data[i - j].close;
+    for (let j = start; j <= end; j++) sum += closes[j];
     out.push({ time: data[i].time as UTCTimestamp, value: sum / period });
   }
   return out;
@@ -150,11 +158,25 @@ export function KlineChart({ ticker }: { ticker: string }) {
         close,
       })));
 
-      if (displayMeta.interval === 'day') {
+      // Intraday benchmark: the audited previous-session close grounds the
+      // day's strength at a glance (standard time-share chart convention).
+      if (range === '1d' && bars[0]?.previousClose != null) {
+        candles.createPriceLine({
+          price: bars[0].previousClose,
+          color: cssVariable('--text-muted', '#a1a1aa'),
+          lineWidth: 1,
+          lineStyle: lwc.LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: t('prevClose'),
+        });
+      }
+
+      if (displayMeta.interval !== 'minute') {
+        const warmup = displayMeta.maWarmupCloses ?? [];
         const ma5 = chart.addLineSeries({ color: '#f59e0b', lineWidth: 1, title: 'MA5', priceFormat: { type: 'price', precision, minMove } });
-        ma5.setData(computeMA(bars, 5));
+        ma5.setData(computeMA(bars, 5, warmup));
         const ma20 = chart.addLineSeries({ color: '#58a6ff', lineWidth: 1, title: 'MA20', priceFormat: { type: 'price', precision, minMove } });
-        ma20.setData(computeMA(bars, 20));
+        ma20.setData(computeMA(bars, 20, warmup));
       }
 
       const volume = chart.addHistogramSeries({
@@ -194,7 +216,7 @@ export function KlineChart({ ticker }: { ticker: string }) {
       if (chartRef.current === chart) chartRef.current = null;
       chart?.remove();
     };
-  }, [bars, displayMeta, locale, visualRevision]);
+  }, [bars, displayMeta, locale, range, t, visualRevision]);
 
   const errorMessage = errorCode && [
     'market_unsupported',
@@ -279,7 +301,7 @@ export function KlineChart({ ticker }: { ticker: string }) {
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-text-muted" aria-live="polite">
         {displayMeta ? <>
           <span>{t(sourceTranslationKey(displayMeta))}</span>
-          <span>{t('granularity', { value: displayMeta.granularity })}</span>
+          <span>{t('granularity', { value: t(`granularityNames.${displayMeta.granularity}`) })}</span>
           <span>{currency && t('currency', { value: currency })}</span>
           <span>{t('volumeUnit', { value: t(`volumeUnits.${volumeUnit}`) })}</span>
           <span>{t(`adjustments.${displayMeta.adjustment}`)}</span>
@@ -292,7 +314,12 @@ export function KlineChart({ ticker }: { ticker: string }) {
               ? t(key, { seconds: displayMeta.cacheAgeSeconds ?? displayMeta.staleAgeSeconds ?? 0 })
               : t(key)}</span>
           ))}
-          <span>{displayMeta.interval === 'day' ? t('indicators.daily') : t('indicators.intraday')}</span>
+          <span>{t(`indicators.${
+            displayMeta.interval === 'minute' ? 'intraday'
+            : displayMeta.interval === 'day' ? 'daily'
+            : displayMeta.interval === 'week' ? 'weekly'
+            : 'monthly'
+          }`)}</span>
         </> : loading ? <span>{t('loading')}</span> : null}
       </div>
     </div>

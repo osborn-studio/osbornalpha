@@ -46,6 +46,8 @@ function assertValidBar(bar: SourceKlineBar): void {
 
 export interface ValidatedKlineSeries extends SourceKlineSeries {
   completeness: 'complete' | 'partial';
+  /** Distinct bars the provider supplied before any window was applied. */
+  availableBars: number;
 }
 
 export function validateKlineSeries(
@@ -91,6 +93,7 @@ export function validateKlineSeries(
     ...series,
     bars,
     completeness: bars.length >= limit ? 'complete' : 'partial',
+    availableBars: unique.length,
   };
 }
 

@@ -292,8 +292,17 @@
       "partialBar": "\u5f53\u524d K \u7ebf\u5c1a\u672a\u6536\u76d8",
       "indicators": {
         "daily": "MA5 / MA20 \u6309\u65e5\u7ebf\u6536\u76d8\u4ef7\u8ba1\u7b97",
+        "weekly": "MA5 / MA20 \u6309\u5468\u7ebf\u6536\u76d8\u4ef7\u8ba1\u7b97",
+        "monthly": "MA5 / MA20 \u6309\u6708\u7ebf\u6536\u76d8\u4ef7\u8ba1\u7b97",
         "intraday": "\u5206\u949f\u6570\u636e\u4e0d\u663e\u793a\u65e5\u5747\u7ebf"
       },
+      "granularityNames": {
+        "1m": "1\u5206\u949f",
+        "1d": "\u65e5\u7ebf",
+        "1w": "\u5468\u7ebf",
+        "1mo": "\u6708\u7ebf"
+      },
+      "prevClose": "\u6628\u6536",
       "volumeUnits": {
         "shares": "股",
         "lots": "手"

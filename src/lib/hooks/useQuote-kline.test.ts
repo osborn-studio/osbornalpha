@@ -13,6 +13,7 @@ describe('fetchKlinePayload', () => {
         range: '1y',
         interval: 'day',
         granularity: '1d',
+        rangeBasis: 'calendar-window',
         cacheTtlSeconds: 60,
         currencyCode: 'CNY',
         pricePrecision: 2,
@@ -20,7 +21,8 @@ describe('fetchKlinePayload', () => {
         volumeUnit: 'shares',
         requestedBars: 260,
         returnedBars: 0,
-        missingBars: 260,
+        availableBars: 281,
+        missingBars: 0,
       },
     };
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 }));

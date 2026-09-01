@@ -1,10 +1,14 @@
 import { unstable_cache } from 'next/cache';
 import {
   KLINE_RANGE_CONFIG,
+  isWithinMarketSession,
   klineBarLimit,
+  marketSessionMinutes,
   marketTimezone,
+  periodKeyOf,
   type KlineRange,
 } from '@/lib/chart/kline';
+import { aggregateDailyBars } from '@/lib/data/kline/aggregate';
 import { fetchEastmoneyKline } from '@/lib/data/sources/eastmoney';
 import { fetchSinaUsKline } from '@/lib/data/sources/sina';
 import { fetchSinaIntradayKline } from '@/lib/data/sources/sina-kline';
@@ -31,12 +35,21 @@ export type KlineFreshness = 'fresh' | 'stale';
 export type KlineCacheStatus = 'none' | 'shared-swr' | 'memory-lkg';
 export type KlineWarning = 'fallback_used' | 'stale_cache' | 'partial_coverage' | 'partial_bar';
 
+/** MA warmup closes delivered ahead of the visible daily window. */
+const MA_WARMUP_BARS = 20;
+
 export interface KlineResolution {
   bars: SourceKlineBar[];
   source: KlineSourceName;
   adjustment: KlineAdjustment;
   volumeUnit: 'shares';
   previousClose: number | null;
+  /** Distinct bars upstream supplied before the visible window was applied. */
+  availableBars: number;
+  /** Daily closes immediately before the window (interval 'day' only). */
+  warmupCloses: number[];
+  /** Latest provider bar time, used for metadata when the window is empty. */
+  asOfFallback: string;
   freshness: KlineFreshness;
   fallbackUsed: boolean;
   cacheStatus: KlineCacheStatus;
@@ -111,14 +124,16 @@ class Semaphore {
 }
 
 function expectedAdjustment(market: Market, range: KlineRange): KlineAdjustment {
-  if (range === '1d') return 'intraday';
+  if (KLINE_RANGE_CONFIG[range].interval === 'minute') return 'intraday';
   return market === 'A' ? 'qfq' : 'none';
 }
 
 export function klineProviderRoute(ticker: string, range: KlineRange): KlineSourceName[] {
   const market = classifyMarket(ticker);
   const interval = KLINE_RANGE_CONFIG[range].interval;
-  const history = interval === 'day';
+  const history = interval !== 'minute';
+  // Weekly/monthly ranges ride the daily routes: Eastmoney serves native
+  // weekly/monthly bars while the other providers fall back to aggregation.
   const gateway = history && isDatagatewayConfigured() ? ['datagateway'] as const : [];
   if (market === 'JP' || market === 'KR') return [...gateway];
   if (market === 'TW') {
@@ -138,44 +153,69 @@ export function klineProviderRoute(ticker: string, range: KlineRange): KlineSour
   return ['eastmoney', 'sina', ...gateway];
 }
 
+/** Daily bars requested when a provider must be aggregated into weekly/monthly. */
+const WEEKLY_FALLBACK_DAILY_BARS = 1_500;
+const MONTHLY_FALLBACK_DAILY_BARS = 1_800;
+
+/**
+ * Validation slice cap for a request: wide enough to cover both the native
+ * interval depth and the larger daily depth used by aggregation fallbacks.
+ */
+export function klineFetchDepth(market: Market, range: KlineRange): number {
+  const config = KLINE_RANGE_CONFIG[range];
+  const need = marketSessionMinutes(market) * config.sessions || config.limit;
+  if (config.interval === 'minute') return Math.min(need + marketSessionMinutes(market), 2_000);
+  if (config.interval === 'day') return config.limit + MA_WARMUP_BARS + 1;
+  if (config.interval === 'week') return Math.max(config.limit + 1, WEEKLY_FALLBACK_DAILY_BARS);
+  return Math.max(config.limit + 1, MONTHLY_FALLBACK_DAILY_BARS);
+}
+
+/** Fetch limit for one provider: native-interval providers ask for less. */
+function providerFetchLimit(market: Market, range: KlineRange, nativeInterval: boolean): number {
+  const config = KLINE_RANGE_CONFIG[range];
+  const need = marketSessionMinutes(market) * config.sessions || config.limit;
+  if (config.interval === 'minute') return Math.min(need + marketSessionMinutes(market), 2_000);
+  if (config.interval === 'day') return config.limit + MA_WARMUP_BARS + 1;
+  if (nativeInterval) return config.limit + 1;
+  return config.interval === 'week' ? WEEKLY_FALLBACK_DAILY_BARS : MONTHLY_FALLBACK_DAILY_BARS;
+}
+
 function providerDefinitions(request: KlineRequest): KlineProvider[] {
   const market = classifyMarket(request.ticker);
   const config = KLINE_RANGE_CONFIG[request.range];
-  // Fetch one look-back daily bar so the first visible bar can carry an
-  // audited previous-close comparison without expanding the selected window.
-  const limit = klineBarLimit(request.ticker, request.range) + 1;
-  // Request several sessions from intraday vendors. On a closed day this lets
-  // their history endpoint return the latest real session rather than empty
-  // data; the resolver below still renders only that one session.
-  const intradayLimit = config.interval === 'minute' ? Math.min(limit * 5, 2_000) : limit;
   const adjustment = expectedAdjustment(market, request.range);
+  const nativeLimit = providerFetchLimit(market, request.range, true);
+  const dailyLimit = providerFetchLimit(market, request.range, false);
   const intradayGateway: KlineProvider[] = config.interval === 'minute' && isDatagatewayIntradayConfigured() ? [{
     name: 'datagateway',
     market,
     adjustment,
     timeoutMs: 4_800,
     maxAttempts: 1,
-    fetch: (signal) => fetchDatagatewayIntradayKline(request.ticker, market, intradayLimit, { signal, timeoutMs: 4_500 }),
+    returnsInterval: 'minute',
+    fetch: (signal) => fetchDatagatewayIntradayKline(request.ticker, market, nativeLimit, { signal, timeoutMs: 4_500 }),
   }] : [];
-  const gateway: KlineProvider[] = config.interval === 'day' && isDatagatewayConfigured() ? [{
+  const gateway: KlineProvider[] = config.interval !== 'minute' && isDatagatewayConfigured() ? [{
     name: 'datagateway',
     market,
     adjustment,
     timeoutMs: 2_800,
     maxAttempts: 1,
-    fetch: (signal) => fetchDatagatewayDailyKline(request.ticker, market, limit, adjustment, { signal, timeoutMs: 2_500 }),
+    returnsInterval: 'day',
+    fetch: (signal) => fetchDatagatewayDailyKline(request.ticker, market, dailyLimit, adjustment, { signal, timeoutMs: 2_500 }),
   }] : [];
   if (market === 'JP' || market === 'KR') return gateway;
 
   if (market === 'TW') {
-    if (config.interval !== 'day') return [];
+    if (config.interval === 'minute') return [];
     return [{
       name: /\.TWO$/i.test(request.ticker) ? 'tpex' : 'twse',
       market,
       adjustment,
       timeoutMs: 9_000,
       maxAttempts: 2,
-      fetch: (signal) => fetchTwseKline(request.ticker, 'D', limit, { signal, timeoutMs: 6_000 }),
+      returnsInterval: 'day',
+      fetch: (signal) => fetchTwseKline(request.ticker, 'D', dailyLimit, { signal, timeoutMs: 6_000 }),
     }, ...gateway];
   }
 
@@ -187,7 +227,9 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
     // A US attempt may probe Eastmoney's 105/106/107 market prefixes internally.
     // Keep it to one provider attempt so a cold US request remains within five HTTP calls.
     maxAttempts: market === 'US' ? 1 : 2,
-    fetch: (signal) => fetchEastmoneyKline(request.ticker, config.providerPeriod, intradayLimit, {
+    // Eastmoney serves every interval natively, including weekly/monthly.
+    returnsInterval: config.interval,
+    fetch: (signal) => fetchEastmoneyKline(request.ticker, config.providerPeriod, nativeLimit, {
       adjustment,
       signal,
       timeoutMs: 2_500,
@@ -199,7 +241,8 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
     adjustment,
     timeoutMs: 4_800,
     maxAttempts: 1,
-    fetch: (signal: AbortSignal) => fetchSinaIntradayKline(request.ticker, market, intradayLimit, { signal, timeoutMs: 4_500 }),
+    returnsInterval: 'minute' as const,
+    fetch: (signal: AbortSignal) => fetchSinaIntradayKline(request.ticker, market, nativeLimit, { signal, timeoutMs: 4_500 }),
   }] : [])];
 
   if (market === 'A' || market === 'HK') {
@@ -209,9 +252,10 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
       adjustment,
       timeoutMs: 2_800,
       maxAttempts: 2,
+      returnsInterval: 'day',
       fetch: (signal) => fetchTencentKline(
         request.ticker,
-        limit,
+        dailyLimit,
         adjustment as Extract<KlineAdjustment, 'qfq' | 'none'>,
         signal,
         2_500,
@@ -222,12 +266,13 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
     name: 'sina',
     market,
     adjustment,
+    returnsInterval: 'day',
     // Sina's verified US history payload is substantially larger than the
     // other fallbacks; keep it inside the 9 s request budget but allow the
     // observed 3–4 s response to complete.
     timeoutMs: 4_500,
     maxAttempts: 2,
-    fetch: (signal) => fetchSinaUsKline(request.ticker, limit, signal, 4_200),
+    fetch: (signal) => fetchSinaUsKline(request.ticker, dailyLimit, signal, 4_200),
   }, ...gateway];
 }
 
@@ -357,9 +402,10 @@ export class KlineReliabilityEngine {
     const startedAt = Date.now();
     const providers = this.providersFor(request);
     const market = classifyMarket(request.ticker);
+    const config = KLINE_RANGE_CONFIG[request.range];
     const expected = expectedAdjustment(market, request.range);
-    const limit = klineBarLimit(request.ticker, request.range);
-    const providerLimit = limit + 1;
+    const need = klineBarLimit(request.ticker, request.range);
+    const fetchDepth = klineFetchDepth(market, request.range);
     const prior = this.lastKnownGood.get(key);
     let calls = 0;
     let sawInvalidData = false;
@@ -374,24 +420,55 @@ export class KlineReliabilityEngine {
         try {
           const raw = await this.callProvider(provider, remainingMs);
           if (!raw) throw new KlineProviderError('empty', `${provider.name} returned no K-line data`);
-          const validated = validateKlineSeries(raw, expected, providerLimit);
-          const normalizedBars = validated.bars;
+          const validated = validateKlineSeries(raw, expected, fetchDepth);
+
+          // Providers without native weekly/monthly history contribute daily
+          // bars that are aggregated into the requested interval here.
+          let seriesBars = validated.bars;
+          let availableBars = validated.availableBars;
+          if ((config.interval === 'week' || config.interval === 'month') && provider.returnsInterval !== config.interval) {
+            seriesBars = aggregateDailyBars(validated.bars, config.interval);
+            availableBars = seriesBars.length;
+          }
+
+          const now = this.now();
           let visibleBars: SourceKlineBar[];
           let previousClose: number | null;
-          if (request.range === '1d') {
-            const latestSession = normalizedBars[normalizedBars.length - 1].time.slice(0, 10);
-            const sessionBars = normalizedBars.filter((bar) => bar.time.startsWith(latestSession));
-            visibleBars = sessionBars.slice(-limit);
-            previousClose = normalizedBars
-              .filter((bar) => bar.time.slice(0, 10) < latestSession)
-              .at(-1)?.close ?? null;
-          } else {
-            visibleBars = normalizedBars.slice(-limit);
-            previousClose = normalizedBars.length > visibleBars.length
-              ? normalizedBars[normalizedBars.length - visibleBars.length - 1].close
+          let warmupCloses: number[] = [];
+          if (config.interval === 'minute') {
+            // Keep only regular-session minutes (drops pre-open and closing
+            // auction bars), then select the latest N trading sessions.
+            const sessionBars = validated.bars.filter((bar) => isWithinMarketSession(bar.time, market));
+            const source = sessionBars.length > 0 ? sessionBars : validated.bars;
+            const dates = Array.from(new Set(source.map((bar) => bar.time.slice(0, 10))));
+            const keptDates = dates.slice(-config.sessions);
+            const kept = new Set(keptDates);
+            visibleBars = source.filter((bar) => kept.has(bar.time.slice(0, 10)));
+            previousClose = keptDates.length > 0
+              ? source.filter((bar) => bar.time.slice(0, 10) < keptDates[0]).at(-1)?.close ?? null
               : null;
+          } else {
+            // Calendar window anchored at "now" in the exchange timezone:
+            // suspensions and holidays simply leave fewer bars in the window.
+            const windowStart = config.calendarDays === null
+              ? null
+              : localDate(new Date(now.getTime() - config.calendarDays * 86_400_000), market);
+            let firstVisible = 0;
+            if (windowStart !== null) {
+              firstVisible = seriesBars.findIndex((bar) => bar.time.slice(0, 10) >= windowStart);
+              if (firstVisible === -1) firstVisible = seriesBars.length;
+            }
+            visibleBars = seriesBars.slice(firstVisible);
+            previousClose = firstVisible > 0 ? seriesBars[firstVisible - 1].close : null;
+            if (config.interval === 'day') {
+              warmupCloses = seriesBars.slice(Math.max(0, firstVisible - MA_WARMUP_BARS), firstVisible).map((bar) => bar.close);
+            }
           }
-          const completeness = visibleBars.length >= limit ? 'complete' : 'partial';
+
+          // Complete means upstream history reached the depth this range
+          // needs — a calendar window holding fewer trading days (holidays,
+          // suspensions) is still complete, not partial.
+          const completeness = request.range === 'max' || availableBars >= need ? 'complete' : 'partial';
           const selected: SourceKlineSeries = {
             source: validated.source,
             adjustment: validated.adjustment,
@@ -401,11 +478,13 @@ export class KlineReliabilityEngine {
           if (providerIndex > 0 && prior) assertCompatibleSeries(selected, prior.result);
           this.recordCircuit(provider, true);
 
-          const now = this.now();
-          const lastDate = visibleBars[visibleBars.length - 1].time.slice(0, 10);
+          const lastDate = visibleBars.length > 0
+            ? visibleBars[visibleBars.length - 1].time.slice(0, 10)
+            : seriesBars[seriesBars.length - 1]?.time.slice(0, 10) ?? '';
           const currentDate = localDate(now, market);
-          const partial = KLINE_RANGE_CONFIG[request.range].interval === 'day'
-            && lastDate === currentDate
+          const partial = config.interval !== 'minute'
+            && visibleBars.length > 0
+            && periodKeyOf(config.interval, lastDate) === periodKeyOf(config.interval, currentDate)
             && marketPhase(market, now).phase === 'open';
           const warnings: KlineWarning[] = [];
           if (providerIndex > 0) warnings.push('fallback_used');
@@ -417,6 +496,9 @@ export class KlineReliabilityEngine {
             adjustment: selected.adjustment,
             volumeUnit: selected.volumeUnit,
             previousClose,
+            availableBars,
+            warmupCloses,
+            asOfFallback: seriesBars[seriesBars.length - 1]?.time ?? '',
             freshness: 'fresh',
             fallbackUsed: providerIndex > 0,
             cacheStatus: 'none',
@@ -476,13 +558,13 @@ async function resolveCacheable(ticker: string, range: KlineRange): Promise<Klin
 
 const cachedIntraday = unstable_cache(
   resolveCacheable,
-  ['kline-reliability-intraday-v5'],
+  ['kline-reliability-intraday-v6'],
   { revalidate: 60 },
 );
 
 const cachedDaily = unstable_cache(
   resolveCacheable,
-  ['kline-reliability-daily-v3'],
+  ['kline-reliability-daily-v4'],
   { revalidate: 300 },
 );
 

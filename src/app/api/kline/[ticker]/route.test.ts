@@ -19,6 +19,9 @@ function resolution(overrides: Record<string, unknown> = {}) {
     adjustment: 'intraday',
     volumeUnit: 'shares',
     previousClose: 9,
+    availableBars: 40,
+    warmupCloses: [],
+    asOfFallback: '2026-08-10 09:30:00',
     freshness: 'fresh',
     fallbackUsed: false,
     cacheStatus: 'shared-swr',
@@ -55,10 +58,11 @@ describe('GET /api/kline/[ticker]', () => {
       currency: '$',
       currencyCode: 'USD',
       volumeUnit: 'shares',
-      rangeBasis: 'trading-bars',
+      rangeBasis: 'trading-sessions',
       requestedBars: 390,
       returnedBars: 1,
-      missingBars: 389,
+      availableBars: 40,
+      missingBars: 350,
     });
     expect(body.bars[0].time).toBe(Date.UTC(2026, 7, 10, 9, 30) / 1000);
     expect(body.bars[0]).toMatchObject({ previousClose: 9, change: 2 });
@@ -66,7 +70,7 @@ describe('GET /api/kline/[ticker]', () => {
   });
 
   it('rejects invalid ranges and unsupported Taiwan intraday', async () => {
-    expect((await GET(new Request('https://example.test/api/kline/NVDA?range=5y'), ctx('NVDA'))).status).toBe(400);
+    expect((await GET(new Request('https://example.test/api/kline/NVDA?range=2y'), ctx('NVDA'))).status).toBe(400);
     const response = await GET(new Request('https://example.test/api/kline/2330.TW?range=1d'), ctx('2330.TW'));
     expect(response.status).toBe(422);
     expect((await response.json()).error).toBe('intraday_unsupported');

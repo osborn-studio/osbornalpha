@@ -34,6 +34,8 @@ export interface KlineProvider {
   adjustment: KlineAdjustment;
   timeoutMs: number;
   maxAttempts: number;
+  /** Interval this provider actually serves for the request, before aggregation. */
+  returnsInterval?: 'minute' | 'day' | 'week' | 'month';
   fetch(signal: AbortSignal): Promise<SourceKlineSeries | null>;
 }
 
