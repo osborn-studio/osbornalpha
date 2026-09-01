@@ -104,6 +104,55 @@ describe('GET /api/kline/[ticker]', () => {
     expect((await response.json()).meta).toMatchObject({ source: 'tencent', fallbackUsed: true, adjustment: 'qfq' });
   });
 
+  it('reports Max cap semantics honestly for truncated and full history', async () => {
+    // Truncated: the aggregated fallback hit the daily cap → partial + lower
+    // bound on the missing months.
+    mocks.resolve.mockResolvedValue(resolution({
+      source: 'tencent',
+      adjustment: 'none',
+      availableBars: 60,
+      completeness: 'partial',
+      warnings: ['partial_coverage'],
+      bars: [{ ...minuteBars[0], time: '2026-08-01' }],
+    }));
+    const truncated = await GET(new Request('https://example.test/api/kline/600519.SH?range=max'), ctx('600519.SH'));
+    expect(truncated.status).toBe(200);
+    expect((await truncated.json()).meta).toMatchObject({
+      range: 'max', interval: 'month', granularity: '1mo', rangeBasis: 'calendar-window',
+      requestedBars: 600, availableBars: 60, missingBars: 540, completeness: 'partial',
+    });
+
+    // Untruncated: the provider simply has fewer months than the probe cap.
+    mocks.resolve.mockResolvedValue(resolution({
+      source: 'eastmoney',
+      adjustment: 'none',
+      availableBars: 60,
+      completeness: 'complete',
+      warnings: [],
+      bars: [{ ...minuteBars[0], time: '2026-08-01' }],
+    }));
+    const full = await GET(new Request('https://example.test/api/kline/NVDA?range=max'), ctx('NVDA'));
+    expect(full.status).toBe(200);
+    expect((await full.json()).meta).toMatchObject({
+      range: 'max', requestedBars: 600, availableBars: 60, missingBars: 0, completeness: 'complete',
+    });
+  });
+
+  it('parses the adjustment override and rejects invalid values', async () => {
+    const bad = await GET(new Request('https://example.test/api/kline/600519.SH?range=1y&adjust=bfq'), ctx('600519.SH'));
+    expect(bad.status).toBe(400);
+    expect((await bad.json()).error).toBe('invalid_adjustment');
+    expect(mocks.resolve).not.toHaveBeenCalled();
+
+    const ok = await GET(new Request('https://example.test/api/kline/600519.SH?range=1y&adjust=hfq'), ctx('600519.SH'));
+    expect(ok.status).toBe(200);
+    expect(mocks.resolve).toHaveBeenCalledWith({ ticker: '600519.SH', range: '1y', adjustment: 'hfq' });
+
+    const untouched = await GET(new Request('https://example.test/api/kline/NVDA?range=1y'), ctx('NVDA'));
+    expect(untouched.status).toBe(200);
+    expect(mocks.resolve).toHaveBeenLastCalledWith({ ticker: 'NVDA', range: '1y', adjustment: undefined });
+  });
+
   it.each([
     ['invalid_data', 502],
     ['provider_unavailable', 503],

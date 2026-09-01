@@ -276,6 +276,7 @@
       },
       "adjustments": {
         "qfq": "Forward-adjusted prices",
+        "hfq": "Back-adjusted prices",
         "none": "Unadjusted prices",
         "intraday": "Intraday prices"
       },
@@ -294,15 +295,23 @@
         "daily": "MA5 / MA20 use daily closes",
         "weekly": "MA5 / MA20 use weekly closes",
         "monthly": "MA5 / MA20 use monthly closes",
-        "intraday": "Daily moving averages are hidden for minute data"
+        "intraday": "Minute views show a session average-price line when turnover is available"
       },
       "granularityNames": {
         "1m": "1 min",
+        "5m": "5 min",
         "1d": "Daily",
         "1w": "Weekly",
         "1mo": "Monthly"
       },
       "prevClose": "Prev close",
+      "avgPrice": "Avg",
+      "adjustAriaLabel": "Price adjustment",
+      "adjustOptions": {
+        "qfq": "Fwd adj",
+        "none": "Raw",
+        "hfq": "Back adj"
+      },
       "volumeUnits": {
         "shares": "shares",
         "lots": "lots"

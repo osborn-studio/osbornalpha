@@ -503,7 +503,7 @@ function isValidKlinePayload(value: unknown): value is KlinePayload {
   // Each range fixes its interval/granularity pair and how the window is cut.
   const expectedShape: Record<KlineMeta['range'], { interval: KlineMeta['interval']; granularity: KlineMeta['granularity']; rangeBasis: KlineMeta['rangeBasis'] }> = {
     '1d': { interval: 'minute', granularity: '1m', rangeBasis: 'trading-sessions' },
-    '5d': { interval: 'minute', granularity: '1m', rangeBasis: 'trading-sessions' },
+    '5d': { interval: 'minute', granularity: '5m', rangeBasis: 'trading-sessions' },
     '1m': { interval: 'day', granularity: '1d', rangeBasis: 'calendar-window' },
     '3m': { interval: 'day', granularity: '1d', rangeBasis: 'calendar-window' },
     '1y': { interval: 'day', granularity: '1d', rangeBasis: 'calendar-window' },
@@ -554,17 +554,23 @@ function isValidKlinePayload(value: unknown): value is KlinePayload {
         || Math.abs(candidate.changePct - expectedChangePct) > 1e-8) return false;
     }
     if (index > 0 && candidate.previousClose !== payload.bars[index - 1].close) return false;
+    if (candidate.amount !== undefined && candidate.amount !== null
+      && (!Number.isFinite(candidate.amount) || candidate.amount < 0)) return false;
     previousTime = candidate.time;
   }
   return true;
 }
 
+export type KlineAdjustmentChoice = 'qfq' | 'hfq' | 'none';
+
 export async function fetchKlinePayload(
   ticker: string,
   range: KlineRange,
   signal?: AbortSignal,
+  adjustment?: KlineAdjustmentChoice,
 ): Promise<KlinePayload> {
-  const response = await fetch(`/api/kline/${encodeURIComponent(ticker)}?range=${range}`, { signal });
+  const query = `range=${range}${adjustment ? `&adjust=${adjustment}` : ''}`;
+  const response = await fetch(`/api/kline/${encodeURIComponent(ticker)}?${query}`, { signal });
   const data = await response.json() as Partial<KlinePayload> & { error?: string; message?: string };
   if (!response.ok) {
     const error = new Error(data.message || data.error || `HTTP ${response.status}`) as Error & { code?: string };
@@ -573,7 +579,9 @@ export async function fetchKlinePayload(
   }
   if (!isValidKlinePayload(data)
     || data.meta.range !== range
-    || data.meta.requestedBars !== klineBarLimit(ticker, range)) {
+    || data.meta.requestedBars !== klineBarLimit(ticker, range)
+    // A requested adjustment must be echoed by the server for daily ranges.
+    || (adjustment && data.meta.interval !== 'minute' && data.meta.adjustment !== adjustment)) {
     const error = new Error('Invalid chart response') as Error & { code?: string };
     error.code = 'invalid_data';
     throw error;
@@ -581,7 +589,11 @@ export async function fetchKlinePayload(
   return data;
 }
 
-export function useKline(ticker: string | null, range: KlineRange = '3m'): KlineState & { refetch: () => void } {
+export function useKline(
+  ticker: string | null,
+  range: KlineRange = '3m',
+  adjustment?: KlineAdjustmentChoice,
+): KlineState & { refetch: () => void } {
   const [state, setState] = useState<KlineState>({ bars: [], loading: !!ticker, error: null, errorCode: null, source: null, meta: null });
   const [refreshToken, setRefreshToken] = useState(0);
   const handledRefreshToken = useRef(0);
@@ -591,7 +603,7 @@ export function useKline(ticker: string | null, range: KlineRange = '3m'): Kline
       setState({ bars: [], loading: false, error: null, errorCode: null, source: null, meta: null });
       return;
     }
-    const key = `${ticker}|${range}`;
+    const key = `${ticker}|${range}|${adjustment ?? ''}`;
     const manual = refreshToken !== handledRefreshToken.current;
     if (manual) handledRefreshToken.current = refreshToken;
     const cached = klineCache.get(key);
@@ -604,7 +616,7 @@ export function useKline(ticker: string | null, range: KlineRange = '3m'): Kline
     // Do not show bars from the previous range while this range is loading.
     setState({ bars: [], loading: true, error: null, errorCode: null, source: null, meta: null });
 
-    fetchKlinePayload(ticker, range, controller.signal)
+    fetchKlinePayload(ticker, range, controller.signal, adjustment)
       .then((data) => {
         if (cancelled) return;
         const next: KlineState = { bars: data.bars || [], loading: false, error: null, errorCode: null, source: data.source || null, meta: data.meta || null };
@@ -632,7 +644,7 @@ export function useKline(ticker: string | null, range: KlineRange = '3m'): Kline
       cancelled = true;
       controller.abort();
     };
-  }, [ticker, range, refreshToken]);
+  }, [ticker, range, adjustment, refreshToken]);
 
   return { ...state, refetch: () => setRefreshToken((token) => token + 1) };
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  adjustmentSelectable,
   inferKlinePricePrecision,
   isWithinMarketSession,
   KLINE_RANGE_CONFIG,
@@ -7,6 +8,7 @@ import {
   klineRangeAvailability,
   marketSessionMinutes,
   marketTimezone,
+  parseKlineAdjustment,
   parseKlineRange,
   periodKeyOf,
   toChartTimestamp,
@@ -20,6 +22,19 @@ describe('kline range contract', () => {
     expect(parseKlineRange('max')).toBe('max');
     expect(parseKlineRange('D')).toBeNull();
     expect(parseKlineRange('2y')).toBeNull();
+  });
+
+  it('parses user-selected adjustment modes only', () => {
+    expect(parseKlineAdjustment('qfq')).toBe('qfq');
+    expect(parseKlineAdjustment('hfq')).toBe('hfq');
+    expect(parseKlineAdjustment('none')).toBe('none');
+    expect(parseKlineAdjustment('bfq')).toBeNull();
+    expect(parseKlineAdjustment('intraday')).toBeNull();
+    expect(parseKlineAdjustment(null)).toBeNull();
+    expect(adjustmentSelectable('A')).toBe(true);
+    expect(adjustmentSelectable('HK')).toBe(true);
+    expect(adjustmentSelectable('US')).toBe(false);
+    expect(adjustmentSelectable('JP')).toBe(false);
   });
 
   it('declares only true provider capability gaps as unavailable', () => {
@@ -44,9 +59,10 @@ describe('kline range contract', () => {
     expect(klineBarLimit('600519.SH', '1d')).toBe(240);
     expect(klineBarLimit('00700.HK', '1d')).toBe(330);
     expect(klineBarLimit('NVDA', '1d')).toBe(390);
-    expect(klineBarLimit('600519.SH', '5d')).toBe(1_200);
-    expect(klineBarLimit('00700.HK', '5d')).toBe(1_650);
-    expect(klineBarLimit('NVDA', '5d')).toBe(1_950);
+    // 5D renders 5-minute bars: five sessions of 48/66/78 bars.
+    expect(klineBarLimit('600519.SH', '5d')).toBe(240);
+    expect(klineBarLimit('00700.HK', '5d')).toBe(330);
+    expect(klineBarLimit('NVDA', '5d')).toBe(390);
   });
 
   it('declares calendar windows with adaptive granularity per range', () => {
@@ -55,8 +71,8 @@ describe('kline range contract', () => {
     expect(KLINE_RANGE_CONFIG['1y']).toMatchObject({ interval: 'day', granularity: '1d', providerPeriod: 'D', calendarDays: 366, limit: 260 });
     expect(KLINE_RANGE_CONFIG['5y']).toMatchObject({ interval: 'week', granularity: '1w', providerPeriod: 'W', calendarDays: 1_826, limit: 275 });
     expect(KLINE_RANGE_CONFIG['max']).toMatchObject({ interval: 'month', granularity: '1mo', providerPeriod: 'M', calendarDays: null, limit: 600 });
-    expect(KLINE_RANGE_CONFIG['5d']).toMatchObject({ interval: 'minute', sessions: 5 });
-    expect(KLINE_RANGE_CONFIG['1d']).toMatchObject({ interval: 'minute', sessions: 1 });
+    expect(KLINE_RANGE_CONFIG['5d']).toMatchObject({ interval: 'minute', granularity: '5m', providerPeriod: '5', sessions: 5 });
+    expect(KLINE_RANGE_CONFIG['1d']).toMatchObject({ interval: 'minute', granularity: '1m', providerPeriod: '1', sessions: 1 });
   });
 
   it('keeps regular-session minutes and drops auction or off-hours bars', () => {

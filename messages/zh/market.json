@@ -276,6 +276,7 @@
       },
       "adjustments": {
         "qfq": "\u524d\u590d\u6743\u4ef7\u683c",
+        "hfq": "\u540e\u590d\u6743\u4ef7\u683c",
         "none": "\u4e0d\u590d\u6743\u4ef7\u683c",
         "intraday": "\u5206\u65f6\u4ef7\u683c"
       },
@@ -294,15 +295,23 @@
         "daily": "MA5 / MA20 \u6309\u65e5\u7ebf\u6536\u76d8\u4ef7\u8ba1\u7b97",
         "weekly": "MA5 / MA20 \u6309\u5468\u7ebf\u6536\u76d8\u4ef7\u8ba1\u7b97",
         "monthly": "MA5 / MA20 \u6309\u6708\u7ebf\u6536\u76d8\u4ef7\u8ba1\u7b97",
-        "intraday": "\u5206\u949f\u6570\u636e\u4e0d\u663e\u793a\u65e5\u5747\u7ebf"
+        "intraday": "\u5206\u65f6\u56fe\u5728\u6709\u6210\u4ea4\u989d\u65f6\u6309\u4ea4\u6613\u65e5\u663e\u793a\u5747\u4ef7\u7ebf"
       },
       "granularityNames": {
         "1m": "1\u5206\u949f",
+        "5m": "5\u5206\u949f",
         "1d": "\u65e5\u7ebf",
         "1w": "\u5468\u7ebf",
         "1mo": "\u6708\u7ebf"
       },
       "prevClose": "\u6628\u6536",
+      "avgPrice": "\u5747\u4ef7",
+      "adjustAriaLabel": "\u590d\u6743\u65b9\u5f0f",
+      "adjustOptions": {
+        "qfq": "\u524d\u590d\u6743",
+        "none": "\u4e0d\u590d\u6743",
+        "hfq": "\u540e\u590d\u6743"
+      },
       "volumeUnits": {
         "shares": "股",
         "lots": "手"

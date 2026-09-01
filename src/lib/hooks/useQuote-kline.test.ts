@@ -33,6 +33,40 @@ describe('fetchKlinePayload', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/kline/600519.SH?range=1y', { signal: controller.signal });
   });
 
+  it('appends the adjustment override to the request and requires the echo', async () => {
+    const payload = {
+      bars: [],
+      source: 'eastmoney',
+      meta: {
+        source: 'eastmoney',
+        range: '1y',
+        interval: 'day',
+        granularity: '1d',
+        rangeBasis: 'calendar-window',
+        adjustment: 'hfq',
+        cacheTtlSeconds: 60,
+        currencyCode: 'CNY',
+        pricePrecision: 2,
+        minMove: 0.01,
+        volumeUnit: 'shares',
+        requestedBars: 260,
+        returnedBars: 0,
+        availableBars: 281,
+        missingBars: 0,
+      },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchKlinePayload('600519.SH', '1y', undefined, 'hfq')).resolves.toEqual(payload);
+    expect(fetchMock).toHaveBeenCalledWith('/api/kline/600519.SH?range=1y&adjust=hfq', { signal: undefined });
+
+    // A server that ignored the override must not reach the chart.
+    const mismatch = { ...payload, meta: { ...payload.meta, adjustment: 'qfq' } };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(mismatch), { status: 200 })));
+    await expect(fetchKlinePayload('600519.SH', '1y', undefined, 'hfq')).rejects.toMatchObject({ code: 'invalid_data' });
+  });
+
   it('preserves the API error code for localized UI states', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'provider_unavailable' }), { status: 503 })));
     await expect(fetchKlinePayload('NVDA', '1m')).rejects.toMatchObject({ code: 'provider_unavailable' });

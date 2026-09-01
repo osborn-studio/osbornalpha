@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import type { IChartApi, UTCTimestamp } from 'lightweight-charts';
 import {
@@ -10,8 +10,10 @@ import {
   type KlineMeta,
   type KlineRange,
 } from '@/lib/chart/kline';
-import { useKline } from '@/lib/hooks/useQuote';
+import { useKline, type KlineAdjustmentChoice } from '@/lib/hooks/useQuote';
 import { chartStatusKeys, sourceTranslationKey } from './kline-chart-meta';
+import { classifyMarket } from '@/lib/utils';
+import { computeSessionVwap } from '@/lib/chart/session-vwap';
 
 const RANGE_LABELS: Record<KlineRange, string> = { '1d': '1D', '5d': '5D', '1m': '1M', '3m': '3M', '1y': '1Y', '5y': '5Y', max: 'Max' };
 
@@ -87,11 +89,18 @@ export function KlineChart({ ticker }: { ticker: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const [range, setRange] = useState<KlineRange>('3m');
+  const [adjustment, setAdjustment] = useState<KlineAdjustmentChoice | null>(null);
   const [visualRevision, setVisualRevision] = useState(0);
   const [hovered, setHovered] = useState<HoverSnapshot | null>(null);
-  const { bars, loading, error, errorCode, meta, refetch } = useKline(ticker, range);
+  // Crosshair anchor (chart-pane pixels) so the tooltip follows the cursor
+  // like a trading terminal instead of sitting in the corner.
+  const [hoverPoint, setHoverPoint] = useState<{ x: number; y: number } | null>(null);
+  const { bars, loading, error, errorCode, meta, refetch } = useKline(ticker, range, adjustment ?? undefined);
   const displayMeta = meta;
   const unsupportedReason = klineRangeAvailability(ticker, range);
+  const market = displayMeta?.market ?? classifyMarket(ticker);
+  const rangeIsMinute = range === '1d' || range === '5d';
+  const effectiveAdjustment = adjustment ?? (market === 'A' ? 'qfq' : 'none');
 
   useEffect(() => {
     const observer = new MutationObserver((mutations) => {
@@ -177,6 +186,12 @@ export function KlineChart({ ticker }: { ticker: string }) {
         ma5.setData(computeMA(bars, 5, warmup));
         const ma20 = chart.addLineSeries({ color: '#58a6ff', lineWidth: 1, title: 'MA20', priceFormat: { type: 'price', precision, minMove } });
         ma20.setData(computeMA(bars, 20, warmup));
+      } else {
+        const vwapData = computeSessionVwap(bars);
+        if (vwapData.some((bar) => 'value' in bar)) {
+          const vwap = chart.addLineSeries({ color: '#facc15', lineWidth: 1, title: t('avgPrice'), priceFormat: { type: 'price', precision, minMove } });
+          vwap.setData(vwapData);
+        }
       }
 
       const volume = chart.addHistogramSeries({
@@ -195,10 +210,13 @@ export function KlineChart({ ticker }: { ticker: string }) {
       chart.subscribeCrosshairMove((param) => {
         if (typeof param.time !== 'number') {
           setHovered(hoverSnapshot(bars, bars.length - 1));
+          setHoverPoint(null);
           return;
         }
         const index = indexByTime.get(param.time);
         if (index !== undefined) setHovered(hoverSnapshot(bars, index));
+        if (param.point) setHoverPoint({ x: param.point.x, y: param.point.y });
+        else setHoverPoint(null);
       });
       chart.timeScale().fitContent();
 
@@ -235,6 +253,17 @@ export function KlineChart({ ticker }: { ticker: string }) {
   const volumeFormatter = new Intl.NumberFormat(locale, { notation: 'compact', maximumFractionDigits: 2 });
   const currency = displayMeta?.currencyCode || displayMeta?.currency || '';
   const volumeUnit = displayMeta?.volumeUnit ?? 'shares';
+  // Keep the tooltip inside the chart pane as it follows the crosshair;
+  // fall back to the top-left corner when the cursor is outside.
+  const tooltipPosition = useMemo(() => {
+    if (!hoverPoint || !containerRef.current) return { left: 8, top: 8 };
+    const width = containerRef.current.clientWidth;
+    const height = containerRef.current.clientHeight;
+    return {
+      left: Math.max(8, Math.min(hoverPoint.x + 16, width - 330)),
+      top: Math.max(8, Math.min(hoverPoint.y - 8, height - 150)),
+    };
+  }, [hoverPoint]);
 
   return (
     <div data-testid="kline-chart">
@@ -262,11 +291,22 @@ export function KlineChart({ ticker }: { ticker: string }) {
               );
             })}
           </div>
+          {(market === 'A' || market === 'HK') && !rangeIsMinute && (
+            <div className="inline-flex rounded-md bg-bg-card p-0.5" role="group" aria-label={t('adjustAriaLabel')}>
+              {(['qfq', 'none', 'hfq'] as const).map((mode) => (
+                <button key={mode} type="button" onClick={() => setAdjustment(mode)} aria-pressed={effectiveAdjustment === mode}
+                  title={t(`adjustments.${mode}`)}
+                  className={`rounded px-2 py-1 text-xs font-medium transition ${effectiveAdjustment === mode ? 'bg-accent-dim text-white' : 'text-text-dim hover:text-text'}`}>
+                  {t(`adjustOptions.${mode}`)}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
       <div className="relative h-[380px] w-full">
         {hovered && displayMeta && !loading && (
-          <div data-testid="kline-tooltip" className="pointer-events-none absolute left-2 top-2 z-10 rounded-md border border-border bg-bg-elevated px-3 py-2 text-[11px] shadow-lg">
+          <div data-testid="kline-tooltip" style={tooltipPosition} className="pointer-events-none absolute z-10 rounded-md border border-border bg-bg-elevated px-3 py-2 text-[11px] shadow-lg">
             <div className="mb-1 font-semibold text-text">
               {formatChartTime(hovered.time, displayMeta.interval, locale)} · {displayMeta.timezone}
             </div>

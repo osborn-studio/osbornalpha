@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { aggregateDailyBars } from './aggregate';
+import { aggregateDailyBars, resampleMinuteBars } from './aggregate';
 import type { SourceKlineBar } from './types';
 
-const bar = (time: string, open: number, high: number, low: number, close: number, volume: number): SourceKlineBar =>
-  ({ time, open, high, low, close, volume });
+const bar = (
+  time: string,
+  open: number,
+  high: number,
+  low: number,
+  close: number,
+  volume: number,
+  amount?: number,
+): SourceKlineBar => ({ time, open, high, low, close, volume, ...(amount !== undefined ? { amount } : {}) });
 
 describe('aggregateDailyBars', () => {
   it('merges each natural month into one candle stamped at month start', () => {
@@ -42,6 +49,36 @@ describe('aggregateDailyBars', () => {
     ];
     expect(aggregateDailyBars(bars, 'month')).toEqual([
       { time: '2026-08-01', open: 30, high: 31, low: 29, close: 30.5, volume: 400 },
+    ]);
+  });
+
+  it('resamples one-minute bars onto the five-minute grid and sums turnover', () => {
+    const minute = [
+      bar('2026-08-14 09:30:00', 10, 11, 9, 10.5, 100, 1_050),
+      bar('2026-08-14 09:32:00', 10.5, 12, 10, 11, 100, 1_100),
+      bar('2026-08-14 09:34:59', 11, 11.5, 10.5, 11.2, 50, 560),
+      bar('2026-08-14 09:35:00', 11.2, 12, 11, 11.8, 80, 944),
+      bar('2026-08-14 09:38:00', 11.8, 12.2, 11.5, 12, 70, 840),
+      // Off-grid start floors into its bucket.
+      bar('2026-08-14 09:41:00', 12, 12.5, 12, 12.4, 60, 744),
+    ];
+    expect(resampleMinuteBars(minute, 5)).toEqual([
+      { time: '2026-08-14 09:30', open: 10, high: 12, low: 9, close: 11.2, volume: 250, amount: 2_710 },
+      { time: '2026-08-14 09:35', open: 11.2, high: 12.2, low: 11, close: 12, volume: 150, amount: 1_784 },
+      { time: '2026-08-14 09:40', open: 12, high: 12.5, low: 12, close: 12.4, volume: 60, amount: 744 },
+    ]);
+  });
+
+  it('drops bars without a clock label instead of guessing buckets', () => {
+    expect(resampleMinuteBars([bar('2026-08-14', 10, 11, 9, 10, 100)], 5)).toEqual([]);
+  });
+
+  it('drops aggregate turnover when any constituent bar does not provide it', () => {
+    expect(resampleMinuteBars([
+      bar('2026-08-14 09:30:00', 10, 11, 9, 10.5, 100, 1_050),
+      bar('2026-08-14 09:31:00', 10.5, 12, 10, 11, 100),
+    ], 5)).toEqual([
+      { time: '2026-08-14 09:30', open: 10, high: 12, low: 9, close: 11, volume: 200 },
     ]);
   });
 });

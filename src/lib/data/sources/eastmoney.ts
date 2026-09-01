@@ -213,12 +213,12 @@ export async function fetchEastmoneyQuote(ticker: string, signal?: AbortSignal):
 }
 
 // ─── K-line ───
-export interface KlineBar { time: string; open: number; high: number; low: number; close: number; volume: number }
+export interface KlineBar { time: string; open: number; high: number; low: number; close: number; volume: number; amount?: number }
 
-export type KlineInterval = '1' | 'D' | 'W' | 'M';
+export type KlineInterval = '1' | '5' | 'D' | 'W' | 'M';
 
 export interface EastmoneyKlineOptions {
-  adjustment?: Extract<KlineAdjustment, 'qfq' | 'none' | 'intraday'>;
+  adjustment?: Extract<KlineAdjustment, 'qfq' | 'hfq' | 'none' | 'intraday'>;
   signal?: AbortSignal;
   timeoutMs?: number;
 }
@@ -232,13 +232,14 @@ export async function fetchEastmoneyKline(
   const parsed = tickerToSecid(ticker);
   if (!parsed) return null;
 
-  const adjustment: KlineAdjustment = period === '1'
+  const adjustment: KlineAdjustment = period === '1' || period === '5'
     ? 'intraday'
     : options.adjustment ?? (parsed.market === 'A' ? 'qfq' : 'none');
-  const fqt = adjustment === 'qfq' ? 1 : 0;
+  // fqt: 0 unadjusted, 1 forward-adjusted (qfq), 2 back-adjusted (hfq).
+  const fqt = adjustment === 'qfq' ? 1 : adjustment === 'hfq' ? 2 : 0;
 
-  // Eastmoney uses 1 for one-minute bars and 101/102/103 for daily/weekly/monthly.
-  const klt = period === '1' ? '1' : period === 'D' ? '101' : period === 'W' ? '102' : '103';
+  // Eastmoney uses 1/5 for one-/five-minute bars and 101/102/103 for daily/weekly/monthly.
+  const klt = period === '1' ? '1' : period === '5' ? '5' : period === 'D' ? '101' : period === 'W' ? '102' : '103';
   const tryFetch = async (secid: string): Promise<KlineBar[]> => {
     const url =
       `https://push2his.eastmoney.com/api/qt/stock/kline/get?cb=cb` +
@@ -249,7 +250,9 @@ export async function fetchEastmoneyKline(
     const json = await fetchJsonp(url, options.timeoutMs ?? 5000, options.signal);
     const klines: string[] = Array.isArray(json?.data?.klines) ? json.data.klines : [];
     return klines.map((line) => {
-      const [date, open, close, high, low, volume] = line.split(',');
+      // Row layout: date, open, close, high, low, volume, amount.
+      const [date, open, close, high, low, volume, amount] = line.split(',');
+      const turnover = Number(amount);
       return {
         time: date,
         open: parseFloat(open),
@@ -259,6 +262,7 @@ export async function fetchEastmoneyKline(
         // Eastmoney reports A-share K-line volume in board lots (手), while
         // Hong Kong and US history is already expressed in shares.
         volume: parseFloat(volume) * (parsed.market === 'A' ? 100 : 1),
+        ...(Number.isFinite(turnover) ? { amount: turnover } : {}),
       };
     });
   };

@@ -13,6 +13,14 @@ describe('Eastmoney K-line adapter', () => {
     expect(result?.bars[0].volume).toBe(10_000);
   });
 
+  it('requests A-share daily bars as hfq with Eastmoney back-adjustment', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response('cb({"data":{"klines":["2026-08-11,10,11,12,9,100"]}});', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await fetchEastmoneyKline('600519.SH', 'D', 22, { adjustment: 'hfq' });
+    expect(String(fetchMock.mock.calls[0][0])).toContain('&fqt=2');
+    expect(result).toMatchObject({ source: 'eastmoney', adjustment: 'hfq', volumeUnit: 'shares' });
+  });
+
   it('requests unadjusted HK history and intraday bars with explicit semantics', async () => {
     const fetchMock = vi.fn().mockImplementation(async () => new Response('cb({"data":{"klines":["2026-08-11,10,11,12,9,100"]}});', { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);

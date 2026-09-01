@@ -7,6 +7,7 @@ import {
   klineBarLimit,
   klineRangeAvailability,
   marketTimezone,
+  parseKlineAdjustment,
   parseKlineRange,
   toChartTimestamp,
   type KlineBar,
@@ -22,10 +23,16 @@ interface Ctx { params: Promise<{ ticker: string }> }
 export async function GET(req: Request, { params }: Ctx) {
   const { ticker: raw } = await params;
   const ticker = decodeURIComponent(raw);
-  const requestedRange = new URL(req.url).searchParams.get('range') ?? '3m';
+  const url = new URL(req.url);
+  const requestedRange = url.searchParams.get('range') ?? '3m';
   const range = parseKlineRange(requestedRange);
   if (!range) {
     return NextResponse.json({ error: 'invalid_range', message: `range must be one of ${KLINE_RANGES.join(', ')}` }, { status: 400 });
+  }
+  const adjustParam = url.searchParams.get('adjust');
+  const adjustment = parseKlineAdjustment(adjustParam) ?? undefined;
+  if (adjustParam !== null && !adjustment) {
+    return NextResponse.json({ error: 'invalid_adjustment', message: 'adjust must be one of qfq, hfq, none' }, { status: 400 });
   }
 
   const unavailable = klineRangeAvailability(ticker, range);
@@ -36,7 +43,7 @@ export async function GET(req: Request, { params }: Ctx) {
   const market = classifyMarket(ticker);
   const config = KLINE_RANGE_CONFIG[range];
   try {
-    const result = await resolveKline({ ticker, range });
+    const result = await resolveKline({ ticker, range, adjustment });
 
     const sourceBars = result.bars;
     let previousClose = result.previousClose;
@@ -84,7 +91,11 @@ export async function GET(req: Request, { params }: Ctx) {
       requestedBars,
       returnedBars: bars.length,
       availableBars: result.availableBars,
-      missingBars: range === 'max' ? 0 : Math.max(0, requestedBars - result.availableBars),
+      // For an untruncated "Max" series the cap-based requestedBars would
+      // fabricate missing months; a truncated series keeps the lower bound.
+      missingBars: range === 'max' && result.completeness === 'complete'
+        ? 0
+        : Math.max(0, requestedBars - result.availableBars),
       ...(result.warmupCloses.length > 0 ? { maWarmupCloses: result.warmupCloses } : {}),
       cacheTtlSeconds: config.interval === 'minute' ? 60 : 300,
       freshness: result.freshness,

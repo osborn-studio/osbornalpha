@@ -13,14 +13,14 @@ import { classifyMarket } from '@/lib/utils';
 export const KLINE_RANGES = ['1d', '5d', '1m', '3m', '1y', '5y', 'max'] as const;
 export type KlineRange = typeof KLINE_RANGES[number];
 export type KlineInterval = 'minute' | 'day' | 'week' | 'month';
-export type KlineGranularity = '1m' | '1d' | '1w' | '1mo';
+export type KlineGranularity = '1m' | '5m' | '1d' | '1w' | '1mo';
 export type KlineUnavailableReason = 'market_unsupported' | 'intraday_unsupported' | 'history_unsupported';
 
 export interface KlineRangeConfig {
   range: KlineRange;
   interval: KlineInterval;
   granularity: KlineGranularity;
-  providerPeriod: '1' | 'D' | 'W' | 'M';
+  providerPeriod: '1' | '5' | 'D' | 'W' | 'M';
   /**
    * Calendar length of the window in exchange-local days. `null` means the
    * full history the providers can return ("Max"). Minute ranges select
@@ -45,6 +45,8 @@ export interface KlineBar {
   low: number;
   close: number;
   volume: number;
+  /** Turnover in quote currency when the provider reports it (VWAP seed). */
+  amount?: number | null;
   /** Previous comparable close used by the server for audited change calculations. */
   previousClose: number | null;
   change: number | null;
@@ -91,7 +93,7 @@ export interface KlineMeta {
 
 export const KLINE_RANGE_CONFIG: Record<KlineRange, KlineRangeConfig> = {
   '1d': { range: '1d', interval: 'minute', granularity: '1m', providerPeriod: '1', calendarDays: null, sessions: 1, limit: 240 },
-  '5d': { range: '5d', interval: 'minute', granularity: '1m', providerPeriod: '1', calendarDays: null, sessions: 5, limit: 1_200 },
+  '5d': { range: '5d', interval: 'minute', granularity: '5m', providerPeriod: '5', calendarDays: null, sessions: 5, limit: 240 },
   '1m': { range: '1m', interval: 'day', granularity: '1d', providerPeriod: 'D', calendarDays: 31, sessions: 0, limit: 32 },
   '3m': { range: '3m', interval: 'day', granularity: '1d', providerPeriod: 'D', calendarDays: 92, sessions: 0, limit: 68 },
   '1y': { range: '1y', interval: 'day', granularity: '1d', providerPeriod: 'D', calendarDays: 366, sessions: 0, limit: 260 },
@@ -109,8 +111,17 @@ export function marketSessionMinutes(market: Market): number {
 export function klineBarLimit(ticker: string, range: KlineRange): number {
   const config = KLINE_RANGE_CONFIG[range];
   if (config.interval !== 'minute') return config.limit;
-  const sessionMinutes = marketSessionMinutes(classifyMarket(ticker));
-  return sessionMinutes * config.sessions;
+  const barMinutes = config.granularity === '5m' ? 5 : 1;
+  return (marketSessionMinutes(classifyMarket(ticker)) * config.sessions) / barMinutes;
+}
+
+/** Markets whose providers support a user-facing adjustment toggle. */
+export function adjustmentSelectable(market: Market): boolean {
+  return market === 'A' || market === 'HK';
+}
+
+export function parseKlineAdjustment(value: string | null): 'qfq' | 'hfq' | 'none' | null {
+  return value === 'qfq' || value === 'hfq' || value === 'none' ? value : null;
 }
 
 export function parseKlineRange(value: string | null): KlineRange | null {

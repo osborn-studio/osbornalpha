@@ -6,6 +6,8 @@ import { KlineProviderError, type SourceKlineBar } from '@/lib/data/kline/types'
 export interface SinaIntradayKlineOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** Bar granularity; Sina's `scale` serves 1- and 5-minute history. */
+  granularity?: '1m' | '5m';
 }
 
 function symbolOf(ticker: string): string | null {
@@ -47,7 +49,7 @@ export async function fetchSinaIntradayKline(
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 4_500);
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
   try {
-    const url = `https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketData.getKLineData?symbol=${symbol}&scale=1&ma=no&datalen=${Math.max(1, Math.min(limit, 240))}`;
+    const url = `https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketData.getKLineData?symbol=${symbol}&scale=${options.granularity === '5m' ? 5 : 1}&ma=no&datalen=${Math.max(1, Math.min(limit, 240))}`;
     const response = await fetch(url, {
       headers: { Referer: 'https://finance.sina.com.cn/', 'User-Agent': 'Mozilla/5.0 (compatible; StockMonitor/1.0)' },
       signal,

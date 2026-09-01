@@ -1,7 +1,9 @@
 import type { Market } from '@/lib/supabase/database.types';
 
 export type KlineSourceName = 'datagateway' | 'eastmoney' | 'sina' | 'tencent' | 'twse' | 'tpex';
-export type KlineAdjustment = 'qfq' | 'none' | 'intraday';
+export type KlineAdjustment = 'qfq' | 'hfq' | 'none' | 'intraday';
+/** User-selectable adjustment modes for daily-and-longer ranges. */
+export type KlineAdjustmentSelection = 'qfq' | 'hfq' | 'none';
 export type KlineProviderFailureKind =
   | 'unsupported'
   | 'empty'
@@ -18,6 +20,8 @@ export interface SourceKlineBar {
   low: number;
   close: number;
   volume: number;
+  /** Turnover in quote currency when the provider reports it (VWAP seed). */
+  amount?: number;
 }
 
 export interface SourceKlineSeries {
@@ -36,6 +40,8 @@ export interface KlineProvider {
   maxAttempts: number;
   /** Interval this provider actually serves for the request, before aggregation. */
   returnsInterval?: 'minute' | 'day' | 'week' | 'month';
+  /** Native minute granularity when returnsInterval === 'minute'. */
+  returnsGranularity?: '1m' | '5m';
   fetch(signal: AbortSignal): Promise<SourceKlineSeries | null>;
 }
 

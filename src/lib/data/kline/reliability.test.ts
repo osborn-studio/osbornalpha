@@ -89,12 +89,45 @@ describe('KlineReliabilityEngine', () => {
     const intraday = provider('eastmoney', vi.fn().mockResolvedValue({ source: 'eastmoney', adjustment: 'intraday', volumeUnit: 'shares', bars }));
     intraday.adjustment = 'intraday';
     intraday.returnsInterval = 'minute';
+    intraday.returnsGranularity = '5m';
     const engine = new KlineReliabilityEngine({ providersFor: () => [intraday], now: () => NOW });
     const result = await engine.resolve({ ticker: 'NVDA', range: '5d' });
     expect(result.bars.map((bar) => bar.time.slice(0, 10))).toEqual([
       '2026-08-10', '2026-08-11', '2026-08-12', '2026-08-13', '2026-08-14',
     ]);
     expect(result.previousClose).toBe(91);
+  });
+
+  it('resamples one-minute providers onto the 5D five-minute grid', async () => {
+    const minute: SourceKlineBar[] = [];
+    for (let index = 0; index < 10; index += 1) {
+      const minuteOfDay = 30 + index;
+      minute.push({
+        time: `2026-08-14 09:${String(minuteOfDay).padStart(2, '0')}:00`,
+        open: 100 + index, high: 101 + index, low: 99 + index, close: 100 + index, volume: 10, amount: 1_000,
+      });
+    }
+    const wind = provider('datagateway', vi.fn().mockResolvedValue({ source: 'datagateway', adjustment: 'intraday', volumeUnit: 'shares', bars: minute }));
+    wind.adjustment = 'intraday';
+    wind.returnsInterval = 'minute';
+    wind.returnsGranularity = '1m';
+    const engine = new KlineReliabilityEngine({ providersFor: () => [wind], now: () => NOW });
+
+    const result = await engine.resolve({ ticker: 'NVDA', range: '5d' });
+    expect(result.bars.map((bar) => bar.time)).toEqual(['2026-08-14 09:30', '2026-08-14 09:35']);
+    expect(result.bars[0]).toMatchObject({ open: 100, high: 105, low: 99, close: 104, volume: 50, amount: 5_000 });
+    expect(result.availableBars).toBe(2);
+  });
+
+  it('honors an explicit adjustment selection end to end', async () => {
+    const history = provider('eastmoney', vi.fn().mockResolvedValue({
+      source: 'eastmoney', adjustment: 'hfq', volumeUnit: 'shares', bars: completeBars(),
+    }));
+    history.adjustment = 'hfq';
+    const engine = new KlineReliabilityEngine({ providersFor: () => [history], now: () => NOW });
+
+    const result = await engine.resolve({ ticker: '600519.SH', range: '1m', adjustment: 'hfq' });
+    expect(result.adjustment).toBe('hfq');
   });
 
   it('drops off-session auction bars before selecting the trading sessions', async () => {
@@ -190,6 +223,10 @@ describe('KlineReliabilityEngine', () => {
     expect(result.bars[0]).toMatchObject({ open: 100, high: 108, low: 99, close: 107, volume: 700 });
     expect(result.completeness).toBe('partial');
     expect(result.previousClose).toBeNull();
+    // NOW is a Saturday inside the 2026-08-10 week: the last weekly bar is
+    // still forming even though the market is closed.
+    expect(result.partial).toBe(true);
+    expect(result.warnings).toContain('partial_bar');
   });
 
   it('passes native weekly bars through without re-aggregating', async () => {
@@ -204,6 +241,52 @@ describe('KlineReliabilityEngine', () => {
     const result = await engine.resolve({ ticker: 'NVDA', range: '5y' });
     expect(result.bars).toEqual(weekly);
     expect(result.previousClose).toBeNull();
+  });
+
+  it('marks Max complete when the aggregated fallback exhausts provider history', async () => {
+    // 40 daily bars (07-06..08-14) are far below the 1800-bar fetch cap, so
+    // the aggregated monthly series is everything the provider has.
+    const fallback = provider('sina', vi.fn().mockResolvedValue({ source: 'sina', adjustment: 'none', volumeUnit: 'shares', bars: completeBars(40) }));
+    fallback.returnsInterval = 'day';
+    const engine = new KlineReliabilityEngine({ providersFor: () => [fallback], now: () => NOW });
+
+    const result = await engine.resolve({ ticker: 'NVDA', range: 'max' });
+    expect(result.bars.map((bar) => bar.time)).toEqual(['2026-07-01', '2026-08-01']);
+    expect(result.completeness).toBe('complete');
+    expect(result.warnings).not.toContain('partial_coverage');
+    // NOW (Saturday 2026-08-15) sits in the 2026-08 bucket: forming monthly bar.
+    expect(result.partial).toBe(true);
+  });
+
+  it('flags Max as partial when the aggregated fallback hits the daily fetch cap', async () => {
+    const daily = Array.from({ length: 2_000 }, (_, index) => ({
+      time: dayString(index - 2_000),
+      open: 100, high: 101, low: 99, close: 100, volume: 10,
+    }));
+    const fallback = provider('sina', vi.fn().mockResolvedValue({ source: 'sina', adjustment: 'none', volumeUnit: 'shares', bars: daily }));
+    fallback.returnsInterval = 'day';
+    const engine = new KlineReliabilityEngine({ providersFor: () => [fallback], now: () => NOW });
+
+    const result = await engine.resolve({ ticker: 'NVDA', range: 'max' });
+    expect(result.completeness).toBe('partial');
+    expect(result.warnings).toContain('partial_coverage');
+    expect(result.availableBars).toBeLessThan(600);
+  });
+
+  it('marks native Max monthly history complete regardless of depth', async () => {
+    const monthly: SourceKlineBar[] = [
+      { time: '2024-01-01', open: 10, high: 12, low: 9, close: 11, volume: 500 },
+      { time: '2025-01-01', open: 11, high: 13, low: 10, close: 12, volume: 600 },
+      { time: '2026-08-01', open: 12, high: 14, low: 11, close: 13, volume: 700 },
+    ];
+    const native = provider('eastmoney', vi.fn().mockResolvedValue({ source: 'eastmoney', adjustment: 'none', volumeUnit: 'shares', bars: monthly }));
+    native.returnsInterval = 'month';
+    const engine = new KlineReliabilityEngine({ providersFor: () => [native], now: () => NOW });
+
+    const result = await engine.resolve({ ticker: 'NVDA', range: 'max' });
+    expect(result.bars).toEqual(monthly);
+    expect(result.completeness).toBe('complete');
+    expect(result.partial).toBe(true);
   });
 
   it('returns last-known-good data as explicitly stale after providers fail', async () => {
@@ -361,29 +444,32 @@ describe('provider route matrix', () => {
   });
 
   it.each([
-    ['600519.SH', '1d', ['eastmoney', 'sina']],
-    ['600519.SH', '5d', ['eastmoney', 'sina']],
-    ['600519.SH', '1m', ['eastmoney', 'tencent']],
-    ['600519.SH', '5y', ['eastmoney', 'tencent']],
-    ['00700.HK', '1d', ['eastmoney']],
-    ['00700.HK', '5d', ['eastmoney']],
-    ['00700.HK', '1y', ['eastmoney', 'tencent']],
-    ['NVDA', '1d', ['eastmoney']],
-    ['NVDA', '3m', ['eastmoney', 'sina']],
-    ['NVDA', '5y', ['eastmoney', 'sina']],
-    ['NVDA', 'max', ['eastmoney', 'sina']],
-    ['2330.TW', '1y', ['twse']],
-    ['2330.TW', 'max', ['twse']],
-    ['5483.TWO', '1m', ['tpex']],
-    ['2330.TW', '1d', []],
-    ['2330.TW', '5d', []],
-    ['7203.T', '1d', []],
-    ['7203.T', '5d', []],
-    ['7203.T', '1m', []],
-    ['005930.KS', '1y', []],
-    ['005930.KS', '5y', []],
-  ] as const)('routes %s %s only to verified historical providers', (ticker, range, expected) => {
-    expect(klineProviderRoute(ticker, range)).toEqual(expected);
+    ['600519.SH', '1d', undefined, ['eastmoney', 'sina']],
+    ['600519.SH', '5d', undefined, ['eastmoney', 'sina']],
+    ['600519.SH', '1m', undefined, ['eastmoney', 'tencent']],
+    ['600519.SH', '5y', undefined, ['eastmoney', 'tencent']],
+    ['600519.SH', '1y', 'hfq', ['eastmoney']],
+    ['00700.HK', '1y', 'hfq', ['eastmoney']],
+    ['NVDA', '1y', 'hfq', ['eastmoney', 'sina']],
+    ['00700.HK', '1d', undefined, ['eastmoney']],
+    ['00700.HK', '5d', undefined, ['eastmoney']],
+    ['00700.HK', '1y', undefined, ['eastmoney', 'tencent']],
+    ['NVDA', '1d', undefined, ['eastmoney']],
+    ['NVDA', '3m', undefined, ['eastmoney', 'sina']],
+    ['NVDA', '5y', undefined, ['eastmoney', 'sina']],
+    ['NVDA', 'max', undefined, ['eastmoney', 'sina']],
+    ['2330.TW', '1y', undefined, ['twse']],
+    ['2330.TW', 'max', undefined, ['twse']],
+    ['5483.TWO', '1m', undefined, ['tpex']],
+    ['2330.TW', '1d', undefined, []],
+    ['2330.TW', '5d', undefined, []],
+    ['7203.T', '1d', undefined, []],
+    ['7203.T', '5d', undefined, []],
+    ['7203.T', '1m', undefined, []],
+    ['005930.KS', '1y', undefined, []],
+    ['005930.KS', '5y', undefined, []],
+  ] as const)('routes %s %s only to verified historical providers', (ticker, range, adjustment, expected) => {
+    expect(klineProviderRoute(ticker, range, adjustment)).toEqual(expected);
   });
 
   it('prefers complete OHLCV feeds and keeps Datagateway as a daily fallback', () => {

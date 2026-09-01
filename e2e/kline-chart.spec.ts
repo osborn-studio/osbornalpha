@@ -13,7 +13,7 @@ test('ticker chart requests the selected business range and exposes provenance',
     const range = new URL(route.request().url()).searchParams.get('range');
     if (range) ranges.push(range);
     const interval = range === '1d' || range === '5d' ? 'minute' : range === '5y' ? 'week' : range === 'max' ? 'month' : 'day';
-    const requestedBars = range === '1d' ? 390 : range === '5d' ? 1_950
+    const requestedBars = range === '1d' ? 390 : range === '5d' ? 390
       : range === '1m' ? 32 : range === '3m' ? 68 : range === '1y' ? 260
       : range === '5y' ? 275 : 600;
     await route.fulfill({
@@ -23,7 +23,7 @@ test('ticker chart requests the selected business range and exposes provenance',
         meta: {
           range,
           interval,
-          granularity: interval === 'minute' ? '1m' : interval === 'day' ? '1d' : interval === 'week' ? '1w' : '1mo',
+          granularity: range === '1d' ? '1m' : range === '5d' ? '5m' : interval === 'day' ? '1d' : interval === 'week' ? '1w' : '1mo',
           source: 'eastmoney',
           adjustment: interval === 'minute' ? 'intraday' : 'none',
           rangeBasis: interval === 'minute' ? 'trading-sessions' : 'calendar-window',
