@@ -26,6 +26,10 @@ import {
 } from '@/lib/watchlist/onboarding';
 import { classifyAssetType } from '@/lib/stocks/asset-type';
 import { canAddResult, nextSearchAction } from '@/lib/watchlist/security-validation';
+import {
+  ImportValidationError,
+  validateImportedTickerBatches,
+} from '@/lib/watchlist/import-validation';
 
 const REFRESH_MS = 60_000;
 
@@ -1260,26 +1264,17 @@ function ImportDialog({ existingTickerCount, existingTickers, onCancel, onConfir
     setValidationError(null);
     setRejected([]);
     try {
-      const response = await fetch('/api/securities/validate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tickers: fresh }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        setValidationError(data?.error === 'security_master_unavailable' ? t('validationUnavailable') : t('validationFailed'));
-        return;
-      }
-      const accepted = Array.isArray(data.accepted) ? data.accepted.filter((ticker: unknown): ticker is string => typeof ticker === 'string') : [];
-      const invalid = Array.isArray(data.rejected) ? data.rejected.filter((ticker: unknown): ticker is string => typeof ticker === 'string') : [];
+      const { accepted, rejected: invalid } = await validateImportedTickerBatches(fresh);
       setRejected(invalid);
       if (accepted.length === 0) {
         setValidationError(t('validationNoneAccepted'));
         return;
       }
       onConfirm(accepted, boardName, invalid);
-    } catch {
-      setValidationError(t('validationFailed'));
+    } catch (error) {
+      setValidationError(error instanceof ImportValidationError && error.code === 'security_master_unavailable'
+        ? t('validationUnavailable')
+        : t('validationFailed'));
     } finally {
       setValidating(false);
     }

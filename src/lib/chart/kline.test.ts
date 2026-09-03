@@ -49,8 +49,12 @@ describe('kline range contract', () => {
     expect(klineRangeAvailability('5483.TWO', '1y')).toBeNull();
     expect(klineRangeAvailability('7203.T', '1d')).toBe('market_unsupported');
     expect(klineRangeAvailability('7203.T', '5d')).toBe('market_unsupported');
-    expect(klineRangeAvailability('7203.T', '5y')).toBeNull();
-    expect(klineRangeAvailability('7203.T', '1m')).toBeNull();
+    expect(klineRangeAvailability('7203.T', '5y', false)).toBe('market_unsupported');
+    expect(klineRangeAvailability('7203.T', '5y', true)).toBeNull();
+    expect(klineRangeAvailability('7203.T', '1m', false)).toBe('market_unsupported');
+    expect(klineRangeAvailability('7203.T', '1m', true)).toBeNull();
+    expect(klineRangeAvailability('005930.KS', '1y', false)).toBe('market_unsupported');
+    expect(klineRangeAvailability('005930.KS', '1y', true)).toBeNull();
     expect(klineRangeAvailability('NVDA', '1y')).toBeNull();
     expect(klineRangeAvailability('NVDA', 'all')).toBeNull();
   });
@@ -73,6 +77,7 @@ describe('kline range contract', () => {
     expect(KLINE_RANGE_CONFIG['6m']).toMatchObject({ interval: 'day', granularity: '1d', providerPeriod: 'D', calendarDays: 184, limit: 140 });
     expect(KLINE_RANGE_CONFIG.ytd).toMatchObject({ interval: 'day', granularity: '1d', providerPeriod: 'D', calendarDays: 'ytd', limit: 260 });
     expect(KLINE_RANGE_CONFIG['1y']).toMatchObject({ interval: 'day', granularity: '1d', providerPeriod: 'D', calendarDays: 366, limit: 260 });
+    expect(klineBarLimit('NVDA', '1y')).toBe(260);
     expect(KLINE_RANGE_CONFIG['5y']).toMatchObject({ interval: 'week', granularity: '1w', providerPeriod: 'W', calendarDays: 1_826, limit: 275 });
     expect(KLINE_RANGE_CONFIG.all).toMatchObject({ interval: 'month', granularity: '1mo', providerPeriod: 'M', calendarDays: null, limit: 600 });
     expect(KLINE_RANGE_CONFIG['5d']).toMatchObject({ interval: 'minute', granularity: '5m', providerPeriod: '5', sessions: 5 });

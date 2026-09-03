@@ -77,6 +77,24 @@ describe('GET /api/kline/[ticker]', () => {
     expect(mocks.resolve).not.toHaveBeenCalled();
   });
 
+  it('rejects JP/KR history when the server-side gateway is not configured', async () => {
+    const baseUrl = process.env.DATAGATEWAY_BASE_URL;
+    const apiKey = process.env.DATAGATEWAY_API_KEY;
+    delete process.env.DATAGATEWAY_BASE_URL;
+    delete process.env.DATAGATEWAY_API_KEY;
+    try {
+      const response = await GET(new Request('https://example.test/api/kline/7203.T?range=1m'), ctx('7203.T'));
+      expect(response.status).toBe(422);
+      expect((await response.json()).error).toBe('market_unsupported');
+      expect(mocks.resolve).not.toHaveBeenCalled();
+    } finally {
+      if (baseUrl === undefined) delete process.env.DATAGATEWAY_BASE_URL;
+      else process.env.DATAGATEWAY_BASE_URL = baseUrl;
+      if (apiKey === undefined) delete process.env.DATAGATEWAY_API_KEY;
+      else process.env.DATAGATEWAY_API_KEY = apiKey;
+    }
+  });
+
   it.each([
     ['2330.TW', 'twse'],
     ['5483.TWO', 'tpex'],

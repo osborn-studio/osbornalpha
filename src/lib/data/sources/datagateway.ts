@@ -23,6 +23,7 @@ import {
 const DEFAULT_DAILY_KLINE_PATH = '/v1/market-data/security-prices/history/query';
 const LEGACY_DAILY_KLINE_PATH = '/v1/market/kline/daily';
 const MAX_RESPONSE_BYTES = 1_000_000;
+export const DATAGATEWAY_DAILY_TIMEOUT_MS = 7_000;
 
 export interface DatagatewayConfig {
   baseUrl: URL;
@@ -46,7 +47,9 @@ function record(value: unknown): JsonRecord | null {
 }
 
 /** Returns null for missing or unsafe configuration so public fallbacks stay usable. */
-export function datagatewayConfig(env: Record<string, string | undefined> = process.env): DatagatewayConfig | null {
+export function datagatewayConfig(
+  env: Record<string, string | undefined> = process.env,
+): DatagatewayConfig | null {
   const base = env.DATAGATEWAY_BASE_URL?.trim();
   const apiKey = env.DATAGATEWAY_API_KEY?.trim();
   if (!base || !apiKey) return null;
@@ -290,13 +293,12 @@ export async function fetchDatagatewayDailyKline(
   if (!config || !url) return null;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 2_500);
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DATAGATEWAY_DAILY_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
-  let response: Response;
   try {
     const body = datagatewayDailyKlineBody({ ticker, market, limit });
     if (!body) return null;
-    response = await (options.fetchImpl ?? fetch)(url, {
+    const response = await (options.fetchImpl ?? fetch)(url, {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -307,6 +309,26 @@ export async function fetchDatagatewayDailyKline(
       signal,
       cache: 'no-store',
     });
+    if (!response.ok) {
+      const retryable = response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500;
+      const kind = response.status === 404 ? 'not_found' : response.status === 429 ? 'rate_limited' : retryable ? 'transient' : 'protocol';
+      throw new KlineProviderError(kind, `Datagateway HTTP ${response.status}`, retryable, response.status);
+    }
+    let text: string;
+    try {
+      text = await readLimitedText(response, MAX_RESPONSE_BYTES);
+    } catch (error) {
+      if (error instanceof KlineProviderError) throw error;
+      const aborted = controller.signal.aborted || options.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError');
+      throw new KlineProviderError('transient', aborted ? 'Datagateway request timed out' : 'Datagateway response body failed', true);
+    }
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new KlineProviderError('protocol', 'Datagateway response is invalid JSON');
+    }
+    return parseDatagatewayDailyKline(payload, adjustment);
   } catch (error) {
     if (error instanceof KlineProviderError) throw error;
     const aborted = controller.signal.aborted || options.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError');
@@ -314,18 +336,4 @@ export async function fetchDatagatewayDailyKline(
   } finally {
     clearTimeout(timer);
   }
-
-  if (!response.ok) {
-    const retryable = response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500;
-    const kind = response.status === 404 ? 'not_found' : response.status === 429 ? 'rate_limited' : retryable ? 'transient' : 'protocol';
-    throw new KlineProviderError(kind, `Datagateway HTTP ${response.status}`, retryable, response.status);
-  }
-  let payload: unknown;
-  try {
-    payload = JSON.parse(await readLimitedText(response, MAX_RESPONSE_BYTES));
-  } catch (error) {
-    if (error instanceof KlineProviderError) throw error;
-    throw new KlineProviderError('protocol', 'Datagateway response is invalid JSON');
-  }
-  return parseDatagatewayDailyKline(payload, adjustment);
 }
