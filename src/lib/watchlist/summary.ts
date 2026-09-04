@@ -3,6 +3,7 @@ import type { WatchlistMarketRow } from './market-row';
 export interface WatchlistMarketSummary {
   tracked: number;
   quoted: number;
+  loading: number;
   live: number;
   delayed: number;
   unavailable: number;
@@ -37,6 +38,7 @@ export function summarizeWatchlistMarketRows(rows: WatchlistMarketRow[]): Watchl
   return {
     tracked: rows.length,
     quoted: quoted.length,
+    loading: rows.filter((row) => row.status === 'loading').length,
     live: rows.filter((row) => row.status === 'live').length,
     delayed: rows.filter((row) => row.status === 'delayed').length,
     unavailable: rows.filter((row) => row.status === 'unavailable').length,

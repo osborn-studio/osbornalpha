@@ -139,7 +139,7 @@ export function WatchlistQuickView({
                   <Metric label={t('bollingerPosition')} value={optional(historicalMetrics?.bollingerPositionPct, '%')} />
                   <Metric label={t('atr14')} value={optional(historicalMetrics?.atr14Pct, '%')} />
                 </div>
-                {historicalMetrics && <div className="mt-3 border-t border-border/70 pt-2 text-[10px] text-text-muted">{t('methodology', { days: historicalMetrics.methodology.annualizationFactor, basis: historicalMetrics.methodology.returnBasis })}</div>}
+                {historicalMetrics && <div className="mt-3 border-t border-border/70 pt-2 text-[10px] text-text-muted">{t('methodology', { days: historicalMetrics.methodology.annualizationFactor, basis: historicalMetrics.methodology.returnBasis, riskFree: historicalMetrics.methodology.riskFreeRatePct.toFixed(2) })}</div>}
               </section>
               <div className="mt-5 border-t border-border pt-3">
                 <div className="flex flex-wrap gap-2">

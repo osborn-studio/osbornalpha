@@ -363,6 +363,7 @@ export function WatchlistTable({
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border bg-bg-card px-4 py-2 text-[10px] text-text-muted" aria-label={t('summary.quoteStatusAriaLabel')}>
         <span className="font-medium text-text-dim">{t('summary.quoteStatus')}</span>
+        <span className="inline-flex items-center gap-1.5 text-text-dim"><span className="h-1.5 w-1.5 rounded-full bg-text-muted" />{t('summary.loading')}: {summary.loading}</span>
         <span className="inline-flex items-center gap-1.5 text-up"><span className="h-1.5 w-1.5 rounded-full bg-up" />{t('summary.live')}: {summary.live}</span>
         <span className="inline-flex items-center gap-1.5 text-warn"><span className="h-1.5 w-1.5 rounded-full bg-warn" />{t('summary.delayed')}: {summary.delayed}</span>
         <span className="inline-flex items-center gap-1.5 text-down"><span className="h-1.5 w-1.5 rounded-full bg-down" />{t('summary.unavailable')}: {summary.unavailable}</span>

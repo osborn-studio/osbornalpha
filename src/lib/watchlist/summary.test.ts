@@ -27,6 +27,7 @@ describe('summarizeWatchlistMarketRows', () => {
     expect(summary).toMatchObject({
       tracked: 4,
       quoted: 3,
+      loading: 0,
       live: 2,
       delayed: 1,
       unavailable: 1,

@@ -12,6 +12,7 @@ import { classifyMarket } from '@/lib/utils';
 import { marketPhase } from '@/lib/today/clock';
 import type { DataEnvelope, WatchlistMarketSnapshot } from './overview-contract';
 import { watchlistMarketFreshness } from './freshness';
+import { watchlistRiskFreeRatePct } from './risk';
 export type { DataEnvelope, WatchlistMarketSnapshot } from './overview-contract';
 
 const loadMarket = unstable_cache(async (ticker: string, locale: AppLocale) => {
@@ -75,13 +76,14 @@ function historyEnvelope(
   benchmark: HistorySeries | null,
 ): DataEnvelope<HistoricalWatchlistMetrics> {
   const benchmarkTicker = watchlistBenchmarkTicker(classifyMarket(ticker));
+  const market = classifyMarket(ticker);
   return {
     value: calculateHistoricalWatchlistMetrics(result.bars, {
       benchmarkBars: benchmark?.bars ?? [],
       benchmarkTicker,
-      market: classifyMarket(ticker),
+      market,
       adjustment: result.adjustment,
-      riskFreeRatePct: 0,
+      riskFreeRatePct: watchlistRiskFreeRatePct(market),
     }),
     asOf: result.fetchedAt,
     source: result.source,

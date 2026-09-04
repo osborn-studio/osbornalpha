@@ -198,6 +198,7 @@
         "average": "Equal-weight avg",
         "quoteStatus": "Quote status",
         "quoteStatusAriaLabel": "Quote status for the filtered watchlist",
+        "loading": "Loading",
         "median": "Median change",
         "breadth": "Market breadth"
       },
@@ -335,7 +336,7 @@
       "macdHistogram": "MACD histogram",
       "bollingerPosition": "Bollinger position",
       "atr14": "ATR (14)",
-      "methodology": "Annualised over {days} sessions · {basis} return basis",
+      "methodology": "Annualised over {days} sessions · {basis} return basis · RF {riskFree}%",
       "sampleSize": "{count} sessions",
       "marketSnapshot": "Market snapshot",
       "historySnapshot": "Historical metrics",

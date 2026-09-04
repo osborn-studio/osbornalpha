@@ -198,6 +198,7 @@
         "average": "等权平均",
         "quoteStatus": "报价状态",
         "quoteStatusAriaLabel": "当前筛选标的的报价状态",
+        "loading": "加载中",
         "median": "中位涨跌",
         "breadth": "涨跌广度"
       },
@@ -335,7 +336,7 @@
       "macdHistogram": "MACD 柱",
       "bollingerPosition": "布林带位置",
       "atr14": "ATR（14）",
-      "methodology": "按 {days} 个交易日年化 · {basis}收益口径",
+      "methodology": "按 {days} 个交易日年化 · {basis}收益口径 · 无风险利率 {riskFree}%",
       "sampleSize": "{count} 个交易日",
       "marketSnapshot": "行情快照",
       "historySnapshot": "历史指标",

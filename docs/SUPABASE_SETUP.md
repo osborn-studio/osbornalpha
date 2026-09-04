@@ -65,6 +65,8 @@ WATCHLIST_RUNTIME_URL=https://stock-monitor-nu.vercel.app npm run watchlist:runt
 
 如果 Cron 路由返回 `404`，说明生产仍在运行旧部署或 Vercel 项目绑定未指向当前 `main`，此时先处理部署切换，再进行 Cron 首次运行验收。
 
+Watchlist Sharpe 等风险指标默认使用 `0%` 年化无风险利率；需要更准确的口径时，可在服务端配置 `WATCHLIST_RISK_FREE_RATE_PCT`，或按市场配置 `WATCHLIST_RISK_FREE_RATE_US_PCT`、`WATCHLIST_RISK_FREE_RATE_A_PCT`、`WATCHLIST_RISK_FREE_RATE_HK_PCT`、`WATCHLIST_RISK_FREE_RATE_JP_PCT`、`WATCHLIST_RISK_FREE_RATE_KR_PCT`、`WATCHLIST_RISK_FREE_RATE_TW_PCT`。市场专属值优先，非法值会安全回退到 `0%`。
+
 ## Step 4: 灌入 seed 数据
 
 ```bash
