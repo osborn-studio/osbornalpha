@@ -13,6 +13,8 @@ import { marketPhase } from '@/lib/today/clock';
 import type { DataEnvelope, WatchlistMarketSnapshot } from './overview-contract';
 import { watchlistMarketFreshness } from './freshness';
 import { watchlistRiskFreeRatePct } from './risk';
+import { loadMarketReturnSnapshot } from '@/lib/market-returns/service';
+import type { MarketReturnSnapshot, WatchlistHistoryRange } from '@/lib/market-returns/types';
 export type { DataEnvelope, WatchlistMarketSnapshot } from './overview-contract';
 
 const loadMarket = unstable_cache(async (ticker: string, locale: AppLocale) => {
@@ -64,9 +66,9 @@ const loadMarket = unstable_cache(async (ticker: string, locale: AppLocale) => {
   } satisfies DataEnvelope<WatchlistMarketSnapshot>;
 }, ['watchlist-overview-market-v1'], { revalidate: 60 });
 
-const loadHistorySeries = unstable_cache(async (ticker: string) => {
-  return resolveKline({ ticker, range: '1y' });
-}, ['watchlist-overview-history-v1'], { revalidate: 3600 });
+const loadHistorySeries = unstable_cache(async (ticker: string, range: WatchlistHistoryRange) => {
+  return resolveKline({ ticker, range });
+}, ['watchlist-overview-history-v2'], { revalidate: 3600 });
 
 type HistorySeries = Awaited<ReturnType<typeof loadHistorySeries>>;
 
@@ -75,6 +77,9 @@ function historyEnvelope(
   result: HistorySeries,
   benchmark: HistorySeries | null,
   benchmarkTicker: string,
+  historyRange: WatchlistHistoryRange,
+  returnSnapshot: MarketReturnSnapshot | null,
+  benchmarkReturnSnapshot: MarketReturnSnapshot | null,
 ): DataEnvelope<HistoricalWatchlistMetrics> {
   const market = classifyMarket(ticker);
   const metrics = calculateHistoricalWatchlistMetrics(result.bars, {
@@ -83,17 +88,23 @@ function historyEnvelope(
     market,
     adjustment: result.adjustment,
     riskFreeRatePct: watchlistRiskFreeRatePct(market),
+    historyRange,
+    returnSnapshot,
+    benchmarkReturnSnapshot,
   });
+  const totalReturnAvailable = returnSnapshot?.totalReturnPct != null;
   return {
     value: metrics,
-    asOf: result.fetchedAt,
-    source: result.source,
+    asOf: returnSnapshot?.asOf ?? result.fetchedAt,
+    source: returnSnapshot ? `${result.source}+${returnSnapshot.source}` : result.source,
     status: result.freshness === 'stale' ? 'stale' : 'fresh',
     warnings: [
       ...result.warnings,
       ...(metrics.coverageRatio < 1 ? ['history_partial_coverage'] : []),
       ...(metrics.benchmarkAlignmentRatio != null && metrics.benchmarkAlignmentRatio < 0.9 ? ['benchmark_partial_alignment'] : []),
-      'price_return_only',
+      ...(returnSnapshot?.warnings ?? []),
+      ...(benchmarkReturnSnapshot?.warnings.map((warning) => `benchmark_${warning}`) ?? []),
+      totalReturnAvailable ? 'total_return_adjusted_close' : 'total_return_unavailable',
       ...(!benchmark ? ['benchmark_unavailable'] : []),
     ],
   };
@@ -112,21 +123,37 @@ export interface WatchlistComputedOverview {
 export async function buildComputedWatchlistOverview(
   tickers: string[],
   locale: AppLocale,
-  options: { includeMarket?: boolean; benchmarkTicker?: string | null } = {},
+  options: {
+    includeMarket?: boolean;
+    benchmarkTicker?: string | null;
+    historyRange?: WatchlistHistoryRange;
+    includeTotalReturn?: boolean;
+  } = {},
 ): Promise<Record<string, WatchlistComputedOverview>> {
   const unique = Array.from(new Set(tickers));
+  const historyRange = options.historyRange ?? '1y';
   const benchmarkTickers = Array.from(new Set(unique.map((ticker) => (
     options.benchmarkTicker ?? watchlistBenchmarkTicker(classifyMarket(ticker))
   ))));
-  const benchmarkSettled = await boundedMap(benchmarkTickers, 3, (ticker) => loadHistorySeries(ticker));
+  const [benchmarkSettled, benchmarkReturnSettled] = await Promise.all([
+    boundedMap(benchmarkTickers, 3, (ticker) => loadHistorySeries(ticker, historyRange)),
+    options.includeTotalReturn
+      ? boundedMap(benchmarkTickers, 3, (ticker) => loadMarketReturnSnapshot(ticker, historyRange))
+      : Promise.resolve([]),
+  ]);
   const benchmarkByTicker = new Map<string, HistorySeries>();
   benchmarkSettled.forEach((result, index) => {
     if (result.status === 'fulfilled') benchmarkByTicker.set(benchmarkTickers[index], result.value);
   });
+  const benchmarkReturnByTicker = new Map<string, MarketReturnSnapshot>();
+  benchmarkReturnSettled.forEach((result, index) => {
+    if (result.status === 'fulfilled' && result.value) benchmarkReturnByTicker.set(benchmarkTickers[index], result.value);
+  });
   const settled = await boundedMap(unique, 5, async (ticker) => {
-    const [market, history] = await Promise.allSettled([
+    const [market, history, returnSnapshot] = await Promise.allSettled([
       options.includeMarket ? loadMarket(ticker, locale) : Promise.resolve(null),
-      loadHistorySeries(ticker),
+      loadHistorySeries(ticker, historyRange),
+      options.includeTotalReturn ? loadMarketReturnSnapshot(ticker, historyRange) : Promise.resolve(null),
     ]);
     const benchmarkTicker = options.benchmarkTicker ?? watchlistBenchmarkTicker(classifyMarket(ticker));
     return {
@@ -135,7 +162,15 @@ export async function buildComputedWatchlistOverview(
         ? market.value
         : options.includeMarket ? unavailable<WatchlistMarketSnapshot>('market_unavailable') : null,
       history: history.status === 'fulfilled'
-        ? historyEnvelope(ticker, history.value, benchmarkByTicker.get(benchmarkTicker) ?? null, benchmarkTicker)
+        ? historyEnvelope(
+            ticker,
+            history.value,
+            benchmarkByTicker.get(benchmarkTicker) ?? null,
+            benchmarkTicker,
+            historyRange,
+            returnSnapshot.status === 'fulfilled' ? returnSnapshot.value : null,
+            benchmarkReturnByTicker.get(benchmarkTicker) ?? null,
+          )
         : unavailable<HistoricalWatchlistMetrics>('history_unavailable'),
     };
   });

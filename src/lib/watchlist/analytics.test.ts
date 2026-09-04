@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { KlineBar } from '@/lib/chart/kline';
-import { calculateHistoricalWatchlistMetrics, tradingDaysPerYear } from './analytics';
+import { calculateHistoricalWatchlistMetrics, tradingDaysPerYear, watchlistAnnualizationFactor } from './analytics';
 
 function bar(time: number, close: number, high = close, low = close): KlineBar {
   return { time, open: close, high, low, close, volume: 100, previousClose: null, change: null, changePct: null };
@@ -16,6 +16,13 @@ describe('calculateHistoricalWatchlistMetrics', () => {
     expect(us.methodology.annualizationFactor).toBe(252);
     expect(aShare.methodology.annualizationFactor).toBe(244);
     expect(aShare.annualizedVolatilityPct).toBeLessThan(us.annualizedVolatilityPct!);
+  });
+
+  it('annualizes weekly and monthly history using their observation frequency', () => {
+    expect(watchlistAnnualizationFactor('US', '5y')).toBe(52);
+    expect(watchlistAnnualizationFactor('US', 'all')).toBe(12);
+    expect(calculateHistoricalWatchlistMetrics([], { market: 'US', historyRange: '5y' }).methodology.annualizationFactor).toBe(52);
+    expect(calculateHistoricalWatchlistMetrics([], { market: 'US', historyRange: 'all' }).methodology.annualizationFactor).toBe(12);
   });
 
   it('calculates price return, drawdown and range position from honest bar data', () => {
@@ -45,6 +52,10 @@ describe('calculateHistoricalWatchlistMetrics', () => {
   it('uses null instead of fabricated zeros when history is unavailable', () => {
     expect(calculateHistoricalWatchlistMetrics([])).toEqual({
       periodReturnPct: null,
+      totalReturnPct: null,
+      distributionContributionPct: null,
+      dividendCount: 0,
+      splitCount: 0,
       annualizedVolatilityPct: null,
       downsideVolatilityPct: null,
       sharpeRatio: null,
@@ -63,6 +74,8 @@ describe('calculateHistoricalWatchlistMetrics', () => {
       benchmarkTicker: null,
       benchmarkReturnPct: null,
       excessReturnPct: null,
+      benchmarkTotalReturnPct: null,
+      excessTotalReturnPct: null,
       beta: null,
       observations: 0,
       usableObservations: 0,
@@ -75,9 +88,31 @@ describe('calculateHistoricalWatchlistMetrics', () => {
       benchmarkStatus: 'unavailable',
       sampleSize: 0,
       methodology: {
-        returnBasis: 'price', adjustment: 'none', riskFreeRatePct: 0,
+        returnBasis: 'price', historyRange: '1y', priceReturnSource: null,
+        totalReturnBasis: 'unavailable', adjustment: 'none', riskFreeRatePct: 0,
         annualizationFactor: 252, rsiMethod: 'wilder', betaSampleSize: 0,
       },
+    });
+  });
+
+  it('uses one return source for price, total, distribution, and benchmark comparisons', () => {
+    const bars = Array.from({ length: 30 }, (_, index) => bar(index + 1, 100 + index));
+    const snapshot = {
+      ticker: 'AAPL', market: 'US' as const, range: '6m' as const, source: 'yahoo-chart', currency: 'USD',
+      priceReturnPct: 8, totalReturnPct: 9.25, distributionContributionPct: 1.25,
+      dividendCount: 2, splitCount: 0, coverageStart: '2026-01-01', coverageEnd: '2026-06-30', asOf: '2026-06-30',
+      methodology: { priceBasis: 'unadjusted_close' as const, totalReturnBasis: 'adjusted_close_reinvestment' as const }, warnings: [],
+    };
+    const benchmark = { ...snapshot, ticker: 'SPY', priceReturnPct: 5, totalReturnPct: 5.5, distributionContributionPct: 0.5 };
+    const metrics = calculateHistoricalWatchlistMetrics(bars, {
+      historyRange: '6m', returnSnapshot: snapshot, benchmarkReturnSnapshot: benchmark,
+    });
+    expect(metrics).toMatchObject({
+      periodReturnPct: 8, totalReturnPct: 9.25, distributionContributionPct: 1.25,
+      benchmarkReturnPct: 5, excessReturnPct: 3,
+      benchmarkTotalReturnPct: 5.5, excessTotalReturnPct: 3.75,
+      dividendCount: 2, splitCount: 0,
+      methodology: { historyRange: '6m', priceReturnSource: 'yahoo-chart', totalReturnBasis: 'adjusted_close_reinvestment' },
     });
   });
 

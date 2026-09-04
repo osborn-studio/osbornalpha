@@ -75,7 +75,9 @@ describe('GET /api/watchlist/overview', () => {
       history: { status: 'fresh' },
       research: { source: 'stored-research', status: 'fresh', value: { recentNewsCount: 1 } },
     });
-    expect(mocks.computed).toHaveBeenCalledWith(['AAPL'], 'en', { includeMarket: false, benchmarkTicker: null });
+    expect(mocks.computed).toHaveBeenCalledWith(['AAPL'], 'en', {
+      includeMarket: false, benchmarkTicker: null, historyRange: '1y', includeTotalReturn: false,
+    });
   });
 
   it('supports a targeted ticker read for an unloaded quick view', async () => {
@@ -84,7 +86,9 @@ describe('GET /api/watchlist/overview', () => {
     const body = await response.json();
     expect(body.total).toBe(1);
     expect(body.rows).toHaveLength(1);
-    expect(mocks.computed).toHaveBeenCalledWith(['AAPL'], 'en', { includeMarket: true, benchmarkTicker: null });
+    expect(mocks.computed).toHaveBeenCalledWith(['AAPL'], 'en', {
+      includeMarket: true, benchmarkTicker: null, historyRange: '1y', includeTotalReturn: true,
+    });
     expect(mocks.page).toHaveBeenCalledWith(expect.anything(), {
       offset: null, cursor: null, limit: 50, ticker: 'AAPL',
     });
@@ -93,7 +97,28 @@ describe('GET /api/watchlist/overview', () => {
   it('passes a normalized custom benchmark only for targeted reads', async () => {
     const response = await GET(new Request('https://example.test/api/watchlist/overview?ticker=aapl&benchmark=qqq'));
     expect(response.status).toBe(200);
-    expect(mocks.computed).toHaveBeenCalledWith(['AAPL'], 'en', { includeMarket: true, benchmarkTicker: 'QQQ' });
+    expect(mocks.computed).toHaveBeenCalledWith(['AAPL'], 'en', {
+      includeMarket: true, benchmarkTicker: 'QQQ', historyRange: '1y', includeTotalReturn: true,
+    });
+  });
+
+  it('passes a custom history range only for targeted reads', async () => {
+    const response = await GET(new Request('https://example.test/api/watchlist/overview?ticker=aapl&range=6m'));
+    expect(response.status).toBe(200);
+    expect(mocks.computed).toHaveBeenCalledWith(['AAPL'], 'en', {
+      includeMarket: true, benchmarkTicker: null, historyRange: '6m', includeTotalReturn: true,
+    });
+  });
+
+  it('rejects invalid or bulk custom history ranges before loading data', async () => {
+    const invalid = await GET(new Request('https://example.test/api/watchlist/overview?ticker=aapl&range=5d'));
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toMatchObject({ error: 'invalid_history_range' });
+
+    const bulk = await GET(new Request('https://example.test/api/watchlist/overview?range=6m'));
+    expect(bulk.status).toBe(400);
+    expect(await bulk.json()).toMatchObject({ error: 'history_range_requires_ticker' });
+    expect(mocks.page).not.toHaveBeenCalled();
   });
 
   it('rejects the target security itself as a benchmark', async () => {

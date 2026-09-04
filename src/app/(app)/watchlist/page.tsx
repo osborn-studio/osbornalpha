@@ -33,6 +33,9 @@ import { useWatchlistTrash } from '@/lib/hooks/useWatchlistTrash';
 import { WatchlistTrashDialog } from '@/components/watchlist/WatchlistTrashDialog';
 import { useWatchlistUiPreferences } from '@/lib/hooks/useWatchlistUiPreferences';
 import { DEFAULT_WATCHLIST_CHART_PREFERENCES } from '@/lib/watchlist/ui-preferences';
+import { watchlistHistoryRangeForChart } from '@/lib/market-returns/range';
+import { watchlistBenchmarkTicker } from '@/lib/watchlist/analytics';
+import { classifyMarket } from '@/lib/utils';
 
 const REFRESH_MS = 60_000;
 
@@ -100,6 +103,7 @@ export default function WatchlistPage() {
   const [securityIdentities, setSecurityIdentities] = useState<Record<string, WatchlistSecurityResult>>({});
   const watchlistViewTracked = useRef(false);
   const postAddTracked = useRef<string | null>(null);
+  const quickViewHistoryRequest = useRef<string | null>(null);
 
   // The watchlist hook owns data reconciliation; this lookup only controls the
   // signed-in banner and must never write a second watchlist snapshot.
@@ -170,18 +174,37 @@ export default function WatchlistPage() {
   });
   const overview = useWatchlistOverview(!!user && allTickers.length > 0);
   const { ensureTicker, rows: overviewRows } = overview;
+  const historyRangeForTicker = useCallback((ticker: string) => watchlistHistoryRangeForChart(
+    uiPreferences.preferences.charts[ticker]?.range ?? DEFAULT_WATCHLIST_CHART_PREFERENCES.range,
+  ), [uiPreferences.preferences.charts]);
   const loadQuickViewBenchmark = useCallback(async (ticker: string, benchmark: string | null) => {
-    const row = await ensureTicker(ticker, { benchmark, force: true });
+    const row = await ensureTicker(ticker, {
+      benchmark,
+      range: historyRangeForTicker(ticker),
+      force: true,
+    });
     if (!row || benchmark === null) return row !== null;
     return row.history?.value?.benchmarkTicker === benchmark
       && row.history.value.benchmarkStatus !== 'unavailable';
-  }, [ensureTicker]);
+  }, [ensureTicker, historyRangeForTicker]);
 
   useEffect(() => {
-    if (quickViewTicker && user && !overviewRows[quickViewTicker]?.market) {
-      void ensureTicker(quickViewTicker);
+    if (!quickViewTicker || !user) {
+      quickViewHistoryRequest.current = null;
+      return;
     }
-  }, [ensureTicker, overviewRows, quickViewTicker, user]);
+    const expectedRange = historyRangeForTicker(quickViewTicker);
+    const row = overviewRows[quickViewTicker];
+    const benchmark = uiPreferences.preferences.benchmarks[quickViewTicker] || null;
+    const expectedBenchmark = benchmark ?? watchlistBenchmarkTicker(classifyMarket(quickViewTicker));
+    if (row?.market
+      && row.history?.value?.methodology.historyRange === expectedRange
+      && row.history.value.benchmarkTicker === expectedBenchmark) return;
+    const requestKey = `${quickViewTicker}:${expectedBenchmark}:${expectedRange}`;
+    if (quickViewHistoryRequest.current === requestKey) return;
+    quickViewHistoryRequest.current = requestKey;
+    void ensureTicker(quickViewTicker, { benchmark, range: expectedRange, force: true });
+  }, [ensureTicker, historyRangeForTicker, overviewRows, quickViewTicker, uiPreferences.preferences.benchmarks, user]);
 
   async function updateTickerTags(tickers: string[], tag: string, mode: 'add' | 'remove') {
     const items = tickers.flatMap((ticker) => {

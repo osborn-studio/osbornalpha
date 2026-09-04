@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DataEnvelope, WatchlistOverviewItemRow, WatchlistOverviewResponse, WatchlistOverviewRow } from '@/lib/watchlist/overview-contract';
 import { createRequestSlot, type RequestSlot } from './request-slot';
+import type { WatchlistHistoryRange } from '@/lib/market-returns/types';
 export type { WatchlistOverviewRow as WatchlistOverviewClientRow } from '@/lib/watchlist/overview-contract';
 
 const DATA_STATUSES = new Set(['fresh', 'delayed', 'stale', 'unavailable']);
@@ -78,11 +79,18 @@ export function useWatchlistOverview(enabled: boolean) {
 
   useEffect(() => { rowsRef.current = rows; }, [rows]);
 
-  const fetchPage = useCallback(async (cursor: string | null, signal?: AbortSignal, ticker?: string, benchmark?: string | null) => {
+  const fetchPage = useCallback(async (
+    cursor: string | null,
+    signal?: AbortSignal,
+    ticker?: string,
+    benchmark?: string | null,
+    range?: WatchlistHistoryRange,
+  ) => {
     const query = new URLSearchParams({ limit: '50' });
     if (cursor) query.set('cursor', cursor);
     if (ticker) query.set('ticker', ticker);
     if (benchmark) query.set('benchmark', benchmark);
+    if (range) query.set('range', range);
     const response = await fetch(`/api/watchlist/overview?${query}`, { signal, cache: 'no-store' });
     const body = await response.json().catch(() => null);
     if (!response.ok || !isOverviewResponse(body)) {
@@ -169,7 +177,7 @@ export function useWatchlistOverview(enabled: boolean) {
 
   const ensureTicker = useCallback(async (
     ticker: string,
-    options: { benchmark?: string | null; force?: boolean } = {},
+    options: { benchmark?: string | null; range?: WatchlistHistoryRange; force?: boolean } = {},
   ) => {
     if (!enabled || (!options.force && rowsRef.current[ticker]?.market)) return rowsRef.current[ticker] ?? null;
     const existing = ensuringRef.current.get(ticker);
@@ -184,7 +192,7 @@ export function useWatchlistOverview(enabled: boolean) {
     const lease = slot.begin();
     const loadGeneration = generation.current;
     const pending = (async () => {
-      const payload = await fetchPage(null, lease.signal, ticker, options.benchmark ?? null);
+      const payload = await fetchPage(null, lease.signal, ticker, options.benchmark ?? null, options.range);
       if (!slot.isCurrent(lease) || loadGeneration !== generation.current) return null;
       const row = payload.rows.find((candidate) => candidate.item.ticker === ticker) ?? null;
       if (row) setRows((current) => ({ ...current, [ticker]: row }));

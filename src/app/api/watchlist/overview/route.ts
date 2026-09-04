@@ -13,6 +13,7 @@ import { watchlistTimestampFreshness } from '@/lib/watchlist/freshness';
 import { watchlistApiError } from '@/lib/watchlist/api-error';
 import { WATCHLIST_RESEARCH_WINDOW_DAYS } from '@/lib/watchlist/research-window';
 import { validateWatchlistBenchmark } from '@/lib/watchlist/benchmark-validation';
+import { parseWatchlistHistoryRange } from '@/lib/market-returns/range';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -55,6 +56,10 @@ export async function GET(request: Request) {
       const validation = validateWatchlistBenchmark(ticker, benchmark);
       if (!validation.valid) return watchlistApiError(`benchmark_${validation.issue}`, 400);
     }
+    const rangeParam = url.searchParams.get('range');
+    const historyRange = rangeParam ? parseWatchlistHistoryRange(rangeParam) : '1y';
+    if (!historyRange) return watchlistApiError('invalid_history_range', 400);
+    if (rangeParam && !ticker) return watchlistApiError('history_range_requires_ticker', 400);
     const page = parseWatchlistOverviewPage(url);
     if (page.invalidCursor) return watchlistApiError('invalid_cursor', 400);
     const databasePage = await loadWatchlistOverviewPage(client, {
@@ -67,7 +72,12 @@ export async function GET(request: Request) {
     const locale = await getRequestLocale();
     const [version, computed, identitiesResult, researchByTicker] = await Promise.all([
       loadWatchlistVersion(client),
-      buildComputedWatchlistOverview(pageTickers, locale, { includeMarket: ticker !== null, benchmarkTicker: benchmark }),
+      buildComputedWatchlistOverview(pageTickers, locale, {
+        includeMarket: ticker !== null,
+        benchmarkTicker: benchmark,
+        historyRange,
+        includeTotalReturn: ticker !== null,
+      }),
       pageTickers.length
         ? client.from('stocks_universe').select('*').in('ticker', pageTickers)
         : Promise.resolve({ data: [], error: null }),

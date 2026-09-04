@@ -19,6 +19,7 @@ import { watchlistBenchmarkTicker } from '@/lib/watchlist/analytics';
 import { WatchlistFinancialPanel } from '@/components/watchlist/WatchlistFinancialPanel';
 import { validateWatchlistBenchmark, type WatchlistBenchmarkIssue } from '@/lib/watchlist/benchmark-validation';
 import type { WatchlistChartPreferences } from '@/lib/watchlist/ui-preferences';
+import { watchlistHistoryRangeForChart } from '@/lib/market-returns/range';
 
 type QuickViewTab = 'overview' | 'financials' | 'research' | 'decision' | 'alerts';
 
@@ -107,8 +108,16 @@ export function WatchlistQuickView({
   };
   const onDecisionDirtyChange = useCallback((dirty: boolean) => setDecisionDirty(dirty), []);
   const market = quote?.market ?? classifyMarket(ticker);
-  const historicalMetrics = overview?.history?.value;
+  const loadedHistoricalMetrics = overview?.history?.value;
+  const requestedHistoryRange = watchlistHistoryRangeForChart(chartPreferences?.range ?? '1d');
+  const historicalMetrics = loadedHistoricalMetrics?.methodology.historyRange === requestedHistoryRange
+    ? loadedHistoricalMetrics
+    : undefined;
+  const metricsPending = !!loadedHistoricalMetrics && !historicalMetrics;
   const benchmarkReliable = historicalMetrics?.benchmarkStatus === 'reliable';
+  const historyRange = requestedHistoryRange;
+  const historyRangeLabel = t(`historyRanges.${historyRange}`);
+  const totalReturnAvailable = historicalMetrics?.totalReturnPct != null;
   const defaultBenchmark = watchlistBenchmarkTicker(market);
   const refreshBenchmark = useCallback(async (next: string | null) => {
     if (!onBenchmarkChange) return;
@@ -128,12 +137,12 @@ export function WatchlistQuickView({
   }, [onBenchmarkChange, setBenchmarkPreference, ticker]);
 
   useEffect(() => {
-    if (!benchmarkPreference || !onBenchmarkChange
+    if (!historicalMetrics || !benchmarkPreference || !onBenchmarkChange
       || historicalMetrics?.benchmarkTicker === benchmarkPreference
       || autoRequestedBenchmark.current === benchmarkPreference) return;
     autoRequestedBenchmark.current = benchmarkPreference;
     void refreshBenchmark(benchmarkPreference);
-  }, [benchmarkPreference, historicalMetrics?.benchmarkTicker, onBenchmarkChange, refreshBenchmark]);
+  }, [benchmarkPreference, historicalMetrics, onBenchmarkChange, refreshBenchmark]);
   const tabs: Array<{ id: QuickViewTab; icon: typeof ChartNoAxesCombined; available: boolean }> = [
     { id: 'overview', icon: ChartNoAxesCombined, available: true },
     { id: 'financials', icon: Landmark, available: true },
@@ -199,7 +208,7 @@ export function WatchlistQuickView({
                 </div>
               </section>
               <section className="mt-6" aria-label={t('historyMetrics')}>
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold text-text-dim"><span>{t('historyMetrics')}</span>{historicalMetrics && <span className="font-normal text-text-muted">{t('sampleSize', { count: historicalMetrics.sampleSize })} · {t('coverage', { value: Math.round(historicalMetrics.coverageRatio * 100) })}</span>}</div>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold text-text-dim"><span>{t('historyMetrics')}</span>{metricsPending ? <span className="font-normal text-text-muted">{t('calculating')}</span> : historicalMetrics && <span className="font-normal text-text-muted">{t('sampleSize', { count: historicalMetrics.sampleSize })} · {t('coverage', { value: Math.round(historicalMetrics.coverageRatio * 100) })}</span>}</div>
                 {onBenchmarkChange && <div className="mb-2 flex flex-wrap items-center gap-1.5 rounded-md border border-border/70 bg-bg-elevated/40 p-2">
                   <label htmlFor={`watchlist-benchmark-${ticker}`} className="text-[10px] font-medium text-text-muted">{t('benchmarkSelector')}</label>
                   <input id={`watchlist-benchmark-${ticker}`} value={benchmarkInput} onChange={(event) => { setBenchmarkInput(event.target.value.toUpperCase().trim()); setBenchmarkError(null); }} placeholder={defaultBenchmark} className="h-7 w-28 px-2 py-1 font-mono text-[10px]" maxLength={20} />
@@ -209,14 +218,18 @@ export function WatchlistQuickView({
                   {benchmarkError && <span className="w-full text-[10px] text-warn" role="status">{t(`benchmarkErrors.${benchmarkError}`)}</span>}
                 </div>}
                 <div className="grid grid-cols-2 gap-x-4 sm:grid-cols-4">
-                  <Metric label={t('oneYearPriceReturn')} value={optional(historicalMetrics?.periodReturnPct, '%')} tone={historicalMetrics?.periodReturnPct == null ? 'text-text' : changeClass(historicalMetrics.periodReturnPct)} />
-                  <Metric label={t('benchmarkReturn', { benchmark: historicalMetrics?.benchmarkTicker ?? '--' })} value={optional(benchmarkReliable ? historicalMetrics?.benchmarkReturnPct : null, '%')} tone={!benchmarkReliable || historicalMetrics?.benchmarkReturnPct == null ? 'text-text' : changeClass(historicalMetrics.benchmarkReturnPct)} />
-                  <Metric label={t('excessReturn')} value={optional(benchmarkReliable ? historicalMetrics?.excessReturnPct : null, '%')} tone={!benchmarkReliable || historicalMetrics?.excessReturnPct == null ? 'text-text' : changeClass(historicalMetrics.excessReturnPct)} />
+                  <Metric label={t('periodPriceReturn', { range: historyRangeLabel })} value={optional(historicalMetrics?.periodReturnPct, '%')} tone={historicalMetrics?.periodReturnPct == null ? 'text-text' : changeClass(historicalMetrics.periodReturnPct)} />
+                  <Metric label={t('periodTotalReturn', { range: historyRangeLabel })} value={optional(historicalMetrics?.totalReturnPct, '%')} tone={historicalMetrics?.totalReturnPct == null ? 'text-text' : changeClass(historicalMetrics.totalReturnPct)} />
+                  <Metric label={t('distributionContribution')} value={optional(historicalMetrics?.distributionContributionPct, '%')} tone={historicalMetrics?.distributionContributionPct == null ? 'text-text' : changeClass(historicalMetrics.distributionContributionPct)} />
+                  <Metric label={t('benchmarkTotalReturn', { benchmark: historicalMetrics?.benchmarkTicker ?? '--' })} value={optional(benchmarkReliable ? historicalMetrics?.benchmarkTotalReturnPct : null, '%')} tone={!benchmarkReliable || historicalMetrics?.benchmarkTotalReturnPct == null ? 'text-text' : changeClass(historicalMetrics.benchmarkTotalReturnPct)} />
+                  <Metric label={t('excessTotalReturn')} value={optional(benchmarkReliable ? historicalMetrics?.excessTotalReturnPct : null, '%')} tone={!benchmarkReliable || historicalMetrics?.excessTotalReturnPct == null ? 'text-text' : changeClass(historicalMetrics.excessTotalReturnPct)} />
+                  <Metric label={t('benchmarkPriceReturn', { benchmark: historicalMetrics?.benchmarkTicker ?? '--' })} value={optional(benchmarkReliable ? historicalMetrics?.benchmarkReturnPct : null, '%')} tone={!benchmarkReliable || historicalMetrics?.benchmarkReturnPct == null ? 'text-text' : changeClass(historicalMetrics.benchmarkReturnPct)} />
+                  <Metric label={t('excessPriceReturn')} value={optional(benchmarkReliable ? historicalMetrics?.excessReturnPct : null, '%')} tone={!benchmarkReliable || historicalMetrics?.excessReturnPct == null ? 'text-text' : changeClass(historicalMetrics.excessReturnPct)} />
                   <Metric label={t('beta')} value={optional(benchmarkReliable ? historicalMetrics?.beta : null)} />
                   <Metric label={t('annualizedVolatility')} value={optional(historicalMetrics?.annualizedVolatilityPct, '%')} />
                   <Metric label={t('downsideVolatility')} value={optional(historicalMetrics?.downsideVolatilityPct, '%')} />
                   <Metric label={t('sharpeRatio')} value={optional(historicalMetrics?.sharpeRatio)} />
-                  <Metric label={t('maxDrawdown')} value={optional(historicalMetrics?.maxDrawdownPct, '%')} tone="text-warn" />
+                  <Metric label={t('periodMaxDrawdown', { range: historyRangeLabel })} value={optional(historicalMetrics?.maxDrawdownPct, '%')} tone="text-warn" />
                 </div>
                 {historicalMetrics && <div className={`mt-2 text-[10px] ${benchmarkReliable ? 'text-text-muted' : 'text-warn'}`}>{t('benchmarkQuality', { aligned: historicalMetrics.benchmarkAlignedObservations, total: historicalMetrics.usableObservations, status: t(`benchmarkStatuses.${historicalMetrics.benchmarkStatus}`) })}</div>}
                 <details className="mt-3 rounded-md border border-border/70 bg-bg-elevated/40 px-3">
@@ -225,7 +238,7 @@ export function WatchlistQuickView({
                   <Metric label={t('rsi14')} value={optional(historicalMetrics?.rsi14)} />
                   <Metric label={t('ma20Distance')} value={optional(historicalMetrics?.ma20DistancePct, '%')} tone={historicalMetrics?.ma20DistancePct == null ? 'text-text' : changeClass(historicalMetrics.ma20DistancePct)} />
                   <Metric label={t('ma50Distance')} value={optional(historicalMetrics?.ma50DistancePct, '%')} tone={historicalMetrics?.ma50DistancePct == null ? 'text-text' : changeClass(historicalMetrics.ma50DistancePct)} />
-                  <Metric label={t('rangePosition')} value={optional(historicalMetrics?.rangePositionPct, '%')} />
+                  <Metric label={t('periodRangePosition', { range: historyRangeLabel })} value={optional(historicalMetrics?.rangePositionPct, '%')} />
                   <Metric label={t('macd')} value={optional(historicalMetrics?.macd)} tone={historicalMetrics?.macd == null ? 'text-text' : changeClass(historicalMetrics.macd)} />
                   <Metric label={t('macdSignal')} value={optional(historicalMetrics?.macdSignal)} />
                   <Metric label={t('macdHistogram')} value={optional(historicalMetrics?.macdHistogram)} tone={historicalMetrics?.macdHistogram == null ? 'text-text' : changeClass(historicalMetrics.macdHistogram)} />
@@ -233,7 +246,13 @@ export function WatchlistQuickView({
                   <Metric label={t('atr14')} value={optional(historicalMetrics?.atr14Pct, '%')} />
                   </div>
                 </details>
-                {historicalMetrics && <div className="mt-3 border-t border-border/70 pt-2 text-[10px] text-text-muted">{t('methodology', { days: historicalMetrics.methodology.annualizationFactor, basis: historicalMetrics.methodology.returnBasis, riskFree: historicalMetrics.methodology.riskFreeRatePct.toFixed(2) })}</div>}
+                {historicalMetrics && <div className="mt-3 border-t border-border/70 pt-2 text-[10px] text-text-muted">{t('methodology', {
+                  range: historyRangeLabel,
+                  days: historicalMetrics.methodology.annualizationFactor,
+                  source: historicalMetrics.methodology.priceReturnSource ?? overview?.history?.source ?? '--',
+                  totalBasis: t(totalReturnAvailable ? 'totalReturnBases.adjustedClose' : 'totalReturnBases.unavailable'),
+                  riskFree: historicalMetrics.methodology.riskFreeRatePct.toFixed(2),
+                })}</div>}
               </section>
               <div className="mt-5 border-t border-border pt-3">
                 <div className="flex flex-wrap gap-2">

@@ -1,6 +1,7 @@
 import type { KlineBar } from '@/lib/chart/kline';
 import type { KlineAdjustment } from '@/lib/data/kline/types';
 import type { Market } from '@/lib/supabase/database.types';
+import type { MarketReturnSnapshot, WatchlistHistoryRange } from '@/lib/market-returns/types';
 
 type HistoricalPriceBar = Pick<KlineBar, 'close' | 'high' | 'low'> & { time: string | number };
 
@@ -18,7 +19,12 @@ export function watchlistBenchmarkTicker(market: Market): string {
 }
 
 export interface HistoricalWatchlistMetrics {
+  /** Kept for table compatibility; always the unadjusted close return when a return snapshot is available. */
   periodReturnPct: number | null;
+  totalReturnPct: number | null;
+  distributionContributionPct: number | null;
+  dividendCount: number;
+  splitCount: number;
   annualizedVolatilityPct: number | null;
   downsideVolatilityPct: number | null;
   sharpeRatio: number | null;
@@ -37,6 +43,8 @@ export interface HistoricalWatchlistMetrics {
   benchmarkTicker: string | null;
   benchmarkReturnPct: number | null;
   excessReturnPct: number | null;
+  benchmarkTotalReturnPct: number | null;
+  excessTotalReturnPct: number | null;
   beta: number | null;
   observations: number;
   usableObservations: number;
@@ -50,6 +58,9 @@ export interface HistoricalWatchlistMetrics {
   sampleSize: number;
   methodology: {
     returnBasis: 'price';
+    historyRange: WatchlistHistoryRange;
+    priceReturnSource: string | null;
+    totalReturnBasis: 'adjusted_close_reinvestment' | 'unavailable';
     adjustment: KlineAdjustment;
     riskFreeRatePct: number;
     annualizationFactor: number;
@@ -75,6 +86,12 @@ const TRADING_DAYS_PER_YEAR: Record<Market, number> = {
 
 export function tradingDaysPerYear(market: Market): number {
   return TRADING_DAYS_PER_YEAR[market];
+}
+
+export function watchlistAnnualizationFactor(market: Market, range: WatchlistHistoryRange): number {
+  if (range === '5y') return 52;
+  if (range === 'all') return 12;
+  return tradingDaysPerYear(market);
 }
 
 function finitePositive(value: number): boolean {
@@ -245,15 +262,23 @@ export function calculateHistoricalWatchlistMetrics(
     tradingDaysPerYear?: number;
     adjustment?: KlineAdjustment;
     riskFreeRatePct?: number;
+    historyRange?: WatchlistHistoryRange;
+    returnSnapshot?: MarketReturnSnapshot | null;
+    benchmarkReturnSnapshot?: MarketReturnSnapshot | null;
   } = {},
 ): HistoricalWatchlistMetrics {
   const riskFreeRatePct = Number.isFinite(options.riskFreeRatePct) ? options.riskFreeRatePct! : 0;
   const annualizationFactor = Number.isFinite(options.tradingDaysPerYear)
     && options.tradingDaysPerYear! >= 1
     ? Math.round(options.tradingDaysPerYear!)
-    : options.market ? tradingDaysPerYear(options.market) : 252;
+    : options.market
+      ? watchlistAnnualizationFactor(options.market, options.historyRange ?? '1y')
+      : 252;
   const methodologyBase = {
     returnBasis: 'price' as const,
+    historyRange: options.historyRange ?? '1y',
+    priceReturnSource: options.returnSnapshot?.source ?? null,
+    totalReturnBasis: options.returnSnapshot?.methodology.totalReturnBasis ?? 'unavailable' as const,
     adjustment: (options.adjustment ?? 'none') as KlineAdjustment,
     riskFreeRatePct,
     annualizationFactor,
@@ -263,6 +288,10 @@ export function calculateHistoricalWatchlistMetrics(
   if (usable.length === 0) {
     return {
       periodReturnPct: null,
+      totalReturnPct: null,
+      distributionContributionPct: null,
+      dividendCount: 0,
+      splitCount: 0,
       annualizedVolatilityPct: null,
       downsideVolatilityPct: null,
       sharpeRatio: null,
@@ -281,6 +310,8 @@ export function calculateHistoricalWatchlistMetrics(
       benchmarkTicker: options.benchmarkTicker ?? null,
       benchmarkReturnPct: null,
       excessReturnPct: null,
+      benchmarkTotalReturnPct: null,
+      excessTotalReturnPct: null,
       beta: null,
       observations: bars.length,
       usableObservations: 0,
@@ -299,7 +330,8 @@ export function calculateHistoricalWatchlistMetrics(
   const closes = usable.map((bar) => bar.close);
   const first = closes[0];
   const last = closes[closes.length - 1];
-  const periodReturnPct = closes.length >= 2 ? ((last / first) - 1) * 100 : null;
+  const klinePriceReturnPct = closes.length >= 2 ? ((last / first) - 1) * 100 : null;
+  const periodReturnPct = options.returnSnapshot?.priceReturnPct ?? klinePriceReturnPct;
   const rangeHigh = Math.max(...usable.map((bar) => bar.high));
   const rangeLow = Math.min(...usable.map((bar) => bar.low));
   const rangePositionPct = rangeHigh > rangeLow
@@ -333,9 +365,19 @@ export function calculateHistoricalWatchlistMetrics(
     options.benchmarkTicker ?? null,
   );
   const macdMetrics = macd(closes);
+  const benchmarkReturnPct = options.benchmarkReturnSnapshot?.priceReturnPct ?? relative.benchmarkReturnPct;
+  const excessReturnPct = periodReturnPct != null && benchmarkReturnPct != null
+    ? periodReturnPct - benchmarkReturnPct
+    : null;
+  const totalReturnPct = options.returnSnapshot?.totalReturnPct ?? null;
+  const benchmarkTotalReturnPct = options.benchmarkReturnSnapshot?.totalReturnPct ?? null;
 
   return {
     periodReturnPct,
+    totalReturnPct,
+    distributionContributionPct: options.returnSnapshot?.distributionContributionPct ?? null,
+    dividendCount: options.returnSnapshot?.dividendCount ?? 0,
+    splitCount: options.returnSnapshot?.splitCount ?? 0,
     annualizedVolatilityPct,
     downsideVolatilityPct,
     sharpeRatio,
@@ -352,6 +394,12 @@ export function calculateHistoricalWatchlistMetrics(
     bollingerPositionPct: bollingerPosition(closes),
     atr14Pct: atrPercent(usable),
     ...relative,
+    benchmarkReturnPct,
+    excessReturnPct,
+    benchmarkTotalReturnPct,
+    excessTotalReturnPct: totalReturnPct != null && benchmarkTotalReturnPct != null
+      ? totalReturnPct - benchmarkTotalReturnPct
+      : null,
     observations: bars.length,
     usableObservations: usable.length,
     coverageRatio: usable.length / Math.max(1, bars.length),
