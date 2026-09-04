@@ -33,7 +33,8 @@ const DEFAULT_OPTIONS: Required<SearchFetchOptions> = {
   timeoutMs: 7_000,
   maxAttempts: 3,
   baseDelayMs: 150,
-  maxDelayMs: 2_000,
+  // Respect provider Retry-After hints up to a bounded 30-second ceiling.
+  maxDelayMs: 30_000,
 };
 
 function optionsOf(value: number | SearchFetchOptions): Required<SearchFetchOptions> {

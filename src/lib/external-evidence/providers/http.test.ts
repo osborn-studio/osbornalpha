@@ -30,16 +30,24 @@ describe('search provider HTTP reliability', () => {
   });
 
   it('honors a bounded Retry-After hint for rate limits', async () => {
+    vi.useFakeTimers();
     const fetcher = vi.fn()
-      .mockResolvedValueOnce(response({ error: 'limited' }, 429, { 'retry-after': '0' }))
+      .mockResolvedValueOnce(response({ error: 'limited' }, 429, { 'retry-after': '2' }))
       .mockResolvedValueOnce(response({ ok: true }));
     vi.stubGlobal('fetch', fetcher);
 
-    await expect(fetchSearchJson('https://provider.test/search', {}, {
-      maxAttempts: 2,
-      baseDelayMs: 0,
-      maxDelayMs: 0,
-    })).resolves.toEqual({ ok: true });
+    try {
+      const pending = fetchSearchJson('https://provider.test/search', {}, {
+        maxAttempts: 2,
+        baseDelayMs: 0,
+        maxDelayMs: 3_000,
+      });
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(pending).resolves.toEqual({ ok: true });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('fails immediately for non-retryable provider responses', async () => {
