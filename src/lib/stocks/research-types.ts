@@ -14,6 +14,9 @@ export interface StockNewsItem {
   url: string | null;
   snippet: string;
   sentiment: number | null;
+  sentimentConfidence?: number;
+  sentimentPositiveMatches?: string[];
+  sentimentNegativeMatches?: string[];
   publishedAt: string | null;
   fetchedAt: string;
   trustScore: number;

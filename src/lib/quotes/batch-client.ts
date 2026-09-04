@@ -2,6 +2,31 @@ export const QUOTE_BATCH_CHUNK_SIZE = 10;
 export const QUOTE_TELEMETRY_INTERVAL_MS = 10 * 60_000;
 export const QUOTE_SLOW_REQUEST_MS = 1_000;
 export const QUOTE_BATCH_SUSPEND_THRESHOLD_MS = 60_000;
+export { isQuoteBatchPayload } from './batch-contract';
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+/** Guard fields consumed by the watchlist so malformed provider output is never cached as a quote. */
+export function isLiveQuotePayload(value: unknown, ticker: string): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const quote = value as Record<string, unknown>;
+  if (typeof quote.ticker !== 'string' || quote.ticker.trim().toUpperCase() !== ticker.toUpperCase()) return false;
+  for (const key of ['price', 'change', 'change_pct', 'open', 'high', 'low', 'prev_close', 'volume', 'amount', 'amplitude']) {
+    if (!isFiniteNumber(quote[key])) return false;
+  }
+  for (const key of ['market_cap', 'pe_ttm', 'pb', 'turnover', 'volume_ratio']) {
+    if (quote[key] !== null && quote[key] !== undefined && !isFiniteNumber(quote[key])) return false;
+  }
+  return typeof quote.source === 'string'
+    && typeof quote.name === 'string'
+    && typeof quote.market === 'string'
+    && typeof quote.currency === 'string'
+    && typeof quote.market_cap_label === 'string'
+    && typeof quote.updated_at === 'string'
+    && typeof quote.delayed === 'boolean';
+}
 
 interface SourceStats {
   attempted?: number;

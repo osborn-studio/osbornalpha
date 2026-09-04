@@ -4,7 +4,7 @@ import { canonicalizeEvidenceUrl, dedupeAndRankEvidence, normalizeEvidenceResult
 import { buildEvidenceQueries } from './query';
 import { normalizeEvidenceSearchRequest, normalizeEvidenceTickerParam } from './request';
 import { searchExternalEvidenceUncached } from './service';
-import { classifyHeadlineSentiment } from './sentiment';
+import { assessHeadlineSentiment, classifyHeadlineSentiment } from './sentiment';
 import { buildEvidencePersistenceRows } from './store';
 import type { EvidenceSearchProvider } from './types';
 
@@ -100,6 +100,30 @@ describe('external evidence service', () => {
     expect(snapshot.warnings).toContain('provider_failover:primary');
     expect(snapshot.results[0].title).toBe('Recovered');
   });
+
+  it('fails over only the scoped queries that the primary provider missed', async () => {
+    const primary: EvidenceSearchProvider = {
+      id: 'primary',
+      search: vi.fn(async (query) => {
+        if (query.scope === 'filing') throw new Error('filing_offline');
+        return [{ title: 'News result', url: 'https://reuters.com/news-result' }];
+      }),
+    };
+    const fallback: EvidenceSearchProvider = {
+      id: 'fallback',
+      search: vi.fn(async () => [{ title: 'Filing result', url: 'https://sec.gov/filing-result' }]),
+    };
+    const snapshot = await searchExternalEvidenceUncached({ ticker: 'AAPL', scopes: ['news', 'filing'] }, {
+      providers: [primary, fallback],
+      now: () => new Date('2026-09-04T00:00:00Z'),
+    });
+    expect(primary.search).toHaveBeenCalledTimes(2);
+    expect(fallback.search).toHaveBeenCalledTimes(1);
+    expect(snapshot.status).toBe('complete');
+    expect(snapshot.queryCount).toBe(3);
+    expect(snapshot.results.map((item) => item.title)).toEqual(['Filing result', 'News result']);
+    expect(snapshot.warnings).toEqual(['provider_failover:primary']);
+  });
 });
 
 describe('headline sentiment', () => {
@@ -107,6 +131,16 @@ describe('headline sentiment', () => {
     expect(classifyHeadlineSentiment('Company raises guidance after record growth')).toBe(0.5);
     expect(classifyHeadlineSentiment('Regulator opens fraud probe')).toBe(-0.5);
     expect(classifyHeadlineSentiment('Company announces September meeting')).toBeNull();
+  });
+
+  it('exposes matched terms and confidence for explainable sentiment', () => {
+    expect(assessHeadlineSentiment('Company beats estimates after record growth')).toMatchObject({
+      score: 0.5,
+      confidence: 0.95,
+      positiveMatches: expect.arrayContaining(['beats', 'record', 'growth']),
+      negativeMatches: [],
+    });
+    expect(assessHeadlineSentiment('Growth but cuts guidance')).toMatchObject({ score: null, confidence: 0 });
   });
 });
 

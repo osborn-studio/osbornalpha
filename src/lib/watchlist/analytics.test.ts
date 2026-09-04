@@ -35,6 +35,11 @@ describe('calculateHistoricalWatchlistMetrics', () => {
     expect(metrics.downsideVolatilityPct).toBeGreaterThan(0);
     expect(metrics.sharpeRatio).not.toBeNull();
     expect(metrics.sampleSize).toBe(4);
+    expect(metrics.observations).toBe(4);
+    expect(metrics.usableObservations).toBe(4);
+    expect(metrics.coverageRatio).toBe(1);
+    expect(metrics.coverageStart).toBe('1');
+    expect(metrics.coverageEnd).toBe('4');
   });
 
   it('uses null instead of fabricated zeros when history is unavailable', () => {
@@ -59,6 +64,14 @@ describe('calculateHistoricalWatchlistMetrics', () => {
       benchmarkReturnPct: null,
       excessReturnPct: null,
       beta: null,
+      observations: 0,
+      usableObservations: 0,
+      coverageRatio: 0,
+      coverageStart: null,
+      coverageEnd: null,
+      benchmarkObservations: 0,
+      benchmarkAlignedObservations: 0,
+      benchmarkAlignmentRatio: null,
       sampleSize: 0,
       methodology: {
         returnBasis: 'price', adjustment: 'none', riskFreeRatePct: 0,
@@ -76,6 +89,8 @@ describe('calculateHistoricalWatchlistMetrics', () => {
     expect(metrics.excessReturnPct).toBeGreaterThan(0);
     expect(metrics.beta).not.toBeNull();
     expect(metrics.methodology).toMatchObject({ rsiMethod: 'wilder', betaSampleSize: 59 });
+    expect(metrics.benchmarkAlignedObservations).toBe(60);
+    expect(metrics.benchmarkAlignmentRatio).toBe(1);
     expect(metrics.rsi14).toBe(100);
     expect(metrics.ma20DistancePct).toBeGreaterThan(0);
     expect(metrics.ma50DistancePct).toBeGreaterThan(0);

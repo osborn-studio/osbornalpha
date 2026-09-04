@@ -62,8 +62,10 @@ export function WatchlistResearchPanel({ ticker, overview }: { ticker: string; o
         {(['news', 'reports', 'perspectives'] as const).map((value) => {
           const Icon = value === 'news' ? Newspaper : value === 'reports' ? FileText : Sparkles;
           const count = value === 'news' ? news.length : value === 'reports' ? reports.length : research.perspectives.length;
+          const tabId = `research-tab-${ticker}-${value}`;
+          const panelId = `research-panel-${ticker}-${value}`;
           return (
-            <button key={value} type="button" role="tab" aria-selected={tab === value} onClick={() => setTab(value)} className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded px-3 text-xs transition ${tab === value ? 'bg-bg-card font-semibold text-text shadow-sm' : 'text-text-dim hover:text-text'}`}>
+            <button key={value} id={tabId} type="button" role="tab" aria-selected={tab === value} aria-controls={panelId} tabIndex={tab === value ? 0 : -1} onClick={() => setTab(value)} className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded px-3 text-xs transition ${tab === value ? 'bg-bg-card font-semibold text-text' : 'text-text-dim hover:text-text'}`}>
               <Icon className="h-3.5 w-3.5" aria-hidden="true" />{t(`tabs.${value}`)}<span className="font-mono text-[10px] text-text-muted">{count}</span>
             </button>
           );
@@ -92,18 +94,18 @@ export function WatchlistResearchPanel({ ticker, overview }: { ticker: string; o
       ) : tab !== 'perspectives' && research.error ? (
         <div className="border-y border-border py-8 text-center text-xs text-text-muted">{t('unavailable')}</div>
       ) : tab === 'news' ? (
-        <div className="divide-y divide-border/70 border-y border-border/70">
+        <div id={`research-panel-${ticker}-news`} role="tabpanel" aria-labelledby={`research-tab-${ticker}-news`} className="divide-y divide-border/70 border-y border-border/70">
           {news.map((item) => (
             <ExternalLink key={item.id} href={item.url} className="flex items-start gap-3 py-3 text-text hover:no-underline">
               <Newspaper className="mt-0.5 h-4 w-4 shrink-0 text-text-muted" aria-hidden="true" />
-              <span className="min-w-0 flex-1"><span className="line-clamp-2 text-sm font-medium leading-snug">{item.title}</span>{item.snippet && <span className="mt-1 line-clamp-2 block text-xs leading-relaxed text-text-dim">{item.snippet}</span>}<span className="mt-1.5 flex flex-wrap gap-x-2 text-[10px] text-text-muted"><span>{item.source}</span><span>{t('trust', { value: Math.round(item.trustScore * 100) })}</span><span title={t('qualityFlags', { value: item.qualityFlags?.join(', ') || '--' })}>{t('quality', { value: Math.round((item.qualityScore ?? item.trustScore) * 100) })}</span>{!item.url && <span>{t('metadataOnly')}</span>}{item.publishedAt && <time>{new Date(item.publishedAt).toLocaleDateString()}</time>}</span></span>
+              <span className="min-w-0 flex-1"><span className="line-clamp-2 text-sm font-medium leading-snug">{item.title}</span>{item.snippet && <span className="mt-1 line-clamp-2 block text-xs leading-relaxed text-text-dim">{item.snippet}</span>}<span className="mt-1.5 flex flex-wrap gap-x-2 text-[10px] text-text-muted"><span>{item.source}</span>{item.sentiment != null && <span className={item.sentiment > 0 ? 'text-up' : 'text-down'} title={t('sentimentBasis', { value: [...(item.sentimentPositiveMatches ?? []), ...(item.sentimentNegativeMatches ?? [])].join(', ') || t('sentimentUnknown') })}>{t('sentiment', { value: `${item.sentiment > 0 ? '+' : ''}${item.sentiment.toFixed(1)}` })}</span>}<span>{t('trust', { value: Math.round(item.trustScore * 100) })}</span><span title={t('qualityFlags', { value: item.qualityFlags?.join(', ') || '--' })}>{t('quality', { value: Math.round((item.qualityScore ?? item.trustScore) * 100) })}</span>{!item.url && <span>{t('metadataOnly')}</span>}{item.publishedAt && <time>{new Date(item.publishedAt).toLocaleDateString()}</time>}</span></span>
               {item.url && <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />}
             </ExternalLink>
           ))}
           {news.length === 0 && <div className="py-8 text-center text-xs text-text-muted">{t('emptyNews')}</div>}
         </div>
       ) : tab === 'reports' ? (
-        <div className="divide-y divide-border/70 border-y border-border/70">
+        <div id={`research-panel-${ticker}-reports`} role="tabpanel" aria-labelledby={`research-tab-${ticker}-reports`} className="divide-y divide-border/70 border-y border-border/70">
           {reports.map((item) => {
             const content = <><FileText className="mt-0.5 h-4 w-4 shrink-0 text-text-muted" aria-hidden="true" /><span className="min-w-0 flex-1"><span className="line-clamp-2 text-sm font-medium">{item.title}</span><span className="mt-1 flex flex-wrap gap-x-2 text-[10px] text-text-muted"><span>{item.broker || item.source}</span>{item.rating && <span>{item.rating}</span>}<span>{t('trust', { value: Math.round(item.trustScore * 100) })}</span><span title={t('qualityFlags', { value: item.qualityFlags?.join(', ') || '--' })}>{t('quality', { value: Math.round((item.qualityScore ?? item.trustScore) * 100) })}</span>{item.publishedAt && <time>{new Date(item.publishedAt).toLocaleDateString()}</time>}</span></span>{item.url && <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />}</>;
             return <ExternalLink key={item.id} href={item.url} className="flex items-start gap-3 py-3 text-text">{content}</ExternalLink>;
@@ -111,7 +113,7 @@ export function WatchlistResearchPanel({ ticker, overview }: { ticker: string; o
           {reports.length === 0 && <div className="py-8 text-center text-xs text-text-muted">{t('emptyReports')}</div>}
         </div>
       ) : (
-        <div>
+        <div id={`research-panel-${ticker}-perspectives`} role="tabpanel" aria-labelledby={`research-tab-${ticker}-perspectives`}>
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
             <div className="text-[10px] text-text-muted">{research.perspectivesGeneratedAt ? <>{t('perspectivesGeneratedAt', { value: new Date(research.perspectivesGeneratedAt).toLocaleString() })}{research.perspectiveSource && <span className="ml-2">{t('perspectivesSource', { value: research.perspectiveSource })}</span>}</> : t('perspectivesNotGenerated')}</div>
             <button type="button" onClick={() => void research.generatePerspectives()} disabled={research.generating} className="inline-flex h-8 items-center gap-1.5 rounded bg-accent-dim px-3 text-xs font-semibold text-white disabled:opacity-50">

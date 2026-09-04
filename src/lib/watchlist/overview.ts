@@ -21,7 +21,7 @@ const loadMarket = unstable_cache(async (ticker: string, locale: AppLocale) => {
   // Radar's as_of is the composition time, not the market observation time.
   // Do not use it as a freshness surrogate when a provider omits updated_at.
   const asOf = radar.sections.price.updated_at ?? null;
-  const freshness = watchlistMarketFreshness(asOf);
+  const freshness = watchlistMarketFreshness(asOf, new Date(), classifyMarket(ticker));
   const hasPrice = radar.sections.price.value != null && radar.sections.price.value > 0;
   const delayed = radar.sections.price.delayed === true;
   const status = !hasPrice || freshness === 'unavailable'
@@ -77,18 +77,25 @@ function historyEnvelope(
 ): DataEnvelope<HistoricalWatchlistMetrics> {
   const benchmarkTicker = watchlistBenchmarkTicker(classifyMarket(ticker));
   const market = classifyMarket(ticker);
+  const metrics = calculateHistoricalWatchlistMetrics(result.bars, {
+    benchmarkBars: benchmark?.bars ?? [],
+    benchmarkTicker,
+    market,
+    adjustment: result.adjustment,
+    riskFreeRatePct: watchlistRiskFreeRatePct(market),
+  });
   return {
-    value: calculateHistoricalWatchlistMetrics(result.bars, {
-      benchmarkBars: benchmark?.bars ?? [],
-      benchmarkTicker,
-      market,
-      adjustment: result.adjustment,
-      riskFreeRatePct: watchlistRiskFreeRatePct(market),
-    }),
+    value: metrics,
     asOf: result.fetchedAt,
     source: result.source,
     status: result.freshness === 'stale' ? 'stale' : 'fresh',
-    warnings: [...result.warnings, ...(!benchmark ? ['benchmark_unavailable'] : [])],
+    warnings: [
+      ...result.warnings,
+      ...(metrics.coverageRatio < 1 ? ['history_partial_coverage'] : []),
+      ...(metrics.benchmarkAlignmentRatio != null && metrics.benchmarkAlignmentRatio < 0.9 ? ['benchmark_partial_alignment'] : []),
+      'price_return_only',
+      ...(!benchmark ? ['benchmark_unavailable'] : []),
+    ],
   };
 }
 

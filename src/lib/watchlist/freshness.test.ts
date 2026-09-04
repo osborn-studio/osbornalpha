@@ -21,4 +21,11 @@ describe('watchlist timestamp freshness', () => {
     expect(watchlistMarketFreshness('2026-09-02T00:00:00.000Z', now)).toBe('stale');
     expect(watchlistMarketFreshness('2026-08-01T00:00:00.000Z', now)).toBe('unavailable');
   });
+
+  it('grants a bounded holiday grace period with market context', () => {
+    const beforeAfterHoliday = new Date('2026-09-08T12:00:00.000Z');
+    expect(watchlistMarketFreshness('2026-09-04T20:00:00.000Z', beforeAfterHoliday, 'US')).toBe('fresh');
+    const duringOpen = new Date('2026-09-08T15:00:00.000Z');
+    expect(watchlistMarketFreshness('2026-09-04T20:00:00.000Z', duringOpen, 'US')).toBe('stale');
+  });
 });

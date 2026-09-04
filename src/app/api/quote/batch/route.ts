@@ -9,6 +9,7 @@ import {
 } from '@/lib/quotes/diagnostics';
 import { fetchDatagatewayRealtimeQuotes, isDatagatewayConfigured } from '@/lib/data/sources/datagateway-quote';
 import { readQuoteCache, resolveQuote, writeQuoteCache, type QuoteResolution, type QuoteShape } from '@/lib/quotes/resolve-quote';
+import { parseQuoteBatchRequest } from '@/lib/quotes/batch-contract';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 30;
@@ -20,29 +21,11 @@ const STALE_TTL_MS = 15 * 60_000;
 export async function GET(req: Request) {
   const startedAt = Date.now();
   const url = new URL(req.url);
-  const tickersParam = url.searchParams.get('tickers') || '';
-  const tickers = tickersParam
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .slice(0, 40);  // cap
-
-  if (tickers.length === 0) {
-    return NextResponse.json({
-      quotes: {},
-      meta: {
-        attempted: 0,
-        failed: 0,
-        stale: 0,
-        duration_ms: 0,
-        sources: {},
-        failed_tickers: [],
-        selected_sources: {},
-      },
-    });
+  const request = parseQuoteBatchRequest(url);
+  if ('error' in request) {
+    return NextResponse.json({ error: request.error }, { status: 400 });
   }
-
-  const force = url.searchParams.has('_');
+  const { tickers, force } = request;
   const freshQuotes: Record<string, QuoteShape> = {};
   const selectedSources: Record<string, string> = {};
   const toFetch: string[] = [];
@@ -95,6 +78,7 @@ export async function GET(req: Request) {
 
   const quotes: Record<string, QuoteShape | null> = { ...freshQuotes };
   const sourceAttempts: SourceAttempt[] = [];
+  let stale = 0;
   if (isDatagatewayConfigured()) {
     for (const ticker of toFetch) {
       const value = windMap.get(ticker.toUpperCase()) ?? null;
@@ -109,10 +93,18 @@ export async function GET(req: Request) {
         writeQuoteCache(ticker, value);
         quotes[ticker] = value;
         selectedSources[ticker] = 'datagateway-wind';
+      } else {
+        const cached = readQuoteCache(ticker, STALE_TTL_MS);
+        if (cached) {
+          stale += 1;
+          quotes[ticker] = { ...cached, delayed: true, stale: true };
+          selectedSources[ticker] = 'stale-cache';
+        } else {
+          quotes[ticker] = null;
+        }
       }
     }
   }
-  let stale = 0;
   results.forEach((r, i) => {
     const ticker = otherTickers[i];
     const resolution = r.status === 'fulfilled'

@@ -6,6 +6,15 @@ import { MarketLabel } from '@/components/MarketLabel';
 import type { WatchlistMarketRow } from '@/lib/watchlist/market-row';
 import { changeClass, formatPct, formatPrice } from '@/lib/utils';
 
+function MiniRange({ values, positive }: { values: number[]; positive: boolean }) {
+  const finite = values.filter((value) => Number.isFinite(value));
+  if (finite.length < 2) return null;
+  const min = Math.min(...finite);
+  const max = Math.max(...finite);
+  const span = max - min || 1;
+  return <span className="inline-flex h-6 w-14 items-end gap-0.5" aria-hidden="true">{values.map((value, index) => <span key={index} className={`w-1.5 rounded-t-sm ${positive ? 'bg-up/70' : 'bg-down/70'}`} style={{ height: `${Math.max(18, ((value - min) / span) * 100)}%` }} />)}</span>;
+}
+
 export function WatchlistMobileList({ rows, onSelect, selected, onToggle }: { rows: WatchlistMarketRow[]; onSelect?: (ticker: string) => void; selected?: Set<string>; onToggle?: (ticker: string) => void }) {
   const t = useTranslations('market.table');
   return (
@@ -32,12 +41,15 @@ export function WatchlistMobileList({ rows, onSelect, selected, onToggle }: { ro
                 </span>
               )}
             </span>
-            <span className="text-right">
+            <span className="flex items-center gap-2 text-right">
+              {hasQuote && <MiniRange values={[quote.low, quote.open, quote.prev_close, quote.price, quote.high]} positive={quote.change_pct >= 0} />}
+              <span>
               <span className="block font-mono text-sm font-semibold tabular-nums text-text">
                 {hasQuote ? formatPrice(quote.price, row.currency) : '--'}
               </span>
               <span className={`mt-0.5 block font-mono text-xs tabular-nums ${hasQuote ? changeClass(quote.change_pct) : 'text-text-muted'}`}>
                 {hasQuote ? formatPct(quote.change_pct) : t(`status.${row.status}`)}
+              </span>
               </span>
             </span>
             <ChevronRight className="h-4 w-4 text-text-muted" aria-hidden="true" />

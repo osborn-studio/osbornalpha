@@ -280,7 +280,8 @@
     "quickViewAction": "查看",
     "overview": {
       "loadMore": "加载更多分析数据",
-      "loadingMore": "正在加载分析数据…"
+      "loadingMore": "正在加载分析数据…",
+      "sortBlocked": "加载全部自选记录后，才能按分析指标排序。"
     },
     "dayPositionTitle": "当前价格位于今日区间的 {value}%",
     "researchDivergence": "有分歧",
@@ -341,6 +342,8 @@
       "atr14": "ATR（14）",
       "methodology": "按 {days} 个交易日年化 · {basis}收益口径 · 无风险利率 {riskFree}%",
       "sampleSize": "{count} 个交易日",
+      "coverage": "覆盖 {value}%",
+      "technicalMetrics": "技术指标",
       "marketSnapshot": "行情快照",
       "historySnapshot": "历史指标",
       "dataStatus": {
@@ -384,6 +387,9 @@
         "targetRange": "目标价区间",
         "targetUpside": "目标价空间",
         "trust": "可信度 {value}%",
+        "sentiment": "情绪 {value}",
+        "sentimentBasis": "匹配词：{value}",
+        "sentimentUnknown": "标题方向性词语",
         "quality": "质量 {value}%",
         "qualityFlags": "质量标记：{value}",
         "metadataOnly": "仅元数据",

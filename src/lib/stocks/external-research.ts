@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { classifyHeadlineSentiment, searchExternalEvidence } from '@/lib/external-evidence';
+import { assessHeadlineSentiment, searchExternalEvidence } from '@/lib/external-evidence';
 import { fetchEastmoneyQuote } from '@/lib/data/sources/eastmoney';
 import {
   fetchTushareReportRc,
@@ -54,13 +54,18 @@ export async function getStockNews(ticker: string, freshnessDays = 14): Promise<
     freshnessDays,
     limit: 15,
   });
-  const items: StockNewsItem[] = snapshot.results.map((item) => ({
+  const items: StockNewsItem[] = snapshot.results.map((item) => {
+    const sentiment = assessHeadlineSentiment(`${item.title} ${item.snippet}`);
+    return {
     id: item.citationId,
     title: item.title,
     source: item.domain,
     url: item.url,
     snippet: item.snippet,
-    sentiment: classifyHeadlineSentiment(`${item.title} ${item.snippet}`),
+    sentiment: sentiment.score,
+    sentimentConfidence: sentiment.confidence,
+    sentimentPositiveMatches: sentiment.positiveMatches,
+    sentimentNegativeMatches: sentiment.negativeMatches,
     publishedAt: item.publishedAt,
     fetchedAt: item.fetchedAt,
     trustScore: item.trustScore,
@@ -68,7 +73,8 @@ export async function getStockNews(ticker: string, freshnessDays = 14): Promise<
     qualityScore: item.qualityScore,
     qualityFlags: item.qualityFlags,
     sourceType: item.sourceType,
-  }));
+    };
+  });
   return {
     ticker,
     items,

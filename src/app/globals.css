@@ -16,7 +16,7 @@
   --border-active: rgba(202, 138, 4, 0.4);    /* Active Border (brass) */
   --text: #fafafa;                            /* Bone White */
   --text-dim: #a1a1aa;                        /* Pewter Steel */
-  --text-muted: #52525b;                      /* Distant Fog */
+  --text-muted: #71717a;                      /* Distant Fog */
   --accent: #ca8a04;                          /* Distressed Brass */
   --accent-dim: #a16207;                      /* Brass darker (hover) */
   --accent-wash: rgba(202, 138, 4, 0.12);     /* Brass Wash */
@@ -37,7 +37,7 @@
   --border-active: rgba(202, 138, 4, 0.5);
   --text: #0a0a0b;
   --text-dim: #52525b;
-  --text-muted: #a1a1aa;
+  --text-muted: #71717a;
   --accent: #ca8a04;
   --accent-dim: #a16207;
   --accent-wash: rgba(202, 138, 4, 0.10);

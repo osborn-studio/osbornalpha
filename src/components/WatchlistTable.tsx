@@ -60,6 +60,10 @@ const NUMERIC_COLUMNS = new Set<ColumnKey>([
   'oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition', 'rsi14', 'macdHistogram', 'bollingerPosition', 'atr14',
 ]);
 
+const ANALYTICS_COLUMNS = new Set<ColumnKey>([
+  'oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition', 'rsi14', 'macdHistogram', 'bollingerPosition', 'atr14', 'research', 'decision',
+]);
+
 const DEFAULT_PREFERENCES: TablePreferences = {
   sortKey: 'change', asc: false, preset: 'market', visibleColumns: PRESET_COLUMNS.market,
   query: '', groupFilter: 'all', marketFilter: 'all', statusFilter: 'all', density: 'comfortable',
@@ -266,6 +270,7 @@ export function WatchlistTable({
   };
 
   const sort = (key: ColumnKey) => {
+    if (overviewHasMore && ANALYTICS_COLUMNS.has(key)) return;
     setPreferences((current) => sortKey === key
       ? { ...current, asc: !current.asc }
       : { ...current, sortKey: key, asc: key === 'ticker' || key === 'name' || key === 'group' });
@@ -421,6 +426,7 @@ export function WatchlistTable({
       </div>
 
       {loading && <div className="border-b border-border px-3 py-1.5 text-[11px] text-text-dim" role="status">{t('loadingQuotes')}</div>}
+      {overviewHasMore && <div className="border-b border-warn/20 bg-warn/5 px-3 py-1.5 text-[11px] text-warn" role="status">{t('overview.sortBlocked')}</div>}
       {selected.size > 0 && (
         <div className="flex flex-wrap items-center gap-2 border-b border-accent/20 bg-accent/5 px-3 py-2">
           <span className="mr-auto text-xs font-semibold text-text">{t('selection.count', { count: selected.size })}</span>
@@ -449,7 +455,7 @@ export function WatchlistTable({
                 <th className="sticky left-0 top-0 z-30 w-10 bg-bg-elevated/95 px-2 py-2.5"><input type="checkbox" checked={allVisibleSelected} onChange={() => setSelected((current) => { const next = new Set(current); if (allVisibleSelected) sorted.forEach((row) => next.delete(row.ticker)); else sorted.forEach((row) => next.add(row.ticker)); return next; })} aria-label={t('selection.all')} /></th>
                 {visibleColumns.map((column) => (
                   <th key={column} className={`sticky top-0 whitespace-nowrap bg-bg-elevated/95 px-3 py-2.5 font-semibold ${column === 'ticker' ? 'left-10 z-20 min-w-[126px]' : 'z-10'} ${NUMERIC_COLUMNS.has(column) ? 'text-right' : 'text-left'}`} aria-sort={sortKey === column ? (asc ? 'ascending' : 'descending') : 'none'}>
-                    <button type="button" onClick={() => sort(column)} className="hover:text-text" aria-label={t('sortAriaLabel', { label: t(`headers.${column}`) })}>
+                    <button type="button" onClick={() => sort(column)} disabled={overviewHasMore && ANALYTICS_COLUMNS.has(column)} className="hover:text-text disabled:cursor-not-allowed disabled:opacity-50" aria-label={t('sortAriaLabel', { label: t(`headers.${column}`) })}>
                       {t(`headers.${column}`)}{sortKey === column ? (asc ? ' ▲' : ' ▼') : ''}
                     </button>
                   </th>

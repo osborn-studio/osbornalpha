@@ -280,7 +280,8 @@
     "quickViewAction": "View",
     "overview": {
       "loadMore": "Load more analytics",
-      "loadingMore": "Loading analytics…"
+      "loadingMore": "Loading analytics…",
+      "sortBlocked": "Analytics columns are only sortable after all watchlist records are loaded."
     },
     "dayPositionTitle": "Current price is at {value}% of today's range",
     "researchDivergence": "Divergent",
@@ -341,6 +342,8 @@
       "atr14": "ATR (14)",
       "methodology": "Annualised over {days} sessions · {basis} return basis · RF {riskFree}%",
       "sampleSize": "{count} sessions",
+      "coverage": "{value}% coverage",
+      "technicalMetrics": "Technical indicators",
       "marketSnapshot": "Market snapshot",
       "historySnapshot": "Historical metrics",
       "dataStatus": {
@@ -384,6 +387,9 @@
         "targetRange": "Target range",
         "targetUpside": "Target upside",
         "trust": "Trust {value}%",
+        "sentiment": "Sentiment {value}",
+        "sentimentBasis": "Matched terms: {value}",
+        "sentimentUnknown": "directional headline terms",
         "quality": "Quality {value}%",
         "qualityFlags": "Quality flags: {value}",
         "metadataOnly": "Metadata only",

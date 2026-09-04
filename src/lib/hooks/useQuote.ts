@@ -11,6 +11,8 @@ import {
   mergeQuoteBatchResults,
   shouldRetryQuoteBatchError,
   shouldReportQuoteBatch,
+  isQuoteBatchPayload,
+  isLiveQuotePayload,
   type QuoteBatchMeta,
   type QuoteBatchPayload,
 } from '@/lib/quotes/batch-client';
@@ -152,7 +154,7 @@ const BATCH_RESULT_TTL_MS = 5_000;
 const batchInflight = new Map<string, Promise<QuoteBatchPayload<LiveQuote>>>();
 const batchResultCache = new Map<string, { payload: QuoteBatchPayload<LiveQuote>; ts: number }>();
 
-async function fetchQuoteBatchChunk(url: string, callerSignal?: AbortSignal): Promise<QuoteBatchPayload<LiveQuote>> {
+async function fetchQuoteBatchChunk(url: string, expectedTickers: string[], callerSignal?: AbortSignal): Promise<QuoteBatchPayload<LiveQuote>> {
   const cached = batchResultCache.get(url);
   if (cached && Date.now() - cached.ts < BATCH_RESULT_TTL_MS) return cached.payload;
   const existing = batchInflight.get(url);
@@ -166,7 +168,12 @@ async function fetchQuoteBatchChunk(url: string, callerSignal?: AbortSignal): Pr
         const response = await fetch(url, { signal: controller.signal });
         if (!response.ok) throw new Error(`quote batch HTTP ${response.status}`);
         const payload = await response.json();
-        if (!payload || typeof payload !== 'object') throw new Error('invalid quote batch response');
+        if (!isQuoteBatchPayload<LiveQuote>(payload, {
+          expectedTickers,
+          validateQuote: (value, ticker): value is LiveQuote => isLiveQuotePayload(value, ticker),
+        })) {
+          throw new Error('invalid quote batch response');
+        }
         const typedPayload = payload as QuoteBatchPayload<LiveQuote>;
         batchResultCache.set(url, { payload: typedPayload, ts: Date.now() });
         return typedPayload;
@@ -227,7 +234,7 @@ export function useBatchQuotes(
 
     const fetchChunk = async (chunk: string[], manual: boolean): Promise<QuoteBatchPayload<LiveQuote>> => {
       const url = `/api/quote/batch?tickers=${encodeURIComponent(chunk.join(','))}${manual ? `&_=${bump}` : ''}`;
-      return fetchQuoteBatchChunk(url, controller.signal);
+      return fetchQuoteBatchChunk(url, chunk, controller.signal);
     };
 
     const run = async (manual = false) => {

@@ -38,6 +38,14 @@ export interface HistoricalWatchlistMetrics {
   benchmarkReturnPct: number | null;
   excessReturnPct: number | null;
   beta: number | null;
+  observations: number;
+  usableObservations: number;
+  coverageRatio: number;
+  coverageStart: string | null;
+  coverageEnd: string | null;
+  benchmarkObservations: number;
+  benchmarkAlignedObservations: number;
+  benchmarkAlignmentRatio: number | null;
   sampleSize: number;
   methodology: {
     returnBasis: 'price';
@@ -163,13 +171,22 @@ function tradingDateKey(value: string | number): string {
   return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toISOString().slice(0, 10);
 }
 
+function coverageDateKey(value: string | number): string | null {
+  const key = tradingDateKey(value);
+  return key && key !== 'undefined' ? key : null;
+}
+
 function benchmarkMetrics(
   bars: HistoricalPriceBar[],
   benchmarkBars: HistoricalPriceBar[],
   benchmarkTicker: string | null,
 ) {
   if (!benchmarkTicker || benchmarkBars.length < 2) {
-    return { benchmarkTicker, benchmarkReturnPct: null, excessReturnPct: null, beta: null, betaSampleSize: 0 };
+    return {
+      benchmarkTicker, benchmarkReturnPct: null, excessReturnPct: null, beta: null,
+      betaSampleSize: 0, benchmarkObservations: benchmarkBars.length,
+      benchmarkAlignedObservations: 0, benchmarkAlignmentRatio: null,
+    };
   }
   const benchmarkByTime = new Map(benchmarkBars.map((bar) => [tradingDateKey(bar.time), bar.close]));
   const aligned = bars.flatMap((bar) => {
@@ -177,7 +194,12 @@ function benchmarkMetrics(
     return benchmarkClose && finitePositive(benchmarkClose) ? [{ asset: bar.close, benchmark: benchmarkClose }] : [];
   });
   if (aligned.length < 2) {
-    return { benchmarkTicker, benchmarkReturnPct: null, excessReturnPct: null, beta: null, betaSampleSize: 0 };
+    return {
+      benchmarkTicker, benchmarkReturnPct: null, excessReturnPct: null, beta: null,
+      betaSampleSize: 0, benchmarkObservations: benchmarkBars.length,
+      benchmarkAlignedObservations: aligned.length,
+      benchmarkAlignmentRatio: aligned.length / Math.max(1, bars.length),
+    };
   }
   const assetCloses = aligned.map((row) => row.asset);
   const benchmarkCloses = aligned.map((row) => row.benchmark);
@@ -202,6 +224,9 @@ function benchmarkMetrics(
     excessReturnPct: assetReturnPct - benchmarkReturnPct,
     beta,
     betaSampleSize: assetReturns.length,
+    benchmarkObservations: benchmarkBars.length,
+    benchmarkAlignedObservations: aligned.length,
+    benchmarkAlignmentRatio: aligned.length / Math.max(1, bars.length),
   };
 }
 
@@ -251,6 +276,14 @@ export function calculateHistoricalWatchlistMetrics(
       benchmarkReturnPct: null,
       excessReturnPct: null,
       beta: null,
+      observations: bars.length,
+      usableObservations: 0,
+      coverageRatio: 0,
+      coverageStart: bars[0] ? coverageDateKey(bars[0].time) : null,
+      coverageEnd: bars.at(-1) ? coverageDateKey(bars.at(-1)!.time) : null,
+      benchmarkObservations: options.benchmarkBars?.length ?? 0,
+      benchmarkAlignedObservations: 0,
+      benchmarkAlignmentRatio: null,
       sampleSize: 0,
       methodology: { ...methodologyBase, betaSampleSize: 0 },
     };
@@ -312,6 +345,11 @@ export function calculateHistoricalWatchlistMetrics(
     bollingerPositionPct: bollingerPosition(closes),
     atr14Pct: atrPercent(usable),
     ...relative,
+    observations: bars.length,
+    usableObservations: usable.length,
+    coverageRatio: usable.length / Math.max(1, bars.length),
+    coverageStart: coverageDateKey(usable[0].time),
+    coverageEnd: coverageDateKey(usable.at(-1)!.time),
     sampleSize: usable.length,
     methodology: { ...methodologyBase, betaSampleSize: relative.betaSampleSize },
   };

@@ -96,14 +96,16 @@ export function WatchlistQuickView({
           <nav className="flex overflow-x-auto border-b border-border px-3 sm:px-5" role="tablist" aria-label={t('tabs.label')}>
             {tabs.filter((tab) => tab.available).map((tab) => {
               const Icon = tab.icon;
-              return <button key={tab.id} type="button" role="tab" aria-selected={activeTab === tab.id} onClick={() => selectTab(tab.id)} className={`relative inline-flex h-11 shrink-0 items-center gap-2 px-3 text-xs font-medium transition ${activeTab === tab.id ? 'text-text' : 'text-text-muted hover:text-text'}`}><Icon className="h-3.5 w-3.5" aria-hidden="true" />{t(`tabs.${tab.id}`)}{activeTab === tab.id && <span className="absolute inset-x-2 bottom-0 h-0.5 bg-accent" />}</button>;
+              const tabId = `watchlist-tab-${ticker}-${tab.id}`;
+              const panelId = `watchlist-panel-${ticker}-${tab.id}`;
+              return <button key={tab.id} id={tabId} type="button" role="tab" aria-selected={activeTab === tab.id} aria-controls={panelId} tabIndex={activeTab === tab.id ? 0 : -1} onClick={() => selectTab(tab.id)} className={`relative inline-flex h-11 shrink-0 items-center gap-2 px-3 text-xs font-medium transition ${activeTab === tab.id ? 'text-text' : 'text-text-muted hover:text-text'}`}><Icon className="h-3.5 w-3.5" aria-hidden="true" />{t(`tabs.${tab.id}`)}{activeTab === tab.id && <span className="absolute inset-x-2 bottom-0 h-0.5 bg-accent" />}</button>;
             })}
           </nav>
         </div>
 
         <div className="p-4 sm:p-5">
           {activeTab === 'overview' && (
-            <div role="tabpanel">
+            <div id={`watchlist-panel-${ticker}-overview`} role="tabpanel" aria-labelledby={`watchlist-tab-${ticker}-overview`}>
               <section className="mb-6"><KlineChart ticker={ticker} /></section>
               <section aria-label={t('metrics')}>
                 <div className="mb-2 text-[11px] font-semibold text-text-dim">{t('metrics')}</div>
@@ -119,7 +121,7 @@ export function WatchlistQuickView({
                 </div>
               </section>
               <section className="mt-6" aria-label={t('historyMetrics')}>
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold text-text-dim"><span>{t('historyMetrics')}</span>{historicalMetrics && <span className="font-normal text-text-muted">{t('sampleSize', { count: historicalMetrics.sampleSize })}</span>}</div>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold text-text-dim"><span>{t('historyMetrics')}</span>{historicalMetrics && <span className="font-normal text-text-muted">{t('sampleSize', { count: historicalMetrics.sampleSize })} · {t('coverage', { value: Math.round(historicalMetrics.coverageRatio * 100) })}</span>}</div>
                 <div className="grid grid-cols-2 gap-x-4 sm:grid-cols-4">
                   <Metric label={t('oneYearPriceReturn')} value={optional(historicalMetrics?.periodReturnPct, '%')} tone={historicalMetrics?.periodReturnPct == null ? 'text-text' : changeClass(historicalMetrics.periodReturnPct)} />
                   <Metric label={t('benchmarkReturn', { benchmark: historicalMetrics?.benchmarkTicker ?? '--' })} value={optional(historicalMetrics?.benchmarkReturnPct, '%')} tone={historicalMetrics?.benchmarkReturnPct == null ? 'text-text' : changeClass(historicalMetrics.benchmarkReturnPct)} />
@@ -129,6 +131,10 @@ export function WatchlistQuickView({
                   <Metric label={t('downsideVolatility')} value={optional(historicalMetrics?.downsideVolatilityPct, '%')} />
                   <Metric label={t('sharpeRatio')} value={optional(historicalMetrics?.sharpeRatio)} />
                   <Metric label={t('maxDrawdown')} value={optional(historicalMetrics?.maxDrawdownPct, '%')} tone="text-warn" />
+                </div>
+                <details className="mt-3 rounded-md border border-border/70 bg-bg-elevated/40 px-3">
+                  <summary className="cursor-pointer py-2 text-[11px] font-semibold text-text-dim">{t('technicalMetrics')}</summary>
+                  <div className="grid grid-cols-2 gap-x-4 pb-2 sm:grid-cols-4">
                   <Metric label={t('rsi14')} value={optional(historicalMetrics?.rsi14)} />
                   <Metric label={t('ma20Distance')} value={optional(historicalMetrics?.ma20DistancePct, '%')} tone={historicalMetrics?.ma20DistancePct == null ? 'text-text' : changeClass(historicalMetrics.ma20DistancePct)} />
                   <Metric label={t('ma50Distance')} value={optional(historicalMetrics?.ma50DistancePct, '%')} tone={historicalMetrics?.ma50DistancePct == null ? 'text-text' : changeClass(historicalMetrics.ma50DistancePct)} />
@@ -138,7 +144,8 @@ export function WatchlistQuickView({
                   <Metric label={t('macdHistogram')} value={optional(historicalMetrics?.macdHistogram)} tone={historicalMetrics?.macdHistogram == null ? 'text-text' : changeClass(historicalMetrics.macdHistogram)} />
                   <Metric label={t('bollingerPosition')} value={optional(historicalMetrics?.bollingerPositionPct, '%')} />
                   <Metric label={t('atr14')} value={optional(historicalMetrics?.atr14Pct, '%')} />
-                </div>
+                  </div>
+                </details>
                 {historicalMetrics && <div className="mt-3 border-t border-border/70 pt-2 text-[10px] text-text-muted">{t('methodology', { days: historicalMetrics.methodology.annualizationFactor, basis: historicalMetrics.methodology.returnBasis, riskFree: historicalMetrics.methodology.riskFreeRatePct.toFixed(2) })}</div>}
               </section>
               <div className="mt-5 border-t border-border pt-3">
@@ -150,9 +157,9 @@ export function WatchlistQuickView({
               </div>
             </div>
           )}
-          {activeTab === 'research' && visited.has('research') && <div role="tabpanel"><WatchlistResearchPanel ticker={ticker} overview={overview} /></div>}
-          {overview?.item && onDecisionSaved && visited.has('decision') && <div role="tabpanel" hidden={activeTab !== 'decision'}><WatchlistDecisionPanel item={overview.item} onSaved={onDecisionSaved} onDirtyChange={onDecisionDirtyChange} /></div>}
-          {activeTab === 'alerts' && overview?.item && visited.has('alerts') && <div role="tabpanel"><WatchlistAlertPanel itemId={overview.item.id} /></div>}
+          {activeTab === 'research' && visited.has('research') && <div id={`watchlist-panel-${ticker}-research`} role="tabpanel" aria-labelledby={`watchlist-tab-${ticker}-research`}><WatchlistResearchPanel ticker={ticker} overview={overview} /></div>}
+          {overview?.item && onDecisionSaved && visited.has('decision') && <div id={`watchlist-panel-${ticker}-decision`} role="tabpanel" aria-labelledby={`watchlist-tab-${ticker}-decision`} hidden={activeTab !== 'decision'}><WatchlistDecisionPanel item={overview.item} onSaved={onDecisionSaved} onDirtyChange={onDecisionDirtyChange} /></div>}
+          {activeTab === 'alerts' && overview?.item && visited.has('alerts') && <div id={`watchlist-panel-${ticker}-alerts`} role="tabpanel" aria-labelledby={`watchlist-tab-${ticker}-alerts`}><WatchlistAlertPanel itemId={overview.item.id} /></div>}
         </div>
 
         {confirmingClose && (

@@ -40,9 +40,10 @@ async function runQueries(
   queries: EvidenceQuery[],
   provider: EvidenceSearchProvider,
   fetchedAt: Date,
-): Promise<{ results: ExternalEvidence[]; warnings: string[] }> {
+): Promise<{ results: ExternalEvidence[]; warnings: string[]; failedQueries: EvidenceQuery[] }> {
   const results: ExternalEvidence[] = [];
   const warnings: string[] = [];
+  const failedQueries: EvidenceQuery[] = [];
   let cursor = 0;
   const worker = async () => {
     while (cursor < queries.length) {
@@ -53,11 +54,12 @@ async function runQueries(
       } catch (error) {
         const code = error instanceof Error ? error.message : 'search_provider_error';
         warnings.push(`${query.scope}:${code.slice(0, 80)}`);
+        failedQueries.push(query);
       }
     }
   };
   await Promise.all(Array.from({ length: Math.min(2, queries.length) }, () => worker()));
-  return { results, warnings };
+  return { results, warnings, failedQueries };
 }
 
 export async function searchExternalEvidenceUncached(
@@ -86,25 +88,39 @@ export async function searchExternalEvidenceUncached(
   }
 
   const queries = buildEvidenceQueries(request);
-  let searched = { results: [] as ExternalEvidence[], warnings: [] as string[] };
-  let provider = providers[0];
+  let searched = { results: [] as ExternalEvidence[], warnings: [] as string[], failedQueries: [] as EvidenceQuery[] };
+  const usedProviders = new Set<string>();
   let queryCount = 0;
   const failoverWarnings: string[] = [];
-  for (let index = 0; index < providers.length; index += 1) {
-    provider = providers[index];
-    searched = await runQueries(queries, provider, fetchedAt);
-    queryCount += queries.length;
-    const failedAll = searched.warnings.length === queries.length;
-    if (!failedAll || index === providers.length - 1) break;
-    failoverWarnings.push(`provider_failover:${provider.id}`);
+  let pendingQueries = queries;
+  let lastProviderId: string | null = null;
+  let firstProviderFailedAll = false;
+  for (let index = 0; index < providers.length && pendingQueries.length > 0; index += 1) {
+    const provider = providers[index];
+    const result = await runQueries(pendingQueries, provider, fetchedAt);
+    usedProviders.add(provider.id);
+    lastProviderId = provider.id;
+    if (index === 0) firstProviderFailedAll = result.failedQueries.length === queries.length;
+    queryCount += pendingQueries.length;
+    searched.results.push(...result.results);
+    searched.warnings = result.warnings;
+    pendingQueries = result.failedQueries;
+    if (pendingQueries.length > 0 && index < providers.length - 1) {
+      failoverWarnings.push(`provider_failover:${provider.id}`);
+    }
   }
   const results = dedupeAndRankEvidence(searched.results, request.limit);
-  const warnings = [...failoverWarnings, ...searched.warnings];
-  const failedAll = searched.warnings.length === queries.length;
+  const warnings = [...failoverWarnings, ...(pendingQueries.length > 0 ? searched.warnings : [])];
+  const failedAll = pendingQueries.length === queries.length;
+  const provider = firstProviderFailedAll && pendingQueries.length === 0 && lastProviderId
+    ? lastProviderId
+    : usedProviders.size === 1
+    ? [...usedProviders][0]
+    : usedProviders.size > 1 ? 'mixed' : null;
   return finishSnapshot(request, {
     requestId: crypto.randomUUID(),
-    status: failedAll ? 'error' : searched.warnings.length > 0 ? 'partial' : 'complete',
-    provider: provider.id,
+    status: failedAll ? 'error' : pendingQueries.length > 0 ? 'partial' : 'complete',
+    provider,
     queryCount,
     results,
     fetchedAt: fetchedAt.toISOString(),
