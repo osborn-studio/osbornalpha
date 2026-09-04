@@ -30,4 +30,23 @@ describe('loadWatchlistResearchSummaries', () => {
     await expect(loadWatchlistResearchSummaries(client as never, ['AAPL']))
       .rejects.toThrow('watchlist_research_summary_failed:database offline');
   });
+
+  it('normalizes malformed aggregate numbers before exposing them to the UI', async () => {
+    const rpc = vi.fn(async () => ({
+      data: [{
+        ticker: 'AAPL', recent_news_count: 'NaN', latest_news_at: null,
+        average_sentiment: 4, sentiment_sample_size: -2, sentiment_coverage_ratio: 'Infinity',
+        latest_report_at: null, bullish_count: 1, neutral_count: 0, bearish_count: 0,
+        latest_perspective_at: null,
+      }],
+      error: null,
+    }));
+    const result = await loadWatchlistResearchSummaries({ rpc } as never, ['AAPL']);
+    expect(result.AAPL).toMatchObject({
+      recentNewsCount: 0,
+      averageSentiment: 1,
+      sentimentSampleSize: 0,
+      sentimentCoverageRatio: 0,
+    });
+  });
 });

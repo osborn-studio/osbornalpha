@@ -22,6 +22,16 @@ function count(value: unknown): number {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
 }
 
+function boundedRatio(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, Math.min(1, parsed)) : 0;
+}
+
+function boundedSentiment(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(-1, Math.min(1, parsed)) : null;
+}
+
 export async function loadWatchlistResearchSummaries(
   client: WatchlistServerClient,
   tickers: string[],
@@ -46,9 +56,9 @@ export async function loadWatchlistResearchSummaries(
       recentNewsCount: count(row.recent_news_count),
       latestNewsAt: row.latest_news_at,
       latestReportAt: row.latest_report_at,
-      averageSentiment: row.average_sentiment == null ? null : Number(row.average_sentiment),
+      averageSentiment: boundedSentiment(row.average_sentiment),
       sentimentSampleSize: count(row.sentiment_sample_size),
-      sentimentCoverageRatio: Math.max(0, Math.min(1, Number(row.sentiment_coverage_ratio) || 0)),
+      sentimentCoverageRatio: boundedRatio(row.sentiment_coverage_ratio),
       perspectiveCounts,
       perspectiveDivergence: perspectiveCounts.bullish > 0 && perspectiveCounts.bearish > 0,
       latestPerspectiveAt: row.latest_perspective_at,

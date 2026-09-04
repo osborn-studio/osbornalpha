@@ -205,4 +205,15 @@ describe('mergeWatchlistGroups', () => {
       { id: 'new', name: 'Ideas', tickers: ['TSLA'] },
     ]);
   });
+
+  it('normalizes ticker whitespace and does not merge unnamed groups by an empty key', () => {
+    expect(mergeWatchlistGroups(
+      [{ id: 'local-empty', name: '', tickers: [' AAPL ', ''] }, { id: 'local-core', name: 'Core', tickers: [' msft '] }],
+      [{ id: 'server-empty', name: '', tickers: [' TSLA '] }, { id: 'server-core', name: 'Core', tickers: ['AAPL'] }],
+    )).toEqual([
+      { id: 'server-empty', name: '', tickers: ['TSLA'] },
+      { id: 'server-core', name: 'Core', tickers: ['AAPL', 'MSFT'] },
+      { id: 'local-empty', name: '', tickers: ['AAPL'] },
+    ]);
+  });
 });

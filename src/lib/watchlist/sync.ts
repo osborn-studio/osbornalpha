@@ -47,27 +47,41 @@ export function isWatchlistVersionConflict(error: { code?: string; message?: str
  * preserved. Destructive operations remain explicit in the conflict dialog.
  */
 export function mergeWatchlistGroups(local: WatchlistGroup[], server: WatchlistGroup[]): WatchlistGroup[] {
-  const merged = server.map((group) => ({ ...group, tickers: [...group.tickers] }));
+  const normalizeTicker = (ticker: string) => ticker.trim().toUpperCase();
+  const merged = server.map((group) => ({
+    ...group,
+    tickers: [...new Set(group.tickers.map(normalizeTicker).filter(Boolean))],
+  }));
   const byId = new Map(merged.map((group) => [group.id, group]));
-  const byName = new Map(merged.map((group) => [group.name.trim().toLocaleLowerCase(), group]));
+  const byName = new Map(
+    merged
+      .filter((group) => group.name.trim().length > 0)
+      .map((group) => [group.name.trim().toLocaleLowerCase(), group]),
+  );
   for (const localGroup of local) {
-    const target = byId.get(localGroup.id) ?? byName.get(localGroup.name.trim().toLocaleLowerCase());
+    const localName = localGroup.name.trim();
+    const target = byId.get(localGroup.id) ?? (localName ? byName.get(localName.toLocaleLowerCase()) : undefined);
     if (!target) {
-      const copy = { ...localGroup, tickers: [...new Set(localGroup.tickers.map((ticker) => ticker.toUpperCase()))] };
+      const copy = {
+        ...localGroup,
+        tickers: [...new Set(localGroup.tickers.map(normalizeTicker).filter(Boolean))],
+      };
       merged.push(copy);
       byId.set(copy.id, copy);
-      byName.set(copy.name.trim().toLocaleLowerCase(), copy);
+      if (copy.name.trim()) byName.set(copy.name.trim().toLocaleLowerCase(), copy);
       continue;
     }
-    const seen = new Set(target.tickers.map((ticker) => ticker.toUpperCase()));
-    for (const ticker of localGroup.tickers.map((value) => value.toUpperCase())) {
+    const normalizedServerTickers = target.tickers.map(normalizeTicker).filter(Boolean);
+    target.tickers = [...new Set(normalizedServerTickers)];
+    const seen = new Set(target.tickers);
+    for (const ticker of localGroup.tickers.map(normalizeTicker).filter(Boolean)) {
       if (!seen.has(ticker)) {
         target.tickers.push(ticker);
         seen.add(ticker);
       }
     }
     // A local rename is retained when both snapshots refer to the same group.
-    if (localGroup.name.trim() && localGroup.name !== target.name) target.name = localGroup.name;
+    if (localName && localName !== target.name) target.name = localName;
   }
   return merged;
 }
