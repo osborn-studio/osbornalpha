@@ -20,6 +20,7 @@ import type { WatchlistOverviewRow as WatchlistOverviewClientRow } from '@/lib/w
 import { summarizeWatchlistMarketRows } from '@/lib/watchlist/summary';
 import { usePersistentState } from '@/lib/hooks/usePersistentState';
 import { useDismissableLayer } from '@/lib/hooks/useDismissableLayer';
+import { calculateWatchlistDataQuality } from '@/lib/watchlist/data-quality';
 
 type ColumnKey =
   | 'ticker' | 'name' | 'price' | 'change' | 'open' | 'prevClose' | 'dayRange' | 'volume' | 'amount'
@@ -29,6 +30,7 @@ type ColumnKey =
   | 'research' | 'decision' | 'quality' | 'updated' | 'group';
 type PresetKey = 'market' | 'valuation' | 'risk';
 type Density = 'compact' | 'comfortable';
+type ColumnGroupKey = 'identity' | 'market' | 'valuation' | 'technical' | 'research';
 
 interface TablePreferences {
   sortKey: ColumnKey;
@@ -52,6 +54,14 @@ const ALL_COLUMNS: ColumnKey[] = [
   'ticker', 'name', 'price', 'change', 'open', 'prevClose', 'dayRange', 'volume', 'amount', 'marketCap',
   'pe', 'pb', 'turnover', 'volumeRatio', 'amplitude', 'dayPosition', 'quality', 'updated', 'group',
   'oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition', 'rsi14', 'macdHistogram', 'bollingerPosition', 'atr14', 'research', 'decision',
+];
+
+const COLUMN_GROUPS: Array<{ key: ColumnGroupKey; columns: ColumnKey[] }> = [
+  { key: 'identity', columns: ['ticker', 'name', 'group'] },
+  { key: 'market', columns: ['price', 'change', 'open', 'prevClose', 'dayRange', 'volume', 'amount', 'turnover', 'volumeRatio', 'amplitude', 'dayPosition', 'quality', 'updated'] },
+  { key: 'valuation', columns: ['marketCap', 'pe', 'pb'] },
+  { key: 'technical', columns: ['oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition', 'rsi14', 'macdHistogram', 'bollingerPosition', 'atr14'] },
+  { key: 'research', columns: ['research', 'decision'] },
 ];
 
 const PRESET_COLUMNS: Record<PresetKey, ColumnKey[]> = {
@@ -112,14 +122,6 @@ function dayPosition(quote: LiveQuote | null): number | null {
   return Math.min(100, Math.max(0, ((quote.price - quote.low) / (quote.high - quote.low)) * 100));
 }
 
-function dataQuality(quote: LiveQuote | null): number {
-  if (!quote) return 0;
-  const values = [quote.price, quote.prev_close, quote.volume, quote.amount, quote.market_cap, quote.pe_ttm, quote.pb, quote.turnover, quote.volume_ratio];
-  // Zero is a valid observation for fields such as turnover or volume during
-  // a halt. Missingness must be represented by null/undefined, not by value.
-  return Math.round((values.filter((value) => value != null && Number.isFinite(value)).length / values.length) * 100);
-}
-
 function intradayRangePct(quote: LiveQuote | null): number | null {
   if (!quote || !Number.isFinite(quote.high) || !Number.isFinite(quote.low) || quote.high < quote.low) return null;
   const baseline = Number.isFinite(quote.prev_close) && quote.prev_close > 0 ? quote.prev_close : quote.price;
@@ -130,7 +132,7 @@ function QuoteStatus({ row }: { row: WatchlistMarketRow }) {
   const t = useTranslations('market.table');
   const quote = row.quote;
   if (row.status === 'loading') return <span className="text-text-muted">{t('status.loading')}</span>;
-  if (row.status === 'unavailable') return <span className="text-down">{t('status.unavailable')}</span>;
+  if (row.status === 'unavailable') return <span className="text-status-bad">{t('status.unavailable')}</span>;
 
   const source = quote?.source || t('status.unknownSource');
   const updated = quote?.updated_at ? new Date(quote.updated_at).toLocaleString() : t('status.unknownTime');
@@ -138,8 +140,8 @@ function QuoteStatus({ row }: { row: WatchlistMarketRow }) {
   const stale = row.status === 'stale';
   return (
     <div title={`${source} · ${updated}`}>
-      <div className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${delayed || stale ? 'border-warn/25 bg-warn/10 text-warn' : 'border-up/20 bg-up/10 text-up'}`}>
-        <span className={`h-1.5 w-1.5 rounded-full ${delayed || stale ? 'bg-warn' : 'bg-up'}`} />
+      <div className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${delayed || stale ? 'border-warn/25 bg-warn/10 text-warn' : 'border-status-good/25 bg-status-good/10 text-status-good'}`}>
+        <span className={`h-1.5 w-1.5 rounded-full ${delayed || stale ? 'bg-warn' : 'bg-status-good'}`} />
         {stale ? t('status.stale') : delayed ? t('status.delayed') : t('status.live')}
       </div>
       <div className="mt-1 max-w-[118px] truncate text-[9px] text-text-muted">{source}</div>
@@ -178,7 +180,7 @@ function metricValue(row: WatchlistMarketRow, key: ColumnKey, overview?: Watchli
     case 'atr14': return overview?.history?.value?.atr14Pct ?? null;
     case 'research': return overview?.research.value?.recentNewsCount ?? null;
     case 'decision': return overview?.item.status ?? '';
-    case 'quality': return dataQuality(quote);
+    case 'quality': return calculateWatchlistDataQuality(quote, row.status, overview?.history).score;
     case 'updated': return quote?.updated_at ? Date.parse(quote.updated_at) : null;
     case 'group': return row.group;
   }
@@ -392,8 +394,8 @@ export function WatchlistTable({
         ? <span className="rounded border border-border bg-bg-elevated px-1.5 py-0.5 text-[10px] text-text-dim">{t(`decisionStatuses.${overview.item.status}`)}</span>
         : <span className="text-text-muted">--</span>;
       case 'quality': {
-        const quality = dataQuality(quote);
-        return <span className={quality >= 75 ? 'text-up' : quality >= 45 ? 'text-warn' : 'text-text-muted'}>{quality}%</span>;
+        const quality = calculateWatchlistDataQuality(quote, row.status, overview?.history);
+        return <span title={t('qualityTitle', { completeness: quality.completenessPct, freshness: quality.freshnessPct, analytics: quality.analyticsPct ?? '--' })} className={quality.score >= 75 ? 'text-status-good' : quality.score >= 45 ? 'text-warn' : 'text-text-muted'}>{quality.score}%</span>;
       }
       case 'updated': return <QuoteStatus row={row} />;
       case 'group': return <span className="inline-flex max-w-[150px] truncate rounded-full border border-border bg-bg-elevated px-2 py-0.5 text-[10px] text-text-dim">{row.group}</span>;
@@ -404,27 +406,27 @@ export function WatchlistTable({
 
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-bg-card shadow-[var(--shadow)]" data-density="data">
-      <div className="grid grid-cols-2 divide-x divide-y divide-border border-b border-border sm:grid-cols-4 sm:divide-y-0">
+      <div className="grid grid-cols-4 divide-x divide-border border-b border-border">
         {[
           [t('summary.tracked'), summary.tracked, 'text-text', 'bg-accent'],
           [t('summary.gainers'), summary.gainers, 'text-up', 'bg-up'],
           [t('summary.decliners'), summary.decliners, 'text-down', 'bg-down'],
           [t('summary.average'), summary.averageChangePct == null ? '--' : formatPct(summary.averageChangePct), summary.averageChangePct == null ? 'text-text-muted' : changeClass(summary.averageChangePct), summary.averageChangePct != null && summary.averageChangePct < 0 ? 'bg-down' : 'bg-up'],
         ].map(([label, value, tone, accent]) => (
-          <div key={String(label)} className="relative overflow-hidden bg-bg-card px-4 py-3">
+          <div key={String(label)} className="relative min-w-0 overflow-hidden bg-bg-card px-2 py-2.5 sm:px-4 sm:py-3">
             <span className={`absolute inset-y-0 left-0 w-0.5 ${accent}`} />
-            <div className="text-[10px] font-medium text-text-dim">{label}</div>
-            <div className={`mt-0.5 text-lg font-bold tabular-nums ${tone}`}>{value}</div>
+            <div className="truncate text-[9px] font-medium text-text-dim sm:text-[10px]" title={String(label)}>{label}</div>
+            <div className={`mt-0.5 text-base font-bold tabular-nums sm:text-lg ${tone}`}>{value}</div>
           </div>
         ))}
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border bg-bg-card px-4 py-2 text-[10px] text-text-muted" aria-label={t('summary.quoteStatusAriaLabel')}>
         <span className="font-medium text-text-dim">{t('summary.quoteStatus')}</span>
-        <span className="inline-flex items-center gap-1.5 text-text-dim"><span className="h-1.5 w-1.5 rounded-full bg-text-muted" />{t('summary.loading')}: {summary.loading}</span>
-        <span className="inline-flex items-center gap-1.5 text-up"><span className="h-1.5 w-1.5 rounded-full bg-up" />{t('summary.live')}: {summary.live}</span>
-        <span className="inline-flex items-center gap-1.5 text-warn"><span className="h-1.5 w-1.5 rounded-full bg-warn" />{t('summary.delayed')}: {summary.delayed}</span>
-        <span className="inline-flex items-center gap-1.5 text-warn"><span className="h-1.5 w-1.5 rounded-full bg-warn" />{t('summary.stale')}: {summary.stale}</span>
-        <span className="inline-flex items-center gap-1.5 text-down"><span className="h-1.5 w-1.5 rounded-full bg-down" />{t('summary.unavailable')}: {summary.unavailable}</span>
+        <span className={`${summary.loading === 0 ? 'hidden sm:inline-flex' : 'inline-flex'} items-center gap-1.5 text-text-dim`}><span className="h-1.5 w-1.5 rounded-full bg-text-muted" />{t('summary.loading')}: {summary.loading}</span>
+        <span className="inline-flex items-center gap-1.5 text-status-good"><span className="h-1.5 w-1.5 rounded-full bg-status-good" />{t('summary.live')}: {summary.live}</span>
+        <span className={`${summary.delayed === 0 ? 'hidden sm:inline-flex' : 'inline-flex'} items-center gap-1.5 text-warn`}><span className="h-1.5 w-1.5 rounded-full bg-warn" />{t('summary.delayed')}: {summary.delayed}</span>
+        <span className={`${summary.stale === 0 ? 'hidden sm:inline-flex' : 'inline-flex'} items-center gap-1.5 text-warn`}><span className="h-1.5 w-1.5 rounded-full bg-warn" />{t('summary.stale')}: {summary.stale}</span>
+        <span className={`${summary.unavailable === 0 ? 'hidden sm:inline-flex' : 'inline-flex'} items-center gap-1.5 text-status-bad`}><span className="h-1.5 w-1.5 rounded-full bg-status-bad" />{t('summary.unavailable')}: {summary.unavailable}</span>
         {summary.medianChangePct != null && <span className={changeClass(summary.medianChangePct)}>{t('summary.median')}: {formatPct(summary.medianChangePct)}</span>}
         {summary.breadthPct != null && <span className={changeClass(summary.breadthPct)}>{t('summary.breadth')}: {formatPct(summary.breadthPct)}</span>}
       </div>
@@ -477,11 +479,16 @@ export function WatchlistTable({
               <Columns3 className="h-3.5 w-3.5" aria-hidden="true" />
             </button>
             {columnsOpen && (
-              <div className="absolute right-0 top-full z-30 mt-1 w-72 rounded-md border border-border bg-bg-elevated p-2 shadow-xl">
-                {ALL_COLUMNS.map((column) => (
-                  <div key={column} className="flex items-center gap-1 rounded px-1 py-0.5 text-xs hover:bg-bg-card">
-                    <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-1 py-1"><input type="checkbox" checked={visibleColumns.includes(column)} disabled={(column === 'ticker' || column === 'name') && visibleColumns.includes(column)} onChange={() => toggleColumn(column)} /><span className="truncate">{t(`headers.${column}`)}</span></label>
-                    {visibleColumns.includes(column) && <><button type="button" onClick={() => moveColumn(column, -1)} disabled={visibleColumns[0] === column} className="icon-button !h-6 !w-6 !basis-6 border-transparent bg-transparent" aria-label={t('columns.moveUp')}><ArrowUp className="h-3 w-3" aria-hidden="true" /></button><button type="button" onClick={() => moveColumn(column, 1)} disabled={visibleColumns.at(-1) === column} className="icon-button !h-6 !w-6 !basis-6 border-transparent bg-transparent" aria-label={t('columns.moveDown')}><ArrowDown className="h-3 w-3" aria-hidden="true" /></button></>}
+              <div className="absolute right-0 top-full z-30 mt-1 max-h-[min(70vh,640px)] w-72 overflow-y-auto rounded-md border border-border bg-bg-elevated p-2 shadow-xl">
+                {COLUMN_GROUPS.map((group, groupIndex) => (
+                  <div key={group.key} className={groupIndex === 0 ? '' : 'mt-2 border-t border-border pt-2'}>
+                    <div className="px-2 pb-1 text-[9px] font-semibold uppercase text-text-muted">{t(`columns.groups.${group.key}`)}</div>
+                    {group.columns.map((column) => (
+                      <div key={column} className="flex items-center gap-1 rounded px-1 py-0.5 text-xs hover:bg-bg-card">
+                        <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-1 py-1"><input type="checkbox" checked={visibleColumns.includes(column)} disabled={(column === 'ticker' || column === 'name') && visibleColumns.includes(column)} onChange={() => toggleColumn(column)} /><span className="truncate">{t(`headers.${column}`)}</span></label>
+                        {visibleColumns.includes(column) && <><button type="button" onClick={() => moveColumn(column, -1)} disabled={visibleColumns[0] === column} className="icon-button !h-6 !w-6 !basis-6 border-transparent bg-transparent" aria-label={t('columns.moveUp')}><ArrowUp className="h-3 w-3" aria-hidden="true" /></button><button type="button" onClick={() => moveColumn(column, 1)} disabled={visibleColumns.at(-1) === column} className="icon-button !h-6 !w-6 !basis-6 border-transparent bg-transparent" aria-label={t('columns.moveDown')}><ArrowDown className="h-3 w-3" aria-hidden="true" /></button></>}
+                      </div>
+                    ))}
                   </div>
                 ))}
               </div>
@@ -503,7 +510,7 @@ export function WatchlistTable({
           </div>
           <select value={batchGroupId} onChange={(event) => setBatchGroupId(event.target.value)} aria-label={t('selection.targetGroup')} className="h-8 py-1 text-xs">{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
           <button type="button" disabled={!batchGroupId || !onMoveTickers} onClick={() => { onMoveTickers?.([...selected], batchGroupId); clearSelection(); }} className="inline-flex h-8 items-center gap-1.5 rounded border border-border bg-bg-elevated px-2.5 text-xs text-text disabled:opacity-50"><MoveRight className="h-3.5 w-3.5" aria-hidden="true" />{t('selection.move')}</button>
-          <button type="button" disabled={!onRemoveTickers} onClick={() => { onRemoveTickers?.([...selected]); clearSelection(); }} className="inline-flex h-8 items-center gap-1.5 rounded border border-down/30 px-2.5 text-xs text-down disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" aria-hidden="true" />{t('selection.remove')}</button>
+          <button type="button" disabled={!onRemoveTickers} onClick={() => { onRemoveTickers?.([...selected]); clearSelection(); }} className="inline-flex h-8 items-center gap-1.5 rounded border border-status-bad/30 px-2.5 text-xs text-status-bad disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" aria-hidden="true" />{t('selection.remove')}</button>
           <button type="button" onClick={clearSelection} className="icon-button !h-8 !w-8 !basis-8 border-transparent bg-transparent" aria-label={t('selection.clear')}><X className="h-3.5 w-3.5" aria-hidden="true" /></button>
         </div>
       )}

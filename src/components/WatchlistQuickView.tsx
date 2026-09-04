@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { ArrowUpRight, Bell, ChartNoAxesCombined, Newspaper, NotebookPen, RefreshCw, RotateCcw, X } from 'lucide-react';
+import { ArrowUpRight, Bell, ChartNoAxesCombined, Landmark, Newspaper, NotebookPen, RefreshCw, RotateCcw, X } from 'lucide-react';
 import { KlineChart } from '@/components/KlineChart';
 import { MarketLabel } from '@/components/MarketLabel';
 import type { LiveQuote } from '@/lib/hooks/useQuote';
@@ -16,8 +16,9 @@ import { WatchlistResearchPanel } from '@/components/watchlist/WatchlistResearch
 import { WatchlistDataStatus } from '@/components/watchlist/WatchlistDataStatus';
 import { usePersistentState } from '@/lib/hooks/usePersistentState';
 import { watchlistBenchmarkTicker } from '@/lib/watchlist/analytics';
+import { WatchlistFinancialPanel } from '@/components/watchlist/WatchlistFinancialPanel';
 
-type QuickViewTab = 'overview' | 'research' | 'decision' | 'alerts';
+type QuickViewTab = 'overview' | 'financials' | 'research' | 'decision' | 'alerts';
 
 function Metric({ label, value, tone = 'text-text' }: { label: string; value: React.ReactNode; tone?: string }) {
   return (
@@ -110,6 +111,7 @@ export function WatchlistQuickView({
   }, [benchmarkPreference, historicalMetrics?.benchmarkTicker, onBenchmarkChange, refreshBenchmark]);
   const tabs: Array<{ id: QuickViewTab; icon: typeof ChartNoAxesCombined; available: boolean }> = [
     { id: 'overview', icon: ChartNoAxesCombined, available: true },
+    { id: 'financials', icon: Landmark, available: true },
     { id: 'research', icon: Newspaper, available: true },
     { id: 'decision', icon: NotebookPen, available: !!overview?.item && !!onDecisionSaved },
     { id: 'alerts', icon: Bell, available: !!overview?.item },
@@ -217,6 +219,7 @@ export function WatchlistQuickView({
               </div>
             </div>
           )}
+          {activeTab === 'financials' && visited.has('financials') && <div id={`watchlist-panel-${ticker}-financials`} role="tabpanel" aria-labelledby={`watchlist-tab-${ticker}-financials`}><WatchlistFinancialPanel ticker={ticker} /></div>}
           {activeTab === 'research' && visited.has('research') && <div id={`watchlist-panel-${ticker}-research`} role="tabpanel" aria-labelledby={`watchlist-tab-${ticker}-research`}><WatchlistResearchPanel ticker={ticker} overview={overview} /></div>}
           {overview?.item && onDecisionSaved && visited.has('decision') && <div id={`watchlist-panel-${ticker}-decision`} role="tabpanel" aria-labelledby={`watchlist-tab-${ticker}-decision`} hidden={activeTab !== 'decision'}><WatchlistDecisionPanel item={overview.item} onSaved={onDecisionSaved} onDirtyChange={onDecisionDirtyChange} /></div>}
           {activeTab === 'alerts' && overview?.item && visited.has('alerts') && <div id={`watchlist-panel-${ticker}-alerts`} role="tabpanel" aria-labelledby={`watchlist-tab-${ticker}-alerts`}><WatchlistAlertPanel itemId={overview.item.id} /></div>}
@@ -227,7 +230,7 @@ export function WatchlistQuickView({
             <div className="w-full max-w-sm rounded-md border border-border bg-bg-elevated p-4 shadow-2xl">
               <h3 id="watchlist-unsaved-title" className="text-sm font-semibold text-text">{t('unsavedTitle')}</h3>
               <p className="mt-2 text-xs leading-relaxed text-text-dim">{t('unsavedBody')}</p>
-              <div className="mt-4 flex justify-end gap-2"><button type="button" onClick={() => setConfirmingClose(false)} className="h-8 rounded border border-border px-3 text-xs text-text">{t('keepEditing')}</button><button type="button" onClick={onClose} className="h-8 rounded bg-down px-3 text-xs font-semibold text-white">{t('discardChanges')}</button></div>
+              <div className="mt-4 flex justify-end gap-2"><button type="button" onClick={() => setConfirmingClose(false)} className="h-8 rounded border border-border px-3 text-xs text-text">{t('keepEditing')}</button><button type="button" onClick={onClose} className="h-8 rounded bg-status-bad px-3 text-xs font-semibold text-white">{t('discardChanges')}</button></div>
             </div>
           </div>
         )}

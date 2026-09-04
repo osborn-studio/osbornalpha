@@ -59,6 +59,35 @@ test('watchlist workbench filters, changes presets and opens a multi-chart quick
       }),
     });
   });
+  await page.route('**/api/financials/**', async (route) => {
+    const period = (fiscalYear: number, quarter: 'Q1' | 'Q2' | 'Q3' | 'Q4', revenue: number, netIncome: number) => ({
+      fiscalYear, quarter, periodEnd: `${fiscalYear}${quarter === 'Q1' ? '0331' : quarter === 'Q2' ? '0630' : quarter === 'Q3' ? '0930' : '1231'}`,
+      revenue_yi: revenue, total_revenue_yi: revenue, net_income_yi: netIncome, eps_basic: netIncome / 10,
+      total_assets_yi: revenue * 2, total_liab_yi: revenue * 0.7, equity_yi: revenue * 1.3,
+      op_cashflow_yi: netIncome * 1.2, free_cashflow_yi: netIncome * 0.8,
+    });
+    const quarterly = [
+      period(2025, 'Q3', 88, 9), period(2025, 'Q4', 102, 11),
+      period(2026, 'Q1', 116, 13), period(2026, 'Q2', 128, 15),
+    ];
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        source: 'tushare', ticker: 'AAPL', yearly: [], quarterly,
+        ttm: {
+          periodEnd: '20260630', revenue_yi: 434, total_revenue_yi: 434, net_income_yi: 48,
+          eps_basic: 4.8, op_cashflow_yi: 57.6, free_cashflow_yi: 38.4, quarterCount: 4,
+        },
+        latest_indicator: null,
+        meta: {
+          source: 'tushare', market: 'A', supported: true, currency: 'CNY', unit: 'CNY_100M', unitScale: 100000000,
+          reportingFrequency: 'quarterly', latestPeriodEnd: '20260630', availablePeriods: 0,
+          availableQuarterlyPeriods: 4, ttmAvailable: true,
+          coverage: { income: 4, balance: 4, cashflow: 4, indicator: false }, warnings: [],
+        },
+      }),
+    });
+  });
 
   await page.goto('/watchlist');
   await expect(page.getByRole('button', { name: 'Market', exact: true })).toBeVisible();
@@ -77,6 +106,11 @@ test('watchlist workbench filters, changes presets and opens a multi-chart quick
   await expect(page.getByRole('link', { name: 'AAPL' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'NVDA' })).toHaveCount(0);
   await page.getByPlaceholder('Search ticker or company').fill('');
+  await page.getByRole('button', { name: 'Columns' }).click();
+  await expect(page.getByText('Instrument', { exact: true })).toBeVisible();
+  await expect(page.getByText('Market data', { exact: true })).toBeVisible();
+  await expect(page.getByText('Technical and risk', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Columns' }).click();
   await page.screenshot({ path: 'test-results/watchlist-table-desktop.png', fullPage: true });
 
   const appleRow = page.getByRole('row').filter({ has: page.getByRole('link', { name: 'AAPL' }) });
@@ -88,6 +122,11 @@ test('watchlist workbench filters, changes presets and opens a multi-chart quick
   await drawer.getByLabel('Chart type').selectOption('baseline');
   await expect(drawer.locator('canvas').first()).toBeVisible();
   await page.screenshot({ path: 'test-results/watchlist-desktop.png', fullPage: true });
+
+  await drawer.getByRole('tab', { name: 'Financials' }).click();
+  await expect(drawer.getByText('Revenue · TTM')).toBeVisible();
+  await expect(drawer.getByRole('cell', { name: '2026 Q2' })).toBeVisible();
+  await page.screenshot({ path: 'test-results/watchlist-financials-desktop.png', fullPage: true });
 
   await drawer.getByRole('button', { name: 'Close quick quote' }).click();
   await appleRow.getByRole('button', { name: 'View' }).click();

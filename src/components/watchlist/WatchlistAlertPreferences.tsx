@@ -39,7 +39,7 @@ export function WatchlistAlertPreferences() {
         {quiet && <div className="grid grid-cols-2 gap-2"><label><span className="mb-1 block text-[10px] text-text-muted">{t('quietStart')}</span><input type="time" value={quietStart} onChange={(event) => setQuietStart(event.target.value)} className="h-8 w-full text-xs" /></label><label><span className="mb-1 block text-[10px] text-text-muted">{t('quietEnd')}</span><input type="time" value={quietEnd} onChange={(event) => setQuietEnd(event.target.value)} className="h-8 w-full text-xs" /></label></div>}
         <div className="flex items-center justify-between gap-3"><span className="text-[10px] text-text-muted">{model.preferences && t('timezone', { value: model.preferences.timezone })}</span><button type="button" disabled={model.saving || !valid} onClick={() => void model.save({ channels, mode, telegramChatId: telegramChatId.trim() || null, quietStart: quiet ? quietStart : null, quietEnd: quiet ? quietEnd : null, digestTime })} className="inline-flex h-8 items-center gap-1.5 rounded bg-accent-dim px-3 text-xs font-semibold text-white disabled:opacity-50"><Save className="h-3.5 w-3.5" aria-hidden="true" />{model.saving ? t('saving') : t('save')}</button></div>
       </>}
-      {model.error && <p className="text-[10px] text-down" role="alert">{t('error')}</p>}
+      {model.error && <p className="text-[10px] text-status-bad" role="alert">{t('error')}</p>}
     </div>}
   </section>;
 }

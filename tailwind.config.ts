@@ -26,6 +26,11 @@ const config: Config = {
         bullish: "var(--bullish)",
         neutral: "var(--neutral)",
         bearish: "var(--bearish)",
+        status: {
+          good: "var(--status-good)",
+          bad: "var(--status-bad)",
+          info: "var(--status-info)",
+        },
       },
       fontFamily: {
         sans: [

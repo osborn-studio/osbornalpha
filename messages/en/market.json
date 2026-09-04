@@ -271,7 +271,14 @@
     "columns": {
       "action": "Columns",
       "moveUp": "Move column earlier",
-      "moveDown": "Move column later"
+      "moveDown": "Move column later",
+      "groups": {
+        "identity": "Instrument",
+        "market": "Market data",
+        "valuation": "Valuation",
+        "technical": "Technical and risk",
+        "research": "Research and decision"
+      }
     },
     "density": {
       "compact": "Switch to comfortable density",
@@ -293,6 +300,7 @@
     },
     "dayPositionTitle": "Current price is at {value}% of today's range",
     "researchDivergence": "Divergent",
+    "qualityTitle": "Field completeness {completeness}% · quote freshness {freshness}% · analytics coverage {analytics}%",
     "decisionStatuses": {
       "inbox": "Inbox",
       "researching": "Researching",
@@ -319,6 +327,7 @@
       "tabs": {
         "label": "Quick view sections",
         "overview": "Overview",
+        "financials": "Financials",
         "research": "Research",
         "decision": "Decision",
         "alerts": "Alerts"
@@ -357,6 +366,34 @@
       "benchmarkDefault": "Restore market default ({benchmark})",
       "benchmarkLoadFailed": "Benchmark history is unavailable. The previous comparison is unchanged.",
       "benchmarkStatuses": { "reliable": "reliable", "limited": "limited sample", "unavailable": "unavailable" },
+      "financials": {
+        "title": "Financial performance",
+        "loading": "Loading financial data",
+        "unavailable": "Financial data is temporarily unavailable",
+        "unsupportedTitle": "Structured financials are not yet available for this market",
+        "unsupportedBody": "Quotes and research remain available. This panel will activate when a compatible market data source is connected.",
+        "empty": "No financial periods available",
+        "meta": "Source {source} · unit {unit} · latest period {period}",
+        "unitCny100m": "CNY 100m",
+        "periodMode": "Financial period type",
+        "quarterly": "Quarterly",
+        "annual": "Annual",
+        "partialData": "This snapshot has {count} coverage warnings. Missing values are not treated as zero.",
+        "revenue": "Revenue · {basis}",
+        "netIncome": "Net income · {basis}",
+        "eps": "EPS · {basis}",
+        "freeCashflow": "Free cash flow · {basis}",
+        "quarterGrowth": "latest quarter change",
+        "annualGrowth": "latest annual change",
+        "revenueTrend": "Revenue trend",
+        "incomeTrend": "Net income trend",
+        "period": "Period",
+        "revenueLabel": "Revenue",
+        "netIncomeLabel": "Net income",
+        "operatingCashflow": "Operating cash flow",
+        "freeCashflowLabel": "Free cash flow",
+        "assets": "Total assets"
+      },
       "technicalMetrics": "Technical indicators",
       "marketSnapshot": "Market snapshot",
       "historySnapshot": "Historical metrics",
@@ -396,6 +433,7 @@
         },
         "providers": "Sources: {value}",
         "fetchedAt": "Fetched {value}",
+        "provenance": "Data provenance and run details",
         "queryCount": "{count} queries",
         "resultCount": "{count} results",
         "duration": "{value} ms",
@@ -406,6 +444,9 @@
         "noSourceResults": "No results for this source",
         "decisionSummary": "Research decision summary",
         "perspectiveSummary": "AI perspective stance summary",
+        "perspectiveFilter": "Filter AI perspectives by stance",
+        "perspectiveFilters": { "all": "All", "bullish": "Bullish", "neutral": "Neutral", "bearish": "Bearish" },
+        "emptyPerspectiveFilter": "No perspectives match this stance",
         "bullish": "Bullish",
         "neutral": "Neutral",
         "bearish": "Bearish",

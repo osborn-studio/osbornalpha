@@ -271,7 +271,14 @@
     "columns": {
       "action": "自定义列",
       "moveUp": "向前移动此列",
-      "moveDown": "向后移动此列"
+      "moveDown": "向后移动此列",
+      "groups": {
+        "identity": "标的识别",
+        "market": "行情数据",
+        "valuation": "估值指标",
+        "technical": "技术与风险",
+        "research": "研究与决策"
+      }
     },
     "density": {
       "compact": "切换为舒适密度",
@@ -293,6 +300,7 @@
     },
     "dayPositionTitle": "当前价格位于今日区间的 {value}%",
     "researchDivergence": "有分歧",
+    "qualityTitle": "字段完整度 {completeness}% · 行情新鲜度 {freshness}% · 分析覆盖 {analytics}%",
     "decisionStatuses": {
       "inbox": "待整理",
       "researching": "研究中",
@@ -319,6 +327,7 @@
       "tabs": {
         "label": "快速查看分区",
         "overview": "概览",
+        "financials": "财务",
         "research": "研究",
         "decision": "判断",
         "alerts": "提醒"
@@ -357,6 +366,34 @@
       "benchmarkDefault": "恢复市场默认基准（{benchmark}）",
       "benchmarkLoadFailed": "该基准历史数据不可用，已保留之前的比较结果。",
       "benchmarkStatuses": { "reliable": "可信", "limited": "样本不足", "unavailable": "不可用" },
+      "financials": {
+        "title": "财务表现",
+        "loading": "正在加载财务数据",
+        "unavailable": "财务数据暂不可用",
+        "unsupportedTitle": "该市场暂未接入结构化财务数据",
+        "unsupportedBody": "行情与研究功能仍可使用；财务页会在相应市场数据源接入后自动启用。",
+        "empty": "暂无可展示的财务期间",
+        "meta": "来源 {source} · 单位 {unit} · 最新期间 {period}",
+        "unitCny100m": "人民币亿元",
+        "periodMode": "财务期间类型",
+        "quarterly": "季度",
+        "annual": "年度",
+        "partialData": "当前财务快照有 {count} 项覆盖警告，缺失值不会按零处理。",
+        "revenue": "营业收入 · {basis}",
+        "netIncome": "净利润 · {basis}",
+        "eps": "每股收益 · {basis}",
+        "freeCashflow": "自由现金流 · {basis}",
+        "quarterGrowth": "最新单季环比",
+        "annualGrowth": "最新年度同比",
+        "revenueTrend": "营业收入趋势",
+        "incomeTrend": "净利润趋势",
+        "period": "期间",
+        "revenueLabel": "营业收入",
+        "netIncomeLabel": "净利润",
+        "operatingCashflow": "经营现金流",
+        "freeCashflowLabel": "自由现金流",
+        "assets": "总资产"
+      },
       "technicalMetrics": "技术指标",
       "marketSnapshot": "行情快照",
       "historySnapshot": "历史指标",
@@ -396,6 +433,7 @@
         },
         "providers": "来源：{value}",
         "fetchedAt": "获取于 {value}",
+        "provenance": "数据溯源与运行详情",
         "queryCount": "{count} 次查询",
         "resultCount": "{count} 条结果",
         "duration": "耗时 {value} 毫秒",
@@ -406,6 +444,9 @@
         "noSourceResults": "该来源暂无结果",
         "decisionSummary": "研究决策摘要",
         "perspectiveSummary": "AI 观点方向汇总",
+        "perspectiveFilter": "按方向筛选 AI 观点",
+        "perspectiveFilters": { "all": "全部", "bullish": "看多", "neutral": "中性", "bearish": "看空" },
+        "emptyPerspectiveFilter": "该方向下暂无观点",
         "bullish": "看多",
         "neutral": "中性",
         "bearish": "看空",

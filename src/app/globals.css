@@ -24,6 +24,9 @@
   --bullish: #e11d48;                         /* Pulse Red (CN convention) */
   --neutral: #eab308;                         /* Pulse Amber */
   --bearish: #16a34a;                         /* Pulse Green (CN convention) */
+  --status-good: #22c55e;
+  --status-bad: #f87171;
+  --status-info: #38bdf8;
   --shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 4px 12px rgba(0,0,0,0.3);
 }
 
@@ -45,6 +48,9 @@
   --bullish: #e11d48;
   --neutral: #eab308;
   --bearish: #16a34a;
+  --status-good: #15803d;
+  --status-bad: #dc2626;
+  --status-info: #0369a1;
   --shadow: 0 1px 3px rgba(0,0,0,0.05);
 }
 

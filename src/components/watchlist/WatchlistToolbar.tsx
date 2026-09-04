@@ -54,7 +54,7 @@ export function WatchlistToolbar(props: Props) {
   const SyncIcon = SYNC_ICONS[props.syncStatus];
   const syncTone = props.syncStatus === 'conflict' || props.syncStatus === 'error'
     ? 'text-warn'
-    : props.syncStatus === 'synced' ? 'text-up' : 'text-text-dim';
+    : props.syncStatus === 'synced' ? 'text-status-good' : 'text-text-dim';
 
   return (
     <header className="mb-3 border-b border-border pb-3">
@@ -73,7 +73,7 @@ export function WatchlistToolbar(props: Props) {
             </span>
             {props.quotesLoading && <span className="text-text-dim">{t('loadingQuotes')}</span>}
             {!props.quotesLoading && props.failedQuotes > 0 && (
-              <span className="text-down">{t('quotesFailed', { count: props.failedQuotes })}</span>
+              <span className="text-status-bad">{t('quotesFailed', { count: props.failedQuotes })}</span>
             )}
             {props.overviewPartial && <span className="text-warn">{t('overviewPartial', { count: props.overviewTotal ?? props.count })}</span>}
             {props.overviewError && <span className="text-warn">{t('overviewUnavailable')}</span>}

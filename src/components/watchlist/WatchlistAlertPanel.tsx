@@ -99,7 +99,7 @@ export function WatchlistAlertPanel({ itemId }: { itemId: string }) {
       <label className="mt-2 flex items-center gap-2 text-[10px] text-text-muted"><span>{t('cooldown')}</span><select value={cooldownMinutes} onChange={(event) => setCooldownMinutes(Number(event.target.value))} className="h-7 border-border bg-bg-elevated px-2 text-[10px]">{WATCHLIST_ALERT_CATALOG.cooldownMinutes.map((value) => <option key={value} value={value}>{t(`cooldowns.${value}`)}</option>)}</select></label>
       <div className="mt-2 rounded border border-accent/20 bg-accent/5 px-2.5 py-2 text-[11px] text-text-dim"><span className="font-medium text-text">{t('preview')}:</span> {draftAlertLabel(type, numeric ? operator : null, threshold, valuationMetric, discreteValue, t)}</div>
 
-      {model.error && <p className="mt-2 text-[11px] text-down" role="alert">{t('error')}</p>}
+      {model.error && <p className="mt-2 text-[11px] text-status-bad" role="alert">{t('error')}</p>}
       {model.loading ? <div className="mt-3 h-12 animate-pulse rounded bg-bg-elevated" /> : (
         <div className="mt-3 divide-y divide-border/70 border-y border-border/70">
           {model.alerts.map((alert) => (
@@ -107,7 +107,7 @@ export function WatchlistAlertPanel({ itemId }: { itemId: string }) {
               {alert.enabled ? <Bell className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" /> : <BellOff className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />}
               <span className={`min-w-0 flex-1 truncate text-xs ${alert.enabled ? 'text-text' : 'text-text-muted'}`}>{alertLabel(alert, t)}</span>
               <button type="button" disabled={model.saving} onClick={() => void model.update(alert.id, { enabled: !alert.enabled })} className="rounded px-2 py-1 text-[10px] text-text-dim hover:bg-bg-elevated">{alert.enabled ? t('pause') : t('resume')}</button>
-              <button type="button" disabled={model.saving} onClick={() => void model.remove(alert.id)} className="icon-button !h-7 !w-7 !basis-7 border-transparent bg-transparent text-text-muted hover:text-down" aria-label={t('delete')} title={t('delete')}><Trash2 className="h-3.5 w-3.5" aria-hidden="true" /></button>
+              <button type="button" disabled={model.saving} onClick={() => void model.remove(alert.id)} className="icon-button !h-7 !w-7 !basis-7 border-transparent bg-transparent text-text-muted hover:text-status-bad" aria-label={t('delete')} title={t('delete')}><Trash2 className="h-3.5 w-3.5" aria-hidden="true" /></button>
             </div>
           ))}
           {model.alerts.length === 0 && <div className="py-3 text-xs text-text-muted">{t('empty')}</div>}
@@ -122,7 +122,7 @@ export function WatchlistAlertPanel({ itemId }: { itemId: string }) {
               <div key={event.id} className="flex w-full items-center gap-2 py-2 text-left">
                 <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${event.read_at ? 'bg-border-active' : 'bg-accent'}`} />
                 <button type="button" onClick={() => !event.read_at && void model.markRead(event.id)} className="min-w-0 flex-1 truncate text-left text-[11px] text-text">{String(event.payload.label || t(`types.${event.alert_type}`))}</button>
-                {(event.delivery_status === 'failed' || event.delivery_status === 'dead_letter') && <span className="shrink-0 rounded border border-down/25 px-1 py-0.5 text-[9px] text-down">{t(`delivery.${event.delivery_status}`)}</span>}
+                {(event.delivery_status === 'failed' || event.delivery_status === 'dead_letter') && <span className="shrink-0 rounded border border-status-bad/25 px-1 py-0.5 text-[9px] text-status-bad">{t(`delivery.${event.delivery_status}`)}</span>}
                 <time className="shrink-0 text-[10px] text-text-muted">{new Date(event.triggered_at).toLocaleString()}</time>
                 {(event.delivery_status === 'failed' || event.delivery_status === 'dead_letter') ? <button type="button" disabled={model.saving} onClick={() => void model.retryDelivery(event.id)} className="text-[10px] text-accent">{t('delivery.retry')}</button> : !event.read_at && <Check className="h-3 w-3 shrink-0 text-text-muted" aria-hidden="true" />}
               </div>

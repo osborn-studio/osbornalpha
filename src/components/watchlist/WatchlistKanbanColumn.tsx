@@ -93,7 +93,7 @@ export function WatchlistKanbanColumn(props: ColumnProps) {
         </div>
         <div className="flex gap-0.5" onDragStart={(event) => event.preventDefault()}>
           <button type="button" onClick={(event) => { event.stopPropagation(); props.onRename(); }} title={t('rename')} aria-label={t('rename')} className="icon-button !h-7 !w-7 !basis-7 border-transparent bg-transparent"><Pencil className="h-3.5 w-3.5" aria-hidden="true" /></button>
-          <button type="button" onClick={(event) => { event.stopPropagation(); props.onDelete(); }} title={t('delete')} aria-label={t('delete')} className="icon-button !h-7 !w-7 !basis-7 border-transparent bg-transparent hover:text-down"><Trash2 className="h-3.5 w-3.5" aria-hidden="true" /></button>
+          <button type="button" onClick={(event) => { event.stopPropagation(); props.onDelete(); }} title={t('delete')} aria-label={t('delete')} className="icon-button !h-7 !w-7 !basis-7 border-transparent bg-transparent hover:text-status-bad"><Trash2 className="h-3.5 w-3.5" aria-hidden="true" /></button>
         </div>
       </header>
 
@@ -175,7 +175,7 @@ function StockCard(props: CardProps) {
       draggable
       onDragStart={props.onDragStart}
       onDragEnd={props.onDragEnd}
-      className={`group relative rounded-md border bg-bg-elevated p-2.5 transition-all ${props.isDragging ? 'border-accent opacity-50 shadow-lg shadow-accent/20' : failed ? 'border-down/40 hover:border-down/70' : stale ? 'border-warn/40 hover:border-warn/70' : 'border-border hover:border-border-active'}`}
+      className={`group relative rounded-md border bg-bg-elevated p-2.5 transition-all ${props.isDragging ? 'border-accent opacity-50 shadow-lg shadow-accent/20' : failed ? 'border-status-bad/40 hover:border-status-bad/70' : stale ? 'border-warn/40 hover:border-warn/70' : 'border-border hover:border-border-active'}`}
       style={{ cursor: props.isDragging ? 'grabbing' : 'grab', transform: props.isDragging ? 'rotate(-1.5deg) scale(0.98)' : undefined }}
     >
       <div className="flex items-start justify-between gap-2">
@@ -187,7 +187,7 @@ function StockCard(props: CardProps) {
       </div>
 
       <button type="button" onClick={props.onQuickView} className="mt-1.5 flex w-full items-baseline justify-between gap-2 text-left" aria-label={t('quickView', { ticker: props.ticker })}>
-        {hasPrice ? <><span className="text-base font-semibold tabular-nums">{currency}{formatPrice(props.quote!.price)}</span><span className={`text-xs tabular-nums ${changeClass(props.quote!.change_pct)}`}>{formatPct(props.quote!.change_pct)}</span>{stale && <span className="text-[9px] text-warn">{t('stale')}</span>}</> : failed ? <><span className="text-[11px] text-down">{t('fetchFailed')}</span><span onClick={(event) => { event.stopPropagation(); props.onRetry(); }} className="inline-flex items-center gap-1 text-[10px] text-down"><RefreshCw className="h-3 w-3" aria-hidden="true" />{t('retry')}</span></> : <><span className="text-text-muted">--</span><span className="text-xs text-text-muted">{t('loading')}</span></>}
+        {hasPrice ? <><span className="text-base font-semibold tabular-nums">{currency}{formatPrice(props.quote!.price)}</span><span className={`text-xs tabular-nums ${changeClass(props.quote!.change_pct)}`}>{formatPct(props.quote!.change_pct)}</span>{stale && <span className="text-[9px] text-warn">{t('stale')}</span>}</> : failed ? <><span className="text-[11px] text-status-bad">{t('fetchFailed')}</span><span onClick={(event) => { event.stopPropagation(); props.onRetry(); }} className="inline-flex items-center gap-1 text-[10px] text-status-bad"><RefreshCw className="h-3 w-3" aria-hidden="true" />{t('retry')}</span></> : <><span className="text-text-muted">--</span><span className="text-xs text-text-muted">{t('loading')}</span></>}
       </button>
       {props.overview && (
         <div className="mt-2 flex min-w-0 items-center gap-2 border-t border-border/60 pt-2 text-[9px] text-text-muted">
@@ -205,7 +205,7 @@ function StockCard(props: CardProps) {
           {otherGroups.length === 0 && <div className="px-2 py-1 text-[11px] text-text-muted">{t('noOtherColumns')}</div>}
           {otherGroups.map((group) => <button type="button" key={group.id} onClick={() => { props.onMove(group.id); props.onToggleMenu(); }} className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-bg-card">{t('moveToArrow', { name: group.name })}</button>)}
           <div className="my-1 border-t border-border" />
-          <button type="button" onClick={() => { props.onRemove(); props.onToggleMenu(); }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-down hover:bg-down/10"><Trash2 className="h-3.5 w-3.5" aria-hidden="true" />{t('removeFromWatchlist')}</button>
+          <button type="button" onClick={() => { props.onRemove(); props.onToggleMenu(); }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-status-bad hover:bg-status-bad/10"><Trash2 className="h-3.5 w-3.5" aria-hidden="true" />{t('removeFromWatchlist')}</button>
         </div>
       )}
     </article>

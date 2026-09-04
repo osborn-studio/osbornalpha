@@ -212,8 +212,8 @@ export function WatchlistImportDialog({
               <input type="file" accept=".csv,.txt,.yml,.yaml,.xlsx,.xls,.xlsm,.xlsb" onChange={readFile} className="hidden" />
             </label>
             <div className="mt-1.5 text-[10px] text-text-muted">{t('supportedFormats')}</div>
-            {fileError && <div className="mt-1 text-[11px] text-down" role="alert">{fileError}</div>}
-            {validationError && <div className="mt-2 rounded border border-down/25 bg-down/5 p-2 text-[11px] text-down" role="alert">{validationError}</div>}
+            {fileError && <div className="mt-1 text-[11px] text-status-bad" role="alert">{fileError}</div>}
+            {validationError && <div className="mt-2 rounded border border-status-bad/25 bg-status-bad/5 p-2 text-[11px] text-status-bad" role="alert">{validationError}</div>}
           </div>
         </div>
 

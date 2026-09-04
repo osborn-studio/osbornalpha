@@ -24,16 +24,16 @@ const STANCE_BORDER: Record<Stance, string> = {
 };
 
 const LEVEL_TEXT: Record<ConfidenceLevel, string> = {
-  high: 'text-up',
+  high: 'text-status-good',
   medium: 'text-warn',
-  low: 'text-down',
+  low: 'text-status-bad',
   unknown: 'text-text-muted',
 };
 
 const LEVEL_BG: Record<ConfidenceLevel, string> = {
-  high: 'bg-up/15 text-up border-up/30',
+  high: 'bg-status-good/10 text-status-good border-status-good/30',
   medium: 'bg-warn/15 text-warn border-warn/30',
-  low: 'bg-down/15 text-down border-down/30',
+  low: 'bg-status-bad/10 text-status-bad border-status-bad/30',
   unknown: 'bg-bg-card text-text-muted border-border',
 };
 

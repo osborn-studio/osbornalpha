@@ -5,10 +5,10 @@ import { useTranslations } from 'next-intl';
 import type { DataEnvelope, DataStatus } from '@/lib/watchlist/overview-contract';
 
 const STATUS_TONE: Record<DataStatus, string> = {
-  fresh: 'border-up/20 bg-up/10 text-up',
+  fresh: 'border-status-good/25 bg-status-good/10 text-status-good',
   delayed: 'border-warn/25 bg-warn/10 text-warn',
   stale: 'border-warn/25 bg-warn/10 text-warn',
-  unavailable: 'border-border bg-bg-elevated text-text-muted',
+  unavailable: 'border-status-bad/20 bg-status-bad/10 text-status-bad',
 };
 
 export function WatchlistDataStatus({

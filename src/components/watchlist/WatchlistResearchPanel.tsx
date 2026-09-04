@@ -12,6 +12,7 @@ import { ExternalLink } from '@/components/ExternalLink';
 import { weightedSentiment } from '@/lib/watchlist/research-summary';
 
 type ResearchTab = 'news' | 'reports' | 'perspectives';
+type PerspectiveFilter = 'all' | 'bullish' | 'neutral' | 'bearish';
 
 function telemetryTotal(values: Array<number | null | undefined>): number | null {
   const finite = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0);
@@ -19,15 +20,16 @@ function telemetryTotal(values: Array<number | null | undefined>): number | null
 }
 
 function statusTone(status: EvidenceSearchStatus) {
-  if (status === 'complete') return 'border-up/20 bg-up/10 text-up';
+  if (status === 'complete') return 'border-status-good/25 bg-status-good/10 text-status-good';
   if (status === 'partial') return 'border-warn/25 bg-warn/10 text-warn';
-  return 'border-down/20 bg-down/10 text-down';
+  return 'border-status-bad/20 bg-status-bad/10 text-status-bad';
 }
 
 export function WatchlistResearchPanel({ ticker, overview }: { ticker: string; overview?: WatchlistOverviewRow }) {
   const t = useTranslations('market.table.drawer.research');
   const [tab, setTab] = useState<ResearchTab>('news');
   const [sourceFilter, setSourceFilter] = useState('all');
+  const [perspectiveFilter, setPerspectiveFilter] = useState<PerspectiveFilter>('all');
   const research = useWatchlistResearchBundle(ticker);
   const metas = [research.news?.meta, research.reports?.meta].filter((value) => !!value);
   const status: EvidenceSearchStatus = metas.some((meta) => meta?.status === 'error' || meta?.status === 'unavailable')
@@ -69,6 +71,9 @@ export function WatchlistResearchPanel({ ticker, overview }: { ticker: string; o
   const averagePerspectiveConfidence = research.perspectives.length > 0
     ? research.perspectives.reduce((sum, item) => sum + item.confidence, 0) / research.perspectives.length
     : null;
+  const visiblePerspectives = perspectiveFilter === 'all'
+    ? research.perspectives
+    : research.perspectives.filter((item) => item.stance === perspectiveFilter);
   const moveResearchTab = (current: ResearchTab, direction: 'next' | 'prev' | 'first' | 'last') => {
     const values: ResearchTab[] = ['news', 'reports', 'perspectives'];
     const index = values.indexOf(current);
@@ -110,15 +115,22 @@ export function WatchlistResearchPanel({ ticker, overview }: { ticker: string; o
       </div>
 
       {tab !== 'perspectives' && !research.loading && metas.length > 0 && (
-        <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-text-muted">
-          {providers.length > 0 && <span>{t('providers', { value: providers.join(', ') })}</span>}
-          {fetchedAt && <span>{t('fetchedAt', { value: new Date(fetchedAt).toLocaleString() })}</span>}
-          {queryCount != null && <span>{t('queryCount', { count: queryCount })}</span>}
-          {resultCount != null && <span>{t('resultCount', { count: resultCount })}</span>}
-          {durationMs != null && <span>{t('duration', { value: durationMs })}</span>}
-          {estimatedCostMicrousd != null && <span>{t('estimatedCost', { value: (estimatedCostMicrousd / 1_000_000).toFixed(4) })}</span>}
-          {warnings.length > 0 && <span className="text-warn" title={warnings.join(', ')}>{t('warnings', { count: warnings.length })}</span>}
-          {sourceOptions.length > 1 && <label className="ml-auto inline-flex items-center gap-1.5"><span>{t('sourceFilter')}</span><select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} aria-label={t('sourceFilter')} className="h-7 py-1 text-[10px]"><option value="all">{t('allSources')}</option>{sourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}</select></label>}
+        <div className="mb-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-text-muted">
+            {providers.length > 0 && <span>{t('providers', { value: providers.join(', ') })}</span>}
+            {fetchedAt && <span>{t('fetchedAt', { value: new Date(fetchedAt).toLocaleString() })}</span>}
+            {sourceOptions.length > 1 && <label className="ml-auto inline-flex items-center gap-1.5"><span>{t('sourceFilter')}</span><select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} aria-label={t('sourceFilter')} className="h-7 py-1 text-[10px]"><option value="all">{t('allSources')}</option>{sourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}</select></label>}
+          </div>
+          <details className="mt-2 border-y border-border/70 py-1.5 text-[10px] text-text-muted">
+            <summary className="cursor-pointer font-medium text-text-dim">{t('provenance')}</summary>
+            <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+              {queryCount != null && <span>{t('queryCount', { count: queryCount })}</span>}
+              {resultCount != null && <span>{t('resultCount', { count: resultCount })}</span>}
+              {durationMs != null && <span>{t('duration', { value: durationMs })}</span>}
+              {estimatedCostMicrousd != null && <span>{t('estimatedCost', { value: (estimatedCostMicrousd / 1_000_000).toFixed(4) })}</span>}
+              {warnings.length > 0 && <span className="text-warn" title={warnings.join(', ')}>{t('warnings', { count: warnings.length })}</span>}
+            </div>
+          </details>
         </div>
       )}
 
@@ -184,6 +196,12 @@ export function WatchlistResearchPanel({ ticker, overview }: { ticker: string; o
             <div className="bg-bg-elevated px-3 py-2"><div className="text-[10px] text-text-muted">{t('bearish')}</div><div className="mt-0.5 text-sm font-semibold tabular-nums text-down">{stanceCounts.bearish}</div></div>
             <div className="bg-bg-elevated px-3 py-2"><div className="text-[10px] text-text-muted">{t('averageConfidence')}</div><div className="mt-0.5 text-sm font-semibold tabular-nums text-text">{averagePerspectiveConfidence?.toFixed(1)}/10</div></div>
           </div>}
+          {research.perspectives.length > 0 && <div className="mb-3 flex max-w-full gap-1 overflow-x-auto" role="group" aria-label={t('perspectiveFilter')}>
+            {(['all', 'bullish', 'neutral', 'bearish'] as PerspectiveFilter[]).map((value) => {
+              const count = value === 'all' ? research.perspectives.length : stanceCounts[value];
+              return <button key={value} type="button" aria-pressed={perspectiveFilter === value} onClick={() => setPerspectiveFilter(value)} className={`h-7 shrink-0 rounded border px-2.5 text-[10px] transition ${perspectiveFilter === value ? 'border-accent/40 bg-accent/10 font-semibold text-accent' : 'border-border text-text-dim hover:text-text'}`}>{t(`perspectiveFilters.${value}`)} <span className="font-mono text-text-muted">{count}</span></button>;
+            })}
+          </div>}
           {research.quota && <QuotaNotice {...research.quota} />}
           {(research.loading || research.generating) && research.perspectives.length === 0 ? (
             <div className="space-y-2" role="status"><div className="h-28 animate-pulse rounded bg-bg-elevated" /><div className="h-28 animate-pulse rounded bg-bg-elevated" /></div>
@@ -191,7 +209,9 @@ export function WatchlistResearchPanel({ ticker, overview }: { ticker: string; o
             <div className="py-8 text-center text-xs text-warn">{t('perspectivesUnavailable')}</div>
           ) : research.perspectives.length === 0 ? (
             <div className="py-8 text-center text-xs text-text-muted">{t('emptyPerspectives')}</div>
-          ) : <div>{research.perspectives.map((item) => <PerspectiveCard key={item.persona} {...item} />)}</div>}
+          ) : visiblePerspectives.length === 0 ? (
+            <div className="py-8 text-center text-xs text-text-muted">{t('emptyPerspectiveFilter')}</div>
+          ) : <div>{visiblePerspectives.map((item) => <PerspectiveCard key={item.persona} {...item} />)}</div>}
         </div>
       )}
     </section>

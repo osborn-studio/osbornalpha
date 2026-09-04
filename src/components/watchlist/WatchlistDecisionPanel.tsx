@@ -129,7 +129,7 @@ export function WatchlistDecisionPanel({
         <label>
           <span className="mb-1 block text-[11px] text-text-dim">{t('targetPrice')}</span>
           <input type="number" min="0" step="any" value={targetPrice} onChange={(event) => setTargetPrice(event.target.value)} className="w-full" aria-invalid={!validTarget} />
-          {!validTarget && <span className="mt-1 block text-[10px] text-down">{t('targetInvalid')}</span>}
+          {!validTarget && <span className="mt-1 block text-[10px] text-status-bad">{t('targetInvalid')}</span>}
         </label>
         <label>
           <span className="mb-1 block text-[11px] text-text-dim">{t('reviewAt')}</span>
@@ -153,7 +153,7 @@ export function WatchlistDecisionPanel({
         </label>
       </div>
       <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
-        {error && <span className="mr-auto text-[11px] text-down" role="alert">{error}</span>}
+        {error && <span className="mr-auto text-[11px] text-status-bad" role="alert">{error}</span>}
         {conflictItem && <button type="button" onClick={() => onSaved(conflictItem)} className="h-8 rounded border border-warn/30 px-2.5 text-xs text-warn">{t('conflictReload')}</button>}
         <button type="button" onClick={() => reset()} disabled={!dirty || saving} className="inline-flex h-8 items-center gap-1.5 rounded border border-border px-2.5 text-xs text-text-dim disabled:opacity-40">
           <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />{t('reset')}
