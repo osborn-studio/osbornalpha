@@ -76,6 +76,9 @@ export async function getStockNews(ticker: string, freshnessDays = 14): Promise<
     relevanceScore: item.relevanceScore,
     qualityScore: item.qualityScore,
     qualityFlags: item.qualityFlags,
+    eventClusterId: item.eventClusterId,
+    corroborationCount: item.corroborationCount,
+    corroboratingSources: item.corroboratingSources,
     sourceType: item.sourceType,
     };
   });
@@ -175,6 +178,9 @@ export async function getStockReports(ticker: string): Promise<StockReportsRespo
     relevanceScore: item.relevanceScore,
     qualityScore: item.qualityScore,
     qualityFlags: item.qualityFlags,
+    eventClusterId: item.eventClusterId,
+    corroborationCount: item.corroborationCount,
+    corroboratingSources: item.corroboratingSources,
   }));
   const items = mergeDuplicateReports([...structured, ...discovered]);
   const consensusInput = filterConsensusReports(tushareResult.items, { asOf: new Date(), maxAgeDays: 180, currentPrice: identity.price });

@@ -96,6 +96,20 @@ describe('GET /api/watchlist/overview', () => {
     expect(mocks.computed).toHaveBeenCalledWith(['AAPL'], 'en', { includeMarket: true, benchmarkTicker: 'QQQ' });
   });
 
+  it('rejects the target security itself as a benchmark', async () => {
+    const response = await GET(new Request('https://example.test/api/watchlist/overview?ticker=aapl&benchmark=AAPL'));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: 'benchmark_same_security' });
+    expect(mocks.page).not.toHaveBeenCalled();
+  });
+
+  it('rejects a benchmark from an incompatible currency and market calendar', async () => {
+    const response = await GET(new Request('https://example.test/api/watchlist/overview?ticker=aapl&benchmark=510300.SH'));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: 'benchmark_incompatible_market' });
+    expect(mocks.page).not.toHaveBeenCalled();
+  });
+
   it('rejects custom benchmarks on a bulk overview request', async () => {
     const response = await GET(new Request('https://example.test/api/watchlist/overview?benchmark=qqq'));
     expect(response.status).toBe(400);

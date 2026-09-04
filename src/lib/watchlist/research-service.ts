@@ -160,6 +160,9 @@ export function mapStoredWatchlistResearch(
       relevanceScore: row.relevance_score ?? row.trust_score ?? 0,
       qualityScore: row.quality_score ?? row.trust_score ?? 0,
       qualityFlags: qualityFlags(row.quality_flags),
+      eventClusterId: row.event_cluster_id,
+      corroborationCount: row.corroboration_count,
+      corroboratingSources: row.corroborating_sources,
     };
   });
   const perspectives = stored.perspectives.map((row) => ({
@@ -203,6 +206,9 @@ export function mapStoredWatchlistResearch(
         relevanceScore: row.relevance_score ?? row.trust_score ?? 0,
         qualityScore: row.quality_score ?? row.trust_score ?? 0,
         qualityFlags: qualityFlags(row.quality_flags),
+        eventClusterId: row.event_cluster_id,
+        corroborationCount: row.corroboration_count,
+        corroboratingSources: row.corroborating_sources,
         sourceType: row.source_type || 'news',
       })),
       meta: storedMeta(newsFetchedAt, newsProviders, now),

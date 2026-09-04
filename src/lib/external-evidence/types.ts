@@ -9,11 +9,21 @@ export type EvidenceQualityFlag =
   | 'provider_ranked'
   | 'dated_source'
   | 'snippet_available'
+  | 'cross_source_corroborated'
   | 'unverified_source';
 export const EVIDENCE_QUALITY_FLAGS: readonly EvidenceQualityFlag[] = [
   'official_source', 'professional_source', 'provider_ranked',
-  'dated_source', 'snippet_available', 'unverified_source',
+  'dated_source', 'snippet_available', 'cross_source_corroborated', 'unverified_source',
 ];
+
+export interface EvidenceCorroboratingSource {
+  title: string;
+  url: string;
+  domain: string;
+  publishedAt: string | null;
+  trustScore: number;
+  qualityScore: number;
+}
 
 export interface EvidenceSearchRequest {
   query?: string;
@@ -63,6 +73,9 @@ export interface ExternalEvidence {
   relevanceScore: number;
   qualityScore: number;
   qualityFlags: EvidenceQualityFlag[];
+  eventClusterId?: string;
+  corroborationCount?: number;
+  corroboratingSources?: EvidenceCorroboratingSource[];
 }
 
 export interface EvidenceSearchProvider {
@@ -91,4 +104,5 @@ export interface PerspectiveCitation {
   trustScore: number;
   qualityScore?: number;
   qualityFlags?: string[];
+  corroborationCount?: number;
 }

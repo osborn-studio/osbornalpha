@@ -143,3 +143,41 @@ test('watchlist workbench filters, changes presets and opens a multi-chart quick
   await drawer.getByRole('button', { name: 'Close quick quote' }).click();
   await page.screenshot({ path: 'test-results/watchlist-table-mobile.png', fullPage: false });
 });
+
+test('large desktop watchlists keep a bounded row window while scrolling', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const tickers = Array.from({ length: 120 }, (_, index) => `T${String(index).padStart(3, '0')}`);
+  await page.addInitScript((items) => {
+    localStorage.setItem('stock-monitor:watchlist:v2', JSON.stringify([
+      { id: 'large', name: 'Large list', tickers: items },
+    ]));
+  }, tickers);
+  await page.route('**/api/watchlist/sync', (route) => route.fulfill({ status: 401, contentType: 'application/json', body: '{}' }));
+  await page.route('**/api/events', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
+  await page.route('**/api/quote/batch**', async (route) => {
+    const requested = new URL(route.request().url()).searchParams.get('tickers')?.split(',') ?? [];
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        quotes: Object.fromEntries(requested.map((ticker, index) => [ticker, {
+          ...quote(ticker, index), name: ticker, change: 0, change_pct: 0,
+        }])),
+        meta: { failed: 0 },
+      }),
+    });
+  });
+
+  await page.goto('/watchlist');
+  const table = page.getByRole('table', { name: 'Watchlist table view' });
+  await expect(page.getByRole('link', { name: 'T000', exact: true })).toBeVisible();
+  const renderedRows = await table.locator('tbody > tr').count();
+  expect(renderedRows).toBeLessThan(40);
+
+  const scroller = table.locator('..');
+  await scroller.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  await expect(page.getByRole('link', { name: 'T119', exact: true })).toBeVisible();
+  expect(await table.locator('tbody > tr').count()).toBeLessThan(40);
+});

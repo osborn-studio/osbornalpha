@@ -29,6 +29,9 @@ const CHECKS: SchemaCheck[] = [
   { name: 'news_quality_columns', path: '/rest/v1/news_items?select=quality_score,quality_flags&limit=1' },
   { name: 'report_quality_columns', path: '/rest/v1/broker_reports?select=quality_score,quality_flags&limit=1' },
   { name: 'external_evidence_quality_columns', path: '/rest/v1/external_evidence?select=quality_score,quality_flags&limit=1' },
+  { name: 'news_event_cluster_columns', path: '/rest/v1/news_items?select=event_cluster_id,corroboration_count,corroborating_sources&limit=1' },
+  { name: 'report_event_cluster_columns', path: '/rest/v1/broker_reports?select=event_cluster_id,corroboration_count,corroborating_sources&limit=1' },
+  { name: 'external_evidence_event_cluster_columns', path: '/rest/v1/external_evidence?select=event_cluster_id,corroboration_count,corroborating_sources&limit=1' },
   {
     name: 'external_evidence_audit_columns',
     path: '/rest/v1/external_evidence_runs?select=audit_version,query_plan,result_citation_ids,result_set_hash&limit=1',
@@ -55,6 +58,20 @@ const CHECKS: SchemaCheck[] = [
       try {
         const rows = JSON.parse(body);
         return Array.isArray(rows) && rows.some((row) => row?.marker === 'external_evidence_audit_snapshot')
+          ? undefined
+          : 'release_marker_missing';
+      } catch {
+        return 'release_marker_response_invalid';
+      }
+    },
+  },
+  {
+    name: 'research_event_clusters_release_marker',
+    path: '/rest/v1/watchlist_release_markers?select=marker&marker=eq.watchlist_research_event_clusters&limit=1',
+    validate: (body) => {
+      try {
+        const rows = JSON.parse(body);
+        return Array.isArray(rows) && rows.some((row) => row?.marker === 'watchlist_research_event_clusters')
           ? undefined
           : 'release_marker_missing';
       } catch {

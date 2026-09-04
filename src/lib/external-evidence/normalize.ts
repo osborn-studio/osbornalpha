@@ -22,6 +22,50 @@ function cleanText(value: string | null | undefined, maxLength: number): string 
     .slice(0, maxLength);
 }
 
+function normalizedEventTitle(value: string): string {
+  return value.normalize('NFKC').toLocaleLowerCase()
+    .replace(/[\p{P}\p{S}]+/gu, ' ')
+    .replace(/\b(the|a|an|and|or|of|to|for|on|in|at|by|with)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function titleNgrams(value: string): Set<string> {
+  const compact = normalizedEventTitle(value).replace(/\s+/g, '');
+  const grams = new Set<string>();
+  const size = compact.length < 12 ? 2 : 3;
+  for (let index = 0; index <= compact.length - size; index += 1) grams.add(compact.slice(index, index + size));
+  return grams;
+}
+
+function diceSimilarity(left: string, right: string): number {
+  const a = titleNgrams(left);
+  const b = titleNgrams(right);
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const gram of a) if (b.has(gram)) intersection += 1;
+  return (2 * intersection) / (a.size + b.size);
+}
+
+function withinEventWindow(left: string | null, right: string | null): boolean {
+  if (!left || !right) return true;
+  return Math.abs(Date.parse(left) - Date.parse(right)) <= 3 * 86_400_000;
+}
+
+function representsSameEvent(left: ExternalEvidence, right: ExternalEvidence): boolean {
+  const leftTitle = normalizedEventTitle(left.title);
+  const rightTitle = normalizedEventTitle(right.title);
+  if (leftTitle === rightTitle) return withinEventWindow(left.publishedAt, right.publishedAt);
+  return Math.min(leftTitle.length, rightTitle.length) >= 18
+    && withinEventWindow(left.publishedAt, right.publishedAt)
+    && diceSimilarity(left.title, right.title) >= 0.78;
+}
+
+function eventClusterId(items: ExternalEvidence[]): string {
+  const canonicalTitle = items.map((item) => normalizedEventTitle(item.title)).sort()[0] ?? '';
+  return `evt_${createHash('sha256').update(canonicalTitle).digest('hex').slice(0, 12)}`;
+}
+
 function domainMatches(domain: string, candidates: string[]): boolean {
   return candidates.some((candidate) => domain === candidate || domain.endsWith(`.${candidate}`));
 }
@@ -108,7 +152,36 @@ export function dedupeAndRankEvidence(results: ExternalEvidence[], limit: number
     const current = byUrl.get(result.url);
     if (!current || result.relevanceScore > current.relevanceScore) byUrl.set(result.url, result);
   }
-  return [...byUrl.values()]
-    .sort((a, b) => b.relevanceScore - a.relevanceScore || (b.publishedAt || '').localeCompare(a.publishedAt || ''))
-    .slice(0, limit);
+  const ranked = [...byUrl.values()]
+    .sort((a, b) => b.relevanceScore - a.relevanceScore || (b.publishedAt || '').localeCompare(a.publishedAt || ''));
+  const clusters: ExternalEvidence[][] = [];
+  for (const item of ranked) {
+    const cluster = clusters.find((candidate) => representsSameEvent(candidate[0], item));
+    if (cluster) cluster.push(item);
+    else clusters.push([item]);
+  }
+  return clusters.slice(0, limit).map((cluster) => {
+    const representative = cluster[0];
+    const corroboratingSources = cluster.slice(1)
+      .filter((item, index, items) => item.domain !== representative.domain
+        && items.findIndex((candidate) => candidate.domain === item.domain) === index)
+      .map((item) => ({
+        title: item.title,
+        url: item.url,
+        domain: item.domain,
+        publishedAt: item.publishedAt,
+        trustScore: item.trustScore,
+        qualityScore: item.qualityScore,
+      }));
+    const corroborationCount = 1 + corroboratingSources.length;
+    return {
+      ...representative,
+      eventClusterId: eventClusterId(cluster),
+      corroborationCount,
+      corroboratingSources,
+      qualityFlags: corroborationCount > 1
+        ? [...new Set([...representative.qualityFlags, 'cross_source_corroborated' as const])]
+        : representative.qualityFlags,
+    };
+  });
 }

@@ -365,6 +365,11 @@
       "benchmarkApply": "应用比较基准",
       "benchmarkDefault": "恢复市场默认基准（{benchmark}）",
       "benchmarkLoadFailed": "该基准历史数据不可用，已保留之前的比较结果。",
+      "benchmarkErrors": {
+        "same_security": "基准不能与当前标的相同。",
+        "incompatible_market": "请选择市场、币种和交易日历一致的基准。",
+        "unavailable": "该基准历史数据不可用，已保留之前的比较结果。"
+      },
       "benchmarkStatuses": { "reliable": "可信", "limited": "样本不足", "unavailable": "不可用" },
       "financials": {
         "title": "财务表现",
@@ -463,6 +468,7 @@
         "sentimentUnknown": "标题方向性词语",
         "quality": "质量 {value}%",
         "qualityFlags": "质量标记：{value}",
+        "corroborated": "{count} 个独立来源佐证",
         "metadataOnly": "仅元数据",
         "status": {
           "complete": "覆盖完整",

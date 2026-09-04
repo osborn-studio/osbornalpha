@@ -54,6 +54,25 @@ describe('external evidence normalization', () => {
 
     expect(normalized.map((item) => item.title)).toEqual(['Recent', 'Undated']);
   });
+
+  it('clusters near-time duplicate events across domains and preserves corroborating sources', () => {
+    const normalized = normalizeEvidenceResults([
+      { title: 'Apple raises guidance after strong iPhone demand', url: 'https://reuters.com/apple-guidance', publishedAt: '2026-09-03T10:00:00Z', score: 0.9 },
+      { title: 'Apple raises guidance after strong iPhone demand', url: 'https://bloomberg.com/apple-guidance', publishedAt: '2026-09-02T12:00:00Z', score: 0.8 },
+      { title: 'Apple raises guidance after strong iPhone demand', url: 'https://ft.com/old-guidance', publishedAt: '2026-08-20T12:00:00Z', score: 0.7 },
+    ], 'news', new Date('2026-09-04T00:00:00Z'), 30);
+
+    const ranked = dedupeAndRankEvidence(normalized, 10);
+    expect(ranked).toHaveLength(2);
+    expect(ranked[0]).toMatchObject({
+      domain: 'reuters.com',
+      corroborationCount: 2,
+      corroboratingSources: [expect.objectContaining({ domain: 'bloomberg.com' })],
+    });
+    expect(ranked[0].eventClusterId).toMatch(/^evt_[a-f0-9]{12}$/);
+    expect(ranked[0].qualityFlags).toContain('cross_source_corroborated');
+    expect(ranked[1].corroborationCount).toBe(1);
+  });
 });
 
 describe('external evidence service', () => {
@@ -158,6 +177,26 @@ describe('headline sentiment', () => {
     });
     expect(assessHeadlineSentiment('Growth but cuts guidance')).toMatchObject({ score: null, confidence: 0 });
   });
+
+  it('handles bounded negation and common Chinese financial language', () => {
+    expect(assessHeadlineSentiment('Review finds no fraud at company')).toMatchObject({
+      score: 0.5,
+      positiveMatches: ['not fraud'],
+      negativeMatches: [],
+    });
+    expect(assessHeadlineSentiment('Company is not seeing growth this quarter')).toMatchObject({
+      score: -0.5,
+      positiveMatches: [],
+      negativeMatches: ['not growth'],
+    });
+    expect(classifyHeadlineSentiment('公司预计扭亏并实施分红')).toBe(0.5);
+    expect(classifyHeadlineSentiment('公司预亏并遭监管处罚')).toBe(-0.5);
+    expect(classifyHeadlineSentiment('公司未出现亏损')).toBe(0.5);
+  });
+
+  it('uses word boundaries for English terms', () => {
+    expect(classifyHeadlineSentiment('Missile supplier announces meeting')).toBeNull();
+  });
 });
 
 describe('evidence persistence records', () => {
@@ -180,7 +219,13 @@ describe('evidence persistence records', () => {
     expect(rows.run.result_set_hash).toMatch(/^[a-f0-9]{64}$/);
     expect(rows.run).not.toHaveProperty('query');
     expect(JSON.stringify(rows)).not.toContain('private research question');
-    expect(rows.evidence[0]).toMatchObject({ citation_id: result.citationId, canonical_url: result.url });
+    expect(rows.evidence[0]).toMatchObject({
+      citation_id: result.citationId,
+      canonical_url: result.url,
+      event_cluster_id: result.citationId,
+      corroboration_count: 1,
+      corroborating_sources: [],
+    });
     expect(rows.links[0]).toMatchObject({ ticker: 'AAPL', citation_id: result.citationId });
   });
 

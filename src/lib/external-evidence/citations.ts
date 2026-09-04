@@ -23,6 +23,7 @@ export function resolvePerspectiveCitations(
       trustScore: item.trustScore,
       qualityScore: item.qualityScore,
       qualityFlags: item.qualityFlags,
+      corroborationCount: item.corroborationCount,
     });
     if (citations.length >= limit) break;
   }
@@ -33,6 +34,9 @@ export function evidencePromptLines(evidence: ExternalEvidence[]): string[] {
   if (evidence.length === 0) return [];
   return evidence.map((item) => {
     const date = item.publishedAt?.slice(0, 10) || 'date unavailable';
-    return `[${item.citationId}] ${item.title} | ${item.domain} | ${date} | ${item.snippet || 'No excerpt'}`;
+    const corroboration = item.corroboratingSources?.length
+      ? ` | corroborated by ${item.corroboratingSources.map((source) => source.domain).join(', ')}`
+      : '';
+    return `[${item.citationId}] ${item.title} | ${item.domain} | ${date}${corroboration} | ${item.snippet || 'No excerpt'}`;
   });
 }

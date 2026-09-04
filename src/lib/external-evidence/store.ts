@@ -74,6 +74,9 @@ export function buildEvidencePersistenceRows(
       relevance_score: item.relevanceScore,
       quality_score: item.qualityScore,
       quality_flags: item.qualityFlags,
+      event_cluster_id: item.eventClusterId ?? item.citationId,
+      corroboration_count: item.corroborationCount ?? 1,
+      corroborating_sources: item.corroboratingSources ?? [],
       content_hash: sha256(`${item.title}\n${item.snippet}`),
     })),
     links: request.ticker ? snapshot.results.map((item) => ({

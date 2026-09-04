@@ -1,4 +1,4 @@
-import type { EvidenceQualityFlag, EvidenceSearchStatus } from '@/lib/external-evidence/types';
+import type { EvidenceCorroboratingSource, EvidenceQualityFlag, EvidenceSearchStatus } from '@/lib/external-evidence/types';
 import type { BrokerRating } from './consensus';
 
 export interface StockResearchMeta {
@@ -28,6 +28,9 @@ export interface StockNewsItem {
   relevanceScore?: number;
   qualityScore?: number;
   qualityFlags?: EvidenceQualityFlag[];
+  eventClusterId?: string;
+  corroborationCount?: number;
+  corroboratingSources?: EvidenceCorroboratingSource[];
   sourceType: string;
 }
 
@@ -47,6 +50,9 @@ export interface StockReportItem {
   relevanceScore?: number;
   qualityScore?: number;
   qualityFlags?: EvidenceQualityFlag[];
+  eventClusterId?: string;
+  corroborationCount?: number;
+  corroboratingSources?: EvidenceCorroboratingSource[];
 }
 
 export interface BrokerConsensusView {

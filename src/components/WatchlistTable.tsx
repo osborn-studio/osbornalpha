@@ -21,6 +21,7 @@ import { summarizeWatchlistMarketRows } from '@/lib/watchlist/summary';
 import { usePersistentState } from '@/lib/hooks/usePersistentState';
 import { useDismissableLayer } from '@/lib/hooks/useDismissableLayer';
 import { calculateWatchlistDataQuality } from '@/lib/watchlist/data-quality';
+import { useVirtualRows } from '@/lib/hooks/useVirtualRows';
 
 type ColumnKey =
   | 'ticker' | 'name' | 'price' | 'change' | 'open' | 'prevClose' | 'dayRange' | 'volume' | 'amount'
@@ -269,6 +270,15 @@ export function WatchlistTable({
   }), [asc, filtered, overviewByTicker, sortKey]);
 
   const summary = summarizeWatchlistMarketRows(filtered);
+  const rowHeight = density === 'compact' ? 44 : 58;
+  const virtualRows = useVirtualRows({
+    count: sorted.length,
+    rowHeight,
+    enabled: sorted.length > 80,
+    resetKey: `${sortKey}:${asc}:${query}:${groupFilter}:${marketFilter}:${statusFilter}:${density}`,
+  });
+  const visibleDesktopRows = sorted.slice(virtualRows.start, virtualRows.end);
+  const tableColumnCount = visibleColumns.length + 1 + (onSelectTicker ? 1 : 0);
   const allVisibleSelected = sorted.length > 0 && sorted.every((row) => selected.has(row.ticker));
   const toggleSelection = (ticker: string) => setSelected((current) => {
     const next = new Set(current);
@@ -519,8 +529,8 @@ export function WatchlistTable({
       ) : (
         <>
         <WatchlistMobileList rows={sorted} onSelect={onSelectTicker} selected={selected} onToggle={toggleSelection} />
-        <div className="hidden max-h-[64vh] overflow-auto sm:block">
-          <table aria-label={t('ariaLabel')} className="w-full min-w-max text-sm">
+        <div ref={virtualRows.containerRef} onScroll={virtualRows.onScroll} className="hidden max-h-[64vh] overflow-auto sm:block">
+          <table aria-label={t('ariaLabel')} aria-rowcount={sorted.length + 1} className="w-full min-w-max text-sm">
             <caption className="sr-only">{t('caption')}</caption>
             <thead>
               <tr className="border-b border-border bg-bg-elevated/95 text-[10px] text-text-dim">
@@ -536,8 +546,9 @@ export function WatchlistTable({
               </tr>
             </thead>
             <tbody>
-              {sorted.map((row) => (
-                <tr key={row.ticker} tabIndex={onSelectTicker ? 0 : undefined} onClick={() => onSelectTicker?.(row.ticker)} onKeyDown={(event) => { if (event.key === 'Enter') onSelectTicker?.(row.ticker); }}
+              {virtualRows.paddingTop > 0 && <tr aria-hidden="true"><td colSpan={tableColumnCount} style={{ height: virtualRows.paddingTop, padding: 0 }} /></tr>}
+              {visibleDesktopRows.map((row, index) => (
+                <tr key={row.ticker} aria-rowindex={virtualRows.start + index + 2} tabIndex={onSelectTicker ? 0 : undefined} style={{ height: rowHeight }} onClick={() => onSelectTicker?.(row.ticker)} onKeyDown={(event) => { if (event.key === 'Enter') onSelectTicker?.(row.ticker); }}
                   className={`group border-b border-border/60 last:border-0 hover:bg-bg-hover ${onSelectTicker ? 'cursor-pointer focus:bg-bg-hover focus:outline-none' : ''}`}>
                   <td className="sticky left-0 z-10 w-10 bg-bg-card px-2 text-center group-hover:bg-bg-hover"><input type="checkbox" checked={selected.has(row.ticker)} onClick={(event) => event.stopPropagation()} onChange={() => toggleSelection(row.ticker)} aria-label={t('selection.toggle', { ticker: row.ticker })} /></td>
                   {visibleColumns.map((column) => (
@@ -546,6 +557,7 @@ export function WatchlistTable({
                   {onSelectTicker && <td className="sticky right-0 z-10 bg-bg-card px-3 py-3 text-right group-hover:bg-bg-hover"><button type="button" onClick={(event) => { event.stopPropagation(); onSelectTicker(row.ticker); }} className="icon-button !h-7 !w-7 !basis-7 border-transparent bg-transparent" title={t('quickViewAction')} aria-label={t('quickViewAction')}><PanelRightOpen className="h-3.5 w-3.5" aria-hidden="true" /></button></td>}
                 </tr>
               ))}
+              {virtualRows.paddingBottom > 0 && <tr aria-hidden="true"><td colSpan={tableColumnCount} style={{ height: virtualRows.paddingBottom, padding: 0 }} /></tr>}
             </tbody>
           </table>
         </div>

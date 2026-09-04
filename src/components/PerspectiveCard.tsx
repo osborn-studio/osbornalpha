@@ -97,7 +97,7 @@ export function PerspectiveCard({ persona, name, stance, confidence, summary, ci
               className="max-w-[220px] truncate rounded border border-border bg-bg-elevated px-1.5 py-0.5 text-text-dim hover:border-accent hover:text-accent"
               title={`${citation.title} · ${citation.domain}`}
             >
-              {citation.domain} · {t('sourceQuality', { value: Math.round((citation.qualityScore ?? citation.trustScore) * 100) })}
+              {citation.domain} · {t('sourceQuality', { value: Math.round((citation.qualityScore ?? citation.trustScore) * 100) })}{(citation.corroborationCount ?? 1) > 1 ? ` · ${t('sourceCount', { count: citation.corroborationCount ?? 1 })}` : ''}
             </ExternalLink>
           ))}
         </div>

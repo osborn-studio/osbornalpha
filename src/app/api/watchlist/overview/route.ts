@@ -12,6 +12,7 @@ import { normalizeEvidenceTickerParam } from '@/lib/external-evidence';
 import { watchlistTimestampFreshness } from '@/lib/watchlist/freshness';
 import { watchlistApiError } from '@/lib/watchlist/api-error';
 import { WATCHLIST_RESEARCH_WINDOW_DAYS } from '@/lib/watchlist/research-window';
+import { validateWatchlistBenchmark } from '@/lib/watchlist/benchmark-validation';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -50,6 +51,10 @@ export async function GET(request: Request) {
     const benchmark = benchmarkParam ? normalizeEvidenceTickerParam(benchmarkParam) : null;
     if (benchmarkParam && !benchmark) return watchlistApiError('invalid_benchmark', 400);
     if (benchmark && !ticker) return watchlistApiError('benchmark_requires_ticker', 400);
+    if (benchmark && ticker) {
+      const validation = validateWatchlistBenchmark(ticker, benchmark);
+      if (!validation.valid) return watchlistApiError(`benchmark_${validation.issue}`, 400);
+    }
     const page = parseWatchlistOverviewPage(url);
     if (page.invalidCursor) return watchlistApiError('invalid_cursor', 400);
     const databasePage = await loadWatchlistOverviewPage(client, {

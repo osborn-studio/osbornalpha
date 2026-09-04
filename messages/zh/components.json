@@ -94,6 +94,7 @@
     "cite": "引用",
     "webSources": "网页来源",
     "sourceQuality": "来源质量 {value}%",
+    "sourceCount": "{count} 个来源",
     "qualityFlags": "质量标记：{value}"
   },
   "disclaimer": {

@@ -365,6 +365,11 @@
       "benchmarkApply": "Apply benchmark",
       "benchmarkDefault": "Restore market default ({benchmark})",
       "benchmarkLoadFailed": "Benchmark history is unavailable. The previous comparison is unchanged.",
+      "benchmarkErrors": {
+        "same_security": "Choose a benchmark other than the security itself.",
+        "incompatible_market": "Choose a benchmark from the same market, currency, and trading calendar.",
+        "unavailable": "Benchmark history is unavailable. The previous comparison is unchanged."
+      },
       "benchmarkStatuses": { "reliable": "reliable", "limited": "limited sample", "unavailable": "unavailable" },
       "financials": {
         "title": "Financial performance",
@@ -463,6 +468,7 @@
         "sentimentUnknown": "directional headline terms",
         "quality": "Quality {value}%",
         "qualityFlags": "Quality flags: {value}",
+        "corroborated": "{count} independent sources",
         "metadataOnly": "Metadata only",
         "status": {
           "complete": "Complete coverage",

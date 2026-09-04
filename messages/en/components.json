@@ -94,6 +94,7 @@
     "cite": "cite",
     "webSources": "Web sources",
     "sourceQuality": "Source quality {value}%",
+    "sourceCount": "{count} sources",
     "qualityFlags": "Quality flags: {value}"
   },
   "disclaimer": {

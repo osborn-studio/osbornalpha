@@ -175,9 +175,12 @@ export default function WatchlistPage() {
   });
   const overview = useWatchlistOverview(!!user && allTickers.length > 0);
   const { ensureTicker, rows: overviewRows } = overview;
-  const loadQuickViewBenchmark = useCallback(async (ticker: string, benchmark: string | null) => (
-    await ensureTicker(ticker, { benchmark, force: true })
-  ) !== null, [ensureTicker]);
+  const loadQuickViewBenchmark = useCallback(async (ticker: string, benchmark: string | null) => {
+    const row = await ensureTicker(ticker, { benchmark, force: true });
+    if (!row || benchmark === null) return row !== null;
+    return row.history?.value?.benchmarkTicker === benchmark
+      && row.history.value.benchmarkStatus !== 'unavailable';
+  }, [ensureTicker]);
 
   useEffect(() => {
     if (quickViewTicker && user && !overviewRows[quickViewTicker]?.market) {

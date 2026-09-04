@@ -26,7 +26,7 @@ export function WatchlistMobileList({ rows, onSelect, selected, onToggle }: { ro
           ? Math.min(100, Math.max(0, ((quote.price - quote.low) / (quote.high - quote.low)) * 100))
           : null;
         return (
-          <div key={row.ticker} className="grid min-h-[68px] w-full grid-cols-[24px_minmax(0,1fr)_auto_28px] items-center gap-2 px-3 py-2.5 hover:bg-bg-hover">
+          <div key={row.ticker} style={{ contentVisibility: 'auto', containIntrinsicSize: '68px' }} className="grid min-h-[68px] w-full grid-cols-[24px_minmax(0,1fr)_auto_28px] items-center gap-2 px-3 py-2.5 hover:bg-bg-hover">
             <input type="checkbox" checked={selected?.has(row.ticker) ?? false} onChange={() => onToggle?.(row.ticker)} aria-label={t('selection.toggle', { ticker: row.ticker })} />
             <button type="button" onClick={() => onSelect?.(row.ticker)} className="col-span-3 grid min-w-0 grid-cols-[minmax(0,1fr)_auto_20px] items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset">
             <span className="min-w-0">

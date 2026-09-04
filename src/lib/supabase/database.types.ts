@@ -366,6 +366,11 @@ export interface NewsItem {
   relevance_score: number | null;
   quality_score: number | null;
   quality_flags: string[];
+  event_cluster_id: string;
+  corroboration_count: number;
+  corroborating_sources: Array<{
+    title: string; url: string; domain: string; publishedAt: string | null; trustScore: number; qualityScore: number;
+  }>;
   source_type: string | null;
 }
 
@@ -388,6 +393,11 @@ export interface BrokerReport {
   relevance_score: number | null;
   quality_score: number | null;
   quality_flags: string[];
+  event_cluster_id: string;
+  corroboration_count: number;
+  corroborating_sources: Array<{
+    title: string; url: string; domain: string; publishedAt: string | null; trustScore: number; qualityScore: number;
+  }>;
 }
 
 export interface ExternalEvidenceRecord {
@@ -404,6 +414,11 @@ export interface ExternalEvidenceRecord {
   relevance_score: number;
   quality_score: number;
   quality_flags: string[];
+  event_cluster_id: string;
+  corroboration_count: number;
+  corroborating_sources: Array<{
+    title: string; url: string; domain: string; publishedAt: string | null; trustScore: number; qualityScore: number;
+  }>;
   content_hash: string;
   created_at: string;
   updated_at: string;

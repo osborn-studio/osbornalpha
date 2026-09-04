@@ -28,6 +28,9 @@ export function stockNewsRows(userId: string, response: StockNewsResponse) {
     relevance_score: item.relevanceScore ?? item.trustScore,
     quality_score: item.qualityScore ?? item.trustScore,
     quality_flags: item.qualityFlags ?? [],
+    event_cluster_id: item.eventClusterId ?? item.id,
+    corroboration_count: item.corroborationCount ?? 1,
+    corroborating_sources: item.corroboratingSources ?? [],
     source_type: item.sourceType,
   }));
 }
@@ -59,6 +62,9 @@ export function stockReportRows(userId: string, response: StockReportsResponse) 
     relevance_score: item.relevanceScore ?? item.trustScore,
     quality_score: item.qualityScore ?? item.trustScore,
     quality_flags: item.qualityFlags ?? [],
+    event_cluster_id: item.eventClusterId ?? item.id,
+    corroboration_count: item.corroborationCount ?? 1,
+    corroborating_sources: item.corroboratingSources ?? [],
   }));
 }
 
