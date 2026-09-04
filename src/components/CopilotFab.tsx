@@ -25,6 +25,7 @@ export function CopilotFab() {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
   const ticker = tickerFromPathname(pathname);
+  const hideOnWatchlistMobile = pathname?.split('/').includes('watchlist');
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -43,7 +44,7 @@ export function CopilotFab() {
         type="button"
         onClick={() => setOpen(true)}
         aria-label={t('openAria')}
-        className="fixed bottom-20 right-4 z-50 flex h-12 w-12 items-center justify-center rounded-full border border-accent-dim bg-bg-elevated text-2xl shadow-lg transition-transform hover:scale-105"
+        className={`fixed bottom-20 right-4 z-50 h-12 w-12 items-center justify-center rounded-full border border-accent-dim bg-bg-elevated text-2xl shadow-lg transition-transform hover:scale-105 ${hideOnWatchlistMobile ? 'hidden sm:flex' : 'flex'}`}
       >
         🎩
       </button>

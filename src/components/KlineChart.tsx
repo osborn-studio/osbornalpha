@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
-import type { IChartApi, UTCTimestamp } from 'lightweight-charts';
+import type { CreatePriceLineOptions, IChartApi, IPriceLine, UTCTimestamp } from 'lightweight-charts';
 import {
   KLINE_RANGES,
   klineRangeAvailability,
@@ -15,6 +15,8 @@ import { chartStatusKeys, sourceTranslationKey } from './kline-chart-meta';
 import { computeSessionVwap } from '@/lib/chart/session-vwap';
 
 const RANGE_LABELS: Record<KlineRange, string> = { '1d': '1D', '5d': '5D', '1m': '1M', '6m': '6M', ytd: 'YTD', '1y': '1Y', '5y': '5Y', all: 'All' };
+const CHART_TYPES = ['line', 'candle', 'baseline', 'area', 'bar'] as const;
+type ChartType = typeof CHART_TYPES[number];
 
 type HoverSnapshot = KlineBar;
 
@@ -88,6 +90,12 @@ export function KlineChart({ ticker }: { ticker: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const [range, setRange] = useState<KlineRange>('1d');
+  const [chartType, setChartType] = useState<ChartType>('candle');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [showTooltip, setShowTooltip] = useState(true);
+  const [showVolume, setShowVolume] = useState(true);
+  const [showIndicators, setShowIndicators] = useState(true);
+  const [showPreviousClose, setShowPreviousClose] = useState(true);
   const [visualRevision, setVisualRevision] = useState(0);
   const [hovered, setHovered] = useState<HoverSnapshot | null>(null);
   // Crosshair anchor (chart-pane pixels) so the tooltip follows the cursor
@@ -96,6 +104,18 @@ export function KlineChart({ ticker }: { ticker: string }) {
   const { bars, loading, error, errorCode, meta, refetch } = useKline(ticker, range);
   const displayMeta = meta;
   const unsupportedReason = klineRangeAvailability(ticker, range);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('stock-monitor:chart:type');
+      if (saved && (CHART_TYPES as readonly string[]).includes(saved)) setChartType(saved as ChartType);
+    } catch {}
+  }, []);
+
+  const selectChartType = (next: ChartType) => {
+    setChartType(next);
+    try { localStorage.setItem('stock-monitor:chart:type', next); } catch {}
+  };
 
   useEffect(() => {
     const observer = new MutationObserver((mutations) => {
@@ -145,27 +165,18 @@ export function KlineChart({ ticker }: { ticker: string }) {
       });
       chartRef.current = chart;
 
-      const candles = chart.addCandlestickSeries({
-        upColor,
-        downColor,
-        borderUpColor: upColor,
-        borderDownColor: downColor,
-        wickUpColor: upColor,
-        wickDownColor: downColor,
-        priceFormat: { type: 'price', precision, minMove },
-      });
-      candles.setData(bars.map(({ time, open, high, low, close }) => ({
+      const ohlcData = bars.map(({ time, open, high, low, close }) => ({
         time: time as UTCTimestamp,
         open,
         high,
         low,
         close,
-      })));
-
-      // Intraday benchmark: the audited previous-session close grounds the
-      // day's strength at a glance (standard time-share chart convention).
-      if (range === '1d' && bars[0]?.previousClose != null) {
-        candles.createPriceLine({
+      }));
+      const lineData = bars.map(({ time, close }) => ({ time: time as UTCTimestamp, value: close }));
+      const priceFormat = { type: 'price' as const, precision, minMove };
+      const addPreviousCloseLine = (series: { createPriceLine(options: CreatePriceLineOptions): IPriceLine }) => {
+        if (range !== '1d' || !showPreviousClose || bars[0]?.previousClose == null) return;
+        series.createPriceLine({
           price: bars[0].previousClose,
           color: cssVariable('--text-muted', '#a1a1aa'),
           lineWidth: 1,
@@ -173,15 +184,63 @@ export function KlineChart({ ticker }: { ticker: string }) {
           axisLabelVisible: true,
           title: t('prevClose'),
         });
+      };
+
+      if (chartType === 'line') {
+        const series = chart.addLineSeries({ color: upColor, lineWidth: 2, priceFormat });
+        series.setData(lineData);
+        addPreviousCloseLine(series);
+      } else if (chartType === 'baseline') {
+        const basePrice = bars[0]?.previousClose ?? bars[0]?.close;
+        const series = chart.addBaselineSeries({
+          baseValue: { type: 'price', price: basePrice },
+          topLineColor: upColor,
+          topFillColor1: `${upColor}30`,
+          topFillColor2: `${upColor}08`,
+          bottomLineColor: downColor,
+          bottomFillColor1: `${downColor}08`,
+          bottomFillColor2: `${downColor}30`,
+          priceFormat,
+        });
+        series.setData(lineData);
+        addPreviousCloseLine(series);
+      } else if (chartType === 'area') {
+        const series = chart.addAreaSeries({
+          lineColor: upColor,
+          topColor: `${upColor}38`,
+          bottomColor: `${upColor}05`,
+          lineWidth: 2,
+          priceFormat,
+        });
+        series.setData(lineData);
+        addPreviousCloseLine(series);
+      } else if (chartType === 'bar') {
+        const series = chart.addBarSeries({ upColor, downColor, thinBars: true, priceFormat });
+        series.setData(ohlcData);
+        addPreviousCloseLine(series);
+      } else {
+        const series = chart.addCandlestickSeries({
+          upColor,
+          downColor,
+          borderUpColor: upColor,
+          borderDownColor: downColor,
+          wickUpColor: upColor,
+          wickDownColor: downColor,
+          priceFormat,
+        });
+        series.setData(ohlcData);
+        addPreviousCloseLine(series);
       }
 
-      if (displayMeta.interval !== 'minute') {
+      // Intraday benchmark: the audited previous-session close grounds the
+      // day's strength at a glance (standard time-share chart convention).
+      if (showIndicators && displayMeta.interval !== 'minute') {
         const warmup = displayMeta.maWarmupCloses ?? [];
         const ma5 = chart.addLineSeries({ color: '#f59e0b', lineWidth: 1, title: 'MA5', priceFormat: { type: 'price', precision, minMove } });
         ma5.setData(computeMA(bars, 5, warmup));
         const ma20 = chart.addLineSeries({ color: '#58a6ff', lineWidth: 1, title: 'MA20', priceFormat: { type: 'price', precision, minMove } });
         ma20.setData(computeMA(bars, 20, warmup));
-      } else {
+      } else if (showIndicators) {
         const vwapData = computeSessionVwap(bars);
         if (vwapData.some((bar) => 'value' in bar)) {
           const vwap = chart.addLineSeries({ color: '#facc15', lineWidth: 1, title: t('avgPrice'), priceFormat: { type: 'price', precision, minMove } });
@@ -189,16 +248,18 @@ export function KlineChart({ ticker }: { ticker: string }) {
         }
       }
 
-      const volume = chart.addHistogramSeries({
-        priceFormat: { type: 'custom', minMove: 1, formatter: volumeFormatter },
-        priceScaleId: '',
-      });
-      volume.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-      volume.setData(bars.map((bar) => ({
-        time: bar.time as UTCTimestamp,
-        value: bar.volume,
-        color: bar.close >= bar.open ? `${upColor}80` : `${downColor}80`,
-      })));
+      if (showVolume) {
+        const volume = chart.addHistogramSeries({
+          priceFormat: { type: 'custom', minMove: 1, formatter: volumeFormatter },
+          priceScaleId: '',
+        });
+        volume.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+        volume.setData(bars.map((bar) => ({
+          time: bar.time as UTCTimestamp,
+          value: bar.volume,
+          color: bar.close >= bar.open ? `${upColor}80` : `${downColor}80`,
+        })));
+      }
 
       const indexByTime = new Map(bars.map((bar, index) => [bar.time, index]));
       setHovered(hoverSnapshot(bars, bars.length - 1));
@@ -229,7 +290,7 @@ export function KlineChart({ ticker }: { ticker: string }) {
       if (chartRef.current === chart) chartRef.current = null;
       chart?.remove();
     };
-  }, [bars, displayMeta, locale, range, t, visualRevision]);
+  }, [bars, chartType, displayMeta, locale, range, showIndicators, showPreviousClose, showVolume, t, visualRevision]);
 
   const errorMessage = errorCode && [
     'market_unsupported',
@@ -262,18 +323,44 @@ export function KlineChart({ ticker }: { ticker: string }) {
 
   return (
     <div data-testid="kline-chart">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="text-xs text-text-muted">{t('rangeLabel')}</div>
-        <div className="flex items-center gap-2">
+      <div className="mb-3 flex flex-col gap-2 border-b border-border pb-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <label className="sr-only" htmlFor={`chart-type-${ticker}`}>{t('chartType')}</label>
+          <select id={`chart-type-${ticker}`} value={chartType} onChange={(event) => selectChartType(event.target.value as ChartType)} className="border-border bg-bg-elevated px-2.5 py-1.5 text-xs font-medium" aria-label={t('chartType')}>
+            {CHART_TYPES.map((type) => <option key={type} value={type}>{t(`chartTypes.${type}`)}</option>)}
+          </select>
+          <div className="relative">
+            <button type="button" onClick={() => setSettingsOpen((open) => !open)} aria-expanded={settingsOpen} className="rounded-md border border-border bg-bg-elevated px-2.5 py-1.5 text-xs text-text-dim transition hover:border-border-active hover:text-text">
+              {t('settings')}
+            </button>
+            {settingsOpen && (
+              <div className="absolute left-0 top-full z-30 mt-1 w-48 rounded-md border border-border bg-bg-elevated p-2 shadow-xl">
+                {[
+                  ['tooltip', showTooltip, setShowTooltip],
+                  ['volume', showVolume, setShowVolume],
+                  ['indicators', showIndicators, setShowIndicators],
+                  ['previousClose', showPreviousClose, setShowPreviousClose],
+                ].map(([key, checked, setter]) => (
+                  <label key={String(key)} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-bg-card">
+                    <input type="checkbox" checked={checked as boolean} onChange={(event) => (setter as (value: boolean) => void)(event.target.checked)} />
+                    <span>{t(`settingsOptions.${key}`)}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
           <button
             type="button"
             onClick={() => chartRef.current?.timeScale().fitContent()}
             disabled={bars.length === 0}
-            className="rounded px-2 py-1 text-xs text-text-dim transition hover:text-text disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-md px-2.5 py-1.5 text-xs text-text-dim transition hover:bg-bg-elevated hover:text-text disabled:cursor-not-allowed disabled:opacity-40"
           >
             {t('resetView')}
           </button>
-          <div className="inline-flex rounded-md bg-bg-card p-0.5" role="group" aria-label={t('rangeAriaLabel')}>
+        </div>
+        <div className="flex max-w-full items-center gap-2 overflow-x-auto pb-0.5 lg:pb-0">
+          <span className="shrink-0 text-xs text-text-muted">{t('rangeLabel')}</span>
+          <div className="inline-flex shrink-0 rounded-md border border-border bg-bg-elevated p-0.5" role="group" aria-label={t('rangeAriaLabel')}>
             {KLINE_RANGES.map((item) => {
               const unavailable = klineRangeAvailability(ticker, item);
               const reason = unavailable ? t(`errors.${unavailable}`) : undefined;
@@ -288,13 +375,13 @@ export function KlineChart({ ticker }: { ticker: string }) {
           </div>
         </div>
       </div>
-      <div className="relative h-[380px] w-full">
-        {hovered && displayMeta && !loading && (
-          <div data-testid="kline-tooltip" style={tooltipPosition} className="pointer-events-none absolute z-10 rounded-md border border-border bg-bg-elevated px-3 py-2 text-[11px] shadow-lg">
+      <div className="relative h-[380px] w-full overflow-hidden rounded-md border border-border bg-bg-card">
+        {showTooltip && hovered && displayMeta && !loading && (
+          <div data-testid="kline-tooltip" style={tooltipPosition} className="pointer-events-none absolute z-10 max-w-[calc(100%-16px)] rounded-md border border-border bg-bg-elevated/95 px-2.5 py-2 text-[10px] shadow-lg backdrop-blur sm:px-3 sm:text-[11px]">
             <div className="mb-1 font-semibold text-text">
               {formatChartTime(hovered.time, displayMeta.interval, locale)} · {displayMeta.timezone}
             </div>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 tabular-nums sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 tabular-nums sm:grid-cols-4 sm:gap-x-4">
               <span>{t('tooltip.open')} {priceFormatter.format(hovered.open)}</span>
               <span>{t('tooltip.high')} {priceFormatter.format(hovered.high)}</span>
               <span>{t('tooltip.low')} {priceFormatter.format(hovered.low)}</span>
@@ -320,31 +407,41 @@ export function KlineChart({ ticker }: { ticker: string }) {
             )}
           </div>
         )}
-        <div ref={containerRef} className="h-[380px] w-full rounded-md bg-bg-card" />
+        <div ref={containerRef} className="h-[380px] w-full bg-bg-card" />
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-text-muted" aria-live="polite">
-        {displayMeta ? <>
-          <span>{t(sourceTranslationKey(displayMeta))}</span>
-          <span>{t('granularity', { value: t(`granularityNames.${displayMeta.granularity}`) })}</span>
-          <span>{currency && t('currency', { value: currency })}</span>
-          <span>{t('volumeUnit', { value: t(`volumeUnits.${volumeUnit}`) })}</span>
-          <span>{t(`adjustments.${displayMeta.adjustment}`)}</span>
-          <span>{t('coverage', { start: displayMeta.coverageStart, end: displayMeta.coverageEnd })}</span>
-          <span>{t('barCoverage', { returned: displayMeta.returnedBars, requested: displayMeta.requestedBars })}</span>
-          <span>{t('asOf', { value: displayMeta.asOf, timezone: displayMeta.timezone })}</span>
-          <span>{t('fetchedAt', { value: formatFetchedAt(displayMeta.fetchedAt, displayMeta.timezone, locale) })}</span>
-          {chartStatusKeys(displayMeta).map((key) => (
-            <span key={key}>{key === 'freshness.stale'
-              ? t(key, { seconds: displayMeta.cacheAgeSeconds ?? displayMeta.staleAgeSeconds ?? 0 })
-              : t(key)}</span>
-          ))}
-          <span>{t(`indicators.${
-            displayMeta.interval === 'minute' ? 'intraday'
-            : displayMeta.interval === 'day' ? 'daily'
-            : displayMeta.interval === 'week' ? 'weekly'
-            : 'monthly'
-          }`)}</span>
-        </> : loading ? <span>{t('loading')}</span> : null}
+      <div className="mt-2 text-[10px] text-text-muted sm:text-[11px]" aria-live="polite">
+        {displayMeta ? (
+          <>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="font-medium text-text-dim">{t(sourceTranslationKey(displayMeta))}</span>
+              <span>{t('asOf', { value: displayMeta.asOf, timezone: displayMeta.timezone })}</span>
+              <span>{displayMeta.delayed ? t('delayed') : t('live')}</span>
+            </div>
+            <details className="mt-1.5 border-t border-border/60 pt-1.5">
+              <summary className="w-fit cursor-pointer select-none text-text-dim transition hover:text-text">{t('dataDetails')}</summary>
+              <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+                <span>{t('granularity', { value: t(`granularityNames.${displayMeta.granularity}`) })}</span>
+                {currency && <span>{t('currency', { value: currency })}</span>}
+                <span>{t('volumeUnit', { value: t(`volumeUnits.${volumeUnit}`) })}</span>
+                <span>{t(`adjustments.${displayMeta.adjustment}`)}</span>
+                <span>{t('coverage', { start: displayMeta.coverageStart, end: displayMeta.coverageEnd })}</span>
+                <span>{t('barCoverage', { returned: displayMeta.returnedBars, requested: displayMeta.requestedBars })}</span>
+                <span>{t('fetchedAt', { value: formatFetchedAt(displayMeta.fetchedAt, displayMeta.timezone, locale) })}</span>
+                {chartStatusKeys(displayMeta).map((key) => (
+                  <span key={key}>{key === 'freshness.stale'
+                    ? t(key, { seconds: displayMeta.cacheAgeSeconds ?? displayMeta.staleAgeSeconds ?? 0 })
+                    : t(key)}</span>
+                ))}
+                <span>{t(`indicators.${
+                  displayMeta.interval === 'minute' ? 'intraday'
+                  : displayMeta.interval === 'day' ? 'daily'
+                  : displayMeta.interval === 'week' ? 'weekly'
+                  : 'monthly'
+                }`)}</span>
+              </div>
+            </details>
+          </>
+        ) : loading ? <span>{t('loading')}</span> : null}
       </div>
     </div>
   );

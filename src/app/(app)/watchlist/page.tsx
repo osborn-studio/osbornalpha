@@ -11,6 +11,7 @@ import { useToast } from '@/components/Toast';
 import { useBatchQuotes, type LiveQuote } from '@/lib/hooks/useQuote';
 import { normalizeWindTicker } from '@/lib/stocks/wind-normalize';
 import { WatchlistTable } from '@/components/WatchlistTable';
+import { WatchlistQuickView } from '@/components/WatchlistQuickView';
 import { WatchlistOnboarding } from '@/components/WatchlistOnboarding';
 import { PostAddInsight } from '@/components/PostAddInsight';
 import { getBrowserSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
@@ -95,6 +96,7 @@ export default function WatchlistPage() {
   // Mobile move menu (per-card kebab) — which ticker's menu is open
   const [openMenuTicker, setOpenMenuTicker] = useState<string | null>(null);
   const [lastAdded, setLastAdded] = useState<SearchResult | null>(null);
+  const [quickViewTicker, setQuickViewTicker] = useState<string | null>(null);
   const [securityIdentities, setSecurityIdentities] = useState<Record<string, SearchResult>>({});
   const watchlistViewTracked = useRef(false);
   const postAddTracked = useRef<string | null>(null);
@@ -409,10 +411,17 @@ export default function WatchlistPage() {
 
   return (
     <>
-      <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mb-4 flex flex-col gap-4 border-b border-border pb-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-xl font-bold">{t('heading')}</h1>
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-text-dim">
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-xl font-bold">{t('heading')}</h1>
+            {hydrated && allTickers.length > 0 && (
+              <span className="rounded-full border border-border bg-bg-elevated px-2 py-0.5 text-[10px] font-semibold tabular-nums text-text-dim">
+                {allTickers.length}
+              </span>
+            )}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-text-dim">
             <span>
               {viewMode === 'kanban' ? t('hintKanban') : t('hintTable')}
               {' · '}{t('autoRefresh', { seconds: REFRESH_MS / 1000 })}
@@ -425,18 +434,18 @@ export default function WatchlistPage() {
             )}
           </div>
         </div>
-        <div className="flex w-full gap-1.5 overflow-x-auto pb-1 sm:w-auto sm:shrink-0 sm:overflow-visible sm:pb-0">
-          <div className="flex shrink-0 overflow-hidden rounded-md border border-border text-xs">
+        <div className="flex w-full items-center gap-1.5 overflow-x-auto pb-1 sm:w-auto sm:shrink-0 sm:overflow-visible sm:pb-0">
+          <div className="flex shrink-0 overflow-hidden rounded-md border border-border bg-bg-elevated p-0.5 text-xs">
             <button
               onClick={() => setView('kanban')}
-              className={`whitespace-nowrap px-3 py-1.5 ${viewMode === 'kanban' ? 'bg-accent-dim/20 font-semibold text-accent' : 'text-text-dim hover:text-text'}`}
+              className={`whitespace-nowrap rounded px-3 py-1.5 transition ${viewMode === 'kanban' ? 'bg-bg-card font-semibold text-text shadow-sm' : 'text-text-dim hover:text-text'}`}
               title={t('viewKanbanTitle')}
             >
               {t('viewKanban')}
             </button>
             <button
               onClick={() => setView('table')}
-              className={`whitespace-nowrap border-l border-border px-3 py-1.5 ${viewMode === 'table' ? 'bg-accent-dim/20 font-semibold text-accent' : 'text-text-dim hover:text-text'}`}
+              className={`whitespace-nowrap rounded px-3 py-1.5 transition ${viewMode === 'table' ? 'bg-bg-card font-semibold text-text shadow-sm' : 'text-text-dim hover:text-text'}`}
               title={t('viewTableTitle')}
             >
               {t('viewTable')}
@@ -445,21 +454,21 @@ export default function WatchlistPage() {
           <button
             onClick={refreshQuotes}
             disabled={allTickers.length === 0 || quotesLoading}
-            className="whitespace-nowrap rounded-md bg-bg-card px-3 py-1.5 text-xs text-text-dim hover:text-text disabled:opacity-50"
+            className="whitespace-nowrap rounded-md border border-border bg-bg-elevated px-3 py-1.5 text-xs text-text-dim transition hover:border-border-active hover:text-text disabled:opacity-50"
             title={t('refreshTitle')}
           >
             {t('refresh')}
           </button>
           <button
             onClick={() => setImportOpen(true)}
-            className="whitespace-nowrap rounded-md bg-accent-dim/15 px-3 py-1.5 text-xs font-semibold text-accent hover:bg-accent-dim/25"
+            className="whitespace-nowrap rounded-md border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent transition hover:bg-accent/15"
             title={t('importBatchTitle')}
           >
             {t('importBatch')}
           </button>
           <button
             onClick={exportYaml}
-            className="whitespace-nowrap rounded-md bg-bg-card px-3 py-1.5 text-xs text-text-dim hover:text-text"
+            className="whitespace-nowrap rounded-md border border-border bg-bg-elevated px-3 py-1.5 text-xs text-text-dim transition hover:border-border-active hover:text-text"
           >
             {t('export')}
           </button>
@@ -499,6 +508,7 @@ export default function WatchlistPage() {
           identities={securityIdentities}
           loadedAt={loadedAt}
           loading={quotesLoading}
+          onSelectTicker={setQuickViewTicker}
         />
       )}
 
@@ -617,6 +627,14 @@ export default function WatchlistPage() {
       )}
 
       <Disclaimer />
+
+      {quickViewTicker && (
+        <WatchlistQuickView
+          ticker={quickViewTicker}
+          quote={quotes[quickViewTicker] ?? null}
+          onClose={() => setQuickViewTicker(null)}
+        />
+      )}
 
       {importOpen && (
         <ImportDialog

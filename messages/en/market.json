@@ -135,7 +135,10 @@
       "tracked": "Tracked",
       "live": "Live",
       "delayed": "Delayed",
-      "unavailable": "No quote"
+      "unavailable": "No quote",
+      "gainers": "Gainers",
+      "decliners": "Decliners",
+      "average": "Equal-weight avg"
     },
     "loadingQuotes": "⏳ Loading quotes…",
     "ariaLabel": "Watchlist table view",
@@ -149,10 +152,40 @@
       "dayRange": "High / Low",
       "volume": "Volume",
       "amount": "Turnover",
-      "status": "Quote status",
+      "marketCap": "Market cap",
+      "pe": "PE (TTM)",
+      "pb": "PB",
+      "turnover": "Turnover rate",
+      "volumeRatio": "Rel volume",
+      "amplitude": "Amplitude",
+      "dayPosition": "Day position",
+      "quality": "Data coverage",
+      "updated": "Quote status",
       "group": "Group"
     },
     "sortAriaLabel": "Sort by {label}",
+    "presetAriaLabel": "Metric view",
+    "presets": {
+      "market": "Market",
+      "valuation": "Valuation",
+      "risk": "Risk"
+    },
+    "filters": {
+      "search": "Search ticker or company",
+      "group": "Filter group",
+      "market": "Filter market",
+      "status": "Filter quote status",
+      "allGroups": "All groups",
+      "allMarkets": "All markets",
+      "allStatuses": "All statuses",
+      "noResults": "No instruments match the current filters."
+    },
+    "columns": {
+      "action": "Columns"
+    },
+    "quickView": "Action",
+    "quickViewAction": "View",
+    "dayPositionTitle": "Current price is at {value}% of today's range",
     "status": {
       "loading": "Loading",
       "unavailable": "Unavailable",
@@ -160,6 +193,28 @@
       "live": "Current",
       "unknownSource": "Unknown source",
       "unknownTime": "Unknown time"
+    },
+    "drawer": {
+      "ariaLabel": "Quick quote for {ticker}",
+      "close": "Close quick quote",
+      "dismiss": "Dismiss quick quote overlay",
+      "fullDetail": "Full details",
+      "unavailable": "Current quote unavailable",
+      "metrics": "Key metrics",
+      "historyMetrics": "Historical performance and risk",
+      "open": "Open",
+      "dayRange": "Day range",
+      "amplitude": "Amplitude",
+      "volumeRatio": "Relative volume",
+      "marketCap": "Market cap",
+      "turnover": "Turnover rate",
+      "oneYearPriceReturn": "1Y price return",
+      "annualizedVolatility": "Annualized volatility",
+      "maxDrawdown": "1Y max drawdown",
+      "rangePosition": "52-week position",
+      "calculating": "Calculating…",
+      "source": "Quote source: {value}",
+      "updated": "Updated: {value}"
     }
   },
   "copilot": {
@@ -251,9 +306,25 @@
       "noTriggersToday": "No significant triggers today"
     },
     "chart": {
+      "chartType": "Chart type",
+      "chartTypes": {
+        "line": "Line",
+        "candle": "Candle",
+        "baseline": "Baseline",
+        "area": "Area",
+        "bar": "OHLC"
+      },
+      "settings": "Chart settings",
+      "settingsOptions": {
+        "tooltip": "Hover values",
+        "volume": "Volume",
+        "indicators": "MA / VWAP",
+        "previousClose": "Previous close line"
+      },
       "rangeLabel": "Trend range",
       "rangeAriaLabel": "Chart period",
       "resetView": "Reset view",
+      "dataDetails": "Data details",
       "retry": "Retry",
       "granularity": "Bar interval: {value}",
       "currency": "Currency: {value}",

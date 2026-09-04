@@ -61,6 +61,7 @@ test('ticker chart requests the selected business range and exposes provenance',
   await expect(page.getByText('Live quote unavailable', { exact: true })).toBeVisible();
   await expect(page.getByText('$1,180.50')).toHaveCount(0);
   await expect(chart.getByText('Source: Eastmoney')).toBeVisible();
+  await chart.getByText('Data details').click();
   await expect(chart.getByText('Currency: USD')).toBeVisible();
   await expect(chart.getByText('Volume unit: shares')).toBeVisible();
   await expect(chart.getByText('Shared SWR cache hit')).toBeVisible();

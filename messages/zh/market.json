@@ -135,7 +135,10 @@
       "tracked": "跟踪标的",
       "live": "实时",
       "delayed": "延迟",
-      "unavailable": "无报价"
+      "unavailable": "无报价",
+      "gainers": "上涨",
+      "decliners": "下跌",
+      "average": "等权平均"
     },
     "loadingQuotes": "⏳ 报价加载中…",
     "ariaLabel": "股票池表格视图",
@@ -149,10 +152,40 @@
       "dayRange": "最高 / 最低",
       "volume": "成交量",
       "amount": "成交额",
-      "status": "行情状态",
+      "marketCap": "总市值",
+      "pe": "PE (TTM)",
+      "pb": "PB",
+      "turnover": "换手率",
+      "volumeRatio": "量比",
+      "amplitude": "振幅",
+      "dayPosition": "日内位置",
+      "quality": "数据覆盖",
+      "updated": "行情状态",
       "group": "分组"
     },
     "sortAriaLabel": "按{label}排序",
+    "presetAriaLabel": "指标视图",
+    "presets": {
+      "market": "行情",
+      "valuation": "估值",
+      "risk": "风险"
+    },
+    "filters": {
+      "search": "搜索代码或名称",
+      "group": "筛选分组",
+      "market": "筛选市场",
+      "status": "筛选行情状态",
+      "allGroups": "全部分组",
+      "allMarkets": "全部市场",
+      "allStatuses": "全部状态",
+      "noResults": "没有符合当前筛选条件的标的。"
+    },
+    "columns": {
+      "action": "自定义列"
+    },
+    "quickView": "操作",
+    "quickViewAction": "查看",
+    "dayPositionTitle": "当前价格位于今日区间的 {value}%",
     "status": {
       "loading": "加载中",
       "unavailable": "不可用",
@@ -160,6 +193,28 @@
       "live": "当前",
       "unknownSource": "未知来源",
       "unknownTime": "未知时间"
+    },
+    "drawer": {
+      "ariaLabel": "{ticker} 快速行情",
+      "close": "关闭快速行情",
+      "dismiss": "关闭快速行情背景层",
+      "fullDetail": "完整详情",
+      "unavailable": "当前报价不可用",
+      "metrics": "关键指标",
+      "historyMetrics": "历史表现与风险",
+      "open": "开盘",
+      "dayRange": "日内区间",
+      "amplitude": "振幅",
+      "volumeRatio": "量比",
+      "marketCap": "总市值",
+      "turnover": "换手率",
+      "oneYearPriceReturn": "1 年价格收益",
+      "annualizedVolatility": "年化波动率",
+      "maxDrawdown": "1 年最大回撤",
+      "rangePosition": "52 周位置",
+      "calculating": "计算中…",
+      "source": "行情来源：{value}",
+      "updated": "更新时间：{value}"
     }
   },
   "copilot": {
@@ -251,9 +306,25 @@
       "noTriggersToday": "今日无显著触发信号"
     },
     "chart": {
+      "chartType": "图表类型",
+      "chartTypes": {
+        "line": "折线",
+        "candle": "蜡烛",
+        "baseline": "基准",
+        "area": "面积",
+        "bar": "OHLC"
+      },
+      "settings": "图表设置",
+      "settingsOptions": {
+        "tooltip": "悬浮数据",
+        "volume": "成交量",
+        "indicators": "MA / VWAP",
+        "previousClose": "昨收参考线"
+      },
       "rangeLabel": "\u8d70\u52bf\u533a\u95f4",
       "rangeAriaLabel": "\u8d70\u52bf\u56fe\u5468\u671f",
       "resetView": "重置视图",
+      "dataDetails": "数据详情",
       "retry": "重新加载",
       "granularity": "K \u7ebf\u7c92\u5ea6\uff1a{value}",
       "currency": "币种：{value}",
