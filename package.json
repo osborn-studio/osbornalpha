@@ -21,6 +21,7 @@
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.46.1",
+    "@swc/helpers": "0.5.23",
     "clsx": "^2.1.1",
     "csv-parse": "^6.2.1",
     "geist": "^1.7.1",
