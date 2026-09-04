@@ -33,6 +33,7 @@ export interface QuoteShape {
   volume_ratio: number | null;
   updated_at: string;
   delayed: boolean;
+  stale?: boolean;
 }
 
 export interface QuoteResolution {

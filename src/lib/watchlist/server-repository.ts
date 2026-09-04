@@ -29,6 +29,26 @@ export async function loadWatchlistRows(client: WatchlistServerClient): Promise<
   return (data ?? []) as unknown as ServerWatchlistRow[];
 }
 
+/**
+ * Research and alert refreshes are user-scoped operations. Keep the ownership
+ * check in the repository so every route uses the same RLS-backed boundary.
+ */
+export async function userOwnsWatchlistTicker(
+  client: WatchlistServerClient,
+  userId: string,
+  ticker: string,
+): Promise<boolean> {
+  const { data, error } = await client
+    .from('watchlist_items')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('ticker', ticker)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`watchlist_item_lookup_failed:${error.message}`);
+  return !!data;
+}
+
 export async function loadWatchlistOverviewRows(client: WatchlistServerClient): Promise<WatchlistOverviewGroupRow[]> {
   const { data, error } = await client.from('watchlists').select(OVERVIEW_SELECT).order('sort_order');
   if (error) throw new Error(error.message);

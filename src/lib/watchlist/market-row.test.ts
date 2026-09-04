@@ -36,4 +36,8 @@ describe('watchlist market rows', () => {
   it('marks explicitly delayed provider quotes as delayed', () => {
     expect(quoteDisplayStatus({ ...quote, delayed: true }, Date.now())).toBe('delayed');
   });
+
+  it('keeps a stale cache fallback distinct from provider-delayed data', () => {
+    expect(quoteDisplayStatus({ ...quote, delayed: true, stale: true }, Date.now())).toBe('stale');
+  });
 });

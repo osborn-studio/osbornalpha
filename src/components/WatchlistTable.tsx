@@ -76,7 +76,7 @@ function validPreferences(value: unknown): value is TablePreferences {
     && typeof input.query === 'string'
     && typeof input.groupFilter === 'string'
     && (input.marketFilter === 'all' || ['A', 'HK', 'US', 'JP', 'KR', 'TW'].includes(String(input.marketFilter)))
-    && (input.statusFilter === 'all' || ['loading', 'live', 'delayed', 'unavailable'].includes(String(input.statusFilter)))
+    && (input.statusFilter === 'all' || ['loading', 'live', 'delayed', 'stale', 'unavailable'].includes(String(input.statusFilter)))
     && (input.density === 'compact' || input.density === 'comfortable');
 }
 
@@ -106,11 +106,12 @@ function QuoteStatus({ row }: { row: WatchlistMarketRow }) {
   const source = quote?.source || t('status.unknownSource');
   const updated = quote?.updated_at ? new Date(quote.updated_at).toLocaleString() : t('status.unknownTime');
   const delayed = row.status === 'delayed';
+  const stale = row.status === 'stale';
   return (
     <div title={`${source} · ${updated}`}>
-      <div className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${delayed ? 'border-warn/25 bg-warn/10 text-warn' : 'border-up/20 bg-up/10 text-up'}`}>
-        <span className={`h-1.5 w-1.5 rounded-full ${delayed ? 'bg-warn' : 'bg-up'}`} />
-        {delayed ? t('status.delayed') : t('status.live')}
+      <div className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${delayed || stale ? 'border-warn/25 bg-warn/10 text-warn' : 'border-up/20 bg-up/10 text-up'}`}>
+        <span className={`h-1.5 w-1.5 rounded-full ${delayed || stale ? 'bg-warn' : 'bg-up'}`} />
+        {stale ? t('status.stale') : delayed ? t('status.delayed') : t('status.live')}
       </div>
       <div className="mt-1 max-w-[118px] truncate text-[9px] text-text-muted">{source}</div>
     </div>
@@ -366,6 +367,7 @@ export function WatchlistTable({
         <span className="inline-flex items-center gap-1.5 text-text-dim"><span className="h-1.5 w-1.5 rounded-full bg-text-muted" />{t('summary.loading')}: {summary.loading}</span>
         <span className="inline-flex items-center gap-1.5 text-up"><span className="h-1.5 w-1.5 rounded-full bg-up" />{t('summary.live')}: {summary.live}</span>
         <span className="inline-flex items-center gap-1.5 text-warn"><span className="h-1.5 w-1.5 rounded-full bg-warn" />{t('summary.delayed')}: {summary.delayed}</span>
+        <span className="inline-flex items-center gap-1.5 text-warn"><span className="h-1.5 w-1.5 rounded-full bg-warn" />{t('summary.stale')}: {summary.stale}</span>
         <span className="inline-flex items-center gap-1.5 text-down"><span className="h-1.5 w-1.5 rounded-full bg-down" />{t('summary.unavailable')}: {summary.unavailable}</span>
         {summary.medianChangePct != null && <span className={changeClass(summary.medianChangePct)}>{t('summary.median')}: {formatPct(summary.medianChangePct)}</span>}
         {summary.breadthPct != null && <span className={changeClass(summary.breadthPct)}>{t('summary.breadth')}: {formatPct(summary.breadthPct)}</span>}
@@ -397,7 +399,7 @@ export function WatchlistTable({
           </select>
           <select value={statusFilter} onChange={(event) => setPreferences((current) => ({ ...current, statusFilter: event.target.value as 'all' | QuoteDisplayStatus }))} aria-label={t('filters.status')} className="px-2 py-1.5 text-xs">
             <option value="all">{t('filters.allStatuses')}</option>
-            {(['live', 'delayed', 'unavailable'] as QuoteDisplayStatus[]).map((status) => <option key={status} value={status}>{t(`status.${status}`)}</option>)}
+            {(['live', 'delayed', 'stale', 'unavailable'] as QuoteDisplayStatus[]).map((status) => <option key={status} value={status}>{t(`status.${status}`)}</option>)}
           </select>
           <button type="button" onClick={() => setPreferences((current) => ({ ...current, density: current.density === 'compact' ? 'comfortable' : 'compact' }))} className="icon-button !h-8 !w-8 !basis-8" title={t(`density.${density}`)} aria-label={t(`density.${density}`)}><Rows3 className="h-3.5 w-3.5" aria-hidden="true" /></button>
           <div ref={columnsRef} className="relative ml-auto shrink-0">

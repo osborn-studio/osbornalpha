@@ -4,6 +4,7 @@
     "all": "All",
     "loading": "Loading",
     "unavailable": "No quote",
-    "delayed": "Delayed"
+    "delayed": "Delayed",
+    "stale": "Stale cache"
   }
 }

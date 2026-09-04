@@ -119,6 +119,7 @@
       "moveToArrow": "→ {name}",
       "removeFromWatchlist": "从股票池移除",
       "fetchFailed": "拉取失败",
+      "stale": "缓存过期",
       "fetchFailedTitle": "行情数据拉取失败",
       "retry": "重试",
       "retryTitle": "重试拉取这只股票",
@@ -192,6 +193,7 @@
         "tracked": "跟踪标的",
         "live": "实时",
         "delayed": "延迟",
+        "stale": "缓存过期",
         "unavailable": "无报价",
         "gainers": "上涨",
         "decliners": "下跌",
@@ -294,6 +296,7 @@
       "loading": "加载中",
       "unavailable": "不可用",
       "delayed": "延迟",
+      "stale": "缓存过期",
       "live": "当前",
       "unknownSource": "未知来源",
       "unknownTime": "未知时间"

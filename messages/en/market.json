@@ -119,6 +119,7 @@
       "moveToArrow": "→ {name}",
       "removeFromWatchlist": "Remove from Watchlist",
       "fetchFailed": "Fetch failed",
+      "stale": "Stale cache",
       "fetchFailedTitle": "Failed to fetch quote data",
       "retry": "Retry",
       "retryTitle": "Retry fetching this stock",
@@ -192,6 +193,7 @@
         "tracked": "Tracked",
         "live": "Live",
         "delayed": "Delayed",
+        "stale": "Stale cache",
         "unavailable": "No quote",
         "gainers": "Gainers",
         "decliners": "Decliners",
@@ -294,6 +296,7 @@
       "loading": "Loading",
       "unavailable": "Unavailable",
       "delayed": "Delayed",
+      "stale": "Stale cache",
       "live": "Current",
       "unknownSource": "Unknown source",
       "unknownTime": "Unknown time"

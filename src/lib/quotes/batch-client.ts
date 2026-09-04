@@ -24,6 +24,11 @@ export interface QuoteBatchPayload<T> {
   };
 }
 
+function markStale<T>(value: T): T {
+  if (!value || typeof value !== 'object') return value;
+  return { ...(value as Record<string, unknown>), stale: true, delayed: true } as T;
+}
+
 export interface QuoteBatchMeta {
   attempted: number;
   failed: number;
@@ -105,6 +110,7 @@ export function mergeQuoteBatchResults<T>(input: {
         if (input.previousQuotes[ticker]) {
           stale += 1;
           selectedSources[ticker] = 'client-cache';
+          quotes[ticker] = markStale(input.previousQuotes[ticker]);
         }
       });
       return;
@@ -136,6 +142,7 @@ export function mergeQuoteBatchResults<T>(input: {
         if (!value && input.previousQuotes[ticker]) {
           stale += 1;
           selectedSources[ticker] = 'client-cache';
+          quotes[ticker] = markStale(input.previousQuotes[ticker]);
         }
       }
     }

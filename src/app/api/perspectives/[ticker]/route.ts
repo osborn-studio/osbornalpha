@@ -27,7 +27,7 @@ import {
   PERSONA_CONCURRENCY_HARD_CAP,
 } from '@/lib/billing/llm-concurrency';
 import { PRICING_VERSION } from '@/lib/billing/llm-pricing';
-import { resolvePerspectiveCitations, searchExternalEvidence } from '@/lib/external-evidence';
+import { normalizeEvidenceTickerParam, resolvePerspectiveCitations, searchExternalEvidence } from '@/lib/external-evidence';
 import { persistStockPerspectives } from '@/lib/stocks/research-artifact-repository';
 import { consumeExternalEvidenceQuota } from '@/lib/external-evidence/quota';
 
@@ -97,7 +97,10 @@ async function finalizeAccounting(
 
 export async function GET(req: Request, { params }: Ctx) {
   const { ticker: raw } = await params;
-  const ticker = decodeURIComponent(raw);
+  const ticker = normalizeEvidenceTickerParam(raw);
+  if (!ticker) {
+    return NextResponse.json({ error: 'invalid_ticker', perspectives: [] }, { status: 400 });
+  }
   const url = new URL(req.url);
   const personaFilter = url.searchParams.get('personas')?.split(',').filter(Boolean);
 

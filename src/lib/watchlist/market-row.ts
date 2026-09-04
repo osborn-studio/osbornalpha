@@ -14,7 +14,7 @@ export interface WatchlistSecurityIdentity {
   m: Market;
 }
 
-export type QuoteDisplayStatus = 'loading' | 'unavailable' | 'delayed' | 'live';
+export type QuoteDisplayStatus = 'loading' | 'unavailable' | 'stale' | 'delayed' | 'live';
 
 export interface WatchlistMarketRow {
   ticker: string;
@@ -28,6 +28,7 @@ export interface WatchlistMarketRow {
 
 export function quoteDisplayStatus(quote: LiveQuote | null, loadedAt: number | null): QuoteDisplayStatus {
   if (!quote || quote.price <= 0) return loadedAt === null ? 'loading' : 'unavailable';
+  if (quote.stale) return 'stale';
   return quote.delayed ? 'delayed' : 'live';
 }
 

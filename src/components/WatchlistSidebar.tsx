@@ -101,7 +101,7 @@ export function WatchlistSidebar({ selectedTicker, onSelect, variant = 'sidebar'
                   const hasQuote = price > 0;
                   const status = !hasQuote && loadedAt !== null
                     ? t('unavailable')
-                    : live?.delayed ? t('delayed') : live?.source || t('loading');
+                    : live?.stale ? t('stale') : live?.delayed ? t('delayed') : live?.source || t('loading');
                   const selected = ticker === selectedTicker;
                   return (
                     <button

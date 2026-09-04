@@ -30,6 +30,7 @@ describe('summarizeWatchlistMarketRows', () => {
       loading: 0,
       live: 2,
       delayed: 1,
+      stale: 0,
       unavailable: 1,
       gainers: 1,
       decliners: 1,

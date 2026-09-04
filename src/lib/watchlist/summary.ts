@@ -6,6 +6,7 @@ export interface WatchlistMarketSummary {
   loading: number;
   live: number;
   delayed: number;
+  stale: number;
   unavailable: number;
   gainers: number;
   decliners: number;
@@ -41,6 +42,7 @@ export function summarizeWatchlistMarketRows(rows: WatchlistMarketRow[]): Watchl
     loading: rows.filter((row) => row.status === 'loading').length,
     live: rows.filter((row) => row.status === 'live').length,
     delayed: rows.filter((row) => row.status === 'delayed').length,
+    stale: rows.filter((row) => row.status === 'stale').length,
     unavailable: rows.filter((row) => row.status === 'unavailable').length,
     gainers,
     decliners,

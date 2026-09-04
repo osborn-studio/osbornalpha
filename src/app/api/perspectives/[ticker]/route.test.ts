@@ -161,6 +161,15 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
     mocks.consumeExternalEvidenceQuota.mockResolvedValue(true);
   });
 
+  it('rejects malformed ticker path parameters before provider work', async () => {
+    const response = await GET(
+      new Request('http://localhost/api/perspectives/%3Cscript%3E'),
+      { params: Promise.resolve({ ticker: '%3Cscript%3E' }) },
+    );
+    expect(response.status).toBe(400);
+    expect(mocks.resolveLlm).not.toHaveBeenCalled();
+  });
+
   it('applies the shared external-evidence quota before quote or search calls', async () => {
     mocks.consumeExternalEvidenceQuota.mockResolvedValue(false);
 

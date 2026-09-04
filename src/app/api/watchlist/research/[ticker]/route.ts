@@ -4,6 +4,7 @@ import { getServerSupabase, serverIsSupabaseConfigured } from '@/lib/supabase/se
 import { loadWatchlistResearchBundle, refreshWatchlistResearch } from '@/lib/watchlist/research-service';
 import { consumeExternalEvidenceQuota } from '@/lib/external-evidence/quota';
 import { watchlistApiError } from '@/lib/watchlist/api-error';
+import { userOwnsWatchlistTicker } from '@/lib/watchlist/server-repository';
 
 interface Context { params: Promise<{ ticker: string }> }
 
@@ -14,6 +15,13 @@ async function authenticatedContext(params: Context['params']) {
   if (!user) return watchlistApiError('not_authenticated', 401);
   const ticker = normalizeEvidenceTickerParam((await params).ticker);
   if (!ticker) return watchlistApiError('invalid_ticker', 400);
+  try {
+    if (!await userOwnsWatchlistTicker(client, user.id, ticker)) {
+      return watchlistApiError('watchlist_item_not_found', 404, { details: { ticker } });
+    }
+  } catch {
+    return watchlistApiError('watchlist_item_lookup_failed', 503);
+  }
   return { client, user, ticker };
 }
 

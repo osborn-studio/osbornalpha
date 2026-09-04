@@ -139,7 +139,7 @@ export async function GET(req: Request) {
     const cached = readQuoteCache(ticker, STALE_TTL_MS);
     if (cached) {
       stale += 1;
-      quotes[ticker] = { ...cached, delayed: true };
+      quotes[ticker] = { ...cached, delayed: true, stale: true };
       selectedSources[ticker] = 'stale-cache';
     } else {
       quotes[ticker] = null;
@@ -163,7 +163,7 @@ export async function GET(req: Request) {
     const cached = readQuoteCache(t, STALE_TTL_MS);
     if (cached) {
       stale += 1;
-      quotes[t] = { ...cached, delayed: true };
+      quotes[t] = { ...cached, delayed: true, stale: true };
       selectedSources[t] = 'stale-cache';
     } else {
       quotes[t] = null;

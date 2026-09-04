@@ -4,6 +4,7 @@
     "all": "全部",
     "loading": "加载中",
     "unavailable": "无报价",
-    "delayed": "延迟"
+    "delayed": "延迟",
+    "stale": "缓存过期"
   }
 }

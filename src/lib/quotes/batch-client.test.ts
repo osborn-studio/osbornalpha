@@ -18,9 +18,9 @@ describe('quote batch client resilience', () => {
   });
 
   it('merges successful chunks and preserves cached quotes for a failed chunk', () => {
-    const cached: Record<string, { ticker: string; price?: number }> = {
+    const cached: Record<string, { ticker: string; price?: number; stale?: boolean; delayed?: boolean }> = {
       A: { ticker: 'A' },
-      B: { ticker: 'B' },
+      B: { ticker: 'B', stale: true, delayed: true },
     };
     const result = mergeQuoteBatchResults({
       tickers: ['A', 'B', 'C'],
@@ -34,7 +34,7 @@ describe('quote batch client resilience', () => {
 
     expect(result.quotes).toEqual({
       A: { ticker: 'A', price: 10 },
-      B: { ticker: 'B' },
+      B: { ticker: 'B', stale: true, delayed: true },
       C: { ticker: 'C', price: 30 },
     });
     expect(result.meta.failed_tickers).toEqual(['B']);

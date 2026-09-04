@@ -42,6 +42,8 @@ export interface LiveQuote {
   volume_ratio: number | null;
   updated_at: string;
   delayed: boolean;
+  /** True when the value is a last-known-good cache fallback. */
+  stale?: boolean;
   supplemented?: string[];
 }
 
@@ -150,11 +152,11 @@ const BATCH_RESULT_TTL_MS = 5_000;
 const batchInflight = new Map<string, Promise<QuoteBatchPayload<LiveQuote>>>();
 const batchResultCache = new Map<string, { payload: QuoteBatchPayload<LiveQuote>; ts: number }>();
 
-async function fetchQuoteBatchChunk(url: string): Promise<QuoteBatchPayload<LiveQuote>> {
+async function fetchQuoteBatchChunk(url: string, callerSignal?: AbortSignal): Promise<QuoteBatchPayload<LiveQuote>> {
   const cached = batchResultCache.get(url);
   if (cached && Date.now() - cached.ts < BATCH_RESULT_TTL_MS) return cached.payload;
   const existing = batchInflight.get(url);
-  if (existing) return existing;
+  if (existing) return callerSignal ? raceWithAbort(existing, callerSignal) : existing;
 
   const request = (async () => {
     for (let attempt = 0; ; attempt += 1) {
@@ -177,11 +179,27 @@ async function fetchQuoteBatchChunk(url: string): Promise<QuoteBatchPayload<Live
     }
   })();
   batchInflight.set(url, request);
-  try {
-    return await request;
-  } finally {
-    if (batchInflight.get(url) === request) batchInflight.delete(url);
-  }
+  request.then(
+    () => { if (batchInflight.get(url) === request) batchInflight.delete(url); },
+    () => { if (batchInflight.get(url) === request) batchInflight.delete(url); },
+  );
+  return callerSignal ? await raceWithAbort(request, callerSignal) : await request;
+}
+
+function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new DOMException('The request was aborted.', 'AbortError'));
+  return new Promise<T>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener('abort', onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(new DOMException('The request was aborted.', 'AbortError'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => { cleanup(); resolve(value); },
+      (error) => { cleanup(); reject(error); },
+    );
+  });
 }
 
 export function useBatchQuotes(
@@ -205,10 +223,11 @@ export function useBatchQuotes(
     }
     let cancelled = false;
     let inFlight = false;
+    const controller = new AbortController();
 
     const fetchChunk = async (chunk: string[], manual: boolean): Promise<QuoteBatchPayload<LiveQuote>> => {
       const url = `/api/quote/batch?tickers=${encodeURIComponent(chunk.join(','))}${manual ? `&_=${bump}` : ''}`;
-      return fetchQuoteBatchChunk(url);
+      return fetchQuoteBatchChunk(url, controller.signal);
     };
 
     const run = async (manual = false) => {
@@ -303,6 +322,7 @@ export function useBatchQuotes(
 
     return () => {
       cancelled = true;
+      controller.abort();
       if (timer) clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };

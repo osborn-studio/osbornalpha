@@ -1,9 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { QuotaNoticeProps } from '@/components/QuotaNotice';
 import type { PerspectiveRow } from '@/lib/hooks/useQuote';
 import type { StockNewsResponse, StockReportsResponse } from '@/lib/stocks/research-types';
+import { createRequestSlot, type RequestSlot } from './request-slot';
 
 interface WatchlistResearchBundleState {
   news: StockNewsResponse | null;
@@ -46,26 +47,47 @@ function bundlePatch(body: Record<string, unknown>) {
 function validBundle(body: unknown): body is Record<string, unknown> {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
   const value = body as Record<string, unknown>;
-  return !!value.news && typeof value.news === 'object'
-    && !!value.reports && typeof value.reports === 'object'
+  return !!value.news && typeof value.news === 'object' && !Array.isArray(value.news)
+    && Array.isArray((value.news as Record<string, unknown>).items)
+    && !!value.reports && typeof value.reports === 'object' && !Array.isArray(value.reports)
+    && Array.isArray((value.reports as Record<string, unknown>).items)
     && Array.isArray(value.perspectives);
 }
 
 export function useWatchlistResearchBundle(ticker: string) {
   const [state, setState] = useState<WatchlistResearchBundleState>(EMPTY);
+  const loadSlot = useRef<RequestSlot | null>(null);
+  const refreshSlot = useRef<RequestSlot | null>(null);
+  const perspectiveSlot = useRef<RequestSlot | null>(null);
+  const generation = useRef(0);
+  if (!loadSlot.current) loadSlot.current = createRequestSlot();
+  if (!refreshSlot.current) refreshSlot.current = createRequestSlot();
+  if (!perspectiveSlot.current) perspectiveSlot.current = createRequestSlot();
 
-  const load = useCallback(async (signal?: AbortSignal) => {
-    setState((current) => ({ ...current, loading: true, error: null }));
+  const cancelAll = useCallback(() => {
+    loadSlot.current!.cancel();
+    refreshSlot.current!.cancel();
+    perspectiveSlot.current!.cancel();
+    generation.current += 1;
+  }, []);
+
+  const load = useCallback(async () => {
+    cancelAll();
+    const lease = loadSlot.current!.begin();
+    const requestGeneration = generation.current;
+    setState((current) => ({ ...current, loading: true, refreshing: false, generating: false, error: null }));
     try {
       const response = await fetch(`/api/watchlist/research/${encodeURIComponent(ticker)}`, {
-        signal,
+        signal: lease.signal,
         cache: 'no-store',
       });
       const body = await response.json().catch(() => null);
       if (!response.ok || !validBundle(body)) throw new Error(body?.error || 'research_unavailable');
-      if (!signal?.aborted) setState((current) => ({ ...current, ...bundlePatch(body), loading: false }));
+      if (loadSlot.current!.isCurrent(lease) && requestGeneration === generation.current) {
+        setState((current) => ({ ...current, ...bundlePatch(body), loading: false }));
+      }
     } catch (error) {
-      if (!signal?.aborted) {
+      if (loadSlot.current!.isCurrent(lease) && requestGeneration === generation.current) {
         setState((current) => ({
           ...current,
           loading: false,
@@ -73,52 +95,66 @@ export function useWatchlistResearchBundle(ticker: string) {
         }));
       }
     }
-  }, [ticker]);
+  }, [cancelAll, ticker]);
 
   useEffect(() => {
-    const controller = new AbortController();
+    generation.current += 1;
     setState(EMPTY);
-    void load(controller.signal);
-    return () => controller.abort();
-  }, [load]);
+    void load();
+    return cancelAll;
+  }, [cancelAll, load]);
 
   const refresh = useCallback(async () => {
-    setState((current) => ({ ...current, refreshing: true, error: null }));
+    cancelAll();
+    const lease = refreshSlot.current!.begin();
+    const requestGeneration = generation.current;
+    setState((current) => ({ ...current, loading: false, refreshing: true, generating: false, error: null }));
     try {
       const response = await fetch(`/api/watchlist/research/${encodeURIComponent(ticker)}`, {
         method: 'POST',
+        signal: lease.signal,
         cache: 'no-store',
       });
       const body = await response.json().catch(() => null);
       if (!response.ok || !validBundle(body)) throw new Error(body?.error || 'research_refresh_failed');
-      setState((current) => ({ ...current, ...bundlePatch(body), refreshing: false }));
+      if (refreshSlot.current!.isCurrent(lease) && requestGeneration === generation.current) {
+        setState((current) => ({ ...current, ...bundlePatch(body), refreshing: false }));
+      }
     } catch (error) {
-      setState((current) => ({
-        ...current,
-        refreshing: false,
-        error: error instanceof Error ? error.message : 'research_refresh_failed',
-      }));
+      if (refreshSlot.current!.isCurrent(lease) && requestGeneration === generation.current) {
+        setState((current) => ({
+          ...current,
+          refreshing: false,
+          error: error instanceof Error ? error.message : 'research_refresh_failed',
+        }));
+      }
     }
-  }, [ticker]);
+  }, [cancelAll, ticker]);
 
   const generatePerspectives = useCallback(async () => {
-    setState((current) => ({ ...current, generating: true, perspectiveError: null, quota: null }));
+    cancelAll();
+    const lease = perspectiveSlot.current!.begin();
+    const requestGeneration = generation.current;
+    setState((current) => ({ ...current, loading: false, refreshing: false, generating: true, perspectiveError: null, quota: null }));
     try {
-      const response = await fetch(`/api/perspectives/${encodeURIComponent(ticker)}`, { cache: 'no-store' });
+      const response = await fetch(`/api/perspectives/${encodeURIComponent(ticker)}`, { signal: lease.signal, cache: 'no-store' });
       const body = await response.json().catch(() => null);
       if (!response.ok || body?.error) {
         const error = new Error(body?.error || 'perspectives_unavailable') as Error & { quota?: QuotaNoticeProps };
         error.quota = body?.quota;
         throw error;
       }
-      setState((current) => ({
-        ...current,
-        perspectives: Array.isArray(body?.perspectives) ? body.perspectives : [],
-        perspectiveSource: typeof body?.source === 'string' ? body.source : null,
-        perspectivesGeneratedAt: typeof body?.meta?.generated_at === 'string' ? body.meta.generated_at : null,
-        generating: false,
-      }));
+      if (perspectiveSlot.current!.isCurrent(lease) && requestGeneration === generation.current) {
+        setState((current) => ({
+          ...current,
+          perspectives: Array.isArray(body?.perspectives) ? body.perspectives : [],
+          perspectiveSource: typeof body?.source === 'string' ? body.source : null,
+          perspectivesGeneratedAt: typeof body?.meta?.generated_at === 'string' ? body.meta.generated_at : null,
+          generating: false,
+        }));
+      }
     } catch (error) {
+      if (!perspectiveSlot.current!.isCurrent(lease) || requestGeneration !== generation.current) return;
       const value = error as Error & { quota?: QuotaNoticeProps };
       setState((current) => ({
         ...current,
@@ -127,7 +163,7 @@ export function useWatchlistResearchBundle(ticker: string) {
         quota: value.quota ?? null,
       }));
     }
-  }, [ticker]);
+  }, [cancelAll, ticker]);
 
   return { ...state, refetch: () => load(), refresh, generatePerspectives };
 }
