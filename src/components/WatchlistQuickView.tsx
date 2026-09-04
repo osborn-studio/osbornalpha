@@ -13,6 +13,7 @@ import { WatchlistDecisionPanel } from '@/components/watchlist/WatchlistDecision
 import { useDialogFocusTrap } from '@/lib/hooks/useDialogFocusTrap';
 import { WatchlistAlertPanel } from '@/components/watchlist/WatchlistAlertPanel';
 import { WatchlistResearchPanel } from '@/components/watchlist/WatchlistResearchPanel';
+import { WatchlistDataStatus } from '@/components/watchlist/WatchlistDataStatus';
 
 type QuickViewTab = 'overview' | 'research' | 'decision' | 'alerts';
 
@@ -132,9 +133,21 @@ export function WatchlistQuickView({
                   <Metric label={t('ma20Distance')} value={optional(historicalMetrics?.ma20DistancePct, '%')} tone={historicalMetrics?.ma20DistancePct == null ? 'text-text' : changeClass(historicalMetrics.ma20DistancePct)} />
                   <Metric label={t('ma50Distance')} value={optional(historicalMetrics?.ma50DistancePct, '%')} tone={historicalMetrics?.ma50DistancePct == null ? 'text-text' : changeClass(historicalMetrics.ma50DistancePct)} />
                   <Metric label={t('rangePosition')} value={optional(historicalMetrics?.rangePositionPct, '%')} />
+                  <Metric label={t('macd')} value={optional(historicalMetrics?.macd)} tone={historicalMetrics?.macd == null ? 'text-text' : changeClass(historicalMetrics.macd)} />
+                  <Metric label={t('macdSignal')} value={optional(historicalMetrics?.macdSignal)} />
+                  <Metric label={t('macdHistogram')} value={optional(historicalMetrics?.macdHistogram)} tone={historicalMetrics?.macdHistogram == null ? 'text-text' : changeClass(historicalMetrics.macdHistogram)} />
+                  <Metric label={t('bollingerPosition')} value={optional(historicalMetrics?.bollingerPositionPct, '%')} />
+                  <Metric label={t('atr14')} value={optional(historicalMetrics?.atr14Pct, '%')} />
                 </div>
+                {historicalMetrics && <div className="mt-3 border-t border-border/70 pt-2 text-[10px] text-text-muted">{t('methodology', { days: historicalMetrics.methodology.annualizationFactor, basis: historicalMetrics.methodology.returnBasis })}</div>}
               </section>
-              <div className="mt-5 flex flex-wrap gap-x-4 gap-y-1 border-t border-border pt-3 text-[10px] text-text-muted"><span>{t('source', { value: quote?.source || '--' })}</span><span>{t('updated', { value: quote?.updated_at ? new Date(quote.updated_at).toLocaleString() : '--' })}</span>{overview?.history?.warnings.map((warning) => <span key={warning} className="text-warn">{warning}</span>)}</div>
+              <div className="mt-5 border-t border-border pt-3">
+                <div className="flex flex-wrap gap-2">
+                  <WatchlistDataStatus label={t('marketSnapshot')} envelope={overview?.market} />
+                  <WatchlistDataStatus label={t('historySnapshot')} envelope={overview?.history} />
+                </div>
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-text-muted"><span>{t('source', { value: quote?.source || '--' })}</span><span>{t('updated', { value: quote?.updated_at ? new Date(quote.updated_at).toLocaleString() : '--' })}</span></div>
+              </div>
             </div>
           )}
           {activeTab === 'research' && visited.has('research') && <div role="tabpanel"><WatchlistResearchPanel ticker={ticker} overview={overview} /></div>}

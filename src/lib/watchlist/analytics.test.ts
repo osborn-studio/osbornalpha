@@ -1,12 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import type { KlineBar } from '@/lib/chart/kline';
-import { calculateHistoricalWatchlistMetrics } from './analytics';
+import { calculateHistoricalWatchlistMetrics, tradingDaysPerYear } from './analytics';
 
 function bar(time: number, close: number, high = close, low = close): KlineBar {
   return { time, open: close, high, low, close, volume: 100, previousClose: null, change: null, changePct: null };
 }
 
 describe('calculateHistoricalWatchlistMetrics', () => {
+  it('uses the selected market calendar for annualised risk metrics', () => {
+    expect(tradingDaysPerYear('US')).toBe(252);
+    expect(tradingDaysPerYear('A')).toBe(244);
+    const bars = Array.from({ length: 30 }, (_, index) => bar(index + 1, 100 + index));
+    const us = calculateHistoricalWatchlistMetrics(bars, { market: 'US' });
+    const aShare = calculateHistoricalWatchlistMetrics(bars, { market: 'A' });
+    expect(us.methodology.annualizationFactor).toBe(252);
+    expect(aShare.methodology.annualizationFactor).toBe(244);
+    expect(aShare.annualizedVolatilityPct).toBeLessThan(us.annualizedVolatilityPct!);
+  });
+
   it('calculates price return, drawdown and range position from honest bar data', () => {
     const metrics = calculateHistoricalWatchlistMetrics([
       bar(1, 100, 102, 98),
@@ -39,6 +50,11 @@ describe('calculateHistoricalWatchlistMetrics', () => {
       rsi14: null,
       ma20DistancePct: null,
       ma50DistancePct: null,
+      macd: null,
+      macdSignal: null,
+      macdHistogram: null,
+      bollingerPositionPct: null,
+      atr14Pct: null,
       benchmarkTicker: null,
       benchmarkReturnPct: null,
       excessReturnPct: null,
@@ -63,6 +79,20 @@ describe('calculateHistoricalWatchlistMetrics', () => {
     expect(metrics.rsi14).toBe(100);
     expect(metrics.ma20DistancePct).toBeGreaterThan(0);
     expect(metrics.ma50DistancePct).toBeGreaterThan(0);
+  });
+
+  it('calculates MACD, Bollinger position, and ATR from sufficient history', () => {
+    const bars = Array.from({ length: 80 }, (_, index) => {
+      const close = 100 + index * 0.35 + Math.sin(index / 3);
+      return bar(index + 1, close, close + 2, close - 2);
+    });
+    const metrics = calculateHistoricalWatchlistMetrics(bars, { market: 'US' });
+    expect(metrics.macd).not.toBeNull();
+    expect(metrics.macdSignal).not.toBeNull();
+    expect(metrics.macdHistogram).not.toBeNull();
+    expect(metrics.bollingerPositionPct).toBeGreaterThanOrEqual(0);
+    expect(metrics.bollingerPositionPct).toBeLessThanOrEqual(100);
+    expect(metrics.atr14Pct).toBeGreaterThan(0);
   });
 
   it('aligns benchmark sessions by trading date across timestamp encodings', () => {

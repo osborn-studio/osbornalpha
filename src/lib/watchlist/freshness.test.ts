@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { watchlistTimestampFreshness } from './freshness';
+import { watchlistMarketFreshness, watchlistTimestampFreshness } from './freshness';
 
 const now = new Date('2026-09-04T12:00:00.000Z');
 
@@ -14,5 +14,11 @@ describe('watchlist timestamp freshness', () => {
     expect(watchlistTimestampFreshness(null, now)).toBe('unavailable');
     expect(watchlistTimestampFreshness('not-a-date', now)).toBe('unavailable');
     expect(watchlistTimestampFreshness('2026-09-04T12:06:00.000Z', now)).toBe('unavailable');
+  });
+
+  it('allows a normal weekend market close but expires old market data', () => {
+    expect(watchlistMarketFreshness('2026-09-03T12:00:00.000Z', now)).toBe('fresh');
+    expect(watchlistMarketFreshness('2026-09-02T00:00:00.000Z', now)).toBe('stale');
+    expect(watchlistMarketFreshness('2026-08-01T00:00:00.000Z', now)).toBe('unavailable');
   });
 });

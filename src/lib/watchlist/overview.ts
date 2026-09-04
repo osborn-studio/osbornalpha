@@ -11,11 +11,23 @@ import {
 import { classifyMarket } from '@/lib/utils';
 import { marketPhase } from '@/lib/today/clock';
 import type { DataEnvelope, WatchlistMarketSnapshot } from './overview-contract';
+import { watchlistMarketFreshness } from './freshness';
 export type { DataEnvelope, WatchlistMarketSnapshot } from './overview-contract';
 
 const loadMarket = unstable_cache(async (ticker: string, locale: AppLocale) => {
   const radar = await buildRadar(ticker, locale);
   const state = marketPhase(classifyMarket(ticker), new Date());
+  // Radar's as_of is the composition time, not the market observation time.
+  // Do not use it as a freshness surrogate when a provider omits updated_at.
+  const asOf = radar.sections.price.updated_at ?? null;
+  const freshness = watchlistMarketFreshness(asOf);
+  const hasPrice = radar.sections.price.value != null && radar.sections.price.value > 0;
+  const delayed = radar.sections.price.delayed === true;
+  const status = !hasPrice || freshness === 'unavailable'
+    ? 'unavailable' as const
+    : delayed
+      ? 'delayed' as const
+      : freshness === 'stale' ? 'stale' as const : 'fresh' as const;
   return {
     value: {
       quote: {
@@ -40,10 +52,14 @@ const loadMarket = unstable_cache(async (ticker: string, locale: AppLocale) => {
         title: event.title,
       })),
     },
-    asOf: radar.as_of,
+    asOf,
     source: radar.sections.price.source || null,
-    status: radar.sections.price.value == null ? 'unavailable' : 'fresh',
-    warnings: [],
+    status,
+    warnings: [
+      ...(delayed ? ['quote_delayed'] : []),
+      ...(freshness === 'stale' ? ['quote_stale'] : []),
+      ...(freshness === 'unavailable' ? ['quote_timestamp_unavailable'] : []),
+    ],
   } satisfies DataEnvelope<WatchlistMarketSnapshot>;
 }, ['watchlist-overview-market-v1'], { revalidate: 60 });
 
@@ -63,6 +79,7 @@ function historyEnvelope(
     value: calculateHistoricalWatchlistMetrics(result.bars, {
       benchmarkBars: benchmark?.bars ?? [],
       benchmarkTicker,
+      market: classifyMarket(ticker),
       adjustment: result.adjustment,
       riskFreeRatePct: 0,
     }),

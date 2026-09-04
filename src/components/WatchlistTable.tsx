@@ -17,6 +17,7 @@ import {
 } from '@/lib/watchlist/market-row';
 import { WatchlistMobileList } from '@/components/watchlist/WatchlistMobileList';
 import type { WatchlistOverviewRow as WatchlistOverviewClientRow } from '@/lib/watchlist/overview-contract';
+import { summarizeWatchlistMarketRows } from '@/lib/watchlist/summary';
 import { usePersistentState } from '@/lib/hooks/usePersistentState';
 import { useDismissableLayer } from '@/lib/hooks/useDismissableLayer';
 
@@ -24,6 +25,7 @@ type ColumnKey =
   | 'ticker' | 'name' | 'price' | 'change' | 'open' | 'prevClose' | 'dayRange' | 'volume' | 'amount'
   | 'marketCap' | 'pe' | 'pb' | 'turnover' | 'volumeRatio' | 'amplitude'
   | 'dayPosition' | 'oneYearReturn' | 'volatility' | 'maxDrawdown' | 'rangePosition'
+  | 'rsi14' | 'macdHistogram' | 'bollingerPosition' | 'atr14'
   | 'research' | 'decision' | 'quality' | 'updated' | 'group';
 type PresetKey = 'market' | 'valuation' | 'risk';
 type Density = 'compact' | 'comfortable';
@@ -43,19 +45,19 @@ interface TablePreferences {
 const ALL_COLUMNS: ColumnKey[] = [
   'ticker', 'name', 'price', 'change', 'open', 'prevClose', 'dayRange', 'volume', 'amount', 'marketCap',
   'pe', 'pb', 'turnover', 'volumeRatio', 'amplitude', 'dayPosition', 'quality', 'updated', 'group',
-  'oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition', 'research', 'decision',
+  'oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition', 'rsi14', 'macdHistogram', 'bollingerPosition', 'atr14', 'research', 'decision',
 ];
 
 const PRESET_COLUMNS: Record<PresetKey, ColumnKey[]> = {
   market: ['ticker', 'name', 'price', 'change', 'open', 'dayRange', 'volume', 'amount', 'volumeRatio', 'updated', 'group'],
   valuation: ['ticker', 'name', 'price', 'change', 'marketCap', 'pe', 'pb', 'turnover', 'updated', 'group'],
-  risk: ['ticker', 'name', 'price', 'change', 'oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition', 'research', 'decision', 'updated', 'group'],
+  risk: ['ticker', 'name', 'price', 'change', 'oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition', 'rsi14', 'macdHistogram', 'bollingerPosition', 'atr14', 'research', 'decision', 'updated', 'group'],
 };
 
 const NUMERIC_COLUMNS = new Set<ColumnKey>([
   'price', 'change', 'open', 'prevClose', 'volume', 'amount', 'marketCap', 'pe', 'pb', 'turnover',
   'volumeRatio', 'amplitude', 'dayPosition', 'quality', 'updated',
-  'oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition',
+  'oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition', 'rsi14', 'macdHistogram', 'bollingerPosition', 'atr14',
 ]);
 
 const DEFAULT_PREFERENCES: TablePreferences = {
@@ -138,6 +140,10 @@ function metricValue(row: WatchlistMarketRow, key: ColumnKey, overview?: Watchli
     case 'volatility': return overview?.history?.value?.annualizedVolatilityPct ?? -Infinity;
     case 'maxDrawdown': return overview?.history?.value?.maxDrawdownPct ?? -Infinity;
     case 'rangePosition': return overview?.history?.value?.rangePositionPct ?? -1;
+    case 'rsi14': return overview?.history?.value?.rsi14 ?? -1;
+    case 'macdHistogram': return overview?.history?.value?.macdHistogram ?? -Infinity;
+    case 'bollingerPosition': return overview?.history?.value?.bollingerPositionPct ?? -1;
+    case 'atr14': return overview?.history?.value?.atr14Pct ?? -1;
     case 'research': return overview?.research.value?.recentNewsCount ?? -1;
     case 'decision': return overview?.item.status ?? '';
     case 'quality': return dataQuality(quote);
@@ -217,15 +223,7 @@ export function WatchlistTable({
     return asc ? result : -result;
   }), [asc, filtered, overviewByTicker, sortKey]);
 
-  const quotedRows = filtered.filter((row) => row.quote && row.quote.price > 0);
-  const summary = {
-    tracked: filtered.length,
-    gainers: quotedRows.filter((row) => row.quote!.change_pct > 0).length,
-    decliners: quotedRows.filter((row) => row.quote!.change_pct < 0).length,
-    average: quotedRows.length
-      ? quotedRows.reduce((sum, row) => sum + row.quote!.change_pct, 0) / quotedRows.length
-      : null,
-  };
+  const summary = summarizeWatchlistMarketRows(filtered);
   const allVisibleSelected = sorted.length > 0 && sorted.every((row) => selected.has(row.ticker));
   const toggleSelection = (ticker: string) => setSelected((current) => {
     const next = new Set(current);
@@ -316,6 +314,18 @@ export function WatchlistTable({
           <div className="ml-auto w-24"><div className="h-1.5 overflow-hidden rounded bg-border"><div className="h-full bg-accent" style={{ width: `${value}%` }} /></div><div className="mt-1 text-[10px] text-text-dim">{value.toFixed(0)}%</div></div>
         );
       }
+      case 'rsi14': return optionalNumber(overview?.history?.value?.rsi14);
+      case 'macdHistogram': {
+        const value = overview?.history?.value?.macdHistogram;
+        return value == null ? <span className="text-text-muted">--</span> : <span className={changeClass(value)}>{value.toFixed(2)}</span>;
+      }
+      case 'bollingerPosition': {
+        const value = overview?.history?.value?.bollingerPositionPct;
+        return value == null ? <span className="text-text-muted">--</span> : (
+          <div className="ml-auto w-24"><div className="h-1.5 overflow-hidden rounded bg-border"><div className="h-full bg-accent" style={{ width: `${value}%` }} /></div><div className="mt-1 text-[10px] text-text-dim">{value.toFixed(0)}%</div></div>
+        );
+      }
+      case 'atr14': return optionalNumber(overview?.history?.value?.atr14Pct, '%');
       case 'research': {
         const research = overview?.research.value;
         if (!research) return <span className="text-text-muted">--</span>;
@@ -342,7 +352,7 @@ export function WatchlistTable({
           [t('summary.tracked'), summary.tracked, 'text-text', 'bg-accent'],
           [t('summary.gainers'), summary.gainers, 'text-up', 'bg-up'],
           [t('summary.decliners'), summary.decliners, 'text-down', 'bg-down'],
-          [t('summary.average'), summary.average == null ? '--' : formatPct(summary.average), summary.average == null ? 'text-text-muted' : changeClass(summary.average), summary.average != null && summary.average < 0 ? 'bg-down' : 'bg-up'],
+          [t('summary.average'), summary.averageChangePct == null ? '--' : formatPct(summary.averageChangePct), summary.averageChangePct == null ? 'text-text-muted' : changeClass(summary.averageChangePct), summary.averageChangePct != null && summary.averageChangePct < 0 ? 'bg-down' : 'bg-up'],
         ].map(([label, value, tone, accent]) => (
           <div key={String(label)} className="relative overflow-hidden bg-bg-card px-4 py-3">
             <span className={`absolute inset-y-0 left-0 w-0.5 ${accent}`} />
@@ -350,6 +360,14 @@ export function WatchlistTable({
             <div className={`mt-0.5 text-lg font-bold tabular-nums ${tone}`}>{value}</div>
           </div>
         ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border bg-bg-card px-4 py-2 text-[10px] text-text-muted" aria-label={t('summary.quoteStatusAriaLabel')}>
+        <span className="font-medium text-text-dim">{t('summary.quoteStatus')}</span>
+        <span className="inline-flex items-center gap-1.5 text-up"><span className="h-1.5 w-1.5 rounded-full bg-up" />{t('summary.live')}: {summary.live}</span>
+        <span className="inline-flex items-center gap-1.5 text-warn"><span className="h-1.5 w-1.5 rounded-full bg-warn" />{t('summary.delayed')}: {summary.delayed}</span>
+        <span className="inline-flex items-center gap-1.5 text-down"><span className="h-1.5 w-1.5 rounded-full bg-down" />{t('summary.unavailable')}: {summary.unavailable}</span>
+        {summary.medianChangePct != null && <span className={changeClass(summary.medianChangePct)}>{t('summary.median')}: {formatPct(summary.medianChangePct)}</span>}
+        {summary.breadthPct != null && <span className={changeClass(summary.breadthPct)}>{t('summary.breadth')}: {formatPct(summary.breadthPct)}</span>}
       </div>
 
       <div className="flex flex-col gap-2 border-b border-border bg-bg-elevated/70 px-3 py-3 xl:flex-row xl:items-center">

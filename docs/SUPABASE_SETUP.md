@@ -57,6 +57,14 @@ npm run watchlist:production-check
 
 输出中的六项检查必须全部为 `"ok": true`，再进行 Watchlist 登录态验收；其中 release marker 用于确认最新的状态过滤函数确实已应用。
 
+Vercel 发布后可运行无副作用的 runtime verifier。它不会发送 Cron secret，也不会执行告警或研究任务；只验证页面存在、Cron 路由已安装并且未授权请求会被拒绝：
+
+```bash
+WATCHLIST_RUNTIME_URL=https://stock-monitor-nu.vercel.app npm run watchlist:runtime-check
+```
+
+如果 Cron 路由返回 `404`，说明生产仍在运行旧部署或 Vercel 项目绑定未指向当前 `main`，此时先处理部署切换，再进行 Cron 首次运行验收。
+
 ## Step 4: 灌入 seed 数据
 
 ```bash

@@ -16,6 +16,7 @@
     "e2e": "playwright test",
     "preflight:release": "tsx scripts/release-preflight.ts",
     "watchlist:production-check": "tsx scripts/watchlist-production-check.ts",
+    "watchlist:runtime-check": "tsx scripts/watchlist-runtime-check.ts",
     "securities:sync": "tsx scripts/securities-sync.ts",
     "securities:reconcile": "tsx scripts/securities-reconcile.ts"
   },
