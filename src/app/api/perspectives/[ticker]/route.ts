@@ -30,6 +30,7 @@ import { PRICING_VERSION } from '@/lib/billing/llm-pricing';
 import { normalizeEvidenceTickerParam, resolvePerspectiveCitations, searchExternalEvidence } from '@/lib/external-evidence';
 import { persistStockPerspectives } from '@/lib/stocks/research-artifact-repository';
 import { consumeExternalEvidenceQuota } from '@/lib/external-evidence/quota';
+import type { PerspectiveProvenance } from '@/lib/stocks/research-types';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 86400;
@@ -38,6 +39,8 @@ export const maxDuration = 60;  // Vercel function timeout
 interface Ctx { params: Promise<{ ticker: string }> }
 
 const MAX_PERSONA_OUTPUT_TOKENS = 400;
+// Bump when persona instructions or the injected context contract changes.
+const PERSPECTIVE_PROMPT_VERSION = 'watchlist-perspectives-2026-09-04.v1';
 const COST_ERROR_CODES = new Set([
   'daily_cost_exhausted',
   'pricing_unavailable',
@@ -434,6 +437,23 @@ export async function GET(req: Request, { params }: Ctx) {
   const aggregate = accounting.length > 0 ? aggregateMeteredUsage(accounting) : null;
   const budgetConfig = getBudgetConfig();
   const generatedAt = new Date().toISOString();
+  const perspectiveProvenance: PerspectiveProvenance = {
+    modelVersion: llm.model,
+    promptVersion: PERSPECTIVE_PROMPT_VERSION,
+    // An unavailable/error snapshot may still carry an internal UUID for
+    // tracing, but it is not an auditable evidence request. Keep that ID out
+    // of user-facing provenance so the UI cannot imply citations exist.
+    evidenceRequestId: evidence.status === 'complete' || evidence.status === 'partial'
+      ? evidence.requestId
+      : null,
+    evidenceFetchedAt: evidence.status === 'complete' || evidence.status === 'partial'
+      ? evidence.fetchedAt
+      : null,
+    evidenceResultCount: evidence.results.length,
+    evidenceCoverageRatio: perspectives.length > 0
+      ? perspectives.filter((item) => item.citations && item.citations.length > 0).length / perspectives.length
+      : 0,
+  };
   const persistenceWarnings: string[] = [];
   try {
     await persistStockPerspectives(userDb, userId, {
@@ -441,6 +461,7 @@ export async function GET(req: Request, { params }: Ctx) {
       generationId: usageAuditKey,
       source: `${llm.provider}:${llm.model}`,
       createdAt: generatedAt,
+      provenance: perspectiveProvenance,
       perspectives,
     });
   } catch {
@@ -459,6 +480,7 @@ export async function GET(req: Request, { params }: Ctx) {
       duration_ms: Date.now() - startedAt,
       provider: llm.provider,
       model: llm.model,
+      prompt_version: PERSPECTIVE_PROMPT_VERSION,
       personas_attempted: enabled.length,
       personas_succeeded: perspectives.length,
       tokens: {
@@ -478,7 +500,9 @@ export async function GET(req: Request, { params }: Ctx) {
         result_count: evidence.results.length,
         fetched_at: evidence.fetchedAt,
         warnings: evidence.warnings,
+        coverage_ratio: perspectiveProvenance.evidenceCoverageRatio,
       },
+      provenance: perspectiveProvenance,
     },
   });
 }

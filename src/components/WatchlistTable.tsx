@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
-import { ArrowDown, ArrowUp, Columns3, LoaderCircle, Minus, MoveRight, PanelRightOpen, Plus, Rows3, Search, Tag, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Bookmark, BookmarkPlus, Columns3, LoaderCircle, Minus, MoveRight, PanelRightOpen, Plus, Rows3, Search, Tag, Trash2, X } from 'lucide-react';
 import { formatChange, formatPct, formatPrice, formatVolume, changeClass } from '@/lib/utils';
 import type { Market } from '@/lib/supabase/database.types';
 import type { LiveQuote } from '@/lib/hooks/useQuote';
@@ -40,6 +40,12 @@ interface TablePreferences {
   marketFilter: 'all' | Market;
   statusFilter: 'all' | QuoteDisplayStatus;
   density: Density;
+}
+
+interface SavedTableView {
+  id: string;
+  name: string;
+  preferences: TablePreferences;
 }
 
 const ALL_COLUMNS: ColumnKey[] = [
@@ -84,6 +90,17 @@ function validPreferences(value: unknown): value is TablePreferences {
     && (input.density === 'compact' || input.density === 'comfortable');
 }
 
+function validSavedViews(value: unknown): value is SavedTableView[] {
+  return Array.isArray(value) && value.length <= 12 && value.every((item) => (
+    !!item && typeof item === 'object' && !Array.isArray(item)
+    && typeof (item as SavedTableView).id === 'string'
+    && typeof (item as SavedTableView).name === 'string'
+    && (item as SavedTableView).name.trim().length > 0
+    && (item as SavedTableView).name.length <= 40
+    && validPreferences((item as SavedTableView).preferences)
+  ));
+}
+
 function optionalNumber(value: number | null | undefined, suffix = '') {
   return value == null || !Number.isFinite(value)
     ? <span className="text-text-muted">--</span>
@@ -98,7 +115,15 @@ function dayPosition(quote: LiveQuote | null): number | null {
 function dataQuality(quote: LiveQuote | null): number {
   if (!quote) return 0;
   const values = [quote.price, quote.prev_close, quote.volume, quote.amount, quote.market_cap, quote.pe_ttm, quote.pb, quote.turnover, quote.volume_ratio];
-  return Math.round((values.filter((value) => value != null && Number.isFinite(value) && value !== 0).length / values.length) * 100);
+  // Zero is a valid observation for fields such as turnover or volume during
+  // a halt. Missingness must be represented by null/undefined, not by value.
+  return Math.round((values.filter((value) => value != null && Number.isFinite(value)).length / values.length) * 100);
+}
+
+function intradayRangePct(quote: LiveQuote | null): number | null {
+  if (!quote || !Number.isFinite(quote.high) || !Number.isFinite(quote.low) || quote.high < quote.low) return null;
+  const baseline = Number.isFinite(quote.prev_close) && quote.prev_close > 0 ? quote.prev_close : quote.price;
+  return baseline > 0 ? ((quote.high - quote.low) / baseline) * 100 : null;
 }
 
 function QuoteStatus({ row }: { row: WatchlistMarketRow }) {
@@ -122,37 +147,39 @@ function QuoteStatus({ row }: { row: WatchlistMarketRow }) {
   );
 }
 
-function metricValue(row: WatchlistMarketRow, key: ColumnKey, overview?: WatchlistOverviewClientRow): string | number {
+function metricValue(row: WatchlistMarketRow, key: ColumnKey, overview?: WatchlistOverviewClientRow): string | number | null {
   const quote = row.quote;
   switch (key) {
     case 'ticker': return row.ticker;
     case 'name': return row.name;
-    case 'price': return quote?.price ?? -1;
-    case 'change': return quote?.change_pct ?? -Infinity;
-    case 'open': return quote?.open ?? -1;
-    case 'prevClose': return quote?.prev_close ?? -1;
-    case 'dayRange': return quote?.high ?? -1;
-    case 'volume': return quote?.volume ?? -1;
-    case 'amount': return quote?.amount ?? -1;
-    case 'marketCap': return quote?.market_cap ?? -1;
-    case 'pe': return quote?.pe_ttm ?? -Infinity;
-    case 'pb': return quote?.pb ?? -Infinity;
-    case 'turnover': return quote?.turnover ?? -Infinity;
-    case 'volumeRatio': return quote?.volume_ratio ?? -Infinity;
-    case 'amplitude': return quote?.amplitude ?? -Infinity;
-    case 'dayPosition': return dayPosition(quote) ?? -1;
-    case 'oneYearReturn': return overview?.history?.value?.periodReturnPct ?? -Infinity;
-    case 'volatility': return overview?.history?.value?.annualizedVolatilityPct ?? -Infinity;
-    case 'maxDrawdown': return overview?.history?.value?.maxDrawdownPct ?? -Infinity;
-    case 'rangePosition': return overview?.history?.value?.rangePositionPct ?? -1;
-    case 'rsi14': return overview?.history?.value?.rsi14 ?? -1;
-    case 'macdHistogram': return overview?.history?.value?.macdHistogram ?? -Infinity;
-    case 'bollingerPosition': return overview?.history?.value?.bollingerPositionPct ?? -1;
-    case 'atr14': return overview?.history?.value?.atr14Pct ?? -1;
-    case 'research': return overview?.research.value?.recentNewsCount ?? -1;
+    case 'price': return quote?.price ?? null;
+    case 'change': return quote?.change_pct ?? null;
+    case 'open': return quote?.open ?? null;
+    case 'prevClose': return quote?.prev_close ?? null;
+    // The cell renders a high/low pair. Sort by the normalized range width so
+    // the order remains meaningful across different price levels.
+    case 'dayRange': return intradayRangePct(quote);
+    case 'volume': return quote?.volume ?? null;
+    case 'amount': return quote?.amount ?? null;
+    case 'marketCap': return quote?.market_cap ?? null;
+    case 'pe': return quote?.pe_ttm ?? null;
+    case 'pb': return quote?.pb ?? null;
+    case 'turnover': return quote?.turnover ?? null;
+    case 'volumeRatio': return quote?.volume_ratio ?? null;
+    case 'amplitude': return quote?.amplitude ?? null;
+    case 'dayPosition': return dayPosition(quote);
+    case 'oneYearReturn': return overview?.history?.value?.periodReturnPct ?? null;
+    case 'volatility': return overview?.history?.value?.annualizedVolatilityPct ?? null;
+    case 'maxDrawdown': return overview?.history?.value?.maxDrawdownPct ?? null;
+    case 'rangePosition': return overview?.history?.value?.rangePositionPct ?? null;
+    case 'rsi14': return overview?.history?.value?.rsi14 ?? null;
+    case 'macdHistogram': return overview?.history?.value?.macdHistogram ?? null;
+    case 'bollingerPosition': return overview?.history?.value?.bollingerPositionPct ?? null;
+    case 'atr14': return overview?.history?.value?.atr14Pct ?? null;
+    case 'research': return overview?.research.value?.recentNewsCount ?? null;
     case 'decision': return overview?.item.status ?? '';
     case 'quality': return dataQuality(quote);
-    case 'updated': return quote?.updated_at ? Date.parse(quote.updated_at) : -1;
+    case 'updated': return quote?.updated_at ? Date.parse(quote.updated_at) : null;
     case 'group': return row.group;
   }
 }
@@ -188,13 +215,18 @@ export function WatchlistTable({
 }) {
   const t = useTranslations('market.table');
   const [preferences, setPreferences] = usePersistentState('stock-monitor:watchlist:table-preferences-v1', DEFAULT_PREFERENCES, validPreferences);
+  const [savedViews, setSavedViews] = usePersistentState<SavedTableView[]>('stock-monitor:watchlist:table-views-v1', [], validSavedViews);
   const [columnsOpen, setColumnsOpen] = useState(false);
+  const [viewsOpen, setViewsOpen] = useState(false);
+  const [viewName, setViewName] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [batchGroupId, setBatchGroupId] = useState(groups[0]?.id ?? '');
   const [batchTag, setBatchTag] = useState('');
   const [tagSaving, setTagSaving] = useState(false);
   const columnsRef = useRef<HTMLDivElement>(null);
+  const viewsRef = useRef<HTMLDivElement>(null);
   useDismissableLayer(columnsRef, columnsOpen, () => setColumnsOpen(false));
+  useDismissableLayer(viewsRef, viewsOpen, () => setViewsOpen(false));
   const { sortKey, asc, preset, visibleColumns, query, groupFilter, marketFilter, statusFilter, density } = preferences;
 
   const rows = useMemo(
@@ -222,6 +254,12 @@ export function WatchlistTable({
   const sorted = useMemo(() => [...filtered].sort((left, right) => {
     const a = metricValue(left, sortKey, overviewByTicker[left.ticker]);
     const b = metricValue(right, sortKey, overviewByTicker[right.ticker]);
+    const aMissing = a == null || a === '';
+    const bMissing = b == null || b === '';
+    if (aMissing || bMissing) {
+      if (aMissing && bMissing) return 0;
+      return aMissing ? 1 : -1;
+    }
     const result = typeof a === 'string' && typeof b === 'string'
       ? a.localeCompare(b)
       : Number(a) - Number(b);
@@ -250,6 +288,19 @@ export function WatchlistTable({
 
   const applyPreset = (next: PresetKey) => {
     setPreferences((current) => ({ ...current, preset: next, visibleColumns: PRESET_COLUMNS[next] }));
+  };
+
+  const saveCurrentView = () => {
+    const name = viewName.trim().slice(0, 40);
+    if (!name) return;
+    const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}`;
+    setSavedViews((current) => [{ id, name, preferences: { ...preferences, visibleColumns: [...preferences.visibleColumns] } }, ...current.filter((view) => view.name !== name)].slice(0, 12));
+    setViewName('');
+  };
+
+  const loadSavedView = (view: SavedTableView) => {
+    setPreferences({ ...view.preferences, visibleColumns: [...view.preferences.visibleColumns] });
+    setViewsOpen(false);
   };
 
   const toggleColumn = (column: ColumnKey) => {
@@ -288,8 +339,8 @@ export function WatchlistTable({
       case 'open': return hasQuote ? <span className="tabular-nums">{formatPrice(quote.open, row.currency)}</span> : <span className="text-text-muted">--</span>;
       case 'prevClose': return hasQuote ? <span className="tabular-nums">{formatPrice(quote.prev_close, row.currency)}</span> : <span className="text-text-muted">--</span>;
       case 'dayRange': return hasQuote ? <><div className="tabular-nums">{formatPrice(quote.high, row.currency)}</div><div className="text-[10px] text-text-dim">{formatPrice(quote.low, row.currency)}</div></> : <span className="text-text-muted">--</span>;
-      case 'volume': return hasQuote && quote.volume > 0 ? formatVolume(quote.volume) : <span className="text-text-muted">--</span>;
-      case 'amount': return hasQuote && quote.amount > 0 ? formatVolume(quote.amount) : <span className="text-text-muted">--</span>;
+      case 'volume': return hasQuote && Number.isFinite(quote.volume) ? formatVolume(quote.volume) : <span className="text-text-muted">--</span>;
+      case 'amount': return hasQuote && Number.isFinite(quote.amount) ? formatVolume(quote.amount) : <span className="text-text-muted">--</span>;
       case 'marketCap': return quote?.market_cap_label && quote.market_cap_label !== '—' ? quote.market_cap_label : <span className="text-text-muted">--</span>;
       case 'pe': return optionalNumber(quote?.pe_ttm);
       case 'pb': return optionalNumber(quote?.pb);
@@ -406,6 +457,20 @@ export function WatchlistTable({
             <option value="all">{t('filters.allStatuses')}</option>
             {(['live', 'delayed', 'stale', 'unavailable'] as QuoteDisplayStatus[]).map((status) => <option key={status} value={status}>{t(`status.${status}`)}</option>)}
           </select>
+          <div ref={viewsRef} className="relative shrink-0">
+            <button type="button" onClick={() => setViewsOpen((open) => !open)} aria-expanded={viewsOpen} className="icon-button !h-8 !w-8 !basis-8" title={t('views.action')} aria-label={t('views.action')}>
+              <Bookmark className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+            {viewsOpen && <div className="absolute right-0 top-full z-30 mt-1 w-64 rounded-md border border-border bg-bg-elevated p-2 shadow-xl">
+              <form className="flex items-center gap-1.5" onSubmit={(event) => { event.preventDefault(); saveCurrentView(); }}>
+                <input value={viewName} maxLength={40} onChange={(event) => setViewName(event.target.value)} placeholder={t('views.namePlaceholder')} aria-label={t('views.namePlaceholder')} className="h-8 min-w-0 flex-1 px-2 text-xs" />
+                <button type="submit" disabled={!viewName.trim()} className="icon-button !h-8 !w-8 !basis-8" title={t('views.save')} aria-label={t('views.save')}><BookmarkPlus className="h-3.5 w-3.5" aria-hidden="true" /></button>
+              </form>
+              <div className="mt-2 border-t border-border pt-1">
+                {savedViews.length === 0 ? <div className="px-1 py-2 text-[10px] text-text-muted">{t('views.empty')}</div> : savedViews.map((view) => <div key={view.id} className="flex items-center gap-1 rounded px-1 py-1 hover:bg-bg-card"><button type="button" onClick={() => loadSavedView(view)} className="min-w-0 flex-1 truncate text-left text-xs text-text-dim hover:text-text">{view.name}</button><button type="button" onClick={() => setSavedViews((current) => current.filter((item) => item.id !== view.id))} className="icon-button !h-6 !w-6 !basis-6 border-transparent bg-transparent" title={t('views.delete')} aria-label={t('views.delete')}><Trash2 className="h-3 w-3" aria-hidden="true" /></button></div>)}
+              </div>
+            </div>}
+          </div>
           <button type="button" onClick={() => setPreferences((current) => ({ ...current, density: current.density === 'compact' ? 'comfortable' : 'compact' }))} className="icon-button !h-8 !w-8 !basis-8" title={t(`density.${density}`)} aria-label={t(`density.${density}`)}><Rows3 className="h-3.5 w-3.5" aria-hidden="true" /></button>
           <div ref={columnsRef} className="relative ml-auto shrink-0">
             <button type="button" onClick={() => setColumnsOpen((open) => !open)} aria-expanded={columnsOpen} className="icon-button !h-8 !w-8 !basis-8" title={t('columns.action')} aria-label={t('columns.action')}>

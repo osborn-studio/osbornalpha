@@ -516,6 +516,7 @@ export default function WatchlistPage() {
         <WatchlistSyncConflict
           onUseServer={() => resolveSyncConflict('server')}
           onKeepLocal={() => resolveSyncConflict('local')}
+          onMerge={() => resolveSyncConflict('merge')}
         />
       )}
 

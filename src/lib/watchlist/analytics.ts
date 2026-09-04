@@ -46,6 +46,7 @@ export interface HistoricalWatchlistMetrics {
   benchmarkObservations: number;
   benchmarkAlignedObservations: number;
   benchmarkAlignmentRatio: number | null;
+  benchmarkStatus: 'unavailable' | 'limited' | 'reliable';
   sampleSize: number;
   methodology: {
     returnBasis: 'price';
@@ -186,6 +187,7 @@ function benchmarkMetrics(
       benchmarkTicker, benchmarkReturnPct: null, excessReturnPct: null, beta: null,
       betaSampleSize: 0, benchmarkObservations: benchmarkBars.length,
       benchmarkAlignedObservations: 0, benchmarkAlignmentRatio: null,
+      benchmarkStatus: 'unavailable' as const,
     };
   }
   const benchmarkByTime = new Map(benchmarkBars.map((bar) => [tradingDateKey(bar.time), bar.close]));
@@ -199,6 +201,7 @@ function benchmarkMetrics(
       betaSampleSize: 0, benchmarkObservations: benchmarkBars.length,
       benchmarkAlignedObservations: aligned.length,
       benchmarkAlignmentRatio: aligned.length / Math.max(1, bars.length),
+      benchmarkStatus: 'unavailable' as const,
     };
   }
   const assetCloses = aligned.map((row) => row.asset);
@@ -227,6 +230,9 @@ function benchmarkMetrics(
     benchmarkObservations: benchmarkBars.length,
     benchmarkAlignedObservations: aligned.length,
     benchmarkAlignmentRatio: aligned.length / Math.max(1, bars.length),
+    benchmarkStatus: aligned.length >= 20 && aligned.length / Math.max(1, bars.length) >= 0.8
+      ? 'reliable' as const
+      : 'limited' as const,
   };
 }
 
@@ -284,6 +290,7 @@ export function calculateHistoricalWatchlistMetrics(
       benchmarkObservations: options.benchmarkBars?.length ?? 0,
       benchmarkAlignedObservations: 0,
       benchmarkAlignmentRatio: null,
+      benchmarkStatus: 'unavailable',
       sampleSize: 0,
       methodology: { ...methodologyBase, betaSampleSize: 0 },
     };

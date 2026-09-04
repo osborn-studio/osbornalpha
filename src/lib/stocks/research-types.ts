@@ -1,4 +1,5 @@
 import type { EvidenceQualityFlag, EvidenceSearchStatus } from '@/lib/external-evidence/types';
+import type { BrokerRating } from './consensus';
 
 export interface StockResearchMeta {
   status: EvidenceSearchStatus;
@@ -31,6 +32,7 @@ export interface StockReportItem {
   title: string;
   broker: string | null;
   rating: string | null;
+  ratingNormalized?: BrokerRating;
   targetPriceMin: number | null;
   targetPriceMax: number | null;
   targetChangePct: number | null;
@@ -61,4 +63,14 @@ export interface StockReportsResponse {
   items: StockReportItem[];
   consensus: BrokerConsensusView | null;
   meta: StockResearchMeta;
+}
+
+/** Immutable metadata describing how a set of AI perspectives was produced. */
+export interface PerspectiveProvenance {
+  modelVersion: string | null;
+  promptVersion: string | null;
+  evidenceRequestId: string | null;
+  evidenceFetchedAt: string | null;
+  evidenceResultCount: number;
+  evidenceCoverageRatio: number;
 }

@@ -13,10 +13,40 @@ import {
 import { useKline } from '@/lib/hooks/useQuote';
 import { chartStatusKeys, sourceTranslationKey } from './kline-chart-meta';
 import { computeSessionVwap } from '@/lib/chart/session-vwap';
+import { usePersistentState } from '@/lib/hooks/usePersistentState';
 
 const RANGE_LABELS: Record<KlineRange, string> = { '1d': '1D', '5d': '5D', '1m': '1M', '6m': '6M', ytd: 'YTD', '1y': '1Y', '5y': '5Y', all: 'All' };
 const CHART_TYPES = ['line', 'candle', 'baseline', 'area', 'bar'] as const;
 type ChartType = typeof CHART_TYPES[number];
+
+interface ChartPreferences {
+  range: KlineRange;
+  chartType: ChartType;
+  showTooltip: boolean;
+  showVolume: boolean;
+  showIndicators: boolean;
+  showPreviousClose: boolean;
+}
+
+const DEFAULT_CHART_PREFERENCES: ChartPreferences = {
+  range: '1d',
+  chartType: 'candle',
+  showTooltip: true,
+  showVolume: true,
+  showIndicators: true,
+  showPreviousClose: true,
+};
+
+function validChartPreferences(value: unknown): value is ChartPreferences {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const item = value as Partial<ChartPreferences>;
+  return typeof item.range === 'string' && (KLINE_RANGES as readonly string[]).includes(item.range)
+    && typeof item.chartType === 'string' && (CHART_TYPES as readonly string[]).includes(item.chartType)
+    && typeof item.showTooltip === 'boolean'
+    && typeof item.showVolume === 'boolean'
+    && typeof item.showIndicators === 'boolean'
+    && typeof item.showPreviousClose === 'boolean';
+}
 
 type HoverSnapshot = KlineBar;
 
@@ -89,32 +119,28 @@ export function KlineChart({ ticker }: { ticker: string }) {
   const locale = useLocale();
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const [range, setRange] = useState<KlineRange>('1d');
-  const [chartType, setChartType] = useState<ChartType>('candle');
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [showTooltip, setShowTooltip] = useState(true);
-  const [showVolume, setShowVolume] = useState(true);
-  const [showIndicators, setShowIndicators] = useState(true);
-  const [showPreviousClose, setShowPreviousClose] = useState(true);
   const [visualRevision, setVisualRevision] = useState(0);
   const [hovered, setHovered] = useState<HoverSnapshot | null>(null);
   // Crosshair anchor (chart-pane pixels) so the tooltip follows the cursor
   // like a trading terminal instead of sitting in the corner.
   const [hoverPoint, setHoverPoint] = useState<{ x: number; y: number } | null>(null);
+  const [preferences, setPreferences] = usePersistentState(
+    `stock-monitor:chart-preferences-v1:${ticker}`,
+    DEFAULT_CHART_PREFERENCES,
+    validChartPreferences,
+  );
+  const { range, chartType, showTooltip, showVolume, showIndicators, showPreviousClose } = preferences;
   const { bars, loading, error, errorCode, meta, refetch } = useKline(ticker, range);
   const displayMeta = meta;
   const unsupportedReason = klineRangeAvailability(ticker, range);
 
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('stock-monitor:chart:type');
-      if (saved && (CHART_TYPES as readonly string[]).includes(saved)) setChartType(saved as ChartType);
-    } catch {}
-  }, []);
-
   const selectChartType = (next: ChartType) => {
-    setChartType(next);
-    try { localStorage.setItem('stock-monitor:chart:type', next); } catch {}
+    setPreferences((current) => ({ ...current, chartType: next }));
+  };
+
+  const setPreference = <K extends keyof ChartPreferences>(key: K, value: ChartPreferences[K]) => {
+    setPreferences((current) => ({ ...current, [key]: value }));
   };
 
   useEffect(() => {
@@ -336,10 +362,10 @@ export function KlineChart({ ticker }: { ticker: string }) {
             {settingsOpen && (
               <div className="absolute left-0 top-full z-30 mt-1 w-48 rounded-md border border-border bg-bg-elevated p-2 shadow-xl">
                 {[
-                  ['tooltip', showTooltip, setShowTooltip],
-                  ['volume', showVolume, setShowVolume],
-                  ['indicators', showIndicators, setShowIndicators],
-                  ['previousClose', showPreviousClose, setShowPreviousClose],
+                  ['tooltip', showTooltip, (value: boolean) => setPreference('showTooltip', value)],
+                  ['volume', showVolume, (value: boolean) => setPreference('showVolume', value)],
+                  ['indicators', showIndicators, (value: boolean) => setPreference('showIndicators', value)],
+                  ['previousClose', showPreviousClose, (value: boolean) => setPreference('showPreviousClose', value)],
                 ].map(([key, checked, setter]) => (
                   <label key={String(key)} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-bg-card">
                     <input type="checkbox" checked={checked as boolean} onChange={(event) => (setter as (value: boolean) => void)(event.target.checked)} />
@@ -365,7 +391,7 @@ export function KlineChart({ ticker }: { ticker: string }) {
               const unavailable = klineRangeAvailability(ticker, item);
               const reason = unavailable ? t(`errors.${unavailable}`) : undefined;
               return (
-                <button key={item} type="button" onClick={() => setRange(item)} disabled={!!unavailable}
+                <button key={item} type="button" onClick={() => setPreference('range', item)} disabled={!!unavailable}
                   aria-pressed={range === item} aria-label={reason ? `${RANGE_LABELS[item]}: ${reason}` : RANGE_LABELS[item]} title={reason}
                   className={`rounded px-2 py-1 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-45 ${range === item ? 'bg-accent-dim text-white' : 'text-text-dim hover:text-text'}`}>
                   {RANGE_LABELS[item]}

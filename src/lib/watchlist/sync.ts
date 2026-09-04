@@ -40,6 +40,38 @@ export function isWatchlistVersionConflict(error: { code?: string; message?: str
   return error?.code === '40001' || error?.message === 'watchlist_version_conflict';
 }
 
+/**
+ * Non-destructive conflict merge for two client snapshots. Groups are matched
+ * by server id first and then by a case-insensitive name. Tickers are unioned
+ * in server order followed by local additions, so concurrent additions are
+ * preserved. Destructive operations remain explicit in the conflict dialog.
+ */
+export function mergeWatchlistGroups(local: WatchlistGroup[], server: WatchlistGroup[]): WatchlistGroup[] {
+  const merged = server.map((group) => ({ ...group, tickers: [...group.tickers] }));
+  const byId = new Map(merged.map((group) => [group.id, group]));
+  const byName = new Map(merged.map((group) => [group.name.trim().toLocaleLowerCase(), group]));
+  for (const localGroup of local) {
+    const target = byId.get(localGroup.id) ?? byName.get(localGroup.name.trim().toLocaleLowerCase());
+    if (!target) {
+      const copy = { ...localGroup, tickers: [...new Set(localGroup.tickers.map((ticker) => ticker.toUpperCase()))] };
+      merged.push(copy);
+      byId.set(copy.id, copy);
+      byName.set(copy.name.trim().toLocaleLowerCase(), copy);
+      continue;
+    }
+    const seen = new Set(target.tickers.map((ticker) => ticker.toUpperCase()));
+    for (const ticker of localGroup.tickers.map((value) => value.toUpperCase())) {
+      if (!seen.has(ticker)) {
+        target.tickers.push(ticker);
+        seen.add(ticker);
+      }
+    }
+    // A local rename is retained when both snapshots refer to the same group.
+    if (localGroup.name.trim() && localGroup.name !== target.name) target.name = localGroup.name;
+  }
+  return merged;
+}
+
 export interface ServerWatchlistItem {
   ticker: string;
   sort_order: number;

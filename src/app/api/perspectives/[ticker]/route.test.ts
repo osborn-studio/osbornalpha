@@ -216,6 +216,34 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
       citations: [{ id: 'web_valid', url: 'https://reuters.com/update' }],
     });
     expect(body.meta.evidence).toMatchObject({ status: 'complete', provider: 'test-search', result_count: 1 });
+    expect(body.meta.provenance).toMatchObject({
+      modelVersion: 'deepseek-v4-flash',
+      promptVersion: 'watchlist-perspectives-2026-09-04.v1',
+      evidenceRequestId: 'evidence-2',
+      evidenceResultCount: 1,
+      evidenceCoverageRatio: 1,
+    });
+  });
+
+  it('does not claim an auditable evidence request when search fails', async () => {
+    mocks.searchExternalEvidence.mockRejectedValue(new Error('provider offline'));
+    mocks.reserveCostBudget.mockResolvedValue(reservation('r1', 110));
+    mocks.chatResolved.mockResolvedValue({ content: perspectiveContent(0), usage: usage(20, 0, 5) });
+
+    const response = await GET(
+      new Request('http://localhost/api/perspectives/AAPL?personas=value'),
+      { params: Promise.resolve({ ticker: 'AAPL' }) },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.meta.evidence.status).toBe('error');
+    expect(body.meta.provenance).toMatchObject({
+      evidenceRequestId: null,
+      evidenceFetchedAt: null,
+      evidenceResultCount: 0,
+      evidenceCoverageRatio: 0,
+    });
   });
 
   it('meters every platform persona call and writes one completed aggregate ticker event', async () => {

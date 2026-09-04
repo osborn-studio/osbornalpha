@@ -1,20 +1,62 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { WatchlistOverviewItemRow, WatchlistOverviewResponse, WatchlistOverviewRow } from '@/lib/watchlist/overview-contract';
+import type { DataEnvelope, WatchlistOverviewItemRow, WatchlistOverviewResponse, WatchlistOverviewRow } from '@/lib/watchlist/overview-contract';
 import { createRequestSlot, type RequestSlot } from './request-slot';
 export type { WatchlistOverviewRow as WatchlistOverviewClientRow } from '@/lib/watchlist/overview-contract';
+
+const DATA_STATUSES = new Set(['fresh', 'delayed', 'stale', 'unavailable']);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isDataEnvelope(value: unknown): value is DataEnvelope<unknown> {
+  if (!isRecord(value)) return false;
+  return (value.value === null || isRecord(value.value))
+    && (value.asOf === null || typeof value.asOf === 'string')
+    && (value.source === null || typeof value.source === 'string')
+    && typeof value.status === 'string'
+    && DATA_STATUSES.has(value.status)
+    && Array.isArray(value.warnings)
+    && value.warnings.every((warning) => typeof warning === 'string');
+}
 
 function isOverviewRow(value: unknown): value is WatchlistOverviewRow {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
   const group = row.group;
   const item = row.item;
+  const identity = row.identity;
   return !!group && typeof group === 'object' && !Array.isArray(group)
     && typeof (group as Record<string, unknown>).id === 'string'
     && typeof (group as Record<string, unknown>).name === 'string'
+    && Number.isInteger((group as Record<string, unknown>).sortOrder)
     && !!item && typeof item === 'object' && !Array.isArray(item)
-    && typeof (item as Record<string, unknown>).ticker === 'string';
+    && typeof (item as Record<string, unknown>).id === 'string'
+    && typeof (item as Record<string, unknown>).ticker === 'string'
+    && (identity === null || isRecord(identity))
+    && (row.market === null || isDataEnvelope(row.market))
+    && (row.history === null || isDataEnvelope(row.history))
+    && isDataEnvelope(row.research);
+}
+
+function isOverviewResponse(value: unknown): value is WatchlistOverviewResponse {
+  if (!isRecord(value) || !Array.isArray(value.rows)) return false;
+  const page = value.page;
+  const total = value.total;
+  return typeof value.generatedAt === 'string'
+    && typeof value.ownerId === 'string'
+    && Number.isSafeInteger(value.version)
+    && typeof value.partial === 'boolean'
+    && Number.isSafeInteger(total) && Number(total) >= 0
+    && isRecord(page)
+    && Number.isSafeInteger(page.limit) && Number(page.limit) > 0
+    && (page.offset === null || Number.isSafeInteger(page.offset))
+    && (page.cursor === null || typeof page.cursor === 'string')
+    && (page.nextCursor === null || typeof page.nextCursor === 'string')
+    && typeof page.hasMore === 'boolean'
+    && value.rows.every(isOverviewRow);
 }
 
 export function useWatchlistOverview(enabled: boolean) {
@@ -42,7 +84,7 @@ export function useWatchlistOverview(enabled: boolean) {
     if (ticker) query.set('ticker', ticker);
     const response = await fetch(`/api/watchlist/overview?${query}`, { signal, cache: 'no-store' });
     const body = await response.json().catch(() => null);
-    if (!response.ok || !body || !Array.isArray(body.rows) || !body.rows.every(isOverviewRow)) {
+    if (!response.ok || !isOverviewResponse(body)) {
       throw new Error(body?.error || 'overview_unavailable');
     }
     return body as WatchlistOverviewResponse;

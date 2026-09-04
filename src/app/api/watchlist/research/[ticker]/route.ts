@@ -31,6 +31,7 @@ function responseBody(bundle: Awaited<ReturnType<typeof loadWatchlistResearchBun
     // Keep the original stored-perspectives response contract additive.
     source: bundle.perspectiveSource,
     generatedAt: bundle.perspectivesGeneratedAt,
+    provenance: bundle.perspectiveProvenance,
   };
 }
 

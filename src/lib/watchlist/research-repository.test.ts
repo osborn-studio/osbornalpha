@@ -7,6 +7,7 @@ describe('loadWatchlistResearchSummaries', () => {
       data: [{
         ticker: 'AAPL', recent_news_count: 4, latest_news_at: '2026-09-04T00:00:00Z',
         average_sentiment: 0.25, latest_report_at: '2026-09-03T00:00:00Z',
+        sentiment_sample_size: 3, sentiment_coverage_ratio: 0.75,
         bullish_count: 2, neutral_count: 1, bearish_count: 1,
         latest_perspective_at: '2026-09-04T01:00:00Z',
       }],
@@ -17,6 +18,8 @@ describe('loadWatchlistResearchSummaries', () => {
     expect(result.AAPL).toMatchObject({
       recentNewsCount: 4,
       averageSentiment: 0.25,
+      sentimentSampleSize: 3,
+      sentimentCoverageRatio: 0.75,
       perspectiveCounts: { bullish: 2, neutral: 1, bearish: 1 },
       perspectiveDivergence: true,
     });

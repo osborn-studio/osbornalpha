@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { QuotaNoticeProps } from '@/components/QuotaNotice';
 import type { PerspectiveRow } from '@/lib/hooks/useQuote';
-import type { StockNewsResponse, StockReportsResponse } from '@/lib/stocks/research-types';
+import type { PerspectiveProvenance, StockNewsResponse, StockReportsResponse } from '@/lib/stocks/research-types';
 import { createRequestSlot, type RequestSlot } from './request-slot';
 
 interface WatchlistResearchBundleState {
@@ -12,6 +12,7 @@ interface WatchlistResearchBundleState {
   perspectives: PerspectiveRow[];
   perspectiveSource: string | null;
   perspectivesGeneratedAt: string | null;
+  perspectiveProvenance: PerspectiveProvenance | null;
   loading: boolean;
   refreshing: boolean;
   generating: boolean;
@@ -26,6 +27,7 @@ const EMPTY: WatchlistResearchBundleState = {
   perspectives: [],
   perspectiveSource: null,
   perspectivesGeneratedAt: null,
+  perspectiveProvenance: null,
   loading: true,
   refreshing: false,
   generating: false,
@@ -41,7 +43,20 @@ function bundlePatch(body: Record<string, unknown>) {
     perspectives: Array.isArray(body.perspectives) ? body.perspectives as PerspectiveRow[] : [],
     perspectiveSource: typeof body.source === 'string' ? body.source : null,
     perspectivesGeneratedAt: typeof body.generatedAt === 'string' ? body.generatedAt : null,
+    perspectiveProvenance: isPerspectiveProvenance(body.provenance) ? body.provenance : null,
   };
+}
+
+function isPerspectiveProvenance(value: unknown): value is PerspectiveProvenance {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return (item.modelVersion === null || typeof item.modelVersion === 'string')
+    && (item.promptVersion === null || typeof item.promptVersion === 'string')
+    && (item.evidenceRequestId === null || typeof item.evidenceRequestId === 'string')
+    && (item.evidenceFetchedAt === null || typeof item.evidenceFetchedAt === 'string')
+    && typeof item.evidenceResultCount === 'number' && Number.isSafeInteger(item.evidenceResultCount) && item.evidenceResultCount >= 0
+    && typeof item.evidenceCoverageRatio === 'number' && Number.isFinite(item.evidenceCoverageRatio)
+    && item.evidenceCoverageRatio >= 0 && item.evidenceCoverageRatio <= 1;
 }
 
 function validBundle(body: unknown): body is Record<string, unknown> {
@@ -150,6 +165,7 @@ export function useWatchlistResearchBundle(ticker: string) {
           perspectives: Array.isArray(body?.perspectives) ? body.perspectives : [],
           perspectiveSource: typeof body?.source === 'string' ? body.source : null,
           perspectivesGeneratedAt: typeof body?.meta?.generated_at === 'string' ? body.meta.generated_at : null,
+          perspectiveProvenance: isPerspectiveProvenance(body?.meta?.provenance) ? body.meta.provenance : null,
           generating: false,
         }));
       }

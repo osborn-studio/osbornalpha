@@ -45,12 +45,20 @@ describe('research artifact persistence mapping', () => {
         persona: 'buffett', name: 'Buffett', stance: 'bullish', confidence: 8,
         summary: 'Durable moat', cites: ['ROE'], citations: [],
       }],
+      provenance: {
+        modelVersion: 'test-model', promptVersion: 'prompt-v1', evidenceRequestId: '550e8400-e29b-41d4-a716-446655440001',
+        evidenceFetchedAt: '2026-09-04T00:00:00Z', evidenceResultCount: 4, evidenceCoverageRatio: 1,
+      },
     });
     expect(rows[0]).toMatchObject({
       brief_id: null,
       generation_id: '550e8400-e29b-41d4-a716-446655440000',
       persona: 'buffett',
       citations: [],
+      model_version: 'test-model',
+      prompt_version: 'prompt-v1',
+      evidence_result_count: 4,
+      evidence_coverage_ratio: 1,
     });
   });
 });

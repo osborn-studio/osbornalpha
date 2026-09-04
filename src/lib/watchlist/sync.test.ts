@@ -3,6 +3,7 @@ import {
   groupsToMutations,
   isDefaultWatchlist,
   isWatchlistVersionConflict,
+  mergeWatchlistGroups,
   parseWatchlistSyncRequest,
   serverToGroups,
   type ServerWatchlistRow,
@@ -191,5 +192,17 @@ describe('isDefaultWatchlist', () => {
   it('is order-insensitive across groups', () => {
     const groups = defaultWatchlistGroups().reverse();
     expect(isDefaultWatchlist(groups)).toBe(true);
+  });
+});
+
+describe('mergeWatchlistGroups', () => {
+  it('preserves concurrent ticker additions while matching groups by id or name', () => {
+    expect(mergeWatchlistGroups(
+      [{ id: 'local', name: 'Core', tickers: ['AAPL', 'NVDA'] }, { id: 'new', name: 'Ideas', tickers: ['TSLA'] }],
+      [{ id: 'server-core', name: 'Core', tickers: ['MSFT'] }],
+    )).toEqual([
+      { id: 'server-core', name: 'Core', tickers: ['MSFT', 'AAPL', 'NVDA'] },
+      { id: 'new', name: 'Ideas', tickers: ['TSLA'] },
+    ]);
   });
 });

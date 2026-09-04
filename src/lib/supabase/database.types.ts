@@ -339,6 +339,12 @@ export interface Perspective {
     qualityFlags?: string[];
   }>;
   source: string | null;
+  model_version: string | null;
+  prompt_version: string | null;
+  evidence_request_id: string | null;
+  evidence_fetched_at: string | null;
+  evidence_result_count: number;
+  evidence_coverage_ratio: number;
   created_at: string;
   updated_at: string;
 }
@@ -820,6 +826,8 @@ export type Database = {
           recent_news_count: number;
           latest_news_at: string | null;
           average_sentiment: number | null;
+          sentiment_sample_size: number;
+          sentiment_coverage_ratio: number;
           latest_report_at: string | null;
           bullish_count: number;
           neutral_count: number;

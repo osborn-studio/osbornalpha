@@ -342,6 +342,7 @@ export function useBatchQuotes(
 // ─── Financials ───
 export interface YearlyFinancial {
   year: number;
+  periodEnd?: string;
   revenue_yi: number | null;
   total_revenue_yi: number | null;
   net_income_yi: number | null;
@@ -352,39 +353,88 @@ export interface YearlyFinancial {
   op_cashflow_yi: number | null;
   free_cashflow_yi: number | null;
 }
+export interface FinancialMeta {
+  source: string;
+  market?: string;
+  supported?: boolean;
+  currency: string;
+  unit: string;
+  unitScale: number;
+  reportingFrequency: 'annual' | 'quarterly' | 'unsupported';
+  latestPeriodEnd: string | null;
+  availablePeriods: number;
+  coverage: { income: number; balance: number; cashflow: number; indicator: boolean };
+  warnings: string[];
+}
 export interface FinancialState {
   yearly: YearlyFinancial[];
   latest_indicator: any;
   source: string | null;
+  meta: FinancialMeta | null;
   loading: boolean;
   error: string | null;
 }
 
+function isFinancialRow(value: unknown): value is YearlyFinancial {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return Number.isInteger(row.year)
+    && typeof row.periodEnd === 'string'
+    && ['revenue_yi', 'total_revenue_yi', 'net_income_yi', 'eps_basic', 'total_assets_yi', 'total_liab_yi', 'equity_yi', 'op_cashflow_yi', 'free_cashflow_yi']
+      .every((key) => row[key] === null || (typeof row[key] === 'number' && Number.isFinite(row[key])));
+}
+
+function isFinancialMeta(value: unknown): value is FinancialMeta {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const meta = value as Record<string, unknown>;
+  const coverage = meta.coverage;
+  return typeof meta.source === 'string'
+    && (meta.market === undefined || typeof meta.market === 'string')
+    && (meta.supported === undefined || typeof meta.supported === 'boolean')
+    && typeof meta.currency === 'string'
+    && typeof meta.unit === 'string'
+    && typeof meta.unitScale === 'number' && Number.isFinite(meta.unitScale)
+    && (meta.reportingFrequency === 'annual' || meta.reportingFrequency === 'quarterly' || meta.reportingFrequency === 'unsupported')
+    && (meta.latestPeriodEnd === null || typeof meta.latestPeriodEnd === 'string')
+    && Number.isSafeInteger(meta.availablePeriods) && Number(meta.availablePeriods) >= 0
+    && !!coverage && typeof coverage === 'object' && !Array.isArray(coverage)
+    && ['income', 'balance', 'cashflow'].every((key) => Number.isSafeInteger((coverage as Record<string, unknown>)[key]) && Number((coverage as Record<string, unknown>)[key]) >= 0)
+    && typeof (coverage as Record<string, unknown>).indicator === 'boolean'
+    && Array.isArray(meta.warnings) && meta.warnings.every((warning) => typeof warning === 'string');
+}
+
 export function useFinancials(ticker: string | null): FinancialState {
   const [state, setState] = useState<FinancialState>({
-    yearly: [], latest_indicator: null, source: null,
+    yearly: [], latest_indicator: null, source: null, meta: null,
     loading: !!ticker, error: null,
   });
 
   useEffect(() => {
-    if (!ticker) { setState({ yearly: [], latest_indicator: null, source: null, loading: false, error: null }); return; }
+    if (!ticker) { setState({ yearly: [], latest_indicator: null, source: null, meta: null, loading: false, error: null }); return; }
     let cancelled = false;
     setState((prev) => ({ ...prev, loading: true, error: null }));
-    fetch(`/api/financials/${encodeURIComponent(ticker)}`)
-      .then((r) => r.json())
+    fetch(`/api/financials/${encodeURIComponent(ticker)}`, { cache: 'no-store' })
+      .then(async (response) => {
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data || !Array.isArray(data.yearly) || !data.yearly.every(isFinancialRow)) {
+          throw new Error(data?.error || 'financials_unavailable');
+        }
+        return data;
+      })
       .then((data) => {
         if (cancelled) return;
         setState({
-          yearly: data.yearly || [],
+          yearly: data.yearly,
           latest_indicator: data.latest_indicator || null,
-          source: data.source,
+          source: typeof data.source === 'string' ? data.source : null,
+          meta: isFinancialMeta(data.meta) ? data.meta : null,
           loading: false,
           error: data.error || null,
         });
       })
       .catch((err: any) => {
         if (cancelled) return;
-        setState({ yearly: [], latest_indicator: null, source: null, loading: false, error: err?.message || '获取失败' });
+        setState({ yearly: [], latest_indicator: null, source: null, meta: null, loading: false, error: err?.message || '获取失败' });
       });
     return () => { cancelled = true; };
   }, [ticker]);

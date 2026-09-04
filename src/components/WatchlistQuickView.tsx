@@ -68,12 +68,24 @@ export function WatchlistQuickView({
   const onDecisionDirtyChange = useCallback((dirty: boolean) => setDecisionDirty(dirty), []);
   const market = quote?.market ?? classifyMarket(ticker);
   const historicalMetrics = overview?.history?.value;
+  const benchmarkReliable = historicalMetrics?.benchmarkStatus === 'reliable';
   const tabs: Array<{ id: QuickViewTab; icon: typeof ChartNoAxesCombined; available: boolean }> = [
     { id: 'overview', icon: ChartNoAxesCombined, available: true },
     { id: 'research', icon: Newspaper, available: true },
     { id: 'decision', icon: NotebookPen, available: !!overview?.item && !!onDecisionSaved },
     { id: 'alerts', icon: Bell, available: !!overview?.item },
   ];
+  const availableTabs = tabs.filter((tab) => tab.available);
+  const moveTab = (current: QuickViewTab, direction: 'next' | 'prev' | 'first' | 'last') => {
+    const index = availableTabs.findIndex((tab) => tab.id === current);
+    if (index < 0) return;
+    const target = direction === 'first' ? 0
+      : direction === 'last' ? availableTabs.length - 1
+        : (index + (direction === 'next' ? 1 : -1) + availableTabs.length) % availableTabs.length;
+    const next = availableTabs[target].id;
+    selectTab(next);
+    window.requestAnimationFrame(() => document.getElementById(`watchlist-tab-${ticker}-${next}`)?.focus());
+  };
 
   return (
     <div className="fixed inset-0 z-[60]" role="dialog" aria-modal="true" aria-label={t('ariaLabel', { ticker })}>
@@ -94,11 +106,11 @@ export function WatchlistQuickView({
             <button type="button" onClick={requestClose} className="icon-button !h-8 !w-8 !basis-8 border-transparent bg-transparent" aria-label={t('close')}><X className="h-4 w-4" aria-hidden="true" /></button>
           </header>
           <nav className="flex overflow-x-auto border-b border-border px-3 sm:px-5" role="tablist" aria-label={t('tabs.label')}>
-            {tabs.filter((tab) => tab.available).map((tab) => {
+            {availableTabs.map((tab) => {
               const Icon = tab.icon;
               const tabId = `watchlist-tab-${ticker}-${tab.id}`;
               const panelId = `watchlist-panel-${ticker}-${tab.id}`;
-              return <button key={tab.id} id={tabId} type="button" role="tab" aria-selected={activeTab === tab.id} aria-controls={panelId} tabIndex={activeTab === tab.id ? 0 : -1} onClick={() => selectTab(tab.id)} className={`relative inline-flex h-11 shrink-0 items-center gap-2 px-3 text-xs font-medium transition ${activeTab === tab.id ? 'text-text' : 'text-text-muted hover:text-text'}`}><Icon className="h-3.5 w-3.5" aria-hidden="true" />{t(`tabs.${tab.id}`)}{activeTab === tab.id && <span className="absolute inset-x-2 bottom-0 h-0.5 bg-accent" />}</button>;
+              return <button key={tab.id} id={tabId} type="button" role="tab" aria-selected={activeTab === tab.id} aria-controls={panelId} tabIndex={activeTab === tab.id ? 0 : -1} onClick={() => selectTab(tab.id)} onKeyDown={(event) => { if (event.key === 'ArrowRight' || event.key === 'ArrowDown') { event.preventDefault(); moveTab(tab.id, 'next'); } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') { event.preventDefault(); moveTab(tab.id, 'prev'); } else if (event.key === 'Home') { event.preventDefault(); moveTab(tab.id, 'first'); } else if (event.key === 'End') { event.preventDefault(); moveTab(tab.id, 'last'); } }} className={`relative inline-flex h-11 shrink-0 items-center gap-2 px-3 text-xs font-medium transition ${activeTab === tab.id ? 'text-text' : 'text-text-muted hover:text-text'}`}><Icon className="h-3.5 w-3.5" aria-hidden="true" />{t(`tabs.${tab.id}`)}{activeTab === tab.id && <span className="absolute inset-x-2 bottom-0 h-0.5 bg-accent" />}</button>;
             })}
           </nav>
         </div>
@@ -124,14 +136,15 @@ export function WatchlistQuickView({
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold text-text-dim"><span>{t('historyMetrics')}</span>{historicalMetrics && <span className="font-normal text-text-muted">{t('sampleSize', { count: historicalMetrics.sampleSize })} · {t('coverage', { value: Math.round(historicalMetrics.coverageRatio * 100) })}</span>}</div>
                 <div className="grid grid-cols-2 gap-x-4 sm:grid-cols-4">
                   <Metric label={t('oneYearPriceReturn')} value={optional(historicalMetrics?.periodReturnPct, '%')} tone={historicalMetrics?.periodReturnPct == null ? 'text-text' : changeClass(historicalMetrics.periodReturnPct)} />
-                  <Metric label={t('benchmarkReturn', { benchmark: historicalMetrics?.benchmarkTicker ?? '--' })} value={optional(historicalMetrics?.benchmarkReturnPct, '%')} tone={historicalMetrics?.benchmarkReturnPct == null ? 'text-text' : changeClass(historicalMetrics.benchmarkReturnPct)} />
-                  <Metric label={t('excessReturn')} value={optional(historicalMetrics?.excessReturnPct, '%')} tone={historicalMetrics?.excessReturnPct == null ? 'text-text' : changeClass(historicalMetrics.excessReturnPct)} />
-                  <Metric label={t('beta')} value={optional(historicalMetrics?.beta)} />
+                  <Metric label={t('benchmarkReturn', { benchmark: historicalMetrics?.benchmarkTicker ?? '--' })} value={optional(benchmarkReliable ? historicalMetrics?.benchmarkReturnPct : null, '%')} tone={!benchmarkReliable || historicalMetrics?.benchmarkReturnPct == null ? 'text-text' : changeClass(historicalMetrics.benchmarkReturnPct)} />
+                  <Metric label={t('excessReturn')} value={optional(benchmarkReliable ? historicalMetrics?.excessReturnPct : null, '%')} tone={!benchmarkReliable || historicalMetrics?.excessReturnPct == null ? 'text-text' : changeClass(historicalMetrics.excessReturnPct)} />
+                  <Metric label={t('beta')} value={optional(benchmarkReliable ? historicalMetrics?.beta : null)} />
                   <Metric label={t('annualizedVolatility')} value={optional(historicalMetrics?.annualizedVolatilityPct, '%')} />
                   <Metric label={t('downsideVolatility')} value={optional(historicalMetrics?.downsideVolatilityPct, '%')} />
                   <Metric label={t('sharpeRatio')} value={optional(historicalMetrics?.sharpeRatio)} />
                   <Metric label={t('maxDrawdown')} value={optional(historicalMetrics?.maxDrawdownPct, '%')} tone="text-warn" />
                 </div>
+                {historicalMetrics && <div className={`mt-2 text-[10px] ${benchmarkReliable ? 'text-text-muted' : 'text-warn'}`}>{t('benchmarkQuality', { aligned: historicalMetrics.benchmarkAlignedObservations, total: historicalMetrics.usableObservations, status: t(`benchmarkStatuses.${historicalMetrics.benchmarkStatus}`) })}</div>}
                 <details className="mt-3 rounded-md border border-border/70 bg-bg-elevated/40 px-3">
                   <summary className="cursor-pointer py-2 text-[11px] font-semibold text-text-dim">{t('technicalMetrics')}</summary>
                   <div className="grid grid-cols-2 gap-x-4 pb-2 sm:grid-cols-4">

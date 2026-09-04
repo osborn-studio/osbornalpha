@@ -1,12 +1,15 @@
 import type { Stance } from '@/lib/supabase/database.types';
 import type { WatchlistServerClient } from './server-repository';
 import type { WatchlistResearchSummary } from './research-summary';
+import { WATCHLIST_RESEARCH_WINDOW_DAYS } from './research-window';
 
 interface ResearchSummaryRow {
   ticker: string;
   recent_news_count: number;
   latest_news_at: string | null;
   average_sentiment: number | null;
+  sentiment_sample_size?: number;
+  sentiment_coverage_ratio?: number;
   latest_report_at: string | null;
   bullish_count: number;
   neutral_count: number;
@@ -44,9 +47,12 @@ export async function loadWatchlistResearchSummaries(
       latestNewsAt: row.latest_news_at,
       latestReportAt: row.latest_report_at,
       averageSentiment: row.average_sentiment == null ? null : Number(row.average_sentiment),
+      sentimentSampleSize: count(row.sentiment_sample_size),
+      sentimentCoverageRatio: Math.max(0, Math.min(1, Number(row.sentiment_coverage_ratio) || 0)),
       perspectiveCounts,
       perspectiveDivergence: perspectiveCounts.bullish > 0 && perspectiveCounts.bearish > 0,
       latestPerspectiveAt: row.latest_perspective_at,
+      researchWindowDays: WATCHLIST_RESEARCH_WINDOW_DAYS,
     } satisfies WatchlistResearchSummary];
   }));
 }

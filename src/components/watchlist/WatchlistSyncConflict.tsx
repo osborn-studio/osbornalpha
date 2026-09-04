@@ -1,14 +1,16 @@
 'use client';
 
-import { AlertTriangle, CloudDownload, CloudUpload } from 'lucide-react';
+import { AlertTriangle, CloudDownload, CloudUpload, GitMerge } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 
 export function WatchlistSyncConflict({
   onUseServer,
   onKeepLocal,
+  onMerge,
 }: {
   onUseServer: () => void;
   onKeepLocal: () => void;
+  onMerge: () => void;
 }) {
   const t = useTranslations('market.watchlist.syncConflict');
   return (
@@ -19,6 +21,9 @@ export function WatchlistSyncConflict({
         <div className="mt-0.5 text-[11px] text-text-dim">{t('body')}</div>
       </div>
       <div className="flex shrink-0 gap-2">
+        <button type="button" onClick={onMerge} className="inline-flex h-8 items-center gap-1.5 rounded border border-accent/40 px-2.5 text-xs text-accent hover:bg-accent/10">
+          <GitMerge className="h-3.5 w-3.5" aria-hidden="true" />{t('merge')}
+        </button>
         <button type="button" onClick={onUseServer} className="inline-flex h-8 items-center gap-1.5 rounded border border-border px-2.5 text-xs text-text-dim hover:text-text">
           <CloudDownload className="h-3.5 w-3.5" aria-hidden="true" />{t('useServer')}
         </button>

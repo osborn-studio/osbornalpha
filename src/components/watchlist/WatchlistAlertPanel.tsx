@@ -18,6 +18,23 @@ function alertLabel(alert: WatchlistAlert, t: ReturnType<typeof useTranslations>
   return `${metric} ${operator} ${alert.threshold_numeric}`;
 }
 
+function draftAlertLabel(
+  type: WatchlistAlert['alert_type'],
+  operator: WatchlistAlert['operator'],
+  threshold: string,
+  valuationMetric: string,
+  discreteValue: string,
+  t: ReturnType<typeof useTranslations>,
+) {
+  const typeLabel = t(`types.${type}`);
+  if (NUMERIC_TYPES.includes(type)) {
+    if (!threshold.trim() || !operator) return typeLabel;
+    const metric = type === 'valuation' ? valuationMetric.toUpperCase() : typeLabel;
+    return `${metric} ${t(`operators.${operator}`)} ${threshold}`;
+  }
+  return discreteValue ? `${typeLabel}: ${t(`values.${discreteValue}`)}` : typeLabel;
+}
+
 export function WatchlistAlertPanel({ itemId }: { itemId: string }) {
   const t = useTranslations('market.table.drawer.alerts');
   const model = useWatchlistAlerts(itemId);
@@ -80,6 +97,7 @@ export function WatchlistAlertPanel({ itemId }: { itemId: string }) {
         <button type="button" onClick={addAlert} disabled={!valid || model.saving} className="icon-button !h-9 !w-9 !basis-9 bg-accent-dim text-white disabled:opacity-50" title={t('add')} aria-label={t('add')}><Plus className="h-4 w-4" aria-hidden="true" /></button>
       </div>
       <label className="mt-2 flex items-center gap-2 text-[10px] text-text-muted"><span>{t('cooldown')}</span><select value={cooldownMinutes} onChange={(event) => setCooldownMinutes(Number(event.target.value))} className="h-7 border-border bg-bg-elevated px-2 text-[10px]">{WATCHLIST_ALERT_CATALOG.cooldownMinutes.map((value) => <option key={value} value={value}>{t(`cooldowns.${value}`)}</option>)}</select></label>
+      <div className="mt-2 rounded border border-accent/20 bg-accent/5 px-2.5 py-2 text-[11px] text-text-dim"><span className="font-medium text-text">{t('preview')}:</span> {draftAlertLabel(type, numeric ? operator : null, threshold, valuationMetric, discreteValue, t)}</div>
 
       {model.error && <p className="mt-2 text-[11px] text-down" role="alert">{t('error')}</p>}
       {model.loading ? <div className="mt-3 h-12 animate-pulse rounded bg-bg-elevated" /> : (

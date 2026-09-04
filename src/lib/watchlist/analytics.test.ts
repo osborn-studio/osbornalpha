@@ -72,6 +72,7 @@ describe('calculateHistoricalWatchlistMetrics', () => {
       benchmarkObservations: 0,
       benchmarkAlignedObservations: 0,
       benchmarkAlignmentRatio: null,
+      benchmarkStatus: 'unavailable',
       sampleSize: 0,
       methodology: {
         returnBasis: 'price', adjustment: 'none', riskFreeRatePct: 0,
@@ -126,5 +127,6 @@ describe('calculateHistoricalWatchlistMetrics', () => {
     const metrics = calculateHistoricalWatchlistMetrics(asset, { benchmarkBars: benchmark, benchmarkTicker: 'SPY' });
     expect(metrics.beta).toBeNull();
     expect(metrics.methodology.betaSampleSize).toBe(9);
+    expect(metrics.benchmarkStatus).toBe('limited');
   });
 });

@@ -12,7 +12,9 @@ import type {
   StockNewsResponse,
   StockReportItem,
   StockReportsResponse,
+  PerspectiveProvenance,
 } from '@/lib/stocks/research-types';
+import { deriveConsensus, filterConsensusReports, normalizeBrokerRating } from '@/lib/stocks/consensus';
 import { watchlistTimestampFreshness } from './freshness';
 import { EVIDENCE_QUALITY_FLAGS, type EvidenceQualityFlag } from '@/lib/external-evidence/types';
 
@@ -23,6 +25,7 @@ export interface WatchlistResearchBundle {
   perspectives: PerspectiveRow[];
   perspectiveSource: string | null;
   perspectivesGeneratedAt: string | null;
+  perspectiveProvenance: PerspectiveProvenance | null;
   refresh: {
     status: 'stored' | 'complete' | 'partial';
     refreshedAt: string | null;
@@ -105,21 +108,22 @@ function parseTargetRange(value: string | null): { min: number | null; max: numb
   };
 }
 
-function median(values: number[]): number | null {
-  if (values.length === 0) return null;
-  const ordered = [...values].sort((left, right) => left - right);
-  const middle = Math.floor(ordered.length / 2);
-  return ordered.length % 2 ? ordered[middle] : (ordered[middle - 1] + ordered[middle]) / 2;
-}
-
-function storedConsensus(items: StockReportItem[]): BrokerConsensusView | null {
-  const targets = items.flatMap((item) => {
-    if (item.targetPriceMin == null && item.targetPriceMax == null) return [];
-    return [(item.targetPriceMin ?? item.targetPriceMax!) + ((item.targetPriceMax ?? item.targetPriceMin!) - (item.targetPriceMin ?? item.targetPriceMax!)) / 2];
-  });
-  const targetMedian = median(targets);
-  if (targetMedian == null) return null;
-  return { targetMedian, targetMin: Math.min(...targets), targetMax: Math.max(...targets), count: targets.length };
+function storedConsensus(items: StockReportItem[], now: Date): BrokerConsensusView | null {
+  const filtered = filterConsensusReports(items.map((item) => ({
+    max_price: item.targetPriceMax,
+    min_price: item.targetPriceMin,
+    report_date: item.publishedAt,
+    org_name: item.broker,
+    report_title: item.title,
+  })), { asOf: now, maxAgeDays: 180 });
+  const consensus = deriveConsensus(filtered.accepted);
+  if (consensus == null) return null;
+  return {
+    targetMedian: consensus.target_median,
+    targetMin: consensus.target_min,
+    targetMax: consensus.target_max,
+    count: consensus.n,
+  };
 }
 
 export function mapStoredWatchlistResearch(
@@ -138,6 +142,7 @@ export function mapStoredWatchlistResearch(
       title: row.title || `${ticker} research update`,
       broker: row.broker,
       rating: row.rating,
+      ratingNormalized: normalizeBrokerRating(row.rating),
       targetPriceMin: target.min,
       targetPriceMax: target.max,
       targetChangePct: row.target_change_pct,
@@ -159,6 +164,21 @@ export function mapStoredWatchlistResearch(
     cites: row.cites,
     citations: row.citations,
   }));
+  const latestPerspective = stored.perspectives[0];
+  const perspectiveProvenance: PerspectiveProvenance | null = latestPerspective
+    ? {
+        modelVersion: latestPerspective.model_version ?? null,
+        promptVersion: latestPerspective.prompt_version ?? null,
+        evidenceRequestId: latestPerspective.evidence_request_id ?? null,
+        evidenceFetchedAt: latestPerspective.evidence_fetched_at ?? null,
+        evidenceResultCount: Number.isSafeInteger(latestPerspective.evidence_result_count) && latestPerspective.evidence_result_count >= 0
+          ? latestPerspective.evidence_result_count
+          : 0,
+        evidenceCoverageRatio: Number.isFinite(Number(latestPerspective.evidence_coverage_ratio))
+          ? Math.max(0, Math.min(1, Number(latestPerspective.evidence_coverage_ratio)))
+          : 0,
+      }
+    : null;
   return {
     ticker,
     news: {
@@ -183,12 +203,13 @@ export function mapStoredWatchlistResearch(
     reports: {
       ticker,
       items: reportItems,
-      consensus: storedConsensus(reportItems),
+      consensus: storedConsensus(reportItems, now),
       meta: storedMeta(reportsFetchedAt, reportProviders, now),
     },
     perspectives,
     perspectiveSource: stored.perspectives[0]?.source ?? null,
     perspectivesGeneratedAt: stored.perspectives[0]?.created_at ?? null,
+    perspectiveProvenance,
     refresh: { status: 'stored', refreshedAt: latest([newsFetchedAt, reportsFetchedAt]), warnings: [] },
   };
 }

@@ -71,7 +71,11 @@ function parseOverviewPage(value: unknown): WatchlistOverviewDatabasePage {
     const group = row.group as Record<string, unknown>;
     const item = row.item as Record<string, unknown>;
     if (typeof group.id !== 'string' || typeof group.name !== 'string' || !Number.isInteger(group.sort_order)
-      || typeof item.id !== 'string' || typeof item.ticker !== 'string' || !Number.isInteger(item.sort_order)) {
+      || typeof item.id !== 'string' || typeof item.ticker !== 'string' || !Number.isInteger(item.sort_order)
+      || !Number.isFinite(Number(item.conviction))
+      || !Number.isInteger(item.decision_version) || Number(item.decision_version) < 0
+      || !Array.isArray(item.tags) || item.tags.some((tag) => typeof tag !== 'string')
+      || !['inbox', 'researching', 'watching', 'ready', 'paused', 'invalidated'].includes(String(item.status))) {
       throw new Error('invalid_watchlist_overview_row');
     }
     return {

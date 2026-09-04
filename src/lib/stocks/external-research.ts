@@ -6,7 +6,7 @@ import {
   isTushareConfigured,
 } from '@/lib/data/sources/tushare-cached';
 import type { TushareReportRc } from '@/lib/data/sources/tushare';
-import { deriveConsensus } from './consensus';
+import { deriveConsensus, filterConsensusReports, normalizeBrokerRating } from './consensus';
 import type {
   StockNewsItem,
   StockNewsResponse,
@@ -26,7 +26,7 @@ function stableId(prefix: string, value: string): string {
 
 async function stockIdentity(ticker: string) {
   const quote = await fetchEastmoneyQuote(ticker).catch(() => null);
-  return { name: quote?.name || ticker, market: quote?.market };
+  return { name: quote?.name || ticker, market: quote?.market, price: quote?.price ?? null };
 }
 
 function evidenceMeta(
@@ -89,6 +89,7 @@ function reportFromTushare(ticker: string, report: TushareReportRc): StockReport
     title,
     broker: report.org_name?.trim() || null,
     rating: report.rating?.trim() || null,
+    ratingNormalized: normalizeBrokerRating(report.rating),
     targetPriceMin: Number.isFinite(report.min_price) ? report.min_price! : null,
     targetPriceMax: Number.isFinite(report.max_price) ? report.max_price! : null,
     targetChangePct: Number.isFinite(report.rd) ? report.rd! : null,
@@ -123,6 +124,11 @@ export function mergeDuplicateReports(items: StockReportItem[]): StockReportItem
       targetPriceMax: preferred.targetPriceMax ?? item.targetPriceMax ?? current.targetPriceMax,
       targetChangePct: preferred.targetChangePct ?? item.targetChangePct ?? current.targetChangePct,
       rating: preferred.rating ?? item.rating ?? current.rating,
+      ratingNormalized: preferred.ratingNormalized && preferred.ratingNormalized !== 'unknown'
+        ? preferred.ratingNormalized
+        : item.ratingNormalized && item.ratingNormalized !== 'unknown'
+          ? item.ratingNormalized
+          : current.ratingNormalized ?? 'unknown',
       url: preferred.url ?? current.url,
       qualityFlags: [...new Set([...(current.qualityFlags ?? []), ...(item.qualityFlags ?? []), 'provider_ranked'])] as Array<NonNullable<StockReportItem['qualityFlags']>[number]>,
     });
@@ -154,6 +160,7 @@ export async function getStockReports(ticker: string): Promise<StockReportsRespo
     title: item.title,
     broker: item.domain,
     rating: null,
+    ratingNormalized: 'unknown',
     targetPriceMin: null,
     targetPriceMax: null,
     targetChangePct: null,
@@ -166,8 +173,13 @@ export async function getStockReports(ticker: string): Promise<StockReportsRespo
     qualityFlags: item.qualityFlags,
   }));
   const items = mergeDuplicateReports([...structured, ...discovered]);
-  const consensus = deriveConsensus(tushareResult.items);
-  const warnings = [...snapshot.warnings, ...(tushareResult.error ? [tushareResult.error] : [])];
+  const consensusInput = filterConsensusReports(tushareResult.items, { asOf: new Date(), maxAgeDays: 180, currentPrice: identity.price });
+  const consensus = deriveConsensus(consensusInput.accepted);
+  const warnings = [
+    ...snapshot.warnings,
+    ...(tushareResult.error ? [tushareResult.error] : []),
+    ...consensusInput.reasons.map((reason) => `consensus_${reason}`),
+  ];
   const status = items.length > 0
     ? (snapshot.status === 'complete' && !tushareResult.error ? 'complete' : 'partial')
     : snapshot.status;

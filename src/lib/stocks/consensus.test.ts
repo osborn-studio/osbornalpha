@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveConsensus, type ConsensusReport } from './consensus';
+import { deriveConsensus, filterConsensusReports, normalizeBrokerRating, type ConsensusReport } from './consensus';
 
 describe('deriveConsensus', () => {
   it('null for empty input', () => {
@@ -90,5 +90,38 @@ describe('deriveConsensus', () => {
     expect(result).not.toBeNull();
     expect(result!.n).toBe(1);
     expect(result!.target_median).toBe(50);
+  });
+
+  it('normalizes broker rating labels while preserving an unknown bucket', () => {
+    expect(normalizeBrokerRating('强烈买入')).toBe('strong_buy');
+    expect(normalizeBrokerRating('Overweight')).toBe('buy');
+    expect(normalizeBrokerRating('持有')).toBe('hold');
+    expect(normalizeBrokerRating('Underweight')).toBe('sell');
+    expect(normalizeBrokerRating('')).toBe('unknown');
+  });
+
+  it('filters stale, duplicate, and extreme targets before aggregation', () => {
+    const reports = [
+      { report_date: '20260901', org_name: 'Broker A', report_title: 'Update', max_price: 120, min_price: 100 },
+      { report_date: '20260901', org_name: 'Broker A', report_title: 'Update', max_price: 120, min_price: 100 },
+      { report_date: '20200101', org_name: 'Broker B', report_title: 'Old', max_price: 110, min_price: 90 },
+      { report_date: '20260902', org_name: 'Broker C', report_title: 'Outlier', max_price: 2_000, min_price: 1_900 },
+    ];
+    const filtered = filterConsensusReports(reports, { asOf: new Date('2026-09-04T00:00:00Z'), currentPrice: 100 });
+    expect(filtered.accepted).toHaveLength(1);
+    expect(filtered.excluded).toBe(3);
+    expect(filtered.reasons).toEqual(expect.arrayContaining(['duplicate_report', 'stale_report', 'target_outlier']));
+    expect(deriveConsensus(filtered.accepted)).toMatchObject({ target_median: 110, n: 1 });
+  });
+
+  it('guards stored snapshots without a current quote using the snapshot median', () => {
+    const filtered = filterConsensusReports([
+      { report_date: '20260901', org_name: 'A', report_title: 'A', max_price: 110, min_price: 90 },
+      { report_date: '20260901', org_name: 'B', report_title: 'B', max_price: 120, min_price: 100 },
+      { report_date: '20260901', org_name: 'C', report_title: 'C', max_price: 2_000, min_price: 1_900 },
+    ], { asOf: new Date('2026-09-04T00:00:00Z') });
+    expect(filtered.accepted).toHaveLength(2);
+    expect(filtered.excluded).toBe(1);
+    expect(filtered.reasons).toContain('target_outlier');
   });
 });

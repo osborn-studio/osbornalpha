@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { PerspectiveResult } from '@/lib/data/personas';
 import type { StockNewsResponse, StockReportsResponse } from './research-types';
+import type { PerspectiveProvenance } from './research-types';
 
 function stableUuid(namespace: string, value: string): string {
   const hex = createHash('sha256').update(`${namespace}:${value}`).digest('hex').slice(0, 32).split('');
@@ -66,10 +67,19 @@ export interface PerspectivePersistenceInput {
   generationId: string;
   source: string;
   createdAt: string;
+  provenance?: PerspectiveProvenance;
   perspectives: PerspectiveResult[];
 }
 
 export function stockPerspectiveRows(userId: string, input: PerspectivePersistenceInput) {
+  const provenance = input.provenance ?? {
+    modelVersion: null,
+    promptVersion: null,
+    evidenceRequestId: null,
+    evidenceFetchedAt: null,
+    evidenceResultCount: 0,
+    evidenceCoverageRatio: 0,
+  } satisfies PerspectiveProvenance;
   return input.perspectives.map((item) => ({
     id: stableUuid('stock-perspective', `${userId}:${input.generationId}:${input.ticker}:${item.persona}`),
     brief_id: null,
@@ -83,6 +93,12 @@ export function stockPerspectiveRows(userId: string, input: PerspectivePersisten
     cites: item.cites,
     citations: item.citations ?? [],
     source: input.source,
+    model_version: provenance.modelVersion,
+    prompt_version: provenance.promptVersion,
+    evidence_request_id: provenance.evidenceRequestId,
+    evidence_fetched_at: provenance.evidenceFetchedAt,
+    evidence_result_count: provenance.evidenceResultCount,
+    evidence_coverage_ratio: provenance.evidenceCoverageRatio,
     created_at: input.createdAt,
     updated_at: input.createdAt,
   }));

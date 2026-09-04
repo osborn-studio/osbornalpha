@@ -11,6 +11,7 @@ import { loadWatchlistOverviewPage, loadWatchlistVersion } from '@/lib/watchlist
 import { normalizeEvidenceTickerParam } from '@/lib/external-evidence';
 import { watchlistTimestampFreshness } from '@/lib/watchlist/freshness';
 import { watchlistApiError } from '@/lib/watchlist/api-error';
+import { WATCHLIST_RESEARCH_WINDOW_DAYS } from '@/lib/watchlist/research-window';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -74,9 +75,12 @@ export async function GET(request: Request) {
           latestNewsAt: null,
           latestReportAt: null,
           averageSentiment: null,
+          sentimentSampleSize: 0,
+          sentimentCoverageRatio: 0,
           perspectiveCounts: { bullish: 0, neutral: 0, bearish: 0 },
           perspectiveDivergence: false,
           latestPerspectiveAt: null,
+          researchWindowDays: WATCHLIST_RESEARCH_WINDOW_DAYS,
         };
         return {
           group: { id: group.id, name: group.name, sortOrder: group.sort_order },

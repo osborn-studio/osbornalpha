@@ -9,7 +9,7 @@ import {
   type WatchlistGroup,
 } from '@/lib/watchlist/store';
 import { createWatchlistSyncQueue, watchlistPendingStorageKey } from '@/lib/watchlist/client-sync';
-import { isDefaultWatchlist, type VersionedWatchlistSnapshot, type WatchlistSyncRequest } from '@/lib/watchlist/sync';
+import { isDefaultWatchlist, mergeWatchlistGroups, type VersionedWatchlistSnapshot, type WatchlistSyncRequest } from '@/lib/watchlist/sync';
 import { trackEvent } from '@/lib/analytics/client';
 
 type WatchlistSyncQueue = ReturnType<typeof createWatchlistSyncQueue>;
@@ -162,7 +162,7 @@ export function useWatchlist() {
     });
   }, [hydrated]);
 
-  const resolveSyncConflict = useCallback((strategy: 'server' | 'local') => {
+  const resolveSyncConflict = useCallback((strategy: 'server' | 'local' | 'merge') => {
     const queue = syncQueue.current;
     const conflict = conflictSnapshot;
     if (!queue || !conflict) return;
@@ -174,13 +174,26 @@ export function useWatchlist() {
       setSyncStatus('synced');
       return;
     }
+    if (strategy === 'merge') {
+      const merged = mergeWatchlistGroups(groups, conflict.groups);
+      queue.discardPending();
+      queue.setServerVersion(conflict.version);
+      writeLocalWatchlist(merged);
+      setGroups(merged);
+      setConflictSnapshot(null);
+      setSyncStatus('syncing');
+      queue.enqueue(merged).then((saved) => {
+        if (saved) setSyncStatus('synced');
+      });
+      return;
+    }
     if (!queue.rebasePending(conflict.version)) return;
     setConflictSnapshot(null);
     setSyncStatus('syncing');
     queue.flush().then((saved) => {
       if (saved) setSyncStatus('synced');
     });
-  }, [conflictSnapshot]);
+  }, [conflictSnapshot, groups]);
 
   const applyServerSnapshot = useCallback((snapshot: VersionedWatchlistSnapshot): boolean => {
     const queue = syncQueue.current;
