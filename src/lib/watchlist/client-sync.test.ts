@@ -62,6 +62,31 @@ describe('watchlist client sync queue', () => {
     await expect(saving).resolves.toBe(true);
   });
 
+  it('persists the canonical base used by a local edit', async () => {
+    const storage = new MemoryStorage();
+    const request = deferred<WatchlistSaveResult | null>();
+    const base = [{ id: 'server', name: 'Core', tickers: ['AAPL', 'MSFT'] }];
+    const local = [{ id: 'server', name: 'Core', tickers: ['AAPL', 'NVDA'] }];
+    const queue = createWatchlistSyncQueue({
+      storage,
+      put: () => request.promise,
+      applyCanonical: () => {},
+      createMutationId: ids(),
+    });
+    queue.setServerSnapshot(versioned(base, 4));
+
+    const saving = queue.enqueue(local);
+    expect(JSON.parse(storage.getItem(WATCHLIST_PENDING_STORAGE_KEY)!)).toEqual({
+      groups: local,
+      expectedVersion: 4,
+      mutationId: 'mutation-1',
+      baseGroups: base,
+    });
+    expect(queue.getPendingBaseGroups()).toEqual(base);
+    request.resolve(saved(local, 5));
+    await saving;
+  });
+
   it('rebases a newer local edit after the older response succeeds', async () => {
     const storage = new MemoryStorage();
     const firstRequest = deferred<WatchlistSaveResult | null>();
@@ -88,6 +113,11 @@ describe('watchlist client sync queue', () => {
 
     expect(sent[0]).toMatchObject({ groups: first, expectedVersion: 0 });
     expect(sent[1]).toMatchObject({ groups: second, expectedVersion: 1 });
+    expect(JSON.parse(storage.getItem(WATCHLIST_PENDING_STORAGE_KEY)!)).toMatchObject({
+      groups: second,
+      expectedVersion: 1,
+      baseGroups: [{ id: 'server-id', name: 'Mine', tickers: ['NVDA'] }],
+    });
     expect(applied).toEqual([]);
 
     const canonical = [{ id: 'server-id', name: 'Mine', tickers: ['NVDA', 'AAPL'] }];
@@ -162,5 +192,30 @@ describe('watchlist client sync queue', () => {
 
     expect(queue.hasPending()).toBe(false);
     expect(applied).toEqual([canonical.groups]);
+  });
+
+  it('rebases keep-local conflict resolution onto the conflicting server snapshot', async () => {
+    const storage = new MemoryStorage();
+    const local = [{ id: 'server', name: 'Core', tickers: ['AAPL'] }];
+    const remote = [{ id: 'server', name: 'Core', tickers: ['AAPL', 'MSFT'] }];
+    const queue = createWatchlistSyncQueue({
+      storage,
+      put: async () => null,
+      applyCanonical: () => {},
+      createMutationId: ids(),
+    });
+    storage.setItem(WATCHLIST_PENDING_STORAGE_KEY, JSON.stringify({
+      groups: local,
+      expectedVersion: 3,
+      mutationId: 'mutation-old',
+    }));
+
+    expect(queue.rebasePending(4, remote)).toBe(true);
+    expect(JSON.parse(storage.getItem(WATCHLIST_PENDING_STORAGE_KEY)!)).toEqual({
+      groups: local,
+      expectedVersion: 4,
+      mutationId: 'mutation-1',
+      baseGroups: remote,
+    });
   });
 });

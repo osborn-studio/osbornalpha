@@ -29,6 +29,10 @@ const CHECKS: SchemaCheck[] = [
   { name: 'news_quality_columns', path: '/rest/v1/news_items?select=quality_score,quality_flags&limit=1' },
   { name: 'report_quality_columns', path: '/rest/v1/broker_reports?select=quality_score,quality_flags&limit=1' },
   { name: 'external_evidence_quality_columns', path: '/rest/v1/external_evidence?select=quality_score,quality_flags&limit=1' },
+  {
+    name: 'external_evidence_audit_columns',
+    path: '/rest/v1/external_evidence_runs?select=audit_version,query_plan,result_citation_ids,result_set_hash&limit=1',
+  },
   { name: 'ticker_refresh_queue', path: '/rest/v1/watchlist_research_ticker_refresh_state?select=ticker,status&limit=1' },
   {
     name: 'monitoring_status_release_marker',
@@ -37,6 +41,20 @@ const CHECKS: SchemaCheck[] = [
       try {
         const rows = JSON.parse(body);
         return Array.isArray(rows) && rows.some((row) => row?.marker === 'watchlist_monitoring_status')
+          ? undefined
+          : 'release_marker_missing';
+      } catch {
+        return 'release_marker_response_invalid';
+      }
+    },
+  },
+  {
+    name: 'external_evidence_audit_release_marker',
+    path: '/rest/v1/watchlist_release_markers?select=marker&marker=eq.external_evidence_audit_snapshot&limit=1',
+    validate: (body) => {
+      try {
+        const rows = JSON.parse(body);
+        return Array.isArray(rows) && rows.some((row) => row?.marker === 'external_evidence_audit_snapshot')
           ? undefined
           : 'release_marker_missing';
       } catch {

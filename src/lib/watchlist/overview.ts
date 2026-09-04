@@ -74,8 +74,8 @@ function historyEnvelope(
   ticker: string,
   result: HistorySeries,
   benchmark: HistorySeries | null,
+  benchmarkTicker: string,
 ): DataEnvelope<HistoricalWatchlistMetrics> {
-  const benchmarkTicker = watchlistBenchmarkTicker(classifyMarket(ticker));
   const market = classifyMarket(ticker);
   const metrics = calculateHistoricalWatchlistMetrics(result.bars, {
     benchmarkBars: benchmark?.bars ?? [],
@@ -112,11 +112,11 @@ export interface WatchlistComputedOverview {
 export async function buildComputedWatchlistOverview(
   tickers: string[],
   locale: AppLocale,
-  options: { includeMarket?: boolean } = {},
+  options: { includeMarket?: boolean; benchmarkTicker?: string | null } = {},
 ): Promise<Record<string, WatchlistComputedOverview>> {
   const unique = Array.from(new Set(tickers));
   const benchmarkTickers = Array.from(new Set(unique.map((ticker) => (
-    watchlistBenchmarkTicker(classifyMarket(ticker))
+    options.benchmarkTicker ?? watchlistBenchmarkTicker(classifyMarket(ticker))
   ))));
   const benchmarkSettled = await boundedMap(benchmarkTickers, 3, (ticker) => loadHistorySeries(ticker));
   const benchmarkByTicker = new Map<string, HistorySeries>();
@@ -128,14 +128,14 @@ export async function buildComputedWatchlistOverview(
       options.includeMarket ? loadMarket(ticker, locale) : Promise.resolve(null),
       loadHistorySeries(ticker),
     ]);
-    const benchmarkTicker = watchlistBenchmarkTicker(classifyMarket(ticker));
+    const benchmarkTicker = options.benchmarkTicker ?? watchlistBenchmarkTicker(classifyMarket(ticker));
     return {
       ticker,
       market: market.status === 'fulfilled'
         ? market.value
         : options.includeMarket ? unavailable<WatchlistMarketSnapshot>('market_unavailable') : null,
       history: history.status === 'fulfilled'
-        ? historyEnvelope(ticker, history.value, benchmarkByTicker.get(benchmarkTicker) ?? null)
+        ? historyEnvelope(ticker, history.value, benchmarkByTicker.get(benchmarkTicker) ?? null, benchmarkTicker)
         : unavailable<HistoricalWatchlistMetrics>('history_unavailable'),
     };
   });

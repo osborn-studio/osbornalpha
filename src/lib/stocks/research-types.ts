@@ -6,6 +6,10 @@ export interface StockResearchMeta {
   providers: string[];
   fetchedAt: string;
   warnings: string[];
+  queryCount?: number | null;
+  resultCount?: number | null;
+  durationMs?: number | null;
+  estimatedCostMicrousd?: number | null;
 }
 
 export interface StockNewsItem {

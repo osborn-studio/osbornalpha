@@ -59,13 +59,34 @@ function isPerspectiveProvenance(value: unknown): value is PerspectiveProvenance
     && item.evidenceCoverageRatio >= 0 && item.evidenceCoverageRatio <= 1;
 }
 
+function isResearchMeta(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const meta = value as Record<string, unknown>;
+  const optionalCount = (key: string) => meta[key] === undefined || meta[key] === null
+    || (typeof meta[key] === 'number' && Number.isFinite(meta[key]) && Number(meta[key]) >= 0);
+  return ['complete', 'partial', 'unavailable', 'error'].includes(String(meta.status))
+    && Array.isArray(meta.providers) && meta.providers.every((provider) => typeof provider === 'string')
+    && typeof meta.fetchedAt === 'string'
+    && Array.isArray(meta.warnings) && meta.warnings.every((warning) => typeof warning === 'string')
+    && optionalCount('queryCount')
+    && optionalCount('resultCount')
+    && optionalCount('durationMs')
+    && optionalCount('estimatedCostMicrousd');
+}
+
 function validBundle(body: unknown): body is Record<string, unknown> {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
   const value = body as Record<string, unknown>;
-  return !!value.news && typeof value.news === 'object' && !Array.isArray(value.news)
-    && Array.isArray((value.news as Record<string, unknown>).items)
-    && !!value.reports && typeof value.reports === 'object' && !Array.isArray(value.reports)
-    && Array.isArray((value.reports as Record<string, unknown>).items)
+  const news = value.news;
+  const reports = value.reports;
+  return !!news && typeof news === 'object' && !Array.isArray(news)
+    && typeof (news as Record<string, unknown>).ticker === 'string'
+    && Array.isArray((news as Record<string, unknown>).items)
+    && isResearchMeta((news as Record<string, unknown>).meta)
+    && !!reports && typeof reports === 'object' && !Array.isArray(reports)
+    && typeof (reports as Record<string, unknown>).ticker === 'string'
+    && Array.isArray((reports as Record<string, unknown>).items)
+    && isResearchMeta((reports as Record<string, unknown>).meta)
     && Array.isArray(value.perspectives);
 }
 

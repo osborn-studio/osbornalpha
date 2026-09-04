@@ -13,6 +13,11 @@ import { weightedSentiment } from '@/lib/watchlist/research-summary';
 
 type ResearchTab = 'news' | 'reports' | 'perspectives';
 
+function telemetryTotal(values: Array<number | null | undefined>): number | null {
+  const finite = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0);
+  return finite.length > 0 ? finite.reduce((sum, value) => sum + value, 0) : null;
+}
+
 function statusTone(status: EvidenceSearchStatus) {
   if (status === 'complete') return 'border-up/20 bg-up/10 text-up';
   if (status === 'partial') return 'border-warn/25 bg-warn/10 text-warn';
@@ -31,6 +36,10 @@ export function WatchlistResearchPanel({ ticker, overview }: { ticker: string; o
   const providers = [...new Set(metas.flatMap((meta) => meta?.providers ?? []))];
   const fetchedAt = metas.map((meta) => meta?.fetchedAt).filter((value): value is string => !!value).sort().at(-1);
   const warnings = [...new Set(metas.flatMap((meta) => meta?.warnings ?? []))];
+  const queryCount = telemetryTotal(metas.map((meta) => meta?.queryCount));
+  const resultCount = telemetryTotal(metas.map((meta) => meta?.resultCount));
+  const durationMs = telemetryTotal(metas.map((meta) => meta?.durationMs));
+  const estimatedCostMicrousd = telemetryTotal(metas.map((meta) => meta?.estimatedCostMicrousd));
   const news = research.news?.items ?? [];
   const reports = research.reports?.items ?? [];
   const sourceOptions = [...new Set([
@@ -104,6 +113,10 @@ export function WatchlistResearchPanel({ ticker, overview }: { ticker: string; o
         <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-text-muted">
           {providers.length > 0 && <span>{t('providers', { value: providers.join(', ') })}</span>}
           {fetchedAt && <span>{t('fetchedAt', { value: new Date(fetchedAt).toLocaleString() })}</span>}
+          {queryCount != null && <span>{t('queryCount', { count: queryCount })}</span>}
+          {resultCount != null && <span>{t('resultCount', { count: resultCount })}</span>}
+          {durationMs != null && <span>{t('duration', { value: durationMs })}</span>}
+          {estimatedCostMicrousd != null && <span>{t('estimatedCost', { value: (estimatedCostMicrousd / 1_000_000).toFixed(4) })}</span>}
           {warnings.length > 0 && <span className="text-warn" title={warnings.join(', ')}>{t('warnings', { count: warnings.length })}</span>}
           {sourceOptions.length > 1 && <label className="ml-auto inline-flex items-center gap-1.5"><span>{t('sourceFilter')}</span><select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} aria-label={t('sourceFilter')} className="h-7 py-1 text-[10px]"><option value="all">{t('allSources')}</option>{sourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}</select></label>}
         </div>

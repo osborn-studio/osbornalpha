@@ -64,6 +64,14 @@ test('watchlist workbench filters, changes presets and opens a multi-chart quick
   await expect(page.getByRole('button', { name: 'Market', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Valuation', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sort by PE (TTM)' })).toBeVisible();
+  await page.getByRole('button', { name: 'Saved table views' }).click();
+  await page.getByPlaceholder('View name').fill('Valuation review');
+  await page.getByRole('button', { name: 'Save current view' }).click();
+  await page.getByRole('button', { name: 'Market', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Sort by PE (TTM)' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Saved table views' }).click();
+  await page.getByRole('button', { name: 'Valuation review' }).click();
+  await expect(page.getByRole('button', { name: 'Sort by PE (TTM)' })).toBeVisible();
 
   await page.getByPlaceholder('Search ticker or company').fill('AAPL');
   await expect(page.getByRole('link', { name: 'AAPL' })).toBeVisible();
@@ -81,11 +89,18 @@ test('watchlist workbench filters, changes presets and opens a multi-chart quick
   await expect(drawer.locator('canvas').first()).toBeVisible();
   await page.screenshot({ path: 'test-results/watchlist-desktop.png', fullPage: true });
 
+  await drawer.getByRole('button', { name: 'Close quick quote' }).click();
+  await appleRow.getByRole('button', { name: 'View' }).click();
+  await expect(drawer.getByLabel('Chart type')).toHaveValue('baseline');
+
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(drawer).toBeVisible();
   await expect(drawer.getByRole('button', { name: 'Close quick quote' })).toBeVisible();
   await page.screenshot({ path: 'test-results/watchlist-mobile.png', fullPage: false });
   await drawer.getByRole('button', { name: 'Close quick quote' }).click();
   await expect(drawer).toBeHidden();
+  await page.getByRole('button', { name: /Apple/ }).click();
+  await expect(drawer).toBeVisible();
+  await drawer.getByRole('button', { name: 'Close quick quote' }).click();
   await page.screenshot({ path: 'test-results/watchlist-table-mobile.png', fullPage: false });
 });

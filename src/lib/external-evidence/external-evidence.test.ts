@@ -124,6 +124,22 @@ describe('external evidence service', () => {
     expect(snapshot.results.map((item) => item.title)).toEqual(['Filing result', 'News result']);
     expect(snapshot.warnings).toEqual(['provider_failover:primary']);
   });
+
+  it('surfaces an audit warning without discarding successful search results', async () => {
+    const provider: EvidenceSearchProvider = {
+      id: 'test',
+      search: vi.fn(async () => [{ title: 'Verified update', url: 'https://reuters.com/update' }]),
+    };
+    const snapshot = await searchExternalEvidenceUncached({ ticker: 'AAPL', scopes: ['news'] }, {
+      provider,
+      persist: vi.fn(async () => { throw new Error('database unavailable'); }),
+      now: () => new Date('2026-09-04T00:00:00Z'),
+    });
+
+    expect(snapshot.status).toBe('complete');
+    expect(snapshot.results).toHaveLength(1);
+    expect(snapshot.warnings).toContain('audit_persist_failed');
+  });
 });
 
 describe('headline sentiment', () => {
@@ -145,7 +161,7 @@ describe('headline sentiment', () => {
 });
 
 describe('evidence persistence records', () => {
-  it('stores a query hash and normalized evidence without storing credentials or raw queries', () => {
+  it('stores immutable query/result hashes without storing credentials or raw queries', () => {
     const request = normalizeEvidenceSearchRequest({ query: 'private research question', ticker: 'AAPL', scopes: ['news'] });
     const result = normalizeEvidenceResults([
       { title: 'Verified update', url: 'https://reuters.com/update', snippet: 'Public excerpt', score: 0.9 },
@@ -156,9 +172,32 @@ describe('evidence persistence records', () => {
       estimatedCostMicrousd: 2_000, warnings: [],
     });
     expect(rows.run.request_hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(rows.run.audit_version).toBe(1);
+    expect(rows.run.query_plan).toEqual([expect.objectContaining({
+      scope: 'news', queryHash: expect.stringMatching(/^[a-f0-9]{64}$/), freshnessDays: 14,
+    })]);
+    expect(rows.run.result_citation_ids).toEqual([result.citationId]);
+    expect(rows.run.result_set_hash).toMatch(/^[a-f0-9]{64}$/);
     expect(rows.run).not.toHaveProperty('query');
     expect(JSON.stringify(rows)).not.toContain('private research question');
     expect(rows.evidence[0]).toMatchObject({ citation_id: result.citationId, canonical_url: result.url });
     expect(rows.links[0]).toMatchObject({ ticker: 'AAPL', citation_id: result.citationId });
+  });
+
+  it('keeps the result-set hash stable when providers return the same evidence in another order', () => {
+    const request = normalizeEvidenceSearchRequest({ ticker: 'AAPL', scopes: ['news'] });
+    const results = normalizeEvidenceResults([
+      { title: 'First', url: 'https://reuters.com/first' },
+      { title: 'Second', url: 'https://sec.gov/second' },
+    ], 'news', new Date('2026-09-04T00:00:00Z'));
+    const snapshot = {
+      requestId: '00000000-0000-4000-8000-000000000001', status: 'complete' as const,
+      provider: 'test', queryCount: 1, fetchedAt: '2026-09-04T00:00:00.000Z',
+      durationMs: 10, estimatedCostMicrousd: null, warnings: [],
+    };
+    const first = buildEvidencePersistenceRows(request, { ...snapshot, results });
+    const second = buildEvidencePersistenceRows(request, { ...snapshot, results: [...results].reverse() });
+    expect(second.run.result_set_hash).toBe(first.run.result_set_hash);
+    expect(second.run.result_citation_ids).toEqual(first.run.result_citation_ids);
   });
 });

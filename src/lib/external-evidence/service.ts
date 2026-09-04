@@ -31,7 +31,14 @@ async function finishSnapshot(
   persist?: SearchDependencies['persist'],
 ): Promise<EvidenceSearchSnapshot> {
   if (persist) {
-    try { await persist(request, snapshot); } catch { /* Audit storage is best-effort. */ }
+    try {
+      await persist(request, snapshot);
+    } catch {
+      return {
+        ...snapshot,
+        warnings: [...new Set([...snapshot.warnings, 'audit_persist_failed'])],
+      };
+    }
   }
   return snapshot;
 }

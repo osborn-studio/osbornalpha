@@ -1,9 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { ArrowUpRight, Bell, ChartNoAxesCombined, Newspaper, NotebookPen, X } from 'lucide-react';
+import { ArrowUpRight, Bell, ChartNoAxesCombined, Newspaper, NotebookPen, RefreshCw, RotateCcw, X } from 'lucide-react';
 import { KlineChart } from '@/components/KlineChart';
 import { MarketLabel } from '@/components/MarketLabel';
 import type { LiveQuote } from '@/lib/hooks/useQuote';
@@ -14,6 +14,8 @@ import { useDialogFocusTrap } from '@/lib/hooks/useDialogFocusTrap';
 import { WatchlistAlertPanel } from '@/components/watchlist/WatchlistAlertPanel';
 import { WatchlistResearchPanel } from '@/components/watchlist/WatchlistResearchPanel';
 import { WatchlistDataStatus } from '@/components/watchlist/WatchlistDataStatus';
+import { usePersistentState } from '@/lib/hooks/usePersistentState';
+import { watchlistBenchmarkTicker } from '@/lib/watchlist/analytics';
 
 type QuickViewTab = 'overview' | 'research' | 'decision' | 'alerts';
 
@@ -30,17 +32,23 @@ function optional(value: number | null | undefined, suffix = '') {
   return value == null || !Number.isFinite(value) ? '--' : `${value.toFixed(2)}${suffix}`;
 }
 
+function validBenchmarkPreference(value: unknown): value is string {
+  return typeof value === 'string' && (value === '' || /^[A-Z0-9][A-Z0-9.\-]{0,19}$/.test(value));
+}
+
 export function WatchlistQuickView({
   ticker,
   quote,
   overview,
   onDecisionSaved,
+  onBenchmarkChange,
   onClose,
 }: {
   ticker: string;
   quote: LiveQuote | null;
   overview?: WatchlistOverviewClientRow;
   onDecisionSaved?: (item: WatchlistOverviewItemRow) => void;
+  onBenchmarkChange?: (ticker: string, benchmark: string | null) => Promise<boolean>;
   onClose: () => void;
 }) {
   const t = useTranslations('market.table.drawer');
@@ -48,6 +56,15 @@ export function WatchlistQuickView({
   const [visited, setVisited] = useState<Set<QuickViewTab>>(() => new Set(['overview']));
   const [decisionDirty, setDecisionDirty] = useState(false);
   const [confirmingClose, setConfirmingClose] = useState(false);
+  const [benchmarkPreference, setBenchmarkPreference] = usePersistentState(
+    `stock-monitor:watchlist:benchmark-v1:${ticker}`,
+    '',
+    validBenchmarkPreference,
+  );
+  const [benchmarkInput, setBenchmarkInput] = useState(benchmarkPreference);
+  const [benchmarkLoading, setBenchmarkLoading] = useState(false);
+  const [benchmarkError, setBenchmarkError] = useState(false);
+  const autoRequestedBenchmark = useRef<string | null>(null);
   const requestClose = useCallback(() => {
     if (decisionDirty) setConfirmingClose(true);
     else onClose();
@@ -59,7 +76,11 @@ export function WatchlistQuickView({
     setVisited(new Set(['overview']));
     setDecisionDirty(false);
     setConfirmingClose(false);
+    setBenchmarkError(false);
+    autoRequestedBenchmark.current = null;
   }, [ticker]);
+
+  useEffect(() => { setBenchmarkInput(benchmarkPreference); }, [benchmarkPreference]);
 
   const selectTab = (tab: QuickViewTab) => {
     setActiveTab(tab);
@@ -69,6 +90,24 @@ export function WatchlistQuickView({
   const market = quote?.market ?? classifyMarket(ticker);
   const historicalMetrics = overview?.history?.value;
   const benchmarkReliable = historicalMetrics?.benchmarkStatus === 'reliable';
+  const defaultBenchmark = watchlistBenchmarkTicker(market);
+  const refreshBenchmark = useCallback(async (next: string | null) => {
+    if (!onBenchmarkChange) return;
+    setBenchmarkLoading(true);
+    setBenchmarkError(false);
+    const ok = await onBenchmarkChange(ticker, next);
+    setBenchmarkLoading(false);
+    setBenchmarkError(!ok);
+    if (ok) setBenchmarkPreference(next ?? '');
+  }, [onBenchmarkChange, setBenchmarkPreference, ticker]);
+
+  useEffect(() => {
+    if (!benchmarkPreference || !onBenchmarkChange
+      || historicalMetrics?.benchmarkTicker === benchmarkPreference
+      || autoRequestedBenchmark.current === benchmarkPreference) return;
+    autoRequestedBenchmark.current = benchmarkPreference;
+    void refreshBenchmark(benchmarkPreference);
+  }, [benchmarkPreference, historicalMetrics?.benchmarkTicker, onBenchmarkChange, refreshBenchmark]);
   const tabs: Array<{ id: QuickViewTab; icon: typeof ChartNoAxesCombined; available: boolean }> = [
     { id: 'overview', icon: ChartNoAxesCombined, available: true },
     { id: 'research', icon: Newspaper, available: true },
@@ -134,6 +173,14 @@ export function WatchlistQuickView({
               </section>
               <section className="mt-6" aria-label={t('historyMetrics')}>
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold text-text-dim"><span>{t('historyMetrics')}</span>{historicalMetrics && <span className="font-normal text-text-muted">{t('sampleSize', { count: historicalMetrics.sampleSize })} · {t('coverage', { value: Math.round(historicalMetrics.coverageRatio * 100) })}</span>}</div>
+                {onBenchmarkChange && <div className="mb-2 flex flex-wrap items-center gap-1.5 rounded-md border border-border/70 bg-bg-elevated/40 p-2">
+                  <label htmlFor={`watchlist-benchmark-${ticker}`} className="text-[10px] font-medium text-text-muted">{t('benchmarkSelector')}</label>
+                  <input id={`watchlist-benchmark-${ticker}`} value={benchmarkInput} onChange={(event) => setBenchmarkInput(event.target.value.toUpperCase().trim())} placeholder={defaultBenchmark} className="h-7 w-28 px-2 py-1 font-mono text-[10px]" maxLength={20} />
+                  <button type="button" onClick={() => void refreshBenchmark(benchmarkInput || null)} disabled={benchmarkLoading || !validBenchmarkPreference(benchmarkInput)} className="icon-button !h-7 !w-7 !basis-7" title={t('benchmarkApply')} aria-label={t('benchmarkApply')}><RefreshCw className={`h-3.5 w-3.5 ${benchmarkLoading ? 'animate-spin' : ''}`} aria-hidden="true" /></button>
+                  <button type="button" onClick={() => { setBenchmarkInput(''); void refreshBenchmark(null); }} disabled={benchmarkLoading || (!benchmarkPreference && historicalMetrics?.benchmarkTicker === defaultBenchmark)} className="icon-button !h-7 !w-7 !basis-7" title={t('benchmarkDefault', { benchmark: defaultBenchmark })} aria-label={t('benchmarkDefault', { benchmark: defaultBenchmark })}><RotateCcw className="h-3.5 w-3.5" aria-hidden="true" /></button>
+                  <span className="ml-auto text-[10px] text-text-muted">{historicalMetrics?.benchmarkTicker ?? defaultBenchmark}</span>
+                  {benchmarkError && <span className="w-full text-[10px] text-warn" role="status">{t('benchmarkLoadFailed')}</span>}
+                </div>}
                 <div className="grid grid-cols-2 gap-x-4 sm:grid-cols-4">
                   <Metric label={t('oneYearPriceReturn')} value={optional(historicalMetrics?.periodReturnPct, '%')} tone={historicalMetrics?.periodReturnPct == null ? 'text-text' : changeClass(historicalMetrics.periodReturnPct)} />
                   <Metric label={t('benchmarkReturn', { benchmark: historicalMetrics?.benchmarkTicker ?? '--' })} value={optional(benchmarkReliable ? historicalMetrics?.benchmarkReturnPct : null, '%')} tone={!benchmarkReliable || historicalMetrics?.benchmarkReturnPct == null ? 'text-text' : changeClass(historicalMetrics.benchmarkReturnPct)} />

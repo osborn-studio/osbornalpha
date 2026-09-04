@@ -1,9 +1,38 @@
 import { createHash } from 'node:crypto';
 import { getAdminSupabase } from '@/lib/supabase/admin';
+import { buildEvidenceQueries } from './query';
 import type { EvidenceSearchSnapshot, NormalizedEvidenceSearchRequest } from './types';
+
+const EVIDENCE_AUDIT_VERSION = 1;
 
 function requestHash(request: NormalizedEvidenceSearchRequest): string {
   return createHash('sha256').update(JSON.stringify(request)).digest('hex');
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function queryPlan(request: NormalizedEvidenceSearchRequest) {
+  return buildEvidenceQueries(request).map((query) => ({
+    scope: query.scope,
+    queryHash: sha256(query.query),
+    freshnessDays: query.freshnessDays,
+    limit: query.limit,
+  }));
+}
+
+function resultSet(snapshot: EvidenceSearchSnapshot) {
+  const rows = snapshot.results
+    .map((item) => ({
+      citationId: item.citationId,
+      contentHash: sha256(`${item.title}\n${item.snippet}`),
+    }))
+    .sort((left, right) => left.citationId.localeCompare(right.citationId));
+  return {
+    citationIds: rows.map((row) => row.citationId),
+    hash: sha256(JSON.stringify(rows)),
+  };
 }
 
 export function buildEvidencePersistenceRows(
@@ -11,10 +40,15 @@ export function buildEvidencePersistenceRows(
   snapshot: EvidenceSearchSnapshot,
 ) {
   const expiresAt = new Date(Date.parse(snapshot.fetchedAt) + 6 * 60 * 60_000).toISOString();
+  const results = resultSet(snapshot);
   return {
     run: {
       request_id: snapshot.requestId,
       request_hash: requestHash(request),
+      audit_version: EVIDENCE_AUDIT_VERSION,
+      query_plan: queryPlan(request),
+      result_citation_ids: results.citationIds,
+      result_set_hash: results.hash,
       ticker: request.ticker ?? null,
       scopes: request.scopes,
       provider: snapshot.provider,
@@ -40,7 +74,7 @@ export function buildEvidencePersistenceRows(
       relevance_score: item.relevanceScore,
       quality_score: item.qualityScore,
       quality_flags: item.qualityFlags,
-      content_hash: createHash('sha256').update(`${item.title}\n${item.snippet}`).digest('hex'),
+      content_hash: sha256(`${item.title}\n${item.snippet}`),
     })),
     links: request.ticker ? snapshot.results.map((item) => ({
       ticker: request.ticker!,
@@ -58,6 +92,7 @@ export async function persistEvidenceSnapshot(
   type EvidenceTable = 'external_evidence_runs' | 'external_evidence' | 'external_evidence_tickers';
   type EvidenceRepository = {
     from: (table: EvidenceTable) => {
+      insert: (values: Record<string, unknown>) => Promise<{ error: { message: string } | null }>;
       upsert: (
         values: Record<string, unknown> | Array<Record<string, unknown>>,
         options: { onConflict: string },
@@ -68,7 +103,9 @@ export async function persistEvidenceSnapshot(
   // a small, explicit table contract for the persistence operations below.
   const db = getAdminSupabase() as unknown as EvidenceRepository;
   const rows = buildEvidencePersistenceRows(request, snapshot);
-  const { error: runError } = await db.from('external_evidence_runs').upsert(rows.run, { onConflict: 'request_id' });
+  // Runs form an immutable audit ledger. Evidence bodies remain independently
+  // upserted by citation so cached public facts can receive fresher metadata.
+  const { error: runError } = await db.from('external_evidence_runs').insert(rows.run);
   if (runError) throw new Error('evidence_run_persist_failed');
   if (rows.evidence.length === 0) return;
   const { error: evidenceError } = await db.from('external_evidence').upsert(rows.evidence, { onConflict: 'citation_id' });

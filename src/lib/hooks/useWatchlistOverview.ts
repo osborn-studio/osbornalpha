@@ -78,10 +78,11 @@ export function useWatchlistOverview(enabled: boolean) {
 
   useEffect(() => { rowsRef.current = rows; }, [rows]);
 
-  const fetchPage = useCallback(async (cursor: string | null, signal?: AbortSignal, ticker?: string) => {
+  const fetchPage = useCallback(async (cursor: string | null, signal?: AbortSignal, ticker?: string, benchmark?: string | null) => {
     const query = new URLSearchParams({ limit: '50' });
     if (cursor) query.set('cursor', cursor);
     if (ticker) query.set('ticker', ticker);
+    if (benchmark) query.set('benchmark', benchmark);
     const response = await fetch(`/api/watchlist/overview?${query}`, { signal, cache: 'no-store' });
     const body = await response.json().catch(() => null);
     if (!response.ok || !isOverviewResponse(body)) {
@@ -166,23 +167,31 @@ export function useWatchlistOverview(enabled: boolean) {
     }
   }, [enabled, fetchPage, loadingMore, meta.partial, nextCursor]);
 
-  const ensureTicker = useCallback(async (ticker: string) => {
-    if (!enabled || rowsRef.current[ticker]?.market) return rowsRef.current[ticker] ?? null;
+  const ensureTicker = useCallback(async (
+    ticker: string,
+    options: { benchmark?: string | null; force?: boolean } = {},
+  ) => {
+    if (!enabled || (!options.force && rowsRef.current[ticker]?.market)) return rowsRef.current[ticker] ?? null;
     const existing = ensuringRef.current.get(ticker);
-    if (existing) return existing;
+    if (existing && !options.force) return existing;
+    if (options.force) {
+      ensureSlots.current.get(ticker)?.cancel();
+      ensureSlots.current.delete(ticker);
+      ensuringRef.current.delete(ticker);
+    }
     const slot = createRequestSlot();
     ensureSlots.current.set(ticker, slot);
     const lease = slot.begin();
     const loadGeneration = generation.current;
     const pending = (async () => {
-      const payload = await fetchPage(null, lease.signal, ticker);
+      const payload = await fetchPage(null, lease.signal, ticker, options.benchmark ?? null);
       if (!slot.isCurrent(lease) || loadGeneration !== generation.current) return null;
       const row = payload.rows.find((candidate) => candidate.item.ticker === ticker) ?? null;
       if (row) setRows((current) => ({ ...current, [ticker]: row }));
       return row;
     })().catch(() => null).finally(() => {
-      ensuringRef.current.delete(ticker);
-      ensureSlots.current.delete(ticker);
+      if (ensuringRef.current.get(ticker) === pending) ensuringRef.current.delete(ticker);
+      if (ensureSlots.current.get(ticker) === slot) ensureSlots.current.delete(ticker);
     });
     ensuringRef.current.set(ticker, pending);
     return pending;

@@ -108,7 +108,7 @@ export function useWatchlist() {
         });
         ownerIdRef.current = server.ownerId;
         syncQueue.current = queue;
-        queue?.setServerVersion(server.version);
+        queue?.setServerSnapshot(server);
         setServerVersion(server.version);
         if (queue?.hasPending()) {
           setSyncStatus('syncing');
@@ -167,17 +167,17 @@ export function useWatchlist() {
     const conflict = conflictSnapshot;
     if (!queue || !conflict) return;
     if (strategy === 'server') {
-      queue.discardPending();
-      queue.setServerVersion(conflict.version);
-      writeLocalWatchlist(conflict.groups);
+      queue.acceptCanonical(conflict);
+      setGroups(conflict.groups);
+      setServerVersion(conflict.version);
       setConflictSnapshot(null);
       setSyncStatus('synced');
       return;
     }
     if (strategy === 'merge') {
-      const merged = mergeWatchlistGroups(groups, conflict.groups);
+      const merged = mergeWatchlistGroups(groups, conflict.groups, queue.getPendingBaseGroups());
       queue.discardPending();
-      queue.setServerVersion(conflict.version);
+      queue.setServerSnapshot(conflict);
       writeLocalWatchlist(merged);
       setGroups(merged);
       setConflictSnapshot(null);
@@ -187,7 +187,7 @@ export function useWatchlist() {
       });
       return;
     }
-    if (!queue.rebasePending(conflict.version)) return;
+    if (!queue.rebasePending(conflict.version, conflict.groups)) return;
     setConflictSnapshot(null);
     setSyncStatus('syncing');
     queue.flush().then((saved) => {

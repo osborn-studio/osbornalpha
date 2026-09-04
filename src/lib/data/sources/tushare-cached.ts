@@ -32,8 +32,11 @@ import {
   fetchTushareDailyBasic as _fetchTushareDailyBasic,
   fetchTushareFinaIndicator as _fetchTushareFinaIndicator,
   fetchTushareIncome as _fetchTushareIncome,
+  fetchTushareIncomePeriods as _fetchTushareIncomePeriods,
   fetchTushareBalance as _fetchTushareBalance,
+  fetchTushareBalancePeriods as _fetchTushareBalancePeriods,
   fetchTushareCashflow as _fetchTushareCashflow,
+  fetchTushareCashflowPeriods as _fetchTushareCashflowPeriods,
   fetchTushareTopHolders as _fetchTushareTopHolders,
   fetchTushareFloatHolders as _fetchTushareFloatHolders,
   fetchTushareHkHold as _fetchTushareHkHold,
@@ -87,6 +90,24 @@ export const fetchTushareBalance = unstable_cache(
 export const fetchTushareCashflow = unstable_cache(
   async (ticker: string, limit = 5) => _fetchTushareCashflow(ticker, limit),
   ['tushare-cashflow'],
+  { revalidate: 7 * DAY, tags: ['tushare', 'tushare-cashflow'] }
+);
+
+export const fetchTushareIncomePeriods = unstable_cache(
+  async (ticker: string, limit = 20) => _fetchTushareIncomePeriods(ticker, limit),
+  ['tushare-income-periods-v1'],
+  { revalidate: 7 * DAY, tags: ['tushare', 'tushare-income'] }
+);
+
+export const fetchTushareBalancePeriods = unstable_cache(
+  async (ticker: string, limit = 20) => _fetchTushareBalancePeriods(ticker, limit),
+  ['tushare-balance-periods-v1'],
+  { revalidate: 7 * DAY, tags: ['tushare', 'tushare-balance'] }
+);
+
+export const fetchTushareCashflowPeriods = unstable_cache(
+  async (ticker: string, limit = 20) => _fetchTushareCashflowPeriods(ticker, limit),
+  ['tushare-cashflow-periods-v1'],
   { revalidate: 7 * DAY, tags: ['tushare', 'tushare-cashflow'] }
 );
 

@@ -75,7 +75,7 @@ describe('GET /api/watchlist/overview', () => {
       history: { status: 'fresh' },
       research: { source: 'stored-research', status: 'fresh', value: { recentNewsCount: 1 } },
     });
-    expect(mocks.computed).toHaveBeenCalledWith(['AAPL'], 'en', { includeMarket: false });
+    expect(mocks.computed).toHaveBeenCalledWith(['AAPL'], 'en', { includeMarket: false, benchmarkTicker: null });
   });
 
   it('supports a targeted ticker read for an unloaded quick view', async () => {
@@ -84,10 +84,22 @@ describe('GET /api/watchlist/overview', () => {
     const body = await response.json();
     expect(body.total).toBe(1);
     expect(body.rows).toHaveLength(1);
-    expect(mocks.computed).toHaveBeenCalledWith(['AAPL'], 'en', { includeMarket: true });
+    expect(mocks.computed).toHaveBeenCalledWith(['AAPL'], 'en', { includeMarket: true, benchmarkTicker: null });
     expect(mocks.page).toHaveBeenCalledWith(expect.anything(), {
       offset: null, cursor: null, limit: 50, ticker: 'AAPL',
     });
+  });
+
+  it('passes a normalized custom benchmark only for targeted reads', async () => {
+    const response = await GET(new Request('https://example.test/api/watchlist/overview?ticker=aapl&benchmark=qqq'));
+    expect(response.status).toBe(200);
+    expect(mocks.computed).toHaveBeenCalledWith(['AAPL'], 'en', { includeMarket: true, benchmarkTicker: 'QQQ' });
+  });
+
+  it('rejects custom benchmarks on a bulk overview request', async () => {
+    const response = await GET(new Request('https://example.test/api/watchlist/overview?benchmark=qqq'));
+    expect(response.status).toBe(400);
+    expect(mocks.page).not.toHaveBeenCalled();
   });
 
   it('rejects malformed keyset cursors before loading data', async () => {

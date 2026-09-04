@@ -20,6 +20,45 @@ export interface WatchlistSyncRequest {
   mutationId: string;
 }
 
+function normalizedGroup(group: WatchlistGroup): WatchlistGroup {
+  return {
+    ...group,
+    name: group.name.trim(),
+    tickers: [...new Set(group.tickers.map((ticker) => ticker.trim().toUpperCase()).filter(Boolean))],
+  };
+}
+
+function groupNameKey(group: WatchlistGroup): string | null {
+  const name = group.name.trim().toLocaleLowerCase();
+  return name || null;
+}
+
+function findGroup(groups: WatchlistGroup[], reference: WatchlistGroup): WatchlistGroup | undefined {
+  return groups.find((group) => group.id === reference.id)
+    ?? (groupNameKey(reference) ? groups.find((group) => groupNameKey(group) === groupNameKey(reference)) : undefined);
+}
+
+function sameGroup(left: WatchlistGroup, right: WatchlistGroup): boolean {
+  const a = normalizedGroup(left);
+  const b = normalizedGroup(right);
+  return a.name === b.name && a.tickers.length === b.tickers.length
+    && a.tickers.every((ticker) => b.tickers.includes(ticker));
+}
+
+function mergeTickerSets(local: string[], server: string[], base?: string[]): string[] {
+  const normalize = (values: string[]) => [...new Set(values.map((ticker) => ticker.trim().toUpperCase()).filter(Boolean))];
+  const localValues = normalize(local);
+  const serverValues = normalize(server);
+  if (!base) return [...serverValues, ...localValues.filter((ticker) => !serverValues.includes(ticker))];
+  const baseSet = new Set(normalize(base));
+  const localSet = new Set(localValues);
+  const serverSet = new Set(serverValues);
+  return [
+    ...serverValues.filter((ticker) => !baseSet.has(ticker) || localSet.has(ticker)),
+    ...localValues.filter((ticker) => !serverSet.has(ticker) && !baseSet.has(ticker)),
+  ];
+}
+
 export function parseWatchlistSyncRequest(body: unknown): WatchlistSyncRequest | null {
   if (!body || typeof body !== 'object') return null;
   const candidate = body as Record<string, unknown>;
@@ -44,44 +83,47 @@ export function isWatchlistVersionConflict(error: { code?: string; message?: str
  * Non-destructive conflict merge for two client snapshots. Groups are matched
  * by server id first and then by a case-insensitive name. Tickers are unioned
  * in server order followed by local additions, so concurrent additions are
- * preserved. Destructive operations remain explicit in the conflict dialog.
+ * preserved. With a common base, deletions win over an unchanged copy while
+ * a group edited on the other side is retained conservatively.
  */
-export function mergeWatchlistGroups(local: WatchlistGroup[], server: WatchlistGroup[]): WatchlistGroup[] {
-  const normalizeTicker = (ticker: string) => ticker.trim().toUpperCase();
-  const merged = server.map((group) => ({
-    ...group,
-    tickers: [...new Set(group.tickers.map(normalizeTicker).filter(Boolean))],
-  }));
-  const byId = new Map(merged.map((group) => [group.id, group]));
-  const byName = new Map(
-    merged
-      .filter((group) => group.name.trim().length > 0)
-      .map((group) => [group.name.trim().toLocaleLowerCase(), group]),
-  );
-  for (const localGroup of local) {
-    const localName = localGroup.name.trim();
-    const target = byId.get(localGroup.id) ?? (localName ? byName.get(localName.toLocaleLowerCase()) : undefined);
-    if (!target) {
-      const copy = {
-        ...localGroup,
-        tickers: [...new Set(localGroup.tickers.map(normalizeTicker).filter(Boolean))],
-      };
-      merged.push(copy);
-      byId.set(copy.id, copy);
-      if (copy.name.trim()) byName.set(copy.name.trim().toLocaleLowerCase(), copy);
+export function mergeWatchlistGroups(
+  local: WatchlistGroup[],
+  server: WatchlistGroup[],
+  base?: WatchlistGroup[] | null,
+): WatchlistGroup[] {
+  const localGroups = local.map(normalizedGroup);
+  const serverGroups = server.map(normalizedGroup);
+  const baseGroups = base?.map(normalizedGroup) ?? null;
+  const merged: WatchlistGroup[] = [];
+  const usedLocal = new Set<string>();
+
+  for (const serverGroup of serverGroups) {
+    const localGroup = findGroup(localGroups, serverGroup);
+    const baseGroup = baseGroups ? findGroup(baseGroups, serverGroup) : undefined;
+    if (localGroup) usedLocal.add(localGroup.id);
+    if (!localGroup && baseGroup && sameGroup(serverGroup, baseGroup)) continue;
+    if (!localGroup) {
+      merged.push(serverGroup);
       continue;
     }
-    const normalizedServerTickers = target.tickers.map(normalizeTicker).filter(Boolean);
-    target.tickers = [...new Set(normalizedServerTickers)];
-    const seen = new Set(target.tickers);
-    for (const ticker of localGroup.tickers.map(normalizeTicker).filter(Boolean)) {
-      if (!seen.has(ticker)) {
-        target.tickers.push(ticker);
-        seen.add(ticker);
-      }
-    }
-    // A local rename is retained when both snapshots refer to the same group.
-    if (localName && localName !== target.name) target.name = localName;
+    const localRenamed = !!baseGroup && localGroup.name !== baseGroup.name;
+    const serverRenamed = !!baseGroup && serverGroup.name !== baseGroup.name;
+    merged.push({
+      ...serverGroup,
+      name: localRenamed && !serverRenamed ? localGroup.name
+        : serverRenamed && !localRenamed ? serverGroup.name
+          : localGroup.name || serverGroup.name,
+      tickers: mergeTickerSets(localGroup.tickers, serverGroup.tickers, baseGroup?.tickers),
+    });
+  }
+
+  for (const localGroup of localGroups) {
+    if (usedLocal.has(localGroup.id)) continue;
+    const baseGroup = baseGroups ? findGroup(baseGroups, localGroup) : undefined;
+    const serverGroup = findGroup(serverGroups, localGroup);
+    if (serverGroup) continue;
+    if (baseGroup && sameGroup(localGroup, baseGroup)) continue;
+    merged.push(localGroup);
   }
   return merged;
 }

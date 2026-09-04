@@ -216,4 +216,25 @@ describe('mergeWatchlistGroups', () => {
       { id: 'local-empty', name: '', tickers: ['AAPL'] },
     ]);
   });
+
+  it('preserves concurrent additions while honoring a deletion relative to the common base', () => {
+    const base = [{ id: 'core', name: 'Core', tickers: ['AAPL', 'MSFT'] }];
+    const local = [{ id: 'core', name: 'Core', tickers: ['AAPL', 'NVDA'] }];
+    const server = [{ id: 'core', name: 'Core', tickers: ['AAPL', 'MSFT', 'TSLA'] }];
+
+    expect(mergeWatchlistGroups(local, server, base)).toEqual([
+      { id: 'core', name: 'Core', tickers: ['AAPL', 'TSLA', 'NVDA'] },
+    ]);
+  });
+
+  it('honors a whole-group deletion when the other side left the group unchanged', () => {
+    const base = [{ id: 'ideas', name: 'Ideas', tickers: ['TSLA'] }];
+    expect(mergeWatchlistGroups([], base, base)).toEqual([]);
+  });
+
+  it('keeps a remotely modified group when the local side deleted its base version', () => {
+    const base = [{ id: 'ideas', name: 'Ideas', tickers: ['TSLA'] }];
+    const server = [{ id: 'ideas', name: 'Ideas', tickers: ['TSLA', 'NVDA'] }];
+    expect(mergeWatchlistGroups([], server, base)).toEqual(server);
+  });
 });

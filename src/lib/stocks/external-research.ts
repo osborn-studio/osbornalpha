@@ -14,6 +14,7 @@ import type {
   StockReportsResponse,
   StockResearchMeta,
 } from './research-types';
+import type { EvidenceSearchSnapshot } from '@/lib/external-evidence/types';
 
 function formatTushareDate(value: string | null | undefined): string | null {
   if (!value || !/^\d{8}$/.test(value)) return null;
@@ -30,17 +31,20 @@ async function stockIdentity(ticker: string) {
 }
 
 function evidenceMeta(
-  status: StockResearchMeta['status'],
-  provider: string | null,
-  fetchedAt: string,
-  warnings: string[],
+  snapshot: EvidenceSearchSnapshot,
+  warnings: string[] = snapshot.warnings,
   extraProviders: string[] = [],
+  extraResultCount = 0,
 ): StockResearchMeta {
   return {
-    status,
-    providers: Array.from(new Set([...extraProviders, ...(provider ? [provider] : [])])),
-    fetchedAt,
+    status: snapshot.status,
+    providers: Array.from(new Set([...extraProviders, ...(snapshot.provider ? [snapshot.provider] : [])])),
+    fetchedAt: snapshot.fetchedAt,
     warnings,
+    queryCount: snapshot.queryCount,
+    resultCount: snapshot.results.length + extraResultCount,
+    durationMs: snapshot.durationMs,
+    estimatedCostMicrousd: snapshot.estimatedCostMicrousd,
   };
 }
 
@@ -78,7 +82,7 @@ export async function getStockNews(ticker: string, freshnessDays = 14): Promise<
   return {
     ticker,
     items,
-    meta: evidenceMeta(snapshot.status, snapshot.provider, snapshot.fetchedAt, snapshot.warnings),
+    meta: evidenceMeta(snapshot),
   };
 }
 
@@ -193,6 +197,9 @@ export async function getStockReports(ticker: string): Promise<StockReportsRespo
       targetMax: consensus.target_max,
       count: consensus.n,
     } : null,
-    meta: evidenceMeta(status, snapshot.provider, snapshot.fetchedAt, warnings, structured.length > 0 ? ['tushare'] : []),
+    meta: {
+      ...evidenceMeta(snapshot, warnings, structured.length > 0 ? ['tushare'] : [], structured.length),
+      status,
+    },
   };
 }

@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import {
   isTushareConfigured,
-  fetchTushareIncome,
-  fetchTushareBalance,
-  fetchTushareCashflow,
+  fetchTushareIncomePeriods,
+  fetchTushareBalancePeriods,
+  fetchTushareCashflowPeriods,
   fetchTushareFinaIndicator,
 } from '@/lib/data/sources/tushare-cached';
 import { buildFinancialReport } from '@/lib/stocks/financials';
@@ -25,6 +25,8 @@ export async function GET(_req: Request, { params }: Ctx) {
         source: 'unsupported',
         ticker,
         yearly: [],
+        quarterly: [],
+        ttm: null,
         latest_indicator: null,
         error: 'Tushare financials only support A-share',
         meta: {
@@ -37,6 +39,8 @@ export async function GET(_req: Request, { params }: Ctx) {
           reportingFrequency: 'unsupported',
           latestPeriodEnd: null,
           availablePeriods: 0,
+          availableQuarterlyPeriods: 0,
+          ttmAvailable: false,
           coverage: { income: 0, balance: 0, cashflow: 0, indicator: false },
           warnings: ['financials_market_unsupported'],
         },
@@ -51,6 +55,8 @@ export async function GET(_req: Request, { params }: Ctx) {
         source: 'no-token',
         ticker,
         yearly: [],
+        quarterly: [],
+        ttm: null,
         latest_indicator: null,
         error: 'TUSHARE_TOKEN not configured',
         meta: {
@@ -60,9 +66,11 @@ export async function GET(_req: Request, { params }: Ctx) {
           currency: 'CNY',
           unit: 'CNY_100M',
           unitScale: 1e8,
-          reportingFrequency: 'annual',
+          reportingFrequency: 'quarterly',
           latestPeriodEnd: null,
           availablePeriods: 0,
+          availableQuarterlyPeriods: 0,
+          ttmAvailable: false,
           coverage: { income: 0, balance: 0, cashflow: 0, indicator: false },
           warnings: ['tushare_token_missing'],
         },
@@ -73,9 +81,9 @@ export async function GET(_req: Request, { params }: Ctx) {
 
   try {
     const results = await Promise.allSettled([
-      fetchTushareIncome(ticker, 5),
-      fetchTushareBalance(ticker, 5),
-      fetchTushareCashflow(ticker, 5),
+      fetchTushareIncomePeriods(ticker, 20),
+      fetchTushareBalancePeriods(ticker, 20),
+      fetchTushareCashflowPeriods(ticker, 20),
       fetchTushareFinaIndicator(ticker),
     ]);
     const income = results[0].status === 'fulfilled' ? results[0].value : [];
@@ -89,6 +97,8 @@ export async function GET(_req: Request, { params }: Ctx) {
       source: 'tushare',
       ticker,
       yearly: report.yearly,
+      quarterly: report.quarterly,
+      ttm: report.ttm,
       latest_indicator: report.latestIndicator
         ? {
             end_date: report.latestIndicator.end_date,

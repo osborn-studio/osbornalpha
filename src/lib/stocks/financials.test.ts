@@ -34,4 +34,51 @@ describe('buildFinancialReport', () => {
     });
     expect(report.yearly).toEqual([]);
   });
+
+  it('derives discrete quarters from cumulative statements and calculates TTM', () => {
+    const periods = ['20250331', '20250630', '20250930', '20251231'];
+    const cumulativeRevenue = [100, 220, 360, 500].map((value) => value * 1e8);
+    const cumulativeIncome = [10, 25, 42, 60].map((value) => value * 1e8);
+    const report = buildFinancialReport({
+      income: periods.map((end_date, index) => ({
+        ts_code: '600519.SH', end_date,
+        revenue: cumulativeRevenue[index], total_revenue: cumulativeRevenue[index],
+        n_income: cumulativeIncome[index], basic_eps: [1, 2.5, 4.2, 6][index], diluted_eps: 0,
+      })),
+      balance: periods.map((end_date, index) => ({
+        ts_code: '600519.SH', end_date, total_assets: (500 + index * 10) * 1e8,
+        total_liab: 100 * 1e8, total_hldr_eqy_inc_min_int: 400 * 1e8,
+        total_share: 1, money_cap: 1,
+      })),
+      cashflow: periods.map((end_date, index) => ({
+        ts_code: '600519.SH', end_date, n_cashflow_act: [8, 20, 33, 48][index] * 1e8,
+        n_cashflow_inv_act: 0, n_cash_flows_fnc_act: 0, free_cashflow: [6, 15, 25, 36][index] * 1e8,
+      })),
+      indicator: null,
+    });
+
+    expect(report.quarterly.map((row) => row.revenue_yi)).toEqual([100, 120, 140, 140]);
+    expect(report.quarterly.map((row) => row.net_income_yi)).toEqual([10, 15, 17, 18]);
+    expect(report.ttm).toMatchObject({
+      periodEnd: '20251231', revenue_yi: 500, net_income_yi: 60,
+      op_cashflow_yi: 48, free_cashflow_yi: 36, quarterCount: 4,
+    });
+    expect(report.meta).toMatchObject({
+      reportingFrequency: 'quarterly', availablePeriods: 1,
+      availableQuarterlyPeriods: 4, ttmAvailable: true, warnings: [],
+    });
+  });
+
+  it('does not fabricate discrete flow values when an adjacent quarter is missing', () => {
+    const report = buildFinancialReport({
+      income: [
+        { ts_code: '600519.SH', end_date: '20250331', revenue: 100, total_revenue: 100, n_income: 10, basic_eps: 1, diluted_eps: 1 },
+        { ts_code: '600519.SH', end_date: '20250930', revenue: 300, total_revenue: 300, n_income: 30, basic_eps: 3, diluted_eps: 3 },
+      ],
+      balance: [], cashflow: [], indicator: null,
+    });
+    expect(report.quarterly[1]).toMatchObject({ quarter: 'Q3', revenue_yi: null, net_income_yi: null });
+    expect(report.ttm).toBeNull();
+    expect(report.meta.warnings).toContain('quarterly_history_incomplete');
+  });
 });

@@ -10,15 +10,20 @@ describe('watchlist production schema verifier', () => {
     const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       expect(String(input)).toContain('https://project.supabase.co');
       expect(init?.headers).toMatchObject({ apikey: 'secret', authorization: 'Bearer secret' });
-      return new Response(String(input).includes('watchlist_release_markers')
-        ? JSON.stringify([{ marker: 'watchlist_monitoring_status' }])
+      const url = String(input);
+      const marker = url.includes('external_evidence_audit_snapshot')
+        ? 'external_evidence_audit_snapshot'
+        : 'watchlist_monitoring_status';
+      return new Response(url.includes('watchlist_release_markers')
+        ? JSON.stringify([{ marker }])
         : '[]', { status: 200 });
     });
     try {
       const results = await runWatchlistProductionChecks(fetcher);
-      expect(results).toHaveLength(6);
+      expect(results).toHaveLength(8);
       expect(results.every((result) => result.ok)).toBe(true);
       expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('/rpc/get_watchlist_overview_cursor'), expect.objectContaining({ method: 'POST' }));
+      expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('audit_version,query_plan,result_citation_ids,result_set_hash'), expect.anything());
     } finally {
       if (originalUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
       else process.env.NEXT_PUBLIC_SUPABASE_URL = originalUrl;

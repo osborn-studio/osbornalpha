@@ -82,7 +82,10 @@ function storedMeta(
   now: Date,
 ) {
   if (!fetchedAt) {
-    return { status: 'unavailable' as const, providers, fetchedAt: now.toISOString(), warnings: ['stored_research_empty'] };
+    return {
+      status: 'unavailable' as const, providers, fetchedAt: now.toISOString(), warnings: ['stored_research_empty'],
+      queryCount: null, resultCount: null, durationMs: null, estimatedCostMicrousd: null,
+    };
   }
   const freshness = watchlistTimestampFreshness(fetchedAt, now);
   return {
@@ -94,6 +97,10 @@ function storedMeta(
     warnings: freshness === 'fresh' ? []
       : freshness === 'stale' ? ['stored_research_stale']
         : ['stored_research_expired'],
+    queryCount: null,
+    resultCount: null,
+    durationMs: null,
+    estimatedCostMicrousd: null,
   };
 }
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 
 export function usePersistentState<T>(
   key: string,
@@ -8,8 +8,15 @@ export function usePersistentState<T>(
   validate: (value: unknown) => value is T,
 ): [T, Dispatch<SetStateAction<T>>] {
   const [value, setValue] = useState(initialValue);
+  const activeKey = useRef(key);
+  const initialValueRef = useRef(initialValue);
+  initialValueRef.current = initialValue;
 
   useEffect(() => {
+    if (activeKey.current !== key) {
+      activeKey.current = key;
+      setValue(initialValueRef.current);
+    }
     try {
       const raw = localStorage.getItem(key);
       if (!raw) return;

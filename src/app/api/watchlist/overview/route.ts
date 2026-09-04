@@ -46,6 +46,10 @@ export async function GET(request: Request) {
     const tickerParam = url.searchParams.get('ticker');
     const ticker = tickerParam ? normalizeEvidenceTickerParam(tickerParam) : null;
     if (tickerParam && !ticker) return watchlistApiError('invalid_ticker', 400);
+    const benchmarkParam = url.searchParams.get('benchmark');
+    const benchmark = benchmarkParam ? normalizeEvidenceTickerParam(benchmarkParam) : null;
+    if (benchmarkParam && !benchmark) return watchlistApiError('invalid_benchmark', 400);
+    if (benchmark && !ticker) return watchlistApiError('benchmark_requires_ticker', 400);
     const page = parseWatchlistOverviewPage(url);
     if (page.invalidCursor) return watchlistApiError('invalid_cursor', 400);
     const databasePage = await loadWatchlistOverviewPage(client, {
@@ -58,7 +62,7 @@ export async function GET(request: Request) {
     const locale = await getRequestLocale();
     const [version, computed, identitiesResult, researchByTicker] = await Promise.all([
       loadWatchlistVersion(client),
-      buildComputedWatchlistOverview(pageTickers, locale, { includeMarket: ticker !== null }),
+      buildComputedWatchlistOverview(pageTickers, locale, { includeMarket: ticker !== null, benchmarkTicker: benchmark }),
       pageTickers.length
         ? client.from('stocks_universe').select('*').in('ticker', pageTickers)
         : Promise.resolve({ data: [], error: null }),

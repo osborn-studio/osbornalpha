@@ -165,16 +165,30 @@ export interface TushareIncome {
   diluted_eps: number;
 }
 
-/** Recent income statements (default 5 years annual). */
-export async function fetchTushareIncome(ticker: string, limit = 5): Promise<TushareIncome[]> {
+function firstStatementPerPeriod<T extends { end_date: string }>(rows: T[], limit: number): T[] {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    if (!row.end_date || seen.has(row.end_date)) return false;
+    seen.add(row.end_date);
+    return true;
+  }).slice(0, limit);
+}
+
+/** Recent income statement periods, including interim cumulative reports. */
+export async function fetchTushareIncomePeriods(ticker: string, limit = 20): Promise<TushareIncome[]> {
   const ts_code = normalizeTushareTicker(ticker);
   if (!ts_code) return [];
-  // report_type=1 合并报表, fetch more rows then filter to annual (period ending 1231)
   const rows = await tushareCall<TushareIncome>(
     'income',
-    { ts_code, report_type: 1, limit: 40 },
+    { ts_code, report_type: 1, limit: Math.max(limit * 2, 40) },
     'ts_code,end_date,total_revenue,revenue,n_income,basic_eps,diluted_eps'
   );
+  return firstStatementPerPeriod(rows, limit);
+}
+
+/** Recent income statements (default 5 years annual). */
+export async function fetchTushareIncome(ticker: string, limit = 5): Promise<TushareIncome[]> {
+  const rows = await fetchTushareIncomePeriods(ticker, Math.max(limit * 4, 20));
   const annual = rows.filter((r) => String(r.end_date).endsWith('1231'));
   return annual.slice(0, limit);
 }
@@ -189,15 +203,21 @@ export interface TushareBalance {
   money_cap: number;
 }
 
-/** Recent balance sheets (default 5 years annual). */
-export async function fetchTushareBalance(ticker: string, limit = 5): Promise<TushareBalance[]> {
+/** Recent balance-sheet periods, including interim point-in-time reports. */
+export async function fetchTushareBalancePeriods(ticker: string, limit = 20): Promise<TushareBalance[]> {
   const ts_code = normalizeTushareTicker(ticker);
   if (!ts_code) return [];
   const rows = await tushareCall<TushareBalance>(
     'balancesheet',
-    { ts_code, report_type: 1, limit: 40 },
+    { ts_code, report_type: 1, limit: Math.max(limit * 2, 40) },
     'ts_code,end_date,total_assets,total_liab,total_hldr_eqy_inc_min_int,total_share,money_cap'
   );
+  return firstStatementPerPeriod(rows, limit);
+}
+
+/** Recent balance sheets (default 5 years annual). */
+export async function fetchTushareBalance(ticker: string, limit = 5): Promise<TushareBalance[]> {
+  const rows = await fetchTushareBalancePeriods(ticker, Math.max(limit * 4, 20));
   const annual = rows.filter((r) => String(r.end_date).endsWith('1231'));
   return annual.slice(0, limit);
 }
@@ -211,14 +231,20 @@ export interface TushareCashflow {
   free_cashflow: number;
 }
 
-export async function fetchTushareCashflow(ticker: string, limit = 5): Promise<TushareCashflow[]> {
+/** Recent cash-flow periods, including interim cumulative reports. */
+export async function fetchTushareCashflowPeriods(ticker: string, limit = 20): Promise<TushareCashflow[]> {
   const ts_code = normalizeTushareTicker(ticker);
   if (!ts_code) return [];
   const rows = await tushareCall<TushareCashflow>(
     'cashflow',
-    { ts_code, report_type: 1, limit: 40 },
+    { ts_code, report_type: 1, limit: Math.max(limit * 2, 40) },
     'ts_code,end_date,n_cashflow_act,n_cashflow_inv_act,n_cash_flows_fnc_act,free_cashflow'
   );
+  return firstStatementPerPeriod(rows, limit);
+}
+
+export async function fetchTushareCashflow(ticker: string, limit = 5): Promise<TushareCashflow[]> {
+  const rows = await fetchTushareCashflowPeriods(ticker, Math.max(limit * 4, 20));
   const annual = rows.filter((r) => String(r.end_date).endsWith('1231'));
   return annual.slice(0, limit);
 }

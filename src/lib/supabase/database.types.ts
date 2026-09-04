@@ -10,6 +10,7 @@
 // + 20260904170000_watchlist_overview_cursor.sql (keyset overview pagination)
 // + 20260904180000_watchlist_research_quality.sql (research provenance flags)
 // + 20260904190000_watchlist_research_refresh_cleanup.sql (ticker queue migration)
+// + 20260904230000_external_evidence_audit_snapshot.sql (immutable query/result audit metadata)
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -411,6 +412,10 @@ export interface ExternalEvidenceRecord {
 export interface ExternalEvidenceRun {
   request_id: string;
   request_hash: string;
+  audit_version: number;
+  query_plan: Array<{ scope: string; queryHash: string; freshnessDays: number; limit: number }>;
+  result_citation_ids: string[];
+  result_set_hash: string;
   ticker: string | null;
   scopes: string[];
   provider: string | null;

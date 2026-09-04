@@ -175,6 +175,9 @@ export default function WatchlistPage() {
   });
   const overview = useWatchlistOverview(!!user && allTickers.length > 0);
   const { ensureTicker, rows: overviewRows } = overview;
+  const loadQuickViewBenchmark = useCallback(async (ticker: string, benchmark: string | null) => (
+    await ensureTicker(ticker, { benchmark, force: true })
+  ) !== null, [ensureTicker]);
 
   useEffect(() => {
     if (quickViewTicker && user && !overviewRows[quickViewTicker]?.market) {
@@ -688,6 +691,7 @@ export default function WatchlistPage() {
           quote={quotes[quickViewTicker] ?? null}
           overview={overview.rows[quickViewTicker]}
           onDecisionSaved={overview.updateItem}
+          onBenchmarkChange={user ? loadQuickViewBenchmark : undefined}
           onClose={() => setQuickViewTicker(null)}
         />
       )}
