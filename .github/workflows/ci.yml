@@ -22,3 +22,30 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
+
+  production-schema:
+    name: Production Watchlist schema (when configured)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      WATCHLIST_PRODUCTION_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      WATCHLIST_PRODUCTION_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - name: Skip when production verifier secrets are not configured
+        if: ${{ env.WATCHLIST_PRODUCTION_URL == '' || env.WATCHLIST_PRODUCTION_KEY == '' }}
+        run: echo "Production Watchlist schema verifier skipped; configure NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to enable it."
+      - uses: actions/checkout@v5
+        if: ${{ env.WATCHLIST_PRODUCTION_URL != '' && env.WATCHLIST_PRODUCTION_KEY != '' }}
+      - uses: actions/setup-node@v5
+        if: ${{ env.WATCHLIST_PRODUCTION_URL != '' && env.WATCHLIST_PRODUCTION_KEY != '' }}
+        with:
+          node-version-file: package.json
+          cache: npm
+      - run: npm ci
+        if: ${{ env.WATCHLIST_PRODUCTION_URL != '' && env.WATCHLIST_PRODUCTION_KEY != '' }}
+      - name: Verify production Watchlist schema
+        if: ${{ env.WATCHLIST_PRODUCTION_URL != '' && env.WATCHLIST_PRODUCTION_KEY != '' }}
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ env.WATCHLIST_PRODUCTION_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ env.WATCHLIST_PRODUCTION_KEY }}
+        run: npm run watchlist:production-check
