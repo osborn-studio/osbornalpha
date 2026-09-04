@@ -2,6 +2,7 @@ import { useTranslations } from 'next-intl';
 import type { Stance } from '@/lib/supabase/database.types';
 import { aggregateConfidence, classifyCite, type ConfidenceLevel } from '@/lib/data/evidence-confidence';
 import type { PerspectiveCitation } from '@/lib/external-evidence/types';
+import { ExternalLink } from '@/components/ExternalLink';
 
 interface Props {
   // Typed as `string` (not the `Persona` union) because the mock/stub data
@@ -90,16 +91,14 @@ export function PerspectiveCard({ persona, name, stance, confidence, summary, ci
         <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-text-muted">
           <span>{t('webSources')}:</span>
           {citations.map((citation) => (
-            <a
+            <ExternalLink
               key={citation.id}
               href={citation.url}
-              target="_blank"
-              rel="noopener noreferrer"
               className="max-w-[220px] truncate rounded border border-border bg-bg-elevated px-1.5 py-0.5 text-text-dim hover:border-accent hover:text-accent"
               title={`${citation.title} · ${citation.domain}`}
             >
               {citation.domain} · {t('sourceQuality', { value: Math.round((citation.qualityScore ?? citation.trustScore) * 100) })}
-            </a>
+            </ExternalLink>
           ))}
         </div>
       )}

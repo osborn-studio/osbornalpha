@@ -3,6 +3,7 @@
 import { useLocale, useTranslations } from 'next-intl';
 import { useStockResearch } from '@/lib/hooks/useStockResearch';
 import type { StockReportItem } from '@/lib/stocks/research-types';
+import { ExternalLink } from '@/components/ExternalLink';
 
 function formatPublishedAt(value: string | null, locale: string, fallback: string): string {
   if (!value) return fallback;
@@ -64,9 +65,7 @@ export function StockResearchPanel({ ticker, currency }: { ticker: string; curre
           return (
             <article key={report.id} className="grid gap-2 border-b border-border px-1 py-3 last:border-b-0 sm:grid-cols-[1fr_auto] sm:items-center">
               <div className="min-w-0">
-                {report.url ? (
-                  <a href={report.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-text hover:text-accent">{report.title}</a>
-                ) : <div className="font-semibold">{report.title}</div>}
+                <ExternalLink href={report.url} className="font-semibold text-text hover:text-accent">{report.title}</ExternalLink>
                 <div className="mt-1 flex flex-wrap gap-x-2 text-[11px] text-text-muted">
                   <span>{report.broker || report.source}</span>
                   <span>{formatPublishedAt(report.publishedAt, locale, t('publishedUnknown'))}</span>
@@ -87,7 +86,7 @@ export function StockResearchPanel({ ticker, currency }: { ticker: string; curre
         ) : news.map((item) => (
           <article key={item.id} className="border-b border-border px-1 py-3 last:border-b-0">
             <div className="flex items-start justify-between gap-3">
-              <a href={item.url} target="_blank" rel="noopener noreferrer" className="font-medium leading-snug text-text hover:text-accent">{item.title}</a>
+              <ExternalLink href={item.url} className="font-medium leading-snug text-text hover:text-accent">{item.title}</ExternalLink>
               {item.sentiment != null && (
                 <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] tabular-nums ${item.sentiment > 0 ? 'bg-up/10 text-up' : 'bg-down/10 text-down'}`}>
                   {item.sentiment > 0 ? '+' : ''}{item.sentiment.toFixed(1)}
