@@ -219,6 +219,45 @@ export interface BrokerReport {
   fetched_at: string;
 }
 
+export interface ExternalEvidenceRecord {
+  citation_id: string;
+  canonical_url: string;
+  title: string;
+  domain: string;
+  snippet: string;
+  source_type: string;
+  published_at: string | null;
+  fetched_at: string;
+  provider: string | null;
+  trust_score: number;
+  relevance_score: number;
+  content_hash: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExternalEvidenceRun {
+  request_id: string;
+  request_hash: string;
+  ticker: string | null;
+  scopes: string[];
+  provider: string | null;
+  status: string;
+  query_count: number;
+  result_count: number;
+  duration_ms: number;
+  estimated_cost_microusd: number | null;
+  warnings: string[];
+  created_at: string;
+}
+
+export interface ExternalEvidenceTicker {
+  ticker: string;
+  citation_id: string;
+  request_id: string;
+  expires_at: string;
+}
+
 export interface UserPreferences {
   user_id: string;
   language: string;
@@ -480,6 +519,9 @@ export type Database = {
       perspectives: { Row: Perspective; Insert: Partial<Perspective>; Update: Partial<Perspective> };
       news_items: { Row: NewsItem; Insert: Partial<NewsItem>; Update: Partial<NewsItem> };
       broker_reports: { Row: BrokerReport; Insert: Partial<BrokerReport>; Update: Partial<BrokerReport> };
+      external_evidence: { Row: ExternalEvidenceRecord; Insert: Partial<ExternalEvidenceRecord>; Update: Partial<ExternalEvidenceRecord> };
+      external_evidence_runs: { Row: ExternalEvidenceRun; Insert: Partial<ExternalEvidenceRun>; Update: Partial<ExternalEvidenceRun> };
+      external_evidence_tickers: { Row: ExternalEvidenceTicker; Insert: Partial<ExternalEvidenceTicker>; Update: Partial<ExternalEvidenceTicker> };
       user_preferences: { Row: UserPreferences; Insert: Partial<UserPreferences>; Update: Partial<UserPreferences> };
       profiles: { Row: Profile; Insert: Partial<Profile>; Update: Partial<Profile> };
       decisions: { Row: Decision; Insert: Partial<Decision>; Update: Partial<Decision> };

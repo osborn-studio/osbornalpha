@@ -423,6 +423,14 @@ export interface PerspectiveRow {
   confidence: number;
   summary: string;
   cites: string[];
+  citations?: Array<{
+    id: string;
+    title: string;
+    url: string;
+    domain: string;
+    publishedAt: string | null;
+    trustScore: number;
+  }>;
 }
 export interface PerspectivesState {
   perspectives: PerspectiveRow[];

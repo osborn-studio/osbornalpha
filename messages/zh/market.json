@@ -440,7 +440,15 @@
       "noRecentReports": "暂无近期研报",
       "targetLabel": "目标 {target}",
       "newsHeading": "📰 新闻动态 ({count})",
-      "noNews": "暂无最新新闻"
+      "noNews": "暂无近期可核验新闻",
+      "loading": "正在加载外部研究证据…",
+      "loadFailed": "外部研究数据加载失败，请稍后重试。",
+      "providerUnavailable": "尚未配置联网搜索。结构化行情仍可使用，但无法核验外部新闻。",
+      "partialData": "部分外部来源暂不可用，以下已核验结果可能不完整。",
+      "publishedUnknown": "发布日期未知",
+      "metadataOnly": "仅元数据",
+      "trust": "来源可信度 {value}%",
+      "providers": "数据来源：{value}"
     },
     "signals": {
       "heading": "🎯 Sentinel 历史信号",

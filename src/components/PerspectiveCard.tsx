@@ -1,6 +1,7 @@
 import { useTranslations } from 'next-intl';
 import type { Stance } from '@/lib/supabase/database.types';
 import { aggregateConfidence, classifyCite, type ConfidenceLevel } from '@/lib/data/evidence-confidence';
+import type { PerspectiveCitation } from '@/lib/external-evidence/types';
 
 interface Props {
   // Typed as `string` (not the `Persona` union) because the mock/stub data
@@ -12,6 +13,7 @@ interface Props {
   confidence: number;
   summary: string;
   cites: string[];
+  citations?: PerspectiveCitation[];
 }
 
 const STANCE_BORDER: Record<Stance, string> = {
@@ -34,7 +36,7 @@ const LEVEL_BG: Record<ConfidenceLevel, string> = {
   unknown: 'bg-bg-card text-text-muted border-border',
 };
 
-export function PerspectiveCard({ persona, name, stance, confidence, summary, cites }: Props) {
+export function PerspectiveCard({ persona, name, stance, confidence, summary, cites, citations = [] }: Props) {
   const t = useTranslations('components.perspectiveCard');
   const tPersonas = useTranslations('components.personas');
   const evidence = aggregateConfidence(cites);
@@ -87,6 +89,23 @@ export function PerspectiveCard({ persona, name, stance, confidence, summary, ci
               </span>
             );
           })}
+        </div>
+      )}
+      {citations.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-text-muted">
+          <span>{t('webSources')}:</span>
+          {citations.map((citation) => (
+            <a
+              key={citation.id}
+              href={citation.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="max-w-[220px] truncate rounded border border-border bg-bg-elevated px-1.5 py-0.5 text-text-dim hover:border-accent hover:text-accent"
+              title={`${citation.title} · ${citation.domain}`}
+            >
+              {citation.domain}
+            </a>
+          ))}
         </div>
       )}
     </div>

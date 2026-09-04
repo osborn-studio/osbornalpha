@@ -440,7 +440,15 @@
       "noRecentReports": "No recent reports",
       "targetLabel": "Target {target}",
       "newsHeading": "📰 News ({count})",
-      "noNews": "No recent news"
+      "noNews": "No recent verified news",
+      "loading": "Loading external research evidence…",
+      "loadFailed": "External research could not be loaded. Try again later.",
+      "providerUnavailable": "Web search is not configured. Structured market data remains available, but external news cannot be verified.",
+      "partialData": "Some external sources were unavailable. The verified results below may be incomplete.",
+      "publishedUnknown": "Publication date unavailable",
+      "metadataOnly": "Metadata only",
+      "trust": "Source trust {value}%",
+      "providers": "Sources: {value}"
     },
     "signals": {
       "heading": "🎯 Sentinel Signal History",

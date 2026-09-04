@@ -6,7 +6,7 @@ describe('tool registry', () => {
     const names = TOOLS.map((t) => t.name).sort();
     expect(names).toEqual(
       [
-        'calendar', 'dcf', 'financials', 'flows', 'holders', 'kline', 'perspectives', 'quote', 'radar', 'search', 'signals',
+        'calendar', 'dcf', 'financials', 'flows', 'holders', 'kline', 'perspectives', 'quote', 'radar', 'search', 'signals', 'web_search',
         'record_decision', 'get_portfolio', 'save_artifact',
       ].sort(),
     );

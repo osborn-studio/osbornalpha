@@ -16,13 +16,9 @@ import { useToast } from '@/components/Toast';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
 import { usePerspectives, useQuote } from '@/lib/hooks/useQuote';
 import { QuotaNotice } from '@/components/QuotaNotice';
+import { StockResearchPanel } from '@/components/StockResearchPanel';
 
 type Tab = 'overview' | 'ai' | 'fundamentals' | 'news' | 'signals' | 'holdings';
-
-interface ConsensusInfo { target: number; min: number | null; max: number | null; n: number; source: string }
-
-/** A-share tickers only — the ones report_rc consensus can cover. */
-const isAShare = (ticker: string) => /\.(SH|SZ|BJ)$/i.test(ticker);
 
 const TAB_IDS: Tab[] = ['overview', 'ai', 'fundamentals', 'news', 'signals', 'holdings'];
 
@@ -46,32 +42,6 @@ export default function StockDetailPage() {
     if (!hydrated) return;
     setInWatchlist(groups.some((g) => g.tickers.includes(ticker)));
   }, [groups, hydrated, ticker]);
-
-  // A-share with no mock broker reports: ask /api/consensus for real (tushare
-  // report_rc) consensus so 目标价 isn't stuck at 暂无 once the account is on
-  // real data. Fill-only-missing — mock broker_reports keep priority.
-  const hasBrokerReports = (stock?.broker_reports.length ?? 0) > 0;
-  const [brokerConsensus, setBrokerConsensus] = useState<ConsensusInfo | null>(null);
-
-  useEffect(() => {
-    setBrokerConsensus(null);
-    if (hasBrokerReports || !isAShare(ticker)) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`/api/consensus/${encodeURIComponent(ticker)}`);
-        const data = await res.json();
-        if (cancelled) return;
-        const c = data?.consensus;
-        if (c && Number.isFinite(c.target_median)) {
-          setBrokerConsensus({ target: c.target_median, min: c.target_min, max: c.target_max, n: c.n, source: data.source });
-        }
-      } catch {
-        // fetch failed — keep the 暂无近期研报 empty state
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [ticker, hasBrokerReports]);
 
   if (!stock && quote.loading) {
     return (
@@ -315,67 +285,7 @@ export default function StockDetailPage() {
         </>
       )}
 
-      {tab === 'news' && (
-        <>
-          <div className="card-base">
-            <div className="mb-3 text-sm font-semibold text-text-dim">{t('news.brokerReportsHeading', { count: stock.broker_reports.length || brokerConsensus?.n || 0 })}</div>
-            {stock.broker_reports.length === 0 ? (
-              brokerConsensus ? (
-                <div
-                  className="rounded-md bg-bg-card px-3 py-2.5 text-sm"
-                  title={brokerConsensus.source === 'tushare' ? t('news.consensusSourceTitle') : undefined}
-                >
-                  <div className="font-semibold tabular-nums">
-                    {t('news.consensusTarget', { price: `${stock.currency}${formatPrice(brokerConsensus.target)}` })}
-                    {brokerConsensus.source === 'tushare' && (
-                      <sup className="ml-0.5 text-[9px] font-normal text-text-dim">tushare</sup>
-                    )}
-                  </div>
-                  <div className="text-[11px] text-text-dim">
-                    {t('news.reportCount', { n: brokerConsensus.n })}
-                    {brokerConsensus.min != null && brokerConsensus.max != null && brokerConsensus.max > brokerConsensus.min
-                      ? t('news.range', { min: `${stock.currency}${formatPrice(brokerConsensus.min)}`, max: `${stock.currency}${formatPrice(brokerConsensus.max)}` })
-                      : ''}
-                  </div>
-                </div>
-              ) : (
-                <div className="py-8 text-center text-sm text-text-dim">{t('news.noRecentReports')}</div>
-              )
-            ) : (
-              stock.broker_reports.map((r, i) => (
-                <div key={i} className="mb-2 grid grid-cols-[1fr_auto] items-center gap-3 rounded-md bg-bg-card px-3 py-2.5 text-sm">
-                  <div>
-                    <div className="font-semibold">{r.broker}</div>
-                    <div className="text-[11px] text-text-dim">{r.date} · {r.rating}</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="font-semibold tabular-nums">{t('news.targetLabel', { target: r.target })}</div>
-                    <div className={`text-[11px] ${r.target_change_pct > 0 ? 'text-up' : r.target_change_pct < 0 ? 'text-down' : ''}`}>
-                      {r.target_change_pct > 0 ? '↑ +' : r.target_change_pct < 0 ? '↓ ' : '→ '}{r.target_change_pct}%
-                    </div>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-          <div className="card-base">
-            <div className="mb-3 text-sm font-semibold text-text-dim">{t('news.newsHeading', { count: stock.news.length })}</div>
-            {stock.news.length === 0 ? (
-              <div className="py-8 text-center text-sm text-text-dim">{t('news.noNews')}</div>
-            ) : (
-              stock.news.map((n, i) => (
-                <div key={i} className="grid grid-cols-[auto_1fr_auto] items-center gap-2.5 border-b border-border px-3 py-2.5 text-sm last:border-b-0">
-                  <span className="text-[11px] text-text-muted">{n.time}</span>
-                  <span>{n.title} <span className="text-[11px] text-text-muted">· {n.source}</span></span>
-                  <span className={`rounded px-1.5 py-0.5 text-[11px] ${n.sentiment > 0.3 ? 'bg-up/15 text-up' : n.sentiment < -0.3 ? 'bg-down/15 text-down' : 'bg-bg-card text-text-dim'}`}>
-                    {n.sentiment > 0 ? '+' : ''}{n.sentiment.toFixed(1)}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        </>
-      )}
+      {tab === 'news' && <StockResearchPanel ticker={ticker} currency={stock.currency} />}
 
       {tab === 'signals' && (
         <div className="card-base">

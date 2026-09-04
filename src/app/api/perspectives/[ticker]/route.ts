@@ -26,6 +26,7 @@ import {
   PERSONA_CONCURRENCY_HARD_CAP,
 } from '@/lib/billing/llm-concurrency';
 import { PRICING_VERSION } from '@/lib/billing/llm-pricing';
+import { resolvePerspectiveCitations, searchExternalEvidence } from '@/lib/external-evidence';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 86400;
@@ -170,17 +171,34 @@ export async function GET(req: Request, { params }: Ctx) {
   }
 
   const isA = /\.(SH|SZ|BJ)$/i.test(ticker);
-  let dailyBasic: any = null;
-  let finaIndicator: any = null;
-  let income: any[] = [];
-
-  if (isA && isTushareConfigured()) {
-    [dailyBasic, finaIndicator, income] = await Promise.all([
-      fetchTushareDailyBasic(ticker).catch(() => null),
-      fetchTushareFinaIndicator(ticker).catch(() => null),
-      fetchTushareIncome(ticker, 5).catch(() => []),
-    ]);
-  }
+  const [financialContext, evidence] = await Promise.all([
+    isA && isTushareConfigured()
+      ? Promise.all([
+          fetchTushareDailyBasic(ticker).catch(() => null),
+          fetchTushareFinaIndicator(ticker).catch(() => null),
+          fetchTushareIncome(ticker, 5).catch(() => []),
+        ])
+      : Promise.resolve([null, null, []] as [any, any, any[]]),
+    searchExternalEvidence({
+      ticker,
+      name: quote.name,
+      market: quote.market,
+      scopes: ['news', 'filing', 'industry', 'macro'],
+      freshnessDays: 30,
+      limit: 12,
+    }).catch(() => ({
+      requestId: crypto.randomUUID(),
+      status: 'error' as const,
+      provider: null,
+      queryCount: 0,
+      results: [],
+      fetchedAt: new Date().toISOString(),
+      durationMs: 0,
+      estimatedCostMicrousd: null,
+      warnings: ['evidence_search_failed'],
+    })),
+  ]);
+  const [dailyBasic, finaIndicator, income] = financialContext;
 
   let financialSummary: string | undefined;
   if (income.length > 0) {
@@ -206,6 +224,7 @@ export async function GET(req: Request, { params }: Ctx) {
     gross_margin: finaIndicator?.grossprofit_margin ?? null,
     net_margin: finaIndicator?.netprofit_margin ?? null,
     financial_summary: financialSummary,
+    external_evidence: evidence.results,
   };
 
   // 2. Run all 9 personas in parallel through the unified LLM facade
@@ -309,7 +328,9 @@ export async function GET(req: Request, { params }: Ctx) {
         : 'neutral';
       const confidence = Math.max(0, Math.min(10, Number(parsed.confidence) || 5));
       const summary = sanitizeAiText(String(parsed.summary || '')).slice(0, 300);
-      const cites = sanitizeAiList(Array.isArray(parsed.cites) ? parsed.cites.slice(0, 6).map(String) : []);
+      const rawDataCites = Array.isArray(parsed.data_cites) ? parsed.data_cites : parsed.cites;
+      const cites = sanitizeAiList(Array.isArray(rawDataCites) ? rawDataCites.slice(0, 6).map(String) : []);
+      const citations = resolvePerspectiveCitations(parsed.citation_ids, evidence.results);
 
       return {
         persona: p.id,
@@ -318,6 +339,7 @@ export async function GET(req: Request, { params }: Ctx) {
         confidence,
         summary,
         cites,
+        citations,
       };
     })
   );
@@ -384,7 +406,9 @@ export async function GET(req: Request, { params }: Ctx) {
   const budgetConfig = getBudgetConfig();
 
   return NextResponse.json({
-    source: `${llm.provider}+eastmoney` + (isA && isTushareConfigured() ? '+tushare' : ''),
+    source: `${llm.provider}+eastmoney`
+      + (isA && isTushareConfigured() ? '+tushare' : '')
+      + (evidence.provider ? `+${evidence.provider}` : ''),
     ticker,
     context: ctx,
     perspectives,
@@ -404,6 +428,14 @@ export async function GET(req: Request, { params }: Ctx) {
         ((aggregate?.costMicrormb ?? 0) / budgetConfig.usdCnyMicros).toFixed(5),
       ),
       failures: failures.length > 0 ? failures.slice(0, 3) : undefined,
+      evidence: {
+        request_id: evidence.requestId,
+        status: evidence.status,
+        provider: evidence.provider,
+        result_count: evidence.results.length,
+        fetched_at: evidence.fetchedAt,
+        warnings: evidence.warnings,
+      },
     },
   });
 }

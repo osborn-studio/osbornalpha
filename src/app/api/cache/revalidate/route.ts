@@ -12,6 +12,7 @@ const KNOWN_TAGS = [
   'tushare-balance',
   'tushare-cashflow',
   'tushare-holders',
+  'external-evidence',
 ];
 
 /**

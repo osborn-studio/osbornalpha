@@ -91,7 +91,8 @@
   "perspectiveCard": {
     "confidence": "信心",
     "evidenceStrengthTitle": "证据强度：{label} ({score}%)\n{high} 强 · {medium} 中 · {low} 弱 · {unknown} 未分类",
-    "cite": "cite"
+    "cite": "引用",
+    "webSources": "网页来源"
   },
   "disclaimer": {
     "heading": "免责声明",

@@ -3,6 +3,7 @@ import { createDecision, getPortfolio, listDecisions } from '@/lib/portfolio/sto
 import { parseDecisionInput } from '@/lib/portfolio/validate';
 import { classifyMarket } from '@/lib/utils';
 import { createArtifact } from '@/lib/portfolio/artifacts-store';
+import { searchExternalEvidence } from '@/lib/external-evidence';
 
 export interface ToolCtx { origin: string; }
 export interface AgentTool {
@@ -27,6 +28,25 @@ export const TOOLS: AgentTool[] = [
     description: '按名称或代码解析股票 → ticker。当 ticker 不确定时先调用。',
     inputSchema: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] },
     handler: (a, c) => callApi(c.origin, `/api/search?q=${enc(a.q)}`) },
+  { name: 'web_search', category: '研究',
+    description: '联网检索近期、可引用的外部证据。仅用于新闻、公告、研报、行业和宏观事件；价格和财务数字必须优先用结构化工具。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '明确、简短的检索问题；最多 200 字符' },
+        ticker: { type: 'string', description: '可选证券代码，如 AAPL / 600519.SH' },
+        scope: { type: 'string', enum: ['news', 'filing', 'broker', 'company', 'industry', 'macro'] },
+        freshness_days: { type: 'number', description: '结果时效窗口，1-365 天' },
+      },
+      required: ['query'],
+    },
+    handler: (a) => searchExternalEvidence({
+      query: a.query,
+      ticker: a.ticker,
+      scopes: [a.scope ?? 'news'],
+      freshnessDays: a.freshness_days ?? 30,
+      limit: 8,
+    }) },
   { name: 'quote', category: '行情',
     description: '实时行情：价格、涨跌幅、PE/PB。A/HK/US。',
     inputSchema: tickerSchema,

@@ -91,7 +91,8 @@
   "perspectiveCard": {
     "confidence": "Confidence",
     "evidenceStrengthTitle": "Evidence strength: {label} ({score}%)\n{high} strong · {medium} medium · {low} weak · {unknown} unclassified",
-    "cite": "cite"
+    "cite": "cite",
+    "webSources": "Web sources"
   },
   "disclaimer": {
     "heading": "Disclaimer",

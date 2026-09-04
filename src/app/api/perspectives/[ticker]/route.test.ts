@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   reserveCostBudget: vi.fn(),
   createCapExemptCostAudit: vi.fn(),
   fetchEastmoneyQuote: vi.fn(),
+  searchExternalEvidence: vi.fn(),
 }));
 
 vi.mock('@/lib/llm/resolve', () => ({
@@ -49,6 +50,11 @@ vi.mock('@/lib/billing/cost-budget', async (importOriginal) => {
 
 vi.mock('@/lib/data/sources/eastmoney', () => ({
   fetchEastmoneyQuote: mocks.fetchEastmoneyQuote,
+}));
+
+vi.mock('@/lib/external-evidence', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/external-evidence')>(),
+  searchExternalEvidence: mocks.searchExternalEvidence,
 }));
 
 vi.mock('@/lib/data/sources/tushare-cached', () => ({
@@ -137,6 +143,42 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
       },
     });
     mocks.fetchEastmoneyQuote.mockResolvedValue(quote());
+    mocks.searchExternalEvidence.mockResolvedValue({
+      requestId: 'evidence-1', status: 'complete', provider: 'test-search', queryCount: 1,
+      results: [], fetchedAt: '2026-09-04T00:00:00.000Z', durationMs: 5, warnings: [],
+    });
+  });
+
+  it('only exposes web citations that belong to the fetched evidence snapshot', async () => {
+    const item = {
+      citationId: 'web_valid', title: 'Verified update', url: 'https://reuters.com/update', domain: 'reuters.com',
+      snippet: 'Verified excerpt', sourceType: 'news', publishedAt: '2026-09-03T00:00:00.000Z',
+      fetchedAt: '2026-09-04T00:00:00.000Z', trustScore: 0.78, relevanceScore: 0.9,
+    };
+    mocks.searchExternalEvidence.mockResolvedValue({
+      requestId: 'evidence-2', status: 'complete', provider: 'test-search', queryCount: 1,
+      results: [item], fetchedAt: item.fetchedAt, durationMs: 5, warnings: [],
+    });
+    mocks.reserveCostBudget.mockResolvedValue(reservation('r1', 110));
+    mocks.chatResolved.mockResolvedValue({
+      content: JSON.stringify({
+        stance: 'bullish', confidence: 7, summary: 'summary', data_cites: ['PE TTM'],
+        citation_ids: ['web_valid', 'web_invented'],
+      }),
+      usage: usage(50, 0, 10),
+    });
+
+    const response = await GET(
+      new Request('http://localhost/api/perspectives/AAPL?personas=value'),
+      { params: Promise.resolve({ ticker: 'AAPL' }) },
+    );
+    const body = await response.json();
+
+    expect(body.perspectives[0]).toMatchObject({
+      cites: ['PE TTM'],
+      citations: [{ id: 'web_valid', url: 'https://reuters.com/update' }],
+    });
+    expect(body.meta.evidence).toMatchObject({ status: 'complete', provider: 'test-search', result_count: 1 });
   });
 
   it('meters every platform persona call and writes one completed aggregate ticker event', async () => {
