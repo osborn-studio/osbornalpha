@@ -17,4 +17,14 @@ describe('persona evidence prompt', () => {
     expect(message).toContain('citation_ids');
     expect(message).toContain('只能使用上方外部证据中真实存在');
   });
+
+  it('labels normalized financial context with its real source, unit, and date', () => {
+    const message = buildUserMessage({
+      ticker: 'AAPL', name: 'Apple', market: 'US', currency: '$', price: 200, change_pct: 1,
+      financial_summary: '2025: revenue 416,161; net income 112,010',
+      financial_source: 'sec-company-facts', financial_unit: 'USD_MILLION', financial_as_of: '2025-09-27',
+    });
+    expect(message).toContain('来源 sec-company-facts · 单位 USD_MILLION · 截至 2025-09-27');
+    expect(message).not.toContain('5 年财务（亿元）');
+  });
 });

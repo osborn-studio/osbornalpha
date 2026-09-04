@@ -1,14 +1,6 @@
 import { NextResponse } from 'next/server';
 import { chatResolved, extractJson } from '@/lib/data/sources/llm';
-import { fetchEastmoneyQuote } from '@/lib/data/sources/eastmoney';
-import {
-  isTushareConfigured,
-  fetchTushareDailyBasic,
-  fetchTushareFinaIndicator,
-  fetchTushareIncome,
-} from '@/lib/data/sources/tushare-cached';
-import type { TushareDailyBasic, TushareIncome, TushareIndicator } from '@/lib/data/sources/tushare';
-import { PERSONAS, buildUserMessage, type StockContext, type PerspectiveResult } from '@/lib/data/personas';
+import { PERSONAS, buildUserMessage, type PerspectiveResult } from '@/lib/data/personas';
 import { resolveLlm } from '@/lib/llm/resolve';
 import { beginUsageRun, checkQuota, finalizeUsageRun } from '@/lib/billing/quota';
 import { getRequestLocale, apiMessage } from '@/lib/i18n/server';
@@ -27,10 +19,11 @@ import {
   PERSONA_CONCURRENCY_HARD_CAP,
 } from '@/lib/billing/llm-concurrency';
 import { PRICING_VERSION } from '@/lib/billing/llm-pricing';
-import { normalizeEvidenceTickerParam, resolvePerspectiveCitations, searchExternalEvidence } from '@/lib/external-evidence';
+import { normalizeEvidenceTickerParam, resolvePerspectiveCitations } from '@/lib/external-evidence';
 import { persistStockPerspectives } from '@/lib/stocks/research-artifact-repository';
 import { consumeExternalEvidenceQuota } from '@/lib/external-evidence/quota';
 import type { PerspectiveProvenance } from '@/lib/stocks/research-types';
+import { loadPerspectiveContext } from '@/lib/stocks/perspective-context';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 86400;
@@ -193,71 +186,15 @@ export async function GET(req: Request, { params }: Ctx) {
   }
 
   const budgetExempt = !byo && quota?.limit === -1;
-  // 1. Gather context
-  const quote = await fetchEastmoneyQuote(ticker).catch(() => null);
-  if (!quote) {
+  // 1. Gather normalized context through the shared market, financial, and evidence services.
+  const contextBundle = await loadPerspectiveContext(ticker).catch(() => null);
+  if (!contextBundle) {
     return NextResponse.json(
-      { source: 'no-quote', ticker, error: 'Cannot fetch quote', perspectives: [] },
+      { source: 'context_unavailable', ticker, error: 'Cannot build stock context', perspectives: [] },
       { status: 502 }
     );
   }
-
-  const isA = /\.(SH|SZ|BJ)$/i.test(ticker);
-  const [financialContext, evidence] = await Promise.all([
-    isA && isTushareConfigured()
-      ? Promise.all([
-          fetchTushareDailyBasic(ticker).catch(() => null),
-          fetchTushareFinaIndicator(ticker).catch(() => null),
-          fetchTushareIncome(ticker, 5).catch(() => []),
-        ])
-      : Promise.resolve([null, null, []] as [TushareDailyBasic | null, TushareIndicator | null, TushareIncome[]]),
-    searchExternalEvidence({
-      ticker,
-      name: quote.name,
-      market: quote.market,
-      scopes: ['news', 'filing', 'industry', 'macro'],
-      freshnessDays: 30,
-      limit: 12,
-    }).catch(() => ({
-      requestId: crypto.randomUUID(),
-      status: 'error' as const,
-      provider: null,
-      queryCount: 0,
-      results: [],
-      fetchedAt: new Date().toISOString(),
-      durationMs: 0,
-      estimatedCostMicrousd: null,
-      warnings: ['evidence_search_failed'],
-    })),
-  ]);
-  const [dailyBasic, finaIndicator, income] = financialContext;
-
-  let financialSummary: string | undefined;
-  if (income.length > 0) {
-    const reversed = [...income].reverse();
-    const rows = reversed.map((r) =>
-      `${r.end_date.slice(0,4)}: 营收 ${(r.revenue/1e8).toFixed(0)}亿, 净利 ${(r.n_income/1e8).toFixed(0)}亿`
-    );
-    financialSummary = rows.join(' | ');
-  }
-
-  const ctx: StockContext = {
-    ticker,
-    name: quote.name,
-    market: quote.market,
-    currency: quote.currency,
-    price: quote.price,
-    change_pct: quote.change_pct,
-    pe_ttm: dailyBasic?.pe_ttm ?? quote.pe_ttm ?? null,
-    pb: dailyBasic?.pb ?? quote.pb ?? null,
-    roe: finaIndicator?.roe ?? null,
-    market_cap_label: quote.market_cap_label,
-    dividend_yield: dailyBasic?.dv_ratio ?? null,
-    gross_margin: finaIndicator?.grossprofit_margin ?? null,
-    net_margin: finaIndicator?.netprofit_margin ?? null,
-    financial_summary: financialSummary,
-    external_evidence: evidence.results,
-  };
+  const { context: ctx, evidence } = contextBundle;
 
   // 2. Run all 9 personas in parallel through the unified LLM facade
   const enabled = personaFilter && personaFilter.length > 0
@@ -469,9 +406,7 @@ export async function GET(req: Request, { params }: Ctx) {
   }
 
   return NextResponse.json({
-    source: `${llm.provider}+eastmoney`
-      + (isA && isTushareConfigured() ? '+tushare' : '')
-      + (evidence.provider ? `+${evidence.provider}` : ''),
+    source: [llm.provider, ...contextBundle.sources].join('+'),
     ticker,
     context: ctx,
     perspectives,
@@ -501,6 +436,12 @@ export async function GET(req: Request, { params }: Ctx) {
         fetched_at: evidence.fetchedAt,
         warnings: evidence.warnings,
         coverage_ratio: perspectiveProvenance.evidenceCoverageRatio,
+      },
+      financial: {
+        source: contextBundle.financial.source,
+        status: contextBundle.financial.availability,
+        as_of: contextBundle.financial.asOf,
+        warnings: contextBundle.financial.warnings,
       },
       provenance: perspectiveProvenance,
     },

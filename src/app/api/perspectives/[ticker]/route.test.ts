@@ -12,8 +12,7 @@ const mocks = vi.hoisted(() => ({
   getAdminSupabase: vi.fn(() => ({ kind: 'admin-db' })),
   reserveCostBudget: vi.fn(),
   createCapExemptCostAudit: vi.fn(),
-  fetchEastmoneyQuote: vi.fn(),
-  searchExternalEvidence: vi.fn(),
+  loadPerspectiveContext: vi.fn(),
   persistStockPerspectives: vi.fn(),
   consumeExternalEvidenceQuota: vi.fn(),
 }));
@@ -50,15 +49,6 @@ vi.mock('@/lib/billing/cost-budget', async (importOriginal) => {
   };
 });
 
-vi.mock('@/lib/data/sources/eastmoney', () => ({
-  fetchEastmoneyQuote: mocks.fetchEastmoneyQuote,
-}));
-
-vi.mock('@/lib/external-evidence', async (importOriginal) => ({
-  ...await importOriginal<typeof import('@/lib/external-evidence')>(),
-  searchExternalEvidence: mocks.searchExternalEvidence,
-}));
-
 vi.mock('@/lib/stocks/research-artifact-repository', () => ({
   persistStockPerspectives: mocks.persistStockPerspectives,
 }));
@@ -67,11 +57,8 @@ vi.mock('@/lib/external-evidence/quota', () => ({
   consumeExternalEvidenceQuota: mocks.consumeExternalEvidenceQuota,
 }));
 
-vi.mock('@/lib/data/sources/tushare-cached', () => ({
-  isTushareConfigured: () => false,
-  fetchTushareDailyBasic: vi.fn(),
-  fetchTushareFinaIndicator: vi.fn(),
-  fetchTushareIncome: vi.fn(),
+vi.mock('@/lib/stocks/perspective-context', () => ({
+  loadPerspectiveContext: mocks.loadPerspectiveContext,
 }));
 
 vi.mock('@/lib/data/personas', () => ({
@@ -102,16 +89,19 @@ const usage = (input: number, hit: number, output: number): NormalizedUsage => (
   estimated: false,
 });
 
-function quote() {
+function contextBundle(evidence: Record<string, unknown> = {}) {
   return {
-    ticker: 'AAPL',
-    name: 'Apple',
-    market: 'US',
-    currency: 'USD',
-    price: 200,
-    change_pct: 1,
-    pe_ttm: 30,
-    market_cap_label: '3T',
+    context: {
+      ticker: 'AAPL', name: 'Apple', market: 'US', currency: 'USD', price: 200,
+      change_pct: 1, pe_ttm: 30, market_cap_label: '3T', external_evidence: [],
+    },
+    evidence: {
+      requestId: 'evidence-1', status: 'complete', provider: 'test-search', queryCount: 1,
+      results: [], fetchedAt: '2026-09-04T00:00:00.000Z', durationMs: 5, warnings: [],
+      ...evidence,
+    },
+    sources: ['test-quote', 'sec-company-facts', 'test-search'],
+    financial: { source: 'sec-company-facts', availability: 'available', asOf: '2025-12-31', warnings: [] },
   };
 }
 
@@ -152,11 +142,7 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
         }),
       },
     });
-    mocks.fetchEastmoneyQuote.mockResolvedValue(quote());
-    mocks.searchExternalEvidence.mockResolvedValue({
-      requestId: 'evidence-1', status: 'complete', provider: 'test-search', queryCount: 1,
-      results: [], fetchedAt: '2026-09-04T00:00:00.000Z', durationMs: 5, warnings: [],
-    });
+    mocks.loadPerspectiveContext.mockResolvedValue(contextBundle());
     mocks.persistStockPerspectives.mockResolvedValue(undefined);
     mocks.consumeExternalEvidenceQuota.mockResolvedValue(true);
   });
@@ -170,7 +156,7 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
     expect(mocks.resolveLlm).not.toHaveBeenCalled();
   });
 
-  it('applies the shared external-evidence quota before quote or search calls', async () => {
+  it('applies the shared external-evidence quota before context loading', async () => {
     mocks.consumeExternalEvidenceQuota.mockResolvedValue(false);
 
     const response = await GET(
@@ -182,8 +168,23 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
     expect(response.status).toBe(429);
     expect(response.headers.get('retry-after')).toBe('3600');
     expect(body).toMatchObject({ errorCode: 'external_evidence_rate_limited', perspectives: [] });
-    expect(mocks.fetchEastmoneyQuote).not.toHaveBeenCalled();
-    expect(mocks.searchExternalEvidence).not.toHaveBeenCalled();
+    expect(mocks.loadPerspectiveContext).not.toHaveBeenCalled();
+  });
+
+  it('returns a stable error without calling the model when normalized context is unavailable', async () => {
+    mocks.loadPerspectiveContext.mockResolvedValue(null);
+
+    const response = await GET(
+      new Request('http://localhost/api/perspectives/AAPL'),
+      { params: Promise.resolve({ ticker: 'AAPL' }) },
+    );
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({
+      source: 'context_unavailable', ticker: 'AAPL', perspectives: [],
+    });
+    expect(mocks.chatResolved).not.toHaveBeenCalled();
+    expect(mocks.beginUsageRun).not.toHaveBeenCalled();
   });
 
   it('only exposes web citations that belong to the fetched evidence snapshot', async () => {
@@ -192,10 +193,9 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
       snippet: 'Verified excerpt', sourceType: 'news', publishedAt: '2026-09-03T00:00:00.000Z',
       fetchedAt: '2026-09-04T00:00:00.000Z', trustScore: 0.78, relevanceScore: 0.9,
     };
-    mocks.searchExternalEvidence.mockResolvedValue({
-      requestId: 'evidence-2', status: 'complete', provider: 'test-search', queryCount: 1,
-      results: [item], fetchedAt: item.fetchedAt, durationMs: 5, warnings: [],
-    });
+    mocks.loadPerspectiveContext.mockResolvedValue(contextBundle({
+      requestId: 'evidence-2', results: [item], fetchedAt: item.fetchedAt,
+    }));
     mocks.reserveCostBudget.mockResolvedValue(reservation('r1', 110));
     mocks.chatResolved.mockResolvedValue({
       content: JSON.stringify({
@@ -223,10 +223,17 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
       evidenceResultCount: 1,
       evidenceCoverageRatio: 1,
     });
+    expect(body.meta.financial).toEqual({
+      source: 'sec-company-facts', status: 'available', as_of: '2025-12-31', warnings: [],
+    });
   });
 
   it('does not claim an auditable evidence request when search fails', async () => {
-    mocks.searchExternalEvidence.mockRejectedValue(new Error('provider offline'));
+    mocks.loadPerspectiveContext.mockResolvedValue(contextBundle({
+      requestId: 'error-request', status: 'error', provider: null, queryCount: 0,
+      results: [], fetchedAt: '2026-09-04T00:00:00.000Z', durationMs: 0,
+      warnings: ['evidence_search_failed'],
+    }));
     mocks.reserveCostBudget.mockResolvedValue(reservation('r1', 110));
     mocks.chatResolved.mockResolvedValue({ content: perspectiveContent(0), usage: usage(20, 0, 5) });
 

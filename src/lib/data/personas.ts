@@ -225,6 +225,9 @@ export interface StockContext {
   net_margin?: number | null;
   // 5-year yoy summary
   financial_summary?: string;
+  financial_source?: string;
+  financial_unit?: string;
+  financial_as_of?: string | null;
   // recent material events
   events?: string[];
   // Normalized web excerpts gathered for this request. They remain untrusted input.
@@ -248,7 +251,7 @@ export function buildUserMessage(ctx: StockContext): string {
   if (ctx.dividend_yield != null) lines.push(`股息率：${ctx.dividend_yield.toFixed(2)}%`);
   if (ctx.financial_summary) {
     lines.push('');
-    lines.push('5 年财务（亿元）：');
+    lines.push(`财务摘要（来源 ${ctx.financial_source ?? 'unknown'} · 单位 ${ctx.financial_unit ?? 'unknown'} · 截至 ${ctx.financial_as_of ?? 'unknown'}）：`);
     lines.push(ctx.financial_summary);
   }
   if (ctx.events && ctx.events.length) {
