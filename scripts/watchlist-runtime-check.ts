@@ -6,6 +6,8 @@ interface Probe {
   label: string;
 }
 
+let protectedProbeCount = 0;
+
 const probes: Probe[] = [
   // Depending on the deployment's auth middleware, an anonymous request may
   // redirect to login or receive a direct 401. Both prove the page is installed.
@@ -24,6 +26,14 @@ async function probe(item: Probe): Promise<void> {
   });
   const location = response.headers.get('location');
   const suffix = location ? ` location=${location}` : '';
+  const body = await response.json().catch(() => null) as { protection?: unknown } | null;
+  // Vercel Deployment Protection can terminate the request before Next.js
+  // runs. Do not mistake its SSO redirect for the app's auth or Cron guard.
+  if (location?.includes('vercel.com/sso-api') || location?.includes('/sso-api%3F') || body?.protection) {
+    protectedProbeCount += 1;
+    console.log(`${item.label}: deployment_protection${suffix || ' (Vercel SSO)'}`);
+    return;
+  }
   if (!item.expected.includes(response.status)) {
     throw new Error(`${item.label}: expected ${item.expected.join('/')} but received ${response.status}${suffix}`);
   }
@@ -33,7 +43,11 @@ async function probe(item: Probe): Promise<void> {
 async function main() {
   console.log(`Checking Watchlist runtime at ${baseUrl}`);
   for (const item of probes) await probe(item);
-  console.log('Watchlist runtime routes are installed and protected.');
+  if (protectedProbeCount > 0) {
+    console.log(`Vercel deployment protection blocked ${protectedProbeCount}/${probes.length} app-level probes; rerun with a protection bypass or on the public alias.`);
+  } else {
+    console.log('Watchlist runtime routes are installed and protected.');
+  }
 }
 
 main().catch((error) => {
