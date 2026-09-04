@@ -17,10 +17,11 @@ describe('external evidence API authorization', () => {
 
   it('allows authenticated users', async () => {
     mocks.configured.mockReturnValue(true);
-    mocks.getServerSupabase.mockResolvedValue({
+    const client = {
       auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'u1' } }, error: null }) },
-    });
-    await expect(authorizeExternalEvidenceRequest()).resolves.toEqual({ ok: true });
+    };
+    mocks.getServerSupabase.mockResolvedValue(client);
+    await expect(authorizeExternalEvidenceRequest()).resolves.toEqual({ ok: true, userId: 'u1', client });
   });
 
   it('rejects missing sessions', async () => {

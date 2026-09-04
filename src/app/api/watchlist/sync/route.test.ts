@@ -27,7 +27,11 @@ describe('PUT /api/watchlist/sync', () => {
     mocks.validate.mockResolvedValue({ valid: false, canonicalTickers: [], rejected: ['MISSING'] });
     const response = await PUT(new Request('https://example.com/api/watchlist/sync', {
       method: 'PUT',
-      body: JSON.stringify({ groups: [{ id: 'one', name: 'One', tickers: ['MISSING'] }] }),
+      body: JSON.stringify({
+        expectedVersion: 0,
+        mutationId: 'mutation-123',
+        groups: [{ id: 'one', name: 'One', tickers: ['MISSING'] }],
+      }),
     }));
     expect(response.status).toBe(422);
     expect(mocks.from).not.toHaveBeenCalled();

@@ -65,7 +65,7 @@ export function PerspectiveCard({ persona, name, stance, confidence, summary, ci
                 unknown: evidence.unknown_count,
               })}
             >
-              📊 {evidence.label}
+              {evidence.label}
             </span>
           )}
         </div>
@@ -73,17 +73,12 @@ export function PerspectiveCard({ persona, name, stance, confidence, summary, ci
       <div className="mb-1.5 text-sm leading-relaxed">{summary}</div>
       {cites.length > 0 && (
         <div className="text-[11px] italic text-text-muted">
-          <span className="not-italic mr-1">▸ {t('cite')}:</span>
+              <span className="not-italic mr-1">{t('cite')}:</span>
           {cites.map((cite, i) => {
             const v = classifyCite(cite);
             return (
               <span key={i}>
-                <span
-                  className={`inline-block ${LEVEL_TEXT[v.level]} not-italic mr-0.5`}
-                  title={`${v.kind} · ${(v.score * 100).toFixed(0)}%`}
-                >
-                  {v.emoji}
-                </span>
+                <span className={`mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle ${LEVEL_TEXT[v.level]} bg-current`} title={`${v.kind} · ${(v.score * 100).toFixed(0)}%`} />
                 {cite}
                 {i < cites.length - 1 && '; '}
               </span>

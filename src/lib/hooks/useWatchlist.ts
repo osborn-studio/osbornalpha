@@ -9,36 +9,53 @@ import {
   type WatchlistGroup,
 } from '@/lib/watchlist/store';
 import { createWatchlistSyncQueue, watchlistPendingStorageKey } from '@/lib/watchlist/client-sync';
-import { isDefaultWatchlist } from '@/lib/watchlist/sync';
+import { isDefaultWatchlist, type VersionedWatchlistSnapshot, type WatchlistSyncRequest } from '@/lib/watchlist/sync';
 import { trackEvent } from '@/lib/analytics/client';
 
 type WatchlistSyncQueue = ReturnType<typeof createWatchlistSyncQueue>;
+export type WatchlistSyncStatus = 'local' | 'syncing' | 'synced' | 'conflict' | 'error';
 
-const browserSyncQueues = new Map<string, WatchlistSyncQueue>();
+function parseServerSnapshot(body: unknown): VersionedWatchlistSnapshot | null {
+  if (!body || typeof body !== 'object') return null;
+  const candidate = body as Record<string, unknown>;
+  if (typeof candidate.ownerId !== 'string'
+    || !Number.isSafeInteger(candidate.version)
+    || Number(candidate.version) < 0
+    || !Array.isArray(candidate.groups)) return null;
+  const groups = parseWatchlistGroups(JSON.stringify(candidate.groups));
+  return groups === null
+    ? null
+    : { ownerId: candidate.ownerId, version: Number(candidate.version), groups };
+}
 
-function getBrowserSyncQueue(ownerId: string) {
+function getBrowserSyncQueue(
+  ownerId: string,
+  callbacks: {
+    onConflict: (snapshot: VersionedWatchlistSnapshot) => void;
+    onError: () => void;
+  },
+) {
   if (typeof window === 'undefined') return null;
-  const existing = browserSyncQueues.get(ownerId);
-  if (existing) return existing;
 
   const queue = createWatchlistSyncQueue({
     storage: window.localStorage,
     storageKey: watchlistPendingStorageKey(ownerId),
-    put: async (groups) => {
+    put: async (request: WatchlistSyncRequest) => {
       const response = await fetch('/api/watchlist/sync', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ groups }),
+        body: JSON.stringify(request),
       });
-      if (!response.ok) return null;
-      const body = await response.json();
-      if (body?.ownerId !== ownerId || !Array.isArray(body?.groups)) return null;
-      return parseWatchlistGroups(JSON.stringify(body.groups));
+      const body = await response.json().catch(() => null);
+      const snapshot = parseServerSnapshot(body);
+      if (!snapshot || snapshot.ownerId !== ownerId) return null;
+      if (response.status === 409) return { status: 'conflict' as const, snapshot };
+      return response.ok ? { status: 'saved' as const, snapshot } : null;
     },
     applyCanonical: writeLocalWatchlist,
+    onConflict: callbacks.onConflict,
+    onError: callbacks.onError,
   });
-
-  browserSyncQueues.set(ownerId, queue);
   return queue;
 }
 
@@ -46,11 +63,8 @@ async function fetchServerWatchlist() {
   const response = await fetch('/api/watchlist/sync');
   if (!response.ok) return null;
   const body = await response.json();
-  if (body?.mode !== 'server' || typeof body?.ownerId !== 'string' || !Array.isArray(body?.groups)) {
-    return null;
-  }
-  const groups = parseWatchlistGroups(JSON.stringify(body.groups));
-  return groups === null ? null : { ownerId: body.ownerId, groups };
+  if (body?.mode !== 'server') return null;
+  return parseServerSnapshot(body);
 }
 
 /**
@@ -68,7 +82,11 @@ async function fetchServerWatchlist() {
 export function useWatchlist() {
   const [groups, setGroups] = useState<WatchlistGroup[]>([]);
   const [hydrated, setHydrated] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<WatchlistSyncStatus>('local');
+  const [conflictSnapshot, setConflictSnapshot] = useState<VersionedWatchlistSnapshot | null>(null);
+  const [serverVersion, setServerVersion] = useState(0);
   const syncQueue = useRef<WatchlistSyncQueue | null>(null);
+  const ownerIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     let local = resolveInitialWatchlist();
@@ -81,9 +99,19 @@ export function useWatchlist() {
         if (!server || cancelled) return; // guest / local mode → stay local
 
         const ownerId = server.ownerId;
-        const queue = getBrowserSyncQueue(ownerId);
+        const queue = getBrowserSyncQueue(ownerId, {
+          onConflict: (snapshot) => {
+            setConflictSnapshot(snapshot);
+            setSyncStatus('conflict');
+          },
+          onError: () => setSyncStatus('error'),
+        });
+        ownerIdRef.current = server.ownerId;
         syncQueue.current = queue;
+        queue?.setServerVersion(server.version);
+        setServerVersion(server.version);
         if (queue?.hasPending()) {
+          setSyncStatus('syncing');
           const flushed = await queue.flush();
           if (!flushed || cancelled) return;
           local = resolveInitialWatchlist();
@@ -94,8 +122,11 @@ export function useWatchlist() {
         if (server.groups.length > 0) {
           writeLocalWatchlist(server.groups); // dispatches change event → setGroups below
         } else if (!isDefaultWatchlist(local)) {
-          await queue?.enqueue(local);
+          setSyncStatus('syncing');
+          const saved = await queue?.enqueue(local);
+          if (!saved || cancelled) return;
         }
+        if (!cancelled) setSyncStatus('synced');
       } catch {
         // offline / network error → localStorage mode
       } finally {
@@ -108,6 +139,8 @@ export function useWatchlist() {
     });
     return () => {
       cancelled = true;
+      ownerIdRef.current = null;
+      syncQueue.current = null;
       unsubscribe();
     };
   }, []);
@@ -120,12 +153,54 @@ export function useWatchlist() {
     });
     setGroups(next);
     writeLocalWatchlist(next);
+    if (syncQueue.current) setSyncStatus('syncing');
     syncQueue.current?.enqueue(next).then((saved) => {
-      if (!saved) console.warn('watchlist sync failed (kept locally)');
+      if (saved) setSyncStatus('synced');
+      else console.warn('watchlist sync failed (kept locally)');
     }).catch((error) => {
       console.warn('watchlist sync failed (kept locally):', error instanceof Error ? error.message : error);
     });
   }, [hydrated]);
 
-  return { groups, hydrated, setGroups: persistGroups };
+  const resolveSyncConflict = useCallback((strategy: 'server' | 'local') => {
+    const queue = syncQueue.current;
+    const conflict = conflictSnapshot;
+    if (!queue || !conflict) return;
+    if (strategy === 'server') {
+      queue.discardPending();
+      queue.setServerVersion(conflict.version);
+      writeLocalWatchlist(conflict.groups);
+      setConflictSnapshot(null);
+      setSyncStatus('synced');
+      return;
+    }
+    if (!queue.rebasePending(conflict.version)) return;
+    setConflictSnapshot(null);
+    setSyncStatus('syncing');
+    queue.flush().then((saved) => {
+      if (saved) setSyncStatus('synced');
+    });
+  }, [conflictSnapshot]);
+
+  const applyServerSnapshot = useCallback((snapshot: VersionedWatchlistSnapshot): boolean => {
+    const queue = syncQueue.current;
+    if (!queue || ownerIdRef.current !== snapshot.ownerId) return false;
+    queue.acceptCanonical(snapshot);
+    setServerVersion(snapshot.version);
+    setGroups(snapshot.groups);
+    setConflictSnapshot(null);
+    setSyncStatus('synced');
+    return true;
+  }, []);
+
+  return {
+    groups,
+    hydrated,
+    setGroups: persistGroups,
+    syncStatus,
+    conflictSnapshot,
+    serverVersion,
+    resolveSyncConflict,
+    applyServerSnapshot,
+  };
 }

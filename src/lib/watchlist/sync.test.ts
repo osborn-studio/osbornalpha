@@ -1,6 +1,33 @@
 import { describe, expect, it } from 'vitest';
-import { groupsToMutations, isDefaultWatchlist, serverToGroups, type ServerWatchlistRow } from './sync';
+import {
+  groupsToMutations,
+  isDefaultWatchlist,
+  isWatchlistVersionConflict,
+  parseWatchlistSyncRequest,
+  serverToGroups,
+  type ServerWatchlistRow,
+} from './sync';
 import { defaultWatchlistGroups, type WatchlistGroup } from './store';
+
+describe('versioned watchlist sync contract', () => {
+  it('accepts a normalized, versioned snapshot request', () => {
+    expect(parseWatchlistSyncRequest({
+      expectedVersion: 3,
+      mutationId: 'mutation-123',
+      groups: [{ id: 'local', name: 'Core', tickers: ['aapl', 'AAPL'] }],
+    })).toEqual({
+      expectedVersion: 3,
+      mutationId: 'mutation-123',
+      groups: [{ id: 'local', name: 'Core', tickers: ['AAPL'] }],
+    });
+  });
+
+  it('rejects missing concurrency fields and classifies database conflicts', () => {
+    expect(parseWatchlistSyncRequest({ groups: [] })).toBeNull();
+    expect(parseWatchlistSyncRequest({ groups: [], expectedVersion: -1, mutationId: 'mutation-123' })).toBeNull();
+    expect(isWatchlistVersionConflict({ code: '40001' })).toBe(true);
+  });
+});
 
 function row(overrides: Partial<ServerWatchlistRow> = {}): ServerWatchlistRow {
   return {

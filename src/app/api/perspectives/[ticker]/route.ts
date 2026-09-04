@@ -27,6 +27,8 @@ import {
 } from '@/lib/billing/llm-concurrency';
 import { PRICING_VERSION } from '@/lib/billing/llm-pricing';
 import { resolvePerspectiveCitations, searchExternalEvidence } from '@/lib/external-evidence';
+import { persistStockPerspectives } from '@/lib/stocks/research-artifact-repository';
+import { consumeExternalEvidenceQuota } from '@/lib/external-evidence/quota';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 86400;
@@ -114,9 +116,10 @@ export async function GET(req: Request, { params }: Ctx) {
   // get no platform-key budget. Other checkQuota failures fail open.
   const byo = llm.source === 'user';
   let userId: string;
+  let userDb: Awaited<ReturnType<typeof getServerSupabase>>;
   try {
-    const authDb = await getServerSupabase();
-    const { data, error } = await authDb.auth.getUser();
+    userDb = await getServerSupabase();
+    const { data, error } = await userDb.auth.getUser();
     if (error || !data.user) {
       return NextResponse.json({ error: 'not authenticated' }, { status: 401 });
     }
@@ -158,6 +161,28 @@ export async function GET(req: Request, { params }: Ctx) {
       perspectives: [],
       quota: quotaNotice('quota_exhausted', quota),
     }, { status: 200 });
+  }
+
+  try {
+    if (!await consumeExternalEvidenceQuota(userDb)) {
+      const locale = await getRequestLocale();
+      return NextResponse.json({
+        source: 'external_evidence_quota',
+        ticker,
+        error: apiMessage(locale, 'quotaExhausted'),
+        errorCode: 'external_evidence_rate_limited',
+        perspectives: [],
+        retryAfterSeconds: 3600,
+      }, { status: 429, headers: { 'retry-after': '3600' } });
+    }
+  } catch {
+    return NextResponse.json({
+      source: 'external_evidence_quota',
+      ticker,
+      error: 'External evidence quota is temporarily unavailable',
+      errorCode: 'external_evidence_quota_unavailable',
+      perspectives: [],
+    }, { status: 503 });
   }
 
   const budgetExempt = !byo && quota?.limit === -1;
@@ -404,6 +429,19 @@ export async function GET(req: Request, { params }: Ctx) {
 
   const aggregate = accounting.length > 0 ? aggregateMeteredUsage(accounting) : null;
   const budgetConfig = getBudgetConfig();
+  const generatedAt = new Date().toISOString();
+  const persistenceWarnings: string[] = [];
+  try {
+    await persistStockPerspectives(userDb, userId, {
+      ticker,
+      generationId: usageAuditKey,
+      source: `${llm.provider}:${llm.model}`,
+      createdAt: generatedAt,
+      perspectives,
+    });
+  } catch {
+    persistenceWarnings.push('perspectives_persist_failed');
+  }
 
   return NextResponse.json({
     source: `${llm.provider}+eastmoney`
@@ -413,7 +451,7 @@ export async function GET(req: Request, { params }: Ctx) {
     context: ctx,
     perspectives,
     meta: {
-      generated_at: new Date().toISOString(),
+      generated_at: generatedAt,
       duration_ms: Date.now() - startedAt,
       provider: llm.provider,
       model: llm.model,
@@ -428,6 +466,7 @@ export async function GET(req: Request, { params }: Ctx) {
         ((aggregate?.costMicrormb ?? 0) / budgetConfig.usdCnyMicros).toFixed(5),
       ),
       failures: failures.length > 0 ? failures.slice(0, 3) : undefined,
+      warnings: persistenceWarnings,
       evidence: {
         request_id: evidence.requestId,
         status: evidence.status,

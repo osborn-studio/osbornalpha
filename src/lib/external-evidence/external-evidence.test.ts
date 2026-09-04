@@ -80,6 +80,24 @@ describe('external evidence service', () => {
     expect(snapshot.warnings[0]).toContain('filing:timeout');
     expect(resolvePerspectiveCitations([snapshot.results[0].citationId, 'invented'], snapshot.results)).toHaveLength(1);
   });
+
+  it('fails over to the next configured provider only when all primary queries fail', async () => {
+    const primary: EvidenceSearchProvider = {
+      id: 'primary',
+      search: vi.fn(async () => { throw new Error('offline'); }),
+    };
+    const fallback: EvidenceSearchProvider = {
+      id: 'fallback',
+      search: vi.fn(async () => [{ title: 'Recovered', url: 'https://reuters.com/recovered' }]),
+    };
+    const snapshot = await searchExternalEvidenceUncached({ ticker: 'AAPL', scopes: ['news'] }, {
+      providers: [primary, fallback],
+      now: () => new Date('2026-09-04T00:00:00Z'),
+    });
+    expect(snapshot).toMatchObject({ status: 'complete', provider: 'fallback', queryCount: 2 });
+    expect(snapshot.warnings).toContain('provider_failover:primary');
+    expect(snapshot.results[0].title).toBe('Recovered');
+  });
 });
 
 describe('headline sentiment', () => {

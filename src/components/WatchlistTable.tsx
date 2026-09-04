@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
+import { ArrowDown, ArrowUp, Columns3, LoaderCircle, Minus, MoveRight, PanelRightOpen, Plus, Rows3, Search, Tag, Trash2, X } from 'lucide-react';
 import { formatChange, formatPct, formatPrice, formatVolume, changeClass } from '@/lib/utils';
 import type { Market } from '@/lib/supabase/database.types';
 import type { LiveQuote } from '@/lib/hooks/useQuote';
@@ -14,28 +15,68 @@ import {
   type WatchlistSecurityIdentity,
   type WatchlistMarketRow,
 } from '@/lib/watchlist/market-row';
+import { WatchlistMobileList } from '@/components/watchlist/WatchlistMobileList';
+import type { WatchlistOverviewRow as WatchlistOverviewClientRow } from '@/lib/watchlist/overview-contract';
+import { usePersistentState } from '@/lib/hooks/usePersistentState';
+import { useDismissableLayer } from '@/lib/hooks/useDismissableLayer';
 
 type ColumnKey =
-  | 'ticker' | 'name' | 'price' | 'change' | 'dayRange' | 'volume' | 'amount'
+  | 'ticker' | 'name' | 'price' | 'change' | 'open' | 'prevClose' | 'dayRange' | 'volume' | 'amount'
   | 'marketCap' | 'pe' | 'pb' | 'turnover' | 'volumeRatio' | 'amplitude'
-  | 'dayPosition' | 'quality' | 'updated' | 'group';
+  | 'dayPosition' | 'oneYearReturn' | 'volatility' | 'maxDrawdown' | 'rangePosition'
+  | 'research' | 'decision' | 'quality' | 'updated' | 'group';
 type PresetKey = 'market' | 'valuation' | 'risk';
+type Density = 'compact' | 'comfortable';
+
+interface TablePreferences {
+  sortKey: ColumnKey;
+  asc: boolean;
+  preset: PresetKey;
+  visibleColumns: ColumnKey[];
+  query: string;
+  groupFilter: string;
+  marketFilter: 'all' | Market;
+  statusFilter: 'all' | QuoteDisplayStatus;
+  density: Density;
+}
 
 const ALL_COLUMNS: ColumnKey[] = [
-  'ticker', 'name', 'price', 'change', 'dayRange', 'volume', 'amount', 'marketCap',
+  'ticker', 'name', 'price', 'change', 'open', 'prevClose', 'dayRange', 'volume', 'amount', 'marketCap',
   'pe', 'pb', 'turnover', 'volumeRatio', 'amplitude', 'dayPosition', 'quality', 'updated', 'group',
+  'oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition', 'research', 'decision',
 ];
 
 const PRESET_COLUMNS: Record<PresetKey, ColumnKey[]> = {
-  market: ['ticker', 'name', 'price', 'change', 'dayRange', 'volume', 'amount', 'volumeRatio', 'updated', 'group'],
+  market: ['ticker', 'name', 'price', 'change', 'open', 'dayRange', 'volume', 'amount', 'volumeRatio', 'updated', 'group'],
   valuation: ['ticker', 'name', 'price', 'change', 'marketCap', 'pe', 'pb', 'turnover', 'updated', 'group'],
-  risk: ['ticker', 'name', 'price', 'change', 'amplitude', 'dayPosition', 'volumeRatio', 'turnover', 'quality', 'updated', 'group'],
+  risk: ['ticker', 'name', 'price', 'change', 'oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition', 'research', 'decision', 'updated', 'group'],
 };
 
 const NUMERIC_COLUMNS = new Set<ColumnKey>([
-  'price', 'change', 'volume', 'amount', 'marketCap', 'pe', 'pb', 'turnover',
+  'price', 'change', 'open', 'prevClose', 'volume', 'amount', 'marketCap', 'pe', 'pb', 'turnover',
   'volumeRatio', 'amplitude', 'dayPosition', 'quality', 'updated',
+  'oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition',
 ]);
+
+const DEFAULT_PREFERENCES: TablePreferences = {
+  sortKey: 'change', asc: false, preset: 'market', visibleColumns: PRESET_COLUMNS.market,
+  query: '', groupFilter: 'all', marketFilter: 'all', statusFilter: 'all', density: 'comfortable',
+};
+
+function validPreferences(value: unknown): value is TablePreferences {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const input = value as Partial<TablePreferences>;
+  return typeof input.sortKey === 'string' && ALL_COLUMNS.includes(input.sortKey as ColumnKey)
+    && typeof input.asc === 'boolean'
+    && typeof input.preset === 'string' && input.preset in PRESET_COLUMNS
+    && Array.isArray(input.visibleColumns) && input.visibleColumns.length > 0
+    && input.visibleColumns.every((column) => ALL_COLUMNS.includes(column))
+    && typeof input.query === 'string'
+    && typeof input.groupFilter === 'string'
+    && (input.marketFilter === 'all' || ['A', 'HK', 'US', 'JP', 'KR', 'TW'].includes(String(input.marketFilter)))
+    && (input.statusFilter === 'all' || ['loading', 'live', 'delayed', 'unavailable'].includes(String(input.statusFilter)))
+    && (input.density === 'compact' || input.density === 'comfortable');
+}
 
 function optionalNumber(value: number | null | undefined, suffix = '') {
   return value == null || !Number.isFinite(value)
@@ -74,13 +115,15 @@ function QuoteStatus({ row }: { row: WatchlistMarketRow }) {
   );
 }
 
-function metricValue(row: WatchlistMarketRow, key: ColumnKey): string | number {
+function metricValue(row: WatchlistMarketRow, key: ColumnKey, overview?: WatchlistOverviewClientRow): string | number {
   const quote = row.quote;
   switch (key) {
     case 'ticker': return row.ticker;
     case 'name': return row.name;
     case 'price': return quote?.price ?? -1;
     case 'change': return quote?.change_pct ?? -Infinity;
+    case 'open': return quote?.open ?? -1;
+    case 'prevClose': return quote?.prev_close ?? -1;
     case 'dayRange': return quote?.high ?? -1;
     case 'volume': return quote?.volume ?? -1;
     case 'amount': return quote?.amount ?? -1;
@@ -91,6 +134,12 @@ function metricValue(row: WatchlistMarketRow, key: ColumnKey): string | number {
     case 'volumeRatio': return quote?.volume_ratio ?? -Infinity;
     case 'amplitude': return quote?.amplitude ?? -Infinity;
     case 'dayPosition': return dayPosition(quote) ?? -1;
+    case 'oneYearReturn': return overview?.history?.value?.periodReturnPct ?? -Infinity;
+    case 'volatility': return overview?.history?.value?.annualizedVolatilityPct ?? -Infinity;
+    case 'maxDrawdown': return overview?.history?.value?.maxDrawdownPct ?? -Infinity;
+    case 'rangePosition': return overview?.history?.value?.rangePositionPct ?? -1;
+    case 'research': return overview?.research.value?.recentNewsCount ?? -1;
+    case 'decision': return overview?.item.status ?? '';
     case 'quality': return dataQuality(quote);
     case 'updated': return quote?.updated_at ? Date.parse(quote.updated_at) : -1;
     case 'group': return row.group;
@@ -101,41 +150,52 @@ export function WatchlistTable({
   groups,
   quotes,
   identities,
+  overviewByTicker = {},
   loadedAt,
   loading = false,
   onSelectTicker,
+  onMoveTickers,
+  onRemoveTickers,
+  onTagTickers,
+  overviewHasMore = false,
+  overviewLoadingMore = false,
+  onLoadMoreOverview,
 }: {
   groups: WatchlistMarketGroup[];
   quotes: Record<string, LiveQuote | null>;
   identities: Record<string, WatchlistSecurityIdentity>;
+  overviewByTicker?: Record<string, WatchlistOverviewClientRow>;
   loadedAt: number | null;
   loading?: boolean;
   onSelectTicker?: (ticker: string) => void;
+  onMoveTickers?: (tickers: string[], groupId: string) => void;
+  onRemoveTickers?: (tickers: string[]) => void;
+  onTagTickers?: (tickers: string[], tag: string, mode: 'add' | 'remove') => Promise<boolean>;
+  overviewHasMore?: boolean;
+  overviewLoadingMore?: boolean;
+  onLoadMoreOverview?: () => Promise<void>;
 }) {
   const t = useTranslations('market.table');
-  const [sortKey, setSortKey] = useState<ColumnKey>('change');
-  const [asc, setAsc] = useState(false);
-  const [preset, setPreset] = useState<PresetKey>('market');
-  const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(PRESET_COLUMNS.market);
-  const [query, setQuery] = useState('');
-  const [groupFilter, setGroupFilter] = useState('all');
-  const [marketFilter, setMarketFilter] = useState<'all' | Market>('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | QuoteDisplayStatus>('all');
+  const [preferences, setPreferences] = usePersistentState('stock-monitor:watchlist:table-preferences-v1', DEFAULT_PREFERENCES, validPreferences);
   const [columnsOpen, setColumnsOpen] = useState(false);
-
-  useEffect(() => {
-    try {
-      const savedPreset = localStorage.getItem('stock-monitor:watchlist:preset') as PresetKey | null;
-      const savedColumns = JSON.parse(localStorage.getItem('stock-monitor:watchlist:columns') || 'null') as ColumnKey[] | null;
-      if (savedPreset && PRESET_COLUMNS[savedPreset]) setPreset(savedPreset);
-      if (savedColumns?.length) setVisibleColumns(savedColumns.filter((column) => ALL_COLUMNS.includes(column)));
-    } catch {}
-  }, []);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [batchGroupId, setBatchGroupId] = useState(groups[0]?.id ?? '');
+  const [batchTag, setBatchTag] = useState('');
+  const [tagSaving, setTagSaving] = useState(false);
+  const columnsRef = useRef<HTMLDivElement>(null);
+  useDismissableLayer(columnsRef, columnsOpen, () => setColumnsOpen(false));
+  const { sortKey, asc, preset, visibleColumns, query, groupFilter, marketFilter, statusFilter, density } = preferences;
 
   const rows = useMemo(
     () => buildWatchlistMarketRows(groups, quotes, identities, loadedAt),
     [groups, quotes, identities, loadedAt],
   );
+
+  useEffect(() => {
+    const available = new Set(rows.map((row) => row.ticker));
+    setSelected((current) => new Set([...current].filter((ticker) => available.has(ticker))));
+    if (!groups.some((group) => group.id === batchGroupId)) setBatchGroupId(groups[0]?.id ?? '');
+  }, [batchGroupId, groups, rows]);
 
   const filtered = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -149,13 +209,13 @@ export function WatchlistTable({
   }, [groupFilter, marketFilter, query, rows, statusFilter]);
 
   const sorted = useMemo(() => [...filtered].sort((left, right) => {
-    const a = metricValue(left, sortKey);
-    const b = metricValue(right, sortKey);
+    const a = metricValue(left, sortKey, overviewByTicker[left.ticker]);
+    const b = metricValue(right, sortKey, overviewByTicker[right.ticker]);
     const result = typeof a === 'string' && typeof b === 'string'
       ? a.localeCompare(b)
       : Number(a) - Number(b);
     return asc ? result : -result;
-  }), [asc, filtered, sortKey]);
+  }), [asc, filtered, overviewByTicker, sortKey]);
 
   const quotedRows = filtered.filter((row) => row.quote && row.quote.price > 0);
   const summary = {
@@ -166,14 +226,27 @@ export function WatchlistTable({
       ? quotedRows.reduce((sum, row) => sum + row.quote!.change_pct, 0) / quotedRows.length
       : null,
   };
+  const allVisibleSelected = sorted.length > 0 && sorted.every((row) => selected.has(row.ticker));
+  const toggleSelection = (ticker: string) => setSelected((current) => {
+    const next = new Set(current);
+    if (next.has(ticker)) next.delete(ticker); else next.add(ticker);
+    return next;
+  });
+  const clearSelection = () => setSelected(new Set());
+  const updateTags = async (mode: 'add' | 'remove') => {
+    const tag = batchTag.trim();
+    if (!tag || !onTagTickers) return;
+    setTagSaving(true);
+    const updated = await onTagTickers([...selected], tag, mode);
+    setTagSaving(false);
+    if (updated) {
+      setBatchTag('');
+      clearSelection();
+    }
+  };
 
   const applyPreset = (next: PresetKey) => {
-    setPreset(next);
-    setVisibleColumns(PRESET_COLUMNS[next]);
-    try {
-      localStorage.setItem('stock-monitor:watchlist:preset', next);
-      localStorage.setItem('stock-monitor:watchlist:columns', JSON.stringify(PRESET_COLUMNS[next]));
-    } catch {}
+    setPreferences((current) => ({ ...current, preset: next, visibleColumns: PRESET_COLUMNS[next] }));
   };
 
   const toggleColumn = (column: ColumnKey) => {
@@ -181,26 +254,35 @@ export function WatchlistTable({
     const next = visibleColumns.includes(column)
       ? visibleColumns.filter((item) => item !== column)
       : ALL_COLUMNS.filter((item) => visibleColumns.includes(item) || item === column);
-    setVisibleColumns(next);
-    try { localStorage.setItem('stock-monitor:watchlist:columns', JSON.stringify(next)); } catch {}
+    setPreferences((current) => ({ ...current, visibleColumns: next }));
+  };
+
+  const moveColumn = (column: ColumnKey, offset: -1 | 1) => {
+    const index = visibleColumns.indexOf(column);
+    const target = index + offset;
+    if (index < 0 || target < 0 || target >= visibleColumns.length) return;
+    const next = [...visibleColumns];
+    [next[index], next[target]] = [next[target], next[index]];
+    setPreferences((current) => ({ ...current, visibleColumns: next }));
   };
 
   const sort = (key: ColumnKey) => {
-    if (sortKey === key) setAsc((current) => !current);
-    else {
-      setSortKey(key);
-      setAsc(key === 'ticker' || key === 'name' || key === 'group');
-    }
+    setPreferences((current) => sortKey === key
+      ? { ...current, asc: !current.asc }
+      : { ...current, sortKey: key, asc: key === 'ticker' || key === 'name' || key === 'group' });
   };
 
   const cell = (row: WatchlistMarketRow, key: ColumnKey) => {
     const quote = row.quote;
+    const overview = overviewByTicker[row.ticker];
     const hasQuote = !!quote && quote.price > 0;
     switch (key) {
       case 'ticker': return <div className="flex items-center gap-2"><Link onClick={(event) => event.stopPropagation()} href={`/stock/${encodeURIComponent(row.ticker)}` as never} className="font-mono text-xs font-bold text-accent hover:no-underline">{row.ticker}</Link><span className="rounded border border-border bg-bg-elevated px-1 py-0.5 text-[8px] text-text-muted"><MarketLabel m={row.market} /></span></div>;
       case 'name': return <span className="block max-w-[190px] truncate font-medium text-text">{row.name}</span>;
       case 'price': return hasQuote ? <span className="font-semibold tabular-nums text-text">{formatPrice(quote.price, row.currency)}</span> : <span className="text-text-muted">--</span>;
       case 'change': return hasQuote ? <div className={`tabular-nums ${changeClass(quote.change_pct)}`}><div>{formatPct(quote.change_pct)}</div><div className="text-[10px] opacity-75">{formatChange(quote.change)}</div></div> : <span className="text-text-muted">--</span>;
+      case 'open': return hasQuote ? <span className="tabular-nums">{formatPrice(quote.open, row.currency)}</span> : <span className="text-text-muted">--</span>;
+      case 'prevClose': return hasQuote ? <span className="tabular-nums">{formatPrice(quote.prev_close, row.currency)}</span> : <span className="text-text-muted">--</span>;
       case 'dayRange': return hasQuote ? <><div className="tabular-nums">{formatPrice(quote.high, row.currency)}</div><div className="text-[10px] text-text-dim">{formatPrice(quote.low, row.currency)}</div></> : <span className="text-text-muted">--</span>;
       case 'volume': return hasQuote && quote.volume > 0 ? formatVolume(quote.volume) : <span className="text-text-muted">--</span>;
       case 'amount': return hasQuote && quote.amount > 0 ? formatVolume(quote.amount) : <span className="text-text-muted">--</span>;
@@ -219,6 +301,29 @@ export function WatchlistTable({
           </div>
         );
       }
+      case 'oneYearReturn': {
+        const value = overview?.history?.value?.periodReturnPct;
+        return value == null ? <span className="text-text-muted">--</span> : <span className={changeClass(value)}>{value.toFixed(2)}%</span>;
+      }
+      case 'volatility': return optionalNumber(overview?.history?.value?.annualizedVolatilityPct, '%');
+      case 'maxDrawdown': {
+        const value = overview?.history?.value?.maxDrawdownPct;
+        return value == null ? <span className="text-text-muted">--</span> : <span className="text-warn">{value.toFixed(2)}%</span>;
+      }
+      case 'rangePosition': {
+        const value = overview?.history?.value?.rangePositionPct;
+        return value == null ? <span className="text-text-muted">--</span> : (
+          <div className="ml-auto w-24"><div className="h-1.5 overflow-hidden rounded bg-border"><div className="h-full bg-accent" style={{ width: `${value}%` }} /></div><div className="mt-1 text-[10px] text-text-dim">{value.toFixed(0)}%</div></div>
+        );
+      }
+      case 'research': {
+        const research = overview?.research.value;
+        if (!research) return <span className="text-text-muted">--</span>;
+        return <div className="flex items-center justify-end gap-1.5"><span className="font-mono text-xs">{research.recentNewsCount}</span>{research.perspectiveDivergence && <span className="rounded border border-warn/30 bg-warn/10 px-1 py-0.5 text-[9px] text-warn">{t('researchDivergence')}</span>}</div>;
+      }
+      case 'decision': return overview?.item.status
+        ? <span className="rounded border border-border bg-bg-elevated px-1.5 py-0.5 text-[10px] text-text-dim">{t(`decisionStatuses.${overview.item.status}`)}</span>
+        : <span className="text-text-muted">--</span>;
       case 'quality': {
         const quality = dataQuality(quote);
         return <span className={quality >= 75 ? 'text-up' : quality >= 45 ? 'text-warn' : 'text-text-muted'}>{quality}%</span>;
@@ -258,34 +363,35 @@ export function WatchlistTable({
             ))}
           </div>
           <div className="relative w-full min-w-0 sm:w-[260px]">
-            <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-text-muted">⌕</span>
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('filters.search')} aria-label={t('filters.search')} className="w-full bg-bg py-1.5 pl-7 pr-2.5 text-xs" />
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-muted" aria-hidden="true" />
+            <input value={query} onChange={(event) => setPreferences((current) => ({ ...current, query: event.target.value }))} placeholder={t('filters.search')} aria-label={t('filters.search')} className="w-full bg-bg py-1.5 pl-7 pr-2.5 text-xs" />
           </div>
         </div>
         <div className="flex min-w-0 items-center gap-2 overflow-x-auto pb-0.5 xl:ml-auto xl:overflow-visible xl:pb-0">
-          <select value={groupFilter} onChange={(event) => setGroupFilter(event.target.value)} aria-label={t('filters.group')} className="px-2 py-1.5 text-xs">
+          <select value={groupFilter} onChange={(event) => setPreferences((current) => ({ ...current, groupFilter: event.target.value }))} aria-label={t('filters.group')} className="px-2 py-1.5 text-xs">
             <option value="all">{t('filters.allGroups')}</option>
             {groups.map((group) => <option key={group.id} value={group.name}>{group.name}</option>)}
           </select>
-          <select value={marketFilter} onChange={(event) => setMarketFilter(event.target.value as 'all' | Market)} aria-label={t('filters.market')} className="px-2 py-1.5 text-xs">
+          <select value={marketFilter} onChange={(event) => setPreferences((current) => ({ ...current, marketFilter: event.target.value as 'all' | Market }))} aria-label={t('filters.market')} className="px-2 py-1.5 text-xs">
             <option value="all">{t('filters.allMarkets')}</option>
             {Array.from(new Set(rows.map((row) => row.market))).map((market) => <option key={market} value={market}>{market}</option>)}
           </select>
-          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as 'all' | QuoteDisplayStatus)} aria-label={t('filters.status')} className="px-2 py-1.5 text-xs">
+          <select value={statusFilter} onChange={(event) => setPreferences((current) => ({ ...current, statusFilter: event.target.value as 'all' | QuoteDisplayStatus }))} aria-label={t('filters.status')} className="px-2 py-1.5 text-xs">
             <option value="all">{t('filters.allStatuses')}</option>
             {(['live', 'delayed', 'unavailable'] as QuoteDisplayStatus[]).map((status) => <option key={status} value={status}>{t(`status.${status}`)}</option>)}
           </select>
-          <div className="relative ml-auto shrink-0">
-            <button type="button" onClick={() => setColumnsOpen((open) => !open)} aria-expanded={columnsOpen} className="rounded-md border border-border bg-bg px-2.5 py-1.5 text-xs text-text-dim transition hover:border-border-active hover:text-text">
-              {t('columns.action')}
+          <button type="button" onClick={() => setPreferences((current) => ({ ...current, density: current.density === 'compact' ? 'comfortable' : 'compact' }))} className="icon-button !h-8 !w-8 !basis-8" title={t(`density.${density}`)} aria-label={t(`density.${density}`)}><Rows3 className="h-3.5 w-3.5" aria-hidden="true" /></button>
+          <div ref={columnsRef} className="relative ml-auto shrink-0">
+            <button type="button" onClick={() => setColumnsOpen((open) => !open)} aria-expanded={columnsOpen} className="icon-button !h-8 !w-8 !basis-8" title={t('columns.action')} aria-label={t('columns.action')}>
+              <Columns3 className="h-3.5 w-3.5" aria-hidden="true" />
             </button>
             {columnsOpen && (
-              <div className="absolute right-0 top-full z-30 mt-1 grid w-64 grid-cols-2 gap-1 rounded-md border border-border bg-bg-elevated p-2 shadow-xl">
+              <div className="absolute right-0 top-full z-30 mt-1 w-72 rounded-md border border-border bg-bg-elevated p-2 shadow-xl">
                 {ALL_COLUMNS.map((column) => (
-                  <label key={column} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs hover:bg-bg-card">
-                    <input type="checkbox" checked={visibleColumns.includes(column)} disabled={(column === 'ticker' || column === 'name') && visibleColumns.includes(column)} onChange={() => toggleColumn(column)} />
-                    <span>{t(`headers.${column}`)}</span>
-                  </label>
+                  <div key={column} className="flex items-center gap-1 rounded px-1 py-0.5 text-xs hover:bg-bg-card">
+                    <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-1 py-1"><input type="checkbox" checked={visibleColumns.includes(column)} disabled={(column === 'ticker' || column === 'name') && visibleColumns.includes(column)} onChange={() => toggleColumn(column)} /><span className="truncate">{t(`headers.${column}`)}</span></label>
+                    {visibleColumns.includes(column) && <><button type="button" onClick={() => moveColumn(column, -1)} disabled={visibleColumns[0] === column} className="icon-button !h-6 !w-6 !basis-6 border-transparent bg-transparent" aria-label={t('columns.moveUp')}><ArrowUp className="h-3 w-3" aria-hidden="true" /></button><button type="button" onClick={() => moveColumn(column, 1)} disabled={visibleColumns.at(-1) === column} className="icon-button !h-6 !w-6 !basis-6 border-transparent bg-transparent" aria-label={t('columns.moveDown')}><ArrowDown className="h-3 w-3" aria-hidden="true" /></button></>}
+                  </div>
                 ))}
               </div>
             )}
@@ -294,36 +400,63 @@ export function WatchlistTable({
       </div>
 
       {loading && <div className="border-b border-border px-3 py-1.5 text-[11px] text-text-dim" role="status">{t('loadingQuotes')}</div>}
+      {selected.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-accent/20 bg-accent/5 px-3 py-2">
+          <span className="mr-auto text-xs font-semibold text-text">{t('selection.count', { count: selected.size })}</span>
+          <div className="flex min-w-[190px] items-center gap-1">
+            <Tag className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />
+            <input value={batchTag} maxLength={32} onChange={(event) => setBatchTag(event.target.value)} placeholder={t('selection.tagPlaceholder')} aria-label={t('selection.tagPlaceholder')} className="h-8 min-w-0 flex-1 py-1 text-xs" />
+            <button type="button" disabled={!batchTag.trim() || tagSaving || !onTagTickers} onClick={() => void updateTags('add')} className="icon-button !h-8 !w-8 !basis-8" title={t('selection.addTag')} aria-label={t('selection.addTag')}><Plus className="h-3.5 w-3.5" aria-hidden="true" /></button>
+            <button type="button" disabled={!batchTag.trim() || tagSaving || !onTagTickers} onClick={() => void updateTags('remove')} className="icon-button !h-8 !w-8 !basis-8" title={t('selection.removeTag')} aria-label={t('selection.removeTag')}><Minus className="h-3.5 w-3.5" aria-hidden="true" /></button>
+          </div>
+          <select value={batchGroupId} onChange={(event) => setBatchGroupId(event.target.value)} aria-label={t('selection.targetGroup')} className="h-8 py-1 text-xs">{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
+          <button type="button" disabled={!batchGroupId || !onMoveTickers} onClick={() => { onMoveTickers?.([...selected], batchGroupId); clearSelection(); }} className="inline-flex h-8 items-center gap-1.5 rounded border border-border bg-bg-elevated px-2.5 text-xs text-text disabled:opacity-50"><MoveRight className="h-3.5 w-3.5" aria-hidden="true" />{t('selection.move')}</button>
+          <button type="button" disabled={!onRemoveTickers} onClick={() => { onRemoveTickers?.([...selected]); clearSelection(); }} className="inline-flex h-8 items-center gap-1.5 rounded border border-down/30 px-2.5 text-xs text-down disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" aria-hidden="true" />{t('selection.remove')}</button>
+          <button type="button" onClick={clearSelection} className="icon-button !h-8 !w-8 !basis-8 border-transparent bg-transparent" aria-label={t('selection.clear')}><X className="h-3.5 w-3.5" aria-hidden="true" /></button>
+        </div>
+      )}
       {filtered.length === 0 ? (
         <div className="px-4 py-10 text-center text-sm text-text-dim">{t('filters.noResults')}</div>
       ) : (
-        <div className="max-h-[64vh] overflow-auto">
+        <>
+        <WatchlistMobileList rows={sorted} onSelect={onSelectTicker} selected={selected} onToggle={toggleSelection} />
+        <div className="hidden max-h-[64vh] overflow-auto sm:block">
           <table aria-label={t('ariaLabel')} className="w-full min-w-max text-sm">
             <caption className="sr-only">{t('caption')}</caption>
             <thead>
               <tr className="border-b border-border bg-bg-elevated/95 text-[10px] text-text-dim">
+                <th className="sticky left-0 top-0 z-30 w-10 bg-bg-elevated/95 px-2 py-2.5"><input type="checkbox" checked={allVisibleSelected} onChange={() => setSelected((current) => { const next = new Set(current); if (allVisibleSelected) sorted.forEach((row) => next.delete(row.ticker)); else sorted.forEach((row) => next.add(row.ticker)); return next; })} aria-label={t('selection.all')} /></th>
                 {visibleColumns.map((column) => (
-                  <th key={column} className={`sticky top-0 z-10 whitespace-nowrap bg-bg-elevated/95 px-3 py-2.5 font-semibold ${NUMERIC_COLUMNS.has(column) ? 'text-right' : 'text-left'}`} aria-sort={sortKey === column ? (asc ? 'ascending' : 'descending') : 'none'}>
+                  <th key={column} className={`sticky top-0 whitespace-nowrap bg-bg-elevated/95 px-3 py-2.5 font-semibold ${column === 'ticker' ? 'left-10 z-20 min-w-[126px]' : 'z-10'} ${NUMERIC_COLUMNS.has(column) ? 'text-right' : 'text-left'}`} aria-sort={sortKey === column ? (asc ? 'ascending' : 'descending') : 'none'}>
                     <button type="button" onClick={() => sort(column)} className="hover:text-text" aria-label={t('sortAriaLabel', { label: t(`headers.${column}`) })}>
                       {t(`headers.${column}`)}{sortKey === column ? (asc ? ' ▲' : ' ▼') : ''}
                     </button>
                   </th>
                 ))}
-                {onSelectTicker && <th className="sticky top-0 z-10 w-16 bg-bg-elevated/95 px-3 py-2.5 text-right font-semibold">{t('quickView')}</th>}
+                {onSelectTicker && <th className="sticky right-0 top-0 z-30 w-16 bg-bg-elevated/95 px-3 py-2.5 text-right font-semibold">{t('quickView')}</th>}
               </tr>
             </thead>
             <tbody>
               {sorted.map((row) => (
                 <tr key={row.ticker} tabIndex={onSelectTicker ? 0 : undefined} onClick={() => onSelectTicker?.(row.ticker)} onKeyDown={(event) => { if (event.key === 'Enter') onSelectTicker?.(row.ticker); }}
                   className={`group border-b border-border/60 last:border-0 hover:bg-bg-hover ${onSelectTicker ? 'cursor-pointer focus:bg-bg-hover focus:outline-none' : ''}`}>
+                  <td className="sticky left-0 z-10 w-10 bg-bg-card px-2 text-center group-hover:bg-bg-hover"><input type="checkbox" checked={selected.has(row.ticker)} onClick={(event) => event.stopPropagation()} onChange={() => toggleSelection(row.ticker)} aria-label={t('selection.toggle', { ticker: row.ticker })} /></td>
                   {visibleColumns.map((column) => (
-                    <td key={column} className={`whitespace-nowrap px-3 py-3 transition-colors ${NUMERIC_COLUMNS.has(column) ? 'text-right tabular-nums' : ''}`}>{cell(row, column)}</td>
+                    <td key={column} className={`whitespace-nowrap px-3 ${density === 'compact' ? 'py-1.5' : 'py-3'} transition-colors ${column === 'ticker' ? 'sticky left-10 z-[5] bg-bg-card group-hover:bg-bg-hover' : ''} ${NUMERIC_COLUMNS.has(column) ? 'text-right tabular-nums' : ''}`}>{cell(row, column)}</td>
                   ))}
-                  {onSelectTicker && <td className="px-3 py-3 text-right"><button type="button" onClick={(event) => { event.stopPropagation(); onSelectTicker(row.ticker); }} className="rounded-md border border-transparent px-2 py-1 text-[10px] font-semibold text-text-dim transition group-hover:border-border group-hover:bg-bg-card group-hover:text-accent hover:!border-accent/30 hover:!bg-accent/10">{t('quickViewAction')}</button></td>}
+                  {onSelectTicker && <td className="sticky right-0 z-10 bg-bg-card px-3 py-3 text-right group-hover:bg-bg-hover"><button type="button" onClick={(event) => { event.stopPropagation(); onSelectTicker(row.ticker); }} className="icon-button !h-7 !w-7 !basis-7 border-transparent bg-transparent" title={t('quickViewAction')} aria-label={t('quickViewAction')}><PanelRightOpen className="h-3.5 w-3.5" aria-hidden="true" /></button></td>}
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+        </>
+      )}
+      {overviewHasMore && (
+        <div className="flex justify-center border-t border-border bg-bg-elevated/50 px-3 py-2">
+          <button type="button" disabled={overviewLoadingMore} onClick={() => void onLoadMoreOverview?.()} className="inline-flex h-8 items-center gap-1.5 rounded border border-border bg-bg-card px-3 text-xs text-text-dim disabled:opacity-50">
+            {overviewLoadingMore && <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}{t(overviewLoadingMore ? 'overview.loadingMore' : 'overview.loadMore')}
+          </button>
         </div>
       )}
     </div>

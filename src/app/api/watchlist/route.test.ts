@@ -38,7 +38,13 @@ describe('POST /api/watchlist', () => {
     mocks.validate.mockResolvedValue({ valid: false, canonicalTickers: [], rejected: ['MISSING'] });
     const response = await POST(request('MISSING'));
     expect(response.status).toBe(422);
-    expect(await response.json()).toEqual({ error: 'security_not_selectable', tickers: ['MISSING'] });
+    expect(await response.json()).toMatchObject({
+      error: 'security_not_selectable',
+      code: 'security_not_selectable',
+      retryable: false,
+      requestId: expect.any(String),
+      tickers: ['MISSING'],
+    });
     expect(mocks.upsert).not.toHaveBeenCalled();
   });
 

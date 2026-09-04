@@ -19,6 +19,14 @@
       "schedule": "15 16 * * *"
     },
     {
+      "path": "/api/cron/watchlist-alerts",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/watchlist-research",
+      "schedule": "7 * * * *"
+    },
+    {
       "path": "/api/cron/securities-sync?region=asia",
       "schedule": "30 21 * * *"
     },

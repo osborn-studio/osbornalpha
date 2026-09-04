@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { resolveEvidenceSearchProvider } from './resolve-provider';
+import { resolveEvidenceSearchProvider, resolveEvidenceSearchProviders } from './resolve-provider';
 
 const KEYS = ['SEARCH_PROVIDER', 'TAVILY_API_KEY', 'BRAVE_SEARCH_API_KEY', 'SERPER_API_KEY'] as const;
 const original = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
@@ -21,6 +21,14 @@ describe('evidence search provider resolution', () => {
     process.env.BRAVE_SEARCH_API_KEY = 'brave';
     process.env.TAVILY_API_KEY = 'tavily';
     expect(resolveEvidenceSearchProvider()?.id).toBe('tavily');
+    expect(resolveEvidenceSearchProviders().map((provider) => provider.id)).toEqual(['tavily', 'brave']);
+  });
+
+  it('keeps an explicit provider first while retaining configured failovers', () => {
+    process.env.SEARCH_PROVIDER = 'brave';
+    process.env.BRAVE_SEARCH_API_KEY = 'brave';
+    process.env.TAVILY_API_KEY = 'tavily';
+    expect(resolveEvidenceSearchProviders().map((provider) => provider.id)).toEqual(['brave', 'tavily']);
   });
 
   it('fails closed when an explicitly pinned provider lacks its own key', () => {

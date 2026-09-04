@@ -14,7 +14,6 @@
  *   5. Markdown render in morning-note format
  */
 
-import { quoteSourcesFor } from '@/lib/data/sources/registry';
 import { classifyMarket, currencyOfMarket } from '@/lib/utils';
 import type { Market } from '@/lib/supabase/database.types';
 import {
@@ -27,6 +26,7 @@ import {
 import { MOCK_UNIVERSE } from '@/lib/data/mock';
 import { buildCalendar, type CalendarEvent } from './calendar';
 import type { AppLocale } from '@/lib/i18n/locale';
+import { resolveQuote } from '@/lib/quotes/resolve-quote';
 
 export type RadarLevel = 'red' | 'yellow' | 'white';
 
@@ -53,8 +53,11 @@ export interface RadarPayload {
       currency: string;
       pe_ttm: number | null;
       pb: number | null;
+      volume_ratio?: number | null;
       market_cap_label: string;
       source: string;
+      updated_at?: string | null;
+      delayed?: boolean;
     };
     flows: {
       available: boolean;
@@ -195,15 +198,6 @@ const RADAR_TEXT = {
 
 function lookupName(ticker: string): string {
   return MOCK_UNIVERSE.find((u) => u.t === ticker)?.n || ticker;
-}
-
-/** Same market-routed cascade as /api/quote/batch but inline for one ticker. */
-async function resolveQuote(ticker: string): Promise<any | null> {
-  for (const s of quoteSourcesFor(classifyMarket(ticker))) {
-    const q = await s.fetch(ticker).catch(() => null);
-    if (q) return q;
-  }
-  return null;
 }
 
 function computePriceTriggers(q: any, locale: AppLocale): RadarTrigger[] {
@@ -396,7 +390,7 @@ export async function buildRadar(ticker: string, locale: AppLocale = 'zh'): Prom
   const isA = /\.(SH|SZ|BJ)$/i.test(ticker);
 
   // Layer 1: quote (cascade through 4 sources)
-  const quote = await resolveQuote(ticker);
+  const quote = (await resolveQuote(ticker)).quote;
 
   // Layer 2: A-share supplements (anns_d skipped — needs > 5000 积分)
   const [dailyBasic, finaInd, northTop10, limitList, calendar] = await Promise.all([
@@ -560,8 +554,11 @@ export async function buildRadar(ticker: string, locale: AppLocale = 'zh'): Prom
         currency,
         pe_ttm: dailyBasic?.pe_ttm ?? quote?.pe_ttm ?? null,
         pb: dailyBasic?.pb ?? quote?.pb ?? null,
+        volume_ratio: quote?.volume_ratio ?? null,
         market_cap_label: quote?.market_cap_label || '—',
         source: quote?.source || 'none',
+        updated_at: quote?.updated_at ?? null,
+        delayed: quote?.delayed ?? false,
       },
       flows: flowsSection,
       events,

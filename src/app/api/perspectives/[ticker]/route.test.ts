@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   createCapExemptCostAudit: vi.fn(),
   fetchEastmoneyQuote: vi.fn(),
   searchExternalEvidence: vi.fn(),
+  persistStockPerspectives: vi.fn(),
+  consumeExternalEvidenceQuota: vi.fn(),
 }));
 
 vi.mock('@/lib/llm/resolve', () => ({
@@ -55,6 +57,14 @@ vi.mock('@/lib/data/sources/eastmoney', () => ({
 vi.mock('@/lib/external-evidence', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/lib/external-evidence')>(),
   searchExternalEvidence: mocks.searchExternalEvidence,
+}));
+
+vi.mock('@/lib/stocks/research-artifact-repository', () => ({
+  persistStockPerspectives: mocks.persistStockPerspectives,
+}));
+
+vi.mock('@/lib/external-evidence/quota', () => ({
+  consumeExternalEvidenceQuota: mocks.consumeExternalEvidenceQuota,
 }));
 
 vi.mock('@/lib/data/sources/tushare-cached', () => ({
@@ -147,6 +157,24 @@ describe('GET /api/perspectives/[ticker] cost budget', () => {
       requestId: 'evidence-1', status: 'complete', provider: 'test-search', queryCount: 1,
       results: [], fetchedAt: '2026-09-04T00:00:00.000Z', durationMs: 5, warnings: [],
     });
+    mocks.persistStockPerspectives.mockResolvedValue(undefined);
+    mocks.consumeExternalEvidenceQuota.mockResolvedValue(true);
+  });
+
+  it('applies the shared external-evidence quota before quote or search calls', async () => {
+    mocks.consumeExternalEvidenceQuota.mockResolvedValue(false);
+
+    const response = await GET(
+      new Request('http://localhost/api/perspectives/AAPL'),
+      { params: Promise.resolve({ ticker: 'AAPL' }) },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('retry-after')).toBe('3600');
+    expect(body).toMatchObject({ errorCode: 'external_evidence_rate_limited', perspectives: [] });
+    expect(mocks.fetchEastmoneyQuote).not.toHaveBeenCalled();
+    expect(mocks.searchExternalEvidence).not.toHaveBeenCalled();
   });
 
   it('only exposes web citations that belong to the fetched evidence snapshot', async () => {

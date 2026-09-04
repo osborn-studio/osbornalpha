@@ -3,10 +3,42 @@
 // Client shape: WatchlistGroup[] (id/name/tickers) — ids are server uuids once
 // synced, but may be local slugs (e.g. 'long_hold') before first sync.
 
-import { defaultWatchlistGroups, type WatchlistGroup } from './store';
+import { defaultWatchlistGroups, parseWatchlistGroups, type WatchlistGroup } from './store';
 
 export const MAX_GROUPS = 50;
 export const MAX_TICKERS_PER_GROUP = 200;
+
+export interface VersionedWatchlistSnapshot {
+  ownerId: string;
+  version: number;
+  groups: WatchlistGroup[];
+}
+
+export interface WatchlistSyncRequest {
+  groups: WatchlistGroup[];
+  expectedVersion: number;
+  mutationId: string;
+}
+
+export function parseWatchlistSyncRequest(body: unknown): WatchlistSyncRequest | null {
+  if (!body || typeof body !== 'object') return null;
+  const candidate = body as Record<string, unknown>;
+  if (!Array.isArray(candidate.groups)) return null;
+  if (!Number.isSafeInteger(candidate.expectedVersion) || Number(candidate.expectedVersion) < 0) return null;
+  if (typeof candidate.mutationId !== 'string') return null;
+  const mutationId = candidate.mutationId.trim();
+  if (mutationId.length < 8 || mutationId.length > 128) return null;
+
+  const groups = candidate.groups.length === 0
+    ? []
+    : parseWatchlistGroups(JSON.stringify(candidate.groups));
+  if (groups === null) return null;
+  return { groups, expectedVersion: Number(candidate.expectedVersion), mutationId };
+}
+
+export function isWatchlistVersionConflict(error: { code?: string; message?: string } | null): boolean {
+  return error?.code === '40001' || error?.message === 'watchlist_version_conflict';
+}
 
 export interface ServerWatchlistItem {
   ticker: string;

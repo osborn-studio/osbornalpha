@@ -125,6 +125,21 @@ select:focus {
 }
 
 button { cursor: pointer; font-family: inherit; }
+.icon-button {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text-dim);
+  transition: border-color 150ms ease, color 150ms ease, background-color 150ms ease;
+}
+.icon-button:hover:not(:disabled) { border-color: var(--border-active); color: var(--text); background: var(--bg-card); }
+.icon-button:disabled { cursor: not-allowed; opacity: 0.45; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 

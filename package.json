@@ -22,9 +22,11 @@
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.46.1",
     "clsx": "^2.1.1",
+    "csv-parse": "^6.2.1",
     "geist": "^1.7.1",
     "iconv-lite": "^0.7.2",
     "lightweight-charts": "^4.2.1",
+    "lucide-react": "^0.468.0",
     "next": "15.5.22",
     "next-intl": "^4.13.1",
     "pinyin-pro": "^3.28.1",
@@ -33,7 +35,8 @@
     "stripe": "^22.3.0",
     "svix": "^1.98.0",
     "tailwind-merge": "^2.5.4",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@next/eslint-plugin-next": "^15.5.22",

@@ -1,22 +1,14 @@
 import { NextResponse } from 'next/server';
-import { quoteSourcesFor } from '@/lib/data/sources/registry';
 import { fetchTwseQuotesBatch } from '@/lib/data/sources/twse';
 import { classifyMarket } from '@/lib/utils';
-import {
-  isTushareConfigured,
-  fetchTushareDaily,
-  fetchTushareDailyBasic,
-} from '@/lib/data/sources/tushare-cached';
-import { MOCK_UNIVERSE } from '@/lib/data/mock';
-import type { Market } from '@/lib/supabase/database.types';
 import {
   aggregateSourceAttempts,
   classifySourceFailure,
   type SourceAttempt,
   type SourceOutcome,
 } from '@/lib/quotes/diagnostics';
-import { withQuoteSourceTimeout } from '@/lib/quotes/source-timeout';
 import { fetchDatagatewayRealtimeQuotes, isDatagatewayConfigured } from '@/lib/data/sources/datagateway-quote';
+import { readQuoteCache, resolveQuote, writeQuoteCache, type QuoteResolution, type QuoteShape } from '@/lib/quotes/resolve-quote';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 30;
@@ -24,182 +16,6 @@ export const maxDuration = 30;
 
 const FRESH_TTL_MS = 60_000;
 const STALE_TTL_MS = 15 * 60_000;
-const SOURCE_ATTEMPT_TIMEOUT_MS = 2_500;
-
-interface QuoteShape {
-  source: string;
-  ticker: string;
-  name: string;
-  market: Market;
-  currency: string;
-  price: number;
-  change: number;
-  change_pct: number;
-  open: number;
-  high: number;
-  low: number;
-  prev_close: number;
-  volume: number;
-  amount: number;
-  amplitude: number;
-  market_cap: number | null;
-  market_cap_label: string;
-  pe_ttm: number | null;
-  pb: number | null;
-  turnover: number | null;
-  volume_ratio: number | null;
-  updated_at: string;
-  delayed: boolean;
-}
-
-const quoteCache = new Map<string, { quote: QuoteShape; ts: number }>();
-
-function lookupName(ticker: string): string {
-  const hit = MOCK_UNIVERSE.find((u) => u.t === ticker);
-  return hit?.n || ticker;
-}
-
-function formatMarketCap(yuan: number | null): string {
-  if (yuan === null || yuan === 0) return '—';
-  if (yuan >= 1e12) return `¥${(yuan / 1e12).toFixed(2)}万亿`;
-  if (yuan >= 1e8) return `¥${(yuan / 1e8).toFixed(0)}亿`;
-  if (yuan >= 1e4) return `¥${(yuan / 1e4).toFixed(0)}万`;
-  return `¥${yuan.toFixed(0)}`;
-}
-
-/**
- * Tushare-only synthesis for A-shares — the final fallback that costs 积分.
- * Eastmoney's `push2delay` host is blocked from Vercel for A-share secid
- * prefixes (0/1). Sina + Tencent are tried first; this only fires if both
- * also fail (e.g. their CDNs are flaky on a given request).
- */
-async function tushareFallback(ticker: string): Promise<QuoteShape | null> {
-  if (!isTushareConfigured()) return null;
-  const [daily, basic] = await Promise.all([
-    fetchTushareDaily(ticker, 1).catch(() => []),
-    fetchTushareDailyBasic(ticker).catch(() => null),
-  ]);
-  const last = daily[0];
-  if (!last && !basic) return null;
-
-  const close = last?.close ?? basic?.close ?? 0;
-  const prev_close = last?.pre_close ?? 0;
-  const change = last?.change ?? (prev_close ? close - prev_close : 0);
-  const change_pct = last?.pct_chg ?? (prev_close ? ((close - prev_close) / prev_close) * 100 : 0);
-  const market_cap = basic?.total_mv != null ? basic.total_mv * 10000 : null;
-
-  return {
-    source: 'tushare-daily',
-    ticker,
-    name: lookupName(ticker),
-    market: 'A',
-    currency: '¥',
-    price: close,
-    change,
-    change_pct,
-    open: last?.open ?? close,
-    high: last?.high ?? close,
-    low: last?.low ?? close,
-    prev_close,
-    volume: last?.vol ?? 0,
-    amount: last?.amount ?? 0,
-    amplitude: prev_close > 0 ? (((last?.high ?? close) - (last?.low ?? close)) / prev_close) * 100 : 0,
-    market_cap,
-    market_cap_label: formatMarketCap(market_cap),
-    pe_ttm: basic?.pe_ttm ?? null,
-    pb: basic?.pb ?? null,
-    turnover: basic?.turnover_rate ?? null,
-    volume_ratio: null,
-    updated_at: last?.trade_date
-      ? `${last.trade_date.slice(0, 4)}-${last.trade_date.slice(4, 6)}-${last.trade_date.slice(6, 8)}T15:00:00+08:00`
-      : new Date().toISOString(),
-    delayed: true,
-  };
-}
-
-/**
- * Run a single fetcher with one transient-failure retry.
- * Transient = throws OR returns null. Retry after 200ms.
- */
-async function withRetry<T>(
-  ticker: string,
-  source: string,
-  fn: (signal: AbortSignal) => Promise<T | null>
-): Promise<{ value: T | null; attempt: SourceAttempt }> {
-  const startedAt = Date.now();
-  let attempts = 0;
-  let failureOutcome: Exclude<SourceOutcome, 'success' | 'empty'> | null = null;
-
-  for (let index = 0; index < 2; index += 1) {
-    attempts += 1;
-    try {
-      const value = await withQuoteSourceTimeout(fn, SOURCE_ATTEMPT_TIMEOUT_MS);
-      if (value) {
-        return {
-          value,
-          attempt: { ticker, source, outcome: 'success', attempts, duration_ms: Date.now() - startedAt },
-        };
-      }
-    } catch (error) {
-      failureOutcome = classifySourceFailure(error);
-    }
-    if (index === 0) await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-
-  return {
-    value: null,
-    attempt: {
-      ticker,
-      source,
-      outcome: failureOutcome ?? 'empty',
-      attempts,
-      duration_ms: Date.now() - startedAt,
-    },
-  };
-}
-
-/**
- * Resolve a quote via the market-routed registry cascade. Each layer is a
- * separate network call — we stop at the first one that returns a usable
- * quote. For A/HK/US the order is unchanged:
- *
- *   Datagateway/Wind          ← preferred batched realtime snapshot
- *   Eastmoney (push2delay)   ← public fallback; blocked from Vercel for A-share
- *   Sina (hq.sinajs.cn)      ← free, no auth, GBK; AKShare's underlying A/HK/US source
- *   Tencent (qt.gtimg.cn)    ← free, no auth, GBK; second free fallback
- *   Tushare daily            ← costs 积分; only fires if all three free sources fail
- *
- * The batch route resolves Datagateway once before reaching this fallback.
- * Each remaining individual call has a 1-retry wrapper for transient hiccups.
- * (TW tickers are handled by fetchTwseQuotesBatch in GET — one native
- * multi-symbol mis request — and never reach this function.)
- */
-interface QuoteResolution {
-  quote: QuoteShape | null;
-  attempts: SourceAttempt[];
-  selectedSource: string | null;
-}
-
-async function resolveQuote(ticker: string, skipDatagateway = false): Promise<QuoteResolution> {
-  const attempts: SourceAttempt[] = [];
-  for (const s of quoteSourcesFor(classifyMarket(ticker))) {
-    if (skipDatagateway && s.name === 'datagateway-wind') continue;
-    const result = await withRetry(ticker, s.name, (signal) => s.fetch(ticker, signal));
-    attempts.push(result.attempt);
-    if (result.value) {
-      return { quote: result.value as unknown as QuoteShape, attempts, selectedSource: s.name };
-    }
-  }
-
-  // Final layer: Tushare (A-share only, costs 积分)
-  if (/\.(SH|SZ|BJ)$/i.test(ticker)) {
-    const result = await withRetry(ticker, 'tushare', () => tushareFallback(ticker));
-    attempts.push(result.attempt);
-    if (result.value) return { quote: result.value, attempts, selectedSource: 'tushare' };
-  }
-
-  return { quote: null, attempts, selectedSource: null };
-}
 
 export async function GET(req: Request) {
   const startedAt = Date.now();
@@ -227,14 +43,13 @@ export async function GET(req: Request) {
   }
 
   const force = url.searchParams.has('_');
-  const now = Date.now();
   const freshQuotes: Record<string, QuoteShape> = {};
   const selectedSources: Record<string, string> = {};
   const toFetch: string[] = [];
   for (const ticker of tickers) {
-    const cached = quoteCache.get(ticker);
-    if (!force && cached && now - cached.ts < FRESH_TTL_MS) {
-      freshQuotes[ticker] = cached.quote;
+    const cached = !force ? readQuoteCache(ticker, FRESH_TTL_MS) : null;
+    if (cached) {
+      freshQuotes[ticker] = cached;
       selectedSources[ticker] = 'cache';
     } else {
       toFetch.push(ticker);
@@ -275,7 +90,7 @@ export async function GET(req: Request) {
           return new Map<string, QuoteShape | null>();
         })
       : Promise.resolve(new Map<string, QuoteShape | null>()),
-    Promise.allSettled(otherTickers.map((ticker) => resolveQuote(ticker, true))),
+    Promise.allSettled(otherTickers.map((ticker) => resolveQuote(ticker, { skipDatagateway: true, force }))),
   ]);
 
   const quotes: Record<string, QuoteShape | null> = { ...freshQuotes };
@@ -291,7 +106,7 @@ export async function GET(req: Request) {
         duration_ms: Date.now() - windStartedAt,
       });
       if (value) {
-        quoteCache.set(ticker, { quote: value, ts: Date.now() });
+        writeQuoteCache(ticker, value);
         quotes[ticker] = value;
         selectedSources[ticker] = 'datagateway-wind';
       }
@@ -316,15 +131,15 @@ export async function GET(req: Request) {
     sourceAttempts.push(...resolution.attempts);
     const value = resolution.quote;
     if (value) {
-      quoteCache.set(ticker, { quote: value, ts: Date.now() });
+      writeQuoteCache(ticker, value);
       quotes[ticker] = value;
       if (resolution.selectedSource) selectedSources[ticker] = resolution.selectedSource;
       return;
     }
-    const cached = quoteCache.get(ticker);
-    if (cached && Date.now() - cached.ts < STALE_TTL_MS) {
+    const cached = readQuoteCache(ticker, STALE_TTL_MS);
+    if (cached) {
       stale += 1;
-      quotes[ticker] = { ...cached.quote, delayed: true };
+      quotes[ticker] = { ...cached, delayed: true };
       selectedSources[ticker] = 'stale-cache';
     } else {
       quotes[ticker] = null;
@@ -340,15 +155,15 @@ export async function GET(req: Request) {
       duration_ms: Date.now() - twStartedAt,
     });
     if (value) {
-      quoteCache.set(t, { quote: value, ts: Date.now() });
+      writeQuoteCache(t, value);
       quotes[t] = value;
       selectedSources[t] = 'twse';
       continue;
     }
-    const cached = quoteCache.get(t);
-    if (cached && Date.now() - cached.ts < STALE_TTL_MS) {
+    const cached = readQuoteCache(t, STALE_TTL_MS);
+    if (cached) {
       stale += 1;
-      quotes[t] = { ...cached.quote, delayed: true };
+      quotes[t] = { ...cached, delayed: true };
       selectedSources[t] = 'stale-cache';
     } else {
       quotes[t] = null;

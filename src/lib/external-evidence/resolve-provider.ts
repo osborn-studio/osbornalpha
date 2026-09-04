@@ -20,13 +20,21 @@ const FACTORIES: Record<SearchProviderId, (apiKey: string) => EvidenceSearchProv
 const PREFERENCE: SearchProviderId[] = ['tavily', 'brave', 'serper'];
 
 export function resolveEvidenceSearchProvider(): EvidenceSearchProvider | null {
+  return resolveEvidenceSearchProviders()[0] ?? null;
+}
+
+export function resolveEvidenceSearchProviders(): EvidenceSearchProvider[] {
   const explicit = process.env.SEARCH_PROVIDER?.trim().toLowerCase();
-  const id = explicit
-    ? (PREFERENCE.includes(explicit as SearchProviderId) ? explicit as SearchProviderId : null)
-    : PREFERENCE.find((candidate) => Boolean(process.env[KEYS[candidate]]?.trim())) ?? null;
-  if (!id) return null;
-  const apiKey = process.env[KEYS[id]]?.trim();
-  return apiKey ? FACTORIES[id](apiKey) : null;
+  if (explicit && !PREFERENCE.includes(explicit as SearchProviderId)) return [];
+  const preferred = explicit as SearchProviderId | undefined;
+  if (preferred && !process.env[KEYS[preferred]]?.trim()) return [];
+  const ordered = preferred
+    ? [preferred, ...PREFERENCE.filter((candidate) => candidate !== preferred)]
+    : PREFERENCE;
+  return ordered.flatMap((id) => {
+    const apiKey = process.env[KEYS[id]]?.trim();
+    return apiKey ? [FACTORIES[id](apiKey)] : [];
+  });
 }
 
 export function isEvidenceSearchConfigured(): boolean {

@@ -10,6 +10,7 @@
     "openAfternoon": "盘中 · 收盘还有 {minutes} 分钟",
     "open": "盘中 · 收盘还有 {minutes} 分钟",
     "closed": "已收盘",
+    "holiday": "节假日休市",
     "weekend": "周末休市"
   },
   "clock": {

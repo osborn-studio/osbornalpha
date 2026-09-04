@@ -31,6 +31,7 @@ export interface SendEmailOpts {
   text?: string;                  // plain-text fallback (recommended)
   replyTo?: string;
   timeoutMs?: number;
+  idempotencyKey?: string;
 }
 
 export interface SendEmailResult {
@@ -70,6 +71,7 @@ export async function sendEmail(opts: SendEmailOpts): Promise<SendEmailResult> {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`,
+        ...(opts.idempotencyKey ? { 'Idempotency-Key': opts.idempotencyKey } : {}),
       },
       body: JSON.stringify(body),
       signal: ctrl.signal,

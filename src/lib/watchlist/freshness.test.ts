@@ -1,0 +1,18 @@
+import { describe, expect, it } from 'vitest';
+import { watchlistTimestampFreshness } from './freshness';
+
+const now = new Date('2026-09-04T12:00:00.000Z');
+
+describe('watchlist timestamp freshness', () => {
+  it('uses one fresh, stale, and expired policy for research surfaces', () => {
+    expect(watchlistTimestampFreshness('2026-09-04T01:00:00.000Z', now)).toBe('fresh');
+    expect(watchlistTimestampFreshness('2026-09-03T12:00:00.000Z', now)).toBe('stale');
+    expect(watchlistTimestampFreshness('2026-08-20T12:00:00.000Z', now)).toBe('unavailable');
+  });
+
+  it('rejects missing, malformed, and materially future timestamps', () => {
+    expect(watchlistTimestampFreshness(null, now)).toBe('unavailable');
+    expect(watchlistTimestampFreshness('not-a-date', now)).toBe('unavailable');
+    expect(watchlistTimestampFreshness('2026-09-04T12:06:00.000Z', now)).toBe('unavailable');
+  });
+});

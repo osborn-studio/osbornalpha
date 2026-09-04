@@ -2,7 +2,7 @@ import { unstable_cache } from 'next/cache';
 import { buildEvidenceQueries } from './query';
 import { dedupeAndRankEvidence, normalizeEvidenceResults } from './normalize';
 import { normalizeEvidenceSearchRequest } from './request';
-import { resolveEvidenceSearchProvider } from './resolve-provider';
+import { resolveEvidenceSearchProviders } from './resolve-provider';
 import { persistEvidenceSnapshot } from './store';
 import type {
   EvidenceQuery,
@@ -15,6 +15,7 @@ import type {
 
 interface SearchDependencies {
   provider?: EvidenceSearchProvider | null;
+  providers?: EvidenceSearchProvider[];
   now?: () => Date;
   persist?: (request: NormalizedEvidenceSearchRequest, snapshot: EvidenceSearchSnapshot) => Promise<void>;
 }
@@ -64,12 +65,13 @@ export async function searchExternalEvidenceUncached(
   dependencies: SearchDependencies = {},
 ): Promise<EvidenceSearchSnapshot> {
   const request = normalizeEvidenceSearchRequest(input);
-  const provider = dependencies.provider === undefined
-    ? resolveEvidenceSearchProvider()
-    : dependencies.provider;
+  const providers = dependencies.providers
+    ?? (dependencies.provider !== undefined
+      ? (dependencies.provider ? [dependencies.provider] : [])
+      : resolveEvidenceSearchProviders());
   const fetchedAt = dependencies.now?.() ?? new Date();
   const startedAt = Date.now();
-  if (!provider) {
+  if (providers.length === 0) {
     return finishSnapshot(request, {
       requestId: crypto.randomUUID(),
       status: 'unavailable',
@@ -84,19 +86,31 @@ export async function searchExternalEvidenceUncached(
   }
 
   const queries = buildEvidenceQueries(request);
-  const searched = await runQueries(queries, provider, fetchedAt);
+  let searched = { results: [] as ExternalEvidence[], warnings: [] as string[] };
+  let provider = providers[0];
+  let queryCount = 0;
+  const failoverWarnings: string[] = [];
+  for (let index = 0; index < providers.length; index += 1) {
+    provider = providers[index];
+    searched = await runQueries(queries, provider, fetchedAt);
+    queryCount += queries.length;
+    const failedAll = searched.warnings.length === queries.length;
+    if (!failedAll || index === providers.length - 1) break;
+    failoverWarnings.push(`provider_failover:${provider.id}`);
+  }
   const results = dedupeAndRankEvidence(searched.results, request.limit);
+  const warnings = [...failoverWarnings, ...searched.warnings];
   const failedAll = searched.warnings.length === queries.length;
   return finishSnapshot(request, {
     requestId: crypto.randomUUID(),
     status: failedAll ? 'error' : searched.warnings.length > 0 ? 'partial' : 'complete',
     provider: provider.id,
-    queryCount: queries.length,
+    queryCount,
     results,
     fetchedAt: fetchedAt.toISOString(),
     durationMs: Date.now() - startedAt,
-    estimatedCostMicrousd: estimatedSearchCostMicrousd(queries.length),
-    warnings: searched.warnings,
+    estimatedCostMicrousd: estimatedSearchCostMicrousd(queryCount),
+    warnings,
   }, dependencies.persist);
 }
 

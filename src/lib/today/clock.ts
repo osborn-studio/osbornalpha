@@ -6,16 +6,17 @@
  * whether the process runs in UTC (Vercel) or CST (local dev), and US
  * DST transitions are handled automatically.
  *
- * Known simplification: does NOT account for market holidays (春节/国庆/
- * Thanksgiving etc.) — a holiday will be reported as a normal weekday
- * phase. Acceptable for current scope; a holiday calendar can be layered
- * on later (tracked debt, now ×3 markets).
- *
  * G3: JP/KR/TW added — Market union from database.types is the single
  * market type; marketOfTicker re-exports classifyMarket (utils.ts).
  */
 
 import type { Market } from '@/lib/supabase/database.types';
+import {
+  MARKET_SESSION_SPECS,
+  builtInMarketCalendar,
+  marketLocalTime,
+  type MarketCalendarProvider,
+} from '@/lib/market/calendar';
 
 // phaseKey disambiguates the two 'open' sub-phases (morning session vs
 // afternoon session) that share `phase: 'open'` but have different label
@@ -23,7 +24,7 @@ import type { Market } from '@/lib/supabase/database.types';
 // plain 'open' key. UI code should render off `phaseKey` + `minutes` via
 // t('phase.' + phaseKey, { minutes }); `label` is kept additively for
 // back-compat with any existing zh-only call sites.
-export type MarketPhaseKey = 'pre' | 'open' | 'openMorning' | 'lunch' | 'openAfternoon' | 'closed' | 'weekend';
+export type MarketPhaseKey = 'pre' | 'open' | 'openMorning' | 'lunch' | 'openAfternoon' | 'closed' | 'holiday' | 'weekend';
 
 export interface MarketPhase {
   phase: 'pre' | 'open' | 'lunch' | 'closed' | 'weekend';
@@ -32,66 +33,26 @@ export interface MarketPhase {
   minutes?: number; // minutes remaining to the next transition (absent for closed/weekend)
 }
 
-interface MarketSessionSpec {
-  tz: string; // IANA timezone, judged via Intl (US DST automatically correct)
-  sessions: Array<{ open: number; close: number }>; // 当地分钟数；2 段=有午休
-}
-
-const MARKET_SESSIONS: Record<Market, MarketSessionSpec> = {
-  A:  { tz: 'Asia/Shanghai',    sessions: [{ open: 570, close: 690 }, { open: 780, close: 900 }] }, // 09:30–11:30, 13:00–15:00
-  HK: { tz: 'Asia/Hong_Kong',   sessions: [{ open: 570, close: 720 }, { open: 780, close: 960 }] }, // 09:30–12:00, 13:00–16:00
-  US: { tz: 'America/New_York', sessions: [{ open: 570, close: 960 }] },                            // 09:30–16:00 单段
-  JP: { tz: 'Asia/Tokyo',       sessions: [{ open: 540, close: 690 }, { open: 750, close: 930 }] }, // 09:00–11:30, 12:30–15:30（2024-11 起收盘 15:30）
-  KR: { tz: 'Asia/Seoul',       sessions: [{ open: 540, close: 930 }] },                            // 09:00–15:30 单段
-  TW: { tz: 'Asia/Taipei',      sessions: [{ open: 540, close: 810 }] },                            // 09:00–13:30 单段
-};
-
 export interface MarketPhaseV2 {
   phase: 'pre' | 'open' | 'lunch' | 'closed' | 'weekend';
   phaseKey: MarketPhaseKey;
   minutes?: number;
 }
 
-interface ZoneParts {
-  weekday: number; // 0=Sun .. 6=Sat
-  hour: number;
-  minute: number;
-}
-
-const WEEKDAY_INDEX: Record<string, number> = {
-  Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
-};
-
-function toZoneParts(now: Date, tz: string): ZoneParts {
-  // en-US short format gives us: "Mon, 06/29/2026, 09:30:00" style pieces via
-  // formatToParts, which is more robust to parse than a locale string.
-  const fmt = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz,
-    weekday: 'short',
-    hour: 'numeric',
-    minute: 'numeric',
-    hour12: false,
-  });
-  const parts = fmt.formatToParts(now);
-  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
-
-  const weekdayStr = get('weekday');
-  // hour12:false can still yield "24" for midnight in some environments; normalize.
-  let hour = Number(get('hour'));
-  if (hour === 24) hour = 0;
-  const minute = Number(get('minute'));
-
-  return { weekday: WEEKDAY_INDEX[weekdayStr] ?? 0, hour, minute };
-}
-
-export function marketPhase(market: Market, now: Date): MarketPhaseV2 {
-  const spec = MARKET_SESSIONS[market];
-  const { weekday, hour, minute } = toZoneParts(now, spec.tz);
+export function marketPhase(
+  market: Market,
+  now: Date,
+  calendar: MarketCalendarProvider = builtInMarketCalendar,
+): MarketPhaseV2 {
+  const spec = MARKET_SESSION_SPECS[market];
+  const { dateKey, weekday, hour, minute } = marketLocalTime(market, now);
+  const override = calendar.getOverride(market, dateKey);
+  if (override?.kind === 'closed') return { phase: 'closed', phaseKey: 'holiday' };
   // Weekend is judged in the MARKET's local weekday (北京周六清晨 = 纽约周五晚,
   // US must be open/closed there — the core cross-date trap).
   if (weekday === 0 || weekday === 6) return { phase: 'weekend', phaseKey: 'weekend' };
   const m = hour * 60 + minute;
-  const [s1, s2] = spec.sessions;
+  const [s1, s2] = override?.kind === 'sessions' ? override.sessions : spec.sessions;
   if (m < s1.open) return { phase: 'pre', phaseKey: 'pre', minutes: s1.open - m };
   if (m < s1.close) {
     return s2
@@ -117,6 +78,7 @@ export function aShareMarketPhase(now: Date): MarketPhase {
     openAfternoon: (n) => `盘中 · 收盘还有 ${n} 分钟`,
     open: () => '盘中', // unreachable for A (two sessions ⇒ openMorning); kept for exhaustiveness over MarketPhaseKey
     closed: () => '已收盘',
+    holiday: () => '节假日休市',
     weekend: () => '周末休市',
   };
   return { ...p, label: labels[p.phaseKey](p.minutes) };

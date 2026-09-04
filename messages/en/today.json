@@ -10,6 +10,7 @@
     "openAfternoon": "Trading · {minutes} min to close",
     "open": "Trading · {minutes} min to close",
     "closed": "Closed",
+    "holiday": "Market holiday",
     "weekend": "Weekend — closed"
   },
   "clock": {

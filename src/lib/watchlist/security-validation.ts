@@ -62,9 +62,22 @@ export async function validateSelectableSecurities(
   };
 }
 
-export async function validateSelectableSecuritiesWithClient(client: any, requestedTickers: string[]) {
+export async function validateSelectableSecuritiesWithClient(
+  client: unknown,
+  requestedTickers: string[],
+) {
   return validateSelectableSecurities(requestedTickers, async (canonicalTickers) => {
-    const { data, error } = await client.from('stocks_universe')
+    const repository = client as {
+      from(table: 'stocks_universe'): {
+        select(columns: string): {
+          in(column: 'ticker', values: string[]): Promise<{
+            data: SelectableSecurityRow[] | null;
+            error: { message: string } | null;
+          }>;
+        };
+      };
+    };
+    const { data, error } = await repository.from('stocks_universe')
       .select('ticker,is_active,list_status,source')
       .in('ticker', canonicalTickers);
     if (error) throw new Error('Security master unavailable.');

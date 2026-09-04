@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { aShareMarketPhase } from './clock';
 import { marketPhase, marketOfTicker } from './clock';
+import { createMarketCalendar } from '@/lib/market/calendar';
 
 // All fixed instants below are UTC Date objects; Beijing time = UTC+8.
 // e.g. Monday 01:00 UTC = Monday 09:00 Beijing.
@@ -130,6 +131,29 @@ describe('marketPhase — multi-market', () => {
     expect(a.phaseKey).toBe('openMorning');
     expect(a.minutes).toBe(90);
   });
+
+  it('uses the exchange-local date for the US Independence Day closure', () => {
+    const result = marketPhase('US', new Date('2026-07-03T15:00:00Z'));
+    expect(result).toEqual({ phase: 'closed', phaseKey: 'holiday' });
+  });
+
+  it('closes at 13:00 ET on the day after Thanksgiving', () => {
+    expect(marketPhase('US', new Date('2026-11-27T17:59:00Z'))).toMatchObject({
+      phase: 'open', phaseKey: 'open', minutes: 1,
+    });
+    expect(marketPhase('US', new Date('2026-11-27T18:00:00Z'))).toEqual({
+      phase: 'closed', phaseKey: 'closed',
+    });
+  });
+
+  it('supports injected emergency closures without changing the clock engine', () => {
+    const calendar = createMarketCalendar({
+      'US:2026-07-06': { kind: 'closed', name: 'Emergency closure' },
+    });
+    expect(marketPhase('US', new Date('2026-07-06T15:00:00Z'), calendar)).toEqual({
+      phase: 'closed', phaseKey: 'holiday',
+    });
+  });
 });
 
 describe('marketPhase — JP/KR/TW', () => {
@@ -152,6 +176,16 @@ describe('marketPhase — JP/KR/TW', () => {
   it('TW single session: Mon 05:00 UTC → open, 30 min', () => {
     const r = marketPhase('TW', new Date('2026-07-06T05:00:00Z'));
     expect(r.phaseKey).toBe('open'); expect(r.minutes).toBe(30);
+  });
+
+  it.each([
+    ['A', '2026-02-17T02:00:00Z'],
+    ['HK', '2026-04-03T02:00:00Z'],
+    ['JP', '2026-11-03T02:00:00Z'],
+    ['KR', '2026-09-25T02:00:00Z'],
+    ['TW', '2026-06-19T02:00:00Z'],
+  ] as const)('%s observes its 2026 exchange holiday', (market, instant) => {
+    expect(marketPhase(market, new Date(instant)).phaseKey).toBe('holiday');
   });
 });
 

@@ -152,6 +152,140 @@ export interface WatchlistItem {
   notes: string | null;
   sort_order: number;
   added_at: string;
+  thesis: string | null;
+  target_price: number | null;
+  invalidation_conditions: string | null;
+  confidence: number | null;
+  review_at: string | null;
+  tags: string[];
+  status: 'inbox' | 'researching' | 'watching' | 'ready' | 'paused' | 'invalidated';
+  decision_version: number;
+  updated_at: string;
+}
+
+export interface WatchlistItemDecisionHistory {
+  id: string;
+  user_id: string;
+  watchlist_item_id: string;
+  version: number;
+  before_value: Record<string, unknown>;
+  after_value: Record<string, unknown>;
+  changed_at: string;
+}
+
+export interface WatchlistSyncState {
+  user_id: string;
+  version: number;
+  last_mutation_id: string | null;
+  updated_at: string;
+}
+
+export interface WatchlistAlert {
+  id: string;
+  user_id: string;
+  watchlist_item_id: string;
+  alert_type: 'price' | 'change_pct' | 'volume_ratio' | 'valuation' | 'event' | 'rating' | 'perspective';
+  operator: 'gt' | 'gte' | 'lt' | 'lte' | 'crosses_above' | 'crosses_below' | null;
+  threshold_numeric: number | null;
+  config: Record<string, unknown>;
+  enabled: boolean;
+  cooldown_minutes: number;
+  last_observed_value: number | null;
+  last_observed_key: string | null;
+  last_evaluated_at: string | null;
+  last_triggered_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WatchlistAlertEvent {
+  id: string;
+  user_id: string;
+  alert_id: string;
+  watchlist_item_id: string;
+  ticker: string;
+  alert_type: WatchlistAlert['alert_type'];
+  event_key: string;
+  observed_value: number | null;
+  threshold_numeric: number | null;
+  payload: Record<string, unknown>;
+  delivery_channels?: Record<string, unknown>;
+  delivery_status: 'pending' | 'processing' | 'delivered' | 'failed' | 'dead_letter' | 'skipped';
+  delivery_attempts: number;
+  last_delivery_error: string | null;
+  claimed_at: string | null;
+  next_delivery_at: string;
+  dead_lettered_at: string | null;
+  provider_message_id: string | null;
+  delivered_at: string | null;
+  read_at: string | null;
+  triggered_at: string;
+  created_at: string;
+}
+
+export interface WatchlistAlertRun {
+  id: string;
+  status: 'running' | 'succeeded' | 'failed';
+  evaluated: number;
+  triggered: number;
+  unavailable: number;
+  delivery_claimed: number;
+  delivery_delivered: number;
+  delivery_failed: number;
+  delivery_dead_letter: number;
+  delivery_skipped: number;
+  delivery_deferred: number;
+  saturated: boolean;
+  error: string | null;
+  duration_ms: number | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+export interface WatchlistResearchRefreshState {
+  user_id: string;
+  ticker: string;
+  status: 'pending' | 'running' | 'succeeded' | 'partial' | 'failed';
+  failure_count: number;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  next_refresh_at: string;
+  lease_expires_at: string | null;
+  last_error: string | null;
+  updated_at: string;
+}
+
+export interface WatchlistResearchTickerRefreshState {
+  ticker: string;
+  status: 'pending' | 'running' | 'succeeded' | 'partial' | 'failed';
+  failure_count: number;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  next_refresh_at: string;
+  lease_expires_at: string | null;
+  last_error: string | null;
+  updated_at: string;
+}
+
+export interface WatchlistOperationAction {
+  id: string;
+  actor_id: string | null;
+  action: 'retry_failed_delivery' | 'retry_dead_letter' | 'release_stale_processing' | 'retry_failed_research';
+  arguments: Record<string, unknown>;
+  affected_count: number;
+  created_at: string;
+}
+
+export interface WatchlistTrash {
+  id: string;
+  user_id: string;
+  entity_type: 'group' | 'item';
+  source_id: string;
+  label: string;
+  payload: Record<string, unknown>;
+  deleted_at: string;
+  expires_at: string;
+  restored_at: string | null;
 }
 
 export interface Brief {
@@ -182,7 +316,8 @@ export interface StockSignal {
 
 export interface Perspective {
   id: string;
-  brief_id: string;
+  brief_id: string | null;
+  generation_id: string | null;
   user_id: string;
   ticker: string;
   persona: Persona;
@@ -190,7 +325,17 @@ export interface Perspective {
   confidence: number;
   summary: string | null;
   cites: string[];
+  citations: Array<{
+    id: string;
+    title: string;
+    url: string;
+    domain: string;
+    publishedAt: string | null;
+    trustScore: number;
+  }>;
+  source: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 export interface NewsItem {
@@ -199,16 +344,22 @@ export interface NewsItem {
   ticker: string;
   title: string;
   source: string | null;
+  source_key: string;
   url: string | null;
+  snippet: string | null;
   sentiment: number | null;
-  published_at: string;
+  published_at: string | null;
   fetched_at: string;
+  trust_score: number | null;
+  source_type: string | null;
 }
 
 export interface BrokerReport {
   id: string;
   user_id: string;
   ticker: string;
+  source_key: string;
+  title: string | null;
   broker: string | null;
   rating: string | null;
   target_price: string | null;
@@ -217,6 +368,8 @@ export interface BrokerReport {
   ai_summary: string | null;
   published_at: string | null;
   fetched_at: string;
+  source: string | null;
+  trust_score: number | null;
 }
 
 export interface ExternalEvidenceRecord {
@@ -266,6 +419,12 @@ export interface UserPreferences {
   email_notifications: boolean;
   daily_brief_time: string;
   timezone: string;
+  watchlist_alert_channels: Array<'email' | 'telegram'>;
+  watchlist_alert_delivery_mode: 'instant' | 'digest';
+  watchlist_alert_quiet_start: string | null;
+  watchlist_alert_quiet_end: string | null;
+  watchlist_alert_digest_time: string;
+  updated_at: string;
 }
 
 // Convenient row aliases
@@ -514,6 +673,15 @@ export type Database = {
       financial_history: { Row: FinancialHistory; Insert: Partial<FinancialHistory>; Update: Partial<FinancialHistory> };
       watchlists: { Row: Watchlist; Insert: Partial<Watchlist>; Update: Partial<Watchlist> };
       watchlist_items: { Row: WatchlistItem; Insert: Partial<WatchlistItem>; Update: Partial<WatchlistItem> };
+      watchlist_sync_state: { Row: WatchlistSyncState; Insert: Partial<WatchlistSyncState>; Update: Partial<WatchlistSyncState> };
+      watchlist_alerts: { Row: WatchlistAlert; Insert: Partial<WatchlistAlert>; Update: Partial<WatchlistAlert> };
+      watchlist_alert_events: { Row: WatchlistAlertEvent; Insert: Partial<WatchlistAlertEvent>; Update: Partial<WatchlistAlertEvent> };
+      watchlist_alert_runs: { Row: WatchlistAlertRun; Insert: Partial<WatchlistAlertRun>; Update: Partial<WatchlistAlertRun> };
+      watchlist_research_refresh_state: { Row: WatchlistResearchRefreshState; Insert: Partial<WatchlistResearchRefreshState>; Update: Partial<WatchlistResearchRefreshState> };
+      watchlist_research_ticker_refresh_state: { Row: WatchlistResearchTickerRefreshState; Insert: Partial<WatchlistResearchTickerRefreshState>; Update: Partial<WatchlistResearchTickerRefreshState> };
+      watchlist_operation_actions: { Row: WatchlistOperationAction; Insert: Partial<WatchlistOperationAction>; Update: Partial<WatchlistOperationAction> };
+      watchlist_trash: { Row: WatchlistTrash; Insert: Partial<WatchlistTrash>; Update: Partial<WatchlistTrash> };
+      watchlist_item_decision_history: { Row: WatchlistItemDecisionHistory; Insert: Partial<WatchlistItemDecisionHistory>; Update: Partial<WatchlistItemDecisionHistory> };
       briefs: { Row: Brief; Insert: Partial<Brief>; Update: Partial<Brief> };
       stock_signals: { Row: StockSignal; Insert: Partial<StockSignal>; Update: Partial<StockSignal> };
       perspectives: { Row: Perspective; Insert: Partial<Perspective>; Update: Partial<Perspective> };
@@ -522,6 +690,7 @@ export type Database = {
       external_evidence: { Row: ExternalEvidenceRecord; Insert: Partial<ExternalEvidenceRecord>; Update: Partial<ExternalEvidenceRecord> };
       external_evidence_runs: { Row: ExternalEvidenceRun; Insert: Partial<ExternalEvidenceRun>; Update: Partial<ExternalEvidenceRun> };
       external_evidence_tickers: { Row: ExternalEvidenceTicker; Insert: Partial<ExternalEvidenceTicker>; Update: Partial<ExternalEvidenceTicker> };
+      external_evidence_user_limits: { Row: { user_id: string; window_started_at: string; request_count: number; updated_at: string }; Insert: Record<string, unknown>; Update: Record<string, unknown> };
       user_preferences: { Row: UserPreferences; Insert: Partial<UserPreferences>; Update: Partial<UserPreferences> };
       profiles: { Row: Profile; Insert: Partial<Profile>; Update: Partial<Profile> };
       decisions: { Row: Decision; Insert: Partial<Decision>; Update: Partial<Decision> };
@@ -555,9 +724,114 @@ export type Database = {
         };
         Returns: string;
       };
+      claim_watchlist_alert_events: {
+        Args: { p_limit?: number };
+        Returns: WatchlistAlertEvent[];
+      };
+      set_watchlist_alert_event_read: {
+        Args: { p_event_id: string; p_read: boolean };
+        Returns: WatchlistAlertEvent[];
+      };
+      retry_watchlist_alert_event_delivery: {
+        Args: { p_event_id: string };
+        Returns: WatchlistAlertEvent[];
+      };
+      defer_watchlist_alert_events: {
+        Args: { p_event_ids: string[]; p_next_delivery_at: string };
+        Returns: number;
+      };
+      import_watchlist_bundle: {
+        Args: {
+          p_bundle: Record<string, unknown>;
+          p_mode: 'merge' | 'replace';
+          p_mutation_id: string;
+        };
+        Returns: Array<{
+          version: number;
+          groups_created: number;
+          groups_updated: number;
+          items_created: number;
+          items_updated: number;
+          alerts_created: number;
+          alerts_updated: number;
+        }>;
+      };
+      get_watchlist_overview_page: {
+        Args: { p_offset?: number; p_limit?: number; p_ticker?: string | null };
+        Returns: Record<string, unknown>;
+      };
+      start_watchlist_alert_run: {
+        Args: { p_started_at?: string };
+        Returns: string | null;
+      };
+      claim_watchlist_research_refresh: {
+        Args: { p_limit?: number; p_lease_minutes?: number };
+        Returns: WatchlistResearchRefreshState[];
+      };
+      claim_watchlist_research_ticker_refresh: {
+        Args: { p_limit?: number; p_lease_minutes?: number };
+        Returns: WatchlistResearchTickerRefreshState[];
+      };
+      run_watchlist_admin_operation: {
+        Args: {
+          p_actor_id: string;
+          p_action: string;
+          p_limit?: number;
+          p_older_than_minutes?: number;
+          p_tickers?: string[] | null;
+        };
+        Returns: { action: string; affected: number };
+      };
+      restore_watchlist_trash: {
+        Args: { p_trash_id: string; p_expected_version: number; p_mutation_id: string };
+        Returns: Array<{ version: number; applied: boolean; restored_items: number }>;
+      };
+      consume_external_evidence_user_quota: {
+        Args: { p_limit?: number; p_window_seconds?: number };
+        Returns: boolean;
+      };
+      watchlist_research_summaries: {
+        Args: { p_tickers: string[] };
+        Returns: Array<{
+          ticker: string;
+          recent_news_count: number;
+          latest_news_at: string | null;
+          average_sentiment: number | null;
+          latest_report_at: string | null;
+          bullish_count: number;
+          neutral_count: number;
+          bearish_count: number;
+          latest_perspective_at: string | null;
+        }>;
+      };
+      watchlist_alert_research_candidates: {
+        Args: { p_pairs: Array<{ user_id: string; ticker: string }>; p_limit_per_kind?: number };
+        Returns: Array<{
+          owner_id: string;
+          ticker: string;
+          reports: BrokerReport[];
+          perspectives: Perspective[];
+        }>;
+      };
       commit_security_sync: {
         Args: { p_run_id: string };
         Returns: undefined;
+      };
+      replace_watchlist_snapshot: {
+        Args: { p_expected_version: number; p_mutation_id: string; p_groups: Array<Record<string, unknown>> };
+        Returns: Array<{ version: number; applied: boolean }>;
+      };
+      update_watchlist_item_decision: {
+        Args: { p_item_id: string; p_expected_version: number; p_patch: Record<string, unknown> };
+        Returns: WatchlistItem[];
+      };
+      bulk_update_watchlist_item_tags: {
+        Args: {
+          p_items: Array<{ id: string; expected_version: number }>;
+          p_tag: string;
+          p_mode?: 'add' | 'remove';
+        };
+        Returns: WatchlistItem[];
       };
       reserve_llm_daily_budget: {
         Args: {
