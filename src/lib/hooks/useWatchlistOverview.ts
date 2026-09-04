@@ -11,13 +11,14 @@ export function useWatchlistOverview(enabled: boolean) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [meta, setMeta] = useState({ partial: false, total: 0, generatedAt: null as string | null });
-  const [nextOffset, setNextOffset] = useState(0);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => { rowsRef.current = rows; }, [rows]);
 
-  const fetchPage = useCallback(async (offset: number, signal?: AbortSignal, ticker?: string) => {
-    const query = new URLSearchParams({ offset: String(offset), limit: '50' });
+  const fetchPage = useCallback(async (cursor: string | null, signal?: AbortSignal, ticker?: string) => {
+    const query = new URLSearchParams({ limit: '50' });
+    if (cursor) query.set('cursor', cursor);
     if (ticker) query.set('ticker', ticker);
     const response = await fetch(`/api/watchlist/overview?${query}`, { signal, cache: 'no-store' });
     const body = await response.json().catch(() => null);
@@ -31,12 +32,12 @@ export function useWatchlistOverview(enabled: boolean) {
     setError(null);
     try {
       const mapped: Record<string, WatchlistOverviewRow> = {};
-      const payload = await fetchPage(0, signal);
+      const payload = await fetchPage(null, signal);
       for (const row of payload.rows) {
         if (row?.item?.ticker && !mapped[row.item.ticker]) mapped[row.item.ticker] = row;
       }
       setRows(mapped);
-      setNextOffset(payload.rows.length);
+      setNextCursor(payload.page?.nextCursor ?? null);
       setMeta({ partial: payload.page?.hasMore ?? payload.partial, total: payload.total, generatedAt: payload.generatedAt });
     } catch (caught) {
       if (signal?.aborted) return;
@@ -51,7 +52,7 @@ export function useWatchlistOverview(enabled: boolean) {
       setRows({});
       setLoading(false);
       setLoadingMore(false);
-      setNextOffset(0);
+      setNextCursor(null);
       setMeta({ partial: false, total: 0, generatedAt: null });
       return;
     }
@@ -61,30 +62,30 @@ export function useWatchlistOverview(enabled: boolean) {
   }, [enabled, load]);
 
   const loadMore = useCallback(async () => {
-    if (!enabled || loadingMore || !meta.partial) return;
+    if (!enabled || loadingMore || !meta.partial || !nextCursor) return;
     setLoadingMore(true);
     setError(null);
     try {
-      const payload = await fetchPage(nextOffset);
+      const payload = await fetchPage(nextCursor);
       setRows((current) => ({
         ...current,
         ...Object.fromEntries(payload.rows.filter((row) => row?.item?.ticker).map((row) => [row.item.ticker, row])),
       }));
-      setNextOffset((current) => current + payload.rows.length);
+      setNextCursor(payload.page?.nextCursor ?? null);
       setMeta({ partial: payload.page?.hasMore ?? payload.partial, total: payload.total, generatedAt: payload.generatedAt });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'overview_unavailable');
     } finally {
       setLoadingMore(false);
     }
-  }, [enabled, fetchPage, loadingMore, meta.partial, nextOffset]);
+  }, [enabled, fetchPage, loadingMore, meta.partial, nextCursor]);
 
   const ensureTicker = useCallback(async (ticker: string) => {
     if (!enabled || rowsRef.current[ticker]?.market) return rowsRef.current[ticker] ?? null;
     const existing = ensuringRef.current.get(ticker);
     if (existing) return existing;
     const pending = (async () => {
-      const payload = await fetchPage(0, undefined, ticker);
+      const payload = await fetchPage(null, undefined, ticker);
       const row = payload.rows.find((candidate) => candidate.item.ticker === ticker) ?? null;
       if (row) setRows((current) => ({ ...current, [ticker]: row }));
       return row;

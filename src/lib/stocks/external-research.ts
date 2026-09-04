@@ -64,6 +64,9 @@ export async function getStockNews(ticker: string, freshnessDays = 14): Promise<
     publishedAt: item.publishedAt,
     fetchedAt: item.fetchedAt,
     trustScore: item.trustScore,
+    relevanceScore: item.relevanceScore,
+    qualityScore: item.qualityScore,
+    qualityFlags: item.qualityFlags,
     sourceType: item.sourceType,
   }));
   return {
@@ -87,7 +90,38 @@ function reportFromTushare(ticker: string, report: TushareReportRc): StockReport
     publishedAt: formatTushareDate(report.report_date),
     source: 'tushare',
     trustScore: 0.78,
+    relevanceScore: 0.8,
+    qualityScore: 0.78,
+    qualityFlags: ['professional_source', 'dated_source'],
   };
+}
+
+function reportIdentity(item: StockReportItem): string {
+  if (item.url) return `url:${item.url}`;
+  return [item.broker || '', item.title.trim().toLocaleLowerCase(), item.publishedAt || ''].join('|');
+}
+
+export function mergeDuplicateReports(items: StockReportItem[]): StockReportItem[] {
+  const merged = new Map<string, StockReportItem>();
+  for (const item of items) {
+    const key = reportIdentity(item);
+    const current = merged.get(key);
+    if (!current) {
+      merged.set(key, item);
+      continue;
+    }
+    const preferred = (item.qualityScore ?? item.trustScore) > (current.qualityScore ?? current.trustScore) ? item : current;
+    merged.set(key, {
+      ...preferred,
+      targetPriceMin: preferred.targetPriceMin ?? item.targetPriceMin ?? current.targetPriceMin,
+      targetPriceMax: preferred.targetPriceMax ?? item.targetPriceMax ?? current.targetPriceMax,
+      targetChangePct: preferred.targetChangePct ?? item.targetChangePct ?? current.targetChangePct,
+      rating: preferred.rating ?? item.rating ?? current.rating,
+      url: preferred.url ?? current.url,
+      qualityFlags: [...new Set([...(current.qualityFlags ?? []), ...(item.qualityFlags ?? []), 'provider_ranked'])] as Array<NonNullable<StockReportItem['qualityFlags']>[number]>,
+    });
+  }
+  return [...merged.values()];
 }
 
 export async function getStockReports(ticker: string): Promise<StockReportsResponse> {
@@ -121,14 +155,11 @@ export async function getStockReports(ticker: string): Promise<StockReportsRespo
     publishedAt: item.publishedAt,
     source: snapshot.provider || 'web',
     trustScore: item.trustScore,
+    relevanceScore: item.relevanceScore,
+    qualityScore: item.qualityScore,
+    qualityFlags: item.qualityFlags,
   }));
-  const seen = new Set<string>();
-  const items = [...structured, ...discovered].filter((item) => {
-    const key = item.title.toLocaleLowerCase().replace(/\s+/g, ' ');
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const items = mergeDuplicateReports([...structured, ...discovered]);
   const consensus = deriveConsensus(tushareResult.items);
   const warnings = [...snapshot.warnings, ...(tushareResult.error ? [tushareResult.error] : [])];
   const status = items.length > 0

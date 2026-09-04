@@ -1,4 +1,4 @@
-import type { EvidenceSearchStatus } from '@/lib/external-evidence/types';
+import type { EvidenceQualityFlag, EvidenceSearchStatus } from '@/lib/external-evidence/types';
 
 export interface StockResearchMeta {
   status: EvidenceSearchStatus;
@@ -17,6 +17,9 @@ export interface StockNewsItem {
   publishedAt: string | null;
   fetchedAt: string;
   trustScore: number;
+  relevanceScore?: number;
+  qualityScore?: number;
+  qualityFlags?: EvidenceQualityFlag[];
   sourceType: string;
 }
 
@@ -32,6 +35,9 @@ export interface StockReportItem {
   publishedAt: string | null;
   source: string;
   trustScore: number;
+  relevanceScore?: number;
+  qualityScore?: number;
+  qualityFlags?: EvidenceQualityFlag[];
 }
 
 export interface BrokerConsensusView {

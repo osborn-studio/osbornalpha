@@ -3,6 +3,17 @@ export const EVIDENCE_SCOPES = ['news', 'filing', 'broker', 'company', 'industry
 export type EvidenceScope = typeof EVIDENCE_SCOPES[number];
 export type EvidenceSourceType = EvidenceScope | 'social';
 export type EvidenceSearchStatus = 'complete' | 'partial' | 'unavailable' | 'error';
+export type EvidenceQualityFlag =
+  | 'official_source'
+  | 'professional_source'
+  | 'provider_ranked'
+  | 'dated_source'
+  | 'snippet_available'
+  | 'unverified_source';
+export const EVIDENCE_QUALITY_FLAGS: readonly EvidenceQualityFlag[] = [
+  'official_source', 'professional_source', 'provider_ranked',
+  'dated_source', 'snippet_available', 'unverified_source',
+];
 
 export interface EvidenceSearchRequest {
   query?: string;
@@ -50,6 +61,8 @@ export interface ExternalEvidence {
   fetchedAt: string;
   trustScore: number;
   relevanceScore: number;
+  qualityScore: number;
+  qualityFlags: EvidenceQualityFlag[];
 }
 
 export interface EvidenceSearchProvider {
@@ -76,4 +89,6 @@ export interface PerspectiveCitation {
   domain: string;
   publishedAt: string | null;
   trustScore: number;
+  qualityScore?: number;
+  qualityFlags?: string[];
 }

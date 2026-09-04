@@ -8,6 +8,7 @@ import type {
   WatchlistOverviewItemRow,
   WatchlistOverviewPageRow,
 } from './overview-contract';
+import type { WatchlistOverviewCursor } from './overview-pagination';
 export type { WatchlistOverviewItemRow, WatchlistOverviewGroupRow } from './overview-contract';
 
 export type WatchlistServerClient = Awaited<ReturnType<typeof getServerSupabase>>;
@@ -58,13 +59,45 @@ function parseOverviewPage(value: unknown): WatchlistOverviewDatabasePage {
       item: item as unknown as WatchlistOverviewItemRow,
     };
   });
-  return { total: Number(page.total), rows };
+  const hasMore = typeof page.has_more === 'boolean' ? page.has_more : undefined;
+  const rawCursor = page.next_cursor;
+  const nextCursor = rawCursor && typeof rawCursor === 'object' && !Array.isArray(rawCursor)
+    ? (() => {
+        const cursor = rawCursor as Record<string, unknown>;
+        return Number.isSafeInteger(cursor.group_sort) && Number.isSafeInteger(cursor.item_sort)
+          && typeof cursor.item_id === 'string'
+          ? { groupSort: Number(cursor.group_sort), itemSort: Number(cursor.item_sort), itemId: cursor.item_id }
+          : null;
+      })()
+    : null;
+  return { total: Number(page.total), rows, hasMore, nextCursor };
 }
 
 export async function loadWatchlistOverviewPage(
   client: WatchlistServerClient,
-  request: { offset: number; limit: number; ticker?: string | null },
+  request: { offset: number | null; limit: number; cursor?: WatchlistOverviewCursor | null; ticker?: string | null },
 ): Promise<WatchlistOverviewDatabasePage> {
+  if (request.offset === null) {
+    const repository = client as unknown as {
+      rpc: (name: 'get_watchlist_overview_cursor', args: {
+        p_group_sort: number | null;
+        p_item_sort: number | null;
+        p_item_id: string | null;
+        p_limit: number;
+        p_ticker: string | null;
+      }) => Promise<{ data: unknown; error: { message: string } | null }>;
+    };
+    const cursor = request.cursor ?? null;
+    const { data, error } = await repository.rpc('get_watchlist_overview_cursor', {
+      p_group_sort: cursor?.groupSort ?? null,
+      p_item_sort: cursor?.itemSort ?? null,
+      p_item_id: cursor?.itemId ?? null,
+      p_limit: request.limit,
+      p_ticker: request.ticker ?? null,
+    });
+    if (error) throw new Error(error.message);
+    return parseOverviewPage(data);
+  }
   const repository = client as unknown as {
     rpc: (name: 'get_watchlist_overview_page', args: {
       p_offset: number;

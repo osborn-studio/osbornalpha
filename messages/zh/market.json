@@ -352,6 +352,8 @@
         "fetchedAt": "获取于 {value}",
         "warnings": "{count} 项数据警告",
         "trust": "可信度 {value}%",
+        "quality": "质量 {value}%",
+        "qualityFlags": "质量标记：{value}",
         "status": {
           "complete": "覆盖完整",
           "partial": "部分覆盖",

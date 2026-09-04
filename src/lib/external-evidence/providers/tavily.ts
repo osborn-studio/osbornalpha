@@ -1,11 +1,11 @@
 import type { EvidenceQuery, EvidenceSearchProvider, RawEvidenceResult } from '../types';
-import { fetchSearchJson } from './http';
+import { asFiniteNumber, asJsonRecord, asText, fetchSearchJson } from './http';
 
 export function createTavilyProvider(apiKey: string): EvidenceSearchProvider {
   return {
     id: 'tavily',
     async search(query: EvidenceQuery): Promise<RawEvidenceResult[]> {
-      const data = await fetchSearchJson('https://api.tavily.com/search', {
+      const data = asJsonRecord(await fetchSearchJson('https://api.tavily.com/search', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -18,14 +18,18 @@ export function createTavilyProvider(apiKey: string): EvidenceSearchProvider {
           include_answer: false,
           include_raw_content: false,
         }),
-      });
-      return Array.isArray(data?.results) ? data.results.map((item: any) => ({
-        title: String(item.title || ''),
-        url: String(item.url || ''),
-        snippet: typeof item.content === 'string' ? item.content : null,
-        publishedAt: typeof item.published_date === 'string' ? item.published_date : null,
-        score: typeof item.score === 'number' ? item.score : null,
-      })) : [];
+      }));
+      return Array.isArray(data?.results) ? data.results.flatMap((item) => {
+        const row = asJsonRecord(item);
+        if (!row) return [];
+        return [{
+          title: asText(row.title) || '',
+          url: asText(row.url) || '',
+          snippet: asText(row.content),
+          publishedAt: asText(row.published_date),
+          score: asFiniteNumber(row.score),
+        }];
+      }) : [];
     },
   };
 }

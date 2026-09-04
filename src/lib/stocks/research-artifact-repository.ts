@@ -50,16 +50,19 @@ export async function loadLatestStockPerspectives(
   userId: string,
   ticker: string,
 ): Promise<Perspective[]> {
+  type PerspectiveQuery = {
+    eq: (column: 'user_id' | 'ticker', value: string) => PerspectiveQuery;
+    order: (column: 'created_at', options: { ascending: boolean }) => PerspectiveQuery;
+    limit: (value: number) => Promise<{ data: Perspective[] | null; error: { message: string } | null }>;
+  };
   const repository = client as unknown as {
     from: (name: 'perspectives') => {
-      select: (columns: string) => {
-        eq: (column: string, value: string) => any;
-      };
-    };
+      select: (columns: string) => PerspectiveQuery;
+  };
   };
   const query = repository.from('perspectives').select('*').eq('user_id', userId).eq('ticker', ticker)
     .order('created_at', { ascending: false }).limit(100);
-  const { data, error } = await query as { data: Perspective[] | null; error: { message: string } | null };
+  const { data, error } = await query;
   if (error) throw new Error(`perspectives_load_failed:${error.message}`);
   const rows = data ?? [];
   const latest = rows[0];

@@ -24,6 +24,9 @@ export function stockNewsRows(userId: string, response: StockNewsResponse) {
     published_at: item.publishedAt,
     fetched_at: item.fetchedAt,
     trust_score: item.trustScore,
+    relevance_score: item.relevanceScore ?? item.trustScore,
+    quality_score: item.qualityScore ?? item.trustScore,
+    quality_flags: item.qualityFlags ?? [],
     source_type: item.sourceType,
   }));
 }
@@ -52,6 +55,9 @@ export function stockReportRows(userId: string, response: StockReportsResponse) 
     fetched_at: fetchedAt,
     source: item.source,
     trust_score: item.trustScore,
+    relevance_score: item.relevanceScore ?? item.trustScore,
+    quality_score: item.qualityScore ?? item.trustScore,
+    quality_flags: item.qualityFlags ?? [],
   }));
 }
 

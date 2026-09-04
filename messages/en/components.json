@@ -92,7 +92,9 @@
     "confidence": "Confidence",
     "evidenceStrengthTitle": "Evidence strength: {label} ({score}%)\n{high} strong · {medium} medium · {low} weak · {unknown} unclassified",
     "cite": "cite",
-    "webSources": "Web sources"
+    "webSources": "Web sources",
+    "sourceQuality": "Source quality {value}%",
+    "qualityFlags": "Quality flags: {value}"
   },
   "disclaimer": {
     "heading": "Disclaimer",

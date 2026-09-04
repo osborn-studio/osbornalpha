@@ -30,6 +30,8 @@ describe('GET /api/watchlist/overview', () => {
     mocks.version.mockResolvedValue(7);
     mocks.page.mockResolvedValue({
       total: 1,
+      hasMore: false,
+      nextCursor: null,
       rows: [{
         group: { id: 'wl-1', name: 'Core', description: null, sort_order: 0 },
         item: {
@@ -64,7 +66,7 @@ describe('GET /api/watchlist/overview', () => {
     const body = await response.json();
     expect(body).toMatchObject({
       ownerId: 'user-1', version: 7, total: 1, partial: false,
-      page: { offset: 0, limit: 50, hasMore: false },
+      page: { offset: null, limit: 50, cursor: null, nextCursor: null, hasMore: false },
     });
     expect(body.rows[0]).toMatchObject({
       item: { ticker: 'AAPL', thesis: 'Services growth', target_price: 250 },
@@ -83,6 +85,28 @@ describe('GET /api/watchlist/overview', () => {
     expect(body.total).toBe(1);
     expect(body.rows).toHaveLength(1);
     expect(mocks.computed).toHaveBeenCalledWith(['AAPL'], 'en', { includeMarket: true });
-    expect(mocks.page).toHaveBeenCalledWith(expect.anything(), { offset: 0, limit: 50, ticker: 'AAPL' });
+    expect(mocks.page).toHaveBeenCalledWith(expect.anything(), {
+      offset: null, cursor: null, limit: 50, ticker: 'AAPL',
+    });
+  });
+
+  it('rejects malformed keyset cursors before loading data', async () => {
+    const response = await GET(new Request('https://example.test/api/watchlist/overview?cursor=%7Bbad'));
+    expect(response.status).toBe(400);
+    expect(mocks.page).not.toHaveBeenCalled();
+  });
+
+  it('returns an opaque next cursor without exposing database ordering fields', async () => {
+    mocks.page.mockResolvedValueOnce({
+      total: 2,
+      hasMore: true,
+      nextCursor: { groupSort: 1, itemSort: 2, itemId: '11111111-1111-5111-8111-111111111111' },
+      rows: [],
+    });
+    const response = await GET(new Request('https://example.test/api/watchlist/overview'));
+    const body = await response.json();
+    expect(body.page).toMatchObject({ offset: null, hasMore: true });
+    expect(body.page.nextCursor).toContain('groupSort');
+    expect(body.page.nextCursor).not.toContain('group_sort');
   });
 });

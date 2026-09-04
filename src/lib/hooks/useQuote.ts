@@ -430,6 +430,8 @@ export interface PerspectiveRow {
     domain: string;
     publishedAt: string | null;
     trustScore: number;
+    qualityScore?: number;
+    qualityFlags?: string[];
   }>;
 }
 export interface PerspectivesState {

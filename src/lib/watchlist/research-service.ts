@@ -14,6 +14,7 @@ import type {
   StockReportsResponse,
 } from '@/lib/stocks/research-types';
 import { watchlistTimestampFreshness } from './freshness';
+import { EVIDENCE_QUALITY_FLAGS, type EvidenceQualityFlag } from '@/lib/external-evidence/types';
 
 export interface WatchlistResearchBundle {
   ticker: string;
@@ -64,6 +65,12 @@ const productionDependencies: WatchlistResearchDependencies = {
 
 function latest(values: Array<string | null | undefined>): string | null {
   return values.filter((value): value is string => !!value).sort().at(-1) ?? null;
+}
+
+function qualityFlags(value: string[] | null | undefined): EvidenceQualityFlag[] {
+  return (value ?? []).filter((flag): flag is EvidenceQualityFlag => (
+    EVIDENCE_QUALITY_FLAGS as readonly string[]
+  ).includes(flag));
 }
 
 function storedMeta(
@@ -138,6 +145,9 @@ export function mapStoredWatchlistResearch(
       publishedAt: row.published_at,
       source: row.source || 'stored',
       trustScore: row.trust_score ?? 0,
+      relevanceScore: row.relevance_score ?? row.trust_score ?? 0,
+      qualityScore: row.quality_score ?? row.trust_score ?? 0,
+      qualityFlags: qualityFlags(row.quality_flags),
     };
   });
   const perspectives = stored.perspectives.map((row) => ({
@@ -162,7 +172,10 @@ export function mapStoredWatchlistResearch(
         sentiment: row.sentiment,
         publishedAt: row.published_at,
         fetchedAt: row.fetched_at,
-        trustScore: row.trust_score ?? 0,
+      trustScore: row.trust_score ?? 0,
+      relevanceScore: row.relevance_score ?? row.trust_score ?? 0,
+      qualityScore: row.quality_score ?? row.trust_score ?? 0,
+      qualityFlags: qualityFlags(row.quality_flags),
         sourceType: row.source_type || 'news',
       })),
       meta: storedMeta(newsFetchedAt, newsProviders, now),

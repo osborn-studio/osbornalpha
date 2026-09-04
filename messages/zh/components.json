@@ -92,7 +92,9 @@
     "confidence": "信心",
     "evidenceStrengthTitle": "证据强度：{label} ({score}%)\n{high} 强 · {medium} 中 · {low} 弱 · {unknown} 未分类",
     "cite": "引用",
-    "webSources": "网页来源"
+    "webSources": "网页来源",
+    "sourceQuality": "来源质量 {value}%",
+    "qualityFlags": "质量标记：{value}"
   },
   "disclaimer": {
     "heading": "免责声明",

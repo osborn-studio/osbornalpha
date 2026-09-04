@@ -7,6 +7,7 @@ import {
   fetchTushareFinaIndicator,
   fetchTushareIncome,
 } from '@/lib/data/sources/tushare-cached';
+import type { TushareDailyBasic, TushareIncome, TushareIndicator } from '@/lib/data/sources/tushare';
 import { PERSONAS, buildUserMessage, type StockContext, type PerspectiveResult } from '@/lib/data/personas';
 import { resolveLlm } from '@/lib/llm/resolve';
 import { beginUsageRun, checkQuota, finalizeUsageRun } from '@/lib/billing/quota';
@@ -203,7 +204,7 @@ export async function GET(req: Request, { params }: Ctx) {
           fetchTushareFinaIndicator(ticker).catch(() => null),
           fetchTushareIncome(ticker, 5).catch(() => []),
         ])
-      : Promise.resolve([null, null, []] as [any, any, any[]]),
+      : Promise.resolve([null, null, []] as [TushareDailyBasic | null, TushareIndicator | null, TushareIncome[]]),
     searchExternalEvidence({
       ticker,
       name: quote.name,

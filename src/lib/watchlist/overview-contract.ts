@@ -1,6 +1,7 @@
 import type { StockUniverse, WatchlistItem } from '@/lib/supabase/database.types';
 import type { MarketPhaseKey } from '@/lib/today/clock';
 import type { HistoricalWatchlistMetrics } from './analytics';
+import type { WatchlistOverviewCursor } from './overview-pagination';
 import type { WatchlistResearchSummary } from './research-summary';
 
 export type DataStatus = 'fresh' | 'delayed' | 'stale' | 'unavailable';
@@ -66,6 +67,8 @@ export interface WatchlistOverviewPageRow {
 export interface WatchlistOverviewDatabasePage {
   total: number;
   rows: WatchlistOverviewPageRow[];
+  hasMore?: boolean;
+  nextCursor?: WatchlistOverviewCursor | null;
 }
 
 export interface WatchlistOverviewRow {
@@ -83,6 +86,13 @@ export interface WatchlistOverviewResponse {
   version: number;
   partial: boolean;
   total: number;
-  page: { offset: number; limit: number; hasMore: boolean };
+  page: {
+    /** Legacy offset is null for keyset-paginated responses. */
+    offset: number | null;
+    limit: number;
+    cursor: string | null;
+    nextCursor: string | null;
+    hasMore: boolean;
+  };
   rows: WatchlistOverviewRow[];
 }

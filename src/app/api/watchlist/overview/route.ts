@@ -4,7 +4,7 @@ import { getServerSupabase, serverIsSupabaseConfigured } from '@/lib/supabase/se
 import type { StockUniverse } from '@/lib/supabase/database.types';
 import { buildComputedWatchlistOverview } from '@/lib/watchlist/overview';
 import type { DataEnvelope, WatchlistOverviewResponse } from '@/lib/watchlist/overview-contract';
-import { parseWatchlistOverviewPage } from '@/lib/watchlist/overview-pagination';
+import { encodeWatchlistOverviewCursor, parseWatchlistOverviewPage } from '@/lib/watchlist/overview-pagination';
 import { loadWatchlistResearchSummaries } from '@/lib/watchlist/research-repository';
 import type { WatchlistResearchSummary } from '@/lib/watchlist/research-summary';
 import { loadWatchlistOverviewPage, loadWatchlistVersion } from '@/lib/watchlist/server-repository';
@@ -46,7 +46,13 @@ export async function GET(request: Request) {
     const ticker = tickerParam ? normalizeEvidenceTickerParam(tickerParam) : null;
     if (tickerParam && !ticker) return watchlistApiError('invalid_ticker', 400);
     const page = parseWatchlistOverviewPage(url);
-    const databasePage = await loadWatchlistOverviewPage(client, { ...page, ticker });
+    if (page.invalidCursor) return watchlistApiError('invalid_cursor', 400);
+    const databasePage = await loadWatchlistOverviewPage(client, {
+      offset: page.offset,
+      cursor: page.cursor,
+      limit: page.limit,
+      ticker,
+    });
     const pageTickers = Array.from(new Set(databasePage.rows.map(({ item }) => item.ticker)));
     const locale = await getRequestLocale();
     const [version, computed, identitiesResult, researchByTicker] = await Promise.all([
@@ -82,13 +88,22 @@ export async function GET(request: Request) {
         };
       });
 
+    const hasMore = databasePage.hasMore ?? (page.offset !== null
+      ? page.offset + databasePage.rows.length < databasePage.total
+      : false);
     const response: WatchlistOverviewResponse = {
       generatedAt: new Date().toISOString(),
       ownerId: user.id,
       version,
-      partial: page.offset + databasePage.rows.length < databasePage.total,
+      partial: hasMore,
       total: databasePage.total,
-      page: { ...page, hasMore: page.offset + databasePage.rows.length < databasePage.total },
+      page: {
+        offset: page.offset,
+        limit: page.limit,
+        cursor: page.cursor ? encodeWatchlistOverviewCursor(page.cursor) : null,
+        nextCursor: databasePage.nextCursor ? encodeWatchlistOverviewCursor(databasePage.nextCursor) : null,
+        hasMore,
+      },
       rows,
     };
     return NextResponse.json(response);

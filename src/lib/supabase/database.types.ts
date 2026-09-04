@@ -7,6 +7,9 @@
 // + 20260728110000_llm_incurred_budget.sql (durable pre-network spend state)
 // + 20260728140000_cap_exempt_platform_audit.sql (cap-exempt durable accounting)
 // + 20260728150000_profile_entitlement_security.sql (backend-managed entitlements)
+// + 20260904170000_watchlist_overview_cursor.sql (keyset overview pagination)
+// + 20260904180000_watchlist_research_quality.sql (research provenance flags)
+// + 20260904190000_watchlist_research_refresh_cleanup.sql (ticker queue migration)
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -332,6 +335,8 @@ export interface Perspective {
     domain: string;
     publishedAt: string | null;
     trustScore: number;
+    qualityScore?: number;
+    qualityFlags?: string[];
   }>;
   source: string | null;
   created_at: string;
@@ -351,6 +356,9 @@ export interface NewsItem {
   published_at: string | null;
   fetched_at: string;
   trust_score: number | null;
+  relevance_score: number | null;
+  quality_score: number | null;
+  quality_flags: string[];
   source_type: string | null;
 }
 
@@ -370,6 +378,9 @@ export interface BrokerReport {
   fetched_at: string;
   source: string | null;
   trust_score: number | null;
+  relevance_score: number | null;
+  quality_score: number | null;
+  quality_flags: string[];
 }
 
 export interface ExternalEvidenceRecord {
@@ -384,6 +395,8 @@ export interface ExternalEvidenceRecord {
   provider: string | null;
   trust_score: number;
   relevance_score: number;
+  quality_score: number;
+  quality_flags: string[];
   content_hash: string;
   created_at: string;
   updated_at: string;
@@ -758,6 +771,16 @@ export type Database = {
       };
       get_watchlist_overview_page: {
         Args: { p_offset?: number; p_limit?: number; p_ticker?: string | null };
+        Returns: Record<string, unknown>;
+      };
+      get_watchlist_overview_cursor: {
+        Args: {
+          p_group_sort?: number | null;
+          p_item_sort?: number | null;
+          p_item_id?: string | null;
+          p_limit?: number;
+          p_ticker?: string | null;
+        };
         Returns: Record<string, unknown>;
       };
       start_watchlist_alert_run: {

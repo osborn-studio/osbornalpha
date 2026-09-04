@@ -352,6 +352,8 @@
         "fetchedAt": "Fetched {value}",
         "warnings": "{count} data warnings",
         "trust": "Trust {value}%",
+        "quality": "Quality {value}%",
+        "qualityFlags": "Quality flags: {value}",
         "status": {
           "complete": "Complete coverage",
           "partial": "Partial coverage",

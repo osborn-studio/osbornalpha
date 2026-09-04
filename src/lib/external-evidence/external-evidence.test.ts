@@ -39,6 +39,8 @@ describe('external evidence normalization', () => {
     const ranked = dedupeAndRankEvidence(normalized, 10);
     expect(ranked).toHaveLength(1);
     expect(ranked[0]).toMatchObject({ title: 'Official filing', domain: 'sec.gov', trustScore: 0.95 });
+    expect(ranked[0].qualityFlags).toEqual(expect.arrayContaining(['official_source', 'provider_ranked']));
+    expect(ranked[0].qualityScore).toBeGreaterThan(0.7);
     expect(ranked[0].url).not.toContain('utm_source');
     expect(ranked[0].citationId).toMatch(/^web_[a-f0-9]{12}$/);
   });

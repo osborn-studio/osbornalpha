@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { EvidenceScope, ExternalEvidence, RawEvidenceResult } from './types';
+import type { EvidenceQualityFlag, EvidenceScope, ExternalEvidence, RawEvidenceResult } from './types';
 
 const OFFICIAL_DOMAINS = [
   'sec.gov', 'sse.com.cn', 'szse.cn', 'bse.cn', 'hkexnews.hk', 'hkex.com.hk',
@@ -60,6 +60,28 @@ function normalizeDate(value: string | null | undefined, now: Date): string | nu
   return date.toISOString();
 }
 
+function qualityFor(
+  domain: string,
+  trustScore: number,
+  relevanceScore: number,
+  publishedAt: string | null,
+  snippet: string,
+  providerScore: number | null,
+): { score: number; flags: EvidenceQualityFlag[] } {
+  const flags: EvidenceQualityFlag[] = [];
+  if (trustScore >= 0.9) flags.push('official_source');
+  else if (trustScore >= 0.75) flags.push('professional_source');
+  if (providerScore != null) flags.push('provider_ranked');
+  if (publishedAt) flags.push('dated_source');
+  if (snippet) flags.push('snippet_available');
+  if (trustScore < 0.7) flags.push('unverified_source');
+  // Quality is intentionally separate from relevance: it answers whether a
+  // result is well-sourced and inspectable, not whether it matches the query.
+  const score = trustScore * 0.65 + (publishedAt ? 0.15 : 0) + (snippet ? 0.1 : 0)
+    + (domain.length > 0 ? 0.05 : 0) + relevanceScore * 0.05;
+  return { score: Number(Math.min(1, score).toFixed(3)), flags };
+}
+
 export function normalizeEvidenceResults(
   raw: RawEvidenceResult[],
   scope: EvidenceScope,
@@ -79,17 +101,22 @@ export function normalizeEvidenceResults(
     const providerScore = Number.isFinite(result.score) ? Math.min(1, Math.max(0, Number(result.score))) : 0.5;
     const publishedAt = normalizeDate(result.publishedAt, fetchedAt);
     if (publishedAt && Date.parse(publishedAt) < oldestAllowedAt) continue;
+    const snippet = cleanText(result.snippet, 800);
+    const relevanceScore = Number((providerScore * 0.7 + trustScore * 0.3).toFixed(3));
+    const quality = qualityFor(domain, trustScore, relevanceScore, publishedAt, snippet, Number.isFinite(result.score) ? providerScore : null);
     output.push({
       citationId: `web_${createHash('sha256').update(url).digest('hex').slice(0, 12)}`,
       title,
       url,
       domain,
-      snippet: cleanText(result.snippet, 800),
+      snippet,
       sourceType: scope,
       publishedAt,
       fetchedAt: fetchedAt.toISOString(),
       trustScore,
-      relevanceScore: Number((providerScore * 0.7 + trustScore * 0.3).toFixed(3)),
+      relevanceScore,
+      qualityScore: quality.score,
+      qualityFlags: quality.flags,
     });
   }
   return output;

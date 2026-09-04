@@ -38,6 +38,8 @@ export function buildEvidencePersistenceRows(
       provider: snapshot.provider,
       trust_score: item.trustScore,
       relevance_score: item.relevanceScore,
+      quality_score: item.qualityScore,
+      quality_flags: item.qualityFlags,
       content_hash: createHash('sha256').update(`${item.title}\n${item.snippet}`).digest('hex'),
     })),
     links: request.ticker ? snapshot.results.map((item) => ({
@@ -53,17 +55,26 @@ export async function persistEvidenceSnapshot(
   request: NormalizedEvidenceSearchRequest,
   snapshot: EvidenceSearchSnapshot,
 ): Promise<void> {
-  const db = getAdminSupabase();
+  type EvidenceTable = 'external_evidence_runs' | 'external_evidence' | 'external_evidence_tickers';
+  type EvidenceRepository = {
+    from: (table: EvidenceTable) => {
+      upsert: (
+        values: Record<string, unknown> | Array<Record<string, unknown>>,
+        options: { onConflict: string },
+      ) => Promise<{ error: { message: string } | null }>;
+    };
+  };
+  // Keep the SDK generic at this trusted service-role boundary while retaining
+  // a small, explicit table contract for the persistence operations below.
+  const db = getAdminSupabase() as unknown as EvidenceRepository;
   const rows = buildEvidencePersistenceRows(request, snapshot);
-  // The repository's hand-maintained Database type predates the current Supabase
-  // mutation overloads; keep the compatibility cast at this service-only boundary.
-  const { error: runError } = await (db as any).from('external_evidence_runs').upsert(rows.run, { onConflict: 'request_id' });
+  const { error: runError } = await db.from('external_evidence_runs').upsert(rows.run, { onConflict: 'request_id' });
   if (runError) throw new Error('evidence_run_persist_failed');
   if (rows.evidence.length === 0) return;
-  const { error: evidenceError } = await (db as any).from('external_evidence').upsert(rows.evidence, { onConflict: 'citation_id' });
+  const { error: evidenceError } = await db.from('external_evidence').upsert(rows.evidence, { onConflict: 'citation_id' });
   if (evidenceError) throw new Error('evidence_persist_failed');
   if (rows.links.length > 0) {
-    const { error: linkError } = await (db as any).from('external_evidence_tickers').upsert(rows.links, { onConflict: 'ticker,citation_id,request_id' });
+    const { error: linkError } = await db.from('external_evidence_tickers').upsert(rows.links, { onConflict: 'ticker,citation_id,request_id' });
     if (linkError) throw new Error('evidence_link_persist_failed');
   }
 }

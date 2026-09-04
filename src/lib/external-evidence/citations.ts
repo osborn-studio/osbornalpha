@@ -21,6 +21,8 @@ export function resolvePerspectiveCitations(
       domain: item.domain,
       publishedAt: item.publishedAt,
       trustScore: item.trustScore,
+      qualityScore: item.qualityScore,
+      qualityFlags: item.qualityFlags,
     });
     if (citations.length >= limit) break;
   }
