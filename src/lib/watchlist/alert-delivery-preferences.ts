@@ -46,7 +46,11 @@ export function parseWatchlistAlertDeliveryPreferences(
   const configured = Array.isArray(row?.watchlist_alert_channels)
     ? row.watchlist_alert_channels.filter((value): value is WatchlistAlertChannel => value === 'email' || value === 'telegram')
     : row?.email_notifications === false ? [] : ['email' as const];
+  // Keep the legacy opt-out authoritative while older preference rows are
+  // gradually populated with the channel array.
   const channels = [...new Set(configured)].filter((channel) => (
+    channel !== 'email' || row?.email_notifications !== false
+  )).filter((channel) => (
     channel !== 'telegram' || typeof row?.telegram_chat_id === 'string' && row.telegram_chat_id.trim().length > 0
   ));
   const quietStart = time(row?.watchlist_alert_quiet_start, null);

@@ -3,6 +3,7 @@ interface SchemaCheck {
   path: string;
   method?: 'GET' | 'POST';
   body?: Record<string, unknown>;
+  validate?: (body: string) => string | undefined;
 }
 
 export interface WatchlistProductionCheckResult {
@@ -29,6 +30,20 @@ const CHECKS: SchemaCheck[] = [
   { name: 'report_quality_columns', path: '/rest/v1/broker_reports?select=quality_score,quality_flags&limit=1' },
   { name: 'external_evidence_quality_columns', path: '/rest/v1/external_evidence?select=quality_score,quality_flags&limit=1' },
   { name: 'ticker_refresh_queue', path: '/rest/v1/watchlist_research_ticker_refresh_state?select=ticker,status&limit=1' },
+  {
+    name: 'monitoring_status_release_marker',
+    path: '/rest/v1/watchlist_release_markers?select=marker&marker=eq.watchlist_monitoring_status&limit=1',
+    validate: (body) => {
+      try {
+        const rows = JSON.parse(body);
+        return Array.isArray(rows) && rows.some((row) => row?.marker === 'watchlist_monitoring_status')
+          ? undefined
+          : 'release_marker_missing';
+      } catch {
+        return 'release_marker_response_invalid';
+      }
+    },
+  },
 ];
 
 function configuredEnvironment() {
@@ -61,11 +76,12 @@ export async function runWatchlistProductionChecks(
         ...(check.body ? { body: JSON.stringify(check.body) } : {}),
       });
       const body = await response.text();
+      const validationError = response.ok && check.validate ? check.validate(body) : undefined;
       results.push({
         name: check.name,
-        ok: response.ok,
+        ok: response.ok && !validationError,
         status: response.status,
-        ...(response.ok ? {} : { detail: responseDetail(body) }),
+        ...(!response.ok || validationError ? { detail: validationError ?? responseDetail(body) } : {}),
       });
     } catch (error) {
       results.push({

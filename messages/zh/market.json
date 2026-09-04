@@ -354,6 +354,7 @@
         "trust": "可信度 {value}%",
         "quality": "质量 {value}%",
         "qualityFlags": "质量标记：{value}",
+        "metadataOnly": "仅元数据",
         "status": {
           "complete": "覆盖完整",
           "partial": "部分覆盖",

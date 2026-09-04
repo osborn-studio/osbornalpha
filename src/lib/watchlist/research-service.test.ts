@@ -12,6 +12,10 @@ describe('watchlist research service', () => {
         source: 'reuters.com', url: 'https://reuters.com/apple', snippet: 'Update', sentiment: 0.4,
         published_at: '2026-09-03T00:00:00Z', fetched_at: '2026-09-04T11:00:00Z', trust_score: 0.9,
         source_type: 'news',
+      } as NewsItem, {
+        id: 'news-2', user_id: 'user-1', ticker: 'AAPL', source_key: 'metadata-1', title: 'Exchange bulletin',
+        source: 'exchange', url: null, snippet: null, sentiment: null, published_at: null,
+        fetched_at: '2026-09-04T10:00:00Z', trust_score: 0.7, source_type: 'filing',
       } as NewsItem],
       reports: [{
         id: 'report-1', user_id: 'user-1', ticker: 'AAPL', source_key: 'report-key', title: 'Apple target raised',
@@ -24,6 +28,7 @@ describe('watchlist research service', () => {
 
     expect(bundle.news.meta.status).toBe('complete');
     expect(bundle.news.items[0]).toMatchObject({ id: 'citation-1', trustScore: 0.9 });
+    expect(bundle.news.items[1]).toMatchObject({ id: 'metadata-1', url: null });
     expect(bundle.reports.meta.status).toBe('partial');
     expect(bundle.reports.consensus).toMatchObject({ targetMedian: 220, count: 1 });
   });

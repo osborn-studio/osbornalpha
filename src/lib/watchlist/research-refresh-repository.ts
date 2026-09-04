@@ -4,6 +4,7 @@ import type {
   WatchlistResearchRefreshState,
   WatchlistResearchTickerRefreshState,
 } from '@/lib/supabase/database.types';
+import { WATCHLIST_MONITORED_STATUSES } from './item-status';
 
 function repositoryOf(db: SupabaseClient<Database>) {
   return db as unknown as {
@@ -29,7 +30,9 @@ function tickerRepositoryOf(db: SupabaseClient<Database>) {
     }>;
     from(name: 'watchlist_items'): {
       select(columns: string): {
-        eq(column: string, value: string): Promise<{ data: Array<{ user_id: string }> | null; error: { message: string } | null }>;
+        eq(column: string, value: string): {
+          in(column: string, values: string[]): Promise<{ data: Array<{ user_id: string }> | null; error: { message: string } | null }>;
+        };
       };
     };
     from(name: 'watchlist_research_ticker_refresh_state'): {
@@ -56,7 +59,9 @@ export async function loadWatchlistResearchAudience(
   db: SupabaseClient<Database>,
   ticker: string,
 ): Promise<string[]> {
-  const { data, error } = await tickerRepositoryOf(db).from('watchlist_items').select('user_id').eq('ticker', ticker);
+  const { data, error } = await tickerRepositoryOf(db).from('watchlist_items').select('user_id')
+    .eq('ticker', ticker)
+    .in('status', [...WATCHLIST_MONITORED_STATUSES]);
   if (error) throw new Error(`watchlist_research_audience_failed:${error.message}`);
   return [...new Set((data ?? []).map((row) => row.user_id).filter(Boolean))];
 }

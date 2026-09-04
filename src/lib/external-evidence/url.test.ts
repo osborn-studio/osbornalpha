@@ -14,6 +14,7 @@ describe('canonicalizeEvidenceUrl', () => {
     expect(canonicalizeEvidenceUrl('http://localhost:3000/admin')).toBeNull();
     expect(canonicalizeEvidenceUrl('http://192.168.1.10/admin')).toBeNull();
     expect(canonicalizeEvidenceUrl('http://[fd00::1]/admin')).toBeNull();
+    expect(canonicalizeEvidenceUrl('http://[::ffff:127.0.0.1]/admin')).toBeNull();
   });
 
   it('returns null for malformed or missing values', () => {

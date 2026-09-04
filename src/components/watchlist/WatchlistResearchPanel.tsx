@@ -76,8 +76,8 @@ export function WatchlistResearchPanel({ ticker, overview }: { ticker: string; o
           {news.map((item) => (
             <ExternalLink key={item.id} href={item.url} className="flex items-start gap-3 py-3 text-text hover:no-underline">
               <Newspaper className="mt-0.5 h-4 w-4 shrink-0 text-text-muted" aria-hidden="true" />
-              <span className="min-w-0 flex-1"><span className="line-clamp-2 text-sm font-medium leading-snug">{item.title}</span>{item.snippet && <span className="mt-1 line-clamp-2 block text-xs leading-relaxed text-text-dim">{item.snippet}</span>}<span className="mt-1.5 flex flex-wrap gap-x-2 text-[10px] text-text-muted"><span>{item.source}</span><span>{t('trust', { value: Math.round(item.trustScore * 100) })}</span><span title={t('qualityFlags', { value: item.qualityFlags?.join(', ') || '--' })}>{t('quality', { value: Math.round((item.qualityScore ?? item.trustScore) * 100) })}</span>{item.publishedAt && <time>{new Date(item.publishedAt).toLocaleDateString()}</time>}</span></span>
-              <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />
+              <span className="min-w-0 flex-1"><span className="line-clamp-2 text-sm font-medium leading-snug">{item.title}</span>{item.snippet && <span className="mt-1 line-clamp-2 block text-xs leading-relaxed text-text-dim">{item.snippet}</span>}<span className="mt-1.5 flex flex-wrap gap-x-2 text-[10px] text-text-muted"><span>{item.source}</span><span>{t('trust', { value: Math.round(item.trustScore * 100) })}</span><span title={t('qualityFlags', { value: item.qualityFlags?.join(', ') || '--' })}>{t('quality', { value: Math.round((item.qualityScore ?? item.trustScore) * 100) })}</span>{!item.url && <span>{t('metadataOnly')}</span>}{item.publishedAt && <time>{new Date(item.publishedAt).toLocaleDateString()}</time>}</span></span>
+              {item.url && <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />}
             </ExternalLink>
           ))}
           {news.length === 0 && <div className="py-8 text-center text-xs text-text-muted">{t('emptyNews')}</div>}

@@ -354,6 +354,7 @@
         "trust": "Trust {value}%",
         "quality": "Quality {value}%",
         "qualityFlags": "Quality flags: {value}",
+        "metadataOnly": "Metadata only",
         "status": {
           "complete": "Complete coverage",
           "partial": "Partial coverage",

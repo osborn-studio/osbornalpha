@@ -98,6 +98,7 @@ export function StockResearchPanel({ ticker, currency }: { ticker: string; curre
               <span>{item.source}</span>
               <span>{formatPublishedAt(item.publishedAt, locale, t('publishedUnknown'))}</span>
               <span>{t('trust', { value: Math.round(item.trustScore * 100) })}</span>
+              {!item.url && <span>{t('metadataOnly')}</span>}
             </div>
           </article>
         ))}

@@ -11,7 +11,7 @@ export interface StockNewsItem {
   id: string;
   title: string;
   source: string;
-  url: string;
+  url: string | null;
   snippet: string;
   sentiment: number | null;
   publishedAt: string | null;

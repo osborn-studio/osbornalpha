@@ -17,6 +17,14 @@ describe('watchlist alert delivery preferences', () => {
     }).channels).toEqual([]);
   });
 
+  it('honors the legacy email opt-out when channel preferences are present', () => {
+    expect(parseWatchlistAlertDeliveryPreferences({
+      email_notifications: false,
+      watchlist_alert_channels: ['email', 'telegram'],
+      telegram_chat_id: 'chat-1',
+    }).channels).toEqual(['telegram']);
+  });
+
   it('handles same-day and overnight quiet windows in the selected timezone', () => {
     const sameDay = parseWatchlistAlertDeliveryPreferences({
       timezone: 'UTC', watchlist_alert_quiet_start: '09:00', watchlist_alert_quiet_end: '17:00',

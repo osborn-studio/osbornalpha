@@ -43,6 +43,7 @@ Watchlist 后端上线前请在 Dashboard 的 **Database → Migrations** 或 CL
 - `20260904170000_watchlist_overview_cursor.sql`
 - `20260904180000_watchlist_research_quality.sql`
 - `20260904190000_watchlist_research_refresh_cleanup.sql`
+- `20260904200000_watchlist_monitoring_status.sql`
 
 Vercel 部署只发布 Next.js 代码，不会自动执行 Supabase migrations；两者必须分别验收。
 
@@ -54,7 +55,7 @@ SUPABASE_SERVICE_ROLE_KEY=<SERVICE_ROLE_KEY> \
 npm run watchlist:production-check
 ```
 
-输出中的五项检查必须全部为 `"ok": true`，再进行 Watchlist 登录态验收。
+输出中的六项检查必须全部为 `"ok": true`，再进行 Watchlist 登录态验收；其中 release marker 用于确认最新的状态过滤函数确实已应用。
 
 ## Step 4: 灌入 seed 数据
 

@@ -7,11 +7,12 @@ import type {
   WatchlistAlertEvent,
   WatchlistAlertRun,
 } from '@/lib/supabase/database.types';
+import { WATCHLIST_MONITORED_STATUSES } from './item-status';
 
 export const WATCHLIST_ALERT_BATCH_SIZE = 100;
 
 export interface AlertWithItem extends WatchlistAlert {
-  watchlist_items: { id: string; ticker: string } | Array<{ id: string; ticker: string }>;
+  watchlist_items: { id: string; ticker: string; status?: string } | Array<{ id: string; ticker: string; status?: string }>;
 }
 
 export interface AlertResearchCandidates {
@@ -51,17 +52,20 @@ function alertRunDatabase(db: SupabaseClient<Database>): AlertRunDatabase {
       const table = repository.from('watchlist_alerts') as {
         select(columns: string): {
           eq(column: string, value: unknown): {
-            order(column: string, options: Record<string, unknown>): {
+            in(column: string, values: string[]): {
               order(column: string, options: Record<string, unknown>): {
-                limit(value: number): Promise<{ data: AlertWithItem[] | null; error: RepositoryError | null }>;
+                order(column: string, options: Record<string, unknown>): {
+                  limit(value: number): Promise<{ data: AlertWithItem[] | null; error: RepositoryError | null }>;
+                };
               };
             };
           };
         };
       };
       return table
-        .select('*, watchlist_items!inner(id,ticker)')
+        .select('*, watchlist_items!inner(id,ticker,status)')
         .eq('enabled', true)
+        .in('watchlist_items.status', [...WATCHLIST_MONITORED_STATUSES])
         .order('last_evaluated_at', { ascending: true, nullsFirst: true })
         .order('id', { ascending: true })
         .limit(WATCHLIST_ALERT_BATCH_SIZE + 1);
