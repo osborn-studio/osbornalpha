@@ -84,7 +84,7 @@
 - **ref**：`mzfcaabhuwtfvsvadvsv`；**URL**：`https://mzfcaabhuwtfvsvadvsv.supabase.co`。
 - **OAuth 回调（所有 provider 统一）**：`https://mzfcaabhuwtfvsvadvsv.supabase.co/auth/v1/callback`。
 - **Key 体系**：新版 `sb_publishable_…`（= anon/publishable）/ `sb_secret_…`（= service_role）。生产 service-role 是平台计量、持久化审计和 admin DB RPC 的必需服务端 secret；绝不带 `NEXT_PUBLIC_` 或进入客户端 bundle。
-- **迁移状态**：已通过 SQL Editor 应用（11 表 / ~26 RLS 策略 / `on_auth_user_created` 触发器）。推送命令：`supabase link --project-ref mzfcaabhuwtfvsvadvsv && supabase db push`。
+- **迁移状态**：基础 schema 已通过 SQL Editor 应用（11 表 / ~26 RLS 策略 / `on_auth_user_created` 触发器）；2026-09-04 之后新增的 Watchlist migrations 仍须在生产项目逐条核验。推送命令：`supabase link --project-ref mzfcaabhuwtfvsvadvsv && supabase db push`。
 - **Auth 开关**：允许注册、允许 manual linking（第三方绑定）、Confirm email = 开。默认 SMTP 配额低，正式上线建议接自有 SMTP（Resend/SES）。
 
 ---
