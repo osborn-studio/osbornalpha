@@ -31,8 +31,8 @@ export async function GET(request: Request) {
 
   const run = startCronRun('watchlist-research');
   logCronEvent('info', 'cron_started', run, { refresh_limit: refreshLimit() });
-  const db = getAdminSupabase();
   try {
+    const db = getAdminSupabase();
     const claimed = await claimWatchlistResearchTickerRefresh(db, refreshLimit());
     const settled = await boundedMap(claimed, 2, async (item) => {
       try {

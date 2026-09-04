@@ -55,11 +55,27 @@ describe('GET /api/cron/watchlist-research', () => {
       headers: { authorization: 'Bearer secret' },
     }));
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ claimed: 1, complete: 1, distributed: 2 });
+    expect(await response.json()).toMatchObject({ claimed: 1, complete: 1, distributed: 2, cron_run_id: expect.any(String) });
+    expect(response.headers.get('x-cron-run-id')).toMatch(/^[0-9a-f-]{36}$/);
     expect(mocks.fetchSources).toHaveBeenCalledTimes(1);
     expect(mocks.persist).toHaveBeenCalledTimes(2);
     expect(mocks.persist).toHaveBeenCalledWith(db, 'user-1', snapshot);
     expect(mocks.persist).toHaveBeenCalledWith(db, 'user-2', snapshot);
     expect(mocks.finish).toHaveBeenCalledWith(db, claimed, 'complete', null);
+  });
+
+  it('returns a traceable failure when the admin client cannot be created', async () => {
+    process.env.CRON_SECRET = 'secret';
+    mocks.admin.mockImplementation(() => { throw new Error('supabase_admin_unavailable'); });
+
+    const response = await GET(new Request('http://localhost/api/cron/watchlist-research', {
+      headers: { authorization: 'Bearer secret' },
+    }));
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({
+      error: 'watchlist_research_cron_failed',
+      cron_run_id: expect.any(String),
+      duration_ms: expect.any(Number),
+    });
   });
 });

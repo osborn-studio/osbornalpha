@@ -29,7 +29,7 @@ supabase link --project-ref <YOUR_PROJECT_REF>
 ## Step 3: 推送 schema
 
 ```bash
-# 推送 migrations/ 里所有 .sql
+# 推送 migrations/ 里所有 .sql（包括 Watchlist cursor、研究质量和刷新队列清理迁移）
 supabase db push
 ```
 
@@ -37,6 +37,14 @@ supabase db push
 - 10 张表（stocks_universe, financial_history, watchlists, watchlist_items, briefs, stock_signals, perspectives, news_items, broker_reports, user_preferences）
 - RLS 策略（用户只能看自己数据 + 公开 reference 表所有人可读）
 - 自动触发器（用户注册时自动建默认 watchlist + 默认偏好）
+
+Watchlist 后端上线前请在 Dashboard 的 **Database → Migrations** 或 CLI 输出中确认以下迁移已执行：
+
+- `20260904170000_watchlist_overview_cursor.sql`
+- `20260904180000_watchlist_research_quality.sql`
+- `20260904190000_watchlist_research_refresh_cleanup.sql`
+
+Vercel 部署只发布 Next.js 代码，不会自动执行 Supabase migrations；两者必须分别验收。
 
 ## Step 4: 灌入 seed 数据
 

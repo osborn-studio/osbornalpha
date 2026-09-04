@@ -39,7 +39,7 @@ const DEFAULT_OPTIONS: Required<SearchFetchOptions> = {
 function optionsOf(value: number | SearchFetchOptions): Required<SearchFetchOptions> {
   const input = typeof value === 'number' ? { timeoutMs: value } : value;
   return {
-    timeoutMs: Number.isFinite(input.timeoutMs) ? Math.max(250, Math.floor(input.timeoutMs ?? DEFAULT_OPTIONS.timeoutMs)) : DEFAULT_OPTIONS.timeoutMs,
+    timeoutMs: Number.isFinite(input.timeoutMs) ? Math.max(1, Math.floor(input.timeoutMs ?? DEFAULT_OPTIONS.timeoutMs)) : DEFAULT_OPTIONS.timeoutMs,
     maxAttempts: Number.isFinite(input.maxAttempts) ? Math.min(4, Math.max(1, Math.floor(input.maxAttempts ?? DEFAULT_OPTIONS.maxAttempts))) : DEFAULT_OPTIONS.maxAttempts,
     baseDelayMs: Number.isFinite(input.baseDelayMs) ? Math.max(0, Math.floor(input.baseDelayMs ?? DEFAULT_OPTIONS.baseDelayMs)) : DEFAULT_OPTIONS.baseDelayMs,
     maxDelayMs: Number.isFinite(input.maxDelayMs) ? Math.max(0, Math.floor(input.maxDelayMs ?? DEFAULT_OPTIONS.maxDelayMs)) : DEFAULT_OPTIONS.maxDelayMs,
@@ -112,6 +112,8 @@ export async function fetchSearchJson(
         });
       lastError = normalized;
       if (!normalized.retryable || attempt >= options.maxAttempts) throw normalized;
+      // Do not keep an aborted request timer alive while backing off.
+      clearTimeout(timeout);
       await sleep(delayMs(attempt, options, normalized.retryAfterSeconds));
     } finally {
       clearTimeout(timeout);
