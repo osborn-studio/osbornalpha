@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { boundedMap } from '@/lib/async/bounded-map';
 import { authorizedCronRequest } from '@/lib/observability/cron-auth';
+import { cronErrorCode, cronRunDuration, logCronEvent, startCronRun } from '@/lib/observability/cron-run';
 import { getAdminSupabase } from '@/lib/supabase/admin';
 import {
   claimWatchlistResearchTickerRefresh,
@@ -28,7 +29,8 @@ export async function GET(request: Request) {
     return watchlistApiError('unauthorized', 401);
   }
 
-  const startedAt = Date.now();
+  const run = startCronRun('watchlist-research');
+  logCronEvent('info', 'cron_started', run, { refresh_limit: refreshLimit() });
   const db = getAdminSupabase();
   try {
     const claimed = await claimWatchlistResearchTickerRefresh(db, refreshLimit());
@@ -63,19 +65,31 @@ export async function GET(request: Request) {
     const outcomes = settled.map((item) => item.status === 'fulfilled'
       ? item.value
       : { status: 'failed' as const, distributed: 0 });
-    return NextResponse.json({
+    const durationMs = cronRunDuration(run);
+    const response = NextResponse.json({
       ok: true,
+      cron_run_id: run.runId,
       claimed: claimed.length,
       complete: outcomes.filter((item) => item.status === 'complete').length,
       partial: outcomes.filter((item) => item.status === 'partial').length,
       failed: outcomes.filter((item) => item.status === 'failed').length,
       distributed: outcomes.reduce((sum, item) => sum + item.distributed, 0),
-      duration_ms: Date.now() - startedAt,
+      duration_ms: durationMs,
     });
-  } catch {
-    console.error('watchlist research cron failed');
+    response.headers.set('x-cron-run-id', run.runId);
+    logCronEvent('info', 'cron_succeeded', run, {
+      duration_ms: durationMs,
+      claimed: claimed.length,
+    });
+    return response;
+  } catch (error) {
+    const durationMs = cronRunDuration(run);
+    logCronEvent('error', 'cron_failed', run, {
+      duration_ms: durationMs,
+      error_code: cronErrorCode(error, 'watchlist_research_cron_failed'),
+    });
     return watchlistApiError('watchlist_research_cron_failed', 500, {
-      details: { duration_ms: Date.now() - startedAt },
+      details: { cron_run_id: run.runId, duration_ms: durationMs },
     });
   }
 }

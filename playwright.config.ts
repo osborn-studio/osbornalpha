@@ -1,6 +1,11 @@
 import { defineConfig } from '@playwright/test';
 
-const baseURL = process.env.E2E_BASE_URL ?? 'http://localhost:3000';
+const configuredPort = Number(process.env.E2E_PORT ?? 3100);
+const port = Number.isInteger(configuredPort) && configuredPort >= 1024 && configuredPort <= 65_535
+  ? configuredPort
+  : 3100;
+const localBaseURL = `http://127.0.0.1:${port}`;
+const baseURL = process.env.E2E_BASE_URL ?? localBaseURL;
 
 export default defineConfig({
   testDir: './e2e',
@@ -14,9 +19,9 @@ export default defineConfig({
     ? {}
     : {
         webServer: {
-          command: 'npm run dev',
-          url: 'http://localhost:3000',
-          reuseExistingServer: true,
+          command: `npm run dev -- --hostname 127.0.0.1 --port ${port}`,
+          url: `${localBaseURL}/`,
+          reuseExistingServer: false,
           timeout: 120_000,
         },
       }),
