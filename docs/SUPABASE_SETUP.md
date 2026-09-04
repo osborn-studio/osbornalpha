@@ -46,6 +46,16 @@ Watchlist 后端上线前请在 Dashboard 的 **Database → Migrations** 或 CL
 
 Vercel 部署只发布 Next.js 代码，不会自动执行 Supabase migrations；两者必须分别验收。
 
+完成迁移后可使用只读 verifier 复核生产 schema（不会写入数据库，也不会输出密钥）：
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=https://mzfcaabhuwtfvsvadvsv.supabase.co \
+SUPABASE_SERVICE_ROLE_KEY=<SERVICE_ROLE_KEY> \
+npm run watchlist:production-check
+```
+
+输出中的五项检查必须全部为 `"ok": true`，再进行 Watchlist 登录态验收。
+
 ## Step 4: 灌入 seed 数据
 
 ```bash
