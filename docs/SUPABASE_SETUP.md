@@ -44,6 +44,9 @@ Watchlist 后端上线前请在 Dashboard 的 **Database → Migrations** 或 CL
 - `20260904180000_watchlist_research_quality.sql`
 - `20260904190000_watchlist_research_refresh_cleanup.sql`
 - `20260904200000_watchlist_monitoring_status.sql`
+- `20260904230000_external_evidence_audit_snapshot.sql`
+- `20260904240000_watchlist_research_event_clusters.sql`
+- `20260904250000_watchlist_ui_preferences.sql`
 
 Vercel 部署只发布 Next.js 代码，不会自动执行 Supabase migrations；两者必须分别验收。
 
@@ -55,7 +58,7 @@ SUPABASE_SERVICE_ROLE_KEY=<SERVICE_ROLE_KEY> \
 npm run watchlist:production-check
 ```
 
-输出中的六项检查必须全部为 `"ok": true`，再进行 Watchlist 登录态验收；其中 release marker 用于确认最新的状态过滤函数确实已应用。
+输出中的全部检查必须为 `"ok": true`，再进行 Watchlist 登录态验收；其中 release marker 用于确认最新迁移确实已应用。
 
 Vercel 发布后可运行无副作用的 runtime verifier。它不会发送 Cron secret，也不会执行告警或研究任务；只验证页面存在、Cron 路由已安装并且未授权请求会被拒绝：
 

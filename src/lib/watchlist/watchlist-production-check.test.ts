@@ -15,6 +15,7 @@ describe('watchlist production schema verifier', () => {
         'external_evidence_audit_snapshot',
         'watchlist_research_event_clusters',
         'watchlist_monitoring_status',
+        'watchlist_ui_preferences',
       ].find((candidate) => url.includes(candidate));
       return new Response(url.includes('watchlist_release_markers')
         ? JSON.stringify(marker ? [{ marker }] : [])
@@ -29,6 +30,8 @@ describe('watchlist production schema verifier', () => {
         'report_event_cluster_columns',
         'external_evidence_event_cluster_columns',
         'research_event_clusters_release_marker',
+        'watchlist_ui_preference_columns',
+        'watchlist_ui_preferences_release_marker',
       ]));
       expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('/rpc/get_watchlist_overview_cursor'), expect.objectContaining({ method: 'POST' }));
       expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('audit_version,query_plan,result_citation_ids,result_set_hash'), expect.anything());

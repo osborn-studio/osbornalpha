@@ -11,6 +11,7 @@
 // + 20260904180000_watchlist_research_quality.sql (research provenance flags)
 // + 20260904190000_watchlist_research_refresh_cleanup.sql (ticker queue migration)
 // + 20260904230000_external_evidence_audit_snapshot.sql (immutable query/result audit metadata)
+// + 20260904250000_watchlist_ui_preferences.sql (cross-device Watchlist UI state)
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -463,6 +464,9 @@ export interface UserPreferences {
   watchlist_alert_quiet_start: string | null;
   watchlist_alert_quiet_end: string | null;
   watchlist_alert_digest_time: string;
+  watchlist_ui_preferences: Record<string, unknown>;
+  watchlist_ui_preferences_version: number;
+  watchlist_ui_preferences_updated_at: string;
   updated_at: string;
 }
 

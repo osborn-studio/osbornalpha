@@ -18,6 +18,7 @@ import {
 import { useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import type { WatchlistSyncStatus } from '@/lib/hooks/useWatchlist';
+import type { WatchlistUiPreferencesSyncStatus } from '@/lib/hooks/useWatchlistUiPreferences';
 import { useDismissableLayer } from '@/lib/hooks/useDismissableLayer';
 
 interface Props {
@@ -36,6 +37,8 @@ interface Props {
   onExportCsv: () => void;
   onOpenTrash?: () => void;
   trashCount?: number;
+  preferencesSyncStatus?: WatchlistUiPreferencesSyncStatus;
+  onRetryPreferencesSync?: () => void;
 }
 
 const SYNC_ICONS = {
@@ -71,6 +74,24 @@ export function WatchlistToolbar(props: Props) {
               <SyncIcon className={`h-3.5 w-3.5 ${props.syncStatus === 'syncing' ? 'animate-spin' : ''}`} aria-hidden="true" />
               {t(`sync.${props.syncStatus}`)}
             </span>
+            {props.preferencesSyncStatus === 'saving' && (
+              <span className="inline-flex items-center gap-1.5 text-text-dim">
+                <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                {t('uiSync.saving')}
+              </span>
+            )}
+            {props.preferencesSyncStatus === 'conflict' && (
+              <span className="inline-flex items-center gap-1.5 text-warn">
+                <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                {t('uiSync.merging')}
+              </span>
+            )}
+            {props.preferencesSyncStatus === 'error' && (
+              <button type="button" onClick={props.onRetryPreferencesSync} className="inline-flex items-center gap-1.5 text-warn hover:text-text">
+                <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                {t('uiSync.retry')}
+              </button>
+            )}
             {props.quotesLoading && <span className="text-text-dim">{t('loadingQuotes')}</span>}
             {!props.quotesLoading && props.failedQuotes > 0 && (
               <span className="text-status-bad">{t('quotesFailed', { count: props.failedQuotes })}</span>

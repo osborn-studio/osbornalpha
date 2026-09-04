@@ -192,6 +192,9 @@
 | `email_notifications` | boolean | default true |
 | `daily_brief_time` | text | default `'08:30'` |
 | `timezone` | text | default `'Asia/Shanghai'` |
+| `watchlist_ui_preferences` | jsonb | Watchlist 视图、表格、自定义视图、benchmark 与图表偏好；对象且不超过 64 KiB |
+| `watchlist_ui_preferences_version` | integer | 乐观并发版本，非负，default 0 |
+| `watchlist_ui_preferences_updated_at` | timestamptz | 独立的 Watchlist UI 偏好更新时间 |
 | `updated_at` | timestamptz | default now() |
 
 - RLS（3 条 `auth.uid() = user_id`）：`select` / `insert` / `update`。

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { ArrowDown, ArrowUp, Bookmark, BookmarkPlus, Columns3, LoaderCircle, Minus, MoveRight, PanelRightOpen, Plus, Rows3, Search, Tag, Trash2, X } from 'lucide-react';
@@ -22,40 +22,20 @@ import { usePersistentState } from '@/lib/hooks/usePersistentState';
 import { useDismissableLayer } from '@/lib/hooks/useDismissableLayer';
 import { calculateWatchlistDataQuality } from '@/lib/watchlist/data-quality';
 import { useVirtualRows } from '@/lib/hooks/useVirtualRows';
+import {
+  DEFAULT_WATCHLIST_TABLE_PREFERENCES,
+  WATCHLIST_ALL_COLUMNS,
+  WATCHLIST_PRESET_COLUMNS,
+  isWatchlistSavedViews,
+  isWatchlistTablePreferences,
+  type WatchlistColumnKey as ColumnKey,
+  type WatchlistSavedTableView as SavedTableView,
+  type WatchlistTablePreferences as TablePreferences,
+  type WatchlistTablePreset as PresetKey,
+} from '@/lib/watchlist/ui-preferences';
 
-type ColumnKey =
-  | 'ticker' | 'name' | 'price' | 'change' | 'open' | 'prevClose' | 'dayRange' | 'volume' | 'amount'
-  | 'marketCap' | 'pe' | 'pb' | 'turnover' | 'volumeRatio' | 'amplitude'
-  | 'dayPosition' | 'oneYearReturn' | 'volatility' | 'maxDrawdown' | 'rangePosition'
-  | 'rsi14' | 'macdHistogram' | 'bollingerPosition' | 'atr14'
-  | 'research' | 'decision' | 'quality' | 'updated' | 'group';
-type PresetKey = 'market' | 'valuation' | 'risk';
-type Density = 'compact' | 'comfortable';
 type ColumnGroupKey = 'identity' | 'market' | 'valuation' | 'technical' | 'research';
-
-interface TablePreferences {
-  sortKey: ColumnKey;
-  asc: boolean;
-  preset: PresetKey;
-  visibleColumns: ColumnKey[];
-  query: string;
-  groupFilter: string;
-  marketFilter: 'all' | Market;
-  statusFilter: 'all' | QuoteDisplayStatus;
-  density: Density;
-}
-
-interface SavedTableView {
-  id: string;
-  name: string;
-  preferences: TablePreferences;
-}
-
-const ALL_COLUMNS: ColumnKey[] = [
-  'ticker', 'name', 'price', 'change', 'open', 'prevClose', 'dayRange', 'volume', 'amount', 'marketCap',
-  'pe', 'pb', 'turnover', 'volumeRatio', 'amplitude', 'dayPosition', 'quality', 'updated', 'group',
-  'oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition', 'rsi14', 'macdHistogram', 'bollingerPosition', 'atr14', 'research', 'decision',
-];
+const ALL_COLUMNS = WATCHLIST_ALL_COLUMNS;
 
 const COLUMN_GROUPS: Array<{ key: ColumnGroupKey; columns: ColumnKey[] }> = [
   { key: 'identity', columns: ['ticker', 'name', 'group'] },
@@ -65,11 +45,7 @@ const COLUMN_GROUPS: Array<{ key: ColumnGroupKey; columns: ColumnKey[] }> = [
   { key: 'research', columns: ['research', 'decision'] },
 ];
 
-const PRESET_COLUMNS: Record<PresetKey, ColumnKey[]> = {
-  market: ['ticker', 'name', 'price', 'change', 'open', 'dayRange', 'volume', 'amount', 'volumeRatio', 'updated', 'group'],
-  valuation: ['ticker', 'name', 'price', 'change', 'marketCap', 'pe', 'pb', 'turnover', 'updated', 'group'],
-  risk: ['ticker', 'name', 'price', 'change', 'oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition', 'rsi14', 'macdHistogram', 'bollingerPosition', 'atr14', 'research', 'decision', 'updated', 'group'],
-};
+const PRESET_COLUMNS = WATCHLIST_PRESET_COLUMNS;
 
 const NUMERIC_COLUMNS = new Set<ColumnKey>([
   'price', 'change', 'open', 'prevClose', 'volume', 'amount', 'marketCap', 'pe', 'pb', 'turnover',
@@ -80,37 +56,6 @@ const NUMERIC_COLUMNS = new Set<ColumnKey>([
 const ANALYTICS_COLUMNS = new Set<ColumnKey>([
   'oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition', 'rsi14', 'macdHistogram', 'bollingerPosition', 'atr14', 'research', 'decision',
 ]);
-
-const DEFAULT_PREFERENCES: TablePreferences = {
-  sortKey: 'change', asc: false, preset: 'market', visibleColumns: PRESET_COLUMNS.market,
-  query: '', groupFilter: 'all', marketFilter: 'all', statusFilter: 'all', density: 'comfortable',
-};
-
-function validPreferences(value: unknown): value is TablePreferences {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const input = value as Partial<TablePreferences>;
-  return typeof input.sortKey === 'string' && ALL_COLUMNS.includes(input.sortKey as ColumnKey)
-    && typeof input.asc === 'boolean'
-    && typeof input.preset === 'string' && input.preset in PRESET_COLUMNS
-    && Array.isArray(input.visibleColumns) && input.visibleColumns.length > 0
-    && input.visibleColumns.every((column) => ALL_COLUMNS.includes(column))
-    && typeof input.query === 'string'
-    && typeof input.groupFilter === 'string'
-    && (input.marketFilter === 'all' || ['A', 'HK', 'US', 'JP', 'KR', 'TW'].includes(String(input.marketFilter)))
-    && (input.statusFilter === 'all' || ['loading', 'live', 'delayed', 'stale', 'unavailable'].includes(String(input.statusFilter)))
-    && (input.density === 'compact' || input.density === 'comfortable');
-}
-
-function validSavedViews(value: unknown): value is SavedTableView[] {
-  return Array.isArray(value) && value.length <= 12 && value.every((item) => (
-    !!item && typeof item === 'object' && !Array.isArray(item)
-    && typeof (item as SavedTableView).id === 'string'
-    && typeof (item as SavedTableView).name === 'string'
-    && (item as SavedTableView).name.trim().length > 0
-    && (item as SavedTableView).name.length <= 40
-    && validPreferences((item as SavedTableView).preferences)
-  ));
-}
 
 function optionalNumber(value: number | null | undefined, suffix = '') {
   return value == null || !Number.isFinite(value)
@@ -201,6 +146,10 @@ export function WatchlistTable({
   overviewHasMore = false,
   overviewLoadingMore = false,
   onLoadMoreOverview,
+  tablePreferences,
+  savedTableViews,
+  onTablePreferencesChange,
+  onSavedTableViewsChange,
 }: {
   groups: WatchlistMarketGroup[];
   quotes: Record<string, LiveQuote | null>;
@@ -215,10 +164,32 @@ export function WatchlistTable({
   overviewHasMore?: boolean;
   overviewLoadingMore?: boolean;
   onLoadMoreOverview?: () => Promise<void>;
+  tablePreferences?: TablePreferences;
+  savedTableViews?: SavedTableView[];
+  onTablePreferencesChange?: Dispatch<SetStateAction<TablePreferences>>;
+  onSavedTableViewsChange?: Dispatch<SetStateAction<SavedTableView[]>>;
 }) {
   const t = useTranslations('market.table');
-  const [preferences, setPreferences] = usePersistentState('stock-monitor:watchlist:table-preferences-v1', DEFAULT_PREFERENCES, validPreferences);
-  const [savedViews, setSavedViews] = usePersistentState<SavedTableView[]>('stock-monitor:watchlist:table-views-v1', [], validSavedViews);
+  const [localPreferences, setLocalPreferences] = usePersistentState(
+    'stock-monitor:watchlist:table-preferences-v1',
+    DEFAULT_WATCHLIST_TABLE_PREFERENCES,
+    isWatchlistTablePreferences,
+  );
+  const [localSavedViews, setLocalSavedViews] = usePersistentState<SavedTableView[]>(
+    'stock-monitor:watchlist:table-views-v1',
+    [],
+    isWatchlistSavedViews,
+  );
+  const preferences = tablePreferences ?? localPreferences;
+  const savedViews = savedTableViews ?? localSavedViews;
+  const setPreferences = useCallback<Dispatch<SetStateAction<TablePreferences>>>((next) => {
+    if (tablePreferences !== undefined && onTablePreferencesChange) onTablePreferencesChange(next);
+    else setLocalPreferences(next);
+  }, [onTablePreferencesChange, setLocalPreferences, tablePreferences]);
+  const setSavedViews = useCallback<Dispatch<SetStateAction<SavedTableView[]>>>((next) => {
+    if (savedTableViews !== undefined && onSavedTableViewsChange) onSavedTableViewsChange(next);
+    else setLocalSavedViews(next);
+  }, [onSavedTableViewsChange, savedTableViews, setLocalSavedViews]);
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [viewsOpen, setViewsOpen] = useState(false);
   const [viewName, setViewName] = useState('');

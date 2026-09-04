@@ -33,6 +33,11 @@
       "conflict": "Sync conflict",
       "error": "Waiting to retry"
     },
+    "uiSync": {
+      "saving": "Syncing view settings",
+      "merging": "Merging view settings",
+      "retry": "View settings saved locally · retry sync"
+    },
     "syncConflict": {
       "title": "This watchlist changed on another device",
       "body": "Your local edits are still preserved. Use the cloud version or explicitly overwrite it with this device.",

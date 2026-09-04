@@ -125,6 +125,12 @@
 ### `DELETE /api/watchlist/[ticker]`
 - 路径参数：`ticker`（URL 编码）。鉴权：需登录。数据源：删除 `watchlist_items`。响应：`{ ok: true }`。
 
+### `GET|PUT /api/watchlist/ui-preferences`
+- 鉴权：需登录，由 `user_preferences` RLS 隔离。
+- GET 响应：`{ preferences, version, updatedAt }`；旧的空 JSON 会归一化为当前 schema 默认值。
+- PUT Body：`{ expectedVersion, preferences }`。服务端严格校验大小、字段、保存视图及逐标的条目上限，并以版本谓词原子更新；冲突返回 `409` 和最新云端快照。
+- 客户端以本地快照先渲染，迁移旧 localStorage 键，登录后防抖同步；冲突时把尚未提交的字段级操作重放到最新云端版本。
+
 ---
 
 ## 9. Search / Stocks（搜索 / 个股元数据）
@@ -213,6 +219,7 @@
 | `/api/calendar/batch` | GET | 无 | 并发 calendar | 3600s |
 | `/api/watchlist` | GET/POST | 登录+RLS | Supabase | — |
 | `/api/watchlist/[ticker]` | DELETE | 登录+RLS | Supabase | — |
+| `/api/watchlist/ui-preferences` | GET/PUT | 登录+RLS | Supabase | — |
 | `/api/search` | GET | 无 | 东财+本地 | 60s |
 | `/api/stocks/[ticker]` | GET | 无 | mock | — |
 | `/api/brief/preview` | GET | 无 | generateDailyBrief | — |

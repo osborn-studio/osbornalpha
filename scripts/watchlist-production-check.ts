@@ -38,6 +38,10 @@ const CHECKS: SchemaCheck[] = [
   },
   { name: 'ticker_refresh_queue', path: '/rest/v1/watchlist_research_ticker_refresh_state?select=ticker,status&limit=1' },
   {
+    name: 'watchlist_ui_preference_columns',
+    path: '/rest/v1/user_preferences?select=watchlist_ui_preferences,watchlist_ui_preferences_version,watchlist_ui_preferences_updated_at&limit=1',
+  },
+  {
     name: 'monitoring_status_release_marker',
     path: '/rest/v1/watchlist_release_markers?select=marker&marker=eq.watchlist_monitoring_status&limit=1',
     validate: (body) => {
@@ -72,6 +76,20 @@ const CHECKS: SchemaCheck[] = [
       try {
         const rows = JSON.parse(body);
         return Array.isArray(rows) && rows.some((row) => row?.marker === 'watchlist_research_event_clusters')
+          ? undefined
+          : 'release_marker_missing';
+      } catch {
+        return 'release_marker_response_invalid';
+      }
+    },
+  },
+  {
+    name: 'watchlist_ui_preferences_release_marker',
+    path: '/rest/v1/watchlist_release_markers?select=marker&marker=eq.watchlist_ui_preferences&limit=1',
+    validate: (body) => {
+      try {
+        const rows = JSON.parse(body);
+        return Array.isArray(rows) && rows.some((row) => row?.marker === 'watchlist_ui_preferences')
           ? undefined
           : 'release_marker_missing';
       } catch {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import type { CreatePriceLineOptions, IChartApi, IPriceLine, UTCTimestamp } from 'lightweight-charts';
 import {
@@ -14,39 +14,16 @@ import { useKline } from '@/lib/hooks/useQuote';
 import { chartStatusKeys, sourceTranslationKey } from './kline-chart-meta';
 import { computeSessionVwap } from '@/lib/chart/session-vwap';
 import { usePersistentState } from '@/lib/hooks/usePersistentState';
+import {
+  DEFAULT_WATCHLIST_CHART_PREFERENCES,
+  WATCHLIST_CHART_TYPES,
+  isWatchlistChartPreferences,
+  type WatchlistChartPreferences as ChartPreferences,
+  type WatchlistChartType as ChartType,
+} from '@/lib/watchlist/ui-preferences';
 
 const RANGE_LABELS: Record<KlineRange, string> = { '1d': '1D', '5d': '5D', '1m': '1M', '6m': '6M', ytd: 'YTD', '1y': '1Y', '5y': '5Y', all: 'All' };
-const CHART_TYPES = ['line', 'candle', 'baseline', 'area', 'bar'] as const;
-type ChartType = typeof CHART_TYPES[number];
-
-interface ChartPreferences {
-  range: KlineRange;
-  chartType: ChartType;
-  showTooltip: boolean;
-  showVolume: boolean;
-  showIndicators: boolean;
-  showPreviousClose: boolean;
-}
-
-const DEFAULT_CHART_PREFERENCES: ChartPreferences = {
-  range: '1d',
-  chartType: 'candle',
-  showTooltip: true,
-  showVolume: true,
-  showIndicators: true,
-  showPreviousClose: true,
-};
-
-function validChartPreferences(value: unknown): value is ChartPreferences {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const item = value as Partial<ChartPreferences>;
-  return typeof item.range === 'string' && (KLINE_RANGES as readonly string[]).includes(item.range)
-    && typeof item.chartType === 'string' && (CHART_TYPES as readonly string[]).includes(item.chartType)
-    && typeof item.showTooltip === 'boolean'
-    && typeof item.showVolume === 'boolean'
-    && typeof item.showIndicators === 'boolean'
-    && typeof item.showPreviousClose === 'boolean';
-}
+const CHART_TYPES = WATCHLIST_CHART_TYPES;
 
 type HoverSnapshot = KlineBar;
 
@@ -114,7 +91,15 @@ function formatFetchedAt(value: string, timezone: string, locale: string): strin
   }).format(date);
 }
 
-export function KlineChart({ ticker }: { ticker: string }) {
+export function KlineChart({
+  ticker,
+  preferences: controlledPreferences,
+  onPreferencesChange,
+}: {
+  ticker: string;
+  preferences?: ChartPreferences;
+  onPreferencesChange?: Dispatch<SetStateAction<ChartPreferences>>;
+}) {
   const t = useTranslations('market.stock.chart');
   const locale = useLocale();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -125,11 +110,16 @@ export function KlineChart({ ticker }: { ticker: string }) {
   // Crosshair anchor (chart-pane pixels) so the tooltip follows the cursor
   // like a trading terminal instead of sitting in the corner.
   const [hoverPoint, setHoverPoint] = useState<{ x: number; y: number } | null>(null);
-  const [preferences, setPreferences] = usePersistentState(
+  const [localPreferences, setLocalPreferences] = usePersistentState(
     `stock-monitor:chart-preferences-v1:${ticker}`,
-    DEFAULT_CHART_PREFERENCES,
-    validChartPreferences,
+    DEFAULT_WATCHLIST_CHART_PREFERENCES,
+    isWatchlistChartPreferences,
   );
+  const preferences = controlledPreferences ?? localPreferences;
+  const setPreferences = useCallback<Dispatch<SetStateAction<ChartPreferences>>>((next) => {
+    if (controlledPreferences !== undefined && onPreferencesChange) onPreferencesChange(next);
+    else setLocalPreferences(next);
+  }, [controlledPreferences, onPreferencesChange, setLocalPreferences]);
   const { range, chartType, showTooltip, showVolume, showIndicators, showPreviousClose } = preferences;
   const { bars, loading, error, errorCode, meta, refetch } = useKline(ticker, range);
   const displayMeta = meta;

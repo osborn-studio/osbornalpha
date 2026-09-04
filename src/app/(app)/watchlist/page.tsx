@@ -31,6 +31,8 @@ import {
 import { serializeWatchlistYaml, watchlistCsv } from '@/lib/watchlist/export';
 import { useWatchlistTrash } from '@/lib/hooks/useWatchlistTrash';
 import { WatchlistTrashDialog } from '@/components/watchlist/WatchlistTrashDialog';
+import { useWatchlistUiPreferences } from '@/lib/hooks/useWatchlistUiPreferences';
+import { DEFAULT_WATCHLIST_CHART_PREFERENCES } from '@/lib/watchlist/ui-preferences';
 
 const REFRESH_MS = 60_000;
 
@@ -62,16 +64,9 @@ export default function WatchlistPage() {
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
   const trash = useWatchlistTrash(!!user);
   const [trashOpen, setTrashOpen] = useState(false);
-  // Default to the live-market table; the user's last choice is remembered.
-  const VIEW_KEY = 'stock-monitor:watchlist:view';
-  const [viewMode, setViewMode] = useState<'kanban' | 'table'>('table');
-  useEffect(() => {
-    try { const v = localStorage.getItem(VIEW_KEY); if (v === 'kanban' || v === 'table') setViewMode(v); } catch {}
-  }, []);
-  const setView = (v: 'kanban' | 'table') => {
-    setViewMode(v);
-    try { localStorage.setItem(VIEW_KEY, v); } catch {}
-  };
+  const uiPreferences = useWatchlistUiPreferences(!!user);
+  const viewMode = uiPreferences.preferences.viewMode;
+  const setView = uiPreferences.setViewMode;
 
   // Drag state — single source of truth.
   // `dragKind` distinguishes card-drag from column-reorder so the column
@@ -516,6 +511,8 @@ export default function WatchlistPage() {
         onExportCsv={() => void exportPortableFile('csv')}
         onOpenTrash={user ? () => setTrashOpen(true) : undefined}
         trashCount={trash.entries.length}
+        preferencesSyncStatus={uiPreferences.status}
+        onRetryPreferencesSync={uiPreferences.retry}
       />
 
       {conflictSnapshot && (
@@ -567,6 +564,10 @@ export default function WatchlistPage() {
           overviewHasMore={overview.partial}
           overviewLoadingMore={overview.loadingMore}
           onLoadMoreOverview={overview.loadMore}
+          tablePreferences={uiPreferences.preferences.table}
+          savedTableViews={uiPreferences.preferences.savedViews}
+          onTablePreferencesChange={uiPreferences.setTable}
+          onSavedTableViewsChange={uiPreferences.setSavedViews}
         />
       )}
 
@@ -695,6 +696,10 @@ export default function WatchlistPage() {
           overview={overview.rows[quickViewTicker]}
           onDecisionSaved={overview.updateItem}
           onBenchmarkChange={user ? loadQuickViewBenchmark : undefined}
+          benchmarkPreference={uiPreferences.preferences.benchmarks[quickViewTicker] ?? ''}
+          onBenchmarkPreferenceChange={uiPreferences.setBenchmark}
+          chartPreferences={uiPreferences.preferences.charts[quickViewTicker] ?? DEFAULT_WATCHLIST_CHART_PREFERENCES}
+          onChartPreferencesChange={(next) => uiPreferences.setChart(quickViewTicker, next)}
           onClose={() => setQuickViewTicker(null)}
         />
       )}

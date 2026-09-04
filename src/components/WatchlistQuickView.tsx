@@ -18,6 +18,7 @@ import { usePersistentState } from '@/lib/hooks/usePersistentState';
 import { watchlistBenchmarkTicker } from '@/lib/watchlist/analytics';
 import { WatchlistFinancialPanel } from '@/components/watchlist/WatchlistFinancialPanel';
 import { validateWatchlistBenchmark, type WatchlistBenchmarkIssue } from '@/lib/watchlist/benchmark-validation';
+import type { WatchlistChartPreferences } from '@/lib/watchlist/ui-preferences';
 
 type QuickViewTab = 'overview' | 'financials' | 'research' | 'decision' | 'alerts';
 
@@ -44,6 +45,10 @@ export function WatchlistQuickView({
   overview,
   onDecisionSaved,
   onBenchmarkChange,
+  benchmarkPreference: controlledBenchmarkPreference,
+  onBenchmarkPreferenceChange,
+  chartPreferences,
+  onChartPreferencesChange,
   onClose,
 }: {
   ticker: string;
@@ -51,6 +56,10 @@ export function WatchlistQuickView({
   overview?: WatchlistOverviewClientRow;
   onDecisionSaved?: (item: WatchlistOverviewItemRow) => void;
   onBenchmarkChange?: (ticker: string, benchmark: string | null) => Promise<boolean>;
+  benchmarkPreference?: string;
+  onBenchmarkPreferenceChange?: (ticker: string, benchmark: string | null) => void;
+  chartPreferences?: WatchlistChartPreferences;
+  onChartPreferencesChange?: React.Dispatch<React.SetStateAction<WatchlistChartPreferences>>;
   onClose: () => void;
 }) {
   const t = useTranslations('market.table.drawer');
@@ -58,11 +67,19 @@ export function WatchlistQuickView({
   const [visited, setVisited] = useState<Set<QuickViewTab>>(() => new Set(['overview']));
   const [decisionDirty, setDecisionDirty] = useState(false);
   const [confirmingClose, setConfirmingClose] = useState(false);
-  const [benchmarkPreference, setBenchmarkPreference] = usePersistentState(
+  const [localBenchmarkPreference, setLocalBenchmarkPreference] = usePersistentState(
     `stock-monitor:watchlist:benchmark-v1:${ticker}`,
     '',
     validBenchmarkPreference,
   );
+  const benchmarkPreference = controlledBenchmarkPreference ?? localBenchmarkPreference;
+  const setBenchmarkPreference = useCallback((next: string) => {
+    if (controlledBenchmarkPreference !== undefined && onBenchmarkPreferenceChange) {
+      onBenchmarkPreferenceChange(ticker, next || null);
+    } else {
+      setLocalBenchmarkPreference(next);
+    }
+  }, [controlledBenchmarkPreference, onBenchmarkPreferenceChange, setLocalBenchmarkPreference, ticker]);
   const [benchmarkInput, setBenchmarkInput] = useState(benchmarkPreference);
   const [benchmarkLoading, setBenchmarkLoading] = useState(false);
   const [benchmarkError, setBenchmarkError] = useState<WatchlistBenchmarkIssue | 'unavailable' | null>(null);
@@ -167,7 +184,7 @@ export function WatchlistQuickView({
         <div className="p-4 sm:p-5">
           {activeTab === 'overview' && (
             <div id={`watchlist-panel-${ticker}-overview`} role="tabpanel" aria-labelledby={`watchlist-tab-${ticker}-overview`}>
-              <section className="mb-6"><KlineChart ticker={ticker} /></section>
+              <section className="mb-6"><KlineChart ticker={ticker} preferences={chartPreferences} onPreferencesChange={onChartPreferencesChange} /></section>
               <section aria-label={t('metrics')}>
                 <div className="mb-2 text-[11px] font-semibold text-text-dim">{t('metrics')}</div>
                 <div className="grid grid-cols-2 gap-x-4 sm:grid-cols-4">
