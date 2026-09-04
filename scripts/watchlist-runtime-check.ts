@@ -7,7 +7,9 @@ interface Probe {
 }
 
 const probes: Probe[] = [
-  { path: '/watchlist', expected: [200, 307], label: 'Watchlist page' },
+  // Depending on the deployment's auth middleware, an anonymous request may
+  // redirect to login or receive a direct 401. Both prove the page is installed.
+  { path: '/watchlist', expected: [200, 307, 401], label: 'Watchlist page' },
   // No Authorization header is intentional: an installed route must reject
   // the request without executing the job. A 404 means the deployment is
   // older than the current main branch.
