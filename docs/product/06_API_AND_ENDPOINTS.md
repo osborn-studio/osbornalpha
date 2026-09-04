@@ -37,12 +37,13 @@
 
 ---
 
-## 3. Financials（财务 / 股东，A 股）
+## 3. Financials（财务 / 股东）
 
 ### `GET /api/financials/[ticker]`
-- 路径参数：`ticker`（仅 A 股）。鉴权：无。
-- 数据源：Tushare `income`/`balance`/`cashflow`（各 5 期）+ `fina_indicator`。
-- 响应：`{ source('tushare'|'unsupported'|'no-token'|'error'), ticker, yearly: Array<{year, revenue_yi, total_revenue_yi, net_income_yi, eps_basic, total_assets_yi, total_liab_yi, equity_yi, op_cashflow_yi, free_cashflow_yi}>, latest_indicator: {end_date, roe, gross_margin, net_margin, current_ratio} }`。
+- 路径参数：`ticker`。鉴权：无。
+- 数据源：A 股使用 Tushare `income`/`balance`/`cashflow` + `fina_indicator`；美股使用 SEC EDGAR Company Facts。其他市场通过统一 Provider registry 返回显式 unsupported，不伪造数据。
+- 响应：`{ source, ticker, yearly[], quarterly[], ttm, latest_indicator, meta }`。期间行统一使用 `revenue/totalRevenue/netIncome/epsBasic/totalAssets/totalLiabilities/equity/operatingCashflow/freeCashflow`；金额显示口径由 `meta.currency/unit/unitScale` 声明。
+- `meta` 包含 `supported/availability/reportingFrequency/coverage/warnings`，部分来源失败或缺项不会按零处理。SEC 请求使用可配置 `SEC_USER_AGENT`，ticker→CIK 缓存 24 小时，Company Facts 缓存 6 小时。
 - 缓存：`revalidate=3600`，`force-dynamic`。
 
 ### `GET /api/holders/[ticker]`
@@ -207,7 +208,7 @@
 | `/api/quote/[ticker]` | GET | 无 | 东财→新浪→腾讯→Tushare | 30s |
 | `/api/quote/batch` | GET | 无 | 同上 | 30s |
 | `/api/kline/[ticker]` | GET | 无 | 东财 | 300s |
-| `/api/financials/[ticker]` | GET | 无 | Tushare | 3600s |
+| `/api/financials/[ticker]` | GET | 无 | Tushare / SEC Company Facts | 3600s；SEC 上游 6h |
 | `/api/holders/[ticker]` | GET | 无 | Tushare | 86400s |
 | `/api/radar/[ticker]` | GET | 无 | quote+Tushare+flows+信号 | 1800s |
 | `/api/radar/batch` | GET | 无 | 并发 radar | 1800s |

@@ -385,6 +385,7 @@
         "empty": "No financial periods available",
         "meta": "Source {source} · unit {unit} · latest period {period}",
         "unitCny100m": "CNY 100m",
+        "unitUsdMillion": "USD millions",
         "periodMode": "Financial period type",
         "quarterly": "Quarterly",
         "annual": "Annual",

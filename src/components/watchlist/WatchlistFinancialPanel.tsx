@@ -81,12 +81,14 @@ export function WatchlistFinancialPanel({ ticker }: { ticker: string }) {
   const previous = rows.at(-2) ?? null;
   const useTtm = effectiveMode === 'quarterly' && financials.ttm != null;
   const summary = useTtm ? {
-    revenue: financials.ttm!.revenue_yi,
-    netIncome: financials.ttm!.net_income_yi,
-    eps: financials.ttm!.eps_basic,
-    freeCashflow: financials.ttm!.free_cashflow_yi,
+    revenue: financials.ttm!.revenue,
+    netIncome: financials.ttm!.netIncome,
+    eps: financials.ttm!.epsBasic,
+    freeCashflow: financials.ttm!.freeCashflow,
   } : latest;
-  const unit = financials.meta?.unit === 'CNY_100M' ? t('unitCny100m') : financials.meta?.currency ?? '';
+  const unit = financials.meta?.unit === 'CNY_100M'
+    ? t('unitCny100m')
+    : financials.meta?.unit === 'USD_MILLION' ? t('unitUsdMillion') : financials.meta?.currency ?? '';
 
   if (financials.loading) {
     return <div className="space-y-3" role="status" aria-label={t('loading')}><div className="h-20 animate-pulse rounded bg-bg-elevated" /><div className="h-40 animate-pulse rounded bg-bg-elevated" /></div>;

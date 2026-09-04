@@ -385,6 +385,7 @@
         "empty": "暂无可展示的财务期间",
         "meta": "来源 {source} · 单位 {unit} · 最新期间 {period}",
         "unitCny100m": "人民币亿元",
+        "unitUsdMillion": "百万美元",
         "periodMode": "财务期间类型",
         "quarterly": "季度",
         "annual": "年度",

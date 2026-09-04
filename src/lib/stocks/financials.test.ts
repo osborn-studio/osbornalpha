@@ -14,10 +14,10 @@ describe('buildFinancialReport', () => {
     expect(report.yearly).toEqual([expect.objectContaining({
       year: 2025,
       periodEnd: '20251231',
-      revenue_yi: 20,
-      net_income_yi: 8,
-      total_assets_yi: 50,
-      op_cashflow_yi: null,
+      revenue: 20,
+      netIncome: 8,
+      totalAssets: 50,
+      operatingCashflow: null,
     })]);
     expect(report.meta).toMatchObject({
       currency: 'CNY', unit: 'CNY_100M', unitScale: 1e8,
@@ -57,11 +57,11 @@ describe('buildFinancialReport', () => {
       indicator: null,
     });
 
-    expect(report.quarterly.map((row) => row.revenue_yi)).toEqual([100, 120, 140, 140]);
-    expect(report.quarterly.map((row) => row.net_income_yi)).toEqual([10, 15, 17, 18]);
+    expect(report.quarterly.map((row) => row.revenue)).toEqual([100, 120, 140, 140]);
+    expect(report.quarterly.map((row) => row.netIncome)).toEqual([10, 15, 17, 18]);
     expect(report.ttm).toMatchObject({
-      periodEnd: '20251231', revenue_yi: 500, net_income_yi: 60,
-      op_cashflow_yi: 48, free_cashflow_yi: 36, quarterCount: 4,
+      periodEnd: '20251231', revenue: 500, netIncome: 60,
+      operatingCashflow: 48, freeCashflow: 36, quarterCount: 4,
     });
     expect(report.meta).toMatchObject({
       reportingFrequency: 'quarterly', availablePeriods: 1,
@@ -77,7 +77,7 @@ describe('buildFinancialReport', () => {
       ],
       balance: [], cashflow: [], indicator: null,
     });
-    expect(report.quarterly[1]).toMatchObject({ quarter: 'Q3', revenue_yi: null, net_income_yi: null });
+    expect(report.quarterly[1]).toMatchObject({ quarter: 'Q3', revenue: null, netIncome: null });
     expect(report.ttm).toBeNull();
     expect(report.meta.warnings).toContain('quarterly_history_incomplete');
   });

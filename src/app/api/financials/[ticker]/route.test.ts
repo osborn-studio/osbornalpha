@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   balance: vi.fn(),
   cashflow: vi.fn(),
   indicator: vi.fn(),
+  secLoad: vi.fn(),
 }));
 
 vi.mock('@/lib/data/sources/tushare-cached', () => ({
@@ -14,6 +15,14 @@ vi.mock('@/lib/data/sources/tushare-cached', () => ({
   fetchTushareBalancePeriods: mocks.balance,
   fetchTushareCashflowPeriods: mocks.cashflow,
   fetchTushareFinaIndicator: mocks.indicator,
+}));
+
+vi.mock('@/lib/financials/providers/sec-company-facts', () => ({
+  secCompanyFactsProvider: {
+    id: 'sec-companyfacts',
+    supports: (market: string) => market === 'US',
+    load: mocks.secLoad,
+  },
 }));
 
 import { GET } from './route';
@@ -29,6 +38,15 @@ describe('GET /api/financials/[ticker]', () => {
     mocks.balance.mockResolvedValue([]);
     mocks.cashflow.mockResolvedValue([]);
     mocks.indicator.mockResolvedValue(null);
+    mocks.secLoad.mockResolvedValue({
+      source: 'sec-companyfacts', ticker: 'AAPL', yearly: [], quarterly: [], ttm: null, latestIndicator: null,
+      meta: {
+        source: 'sec-companyfacts', market: 'US', supported: true, availability: 'unavailable',
+        currency: 'USD', unit: 'USD_MILLION', unitScale: 1e6, reportingFrequency: 'quarterly',
+        latestPeriodEnd: null, availablePeriods: 0, availableQuarterlyPeriods: 0, ttmAvailable: false,
+        coverage: { income: 0, balance: 0, cashflow: 0, indicator: false }, warnings: ['no_facts'],
+      },
+    });
   });
 
   it('returns period-derived quarterly rows while preserving the annual response field', async () => {
@@ -40,23 +58,32 @@ describe('GET /api/financials/[ticker]', () => {
     expect(mocks.income).toHaveBeenCalledWith('600519.SH', 20);
     expect(body.yearly).toEqual([]);
     expect(body.quarterly).toEqual([
-      expect.objectContaining({ quarter: 'Q1', revenue_yi: 10, net_income_yi: 2 }),
-      expect.objectContaining({ quarter: 'Q2', revenue_yi: 15, net_income_yi: 3 }),
+      expect.objectContaining({ quarter: 'Q1', revenue: 10, netIncome: 2 }),
+      expect.objectContaining({ quarter: 'Q2', revenue: 15, netIncome: 3 }),
     ]);
     expect(body.ttm).toBeNull();
     expect(body.meta).toMatchObject({ reportingFrequency: 'quarterly', availableQuarterlyPeriods: 2, ttmAvailable: false });
   });
 
-  it('returns an explicit unsupported contract for non-A-share tickers', async () => {
+  it('routes US tickers to SEC Company Facts', async () => {
     const response = await GET(new Request('https://example.test/api/financials/AAPL'), {
       params: Promise.resolve({ ticker: 'AAPL' }),
     });
     const body = await response.json();
     expect(response.status).toBe(200);
     expect(body).toMatchObject({
-      source: 'unsupported', ticker: 'AAPL', yearly: [], quarterly: [], ttm: null,
-      meta: { supported: false, reportingFrequency: 'unsupported', availableQuarterlyPeriods: 0, ttmAvailable: false },
+      source: 'sec-companyfacts', ticker: 'AAPL', yearly: [], quarterly: [], ttm: null,
+      meta: { supported: true, market: 'US', reportingFrequency: 'quarterly' },
     });
+    expect(mocks.secLoad).toHaveBeenCalledWith('AAPL');
     expect(mocks.income).not.toHaveBeenCalled();
+  });
+
+  it('returns an explicit unsupported contract when no provider owns the market', async () => {
+    const response = await GET(new Request('https://example.test/api/financials/0700.HK'), {
+      params: Promise.resolve({ ticker: '0700.HK' }),
+    });
+    const body = await response.json();
+    expect(body).toMatchObject({ source: 'unsupported', ticker: '0700.HK', meta: { supported: false, market: 'HK' } });
   });
 });

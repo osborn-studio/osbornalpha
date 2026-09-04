@@ -40,6 +40,7 @@ vercel --prod --yes                  # 直接发 Production
 | `LLM_USD_CNY_MICROS` | ✅ | 经评审的 USD/CNY 微单位值，当前 `7200000` |
 | `LLM_RESERVATION_TTL_SECONDS` | ✅ | 成本预留 TTL，当前 `300` |
 | `TUSHARE_TOKEN` | 数据 | A 股深度数据 |
+| `SEC_USER_AGENT` | 可选 | SEC EDGAR 请求联系标识；建议设置为 `产品名/版本 运维邮箱` |
 | `CRON_SECRET` | 建议 | `/api/cron/*` 的 Bearer 鉴权 |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | 通知 | 简报/告警推送 |
 | `RESEND_API_KEY` / `EMAIL_FROM` / `EMAIL_TO` | 通知 | 邮件简报/告警 |

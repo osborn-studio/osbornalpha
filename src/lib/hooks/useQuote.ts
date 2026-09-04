@@ -5,6 +5,13 @@ import type { QuotaNoticeProps } from '@/components/QuotaNotice';
 import type { Market } from '@/lib/supabase/database.types';
 import { klineBarLimit, type KlineBar, type KlineMeta, type KlineRange } from '@/lib/chart/kline';
 import { trackEvent } from '@/lib/analytics/client';
+import { isFinancialMeta, isFinancialQuarterRow, isFinancialTtmRow, isFinancialYearRow } from '@/lib/financials/contract';
+import type {
+  FinancialMeta,
+  FinancialQuarterRow,
+  FinancialTtmRow,
+  FinancialYearRow,
+} from '@/lib/financials/types';
 import {
   classifyQuoteBatchOutcome,
   chunkQuoteTickers,
@@ -340,48 +347,10 @@ export function useBatchQuotes(
 }
 
 // ─── Financials ───
-export interface YearlyFinancial {
-  year: number;
-  periodEnd?: string;
-  revenue_yi: number | null;
-  total_revenue_yi: number | null;
-  net_income_yi: number | null;
-  eps_basic: number | null;
-  total_assets_yi: number | null;
-  total_liab_yi: number | null;
-  equity_yi: number | null;
-  op_cashflow_yi: number | null;
-  free_cashflow_yi: number | null;
-}
-export interface QuarterlyFinancial extends Omit<YearlyFinancial, 'year'> {
-  fiscalYear: number;
-  quarter: 'Q1' | 'Q2' | 'Q3' | 'Q4';
-}
-export interface TtmFinancial {
-  periodEnd: string;
-  revenue_yi: number | null;
-  total_revenue_yi: number | null;
-  net_income_yi: number | null;
-  eps_basic: number | null;
-  op_cashflow_yi: number | null;
-  free_cashflow_yi: number | null;
-  quarterCount: 4;
-}
-export interface FinancialMeta {
-  source: string;
-  market?: string;
-  supported?: boolean;
-  currency: string;
-  unit: string;
-  unitScale: number;
-  reportingFrequency: 'annual' | 'quarterly' | 'unsupported';
-  latestPeriodEnd: string | null;
-  availablePeriods: number;
-  availableQuarterlyPeriods?: number;
-  ttmAvailable?: boolean;
-  coverage: { income: number; balance: number; cashflow: number; indicator: boolean };
-  warnings: string[];
-}
+export type YearlyFinancial = FinancialYearRow;
+export type QuarterlyFinancial = FinancialQuarterRow;
+export type TtmFinancial = FinancialTtmRow;
+export type { FinancialMeta };
 export interface FinancialState {
   yearly: YearlyFinancial[];
   quarterly: QuarterlyFinancial[];
@@ -391,58 +360,6 @@ export interface FinancialState {
   meta: FinancialMeta | null;
   loading: boolean;
   error: string | null;
-}
-
-const FINANCIAL_METRICS = ['revenue_yi', 'total_revenue_yi', 'net_income_yi', 'eps_basic', 'total_assets_yi', 'total_liab_yi', 'equity_yi', 'op_cashflow_yi', 'free_cashflow_yi'] as const;
-
-function hasNullableFinancialMetrics(row: Record<string, unknown>, keys: readonly string[]): boolean {
-  return keys.every((key) => row[key] === null || (typeof row[key] === 'number' && Number.isFinite(row[key])));
-}
-
-function isFinancialRow(value: unknown): value is YearlyFinancial {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const row = value as Record<string, unknown>;
-  return Number.isInteger(row.year)
-    && typeof row.periodEnd === 'string'
-    && hasNullableFinancialMetrics(row, FINANCIAL_METRICS);
-}
-
-function isFinancialQuarter(value: unknown): value is QuarterlyFinancial {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const row = value as Record<string, unknown>;
-  return Number.isInteger(row.fiscalYear)
-    && ['Q1', 'Q2', 'Q3', 'Q4'].includes(String(row.quarter))
-    && typeof row.periodEnd === 'string'
-    && hasNullableFinancialMetrics(row, FINANCIAL_METRICS);
-}
-
-function isFinancialTtm(value: unknown): value is TtmFinancial {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const row = value as Record<string, unknown>;
-  return typeof row.periodEnd === 'string'
-    && row.quarterCount === 4
-    && hasNullableFinancialMetrics(row, ['revenue_yi', 'total_revenue_yi', 'net_income_yi', 'eps_basic', 'op_cashflow_yi', 'free_cashflow_yi']);
-}
-
-function isFinancialMeta(value: unknown): value is FinancialMeta {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const meta = value as Record<string, unknown>;
-  const coverage = meta.coverage;
-  return typeof meta.source === 'string'
-    && (meta.market === undefined || typeof meta.market === 'string')
-    && (meta.supported === undefined || typeof meta.supported === 'boolean')
-    && typeof meta.currency === 'string'
-    && typeof meta.unit === 'string'
-    && typeof meta.unitScale === 'number' && Number.isFinite(meta.unitScale)
-    && (meta.reportingFrequency === 'annual' || meta.reportingFrequency === 'quarterly' || meta.reportingFrequency === 'unsupported')
-    && (meta.latestPeriodEnd === null || typeof meta.latestPeriodEnd === 'string')
-    && Number.isSafeInteger(meta.availablePeriods) && Number(meta.availablePeriods) >= 0
-    && (meta.availableQuarterlyPeriods === undefined || (Number.isSafeInteger(meta.availableQuarterlyPeriods) && Number(meta.availableQuarterlyPeriods) >= 0))
-    && (meta.ttmAvailable === undefined || typeof meta.ttmAvailable === 'boolean')
-    && !!coverage && typeof coverage === 'object' && !Array.isArray(coverage)
-    && ['income', 'balance', 'cashflow'].every((key) => Number.isSafeInteger((coverage as Record<string, unknown>)[key]) && Number((coverage as Record<string, unknown>)[key]) >= 0)
-    && typeof (coverage as Record<string, unknown>).indicator === 'boolean'
-    && Array.isArray(meta.warnings) && meta.warnings.every((warning) => typeof warning === 'string');
 }
 
 export function useFinancials(ticker: string | null): FinancialState {
@@ -460,9 +377,9 @@ export function useFinancials(ticker: string | null): FinancialState {
         const data = await response.json().catch(() => null);
         const quarterly = data?.quarterly ?? [];
         const ttm = data?.ttm ?? null;
-        if (!response.ok || !data || !Array.isArray(data.yearly) || !data.yearly.every(isFinancialRow)
-          || !Array.isArray(quarterly) || !quarterly.every(isFinancialQuarter)
-          || (ttm !== null && !isFinancialTtm(ttm))) {
+        if (!response.ok || !data || !Array.isArray(data.yearly) || !data.yearly.every(isFinancialYearRow)
+          || !Array.isArray(quarterly) || !quarterly.every(isFinancialQuarterRow)
+          || (ttm !== null && !isFinancialTtmRow(ttm))) {
           throw new Error(data?.error || 'financials_unavailable');
         }
         return { ...data, quarterly, ttm };

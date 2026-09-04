@@ -4,69 +4,18 @@ import type {
   TushareIncome,
   TushareIndicator,
 } from '@/lib/data/sources/tushare';
+import { reportAvailability } from '@/lib/financials/report';
+import type {
+  FinancialQuarter,
+  FinancialQuarterRow,
+  FinancialReport,
+  FinancialTtmRow,
+  FinancialYearRow,
+} from '@/lib/financials/types';
 
 export const FINANCIAL_UNIT_SCALE = 1e8;
 export const FINANCIAL_CURRENCY = 'CNY';
 export const FINANCIAL_UNIT = 'CNY_100M';
-
-export interface FinancialYearRow {
-  year: number;
-  periodEnd: string;
-  revenue_yi: number | null;
-  total_revenue_yi: number | null;
-  net_income_yi: number | null;
-  eps_basic: number | null;
-  total_assets_yi: number | null;
-  total_liab_yi: number | null;
-  equity_yi: number | null;
-  op_cashflow_yi: number | null;
-  free_cashflow_yi: number | null;
-}
-
-export type FinancialQuarter = 'Q1' | 'Q2' | 'Q3' | 'Q4';
-
-export interface FinancialQuarterRow extends Omit<FinancialYearRow, 'year'> {
-  fiscalYear: number;
-  quarter: FinancialQuarter;
-}
-
-export interface FinancialTtmRow {
-  periodEnd: string;
-  revenue_yi: number | null;
-  total_revenue_yi: number | null;
-  net_income_yi: number | null;
-  eps_basic: number | null;
-  op_cashflow_yi: number | null;
-  free_cashflow_yi: number | null;
-  quarterCount: 4;
-}
-
-export interface FinancialReport {
-  yearly: FinancialYearRow[];
-  quarterly: FinancialQuarterRow[];
-  ttm: FinancialTtmRow | null;
-  latestIndicator: TushareIndicator | null;
-  meta: {
-    source: 'tushare';
-    market: 'A';
-    supported: true;
-    currency: typeof FINANCIAL_CURRENCY;
-    unit: typeof FINANCIAL_UNIT;
-    unitScale: number;
-    reportingFrequency: 'quarterly';
-    latestPeriodEnd: string | null;
-    availablePeriods: number;
-    availableQuarterlyPeriods: number;
-    ttmAvailable: boolean;
-    coverage: {
-      income: number;
-      balance: number;
-      cashflow: number;
-      indicator: boolean;
-    };
-    warnings: string[];
-  };
-}
 
 function annualPeriod(value: string | null | undefined): boolean {
   return typeof value === 'string' && /^\d{8}$/.test(value) && value.endsWith('1231');
@@ -108,6 +57,7 @@ function byPeriod<T extends { end_date: string }>(rows: T[]): Map<string, T> {
 }
 
 export function buildFinancialReport(input: {
+  ticker?: string;
   income: TushareIncome[];
   balance: TushareBalance[];
   cashflow: TushareCashflow[];
@@ -136,15 +86,15 @@ export function buildFinancialReport(input: {
     return {
       year: Number(periodEnd.slice(0, 4)),
       periodEnd,
-      revenue_yi: scaled(i?.revenue),
-      total_revenue_yi: scaled(i?.total_revenue),
-      net_income_yi: scaled(i?.n_income),
-      eps_basic: finiteOrNull(i?.basic_eps),
-      total_assets_yi: scaled(b?.total_assets),
-      total_liab_yi: scaled(b?.total_liab),
-      equity_yi: scaled(b?.total_hldr_eqy_inc_min_int),
-      op_cashflow_yi: scaled(c?.n_cashflow_act),
-      free_cashflow_yi: scaled(c?.free_cashflow),
+      revenue: scaled(i?.revenue),
+      totalRevenue: scaled(i?.total_revenue),
+      netIncome: scaled(i?.n_income),
+      epsBasic: finiteOrNull(i?.basic_eps),
+      totalAssets: scaled(b?.total_assets),
+      totalLiabilities: scaled(b?.total_liab),
+      equity: scaled(b?.total_hldr_eqy_inc_min_int),
+      operatingCashflow: scaled(c?.n_cashflow_act),
+      freeCashflow: scaled(c?.free_cashflow),
     } satisfies FinancialYearRow;
   });
 
@@ -169,15 +119,15 @@ export function buildFinancialReport(input: {
       fiscalYear,
       quarter,
       periodEnd,
-      revenue_yi: scaled(discrete(currentIncome?.revenue, previousIncome?.revenue, quarter)),
-      total_revenue_yi: scaled(discrete(currentIncome?.total_revenue, previousIncome?.total_revenue, quarter)),
-      net_income_yi: scaled(discrete(currentIncome?.n_income, previousIncome?.n_income, quarter)),
-      eps_basic: discrete(currentIncome?.basic_eps, previousIncome?.basic_eps, quarter),
-      total_assets_yi: scaled(currentBalance?.total_assets),
-      total_liab_yi: scaled(currentBalance?.total_liab),
-      equity_yi: scaled(currentBalance?.total_hldr_eqy_inc_min_int),
-      op_cashflow_yi: scaled(discrete(currentCashflow?.n_cashflow_act, previousCashflow?.n_cashflow_act, quarter)),
-      free_cashflow_yi: scaled(discrete(currentCashflow?.free_cashflow, previousCashflow?.free_cashflow, quarter)),
+      revenue: scaled(discrete(currentIncome?.revenue, previousIncome?.revenue, quarter)),
+      totalRevenue: scaled(discrete(currentIncome?.total_revenue, previousIncome?.total_revenue, quarter)),
+      netIncome: scaled(discrete(currentIncome?.n_income, previousIncome?.n_income, quarter)),
+      epsBasic: discrete(currentIncome?.basic_eps, previousIncome?.basic_eps, quarter),
+      totalAssets: scaled(currentBalance?.total_assets),
+      totalLiabilities: scaled(currentBalance?.total_liab),
+      equity: scaled(currentBalance?.total_hldr_eqy_inc_min_int),
+      operatingCashflow: scaled(discrete(currentCashflow?.n_cashflow_act, previousCashflow?.n_cashflow_act, quarter)),
+      freeCashflow: scaled(discrete(currentCashflow?.free_cashflow, previousCashflow?.free_cashflow, quarter)),
     } satisfies FinancialQuarterRow;
   });
 
@@ -185,14 +135,14 @@ export function buildFinancialReport(input: {
   const consecutive = latestFour.length === 4 && latestFour.every((row, index) => index === 0
     || row.fiscalYear * 4 + QUARTER_INDEX[row.quarter]
       === latestFour[index - 1].fiscalYear * 4 + QUARTER_INDEX[latestFour[index - 1].quarter] + 1);
-  const ttm = consecutive ? {
+  const ttm: FinancialTtmRow | null = consecutive ? {
     periodEnd: latestFour.at(-1)!.periodEnd,
-    revenue_yi: sumFinite(latestFour.map((row) => row.revenue_yi)),
-    total_revenue_yi: sumFinite(latestFour.map((row) => row.total_revenue_yi)),
-    net_income_yi: sumFinite(latestFour.map((row) => row.net_income_yi)),
-    eps_basic: sumFinite(latestFour.map((row) => row.eps_basic)),
-    op_cashflow_yi: sumFinite(latestFour.map((row) => row.op_cashflow_yi)),
-    free_cashflow_yi: sumFinite(latestFour.map((row) => row.free_cashflow_yi)),
+    revenue: sumFinite(latestFour.map((row) => row.revenue)),
+    totalRevenue: sumFinite(latestFour.map((row) => row.totalRevenue)),
+    netIncome: sumFinite(latestFour.map((row) => row.netIncome)),
+    epsBasic: sumFinite(latestFour.map((row) => row.epsBasic)),
+    operatingCashflow: sumFinite(latestFour.map((row) => row.operatingCashflow)),
+    freeCashflow: sumFinite(latestFour.map((row) => row.freeCashflow)),
     quarterCount: 4 as const,
   } : null;
   const hasInterimPeriods = quarterly.some((row) => row.quarter !== 'Q4');
@@ -201,15 +151,25 @@ export function buildFinancialReport(input: {
     ...(hasInterimPeriods && !consecutive ? ['quarterly_history_incomplete'] : []),
   ])];
 
-  return {
+  const latestIndicator = input.indicator ? {
+    periodEnd: input.indicator.end_date,
+    roe: finiteOrNull(input.indicator.roe),
+    grossMargin: finiteOrNull(input.indicator.grossprofit_margin),
+    netMargin: finiteOrNull(input.indicator.netprofit_margin),
+    currentRatio: finiteOrNull(input.indicator.current_ratio),
+  } : null;
+  const report: FinancialReport = {
+    source: 'tushare',
+    ticker: input.ticker ?? input.income[0]?.ts_code ?? input.balance[0]?.ts_code ?? input.cashflow[0]?.ts_code ?? '',
     yearly,
     quarterly,
     ttm,
-    latestIndicator: input.indicator,
+    latestIndicator,
     meta: {
       source: 'tushare',
       market: 'A',
       supported: true,
+      availability: 'available',
       currency: FINANCIAL_CURRENCY,
       unit: FINANCIAL_UNIT,
       unitScale: FINANCIAL_UNIT_SCALE,
@@ -227,4 +187,6 @@ export function buildFinancialReport(input: {
       warnings,
     },
   };
+  report.meta.availability = reportAvailability(report);
+  return report;
 }

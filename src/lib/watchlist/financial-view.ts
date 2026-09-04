@@ -1,4 +1,4 @@
-import type { QuarterlyFinancial, YearlyFinancial } from '@/lib/hooks/useQuote';
+import type { FinancialQuarterRow, FinancialYearRow } from '@/lib/financials/types';
 
 export type FinancialViewMode = 'quarterly' | 'annual';
 
@@ -22,25 +22,25 @@ export function financialGrowthPct(current: number | null, previous: number | nu
 }
 
 function mapFinancialRow(
-  row: YearlyFinancial | QuarterlyFinancial,
+  row: FinancialYearRow | FinancialQuarterRow,
   label: string,
 ): FinancialViewRow {
   return {
     key: row.periodEnd ?? label,
     label,
     periodEnd: row.periodEnd ?? '',
-    revenue: row.revenue_yi,
-    netIncome: row.net_income_yi,
-    eps: row.eps_basic,
-    operatingCashflow: row.op_cashflow_yi,
-    freeCashflow: row.free_cashflow_yi,
-    totalAssets: row.total_assets_yi,
+    revenue: row.revenue,
+    netIncome: row.netIncome,
+    eps: row.epsBasic,
+    operatingCashflow: row.operatingCashflow,
+    freeCashflow: row.freeCashflow,
+    totalAssets: row.totalAssets,
   };
 }
 
 export function buildFinancialViewRows(
-  yearly: YearlyFinancial[],
-  quarterly: QuarterlyFinancial[],
+  yearly: FinancialYearRow[],
+  quarterly: FinancialQuarterRow[],
   mode: FinancialViewMode,
   limit = 8,
 ): FinancialViewRow[] {

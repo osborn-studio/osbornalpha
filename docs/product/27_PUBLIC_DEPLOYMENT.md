@@ -23,6 +23,7 @@ LLM_PROVIDER=deepseek                          # 生产显式 pin
 LLM_MODEL=deepseek-v4-flash                    # 已复核定价模型
 DEEPSEEK_API_KEY=...                            # 仅部署 secret
 TUSHARE_TOKEN=...                               # 数据
+SEC_USER_AGENT=OsbornAlpha/1.0 ops@example.com  # SEC EDGAR 联系标识
 CRON_SECRET=...                                 # cron 鉴权（建议）
 # 通知（可选）：TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID / RESEND_API_KEY / EMAIL_FROM / EMAIL_TO
 ```

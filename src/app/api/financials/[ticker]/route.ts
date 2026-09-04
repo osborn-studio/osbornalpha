@@ -1,13 +1,5 @@
 import { NextResponse } from 'next/server';
-import {
-  isTushareConfigured,
-  fetchTushareIncomePeriods,
-  fetchTushareBalancePeriods,
-  fetchTushareCashflowPeriods,
-  fetchTushareFinaIndicator,
-} from '@/lib/data/sources/tushare-cached';
-import { buildFinancialReport } from '@/lib/stocks/financials';
-import { classifyMarket, currencyOfMarket } from '@/lib/utils';
+import { loadFinancialReport } from '@/lib/financials/service';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 3600;  // 1h cache
@@ -16,96 +8,26 @@ interface Ctx { params: Promise<{ ticker: string }> }
 
 export async function GET(_req: Request, { params }: Ctx) {
   const { ticker: raw } = await params;
-  const ticker = decodeURIComponent(raw);
-  const market = classifyMarket(ticker);
-
-  if (!/\.(SH|SZ|BJ)$/i.test(ticker)) {
-    return NextResponse.json(
-      {
-        source: 'unsupported',
-        ticker,
-        yearly: [],
-        quarterly: [],
-        ttm: null,
-        latest_indicator: null,
-        error: 'Tushare financials only support A-share',
-        meta: {
-          source: 'unsupported',
-          market,
-          supported: false,
-          currency: currencyOfMarket(market),
-          unit: 'native',
-          unitScale: 1,
-          reportingFrequency: 'unsupported',
-          latestPeriodEnd: null,
-          availablePeriods: 0,
-          availableQuarterlyPeriods: 0,
-          ttmAvailable: false,
-          coverage: { income: 0, balance: 0, cashflow: 0, indicator: false },
-          warnings: ['financials_market_unsupported'],
-        },
-      },
-      { status: 200 }
-    );
-  }
-
-  if (!isTushareConfigured()) {
-    return NextResponse.json(
-      {
-        source: 'no-token',
-        ticker,
-        yearly: [],
-        quarterly: [],
-        ttm: null,
-        latest_indicator: null,
-        error: 'TUSHARE_TOKEN not configured',
-        meta: {
-          source: 'tushare',
-          market: 'A',
-          supported: true,
-          currency: 'CNY',
-          unit: 'CNY_100M',
-          unitScale: 1e8,
-          reportingFrequency: 'quarterly',
-          latestPeriodEnd: null,
-          availablePeriods: 0,
-          availableQuarterlyPeriods: 0,
-          ttmAvailable: false,
-          coverage: { income: 0, balance: 0, cashflow: 0, indicator: false },
-          warnings: ['tushare_token_missing'],
-        },
-      },
-      { status: 200 }
-    );
+  const ticker = decodeURIComponent(raw).trim();
+  if (!ticker || ticker.length > 32) {
+    return NextResponse.json({ error: 'invalid_ticker' }, { status: 400 });
   }
 
   try {
-    const results = await Promise.allSettled([
-      fetchTushareIncomePeriods(ticker, 20),
-      fetchTushareBalancePeriods(ticker, 20),
-      fetchTushareCashflowPeriods(ticker, 20),
-      fetchTushareFinaIndicator(ticker),
-    ]);
-    const income = results[0].status === 'fulfilled' ? results[0].value : [];
-    const balance = results[1].status === 'fulfilled' ? results[1].value : [];
-    const cashflow = results[2].status === 'fulfilled' ? results[2].value : [];
-    const indicator = results[3].status === 'fulfilled' ? results[3].value : null;
-    const warnings = results.flatMap((result, index) => result.status === 'rejected' ? [`${['income', 'balance', 'cashflow', 'indicator'][index]}_unavailable`] : []);
-    const report = buildFinancialReport({ income, balance, cashflow, indicator, warnings });
-
+    const report = await loadFinancialReport(ticker);
     return NextResponse.json({
-      source: 'tushare',
-      ticker,
+      source: report.source,
+      ticker: report.ticker,
       yearly: report.yearly,
       quarterly: report.quarterly,
       ttm: report.ttm,
       latest_indicator: report.latestIndicator
         ? {
-            end_date: report.latestIndicator.end_date,
+            end_date: report.latestIndicator.periodEnd,
             roe: report.latestIndicator.roe,
-            gross_margin: report.latestIndicator.grossprofit_margin,
-            net_margin: report.latestIndicator.netprofit_margin,
-            current_ratio: report.latestIndicator.current_ratio,
+            gross_margin: report.latestIndicator.grossMargin,
+            net_margin: report.latestIndicator.netMargin,
+            current_ratio: report.latestIndicator.currentRatio,
           }
         : null,
       meta: report.meta,
