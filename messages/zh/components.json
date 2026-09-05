@@ -100,7 +100,9 @@
   "search": {
     "placeholder": "搜索代码或名称（⌘+K · 全 A/H/US · 如 完美世界 / AAPL / 600519）",
     "searching": "搜索中...",
-    "noResults": "没有匹配结果"
+    "noResults": "没有匹配结果",
+    "unavailable": "证券搜索服务暂不可用，请稍后重试。",
+    "failed": "搜索失败，请重试。"
   },
   "market": {
     "A": "A 股",

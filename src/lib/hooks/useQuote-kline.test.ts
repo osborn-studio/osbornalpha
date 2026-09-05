@@ -13,6 +13,7 @@ describe('fetchKlinePayload', () => {
         range: '1y',
         interval: 'day',
         granularity: '1d',
+        rangeBasis: 'calendar-window',
         cacheTtlSeconds: 60,
         currencyCode: 'CNY',
         pricePrecision: 2,
@@ -20,7 +21,8 @@ describe('fetchKlinePayload', () => {
         volumeUnit: 'shares',
         requestedBars: 260,
         returnedBars: 0,
-        missingBars: 260,
+        availableBars: 281,
+        missingBars: 0,
       },
     };
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 }));
@@ -29,6 +31,40 @@ describe('fetchKlinePayload', () => {
 
     await expect(fetchKlinePayload('600519.SH', '1y', controller.signal)).resolves.toEqual(payload);
     expect(fetchMock).toHaveBeenCalledWith('/api/kline/600519.SH?range=1y', { signal: controller.signal });
+  });
+
+  it('appends the adjustment override to the request and requires the echo', async () => {
+    const payload = {
+      bars: [],
+      source: 'eastmoney',
+      meta: {
+        source: 'eastmoney',
+        range: '1y',
+        interval: 'day',
+        granularity: '1d',
+        rangeBasis: 'calendar-window',
+        adjustment: 'hfq',
+        cacheTtlSeconds: 60,
+        currencyCode: 'CNY',
+        pricePrecision: 2,
+        minMove: 0.01,
+        volumeUnit: 'shares',
+        requestedBars: 260,
+        returnedBars: 0,
+        availableBars: 281,
+        missingBars: 0,
+      },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchKlinePayload('600519.SH', '1y', undefined, 'hfq')).resolves.toEqual(payload);
+    expect(fetchMock).toHaveBeenCalledWith('/api/kline/600519.SH?range=1y&adjust=hfq', { signal: undefined });
+
+    // A server that ignored the override must not reach the chart.
+    const mismatch = { ...payload, meta: { ...payload.meta, adjustment: 'qfq' } };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(mismatch), { status: 200 })));
+    await expect(fetchKlinePayload('600519.SH', '1y', undefined, 'hfq')).rejects.toMatchObject({ code: 'invalid_data' });
   });
 
   it('preserves the API error code for localized UI states', async () => {
@@ -41,7 +77,7 @@ describe('fetchKlinePayload', () => {
       bars: [],
       source: 'eastmoney',
       meta: {
-        source: 'eastmoney', range: '3m', interval: 'day', granularity: '1d',
+        source: 'eastmoney', range: '6m', interval: 'day', granularity: '1d',
         cacheTtlSeconds: 300, currencyCode: 'USD', pricePrecision: 2, minMove: 0.01,
         volumeUnit: 'shares', requestedBars: 66, returnedBars: 0, missingBars: 66,
       },
@@ -85,7 +121,7 @@ describe('fetchKlinePayload', () => {
       init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
     })));
     const controller = new AbortController();
-    const pending = fetchKlinePayload('NVDA', '3m', controller.signal);
+    const pending = fetchKlinePayload('NVDA', '6m', controller.signal);
     controller.abort();
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
   });

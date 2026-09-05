@@ -12,17 +12,21 @@ test('ticker chart requests the selected business range and exposes provenance',
   await page.route('**/api/kline/**', async (route) => {
     const range = new URL(route.request().url()).searchParams.get('range');
     if (range) ranges.push(range);
-    const requestedBars = range === '1d' ? 390 : range === '1m' ? 22 : range === '1y' ? 260 : 66;
+    const interval = range === '1d' || range === '5d' ? 'minute' : range === '5y' ? 'week' : range === 'all' ? 'month' : 'day';
+    const requestedBars = range === '1d' ? 390 : range === '5d' ? 390
+      : range === '1m' ? 32 : range === '6m' ? 140 : range === 'ytd' ? 175 : range === '1y' ? 260
+      : range === '5y' ? 275 : 600;
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
         source: 'eastmoney', bars,
         meta: {
           range,
-          interval: range === '1d' ? 'minute' : 'day',
-          granularity: range === '1d' ? '1m' : '1d',
+          interval,
+          granularity: range === '1d' ? '1m' : range === '5d' ? '5m' : interval === 'day' ? '1d' : interval === 'week' ? '1w' : '1mo',
           source: 'eastmoney',
-          adjustment: range === '1d' ? 'intraday' : 'none',
+          adjustment: interval === 'minute' ? 'intraday' : 'none',
+          rangeBasis: interval === 'minute' ? 'trading-sessions' : 'calendar-window',
           coverageStart: '2026-08-10 09:30:00',
           coverageEnd: '2026-08-10 09:31:00',
           asOf: '2026-08-10 09:31:00',
@@ -36,10 +40,10 @@ test('ticker chart requests the selected business range and exposes provenance',
           pricePrecision: 2,
           minMove: 0.01,
           volumeUnit: 'shares',
-          rangeBasis: 'trading-bars',
           requestedBars,
           returnedBars: bars.length,
-          missingBars: requestedBars - bars.length,
+          availableBars: 40,
+          missingBars: Math.max(0, requestedBars - 40),
           freshness: 'fresh',
           fallbackUsed: false,
           cacheStatus: 'shared-swr',
@@ -90,12 +94,13 @@ test('ticker chart offers an explicit retry after a provider failure', async ({ 
         source: 'eastmoney',
         bars,
         meta: {
-          range: '3m', interval: 'day', granularity: '1d', source: 'eastmoney', adjustment: 'none',
+          range: '1d', interval: 'minute', granularity: '1m', source: 'eastmoney', adjustment: 'intraday',
+          rangeBasis: 'trading-sessions',
           coverageStart: '2026-08-10', coverageEnd: '2026-08-11', asOf: '2026-08-11',
           timezone: 'America/New_York', fetchedAt: '2026-08-11T20:00:00.000Z', delayed: false,
-          cacheTtlSeconds: 300, currency: '$', currencyCode: 'USD', pricePrecision: 2, minMove: 0.01,
-          market: 'US', volumeUnit: 'shares', rangeBasis: 'trading-bars', requestedBars: 66,
-          returnedBars: bars.length, missingBars: 66 - bars.length,
+          cacheTtlSeconds: 60, currency: '$', currencyCode: 'USD', pricePrecision: 2, minMove: 0.01,
+          market: 'US', volumeUnit: 'shares', requestedBars: 390,
+          returnedBars: bars.length, availableBars: 68, missingBars: 0,
           freshness: 'fresh', fallbackUsed: false, cacheStatus: 'none',
           completeness: 'partial', partial: false, warnings: ['partial_coverage'],
         },

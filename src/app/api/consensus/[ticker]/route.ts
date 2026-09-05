@@ -18,8 +18,7 @@ interface Ctx { params: Promise<{ ticker: string }> }
  *      usable reports) → mock broker_reports via deriveTargetPrice /
  *      deriveValuationRange, reshaped to the same { target_median, target_min,
  *      target_max, n } shape so callers don't need to branch on source.
- *      (Consumed by WatchlistTable and the stock detail page, both
- *      fill-only-missing: mock broker_reports keep priority when present.)
+   *      (Consumed by the stock detail page.)
  *   3. No usable data anywhere → { source: 'none', consensus: null }
  */
 export async function GET(_req: Request, { params }: Ctx) {

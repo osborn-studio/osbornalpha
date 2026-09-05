@@ -24,6 +24,18 @@ export interface QuoteBatchPayload<T> {
   };
 }
 
+export interface QuoteBatchMeta {
+  attempted: number;
+  failed: number;
+  stale: number;
+  duration_ms: number;
+  failed_tickers: string[];
+  failed_chunks: number;
+  error_codes: string[];
+  sources: Record<string, Required<SourceStats>>;
+  selected_sources: Record<string, string>;
+}
+
 export function quoteBatchErrorCode(error: unknown): string {
   if (typeof error === 'object' && error && 'name' in error && error.name === 'AbortError') {
     return 'timeout';
@@ -141,7 +153,7 @@ export function mergeQuoteBatchResults<T>(input: {
       error_codes: [...errorCodes],
       sources,
       selected_sources: selectedSources,
-    },
+    } satisfies QuoteBatchMeta,
   };
 }
 

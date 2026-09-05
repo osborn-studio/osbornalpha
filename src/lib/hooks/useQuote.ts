@@ -11,6 +11,7 @@ import {
   mergeQuoteBatchResults,
   shouldRetryQuoteBatchError,
   shouldReportQuoteBatch,
+  type QuoteBatchMeta,
   type QuoteBatchPayload,
 } from '@/lib/quotes/batch-client';
 
@@ -137,7 +138,12 @@ export function useQuote(ticker: string | null, opts?: { refreshIntervalMs?: num
 }
 
 // ─── Batch ───
-interface BatchState { quotes: Record<string, LiveQuote | null>; loading: boolean; loadedAt: number | null }
+interface BatchState {
+  quotes: Record<string, LiveQuote | null>;
+  loading: boolean;
+  loadedAt: number | null;
+  meta: QuoteBatchMeta | null;
+}
 
 const BATCH_REQUEST_TIMEOUT_MS = 25_000;
 const BATCH_RESULT_TTL_MS = 5_000;
@@ -182,7 +188,7 @@ export function useBatchQuotes(
   tickers: string[],
   opts?: { refreshIntervalMs?: number }
 ): BatchState & { refetch: () => void } {
-  const [state, setState] = useState<BatchState>({ quotes: {}, loading: tickers.length > 0, loadedAt: null });
+  const [state, setState] = useState<BatchState>({ quotes: {}, loading: tickers.length > 0, loadedAt: null, meta: null });
   // `bump` lets callers trigger a manual refetch without changing tickers
   const [bump, setBump] = useState(0);
   const key = tickers.slice().sort().join(',');
@@ -194,7 +200,7 @@ export function useBatchQuotes(
   useEffect(() => {
     if (tickers.length === 0) {
       quotesRef.current = {};
-      setState({ quotes: {}, loading: false, loadedAt: null });
+      setState({ quotes: {}, loading: false, loadedAt: null, meta: null });
       return;
     }
     let cancelled = false;
@@ -268,6 +274,7 @@ export function useBatchQuotes(
           quotes: merged.quotes,
           loading: false,
           loadedAt: outcome === 'failed' || outcome === 'suspended' ? prev.loadedAt : Date.now(),
+          meta: merged.meta,
         }));
       } catch {
         if (!cancelled) {
@@ -493,8 +500,21 @@ function isValidKlinePayload(value: unknown): value is KlinePayload {
   if (!Array.isArray(payload.bars) || !payload.meta || typeof payload.meta !== 'object') return false;
   if (typeof payload.source !== 'string' || payload.source !== payload.meta.source) return false;
   if (typeof payload.meta.cacheTtlSeconds !== 'number' || payload.meta.cacheTtlSeconds <= 0) return false;
-  if ((payload.meta.range === '1d' && (payload.meta.interval !== 'minute' || payload.meta.granularity !== '1m'))
-    || (payload.meta.range !== '1d' && (payload.meta.interval !== 'day' || payload.meta.granularity !== '1d'))) return false;
+  // Each range fixes its interval/granularity pair and how the window is cut.
+  const expectedShape: Record<KlineMeta['range'], { interval: KlineMeta['interval']; granularity: KlineMeta['granularity']; rangeBasis: KlineMeta['rangeBasis'] }> = {
+    '1d': { interval: 'minute', granularity: '1m', rangeBasis: 'trading-sessions' },
+    '5d': { interval: 'minute', granularity: '5m', rangeBasis: 'trading-sessions' },
+    '1m': { interval: 'day', granularity: '1d', rangeBasis: 'calendar-window' },
+    '6m': { interval: 'day', granularity: '1d', rangeBasis: 'calendar-window' },
+    ytd: { interval: 'day', granularity: '1d', rangeBasis: 'calendar-window' },
+    '1y': { interval: 'day', granularity: '1d', rangeBasis: 'calendar-window' },
+    '5y': { interval: 'week', granularity: '1w', rangeBasis: 'calendar-window' },
+    all: { interval: 'month', granularity: '1mo', rangeBasis: 'calendar-window' },
+  };
+  const shape = expectedShape[payload.meta.range ?? ''] ?? { interval: null, granularity: null, rangeBasis: null };
+  if (payload.meta.interval !== shape.interval
+    || payload.meta.granularity !== shape.granularity
+    || payload.meta.rangeBasis !== shape.rangeBasis) return false;
   if (payload.meta.volumeUnit !== 'shares'
     || typeof payload.meta.currencyCode !== 'string'
     || !Number.isInteger(payload.meta.pricePrecision)
@@ -505,7 +525,12 @@ function isValidKlinePayload(value: unknown): value is KlinePayload {
     || !Number.isInteger(payload.meta.requestedBars)
     || payload.meta.requestedBars <= 0
     || payload.meta.returnedBars !== payload.bars.length
-    || payload.meta.missingBars !== Math.max(0, payload.meta.requestedBars - payload.bars.length)) return false;
+    || !Number.isInteger(payload.meta.missingBars)
+    || payload.meta.missingBars < 0
+    || !Number.isInteger(payload.meta.availableBars)
+    || payload.meta.availableBars < 0
+    || (payload.meta.maWarmupCloses !== undefined
+      && (!Array.isArray(payload.meta.maWarmupCloses) || payload.meta.maWarmupCloses.some((close) => !Number.isFinite(close))))) return false;
   let previousTime = 0;
   for (let index = 0; index < payload.bars.length; index += 1) {
     const bar = payload.bars[index];
@@ -530,17 +555,23 @@ function isValidKlinePayload(value: unknown): value is KlinePayload {
         || Math.abs(candidate.changePct - expectedChangePct) > 1e-8) return false;
     }
     if (index > 0 && candidate.previousClose !== payload.bars[index - 1].close) return false;
+    if (candidate.amount !== undefined && candidate.amount !== null
+      && (!Number.isFinite(candidate.amount) || candidate.amount < 0)) return false;
     previousTime = candidate.time;
   }
   return true;
 }
 
+export type KlineAdjustmentChoice = 'qfq' | 'hfq' | 'none';
+
 export async function fetchKlinePayload(
   ticker: string,
   range: KlineRange,
   signal?: AbortSignal,
+  adjustment?: KlineAdjustmentChoice,
 ): Promise<KlinePayload> {
-  const response = await fetch(`/api/kline/${encodeURIComponent(ticker)}?range=${range}`, { signal });
+  const query = `range=${range}${adjustment ? `&adjust=${adjustment}` : ''}`;
+  const response = await fetch(`/api/kline/${encodeURIComponent(ticker)}?${query}`, { signal });
   const data = await response.json() as Partial<KlinePayload> & { error?: string; message?: string };
   if (!response.ok) {
     const error = new Error(data.message || data.error || `HTTP ${response.status}`) as Error & { code?: string };
@@ -549,7 +580,9 @@ export async function fetchKlinePayload(
   }
   if (!isValidKlinePayload(data)
     || data.meta.range !== range
-    || data.meta.requestedBars !== klineBarLimit(ticker, range)) {
+    || data.meta.requestedBars !== klineBarLimit(ticker, range)
+    // A requested adjustment must be echoed by the server for daily ranges.
+    || (adjustment && data.meta.interval !== 'minute' && data.meta.adjustment !== adjustment)) {
     const error = new Error('Invalid chart response') as Error & { code?: string };
     error.code = 'invalid_data';
     throw error;
@@ -557,7 +590,11 @@ export async function fetchKlinePayload(
   return data;
 }
 
-export function useKline(ticker: string | null, range: KlineRange = '3m'): KlineState & { refetch: () => void } {
+export function useKline(
+  ticker: string | null,
+  range: KlineRange = '1d',
+  adjustment?: KlineAdjustmentChoice,
+): KlineState & { refetch: () => void } {
   const [state, setState] = useState<KlineState>({ bars: [], loading: !!ticker, error: null, errorCode: null, source: null, meta: null });
   const [refreshToken, setRefreshToken] = useState(0);
   const handledRefreshToken = useRef(0);
@@ -567,7 +604,7 @@ export function useKline(ticker: string | null, range: KlineRange = '3m'): Kline
       setState({ bars: [], loading: false, error: null, errorCode: null, source: null, meta: null });
       return;
     }
-    const key = `${ticker}|${range}`;
+    const key = `${ticker}|${range}|${adjustment ?? ''}`;
     const manual = refreshToken !== handledRefreshToken.current;
     if (manual) handledRefreshToken.current = refreshToken;
     const cached = klineCache.get(key);
@@ -580,7 +617,7 @@ export function useKline(ticker: string | null, range: KlineRange = '3m'): Kline
     // Do not show bars from the previous range while this range is loading.
     setState({ bars: [], loading: true, error: null, errorCode: null, source: null, meta: null });
 
-    fetchKlinePayload(ticker, range, controller.signal)
+    fetchKlinePayload(ticker, range, controller.signal, adjustment)
       .then((data) => {
         if (cancelled) return;
         const next: KlineState = { bars: data.bars || [], loading: false, error: null, errorCode: null, source: data.source || null, meta: data.meta || null };
@@ -608,7 +645,7 @@ export function useKline(ticker: string | null, range: KlineRange = '3m'): Kline
       cancelled = true;
       controller.abort();
     };
-  }, [ticker, range, refreshToken]);
+  }, [ticker, range, adjustment, refreshToken]);
 
   return { ...state, refetch: () => setRefreshToken((token) => token + 1) };
 }

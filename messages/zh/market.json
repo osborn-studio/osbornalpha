@@ -2,14 +2,14 @@
   "watchlist": {
     "heading": "📋 股票池",
     "hintKanban": "拖拽卡片在看板间移动 · 拖拽列头重排看板",
-    "hintTable": "点击表头排序 · 评级/风险/目标价/估值区间",
+    "hintTable": "真实行情监控 · 点击表头排序",
     "autoRefresh": "每 {seconds}s 自动刷新",
     "loadingQuotes": "⏳ 加载报价…",
     "quotesFailed": "⚠ {count} 只行情拉取失败",
     "viewKanban": "📋 看板",
     "viewKanbanTitle": "看板视图（拖拽分组）",
     "viewTable": "📊 表格",
-    "viewTableTitle": "表格视图（评级 / 风险 / 目标价 / 估值区间）",
+    "viewTableTitle": "表格视图（真实报价、日内区间、流动性和来源状态）",
     "refresh": "🔄 刷新",
     "refreshTitle": "重新拉取所有行情",
     "refreshing": "🔄 正在刷新行情…",
@@ -39,6 +39,7 @@
     "importNoNew": "没有新代码可导入（全部 {skipped} 个已存在于股票池）",
     "importDone": "✓ 已导入 {fresh} 只到「{name}」",
     "importDoneDedup": "✓ 已导入 {fresh} 只到「{name}」，去重 {skipped} 个",
+    "importDoneValidated": "✓ 已导入 {fresh} 只已验证标的到「{name}」；跳过 {rejected} 个无效或暂不可用代码",
     "importDefaultName": "批量导入 {date}",
     "onboarding": {
       "title": "建立你的第一份监控清单",
@@ -93,6 +94,8 @@
       "done": "完成",
       "searchPlaceholder": "代码 / 名称（如 完美世界 / AAPL / 600519）",
       "noMatch": "暂未找到「{query}」。",
+      "searchUnavailable": "证券搜索服务暂不可用，请稍后重试。",
+      "searchFailed": "搜索失败，请重试。",
       "normalizedNote": "（已规范化为 {canonical}）",
       "pendingVerification": "待验证"
     },
@@ -118,36 +121,46 @@
       "willSkipTitle": "已存在于股票池，将跳过",
       "willImportTitle": "将导入",
       "confirmImport": "导入 {count} 个到新看板",
-      "noneToImport": "没有可导入的代码"
+      "noneToImport": "没有可导入的代码",
+      "validating": "正在验证标的…",
+      "validationUnavailable": "证券验证服务暂不可用，未导入任何代码。",
+      "validationFailed": "无法验证标的，未导入任何代码。",
+      "validationNoneAccepted": "没有可用的已验证上市标的。",
+      "validationRejected": "证券主数据拒绝了 {count} 个代码。"
     }
   },
   "table": {
     "empty": "股票池为空，先到看板视图添加标的。",
     "summary": {
       "tracked": "跟踪标的",
-      "strongBuy": "强烈买入",
-      "avgRisk": "平均风险",
-      "upside": "上行空间"
+      "live": "实时",
+      "delayed": "延迟",
+      "unavailable": "无报价"
     },
     "loadingQuotes": "⏳ 报价加载中…",
     "ariaLabel": "股票池表格视图",
-    "caption": "股票池表格视图：评级、风险、目标价、估值区间，可按表头排序",
+    "caption": "股票池表格视图：真实报价、日内区间、流动性和报价状态，可按表头排序",
     "headers": {
       "ticker": "股票代码",
       "name": "公司名称",
       "price": "当前价格",
-      "change": "涨跌幅",
-      "rating": "投资评级",
-      "risk": "风险等级",
-      "target": "目标价",
-      "range": "估值区间",
+      "change": "涨跌",
+      "open": "开盘",
+      "dayRange": "最高 / 最低",
+      "volume": "成交量",
+      "amount": "成交额",
+      "status": "行情状态",
       "group": "分组"
     },
     "sortAriaLabel": "按{label}排序",
-    "riskLevelAria": "风险 {level} 级",
-    "riskLevelLabel": "{level}级",
-    "currentPriceTitle": "现价 {price}",
-    "consensusSourceTitle": "来源：Tushare 卖方一致预期"
+    "status": {
+      "loading": "加载中",
+      "unavailable": "不可用",
+      "delayed": "延迟",
+      "live": "当前",
+      "unknownSource": "未知来源",
+      "unknownTime": "未知时间"
+    }
   },
   "copilot": {
     "pageTitle": "🎩 John Cameron · 投研助手",
@@ -263,6 +276,7 @@
       },
       "adjustments": {
         "qfq": "\u524d\u590d\u6743\u4ef7\u683c",
+        "hfq": "\u540e\u590d\u6743\u4ef7\u683c",
         "none": "\u4e0d\u590d\u6743\u4ef7\u683c",
         "intraday": "\u5206\u65f6\u4ef7\u683c"
       },
@@ -279,7 +293,24 @@
       "partialBar": "\u5f53\u524d K \u7ebf\u5c1a\u672a\u6536\u76d8",
       "indicators": {
         "daily": "MA5 / MA20 \u6309\u65e5\u7ebf\u6536\u76d8\u4ef7\u8ba1\u7b97",
-        "intraday": "\u5206\u949f\u6570\u636e\u4e0d\u663e\u793a\u65e5\u5747\u7ebf"
+        "weekly": "MA5 / MA20 \u6309\u5468\u7ebf\u6536\u76d8\u4ef7\u8ba1\u7b97",
+        "monthly": "MA5 / MA20 \u6309\u6708\u7ebf\u6536\u76d8\u4ef7\u8ba1\u7b97",
+        "intraday": "\u5206\u65f6\u56fe\u5728\u6709\u6210\u4ea4\u989d\u65f6\u6309\u4ea4\u6613\u65e5\u663e\u793a\u5747\u4ef7\u7ebf"
+      },
+      "granularityNames": {
+        "1m": "1\u5206\u949f",
+        "5m": "5\u5206\u949f",
+        "1d": "\u65e5\u7ebf",
+        "1w": "\u5468\u7ebf",
+        "1mo": "\u6708\u7ebf"
+      },
+      "prevClose": "\u6628\u6536",
+      "avgPrice": "\u5747\u4ef7",
+      "adjustAriaLabel": "\u590d\u6743\u65b9\u5f0f",
+      "adjustOptions": {
+        "qfq": "\u524d\u590d\u6743",
+        "none": "\u4e0d\u590d\u6743",
+        "hfq": "\u540e\u590d\u6743"
       },
       "volumeUnits": {
         "shares": "股",

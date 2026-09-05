@@ -19,6 +19,9 @@ function resolution(overrides: Record<string, unknown> = {}) {
     adjustment: 'intraday',
     volumeUnit: 'shares',
     previousClose: 9,
+    availableBars: 40,
+    warmupCloses: [],
+    asOfFallback: '2026-08-10 09:30:00',
     freshness: 'fresh',
     fallbackUsed: false,
     cacheStatus: 'shared-swr',
@@ -55,10 +58,11 @@ describe('GET /api/kline/[ticker]', () => {
       currency: '$',
       currencyCode: 'USD',
       volumeUnit: 'shares',
-      rangeBasis: 'trading-bars',
+      rangeBasis: 'trading-sessions',
       requestedBars: 390,
       returnedBars: 1,
-      missingBars: 389,
+      availableBars: 40,
+      missingBars: 350,
     });
     expect(body.bars[0].time).toBe(Date.UTC(2026, 7, 10, 9, 30) / 1000);
     expect(body.bars[0]).toMatchObject({ previousClose: 9, change: 2 });
@@ -66,7 +70,7 @@ describe('GET /api/kline/[ticker]', () => {
   });
 
   it('rejects invalid ranges and unsupported Taiwan intraday', async () => {
-    expect((await GET(new Request('https://example.test/api/kline/NVDA?range=5y'), ctx('NVDA'))).status).toBe(400);
+    expect((await GET(new Request('https://example.test/api/kline/NVDA?range=2y'), ctx('NVDA'))).status).toBe(400);
     const response = await GET(new Request('https://example.test/api/kline/2330.TW?range=1d'), ctx('2330.TW'));
     expect(response.status).toBe(422);
     expect((await response.json()).error).toBe('intraday_unsupported');
@@ -118,6 +122,55 @@ describe('GET /api/kline/[ticker]', () => {
     expect((await response.json()).meta).toMatchObject({ source: 'tencent', fallbackUsed: true, adjustment: 'qfq' });
   });
 
+  it('reports All cap semantics honestly for truncated and full history', async () => {
+    // Truncated: the aggregated fallback hit the daily cap → partial + lower
+    // bound on the missing months.
+    mocks.resolve.mockResolvedValue(resolution({
+      source: 'tencent',
+      adjustment: 'none',
+      availableBars: 60,
+      completeness: 'partial',
+      warnings: ['partial_coverage'],
+      bars: [{ ...minuteBars[0], time: '2026-08-01' }],
+    }));
+    const truncated = await GET(new Request('https://example.test/api/kline/600519.SH?range=all'), ctx('600519.SH'));
+    expect(truncated.status).toBe(200);
+    expect((await truncated.json()).meta).toMatchObject({
+      range: 'all', interval: 'month', granularity: '1mo', rangeBasis: 'calendar-window',
+      requestedBars: 600, availableBars: 60, missingBars: 540, completeness: 'partial',
+    });
+
+    // Untruncated: the provider simply has fewer months than the probe cap.
+    mocks.resolve.mockResolvedValue(resolution({
+      source: 'eastmoney',
+      adjustment: 'none',
+      availableBars: 60,
+      completeness: 'complete',
+      warnings: [],
+      bars: [{ ...minuteBars[0], time: '2026-08-01' }],
+    }));
+    const full = await GET(new Request('https://example.test/api/kline/NVDA?range=all'), ctx('NVDA'));
+    expect(full.status).toBe(200);
+    expect((await full.json()).meta).toMatchObject({
+      range: 'all', requestedBars: 600, availableBars: 60, missingBars: 0, completeness: 'complete',
+    });
+  });
+
+  it('parses the adjustment override and rejects invalid values', async () => {
+    const bad = await GET(new Request('https://example.test/api/kline/600519.SH?range=1y&adjust=bfq'), ctx('600519.SH'));
+    expect(bad.status).toBe(400);
+    expect((await bad.json()).error).toBe('invalid_adjustment');
+    expect(mocks.resolve).not.toHaveBeenCalled();
+
+    const ok = await GET(new Request('https://example.test/api/kline/600519.SH?range=1y&adjust=hfq'), ctx('600519.SH'));
+    expect(ok.status).toBe(200);
+    expect(mocks.resolve).toHaveBeenCalledWith({ ticker: '600519.SH', range: '1y', adjustment: 'hfq' });
+
+    const untouched = await GET(new Request('https://example.test/api/kline/NVDA?range=1y'), ctx('NVDA'));
+    expect(untouched.status).toBe(200);
+    expect(mocks.resolve).toHaveBeenLastCalledWith({ ticker: 'NVDA', range: '1y', adjustment: undefined });
+  });
+
   it.each([
     ['invalid_data', 502],
     ['provider_unavailable', 503],
@@ -131,8 +184,8 @@ describe('GET /api/kline/[ticker]', () => {
   it('does not expose upstream error details to clients', async () => {
     mocks.resolve.mockRejectedValue(new Error('internal upstream URL and credentials'));
 
-    const response = await GET(new Request('https://example.test/api/kline/NVDA?range=3m'), ctx('NVDA'));
+    const response = await GET(new Request('https://example.test/api/kline/NVDA?range=6m'), ctx('NVDA'));
     expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({ error: 'provider_unavailable', ticker: 'NVDA', range: '3m', bars: [] });
+    expect(await response.json()).toEqual({ error: 'provider_unavailable', ticker: 'NVDA', range: '6m', bars: [] });
   });
 });

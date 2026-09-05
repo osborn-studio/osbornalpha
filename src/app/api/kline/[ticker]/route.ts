@@ -2,10 +2,12 @@ import { NextResponse } from 'next/server';
 import { KlineResolutionError, resolveKline } from '@/lib/data/kline/reliability';
 import {
   KLINE_RANGE_CONFIG,
+  KLINE_RANGES,
   inferKlinePricePrecision,
   klineBarLimit,
   klineRangeAvailability,
   marketTimezone,
+  parseKlineAdjustment,
   parseKlineRange,
   toChartTimestamp,
   type KlineBar,
@@ -22,10 +24,16 @@ interface Ctx { params: Promise<{ ticker: string }> }
 export async function GET(req: Request, { params }: Ctx) {
   const { ticker: raw } = await params;
   const ticker = decodeURIComponent(raw);
-  const requestedRange = new URL(req.url).searchParams.get('range') ?? '3m';
+  const url = new URL(req.url);
+  const requestedRange = url.searchParams.get('range') ?? '1d';
   const range = parseKlineRange(requestedRange);
   if (!range) {
-    return NextResponse.json({ error: 'invalid_range', message: 'range must be one of 1d, 1m, 3m, 1y' }, { status: 400 });
+    return NextResponse.json({ error: 'invalid_range', message: `range must be one of ${KLINE_RANGES.join(', ')}` }, { status: 400 });
+  }
+  const adjustParam = url.searchParams.get('adjust');
+  const adjustment = parseKlineAdjustment(adjustParam) ?? undefined;
+  if (adjustParam !== null && !adjustment) {
+    return NextResponse.json({ error: 'invalid_adjustment', message: 'adjust must be one of qfq, hfq, none' }, { status: 400 });
   }
 
   const unavailable = klineRangeAvailability(ticker, range, isDatagatewayConfigured());
@@ -36,7 +44,7 @@ export async function GET(req: Request, { params }: Ctx) {
   const market = classifyMarket(ticker);
   const config = KLINE_RANGE_CONFIG[range];
   try {
-    const result = await resolveKline({ ticker, range });
+    const result = await resolveKline({ ticker, range, adjustment });
 
     const sourceBars = result.bars;
     let previousClose = result.previousClose;
@@ -53,11 +61,17 @@ export async function GET(req: Request, { params }: Ctx) {
       previousClose = bar.close;
       return normalized;
     }).filter((bar) => bar.time > 0);
-    if (bars.length === 0) {
+    if (result.availableBars === 0) {
       return NextResponse.json({ error: 'invalid_data', ticker, range, bars: [] }, { status: 502 });
     }
-    const requestedBars = klineBarLimit(ticker, range);
+    // An empty window is a valid answer: the security simply has no bars
+    // inside the selected calendar range (e.g. a long suspension). Surface it
+    // as a successful empty series so the chart can say so.
+    const requestedBars = klineBarLimit(ticker, range, new Date(result.fetchedAt));
     const pricePrecision = inferKlinePricePrecision(bars);
+    const coverageEdge = bars.length > 0
+      ? { coverageStart: sourceBars[0].time, coverageEnd: sourceBars[sourceBars.length - 1].time, asOf: sourceBars[sourceBars.length - 1].time }
+      : { coverageStart: result.asOfFallback, coverageEnd: result.asOfFallback, asOf: result.asOfFallback };
     const meta: KlineMeta = {
       market,
       range,
@@ -65,9 +79,7 @@ export async function GET(req: Request, { params }: Ctx) {
       granularity: config.granularity,
       source: result.source,
       adjustment: result.adjustment,
-      coverageStart: sourceBars[0].time,
-      coverageEnd: sourceBars[sourceBars.length - 1].time,
-      asOf: sourceBars[sourceBars.length - 1].time,
+      ...coverageEdge,
       timezone: marketTimezone(market),
       fetchedAt: result.fetchedAt,
       delayed: result.freshness === 'stale',
@@ -76,10 +88,16 @@ export async function GET(req: Request, { params }: Ctx) {
       pricePrecision,
       minMove: 10 ** -pricePrecision,
       volumeUnit: result.volumeUnit,
-      rangeBasis: 'trading-bars',
+      rangeBasis: config.interval === 'minute' ? 'trading-sessions' : 'calendar-window',
       requestedBars,
       returnedBars: bars.length,
-      missingBars: Math.max(0, requestedBars - bars.length),
+      availableBars: result.availableBars,
+      // For an untruncated "All" series the cap-based requestedBars would
+      // fabricate missing months; a truncated series keeps the lower bound.
+      missingBars: range === 'all' && result.completeness === 'complete'
+        ? 0
+        : Math.max(0, requestedBars - result.availableBars),
+      ...(result.warmupCloses.length > 0 ? { maWarmupCloses: result.warmupCloses } : {}),
       cacheTtlSeconds: config.interval === 'minute' ? 60 : 300,
       freshness: result.freshness,
       fallbackUsed: result.fallbackUsed,

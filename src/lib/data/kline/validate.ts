@@ -13,7 +13,8 @@ function sameBar(a: SourceKlineBar, b: SourceKlineBar): boolean {
     && a.high === b.high
     && a.low === b.low
     && a.close === b.close
-    && a.volume === b.volume;
+    && a.volume === b.volume
+    && a.amount === b.amount;
 }
 
 function assertValidBar(bar: SourceKlineBar): void {
@@ -39,6 +40,9 @@ function assertValidBar(bar: SourceKlineBar): void {
   if (!Number.isFinite(bar.volume) || bar.volume < 0) {
     throw new KlineProviderError('invalid_data', `Invalid volume at ${bar.time}`);
   }
+  if (bar.amount !== undefined && (!Number.isFinite(bar.amount) || bar.amount < 0)) {
+    throw new KlineProviderError('invalid_data', `Invalid turnover at ${bar.time}`);
+  }
   if (bar.high < Math.max(bar.open, bar.close) || bar.low > Math.min(bar.open, bar.close) || bar.high < bar.low) {
     throw new KlineProviderError('invalid_data', `Invalid OHLC relationship at ${bar.time}`);
   }
@@ -46,6 +50,8 @@ function assertValidBar(bar: SourceKlineBar): void {
 
 export interface ValidatedKlineSeries extends SourceKlineSeries {
   completeness: 'complete' | 'partial';
+  /** Distinct bars the provider supplied before any window was applied. */
+  availableBars: number;
 }
 
 export function validateKlineSeries(
@@ -91,6 +97,7 @@ export function validateKlineSeries(
     ...series,
     bars,
     completeness: bars.length >= limit ? 'complete' : 'partial',
+    availableBars: unique.length,
   };
 }
 
