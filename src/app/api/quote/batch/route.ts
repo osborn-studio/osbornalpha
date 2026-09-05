@@ -10,6 +10,7 @@ import {
 import { fetchDatagatewayRealtimeQuotes, isDatagatewayConfigured } from '@/lib/data/sources/datagateway-quote';
 import { readQuoteCache, resolveQuote, writeQuoteCache, type QuoteResolution, type QuoteShape } from '@/lib/quotes/resolve-quote';
 import { parseQuoteBatchRequest } from '@/lib/quotes/batch-contract';
+import { readSharedQuoteCache, writeSharedQuoteCache } from '@/lib/quotes/shared-cache';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 30;
@@ -26,14 +27,20 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: request.error }, { status: 400 });
   }
   const { tickers, force } = request;
+  const cacheNow = new Date();
+  const sharedCache = force
+    ? { fresh: {}, stale: {} }
+    : await readSharedQuoteCache(tickers, cacheNow);
   const freshQuotes: Record<string, QuoteShape> = {};
   const selectedSources: Record<string, string> = {};
   const toFetch: string[] = [];
   for (const ticker of tickers) {
-    const cached = !force ? readQuoteCache(ticker, FRESH_TTL_MS) : null;
+    const local = !force ? readQuoteCache(ticker, FRESH_TTL_MS) : null;
+    const cached = local ?? sharedCache.fresh[ticker];
     if (cached) {
       freshQuotes[ticker] = cached;
-      selectedSources[ticker] = 'cache';
+      selectedSources[ticker] = local ? 'cache' : 'shared-cache';
+      if (!local) writeQuoteCache(ticker, cached);
     } else {
       toFetch.push(ticker);
     }
@@ -79,6 +86,9 @@ export async function GET(req: Request) {
   const quotes: Record<string, QuoteShape | null> = { ...freshQuotes };
   const sourceAttempts: SourceAttempt[] = [];
   let stale = 0;
+  const staleFallback = (ticker: string): QuoteShape | null => (
+    readQuoteCache(ticker, STALE_TTL_MS) ?? sharedCache.stale[ticker] ?? null
+  );
   if (isDatagatewayConfigured()) {
     for (const ticker of toFetch) {
       const value = windMap.get(ticker.toUpperCase()) ?? null;
@@ -94,11 +104,11 @@ export async function GET(req: Request) {
         quotes[ticker] = value;
         selectedSources[ticker] = 'datagateway-wind';
       } else {
-        const cached = readQuoteCache(ticker, STALE_TTL_MS);
+        const cached = staleFallback(ticker);
         if (cached) {
           stale += 1;
           quotes[ticker] = { ...cached, delayed: true, stale: true };
-          selectedSources[ticker] = 'stale-cache';
+          selectedSources[ticker] = sharedCache.stale[ticker] === cached ? 'shared-stale-cache' : 'stale-cache';
         } else {
           quotes[ticker] = null;
         }
@@ -128,11 +138,11 @@ export async function GET(req: Request) {
       if (resolution.selectedSource) selectedSources[ticker] = resolution.selectedSource;
       return;
     }
-    const cached = readQuoteCache(ticker, STALE_TTL_MS);
+    const cached = staleFallback(ticker);
     if (cached) {
       stale += 1;
       quotes[ticker] = { ...cached, delayed: true, stale: true };
-      selectedSources[ticker] = 'stale-cache';
+      selectedSources[ticker] = sharedCache.stale[ticker] === cached ? 'shared-stale-cache' : 'stale-cache';
     } else {
       quotes[ticker] = null;
     }
@@ -152,11 +162,11 @@ export async function GET(req: Request) {
       selectedSources[t] = 'twse';
       continue;
     }
-    const cached = readQuoteCache(t, STALE_TTL_MS);
+    const cached = staleFallback(t);
     if (cached) {
       stale += 1;
       quotes[t] = { ...cached, delayed: true, stale: true };
-      selectedSources[t] = 'stale-cache';
+      selectedSources[t] = sharedCache.stale[t] === cached ? 'shared-stale-cache' : 'stale-cache';
     } else {
       quotes[t] = null;
     }
@@ -164,6 +174,10 @@ export async function GET(req: Request) {
 
   const failed = tickers.filter((t) => !quotes[t]).length;
   const failedTickers = tickers.filter((t) => !quotes[t]);
+  const fetchedQuotes = toFetch
+    .map((ticker) => quotes[ticker])
+    .filter((quote): quote is QuoteShape => !!quote && !quote.stale);
+  const sharedCacheWritten = await writeSharedQuoteCache(fetchedQuotes, cacheNow);
   const sources = aggregateSourceAttempts(sourceAttempts);
   if (failed > 0) {
     console.warn('quote batch degraded', { attempted: tickers.length, failed, stale, sources });
@@ -179,6 +193,7 @@ export async function GET(req: Request) {
       sources,
       failed_tickers: failedTickers,
       selected_sources: selectedSources,
+      shared_cache_written: sharedCacheWritten,
     },
   });
 }

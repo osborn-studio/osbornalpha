@@ -44,9 +44,11 @@ async function postJson(
   apiKey: string,
   body: unknown,
   timeoutMs: number,
+  externalSignal?: AbortSignal,
 ): Promise<unknown> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const signal = externalSignal ? AbortSignal.any([controller.signal, externalSignal]) : controller.signal;
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -55,7 +57,7 @@ async function postJson(
         'content-type': 'application/json',
       },
       body: JSON.stringify(body),
-      signal: controller.signal,
+      signal,
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -76,6 +78,7 @@ export async function chat(
     temperature?: number;
     timeoutMs?: number;
     responseJson?: boolean;
+    signal?: AbortSignal;
   },
 ): Promise<{ content: string; usage: NormalizedUsage }> {
   const timeoutMs = opts.timeoutMs ?? 60000;
@@ -91,7 +94,7 @@ export async function chat(
   if (typeof opts.temperature === 'number') body.temperature = opts.temperature;
   if (opts.responseJson) body.response_format = { type: 'json_object' };
 
-  const data = (await postJson(buildUrl(cfg), cfg.apiKey, body, timeoutMs)) as {
+  const data = (await postJson(buildUrl(cfg), cfg.apiKey, body, timeoutMs, opts.signal)) as {
     choices?: Array<{ message?: { content?: string } }>;
     usage?: unknown;
   };
@@ -109,6 +112,7 @@ export async function toolChat(
     max_tokens?: number;
     timeoutMs?: number;
     thinking?: 'enabled' | 'disabled';
+    signal?: AbortSignal;
   },
 ): Promise<{
   content: string;
@@ -137,7 +141,7 @@ export async function toolChat(
   if (typeof opts.max_tokens === 'number') body.max_tokens = opts.max_tokens;
   if (opts.thinking) body.thinking = { type: opts.thinking };
 
-  const data = (await postJson(buildUrl(cfg), cfg.apiKey, body, timeoutMs)) as {
+  const data = (await postJson(buildUrl(cfg), cfg.apiKey, body, timeoutMs, opts.signal)) as {
     choices?: Array<{
       message?: {
         content?: string | null;

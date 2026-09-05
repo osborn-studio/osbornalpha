@@ -6,7 +6,7 @@ export interface AlertDb {
 }
 
 interface RecordCheckInput {
-  checkName: 'ai_daily' | 'quote_15m' | 'auth_email_daily';
+  checkName: 'ai_daily' | 'quote_15m' | 'auth_email_daily' | 'watchlist_15m';
   window: AlertWindow;
   metrics: Record<string, unknown>;
   violations: AlertViolation[];

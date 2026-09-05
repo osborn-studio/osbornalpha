@@ -142,4 +142,19 @@ describe('error handling', () => {
     global.fetch = vi.fn(async () => ({ ok: false, status: 401, json: async () => ({}), text: async () => 'unauthorized' }));
     await expect(chat(CFG, { messages: [{ role: 'user', content: 'hi' }] })).rejects.toThrow('llm 401: unauthorized');
   });
+
+  it('propagates caller cancellation into the provider request', async () => {
+    const controller = new AbortController();
+    global.fetch = vi.fn(async (_input, init) => new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      if (!signal) return reject(new Error('missing signal'));
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }));
+    const pending = chat(CFG, {
+      messages: [{ role: 'user', content: 'hi' }],
+      signal: controller.signal,
+    });
+    controller.abort(new Error('cancelled'));
+    await expect(pending).rejects.toThrow('cancelled');
+  });
 });

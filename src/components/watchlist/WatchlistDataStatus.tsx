@@ -27,7 +27,7 @@ export function WatchlistDataStatus({
   ].filter(Boolean).join(' | ');
 
   return (
-    <span className={`inline-flex min-w-0 items-center gap-1.5 rounded border px-2 py-1 text-[10px] ${STATUS_TONE[status]}`} title={diagnostics || t('noDetails')}>
+    <span className={`inline-flex min-w-0 items-center gap-1.5 rounded border px-2 py-1 text-[11px] ${STATUS_TONE[status]}`} title={diagnostics || t('noDetails')}>
       {status === 'fresh' ? <Database className="h-3 w-3 shrink-0" aria-hidden="true" /> : <Clock3 className="h-3 w-3 shrink-0" aria-hidden="true" />}
       <span className="truncate">{label}</span>
       <span className="font-semibold">{t(`statuses.${status}`)}</span>

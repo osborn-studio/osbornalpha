@@ -15,6 +15,8 @@ import type {
   StockResearchMeta,
 } from './research-types';
 import type { EvidenceSearchSnapshot } from '@/lib/external-evidence/types';
+import { classifyMarket } from '@/lib/utils';
+import { loadConfiguredStructuredResearch, type StructuredResearchLoad } from './structured-research-provider';
 
 function formatTushareDate(value: string | null | undefined): string | null {
   if (!value || !/^\d{8}$/.test(value)) return null;
@@ -70,6 +72,8 @@ export async function getStockNews(ticker: string, freshnessDays = 14): Promise<
     sentimentConfidence: sentiment.confidence,
     sentimentPositiveMatches: sentiment.positiveMatches,
     sentimentNegativeMatches: sentiment.negativeMatches,
+    sentimentLanguage: sentiment.language,
+    sentimentAspects: sentiment.aspects,
     publishedAt: item.publishedAt,
     fetchedAt: item.fetchedAt,
     trustScore: item.trustScore,
@@ -145,9 +149,10 @@ export function mergeDuplicateReports(items: StockReportItem[]): StockReportItem
 
 export async function getStockReports(ticker: string): Promise<StockReportsResponse> {
   const identity = await stockIdentity(ticker);
+  const market = identity.market ?? classifyMarket(ticker);
   const isAShare = /\.(SH|SZ|BJ)$/i.test(ticker);
   const canUseTushare = isAShare && isTushareConfigured();
-  const [snapshot, tushareResult] = await Promise.all([
+  const [snapshot, tushareResult, configuredResearch] = await Promise.all([
     searchExternalEvidence({
       ticker,
       name: identity.name,
@@ -159,6 +164,11 @@ export async function getStockReports(ticker: string): Promise<StockReportsRespo
     canUseTushare
       ? fetchTushareReportRc(ticker).then((items) => ({ items, error: null as string | null })).catch(() => ({ items: [], error: 'tushare_unavailable' }))
       : Promise.resolve({ items: [], error: null as string | null }),
+    market === 'HK' || market === 'US'
+      ? loadConfiguredStructuredResearch(ticker, market).catch((): StructuredResearchLoad => ({
+          provider: 'structured-research-http', configured: true, items: [], warnings: ['structured_research_provider_unavailable'],
+        }))
+      : Promise.resolve({ provider: 'structured-research-http', configured: false, items: [], warnings: [] } as StructuredResearchLoad),
   ]);
 
   const structured = tushareResult.items.map((item) => reportFromTushare(ticker, item));
@@ -182,16 +192,24 @@ export async function getStockReports(ticker: string): Promise<StockReportsRespo
     corroborationCount: item.corroborationCount,
     corroboratingSources: item.corroboratingSources,
   }));
-  const items = mergeDuplicateReports([...structured, ...discovered]);
-  const consensusInput = filterConsensusReports(tushareResult.items, { asOf: new Date(), maxAgeDays: 180, currentPrice: identity.price });
+  const items = mergeDuplicateReports([...structured, ...configuredResearch.items, ...discovered]);
+  const consensusRows = items.filter((item) => item.targetPriceMin != null || item.targetPriceMax != null).map((item) => ({
+    max_price: item.targetPriceMax,
+    min_price: item.targetPriceMin,
+    report_date: item.publishedAt,
+    org_name: item.broker,
+    report_title: item.title,
+  }));
+  const consensusInput = filterConsensusReports(consensusRows, { asOf: new Date(), maxAgeDays: 180, currentPrice: identity.price });
   const consensus = deriveConsensus(consensusInput.accepted);
   const warnings = [
     ...snapshot.warnings,
     ...(tushareResult.error ? [tushareResult.error] : []),
+    ...configuredResearch.warnings,
     ...consensusInput.reasons.map((reason) => `consensus_${reason}`),
   ];
   const status = items.length > 0
-    ? (snapshot.status === 'complete' && !tushareResult.error ? 'complete' : 'partial')
+    ? (snapshot.status === 'complete' && !tushareResult.error && configuredResearch.warnings.length === 0 ? 'complete' : 'partial')
     : snapshot.status;
 
   return {
@@ -204,7 +222,10 @@ export async function getStockReports(ticker: string): Promise<StockReportsRespo
       count: consensus.n,
     } : null,
     meta: {
-      ...evidenceMeta(snapshot, warnings, structured.length > 0 ? ['tushare'] : [], structured.length),
+      ...evidenceMeta(snapshot, warnings, [
+        ...(structured.length > 0 ? ['tushare'] : []),
+        ...(configuredResearch.configured ? [configuredResearch.provider] : []),
+      ], structured.length + configuredResearch.items.length),
       status,
     },
   };

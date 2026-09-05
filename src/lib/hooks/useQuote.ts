@@ -3,6 +3,8 @@
 import { useEffect, useState, useRef } from 'react';
 import type { QuotaNoticeProps } from '@/components/QuotaNotice';
 import type { Market } from '@/lib/supabase/database.types';
+import type { PerspectiveCitation } from '@/lib/external-evidence/types';
+import type { PerspectiveClaim } from '@/lib/stocks/perspective-claims';
 import { klineBarLimit, type KlineBar, type KlineMeta, type KlineRange } from '@/lib/chart/kline';
 import { trackEvent } from '@/lib/analytics/client';
 import { isFinancialMeta, isFinancialQuarterRow, isFinancialTtmRow, isFinancialYearRow } from '@/lib/financials/contract';
@@ -218,7 +220,9 @@ function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> 
 
 export function useBatchQuotes(
   tickers: string[],
-  opts?: { refreshIntervalMs?: number }
+  opts?: {
+    refreshIntervalMs?: number | ((context: { now: Date; consecutiveFailures: number }) => number);
+  }
 ): BatchState & { refetch: () => void } {
   const [state, setState] = useState<BatchState>({ quotes: {}, loading: tickers.length > 0, loadedAt: null, meta: null });
   // `bump` lets callers trigger a manual refetch without changing tickers
@@ -237,6 +241,7 @@ export function useBatchQuotes(
     }
     let cancelled = false;
     let inFlight = false;
+    let consecutiveFailures = 0;
     const controller = new AbortController();
 
     const fetchChunk = async (chunk: string[], manual: boolean): Promise<QuoteBatchPayload<LiveQuote>> => {
@@ -277,6 +282,9 @@ export function useBatchQuotes(
           failed: merged.meta.failed,
           durationMs: merged.meta.duration_ms,
         });
+        consecutiveFailures = outcome === 'failed' || outcome === 'suspended'
+          ? consecutiveFailures + 1
+          : 0;
         const eventMetadata = {
           count: tickers.length,
           failed: merged.meta.failed,
@@ -310,6 +318,7 @@ export function useBatchQuotes(
           meta: merged.meta,
         }));
       } catch {
+        consecutiveFailures += 1;
         if (!cancelled) {
           trackEvent('quote_batch_failed', { count: tickers.length, error_code: 'client_processing_error' });
           setState((prev) => ({ ...prev, loading: false }));
@@ -321,23 +330,34 @@ export function useBatchQuotes(
 
     const initialIsManual = bump > lastHandledBumpRef.current;
     if (initialIsManual) lastHandledBumpRef.current = bump;
-    void run(initialIsManual);
-
-    let timer: ReturnType<typeof setInterval> | null = null;
-    if (refreshMs > 0) {
-      timer = setInterval(() => {
-        if (document.visibilityState === 'visible') void run(false);
-      }, refreshMs);
-    }
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const schedule = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      const interval = typeof refreshMs === 'function'
+        ? refreshMs({ now: new Date(), consecutiveFailures })
+        : refreshMs;
+      if (cancelled || !Number.isFinite(interval) || interval <= 0) return;
+      timer = setTimeout(async () => {
+        timer = null;
+        if (document.visibilityState === 'visible') await run(false);
+        schedule();
+      }, interval);
+    };
+    void run(initialIsManual).finally(schedule);
     const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') void run(false);
+      if (document.visibilityState === 'visible') {
+        if (timer) clearTimeout(timer);
+        timer = null;
+        void run(false).finally(schedule);
+      }
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
 
     return () => {
       cancelled = true;
       controller.abort();
-      if (timer) clearInterval(timer);
+      if (timer) clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -459,21 +479,26 @@ export function useHolders(ticker: string | null): HoldersState {
 
 // ─── Perspectives ───
 export interface PerspectiveRow {
+  /** Stable persisted id. Missing only when generation could not be stored. */
+  id?: string;
   persona: string;
   name: string;
   stance: 'bullish' | 'neutral' | 'bearish';
   confidence: number;
   summary: string;
   cites: string[];
-  citations?: Array<{
-    id: string;
-    title: string;
-    url: string;
-    domain: string;
-    publishedAt: string | null;
-    trustScore: number;
-    qualityScore?: number;
-    qualityFlags?: string[];
+  citations?: PerspectiveCitation[];
+  claims?: PerspectiveClaim[];
+  feedback?: {
+    verdict: 'helpful' | 'incorrect' | 'outdated';
+    reason: string | null;
+    correctedStance: 'bullish' | 'neutral' | 'bearish' | null;
+  } | null;
+  outcomes?: Array<{
+    horizonDays: number;
+    returnPct: number;
+    directionCorrect: boolean;
+    evaluatedAt: string;
   }>;
 }
 export interface PerspectivesState {
@@ -494,7 +519,7 @@ export function usePerspectives(ticker: string | null, autoLoad = false): Perspe
   const fetcher = (t: string) => {
     let cancelled = false;
     setState((prev) => ({ ...prev, loading: true, error: null }));
-    fetch(`/api/perspectives/${encodeURIComponent(t)}`)
+    fetch(`/api/perspectives/${encodeURIComponent(t)}`, { method: 'POST' })
       .then((r) => r.json())
       .then((data) => {
         if (cancelled) return;

@@ -14,6 +14,7 @@ import {
 } from '@/lib/watchlist/import-client';
 import type { WatchlistImportMode, WatchlistImportPreview } from '@/lib/watchlist/portable-import';
 import type { VersionedWatchlistSnapshot } from '@/lib/watchlist/sync';
+import { watchlistJsonResult } from '@/lib/watchlist/api-client';
 
 interface Props {
   existingTickerCount: number;
@@ -158,14 +159,14 @@ export function WatchlistImportDialog({
     setValidationError(null);
     setRejected([]);
     try {
-      const response = await fetch('/api/securities/validate', {
+      const result = await watchlistJsonResult<{ accepted?: unknown[]; rejected?: unknown[] }>('/api/securities/validate', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tickers: stats.fresh }),
-      });
-      const body = await response.json().catch(() => null);
-      if (!response.ok) {
-        setValidationError(body?.error === 'security_master_unavailable' ? t('validationUnavailable') : t('validationFailed'));
+      }, 'security_validation_failed');
+      if (!result.ok) {
+        setValidationError(result.error.code === 'security_master_unavailable' ? t('validationUnavailable') : t('validationFailed'));
         return;
       }
+      const body = result.body;
       const accepted = Array.isArray(body?.accepted) ? body.accepted.filter((value: unknown): value is string => typeof value === 'string') : [];
       const invalid = Array.isArray(body?.rejected) ? body.rejected.filter((value: unknown): value is string => typeof value === 'string') : [];
       setRejected(invalid);
@@ -211,7 +212,7 @@ export function WatchlistImportDialog({
               <Upload className="h-3.5 w-3.5" aria-hidden="true" />{t('uploadFile')}
               <input type="file" accept=".csv,.txt,.yml,.yaml,.xlsx,.xls,.xlsm,.xlsb" onChange={readFile} className="hidden" />
             </label>
-            <div className="mt-1.5 text-[10px] text-text-muted">{t('supportedFormats')}</div>
+            <div className="mt-1.5 text-[11px] text-text-muted">{t('supportedFormats')}</div>
             {fileError && <div className="mt-1 text-[11px] text-status-bad" role="alert">{fileError}</div>}
             {validationError && <div className="mt-2 rounded border border-status-bad/25 bg-status-bad/5 p-2 text-[11px] text-status-bad" role="alert">{validationError}</div>}
           </div>
@@ -237,9 +238,9 @@ export function WatchlistImportDialog({
                 <div className="grid grid-cols-3 divide-x divide-border rounded border border-border bg-bg-elevated">
                   {(['groups', 'items', 'alerts'] as const).map((key) => (
                     <div key={key} className="px-3 py-2 text-center">
-                      <div className="text-[10px] text-text-muted">{t(`portableEntities.${key}`)}</div>
+                      <div className="text-[11px] text-text-muted">{t(`portableEntities.${key}`)}</div>
                       <div className="mt-1 font-mono text-base font-semibold text-text">{preview[key].incoming}</div>
-                      <div className="mt-1 text-[9px] text-text-muted">{t('portableChanges', { count: previewTotal(preview, key) })}</div>
+                      <div className="mt-1 text-[11px] text-text-muted">{t('portableChanges', { count: previewTotal(preview, key) })}</div>
                     </div>
                   ))}
                 </div>
@@ -260,7 +261,7 @@ export function WatchlistImportDialog({
               {stats.duplicateWithinInput > 0 && <span>{t('parsedDupWithinInput', { count: stats.duplicateWithinInput })}</span>}
               {rejected.length > 0 && <span className="text-warn">{t('validationRejected', { count: rejected.length })}</span>}
             </div>
-            <div className="max-h-28 overflow-y-auto font-mono text-[10px] leading-5">
+            <div className="max-h-28 overflow-y-auto font-mono text-[11px] leading-5">
               {Array.from(new Set(parsed)).map((ticker) => <span key={ticker} className={`mr-2 inline-block ${existingTickers.has(ticker) ? 'text-text-muted line-through' : 'text-text'}`}>{ticker}</span>)}
             </div>
           </div>

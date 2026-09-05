@@ -24,7 +24,7 @@ export async function loadFinancialReport(
   try {
     return await provider.load(normalizedTicker);
   } catch (error) {
-    const reason = error instanceof Error && /^sec_http_\d+$/.test(error.message)
+    const reason = error instanceof Error && /^(sec_http_\d+|hk-financials-http_(?:http_\d+|invalid_response|timeout))$/.test(error.message)
       ? error.message
       : `${provider.id}_unavailable`;
     return unavailableFinancialReport({

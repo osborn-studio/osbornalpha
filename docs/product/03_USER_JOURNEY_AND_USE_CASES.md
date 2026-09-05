@@ -89,8 +89,8 @@ osbornalpha 是多租户 AI 投研监控 SaaS。**公开面只有落地页 `/`�
 - 导出：YAML（`watchlist-{date}.yml`）。
 - **持久化与隔离**：
   - 登录用户 → 写 Supabase `watchlists` + `watchlist_items`（按 `sort_order` 排序），RLS 按 `user_id` 隔离，多端同步。
-  - 未登录/未配置 Supabase → 退化为浏览器 `localStorage`（键 `stock-monitor:watchlist:v2`），并显示「👤 访客模式（数据存浏览器本地）」横幅引导登录。
-  - 该 `localStorage` 键被 watchlist / radar / backtest / stock-detail 四处共享读取。
+  - 生产环境产品路由必须登录；浏览器缓存只承担离线草稿和同步恢复，不作为访客产品模式。
+  - 未配置 Supabase 的本地开发环境可使用 `localStorage`（键 `stock-monitor:watchlist:v2`）进行界面调试。
 
 ### 2.5 阅读每日 AI 简报（`/briefs`）
 

@@ -3,6 +3,7 @@ import { getServerSupabase, serverIsSupabaseConfigured } from '@/lib/supabase/se
 import { validateSelectableSecuritiesWithClient } from '@/lib/watchlist/security-validation';
 import { watchlistApiError } from '@/lib/watchlist/api-error';
 import { upsertWatchlistItem } from '@/lib/watchlist/server-repository';
+import { isWatchlistPlanLimitError } from '@/lib/watchlist/plan-limits';
 
 // GET /api/watchlist — list all watchlists with items for current user
 export async function GET() {
@@ -48,6 +49,7 @@ export async function POST(request: Request) {
     sort_order,
     user_id: user.id,
   });
+  if (isWatchlistPlanLimitError(error, 'item')) return watchlistApiError('watchlist_item_plan_limit', 403);
   if (error) return watchlistApiError('watchlist_item_create_failed', 503);
   return NextResponse.json({ item: data });
 }

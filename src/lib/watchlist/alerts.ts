@@ -8,6 +8,10 @@ import {
   WATCHLIST_RATING_VALUES,
   WATCHLIST_VALUATION_METRICS,
 } from './alert-catalog';
+import {
+  isWatchlistMetricAlertKey,
+  watchlistMetricAlertThresholdIsValid,
+} from './alert-metrics';
 
 const ALERT_TYPES = new Set<WatchlistAlert['alert_type']>(WATCHLIST_ALERT_TYPES);
 const OPERATORS = new Set<NonNullable<WatchlistAlert['operator']>>(WATCHLIST_ALERT_OPERATORS);
@@ -39,19 +43,25 @@ function validEnumeratedList(value: unknown, allowed: readonly string[]): boolea
 }
 
 function validAlertConfig(type: WatchlistAlert['alert_type'], config: Record<string, unknown>): boolean {
-  const allowed = type === 'valuation' ? ['metric']
+  const allowed = type === 'valuation' || type === 'metric' ? ['metric']
     : type === 'event' ? ['kinds']
       : type === 'rating' || type === 'perspective' ? ['values']
         : [];
   if (Object.keys(config).some((key) => !allowed.includes(key))) return false;
   if (type === 'valuation' && !WATCHLIST_VALUATION_METRICS.includes(config.metric as never)) return false;
+  if (type === 'metric' && !isWatchlistMetricAlertKey(config.metric)) return false;
   if (type === 'event' && !validEnumeratedList(config.kinds, WATCHLIST_EVENT_KINDS)) return false;
   if (type === 'rating' && !validEnumeratedList(config.values, WATCHLIST_RATING_VALUES)) return false;
   if (type === 'perspective' && !validEnumeratedList(config.values, WATCHLIST_PERSPECTIVE_VALUES)) return false;
   return true;
 }
 
-function validNumericThreshold(type: WatchlistAlert['alert_type'], value: unknown): value is number {
+function validNumericThreshold(
+  type: WatchlistAlert['alert_type'],
+  value: unknown,
+  config: Record<string, unknown>,
+): value is number {
+  if (type === 'metric') return watchlistMetricAlertThresholdIsValid(config.metric, value);
   if (!finiteThreshold(value) || Math.abs(value) > 1_000_000_000_000_000) return false;
   return type === 'change_pct' || value >= 0;
 }
@@ -63,7 +73,7 @@ function validRule(
   config: Record<string, unknown>,
 ): boolean {
   if (!validAlertConfig(type, config)) return false;
-  if (NUMERIC_ALERTS.has(type)) return !!operator && OPERATORS.has(operator) && validNumericThreshold(type, threshold);
+  if (NUMERIC_ALERTS.has(type)) return !!operator && OPERATORS.has(operator) && validNumericThreshold(type, threshold, config);
   return operator === null && threshold === null;
 }
 
@@ -79,14 +89,14 @@ export function parseCreateWatchlistAlert(body: unknown): CreateWatchlistAlert |
   const alertType = input.alertType as WatchlistAlert['alert_type'];
   const operator = input.operator == null ? null : input.operator;
   const threshold = input.threshold == null ? null : input.threshold;
+  const config = input.config ?? {};
+  if (!validConfig(config) || !validAlertConfig(alertType, config)) return null;
   if (NUMERIC_ALERTS.has(alertType)) {
     if (typeof operator !== 'string' || !OPERATORS.has(operator as NonNullable<WatchlistAlert['operator']>)) return null;
-    if (!validNumericThreshold(alertType, threshold)) return null;
+    if (!validNumericThreshold(alertType, threshold, config)) return null;
   } else if (operator !== null || threshold !== null) {
     return null;
   }
-  const config = input.config ?? {};
-  if (!validConfig(config) || !validAlertConfig(alertType, config)) return null;
   const cooldown = input.cooldownMinutes ?? 1440;
   if (!Number.isInteger(cooldown) || Number(cooldown) < 1 || Number(cooldown) > 10080) return null;
   if (input.enabled !== undefined && typeof input.enabled !== 'boolean') return null;

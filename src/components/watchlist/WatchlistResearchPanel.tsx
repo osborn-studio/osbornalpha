@@ -1,18 +1,49 @@
 'use client';
 
-import { ArrowUpRight, FileText, Newspaper, RefreshCw, Sparkles } from 'lucide-react';
-import { useState } from 'react';
+import {
+  Activity,
+  ArrowUpRight,
+  Bell,
+  CalendarDays,
+  CheckCheck,
+  FileSearch,
+  FileText,
+  Newspaper,
+  NotebookPen,
+  RefreshCw,
+  Search,
+  Sparkles,
+  X,
+  type LucideIcon,
+} from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
+import { ExternalLink } from '@/components/ExternalLink';
 import { PerspectiveCard } from '@/components/PerspectiveCard';
 import { QuotaNotice } from '@/components/QuotaNotice';
+import { PerspectiveFeedbackControls } from './PerspectiveFeedbackControls';
 import { useWatchlistResearchBundle } from '@/lib/hooks/useWatchlistResearchBundle';
-import type { WatchlistOverviewRow } from '@/lib/watchlist/overview-contract';
 import type { EvidenceSearchStatus } from '@/lib/external-evidence/types';
-import { ExternalLink } from '@/components/ExternalLink';
+import type { PerspectiveAnalysisRequestMode } from '@/lib/stocks/perspective-analysis';
+import type { WatchlistOverviewRow } from '@/lib/watchlist/overview-contract';
+import type { WatchlistResearchTimelineKind } from '@/lib/watchlist/research-timeline';
 import { weightedSentiment } from '@/lib/watchlist/research-summary';
 
-type ResearchTab = 'news' | 'reports' | 'perspectives';
+type TimelineFilter = 'all' | WatchlistResearchTimelineKind;
 type PerspectiveFilter = 'all' | 'bullish' | 'neutral' | 'bearish';
+type TimelineRange = '7d' | '30d' | 'all';
+type ResearchSection = 'timeline' | 'perspectives';
+
+const FILTERS: TimelineFilter[] = ['all', 'news', 'filing', 'report', 'perspective', 'calendar', 'decision', 'alert'];
+const TIMELINE_ICONS: Record<WatchlistResearchTimelineKind, LucideIcon> = {
+  news: Newspaper,
+  filing: FileSearch,
+  report: FileText,
+  perspective: Sparkles,
+  calendar: CalendarDays,
+  decision: NotebookPen,
+  alert: Bell,
+};
 
 function telemetryTotal(values: Array<number | null | undefined>): number | null {
   const finite = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0);
@@ -25,40 +56,70 @@ function statusTone(status: EvidenceSearchStatus) {
   return 'border-status-bad/20 bg-status-bad/10 text-status-bad';
 }
 
+const PERSPECTIVE_ERROR_KEYS = new Set([
+  'external_evidence_required',
+  'external_evidence_rate_limited',
+  'external_evidence_quota_unavailable',
+  'budget_unavailable',
+  'pricing_unavailable',
+  'usage_audit_unavailable',
+  'usage_audit_invariant',
+]);
+
+function perspectiveErrorKey(code: string | null): string {
+  return code && PERSPECTIVE_ERROR_KEYS.has(code) ? code : 'perspectives_unavailable';
+}
+
+function InsightMetric({ label, value, detail, tone = 'text-text' }: { label: string; value: string; detail?: string; tone?: string }) {
+  return (
+    <div className="min-w-0 border-r border-border/70 px-3 py-2.5 last:border-r-0">
+      <div className="text-[11px] text-text-muted">{label}</div>
+      <div className={`mt-0.5 truncate text-base font-semibold tabular-nums ${tone}`}>{value}</div>
+      {detail && <div className="mt-0.5 truncate text-[11px] text-text-muted" title={detail}>{detail}</div>}
+    </div>
+  );
+}
+
 export function WatchlistResearchPanel({ ticker, overview }: { ticker: string; overview?: WatchlistOverviewRow }) {
   const t = useTranslations('market.table.drawer.research');
-  const [tab, setTab] = useState<ResearchTab>('news');
-  const [sourceFilter, setSourceFilter] = useState('all');
+  const [section, setSection] = useState<ResearchSection>('timeline');
+  const [timelineFilter, setTimelineFilter] = useState<TimelineFilter>('all');
   const [perspectiveFilter, setPerspectiveFilter] = useState<PerspectiveFilter>('all');
+  const [analysisMode, setAnalysisMode] = useState<PerspectiveAnalysisRequestMode>('auto');
+  const [timelineQuery, setTimelineQuery] = useState('');
+  const [timelineRange, setTimelineRange] = useState<TimelineRange>('30d');
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [timelineLimit, setTimelineLimit] = useState(25);
   const research = useWatchlistResearchBundle(ticker);
+  useEffect(() => {
+    setSection('timeline');
+    setTimelineQuery('');
+    setTimelineRange('30d');
+    setUnreadOnly(false);
+    setTimelineLimit(25);
+  }, [ticker]);
   const metas = [research.news?.meta, research.reports?.meta].filter((value) => !!value);
   const status: EvidenceSearchStatus = metas.some((meta) => meta?.status === 'error' || meta?.status === 'unavailable')
     ? (metas.some((meta) => meta?.status === 'complete' || meta?.status === 'partial') ? 'partial' : 'unavailable')
     : metas.some((meta) => meta?.status === 'partial') ? 'partial' : 'complete';
   const providers = [...new Set(metas.flatMap((meta) => meta?.providers ?? []))];
   const fetchedAt = metas.map((meta) => meta?.fetchedAt).filter((value): value is string => !!value).sort().at(-1);
-  const warnings = [...new Set(metas.flatMap((meta) => meta?.warnings ?? []))];
+  const warnings = [...new Set([
+    ...metas.flatMap((meta) => meta?.warnings ?? []),
+    ...(research.activity?.warnings ?? []),
+  ])];
   const queryCount = telemetryTotal(metas.map((meta) => meta?.queryCount));
   const resultCount = telemetryTotal(metas.map((meta) => meta?.resultCount));
   const durationMs = telemetryTotal(metas.map((meta) => meta?.durationMs));
   const estimatedCostMicrousd = telemetryTotal(metas.map((meta) => meta?.estimatedCostMicrousd));
   const news = research.news?.items ?? [];
   const reports = research.reports?.items ?? [];
-  const sourceOptions = [...new Set([
-    ...news.map((item) => item.source),
-    ...reports.map((item) => item.broker || item.source),
-  ].filter(Boolean))].sort();
-  const visibleNews = sourceFilter === 'all' ? news : news.filter((item) => item.source === sourceFilter);
-  const visibleReports = sourceFilter === 'all' ? reports : reports.filter((item) => (item.broker || item.source) === sourceFilter);
   const sentiment = weightedSentiment(news);
-  const sentimentValues = news
-    .map((item) => item.sentiment)
+  const sentimentValues = news.map((item) => item.sentiment)
     .filter((value): value is number => value != null && Number.isFinite(value));
   const sentimentCoverage = overview?.research.value?.sentimentCoverageRatio
     ?? (news.length > 0 ? sentimentValues.length / news.length : 0);
-  const averageSentiment = sentiment.value != null
-    ? sentiment.value
-    : overview?.research.value?.averageSentiment ?? null;
+  const averageSentiment = sentiment.value ?? overview?.research.value?.averageSentiment ?? null;
   const consensus = research.reports?.consensus ?? null;
   const currentPrice = overview?.market?.value?.quote.price ?? null;
   const targetUpside = consensus?.targetMedian != null && currentPrice != null && currentPrice > 0
@@ -71,149 +132,128 @@ export function WatchlistResearchPanel({ ticker, overview }: { ticker: string; o
   const averagePerspectiveConfidence = research.perspectives.length > 0
     ? research.perspectives.reduce((sum, item) => sum + item.confidence, 0) / research.perspectives.length
     : null;
+  const stance = stanceCounts.bullish > stanceCounts.bearish ? 'bullish'
+    : stanceCounts.bearish > stanceCounts.bullish ? 'bearish' : 'neutral';
   const visiblePerspectives = perspectiveFilter === 'all'
     ? research.perspectives
     : research.perspectives.filter((item) => item.stance === perspectiveFilter);
-  const moveResearchTab = (current: ResearchTab, direction: 'next' | 'prev' | 'first' | 'last') => {
-    const values: ResearchTab[] = ['news', 'reports', 'perspectives'];
-    const index = values.indexOf(current);
-    const target = direction === 'first' ? 0
-      : direction === 'last' ? values.length - 1
-        : (index + (direction === 'next' ? 1 : -1) + values.length) % values.length;
-    const next = values[target];
-    setTab(next);
-    window.requestAnimationFrame(() => document.getElementById(`research-tab-${ticker}-${next}`)?.focus());
-  };
+  const filteredTimeline = useMemo(() => {
+    const query = timelineQuery.trim().toLocaleLowerCase();
+    const cutoff = timelineRange === 'all' ? null : Date.now() - Number.parseInt(timelineRange, 10) * 24 * 60 * 60_000;
+    return research.timeline.filter((item) => {
+      if (timelineFilter !== 'all' && item.kind !== timelineFilter) return false;
+      if (query && !`${item.title} ${item.source} ${item.detail ?? ''}`.toLocaleLowerCase().includes(query)) return false;
+      if (cutoff != null && item.at && new Date(item.at).getTime() < cutoff) return false;
+      const unseenByActivity = !!item.at && !!research.activity?.lastSeenAt && item.at > research.activity.lastSeenAt;
+      if (unreadOnly && item.read !== false && !unseenByActivity) return false;
+      return true;
+    });
+  }, [research.activity?.lastSeenAt, research.timeline, timelineFilter, timelineQuery, timelineRange, unreadOnly]);
+  const visibleTimeline = filteredTimeline.slice(0, timelineLimit);
+  useEffect(() => setTimelineLimit(25), [timelineFilter, timelineQuery, timelineRange, unreadOnly]);
+  const counts = useMemo(() => Object.fromEntries(FILTERS.map((filter) => [
+    filter,
+    filter === 'all' ? research.timeline.length : research.timeline.filter((item) => item.kind === filter).length,
+  ])), [research.timeline]);
 
   return (
     <section aria-label={t('title')}>
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-text">{t('title')}</h3>
-          {overview?.research.value && <p className="mt-1 text-[11px] text-text-muted">{t('summary', { news: overview.research.value.recentNewsCount, reports: reports.length })}</p>}
+      <header className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b border-border/70 pb-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-semibold text-text">{t('title')}</h3>
+            {!research.loading && metas.length > 0 && <span className={`rounded border px-2 py-0.5 text-[11px] font-semibold ${statusTone(status)}`}>{t(`status.${status}`)}</span>}
+            {(research.activity?.unseenCount ?? 0) > 0 && <span className="rounded bg-accent/10 px-2 py-0.5 text-[11px] font-semibold text-accent">{t('unseen', { count: research.activity!.unseenCount })}</span>}
+          </div>
+          <p className="mt-1 text-[11px] text-text-muted">{t('summary', { news: overview?.research.value?.recentNewsCount ?? news.length, reports: reports.length })}</p>
         </div>
-        <div className="flex items-center gap-2">
-          {!research.loading && metas.length > 0 && <span className={`rounded border px-2 py-1 text-[10px] font-semibold ${statusTone(status)}`}>{t(`status.${status}`)}</span>}
+        <div className="flex items-center gap-1.5">
+          {(research.activity?.unseenCount ?? 0) > 0 && <button type="button" onClick={() => void research.markActivitySeen()} className="icon-button !h-8 !w-8 !basis-8" aria-label={t('markSeen')} title={t('markSeen')}><CheckCheck className="h-3.5 w-3.5" aria-hidden="true" /></button>}
           <button type="button" onClick={() => void research.refresh()} disabled={research.loading || research.refreshing} className="icon-button !h-8 !w-8 !basis-8" aria-label={t('refresh')} title={t('refresh')}>
             <RefreshCw className={`h-3.5 w-3.5 ${research.refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />
           </button>
         </div>
-      </div>
+      </header>
 
-      <div className="mb-4 inline-flex max-w-full overflow-x-auto rounded-md border border-border bg-bg-elevated p-0.5" role="tablist" aria-label={t('tabs.label')}>
-        {(['news', 'reports', 'perspectives'] as const).map((value) => {
-          const Icon = value === 'news' ? Newspaper : value === 'reports' ? FileText : Sparkles;
-          const count = value === 'news' ? news.length : value === 'reports' ? reports.length : research.perspectives.length;
-          const tabId = `research-tab-${ticker}-${value}`;
-          const panelId = `research-panel-${ticker}-${value}`;
-          return (
-            <button key={value} id={tabId} type="button" role="tab" aria-selected={tab === value} aria-controls={panelId} tabIndex={tab === value ? 0 : -1} onClick={() => setTab(value)} onKeyDown={(event) => { if (event.key === 'ArrowRight' || event.key === 'ArrowDown') { event.preventDefault(); moveResearchTab(value, 'next'); } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') { event.preventDefault(); moveResearchTab(value, 'prev'); } else if (event.key === 'Home') { event.preventDefault(); moveResearchTab(value, 'first'); } else if (event.key === 'End') { event.preventDefault(); moveResearchTab(value, 'last'); } }} className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded px-3 text-xs transition ${tab === value ? 'bg-bg-card font-semibold text-text' : 'text-text-dim hover:text-text'}`}>
-              <Icon className="h-3.5 w-3.5" aria-hidden="true" />{t(`tabs.${value}`)}<span className="font-mono text-[10px] text-text-muted">{count}</span>
-            </button>
-          );
-        })}
-      </div>
+      {research.changes?.hasChanges && (
+        <div className="mb-3 flex items-start gap-2 border-l-2 border-status-info bg-status-info/5 px-3 py-2 text-[11px] text-text-dim" role="status">
+          <Activity className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-info" aria-hidden="true" />
+          <span>{t('changes', { news: research.changes.newNews, reports: research.changes.newReports, ratings: research.changes.ratingChanges.length })}{research.changes.perspectivesChanged ? ` · ${t('perspectivesChanged')}` : ''}</span>
+        </div>
+      )}
 
-      {tab !== 'perspectives' && !research.loading && metas.length > 0 && (
-        <div className="mb-3">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-text-muted">
+      {!research.loading && (
+        <div className="mb-4 grid grid-cols-2 overflow-hidden border-y border-border/70 sm:grid-cols-4" aria-label={t('decisionSummary')}>
+          <InsightMetric label={t('averageSentiment')} value={averageSentiment == null ? '--' : `${averageSentiment > 0 ? '+' : ''}${(averageSentiment * 100).toFixed(0)}%`} detail={t('sentimentSample', { count: overview?.research.value?.sentimentSampleSize ?? sentimentValues.length, coverage: Math.round(sentimentCoverage * 100) })} tone={averageSentiment == null ? 'text-text-muted' : averageSentiment > 0.1 ? 'text-up' : averageSentiment < -0.1 ? 'text-down' : 'text-text'} />
+          <InsightMetric label={t('targetUpside')} value={targetUpside == null ? '--' : `${targetUpside > 0 ? '+' : ''}${targetUpside.toFixed(1)}%`} detail={consensus ? t('targetMedianValue', { value: consensus.targetMedian.toFixed(2), count: consensus.count }) : undefined} tone={targetUpside == null ? 'text-text-muted' : targetUpside >= 0 ? 'text-up' : 'text-down'} />
+          <InsightMetric label={t('committeeStance')} value={research.perspectives.length > 0 ? t(`perspectiveFilters.${stance}`) : '--'} detail={research.perspectives.length > 0 ? t('stanceSplit', stanceCounts) : undefined} tone={stance === 'bullish' ? 'text-up' : stance === 'bearish' ? 'text-down' : 'text-warn'} />
+          <InsightMetric label={t('evidenceCoverage')} value={research.perspectiveProvenance ? `${Math.round(research.perspectiveProvenance.evidenceCoverageRatio * 100)}%` : '--'} detail={research.perspectiveProvenance ? t('evidenceItems', { count: research.perspectiveProvenance.evidenceResultCount }) : undefined} />
+        </div>
+      )}
+
+      {!research.loading && metas.length > 0 && (
+        <details className="mb-4 border-b border-border/70 pb-2 text-[11px] text-text-muted">
+          <summary className="cursor-pointer font-medium text-text-dim">{t('provenance')}</summary>
+          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
             {providers.length > 0 && <span>{t('providers', { value: providers.join(', ') })}</span>}
             {fetchedAt && <span>{t('fetchedAt', { value: new Date(fetchedAt).toLocaleString() })}</span>}
-            {sourceOptions.length > 1 && <label className="ml-auto inline-flex items-center gap-1.5"><span>{t('sourceFilter')}</span><select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} aria-label={t('sourceFilter')} className="h-7 py-1 text-[10px]"><option value="all">{t('allSources')}</option>{sourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}</select></label>}
+            {queryCount != null && <span>{t('queryCount', { count: queryCount })}</span>}
+            {resultCount != null && <span>{t('resultCount', { count: resultCount })}</span>}
+            {durationMs != null && <span>{t('duration', { value: durationMs })}</span>}
+            {estimatedCostMicrousd != null && <span>{t('estimatedCost', { value: (estimatedCostMicrousd / 1_000_000).toFixed(4) })}</span>}
+            {warnings.length > 0 && <span className="text-warn" title={warnings.join(', ')}>{t('warnings', { count: warnings.length })}</span>}
           </div>
-          <details className="mt-2 border-y border-border/70 py-1.5 text-[10px] text-text-muted">
-            <summary className="cursor-pointer font-medium text-text-dim">{t('provenance')}</summary>
-            <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
-              {queryCount != null && <span>{t('queryCount', { count: queryCount })}</span>}
-              {resultCount != null && <span>{t('resultCount', { count: resultCount })}</span>}
-              {durationMs != null && <span>{t('duration', { value: durationMs })}</span>}
-              {estimatedCostMicrousd != null && <span>{t('estimatedCost', { value: (estimatedCostMicrousd / 1_000_000).toFixed(4) })}</span>}
-              {warnings.length > 0 && <span className="text-warn" title={warnings.join(', ')}>{t('warnings', { count: warnings.length })}</span>}
-            </div>
-          </details>
-        </div>
+        </details>
       )}
 
-      {tab !== 'perspectives' && !research.loading && (averageSentiment != null || consensus) && (
-        <div className="mb-3 grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border sm:grid-cols-4" aria-label={t('decisionSummary')}>
-          {averageSentiment != null && <div className="bg-bg-elevated px-3 py-2"><div className="text-[10px] text-text-muted">{t('averageSentiment')}</div><div className={`mt-0.5 text-sm font-semibold tabular-nums ${averageSentiment > 0.1 ? 'text-up' : averageSentiment < -0.1 ? 'text-down' : 'text-text'}`}>{averageSentiment > 0 ? '+' : ''}{(averageSentiment * 100).toFixed(0)}%</div><div className="mt-0.5 text-[9px] text-text-muted">{t('sentimentSample', { count: overview?.research.value?.sentimentSampleSize ?? sentimentValues.length, coverage: Math.round(sentimentCoverage * 100) })}</div></div>}
-          {consensus && <div className="bg-bg-elevated px-3 py-2"><div className="text-[10px] text-text-muted">{t('targetMedian')}</div><div className="mt-0.5 text-sm font-semibold tabular-nums text-text">{consensus.targetMedian.toFixed(2)}</div></div>}
-          {consensus?.targetMin != null && consensus.targetMax != null && <div className="bg-bg-elevated px-3 py-2"><div className="text-[10px] text-text-muted">{t('targetRange')}</div><div className="mt-0.5 text-sm font-semibold tabular-nums text-text">{consensus.targetMin.toFixed(2)} - {consensus.targetMax.toFixed(2)}</div></div>}
-          {targetUpside != null && <div className="bg-bg-elevated px-3 py-2"><div className="text-[10px] text-text-muted">{t('targetUpside')}</div><div className={`mt-0.5 text-sm font-semibold tabular-nums ${targetUpside >= 0 ? 'text-up' : 'text-down'}`}>{targetUpside > 0 ? '+' : ''}{targetUpside.toFixed(1)}%</div></div>}
-        </div>
-      )}
+      <div className="mb-4 grid grid-cols-2 rounded-md border border-border bg-bg-elevated p-0.5" role="tablist" aria-label={t('title')}>
+        <button type="button" role="tab" aria-selected={section === 'timeline'} onClick={() => setSection('timeline')} className={`flex h-8 items-center justify-center gap-2 rounded border text-xs font-medium transition ${section === 'timeline' ? 'border-accent/30 bg-accent-wash text-accent' : 'border-transparent text-text-muted hover:text-text'}`}>
+          <Activity className="h-3.5 w-3.5" aria-hidden="true" />{t('timeline.title')}<span className="tabular-nums text-text-muted">{research.timeline.length}</span>
+        </button>
+        <button type="button" role="tab" aria-selected={section === 'perspectives'} onClick={() => setSection('perspectives')} className={`flex h-8 items-center justify-center gap-2 rounded border text-xs font-medium transition ${section === 'perspectives' ? 'border-accent/30 bg-accent-wash text-accent' : 'border-transparent text-text-muted hover:text-text'}`}>
+          <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />{t('aiSection')}<span className="tabular-nums text-text-muted">{research.perspectives.length}</span>
+        </button>
+      </div>
 
-      {tab !== 'perspectives' && research.loading ? (
-        <div className="space-y-2" role="status" aria-label={t('loading')}>{[0, 1, 2].map((item) => <div key={item} className="h-14 animate-pulse rounded bg-bg-elevated" />)}</div>
-      ) : tab !== 'perspectives' && research.error ? (
-        <div className="border-y border-border py-8 text-center text-xs text-text-muted">{t('unavailable')}</div>
-      ) : tab === 'news' ? (
-        <div id={`research-panel-${ticker}-news`} role="tabpanel" aria-labelledby={`research-tab-${ticker}-news`} className="divide-y divide-border/70 border-y border-border/70">
-          {visibleNews.map((item) => (
-            <ExternalLink key={item.id} href={item.url} className="flex items-start gap-3 py-3 text-text hover:no-underline">
-              <Newspaper className="mt-0.5 h-4 w-4 shrink-0 text-text-muted" aria-hidden="true" />
-              <span className="min-w-0 flex-1"><span className="line-clamp-2 text-sm font-medium leading-snug">{item.title}</span>{item.snippet && <span className="mt-1 line-clamp-2 block text-xs leading-relaxed text-text-dim">{item.snippet}</span>}<span className="mt-1.5 flex flex-wrap gap-x-2 text-[10px] text-text-muted"><span>{item.source}</span>{item.sentiment != null && <span className={item.sentiment > 0 ? 'text-up' : 'text-down'} title={t('sentimentBasis', { value: [...(item.sentimentPositiveMatches ?? []), ...(item.sentimentNegativeMatches ?? [])].join(', ') || t('sentimentUnknown') })}>{t('sentiment', { value: `${item.sentiment > 0 ? '+' : ''}${item.sentiment.toFixed(1)}` })}</span>}<span>{t('trust', { value: Math.round(item.trustScore * 100) })}</span><span title={t('qualityFlags', { value: item.qualityFlags?.join(', ') || '--' })}>{t('quality', { value: Math.round((item.qualityScore ?? item.trustScore) * 100) })}</span>{(item.corroborationCount ?? 1) > 1 && <span className="text-status-info" title={item.corroboratingSources?.map((source) => source.domain).join(', ')}>{t('corroborated', { count: item.corroborationCount ?? 1 })}</span>}{!item.url && <span>{t('metadataOnly')}</span>}{item.publishedAt && <time>{new Date(item.publishedAt).toLocaleDateString()}</time>}</span></span>
-              {item.url && <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />}
-            </ExternalLink>
-          ))}
-          {visibleNews.length === 0 && <div className="py-8 text-center text-xs text-text-muted">{news.length === 0 ? t('emptyNews') : t('noSourceResults')}</div>}
+      {section === 'timeline' && <section role="tabpanel" aria-label={t('timeline.title')}>
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <h4 className="text-xs font-semibold text-text">{t('timeline.title')}</h4>
+          <span className="text-[11px] text-text-muted">{t('timeline.count', { count: visibleTimeline.length })}</span>
         </div>
-      ) : tab === 'reports' ? (
-        <div id={`research-panel-${ticker}-reports`} role="tabpanel" aria-labelledby={`research-tab-${ticker}-reports`} className="divide-y divide-border/70 border-y border-border/70">
-          {visibleReports.map((item) => {
-            const content = <><FileText className="mt-0.5 h-4 w-4 shrink-0 text-text-muted" aria-hidden="true" /><span className="min-w-0 flex-1"><span className="line-clamp-2 text-sm font-medium">{item.title}</span><span className="mt-1 flex flex-wrap gap-x-2 text-[10px] text-text-muted"><span>{item.broker || item.source}</span>{item.rating && <span>{item.rating}</span>}{item.ratingNormalized && item.ratingNormalized !== 'unknown' && <span className="rounded border border-border bg-bg-elevated px-1 py-0.5 text-text-dim">{t(`ratingValues.${item.ratingNormalized}`)}</span>}<span>{t('trust', { value: Math.round(item.trustScore * 100) })}</span><span title={t('qualityFlags', { value: item.qualityFlags?.join(', ') || '--' })}>{t('quality', { value: Math.round((item.qualityScore ?? item.trustScore) * 100) })}</span>{(item.corroborationCount ?? 1) > 1 && <span className="text-status-info" title={item.corroboratingSources?.map((source) => source.domain).join(', ')}>{t('corroborated', { count: item.corroborationCount ?? 1 })}</span>}{item.publishedAt && <time>{new Date(item.publishedAt).toLocaleDateString()}</time>}</span></span>{item.url && <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />}</>;
-            return <ExternalLink key={item.id} href={item.url} className="flex items-start gap-3 py-3 text-text">{content}</ExternalLink>;
-          })}
-          {visibleReports.length === 0 && <div className="py-8 text-center text-xs text-text-muted">{reports.length === 0 ? t('emptyReports') : t('noSourceResults')}</div>}
+        <div className="mb-2 flex max-w-full gap-1 overflow-x-auto pb-1" role="group" aria-label={t('timeline.filter')}>
+          {FILTERS.map((filter) => <button key={filter} type="button" aria-pressed={timelineFilter === filter} onClick={() => setTimelineFilter(filter)} className={`h-7 shrink-0 rounded px-2 text-[11px] ${timelineFilter === filter ? 'bg-bg-hover font-semibold text-text' : 'text-text-muted hover:text-text'}`}>{t(`timeline.kinds.${filter}`)} <span className="tabular-nums">{counts[filter] ?? 0}</span></button>)}
         </div>
-      ) : (
-        <div id={`research-panel-${ticker}-perspectives`} role="tabpanel" aria-labelledby={`research-tab-${ticker}-perspectives`}>
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
-            <div className="text-[10px] text-text-muted">
-              {research.perspectivesGeneratedAt ? <>
-                <span>{t('perspectivesGeneratedAt', { value: new Date(research.perspectivesGeneratedAt).toLocaleString() })}</span>
-                {research.perspectiveSource && <span className="ml-2">{t('perspectivesSource', { value: research.perspectiveSource })}</span>}
-                {research.perspectiveProvenance && <span className="ml-2" title={research.perspectiveProvenance.evidenceRequestId ?? undefined}>
-                  {t('perspectivesProvenance', {
-                    model: research.perspectiveProvenance.modelVersion ?? '--',
-                    prompt: research.perspectiveProvenance.promptVersion ?? '--',
-                    coverage: Math.round(research.perspectiveProvenance.evidenceCoverageRatio * 100),
-                    evidence: research.perspectiveProvenance.evidenceResultCount,
-                  })}
-                </span>}
-                {research.perspectiveProvenance && research.perspectiveProvenance.evidenceResultCount === 0 && (
-                  <span className="ml-2 text-warn">{t('evidenceUnavailable')}</span>
-                )}
-              </> : t('perspectivesNotGenerated')}
-            </div>
-            <button type="button" onClick={() => void research.generatePerspectives()} disabled={research.generating} className="inline-flex h-8 items-center gap-1.5 rounded bg-accent-dim px-3 text-xs font-semibold text-white disabled:opacity-50">
-              <RefreshCw className={`h-3.5 w-3.5 ${research.generating ? 'animate-spin' : ''}`} aria-hidden="true" />{research.generating ? t('generatingPerspectives') : t('generatePerspectives')}
-            </button>
+        <div className="mb-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+          <label className="relative"><span className="sr-only">{t('timeline.search')}</span><Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-muted" aria-hidden="true" /><input value={timelineQuery} onChange={(event) => setTimelineQuery(event.target.value)} placeholder={t('timeline.search')} className="h-8 w-full pl-8 text-xs" /></label>
+          <select value={timelineRange} onChange={(event) => setTimelineRange(event.target.value as TimelineRange)} aria-label={t('timeline.range')} className="h-8 text-xs"><option value="7d">{t('timeline.ranges.7d')}</option><option value="30d">{t('timeline.ranges.30d')}</option><option value="all">{t('timeline.ranges.all')}</option></select>
+          <label className="inline-flex h-8 items-center gap-2 rounded border border-border px-2.5 text-[11px] text-text-dim"><input type="checkbox" checked={unreadOnly} onChange={(event) => setUnreadOnly(event.target.checked)} />{t('timeline.unreadOnly')}</label>
+        </div>
+        {research.loading ? <div className="space-y-2" role="status" aria-label={t('loading')}>{[0, 1, 2].map((item) => <div key={item} className="h-14 animate-pulse bg-bg-elevated" />)}</div>
+          : research.error ? <div className="border-y border-border py-8 text-center text-xs text-text-muted"><p>{t('unavailable')}</p><button type="button" onClick={() => void research.refresh()} className="mt-3 inline-flex h-8 items-center gap-1.5 rounded border border-border px-3 text-text-dim hover:text-text"><RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />{t('retry')}</button></div>
+            : visibleTimeline.length === 0 ? <div className="border-y border-border py-8 text-center text-xs text-text-muted"><p>{t('timeline.empty')}</p>{(timelineFilter !== 'all' || timelineQuery || timelineRange !== 'all' || unreadOnly) && <button type="button" onClick={() => { setTimelineFilter('all'); setTimelineQuery(''); setTimelineRange('all'); setUnreadOnly(false); }} className="mt-3 h-8 rounded border border-border px-3 text-text-dim hover:text-text">{t('timeline.clearFilters')}</button>}</div>
+              : <><div className="divide-y divide-border/70 border-y border-border/70">{visibleTimeline.map((item) => {
+                const Icon = TIMELINE_ICONS[item.kind];
+                const body = <><span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded bg-bg-elevated ${item.read === false ? 'text-accent' : 'text-text-muted'}`}><Icon className="h-3.5 w-3.5" aria-hidden="true" /></span><span className="min-w-0 flex-1"><span className="line-clamp-2 text-sm font-medium leading-snug text-text">{item.title}</span><span className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-text-muted"><span>{t(`timeline.kinds.${item.kind}`)}</span><span>{item.source}</span>{item.stance && <span>{t(`perspectiveFilters.${item.stance}`)}</span>}{item.confidence != null && <span>{t('timeline.confidence', { value: item.confidence.toFixed(1) })}</span>}{item.at && <time>{new Date(item.at).toLocaleString()}</time>}</span>{item.detail && <span className="mt-1 line-clamp-2 block text-[11px] text-text-dim">{item.detail}</span>}</span>{item.url && <ArrowUpRight className="mt-1 h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />}</>;
+                return <ExternalLink key={item.id} href={item.url} className="flex items-start gap-2.5 py-3 text-text hover:no-underline">{body}</ExternalLink>;
+              })}</div>{visibleTimeline.length < filteredTimeline.length && <button type="button" onClick={() => setTimelineLimit((current) => current + 25)} className="mt-2 h-8 w-full rounded border border-border text-xs text-text-dim hover:text-text">{t('timeline.loadMore', { count: filteredTimeline.length - visibleTimeline.length })}</button>}</>}
+      </section>}
+
+      {section === 'perspectives' && <section role="tabpanel" aria-label={t('aiSection')}>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 pb-3">
+          <div className="text-[11px] text-text-muted">
+            {research.perspectivesGeneratedAt ? <>{t('perspectivesGeneratedAt', { value: new Date(research.perspectivesGeneratedAt).toLocaleString() })}{research.perspectiveSource && <span className="ml-2">{t('perspectivesSource', { value: research.perspectiveSource })}</span>}{averagePerspectiveConfidence != null && <span className="ml-2">{t('averageConfidence')}: {averagePerspectiveConfidence.toFixed(1)}/10</span>}{research.perspectiveProvenance && <><span className="mt-1 block">{t('perspectivesProvenance', { model: research.perspectiveProvenance.modelVersion ?? '--', prompt: research.perspectiveProvenance.promptVersion ?? '--', evidence: research.perspectiveProvenance.evidenceResultCount, coverage: Math.round(research.perspectiveProvenance.evidenceCoverageRatio * 100) })}</span><span className="mt-1 block">{t('analysisModeResult', { value: t(`analysisModes.${research.perspectiveProvenance.resolvedAnalysisMode}`) })}</span>{research.perspectiveProvenance.resolvedAnalysisMode === 'structured_only' && <span className="mt-1 block text-warn">{t('evidenceUnavailable')}</span>}</>}</> : t('perspectivesNotGenerated')}
           </div>
-          {research.perspectives.length > 0 && <div className="mb-3 grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border sm:grid-cols-4" aria-label={t('perspectiveSummary')}>
-            <div className="bg-bg-elevated px-3 py-2"><div className="text-[10px] text-text-muted">{t('bullish')}</div><div className="mt-0.5 text-sm font-semibold tabular-nums text-up">{stanceCounts.bullish}</div></div>
-            <div className="bg-bg-elevated px-3 py-2"><div className="text-[10px] text-text-muted">{t('neutral')}</div><div className="mt-0.5 text-sm font-semibold tabular-nums text-warn">{stanceCounts.neutral}</div></div>
-            <div className="bg-bg-elevated px-3 py-2"><div className="text-[10px] text-text-muted">{t('bearish')}</div><div className="mt-0.5 text-sm font-semibold tabular-nums text-down">{stanceCounts.bearish}</div></div>
-            <div className="bg-bg-elevated px-3 py-2"><div className="text-[10px] text-text-muted">{t('averageConfidence')}</div><div className="mt-0.5 text-sm font-semibold tabular-nums text-text">{averagePerspectiveConfidence?.toFixed(1)}/10</div></div>
-          </div>}
-          {research.perspectives.length > 0 && <div className="mb-3 flex max-w-full gap-1 overflow-x-auto" role="group" aria-label={t('perspectiveFilter')}>
-            {(['all', 'bullish', 'neutral', 'bearish'] as PerspectiveFilter[]).map((value) => {
-              const count = value === 'all' ? research.perspectives.length : stanceCounts[value];
-              return <button key={value} type="button" aria-pressed={perspectiveFilter === value} onClick={() => setPerspectiveFilter(value)} className={`h-7 shrink-0 rounded border px-2.5 text-[10px] transition ${perspectiveFilter === value ? 'border-accent/40 bg-accent/10 font-semibold text-accent' : 'border-border text-text-dim hover:text-text'}`}>{t(`perspectiveFilters.${value}`)} <span className="font-mono text-text-muted">{count}</span></button>;
-            })}
-          </div>}
-          {research.quota && <QuotaNotice {...research.quota} />}
-          {(research.loading || research.generating) && research.perspectives.length === 0 ? (
-            <div className="space-y-2" role="status"><div className="h-28 animate-pulse rounded bg-bg-elevated" /><div className="h-28 animate-pulse rounded bg-bg-elevated" /></div>
-          ) : research.perspectiveError && research.perspectives.length === 0 ? (
-            <div className="py-8 text-center text-xs text-warn">{t('perspectivesUnavailable')}</div>
-          ) : research.perspectives.length === 0 ? (
-            <div className="py-8 text-center text-xs text-text-muted">{t('emptyPerspectives')}</div>
-          ) : visiblePerspectives.length === 0 ? (
-            <div className="py-8 text-center text-xs text-text-muted">{t('emptyPerspectiveFilter')}</div>
-          ) : <div>{visiblePerspectives.map((item) => <PerspectiveCard key={item.persona} {...item} />)}</div>}
+          <div className="flex items-center gap-1.5"><label className="sr-only" htmlFor={`perspective-analysis-mode-${ticker}`}>{t('analysisModeLabel')}</label><select id={`perspective-analysis-mode-${ticker}`} value={analysisMode} onChange={(event) => setAnalysisMode(event.target.value as PerspectiveAnalysisRequestMode)} disabled={research.generating} className="h-8 max-w-36 text-xs"><option value="auto">{t('analysisModes.auto')}</option><option value="evidence_required">{t('analysisModes.evidence_required')}</option><option value="structured_only">{t('analysisModes.structured_only')}</option></select><button type="button" onClick={() => void research.generatePerspectives(analysisMode)} disabled={research.generating} className="inline-flex h-8 items-center gap-1.5 rounded bg-accent-dim px-3 text-xs font-semibold text-white disabled:opacity-50"><RefreshCw className={`h-3.5 w-3.5 ${research.generating ? 'animate-spin' : ''}`} aria-hidden="true" />{research.generating ? t('generatingPerspectives') : t('generatePerspectives')}</button>{research.generating && research.perspectiveJob && <button type="button" onClick={() => void research.cancelPerspectiveGeneration()} className="icon-button !h-8 !w-8 !basis-8" title={t('cancelGeneration')} aria-label={t('cancelGeneration')}><X className="h-3.5 w-3.5" aria-hidden="true" /></button>}</div>
         </div>
-      )}
+        {research.generating && research.perspectiveJob && <div className="border-b border-border/70 py-3" role="status" aria-live="polite"><div className="mb-1.5 flex items-center justify-between gap-3 text-[11px]"><span className="font-medium text-text-dim">{t(`jobStages.${research.perspectiveJob.stage}`)}</span><span className="font-mono tabular-nums text-text-muted">{research.perspectiveJob.progress}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-bg-elevated"><div className="h-full rounded-full bg-accent transition-[width] duration-300" style={{ width: `${research.perspectiveJob.progress}%` }} /></div></div>}
+        {research.perspectives.length > 0 && <div className="my-3 flex max-w-full gap-1 overflow-x-auto" role="group" aria-label={t('perspectiveFilter')}>{(['all', 'bullish', 'neutral', 'bearish'] as PerspectiveFilter[]).map((value) => <button key={value} type="button" aria-pressed={perspectiveFilter === value} onClick={() => setPerspectiveFilter(value)} className={`h-7 shrink-0 rounded border px-2.5 text-[11px] ${perspectiveFilter === value ? 'border-accent/40 bg-accent/10 font-semibold text-accent' : 'border-border text-text-dim hover:text-text'}`}>{t(`perspectiveFilters.${value}`)} <span className="tabular-nums">{value === 'all' ? research.perspectives.length : stanceCounts[value]}</span></button>)}</div>}
+        {research.quota && <QuotaNotice {...research.quota} />}
+        {research.feedbackError && <p className="mb-2 text-[11px] text-status-bad" role="alert">{t('feedback.error')}</p>}
+        {(research.loading || research.generating) && research.perspectives.length === 0 ? <div className="space-y-2 border-y border-border/70 py-3" role="status" aria-label={research.generating ? t('generatingPerspectives') : t('loading')}>{[0, 1].map((item) => <div key={item} className="border-l-2 border-border bg-bg-elevated/60 px-3 py-3"><div className="h-3 w-28 animate-pulse rounded-sm bg-border" /><div className="mt-3 h-2.5 w-full animate-pulse rounded-sm bg-border/70" /><div className="mt-2 h-2.5 w-3/4 animate-pulse rounded-sm bg-border/50" /></div>)}</div>
+          : research.perspectiveError && research.perspectives.length === 0 ? <div className="py-8 text-center text-xs text-warn" role="alert">{t(`perspectiveErrors.${perspectiveErrorKey(research.perspectiveErrorCode)}`)}</div>
+            : research.perspectives.length === 0 ? <div className="border-y border-border/70 py-8 text-center"><Sparkles className="mx-auto h-5 w-5 text-text-muted" aria-hidden="true" /><p className="mt-2 text-xs text-text-muted">{t('emptyPerspectives')}</p></div>
+              : <div className="mt-3">{visiblePerspectives.map((item) => <PerspectiveCard key={item.id ?? item.persona} {...item} footer={<PerspectiveFeedbackControls perspective={item} saving={research.feedbackSavingId === item.id} onSave={research.saveFeedback} onClear={research.clearFeedback} />} />)}</div>}
+      </section>}
     </section>
   );
 }

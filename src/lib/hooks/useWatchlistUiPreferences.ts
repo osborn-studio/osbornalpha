@@ -20,6 +20,7 @@ import {
   type WatchlistUiPreferences,
   type WatchlistViewMode,
 } from '@/lib/watchlist/ui-preferences';
+import { watchlistJsonResult } from '@/lib/watchlist/api-client';
 
 export type WatchlistUiPreferencesSyncStatus = 'local' | 'loading' | 'saving' | 'synced' | 'conflict' | 'error';
 
@@ -54,9 +55,12 @@ function applyPending(base: WatchlistUiPreferences, mutations: PendingMutation[]
   return mutations.reduce((current, mutation) => mutation.apply(current), base);
 }
 
-async function requestRemote(init?: RequestInit): Promise<{ response: Response; body: unknown }> {
-  const response = await fetch('/api/watchlist/ui-preferences', { cache: 'no-store', ...init });
-  return { response, body: await response.json().catch(() => null) };
+async function requestRemote(init?: RequestInit) {
+  return watchlistJsonResult<unknown>(
+    '/api/watchlist/ui-preferences',
+    { cache: 'no-store', ...init },
+    'watchlist_ui_preferences_unavailable',
+  );
 }
 
 export function useWatchlistUiPreferences(enabled: boolean) {
@@ -100,13 +104,14 @@ export function useWatchlistUiPreferences(enabled: boolean) {
     const lastMutationId = pendingRef.current.at(-1)!.id;
     const snapshot = cloneWatchlistUiPreferences(preferencesRef.current);
     try {
-      const { response, body } = await requestRemote({
+      const result = await requestRemote({
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ expectedVersion: versionRef.current, preferences: snapshot }),
       });
+      const { body } = result;
       const remote = parseRemoteSnapshot(body);
-      if (response.status === 409 && remote) {
+      if (!result.ok && result.status === 409 && remote) {
         versionRef.current = remote.version;
         const rebased = applyPending(remote.preferences, pendingRef.current);
         replaceLocal(rebased);
@@ -116,12 +121,7 @@ export function useWatchlistUiPreferences(enabled: boolean) {
         else setError('watchlist_ui_preferences_conflict');
         return;
       }
-      if (!response.ok || !remote) {
-        const code = body && typeof body === 'object' && !Array.isArray(body)
-          ? (body as Record<string, unknown>).error
-          : null;
-        throw new Error(typeof code === 'string' ? code : 'watchlist_ui_preferences_update_failed');
-      }
+      if (!result.ok || !remote) throw new Error(result.ok ? 'watchlist_ui_preferences_update_failed' : result.error.code);
 
       versionRef.current = remote.version;
       conflictRetriesRef.current = 0;
@@ -163,13 +163,9 @@ export function useWatchlistUiPreferences(enabled: boolean) {
     setStatus('loading');
     setError(null);
     requestRemote({ signal: controller.signal })
-      .then(({ response, body }) => {
-        if (!response.ok) {
-          const code = body && typeof body === 'object' && !Array.isArray(body)
-            ? (body as Record<string, unknown>).error
-            : null;
-          throw new Error(typeof code === 'string' ? code : 'watchlist_ui_preferences_unavailable');
-        }
+      .then((result) => {
+        if (!result.ok) throw result.error;
+        const { body } = result;
         const remote = parseRemoteSnapshot(body);
         if (!remote) throw new Error('invalid_watchlist_ui_preferences_response');
         versionRef.current = remote.version;
@@ -200,8 +196,8 @@ export function useWatchlistUiPreferences(enabled: boolean) {
       if (!serverReadyRef.current || inFlightRef.current || pendingRef.current.length > 0) return;
       inFlightRef.current = true;
       try {
-        const { response, body } = await requestRemote();
-        const remote = response.ok ? parseRemoteSnapshot(body) : null;
+        const result = await requestRemote();
+        const remote = result.ok ? parseRemoteSnapshot(result.body) : null;
         if (!remote) throw new Error('watchlist_ui_preferences_unavailable');
         if (cancelled || remote.version <= versionRef.current) return;
         versionRef.current = remote.version;

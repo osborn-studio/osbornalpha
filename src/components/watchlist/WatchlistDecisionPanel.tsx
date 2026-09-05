@@ -1,8 +1,9 @@
 'use client';
 
-import { RotateCcw, Save } from 'lucide-react';
+import { CircleHelp, RotateCcw, Save } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
+import { WatchlistRequestError, watchlistJsonRequest } from '@/lib/watchlist/api-client';
 import type { WatchlistOverviewItemRow } from '@/lib/watchlist/overview-contract';
 import { WatchlistDecisionHistory } from './WatchlistDecisionHistory';
 
@@ -12,10 +13,12 @@ function normalizeTags(value: string) {
 
 export function WatchlistDecisionPanel({
   item,
+  currency,
   onSaved,
   onDirtyChange,
 }: {
   item: WatchlistOverviewItemRow;
+  currency?: string | null;
   onSaved: (item: WatchlistOverviewItemRow) => void;
   onDirtyChange?: (dirty: boolean) => void;
 }) {
@@ -77,7 +80,7 @@ export function WatchlistDecisionPanel({
     setError(null);
     setConflictItem(null);
     try {
-      const response = await fetch(`/api/watchlist/items/${encodeURIComponent(item.id)}`, {
+      const body = await watchlistJsonRequest<{ item: WatchlistOverviewItemRow }>(`/api/watchlist/items/${encodeURIComponent(item.id)}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -92,16 +95,16 @@ export function WatchlistDecisionPanel({
           status,
           expectedVersion: item.decision_version,
         }),
-      });
-      const body = await response.json().catch(() => null);
-      if (response.status === 409) {
-        setConflictItem(body?.currentItem ?? null);
-        throw new Error('watchlist_decision_conflict');
-      }
-      if (!response.ok || !body?.item) throw new Error(body?.error || 'save_failed');
-      onSaved(body.item as WatchlistOverviewItemRow);
+      }, 'save_failed');
+      if (!body.item) throw new Error('save_failed');
+      onSaved(body.item);
     } catch (caught) {
-      setError(caught instanceof Error && caught.message === 'watchlist_decision_conflict' ? t('conflict') : t('saveFailed'));
+      const conflict = caught instanceof WatchlistRequestError && caught.status === 409;
+      if (conflict) {
+        const currentItem = caught.body?.currentItem;
+        setConflictItem(currentItem && typeof currentItem === 'object' ? currentItem as WatchlistOverviewItemRow : null);
+      }
+      setError(conflict ? t('conflict') : t('saveFailed'));
     } finally {
       setSaving(false);
     }
@@ -127,9 +130,9 @@ export function WatchlistDecisionPanel({
           <textarea value={notes} onChange={(event) => setNotes(event.target.value)} rows={2} maxLength={2000} className="w-full resize-y rounded-md border border-border bg-bg-elevated px-3 py-2 text-sm outline-none focus:border-accent" />
         </label>
         <label>
-          <span className="mb-1 block text-[11px] text-text-dim">{t('targetPrice')}</span>
+          <span className="mb-1 block text-[11px] text-text-dim">{currency ? t('targetPriceWithCurrency', { currency }) : t('targetPrice')}</span>
           <input type="number" min="0" step="any" value={targetPrice} onChange={(event) => setTargetPrice(event.target.value)} className="w-full" aria-invalid={!validTarget} />
-          {!validTarget && <span className="mt-1 block text-[10px] text-status-bad">{t('targetInvalid')}</span>}
+          {!validTarget && <span className="mt-1 block text-[11px] text-status-bad">{t('targetInvalid')}</span>}
         </label>
         <label>
           <span className="mb-1 block text-[11px] text-text-dim">{t('reviewAt')}</span>
@@ -144,11 +147,11 @@ export function WatchlistDecisionPanel({
           <textarea value={invalidation} onChange={(event) => setInvalidation(event.target.value)} rows={2} maxLength={2000} className="w-full resize-y rounded-md border border-border bg-bg-elevated px-3 py-2 text-sm outline-none focus:border-accent" />
         </label>
         <label>
-          <span className="mb-1 flex justify-between text-[11px] text-text-dim"><span>{t('conviction')}</span><span className="font-mono text-text">{conviction}/10</span></span>
+          <span className="mb-1 flex justify-between text-[11px] text-text-dim"><span className="inline-flex items-center gap-1" title={t('convictionHelp')}>{t('conviction')}<CircleHelp className="h-3 w-3 text-text-muted" aria-hidden="true" /></span><span className="font-mono text-text">{conviction}/10</span></span>
           <input type="range" min="0" max="10" step="1" value={conviction} onChange={(event) => setConviction(Number(event.target.value))} className="w-full accent-[var(--accent)]" />
         </label>
         <label>
-          <span className="mb-1 flex justify-between text-[11px] text-text-dim"><span>{t('confidence')}</span><span className="font-mono text-text">{confidence}%</span></span>
+          <span className="mb-1 flex justify-between text-[11px] text-text-dim"><span className="inline-flex items-center gap-1" title={t('confidenceHelp')}>{t('confidence')}<CircleHelp className="h-3 w-3 text-text-muted" aria-hidden="true" /></span><span className="font-mono text-text">{confidence}%</span></span>
           <input type="range" min="0" max="100" step="5" value={confidence} onChange={(event) => setConfidence(Number(event.target.value))} className="w-full accent-[var(--accent)]" />
         </label>
       </div>

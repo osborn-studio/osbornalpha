@@ -1,5 +1,10 @@
 import type { EvidenceCorroboratingSource, EvidenceQualityFlag, EvidenceSearchStatus } from '@/lib/external-evidence/types';
 import type { BrokerRating } from './consensus';
+import type { HeadlineSentimentAssessment } from '@/lib/external-evidence/sentiment';
+import type {
+  PerspectiveAnalysisRequestMode,
+  PerspectiveAnalysisResolvedMode,
+} from './perspective-analysis';
 
 export interface StockResearchMeta {
   status: EvidenceSearchStatus;
@@ -22,6 +27,8 @@ export interface StockNewsItem {
   sentimentConfidence?: number;
   sentimentPositiveMatches?: string[];
   sentimentNegativeMatches?: string[];
+  sentimentLanguage?: HeadlineSentimentAssessment['language'];
+  sentimentAspects?: HeadlineSentimentAssessment['aspects'];
   publishedAt: string | null;
   fetchedAt: string;
   trustScore: number;
@@ -79,6 +86,9 @@ export interface StockReportsResponse {
 export interface PerspectiveProvenance {
   modelVersion: string | null;
   promptVersion: string | null;
+  requestedAnalysisMode: PerspectiveAnalysisRequestMode;
+  resolvedAnalysisMode: PerspectiveAnalysisResolvedMode;
+  evidenceStatus: EvidenceSearchStatus;
   evidenceRequestId: string | null;
   evidenceFetchedAt: string | null;
   evidenceResultCount: number;

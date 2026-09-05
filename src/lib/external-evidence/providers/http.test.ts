@@ -65,4 +65,20 @@ describe('search provider HTTP reliability', () => {
     });
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
+
+  it('does not retry after caller cancellation', async () => {
+    const controller = new AbortController();
+    const fetcher = vi.fn(async (_input, init) => new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      if (!signal) return reject(new Error('missing signal'));
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }));
+    vi.stubGlobal('fetch', fetcher);
+    const pending = fetchSearchJson('https://provider.test/search', { signal: controller.signal });
+    controller.abort(new Error('cancelled'));
+    await expect(pending).rejects.toMatchObject({
+      message: 'search_provider_aborted', retryable: false, attempts: 1,
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
 });

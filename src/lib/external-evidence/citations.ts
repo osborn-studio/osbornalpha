@@ -11,8 +11,10 @@ export function resolvePerspectiveCitations(
   const citations: PerspectiveCitation[] = [];
   for (const rawId of ids) {
     const id = String(rawId);
-    const item = byId.get(id);
-    if (!item || seen.has(id)) continue;
+    const baseId = id.split('#')[0];
+    const item = byId.get(baseId);
+    const paragraph = item?.document?.paragraphs.find((candidate) => candidate.id === id);
+    if (!item || seen.has(id) || (id !== baseId && !paragraph)) continue;
     seen.add(id);
     citations.push({
       id,
@@ -24,6 +26,11 @@ export function resolvePerspectiveCitations(
       qualityScore: item.qualityScore,
       qualityFlags: item.qualityFlags,
       corroborationCount: item.corroborationCount,
+      ...(paragraph ? {
+        paragraphId: paragraph.id,
+        excerpt: paragraph.text,
+        contentHash: paragraph.contentHash,
+      } : {}),
     });
     if (citations.length >= limit) break;
   }
@@ -32,11 +39,16 @@ export function resolvePerspectiveCitations(
 
 export function evidencePromptLines(evidence: ExternalEvidence[]): string[] {
   if (evidence.length === 0) return [];
-  return evidence.map((item) => {
+  return evidence.flatMap((item) => {
     const date = item.publishedAt?.slice(0, 10) || 'date unavailable';
     const corroboration = item.corroboratingSources?.length
       ? ` | corroborated by ${item.corroboratingSources.map((source) => source.domain).join(', ')}`
       : '';
-    return `[${item.citationId}] ${item.title} | ${item.domain} | ${date}${corroboration} | ${item.snippet || 'No excerpt'}`;
+    if (item.document?.paragraphs.length) {
+      return item.document.paragraphs.slice(0, 3).map((paragraph) => (
+        `[${paragraph.id}] ${item.title} | ${item.domain} | ${date}${corroboration} | ${paragraph.text}`
+      ));
+    }
+    return [`[${item.citationId}] ${item.title} | ${item.domain} | ${date}${corroboration} | ${item.snippet || 'No excerpt'}`];
   });
 }

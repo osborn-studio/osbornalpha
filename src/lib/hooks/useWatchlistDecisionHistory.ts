@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { WatchlistItemDecisionHistory, WatchlistItem } from '@/lib/supabase/database.types';
 import { decisionRestoreRequest } from '@/lib/watchlist/decision-history';
+import { watchlistJsonRequest } from '@/lib/watchlist/api-client';
 
 export function useWatchlistDecisionHistory(itemId: string) {
   const [history, setHistory] = useState<WatchlistItemDecisionHistory[]>([]);
@@ -14,9 +15,12 @@ export function useWatchlistDecisionHistory(itemId: string) {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`/api/watchlist/items/${encodeURIComponent(itemId)}`, { signal, cache: 'no-store' });
-      const body = await response.json().catch(() => null);
-      if (!response.ok || !Array.isArray(body?.history)) throw new Error(body?.error || 'decision_history_unavailable');
+      const body = await watchlistJsonRequest<{ history: WatchlistItemDecisionHistory[]; item: WatchlistItem }>(
+        `/api/watchlist/items/${encodeURIComponent(itemId)}`,
+        { signal, cache: 'no-store' },
+        'decision_history_unavailable',
+      );
+      if (!Array.isArray(body.history)) throw new Error('decision_history_unavailable');
       setHistory(body.history);
       return body.item as WatchlistItem;
     } catch (caught) {
@@ -39,11 +43,10 @@ export function useWatchlistDecisionHistory(itemId: string) {
     setRestoring(true);
     setError(null);
     try {
-      const response = await fetch(`/api/watchlist/items/${encodeURIComponent(itemId)}`, {
+      const payload = await watchlistJsonRequest<{ item: WatchlistItem }>(`/api/watchlist/items/${encodeURIComponent(itemId)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
-      });
-      const payload = await response.json().catch(() => null);
-      if (!response.ok || !payload?.item) throw new Error(payload?.error || 'decision_restore_failed');
+      }, 'decision_restore_failed');
+      if (!payload.item) throw new Error('decision_restore_failed');
       await load();
       return payload.item as WatchlistItem;
     } catch (caught) {

@@ -26,7 +26,7 @@ function resultSet(snapshot: EvidenceSearchSnapshot) {
   const rows = snapshot.results
     .map((item) => ({
       citationId: item.citationId,
-      contentHash: sha256(`${item.title}\n${item.snippet}`),
+      contentHash: item.document?.contentHash ?? sha256(`${item.title}\n${item.snippet}`),
     }))
     .sort((left, right) => left.citationId.localeCompare(right.citationId));
   return {
@@ -78,6 +78,9 @@ export function buildEvidencePersistenceRows(
       corroboration_count: item.corroborationCount ?? 1,
       corroborating_sources: item.corroboratingSources ?? [],
       content_hash: sha256(`${item.title}\n${item.snippet}`),
+      document_content_hash: item.document?.contentHash ?? null,
+      document_fetched_at: item.document?.fetchedAt ?? null,
+      document_paragraphs: item.document?.paragraphs ?? [],
     })),
     links: request.ticker ? snapshot.results.map((item) => ({
       ticker: request.ticker!,

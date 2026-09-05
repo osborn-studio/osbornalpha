@@ -16,6 +16,32 @@ export interface UserLlm {
   apiKeyCipher: string;
 }
 
+export type UserLlmSettingsClient = object;
+
+export async function getUserLlmForUser(
+  client: UserLlmSettingsClient,
+  userId: string,
+): Promise<UserLlm | null> {
+  const repository = client as {
+    from(name: 'llm_settings'): {
+      select(columns: string): {
+        eq(column: 'user_id', value: string): {
+          maybeSingle(): Promise<{
+            data: { provider: string; model: string; api_key_cipher: string } | null;
+            error: { message: string } | null;
+          }>;
+        };
+      };
+    };
+  };
+  const { data, error } = await repository.from('llm_settings')
+    .select('provider, model, api_key_cipher')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error || !data) return null;
+  return { provider: data.provider, model: data.model, apiKeyCipher: data.api_key_cipher };
+}
+
 /**
  * Returns the authenticated user's LLM settings, or null if there is no user
  * or no row has been persisted yet.
@@ -27,19 +53,7 @@ export async function getUserLlm(): Promise<UserLlm | null> {
   } = await supabase.auth.getUser();
   if (!user) return null;
 
-  const { data, error } = await (supabase as any)
-    .from('llm_settings')
-    .select('provider, model, api_key_cipher')
-    .eq('user_id', user.id)
-    .maybeSingle();
-
-  if (error || !data) return null;
-
-  return {
-    provider: data.provider as string,
-    model: data.model as string,
-    apiKeyCipher: data.api_key_cipher as string,
-  };
+  return getUserLlmForUser(supabase, user.id);
 }
 
 /**

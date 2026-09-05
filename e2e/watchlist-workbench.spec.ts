@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 const bars = [
   { time: 1756684800, open: 100, high: 103, low: 98, close: 102, volume: 1000, amount: 102000, previousClose: 99, change: 3, changePct: (3 / 99) * 100 },
@@ -10,7 +10,7 @@ const bars = [
 function quote(ticker: string, index: number) {
   const price = 100 + index * 20;
   return {
-    source: 'test-feed', ticker, name: ticker === 'AAPL' ? 'Apple' : ticker === 'NVDA' ? 'NVIDIA' : 'Kweichow Moutai',
+    source: 'test-feed', ticker, name: ticker === 'AAPL' ? 'Apple' : ticker === 'NVDA' ? 'NVIDIA' : ticker === 'MSFT' ? 'Microsoft' : 'Kweichow Moutai',
     market: ticker.endsWith('.SH') ? 'A' : 'US', currency: ticker.endsWith('.SH') ? '¥' : '$',
     price, change: index - 1, change_pct: (index - 1) * 1.25, open: price - 1, high: price + 3, low: price - 4,
     prev_close: price - index + 1, volume: 1_000_000 * (index + 1), amount: price * 1_000_000,
@@ -18,6 +18,18 @@ function quote(ticker: string, index: number) {
     pb: 3 + index, turnover: 1.2 + index, volume_ratio: 1.1 + index / 10,
     updated_at: '2026-09-03T20:00:00.000Z', delayed: false,
   };
+}
+
+async function mockWatchlistCore(page: Page) {
+  await page.route('**/api/watchlist/sync', (route) => route.fulfill({ status: 401, contentType: 'application/json', body: '{}' }));
+  await page.route('**/api/events', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
+  await page.route('**/api/quote/batch**', async (route) => {
+    const tickers = new URL(route.request().url()).searchParams.get('tickers')?.split(',') ?? [];
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ quotes: Object.fromEntries(tickers.map((ticker, index) => [ticker, quote(ticker, index)])), meta: { failed: 0 } }),
+    });
+  });
 }
 
 test('watchlist workbench filters, changes presets and opens a multi-chart quick view', async ({ page }) => {
@@ -28,15 +40,7 @@ test('watchlist workbench filters, changes presets and opens a multi-chart quick
       { id: 'cn', name: 'China', tickers: ['600519.SH'] },
     ]));
   });
-  await page.route('**/api/watchlist/sync', (route) => route.fulfill({ status: 401, contentType: 'application/json', body: '{}' }));
-  await page.route('**/api/events', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
-  await page.route('**/api/quote/batch**', async (route) => {
-    const tickers = new URL(route.request().url()).searchParams.get('tickers')?.split(',') ?? [];
-    await route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({ quotes: Object.fromEntries(tickers.map((ticker, index) => [ticker, quote(ticker, index)])), meta: { failed: 0 } }),
-    });
-  });
+  await mockWatchlistCore(page);
   await page.route('**/api/kline/**', async (route) => {
     const range = new URL(route.request().url()).searchParams.get('range') ?? '1d';
     const interval = range === '1d' || range === '5d' ? 'minute' : 'day';
@@ -62,9 +66,9 @@ test('watchlist workbench filters, changes presets and opens a multi-chart quick
   await page.route('**/api/financials/**', async (route) => {
     const period = (fiscalYear: number, quarter: 'Q1' | 'Q2' | 'Q3' | 'Q4', revenue: number, netIncome: number) => ({
       fiscalYear, quarter, periodEnd: `${fiscalYear}${quarter === 'Q1' ? '0331' : quarter === 'Q2' ? '0630' : quarter === 'Q3' ? '0930' : '1231'}`,
-      revenue_yi: revenue, total_revenue_yi: revenue, net_income_yi: netIncome, eps_basic: netIncome / 10,
-      total_assets_yi: revenue * 2, total_liab_yi: revenue * 0.7, equity_yi: revenue * 1.3,
-      op_cashflow_yi: netIncome * 1.2, free_cashflow_yi: netIncome * 0.8,
+      revenue, totalRevenue: revenue, netIncome, epsBasic: netIncome / 10,
+      totalAssets: revenue * 2, totalLiabilities: revenue * 0.7, equity: revenue * 1.3,
+      operatingCashflow: netIncome * 1.2, freeCashflow: netIncome * 0.8,
     });
     const quarterly = [
       period(2025, 'Q3', 88, 9), period(2025, 'Q4', 102, 11),
@@ -75,12 +79,12 @@ test('watchlist workbench filters, changes presets and opens a multi-chart quick
       body: JSON.stringify({
         source: 'tushare', ticker: 'AAPL', yearly: [], quarterly,
         ttm: {
-          periodEnd: '20260630', revenue_yi: 434, total_revenue_yi: 434, net_income_yi: 48,
-          eps_basic: 4.8, op_cashflow_yi: 57.6, free_cashflow_yi: 38.4, quarterCount: 4,
+          periodEnd: '20260630', revenue: 434, totalRevenue: 434, netIncome: 48,
+          epsBasic: 4.8, operatingCashflow: 57.6, freeCashflow: 38.4, quarterCount: 4,
         },
-        latest_indicator: null,
+        latestIndicator: null,
         meta: {
-          source: 'tushare', market: 'A', supported: true, currency: 'CNY', unit: 'CNY_100M', unitScale: 100000000,
+          source: 'tushare', market: 'A', supported: true, availability: 'available', currency: 'CNY', unit: 'CNY_100M', unitScale: 100000000,
           reportingFrequency: 'quarterly', latestPeriodEnd: '20260630', availablePeriods: 0,
           availableQuarterlyPeriods: 4, ttmAvailable: true,
           coverage: { income: 4, balance: 4, cashflow: 4, indicator: false }, warnings: [],
@@ -106,42 +110,112 @@ test('watchlist workbench filters, changes presets and opens a multi-chart quick
   await expect(page.getByRole('link', { name: 'AAPL' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'NVDA' })).toHaveCount(0);
   await page.getByPlaceholder('Search ticker or company').fill('');
+  const appleRow = page.getByRole('row').filter({ has: page.getByRole('link', { name: 'AAPL' }) });
+  const nvidiaRow = page.getByRole('row').filter({ has: page.getByRole('link', { name: 'NVDA' }) });
+  await appleRow.focus();
+  await appleRow.press('ArrowUp');
+  await expect(nvidiaRow).toBeFocused();
   await page.getByRole('button', { name: 'Columns' }).click();
   await expect(page.getByText('Instrument', { exact: true })).toBeVisible();
   await expect(page.getByText('Market data', { exact: true })).toBeVisible();
   await expect(page.getByText('Technical and risk', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Unfreeze Company' })).toBeVisible();
   await page.getByRole('button', { name: 'Columns' }).click();
+  const companyResize = page.getByRole('separator', { name: 'Resize Company' });
+  await expect(companyResize).toHaveAttribute('aria-valuenow', '190');
+  await companyResize.focus();
+  await companyResize.press('ArrowRight');
+  await expect(companyResize).toHaveAttribute('aria-valuenow', '198');
   await page.screenshot({ path: 'test-results/watchlist-table-desktop.png', fullPage: true });
 
-  const appleRow = page.getByRole('row').filter({ has: page.getByRole('link', { name: 'AAPL' }) });
   await appleRow.getByRole('button', { name: 'View' }).click();
   const drawer = page.getByRole('dialog', { name: 'Quick quote for AAPL' });
   await expect(drawer).toBeVisible();
-  await expect(drawer.getByText('1Y price return')).toBeVisible();
+  await expect(drawer.getByRole('tab', { name: 'Chart' })).toHaveAttribute('aria-selected', 'true');
   await expect(drawer.locator('canvas').first()).toBeVisible();
-  await drawer.getByLabel('Chart type').selectOption('baseline');
+  await drawer.getByRole('button', { name: 'Baseline' }).click();
   await expect(drawer.locator('canvas').first()).toBeVisible();
+  await drawer.getByRole('button', { name: 'Close quick quote' }).hover();
+  await expect(drawer.getByTestId('kline-tooltip')).toHaveCount(0);
+  const chartBounds = await drawer.getByTestId('kline-chart-pane').boundingBox();
+  expect(chartBounds).not.toBeNull();
+  await page.mouse.move(chartBounds!.x + 180, chartBounds!.y + 140);
+  await expect(drawer.getByTestId('kline-tooltip')).toBeVisible();
+  await drawer.getByRole('button', { name: 'Close quick quote' }).hover();
+  await expect(drawer.getByTestId('kline-tooltip')).toHaveCount(0);
   await page.screenshot({ path: 'test-results/watchlist-desktop.png', fullPage: true });
 
-  await drawer.getByRole('tab', { name: 'Financials' }).click();
+  await drawer.getByRole('tab', { name: 'Snapshot' }).click();
+  await expect(drawer.getByRole('region', { name: 'Historical performance and risk' })).toBeVisible();
+  await drawer.locator('summary').filter({ hasText: 'Financial performance' }).click();
   await expect(drawer.getByText('Revenue · TTM')).toBeVisible();
   await expect(drawer.getByRole('cell', { name: '2026 Q2' })).toBeVisible();
   await page.screenshot({ path: 'test-results/watchlist-financials-desktop.png', fullPage: true });
 
+  await drawer.getByRole('tab', { name: 'Research' }).click();
+  await expect(drawer.getByRole('tab', { name: /Activity timeline/ })).toBeVisible();
+  await drawer.getByRole('tab', { name: /AI perspectives/ }).click();
+  await expect(drawer.getByRole('button', { name: 'Generate perspectives' })).toBeVisible();
+  await page.screenshot({ path: 'test-results/watchlist-research-desktop.png', fullPage: true });
+
   await drawer.getByRole('button', { name: 'Close quick quote' }).click();
   await appleRow.getByRole('button', { name: 'View' }).click();
-  await expect(drawer.getByLabel('Chart type')).toHaveValue('baseline');
+  await drawer.getByRole('tab', { name: 'Chart' }).click();
+  await expect(drawer.getByRole('button', { name: 'Baseline' })).toHaveAttribute('aria-pressed', 'true');
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(drawer).toBeVisible();
   await expect(drawer.getByRole('button', { name: 'Close quick quote' })).toBeVisible();
   await page.screenshot({ path: 'test-results/watchlist-mobile.png', fullPage: false });
-  await drawer.getByRole('button', { name: 'Close quick quote' }).click();
+  await drawer.getByRole('button', { name: 'Close quick quote' }).dispatchEvent('click');
   await expect(drawer).toBeHidden();
   await page.getByRole('button', { name: /Apple/ }).click();
   await expect(drawer).toBeVisible();
   await drawer.getByRole('button', { name: 'Close quick quote' }).click();
   await page.screenshot({ path: 'test-results/watchlist-table-mobile.png', fullPage: false });
+});
+
+test('mobile filters, add-security search and board keyboard movement remain usable', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() => {
+    localStorage.setItem('stock-monitor:watchlist:v2', JSON.stringify([
+      { id: 'core', name: 'Core', tickers: ['AAPL'] },
+      { id: 'cn', name: 'China', tickers: ['600519.SH'] },
+    ]));
+  });
+  await mockWatchlistCore(page);
+  await page.route('**/api/search**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({
+      results: [{ t: 'MSFT', n: 'Microsoft', py: 'microsoft', m: 'US', asset_type: 'stock', selectable: true, verification_status: 'verified', list_status: 'listed' }],
+    }),
+  }));
+
+  await page.goto('/watchlist');
+  await page.getByRole('button', { name: 'Advanced filters' }).click();
+  const marketFilter = page.locator('label').filter({ hasText: 'Filter market' }).getByRole('combobox');
+  await expect(marketFilter).toBeVisible();
+  await marketFilter.selectOption('US');
+  await page.getByRole('button', { name: 'Close filters' }).click();
+  await expect(page.getByRole('button', { name: /Apple/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Kweichow Moutai/ })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Add security' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Add security' });
+  const search = dialog.getByPlaceholder('Ticker / name (e.g. AAPL / 600519)');
+  await search.fill('MSFT');
+  await expect(dialog.getByRole('option', { name: /Microsoft/ })).toBeVisible();
+  await dialog.getByRole('option', { name: /Microsoft/ }).click();
+  await dialog.getByRole('button', { name: 'Done' }).click();
+  await expect(page.getByRole('region', { name: 'Now monitoring MSFT' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Microsoft/ })).toBeVisible();
+
+  await page.setViewportSize({ width: 1024, height: 800 });
+  await page.getByRole('button', { name: 'Board' }).click();
+  const appleCard = page.locator('[data-watchlist-card="AAPL"]');
+  await appleCard.focus();
+  await appleCard.press('Alt+ArrowRight');
+  await expect(page.getByRole('region', { name: 'China' }).locator('[data-watchlist-card="AAPL"]')).toBeVisible();
 });
 
 test('large desktop watchlists keep a bounded row window while scrolling', async ({ page }) => {
@@ -152,23 +226,11 @@ test('large desktop watchlists keep a bounded row window while scrolling', async
       { id: 'large', name: 'Large list', tickers: items },
     ]));
   }, tickers);
-  await page.route('**/api/watchlist/sync', (route) => route.fulfill({ status: 401, contentType: 'application/json', body: '{}' }));
-  await page.route('**/api/events', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
-  await page.route('**/api/quote/batch**', async (route) => {
-    const requested = new URL(route.request().url()).searchParams.get('tickers')?.split(',') ?? [];
-    await route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({
-        quotes: Object.fromEntries(requested.map((ticker, index) => [ticker, {
-          ...quote(ticker, index), name: ticker, change: 0, change_pct: 0,
-        }])),
-        meta: { failed: 0 },
-      }),
-    });
-  });
+  await mockWatchlistCore(page);
 
   await page.goto('/watchlist');
   const table = page.getByRole('table', { name: 'Watchlist table view' });
+  await page.getByRole('button', { name: 'Sort by Ticker' }).click();
   await expect(page.getByRole('link', { name: 'T000', exact: true })).toBeVisible();
   const renderedRows = await table.locator('tbody > tr').count();
   expect(renderedRows).toBeLessThan(40);
@@ -180,4 +242,34 @@ test('large desktop watchlists keep a bounded row window while scrolling', async
   });
   await expect(page.getByRole('link', { name: 'T119', exact: true })).toBeVisible();
   expect(await table.locator('tbody > tr').count()).toBeLessThan(40);
+});
+
+test('watchlist shell remains bounded across supported breakpoints', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('stock-monitor:watchlist:v2', JSON.stringify([
+      { id: 'core', name: 'Core', tickers: ['AAPL', 'NVDA'] },
+    ]));
+  });
+  await mockWatchlistCore(page);
+  await page.goto('/watchlist');
+
+  for (const viewport of [
+    { width: 360, height: 800 },
+    { width: 768, height: 900 },
+    { width: 1024, height: 900 },
+    { width: 1440, height: 1000 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect(page.getByRole('heading', { name: 'Watchlist' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Add security' })).toBeVisible();
+    const horizontalOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(horizontalOverflow).toBeLessThanOrEqual(1);
+    if (viewport.width < 640) {
+      await expect(page.getByRole('navigation', { name: 'Primary navigation' })).toBeVisible();
+      await expect(page.getByRole('button', { name: /Apple/ })).toBeVisible();
+    } else {
+      await expect(page.getByRole('table', { name: 'Watchlist table view' })).toBeVisible();
+    }
+    await page.screenshot({ path: `test-results/watchlist-${viewport.width}.png`, fullPage: false });
+  }
 });

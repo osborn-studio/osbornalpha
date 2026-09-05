@@ -100,6 +100,25 @@ describe('perspective context', () => {
     });
   });
 
+  it('does not call search when external evidence is explicitly disabled', async () => {
+    const searchEvidence = vi.fn();
+    const result = await loadPerspectiveContext('AAPL', {
+      loadRadar: async () => radar(),
+      loadFinancials: async () => financials(),
+      searchEvidence,
+      includeExternalEvidence: false,
+      evidenceSkipWarning: 'external_evidence_not_requested',
+      now: () => new Date('2026-09-04T20:00:00.000Z'),
+    });
+
+    expect(searchEvidence).not.toHaveBeenCalled();
+    expect(result?.evidence).toMatchObject({
+      requestId: 'not-requested', status: 'unavailable', results: [],
+      warnings: ['external_evidence_not_requested'],
+    });
+    expect(result?.context.external_evidence).toEqual([]);
+  });
+
   it('keeps market and evidence context when financial loading fails', async () => {
     const result = await loadPerspectiveContext('AAPL', {
       loadRadar: async () => radar(),
@@ -116,13 +135,15 @@ describe('perspective context', () => {
     });
   });
 
-  it('stops before financial and evidence work when no valid market price exists', async () => {
-    const loadFinancials = vi.fn();
-    const searchEvidence = vi.fn();
+  it('degrades to financial and evidence context when live market price is unavailable', async () => {
+    const loadFinancials = vi.fn(async () => financials());
+    const searchEvidence = vi.fn(async () => evidence());
     await expect(loadPerspectiveContext('AAPL', {
       loadRadar: async () => radar(null), loadFinancials, searchEvidence,
-    })).resolves.toBeNull();
-    expect(loadFinancials).not.toHaveBeenCalled();
-    expect(searchEvidence).not.toHaveBeenCalled();
+    })).resolves.toMatchObject({
+      context: { ticker: 'AAPL', price: null, financial_source: 'sec-company-facts' },
+    });
+    expect(loadFinancials).toHaveBeenCalledWith('AAPL');
+    expect(searchEvidence).toHaveBeenCalled();
   });
 });

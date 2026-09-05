@@ -1,4 +1,7 @@
 import type { WatchlistAlert } from '@/lib/supabase/database.types';
+import type { WatchlistMetricAlertKey } from './alert-metrics';
+import { isWatchlistMetricAlertKey } from './alert-metrics';
+import { WATCHLIST_NUMERIC_ALERT_TYPES } from './alert-catalog';
 
 export interface WatchlistAlertCandidate {
   key: string;
@@ -17,6 +20,8 @@ export interface WatchlistAlertObservation {
   volumeRatio: number | null;
   peTtm: number | null;
   pb: number | null;
+  metricDataStatus?: 'fresh' | 'stale' | 'unavailable';
+  metrics?: Partial<Record<WatchlistMetricAlertKey, number | null>>;
   events: WatchlistAlertCandidate[];
   ratings: WatchlistAlertCandidate[];
   perspectives: WatchlistAlertCandidate[];
@@ -49,7 +54,21 @@ function numericValue(alert: WatchlistAlert, observation: WatchlistAlertObservat
   if (alert.alert_type === 'valuation') {
     return alert.config.metric === 'pb' ? observation.pb : observation.peTtm;
   }
+  if (alert.alert_type === 'metric' && isWatchlistMetricAlertKey(alert.config.metric)) {
+    return observation.metrics?.[alert.config.metric] ?? null;
+  }
   return null;
+}
+
+function numericDataStatus(
+  alert: WatchlistAlert,
+  observation: WatchlistAlertObservation,
+): WatchlistAlertObservation['marketDataStatus'] {
+  return alert.alert_type === 'metric' ? observation.metricDataStatus : observation.marketDataStatus;
+}
+
+function isNumericAlert(alert: WatchlistAlert): boolean {
+  return (WATCHLIST_NUMERIC_ALERT_TYPES as readonly string[]).includes(alert.alert_type);
 }
 
 function numericMatch(
@@ -149,10 +168,11 @@ export function evaluateWatchlistAlert(
     payload: {},
   };
 
-  if (['price', 'change_pct', 'volume_ratio', 'valuation'].includes(alert.alert_type)) {
+  if (isNumericAlert(alert)) {
     const current = numericValue(alert, observation);
-    if (observation.marketDataStatus === 'stale'
-      || observation.marketDataStatus === 'unavailable'
+    const status = numericDataStatus(alert, observation);
+    if (status === 'stale'
+      || status === 'unavailable'
       || !finite(current)
       || !finite(alert.threshold_numeric)
       || !alert.operator) {
@@ -167,9 +187,16 @@ export function evaluateWatchlistAlert(
       ...base,
       observedValue: current,
       triggered: true,
-      eventKey: `${alert.alert_type}:${alert.operator}:${alert.threshold_numeric}:${observationBucket(observation.observedAt)}`,
-      label: `${alert.alert_type} ${alert.operator} ${alert.threshold_numeric}`,
-      payload: { operator: alert.operator, threshold: alert.threshold_numeric, observedAt: observation.observedAt },
+      eventKey: alert.alert_type === 'metric'
+        ? `metric:${alert.config.metric}:${alert.operator}:${alert.threshold_numeric}:${observationBucket(observation.observedAt)}`
+        : `${alert.alert_type}:${alert.operator}:${alert.threshold_numeric}:${observationBucket(observation.observedAt)}`,
+      label: `${alert.alert_type === 'metric' ? alert.config.metric : alert.alert_type} ${alert.operator} ${alert.threshold_numeric}`,
+      payload: {
+        metric: alert.config.metric ?? null,
+        operator: alert.operator,
+        threshold: alert.threshold_numeric,
+        observedAt: observation.observedAt,
+      },
       reason: 'matched',
     };
   }
@@ -197,7 +224,7 @@ export function evaluateWatchlistAlertBatch(
   alert: WatchlistAlert,
   observation: WatchlistAlertObservation,
 ): WatchlistAlertEvaluation[] {
-  if (['price', 'change_pct', 'volume_ratio', 'valuation'].includes(alert.alert_type)) {
+  if (isNumericAlert(alert)) {
     return [evaluateWatchlistAlert(alert, observation)];
   }
 

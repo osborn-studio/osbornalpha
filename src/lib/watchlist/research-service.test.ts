@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { BrokerReport, NewsItem } from '@/lib/supabase/database.types';
+import type { BrokerReport, NewsItem, Perspective } from '@/lib/supabase/database.types';
 import { mapStoredWatchlistResearch, refreshWatchlistResearch } from './research-service';
 
 const now = new Date('2026-09-04T12:00:00.000Z');
@@ -44,6 +44,32 @@ describe('watchlist research service', () => {
     await expect(refreshWatchlistResearch({}, 'user-1', 'AAPL', dependencies)).resolves.toMatchObject({
       status: 'complete', newsUpdated: true, reportsUpdated: true, refreshedAt: now.toISOString(),
     });
+  });
+
+  it('keeps claim-level evidence in the public research read model', () => {
+    const claims = [{
+      kind: 'risk' as const,
+      text: 'Margins may compress.',
+      dataCites: ['gross_margin'],
+      citations: [{
+        id: 'web_1#p2', title: 'Filing', url: 'https://example.com/filing', domain: 'example.com',
+        publishedAt: '2026-09-01T00:00:00Z', trustScore: 0.9, excerpt: 'Input costs increased.',
+      }],
+    }];
+    const bundle = mapStoredWatchlistResearch('AAPL', {
+      news: [],
+      reports: [],
+      perspectives: [{
+        id: 'perspective-1', persona: 'marks', stance: 'bearish', confidence: 7,
+        summary: 'Margin risk', cites: ['gross_margin'], citations: [], claims,
+        model_version: 'model', prompt_version: 'prompt', requested_analysis_mode: 'auto',
+        resolved_analysis_mode: 'evidence_backed', evidence_status: 'complete',
+        evidence_request_id: null, evidence_fetched_at: null, evidence_result_count: 1,
+        evidence_coverage_ratio: 1, created_at: now.toISOString(),
+      } as unknown as Perspective],
+    }, now);
+
+    expect(bundle.perspectives[0]).toMatchObject({ claims });
   });
 
   it('keeps a successful section when the other provider fails', async () => {

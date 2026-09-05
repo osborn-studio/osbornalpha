@@ -4,6 +4,7 @@
     "description": "AI 投资监控工作台 · 个人股票池每日 AI 监控 · A 股 / 港股 / 美股"
   },
   "nav": {
+    "primaryNavigation": "主导航",
     "today": "今日",
     "watchlist": "股票池",
     "intel": "情报",

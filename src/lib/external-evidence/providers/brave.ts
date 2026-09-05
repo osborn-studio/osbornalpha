@@ -4,7 +4,7 @@ import { asJsonRecord, asText, fetchSearchJson } from './http';
 export function createBraveProvider(apiKey: string): EvidenceSearchProvider {
   return {
     id: 'brave',
-    async search(query: EvidenceQuery): Promise<RawEvidenceResult[]> {
+    async search(query: EvidenceQuery, signal?: AbortSignal): Promise<RawEvidenceResult[]> {
       const params = new URLSearchParams({
         q: query.query,
         count: String(query.limit),
@@ -12,7 +12,7 @@ export function createBraveProvider(apiKey: string): EvidenceSearchProvider {
         text_decorations: 'false',
       });
       const data = asJsonRecord(await fetchSearchJson(`https://api.search.brave.com/res/v1/web/search?${params}`, {
-        headers: { accept: 'application/json', 'X-Subscription-Token': apiKey },
+        headers: { accept: 'application/json', 'X-Subscription-Token': apiKey }, signal,
       }));
       const web = asJsonRecord(data?.web);
       const results = web?.results;

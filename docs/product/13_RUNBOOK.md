@@ -15,6 +15,8 @@ npm test
 npm run typecheck
 npm run build
 npm run preflight:release            # 在已注入生产 env 的受控环境运行；只输出 provider/model 等非秘密信息
+npm run watchlist:provider-check     # 真实探测已配置 Watchlist Provider；会产生少量外部请求
+npm run watchlist:rls-check          # 两个独立验收账号；只读验证私有表双向隔离
 vercel --prod --yes                  # 直接发 Production
 ```
 
@@ -40,8 +42,17 @@ vercel --prod --yes                  # 直接发 Production
 | `LLM_USD_CNY_MICROS` | ✅ | 经评审的 USD/CNY 微单位值，当前 `7200000` |
 | `LLM_RESERVATION_TTL_SECONDS` | ✅ | 成本预留 TTL，当前 `300` |
 | `TUSHARE_TOKEN` | 数据 | A 股深度数据 |
+| `WATCHLIST_REQUIRED_PROVIDERS` | 建议 | 逗号分隔：`search,hk-financials,structured-research,official-documents,trading-calendar`；列入后不可降级发布 |
+| `SEARCH_PROVIDER` / `TAVILY_API_KEY` / `BRAVE_SEARCH_API_KEY` / `SERPER_API_KEY` | Watchlist 研究 | 联网搜索 Provider 与服务端密钥 |
+| `WATCHLIST_SEARCH_CANARY_QUERIES` | 可选探针 | 以 `|` 分隔的搜索 Canary 查询；默认覆盖 A/H/US 三市场 |
+| `HK_FINANCIALS_API_URL` / `HK_FINANCIALS_API_TOKEN` | 可选数据 | 港股财务结构化 Provider |
+| `STRUCTURED_RESEARCH_API_URL` / `STRUCTURED_RESEARCH_API_TOKEN` | 可选数据 | 港美股结构化研报 Provider |
+| `OFFICIAL_DOCUMENT_API_URL` / `OFFICIAL_DOCUMENT_API_TOKEN` | 可选数据 | 官方公告正文抽取 Provider |
+| `OFFICIAL_DOCUMENT_CANARY_URL` | 官方文档探针 | 允许抽取的 SEC/交易所官方公告 URL |
+| `TRADING_CALENDAR_URL` / `TRADING_CALENDAR_API_KEY` | 可选数据 | 六市场交易日历 Provider |
 | `SEC_USER_AGENT` | 可选 | SEC EDGAR 请求联系标识；建议设置为 `产品名/版本 运维邮箱` |
 | `CRON_SECRET` | 建议 | `/api/cron/*` 的 Bearer 鉴权 |
+| `WATCHLIST_REVIEW_REMINDER_LIMIT` | 建议 | Dispatcher 单轮生成 Review 到期提醒的上限，生产建议 `500` |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | 通知 | 简报/告警推送 |
 | `RESEND_API_KEY` / `EMAIL_FROM` / `EMAIL_TO` | 通知 | 邮件简报/告警 |
 | `CACHE_PURGE_SECRET` | 可选 | `/api/cache/revalidate` 鉴权 |
@@ -54,7 +65,7 @@ vercel --prod --yes                  # 直接发 Production
 
 ## 3. Supabase 迁移
 
-迁移文件在 `supabase/migrations/`（`20260515000000_initial_schema.sql`、`20260621000000_profiles_and_billing_hooks.sql`）。两种应用方式：
+迁移文件在 `supabase/migrations/`。上线前以文件名顺序核对所有未应用迁移；当前 Watchlist 最新 release marker 为 `perspective_claims`，由 `20260904430000_perspective_claims.sql` 写入。两种应用方式：
 
 **A. CLI（推荐）**
 ```bash
@@ -63,7 +74,9 @@ supabase link --project-ref mzfcaabhuwtfvsvadvsv   # 输入 DB 密码（Dashboar
 supabase db push                                    # 应用所有未应用迁移
 ```
 
-**B. SQL Editor（无 CLI 时）** — Dashboard → SQL Editor，粘贴迁移文件内容执行。迁移写法幂等（`create table if not exists`、`create or replace function`、`drop trigger if exists`），可安全重跑。
+**B. SQL Editor（无 CLI 时）** — Dashboard → SQL Editor，严格按文件名顺序执行尚未应用的迁移。不要整批重跑已登记迁移；约束、策略与数据迁移可能不是任意次数幂等。
+
+应用后必须运行 `npm run watchlist:production-check`。失败时先停止代码发布，修复数据库迁移；回滚优先恢复上一版应用代码。数据库迁移均为向前兼容的加法变更，不应在事故中直接删除新列或新表。
 
 **Seed**：`supabase/seed.sql`（30 只股票 universe）—— `supabase db push --include-seed` 或 SQL Editor 粘贴；`on conflict do update` 可重复执行。
 
@@ -97,8 +110,13 @@ supabase db push                                    # 应用所有未应用迁�
 - 缓解：保持 `LLM_PROVIDER=deepseek`、`LLM_MODEL=deepseek-v4-flash`，必要时降 `topN` 或用 `?skipLLM=true` 隔离数据管线；不得通过切换到未复核定价的模型绕过门禁。
 
 ### 5.4 cron 未跑 / 被滥用
-- 排查：Vercel cron 在 `vercel.json`（`daily-radar` 00:00 UTC、`daily-brief` 00:30 UTC）；Vercel Dashboard → Crons 看执行记录。
+- 排查：Vercel cron 在 `vercel.json`；`/api/cron/watchlist-dispatch` 分派告警、运营健康、Review 提醒、指标、观点结果和研究刷新；`/api/cron/watchlist-perspectives` 每 5 分钟恢复未被即时 Worker 处理的 AI 任务。Vercel Dashboard → Crons 查看执行记录，并检查响应中各 job 的独立状态。
 - 加固：设 `CRON_SECRET`，裸调 `/api/cron/*` 应返回 401。
+
+### 5.5 Review 提醒未送达或重复
+- 排查：先运行 `npm run watchlist:production-check`，确认 `watchlist_review_reminders` marker 与 `enqueue_watchlist_review_reminders` RPC；再检查 `alert_events`、投递队列、重试和死信状态。
+- 行为：提醒以 `watchlist_item_id + review + review_date` 幂等；暂停或已作废标的不发送。即时模式进入 Email/Telegram 队列，Digest 模式遵循用户时区和静默时段。
+- 缓解：队列积压时降低 Dispatcher 其他任务并发，但不要重置幂等键或手工重复插入提醒事件。
 
 ---
 
@@ -106,5 +124,7 @@ supabase db push                                    # 应用所有未应用迁�
 
 - **告警通道**：cron 失败时路由自动推 Telegram（`TELEGRAM_*`）+ Email（`RESEND_*`/`EMAIL_*`）。保证至少一条通道配好。
 - **日常巡检**：Vercel Deployments（构建/函数错误率）、Vercel Crons（每日两个 job 是否绿）、Supabase Dashboard（DB 用量、Auth 用户数、SMTP 配额）。
-- **健康探针**：`GET /api/brief/preview?skipLLM=true`（数据管线）、`GET /api/diag/tushare`（数据源 token）。
+- **健康探针**：`npm run watchlist:provider-check`（外部 Provider）、`npm run watchlist:production-check`（Schema 与队列健康）、`npm run watchlist:rls-check`（双账号只读隔离）、`GET /api/brief/preview?skipLLM=true`（数据管线）、`GET /api/diag/tushare`（数据源 token）。
+- **Watchlist 历史与告警**：`/api/cron/alerts/watchlist` 每 15 分钟将健康快照写入 `service_alert_runs(check_name='watchlist_15m')`；异常复用 Email/Telegram 运维通道。
+- **Watchlist 调度器**：Vercel 每 15 分钟调用 `/api/cron/watchlist-dispatch`。报价告警与运营健康每轮执行；Review 提醒、指标、观点结果和研究刷新分散到每小时四个 slot。AI Perspective 队列由独立的 `/api/cron/watchlist-perspectives` 每 5 分钟恢复，前端会在刷新或重新打开标的时继续跟踪活跃任务；数据库租约和幂等键阻止重复执行与旧 Worker 覆盖。
 - **on-call 基本动作**：①确认影响面（全站 vs 单接口）；②先看 Vercel 部署日志 + Supabase 状态；③能 env 回滚就回滚 + redeploy；④数据/LLM 单点故障走 §5 降级；⑤事后记录根因与改进项。

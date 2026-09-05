@@ -13,7 +13,7 @@ describe('quote batch client resilience', () => {
     const tickers = Array.from({ length: 50 }, (_, index) => `T${index}`);
     const chunks = chunkQuoteTickers(tickers);
 
-    expect(chunks.map((chunk) => chunk.length)).toEqual([10, 10, 10, 10, 10]);
+    expect(chunks.map((chunk) => chunk.length)).toEqual([40, 10]);
     expect(chunks.flat()).toEqual(tickers);
   });
 

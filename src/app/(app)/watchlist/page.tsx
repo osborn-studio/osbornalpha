@@ -1,23 +1,18 @@
 'use client';
 
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { useLocale, useTranslations } from 'next-intl';
 import { Disclaimer } from '@/components/Disclaimer';
 import { useToast } from '@/components/Toast';
 import { useBatchQuotes } from '@/lib/hooks/useQuote';
 import { WatchlistTable } from '@/components/WatchlistTable';
-import { WatchlistQuickView } from '@/components/WatchlistQuickView';
 import { WatchlistOnboarding } from '@/components/WatchlistOnboarding';
 import { WatchlistToolbar } from '@/components/watchlist/WatchlistToolbar';
 import { WatchlistSyncConflict } from '@/components/watchlist/WatchlistSyncConflict';
-import { WatchlistImportDialog } from '@/components/watchlist/WatchlistImportDialog';
-import { WatchlistActionDialog, type WatchlistPendingAction } from '@/components/watchlist/WatchlistActionDialog';
-import { WatchlistKanbanColumn, type WatchlistSecurityResult } from '@/components/watchlist/WatchlistKanbanColumn';
-import { PostAddInsight } from '@/components/PostAddInsight';
-import { getBrowserSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
-import type { AssetType, Market } from '@/lib/supabase/database.types';
+import type { WatchlistPendingAction } from '@/components/watchlist/WatchlistActionDialog';
+import { WatchlistReviewSummary } from '@/components/watchlist/WatchlistReviewSummary';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
 import { useWatchlistOverview } from '@/lib/hooks/useWatchlistOverview';
 import { uniqueWatchlistTickers, type WatchlistGroup } from '@/lib/watchlist/store';
@@ -30,30 +25,69 @@ import {
 } from '@/lib/watchlist/onboarding';
 import { serializeWatchlistYaml, watchlistCsv } from '@/lib/watchlist/export';
 import { useWatchlistTrash } from '@/lib/hooks/useWatchlistTrash';
-import { WatchlistTrashDialog } from '@/components/watchlist/WatchlistTrashDialog';
 import { useWatchlistUiPreferences } from '@/lib/hooks/useWatchlistUiPreferences';
 import { DEFAULT_WATCHLIST_CHART_PREFERENCES } from '@/lib/watchlist/ui-preferences';
 import { watchlistHistoryRangeForChart } from '@/lib/market-returns/range';
 import { watchlistBenchmarkTicker } from '@/lib/watchlist/analytics';
 import { classifyMarket } from '@/lib/utils';
-
-const REFRESH_MS = 60_000;
+import { watchlistOverviewServerSort } from '@/lib/watchlist/overview-query';
+import { watchlistQuoteRefreshInterval } from '@/lib/watchlist/quote-refresh-policy';
+import { useDebouncedValue } from '@/lib/hooks/useDebouncedValue';
+import { useAppSession } from '@/components/AppSessionProvider';
+import { useWatchlistReviews } from '@/lib/hooks/useWatchlistReviews';
+import { useWatchlistBoardDnd } from '@/lib/hooks/useWatchlistBoardDnd';
+import {
+  watchlistSecurityIdentity,
+  type WatchlistSecurityIdentity as WatchlistSecurityResult,
+} from '@/lib/watchlist/security-identity';
+import type { WatchlistOverviewItemRow } from '@/lib/watchlist/overview-contract';
+import {
+  WatchlistRequestError,
+  watchlistJsonRequest,
+  watchlistResponseRequest,
+} from '@/lib/watchlist/api-client';
 
 type Group = WatchlistGroup;
-interface SecurityIdentityRow {
-  ticker: string;
-  name: string;
-  pinyin: string | null;
-  market: Market;
-  asset_type: AssetType;
-  list_status: string;
-}
+
+const WatchlistQuickView = dynamic(
+  () => import('@/components/WatchlistQuickView').then((module) => module.WatchlistQuickView),
+  { ssr: false },
+);
+const WatchlistKanbanColumn = dynamic(
+  () => import('@/components/watchlist/WatchlistKanbanColumn').then((module) => module.WatchlistKanbanColumn),
+  { ssr: false },
+);
+const WatchlistAddDialog = dynamic(
+  () => import('@/components/watchlist/WatchlistAddDialog').then((module) => module.WatchlistAddDialog),
+  { ssr: false },
+);
+const WatchlistReviewPanel = dynamic(
+  () => import('@/components/watchlist/WatchlistReviewPanel').then((module) => module.WatchlistReviewPanel),
+  { ssr: false },
+);
+const WatchlistImportDialog = dynamic(
+  () => import('@/components/watchlist/WatchlistImportDialog').then((module) => module.WatchlistImportDialog),
+  { ssr: false },
+);
+const WatchlistActionDialog = dynamic(
+  () => import('@/components/watchlist/WatchlistActionDialog').then((module) => module.WatchlistActionDialog),
+  { ssr: false },
+);
+const WatchlistTrashDialog = dynamic(
+  () => import('@/components/watchlist/WatchlistTrashDialog').then((module) => module.WatchlistTrashDialog),
+  { ssr: false },
+);
+const PostAddInsight = dynamic(
+  () => import('@/components/PostAddInsight').then((module) => module.PostAddInsight),
+  { ssr: false },
+);
 
 export default function WatchlistPage() {
   const router = useRouter();
   const { show } = useToast();
   const t = useTranslations('market.watchlist');
   const locale = useLocale() as AppLocale;
+  const { user } = useAppSession();
   const {
     groups,
     hydrated,
@@ -64,26 +98,11 @@ export default function WatchlistPage() {
     applyServerSnapshot,
     serverVersion,
   } = useWatchlist();
-  const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
   const trash = useWatchlistTrash(!!user);
   const [trashOpen, setTrashOpen] = useState(false);
   const uiPreferences = useWatchlistUiPreferences(!!user);
   const viewMode = uiPreferences.preferences.viewMode;
   const setView = uiPreferences.setViewMode;
-
-  // Drag state — single source of truth.
-  // `dragKind` distinguishes card-drag from column-reorder so the column
-  // header's onDragOver doesn't accidentally fire highlights during a
-  // card-drop (and vice versa).
-  const [dragKind, setDragKind] = useState<'card' | 'column' | null>(null);
-  const [dragTicker, setDragTicker] = useState<string | null>(null);
-  const [dragFromGroup, setDragFromGroup] = useState<string | null>(null);
-  const [dragColumnId, setDragColumnId] = useState<string | null>(null);
-  const [dropTargetGroup, setDropTargetGroup] = useState<string | null>(null);
-  const [dropTargetColumnId, setDropTargetColumnId] = useState<string | null>(null);
-  // dragenter/dragleave fire on every child element. A counter avoids
-  // flicker as the dragged item moves over cards inside a column.
-  const dragOverCounters = useRef<Record<string, number>>({});
 
   // Per-column add UI: which column has the add panel open
   const [addingInGroup, setAddingInGroup] = useState<string | null>(null);
@@ -94,85 +113,77 @@ export default function WatchlistPage() {
 
   // Batch import dialog
   const [importOpen, setImportOpen] = useState(false);
+  const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
 
   // Mobile move menu (per-card kebab) — which ticker's menu is open
   const [openMenuTicker, setOpenMenuTicker] = useState<string | null>(null);
   const [lastAdded, setLastAdded] = useState<WatchlistSecurityResult | null>(null);
   const [quickViewTicker, setQuickViewTicker] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<WatchlistPendingAction | null>(null);
-  const [securityIdentities, setSecurityIdentities] = useState<Record<string, WatchlistSecurityResult>>({});
+  const [addedSecurityIdentities, setAddedSecurityIdentities] = useState<Record<string, WatchlistSecurityResult>>({});
   const watchlistViewTracked = useRef(false);
   const postAddTracked = useRef<string | null>(null);
   const quickViewHistoryRequest = useRef<string | null>(null);
 
-  // The watchlist hook owns data reconciliation; this lookup only controls the
-  // signed-in banner and must never write a second watchlist snapshot.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        if (isSupabaseConfigured()) {
-          const sb = getBrowserSupabase();
-          const { data: { user: u } } = await sb.auth.getUser();
-          if (u && !cancelled) {
-            setUser({ id: u.id, email: u.email });
-          }
-        }
-      } catch {}
-    })();
-    return () => { cancelled = true; };
-  }, []);
-
-  function persist(next: Group[]) {
+  const persist = useCallback((next: Group[]) => {
     setGroups(next);
-  }
+  }, [setGroups]);
+
+  const boardDnd = useWatchlistBoardDnd({
+    groups,
+    onChange: persist,
+    onTickerMoved: (ticker, group) => show(t('movedTo', { ticker, group })),
+    onGroupReordered: (name) => show(t('reordered', { name })),
+  });
 
   // ─── Live quotes (batch) ───
   const allTickers = useMemo(() => uniqueWatchlistTickers(groups), [groups]);
-
-  useEffect(() => {
-    if (!isSupabaseConfigured() || allTickers.length === 0) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const sb = getBrowserSupabase();
-        const rows: WatchlistSecurityResult[] = [];
-        for (let index = 0; index < allTickers.length; index += 100) {
-          const { data, error } = await sb
-            .from('stocks_universe')
-            .select('ticker,name,pinyin,market,asset_type,list_status')
-            .in('ticker', allTickers.slice(index, index + 100))
-            .eq('is_active', true);
-          if (error) throw error;
-          const identityRows = (data ?? []) as unknown as SecurityIdentityRow[];
-          rows.push(...identityRows.map((row) => ({
-            t: row.ticker,
-            n: row.name,
-            py: row.pinyin ?? '',
-            m: row.market,
-            asset_type: row.asset_type,
-            list_status: row.list_status,
-            selectable: true,
-            verification_status: 'verified',
-          })));
-        }
-        if (!cancelled) {
-          setSecurityIdentities((current) => ({
-            ...current,
-            ...Object.fromEntries(rows.map((row) => [row.t, row])),
-          }));
-        }
-      } catch {
-        // Quotes and cards remain usable with ticker-only fallback.
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [allTickers]);
+  const quoteRefreshInterval = useCallback(
+    (context: { now: Date; consecutiveFailures: number }) => watchlistQuoteRefreshInterval(allTickers, context),
+    [allTickers],
+  );
 
   const { quotes, loading: quotesLoading, loadedAt, refetch } = useBatchQuotes(allTickers, {
-    refreshIntervalMs: REFRESH_MS,
+    refreshIntervalMs: quoteRefreshInterval,
   });
-  const overview = useWatchlistOverview(!!user && allTickers.length > 0);
+  const overviewQuery = useDebouncedValue(uiPreferences.preferences.table.query.trim(), 250);
+  const overviewQueryPending = uiPreferences.preferences.table.query.trim() !== overviewQuery;
+  const overviewServerQuery = useMemo(() => {
+    if (!user) return null;
+    const table = uiPreferences.preferences.table;
+    const serverSort = watchlistOverviewServerSort(table.sortKey);
+    const groupId = table.groupFilter === 'all'
+      ? null
+      : groups.find((group) => group.id === table.groupFilter || group.name === table.groupFilter)?.id ?? null;
+    const market = table.marketFilter === 'all' ? null : table.marketFilter;
+    const quoteStatus = table.statusFilter === 'all' || table.statusFilter === 'loading' ? null : table.statusFilter;
+    const query = overviewQuery || null;
+    const decisionStatus = table.decisionFilter === 'all' ? null : table.decisionFilter;
+    const tag = table.tagFilter.trim() || null;
+    return serverSort || groupId || market || quoteStatus || query || decisionStatus || tag || table.metricFilter !== 'none'
+      ? {
+        sort: serverSort ?? 'position', direction: table.asc ? 'asc' as const : 'desc' as const,
+        groupId, market, quoteStatus, query, decisionStatus, tag, historyRange: table.historyRange,
+        metric: table.metricFilter === 'none' ? null : table.metricFilter,
+        metricMin: table.metricFilter === 'none' ? null : table.metricMin,
+        metricMax: table.metricFilter === 'none' ? null : table.metricMax,
+      }
+      : null;
+  }, [groups, overviewQuery, uiPreferences.preferences.table, user]);
+  const overview = useWatchlistOverview(!!user && allTickers.length > 0, overviewServerQuery);
+  const reviews = useWatchlistReviews(!!user && hydrated && allTickers.length > 0, overview.updateItem);
+  const securityIdentities = useMemo(() => {
+    const overviewIdentities = Object.values(overview.rows).flatMap((row) => {
+      if (!row.identity) return [];
+      const identity = watchlistSecurityIdentity(row.identity, locale);
+      return [[identity.t, identity] as const];
+    });
+    return {
+      ...addedSecurityIdentities,
+      ...Object.fromEntries(overviewIdentities),
+    };
+  }, [addedSecurityIdentities, locale, overview.rows]);
   const { ensureTicker, rows: overviewRows } = overview;
   const historyRangeForTicker = useCallback((ticker: string) => watchlistHistoryRangeForChart(
     uiPreferences.preferences.charts[ticker]?.range ?? DEFAULT_WATCHLIST_CHART_PREFERENCES.range,
@@ -217,22 +228,21 @@ export default function WatchlistPage() {
       return false;
     }
     try {
-      const response = await fetch('/api/watchlist/items/bulk', {
+      const body = await watchlistJsonRequest<{ items: WatchlistOverviewItemRow[] }>('/api/watchlist/items/bulk', {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ items, tag, mode }),
-      });
-      const body = await response.json().catch(() => null);
-      if (response.status === 409) {
+      }, 'bulk_tags_failed');
+      if (!Array.isArray(body.items)) throw new Error('bulk_tags_failed');
+      body.items.forEach(overview.updateItem);
+      show(t(mode === 'add' ? 'bulkTagsAdded' : 'bulkTagsRemoved', { count: tickers.length, tag }));
+      return true;
+    } catch (error) {
+      if (error instanceof WatchlistRequestError && error.status === 409) {
         await overview.refetch();
         show(t('bulkTagsConflict'));
         return false;
       }
-      if (!response.ok || !Array.isArray(body?.items)) throw new Error(body?.error || 'bulk_tags_failed');
-      body.items.forEach(overview.updateItem);
-      show(t(mode === 'add' ? 'bulkTagsAdded' : 'bulkTagsRemoved', { count: tickers.length, tag }));
-      return true;
-    } catch {
       show(t('bulkTagsFailed'));
       return false;
     }
@@ -267,6 +277,22 @@ export default function WatchlistPage() {
     trackEvent('watchlist_empty_action_selected', { action: 'search' });
   }
 
+  function addSecurityToGroup(info: WatchlistSecurityResult, groupId: string) {
+    const group = groups.find((item) => item.id === groupId);
+    if (!group) return;
+    const exists = groups.some((item) => item.tickers.includes(info.t));
+    if (exists) {
+      trackEvent('watchlist_add_duplicate', { ticker: info.t });
+      show(t('alreadyInWatchlist', { ticker: info.t }));
+      return;
+    }
+    trackEvent('watchlist_stock_added', { ticker: info.t, group: group.name, market: info.m });
+    setLastAdded(info);
+    setAddedSecurityIdentities((current) => ({ ...current, [info.t]: info }));
+    persist(groups.map((item) => item.id === groupId ? { ...item, tickers: [...item.tickers, info.t] } : item));
+    show(t('addedTo', { group: group.name, name: info.n, ticker: info.t }));
+  }
+
   function openImportFromEmpty() {
     setImportOpen(true);
     trackEvent('watchlist_empty_action_selected', { action: 'import' });
@@ -279,101 +305,6 @@ export default function WatchlistPage() {
     trackEvent('watchlist_empty_action_selected', { action: 'sample' });
     trackEvent('watchlist_sample_installed', { tickers: SAMPLE_TICKERS });
     show(t('onboarding.installed'));
-  }
-
-  // ─── Drag-and-drop handlers ───
-  // Card drag (within column body)
-  function onCardDragStart(e: React.DragEvent, ticker: string, fromGroup: string) {
-    setDragKind('card');
-    setDragTicker(ticker);
-    setDragFromGroup(fromGroup);
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', ticker);
-    // Apply 'grabbing' cursor to the whole document during drag so the
-    // experience matches Trello / Linear regardless of where the cursor goes.
-    document.body.style.cursor = 'grabbing';
-  }
-
-  // Column drag (from column header)
-  function onColumnDragStart(e: React.DragEvent, columnId: string) {
-    setDragKind('column');
-    setDragColumnId(columnId);
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('application/x-watchlist-column', columnId);
-    document.body.style.cursor = 'grabbing';
-  }
-
-  const onDragEnd = useCallback(() => {
-    setDragKind(null);
-    setDragTicker(null);
-    setDragFromGroup(null);
-    setDragColumnId(null);
-    setDropTargetGroup(null);
-    setDropTargetColumnId(null);
-    dragOverCounters.current = {};
-    document.body.style.cursor = '';
-  }, []);
-
-  // Column body drop zone (cards only)
-  function onColumnDragEnter(groupId: string) {
-    if (dragKind !== 'card') return;
-    const counters = dragOverCounters.current;
-    counters[groupId] = (counters[groupId] || 0) + 1;
-    setDropTargetGroup(groupId);
-  }
-
-  function onColumnDragLeave(groupId: string) {
-    if (dragKind !== 'card') return;
-    const counters = dragOverCounters.current;
-    counters[groupId] = Math.max(0, (counters[groupId] || 0) - 1);
-    if (counters[groupId] === 0) {
-      setDropTargetGroup((cur) => (cur === groupId ? null : cur));
-    }
-  }
-
-  function onColumnDragOver(e: React.DragEvent, groupId: string) {
-    if (dragKind === 'card') {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-    } else if (dragKind === 'column') {
-      // Column being dragged over another column header — allow drop on the
-      // column shell so the user has a wider drop zone
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      if (dragColumnId && dragColumnId !== groupId) setDropTargetColumnId(groupId);
-    }
-  }
-
-  function onColumnDrop(e: React.DragEvent, toGroup: string) {
-    e.preventDefault();
-    if (dragKind === 'card' && dragTicker && dragFromGroup) {
-      if (dragFromGroup !== toGroup) moveTicker(dragTicker, dragFromGroup, toGroup);
-    } else if (dragKind === 'column' && dragColumnId && dragColumnId !== toGroup) {
-      reorderColumn(dragColumnId, toGroup);
-    }
-    onDragEnd();
-  }
-
-  function moveTicker(ticker: string, fromGroup: string, toGroup: string) {
-    const next = groups.map((g) => {
-      if (g.id === fromGroup) return { ...g, tickers: g.tickers.filter((t) => t !== ticker) };
-      if (g.id === toGroup && !g.tickers.includes(ticker)) return { ...g, tickers: [...g.tickers, ticker] };
-      return g;
-    });
-    persist(next);
-    const toName = groups.find((g) => g.id === toGroup)?.name || toGroup;
-    show(t('movedTo', { ticker, group: toName }));
-  }
-
-  function reorderColumn(fromId: string, toId: string) {
-    const fromIdx = groups.findIndex((g) => g.id === fromId);
-    const toIdx = groups.findIndex((g) => g.id === toId);
-    if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
-    const next = [...groups];
-    const [moved] = next.splice(fromIdx, 1);
-    next.splice(toIdx, 0, moved);
-    persist(next);
-    show(t('reordered', { name: moved.name }));
   }
 
   // Manually refresh all quotes (e.g. after a transient API failure)
@@ -504,8 +435,11 @@ export default function WatchlistPage() {
       return;
     }
     try {
-      const response = await fetch(`/api/watchlist/export?format=${format}`, { cache: 'no-store' });
-      if (!response.ok) throw new Error('watchlist_export_failed');
+      const response = await watchlistResponseRequest(
+        `/api/watchlist/export?format=${format}`,
+        { cache: 'no-store' },
+        'watchlist_export_failed',
+      );
       exportFile(
         await response.text(),
         format === 'csv' ? 'csv' : 'yml',
@@ -517,7 +451,7 @@ export default function WatchlistPage() {
   }
 
   return (
-    <>
+    <div className="watchlist-workbench">
       <WatchlistToolbar
         count={hydrated ? allTickers.length : 0}
         view={viewMode}
@@ -546,13 +480,8 @@ export default function WatchlistPage() {
         />
       )}
 
-      {!user && isSupabaseConfigured() && (
-        <div className="card-base mb-3 flex items-center justify-between bg-accent-dim/10 text-sm">
-          <span>
-            {t('guestBanner')}
-            <Link href="/login" className="font-semibold">{t('guestLogin')}</Link>{t('guestSuffix')}
-          </span>
-        </div>
+      {user && hydrated && allTickers.length > 0 && (
+        <WatchlistReviewSummary summary={reviews.summary} loading={reviews.loading} onOpen={() => setReviewOpen(true)} />
       )}
 
       {lastAdded && (
@@ -585,12 +514,16 @@ export default function WatchlistPage() {
           onRemoveTickers={(tickers) => setPendingAction({ kind: 'bulk-remove', tickers })}
           onTagTickers={updateTickerTags}
           overviewHasMore={overview.partial}
+          overviewLoading={overview.loading}
           overviewLoadingMore={overview.loadingMore}
+          overviewQueryPending={overviewQueryPending}
+          overviewQueryActive={overview.serverQueryActive}
           onLoadMoreOverview={overview.loadMore}
           tablePreferences={uiPreferences.preferences.table}
           savedTableViews={uiPreferences.preferences.savedViews}
           onTablePreferencesChange={uiPreferences.setTable}
           onSavedTableViewsChange={uiPreferences.setSavedViews}
+          onAddSecurity={() => setAddDialogOpen(true)}
         />
       )}
 
@@ -610,42 +543,34 @@ export default function WatchlistPage() {
             securityIdentities={securityIdentities}
             overviewByTicker={overview.rows}
             loadedAt={loadedAt}
-            isDropTarget={dropTargetGroup === g.id && dragKind === 'card'}
-            isColumnDropTarget={dropTargetColumnId === g.id && dragKind === 'column'}
-            isBeingDragged={dragColumnId === g.id && dragKind === 'column'}
-            dragTicker={dragTicker}
+            isDropTarget={boardDnd.dropTargetGroup === g.id && boardDnd.dragKind === 'card'}
+            isColumnDropTarget={boardDnd.dropTargetColumnId === g.id && boardDnd.dragKind === 'column'}
+            isBeingDragged={boardDnd.dragColumnId === g.id && boardDnd.dragKind === 'column'}
+            dragTicker={boardDnd.dragTicker}
             isAdding={addingInGroup === g.id}
             openMenuTicker={openMenuTicker}
-            onDragOver={(e) => onColumnDragOver(e, g.id)}
-            onDragEnter={() => onColumnDragEnter(g.id)}
-            onDragLeave={() => onColumnDragLeave(g.id)}
-            onDrop={(e) => onColumnDrop(e, g.id)}
-            onColumnDragStart={(e) => onColumnDragStart(e, g.id)}
-            onCardDragStart={(e, t) => onCardDragStart(e, t, g.id)}
-            onCardDragEnd={onDragEnd}
+            onDragOver={(e) => boardDnd.onColumnDragOver(e, g.id)}
+            onDragEnter={() => boardDnd.onColumnDragEnter(g.id)}
+            onDragLeave={() => boardDnd.onColumnDragLeave(g.id)}
+            onDrop={(e) => boardDnd.onColumnDrop(e, g.id)}
+            onColumnDragStart={(e) => boardDnd.onColumnDragStart(e, g.id)}
+            onCardDragStart={(e, ticker) => boardDnd.onCardDragStart(e, ticker, g.id)}
+            onCardDragEnd={boardDnd.onDragEnd}
             onRetryTicker={refetch}
             onAddOpen={() => setAddingInGroup(g.id)}
             onAddClose={() => setAddingInGroup(null)}
-            onCardMove={(ticker, toGroupId) => moveTicker(ticker, g.id, toGroupId)}
+            onCardMove={(ticker, toGroupId) => boardDnd.moveTicker(ticker, g.id, toGroupId)}
             onCardRemove={removeTicker}
             onOpenMenu={(ticker) => setOpenMenuTicker((cur) => (cur === ticker ? null : ticker))}
             onQuickView={setQuickViewTicker}
             onRename={() => renameColumn(g.id)}
             onDelete={() => deleteColumn(g.id)}
-            onTickerAdded={(info) => {
-              const exists = groups.some((gg) => gg.tickers.includes(info.t));
-              if (exists) {
-                trackEvent('watchlist_add_duplicate', { ticker: info.t });
-                show(t('alreadyInWatchlist', { ticker: info.t }));
-                return;
-              }
-              trackEvent('watchlist_stock_added', { ticker: info.t, group: g.name, market: info.m });
-              setLastAdded(info);
-              setSecurityIdentities((current) => ({ ...current, [info.t]: info }));
-              persist(
-                groups.map((gg) => (gg.id === g.id ? { ...gg, tickers: [...gg.tickers, info.t] } : gg))
-              );
-              show(t('addedTo', { group: g.name, name: info.n, ticker: info.t }));
+            onTickerAdded={(info) => addSecurityToGroup(info, g.id)}
+            onCardKeyboardMove={(ticker, direction) => boardDnd.moveCardByKeyboard(ticker, g.id, direction)}
+            onColumnKeyboardMove={(direction) => {
+              const index = groups.findIndex((group) => group.id === g.id);
+              const target = groups[index + (direction === 'right' ? 1 : -1)];
+              if (target) boardDnd.reorderColumn(g.id, target.id);
             }}
           />
         ))}
@@ -727,6 +652,14 @@ export default function WatchlistPage() {
         />
       )}
 
+      {addDialogOpen && <WatchlistAddDialog groups={groups} onAdd={addSecurityToGroup} onClose={() => setAddDialogOpen(false)} />}
+
+      {reviewOpen && user && <WatchlistReviewPanel
+        model={reviews}
+        onOpenTicker={(ticker) => { setReviewOpen(false); setQuickViewTicker(ticker); }}
+        onClose={() => setReviewOpen(false)}
+      />}
+
       {importOpen && (
         <WatchlistImportDialog
           existingTickerCount={allTickers.length}
@@ -761,6 +694,6 @@ export default function WatchlistPage() {
           return snapshot;
         }}
       />}
-    </>
+    </div>
   );
 }

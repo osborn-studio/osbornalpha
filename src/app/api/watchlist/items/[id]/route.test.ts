@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ auth: vi.fn(), update: vi.fn(), item: vi.fn(), history: vi.fn(), from: vi.fn() }));
+const mocks = vi.hoisted(() => ({ auth: vi.fn(), execute: vi.fn(), item: vi.fn(), history: vi.fn(), from: vi.fn() }));
 vi.mock('@/lib/supabase/server', () => ({
   serverIsSupabaseConfigured: vi.fn(() => true),
   getServerSupabase: vi.fn(async () => ({ auth: { getUser: mocks.auth }, from: mocks.from })),
 }));
 vi.mock('@/lib/watchlist/server-repository', () => ({
-  updateWatchlistItemDecision: mocks.update,
   loadWatchlistItem: mocks.item,
   loadWatchlistItemDecisionHistory: mocks.history,
 }));
+vi.mock('@/lib/watchlist/decision-service', () => ({ executeWatchlistDecision: mocks.execute }));
 
 import { GET, PATCH } from './route';
 
@@ -17,8 +17,8 @@ describe('PATCH /api/watchlist/items/[id]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.auth.mockResolvedValue({ data: { user: { id: 'user-1' } } });
-    mocks.update.mockImplementation(async (_client, _itemId, patch, expectedVersion) => ({
-      data: { id: 'item-1', decision_version: expectedVersion + 1, ...patch }, error: null,
+    mocks.execute.mockImplementation(async (_client, _userId, _itemId, command) => ({
+      status: 'updated', item: { id: 'item-1', decision_version: command.expectedVersion + 1, ...command.patch },
     }));
     mocks.item.mockResolvedValue({ data: { id: 'item-1', ticker: 'AAPL', decision_version: 2 }, error: null });
     mocks.history.mockResolvedValue({ data: [{ id: 'history-1', version: 2 }], error: null });
@@ -45,11 +45,11 @@ describe('PATCH /api/watchlist/items/[id]', () => {
       method: 'PATCH', body: JSON.stringify({ confidence: 800, expectedVersion: 0 }),
     }), { params: Promise.resolve({ id: 'item-1' }) });
     expect(response.status).toBe(400);
-    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.execute).not.toHaveBeenCalled();
   });
 
   it('returns 409 when the decision version changed', async () => {
-    mocks.update.mockResolvedValueOnce({ data: null, error: { code: '40001', message: 'watchlist_decision_conflict' } });
+    mocks.execute.mockResolvedValueOnce({ status: 'conflict', currentItem: { id: 'item-1', decision_version: 2 } });
     const response = await PATCH(new Request('https://example.com/api/watchlist/items/item-1', {
       method: 'PATCH', body: JSON.stringify({ thesis: 'Changed', expectedVersion: 1 }),
     }), { params: Promise.resolve({ id: 'item-1' }) });
@@ -58,7 +58,7 @@ describe('PATCH /api/watchlist/items/[id]', () => {
   });
 
   it('maps a missing RPC row to 404', async () => {
-    mocks.update.mockResolvedValueOnce({ data: null, error: { code: 'P0002', message: 'watchlist_item_not_found' } });
+    mocks.execute.mockResolvedValueOnce({ status: 'not_found' });
     const response = await PATCH(new Request('https://example.com/api/watchlist/items/missing', {
       method: 'PATCH', body: JSON.stringify({ thesis: 'Changed', expectedVersion: 1 }),
     }), { params: Promise.resolve({ id: 'missing' }) });

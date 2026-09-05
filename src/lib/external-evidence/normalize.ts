@@ -4,7 +4,7 @@ import { canonicalizeEvidenceUrl } from './url';
 
 export { canonicalizeEvidenceUrl } from './url';
 
-const OFFICIAL_DOMAINS = [
+export const OFFICIAL_EVIDENCE_DOMAINS = [
   'sec.gov', 'sse.com.cn', 'szse.cn', 'bse.cn', 'hkexnews.hk', 'hkex.com.hk',
   'twse.com.tw', 'mops.twse.com.tw', 'edinet-fsa.go.jp', 'dart.fss.or.kr',
 ];
@@ -71,10 +71,14 @@ function domainMatches(domain: string, candidates: string[]): boolean {
 }
 
 export function trustScoreFor(domain: string, scope: EvidenceScope): number {
-  if (domainMatches(domain, OFFICIAL_DOMAINS)) return 0.95;
+  if (domainMatches(domain, OFFICIAL_EVIDENCE_DOMAINS)) return 0.95;
   if (domainMatches(domain, PROFESSIONAL_NEWS)) return 0.78;
   if (scope === 'broker' || scope === 'filing' || scope === 'company') return 0.68;
   return 0.55;
+}
+
+export function isOfficialEvidenceDomain(domain: string): boolean {
+  return domainMatches(domain.toLowerCase(), OFFICIAL_EVIDENCE_DOMAINS);
 }
 
 function normalizeDate(value: string | null | undefined, now: Date): string | null {

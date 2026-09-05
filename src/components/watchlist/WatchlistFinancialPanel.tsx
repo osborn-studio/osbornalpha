@@ -28,9 +28,9 @@ function SummaryMetric({ label, valueText, growth, growthLabel }: {
   const Icon = growth != null && growth < 0 ? TrendingDown : TrendingUp;
   return (
     <div className="min-w-0 bg-bg-elevated/55 px-3 py-3">
-      <div className="text-[10px] font-medium text-text-muted">{label}</div>
+      <div className="text-[11px] font-medium text-text-muted">{label}</div>
       <div className="mt-1 truncate font-mono text-base font-semibold tabular-nums text-text">{valueText}</div>
-      <div className={`mt-1 flex items-center gap-1 text-[10px] ${growthTone(growth)}`}>
+      <div className={`mt-1 flex items-center gap-1 text-[11px] ${growthTone(growth)}`}>
         {growth != null && <Icon className="h-3 w-3" aria-hidden="true" />}
         {growth == null ? '--' : `${growth >= 0 ? '+' : ''}${growth.toFixed(1)}%`} <span className="text-text-muted">{growthLabel}</span>
       </div>
@@ -47,19 +47,19 @@ function TrendBars({ label, rows, metric }: {
   const maximum = Math.max(0, ...points.map((row) => Math.abs(row[metric] ?? 0)));
   return (
     <div className="min-w-0 px-3 py-3">
-      <div className="mb-3 text-[10px] font-semibold text-text-dim">{label}</div>
+      <div className="mb-3 text-[11px] font-semibold text-text-dim">{label}</div>
       <div className="flex h-28 items-end gap-2" role="img" aria-label={label}>
         {points.map((row) => {
           const point = row[metric];
           const height = point == null || maximum === 0 ? 2 : Math.max(6, Math.round((Math.abs(point) / maximum) * 72));
           return (
             <div key={row.key} className="flex h-full min-w-0 flex-1 flex-col justify-end text-center" title={`${row.label}: ${value(point)}`}>
-              <div className="mb-1 truncate font-mono text-[9px] text-text-muted">{value(point)}</div>
+              <div className="mb-1 truncate font-mono text-[11px] text-text-muted">{value(point)}</div>
               <div
                 className="mx-auto w-full max-w-9 shrink-0 rounded-t-sm opacity-75"
                 style={{ height, backgroundColor: point != null && point < 0 ? 'var(--down)' : 'var(--accent)' }}
               />
-              <div className="mt-1.5 truncate text-[9px] text-text-muted">{row.label.replace('20', "'")}</div>
+              <div className="mt-1.5 truncate text-[11px] text-text-muted">{row.label.replace('20', "'")}</div>
             </div>
           );
         })}
@@ -107,16 +107,16 @@ export function WatchlistFinancialPanel({ ticker }: { ticker: string }) {
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div>
           <h3 className="text-sm font-semibold text-text">{t('title')}</h3>
-          <p className="mt-0.5 text-[10px] text-text-muted">{t('meta', { source: financials.source ?? '--', unit, period: financials.meta?.latestPeriodEnd ?? '--' })}</p>
+          <p className="mt-0.5 text-[11px] text-text-muted">{t('meta', { source: financials.source ?? '--', unit, period: financials.meta?.latestPeriodEnd ?? '--' })}</p>
         </div>
         <div className="ml-auto inline-flex rounded-md border border-border bg-bg-elevated p-0.5" role="group" aria-label={t('periodMode')}>
           {(['quarterly', 'annual'] as FinancialViewMode[]).map((item) => (
-            <button key={item} type="button" onClick={() => setMode(item)} disabled={item === 'quarterly' && financials.quarterly.length === 0} aria-pressed={effectiveMode === item} className={`h-7 rounded px-2.5 text-[10px] font-medium transition disabled:opacity-40 ${effectiveMode === item ? 'bg-bg-card text-text shadow-sm' : 'text-text-muted hover:text-text'}`}>{t(item)}</button>
+            <button key={item} type="button" onClick={() => setMode(item)} disabled={item === 'quarterly' && financials.quarterly.length === 0} aria-pressed={effectiveMode === item} className={`h-7 rounded px-2.5 text-[11px] font-medium transition disabled:opacity-40 ${effectiveMode === item ? 'bg-bg-card text-text shadow-sm' : 'text-text-muted hover:text-text'}`}>{t(item)}</button>
           ))}
         </div>
       </div>
 
-      {financials.meta?.warnings.length ? <div className="mb-3 flex items-start gap-2 border-l-2 border-warn bg-warn/5 px-3 py-2 text-[10px] text-text-dim"><AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn" aria-hidden="true" /><span>{t('partialData', { count: financials.meta.warnings.length })}</span></div> : null}
+      {financials.meta?.warnings.length ? <div className="mb-3 flex items-start gap-2 border-l-2 border-warn bg-warn/5 px-3 py-2 text-[11px] text-text-dim"><AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn" aria-hidden="true" /><span>{t('partialData', { count: financials.meta.warnings.length })}</span></div> : null}
 
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border sm:grid-cols-4">
         <SummaryMetric label={t('revenue', { basis: useTtm ? 'TTM' : latest?.label ?? '--' })} valueText={value(summary?.revenue ?? null)} growth={financialGrowthPct(latest?.revenue ?? null, previous?.revenue ?? null)} growthLabel={t(effectiveMode === 'quarterly' ? 'quarterGrowth' : 'annualGrowth')} />
@@ -132,7 +132,7 @@ export function WatchlistFinancialPanel({ ticker }: { ticker: string }) {
         </div>
         <div className="mt-4 overflow-x-auto">
           <table className="w-full min-w-[680px] text-xs">
-            <thead className="text-[10px] text-text-muted"><tr className="border-b border-border"><th className="px-2 py-2 text-left font-medium">{t('period')}</th><th className="px-2 py-2 text-right font-medium">{t('revenueLabel')}</th><th className="px-2 py-2 text-right font-medium">{t('netIncomeLabel')}</th><th className="px-2 py-2 text-right font-medium">EPS</th><th className="px-2 py-2 text-right font-medium">{t('operatingCashflow')}</th><th className="px-2 py-2 text-right font-medium">{t('freeCashflowLabel')}</th><th className="px-2 py-2 text-right font-medium">{t('assets')}</th></tr></thead>
+            <thead className="text-[11px] text-text-muted"><tr className="border-b border-border"><th className="px-2 py-2 text-left font-medium">{t('period')}</th><th className="px-2 py-2 text-right font-medium">{t('revenueLabel')}</th><th className="px-2 py-2 text-right font-medium">{t('netIncomeLabel')}</th><th className="px-2 py-2 text-right font-medium">EPS</th><th className="px-2 py-2 text-right font-medium">{t('operatingCashflow')}</th><th className="px-2 py-2 text-right font-medium">{t('freeCashflowLabel')}</th><th className="px-2 py-2 text-right font-medium">{t('assets')}</th></tr></thead>
             <tbody>{[...rows].reverse().map((row) => <tr key={row.key} className="border-b border-border/60 last:border-0"><td className="px-2 py-2 font-medium text-text">{row.label}</td><td className="px-2 py-2 text-right tabular-nums">{value(row.revenue)}</td><td className={`px-2 py-2 text-right tabular-nums ${row.netIncome != null && row.netIncome < 0 ? 'text-down' : ''}`}>{value(row.netIncome)}</td><td className="px-2 py-2 text-right tabular-nums">{value(row.eps, 2)}</td><td className="px-2 py-2 text-right tabular-nums">{value(row.operatingCashflow)}</td><td className={`px-2 py-2 text-right tabular-nums ${row.freeCashflow != null && row.freeCashflow < 0 ? 'text-down' : ''}`}>{value(row.freeCashflow)}</td><td className="px-2 py-2 text-right tabular-nums">{value(row.totalAssets)}</td></tr>)}</tbody>
           </table>
         </div>

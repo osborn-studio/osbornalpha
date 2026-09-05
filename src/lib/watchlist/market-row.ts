@@ -21,6 +21,7 @@ export interface WatchlistMarketRow {
   name: string;
   market: Market;
   currency: string;
+  groupId: string;
   group: string;
   quote: LiveQuote | null;
   status: QuoteDisplayStatus;
@@ -54,9 +55,10 @@ export function buildWatchlistMarketRows(
       const market = quote?.market ?? identity?.m ?? classifyMarket(ticker);
       rows.push({
         ticker,
-        name: quote?.name || identity?.n || ticker,
+        name: identity?.n || quote?.name || ticker,
         market,
         currency: quote?.currency || currencyOfMarket(market),
+        groupId: group.id,
         group: group.name,
         quote,
         status: quoteDisplayStatus(quote, loadedAt),

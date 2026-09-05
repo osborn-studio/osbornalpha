@@ -21,13 +21,14 @@ import {
 
 function queryBuilder(result: object = { count: 3, error: null }) {
   const builder: Record<string, ReturnType<typeof vi.fn>> = {};
-  for (const method of ['select', 'eq', 'gte', 'lt', 'maybeSingle']) {
+  for (const method of ['select', 'eq', 'gte', 'lt', 'in', 'maybeSingle']) {
     builder[method] = vi.fn();
   }
   builder.select.mockReturnValue(builder);
   builder.eq.mockReturnValue(builder);
   builder.gte.mockReturnValue(builder);
   builder.lt.mockResolvedValue(result);
+  builder.in.mockResolvedValue(result);
   builder.maybeSingle.mockResolvedValue({
     data: { plan: 'free', role: 'user', plan_expires_at: null },
     error: null,
@@ -57,19 +58,22 @@ describe('usage ledger count and audit fields', () => {
   it('applies completed-only counting to perspectives so failed audits do not consume its 5-call limit', async () => {
     const profile = queryBuilder();
     const events = queryBuilder({ count: 4, error: null });
+    const jobs = queryBuilder({ count: 1, error: null });
     mocks.getServerSupabase.mockResolvedValue({
       auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null }) },
-      from: vi.fn((table: string) => table === 'profiles' ? profile : events),
+      from: vi.fn((table: string) => table === 'profiles' ? profile : table === 'usage_events' ? events : jobs),
     });
 
     await expect(checkQuota('perspectives')).resolves.toMatchObject({
-      allowed: true,
-      used: 4,
+      allowed: false,
+      used: 5,
       limit: 5,
     });
 
     expect(events.eq).toHaveBeenCalledWith('feature', 'perspectives');
     expect(events.eq).toHaveBeenCalledWith('status', 'completed');
+    expect(jobs.eq).toHaveBeenCalledWith('llm_source', 'env');
+    expect(jobs.in).toHaveBeenCalledWith('status', ['queued', 'running']);
   });
 
   it('creates a pending usage run with immutable server-derived identity before spend', async () => {

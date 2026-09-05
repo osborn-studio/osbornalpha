@@ -1,9 +1,13 @@
 import type { KlineRange } from '@/lib/chart/kline';
-import type { Market } from '@/lib/supabase/database.types';
+import type { Market, WatchlistItem } from '@/lib/supabase/database.types';
 import type { QuoteDisplayStatus } from './market-row';
+import {
+  WATCHLIST_OVERVIEW_METRICS,
+  type WatchlistOverviewMetric,
+} from './overview-fields';
 
-export const WATCHLIST_UI_PREFERENCES_SCHEMA_VERSION = 1;
-export const WATCHLIST_UI_PREFERENCES_STORAGE_KEY = 'stock-monitor:watchlist:ui-preferences-v1';
+export const WATCHLIST_UI_PREFERENCES_SCHEMA_VERSION = 2;
+export const WATCHLIST_UI_PREFERENCES_STORAGE_KEY = 'stock-monitor:watchlist:ui-preferences-v2';
 export const WATCHLIST_UI_PREFERENCES_MAX_BYTES = 64 * 1024;
 export const WATCHLIST_UI_PREFERENCES_MAX_TICKERS = 100;
 export const WATCHLIST_UI_PREFERENCES_MAX_SAVED_VIEWS = 12;
@@ -14,9 +18,11 @@ export type WatchlistColumnKey =
   | 'marketCap' | 'pe' | 'pb' | 'turnover' | 'volumeRatio' | 'amplitude'
   | 'dayPosition' | 'oneYearReturn' | 'volatility' | 'maxDrawdown' | 'rangePosition'
   | 'rsi14' | 'macdHistogram' | 'bollingerPosition' | 'atr14'
+  | 'excessReturn' | 'beta' | 'volumeZScore20'
   | 'research' | 'decision' | 'quality' | 'updated' | 'group';
 export type WatchlistTablePreset = 'market' | 'valuation' | 'risk';
 export type WatchlistTableDensity = 'compact' | 'comfortable';
+export type WatchlistMetricFilterKey = WatchlistOverviewMetric;
 
 export interface WatchlistTablePreferences {
   sortKey: WatchlistColumnKey;
@@ -27,7 +33,15 @@ export interface WatchlistTablePreferences {
   groupFilter: string;
   marketFilter: 'all' | Market;
   statusFilter: 'all' | QuoteDisplayStatus;
+  decisionFilter: 'all' | WatchlistItem['status'];
+  tagFilter: string;
+  historyRange: Extract<KlineRange, '1m' | '6m' | 'ytd' | '1y' | '5y' | 'all'>;
+  metricFilter: 'none' | WatchlistMetricFilterKey;
+  metricMin: number | null;
+  metricMax: number | null;
   density: WatchlistTableDensity;
+  columnWidths: Partial<Record<WatchlistColumnKey, number>>;
+  pinnedColumns: WatchlistColumnKey[];
 }
 
 export interface WatchlistSavedTableView {
@@ -38,6 +52,8 @@ export interface WatchlistSavedTableView {
 
 export const WATCHLIST_CHART_TYPES = ['line', 'candle', 'baseline', 'area', 'bar'] as const;
 export type WatchlistChartType = typeof WATCHLIST_CHART_TYPES[number];
+export const WATCHLIST_CHART_INDICATORS = ['ma5', 'ma20', 'vwap'] as const;
+export type WatchlistChartIndicator = typeof WATCHLIST_CHART_INDICATORS[number];
 
 export interface WatchlistChartPreferences {
   range: KlineRange;
@@ -45,6 +61,7 @@ export interface WatchlistChartPreferences {
   showTooltip: boolean;
   showVolume: boolean;
   showIndicators: boolean;
+  indicators?: WatchlistChartIndicator[];
   showPreviousClose: boolean;
 }
 
@@ -66,13 +83,13 @@ export const WATCHLIST_ALL_COLUMNS: WatchlistColumnKey[] = [
   'ticker', 'name', 'price', 'change', 'open', 'prevClose', 'dayRange', 'volume', 'amount', 'marketCap',
   'pe', 'pb', 'turnover', 'volumeRatio', 'amplitude', 'dayPosition', 'quality', 'updated', 'group',
   'oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition', 'rsi14', 'macdHistogram',
-  'bollingerPosition', 'atr14', 'research', 'decision',
+  'bollingerPosition', 'atr14', 'excessReturn', 'beta', 'volumeZScore20', 'research', 'decision',
 ];
 
 export const WATCHLIST_PRESET_COLUMNS: Record<WatchlistTablePreset, WatchlistColumnKey[]> = {
-  market: ['ticker', 'name', 'price', 'change', 'open', 'dayRange', 'volume', 'amount', 'volumeRatio', 'updated', 'group'],
+  market: ['ticker', 'name', 'price', 'change', 'oneYearReturn', 'research', 'decision', 'updated'],
   valuation: ['ticker', 'name', 'price', 'change', 'marketCap', 'pe', 'pb', 'turnover', 'updated', 'group'],
-  risk: ['ticker', 'name', 'price', 'change', 'oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition', 'rsi14', 'macdHistogram', 'bollingerPosition', 'atr14', 'research', 'decision', 'updated', 'group'],
+  risk: ['ticker', 'name', 'price', 'change', 'oneYearReturn', 'excessReturn', 'volatility', 'beta', 'maxDrawdown', 'rangePosition', 'rsi14', 'volumeZScore20', 'research', 'decision', 'updated', 'group'],
 };
 
 export const DEFAULT_WATCHLIST_TABLE_PREFERENCES: WatchlistTablePreferences = {
@@ -84,7 +101,15 @@ export const DEFAULT_WATCHLIST_TABLE_PREFERENCES: WatchlistTablePreferences = {
   groupFilter: 'all',
   marketFilter: 'all',
   statusFilter: 'all',
-  density: 'comfortable',
+  decisionFilter: 'all',
+  tagFilter: '',
+  historyRange: '1y',
+  metricFilter: 'none',
+  metricMin: null,
+  metricMax: null,
+  density: 'compact',
+  columnWidths: {},
+  pinnedColumns: ['ticker', 'name'],
 };
 
 export const DEFAULT_WATCHLIST_CHART_PREFERENCES: WatchlistChartPreferences = {
@@ -93,6 +118,7 @@ export const DEFAULT_WATCHLIST_CHART_PREFERENCES: WatchlistChartPreferences = {
   showTooltip: true,
   showVolume: true,
   showIndicators: true,
+  indicators: [...WATCHLIST_CHART_INDICATORS],
   showPreviousClose: true,
 };
 
@@ -108,6 +134,9 @@ export const DEFAULT_WATCHLIST_UI_PREFERENCES: WatchlistUiPreferences = {
 const KLINE_RANGES = new Set<KlineRange>(['1d', '5d', '1m', '6m', 'ytd', '1y', '5y', 'all']);
 const MARKETS = new Set<Market>(['A', 'HK', 'US', 'JP', 'KR', 'TW']);
 const QUOTE_STATUSES = new Set<QuoteDisplayStatus>(['loading', 'live', 'delayed', 'stale', 'unavailable']);
+const DECISION_STATUSES = new Set<WatchlistItem['status']>(['inbox', 'researching', 'watching', 'ready', 'paused', 'invalidated']);
+const HISTORY_RANGES = new Set(['1m', '6m', 'ytd', '1y', '5y', 'all']);
+export const WATCHLIST_METRIC_FILTERS: readonly WatchlistMetricFilterKey[] = WATCHLIST_OVERVIEW_METRICS;
 const TICKER = /^[A-Z0-9][A-Z0-9.\-]{0,19}$/;
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -140,7 +169,103 @@ export function isWatchlistTablePreferences(value: unknown): value is WatchlistT
     && typeof input.groupFilter === 'string' && input.groupFilter.length <= 100
     && (input.marketFilter === 'all' || MARKETS.has(input.marketFilter as Market))
     && (input.statusFilter === 'all' || QUOTE_STATUSES.has(input.statusFilter as QuoteDisplayStatus))
-    && (input.density === 'compact' || input.density === 'comfortable');
+    && (input.decisionFilter === 'all' || DECISION_STATUSES.has(input.decisionFilter as WatchlistItem['status']))
+    && typeof input.tagFilter === 'string' && input.tagFilter.length <= 32
+    && typeof input.historyRange === 'string' && HISTORY_RANGES.has(input.historyRange)
+    && (input.metricFilter === 'none' || WATCHLIST_METRIC_FILTERS.includes(input.metricFilter as WatchlistMetricFilterKey))
+    && (input.metricMin === null || (typeof input.metricMin === 'number' && Number.isFinite(input.metricMin)))
+    && (input.metricMax === null || (typeof input.metricMax === 'number' && Number.isFinite(input.metricMax)))
+    && (input.metricMin === null || input.metricMax === null || input.metricMin <= input.metricMax)
+    && (input.density === 'compact' || input.density === 'comfortable')
+    && isColumnWidths(input.columnWidths)
+    && Array.isArray(input.pinnedColumns) && input.pinnedColumns.length <= 3
+    && input.pinnedColumns.every((column) => typeof column === 'string' && input.visibleColumns!.includes(column as WatchlistColumnKey))
+    && uniqueStrings(input.pinnedColumns as string[]);
+}
+
+function isColumnWidths(value: unknown): value is Partial<Record<WatchlistColumnKey, number>> {
+  const input = record(value);
+  return !!input && Object.entries(input).every(([column, width]) =>
+    WATCHLIST_ALL_COLUMNS.includes(column as WatchlistColumnKey)
+    && typeof width === 'number' && Number.isFinite(width) && width >= 72 && width <= 480);
+}
+
+function normalizeTablePreferences(value: unknown): WatchlistTablePreferences {
+  const input = record(value);
+  const defaults = DEFAULT_WATCHLIST_TABLE_PREFERENCES;
+  if (!input) return { ...defaults, visibleColumns: [...defaults.visibleColumns], columnWidths: {}, pinnedColumns: [...defaults.pinnedColumns] };
+
+  const preset = typeof input.preset === 'string' && input.preset in WATCHLIST_PRESET_COLUMNS
+    ? input.preset as WatchlistTablePreset
+    : defaults.preset;
+  const candidateColumns = Array.isArray(input.visibleColumns)
+    ? input.visibleColumns.filter((column): column is WatchlistColumnKey => typeof column === 'string' && WATCHLIST_ALL_COLUMNS.includes(column as WatchlistColumnKey))
+    : [];
+  const visibleColumns = [...new Set(candidateColumns)];
+  const resolvedColumns = visibleColumns.length > 0 ? visibleColumns : [...WATCHLIST_PRESET_COLUMNS[preset]];
+  const metricFilter = typeof input.metricFilter === 'string' && (input.metricFilter === 'none' || WATCHLIST_METRIC_FILTERS.includes(input.metricFilter as WatchlistMetricFilterKey))
+    ? input.metricFilter as WatchlistTablePreferences['metricFilter']
+    : 'none';
+  let metricMin = typeof input.metricMin === 'number' && Number.isFinite(input.metricMin) ? input.metricMin : null;
+  let metricMax = typeof input.metricMax === 'number' && Number.isFinite(input.metricMax) ? input.metricMax : null;
+  if (metricFilter === 'none' || (metricMin !== null && metricMax !== null && metricMin > metricMax)) {
+    metricMin = null;
+    metricMax = null;
+  }
+  const widths = record(input.columnWidths);
+  const columnWidths = Object.fromEntries(Object.entries(widths ?? {}).filter(([column, width]) =>
+    resolvedColumns.includes(column as WatchlistColumnKey)
+    && WATCHLIST_ALL_COLUMNS.includes(column as WatchlistColumnKey)
+    && typeof width === 'number' && Number.isFinite(width) && width >= 72 && width <= 480,
+  )) as Partial<Record<WatchlistColumnKey, number>>;
+  const candidatePinned = Array.isArray(input.pinnedColumns)
+    ? input.pinnedColumns.filter((column): column is WatchlistColumnKey => typeof column === 'string' && resolvedColumns.includes(column as WatchlistColumnKey))
+    : defaults.pinnedColumns.filter((column) => resolvedColumns.includes(column));
+  const pinnedColumns = [...new Set(candidatePinned)].slice(0, 3);
+
+  return {
+    sortKey: typeof input.sortKey === 'string' && WATCHLIST_ALL_COLUMNS.includes(input.sortKey as WatchlistColumnKey)
+      ? input.sortKey as WatchlistColumnKey : defaults.sortKey,
+    asc: typeof input.asc === 'boolean' ? input.asc : defaults.asc,
+    preset,
+    visibleColumns: resolvedColumns,
+    query: typeof input.query === 'string' && input.query.length <= 120 ? input.query : '',
+    groupFilter: typeof input.groupFilter === 'string' && input.groupFilter.length <= 100 ? input.groupFilter : 'all',
+    marketFilter: input.marketFilter === 'all' || MARKETS.has(input.marketFilter as Market)
+      ? input.marketFilter as WatchlistTablePreferences['marketFilter'] : 'all',
+    statusFilter: input.statusFilter === 'all' || QUOTE_STATUSES.has(input.statusFilter as QuoteDisplayStatus)
+      ? input.statusFilter as WatchlistTablePreferences['statusFilter'] : 'all',
+    decisionFilter: input.decisionFilter === 'all' || DECISION_STATUSES.has(input.decisionFilter as WatchlistItem['status'])
+      ? input.decisionFilter as WatchlistTablePreferences['decisionFilter'] : 'all',
+    tagFilter: typeof input.tagFilter === 'string' && input.tagFilter.length <= 32 ? input.tagFilter : '',
+    historyRange: typeof input.historyRange === 'string' && HISTORY_RANGES.has(input.historyRange)
+      ? input.historyRange as WatchlistTablePreferences['historyRange'] : '1y',
+    metricFilter,
+    metricMin,
+    metricMax,
+    density: input.density === 'compact' || input.density === 'comfortable' ? input.density : defaults.density,
+    columnWidths,
+    pinnedColumns,
+  };
+}
+
+function normalizeSavedViews(value: unknown): WatchlistSavedTableView[] {
+  if (!Array.isArray(value)) return [];
+  const ids = new Set<string>();
+  const names = new Set<string>();
+  const normalized: WatchlistSavedTableView[] = [];
+  for (const candidate of value) {
+    const saved = record(candidate);
+    const id = typeof saved?.id === 'string' ? saved.id : '';
+    const name = typeof saved?.name === 'string' ? saved.name.trim() : '';
+    const normalizedName = name.toLocaleLowerCase();
+    if (!id || id.length > 100 || !name || name.length > 40 || ids.has(id) || names.has(normalizedName)) continue;
+    ids.add(id);
+    names.add(normalizedName);
+    normalized.push({ id, name, preferences: normalizeTablePreferences(saved?.preferences) });
+    if (normalized.length >= WATCHLIST_UI_PREFERENCES_MAX_SAVED_VIEWS) break;
+  }
+  return normalized;
 }
 
 export function isWatchlistSavedViews(value: unknown): value is WatchlistSavedTableView[] {
@@ -166,6 +291,11 @@ export function isWatchlistChartPreferences(value: unknown): value is WatchlistC
     && typeof input.showTooltip === 'boolean'
     && typeof input.showVolume === 'boolean'
     && typeof input.showIndicators === 'boolean'
+    && (input.indicators === undefined || (
+      Array.isArray(input.indicators)
+      && new Set(input.indicators).size === input.indicators.length
+      && input.indicators.every((indicator) => (WATCHLIST_CHART_INDICATORS as readonly unknown[]).includes(indicator))
+    ))
     && typeof input.showPreviousClose === 'boolean';
 }
 
@@ -179,6 +309,16 @@ function isTickerMap<T>(value: unknown, validate: (candidate: unknown) => candid
 
 function isBenchmark(value: unknown): value is string {
   return typeof value === 'string' && TICKER.test(value);
+}
+
+function normalizeTickerMap<T>(value: unknown, validate: (candidate: unknown) => candidate is T): Record<string, T> {
+  const input = record(value);
+  if (!input) return {};
+  const entries: Array<[string, T]> = [];
+  for (const [ticker, candidate] of Object.entries(input)) {
+    if (TICKER.test(ticker) && validate(candidate)) entries.push([ticker, candidate]);
+  }
+  return Object.fromEntries(entries.slice(-WATCHLIST_UI_PREFERENCES_MAX_TICKERS));
 }
 
 export function isWatchlistUiPreferences(value: unknown): value is WatchlistUiPreferences {
@@ -196,20 +336,34 @@ export function isWatchlistUiPreferences(value: unknown): value is WatchlistUiPr
 export function cloneWatchlistUiPreferences(value: WatchlistUiPreferences): WatchlistUiPreferences {
   return {
     ...value,
-    table: { ...value.table, visibleColumns: [...value.table.visibleColumns] },
+    table: { ...value.table, visibleColumns: [...value.table.visibleColumns], columnWidths: { ...value.table.columnWidths }, pinnedColumns: [...value.table.pinnedColumns] },
     savedViews: value.savedViews.map((view) => ({
       ...view,
-      preferences: { ...view.preferences, visibleColumns: [...view.preferences.visibleColumns] },
+      preferences: { ...view.preferences, visibleColumns: [...view.preferences.visibleColumns], columnWidths: { ...view.preferences.columnWidths }, pinnedColumns: [...view.preferences.pinnedColumns] },
     })),
     benchmarks: { ...value.benchmarks },
-    charts: Object.fromEntries(Object.entries(value.charts).map(([ticker, preferences]) => [ticker, { ...preferences }])),
+    charts: Object.fromEntries(Object.entries(value.charts).map(([ticker, preferences]) => [ticker, {
+      ...preferences,
+      ...(preferences.indicators ? { indicators: [...preferences.indicators] } : {}),
+    }])),
   };
 }
 
 export function normalizeWatchlistUiPreferences(value: unknown): WatchlistUiPreferences {
-  return isWatchlistUiPreferences(value)
-    ? cloneWatchlistUiPreferences(value)
-    : cloneWatchlistUiPreferences(DEFAULT_WATCHLIST_UI_PREFERENCES);
+  if (isWatchlistUiPreferences(value)) return cloneWatchlistUiPreferences(value);
+  const input = record(value);
+  if (!input || (input.schemaVersion !== 1 && input.schemaVersion !== WATCHLIST_UI_PREFERENCES_SCHEMA_VERSION)) {
+    return cloneWatchlistUiPreferences(DEFAULT_WATCHLIST_UI_PREFERENCES);
+  }
+  const migrated: WatchlistUiPreferences = {
+    schemaVersion: WATCHLIST_UI_PREFERENCES_SCHEMA_VERSION,
+    viewMode: input.viewMode === 'kanban' ? 'kanban' : 'table',
+    table: normalizeTablePreferences(input.table),
+    savedViews: normalizeSavedViews(input.savedViews),
+    benchmarks: normalizeTickerMap(input.benchmarks, isBenchmark),
+    charts: normalizeTickerMap(input.charts, isWatchlistChartPreferences),
+  };
+  return isWatchlistUiPreferences(migrated) ? cloneWatchlistUiPreferences(migrated) : cloneWatchlistUiPreferences(DEFAULT_WATCHLIST_UI_PREFERENCES);
 }
 
 export function parseWatchlistUiPreferencesCommand(body: unknown): WatchlistUiPreferencesCommand | null {
@@ -240,7 +394,7 @@ export function withWatchlistTablePreferences(
   table: WatchlistTablePreferences,
 ): WatchlistUiPreferences {
   return isWatchlistTablePreferences(table)
-    ? { ...current, table: { ...table, visibleColumns: [...table.visibleColumns] } }
+    ? { ...current, table: { ...table, visibleColumns: [...table.visibleColumns], columnWidths: { ...table.columnWidths }, pinnedColumns: [...table.pinnedColumns] } }
     : current;
 }
 
@@ -269,7 +423,10 @@ export function withWatchlistChartPreferences(
   chart: WatchlistChartPreferences,
 ): WatchlistUiPreferences {
   if (!isWatchlistChartPreferences(chart)) return current;
-  return { ...current, charts: boundedTickerMap(current.charts, ticker, { ...chart }) };
+  return { ...current, charts: boundedTickerMap(current.charts, ticker, {
+    ...chart,
+    ...(chart.indicators ? { indicators: [...chart.indicators] } : {}),
+  }) };
 }
 
 interface StorageReader {
@@ -289,16 +446,22 @@ function readJson(storage: StorageReader, key: string): unknown {
 
 export function readWatchlistUiPreferencesFromStorage(storage: StorageReader): WatchlistUiPreferences {
   try {
-    const stored = readJson(storage, WATCHLIST_UI_PREFERENCES_STORAGE_KEY);
-    if (isWatchlistUiPreferences(stored)) return cloneWatchlistUiPreferences(stored);
+    const current = readJson(storage, WATCHLIST_UI_PREFERENCES_STORAGE_KEY);
+    const currentRecord = record(current);
+    if (currentRecord && currentRecord.schemaVersion === WATCHLIST_UI_PREFERENCES_SCHEMA_VERSION) {
+      return normalizeWatchlistUiPreferences(current);
+    }
+    const unifiedV1 = readJson(storage, 'stock-monitor:watchlist:ui-preferences-v1');
+    const unifiedV1Record = record(unifiedV1);
+    if (unifiedV1Record && unifiedV1Record.schemaVersion === 1) return normalizeWatchlistUiPreferences(unifiedV1);
 
     let preferences = cloneWatchlistUiPreferences(DEFAULT_WATCHLIST_UI_PREFERENCES);
     const viewMode = storage.getItem('stock-monitor:watchlist:view');
     if (viewMode === 'table' || viewMode === 'kanban') preferences.viewMode = viewMode;
     const table = readJson(storage, 'stock-monitor:watchlist:table-preferences-v1');
-    if (isWatchlistTablePreferences(table)) preferences.table = { ...table, visibleColumns: [...table.visibleColumns] };
+    if (table) preferences.table = normalizeTablePreferences(table);
     const savedViews = readJson(storage, 'stock-monitor:watchlist:table-views-v1');
-    if (isWatchlistSavedViews(savedViews)) preferences.savedViews = savedViews;
+    preferences.savedViews = normalizeSavedViews(savedViews);
 
     const benchmarkPrefix = 'stock-monitor:watchlist:benchmark-v1:';
     const chartPrefix = 'stock-monitor:chart-preferences-v1:';

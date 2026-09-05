@@ -95,7 +95,14 @@
     "webSources": "网页来源",
     "sourceQuality": "来源质量 {value}%",
     "sourceCount": "{count} 个来源",
-    "qualityFlags": "质量标记：{value}"
+    "qualityFlags": "质量标记：{value}",
+    "structuredEvidence": "结构化证据",
+    "claimKinds": {
+      "thesis": "核心判断",
+      "catalyst": "催化剂",
+      "risk": "风险",
+      "counterpoint": "反方观点"
+    }
   },
   "disclaimer": {
     "heading": "免责声明",

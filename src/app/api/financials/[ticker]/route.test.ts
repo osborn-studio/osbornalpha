@@ -79,11 +79,20 @@ describe('GET /api/financials/[ticker]', () => {
     expect(mocks.income).not.toHaveBeenCalled();
   });
 
-  it('returns an explicit unsupported contract when no provider owns the market', async () => {
+  it('returns an explicit unavailable contract when the HK provider is not configured', async () => {
     const response = await GET(new Request('https://example.test/api/financials/0700.HK'), {
       params: Promise.resolve({ ticker: '0700.HK' }),
     });
     const body = await response.json();
-    expect(body).toMatchObject({ source: 'unsupported', ticker: '0700.HK', meta: { supported: false, market: 'HK' } });
+    expect(body).toMatchObject({
+      source: 'hk-financials-http',
+      ticker: '0700.HK',
+      meta: {
+        supported: true,
+        market: 'HK',
+        availability: 'unavailable',
+        warnings: ['hk_financials_provider_unconfigured'],
+      },
+    });
   });
 });

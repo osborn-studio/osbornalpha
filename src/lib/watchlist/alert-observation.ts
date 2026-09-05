@@ -1,8 +1,17 @@
-import type { BrokerReport, Perspective } from '@/lib/supabase/database.types';
+import type { BrokerReport, Perspective, WatchlistMetricSnapshot } from '@/lib/supabase/database.types';
 import type { RadarPayload } from '@/lib/brief/radar';
+import type { CalendarPayload } from '@/lib/brief/calendar';
+import type { QuoteShape } from '@/lib/quotes/resolve-quote';
 import { marketPhase } from '@/lib/today/clock';
+import { builtInMarketCalendar, type MarketCalendarProvider } from '@/lib/market/calendar';
+import { classifyMarket } from '@/lib/utils';
 import type { WatchlistAlertCandidate, WatchlistAlertObservation } from './alert-evaluator';
 import { normalizeWatchlistRating } from './alert-catalog';
+import {
+  WATCHLIST_METRIC_ALERT_KEYS,
+  watchlistMetricAlertValue,
+  watchlistMetricSnapshotStatus,
+} from './alert-metrics';
 
 function dateKey(value: string | null | undefined): string {
   return value || 'unknown-date';
@@ -42,37 +51,123 @@ export function perspectiveCandidates(perspectives: Perspective[]): WatchlistAle
   }));
 }
 
+function emptyObservation(observedAt: string): WatchlistAlertObservation {
+  return {
+    observedAt,
+    marketDataStatus: 'unavailable',
+    price: null,
+    changePct: null,
+    volumeRatio: null,
+    peTtm: null,
+    pb: null,
+    metrics: {},
+    events: [],
+    ratings: [],
+    perspectives: [],
+  };
+}
+
+export function observationFromMetricSnapshot(
+  snapshot: WatchlistMetricSnapshot | null,
+  now = new Date(),
+): WatchlistAlertObservation {
+  const observedAt = snapshot?.observed_at ?? snapshot?.generated_at ?? now.toISOString();
+  return {
+    ...emptyObservation(observedAt),
+    metricDataStatus: watchlistMetricSnapshotStatus(snapshot, now),
+    metrics: Object.fromEntries(
+      WATCHLIST_METRIC_ALERT_KEYS.map((key) => [key, watchlistMetricAlertValue(snapshot, key)]),
+    ),
+  };
+}
+
+export function observationFromQuote(
+  ticker: string,
+  quote: QuoteShape | null,
+  now = new Date(),
+  calendar: MarketCalendarProvider = builtInMarketCalendar,
+): WatchlistAlertObservation {
+  const observedAt = quote?.updated_at || now.toISOString();
+  const quoteTime = quote?.updated_at ? new Date(quote.updated_at).getTime() : Number.NaN;
+  const age = now.getTime() - quoteTime;
+  const phase = marketPhase(quote?.market ?? classifyMarket(ticker), now, calendar).phase;
+  const maximumAge = phase === 'open' || phase === 'lunch'
+    ? 30 * 60_000
+    : phase === 'pre'
+      ? 24 * 60 * 60_000
+      : 96 * 60 * 60_000;
+  const marketDataStatus = !quote
+    ? 'unavailable'
+    : !quote.updated_at
+      ? 'fresh'
+      : !Number.isFinite(age) || age < -5 * 60_000 || age > maximumAge
+        ? 'stale'
+        : 'fresh';
+  return {
+    ...emptyObservation(observedAt),
+    marketDataStatus,
+    price: quote?.price ?? null,
+    changePct: quote?.change_pct ?? null,
+    volumeRatio: quote?.volume_ratio ?? null,
+    peTtm: quote?.pe_ttm ?? null,
+    pb: quote?.pb ?? null,
+  };
+}
+
+export function observationFromResearch(
+  calendar: CalendarPayload | null,
+  reports: BrokerReport[] = [],
+  perspectives: Perspective[] = [],
+  now = new Date(),
+): WatchlistAlertObservation {
+  return {
+    ...emptyObservation(now.toISOString()),
+    events: (calendar?.events ?? []).map((event) => ({
+      key: `${event.kind}:${dateKey(event.date)}`,
+      kind: event.kind,
+      label: event.title,
+      occurredAt: event.date,
+      payload: { daysUntil: event.days_until },
+    })),
+    ratings: reportCandidates(reports),
+    perspectives: perspectiveCandidates(perspectives),
+  };
+}
+
 export function observationFromRadar(
   radar: RadarPayload,
   reports: BrokerReport[] = [],
   perspectives: Perspective[] = [],
   now = new Date(),
 ): WatchlistAlertObservation {
-  const quoteTime = radar.sections.price.updated_at
-    ? new Date(radar.sections.price.updated_at).getTime()
-    : Number.NaN;
-  const age = now.getTime() - quoteTime;
-  const phase = marketPhase(radar.market, now).phase;
-  const maximumAge = phase === 'open' || phase === 'lunch'
-    ? 30 * 60_000
-    : phase === 'pre'
-      ? 24 * 60 * 60_000
-      : 96 * 60 * 60_000;
-  const marketDataStatus = radar.sections.price.value == null
-    ? 'unavailable'
-    : !radar.sections.price.updated_at
-      ? 'fresh'
-      : !Number.isFinite(age) || age < -5 * 60_000 || age > maximumAge
-        ? 'stale'
-        : 'fresh';
-  return {
-    observedAt: radar.sections.price.updated_at || radar.as_of,
-    marketDataStatus,
-    price: radar.sections.price.value,
-    changePct: radar.sections.price.change_pct,
-    volumeRatio: radar.sections.price.volume_ratio ?? null,
-    peTtm: radar.sections.price.pe_ttm,
+  const quoteObservation = observationFromQuote(radar.ticker, {
+    source: radar.sections.price.source,
+    ticker: radar.ticker,
+    name: radar.name,
+    market: radar.market,
+    currency: radar.sections.price.currency,
+    price: radar.sections.price.value ?? 0,
+    change: 0,
+    change_pct: radar.sections.price.change_pct ?? 0,
+    open: 0,
+    high: 0,
+    low: 0,
+    prev_close: 0,
+    volume: 0,
+    amount: 0,
+    amplitude: 0,
+    market_cap: null,
+    market_cap_label: radar.sections.price.market_cap_label,
+    pe_ttm: radar.sections.price.pe_ttm,
     pb: radar.sections.price.pb,
+    turnover: null,
+    volume_ratio: radar.sections.price.volume_ratio ?? null,
+    updated_at: radar.sections.price.updated_at ?? radar.as_of,
+    delayed: radar.sections.price.delayed ?? false,
+  }, now);
+  return {
+    ...quoteObservation,
+    price: radar.sections.price.value,
     events: radar.sections.calendar.upcoming.map((event) => ({
       key: `${event.kind}:${dateKey(event.date)}`,
       kind: event.kind,

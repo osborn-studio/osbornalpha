@@ -108,10 +108,11 @@ export function responseToTurn(data: { content?: any[]; stop_reason?: string; us
 
 export async function anthropicToolChat(
   cfg: LlmConfig,
-  opts: { system?: string; messages: any[]; tools: ToolDef[]; max_tokens?: number; timeoutMs?: number },
+  opts: { system?: string; messages: any[]; tools: ToolDef[]; max_tokens?: number; timeoutMs?: number; signal?: AbortSignal },
 ): Promise<{ content: string; toolCalls: ToolCall[]; finishReason: string; usage: NormalizedUsage }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 60000);
+  const signal = opts.signal ? AbortSignal.any([controller.signal, opts.signal]) : controller.signal;
   try {
     const res = await fetch(cfg.baseUrl + (cfg.chatPath ?? '/v1/messages'), {
       method: 'POST',
@@ -127,7 +128,7 @@ export async function anthropicToolChat(
         messages: oaiToAnthropic(opts.messages),
         ...(opts.tools.length ? { tools: toolDefsToAnthropic(opts.tools) } : {}),
       }),
-      signal: controller.signal,
+      signal,
     });
     if (!res.ok) throw new Error('llm ' + res.status + ': ' + (await res.text().catch(() => '')));
     return responseToTurn(await res.json());
@@ -139,8 +140,8 @@ export async function anthropicToolChat(
 /** Plain-text completion for /api/llm/test connectivity checks. */
 export async function anthropicChat(
   cfg: LlmConfig,
-  opts: { system?: string; messages: Array<{ role: 'user' | 'assistant'; content: string }>; max_tokens?: number; timeoutMs?: number },
+  opts: { system?: string; messages: Array<{ role: 'user' | 'assistant'; content: string }>; max_tokens?: number; timeoutMs?: number; signal?: AbortSignal },
 ): Promise<{ content: string; usage: NormalizedUsage }> {
-  const r = await anthropicToolChat(cfg, { system: opts.system, messages: opts.messages, tools: [], max_tokens: opts.max_tokens ?? 64, timeoutMs: opts.timeoutMs });
+  const r = await anthropicToolChat(cfg, { system: opts.system, messages: opts.messages, tools: [], max_tokens: opts.max_tokens ?? 64, timeoutMs: opts.timeoutMs, signal: opts.signal });
   return { content: r.content, usage: r.usage };
 }

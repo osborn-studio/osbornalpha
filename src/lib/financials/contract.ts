@@ -1,5 +1,6 @@
 import type {
   FinancialAmounts,
+  FinancialIndicator,
   FinancialMeta,
   FinancialQuarterRow,
   FinancialReport,
@@ -14,6 +15,12 @@ const AMOUNT_KEYS = [
 
 function object(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+export function isFinancialIndicator(value: unknown): value is FinancialIndicator {
+  if (!object(value)) return false;
+  return typeof value.periodEnd === 'string'
+    && ['roe', 'grossMargin', 'netMargin', 'currentRatio'].every((key) => nullableFinite(value[key]));
 }
 
 function nullableFinite(value: unknown): boolean {
@@ -71,5 +78,6 @@ export function isFinancialReport(value: unknown): value is FinancialReport {
     && Array.isArray(value.yearly) && value.yearly.every(isFinancialYearRow)
     && Array.isArray(value.quarterly) && value.quarterly.every(isFinancialQuarterRow)
     && (value.ttm === null || isFinancialTtmRow(value.ttm))
+    && (value.latestIndicator === null || isFinancialIndicator(value.latestIndicator))
     && isFinancialMeta(value.meta);
 }

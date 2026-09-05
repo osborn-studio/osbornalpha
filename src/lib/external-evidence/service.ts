@@ -4,9 +4,11 @@ import { dedupeAndRankEvidence, normalizeEvidenceResults } from './normalize';
 import { normalizeEvidenceSearchRequest } from './request';
 import { resolveEvidenceSearchProviders } from './resolve-provider';
 import { persistEvidenceSnapshot } from './store';
+import { configuredOfficialDocumentProvider, enrichOfficialEvidenceDocuments } from './official-documents';
 import type {
   EvidenceQuery,
   EvidenceSearchProvider,
+  EvidenceDocumentProvider,
   EvidenceSearchRequest,
   EvidenceSearchSnapshot,
   ExternalEvidence,
@@ -18,6 +20,8 @@ interface SearchDependencies {
   providers?: EvidenceSearchProvider[];
   now?: () => Date;
   persist?: (request: NormalizedEvidenceSearchRequest, snapshot: EvidenceSearchSnapshot) => Promise<void>;
+  documentProvider?: EvidenceDocumentProvider | null;
+  signal?: AbortSignal;
 }
 
 function estimatedSearchCostMicrousd(queryCount: number): number | null {
@@ -47,6 +51,7 @@ async function runQueries(
   queries: EvidenceQuery[],
   provider: EvidenceSearchProvider,
   fetchedAt: Date,
+  signal?: AbortSignal,
 ): Promise<{ results: ExternalEvidence[]; warnings: string[]; failedQueries: EvidenceQuery[] }> {
   const results: ExternalEvidence[] = [];
   const warnings: string[] = [];
@@ -54,11 +59,13 @@ async function runQueries(
   let cursor = 0;
   const worker = async () => {
     while (cursor < queries.length) {
+      if (signal?.aborted) throw signal.reason;
       const query = queries[cursor++];
       try {
-        const raw = await provider.search(query);
+        const raw = await provider.search(query, signal);
         results.push(...normalizeEvidenceResults(raw, query.scope, fetchedAt, query.freshnessDays));
       } catch (error) {
+        if (signal?.aborted) throw error;
         const code = error instanceof Error ? error.message : 'search_provider_error';
         warnings.push(`${query.scope}:${code.slice(0, 80)}`);
         failedQueries.push(query);
@@ -74,6 +81,7 @@ export async function searchExternalEvidenceUncached(
   dependencies: SearchDependencies = {},
 ): Promise<EvidenceSearchSnapshot> {
   const request = normalizeEvidenceSearchRequest(input);
+  if (dependencies.signal?.aborted) throw dependencies.signal.reason;
   const providers = dependencies.providers
     ?? (dependencies.provider !== undefined
       ? (dependencies.provider ? [dependencies.provider] : [])
@@ -104,7 +112,7 @@ export async function searchExternalEvidenceUncached(
   let firstProviderFailedAll = false;
   for (let index = 0; index < providers.length && pendingQueries.length > 0; index += 1) {
     const provider = providers[index];
-    const result = await runQueries(pendingQueries, provider, fetchedAt);
+    const result = await runQueries(pendingQueries, provider, fetchedAt, dependencies.signal);
     usedProviders.add(provider.id);
     lastProviderId = provider.id;
     if (index === 0) firstProviderFailedAll = result.failedQueries.length === queries.length;
@@ -116,8 +124,19 @@ export async function searchExternalEvidenceUncached(
       failoverWarnings.push(`provider_failover:${provider.id}`);
     }
   }
-  const results = dedupeAndRankEvidence(searched.results, request.limit);
-  const warnings = [...failoverWarnings, ...(pendingQueries.length > 0 ? searched.warnings : [])];
+  const ranked = dedupeAndRankEvidence(searched.results, request.limit);
+  if (dependencies.signal?.aborted) throw dependencies.signal.reason;
+  const documents = await enrichOfficialEvidenceDocuments(
+    ranked,
+    dependencies.documentProvider === undefined ? configuredOfficialDocumentProvider() : dependencies.documentProvider,
+    fetchedAt,
+  );
+  const results = documents.results;
+  const warnings = [
+    ...failoverWarnings,
+    ...(pendingQueries.length > 0 ? searched.warnings : []),
+    ...documents.warnings,
+  ];
   const failedAll = pendingQueries.length === queries.length;
   const provider = firstProviderFailedAll && pendingQueries.length === 0 && lastProviderId
     ? lastProviderId

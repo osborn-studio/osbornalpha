@@ -1,9 +1,31 @@
+import {
+  evaluateWatchlistOperationalHealth,
+  parseWatchlistOperationalHealth,
+} from '../src/lib/watchlist/operational-health';
+
 interface SchemaCheck {
   name: string;
   path: string;
   method?: 'GET' | 'POST';
   body?: Record<string, unknown>;
   validate?: (body: string) => string | undefined;
+}
+
+function releaseMarkerCheck(marker: string): SchemaCheck {
+  return {
+    name: `${marker}_release_marker`,
+    path: `/rest/v1/watchlist_release_markers?select=marker&marker=eq.${marker}&limit=1`,
+    validate: (body) => {
+      try {
+        const rows = JSON.parse(body);
+        return Array.isArray(rows) && rows.some((row) => row?.marker === marker)
+          ? undefined
+          : 'release_marker_missing';
+      } catch {
+        return 'release_marker_response_invalid';
+      }
+    },
+  };
 }
 
 export interface WatchlistProductionCheckResult {
@@ -41,6 +63,141 @@ const CHECKS: SchemaCheck[] = [
     name: 'watchlist_ui_preference_columns',
     path: '/rest/v1/user_preferences?select=watchlist_ui_preferences,watchlist_ui_preferences_version,watchlist_ui_preferences_updated_at&limit=1',
   },
+  {
+    name: 'watchlist_metric_snapshot_columns',
+    path: '/rest/v1/watchlist_metric_snapshots?select=ticker,market,history_range,benchmark_ticker,metrics,source_bundle,calculator_version,observed_at,generated_at,valid_until,period_return_pct,total_return_pct,annualized_volatility_pct,max_drawdown_pct,rsi14,excess_return_pct,beta,volume_zscore_20,coverage_ratio&limit=1',
+  },
+  {
+    name: 'watchlist_metric_refresh_columns',
+    path: '/rest/v1/watchlist_metric_refresh_state?select=ticker,market,history_range,benchmark_ticker,status,next_refresh_at,lease_expires_at&limit=1',
+  },
+  {
+    name: 'watchlist_metric_claim_rpc',
+    path: '/rest/v1/rpc/claim_watchlist_metric_refresh',
+    method: 'POST',
+    body: { p_limit: 0, p_lease_minutes: 1 },
+  },
+  releaseMarkerCheck('watchlist_metric_snapshots'),
+  releaseMarkerCheck('watchlist_metric_extensions'),
+  {
+    name: 'watchlist_overview_query_rpc',
+    path: '/rest/v1/rpc/get_watchlist_overview_query',
+    method: 'POST',
+    body: {
+      p_limit: 1,
+      p_sort: 'position',
+      p_direction: 'asc',
+      p_quote_status: null,
+      p_history_range: '1y',
+      p_metric: null,
+      p_metric_min: null,
+      p_metric_max: null,
+      p_fingerprint: 'production-check',
+    },
+  },
+  releaseMarkerCheck('watchlist_overview_query'),
+  {
+    name: 'watchlist_alert_scope_columns',
+    path: '/rest/v1/watchlist_alert_runs?select=scope,skipped_closed&limit=1',
+  },
+  releaseMarkerCheck('watchlist_alert_scopes'),
+  {
+    name: 'market_calendar_override_columns',
+    path: '/rest/v1/market_calendar_overrides?select=market,date_key,kind,name,sessions,source,source_updated_at,fetched_at&limit=1',
+  },
+  releaseMarkerCheck('market_calendar_overrides'),
+  {
+    name: 'shared_quote_snapshot_columns',
+    path: '/rest/v1/market_quote_snapshots?select=ticker,market,quote,source,observed_at,fetched_at,valid_until,stale_until&limit=1',
+  },
+  releaseMarkerCheck('shared_quote_snapshots'),
+  {
+    name: 'shared_research_artifact_columns',
+    path: '/rest/v1/shared_research_artifacts?select=id,kind,ticker,source_key,title,source,url,published_at,fetched_at,event_cluster_id,quality_score,content_hash,payload,updated_at&limit=1',
+  },
+  {
+    name: 'user_research_artifact_link_columns',
+    path: '/rest/v1/user_research_artifact_links?select=user_id,artifact_id,linked_at&limit=1',
+  },
+  {
+    name: 'shared_research_load_rpc',
+    path: '/rest/v1/rpc/load_watchlist_research_artifacts',
+    method: 'POST',
+    body: { p_user_id: '00000000-0000-0000-0000-000000000000', p_ticker: 'AAPL', p_limit: 1 },
+  },
+  releaseMarkerCheck('shared_research_artifacts'),
+  {
+    name: 'watchlist_activity_state_columns',
+    path: '/rest/v1/watchlist_activity_state?select=user_id,ticker,last_seen_at,updated_at&limit=1',
+  },
+  {
+    name: 'perspective_feedback_columns',
+    path: '/rest/v1/perspective_feedback?select=id,user_id,perspective_id,verdict,reason,corrected_stance,created_at,updated_at&limit=1',
+  },
+  {
+    name: 'perspective_outcome_columns',
+    path: '/rest/v1/perspective_outcomes?select=id,perspective_id,horizon_days,reference_price,evaluated_price,return_pct,direction_correct,evaluated_at&limit=1',
+  },
+  {
+    name: 'perspective_evaluation_queue_columns',
+    path: '/rest/v1/perspective_evaluation_queue?select=perspective_id,horizon_days,due_at,next_attempt_at,attempt_count,claimed_at,status,dead_lettered_at,updated_at&limit=1',
+  },
+  {
+    name: 'perspective_evaluation_claim_rpc',
+    path: '/rest/v1/rpc/claim_perspective_evaluations',
+    method: 'POST',
+    body: { p_limit: 0 },
+  },
+  releaseMarkerCheck('watchlist_activity_feedback_hardening'),
+  releaseMarkerCheck('watchlist_atomic_research_quota'),
+  {
+    name: 'perspective_analysis_mode_columns',
+    path: '/rest/v1/perspectives?select=requested_analysis_mode,resolved_analysis_mode,evidence_status&limit=1',
+  },
+  releaseMarkerCheck('perspective_analysis_modes'),
+  releaseMarkerCheck('watchlist_review_workflow'),
+  {
+    name: 'watchlist_review_reminder_rpc',
+    path: '/rest/v1/rpc/enqueue_watchlist_review_reminders',
+    method: 'POST',
+    body: { p_limit: 0 },
+  },
+  releaseMarkerCheck('watchlist_review_reminders'),
+  releaseMarkerCheck('watchlist_metric_alerts'),
+  {
+    name: 'perspective_generation_job_columns',
+    path: '/rest/v1/perspective_generation_jobs?select=id,user_id,ticker,status,stage,progress,attempt_count,max_attempts,quota_plan,quota_limit,quota_used,next_attempt_at,lease_expires_at,lease_token,cancel_requested_at,result_generation_id,error_code,created_at,started_at,finished_at,updated_at&limit=1',
+  },
+  {
+    name: 'perspective_generation_claim_rpc',
+    path: '/rest/v1/rpc/claim_perspective_generation_jobs',
+    method: 'POST',
+    body: { p_limit: 0, p_lease_minutes: 1, p_job_id: null },
+  },
+  releaseMarkerCheck('perspective_generation_jobs'),
+  {
+    name: 'perspective_claim_columns',
+    path: '/rest/v1/perspectives?select=claims&limit=1',
+  },
+  releaseMarkerCheck('perspective_claims'),
+  {
+    name: 'watchlist_operational_health_rpc',
+    path: '/rest/v1/rpc/get_watchlist_operational_health',
+    method: 'POST',
+    body: {},
+    validate: (body) => {
+      try {
+        const snapshot = parseWatchlistOperationalHealth(JSON.parse(body));
+        if (!snapshot) return 'operational_health_response_invalid';
+        const health = evaluateWatchlistOperationalHealth(snapshot);
+        return health.status === 'critical' ? health.warnings.join(',') : undefined;
+      } catch {
+        return 'operational_health_response_invalid';
+      }
+    },
+  },
+  releaseMarkerCheck('watchlist_operational_health'),
+  releaseMarkerCheck('watchlist_operational_monitoring'),
   {
     name: 'monitoring_status_release_marker',
     path: '/rest/v1/watchlist_release_markers?select=marker&marker=eq.watchlist_monitoring_status&limit=1',

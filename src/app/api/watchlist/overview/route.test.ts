@@ -4,8 +4,10 @@ const mocks = vi.hoisted(() => ({
   auth: vi.fn(),
   from: vi.fn(),
   page: vi.fn(),
+  queryPage: vi.fn(),
   version: vi.fn(),
   computed: vi.fn(),
+  metricSnapshots: vi.fn(),
   research: vi.fn(),
 }));
 
@@ -16,9 +18,13 @@ vi.mock('@/lib/supabase/server', () => ({
 vi.mock('@/lib/i18n/server', () => ({ getRequestLocale: vi.fn(async () => 'en') }));
 vi.mock('@/lib/watchlist/server-repository', () => ({
   loadWatchlistOverviewPage: mocks.page,
+  loadWatchlistOverviewQuery: mocks.queryPage,
   loadWatchlistVersion: mocks.version,
 }));
 vi.mock('@/lib/watchlist/overview', () => ({ buildComputedWatchlistOverview: mocks.computed }));
+vi.mock('@/lib/watchlist/metric-snapshot-repository', () => ({
+  loadWatchlistMetricSnapshots: mocks.metricSnapshots,
+}));
 vi.mock('@/lib/watchlist/research-repository', () => ({ loadWatchlistResearchSummaries: mocks.research }));
 
 import { GET } from './route';
@@ -43,7 +49,17 @@ describe('GET /api/watchlist/overview', () => {
         },
       }],
     });
+    mocks.queryPage.mockResolvedValue({ total: 0, hasMore: false, nextCursor: null, rows: [] });
     mocks.computed.mockResolvedValue({ AAPL: { market: { status: 'fresh' }, history: { status: 'fresh' } } });
+    mocks.metricSnapshots.mockResolvedValue({
+      AAPL: {
+        ticker: 'AAPL', market: 'US', history_range: '1y', benchmark_ticker: 'SPY',
+        metrics: { observations: 252, coverageRatio: 1, methodology: { historyRange: '1y' } },
+        source: 'snapshot-source', source_bundle: {}, warnings: [], calculator_version: 'watchlist-analytics-v2',
+        observed_at: new Date().toISOString(),
+        generated_at: new Date().toISOString(), valid_until: new Date(Date.now() + 60_000).toISOString(),
+      },
+    });
     mocks.research.mockResolvedValue({
       AAPL: {
         recentNewsCount: 1, latestNewsAt: new Date().toISOString(), latestReportAt: null,
@@ -71,13 +87,13 @@ describe('GET /api/watchlist/overview', () => {
     expect(body.rows[0]).toMatchObject({
       item: { ticker: 'AAPL', thesis: 'Services growth', target_price: 250 },
       identity: { name: 'Apple' },
-      market: { status: 'fresh' },
+      market: null,
       history: { status: 'fresh' },
       research: { source: 'stored-research', status: 'fresh', value: { recentNewsCount: 1 } },
     });
-    expect(mocks.computed).toHaveBeenCalledWith(['AAPL'], 'en', {
-      includeMarket: false, benchmarkTicker: null, historyRange: '1y', includeTotalReturn: false,
-    });
+    expect(mocks.computed).not.toHaveBeenCalled();
+    expect(mocks.metricSnapshots).toHaveBeenCalledWith(expect.anything(), ['AAPL'], '1y');
+    expect(body.rows[0].history).toMatchObject({ status: 'fresh', source: 'snapshot-source' });
   });
 
   it('supports a targeted ticker read for an unloaded quick view', async () => {
@@ -145,6 +161,30 @@ describe('GET /api/watchlist/overview', () => {
     const response = await GET(new Request('https://example.test/api/watchlist/overview?cursor=%7Bbad'));
     expect(response.status).toBe(400);
     expect(mocks.page).not.toHaveBeenCalled();
+  });
+
+  it('routes typed metric sorting through the complete-dataset query RPC', async () => {
+    mocks.queryPage.mockResolvedValueOnce({
+      total: 1, hasMore: false, nextCursor: null,
+      rows: [{
+        group: { id: 'wl-1', name: 'Core', description: null, sort_order: 0 },
+        item: {
+          id: 'item-1', ticker: 'AAPL', conviction: 8, notes: null, sort_order: 0,
+          added_at: '2026-09-01T00:00:00Z', thesis: null, target_price: null,
+          invalidation_conditions: null, confidence: null, review_at: null,
+          tags: [], status: 'watching', updated_at: '2026-09-01T00:00:00Z', decision_version: 2,
+        },
+      }],
+    });
+    const response = await GET(new Request(
+      'https://example.test/api/watchlist/overview?sort=change&direction=desc&quoteStatus=live&metric=rsi14&metricMin=30',
+    ));
+    expect(response.status).toBe(200);
+    expect(mocks.queryPage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      sort: 'change', direction: 'desc', quoteStatus: 'live', metric: 'rsi14', metricMin: 30, cursor: null,
+    }));
+    expect(mocks.page).not.toHaveBeenCalled();
+    expect(mocks.computed).not.toHaveBeenCalled();
   });
 
   it('returns an opaque next cursor without exposing database ordering fields', async () => {

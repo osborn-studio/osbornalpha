@@ -18,7 +18,7 @@ describe('watchlist market rows', () => {
       Date.now(),
     );
 
-    expect(row).toMatchObject({ name: '贵州茅台', currency: '¥', status: 'live', quote });
+    expect(row).toMatchObject({ name: '贵州茅台', currency: '¥', groupId: 'core', status: 'live', quote });
   });
 
   it('does not fabricate a price when a quote is unavailable', () => {
@@ -31,6 +31,17 @@ describe('watchlist market rows', () => {
 
     expect(row).toMatchObject({ name: 'Apple', currency: '$', quote: null, status: 'unavailable' });
     expect(quoteDisplayStatus(null, null)).toBe('loading');
+  });
+
+  it('prefers the locale-selected security-master name over a provider label', () => {
+    const [row] = buildWatchlistMarketRows(
+      [{ id: 'core', name: 'Core', tickers: ['600519.SH'] }],
+      { '600519.SH': quote },
+      { '600519.SH': { t: '600519.SH', n: 'Kweichow Moutai', m: 'A' } },
+      Date.now(),
+    );
+
+    expect(row.name).toBe('Kweichow Moutai');
   });
 
   it('marks explicitly delayed provider quotes as delayed', () => {

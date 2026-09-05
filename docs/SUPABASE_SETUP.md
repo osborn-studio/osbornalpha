@@ -47,6 +47,26 @@ Watchlist 后端上线前请在 Dashboard 的 **Database → Migrations** 或 CL
 - `20260904230000_external_evidence_audit_snapshot.sql`
 - `20260904240000_watchlist_research_event_clusters.sql`
 - `20260904250000_watchlist_ui_preferences.sql`
+- `20260904260000_watchlist_metric_snapshots.sql`
+- `20260904265000_shared_quote_snapshots.sql`
+- `20260904266000_shared_research_artifacts.sql`
+- `20260904270000_watchlist_overview_query.sql`
+- `20260904280000_watchlist_alert_scopes.sql`
+- `20260904290000_market_calendar_overrides.sql`
+- `20260904300000_external_evidence_documents.sql`
+- `20260904310000_news_sentiment_aspects.sql`
+- `20260904320000_perspective_feedback_outcomes.sql`
+- `20260904380000_perspective_analysis_modes.sql`
+- `20260904330000_watchlist_plan_limits.sql`
+- `20260904340000_watchlist_operational_health.sql`
+- `20260904350000_watchlist_activity_feedback_hardening.sql`
+- `20260904360000_watchlist_operational_monitoring.sql`
+- `20260904370000_watchlist_atomic_research_quota.sql`
+- `20260904390000_watchlist_review_workflow.sql`
+- `20260904400000_watchlist_review_reminders.sql`
+- `20260904410000_watchlist_metric_alerts.sql`
+- `20260904420000_perspective_generation_jobs.sql`
+- `20260904430000_perspective_claims.sql`
 
 Vercel 部署只发布 Next.js 代码，不会自动执行 Supabase migrations；两者必须分别验收。
 
@@ -65,6 +85,32 @@ Vercel 发布后可运行无副作用的 runtime verifier。它不会发送 Cron
 ```bash
 WATCHLIST_RUNTIME_URL=https://stock-monitor-nu.vercel.app npm run watchlist:runtime-check
 ```
+
+在生产 Provider 密钥已注入的受控环境运行 live canary。该命令会真实访问所有已配置 Provider；未配置的可选 Provider 跳过，`WATCHLIST_REQUIRED_PROVIDERS` 中任一 Provider 未配置或探测失败都会阻断发布：
+
+```bash
+npm run watchlist:provider-check
+```
+
+官方文档 Provider 还需配置一个允许抓取的官方公告 URL 作为 canary：`OFFICIAL_DOCUMENT_CANARY_URL`。该值只用于健康检查，不会写入数据库。
+
+准备两个独立的只读验收账号后运行 RLS Canary。脚本不会创建、修改或删除数据；
+`watchlists` 与 `user_preferences` 必须在两个账号下都有注册触发器生成的基线行，
+其他私有表只在存在样本时计入覆盖：
+
+```bash
+E2E_EMAIL=<ACCOUNT_A_EMAIL> E2E_PASSWORD=<ACCOUNT_A_PASSWORD> \
+E2E_EMAIL_B=<ACCOUNT_B_EMAIL> E2E_PASSWORD_B=<ACCOUNT_B_PASSWORD> \
+npm run watchlist:rls-check
+```
+
+输出必须为 `"ok": true`，且核心表 `coverage` 为 `full`。可选表显示 `none`
+表示没有样本、不是隔离证明；发布记录中应保留这一覆盖差异。
+
+Review 到期提醒由 Watchlist Dispatcher 调用数据库队列生成，单轮上限由
+`WATCHLIST_REVIEW_REMINDER_LIMIT` 控制（建议生产值 `500`）。提醒复用现有
+Email/Telegram、Digest、静默时段、重试和死信队列；`paused` 与
+`invalidated` 标的不进入提醒队列。
 
 如果 Cron 路由返回 `404`，说明生产仍在运行旧部署或 Vercel 项目绑定未指向当前 `main`，此时先处理部署切换，再进行 Cron 首次运行验收。
 

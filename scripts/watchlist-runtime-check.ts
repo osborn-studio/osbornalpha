@@ -15,8 +15,8 @@ const probes: Probe[] = [
   // No Authorization header is intentional: an installed route must reject
   // the request without executing the job. A 404 means the deployment is
   // older than the current main branch.
-  { path: '/api/cron/watchlist-alerts', expected: [401, 503], label: 'Watchlist alerts cron route' },
-  { path: '/api/cron/watchlist-research', expected: [401, 503], label: 'Watchlist research cron route' },
+  { path: '/api/cron/watchlist-dispatch', expected: [401, 503], label: 'Watchlist dispatcher cron route' },
+  { path: '/api/cron/watchlist-perspectives', expected: [401, 503], label: 'Watchlist perspective worker cron route' },
 ];
 
 async function probe(item: Probe): Promise<void> {

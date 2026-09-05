@@ -1,9 +1,17 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DataEnvelope, WatchlistOverviewItemRow, WatchlistOverviewResponse, WatchlistOverviewRow } from '@/lib/watchlist/overview-contract';
 import { createRequestSlot, type RequestSlot } from './request-slot';
+import { watchlistJsonRequest } from '@/lib/watchlist/api-client';
 import type { WatchlistHistoryRange } from '@/lib/market-returns/types';
+import type { Market, WatchlistItem } from '@/lib/supabase/database.types';
+import type {
+  WatchlistOverviewMetric,
+  WatchlistOverviewQueryDirection,
+  WatchlistOverviewQuerySort,
+  WatchlistOverviewQuoteStatus,
+} from '@/lib/watchlist/overview-query';
 export type { WatchlistOverviewRow as WatchlistOverviewClientRow } from '@/lib/watchlist/overview-contract';
 
 const DATA_STATUSES = new Set(['fresh', 'delayed', 'stale', 'unavailable']);
@@ -60,7 +68,37 @@ function isOverviewResponse(value: unknown): value is WatchlistOverviewResponse 
     && value.rows.every(isOverviewRow);
 }
 
-export function useWatchlistOverview(enabled: boolean) {
+export interface WatchlistOverviewClientQuery {
+  sort: WatchlistOverviewQuerySort;
+  direction: WatchlistOverviewQueryDirection;
+  query?: string | null;
+  groupId?: string | null;
+  market?: Market | null;
+  quoteStatus?: WatchlistOverviewQuoteStatus | null;
+  decisionStatus?: WatchlistItem['status'] | null;
+  tag?: string | null;
+  historyRange?: WatchlistHistoryRange;
+  metric?: WatchlistOverviewMetric | null;
+  metricMin?: number | null;
+  metricMax?: number | null;
+}
+
+export function watchlistOverviewQueryString(query: WatchlistOverviewClientQuery): string {
+  const params = new URLSearchParams({ sort: query.sort, direction: query.direction });
+  if (query.query?.trim()) params.set('q', query.query.trim());
+  if (query.groupId) params.set('groupId', query.groupId);
+  if (query.market) params.set('market', query.market);
+  if (query.quoteStatus) params.set('quoteStatus', query.quoteStatus);
+  if (query.decisionStatus) params.set('decisionStatus', query.decisionStatus);
+  if (query.tag?.trim()) params.set('tag', query.tag.trim());
+  if (query.historyRange) params.set('historyRange', query.historyRange);
+  if (query.metric) params.set('metric', query.metric);
+  if (query.metricMin != null && Number.isFinite(query.metricMin)) params.set('metricMin', String(query.metricMin));
+  if (query.metricMax != null && Number.isFinite(query.metricMax)) params.set('metricMax', String(query.metricMax));
+  return params.toString();
+}
+
+export function useWatchlistOverview(enabled: boolean, serverQuery: WatchlistOverviewClientQuery | null = null) {
   const [rows, setRows] = useState<Record<string, WatchlistOverviewRow>>({});
   const rowsRef = useRef<Record<string, WatchlistOverviewRow>>({});
   const ensuringRef = useRef(new Map<string, Promise<WatchlistOverviewRow | null>>());
@@ -77,6 +115,11 @@ export function useWatchlistOverview(enabled: boolean) {
   if (!loadSlot.current) loadSlot.current = createRequestSlot();
   if (!loadMoreSlot.current) loadMoreSlot.current = createRequestSlot();
 
+  const bulkQueryString = useMemo(() => {
+    if (!serverQuery) return '';
+    return watchlistOverviewQueryString(serverQuery);
+  }, [serverQuery]);
+
   useEffect(() => { rowsRef.current = rows; }, [rows]);
 
   const fetchPage = useCallback(async (
@@ -87,17 +130,20 @@ export function useWatchlistOverview(enabled: boolean) {
     range?: WatchlistHistoryRange,
   ) => {
     const query = new URLSearchParams({ limit: '50' });
+    if (!ticker && bulkQueryString) {
+      for (const [key, value] of new URLSearchParams(bulkQueryString)) query.set(key, value);
+    }
     if (cursor) query.set('cursor', cursor);
     if (ticker) query.set('ticker', ticker);
     if (benchmark) query.set('benchmark', benchmark);
     if (range) query.set('range', range);
-    const response = await fetch(`/api/watchlist/overview?${query}`, { signal, cache: 'no-store' });
-    const body = await response.json().catch(() => null);
-    if (!response.ok || !isOverviewResponse(body)) {
-      throw new Error(body?.error || 'overview_unavailable');
-    }
+    const body = await watchlistJsonRequest<unknown>(`/api/watchlist/overview?${query}`, {
+      signal,
+      cache: 'no-store',
+    }, 'overview_unavailable');
+    if (!isOverviewResponse(body)) throw new Error('overview_unavailable');
     return body as WatchlistOverviewResponse;
-  }, []);
+  }, [bulkQueryString]);
 
   const load = useCallback(async () => {
     if (!enabled) return;
@@ -106,6 +152,11 @@ export function useWatchlistOverview(enabled: boolean) {
     for (const slot of ensureSlots.current.values()) slot.cancel();
     ensureSlots.current.clear();
     const loadGeneration = ++generation.current;
+    rowsRef.current = {};
+    setRows({});
+    setNextCursor(null);
+    setMeta({ partial: false, total: 0, generatedAt: null });
+    setLoadingMore(false);
     setLoading(true);
     setError(null);
     try {
@@ -212,5 +263,9 @@ export function useWatchlistOverview(enabled: boolean) {
     });
   }, []);
 
-  return { rows, loading, loadingMore, error, ...meta, refetch: () => load(), loadMore, ensureTicker, updateItem };
+  return {
+    rows, loading, loadingMore, error, ...meta,
+    serverQueryActive: enabled && serverQuery !== null,
+    refetch: () => load(), loadMore, ensureTicker, updateItem,
+  };
 }

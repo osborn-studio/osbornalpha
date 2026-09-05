@@ -4,6 +4,7 @@ import { parseCreateWatchlistAlert } from '@/lib/watchlist/alerts';
 import { createWatchlistAlert, listWatchlistAlerts } from '@/lib/watchlist/alert-repository';
 import { watchlistApiError } from '@/lib/watchlist/api-error';
 import { WATCHLIST_ALERT_CATALOG } from '@/lib/watchlist/alert-catalog';
+import { isWatchlistPlanLimitError } from '@/lib/watchlist/plan-limits';
 
 async function authorizedClient() {
   if (!serverIsSupabaseConfigured()) return null;
@@ -28,6 +29,7 @@ export async function POST(request: Request) {
   if (!input) return watchlistApiError('invalid_alert', 400);
   const { data, error } = await createWatchlistAlert(auth.client, auth.user.id, input);
   if (error?.code === '23505') return watchlistApiError('alert_already_exists', 409);
+  if (isWatchlistPlanLimitError(error, 'alert')) return watchlistApiError('watchlist_alert_plan_limit', 403);
   if (error) return watchlistApiError('watchlist_alert_create_failed', 503);
   return NextResponse.json({ alert: data }, { status: 201 });
 }

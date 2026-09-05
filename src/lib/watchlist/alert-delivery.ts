@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { sendEmail } from '@/lib/data/sources/resend';
 import { sendTelegram } from '@/lib/data/sources/telegram';
 import type { Database, WatchlistAlertEvent } from '@/lib/supabase/database.types';
+import { watchlistAlertEventLabel } from './alert-events';
 import {
   nextWatchlistAlertDeliveryAt,
   parseWatchlistAlertDeliveryPreferences,
@@ -14,13 +15,8 @@ function escapeHtml(value: string) {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function eventLabel(event: WatchlistAlertEvent): string {
-  const label = event.payload.label;
-  return typeof label === 'string' && label.trim() ? label : event.alert_type;
-}
-
 export function formatWatchlistAlertDigest(events: WatchlistAlertEvent[], locale: 'zh' | 'en' = 'en') {
-  const lines = events.map((event) => `${event.ticker}: ${eventLabel(event)}`);
+  const lines = events.map((event) => `${event.ticker}: ${watchlistAlertEventLabel(event, locale)}`);
   const title = locale === 'zh' ? '股票池提醒' : 'Watchlist alerts';
   const subject = locale === 'zh'
     ? `[股票池] ${events.length} 条提醒`

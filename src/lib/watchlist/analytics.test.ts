@@ -1,12 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import type { KlineBar } from '@/lib/chart/kline';
-import { calculateHistoricalWatchlistMetrics, tradingDaysPerYear, watchlistAnnualizationFactor } from './analytics';
+import { calculateHistoricalWatchlistMetrics, sampleWatchlistSparkline, tradingDaysPerYear, watchlistAnnualizationFactor } from './analytics';
 
-function bar(time: number, close: number, high = close, low = close): KlineBar {
-  return { time, open: close, high, low, close, volume: 100, previousClose: null, change: null, changePct: null };
+function bar(time: number, close: number, high = close, low = close, volume: number | undefined = 100): KlineBar {
+  return { time, open: close, high, low, close, volume, previousClose: null, change: null, changePct: null };
 }
 
 describe('calculateHistoricalWatchlistMetrics', () => {
+  it('samples a chronological sparkline while preserving both endpoints', () => {
+    const values = Array.from({ length: 100 }, (_, index) => index + 1);
+    const sampled = sampleWatchlistSparkline(values);
+    expect(sampled).toHaveLength(24);
+    expect(sampled[0]).toBe(1);
+    expect(sampled.at(-1)).toBe(100);
+  });
+
   it('uses the selected market calendar for annualised risk metrics', () => {
     expect(tradingDaysPerYear('US')).toBe(252);
     expect(tradingDaysPerYear('A')).toBe(244);
@@ -71,6 +79,7 @@ describe('calculateHistoricalWatchlistMetrics', () => {
       macdHistogram: null,
       bollingerPositionPct: null,
       atr14Pct: null,
+      volumeZScore20: null,
       benchmarkTicker: null,
       benchmarkReturnPct: null,
       excessReturnPct: null,
@@ -87,6 +96,7 @@ describe('calculateHistoricalWatchlistMetrics', () => {
       benchmarkAlignmentRatio: null,
       benchmarkStatus: 'unavailable',
       sampleSize: 0,
+      sparkline: [],
       methodology: {
         returnBasis: 'price', historyRange: '1y', priceReturnSource: null,
         totalReturnBasis: 'unavailable', adjustment: 'none', riskFreeRatePct: 0,
@@ -144,6 +154,19 @@ describe('calculateHistoricalWatchlistMetrics', () => {
     expect(metrics.bollingerPositionPct).toBeGreaterThanOrEqual(0);
     expect(metrics.bollingerPositionPct).toBeLessThanOrEqual(100);
     expect(metrics.atr14Pct).toBeGreaterThan(0);
+  });
+
+  it('measures the latest volume against the preceding 20 sessions', () => {
+    const bars = Array.from({ length: 20 }, (_, index) => bar(index + 1, 100 + index, undefined, undefined, 90 + index));
+    bars.push(bar(21, 121, undefined, undefined, 250));
+    expect(calculateHistoricalWatchlistMetrics(bars).volumeZScore20).toBeGreaterThan(10);
+  });
+
+  it('returns zero for unchanged volume and null when the comparison window is incomplete', () => {
+    const flat = Array.from({ length: 21 }, (_, index) => bar(index + 1, 100 + index, undefined, undefined, 100));
+    expect(calculateHistoricalWatchlistMetrics(flat).volumeZScore20).toBe(0);
+    flat[5] = { ...bar(6, 105), volume: Number.NaN };
+    expect(calculateHistoricalWatchlistMetrics(flat).volumeZScore20).toBeNull();
   });
 
   it('aligns benchmark sessions by trading date across timestamp encodings', () => {

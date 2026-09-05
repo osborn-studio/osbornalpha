@@ -9,6 +9,12 @@ import type {
   WatchlistOverviewPageRow,
 } from './overview-contract';
 import type { WatchlistOverviewCursor } from './overview-pagination';
+import type { WatchlistOverviewQueryCursor, WatchlistOverviewQueryRequest } from './overview-query';
+import {
+  parseWatchlistReviewQueue,
+  type WatchlistReviewQueue,
+  type WatchlistReviewScope,
+} from './review-workflow';
 export type { WatchlistOverviewItemRow, WatchlistOverviewGroupRow } from './overview-contract';
 
 export type WatchlistServerClient = Awaited<ReturnType<typeof getServerSupabase>>;
@@ -47,6 +53,16 @@ export async function userOwnsWatchlistTicker(
     .maybeSingle();
   if (error) throw new Error(`watchlist_item_lookup_failed:${error.message}`);
   return !!data;
+}
+
+export async function loadWatchlistItemByTicker(
+  client: WatchlistServerClient,
+  userId: string,
+  ticker: string,
+) {
+  const result = await client.from('watchlist_items').select('*')
+    .eq('user_id', userId).eq('ticker', ticker).limit(1).maybeSingle();
+  return result as { data: WatchlistItem | null; error: { message: string } | null };
 }
 
 export async function loadWatchlistOverviewRows(client: WatchlistServerClient): Promise<WatchlistOverviewGroupRow[]> {
@@ -88,6 +104,18 @@ function parseOverviewPage(value: unknown): WatchlistOverviewDatabasePage {
   const nextCursor = rawCursor && typeof rawCursor === 'object' && !Array.isArray(rawCursor)
     ? (() => {
         const cursor = rawCursor as Record<string, unknown>;
+        if (cursor.mode === 'query' && typeof cursor.fingerprint === 'string'
+          && (cursor.nullRank === 0 || cursor.nullRank === 1)
+          && typeof cursor.itemId === 'string') {
+          return {
+            mode: 'query' as const,
+            fingerprint: cursor.fingerprint,
+            nullRank: cursor.nullRank as 0 | 1,
+            sortNumber: Number.isFinite(cursor.sortNumber) ? Number(cursor.sortNumber) : null,
+            sortText: typeof cursor.sortText === 'string' ? cursor.sortText : null,
+            itemId: cursor.itemId,
+          };
+        }
         return Number.isSafeInteger(cursor.group_sort) && Number.isSafeInteger(cursor.item_sort)
           && typeof cursor.item_id === 'string'
           ? { groupSort: Number(cursor.group_sort), itemSort: Number(cursor.item_sort), itemId: cursor.item_id }
@@ -95,6 +123,50 @@ function parseOverviewPage(value: unknown): WatchlistOverviewDatabasePage {
       })()
     : null;
   return { total: Number(page.total), rows, hasMore, nextCursor };
+}
+
+export async function loadWatchlistOverviewQuery(
+  client: WatchlistServerClient,
+  request: WatchlistOverviewQueryRequest,
+): Promise<WatchlistOverviewDatabasePage> {
+  const repository = client as unknown as {
+    rpc: (name: 'get_watchlist_overview_query', args: {
+      p_limit: number;
+      p_sort: string;
+      p_direction: string;
+      p_query: string | null;
+      p_group_id: string | null;
+      p_market: string | null;
+      p_quote_status: string | null;
+      p_decision_status: string | null;
+      p_tag: string | null;
+      p_history_range: string;
+      p_metric: string | null;
+      p_metric_min: number | null;
+      p_metric_max: number | null;
+      p_cursor: WatchlistOverviewQueryCursor | null;
+      p_fingerprint: string;
+    }) => Promise<{ data: unknown; error: { message: string } | null }>;
+  };
+  const { data, error } = await repository.rpc('get_watchlist_overview_query', {
+    p_limit: request.limit,
+    p_sort: request.sort,
+    p_direction: request.direction,
+    p_query: request.query,
+    p_group_id: request.groupId,
+    p_market: request.market,
+    p_quote_status: request.quoteStatus,
+    p_decision_status: request.decisionStatus,
+    p_tag: request.tag,
+    p_history_range: request.historyRange,
+    p_metric: request.metric,
+    p_metric_min: request.metricMin,
+    p_metric_max: request.metricMax,
+    p_cursor: request.cursor,
+    p_fingerprint: request.fingerprint,
+  });
+  if (error) throw new Error(error.message);
+  return parseOverviewPage(data);
 }
 
 export async function loadWatchlistOverviewPage(
@@ -142,6 +214,28 @@ export async function loadWatchlistVersion(client: WatchlistServerClient): Promi
   const { data, error } = await client.from('watchlist_sync_state').select('version').maybeSingle();
   if (error) throw new Error(error.message);
   return (data as unknown as { version: number } | null)?.version ?? 0;
+}
+
+export async function loadWatchlistReviewQueue(
+  client: WatchlistServerClient,
+  request: { scope: WatchlistReviewScope; horizonDays: number; limit: number },
+): Promise<WatchlistReviewQueue> {
+  const repository = client as unknown as {
+    rpc(name: 'get_watchlist_review_queue', args: {
+      p_scope: WatchlistReviewScope;
+      p_horizon_days: number;
+      p_limit: number;
+    }): Promise<{ data: unknown; error: { message: string } | null }>;
+  };
+  const { data, error } = await repository.rpc('get_watchlist_review_queue', {
+    p_scope: request.scope,
+    p_horizon_days: Math.min(Math.max(Math.floor(request.horizonDays), 1), 30),
+    p_limit: Math.min(Math.max(Math.floor(request.limit), 1), 100),
+  });
+  if (error) throw new Error(`watchlist_review_queue_failed:${error.message}`);
+  const queue = parseWatchlistReviewQueue(data);
+  if (!queue) throw new Error('watchlist_review_queue_invalid');
+  return queue;
 }
 
 export async function loadVersionedWatchlistSnapshot(

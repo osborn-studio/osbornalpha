@@ -3,12 +3,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { WatchlistAlertDeliveryPreferences } from '@/lib/watchlist/alert-delivery-preferences';
 import type { WatchlistAlertPreferencesCommand } from '@/lib/watchlist/alert-preferences';
+import { watchlistJsonRequest } from '@/lib/watchlist/api-client';
 
 async function request<T>(init?: RequestInit): Promise<T> {
-  const response = await fetch('/api/watchlist/alert-preferences', init);
-  const body = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(body?.error || 'watchlist_alert_preferences_failed');
-  return body as T;
+  return watchlistJsonRequest<T>('/api/watchlist/alert-preferences', init, 'watchlist_alert_preferences_failed');
 }
 
 export function useWatchlistAlertPreferences() {

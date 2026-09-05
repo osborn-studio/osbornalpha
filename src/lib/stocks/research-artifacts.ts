@@ -11,28 +11,57 @@ function stableUuid(namespace: string, value: string): string {
   return `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`;
 }
 
-export function stockNewsRows(userId: string, response: StockNewsResponse) {
-  return response.items.map((item) => ({
-    id: stableUuid('stock-news', `${userId}:${response.ticker}:${item.id}`),
-    user_id: userId,
+export interface SharedResearchArtifactRow {
+  id: string;
+  kind: 'news' | 'report';
+  ticker: string;
+  source_key: string;
+  title: string;
+  source: string | null;
+  url: string | null;
+  published_at: string | null;
+  fetched_at: string;
+  event_cluster_id: string;
+  quality_score: number;
+  content_hash: string;
+  payload: Record<string, unknown>;
+}
+
+function contentHash(value: Record<string, unknown>): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+export function stockNewsArtifactRows(response: StockNewsResponse): SharedResearchArtifactRow[] {
+  return response.items.map((item) => {
+    const payload = {
+      snippet: item.snippet,
+      sentiment: item.sentiment,
+      sentiment_confidence: item.sentimentConfidence ?? 0,
+      sentiment_language: item.sentimentLanguage ?? 'unknown',
+      sentiment_aspects: item.sentimentAspects ?? {},
+      trust_score: item.trustScore,
+      relevance_score: item.relevanceScore ?? item.trustScore,
+      quality_flags: item.qualityFlags ?? [],
+      corroboration_count: item.corroborationCount ?? 1,
+      corroborating_sources: item.corroboratingSources ?? [],
+      source_type: item.sourceType,
+    };
+    return {
+    id: stableUuid('stock-news', `${response.ticker}:${item.id}`),
+    kind: 'news' as const,
     ticker: response.ticker,
     source_key: item.id,
     title: item.title,
     source: item.source,
     url: item.url,
-    snippet: item.snippet,
-    sentiment: item.sentiment,
     published_at: item.publishedAt,
     fetched_at: item.fetchedAt,
-    trust_score: item.trustScore,
-    relevance_score: item.relevanceScore ?? item.trustScore,
     quality_score: item.qualityScore ?? item.trustScore,
-    quality_flags: item.qualityFlags ?? [],
     event_cluster_id: item.eventClusterId ?? item.id,
-    corroboration_count: item.corroborationCount ?? 1,
-    corroborating_sources: item.corroboratingSources ?? [],
-    source_type: item.sourceType,
-  }));
+    content_hash: contentHash(payload),
+    payload,
+  };
+  });
 }
 
 function reportTargetPrice(min: number | null, max: number | null): string | null {
@@ -41,31 +70,37 @@ function reportTargetPrice(min: number | null, max: number | null): string | nul
   return String(min ?? max);
 }
 
-export function stockReportRows(userId: string, response: StockReportsResponse) {
+export function stockReportArtifactRows(response: StockReportsResponse): SharedResearchArtifactRow[] {
   const fetchedAt = response.meta.fetchedAt;
-  return response.items.map((item) => ({
-    id: stableUuid('stock-report', `${userId}:${response.ticker}:${item.id}`),
-    user_id: userId,
+  return response.items.map((item) => {
+    const payload = {
+      broker: item.broker,
+      rating: item.rating,
+      target_price: reportTargetPrice(item.targetPriceMin, item.targetPriceMax),
+      target_change_pct: item.targetChangePct,
+      ai_summary: null,
+      trust_score: item.trustScore,
+      relevance_score: item.relevanceScore ?? item.trustScore,
+      quality_flags: item.qualityFlags ?? [],
+      corroboration_count: item.corroborationCount ?? 1,
+      corroborating_sources: item.corroboratingSources ?? [],
+    };
+    return {
+    id: stableUuid('stock-report', `${response.ticker}:${item.id}`),
+    kind: 'report' as const,
     ticker: response.ticker,
     source_key: item.id,
     title: item.title,
-    broker: item.broker,
-    rating: item.rating,
-    target_price: reportTargetPrice(item.targetPriceMin, item.targetPriceMax),
-    target_change_pct: item.targetChangePct,
-    pdf_url: item.url,
-    ai_summary: null,
-    published_at: item.publishedAt?.slice(0, 10) ?? null,
+    url: item.url,
+    published_at: item.publishedAt,
     fetched_at: fetchedAt,
     source: item.source,
-    trust_score: item.trustScore,
-    relevance_score: item.relevanceScore ?? item.trustScore,
     quality_score: item.qualityScore ?? item.trustScore,
-    quality_flags: item.qualityFlags ?? [],
     event_cluster_id: item.eventClusterId ?? item.id,
-    corroboration_count: item.corroborationCount ?? 1,
-    corroborating_sources: item.corroboratingSources ?? [],
-  }));
+    content_hash: contentHash(payload),
+    payload,
+  };
+  });
 }
 
 export interface PerspectivePersistenceInput {
@@ -74,6 +109,7 @@ export interface PerspectivePersistenceInput {
   source: string;
   createdAt: string;
   provenance?: PerspectiveProvenance;
+  referencePrice?: number | null;
   perspectives: PerspectiveResult[];
 }
 
@@ -81,6 +117,9 @@ export function stockPerspectiveRows(userId: string, input: PerspectivePersisten
   const provenance = input.provenance ?? {
     modelVersion: null,
     promptVersion: null,
+    requestedAnalysisMode: 'auto',
+    resolvedAnalysisMode: 'structured_only',
+    evidenceStatus: 'unavailable',
     evidenceRequestId: null,
     evidenceFetchedAt: null,
     evidenceResultCount: 0,
@@ -98,13 +137,20 @@ export function stockPerspectiveRows(userId: string, input: PerspectivePersisten
     summary: item.summary,
     cites: item.cites,
     citations: item.citations ?? [],
+    claims: item.claims ?? [],
     source: input.source,
     model_version: provenance.modelVersion,
     prompt_version: provenance.promptVersion,
+    requested_analysis_mode: provenance.requestedAnalysisMode,
+    resolved_analysis_mode: provenance.resolvedAnalysisMode,
+    evidence_status: provenance.evidenceStatus,
     evidence_request_id: provenance.evidenceRequestId,
     evidence_fetched_at: provenance.evidenceFetchedAt,
     evidence_result_count: provenance.evidenceResultCount,
     evidence_coverage_ratio: provenance.evidenceCoverageRatio,
+    reference_price: input.referencePrice != null && Number.isFinite(input.referencePrice) && input.referencePrice > 0
+      ? input.referencePrice
+      : null,
     created_at: input.createdAt,
     updated_at: input.createdAt,
   }));

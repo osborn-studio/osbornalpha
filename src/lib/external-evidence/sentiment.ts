@@ -14,7 +14,29 @@ export interface HeadlineSentimentAssessment {
   confidence: number;
   positiveMatches: string[];
   negativeMatches: string[];
+  language: 'en' | 'zh' | 'mixed' | 'unknown';
+  aspects: Partial<Record<SentimentAspect, AspectSentimentAssessment>>;
 }
+
+export type SentimentAspect = 'earnings' | 'guidance' | 'legal' | 'capital' | 'operations' | 'market';
+
+export interface AspectSentimentAssessment {
+  score: number | null;
+  confidence: number;
+  matches: string[];
+}
+
+const TERM_ASPECTS: Partial<Record<string, SentimentAspect>> = {
+  beat: 'earnings', beats: 'earnings', growth: 'earnings', record: 'earnings', miss: 'earnings', misses: 'earnings', decline: 'earnings',
+  'raises guidance': 'guidance', 'cuts guidance': 'guidance',
+  lawsuit: 'legal', probe: 'legal', fraud: 'legal', approval: 'legal',
+  buyback: 'capital', upgrade: 'market', downgrade: 'market', surge: 'market',
+  partnership: 'operations', recall: 'operations', layoff: 'operations',
+  增长: 'earnings', 超预期: 'earnings', 下滑: 'earnings', 不及预期: 'earnings', 扭亏: 'earnings', 亏损: 'earnings', 预亏: 'earnings',
+  上调: 'guidance', 下调: 'guidance', 获批: 'legal', 调查: 'legal', 诉讼: 'legal', 造假: 'legal', 处罚: 'legal',
+  回购: 'capital', 增持: 'capital', 分红: 'capital', 减持: 'capital',
+  合作: 'operations', 召回: 'operations', 裁员: 'operations', 中标: 'operations', 违约: 'operations', 创新高: 'market',
+};
 
 interface TermMatch {
   term: string;
@@ -59,6 +81,35 @@ function polarityMatches(text: string, terms: string[]) {
   }));
 }
 
+function languageOf(text: string): HeadlineSentimentAssessment['language'] {
+  const chinese = /[\u3400-\u9fff]/.test(text);
+  const english = /[a-z]/i.test(text);
+  return chinese && english ? 'mixed' : chinese ? 'zh' : english ? 'en' : 'unknown';
+}
+
+function aspectAssessments(text: string, positive: TermMatch[], negative: TermMatch[]) {
+  const grouped = new Map<SentimentAspect, { positive: string[]; negative: string[] }>();
+  const add = (match: TermMatch, originallyPositive: boolean) => {
+    const aspect = TERM_ASPECTS[match.term];
+    if (!aspect) return;
+    const group = grouped.get(aspect) ?? { positive: [], negative: [] };
+    const negated = isNegated(text, match.index);
+    const label = negated ? `not ${match.term}` : match.term;
+    (originallyPositive !== negated ? group.positive : group.negative).push(label);
+    grouped.set(aspect, group);
+  };
+  positive.forEach((match) => add(match, true));
+  negative.forEach((match) => add(match, false));
+  return Object.fromEntries([...grouped].map(([aspect, matches]) => {
+    const count = matches.positive.length + matches.negative.length;
+    return [aspect, {
+      score: matches.positive.length === matches.negative.length ? null : matches.positive.length > matches.negative.length ? 0.5 : -0.5,
+      confidence: matches.positive.length === matches.negative.length ? 0 : Number(Math.min(1, 0.35 + count * 0.2).toFixed(2)),
+      matches: [...matches.positive, ...matches.negative],
+    }];
+  })) as HeadlineSentimentAssessment['aspects'];
+}
+
 export function assessHeadlineSentiment(text: string): HeadlineSentimentAssessment {
   const positive = polarityMatches(text, POSITIVE_TERMS);
   const negative = polarityMatches(text, NEGATIVE_TERMS);
@@ -79,6 +130,8 @@ export function assessHeadlineSentiment(text: string): HeadlineSentimentAssessme
     confidence: score == null ? 0 : Number(Math.min(1, 0.35 + evidenceCount * 0.2).toFixed(2)),
     positiveMatches,
     negativeMatches,
+    language: languageOf(text),
+    aspects: aspectAssessments(text, positive, negative),
   };
 }
 

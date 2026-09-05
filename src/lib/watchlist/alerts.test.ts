@@ -41,6 +41,14 @@ describe('watchlist alert contracts', () => {
       .toBeNull();
     expect(parseCreateWatchlistAlert({ itemId: 'item-1', alertType: 'price', operator: 'gt', threshold: 2, config: { values: ['x'] } }))
       .toBeNull();
+    expect(parseCreateWatchlistAlert({ itemId: 'item-1', alertType: 'metric', operator: 'lte', threshold: 30, config: { metric: 'rsi14' } }))
+      .toMatchObject({ config: { metric: 'rsi14' }, threshold_numeric: 30 });
+    expect(parseCreateWatchlistAlert({ itemId: 'item-1', alertType: 'metric', operator: 'lte', threshold: -1, config: { metric: 'rsi14' } }))
+      .toBeNull();
+    expect(parseCreateWatchlistAlert({ itemId: 'item-1', alertType: 'metric', operator: 'lt', threshold: -3, config: { metric: 'ma20_distance_pct' } }))
+      .toMatchObject({ threshold_numeric: -3 });
+    expect(parseCreateWatchlistAlert({ itemId: 'item-1', alertType: 'metric', operator: 'gte', threshold: 2, config: { metric: 'unknown' } }))
+      .toBeNull();
   });
 
   it('validates an update against the immutable alert type', () => {

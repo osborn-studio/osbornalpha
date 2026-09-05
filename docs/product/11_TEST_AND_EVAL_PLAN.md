@@ -1,20 +1,21 @@
-<!-- 11 测试与评估计划 · 用途：无单测下的验收门、e2e 清单、LLM eval、回归 · 最后更新 2026-06-20 -->
+<!-- 11 测试与评估计划 · 用途：单元测试、静态门、e2e、LLM eval、回归 · 最后更新 2026-09-04 -->
 
 # 11 · 测试与评估计划（Test & Eval Plan）
 
-本项目**没有单元测试套件**（`package.json` scripts 仅 `dev/build/start/lint/typecheck`）。验证策略是三层：静态门（typecheck + build + lint）→ 运行时/预览 e2e 清单 → LLM 输出评估。每次部署前过一遍回归清单。
+验证策略分为四层：Vitest 单元/契约测试 → 静态门（typecheck + build + lint）→ Playwright 与生产运行时检查 → LLM 输出评估。每次部署前必须完整执行回归门禁。
 
 ---
 
 ## 1. 静态门（每次提交/部署必过）
 
 ```bash
+npm test            # Vitest 单元、契约、迁移与安全回归
 npm run typecheck   # tsc --noEmit —— 类型零错误
 npm run build       # next build —— App Router 全量构建通过
-npm run lint        # next lint —— 可选，建议过
+npm run lint        # ESLint 零 warning
 ```
 
-**门通过标准：** `typecheck` 与 `build` 均 0 退出码。`build` 在缺 Supabase env 时仍应成功（占位值降级，见 `server.ts` 的 placeholder 兜底）；缺 env 报错时按 `EDGEONE_DEPLOY.md` 用占位 public 值过构建。
+**门通过标准：** 四条命令均为 0 退出码。`build` 在缺 Supabase env 时仍应成功（占位值降级，见 `server.ts` 的 placeholder 兜底）；缺 env 报错时按 `EDGEONE_DEPLOY.md` 用占位 public 值过构建。
 
 ---
 
@@ -33,6 +34,7 @@ npm run lint        # next lint —— 可选，建议过
 - [ ] 新邮箱注册（确认后）→ Supabase `profiles`、`watchlists`（默认「我的股票池」）、`user_preferences` 各新增 1 行，`user_id`/`id` 对应新用户。
 
 ### 2.3 RLS 双账号隔离（核心安全验收）
+- [ ] 在受控环境为两个账号准备完整私有表 fixture，再运行 `npm run watchlist:rls-check`；结果 `ok:true`，所有表均为 `coverage:full`。
 - [ ] 账号 A 加自选股；账号 B 登录后 `/watchlist` 看不到 A 的条目。
 - [ ] 用 A 的会话直接打 `/api/watchlist`，仅返回 A 的数据；B 同理。
 - [ ] 公开 reference 表（`stocks_universe`/`financial_history`）两账号都可读（`/api/search`、`/api/stocks/[ticker]` 返回数据）。

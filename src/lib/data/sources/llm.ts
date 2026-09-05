@@ -42,6 +42,7 @@ export interface UnifiedChatOpts {
   max_tokens?: number;
   temperature?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
   /** Hint the model to return strict JSON (uses response_format on DeepSeek). */
   responseJson?: boolean;
 }
@@ -82,6 +83,7 @@ export async function chatResolved(
       messages: opts.messages,
       max_tokens: opts.max_tokens,
       timeoutMs: opts.timeoutMs,
+      signal: opts.signal,
     });
   }
 
@@ -92,6 +94,7 @@ export async function chatResolved(
     max_tokens: opts.max_tokens,
     temperature: opts.temperature,
     timeoutMs: opts.timeoutMs,
+    signal: opts.signal,
     responseJson: opts.responseJson,
   });
 }

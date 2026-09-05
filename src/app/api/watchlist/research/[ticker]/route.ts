@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
 import { normalizeEvidenceTickerParam } from '@/lib/external-evidence';
 import { getServerSupabase, serverIsSupabaseConfigured } from '@/lib/supabase/server';
+import { getAdminSupabase } from '@/lib/supabase/admin';
 import { loadWatchlistResearchBundle, refreshWatchlistResearch } from '@/lib/watchlist/research-service';
-import { consumeExternalEvidenceQuota } from '@/lib/external-evidence/quota';
 import { watchlistApiError } from '@/lib/watchlist/api-error';
 import { userOwnsWatchlistTicker } from '@/lib/watchlist/server-repository';
+import { summarizeWatchlistResearchChanges } from '@/lib/watchlist/research-timeline';
+import { authorizeResearchRefresh } from '@/lib/watchlist/research-quota';
 
 interface Context { params: Promise<{ ticker: string }> }
 
@@ -53,15 +55,33 @@ export async function POST(_request: Request, { params }: Context) {
   const context = await authenticatedContext(params);
   if (context instanceof NextResponse) return context;
   try {
-    if (!await consumeExternalEvidenceQuota(context.client)) {
+    const authorization = await authorizeResearchRefresh(context.client);
+    if (!authorization.allowed && authorization.reason === 'plan_limit') {
+      return watchlistApiError('watchlist_research_plan_limit', 429, {
+        details: {
+          used: authorization.plan.used,
+          limit: authorization.plan.limit,
+          plan: authorization.plan.plan,
+        },
+      });
+    }
+    if (!authorization.allowed) {
       return watchlistApiError('rate_limited', 429, {
         retryAfterSeconds: 3600,
         details: { ticker: context.ticker },
       });
     }
-    const refresh = await refreshWatchlistResearch(context.client, context.user.id, context.ticker);
+    const before = await loadWatchlistResearchBundle(context.client, context.user.id, context.ticker);
+    const refresh = await refreshWatchlistResearch(getAdminSupabase(), context.user.id, context.ticker);
     const bundle = await loadWatchlistResearchBundle(context.client, context.user.id, context.ticker);
-    return NextResponse.json(responseBody({ ...bundle, refresh: {
+    const changes = summarizeWatchlistResearchChanges({
+      news: before.news.items, reports: before.reports.items, perspectives: before.perspectives,
+      perspectivesGeneratedAt: before.perspectivesGeneratedAt,
+    }, {
+      news: bundle.news.items, reports: bundle.reports.items, perspectives: bundle.perspectives,
+      perspectivesGeneratedAt: bundle.perspectivesGeneratedAt,
+    });
+    return NextResponse.json(responseBody({ ...bundle, changes, refresh: {
       status: refresh.status,
       refreshedAt: refresh.refreshedAt,
       warnings: refresh.warnings,

@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { isTushareConfigured, fetchTushareReportRc, TushareError } from '@/lib/data/sources/tushare-cached';
-import { deriveConsensus } from '@/lib/stocks/consensus';
-import { deriveTargetPrice, deriveValuationRange } from '@/lib/stocks/metrics';
-import { getStockOrStub } from '@/lib/data/mock';
+import { deriveConsensus, filterConsensusReports } from '@/lib/stocks/consensus';
+import { normalizeEvidenceTickerParam } from '@/lib/external-evidence';
+import { classifyMarket } from '@/lib/utils';
+import { loadConfiguredStructuredResearch } from '@/lib/stocks/structured-research-provider';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 3600; // 1h cache — mirrors /api/financials
@@ -12,28 +13,24 @@ interface Ctx { params: Promise<{ ticker: string }> }
 /**
  * GET /api/consensus/[ticker]
  *
- * Broker consensus target price, with graceful degradation:
- *   1. A-share + TUSHARE_TOKEN configured → report_rc (real broker research)
- *   2. Otherwise (non-A-share, no token, Tushare error, or tushare returned no
- *      usable reports) → mock broker_reports via deriveTargetPrice /
- *      deriveValuationRange, reshaped to the same { target_median, target_min,
- *      target_max, n } shape so callers don't need to branch on source.
-   *      (Consumed by the stock detail page.)
- *   3. No usable data anywhere → { source: 'none', consensus: null }
+ * Broker consensus target price from structured providers only. Search results
+ * remain visible as research, but never become synthetic target-price inputs.
  */
 export async function GET(_req: Request, { params }: Ctx) {
   const { ticker: raw } = await params;
-  const ticker = decodeURIComponent(raw);
-  const isAShare = /\.(SH|SZ|BJ)$/i.test(ticker);
+  const ticker = normalizeEvidenceTickerParam(raw);
+  if (!ticker) return NextResponse.json({ error: 'invalid_ticker', consensus: null }, { status: 400 });
+  const market = classifyMarket(ticker);
 
-  if (isAShare && isTushareConfigured()) {
+  if (market === 'A' && isTushareConfigured()) {
     try {
       const reports = await fetchTushareReportRc(ticker);
-      const consensus = deriveConsensus(reports);
-      // Zero usable reports (no broker coverage) → try the mock fallback below.
-      if (consensus !== null) {
-        return NextResponse.json({ source: 'tushare', ticker, consensus });
-      }
+      const filtered = filterConsensusReports(reports, { maxAgeDays: 180 });
+      const consensus = deriveConsensus(filtered.accepted);
+      return NextResponse.json({
+        source: 'tushare', ticker, consensus,
+        meta: { status: consensus ? 'available' : 'unavailable', warnings: filtered.reasons },
+      });
     } catch (e: any) {
       if (!(e instanceof TushareError)) {
         return NextResponse.json(
@@ -41,27 +38,45 @@ export async function GET(_req: Request, { params }: Ctx) {
           { status: 502 }
         );
       }
-      // fall through to mock degradation below
-    }
-  }
-
-  const stub = getStockOrStub(ticker);
-  if (stub && stub.broker_reports?.length) {
-    const target_median = deriveTargetPrice(stub.broker_reports);
-    if (target_median != null) {
-      const range = deriveValuationRange(stub.broker_reports);
       return NextResponse.json({
-        source: 'mock',
-        ticker,
-        consensus: {
-          target_median,
-          target_min: range?.min ?? null,
-          target_max: range?.max ?? null,
-          n: stub.broker_reports.length,
-        },
+        source: 'tushare', ticker, consensus: null,
+        meta: { status: 'unavailable', warnings: ['tushare_unavailable'] },
       });
     }
   }
 
-  return NextResponse.json({ source: 'none', ticker, consensus: null });
+  if (market === 'HK' || market === 'US') {
+    try {
+      const result = await loadConfiguredStructuredResearch(ticker, market);
+      const rows = result.items.map((item) => ({
+        max_price: item.targetPriceMax,
+        min_price: item.targetPriceMin,
+        report_date: item.publishedAt,
+        org_name: item.broker,
+        report_title: item.title,
+      }));
+      const filtered = filterConsensusReports(rows, { maxAgeDays: 180 });
+      const consensus = deriveConsensus(filtered.accepted);
+      return NextResponse.json({
+        source: result.provider, ticker, consensus,
+        meta: {
+          status: consensus ? 'available' : 'unavailable',
+          warnings: [...new Set([...result.warnings, ...filtered.reasons])],
+        },
+      });
+    } catch {
+      return NextResponse.json({
+        source: 'structured-research-http', ticker, consensus: null,
+        meta: { status: 'unavailable', warnings: ['structured_research_provider_unavailable'] },
+      });
+    }
+  }
+
+  return NextResponse.json({
+    source: 'none', ticker, consensus: null,
+    meta: {
+      status: 'unsupported',
+      warnings: [market === 'A' ? 'tushare_unconfigured' : 'structured_research_market_unsupported'],
+    },
+  });
 }

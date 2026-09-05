@@ -64,22 +64,29 @@ export interface QuotaResult {
   plan: string;
 }
 
-export async function checkQuota(feature: QuotaFeature): Promise<QuotaResult> {
-  const { supabase, userId } = await requireUser();
+export type QuotaDatabase = object;
+
+async function quotaForUser(
+  client: QuotaDatabase,
+  userId: string,
+  feature: QuotaFeature,
+  now = new Date(),
+): Promise<QuotaResult> {
+  const supabase = client as any;
   const { data: prof, error: profErr } = await supabase
     .from('profiles')
     .select('plan, role, plan_expires_at')
     .eq('id', userId)
-    .maybeSingle<{ plan: string | null; role: string | null; plan_expires_at: string | null }>();
+    .maybeSingle();
   if (profErr) throw new Error(profErr.message);
 
-  const plan = effectivePlan(prof?.plan ?? null, prof?.plan_expires_at ?? null, new Date());
+  const plan = effectivePlan(prof?.plan ?? null, prof?.plan_expires_at ?? null, now);
   const limit = limitFor(feature, plan, prof?.role ?? null);
   if (limit === -1) {
     return { allowed: true, used: 0, limit: -1, plan };
   }
 
-  const { startIso, endIso } = dayWindowUtc8(new Date());
+  const { startIso, endIso } = dayWindowUtc8(now);
   const { count, error: countErr } = await supabase
     .from('usage_events')
     .select('*', { count: 'exact', head: true })
@@ -91,8 +98,34 @@ export async function checkQuota(feature: QuotaFeature): Promise<QuotaResult> {
     .lt('created_at', endIso);
   if (countErr) throw new Error(countErr.message);
 
-  const used = count ?? 0;
+  let reserved = 0;
+  if (feature === 'perspectives') {
+    const { count: activeCount, error: activeError } = await supabase
+      .from('perspective_generation_jobs')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('llm_source', 'env')
+      .in('status', ['queued', 'running']);
+    if (activeError) throw new Error(activeError.message);
+    reserved = activeCount ?? 0;
+  }
+
+  const used = (count ?? 0) + reserved;
   return { allowed: used < limit, used, limit, plan };
+}
+
+export async function checkQuota(feature: QuotaFeature): Promise<QuotaResult> {
+  const { supabase, userId } = await requireUser();
+  return quotaForUser(supabase, userId, feature);
+}
+
+export async function checkQuotaForUser(
+  userId: string,
+  feature: QuotaFeature,
+  client: QuotaDatabase = getAdminSupabase(),
+  now = new Date(),
+): Promise<QuotaResult> {
+  return quotaForUser(client, userId, feature, now);
 }
 
 export interface RecordUsageMeta {

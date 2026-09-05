@@ -76,11 +76,30 @@ export interface ExternalEvidence {
   eventClusterId?: string;
   corroborationCount?: number;
   corroboratingSources?: EvidenceCorroboratingSource[];
+  document?: EvidenceDocument;
+}
+
+export interface EvidenceDocumentParagraph {
+  id: string;
+  text: string;
+  contentHash: string;
+}
+
+export interface EvidenceDocument {
+  url: string;
+  contentHash: string;
+  fetchedAt: string;
+  paragraphs: EvidenceDocumentParagraph[];
+}
+
+export interface EvidenceDocumentProvider {
+  id: string;
+  load(url: string): Promise<{ url: string; paragraphs: string[] }>;
 }
 
 export interface EvidenceSearchProvider {
   id: string;
-  search(query: EvidenceQuery): Promise<RawEvidenceResult[]>;
+  search(query: EvidenceQuery, signal?: AbortSignal): Promise<RawEvidenceResult[]>;
 }
 
 export interface EvidenceSearchSnapshot {
@@ -105,4 +124,7 @@ export interface PerspectiveCitation {
   qualityScore?: number;
   qualityFlags?: string[];
   corroborationCount?: number;
+  paragraphId?: string;
+  excerpt?: string;
+  contentHash?: string;
 }

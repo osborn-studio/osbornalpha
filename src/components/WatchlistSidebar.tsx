@@ -71,7 +71,7 @@ export function WatchlistSidebar({ selectedTicker, onSelect, variant = 'sidebar'
           ))}
         </div>
 
-        <div className="grid grid-cols-[1fr_auto_55px] gap-2 border-b border-border px-2 py-1 text-[10px] uppercase tracking-wider text-text-muted">
+        <div className="grid grid-cols-[1fr_auto_55px] gap-2 border-b border-border px-2 py-1 text-[11px] uppercase tracking-wider text-text-muted">
           <span>Symbol</span>
           <span className="text-right">Last</span>
           <span className="text-right">Chg%</span>
@@ -85,7 +85,7 @@ export function WatchlistSidebar({ selectedTicker, onSelect, variant = 'sidebar'
                 {activeGroup === 'all' && (
                   <button
                     onClick={() => toggleCollapse(g.id)}
-                    className="flex w-full items-center gap-1 px-2 py-1.5 text-[10px] font-semibold text-text-dim hover:bg-bg-card"
+                    className="flex w-full items-center gap-1 px-2 py-1.5 text-[11px] font-semibold text-text-dim hover:bg-bg-card"
                   >
                     <span>{isCollapsed ? '▸' : '▾'}</span>
                     <span>{g.name}</span>
@@ -113,13 +113,13 @@ export function WatchlistSidebar({ selectedTicker, onSelect, variant = 'sidebar'
                     >
                       <div className="overflow-hidden">
                         <div className="truncate font-semibold leading-tight">{live?.name || ticker}</div>
-                        <div className="truncate text-[10px] text-text-dim">{ticker}</div>
+                        <div className="truncate text-[11px] text-text-dim">{ticker}</div>
                       </div>
                       <div className="text-right font-mono text-[11px] leading-tight">
                         <div className="font-semibold tabular-nums">
                           {hasQuote ? formatPrice(price, currency) : '—'}
                         </div>
-                        <div className="truncate text-[10px] text-text-muted" title={live?.updated_at || status}>
+                        <div className="truncate text-[11px] text-text-muted" title={live?.updated_at || status}>
                           {hasQuote ? status : <MarketLabel m={market} />}
                         </div>
                       </div>

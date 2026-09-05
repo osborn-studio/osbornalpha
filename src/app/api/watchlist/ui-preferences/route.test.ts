@@ -30,7 +30,7 @@ describe('watchlist UI preference route', () => {
   it('returns a normalized versioned snapshot', async () => {
     const response = await GET();
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ version: 4, preferences: { schemaVersion: 1, viewMode: 'table' } });
+    expect(await response.json()).toMatchObject({ version: 4, preferences: { schemaVersion: 2, viewMode: 'table' } });
   });
 
   it('validates and compare-and-swaps a complete snapshot', async () => {

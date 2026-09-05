@@ -1,449 +1,209 @@
 import { NextResponse } from 'next/server';
-import { chatResolved, extractJson } from '@/lib/data/sources/llm';
-import { PERSONAS, buildUserMessage, type PerspectiveResult } from '@/lib/data/personas';
+import { PERSONAS } from '@/lib/data/personas';
 import { resolveLlm } from '@/lib/llm/resolve';
-import { beginUsageRun, checkQuota, finalizeUsageRun } from '@/lib/billing/quota';
 import { getRequestLocale, apiMessage } from '@/lib/i18n/server';
-import { sanitizeAiList, sanitizeAiText } from '@/lib/llm/sanitize';
-import { getServerSupabase } from '@/lib/supabase/server';
-import {
-  aggregateMeteredUsage,
-  meteredUsageFromError,
-  runMeteredLlmCall,
-  type MeteredUsage,
-} from '@/lib/billing/metered-llm';
 import { getBudgetConfig } from '@/lib/billing/cost-budget';
+import { normalizeEvidenceTickerParam } from '@/lib/external-evidence';
+import { getServerSupabase } from '@/lib/supabase/server';
+import { getAdminSupabase } from '@/lib/supabase/admin';
 import {
-  createConcurrencyLimiter,
-  createPersonaConcurrencyLimiter,
-  PERSONA_CONCURRENCY_HARD_CAP,
-} from '@/lib/billing/llm-concurrency';
-import { PRICING_VERSION } from '@/lib/billing/llm-pricing';
-import { normalizeEvidenceTickerParam, resolvePerspectiveCitations } from '@/lib/external-evidence';
-import { persistStockPerspectives } from '@/lib/stocks/research-artifact-repository';
-import { consumeExternalEvidenceQuota } from '@/lib/external-evidence/quota';
-import type { PerspectiveProvenance } from '@/lib/stocks/research-types';
-import { loadPerspectiveContext } from '@/lib/stocks/perspective-context';
+  parsePerspectiveAnalysisMode,
+  perspectiveAnalysisNeedsSearch,
+  type PerspectiveAnalysisRequestMode,
+} from '@/lib/stocks/perspective-analysis';
+import {
+  enqueuePerspectiveGenerationJob,
+  waitForPerspectiveGenerationJob,
+  PerspectiveJobRepositoryError,
+} from '@/lib/stocks/perspective-job-repository';
+import { perspectiveGenerationJobView } from '@/lib/stocks/perspective-job-contract';
+import { schedulePerspectiveGenerationWorker } from '@/lib/stocks/perspective-job-dispatch';
+import { runPerspectiveGenerationJobByIdWithResult } from '@/lib/stocks/perspective-job-runner';
+import { watchlistApiError } from '@/lib/watchlist/api-error';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 86400;
-export const maxDuration = 60;  // Vercel function timeout
+export const maxDuration = 300;
 
 interface Ctx { params: Promise<{ ticker: string }> }
 
-const MAX_PERSONA_OUTPUT_TOKENS = 400;
-// Bump when persona instructions or the injected context contract changes.
-const PERSPECTIVE_PROMPT_VERSION = 'watchlist-perspectives-2026-09-04.v1';
-const COST_ERROR_CODES = new Set([
-  'daily_cost_exhausted',
-  'pricing_unavailable',
-  'budget_unavailable',
-  'budget_invariant_violation',
-  'usage_audit_unavailable',
-  'usage_audit_invariant',
-]);
+const MAX_EXPLICIT_PERSONAS = 6;
 
-function costErrorCode(error: unknown): string | null {
-  const code = error instanceof Error ? error.message : String(error);
-  return COST_ERROR_CODES.has(code) ? code : null;
+interface PerspectiveGenerationRequest {
+  personaIds: string[] | null;
+  analysisMode: PerspectiveAnalysisRequestMode;
+  error: 'invalid_request' | 'invalid_personas' | 'invalid_analysis_mode' | null;
 }
 
-function costErrorStatus(code: string): number {
-  if (code === 'daily_cost_exhausted') return 429;
-  if (code === 'budget_unavailable' || code === 'usage_audit_unavailable') return 503;
-  return 500;
+async function parseGenerationRequest(req: Request): Promise<PerspectiveGenerationRequest> {
+  const searchParams = new URL(req.url).searchParams;
+  const personasFromQuery = searchParams.get('personas')?.split(',').filter(Boolean) ?? null;
+  const analysisModeFromQuery = searchParams.get('analysisMode');
+  let body: Record<string, unknown> | null = null;
+  if (req.headers.get('content-type')?.includes('application/json')) {
+    const value: unknown = await req.json().catch(() => undefined);
+    if (value === undefined || !value || typeof value !== 'object' || Array.isArray(value)) {
+      return { personaIds: null, analysisMode: 'auto', error: 'invalid_request' };
+    }
+    body = value as Record<string, unknown>;
+    if (body.personas !== undefined
+      && (!Array.isArray(body.personas) || body.personas.some((id) => typeof id !== 'string'))) {
+      return { personaIds: null, analysisMode: 'auto', error: 'invalid_personas' };
+    }
+  }
+  const rawPersonas = Array.isArray(body?.personas) ? body.personas as string[] : personasFromQuery;
+  const personaIds = rawPersonas
+    ? [...new Set(rawPersonas.map((id) => id.trim()).filter(Boolean))]
+    : null;
+  const known = new Set<string>(PERSONAS.map((persona) => persona.id));
+  if (personaIds
+    && (personaIds.length === 0 || personaIds.length > MAX_EXPLICIT_PERSONAS
+      || personaIds.some((id) => !known.has(id)))) {
+    return { personaIds: null, analysisMode: 'auto', error: 'invalid_personas' };
+  }
+  const rawAnalysisMode = body?.analysisMode ?? analysisModeFromQuery ?? 'auto';
+  const analysisMode = parsePerspectiveAnalysisMode(rawAnalysisMode);
+  if (!analysisMode) return { personaIds, analysisMode: 'auto', error: 'invalid_analysis_mode' };
+  return { personaIds, analysisMode, error: null };
 }
 
-function quotaNotice(
-  reason: 'quota_exhausted' | 'daily_cost_exhausted',
-  quota: Awaited<ReturnType<typeof checkQuota>> | null,
-) {
-  const budget = getBudgetConfig();
-  return reason === 'quota_exhausted'
-    ? { used: quota?.used ?? 0, limit: quota?.limit ?? 0, plan: quota?.plan ?? 'free', reason }
-    : { used: 0, limit: 0, plan: quota?.plan ?? 'free', reason, costLimitMicrormb: budget.dailyLimitMicrormb };
-}
-
-async function finalizeAccounting(
-  userId: string,
-  idempotencyKey: string,
+function perspectiveApiError(
+  code: string,
+  status: number,
   ticker: string,
-  initial: { provider: string; model: string; byo: boolean },
-  accounting: MeteredUsage[],
-  status: 'completed' | 'failed',
-): Promise<void> {
-  const aggregate = accounting.length > 0 ? aggregateMeteredUsage(accounting) : null;
-  const budget = getBudgetConfig();
-  await finalizeUsageRun(userId, idempotencyKey, 'perspectives', {
-    ticker,
-    provider: aggregate?.provider ?? initial.provider,
-    model: aggregate?.model ?? initial.model,
-    inputTokens: aggregate?.usage.inputTokens ?? 0,
-    cacheHitInputTokens: aggregate?.usage.cacheHitInputTokens ?? 0,
-    cacheMissInputTokens: aggregate?.usage.cacheMissInputTokens ?? 0,
-    outputTokens: aggregate?.usage.outputTokens ?? 0,
-    costMicrormb: aggregate?.costMicrormb ?? 0,
-    pricingVersion: aggregate?.pricingVersion ?? (initial.byo ? undefined : PRICING_VERSION),
-    usdCnyMicros: aggregate?.usdCnyMicros ?? (initial.byo ? undefined : budget.usdCnyMicros),
-    usageEstimated: aggregate?.usageEstimated ?? true,
-    byo: aggregate?.byo ?? initial.byo,
-    status,
+  source: string,
+  details: Record<string, unknown> = {},
+  error = code,
+) {
+  return watchlistApiError(code, status, {
+    details: { source, ticker, error, errorCode: code, perspectives: [], ...details },
   });
 }
 
-export async function GET(req: Request, { params }: Ctx) {
+function wantsAsyncResponse(request: Request): boolean {
+  return request.headers.get('prefer')?.split(',').some((value) => value.trim() === 'respond-async') ?? false;
+}
+
+function completedResult(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const result = value as Record<string, unknown>;
+  return Array.isArray(result.perspectives) ? result : null;
+}
+
+function jobErrorStatus(code: string | null): number {
+  if (code === 'external_evidence_required') return 424;
+  if (code === 'daily_cost_exhausted') return 429;
+  if (code === 'pricing_unavailable' || code === 'budget_invariant_violation' || code === 'usage_audit_invariant') return 500;
+  if (code === 'llm_provider_unavailable' || code === 'budget_unavailable' || code === 'usage_audit_unavailable') return 503;
+  return 502;
+}
+
+export async function GET() {
+  const response = watchlistApiError('method_not_allowed', 405, { details: { perspectives: [] } });
+  response.headers.set('allow', 'POST');
+  return response;
+}
+
+export async function POST(req: Request, { params }: Ctx) {
   const { ticker: raw } = await params;
   const ticker = normalizeEvidenceTickerParam(raw);
-  if (!ticker) {
-    return NextResponse.json({ error: 'invalid_ticker', perspectives: [] }, { status: 400 });
+  if (!ticker) return watchlistApiError('invalid_ticker', 400, { details: { perspectives: [] } });
+  const generationRequest = await parseGenerationRequest(req);
+  if (generationRequest.error) {
+    return watchlistApiError(generationRequest.error, 400, { details: { perspectives: [] } });
   }
-  const url = new URL(req.url);
-  const personaFilter = url.searchParams.get('personas')?.split(',').filter(Boolean);
 
   const llm = await resolveLlm();
   if (!llm) {
-    return NextResponse.json({
-      source: 'no-key',
+    return perspectiveApiError(
+      'llm_provider_unavailable',
+      503,
       ticker,
-      error: 'No LLM provider configured — set DEEPSEEK_API_KEY (preferred) or ANTHROPIC_API_KEY in Vercel env vars',
-      perspectives: [],
-    }, { status: 200 });
+      'no-key',
+      {},
+      'No LLM provider configured - set DEEPSEEK_API_KEY (preferred) or ANTHROPIC_API_KEY in Vercel env vars',
+    );
   }
 
-  // BYO-key calls (user's own provider config) run unmetered; the shared
-  // platform key is subject to the daily quota. This route is public in
-  // middleware, so 'not authenticated' fails CLOSED (401) — anonymous callers
-  // get no platform-key budget. Other checkQuota failures fail open.
-  const byo = llm.source === 'user';
   let userId: string;
   let userDb: Awaited<ReturnType<typeof getServerSupabase>>;
   try {
     userDb = await getServerSupabase();
     const { data, error } = await userDb.auth.getUser();
-    if (error || !data.user) {
-      return NextResponse.json({ error: 'not authenticated' }, { status: 401 });
-    }
+    if (error || !data.user) return watchlistApiError('not_authenticated', 401);
     userId = data.user.id;
   } catch {
     const locale = await getRequestLocale();
     const budget = getBudgetConfig();
-    return NextResponse.json({
-      source: 'cost_quota',
-      ticker,
-      error: apiMessage(locale, 'budgetUnavailable'),
-      errorCode: 'budget_unavailable',
-      perspectives: [],
-      costLimit: {
-        dailyMicrormb: budget.dailyLimitMicrormb,
-        timezone: 'Asia/Shanghai',
-      },
-    }, { status: 503 });
-  }
-  let quota: Awaited<ReturnType<typeof checkQuota>> | null = null;
-  if (!byo) {
-    try {
-      quota = await checkQuota('perspectives');
-    } catch (e) {
-      if ((e as Error).message === 'not authenticated') {
-        return NextResponse.json({ error: 'not authenticated' }, { status: 401 });
-      }
-      quota = null;
-    }
-  }
-  if (quota && !quota.allowed) {
-    // Field names mirror the no-key degradation shape above so the client
-    // can share one "no perspectives, here's why" rendering path.
-    const locale = await getRequestLocale();
-    return NextResponse.json({
-      source: 'quota',
-      ticker,
-      error: apiMessage(locale, 'quotaExhausted'),
-      perspectives: [],
-      quota: quotaNotice('quota_exhausted', quota),
-    }, { status: 200 });
+    return perspectiveApiError('budget_unavailable', 503, ticker, 'cost_quota', {
+      costLimit: { dailyMicrormb: budget.dailyLimitMicrormb, timezone: 'Asia/Shanghai' },
+    }, apiMessage(locale, 'budgetUnavailable'));
   }
 
+  const respondAsync = wantsAsyncResponse(req);
+  let job;
   try {
-    if (!await consumeExternalEvidenceQuota(userDb)) {
+    job = await enqueuePerspectiveGenerationJob(userDb, {
+      ticker,
+      personaIds: generationRequest.personaIds,
+      analysisMode: generationRequest.analysisMode,
+      llmSource: llm.source,
+      includeExternalEvidence: perspectiveAnalysisNeedsSearch(generationRequest.analysisMode),
+      warnings: [],
+    });
+    if (respondAsync) {
+      if (job.status === 'queued') {
+        schedulePerspectiveGenerationWorker(job.id);
+      }
+      return NextResponse.json({ job: perspectiveGenerationJobView(job) }, {
+        status: job.status === 'succeeded' ? 200 : 202,
+        headers: { location: `/api/perspectives/jobs/${job.id}` },
+      });
+    }
+  } catch (error) {
+    if (error instanceof PerspectiveJobRepositoryError && error.code === 'perspective_quota_exhausted') {
       const locale = await getRequestLocale();
-      return NextResponse.json({
-        source: 'external_evidence_quota',
-        ticker,
-        error: apiMessage(locale, 'quotaExhausted'),
-        errorCode: 'external_evidence_rate_limited',
-        perspectives: [],
-        retryAfterSeconds: 3600,
-      }, { status: 429, headers: { 'retry-after': '3600' } });
+      return perspectiveApiError(error.code, 429, ticker, 'quota', {
+        quota: { ...(error.quota ?? { used: 0, limit: 0, plan: 'unknown' }), reason: 'quota_exhausted' },
+      }, apiMessage(locale, 'quotaExhausted'));
     }
-  } catch {
-    return NextResponse.json({
-      source: 'external_evidence_quota',
-      ticker,
-      error: 'External evidence quota is temporarily unavailable',
-      errorCode: 'external_evidence_quota_unavailable',
-      perspectives: [],
-    }, { status: 503 });
+    if (error instanceof PerspectiveJobRepositoryError && error.code === 'external_evidence_rate_limited') {
+      return watchlistApiError(error.code, 429, {
+        retryAfterSeconds: 3600,
+        details: { source: 'external_evidence_quota', ticker, errorCode: error.code, perspectives: [] },
+      });
+    }
+    return perspectiveApiError('perspective_job_enqueue_failed', 503, ticker, 'job_queue');
   }
 
-  const budgetExempt = !byo && quota?.limit === -1;
-  // 1. Gather normalized context through the shared market, financial, and evidence services.
-  const contextBundle = await loadPerspectiveContext(ticker).catch(() => null);
-  if (!contextBundle) {
-    return NextResponse.json(
-      { source: 'context_unavailable', ticker, error: 'Cannot build stock context', perspectives: [] },
-      { status: 502 }
-    );
-  }
-  const { context: ctx, evidence } = contextBundle;
-
-  // 2. Run all 9 personas in parallel through the unified LLM facade
-  const enabled = personaFilter && personaFilter.length > 0
-    ? PERSONAS.filter((p) => personaFilter.includes(p.id))
-    : PERSONAS;
-
-  const userMessage = buildUserMessage(ctx);
-  const startedAt = Date.now();
-  const accounting: MeteredUsage[] = [];
-  const usageAuditKey = crypto.randomUUID();
-  let limiter: ReturnType<typeof createConcurrencyLimiter>;
   try {
-    limiter = llm.source === 'env'
-      ? createPersonaConcurrencyLimiter({
-          provider: llm.provider,
-          model: llm.model,
-          maxOutputTokens: MAX_PERSONA_OUTPUT_TOKENS,
-        })
-      : createConcurrencyLimiter(PERSONA_CONCURRENCY_HARD_CAP);
+    const execution = await runPerspectiveGenerationJobByIdWithResult(job.id, getAdminSupabase(), llm);
+    if (execution.result) return NextResponse.json(execution.result);
+    if (execution.error) {
+      return perspectiveApiError(
+        execution.error.code,
+        execution.error.status,
+        ticker,
+        execution.error.source,
+        execution.error.details,
+      );
+    }
+
+    const current = execution.outcome === 'superseded'
+      ? await waitForPerspectiveGenerationJob(userDb, job.id, { timeoutMs: 240_000, signal: req.signal })
+      : await waitForPerspectiveGenerationJob(userDb, job.id, { timeoutMs: 0, signal: req.signal });
+    const result = current?.status === 'succeeded' ? completedResult(current.result) : null;
+    if (result) return NextResponse.json(result);
+    if (current?.status === 'queued' || current?.status === 'running') {
+      schedulePerspectiveGenerationWorker(current.id);
+      return NextResponse.json({ job: perspectiveGenerationJobView(current) }, {
+        status: 202,
+        headers: { location: `/api/perspectives/jobs/${current.id}` },
+      });
+    }
+    const code = current?.error_code ?? (current?.status === 'cancelled' ? 'perspective_job_cancelled' : 'provider_error');
+    return perspectiveApiError(code, current?.status === 'cancelled' ? 409 : jobErrorStatus(code), ticker, 'job');
   } catch (error) {
-    const code = costErrorCode(error);
-    if (!code) throw error;
-    const locale = await getRequestLocale();
-    const budget = getBudgetConfig();
-    return NextResponse.json({
-      source: 'cost_quota',
-      ticker,
-      error: apiMessage(locale, code === 'pricing_unavailable' ? 'pricingUnavailable' : 'budgetUnavailable'),
-      errorCode: code,
-      perspectives: [],
-      costLimit: {
-        dailyMicrormb: budget.dailyLimitMicrormb,
-        timezone: 'Asia/Shanghai',
-      },
-    }, { status: costErrorStatus(code) });
+    return perspectiveApiError('provider_error', 502, ticker, 'llm');
   }
-
-  try {
-    const budget = getBudgetConfig();
-    await beginUsageRun(userId, usageAuditKey, 'perspectives', {
-      ticker,
-      provider: llm.provider,
-      model: llm.model,
-      pricingVersion: byo ? undefined : PRICING_VERSION,
-      usdCnyMicros: byo ? undefined : budget.usdCnyMicros,
-      byo,
-    });
-  } catch (error) {
-    const code = costErrorCode(error) ?? 'usage_audit_unavailable';
-    const locale = await getRequestLocale();
-    const budget = getBudgetConfig();
-    return NextResponse.json({
-      source: 'cost_quota',
-      ticker,
-      error: apiMessage(
-        locale,
-        code === 'usage_audit_invariant' ? 'budgetInvariantViolation' : 'budgetUnavailable',
-      ),
-      errorCode: code,
-      perspectives: [],
-      costLimit: {
-        dailyMicrormb: budget.dailyLimitMicrormb,
-        timezone: 'Asia/Shanghai',
-      },
-    }, { status: costErrorStatus(code) });
-  }
-
-  const settled = await Promise.allSettled(
-    enabled.map(async (p): Promise<PerspectiveResult | null> => {
-      let resp;
-      try {
-        const metered = await limiter.runWithBudgetRetry(() => runMeteredLlmCall({
-          feature: 'perspectives',
-          provider: llm,
-          userId,
-          budgetExempt,
-          maxOutputTokens: MAX_PERSONA_OUTPUT_TOKENS,
-          call: () => chatResolved(llm, {
-            system: p.prompt,
-            messages: [{ role: 'user', content: userMessage }],
-            max_tokens: MAX_PERSONA_OUTPUT_TOKENS,
-            temperature: 0.7,
-            timeoutMs: 30_000,
-            responseJson: true,
-          }),
-        }));
-        accounting.push(metered.accounting);
-        resp = metered.value;
-      } catch (error) {
-        const failedUsage = meteredUsageFromError(error);
-        if (failedUsage) accounting.push(failedUsage);
-        throw error;
-      }
-
-      const parsed = extractJson(resp.content);
-      if (!parsed) return null;
-
-      const stance = (['bullish', 'neutral', 'bearish'] as const).includes(parsed.stance)
-        ? parsed.stance
-        : 'neutral';
-      const confidence = Math.max(0, Math.min(10, Number(parsed.confidence) || 5));
-      const summary = sanitizeAiText(String(parsed.summary || '')).slice(0, 300);
-      const rawDataCites = Array.isArray(parsed.data_cites) ? parsed.data_cites : parsed.cites;
-      const cites = sanitizeAiList(Array.isArray(rawDataCites) ? rawDataCites.slice(0, 6).map(String) : []);
-      const citations = resolvePerspectiveCitations(parsed.citation_ids, evidence.results);
-
-      return {
-        persona: p.id,
-        name: p.name,
-        stance,
-        confidence,
-        summary,
-        cites,
-        citations,
-      };
-    })
-  );
-
-  const perspectives = settled
-    .map((s) => (s.status === 'fulfilled' ? s.value : null))
-    .filter((p): p is PerspectiveResult => p !== null);
-
-  const failures = settled
-    .map((s, i) => (s.status === 'rejected'
-      ? {
-          persona: enabled[i].id,
-          code: costErrorCode(s.reason) ?? 'provider_error',
-        }
-      : null))
-    .filter(Boolean);
-
-  let rejectedCostError = settled
-    .filter((item): item is PromiseRejectedResult => item.status === 'rejected')
-    .map((item) => costErrorCode(item.reason))
-    .find((code): code is string => code !== null);
-  const auditStatus = failures.length > 0 || perspectives.length !== enabled.length
-    ? 'failed'
-    : 'completed';
-  try {
-    await finalizeAccounting(
-      userId,
-      usageAuditKey,
-      ticker,
-      { provider: llm.provider, model: llm.model, byo },
-      accounting,
-      auditStatus,
-    );
-  } catch (error) {
-    rejectedCostError = costErrorCode(error) ?? 'usage_audit_unavailable';
-  }
-
-  if (rejectedCostError) {
-    const locale = await getRequestLocale();
-    const budget = getBudgetConfig();
-    const messageKey = rejectedCostError === 'daily_cost_exhausted'
-      ? 'dailyCostExhausted'
-      : rejectedCostError === 'pricing_unavailable'
-        ? 'pricingUnavailable'
-        : rejectedCostError === 'budget_invariant_violation'
-          || rejectedCostError === 'usage_audit_invariant'
-          ? 'budgetInvariantViolation'
-          : 'budgetUnavailable';
-    return NextResponse.json({
-      source: 'cost_quota',
-      ticker,
-      error: apiMessage(locale, messageKey),
-      errorCode: rejectedCostError,
-      perspectives: [],
-      ...(rejectedCostError === 'daily_cost_exhausted' ? { quota: quotaNotice('daily_cost_exhausted', quota) } : {}),
-      costLimit: {
-        dailyMicrormb: budget.dailyLimitMicrormb,
-        timezone: 'Asia/Shanghai',
-      },
-    }, { status: costErrorStatus(rejectedCostError) });
-  }
-
-  const aggregate = accounting.length > 0 ? aggregateMeteredUsage(accounting) : null;
-  const budgetConfig = getBudgetConfig();
-  const generatedAt = new Date().toISOString();
-  const perspectiveProvenance: PerspectiveProvenance = {
-    modelVersion: llm.model,
-    promptVersion: PERSPECTIVE_PROMPT_VERSION,
-    // An unavailable/error snapshot may still carry an internal UUID for
-    // tracing, but it is not an auditable evidence request. Keep that ID out
-    // of user-facing provenance so the UI cannot imply citations exist.
-    evidenceRequestId: evidence.status === 'complete' || evidence.status === 'partial'
-      ? evidence.requestId
-      : null,
-    evidenceFetchedAt: evidence.status === 'complete' || evidence.status === 'partial'
-      ? evidence.fetchedAt
-      : null,
-    evidenceResultCount: evidence.results.length,
-    evidenceCoverageRatio: perspectives.length > 0
-      ? perspectives.filter((item) => item.citations && item.citations.length > 0).length / perspectives.length
-      : 0,
-  };
-  const persistenceWarnings: string[] = [];
-  try {
-    await persistStockPerspectives(userDb, userId, {
-      ticker,
-      generationId: usageAuditKey,
-      source: `${llm.provider}:${llm.model}`,
-      createdAt: generatedAt,
-      provenance: perspectiveProvenance,
-      perspectives,
-    });
-  } catch {
-    persistenceWarnings.push('perspectives_persist_failed');
-  }
-
-  return NextResponse.json({
-    source: [llm.provider, ...contextBundle.sources].join('+'),
-    ticker,
-    context: ctx,
-    perspectives,
-    meta: {
-      generated_at: generatedAt,
-      duration_ms: Date.now() - startedAt,
-      provider: llm.provider,
-      model: llm.model,
-      prompt_version: PERSPECTIVE_PROMPT_VERSION,
-      personas_attempted: enabled.length,
-      personas_succeeded: perspectives.length,
-      tokens: {
-        input: aggregate?.usage.inputTokens ?? 0,
-        output: aggregate?.usage.outputTokens ?? 0,
-      },
-      cost_micrormb: aggregate?.costMicrormb ?? 0,
-      est_cost_usd: Number(
-        ((aggregate?.costMicrormb ?? 0) / budgetConfig.usdCnyMicros).toFixed(5),
-      ),
-      failures: failures.length > 0 ? failures.slice(0, 3) : undefined,
-      warnings: persistenceWarnings,
-      evidence: {
-        request_id: evidence.requestId,
-        status: evidence.status,
-        provider: evidence.provider,
-        result_count: evidence.results.length,
-        fetched_at: evidence.fetchedAt,
-        warnings: evidence.warnings,
-        coverage_ratio: perspectiveProvenance.evidenceCoverageRatio,
-      },
-      financial: {
-        source: contextBundle.financial.source,
-        status: contextBundle.financial.availability,
-        as_of: contextBundle.financial.asOf,
-        warnings: contextBundle.financial.warnings,
-      },
-      provenance: perspectiveProvenance,
-    },
-  });
 }

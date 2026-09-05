@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { WatchlistAlert, WatchlistAlertEvent } from '@/lib/supabase/database.types';
+import { watchlistJsonRequest } from '@/lib/watchlist/api-client';
 
 export interface NewWatchlistAlert {
   alertType: WatchlistAlert['alert_type'];
@@ -9,13 +10,6 @@ export interface NewWatchlistAlert {
   threshold?: number | null;
   config?: Record<string, unknown>;
   cooldownMinutes?: number;
-}
-
-async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  const body = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(body?.error || 'watchlist_alert_request_failed');
-  return body as T;
 }
 
 export function useWatchlistAlerts(itemId: string | null) {
@@ -32,8 +26,8 @@ export function useWatchlistAlerts(itemId: string | null) {
     try {
       const query = encodeURIComponent(itemId);
       const [alertBody, eventBody] = await Promise.all([
-        jsonRequest<{ alerts: WatchlistAlert[] }>(`/api/watchlist/alerts?itemId=${query}`, { signal, cache: 'no-store' }),
-        jsonRequest<{ events: WatchlistAlertEvent[] }>(`/api/watchlist/alert-events?itemId=${query}&limit=20`, { signal, cache: 'no-store' }),
+        watchlistJsonRequest<{ alerts: WatchlistAlert[] }>(`/api/watchlist/alerts?itemId=${query}`, { signal, cache: 'no-store' }, 'watchlist_alert_request_failed'),
+        watchlistJsonRequest<{ events: WatchlistAlertEvent[] }>(`/api/watchlist/alert-events?itemId=${query}&limit=20`, { signal, cache: 'no-store' }, 'watchlist_alert_request_failed'),
       ]);
       setAlerts(alertBody.alerts);
       setEvents(eventBody.events);
@@ -56,11 +50,11 @@ export function useWatchlistAlerts(itemId: string | null) {
     setSaving(true);
     setError(null);
     try {
-      const body = await jsonRequest<{ alert: WatchlistAlert }>('/api/watchlist/alerts', {
+      const body = await watchlistJsonRequest<{ alert: WatchlistAlert }>('/api/watchlist/alerts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ itemId, ...input }),
-      });
+      }, 'watchlist_alert_request_failed');
       setAlerts((current) => [body.alert, ...current]);
       return true;
     } catch (caught) {
@@ -75,9 +69,9 @@ export function useWatchlistAlerts(itemId: string | null) {
     setSaving(true);
     setError(null);
     try {
-      const body = await jsonRequest<{ alert: WatchlistAlert }>(`/api/watchlist/alerts/${encodeURIComponent(id)}`, {
+      const body = await watchlistJsonRequest<{ alert: WatchlistAlert }>(`/api/watchlist/alerts/${encodeURIComponent(id)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
-      });
+      }, 'watchlist_alert_request_failed');
       setAlerts((current) => current.map((alert) => alert.id === id ? body.alert : alert));
       return true;
     } catch (caught) {
@@ -92,7 +86,7 @@ export function useWatchlistAlerts(itemId: string | null) {
     setSaving(true);
     setError(null);
     try {
-      await jsonRequest(`/api/watchlist/alerts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      await watchlistJsonRequest(`/api/watchlist/alerts/${encodeURIComponent(id)}`, { method: 'DELETE' }, 'watchlist_alert_request_failed');
       setAlerts((current) => current.filter((alert) => alert.id !== id));
       return true;
     } catch (caught) {
@@ -104,9 +98,9 @@ export function useWatchlistAlerts(itemId: string | null) {
   }, []);
 
   const markRead = useCallback(async (id: string) => {
-    const body = await jsonRequest<{ event: WatchlistAlertEvent }>(`/api/watchlist/alert-events/${encodeURIComponent(id)}`, {
+    const body = await watchlistJsonRequest<{ event: WatchlistAlertEvent }>(`/api/watchlist/alert-events/${encodeURIComponent(id)}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ read: true }),
-    });
+    }, 'watchlist_alert_request_failed');
     setEvents((current) => current.map((event) => event.id === id ? body.event : event));
   }, []);
 
@@ -114,9 +108,9 @@ export function useWatchlistAlerts(itemId: string | null) {
     setSaving(true);
     setError(null);
     try {
-      const body = await jsonRequest<{ event: WatchlistAlertEvent }>(`/api/watchlist/alert-events/${encodeURIComponent(id)}`, {
+      const body = await watchlistJsonRequest<{ event: WatchlistAlertEvent }>(`/api/watchlist/alert-events/${encodeURIComponent(id)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ retry: true }),
-      });
+      }, 'watchlist_alert_request_failed');
       setEvents((current) => current.map((event) => event.id === id ? body.event : event));
       return true;
     } catch (caught) {

@@ -4,6 +4,16 @@ export interface WatchlistAlertEventQuery {
   itemId: string | null;
 }
 
+export function watchlistAlertEventLabel(
+  event: { alert_type: string; payload: Record<string, unknown> },
+  locale: 'zh' | 'en',
+): string {
+  const localized = event.payload[locale === 'zh' ? 'label_zh' : 'label_en'];
+  if (typeof localized === 'string' && localized.trim()) return localized.trim();
+  const label = event.payload.label;
+  return typeof label === 'string' && label.trim() ? label.trim() : event.alert_type;
+}
+
 export function parseWatchlistAlertEventQuery(url: URL): WatchlistAlertEventQuery {
   const rawLimit = Number(url.searchParams.get('limit') ?? 50);
   const itemId = url.searchParams.get('itemId')?.trim() || null;

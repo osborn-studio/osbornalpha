@@ -95,7 +95,14 @@
     "webSources": "Web sources",
     "sourceQuality": "Source quality {value}%",
     "sourceCount": "{count} sources",
-    "qualityFlags": "Quality flags: {value}"
+    "qualityFlags": "Quality flags: {value}",
+    "structuredEvidence": "Structured evidence",
+    "claimKinds": {
+      "thesis": "Thesis",
+      "catalyst": "Catalyst",
+      "risk": "Risk",
+      "counterpoint": "Counterpoint"
+    }
   },
   "disclaimer": {
     "heading": "Disclaimer",

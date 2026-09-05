@@ -28,8 +28,11 @@ quote and fundamentals providers.
   headline sentiment, source links, and provider/status metadata.
 - `GET /api/reports/:ticker` prefers Tushare `report_rc` for A-share report
   metadata and supplements it with public search links.
-- `POST /api/perspectives/:ticker` fetches one shared evidence snapshot for all
-  personas and returns only citation IDs that exist in that snapshot.
+- `POST /api/perspectives/:ticker` accepts `analysisMode` as `auto`,
+  `evidence_required`, or `structured_only`. It fetches at most one shared
+  evidence snapshot for all personas and returns only citation IDs that exist
+  in that snapshot. `evidence_required` fails closed when no usable evidence is
+  available; `structured_only` never calls or charges the search provider.
 - Copilot exposes `web_search` for news, filing, broker, company, industry, and
   macro context. Its original `search` tool remains security lookup only.
 
@@ -64,8 +67,11 @@ TAVILY_API_KEY=
 BRAVE_SEARCH_API_KEY=
 SERPER_API_KEY=
 SEARCH_COST_MICRO_USD_PER_QUERY=
+WATCHLIST_REQUIRED_PROVIDERS=search
 ```
 
 Only the selected provider key is required. None of these variables may use the
 `NEXT_PUBLIC_` prefix. When no provider is configured, APIs return an explicit
 unavailable state and the UI does not fall back to mock news.
+
+Before release, run `npm run watchlist:provider-check` with production secrets injected. Unlike configuration readiness, this live canary calls the configured provider and validates its response contract. The output contains only provider IDs, latency, and stable error codes; it never prints credentials or raw provider responses.

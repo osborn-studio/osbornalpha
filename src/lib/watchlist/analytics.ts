@@ -3,7 +3,10 @@ import type { KlineAdjustment } from '@/lib/data/kline/types';
 import type { Market } from '@/lib/supabase/database.types';
 import type { MarketReturnSnapshot, WatchlistHistoryRange } from '@/lib/market-returns/types';
 
-type HistoricalPriceBar = Pick<KlineBar, 'close' | 'high' | 'low'> & { time: string | number };
+type HistoricalPriceBar = Pick<KlineBar, 'close' | 'high' | 'low'> & {
+  time: string | number;
+  volume?: number;
+};
 
 const MARKET_BENCHMARKS: Record<Market, string> = {
   A: '510300.SH',
@@ -40,6 +43,7 @@ export interface HistoricalWatchlistMetrics {
   macdHistogram: number | null;
   bollingerPositionPct: number | null;
   atr14Pct: number | null;
+  volumeZScore20: number | null;
   benchmarkTicker: string | null;
   benchmarkReturnPct: number | null;
   excessReturnPct: number | null;
@@ -56,6 +60,8 @@ export interface HistoricalWatchlistMetrics {
   benchmarkAlignmentRatio: number | null;
   benchmarkStatus: 'unavailable' | 'limited' | 'reliable';
   sampleSize: number;
+  /** Chronological close samples for compact, non-interactive sparklines. */
+  sparkline?: number[];
   methodology: {
     returnBasis: 'price';
     historyRange: WatchlistHistoryRange;
@@ -111,6 +117,13 @@ function sampleVariance(values: number[]): number | null {
 
 function simpleReturns(closes: number[]): number[] {
   return closes.slice(1).map((close, index) => (close / closes[index]) - 1);
+}
+
+export function sampleWatchlistSparkline(values: number[], maxPoints = 24): number[] {
+  const finite = values.filter(finitePositive);
+  if (finite.length <= maxPoints) return finite;
+  const last = finite.length - 1;
+  return Array.from({ length: maxPoints }, (_, index) => finite[Math.round((index * last) / (maxPoints - 1))]);
 }
 
 function movingAverageDistance(closes: number[], period: number): number | null {
@@ -174,6 +187,21 @@ function rsi(closes: number[], period = 14): number | null {
   if (averageGain === 0 && averageLoss === 0) return null;
   if (averageLoss === 0) return 100;
   return 100 - (100 / (1 + averageGain / averageLoss));
+}
+
+function latestVolumeZScore(bars: HistoricalPriceBar[], period = 20): number | null {
+  if (bars.length <= period) return null;
+  const current = bars.at(-1)?.volume;
+  const comparison = bars.slice(-(period + 1), -1).map((bar) => bar.volume);
+  if (current == null || !Number.isFinite(current) || current < 0
+    || comparison.some((value) => value == null || !Number.isFinite(value) || value < 0)) {
+    return null;
+  }
+  const numeric = comparison as number[];
+  const average = mean(numeric);
+  const variance = sampleVariance(numeric);
+  if (variance == null || variance <= 0) return current === average ? 0 : null;
+  return (current - average) / Math.sqrt(variance);
 }
 
 function tradingDateKey(value: string | number): string {
@@ -307,6 +335,7 @@ export function calculateHistoricalWatchlistMetrics(
       macdHistogram: null,
       bollingerPositionPct: null,
       atr14Pct: null,
+      volumeZScore20: null,
       benchmarkTicker: options.benchmarkTicker ?? null,
       benchmarkReturnPct: null,
       excessReturnPct: null,
@@ -323,6 +352,7 @@ export function calculateHistoricalWatchlistMetrics(
       benchmarkAlignmentRatio: null,
       benchmarkStatus: 'unavailable',
       sampleSize: 0,
+      sparkline: [],
       methodology: { ...methodologyBase, betaSampleSize: 0 },
     };
   }
@@ -393,6 +423,7 @@ export function calculateHistoricalWatchlistMetrics(
     macdHistogram: macdMetrics.histogram,
     bollingerPositionPct: bollingerPosition(closes),
     atr14Pct: atrPercent(usable),
+    volumeZScore20: latestVolumeZScore(usable),
     ...relative,
     benchmarkReturnPct,
     excessReturnPct,
@@ -406,6 +437,7 @@ export function calculateHistoricalWatchlistMetrics(
     coverageStart: coverageDateKey(usable[0].time),
     coverageEnd: coverageDateKey(usable.at(-1)!.time),
     sampleSize: usable.length,
+    sparkline: sampleWatchlistSparkline(closes),
     methodology: { ...methodologyBase, betaSampleSize: relative.betaSampleSize },
   };
 }

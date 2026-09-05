@@ -3,13 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { VersionedWatchlistSnapshot } from '@/lib/watchlist/sync';
 import type { WatchlistTrashEntry } from '@/lib/watchlist/trash';
-
-async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  const body = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(body?.error || 'watchlist_trash_request_failed');
-  return body as T;
-}
+import { watchlistJsonRequest } from '@/lib/watchlist/api-client';
 
 export function useWatchlistTrash(enabled: boolean) {
   const [entries, setEntries] = useState<WatchlistTrashEntry[]>([]);
@@ -20,7 +14,7 @@ export function useWatchlistTrash(enabled: boolean) {
     if (!enabled) return;
     setLoading(true); setError(null);
     try {
-      const body = await requestJson<{ entries: WatchlistTrashEntry[] }>('/api/watchlist/trash', { signal, cache: 'no-store' });
+      const body = await watchlistJsonRequest<{ entries: WatchlistTrashEntry[] }>('/api/watchlist/trash', { signal, cache: 'no-store' }, 'watchlist_trash_request_failed');
       setEntries(body.entries);
     } catch (caught) {
       if (!signal?.aborted) setError(caught instanceof Error ? caught.message : 'watchlist_trash_request_failed');
@@ -30,10 +24,10 @@ export function useWatchlistTrash(enabled: boolean) {
   const restore = useCallback(async (entry: WatchlistTrashEntry, expectedVersion: number) => {
     setSaving(true); setError(null);
     try {
-      const body = await requestJson<{ snapshot: VersionedWatchlistSnapshot }>(`/api/watchlist/trash/${encodeURIComponent(entry.id)}/restore`, {
+      const body = await watchlistJsonRequest<{ snapshot: VersionedWatchlistSnapshot }>(`/api/watchlist/trash/${encodeURIComponent(entry.id)}/restore`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ expectedVersion, mutationId: `restore_${entry.id}_${Date.now()}` }),
-      });
+      }, 'watchlist_restore_failed');
       setEntries((current) => current.filter((item) => item.id !== entry.id));
       return body.snapshot;
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'watchlist_restore_failed'); return null; }
@@ -41,7 +35,7 @@ export function useWatchlistTrash(enabled: boolean) {
   }, []);
   const remove = useCallback(async (entry: WatchlistTrashEntry) => {
     setSaving(true); setError(null);
-    try { await requestJson(`/api/watchlist/trash/${encodeURIComponent(entry.id)}`, { method: 'DELETE' }); setEntries((current) => current.filter((item) => item.id !== entry.id)); return true; }
+    try { await watchlistJsonRequest(`/api/watchlist/trash/${encodeURIComponent(entry.id)}`, { method: 'DELETE' }, 'watchlist_trash_delete_failed'); setEntries((current) => current.filter((item) => item.id !== entry.id)); return true; }
     catch (caught) { setError(caught instanceof Error ? caught.message : 'watchlist_trash_delete_failed'); return false; }
     finally { setSaving(false); }
   }, []);

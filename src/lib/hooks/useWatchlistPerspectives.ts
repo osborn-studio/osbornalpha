@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { QuotaNoticeProps } from '@/components/QuotaNotice';
 import type { PerspectiveRow } from '@/lib/hooks/useQuote';
+import { WatchlistRequestError, watchlistJsonRequest } from '@/lib/watchlist/api-client';
 
 interface State {
   perspectives: PerspectiveRow[];
@@ -12,6 +13,13 @@ interface State {
   generating: boolean;
   error: string | null;
   quota: QuotaNoticeProps | null;
+}
+
+interface PerspectiveListResponse {
+  perspectives?: PerspectiveRow[];
+  source?: string | null;
+  generatedAt?: string | null;
+  meta?: { generated_at?: string | null };
 }
 
 const INITIAL: State = {
@@ -25,14 +33,15 @@ export function useWatchlistPerspectives(ticker: string) {
   const load = useCallback(async (signal?: AbortSignal) => {
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
-      const response = await fetch(`/api/watchlist/research/${encodeURIComponent(ticker)}`, { signal, cache: 'no-store' });
-      const body = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(body?.error || 'perspectives_unavailable');
+      const body = await watchlistJsonRequest<PerspectiveListResponse>(`/api/watchlist/research/${encodeURIComponent(ticker)}`, {
+        signal,
+        cache: 'no-store',
+      }, 'perspectives_unavailable');
       setState((current) => ({
         ...current,
         perspectives: Array.isArray(body.perspectives) ? body.perspectives : [],
-        source: body.source ?? null,
-        generatedAt: body.generatedAt ?? null,
+        source: typeof body.source === 'string' ? body.source : null,
+        generatedAt: typeof body.generatedAt === 'string' ? body.generatedAt : null,
         loading: false,
       }));
     } catch (error) {
@@ -49,19 +58,27 @@ export function useWatchlistPerspectives(ticker: string) {
   const generate = useCallback(async () => {
     setState((current) => ({ ...current, generating: true, error: null, quota: null }));
     try {
-      const response = await fetch(`/api/perspectives/${encodeURIComponent(ticker)}`, { cache: 'no-store' });
-      const body = await response.json().catch(() => null);
-      if (!response.ok || body?.error) throw Object.assign(new Error(body?.error || 'perspectives_unavailable'), { quota: body?.quota });
+      const body = await watchlistJsonRequest<PerspectiveListResponse>(`/api/perspectives/${encodeURIComponent(ticker)}`, {
+        method: 'POST',
+        cache: 'no-store',
+      }, 'perspectives_unavailable');
       setState((current) => ({
         ...current,
         perspectives: Array.isArray(body.perspectives) ? body.perspectives : [],
-        source: body.source ?? null,
-        generatedAt: body.meta?.generated_at ?? null,
+        source: typeof body.source === 'string' ? body.source : null,
+        generatedAt: typeof body.meta?.generated_at === 'string' ? body.meta.generated_at : null,
         generating: false,
       }));
     } catch (error) {
-      const withQuota = error as Error & { quota?: QuotaNoticeProps };
-      setState((current) => ({ ...current, generating: false, error: withQuota.message, quota: withQuota.quota ?? null }));
+      const withQuota = error instanceof WatchlistRequestError
+        ? error.body?.quota as QuotaNoticeProps | undefined
+        : undefined;
+      setState((current) => ({
+        ...current,
+        generating: false,
+        error: error instanceof Error ? error.message : 'perspectives_unavailable',
+        quota: withQuota ?? null,
+      }));
     }
   }, [ticker]);
 

@@ -1,11 +1,13 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowRight, LoaderCircle, Search } from 'lucide-react';
 import { MarketLabel } from '@/components/MarketLabel';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import type { Market } from '@/lib/supabase/database.types';
 import { nextSearchAction } from '@/lib/watchlist/security-validation';
+import { useDebouncedValue } from '@/lib/hooks/useDebouncedValue';
 
 interface ApiResult {
   t: string;
@@ -28,8 +30,8 @@ export function SearchInput() {
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const debouncedQuery = useDebouncedValue(query.trim(), 250);
 
   // close on outside click
   useEffect(() => {
@@ -53,7 +55,7 @@ export function SearchInput() {
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
-  async function fetchResults(q: string) {
+  const fetchResults = useCallback(async (q: string) => {
     if (abortRef.current) abortRef.current.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -100,18 +102,29 @@ export function SearchInput() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  function onChange(v: string) {
-    setQuery(v);
-    setError(null);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (v.trim().length === 0) {
+  useEffect(() => {
+    if (!debouncedQuery) {
+      abortRef.current?.abort();
+      setLoading(false);
       setResults([]);
       setOpen(false);
       return;
     }
-    debounceRef.current = setTimeout(() => fetchResults(v.trim()), 250);
+    void fetchResults(debouncedQuery);
+    return () => abortRef.current?.abort();
+  }, [debouncedQuery, fetchResults]);
+
+  function onChange(v: string) {
+    setQuery(v);
+    setError(null);
+    if (v.trim().length === 0) {
+      abortRef.current?.abort();
+      setLoading(false);
+      setResults([]);
+      setOpen(false);
+    }
   }
 
   function go(ticker: string) {
@@ -138,12 +151,17 @@ export function SearchInput() {
     <div ref={containerRef} className="relative flex-1">
       <div className="relative">
         <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-dim">
-          {loading ? '⏳' : '🔍'}
+          {loading ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Search className="h-4 w-4" aria-hidden="true" />}
         </span>
         <input
           ref={inputRef}
           type="text"
           autoComplete="off"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={open}
+          aria-controls="global-security-search-results"
+          aria-activedescendant={focusIdx >= 0 ? `global-security-search-option-${focusIdx}` : undefined}
           placeholder={t('placeholder')}
           value={query}
           onChange={(e) => onChange(e.target.value)}
@@ -153,7 +171,7 @@ export function SearchInput() {
         />
       </div>
       {open && (
-        <div className="absolute left-0 right-0 top-full z-50 mt-1.5 max-h-[420px] overflow-y-auto rounded-lg border border-border bg-bg-elevated shadow-lg">
+        <div id="global-security-search-results" role="listbox" className="absolute left-0 right-0 top-full z-50 mt-1.5 max-h-[420px] overflow-y-auto rounded-lg border border-border bg-bg-elevated shadow-lg">
           {results.length === 0 && (
             <div className="px-3 py-4 text-center text-xs text-text-dim">
               {loading ? t('searching') : error === 'unavailable' ? t('unavailable') : error ? t('failed') : t('noResults')}
@@ -161,6 +179,9 @@ export function SearchInput() {
           )}
           {results.map((r, i) => (
             <button
+              id={`global-security-search-option-${i}`}
+              role="option"
+              aria-selected={i === focusIdx}
               key={`${r.t}-${i}`}
               onClick={() => go(r.t)}
               onMouseEnter={() => setFocusIdx(i)}
@@ -175,7 +196,7 @@ export function SearchInput() {
                 <div className="font-semibold">{r.n}</div>
                 <div className="text-xs text-text-dim">{r.t} {r.py && `· ${r.py}`}</div>
               </div>
-              <span className="text-xs text-text-muted">→</span>
+              <ArrowRight className="h-3.5 w-3.5 text-text-muted" aria-hidden="true" />
             </button>
           ))}
           {source && (

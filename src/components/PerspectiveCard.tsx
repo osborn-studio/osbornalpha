@@ -1,7 +1,9 @@
+import type { ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
 import type { Stance } from '@/lib/supabase/database.types';
 import { aggregateConfidence, classifyCite, type ConfidenceLevel } from '@/lib/data/evidence-confidence';
 import type { PerspectiveCitation } from '@/lib/external-evidence/types';
+import type { PerspectiveClaim } from '@/lib/stocks/perspective-claims';
 import { ExternalLink } from '@/components/ExternalLink';
 
 interface Props {
@@ -15,6 +17,8 @@ interface Props {
   summary: string;
   cites: string[];
   citations?: PerspectiveCitation[];
+  claims?: PerspectiveClaim[];
+  footer?: ReactNode;
 }
 
 const STANCE_BORDER: Record<Stance, string> = {
@@ -37,7 +41,7 @@ const LEVEL_BG: Record<ConfidenceLevel, string> = {
   unknown: 'bg-bg-card text-text-muted border-border',
 };
 
-export function PerspectiveCard({ persona, name, stance, confidence, summary, cites, citations = [] }: Props) {
+export function PerspectiveCard({ persona, name, stance, confidence, summary, cites, citations = [], claims = [], footer }: Props) {
   const t = useTranslations('components.perspectiveCard');
   const tPersonas = useTranslations('components.personas');
   const evidence = aggregateConfidence(cites);
@@ -56,7 +60,7 @@ export function PerspectiveCard({ persona, name, stance, confidence, summary, ci
               values sourced from lib/data/evidence-confidence.ts (out of scope). */}
           {cites.length > 0 && (
             <span
-              className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${LEVEL_BG[evidence.level]}`}
+              className={`rounded border px-1.5 py-0.5 text-[11px] font-semibold ${LEVEL_BG[evidence.level]}`}
               title={t('evidenceStrengthTitle', {
                 label: evidence.label,
                 score: (evidence.score * 100).toFixed(0),
@@ -71,8 +75,37 @@ export function PerspectiveCard({ persona, name, stance, confidence, summary, ci
           )}
         </div>
       </div>
-      <div className="mb-1.5 text-sm leading-relaxed">{summary}</div>
-      {cites.length > 0 && (
+      {claims.length > 0 ? (
+        <div className="divide-y divide-border/60 border-y border-border/60">
+          {claims.map((claim, index) => (
+            <div key={`${claim.kind}-${index}`} className="py-3 first:pt-2.5 last:pb-2.5">
+              <div className="mb-1 text-[10px] font-semibold uppercase text-text-muted">
+                {t(`claimKinds.${claim.kind}`)}
+              </div>
+              <p className="text-sm leading-relaxed text-text">{claim.text}</p>
+              {claim.dataCites.length > 0 && (
+                <p className="mt-1.5 text-[11px] text-text-muted">
+                  <span className="font-medium text-text-dim">{t('structuredEvidence')}:</span>{' '}
+                  {claim.dataCites.join(' · ')}
+                </p>
+              )}
+              {claim.citations.length > 0 && (
+                <div className="mt-2 space-y-1.5">
+                  {claim.citations.map((citation) => (
+                    <div key={citation.id} className="border-l border-border-active pl-2.5 text-[11px]">
+                      <ExternalLink href={citation.url} className="font-medium text-text-dim hover:text-accent">
+                        {citation.domain} · {t('sourceQuality', { value: Math.round((citation.qualityScore ?? citation.trustScore) * 100) })}
+                      </ExternalLink>
+                      {citation.excerpt && <blockquote className="mt-0.5 line-clamp-2 text-text-muted">{citation.excerpt}</blockquote>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : <div className="mb-1.5 text-sm leading-relaxed">{summary}</div>}
+      {claims.length === 0 && cites.length > 0 && (
         <div className="text-[11px] italic text-text-muted">
               <span className="not-italic mr-1">{t('cite')}:</span>
           {cites.map((cite, i) => {
@@ -87,8 +120,8 @@ export function PerspectiveCard({ persona, name, stance, confidence, summary, ci
           })}
         </div>
       )}
-      {citations.length > 0 && (
-        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-text-muted">
+      {claims.length === 0 && citations.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-text-muted">
           <span>{t('webSources')}:</span>
           {citations.map((citation) => (
             <ExternalLink
@@ -102,6 +135,7 @@ export function PerspectiveCard({ persona, name, stance, confidence, summary, ci
           ))}
         </div>
       )}
+      {footer && <div className="mt-3 border-t border-border/70 pt-2.5">{footer}</div>}
     </div>
   );
 }

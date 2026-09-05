@@ -9,7 +9,8 @@
 
 import { getProvider } from './providers';
 import { decrypt } from './crypto';
-import { getUserLlm } from './settings-store';
+import { getUserLlm, getUserLlmForUser, type UserLlmSettingsClient } from './settings-store';
+import { getAdminSupabase } from '@/lib/supabase/admin';
 import type { LlmConfig } from './openai-compat';
 
 export interface ResolvedLlm extends LlmConfig {
@@ -72,6 +73,30 @@ export async function resolveLlm(): Promise<ResolvedLlm | null> {
   if (user) return user;
 
   // (2) Environment fallback.
+  return resolvePlatformLlm();
+}
+
+export async function resolveLlmForUser(
+  userId: string,
+  client: UserLlmSettingsClient = getAdminSupabase(),
+): Promise<ResolvedLlm | null> {
+  const user = await getUserLlmForUser(client, userId);
+  if (user) {
+    const definition = getProvider(user.provider);
+    let apiKey: string | null = null;
+    try { apiKey = decrypt(user.apiKeyCipher); } catch { apiKey = null; }
+    if (definition && apiKey) {
+      return {
+        provider: user.provider,
+        baseUrl: definition.baseUrl,
+        model: user.model || definition.defaultModel,
+        apiKey,
+        chatPath: definition.chatPath,
+        protocol: definition.protocol,
+        source: 'user',
+      };
+    }
+  }
   return resolvePlatformLlm();
 }
 

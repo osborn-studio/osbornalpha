@@ -66,8 +66,16 @@ function delayMs(attempt: number, options: Required<SearchFetchOptions>, retryAf
   return Math.min(options.maxDelayMs, Math.max(hinted, exponential));
 }
 
-function sleep(milliseconds: number): Promise<void> {
-  return milliseconds > 0 ? new Promise((resolve) => setTimeout(resolve, milliseconds)) : Promise.resolve();
+function sleep(milliseconds: number, signal?: AbortSignal | null): Promise<void> {
+  if (milliseconds <= 0) return Promise.resolve();
+  if (signal?.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, milliseconds);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    }, { once: true });
+  });
 }
 
 export async function fetchSearchJson(
@@ -79,6 +87,12 @@ export async function fetchSearchJson(
   let lastError: SearchProviderRequestError | null = null;
 
   for (let attempt = 1; attempt <= options.maxAttempts; attempt += 1) {
+    if (init.signal?.aborted) {
+      throw new SearchProviderRequestError('search_provider_aborted', {
+        retryable: false,
+        attempts: Math.max(0, attempt - 1),
+      });
+    }
     const controller = new AbortController();
     let timedOut = false;
     const timeout = setTimeout(() => {
@@ -86,7 +100,8 @@ export async function fetchSearchJson(
       controller.abort();
     }, options.timeoutMs);
     try {
-      const response = await fetch(url, { ...init, signal: controller.signal });
+      const signal = init.signal ? AbortSignal.any([controller.signal, init.signal]) : controller.signal;
+      const response = await fetch(url, { ...init, signal });
       if (!response.ok) {
         const retryAfter = retryAfterSeconds(response.headers.get('retry-after'));
         throw new SearchProviderRequestError(`search_provider_http_${response.status}`, {
@@ -105,7 +120,12 @@ export async function fetchSearchJson(
         });
       }
     } catch (error) {
-      const normalized = error instanceof SearchProviderRequestError
+      const normalized = init.signal?.aborted
+        ? new SearchProviderRequestError('search_provider_aborted', {
+            retryable: false,
+            attempts: attempt,
+          })
+        : error instanceof SearchProviderRequestError
         ? error
         : new SearchProviderRequestError(timedOut ? 'search_provider_timeout' : 'search_provider_network_error', {
           retryable: true,
@@ -115,7 +135,7 @@ export async function fetchSearchJson(
       if (!normalized.retryable || attempt >= options.maxAttempts) throw normalized;
       // Do not keep an aborted request timer alive while backing off.
       clearTimeout(timeout);
-      await sleep(delayMs(attempt, options, normalized.retryAfterSeconds));
+      await sleep(delayMs(attempt, options, normalized.retryAfterSeconds), init.signal);
     } finally {
       clearTimeout(timeout);
     }

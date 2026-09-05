@@ -3,7 +3,7 @@ import { isTelegramConfigured, sendTelegram } from '@/lib/data/sources/telegram'
 import type { AlertViolation, AlertWindow } from './evaluators';
 
 interface AlertMessageInput {
-  checkName: 'ai_daily' | 'quote_15m' | 'auth_email_daily';
+  checkName: 'ai_daily' | 'quote_15m' | 'auth_email_daily' | 'watchlist_15m';
   window: AlertWindow;
   metrics: Record<string, unknown>;
   violations: AlertViolation[];
@@ -38,11 +38,13 @@ export function parseAlertRecipients(raw: string | undefined): string[] {
 }
 
 export function formatOperationalAlert(input: AlertMessageInput) {
-  const label = input.checkName === 'ai_daily'
-    ? 'AI daily'
-    : input.checkName === 'quote_15m'
-      ? 'Quote 15m'
-      : 'Auth email daily';
+  const labels: Record<AlertMessageInput['checkName'], string> = {
+    ai_daily: 'AI daily',
+    quote_15m: 'Quote 15m',
+    auth_email_daily: 'Auth email daily',
+    watchlist_15m: 'Watchlist health 15m',
+  };
+  const label = labels[input.checkName];
   const violationLines = input.violations.map((item) => (
     `${item.code}: value=${item.value}, threshold=${item.threshold}`
   ));

@@ -12,7 +12,14 @@
 // + 20260904190000_watchlist_research_refresh_cleanup.sql (ticker queue migration)
 // + 20260904230000_external_evidence_audit_snapshot.sql (immutable query/result audit metadata)
 // + 20260904250000_watchlist_ui_preferences.sql (cross-device Watchlist UI state)
+// + 20260904260000_watchlist_metric_snapshots.sql (durable Watchlist analytics)
+// + 20260904270000_watchlist_overview_query.sql (server-side Watchlist query contract)
+// + 20260904280000_watchlist_alert_scopes.sql (market-aware alert workloads)
+// + 20260904290000_market_calendar_overrides.sql (maintained exchange calendar cache)
+// + 20260904430000_perspective_claims.sql (claim-level Perspective evidence)
 // Regenerate with: npm run supabase:types (after supabase link)
+
+import type { PerspectiveClaim } from '@/lib/stocks/perspective-claims';
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
 export type AssetType = 'stock' | 'etf' | 'convertible_bond' | 'fund' | 'index' | 'unknown';
@@ -189,7 +196,7 @@ export interface WatchlistAlert {
   id: string;
   user_id: string;
   watchlist_item_id: string;
-  alert_type: 'price' | 'change_pct' | 'volume_ratio' | 'valuation' | 'event' | 'rating' | 'perspective';
+  alert_type: 'price' | 'change_pct' | 'volume_ratio' | 'valuation' | 'metric' | 'event' | 'rating' | 'perspective';
   operator: 'gt' | 'gte' | 'lt' | 'lte' | 'crosses_above' | 'crosses_below' | null;
   threshold_numeric: number | null;
   config: Record<string, unknown>;
@@ -203,13 +210,15 @@ export interface WatchlistAlert {
   updated_at: string;
 }
 
+export type WatchlistAlertEventType = WatchlistAlert['alert_type'] | 'review';
+
 export interface WatchlistAlertEvent {
   id: string;
   user_id: string;
-  alert_id: string;
+  alert_id: string | null;
   watchlist_item_id: string;
   ticker: string;
-  alert_type: WatchlistAlert['alert_type'];
+  alert_type: WatchlistAlertEventType;
   event_key: string;
   observed_value: number | null;
   threshold_numeric: number | null;
@@ -230,10 +239,12 @@ export interface WatchlistAlertEvent {
 
 export interface WatchlistAlertRun {
   id: string;
+  scope: 'all' | 'quote' | 'metric' | 'research';
   status: 'running' | 'succeeded' | 'failed';
   evaluated: number;
   triggered: number;
   unavailable: number;
+  skipped_closed: number;
   delivery_claimed: number;
   delivery_delivered: number;
   delivery_failed: number;
@@ -270,6 +281,95 @@ export interface WatchlistResearchTickerRefreshState {
   lease_expires_at: string | null;
   last_error: string | null;
   updated_at: string;
+}
+
+export interface WatchlistMetricSnapshot {
+  ticker: string;
+  market: Market;
+  history_range: '1m' | '6m' | 'ytd' | '1y' | '5y' | 'all';
+  benchmark_ticker: string;
+  metrics: Record<string, unknown>;
+  source: string | null;
+  source_bundle: Record<string, unknown>;
+  warnings: string[];
+  calculator_version: string;
+  observed_at: string | null;
+  generated_at: string;
+  valid_until: string;
+  period_return_pct: number | null;
+  total_return_pct: number | null;
+  annualized_volatility_pct: number | null;
+  downside_volatility_pct: number | null;
+  sharpe_ratio: number | null;
+  max_drawdown_pct: number | null;
+  rsi14: number | null;
+  ma20_distance_pct: number | null;
+  ma50_distance_pct: number | null;
+  macd_histogram: number | null;
+  bollinger_position_pct: number | null;
+  atr14_pct: number | null;
+  excess_return_pct: number | null;
+  beta: number | null;
+  volume_zscore_20: number | null;
+  coverage_ratio: number | null;
+  updated_at: string;
+}
+
+export interface WatchlistMetricRefreshState {
+  ticker: string;
+  market: Market;
+  history_range: WatchlistMetricSnapshot['history_range'];
+  benchmark_ticker: string;
+  status: 'pending' | 'running' | 'succeeded' | 'failed';
+  failure_count: number;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  next_refresh_at: string;
+  lease_expires_at: string | null;
+  last_error: string | null;
+  updated_at: string;
+}
+
+export interface PerspectiveGenerationJob {
+  id: string;
+  user_id: string;
+  ticker: string;
+  persona_ids: string[] | null;
+  requested_analysis_mode: 'auto' | 'evidence_required' | 'structured_only';
+  llm_source: 'user' | 'env';
+  include_external_evidence: boolean;
+  request_warnings: string[];
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  stage: 'queued' | 'context' | 'model' | 'persistence' | 'complete';
+  progress: number;
+  attempt_count: number;
+  max_attempts: number;
+  quota_plan: 'free' | 'pro' | 'admin';
+  quota_limit: number;
+  quota_used: number;
+  next_attempt_at: string;
+  lease_expires_at: string | null;
+  lease_token: string | null;
+  cancel_requested_at: string | null;
+  result_generation_id: string | null;
+  result: Record<string, unknown>;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  updated_at: string;
+}
+
+export interface MarketCalendarOverrideRow {
+  market: Market;
+  date_key: string;
+  kind: 'closed' | 'sessions';
+  name: string;
+  sessions: Array<{ open: number; close: number }>;
+  source: string;
+  source_updated_at: string | null;
+  fetched_at: string;
 }
 
 export interface WatchlistOperationAction {
@@ -340,14 +440,70 @@ export interface Perspective {
     qualityScore?: number;
     qualityFlags?: string[];
   }>;
+  claims: PerspectiveClaim[];
   source: string | null;
   model_version: string | null;
   prompt_version: string | null;
+  requested_analysis_mode: 'auto' | 'evidence_required' | 'structured_only';
+  resolved_analysis_mode: 'evidence_backed' | 'structured_only';
+  evidence_status: 'complete' | 'partial' | 'unavailable' | 'error';
   evidence_request_id: string | null;
   evidence_fetched_at: string | null;
   evidence_result_count: number;
   evidence_coverage_ratio: number;
+  reference_price: number | null;
   created_at: string;
+  updated_at: string;
+}
+
+export interface PerspectiveFeedback {
+  id: string;
+  user_id: string;
+  perspective_id: string;
+  verdict: 'helpful' | 'incorrect' | 'outdated';
+  reason: string | null;
+  corrected_stance: Stance | null;
+  created_at: string;
+}
+
+export interface PerspectiveOutcome {
+  id: string;
+  user_id: string;
+  perspective_id: string;
+  horizon_days: number;
+  reference_price: number;
+  outcome_price: number;
+  return_pct: number;
+  direction_correct: boolean;
+  evaluated_at: string;
+}
+
+export interface PerspectiveEvaluationQueue {
+  perspective_id: string;
+  due_at: string;
+  horizon_days: number;
+  attempt_count: number;
+  next_attempt_at: string;
+  claimed_at: string | null;
+  last_error: string | null;
+  status: 'pending' | 'dead_letter';
+  dead_lettered_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WatchlistActivityState {
+  user_id: string;
+  ticker: string;
+  last_seen_at: string;
+  updated_at: string;
+}
+
+export interface WatchlistFeatureUsage {
+  user_id: string;
+  feature: 'research_refresh';
+  usage_date: string;
+  used: number;
   updated_at: string;
 }
 
@@ -361,6 +517,9 @@ export interface NewsItem {
   url: string | null;
   snippet: string | null;
   sentiment: number | null;
+  sentiment_confidence: number;
+  sentiment_language: string;
+  sentiment_aspects: Record<string, { score: number | null; confidence: number; matches: string[] }>;
   published_at: string | null;
   fetched_at: string;
   trust_score: number | null;
@@ -401,6 +560,29 @@ export interface BrokerReport {
   }>;
 }
 
+export interface SharedResearchArtifact {
+  id: string;
+  kind: 'news' | 'report';
+  ticker: string;
+  source_key: string;
+  title: string;
+  source: string | null;
+  url: string | null;
+  published_at: string | null;
+  fetched_at: string;
+  event_cluster_id: string;
+  quality_score: number;
+  content_hash: string;
+  payload: Record<string, unknown>;
+  updated_at: string;
+}
+
+export interface UserResearchArtifactLink {
+  user_id: string;
+  artifact_id: string;
+  linked_at: string;
+}
+
 export interface ExternalEvidenceRecord {
   citation_id: string;
   canonical_url: string;
@@ -421,6 +603,9 @@ export interface ExternalEvidenceRecord {
     title: string; url: string; domain: string; publishedAt: string | null; trustScore: number; qualityScore: number;
   }>;
   content_hash: string;
+  document_content_hash: string | null;
+  document_fetched_at: string | null;
+  document_paragraphs: Array<{ id: string; text: string; contentHash: string }>;
   created_at: string;
   updated_at: string;
 }
@@ -661,7 +846,7 @@ export interface AiRun {
 
 export interface ServiceAlertRun {
   id: string;
-  check_name: 'ai_daily' | 'quote_15m' | 'auth_email_daily';
+  check_name: 'ai_daily' | 'quote_15m' | 'auth_email_daily' | 'watchlist_15m';
   window_start: string;
   window_end: string;
   status: 'healthy' | 'alerting' | 'error';
@@ -722,14 +907,25 @@ export type Database = {
       watchlist_alert_runs: { Row: WatchlistAlertRun; Insert: Partial<WatchlistAlertRun>; Update: Partial<WatchlistAlertRun> };
       watchlist_research_refresh_state: { Row: WatchlistResearchRefreshState; Insert: Partial<WatchlistResearchRefreshState>; Update: Partial<WatchlistResearchRefreshState> };
       watchlist_research_ticker_refresh_state: { Row: WatchlistResearchTickerRefreshState; Insert: Partial<WatchlistResearchTickerRefreshState>; Update: Partial<WatchlistResearchTickerRefreshState> };
+      watchlist_metric_snapshots: { Row: WatchlistMetricSnapshot; Insert: Partial<WatchlistMetricSnapshot>; Update: Partial<WatchlistMetricSnapshot> };
+      watchlist_metric_refresh_state: { Row: WatchlistMetricRefreshState; Insert: Partial<WatchlistMetricRefreshState>; Update: Partial<WatchlistMetricRefreshState> };
+      perspective_generation_jobs: { Row: PerspectiveGenerationJob; Insert: Partial<PerspectiveGenerationJob>; Update: Partial<PerspectiveGenerationJob> };
+      market_calendar_overrides: { Row: MarketCalendarOverrideRow; Insert: Partial<MarketCalendarOverrideRow>; Update: Partial<MarketCalendarOverrideRow> };
       watchlist_operation_actions: { Row: WatchlistOperationAction; Insert: Partial<WatchlistOperationAction>; Update: Partial<WatchlistOperationAction> };
       watchlist_trash: { Row: WatchlistTrash; Insert: Partial<WatchlistTrash>; Update: Partial<WatchlistTrash> };
       watchlist_item_decision_history: { Row: WatchlistItemDecisionHistory; Insert: Partial<WatchlistItemDecisionHistory>; Update: Partial<WatchlistItemDecisionHistory> };
       briefs: { Row: Brief; Insert: Partial<Brief>; Update: Partial<Brief> };
       stock_signals: { Row: StockSignal; Insert: Partial<StockSignal>; Update: Partial<StockSignal> };
       perspectives: { Row: Perspective; Insert: Partial<Perspective>; Update: Partial<Perspective> };
+      perspective_feedback: { Row: PerspectiveFeedback; Insert: Partial<PerspectiveFeedback>; Update: Partial<PerspectiveFeedback> };
+      perspective_outcomes: { Row: PerspectiveOutcome; Insert: Partial<PerspectiveOutcome>; Update: Partial<PerspectiveOutcome> };
+      perspective_evaluation_queue: { Row: PerspectiveEvaluationQueue; Insert: Partial<PerspectiveEvaluationQueue>; Update: Partial<PerspectiveEvaluationQueue> };
+      watchlist_activity_state: { Row: WatchlistActivityState; Insert: Partial<WatchlistActivityState>; Update: Partial<WatchlistActivityState> };
+      watchlist_feature_usage: { Row: WatchlistFeatureUsage; Insert: Partial<WatchlistFeatureUsage>; Update: Partial<WatchlistFeatureUsage> };
       news_items: { Row: NewsItem; Insert: Partial<NewsItem>; Update: Partial<NewsItem> };
       broker_reports: { Row: BrokerReport; Insert: Partial<BrokerReport>; Update: Partial<BrokerReport> };
+      shared_research_artifacts: { Row: SharedResearchArtifact; Insert: Partial<SharedResearchArtifact>; Update: Partial<SharedResearchArtifact> };
+      user_research_artifact_links: { Row: UserResearchArtifactLink; Insert: Partial<UserResearchArtifactLink>; Update: Partial<UserResearchArtifactLink> };
       external_evidence: { Row: ExternalEvidenceRecord; Insert: Partial<ExternalEvidenceRecord>; Update: Partial<ExternalEvidenceRecord> };
       external_evidence_runs: { Row: ExternalEvidenceRun; Insert: Partial<ExternalEvidenceRun>; Update: Partial<ExternalEvidenceRun> };
       external_evidence_tickers: { Row: ExternalEvidenceTicker; Insert: Partial<ExternalEvidenceTicker>; Update: Partial<ExternalEvidenceTicker> };
@@ -751,6 +947,63 @@ export type Database = {
       stripe_events: { Row: StripeEvent; Insert: Partial<StripeEvent>; Update: Partial<StripeEvent> };
     };
     Functions: {
+      enqueue_perspective_generation_job: {
+        Args: {
+          p_ticker: string;
+          p_persona_ids: string[] | null;
+          p_analysis_mode: 'auto' | 'evidence_required' | 'structured_only';
+          p_llm_source: 'user' | 'env';
+          p_include_external_evidence: boolean;
+          p_warnings?: string[];
+        };
+        Returns: PerspectiveGenerationJob;
+      };
+      cancel_perspective_generation_job: {
+        Args: { p_job_id: string };
+        Returns: PerspectiveGenerationJob;
+      };
+      claim_perspective_generation_jobs: {
+        Args: { p_limit?: number; p_lease_minutes?: number; p_job_id?: string | null };
+        Returns: PerspectiveGenerationJob[];
+      };
+      claim_perspective_evaluations: {
+        Args: { p_limit?: number };
+        Returns: Array<{
+          perspective_id: string;
+          user_id: string;
+          ticker: string;
+          stance: Stance;
+          reference_price: number;
+          horizon_days: number;
+          attempt_count: number;
+        }>;
+      };
+      consume_watchlist_research_quota: {
+        Args: Record<string, never>;
+        Returns: { allowed: boolean; used: number; limit: number; plan: string };
+      };
+      authorize_watchlist_research_refresh: {
+        Args: Record<string, never>;
+        Returns: {
+          allowed: boolean;
+          used: number;
+          limit: number;
+          plan: string;
+          reason: 'plan_limit' | 'rate_limit' | null;
+        };
+      };
+      refund_watchlist_research_quota: {
+        Args: Record<string, never>;
+        Returns: undefined;
+      };
+      get_watchlist_operational_health: {
+        Args: Record<string, never>;
+        Returns: Record<string, unknown>;
+      };
+      get_watchlist_review_queue: {
+        Args: { p_scope?: string; p_horizon_days?: number; p_limit?: number };
+        Returns: Record<string, unknown>;
+      };
       search_securities: {
         Args: { p_query: string; p_limit?: number };
         Returns: SecuritySearchRow[];
@@ -813,8 +1066,28 @@ export type Database = {
         };
         Returns: Record<string, unknown>;
       };
+      get_watchlist_overview_query: {
+        Args: {
+          p_limit?: number;
+          p_sort?: string;
+          p_direction?: string;
+          p_query?: string | null;
+          p_group_id?: string | null;
+          p_market?: string | null;
+          p_quote_status?: string | null;
+          p_decision_status?: string | null;
+          p_tag?: string | null;
+          p_history_range?: string;
+          p_metric?: string | null;
+          p_metric_min?: number | null;
+          p_metric_max?: number | null;
+          p_cursor?: Record<string, unknown> | null;
+          p_fingerprint?: string;
+        };
+        Returns: Record<string, unknown>;
+      };
       start_watchlist_alert_run: {
-        Args: { p_started_at?: string };
+        Args: { p_started_at?: string; p_scope?: 'all' | 'quote' | 'metric' | 'research' };
         Returns: string | null;
       };
       claim_watchlist_research_refresh: {
@@ -824,6 +1097,10 @@ export type Database = {
       claim_watchlist_research_ticker_refresh: {
         Args: { p_limit?: number; p_lease_minutes?: number };
         Returns: WatchlistResearchTickerRefreshState[];
+      };
+      claim_watchlist_metric_refresh: {
+        Args: { p_limit?: number; p_lease_minutes?: number };
+        Returns: WatchlistMetricRefreshState[];
       };
       run_watchlist_admin_operation: {
         Args: {

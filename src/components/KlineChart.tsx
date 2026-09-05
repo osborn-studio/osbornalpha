@@ -2,6 +2,16 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
+import {
+  ChartArea,
+  ChartBarBig,
+  ChartCandlestick,
+  ChartLine,
+  ChartNoAxesCombined,
+  RotateCcw,
+  SlidersHorizontal,
+  type LucideIcon,
+} from 'lucide-react';
 import type { CreatePriceLineOptions, IChartApi, IPriceLine, UTCTimestamp } from 'lightweight-charts';
 import {
   KLINE_RANGES,
@@ -16,14 +26,23 @@ import { computeSessionVwap } from '@/lib/chart/session-vwap';
 import { usePersistentState } from '@/lib/hooks/usePersistentState';
 import {
   DEFAULT_WATCHLIST_CHART_PREFERENCES,
+  WATCHLIST_CHART_INDICATORS,
   WATCHLIST_CHART_TYPES,
   isWatchlistChartPreferences,
+  type WatchlistChartIndicator,
   type WatchlistChartPreferences as ChartPreferences,
   type WatchlistChartType as ChartType,
 } from '@/lib/watchlist/ui-preferences';
 
 const RANGE_LABELS: Record<KlineRange, string> = { '1d': '1D', '5d': '5D', '1m': '1M', '6m': '6M', ytd: 'YTD', '1y': '1Y', '5y': '5Y', all: 'All' };
 const CHART_TYPES = WATCHLIST_CHART_TYPES;
+const CHART_TYPE_ICONS: Record<ChartType, LucideIcon> = {
+  line: ChartLine,
+  candle: ChartCandlestick,
+  baseline: ChartNoAxesCombined,
+  area: ChartArea,
+  bar: ChartBarBig,
+};
 
 type HoverSnapshot = KlineBar;
 
@@ -121,6 +140,13 @@ export function KlineChart({
     else setLocalPreferences(next);
   }, [controlledPreferences, onPreferencesChange, setLocalPreferences]);
   const { range, chartType, showTooltip, showVolume, showIndicators, showPreviousClose } = preferences;
+  const indicators = useMemo(
+    () => preferences.indicators
+      ?? DEFAULT_WATCHLIST_CHART_PREFERENCES.indicators
+      ?? [...WATCHLIST_CHART_INDICATORS],
+    [preferences.indicators],
+  );
+  const indicatorKey = indicators.join(',');
   const { bars, loading, error, errorCode, meta, refetch } = useKline(ticker, range);
   const displayMeta = meta;
   const unsupportedReason = klineRangeAvailability(ticker, range);
@@ -131,6 +157,18 @@ export function KlineChart({
 
   const setPreference = <K extends keyof ChartPreferences>(key: K, value: ChartPreferences[K]) => {
     setPreferences((current) => ({ ...current, [key]: value }));
+  };
+
+  const setIndicator = (indicator: WatchlistChartIndicator, enabled: boolean) => {
+    setPreferences((current) => {
+      const selected = current.indicators ?? DEFAULT_WATCHLIST_CHART_PREFERENCES.indicators ?? [];
+      return {
+        ...current,
+        indicators: enabled
+          ? [...new Set([...selected, indicator])]
+          : selected.filter((value) => value !== indicator),
+      };
+    });
   };
 
   useEffect(() => {
@@ -252,11 +290,15 @@ export function KlineChart({
       // day's strength at a glance (standard time-share chart convention).
       if (showIndicators && displayMeta.interval !== 'minute') {
         const warmup = displayMeta.maWarmupCloses ?? [];
-        const ma5 = chart.addLineSeries({ color: '#f59e0b', lineWidth: 1, title: 'MA5', priceFormat: { type: 'price', precision, minMove } });
-        ma5.setData(computeMA(bars, 5, warmup));
-        const ma20 = chart.addLineSeries({ color: '#58a6ff', lineWidth: 1, title: 'MA20', priceFormat: { type: 'price', precision, minMove } });
-        ma20.setData(computeMA(bars, 20, warmup));
-      } else if (showIndicators) {
+        if (indicators.includes('ma5')) {
+          const ma5 = chart.addLineSeries({ color: '#f59e0b', lineWidth: 1, title: 'MA5', priceFormat: { type: 'price', precision, minMove } });
+          ma5.setData(computeMA(bars, 5, warmup));
+        }
+        if (indicators.includes('ma20')) {
+          const ma20 = chart.addLineSeries({ color: '#58a6ff', lineWidth: 1, title: 'MA20', priceFormat: { type: 'price', precision, minMove } });
+          ma20.setData(computeMA(bars, 20, warmup));
+        }
+      } else if (showIndicators && indicators.includes('vwap')) {
         const vwapData = computeSessionVwap(bars);
         if (vwapData.some((bar) => 'value' in bar)) {
           const vwap = chart.addLineSeries({ color: '#facc15', lineWidth: 1, title: t('avgPrice'), priceFormat: { type: 'price', precision, minMove } });
@@ -306,7 +348,7 @@ export function KlineChart({
       if (chartRef.current === chart) chartRef.current = null;
       chart?.remove();
     };
-  }, [bars, chartType, displayMeta, locale, range, showIndicators, showPreviousClose, showVolume, t, visualRevision]);
+  }, [bars, chartType, displayMeta, indicatorKey, indicators, locale, range, showIndicators, showPreviousClose, showVolume, t, visualRevision]);
 
   const errorMessage = errorCode && [
     'market_unsupported',
@@ -325,12 +367,13 @@ export function KlineChart({
   const volumeFormatter = new Intl.NumberFormat(locale, { notation: 'compact', maximumFractionDigits: 2 });
   const currency = displayMeta?.currencyCode || displayMeta?.currency || '';
   const volumeUnit = displayMeta?.volumeUnit ?? 'shares';
-  // Keep the tooltip inside the chart pane as it follows the crosshair;
-  // fall back to the top-left corner when the cursor is outside.
+  // Keep the tooltip inside the chart pane while preserving an unobscured
+  // chart whenever the pointer is outside.
   const tooltipPosition = useMemo(() => {
     if (!hoverPoint || !containerRef.current) return { left: 8, top: 8 };
     const width = containerRef.current.clientWidth;
     const height = containerRef.current.clientHeight;
+    if (width < 640) return { left: 8, top: 8 };
     return {
       left: Math.max(8, Math.min(hoverPoint.x + 16, width - 330)),
       top: Math.max(8, Math.min(hoverPoint.y - 8, height - 150)),
@@ -339,15 +382,24 @@ export function KlineChart({
 
   return (
     <div data-testid="kline-chart">
-      <div className="mb-3 flex flex-col gap-2 border-b border-border pb-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <label className="sr-only" htmlFor={`chart-type-${ticker}`}>{t('chartType')}</label>
-          <select id={`chart-type-${ticker}`} value={chartType} onChange={(event) => selectChartType(event.target.value as ChartType)} className="border-border bg-bg-elevated px-2.5 py-1.5 text-xs font-medium" aria-label={t('chartType')}>
-            {CHART_TYPES.map((type) => <option key={type} value={type}>{t(`chartTypes.${type}`)}</option>)}
-          </select>
+      <div className="mb-3 flex flex-col gap-2 border-b border-border/70 pb-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto pb-0.5">
+          <div className="inline-flex shrink-0 rounded-md border border-border bg-bg-elevated p-0.5" role="group" aria-label={t('chartType')}>
+            {CHART_TYPES.map((type) => {
+              const Icon = CHART_TYPE_ICONS[type];
+              const label = t(`chartTypes.${type}`);
+              return (
+                <button key={type} type="button" onClick={() => selectChartType(type)} aria-pressed={chartType === type}
+                  aria-label={label} title={label}
+                  className={`inline-flex h-8 w-8 items-center justify-center rounded transition ${chartType === type ? 'bg-bg-card text-accent shadow-sm' : 'text-text-muted hover:text-text'}`}>
+                  <Icon className="h-4 w-4" aria-hidden="true" />
+                </button>
+              );
+            })}
+          </div>
           <div className="relative">
-            <button type="button" onClick={() => setSettingsOpen((open) => !open)} aria-expanded={settingsOpen} className="rounded-md border border-border bg-bg-elevated px-2.5 py-1.5 text-xs text-text-dim transition hover:border-border-active hover:text-text">
-              {t('settings')}
+            <button type="button" onClick={() => setSettingsOpen((open) => !open)} aria-expanded={settingsOpen} aria-label={t('settings')} title={t('settings')} className="icon-button !h-9 !w-9 !basis-9">
+              <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
             </button>
             {settingsOpen && (
               <div className="absolute left-0 top-full z-30 mt-1 w-48 rounded-md border border-border bg-bg-elevated p-2 shadow-xl">
@@ -362,6 +414,19 @@ export function KlineChart({
                     <span>{t(`settingsOptions.${key}`)}</span>
                   </label>
                 ))}
+                <div className="mt-1 border-t border-border pt-1">
+                  {WATCHLIST_CHART_INDICATORS.map((indicator) => {
+                    const unavailable = displayMeta?.interval === 'minute'
+                      ? indicator !== 'vwap'
+                      : indicator === 'vwap';
+                    return (
+                      <label key={indicator} className={`flex items-center gap-2 rounded px-2 py-1.5 text-xs ${unavailable ? 'cursor-not-allowed opacity-45' : 'cursor-pointer hover:bg-bg-card'}`}>
+                        <input type="checkbox" checked={indicators.includes(indicator)} disabled={!showIndicators || unavailable} onChange={(event) => setIndicator(indicator, event.target.checked)} />
+                        <span>{t(`settingsOptions.${indicator}`)}</span>
+                      </label>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>
@@ -369,13 +434,15 @@ export function KlineChart({
             type="button"
             onClick={() => chartRef.current?.timeScale().fitContent()}
             disabled={bars.length === 0}
-            className="rounded-md px-2.5 py-1.5 text-xs text-text-dim transition hover:bg-bg-elevated hover:text-text disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label={t('resetView')}
+            title={t('resetView')}
+            className="icon-button !h-9 !w-9 !basis-9"
           >
-            {t('resetView')}
+            <RotateCcw className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
-        <div className="flex max-w-full items-center gap-2 overflow-x-auto pb-0.5 lg:pb-0">
-          <span className="shrink-0 text-xs text-text-muted">{t('rangeLabel')}</span>
+        <div className="flex max-w-full items-center gap-2 overflow-x-auto pb-0.5 xl:pb-0">
+          <span className="shrink-0 text-[11px] font-medium text-text-muted">{t('rangeLabel')}</span>
           <div className="inline-flex shrink-0 rounded-md border border-border bg-bg-elevated p-0.5" role="group" aria-label={t('rangeAriaLabel')}>
             {KLINE_RANGES.map((item) => {
               const unavailable = klineRangeAvailability(ticker, item);
@@ -391,9 +458,9 @@ export function KlineChart({
           </div>
         </div>
       </div>
-      <div className="relative h-[380px] w-full overflow-hidden rounded-md border border-border bg-bg-card">
-        {showTooltip && hovered && displayMeta && !loading && (
-          <div data-testid="kline-tooltip" style={tooltipPosition} className="pointer-events-none absolute z-10 max-w-[calc(100%-16px)] rounded-md border border-border bg-bg-elevated/95 px-2.5 py-2 text-[10px] shadow-lg backdrop-blur sm:px-3 sm:text-[11px]">
+      <div data-testid="kline-chart-pane" className="relative h-[300px] w-full overflow-hidden rounded-md border border-border bg-bg-card sm:h-[360px]">
+        {showTooltip && hovered && hoverPoint && displayMeta && !loading && (
+          <div data-testid="kline-tooltip" style={tooltipPosition} className="pointer-events-none absolute z-10 max-w-[calc(100%-16px)] rounded-md border border-border bg-bg-elevated px-2.5 py-2 text-[10px] shadow-lg sm:px-3 sm:text-[11px]">
             <div className="mb-1 font-semibold text-text">
               {formatChartTime(hovered.time, displayMeta.interval, locale)} · {displayMeta.timezone}
             </div>
@@ -423,7 +490,7 @@ export function KlineChart({
             )}
           </div>
         )}
-        <div ref={containerRef} className="h-[380px] w-full bg-bg-card" />
+        <div ref={containerRef} className="h-[300px] w-full bg-bg-card sm:h-[360px]" />
       </div>
       <div className="mt-2 text-[10px] text-text-muted sm:text-[11px]" aria-live="polite">
         {displayMeta ? (

@@ -8,6 +8,7 @@ function row(overrides: Partial<WatchlistMarketRow>): WatchlistMarketRow {
     name: 'Apple',
     market: 'US',
     currency: 'USD',
+    groupId: 'core',
     group: 'Core',
     quote: null,
     status: 'unavailable',

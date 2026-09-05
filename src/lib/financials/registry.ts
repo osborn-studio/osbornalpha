@@ -2,10 +2,12 @@ import type { Market } from '@/lib/supabase/database.types';
 import type { FinancialProvider } from './types';
 import { secCompanyFactsProvider } from './providers/sec-company-facts';
 import { tushareFinancialProvider } from './providers/tushare';
+import { configuredHkFinancialProvider } from './providers/hk-configured';
 
 const PROVIDERS: readonly FinancialProvider[] = [
   tushareFinancialProvider,
   secCompanyFactsProvider,
+  configuredHkFinancialProvider,
 ];
 
 export function financialProviderForMarket(

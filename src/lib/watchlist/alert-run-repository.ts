@@ -8,6 +8,7 @@ import type {
   WatchlistAlertRun,
 } from '@/lib/supabase/database.types';
 import { WATCHLIST_MONITORED_STATUSES } from './item-status';
+import { watchlistAlertTypesForScope, type WatchlistAlertScope } from './alert-schedule';
 
 export const WATCHLIST_ALERT_BATCH_SIZE = 100;
 
@@ -28,7 +29,7 @@ interface RepositoryError {
 }
 
 interface AlertRunDatabase {
-  loadAlerts(): Promise<{ data: AlertWithItem[] | null; error: RepositoryError | null }>;
+  loadAlerts(alertTypes: WatchlistAlert['alert_type'][] | null): Promise<{ data: AlertWithItem[] | null; error: RepositoryError | null }>;
   loadResearch(args: {
     p_pairs: Array<{ user_id: string; ticker: string }>;
     p_limit_per_kind: number;
@@ -38,7 +39,6 @@ interface AlertRunDatabase {
   }>;
   insertEvent(event: Partial<WatchlistAlertEvent>): Promise<{ error: RepositoryError | null }>;
   updateAlert(id: string, update: Partial<WatchlistAlert>): Promise<{ error: RepositoryError | null }>;
-  startRun(startedAt: string): Promise<{ data: string | null; error: RepositoryError | null }>;
   finishRun(id: string, update: Partial<WatchlistAlertRun>): Promise<{ error: RepositoryError | null }>;
 }
 
@@ -48,24 +48,16 @@ function alertRunDatabase(db: SupabaseClient<Database>): AlertRunDatabase {
     rpc(name: string, args: Record<string, unknown>): Promise<{ data: unknown; error: RepositoryError | null }>;
   };
   return {
-    async loadAlerts() {
+    async loadAlerts(alertTypes) {
       const table = repository.from('watchlist_alerts') as {
-        select(columns: string): {
-          eq(column: string, value: unknown): {
-            in(column: string, values: string[]): {
-              order(column: string, options: Record<string, unknown>): {
-                order(column: string, options: Record<string, unknown>): {
-                  limit(value: number): Promise<{ data: AlertWithItem[] | null; error: RepositoryError | null }>;
-                };
-              };
-            };
-          };
-        };
+        select(columns: string): AlertLoadBuilder;
       };
-      return table
+      let query = table
         .select('*, watchlist_items!inner(id,ticker,status)')
         .eq('enabled', true)
-        .in('watchlist_items.status', [...WATCHLIST_MONITORED_STATUSES])
+        .in('watchlist_items.status', [...WATCHLIST_MONITORED_STATUSES]);
+      if (alertTypes) query = query.in('alert_type', alertTypes);
+      return query
         .order('last_evaluated_at', { ascending: true, nullsFirst: true })
         .order('id', { ascending: true })
         .limit(WATCHLIST_ALERT_BATCH_SIZE + 1);
@@ -90,9 +82,6 @@ function alertRunDatabase(db: SupabaseClient<Database>): AlertRunDatabase {
       };
       return table.update(update).eq('id', id);
     },
-    async startRun(startedAt) {
-      return repository.rpc('start_watchlist_alert_run', { p_started_at: startedAt }) as Promise<{ data: string | null; error: RepositoryError | null }>;
-    },
     async finishRun(id, update) {
       const table = repository.from('watchlist_alert_runs') as {
         update(value: Partial<WatchlistAlertRun>): {
@@ -104,8 +93,15 @@ function alertRunDatabase(db: SupabaseClient<Database>): AlertRunDatabase {
   };
 }
 
-export async function loadAlertRunBatch(db: SupabaseClient<Database>) {
-  const { data, error } = await alertRunDatabase(db).loadAlerts();
+interface AlertLoadBuilder {
+  eq(column: string, value: unknown): AlertLoadBuilder;
+  in(column: string, values: readonly string[]): AlertLoadBuilder;
+  order(column: string, options: Record<string, unknown>): AlertLoadBuilder;
+  limit(value: number): Promise<{ data: AlertWithItem[] | null; error: RepositoryError | null }>;
+}
+
+export async function loadAlertRunBatch(db: SupabaseClient<Database>, scope: WatchlistAlertScope = 'all') {
+  const { data, error } = await alertRunDatabase(db).loadAlerts(watchlistAlertTypesForScope(scope));
   if (error) throw new Error(`watchlist_alert_load_failed:${error.message}`);
   const rows = data ?? [];
   return { alerts: rows.slice(0, WATCHLIST_ALERT_BATCH_SIZE), saturated: rows.length > WATCHLIST_ALERT_BATCH_SIZE };
@@ -153,8 +149,17 @@ export async function updateAlertObservation(
   if (error) throw new Error(`watchlist_alert_update_failed:${error.message}`);
 }
 
-export async function createAlertRun(db: SupabaseClient<Database>, startedAt: string): Promise<string | null> {
-  const { data, error } = await alertRunDatabase(db).startRun(startedAt);
+export async function createAlertRun(
+  db: SupabaseClient<Database>,
+  startedAt: string,
+  scope: WatchlistAlertScope = 'all',
+): Promise<string | null> {
+  const repository = db as unknown as {
+    rpc(name: 'start_watchlist_alert_run', args: { p_started_at: string; p_scope: WatchlistAlertScope }): Promise<{
+      data: string | null; error: RepositoryError | null;
+    }>;
+  };
+  const { data, error } = await repository.rpc('start_watchlist_alert_run', { p_started_at: startedAt, p_scope: scope });
   if (error) throw new Error(`watchlist_alert_run_create_failed:${error.message}`);
   return typeof data === 'string' && data ? data : null;
 }

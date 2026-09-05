@@ -1,11 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { boundedMap } from '@/lib/async/bounded-map';
-import { buildRadar, type RadarPayload } from '@/lib/brief/radar';
+import { buildCalendar, type CalendarPayload } from '@/lib/brief/calendar';
 import { getAdminSupabase } from '@/lib/supabase/admin';
-import type { Database, WatchlistAlert, WatchlistAlertEvent } from '@/lib/supabase/database.types';
+import type { Database, WatchlistAlert, WatchlistAlertEvent, WatchlistMetricSnapshot } from '@/lib/supabase/database.types';
+import { resolveQuote, type QuoteShape } from '@/lib/quotes/resolve-quote';
 import { deliverWatchlistAlertEvents } from './alert-delivery';
 import { evaluateWatchlistAlertBatch } from './alert-evaluator';
-import { observationFromRadar } from './alert-observation';
+import { observationFromMetricSnapshot, observationFromQuote, observationFromResearch } from './alert-observation';
 import {
   createAlertRun,
   finishAlertRun,
@@ -16,6 +17,10 @@ import {
   type AlertResearchCandidates,
   type AlertWithItem,
 } from './alert-run-repository';
+import { shouldEvaluateWatchlistAlert, type WatchlistAlertScope } from './alert-schedule';
+import { builtInMarketCalendar, type MarketCalendarProvider } from '@/lib/market/calendar';
+import { loadStoredMarketCalendar } from '@/lib/market/calendar-service';
+import { loadWatchlistMetricSnapshots } from './metric-snapshot-repository';
 
 function itemOf(alert: AlertWithItem) {
   return Array.isArray(alert.watchlist_items) ? alert.watchlist_items[0] : alert.watchlist_items;
@@ -29,46 +34,84 @@ export interface WatchlistAlertRunResult {
   evaluated: number;
   triggered: number;
   unavailable: number;
+  skippedClosed: number;
   saturated: boolean;
   delivery: { claimed: number; delivered: number; failed: number; deadLetter: number; skipped: number; deferred: number };
 }
 
 export interface WatchlistAlertRunDependencies {
   loadBatch: () => Promise<{ alerts: AlertWithItem[]; saturated: boolean }>;
-  loadRadar: (ticker: string) => Promise<RadarPayload>;
+  loadQuote: (ticker: string) => Promise<QuoteShape | null>;
+  loadMetrics: (tickers: string[]) => Promise<Record<string, WatchlistMetricSnapshot>>;
+  loadCalendar: (ticker: string) => Promise<CalendarPayload | null>;
   loadResearch: (pairs: Array<{ userId: string; ticker: string }>) => Promise<AlertResearchCandidates[]>;
   insertEvent: (event: Partial<WatchlistAlertEvent>) => Promise<'inserted' | 'duplicate'>;
   updateAlert: (alertId: string, update: Partial<WatchlistAlert>) => Promise<void>;
   deliver: () => Promise<WatchlistAlertRunResult['delivery']>;
   now?: () => Date;
+  shouldEvaluate?: (alert: AlertWithItem, now: Date) => boolean;
+  calendar?: MarketCalendarProvider;
+}
+
+function isQuoteAlert(alert: Pick<WatchlistAlert, 'alert_type'>) {
+  return ['price', 'change_pct', 'volume_ratio', 'valuation'].includes(alert.alert_type);
+}
+
+function isStoredResearchAlert(alert: Pick<WatchlistAlert, 'alert_type'>) {
+  return alert.alert_type === 'rating' || alert.alert_type === 'perspective';
+}
+
+function isMetricAlert(alert: Pick<WatchlistAlert, 'alert_type'>) {
+  return alert.alert_type === 'metric';
 }
 
 export async function runWatchlistAlertBatch(
   dependencies: WatchlistAlertRunDependencies,
 ): Promise<WatchlistAlertRunResult> {
   const { alerts, saturated } = await dependencies.loadBatch();
-  const tickers = [...new Set(alerts.map((alert) => itemOf(alert)?.ticker).filter((value): value is string => !!value))];
-  const radarSettled = await boundedMap(tickers, 5, (ticker) => dependencies.loadRadar(ticker));
-  const radarByTicker = new Map<string, RadarPayload>();
-  radarSettled.forEach((result, index) => {
-    if (result.status === 'fulfilled') radarByTicker.set(tickers[index], result.value);
+  const scheduleNow = (dependencies.now ?? (() => new Date()))();
+  const eligibleAlerts = alerts.filter((alert) => !dependencies.shouldEvaluate || dependencies.shouldEvaluate(alert, scheduleNow));
+  const skippedAlerts = alerts.filter((alert) => !eligibleAlerts.includes(alert));
+  await boundedMap(skippedAlerts, 5, async (alert) => {
+    const evaluatedAt = scheduleNow.toISOString();
+    await dependencies.updateAlert(alert.id, { last_evaluated_at: evaluatedAt, updated_at: evaluatedAt });
+  });
+  const quoteTickers = [...new Set(eligibleAlerts.filter(isQuoteAlert)
+    .map((alert) => itemOf(alert)?.ticker).filter((value): value is string => !!value))];
+  const quoteSettled = await boundedMap(quoteTickers, 5, (ticker) => dependencies.loadQuote(ticker));
+  const quoteByTicker = new Map<string, QuoteShape | null>();
+  quoteSettled.forEach((result, index) => {
+    if (result.status === 'fulfilled') quoteByTicker.set(quoteTickers[index], result.value);
   });
 
-  const pairs = [...new Map(alerts.flatMap((alert) => {
+  const metricTickers = [...new Set(eligibleAlerts.filter(isMetricAlert)
+    .map((alert) => itemOf(alert)?.ticker).filter((value): value is string => !!value))];
+  const metricsByTicker = metricTickers.length > 0
+    ? await dependencies.loadMetrics(metricTickers)
+    : {};
+
+  const eventTickers = [...new Set(eligibleAlerts.filter((alert) => alert.alert_type === 'event')
+    .map((alert) => itemOf(alert)?.ticker).filter((value): value is string => !!value))];
+  const calendarSettled = await boundedMap(eventTickers, 5, (ticker) => dependencies.loadCalendar(ticker));
+  const calendarByTicker = new Map<string, CalendarPayload | null>();
+  calendarSettled.forEach((result, index) => {
+    if (result.status === 'fulfilled') calendarByTicker.set(eventTickers[index], result.value);
+  });
+
+  const pairs = [...new Map(eligibleAlerts.filter(isStoredResearchAlert).flatMap((alert) => {
     const item = itemOf(alert);
     if (!item) return [];
     const pair = { userId: alert.user_id, ticker: item.ticker };
     return [[pairKey(pair.userId, pair.ticker), pair] as const];
   })).values()];
-  const research = await dependencies.loadResearch(pairs);
+  const research = pairs.length > 0 ? await dependencies.loadResearch(pairs) : [];
   const researchByPair = new Map(research.map((row) => [pairKey(row.ownerId, row.ticker), row]));
 
   let triggered = 0;
   let unavailable = 0;
-  for (const alert of alerts) {
+  for (const alert of eligibleAlerts) {
     const item = itemOf(alert);
-    const radar = item ? radarByTicker.get(item.ticker) : null;
-    if (!item || !radar) {
+    if (!item) {
       unavailable += 1;
       const evaluatedAt = (dependencies.now ?? (() => new Date()))().toISOString();
       await dependencies.updateAlert(alert.id, { last_evaluated_at: evaluatedAt, updated_at: evaluatedAt });
@@ -77,7 +120,24 @@ export async function runWatchlistAlertBatch(
 
     const candidates = researchByPair.get(pairKey(alert.user_id, item.ticker));
     const now = (dependencies.now ?? (() => new Date()))();
-    const observation = observationFromRadar(radar, candidates?.reports, candidates?.perspectives, now);
+    const sourceUnavailable = isQuoteAlert(alert)
+      ? !quoteByTicker.get(item.ticker)
+      : isMetricAlert(alert)
+        ? !metricsByTicker[item.ticker]
+      : alert.alert_type === 'event'
+        ? !calendarByTicker.get(item.ticker)
+        : false;
+    if (sourceUnavailable) unavailable += 1;
+    const observation = isQuoteAlert(alert)
+      ? observationFromQuote(item.ticker, quoteByTicker.get(item.ticker) ?? null, now, dependencies.calendar)
+      : isMetricAlert(alert)
+        ? observationFromMetricSnapshot(metricsByTicker[item.ticker] ?? null, now)
+      : observationFromResearch(
+          alert.alert_type === 'event' ? calendarByTicker.get(item.ticker) ?? null : null,
+          candidates?.reports,
+          candidates?.perspectives,
+          now,
+        );
     const evaluations = evaluateWatchlistAlertBatch(alert, observation);
     const latest = evaluations[0];
     let insertedForAlert = 0;
@@ -115,7 +175,7 @@ export async function runWatchlistAlertBatch(
   }
 
   const delivery = await dependencies.deliver();
-  return { evaluated: alerts.length, triggered, unavailable, saturated, delivery };
+  return { evaluated: eligibleAlerts.length, triggered, unavailable, skippedClosed: skippedAlerts.length, saturated, delivery };
 }
 
 export async function runWatchlistAlertCycles(
@@ -127,6 +187,7 @@ export async function runWatchlistAlertCycles(
     evaluated: 0,
     triggered: 0,
     unavailable: 0,
+    skippedClosed: 0,
     saturated: false,
     delivery: { claimed: 0, delivered: 0, failed: 0, deadLetter: 0, skipped: 0, deferred: 0 },
   };
@@ -135,6 +196,7 @@ export async function runWatchlistAlertCycles(
     aggregate.evaluated += result.evaluated;
     aggregate.triggered += result.triggered;
     aggregate.unavailable += result.unavailable;
+    aggregate.skippedClosed += result.skippedClosed;
     aggregate.delivery.claimed += result.delivery.claimed;
     aggregate.delivery.delivered += result.delivery.delivered;
     aggregate.delivery.failed += result.delivery.failed;
@@ -147,24 +209,38 @@ export async function runWatchlistAlertCycles(
   return aggregate;
 }
 
-function productionDependencies(db: SupabaseClient<Database>): WatchlistAlertRunDependencies {
+function productionDependencies(
+  db: SupabaseClient<Database>,
+  scope: WatchlistAlertScope,
+  calendar: MarketCalendarProvider,
+): WatchlistAlertRunDependencies {
   return {
-    loadBatch: () => loadAlertRunBatch(db),
-    loadRadar: (ticker) => buildRadar(ticker),
+    loadBatch: () => loadAlertRunBatch(db, scope),
+    loadQuote: async (ticker) => (await resolveQuote(ticker)).quote,
+    loadMetrics: (tickers) => loadWatchlistMetricSnapshots(db, tickers, '1y'),
+    loadCalendar: (ticker) => buildCalendar(ticker, 14),
     loadResearch: (pairs) => loadAlertResearchCandidates(db, pairs),
     insertEvent: (event) => insertAlertEvent(db, event),
     updateAlert: (alertId, update) => updateAlertObservation(db, alertId, update),
     deliver: () => deliverWatchlistAlertEvents(db),
+    shouldEvaluate: (alert, now) => {
+      const item = itemOf(alert);
+      return !!item && shouldEvaluateWatchlistAlert(alert, item.ticker, scope, now, calendar);
+    },
+    calendar,
   };
 }
 
-export async function runWatchlistAlerts(): Promise<(WatchlistAlertRunResult & { runId: string }) | { skipped: true; reason: 'already_running' }> {
+export async function runWatchlistAlerts(
+  scope: WatchlistAlertScope = 'all',
+): Promise<(WatchlistAlertRunResult & { runId: string }) | { skipped: true; reason: 'already_running' }> {
   const db = getAdminSupabase();
   const startedAt = new Date();
-  const runId = await createAlertRun(db, startedAt.toISOString());
+  const runId = await createAlertRun(db, startedAt.toISOString(), scope);
   if (!runId) return { skipped: true, reason: 'already_running' };
   try {
-    const result = await runWatchlistAlertCycles(productionDependencies(db), {
+    const calendar = await loadStoredMarketCalendar(db, startedAt).catch(() => builtInMarketCalendar);
+    const result = await runWatchlistAlertCycles(productionDependencies(db, scope, calendar), {
       maxBatches: 5,
       shouldContinue: () => Date.now() - startedAt.getTime() < 240_000,
     });
@@ -174,6 +250,7 @@ export async function runWatchlistAlerts(): Promise<(WatchlistAlertRunResult & {
       evaluated: result.evaluated,
       triggered: result.triggered,
       unavailable: result.unavailable,
+      skipped_closed: result.skippedClosed,
       delivery_claimed: result.delivery.claimed,
       delivery_delivered: result.delivery.delivered,
       delivery_failed: result.delivery.failed,

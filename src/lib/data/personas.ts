@@ -12,6 +12,8 @@
 import type { Stance, Persona } from '@/lib/supabase/database.types';
 import { evidencePromptLines } from '@/lib/external-evidence/citations';
 import type { ExternalEvidence, PerspectiveCitation } from '@/lib/external-evidence/types';
+import type { PerspectiveAnalysisResolvedMode } from '@/lib/stocks/perspective-analysis';
+import type { PerspectiveClaim } from '@/lib/stocks/perspective-claims';
 
 export interface PersonaSpec {
   id: Persona;
@@ -213,9 +215,10 @@ export interface StockContext {
   ticker: string;
   name: string;
   market: string;
-  currency: string;
-  price: number;
-  change_pct: number;
+  currency?: string;
+  market_as_of?: string | null;
+  price?: number | null;
+  change_pct?: number | null;
   pe_ttm?: number | null;
   pb?: number | null;
   roe?: number | null;
@@ -234,14 +237,29 @@ export interface StockContext {
   external_evidence?: ExternalEvidence[];
 }
 
-export function buildUserMessage(ctx: StockContext): string {
+export function buildUserMessage(
+  ctx: StockContext,
+  options: { analysisMode?: PerspectiveAnalysisResolvedMode } = {},
+): string {
   const today = new Date().toISOString().slice(0, 10);
+  const analysisMode = options.analysisMode
+    ?? ((ctx.external_evidence?.length ?? 0) > 0 ? 'evidence_backed' : 'structured_only');
   const lines: string[] = [];
   lines.push(`【日期】今天是 ${today}。所有数据须为 ≤ 90 天内的最新值；不要引用训练数据中的过期信息。`);
   lines.push(`【数据来源】仅可引用以下传入的结构化字段和外部证据。严禁使用训练记忆补充最新事实。`);
+  lines.push(analysisMode === 'evidence_backed'
+    ? '【分析模式】外部证据支撑：结论必须使用并引用本次提供的外部证据。'
+    : '【分析模式】仅结构化数据：本次没有可用外部证据，不得暗示已核验新闻、公告、研报或市场情绪。');
   lines.push('');
   lines.push(`标的：${ctx.name} (${ctx.ticker}) · ${ctx.market}`);
-  lines.push(`当前价：${ctx.currency}${ctx.price} · 今日 ${ctx.change_pct >= 0 ? '+' : ''}${ctx.change_pct.toFixed(2)}%`);
+  if (ctx.price != null && Number.isFinite(ctx.price) && ctx.price > 0) {
+    const change = ctx.change_pct != null && Number.isFinite(ctx.change_pct)
+      ? ` · 今日 ${ctx.change_pct >= 0 ? '+' : ''}${ctx.change_pct.toFixed(2)}%`
+      : '';
+    lines.push(`当前价：${ctx.currency ?? ''}${ctx.price}${change}${ctx.market_as_of ? ` · 截至 ${ctx.market_as_of}` : ''}`);
+  } else {
+    lines.push('当前行情：不可用；不得推断当前价格或当日涨跌。');
+  }
   if (ctx.market_cap_label) lines.push(`市值：${ctx.market_cap_label}`);
   if (ctx.pe_ttm != null) lines.push(`PE (TTM)：${ctx.pe_ttm.toFixed(2)}`);
   if (ctx.pb != null) lines.push(`PB：${ctx.pb.toFixed(2)}`);
@@ -267,13 +285,17 @@ export function buildUserMessage(ctx: StockContext): string {
   }
   lines.push('');
   lines.push('请基于上述数据，从你的视角输出严格 JSON：');
-  lines.push('{"stance":"bullish"|"neutral"|"bearish","confidence":0-10,"summary":"<≤120字>","data_cites":["<结构化数据标签>"],"citation_ids":["<web_xxx>"]}');
+  lines.push('{"stance":"bullish"|"neutral"|"bearish","confidence":0-10,"summary":"<≤120字>","claims":[{"kind":"thesis"|"catalyst"|"risk"|"counterpoint","text":"<单一可验证主张>","data_cites":["<结构化数据标签>"],"citation_ids":["<web_xxx或web_xxx#pN>"]}]}');
   lines.push('');
   lines.push('要求：');
   lines.push('- summary 必须引用上述至少 1 个具体数据点');
   lines.push('- 禁止说"建议买入/卖出/明天会涨"，用"信号偏多/偏空/中性"');
-  lines.push('- data_cites 只列结构化数据标签（如 "PE TTM"、"5年营收"）');
-  lines.push('- citation_ids 只能使用上方外部证据中真实存在的 web_xxx 编号；没有外部证据时必须为空数组');
+  lines.push('- claims 为 1-6 条；每条只表达一个主张，并至少包含一个 data_cites 或 citation_ids 证据');
+  lines.push('- 每条 claim 的 data_cites 只列结构化数据标签（如 "PE TTM"、"5年营收"）');
+  lines.push('- 每条 claim 的 citation_ids 只能使用上方外部证据中真实存在的 web_xxx 或 web_xxx#pN 编号；有段落编号时优先引用段落；没有外部证据时必须为空数组');
+  if (analysisMode === 'evidence_backed') {
+    lines.push('- citation_ids 至少包含 1 个有效外部证据编号（按所有 claims 合计），否则本次观点无效');
+  }
   return lines.join('\n');
 }
 
@@ -285,4 +307,5 @@ export interface PerspectiveResult {
   summary: string;
   cites: string[];
   citations?: PerspectiveCitation[];
+  claims?: PerspectiveClaim[];
 }

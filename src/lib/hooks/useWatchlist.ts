@@ -11,6 +11,7 @@ import {
 import { createWatchlistSyncQueue, watchlistPendingStorageKey } from '@/lib/watchlist/client-sync';
 import { isDefaultWatchlist, mergeWatchlistGroups, type VersionedWatchlistSnapshot, type WatchlistSyncRequest } from '@/lib/watchlist/sync';
 import { trackEvent } from '@/lib/analytics/client';
+import { watchlistJsonRequest, watchlistJsonResult } from '@/lib/watchlist/api-client';
 
 type WatchlistSyncQueue = ReturnType<typeof createWatchlistSyncQueue>;
 export type WatchlistSyncStatus = 'local' | 'syncing' | 'synced' | 'conflict' | 'error';
@@ -41,16 +42,15 @@ function getBrowserSyncQueue(
     storage: window.localStorage,
     storageKey: watchlistPendingStorageKey(ownerId),
     put: async (request: WatchlistSyncRequest) => {
-      const response = await fetch('/api/watchlist/sync', {
+      const result = await watchlistJsonResult<unknown>('/api/watchlist/sync', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(request),
-      });
-      const body = await response.json().catch(() => null);
-      const snapshot = parseServerSnapshot(body);
+      }, 'watchlist_sync_failed');
+      const snapshot = parseServerSnapshot(result.body);
       if (!snapshot || snapshot.ownerId !== ownerId) return null;
-      if (response.status === 409) return { status: 'conflict' as const, snapshot };
-      return response.ok ? { status: 'saved' as const, snapshot } : null;
+      if (!result.ok) return result.status === 409 ? { status: 'conflict' as const, snapshot } : null;
+      return { status: 'saved' as const, snapshot };
     },
     applyCanonical: writeLocalWatchlist,
     onConflict: callbacks.onConflict,
@@ -60,9 +60,8 @@ function getBrowserSyncQueue(
 }
 
 async function fetchServerWatchlist() {
-  const response = await fetch('/api/watchlist/sync');
-  if (!response.ok) return null;
-  const body = await response.json();
+  const body = await watchlistJsonRequest<Record<string, unknown>>('/api/watchlist/sync', undefined, 'watchlist_sync_unavailable')
+    .catch(() => null);
   if (body?.mode !== 'server') return null;
   return parseServerSnapshot(body);
 }

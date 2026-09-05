@@ -27,4 +27,23 @@ describe('persona evidence prompt', () => {
     expect(message).toContain('来源 sec-company-facts · 单位 USD_MILLION · 截至 2025-09-27');
     expect(message).not.toContain('5 年财务（亿元）');
   });
+
+  it('makes the resolved analysis boundary explicit to the model', () => {
+    const structured = buildUserMessage({ ticker: 'AAPL', name: 'Apple', market: 'US' }, {
+      analysisMode: 'structured_only',
+    });
+    expect(structured).toContain('仅结构化数据');
+    expect(structured).toContain('不得暗示已核验新闻、公告、研报或市场情绪');
+
+    const evidenceBacked = buildUserMessage({
+      ticker: 'AAPL', name: 'Apple', market: 'US',
+      external_evidence: [{
+        citationId: 'web_1', title: 'Update', url: 'https://example.com', domain: 'example.com',
+        snippet: 'Update', sourceType: 'news', publishedAt: null,
+        fetchedAt: '2026-09-04T00:00:00Z', trustScore: 0.8, relevanceScore: 0.8,
+        qualityScore: 0.8, qualityFlags: [],
+      }],
+    }, { analysisMode: 'evidence_backed' });
+    expect(evidenceBacked).toContain('citation_ids 至少包含 1 个有效外部证据编号');
+  });
 });

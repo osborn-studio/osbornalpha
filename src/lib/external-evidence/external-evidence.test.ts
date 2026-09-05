@@ -197,6 +197,16 @@ describe('headline sentiment', () => {
   it('uses word boundaries for English terms', () => {
     expect(classifyHeadlineSentiment('Missile supplier announces meeting')).toBeNull();
   });
+
+  it('exposes language and aspect-level confidence', () => {
+    expect(assessHeadlineSentiment('公司 revenue 超预期但下调 guidance')).toMatchObject({
+      language: 'mixed',
+      aspects: {
+        earnings: { score: 0.5, confidence: 0.55, matches: ['超预期'] },
+        guidance: { score: -0.5, confidence: 0.55, matches: ['下调'] },
+      },
+    });
+  });
 });
 
 describe('evidence persistence records', () => {
@@ -225,6 +235,9 @@ describe('evidence persistence records', () => {
       event_cluster_id: result.citationId,
       corroboration_count: 1,
       corroborating_sources: [],
+      document_content_hash: null,
+      document_fetched_at: null,
+      document_paragraphs: [],
     });
     expect(rows.links[0]).toMatchObject({ ticker: 'AAPL', citation_id: result.citationId });
   });

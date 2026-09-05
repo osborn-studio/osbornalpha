@@ -1,12 +1,13 @@
 import type { CalendarEventKind } from '@/lib/brief/calendar';
 import type { WatchlistAlert } from '@/lib/supabase/database.types';
+import { WATCHLIST_METRIC_ALERT_DEFINITIONS } from './alert-metrics';
 
 export const WATCHLIST_ALERT_TYPES = [
-  'price', 'change_pct', 'volume_ratio', 'valuation', 'event', 'rating', 'perspective',
+  'price', 'change_pct', 'volume_ratio', 'valuation', 'metric', 'event', 'rating', 'perspective',
 ] as const satisfies readonly WatchlistAlert['alert_type'][];
 
 export const WATCHLIST_NUMERIC_ALERT_TYPES = [
-  'price', 'change_pct', 'volume_ratio', 'valuation',
+  'price', 'change_pct', 'volume_ratio', 'valuation', 'metric',
 ] as const satisfies readonly WatchlistAlert['alert_type'][];
 
 export const WATCHLIST_ALERT_OPERATORS = [
@@ -54,6 +55,7 @@ export const WATCHLIST_ALERT_CATALOG = {
   numericTypes: WATCHLIST_NUMERIC_ALERT_TYPES,
   operators: WATCHLIST_ALERT_OPERATORS,
   valuationMetrics: WATCHLIST_VALUATION_METRICS,
+  metricDefinitions: WATCHLIST_METRIC_ALERT_DEFINITIONS,
   values: {
     event: WATCHLIST_EVENT_KINDS,
     rating: WATCHLIST_RATING_VALUES,

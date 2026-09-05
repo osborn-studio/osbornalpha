@@ -9,6 +9,7 @@ import {
 import { getStockNews, getStockReports } from '@/lib/stocks/external-research';
 import type {
   BrokerConsensusView,
+  StockNewsItem,
   StockNewsResponse,
   StockReportItem,
   StockReportsResponse,
@@ -17,6 +18,11 @@ import type {
 import { deriveConsensus, filterConsensusReports, normalizeBrokerRating } from '@/lib/stocks/consensus';
 import { watchlistTimestampFreshness } from './freshness';
 import { EVIDENCE_QUALITY_FLAGS, type EvidenceQualityFlag } from '@/lib/external-evidence/types';
+import {
+  buildWatchlistResearchTimeline,
+  type WatchlistResearchChanges,
+  type WatchlistResearchTimelineItem,
+} from './research-timeline';
 
 export interface WatchlistResearchBundle {
   ticker: string;
@@ -26,6 +32,8 @@ export interface WatchlistResearchBundle {
   perspectiveSource: string | null;
   perspectivesGeneratedAt: string | null;
   perspectiveProvenance: PerspectiveProvenance | null;
+  timeline: WatchlistResearchTimelineItem[];
+  changes: WatchlistResearchChanges | null;
   refresh: {
     status: 'stored' | 'complete' | 'partial';
     refreshedAt: string | null;
@@ -166,6 +174,7 @@ export function mapStoredWatchlistResearch(
     };
   });
   const perspectives = stored.perspectives.map((row) => ({
+    id: row.id,
     persona: row.persona,
     name: row.persona,
     stance: row.stance,
@@ -173,12 +182,18 @@ export function mapStoredWatchlistResearch(
     summary: row.summary ?? '',
     cites: row.cites,
     citations: row.citations,
+    claims: row.claims,
   }));
   const latestPerspective = stored.perspectives[0];
   const perspectiveProvenance: PerspectiveProvenance | null = latestPerspective
     ? {
         modelVersion: latestPerspective.model_version ?? null,
         promptVersion: latestPerspective.prompt_version ?? null,
+        requestedAnalysisMode: latestPerspective.requested_analysis_mode ?? 'auto',
+        resolvedAnalysisMode: latestPerspective.resolved_analysis_mode
+          ?? (latestPerspective.evidence_result_count > 0 ? 'evidence_backed' : 'structured_only'),
+        evidenceStatus: latestPerspective.evidence_status
+          ?? (latestPerspective.evidence_result_count > 0 ? 'partial' : 'unavailable'),
         evidenceRequestId: latestPerspective.evidence_request_id ?? null,
         evidenceFetchedAt: latestPerspective.evidence_fetched_at ?? null,
         evidenceResultCount: Number.isSafeInteger(latestPerspective.evidence_result_count) && latestPerspective.evidence_result_count >= 0
@@ -189,7 +204,7 @@ export function mapStoredWatchlistResearch(
           : 0,
       }
     : null;
-  return {
+  const bundle: Omit<WatchlistResearchBundle, 'timeline' | 'changes'> = {
     ticker,
     news: {
       ticker,
@@ -200,6 +215,9 @@ export function mapStoredWatchlistResearch(
         url: row.url,
         snippet: row.snippet || '',
         sentiment: row.sentiment,
+        sentimentConfidence: row.sentiment_confidence,
+        sentimentLanguage: row.sentiment_language as StockNewsItem['sentimentLanguage'],
+        sentimentAspects: row.sentiment_aspects as StockNewsItem['sentimentAspects'],
         publishedAt: row.published_at,
         fetchedAt: row.fetched_at,
         trustScore: row.trust_score ?? 0,
@@ -224,6 +242,16 @@ export function mapStoredWatchlistResearch(
     perspectivesGeneratedAt: stored.perspectives[0]?.created_at ?? null,
     perspectiveProvenance,
     refresh: { status: 'stored', refreshedAt: latest([newsFetchedAt, reportsFetchedAt]), warnings: [] },
+  };
+  return {
+    ...bundle,
+    timeline: buildWatchlistResearchTimeline({
+      news: bundle.news.items,
+      reports: bundle.reports.items,
+      perspectives: bundle.perspectives,
+      perspectivesGeneratedAt: bundle.perspectivesGeneratedAt,
+    }),
+    changes: null,
   };
 }
 

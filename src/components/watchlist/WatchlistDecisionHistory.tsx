@@ -38,12 +38,12 @@ export function WatchlistDecisionHistory({ item, onRestored }: {
                 <div className="flex items-center gap-2">
                   <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
                   <span className="min-w-0 flex-1 text-text-dim">{t('historyVersion', { version: entry.version })}</span>
-                  <time className="shrink-0 font-mono text-[10px] text-text-muted">{new Date(entry.changed_at).toLocaleString()}</time>
+                  <time className="shrink-0 font-mono text-[11px] text-text-muted">{new Date(entry.changed_at).toLocaleString()}</time>
                   {entry.version < item.decision_version && (
                     <button type="button" disabled={model.restoring} onClick={async () => {
                       const restored = await model.restore(entry, item.decision_version);
                       if (restored) onRestored(restored as WatchlistOverviewItemRow);
-                    }} className="inline-flex h-7 items-center gap-1 rounded border border-border px-2 text-[10px] text-text-dim disabled:opacity-40">
+                    }} className="inline-flex h-7 items-center gap-1 rounded border border-border px-2 text-[11px] text-text-dim disabled:opacity-40">
                       <RotateCcw className="h-3 w-3" aria-hidden="true" />{t('historyRestore')}
                     </button>
                   )}

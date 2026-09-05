@@ -32,6 +32,28 @@ describe('evaluateWatchlistAlert', () => {
     expect(result).toMatchObject({ triggered: false, reason: 'missing_data', observedValue: 101 });
   });
 
+  it('evaluates configured metric values and rejects stale snapshots', () => {
+    const metricAlert: WatchlistAlert = {
+      ...baseAlert,
+      alert_type: 'metric',
+      operator: 'lte',
+      threshold_numeric: 30,
+      config: { metric: 'rsi14' },
+    };
+    const fresh = evaluateWatchlistAlert(metricAlert, {
+      ...observation,
+      metricDataStatus: 'fresh',
+      metrics: { rsi14: 28 },
+    });
+    expect(fresh).toMatchObject({ triggered: true, observedValue: 28 });
+    expect(fresh.eventKey).toContain('metric:rsi14:lte:30');
+    expect(evaluateWatchlistAlert(metricAlert, {
+      ...observation,
+      metricDataStatus: 'stale',
+      metrics: { rsi14: 28 },
+    })).toMatchObject({ triggered: false, reason: 'missing_data', observedValue: 28 });
+  });
+
   it('respects cooldown while still returning the latest observation', () => {
     const result = evaluateWatchlistAlert({ ...baseAlert, last_triggered_at: '2026-09-04T11:30:00Z' }, observation);
     expect(result.reason).toBe('cooldown');

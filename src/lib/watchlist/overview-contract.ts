@@ -2,6 +2,7 @@ import type { StockUniverse, WatchlistItem } from '@/lib/supabase/database.types
 import type { MarketPhaseKey } from '@/lib/today/clock';
 import type { HistoricalWatchlistMetrics } from './analytics';
 import type { WatchlistOverviewCursor } from './overview-pagination';
+import type { WatchlistOverviewQueryCursor } from './overview-query';
 import type { WatchlistResearchSummary } from './research-summary';
 
 export type DataStatus = 'fresh' | 'delayed' | 'stale' | 'unavailable';
@@ -68,7 +69,7 @@ export interface WatchlistOverviewDatabasePage {
   total: number;
   rows: WatchlistOverviewPageRow[];
   hasMore?: boolean;
-  nextCursor?: WatchlistOverviewCursor | null;
+  nextCursor?: WatchlistOverviewCursor | WatchlistOverviewQueryCursor | null;
 }
 
 export interface WatchlistOverviewRow {

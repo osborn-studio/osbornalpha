@@ -14,6 +14,7 @@ import {
 } from '@/lib/watchlist/server-repository';
 import { validateSelectableSecuritiesWithClient } from '@/lib/watchlist/security-validation';
 import { watchlistApiError } from '@/lib/watchlist/api-error';
+import { isWatchlistPlanLimitError } from '@/lib/watchlist/plan-limits';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -72,6 +73,9 @@ export async function POST(request: Request) {
       command.mutationId!,
     );
     if (imported.error) {
+      if (isWatchlistPlanLimitError(imported.error, 'item')) {
+        return watchlistApiError('watchlist_item_plan_limit', 403);
+      }
       if (imported.error.code === '22023') {
         return watchlistApiError('invalid_portable_watchlist', 400);
       }

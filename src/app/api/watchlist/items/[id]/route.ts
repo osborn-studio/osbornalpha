@@ -4,9 +4,9 @@ import { parseWatchlistDecisionCommand } from '@/lib/watchlist/decision';
 import {
   loadWatchlistItem,
   loadWatchlistItemDecisionHistory,
-  updateWatchlistItemDecision,
 } from '@/lib/watchlist/server-repository';
 import { watchlistApiError } from '@/lib/watchlist/api-error';
+import { executeWatchlistDecision } from '@/lib/watchlist/decision-service';
 
 interface Context { params: Promise<{ id: string }> }
 
@@ -35,15 +35,11 @@ export async function PATCH(request: Request, { params }: Context) {
   if (!command) return watchlistApiError('invalid_decision_patch', 400);
   const { id } = await params;
 
-  const { data, error } = await updateWatchlistItemDecision(client, id, command.patch, command.expectedVersion);
-  if (error?.code === '40001' || error?.message === 'watchlist_decision_conflict') {
-    const current = await loadWatchlistItem(client, user.id, id);
-    return watchlistApiError('watchlist_decision_conflict', 409, { details: { currentItem: current.data ?? null } });
+  const result = await executeWatchlistDecision(client, user.id, id, command);
+  if (result.status === 'conflict') {
+    return watchlistApiError('watchlist_decision_conflict', 409, { details: { currentItem: result.currentItem } });
   }
-  if (error?.code === 'P0002' || error?.message === 'watchlist_item_not_found') {
-    return watchlistApiError('watchlist_item_not_found', 404);
-  }
-  if (error) return watchlistApiError('watchlist_decision_update_failed', 503);
-  if (!data) return watchlistApiError('watchlist_item_not_found', 404);
-  return NextResponse.json({ item: data });
+  if (result.status === 'not_found') return watchlistApiError('watchlist_item_not_found', 404);
+  if (result.status === 'failed') return watchlistApiError('watchlist_decision_update_failed', 503);
+  return NextResponse.json({ item: result.item });
 }
