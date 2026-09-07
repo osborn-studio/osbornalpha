@@ -12,6 +12,7 @@ describe('Watchlist external scheduler contract', () => {
     expect(workflow).toContain('CRON_SECRET: ${{ secrets.CRON_SECRET }}');
     expect(workflow).toContain('WATCHLIST_SCHEDULER_URL: ${{ vars.WATCHLIST_SCHEDULER_URL }}');
     expect(workflow).toContain('https://*');
+    expect(workflow).toContain("vars.WATCHLIST_SCHEDULER_ENABLED == 'true'");
   });
 
   it('serially invokes both high-frequency Watchlist endpoints', () => {

@@ -120,7 +120,7 @@ supabase db push                                    # 应用所有未应用迁�
 - 缓解：保持 `LLM_PROVIDER=deepseek`、`LLM_MODEL=deepseek-v4-flash`，必要时降 `topN` 或用 `?skipLLM=true` 隔离数据管线；不得通过切换到未复核定价的模型绕过门禁。
 
 ### 5.4 cron 未跑 / 被滥用
-- 排查：日级任务在 Vercel `vercel.json`；高频 `/api/cron/watchlist-dispatch` 与 `/api/cron/watchlist-perspectives` 由 GitHub Actions `Watchlist external scheduler` 每 5 分钟调用。该 workflow 使用 repository secret `CRON_SECRET`（必须与 Vercel Production 完全一致）和 repository variable `WATCHLIST_SCHEDULER_URL`（HTTPS 生产基地址）。查看 GitHub Actions 运行记录及端点响应，`metric-refresh` 必须先于 `metric-alerts`，`skipped_dependency` 表示上游失败，`watchlist_cron_job_timeout` 表示单任务超过独立时限。
+- 排查：日级任务在 Vercel `vercel.json`；高频 `/api/cron/watchlist-dispatch` 与 `/api/cron/watchlist-perspectives` 由 GitHub Actions `Watchlist external scheduler` 每 5 分钟调用。该 workflow 使用 repository secret `CRON_SECRET`（必须与 Vercel Production 完全一致）、repository variable `WATCHLIST_SCHEDULER_URL`（HTTPS 生产基地址）和 `WATCHLIST_SCHEDULER_ENABLED=true`。新建或迁移期间保持该开关为 `false`，待最新应用部署成功后再开启，避免旧版本端点缺失时反复失败。查看 GitHub Actions 运行记录及端点响应，`metric-refresh` 必须先于 `metric-alerts`，`skipped_dependency` 表示上游失败，`watchlist_cron_job_timeout` 表示单任务超过独立时限。
 - 加固：设 `CRON_SECRET`，裸调 `/api/cron/*` 应返回 401。
 
 ### 5.5 Review 提醒未送达或重复
