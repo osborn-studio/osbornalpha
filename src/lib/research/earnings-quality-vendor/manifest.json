@@ -3,12 +3,12 @@
   "skillId": "finance.earnings-interpretation",
   "engineVersion": "0.1.0-candidate",
   "sourceRepository": "gilosbornhello/osborn-skill-catalog",
-  "sourceCommit": "8f19b94d447007da36e12ece9aa870b7a6cd0c41",
+  "sourceCommit": "21669af543f5a5c4a85108e4829c16ac910b198e",
   "files": [
     {
       "name": "earnings-quality.mjs",
       "sourcePath": "skills/finance/earnings-interpretation/scripts/earnings-quality.mjs",
-      "sha256": "6bc63fbffd38f40511abbc75f62be6f8422aa9fefbe21f2a872611a427e00c65"
+      "sha256": "ee5221a3ff34125ed411e4c1cf6edc162e778825b039a0e829661ccea68c99d9"
     },
     {
       "name": "earnings-quality.d.mts",
@@ -26,6 +26,6 @@
       "sha256": "e78da09c923338bfc54ba5e83b4ea48e1499e04b4f58044901ff9f4a2fee172b"
     }
   ],
-  "sha256": "48d27322cae87ad7ce412037a00275ba1614855892a8f0d45184effcc681b6a7",
+  "sha256": "9306e4d50b0df1188f5241d9f0042ec8a5c25e9bc41478186820896a366c21aa",
   "license": "UNLICENSED — private OSBORN team use; no third-party code copied"
 }

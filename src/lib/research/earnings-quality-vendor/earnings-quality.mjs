@@ -27,7 +27,7 @@ export function validateInput(raw) {
   // Round-trip removes object aliases; rejects cycles and bounds host/tool input.
   let serialized;
   try { serialized = JSON.stringify(raw); } catch { fail('Not JSON serializable'); }
-  if (!serialized || serialized.length > 131072) fail('Input exceeds 128 KiB');
+  if (!serialized || new TextEncoder().encode(serialized).byteLength > 131072) fail('Input exceeds 128 KiB');
   // Validate raw first: JSON must not silently turn NaN/Infinity into null.
   shape(raw, ['schemaVersion', 'entity', 'asOf', 'periods', 'sources', 'facts', 'thesis']);
   if (raw.schemaVersion !== '1') fail('Unsupported schema version');
