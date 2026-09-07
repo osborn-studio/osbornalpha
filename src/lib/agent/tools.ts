@@ -3,6 +3,7 @@ import { createDecision, getPortfolio, listDecisions } from '@/lib/portfolio/sto
 import { parseDecisionInput } from '@/lib/portfolio/validate';
 import { classifyMarket } from '@/lib/utils';
 import { createArtifact } from '@/lib/portfolio/artifacts-store';
+import { reviewEarningsQuality } from '@/lib/research/earnings-quality';
 
 export interface ToolCtx { origin: string; }
 export interface AgentTool {
@@ -23,6 +24,10 @@ const tickerSchema = {
 const enc = encodeURIComponent;
 
 export const TOOLS: AgentTool[] = [
+  { name: 'review_earnings_quality', category: '研究',
+    description: '财报质量候选：读取有来源的两期全年事实JSON，确定性计算现金转化、净利率、变动和前置数值Thesis条件。与OsbornModel同一固定内核。不是ticker取数、PDF抽取、完整研报或投资建议；缺事实不得编造；返回来源与不可比原因。不联网、不保存、不交易。',
+    inputSchema: {type:'object',additionalProperties:false,properties:{input_json:{type:'string',maxLength:131072,description:'完整QualityInput JSON：schemaVersion="1",entity,asOf,periods{current/prior:{start,end}},sources[{id,title,url,filedAt}],facts[{id,metric(revenue|net_income|operating_cash_flow|capex),role(actual|estimate),value,entity,period,currency,unit(ones|thousands|millions),basis,sourceId,locator}],thesis[{id,text,createdAt,rule?:{metric(cash_conversion|net_margin),operator(gte|lte),threshold}}]。不自动补缺值。'}},required:['input_json']},
+    handler: async (a)=>reviewEarningsQuality(a.input_json) },
   { name: 'search', category: '行情',
     description: '按名称或代码解析股票 → ticker。当 ticker 不确定时先调用。',
     inputSchema: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] },

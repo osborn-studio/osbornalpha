@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "skillId": "finance.earnings-interpretation",
+  "engineVersion": "0.1.0-candidate",
+  "sourceRepository": "gilosbornhello/osborn-skill-catalog",
+  "sourceCommit": "8f19b94d447007da36e12ece9aa870b7a6cd0c41",
+  "files": [
+    {
+      "name": "earnings-quality.mjs",
+      "sourcePath": "skills/finance/earnings-interpretation/scripts/earnings-quality.mjs",
+      "sha256": "6bc63fbffd38f40511abbc75f62be6f8422aa9fefbe21f2a872611a427e00c65"
+    },
+    {
+      "name": "earnings-quality.d.mts",
+      "sourcePath": "skills/finance/earnings-interpretation/scripts/earnings-quality.d.mts",
+      "sha256": "2a50f4726febe885793e89b21155879e9ea37f9c7addf967a6b960cbbbbe558a"
+    },
+    {
+      "name": "quality-fixtures.json",
+      "sourcePath": "skills/finance/earnings-interpretation/evals/quality-fixtures.json",
+      "sha256": "aea817b4cc747d3a62b7348608967aa2a36b8ad81421e8eeb6393119c5604f75"
+    },
+    {
+      "name": "METHOD.md",
+      "sourcePath": "skills/finance/earnings-interpretation/references/quality-acceptance.md",
+      "sha256": "e78da09c923338bfc54ba5e83b4ea48e1499e04b4f58044901ff9f4a2fee172b"
+    }
+  ],
+  "sha256": "48d27322cae87ad7ce412037a00275ba1614855892a8f0d45184effcc681b6a7",
+  "license": "UNLICENSED — private OSBORN team use; no third-party code copied"
+}

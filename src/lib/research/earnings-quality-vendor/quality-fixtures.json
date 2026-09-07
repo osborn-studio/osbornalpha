@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "evaluationScope": "Deterministic sourced-fact regression. Not live document extraction or an LLM A/B benchmark.",
+  "cases": [
+    {
+      "id": "synthetic-cfo18-ni12",
+      "label": "合成回归：经营现金流18 / 净利润12",
+      "kind": "synthetic",
+      "input": {
+        "schemaVersion": "1",
+        "entity": "OSBORN Synthetic Issuer",
+        "asOf": "2025-03-01",
+        "periods": {"current": {"start": "2024-01-01", "end": "2024-12-31"}, "prior": {"start": "2023-01-01", "end": "2023-12-31"}},
+        "sources": [{"id": "synthetic-statement", "title": "Original synthetic regression packet — not a real issuer", "url": "https://example.com/osborn/synthetic-earnings-regression", "filedAt": "2025-02-01"}],
+        "facts": [
+          {"id": "current-revenue", "metric": "revenue", "role": "actual", "value": 120, "entity": "OSBORN Synthetic Issuer", "period": {"start": "2024-01-01", "end": "2024-12-31"}, "currency": "CNY", "unit": "millions", "basis": "synthetic-consolidated", "sourceId": "synthetic-statement", "locator": "table1/current/revenue"},
+          {"id": "current-ni", "metric": "net_income", "role": "actual", "value": 12, "entity": "OSBORN Synthetic Issuer", "period": {"start": "2024-01-01", "end": "2024-12-31"}, "currency": "CNY", "unit": "millions", "basis": "synthetic-consolidated", "sourceId": "synthetic-statement", "locator": "table1/current/net_income"},
+          {"id": "current-cfo", "metric": "operating_cash_flow", "role": "actual", "value": 18, "entity": "OSBORN Synthetic Issuer", "period": {"start": "2024-01-01", "end": "2024-12-31"}, "currency": "CNY", "unit": "millions", "basis": "synthetic-consolidated", "sourceId": "synthetic-statement", "locator": "table1/current/operating_cash_flow"},
+          {"id": "current-capex", "metric": "capex", "role": "actual", "value": 3, "entity": "OSBORN Synthetic Issuer", "period": {"start": "2024-01-01", "end": "2024-12-31"}, "currency": "CNY", "unit": "millions", "basis": "synthetic-consolidated", "sourceId": "synthetic-statement", "locator": "table1/current/capex-outflow-magnitude"},
+          {"id": "prior-revenue", "metric": "revenue", "role": "actual", "value": 100, "entity": "OSBORN Synthetic Issuer", "period": {"start": "2023-01-01", "end": "2023-12-31"}, "currency": "CNY", "unit": "millions", "basis": "synthetic-consolidated", "sourceId": "synthetic-statement", "locator": "table1/prior/revenue"},
+          {"id": "prior-ni", "metric": "net_income", "role": "actual", "value": 10, "entity": "OSBORN Synthetic Issuer", "period": {"start": "2023-01-01", "end": "2023-12-31"}, "currency": "CNY", "unit": "millions", "basis": "synthetic-consolidated", "sourceId": "synthetic-statement", "locator": "table1/prior/net_income"},
+          {"id": "prior-cfo", "metric": "operating_cash_flow", "role": "actual", "value": 8, "entity": "OSBORN Synthetic Issuer", "period": {"start": "2023-01-01", "end": "2023-12-31"}, "currency": "CNY", "unit": "millions", "basis": "synthetic-consolidated", "sourceId": "synthetic-statement", "locator": "table1/prior/operating_cash_flow"},
+          {"id": "prior-capex", "metric": "capex", "role": "actual", "value": 2, "entity": "OSBORN Synthetic Issuer", "period": {"start": "2023-01-01", "end": "2023-12-31"}, "currency": "CNY", "unit": "millions", "basis": "synthetic-consolidated", "sourceId": "synthetic-statement", "locator": "table1/prior/capex-outflow-magnitude"}
+        ],
+        "thesis": [
+          {"id": "cash-conversion-condition", "text": "Numeric condition only: CFO/net income must be at least 1.", "createdAt": "2023-12-31", "rule": {"metric": "cash_conversion", "operator": "gte", "threshold": 1}},
+          {"id": "customer-durability", "text": "Customer relationships are durable; the supplied facts do not establish contractual lock-in.", "createdAt": "2023-12-31"}
+        ]
+      },
+      "expected": {"cashConversion": 1.5, "priorCashConversion": 0.8, "currentNetMargin": 0.1, "priorNetMargin": 0.1, "currentCashLessCapex": 15, "priorCashLessCapex": 6, "cashRelation": "greater", "revenueGrowth": 0.2, "netIncomeGrowth": 0.2, "operatingCashFlowGrowth": 1.25, "capexGrowth": 0.5},
+      "historical": {
+        "kind": "retained-synthetic-cloud-output-defect",
+        "artifact": "cloud-earnings6/01-research-earnings-commentary-baseline.result.json",
+        "sha256": "56ab8cf341bd44309d986e884ed1b1805145dfdf10af5e717ea228e320053b1b",
+        "excerpt": "经营现金流18低于净利润12？",
+        "defect": "The retained paragraph contains this contradictory comparison despite CFO18 > NI12. This fixture recreates those two operands; it is not a full replay of the historical prompt or model run."
+      }
+    },
+    {
+      "id": "apple-fy2024-filing-transcription",
+      "label": "Apple FY2024 / FY2023：公开年报人工核对样本",
+      "kind": "public-filing-transcription",
+      "input": {
+        "schemaVersion": "1",
+        "entity": "Apple Inc.",
+        "asOf": "2024-11-01",
+        "periods": {"current": {"start": "2023-10-01", "end": "2024-09-28"}, "prior": {"start": "2022-09-25", "end": "2023-09-30"}},
+        "sources": [{"id": "apple-2024-10k", "title": "Apple Inc. FY2024 Form 10-K · accession 0000320193-24-000123", "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019324000123/aapl-20240928.htm", "filedAt": "2024-11-01"}],
+        "facts": [
+          {"id": "aapl-2024-revenue", "metric": "revenue", "role": "actual", "value": 391035, "entity": "Apple Inc.", "period": {"start": "2023-10-01", "end": "2024-09-28"}, "currency": "USD", "unit": "millions", "basis": "US-GAAP-consolidated", "sourceId": "apple-2024-10k", "locator": "Form10-K printed p29 / Consolidated Statements of Operations / Total net sales / 2024"},
+          {"id": "aapl-2024-ni", "metric": "net_income", "role": "actual", "value": 93736, "entity": "Apple Inc.", "period": {"start": "2023-10-01", "end": "2024-09-28"}, "currency": "USD", "unit": "millions", "basis": "US-GAAP-consolidated", "sourceId": "apple-2024-10k", "locator": "Form10-K printed p29 / Consolidated Statements of Operations / Net income / 2024"},
+          {"id": "aapl-2024-cfo", "metric": "operating_cash_flow", "role": "actual", "value": 118254, "entity": "Apple Inc.", "period": {"start": "2023-10-01", "end": "2024-09-28"}, "currency": "USD", "unit": "millions", "basis": "US-GAAP-consolidated", "sourceId": "apple-2024-10k", "locator": "Form10-K printed p33 / Consolidated Statements of Cash Flows / Cash generated by operating activities / 2024"},
+          {"id": "aapl-2024-capex", "metric": "capex", "role": "actual", "value": 9447, "entity": "Apple Inc.", "period": {"start": "2023-10-01", "end": "2024-09-28"}, "currency": "USD", "unit": "millions", "basis": "US-GAAP-consolidated", "sourceId": "apple-2024-10k", "locator": "Form10-K printed p33 / Payments for acquisition of property, plant and equipment / 2024 / positive outflow magnitude from displayed (9447)"},
+          {"id": "aapl-2023-revenue", "metric": "revenue", "role": "actual", "value": 383285, "entity": "Apple Inc.", "period": {"start": "2022-09-25", "end": "2023-09-30"}, "currency": "USD", "unit": "millions", "basis": "US-GAAP-consolidated", "sourceId": "apple-2024-10k", "locator": "Form10-K printed p29 / Consolidated Statements of Operations / Total net sales / 2023"},
+          {"id": "aapl-2023-ni", "metric": "net_income", "role": "actual", "value": 96995, "entity": "Apple Inc.", "period": {"start": "2022-09-25", "end": "2023-09-30"}, "currency": "USD", "unit": "millions", "basis": "US-GAAP-consolidated", "sourceId": "apple-2024-10k", "locator": "Form10-K printed p29 / Consolidated Statements of Operations / Net income / 2023"},
+          {"id": "aapl-2023-cfo", "metric": "operating_cash_flow", "role": "actual", "value": 110543, "entity": "Apple Inc.", "period": {"start": "2022-09-25", "end": "2023-09-30"}, "currency": "USD", "unit": "millions", "basis": "US-GAAP-consolidated", "sourceId": "apple-2024-10k", "locator": "Form10-K printed p33 / Consolidated Statements of Cash Flows / Cash generated by operating activities / 2023"},
+          {"id": "aapl-2023-capex", "metric": "capex", "role": "actual", "value": 10959, "entity": "Apple Inc.", "period": {"start": "2022-09-25", "end": "2023-09-30"}, "currency": "USD", "unit": "millions", "basis": "US-GAAP-consolidated", "sourceId": "apple-2024-10k", "locator": "Form10-K printed p33 / Payments for acquisition of property, plant and equipment / 2023 / positive outflow magnitude from displayed (10959)"}
+        ],
+        "thesis": [
+          {"id": "illustrative-cash-threshold", "text": "Illustrative prewritten condition, not a historical investment claim: CFO/net income at least 1.2.", "createdAt": "2023-09-30", "rule": {"metric": "cash_conversion", "operator": "gte", "threshold": 1.2}},
+          {"id": "illustrative-margin-threshold", "text": "Illustrative prewritten condition: net margin at least 25%.", "createdAt": "2023-09-30", "rule": {"metric": "net_margin", "operator": "gte", "threshold": 0.25}},
+          {"id": "illustrative-services-thesis", "text": "Services revenue durability requires additional business evidence; these four metrics do not establish it.", "createdAt": "2023-09-30"}
+        ]
+      },
+      "expected": {"cashConversion": 1.2615643936161134, "priorCashConversion": 1.1396773029537606, "currentNetMargin": 0.23971255769943867, "priorNetMargin": 0.2530623426432028, "currentCashLessCapex": 108807, "priorCashLessCapex": 99584, "cashRelation": "greater", "revenueGrowth": 0.020219940775141214, "netIncomeGrowth": -0.033599670086086914, "operatingCashFlowGrowth": 0.06975566069312394, "capexGrowth": -0.13796879277306323},
+      "verification": {
+        "checkedAt": "2026-09-07",
+        "method": "Independent manual transcription of eight reported values and arithmetic reference answers; source schema importer not used to create expected answers.",
+        "filingIndex": "https://www.sec.gov/Archives/edgar/data/320193/000032019324000123/0000320193-24-000123-index.htm",
+        "filingDate": "2024-11-01",
+        "fiscalPeriodNote": "Form10-K printed p21 and p34: FY2024 has 52 weeks, FY2023 has 53 weeks. Starts follow immediately after preceding year-end. Growth is reported, not week-normalized.",
+        "capexSignNote": "The cash flow statement displays investing outflows in parentheses; capex input is the positive outflow magnitude. Cash less capex is not FCFF.",
+        "thesisNote": "Thresholds and timestamps are original illustrative test setup, not an assertion that anyone held these views historically."
+      }
+    }
+  ]
+}
