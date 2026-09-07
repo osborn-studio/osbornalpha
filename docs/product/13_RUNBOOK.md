@@ -8,7 +8,7 @@ osbornalpha 生产运维。托管 Vercel（osbornalpha.com，阿里云 DNS）；
 
 ## 1. 部署
 
-正常发布走 GitHub Actions：`Application checks` 先验证代码、浏览器流程与本地 Supabase migrations；成功后 `Watchlist production release` 负责应用生产迁移、验证 schema、构建 Vercel 并执行真实登录态探针。`vercel.json` 已关闭 `main` 的 Git Integration 自动部署，避免新代码在生产迁移之前抢先上线；PR Preview 不受影响。不要在应用生产迁移前用最新 release marker 阻断前置 CI，否则会形成迁移发布死锁。手动发布：
+`main` 使用 Vercel Git Integration 自动部署。Production build 会先验证最新 Watchlist schema marker，数据库未迁移时构建失败关闭。`Application checks` 与 `Watchlist production release` 仍保留为独立验证和受控迁移链路，但不再是 Vercel 自动部署的前置条件。不要在应用生产迁移前用最新 release marker 阻断前置 CI，否则会形成迁移发布死锁。手动发布：
 
 ```bash
 npm test
@@ -120,7 +120,7 @@ supabase db push                                    # 应用所有未应用迁�
 - 缓解：保持 `LLM_PROVIDER=deepseek`、`LLM_MODEL=deepseek-v4-flash`，必要时降 `topN` 或用 `?skipLLM=true` 隔离数据管线；不得通过切换到未复核定价的模型绕过门禁。
 
 ### 5.4 cron 未跑 / 被滥用
-- 排查：Vercel cron 在 `vercel.json`；`/api/cron/watchlist-dispatch` 分派告警、运营健康、Review 提醒、指标、观点结果和研究刷新；`/api/cron/watchlist-perspectives` 每 5 分钟恢复未被即时 Worker 处理的 AI 任务。Vercel Dashboard → Crons 查看执行记录，并检查响应中各 job 的独立状态。`metric-refresh` 必须先于 `metric-alerts`，`skipped_dependency` 表示上游失败，`watchlist_cron_job_timeout` 表示单任务超过独立时限。
+- 排查：日级任务在 Vercel `vercel.json`；高频 `/api/cron/watchlist-dispatch` 与 `/api/cron/watchlist-perspectives` 由 GitHub Actions `Watchlist external scheduler` 每 5 分钟调用。该 workflow 使用 repository secret `CRON_SECRET`（必须与 Vercel Production 完全一致）和 repository variable `WATCHLIST_SCHEDULER_URL`（HTTPS 生产基地址）。查看 GitHub Actions 运行记录及端点响应，`metric-refresh` 必须先于 `metric-alerts`，`skipped_dependency` 表示上游失败，`watchlist_cron_job_timeout` 表示单任务超过独立时限。
 - 加固：设 `CRON_SECRET`，裸调 `/api/cron/*` 应返回 401。
 
 ### 5.5 Review 提醒未送达或重复
@@ -136,5 +136,5 @@ supabase db push                                    # 应用所有未应用迁�
 - **日常巡检**：Vercel Deployments（构建/函数错误率）、Vercel Crons（每日两个 job 是否绿）、Supabase Dashboard（DB 用量、Auth 用户数、SMTP 配额）。
 - **健康探针**：`npm run watchlist:provider-check`（外部 Provider）、`npm run watchlist:production-check`（Schema 与队列健康）、`npm run watchlist:rls-check`（双账号只读隔离）、`GET /api/brief/preview?skipLLM=true`（数据管线）、`GET /api/diag/tushare`（数据源 token）。
 - **Watchlist 历史与告警**：`/api/cron/alerts/watchlist` 每 15 分钟将健康快照写入 `service_alert_runs(check_name='watchlist_15m')`；异常复用 Email/Telegram 运维通道。
-- **Watchlist 调度器**：Vercel 每 15 分钟调用 `/api/cron/watchlist-dispatch`。报价告警与运营健康每轮执行；Review 提醒、指标、观点结果和研究刷新分散到每小时四个 slot。AI Perspective 队列由独立的 `/api/cron/watchlist-perspectives` 每 5 分钟恢复，前端会在刷新或重新打开标的时继续跟踪活跃任务；数据库租约和幂等键阻止重复执行与旧 Worker 覆盖。
+- **Watchlist 调度器**：GitHub Actions 每 5 分钟顺序调用 `/api/cron/watchlist-dispatch` 与 `/api/cron/watchlist-perspectives`，适配 Vercel Hobby 的日级 Cron 限制。dispatcher 的 120 分钟补跑窗口会吸收 Actions 的调度延迟；数据库租约和幂等键阻止重试或重叠运行造成重复执行。报价告警与运营健康每轮执行；Review 提醒、指标、观点结果和研究刷新按 dispatcher slot 分散执行。
 - **on-call 基本动作**：①确认影响面（全站 vs 单接口）；②先看 Vercel 部署日志 + Supabase 状态；③能 env 回滚就回滚 + redeploy；④数据/LLM 单点故障走 §5 降级；⑤事后记录根因与改进项。

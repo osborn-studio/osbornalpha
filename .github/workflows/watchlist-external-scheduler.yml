@@ -1,0 +1,43 @@
+name: Watchlist external scheduler
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: watchlist-external-scheduler
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      WATCHLIST_SCHEDULER_URL: ${{ vars.WATCHLIST_SCHEDULER_URL }}
+    steps:
+      - name: Dispatch due Watchlist work and recover AI perspectives
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error title=Missing CRON_SECRET::Set the repository CRON_SECRET secret to the Vercel Production value."
+            exit 1
+          fi
+          case "$WATCHLIST_SCHEDULER_URL" in
+            https://*) ;;
+            *)
+              echo "::error title=Invalid WATCHLIST_SCHEDULER_URL::Set an HTTPS production base URL repository variable."
+              exit 1
+              ;;
+          esac
+          call_cron() {
+            curl --fail-with-body --retry 2 --retry-all-errors --max-time 300 \
+              --header "Authorization: Bearer ${CRON_SECRET}" \
+              "${WATCHLIST_SCHEDULER_URL}$1"
+          }
+          call_cron /api/cron/watchlist-dispatch
+          call_cron /api/cron/watchlist-perspectives

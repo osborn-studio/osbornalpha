@@ -8,15 +8,14 @@ interface VercelCron {
 }
 
 describe('Watchlist Vercel cron contract', () => {
-  it('registers the dispatcher and a shorter recovery loop for AI work', () => {
+  it('keeps high-frequency Watchlist work on the external scheduler', () => {
     const config = JSON.parse(readFileSync(join(process.cwd(), 'vercel.json'), 'utf8')) as {
       crons?: VercelCron[];
+      git?: { deploymentEnabled?: Record<string, boolean> };
     };
     const watchlistCrons = (config.crons ?? []).filter((cron) => cron.path.includes('watchlist'));
 
-    expect(watchlistCrons).toEqual([
-      { path: '/api/cron/watchlist-dispatch', schedule: '2,17,32,47 * * * *' },
-      { path: '/api/cron/watchlist-perspectives', schedule: '*/5 * * * *' },
-    ]);
+    expect(watchlistCrons).toEqual([]);
+    expect(config.git?.deploymentEnabled?.main).not.toBe(false);
   });
 });

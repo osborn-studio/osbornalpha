@@ -1,11 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "node --import tsx scripts/vercel-build.ts",
-  "git": {
-    "deploymentEnabled": {
-      "main": false
-    }
-  },
   "regions": ["hnd1"],
   "crons": [
     {
@@ -23,14 +18,6 @@
     {
       "path": "/api/cron/alerts/ai",
       "schedule": "15 16 * * *"
-    },
-    {
-      "path": "/api/cron/watchlist-dispatch",
-      "schedule": "2,17,32,47 * * * *"
-    },
-    {
-      "path": "/api/cron/watchlist-perspectives",
-      "schedule": "*/5 * * * *"
     },
     {
       "path": "/api/cron/securities-sync?region=asia",
