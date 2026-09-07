@@ -1,7 +1,7 @@
 export type WatchlistProviderMode = 'configured' | 'fallback' | 'unavailable';
 
 export interface WatchlistProviderReadiness {
-  id: 'search' | 'hk-financials' | 'structured-research' | 'official-documents' | 'trading-calendar';
+  id: 'search' | 'hk-financials' | 'structured-research' | 'official-documents' | 'trading-calendar' | 'sec-companyfacts' | 'yahoo-chart';
   mode: WatchlistProviderMode;
   credentialConfigured: boolean;
 }
@@ -11,6 +11,7 @@ const SEARCH_PROVIDER_KEYS = {
   tavily: 'TAVILY_API_KEY',
   brave: 'BRAVE_SEARCH_API_KEY',
   serper: 'SERPER_API_KEY',
+  openai: 'OPENAI_API_KEY',
 } as const;
 
 function configured(value: string | undefined): boolean {
@@ -47,6 +48,8 @@ export function watchlistProviderReadiness(environment: Environment = process.en
     { id: 'structured-research', mode: structuredResearch ? 'configured' : 'fallback', credentialConfigured: configured(environment.STRUCTURED_RESEARCH_API_TOKEN) },
     { id: 'official-documents', mode: officialDocuments ? 'configured' : 'fallback', credentialConfigured: configured(environment.OFFICIAL_DOCUMENT_API_TOKEN) },
     { id: 'trading-calendar', mode: tradingCalendar ? 'configured' : 'fallback', credentialConfigured: configured(environment.TRADING_CALENDAR_API_KEY) },
+    { id: 'sec-companyfacts', mode: 'configured', credentialConfigured: false },
+    { id: 'yahoo-chart', mode: 'configured', credentialConfigured: false },
   ];
 }
 

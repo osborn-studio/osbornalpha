@@ -27,8 +27,15 @@ function stableId(prefix: string, value: string): string {
   return `${prefix}_${createHash('sha256').update(value).digest('hex').slice(0, 12)}`;
 }
 
-async function stockIdentity(ticker: string) {
-  const quote = await fetchEastmoneyQuote(ticker).catch(() => null);
+export interface StockResearchRequestOptions {
+  signal?: AbortSignal;
+}
+
+async function stockIdentity(ticker: string, signal?: AbortSignal) {
+  const quote = await fetchEastmoneyQuote(ticker, signal).catch((error) => {
+    if (signal?.aborted) throw error;
+    return null;
+  });
   return { name: quote?.name || ticker, market: quote?.market, price: quote?.price ?? null };
 }
 
@@ -50,8 +57,12 @@ function evidenceMeta(
   };
 }
 
-export async function getStockNews(ticker: string, freshnessDays = 14): Promise<StockNewsResponse> {
-  const identity = await stockIdentity(ticker);
+export async function getStockNews(
+  ticker: string,
+  freshnessDays = 14,
+  options: StockResearchRequestOptions = {},
+): Promise<StockNewsResponse> {
+  const identity = await stockIdentity(ticker, options.signal);
   const snapshot = await searchExternalEvidence({
     ticker,
     name: identity.name,
@@ -59,7 +70,7 @@ export async function getStockNews(ticker: string, freshnessDays = 14): Promise<
     scopes: ['news', 'filing'],
     freshnessDays,
     limit: 15,
-  });
+  }, options);
   const items: StockNewsItem[] = snapshot.results.map((item) => {
     const sentiment = assessHeadlineSentiment(`${item.title} ${item.snippet}`);
     return {
@@ -147,8 +158,11 @@ export function mergeDuplicateReports(items: StockReportItem[]): StockReportItem
   return [...merged.values()];
 }
 
-export async function getStockReports(ticker: string): Promise<StockReportsResponse> {
-  const identity = await stockIdentity(ticker);
+export async function getStockReports(
+  ticker: string,
+  options: StockResearchRequestOptions = {},
+): Promise<StockReportsResponse> {
+  const identity = await stockIdentity(ticker, options.signal);
   const market = identity.market ?? classifyMarket(ticker);
   const isAShare = /\.(SH|SZ|BJ)$/i.test(ticker);
   const canUseTushare = isAShare && isTushareConfigured();
@@ -160,14 +174,17 @@ export async function getStockReports(ticker: string): Promise<StockReportsRespo
       scopes: ['broker'],
       freshnessDays: 180,
       limit: 12,
-    }),
+    }, options),
     canUseTushare
       ? fetchTushareReportRc(ticker).then((items) => ({ items, error: null as string | null })).catch(() => ({ items: [], error: 'tushare_unavailable' }))
       : Promise.resolve({ items: [], error: null as string | null }),
     market === 'HK' || market === 'US'
-      ? loadConfiguredStructuredResearch(ticker, market).catch((): StructuredResearchLoad => ({
+      ? loadConfiguredStructuredResearch(ticker, market, { signal: options.signal }).catch((error): StructuredResearchLoad => {
+          if (options.signal?.aborted) throw error;
+          return {
           provider: 'structured-research-http', configured: true, items: [], warnings: ['structured_research_provider_unavailable'],
-        }))
+          };
+        })
       : Promise.resolve({ provider: 'structured-research-http', configured: false, items: [], warnings: [] } as StructuredResearchLoad),
   ]);
 

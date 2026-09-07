@@ -9,6 +9,10 @@ const mocks = vi.hoisted(() => ({
   computed: vi.fn(),
   metricSnapshots: vi.fn(),
   research: vi.fn(),
+  peer: vi.fn(),
+  composition: vi.fn(),
+  alertSummaries: vi.fn(),
+  providerHealth: vi.fn(),
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -26,6 +30,10 @@ vi.mock('@/lib/watchlist/metric-snapshot-repository', () => ({
   loadWatchlistMetricSnapshots: mocks.metricSnapshots,
 }));
 vi.mock('@/lib/watchlist/research-repository', () => ({ loadWatchlistResearchSummaries: mocks.research }));
+vi.mock('@/lib/watchlist/peer-metrics-repository', () => ({ loadWatchlistPeerMetrics: mocks.peer }));
+vi.mock('@/lib/watchlist/composition-repository', () => ({ loadWatchlistComposition: mocks.composition }));
+vi.mock('@/lib/watchlist/alert-summary-repository', () => ({ loadWatchlistAlertSummaries: mocks.alertSummaries }));
+vi.mock('@/lib/watchlist/provider-health-repository', () => ({ loadWatchlistProviderHealth: mocks.providerHealth }));
 
 import { GET } from './route';
 
@@ -67,6 +75,28 @@ describe('GET /api/watchlist/overview', () => {
         perspectiveDivergence: false, latestPerspectiveAt: null,
       },
     });
+    mocks.peer.mockResolvedValue({
+      AAPL: {
+        value: {
+          market: 'US', currency: 'USD', industry: 'Technology',
+          marketRelativeStrengthPercentile: 80, marketRelativeStrengthSampleSize: 50,
+          industryPePercentile: 60, industryPeSampleSize: 20,
+          industryPbPercentile: 70, industryPbSampleSize: 20,
+          marketLiquidityPercentile: 90, marketLiquiditySampleSize: 50,
+          averageTradedAmount20: 1_000_000, watchlistMarketCapSharePct: 100,
+          watchlistMarketCapSampleSize: 1,
+        },
+        asOf: new Date().toISOString(), source: 'shared-peer-snapshots', status: 'fresh', warnings: [],
+      },
+    });
+    mocks.composition.mockResolvedValue({
+      value: { totalSecurities: 1, markets: [{ key: 'US', count: 1, sharePct: 100 }], industries: [], currencies: [], correlations: [], highCorrelationCount: 0 },
+      asOf: new Date().toISOString(), source: 'watchlist-composition-snapshots', status: 'fresh', warnings: ['watchlist_correlation_unavailable'],
+    });
+    mocks.alertSummaries.mockResolvedValue({
+      'item-1': { enabledCount: 2, unreadCount: 1, failedDeliveryCount: 0, latestTriggeredAt: '2026-09-04T12:00:00Z' },
+    });
+    mocks.providerHealth.mockResolvedValue({});
     mocks.from.mockImplementation((table: string) => ({
       select: () => ({
         in: () => table === 'stocks_universe'
@@ -82,6 +112,8 @@ describe('GET /api/watchlist/overview', () => {
     const body = await response.json();
     expect(body).toMatchObject({
       ownerId: 'user-1', version: 7, total: 1, partial: false,
+      dataStatus: 'complete', warnings: [],
+      composition: { value: { totalSecurities: 1 } },
       page: { offset: null, limit: 50, cursor: null, nextCursor: null, hasMore: false },
     });
     expect(body.rows[0]).toMatchObject({
@@ -89,11 +121,39 @@ describe('GET /api/watchlist/overview', () => {
       identity: { name: 'Apple' },
       market: null,
       history: { status: 'fresh' },
+      peer: { status: 'fresh', value: { marketRelativeStrengthPercentile: 80 } },
       research: { source: 'stored-research', status: 'fresh', value: { recentNewsCount: 1 } },
+      alerts: { status: 'fresh', value: { enabledCount: 2, unreadCount: 1, failedDeliveryCount: 0 } },
     });
     expect(mocks.computed).not.toHaveBeenCalled();
     expect(mocks.metricSnapshots).toHaveBeenCalledWith(expect.anything(), ['AAPL'], '1y');
+    expect(mocks.peer).toHaveBeenCalledWith(expect.anything(), ['AAPL'], '1y');
+    expect(mocks.alertSummaries).toHaveBeenCalledWith(expect.anything(), ['item-1']);
     expect(body.rows[0].history).toMatchObject({ status: 'fresh', source: 'snapshot-source' });
+  });
+
+  it('keeps the overview usable when optional sources fail', async () => {
+    mocks.research.mockRejectedValueOnce(new Error('research down'));
+    mocks.peer.mockRejectedValueOnce(new Error('peer down'));
+    mocks.alertSummaries.mockRejectedValueOnce(new Error('alerts down'));
+
+    const response = await GET(new Request('https://example.test/api/watchlist/overview'));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      dataStatus: 'partial',
+      warnings: expect.arrayContaining([
+        'watchlist_research_summaries_unavailable',
+        'watchlist_peer_metrics_unavailable',
+        'watchlist_alert_summaries_unavailable',
+      ]),
+    });
+    expect(body.rows[0]).toMatchObject({
+      item: { ticker: 'AAPL' },
+      research: { status: 'unavailable', value: null },
+      peer: { status: 'unavailable', value: null },
+      alerts: { status: 'unavailable', value: null },
+    });
   });
 
   it('supports a targeted ticker read for an unloaded quick view', async () => {

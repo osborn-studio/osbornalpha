@@ -98,19 +98,33 @@ async function withRetry<T>(
   ticker: string,
   source: string,
   fetcher: (signal: AbortSignal) => Promise<T | null>,
+  outerSignal?: AbortSignal,
 ): Promise<{ value: T | null; attempt: SourceAttempt }> {
   const startedAt = Date.now();
   let attempts = 0;
   let failureOutcome: Exclude<SourceOutcome, 'success' | 'empty'> | null = null;
   for (let index = 0; index < 2; index += 1) {
+    outerSignal?.throwIfAborted();
     attempts += 1;
     try {
-      const value = await withQuoteSourceTimeout(fetcher, SOURCE_ATTEMPT_TIMEOUT_MS);
+      const value = await withQuoteSourceTimeout(
+        (attemptSignal) => fetcher(outerSignal
+          ? AbortSignal.any([attemptSignal, outerSignal])
+          : attemptSignal),
+        SOURCE_ATTEMPT_TIMEOUT_MS,
+      );
       if (value) return { value, attempt: { ticker, source, outcome: 'success', attempts, duration_ms: Date.now() - startedAt } };
     } catch (error) {
+      if (outerSignal?.aborted) throw outerSignal.reason ?? error;
       failureOutcome = classifySourceFailure(error);
     }
-    if (index === 0) await new Promise((resolve) => setTimeout(resolve, 200));
+    if (index === 0) await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, 200);
+      outerSignal?.addEventListener('abort', () => {
+        clearTimeout(timer);
+        reject(outerSignal.reason);
+      }, { once: true });
+    });
   }
   return {
     value: null,
@@ -118,13 +132,19 @@ async function withRetry<T>(
   };
 }
 
-export async function resolveQuote(ticker: string, options: { skipDatagateway?: boolean; force?: boolean; cacheTtlMs?: number } = {}): Promise<QuoteResolution> {
+export async function resolveQuote(ticker: string, options: {
+  skipDatagateway?: boolean;
+  force?: boolean;
+  cacheTtlMs?: number;
+  signal?: AbortSignal;
+} = {}): Promise<QuoteResolution> {
+  options.signal?.throwIfAborted();
   const cached = !options.force ? readQuoteCache(ticker, options.cacheTtlMs ?? 60_000) : null;
   if (cached) return { quote: cached, attempts: [], selectedSource: 'cache' };
   const attempts: SourceAttempt[] = [];
   for (const source of quoteSourcesFor(classifyMarket(ticker))) {
     if (options.skipDatagateway && source.name === 'datagateway-wind') continue;
-    const result = await withRetry(ticker, source.name, (signal) => source.fetch(ticker, signal));
+    const result = await withRetry(ticker, source.name, (signal) => source.fetch(ticker, signal), options.signal);
     attempts.push(result.attempt);
     if (result.value) {
       const quote = result.value as unknown as QuoteShape;
@@ -133,7 +153,7 @@ export async function resolveQuote(ticker: string, options: { skipDatagateway?: 
     }
   }
   if (/\.(SH|SZ|BJ)$/i.test(ticker)) {
-    const result = await withRetry(ticker, 'tushare', () => tushareFallback(ticker));
+    const result = await withRetry(ticker, 'tushare', () => tushareFallback(ticker), options.signal);
     attempts.push(result.attempt);
     if (result.value) {
       writeQuoteCache(ticker, result.value);

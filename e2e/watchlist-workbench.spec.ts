@@ -23,6 +23,27 @@ function quote(ticker: string, index: number) {
 async function mockWatchlistCore(page: Page) {
   await page.route('**/api/watchlist/sync', (route) => route.fulfill({ status: 401, contentType: 'application/json', body: '{}' }));
   await page.route('**/api/events', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
+  await page.route('**/api/watchlist/activity/**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({
+      news: { ticker: 'AAPL', items: [], meta: { status: 'complete', providers: ['test-research'], fetchedAt: '2026-09-03T20:00:00.000Z', warnings: [] } },
+      reports: { ticker: 'AAPL', items: [], consensus: null, meta: { status: 'complete', providers: ['test-research'], fetchedAt: '2026-09-03T20:00:00.000Z', warnings: [] } },
+      perspectives: [], perspectiveSource: null, perspectivesGeneratedAt: null, perspectiveProvenance: null,
+      facts: [{ id: 'fact-1', kind: 'market_event', statement: 'Quarterly revenue exceeded consensus expectations', direction: 'positive', confidence: 0.88, observedAt: '2026-09-03T18:00:00.000Z', sourceIds: ['source-1'], sourceCount: 1, conflicted: false, metrics: { sentiment: 0.6 } }],
+      sources: [{ id: 'source-1', kind: 'news', title: 'Apple reports stronger quarterly revenue', publisher: 'Test Research Wire', url: 'https://example.com/apple-results', publishedAt: '2026-09-03T18:00:00.000Z', fetchedAt: '2026-09-03T20:00:00.000Z', trustScore: 0.9, qualityScore: 0.88, qualityFlags: [], corroborationCount: 2, eligibleForAnalysis: true, qualityIssues: [] }],
+      quality: { totalSources: 1, eligibleSources: 1, datedSources: 1, corroboratedSources: 1, conflictedFacts: 0, averageQualityScore: 0.88, warnings: [] },
+      timeline: [{ id: 'timeline-1', kind: 'news', title: 'Apple reports stronger quarterly revenue', source: 'Test Research Wire', url: 'https://example.com/apple-results', at: '2026-09-03T18:00:00.000Z', detail: 'Quarterly revenue exceeded consensus expectations', read: false }], changes: null,
+      activity: { generatedAt: '2026-09-03T20:00:00.000Z', lastSeenAt: null, unseenCount: 1, warnings: [] },
+      workflow: {
+        research: { status: 'ready', sourceCount: 1, eligibleSourceCount: 1, perspectiveCount: 0, refreshedAt: '2026-09-03T20:00:00.000Z' },
+        alerts: { unread: 0, failedDelivery: 0, latestTriggeredAt: null },
+        review: { bucket: 'unscheduled', due: false },
+        decision: { status: 'inbox', version: 0, hasThesis: false, lastChangedAt: null },
+        nextAction: 'generate_perspectives',
+        priority: { score: 50, reasons: ['perspectives_missing'] },
+      },
+    }),
+  }));
   await page.route('**/api/quote/batch**', async (route) => {
     const tickers = new URL(route.request().url()).searchParams.get('tickers')?.split(',') ?? [];
     await route.fulfill({
@@ -103,15 +124,37 @@ test('watchlist workbench filters, changes presets and opens a multi-chart quick
   await page.getByRole('button', { name: 'Market', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sort by PE (TTM)' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Saved table views' }).click();
+  await page.getByPlaceholder('View name').fill('Market review');
+  await page.getByRole('button', { name: 'Save current view' }).click();
+  const savedViews = page.getByRole('dialog', { name: 'Saved table views' });
+  const marketView = savedViews.getByRole('group', { name: 'Market review' });
+  await marketView.getByRole('button', { name: 'Rename saved view' }).click();
+  await savedViews.getByRole('textbox', { name: 'Rename saved view' }).fill('Core market');
+  await savedViews.getByRole('button', { name: 'Save view name' }).click();
+  const coreMarketView = savedViews.getByRole('group', { name: 'Core market' });
+  await coreMarketView.getByRole('button', { name: 'Move saved view down' }).click();
+  await expect(savedViews.getByRole('group').nth(1)).toHaveAccessibleName('Core market');
+  await coreMarketView.getByRole('button', { name: 'Use as the default table view' }).click();
+  await expect(coreMarketView.getByRole('button', { name: 'Stop using as the default table view' })).toBeVisible();
+  await page.getByRole('button', { name: 'Saved table views' }).click();
+  await page.getByRole('button', { name: 'Valuation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Sort by PE (TTM)' })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Market', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Sort by PE (TTM)' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Saved table views' }).click();
   await page.getByRole('button', { name: 'Valuation review' }).click();
   await expect(page.getByRole('button', { name: 'Sort by PE (TTM)' })).toBeVisible();
 
-  await page.getByPlaceholder('Search ticker or company').fill('AAPL');
+  const tableSearch = page.getByPlaceholder('Search ticker or company');
+  await tableSearch.fill('AAPL');
   await expect(page.getByRole('link', { name: 'AAPL' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'NVDA' })).toHaveCount(0);
-  await page.getByPlaceholder('Search ticker or company').fill('');
+  await tableSearch.fill('');
   const appleRow = page.getByRole('row').filter({ has: page.getByRole('link', { name: 'AAPL' }) });
   const nvidiaRow = page.getByRole('row').filter({ has: page.getByRole('link', { name: 'NVDA' }) });
+  await expect(tableSearch).toHaveValue('');
+  await expect(nvidiaRow).toBeVisible();
   await appleRow.focus();
   await appleRow.press('ArrowUp');
   await expect(nvidiaRow).toBeFocused();
@@ -128,9 +171,32 @@ test('watchlist workbench filters, changes presets and opens a multi-chart quick
   await expect(companyResize).toHaveAttribute('aria-valuenow', '198');
   await page.screenshot({ path: 'test-results/watchlist-table-desktop.png', fullPage: true });
 
+  await appleRow.getByRole('checkbox').check();
+  await nvidiaRow.getByRole('checkbox').check();
+  await page.getByRole('button', { name: 'Compare', exact: true }).click();
+  const comparison = page.getByRole('dialog', { name: 'Security comparison' });
+  await expect(comparison).toBeVisible();
+  await expect(comparison.getByRole('table', { name: 'Selected security metric comparison' })).toBeVisible();
+  await expect(comparison.getByText('AAPL', { exact: true })).toBeVisible();
+  await expect(comparison.getByText('NVDA', { exact: true })).toBeVisible();
+  await expect(comparison.getByText('PE (TTM)', { exact: true })).toBeVisible();
+  await page.screenshot({ path: 'test-results/watchlist-comparison-desktop.png', fullPage: false });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+  const nvidiaHeading = comparison.getByRole('columnheader').filter({ hasText: 'NVDA' });
+  await expect(nvidiaHeading).toBeInViewport();
+  const nvidiaBounds = await nvidiaHeading.boundingBox();
+  expect(nvidiaBounds).not.toBeNull();
+  expect(nvidiaBounds!.x + nvidiaBounds!.width).toBeLessThanOrEqual(391);
+  await page.screenshot({ path: 'test-results/watchlist-comparison-mobile.png', fullPage: false });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await comparison.getByRole('button', { name: 'Close comparison' }).click();
+  await expect(comparison).toBeHidden();
+
   await appleRow.getByRole('button', { name: 'View' }).click();
   const drawer = page.getByRole('dialog', { name: 'Quick quote for AAPL' });
   await expect(drawer).toBeVisible();
+  await expect(drawer.getByText('Generate evidence-backed perspectives')).toBeVisible();
   await expect(drawer.getByRole('tab', { name: 'Chart' })).toHaveAttribute('aria-selected', 'true');
   await expect(drawer.locator('canvas').first()).toBeVisible();
   await drawer.getByRole('button', { name: 'Baseline' }).click();
@@ -153,9 +219,15 @@ test('watchlist workbench filters, changes presets and opens a multi-chart quick
   await page.screenshot({ path: 'test-results/watchlist-financials-desktop.png', fullPage: true });
 
   await drawer.getByRole('tab', { name: 'Research' }).click();
-  await expect(drawer.getByRole('tab', { name: /Activity timeline/ })).toBeVisible();
-  await drawer.getByRole('tab', { name: /AI perspectives/ }).click();
+  await expect(drawer.getByRole('button', { name: /Market facts/ })).toBeVisible();
+  await expect(drawer.getByRole('heading', { name: 'Quarterly revenue exceeded consensus expectations' })).toBeVisible();
+  await expect(drawer.getByRole('button', { name: /News & reports/ })).toBeVisible();
+  await drawer.getByRole('button', { name: /News & reports/ }).click();
+  await expect(drawer.getByRole('region', { name: 'News and report sources' }).getByText('Apple reports stronger quarterly revenue')).toBeVisible();
+  await expect(drawer.locator('summary').filter({ hasText: 'Activity timeline' })).toBeVisible();
+  await drawer.getByRole('button', { name: /AI perspectives/ }).click();
   await expect(drawer.getByRole('button', { name: 'Generate perspectives' })).toBeVisible();
+  await expect(drawer.getByRole('heading', { name: 'Apple' })).toBeInViewport();
   await page.screenshot({ path: 'test-results/watchlist-research-desktop.png', fullPage: true });
 
   await drawer.getByRole('button', { name: 'Close quick quote' }).click();
@@ -192,6 +264,13 @@ test('mobile filters, add-security search and board keyboard movement remain usa
   }));
 
   await page.goto('/watchlist');
+  await expect(page.getByRole('checkbox', { name: 'Select AAPL' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Select securities' }).click();
+  await expect(page.getByRole('checkbox', { name: 'Select AAPL' })).toBeVisible();
+  await page.getByRole('checkbox', { name: 'Select AAPL' }).check();
+  await expect(page.getByText('1 selected', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Exit selection mode' }).click();
+  await expect(page.getByRole('checkbox', { name: 'Select AAPL' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Advanced filters' }).click();
   const marketFilter = page.locator('label').filter({ hasText: 'Filter market' }).getByRole('combobox');
   await expect(marketFilter).toBeVisible();
@@ -271,5 +350,16 @@ test('watchlist shell remains bounded across supported breakpoints', async ({ pa
       await expect(page.getByRole('table', { name: 'Watchlist table view' })).toBeVisible();
     }
     await page.screenshot({ path: `test-results/watchlist-${viewport.width}.png`, fullPage: false });
+  }
+
+  await page.getByRole('button', { name: 'Toggle theme' }).click();
+  await page.getByRole('button', { name: /Light/ }).click();
+  await expect(page.locator('html')).toHaveClass(/theme-light/);
+  await expect(page.getByText('Color scheme')).toBeHidden();
+  for (const viewport of [{ width: 360, height: 800 }, { width: 1440, height: 1000 }]) {
+    await page.setViewportSize(viewport);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(overflow).toBeLessThanOrEqual(1);
+    await page.screenshot({ path: `test-results/watchlist-light-${viewport.width}.png`, fullPage: false });
   }
 });

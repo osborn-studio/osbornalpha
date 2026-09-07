@@ -9,9 +9,13 @@ import type { WatchlistAlertCandidate, WatchlistAlertObservation } from './alert
 import { normalizeWatchlistRating } from './alert-catalog';
 import {
   WATCHLIST_METRIC_ALERT_KEYS,
+  WATCHLIST_PEER_ALERT_KEYS,
+  watchlistPeerMetricAlertValue,
   watchlistMetricAlertValue,
   watchlistMetricSnapshotStatus,
 } from './alert-metrics';
+import type { DataEnvelope } from './overview-contract';
+import type { WatchlistPeerMetrics } from './peer-metrics';
 
 function dateKey(value: string | null | undefined): string {
   return value || 'unknown-date';
@@ -77,6 +81,22 @@ export function observationFromMetricSnapshot(
     metricDataStatus: watchlistMetricSnapshotStatus(snapshot, now),
     metrics: Object.fromEntries(
       WATCHLIST_METRIC_ALERT_KEYS.map((key) => [key, watchlistMetricAlertValue(snapshot, key)]),
+    ),
+  };
+}
+
+export function observationFromPeerMetrics(
+  envelope: DataEnvelope<WatchlistPeerMetrics> | null,
+  now = new Date(),
+): WatchlistAlertObservation {
+  const observedAt = envelope?.asOf ?? now.toISOString();
+  return {
+    ...emptyObservation(observedAt),
+    metricDataStatus: envelope?.status === 'fresh' || envelope?.status === 'delayed'
+      ? 'fresh'
+      : envelope?.status === 'stale' ? 'stale' : 'unavailable',
+    metrics: Object.fromEntries(
+      WATCHLIST_PEER_ALERT_KEYS.map((key) => [key, watchlistPeerMetricAlertValue(envelope, key)]),
     ),
   };
 }

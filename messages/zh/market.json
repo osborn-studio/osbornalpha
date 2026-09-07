@@ -39,6 +39,17 @@
       "merging": "正在合并视图设置",
       "retry": "视图设置已存本机 · 重试同步"
     },
+    "attention": {
+      "label": "股票池待处理事项",
+      "title": "需要处理",
+      "updated": "刚刚更新",
+      "items": {
+        "delivery": "{count} 条提醒投递失败",
+        "alert": "{count} 条未读提醒",
+        "review": "{count} 项判断待复核",
+        "data": "{count} 项数据异常"
+      }
+    },
     "syncConflict": {
       "title": "另一台设备已修改股票池",
       "body": "本机修改仍被保留。请选择使用云端版本，或用本机版本明确覆盖。",
@@ -214,6 +225,9 @@
       "buckets": { "overdue": "已逾期", "due_today": "今日到期", "upcoming": "即将到期", "scheduled": "已排期", "unscheduled": "未排期" },
       "scheduledFor": "复核日期 {date}",
       "notScheduled": "尚未设置复核日期",
+      "alertReason": "主张提醒已触发",
+      "sourceClaim": "来源主张",
+      "triggerEvidence": "观测值 {observed} · 阈值 {threshold}",
       "snoozeDays": "延后 {count} 天",
       "complete": "完成复核",
       "refresh": "刷新复核队列",
@@ -239,12 +253,31 @@
         "quoteStatusAriaLabel": "当前筛选标的的报价状态",
         "loading": "加载中",
         "median": "中位涨跌",
+        "sample": "有效样本 {count}/{total}",
         "breadth": "涨跌广度"
       },
     "loadingQuotes": "⏳ 报价加载中…",
     "addSecurity": "添加标的",
     "ariaLabel": "股票池表格视图",
     "caption": "股票池表格视图：真实报价、日内区间、流动性和报价状态，可按表头排序",
+    "missingData": {
+      "states": {
+        "loading": "数据仍在加载",
+        "insufficient": "有效样本不足，暂时无法计算该指标",
+        "unavailable": "数据源暂时不可用",
+        "notProvided": "当前数据源未提供该字段",
+        "stale": "当前只有已过期的数据快照",
+        "delayed": "当前只有延迟数据"
+      },
+      "coverage": "覆盖 {available}/{total}",
+      "observations": "{count} 个观测值"
+    },
+    "providers": {
+      "marketData": "行情源",
+      "researchFeed": "研究数据",
+      "financialData": "财务数据",
+      "savedResearch": "已保存研究"
+    },
     "headers": {
       "ticker": "股票代码",
       "name": "公司名称",
@@ -262,10 +295,10 @@
       "volumeRatio": "量比",
       "amplitude": "振幅",
       "dayPosition": "日内位置",
-      "oneYearReturn": "1 年收益",
+      "periodReturn": "区间收益",
       "volatility": "年化波动",
       "maxDrawdown": "最大回撤",
-      "rangePosition": "52 周位置",
+      "rangePosition": "区间位置",
       "rsi14": "RSI（14）",
       "macdHistogram": "MACD 柱",
       "bollingerPosition": "布林带位置",
@@ -273,18 +306,47 @@
       "excessReturn": "相对基准",
       "beta": "Beta",
       "volumeZScore20": "异常量能",
+      "relativeStrengthRank": "市场强弱",
+      "pePercentile": "行业 PE 分位",
+      "pbPercentile": "行业 PB 分位",
+      "liquidityPercentile": "市场流动性",
+      "averageTradedAmount20": "20 日平均成交额",
+      "marketCapShare": "自选市值占比",
       "research": "近期研究",
+      "alerts": "提醒",
       "decision": "跟踪状态",
       "quality": "数据覆盖",
       "updated": "行情状态",
       "group": "分组"
     },
+    "alertsSummary": "{enabled} 条启用规则 · {unread} 条未读触发 · {failed} 条投递失败",
+    "alertsFailed": "提醒投递失败",
+    "openResearch": "打开研究",
     "sortAriaLabel": "按{label}排序",
+    "methodology": {
+      "open": "查看{label}口径",
+      "tooltip": "来源：{source} · 窗口：{window} · 最少样本：{observations} · 比较范围：{scope}",
+      "notApplicable": "不适用",
+      "sources": { "quote": "行情快照", "history": "历史指标快照", "peer": "同业指标快照", "research": "已存储研究数据" },
+      "windows": { "snapshot": "当前快照", "selected_history": "所选历史区间", "14d": "滚动 14 天" },
+      "scopes": { "global": "跨市场标准化比较", "single_market": "仅限单一市场/币种", "market_peer": "市场内分位", "industry_peer": "行业内分位", "watchlist_market": "自选列表市场组内占比" }
+    },
     "presetAriaLabel": "指标视图",
     "presets": {
       "market": "行情",
+      "relative": "横向",
       "valuation": "估值",
       "risk": "风险"
+    },
+    "composition": {
+      "label": "自选列表构成",
+      "scopeAll": "完整自选列表 · {count} 个标的",
+      "dataStatus": "构成数据",
+      "largestMarket": "最大市场占比",
+      "largestIndustry": "最大行业占比",
+      "correlation": "可比标的相关性",
+      "highPairs": "{count} 对高相关 · 已测 {total} 对",
+      "pending": "等待对齐历史数据"
     },
     "filters": {
       "search": "搜索代码或名称",
@@ -300,6 +362,8 @@
       "tagPlaceholder": "输入完整标签",
       "metric": "指标",
       "noMetric": "不筛选指标",
+      "singleMarketRequired": "需选择单一市场",
+      "singleMarketSort": "货币金额指标需先选择单一市场后才能排序。",
       "historyRange": "指标区间",
       "minimum": "最小值",
       "maximum": "最大值",
@@ -327,7 +391,77 @@
       "removeTag": "移除标签",
       "move": "移动",
       "remove": "删除",
+      "workflow": "工作流",
+      "workflowLimit": "批量工作流最多支持 {count} 个标的",
+      "compare": "比较",
+      "compareLimit": "每次请选择 2 至 5 只标的进行比较",
+      "enter": "选择标的",
+      "exit": "退出选择模式",
       "clear": "清除选择"
+    },
+    "comparison": {
+      "title": "标的横向比较",
+      "subtitle": "已选 {count} 只 · 历史指标采用 {range} 窗口",
+      "close": "关闭比较",
+      "ariaLabel": "已选标的指标对比",
+      "metric": "指标",
+      "missingSummary": "有 {count} 项指标因所有已选标的均无可用数据而隐藏。",
+      "openFirst": "检查数据",
+      "issues": {
+        "mixedCurrency": "价格和市值使用不同币种，原始数值不可直接等同比较",
+        "mixedMarket": "相对排名来自不同市场的同类样本",
+        "mixedIndustry": "估值倍数横跨不同行业",
+        "differentBenchmarks": "风险和超额收益指标采用了不同基准",
+        "staleData": "至少一个标的使用过期或不可用行情"
+      },
+      "groups": {
+        "market": "市场行情",
+        "valuation": "估值",
+        "performance": "收益表现",
+        "risk": "风险与技术面",
+        "workflow": "研究工作流"
+      }
+    },
+    "bulkWorkflow": {
+      "title": "批量工作流",
+      "close": "关闭批量工作流",
+      "tabsLabel": "批量工作流类型",
+      "tabs": {
+        "research": "研究",
+        "alert": "告警",
+        "review": "复盘"
+      },
+      "researchAction": "刷新所选标的研究",
+      "alertAction": "创建告警",
+      "scheduleAction": "安排复盘",
+      "completeAction": "完成复盘",
+      "completeConfirm": "确认解决所选复盘？",
+      "reviewDate": "复盘日期",
+      "running": "处理中…",
+      "retry": "重试失败项",
+      "resume": "恢复请求",
+      "cancel": "取消",
+      "confirm": "确认",
+      "unavailable": "{count} 个所选标的尚无服务端记录，无法执行此操作。",
+      "error": "批量工作流未能完成。",
+      "resultLabel": "批量工作流结果",
+      "unknownError": "未知错误",
+      "errors": {
+        "rateLimited": "研究刷新频率已达上限",
+        "researchPlanLimit": "研究功能已达套餐上限",
+        "itemNotFound": "标的已不在当前自选列表中",
+        "researchFailed": "研究刷新失败",
+        "alertPlanLimit": "告警数量已达套餐上限",
+        "alertFailed": "创建告警失败",
+        "decisionConflict": "决策已在其他设备上更新",
+        "reviewFailed": "复盘更新失败"
+      },
+      "result": {
+        "succeeded": "成功",
+        "unchanged": "未变化",
+        "conflicted": "冲突",
+        "failed": "失败"
+      }
     },
     "columns": {
       "action": "自定义列",
@@ -354,6 +488,13 @@
       "namePlaceholder": "视图名称",
       "save": "保存当前视图",
       "delete": "删除已保存视图",
+      "rename": "重命名已保存视图",
+      "renameSave": "保存视图名称",
+      "renameCancel": "取消重命名",
+      "moveUp": "上移已保存视图",
+      "moveDown": "下移已保存视图",
+      "setDefault": "设为表格默认视图",
+      "unsetDefault": "取消表格默认视图",
       "empty": "还没有已保存视图"
     },
     "quickView": "操作",
@@ -361,13 +502,53 @@
     "mobile": {
       "sparkline": "{ticker} 历史价格趋势",
       "return": "收益",
-      "volatility": "波动"
+      "volatility": "波动",
+      "research": "近期研究",
+      "unreadAlerts": "{count} 条未读提醒",
+      "alertFailures": "{count} 条提醒投递失败"
     },
     "overview": {
       "loading": "正在加载自选数据",
       "loadMore": "加载更多分析数据",
       "loadingMore": "正在加载分析数据…",
+      "snapshotSort": "排序与筛选采用 {value} 的持久化快照；实时行情仍用于非查询列。",
       "sortBlocked": "加载全部自选记录后，才能按分析指标排序。"
+    },
+    "health": {
+      "label": "数据状态中心",
+      "title": "{count} 项数据需要注意",
+      "checkedAt": "检查于 {value}",
+      "lastSuccess": "最近成功：{value}。",
+      "retry": "重试受影响数据",
+      "warnings": {
+        "computedOverview": "实时行情与历史计算暂不可用；判断数据仍可使用。",
+        "metricSnapshots": "持久化指标快照暂不可用；分析列可能为空。",
+        "identities": "证券名称与行业资料暂不可用，代码仍可识别。",
+        "research": "新闻、研报与研究摘要暂不可用。",
+        "peerMetrics": "市场和行业同类比较暂不可用。",
+        "composition": "股票池构成与相关性暂不可用。",
+        "alerts": "提醒摘要暂不可用，现有提醒规则不受影响。",
+        "providerHealth": "暂时无法确认外部数据源运行状态。",
+        "correlation": "当前没有满足样本要求的相关性配对。",
+        "compositionStale": "股票池构成快照需要更新。",
+        "compositionTimestamp": "股票池构成快照缺少有效时间。",
+        "researchStale": "研究资料已有一段时间未更新。",
+        "researchExpired": "研究资料已过期，需要重新获取。",
+        "generic": "部分可选数据暂不可用；核心股票池仍可继续使用。"
+      },
+      "capabilities": {
+        "degraded": "{markets} 市场的 {features} 数据源运行不稳定，当前正使用降级能力。",
+        "unavailable": "{markets} 市场的 {features} 数据源已暂时停用，等待健康探测恢复。"
+      },
+      "features": {
+        "quote": "行情",
+        "intradayChart": "分时图",
+        "historyChart": "历史图表",
+        "totalReturn": "总回报",
+        "financials": "财务数据",
+        "news": "新闻",
+        "reports": "研报"
+      }
     },
     "dayPositionTitle": "当前价格位于今日区间的 {value}%",
     "researchDivergence": "有分歧",
@@ -506,7 +687,68 @@
       "discardChanges": "放弃并关闭",
       "research": {
         "title": "新闻与研究",
+        "sections": {
+          "label": "研究内容分层",
+          "facts": "市场事实",
+          "sources": "新闻与研报",
+          "perspectives": "AI 观点",
+          "activity": "动态"
+        },
+        "facts": {
+          "empty": "暂无经过验证的市场事实",
+          "confidence": "可信度 {value}%",
+          "sourceCount": "该事件包含 {count} 个来源",
+          "conflicted": "来源对事件方向存在分歧",
+          "kinds": { "market_event": "市场事件", "filing": "公司公告", "broker_view": "券商观点" },
+          "directions": { "positive": "正面", "neutral": "中性", "negative": "负面", "unknown": "方向未知" },
+          "metrics": { "sentiment": "情绪", "targetPriceMin": "目标价下限", "targetPriceMax": "目标价上限", "targetChangePct": "目标价变动" }
+        },
+        "sources": {
+          "title": "新闻与研报来源",
+          "filter": "筛选研究来源",
+          "total": "全部来源",
+          "eligible": "AI 可用",
+          "dated": "有发布日期",
+          "averageQuality": "平均质量",
+          "quality": "质量 {value}%",
+          "corroborated": "{count} 个独立来源佐证",
+          "conflictedFacts": "有 {count} 个事件的来源方向存在明显冲突，纳入投资判断前请检查原始来源。",
+          "included": "可用于分析",
+          "excluded": "已从 AI 上下文排除",
+          "empty": "该筛选下暂无来源",
+          "kinds": { "all": "全部", "news": "新闻", "filing": "公告", "report": "研报" }
+        },
+        "workflow": {
+          "label": "下一步",
+          "open": "处理",
+          "priority": "P{score}",
+          "reasons": {
+            "delivery_failed": "提醒投递需要恢复",
+            "unread_alert": "有新的提醒证据待处理",
+            "review_overdue": "计划中的投资判断复核已逾期",
+            "review_due_today": "投资判断今天需要复核",
+            "research_unavailable": "当前没有可用的研究证据",
+            "research_stale": "研究资料已超出有效证据窗口",
+            "research_limited": "部分来源未通过证据质量门禁",
+            "perspectives_missing": "证据已就绪但尚未形成综合观点",
+            "thesis_missing": "当前判断尚未记录投资逻辑",
+            "research_incomplete": "该标的仍处于研究流程中",
+            "monitoring_current": "研究、提醒和复核状态均为最新"
+          },
+          "actions": {
+            "retry_alert_delivery": "重试投递失败的提醒",
+            "review_alert": "查看最新提醒",
+            "review_decision": "复核当前投资判断",
+            "refresh_research": "刷新市场研究资料",
+            "generate_perspectives": "生成有证据支撑的 AI 观点",
+            "document_thesis": "记录投资逻辑",
+            "continue_research": "继续核对研究证据",
+            "monitor": "当前无需操作，继续监控"
+          }
+        },
         "refresh": "刷新新闻与研报",
+        "cancelRefresh": "取消本次研究刷新",
+        "refreshJobStages": { "queued": "等待刷新任务", "sources": "获取新闻与研报", "persistence": "保存并整理研究资料", "complete": "研究刷新完成" },
         "retry": "重试研究数据",
         "summary": "近 14 天 {news} 条新闻 · {reports} 份研报",
         "unseen": "{count} 条新动态",
@@ -560,6 +802,17 @@
         "allSources": "全部来源",
         "noSourceResults": "该来源暂无结果",
         "decisionSummary": "研究决策摘要",
+        "brief": {
+          "title": "委员会综合结论",
+          "stances": { "bullish": "整体偏多", "neutral": "多空均衡 / 中性", "bearish": "整体偏空" },
+          "confidence": "平均置信度 {value}/10",
+          "agreement": "一致度 {value}%",
+          "disagreement": "存在明显分歧",
+          "accuracy": "历史方向正确率 {value}% · {count} 个样本",
+          "catalysts": "主要催化剂",
+          "risks": "主要风险",
+          "challengedClaims": "有 {count} 条论点被反馈为不准确或证据不足，建议复核。"
+        },
         "targetMedianValue": "中位数 {value} · {count} 个预测",
         "committeeStance": "观点共识",
         "stanceSplit": "{bullish} 看多 · {neutral} 中性 · {bearish} 看空",
@@ -625,6 +878,17 @@
           "notSaved": "观点保存后才可提交反馈。",
           "outcome": "{days} 天结果 {value}",
           "error": "反馈保存失败，请重试。",
+          "claim": {
+            "label": "评价论点",
+            "helpful": "该论点有帮助",
+            "incorrect": "该论点不准确",
+            "outdated": "该论点已过时",
+            "unsupported": "现有证据不足以支持该论点",
+            "clear": "清除论点反馈",
+            "reason": "该论点或证据有什么问题？",
+            "save": "保存论点反馈",
+            "cancel": "取消"
+          },
           "stances": { "bullish": "看多", "neutral": "中性", "bearish": "看空" }
         },
         "status": {
@@ -662,6 +926,14 @@
         "historyNoChanges": "元数据更新",
         "historyVersion": "版本 {version}",
         "historyRestore": "恢复",
+        "context": {
+          "title": "本次判断时的数据与证据",
+          "unavailable": "当时没有可用快照",
+          "metricValue": "{range} 指标 · 基准 {benchmark} · 覆盖 {coverage}%",
+          "researchValue": "{news} 条新闻 · {reports} 份研报",
+          "perspectiveValue": "{evidence} 条证据 · 覆盖 {coverage}%",
+          "alertsValue": "{unread} 条未读 · {failed} 条投递失败 · {reviews} 项复核原因"
+        },
         "fields": {
           "conviction": "确信度",
           "notes": "笔记",
@@ -682,6 +954,17 @@
           "invalidated": "已失效"
         }
       },
+      "peer": {
+        "title": "横向比较",
+        "dataStatus": "同类数据",
+        "industryUnavailable": "暂无行业分类",
+        "relativeStrength": "市场强弱分位",
+        "pe": "行业 PE 分位",
+        "pb": "行业 PB 分位",
+        "liquidity": "市场流动性分位",
+        "averageAmount": "20 日平均成交额",
+        "capShare": "自选列表市值占比"
+      },
       "alerts": {
         "title": "价格与事件提醒",
         "type": "提醒类型",
@@ -694,6 +977,14 @@
         "selectValue": "选择匹配内容",
         "cooldown": "重复提醒间隔",
         "preview": "规则预览",
+        "cadence": {
+          "market_15m": "开市期间约每 15 分钟检查一次。",
+          "hourly": "指标快照刷新后每小时检查一次。",
+          "daily": "处理新研究数据时每日检查一次。"
+        },
+        "discreteCrossing": "突破指相邻两次采样之间发生变化，并非连续实时监控。",
+        "discreteLabel": "离散采样突破",
+        "lastChecked": "上次检查 {value}",
         "templates": "快捷模板",
         "presets": { "priceAbove": "价格向上突破", "priceBelow": "价格向下跌破", "largeMove": "涨幅 ≥ 5%", "unusualVolume": "量比 ≥ 2x", "rsiOversold": "RSI 超卖", "volatilityHigh": "波动率 ≥ 40%", "ratingBuy": "评级转为买入" },
         "cooldowns": { "15": "15 分钟", "60": "1 小时", "240": "4 小时", "1440": "1 天", "10080": "7 天" },
@@ -702,6 +993,7 @@
         "add": "新增提醒",
         "pause": "暂停",
         "resume": "启用",
+        "claimDraft": "AI 主张草稿 · 请确认后启用",
         "delete": "删除提醒",
         "empty": "还没有为该标的设置提醒",
         "history": "最近触发",
@@ -732,7 +1024,12 @@
           "ma50_distance_pct": "距 MA50",
           "macd_histogram": "MACD 柱",
           "bollinger_position_pct": "布林带位置",
-          "atr14_pct": "ATR（14）"
+          "atr14_pct": "ATR（14）",
+          "average_traded_amount_20": "20 日平均成交额",
+          "market_relative_strength_percentile": "同市场强弱分位",
+          "industry_pe_percentile": "同行业 PE 分位",
+          "industry_pb_percentile": "同行业 PB 分位",
+          "market_liquidity_percentile": "同市场流动性分位"
         },
         "operators": {
           "gt": "大于",

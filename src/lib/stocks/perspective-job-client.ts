@@ -1,14 +1,11 @@
 import { watchlistJsonRequest } from '@/lib/watchlist/api-client';
 import type { PerspectiveGenerationJobView } from './perspective-job-contract';
-
-const ACTIVE_STATUSES = new Set<PerspectiveGenerationJobView['status']>(['queued', 'running']);
-const MAX_ACTIVE_POLL_MS = 20 * 60_000;
-
-interface VisibilityDocument {
-  visibilityState: string;
-  addEventListener(type: 'visibilitychange', listener: () => void): void;
-  removeEventListener(type: 'visibilitychange', listener: () => void): void;
-}
+import {
+  abortableJobDelay,
+  durableJobPollDelay,
+  waitForDurableJob,
+  waitUntilPageVisible as waitUntilDurableJobPageVisible,
+} from '@/lib/jobs/durable-job-client';
 
 export interface PerspectiveJobPollingDependencies {
   fetchJob?: (id: string, signal: AbortSignal) => Promise<PerspectiveGenerationJobView>;
@@ -30,52 +27,18 @@ export function isPerspectiveGenerationJob(value: unknown): value is Perspective
 }
 
 export function perspectiveJobPollDelay(attempt: number): number {
-  return Math.min(10_000, Math.round(1_000 * (1.6 ** Math.max(0, Math.floor(attempt)))));
-}
-
-function abortError(signal: AbortSignal): unknown {
-  return signal.reason ?? new DOMException('cancelled', 'AbortError');
+  return durableJobPollDelay(attempt);
 }
 
 export function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.reject(abortError(signal));
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(done, milliseconds);
-    function done() {
-      signal.removeEventListener('abort', cancelled);
-      resolve();
-    }
-    function cancelled() {
-      clearTimeout(timer);
-      reject(abortError(signal));
-    }
-    signal.addEventListener('abort', cancelled, { once: true });
-  });
+  return abortableJobDelay(milliseconds, signal);
 }
 
 export function waitUntilPageVisible(
   signal: AbortSignal,
-  page: VisibilityDocument | undefined = typeof document === 'undefined' ? undefined : document,
+  page: Parameters<typeof waitUntilDurableJobPageVisible>[1] = typeof document === 'undefined' ? undefined : document,
 ): Promise<void> {
-  if (signal.aborted) return Promise.reject(abortError(signal));
-  if (!page || page.visibilityState !== 'hidden') return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    function cleanup() {
-      page!.removeEventListener('visibilitychange', changed);
-      signal.removeEventListener('abort', cancelled);
-    }
-    function changed() {
-      if (page!.visibilityState === 'hidden') return;
-      cleanup();
-      resolve();
-    }
-    function cancelled() {
-      cleanup();
-      reject(abortError(signal));
-    }
-    page.addEventListener('visibilitychange', changed);
-    signal.addEventListener('abort', cancelled, { once: true });
-  });
+  return waitUntilDurableJobPageVisible(signal, page);
 }
 
 async function fetchPerspectiveJob(id: string, signal: AbortSignal): Promise<PerspectiveGenerationJobView> {
@@ -107,28 +70,15 @@ export async function waitForPerspectiveJob(
   onProgress: (job: PerspectiveGenerationJobView) => void,
   dependencies: PerspectiveJobPollingDependencies = {},
 ): Promise<PerspectiveGenerationJobView> {
-  const fetchJob = dependencies.fetchJob ?? fetchPerspectiveJob;
-  const delay = dependencies.delay ?? abortableDelay;
-  const waitUntilVisible = dependencies.waitUntilVisible ?? waitUntilPageVisible;
-  const maxActivePollMs = dependencies.maxActivePollMs ?? MAX_ACTIVE_POLL_MS;
-  let job = initial;
-  let attempt = 0;
-  let activeWaitMs = 0;
-
-  while (ACTIVE_STATUSES.has(job.status)) {
-    await waitUntilVisible(signal);
-    if (attempt > 0) {
-      const waitMs = perspectiveJobPollDelay(attempt - 1);
-      if (activeWaitMs + waitMs > maxActivePollMs) throw new Error('perspective_job_timeout');
-      await delay(waitMs, signal);
-      activeWaitMs += waitMs;
-      // A tab can become hidden during the delay. Do not issue a request until
-      // it is visible again; returning to the tab then refreshes immediately.
-      await waitUntilVisible(signal);
-    }
-    job = await fetchJob(job.id, signal);
-    onProgress(job);
-    attempt += 1;
+  try {
+    return await waitForDurableJob(initial, signal, onProgress, {
+      fetchJob: dependencies.fetchJob ?? fetchPerspectiveJob,
+      delay: dependencies.delay,
+      waitUntilVisible: dependencies.waitUntilVisible,
+      maxActivePollMs: dependencies.maxActivePollMs,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === 'durable_job_timeout') throw new Error('perspective_job_timeout');
+    throw error;
   }
-  return job;
 }

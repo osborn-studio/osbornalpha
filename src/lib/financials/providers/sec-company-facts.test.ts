@@ -98,4 +98,19 @@ describe('SEC Company Facts financial provider', () => {
     expect(fetcher.mock.calls[0][1].headers).toMatchObject({ Accept: 'application/json' });
     expect(fetcher.mock.calls[0][1].headers['User-Agent']).toContain('@');
   });
+
+  it('propagates caller cancellation into the SEC request', async () => {
+    const fetcher = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+    }));
+    vi.stubGlobal('fetch', fetcher);
+    const controller = new AbortController();
+
+    const pending = secCompanyFactsProvider.load('AAPL', controller.signal);
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+    controller.abort(new DOMException('cancelled', 'AbortError'));
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetcher.mock.calls[0][1]?.signal?.aborted).toBe(true);
+  });
 });

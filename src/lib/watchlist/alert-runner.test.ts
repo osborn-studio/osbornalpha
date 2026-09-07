@@ -38,6 +38,7 @@ describe('runWatchlistAlertBatch', () => {
       loadBatch: async () => ({ alerts, saturated: true }),
       loadQuote,
       loadMetrics: async () => ({}),
+      loadPeerMetrics: async () => ({}),
       loadCalendar,
       loadResearch: async () => [{
         ownerId: 'user-1', ticker: 'AAPL', perspectives: [], reports: [
@@ -70,6 +71,7 @@ describe('runWatchlistAlertBatch', () => {
       loadBatch: async () => ({ alerts: [alert({ last_evaluated_at: null, last_observed_key: null })], saturated: false }),
       loadQuote: async () => quote(),
       loadMetrics: async () => ({}),
+      loadPeerMetrics: async () => ({}),
       loadCalendar: async () => null,
       loadResearch: async () => [{
         ownerId: 'user-1', ticker: 'AAPL', perspectives: [], reports: [
@@ -99,6 +101,7 @@ describe('runWatchlistAlertBatch', () => {
       loadBatch: async () => ({ alerts: [alert()], saturated: false }),
       loadQuote,
       loadMetrics: async () => ({}),
+      loadPeerMetrics: async () => ({}),
       loadCalendar,
       loadResearch,
       insertEvent: async () => 'inserted',
@@ -128,6 +131,7 @@ describe('runWatchlistAlertBatch', () => {
       })], saturated: false }),
       loadQuote,
       loadMetrics,
+      loadPeerMetrics: async () => ({}),
       loadCalendar: async () => null,
       loadResearch,
       insertEvent,
@@ -144,6 +148,54 @@ describe('runWatchlistAlertBatch', () => {
     }));
   });
 
+  it('loads peer metrics once per user without loading snapshot metrics', async () => {
+    const loadMetrics = vi.fn(async () => ({}));
+    const loadPeerMetrics = vi.fn(async () => ({
+      AAPL: {
+        value: {
+          marketRelativeStrengthPercentile: 84,
+          marketLiquidityPercentile: 72,
+        },
+        asOf: '2026-09-04T12:00:00Z',
+        source: 'shared-peer-snapshots',
+        status: 'fresh',
+        warnings: [],
+      } as never,
+    }));
+    const insertEvent = vi.fn(async () => 'inserted' as const);
+    const result = await runWatchlistAlertBatch({
+      loadBatch: async () => ({
+        alerts: [
+          alert({
+            id: 'alert-strength', alert_type: 'metric', operator: 'gte', threshold_numeric: 80,
+            config: { metric: 'market_relative_strength_percentile' },
+          }),
+          alert({
+            id: 'alert-liquidity', alert_type: 'metric', operator: 'gte', threshold_numeric: 70,
+            config: { metric: 'market_liquidity_percentile' },
+          }),
+        ],
+        saturated: false,
+      }),
+      loadQuote: async () => quote(),
+      loadMetrics,
+      loadPeerMetrics,
+      loadCalendar: async () => null,
+      loadResearch: async () => [],
+      insertEvent,
+      updateAlert: async () => undefined,
+      deliver: async () => ({ claimed: 0, delivered: 0, failed: 0, deadLetter: 0, skipped: 0, deferred: 0 }),
+      now: () => new Date('2026-09-04T12:01:00Z'),
+    });
+
+    expect(loadMetrics).not.toHaveBeenCalled();
+    expect(loadPeerMetrics).toHaveBeenCalledTimes(1);
+    expect(loadPeerMetrics).toHaveBeenCalledWith('user-1', ['AAPL']);
+    expect(result).toMatchObject({ evaluated: 2, triggered: 2, unavailable: 0 });
+    expect(insertEvent).toHaveBeenCalledWith(expect.objectContaining({ observed_value: 84 }));
+    expect(insertEvent).toHaveBeenCalledWith(expect.objectContaining({ observed_value: 72 }));
+  });
+
   it('loads only the calendar for event alerts', async () => {
     const loadQuote = vi.fn(async () => quote());
     const loadCalendar = vi.fn(async () => ({
@@ -155,6 +207,7 @@ describe('runWatchlistAlertBatch', () => {
       loadBatch: async () => ({ alerts: [alert({ alert_type: 'event' })], saturated: false }),
       loadQuote,
       loadMetrics: async () => ({}),
+      loadPeerMetrics: async () => ({}),
       loadCalendar,
       loadResearch,
       insertEvent: async () => 'inserted',
@@ -172,6 +225,7 @@ describe('runWatchlistAlertBatch', () => {
       loadBatch: async () => ({ alerts: [alert({ alert_type: 'price', operator: 'gte', threshold_numeric: 190 })], saturated: false }),
       loadQuote: async () => null,
       loadMetrics: async () => ({}),
+      loadPeerMetrics: async () => ({}),
       loadCalendar: async () => null,
       loadResearch: async () => [],
       insertEvent: async () => 'inserted',
@@ -192,6 +246,7 @@ describe('runWatchlistAlertBatch', () => {
       loadBatch: async () => ({ alerts: [alert({ alert_type: 'price' })], saturated: false }),
       loadQuote,
       loadMetrics: async () => ({}),
+      loadPeerMetrics: async () => ({}),
       loadCalendar: async () => null,
       loadResearch: async () => [],
       insertEvent: async () => 'inserted',
@@ -217,6 +272,7 @@ describe('runWatchlistAlertCycles', () => {
       loadBatch,
       loadQuote: async () => quote(),
       loadMetrics: async () => ({}),
+      loadPeerMetrics: async () => ({}),
       loadCalendar: async () => null,
       loadResearch: async () => [],
       insertEvent: async () => 'inserted',

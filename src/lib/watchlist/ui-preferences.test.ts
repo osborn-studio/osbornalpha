@@ -5,6 +5,7 @@ import {
   WATCHLIST_UI_PREFERENCES_MAX_SAVED_VIEWS,
   cloneWatchlistUiPreferences,
   isWatchlistChartPreferences,
+  isWatchlistSavedViews,
   isWatchlistUiPreferences,
   normalizeWatchlistUiPreferences,
   parseWatchlistUiPreferencesCommand,
@@ -34,6 +35,12 @@ describe('watchlist UI preferences', () => {
       })),
     })).toBe(false);
     expect(isWatchlistUiPreferences({ ...valid, benchmarks: { '../secret': 'AAPL' } })).toBe(false);
+  });
+
+  it('accepts at most one default saved table view', () => {
+    const view = { id: 'one', name: 'One', preferences: DEFAULT_WATCHLIST_UI_PREFERENCES.table, isDefault: true };
+    expect(isWatchlistSavedViews([view])).toBe(true);
+    expect(isWatchlistSavedViews([view, { ...view, id: 'two', name: 'Two' }])).toBe(false);
   });
 
   it('validates chart indicator selections without accepting duplicates or unknown values', () => {
@@ -97,10 +104,42 @@ describe('watchlist UI preferences', () => {
       }),
     }));
     expect(migrated).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 4,
       viewMode: 'kanban',
       table: { density: 'compact', decisionFilter: 'all', metricFilter: 'none', pinnedColumns: ['ticker', 'name'] },
     });
+  });
+
+  it('migrates the misleading one-year column name in current and saved views', () => {
+    const current = cloneWatchlistUiPreferences(DEFAULT_WATCHLIST_UI_PREFERENCES);
+    const migrated = normalizeWatchlistUiPreferences({
+      ...current,
+      schemaVersion: 3,
+      table: {
+        ...current.table,
+        sortKey: 'oneYearReturn',
+        visibleColumns: ['ticker', 'name', 'oneYearReturn'],
+        pinnedColumns: ['ticker'],
+        columnWidths: { oneYearReturn: 176 },
+      },
+      savedViews: [{
+        id: 'legacy',
+        name: 'Legacy return',
+        preferences: {
+          ...current.table,
+          sortKey: 'oneYearReturn',
+          visibleColumns: ['ticker', 'name', 'oneYearReturn'],
+          pinnedColumns: ['ticker'],
+          columnWidths: {},
+        },
+      }],
+    });
+    expect(migrated.table).toMatchObject({
+      sortKey: 'periodReturn',
+      visibleColumns: ['ticker', 'name', 'periodReturn'],
+      columnWidths: { periodReturn: 176 },
+    });
+    expect(migrated.savedViews[0].preferences.sortKey).toBe('periodReturn');
   });
 
   it('salvages valid fields when one v2 preference field is corrupt', () => {

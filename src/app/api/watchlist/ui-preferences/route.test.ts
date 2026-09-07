@@ -6,6 +6,11 @@ vi.mock('@/lib/supabase/server', () => ({
   serverIsSupabaseConfigured: vi.fn(() => true),
   getServerSupabase: vi.fn(async () => ({ auth: { getUser: mocks.auth } })),
 }));
+vi.mock('@/lib/watchlist/api-rate-limit', () => ({
+  consumeWatchlistApiRateLimit: vi.fn(async () => ({
+    allowed: true, limit: 120, remaining: 119, retryAfterSeconds: 0,
+  })),
+}));
 vi.mock('@/lib/watchlist/ui-preferences-repository', () => ({
   loadWatchlistUiPreferences: mocks.load,
   updateWatchlistUiPreferences: mocks.update,
@@ -28,9 +33,9 @@ describe('watchlist UI preference route', () => {
   });
 
   it('returns a normalized versioned snapshot', async () => {
-    const response = await GET();
+    const response = await GET(new Request('http://localhost/api/watchlist/ui-preferences'));
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ version: 4, preferences: { schemaVersion: 2, viewMode: 'table' } });
+    expect(await response.json()).toMatchObject({ version: 4, preferences: { schemaVersion: 4, viewMode: 'table' } });
   });
 
   it('validates and compare-and-swaps a complete snapshot', async () => {

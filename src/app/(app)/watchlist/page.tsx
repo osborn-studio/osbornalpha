@@ -12,7 +12,7 @@ import { WatchlistOnboarding } from '@/components/WatchlistOnboarding';
 import { WatchlistToolbar } from '@/components/watchlist/WatchlistToolbar';
 import { WatchlistSyncConflict } from '@/components/watchlist/WatchlistSyncConflict';
 import type { WatchlistPendingAction } from '@/components/watchlist/WatchlistActionDialog';
-import { WatchlistReviewSummary } from '@/components/watchlist/WatchlistReviewSummary';
+import { WatchlistPageOverlays } from '@/components/watchlist/WatchlistPageOverlays';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
 import { useWatchlistOverview } from '@/lib/hooks/useWatchlistOverview';
 import { uniqueWatchlistTickers, type WatchlistGroup } from '@/lib/watchlist/store';
@@ -28,14 +28,13 @@ import { useWatchlistTrash } from '@/lib/hooks/useWatchlistTrash';
 import { useWatchlistUiPreferences } from '@/lib/hooks/useWatchlistUiPreferences';
 import { DEFAULT_WATCHLIST_CHART_PREFERENCES } from '@/lib/watchlist/ui-preferences';
 import { watchlistHistoryRangeForChart } from '@/lib/market-returns/range';
+import { selectWatchlistDisplayQuote } from '@/lib/watchlist/quote-authority';
 import { watchlistBenchmarkTicker } from '@/lib/watchlist/analytics';
 import { classifyMarket } from '@/lib/utils';
-import { watchlistOverviewServerSort } from '@/lib/watchlist/overview-query';
 import { watchlistQuoteRefreshInterval } from '@/lib/watchlist/quote-refresh-policy';
-import { useDebouncedValue } from '@/lib/hooks/useDebouncedValue';
+import { useWatchlistOverviewQuery } from '@/lib/hooks/useWatchlistOverviewQuery';
 import { useAppSession } from '@/components/AppSessionProvider';
 import { useWatchlistReviews } from '@/lib/hooks/useWatchlistReviews';
-import { useWatchlistBoardDnd } from '@/lib/hooks/useWatchlistBoardDnd';
 import {
   watchlistSecurityIdentity,
   type WatchlistSecurityIdentity as WatchlistSecurityResult,
@@ -46,35 +45,13 @@ import {
   watchlistJsonRequest,
   watchlistResponseRequest,
 } from '@/lib/watchlist/api-client';
+import { WatchlistAttentionStrip } from '@/components/watchlist/WatchlistAttentionStrip';
+import type { WatchlistQuickViewTab } from '@/lib/watchlist/quick-view';
 
 type Group = WatchlistGroup;
 
-const WatchlistQuickView = dynamic(
-  () => import('@/components/WatchlistQuickView').then((module) => module.WatchlistQuickView),
-  { ssr: false },
-);
-const WatchlistKanbanColumn = dynamic(
-  () => import('@/components/watchlist/WatchlistKanbanColumn').then((module) => module.WatchlistKanbanColumn),
-  { ssr: false },
-);
-const WatchlistAddDialog = dynamic(
-  () => import('@/components/watchlist/WatchlistAddDialog').then((module) => module.WatchlistAddDialog),
-  { ssr: false },
-);
-const WatchlistReviewPanel = dynamic(
-  () => import('@/components/watchlist/WatchlistReviewPanel').then((module) => module.WatchlistReviewPanel),
-  { ssr: false },
-);
-const WatchlistImportDialog = dynamic(
-  () => import('@/components/watchlist/WatchlistImportDialog').then((module) => module.WatchlistImportDialog),
-  { ssr: false },
-);
-const WatchlistActionDialog = dynamic(
-  () => import('@/components/watchlist/WatchlistActionDialog').then((module) => module.WatchlistActionDialog),
-  { ssr: false },
-);
-const WatchlistTrashDialog = dynamic(
-  () => import('@/components/watchlist/WatchlistTrashDialog').then((module) => module.WatchlistTrashDialog),
+const WatchlistBoard = dynamic(
+  () => import('@/components/watchlist/WatchlistBoard').then((module) => module.WatchlistBoard),
   { ssr: false },
 );
 const PostAddInsight = dynamic(
@@ -104,22 +81,14 @@ export default function WatchlistPage() {
   const viewMode = uiPreferences.preferences.viewMode;
   const setView = uiPreferences.setViewMode;
 
-  // Per-column add UI: which column has the add panel open
-  const [addingInGroup, setAddingInGroup] = useState<string | null>(null);
-
-  // New column UI
-  const [newColumnOpen, setNewColumnOpen] = useState(false);
-  const [newColumnName, setNewColumnName] = useState('');
-
   // Batch import dialog
   const [importOpen, setImportOpen] = useState(false);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
 
-  // Mobile move menu (per-card kebab) — which ticker's menu is open
-  const [openMenuTicker, setOpenMenuTicker] = useState<string | null>(null);
   const [lastAdded, setLastAdded] = useState<WatchlistSecurityResult | null>(null);
   const [quickViewTicker, setQuickViewTicker] = useState<string | null>(null);
+  const [quickViewTab, setQuickViewTab] = useState<WatchlistQuickViewTab>('chart');
   const [pendingAction, setPendingAction] = useState<WatchlistPendingAction | null>(null);
   const [addedSecurityIdentities, setAddedSecurityIdentities] = useState<Record<string, WatchlistSecurityResult>>({});
   const watchlistViewTracked = useRef(false);
@@ -130,12 +99,10 @@ export default function WatchlistPage() {
     setGroups(next);
   }, [setGroups]);
 
-  const boardDnd = useWatchlistBoardDnd({
-    groups,
-    onChange: persist,
-    onTickerMoved: (ticker, group) => show(t('movedTo', { ticker, group })),
-    onGroupReordered: (name) => show(t('reordered', { name })),
-  });
+  const openQuickView = useCallback((ticker: string, tab: WatchlistQuickViewTab = 'chart') => {
+    setQuickViewTicker(ticker);
+    setQuickViewTab(tab);
+  }, []);
 
   // ─── Live quotes (batch) ───
   const allTickers = useMemo(() => uniqueWatchlistTickers(groups), [groups]);
@@ -147,31 +114,12 @@ export default function WatchlistPage() {
   const { quotes, loading: quotesLoading, loadedAt, refetch } = useBatchQuotes(allTickers, {
     refreshIntervalMs: quoteRefreshInterval,
   });
-  const overviewQuery = useDebouncedValue(uiPreferences.preferences.table.query.trim(), 250);
-  const overviewQueryPending = uiPreferences.preferences.table.query.trim() !== overviewQuery;
-  const overviewServerQuery = useMemo(() => {
-    if (!user) return null;
-    const table = uiPreferences.preferences.table;
-    const serverSort = watchlistOverviewServerSort(table.sortKey);
-    const groupId = table.groupFilter === 'all'
-      ? null
-      : groups.find((group) => group.id === table.groupFilter || group.name === table.groupFilter)?.id ?? null;
-    const market = table.marketFilter === 'all' ? null : table.marketFilter;
-    const quoteStatus = table.statusFilter === 'all' || table.statusFilter === 'loading' ? null : table.statusFilter;
-    const query = overviewQuery || null;
-    const decisionStatus = table.decisionFilter === 'all' ? null : table.decisionFilter;
-    const tag = table.tagFilter.trim() || null;
-    return serverSort || groupId || market || quoteStatus || query || decisionStatus || tag || table.metricFilter !== 'none'
-      ? {
-        sort: serverSort ?? 'position', direction: table.asc ? 'asc' as const : 'desc' as const,
-        groupId, market, quoteStatus, query, decisionStatus, tag, historyRange: table.historyRange,
-        metric: table.metricFilter === 'none' ? null : table.metricFilter,
-        metricMin: table.metricFilter === 'none' ? null : table.metricMin,
-        metricMax: table.metricFilter === 'none' ? null : table.metricMax,
-      }
-      : null;
-  }, [groups, overviewQuery, uiPreferences.preferences.table, user]);
-  const overview = useWatchlistOverview(!!user && allTickers.length > 0, overviewServerQuery);
+  const overviewQuery = useWatchlistOverviewQuery(
+    !!user,
+    groups,
+    uiPreferences.preferences.table,
+  );
+  const overview = useWatchlistOverview(!!user && allTickers.length > 0, overviewQuery.query);
   const reviews = useWatchlistReviews(!!user && hydrated && allTickers.length > 0, overview.updateItem);
   const securityIdentities = useMemo(() => {
     const overviewIdentities = Object.values(overview.rows).flatMap((row) => {
@@ -273,7 +221,7 @@ export default function WatchlistPage() {
     const next = createPrimaryBoard(groups, t('onboarding.defaultBoard'));
     if (next !== groups) persist(next);
     setView('kanban');
-    setAddingInGroup(next[0].id);
+    setAddDialogOpen(true);
     trackEvent('watchlist_empty_action_selected', { action: 'search' });
   }
 
@@ -336,13 +284,9 @@ export default function WatchlistPage() {
   }
 
   // ─── Column management ───
-  function addColumn() {
-    const name = newColumnName.trim();
-    if (!name) return;
+  function addColumn(name: string) {
     const id = `custom_${Date.now()}`;
     persist([...groups, { id, name, tickers: [] }]);
-    setNewColumnName('');
-    setNewColumnOpen(false);
     show(t('columnAdded', { name }));
   }
 
@@ -481,7 +425,17 @@ export default function WatchlistPage() {
       )}
 
       {user && hydrated && allTickers.length > 0 && (
-        <WatchlistReviewSummary summary={reviews.summary} loading={reviews.loading} onOpen={() => setReviewOpen(true)} />
+        <WatchlistAttentionStrip
+          reviews={reviews.summary}
+          reviewLoading={reviews.loading}
+          warnings={overview.warnings}
+          capabilities={overview.capabilities}
+          overviewByTicker={overview.rows}
+          generatedAt={overview.generatedAt}
+          onOpenReviews={() => setReviewOpen(true)}
+          onOpenAlerts={(ticker) => openQuickView(ticker, 'alerts')}
+          onRetryData={() => void overview.refetch()}
+        />
       )}
 
       {lastAdded && (
@@ -507,16 +461,17 @@ export default function WatchlistPage() {
           quotes={quotes}
           identities={securityIdentities}
           overviewByTicker={overview.rows}
+          composition={overview.composition}
           loadedAt={loadedAt}
           loading={quotesLoading}
-          onSelectTicker={setQuickViewTicker}
+          onSelectTicker={openQuickView}
           onMoveTickers={moveTickers}
           onRemoveTickers={(tickers) => setPendingAction({ kind: 'bulk-remove', tickers })}
           onTagTickers={updateTickerTags}
           overviewHasMore={overview.partial}
           overviewLoading={overview.loading}
           overviewLoadingMore={overview.loadingMore}
-          overviewQueryPending={overviewQueryPending}
+          overviewQueryPending={overviewQuery.pending}
           overviewQueryActive={overview.serverQueryActive}
           onLoadMoreOverview={overview.loadMore}
           tablePreferences={uiPreferences.preferences.table}
@@ -524,101 +479,29 @@ export default function WatchlistPage() {
           onTablePreferencesChange={uiPreferences.setTable}
           onSavedTableViewsChange={uiPreferences.setSavedViews}
           onAddSecurity={() => setAddDialogOpen(true)}
+          bulkWorkflowEnabled={!!user}
+          onBulkWorkflowCompleted={() => overview.refetch()}
         />
       )}
 
-      {/* ─── Kanban Board ─── */}
       {hydrated && viewMode === 'kanban' && (
-      <div
-        className="flex gap-3 overflow-x-auto pb-3"
-        style={{ scrollSnapType: 'x mandatory' }}
-        onClick={() => setOpenMenuTicker(null)}
-      >
-        {groups.map((g) => (
-          <WatchlistKanbanColumn
-            key={g.id}
-            group={g}
-            allGroups={groups}
-            quotes={quotes}
-            securityIdentities={securityIdentities}
-            overviewByTicker={overview.rows}
-            loadedAt={loadedAt}
-            isDropTarget={boardDnd.dropTargetGroup === g.id && boardDnd.dragKind === 'card'}
-            isColumnDropTarget={boardDnd.dropTargetColumnId === g.id && boardDnd.dragKind === 'column'}
-            isBeingDragged={boardDnd.dragColumnId === g.id && boardDnd.dragKind === 'column'}
-            dragTicker={boardDnd.dragTicker}
-            isAdding={addingInGroup === g.id}
-            openMenuTicker={openMenuTicker}
-            onDragOver={(e) => boardDnd.onColumnDragOver(e, g.id)}
-            onDragEnter={() => boardDnd.onColumnDragEnter(g.id)}
-            onDragLeave={() => boardDnd.onColumnDragLeave(g.id)}
-            onDrop={(e) => boardDnd.onColumnDrop(e, g.id)}
-            onColumnDragStart={(e) => boardDnd.onColumnDragStart(e, g.id)}
-            onCardDragStart={(e, ticker) => boardDnd.onCardDragStart(e, ticker, g.id)}
-            onCardDragEnd={boardDnd.onDragEnd}
-            onRetryTicker={refetch}
-            onAddOpen={() => setAddingInGroup(g.id)}
-            onAddClose={() => setAddingInGroup(null)}
-            onCardMove={(ticker, toGroupId) => boardDnd.moveTicker(ticker, g.id, toGroupId)}
-            onCardRemove={removeTicker}
-            onOpenMenu={(ticker) => setOpenMenuTicker((cur) => (cur === ticker ? null : ticker))}
-            onQuickView={setQuickViewTicker}
-            onRename={() => renameColumn(g.id)}
-            onDelete={() => deleteColumn(g.id)}
-            onTickerAdded={(info) => addSecurityToGroup(info, g.id)}
-            onCardKeyboardMove={(ticker, direction) => boardDnd.moveCardByKeyboard(ticker, g.id, direction)}
-            onColumnKeyboardMove={(direction) => {
-              const index = groups.findIndex((group) => group.id === g.id);
-              const target = groups[index + (direction === 'right' ? 1 : -1)];
-              if (target) boardDnd.reorderColumn(g.id, target.id);
-            }}
-          />
-        ))}
-
-        {/* + 新增看板 */}
-        <div
-          className="shrink-0"
-          style={{ scrollSnapAlign: 'start', width: 'min(85vw, 300px)' }}
-        >
-          {newColumnOpen ? (
-            <div className="card-base bg-bg-card p-3">
-              <input
-                autoFocus
-                value={newColumnName}
-                onChange={(e) => setNewColumnName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') addColumn();
-                  if (e.key === 'Escape') { setNewColumnOpen(false); setNewColumnName(''); }
-                }}
-                placeholder={t('newColumnPlaceholder')}
-                className="w-full text-sm"
-              />
-              <div className="mt-2 flex gap-2">
-                <button
-                  onClick={addColumn}
-                  disabled={!newColumnName.trim()}
-                  className="flex-1 rounded bg-accent-dim px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
-                >
-                  {t('addColumnCta')}
-                </button>
-                <button
-                  onClick={() => { setNewColumnOpen(false); setNewColumnName(''); }}
-                  className="rounded border border-border px-3 py-1.5 text-xs text-text-dim"
-                >
-                  {t('cancel')}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button
-              onClick={() => setNewColumnOpen(true)}
-              className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border bg-transparent py-3 text-sm text-text-dim hover:border-accent-dim hover:text-accent"
-            >
-              <span>＋</span><span>{t('addColumnLabel')}</span>
-            </button>
-          )}
-        </div>
-      </div>
+        <WatchlistBoard
+          groups={groups}
+          quotes={quotes}
+          identities={securityIdentities}
+          overviewByTicker={overview.rows}
+          loadedAt={loadedAt}
+          onChange={persist}
+          onTickerMoved={(ticker, groupName) => show(t('movedTo', { ticker, group: groupName }))}
+          onGroupReordered={(name) => show(t('reordered', { name }))}
+          onRetryTicker={refetch}
+          onCardRemove={removeTicker}
+          onQuickView={(ticker) => openQuickView(ticker)}
+          onRenameGroup={renameColumn}
+          onDeleteGroup={deleteColumn}
+          onTickerAdded={addSecurityToGroup}
+          onGroupAdded={addColumn}
+        />
       )}
 
       {!hydrated && (
@@ -637,63 +520,67 @@ export default function WatchlistPage() {
 
       <Disclaimer />
 
-      {quickViewTicker && (
-        <WatchlistQuickView
-          ticker={quickViewTicker}
-          quote={quotes[quickViewTicker] ?? null}
-          overview={overview.rows[quickViewTicker]}
-          onDecisionSaved={overview.updateItem}
-          onBenchmarkChange={user ? loadQuickViewBenchmark : undefined}
-          benchmarkPreference={uiPreferences.preferences.benchmarks[quickViewTicker] ?? ''}
-          onBenchmarkPreferenceChange={uiPreferences.setBenchmark}
-          chartPreferences={uiPreferences.preferences.charts[quickViewTicker] ?? DEFAULT_WATCHLIST_CHART_PREFERENCES}
-          onChartPreferencesChange={(next) => uiPreferences.setChart(quickViewTicker, next)}
-          onClose={() => setQuickViewTicker(null)}
-        />
-      )}
-
-      {addDialogOpen && <WatchlistAddDialog groups={groups} onAdd={addSecurityToGroup} onClose={() => setAddDialogOpen(false)} />}
-
-      {reviewOpen && user && <WatchlistReviewPanel
-        model={reviews}
-        onOpenTicker={(ticker) => { setReviewOpen(false); setQuickViewTicker(ticker); }}
-        onClose={() => setReviewOpen(false)}
-      />}
-
-      {importOpen && (
-        <WatchlistImportDialog
-          existingTickerCount={allTickers.length}
-          existingTickers={new Set(allTickers.map((t) => t.toUpperCase()))}
-          portableEnabled={!!user}
-          onCancel={() => setImportOpen(false)}
-          onConfirm={importBatch}
-          onPortableImported={(snapshot) => {
+      <WatchlistPageOverlays
+        quickView={quickViewTicker ? {
+          ticker: quickViewTicker,
+          tab: quickViewTab,
+          quote: selectWatchlistDisplayQuote(quotes[quickViewTicker]),
+          overview: overview.rows[quickViewTicker],
+          onDecisionSaved: overview.updateItem,
+          onBenchmarkChange: user ? loadQuickViewBenchmark : undefined,
+          benchmarkPreference: uiPreferences.preferences.benchmarks[quickViewTicker] ?? '',
+          onBenchmarkPreferenceChange: uiPreferences.setBenchmark,
+          chartPreferences: uiPreferences.preferences.charts[quickViewTicker] ?? DEFAULT_WATCHLIST_CHART_PREFERENCES,
+          onChartPreferencesChange: (next) => uiPreferences.setChart(quickViewTicker, next),
+          onClose: () => setQuickViewTicker(null),
+        } : null}
+        add={addDialogOpen ? {
+          groups,
+          onAdd: addSecurityToGroup,
+          onClose: () => setAddDialogOpen(false),
+        } : null}
+        review={reviewOpen && user ? {
+          model: reviews,
+          onOpenTicker: (ticker) => { setReviewOpen(false); openQuickView(ticker, 'decision'); },
+          onClose: () => setReviewOpen(false),
+        } : null}
+        importDialog={importOpen ? {
+          existingTickerCount: allTickers.length,
+          existingTickers: new Set(allTickers.map((ticker) => ticker.toUpperCase())),
+          portableEnabled: !!user,
+          onCancel: () => setImportOpen(false),
+          onConfirm: importBatch,
+          onPortableImported: (snapshot) => {
             const applied = applyServerSnapshot(snapshot);
             if (applied) {
               void overview.refetch();
               show(t('importPortableDone'));
             }
             return applied;
-          }}
-        />
-      )}
-
-      {pendingAction && (
-        <WatchlistActionDialog
-          action={pendingAction}
-          onCancel={() => setPendingAction(null)}
-          onConfirm={confirmPendingAction}
-        />
-      )}
-      {trashOpen && user && <WatchlistTrashDialog
-        entries={trash.entries} loading={trash.loading} saving={trash.saving} error={trash.error}
-        onClose={() => setTrashOpen(false)} onDelete={(entry) => trash.remove(entry)}
-        onRestore={async (entry) => {
-          const snapshot = await trash.restore(entry, serverVersion);
-          if (snapshot) { applyServerSnapshot(snapshot); await overview.refetch(); }
-          return snapshot;
-        }}
-      />}
+          },
+        } : null}
+        action={pendingAction ? {
+          action: pendingAction,
+          onCancel: () => setPendingAction(null),
+          onConfirm: confirmPendingAction,
+        } : null}
+        trash={trashOpen && user ? {
+          entries: trash.entries,
+          loading: trash.loading,
+          saving: trash.saving,
+          error: trash.error,
+          onClose: () => setTrashOpen(false),
+          onDelete: trash.remove,
+          onRestore: async (entry) => {
+            const snapshot = await trash.restore(entry, serverVersion);
+            if (snapshot) {
+              applyServerSnapshot(snapshot);
+              await overview.refetch();
+            }
+            return snapshot;
+          },
+        } : null}
+      />
     </div>
   );
 }

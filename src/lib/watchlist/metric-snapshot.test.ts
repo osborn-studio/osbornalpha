@@ -38,8 +38,9 @@ describe('Watchlist metric snapshots', () => {
 
     expect(snapshot).toMatchObject({
       ticker: 'AAPL', market: 'US', history_range: '1y', benchmark_ticker: 'SPY',
-      source: 'test-kline+yahoo-chart', calculator_version: 'watchlist-analytics-v3',
+      source: 'test-kline+yahoo-chart', calculator_version: 'watchlist-analytics-v4',
       period_return_pct: value.periodReturnPct,
+      average_traded_amount_20: value.averageTradedAmount20,
       coverage_ratio: value.coverageRatio,
     });
     expect(snapshot.source_bundle).toMatchObject({ benchmarkTicker: 'SPY', historyRange: '1y' });

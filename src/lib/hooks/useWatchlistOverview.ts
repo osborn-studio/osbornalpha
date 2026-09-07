@@ -5,13 +5,13 @@ import type { DataEnvelope, WatchlistOverviewItemRow, WatchlistOverviewResponse,
 import { createRequestSlot, type RequestSlot } from './request-slot';
 import { watchlistJsonRequest } from '@/lib/watchlist/api-client';
 import type { WatchlistHistoryRange } from '@/lib/market-returns/types';
-import type { Market, WatchlistItem } from '@/lib/supabase/database.types';
+import type { WatchlistComposition } from '@/lib/watchlist/composition';
+import type { WatchlistDataCapability } from '@/lib/watchlist/data-capability';
 import type {
-  WatchlistOverviewMetric,
-  WatchlistOverviewQueryDirection,
-  WatchlistOverviewQuerySort,
-  WatchlistOverviewQuoteStatus,
+  WatchlistOverviewClientQuery,
 } from '@/lib/watchlist/overview-query';
+import { WATCHLIST_OVERVIEW_METRICS, WATCHLIST_OVERVIEW_QUERY_SORTS } from '@/lib/watchlist/overview-fields';
+export type { WatchlistOverviewClientQuery } from '@/lib/watchlist/overview-query';
 export type { WatchlistOverviewRow as WatchlistOverviewClientRow } from '@/lib/watchlist/overview-contract';
 
 const DATA_STATUSES = new Set(['fresh', 'delayed', 'stale', 'unavailable']);
@@ -22,13 +22,59 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isDataEnvelope(value: unknown): value is DataEnvelope<unknown> {
   if (!isRecord(value)) return false;
+  const coverage = value.coverage;
   return (value.value === null || isRecord(value.value))
     && (value.asOf === null || typeof value.asOf === 'string')
     && (value.source === null || typeof value.source === 'string')
     && typeof value.status === 'string'
     && DATA_STATUSES.has(value.status)
     && Array.isArray(value.warnings)
-    && value.warnings.every((warning) => typeof warning === 'string');
+    && value.warnings.every((warning) => typeof warning === 'string')
+    && (value.reasonCode === undefined || value.reasonCode === null || typeof value.reasonCode === 'string')
+    && (value.retryable === undefined || typeof value.retryable === 'boolean')
+    && (coverage === undefined || coverage === null || (
+      isRecord(coverage)
+      && Number.isSafeInteger(coverage.available) && Number(coverage.available) >= 0
+      && Number.isSafeInteger(coverage.total) && Number(coverage.total) >= Number(coverage.available)
+    ))
+    && (value.observations === undefined || value.observations === null
+      || (Number.isSafeInteger(value.observations) && Number(value.observations) >= 0));
+}
+
+function isAlertSummary(value: unknown): boolean {
+  return isRecord(value)
+    && Number.isSafeInteger(value.enabledCount) && Number(value.enabledCount) >= 0
+    && Number.isSafeInteger(value.unreadCount) && Number(value.unreadCount) >= 0
+    && Number.isSafeInteger(value.failedDeliveryCount) && Number(value.failedDeliveryCount) >= 0
+    && (value.latestTriggeredAt === null || typeof value.latestTriggeredAt === 'string');
+}
+
+function isDataCapability(value: unknown): value is WatchlistDataCapability {
+  const runtime = isRecord(value) ? value.runtime : null;
+  return isRecord(value)
+    && ['A', 'HK', 'US', 'JP', 'KR', 'TW'].includes(String(value.market))
+    && ['quote', 'intradayChart', 'historyChart', 'totalReturn', 'financials', 'news', 'reports'].includes(String(value.feature))
+    && ['ready', 'degraded', 'unavailable'].includes(String(value.status))
+    && Array.isArray(value.providers) && value.providers.every((provider) => typeof provider === 'string')
+    && (value.reasonCode === null || typeof value.reasonCode === 'string')
+    && isRecord(runtime)
+    && ['healthy', 'degraded', 'unavailable', 'unknown'].includes(String(runtime.status))
+    && (runtime.lastCheckedAt === null || typeof runtime.lastCheckedAt === 'string')
+    && (runtime.lastSuccessAt === null || typeof runtime.lastSuccessAt === 'string')
+    && (runtime.latencyMs === null || typeof runtime.latencyMs === 'number')
+    && (runtime.circuitState === null || ['closed', 'open', 'half_open'].includes(String(runtime.circuitState)));
+}
+
+function isQuerySnapshot(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return WATCHLIST_OVERVIEW_QUERY_SORTS.includes(String(value.sortKey) as never)
+    && (value.sortNumber === null || Number.isFinite(value.sortNumber))
+    && (value.sortText === null || typeof value.sortText === 'string')
+    && (value.sortAsOf === null || typeof value.sortAsOf === 'string')
+    && (value.metricKey === null || WATCHLIST_OVERVIEW_METRICS.includes(String(value.metricKey) as never))
+    && (value.metricNumber === null || Number.isFinite(value.metricNumber))
+    && (value.metricAsOf === null || typeof value.metricAsOf === 'string')
+    && (value.currency === null || typeof value.currency === 'string');
 }
 
 function isOverviewRow(value: unknown): value is WatchlistOverviewRow {
@@ -37,6 +83,7 @@ function isOverviewRow(value: unknown): value is WatchlistOverviewRow {
   const group = row.group;
   const item = row.item;
   const identity = row.identity;
+  const alerts = row.alerts;
   return !!group && typeof group === 'object' && !Array.isArray(group)
     && typeof (group as Record<string, unknown>).id === 'string'
     && typeof (group as Record<string, unknown>).name === 'string'
@@ -47,7 +94,11 @@ function isOverviewRow(value: unknown): value is WatchlistOverviewRow {
     && (identity === null || isRecord(identity))
     && (row.market === null || isDataEnvelope(row.market))
     && (row.history === null || isDataEnvelope(row.history))
-    && isDataEnvelope(row.research);
+    && (row.peer === null || isDataEnvelope(row.peer))
+    && isDataEnvelope(row.research)
+    && isDataEnvelope(alerts)
+    && (alerts.value === null || isAlertSummary(alerts.value))
+    && (row.querySnapshot === undefined || row.querySnapshot === null || isQuerySnapshot(row.querySnapshot));
 }
 
 function isOverviewResponse(value: unknown): value is WatchlistOverviewResponse {
@@ -57,8 +108,12 @@ function isOverviewResponse(value: unknown): value is WatchlistOverviewResponse 
   return typeof value.generatedAt === 'string'
     && typeof value.ownerId === 'string'
     && Number.isSafeInteger(value.version)
+    && (value.dataStatus === 'complete' || value.dataStatus === 'partial')
+    && Array.isArray(value.warnings) && value.warnings.every((warning) => typeof warning === 'string')
+    && Array.isArray(value.capabilities) && value.capabilities.every(isDataCapability)
     && typeof value.partial === 'boolean'
     && Number.isSafeInteger(total) && Number(total) >= 0
+    && (value.composition === null || isDataEnvelope(value.composition))
     && isRecord(page)
     && Number.isSafeInteger(page.limit) && Number(page.limit) > 0
     && (page.offset === null || Number.isSafeInteger(page.offset))
@@ -66,21 +121,6 @@ function isOverviewResponse(value: unknown): value is WatchlistOverviewResponse 
     && (page.nextCursor === null || typeof page.nextCursor === 'string')
     && typeof page.hasMore === 'boolean'
     && value.rows.every(isOverviewRow);
-}
-
-export interface WatchlistOverviewClientQuery {
-  sort: WatchlistOverviewQuerySort;
-  direction: WatchlistOverviewQueryDirection;
-  query?: string | null;
-  groupId?: string | null;
-  market?: Market | null;
-  quoteStatus?: WatchlistOverviewQuoteStatus | null;
-  decisionStatus?: WatchlistItem['status'] | null;
-  tag?: string | null;
-  historyRange?: WatchlistHistoryRange;
-  metric?: WatchlistOverviewMetric | null;
-  metricMin?: number | null;
-  metricMax?: number | null;
 }
 
 export function watchlistOverviewQueryString(query: WatchlistOverviewClientQuery): string {
@@ -104,7 +144,15 @@ export function useWatchlistOverview(enabled: boolean, serverQuery: WatchlistOve
   const ensuringRef = useRef(new Map<string, Promise<WatchlistOverviewRow | null>>());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [meta, setMeta] = useState({ partial: false, total: 0, generatedAt: null as string | null });
+  const [meta, setMeta] = useState({
+    partial: false,
+    total: 0,
+    generatedAt: null as string | null,
+    composition: null as DataEnvelope<WatchlistComposition> | null,
+    dataStatus: 'complete' as WatchlistOverviewResponse['dataStatus'],
+    warnings: [] as string[],
+    capabilities: [] as WatchlistDataCapability[],
+  });
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const loadSlot = useRef<RequestSlot | null>(null);
@@ -155,7 +203,7 @@ export function useWatchlistOverview(enabled: boolean, serverQuery: WatchlistOve
     rowsRef.current = {};
     setRows({});
     setNextCursor(null);
-    setMeta({ partial: false, total: 0, generatedAt: null });
+    setMeta({ partial: false, total: 0, generatedAt: null, composition: null, dataStatus: 'complete', warnings: [], capabilities: [] });
     setLoadingMore(false);
     setLoading(true);
     setError(null);
@@ -168,7 +216,15 @@ export function useWatchlistOverview(enabled: boolean, serverQuery: WatchlistOve
       }
       setRows(mapped);
       setNextCursor(payload.page?.nextCursor ?? null);
-      setMeta({ partial: payload.page?.hasMore ?? payload.partial, total: payload.total, generatedAt: payload.generatedAt });
+      setMeta({
+        partial: payload.page?.hasMore ?? payload.partial,
+        total: payload.total,
+        generatedAt: payload.generatedAt,
+        composition: payload.composition,
+        dataStatus: payload.dataStatus,
+        warnings: payload.warnings,
+        capabilities: payload.capabilities,
+      });
     } catch (caught) {
       if (!loadSlot.current!.isCurrent(lease)) return;
       setError(caught instanceof Error ? caught.message : 'overview_unavailable');
@@ -188,7 +244,7 @@ export function useWatchlistOverview(enabled: boolean, serverQuery: WatchlistOve
       setLoading(false);
       setLoadingMore(false);
       setNextCursor(null);
-      setMeta({ partial: false, total: 0, generatedAt: null });
+      setMeta({ partial: false, total: 0, generatedAt: null, composition: null, dataStatus: 'complete', warnings: [], capabilities: [] });
       return;
     }
     void load();
@@ -217,7 +273,15 @@ export function useWatchlistOverview(enabled: boolean, serverQuery: WatchlistOve
         ...Object.fromEntries(payload.rows.filter((row) => row?.item?.ticker).map((row) => [row.item.ticker, row])),
       }));
       setNextCursor(payload.page?.nextCursor ?? null);
-      setMeta({ partial: payload.page?.hasMore ?? payload.partial, total: payload.total, generatedAt: payload.generatedAt });
+      setMeta({
+        partial: payload.page?.hasMore ?? payload.partial,
+        total: payload.total,
+        generatedAt: payload.generatedAt,
+        composition: payload.composition,
+        dataStatus: payload.dataStatus,
+        warnings: payload.warnings,
+        capabilities: payload.capabilities,
+      });
     } catch (caught) {
       if (!loadMoreSlot.current!.isCurrent(lease)) return;
       setError(caught instanceof Error ? caught.message : 'overview_unavailable');

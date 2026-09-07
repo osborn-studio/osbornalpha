@@ -1,15 +1,9 @@
 'use client';
 
-import { Clock3, Database } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import type { DataEnvelope, DataStatus } from '@/lib/watchlist/overview-contract';
-
-const STATUS_TONE: Record<DataStatus, string> = {
-  fresh: 'border-status-good/25 bg-status-good/10 text-status-good',
-  delayed: 'border-warn/25 bg-warn/10 text-warn',
-  stale: 'border-warn/25 bg-warn/10 text-warn',
-  unavailable: 'border-status-bad/20 bg-status-bad/10 text-status-bad',
-};
+import type { DataEnvelope } from '@/lib/watchlist/overview-contract';
+import { watchlistWarningMessageKey } from '@/lib/watchlist/data-notice';
+import { WatchlistFreshnessBadge } from './WatchlistFreshnessBadge';
 
 export function WatchlistDataStatus({
   label,
@@ -19,18 +13,20 @@ export function WatchlistDataStatus({
   envelope: DataEnvelope<unknown> | null | undefined;
 }) {
   const t = useTranslations('market.table.drawer.dataStatus');
+  const health = useTranslations('market.table.health');
   const status = envelope?.status ?? 'unavailable';
   const diagnostics = [
-    envelope?.source ? t('source', { value: envelope.source }) : null,
-    envelope?.asOf ? t('asOf', { value: new Date(envelope.asOf).toLocaleString() }) : null,
-    ...(envelope?.warnings ?? []),
+    ...(envelope?.warnings ?? []).map((warning) => health(`warnings.${watchlistWarningMessageKey(warning)}`)),
   ].filter(Boolean).join(' | ');
 
   return (
-    <span className={`inline-flex min-w-0 items-center gap-1.5 rounded border px-2 py-1 text-[11px] ${STATUS_TONE[status]}`} title={diagnostics || t('noDetails')}>
-      {status === 'fresh' ? <Database className="h-3 w-3 shrink-0" aria-hidden="true" /> : <Clock3 className="h-3 w-3 shrink-0" aria-hidden="true" />}
-      <span className="truncate">{label}</span>
-      <span className="font-semibold">{t(`statuses.${status}`)}</span>
-    </span>
+    <WatchlistFreshnessBadge
+      label={label}
+      status={status}
+      statusLabel={t(`statuses.${status}`)}
+      source={envelope?.source}
+      asOf={envelope?.asOf}
+      details={diagnostics || t('noDetails')}
+    />
   );
 }

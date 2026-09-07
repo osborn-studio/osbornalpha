@@ -371,10 +371,15 @@ export function buildSecFinancialReport(ticker: string, facts: SecCompanyFacts):
   return report;
 }
 
-async function secJson<T>(url: string, revalidate: number): Promise<T> {
+function requestSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([timeout, signal]) : timeout;
+}
+
+async function secJson<T>(url: string, revalidate: number, signal?: AbortSignal): Promise<T> {
   const init: RequestInit & { next: { revalidate: number } } = {
     headers: { Accept: 'application/json', 'User-Agent': SEC_USER_AGENT },
-    signal: AbortSignal.timeout(SEC_TIMEOUT_MS),
+    signal: requestSignal(SEC_TIMEOUT_MS, signal),
     next: { revalidate },
   };
   const response = await fetch(url, init);
@@ -386,18 +391,18 @@ function normalizeSecTicker(ticker: string): string {
   return ticker.trim().toUpperCase().replaceAll('.', '-');
 }
 
-async function resolveCik(ticker: string): Promise<string | null> {
-  const rows = await secJson<Record<string, SecTickerRow>>(SEC_TICKERS_URL, 86_400);
+async function resolveCik(ticker: string, signal?: AbortSignal): Promise<string | null> {
+  const rows = await secJson<Record<string, SecTickerRow>>(SEC_TICKERS_URL, 86_400, signal);
   const normalized = normalizeSecTicker(ticker);
   const match = Object.values(rows).find((row) => row.ticker?.toUpperCase() === normalized);
   return Number.isInteger(match?.cik_str) ? String(match!.cik_str).padStart(10, '0') : null;
 }
 
-export const secCompanyFactsProvider: FinancialProvider = {
+export const secCompanyFactsProvider = {
   id: 'sec-companyfacts',
   supports: (market) => market === 'US',
-  async load(ticker) {
-    const cik = await resolveCik(ticker);
+  async load(ticker: string, signal?: AbortSignal) {
+    const cik = await resolveCik(ticker, signal);
     if (!cik) {
       return unavailableFinancialReport({
         ticker,
@@ -407,7 +412,7 @@ export const secCompanyFactsProvider: FinancialProvider = {
         warning: 'sec_cik_unavailable',
       });
     }
-    const facts = await secJson<SecCompanyFacts>(`${SEC_FACTS_BASE_URL}/CIK${cik}.json`, 21_600);
+    const facts = await secJson<SecCompanyFacts>(`${SEC_FACTS_BASE_URL}/CIK${cik}.json`, 21_600, signal);
     return buildSecFinancialReport(ticker, facts);
   },
-};
+} satisfies FinancialProvider;

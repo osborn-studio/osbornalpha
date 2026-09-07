@@ -1,4 +1,5 @@
 import type { Market, WatchlistItem } from '@/lib/supabase/database.types';
+import type { WatchlistHistoryRange } from '@/lib/market-returns/types';
 import type { WatchlistColumnKey } from './ui-preferences';
 import {
   WATCHLIST_OVERVIEW_METRICS,
@@ -8,8 +9,24 @@ import {
   type WatchlistOverviewQuerySort,
   type WatchlistOverviewQuoteStatus,
 } from './overview-fields';
+import { watchlistMetricRequiresSingleMarket, type WatchlistMetricKey } from './metric-registry';
 export type { WatchlistOverviewMetric, WatchlistOverviewQuerySort, WatchlistOverviewQuoteStatus } from './overview-fields';
 export type WatchlistOverviewQueryDirection = 'asc' | 'desc';
+
+export interface WatchlistOverviewClientQuery {
+  sort: WatchlistOverviewQuerySort;
+  direction: WatchlistOverviewQueryDirection;
+  query?: string | null;
+  groupId?: string | null;
+  market?: Market | null;
+  quoteStatus?: WatchlistOverviewQuoteStatus | null;
+  decisionStatus?: WatchlistItem['status'] | null;
+  tag?: string | null;
+  historyRange?: WatchlistHistoryRange;
+  metric?: WatchlistOverviewMetric | null;
+  metricMin?: number | null;
+  metricMax?: number | null;
+}
 
 const COLUMN_SORTS: Partial<Record<WatchlistColumnKey, WatchlistOverviewQuerySort>> = {
   ticker: 'ticker',
@@ -29,7 +46,7 @@ const COLUMN_SORTS: Partial<Record<WatchlistColumnKey, WatchlistOverviewQuerySor
   volumeRatio: 'volumeRatio',
   amplitude: 'amplitude',
   dayPosition: 'dayPosition',
-  oneYearReturn: 'oneYearReturn',
+  periodReturn: 'periodReturn',
   volatility: 'volatility',
   maxDrawdown: 'maxDrawdown',
   rangePosition: 'rangePosition',
@@ -40,13 +57,33 @@ const COLUMN_SORTS: Partial<Record<WatchlistColumnKey, WatchlistOverviewQuerySor
   excessReturn: 'excessReturn',
   beta: 'beta',
   volumeZScore20: 'volumeZScore20',
+  relativeStrengthRank: 'relativeStrengthRank',
+  pePercentile: 'pePercentile',
+  pbPercentile: 'pbPercentile',
+  liquidityPercentile: 'liquidityPercentile',
+  averageTradedAmount20: 'averageTradedAmount20',
+  marketCapShare: 'marketCapShare',
   research: 'research',
   decision: 'decision',
   updated: 'freshness',
 };
 
+const SINGLE_MARKET_SORTS = new Set<WatchlistOverviewQuerySort>([
+  'price', 'open', 'prevClose', 'amount', 'marketCap',
+  'macdHistogram', 'averageTradedAmount20',
+]);
+
 export function watchlistOverviewServerSort(column: WatchlistColumnKey): WatchlistOverviewQuerySort | null {
   return COLUMN_SORTS[column] ?? null;
+}
+
+export function watchlistOverviewSortRequiresSingleMarket(sort: WatchlistOverviewQuerySort): boolean {
+  return SINGLE_MARKET_SORTS.has(sort);
+}
+
+export function watchlistColumnRequiresSingleMarket(column: WatchlistColumnKey): boolean {
+  const sort = watchlistOverviewServerSort(column);
+  return sort ? watchlistOverviewSortRequiresSingleMarket(sort) : false;
 }
 
 export interface WatchlistOverviewQueryCursor {
@@ -87,9 +124,11 @@ const HISTORY_RANGES = new Set(['1m', '6m', 'ytd', '1y', '5y', 'all']);
 const NUMERIC_SORTS = new Set<WatchlistOverviewQuerySort>([
   'position', 'price', 'change', 'open', 'prevClose', 'dayRange', 'volume',
   'amount', 'marketCap', 'pe', 'pb', 'turnover', 'volumeRatio', 'amplitude',
-  'dayPosition', 'oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition',
+  'dayPosition', 'periodReturn', 'volatility', 'maxDrawdown', 'rangePosition',
   'rsi14', 'macdHistogram', 'bollingerPosition', 'atr14', 'excessReturn', 'beta',
   'volumeZScore20', 'research', 'freshness',
+  'relativeStrengthRank', 'pePercentile', 'pbPercentile', 'liquidityPercentile',
+  'averageTradedAmount20', 'marketCapShare',
 ]);
 
 function normalizedOptional(value: string | null, maxLength: number): string | null | undefined {
@@ -144,7 +183,9 @@ export function parseWatchlistOverviewQuery(url: URL): WatchlistOverviewQueryReq
     || (!!metricValue && !WATCHLIST_OVERVIEW_METRICS.includes(metricValue as WatchlistOverviewMetric))
     || metricMin === undefined || metricMax === undefined
     || ((metricMin !== null || metricMax !== null) && !metricValue)
-    || (metricMin !== null && metricMax !== null && metricMin > metricMax);
+    || (metricMin !== null && metricMax !== null && metricMin > metricMax)
+    || (!marketValue && watchlistOverviewSortRequiresSingleMarket(sortValue as WatchlistOverviewQuerySort))
+    || (!marketValue && !!metricValue && watchlistMetricRequiresSingleMarket(metricValue as WatchlistMetricKey));
   const base = {
     limit: Math.min(Math.max(Number.isSafeInteger(limitValue) ? limitValue : 50, 1), 50),
     sort: sortValue as WatchlistOverviewQuerySort,

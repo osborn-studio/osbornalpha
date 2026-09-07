@@ -3,6 +3,7 @@ import type { WatchlistMarketRow } from './market-row';
 export interface WatchlistMarketSummary {
   tracked: number;
   quoted: number;
+  movementSample: number;
   loading: number;
   live: number;
   delayed: number;
@@ -31,7 +32,8 @@ function median(values: number[]): number | null {
  */
 export function summarizeWatchlistMarketRows(rows: WatchlistMarketRow[]): WatchlistMarketSummary {
   const quoted = rows.filter((row) => row.quote != null && row.quote.price > 0);
-  const changes = quoted
+  const movementRows = quoted.filter((row) => row.status === 'live' || row.status === 'delayed');
+  const changes = movementRows
     .map((row) => row.quote!.change_pct)
     .filter((value) => Number.isFinite(value));
   const gainers = changes.filter((value) => value > 0).length;
@@ -39,6 +41,7 @@ export function summarizeWatchlistMarketRows(rows: WatchlistMarketRow[]): Watchl
   return {
     tracked: rows.length,
     quoted: quoted.length,
+    movementSample: changes.length,
     loading: rows.filter((row) => row.status === 'loading').length,
     live: rows.filter((row) => row.status === 'live').length,
     delayed: rows.filter((row) => row.status === 'delayed').length,

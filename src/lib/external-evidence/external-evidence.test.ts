@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolvePerspectiveCitations } from './citations';
-import { canonicalizeEvidenceUrl, dedupeAndRankEvidence, normalizeEvidenceResults } from './normalize';
+import {
+  canonicalizeEvidenceUrl,
+  dedupeAndRankEvidence,
+  evidenceRankingScore,
+  evidenceRecencyScore,
+  normalizeEvidenceResults,
+} from './normalize';
 import { buildEvidenceQueries } from './query';
 import { normalizeEvidenceSearchRequest, normalizeEvidenceTickerParam } from './request';
 import { searchExternalEvidenceUncached } from './service';
@@ -73,6 +79,23 @@ describe('external evidence normalization', () => {
     expect(ranked[0].qualityFlags).toContain('cross_source_corroborated');
     expect(ranked[1].corroborationCount).toBe(1);
   });
+
+  it('uses source-aware recency without discarding durable official evidence', () => {
+    const now = new Date('2026-09-05T00:00:00Z');
+    const [oldNews, recentNews, undatedFiling] = [
+      ...normalizeEvidenceResults([
+        { title: 'Older highly ranked report', url: 'https://reuters.com/old', publishedAt: '2026-08-01T00:00:00Z', score: 1 },
+        { title: 'Recent relevant update', url: 'https://reuters.com/new', publishedAt: '2026-09-04T00:00:00Z', score: 0.82 },
+      ], 'news', now, 90),
+      ...normalizeEvidenceResults([
+        { title: 'Official filing', url: 'https://sec.gov/filing', score: 0.5 },
+      ], 'filing', now, 365),
+    ];
+    expect(evidenceRecencyScore(recentNews, now)).toBeGreaterThan(evidenceRecencyScore(oldNews, now));
+    expect(evidenceRecencyScore(undatedFiling, now)).toBeGreaterThan(0.5);
+    expect(evidenceRankingScore(recentNews, now)).toBeGreaterThan(evidenceRankingScore(oldNews, now));
+    expect(dedupeAndRankEvidence([oldNews, recentNews], 2, now)[0].title).toBe('Recent relevant update');
+  });
 });
 
 describe('external evidence service', () => {
@@ -98,7 +121,7 @@ describe('external evidence service', () => {
     });
     expect(snapshot.status).toBe('partial');
     expect(snapshot.results).toHaveLength(1);
-    expect(snapshot.warnings[0]).toContain('filing:timeout');
+    expect(snapshot.warnings[0]).toContain('test:filing:timeout');
     expect(resolvePerspectiveCitations([snapshot.results[0].citationId, 'invented'], snapshot.results)).toHaveLength(1);
   });
 
@@ -141,7 +164,28 @@ describe('external evidence service', () => {
     expect(snapshot.status).toBe('complete');
     expect(snapshot.queryCount).toBe(3);
     expect(snapshot.results.map((item) => item.title)).toEqual(['Filing result', 'News result']);
-    expect(snapshot.warnings).toEqual(['provider_failover:primary']);
+    expect(snapshot.warnings).toEqual(['provider_failover:primary', 'primary:filing:filing_offline']);
+  });
+
+  it('retains diagnostics from every attempted provider', async () => {
+    const primary: EvidenceSearchProvider = {
+      id: 'primary',
+      search: vi.fn(async () => { throw new Error('primary_timeout'); }),
+    };
+    const fallback: EvidenceSearchProvider = {
+      id: 'fallback',
+      search: vi.fn(async () => { throw new Error('fallback_rate_limited'); }),
+    };
+    const snapshot = await searchExternalEvidenceUncached({ ticker: 'AAPL', scopes: ['news'] }, {
+      providers: [primary, fallback],
+      now: () => new Date('2026-09-04T00:00:00Z'),
+    });
+    expect(snapshot.status).toBe('error');
+    expect(snapshot.warnings).toEqual([
+      'provider_failover:primary',
+      'primary:news:primary_timeout',
+      'fallback:news:fallback_rate_limited',
+    ]);
   });
 
   it('surfaces an audit warning without discarding successful search results', async () => {

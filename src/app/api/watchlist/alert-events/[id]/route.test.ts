@@ -5,6 +5,11 @@ vi.mock('@/lib/supabase/server', () => ({
   serverIsSupabaseConfigured: vi.fn(() => true),
   getServerSupabase: vi.fn(async () => ({ auth: { getUser: mocks.auth } })),
 }));
+vi.mock('@/lib/watchlist/api-rate-limit', () => ({
+  consumeWatchlistApiRateLimit: vi.fn(async () => ({
+    allowed: true, limit: 30, remaining: 29, retryAfterSeconds: 0,
+  })),
+}));
 vi.mock('@/lib/watchlist/alert-repository', () => ({
   updateWatchlistAlertEventReadState: mocks.read,
   retryWatchlistAlertEvent: mocks.retry,

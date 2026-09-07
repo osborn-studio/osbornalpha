@@ -20,6 +20,7 @@ interface Dependencies {
   endpoint?: string | null;
   token?: string | null;
   fetch?: typeof fetch;
+  signal?: AbortSignal;
 }
 
 function endpoint(value: string | null | undefined): URL | null {
@@ -98,9 +99,10 @@ export async function loadConfiguredStructuredResearch(
   url.searchParams.set('ticker', normalizedTicker);
   url.searchParams.set('market', market);
   const token = dependencies.token === undefined ? process.env.STRUCTURED_RESEARCH_API_TOKEN?.trim() : dependencies.token?.trim();
+  const timeoutSignal = AbortSignal.timeout(TIMEOUT_MS);
   const response = await (dependencies.fetch ?? fetch)(url, {
     headers: { accept: 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: dependencies.signal ? AbortSignal.any([timeoutSignal, dependencies.signal]) : timeoutSignal,
     cache: 'no-store',
   });
   if (!response.ok) throw new Error(`${PROVIDER_ID}_http_${response.status}`);

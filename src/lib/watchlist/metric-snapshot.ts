@@ -5,7 +5,7 @@ import { builtInMarketCalendar, type MarketCalendarProvider } from '@/lib/market
 import { marketPhase } from '@/lib/today/clock';
 import { WATCHLIST_METRIC_DEFINITION_VERSION } from './metric-registry';
 
-export const WATCHLIST_METRIC_CALCULATOR_VERSION = 'watchlist-analytics-v3';
+export const WATCHLIST_METRIC_CALCULATOR_VERSION = 'watchlist-analytics-v4';
 
 export function watchlistMetricValidUntil(
   market: Market,
@@ -123,6 +123,7 @@ export function metricSnapshotInsert(
     excess_return_pct: metrics.excessReturnPct,
     beta: metrics.beta,
     volume_zscore_20: metrics.volumeZScore20,
+    average_traded_amount_20: metrics.averageTradedAmount20,
     coverage_ratio: metrics.coverageRatio,
     updated_at: generatedAt.toISOString(),
   };

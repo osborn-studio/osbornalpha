@@ -98,7 +98,7 @@ export function buildYahooReturnSnapshot(
   };
 }
 
-async function fetchYahooChart(ticker: string, range: WatchlistHistoryRange): Promise<YahooChartResponse> {
+async function fetchYahooChart(ticker: string, range: WatchlistHistoryRange, signal?: AbortSignal): Promise<YahooChartResponse> {
   const query = new URLSearchParams({
     range: YAHOO_RANGES[range],
     interval: range === 'all' ? '1mo' : range === '5y' ? '1wk' : '1d',
@@ -107,7 +107,7 @@ async function fetchYahooChart(ticker: string, range: WatchlistHistoryRange): Pr
   });
   const response = await fetch(`${YAHOO_CHART_BASE_URL}/${encodeURIComponent(yahooSymbol(ticker))}?${query}`, {
     headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 (compatible; OsbornAlpha/1.0)' },
-    signal: AbortSignal.timeout(YAHOO_TIMEOUT_MS),
+    signal: signal ? AbortSignal.any([AbortSignal.timeout(YAHOO_TIMEOUT_MS), signal]) : AbortSignal.timeout(YAHOO_TIMEOUT_MS),
     next: { revalidate: 21_600 },
   });
   if (!response.ok) throw new Error(`yahoo_chart_http_${response.status}`);
@@ -122,10 +122,10 @@ async function fetchYahooChart(ticker: string, range: WatchlistHistoryRange): Pr
   }
 }
 
-export const yahooChartReturnProvider: MarketReturnProvider = {
+export const yahooChartReturnProvider = {
   id: 'yahoo-chart',
   supports: () => true,
-  async load(ticker, range) {
-    return buildYahooReturnSnapshot(ticker, range, await fetchYahooChart(ticker, range));
+  async load(ticker: string, range: WatchlistHistoryRange, signal?: AbortSignal) {
+    return buildYahooReturnSnapshot(ticker, range, await fetchYahooChart(ticker, range, signal));
   },
-};
+} satisfies MarketReturnProvider;

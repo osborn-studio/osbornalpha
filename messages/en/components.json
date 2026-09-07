@@ -97,6 +97,13 @@
     "sourceCount": "{count} sources",
     "qualityFlags": "Quality flags: {value}",
     "structuredEvidence": "Structured evidence",
+    "invalidation": "Invalidation condition",
+    "createAlertDraft": "Create alert draft",
+    "creatingAlertDraft": "Creating draft…",
+    "alertDraftCreated": "Disabled draft created",
+    "alertDraftExists": "Alert draft already exists",
+    "reviewAlertDraft": "Review in Alerts",
+    "alertDraftError": "Could not create this alert draft",
     "claimKinds": {
       "thesis": "Thesis",
       "catalyst": "Catalyst",

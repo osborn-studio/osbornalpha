@@ -14,6 +14,11 @@ vi.mock('@/lib/watchlist/alert-repository', () => ({
   createWatchlistAlert: mocks.create,
   listWatchlistAlerts: mocks.list,
 }));
+vi.mock('@/lib/watchlist/api-rate-limit', () => ({
+  consumeWatchlistApiRateLimit: vi.fn(async () => ({
+    allowed: true, limit: 30, remaining: 29, retryAfterSeconds: 0,
+  })),
+}));
 
 import { POST } from './route';
 

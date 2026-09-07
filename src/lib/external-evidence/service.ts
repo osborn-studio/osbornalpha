@@ -24,6 +24,10 @@ interface SearchDependencies {
   signal?: AbortSignal;
 }
 
+export interface ExternalEvidenceSearchOptions {
+  signal?: AbortSignal;
+}
+
 function estimatedSearchCostMicrousd(queryCount: number): number | null {
   const perQuery = Number(process.env.SEARCH_COST_MICRO_USD_PER_QUERY);
   return Number.isFinite(perQuery) && perQuery >= 0 ? Math.round(perQuery * queryCount) : null;
@@ -103,7 +107,7 @@ export async function searchExternalEvidenceUncached(
   }
 
   const queries = buildEvidenceQueries(request);
-  let searched = { results: [] as ExternalEvidence[], warnings: [] as string[], failedQueries: [] as EvidenceQuery[] };
+  const searched = { results: [] as ExternalEvidence[], warnings: [] as string[] };
   const usedProviders = new Set<string>();
   let queryCount = 0;
   const failoverWarnings: string[] = [];
@@ -118,7 +122,7 @@ export async function searchExternalEvidenceUncached(
     if (index === 0) firstProviderFailedAll = result.failedQueries.length === queries.length;
     queryCount += pendingQueries.length;
     searched.results.push(...result.results);
-    searched.warnings = result.warnings;
+    searched.warnings.push(...result.warnings.map((warning) => `${provider.id}:${warning}`));
     pendingQueries = result.failedQueries;
     if (pendingQueries.length > 0 && index < providers.length - 1) {
       failoverWarnings.push(`provider_failover:${provider.id}`);
@@ -134,7 +138,7 @@ export async function searchExternalEvidenceUncached(
   const results = documents.results;
   const warnings = [
     ...failoverWarnings,
-    ...(pendingQueries.length > 0 ? searched.warnings : []),
+    ...searched.warnings,
     ...documents.warnings,
   ];
   const failedAll = pendingQueries.length === queries.length;
@@ -173,8 +177,17 @@ const cachedBrokerSearch = unstable_cache(searchSerialized, ['external-evidence-
   tags: ['external-evidence'],
 });
 
-export async function searchExternalEvidence(input: EvidenceSearchRequest): Promise<EvidenceSearchSnapshot> {
+export async function searchExternalEvidence(
+  input: EvidenceSearchRequest,
+  options: ExternalEvidenceSearchOptions = {},
+): Promise<EvidenceSearchSnapshot> {
   const request = normalizeEvidenceSearchRequest(input);
+  if (options.signal) {
+    return searchExternalEvidenceUncached(request, {
+      signal: options.signal,
+      persist: persistEvidenceSnapshot,
+    });
+  }
   const serialized = JSON.stringify(request);
   if (request.scopes.every((scope) => scope === 'news' || scope === 'filing')) {
     return cachedFastSearch(serialized);

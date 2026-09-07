@@ -5,6 +5,11 @@ vi.mock('@/lib/supabase/server', () => ({
   serverIsSupabaseConfigured: vi.fn(() => true),
   getServerSupabase: vi.fn(async () => ({ auth: { getUser: mocks.auth } })),
 }));
+vi.mock('@/lib/watchlist/api-rate-limit', () => ({
+  consumeWatchlistApiRateLimit: vi.fn(async () => ({
+    allowed: true, limit: 120, remaining: 119, retryAfterSeconds: 0,
+  })),
+}));
 vi.mock('@/lib/watchlist/alert-preferences-repository', () => ({
   loadWatchlistAlertPreferences: mocks.load,
   updateWatchlistAlertPreferences: mocks.update,
@@ -28,7 +33,7 @@ describe('watchlist alert preference route', () => {
   });
 
   it('returns normalized delivery preferences', async () => {
-    const response = await GET();
+    const response = await GET(new Request('http://localhost/api/watchlist/alert-preferences'));
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ preferences: { channels: ['email'], mode: 'instant' } });
   });

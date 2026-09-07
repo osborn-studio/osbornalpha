@@ -12,6 +12,11 @@ vi.mock('@/lib/supabase/server', () => ({
   serverIsSupabaseConfigured: vi.fn(() => true),
   getServerSupabase: vi.fn(async () => ({ auth: { getUser: mocks.auth } })),
 }));
+vi.mock('@/lib/watchlist/api-rate-limit', () => ({
+  consumeWatchlistApiRateLimit: vi.fn(async () => ({
+    allowed: true, limit: 60, remaining: 59, retryAfterSeconds: 0,
+  })),
+}));
 vi.mock('@/lib/watchlist/perspective-feedback', () => ({
   parsePerspectiveFeedback: mocks.parse,
   savePerspectiveFeedback: mocks.save,

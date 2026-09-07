@@ -1,7 +1,9 @@
 import { configuredOfficialDocumentProvider } from '@/lib/external-evidence/official-documents';
 import { resolveEvidenceSearchProvider } from '@/lib/external-evidence/resolve-provider';
 import { loadConfiguredHkFinancialReport } from '@/lib/financials/providers/hk-configured';
+import { secCompanyFactsProvider } from '@/lib/financials/providers/sec-company-facts';
 import { fetchExchangeCalendarSnapshot } from '@/lib/market/calendar-service';
+import { yahooChartReturnProvider } from '@/lib/market-returns/providers/yahoo-chart';
 import { loadConfiguredStructuredResearch } from '@/lib/stocks/structured-research-provider';
 import {
   requiredWatchlistProviders,
@@ -21,7 +23,7 @@ export interface WatchlistProviderCanaryResult {
   errorCode?: string;
 }
 
-type Probe = () => Promise<void>;
+type Probe = (signal?: AbortSignal) => Promise<void>;
 type Probes = Partial<Record<ProviderId, Probe>>;
 
 const DEFAULT_SEARCH_CANARY_QUERIES = [
@@ -58,46 +60,58 @@ function stableErrorCode(error: unknown): string {
 
 function defaultProbes(environment: Environment, now: Date): Probes {
   return {
-    search: async () => {
+    search: async (signal) => {
       const provider = resolveEvidenceSearchProvider(environment);
       if (!provider) throw new Error('search_provider_not_configured');
       for (const query of watchlistSearchCanaryQueries(environment)) {
-        const results = await provider.search({ query, scope: 'company', freshnessDays: 365, limit: 1 });
+        signal?.throwIfAborted();
+        const results = await provider.search({ query, scope: 'company', freshnessDays: 365, limit: 1 }, signal);
         if (!Array.isArray(results) || !validSearchCanaryResults(results)) {
           throw new Error('search_provider_invalid_response');
         }
       }
     },
-    'hk-financials': async () => {
-      await loadConfiguredHkFinancialReport(environment.HK_FINANCIALS_CANARY_TICKER || '0700.HK');
+    'hk-financials': async (signal) => {
+      await loadConfiguredHkFinancialReport(environment.HK_FINANCIALS_CANARY_TICKER || '0700.HK', { signal });
     },
-    'structured-research': async () => {
+    'structured-research': async (signal) => {
       const result = await loadConfiguredStructuredResearch(
         environment.STRUCTURED_RESEARCH_CANARY_TICKER || '0700.HK',
         'HK',
+        { signal },
       );
       if (!result.configured) throw new Error('structured_research_provider_not_configured');
     },
-    'official-documents': async () => {
+    'official-documents': async (signal) => {
       const provider = configuredOfficialDocumentProvider();
       const sourceUrl = environment.OFFICIAL_DOCUMENT_CANARY_URL?.trim();
       if (!provider) throw new Error('official_document_provider_not_configured');
       if (!sourceUrl) throw new Error('official_document_canary_url_required');
-      await provider.load(sourceUrl);
+      await provider.load(sourceUrl, signal);
     },
-    'trading-calendar': async () => {
+    'trading-calendar': async (signal) => {
       const endpoint = environment.TRADING_CALENDAR_URL?.trim();
       if (!endpoint) throw new Error('trading_calendar_not_configured');
       const year = now.getUTCFullYear();
       await fetchExchangeCalendarSnapshot(endpoint, `${year}-01-01`, `${year}-12-31`, {
         apiKey: environment.TRADING_CALENDAR_API_KEY?.trim(),
+        signal,
       });
+    },
+    'sec-companyfacts': async (signal) => {
+      const report = await secCompanyFactsProvider.load('AAPL', signal);
+      if (report.meta.availability === 'unavailable' || report.meta.availablePeriods < 1) {
+        throw new Error('sec_companyfacts_unavailable');
+      }
+    },
+    'yahoo-chart': async (signal) => {
+      await yahooChartReturnProvider.load('AAPL', '1m', signal);
     },
   };
 }
 
 export async function runWatchlistProviderCanaries(
-  options: { environment?: Environment; now?: Date } = {},
+  options: { environment?: Environment; now?: Date; signal?: AbortSignal } = {},
   injectedProbes?: Probes,
 ): Promise<WatchlistProviderCanaryResult[]> {
   const environment = options.environment ?? process.env;
@@ -119,9 +133,11 @@ export async function runWatchlistProviderCanaries(
     if (!probe) return { id: provider.id, mode: provider.mode, status: 'failed', latencyMs: null, errorCode: 'provider_probe_missing' };
     const startedAt = Date.now();
     try {
-      await probe();
+      options.signal?.throwIfAborted();
+      await probe(options.signal);
       return { id: provider.id, mode: provider.mode, status: 'passed', latencyMs: Date.now() - startedAt };
     } catch (error) {
+      if (options.signal?.aborted) throw options.signal.reason ?? error;
       return {
         id: provider.id,
         mode: provider.mode,

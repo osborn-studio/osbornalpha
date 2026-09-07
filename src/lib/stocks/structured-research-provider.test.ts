@@ -37,4 +37,19 @@ describe('configured structured research provider', () => {
       fetch: async () => new Response(JSON.stringify({ ticker: 'AAPL', items: [{ ...item, trustScore: 2 }] })),
     })).rejects.toThrow('structured-research-http_invalid_response');
   });
+
+  it('propagates caller cancellation into the configured adapter request', async () => {
+    const controller = new AbortController();
+    const request = vi.fn((_url: URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+    }));
+    const pending = loadConfiguredStructuredResearch('0700.HK', 'HK', {
+      endpoint: 'https://research.example.test/v1/reports', fetch: request as unknown as typeof fetch, signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    controller.abort(new DOMException('cancelled', 'AbortError'));
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(request.mock.calls[0][1]?.signal?.aborted).toBe(true);
+  });
 });

@@ -34,11 +34,13 @@ export function ThemeToggle() {
     setScheme(s);
     localStorage.setItem('color-scheme', s);
     applyScheme(s);
+    setOpen(false);
   }
   function setT(t: Theme) {
     setTheme(t);
     localStorage.setItem('theme', t);
     applyTheme(t);
+    setOpen(false);
   }
 
   return (

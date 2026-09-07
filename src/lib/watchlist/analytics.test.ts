@@ -80,6 +80,9 @@ describe('calculateHistoricalWatchlistMetrics', () => {
       bollingerPositionPct: null,
       atr14Pct: null,
       volumeZScore20: null,
+      averageTradedAmount20: null,
+      averageTradedAmountSampleSize: 0,
+      correlationSeries: [],
       benchmarkTicker: null,
       benchmarkReturnPct: null,
       excessReturnPct: null,
@@ -169,6 +172,20 @@ describe('calculateHistoricalWatchlistMetrics', () => {
     expect(calculateHistoricalWatchlistMetrics(flat).volumeZScore20).toBeNull();
   });
 
+  it('uses only provider-reported turnover for the 20-session liquidity average', () => {
+    const complete = Array.from({ length: 20 }, (_, index) => ({
+      ...bar(index + 1, 100 + index), amount: 1_000 + index * 10,
+    }));
+    const metrics = calculateHistoricalWatchlistMetrics(complete);
+    expect(metrics.averageTradedAmount20).toBeCloseTo(1_095);
+    expect(metrics.averageTradedAmountSampleSize).toBe(20);
+
+    const incomplete = complete.map((item, index) => index === 3 ? { ...item, amount: null } : item);
+    const missing = calculateHistoricalWatchlistMetrics(incomplete);
+    expect(missing.averageTradedAmount20).toBeNull();
+    expect(missing.averageTradedAmountSampleSize).toBe(19);
+  });
+
   it('aligns benchmark sessions by trading date across timestamp encodings', () => {
     const asset = Array.from({ length: 25 }, (_, index) => bar(Date.UTC(2026, 0, index + 1) / 1_000, 100 + index));
     const benchmark = Array.from({ length: 25 }, (_, index) => ({
@@ -177,6 +194,15 @@ describe('calculateHistoricalWatchlistMetrics', () => {
     const metrics = calculateHistoricalWatchlistMetrics(asset, { benchmarkBars: benchmark, benchmarkTicker: 'SPY' });
     expect(metrics.methodology.betaSampleSize).toBe(24);
     expect(metrics.beta).not.toBeNull();
+  });
+
+  it('keeps a bounded dated return series for honest pairwise correlation', () => {
+    const bars = Array.from({ length: 80 }, (_, index) => bar(index + 1, 100 + index));
+    const series = calculateHistoricalWatchlistMetrics(bars).correlationSeries;
+    expect(series).toHaveLength(60);
+    expect(series[0].date).toBe('21');
+    expect(series.at(-1)?.date).toBe('80');
+    expect(series.every((item) => Number.isFinite(item.returnPct))).toBe(true);
   });
 
   it('does not publish beta from an undersized common-session sample', () => {

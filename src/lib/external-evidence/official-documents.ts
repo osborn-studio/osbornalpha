@@ -36,7 +36,7 @@ export function configuredOfficialDocumentProvider(
   const token = options.token === undefined ? process.env.OFFICIAL_DOCUMENT_API_TOKEN?.trim() : options.token?.trim();
   return {
     id: PROVIDER_ID,
-    async load(sourceUrl) {
+    async load(sourceUrl, signal) {
       const canonical = canonicalizeEvidenceUrl(sourceUrl);
       if (!canonical || !isOfficialEvidenceDomain(new URL(canonical).hostname.replace(/^www\./, ''))) {
         throw new Error('official_document_domain_rejected');
@@ -45,7 +45,7 @@ export function configuredOfficialDocumentProvider(
         method: 'POST',
         headers: { 'content-type': 'application/json', accept: 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ url: canonical }),
-        signal: AbortSignal.timeout(10_000),
+        signal: signal ? AbortSignal.any([AbortSignal.timeout(10_000), signal]) : AbortSignal.timeout(10_000),
         cache: 'no-store',
       });
       if (!response.ok) throw new Error(`official_document_http_${response.status}`);

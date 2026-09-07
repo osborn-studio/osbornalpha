@@ -11,6 +11,10 @@ import { GET } from './route';
 const snapshot = {
   generated_at: '2026-09-04T12:00:00Z',
   research_queue: { due: 0, failed: 0, oldest_due_at: null },
+  manual_research_jobs: {
+    queued: 0, running: 0, failed: 0, cancelled: 0,
+    oldest_queued_at: null, oldest_running_at: null,
+  },
   metric_queue: { due: 0, failed: 0, oldest_due_at: null },
   perspective_generation_queue: {
     queued: 0, running: 0, failed: 0, oldest_queued_at: null, oldest_running_at: null,
@@ -27,7 +31,16 @@ describe('/api/cron/alerts/watchlist', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.CRON_SECRET = 'secret';
-    mocks.rpc.mockResolvedValue({ data: snapshot, error: null });
+    mocks.rpc.mockImplementation(async (name: string) => ({
+      data: name === 'get_watchlist_cron_dispatch_health'
+        ? {
+            pending: 0, running: 1, failed: 0, dead_letter: 0,
+            oldest_unsucceeded_at: '2026-09-04T12:00:00Z',
+            latest_succeeded_at: '2026-09-04T11:45:00Z',
+          }
+        : snapshot,
+      error: null,
+    }));
     mocks.record.mockResolvedValue({ ok: true, status: 'healthy' });
   });
 
@@ -37,6 +50,7 @@ describe('/api/cron/alerts/watchlist', () => {
     }));
     expect(response.status).toBe(200);
     expect(mocks.rpc).toHaveBeenCalledWith('get_watchlist_operational_health');
+    expect(mocks.rpc).toHaveBeenCalledWith('get_watchlist_cron_dispatch_health');
     expect(mocks.record).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       checkName: 'watchlist_15m', violations: [],
     }));
@@ -51,7 +65,10 @@ describe('/api/cron/alerts/watchlist', () => {
   });
 
   it('fails when the database returns an invalid health contract', async () => {
-    mocks.rpc.mockResolvedValue({ data: {}, error: null });
+    mocks.rpc.mockImplementation(async (name: string) => ({
+      data: name === 'get_watchlist_cron_dispatch_health' ? {} : snapshot,
+      error: null,
+    }));
     const response = await GET(new Request('http://localhost/api/cron/alerts/watchlist', {
       headers: { authorization: 'Bearer secret' },
     }));

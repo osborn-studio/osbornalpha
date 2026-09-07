@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { WatchlistMetricSnapshot } from '@/lib/supabase/database.types';
 import {
+  isWatchlistPeerAlertKey,
   isWatchlistMetricAlertKey,
+  watchlistPeerMetricAlertValue,
   watchlistMetricAlertThresholdIsValid,
   watchlistMetricAlertValue,
   watchlistMetricSnapshotStatus,
@@ -22,6 +24,24 @@ describe('Watchlist metric alert registry', () => {
     expect(watchlistMetricAlertThresholdIsValid('rsi14', 30)).toBe(true);
     expect(watchlistMetricAlertThresholdIsValid('rsi14', -1)).toBe(false);
     expect(watchlistMetricAlertThresholdIsValid('ma20_distance_pct', -5)).toBe(true);
+    expect(watchlistMetricAlertThresholdIsValid('market_relative_strength_percentile', 100)).toBe(true);
+    expect(watchlistMetricAlertThresholdIsValid('industry_pe_percentile', 101)).toBe(false);
+  });
+
+  it('keeps peer metric extraction separate from snapshot extraction', () => {
+    const envelope = {
+      value: {
+        marketRelativeStrengthPercentile: 84,
+        industryPePercentile: 65,
+        industryPbPercentile: null,
+        marketLiquidityPercentile: 72,
+      },
+    } as never;
+    expect(isWatchlistPeerAlertKey('market_liquidity_percentile')).toBe(true);
+    expect(isWatchlistPeerAlertKey('rsi14')).toBe(false);
+    expect(watchlistMetricAlertValue(snapshot, 'market_liquidity_percentile')).toBeNull();
+    expect(watchlistPeerMetricAlertValue(envelope, 'market_liquidity_percentile')).toBe(72);
+    expect(watchlistPeerMetricAlertValue(envelope, 'rsi14')).toBeNull();
   });
 
   it('rejects missing and expired snapshots', () => {

@@ -39,6 +39,17 @@
       "merging": "Merging view settings",
       "retry": "View settings saved locally · retry sync"
     },
+    "attention": {
+      "label": "Watchlist attention",
+      "title": "Needs attention",
+      "updated": "Updated",
+      "items": {
+        "delivery": "{count} delivery failures",
+        "alert": "{count} unread alerts",
+        "review": "{count} reviews due",
+        "data": "{count} data issues"
+      }
+    },
     "syncConflict": {
       "title": "This watchlist changed on another device",
       "body": "Your local edits are still preserved. Use the cloud version or explicitly overwrite it with this device.",
@@ -214,6 +225,9 @@
       "buckets": { "overdue": "Overdue", "due_today": "Due today", "upcoming": "Upcoming", "scheduled": "Scheduled", "unscheduled": "Unscheduled" },
       "scheduledFor": "Review {date}",
       "notScheduled": "No review date",
+      "alertReason": "Claim alert triggered",
+      "sourceClaim": "Source claim",
+      "triggerEvidence": "Observed {observed} · threshold {threshold}",
       "snoozeDays": "+{count} days",
       "complete": "Complete review",
       "refresh": "Refresh review queue",
@@ -239,12 +253,31 @@
         "quoteStatusAriaLabel": "Quote status for the filtered watchlist",
         "loading": "Loading",
         "median": "Median change",
+        "sample": "Sample {count}/{total}",
         "breadth": "Market breadth"
       },
     "loadingQuotes": "⏳ Loading quotes…",
     "addSecurity": "Add security",
     "ariaLabel": "Watchlist table view",
     "caption": "Watchlist table view: live prices, session range, liquidity and quote status; click headers to sort",
+    "missingData": {
+      "states": {
+        "loading": "Data is still loading",
+        "insufficient": "Not enough observations to calculate this metric",
+        "unavailable": "The data source is temporarily unavailable",
+        "notProvided": "The current provider does not supply this field",
+        "stale": "Only an expired snapshot is available",
+        "delayed": "Only delayed data is available"
+      },
+      "coverage": "Coverage {available}/{total}",
+      "observations": "{count} observations"
+    },
+    "providers": {
+      "marketData": "Market feed",
+      "researchFeed": "Research feed",
+      "financialData": "Financial data",
+      "savedResearch": "Saved research"
+    },
     "headers": {
       "ticker": "Ticker",
       "name": "Company",
@@ -262,10 +295,10 @@
       "volumeRatio": "Rel volume",
       "amplitude": "Amplitude",
       "dayPosition": "Day position",
-      "oneYearReturn": "1Y return",
+      "periodReturn": "Period return",
       "volatility": "Annualized vol",
       "maxDrawdown": "Max drawdown",
-      "rangePosition": "52W position",
+      "rangePosition": "Range position",
       "rsi14": "RSI (14)",
       "macdHistogram": "MACD histogram",
       "bollingerPosition": "Bollinger position",
@@ -273,18 +306,47 @@
       "excessReturn": "Vs benchmark",
       "beta": "Beta",
       "volumeZScore20": "Volume anomaly",
+      "relativeStrengthRank": "Market strength",
+      "pePercentile": "Industry PE rank",
+      "pbPercentile": "Industry PB rank",
+      "liquidityPercentile": "Market liquidity",
+      "averageTradedAmount20": "20D traded value",
+      "marketCapShare": "Watchlist cap share",
       "research": "Recent research",
+      "alerts": "Alerts",
       "decision": "Tracking status",
       "quality": "Data coverage",
       "updated": "Quote status",
       "group": "Group"
     },
+    "alertsSummary": "{enabled} active rules · {unread} unread events · {failed} delivery failures",
+    "alertsFailed": "Alert delivery failed",
+    "openResearch": "Open research",
     "sortAriaLabel": "Sort by {label}",
+    "methodology": {
+      "open": "Explain {label}",
+      "tooltip": "Source: {source} · Window: {window} · Minimum observations: {observations} · Comparison: {scope}",
+      "notApplicable": "not applicable",
+      "sources": { "quote": "quote snapshot", "history": "historical snapshot", "peer": "peer snapshot", "research": "stored research" },
+      "windows": { "snapshot": "current snapshot", "selected_history": "selected history range", "14d": "rolling 14 days" },
+      "scopes": { "global": "cross-market normalized", "single_market": "single market / currency only", "market_peer": "percentile within market", "industry_peer": "percentile within industry", "watchlist_market": "share within watchlist market cohort" }
+    },
     "presetAriaLabel": "Metric view",
     "presets": {
       "market": "Market",
+      "relative": "Relative",
       "valuation": "Valuation",
       "risk": "Risk"
+    },
+    "composition": {
+      "label": "Watchlist composition",
+      "scopeAll": "Entire watchlist · {count} instruments",
+      "dataStatus": "Composition",
+      "largestMarket": "Largest market share",
+      "largestIndustry": "Largest industry share",
+      "correlation": "Comparable correlations",
+      "highPairs": "{count} high · {total} measured",
+      "pending": "Awaiting aligned history"
     },
     "filters": {
       "search": "Search ticker or company",
@@ -300,6 +362,8 @@
       "tagPlaceholder": "Exact tag",
       "metric": "Metric",
       "noMetric": "No metric filter",
+      "singleMarketRequired": "select one market",
+      "singleMarketSort": "Select one market before sorting a currency-denominated metric.",
       "historyRange": "Metric range",
       "minimum": "Minimum",
       "maximum": "Maximum",
@@ -317,7 +381,7 @@
       "allStatuses": "All statuses",
       "noResults": "No instruments match the current filters."
     },
-    "selection": {
+      "selection": {
       "all": "Select all visible securities",
       "toggle": "Select {ticker}",
       "count": "{count} selected",
@@ -327,7 +391,77 @@
       "removeTag": "Remove tag",
       "move": "Move",
       "remove": "Remove",
+      "workflow": "Workflow",
+      "workflowLimit": "Bulk workflows support up to {count} securities",
+      "compare": "Compare",
+      "compareLimit": "Compare 2 to 5 securities at a time",
+      "enter": "Select securities",
+      "exit": "Exit selection mode",
       "clear": "Clear selection"
+    },
+    "comparison": {
+      "title": "Security comparison",
+      "subtitle": "{count} securities · historical metrics use the {range} window",
+      "close": "Close comparison",
+      "ariaLabel": "Selected security metric comparison",
+      "metric": "Metric",
+      "missingSummary": "{count} metrics are hidden because none of the selected securities has usable data.",
+      "openFirst": "Review data",
+      "issues": {
+        "mixedCurrency": "Prices and market caps use different currencies; compare their raw values with caution",
+        "mixedMarket": "Peer ranks come from different markets",
+        "mixedIndustry": "Valuation multiples span different industries",
+        "differentBenchmarks": "Risk and excess-return metrics use different benchmarks",
+        "staleData": "At least one security uses stale or unavailable quote data"
+      },
+      "groups": {
+        "market": "Market",
+        "valuation": "Valuation",
+        "performance": "Performance",
+        "risk": "Risk and technical",
+        "workflow": "Research workflow"
+      }
+    },
+    "bulkWorkflow": {
+      "title": "Bulk workflow",
+      "close": "Close bulk workflow",
+      "tabsLabel": "Bulk workflow type",
+      "tabs": {
+        "research": "Research",
+        "alert": "Alerts",
+        "review": "Reviews"
+      },
+      "researchAction": "Refresh selected research",
+      "alertAction": "Create alerts",
+      "scheduleAction": "Schedule reviews",
+      "completeAction": "Complete reviews",
+      "completeConfirm": "Resolve selected reviews?",
+      "reviewDate": "Review date",
+      "running": "Working...",
+      "retry": "Retry failed",
+      "resume": "Resume request",
+      "cancel": "Cancel",
+      "confirm": "Confirm",
+      "unavailable": "{count} selected securities are still missing server records and cannot use this action.",
+      "error": "The bulk workflow could not be completed.",
+      "resultLabel": "Bulk workflow result",
+      "unknownError": "Unknown error",
+      "errors": {
+        "rateLimited": "Research rate limit reached",
+        "researchPlanLimit": "Research plan limit reached",
+        "itemNotFound": "Security is no longer in this watchlist",
+        "researchFailed": "Research refresh failed",
+        "alertPlanLimit": "Alert plan limit reached",
+        "alertFailed": "Alert creation failed",
+        "decisionConflict": "Decision changed on another device",
+        "reviewFailed": "Review update failed"
+      },
+      "result": {
+        "succeeded": "Succeeded",
+        "unchanged": "Unchanged",
+        "conflicted": "Conflicts",
+        "failed": "Failed"
+      }
     },
     "columns": {
       "action": "Columns",
@@ -354,6 +488,13 @@
       "namePlaceholder": "View name",
       "save": "Save current view",
       "delete": "Delete saved view",
+      "rename": "Rename saved view",
+      "renameSave": "Save view name",
+      "renameCancel": "Cancel rename",
+      "moveUp": "Move saved view up",
+      "moveDown": "Move saved view down",
+      "setDefault": "Use as the default table view",
+      "unsetDefault": "Stop using as the default table view",
       "empty": "No saved views yet"
     },
     "quickView": "Action",
@@ -361,13 +502,53 @@
     "mobile": {
       "sparkline": "Historical price trend for {ticker}",
       "return": "Return",
-      "volatility": "Vol"
+      "volatility": "Vol",
+      "research": "Recent research",
+      "unreadAlerts": "{count} unread alerts",
+      "alertFailures": "{count} alert delivery failures"
     },
     "overview": {
       "loading": "Loading Watchlist data",
       "loadMore": "Load more analytics",
       "loadingMore": "Loading analytics…",
+      "snapshotSort": "Sorted and filtered using the persisted snapshot from {value}; live quotes remain available outside the active query column.",
       "sortBlocked": "Analytics columns are only sortable after all watchlist records are loaded."
+    },
+    "health": {
+      "label": "Data status center",
+      "title": "{count} data issues need attention",
+      "checkedAt": "Checked {value}",
+      "lastSuccess": "Last successful: {value}.",
+      "retry": "Retry affected data",
+      "warnings": {
+        "computedOverview": "Live market and historical calculations are unavailable; decision data remains usable.",
+        "metricSnapshots": "Persisted metric snapshots are unavailable; analytics columns may be empty.",
+        "identities": "Security names and industry metadata are unavailable; tickers remain identifiable.",
+        "research": "News, reports, and research summaries are unavailable.",
+        "peerMetrics": "Market and industry peer comparisons are unavailable.",
+        "composition": "Watchlist composition and correlations are unavailable.",
+        "alerts": "Alert summaries are unavailable; existing alert rules are unaffected.",
+        "providerHealth": "External provider runtime health could not be confirmed.",
+        "correlation": "No correlation pairs currently meet the sample requirement.",
+        "compositionStale": "The watchlist composition snapshot needs updating.",
+        "compositionTimestamp": "The watchlist composition snapshot has no valid timestamp.",
+        "researchStale": "Research has not been refreshed recently.",
+        "researchExpired": "Research has expired and needs to be fetched again.",
+        "generic": "Some optional data is unavailable; the core Watchlist remains usable."
+      },
+      "capabilities": {
+        "degraded": "{features} for {markets} is unstable and currently operating in degraded mode.",
+        "unavailable": "{features} for {markets} is temporarily disabled pending a successful health probe."
+      },
+      "features": {
+        "quote": "quotes",
+        "intradayChart": "intraday charts",
+        "historyChart": "historical charts",
+        "totalReturn": "total return",
+        "financials": "financials",
+        "news": "news",
+        "reports": "reports"
+      }
     },
     "dayPositionTitle": "Current price is at {value}% of today's range",
     "researchDivergence": "Divergent",
@@ -506,7 +687,68 @@
       "discardChanges": "Discard and close",
       "research": {
         "title": "News and research",
+        "sections": {
+          "label": "Research layers",
+          "facts": "Market facts",
+          "sources": "News & reports",
+          "perspectives": "AI perspectives",
+          "activity": "Activity"
+        },
+        "facts": {
+          "empty": "No verified market facts are available yet",
+          "confidence": "Confidence {value}%",
+          "sourceCount": "{count} sources in this event",
+          "conflicted": "Sources disagree on direction",
+          "kinds": { "market_event": "Market event", "filing": "Filing", "broker_view": "Broker view" },
+          "directions": { "positive": "Positive", "neutral": "Neutral", "negative": "Negative", "unknown": "Direction unknown" },
+          "metrics": { "sentiment": "Sentiment", "targetPriceMin": "Target low", "targetPriceMax": "Target high", "targetChangePct": "Target change" }
+        },
+        "sources": {
+          "title": "News and report sources",
+          "filter": "Filter research sources",
+          "total": "All sources",
+          "eligible": "Used by AI",
+          "dated": "Dated",
+          "averageQuality": "Average quality",
+          "quality": "Quality {value}%",
+          "corroborated": "{count} independent sources",
+          "conflictedFacts": "{count} event(s) contain materially conflicting source directions. Review the underlying sources before using them in a decision.",
+          "included": "Eligible for analysis",
+          "excluded": "Excluded from AI context",
+          "empty": "No sources match this filter",
+          "kinds": { "all": "All", "news": "News", "filing": "Filings", "report": "Reports" }
+        },
+        "workflow": {
+          "label": "Next action",
+          "open": "Open",
+          "priority": "P{score}",
+          "reasons": {
+            "delivery_failed": "Alert delivery needs recovery",
+            "unread_alert": "New alert evidence is waiting",
+            "review_overdue": "The scheduled decision review is overdue",
+            "review_due_today": "The decision review is due today",
+            "research_unavailable": "No usable research evidence is available",
+            "research_stale": "Research is outside the active evidence window",
+            "research_limited": "Some sources did not pass the evidence gate",
+            "perspectives_missing": "Evidence is ready but has not been synthesized",
+            "thesis_missing": "The decision has no documented thesis",
+            "research_incomplete": "The security is still in the research workflow",
+            "monitoring_current": "Research, alerts, and review state are current"
+          },
+          "actions": {
+            "retry_alert_delivery": "Retry failed alert delivery",
+            "review_alert": "Review the latest alert",
+            "review_decision": "Review the investment decision",
+            "refresh_research": "Refresh market research",
+            "generate_perspectives": "Generate evidence-backed perspectives",
+            "document_thesis": "Document the investment thesis",
+            "continue_research": "Continue reviewing the evidence",
+            "monitor": "Monitoring is up to date"
+          }
+        },
         "refresh": "Refresh news and reports",
+        "cancelRefresh": "Cancel this research refresh",
+        "refreshJobStages": { "queued": "Waiting for a refresh worker", "sources": "Fetching news and reports", "persistence": "Saving and organizing research", "complete": "Research refresh complete" },
         "retry": "Retry research",
         "summary": "{news} news in 14d · {reports} reports",
         "unseen": "{count} new",
@@ -560,6 +802,17 @@
         "allSources": "All sources",
         "noSourceResults": "No results for this source",
         "decisionSummary": "Research decision summary",
+        "brief": {
+          "title": "Committee conclusion",
+          "stances": { "bullish": "Bullish bias", "neutral": "Balanced / neutral", "bearish": "Bearish bias" },
+          "confidence": "Confidence {value}/10",
+          "agreement": "Agreement {value}%",
+          "disagreement": "Material disagreement",
+          "accuracy": "Historical accuracy {value}% · {count} observations",
+          "catalysts": "Catalysts",
+          "risks": "Risks",
+          "challengedClaims": "{count} claims have been challenged by feedback and should be reviewed."
+        },
         "targetMedianValue": "Median {value} · {count} estimates",
         "committeeStance": "Committee stance",
         "stanceSplit": "{bullish} bullish · {neutral} neutral · {bearish} bearish",
@@ -625,6 +878,17 @@
           "notSaved": "Feedback is available after this perspective is saved.",
           "outcome": "{days}d outcome {value}",
           "error": "Feedback could not be saved. Please retry.",
+          "claim": {
+            "label": "Rate claim",
+            "helpful": "Claim is useful",
+            "incorrect": "Claim is incorrect",
+            "outdated": "Claim is outdated",
+            "unsupported": "Evidence does not support this claim",
+            "clear": "Clear claim feedback",
+            "reason": "What is wrong with this claim or its evidence?",
+            "save": "Save claim feedback",
+            "cancel": "Cancel"
+          },
           "stances": { "bullish": "Bullish", "neutral": "Neutral", "bearish": "Bearish" }
         },
         "status": {
@@ -662,6 +926,14 @@
         "historyNoChanges": "Metadata updated",
         "historyVersion": "Version {version}",
         "historyRestore": "Restore",
+        "context": {
+          "title": "Data and evidence at this decision",
+          "unavailable": "No snapshot available",
+          "metricValue": "{range} metrics · {benchmark} benchmark · {coverage}% coverage",
+          "researchValue": "{news} news · {reports} reports",
+          "perspectiveValue": "{evidence} evidence items · {coverage}% coverage",
+          "alertsValue": "{unread} unread · {failed} failed delivery · {reviews} review reasons"
+        },
         "fields": {
           "conviction": "Conviction",
           "notes": "Notes",
@@ -682,6 +954,17 @@
           "invalidated": "Invalidated"
         }
       },
+      "peer": {
+        "title": "Comparable context",
+        "dataStatus": "Peer data",
+        "industryUnavailable": "Industry unavailable",
+        "relativeStrength": "Market strength percentile",
+        "pe": "Industry PE percentile",
+        "pb": "Industry PB percentile",
+        "liquidity": "Market liquidity percentile",
+        "averageAmount": "20D average traded value",
+        "capShare": "Watchlist cap share"
+      },
       "alerts": {
         "title": "Price and event alerts",
         "type": "Alert type",
@@ -694,6 +977,14 @@
         "selectValue": "Choose a match",
         "cooldown": "Repeat interval",
         "preview": "Rule preview",
+        "cadence": {
+          "market_15m": "Checked about every 15 minutes while the market is open.",
+          "hourly": "Checked hourly after metric snapshots refresh.",
+          "daily": "Checked daily when new research data is processed."
+        },
+        "discreteCrossing": "Crossing means a change between two sampled observations, not continuous monitoring.",
+        "discreteLabel": "sampled crossing",
+        "lastChecked": "Last checked {value}",
         "templates": "Quick templates",
         "presets": { "priceAbove": "Price breakout", "priceBelow": "Price breakdown", "largeMove": "Move ≥ 5%", "unusualVolume": "Volume ≥ 2x", "rsiOversold": "RSI oversold", "volatilityHigh": "Volatility ≥ 40%", "ratingBuy": "Rating turns buy" },
         "cooldowns": { "15": "15 minutes", "60": "1 hour", "240": "4 hours", "1440": "1 day", "10080": "7 days" },
@@ -702,6 +993,7 @@
         "add": "Add alert",
         "pause": "Pause",
         "resume": "Enable",
+        "claimDraft": "AI claim draft · review before enabling",
         "delete": "Delete alert",
         "empty": "No alerts configured for this security",
         "history": "Recent triggers",
@@ -732,7 +1024,12 @@
           "ma50_distance_pct": "Distance from MA50",
           "macd_histogram": "MACD histogram",
           "bollinger_position_pct": "Bollinger position",
-          "atr14_pct": "ATR (14)"
+          "atr14_pct": "ATR (14)",
+          "average_traded_amount_20": "20D average traded value",
+          "market_relative_strength_percentile": "Market strength percentile",
+          "industry_pe_percentile": "Industry PE percentile",
+          "industry_pb_percentile": "Industry PB percentile",
+          "market_liquidity_percentile": "Market liquidity percentile"
         },
         "operators": {
           "gt": "Greater than",

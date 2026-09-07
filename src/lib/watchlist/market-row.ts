@@ -1,6 +1,7 @@
 import type { Market } from '@/lib/supabase/database.types';
 import type { LiveQuote } from '@/lib/hooks/useQuote';
 import { classifyMarket, currencyOfMarket } from '@/lib/utils';
+import { selectWatchlistDisplayQuote } from './quote-authority';
 
 export interface WatchlistMarketGroup {
   id: string;
@@ -50,7 +51,7 @@ export function buildWatchlistMarketRows(
     for (const ticker of group.tickers) {
       if (seen.has(ticker)) continue;
       seen.add(ticker);
-      const quote = quotes[ticker] ?? null;
+      const quote = selectWatchlistDisplayQuote(quotes[ticker]);
       const identity = identities[ticker];
       const market = quote?.market ?? identity?.m ?? classifyMarket(ticker);
       rows.push({

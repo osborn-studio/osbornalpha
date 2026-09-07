@@ -11,6 +11,11 @@ vi.mock('@/lib/supabase/server', () => ({
   serverIsSupabaseConfigured: vi.fn(() => true),
   getServerSupabase: vi.fn(async () => ({ auth: { getUser: mocks.auth } })),
 }));
+vi.mock('@/lib/watchlist/api-rate-limit', () => ({
+  consumeWatchlistApiRateLimit: vi.fn(async () => ({
+    allowed: true, limit: 120, remaining: 119, retryAfterSeconds: 0,
+  })),
+}));
 vi.mock('@/lib/watchlist/activity-service', () => ({ loadWatchlistActivityBundle: mocks.load }));
 vi.mock('@/lib/watchlist/activity-repository', () => ({ markWatchlistActivitySeen: mocks.markSeen }));
 vi.mock('@/lib/watchlist/server-repository', () => ({ userOwnsWatchlistTicker: mocks.owns }));

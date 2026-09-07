@@ -17,6 +17,14 @@ export interface WatchlistReviewQueueRow {
   item: WatchlistOverviewItemRow;
   identity: StockUniverse | null;
   reviewBucket: Exclude<WatchlistReviewBucket, 'inactive'>;
+  reviewReasons: WatchlistReviewReasonView[];
+}
+
+export interface WatchlistReviewReasonView {
+  id: string;
+  type: 'claim_alert_triggered';
+  payload: Record<string, unknown>;
+  createdAt: string;
 }
 
 export interface WatchlistReviewQueue {
@@ -133,15 +141,30 @@ export function parseWatchlistReviewQueue(value: unknown): WatchlistReviewQueue 
     const group = record(row?.group);
     const item = record(row?.item);
     const identity = row?.identity;
+    const reasons = row?.review_reasons;
     if (!group || typeof group.id !== 'string' || typeof group.name !== 'string'
       || !item || typeof item.id !== 'string' || typeof item.ticker !== 'string'
       || !['overdue', 'due_today', 'upcoming', 'scheduled', 'unscheduled'].includes(String(row?.review_bucket))
-      || (identity !== null && !record(identity))) return [];
+      || (identity !== null && !record(identity)) || !Array.isArray(reasons)) return [];
+    const reviewReasons = reasons.flatMap((candidate): WatchlistReviewReasonView[] => {
+      const reason = record(candidate);
+      const payload = record(reason?.payload);
+      if (!reason || typeof reason.id !== 'string' || reason.type !== 'claim_alert_triggered'
+        || !payload || typeof reason.created_at !== 'string' || !Number.isFinite(Date.parse(reason.created_at))) return [];
+      return [{
+        id: reason.id,
+        type: 'claim_alert_triggered',
+        payload,
+        createdAt: reason.created_at,
+      }];
+    });
+    if (reviewReasons.length !== reasons.length) return [];
     return [{
       group: group as unknown as WatchlistReviewQueueRow['group'],
       item: item as unknown as WatchlistOverviewItemRow,
       identity: identity as StockUniverse | null,
       reviewBucket: row!.review_bucket as WatchlistReviewQueueRow['reviewBucket'],
+      reviewReasons,
     }];
   });
   if (parsedRows.length !== rows.length) return null;

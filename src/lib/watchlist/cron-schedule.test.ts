@@ -4,7 +4,7 @@ import { scheduledWatchlistCronJobs } from './cron-schedule';
 describe('Watchlist cron schedule', () => {
   it('always evaluates quote alerts and operational health', () => {
     expect(scheduledWatchlistCronJobs(new Date('2026-09-04T05:02:00Z'))).toEqual([
-      'quote-alerts', 'operational-health', 'review-reminders',
+      'quote-alerts', 'operational-health', 'review-reminders', 'provider-health',
     ]);
   });
 
@@ -27,5 +27,10 @@ describe('Watchlist cron schedule', () => {
   it('enqueues due review reminders once per hour', () => {
     expect(scheduledWatchlistCronJobs(new Date('2026-09-04T05:02:00Z'))).toContain('review-reminders');
     expect(scheduledWatchlistCronJobs(new Date('2026-09-04T05:17:00Z'))).not.toContain('review-reminders');
+  });
+
+  it('records provider canaries once per hour', () => {
+    expect(scheduledWatchlistCronJobs(new Date('2026-09-04T05:02:00Z'))).toContain('provider-health');
+    expect(scheduledWatchlistCronJobs(new Date('2026-09-04T05:17:00Z'))).not.toContain('provider-health');
   });
 });

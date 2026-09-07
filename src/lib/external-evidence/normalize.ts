@@ -150,14 +150,46 @@ export function normalizeEvidenceResults(
   return output;
 }
 
-export function dedupeAndRankEvidence(results: ExternalEvidence[], limit: number): ExternalEvidence[] {
+const RECENCY_HALF_LIFE_DAYS: Record<EvidenceScope | 'social', number> = {
+  news: 7,
+  social: 2,
+  broker: 30,
+  filing: 180,
+  company: 90,
+  industry: 45,
+  macro: 45,
+};
+
+export function evidenceRecencyScore(item: ExternalEvidence, now: Date): number {
+  if (!item.publishedAt) return item.qualityFlags.includes('official_source') ? 0.65 : 0.2;
+  const publishedAt = Date.parse(item.publishedAt);
+  if (!Number.isFinite(publishedAt)) return 0.2;
+  const ageDays = Math.max(0, (now.getTime() - publishedAt) / 86_400_000);
+  const halfLife = RECENCY_HALF_LIFE_DAYS[item.sourceType] ?? 30;
+  return Number(Math.exp((-Math.LN2 * ageDays) / halfLife).toFixed(3));
+}
+
+export function evidenceRankingScore(item: ExternalEvidence, now: Date): number {
+  return Number((
+    item.relevanceScore * 0.55
+    + item.qualityScore * 0.3
+    + evidenceRecencyScore(item, now) * 0.15
+  ).toFixed(4));
+}
+
+export function dedupeAndRankEvidence(
+  results: ExternalEvidence[],
+  limit: number,
+  now = new Date(Math.max(0, ...results.map((item) => Date.parse(item.fetchedAt) || 0))),
+): ExternalEvidence[] {
   const byUrl = new Map<string, ExternalEvidence>();
   for (const result of results) {
     const current = byUrl.get(result.url);
     if (!current || result.relevanceScore > current.relevanceScore) byUrl.set(result.url, result);
   }
   const ranked = [...byUrl.values()]
-    .sort((a, b) => b.relevanceScore - a.relevanceScore || (b.publishedAt || '').localeCompare(a.publishedAt || ''));
+    .sort((a, b) => evidenceRankingScore(b, now) - evidenceRankingScore(a, now)
+      || (b.publishedAt || '').localeCompare(a.publishedAt || ''));
   const clusters: ExternalEvidence[][] = [];
   for (const item of ranked) {
     const cluster = clusters.find((candidate) => representsSameEvent(candidate[0], item));

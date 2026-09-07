@@ -18,6 +18,8 @@
     "watchlist:production-check": "tsx scripts/watchlist-production-check.ts",
     "watchlist:runtime-check": "tsx scripts/watchlist-runtime-check.ts",
     "watchlist:provider-check": "tsx scripts/watchlist-provider-check.ts",
+    "watchlist:delivery-check": "tsx scripts/watchlist-delivery-check.ts",
+    "watchlist:perspective-eval": "node --import tsx scripts/watchlist-perspective-eval.ts",
     "watchlist:rls-check": "tsx scripts/watchlist-rls-check.ts",
     "securities:sync": "tsx scripts/securities-sync.ts",
     "securities:reconcile": "tsx scripts/securities-reconcile.ts"

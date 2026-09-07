@@ -25,6 +25,9 @@ describe('Watchlist overview query contract', () => {
     expect(parseWatchlistOverviewQuery(new URL('https://example.test?metric=quality')).invalid).toBe(true);
     expect(parseWatchlistOverviewQuery(new URL('https://example.test?market=XX')).invalid).toBe(true);
     expect(parseWatchlistOverviewQuery(new URL('https://example.test?quoteStatus=loading')).invalid).toBe(true);
+    expect(parseWatchlistOverviewQuery(new URL('https://example.test?sort=averageTradedAmount20')).invalid).toBe(true);
+    expect(parseWatchlistOverviewQuery(new URL('https://example.test?metric=averageTradedAmount20&metricMin=1')).invalid).toBe(true);
+    expect(parseWatchlistOverviewQuery(new URL('https://example.test?sort=averageTradedAmount20&market=US')).invalid).toBe(false);
   });
 
   it('binds cursors to the complete query fingerprint', () => {
@@ -62,7 +65,22 @@ describe('Watchlist overview query contract', () => {
     expect(watchlistOverviewServerSort('price')).toBe('price');
     expect(watchlistOverviewServerSort('change')).toBe('change');
     expect(watchlistOverviewServerSort('dayPosition')).toBe('dayPosition');
+    expect(watchlistOverviewServerSort('periodReturn')).toBe('periodReturn');
     expect(watchlistOverviewServerSort('updated')).toBe('freshness');
+    expect(watchlistOverviewServerSort('relativeStrengthRank')).toBe('relativeStrengthRank');
+    expect(watchlistOverviewServerSort('pePercentile')).toBe('pePercentile');
+    expect(watchlistOverviewServerSort('averageTradedAmount20')).toBe('averageTradedAmount20');
     expect(watchlistOverviewServerSort('quality')).toBeNull();
+  });
+
+  it('accepts peer-backed complete-dataset metric filters', () => {
+    expect(parseWatchlistOverviewQuery(new URL(
+      'https://example.test?sort=relativeStrengthRank&direction=desc&metric=liquidityPercentile&metricMin=70',
+    ))).toMatchObject({
+      invalid: false,
+      sort: 'relativeStrengthRank',
+      metric: 'liquidityPercentile',
+      metricMin: 70,
+    });
   });
 });

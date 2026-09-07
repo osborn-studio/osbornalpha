@@ -14,6 +14,11 @@ vi.mock('@/lib/supabase/server', () => ({
 vi.mock('@/lib/watchlist/security-validation', () => ({
   validateSelectableSecuritiesWithClient: mocks.validate,
 }));
+vi.mock('@/lib/watchlist/api-rate-limit', () => ({
+  consumeWatchlistApiRateLimit: vi.fn(async () => ({
+    allowed: true, limit: 120, remaining: 119, retryAfterSeconds: 0,
+  })),
+}));
 
 import { POST } from './route';
 

@@ -24,6 +24,7 @@ describe('Watchlist activity service', () => {
       loadAssessments: vi.fn(async () => ({
         '10000000-0000-4000-8000-000000000001': {
           feedback: { id: 'feedback-1', user_id: 'user-1', perspective_id: '10000000-0000-4000-8000-000000000001', verdict: 'helpful', reason: null, corrected_stance: null, created_at: now.toISOString() },
+          claimFeedback: [{ id: 'claim-feedback-1', user_id: 'user-1', perspective_id: '10000000-0000-4000-8000-000000000001', claim_id: 'claim_1', verdict: 'unsupported', reason: 'Weak source', created_at: now.toISOString(), updated_at: now.toISOString() }],
           outcomes: [{ id: 'outcome-1', user_id: 'user-1', perspective_id: '10000000-0000-4000-8000-000000000001', horizon_days: 30, reference_price: 100, outcome_price: 108, return_pct: 8, direction_correct: false, evaluated_at: now.toISOString() }],
         },
       })),
@@ -34,6 +35,7 @@ describe('Watchlist activity service', () => {
     expect(bundle.perspectives[0]).toMatchObject({
       id: '10000000-0000-4000-8000-000000000001',
       feedback: { verdict: 'helpful' },
+      claimFeedback: { claim_1: { verdict: 'unsupported', reason: 'Weak source' } },
       outcomes: [{ horizonDays: 30, returnPct: 8, directionCorrect: false }],
     });
     // The alert is unseen; a future calendar occurrence is not permanently unread.

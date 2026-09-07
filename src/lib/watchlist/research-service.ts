@@ -23,8 +23,12 @@ import {
   type WatchlistResearchChanges,
   type WatchlistResearchTimelineItem,
 } from './research-timeline';
+import {
+  buildWatchlistResearchEvidence,
+  type WatchlistResearchEvidenceProjection,
+} from './research-evidence';
 
-export interface WatchlistResearchBundle {
+export interface WatchlistResearchBundle extends WatchlistResearchEvidenceProjection {
   ticker: string;
   news: StockNewsResponse;
   reports: StockReportsResponse;
@@ -59,8 +63,8 @@ export interface WatchlistResearchSourceSnapshot {
 }
 
 export interface WatchlistResearchDependencies {
-  getNews: typeof getStockNews;
-  getReports: typeof getStockReports;
+  getNews: (ticker: string, freshnessDays?: number, options?: { signal?: AbortSignal }) => ReturnType<typeof getStockNews>;
+  getReports: (ticker: string, options?: { signal?: AbortSignal }) => ReturnType<typeof getStockReports>;
   persistNews: typeof persistStockNews;
   persistReports: typeof persistStockReports;
   now: () => Date;
@@ -173,6 +177,27 @@ export function mapStoredWatchlistResearch(
       corroboratingSources: row.corroborating_sources,
     };
   });
+  const newsItems: StockNewsItem[] = stored.news.map((row) => ({
+    id: row.source_key,
+    title: row.title,
+    source: row.source || 'stored',
+    url: row.url,
+    snippet: row.snippet || '',
+    sentiment: row.sentiment,
+    sentimentConfidence: row.sentiment_confidence,
+    sentimentLanguage: row.sentiment_language as StockNewsItem['sentimentLanguage'],
+    sentimentAspects: row.sentiment_aspects as StockNewsItem['sentimentAspects'],
+    publishedAt: row.published_at,
+    fetchedAt: row.fetched_at,
+    trustScore: row.trust_score ?? 0,
+    relevanceScore: row.relevance_score ?? row.trust_score ?? 0,
+    qualityScore: row.quality_score ?? row.trust_score ?? 0,
+    qualityFlags: qualityFlags(row.quality_flags),
+    eventClusterId: row.event_cluster_id,
+    corroborationCount: row.corroboration_count,
+    corroboratingSources: row.corroborating_sources,
+    sourceType: row.source_type || 'news',
+  }));
   const perspectives = stored.perspectives.map((row) => ({
     id: row.id,
     persona: row.persona,
@@ -208,27 +233,7 @@ export function mapStoredWatchlistResearch(
     ticker,
     news: {
       ticker,
-      items: stored.news.map((row) => ({
-        id: row.source_key,
-        title: row.title,
-        source: row.source || 'stored',
-        url: row.url,
-        snippet: row.snippet || '',
-        sentiment: row.sentiment,
-        sentimentConfidence: row.sentiment_confidence,
-        sentimentLanguage: row.sentiment_language as StockNewsItem['sentimentLanguage'],
-        sentimentAspects: row.sentiment_aspects as StockNewsItem['sentimentAspects'],
-        publishedAt: row.published_at,
-        fetchedAt: row.fetched_at,
-        trustScore: row.trust_score ?? 0,
-        relevanceScore: row.relevance_score ?? row.trust_score ?? 0,
-        qualityScore: row.quality_score ?? row.trust_score ?? 0,
-        qualityFlags: qualityFlags(row.quality_flags),
-        eventClusterId: row.event_cluster_id,
-        corroborationCount: row.corroboration_count,
-        corroboratingSources: row.corroborating_sources,
-        sourceType: row.source_type || 'news',
-      })),
+      items: newsItems,
       meta: storedMeta(newsFetchedAt, newsProviders, now),
     },
     reports: {
@@ -241,6 +246,7 @@ export function mapStoredWatchlistResearch(
     perspectiveSource: stored.perspectives[0]?.source ?? null,
     perspectivesGeneratedAt: stored.perspectives[0]?.created_at ?? null,
     perspectiveProvenance,
+    ...buildWatchlistResearchEvidence(newsItems, reportItems),
     refresh: { status: 'stored', refreshedAt: latest([newsFetchedAt, reportsFetchedAt]), warnings: [] },
   };
   return {
@@ -277,11 +283,13 @@ export async function refreshWatchlistResearch(
 export async function fetchWatchlistResearchSources(
   ticker: string,
   dependencies: WatchlistResearchDependencies = productionDependencies,
+  signal?: AbortSignal,
 ): Promise<WatchlistResearchSourceSnapshot> {
   const [news, reports] = await Promise.allSettled([
-    dependencies.getNews(ticker),
-    dependencies.getReports(ticker),
+    dependencies.getNews(ticker, 14, { signal }),
+    dependencies.getReports(ticker, { signal }),
   ]);
+  if (signal?.aborted) throw signal.reason ?? new Error('watchlist_research_cancelled');
   if (news.status === 'rejected' && reports.status === 'rejected') {
     throw new Error('watchlist_research_refresh_failed');
   }

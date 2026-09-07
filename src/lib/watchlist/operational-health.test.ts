@@ -8,6 +8,10 @@ import {
 const healthy = {
   generated_at: '2026-09-04T12:00:00Z',
   research_queue: { due: 2, failed: 0, oldest_due_at: '2026-09-04T11:50:00Z' },
+  manual_research_jobs: {
+    queued: 0, running: 0, failed: 0, cancelled: 0,
+    oldest_queued_at: null, oldest_running_at: null,
+  },
   metric_queue: { due: 1, failed: 0, oldest_due_at: '2026-09-04T11:45:00Z' },
   perspective_generation_queue: {
     queued: 0, running: 0, failed: 0, oldest_queued_at: null, oldest_running_at: null,
@@ -20,6 +24,11 @@ const healthy = {
   },
   citations: { sample_size: 4, average_coverage: 0.75 },
   shared_research: { artifacts: 20, links: 30 },
+  cron_dispatch: {
+    pending: 0, running: 1, failed: 0, dead_letter: 0,
+    oldest_unsucceeded_at: '2026-09-04T12:00:00Z',
+    latest_succeeded_at: '2026-09-04T11:45:00Z',
+  },
 };
 
 describe('Watchlist operational health', () => {
@@ -60,6 +69,25 @@ describe('Watchlist operational health', () => {
     });
   });
 
+  it('detects failed and stalled manual research workers', () => {
+    const parsed = parseWatchlistOperationalHealth({
+      ...healthy,
+      manual_research_jobs: {
+        queued: 30, running: 1, failed: 2, cancelled: 3,
+        oldest_queued_at: '2026-09-04T11:00:00Z',
+        oldest_running_at: '2026-09-04T11:40:00Z',
+      },
+    });
+    expect(evaluateWatchlistOperationalHealth(parsed!)).toMatchObject({
+      status: 'critical',
+      warnings: expect.arrayContaining([
+        'manual_research_job_failed',
+        'manual_research_queue_stalled',
+        'manual_research_worker_stalled',
+      ]),
+    });
+  });
+
   it('maps health warnings into the shared operational alert contract', () => {
     const parsed = parseWatchlistOperationalHealth({
       ...healthy,
@@ -68,6 +96,23 @@ describe('Watchlist operational health', () => {
     const evaluation = watchlistOperationalAlertEvaluation(evaluateWatchlistOperationalHealth(parsed!));
     expect(evaluation.metrics).toMatchObject({ status: 'degraded', warnings: ['research_queue_failed'] });
     expect(evaluation.violations).toEqual([{ code: 'research_queue_failed', value: 1, threshold: 0 }]);
+  });
+
+  it('detects stalled and dead-lettered scheduler slots', () => {
+    const parsed = parseWatchlistOperationalHealth({
+      ...healthy,
+      cron_dispatch: {
+        pending: 1, running: 0, failed: 2, dead_letter: 1,
+        oldest_unsucceeded_at: '2026-09-04T10:00:00Z',
+        latest_succeeded_at: '2026-09-04T10:00:00Z',
+      },
+    });
+    expect(evaluateWatchlistOperationalHealth(parsed!)).toMatchObject({
+      status: 'critical',
+      warnings: expect.arrayContaining([
+        'cron_dispatch_failed', 'cron_dispatch_dead_letter', 'cron_dispatch_stalled',
+      ]),
+    });
   });
 
   it('rejects malformed snapshots and reports empty installations as unknown', () => {

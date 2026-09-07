@@ -7,6 +7,7 @@ import { loadPerspectiveAssessments } from './perspective-feedback';
 import { loadWatchlistResearchBundle, type WatchlistResearchBundle } from './research-service';
 import { buildWatchlistResearchTimeline, type WatchlistResearchTimelineItem } from './research-timeline';
 import { loadWatchlistItemByTicker, loadWatchlistItemDecisionHistory, type WatchlistServerClient } from './server-repository';
+import { buildWatchlistWorkflowSummary, type WatchlistWorkflowSummary } from './workflow-summary';
 
 export interface WatchlistActivityBundle extends WatchlistResearchBundle {
   timeline: WatchlistResearchTimelineItem[];
@@ -16,6 +17,7 @@ export interface WatchlistActivityBundle extends WatchlistResearchBundle {
     unseenCount: number;
     warnings: string[];
   };
+  workflow: WatchlistWorkflowSummary;
 }
 
 export interface ActivityDependencies {
@@ -48,6 +50,10 @@ function assessedPerspectives(
     const assessment = item.id ? assessments[item.id] : null;
     return {
       ...item,
+      claimFeedback: Object.fromEntries((assessment?.claimFeedback ?? []).map((feedback) => [feedback.claim_id, {
+        verdict: feedback.verdict,
+        reason: feedback.reason,
+      }])),
       feedback: assessment?.feedback ? {
         verdict: assessment.feedback.verdict,
         reason: assessment.feedback.reason,
@@ -130,5 +136,12 @@ export async function loadWatchlistActivityBundle(
       unseenCount: unseenCount(timeline, lastSeenAt, generatedAt),
       warnings,
     },
+    workflow: buildWatchlistWorkflowSummary({
+      item,
+      research,
+      alerts: alertsResult.data ?? [],
+      decisions: historyResult.data ?? [],
+      now: dependencies.now(),
+    }),
   };
 }

@@ -1,24 +1,25 @@
-import { NextResponse } from 'next/server';
-import { getServerSupabase, serverIsSupabaseConfigured } from '@/lib/supabase/server';
 import { parseBulkTagCommand } from '@/lib/watchlist/bulk-tags';
 import { applyBulkTagCommand } from '@/lib/watchlist/bulk-tags-repository';
-import { watchlistApiError } from '@/lib/watchlist/api-error';
+import { createWatchlistRequestReporter } from '@/lib/watchlist/request-reporter';
+import { authorizeWatchlistRequest, enforceReportedWatchlistRateLimit } from '@/lib/watchlist/request-guards';
 
 export async function PATCH(request: Request) {
-  if (!serverIsSupabaseConfigured()) return watchlistApiError('supabase_unavailable', 503);
-  const client = await getServerSupabase();
-  const { data: { user } } = await client.auth.getUser();
-  if (!user) return watchlistApiError('not_authenticated', 401);
+  const reporter = createWatchlistRequestReporter('watchlist_bulk_tag_update', request);
+  const auth = await authorizeWatchlistRequest(reporter, request);
+  if (auth instanceof Response) return auth;
+  const { client } = auth;
+  const rateLimitResponse = await enforceReportedWatchlistRateLimit(reporter, client, 'bulk');
+  if (rateLimitResponse) return rateLimitResponse;
   const command = parseBulkTagCommand(await request.json().catch(() => null));
-  if (!command) return watchlistApiError('invalid_bulk_tag_command', 400);
+  if (!command) return reporter.reject('invalid_bulk_tag_command', 400);
 
-  const { data, error } = await applyBulkTagCommand(client, command);
+  const { data, error } = await reporter.step('apply_bulk_tag', () => applyBulkTagCommand(client, command));
   if (error?.code === '40001' || error?.message === 'watchlist_decision_conflict') {
-    return watchlistApiError('watchlist_decision_conflict', 409);
+    return reporter.reject('watchlist_decision_conflict', 409);
   }
   if (error?.code === 'P0002' || error?.message === 'watchlist_item_not_found') {
-    return watchlistApiError('watchlist_item_not_found', 404);
+    return reporter.reject('watchlist_item_not_found', 404);
   }
-  if (error) return watchlistApiError('watchlist_bulk_tag_update_failed', 503);
-  return NextResponse.json({ items: data ?? [] });
+  if (error) return reporter.fail(error, 'watchlist_bulk_tag_update_failed');
+  return reporter.json({ items: data ?? [] }, { fields: { item_count: data?.length ?? 0 } });
 }

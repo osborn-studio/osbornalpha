@@ -1,4 +1,4 @@
-import type { PerspectiveFeedback, PerspectiveOutcome, Stance } from '@/lib/supabase/database.types';
+import type { PerspectiveClaimFeedback, PerspectiveFeedback, PerspectiveOutcome, Stance } from '@/lib/supabase/database.types';
 
 export interface PerspectiveFeedbackInput {
   perspectiveId: string;
@@ -33,6 +33,7 @@ export type PerspectiveFeedbackClient = object;
 
 export interface PerspectiveAssessment {
   feedback: PerspectiveFeedback | null;
+  claimFeedback: PerspectiveClaimFeedback[];
   outcomes: PerspectiveOutcome[];
 }
 
@@ -50,22 +51,30 @@ export async function loadPerspectiveAssessments(
   };
   const db = client as {
     from(table: 'perspective_feedback'): { select(columns: '*'): Query<PerspectiveFeedback> };
+    from(table: 'perspective_claim_feedback'): { select(columns: '*'): Query<PerspectiveClaimFeedback> };
     from(table: 'perspective_outcomes'): { select(columns: '*'): Query<PerspectiveOutcome> };
   };
-  const [feedbackResult, outcomeResult] = await Promise.all([
+  const [feedbackResult, claimFeedbackResult, outcomeResult] = await Promise.all([
     db.from('perspective_feedback').select('*').eq('user_id', userId).in('perspective_id', ids),
+    db.from('perspective_claim_feedback').select('*').eq('user_id', userId).in('perspective_id', ids),
     db.from('perspective_outcomes').select('*').eq('user_id', userId).in('perspective_id', ids)
       .order('horizon_days', { ascending: true }),
   ]);
   if (feedbackResult.error) throw new Error(`perspective_feedback_load_failed:${feedbackResult.error.message}`);
+  if (claimFeedbackResult.error) throw new Error(`perspective_claim_feedback_load_failed:${claimFeedbackResult.error.message}`);
   if (outcomeResult.error) throw new Error(`perspective_outcomes_load_failed:${outcomeResult.error.message}`);
   const feedbackById = new Map((feedbackResult.data ?? []).map((item) => [item.perspective_id, item]));
   const outcomesById = new Map<string, PerspectiveOutcome[]>();
+  const claimFeedbackById = new Map<string, PerspectiveClaimFeedback[]>();
+  for (const item of claimFeedbackResult.data ?? []) {
+    claimFeedbackById.set(item.perspective_id, [...(claimFeedbackById.get(item.perspective_id) ?? []), item]);
+  }
   for (const item of outcomeResult.data ?? []) {
     outcomesById.set(item.perspective_id, [...(outcomesById.get(item.perspective_id) ?? []), item]);
   }
   return Object.fromEntries(ids.map((id) => [id, {
     feedback: feedbackById.get(id) ?? null,
+    claimFeedback: claimFeedbackById.get(id) ?? [],
     outcomes: outcomesById.get(id) ?? [],
   }]));
 }

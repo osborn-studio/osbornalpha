@@ -237,6 +237,23 @@ export interface StockContext {
   external_evidence?: ExternalEvidence[];
 }
 
+export function perspectiveStructuredDataCites(ctx: StockContext): string[] {
+  return [
+    ctx.price != null && Number.isFinite(ctx.price) && ctx.price > 0 ? '当前价' : null,
+    ctx.price != null && Number.isFinite(ctx.price) && ctx.price > 0
+      && ctx.change_pct != null && Number.isFinite(ctx.change_pct) ? '今日涨跌' : null,
+    ctx.market_cap_label ? '市值' : null,
+    ctx.pe_ttm != null && Number.isFinite(ctx.pe_ttm) ? 'PE TTM' : null,
+    ctx.pb != null && Number.isFinite(ctx.pb) ? 'PB' : null,
+    ctx.roe != null && Number.isFinite(ctx.roe) ? 'ROE' : null,
+    ctx.gross_margin != null && Number.isFinite(ctx.gross_margin) ? '毛利率' : null,
+    ctx.net_margin != null && Number.isFinite(ctx.net_margin) ? '净利率' : null,
+    ctx.dividend_yield != null && Number.isFinite(ctx.dividend_yield) ? '股息率' : null,
+    ctx.financial_summary ? '财务摘要' : null,
+    ctx.events?.length ? '近期事件' : null,
+  ].filter((value): value is string => value !== null);
+}
+
 export function buildUserMessage(
   ctx: StockContext,
   options: { analysisMode?: PerspectiveAnalysisResolvedMode } = {},
@@ -285,14 +302,19 @@ export function buildUserMessage(
   }
   lines.push('');
   lines.push('请基于上述数据，从你的视角输出严格 JSON：');
-  lines.push('{"stance":"bullish"|"neutral"|"bearish","confidence":0-10,"summary":"<≤120字>","claims":[{"kind":"thesis"|"catalyst"|"risk"|"counterpoint","text":"<单一可验证主张>","data_cites":["<结构化数据标签>"],"citation_ids":["<web_xxx或web_xxx#pN>"]}]}');
+  lines.push('{"stance":"bullish"|"neutral"|"bearish","confidence":0-10,"summary":"<≤120字>","claims":[{"kind":"thesis"|"catalyst"|"risk"|"counterpoint","text":"<单一可验证主张>","data_cites":["<结构化数据标签>"],"citation_ids":["<web_xxx或web_xxx#pN>"],"invalidation":{"condition":"<该主张何时不再成立>","alert_type":"price"|"change_pct"|"volume_ratio"|"valuation"|"metric"|"event"|"rating"|"perspective","operator":"gt"|"gte"|"lt"|"lte"|"crosses_above"|"crosses_below"|null,"threshold":<number|null>,"config":{}}}]}');
   lines.push('');
   lines.push('要求：');
+  const allowedDataCites = perspectiveStructuredDataCites(ctx);
+  lines.push(`- data_cites 只能使用此列表中的原样标签：${allowedDataCites.length > 0 ? allowedDataCites.join('、') : '（无可用标签）'}`);
   lines.push('- summary 必须引用上述至少 1 个具体数据点');
   lines.push('- 禁止说"建议买入/卖出/明天会涨"，用"信号偏多/偏空/中性"');
   lines.push('- claims 为 1-6 条；每条只表达一个主张，并至少包含一个 data_cites 或 citation_ids 证据');
-  lines.push('- 每条 claim 的 data_cites 只列结构化数据标签（如 "PE TTM"、"5年营收"）');
+  lines.push('- 不得创造、改写或从训练记忆补充 data_cites 标签');
   lines.push('- 每条 claim 的 citation_ids 只能使用上方外部证据中真实存在的 web_xxx 或 web_xxx#pN 编号；有段落编号时优先引用段落；没有外部证据时必须为空数组');
+  lines.push('- invalidation 可省略；若提供，必须是可被系统提醒验证的单一条件，数值类必须给出 operator 和 threshold，事件/评级/观点类必须把 operator、threshold 设为 null');
+  lines.push('- invalidation.config 只允许对应提醒所需字段：valuation/metric 用 metric，event 用 kinds，rating/perspective 用 values；不得包含解释、来源或用户信息');
+  lines.push('- invalidation 仅是待用户确认的提醒草稿，不得声称已创建或已启用提醒');
   if (analysisMode === 'evidence_backed') {
     lines.push('- citation_ids 至少包含 1 个有效外部证据编号（按所有 claims 合计），否则本次观点无效');
   }

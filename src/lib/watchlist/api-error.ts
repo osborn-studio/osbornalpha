@@ -4,6 +4,7 @@ interface WatchlistApiErrorOptions {
   retryable?: boolean;
   retryAfterSeconds?: number;
   details?: Record<string, unknown>;
+  requestId?: string;
 }
 
 export function watchlistApiError(
@@ -11,6 +12,7 @@ export function watchlistApiError(
   status: number,
   options: WatchlistApiErrorOptions = {},
 ) {
+  const requestId = options.requestId ?? crypto.randomUUID();
   const retryable = options.retryable ?? (status === 429 || status === 502 || status === 503);
   const retryAfterSeconds = options.retryAfterSeconds && options.retryAfterSeconds > 0
     ? Math.floor(options.retryAfterSeconds)
@@ -19,11 +21,14 @@ export function watchlistApiError(
     error: code,
     code,
     retryable,
-    requestId: crypto.randomUUID(),
+    requestId,
     ...(retryAfterSeconds ? { retryAfterSeconds } : {}),
     ...(options.details ?? {}),
   }, {
     status,
-    headers: retryAfterSeconds ? { 'retry-after': String(retryAfterSeconds) } : undefined,
+    headers: {
+      'x-request-id': requestId,
+      ...(retryAfterSeconds ? { 'retry-after': String(retryAfterSeconds) } : {}),
+    },
   });
 }

@@ -5,6 +5,11 @@ vi.mock('@/lib/supabase/server', () => ({
   serverIsSupabaseConfigured: vi.fn(() => true),
   getServerSupabase: vi.fn(async () => ({ auth: { getUser: mocks.auth } })),
 }));
+vi.mock('@/lib/watchlist/api-rate-limit', () => ({
+  consumeWatchlistApiRateLimit: vi.fn(async () => ({
+    allowed: true, limit: 20, remaining: 19, retryAfterSeconds: 0,
+  })),
+}));
 vi.mock('@/lib/watchlist/bulk-tags-repository', () => ({ applyBulkTagCommand: mocks.apply }));
 
 import { PATCH } from './route';

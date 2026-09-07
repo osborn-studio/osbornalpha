@@ -1,16 +1,21 @@
-import { NextResponse } from 'next/server';
-import { getServerSupabase, serverIsSupabaseConfigured } from '@/lib/supabase/server';
 import { parseWatchlistAlertEventQuery } from '@/lib/watchlist/alert-events';
 import { listWatchlistAlertEvents } from '@/lib/watchlist/alert-repository';
-import { watchlistApiError } from '@/lib/watchlist/api-error';
+import { createWatchlistRequestReporter } from '@/lib/watchlist/request-reporter';
+import { authorizeWatchlistRequest } from '@/lib/watchlist/request-guards';
 
 export async function GET(request: Request) {
-  if (!serverIsSupabaseConfigured()) return watchlistApiError('supabase_unavailable', 503);
-  const client = await getServerSupabase();
-  const { data: { user } } = await client.auth.getUser();
-  if (!user) return watchlistApiError('not_authenticated', 401);
+  const reporter = createWatchlistRequestReporter('watchlist_alert_events', request);
+  const auth = await authorizeWatchlistRequest(reporter, request);
+  if (auth instanceof Response) return auth;
   const options = parseWatchlistAlertEventQuery(new URL(request.url));
-  const { data, error } = await listWatchlistAlertEvents(client, user.id, options);
-  if (error) return watchlistApiError('watchlist_alert_events_unavailable', 503);
-  return NextResponse.json({ events: data ?? [] });
+  try {
+    const { data, error } = await reporter.step('load_events', () => (
+      listWatchlistAlertEvents(auth.client, auth.user.id, options)
+    ));
+    if (error) throw new Error(error.message);
+    const events = data ?? [];
+    return reporter.json({ events }, { fields: { event_count: events.length } });
+  } catch (error) {
+    return reporter.fail(error, 'watchlist_alert_events_unavailable');
+  }
 }

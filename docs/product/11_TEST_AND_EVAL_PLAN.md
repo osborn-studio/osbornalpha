@@ -13,6 +13,7 @@ npm test            # Vitest 单元、契约、迁移与安全回归
 npm run typecheck   # tsc --noEmit —— 类型零错误
 npm run build       # next build —— App Router 全量构建通过
 npm run lint        # ESLint 零 warning
+npm run watchlist:perspective-eval # 固定 A/HK/US 观点合规与引用回归集
 ```
 
 **门通过标准：** 四条命令均为 0 退出码。`build` 在缺 Supabase env 时仍应成功（占位值降级，见 `server.ts` 的 placeholder 兜底）；缺 env 报错时按 `EDGEONE_DEPLOY.md` 用占位 public 值过构建。
@@ -67,6 +68,7 @@ npm run lint        # ESLint 零 warning
 - **免责声明强制**：简报输出必须含免责声明文案（合规后处理注入），人审抽样确认未被模型省略。
 - **人审打分（每周抽 3–5 份简报）**：相关性、是否捏造数据（hallucination）、口径一致（红涨绿跌/币种）、可读性。打脸率纳入 ROADMAP 退出策略统计。
 - **provider 回退**：`LLM_PROVIDER` 未 pin 时 DeepSeek 优先、Anthropic 回退；验证拔掉 `DEEPSEEK_API_KEY` 后仍能用 `ANTHROPIC_API_KEY` 出简报。
+- **固定离线回归**：`npm run watchlist:perspective-eval` 必须全部通过；覆盖真实/伪造网页引用、上下文存在/不存在的结构化指标、直接投资建议措辞和空输出。Prompt 或模型版本升级必须先更新并评审固定集，禁止通过降低断言绕过失败。
 
 ---
 

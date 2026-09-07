@@ -28,6 +28,7 @@ describe('watchlist research timeline', () => {
       calendar: [{ kind: 'earnings_announce', date: '20260908', title: 'Earnings', daysUntil: 4 }],
       decisions: [{
         id: 'decision-1', user_id: 'user-1', watchlist_item_id: 'item-1', version: 2,
+        context_snapshot: {},
         before_value: { status: 'researching' }, after_value: { status: 'watching' },
         changed_at: '2026-09-04T10:00:00Z',
       }],

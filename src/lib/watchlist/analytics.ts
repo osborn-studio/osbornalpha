@@ -6,6 +6,7 @@ import type { MarketReturnSnapshot, WatchlistHistoryRange } from '@/lib/market-r
 type HistoricalPriceBar = Pick<KlineBar, 'close' | 'high' | 'low'> & {
   time: string | number;
   volume?: number;
+  amount?: number | null;
 };
 
 const MARKET_BENCHMARKS: Record<Market, string> = {
@@ -44,6 +45,9 @@ export interface HistoricalWatchlistMetrics {
   bollingerPositionPct: number | null;
   atr14Pct: number | null;
   volumeZScore20: number | null;
+  averageTradedAmount20: number | null;
+  averageTradedAmountSampleSize: number;
+  correlationSeries: Array<{ date: string; returnPct: number }>;
   benchmarkTicker: string | null;
   benchmarkReturnPct: number | null;
   excessReturnPct: number | null;
@@ -204,6 +208,18 @@ function latestVolumeZScore(bars: HistoricalPriceBar[], period = 20): number | n
   return (current - average) / Math.sqrt(variance);
 }
 
+function averageTradedAmount(bars: HistoricalPriceBar[], period = 20): {
+  value: number | null;
+  sampleSize: number;
+} {
+  const window = bars.slice(-period);
+  const amounts = window
+    .map((bar) => bar.amount)
+    .filter((value): value is number => value != null && Number.isFinite(value) && value >= 0);
+  if (amounts.length < period) return { value: null, sampleSize: amounts.length };
+  return { value: mean(amounts), sampleSize: amounts.length };
+}
+
 function tradingDateKey(value: string | number): string {
   if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -215,6 +231,14 @@ function tradingDateKey(value: string | number): string {
   }
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toISOString().slice(0, 10);
+}
+
+function correlationReturnSeries(bars: HistoricalPriceBar[], maxObservations = 60): Array<{ date: string; returnPct: number }> {
+  const source = bars.slice(-(maxObservations + 1));
+  return source.slice(1).map((bar, index) => {
+    const previous = source[index].close;
+    return { date: tradingDateKey(bar.time), returnPct: ((bar.close / previous) - 1) * 100 };
+  }).filter((item) => Number.isFinite(item.returnPct));
 }
 
 function coverageDateKey(value: string | number): string | null {
@@ -336,6 +360,9 @@ export function calculateHistoricalWatchlistMetrics(
       bollingerPositionPct: null,
       atr14Pct: null,
       volumeZScore20: null,
+      averageTradedAmount20: null,
+      averageTradedAmountSampleSize: 0,
+      correlationSeries: [],
       benchmarkTicker: options.benchmarkTicker ?? null,
       benchmarkReturnPct: null,
       excessReturnPct: null,
@@ -395,6 +422,7 @@ export function calculateHistoricalWatchlistMetrics(
     options.benchmarkTicker ?? null,
   );
   const macdMetrics = macd(closes);
+  const tradedAmount = averageTradedAmount(usable);
   const benchmarkReturnPct = options.benchmarkReturnSnapshot?.priceReturnPct ?? relative.benchmarkReturnPct;
   const excessReturnPct = periodReturnPct != null && benchmarkReturnPct != null
     ? periodReturnPct - benchmarkReturnPct
@@ -424,6 +452,9 @@ export function calculateHistoricalWatchlistMetrics(
     bollingerPositionPct: bollingerPosition(closes),
     atr14Pct: atrPercent(usable),
     volumeZScore20: latestVolumeZScore(usable),
+    averageTradedAmount20: tradedAmount.value,
+    averageTradedAmountSampleSize: tradedAmount.sampleSize,
+    correlationSeries: correlationReturnSeries(usable),
     ...relative,
     benchmarkReturnPct,
     excessReturnPct,

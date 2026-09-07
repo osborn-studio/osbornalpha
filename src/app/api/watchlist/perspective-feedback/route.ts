@@ -1,27 +1,29 @@
-import { NextResponse } from 'next/server';
-import { getServerSupabase, serverIsSupabaseConfigured } from '@/lib/supabase/server';
 import {
   deletePerspectiveFeedback,
   loadPerspectiveAssessments,
   parsePerspectiveFeedback,
   savePerspectiveFeedback,
 } from '@/lib/watchlist/perspective-feedback';
-import { watchlistApiError } from '@/lib/watchlist/api-error';
+import { createWatchlistRequestReporter } from '@/lib/watchlist/request-reporter';
+import { authorizeWatchlistRequest, enforceReportedWatchlistRateLimit } from '@/lib/watchlist/request-guards';
 
 export async function POST(request: Request) {
-  if (!serverIsSupabaseConfigured()) return watchlistApiError('supabase_unavailable', 503);
-  const client = await getServerSupabase();
-  const { data: { user } } = await client.auth.getUser();
-  if (!user) return watchlistApiError('not_authenticated', 401);
+  const reporter = createWatchlistRequestReporter('watchlist_perspective_feedback_save', request);
+  const auth = await authorizeWatchlistRequest(reporter, request);
+  if (auth instanceof Response) return auth;
+  const { client, user } = auth;
+  const rateLimitResponse = await enforceReportedWatchlistRateLimit(reporter, client, 'feedback');
+  if (rateLimitResponse) return rateLimitResponse;
   const input = parsePerspectiveFeedback(await request.json().catch(() => null));
-  if (!input) return watchlistApiError('invalid_perspective_feedback', 400);
+  if (!input) return reporter.reject('invalid_perspective_feedback', 400);
   try {
-    return NextResponse.json({ feedback: await savePerspectiveFeedback(client, user.id, input) });
+    const feedback = await reporter.step('store_feedback', () => savePerspectiveFeedback(client, user.id, input));
+    return reporter.json({ feedback });
   } catch (error) {
     if (error instanceof Error && error.message === 'perspective_not_found') {
-      return watchlistApiError('perspective_not_found', 404);
+      return reporter.reject('perspective_not_found', 404);
     }
-    return watchlistApiError('perspective_feedback_unavailable', 503);
+    return reporter.fail(error, 'perspective_feedback_unavailable');
   }
 }
 
@@ -33,31 +35,34 @@ function perspectiveId(request: Request): string | null {
 }
 
 export async function GET(request: Request) {
-  if (!serverIsSupabaseConfigured()) return watchlistApiError('supabase_unavailable', 503);
-  const client = await getServerSupabase();
-  const { data: { user } } = await client.auth.getUser();
-  if (!user) return watchlistApiError('not_authenticated', 401);
+  const reporter = createWatchlistRequestReporter('watchlist_perspective_feedback', request);
   const id = perspectiveId(request);
-  if (!id) return watchlistApiError('invalid_perspective_id', 400);
+  if (!id) return reporter.reject('invalid_perspective_id', 400);
+  const auth = await authorizeWatchlistRequest(reporter, request);
+  if (auth instanceof Response) return auth;
   try {
-    const assessment = (await loadPerspectiveAssessments(client, user.id, [id]))[id];
-    return NextResponse.json({ feedback: assessment?.feedback ?? null, outcomes: assessment?.outcomes ?? [] });
-  } catch {
-    return watchlistApiError('perspective_feedback_unavailable', 503);
+    const assessment = (await reporter.step('load_feedback', () => (
+      loadPerspectiveAssessments(auth.client, auth.user.id, [id])
+    )))[id];
+    return reporter.json({ feedback: assessment?.feedback ?? null, outcomes: assessment?.outcomes ?? [] });
+  } catch (error) {
+    return reporter.fail(error, 'perspective_feedback_unavailable');
   }
 }
 
 export async function DELETE(request: Request) {
-  if (!serverIsSupabaseConfigured()) return watchlistApiError('supabase_unavailable', 503);
-  const client = await getServerSupabase();
-  const { data: { user } } = await client.auth.getUser();
-  if (!user) return watchlistApiError('not_authenticated', 401);
+  const reporter = createWatchlistRequestReporter('watchlist_perspective_feedback_delete', request);
+  const auth = await authorizeWatchlistRequest(reporter, request);
+  if (auth instanceof Response) return auth;
+  const { client, user } = auth;
+  const rateLimitResponse = await enforceReportedWatchlistRateLimit(reporter, client, 'feedback');
+  if (rateLimitResponse) return rateLimitResponse;
   const id = perspectiveId(request);
-  if (!id) return watchlistApiError('invalid_perspective_id', 400);
+  if (!id) return reporter.reject('invalid_perspective_id', 400);
   try {
-    await deletePerspectiveFeedback(client, user.id, id);
-    return NextResponse.json({ ok: true });
-  } catch {
-    return watchlistApiError('perspective_feedback_unavailable', 503);
+    await reporter.step('delete_feedback', () => deletePerspectiveFeedback(client, user.id, id));
+    return reporter.json({ ok: true });
+  } catch (error) {
+    return reporter.fail(error, 'perspective_feedback_unavailable');
   }
 }

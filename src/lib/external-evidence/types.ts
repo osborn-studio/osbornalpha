@@ -94,7 +94,7 @@ export interface EvidenceDocument {
 
 export interface EvidenceDocumentProvider {
   id: string;
-  load(url: string): Promise<{ url: string; paragraphs: string[] }>;
+  load(url: string, signal?: AbortSignal): Promise<{ url: string; paragraphs: string[] }>;
 }
 
 export interface EvidenceSearchProvider {

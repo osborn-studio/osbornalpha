@@ -124,7 +124,7 @@ export async function fetchExchangeCalendarSnapshot(
   baseUrl: string,
   from: string,
   to: string,
-  options: { apiKey?: string; fetcher?: typeof fetch; timeoutMs?: number } = {},
+  options: { apiKey?: string; fetcher?: typeof fetch; timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<ExchangeCalendarSnapshot> {
   const url = new URL(baseUrl);
   url.searchParams.set('from', from);
@@ -133,7 +133,7 @@ export async function fetchExchangeCalendarSnapshot(
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 10_000);
   try {
     const response = await (options.fetcher ?? fetch)(url, {
-      signal: controller.signal,
+      signal: options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal,
       headers: options.apiKey ? { authorization: `Bearer ${options.apiKey}` } : undefined,
       cache: 'no-store',
     });

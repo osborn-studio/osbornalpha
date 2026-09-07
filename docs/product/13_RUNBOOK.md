@@ -8,7 +8,7 @@ osbornalpha 生产运维。托管 Vercel（osbornalpha.com，阿里云 DNS）；
 
 ## 1. 部署
 
-正常发布走 Git → Vercel 自动构建（push 到 `main` 触发 Production）。手动发布：
+正常发布走 GitHub Actions：`Application checks` 先验证代码、浏览器流程与本地 Supabase migrations；成功后 `Watchlist production release` 负责应用生产迁移、验证 schema、构建 Vercel 并执行真实登录态探针。`vercel.json` 已关闭 `main` 的 Git Integration 自动部署，避免新代码在生产迁移之前抢先上线；PR Preview 不受影响。不要在应用生产迁移前用最新 release marker 阻断前置 CI，否则会形成迁移发布死锁。手动发布：
 
 ```bash
 npm test
@@ -32,6 +32,8 @@ vercel --prod --yes                  # 直接发 Production
 |------|------|------|
 | `NEXT_PUBLIC_SUPABASE_URL` | ✅ | Supabase 项目 URL（`https://mzfcaabhuwtfvsvadvsv.supabase.co`） |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | ✅ | 前端 anon/publishable key（`sb_publishable_…`） |
+| `WATCHLIST_RUNTIME_EMAIL` / `WATCHLIST_RUNTIME_PASSWORD` | CI 发布门 | 专用只读验收账号 A，用于部署后调用真实 Watchlist overview，并作为 RLS Canary 一侧；仅存 GitHub `production` environment secrets |
+| `WATCHLIST_RUNTIME_EMAIL_B` / `WATCHLIST_RUNTIME_PASSWORD_B` | CI 发布门 | 独立验收账号 B，用于双向验证租户隔离；仅存 GitHub `production` environment secrets |
 | `SUPABASE_SERVICE_ROLE_KEY` | ✅ | 平台计量、成本预留/审计、管理路由所需；仅服务端，绝不入库/暴露 |
 | `NEXT_PUBLIC_APP_URL` | ✅ | `https://www.osbornalpha.com`（生产） |
 | `LLM_PROVIDER` | ✅（推荐显式） | 生产设为 `deepseek`；显式 provider 缺自己的 key 时失败关闭，不自动换 provider |
@@ -42,7 +44,7 @@ vercel --prod --yes                  # 直接发 Production
 | `LLM_USD_CNY_MICROS` | ✅ | 经评审的 USD/CNY 微单位值，当前 `7200000` |
 | `LLM_RESERVATION_TTL_SECONDS` | ✅ | 成本预留 TTL，当前 `300` |
 | `TUSHARE_TOKEN` | 数据 | A 股深度数据 |
-| `WATCHLIST_REQUIRED_PROVIDERS` | 建议 | 逗号分隔：`search,hk-financials,structured-research,official-documents,trading-calendar`；列入后不可降级发布 |
+| `WATCHLIST_REQUIRED_PROVIDERS` | CI 发布门 | GitHub `production` environment variable；逗号分隔：`search,hk-financials,structured-research,official-documents,trading-calendar`，必须显式设置且列入后不可降级发布 |
 | `SEARCH_PROVIDER` / `TAVILY_API_KEY` / `BRAVE_SEARCH_API_KEY` / `SERPER_API_KEY` | Watchlist 研究 | 联网搜索 Provider 与服务端密钥 |
 | `WATCHLIST_SEARCH_CANARY_QUERIES` | 可选探针 | 以 `|` 分隔的搜索 Canary 查询；默认覆盖 A/H/US 三市场 |
 | `HK_FINANCIALS_API_URL` / `HK_FINANCIALS_API_TOKEN` | 可选数据 | 港股财务结构化 Provider |
@@ -53,8 +55,14 @@ vercel --prod --yes                  # 直接发 Production
 | `SEC_USER_AGENT` | 可选 | SEC EDGAR 请求联系标识；建议设置为 `产品名/版本 运维邮箱` |
 | `CRON_SECRET` | 建议 | `/api/cron/*` 的 Bearer 鉴权 |
 | `WATCHLIST_REVIEW_REMINDER_LIMIT` | 建议 | Dispatcher 单轮生成 Review 到期提醒的上限，生产建议 `500` |
+| `WATCHLIST_DISPATCH_CONCURRENCY` | 建议 | Dispatcher 同一执行波次并发数，默认 `2`；依赖任务不会并发越序 |
+| `WATCHLIST_DISPATCH_BUDGET_MS` / `WATCHLIST_DISPATCH_JOB_TIMEOUT_MS` | 建议 | 单次 Dispatcher 总预算与单任务硬超时，默认 `270000` / `90000` 毫秒 |
+| `WATCHLIST_DISPATCH_LOOKBACK_MINUTES` / `WATCHLIST_DISPATCH_SLOT_LIMIT` | 建议 | 漏调补跑窗口与单次最多领取的 15 分钟时间槽，默认 `120` 分钟 / `8` 个 |
+| `WATCHLIST_DISPATCH_LEASE_MINUTES` | 建议 | 调度时间槽租约，默认 `5` 分钟；超时调用由后续 Dispatcher 回收 |
+| `WATCHLIST_REQUIRE_SCHEMA_GATE` | 生产默认开启 | Vercel Production 构建前验证最新 Watchlist release marker；仅紧急回滚时显式设为 `false` |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | 通知 | 简报/告警推送 |
 | `RESEND_API_KEY` / `EMAIL_FROM` / `EMAIL_TO` | 通知 | 邮件简报/告警 |
+| `WATCHLIST_DELIVERY_CANARY_EMAIL` / `WATCHLIST_DELIVERY_CANARY_FROM` | CI 发布门 | 专用通知验收收件人 secret 与已验证发件人 repository variable；发布时发送幂等邮件并等待 Resend `delivered` 状态 |
 | `CACHE_PURGE_SECRET` | 可选 | `/api/cache/revalidate` 鉴权 |
 | `LLM_DIGEST_TAKE` | 可选 | 摘要 take 开关 |
 
@@ -65,7 +73,7 @@ vercel --prod --yes                  # 直接发 Production
 
 ## 3. Supabase 迁移
 
-迁移文件在 `supabase/migrations/`。上线前以文件名顺序核对所有未应用迁移；当前 Watchlist 最新 release marker 为 `perspective_claims`，由 `20260904430000_perspective_claims.sql` 写入。两种应用方式：
+迁移文件在 `supabase/migrations/`。上线前以文件名顺序核对所有未应用迁移；当前 Watchlist 最新 release marker 为 `watchlist_cron_dispatch_acl_health`，由 `20260904630000_watchlist_cron_dispatch_acl_health.sql` 写入。两种应用方式：
 
 **A. CLI（推荐）**
 ```bash
@@ -87,6 +95,8 @@ supabase db push                                    # 应用所有未应用迁�
 1. 在源头生成新 key（Supabase / DeepSeek / Tushare / Resend / Telegram 各自控制台）。
 2. Vercel → Settings → Env 更新对应变量（Production + Preview）。
 3. 重新部署使新值生效（`vercel --prod` 或 redeploy）。
+
+主分支的 `Watchlist production release` workflow 在 `Application checks` 全绿后按顺序执行生产 migration、schema check、Provider Canary、双账号 RLS Canary、通知投递 Canary、Vercel build/deploy 与 authenticated runtime check。GitHub `production` environment 必须配置 Supabase、Provider、两套验收账号、Resend Canary 与 Vercel secrets；任一必需 Provider、fixture、隔离或投递检查失败都会在部署前停止。Vercel Git 自动构建即使提前触发，也会被 production schema gate 阻止在旧 schema 上发布。
 4. 源头吊销旧 key。
 5. **Supabase service_role / `sb_secret_`**：泄漏即视为最高级事故，立即在 Dashboard → Settings → API 轮换并全环境替换。
 
@@ -110,7 +120,7 @@ supabase db push                                    # 应用所有未应用迁�
 - 缓解：保持 `LLM_PROVIDER=deepseek`、`LLM_MODEL=deepseek-v4-flash`，必要时降 `topN` 或用 `?skipLLM=true` 隔离数据管线；不得通过切换到未复核定价的模型绕过门禁。
 
 ### 5.4 cron 未跑 / 被滥用
-- 排查：Vercel cron 在 `vercel.json`；`/api/cron/watchlist-dispatch` 分派告警、运营健康、Review 提醒、指标、观点结果和研究刷新；`/api/cron/watchlist-perspectives` 每 5 分钟恢复未被即时 Worker 处理的 AI 任务。Vercel Dashboard → Crons 查看执行记录，并检查响应中各 job 的独立状态。
+- 排查：Vercel cron 在 `vercel.json`；`/api/cron/watchlist-dispatch` 分派告警、运营健康、Review 提醒、指标、观点结果和研究刷新；`/api/cron/watchlist-perspectives` 每 5 分钟恢复未被即时 Worker 处理的 AI 任务。Vercel Dashboard → Crons 查看执行记录，并检查响应中各 job 的独立状态。`metric-refresh` 必须先于 `metric-alerts`，`skipped_dependency` 表示上游失败，`watchlist_cron_job_timeout` 表示单任务超过独立时限。
 - 加固：设 `CRON_SECRET`，裸调 `/api/cron/*` 应返回 401。
 
 ### 5.5 Review 提醒未送达或重复

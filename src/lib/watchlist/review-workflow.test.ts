@@ -43,10 +43,10 @@ describe('watchlist review workflow', () => {
       summary: { overdue: 1, due_today: 2, upcoming: 3, unscheduled: 4 },
       rows: [{
         group: { id: 'group-1', name: 'Core', description: null, sort_order: 0 },
-        item: { id: 'item-1', ticker: 'AAPL' }, identity: null, review_bucket: 'overdue',
+        item: { id: 'item-1', ticker: 'AAPL' }, identity: null, review_bucket: 'overdue', review_reasons: [],
       }],
     };
-    expect(parseWatchlistReviewQueue(value)).toMatchObject({ summary: { overdue: 1 }, rows: [{ reviewBucket: 'overdue' }] });
+    expect(parseWatchlistReviewQueue(value)).toMatchObject({ summary: { overdue: 1 }, rows: [{ reviewBucket: 'overdue', reviewReasons: [] }] });
     expect(parseWatchlistReviewQueue({ ...value, rows: [{ item: null }] })).toBeNull();
   });
 });

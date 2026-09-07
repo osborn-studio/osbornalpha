@@ -489,6 +489,10 @@ export interface PerspectiveRow {
   cites: string[];
   citations?: PerspectiveCitation[];
   claims?: PerspectiveClaim[];
+  claimFeedback?: Record<string, {
+    verdict: 'helpful' | 'incorrect' | 'outdated' | 'unsupported';
+    reason: string | null;
+  }>;
   feedback?: {
     verdict: 'helpful' | 'incorrect' | 'outdated';
     reason: string | null;

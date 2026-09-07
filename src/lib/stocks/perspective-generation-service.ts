@@ -1,5 +1,10 @@
 import { chatResolved, extractJson } from '@/lib/data/sources/llm';
-import { PERSONAS, buildUserMessage, type PerspectiveResult } from '@/lib/data/personas';
+import {
+  PERSONAS,
+  buildUserMessage,
+  perspectiveStructuredDataCites,
+  type PerspectiveResult,
+} from '@/lib/data/personas';
 import type { ResolvedLlm } from '@/lib/llm/resolve';
 import { beginUsageRun, finalizeUsageRun, type QuotaResult } from '@/lib/billing/quota';
 import {
@@ -28,7 +33,7 @@ import {
 } from './perspective-analysis';
 
 const MAX_PERSONA_OUTPUT_TOKENS = 400;
-export const PERSPECTIVE_PROMPT_VERSION = 'watchlist-perspectives-2026-09-04.v3';
+export const PERSPECTIVE_PROMPT_VERSION = 'watchlist-perspectives-2026-09-05.v4';
 const COST_ERROR_CODES = new Set([
   'daily_cost_exhausted',
   'pricing_unavailable',
@@ -76,6 +81,7 @@ function costErrorCode(error: unknown): string | null {
 function perspectiveFailureCode(error: unknown): string {
   const code = error instanceof Error ? error.message : String(error);
   return code === 'evidence_citation_required' || code === 'invalid_model_output'
+    || code === 'non_compliant_model_output'
     ? code
     : costErrorCode(error) ?? 'provider_error';
 }
@@ -276,6 +282,7 @@ export async function generateStockPerspectives(
         persona,
         evidence: evidence.results,
         analysisMode: analysis.resolvedMode,
+        allowedDataCites: perspectiveStructuredDataCites(ctx),
       });
     }),
   );

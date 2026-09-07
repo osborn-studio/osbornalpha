@@ -5,6 +5,7 @@ import { useTranslations } from 'next-intl';
 import { useWatchlistDecisionHistory } from '@/lib/hooks/useWatchlistDecisionHistory';
 import { changedDecisionFields } from '@/lib/watchlist/decision-history';
 import type { WatchlistOverviewItemRow } from '@/lib/watchlist/overview-contract';
+import { WatchlistDecisionContext } from './WatchlistDecisionContext';
 
 function displayValue(value: unknown): string {
   if (value == null || value === '') return '--';
@@ -58,6 +59,7 @@ export function WatchlistDecisionHistory({ item, onRestored }: {
                     ))}
                   </dl>
                 ) : <div className="mt-1 text-text-muted">{t('historyNoChanges')}</div>}
+                <WatchlistDecisionContext value={entry.context_snapshot} />
               </li>
             );
           })}

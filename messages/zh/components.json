@@ -97,6 +97,13 @@
     "sourceCount": "{count} 个来源",
     "qualityFlags": "质量标记：{value}",
     "structuredEvidence": "结构化证据",
+    "invalidation": "失效条件",
+    "createAlertDraft": "生成提醒草稿",
+    "creatingAlertDraft": "正在生成草稿…",
+    "alertDraftCreated": "已生成未启用草稿",
+    "alertDraftExists": "该提醒草稿已存在",
+    "reviewAlertDraft": "前往提醒确认",
+    "alertDraftError": "无法生成该提醒草稿",
     "claimKinds": {
       "thesis": "核心判断",
       "catalyst": "催化剂",

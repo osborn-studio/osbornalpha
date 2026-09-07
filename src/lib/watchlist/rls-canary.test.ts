@@ -36,4 +36,18 @@ describe('Watchlist RLS canary', () => {
     }));
     expect(watchlistRlsCanaryPassed(results)).toBe(true);
   });
+
+  it('covers every user-readable table added by durable Watchlist workflows', () => {
+    expect(WATCHLIST_RLS_TABLES.map(({ table }) => table)).toEqual(expect.arrayContaining([
+      'watchlist_research_refresh_state',
+      'watchlist_research_jobs',
+      'watchlist_composition_snapshots',
+      'watchlist_alert_origins',
+      'watchlist_review_reasons',
+      'watchlist_bulk_workflow_runs',
+      'perspective_outcomes',
+      'perspective_claim_feedback',
+    ]));
+    expect(WATCHLIST_RLS_TABLES.every(({ required }) => required)).toBe(true);
+  });
 });

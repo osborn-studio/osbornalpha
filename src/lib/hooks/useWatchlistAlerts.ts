@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import type { WatchlistAlert, WatchlistAlertEvent } from '@/lib/supabase/database.types';
+import type { WatchlistAlert, WatchlistAlertEvent, WatchlistAlertWithOrigin } from '@/lib/supabase/database.types';
 import { watchlistJsonRequest } from '@/lib/watchlist/api-client';
 
 export interface NewWatchlistAlert {
@@ -13,7 +13,7 @@ export interface NewWatchlistAlert {
 }
 
 export function useWatchlistAlerts(itemId: string | null) {
-  const [alerts, setAlerts] = useState<WatchlistAlert[]>([]);
+  const [alerts, setAlerts] = useState<WatchlistAlertWithOrigin[]>([]);
   const [events, setEvents] = useState<WatchlistAlertEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -26,7 +26,7 @@ export function useWatchlistAlerts(itemId: string | null) {
     try {
       const query = encodeURIComponent(itemId);
       const [alertBody, eventBody] = await Promise.all([
-        watchlistJsonRequest<{ alerts: WatchlistAlert[] }>(`/api/watchlist/alerts?itemId=${query}`, { signal, cache: 'no-store' }, 'watchlist_alert_request_failed'),
+        watchlistJsonRequest<{ alerts: WatchlistAlertWithOrigin[] }>(`/api/watchlist/alerts?itemId=${query}`, { signal, cache: 'no-store' }, 'watchlist_alert_request_failed'),
         watchlistJsonRequest<{ events: WatchlistAlertEvent[] }>(`/api/watchlist/alert-events?itemId=${query}&limit=20`, { signal, cache: 'no-store' }, 'watchlist_alert_request_failed'),
       ]);
       setAlerts(alertBody.alerts);
@@ -55,7 +55,7 @@ export function useWatchlistAlerts(itemId: string | null) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ itemId, ...input }),
       }, 'watchlist_alert_request_failed');
-      setAlerts((current) => [body.alert, ...current]);
+      setAlerts((current) => [{ ...body.alert, origin: null }, ...current]);
       return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'watchlist_alert_request_failed');
@@ -72,7 +72,7 @@ export function useWatchlistAlerts(itemId: string | null) {
       const body = await watchlistJsonRequest<{ alert: WatchlistAlert }>(`/api/watchlist/alerts/${encodeURIComponent(id)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
       }, 'watchlist_alert_request_failed');
-      setAlerts((current) => current.map((alert) => alert.id === id ? body.alert : alert));
+      setAlerts((current) => current.map((alert) => alert.id === id ? { ...body.alert, origin: alert.origin } : alert));
       return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'watchlist_alert_request_failed');

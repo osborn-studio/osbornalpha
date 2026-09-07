@@ -9,6 +9,7 @@ interface HkFinancialProviderDependencies {
   endpoint?: string | null;
   token?: string | null;
   fetch?: typeof fetch;
+  signal?: AbortSignal;
 }
 
 function configuredEndpoint(value: string | null | undefined): URL | null {
@@ -50,7 +51,9 @@ export async function loadConfiguredHkFinancialReport(
       accept: 'application/json',
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: dependencies.signal
+      ? AbortSignal.any([AbortSignal.timeout(TIMEOUT_MS), dependencies.signal])
+      : AbortSignal.timeout(TIMEOUT_MS),
     cache: 'no-store',
   });
   if (!response.ok) throw new Error(`${PROVIDER_ID}_http_${response.status}`);

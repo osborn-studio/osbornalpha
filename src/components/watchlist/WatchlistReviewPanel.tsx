@@ -1,6 +1,6 @@
 'use client';
 
-import { CalendarClock, Check, Clock3, RefreshCw, X } from 'lucide-react';
+import { CalendarClock, Check, Clock3, RefreshCw, ShieldAlert, X } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useDialogFocusTrap } from '@/lib/hooks/useDialogFocusTrap';
 import type { useWatchlistReviews } from '@/lib/hooks/useWatchlistReviews';
@@ -8,6 +8,14 @@ import type { WatchlistReviewQueueRow, WatchlistReviewScope } from '@/lib/watchl
 
 type ReviewModel = ReturnType<typeof useWatchlistReviews>;
 const SCOPES: WatchlistReviewScope[] = ['due', 'upcoming', 'unscheduled', 'all'];
+
+function text(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function number(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
 
 function futureDate(days: number): string {
   const date = new Date();
@@ -56,6 +64,21 @@ export function WatchlistReviewPanel({ model, onOpenTicker, onClose }: {
                     <span className="min-w-0 flex-1"><span className="flex items-center gap-2"><strong className="font-mono text-sm text-text">{row.item.ticker}</strong><span className="truncate text-xs text-text-dim">{name}</span></span><span className="mt-1 block text-[11px] text-text-muted">{row.group.name} · {row.item.review_at ? t('scheduledFor', { date: row.item.review_at.slice(0, 10) }) : t('notScheduled')}</span></span>
                     <span className={`text-[11px] ${row.reviewBucket === 'overdue' ? 'text-status-bad' : row.reviewBucket === 'due_today' ? 'text-warn' : 'text-text-muted'}`}>{t(`buckets.${row.reviewBucket}`)}</span>
                   </button>
+                  {row.reviewReasons.map((reason) => {
+                    const condition = text(reason.payload.invalidation_text);
+                    const claim = text(reason.payload.claim_text);
+                    const observed = number(reason.payload.observed_value);
+                    const threshold = number(reason.payload.threshold);
+                    return <div key={reason.id} className="mt-2 flex items-start gap-2 rounded border border-warn/20 bg-warn/5 px-2.5 py-2">
+                      <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn" aria-hidden="true" />
+                      <span className="min-w-0 text-[11px] leading-relaxed text-text-dim">
+                        <span className="block font-medium text-text">{t('alertReason')}</span>
+                        {condition && <span className="block">{condition}</span>}
+                        {claim && <span className="mt-0.5 block text-text-muted">{t('sourceClaim')}: {claim}</span>}
+                        {(observed !== null || threshold !== null) && <span className="mt-0.5 block font-mono text-text-muted">{t('triggerEvidence', { observed: observed ?? '--', threshold: threshold ?? '--' })}</span>}
+                      </span>
+                    </div>;
+                  })}
                   <div className="mt-2 flex flex-wrap justify-end gap-1.5">
                     {actionButton(row, 7)}
                     {actionButton(row, 30)}

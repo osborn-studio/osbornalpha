@@ -5,7 +5,12 @@ vi.mock('@/lib/supabase/server', () => ({
   serverIsSupabaseConfigured: vi.fn(() => true),
   getServerSupabase: vi.fn(async () => ({ auth: { getUser: mocks.auth } })),
 }));
-vi.mock('@/lib/watchlist/decision-service', () => ({ executeWatchlistDecision: mocks.execute }));
+vi.mock('@/lib/watchlist/api-rate-limit', () => ({
+  consumeWatchlistApiRateLimit: vi.fn(async () => ({
+    allowed: true, limit: 120, remaining: 119, retryAfterSeconds: 0,
+  })),
+}));
+vi.mock('@/lib/watchlist/decision-service', () => ({ executeWatchlistReview: mocks.execute }));
 
 import { POST } from './route';
 
@@ -28,7 +33,7 @@ describe('POST /api/watchlist/items/[id]/review', () => {
     });
     expect(response.status).toBe(200);
     expect(mocks.execute).toHaveBeenCalledWith(expect.anything(), 'user-1', 'item-1', {
-      expectedVersion: 2, patch: { review_at: null },
+      action: 'complete', expectedVersion: 2, reviewAt: null,
     });
     expect(await response.json()).toMatchObject({ action: 'complete', item: { decision_version: 3 } });
   });
@@ -40,7 +45,7 @@ describe('POST /api/watchlist/items/[id]/review', () => {
     });
     expect(response.status).toBe(200);
     expect(mocks.execute).toHaveBeenCalledWith(expect.anything(), 'user-1', 'item-1', {
-      expectedVersion: 2, patch: { review_at: future },
+      action: 'snooze', expectedVersion: 2, reviewAt: future,
     });
     const invalid = await POST(request({ action: 'snooze', expectedVersion: 2, reviewAt: '2020-01-01' }), {
       params: Promise.resolve({ id: 'item-1' }),

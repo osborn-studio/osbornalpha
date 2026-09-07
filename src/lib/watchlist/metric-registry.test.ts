@@ -19,7 +19,18 @@ describe('Watchlist metric registry', () => {
     expect(watchlistMetricDefinition('volatility')).toEqual({
       source: 'history', unit: 'percent', direction: 'lower',
       window: 'selected_history', precision: 2, minimumObservations: 20,
+      comparisonScope: 'global',
+    });
+    expect(watchlistMetricDefinition('periodReturn')).toMatchObject({
+      source: 'history', window: 'selected_history', minimumObservations: 2,
     });
     expect(watchlistMetricDefinition('research')).toMatchObject({ source: 'research', window: '14d' });
+    expect(watchlistMetricDefinition('relativeStrengthRank')).toMatchObject({
+      source: 'peer', unit: 'percent', minimumObservations: 5,
+    });
+    expect(watchlistMetricDefinition('averageTradedAmount20')).toMatchObject({
+      source: 'peer', unit: 'currency', minimumObservations: 20,
+      comparisonScope: 'single_market',
+    });
   });
 });

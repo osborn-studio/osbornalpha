@@ -29,6 +29,6 @@ describe('GET /api/cron/watchlist-alerts/quotes', () => {
     }));
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ ok: true, scope: 'quote', evaluated: 1 });
-    expect(mocks.run).toHaveBeenCalledWith('quote');
+    expect(mocks.run).toHaveBeenCalledWith('quote', undefined);
   });
 });

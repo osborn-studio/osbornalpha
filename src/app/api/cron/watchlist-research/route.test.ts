@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  admin: vi.fn(), claim: vi.fn(), audience: vi.fn(), finish: vi.fn(), fetchSources: vi.fn(), persist: vi.fn(),
+  admin: vi.fn(), claim: vi.fn(), audience: vi.fn(), finish: vi.fn(), fetchSources: vi.fn(), persist: vi.fn(), manualJobs: vi.fn(),
 }));
 vi.mock('@/lib/supabase/admin', () => ({ getAdminSupabase: mocks.admin }));
 vi.mock('@/lib/watchlist/research-refresh-repository', () => ({
@@ -13,11 +13,15 @@ vi.mock('@/lib/watchlist/research-service', () => ({
   fetchWatchlistResearchSources: mocks.fetchSources,
   persistWatchlistResearchSnapshot: mocks.persist,
 }));
+vi.mock('@/lib/watchlist/research-job-runner', () => ({ runWatchlistResearchJobs: mocks.manualJobs }));
 
 import { GET } from './route';
 
 const originalSecret = process.env.CRON_SECRET;
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.manualJobs.mockResolvedValue({ claimed: 0, succeeded: 0, queued: 0, failed: 0, cancelled: 0, superseded: 0 });
+});
 afterEach(() => {
   if (originalSecret === undefined) delete process.env.CRON_SECRET;
   else process.env.CRON_SECRET = originalSecret;

@@ -13,6 +13,8 @@ describe('Watchlist provider readiness', () => {
       { id: 'structured-research', mode: 'fallback', credentialConfigured: false },
       { id: 'official-documents', mode: 'fallback', credentialConfigured: false },
       { id: 'trading-calendar', mode: 'fallback', credentialConfigured: false },
+      { id: 'sec-companyfacts', mode: 'configured', credentialConfigured: false },
+      { id: 'yahoo-chart', mode: 'configured', credentialConfigured: false },
     ]);
   });
 
@@ -27,6 +29,11 @@ describe('Watchlist provider readiness', () => {
     const required = requiredWatchlistProviders(environment);
     expect(required).toEqual(['search', 'structured-research', 'hk-financials']);
     expect(missingRequiredWatchlistProviders(readiness, required)).toEqual(['hk-financials']);
+  });
+
+  it('treats the OpenAI Responses web search route as configured search', () => {
+    expect(watchlistProviderReadiness({ OPENAI_API_KEY: 'openai' }).find((item) => item.id === 'search'))
+      .toEqual({ id: 'search', mode: 'configured', credentialConfigured: true });
   });
 
   it('fails readiness when the explicitly selected search provider lacks its own key', () => {

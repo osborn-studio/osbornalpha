@@ -67,6 +67,25 @@ Watchlist 后端上线前请在 Dashboard 的 **Database → Migrations** 或 CL
 - `20260904410000_watchlist_metric_alerts.sql`
 - `20260904420000_perspective_generation_jobs.sql`
 - `20260904430000_perspective_claims.sql`
+- `20260904450000_watchlist_peer_metrics.sql`
+- `20260904460000_perspective_claim_feedback.sql`
+- `20260904470000_watchlist_composition_metrics.sql`
+- `20260904480000_watchlist_peer_metric_alerts.sql`
+- `20260904490000_watchlist_overview_peer_query.sql`
+- `20260904500000_watchlist_alert_summaries.sql`
+- `20260904510000_watchlist_provider_health.sql`
+- `20260904520000_watchlist_composition_snapshots.sql`
+- `20260904530000_watchlist_research_jobs.sql`
+- `20260904540000_watchlist_perspective_alert_reviews.sql`
+- `20260904550000_watchlist_claim_alert_hardening.sql`
+- `20260904560000_watchlist_manual_research_job_health.sql`
+- `20260904570000_watchlist_decision_context.sql`
+- `20260904580000_watchlist_operational_retention.sql`
+- `20260904590000_watchlist_bulk_workflow_runs.sql`
+- `20260904600000_watchlist_cron_dispatch_slots.sql`
+- `20260904610000_watchlist_api_rate_limits.sql`
+- `20260904620000_watchlist_cron_dispatch_acl_hardening.sql`
+- `20260904630000_watchlist_cron_dispatch_acl_health.sql`
 
 Vercel 部署只发布 Next.js 代码，不会自动执行 Supabase migrations；两者必须分别验收。
 
@@ -80,11 +99,20 @@ npm run watchlist:production-check
 
 输出中的全部检查必须为 `"ok": true`，再进行 Watchlist 登录态验收；其中 release marker 用于确认最新迁移确实已应用。
 
-Vercel 发布后可运行无副作用的 runtime verifier。它不会发送 Cron secret，也不会执行告警或研究任务；只验证页面存在、Cron 路由已安装并且未授权请求会被拒绝：
+Vercel 发布后可运行无副作用的 runtime verifier。它不会发送 Cron secret，也不会执行告警或研究任务；除验证页面和 Cron 路由的鉴权边界外，还会通过专用验收账号登录并读取一页真实 Watchlist overview：
 
 ```bash
-WATCHLIST_RUNTIME_URL=https://stock-monitor-nu.vercel.app npm run watchlist:runtime-check
+WATCHLIST_RUNTIME_URL=https://<exact-deployment>.vercel.app \
+NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co \
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<ANON_KEY> \
+WATCHLIST_RUNTIME_EMAIL=<RUNTIME_ACCOUNT_EMAIL> \
+WATCHLIST_RUNTIME_PASSWORD=<RUNTIME_ACCOUNT_PASSWORD> \
+npm run watchlist:runtime-check
 ```
+
+`WATCHLIST_RUNTIME_URL` 必须是本次发布返回的精确 HTTPS deployment URL；脚本不再回退到固定域名。
+如果 Vercel Deployment Protection 截获请求，验证会失败，不能把平台登录页当作应用健康证明。
+验收账号只能用于只读冒烟测试，不应复用管理员或人工用户账号；CI 的四项登录配置均须保存在 GitHub `production` environment secrets 中。
 
 在生产 Provider 密钥已注入的受控环境运行 live canary。该命令会真实访问所有已配置 Provider；未配置的可选 Provider 跳过，`WATCHLIST_REQUIRED_PROVIDERS` 中任一 Provider 未配置或探测失败都会阻断发布：
 
@@ -95,8 +123,8 @@ npm run watchlist:provider-check
 官方文档 Provider 还需配置一个允许抓取的官方公告 URL 作为 canary：`OFFICIAL_DOCUMENT_CANARY_URL`。该值只用于健康检查，不会写入数据库。
 
 准备两个独立的只读验收账号后运行 RLS Canary。脚本不会创建、修改或删除数据；
-`watchlists` 与 `user_preferences` 必须在两个账号下都有注册触发器生成的基线行，
-其他私有表只在存在样本时计入覆盖：
+每个 Canary 所列的用户可读私有表都必须在两个账号下有 fixture。worker-only 队列表、全局行情快照
+和 service-role 专用表不属于此 REST 读取检查；用户可读的研究任务状态仍必须覆盖。它们由 schema/RPC 契约测试覆盖：
 
 ```bash
 E2E_EMAIL=<ACCOUNT_A_EMAIL> E2E_PASSWORD=<ACCOUNT_A_PASSWORD> \
@@ -104,8 +132,18 @@ E2E_EMAIL_B=<ACCOUNT_B_EMAIL> E2E_PASSWORD_B=<ACCOUNT_B_PASSWORD> \
 npm run watchlist:rls-check
 ```
 
-输出必须为 `"ok": true`，且核心表 `coverage` 为 `full`。可选表显示 `none`
-表示没有样本、不是隔离证明；发布记录中应保留这一覆盖差异。
+生产发布 workflow 会强制运行 Provider 与 RLS Canary。GitHub `production` environment
+必须设置 `WATCHLIST_RUNTIME_EMAIL_B` / `WATCHLIST_RUNTIME_PASSWORD_B`，并在两个账号下预置
+Canary 所列的私有表 fixture；同时必须用 repository variable `WATCHLIST_REQUIRED_PROVIDERS`
+显式声明发布不可降级的 Provider。Provider endpoint、Canary ticker/query 使用 repository variables，
+Provider token/key 使用 environment secrets。
+
+通知投递门禁使用 `WATCHLIST_DELIVERY_CANARY_EMAIL`（environment secret）、
+`WATCHLIST_DELIVERY_CANARY_FROM`（repository variable）和 `RESEND_API_KEY`。每个 release SHA
+只发送一封幂等 Canary 邮件，并轮询 Resend 状态；只有状态达到 `delivered` 才允许继续部署。
+
+输出必须为 `"ok": true`，且每张 Canary 表的 `coverage` 都为 `full`；缺少任一
+fixture 不是隔离证明，必须在发布前补齐。
 
 Review 到期提醒由 Watchlist Dispatcher 调用数据库队列生成，单轮上限由
 `WATCHLIST_REVIEW_REMINDER_LIMIT` 控制（建议生产值 `500`）。提醒复用现有

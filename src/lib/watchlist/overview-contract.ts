@@ -4,6 +4,12 @@ import type { HistoricalWatchlistMetrics } from './analytics';
 import type { WatchlistOverviewCursor } from './overview-pagination';
 import type { WatchlistOverviewQueryCursor } from './overview-query';
 import type { WatchlistResearchSummary } from './research-summary';
+import type { WatchlistPeerMetrics } from './peer-metrics';
+import type { WatchlistComposition } from './composition';
+import type { WatchlistAlertSummary } from './alert-summary';
+import type { WatchlistDataCapability } from './data-capability';
+import type { WatchlistMetricKey } from './metric-registry';
+import type { WatchlistOverviewQuerySort } from './overview-query';
 
 export type DataStatus = 'fresh' | 'delayed' | 'stale' | 'unavailable';
 
@@ -13,6 +19,10 @@ export interface DataEnvelope<T> {
   source: string | null;
   status: DataStatus;
   warnings: string[];
+  reasonCode?: string | null;
+  retryable?: boolean;
+  coverage?: { available: number; total: number } | null;
+  observations?: number | null;
 }
 
 export interface WatchlistMarketSnapshot {
@@ -63,6 +73,18 @@ export interface WatchlistOverviewGroupRow {
 export interface WatchlistOverviewPageRow {
   group: Omit<WatchlistOverviewGroupRow, 'watchlist_items'>;
   item: WatchlistOverviewItemRow;
+  querySnapshot?: WatchlistOverviewQuerySnapshot | null;
+}
+
+export interface WatchlistOverviewQuerySnapshot {
+  sortKey: WatchlistOverviewQuerySort;
+  sortNumber: number | null;
+  sortText: string | null;
+  sortAsOf: string | null;
+  metricKey: WatchlistMetricKey | null;
+  metricNumber: number | null;
+  metricAsOf: string | null;
+  currency: string | null;
 }
 
 export interface WatchlistOverviewDatabasePage {
@@ -78,15 +100,23 @@ export interface WatchlistOverviewRow {
   identity: StockUniverse | null;
   market: DataEnvelope<WatchlistMarketSnapshot> | null;
   history: DataEnvelope<HistoricalWatchlistMetrics> | null;
+  peer: DataEnvelope<WatchlistPeerMetrics> | null;
   research: DataEnvelope<WatchlistResearchSummary>;
+  alerts: DataEnvelope<WatchlistAlertSummary>;
+  querySnapshot: WatchlistOverviewQuerySnapshot | null;
 }
 
 export interface WatchlistOverviewResponse {
   generatedAt: string;
   ownerId: string;
   version: number;
+  dataStatus: 'complete' | 'partial';
+  warnings: string[];
+  capabilities: WatchlistDataCapability[];
+  /** Legacy pagination alias. Prefer page.hasMore. */
   partial: boolean;
   total: number;
+  composition: DataEnvelope<WatchlistComposition> | null;
   page: {
     /** Legacy offset is null for keyset-paginated responses. */
     offset: number | null;

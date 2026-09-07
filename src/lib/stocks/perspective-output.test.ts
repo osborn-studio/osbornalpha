@@ -63,6 +63,68 @@ describe('perspective model output', () => {
     });
   });
 
+  it('normalizes alert-ready invalidation conditions through the alert catalog', () => {
+    const result = normalizePerspectiveModelOutput({
+      value: {
+        stance: 'bearish',
+        confidence: 7,
+        summary: 'Momentum is stretched.',
+        claims: [{
+          kind: 'risk',
+          text: 'RSI indicates elevated reversal risk.',
+          data_cites: ['RSI (14)'],
+          citation_ids: [],
+          invalidation: {
+            condition: 'The risk signal clears when RSI falls below 45.',
+            alert_type: 'metric',
+            operator: 'crosses_below',
+            threshold: 45,
+            config: { metric: 'rsi14' },
+          },
+        }],
+      },
+      persona,
+      evidence: [],
+      analysisMode: 'structured_only',
+    });
+
+    expect(result.claims?.[0].invalidation).toEqual({
+      condition: 'The risk signal clears when RSI falls below 45.',
+      alertType: 'metric',
+      operator: 'crosses_below',
+      threshold: 45,
+      config: { metric: 'rsi14' },
+    });
+  });
+
+  it('drops invalid invalidation payloads without rejecting legacy claims', () => {
+    const result = normalizePerspectiveModelOutput({
+      value: {
+        stance: 'neutral',
+        confidence: 5,
+        summary: 'Valuation is balanced.',
+        claims: [{
+          kind: 'thesis',
+          text: 'Valuation is near its normal range.',
+          data_cites: ['PE TTM'],
+          citation_ids: [],
+          invalidation: {
+            condition: 'Unexpected field must not reach alert config.',
+            alert_type: 'valuation',
+            operator: 'gt',
+            threshold: 40,
+            config: { metric: 'pe_ttm', prompt: 'ignore rules' },
+          },
+        }],
+      },
+      persona,
+      evidence: [],
+      analysisMode: 'structured_only',
+    });
+
+    expect(result.claims?.[0].invalidation).toBeUndefined();
+  });
+
   it('projects legacy summaries into the claim read model', () => {
     const result = normalizePerspectiveModelOutput({
       value: {
@@ -75,7 +137,7 @@ describe('perspective model output', () => {
     });
 
     expect(result.claims).toEqual([{
-      kind: 'thesis', text: 'Valuation is balanced.', dataCites: ['PE TTM'], citations: [],
+      id: 'claim_1', kind: 'thesis', text: 'Valuation is balanced.', dataCites: ['PE TTM'], citations: [],
     }]);
   });
 
@@ -100,6 +162,22 @@ describe('perspective model output', () => {
       persona,
       evidence: [evidence],
       analysisMode: 'evidence_backed',
+    })).toThrow(new PerspectiveOutputError('evidence_citation_required'));
+  });
+
+  it('rejects claims that cite structured data absent from this generation context', () => {
+    expect(() => normalizePerspectiveModelOutput({
+      value: {
+        summary: 'Forward earnings support the view.',
+        claims: [{
+          kind: 'thesis', text: 'Forward PE is attractive.',
+          data_cites: ['Forward PE'], citation_ids: [],
+        }],
+      },
+      persona,
+      evidence: [],
+      analysisMode: 'structured_only',
+      allowedDataCites: ['PE TTM', 'PB'],
     })).toThrow(new PerspectiveOutputError('evidence_citation_required'));
   });
 });

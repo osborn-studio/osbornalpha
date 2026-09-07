@@ -1,31 +1,15 @@
-import { NextResponse } from 'next/server';
 import { normalizeEvidenceTickerParam } from '@/lib/external-evidence';
-import { getServerSupabase, serverIsSupabaseConfigured } from '@/lib/supabase/server';
-import { getAdminSupabase } from '@/lib/supabase/admin';
-import { loadWatchlistResearchBundle, refreshWatchlistResearch } from '@/lib/watchlist/research-service';
-import { watchlistApiError } from '@/lib/watchlist/api-error';
+import { loadWatchlistResearchBundle } from '@/lib/watchlist/research-service';
 import { userOwnsWatchlistTicker } from '@/lib/watchlist/server-repository';
-import { summarizeWatchlistResearchChanges } from '@/lib/watchlist/research-timeline';
-import { authorizeResearchRefresh } from '@/lib/watchlist/research-quota';
+import {
+  WatchlistResearchJobRepositoryError,
+} from '@/lib/watchlist/research-job-repository';
+import { watchlistResearchJobView } from '@/lib/watchlist/research-job-contract';
+import { enqueueWatchlistResearchRefresh } from '@/lib/watchlist/research-command-service';
+import { createWatchlistRequestReporter } from '@/lib/watchlist/request-reporter';
+import { authorizeWatchlistRequest, enforceReportedWatchlistRateLimit } from '@/lib/watchlist/request-guards';
 
 interface Context { params: Promise<{ ticker: string }> }
-
-async function authenticatedContext(params: Context['params']) {
-  if (!serverIsSupabaseConfigured()) return watchlistApiError('supabase_unavailable', 503);
-  const client = await getServerSupabase();
-  const { data: { user } } = await client.auth.getUser();
-  if (!user) return watchlistApiError('not_authenticated', 401);
-  const ticker = normalizeEvidenceTickerParam((await params).ticker);
-  if (!ticker) return watchlistApiError('invalid_ticker', 400);
-  try {
-    if (!await userOwnsWatchlistTicker(client, user.id, ticker)) {
-      return watchlistApiError('watchlist_item_not_found', 404, { details: { ticker } });
-    }
-  } catch {
-    return watchlistApiError('watchlist_item_lookup_failed', 503);
-  }
-  return { client, user, ticker };
-}
 
 function responseBody(bundle: Awaited<ReturnType<typeof loadWatchlistResearchBundle>>) {
   return {
@@ -37,56 +21,60 @@ function responseBody(bundle: Awaited<ReturnType<typeof loadWatchlistResearchBun
   };
 }
 
-export async function GET(_request: Request, { params }: Context) {
-  const context = await authenticatedContext(params);
-  if (context instanceof NextResponse) return context;
+export async function GET(request: Request, { params }: Context) {
+  const reporter = createWatchlistRequestReporter('watchlist_research', request);
+  const auth = await authorizeWatchlistRequest(reporter, request);
+  if (auth instanceof Response) return auth;
+  const ticker = normalizeEvidenceTickerParam((await params).ticker);
+  if (!ticker) return reporter.reject('invalid_ticker', 400);
   try {
-    return NextResponse.json(responseBody(await loadWatchlistResearchBundle(
-      context.client,
-      context.user.id,
-      context.ticker,
+    if (!await reporter.step('verify_item', () => userOwnsWatchlistTicker(auth.client, auth.user.id, ticker))) {
+      return reporter.reject('watchlist_item_not_found', 404, { details: { ticker } });
+    }
+  } catch (error) {
+    return reporter.fail(error, 'watchlist_item_lookup_failed');
+  }
+  try {
+    const body = responseBody(await reporter.step('load_research', () => loadWatchlistResearchBundle(
+      auth.client, auth.user.id, ticker,
     )));
-  } catch {
-    return watchlistApiError('research_unavailable', 502, { details: { ticker: context.ticker } });
+    return reporter.json(body, { fields: { ticker } });
+  } catch (error) {
+    return reporter.fail(error, 'research_unavailable', 502, { details: { ticker } });
   }
 }
 
-export async function POST(_request: Request, { params }: Context) {
-  const context = await authenticatedContext(params);
-  if (context instanceof NextResponse) return context;
+export async function POST(request: Request, { params }: Context) {
+  const reporter = createWatchlistRequestReporter('watchlist_research_enqueue', request);
+  const auth = await authorizeWatchlistRequest(reporter, request);
+  if (auth instanceof Response) return auth;
+  const rateLimitResponse = await enforceReportedWatchlistRateLimit(reporter, auth.client, 'bulk');
+  if (rateLimitResponse) return rateLimitResponse;
+  const ticker = normalizeEvidenceTickerParam((await params).ticker);
+  if (!ticker) return reporter.reject('invalid_ticker', 400);
   try {
-    const authorization = await authorizeResearchRefresh(context.client);
-    if (!authorization.allowed && authorization.reason === 'plan_limit') {
-      return watchlistApiError('watchlist_research_plan_limit', 429, {
-        details: {
-          used: authorization.plan.used,
-          limit: authorization.plan.limit,
-          plan: authorization.plan.plan,
-        },
-      });
-    }
-    if (!authorization.allowed) {
-      return watchlistApiError('rate_limited', 429, {
-        retryAfterSeconds: 3600,
-        details: { ticker: context.ticker },
-      });
-    }
-    const before = await loadWatchlistResearchBundle(context.client, context.user.id, context.ticker);
-    const refresh = await refreshWatchlistResearch(getAdminSupabase(), context.user.id, context.ticker);
-    const bundle = await loadWatchlistResearchBundle(context.client, context.user.id, context.ticker);
-    const changes = summarizeWatchlistResearchChanges({
-      news: before.news.items, reports: before.reports.items, perspectives: before.perspectives,
-      perspectivesGeneratedAt: before.perspectivesGeneratedAt,
-    }, {
-      news: bundle.news.items, reports: bundle.reports.items, perspectives: bundle.perspectives,
-      perspectivesGeneratedAt: bundle.perspectivesGeneratedAt,
+    const job = await reporter.step('enqueue_research', () => enqueueWatchlistResearchRefresh(
+      auth.client,
+      auth.user.id,
+      ticker,
+    ));
+    return reporter.json({ job: watchlistResearchJobView(job) }, {
+      status: job.status === 'succeeded' ? 200 : 202,
+      headers: { location: `/api/watchlist/research/jobs/${job.id}` },
+      fields: { status: job.status },
     });
-    return NextResponse.json(responseBody({ ...bundle, changes, refresh: {
-      status: refresh.status,
-      refreshedAt: refresh.refreshedAt,
-      warnings: refresh.warnings,
-    } }));
-  } catch {
-    return watchlistApiError('research_refresh_failed', 502, { details: { ticker: context.ticker } });
+  } catch (error) {
+    if (error instanceof WatchlistResearchJobRepositoryError) {
+      if (error.code === 'watchlist_research_plan_limit') {
+        return reporter.reject(error.code, 429, { details: error.quota ?? {} });
+      }
+      if (error.code === 'watchlist_research_rate_limit') {
+        return reporter.reject('rate_limited', 429, {
+          retryAfterSeconds: 3600, details: { ticker, ...(error.quota ?? {}) },
+        });
+      }
+      if (error.code === 'watchlist_item_not_found') return reporter.reject(error.code, 404);
+    }
+    return reporter.fail(error, 'research_refresh_failed', 502, { details: { ticker } });
   }
 }

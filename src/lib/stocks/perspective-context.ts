@@ -1,5 +1,9 @@
 import { buildRadar, type RadarPayload } from '@/lib/brief/radar';
-import { searchExternalEvidence, searchExternalEvidenceUncached } from '@/lib/external-evidence';
+import {
+  applyEvidenceQualityPolicy,
+  searchExternalEvidence,
+  searchExternalEvidenceUncached,
+} from '@/lib/external-evidence';
 import type { EvidenceSearchSnapshot } from '@/lib/external-evidence/types';
 import { loadFinancialReport } from '@/lib/financials/service';
 import { unavailableFinancialReport } from '@/lib/financials/report';
@@ -108,7 +112,7 @@ export async function loadPerspectiveContext(
   const market = radar?.market ?? classifyMarket(ticker);
   const name = radar?.name ?? ticker;
 
-  const [financial, evidence] = await Promise.all([
+  const [financial, rawEvidence] = await Promise.all([
     loadFinancials(ticker).catch(() => unavailableFinancialReport({
       ticker,
       market,
@@ -133,6 +137,7 @@ export async function loadPerspectiveContext(
           dependencies.evidenceSkipWarning ?? 'external_evidence_not_requested',
         )),
   ]);
+  const evidence = applyEvidenceQualityPolicy(rawEvidence);
   const hasMarketContext = radar?.sections.price.value != null || (radar?.sections.events.length ?? 0) > 0
     || (radar?.sections.calendar.upcoming.length ?? 0) > 0;
   const hasFinancialContext = financial.yearly.length > 0 || financial.quarterly.length > 0

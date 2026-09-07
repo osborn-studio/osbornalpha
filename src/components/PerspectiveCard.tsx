@@ -5,6 +5,7 @@ import { aggregateConfidence, classifyCite, type ConfidenceLevel } from '@/lib/d
 import type { PerspectiveCitation } from '@/lib/external-evidence/types';
 import type { PerspectiveClaim } from '@/lib/stocks/perspective-claims';
 import { ExternalLink } from '@/components/ExternalLink';
+import { ShieldAlert } from 'lucide-react';
 
 interface Props {
   // Typed as `string` (not the `Persona` union) because the mock/stub data
@@ -18,6 +19,7 @@ interface Props {
   cites: string[];
   citations?: PerspectiveCitation[];
   claims?: PerspectiveClaim[];
+  renderClaimFooter?: (claim: PerspectiveClaim) => ReactNode;
   footer?: ReactNode;
 }
 
@@ -41,7 +43,7 @@ const LEVEL_BG: Record<ConfidenceLevel, string> = {
   unknown: 'bg-bg-card text-text-muted border-border',
 };
 
-export function PerspectiveCard({ persona, name, stance, confidence, summary, cites, citations = [], claims = [], footer }: Props) {
+export function PerspectiveCard({ persona, name, stance, confidence, summary, cites, citations = [], claims = [], renderClaimFooter, footer }: Props) {
   const t = useTranslations('components.perspectiveCard');
   const tPersonas = useTranslations('components.personas');
   const evidence = aggregateConfidence(cites);
@@ -101,6 +103,13 @@ export function PerspectiveCard({ persona, name, stance, confidence, summary, ci
                   ))}
                 </div>
               )}
+              {claim.invalidation && (
+                <div className="mt-2 flex items-start gap-2 rounded border border-warn/20 bg-warn/5 px-2.5 py-2 text-[11px] text-text-dim">
+                  <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn" aria-hidden="true" />
+                  <span><span className="font-medium text-text">{t('invalidation')}:</span> {claim.invalidation.condition}</span>
+                </div>
+              )}
+              {renderClaimFooter?.(claim)}
             </div>
           ))}
         </div>

@@ -5,7 +5,7 @@ import { normalizeEvidenceResults } from './normalize';
 describe('official evidence documents', () => {
   it('rejects non-official source URLs before contacting the extractor', async () => {
     const request = vi.fn();
-    const provider = configuredOfficialDocumentProvider({ endpoint: 'https://extractor.example.test/v1', fetch: request })!;
+    const provider = configuredOfficialDocumentProvider({ endpoint: 'https://extractor.example.test/v1', fetch: request as unknown as typeof fetch })!;
     await expect(provider.load('https://example.com/filing')).rejects.toThrow('official_document_domain_rejected');
     expect(request).not.toHaveBeenCalled();
   });
@@ -41,5 +41,19 @@ describe('official evidence documents', () => {
     const enriched = await enrichOfficialEvidenceDocuments(results, null);
     expect(enriched.results).toEqual(results);
     expect(enriched.warnings).toEqual([]);
+  });
+
+  it('propagates caller cancellation into the configured extractor request', async () => {
+    const controller = new AbortController();
+    const request = vi.fn((_url: URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+    }));
+    const provider = configuredOfficialDocumentProvider({ endpoint: 'https://extractor.example.test/v1', fetch: request as unknown as typeof fetch })!;
+    const pending = provider.load('https://www.sec.gov/Archives/example', controller.signal);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    controller.abort(new DOMException('cancelled', 'AbortError'));
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(request.mock.calls[0][1]?.signal?.aborted).toBe(true);
   });
 });

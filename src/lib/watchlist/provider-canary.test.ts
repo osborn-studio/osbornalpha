@@ -11,10 +11,12 @@ describe('Watchlist provider live canaries', () => {
     const results = await runWatchlistProviderCanaries({
       environment: { TAVILY_API_KEY: 'secret' },
       now: new Date('2026-09-04T00:00:00Z'),
-    }, { search });
+    }, { search, 'sec-companyfacts': async () => undefined, 'yahoo-chart': async () => undefined });
     expect(search).toHaveBeenCalledOnce();
     expect(results.find((item) => item.id === 'search')).toMatchObject({ status: 'passed' });
     expect(results.find((item) => item.id === 'structured-research')).toMatchObject({ status: 'skipped', mode: 'fallback' });
+    expect(results.find((item) => item.id === 'sec-companyfacts')).toMatchObject({ status: 'passed' });
+    expect(results.find((item) => item.id === 'yahoo-chart')).toMatchObject({ status: 'passed' });
     expect(providerCanariesPassed(results)).toBe(true);
   });
 
@@ -35,6 +37,23 @@ describe('Watchlist provider live canaries', () => {
     expect(results.find((item) => item.id === 'structured-research')).toMatchObject({
       status: 'failed', errorCode: 'structured_provider_HTTP_503',
     });
+  });
+
+  it('propagates cancellation instead of recording it as a provider failure', async () => {
+    const controller = new AbortController();
+    const probe = vi.fn((signal?: AbortSignal) => new Promise<void>((_resolve, reject) => {
+      signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }));
+    const pending = runWatchlistProviderCanaries({ signal: controller.signal }, {
+      'sec-companyfacts': probe,
+      'yahoo-chart': probe,
+    });
+
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+    controller.abort(new DOMException('cancelled', 'AbortError'));
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(probe.mock.calls.every(([signal]) => signal === controller.signal)).toBe(true);
   });
 
   it('uses a three-market search probe set and supports bounded overrides', () => {

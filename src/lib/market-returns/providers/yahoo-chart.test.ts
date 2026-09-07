@@ -46,4 +46,19 @@ describe('Yahoo adjusted-close return provider', () => {
     expect(url).toContain('range=6mo');
     expect(url).toContain('events=div%2Csplits');
   });
+
+  it('propagates caller cancellation into the Yahoo request', async () => {
+    const fetcher = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+    }));
+    vi.stubGlobal('fetch', fetcher);
+    const controller = new AbortController();
+
+    const pending = yahooChartReturnProvider.load('AAPL', '1m', controller.signal);
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+    controller.abort(new DOMException('cancelled', 'AbortError'));
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetcher.mock.calls[0][1]?.signal?.aborted).toBe(true);
+  });
 });

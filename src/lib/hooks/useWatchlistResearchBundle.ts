@@ -18,6 +18,19 @@ import {
   watchlistJsonRequest,
   watchlistRequestErrorCode,
 } from '@/lib/watchlist/api-client';
+import type { PerspectiveClaimVerdict } from '@/lib/watchlist/perspective-claim-feedback';
+import type { WatchlistResearchJobView } from '@/lib/watchlist/research-job-contract';
+import type {
+  WatchlistResearchFact,
+  WatchlistResearchQualitySummary,
+  WatchlistResearchSource,
+} from '@/lib/watchlist/research-evidence';
+import type { WatchlistWorkflowSummary } from '@/lib/watchlist/workflow-summary';
+import {
+  fetchActiveWatchlistResearchJob,
+  isWatchlistResearchJob,
+  waitForWatchlistResearchJob,
+} from '@/lib/watchlist/research-job-client';
 
 interface WatchlistResearchBundleState {
   news: StockNewsResponse | null;
@@ -26,6 +39,9 @@ interface WatchlistResearchBundleState {
   perspectiveSource: string | null;
   perspectivesGeneratedAt: string | null;
   perspectiveProvenance: PerspectiveProvenance | null;
+  facts: WatchlistResearchFact[];
+  sources: WatchlistResearchSource[];
+  quality: WatchlistResearchQualitySummary;
   timeline: WatchlistResearchTimelineItem[];
   changes: WatchlistResearchChanges | null;
   activity: {
@@ -34,8 +50,10 @@ interface WatchlistResearchBundleState {
     unseenCount: number;
     warnings: string[];
   } | null;
+  workflow: WatchlistWorkflowSummary | null;
   loading: boolean;
   refreshing: boolean;
+  researchJob: WatchlistResearchJobView | null;
   generating: boolean;
   perspectiveJob: PerspectiveGenerationJobView | null;
   error: string | null;
@@ -43,6 +61,7 @@ interface WatchlistResearchBundleState {
   perspectiveErrorCode: string | null;
   quota: QuotaNoticeProps | null;
   feedbackSavingId: string | null;
+  claimFeedbackSavingKey: string | null;
   feedbackError: string | null;
 }
 
@@ -54,6 +73,14 @@ interface PerspectiveFeedbackResponse {
   };
 }
 
+interface PerspectiveClaimFeedbackResponse {
+  feedback: {
+    claim_id: string;
+    verdict: PerspectiveClaimVerdict;
+    reason: string | null;
+  };
+}
+
 const EMPTY: WatchlistResearchBundleState = {
   news: null,
   reports: null,
@@ -61,11 +88,24 @@ const EMPTY: WatchlistResearchBundleState = {
   perspectiveSource: null,
   perspectivesGeneratedAt: null,
   perspectiveProvenance: null,
+  facts: [],
+  sources: [],
+  quality: {
+    totalSources: 0,
+    eligibleSources: 0,
+    datedSources: 0,
+    corroboratedSources: 0,
+    conflictedFacts: 0,
+    averageQualityScore: null,
+    warnings: [],
+  },
   timeline: [],
   changes: null,
   activity: null,
+  workflow: null,
   loading: true,
   refreshing: false,
+  researchJob: null,
   generating: false,
   perspectiveJob: null,
   error: null,
@@ -73,10 +113,14 @@ const EMPTY: WatchlistResearchBundleState = {
   perspectiveErrorCode: null,
   quota: null,
   feedbackSavingId: null,
+  claimFeedbackSavingKey: null,
   feedbackError: null,
 };
 
 function bundlePatch(body: Record<string, unknown>) {
+  const quality = body.quality && typeof body.quality === 'object' && !Array.isArray(body.quality)
+    ? { ...EMPTY.quality, ...body.quality as WatchlistResearchQualitySummary }
+    : EMPTY.quality;
   return {
     news: body.news as StockNewsResponse,
     reports: body.reports as StockReportsResponse,
@@ -87,9 +131,15 @@ function bundlePatch(body: Record<string, unknown>) {
       : typeof body.generatedAt === 'string' ? body.generatedAt : null,
     perspectiveProvenance: isPerspectiveProvenance(body.perspectiveProvenance) ? body.perspectiveProvenance
       : isPerspectiveProvenance(body.provenance) ? body.provenance : null,
+    facts: Array.isArray(body.facts) ? body.facts as WatchlistResearchFact[] : [],
+    sources: Array.isArray(body.sources) ? body.sources as WatchlistResearchSource[] : [],
+    quality,
     timeline: Array.isArray(body.timeline) ? body.timeline as WatchlistResearchTimelineItem[] : [],
     changes: body.changes && typeof body.changes === 'object' ? body.changes as WatchlistResearchChanges : null,
     activity: body.activity && typeof body.activity === 'object' ? body.activity as WatchlistResearchBundleState['activity'] : null,
+    workflow: body.workflow && typeof body.workflow === 'object'
+      ? body.workflow as WatchlistWorkflowSummary
+      : null,
   };
 }
 
@@ -218,22 +268,59 @@ export function useWatchlistResearchBundle(ticker: string) {
     }
   }, [ticker]);
 
+  const monitorResearchJob = useCallback(async (
+    initial: WatchlistResearchJobView,
+    slot: RequestSlot,
+    lease: RequestLease,
+    requestGeneration: number,
+  ) => {
+    const current = () => slot.isCurrent(lease) && requestGeneration === generation.current;
+    if (current()) setState((value) => ({ ...value, refreshing: true, researchJob: initial, error: null }));
+    try {
+      const job = await waitForWatchlistResearchJob(initial, lease.signal, (next) => {
+        if (current()) setState((value) => ({ ...value, researchJob: next }));
+      });
+      if (!current()) return;
+      if (job.status === 'failed') throw new Error(job.errorCode ?? 'research_refresh_failed');
+      if (job.status === 'cancelled') {
+        setState((value) => ({ ...value, refreshing: false, researchJob: job }));
+        return;
+      }
+      const activityBody = await fetchActivityBundle(ticker, lease.signal);
+      if (current()) setState((value) => ({
+        ...value,
+        ...bundlePatch(activityBody),
+        changes: job.result?.changes ?? null,
+        refreshing: false,
+        researchJob: job,
+      }));
+    } catch (error) {
+      if (current()) setState((value) => ({
+        ...value,
+        refreshing: false,
+        error: error instanceof Error ? error.message : 'research_refresh_failed',
+      }));
+    }
+  }, [ticker]);
+
   const load = useCallback(async () => {
     cancelAll();
     const lease = loadSlot.current!.begin();
     const requestGeneration = generation.current;
     setState((current) => ({ ...current, loading: true, refreshing: false, generating: false, error: null }));
     try {
-      const [body, activeJob] = await Promise.all([
+      const [body, activeJob, activeResearchJob] = await Promise.all([
         fetchActivityBundle(ticker, lease.signal),
         fetchActivePerspectiveJob(ticker, lease.signal).catch(() => null),
+        fetchActiveWatchlistResearchJob(ticker, lease.signal).catch(() => null),
       ]);
       if (loadSlot.current!.isCurrent(lease) && requestGeneration === generation.current) {
         setState((current) => ({ ...current, ...bundlePatch(body), loading: false }));
       }
-      if (activeJob) {
-        await monitorPerspectiveJob(activeJob, loadSlot.current!, lease, requestGeneration);
-      }
+      await Promise.all([
+        activeJob ? monitorPerspectiveJob(activeJob, loadSlot.current!, lease, requestGeneration) : Promise.resolve(),
+        activeResearchJob ? monitorResearchJob(activeResearchJob, loadSlot.current!, lease, requestGeneration) : Promise.resolve(),
+      ]);
     } catch (error) {
       if (loadSlot.current!.isCurrent(lease) && requestGeneration === generation.current) {
         setState((current) => ({
@@ -243,7 +330,7 @@ export function useWatchlistResearchBundle(ticker: string) {
         }));
       }
     }
-  }, [cancelAll, monitorPerspectiveJob, ticker]);
+  }, [cancelAll, monitorPerspectiveJob, monitorResearchJob, ticker]);
 
   useEffect(() => {
     generation.current += 1;
@@ -257,21 +344,13 @@ export function useWatchlistResearchBundle(ticker: string) {
     const requestGeneration = generation.current;
     setState((current) => ({ ...current, loading: false, refreshing: true, error: null }));
     try {
-      const body = await watchlistJsonRequest<Record<string, unknown>>(`/api/watchlist/research/${encodeURIComponent(ticker)}`, {
+      const body = await watchlistJsonRequest<{ job?: unknown }>(`/api/watchlist/research/${encodeURIComponent(ticker)}`, {
         method: 'POST',
         signal: lease.signal,
         cache: 'no-store',
       }, 'research_refresh_failed');
-      if (!validBundle(body)) throw new Error('research_refresh_failed');
-      const activityBody = await fetchActivityBundle(ticker, lease.signal);
-      if (refreshSlot.current!.isCurrent(lease) && requestGeneration === generation.current) {
-        setState((current) => ({
-          ...current,
-          ...bundlePatch(activityBody),
-          changes: body.changes && typeof body.changes === 'object' ? body.changes as WatchlistResearchChanges : null,
-          refreshing: false,
-        }));
-      }
+      if (!isWatchlistResearchJob(body.job)) throw new Error('watchlist_research_job_unavailable');
+      await monitorResearchJob(body.job, refreshSlot.current!, lease, requestGeneration);
     } catch (error) {
       if (refreshSlot.current!.isCurrent(lease) && requestGeneration === generation.current) {
         setState((current) => ({
@@ -281,7 +360,28 @@ export function useWatchlistResearchBundle(ticker: string) {
         }));
       }
     }
-  }, [ticker]);
+  }, [monitorResearchJob, ticker]);
+
+  const cancelResearchRefresh = useCallback(async () => {
+    const id = state.researchJob?.id;
+    if (!id || !state.refreshing) return false;
+    try {
+      const body = await watchlistJsonRequest<{ job?: unknown }>(`/api/watchlist/research/jobs/${encodeURIComponent(id)}`, {
+        method: 'DELETE', cache: 'no-store',
+      }, 'watchlist_research_job_cancel_failed');
+      if (!isWatchlistResearchJob(body.job)) return false;
+      refreshSlot.current!.cancel();
+      const cancelledJob = body.job;
+      setState((current) => ({
+        ...current,
+        researchJob: cancelledJob,
+        refreshing: cancelledJob.status === 'queued' || cancelledJob.status === 'running',
+      }));
+      return true;
+    } catch {
+      return false;
+    }
+  }, [state.refreshing, state.researchJob?.id]);
 
   const generatePerspectives = useCallback(async (analysisMode: PerspectiveAnalysisRequestMode = 'auto') => {
     const lease = perspectiveSlot.current!.begin();
@@ -390,6 +490,67 @@ export function useWatchlistResearchBundle(ticker: string) {
     }
   }, []);
 
+  const saveClaimFeedback = useCallback(async (
+    perspectiveId: string,
+    claimId: string,
+    input: { verdict: PerspectiveClaimVerdict; reason?: string | null },
+  ) => {
+    const key = `${perspectiveId}:${claimId}`;
+    setState((current) => ({ ...current, claimFeedbackSavingKey: key, feedbackError: null }));
+    try {
+      const body = await watchlistJsonRequest<PerspectiveClaimFeedbackResponse>('/api/watchlist/perspective-claim-feedback', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ perspectiveId, claimId, ...input }),
+      }, 'perspective_claim_feedback_unavailable');
+      if (!body.feedback) throw new Error('perspective_claim_feedback_unavailable');
+      setState((current) => ({
+        ...current,
+        claimFeedbackSavingKey: null,
+        perspectives: current.perspectives.map((item) => item.id === perspectiveId ? {
+          ...item,
+          claimFeedback: {
+            ...(item.claimFeedback ?? {}),
+            [claimId]: { verdict: body.feedback.verdict, reason: body.feedback.reason ?? null },
+          },
+        } : item),
+      }));
+      return true;
+    } catch (error) {
+      setState((current) => ({
+        ...current, claimFeedbackSavingKey: null,
+        feedbackError: error instanceof Error ? error.message : 'perspective_claim_feedback_unavailable',
+      }));
+      return false;
+    }
+  }, []);
+
+  const clearClaimFeedback = useCallback(async (perspectiveId: string, claimId: string) => {
+    const key = `${perspectiveId}:${claimId}`;
+    setState((current) => ({ ...current, claimFeedbackSavingKey: key, feedbackError: null }));
+    try {
+      await watchlistJsonRequest<Record<string, unknown>>(`/api/watchlist/perspective-claim-feedback?perspectiveId=${encodeURIComponent(perspectiveId)}&claimId=${encodeURIComponent(claimId)}`, {
+        method: 'DELETE',
+      }, 'perspective_claim_feedback_unavailable');
+      setState((current) => ({
+        ...current,
+        claimFeedbackSavingKey: null,
+        perspectives: current.perspectives.map((item) => {
+          if (item.id !== perspectiveId) return item;
+          const claimFeedback = { ...(item.claimFeedback ?? {}) };
+          delete claimFeedback[claimId];
+          return { ...item, claimFeedback };
+        }),
+      }));
+      return true;
+    } catch (error) {
+      setState((current) => ({
+        ...current, claimFeedbackSavingKey: null,
+        feedbackError: error instanceof Error ? error.message : 'perspective_claim_feedback_unavailable',
+      }));
+      return false;
+    }
+  }, []);
+
   const markActivitySeen = useCallback(async () => {
     try {
       const body = await watchlistJsonRequest<{ lastSeenAt?: string }>(`/api/watchlist/activity/${encodeURIComponent(ticker)}`, {
@@ -411,10 +572,15 @@ export function useWatchlistResearchBundle(ticker: string) {
     ...state,
     refetch: () => load(),
     refresh,
+    cancelResearchRefresh,
     generatePerspectives,
     cancelPerspectiveGeneration,
     saveFeedback,
     clearFeedback,
+    saveClaimFeedback,
+    clearClaimFeedback,
     markActivitySeen,
   };
 }
+
+export type WatchlistResearchBundleModel = ReturnType<typeof useWatchlistResearchBundle>;

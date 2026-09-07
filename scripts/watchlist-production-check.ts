@@ -2,6 +2,7 @@ import {
   evaluateWatchlistOperationalHealth,
   parseWatchlistOperationalHealth,
 } from '../src/lib/watchlist/operational-health';
+import { LATEST_WATCHLIST_RELEASE_MARKER } from '../src/lib/watchlist/release';
 
 interface SchemaCheck {
   name: string;
@@ -26,6 +27,36 @@ function releaseMarkerCheck(marker: string): SchemaCheck {
       }
     },
   };
+}
+
+function validateWatchlistCronDispatchAcl(body: string): string | undefined {
+  try {
+    const value = JSON.parse(body) as unknown;
+    const actions = ['claim', 'finish', 'cleanup', 'health'] as const;
+    const expectedRoles = ['anon', 'authenticated', 'service_role'] as const;
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+      || Object.keys(value).length !== actions.length
+      || !actions.every((action) => Object.hasOwn(value, action))) {
+      return 'watchlist_cron_dispatch_acl_invalid';
+    }
+    const matrix = value as Record<string, unknown>;
+    for (const action of actions) {
+      const actionRoles = matrix[action];
+      if (!actionRoles || typeof actionRoles !== 'object' || Array.isArray(actionRoles)
+        || Object.keys(actionRoles).length !== expectedRoles.length
+        || !expectedRoles.every((role) => Object.hasOwn(actionRoles, role))
+      ) {
+        return 'watchlist_cron_dispatch_acl_invalid';
+      }
+      const roleMatrix = actionRoles as Record<string, unknown>;
+      if (roleMatrix.anon !== false || roleMatrix.authenticated !== false || roleMatrix.service_role !== true) {
+        return 'watchlist_cron_dispatch_acl_invalid';
+      }
+    }
+    return undefined;
+  } catch {
+    return 'watchlist_cron_dispatch_acl_invalid';
+  }
 }
 
 export interface WatchlistProductionCheckResult {
@@ -65,7 +96,7 @@ const CHECKS: SchemaCheck[] = [
   },
   {
     name: 'watchlist_metric_snapshot_columns',
-    path: '/rest/v1/watchlist_metric_snapshots?select=ticker,market,history_range,benchmark_ticker,metrics,source_bundle,calculator_version,observed_at,generated_at,valid_until,period_return_pct,total_return_pct,annualized_volatility_pct,max_drawdown_pct,rsi14,excess_return_pct,beta,volume_zscore_20,coverage_ratio&limit=1',
+    path: '/rest/v1/watchlist_metric_snapshots?select=ticker,market,history_range,benchmark_ticker,metrics,source_bundle,calculator_version,observed_at,generated_at,valid_until,period_return_pct,total_return_pct,annualized_volatility_pct,max_drawdown_pct,rsi14,excess_return_pct,beta,volume_zscore_20,average_traded_amount_20,coverage_ratio&limit=1',
   },
   {
     name: 'watchlist_metric_refresh_columns',
@@ -79,6 +110,27 @@ const CHECKS: SchemaCheck[] = [
   },
   releaseMarkerCheck('watchlist_metric_snapshots'),
   releaseMarkerCheck('watchlist_metric_extensions'),
+  releaseMarkerCheck('watchlist_peer_metrics'),
+  releaseMarkerCheck('watchlist_composition_metrics'),
+  {
+    name: 'watchlist_composition_snapshot_columns',
+    path: '/rest/v1/watchlist_composition_snapshots?select=user_id,history_range,watchlist_version,composition,observed_at,generated_at,valid_until&limit=1',
+  },
+  {
+    name: 'watchlist_composition_refresh_rpc',
+    path: '/rest/v1/rpc/refresh_watchlist_composition_snapshots',
+    method: 'POST',
+    body: { p_limit: 0 },
+  },
+  releaseMarkerCheck('watchlist_composition_snapshots'),
+  releaseMarkerCheck('watchlist_peer_metric_alerts'),
+  {
+    name: 'watchlist_alert_summaries_rpc',
+    path: '/rest/v1/rpc/get_watchlist_alert_summaries',
+    method: 'POST',
+    body: { p_item_ids: [] },
+  },
+  releaseMarkerCheck('watchlist_alert_summaries'),
   {
     name: 'watchlist_overview_query_rpc',
     path: '/rest/v1/rpc/get_watchlist_overview_query',
@@ -96,6 +148,7 @@ const CHECKS: SchemaCheck[] = [
     },
   },
   releaseMarkerCheck('watchlist_overview_query'),
+  releaseMarkerCheck('watchlist_overview_peer_query'),
   {
     name: 'watchlist_alert_scope_columns',
     path: '/rest/v1/watchlist_alert_runs?select=scope,skipped_closed&limit=1',
@@ -151,6 +204,57 @@ const CHECKS: SchemaCheck[] = [
   releaseMarkerCheck('watchlist_activity_feedback_hardening'),
   releaseMarkerCheck('watchlist_atomic_research_quota'),
   {
+    name: 'watchlist_research_job_columns',
+    path: '/rest/v1/watchlist_research_jobs?select=id,user_id,ticker,status,stage,progress,attempt_count,max_attempts,quota_plan,quota_limit,quota_used,next_attempt_at,lease_expires_at,lease_token,cancel_requested_at,result,error_code,created_at,started_at,finished_at,updated_at&limit=1',
+  },
+  {
+    name: 'watchlist_research_job_claim_rpc',
+    path: '/rest/v1/rpc/claim_watchlist_research_jobs',
+    method: 'POST',
+    body: { p_limit: 0, p_lease_minutes: 1, p_job_id: null },
+  },
+  releaseMarkerCheck('watchlist_research_jobs'),
+  {
+    name: 'watchlist_bulk_workflow_run_columns',
+    path: '/rest/v1/watchlist_bulk_workflow_runs?select=id,user_id,request_id,request_hash,operation,status,result,lease_token,lease_expires_at,created_at,finished_at,updated_at&limit=1',
+  },
+  {
+    name: 'watchlist_bulk_workflow_cleanup_rpc',
+    path: '/rest/v1/rpc/cleanup_watchlist_bulk_workflow_runs',
+    method: 'POST',
+    body: { p_retention_days: 30, p_limit: 0 },
+  },
+  releaseMarkerCheck('watchlist_bulk_workflow_runs'),
+  {
+    name: 'watchlist_cron_dispatch_slot_columns',
+    path: '/rest/v1/watchlist_cron_dispatch_slots?select=scheduled_for,status,attempt_count,max_attempts,lease_token,lease_expires_at,last_error_code,started_at,finished_at,created_at,updated_at&limit=1',
+  },
+  {
+    name: 'watchlist_cron_dispatch_health_rpc',
+    path: '/rest/v1/rpc/get_watchlist_cron_dispatch_health',
+    method: 'POST',
+    body: {},
+  },
+  {
+    name: 'watchlist_cron_dispatch_acl_health_rpc',
+    path: '/rest/v1/rpc/get_watchlist_cron_dispatch_acl_health',
+    method: 'POST',
+    body: {},
+    validate: validateWatchlistCronDispatchAcl,
+  },
+  releaseMarkerCheck('watchlist_cron_dispatch_slots'),
+  {
+    name: 'watchlist_api_rate_limit_columns',
+    path: '/rest/v1/watchlist_api_rate_limits?select=user_id,action,window_started_at,attempts,updated_at&limit=1',
+  },
+  {
+    name: 'watchlist_api_rate_limit_cleanup_rpc',
+    path: '/rest/v1/rpc/cleanup_watchlist_api_rate_limits',
+    method: 'POST',
+    body: { p_retention_days: 7, p_limit: 0 },
+  },
+  releaseMarkerCheck(LATEST_WATCHLIST_RELEASE_MARKER),
+  {
     name: 'perspective_analysis_mode_columns',
     path: '/rest/v1/perspectives?select=requested_analysis_mode,resolved_analysis_mode,evidence_status&limit=1',
   },
@@ -181,6 +285,34 @@ const CHECKS: SchemaCheck[] = [
   },
   releaseMarkerCheck('perspective_claims'),
   {
+    name: 'perspective_claim_feedback_columns',
+    path: '/rest/v1/perspective_claim_feedback?select=id,user_id,perspective_id,claim_id,verdict,reason,created_at,updated_at&limit=1',
+  },
+  releaseMarkerCheck('perspective_claim_feedback'),
+  {
+    name: 'watchlist_alert_origin_columns',
+    path: '/rest/v1/watchlist_alert_origins?select=alert_id,user_id,perspective_id,claim_id,claim_text,invalidation_text,created_at&limit=1',
+  },
+  {
+    name: 'watchlist_review_reason_columns',
+    path: '/rest/v1/watchlist_review_reasons?select=id,user_id,watchlist_item_id,alert_event_id,reason_type,payload,snoozed_until,created_at,resolved_at&limit=1',
+  },
+  releaseMarkerCheck('watchlist_perspective_alert_reviews'),
+  releaseMarkerCheck('watchlist_claim_alert_hardening'),
+  {
+    name: 'watchlist_decision_context_column',
+    path: '/rest/v1/watchlist_item_decision_history?select=id,context_snapshot&limit=1',
+  },
+  releaseMarkerCheck('watchlist_decision_context'),
+  {
+    name: 'watchlist_operational_retention_rpc',
+    path: '/rest/v1/rpc/cleanup_watchlist_operational_history',
+    method: 'POST',
+    body: { p_job_retention_days: 30, p_evidence_retention_days: 90, p_limit: 0 },
+  },
+  releaseMarkerCheck('watchlist_operational_retention'),
+  releaseMarkerCheck('watchlist_manual_research_job_health'),
+  {
     name: 'watchlist_operational_health_rpc',
     path: '/rest/v1/rpc/get_watchlist_operational_health',
     method: 'POST',
@@ -198,6 +330,13 @@ const CHECKS: SchemaCheck[] = [
   },
   releaseMarkerCheck('watchlist_operational_health'),
   releaseMarkerCheck('watchlist_operational_monitoring'),
+  {
+    name: 'watchlist_provider_health_rpc',
+    path: '/rest/v1/rpc/get_watchlist_provider_health',
+    method: 'POST',
+    body: {},
+  },
+  releaseMarkerCheck('watchlist_provider_health'),
   {
     name: 'monitoring_status_release_marker',
     path: '/rest/v1/watchlist_release_markers?select=marker&marker=eq.watchlist_monitoring_status&limit=1',

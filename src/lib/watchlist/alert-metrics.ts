@@ -1,6 +1,8 @@
 import type { WatchlistMetricSnapshot } from '@/lib/supabase/database.types';
+import type { DataEnvelope } from './overview-contract';
+import type { WatchlistPeerMetrics } from './peer-metrics';
 
-export const WATCHLIST_METRIC_ALERT_KEYS = [
+export const WATCHLIST_SNAPSHOT_ALERT_KEYS = [
   'annualized_volatility_pct',
   'downside_volatility_pct',
   'sharpe_ratio',
@@ -11,13 +13,24 @@ export const WATCHLIST_METRIC_ALERT_KEYS = [
   'macd_histogram',
   'bollinger_position_pct',
   'atr14_pct',
+  'average_traded_amount_20',
 ] as const satisfies readonly (keyof WatchlistMetricSnapshot)[];
 
+export const WATCHLIST_PEER_ALERT_KEYS = [
+  'market_relative_strength_percentile',
+  'industry_pe_percentile',
+  'industry_pb_percentile',
+  'market_liquidity_percentile',
+] as const;
+
+export const WATCHLIST_METRIC_ALERT_KEYS = [...WATCHLIST_SNAPSHOT_ALERT_KEYS, ...WATCHLIST_PEER_ALERT_KEYS] as const;
+export type WatchlistSnapshotAlertKey = typeof WATCHLIST_SNAPSHOT_ALERT_KEYS[number];
+export type WatchlistPeerAlertKey = typeof WATCHLIST_PEER_ALERT_KEYS[number];
 export type WatchlistMetricAlertKey = typeof WATCHLIST_METRIC_ALERT_KEYS[number];
 
 export interface WatchlistMetricAlertDefinition {
   key: WatchlistMetricAlertKey;
-  unit: '%' | null;
+  unit: '%' | 'currency' | null;
   minimum: number | null;
   maximum: number | null;
 }
@@ -33,6 +46,11 @@ export const WATCHLIST_METRIC_ALERT_DEFINITIONS: readonly WatchlistMetricAlertDe
   { key: 'macd_histogram', unit: null, minimum: null, maximum: null },
   { key: 'bollinger_position_pct', unit: '%', minimum: 0, maximum: 100 },
   { key: 'atr14_pct', unit: '%', minimum: 0, maximum: null },
+  { key: 'average_traded_amount_20', unit: 'currency', minimum: 0, maximum: null },
+  { key: 'market_relative_strength_percentile', unit: '%', minimum: 0, maximum: 100 },
+  { key: 'industry_pe_percentile', unit: '%', minimum: 0, maximum: 100 },
+  { key: 'industry_pb_percentile', unit: '%', minimum: 0, maximum: 100 },
+  { key: 'market_liquidity_percentile', unit: '%', minimum: 0, maximum: 100 },
 ] as const;
 
 const DEFINITION_BY_KEY = new Map(
@@ -63,7 +81,24 @@ export function watchlistMetricAlertValue(
   key: unknown,
 ): number | null {
   if (!snapshot || !isWatchlistMetricAlertKey(key)) return null;
-  const value = snapshot[key];
+  if (!(WATCHLIST_SNAPSHOT_ALERT_KEYS as readonly string[]).includes(key)) return null;
+  const value = snapshot[key as WatchlistSnapshotAlertKey];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+export function isWatchlistPeerAlertKey(value: unknown): value is WatchlistPeerAlertKey {
+  return typeof value === 'string' && (WATCHLIST_PEER_ALERT_KEYS as readonly string[]).includes(value);
+}
+
+export function watchlistPeerMetricAlertValue(
+  envelope: DataEnvelope<WatchlistPeerMetrics> | null | undefined,
+  key: unknown,
+): number | null {
+  if (!envelope?.value || !isWatchlistPeerAlertKey(key)) return null;
+  const value = key === 'market_relative_strength_percentile' ? envelope.value.marketRelativeStrengthPercentile
+    : key === 'industry_pe_percentile' ? envelope.value.industryPePercentile
+      : key === 'industry_pb_percentile' ? envelope.value.industryPbPercentile
+        : envelope.value.marketLiquidityPercentile;
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 

@@ -62,9 +62,15 @@
   --bg-hover: #22252a;
   --border: rgba(255, 255, 255, 0.09);
   --border-active: rgba(20, 184, 166, 0.55);
+  --text-dim: #c2c7d0;
+  --text-muted: #9299a5;
   --accent: #2dd4bf;
   --accent-dim: #0f766e;
   --accent-wash: rgba(20, 184, 166, 0.13);
+  --status-good: #34d399;
+  --status-bad: #fb7185;
+  --status-info: #60a5fa;
+  --warn: #fbbf24;
   letter-spacing: 0;
 }
 
@@ -87,9 +93,79 @@
   --bg-hover: #eef1f4;
   --border: rgba(15, 23, 42, 0.11);
   --border-active: rgba(13, 148, 136, 0.5);
+  --text-dim: #475569;
+  --text-muted: #64748b;
   --accent: #0f766e;
   --accent-dim: #0f766e;
   --accent-wash: rgba(13, 148, 136, 0.1);
+}
+
+.watchlist-attention {
+  display: flex;
+  flex-wrap: wrap;
+  min-height: 44px;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  border-block: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+  padding: 6px 10px;
+}
+
+.watchlist-attention__details {
+  flex: 0 0 calc(100% + 20px);
+  margin: 0 -10px -6px;
+}
+
+.watchlist-attention__heading {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 1px;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.watchlist-attention__heading time {
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 400;
+}
+
+.watchlist-attention__items {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.watchlist-attention__items::-webkit-scrollbar { display: none; }
+
+.watchlist-attention__item {
+  display: inline-flex;
+  height: 30px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  padding-inline: 9px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.watchlist-attention__item[data-severity='critical'] { color: var(--status-bad); }
+.watchlist-attention__item[data-severity='warning'] { color: var(--warn); }
+.watchlist-attention__item[data-severity='info'] { color: var(--status-info); }
+
+@media (max-width: 639px) {
+  .watchlist-attention { align-items: stretch; gap: 8px; padding-inline: 4px; }
+  .watchlist-attention__heading { justify-content: center; }
+  .watchlist-attention__details { flex-basis: calc(100% + 8px); margin-inline: -4px; }
 }
 
 /* Color scheme: CN (red up, green down) — default. Sharpened to the

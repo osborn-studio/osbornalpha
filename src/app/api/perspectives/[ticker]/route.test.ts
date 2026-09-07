@@ -89,6 +89,7 @@ vi.mock('@/lib/data/personas', () => ({
     { id: 'risk', name: 'Risk', prompt: 'risk prompt' },
   ],
   buildUserMessage: () => 'stock context',
+  perspectiveStructuredDataCites: () => ['Price', 'Change', 'PE TTM', 'Market cap'],
 }));
 
 import { GET as rejectGenerationGet, POST as generatePerspectives } from './route';
@@ -442,7 +443,7 @@ describe('POST /api/perspectives/[ticker] cost budget', () => {
     expect(body.meta.evidence).toMatchObject({ status: 'complete', provider: 'test-search', result_count: 1 });
     expect(body.meta.provenance).toMatchObject({
       modelVersion: 'deepseek-v4-flash',
-      promptVersion: 'watchlist-perspectives-2026-09-04.v3',
+      promptVersion: 'watchlist-perspectives-2026-09-05.v4',
       requestedAnalysisMode: 'evidence_required',
       resolvedAnalysisMode: 'evidence_backed',
       evidenceStatus: 'complete',

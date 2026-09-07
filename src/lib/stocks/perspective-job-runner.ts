@@ -14,6 +14,13 @@ import {
   updatePerspectiveGenerationJob,
   type PerspectiveJobDatabase,
 } from './perspective-job-repository';
+import {
+  durableJobErrorCode,
+  durableJobRetryAt,
+  durableJobShouldRetry,
+  monitorDurableJobState,
+  type DurableJobExecutionState,
+} from '@/lib/jobs/durable-job-runner';
 
 const PERMANENT_ERROR_CODES = new Set([
   'external_evidence_required',
@@ -64,7 +71,6 @@ function storedJobResult(result: Record<string, unknown>): Record<string, unknow
   };
 }
 
-type JobExecutionState = 'active' | 'cancelled' | 'superseded';
 export type PerspectiveJobOutcome = 'succeeded' | 'queued' | 'failed' | 'cancelled' | 'superseded';
 
 export interface PerspectiveJobExecution {
@@ -87,43 +93,14 @@ async function executionState(
   job: PerspectiveGenerationJob,
   leaseToken: string,
   dependencies: PerspectiveJobRunnerDependencies,
-): Promise<JobExecutionState> {
+): Promise<DurableJobExecutionState> {
   const current = await dependencies.loadJob(db, job.id);
   if (!current || current.status !== 'running' || current.lease_token !== leaseToken) return 'superseded';
   return current.cancel_requested_at === null ? 'active' : 'cancelled';
 }
 
-function retryAt(job: PerspectiveGenerationJob, now: Date): string {
-  const delayMinutes = Math.min(30, 2 ** Math.max(0, job.attempt_count - 1));
-  return new Date(now.getTime() + delayMinutes * 60_000).toISOString();
-}
-
 function errorCode(error: unknown): string {
-  if (error instanceof PerspectiveGenerationError) return error.code;
-  return error instanceof Error && /^[a-z0-9_:-]+$/i.test(error.message)
-    ? error.message.slice(0, 120)
-    : 'perspective_job_failed';
-}
-
-function monitorExecutionState(
-  db: PerspectiveJobDatabase,
-  job: PerspectiveGenerationJob,
-  leaseToken: string,
-  dependencies: PerspectiveJobRunnerDependencies,
-  controller: AbortController,
-): () => void {
-  let checking = false;
-  const timer = setInterval(() => {
-    if (checking || controller.signal.aborted) return;
-    checking = true;
-    void executionState(db, job, leaseToken, dependencies)
-      .then((state) => {
-        if (state !== 'active') controller.abort(new Error(`perspective_job_${state}`));
-      })
-      .catch(() => controller.abort(new Error('perspective_job_lease_check_failed')))
-      .finally(() => { checking = false; });
-  }, 1_000);
-  return () => clearInterval(timer);
+  return durableJobErrorCode(error, 'perspective_job_failed');
 }
 
 async function executePerspectiveGenerationJob(
@@ -153,7 +130,11 @@ async function executePerspectiveGenerationJob(
       });
       return { outcome: updated ? 'cancelled' : 'superseded', result: null, error: null };
     }
-    stopMonitoring = monitorExecutionState(db, job, leaseToken, dependencies, controller);
+    stopMonitoring = monitorDurableJobState(
+      () => executionState(db, job, leaseToken, dependencies),
+      controller,
+      'perspective_job',
+    );
     const llm = await dependencies.resolveLlm(job, db);
     if (!llm || llm.source !== job.llm_source) {
       throw new PerspectiveGenerationError('llm_provider_unavailable', 503, 'job');
@@ -200,9 +181,16 @@ async function executePerspectiveGenerationJob(
       });
       return { outcome: updated ? 'cancelled' : 'superseded', result: null, error: null };
     }
-    const retry = !PERMANENT_ERROR_CODES.has(code) && job.attempt_count < job.max_attempts;
+    const retry = durableJobShouldRetry(
+      error,
+      code,
+      job.attempt_count,
+      job.max_attempts,
+      PERMANENT_ERROR_CODES,
+    );
     const updated = await update(retry ? {
-      status: 'queued', stage: 'queued', progress: 0, next_attempt_at: retryAt(job, finishedAt),
+      status: 'queued', stage: 'queued', progress: 0,
+      next_attempt_at: durableJobRetryAt(job.attempt_count, finishedAt),
       error_code: code, error_message: code, lease_expires_at: null, lease_token: null,
       updated_at: finishedAt.toISOString(),
     } : {

@@ -6,7 +6,12 @@ import type { Database, WatchlistAlert, WatchlistAlertEvent, WatchlistMetricSnap
 import { resolveQuote, type QuoteShape } from '@/lib/quotes/resolve-quote';
 import { deliverWatchlistAlertEvents } from './alert-delivery';
 import { evaluateWatchlistAlertBatch } from './alert-evaluator';
-import { observationFromMetricSnapshot, observationFromQuote, observationFromResearch } from './alert-observation';
+import {
+  observationFromMetricSnapshot,
+  observationFromPeerMetrics,
+  observationFromQuote,
+  observationFromResearch,
+} from './alert-observation';
 import {
   createAlertRun,
   finishAlertRun,
@@ -21,6 +26,10 @@ import { shouldEvaluateWatchlistAlert, type WatchlistAlertScope } from './alert-
 import { builtInMarketCalendar, type MarketCalendarProvider } from '@/lib/market/calendar';
 import { loadStoredMarketCalendar } from '@/lib/market/calendar-service';
 import { loadWatchlistMetricSnapshots } from './metric-snapshot-repository';
+import { isWatchlistPeerAlertKey } from './alert-metrics';
+import { loadWatchlistPeerMetricsForUser } from './peer-metrics-repository';
+import type { DataEnvelope } from './overview-contract';
+import type { WatchlistPeerMetrics } from './peer-metrics';
 
 function itemOf(alert: AlertWithItem) {
   return Array.isArray(alert.watchlist_items) ? alert.watchlist_items[0] : alert.watchlist_items;
@@ -43,6 +52,10 @@ export interface WatchlistAlertRunDependencies {
   loadBatch: () => Promise<{ alerts: AlertWithItem[]; saturated: boolean }>;
   loadQuote: (ticker: string) => Promise<QuoteShape | null>;
   loadMetrics: (tickers: string[]) => Promise<Record<string, WatchlistMetricSnapshot>>;
+  loadPeerMetrics: (
+    userId: string,
+    tickers: string[],
+  ) => Promise<Record<string, DataEnvelope<WatchlistPeerMetrics>>>;
   loadCalendar: (ticker: string) => Promise<CalendarPayload | null>;
   loadResearch: (pairs: Array<{ userId: string; ticker: string }>) => Promise<AlertResearchCandidates[]>;
   insertEvent: (event: Partial<WatchlistAlertEvent>) => Promise<'inserted' | 'duplicate'>;
@@ -65,6 +78,10 @@ function isMetricAlert(alert: Pick<WatchlistAlert, 'alert_type'>) {
   return alert.alert_type === 'metric';
 }
 
+function isPeerMetricAlert(alert: Pick<WatchlistAlert, 'alert_type' | 'config'>) {
+  return alert.alert_type === 'metric' && isWatchlistPeerAlertKey(alert.config.metric);
+}
+
 export async function runWatchlistAlertBatch(
   dependencies: WatchlistAlertRunDependencies,
 ): Promise<WatchlistAlertRunResult> {
@@ -84,11 +101,35 @@ export async function runWatchlistAlertBatch(
     if (result.status === 'fulfilled') quoteByTicker.set(quoteTickers[index], result.value);
   });
 
-  const metricTickers = [...new Set(eligibleAlerts.filter(isMetricAlert)
+  const metricTickers = [...new Set(eligibleAlerts.filter((alert) => isMetricAlert(alert) && !isPeerMetricAlert(alert))
     .map((alert) => itemOf(alert)?.ticker).filter((value): value is string => !!value))];
   const metricsByTicker = metricTickers.length > 0
     ? await dependencies.loadMetrics(metricTickers)
     : {};
+
+  const peerMetricGroups = new Map<string, Set<string>>();
+  for (const alert of eligibleAlerts.filter(isPeerMetricAlert)) {
+    const ticker = itemOf(alert)?.ticker;
+    if (!ticker) continue;
+    const tickers = peerMetricGroups.get(alert.user_id) ?? new Set<string>();
+    tickers.add(ticker);
+    peerMetricGroups.set(alert.user_id, tickers);
+  }
+  const peerMetricRequests = [...peerMetricGroups].map(([userId, tickers]) => ({
+    userId,
+    tickers: [...tickers],
+  }));
+  const peerMetricSettled = await boundedMap(peerMetricRequests, 5, ({ userId, tickers }) => (
+    dependencies.loadPeerMetrics(userId, tickers)
+  ));
+  const peerMetricsByPair = new Map<string, DataEnvelope<WatchlistPeerMetrics>>();
+  peerMetricSettled.forEach((result, index) => {
+    if (result.status !== 'fulfilled') return;
+    const userId = peerMetricRequests[index].userId;
+    Object.entries(result.value).forEach(([ticker, envelope]) => {
+      peerMetricsByPair.set(pairKey(userId, ticker), envelope);
+    });
+  });
 
   const eventTickers = [...new Set(eligibleAlerts.filter((alert) => alert.alert_type === 'event')
     .map((alert) => itemOf(alert)?.ticker).filter((value): value is string => !!value))];
@@ -120,9 +161,14 @@ export async function runWatchlistAlertBatch(
 
     const candidates = researchByPair.get(pairKey(alert.user_id, item.ticker));
     const now = (dependencies.now ?? (() => new Date()))();
+    const peerMetrics = isPeerMetricAlert(alert)
+      ? peerMetricsByPair.get(pairKey(alert.user_id, item.ticker)) ?? null
+      : null;
     const sourceUnavailable = isQuoteAlert(alert)
       ? !quoteByTicker.get(item.ticker)
-      : isMetricAlert(alert)
+      : isPeerMetricAlert(alert)
+        ? !peerMetrics
+        : isMetricAlert(alert)
         ? !metricsByTicker[item.ticker]
       : alert.alert_type === 'event'
         ? !calendarByTicker.get(item.ticker)
@@ -130,7 +176,9 @@ export async function runWatchlistAlertBatch(
     if (sourceUnavailable) unavailable += 1;
     const observation = isQuoteAlert(alert)
       ? observationFromQuote(item.ticker, quoteByTicker.get(item.ticker) ?? null, now, dependencies.calendar)
-      : isMetricAlert(alert)
+      : isPeerMetricAlert(alert)
+        ? observationFromPeerMetrics(peerMetrics, now)
+        : isMetricAlert(alert)
         ? observationFromMetricSnapshot(metricsByTicker[item.ticker] ?? null, now)
       : observationFromResearch(
           alert.alert_type === 'event' ? calendarByTicker.get(item.ticker) ?? null : null,
@@ -180,7 +228,7 @@ export async function runWatchlistAlertBatch(
 
 export async function runWatchlistAlertCycles(
   dependencies: WatchlistAlertRunDependencies,
-  options: { maxBatches?: number; shouldContinue?: () => boolean } = {},
+  options: { maxBatches?: number; shouldContinue?: () => boolean; signal?: AbortSignal } = {},
 ): Promise<WatchlistAlertRunResult> {
   const maxBatches = Math.min(Math.max(Math.floor(options.maxBatches ?? 5), 1), 10);
   const aggregate: WatchlistAlertRunResult = {
@@ -192,6 +240,7 @@ export async function runWatchlistAlertCycles(
     delivery: { claimed: 0, delivered: 0, failed: 0, deadLetter: 0, skipped: 0, deferred: 0 },
   };
   for (let batch = 0; batch < maxBatches; batch += 1) {
+    options.signal?.throwIfAborted();
     const result = await runWatchlistAlertBatch(dependencies);
     aggregate.evaluated += result.evaluated;
     aggregate.triggered += result.triggered;
@@ -213,11 +262,13 @@ function productionDependencies(
   db: SupabaseClient<Database>,
   scope: WatchlistAlertScope,
   calendar: MarketCalendarProvider,
+  signal?: AbortSignal,
 ): WatchlistAlertRunDependencies {
   return {
     loadBatch: () => loadAlertRunBatch(db, scope),
-    loadQuote: async (ticker) => (await resolveQuote(ticker)).quote,
+    loadQuote: async (ticker) => (await resolveQuote(ticker, { signal })).quote,
     loadMetrics: (tickers) => loadWatchlistMetricSnapshots(db, tickers, '1y'),
+    loadPeerMetrics: (userId, tickers) => loadWatchlistPeerMetricsForUser(db, userId, tickers, '1y'),
     loadCalendar: (ticker) => buildCalendar(ticker, 14),
     loadResearch: (pairs) => loadAlertResearchCandidates(db, pairs),
     insertEvent: (event) => insertAlertEvent(db, event),
@@ -233,6 +284,7 @@ function productionDependencies(
 
 export async function runWatchlistAlerts(
   scope: WatchlistAlertScope = 'all',
+  signal?: AbortSignal,
 ): Promise<(WatchlistAlertRunResult & { runId: string }) | { skipped: true; reason: 'already_running' }> {
   const db = getAdminSupabase();
   const startedAt = new Date();
@@ -240,9 +292,11 @@ export async function runWatchlistAlerts(
   if (!runId) return { skipped: true, reason: 'already_running' };
   try {
     const calendar = await loadStoredMarketCalendar(db, startedAt).catch(() => builtInMarketCalendar);
-    const result = await runWatchlistAlertCycles(productionDependencies(db, scope, calendar), {
+    signal?.throwIfAborted();
+    const result = await runWatchlistAlertCycles(productionDependencies(db, scope, calendar, signal), {
       maxBatches: 5,
-      shouldContinue: () => Date.now() - startedAt.getTime() < 240_000,
+      signal,
+      shouldContinue: () => !signal?.aborted && Date.now() - startedAt.getTime() < 240_000,
     });
     const finishedAt = new Date();
     await finishAlertRun(db, runId, {

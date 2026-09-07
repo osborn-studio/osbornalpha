@@ -1,27 +1,26 @@
-import { NextResponse } from 'next/server';
-import { getServerSupabase, serverIsSupabaseConfigured } from '@/lib/supabase/server';
-import { watchlistApiError } from '@/lib/watchlist/api-error';
-import { executeWatchlistDecision } from '@/lib/watchlist/decision-service';
+import { executeWatchlistReview } from '@/lib/watchlist/decision-service';
 import { parseWatchlistReviewAction } from '@/lib/watchlist/review-workflow';
+import { createWatchlistRequestReporter } from '@/lib/watchlist/request-reporter';
+import { authorizeWatchlistRequest, enforceReportedWatchlistRateLimit } from '@/lib/watchlist/request-guards';
 
 interface Context { params: Promise<{ id: string }> }
 
 export async function POST(request: Request, { params }: Context) {
-  if (!serverIsSupabaseConfigured()) return watchlistApiError('supabase_unavailable', 503);
+  const reporter = createWatchlistRequestReporter('watchlist_review_update', request);
   const command = parseWatchlistReviewAction(await request.json().catch(() => null));
-  if (!command) return watchlistApiError('invalid_review_action', 400);
-  const client = await getServerSupabase();
-  const { data: { user } } = await client.auth.getUser();
-  if (!user) return watchlistApiError('not_authenticated', 401);
+  if (!command) return reporter.reject('invalid_review_action', 400);
+  const auth = await authorizeWatchlistRequest(reporter, request);
+  if (auth instanceof Response) return auth;
+  const rateLimitResponse = await enforceReportedWatchlistRateLimit(reporter, auth.client, 'write');
+  if (rateLimitResponse) return rateLimitResponse;
   const { id } = await params;
-  const result = await executeWatchlistDecision(client, user.id, id, {
-    expectedVersion: command.expectedVersion,
-    patch: { review_at: command.reviewAt },
-  });
+  const result = await reporter.step('store_review', () => (
+    executeWatchlistReview(auth.client, auth.user.id, id, command)
+  ));
   if (result.status === 'conflict') {
-    return watchlistApiError('watchlist_decision_conflict', 409, { details: { currentItem: result.currentItem } });
+    return reporter.reject('watchlist_decision_conflict', 409, { details: { currentItem: result.currentItem } });
   }
-  if (result.status === 'not_found') return watchlistApiError('watchlist_item_not_found', 404);
-  if (result.status === 'failed') return watchlistApiError('watchlist_review_update_failed', 503);
-  return NextResponse.json({ action: command.action, item: result.item });
+  if (result.status === 'not_found') return reporter.reject('watchlist_item_not_found', 404);
+  if (result.status === 'failed') return reporter.fail(new Error('watchlist_review_update_failed'), 'watchlist_review_update_failed');
+  return reporter.json({ action: command.action, item: result.item }, { fields: { action: command.action } });
 }

@@ -1,5 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "node --import tsx scripts/vercel-build.ts",
+  "git": {
+    "deploymentEnabled": {
+      "main": false
+    }
+  },
   "regions": ["hnd1"],
   "crons": [
     {

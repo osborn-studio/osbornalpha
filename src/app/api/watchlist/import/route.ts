@@ -1,5 +1,3 @@
-import { NextResponse } from 'next/server';
-import { getServerSupabase, serverIsSupabaseConfigured } from '@/lib/supabase/server';
 import { listWatchlistAlerts } from '@/lib/watchlist/alert-repository';
 import { importPortableWatchlist } from '@/lib/watchlist/import-repository';
 import {
@@ -13,8 +11,9 @@ import {
   loadWatchlistOverviewRows,
 } from '@/lib/watchlist/server-repository';
 import { validateSelectableSecuritiesWithClient } from '@/lib/watchlist/security-validation';
-import { watchlistApiError } from '@/lib/watchlist/api-error';
 import { isWatchlistPlanLimitError } from '@/lib/watchlist/plan-limits';
+import { createWatchlistRequestReporter } from '@/lib/watchlist/request-reporter';
+import { authorizeWatchlistRequest, enforceReportedWatchlistRateLimit } from '@/lib/watchlist/request-guards';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -41,22 +40,24 @@ function parseImportRequest(body: unknown): ImportRequest | null {
 }
 
 export async function POST(request: Request) {
-  if (!serverIsSupabaseConfigured()) {
-    return watchlistApiError('supabase_unavailable', 503);
-  }
-  const client = await getServerSupabase();
-  const { data: { user } } = await client.auth.getUser();
-  if (!user) return watchlistApiError('not_authenticated', 401);
+  const reporter = createWatchlistRequestReporter('watchlist_import', request);
+  const auth = await authorizeWatchlistRequest(reporter, request);
+  if (auth instanceof Response) return auth;
+  const { client, user } = auth;
+  const rateLimitResponse = await enforceReportedWatchlistRateLimit(reporter, client, 'import');
+  if (rateLimitResponse) return rateLimitResponse;
   const command = parseImportRequest(await request.json().catch(() => null));
-  if (!command) return watchlistApiError('invalid_watchlist_import_request', 400);
+  if (!command) return reporter.reject('invalid_watchlist_import_request', 400);
   const parsed = parsePortableWatchlistSource(command.content, command.format);
-  if (!parsed.ok) return watchlistApiError(parsed.error, 400);
+  if (!parsed.ok) return reporter.reject(parsed.error, 400);
 
   try {
     const tickers = parsed.bundle.groups.flatMap((group) => group.items.map((item) => item.ticker));
-    const selectable = await validateSelectableSecuritiesWithClient(client, tickers);
+    const selectable = await reporter.step('validate_securities', () => (
+      validateSelectableSecuritiesWithClient(client, tickers)
+    ));
     if (!selectable.valid) {
-      return watchlistApiError('security_not_selectable', 422, { details: { tickers: selectable.rejected } });
+      return reporter.reject('security_not_selectable', 422, { details: { tickers: selectable.rejected } });
     }
     const [groups, alertsResult] = await Promise.all([
       loadWatchlistOverviewRows(client),
@@ -64,29 +65,31 @@ export async function POST(request: Request) {
     ]);
     if (alertsResult.error) throw new Error('watchlist_alert_load_failed');
     const preview = buildWatchlistImportPreview(parsed.bundle, groups, alertsResult.data ?? [], command.mode);
-    if (command.dryRun) return NextResponse.json({ preview });
+    if (command.dryRun) return reporter.json({ preview }, { fields: { dry_run: true, ticker_count: tickers.length } });
 
-    const imported = await importPortableWatchlist(
+    const imported = await reporter.step('apply_import', () => importPortableWatchlist(
       client,
       parsed.bundle,
       command.mode,
       command.mutationId!,
-    );
+    ));
     if (imported.error) {
       if (isWatchlistPlanLimitError(imported.error, 'item')) {
-        return watchlistApiError('watchlist_item_plan_limit', 403);
+        return reporter.reject('watchlist_item_plan_limit', 403);
       }
       if (imported.error.code === '22023') {
-        return watchlistApiError('invalid_portable_watchlist', 400);
+        return reporter.reject('invalid_portable_watchlist', 400);
       }
       if (imported.error.code === '23503' || imported.error.message === 'security_not_selectable') {
-        return watchlistApiError('security_not_selectable', 422);
+        return reporter.reject('security_not_selectable', 422);
       }
       throw new Error('watchlist_import_failed');
     }
     const snapshot = await loadVersionedWatchlistSnapshot(client, user.id);
-    return NextResponse.json({ preview, result: imported.data, snapshot });
-  } catch {
-    return watchlistApiError('watchlist_import_failed', 503);
+    return reporter.json({ preview, result: imported.data, snapshot }, {
+      fields: { dry_run: false, ticker_count: tickers.length, mode: command.mode },
+    });
+  } catch (error) {
+    return reporter.fail(error, 'watchlist_import_failed');
   }
 }

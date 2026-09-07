@@ -1,0 +1,117 @@
+name: Watchlist production release
+
+on:
+  workflow_run:
+    workflows: ["Application checks"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: watchlist-production-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      WATCHLIST_RUNTIME_EMAIL: ${{ secrets.WATCHLIST_RUNTIME_EMAIL }}
+      WATCHLIST_RUNTIME_PASSWORD: ${{ secrets.WATCHLIST_RUNTIME_PASSWORD }}
+      WATCHLIST_RUNTIME_EMAIL_B: ${{ secrets.WATCHLIST_RUNTIME_EMAIL_B }}
+      WATCHLIST_RUNTIME_PASSWORD_B: ${{ secrets.WATCHLIST_RUNTIME_PASSWORD_B }}
+      WATCHLIST_REQUIRED_PROVIDERS: ${{ vars.WATCHLIST_REQUIRED_PROVIDERS }}
+      WATCHLIST_SEARCH_CANARY_QUERIES: ${{ vars.WATCHLIST_SEARCH_CANARY_QUERIES }}
+      SEARCH_PROVIDER: ${{ vars.SEARCH_PROVIDER }}
+      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+      BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
+      SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      HK_FINANCIALS_API_URL: ${{ vars.HK_FINANCIALS_API_URL }}
+      HK_FINANCIALS_API_TOKEN: ${{ secrets.HK_FINANCIALS_API_TOKEN }}
+      HK_FINANCIALS_CANARY_TICKER: ${{ vars.HK_FINANCIALS_CANARY_TICKER }}
+      STRUCTURED_RESEARCH_API_URL: ${{ vars.STRUCTURED_RESEARCH_API_URL }}
+      STRUCTURED_RESEARCH_API_TOKEN: ${{ secrets.STRUCTURED_RESEARCH_API_TOKEN }}
+      STRUCTURED_RESEARCH_CANARY_TICKER: ${{ vars.STRUCTURED_RESEARCH_CANARY_TICKER }}
+      OFFICIAL_DOCUMENT_API_URL: ${{ vars.OFFICIAL_DOCUMENT_API_URL }}
+      OFFICIAL_DOCUMENT_API_TOKEN: ${{ secrets.OFFICIAL_DOCUMENT_API_TOKEN }}
+      OFFICIAL_DOCUMENT_CANARY_URL: ${{ vars.OFFICIAL_DOCUMENT_CANARY_URL }}
+      TRADING_CALENDAR_URL: ${{ vars.TRADING_CALENDAR_URL }}
+      TRADING_CALENDAR_API_KEY: ${{ secrets.TRADING_CALENDAR_API_KEY }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      WATCHLIST_DELIVERY_CANARY_EMAIL: ${{ secrets.WATCHLIST_DELIVERY_CANARY_EMAIL }}
+      WATCHLIST_DELIVERY_CANARY_FROM: ${{ vars.WATCHLIST_DELIVERY_CANARY_FROM }}
+      WATCHLIST_RELEASE_ID: ${{ github.event.workflow_run.head_sha }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: package.json
+          cache: npm
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.116.0
+      - run: npm ci
+      - name: Require release credentials
+        run: >-
+          test -n "$SUPABASE_ACCESS_TOKEN" && test -n "$SUPABASE_PROJECT_REF" &&
+          test -n "$SUPABASE_DB_PASSWORD" && test -n "$NEXT_PUBLIC_SUPABASE_URL" &&
+          test -n "$NEXT_PUBLIC_SUPABASE_ANON_KEY" && test -n "$SUPABASE_SERVICE_ROLE_KEY" &&
+          test -n "$WATCHLIST_RUNTIME_EMAIL" && test -n "$WATCHLIST_RUNTIME_PASSWORD" &&
+          test -n "$WATCHLIST_RUNTIME_EMAIL_B" && test -n "$WATCHLIST_RUNTIME_PASSWORD_B" &&
+          test -n "$WATCHLIST_REQUIRED_PROVIDERS" &&
+          test -n "$RESEND_API_KEY" && test -n "$WATCHLIST_DELIVERY_CANARY_EMAIL" &&
+          test -n "$WATCHLIST_DELIVERY_CANARY_FROM" &&
+          test -n "$VERCEL_TOKEN" &&
+          test -n "$VERCEL_ORG_ID" && test -n "$VERCEL_PROJECT_ID"
+      - name: Link production database
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
+      - name: Apply production migrations
+        run: supabase db push --include-all --password "$SUPABASE_DB_PASSWORD"
+      - name: Verify production schema
+        run: npm run watchlist:production-check
+      - name: Verify production provider readiness
+        run: npm run watchlist:provider-check
+      - name: Verify production tenant isolation
+        env:
+          E2E_EMAIL: ${{ secrets.WATCHLIST_RUNTIME_EMAIL }}
+          E2E_PASSWORD: ${{ secrets.WATCHLIST_RUNTIME_PASSWORD }}
+          E2E_EMAIL_B: ${{ secrets.WATCHLIST_RUNTIME_EMAIL_B }}
+          E2E_PASSWORD_B: ${{ secrets.WATCHLIST_RUNTIME_PASSWORD_B }}
+        run: npm run watchlist:rls-check
+      - name: Verify notification delivery
+        run: npm run watchlist:delivery-check
+      - name: Pull Vercel production configuration
+        run: npx --yes vercel@59.11.7 pull --yes --environment=production --token="$VERCEL_TOKEN"
+      - name: Build after schema verification
+        run: npx --yes vercel@59.11.7 build --prod --token="$VERCEL_TOKEN"
+      - name: Deploy prebuilt application
+        id: deploy
+        run: |
+          deployment_url="$(npx --yes vercel@59.11.7 deploy --prebuilt --prod --token="$VERCEL_TOKEN" | tail -n 1)"
+          case "$deployment_url" in
+            https://*) ;;
+            *) echo "Vercel did not return a deployment URL" >&2; exit 1 ;;
+          esac
+          echo "url=$deployment_url" >> "$GITHUB_OUTPUT"
+      - name: Verify production routes
+        env:
+          WATCHLIST_RUNTIME_URL: ${{ steps.deploy.outputs.url }}
+        run: npm run watchlist:runtime-check

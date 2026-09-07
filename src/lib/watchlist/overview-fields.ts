@@ -1,9 +1,11 @@
 export const WATCHLIST_OVERVIEW_QUERY_SORTS = [
   'position', 'ticker', 'name', 'group', 'price', 'change', 'open', 'prevClose',
   'dayRange', 'volume', 'amount', 'marketCap', 'pe', 'pb', 'turnover',
-  'volumeRatio', 'amplitude', 'dayPosition', 'oneYearReturn', 'volatility',
+  'volumeRatio', 'amplitude', 'dayPosition', 'periodReturn', 'volatility',
   'maxDrawdown', 'rangePosition', 'rsi14', 'macdHistogram',
   'bollingerPosition', 'atr14', 'excessReturn', 'beta', 'volumeZScore20',
+  'relativeStrengthRank', 'pePercentile', 'pbPercentile', 'liquidityPercentile',
+  'averageTradedAmount20', 'marketCapShare',
   'research', 'decision', 'freshness',
 ] as const;
 

@@ -8,7 +8,8 @@ export function scheduledWatchlistCronJobs(now: Date): WatchlistCronJobId[] {
   const hour = now.getUTCHours();
   const slot = Math.floor(now.getUTCMinutes() / 15);
   const jobs: WatchlistCronJobId[] = ['quote-alerts', 'operational-health'];
-  if (slot === 0) jobs.push('review-reminders');
+  if (slot === 0) jobs.push('review-reminders', 'provider-health');
+  if (hour === 3 && slot === 0) jobs.push('maintenance');
   if (slot === 1) jobs.push('metric-refresh', 'metric-alerts');
   if (slot === 2) jobs.push('perspective-outcomes');
   if (slot === 3) jobs.push('research-refresh');

@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   claim: vi.fn(),
   finish: vi.fn(),
   refresh: vi.fn(),
+  composition: vi.fn(),
 }));
 
 vi.mock('@/lib/supabase/admin', () => ({ getAdminSupabase: mocks.admin }));
@@ -14,6 +15,9 @@ vi.mock('@/lib/watchlist/metric-snapshot-repository', () => ({
 }));
 vi.mock('@/lib/watchlist/metric-snapshot-service', () => ({
   refreshWatchlistMetricSnapshot: mocks.refresh,
+}));
+vi.mock('@/lib/watchlist/composition-snapshot-repository', () => ({
+  refreshWatchlistCompositionSnapshots: mocks.composition,
 }));
 
 import { GET } from './route';
@@ -33,6 +37,7 @@ describe('GET /api/cron/watchlist-metrics', () => {
     mocks.claim.mockResolvedValue([claimed]);
     mocks.refresh.mockResolvedValue(undefined);
     mocks.finish.mockResolvedValue(undefined);
+    mocks.composition.mockResolvedValue(2);
   });
 
   it('fails closed before constructing an admin client', async () => {
@@ -55,7 +60,9 @@ describe('GET /api/cron/watchlist-metrics', () => {
       headers: { authorization: 'Bearer secret' },
     }));
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ ok: true, claimed: 1, succeeded: 1, failed: 0 });
+    expect(await response.json()).toMatchObject({
+      ok: true, claimed: 1, succeeded: 1, failed: 0, composition_refreshed: 2, composition_failed: false,
+    });
     expect(mocks.refresh).toHaveBeenCalledWith(
       { kind: 'admin' }, claimed, undefined, expect.any(Date), expect.objectContaining({ getOverride: expect.any(Function) }),
     );

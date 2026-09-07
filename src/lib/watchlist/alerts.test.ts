@@ -47,6 +47,12 @@ describe('watchlist alert contracts', () => {
       .toBeNull();
     expect(parseCreateWatchlistAlert({ itemId: 'item-1', alertType: 'metric', operator: 'lt', threshold: -3, config: { metric: 'ma20_distance_pct' } }))
       .toMatchObject({ threshold_numeric: -3 });
+    expect(parseCreateWatchlistAlert({ itemId: 'item-1', alertType: 'metric', operator: 'gte', threshold: 80, config: { metric: 'market_relative_strength_percentile' } }))
+      .toMatchObject({ config: { metric: 'market_relative_strength_percentile' }, threshold_numeric: 80 });
+    expect(parseCreateWatchlistAlert({ itemId: 'item-1', alertType: 'metric', operator: 'gte', threshold: 101, config: { metric: 'industry_pe_percentile' } }))
+      .toBeNull();
+    expect(parseCreateWatchlistAlert({ itemId: 'item-1', alertType: 'metric', operator: 'gte', threshold: -1, config: { metric: 'average_traded_amount_20' } }))
+      .toBeNull();
     expect(parseCreateWatchlistAlert({ itemId: 'item-1', alertType: 'metric', operator: 'gte', threshold: 2, config: { metric: 'unknown' } }))
       .toBeNull();
   });

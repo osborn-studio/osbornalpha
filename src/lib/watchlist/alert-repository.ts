@@ -1,4 +1,9 @@
-import type { WatchlistAlert, WatchlistAlertEvent } from '@/lib/supabase/database.types';
+import type {
+  WatchlistAlert,
+  WatchlistAlertEvent,
+  WatchlistAlertOrigin,
+  WatchlistAlertWithOrigin,
+} from '@/lib/supabase/database.types';
 import type { CreateWatchlistAlert } from './alerts';
 import type { WatchlistAlertEventQuery } from './alert-events';
 import type { WatchlistServerClient } from './server-repository';
@@ -54,9 +59,20 @@ function alertEventCommandClient(client: WatchlistServerClient): AlertEventComma
 }
 
 export async function listWatchlistAlerts(client: WatchlistServerClient, userId: string, itemId?: string | null) {
-  let query = alertRepositoryClient(client).from('watchlist_alerts').select('*').eq('user_id', userId);
+  let query = alertRepositoryClient(client).from('watchlist_alerts')
+    .select('*, watchlist_alert_origins(*)').eq('user_id', userId);
   if (itemId) query = query.eq('watchlist_item_id', itemId);
-  return query.order('created_at', { ascending: false });
+  const result = await query.order('created_at', { ascending: false });
+  const rows = (result.data ?? []) as unknown as Array<WatchlistAlert & {
+    watchlist_alert_origins?: WatchlistAlertOrigin | WatchlistAlertOrigin[] | null;
+  }>;
+  return {
+    data: rows.map(({ watchlist_alert_origins: nested, ...alert }) => ({
+      ...alert,
+      origin: Array.isArray(nested) ? nested[0] ?? null : nested ?? null,
+    })) as WatchlistAlertWithOrigin[],
+    error: result.error,
+  };
 }
 
 export async function createWatchlistAlert(client: WatchlistServerClient, userId: string, input: CreateWatchlistAlert) {

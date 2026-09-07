@@ -6,8 +6,8 @@ import {
   type WatchlistOverviewMetric,
 } from './overview-fields';
 
-export const WATCHLIST_UI_PREFERENCES_SCHEMA_VERSION = 2;
-export const WATCHLIST_UI_PREFERENCES_STORAGE_KEY = 'stock-monitor:watchlist:ui-preferences-v2';
+export const WATCHLIST_UI_PREFERENCES_SCHEMA_VERSION = 4;
+export const WATCHLIST_UI_PREFERENCES_STORAGE_KEY = 'stock-monitor:watchlist:ui-preferences-v4';
 export const WATCHLIST_UI_PREFERENCES_MAX_BYTES = 64 * 1024;
 export const WATCHLIST_UI_PREFERENCES_MAX_TICKERS = 100;
 export const WATCHLIST_UI_PREFERENCES_MAX_SAVED_VIEWS = 12;
@@ -16,11 +16,13 @@ export type WatchlistViewMode = 'kanban' | 'table';
 export type WatchlistColumnKey =
   | 'ticker' | 'name' | 'price' | 'change' | 'open' | 'prevClose' | 'dayRange' | 'volume' | 'amount'
   | 'marketCap' | 'pe' | 'pb' | 'turnover' | 'volumeRatio' | 'amplitude'
-  | 'dayPosition' | 'oneYearReturn' | 'volatility' | 'maxDrawdown' | 'rangePosition'
+  | 'dayPosition' | 'periodReturn' | 'volatility' | 'maxDrawdown' | 'rangePosition'
   | 'rsi14' | 'macdHistogram' | 'bollingerPosition' | 'atr14'
   | 'excessReturn' | 'beta' | 'volumeZScore20'
-  | 'research' | 'decision' | 'quality' | 'updated' | 'group';
-export type WatchlistTablePreset = 'market' | 'valuation' | 'risk';
+  | 'relativeStrengthRank' | 'pePercentile' | 'pbPercentile' | 'liquidityPercentile'
+  | 'averageTradedAmount20' | 'marketCapShare'
+  | 'research' | 'alerts' | 'decision' | 'quality' | 'updated' | 'group';
+export type WatchlistTablePreset = 'market' | 'relative' | 'valuation' | 'risk';
 export type WatchlistTableDensity = 'compact' | 'comfortable';
 export type WatchlistMetricFilterKey = WatchlistOverviewMetric;
 
@@ -48,6 +50,7 @@ export interface WatchlistSavedTableView {
   id: string;
   name: string;
   preferences: WatchlistTablePreferences;
+  isDefault?: boolean;
 }
 
 export const WATCHLIST_CHART_TYPES = ['line', 'candle', 'baseline', 'area', 'bar'] as const;
@@ -82,14 +85,17 @@ export interface WatchlistUiPreferencesCommand {
 export const WATCHLIST_ALL_COLUMNS: WatchlistColumnKey[] = [
   'ticker', 'name', 'price', 'change', 'open', 'prevClose', 'dayRange', 'volume', 'amount', 'marketCap',
   'pe', 'pb', 'turnover', 'volumeRatio', 'amplitude', 'dayPosition', 'quality', 'updated', 'group',
-  'oneYearReturn', 'volatility', 'maxDrawdown', 'rangePosition', 'rsi14', 'macdHistogram',
-  'bollingerPosition', 'atr14', 'excessReturn', 'beta', 'volumeZScore20', 'research', 'decision',
+  'periodReturn', 'volatility', 'maxDrawdown', 'rangePosition', 'rsi14', 'macdHistogram',
+  'bollingerPosition', 'atr14', 'excessReturn', 'beta', 'volumeZScore20', 'research', 'alerts', 'decision',
+  'relativeStrengthRank', 'pePercentile', 'pbPercentile', 'liquidityPercentile',
+  'averageTradedAmount20', 'marketCapShare',
 ];
 
 export const WATCHLIST_PRESET_COLUMNS: Record<WatchlistTablePreset, WatchlistColumnKey[]> = {
-  market: ['ticker', 'name', 'price', 'change', 'oneYearReturn', 'research', 'decision', 'updated'],
+  market: ['ticker', 'name', 'price', 'change', 'periodReturn', 'research', 'alerts', 'decision', 'updated'],
+  relative: ['ticker', 'name', 'price', 'change', 'relativeStrengthRank', 'pePercentile', 'liquidityPercentile', 'marketCapShare', 'updated'],
   valuation: ['ticker', 'name', 'price', 'change', 'marketCap', 'pe', 'pb', 'turnover', 'updated', 'group'],
-  risk: ['ticker', 'name', 'price', 'change', 'oneYearReturn', 'excessReturn', 'volatility', 'beta', 'maxDrawdown', 'rangePosition', 'rsi14', 'volumeZScore20', 'research', 'decision', 'updated', 'group'],
+  risk: ['ticker', 'name', 'price', 'change', 'periodReturn', 'excessReturn', 'volatility', 'beta', 'maxDrawdown', 'rangePosition', 'rsi14', 'volumeZScore20', 'research', 'alerts', 'decision', 'updated', 'group'],
 };
 
 export const DEFAULT_WATCHLIST_TABLE_PREFERENCES: WatchlistTablePreferences = {
@@ -141,6 +147,13 @@ const TICKER = /^[A-Z0-9][A-Z0-9.\-]{0,19}$/;
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function normalizedColumn(value: unknown): WatchlistColumnKey | null {
+  const migrated = value === 'oneYearReturn' ? 'periodReturn' : value;
+  return typeof migrated === 'string' && WATCHLIST_ALL_COLUMNS.includes(migrated as WatchlistColumnKey)
+    ? migrated as WatchlistColumnKey
+    : null;
 }
 
 function jsonSize(value: unknown): number {
@@ -199,7 +212,7 @@ function normalizeTablePreferences(value: unknown): WatchlistTablePreferences {
     ? input.preset as WatchlistTablePreset
     : defaults.preset;
   const candidateColumns = Array.isArray(input.visibleColumns)
-    ? input.visibleColumns.filter((column): column is WatchlistColumnKey => typeof column === 'string' && WATCHLIST_ALL_COLUMNS.includes(column as WatchlistColumnKey))
+    ? input.visibleColumns.map(normalizedColumn).filter((column): column is WatchlistColumnKey => column !== null)
     : [];
   const visibleColumns = [...new Set(candidateColumns)];
   const resolvedColumns = visibleColumns.length > 0 ? visibleColumns : [...WATCHLIST_PRESET_COLUMNS[preset]];
@@ -213,19 +226,20 @@ function normalizeTablePreferences(value: unknown): WatchlistTablePreferences {
     metricMax = null;
   }
   const widths = record(input.columnWidths);
-  const columnWidths = Object.fromEntries(Object.entries(widths ?? {}).filter(([column, width]) =>
-    resolvedColumns.includes(column as WatchlistColumnKey)
-    && WATCHLIST_ALL_COLUMNS.includes(column as WatchlistColumnKey)
-    && typeof width === 'number' && Number.isFinite(width) && width >= 72 && width <= 480,
-  )) as Partial<Record<WatchlistColumnKey, number>>;
+  const columnWidths = Object.fromEntries(Object.entries(widths ?? {}).flatMap(([column, width]) => {
+    const normalized = normalizedColumn(column);
+    return normalized && resolvedColumns.includes(normalized)
+      && typeof width === 'number' && Number.isFinite(width) && width >= 72 && width <= 480
+      ? [[normalized, width] as const]
+      : [];
+  })) as Partial<Record<WatchlistColumnKey, number>>;
   const candidatePinned = Array.isArray(input.pinnedColumns)
-    ? input.pinnedColumns.filter((column): column is WatchlistColumnKey => typeof column === 'string' && resolvedColumns.includes(column as WatchlistColumnKey))
+    ? input.pinnedColumns.map(normalizedColumn).filter((column): column is WatchlistColumnKey => column !== null && resolvedColumns.includes(column))
     : defaults.pinnedColumns.filter((column) => resolvedColumns.includes(column));
   const pinnedColumns = [...new Set(candidatePinned)].slice(0, 3);
 
   return {
-    sortKey: typeof input.sortKey === 'string' && WATCHLIST_ALL_COLUMNS.includes(input.sortKey as WatchlistColumnKey)
-      ? input.sortKey as WatchlistColumnKey : defaults.sortKey,
+    sortKey: normalizedColumn(input.sortKey) ?? defaults.sortKey,
     asc: typeof input.asc === 'boolean' ? input.asc : defaults.asc,
     preset,
     visibleColumns: resolvedColumns,
@@ -254,6 +268,7 @@ function normalizeSavedViews(value: unknown): WatchlistSavedTableView[] {
   const ids = new Set<string>();
   const names = new Set<string>();
   const normalized: WatchlistSavedTableView[] = [];
+  let hasDefault = false;
   for (const candidate of value) {
     const saved = record(candidate);
     const id = typeof saved?.id === 'string' ? saved.id : '';
@@ -262,7 +277,9 @@ function normalizeSavedViews(value: unknown): WatchlistSavedTableView[] {
     if (!id || id.length > 100 || !name || name.length > 40 || ids.has(id) || names.has(normalizedName)) continue;
     ids.add(id);
     names.add(normalizedName);
-    normalized.push({ id, name, preferences: normalizeTablePreferences(saved?.preferences) });
+    const isDefault = saved?.isDefault === true && !hasDefault;
+    if (isDefault) hasDefault = true;
+    normalized.push({ id, name, preferences: normalizeTablePreferences(saved?.preferences), ...(isDefault ? { isDefault: true } : {}) });
     if (normalized.length >= WATCHLIST_UI_PREFERENCES_MAX_SAVED_VIEWS) break;
   }
   return normalized;
@@ -272,15 +289,18 @@ export function isWatchlistSavedViews(value: unknown): value is WatchlistSavedTa
   if (!Array.isArray(value) || value.length > WATCHLIST_UI_PREFERENCES_MAX_SAVED_VIEWS) return false;
   const ids: string[] = [];
   const names: string[] = [];
+  let defaultCount = 0;
   for (const candidate of value) {
     const item = record(candidate) as unknown as WatchlistSavedTableView | null;
     if (!item || typeof item.id !== 'string' || item.id.length === 0 || item.id.length > 100
       || typeof item.name !== 'string' || item.name.trim().length === 0 || item.name.length > 40
+      || (item.isDefault !== undefined && typeof item.isDefault !== 'boolean')
       || !isWatchlistTablePreferences(item.preferences)) return false;
+    if (item.isDefault) defaultCount += 1;
     ids.push(item.id);
     names.push(item.name.trim().toLocaleLowerCase());
   }
-  return uniqueStrings(ids) && uniqueStrings(names);
+  return uniqueStrings(ids) && uniqueStrings(names) && defaultCount <= 1;
 }
 
 export function isWatchlistChartPreferences(value: unknown): value is WatchlistChartPreferences {
@@ -352,7 +372,7 @@ export function cloneWatchlistUiPreferences(value: WatchlistUiPreferences): Watc
 export function normalizeWatchlistUiPreferences(value: unknown): WatchlistUiPreferences {
   if (isWatchlistUiPreferences(value)) return cloneWatchlistUiPreferences(value);
   const input = record(value);
-  if (!input || (input.schemaVersion !== 1 && input.schemaVersion !== WATCHLIST_UI_PREFERENCES_SCHEMA_VERSION)) {
+  if (!input || ![1, 2, 3, WATCHLIST_UI_PREFERENCES_SCHEMA_VERSION].includes(Number(input.schemaVersion))) {
     return cloneWatchlistUiPreferences(DEFAULT_WATCHLIST_UI_PREFERENCES);
   }
   const migrated: WatchlistUiPreferences = {
@@ -451,9 +471,17 @@ export function readWatchlistUiPreferencesFromStorage(storage: StorageReader): W
     if (currentRecord && currentRecord.schemaVersion === WATCHLIST_UI_PREFERENCES_SCHEMA_VERSION) {
       return normalizeWatchlistUiPreferences(current);
     }
-    const unifiedV1 = readJson(storage, 'stock-monitor:watchlist:ui-preferences-v1');
-    const unifiedV1Record = record(unifiedV1);
-    if (unifiedV1Record && unifiedV1Record.schemaVersion === 1) return normalizeWatchlistUiPreferences(unifiedV1);
+    for (const legacyKey of [
+      'stock-monitor:watchlist:ui-preferences-v3',
+      'stock-monitor:watchlist:ui-preferences-v2',
+      'stock-monitor:watchlist:ui-preferences-v1',
+    ]) {
+      const legacy = readJson(storage, legacyKey);
+      const legacyRecord = record(legacy);
+      if (legacyRecord && [1, 2, 3].includes(Number(legacyRecord.schemaVersion))) {
+        return normalizeWatchlistUiPreferences(legacy);
+      }
+    }
 
     let preferences = cloneWatchlistUiPreferences(DEFAULT_WATCHLIST_UI_PREFERENCES);
     const viewMode = storage.getItem('stock-monitor:watchlist:view');

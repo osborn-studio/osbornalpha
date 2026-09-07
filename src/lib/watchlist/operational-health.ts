@@ -1,6 +1,14 @@
 export interface WatchlistOperationalHealthSnapshot {
   generated_at: string;
   research_queue: { due: number; failed: number; oldest_due_at: string | null };
+  manual_research_jobs: {
+    queued: number;
+    running: number;
+    failed: number;
+    cancelled: number;
+    oldest_queued_at: string | null;
+    oldest_running_at: string | null;
+  };
   metric_queue: { due: number; failed: number; oldest_due_at: string | null };
   perspective_generation_queue: {
     queued: number;
@@ -22,6 +30,14 @@ export interface WatchlistOperationalHealthSnapshot {
   citations: { sample_size: number; average_coverage: number | null };
   shared_research: { artifacts: number; links: number };
   perspective_evaluations?: { pending: number; dead_letter: number; oldest_due_at: string | null };
+  cron_dispatch?: {
+    pending: number;
+    running: number;
+    failed: number;
+    dead_letter: number;
+    oldest_unsucceeded_at: string | null;
+    latest_succeeded_at: string | null;
+  };
 }
 
 export interface WatchlistOperationalHealth {
@@ -64,6 +80,7 @@ function ratio(value: unknown): number | null | undefined {
 export function parseWatchlistOperationalHealth(value: unknown): WatchlistOperationalHealthSnapshot | null {
   const input = record(value);
   const research = record(input?.research_queue);
+  const manualResearch = record(input?.manual_research_jobs);
   const metric = record(input?.metric_queue);
   const perspectiveGeneration = record(input?.perspective_generation_queue);
   const quotes = record(input?.quotes);
@@ -72,9 +89,16 @@ export function parseWatchlistOperationalHealth(value: unknown): WatchlistOperat
   const citations = record(input?.citations);
   const shared = record(input?.shared_research);
   const perspectiveEvaluations = record(input?.perspective_evaluations);
+  const cronDispatch = record(input?.cron_dispatch);
   const generatedAt = timestamp(input?.generated_at);
   const values = {
     researchDue: count(research?.due), researchFailed: count(research?.failed), researchOldest: timestamp(research?.oldest_due_at),
+    manualQueued: count(manualResearch?.queued),
+    manualRunning: count(manualResearch?.running),
+    manualFailed: count(manualResearch?.failed),
+    manualCancelled: count(manualResearch?.cancelled),
+    manualOldestQueued: timestamp(manualResearch?.oldest_queued_at),
+    manualOldestRunning: timestamp(manualResearch?.oldest_running_at),
     metricDue: count(metric?.due), metricFailed: count(metric?.failed), metricOldest: timestamp(metric?.oldest_due_at),
     generationQueued: count(perspectiveGeneration?.queued),
     generationRunning: count(perspectiveGeneration?.running),
@@ -90,23 +114,44 @@ export function parseWatchlistOperationalHealth(value: unknown): WatchlistOperat
     perspectivePending: count(perspectiveEvaluations?.pending),
     perspectiveDead: count(perspectiveEvaluations?.dead_letter),
     perspectiveOldest: timestamp(perspectiveEvaluations?.oldest_due_at),
+    dispatchPending: cronDispatch ? count(cronDispatch.pending) : null,
+    dispatchRunning: cronDispatch ? count(cronDispatch.running) : null,
+    dispatchFailed: cronDispatch ? count(cronDispatch.failed) : null,
+    dispatchDead: cronDispatch ? count(cronDispatch.dead_letter) : null,
+    dispatchOldest: cronDispatch ? timestamp(cronDispatch.oldest_unsucceeded_at) : null,
+    dispatchLatest: cronDispatch ? timestamp(cronDispatch.latest_succeeded_at) : null,
   };
   if (typeof generatedAt !== 'string'
     || [
-      values.researchOldest, values.metricOldest, values.generationOldestQueued,
+      values.researchOldest, values.manualOldestQueued, values.manualOldestRunning,
+      values.metricOldest, values.generationOldestQueued,
       values.generationOldestRunning, values.quoteLatest, values.metricLatest,
       values.alertLatest, values.alertOldest,
     ]
       .some((item) => item === undefined)
     || values.citationCoverage === undefined
     || values.researchDue === null || values.researchFailed === null || values.metricDue === null || values.metricFailed === null
+    || values.manualQueued === null || values.manualRunning === null || values.manualFailed === null || values.manualCancelled === null
     || values.generationQueued === null || values.generationRunning === null || values.generationFailed === null
     || values.quoteCount === null || values.metricCount === null || values.alertPending === null || values.alertFailed === null
     || values.alertDead === null || values.citationSamples === null || values.artifacts === null || values.links === null
+    || (cronDispatch && (
+      values.dispatchPending === null || values.dispatchRunning === null
+      || values.dispatchFailed === null || values.dispatchDead === null
+      || values.dispatchOldest === undefined || values.dispatchLatest === undefined
+    ))
     || typeof alerts?.latest_status !== 'string' && alerts?.latest_status !== null) return null;
   return {
     generated_at: generatedAt,
     research_queue: { due: values.researchDue, failed: values.researchFailed, oldest_due_at: values.researchOldest ?? null },
+    manual_research_jobs: {
+      queued: values.manualQueued,
+      running: values.manualRunning,
+      failed: values.manualFailed,
+      cancelled: values.manualCancelled,
+      oldest_queued_at: values.manualOldestQueued ?? null,
+      oldest_running_at: values.manualOldestRunning ?? null,
+    },
     metric_queue: { due: values.metricDue, failed: values.metricFailed, oldest_due_at: values.metricOldest ?? null },
     perspective_generation_queue: {
       queued: values.generationQueued,
@@ -134,6 +179,16 @@ export function parseWatchlistOperationalHealth(value: unknown): WatchlistOperat
         oldest_due_at: values.perspectiveOldest ?? null,
       },
     } : {}),
+    ...(cronDispatch ? {
+      cron_dispatch: {
+        pending: values.dispatchPending!,
+        running: values.dispatchRunning!,
+        failed: values.dispatchFailed!,
+        dead_letter: values.dispatchDead!,
+        oldest_unsucceeded_at: values.dispatchOldest ?? null,
+        latest_succeeded_at: values.dispatchLatest ?? null,
+      },
+    } : {}),
   };
 }
 
@@ -151,6 +206,8 @@ export function evaluateWatchlistOperationalHealth(snapshot: WatchlistOperationa
     severity = Math.max(severity, level);
   };
   const researchAge = ageMinutes(now, snapshot.research_queue.oldest_due_at);
+  const manualQueuedAge = ageMinutes(now, snapshot.manual_research_jobs.oldest_queued_at);
+  const manualRunningAge = ageMinutes(now, snapshot.manual_research_jobs.oldest_running_at);
   const metricAge = ageMinutes(now, snapshot.metric_queue.oldest_due_at);
   const generationQueuedAge = ageMinutes(now, snapshot.perspective_generation_queue.oldest_queued_at);
   const generationRunningAge = ageMinutes(now, snapshot.perspective_generation_queue.oldest_running_at);
@@ -158,11 +215,20 @@ export function evaluateWatchlistOperationalHealth(snapshot: WatchlistOperationa
   const metricSnapshotAge = ageMinutes(now, snapshot.metrics.latest_observed_at);
   const alertAge = ageMinutes(now, snapshot.alerts.latest_finished_at);
   const alertPendingAge = ageMinutes(now, snapshot.alerts.oldest_pending_at);
+  const dispatchPendingAge = ageMinutes(now, snapshot.cron_dispatch?.oldest_unsucceeded_at ?? null);
+  const dispatchSuccessAge = ageMinutes(now, snapshot.cron_dispatch?.latest_succeeded_at ?? null);
 
   if (snapshot.research_queue.failed > 0) warn('research_queue_failed');
+  if (snapshot.manual_research_jobs.failed > 0) warn('manual_research_job_failed');
   if (snapshot.metric_queue.failed > 0) warn('metric_queue_failed');
   if (snapshot.perspective_generation_queue.failed > 0) warn('perspective_generation_failed');
   if (snapshot.research_queue.due > 100 || (researchAge ?? 0) > 360) warn('research_queue_stalled', 2);
+  if (snapshot.manual_research_jobs.queued > 25 || (manualQueuedAge ?? 0) > 30) {
+    warn('manual_research_queue_stalled', 2);
+  }
+  if (snapshot.manual_research_jobs.running > 10 || (manualRunningAge ?? 0) > 15) {
+    warn('manual_research_worker_stalled', 2);
+  }
   if (snapshot.metric_queue.due > 100 || (metricAge ?? 0) > 180) warn('metric_queue_stalled', 2);
   if (snapshot.perspective_generation_queue.queued > 25 || (generationQueuedAge ?? 0) > 30) {
     warn('perspective_generation_queue_stalled', 2);
@@ -178,10 +244,15 @@ export function evaluateWatchlistOperationalHealth(snapshot: WatchlistOperationa
   if (snapshot.metrics.count > 0 && (metricSnapshotAge ?? Number.POSITIVE_INFINITY) > 180) warn('metric_snapshots_stale', 2);
   if (snapshot.citations.sample_size > 0 && (snapshot.citations.average_coverage ?? 0) < 0.5) warn('citation_coverage_low');
   if ((snapshot.perspective_evaluations?.dead_letter ?? 0) > 0) warn('perspective_evaluation_dead_letter', 2);
+  if ((snapshot.cron_dispatch?.failed ?? 0) > 0) warn('cron_dispatch_failed');
+  if ((snapshot.cron_dispatch?.dead_letter ?? 0) > 0) warn('cron_dispatch_dead_letter', 2);
+  if ((dispatchPendingAge ?? 0) > 30 || (dispatchSuccessAge ?? 0) > 30) warn('cron_dispatch_stalled', 2);
   const hasRuntimeData = snapshot.quotes.count + snapshot.metrics.count + snapshot.shared_research.links > 0
     || snapshot.alerts.latest_finished_at !== null
     || snapshot.perspective_generation_queue.queued + snapshot.perspective_generation_queue.running
-      + snapshot.perspective_generation_queue.failed > 0;
+      + snapshot.perspective_generation_queue.failed > 0
+    || snapshot.manual_research_jobs.queued + snapshot.manual_research_jobs.running
+      + snapshot.manual_research_jobs.failed + snapshot.manual_research_jobs.cancelled > 0;
   return {
     status: severity === 2 ? 'critical' : severity === 1 ? 'degraded' : hasRuntimeData ? 'healthy' : 'unknown',
     warnings,

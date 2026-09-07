@@ -13,6 +13,11 @@ vi.mock('@/lib/supabase/server', () => ({
   serverIsSupabaseConfigured: vi.fn(() => true),
   getServerSupabase: vi.fn(async () => ({ auth: { getUser: mocks.auth } })),
 }));
+vi.mock('@/lib/watchlist/api-rate-limit', () => ({
+  consumeWatchlistApiRateLimit: vi.fn(async () => ({
+    allowed: true, limit: 6, remaining: 5, retryAfterSeconds: 0,
+  })),
+}));
 vi.mock('@/lib/watchlist/security-validation', async (importOriginal) => {
   const original = await importOriginal<typeof import('@/lib/watchlist/security-validation')>();
   return { ...original, validateSelectableSecuritiesWithClient: mocks.validate };

@@ -18,10 +18,17 @@ import { usePersistentState } from '@/lib/hooks/usePersistentState';
 import { watchlistBenchmarkTicker } from '@/lib/watchlist/analytics';
 import { WatchlistFinancialPanel } from '@/components/watchlist/WatchlistFinancialPanel';
 import { validateWatchlistBenchmark, type WatchlistBenchmarkIssue } from '@/lib/watchlist/benchmark-validation';
+import { watchlistProviderLabel } from '@/lib/watchlist/provider-label';
 import type { WatchlistChartPreferences } from '@/lib/watchlist/ui-preferences';
 import { watchlistHistoryRangeForChart } from '@/lib/market-returns/range';
+import { WatchlistPeerSnapshot } from '@/components/watchlist/WatchlistPeerSnapshot';
+import type { WatchlistQuickViewTab } from '@/lib/watchlist/quick-view';
+import { useWatchlistResearchBundle } from '@/lib/hooks/useWatchlistResearchBundle';
+import { WatchlistWorkflowNextAction } from '@/components/watchlist/WatchlistWorkflowNextAction';
+import type { WatchlistWorkflowNextAction as WorkflowAction } from '@/lib/watchlist/workflow-summary';
+import { nextRovingTab } from '@/lib/keyboard/roving-tabs';
 
-type QuickViewTab = 'snapshot' | 'chart' | 'research' | 'decision' | 'alerts';
+type QuickViewTab = WatchlistQuickViewTab;
 
 function Metric({ label, value, tone = 'text-text' }: { label: string; value: React.ReactNode; tone?: string }) {
   return (
@@ -59,6 +66,7 @@ export function WatchlistQuickView({
   onBenchmarkPreferenceChange,
   chartPreferences,
   onChartPreferencesChange,
+  initialTab = 'chart',
   onClose,
 }: {
   ticker: string;
@@ -70,11 +78,14 @@ export function WatchlistQuickView({
   onBenchmarkPreferenceChange?: (ticker: string, benchmark: string | null) => void;
   chartPreferences?: WatchlistChartPreferences;
   onChartPreferencesChange?: React.Dispatch<React.SetStateAction<WatchlistChartPreferences>>;
+  initialTab?: WatchlistQuickViewTab;
   onClose: () => void;
 }) {
   const t = useTranslations('market.table.drawer');
-  const [activeTab, setActiveTab] = useState<QuickViewTab>('chart');
-  const [visited, setVisited] = useState<Set<QuickViewTab>>(() => new Set(['chart']));
+  const providerT = useTranslations('market.table.providers');
+  const research = useWatchlistResearchBundle(ticker);
+  const [activeTab, setActiveTab] = useState<QuickViewTab>(initialTab);
+  const [visited, setVisited] = useState<Set<QuickViewTab>>(() => new Set([initialTab]));
   const [decisionDirty, setDecisionDirty] = useState(false);
   const [confirmingClose, setConfirmingClose] = useState(false);
   const [localBenchmarkPreference, setLocalBenchmarkPreference] = usePersistentState(
@@ -101,19 +112,30 @@ export function WatchlistQuickView({
   const panelRef = useDialogFocusTrap<HTMLElement>(requestClose);
 
   useEffect(() => {
-    setActiveTab('chart');
-    setVisited(new Set(['chart']));
+    setActiveTab(initialTab);
+    setVisited(new Set([initialTab]));
     setDecisionDirty(false);
     setConfirmingClose(false);
     setBenchmarkError(null);
     autoRequestedBenchmark.current = null;
-  }, [ticker]);
+  }, [initialTab, ticker]);
 
   useEffect(() => { setBenchmarkInput(benchmarkPreference); }, [benchmarkPreference]);
 
   const selectTab = (tab: QuickViewTab) => {
     setActiveTab(tab);
     setVisited((current) => new Set(current).add(tab));
+  };
+  const runWorkflowAction = (action: WorkflowAction) => {
+    if (action === 'retry_alert_delivery' || action === 'review_alert') selectTab('alerts');
+    else if (action === 'review_decision' || action === 'document_thesis') selectTab('decision');
+    else if (action === 'refresh_research') {
+      selectTab('research');
+      void research.refresh();
+    } else if (action === 'generate_perspectives') {
+      selectTab('research');
+      void research.generatePerspectives('auto');
+    } else if (action === 'continue_research') selectTab('research');
   };
   const onDecisionDirtyChange = useCallback((dirty: boolean) => setDecisionDirty(dirty), []);
   const market = quote?.market ?? classifyMarket(ticker);
@@ -165,22 +187,19 @@ export function WatchlistQuickView({
     { id: 'alerts', icon: Bell, available: !!overview?.item },
   ];
   const availableTabs = tabs.filter((tab) => tab.available);
-  const moveTab = (current: QuickViewTab, direction: 'next' | 'prev' | 'first' | 'last') => {
-    const index = availableTabs.findIndex((tab) => tab.id === current);
-    if (index < 0) return;
-    const target = direction === 'first' ? 0
-      : direction === 'last' ? availableTabs.length - 1
-        : (index + (direction === 'next' ? 1 : -1) + availableTabs.length) % availableTabs.length;
-    const next = availableTabs[target].id;
+  const moveTab = (current: QuickViewTab, key: string) => {
+    const next = nextRovingTab(availableTabs.map((tab) => tab.id), current, key);
+    if (!next) return false;
     selectTab(next);
     window.requestAnimationFrame(() => document.getElementById(`watchlist-tab-${ticker}-${next}`)?.focus());
+    return true;
   };
 
   return (
     <div className="fixed inset-0 z-[60]" role="dialog" aria-modal="true" aria-label={t('ariaLabel', { ticker })}>
       <button type="button" className="absolute inset-0 bg-black/70 backdrop-blur-[2px] lg:bg-black/35 lg:backdrop-blur-none" onClick={requestClose} aria-label={t('dismiss')} />
-      <aside ref={panelRef} className="absolute inset-y-0 right-0 w-full overflow-y-auto border-l border-border bg-bg pb-[env(safe-area-inset-bottom)] shadow-2xl sm:w-[min(760px,82vw)] lg:w-[min(760px,72vw)] xl:w-[min(780px,56vw)]">
-        <div className="sticky top-0 z-30 bg-bg/95 backdrop-blur-xl">
+      <aside ref={panelRef} className="absolute inset-y-0 right-0 flex w-full flex-col overflow-hidden border-l border-border bg-bg pb-[env(safe-area-inset-bottom)] shadow-2xl sm:w-[min(760px,82vw)] lg:w-[min(760px,72vw)] xl:w-[min(780px,56vw)]">
+        <div className="sticky top-0 z-30 shrink-0 bg-bg/95 backdrop-blur-xl">
           <div className="h-0.5 bg-accent" />
           <header className="flex items-start gap-3 px-4 py-3 sm:px-5 sm:py-4">
             <div className="min-w-0 flex-1">
@@ -205,12 +224,13 @@ export function WatchlistQuickView({
               const Icon = tab.icon;
               const tabId = `watchlist-tab-${ticker}-${tab.id}`;
               const panelId = `watchlist-panel-${ticker}-${tab.id}`;
-              return <button key={tab.id} id={tabId} type="button" role="tab" aria-label={t(`tabs.${tab.id}`)} title={t(`tabs.${tab.id}`)} aria-selected={activeTab === tab.id} aria-controls={panelId} tabIndex={activeTab === tab.id ? 0 : -1} onClick={() => selectTab(tab.id)} onKeyDown={(event) => { if (event.key === 'ArrowRight' || event.key === 'ArrowDown') { event.preventDefault(); moveTab(tab.id, 'next'); } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') { event.preventDefault(); moveTab(tab.id, 'prev'); } else if (event.key === 'Home') { event.preventDefault(); moveTab(tab.id, 'first'); } else if (event.key === 'End') { event.preventDefault(); moveTab(tab.id, 'last'); } }} className={`relative inline-flex h-11 min-w-0 items-center justify-center gap-1.5 px-1 text-xs font-medium transition sm:px-2 ${activeTab === tab.id ? 'text-text' : 'text-text-muted hover:text-text'}`}><Icon className="h-4 w-4 shrink-0" aria-hidden="true" /><span className="hidden min-[430px]:inline">{t(`tabs.${tab.id}`)}</span>{activeTab === tab.id && <span className="absolute inset-x-2 bottom-0 h-0.5 bg-accent" />}</button>;
+              return <button key={tab.id} id={tabId} type="button" role="tab" aria-label={t(`tabs.${tab.id}`)} title={t(`tabs.${tab.id}`)} aria-selected={activeTab === tab.id} aria-controls={panelId} tabIndex={activeTab === tab.id ? 0 : -1} onClick={() => selectTab(tab.id)} onKeyDown={(event) => { if (moveTab(tab.id, event.key)) event.preventDefault(); }} className={`relative inline-flex h-12 min-w-0 flex-col items-center justify-center gap-0.5 px-0.5 text-[10px] font-medium transition sm:h-11 sm:flex-row sm:gap-1.5 sm:px-2 sm:text-xs ${activeTab === tab.id ? 'text-text' : 'text-text-muted hover:text-text'}`}><Icon className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" aria-hidden="true" /><span className="block max-w-full truncate">{t(`tabs.${tab.id}`)}</span>{activeTab === tab.id && <span className="absolute inset-x-2 bottom-0 h-0.5 bg-accent" />}</button>;
             })}
           </nav>
         </div>
 
-        <div className="p-4 sm:p-5">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+          {research.workflow && <WatchlistWorkflowNextAction workflow={research.workflow} onAction={runWorkflowAction} />}
           {activeTab === 'snapshot' && (
             <div id={`watchlist-panel-${ticker}-snapshot`} role="tabpanel" aria-labelledby={`watchlist-tab-${ticker}-snapshot`}>
               {(radar || decision || nextEvent) && <section className="mb-5 grid divide-y divide-border/70 border-y border-border/70 sm:grid-cols-3 sm:divide-x sm:divide-y-0" aria-label={t('signalSummary')}>
@@ -228,6 +248,7 @@ export function WatchlistQuickView({
                 </div>
                 <details className="mt-2 border-b border-border/70"><summary className="cursor-pointer py-2 text-[11px] font-semibold text-text-dim">{t('moreMarketMetrics')}</summary><div className="grid grid-cols-2 gap-x-4 pb-2 sm:grid-cols-4"><Metric label={t('open')} value={quote ? formatPrice(quote.open, quote.currency) : '--'} /><Metric label={t('amplitude')} value={optional(quote?.amplitude, '%')} /><Metric label="PB" value={optional(quote?.pb)} /><Metric label={t('turnover')} value={optional(quote?.turnover, '%')} /></div></details>
               </section>
+              <WatchlistPeerSnapshot envelope={overview?.peer} />
               <section className="mt-6" aria-label={t('historyMetrics')}>
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold text-text-dim"><span>{t('historyMetrics')}</span>{metricsPending ? <span className="font-normal text-text-muted">{t('calculating')}</span> : historicalMetrics && <span className="font-normal text-text-muted">{t('sampleSize', { count: historicalMetrics.sampleSize })} · {t('coverage', { value: Math.round(historicalMetrics.coverageRatio * 100) })}</span>}</div>
                 {onBenchmarkChange && <div className="mb-2 flex flex-wrap items-center gap-1.5 rounded-md border border-border/70 bg-bg-elevated/40 p-2">
@@ -263,7 +284,7 @@ export function WatchlistQuickView({
                 {historicalMetrics && <div className="mt-3 border-t border-border/70 pt-2 text-[11px] text-text-muted">{t('methodology', {
                   range: historyRangeLabel,
                   days: historicalMetrics.methodology.annualizationFactor,
-                  source: historicalMetrics.methodology.priceReturnSource ?? overview?.history?.source ?? '--',
+                  source: watchlistProviderLabel(historicalMetrics.methodology.priceReturnSource ?? overview?.history?.source, providerT),
                   totalBasis: t(totalReturnAvailable ? 'totalReturnBases.adjustedClose' : 'totalReturnBases.unavailable'),
                   riskFree: historicalMetrics.methodology.riskFreeRatePct.toFixed(2),
                 })}</div>}
@@ -273,7 +294,7 @@ export function WatchlistQuickView({
                   <WatchlistDataStatus label={t('marketSnapshot')} envelope={overview?.market} />
                   <WatchlistDataStatus label={t('historySnapshot')} envelope={overview?.history} />
                 </div>
-                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-text-muted"><span>{t('source', { value: quote?.source || '--' })}</span><span>{t('updated', { value: quote?.updated_at ? new Date(quote.updated_at).toLocaleString() : '--' })}</span></div>
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-text-muted"><span>{t('source', { value: watchlistProviderLabel(quote?.source, providerT) })}</span><span>{t('updated', { value: quote?.updated_at ? new Date(quote.updated_at).toLocaleString() : '--' })}</span></div>
               </div>
               <details className="mt-5 border-t border-border pt-3">
                 <summary className="cursor-pointer py-2 text-xs font-semibold text-text">{t('financials.title')}</summary>
@@ -282,7 +303,7 @@ export function WatchlistQuickView({
             </div>
           )}
           {activeTab === 'chart' && visited.has('chart') && <div id={`watchlist-panel-${ticker}-chart`} role="tabpanel" aria-labelledby={`watchlist-tab-${ticker}-chart`}><KlineChart ticker={ticker} preferences={chartPreferences} onPreferencesChange={onChartPreferencesChange} /></div>}
-          {activeTab === 'research' && visited.has('research') && <div id={`watchlist-panel-${ticker}-research`} role="tabpanel" aria-labelledby={`watchlist-tab-${ticker}-research`}><WatchlistResearchPanel ticker={ticker} overview={overview} /></div>}
+          {activeTab === 'research' && visited.has('research') && <div id={`watchlist-panel-${ticker}-research`} role="tabpanel" aria-labelledby={`watchlist-tab-${ticker}-research`}><WatchlistResearchPanel ticker={ticker} overview={overview} research={research} onOpenAlerts={() => selectTab('alerts')} /></div>}
           {overview?.item && onDecisionSaved && visited.has('decision') && <div id={`watchlist-panel-${ticker}-decision`} role="tabpanel" aria-labelledby={`watchlist-tab-${ticker}-decision`} hidden={activeTab !== 'decision'}><WatchlistDecisionPanel item={overview.item} currency={quote?.currency} onSaved={onDecisionSaved} onDirtyChange={onDecisionDirtyChange} /></div>}
           {activeTab === 'alerts' && overview?.item && visited.has('alerts') && <div id={`watchlist-panel-${ticker}-alerts`} role="tabpanel" aria-labelledby={`watchlist-tab-${ticker}-alerts`}><WatchlistAlertPanel itemId={overview.item.id} /></div>}
         </div>

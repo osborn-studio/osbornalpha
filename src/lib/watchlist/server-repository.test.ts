@@ -21,6 +21,11 @@ describe('loadWatchlistOverviewQuery', () => {
             id: '11111111-1111-5111-8111-111111111111', ticker: 'AAPL', conviction: 8,
             sort_order: 0, decision_version: 1, tags: [], status: 'watching',
           },
+          querySnapshot: {
+            sortKey: 'change', sortNumber: 1.2, sortText: null,
+            sortAsOf: '2026-09-04T12:00:00Z', metricKey: 'rsi14', metricNumber: 55,
+            metricAsOf: '2026-09-04T11:00:00Z', currency: 'USD',
+          },
         }],
       },
       error: null,
@@ -35,6 +40,7 @@ describe('loadWatchlistOverviewQuery', () => {
       total: 2,
       hasMore: true,
       nextCursor: { mode: 'query', fingerprint: request.fingerprint, sortNumber: 55 },
+      rows: [{ querySnapshot: { sortKey: 'change', sortNumber: 1.2, metricNumber: 55 } }],
     });
   });
 
@@ -54,7 +60,7 @@ describe('loadWatchlistReviewQueue', () => {
         summary: { overdue: 1, due_today: 0, upcoming: 0, unscheduled: 0 },
         rows: [{
           group: { id: 'group-1', name: 'Core', sort_order: 0 },
-          item: { id: 'item-1', ticker: 'AAPL' }, identity: null, review_bucket: 'overdue',
+          item: { id: 'item-1', ticker: 'AAPL' }, identity: null, review_bucket: 'overdue', review_reasons: [],
         }],
       },
       error: null,

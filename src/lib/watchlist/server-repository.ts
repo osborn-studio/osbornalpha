@@ -7,6 +7,7 @@ import type {
   WatchlistOverviewGroupRow,
   WatchlistOverviewItemRow,
   WatchlistOverviewPageRow,
+  WatchlistOverviewQuerySnapshot,
 } from './overview-contract';
 import type { WatchlistOverviewCursor } from './overview-pagination';
 import type { WatchlistOverviewQueryCursor, WatchlistOverviewQueryRequest } from './overview-query';
@@ -15,6 +16,7 @@ import {
   type WatchlistReviewQueue,
   type WatchlistReviewScope,
 } from './review-workflow';
+import { WATCHLIST_OVERVIEW_METRICS, WATCHLIST_OVERVIEW_QUERY_SORTS } from './overview-fields';
 export type { WatchlistOverviewItemRow, WatchlistOverviewGroupRow } from './overview-contract';
 
 export type WatchlistServerClient = Awaited<ReturnType<typeof getServerSupabase>>;
@@ -94,9 +96,30 @@ function parseOverviewPage(value: unknown): WatchlistOverviewDatabasePage {
       || !['inbox', 'researching', 'watching', 'ready', 'paused', 'invalidated'].includes(String(item.status))) {
       throw new Error('invalid_watchlist_overview_row');
     }
+    const rawSnapshot = row.querySnapshot;
+    let querySnapshot: WatchlistOverviewQuerySnapshot | null = null;
+    if (rawSnapshot != null) {
+      if (typeof rawSnapshot !== 'object' || Array.isArray(rawSnapshot)) {
+        throw new Error('invalid_watchlist_overview_query_snapshot');
+      }
+      const snapshot = rawSnapshot as Record<string, unknown>;
+      const metricKey = snapshot.metricKey == null ? null : String(snapshot.metricKey);
+      if (!WATCHLIST_OVERVIEW_QUERY_SORTS.includes(String(snapshot.sortKey) as never)
+        || (metricKey !== null && !WATCHLIST_OVERVIEW_METRICS.includes(metricKey as never))
+        || (snapshot.sortNumber !== null && !Number.isFinite(snapshot.sortNumber))
+        || (snapshot.sortText !== null && typeof snapshot.sortText !== 'string')
+        || (snapshot.sortAsOf !== null && typeof snapshot.sortAsOf !== 'string')
+        || (snapshot.metricNumber !== null && !Number.isFinite(snapshot.metricNumber))
+        || (snapshot.metricAsOf !== null && typeof snapshot.metricAsOf !== 'string')
+        || (snapshot.currency !== null && typeof snapshot.currency !== 'string')) {
+        throw new Error('invalid_watchlist_overview_query_snapshot');
+      }
+      querySnapshot = snapshot as unknown as WatchlistOverviewQuerySnapshot;
+    }
     return {
       group: group as unknown as WatchlistOverviewPageRow['group'],
       item: item as unknown as WatchlistOverviewItemRow,
+      querySnapshot,
     };
   });
   const hasMore = typeof page.has_more === 'boolean' ? page.has_more : undefined;
@@ -266,6 +289,30 @@ export async function updateWatchlistItemDecision(
     p_item_id: itemId,
     p_expected_version: expectedVersion,
     p_patch: patch,
+  });
+  return { data: data?.[0] ?? null, error };
+}
+
+export async function updateWatchlistReviewAction(
+  client: WatchlistServerClient,
+  itemId: string,
+  expectedVersion: number,
+  action: 'complete' | 'snooze',
+  reviewAt: string | null,
+) {
+  const repository = client as unknown as {
+    rpc: (name: 'act_watchlist_review', args: {
+      p_item_id: string;
+      p_expected_version: number;
+      p_action: 'complete' | 'snooze';
+      p_review_at: string | null;
+    }) => Promise<{ data: WatchlistItem[] | null; error: { code?: string; message: string } | null }>;
+  };
+  const { data, error } = await repository.rpc('act_watchlist_review', {
+    p_item_id: itemId,
+    p_expected_version: expectedVersion,
+    p_action: action,
+    p_review_at: reviewAt,
   });
   return { data: data?.[0] ?? null, error };
 }
