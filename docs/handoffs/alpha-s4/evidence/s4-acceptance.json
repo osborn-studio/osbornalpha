@@ -1,0 +1,47 @@
+{
+  "status": "passed",
+  "scope": "local synthetic acceptance only",
+  "migrations": 25,
+  "test_files": 149,
+  "tests_passed": 1164,
+  "integration_test_state_supplied": true,
+  "typecheck": "passed",
+  "lint": "passed",
+  "build": "passed",
+  "actual_candidate_id": "d6885801-c783-4f6d-9be4-72d76ebf63f8",
+  "actual_observation_id": "11e06e4f-0f44-4a0e-bdb5-1c285ac021f9",
+  "actual_actor_kind": "agent",
+  "research_stream": "descriptive",
+  "record_origin": "forward",
+  "observation_status": "pending_start",
+  "provenance_level": "local_receipt",
+  "outbox_crash_replay": "passed: durable file write before failed SQL acknowledgment, new child process recovery",
+  "browser": {
+    "status": "passed",
+    "real_server": true,
+    "real_database": true,
+    "mocked_routes": 0,
+    "actor_kind": "agent",
+    "synthetic": true,
+    "checks": [
+      "prelabel_before_card",
+      "citation",
+      "decision_persistence",
+      "pending_observation",
+      "reload_history",
+      "320px_no_overflow",
+      "unauth_401",
+      "cross_origin_403",
+      "no_page_errors"
+    ]
+  },
+  "controlled_local_backup": {
+    "synthetic": true,
+    "provenance_level": "local_receipt",
+    "database_dump_sha256": "e6319942d90a81233db4ebc6b5ee3816613f74a4d2d665a1b9e570db7a1c5323",
+    "journal_sha256": "929f5ca688cae12eb0da2463bc535424785fc758976ec3c698edf8e2a3256a0f",
+    "journal_entries": 25
+  },
+  "no_production_changes": true,
+  "no_material_sent_to_models": true
+}

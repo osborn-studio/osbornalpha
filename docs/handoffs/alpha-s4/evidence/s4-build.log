@@ -1,0 +1,160 @@
+
+> stock-monitor@1.0.0 build
+> next build
+
+   ▲ Next.js 15.5.22
+
+   Creating an optimized production build ...
+ ✓ Compiled successfully in 3.4s
+   Linting and checking validity of types ...
+   Collecting page data ...
+   Generating static pages (0/35) ...
+   Generating static pages (8/35) 
+   Generating static pages (17/35) 
+   Generating static pages (26/35) 
+ ✓ Generating static pages (35/35)
+   Finalizing page optimization ...
+   Collecting build traces ...
+
+Route (app)                                        Size  First Load JS
+┌ ƒ /                                             172 B         106 kB
+├ ƒ /_not-found                                   347 B         103 kB
+├ ƒ /about                                        471 B         118 kB
+├ ƒ /admin/securities                           1.95 kB         120 kB
+├ ƒ /admin/usage                                2.92 kB         121 kB
+├ ƒ /api/admin/securities                         347 B         103 kB
+├ ƒ /api/admin/usage                              347 B         103 kB
+├ ƒ /api/artifacts                                347 B         103 kB
+├ ƒ /api/artifacts/[id]                           347 B         103 kB
+├ ƒ /api/auth/logout                              347 B         103 kB
+├ ƒ /api/backtest                                 347 B         103 kB
+├ ƒ /api/brief/preview                            347 B         103 kB
+├ ƒ /api/brief/send                               347 B         103 kB
+├ ƒ /api/cache/revalidate                         347 B         103 kB
+├ ƒ /api/calendar/[ticker]                        347 B         103 kB
+├ ƒ /api/calendar/batch                           347 B         103 kB
+├ ƒ /api/consensus/[ticker]                       347 B         103 kB
+├ ƒ /api/copilot                                  347 B         103 kB
+├ ƒ /api/cron/alerts/ai                           347 B         103 kB
+├ ƒ /api/cron/alerts/quotes                       347 B         103 kB
+├ ƒ /api/cron/daily-brief                         347 B         103 kB
+├ ƒ /api/cron/daily-radar                         347 B         103 kB
+├ ƒ /api/cron/probes/auth-email                   347 B         103 kB
+├ ƒ /api/cron/research-daily                      347 B         103 kB
+├ ƒ /api/cron/securities-sync                     347 B         103 kB
+├ ƒ /api/dcf/[ticker]                             347 B         103 kB
+├ ƒ /api/decisions                                347 B         103 kB
+├ ƒ /api/decisions/[id]                           347 B         103 kB
+├ ƒ /api/diag/tushare                             347 B         103 kB
+├ ƒ /api/events                                   347 B         103 kB
+├ ƒ /api/financials/[ticker]                      347 B         103 kB
+├ ƒ /api/flows/[ticker]                           347 B         103 kB
+├ ƒ /api/holders/[ticker]                         347 B         103 kB
+├ ƒ /api/kline/[ticker]                           347 B         103 kB
+├ ƒ /api/llm/settings                             347 B         103 kB
+├ ƒ /api/llm/test                                 347 B         103 kB
+├ ƒ /api/perspectives/[ticker]                    347 B         103 kB
+├ ƒ /api/portfolio                                347 B         103 kB
+├ ƒ /api/quote/[ticker]                           347 B         103 kB
+├ ƒ /api/quote/batch                              347 B         103 kB
+├ ƒ /api/radar/[ticker]                           347 B         103 kB
+├ ƒ /api/radar/batch                              347 B         103 kB
+├ ƒ /api/research/axioms/check                    347 B         103 kB
+├ ƒ /api/research/entities                        347 B         103 kB
+├ ƒ /api/research/entities/[id]                   347 B         103 kB
+├ ƒ /api/research/evals/cases                     347 B         103 kB
+├ ƒ /api/research/evals/cases/[id]                347 B         103 kB
+├ ƒ /api/research/evals/cases/[id]/run            347 B         103 kB
+├ ƒ /api/research/evals/runs/[id]                 347 B         103 kB
+├ ƒ /api/research/memos                           347 B         103 kB
+├ ƒ /api/research/memos/[id]                      347 B         103 kB
+├ ƒ /api/research/memos/[id]/review               347 B         103 kB
+├ ƒ /api/research/memos/generate                  347 B         103 kB
+├ ƒ /api/research/memos/generate-deal             347 B         103 kB
+├ ƒ /api/research/playbooks                       347 B         103 kB
+├ ƒ /api/research/playbooks/[id]                  347 B         103 kB
+├ ƒ /api/research/playbooks/[id]/approve          347 B         103 kB
+├ ƒ /api/research/playbooks/[id]/reject           347 B         103 kB
+├ ƒ /api/research/playbooks/suggest               347 B         103 kB
+├ ƒ /api/research/s4/candidates                   347 B         103 kB
+├ ƒ /api/research/s4/candidates/[id]/citation     347 B         103 kB
+├ ƒ /api/research/s4/candidates/[id]/decisions    347 B         103 kB
+├ ƒ /api/research/s4/candidates/[id]/history      347 B         103 kB
+├ ƒ /api/research/s4/candidates/[id]/reveal       347 B         103 kB
+├ ƒ /api/research/s4/candidates/[id]/status       347 B         103 kB
+├ ƒ /api/research/s4/options                      347 B         103 kB
+├ ƒ /api/research/signals                         347 B         103 kB
+├ ƒ /api/research/signals/extract                 347 B         103 kB
+├ ƒ /api/research/sources                         347 B         103 kB
+├ ƒ /api/research/sources/[id]                    347 B         103 kB
+├ ƒ /api/research/sources/from-diligence          347 B         103 kB
+├ ƒ /api/research/theses                          347 B         103 kB
+├ ƒ /api/research/theses/[id]                     347 B         103 kB
+├ ƒ /api/research/theses/[id]/alerts/[eventId]    347 B         103 kB
+├ ƒ /api/research/theses/[id]/monitor             347 B         103 kB
+├ ƒ /api/research/theses/[id]/transition          347 B         103 kB
+├ ƒ /api/research/theses/alerts                   347 B         103 kB
+├ ƒ /api/research/theses/monitor-all              347 B         103 kB
+├ ƒ /api/reviews                                  347 B         103 kB
+├ ƒ /api/search                                   347 B         103 kB
+├ ƒ /api/securities/resolve                       347 B         103 kB
+├ ƒ /api/securities/validate                      347 B         103 kB
+├ ƒ /api/signals/[ticker]                         347 B         103 kB
+├ ƒ /api/stocks/[ticker]                          347 B         103 kB
+├ ƒ /api/stripe/checkout                          347 B         103 kB
+├ ƒ /api/stripe/webhook                           347 B         103 kB
+├ ƒ /api/trades                                   347 B         103 kB
+├ ƒ /api/trades/[id]                              347 B         103 kB
+├ ƒ /api/usage/today                              347 B         103 kB
+├ ƒ /api/watchlist                                347 B         103 kB
+├ ƒ /api/watchlist/[ticker]                       347 B         103 kB
+├ ƒ /api/watchlist/sync                           347 B         103 kB
+├ ƒ /api/webhooks/resend                          347 B         103 kB
+├ ƒ /auth/callback                                347 B         103 kB
+├ ƒ /backtest                                   3.24 kB         136 kB
+├ ƒ /briefs                                       471 B         118 kB
+├ ƒ /briefs/[date]                                471 B         118 kB
+├ ƒ /copilot                                      172 B         138 kB
+├ ƒ /design                                       347 B         103 kB
+├ ƒ /forgot-password                            1.94 kB         183 kB
+├ ƒ /intel                                      3.36 kB         141 kB
+├ ƒ /login                                        863 B         186 kB
+├ ƒ /portfolio                                  5.87 kB         145 kB
+├ ƒ /portfolio/decisions                        2.99 kB         128 kB
+├ ƒ /portfolio/positions                        3.57 kB         128 kB
+├ ƒ /portfolio/review                           3.96 kB         129 kB
+├ ƒ /radar                                      3.47 kB         199 kB
+├ ƒ /register                                     413 B         185 kB
+├ ƒ /research                                   2.23 kB         108 kB
+├ ƒ /research/companies                         1.15 kB         107 kB
+├ ƒ /research/companies/[id]                    1.76 kB         108 kB
+├ ƒ /research/evals                             3.24 kB         109 kB
+├ ƒ /research/evals/[id]                        3.49 kB         109 kB
+├ ƒ /research/library                           2.27 kB         117 kB
+├ ƒ /research/memos                             2.29 kB         108 kB
+├ ƒ /research/memos/[id]                        5.38 kB         108 kB
+├ ƒ /research/observations                      5.86 kB         108 kB
+├ ƒ /research/playbooks                         4.22 kB         110 kB
+├ ƒ /research/signals                           2.29 kB         108 kB
+├ ƒ /research/sources                            2.1 kB         105 kB
+├ ƒ /research/theses                            2.04 kB         108 kB
+├ ƒ /research/theses/[id]                       3.27 kB         109 kB
+├ ƒ /reset-password                             1.56 kB         182 kB
+├ ƒ /settings                                      8 kB         196 kB
+├ ƒ /skills                                       938 B         119 kB
+├ ƒ /stock/[ticker]                             8.64 kB         151 kB
+├ ƒ /today                                       5.8 kB         143 kB
+├ ƒ /tools                                      2.53 kB         127 kB
+├ ƒ /tools/dcf                                  2.32 kB         117 kB
+├ ƒ /tools/primary                              6.49 kB         128 kB
+└ ƒ /watchlist                                    13 kB         213 kB
++ First Load JS shared by all                    103 kB
+  ├ chunks/1255-31f47ebe9b12c7e5.js             46.3 kB
+  ├ chunks/4bd1b696-f785427dddbba9fb.js         54.2 kB
+  └ other shared chunks (total)                 2.03 kB
+
+
+ƒ Middleware                                      89 kB
+
+ƒ  (Dynamic)  server-rendered on demand
+

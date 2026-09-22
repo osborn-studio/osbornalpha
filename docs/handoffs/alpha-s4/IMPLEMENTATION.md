@@ -1,3 +1,5 @@
+> 本文件记录早期离线切片，原有未完成项是当时状态。当前 S4a/S4b 实现及验收请见 [ACCEPTANCE.md](ACCEPTANCE.md)，第五站入口见 [HANDOFF-S5.md](HANDOFF-S5.md)。
+
 # S4 implementation ledger — in progress
 
 Branch: `codex/s4-alpha-observations`; base: `64d01e58f9066165ca43e6d17f241b4be2cc290a`.

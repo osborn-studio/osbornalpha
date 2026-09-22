@@ -21,7 +21,7 @@ export class MarketPolicyError extends Error {
   }
 }
 
-function timestamp(value: string) {
+export function timestamp(value: string) {
   const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{3})?(?:Z|[+-](\d{2}):(\d{2}))$/.exec(value);
   if (!match || !Number.isFinite(Date.parse(value)) ||
       new Date(match[1]).toISOString().slice(0, 10) !== match[1] ||
@@ -32,6 +32,10 @@ function timestamp(value: string) {
   return Date.parse(value);
 }
 
+const validDate=(value:string)=>/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value;
+if(calendar.version!==policy.calendar_version || calendar.range.length!==2 || !calendar.range.every(validDate) ||
+ calendar.range[0]>=calendar.range[1] || !calendar.sessions.length ||
+ calendar.sessions.some(s=>!validDate(s.date)||s.date<calendar.range[0]||s.date>calendar.range[1]||typeof s.full!=='boolean'||!s.open.startsWith(s.date)||!s.close.startsWith(s.date))) throw new Error('invalid_frozen_calendar');
 const localTime = (value: string) => new Intl.DateTimeFormat('en-GB', {
   timeZone: policy.timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
 }).format(new Date(value));

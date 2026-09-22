@@ -1,0 +1,7 @@
+{
+  "src/lib/research/s4/decisions.ts": "ad37487324e43588d5c20b540bff71143cb1615c5756e49e1be733f8ceb6056e",
+  "src/lib/research/s4/cards.ts": "c0551c4022827dfad439b7e106ddd7a2090111a643e1894bd05eef4faf0caca6",
+  "src/lib/research/s4/read.ts": "c180a49a61a801f0714d5ca7aee8dd1e9ff35c611031bf1dc5a9b44072396378",
+  "src/lib/research/s4/http.ts": "473f12384fa8cab3e619bb4983b5f8ce91c0e0000d9ee7b468e2388a4e48a672",
+  "src/app/(app)/research/observations/page.tsx": "516b761b84da3d6d538ef211894c1875311184ffb590d635e783d99817627b30"
+}

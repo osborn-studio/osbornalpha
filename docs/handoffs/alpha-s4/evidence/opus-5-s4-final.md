@@ -1,0 +1,15 @@
+**No residual P0/P1.**
+
+Delta-only findings (all P2 or lower, no regression from round 3):
+
+1. **`decisions.ts` reuse path — asymmetric null handling (P2, by design).** The conflict check only fires when `security`/`company` are *supplied* and differ. Supplying `null` where the old observation has a ticker/company silently reuses the old scope, and the new `Decision.selection` then records `{security_ticker:null, company_entity_id:null}` while `observation_ref` points at an observation carrying the old ticker. That's consistent with the stated rule ("supplied … differs"), but the Decision's `selection` and the linked observation's `securities[0]` can disagree in the null direction. Not a correctness break for the immutable chain; worth noting only if downstream readers treat `selection` as the observation's scope.
+
+2. **Old-observation lookup failure maps to `observation_scope_conflict` (P2).** `if(!old || …) fail('observation_scope_conflict')` — a missing/foreign `last_observation_id` (a data-integrity state, not a user scope clash) surfaces as a 409 with the UI text "所选证券、公司或研究观点与原观察不同", which would be misleading. Safe (still blocks the write), just a diagnostic-label issue. Splitting the `!old` branch into `hash_mismatch`/`internal_error` would be clearer.
+
+3. **HTTP mapping is correct.** `observation_scope_conflict` is in the 409 list alongside `revision_conflict`/`idempotency_conflict`; it is not in the 403 or 422 lists, and does not fall through to the 500 path that rewrites `code` to `internal_error`. The UI `explanations` map has a matching key, so `report()` renders the localized string rather than the raw-code fallback. No mismatch between the three layers.
+
+4. **Citation single `at` (P2 observation only).** `at=await serverTime(db)` now feeds both `weekPeriod(at)` and `displayed_at`, so the ExposureEvent's period and timestamp can no longer straddle a week boundary — this removes a prior hazard rather than adding one. The `exposed_artifact_ids ? $3` containment check still runs before any text is returned, and the `text!==fact.text` re-verification after `TextDecoder(fatal)` is unchanged, so the no-exposure-without-record invariant holds.
+
+5. **`previous_revision_id` linkage (P2).** The lookup is scoped to `user_id` and `payload->>'thesis_id'` with `recorded_at<=at`, deliberately not scoped to `candidate_id`, so chains span candidates for the same owner+thesis — matches the stated intent. Two sub-notes: (a) ordering is `recorded_at desc,id desc`, and `id` is a random UUID, so ties at identical `recorded_at` resolve arbitrarily rather than by insertion order; within one `buildCards` run every ThesisRevision shares `recorded_at:at`, but each thesis appears at most once per fanout (the audit pick is drawn from `unmatched`), so no self- or sibling-link can occur in practice. (b) The chain is advisory metadata on an immutable record; a mis-tie would not corrupt the owner lock, RLS, or hash chain.
+
+No changes observed to the transaction owner lock, RLS predicates, `assertWritableChain`, or record immutability. Nothing in this delta warrants blocking release.

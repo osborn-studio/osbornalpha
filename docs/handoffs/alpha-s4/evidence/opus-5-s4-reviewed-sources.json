@@ -1,0 +1,18 @@
+{
+  "src/lib/research/s4/anchor.ts": "50d11ec2facd8f040f7613f8389d27bc3e75a80645e7bd27b849ff31b80c253a",
+  "src/lib/research/s4/auth.ts": "423619b018b7fd35a2947d545c23505b6125f107270e9a43195eff94fafcab6c",
+  "src/lib/research/s4/cards.ts": "c7e0d755963e8477de69206a2562e62374f370674081885c6d91636d576cc8e6",
+  "src/lib/research/s4/db.ts": "7d1d79f12e64f7e1c9153d939ec9446e52a8aa511c8a9603508c910c30a1fe87",
+  "src/lib/research/s4/decisions.ts": "f3d089b0e75c2a5771a94fc9ce6cf38031d8dddd25c6e44d3fe052b08919c496",
+  "src/lib/research/s4/http.ts": "7f40999301e304f9fdbd8ad9ce9dee02e42a62a97fa68eefb0bffab16b0b0fdb",
+  "src/lib/research/s4/import.ts": "99d9decb4b4062f093ea750897227f85cc87aa915aeac36492232be43b5d2418",
+  "src/lib/research/s4/read.ts": "6ad7c657a6fa2f0c61e52decb318c344965bc84c3170911019d40fbeb0fd9ad8",
+  "src/lib/research/s4/records.ts": "628d95fcb0498d8eaf522e44420270babbfa0e59693dd7f9ae7a8252a3795241",
+  "supabase/migrations/20260922090000_research_s4.sql": "056b0a42552c9d49ad8591804305d7a4711dbd454387367ac12e8fb45eae11f8",
+  "src/lib/research/market-policy.ts": "4c274283fba1880bae674d914585d462924e683e0b0078da4f2de792d3b512da",
+  "src/lib/research/ingest/candidate.ts": "ff745592292a8bd3c3841ea3205e85fb8b5aac8394e1270afd083961310046a5",
+  "scripts/s4/anchor-worker.ts": "65991db6f4476b214f72d83ddf0da0f8fb8ea9a475c5db3b0509b506698117c8",
+  "src/components/research/s4/DecisionForm.tsx": "699a9b1f0e5b94ac645c31780802e757df13ce7b24e73767d08606c8b738a68f",
+  "src/components/research/s4/ChangeCards.tsx": "05f4b1a6d9c195209b8ac6111625cbd797e5a6a5e157c0974c38eae39c824bf5",
+  "src/app/(app)/research/observations/page.tsx": "47e1ac3e635736c69c9789adcdcc49fabe14c59fa4981a883773c80e672528f9"
+}

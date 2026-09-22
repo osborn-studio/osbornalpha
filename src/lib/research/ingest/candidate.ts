@@ -30,9 +30,13 @@ export interface CandidateBinding {
   approvedManifestHash: string;
 }
 
+export function validateCandidateBinding(binding:unknown): asserts binding is CandidateBinding {
+  if (!checkBinding(binding)) fail('invalid_schema', 'Supply all required operator binding fields with their declared types.');
+}
+
 export function prepareCandidate(raw: string, actor: string, binding: CandidateBinding) {
   const now = new Date();
-  if (!checkBinding(binding)) fail('invalid_schema', 'Supply all required operator binding fields with their declared types.');
+  validateCandidateBinding(binding);
   if (!new RegExp(UUID_PATTERN).test(actor) || actor !== binding.localUserId || binding.revoked !== false) fail('scope_denied');
   if (binding.synthetic && actor === binding.upstreamScope.user_id) fail('scope_denied');
   // JSON transport (including escaping) is deliberately limited to 2 MiB,
