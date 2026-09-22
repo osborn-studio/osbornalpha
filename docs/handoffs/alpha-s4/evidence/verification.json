@@ -1,0 +1,24 @@
+{
+  "status": "done_with_concerns_partial_slice",
+  "requested_model": "claude-opus-5",
+  "cli_version": "2.1.261",
+  "review_mode": "tool_less_static_code_review",
+  "material_included": false,
+  "first_attempt": "terminated_after_no_output_for_approximately_five_minutes",
+  "prompt_sha256": {
+    "import": "b173b60c33e1b666a2fc3330f8c2ef269c435799a1155ded157e24703debf317",
+    "market": "33048b7d6bc33775d085102daa237af0727116d2bed7b026dd929f1814bd38fa"
+  },
+  "verification": {
+    "node": "v22.22.1",
+    "test_files": 147,
+    "tests_passed": 1148,
+    "build": "passed",
+    "scope": "current_import_and_market_planner_slice_only",
+    "s4_acceptance": false,
+    "typecheck": "passed",
+    "lint": "passed",
+    "targeted_recheck": "14 import tests passed after test-only assertion/type/fake-clock refinements; production code unchanged from final audit"
+  },
+  "audit": "Opus 5 final: no concrete residual P0/P1 observed in supplied offline importer and preregistration planner"
+}

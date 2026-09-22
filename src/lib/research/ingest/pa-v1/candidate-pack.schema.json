@@ -1,0 +1,1002 @@
+{
+  "$id": "https://osborn.local/research-candidate-pack/1.0",
+  "$defs": {
+    "Scope": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]+$"
+          },
+          "type": "object"
+        },
+        "user_id": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "workspace_id": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "user_id",
+        "workspace_id"
+      ],
+      "type": "object"
+    },
+    "SourceRef": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]+$"
+          },
+          "type": "object"
+        },
+        "owner_scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "owner_system": {
+          "const": "pa"
+        },
+        "raw_sha256": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_id": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "version_id": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner_system",
+        "owner_scope",
+        "source_id",
+        "version_id",
+        "raw_sha256"
+      ],
+      "type": "object"
+    },
+    "RightsPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_processors": {
+          "items": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 128,
+          "type": "array"
+        },
+        "approved_at": {
+          "format": "utc-rfc3339",
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+          "type": "string"
+        },
+        "approved_by": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "basis_ref": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "classification": {
+          "enum": [
+            "unknown",
+            "public",
+            "licensed",
+            "private"
+          ]
+        },
+        "extensions": {
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]+$"
+          },
+          "type": "object"
+        },
+        "external_processing": {
+          "enum": [
+            "deny",
+            "allowlisted"
+          ]
+        },
+        "owner_scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "policy_id": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "redistribution": {
+          "enum": [
+            "unknown",
+            "denied",
+            "allowed"
+          ]
+        },
+        "valid_until": {
+          "format": "utc-rfc3339",
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+          "type": "string"
+        },
+        "version": {
+          "const": "1.0"
+        }
+      },
+      "required": [
+        "policy_id",
+        "version",
+        "owner_scope",
+        "classification",
+        "external_processing",
+        "allowed_processors",
+        "redistribution",
+        "basis_ref",
+        "approved_by",
+        "approved_at",
+        "valid_until"
+      ],
+      "type": "object"
+    },
+    "ProcessingGrant": {
+      "additionalProperties": false,
+      "properties": {
+        "basis_ref": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "confirmed_at": {
+          "format": "utc-rfc3339",
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+          "type": "string"
+        },
+        "confirmed_by": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "extensions": {
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]+$"
+          },
+          "type": "object"
+        },
+        "grant_id": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "input_selector": {
+          "additionalProperties": false,
+          "properties": {
+            "domains": {
+              "items": {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 128,
+              "type": "array"
+            },
+            "extensions": {
+              "propertyNames": {
+                "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]+$"
+              },
+              "type": "object"
+            },
+            "source_ids": {
+              "items": {
+                "maxLength": 2048,
+                "minLength": 1,
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              "maxItems": 128,
+              "type": "array"
+            }
+          },
+          "required": [
+            "source_ids",
+            "domains"
+          ],
+          "type": "object"
+        },
+        "purpose": {
+          "enum": [
+            "local_brain_processing",
+            "pa_reader_display",
+            "alpha_research_import",
+            "external_model_processing"
+          ]
+        },
+        "recipient_system": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "valid_until": {
+          "format": "utc-rfc3339",
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "grant_id",
+        "scope",
+        "input_selector",
+        "purpose",
+        "recipient_system",
+        "valid_until",
+        "basis_ref",
+        "confirmed_by",
+        "confirmed_at"
+      ],
+      "type": "object"
+    },
+    "BrainResultEnvelope": {
+      "additionalProperties": false,
+      "properties": {
+        "baseline_method_version": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "content_sha256": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "display_payload_ref": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evaluation_mode": {
+          "enum": [
+            "baseline",
+            "fixture",
+            "shadow",
+            "assisted"
+          ]
+        },
+        "evaluation_period_id": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "exposure_refs": {
+          "items": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 128,
+          "type": "array"
+        },
+        "exposure_status": {
+          "enum": [
+            "independent",
+            "assisted_exposed",
+            "unknown"
+          ]
+        },
+        "extensions": {
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]+$"
+          },
+          "type": "object"
+        },
+        "generated_at": {
+          "format": "utc-rfc3339",
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+          "type": "string"
+        },
+        "owner_scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "previous_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reference_manifest_ref": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "result_id": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "result_kind": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "review_status": {
+          "enum": [
+            "pending",
+            "accepted",
+            "rejected"
+          ]
+        },
+        "reviewed_by": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision_id": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "rights_policy_ref": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array"
+        },
+        "validity": {
+          "enum": [
+            "current",
+            "stale",
+            "withdrawn",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "result_id",
+        "schema_version",
+        "source_refs",
+        "owner_scope",
+        "revision_id",
+        "previous_revision_id",
+        "content_sha256",
+        "result_kind",
+        "baseline_method_version",
+        "reviewed_by",
+        "review_status",
+        "generated_at",
+        "validity",
+        "display_payload_ref",
+        "reference_manifest_ref",
+        "rights_policy_ref",
+        "evaluation_mode",
+        "exposure_status",
+        "exposure_refs",
+        "evaluation_period_id"
+      ],
+      "type": "object"
+    },
+    "ResultManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "contract_digest": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "utc-rfc3339",
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+          "type": "string"
+        },
+        "export_policy_ref": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "extensions": {
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]+$"
+          },
+          "type": "object"
+        },
+        "history_completeness": {
+          "enum": [
+            "complete",
+            "partial",
+            "unknown"
+          ]
+        },
+        "owner_scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "pack_id": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "payload_digest": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "payload_manifest": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "extensions": {
+                "propertyNames": {
+                  "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]+$"
+                },
+                "type": "object"
+              },
+              "media_type": {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              "relative_path": {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              "sha256": {
+                "maxLength": 2048,
+                "minLength": 1,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "size_bytes": {
+                "maximum": 2097152,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "relative_path",
+              "media_type",
+              "size_bytes",
+              "sha256"
+            ],
+            "type": "object"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array"
+        },
+        "producer_commit": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "producer_system": {
+          "const": "brain"
+        },
+        "schema_name": {
+          "const": "brain-result-pack"
+        },
+        "schema_version": {
+          "const": "1.0"
+        },
+        "source_cutoff_at": {
+          "format": "utc-rfc3339",
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_name",
+        "schema_version",
+        "pack_id",
+        "producer_system",
+        "producer_commit",
+        "owner_scope",
+        "created_at",
+        "source_cutoff_at",
+        "payload_manifest",
+        "contract_digest",
+        "payload_digest",
+        "export_policy_ref",
+        "history_completeness"
+      ],
+      "type": "object"
+    },
+    "ReferenceManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_name": {
+          "const": "brain-reference-manifest"
+        },
+        "schema_version": {
+          "const": "1.0"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "source_ref": {
+                "$ref": "#/$defs/SourceRef"
+              },
+              "rights_policy_ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "rights_policy_version": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "grant_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              }
+            },
+            "required": [
+              "source_ref",
+              "rights_policy_ref",
+              "rights_policy_version",
+              "grant_id"
+            ]
+          },
+          "maxItems": 128
+        },
+        "claims": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "claim_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "text": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 20000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "source_ref": {
+                "$ref": "#/$defs/SourceRef"
+              },
+              "span": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "normalized_text_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "unit": {
+                    "const": "utf8_bytes"
+                  },
+                  "start": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1048576
+                  },
+                  "end": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1048576
+                  }
+                },
+                "required": [
+                  "normalized_text_sha256",
+                  "unit",
+                  "start",
+                  "end"
+                ]
+              },
+              "quote": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 20000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "claim_id",
+              "text",
+              "source_ref",
+              "span",
+              "quote"
+            ]
+          },
+          "maxItems": 500
+        }
+      },
+      "required": [
+        "schema_name",
+        "schema_version",
+        "sources",
+        "claims"
+      ]
+    },
+    "ResearchCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "candidate_id": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "selected_by": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "selected_at": {
+          "format": "utc-rfc3339",
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+          "type": "string"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "maxItems": 128
+        },
+        "wiki_revision_refs": {
+          "type": "array",
+          "items": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "maxItems": 128
+        },
+        "claim_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "maxItems": 128
+        },
+        "entity_candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "entity_type": {
+                "enum": [
+                  "company",
+                  "security",
+                  "unknown"
+                ]
+              },
+              "verified": {
+                "const": false
+              }
+            },
+            "required": [
+              "name",
+              "entity_type",
+              "verified"
+            ]
+          },
+          "maxItems": 128
+        },
+        "thesis_ref": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "industry_change_note": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rights_policy_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "maxItems": 128
+        },
+        "origin_pack_refs": {
+          "type": "array",
+          "items": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "maxItems": 128
+        }
+      },
+      "required": [
+        "candidate_id",
+        "selected_by",
+        "selected_at",
+        "reason",
+        "source_refs",
+        "wiki_revision_refs",
+        "claim_refs",
+        "entity_candidates",
+        "thesis_ref",
+        "industry_change_note",
+        "rights_policy_refs",
+        "origin_pack_refs"
+      ]
+    },
+    "CandidateManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "contract_digest": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "utc-rfc3339",
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+          "type": "string"
+        },
+        "export_policy_ref": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "extensions": {
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]+$"
+          },
+          "type": "object"
+        },
+        "history_completeness": {
+          "enum": [
+            "complete",
+            "partial",
+            "unknown"
+          ]
+        },
+        "owner_scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "pack_id": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "payload_digest": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "payload_manifest": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "extensions": {
+                "propertyNames": {
+                  "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]+$"
+                },
+                "type": "object"
+              },
+              "media_type": {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              "relative_path": {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              "sha256": {
+                "maxLength": 2048,
+                "minLength": 1,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "size_bytes": {
+                "maximum": 2097152,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "relative_path",
+              "media_type",
+              "size_bytes",
+              "sha256"
+            ],
+            "type": "object"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array"
+        },
+        "producer_commit": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "producer_system": {
+          "const": "pa"
+        },
+        "schema_name": {
+          "const": "research-candidate-pack"
+        },
+        "schema_version": {
+          "const": "1.0"
+        },
+        "source_cutoff_at": {
+          "format": "utc-rfc3339",
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_name",
+        "schema_version",
+        "pack_id",
+        "producer_system",
+        "producer_commit",
+        "owner_scope",
+        "created_at",
+        "source_cutoff_at",
+        "payload_manifest",
+        "contract_digest",
+        "payload_digest",
+        "export_policy_ref",
+        "history_completeness"
+      ],
+      "type": "object"
+    }
+  }
+}

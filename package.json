@@ -21,6 +21,7 @@
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.46.1",
+    "ajv": "8.17.1",
     "clsx": "^2.1.1",
     "geist": "^1.7.1",
     "iconv-lite": "^0.7.2",
