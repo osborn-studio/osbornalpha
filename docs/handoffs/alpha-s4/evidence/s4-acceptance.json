@@ -43,5 +43,12 @@
     "journal_entries": 25
   },
   "no_production_changes": true,
-  "no_material_sent_to_models": true
+  "no_material_sent_to_models": true,
+  "source_commit": "9a36dba42943b202846bd99cfc185eb813b22e9e",
+  "raw_verification_log_sha256": {
+    "tests": "c17816ee45970875d28c9f52ea8fdb3d71f77c248cbe3208bd98d489896ab805",
+    "typecheck": "e7ad654fc23f0d7a5d9301d37fbaf8522495b62e28a3eb79f4941fb0cab7346c",
+    "lint": "bf14aaed4938f5909375ad39ac2114a127a5ab7d22d0c28529f42b7963fe28d2",
+    "build": "583b1adc4f0833db0f9a021fb4ac7b71950e466ef19d1fff9a5a5588348f8a53"
+  }
 }

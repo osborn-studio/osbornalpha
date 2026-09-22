@@ -4,7 +4,7 @@ S4a/S4b 的实现范围是本地最小研究闭环。生产迁移、真实行情
 
 ## 入口与现状
 
-- 分支 `codex/s4-alpha-observations`；源码提交由本交接文件所在提交及后续审计修复提交确定，`git log` 可解析，不在文件内制造自引用 SHA。
+- 分支 `codex/s4-alpha-observations`；已验收源码 SHA：`9a36dba42943b202846bd99cfc185eb813b22e9e`；后续文档提交只补验收索引，不改变被审查源码。
 - UI `/research/observations`；只在显式启用本地 S4 服务后可操作。
 - PA 候选 JSON → 独立 operator binding → Source/SourceVersion/Occurrence → 先保存已有判断 → 基线变化卡及 ExposureEvent → 六类决定 → 冻结 Observation → CAS、审计、outbox → 数据库外持久化摘要回执。
 - 已有公司/证券目录继续使用；不建立第二套证券或预算账本。基线为确定性规则，外部模型调用、token 和费用均为零。未知公司保留 null；证券须人工选择，并满足冻结的单市场规则。
