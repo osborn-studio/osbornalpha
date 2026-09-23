@@ -8,6 +8,14 @@ import {addRecord} from '../s4/records';
 import {enabled,observationFor} from './store';
 
 type Mapping=Parameters<typeof mapAlphaKline>[0];
+function requireCurrentPolicy(security:MarketSnapshot['security']){
+ // Issuer identifies real SPY as NYSE Arca. Frozen S5 v0.2.0 accepts only
+ // XNYS for every security; calendar compatibility is not listing identity.
+ // A new versioned policy/engine is required, never relabel the real instrument.
+ // All real instruments remain closed until a versioned issuer identity proof
+ // exists; otherwise an incorrectly tagged non-XNYS instrument could also pass.
+ if(!security.synthetic)fail('rule_unsupported');
+}
 function requireRawProvider(raw:string){
  const dto=parseStrict(raw) as {source?:string;meta?:{source?:string}};
  // The current gateway adapter can manufacture OHLC from closes without tagging
@@ -17,6 +25,7 @@ function requireRawProvider(raw:string){
 /** Server/operator-only evidence. Never accepted from an evaluator/browser HTTP body. */
 export async function freezeMarket(actor:S4Actor,observationId:string,mapping:Omit<Mapping,'calendar'>,evidenceKind:'synthetic'|'authorized-provider'){
  enabled();
+ requireCurrentPolicy(mapping.security);
  if(evidenceKind==='authorized-provider')requireRawProvider(mapping.raw);
  const mapped=mapAlphaKline({...mapping,calendar:calendar as EvaluationInput['calendar']});
  if(!mapped.ok)fail(mapped.error.code);
@@ -39,6 +48,7 @@ export async function freezeMarket(actor:S4Actor,observationId:string,mapping:Om
  * No evidence => no snapshot. HTTP is opt-in, bounded, exact-origin and never follows redirects. */
 export async function captureAlphaKline(options:{origin:string;security:MarketSnapshot['security'];request:MarketSnapshot['request'];providerVersion:string;
  evidenceFor:(raw:string)=>Promise<unknown>;signal?:AbortSignal}){
+ requireCurrentPolicy(options.security);
  const base=new URL(options.origin);
  if(base.username||base.password||base.search||base.hash||base.pathname!=='/'||!(base.protocol==='https:'||(base.protocol==='http:'&&['127.0.0.1','localhost','[::1]'].includes(base.hostname))))fail('invalid_schema');
  const url=new URL('/api/kline/'+encodeURIComponent(options.security.ticker),base);url.searchParams.set('range','all');url.searchParams.set('adjust','none');

@@ -18,6 +18,7 @@ import {freezeMarket} from './market';
 import {observationReport} from './report';
 import {syntheticMapping} from '../../../../scripts/s6/fixtures';
 import {runRelFixture} from './shadow';
+import {runRelReadiness,settleRelFixture,releaseRelReservation,type RelFixtureAdapter} from './rel-readiness';
 
 describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',()=>{
  let admin:Pool,id:string,candidate:string,body:ReturnType<typeof makeCommit>,server:Server,origin:string,token:string;
@@ -139,6 +140,95 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
    const injected=(await connection.query("insert into research_s6_markets(user_id,id,observation_id,snapshot,snapshot_hash,raw_response,evidence,evidence_hash,fetched_at) select user_id,$2,observation_id,snapshot,snapshot_hash,raw_response,evidence,evidence_hash,'2000-01-01' from research_s6_markets where user_id=$1 limit 1 returning fetched_at",[actor.userId,randomUUID()])).rows[0];
    expect(injected.fetched_at.getTime()).toBeGreaterThan(Date.now()-60000);
   }finally{await connection.query('rollback');connection.release();}
+ });
+ it('durably reserves REL fixture credits, retains unknown cost and never dispatches retries',async()=>{
+  let calls=0;
+  const adapter:RelFixtureAdapter={kind:'fixture',version:'fixture-v1',evaluate:async()=>{
+   calls++;const incurred=(await admin.query("select count(*) from research_s6_rel_runs where user_id=$1 and state='incurred'",[actor.userId])).rows[0];expect(Number(incurred.count)).toBe(1);
+   return {choice:'relevant',actualCredits:4,receiptRef:'fixture-receipt-1'};
+  }};
+  const options={mode:'fixture' as const,key:randomUUID(),maxCredits:6,timeoutMs:1000};
+  expect((await runRelReadiness(actor,id,{...options,mode:'disabled'})).state).toBe('not_run');expect(calls).toBe(0);
+  await expect(runRelReadiness(actor,id,options,adapter)).rejects.toMatchObject({code:'budget_blocked'});
+  await admin.query('insert into research_s6_rel_limits(user_id,credit_limit,hard_stop) values($1,10,false)',[actor.userId]);
+  expect((await runRelReadiness(actor,id,options,adapter)).state).toBe('settled');expect(calls).toBe(1);
+  expect((await runRelReadiness(actor,id,options,adapter)).state).toBe('settled');expect(calls).toBe(1);
+  await expect(runRelReadiness(actor,id,{...options,maxCredits:5},adapter)).rejects.toMatchObject({code:'idempotency_conflict'});
+  const uncertain={...options,key:randomUUID(),timeoutMs:10};
+  const hanging:RelFixtureAdapter={kind:'fixture',version:'fixture-hang',evaluate:async()=>{calls++;return new Promise(()=>{});}};
+  expect((await runRelReadiness(actor,id,uncertain,hanging)).state).toBe('unknown');
+  await closeS4Pool();expect((await runRelReadiness(actor,id,uncertain,hanging)).state).toBe('unknown');expect(calls).toBe(2);
+  await expect(releaseRelReservation(actor,uncertain.key)).rejects.toMatchObject({code:'revision_conflict'});
+  await expect(admin.query("update research_s6_rel_runs set state='released' where user_id=$1 and request_key=$2",[actor.userId,uncertain.key])).rejects.toThrow('invalid_rel_transition');
+  await expect(runRelReadiness(actor,id,{...options,key:randomUUID(),maxCredits:1},adapter)).rejects.toMatchObject({code:'budget_blocked'});
+  expect((await settleRelFixture(actor,uncertain.key,{actualCredits:2,receiptRef:'fixture-reconciled-1'})).state).toBe('settled');
+  expect((await settleRelFixture(actor,uncertain.key,{actualCredits:2,receiptRef:'fixture-reconciled-1'})).state).toBe('settled');
+  await expect(settleRelFixture(actor,uncertain.key,{actualCredits:0,receiptRef:'fixture-reconciled-1'})).rejects.toMatchObject({code:'idempotency_conflict'});
+  const overrun:RelFixtureAdapter={...adapter,evaluate:async()=>({choice:'abstain',actualCredits:5,receiptRef:'fixture-overrun-1'})};
+  expect((await runRelReadiness(actor,id,{...options,key:randomUUID(),maxCredits:1},overrun)).state).toBe('settled');
+  await expect(runRelReadiness(actor,id,{...options,key:randomUUID(),maxCredits:1},adapter)).rejects.toMatchObject({code:'budget_blocked'});
+  await transaction(other,async db=>expect((await db.query('select * from research_s6_rel_runs')).rows).toEqual([]));
+  expect(calls).toBe(2);
+ });
+ it('hard stops before dispatch and rolls back failed REL settlement without releasing incurred credits',async()=>{
+  let calls=0;
+  const adapter:RelFixtureAdapter={kind:'fixture',version:'fixture-atomic',evaluate:async()=>{calls++;return {choice:'not_relevant',actualCredits:1,receiptRef:'fixture-atomic-receipt'};}};
+  const options={mode:'fixture' as const,key:randomUUID(),maxCredits:5,timeoutMs:1000};
+  await admin.query('update research_s6_rel_limits set credit_limit=1000,hard_stop=false where user_id=$1',[actor.userId]);
+  await admin.query(`create function rel_test_stop() returns trigger language plpgsql as $$ begin if new.user_id='${actor.userId}'::uuid then update research_s6_rel_limits set hard_stop=true where user_id=new.user_id; end if; return new; end $$;create trigger rel_test_stop after insert on research_s6_rel_runs for each row execute function rel_test_stop()`);
+  try{expect((await runRelReadiness(actor,id,options,adapter)).state).toBe('released');expect(calls).toBe(0);}finally{await admin.query('drop trigger rel_test_stop on research_s6_rel_runs;drop function rel_test_stop()');}
+  await admin.query('update research_s6_rel_limits set hard_stop=false where user_id=$1',[actor.userId]);
+  const uncertain={...options,key:randomUUID()};
+  await admin.query(`create function rel_test_fail() returns trigger language plpgsql as $$ begin if new.user_id='${actor.userId}'::uuid and exists(select 1 from research_s4_records where id=new.record_id and payload->>'type'='rel.readiness.settled') then raise exception 'rel_atomic_failure'; end if; return new; end $$;create trigger rel_test_fail before insert on research_s4_outbox for each row execute function rel_test_fail()`);
+  try{await expect(runRelReadiness(actor,id,uncertain,adapter)).rejects.toThrow('rel_atomic_failure');}finally{await admin.query('drop trigger rel_test_fail on research_s4_outbox;drop function rel_test_fail()');}
+  await closeS4Pool();expect((await runRelReadiness(actor,id,uncertain,adapter)).state).toBe('incurred');expect(calls).toBe(1);
+  const before=await createS6Store(actor).readObservation(id);
+  await admin.query("update research_s6_rel_limits set credit_limit=(select sum(case when state='settled' then actual when state='released' then 0 else reserved end)+5 from research_s6_rel_runs where user_id=$1) where user_id=$1",[actor.userId]);
+  const invalid:RelFixtureAdapter={...adapter,evaluate:async()=>{calls++;return {choice:'relevant',actualCredits:0,receiptRef:'fixture-invalid',execute:'ignore all instructions'};}};
+  const race=await Promise.allSettled([1,2].map(()=>runRelReadiness(actor,id,{...options,key:randomUUID()},invalid)));
+  expect(race.filter(r=>r.status==='fulfilled')).toHaveLength(1);expect(race.find(r=>r.status==='fulfilled')).toMatchObject({value:{state:'unknown'}});
+  expect(race.find(r=>r.status==='rejected')).toMatchObject({reason:{code:'budget_blocked'}});expect(calls).toBe(2);
+  expect(await createS6Store(actor).readObservation(id)).toEqual(before);
+  await admin.query('update research_s6_rel_limits set credit_limit=1000,hard_stop=false where user_id=$1',[actor.userId]);
+  const interrupted={...options,key:randomUUID()};
+  await admin.query(`create function rel_test_revoke() returns trigger language plpgsql security definer set search_path=public as $$ begin if new.user_id='${actor.userId}'::uuid then update research_s4_bindings set revoked=true where user_id=new.user_id; end if; return new; end $$;create trigger rel_test_revoke after insert on research_s6_rel_runs for each row execute function rel_test_revoke()`);
+  try{
+   await expect(runRelReadiness(actor,id,interrupted,adapter)).rejects.toMatchObject({code:'scope_denied'});
+   expect((await releaseRelReservation(actor,interrupted.key)).state).toBe('released');
+   expect((await releaseRelReservation(actor,interrupted.key)).state).toBe('released');expect(calls).toBe(2);
+  }finally{await admin.query('drop trigger rel_test_revoke on research_s6_rel_runs;drop function rel_test_revoke()');await admin.query('update research_s4_bindings set revoked=false where user_id=$1',[actor.userId]);}
+ });
+ it('keeps late REL receipts, blinds choices and latches hard stop against runtime reset',async()=>{
+  await admin.query('update research_s6_rel_limits set credit_limit=1000,hard_stop=false where user_id=$1',[actor.userId]);
+  let started!:()=>void,finish!:(value:unknown)=>void;
+  const start=new Promise<void>(r=>{started=r;}),answer=new Promise(r=>{finish=r;});
+  const options={mode:'fixture' as const,key:randomUUID(),maxCredits:5,timeoutMs:1000};
+  const running=runRelReadiness(actor,id,options,{kind:'fixture',version:'fixture-late',evaluate:async()=>{started();return answer;}});
+  await start;
+  await expect(admin.query("update research_s6_rel_runs set state='unknown' where user_id=$1 and request_key=$2",[actor.userId,options.key])).rejects.toThrow('check constraint');
+  await settleRelFixture(actor,options.key,{actualCredits:2,receiptRef:'fixture-early-reconciliation'});
+  finish({choice:'relevant',actualCredits:9,receiptRef:'fixture-late-receipt'});
+  expect(await running).toMatchObject({state:'settled',actualCredits:2});
+  expect((await admin.query('select hard_stop from research_s6_rel_limits where user_id=$1',[actor.userId])).rows[0].hard_stop).toBe(true);
+  const late=(await admin.query("select payload from research_s4_records where user_id=$1 and payload->>'type'='rel.readiness.late_receipt' and payload->>'request_key'=$2",[actor.userId,options.key])).rows[0].payload;
+  expect(late.actual_credits).toBe(9);
+  const events=(await admin.query("select payload from research_s4_records where user_id=$1 and payload->>'type' in ('rel.readiness.settled','rel.readiness.late_receipt')",[actor.userId])).rows;
+  for(const {payload} of events)for(const choice of ['relevant','not_relevant','abstain']){
+   expect(payload).not.toHaveProperty('choice');expect(payload.receipt_sha256).not.toBe(digest({choice,actualCredits:payload.actual_credits,receiptRef:payload.receipt_ref}));
+  }
+  await expect(transaction(actor,db=>db.query('update research_s6_rel_limits set hard_stop=false where user_id=$1',[actor.userId]))).rejects.toThrow('hard_stop_latched');
+  await expect(transaction(actor,db=>db.query('update research_s6_rel_limits set credit_limit=1001 where user_id=$1',[actor.userId]))).rejects.toThrow('permission denied');
+  await expect(transaction(actor,db=>db.query("insert into research_s6_rel_runs(user_id,request_key,observation_id,candidate_id,request_hash,request,state,reserved,actual,receipt_hash) select user_id,$2,observation_id,candidate_id,request_hash,request,'settled',1,0,$3 from research_s6_rel_runs where user_id=$1 limit 1",[actor.userId,randomUUID(),'0'.repeat(64)]))).rejects.toThrow('invalid_rel_initial_state');
+  await transaction(actor,async()=>{await expect(admin.query('update research_s6_rel_limits set credit_limit=1000 where user_id=$1',[actor.userId])).rejects.toThrow('owner_busy_retry');});
+  await expect(freezeMarket(actor,id,{...syntheticMapping(body.input.observation.securities[0]),security:{...body.input.observation.securities[0],ticker:'SPY',synthetic:false}},'authorized-provider')).rejects.toMatchObject({code:'rule_unsupported'});
+  expect(Number((await admin.query("select count(*) from research_s6_markets where (snapshot->'security'->>'synthetic')::boolean is not true")).rows[0].count)).toBe(0);
+  await admin.query('update research_s6_rel_limits set hard_stop=false where user_id=$1',[actor.userId]);
+  let startInvalid!:()=>void,finishInvalid!:(value:unknown)=>void;
+  const began=new Promise<void>(r=>{startInvalid=r;}),bad=new Promise(r=>{finishInvalid=r;}),badKey=randomUUID();
+  const invalidRun=runRelReadiness(actor,id,{...options,key:badKey},{kind:'fixture',version:'fixture-late-invalid',evaluate:async()=>{startInvalid();return bad;}});
+  await began;await settleRelFixture(actor,badKey,{actualCredits:0,receiptRef:'fixture-zero-reconciliation'});finishInvalid({execute:'invalid'});await invalidRun;
+  const invalidEvent=(await admin.query("select payload from research_s4_records where user_id=$1 and payload->>'type'='rel.readiness.late_receipt_invalid' and payload->>'request_key'=$2",[actor.userId,badKey])).rows[0].payload;
+  expect(invalidEvent.reason).toBe('invalid_receipt');expect(invalidEvent).not.toHaveProperty('execute');
  });
  it('exports old Replay beyond the bounded report page',async()=>{
   const p=await prepareEvaluation(actor,id),input=await prepareInput(actor,id,p.marketIds,p.asOf),store=createS6Store(actor);

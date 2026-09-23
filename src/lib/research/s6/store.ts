@@ -59,6 +59,7 @@ async function inputFor(db:PoolClient,actor:S4Actor,id:string,marketIds:string[]
  if(typeof asOf!=='string'||!Number.isFinite(Date.parse(asOf)))fail('invalid_schema');
  if(Date.parse(asOf)>Date.parse(await serverTime(db)))fail('future_input');
  const row=await observationFor(db,actor,id),markets:MarketSnapshot[]=[];
+ if(!row.payload.synthetic)fail('rule_unsupported'); // Real issuer identity needs the next policy/engine contract.
  for(const mid of marketIds){const m=await marketFor(db,actor,mid);if(m.observation_id!==id)fail('scope_denied');markets.push(m.snapshot);}
  const input:EvaluationInput={schema_version:'evaluator-input-output/1.0',observation:row.payload,observation_sha256:row.payload_hash,
   calendar:calendar as EvaluationInput['calendar'],market_snapshots:markets,market_snapshot_sha256s:markets.map(digest),

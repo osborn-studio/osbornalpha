@@ -13,11 +13,12 @@ afterAll(()=>new Promise<void>(r=>server.close(()=>r())));
 it('captures exact HTTP bytes and requires separately supplied evidence',async()=>{
  const options={origin,security:mapping.security,request:mapping.request,providerVersion:mapping.providerVersion,evidenceFor:async()=>mapping.evidence};
  const captured=await captureAlphaKline(options);expect(captured.raw).toBe(mapping.raw);expect(captured.evidence).toEqual(mapping.evidence);
+ await expect(captureAlphaKline({...options,security:{...mapping.security,ticker:'SPY',synthetic:false}})).rejects.toMatchObject({code:'rule_unsupported'});
  await expect(captureAlphaKline({...options,evidenceFor:async()=>null})).rejects.toMatchObject({code:'source_unavailable'});
  mode='redirect';await expect(captureAlphaKline(options)).rejects.toMatchObject({cause:{message:'unexpected redirect'}});
  mode='oversize';await expect(captureAlphaKline(options)).rejects.toMatchObject({code:'input_limit'});
  for(const state of ['non-json','failure']){mode=state;await expect(captureAlphaKline(options)).rejects.toMatchObject({code:'source_unavailable'});}
  mode='bom';const bom=await captureAlphaKline(options);expect(bytesDigest(bom.raw)).toBe(bytesDigest(Buffer.from('\uFEFF'+mapping.raw)));expect(bom.raw.charCodeAt(0)).toBe(0xFEFF);
- mode='gateway';await expect(captureAlphaKline({...options,security:{...options.security,synthetic:false}})).rejects.toMatchObject({code:'source_unavailable'});
+ mode='gateway';await expect(captureAlphaKline({...options,security:{...options.security,synthetic:false}})).rejects.toMatchObject({code:'rule_unsupported'});
  mode='hang';await expect(captureAlphaKline({...options,signal:AbortSignal.timeout(20)})).rejects.toMatchObject({name:'TimeoutError'});
 });
