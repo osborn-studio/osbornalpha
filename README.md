@@ -26,12 +26,14 @@
 
 服务端已接入 **DataGateway/Wind**，并对外提供无需鉴权的 REST 行情快照接口：
 
+生产 Base URL：`https://osbornalpha.com`（Vercel 默认域名亦可）。
+
 ```bash
 # 单标的
-curl -sS 'https://stock-monitor-nu.vercel.app/api/quote/600519.SH'
+curl -sS 'https://osbornalpha.com/api/quote/600519.SH'
 
 # 批量（逗号分隔，最多 40 个）
-curl -sS 'https://stock-monitor-nu.vercel.app/api/quote/batch?tickers=600519.SH,0700.HK,AAPL'
+curl -sS 'https://osbornalpha.com/api/quote/batch?tickers=600519.SH,0700.HK,AAPL'
 ```
 
 - 数据链路：`osbornalpha /api/quote/* -> DataGateway/Wind -> Eastmoney/Sina/Tencent 等回退`

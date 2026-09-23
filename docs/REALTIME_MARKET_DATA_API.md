@@ -2,7 +2,9 @@
 
 > 适用范围：外部合作方、脚本、Agent 或其他服务读取 osbornalpha 的实时/准实时股票快照。
 >
-> 生产 Base URL：`https://stock-monitor-nu.vercel.app`
+> 生产 Base URL：`https://osbornalpha.com`（品牌域名，已验证同一接口）
+>
+> Vercel 默认域名：`https://stock-monitor-nu.vercel.app`
 >
 > 最后更新：2026-09-23
 
@@ -26,7 +28,7 @@ DataGateway 的上游调用链如下，这部分只在 osbornalpha 服务端内�
 对方只需要配置：
 
 ```text
-BASE_URL=https://stock-monitor-nu.vercel.app
+BASE_URL=https://osbornalpha.com
 AUTH=none
 ```
 
@@ -60,7 +62,7 @@ GET /api/quote/{ticker}
 示例：
 
 ```bash
-curl -sS 'https://stock-monitor-nu.vercel.app/api/quote/600519.SH'
+curl -sS 'https://osbornalpha.com/api/quote/600519.SH'
 ```
 
 成功响应示例：
@@ -109,7 +111,7 @@ GET /api/quote/batch?tickers={comma-separated-tickers}
 示例：
 
 ```bash
-curl -sS 'https://stock-monitor-nu.vercel.app/api/quote/batch?tickers=600519.SH,0700.HK,AAPL'
+curl -sS 'https://osbornalpha.com/api/quote/batch?tickers=600519.SH,0700.HK,AAPL'
 ```
 
 参数：
@@ -211,7 +213,7 @@ DataGateway 当前依赖本机 Mac、Tailscale Funnel 和本机 Wind。Mac 休�
 
 ## 8. 对方接入检查清单
 
-- [ ] 配置 `BASE_URL=https://stock-monitor-nu.vercel.app`
+- [ ] 配置 `BASE_URL=https://osbornalpha.com`（或 Vercel 默认域名）
 - [ ] 使用 `GET /api/quote/{ticker}` 或 `GET /api/quote/batch?tickers=...`
 - [ ] 不配置 DataGateway 地址和 Key；请求也不需要 `Authorization`
 - [ ] 统一 ticker 到本文档格式
@@ -224,8 +226,8 @@ DataGateway 当前依赖本机 Mac、Tailscale Funnel 和本机 Wind。Mac 休�
 ## 9. 给对方的接入摘要
 
 ```text
-接口：GET https://stock-monitor-nu.vercel.app/api/quote/{ticker}
-批量：GET https://stock-monitor-nu.vercel.app/api/quote/batch?tickers=600519.SH,0700.HK,AAPL
+接口：GET https://osbornalpha.com/api/quote/{ticker}
+批量：GET https://osbornalpha.com/api/quote/batch?tickers=600519.SH,0700.HK,AAPL
 鉴权：无
 来源：优先 DataGateway/Wind，失败自动回退公开源
 模式：REST 快照 + 30～60 秒缓存，不是推送
