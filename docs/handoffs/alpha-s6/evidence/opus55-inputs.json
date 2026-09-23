@@ -1,0 +1,90 @@
+[
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/research/s6/market.test.ts",
+    "sha256": "076a9bcedf031d7a1a6e689dc6c8759c5eb426aed8bd879ed352d8535d8531f6"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/research/s6/report.ts",
+    "sha256": "be104ebc8187eb5da087e27dbd840fe3cf333ef977a6dc4b8bb821530e154070"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/research/s6/http.ts",
+    "sha256": "1e9fbb319e4fe79d7c89ed4a467e0a54a248bf1a60a1dcb62c5610e8b7c48efa"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/research/s6/store.integration.test.ts",
+    "sha256": "fb4965db37ba610d2a8e64e39a4658a5839e8231500d6ce30c5573205d17c1c4"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/research/s6/package-types.d.ts",
+    "sha256": "2779bcd2ae1c9eea8da182c2fe6c8d95fd4a21977b36488f31410bd36d52f73e"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/research/s6/market.ts",
+    "sha256": "c52d7a5f5bd8240b30e4d278e9818d0b02500d95911b430e46d7e9b3e51b8f77"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/research/s6/store.ts",
+    "sha256": "80d28a12f84d08781495ceb2e486a6809a5a471a61b02937b6cad0135aac46d8"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/app/api/evaluator/v1/market-snapshots/[id]/route.ts",
+    "sha256": "06c0e3095e94c832d6dc11605eb3042a5f20bdb7b3947054998dea856fc76756"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/app/api/evaluator/v1/evaluation-results/route.ts",
+    "sha256": "4b3f9e555ca9c1c9ed1058e5c031cb8738e1beca442a00cd127bb6578fbd4d51"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/app/api/evaluator/v1/observations/[id]/route.ts",
+    "sha256": "151c597fb98497e4c23aac60517e8586accc16be6bcd423189ed469450e5d607"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/app/api/research/s6/observations/[id]/route.ts",
+    "sha256": "bff62f02e48b90de490e7881f2898b98a5e7b9619856cff9f0c172662714bca7"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/components/research/s4/EvaluationPanel.tsx",
+    "sha256": "cf990d20bd6b2136a623aebef36f017be21dd3cdaa748eb7cb0eb00aadb345f7"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/supabase/migrations/20260922100000_research_s6.sql",
+    "sha256": "a92ab9c6a3851f125b5028b7984211c7be41dbe1601fe6a2b1d1672f29453d3f"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/research/s4/db.ts",
+    "sha256": "7d1d79f12e64f7e1c9153d939ec9446e52a8aa511c8a9603508c910c30a1fe87"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/research/s4/records.ts",
+    "sha256": "628d95fcb0498d8eaf522e44420270babbfa0e59693dd7f9ae7a8252a3795241"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/research/s4/auth.ts",
+    "sha256": "423619b018b7fd35a2947d545c23505b6125f107270e9a43195eff94fafcab6c"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/research/s4/decisions.ts",
+    "sha256": "ad37487324e43588d5c20b540bff71143cb1615c5756e49e1be733f8ceb6056e"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/research/s4/anchor.ts",
+    "sha256": "50d11ec2facd8f040f7613f8389d27bc3e75a80645e7bd27b849ff31b80c253a"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/supabase/migrations/20260922090000_research_s4.sql",
+    "sha256": "056b0a42552c9d49ad8591804305d7a4711dbd454387367ac12e8fb45eae11f8"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/package.json",
+    "sha256": "b001eea6b98c6a016376ad73e0544dfb2c47b92829ebe15623800f0975f650e1"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/node_modules/dsh-trade-strategy-evaluator/src/adapters/evaluator-http.js",
+    "sha256": "954d94bfb554821a119d48b52aad9bbe3f3ca2e24fda5e4b04919f7f53b1f46f"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/node_modules/dsh-trade-strategy-evaluator/src/engine/observation.js",
+    "sha256": "156bbbf84b3ffe5b16ec416b662356671d05ac9a4d936a62c848a7a98228a3ad"
+  }
+]

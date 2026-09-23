@@ -1,0 +1,1887 @@
+
+> dsh-trade-strategy-evaluator@0.2.0 test:strict
+> node scripts/assert-tests-ran.js
+
+TAP version 13
+# (node:15185) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: 端点清单覆盖方案 §14 的全部 API
+ok 1 - 端点清单覆盖方案 §14 的全部 API
+  ---
+  duration_ms: 594.066083
+  type: 'test'
+  ...
+# Subtest: GET /health 与 /meta 可用
+ok 2 - GET /health 与 /meta 可用
+  ---
+  duration_ms: 29.685625
+  type: 'test'
+  ...
+# Subtest: POST /strategies 返回 §15 约定的形状（strategy_id/status/frozen）
+ok 3 - POST /strategies 返回 §15 约定的形状（strategy_id/status/frozen）
+  ---
+  duration_ms: 11.614
+  type: 'test'
+  ...
+# Subtest: PATCH 已冻结策略 → 409 FROZEN_STRATEGY_IMMUTABLE
+ok 4 - PATCH 已冻结策略 → 409 FROZEN_STRATEGY_IMMUTABLE
+  ---
+  duration_ms: 20.480333
+  type: 'test'
+  ...
+# Subtest: POST /:id/freeze：MANAGER 无权 → 403；重复冻结 → 409；DRAFT 可正常冻结
+ok 5 - POST /:id/freeze：MANAGER 无权 → 403；重复冻结 → 409；DRAFT 可正常冻结
+  ---
+  duration_ms: 28.255
+  type: 'test'
+  ...
+# Subtest: POST /:id/evaluate 用未来 as_of → 422 LOOKAHEAD_VIOLATION
+ok 6 - POST /:id/evaluate 用未来 as_of → 422 LOOKAHEAD_VIOLATION
+  ---
+  duration_ms: 16.029916
+  type: 'test'
+  ...
+# Subtest: GET /dashboard 返回分析师、团队与总体指标
+ok 7 - GET /dashboard 返回分析师、团队与总体指标
+  ---
+  duration_ms: 10.740417
+  type: 'test'
+  ...
+# Subtest: GET /analysts/:id/performance 与 /reports/analysts/:id 可用
+ok 8 - GET /analysts/:id/performance 与 /reports/analysts/:id 可用
+  ---
+  duration_ms: 60.494292
+  type: 'test'
+  ...
+# Subtest: 报告语言：?lang= 与 Accept-Language 都生效，且只影响文案
+ok 9 - 报告语言：?lang= 与 Accept-Language 都生效，且只影响文案
+  ---
+  duration_ms: 285.336542
+  type: 'test'
+  ...
+# Subtest: GET /teams 与 /teams/:team/performance：团队明细按分析师分组
+ok 10 - GET /teams 与 /teams/:team/performance：团队明细按分析师分组
+  ---
+  duration_ms: 12.522333
+  type: 'test'
+  ...
+# Subtest: GET /reports/teams 可用，且事实与评论分区
+ok 11 - GET /reports/teams 可用，且事实与评论分区
+  ---
+  duration_ms: 16.510042
+  type: 'test'
+  ...
+# Subtest: GET /strategies/:id/replay 回答 §11 的 11 个问题
+ok 12 - GET /strategies/:id/replay 回答 §11 的 11 个问题
+  ---
+  duration_ms: 127.1085
+  type: 'test'
+  ...
+# Subtest: GET /strategies/:id/replay/verify 重算结果与落库结果一致
+ok 13 - GET /strategies/:id/replay/verify 重算结果与落库结果一致
+  ---
+  duration_ms: 165.343375
+  type: 'test'
+  ...
+# Subtest: Seed 满足 §17 的分布要求
+ok 14 - Seed 满足 §17 的分布要求
+  ---
+  duration_ms: 7.113083
+  type: 'test'
+  ...
+# Subtest: 未注册路径与未知资源返回正确的 404
+ok 15 - 未注册路径与未知资源返回正确的 404
+  ---
+  duration_ms: 3.972
+  type: 'test'
+  ...
+# Subtest: PUT /rules 仅 ADMIN，且拒绝非法权重
+ok 16 - PUT /rules 仅 ADMIN，且拒绝非法权重
+  ---
+  duration_ms: 11.56275
+  type: 'test'
+  ...
+# Subtest: POST /monitor/run 与 /demo/advance-clock 可用（Demo 演示链路）
+ok 17 - POST /monitor/run 与 /demo/advance-clock 可用（Demo 演示链路）
+  ---
+  duration_ms: 59.143875
+  type: 'test'
+  ...
+# (node:15186) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: async json: copied v1 disk and old-reader rollback compatibility
+ok 18 - async json: copied v1 disk and old-reader rollback compatibility
+  ---
+  duration_ms: 96.410042
+  type: 'test'
+  ...
+# Subtest: async sqlite: copied v1 disk and old-reader rollback compatibility
+ok 19 - async sqlite: copied v1 disk and old-reader rollback compatibility
+  ---
+  duration_ms: 112.216833
+  type: 'test'
+  ...
+# Subtest: async json: CAS, sequence allocation, event append and single-writer lock
+ok 20 - async json: CAS, sequence allocation, event append and single-writer lock
+  ---
+  duration_ms: 12.660625
+  type: 'test'
+  ...
+# Subtest: async sqlite: CAS, sequence allocation, event append and single-writer lock
+ok 21 - async sqlite: CAS, sequence allocation, event append and single-writer lock
+  ---
+  duration_ms: 7.881292
+  type: 'test'
+  ...
+# Subtest: DSH awaits delayed port; concurrent evaluations reuse one row; Replay never calls provider
+ok 22 - DSH awaits delayed port; concurrent evaluations reuse one row; Replay never calls provider
+  ---
+  duration_ms: 67.636334
+  type: 'test'
+  ...
+# Subtest: JSON failed write keeps memory and disk unchanged; closed handles cannot outlive writer lease
+ok 23 - JSON failed write keeps memory and disk unchanged; closed handles cannot outlive writer lease
+  ---
+  duration_ms: 1.494917
+  type: 'test'
+  ...
+# (node:15187) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: 插件能被真实 React 挂载：渲染品牌头、指标卡与三张表
+ok 24 - 插件能被真实 React 挂载：渲染品牌头、指标卡与三张表
+  ---
+  duration_ms: 983.108375
+  type: 'test'
+  ...
+# Subtest: 下钻与返回：点分析师行进入详情，返回按钮回到 Dashboard
+ok 25 - 下钻与返回：点分析师行进入详情，返回按钮回到 Dashboard
+  ---
+  duration_ms: 1105.398542
+  type: 'test'
+  ...
+# Subtest: 模拟盘视图：从分析师详情进入组合，渲染净值曲线/持仓/平仓表，并可当场重算校验
+ok 26 - 模拟盘视图：从分析师详情进入组合，渲染净值曲线/持仓/平仓表，并可当场重算校验
+  ---
+  duration_ms: 2107.065959
+  type: 'test'
+  ...
+# Subtest: 模拟盘视图：团队上限更紧的分析师会显示超限挤出记录（C4 在界面上可见）
+ok 27 - 模拟盘视图：团队上限更紧的分析师会显示超限挤出记录（C4 在界面上可见）
+  ---
+  duration_ms: 1429.532125
+  type: 'test'
+  ...
+# Subtest: 表格排序：点表头后行序按该列降序，并带 aria-sort
+ok 28 - 表格排序：点表头后行序按该列降序，并带 aria-sort
+  ---
+  duration_ms: 698.699916
+  type: 'test'
+  ...
+# Subtest: 策略详情三个页签：Performance / Replay / Report 都能渲染（含评分环与图表）
+ok 29 - 策略详情三个页签：Performance / Replay / Report 都能渲染（含评分环与图表）
+  ---
+  duration_ms: 1777.1535
+  type: 'test'
+  ...
+# Subtest: 团队行可点击 → 团队明细按分析师分组，每个成员一块策略表
+ok 30 - 团队行可点击 → 团队明细按分析师分组，每个成员一块策略表
+  ---
+  duration_ms: 1776.40975
+  type: 'test'
+  ...
+# Subtest: 团队明细里的成员链接可点进该分析师的详情
+ok 31 - 团队明细里的成员链接可点进该分析师的详情
+  ---
+  duration_ms: 1078.578125
+  type: 'test'
+  ...
+# Subtest: 三种视角：MANAGER 只读、ANALYST 只维护自己的（含身份切换器）
+ok 32 - 三种视角：MANAGER 只读、ANALYST 只维护自己的（含身份切换器）
+  ---
+  duration_ms: 1112.105958
+  type: 'test'
+  ...
+# Subtest: 分析师自助维护：表单本地校验 → 提交并冻结 → 详情可取消；草稿可编辑
+ok 33 - 分析师自助维护：表单本地校验 → 提交并冻结 → 详情可取消；草稿可编辑
+  ---
+  duration_ms: 3878.351167
+  type: 'test'
+  ...
+# Subtest: 语言切换：同一已挂载面板切到 en 后文案变英文（不需要重新挂载）
+ok 34 - 语言切换：同一已挂载面板切到 en 后文案变英文（不需要重新挂载）
+  ---
+  duration_ms: 705.17325
+  type: 'test'
+  ...
+# Subtest: markdownToHtml：标题/表格/引用/列表都能解析，且先转义再解析
+ok 35 - markdownToHtml：标题/表格/引用/列表都能解析，且先转义再解析
+  ---
+  duration_ms: 5.235542
+  type: 'test'
+  ...
+# Subtest: S4 golden over actual fake HTTP: frozen reads, recompute, append, duplicate and conflicts
+ok 36 - S4 golden over actual fake HTTP: frozen reads, recompute, append, duplicate and conflicts
+  ---
+  duration_ms: 252.603166
+  type: 'test'
+  ...
+# Subtest: two concurrent remote CAS requests commit once; lost-ack retry keeps same result
+ok 37 - two concurrent remote CAS requests commit once; lost-ack retry keeps same result
+  ---
+  duration_ms: 230.412584
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects expired
+ok 38 - HTTP conformance rejects expired
+  ---
+  duration_ms: 10.070084
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects revoked
+ok 39 - HTTP conformance rejects revoked
+  ---
+  duration_ms: 6.461125
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects wrong audience
+ok 40 - HTTP conformance rejects wrong audience
+  ---
+  duration_ms: 6.180125
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects missing scope
+ok 41 - HTTP conformance rejects missing scope
+  ---
+  duration_ms: 7.324167
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects wrong owner
+ok 42 - HTTP conformance rejects wrong owner
+  ---
+  duration_ms: 5.582625
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects rights withdrawn
+ok 43 - HTTP conformance rejects rights withdrawn
+  ---
+  duration_ms: 3.030084
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects bad token
+ok 44 - HTTP conformance rejects bad token
+  ---
+  duration_ms: 2.660833
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects server hash mismatch
+ok 45 - HTTP conformance rejects server hash mismatch
+  ---
+  duration_ms: 4.082917
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects server owner mismatch
+ok 46 - HTTP conformance rejects server owner mismatch
+  ---
+  duration_ms: 5.946083
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects server unknown version
+ok 47 - HTTP conformance rejects server unknown version
+  ---
+  duration_ms: 6.907125
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects timeout
+ok 48 - HTTP conformance rejects timeout
+  ---
+  duration_ms: 206.543916
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects disconnect
+ok 49 - HTTP conformance rejects disconnect
+  ---
+  duration_ms: 3.448333
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects redirect refused
+ok 50 - HTTP conformance rejects redirect refused
+  ---
+  duration_ms: 4.374042
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects duplicate JSON key
+ok 51 - HTTP conformance rejects duplicate JSON key
+  ---
+  duration_ms: 13.203875
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects oversize
+ok 52 - HTTP conformance rejects oversize
+  ---
+  duration_ms: 7.597625
+  type: 'test'
+  ...
+# Subtest: not configured, token timeout, forbidden body and result tampering are explicit
+ok 53 - not configured, token timeout, forbidden body and result tampering are explicit
+  ---
+  duration_ms: 50.642917
+  type: 'test'
+  ...
+# Subtest: local and alpha-connected hosts produce identical kernel results without two-ledger writes
+ok 54 - local and alpha-connected hosts produce identical kernel results without two-ledger writes
+  ---
+  duration_ms: 179.303875
+  type: 'test'
+  ...
+# Subtest: commit rechecks revocation after read
+ok 55 - commit rechecks revocation after read
+  ---
+  duration_ms: 28.888292
+  type: 'test'
+  ...
+# Subtest: commit rechecks append scope removed
+ok 56 - commit rechecks append scope removed
+  ---
+  duration_ms: 30.758667
+  type: 'test'
+  ...
+# (node:15188) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: commit rechecks rights withdrawn after read
+ok 57 - commit rechecks rights withdrawn after read
+  ---
+  duration_ms: 14.969333
+  type: 'test'
+  ...
+# Subtest: DSH service/API exposes alpha-connected evaluation with no local result writes
+ok 58 - DSH service/API exposes alpha-connected evaluation with no local result writes
+  ---
+  duration_ms: 109.042459
+  type: 'test'
+  ...
+# Subtest: frozen S4 service errors retain codes and unknown server messages stay sanitized
+ok 59 - frozen S4 service errors retain codes and unknown server messages stay sanitized
+  ---
+  duration_ms: 4.046291
+  type: 'test'
+  ...
+# Subtest: malformed upstream success cannot become a successful DSH error status
+ok 60 - malformed upstream success cannot become a successful DSH error status
+  ---
+  duration_ms: 5.354042
+  type: 'test'
+  ...
+# (node:15189) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: 端到端主链路：创建（自动冻结）→ 市场快照 → 监控 → 评价 → 报告
+ok 61 - 端到端主链路：创建（自动冻结）→ 市场快照 → 监控 → 评价 → 报告
+  ---
+  duration_ms: 54.834833
+  type: 'test'
+  ...
+# Subtest: 关键不变量：冻结后修改策略必须失败（§18）
+ok 62 - 关键不变量：冻结后修改策略必须失败（§18）
+  ---
+  duration_ms: 7.90725
+  type: 'test'
+  ...
+# Subtest: 关键不变量：使用未来行情评价必须失败（§18 / §21）
+ok 63 - 关键不变量：使用未来行情评价必须失败（§18 / §21）
+  ---
+  duration_ms: 8.029834
+  type: 'test'
+  ...
+# Subtest: 关键不变量：任何角色都不能直接写 Evaluation
+ok 64 - 关键不变量：任何角色都不能直接写 Evaluation
+  ---
+  duration_ms: 27.094
+  type: 'test'
+  ...
+# Subtest: 方向一致性是结构性校验：BUY/SELL 的 target/stop 必须与方向匹配
+ok 65 - 方向一致性是结构性校验：BUY/SELL 的 target/stop 必须与方向匹配
+  ---
+  duration_ms: 6.487125
+  type: 'test'
+  ...
+# Subtest: 价格规则可配置：改权重后新评价用新版本，历史评价保留原版本
+ok 66 - 价格规则可配置：改权重后新评价用新版本，历史评价保留原版本
+  ---
+  duration_ms: 19.040625
+  type: 'test'
+  ...
+# Subtest: 权限：ANALYST 只能读自己的策略
+ok 67 - 权限：ANALYST 只能读自己的策略
+  ---
+  duration_ms: 17.574708
+  type: 'test'
+  ...
+# Subtest: 并发保护：未知策略、未知评价都返回 NOT_FOUND
+ok 68 - 并发保护：未知策略、未知评价都返回 NOT_FOUND
+  ---
+  duration_ms: 3.931875
+  type: 'test'
+  ...
+# Subtest: 每个已声明类型的指标，两个界面的输出都与报告层逐值一致
+ok 69 - 每个已声明类型的指标，两个界面的输出都与报告层逐值一致
+  ---
+  duration_ms: 43.045375
+  type: 'test'
+  ...
+# Subtest: 回归：幅度量不带 `+`（波动率/胜率/回撤曾经被印成 +40.7% / +50.0%）
+ok 70 - 回归：幅度量不带 `+`（波动率/胜率/回撤曾经被印成 +40.7% / +50.0%）
+  ---
+  duration_ms: 0.0985
+  type: 'test'
+  ...
+# Subtest: 回归：方向量带 `+`，且只有方向量带
+ok 71 - 回归：方向量带 `+`，且只有方向量带
+  ---
+  duration_ms: 0.054917
+  type: 'test'
+  ...
+# Subtest: 回归：评分不是百分比，也不补零（曾经报告里印成 4650.0%）
+ok 72 - 回归：评分不是百分比，也不补零（曾经报告里印成 4650.0%）
+  ---
+  duration_ms: 0.944834
+  type: 'test'
+  ...
+# Subtest: 回归：金额带千分位、两位小数（-3,457.33 而不是 -3457.33）
+ok 73 - 回归：金额带千分位、两位小数（-3,457.33 而不是 -3457.33）
+  ---
+  duration_ms: 0.14575
+  type: 'test'
+  ...
+# Subtest: 两个界面对同一指标给出同一个数字（不许各自为政）
+ok 74 - 两个界面对同一指标给出同一个数字（不许各自为政）
+  ---
+  duration_ms: 18.847833
+  type: 'test'
+  ...
+# Subtest: 源码扫描：任何幅度量都不许交给 `pct` 渲染（+40.7% 这类回归的入口）
+ok 75 - 源码扫描：任何幅度量都不许交给 `pct` 渲染（+40.7% 这类回归的入口）
+  ---
+  duration_ms: 2.693042
+  type: 'test'
+  ...
+# Subtest: 源码扫描：两个界面的格式化语义注释与实现都指向同一份契约
+ok 76 - 源码扫描：两个界面的格式化语义注释与实现都指向同一份契约
+  ---
+  duration_ms: 1.246208
+  type: 'test'
+  ...
+# Subtest: review UI: all navigation destinations, simulator label and meaningful content
+ok 77 - review UI: all navigation destinations, simulator label and meaningful content
+  ---
+  duration_ms: 714.07775
+  type: 'test'
+  ...
+# Subtest: review UI: complete ingest, owner switch, confirm, future execution, PM decision
+ok 78 - review UI: complete ingest, owner switch, confirm, future execution, PM decision
+  ---
+  duration_ms: 215.495667
+  type: 'test'
+  ...
+# Subtest: review UI: ambiguity stays pending and error is visible without cash mutation
+ok 79 - review UI: ambiguity stays pending and error is visible without cash mutation
+  ---
+  duration_ms: 98.926875
+  type: 'test'
+  ...
+# Subtest: review UI: search, empty result and status filter are functional
+ok 80 - review UI: search, empty result and status filter are functional
+  ---
+  duration_ms: 76.032083
+  type: 'test'
+  ...
+# Subtest: review UI: personal workspace excludes institutional names/records
+ok 81 - review UI: personal workspace excludes institutional names/records
+  ---
+  duration_ms: 82.077916
+  type: 'test'
+  ...
+# Subtest: review UI: analysts cannot save settings; admin can version per-account rule
+ok 82 - review UI: analysts cannot save settings; admin can version per-account rule
+  ---
+  duration_ms: 60.518667
+  type: 'test'
+  ...
+# Subtest: review UI: weekly review add, complete and save conclusion create audit events
+ok 83 - review UI: weekly review add, complete and save conclusion create audit events
+  ---
+  duration_ms: 68.805542
+  type: 'test'
+  ...
+# Subtest: review UI: local persistence survives reload
+ok 84 - review UI: local persistence survives reload
+  ---
+  duration_ms: 115.6825
+  type: 'test'
+  ...
+# Subtest: review UI: malformed storage degrades to seeded state visibly
+ok 85 - review UI: malformed storage degrades to seeded state visibly
+  ---
+  duration_ms: 51.546542
+  type: 'test'
+  ...
+# Subtest: review UI: XSS-shaped source text stays text in raw evidence
+ok 86 - review UI: XSS-shaped source text stays text in raw evidence
+  ---
+  duration_ms: 84.37625
+  type: 'test'
+  ...
+# Subtest: review UI: reports, evidence and scoped backup create downloadable artifacts
+ok 87 - review UI: reports, evidence and scoped backup create downloadable artifacts
+  ---
+  duration_ms: 81.200125
+  type: 'test'
+  ...
+# Subtest: review UI: 65 original requirements map to reachable destinations
+ok 88 - review UI: 65 original requirements map to reachable destinations
+  ---
+  duration_ms: 67.660208
+  type: 'test'
+  ...
+# Subtest: review UI: primary market manual hypothesis and fact update are separate
+ok 89 - review UI: primary market manual hypothesis and fact update are separate
+  ---
+  duration_ms: 63.105334
+  type: 'test'
+  ...
+# Subtest: review UI: reset requires explicit second step
+ok 90 - review UI: reset requires explicit second step
+  ---
+  duration_ms: 69.476917
+  type: 'test'
+  ...
+# Subtest: review UI: backup restores current workspace and preserves personal data
+ok 91 - review UI: backup restores current workspace and preserves personal data
+  ---
+  duration_ms: 63.546916
+  type: 'test'
+  ...
+# Subtest: review UI: malicious imported ID is rejected atomically before any injected element renders
+ok 92 - review UI: malicious imported ID is rejected atomically before any injected element renders
+  ---
+  duration_ms: 57.756292
+  type: 'test'
+  ...
+# Subtest: review UI: observation evidence appends a note without rewriting source
+ok 93 - review UI: observation evidence appends a note without rewriting source
+  ---
+  duration_ms: 51.391958
+  type: 'test'
+  ...
+# Subtest: review UI: exported HTML is printable, source-backed and escapes source text
+ok 94 - review UI: exported HTML is printable, source-backed and escapes source text
+  ---
+  duration_ms: 71.845375
+  type: 'test'
+  ...
+# Subtest: review UI: weekly metrics disclose their actual shorter observation period
+ok 95 - review UI: weekly metrics disclose their actual shorter observation period
+  ---
+  duration_ms: 44.57175
+  type: 'test'
+  ...
+# (node:15192) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: 页面能挂载并渲染 Dashboard（卡片 / 分析师表 / 团队表 / 审计事件）
+ok 96 - 页面能挂载并渲染 Dashboard（卡片 / 分析师表 / 团队表 / 审计事件）
+  ---
+  duration_ms: 949.538333
+  type: 'test'
+  ...
+# Subtest: 返回按钮：根视图禁用，下钻后可用，点击后回到上一层（Esc 同样生效）
+ok 97 - 返回按钮：根视图禁用，下钻后可用，点击后回到上一层（Esc 同样生效）
+  ---
+  duration_ms: 1704.715583
+  type: 'test'
+  ...
+# Subtest: 深链：直接用 \#/strategy/<id>/replay 打开，停在 Replay 页签
+ok 98 - 深链：直接用 \#/strategy/<id>/replay 打开，停在 Replay 页签
+  ---
+  duration_ms: 344.813416
+  type: 'test'
+  ...
+# Subtest: 排序：点表头切换升/降序并重排行序（含 aria-sort）
+ok 99 - 排序：点表头切换升/降序并重排行序（含 aria-sort）
+  ---
+  duration_ms: 997.890542
+  type: 'test'
+  ...
+# Subtest: 团队行可点击 → 团队明细按分析师分组展示策略，返回按钮回到 Dashboard
+ok 100 - 团队行可点击 → 团队明细按分析师分组展示策略，返回按钮回到 Dashboard
+  ---
+  duration_ms: 1688.251459
+  type: 'test'
+  ...
+# Subtest: 模拟盘视图：深链 \#/portfolio/<analyst> 渲染净值曲线与持仓，且不出现金额
+ok 101 - 模拟盘视图：深链 \#/portfolio/<analyst> 渲染净值曲线与持仓，且不出现金额
+  ---
+  duration_ms: 919.332083
+  type: 'test'
+  ...
+# Subtest: 模拟盘视图：上限更紧的分析师会显示超限挤出表，且入口在分析师详情里可达
+ok 102 - 模拟盘视图：上限更紧的分析师会显示超限挤出表，且入口在分析师详情里可达
+  ---
+  duration_ms: 2055.61425
+  type: 'test'
+  ...
+# Subtest: 深链：直接用 \#/team/<name> 打开团队明细
+ok 103 - 深链：直接用 \#/team/<name> 打开团队明细
+  ---
+  duration_ms: 356.261084
+  type: 'test'
+  ...
+# Subtest: 三种视角：MANAGER 只读、ANALYST 只维护自己的、ADMIN 可改规则
+ok 104 - 三种视角：MANAGER 只读、ANALYST 只维护自己的、ADMIN 可改规则
+  ---
+  duration_ms: 1363.236375
+  type: 'test'
+  ...
+# Subtest: 分析师自助维护：提交策略 → 本地校验 → 冻结 → 详情可编辑/冻结/取消
+ok 105 - 分析师自助维护：提交策略 → 本地校验 → 冻结 → 详情可编辑/冻结/取消
+  ---
+  duration_ms: 2684.241958
+  type: 'test'
+  ...
+# Subtest: ADMIN 视角：可编辑评分规则，保存后版本变化且只影响之后的评价
+ok 106 - ADMIN 视角：可编辑评分规则，保存后版本变化且只影响之后的评价
+  ---
+  duration_ms: 1007.548291
+  type: 'test'
+  ...
+# Subtest: 过滤：按标的/状态筛选策略，显示计数随之变化，可清除
+ok 107 - 过滤：按标的/状态筛选策略，显示计数随之变化，可清除
+  ---
+  duration_ms: 1345.03325
+  type: 'test'
+  ...
+# Subtest: 主题：auto 在无 matchMedia 时回落 dark，可强制 light/dark 且写到 data-theme
+ok 108 - 主题：auto 在无 matchMedia 时回落 dark，可强制 light/dark 且写到 data-theme
+  ---
+  duration_ms: 350.1265
+  type: 'test'
+  ...
+# Subtest: 语言：切到 English 后界面与报告都变英文，数字不变
+ok 109 - 语言：切到 English 后界面与报告都变英文，数字不变
+  ---
+  duration_ms: 683.353125
+  type: 'test'
+  ...
+# Subtest: 报告页签把 Markdown 渲染成结构化 HTML（h1/h2/blockquote），不是一坨 pre
+ok 110 - 报告页签把 Markdown 渲染成结构化 HTML（h1/h2/blockquote），不是一坨 pre
+  ---
+  duration_ms: 355.725875
+  type: 'test'
+  ...
+# (node:15193) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: 事件日志可以重建完整生命周期（Create → Snapshot → Freeze → Performance → Evaluation）
+ok 111 - 事件日志可以重建完整生命周期（Create → Snapshot → Freeze → Performance → Evaluation）
+  ---
+  duration_ms: 44.448125
+  type: 'test'
+  ...
+# Subtest: Replay 回答 §11 的 11 个问题，且答案来自冻结数据与 Engine
+ok 112 - Replay 回答 §11 的 11 个问题，且答案来自冻结数据与 Engine
+  ---
+  duration_ms: 25.190125
+  type: 'test'
+  ...
+# Subtest: Replay 一致性：重算与落库评价逐字段相同（除身份与记账字段）
+ok 113 - Replay 一致性：重算与落库评价逐字段相同（除身份与记账字段）
+  ---
+  duration_ms: 52.989875
+  type: 'test'
+  ...
+# Subtest: 重复评价幂等：同一窗口不会产生第二份 Evaluation
+ok 114 - 重复评价幂等：同一窗口不会产生第二份 Evaluation
+  ---
+  duration_ms: 48.897458
+  type: 'test'
+  ...
+# Subtest: Replay 在进程重启后仍然一致（数据来自持久化，而非内存）
+ok 115 - Replay 在进程重启后仍然一致（数据来自持久化，而非内存）
+  ---
+  duration_ms: 29.39325
+  type: 'test'
+  ...
+# Subtest: sqlite 与 json 两个驱动给出完全相同的业务结果
+ok 116 - sqlite 与 json 两个驱动给出完全相同的业务结果
+  ---
+  duration_ms: 54.189458
+  type: 'test'
+  ...
+# Subtest: Seed 数据同样通过 Replay 一致性校验（种子不是"写死的假结果"）
+ok 117 - Seed 数据同样通过 Replay 一致性校验（种子不是"写死的假结果"）
+  ---
+  duration_ms: 411.291917
+  type: 'test'
+  ...
+# Subtest: retained S4 qfq DTO cannot fabricate XNYS comparable prices
+ok 118 - retained S4 qfq DTO cannot fabricate XNYS comparable prices
+  ---
+  duration_ms: 13.91375
+  type: 'test'
+  ...
+# Subtest: retained S4 hfq DTO cannot fabricate XNYS comparable prices
+ok 119 - retained S4 hfq DTO cannot fabricate XNYS comparable prices
+  ---
+  duration_ms: 3.291417
+  type: 'test'
+  ...
+# Subtest: retained S4 none DTO cannot fabricate XNYS comparable prices
+ok 120 - retained S4 none DTO cannot fabricate XNYS comparable prices
+  ---
+  duration_ms: 7.586459
+  type: 'test'
+  ...
+# Subtest: retained S4 empty DTO cannot fabricate XNYS comparable prices
+ok 121 - retained S4 empty DTO cannot fabricate XNYS comparable prices
+  ---
+  duration_ms: 1.788333
+  type: 'test'
+  ...
+# Subtest: retained S4 missing DTO cannot fabricate XNYS comparable prices
+ok 122 - retained S4 missing DTO cannot fabricate XNYS comparable prices
+  ---
+  duration_ms: 1.896
+  type: 'test'
+  ...
+# Subtest: explicit UTC-seconds, session, availability and verified-factor mapping preserves DTO metadata
+ok 123 - explicit UTC-seconds, session, availability and verified-factor mapping preserves DTO metadata
+  ---
+  duration_ms: 6.687917
+  type: 'test'
+  ...
+# Subtest: mapper rejects missing evidence
+ok 124 - mapper rejects missing evidence
+  ---
+  duration_ms: 3.557458
+  type: 'test'
+  ...
+# Subtest: mapper rejects public time after fetch
+ok 125 - mapper rejects public time after fetch
+  ---
+  duration_ms: 3.82825
+  type: 'test'
+  ...
+# Subtest: mapper rejects missing factor
+ok 126 - mapper rejects missing factor
+  ---
+  duration_ms: 4.355041
+  type: 'test'
+  ...
+# Subtest: mapper rejects wrong raw digest
+ok 127 - mapper rejects wrong raw digest
+  ---
+  duration_ms: 3.757792
+  type: 'test'
+  ...
+# Subtest: mapper rejects wrong session
+ok 128 - mapper rejects wrong session
+  ---
+  duration_ms: 4.447542
+  type: 'test'
+  ...
+# Subtest: 独立 Demo 页：两套主题的关键配色都满足 WCAG AA（4.5:1）
+ok 129 - 独立 Demo 页：两套主题的关键配色都满足 WCAG AA（4.5:1）
+  ---
+  duration_ms: 5.945709
+  type: 'test'
+  ...
+# Subtest: 独立 Demo 页：主按钮不得再用硬编码白色（历史缺陷）
+ok 130 - 独立 Demo 页：主按钮不得再用硬编码白色（历史缺陷）
+  ---
+  duration_ms: 0.490666
+  type: 'test'
+  ...
+# Subtest: DSH 面板：主按钮用 shell 成对令牌，不得硬编码 \#fff
+ok 131 - DSH 面板：主按钮用 shell 成对令牌，不得硬编码 \#fff
+  ---
+  duration_ms: 0.29725
+  type: 'test'
+  ...
+# Subtest: DSH 面板：令牌回退值本身也要够对比（令牌缺失时不能变成不可读）
+ok 132 - DSH 面板：令牌回退值本身也要够对比（令牌缺失时不能变成不可读）
+  ---
+  duration_ms: 0.271292
+  type: 'test'
+  ...
+# Subtest: DSH 面板：shell 主题令牌的两种取值都能满足 AA（模拟暗/亮两端）
+ok 133 - DSH 面板：shell 主题令牌的两种取值都能满足 AA（模拟暗/亮两端）
+  ---
+  duration_ms: 0.776125
+  type: 'test'
+  ...
+# Subtest: 对比度工具本身正确（用已知比例校验）
+ok 134 - 对比度工具本身正确（用已知比例校验）
+  ---
+  duration_ms: 0.219167
+  type: 'test'
+  ...
+# (node:15274) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: normalizeLanguage：接受常见写法，认不出时回落到默认而不是抛错
+ok 135 - normalizeLanguage：接受常见写法，认不出时回落到默认而不是抛错
+  ---
+  duration_ms: 2.330708
+  type: 'test'
+  ...
+# Subtest: 只有 zh 与 en 两种语言，且都有自名
+ok 136 - 只有 zh 与 en 两种语言，且都有自名
+  ---
+  duration_ms: 1.417708
+  type: 'test'
+  ...
+# Subtest: 策略报告文案表：zh 与 en 键集合完全一致
+ok 137 - 策略报告文案表：zh 与 en 键集合完全一致
+  ---
+  duration_ms: 0.484584
+  type: 'test'
+  ...
+# Subtest: 绩效报告文案表：zh 与 en 键集合完全一致（含 metric 名称映射）
+ok 138 - 绩效报告文案表：zh 与 en 键集合完全一致（含 metric 名称映射）
+  ---
+  duration_ms: 0.227625
+  type: 'test'
+  ...
+# Subtest: 免责声明按语言切换，两种语言都明确"不是事实数据"
+ok 139 - 免责声明按语言切换，两种语言都明确"不是事实数据"
+  ---
+  duration_ms: 0.233708
+  type: 'test'
+  ...
+# Subtest: fillTemplate 替换命名占位符，未知占位符原样保留
+ok 140 - fillTemplate 替换命名占位符，未知占位符原样保留
+  ---
+  duration_ms: 0.311167
+  type: 'test'
+  ...
+# Subtest: reportText / performanceText 对未知语言回落到默认语言而不是返回 undefined
+ok 141 - reportText / performanceText 对未知语言回落到默认语言而不是返回 undefined
+  ---
+  duration_ms: 0.184959
+  type: 'test'
+  ...
+# Subtest: 同一策略的两种语言报告：文案不同、数值与判定逐字节相同
+ok 142 - 同一策略的两种语言报告：文案不同、数值与判定逐字节相同
+  ---
+  duration_ms: 379.234708
+  type: 'test'
+  ...
+# Subtest: 报告里的金额/百分比在两种语言下写法一致（避免"数字被本地化"）
+ok 143 - 报告里的金额/百分比在两种语言下写法一致（避免"数字被本地化"）
+  ---
+  duration_ms: 489.099917
+  type: 'test'
+  ...
+# Subtest: 分析师/团队报告：两种语言的事实区表头与分节都切换
+ok 144 - 分析师/团队报告：两种语言的事实区表头与分节都切换
+  ---
+  duration_ms: 375.214875
+  type: 'test'
+  ...
+# Subtest: 插件配置的 language 作为默认值；显式入参优先
+ok 145 - 插件配置的 language 作为默认值；显式入参优先
+  ---
+  duration_ms: 249.746125
+  type: 'test'
+  ...
+# Subtest: 落库的报告记录语言，便于事后核对当时用的是哪种语言
+ok 146 - 落库的报告记录语言，便于事后核对当时用的是哪种语言
+  ---
+  duration_ms: 265.823125
+  type: 'test'
+  ...
+# Subtest: 客户端 bundle 的词典：两个语言键集合一致，且覆盖独立 Demo 页的全部键
+ok 147 - 客户端 bundle 的词典：两个语言键集合一致，且覆盖独立 Demo 页的全部键
+  ---
+  duration_ms: 6.591209
+  type: 'test'
+  ...
+# Subtest: 客户端 bundle 里 t('...') 引用的键都存在于两种语言
+ok 148 - 客户端 bundle 里 t('...') 引用的键都存在于两种语言
+  ---
+  duration_ms: 1.206833
+  type: 'test'
+  ...
+# (node:15277) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: resolveActor：优先级为 调用方自述 > 配置层默认 > 内置默认
+ok 149 - resolveActor：优先级为 调用方自述 > 配置层默认 > 内置默认
+  ---
+  duration_ms: 2.506458
+  type: 'test'
+  ...
+# Subtest: resolveActor：来源默认为 配置层=config / 自述=tool，且可被显式覆盖
+ok 150 - resolveActor：来源默认为 配置层=config / 自述=tool，且可被显式覆盖
+  ---
+  duration_ms: 0.380625
+  type: 'test'
+  ...
+# Subtest: resolveActor：非法来源与非法角色被拒绝（不静默兜底）
+ok 151 - resolveActor：非法来源与非法角色被拒绝（不静默兜底）
+  ---
+  duration_ms: 1.12175
+  type: 'test'
+  ...
+# Subtest: normalizeActor：保留合法 source，拒绝非法 source
+ok 152 - normalizeActor：保留合法 source，拒绝非法 source
+  ---
+  duration_ms: 0.322584
+  type: 'test'
+  ...
+# Subtest: requireVerified 打开后：自述的 MANAGER/ADMIN 被拒绝，且错误说明怎么修
+ok 153 - requireVerified 打开后：自述的 MANAGER/ADMIN 被拒绝，且错误说明怎么修
+  ---
+  duration_ms: 0.589542
+  type: 'test'
+  ...
+# Subtest: requireVerified 关闭时行为不变（默认不改变 Demo 的可用性）
+ok 154 - requireVerified 关闭时行为不变（默认不改变 Demo 的可用性）
+  ---
+  duration_ms: 0.160417
+  type: 'test'
+  ...
+# Subtest: normalizeIdentityPolicy：非法 elevatedRoles 被拒绝，角色大小写归一
+ok 155 - normalizeIdentityPolicy：非法 elevatedRoles 被拒绝，角色大小写归一
+  ---
+  duration_ms: 0.300458
+  type: 'test'
+  ...
+# Subtest: 配置可覆盖默认身份与闸门，非法配置在装载时就报错
+ok 156 - 配置可覆盖默认身份与闸门，非法配置在装载时就报错
+  ---
+  duration_ms: 0.488
+  type: 'test'
+  ...
+# Subtest: assertCapability：报错带上 suggestedActor 与 hint
+ok 157 - assertCapability：报错带上 suggestedActor 与 hint
+  ---
+  duration_ms: 0.637
+  type: 'test'
+  ...
+# Subtest: 属性：每个能力给出的 suggestedActor 照做后一定通过（否则报错等于没说）
+ok 158 - 属性：每个能力给出的 suggestedActor 照做后一定通过（否则报错等于没说）
+  ---
+  duration_ms: 0.569625
+  type: 'test'
+  ...
+# Subtest: evaluation.write 是结构性禁止：报错说明只能由确定性引擎写入，且不给"换个角色"的假建议
+ok 159 - evaluation.write 是结构性禁止：报错说明只能由确定性引擎写入，且不给"换个角色"的假建议
+  ---
+  duration_ms: 0.202
+  type: 'test'
+  ...
+# Subtest: 未知能力名报 VALIDATION_ERROR（拼错能力名不该表现成"没权限"）
+ok 160 - 未知能力名报 VALIDATION_ERROR（拼错能力名不该表现成"没权限"）
+  ---
+  duration_ms: 0.047917
+  type: 'test'
+  ...
+# Subtest: 服务层：未显式传 actor 时使用 config.identity.actor（部署者可改默认身份）
+ok 161 - 服务层：未显式传 actor 时使用 config.identity.actor（部署者可改默认身份）
+  ---
+  duration_ms: 12.509792
+  type: 'test'
+  ...
+# Subtest: 服务层：内置默认身份（MANAGER）不能建策略，但报错可照做
+ok 162 - 服务层：内置默认身份（MANAGER）不能建策略，但报错可照做
+  ---
+  duration_ms: 6.631333
+  type: 'test'
+  ...
+# Subtest: 服务层：requireVerified 打开后，自述 MANAGER 被拒；配置层身份可用
+ok 163 - 服务层：requireVerified 打开后，自述 MANAGER 被拒；配置层身份可用
+  ---
+  duration_ms: 7.097
+  type: 'test'
+  ...
+# Subtest: HTTP 层：请求带来的身份被标记为 actor_source="request"
+ok 164 - HTTP 层：请求带来的身份被标记为 actor_source="request"
+  ---
+  duration_ms: 100.619042
+  type: 'test'
+  ...
+# Subtest: 审计事件记录身份来源，事后能区分"配置给的"与"自述的"
+ok 165 - 审计事件记录身份来源，事后能区分"配置给的"与"自述的"
+  ---
+  duration_ms: 6.449958
+  type: 'test'
+  ...
+# Subtest: 回归：ANALYST 替别人建策略，报的是 create 的错（曾经复用 read.any 的错误）
+ok 166 - 回归：ANALYST 替别人建策略，报的是 create 的错（曾经复用 read.any 的错误）
+  ---
+  duration_ms: 4.010417
+  type: 'test'
+  ...
+# Subtest: capabilityMatrix 与实际判定一致（文档不会比代码宽松）
+ok 167 - capabilityMatrix 与实际判定一致（文档不会比代码宽松）
+  ---
+  duration_ms: 0.292208
+  type: 'test'
+  ...
+# Subtest: 测试夹具身份仍可用（ADMIN/ANALYST/MANAGER 的作用域没被身份层改动）
+ok 168 - 测试夹具身份仍可用（ADMIN/ANALYST/MANAGER 的作用域没被身份层改动）
+  ---
+  duration_ms: 0.065167
+  type: 'test'
+  ...
+# Subtest: 核心字段清单包含方案 §7 的全部决策字段
+ok 169 - 核心字段清单包含方案 §7 的全部决策字段
+  ---
+  duration_ms: 1.216375
+  type: 'test'
+  ...
+# Subtest: 冻结后修改任一核心字段都必须抛 FROZEN_STRATEGY_IMMUTABLE
+ok 170 - 冻结后修改任一核心字段都必须抛 FROZEN_STRATEGY_IMMUTABLE
+  ---
+  duration_ms: 10.747417
+  type: 'test'
+  ...
+# Subtest: 冻结后允许变更生命周期与非决策字段
+ok 171 - 冻结后允许变更生命周期与非决策字段
+  ---
+  duration_ms: 0.106458
+  type: 'test'
+  ...
+# Subtest: pickMutableFields 拒绝未知字段（防止顺手加字段污染审计）
+ok 172 - pickMutableFields 拒绝未知字段（防止顺手加字段污染审计）
+  ---
+  duration_ms: 0.730959
+  type: 'test'
+  ...
+# Subtest: 客户端 bundle 满足 Harness 的三条装载约束
+ok 173 - 客户端 bundle 满足 Harness 的三条装载约束
+  ---
+  duration_ms: 2.638125
+  type: 'test'
+  ...
+# Subtest: bundle 导出的插件面包含 apply/inject，并注册 conversation.view
+ok 174 - bundle 导出的插件面包含 apply/inject，并注册 conversation.view
+  ---
+  duration_ms: 0.469
+  type: 'test'
+  ...
+# Subtest: SKILL.md frontmatter 合法（name 必须是 kebab-case，description 必填）
+ok 175 - SKILL.md frontmatter 合法（name 必须是 kebab-case，description 必填）
+  ---
+  duration_ms: 0.408792
+  type: 'test'
+  ...
+# Subtest: 至少提供 5 个 Demo 标的与 Benchmark
+ok 176 - 至少提供 5 个 Demo 标的与 Benchmark
+  ---
+  duration_ms: 9.536917
+  type: 'test'
+  ...
+# Subtest: 同一 (ticker, 日期) 永远得到同一价格（可复现）
+ok 177 - 同一 (ticker, 日期) 永远得到同一价格（可复现）
+  ---
+  duration_ms: 10.275792
+  type: 'test'
+  ...
+# Subtest: 随机访问顺序不影响结果（无状态纯函数语义）
+ok 178 - 随机访问顺序不影响结果（无状态纯函数语义）
+  ---
+  duration_ms: 69.041792
+  type: 'test'
+  ...
+# Subtest: 数据上界硬闸：读取未来行情必须抛 LOOKAHEAD_VIOLATION
+ok 179 - 数据上界硬闸：读取未来行情必须抛 LOOKAHEAD_VIOLATION
+  ---
+  duration_ms: 1.202333
+  type: 'test'
+  ...
+# Subtest: 非交易日归档到前一个交易日，且 bar 必须有完整的 OHLCV
+ok 180 - 非交易日归档到前一个交易日，且 bar 必须有完整的 OHLCV
+  ---
+  duration_ms: 0.769958
+  type: 'test'
+  ...
+# Subtest: Benchmark 与非 Benchmark 互斥校验
+ok 181 - Benchmark 与非 Benchmark 互斥校验
+  ---
+  duration_ms: 22.240208
+  type: 'test'
+  ...
+# Subtest: 交易日历跳过周末与节假日
+ok 182 - 交易日历跳过周末与节假日
+  ---
+  duration_ms: 9.229792
+  type: 'test'
+  ...
+# Subtest: Return：BUY 与 SELL 口径正确且方向相反
+ok 183 - Return：BUY 与 SELL 口径正确且方向相反
+  ---
+  duration_ms: 0.627792
+  type: 'test'
+  ...
+# Subtest: Return：entryPrice 必须为正，否则抛错
+ok 184 - Return：entryPrice 必须为正，否则抛错
+  ---
+  duration_ms: 0.220584
+  type: 'test'
+  ...
+# Subtest: P&L：方向与数量都参与计算
+ok 185 - P&L：方向与数量都参与计算
+  ---
+  duration_ms: 0.053917
+  type: 'test'
+  ...
+# Subtest: Alpha = 策略收益 − Benchmark 收益（§10：剥离市场普涨）
+ok 186 - Alpha = 策略收益 − Benchmark 收益（§10：剥离市场普涨）
+  ---
+  duration_ms: 0.055958
+  type: 'test'
+  ...
+# Subtest: Maximum Drawdown：峰谷口径，且永不大于 0
+ok 187 - Maximum Drawdown：峰谷口径，且永不大于 0
+  ---
+  duration_ms: 0.109959
+  type: 'test'
+  ...
+# Subtest: Target detection：BUY 看最高价、SELL 看最低价，并给出首次达成日
+ok 188 - Target detection：BUY 看最高价、SELL 看最低价，并给出首次达成日
+  ---
+  duration_ms: 0.078375
+  type: 'test'
+  ...
+# Subtest: Stop Loss detection：BUY 看最低价、SELL 看最高价
+ok 189 - Stop Loss detection：BUY 看最低价、SELL 看最高价
+  ---
+  duration_ms: 0.118
+  type: 'test'
+  ...
+# Subtest: Risk/Reward：提交时即可确定，与后续行情无关
+ok 190 - Risk/Reward：提交时即可确定，与后续行情无关
+  ---
+  duration_ms: 0.682083
+  type: 'test'
+  ...
+# Subtest: Volatility：样本不足时返回 0，否则给出年化值
+ok 191 - Volatility：样本不足时返回 0，否则给出年化值
+  ---
+  duration_ms: 0.596583
+  type: 'test'
+  ...
+# Subtest: roundTo 消除浮点噪声，保证落库结果稳定
+ok 192 - roundTo 消除浮点噪声，保证落库结果稳定
+  ---
+  duration_ms: 0.895916
+  type: 'test'
+  ...
+# Subtest: S4 frozen file JCS hashes agree with producer golden
+ok 193 - S4 frozen file JCS hashes agree with producer golden
+  ---
+  duration_ms: 23.873625
+  type: 'test'
+  ...
+# Subtest: S4 registration remains pending with null prices before first full session
+ok 194 - S4 registration remains pending with null prices before first full session
+  ---
+  duration_ms: 20.3895
+  type: 'test'
+  ...
+# Subtest: S4 single-security 5/20/60 session golden: price return is descriptive, not portfolio or total return
+ok 195 - S4 single-security 5/20/60 session golden: price return is descriptive, not portfolio or total return
+  ---
+  duration_ms: 18.300958
+  type: 'test'
+  ...
+# Subtest: start uses max(frozen,eligibility), including intraday freeze and early-close skip
+ok 196 - start uses max(frozen,eligibility), including intraday freeze and early-close skip
+  ---
+  duration_ms: 4.641292
+  type: 'test'
+  ...
+# Subtest: reject input hash
+ok 197 - reject input hash
+  ---
+  duration_ms: 4.400833
+  type: 'test'
+  ...
+# Subtest: reject unknown version
+ok 198 - reject unknown version
+  ---
+  duration_ms: 5.662625
+  type: 'test'
+  ...
+# Subtest: reject missing currency
+ok 199 - reject missing currency
+  ---
+  duration_ms: 11.563583
+  type: 'test'
+  ...
+# Subtest: reject missing factors
+ok 200 - reject missing factors
+  ---
+  duration_ms: 21.597208
+  type: 'test'
+  ...
+# Subtest: reject inconsistent OHLC
+ok 201 - reject inconsistent OHLC
+  ---
+  duration_ms: 22.077542
+  type: 'test'
+  ...
+# Subtest: reject duplicate bars
+ok 202 - reject duplicate bars
+  ---
+  duration_ms: 12.383417
+  type: 'test'
+  ...
+# Subtest: reject future source version
+ok 203 - reject future source version
+  ---
+  duration_ms: 6.889875
+  type: 'test'
+  ...
+# Subtest: reject future market availability
+ok 204 - reject future market availability
+  ---
+  duration_ms: 14.758334
+  type: 'test'
+  ...
+# Subtest: reject rule modified under old hash
+ok 205 - reject rule modified under old hash
+  ---
+  duration_ms: 15.731208
+  type: 'test'
+  ...
+# Subtest: reject unknown rule digest
+ok 206 - reject unknown rule digest
+  ---
+  duration_ms: 12.054833
+  type: 'test'
+  ...
+# Subtest: reject calendar changed
+ok 207 - reject calendar changed
+  ---
+  duration_ms: 13.051458
+  type: 'test'
+  ...
+# Subtest: reject synthetic mismatch
+ok 208 - reject synthetic mismatch
+  ---
+  duration_ms: 16.511
+  type: 'test'
+  ...
+# Subtest: reject no fallback prices
+ok 209 - reject no fallback prices
+  ---
+  duration_ms: 15.005292
+  type: 'test'
+  ...
+# Subtest: reject tampered start plan
+ok 210 - reject tampered start plan
+  ---
+  duration_ms: 17.153375
+  type: 'test'
+  ...
+# Subtest: reject unknown core field
+ok 211 - reject unknown core field
+  ---
+  duration_ms: 13.32875
+  type: 'test'
+  ...
+# Subtest: missing earlier start is not permission to cherry-pick later favorable price
+ok 212 - missing earlier start is not permission to cherry-pick later favorable price
+  ---
+  duration_ms: 18.960417
+  type: 'test'
+  ...
+# Subtest: verified suspension permits next full start; original registration stays null
+ok 213 - verified suspension permits next full start; original registration stays null
+  ---
+  duration_ms: 11.145709
+  type: 'test'
+  ...
+# Subtest: mature missing endpoint/baseline remains insufficient, incomplete future windows stay open
+ok 214 - mature missing endpoint/baseline remains insufficient, incomplete future windows stay open
+  ---
+  duration_ms: 10.133625
+  type: 'test'
+  ...
+# Subtest: split factors apply to price path, cash dividends are excluded
+ok 215 - split factors apply to price path, cash dividends are excluded
+  ---
+  duration_ms: 12.883958
+  type: 'test'
+  ...
+# Subtest: expired wait with verified unavailable sessions stops pending state
+ok 216 - expired wait with verified unavailable sessions stops pending state
+  ---
+  duration_ms: 6.787708
+  type: 'test'
+  ...
+# Subtest: strict parsing rejects duplicate/escaped duplicate keys and unsafe JSON
+ok 217 - strict parsing rejects duplicate/escaped duplicate keys and unsafe JSON
+  ---
+  duration_ms: 0.491833
+  type: 'test'
+  ...
+# (node:15311) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: 权重式记账：10% 权重做多 +20%，净值为 100 + 10×0.2 = 102
+ok 218 - 权重式记账：10% 权重做多 +20%，净值为 100 + 10×0.2 = 102
+  ---
+  duration_ms: 1.221875
+  type: 'test'
+  ...
+# Subtest: 权重式记账：做空方向相反（100 → 80 为空头盈利）
+ok 219 - 权重式记账：做空方向相反（100 → 80 为空头盈利）
+  ---
+  duration_ms: 0.269333
+  type: 'test'
+  ...
+# Subtest: 未平仓的手逐日盯市：净值随行情变化，而不是停在成本
+ok 220 - 未平仓的手逐日盯市：净值随行情变化，而不是停在成本
+  ---
+  duration_ms: 0.131583
+  type: 'test'
+  ...
+# Subtest: C5 反向指令平掉同标的的最早同向手（FIFO）
+ok 221 - C5 反向指令平掉同标的的最早同向手（FIFO）
+  ---
+  duration_ms: 0.153375
+  type: 'test'
+  ...
+# Subtest: 同向重复指令各开一手（多个推荐 = 多手），不会被合并
+ok 222 - 同向重复指令各开一手（多个推荐 = 多手），不会被合并
+  ---
+  duration_ms: 0.079
+  type: 'test'
+  ...
+# Subtest: C3 仓位上限：分析师覆盖优先于全局默认
+ok 223 - C3 仓位上限：分析师覆盖优先于全局默认
+  ---
+  duration_ms: 0.189
+  type: 'test'
+  ...
+# Subtest: C4 超限自动挤出：挤出按市价平仓并记录受害者与"为谁腾位置"
+ok 224 - C4 超限自动挤出：挤出按市价平仓并记录受害者与"为谁腾位置"
+  ---
+  duration_ms: 0.307833
+  type: 'test'
+  ...
+# Subtest: C4 三种挤出策略都可选，且给出不同受害者
+ok 225 - C4 三种挤出策略都可选，且给出不同受害者
+  ---
+  duration_ms: 3.383167
+  type: 'test'
+  ...
+# Subtest: 单条指令权重本身超上限 ⇒ 拒绝而不是悄悄夹紧
+ok 226 - 单条指令权重本身超上限 ⇒ 拒绝而不是悄悄夹紧
+  ---
+  duration_ms: 0.338792
+  type: 'test'
+  ...
+# Subtest: 挤出后腾出的仓位可以被新指令使用（挤出真的有效）
+ok 227 - 挤出后腾出的仓位可以被新指令使用（挤出真的有效）
+  ---
+  duration_ms: 0.326375
+  type: 'test'
+  ...
+# Subtest: 非交易日的指令顺延到下一交易日生效（绝不静默丢弃）
+ok 228 - 非交易日的指令顺延到下一交易日生效（绝不静默丢弃）
+  ---
+  duration_ms: 0.107291
+  type: 'test'
+  ...
+# Subtest: 缺价的标的抛错而不是按 0 或成本价糊过去
+ok 229 - 缺价的标的抛错而不是按 0 或成本价糊过去
+  ---
+  duration_ms: 0.076625
+  type: 'test'
+  ...
+# Subtest: 停牌/无 bar 的日期取"当日或之前最近一根"（逐日盯市口径）
+ok 230 - 停牌/无 bar 的日期取"当日或之前最近一根"（逐日盯市口径）
+  ---
+  duration_ms: 0.0295
+  type: 'test'
+  ...
+# Subtest: 空组合是合法状态（"这个人还没有任何仓位"本身就是要看的结论）
+ok 231 - 空组合是合法状态（"这个人还没有任何仓位"本身就是要看的结论）
+  ---
+  duration_ms: 0.036458
+  type: 'test'
+  ...
+# Subtest: 起始净值可配，且权重按"当时净值"折算（复利口径）
+ok 232 - 起始净值可配，且权重按"当时净值"折算（复利口径）
+  ---
+  duration_ms: 0.107667
+  type: 'test'
+  ...
+# Subtest: 非法配置与非法权重被拒绝
+ok 233 - 非法配置与非法权重被拒绝
+  ---
+  duration_ms: 0.092416
+  type: 'test'
+  ...
+# Subtest: lotReturn 与 Engine 的收益率口径一致（BUY/SELL 方向相反）
+ok 234 - lotReturn 与 Engine 的收益率口径一致（BUY/SELL 方向相反）
+  ---
+  duration_ms: 0.039
+  type: 'test'
+  ...
+# Subtest: 确定性：同一输入投影两次，逐字段相同（含指纹）
+ok 235 - 确定性：同一输入投影两次，逐字段相同（含指纹）
+  ---
+  duration_ms: 0.576417
+  type: 'test'
+  ...
+# Subtest: 指纹对输入变化敏感（否则"输入相同"这个前提就是空的）
+ok 236 - 指纹对输入变化敏感（否则"输入相同"这个前提就是空的）
+  ---
+  duration_ms: 0.102667
+  type: 'test'
+  ...
+# Subtest: 对账恒等式：已实现 + 浮动 = 净值变动（组合层与逐笔层必须能对上）
+ok 237 - 对账恒等式：已实现 + 浮动 = 净值变动（组合层与逐笔层必须能对上）
+  ---
+  duration_ms: 0.109
+  type: 'test'
+  ...
+# Subtest: compareSnapshots 能真的揪出差异（否则"一致"没有意义）
+ok 238 - compareSnapshots 能真的揪出差异（否则"一致"没有意义）
+  ---
+  duration_ms: 0.10275
+  type: 'test'
+  ...
+# Subtest: 不显示金额：组合层任何产出里都不出现货币或资金字样
+ok 239 - 不显示金额：组合层任何产出里都不出现货币或资金字样
+  ---
+  duration_ms: 3.2985
+  type: 'test'
+  ...
+# Subtest: deriveInstructions：DRAFT 不进组合，CANCELLED 按建仓价平仓（收益 0）
+ok 240 - deriveInstructions：DRAFT 不进组合，CANCELLED 按建仓价平仓（收益 0）
+  ---
+  duration_ms: 0.1725
+  type: 'test'
+  ...
+# Subtest: 没有评价的终结策略保持未平仓（宁可不平也不猜价格）
+ok 241 - 没有评价的终结策略保持未平仓（宁可不平也不猜价格）
+  ---
+  duration_ms: 0.035375
+  type: 'test'
+  ...
+# Subtest: Service：Seed 数据下每个分析师都有模拟盘，且净值可复算
+ok 242 - Service：Seed 数据下每个分析师都有模拟盘，且净值可复算
+  ---
+  duration_ms: 475.673667
+  type: 'test'
+  ...
+# Subtest: Service：同一 as_of 重复读取返回同一份落库快照（reused=true）
+ok 243 - Service：同一 as_of 重复读取返回同一份落库快照（reused=true）
+  ---
+  duration_ms: 310.634334
+  type: 'test'
+  ...
+# Subtest: Service：C3 按分析师配置的仓位上限真的生效（Seed 里 michael 是 30%）
+ok 244 - Service：C3 按分析师配置的仓位上限真的生效（Seed 里 michael 是 30%）
+  ---
+  duration_ms: 271.73225
+  type: 'test'
+  ...
+# Subtest: Service：挤出与建仓都产生审计事件，且事件里能查到受害者与为谁腾位置
+ok 245 - Service：挤出与建仓都产生审计事件，且事件里能查到受害者与为谁腾位置
+  ---
+  duration_ms: 278.807833
+  type: 'test'
+  ...
+# Subtest: Service：组合层操作**不修改任何已冻结策略的核心字段**（第一不变量）
+ok 246 - Service：组合层操作**不修改任何已冻结策略的核心字段**（第一不变量）
+  ---
+  duration_ms: 272.762709
+  type: 'test'
+  ...
+# Subtest: Service：重复读取不会重复灌审计事件（否则日志被噪声淹没）
+ok 247 - Service：重复读取不会重复灌审计事件（否则日志被噪声淹没）
+  ---
+  duration_ms: 214.15125
+  type: 'test'
+  ...
+# Subtest: Service：ANALYST 只能读自己的模拟盘，不能读别人的
+ok 248 - Service：ANALYST 只能读自己的模拟盘，不能读别人的
+  ---
+  duration_ms: 189.418666
+  type: 'test'
+  ...
+# Subtest: Service：未知分析师报 NOT_FOUND 且给出可选分析师
+ok 249 - Service：未知分析师报 NOT_FOUND 且给出可选分析师
+  ---
+  duration_ms: 187.622709
+  type: 'test'
+  ...
+# Subtest: Service：分析师参考数据以 config 为准，对**已有安装**生效（否则仓位上限会静默失效）
+ok 250 - Service：分析师参考数据以 config 为准，对**已有安装**生效（否则仓位上限会静默失效）
+  ---
+  duration_ms: 270.9555
+  type: 'test'
+  ...
+# Subtest: Service：净值曲线可切片，且最大回撤与曲线自洽
+ok 251 - Service：净值曲线可切片，且最大回撤与曲线自洽
+  ---
+  duration_ms: 203.90425
+  type: 'test'
+  ...
+# Subtest: Service：weight_pct 可按指令指定，并进入组合建仓规模
+ok 252 - Service：weight_pct 可按指令指定，并进入组合建仓规模
+  ---
+  duration_ms: 5.156708
+  type: 'test'
+  ...
+# Subtest: Service：未指定 weight_pct 时用配置默认值（保证老数据/手工录入也能进组合）
+ok 253 - Service：未指定 weight_pct 时用配置默认值（保证老数据/手工录入也能进组合）
+  ---
+  duration_ms: 4.250667
+  type: 'test'
+  ...
+# Subtest: Service：weight_pct 冻结后不可修改（它决定测评结果）
+ok 254 - Service：weight_pct 冻结后不可修改（它决定测评结果）
+  ---
+  duration_ms: 3.060583
+  type: 'test'
+  ...
+# Subtest: Service：weight_pct 非法值被拒绝（0 / 负 / 超过 100）
+ok 255 - Service：weight_pct 非法值被拒绝（0 / 负 / 超过 100）
+  ---
+  duration_ms: 2.849041
+  type: 'test'
+  ...
+# (node:15316) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: 穷尽性：聚合器产出的每个指标都必须在 METRIC_TYPES 中声明类型
+ok 256 - 穷尽性：聚合器产出的每个指标都必须在 METRIC_TYPES 中声明类型
+  ---
+  duration_ms: 396.6185
+  type: 'test'
+  ...
+# Subtest: 穷尽性：报告模板里写死的指标名都必须在 METRIC_TYPES 中声明
+ok 257 - 穷尽性：报告模板里写死的指标名都必须在 METRIC_TYPES 中声明
+  ---
+  duration_ms: 0.337375
+  type: 'test'
+  ...
+# Subtest: 穷尽性：聚合器产出的每个指标都要有 zh/en 显示名（否则中文报告里会印出英文字段名）
+ok 258 - 穷尽性：聚合器产出的每个指标都要有 zh/en 显示名（否则中文报告里会印出英文字段名）
+  ---
+  duration_ms: 553.1275
+  type: 'test'
+  ...
+# Subtest: 防漏网：分析师报告的指标表整体由聚合对象驱动，每个指标都真的印出来了
+ok 259 - 防漏网：分析师报告的指标表整体由聚合对象驱动，每个指标都真的印出来了
+  ---
+  duration_ms: 276.94225
+  type: 'test'
+  ...
+# Subtest: 未声明的指标名抛错，而不是靠字段名猜（猜错就是印错数字）
+ok 260 - 未声明的指标名抛错，而不是靠字段名猜（猜错就是印错数字）
+  ---
+  duration_ms: 0.284833
+  type: 'test'
+  ...
+# Subtest: 回归：计数不乘 100 也无小数（`策略总数 = 8`，不是 `+800.00%`）
+ok 261 - 回归：计数不乘 100 也无小数（`策略总数 = 8`，不是 `+800.00%`）
+  ---
+  duration_ms: 0.101334
+  type: 'test'
+  ...
+# Subtest: 回归：`带 alpha/return/rate 子串的计数` 与 `同名比例` 格式化结果必须不同
+ok 262 - 回归：`带 alpha/return/rate 子串的计数` 与 `同名比例` 格式化结果必须不同
+  ---
+  duration_ms: 0.11775
+  type: 'test'
+  ...
+# Subtest: 回归：波动率不带 `+`（曾经印成 `+40.7%`）
+ok 263 - 回归：波动率不带 `+`（曾经印成 `+40.7%`）
+  ---
+  duration_ms: 0.0385
+  type: 'test'
+  ...
+# Subtest: 回归：评分是普通数，不是百分比（曾经印成 `4650.0%`）
+ok 264 - 回归：评分是普通数，不是百分比（曾经印成 `4650.0%`）
+  ---
+  duration_ms: 0.623959
+  type: 'test'
+  ...
+# Subtest: 回归：盈亏比是无量纲数，不是百分比（1.0 不能变成 `100.00%`）
+ok 265 - 回归：盈亏比是无量纲数，不是百分比（1.0 不能变成 `100.00%`）
+  ---
+  duration_ms: 0.463833
+  type: 'test'
+  ...
+# Subtest: 回归：方向量正数带 `+`、负数带 `-`
+ok 266 - 回归：方向量正数带 `+`、负数带 `-`
+  ---
+  duration_ms: 0.093625
+  type: 'test'
+  ...
+# Subtest: 回归：金额与回撤保留两位小数，且以数值符号为准
+ok 267 - 回归：金额与回撤保留两位小数，且以数值符号为准
+  ---
+  duration_ms: 0.099791
+  type: 'test'
+  ...
+# Subtest: signedPct / magnitudePct：只有 signed 加 `+`
+ok 268 - signedPct / magnitudePct：只有 signed 加 `+`
+  ---
+  duration_ms: 0.028416
+  type: 'test'
+  ...
+# Subtest: formatScore：整数不补零，小数不被截断
+ok 269 - formatScore：整数不补零，小数不被截断
+  ---
+  duration_ms: 0.081583
+  type: 'test'
+  ...
+# Subtest: formatCount：四舍五入为整数并按语言加千分位
+ok 270 - formatCount：四舍五入为整数并按语言加千分位
+  ---
+  duration_ms: 0.047125
+  type: 'test'
+  ...
+# Subtest: formatMoney / formatNumber：固定小数位
+ok 271 - formatMoney / formatNumber：固定小数位
+  ---
+  duration_ms: 0.065375
+  type: 'test'
+  ...
+# Subtest: 非数值与非有限值统一输出 n/a，绝不输出 NaN%
+ok 272 - 非数值与非有限值统一输出 n/a，绝不输出 NaN%
+  ---
+  duration_ms: 0.056917
+  type: 'test'
+  ...
+# Subtest: 默认小数位按类型决定（回撤 2 位），显式 decimals 可覆盖
+ok 273 - 默认小数位按类型决定（回撤 2 位），显式 decimals 可覆盖
+  ---
+  duration_ms: 0.045334
+  type: 'test'
+  ...
+# Subtest: METRIC_TYPES 里声明的类型都必须是已知类型
+ok 274 - METRIC_TYPES 里声明的类型都必须是已知类型
+  ---
+  duration_ms: 0.08875
+  type: 'test'
+  ...
+# Subtest: 端到端：真实分析师/团队报告中的键值对与聚合值一致
+ok 275 - 端到端：真实分析师/团队报告中的键值对与聚合值一致
+  ---
+  duration_ms: 223.360167
+  type: 'test'
+  ...
+# Subtest: 端到端：团队报告表头与每行单元格数量一致，且评分不带 %
+ok 276 - 端到端：团队报告表头与每行单元格数量一致，且评分不带 %
+  ---
+  duration_ms: 229.877667
+  type: 'test'
+  ...
+# Subtest: review: all seeded accounts reconcile; deterministic independent state
+ok 277 - review: all seeded accounts reconcile; deterministic independent state
+  ---
+  duration_ms: 7.362209
+  type: 'test'
+  ...
+# Subtest: review: explicit trigger, conditional language, noise and ambiguity
+ok 278 - review: explicit trigger, conditional language, noise and ambiguity
+  ---
+  duration_ms: 0.22225
+  type: 'test'
+  ...
+# Subtest: review: invalid owner blocked; duplicate platform message remains single record
+ok 279 - review: invalid owner blocked; duplicate platform message remains single record
+  ---
+  duration_ms: 0.605708
+  type: 'test'
+  ...
+# Subtest: review: confirmation preserves cash and original text, rejects double confirmation
+ok 280 - review: confirmation preserves cash and original text, rejects double confirmation
+  ---
+  duration_ms: 0.352833
+  type: 'test'
+  ...
+# Subtest: review: manager or another analyst cannot confirm another owner
+ok 281 - review: manager or another analyst cannot confirm another owner
+  ---
+  duration_ms: 2.119584
+  type: 'test'
+  ...
+# Subtest: review: next-day buy uses future open; hand computed fees and cash
+ok 282 - review: next-day buy uses future open; hand computed fees and cash
+  ---
+  duration_ms: 1.38625
+  type: 'test'
+  ...
+# Subtest: review: explicit long-only full sell clears position, credits cash minus fee
+ok 283 - review: explicit long-only full sell clears position, credits cash minus fee
+  ---
+  duration_ms: 0.495625
+  type: 'test'
+  ...
+# Subtest: review: delta sell and unsupported short fail safely
+ok 284 - review: delta sell and unsupported short fail safely
+  ---
+  duration_ms: 1.533125
+  type: 'test'
+  ...
+# Subtest: review: invalid weights, symbols and modes never queue
+ok 285 - review: invalid weights, symbols and modes never queue
+  ---
+  duration_ms: 3.431625
+  type: 'test'
+  ...
+# Subtest: review: over-cap requires explicit rebalance and cannot target above cap
+ok 286 - review: over-cap requires explicit rebalance and cannot target above cap
+  ---
+  duration_ms: 12.87275
+  type: 'test'
+  ...
+# Subtest: review: missing new execution price waits without inventing fill
+ok 287 - review: missing new execution price waits without inventing fill
+  ---
+  duration_ms: 0.475291
+  type: 'test'
+  ...
+# Subtest: review: confirmed policy is versioned and later settings do not rewrite fees
+ok 288 - review: confirmed policy is versioned and later settings do not rewrite fees
+  ---
+  duration_ms: 0.391375
+  type: 'test'
+  ...
+# Subtest: review: per-account risk cap update does not affect another account
+ok 289 - review: per-account risk cap update does not affect another account
+  ---
+  duration_ms: 0.269625
+  type: 'test'
+  ...
+# Subtest: review: withdrawing queued order keeps original evidence, no fill occurs
+ok 290 - review: withdrawing queued order keeps original evidence, no fill occurs
+  ---
+  duration_ms: 0.280916
+  type: 'test'
+  ...
+# Subtest: review: executed history cannot be erased; notes are append-only
+ok 291 - review: executed history cannot be erased; notes are append-only
+  ---
+  duration_ms: 0.84875
+  type: 'test'
+  ...
+# Subtest: review: PM decisions require PM plus reason and keep past decisions
+ok 292 - review: PM decisions require PM plus reason and keep past decisions
+  ---
+  duration_ms: 0.906833
+  type: 'test'
+  ...
+# Subtest: review: visible account scopes distinguish analyst, manager and personal
+ok 293 - review: visible account scopes distinguish analyst, manager and personal
+  ---
+  duration_ms: 0.596667
+  type: 'test'
+  ...
+# Subtest: review: tampered cash/positions are detected; no future samples in report
+ok 294 - review: tampered cash/positions are detected; no future samples in report
+  ---
+  duration_ms: 1.024
+  type: 'test'
+  ...
+# Subtest: review: Friday confirmation executes Monday, no invented weekend price
+ok 295 - review: Friday confirmation executes Monday, no invented weekend price
+  ---
+  duration_ms: 0.717042
+  type: 'test'
+  ...
+# Subtest: review: sequential queued orders revalidate cash, no duplicate or negative holdings
+ok 296 - review: sequential queued orders revalidate cash, no duplicate or negative holdings
+  ---
+  duration_ms: 1.097042
+  type: 'test'
+  ...
+# Subtest: review: FIFO missing victim price cannot cause a partial sell or buy
+ok 297 - review: FIFO missing victim price cannot cause a partial sell or buy
+  ---
+  duration_ms: 1.086458
+  type: 'test'
+  ...
+# Subtest: review: risk-reducing sell remains allowed after tightening the cap
+ok 298 - review: risk-reducing sell remains allowed after tightening the cap
+  ---
+  duration_ms: 0.906125
+  type: 'test'
+  ...
+# Subtest: review: malformed imported identifiers, numbers, histories and links are rejected
+ok 299 - review: malformed imported identifiers, numbers, histories and links are rejected
+  ---
+  duration_ms: 6.661334
+  type: 'test'
+  ...
+# Subtest: review: source parse rejects negative weights and treats multiple actions as ambiguous
+ok 300 - review: source parse rejects negative weights and treats multiple actions as ambiguous
+  ---
+  duration_ms: 0.050958
+  type: 'test'
+  ...
+# Subtest: review: events preserve account workspace and real simulated execution timestamp
+ok 301 - review: events preserve account workspace and real simulated execution timestamp
+  ---
+  duration_ms: 0.353583
+  type: 'test'
+  ...
+# Subtest: 权重必须和为 1，否则拒绝配置
+ok 302 - 权重必须和为 1，否则拒绝配置
+  ---
+  duration_ms: 1.70675
+  type: 'test'
+  ...
+# Subtest: 分段线性映射：zero 处 0 分、full 处 100 分、两端夹紧
+ok 303 - 分段线性映射：zero 处 0 分、full 处 100 分、两端夹紧
+  ---
+  duration_ms: 0.316041
+  type: 'test'
+  ...
+# Subtest: 子分数与总分：权重生效且总分落在 [0,100]
+ok 304 - 子分数与总分：权重生效且总分落在 [0,100]
+  ---
+  duration_ms: 2.143542
+  type: 'test'
+  ...
+# Subtest: 评分单调性：收益更高 → 总分不会更低
+ok 305 - 评分单调性：收益更高 → 总分不会更低
+  ---
+  duration_ms: 0.264417
+  type: 'test'
+  ...
+# Subtest: 触发止损会同时压低 Risk 与 Target 两个分项
+ok 306 - 触发止损会同时压低 Risk 与 Target 两个分项
+  ---
+  duration_ms: 1.214458
+  type: 'test'
+  ...
+# Subtest: 达到目标价提高 Target 分项
+ok 307 - 达到目标价提高 Target 分项
+  ---
+  duration_ms: 0.179708
+  type: 'test'
+  ...
+# Subtest: 规则版本变化会反映在结果的 version 上（历史结果可解释）
+ok 308 - 规则版本变化会反映在结果的 version 上（历史结果可解释）
+  ---
+  duration_ms: 0.725667
+  type: 'test'
+  ...
+1..308
+# tests 308
+# suites 0
+# pass 308
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 17624.404958
+
+测试守卫未通过：
+  ✗ 没能从测试输出里解析出 tests/pass/fail/skipped —— 测试可能根本没启动（解析依赖汇总行格式）

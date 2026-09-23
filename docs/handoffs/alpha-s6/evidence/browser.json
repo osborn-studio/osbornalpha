@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "synthetic": true,
+  "real_next": true,
+  "real_postgres": true,
+  "mocked_api_responses": 0,
+  "checks": [
+    "authorized_S3_package",
+    "report_exposure",
+    "server_computation",
+    "5_20_60_windows",
+    "offline_replay",
+    "reload_persistence",
+    "320px_no_overflow",
+    "revocation_clears_report",
+    "unauthenticated_401",
+    "no_page_errors"
+  ]
+}

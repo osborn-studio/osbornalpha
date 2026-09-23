@@ -1,0 +1,66 @@
+[
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/research/s6/store.ts",
+    "sha256": "7ac08d6cfff53b428b92dc01a58ac5ea4757fe4d1bd83c7364ae46eb77829fa6"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/research/s6/http.ts",
+    "sha256": "0bb2ca8e2e4816da09024af11a96c4afb9ac224246b290f37a84e13513692ace"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/research/s6/report.ts",
+    "sha256": "199634578fac4d595ad8cd4678230b8ee12485f717a8e8820a26f0e6daf27fa6"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/research/s6/shadow.ts",
+    "sha256": "ead35855f3372d5c9cadc6fa869cba82bbfdaa7f432824eec2f568b00245e2c1"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/research/s6/market.ts",
+    "sha256": "1c76eb715fb0605370f2bac3cb5f18f3b16d015b3b93b474d0a998290f708f0a"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/research/s6/store.integration.test.ts",
+    "sha256": "f1e78685ab950c413bf875ded5e2ea1fb2e1ac611d744bd385909aa6e918677d"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/supabase/migrations/20260922100000_research_s6.sql",
+    "sha256": "a92ab9c6a3851f125b5028b7984211c7be41dbe1601fe6a2b1d1672f29453d3f"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/supabase/migrations/20260922101000_research_s6_hardening.sql",
+    "sha256": "e0a7f714e8f26e9629b462e1172e80f802d6511120bc65ffa6662d5d63aede4e"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/supabase/migrations/20260922102000_research_s6_session_clock.sql",
+    "sha256": "aff58dfc855bfca7dd1f8e2b68e326a3ea523db048dccf3cc5fbbfd619977577"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/scripts/s6/probe-public-market.ts",
+    "sha256": "1d64bed46e1b0a05c32e00226cd6681bb422c647366ded2ec0083a24f0d83ff6"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/data/sources/sina.ts",
+    "sha256": "d1191190698636f33f46c188f01ee024877f8a52fd155f0a9d5c53063343ed45"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/src/lib/data/sources/datagateway.ts",
+    "sha256": "f47b667aeea01aed868f709e3ce2b3d93cd24d8cd36a8505ce933503dad4d483"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/docs/handoffs/alpha-s6/evidence/public-market-probe.json",
+    "sha256": "e420687e93cd47399fd5f8cee157da0800dbbb065864fbecce11b4958ab861a6"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OSanalyst/scripts/test-summary.js",
+    "sha256": "cab53543dad79f7ee48d6c16cf2aa23d223b921aaf64ee14f6af78f85d1e0160"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OSanalyst/scripts/assert-tests-ran.js",
+    "sha256": "092ed63ca13e29af616fdaaa8e54265372d8fffc6239c94348be367ce46f265a"
+  },
+  {
+    "path": "/Volumes/AIMATE_WORK/Developer/CodeX/OSanalyst/tests/unit/test-summary.test.js",
+    "sha256": "3f7559c21ff940a37c1cfbaa0e81f1042ef057c8cbd027258b09f587ab90f7b5"
+  }
+]

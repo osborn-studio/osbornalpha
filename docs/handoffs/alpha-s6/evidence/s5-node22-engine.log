@@ -1,0 +1,421 @@
+
+> dsh-trade-strategy-evaluator@0.2.0 test:engine
+> node scripts/check-engine-boundary.js && node --test tests/unit/observation-engine.test.js tests/unit/alpha-kline-mapper.test.js tests/integration/async-storage.test.js tests/integration/evaluator-rpc.test.js
+
+Pure engine dependency closure: 9 files; only deterministic node:crypto.createHash builtin.
+TAP version 13
+# (node:4046) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: async json: copied v1 disk and old-reader rollback compatibility
+ok 1 - async json: copied v1 disk and old-reader rollback compatibility
+  ---
+  duration_ms: 51.830375
+  type: 'test'
+  ...
+# Subtest: async sqlite: copied v1 disk and old-reader rollback compatibility
+ok 2 - async sqlite: copied v1 disk and old-reader rollback compatibility
+  ---
+  duration_ms: 50.4065
+  type: 'test'
+  ...
+# Subtest: async json: CAS, sequence allocation, event append and single-writer lock
+ok 3 - async json: CAS, sequence allocation, event append and single-writer lock
+  ---
+  duration_ms: 7.368208
+  type: 'test'
+  ...
+# Subtest: async sqlite: CAS, sequence allocation, event append and single-writer lock
+ok 4 - async sqlite: CAS, sequence allocation, event append and single-writer lock
+  ---
+  duration_ms: 4.860542
+  type: 'test'
+  ...
+# Subtest: DSH awaits delayed port; concurrent evaluations reuse one row; Replay never calls provider
+ok 5 - DSH awaits delayed port; concurrent evaluations reuse one row; Replay never calls provider
+  ---
+  duration_ms: 45.42125
+  type: 'test'
+  ...
+# Subtest: JSON failed write keeps memory and disk unchanged; closed handles cannot outlive writer lease
+ok 6 - JSON failed write keeps memory and disk unchanged; closed handles cannot outlive writer lease
+  ---
+  duration_ms: 1.38225
+  type: 'test'
+  ...
+# Subtest: S4 golden over actual fake HTTP: frozen reads, recompute, append, duplicate and conflicts
+ok 7 - S4 golden over actual fake HTTP: frozen reads, recompute, append, duplicate and conflicts
+  ---
+  duration_ms: 113.018
+  type: 'test'
+  ...
+# Subtest: two concurrent remote CAS requests commit once; lost-ack retry keeps same result
+ok 8 - two concurrent remote CAS requests commit once; lost-ack retry keeps same result
+  ---
+  duration_ms: 79.275834
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects expired
+ok 9 - HTTP conformance rejects expired
+  ---
+  duration_ms: 2.897667
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects revoked
+ok 10 - HTTP conformance rejects revoked
+  ---
+  duration_ms: 2.813208
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects wrong audience
+ok 11 - HTTP conformance rejects wrong audience
+  ---
+  duration_ms: 2.126959
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects missing scope
+ok 12 - HTTP conformance rejects missing scope
+  ---
+  duration_ms: 2.013084
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects wrong owner
+ok 13 - HTTP conformance rejects wrong owner
+  ---
+  duration_ms: 2.243667
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects rights withdrawn
+ok 14 - HTTP conformance rejects rights withdrawn
+  ---
+  duration_ms: 2.349459
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects bad token
+ok 15 - HTTP conformance rejects bad token
+  ---
+  duration_ms: 2.56375
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects server hash mismatch
+ok 16 - HTTP conformance rejects server hash mismatch
+  ---
+  duration_ms: 2.788125
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects server owner mismatch
+ok 17 - HTTP conformance rejects server owner mismatch
+  ---
+  duration_ms: 2.059542
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects server unknown version
+ok 18 - HTTP conformance rejects server unknown version
+  ---
+  duration_ms: 1.882208
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects timeout
+ok 19 - HTTP conformance rejects timeout
+  ---
+  duration_ms: 203.413083
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects disconnect
+ok 20 - HTTP conformance rejects disconnect
+  ---
+  duration_ms: 6.625625
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects redirect refused
+ok 21 - HTTP conformance rejects redirect refused
+  ---
+  duration_ms: 3.082208
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects duplicate JSON key
+ok 22 - HTTP conformance rejects duplicate JSON key
+  ---
+  duration_ms: 3.735459
+  type: 'test'
+  ...
+# Subtest: HTTP conformance rejects oversize
+ok 23 - HTTP conformance rejects oversize
+  ---
+  duration_ms: 3.407
+  type: 'test'
+  ...
+# Subtest: not configured, token timeout, forbidden body and result tampering are explicit
+ok 24 - not configured, token timeout, forbidden body and result tampering are explicit
+  ---
+  duration_ms: 43.262459
+  type: 'test'
+  ...
+# Subtest: local and alpha-connected hosts produce identical kernel results without two-ledger writes
+ok 25 - local and alpha-connected hosts produce identical kernel results without two-ledger writes
+  ---
+  duration_ms: 48.240625
+  type: 'test'
+  ...
+# Subtest: commit rechecks revocation after read
+ok 26 - commit rechecks revocation after read
+  ---
+  duration_ms: 11.488291
+  type: 'test'
+  ...
+# Subtest: commit rechecks append scope removed
+ok 27 - commit rechecks append scope removed
+  ---
+  duration_ms: 11.603917
+  type: 'test'
+  ...
+# (node:4047) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: commit rechecks rights withdrawn after read
+ok 28 - commit rechecks rights withdrawn after read
+  ---
+  duration_ms: 10.970625
+  type: 'test'
+  ...
+# Subtest: DSH service/API exposes alpha-connected evaluation with no local result writes
+ok 29 - DSH service/API exposes alpha-connected evaluation with no local result writes
+  ---
+  duration_ms: 33.436375
+  type: 'test'
+  ...
+# Subtest: frozen S4 service errors retain codes and unknown server messages stay sanitized
+ok 30 - frozen S4 service errors retain codes and unknown server messages stay sanitized
+  ---
+  duration_ms: 2.441917
+  type: 'test'
+  ...
+# Subtest: malformed upstream success cannot become a successful DSH error status
+ok 31 - malformed upstream success cannot become a successful DSH error status
+  ---
+  duration_ms: 1.684958
+  type: 'test'
+  ...
+# Subtest: retained S4 qfq DTO cannot fabricate XNYS comparable prices
+ok 32 - retained S4 qfq DTO cannot fabricate XNYS comparable prices
+  ---
+  duration_ms: 7.417708
+  type: 'test'
+  ...
+# Subtest: retained S4 hfq DTO cannot fabricate XNYS comparable prices
+ok 33 - retained S4 hfq DTO cannot fabricate XNYS comparable prices
+  ---
+  duration_ms: 2.764791
+  type: 'test'
+  ...
+# Subtest: retained S4 none DTO cannot fabricate XNYS comparable prices
+ok 34 - retained S4 none DTO cannot fabricate XNYS comparable prices
+  ---
+  duration_ms: 2.5435
+  type: 'test'
+  ...
+# Subtest: retained S4 empty DTO cannot fabricate XNYS comparable prices
+ok 35 - retained S4 empty DTO cannot fabricate XNYS comparable prices
+  ---
+  duration_ms: 2.218708
+  type: 'test'
+  ...
+# Subtest: retained S4 missing DTO cannot fabricate XNYS comparable prices
+ok 36 - retained S4 missing DTO cannot fabricate XNYS comparable prices
+  ---
+  duration_ms: 1.639084
+  type: 'test'
+  ...
+# Subtest: explicit UTC-seconds, session, availability and verified-factor mapping preserves DTO metadata
+ok 37 - explicit UTC-seconds, session, availability and verified-factor mapping preserves DTO metadata
+  ---
+  duration_ms: 4.006667
+  type: 'test'
+  ...
+# Subtest: mapper rejects missing evidence
+ok 38 - mapper rejects missing evidence
+  ---
+  duration_ms: 2.383583
+  type: 'test'
+  ...
+# Subtest: mapper rejects public time after fetch
+ok 39 - mapper rejects public time after fetch
+  ---
+  duration_ms: 1.912625
+  type: 'test'
+  ...
+# Subtest: mapper rejects missing factor
+ok 40 - mapper rejects missing factor
+  ---
+  duration_ms: 1.874708
+  type: 'test'
+  ...
+# Subtest: mapper rejects wrong raw digest
+ok 41 - mapper rejects wrong raw digest
+  ---
+  duration_ms: 2.190791
+  type: 'test'
+  ...
+# Subtest: mapper rejects wrong session
+ok 42 - mapper rejects wrong session
+  ---
+  duration_ms: 1.448125
+  type: 'test'
+  ...
+# Subtest: S4 frozen file JCS hashes agree with producer golden
+ok 43 - S4 frozen file JCS hashes agree with producer golden
+  ---
+  duration_ms: 4.645625
+  type: 'test'
+  ...
+# Subtest: S4 registration remains pending with null prices before first full session
+ok 44 - S4 registration remains pending with null prices before first full session
+  ---
+  duration_ms: 9.735167
+  type: 'test'
+  ...
+# Subtest: S4 single-security 5/20/60 session golden: price return is descriptive, not portfolio or total return
+ok 45 - S4 single-security 5/20/60 session golden: price return is descriptive, not portfolio or total return
+  ---
+  duration_ms: 11.28125
+  type: 'test'
+  ...
+# Subtest: start uses max(frozen,eligibility), including intraday freeze and early-close skip
+ok 46 - start uses max(frozen,eligibility), including intraday freeze and early-close skip
+  ---
+  duration_ms: 3.241083
+  type: 'test'
+  ...
+# Subtest: reject input hash
+ok 47 - reject input hash
+  ---
+  duration_ms: 2.685458
+  type: 'test'
+  ...
+# Subtest: reject unknown version
+ok 48 - reject unknown version
+  ---
+  duration_ms: 2.710209
+  type: 'test'
+  ...
+# Subtest: reject missing currency
+ok 49 - reject missing currency
+  ---
+  duration_ms: 5.111875
+  type: 'test'
+  ...
+# Subtest: reject missing factors
+ok 50 - reject missing factors
+  ---
+  duration_ms: 5.318709
+  type: 'test'
+  ...
+# Subtest: reject inconsistent OHLC
+ok 51 - reject inconsistent OHLC
+  ---
+  duration_ms: 6.310291
+  type: 'test'
+  ...
+# Subtest: reject duplicate bars
+ok 52 - reject duplicate bars
+  ---
+  duration_ms: 6.709292
+  type: 'test'
+  ...
+# Subtest: reject future source version
+ok 53 - reject future source version
+  ---
+  duration_ms: 7.092209
+  type: 'test'
+  ...
+# Subtest: reject future market availability
+ok 54 - reject future market availability
+  ---
+  duration_ms: 5.780709
+  type: 'test'
+  ...
+# Subtest: reject rule modified under old hash
+ok 55 - reject rule modified under old hash
+  ---
+  duration_ms: 3.640667
+  type: 'test'
+  ...
+# Subtest: reject unknown rule digest
+ok 56 - reject unknown rule digest
+  ---
+  duration_ms: 4.205417
+  type: 'test'
+  ...
+# Subtest: reject calendar changed
+ok 57 - reject calendar changed
+  ---
+  duration_ms: 4.015
+  type: 'test'
+  ...
+# Subtest: reject synthetic mismatch
+ok 58 - reject synthetic mismatch
+  ---
+  duration_ms: 4.048917
+  type: 'test'
+  ...
+# Subtest: reject no fallback prices
+ok 59 - reject no fallback prices
+  ---
+  duration_ms: 4.694584
+  type: 'test'
+  ...
+# Subtest: reject tampered start plan
+ok 60 - reject tampered start plan
+  ---
+  duration_ms: 5.144417
+  type: 'test'
+  ...
+# Subtest: reject unknown core field
+ok 61 - reject unknown core field
+  ---
+  duration_ms: 2.574958
+  type: 'test'
+  ...
+# Subtest: missing earlier start is not permission to cherry-pick later favorable price
+ok 62 - missing earlier start is not permission to cherry-pick later favorable price
+  ---
+  duration_ms: 6.273542
+  type: 'test'
+  ...
+# Subtest: verified suspension permits next full start; original registration stays null
+ok 63 - verified suspension permits next full start; original registration stays null
+  ---
+  duration_ms: 6.337542
+  type: 'test'
+  ...
+# Subtest: mature missing endpoint/baseline remains insufficient, incomplete future windows stay open
+ok 64 - mature missing endpoint/baseline remains insufficient, incomplete future windows stay open
+  ---
+  duration_ms: 4.385667
+  type: 'test'
+  ...
+# Subtest: split factors apply to price path, cash dividends are excluded
+ok 65 - split factors apply to price path, cash dividends are excluded
+  ---
+  duration_ms: 4.465083
+  type: 'test'
+  ...
+# Subtest: expired wait with verified unavailable sessions stops pending state
+ok 66 - expired wait with verified unavailable sessions stops pending state
+  ---
+  duration_ms: 4.701459
+  type: 'test'
+  ...
+# Subtest: strict parsing rejects duplicate/escaped duplicate keys and unsafe JSON
+ok 67 - strict parsing rejects duplicate/escaped duplicate keys and unsafe JSON
+  ---
+  duration_ms: 0.512375
+  type: 'test'
+  ...
+1..67
+# tests 67
+# suites 0
+# pass 67
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 691.996625
