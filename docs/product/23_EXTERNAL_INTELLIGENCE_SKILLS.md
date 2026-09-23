@@ -6,14 +6,15 @@
 
 ## 23.1 行情数据源与级联
 
-四个数据源（`src/lib/data/sources/`），按可靠性级联，每层 ~4s 超时 + 200ms 重试：
+配置 DataGateway 时，实时快照先走 **DataGateway/Wind**；未配置或失败后进入以下公开源级联，每层约 2.5～4 秒超时 + 200ms 重试：
 
-1. **Eastmoney（东方财富）** `eastmoney.ts` — 实时快照 `https://push2delay.eastmoney.com/api/qt/stock/get`、K 线 `https://push2his.eastmoney.com/api/qt/stock/kline/get`（`fqt=1` 前复权）。无需鉴权。secid 前缀映射：`0.`=深/北、`1.`=沪、`116.`=港、`105/106/107`=NASDAQ/NYSE/AMEX（US 失败时 105→106→107 回退）。字段 `f43`价/`f44`高/`f45`低/`f46`开/`f60`昨收/`f162`PE TTM/`f167`PB/`f50`量比 等。**注意：从 Vercel US 区访问 A 股 secid（0./1.）地理受限，常需回落。**
-2. **Sina（新浪财经）** `sina.ts` — `https://hq.sinajs.cn/list=...`（GBK 编码），AKShare 底层源。前缀 `sh/sz`=A、`rt_hk`=港、`gb_`=US。逗号分隔、按市场不同字段布局；标记为延迟数据，A 股无 PE/PB/市值。
-3. **Tencent（腾讯财经）** `tencent.ts` — `http://qt.gtimg.cn/q=...`（GBK，波浪线分隔）。前缀 `sh/sz/bj`=A、`hk`=港、`us`=US。A 股成交量按「手」(=100 股) 转换为股。
-4. **Tushare daily** — 仅 A 股、消耗积分，仅在前三免费源全失败时兜底。
+1. **DataGateway/Wind** `datagateway-quote.ts` — 服务端 `POST /v1/market-data/tickers/query`，Bearer Key；A/HK/US/JP/KR/TW 路由优先。地址和 Key 只存在服务端环境变量中，不向浏览器或合作方暴露。
+2. **Eastmoney（东方财富）** `eastmoney.ts` — 实时快照 `https://push2delay.eastmoney.com/api/qt/stock/get`、K 线 `https://push2his.eastmoney.com/api/qt/stock/kline/get`（`fqt=1` 前复权）。无需鉴权。secid 前缀映射：`0.`=深/北、`1.`=沪、`116.`=港、`105/106/107`=NASDAQ/NYSE/AMEX（US 失败时 105→106→107 回退）。字段 `f43`价/`f44`高/`f45`低/`f46`开/`f60`昨收/`f162`PE TTM/`f167`PB/`f50`量比 等。**注意：从 Vercel US 区访问 A 股 secid（0./1.）地理受限，常需回落。**
+3. **Sina（新浪财经）** `sina.ts` — `https://hq.sinajs.cn/list=...`（GBK 编码），AKShare 底层源。前缀 `sh/sz`=A、`rt_hk`=港、`gb_`=US。逗号分隔、按市场不同字段布局；标记为延迟数据，A 股无 PE/PB/市值。
+4. **Tencent（腾讯财经）** `tencent.ts` — `http://qt.gtimg.cn/q=...`（GBK，波浪线分隔）。前缀 `sh/sz/bj`=A、`hk`=港、`us`=US。A 股成交量按「手」(=100 股) 转换为股。
+5. **Tushare daily** — 仅 A 股、消耗积分，仅在前述实时源全失败时兜底。
 
-级联实现见 `src/app/api/quote/batch/route.ts`：Eastmoney → Sina → Tencent → Tushare。
+级联实现见 `src/app/api/quote/batch/route.ts`：DataGateway/Wind → Eastmoney → Sina → Tencent → Tushare。对外接口说明见 [`REALTIME_MARKET_DATA_API.md`](../REALTIME_MARKET_DATA_API.md)。
 
 ## 23.2 Tushare Pro（A 股深度数据）
 
@@ -51,7 +52,8 @@ DB 中两张 **按用户** 缓存表（`supabase/migrations/20260515000000_initi
 
 | 源 | 用途 | 鉴权 | 回退/可靠性 |
 |---|---|---|---|
-| Eastmoney | 实时行情 + K 线 | 无 | 主源；Vercel US 访问 A 股受限 → 回落 Sina |
+| DataGateway/Wind | 实时行情 + 日线/K 线 | 服务端 `DATAGATEWAY_API_KEY` | 实盘主源；依赖本机 DataGateway/Tailscale，失败自动回退 |
+| Eastmoney | 实时行情 + K 线 | 无 | 公开源首选；Vercel US 访问 A 股受限 → 回落 Sina |
 | Sina | 行情兜底 | 无 | 延迟数据；A 股无 PE/PB/市值 |
 | Tencent | 行情三级兜底 | 无 | GBK，量按手转股 |
 | Tushare | A 股深度 + daily 兜底 | `TUSHARE_TOKEN` | 积分配额限制；缓存 6h–7d |

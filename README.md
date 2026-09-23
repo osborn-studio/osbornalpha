@@ -22,6 +22,27 @@
 
 ---
 
+## 📈 实时行情 API（对外接入）
+
+服务端已接入 **DataGateway/Wind**，并对外提供无需鉴权的 REST 行情快照接口：
+
+```bash
+# 单标的
+curl -sS 'https://stock-monitor-nu.vercel.app/api/quote/600519.SH'
+
+# 批量（逗号分隔，最多 40 个）
+curl -sS 'https://stock-monitor-nu.vercel.app/api/quote/batch?tickers=600519.SH,0700.HK,AAPL'
+```
+
+- 数据链路：`osbornalpha /api/quote/* -> DataGateway/Wind -> Eastmoney/Sina/Tencent 等回退`
+- 响应模式：REST 快照 + 30～60 秒缓存，不是 WebSocket/SSE 推送
+- 调用方**不需要** DataGateway 地址或 API Key；这些凭证只保留在服务端
+- 外部服务可直接调用；浏览器跨域调用需服务端按 Origin 增加 CORS 白名单
+
+完整字段、示例、错误处理、轮询建议和对方接入清单见 **[实时行情 API 对接说明](docs/REALTIME_MARKET_DATA_API.md)**。
+
+---
+
 ## 🎯 产品定位（v1.1）
 
 > **桌面优先（IBKR 风格）+ 手机适配**。打开首页就是工作台，左栏 watchlist、中栏 K 线/详情、右栏新闻+AI 委员会——切换标的不重新加载页面，URL 用 `?s=TICKER` 同步。
