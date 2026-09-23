@@ -1,0 +1,44 @@
+{
+  "scope": "S6 fixture REL accounting and fail-closed real identity policy",
+  "tests": {
+    "files": 151,
+    "passed": 1176,
+    "failed": 0
+  },
+  "new_database_migrations": 30,
+  "build": "passed",
+  "lint": "passed",
+  "typecheck": "passed",
+  "live_jev": "not_run",
+  "real_market_acceptance": "not_passed",
+  "production_deployment": "not_run",
+  "files": [
+    {
+      "file": "src/lib/research/s6/rel-readiness.ts",
+      "sha256": "15f64deebb8479215480783601338771e9af77d9fa9d09c48ccf283ee2d0a37e"
+    },
+    {
+      "file": "src/lib/research/s6/market.ts",
+      "sha256": "ffad36465cab20ad49303028a940b4dc388183bbd7ee6696918be01517c6a33c"
+    },
+    {
+      "file": "src/lib/research/s6/store.ts",
+      "sha256": "1f5836e8939822d9096d794ea6223a3d86997e154ce5ce3f5cda77704608598a"
+    },
+    {
+      "file": "src/lib/research/s6/market.test.ts",
+      "sha256": "6cb177be1c4ee575dbf3aee9878f279a6e9c4ea226410537c26d1d28605e02fa"
+    },
+    {
+      "file": "src/lib/research/s6/store.integration.test.ts",
+      "sha256": "f1826e121a66e76a095b9b7e2b5e914901d714ed45bd4be136a41f9dfd7b8b6d"
+    },
+    {
+      "file": "supabase/migrations/20260922104000_research_s6_rel_fixture.sql",
+      "sha256": "255a4280ac99a5984f958751b1a903ef44beb68f83accf0d2a26e7a5d2e8f90a"
+    }
+  ],
+  "implementation_commit": "d0c7567",
+  "audit": "Opus 5.5 re-review: prior P1s closed, no new P0/P1; two final P2 changes locally reverified",
+  "role_check": "role-check.json"
+}

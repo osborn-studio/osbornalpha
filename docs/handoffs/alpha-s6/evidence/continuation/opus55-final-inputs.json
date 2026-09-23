@@ -1,0 +1,22 @@
+[
+  {
+    "file": "src/lib/research/s6/rel-readiness.ts",
+    "sha256": "bda8cfc24617d65a35859736b317268a1716fcabaefaaf75b4c01f3fd984eb80"
+  },
+  {
+    "file": "supabase/migrations/20260922104000_research_s6_rel_fixture.sql",
+    "sha256": "658c5d77a8be61e9078aa4664deffe31e59b04e1d801e3ee169539db765bcd59"
+  },
+  {
+    "file": "src/lib/research/s6/market.ts",
+    "sha256": "ffad36465cab20ad49303028a940b4dc388183bbd7ee6696918be01517c6a33c"
+  },
+  {
+    "file": "src/lib/research/s6/store.ts",
+    "sha256": "1f5836e8939822d9096d794ea6223a3d86997e154ce5ce3f5cda77704608598a"
+  },
+  {
+    "file": "src/lib/research/s6/store.integration.test.ts",
+    "sha256": "b57bf3dbb9bfafbb0b44404dc446262f618f3a269aa558bd1ecbbb99e3b70624"
+  }
+]

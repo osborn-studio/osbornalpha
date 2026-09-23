@@ -1,0 +1,8 @@
+{
+  "scope": "isolated_local_database",
+  "runtime": "s4_app",
+  "rolsuper": false,
+  "rolbypassrls": false,
+  "member_of_table_owner": false,
+  "executable_security_definer_limit_writers": []
+}
