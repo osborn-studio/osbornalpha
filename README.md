@@ -127,10 +127,12 @@ John Cameron 已接入 [Hermes Agent](https://github.com/NousResearch/hermes-age
 
 ## 🚀 部署（已完成）
 
-- ✅ Vercel 自动从 main 分支部署
-- ✅ GitHub Actions 已移除（替换为 Vercel auto-deploy）
+- ✅ Vercel 从 `main` 分支自动部署；前提是 Vercel Project 的 Git Repository 指向 `osborn-studio/osbornalpha`
+- ✅ GitHub Actions 负责应用检查和行情连通性告警，Vercel 负责自动部署
 - ✅ 域名：`stock-monitor-nu.vercel.app`（Vercel 默认）
 - ⏳ EdgeOne Pages / Makers：见 [docs/EDGEONE_DEPLOY.md](docs/EDGEONE_DEPLOY.md)
+
+DataGateway 常驻、Vercel 环境变量和自动部署验收见 [Vercel + DataGateway 部署说明](docs/VERCEL_DATAGATEWAY_DEPLOYMENT.md)。
 
 快速导入 EdgeOne：
 
