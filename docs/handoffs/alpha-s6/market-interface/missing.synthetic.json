@@ -1,0 +1,103 @@
+{
+  "schema_version": "alpha-market-handoff/1.0",
+  "synthetic": true,
+  "provider": {
+    "name": "synthetic-fixture",
+    "version": "1.0"
+  },
+  "security": {
+    "ticker": "S6SYNTH",
+    "listing_mic": "XNYS",
+    "currency": "USD",
+    "identity_ref": "identity"
+  },
+  "calendar_version": "XNYS-2026-2028-frozen-2026-09-22",
+  "interval": "1d",
+  "adjustment": "raw",
+  "includes_cash_dividends": false,
+  "observed_at": "2026-01-06T22:00:00.000Z",
+  "range": {
+    "from": "2026-01-05",
+    "to": "2026-01-06"
+  },
+  "splits": {
+    "basis_date": "2026-01-06",
+    "coverage": {
+      "from": "2026-01-05",
+      "to": "2026-01-06",
+      "complete": true,
+      "evidence_ref": "splits"
+    },
+    "events": [
+      {
+        "effective_date": "2026-01-06",
+        "new_shares": 2,
+        "old_shares": 1,
+        "evidence_ref": "splits"
+      }
+    ]
+  },
+  "bars": [
+    {
+      "session_date": "2026-01-05",
+      "open": 100,
+      "high": 101,
+      "low": 99,
+      "close": 100,
+      "volume": 1000,
+      "split_factor": 0.5,
+      "available_at": "2026-01-06T22:00:00.000Z",
+      "price_ref": "prices",
+      "split_ref": "splits",
+      "availability_ref": "availability"
+    }
+  ],
+  "unavailable_sessions": [],
+  "evidence": [
+    {
+      "id": "prices",
+      "kind": "prices",
+      "source_url": "synthetic://fixture/prices",
+      "received_at": "2026-01-06T22:00:00.000Z",
+      "media_type": "application/json",
+      "content": "{\"synthetic\":true,\"kind\":\"prices\",\"notice\":\"Invented test evidence; not market data.\"}",
+      "sha256": "ab9c22adea1b54f8a52e167088012c63cfc5e97b2973353f4ef267577b539204"
+    },
+    {
+      "id": "splits",
+      "kind": "splits",
+      "source_url": "synthetic://fixture/splits",
+      "received_at": "2026-01-06T22:00:00.000Z",
+      "media_type": "application/json",
+      "content": "{\"synthetic\":true,\"kind\":\"splits\",\"notice\":\"Invented test evidence; not market data.\"}",
+      "sha256": "584ba9a6a190535544b18df9611d69064ae451c5756879192626c7cd17a4cf5d"
+    },
+    {
+      "id": "identity",
+      "kind": "identity",
+      "source_url": "synthetic://fixture/identity",
+      "received_at": "2026-01-06T22:00:00.000Z",
+      "media_type": "application/json",
+      "content": "{\"synthetic\":true,\"kind\":\"identity\",\"notice\":\"Invented test evidence; not market data.\"}",
+      "sha256": "214fe16d94c90c7a58e80f8581bb8f4587425756dc31889c916079baaca92409"
+    },
+    {
+      "id": "availability",
+      "kind": "availability",
+      "source_url": "synthetic://fixture/availability",
+      "received_at": "2026-01-06T22:00:00.000Z",
+      "media_type": "application/json",
+      "content": "{\"synthetic\":true,\"kind\":\"availability\",\"notice\":\"Invented test evidence; not market data.\"}",
+      "sha256": "f26724c5e8698748c9ace13a17c09deb007f6cdf6f0376f97265ae7a1c888554"
+    },
+    {
+      "id": "session_status",
+      "kind": "session_status",
+      "source_url": "synthetic://fixture/session_status",
+      "received_at": "2026-01-06T22:00:00.000Z",
+      "media_type": "application/json",
+      "content": "{\"synthetic\":true,\"kind\":\"session_status\",\"notice\":\"Invented test evidence; not market data.\"}",
+      "sha256": "c70bc0fda68c1f4866ba17c0b74660c4a37de565ba1a7e1401f7c1088306fd81"
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+[
+  {
+    "path": "src/lib/research/s6/market-handoff.ts",
+    "sha256": "db89a772957407f5e37353d47bf2f45e6e86e11f8b92b1daff45c494319d12c5"
+  },
+  {
+    "path": "src/lib/research/s6/market-handoff.test.ts",
+    "sha256": "bbc769c1f6d5eb2279235b4a35340458cc7ee2263547c832adfc84d07cdb232b"
+  },
+  {
+    "path": "src/lib/research/s6/handoff-cli.test.ts",
+    "sha256": "773330934bf8fab5e65b7085285ac13179fae1e56d00058957994f1b5b80cc95"
+  },
+  {
+    "path": "scripts/s6/check-market-handoff.ts",
+    "sha256": "bb17568fa7e548b2d2f2b6b8326b85f36916a84b74df2641b65ad5957ccdd644"
+  },
+  {
+    "path": "scripts/s7/verify-handoff.ts",
+    "sha256": "ee074257728ea886a9a5bdb748e7914f5cd4e7397b833c8cd61fd94162889e1d"
+  },
+  {
+    "path": "docs/handoffs/alpha-s6/market-interface/README.md",
+    "sha256": "2483888db9828570f6c1fc0a5fa5577bdc66df0fa623499144434d48636e8851"
+  },
+  {
+    "path": "docs/handoffs/alpha-s6/market-interface/split.synthetic.json",
+    "sha256": "fd4b89d6a63ca35bb19b850281133dc25d2026c4a26b8bf62e897d9ae2ab8e15"
+  },
+  {
+    "path": "docs/handoffs/alpha-s7/README.md",
+    "sha256": "70c3e2bbb1cd28f54a53c4618af0ebebb162fec34cb4596d835d37baa4037832"
+  },
+  {
+    "path": "src/lib/research/ingest/pa-v1/json.js",
+    "sha256": "707379fa331592a3a8b44ce3ebddf51ae3e724854bda49703ea98c9eb2d470ed"
+  },
+  {
+    "path": "docs/handoffs/alpha-s6/POLICY-NEXT.md",
+    "sha256": "6cc1931cbced90f9bbf1f0582d7f2f57fb3e976fc7c39589049b2ce2d4e2148e"
+  }
+]

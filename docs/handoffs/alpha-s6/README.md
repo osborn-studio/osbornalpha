@@ -4,6 +4,8 @@
 
 2026-09-22 续做：新增 [REL 预算与恢复工程验证](REL-READINESS.md)，并发现真实 SPY 的 ARCX 身份与固定引擎 XNYS 限制冲突，已阻断错误映射并形成 [下一版政策交接](POLICY-NEXT.md)。成熟观察 pending 与 Jev not_run 可如实保留，不必为了结束六站制造结果；当前工程仍缺兼容实源身份的版本化行情链及完整实源证据。
 
+2026-09-22 行情并行交接：新增 [行情接口联调包](market-interface/README.md) 与 [07 共享契约交接](../alpha-s7/README.md)。离线检查覆盖结构、证据哈希、保守接收时间、拆股乘数和缺日；真实身份、授权与原始响应解析尚待核验。接口由用户安排的负责人实现。
+
 ## 已实现
 
 - 固定 `dsh-trade-strategy-evaluator@0.2.0` 包，SHA-256 `a071a1fcfc2499a54af5a7ced2f18d57ff7cd61d8aa17f8af3def13777fc5869`；干净离线消费者的 golden/Replay 一致。

@@ -1,0 +1,205 @@
+{
+  "schema_version": "alpha-shared-handoff/1.0",
+  "files": [
+    {
+      "path": "docs/handoffs/alpha-s4/alpha-observation-contract.schema.json",
+      "size_bytes": 9574,
+      "sha256": "ee9fb5bbe5d6cef9794cb715bbcd4f62a9601d6363f14d11ea6beb0b353c3647"
+    },
+    {
+      "path": "docs/handoffs/alpha-s4/alpha-observation-golden.json",
+      "size_bytes": 5848,
+      "sha256": "a7d85d18ee629b64407b1613d53846e82058f21538ef1d34f84ad4ea36d654d7"
+    },
+    {
+      "path": "docs/handoffs/alpha-s4/calendar.json",
+      "size_bytes": 109373,
+      "sha256": "cda6d033e9b1a7837e5d515c6432ea6bb8db8de95846b472a155022175c7ae29"
+    },
+    {
+      "path": "docs/handoffs/alpha-s4/calendar.json.sha256",
+      "size_bytes": 65,
+      "sha256": "4ffaf432100d6d7ef2a519ca60eb0a555c50ee982ba6103f217c6c4df3d56ceb"
+    },
+    {
+      "path": "docs/handoffs/alpha-s4/contract-hashes.json",
+      "size_bytes": 2502,
+      "sha256": "cc3ac058e1633c70b8ac3c3006f193a5d401193f0de96a161e6fd2c1d228808e"
+    },
+    {
+      "path": "docs/handoffs/alpha-s4/evaluator-auth-fake.json",
+      "size_bytes": 620,
+      "sha256": "59e0c10e0303ddf54ba538a258a30d06e359ebb166f3785e77f73b2ccc6b01cf"
+    },
+    {
+      "path": "docs/handoffs/alpha-s4/kline-dto.schema.json",
+      "size_bytes": 7270,
+      "sha256": "8dd2e6f526e30fa29010fa2f2a461505426fa161250d9441e91c6396fbc52f64"
+    },
+    {
+      "path": "docs/handoffs/alpha-s4/kline-empty.synthetic.json",
+      "size_bytes": 885,
+      "sha256": "d8db5842cea0c8e1a0571ff1c34205087a37fce58a5c974629373b554e072678"
+    },
+    {
+      "path": "docs/handoffs/alpha-s4/kline-hfq.synthetic.json",
+      "size_bytes": 1121,
+      "sha256": "5aa5f4c6c47fe68be9be5956978afbb11c15db163dc928148b25e79fb08dbfb7"
+    },
+    {
+      "path": "docs/handoffs/alpha-s4/kline-missing.synthetic.json",
+      "size_bytes": 92,
+      "sha256": "a20c6a120f0d68377420cb1c119919a84f8a33ca8e83b8e0122eb44f13775514"
+    },
+    {
+      "path": "docs/handoffs/alpha-s4/kline-none.synthetic.json",
+      "size_bytes": 1100,
+      "sha256": "35d45d827c47f880e9bf6d5d1128af8eb2e9dc930ee0606b52d4043b1831c4df"
+    },
+    {
+      "path": "docs/handoffs/alpha-s4/kline-qfq.synthetic.json",
+      "size_bytes": 1099,
+      "sha256": "b77245ceea44162c3f392cbccf49ebf6c7c8467661d7f270bb8a31359244a592"
+    },
+    {
+      "path": "docs/handoffs/alpha-s4/market-policy.json",
+      "size_bytes": 1763,
+      "sha256": "904f438716b9650b1bb73524121d70b6e32d5c9d2e8fe44dd483f4915ac69f88"
+    },
+    {
+      "path": "docs/handoffs/alpha-s4/market-policy.json.sha256",
+      "size_bytes": 65,
+      "sha256": "63188fe9eed419ecff79225a6b1aabcad392044b3216588d66ad8d47139e727a"
+    },
+    {
+      "path": "docs/handoffs/alpha-s6/fixtures/golden-input.json",
+      "size_bytes": 171705,
+      "sha256": "bb7c630e4e004e3dbf88b95df332886ff26c1b166e55b35461df355a2139e574"
+    },
+    {
+      "path": "docs/handoffs/alpha-s6/fixtures/golden-result.json",
+      "size_bytes": 3260,
+      "sha256": "18f61f693ebecb2f824e3ecead907a1449e84f4cff7419ced528d610dfcebd1e"
+    },
+    {
+      "path": "docs/handoffs/alpha-s6/market-interface/README.md",
+      "size_bytes": 5173,
+      "sha256": "9e53b1c0f599971eae18758d1d953b5d1c2cabf11ff310000bb6af3959ba83c2"
+    },
+    {
+      "path": "docs/handoffs/alpha-s6/market-interface/missing.synthetic.json",
+      "size_bytes": 3311,
+      "sha256": "0baeaa103dc9f2ae417b15ecca994070a774bb5d76007e25eafaa35f89e3f936"
+    },
+    {
+      "path": "docs/handoffs/alpha-s6/market-interface/schema.json",
+      "size_bytes": 8447,
+      "sha256": "741951db728a6d8b1dd48a72b3189a5f8c34f92db84ce7bef3690bcf0b13846e"
+    },
+    {
+      "path": "docs/handoffs/alpha-s6/market-interface/split.synthetic.json",
+      "size_bytes": 3628,
+      "sha256": "fd4b89d6a63ca35bb19b850281133dc25d2026c4a26b8bf62e897d9ae2ab8e15"
+    },
+    {
+      "path": "docs/handoffs/alpha-s7/README.md",
+      "size_bytes": 4329,
+      "sha256": "238d256cc1ae62cc98f6ba7879a7fea41a66633d2f34d4715f0f74a2d0cb649d"
+    },
+    {
+      "path": "scripts/s6/check-market-handoff.ts",
+      "size_bytes": 1628,
+      "sha256": "bca2d6a102d819d1c2355984670a89a0a5b1193ea83b3cae2ac97e0754dd2774"
+    },
+    {
+      "path": "scripts/s7/verify-handoff.ts",
+      "size_bytes": 3875,
+      "sha256": "041d9cfb8bd2bf6a87aee917ea0cdd7b05561ff01bd1ed0a2f0e2419d39cdd79"
+    },
+    {
+      "path": "src/lib/research/ingest/__fixtures__/s3/candidate-pack/candidate.json",
+      "size_bytes": 753,
+      "sha256": "bf119391914ccf938624f467a9c5700da125b8dfb0d0d89f614c6c04de7252ec"
+    },
+    {
+      "path": "src/lib/research/ingest/__fixtures__/s3/candidate-pack/manifest.json",
+      "size_bytes": 1389,
+      "sha256": "56417f719da56410edce8659bb16eb53ea6fe31b13a5a3ddb7322a1a86803a2e"
+    },
+    {
+      "path": "src/lib/research/ingest/__fixtures__/s3/candidate-pack/source/manifest.json",
+      "size_bytes": 1008,
+      "sha256": "1d745551b205695f32d4447423c144da3bfc4a3fccd4fedd3d46b0e661120a7a"
+    },
+    {
+      "path": "src/lib/research/ingest/__fixtures__/s3/candidate-pack/source/snapshots/raw.txt",
+      "size_bytes": 80,
+      "sha256": "572a89160cbeb91f0b1f763066a5c9587e177acec6d7d19e6b7515a2fe93ba3e"
+    },
+    {
+      "path": "src/lib/research/ingest/__fixtures__/s3/candidate-pack/source/source.json",
+      "size_bytes": 2140,
+      "sha256": "f2b215d90336bb886b439d92057cb23bf57da4df965d948a4588cdbd55940209"
+    },
+    {
+      "path": "src/lib/research/ingest/__fixtures__/s3/trusted-test-config.json",
+      "size_bytes": 936,
+      "sha256": "088570f787da11c6f205f7f1a0f556fa8fcd970f3450bf503c3f18517315b401"
+    },
+    {
+      "path": "src/lib/research/ingest/pa-v1/PROVENANCE.md",
+      "size_bytes": 658,
+      "sha256": "5cc127b75bddfd68ca2205698e71d2b0b114e6a42b64719dcd664afeba75d169"
+    },
+    {
+      "path": "src/lib/research/ingest/pa-v1/candidate-pack.js",
+      "size_bytes": 5381,
+      "sha256": "f28434af07a0eba5ed79c547afcf023123520e401755d7526e46496f5ba3543e"
+    },
+    {
+      "path": "src/lib/research/ingest/pa-v1/candidate-pack.schema.json",
+      "size_bytes": 26519,
+      "sha256": "f9f95849ec510a67a2bad87169296925fa80553e78ece4fc583eb06d7494b0fc"
+    },
+    {
+      "path": "src/lib/research/ingest/pa-v1/contracts.js",
+      "size_bytes": 721,
+      "sha256": "ff3c153bf1b9115eb3ff311ecdfdda2d16f191cc762adedb9a7dc460b3e5b5ef"
+    },
+    {
+      "path": "src/lib/research/ingest/pa-v1/contracts.schema.json",
+      "size_bytes": 30307,
+      "sha256": "b01b28a21969d31d32d4eaac23d7022d719be4ee51c364c91de8a5265760ce64"
+    },
+    {
+      "path": "src/lib/research/ingest/pa-v1/json.js",
+      "size_bytes": 3426,
+      "sha256": "707379fa331592a3a8b44ce3ebddf51ae3e724854bda49703ea98c9eb2d470ed"
+    },
+    {
+      "path": "src/lib/research/ingest/pa-v1/pack.js",
+      "size_bytes": 6839,
+      "sha256": "8c994980caa8f8eb41e873befcbe4ebbd2b0d9286f17dad39a0c85a945ea8989"
+    },
+    {
+      "path": "src/lib/research/s6/market-handoff.ts",
+      "size_bytes": 8646,
+      "sha256": "3a790082f32fb8880eda48d2b487404201002f86030f7f510774f8c453a60466"
+    },
+    {
+      "path": "vendor/dsh-trade-strategy-evaluator-0.2.0.tgz",
+      "size_bytes": 262636,
+      "sha256": "a071a1fcfc2499a54af5a7ced2f18d57ff7cd61d8aa17f8af3def13777fc5869"
+    },
+    {
+      "path": "package.json",
+      "size_bytes": 1820,
+      "sha256": "b001eea6b98c6a016376ad73e0544dfb2c47b92829ebe15623800f0975f650e1"
+    },
+    {
+      "path": "package-lock.json",
+      "size_bytes": 223997,
+      "sha256": "4cb04b6b0f64d21559ef2e9f9372e5c09c91eaf8488b44fd2f98ca4156509828"
+    }
+  ]
+}

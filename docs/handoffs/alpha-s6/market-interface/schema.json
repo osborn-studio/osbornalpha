@@ -1,0 +1,348 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "synthetic",
+    "provider",
+    "security",
+    "calendar_version",
+    "interval",
+    "adjustment",
+    "includes_cash_dividends",
+    "observed_at",
+    "range",
+    "splits",
+    "bars",
+    "unavailable_sessions",
+    "evidence"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "alpha-market-handoff/1.0"
+    },
+    "synthetic": {
+      "type": "boolean"
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$"
+        }
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ticker",
+        "listing_mic",
+        "currency",
+        "identity_ref"
+      ],
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9.]{0,15}$"
+        },
+        "listing_mic": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{4}$"
+        },
+        "currency": {
+          "const": "USD"
+        },
+        "identity_ref": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$"
+        }
+      }
+    },
+    "calendar_version": {
+      "const": "XNYS-2026-2028-frozen-2026-09-22"
+    },
+    "interval": {
+      "const": "1d"
+    },
+    "adjustment": {
+      "const": "raw"
+    },
+    "includes_cash_dividends": {
+      "const": false
+    },
+    "observed_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to"
+      ],
+      "properties": {
+        "from": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        }
+      }
+    },
+    "splits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "basis_date",
+        "coverage",
+        "events"
+      ],
+      "properties": {
+        "basis_date": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "from",
+            "to",
+            "complete",
+            "evidence_ref"
+          ],
+          "properties": {
+            "from": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "to": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "complete": {
+              "type": "boolean"
+            },
+            "evidence_ref": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$"
+            }
+          }
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "effective_date",
+              "new_shares",
+              "old_shares",
+              "evidence_ref"
+            ],
+            "properties": {
+              "effective_date": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              "new_shares": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000000
+              },
+              "old_shares": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000000
+              },
+              "evidence_ref": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$"
+              }
+            }
+          },
+          "maxItems": 2000
+        }
+      }
+    },
+    "bars": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "session_date",
+          "open",
+          "high",
+          "low",
+          "close",
+          "volume",
+          "split_factor",
+          "available_at",
+          "price_ref",
+          "split_ref",
+          "availability_ref"
+        ],
+        "properties": {
+          "session_date": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "open": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 1000000000000
+          },
+          "high": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 1000000000000
+          },
+          "low": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 1000000000000
+          },
+          "close": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 1000000000000
+          },
+          "volume": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "split_factor": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 1000000000000
+          },
+          "available_at": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          },
+          "price_ref": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$"
+          },
+          "split_ref": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$"
+          },
+          "availability_ref": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$"
+          }
+        }
+      },
+      "maxItems": 2000
+    },
+    "unavailable_sessions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "session_date",
+          "status",
+          "available_at",
+          "evidence_ref"
+        ],
+        "properties": {
+          "session_date": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "status": {
+            "enum": [
+              "suspended",
+              "no_valid_close"
+            ]
+          },
+          "available_at": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          },
+          "evidence_ref": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$"
+          }
+        }
+      },
+      "maxItems": 2000
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "source_url",
+          "received_at",
+          "media_type",
+          "content",
+          "sha256"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$"
+          },
+          "kind": {
+            "enum": [
+              "prices",
+              "splits",
+              "identity",
+              "availability",
+              "session_status"
+            ]
+          },
+          "source_url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "received_at": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          },
+          "media_type": {
+            "enum": [
+              "application/json",
+              "text/plain",
+              "text/html",
+              "text/csv"
+            ]
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000000
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      },
+      "maxItems": 100
+    }
+  }
+}
