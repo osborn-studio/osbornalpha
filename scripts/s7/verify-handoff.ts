@@ -5,6 +5,7 @@ import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {parseStrict,sha256,digest} from '../../src/lib/research/ingest/pa-v1/json.js';
 import {validateMarketHandoff,marketHandoffSchema} from '../../src/lib/research/s6/market-handoff';
+import {validateMarketPair} from '../../src/lib/research/s6/market-pair';
 import {evaluateObservation,replayObservation} from 'dsh-trade-strategy-evaluator/engine';
 
 const root=realpathSync('.');
@@ -36,5 +37,7 @@ try{
  assert.deepEqual(parseStrict(bytes(market+'schema.json')),parseStrict(JSON.stringify(marketHandoffSchema)));
  assert.equal(validateMarketHandoff(bytes(market+'split.synthetic.json')).status,'contract_valid');
  assert.equal(validateMarketHandoff(bytes(market+'missing.synthetic.json')).status,'contract_incomplete');
+ const pair=validateMarketPair(bytes(market+'split.synthetic.json'),bytes(market+'spy.synthetic.json'));
+ assert.equal(pair.status,'contract_valid');assert.equal(pair.proposed_policy_status,'unreleased');assert.equal(pair.accepted_for_evaluation,false);
  console.log(JSON.stringify({status:'passed',files:paths.size,total_bytes:total,frozen_s4:'unchanged',vendor_tarball:'unchanged',synthetic_replay:'matched',real_market_acceptance:'not_passed',live_jev:'not_run',production_deployment:'not_run',authenticity:'requires_trusted_checkout'}));
 }catch(error){console.error(error instanceof Error?error.message:'handoff_invalid');process.exitCode=1;}

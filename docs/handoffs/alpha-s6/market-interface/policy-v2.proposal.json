@@ -1,0 +1,22 @@
+{
+  "schema_version": "alpha-market-policy-proposal/1.0",
+  "status": "unreleased",
+  "parent_market_policy_version": "market-policy/1.0",
+  "parent_market_policy_sha256": "9f31b8c1ad67aa62fa6b9743044763b530f1a69e6f5ebdb468e33597fddb5089",
+  "identity_field": "security.listing_mic",
+  "target_listing_mics": ["XNYS"],
+  "benchmark": {
+    "ticker": "SPY",
+    "listing_mic": "ARCX",
+    "currency": "USD"
+  },
+  "session_calendar": {
+    "version": "XNYS-2026-2028-frozen-2026-09-22",
+    "calendar_mic": "XNYS"
+  },
+  "calendar_venue_compatibility": "unverified",
+  "range_alignment": "same_calendar_sessions_and_query_range",
+  "missing_session": "data_insufficient_not_zero",
+  "availability_basis": "local_retrieval_only_until_independent_attestation",
+  "real_evaluation": "closed_until_versioned_engine_and_trusted_evidence"
+}

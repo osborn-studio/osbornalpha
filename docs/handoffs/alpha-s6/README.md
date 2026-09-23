@@ -4,7 +4,7 @@
 
 2026-09-22 续做：新增 [REL 预算与恢复工程验证](REL-READINESS.md)，并发现真实 SPY 的 ARCX 身份与固定引擎 XNYS 限制冲突，已阻断错误映射并形成 [下一版政策交接](POLICY-NEXT.md)。成熟观察 pending 与 Jev not_run 可如实保留，不必为了结束六站制造结果；当前工程仍缺兼容实源身份的版本化行情链及完整实源证据。
 
-2026-09-22 行情并行交接：新增 [行情接口联调包](market-interface/README.md) 与 [07 共享契约交接](../alpha-s7/README.md)。离线检查覆盖结构、证据哈希、保守接收时间、拆股乘数和缺日；真实身份、授权与原始响应解析尚待核验。接口由用户安排的负责人实现。
+2026-09-22 行情并行交接：新增 [行情接口联调包](market-interface/README.md) 与 [07 共享契约交接](../alpha-s7/README.md)。离线检查覆盖结构、证据哈希、保守接收时间、拆股乘数、缺日及标的/SPY 双包对齐；真实身份、授权与原始响应解析尚待核验。接口由用户安排的负责人实现。
 
 ## 已实现
 
@@ -31,9 +31,11 @@
 | 备份恢复 | 原观察不变、结果 Replay 相同、外部回执哈希保留；[记录](evidence/restore.json)。同机验证，off_host=false |
 | 实源只读探测 | 新浪 IBM/SPY 日线已取得；[来源核查与尚缺证据](MARKET-SOURCES.md) |
 
-最新续做验证覆盖 30 个全新数据库迁移、151 文件/1,176 项全量测试，以及构建和 lint，见 [续做测试](evidence/continuation/alpha-tests.log)、[构建](evidence/continuation/build.log)、[lint](evidence/continuation/lint.log)。旧证据保留原始时间范围，不冒称旧浏览器记录已覆盖本轮新增会计恢复逻辑；新增部分由真实 PostgreSQL 集成测试验证。
+此前续做验证覆盖 30 个全新数据库迁移、151 文件/1,176 项全量测试，以及构建和 lint，见 [续做测试](evidence/continuation/alpha-tests.log)、[构建](evidence/continuation/build.log)、[lint](evidence/continuation/lint.log)。旧证据保留原始时间范围，不冒称旧浏览器记录已覆盖本轮新增会计恢复逻辑；新增部分由真实 PostgreSQL 集成测试验证。
 
 Claude CLI 使用 `claude-opus-5-5` 独立审计，提示输入有逐文件哈希，工具禁用。首轮发现的调用者选择 as-of/行情集合问题已修复；第三轮未发现 P0/P1，其 P2 处理见 [处置表](AUDIT-DISPOSITION.md)，后续小修由本地测试验证，未重复声称获得外部审计。测试通过不等于真实行情或真实 REL 验收完成。
+
+2026-09-22 双包联调续做：本轮 [测试与核验](../alpha-s7/evidence/README.md) 覆盖 154 个文件/1,220 项测试、构建、lint、typecheck 和 48 件固定清单；Opus 5.5 复审此前 P1 已关闭，详见 [处置](../alpha-s7/evidence/PAIR-AUDIT-DISPOSITION.md)。真实行情与新版引擎仍未验收。
 
 ## 本地复现
 

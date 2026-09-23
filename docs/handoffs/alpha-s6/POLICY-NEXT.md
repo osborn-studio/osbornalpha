@@ -1,6 +1,6 @@
 # 真实 SPY 的下一版契约交接
 
-状态：已发现并阻断当前契约冲突；新引擎/政策包尚未发布。不能以此文档替换任何已有 Observation 的 policy/hash。
+状态：已发现并阻断当前契约冲突；[分离挂牌身份与会话日历的未发布提案](market-interface/policy-v2.proposal.json) 及双包检查已实现，新引擎/正式政策包尚未发布。不能以此文档替换任何已有 Observation 的 policy/hash。
 
 ## 已核实事实
 

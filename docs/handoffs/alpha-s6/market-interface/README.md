@@ -6,13 +6,15 @@
 # 仓库根目录，Node 22.19–22.x，已安装锁定依赖
 npx tsx scripts/s6/check-market-handoff.ts docs/handoffs/alpha-s6/market-interface/split.synthetic.json
 npx tsx scripts/s6/check-market-handoff.ts /受控目录/provider-bundle.json
+# 标的与 SPY 基准都备齐后
+npx tsx scripts/s6/check-market-pair.ts /受控目录/target.json /受控目录/spy.json
 ```
 
 退出码：0 表示结构和引用完整；2 表示缺交易日或拆股覆盖未完成；1 表示无效包内容；3 表示用法/文件读取错误。运行环境缺依赖等启动失败可能由 Node 输出诊断并非 JSON，应先修复安装。每次输出 `accepted_for_evaluation:false`，不把供应商声明视为已验证。该离线格式为 `alpha-market-handoff/1.0`，不是现有引擎的 MarketSnapshot；真实路径仍关闭，转换/核验器及新政策、新引擎另行交付。
 
 ## 字段与证据
 
-机器格式见 [schema.json](schema.json)，完整正例见 [split.synthetic.json](split.synthetic.json)，缺日反例见 [missing.synthetic.json](missing.synthetic.json)。样例全部虚构，仅供测试，不是证券数据、授权或投资结果。未知字段拒绝，包括 `verified:true`；版本变化须另发契约，不能静默改旧包。
+机器格式见 [schema.json](schema.json)，完整正例见 [split.synthetic.json](split.synthetic.json)，SPY/ARCX 合成基准见 [spy.synthetic.json](spy.synthetic.json)，缺日反例见 [missing.synthetic.json](missing.synthetic.json)。样例全部虚构，仅供测试，不是证券数据、授权或投资结果。双包检查按 [尚未发布的 V2 口径提案](policy-v2.proposal.json) 限定标的为 XNYS、基准为 SPY/ARCX、相同日历版本与范围、相同合成属性；允许标的挂牌 MIC 与基准不同。只有两腿都有日线的会话可对齐，两腿复用同一价格证据或在真实模式下出现完全相同的 OHLCV 序列会单列待查；已解释的停牌会单列 `documented_unavailable_sessions`，仍不可计算；未知缺日另列 `unaligned_sessions`。结果保留两腿哈希、提案 JCS 摘要与不可用日期；JCS 摘要不是 manifest 中的原始文件字节 SHA-256，`contract_valid` 仍只是结构检查。未知字段拒绝，包括 `verified:true`；版本变化须另发契约，不能静默改旧包。
 
 - `security.listing_mic` 是挂牌市场；`calendar_version` 是会话日历。SPY 的真实挂牌身份问题见 [POLICY-NEXT](../POLICY-NEXT.md)。格式接受 MIC 字符串不等于确认其真实身份或日历兼容性。
 - `interval=1d`、`adjustment=raw`、`includes_cash_dividends=false` 是待核验的供应商声明。不得用收盘价复制生成 OHLC；须另提供能证明价格口径的供应商文档和原始响应。检查器校验 OHLC 数值边界，尚不解析各供应商原始响应或验证其中的价格对应关系。
@@ -30,3 +32,5 @@ npx tsx scripts/s6/check-market-handoff.ts /受控目录/provider-bundle.json
 4. 用同一获准材料进行真实冻结、5/20/60 窗口及 Replay 验收。未成熟窗口保留 pending。此包不代表第六站实源验收已经完成。
 
 `synthetic`、接收时间和全部可用时间也都是包内声明，检查器固定列出未核验 blocker。后续转换器必须从独立可信配置/回执取得合成身份和实际接收时间，不能凭供应商自报 `synthetic:true` 进入合成通道。
+
+提案把证券挂牌 `listing_mic` 与 XNYS 会话日历分开，保留原 market-policy/1.0 哈希。ARCX 与 XNYS 实际交易日历兼容性仍需独立核验；共用一个版本只是一项待检验的输入口径。它尚不是 `market-policy/2.0` 发布包；旧 S4 观察与固定 S5 引擎仍仅按旧版本解释。双包检查输出提案哈希供联调，真实价格路径仍关闭。

@@ -1,6 +1,6 @@
 import {it,expect} from 'vitest';
 import {spawnSync,execFileSync} from 'node:child_process';
-import {mkdtempSync,mkdirSync,writeFileSync,symlinkSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,readFileSync,writeFileSync,symlinkSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 const script=resolve('scripts/s6/check-market-handoff.ts');
@@ -30,4 +30,14 @@ it('shared inventory rejects traversal, empty inventories and symlinks',()=>{
   writeFileSync(join(dir,'actual'),'safe');put([{path:'actual',sha256:'0'.repeat(64),size_bytes:4}]);const tampered=verify();expect(tampered.status).toBe(1);expect(tampered.stderr).toContain('actual');symlinkSync(join(dir,'actual'),join(dir,'link'));
   put([{path:'link',sha256:'0'.repeat(64),size_bytes:4}]);const result=verify();expect(result.status).toBe(1);expect(result.stderr).toContain('symlink refused');
  }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+it('pair CLI distinguishes aligned, gap, identity mismatch, and file error',()=>{
+ const script=resolve('scripts/s6/check-market-pair.ts');
+ const run=(a:string,b:string)=>spawnSync(process.execPath,['--import','tsx',script,a,b],{encoding:'utf8',timeout:5000});
+ const target='docs/handoffs/alpha-s6/market-interface/split.synthetic.json';
+ const spy='docs/handoffs/alpha-s6/market-interface/spy.synthetic.json';
+ expect(run(target,spy).status).toBe(0);
+ expect(run(target,'docs/handoffs/alpha-s6/market-interface/missing.synthetic.json').status).toBe(1);
+ expect(run(target,join(tmpdir(),'nonexistent-market-pair.json')).status).toBe(3);
 });
