@@ -13,7 +13,7 @@ export function s4Pool(): Pool {
     statement_timeout: 15000, idle_in_transaction_session_timeout:30000, application_name: 'alpha-s4' });
 }
 export async function closeS4Pool() { await pool?.end(); pool = undefined; }
-export async function transaction<T>(actor: S4Actor, work: (db: PoolClient) => Promise<T>): Promise<T> {
+export async function transaction<T>(actor: S4Actor, work: (db: PoolClient) => Promise<T>, preAuth?: (db:PoolClient)=>Promise<void>): Promise<T> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(actor.userId) || !['human','agent'].includes(actor.kind)) fail('scope_denied');
   const db = await s4Pool().connect();
   let released=false;
@@ -22,6 +22,9 @@ export async function transaction<T>(actor: S4Actor, work: (db: PoolClient) => P
     const role = (await db.query('select rolsuper,rolbypassrls from pg_roles where rolname=current_user')).rows[0];
     if (!role || role.rolsuper || role.rolbypassrls) fail('scope_denied');
     await db.query("select set_config('request.jwt.claim.sub',$1,true)", [actor.userId]);
+    // Machine sessions reject invalid tokens before contending for the owner lock.
+    // Their caller must recheck after acquiring it to serialize revocation.
+    await preAuth?.(db);
     // Serializes one owner's mutations + export. Sequence allocation cannot race
     // export visibility, and two equal CAS submissions cannot both succeed.
     await db.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [actor.userId]);
