@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {digest,bytesDigest,validateMarketSnapshot,type MarketSnapshot,type EvaluationInput} from 'dsh-trade-strategy-evaluator/engine';
+import {digest,bytesDigest,parseStrict,validateMarketSnapshot,type MarketSnapshot,type EvaluationInput} from 'dsh-trade-strategy-evaluator/engine';
 import {mapAlphaKline} from 'dsh-trade-strategy-evaluator/adapters';
 import calendar from '../../../../docs/handoffs/alpha-s4/calendar.json';
 import {fail} from '../ingest/pa-v1/json.js';
@@ -8,9 +8,16 @@ import {addRecord} from '../s4/records';
 import {enabled,observationFor} from './store';
 
 type Mapping=Parameters<typeof mapAlphaKline>[0];
+function requireRawProvider(raw:string){
+ const dto=parseStrict(raw) as {source?:string;meta?:{source?:string}};
+ // The current gateway adapter can manufacture OHLC from closes without tagging
+ // that derivation. Keep its real-data path closed until its evidence contract exists.
+ if(dto?.source==='datagateway'||dto?.meta?.source==='datagateway')fail('source_unavailable');
+}
 /** Server/operator-only evidence. Never accepted from an evaluator/browser HTTP body. */
 export async function freezeMarket(actor:S4Actor,observationId:string,mapping:Omit<Mapping,'calendar'>,evidenceKind:'synthetic'|'authorized-provider'){
  enabled();
+ if(evidenceKind==='authorized-provider')requireRawProvider(mapping.raw);
  const mapped=mapAlphaKline({...mapping,calendar:calendar as EvaluationInput['calendar']});
  if(!mapped.ok)fail(mapped.error.code);
  if(!mapped.ok)throw Error('unreachable');
@@ -43,6 +50,7 @@ export async function captureAlphaKline(options:{origin:string;security:MarketSn
  try{for(;;){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>2_000_000)fail('input_limit');chunks.push(value);}}
  finally{await reader.cancel();reader.releaseLock();}
  const raw=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(Buffer.concat(chunks));
+ if(!options.security.synthetic)requireRawProvider(raw);
  const evidence=await options.evidenceFor(raw);if(!evidence)fail('source_unavailable');
  return {raw,security:options.security,request:options.request,id:randomUUID(),providerVersion:options.providerVersion,evidence,as_of:new Date().toISOString()};
 }

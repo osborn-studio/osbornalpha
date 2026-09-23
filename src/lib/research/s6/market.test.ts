@@ -6,7 +6,7 @@ import {bytesDigest} from 'dsh-trade-strategy-evaluator/engine';
 const mapping=syntheticMapping({ticker:'S6SYNTH',exchange:'XNYS',currency:'USD',synthetic:true,company_entity_id:null});
 let server:Server,origin:string,mode='valid';
 beforeAll(async()=>{
- server=createServer((req,res)=>{if(mode==='hang')return;if(mode==='redirect'){res.writeHead(302,{location:'https://example.invalid'});return res.end();}res.writeHead(mode==='failure'?503:200,{'Content-Type':mode==='non-json'?'text/plain':'application/json'});res.end(mode==='oversize'?'x'.repeat(2_000_001):(mode==='bom'?'\uFEFF':'')+mapping.raw);});
+ server=createServer((req,res)=>{if(mode==='hang')return;if(mode==='redirect'){res.writeHead(302,{location:'https://example.invalid'});return res.end();}res.writeHead(mode==='failure'?503:200,{'Content-Type':mode==='non-json'?'text/plain':'application/json'});res.end(mode==='gateway'?JSON.stringify({...JSON.parse(mapping.raw),source:'datagateway'}):mode==='oversize'?'x'.repeat(2_000_001):(mode==='bom'?'\uFEFF':'')+mapping.raw);});
  await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));origin='http://127.0.0.1:'+(server.address() as {port:number}).port;
 });
 afterAll(()=>new Promise<void>(r=>server.close(()=>r())));
@@ -18,5 +18,6 @@ it('captures exact HTTP bytes and requires separately supplied evidence',async()
  mode='oversize';await expect(captureAlphaKline(options)).rejects.toMatchObject({code:'input_limit'});
  for(const state of ['non-json','failure']){mode=state;await expect(captureAlphaKline(options)).rejects.toMatchObject({code:'source_unavailable'});}
  mode='bom';const bom=await captureAlphaKline(options);expect(bytesDigest(bom.raw)).toBe(bytesDigest(Buffer.from('\uFEFF'+mapping.raw)));expect(bom.raw.charCodeAt(0)).toBe(0xFEFF);
+ mode='gateway';await expect(captureAlphaKline({...options,security:{...options.security,synthetic:false}})).rejects.toMatchObject({code:'source_unavailable'});
  mode='hang';await expect(captureAlphaKline({...options,signal:AbortSignal.timeout(20)})).rejects.toMatchObject({name:'TimeoutError'});
 });

@@ -8,6 +8,7 @@ import {enabled,observationFor,currentMarketIds,marketFor} from './store';
 
 /** Display and export append exposure before returning material, in the same transaction. */
 export async function observationReport(actor:S4Actor,id:string,replayId?:string){
+ if(replayId!==undefined&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(replayId))fail('invalid_schema');
  enabled();return transaction(actor,async db=>{
   const o=await observationFor(db,actor,id),at=await serverTime(db);
   const rows=replayId?[]:(await db.query('select id,result,result_hash,receipt,created_at from research_s6_evaluations where user_id=$1 and observation_id=$2 order by (receipt->>\'revision\')::int desc limit 101',[actor.userId,id])).rows;
@@ -20,6 +21,7 @@ export async function observationReport(actor:S4Actor,id:string,replayId?:string
    subject_refs:[digest([source.owner_system,source.owner_scope,source.source_id])],exposed_artifact_ids:replayId?[replayId]:rows.slice(0,100).map(r=>r.id),
    displayed_at:at,origin:replayId?'alpha_evaluation_replay':'alpha_evaluation_report',shadow_exposed:o.payload.observation_kind==='shadow'});
   if(selected){
+   if(selected.input.observation_sha256!==o.payload_hash||selected.receipt.idempotency_key!==selected.idempotency_key||selected.receipt.owner_scope?.user_id!==actor.userId)fail('hash_mismatch');
    if(digest(selected.result)!==selected.result_hash||selected.receipt.result_sha256!==selected.result_hash||selected.receipt.input_sha256!==inputDigest(selected.input)||selected.receipt.evaluation_ref!==selected.id||selected.receipt.observation_ref!==id)fail('hash_mismatch');
    const outcome={ok:true as const,result:selected.result,result_sha256:selected.result_hash};
    const replay=replayObservation(selected.input,outcome);if(!replay.matches)fail('hash_mismatch');

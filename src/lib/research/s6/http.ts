@@ -26,7 +26,7 @@ export async function evaluatorRpc(req:Request,operation:'observation'|'market'|
   const origin=new URL(configured!),url=new URL(req.url);
   if(!['localhost','127.0.0.1','[::1]'].includes(origin.hostname)||url.origin!==origin.origin||req.headers.get('host')!==origin.host||req.headers.get('origin')||req.headers.get('sec-fetch-site')==='cross-site')fail('scope_denied');
   if(req.headers.get('x-evaluator-protocol')!=='evaluator-rpc/1.0')fail('unsupported_version');
-  const match=/^Bearer ([0-9a-f-]{36}\.[0-9a-f]{64})$/.exec(req.headers.get('authorization')||'');
+  const match=/^Bearer ([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.[0-9a-f]{64})$/.exec(req.headers.get('authorization')||'');
   if(!match)fail('not_authenticated');
   const token=match![1],store=createS6Store({userId:token.split('.')[0],kind:'agent'},token);
   if(operation==='observation')return store.readObservation(id!);

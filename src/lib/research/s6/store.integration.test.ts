@@ -9,7 +9,7 @@ import {revealCards} from '../s4/cards';
 import {submitDecision} from '../s4/decisions';
 import {closeS4Pool,transaction} from '../s4/db';
 import {digest,evaluateObservation} from 'dsh-trade-strategy-evaluator/engine';
-import {createS6Store,prepareInput,prepareEvaluation,makeCommit,tokenHash} from './store';
+import {createS6Store,prepareInput,prepareEvaluation,makeCommit,tokenHash,currentMarketIds} from './store';
 import {createEvaluationHttpClient} from 'dsh-trade-strategy-evaluator/adapters';
 // @ts-expect-error Fixed S5 conformance export has no bundled declaration.
 import {assertEvaluationStoreConformance} from 'dsh-trade-strategy-evaluator/conformance';
@@ -75,7 +75,9 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
   await admin.query("update research_s6_sessions set scopes=array['observation:read','evaluation:append'] where user_id=$1",[actor.userId]);
   const response=await fetch(origin+'/api/evaluator/v1/evaluation-results',{method:'POST',headers:{authorization:'Bearer '+token,'x-evaluator-protocol':'evaluator-rpc/1.0','idempotency-key':body.idempotency_key},body:JSON.stringify({...body,owner_scope:{user_id:other.userId}})});
   expect(response.status).toBe(403);
+  expect((await response.json()).error.code).toBe('scope_denied');
   await expect(remote(other.userId+'.'+token.split('.')[1]).readObservation(id)).rejects.toMatchObject({code:'not_authenticated'});
+  for(const prefix of ['-'.repeat(36),randomUUID()])await expect(remote(prefix+'.'+token.split('.')[1]).readObservation(id)).rejects.toMatchObject({code:'not_authenticated',status:401});
  });
  it('rejects forged calculations, rewritten authority, future time and cross-owner requests',async()=>{
   const store=createS6Store(actor),n=await counts();
@@ -128,7 +130,15 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
   await expect(admin.query('truncate research_s6_evaluations')).rejects.toThrow('immutable_record');
   await expect(admin.query("update research_s6_sessions set expires_at=created_at+interval '2 hours' where user_id=$1",[actor.userId])).rejects.toThrow('s6_session_max_lifetime');
   await expect(admin.query("update research_s6_sessions set created_at=created_at+interval '1 day' where user_id=$1",[actor.userId])).rejects.toThrow('immutable_session_identity');
-  await expect(admin.query("insert into research_s6_sessions(user_id,token_hash,subject,audience,scopes,created_at,expires_at) values($1,$2,'future','alpha-evaluator',array['observation:read'],clock_timestamp()+interval '1 day',clock_timestamp()+interval '25 hours')",[actor.userId,tokenHash(randomUUID())])).rejects.toThrow('s6_session_max_lifetime');
+  await expect(admin.query("insert into research_s6_sessions(user_id,token_hash,subject,audience,scopes,created_at,expires_at) values($1,$2,'future','alpha-evaluator',array['observation:read'],'2099-01-01T00:00:00Z','2099-01-01T00:30:00Z')",[actor.userId,tokenHash(randomUUID())])).rejects.toThrow('s6_session_max_lifetime');
+  const sameFetch={...mapping,id:randomUUID()};await freezeMarket(actor,id,sameFetch,'synthetic');
+  const current=await transaction(actor,db=>currentMarketIds(db,actor,id,null));expect(current).toContain(sameFetch.id);expect(current).not.toContain(mapping.id);
+  const connection=await admin.connect();
+  try{
+   await connection.query('begin');
+   const injected=(await connection.query("insert into research_s6_markets(user_id,id,observation_id,snapshot,snapshot_hash,raw_response,evidence,evidence_hash,fetched_at) select user_id,$2,observation_id,snapshot,snapshot_hash,raw_response,evidence,evidence_hash,'2000-01-01' from research_s6_markets where user_id=$1 limit 1 returning fetched_at",[actor.userId,randomUUID()])).rows[0];
+   expect(injected.fetched_at.getTime()).toBeGreaterThan(Date.now()-60000);
+  }finally{await connection.query('rollback');connection.release();}
  });
  it('exports old Replay beyond the bounded report page',async()=>{
   const p=await prepareEvaluation(actor,id),input=await prepareInput(actor,id,p.marketIds,p.asOf),store=createS6Store(actor);
@@ -136,6 +146,7 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
   const report=await observationReport(actor,id);expect('evaluations' in report&&report.evaluations?.length).toBe(100);expect('historyTruncated' in report&&report.historyTruncated).toBe(true);
   const oldest=(await admin.query('select id from research_s6_evaluations where user_id=$1 and idempotency_key=$2',[actor.userId,body.idempotency_key])).rows[0];
   const replay=await observationReport(actor,id,oldest.id);expect('replay' in replay&&replay.replay?.matches).toBe(true);
+  await expect(observationReport(actor,id,'-'.repeat(36))).rejects.toMatchObject({code:'invalid_schema'});
   expect('market_evidence' in replay&&replay.market_evidence?.length).toBe(2);
  },30000);
  it('immutable results reject updates and source revocation also blocks duplicate replay',async()=>{

@@ -66,9 +66,10 @@ async function inputFor(db:PoolClient,actor:S4Actor,id:string,marketIds:string[]
  input.input_sha256=inputDigest(input);return input;
 }
 export async function prepareInput(actor:S4Actor,id:string,marketIds:string[],asOf:string){enabled();return transaction(actor,db=>inputFor(db,actor,id,marketIds,asOf));}
-export async function currentMarketIds(db:PoolClient,actor:S4Actor,id:string,asOf:string):Promise<string[]>{
+export async function currentMarketIds(db:PoolClient,actor:S4Actor,id:string,asOf:string|null):Promise<string[]>{
  return (await db.query(`select distinct on(snapshot->'security'->>'ticker') id from research_s6_markets
-  where user_id=$1 and observation_id=$2 and fetched_at<=$3 and (snapshot->>'fetched_at')::timestamptz<=$3
+  where user_id=$1 and observation_id=$2 and ($3::timestamptz is null or fetched_at<=$3)
+   and (snapshot->>'fetched_at')::timestamptz<=coalesce($3::timestamptz,clock_timestamp())
   order by snapshot->'security'->>'ticker',(snapshot->>'fetched_at')::timestamptz desc,fetched_at desc,id`,[actor.userId,id,asOf])).rows.map(r=>r.id).sort();
 }
 export async function prepareEvaluation(actor:S4Actor,id:string){
@@ -107,7 +108,9 @@ export function createS6Store(actor:S4Actor,sessionToken?:string):EvaluationStor
     const last=(await db.query(`select input->>'as_of' as as_of from research_s6_evaluations where user_id=$1 and observation_id=$2 order by (receipt->>'revision')::int desc limit 1`,[actor.userId,row.id])).rows[0];
     if(asOf<now-300000||(last&&asOf<Date.parse(last.as_of)))fail('invalid_timeline');
     if(digest(await currentMarketIds(db,actor,row.id,body.input.as_of))!==digest(body.market_snapshot_refs.map(r=>r.id).sort()))fail('source_version_conflict');
-    if(digest(await currentMarketIds(db,actor,row.id,new Date(now).toISOString()))!==digest(body.market_snapshot_refs.map(r=>r.id).sort()))fail('source_version_conflict');
+    // Under the owner lock, current authority includes every committed receipt,
+    // including PostgreSQL microseconds lost by JavaScript Date conversion.
+    if(digest(await currentMarketIds(db,actor,row.id,null))!==digest(body.market_snapshot_refs.map(r=>r.id).sort()))fail('source_version_conflict');
     if(row.revision!==body.expected_revision)fail('revision_conflict');
     const id=randomUUID(),receipt={schema_version:'evaluator-rpc/1.0' as const,owner_scope:{user_id:actor.userId,workspace_id:null},status:'accepted' as const,
      observation_ref:row.id,revision:row.revision+1,idempotency_key:body.idempotency_key,input_sha256:body.input_sha256,result_sha256:body.result_sha256,evaluation_ref:id};
