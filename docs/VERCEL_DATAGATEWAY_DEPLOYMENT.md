@@ -94,6 +94,7 @@ lsof -nP -iTCP:8800 -iTCP:8766 -sTCP:LISTEN
 curl -sS "https://osbornalpha.com/api/quote/batch?tickers=600519.SH,AAPL&_=$(date +%s)" \
   | jq -e '
     .meta.failed == 0 and
+    .meta.stale == 0 and
     .meta.selected_sources["600519.SH"] == "datagateway-wind" and
     .meta.selected_sources["AAPL"] == "datagateway-wind"
   '
@@ -101,7 +102,7 @@ curl -sS "https://osbornalpha.com/api/quote/batch?tickers=600519.SH,AAPL&_=$(dat
 
 该检查失败时，即使接口返回了公开源回退数据，也视为“Vercel 未真正到达 Mac Studio DataGateway”。
 
-仓库中的 `.github/workflows/quote-service-alert.yml` 每 15 分钟执行同类探测，用于持续监控这一条链路。
+仓库中的 `.github/workflows/quote-service-alert.yml` 每 15 分钟执行同类探测，用于持续监控这一条链路。网关探测与原有 15 分钟行情窗口告警在独立 job 中运行，任一失败或超时都不会跳过另一项检查。
 
 ## 6. 常见故障定位
 

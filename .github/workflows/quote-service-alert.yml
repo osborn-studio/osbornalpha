@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  check:
+  gateway:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -24,6 +24,7 @@ jobs:
             "https://osbornalpha.com/api/quote/batch?tickers=600519.SH,AAPL&_=$(date +%s)")"
           if ! jq -e '
             .meta.failed == 0 and
+            .meta.stale == 0 and
             .meta.selected_sources["600519.SH"] == "datagateway-wind" and
             .meta.selected_sources["AAPL"] == "datagateway-wind"
           ' <<< "$payload" >/dev/null; then
@@ -32,6 +33,10 @@ jobs:
             exit 1
           fi
 
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
       - name: Evaluate the previous 15-minute quote window
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
