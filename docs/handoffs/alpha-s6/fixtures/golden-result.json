@@ -1,0 +1,97 @@
+{
+  "ok": true,
+  "result": {
+    "schema_version": "evaluator-input-output/1.0",
+    "engine_version": "osanalyst-engine/1.0.0",
+    "rule_version": "market-policy/1.0",
+    "observation_ref": "00000001-0000-4000-8000-000000000000",
+    "observation_sha256": "181c89f91991deb243c207cdd298c6f91d921e9903a68168661fb42c3478f915",
+    "input_sha256": "af6f5b71ac1b917b28631264bc0597dac69b308f1cb6d3672cd7db57ed270743",
+    "market_snapshot_refs": [
+      {
+        "id": "synthetic-market-0",
+        "sha256": "697251ad8866f45ce8077b6f3dae8226415fa4687041d6c3aacc69b8ec1bfd58",
+        "adapter_version": "s5-fixture/1.0"
+      },
+      {
+        "id": "synthetic-market-1",
+        "sha256": "c0f3a0b63650d546eb999ebbdc6fe67d2b1924cf46e2b3975460ed7acbe38665",
+        "adapter_version": "s5-fixture/1.0"
+      }
+    ],
+    "market_policy_hash": "9f31b8c1ad67aa62fa6b9743044763b530f1a69e6f5ebdb468e33597fddb5089",
+    "calendar_hash": "9c81226f191c390e69478a9651025254d789d671c72b9aef2b78bc941af302a4",
+    "computed_at": "2026-12-17T21:00:00.000Z",
+    "record_origin": "forward",
+    "research_stream": "descriptive",
+    "synthetic": true,
+    "contamination_reasons": [
+      "synthetic_agent_operated",
+      "upstream_exposure_history_unknown"
+    ],
+    "anchor_status": "anchor_pending",
+    "provenance_level": "local_receipt",
+    "security": {
+      "ticker": "S4SYNTH",
+      "exchange": "XNYS",
+      "currency": "USD",
+      "company_entity_id": null,
+      "synthetic": true
+    },
+    "input_snapshot_ref": "00000005-0000-4000-8000-000000000000",
+    "input_snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "return_method": "split_adjusted_price_return_excluding_cash_dividends",
+    "portfolio_return": null,
+    "status": "resolved",
+    "reason": null,
+    "actual_start_at": "2026-09-23T20:00:00.000Z",
+    "windows": [
+      {
+        "trading_sessions": 5,
+        "starts_at": "2026-09-23T20:00:00.000Z",
+        "ends_at": "2026-09-30T20:00:00.000Z",
+        "status": "resolved",
+        "reason": null,
+        "result": {
+          "price_return": 0.05,
+          "benchmark_price_return": 0.025,
+          "benchmark_difference": 0.025,
+          "max_drawdown": 0,
+          "benchmark": "SPY",
+          "currency": "USD"
+        }
+      },
+      {
+        "trading_sessions": 20,
+        "starts_at": "2026-09-23T20:00:00.000Z",
+        "ends_at": "2026-10-21T20:00:00.000Z",
+        "status": "resolved",
+        "reason": null,
+        "result": {
+          "price_return": 0.2,
+          "benchmark_price_return": 0.1,
+          "benchmark_difference": 0.1,
+          "max_drawdown": 0,
+          "benchmark": "SPY",
+          "currency": "USD"
+        }
+      },
+      {
+        "trading_sessions": 60,
+        "starts_at": "2026-09-23T20:00:00.000Z",
+        "ends_at": "2026-12-17T21:00:00.000Z",
+        "status": "resolved",
+        "reason": null,
+        "result": {
+          "price_return": 0.6,
+          "benchmark_price_return": 0.3,
+          "benchmark_difference": 0.3,
+          "max_drawdown": 0,
+          "benchmark": "SPY",
+          "currency": "USD"
+        }
+      }
+    ]
+  },
+  "result_sha256": "b733aa14ec4e0f190967419ee9b8f068211dbe7d3807becfcc738d8b480d8c9f"
+}

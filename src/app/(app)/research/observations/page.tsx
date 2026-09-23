@@ -2,6 +2,7 @@
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {ChangeCards,type CardView} from '@/components/research/s4/ChangeCards';
 import {DecisionForm,type OptionsView} from '@/components/research/s4/DecisionForm';
+import {EvaluationPanel} from '@/components/research/s4/EvaluationPanel';
 const base='/api/research/s4';
 const explanations:Record<string,string>={observation_scope_conflict:'所选证券、公司或研究观点与原观察不同。请追加新观察；延期须保留原范围。',anchor_integrity_failed:'回执链完整性检查失败，新增登记已暂停。请由操作员核查数据库与原始备份。',data_insufficient:'当前冻结日历不足以覆盖新观察窗口，请先发布新的规则版本。原记录不会改写。',input_limit:'输入超过当前容量限制，请减小文件。',future_input:'资料包含未来可用时间，不能进入当前输入。',source_version_conflict:'同一资料版本已登记不同内容或元数据。',hash_mismatch:'内容摘要不匹配，请核对原包。',internal_error:'服务暂时未能完成请求，请重试或查看本地服务日志。',not_authenticated:'请先登录获准的研究账号。',not_configured:'本地观察服务尚未启用。',scope_denied:'当前账号没有这份材料的权限，或授权已撤回。',policy_blocked:'材料授权已过期或变更，需重新确认授权。',revision_conflict:'已有新决定，请重新查看后提交。',idempotency_conflict:'该请求键已用于另一份决定。',security_unresolved:'请选择符合当前规则的证券；公司可保持未解决。',exposure_required:'请先保存已有判断并查看本周变化卡。',invalid_schema:'请检查必填字段及文件格式。',fixture_not_operational:'测试 golden 不能作为真实候选导入。'};
 async function request(path:string,body?:unknown,raw=false){
@@ -56,7 +57,8 @@ export default function ObservationsPage(){
     {selected&&<section className="space-y-3" aria-label="复核与观察历史"><div className="flex items-center justify-between"><h2 className="text-lg font-semibold">复核与观察历史</h2><button disabled={busy} onClick={()=>historyLoad().catch(report)} className="text-sm text-accent underline">查看 / 刷新历史</button></div>
       {history.filter(r=>['Decision','Observation'].includes(r.kind)).map(r=><article key={r.id} className="rounded-lg border border-border bg-bg-card p-4 text-sm">
         {r.kind==='Decision'?<><h3 className="font-semibold">决定 · {r.payload.action} · 版本 {r.payload.revision}</h3><p className="mt-2 whitespace-pre-wrap">{r.payload.reason}</p><p className="mt-2 text-xs text-text-dim">{r.payload.review_at?`下次复核：${new Date(r.payload.review_at).toLocaleString()}`:'尚未指定下次复核时间'}{r.payload.preserves_original_window?' · 保留原观察窗口':''}</p></>:
-        <><h3 className="font-semibold">冻结观察 · {r.status==='pending_start'?'等待起点':r.status}</h3><p className="mt-2">{r.anchor_status==='anchored'?'已取得本机持久化回执':r.anchor_status==='integrity_failed'?'回执完整性检查失败':'回执待持久化'} · 描述性记录</p><p className="mt-2 text-text-dim">{r.payload.securities.map((s:any)=>s.ticker).join('、')} · 窗口 {r.payload.windows.map((w:any)=>w.trading_sessions).join(' / ')} 个交易日 · 尚无收益结果</p><p className="mt-2 break-all text-xs text-text-dim">冻结时间 {r.payload.frozen_at} · 摘要 {r.payload_hash}</p></>}
+        <><h3 className="font-semibold">冻结观察 · {r.status==='pending_start'?'等待起点':r.status}</h3><p className="mt-2">{r.anchor_status==='anchored'?'已取得本机持久化回执':r.anchor_status==='integrity_failed'?'回执完整性检查失败':'回执待持久化'} · 描述性记录</p><p className="mt-2 text-text-dim">{r.payload.securities.map((s:any)=>s.ticker).join('、')} · 窗口 {r.payload.windows.map((w:any)=>w.trading_sessions).join(' / ')} 个交易日 · 评估结果见下方报告</p><p className="mt-2 break-all text-xs text-text-dim">冻结时间 {r.payload.frozen_at} · 摘要 {r.payload_hash}</p></>}
+        {r.kind==='Observation'&&<EvaluationPanel key={r.id} id={r.id}/>}
       </article>)}
     </section>}
   </div>;
