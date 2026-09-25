@@ -16,3 +16,7 @@
 ## 双包联调续做
 
 新增 `tests-pair.log`：154 文件 / 1,220 测试通过，使用新建的 30 迁移隔离数据库，集群结束后停止。`lint-pair.log`、`build-pair.log`、`typecheck-pair.log` 为最新检查，均退出 0；类型检查首次与 Next build 并行触碰 `.next/types` 出现临时 TS6053，构建结束后顺序重跑退出 0，保留最终成功日志。`market-pair-tests.log` 为定向用例；`handoff-pair.json` 记录 48 件固定文件、旧 golden/Replay 与双包合成样例通过。`market-pair.json` 是 XNYS 标的 + ARCX/SPY 基准样例输出，仍为 accepted_for_evaluation=false。`opus55-pair.*` 是本轮只读外审，复审结果及处置见 [双包审计处置](PAIR-AUDIT-DISPOSITION.md)。
+
+## 清单重新固定（2026-09-25）
+
+`codex/s5-s6-alpha-integration` 合并进 `main`（#43，#44 叠加）后，`main` 此前的 Next.js 安全补丁与 npm 10 锁文件对齐改变了 `package.json`（1820 → 1850 字节）与 `package-lock.json`（223997 → 222960 字节），`scripts/s7/verify-handoff.ts` 因此失败。本次只刷新这两条清单项的大小与 SHA-256；其余 46 项、S4 冻结哈希（`contract-hashes.json`）与固定 vendor tarball 均未变。`handoff-repin-20260925.json` 为重新固定后的校验回执：48 件通过，合成 golden/Replay 匹配。真实行情验收仍为 not_passed，Jev 与生产部署仍为 not_run；本次不改变任何业务代码、引擎或政策版本。
