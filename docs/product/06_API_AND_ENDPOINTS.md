@@ -13,17 +13,20 @@
 
 ## 1. Quote（行情）
 
+> 对外接入的完整说明、跨域/轮询建议和调用方检查清单见 [`docs/REALTIME_MARKET_DATA_API.md`](../REALTIME_MARKET_DATA_API.md)。
+
 ### `GET /api/quote/[ticker]`
 - 路径参数：`ticker`（URL 编码）。
 - 鉴权：无。
-- 数据源：东方财富 → 新浪 → 腾讯 级联兜底；A 股再用 Tushare `daily` / `daily_basic` / `fina_indicator` 补充基本面。
+- 数据源：配置 `DATAGATEWAY_BASE_URL` + `DATAGATEWAY_API_KEY` 时优先 DataGateway/Wind；之后按市场回退东方财富 → 新浪 → 腾讯（TW 为 TWSE，JP/KR 为已配置的 EODHD），A 股再用 Tushare `daily` / `daily_basic` / `fina_indicator` 补充基本面或作为最后兜底。
 - 响应：`{ source, ticker, name, market('A'|'HK'|'US'), currency, price, change, change_pct, open, high, low, prev_close, volume, amount, amplitude, pe_ttm, pb, turnover, dividend_yield, market_cap, roe, gross_margin, net_margin, supplemented[], updated_at, delayed }`。
 - 缓存：`revalidate=30`，`dynamic=force-dynamic`。
 
 ### `GET /api/quote/batch`
-- 查询参数：`tickers`（逗号分隔，上限 40）。
-- 鉴权：无。数据源：同单股级联（`Promise.allSettled` 并发）。
-- 响应：`{ quotes: Record<ticker, Quote|null> }`。缓存：`revalidate=30`，`force-dynamic`。
+- 查询参数：`tickers`（逗号分隔，服务端最多处理前 40 个）；`_=<任意值>` 可绕过 60 秒服务端缓存。
+- 鉴权：无。数据源：DataGateway/Wind 批量优先，未命中的标的再走市场级联。
+- 响应：`{ quotes: Record<ticker, Quote|null>, meta: { attempted, failed, stale, duration_ms, sources, failed_tickers, selected_sources } }`。部分标的失败时仍可能返回 HTTP 200。
+- 缓存：`revalidate=30`，`force-dynamic`；服务端行情快照缓存 60 秒，过期缓存最多保留 15 分钟。
 
 ---
 
@@ -198,8 +201,8 @@
 
 | 端点 | 方法 | 鉴权 | 主数据源 | 缓存 |
 |---|---|---|---|---|
-| `/api/quote/[ticker]` | GET | 无 | 东财→新浪→腾讯→Tushare | 30s |
-| `/api/quote/batch` | GET | 无 | 同上 | 30s |
+| `/api/quote/[ticker]` | GET | 无 | DataGateway/Wind→东财→新浪→腾讯→Tushare | 30s |
+| `/api/quote/batch` | GET | 无 | 同上，DataGateway 批量优先 | 30s + 内存 60s |
 | `/api/kline/[ticker]` | GET | 无 | 东财 | 300s |
 | `/api/financials/[ticker]` | GET | 无 | Tushare | 3600s |
 | `/api/holders/[ticker]` | GET | 无 | Tushare | 86400s |
