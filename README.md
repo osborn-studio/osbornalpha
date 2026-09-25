@@ -22,6 +22,29 @@
 
 ---
 
+## 📈 实时行情 API（对外接入）
+
+服务端已接入 **DataGateway/Wind**，并对外提供无需鉴权的 REST 行情快照接口：
+
+生产 Base URL：`https://osbornalpha.com`（Vercel 默认域名亦可）。
+
+```bash
+# 单标的
+curl -sS 'https://osbornalpha.com/api/quote/600519.SH'
+
+# 批量（逗号分隔，最多 40 个）
+curl -sS 'https://osbornalpha.com/api/quote/batch?tickers=600519.SH,0700.HK,AAPL'
+```
+
+- 数据链路：`osbornalpha /api/quote/* -> DataGateway/Wind -> Eastmoney/Sina/Tencent 等回退`
+- 响应模式：REST 快照 + 30～60 秒缓存，不是 WebSocket/SSE 推送
+- 调用方**不需要** DataGateway 地址或 API Key；这些凭证只保留在服务端
+- 外部服务可直接调用；浏览器跨域调用需服务端按 Origin 增加 CORS 白名单
+
+完整字段、示例、错误处理、轮询建议和对方接入清单见 **[实时行情 API 对接说明](docs/REALTIME_MARKET_DATA_API.md)**。
+
+---
+
 ## 🎯 产品定位（v1.1）
 
 > **桌面优先（IBKR 风格）+ 手机适配**。打开首页就是工作台，左栏 watchlist、中栏 K 线/详情、右栏新闻+AI 委员会——切换标的不重新加载页面，URL 用 `?s=TICKER` 同步。
@@ -104,10 +127,12 @@ John Cameron 已接入 [Hermes Agent](https://github.com/NousResearch/hermes-age
 
 ## 🚀 部署（已完成）
 
-- ✅ Vercel 自动从 main 分支部署
-- ✅ GitHub Actions 已移除（替换为 Vercel auto-deploy）
+- ✅ Vercel 从 `main` 分支自动部署；前提是 Vercel Project 的 Git Repository 指向 `osborn-studio/osbornalpha`
+- ✅ GitHub Actions 负责应用检查和行情连通性告警，Vercel 负责自动部署
 - ✅ 域名：`stock-monitor-nu.vercel.app`（Vercel 默认）
 - ⏳ EdgeOne Pages / Makers：见 [docs/EDGEONE_DEPLOY.md](docs/EDGEONE_DEPLOY.md)
+
+DataGateway 常驻、Vercel 环境变量和自动部署验收见 [Vercel + DataGateway 部署说明](docs/VERCEL_DATAGATEWAY_DEPLOYMENT.md)。
 
 快速导入 EdgeOne：
 

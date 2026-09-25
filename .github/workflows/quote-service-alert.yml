@@ -13,6 +13,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify Vercel reaches local DataGateway/Wind
+        run: |
+          set -euo pipefail
+          payload="$(curl --fail-with-body --retry 2 --retry-all-errors --max-time 30 \
+            "https://osbornalpha.com/api/quote/batch?tickers=600519.SH,AAPL&_=$(date +%s)")"
+          if ! jq -e '
+            .meta.failed == 0 and
+            .meta.stale == 0 and
+            .meta.selected_sources["600519.SH"] == "datagateway-wind" and
+            .meta.selected_sources["AAPL"] == "datagateway-wind"
+          ' <<< "$payload" >/dev/null; then
+            echo "DataGateway/Wind is not the selected quote source for all probe tickers."
+            echo "$payload"
+            exit 1
+          fi
+
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 5
