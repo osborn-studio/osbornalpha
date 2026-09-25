@@ -1,0 +1,46 @@
+/** Regenerate only before releasing this version; subsequent versions need new files. */
+import {writeFileSync,readFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {MARKET_POLICY,MARKET_POLICY_HASH,CALENDAR_HASH,planObservationSessions} from '../../src/lib/research/market-policy';
+import {digest,sha256} from '../../src/lib/research/ingest/pa-v1/json.js';
+const root='docs/handoffs/alpha-s4';
+const id=(n:number)=>`${String(n).padStart(8,'0')}-0000-4000-8000-000000000000`;
+const at='2026-09-22T15:00:00.000Z';
+const golden={schema_version:'alpha-observation-contract/1.0',id:id(1),owner_scope:{user_id:id(2),workspace_id:null},decision_or_candidate_ref:id(3),candidate_ref:id(4),thesis_revision_ref:null,input_snapshot_ref:id(5),input_snapshot_hash:'a'.repeat(64),record_origin:'forward',research_stream:'descriptive',contamination_reasons:['synthetic_agent_operated','upstream_exposure_history_unknown'],actor_kind:'agent',synthetic:true,observation_kind:'decision',securities:[{ticker:'S4SYNTH',exchange:'XNYS',currency:'USD',company_entity_id:null,synthetic:true}],frozen_at:at,recorded_at:at,eligibility_at:at,start_rule:MARKET_POLICY.start_rule,start_plan:planObservationSessions(at,at),actual_start_at:null,windows:MARKET_POLICY.windows_trading_sessions.map(n=>({trading_sessions:n,starts_at:null,ends_at:null,result:null})),benchmarks:[MARKET_POLICY.benchmark],currency_basis:MARKET_POLICY.currency,return_method:MARKET_POLICY.return_method,market_policy_version:MARKET_POLICY.schema_version,market_policy_hash:MARKET_POLICY_HASH,market_policy:MARKET_POLICY,calendar_version:MARKET_POLICY.calendar_version,calendar_hash:CALENDAR_HASH,status:'pending_start',predecessor_id:null,anchor_status:'anchor_pending',provenance_level:'local_receipt'};
+const uuid={type:'string',pattern:'^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'};
+function infer(v:any):any{if(v===null)return {type:'null'};if(Array.isArray(v))return {type:'array',items:v.length?infer(v[0]):{type:'string'}};if(typeof v==='object')return {type:'object',additionalProperties:false,required:Object.keys(v),properties:Object.fromEntries(Object.entries(v).map(([k,x])=>[k,infer(x)]))};return {type:typeof v==='number'?'number':typeof v};}
+const schema=infer(golden);schema.$schema='http://json-schema.org/draft-07/schema#';schema.$id='urn:osborn:alpha-observation-contract:1.0';
+for(const field of ['id','decision_or_candidate_ref','candidate_ref','input_snapshot_ref'])schema.properties[field]=uuid;
+for(const field of ['thesis_revision_ref','predecessor_id'])schema.properties[field]={anyOf:[uuid,{type:'null'}]};
+schema.properties.owner_scope.properties.user_id=uuid;
+schema.properties.securities.minItems=1;schema.properties.securities.maxItems=1;
+schema.properties.securities.items.properties.company_entity_id={anyOf:[uuid,{type:'null'}]};
+schema.properties.securities.items.properties.ticker={type:'string',minLength:1,maxLength:40};
+for(const field of ['schema_version','record_origin','research_stream','start_rule','currency_basis','return_method','market_policy_version','market_policy_hash','market_policy','calendar_version','calendar_hash','status','anchor_status','provenance_level','benchmarks'])schema.properties[field]={const:(golden as any)[field]};
+schema.properties.actor_kind={enum:['human','agent']};schema.properties.observation_kind={enum:['decision','shadow']};
+schema.properties.input_snapshot_hash={type:'string',pattern:'^[0-9a-f]{64}$'};
+schema.properties.windows={const:golden.windows};
+for(const field of ['frozen_at','recorded_at','eligibility_at'])schema.properties[field]={type:'string',pattern:'^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$'};
+const files:Record<string,unknown>={'alpha-observation-contract.schema.json':schema,'alpha-observation-golden.json':golden};
+// DTO mirrors src/lib/chart/kline.ts and the route, not an evaluator contract.
+const bar={time:1786325400,open:10,high:12,low:9,close:11,volume:100,previousClose:9,change:2,changePct:22.22222222222222};
+const meta={market:'A',range:'1m',interval:'day',granularity:'1d',source:'eastmoney',adjustment:'qfq',coverageStart:'2026-08-10',coverageEnd:'2026-08-10',asOf:'2026-08-10',timezone:'Asia/Shanghai',fetchedAt:'2026-08-12T00:00:00.000Z',delayed:false,currency:'¥',currencyCode:'CNY',pricePrecision:2,minMove:0.01,volumeUnit:'shares',rangeBasis:'calendar-window',requestedBars:32,returnedBars:1,availableBars:1,missingBars:31,cacheTtlSeconds:300,freshness:'fresh',fallbackUsed:false,cacheStatus:'shared-swr',completeness:'partial',partial:false,warnings:['partial_coverage']};
+const dto={source:'eastmoney',ticker:'000001',bars:[bar],meta};const dtoSchema=infer(dto);dtoSchema.$schema=schema.$schema;dtoSchema.$id='urn:osborn:alpha-kline-dto:1.0';
+const enumS=(values:string[])=>({enum:values});
+const sources=['datagateway','eastmoney','sina','tencent','twse','tpex'];dtoSchema.properties.source=enumS(sources);
+const mp=dtoSchema.properties.meta.properties;
+Object.assign(mp,{market:enumS(['A','HK','US','JP','KR','TW']),range:enumS(['1d','5d','1m','6m','ytd','1y','5y','all']),interval:enumS(['minute','day','week','month']),granularity:enumS(['1m','5m','1d','1w','1mo']),source:enumS(sources),adjustment:enumS(['qfq','hfq','none','intraday']),freshness:enumS(['fresh','stale']),cacheStatus:enumS(['none','shared-swr','memory-lkg']),completeness:enumS(['complete','partial']),warnings:{type:'array',items:enumS(['fallback_used','stale_cache','partial_coverage','partial_bar'])},maWarmupCloses:{type:'array',items:{type:'number'}},cacheAgeSeconds:{type:'number',minimum:0},staleAgeSeconds:{type:'number',minimum:0}});
+mp.rangeBasis=enumS(['trading-sessions','calendar-window']);mp.volumeUnit={const:'shares'};
+for(const key of ['previousClose','change','changePct'])dtoSchema.properties.bars.items.properties[key]={type:['number','null']};
+dtoSchema.properties.bars.items.properties.amount={type:['number','null']};
+const errorSchema={type:'object',additionalProperties:false,required:['error'],properties:{error:{type:'string'},message:{type:'string'},ticker:{type:'string'},range:{type:'string'},bars:{type:'array',maxItems:0}}};
+const dtoId=dtoSchema.$id;delete dtoSchema.$id;delete dtoSchema.$schema;
+files['kline-dto.schema.json']={$schema:schema.$schema,$id:dtoId,oneOf:[dtoSchema,errorSchema]};
+for(const adjustment of ['qfq','hfq','none'])files[`kline-${adjustment}.synthetic.json`]={...dto,meta:{...meta,adjustment,...(adjustment==='hfq'?{fallbackUsed:true,warnings:['fallback_used','partial_coverage']}:{})}};
+files['kline-missing.synthetic.json']={error:'provider_unavailable',ticker:'S4SYNTH',range:'1m',bars:[]};
+files['kline-empty.synthetic.json']={...dto,bars:[],meta:{...meta,returnedBars:0,availableBars:10,missingBars:22}};
+files['evaluator-auth-fake.json']={schema_version:'evaluator-auth/1.0',synthetic:true,token:'FAKE-NOT-A-CREDENTIAL',server_session:{subject:'fake-evaluator',owner_scope:{user_id:id(2),workspace_id:null},audience:'alpha-evaluator',scopes:['observation:read','evaluation:append'],expires_at:'2026-09-23T00:00:00.000Z',revoked:false},negative_cases:['expired:401','revoked:401','wrong_audience:401','scope_missing:403','cross_owner:404','body_scope_override:403']};
+for(const [name,value]of Object.entries(files))writeFileSync(join(root,name),JSON.stringify(value,null,2)+'\n');
+const hashes=Object.fromEntries([...Object.keys(files),'market-policy.json','calendar.json'].map(name=>[name,{jcs_sha256:digest(JSON.parse(readFileSync(join(root,name),'utf8'))),file_sha256:sha256(readFileSync(join(root,name)))}]));
+writeFileSync(join(root,'contract-hashes.json'),JSON.stringify({algorithm:'SHA-256; JCS via frozen PA canonicalizer',synthetic_fixtures:true,files:hashes},null,2)+'\n');
+console.log('Frozen synthetic S5 handoff contracts and hashes.');

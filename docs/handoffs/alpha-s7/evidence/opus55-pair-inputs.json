@@ -1,0 +1,42 @@
+[
+  {
+    "path": "src/lib/research/s6/market-pair.ts",
+    "sha256": "4657c8d47b170b42299a15cc8811ecee306fcc2b78c68ee6dde188d6c031d1d3"
+  },
+  {
+    "path": "src/lib/research/s6/market-pair.test.ts",
+    "sha256": "a2b7ab978f36274fc197bc67e3d64d6dc874a2d7869b0ec7786db1915e49cf59"
+  },
+  {
+    "path": "src/lib/research/s6/market-handoff.ts",
+    "sha256": "3a790082f32fb8880eda48d2b487404201002f86030f7f510774f8c453a60466"
+  },
+  {
+    "path": "scripts/s6/check-market-pair.ts",
+    "sha256": "26375ec97ad1eae130d62c1f4af2bd490d9abf8f1e8fa5f0a522c20b1d81a35c"
+  },
+  {
+    "path": "scripts/s6/check-market-handoff.ts",
+    "sha256": "413a0cc576e09b0df73e25a078971fbeb6340550177abb8ec089e67a98ecd2fd"
+  },
+  {
+    "path": "scripts/s6/market-file.ts",
+    "sha256": "9630fc06fac2c5674307489e6bf3ad64956a320ee255626ceda6f64f9409b3ff"
+  },
+  {
+    "path": "scripts/s7/verify-handoff.ts",
+    "sha256": "2b8377661be23f2bac28037a1d2ce93f56a28c020cabc070494a19478a64ff87"
+  },
+  {
+    "path": "docs/handoffs/alpha-s6/market-interface/policy-v2.proposal.json",
+    "sha256": "ccb63a3b7e66048f93d7fe548451299342340c8c15b265e558661a9ed8da2837"
+  },
+  {
+    "path": "docs/handoffs/alpha-s6/market-interface/README.md",
+    "sha256": "b855003bf5334b890fa201c986fd115e3709d41e7d8f9407de8f3785e0c1c643"
+  },
+  {
+    "path": "docs/handoffs/alpha-s7/manifest.json",
+    "sha256": "4af1afa27a042c3546cbbc71d7503f96ece8d549d03cb7fb15ed375c2160796e"
+  }
+]

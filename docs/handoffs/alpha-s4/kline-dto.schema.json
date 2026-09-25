@@ -1,0 +1,316 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:osborn:alpha-kline-dto:1.0",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "ticker",
+        "bars",
+        "meta"
+      ],
+      "properties": {
+        "source": {
+          "enum": [
+            "datagateway",
+            "eastmoney",
+            "sina",
+            "tencent",
+            "twse",
+            "tpex"
+          ]
+        },
+        "ticker": {
+          "type": "string"
+        },
+        "bars": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "time",
+              "open",
+              "high",
+              "low",
+              "close",
+              "volume",
+              "previousClose",
+              "change",
+              "changePct"
+            ],
+            "properties": {
+              "time": {
+                "type": "number"
+              },
+              "open": {
+                "type": "number"
+              },
+              "high": {
+                "type": "number"
+              },
+              "low": {
+                "type": "number"
+              },
+              "close": {
+                "type": "number"
+              },
+              "volume": {
+                "type": "number"
+              },
+              "previousClose": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "change": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "changePct": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "amount": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        "meta": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "market",
+            "range",
+            "interval",
+            "granularity",
+            "source",
+            "adjustment",
+            "coverageStart",
+            "coverageEnd",
+            "asOf",
+            "timezone",
+            "fetchedAt",
+            "delayed",
+            "currency",
+            "currencyCode",
+            "pricePrecision",
+            "minMove",
+            "volumeUnit",
+            "rangeBasis",
+            "requestedBars",
+            "returnedBars",
+            "availableBars",
+            "missingBars",
+            "cacheTtlSeconds",
+            "freshness",
+            "fallbackUsed",
+            "cacheStatus",
+            "completeness",
+            "partial",
+            "warnings"
+          ],
+          "properties": {
+            "market": {
+              "enum": [
+                "A",
+                "HK",
+                "US",
+                "JP",
+                "KR",
+                "TW"
+              ]
+            },
+            "range": {
+              "enum": [
+                "1d",
+                "5d",
+                "1m",
+                "6m",
+                "ytd",
+                "1y",
+                "5y",
+                "all"
+              ]
+            },
+            "interval": {
+              "enum": [
+                "minute",
+                "day",
+                "week",
+                "month"
+              ]
+            },
+            "granularity": {
+              "enum": [
+                "1m",
+                "5m",
+                "1d",
+                "1w",
+                "1mo"
+              ]
+            },
+            "source": {
+              "enum": [
+                "datagateway",
+                "eastmoney",
+                "sina",
+                "tencent",
+                "twse",
+                "tpex"
+              ]
+            },
+            "adjustment": {
+              "enum": [
+                "qfq",
+                "hfq",
+                "none",
+                "intraday"
+              ]
+            },
+            "coverageStart": {
+              "type": "string"
+            },
+            "coverageEnd": {
+              "type": "string"
+            },
+            "asOf": {
+              "type": "string"
+            },
+            "timezone": {
+              "type": "string"
+            },
+            "fetchedAt": {
+              "type": "string"
+            },
+            "delayed": {
+              "type": "boolean"
+            },
+            "currency": {
+              "type": "string"
+            },
+            "currencyCode": {
+              "type": "string"
+            },
+            "pricePrecision": {
+              "type": "number"
+            },
+            "minMove": {
+              "type": "number"
+            },
+            "volumeUnit": {
+              "const": "shares"
+            },
+            "rangeBasis": {
+              "enum": [
+                "trading-sessions",
+                "calendar-window"
+              ]
+            },
+            "requestedBars": {
+              "type": "number"
+            },
+            "returnedBars": {
+              "type": "number"
+            },
+            "availableBars": {
+              "type": "number"
+            },
+            "missingBars": {
+              "type": "number"
+            },
+            "cacheTtlSeconds": {
+              "type": "number"
+            },
+            "freshness": {
+              "enum": [
+                "fresh",
+                "stale"
+              ]
+            },
+            "fallbackUsed": {
+              "type": "boolean"
+            },
+            "cacheStatus": {
+              "enum": [
+                "none",
+                "shared-swr",
+                "memory-lkg"
+              ]
+            },
+            "completeness": {
+              "enum": [
+                "complete",
+                "partial"
+              ]
+            },
+            "partial": {
+              "type": "boolean"
+            },
+            "warnings": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "fallback_used",
+                  "stale_cache",
+                  "partial_coverage",
+                  "partial_bar"
+                ]
+              }
+            },
+            "maWarmupCloses": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            },
+            "cacheAgeSeconds": {
+              "type": "number",
+              "minimum": 0
+            },
+            "staleAgeSeconds": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "error"
+      ],
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "ticker": {
+          "type": "string"
+        },
+        "range": {
+          "type": "string"
+        },
+        "bars": {
+          "type": "array",
+          "maxItems": 0
+        }
+      }
+    }
+  ]
+}

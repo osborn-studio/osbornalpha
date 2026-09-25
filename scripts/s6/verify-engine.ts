@@ -1,0 +1,17 @@
+import {readFileSync,writeFileSync,mkdtempSync,copyFileSync} from 'node:fs';
+import {join,resolve} from 'node:path';
+import {tmpdir} from 'node:os';
+import {createHash} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
+import assert from 'node:assert/strict';
+const expected='a071a1fcfc2499a54af5a7ced2f18d57ff7cd61d8aa17f8af3def13777fc5869';
+const tar=readFileSync('vendor/dsh-trade-strategy-evaluator-0.2.0.tgz');
+assert.equal(createHash('sha256').update(tar).digest('hex'),expected);
+const dir=mkdtempSync(join(tmpdir(),'alpha-s6-consumer-'));
+writeFileSync(join(dir,'package.json'),JSON.stringify({private:true,type:'module',dependencies:{'dsh-trade-strategy-evaluator':'file:./engine.tgz'}}));
+writeFileSync(join(dir,'engine.tgz'),tar);
+for(const n of ['golden-input.json','golden-result.json'])copyFileSync(resolve('docs/handoffs/alpha-s6/fixtures',n),join(dir,n));
+execFileSync('npm',['install','--offline','--ignore-scripts','--no-audit','--no-fund'],{cwd:dir,stdio:'pipe'});
+writeFileSync(join(dir,'verify.mjs'),`import {readFileSync} from 'node:fs';import assert from 'node:assert/strict';import {evaluateObservation,replayObservation} from 'dsh-trade-strategy-evaluator/engine';const input=JSON.parse(readFileSync('golden-input.json')),expected=JSON.parse(readFileSync('golden-result.json'));assert.deepEqual(evaluateObservation(input),expected);assert.equal(replayObservation(input,expected).matches,true);console.log('clean offline consumer: golden and Replay matched');`);
+const result=execFileSync(process.execPath,['verify.mjs'],{cwd:dir,encoding:'utf8'}).trim();
+console.log(JSON.stringify({passed:true,node:process.version,tarball_sha256:expected,result}));

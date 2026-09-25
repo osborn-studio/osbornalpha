@@ -1,0 +1,35 @@
+{
+  "modelUsage": {
+    "claude-haiku-4-5-20251001": {
+      "inputTokens": 13492,
+      "outputTokens": 15,
+      "cacheReadInputTokens": 0,
+      "cacheCreationInputTokens": 0,
+      "webSearchRequests": 0,
+      "costUSD": 0.013567000000000001,
+      "contextWindow": 200000,
+      "maxOutputTokens": 32000,
+      "thinkingTokens": 0,
+      "canonicalModel": "claude-haiku-4-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    },
+    "claude-opus-5": {
+      "inputTokens": 2,
+      "outputTokens": 1964,
+      "cacheReadInputTokens": 0,
+      "cacheCreationInputTokens": 20334,
+      "webSearchRequests": 0,
+      "costUSD": 0.25245,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "thinkingTokens": 814,
+      "canonicalModel": "claude-opus-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "is_error": false,
+  "prompt_sha256": "3e05431f66587984776efccc184b3b1772e8700f1b35bdfa02d3e56d06efaa31",
+  "mode": "tool-less code-only delta audit after round3"
+}

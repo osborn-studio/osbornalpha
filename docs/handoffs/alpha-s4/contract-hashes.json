@@ -1,0 +1,50 @@
+{
+  "algorithm": "SHA-256; JCS via frozen PA canonicalizer",
+  "synthetic_fixtures": true,
+  "files": {
+    "alpha-observation-contract.schema.json": {
+      "jcs_sha256": "d1459204b183e958b2a0fd74f0ba0ed6623d816241887b761c9c661cc1602d1d",
+      "file_sha256": "ee9fb5bbe5d6cef9794cb715bbcd4f62a9601d6363f14d11ea6beb0b353c3647"
+    },
+    "alpha-observation-golden.json": {
+      "jcs_sha256": "181c89f91991deb243c207cdd298c6f91d921e9903a68168661fb42c3478f915",
+      "file_sha256": "a7d85d18ee629b64407b1613d53846e82058f21538ef1d34f84ad4ea36d654d7"
+    },
+    "kline-dto.schema.json": {
+      "jcs_sha256": "ef134449f29b26c67db1d23231b7311629b113305cbaee7673ca8c52b4a95f83",
+      "file_sha256": "8dd2e6f526e30fa29010fa2f2a461505426fa161250d9441e91c6396fbc52f64"
+    },
+    "kline-qfq.synthetic.json": {
+      "jcs_sha256": "08cca1f36694549817ead821b8a8d52338d90722d5bea3323978b8970480e66d",
+      "file_sha256": "b77245ceea44162c3f392cbccf49ebf6c7c8467661d7f270bb8a31359244a592"
+    },
+    "kline-hfq.synthetic.json": {
+      "jcs_sha256": "2a404dc4dac751ea7c4d9297765a6cf602180c80b278d497a2d86281e340642b",
+      "file_sha256": "5aa5f4c6c47fe68be9be5956978afbb11c15db163dc928148b25e79fb08dbfb7"
+    },
+    "kline-none.synthetic.json": {
+      "jcs_sha256": "9c893801ab925952447e9c96adae00602c26ec55b81c75b7ef48c5085c3423c7",
+      "file_sha256": "35d45d827c47f880e9bf6d5d1128af8eb2e9dc930ee0606b52d4043b1831c4df"
+    },
+    "kline-missing.synthetic.json": {
+      "jcs_sha256": "33f6db66101a8f400e5abf86f6db738934824163c0975942c245c533614a19a5",
+      "file_sha256": "a20c6a120f0d68377420cb1c119919a84f8a33ca8e83b8e0122eb44f13775514"
+    },
+    "kline-empty.synthetic.json": {
+      "jcs_sha256": "72dcde2734879e5127b5e5ff486d576fe13e2e4f35c099a92b0038a29b64218a",
+      "file_sha256": "d8db5842cea0c8e1a0571ff1c34205087a37fce58a5c974629373b554e072678"
+    },
+    "evaluator-auth-fake.json": {
+      "jcs_sha256": "d2d28d5345039ff19649b3cca9645722ba44a19bf6fe5efb4ef806477123400c",
+      "file_sha256": "59e0c10e0303ddf54ba538a258a30d06e359ebb166f3785e77f73b2ccc6b01cf"
+    },
+    "market-policy.json": {
+      "jcs_sha256": "9f31b8c1ad67aa62fa6b9743044763b530f1a69e6f5ebdb468e33597fddb5089",
+      "file_sha256": "904f438716b9650b1bb73524121d70b6e32d5c9d2e8fe44dd483f4915ac69f88"
+    },
+    "calendar.json": {
+      "jcs_sha256": "9c81226f191c390e69478a9651025254d789d671c72b9aef2b78bc941af302a4",
+      "file_sha256": "cda6d033e9b1a7837e5d515c6432ea6bb8db8de95846b472a155022175c7ae29"
+    }
+  }
+}

@@ -10,7 +10,7 @@
 import { audit, isUuid, type ResearchCtx } from './store';
 import { defaultLlm, type LlmFn } from './memos';
 import { listSignalsSince } from './signals';
-import { rowToSource } from './sources';
+import { rowToSource, legacySourceVisible } from './sources';
 import {
   ThesisError,
   eventDetail,
@@ -48,7 +48,7 @@ async function listSourcesSince(ctx: ResearchCtx, sinceIso: string): Promise<Sou
     .gte('ingested_at', sinceIso)
     .order('ingested_at', { ascending: false });
   if (error) throw new Error(error.message);
-  return ((data ?? []) as any[]).map(rowToSource);
+  return ((data ?? []) as any[]).filter(legacySourceVisible).map(rowToSource);
 }
 
 async function getThesisEvent(

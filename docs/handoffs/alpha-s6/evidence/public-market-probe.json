@@ -1,0 +1,102 @@
+{
+  "schema_version": "alpha-public-market-probe/1.0",
+  "captured_at": "2026-09-23T01:06:54.692Z",
+  "purpose": "capability_only",
+  "real_market_acceptance": "not_passed",
+  "limitations": [
+    "adapter_adjustment is an adapter declaration, not upstream certification of unadjusted prices.",
+    "No verified split-factor or complete corporate-action history is returned by these adapters.",
+    "received_at proves this retrieval only, not historical publication availability.",
+    "Existing adapters classify US market without preserving a verified XNYS listing identity."
+  ],
+  "datagateway_configured": false,
+  "datagateway_called": false,
+  "results": [
+    {
+      "ticker": "IBM",
+      "provider": "eastmoney",
+      "status": "failed",
+      "error": "fetch failed"
+    },
+    {
+      "ticker": "IBM",
+      "provider": "sina",
+      "status": "received",
+      "bar_count": 5,
+      "first_date": "2026-09-16",
+      "last_date": "2026-09-22",
+      "adapter_adjustment": "none"
+    },
+    {
+      "ticker": "SPY",
+      "provider": "eastmoney",
+      "status": "failed",
+      "error": "fetch failed"
+    },
+    {
+      "ticker": "SPY",
+      "provider": "sina",
+      "status": "received",
+      "bar_count": 5,
+      "first_date": "2026-09-16",
+      "last_date": "2026-09-22",
+      "adapter_adjustment": "none"
+    }
+  ],
+  "captures": [
+    {
+      "url": "https://push2his.eastmoney.com/api/qt/stock/kline/get?cb=cb&secid=105.IBM&klt=101&fqt=0&lmt=5&end=20500101&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57",
+      "started_at": "2026-09-23T01:06:49.014Z",
+      "failed_at": "2026-09-23T01:06:49.601Z",
+      "error": "fetch failed"
+    },
+    {
+      "url": "https://push2his.eastmoney.com/api/qt/stock/kline/get?cb=cb&secid=106.IBM&klt=101&fqt=0&lmt=5&end=20500101&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57",
+      "started_at": "2026-09-23T01:06:49.601Z",
+      "failed_at": "2026-09-23T01:06:49.856Z",
+      "error": "fetch failed"
+    },
+    {
+      "url": "https://push2his.eastmoney.com/api/qt/stock/kline/get?cb=cb&secid=107.IBM&klt=101&fqt=0&lmt=5&end=20500101&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57",
+      "started_at": "2026-09-23T01:06:49.857Z",
+      "failed_at": "2026-09-23T01:06:50.115Z",
+      "error": "fetch failed"
+    },
+    {
+      "url": "https://stock.finance.sina.com.cn/usstock/api/jsonp.php/var%20_data=/US_MinKService.getDailyK?symbol=IBM",
+      "started_at": "2026-09-23T01:06:50.116Z",
+      "http_status": 200,
+      "received_at": "2026-09-23T01:06:53.313Z",
+      "bytes": 1168814,
+      "sha256": "6db9c89a6e28c70bbd95593a85e392eaf11350ceb8d6cda8e47b66d0630cf808",
+      "raw_file": "6db9c89a6e28c70bbd95593a85e392eaf11350ceb8d6cda8e47b66d0630cf808.raw"
+    },
+    {
+      "url": "https://push2his.eastmoney.com/api/qt/stock/kline/get?cb=cb&secid=105.SPY&klt=101&fqt=0&lmt=5&end=20500101&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57",
+      "started_at": "2026-09-23T01:06:53.335Z",
+      "failed_at": "2026-09-23T01:06:53.593Z",
+      "error": "fetch failed"
+    },
+    {
+      "url": "https://push2his.eastmoney.com/api/qt/stock/kline/get?cb=cb&secid=106.SPY&klt=101&fqt=0&lmt=5&end=20500101&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57",
+      "started_at": "2026-09-23T01:06:53.593Z",
+      "failed_at": "2026-09-23T01:06:53.851Z",
+      "error": "fetch failed"
+    },
+    {
+      "url": "https://push2his.eastmoney.com/api/qt/stock/kline/get?cb=cb&secid=107.SPY&klt=101&fqt=0&lmt=5&end=20500101&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57",
+      "started_at": "2026-09-23T01:06:53.851Z",
+      "failed_at": "2026-09-23T01:06:54.107Z",
+      "error": "fetch failed"
+    },
+    {
+      "url": "https://stock.finance.sina.com.cn/usstock/api/jsonp.php/var%20_data=/US_MinKService.getDailyK?symbol=SPY",
+      "started_at": "2026-09-23T01:06:54.108Z",
+      "http_status": 200,
+      "received_at": "2026-09-23T01:06:54.680Z",
+      "bytes": 631385,
+      "sha256": "c3cc819f59bfdd4e7387e1b947984ea7d6ca92d6841eecc7e26ac00390b25711",
+      "raw_file": "c3cc819f59bfdd4e7387e1b947984ea7d6ca92d6841eecc7e26ac00390b25711.raw"
+    }
+  ]
+}

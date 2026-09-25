@@ -1,0 +1,29 @@
+{
+  "schema_version": "alpha-market-handoff-check/1.0",
+  "status": "contract_valid",
+  "bundle_sha256": "e52694aac942092d315175c0e33f1774728cb0a79f5ac8b0612e1c30e66ed6bf",
+  "raw_sha256": "fd4b89d6a63ca35bb19b850281133dc25d2026c4a26b8bf62e897d9ae2ab8e15",
+  "synthetic": true,
+  "security": {
+    "ticker": "S6SYNTH",
+    "listing_mic": "XNYS",
+    "currency": "USD",
+    "identity_ref": "identity"
+  },
+  "bar_count": 2,
+  "missing_sessions": [],
+  "readiness": "provider_claims_unverified",
+  "engine_compatible": false,
+  "accepted_for_evaluation": false,
+  "blockers": [
+    "availability_timestamps_unverified",
+    "synthetic_flag_unverified",
+    "source_rights_unverified",
+    "issuer_identity_unverified",
+    "price_adjustment_unverified",
+    "split_evidence_unverified",
+    "engine_policy_upgrade_required"
+  ],
+  "availability_basis": "local_retrieval_only",
+  "observed_at": "2026-01-06T22:00:00.000Z"
+}

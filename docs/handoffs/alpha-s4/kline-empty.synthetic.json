@@ -1,0 +1,38 @@
+{
+  "source": "eastmoney",
+  "ticker": "000001",
+  "bars": [],
+  "meta": {
+    "market": "A",
+    "range": "1m",
+    "interval": "day",
+    "granularity": "1d",
+    "source": "eastmoney",
+    "adjustment": "qfq",
+    "coverageStart": "2026-08-10",
+    "coverageEnd": "2026-08-10",
+    "asOf": "2026-08-10",
+    "timezone": "Asia/Shanghai",
+    "fetchedAt": "2026-08-12T00:00:00.000Z",
+    "delayed": false,
+    "currency": "¥",
+    "currencyCode": "CNY",
+    "pricePrecision": 2,
+    "minMove": 0.01,
+    "volumeUnit": "shares",
+    "rangeBasis": "calendar-window",
+    "requestedBars": 32,
+    "returnedBars": 0,
+    "availableBars": 10,
+    "missingBars": 22,
+    "cacheTtlSeconds": 300,
+    "freshness": "fresh",
+    "fallbackUsed": false,
+    "cacheStatus": "shared-swr",
+    "completeness": "partial",
+    "partial": false,
+    "warnings": [
+      "partial_coverage"
+    ]
+  }
+}

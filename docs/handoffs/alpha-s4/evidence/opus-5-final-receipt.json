@@ -1,0 +1,43 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "duration_ms": 122196,
+  "num_turns": 1,
+  "modelUsage": {
+    "claude-haiku-4-5-20251001": {
+      "inputTokens": 38531,
+      "outputTokens": 15,
+      "cacheReadInputTokens": 0,
+      "cacheCreationInputTokens": 0,
+      "webSearchRequests": 0,
+      "costUSD": 0.038606,
+      "contextWindow": 200000,
+      "maxOutputTokens": 32000,
+      "thinkingTokens": 0,
+      "canonicalModel": "claude-haiku-4-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    },
+    "claude-opus-5": {
+      "inputTokens": 2,
+      "outputTokens": 9877,
+      "cacheReadInputTokens": 3053,
+      "cacheCreationInputTokens": 48074,
+      "webSearchRequests": 0,
+      "costUSD": 0.7292015000000001,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "thinkingTokens": 8447,
+      "canonicalModel": "claude-opus-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "prompt_sha256": "77fe76332bd58e684bbefcb53538b8413e950616ea8224f99815c8cfd5e3b0f6",
+  "production_files": {
+    "src/lib/research/ingest/candidate.ts": "992a575d50e37a559487857cb1f6401a10a27417c2eb761c4ac0e64b78bfc86f",
+    "src/lib/research/market-policy.ts": "731ac48951e56f1e08628e3ba329ce0678291e97259a47b3783c8436c9b9b0d7",
+    "scripts/s4-verify-candidate.ts": "91ef663787db70029c9c634f2d920932111bc4d1c836ce75ce8665b47679a6e3"
+  }
+}

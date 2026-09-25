@@ -1,0 +1,2 @@
+An immutable snapshot preserves captured text.
+A retry reuses the action UUID.

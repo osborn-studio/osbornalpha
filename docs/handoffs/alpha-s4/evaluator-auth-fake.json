@@ -1,0 +1,27 @@
+{
+  "schema_version": "evaluator-auth/1.0",
+  "synthetic": true,
+  "token": "FAKE-NOT-A-CREDENTIAL",
+  "server_session": {
+    "subject": "fake-evaluator",
+    "owner_scope": {
+      "user_id": "00000002-0000-4000-8000-000000000000",
+      "workspace_id": null
+    },
+    "audience": "alpha-evaluator",
+    "scopes": [
+      "observation:read",
+      "evaluation:append"
+    ],
+    "expires_at": "2026-09-23T00:00:00.000Z",
+    "revoked": false
+  },
+  "negative_cases": [
+    "expired:401",
+    "revoked:401",
+    "wrong_audience:401",
+    "scope_missing:403",
+    "cross_owner:404",
+    "body_scope_override:403"
+  ]
+}

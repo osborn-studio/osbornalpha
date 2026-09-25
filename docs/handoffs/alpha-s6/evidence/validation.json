@@ -1,0 +1,124 @@
+{
+  "schema_version": "alpha-s6-validation/1.0",
+  "scope": "local synthetic integration; real provider capability probe only",
+  "alpha_implementation_commits": [
+    "f60e5da",
+    "898e384",
+    "988cd77"
+  ],
+  "node": "22.22.1",
+  "database_migrations": 29,
+  "tests": {
+    "files": 151,
+    "passed": 1173,
+    "failed": 0
+  },
+  "typecheck": "passed",
+  "lint": "passed",
+  "build": "passed",
+  "real_market_acceptance": "not_passed",
+  "live_rel": "not_run",
+  "production_deployment": "not_run",
+  "files": [
+    {
+      "path": "scripts/s6/backup-replay.ts",
+      "sha256": "18459c26c99537df675b474218a4f9139df62469317a205fbd6c902a2bddc0ec"
+    },
+    {
+      "path": "scripts/s6/browser-smoke.ts",
+      "sha256": "1457fa2db12eaba03ad1d7e5a3d576f00906cb6b83fb28a3060f468384078ce3"
+    },
+    {
+      "path": "scripts/s6/fixtures.ts",
+      "sha256": "01bb54e6a01142a0770c4815831fd073c9be7e5f0ffc4cff02901224ab798f0c"
+    },
+    {
+      "path": "scripts/s6/issue-session.ts",
+      "sha256": "294ed905e31cec76e08b61aa3d2ca414c65ac1977319ade30741356030166081"
+    },
+    {
+      "path": "scripts/s6/local-web.ts",
+      "sha256": "5db5ecd1bc1ba3c5946c6a0a4778c4abf2d4bfef0e018ac0089cfaac0b4bcdb6"
+    },
+    {
+      "path": "scripts/s6/probe-public-market.ts",
+      "sha256": "2ea865ca5bff892468918c5b6794d256f5952f49a0afe179aa39b0e989954727"
+    },
+    {
+      "path": "scripts/s6/seed-acceptance.ts",
+      "sha256": "c630d4d3031e5e3cc81e9a9aa87a3406960508879b5382a5e9044a0bd00c12fe"
+    },
+    {
+      "path": "scripts/s6/verify-engine.ts",
+      "sha256": "0164171156cda71e6e6f36fe0e3753075747c62a753176032919ab52ad37348f"
+    },
+    {
+      "path": "src/app/api/evaluator/v1/evaluation-results/route.ts",
+      "sha256": "4b3f9e555ca9c1c9ed1058e5c031cb8738e1beca442a00cd127bb6578fbd4d51"
+    },
+    {
+      "path": "src/app/api/evaluator/v1/market-snapshots/[id]/route.ts",
+      "sha256": "06c0e3095e94c832d6dc11605eb3042a5f20bdb7b3947054998dea856fc76756"
+    },
+    {
+      "path": "src/app/api/evaluator/v1/observations/[id]/route.ts",
+      "sha256": "151c597fb98497e4c23aac60517e8586accc16be6bcd423189ed469450e5d607"
+    },
+    {
+      "path": "src/app/api/research/s6/observations/[id]/route.ts",
+      "sha256": "89b0b48d8389af368d76284d874ea2eacce90874497a38ed295122d2c017df88"
+    },
+    {
+      "path": "src/lib/research/s6/http.ts",
+      "sha256": "fbdb4dcbb75370c6580083d13eeeb67f266b277e38126006f1ab19769c9cee9f"
+    },
+    {
+      "path": "src/lib/research/s6/market.test.ts",
+      "sha256": "f83d80632a1034027bac8ae3d171fd5246b0da95b801224e5b4634f23e36e1b6"
+    },
+    {
+      "path": "src/lib/research/s6/market.ts",
+      "sha256": "886dd6eec5ba2f4618106e9e7202dff81749a15a7a2020fff620aca94c614946"
+    },
+    {
+      "path": "src/lib/research/s6/package-types.d.ts",
+      "sha256": "2779bcd2ae1c9eea8da182c2fe6c8d95fd4a21977b36488f31410bd36d52f73e"
+    },
+    {
+      "path": "src/lib/research/s6/report.ts",
+      "sha256": "28ee2df65397b5998f8965f67165544b945117bd14c580f13e12acf2647bd321"
+    },
+    {
+      "path": "src/lib/research/s6/shadow.ts",
+      "sha256": "ead35855f3372d5c9cadc6fa869cba82bbfdaa7f432824eec2f568b00245e2c1"
+    },
+    {
+      "path": "src/lib/research/s6/store.integration.test.ts",
+      "sha256": "2f36c2d66f581513b855e5b682a0db3fdaba4681d9bd8c29c0b114457f23068b"
+    },
+    {
+      "path": "src/lib/research/s6/store.ts",
+      "sha256": "f0027843cde1522bb347d384fdc631451c3640a4cb0b1583ddec9926686dece9"
+    },
+    {
+      "path": "supabase/migrations/20260922100000_research_s6.sql",
+      "sha256": "a92ab9c6a3851f125b5028b7984211c7be41dbe1601fe6a2b1d1672f29453d3f"
+    },
+    {
+      "path": "supabase/migrations/20260922101000_research_s6_hardening.sql",
+      "sha256": "e0a7f714e8f26e9629b462e1172e80f802d6511120bc65ffa6662d5d63aede4e"
+    },
+    {
+      "path": "supabase/migrations/20260922102000_research_s6_session_clock.sql",
+      "sha256": "aff58dfc855bfca7dd1f8e2b68e326a3ea523db048dccf3cc5fbbfd619977577"
+    },
+    {
+      "path": "supabase/migrations/20260922103000_research_s6_receipt_clock.sql",
+      "sha256": "368b70924c4a07f4539ad361713e83376890c33b3f76eea437c686f9a2295efb"
+    }
+  ],
+  "osanalyst_guard_commits": [
+    "77955a4",
+    "c88fddb"
+  ]
+}

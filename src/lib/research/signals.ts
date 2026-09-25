@@ -7,7 +7,7 @@
 
 import { audit, isUuid, type ResearchCtx } from './store';
 import { listEntities } from './entities';
-import { rowToSource } from './sources';
+import { rowToSource, legacySourceVisible } from './sources';
 import { defaultLlm, type LlmFn } from './memos';
 import {
   buildSignalPrompt,
@@ -117,7 +117,7 @@ export async function listPendingSources(
   return ((data ?? []) as any[])
     .filter((row) => !cited.has(row.id))
     .slice(0, limit)
-    .map(rowToSource);
+    .filter(legacySourceVisible).map(rowToSource);
 }
 
 // ---------------------------------------------------------------------------

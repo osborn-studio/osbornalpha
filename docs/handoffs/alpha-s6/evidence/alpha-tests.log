@@ -1,0 +1,79 @@
+
+> stock-monitor@1.0.0 test
+> vitest run --reporter=dot
+
+
+ RUN  v4.1.10 /Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha
+
+······stderr | src/app/api/brief/preview/route.test.ts > GET /api/brief/preview durable cost budget > does not expose stack traces for ordinary preview failures
+brief preview failed { code: 'brief_generation_failed' }
+
+··································stderr | src/app/api/copilot/route.test.ts > Copilot platform cost budget > reserves before a platform fallback and records the completed platform row as non-BYO
+copilot provider fallback {
+  from: 'ark',
+  to: 'deepseek',
+  code: 'provider_auth',
+  method_id: 'john-cameron-5step'
+}
+
+stderr | src/app/api/copilot/route.test.ts > Copilot platform cost budget > writes one mixed completed run after a successful BYO tool turn falls back to platform
+copilot provider fallback {
+  from: 'ark',
+  to: 'deepseek',
+  code: 'provider_auth',
+  method_id: 'john-cameron-5step'
+}
+
+··············stderr | src/app/api/copilot/route.test.ts > Copilot platform cost budget > lets an admin fallback from BYO to platform without budget RPCs while auditing actual cost
+copilot provider fallback {
+  from: 'ark',
+  to: 'deepseek',
+  code: 'provider_auth',
+  method_id: 'john-cameron-5step'
+}
+
+stderr | src/app/api/copilot/route.test.ts > Copilot platform cost budget > rejects an unpriced admin platform fallback before its provider network call
+copilot provider fallback {
+  from: 'ark',
+  to: 'deepseek',
+  code: 'provider_auth',
+  method_id: 'john-cameron-5step'
+}
+
+stderr | src/app/api/copilot/route.test.ts > Copilot platform cost budget > audits only the conservative platform ceiling when an admin fallback attempt fails
+copilot provider fallback {
+  from: 'ark',
+  to: 'deepseek',
+  code: 'provider_auth',
+  method_id: 'john-cameron-5step'
+}
+
+stderr | src/app/api/copilot/route.test.ts > Copilot platform cost budget > audits the conservative ceiling when an admin fallback response has incomplete usage
+copilot provider fallback {
+  from: 'ark',
+  to: 'deepseek',
+  code: 'provider_auth',
+  method_id: 'john-cameron-5step'
+}
+
+stderr | src/app/api/copilot/route.test.ts > Copilot platform cost budget > writes one mixed failed event with all successful-turn tokens and only settled platform cost
+copilot provider fallback {
+  from: 'ark',
+  to: 'deepseek',
+  code: 'provider_auth',
+  method_id: 'john-cameron-5step'
+}
+
+···········································································································································································································································································stderr | src/app/api/stripe/webhook/route.test.ts > POST /api/stripe/webhook > clears the dedup row and returns 500 when the profile write fails after dedup insert
+Stripe webhook handler error: db write failed
+
+stderr | src/app/api/stripe/webhook/route.test.ts > POST /api/stripe/webhook > applies the grant on Stripe retry after a failed first attempt (dedup row was cleared)
+Stripe webhook handler error: db write failed
+
+····················································································································································································································································································································································································································································································································································································································································································································································································································································································
+
+ Test Files  151 passed (151)
+      Tests  1173 passed (1173)
+   Start at  18:16:46
+   Duration  6.80s (transform 3.46s, setup 0ms, import 9.90s, tests 11.48s, environment 17ms)
+

@@ -1,0 +1,8 @@
+{
+  "status": "verified_only_not_persisted",
+  "payloadHash": "d54fc67a3f91335990c1eb5b72bbf00bed214d779973428db917ccd7d2246cc1",
+  "idempotencyKey": "64541594202815d48a4c7fd197c63b4ebb5e5cd032b37420d62aad2cdac7bd8f",
+  "researchStream": "descriptive",
+  "synthetic": true,
+  "receivedAt": "2026-09-22T13:58:50.473Z"
+}

@@ -1,0 +1,12 @@
+
+> stock-monitor@1.0.0 test
+> vitest run
+
+
+ RUN  v4.1.10 /Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha
+
+
+ Test Files  149 passed (149)
+      Tests  1164 passed (1164)
+   Start at  07:55:12
+   Duration  3.93s (transform 3.63s, setup 0ms, import 9.26s, tests 5.42s, environment 10ms)

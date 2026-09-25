@@ -14,6 +14,8 @@ import {
   type TrustLevel,
 } from './types';
 
+export function legacySourceVisible(row: any): boolean { return row?.metadata?.s4_controlled_copy !== true; }
+
 const TABLE = 'research_source_documents';
 
 export interface IngestSourceInput {
@@ -146,7 +148,7 @@ export async function getSource(ctx: ResearchCtx, id: string): Promise<SourceDoc
     .eq('id', id)
     .maybeSingle();
   if (error) throw new Error(error.message);
-  return data ? rowToSource(data) : null;
+  return data && legacySourceVisible(data) ? rowToSource(data) : null;
 }
 
 export interface ListSourcesOpts {
@@ -166,7 +168,7 @@ export async function listSources(ctx: ResearchCtx, opts: ListSourcesOpts = {}):
   if (opts.type) q = q.eq('source_type', opts.type);
   const { data, error } = await q;
   if (error) throw new Error(error.message);
-  return ((data ?? []) as any[]).map(rowToSource);
+  return ((data ?? []) as any[]).filter(legacySourceVisible).map(rowToSource);
 }
 
 /** Sources whose entity_ids jsonb array contains the given entity id. */
@@ -178,7 +180,7 @@ export async function listSourcesForEntity(ctx: ResearchCtx, entityId: string): 
     .contains('entity_ids', [entityId])
     .order('ingested_at', { ascending: false });
   if (error) throw new Error(error.message);
-  return ((data ?? []) as any[]).map(rowToSource);
+  return ((data ?? []) as any[]).filter(legacySourceVisible).map(rowToSource);
 }
 
 /** Fetch a set of sources by id (skips non-uuid junk and missing rows). */
@@ -191,5 +193,5 @@ export async function listSourcesByIds(ctx: ResearchCtx, ids: string[]): Promise
     .eq('user_id', ctx.userId)
     .in('id', valid);
   if (error) throw new Error(error.message);
-  return ((data ?? []) as any[]).map(rowToSource);
+  return ((data ?? []) as any[]).filter(legacySourceVisible).map(rowToSource);
 }

@@ -1,0 +1,17 @@
+## Scoped conclusion
+
+Against the current supplied files only (offline importer + preregistration planner, nothing wired to HTTP or DB): **no concrete residual P0 or P1 observed.** The Round‑3 dispositions I can check statically are present in the code as described — Ajv `checkBinding` runs first in `prepareCandidate` (`if (!checkBinding(binding)) fail('invalid_schema', …)`, all seven fields required, `additionalProperties:false`, `synthetic`/`revoked` typed boolean, hashes `^[0-9a-f]{64}$`); lineage block via `record.source_ref.source_id === FIXTURE_SOURCE_ID`; recursive `freeze()` in `market-policy.ts` descends every object value before hashing; `now` is always the server clock; explicit `fail('input_limit', …)` recovery text on the 2 MiB ceiling; `timestamp()` rejects Feb 30 (short‑circuits on `!Number.isFinite(Date.parse(value))` before `toISOString`) and hour/minute overflow.
+
+## Material P2
+
+1. **`candidate.ts`, `FIXTURE_PAYLOAD_HASH = 'd59c334c…'` — value contradicts the ledger and is not pinned by any test.** `IMPLEMENTATION.md` records the verified golden payload digest as `d54fc67a3f91335990c1eb5b72bbf00bed214d779973428db917ccd7d2246cc1`. Either these are two different artifacts (source‑pack vs candidate‑pack digest) or the constant is stale. Trigger: in `it('never imports the golden as an operational candidate')` the throw is satisfied by `verifyCandidatePack`'s `evaluation_mode==='fixture'` branch, and in the relabelled‑golden test by the `source_id` check — so the line `if (manifest?.payload_digest === FIXTURE_PAYLOAD_HASH) fail('fixture_not_operational')` is never the deciding guard and could be dead. Fix: confirm which digest belongs to the candidate pack and add a test whose only surviving guard is that line. Escalate to P1 only if this constant is the sole intended defence for some pack shape.
+
+2. **`candidate.test.ts`, `it('fails closed on omitted, misspelled or incorrectly typed binding controls')` — the title over‑claims.** Trigger: the loop only `delete`s four of seven required keys (`localUserId`, `upstreamScope`, `trustedConfig` untested) and never adds a misspelled extra key, so `additionalProperties:false` — the actual defence against `approvedPayloadhash` typos next to a stale correct key — is unexercised.
+
+3. **`market-policy.ts`, `if (cutoff < Date.parse(calendar.range[0]) || cutoff >= Date.parse(calendar.range[1]) + 86400000)`.** Trigger: `calendar.range` is never validated by the module‑load invariant loop (which checks only `sessions`). A malformed/non‑ISO range yields `NaN`, both comparisons are `false`, and the out‑of‑range guard silently passes. Residual impact is bounded by the later `candidates.length !== policy.max_wait_trading_sessions` check, so this is hardening, not a hole.
+
+4. **`candidate.ts`, `idempotencyKey: digest([binding.localUserId, result.manifest.payload_digest])` omits `upstreamScope.workspace_id`.** Trigger: the same pack imported under two workspaces of one local user produces one key. Harmless today (no DB), but decide before it becomes a uniqueness/CAS key.
+
+## Evidence not supplied
+
+`calendar.json`, both `.sha256` sidecars, `trusted-test-config.json` and `__fixtures__/s3` are absent. Therefore the 251‑session/DST/holiday assertions, `MARKET_POLICY_HASH`/`CALENDAR_HASH` equality, and every fixture‑dependent test outcome are unverified here. Open items you already list — source revocation/withdrawal integration, DB scope enforcement, concurrency — remain outstanding; nothing here constitutes S4 acceptance, and I executed no tests.

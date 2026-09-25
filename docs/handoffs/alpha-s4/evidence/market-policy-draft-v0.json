@@ -1,0 +1,31 @@
+{
+  "schema_version": "market-policy/1.0",
+  "exchange": "XNYS",
+  "timezone": "America/New_York",
+  "calendar_version": "XNYS-2026-2028-frozen-2026-09-22",
+  "calendar_source": "https://www.nyse.com/trade/hours-calendars",
+  "calendar_frozen_at": "2026-09-22",
+  "regular_open": "09:30",
+  "regular_close": "16:00",
+  "start_rule": "first_full_regular_session_open_strictly_after_max_frozen_eligibility_then_valid_close",
+  "early_close_start": "skip",
+  "suspension": "wait_first_valid_close",
+  "max_wait_trading_sessions": 10,
+  "windows_trading_sessions": [
+    5,
+    20,
+    60
+  ],
+  "window_count": "exclude_start_session_include_early_close_sessions",
+  "endpoint_missing": "data_insufficient",
+  "benchmark": "SPY",
+  "currency": "USD",
+  "return_method": "split_adjusted_price_return_excluding_cash_dividends",
+  "adjustment": "none_with_verified_split_factors",
+  "missing_benchmark": "data_insufficient",
+  "missing_split_factors": "data_insufficient",
+  "calendar_out_of_range": "data_insufficient/rule_unsupported",
+  "calendar_changes": "append_new_policy_for_new_observations_only",
+  "multi_security_aggregation": "disabled",
+  "policy_selection_basis": "registered_before_any_price_window_results"
+}

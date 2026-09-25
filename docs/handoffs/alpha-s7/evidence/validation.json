@@ -1,0 +1,45 @@
+{
+  "scope": "S6 offline market conformance and 07 Alpha shared handoff",
+  "tests": {
+    "files": 153,
+    "passed": 1210,
+    "failed": 0
+  },
+  "isolated_database_migrations": 30,
+  "database_stopped": true,
+  "lint": "passed",
+  "typecheck": "passed",
+  "build": "passed",
+  "handoff": "40 selected files verified",
+  "clean_consumer": "golden and Replay matched",
+  "real_market_acceptance": "not_passed",
+  "live_jev": "not_run",
+  "production_deployment": "not_run",
+  "files": [
+    {
+      "path": "src/lib/research/s6/market-handoff.ts",
+      "sha256": "3a790082f32fb8880eda48d2b487404201002f86030f7f510774f8c453a60466"
+    },
+    {
+      "path": "scripts/s6/check-market-handoff.ts",
+      "sha256": "bca2d6a102d819d1c2355984670a89a0a5b1193ea83b3cae2ac97e0754dd2774"
+    },
+    {
+      "path": "scripts/s7/verify-handoff.ts",
+      "sha256": "041d9cfb8bd2bf6a87aee917ea0cdd7b05561ff01bd1ed0a2f0e2419d39cdd79"
+    },
+    {
+      "path": "src/lib/research/s6/market-handoff.test.ts",
+      "sha256": "c27e42e0e74e4e4ca5e415ae0fd02c429c81214aec5828ea70fcf57e507eebcc"
+    },
+    {
+      "path": "src/lib/research/s6/handoff-cli.test.ts",
+      "sha256": "63a032fbbfa2a5618bf7ffd9fc4ed440a21c36e24e5f3daf630ec7732f95a78a"
+    },
+    {
+      "path": "docs/handoffs/alpha-s7/manifest.json",
+      "sha256": "502fcdfb313ebf77b8ee6f5f2d6eb9d20eaf47dcb2e1ad0eb1fef149e90ec06f"
+    }
+  ],
+  "audit": "Claude CLI Opus 5.5: no P0/P1 in reviewed snapshot; P2 dispositions locally verified; no final external re-review"
+}
