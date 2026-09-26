@@ -12,6 +12,9 @@ import {
   type ThesisEvent,
   type ThesisStatus,
 } from '@/lib/research/types';
+import { EMPTY_FORM, OPPORTUNITY_LABELS, ThesisFormFields, formToInput } from '../thesis-form';
+
+interface QuarterReview { count: number; quarter: string; needs_review: boolean }
 
 const STATUS_COLORS: Record<ThesisStatus, string> = {
   DRAFT: 'bg-gray-100 text-gray-700',
@@ -27,6 +30,7 @@ const EVENT_BADGES: Record<string, string> = {
   WEAKEN: 'bg-orange-100 text-orange-800',
   INVALIDATE: 'bg-red-100 text-red-800',
   STATUS_CHANGE: 'bg-blue-100 text-blue-800',
+  KILL_CONDITION_REVISED: 'bg-purple-100 text-purple-800',
   NOTE: 'bg-gray-100 text-gray-600',
 };
 
@@ -42,6 +46,9 @@ export default function ResearchThesisDetailPage() {
   const params = useParams<{ id: string }>();
   const [thesis, setThesis] = useState<Thesis | null>(null);
   const [events, setEvents] = useState<ThesisEvent[]>([]);
+  const [review, setReview] = useState<QuarterReview | null>(null);
+  const [supersedeForm, setSupersedeForm] = useState(EMPTY_FORM);
+  const [showSupersede, setShowSupersede] = useState(false);
   const [disabled, setDisabled] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -54,6 +61,7 @@ export default function ResearchThesisDetailPage() {
     const data = await res.json().catch(() => ({}));
     setThesis(data.thesis ?? null);
     setEvents(data.events ?? []);
+    setReview(data.review ?? null);
   }, [params.id]);
 
   useEffect(() => { void load(); }, [load]);
@@ -71,6 +79,50 @@ export default function ResearchThesisDetailPage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) setNotice(`转移失败：${data?.error?.message ?? res.status}`);
       else await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reviseKillCondition(index: number, current: string) {
+    const newText = window.prompt(`修订失效条件 ${index + 1} 的新写法（原版会保留在修订历史）：`, current);
+    if (newText === null) return;
+    const reason = window.prompt('修订原因（口径为何写错）？') ?? '';
+    setBusy(true);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/research/theses/${params.id}/kill-condition`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ index, new_text: newText, reason }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) setNotice(`修订失败：${data?.error?.message ?? res.status}`);
+      else await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function supersede(e: React.FormEvent) {
+    e.preventDefault();
+    const reason = window.prompt('取代原因（哪条支柱错了）？') ?? '';
+    setBusy(true);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/research/theses/${params.id}/supersede`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...formToInput(supersedeForm), reason }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) setNotice(`取代失败：${data?.error?.message ?? res.status}`);
+      else {
+        setNotice(`已创建新 thesis：${data.thesis.title}（DRAFT，窗口从零计）`);
+        setSupersedeForm(EMPTY_FORM);
+        setShowSupersede(false);
+        await load();
+      }
     } finally {
       setBusy(false);
     }
@@ -135,8 +187,19 @@ export default function ResearchThesisDetailPage() {
         </div>
         <p className="whitespace-pre-wrap text-sm text-gray-700">{thesis.body}</p>
         <p className="text-xs text-gray-500">
-          创建 {thesis.created_at}{thesis.next_review_at ? ` · 下次复核 ${thesis.next_review_at}` : ''}
+          {OPPORTUNITY_LABELS[thesis.opportunity_type ?? 'other']} · 窗口 {(thesis.horizon_weeks ?? [4, 13, 26]).join('/')} 周 · 创建 {thesis.created_at}
+          {thesis.next_review_at ? ` · 下次复核 ${thesis.next_review_at}` : ''}
         </p>
+        {thesis.supersedes && (
+          <p className="text-xs text-gray-600">
+            取代旧 thesis：<Link className="underline" href={`/research/theses/${thesis.supersedes}`}>{thesis.supersedes}</Link>（窗口从零计，不继承）
+          </p>
+        )}
+        {review && review.needs_review && (
+          <p className="rounded border border-purple-300 bg-purple-50 p-2 text-xs text-purple-900">
+            本季（{review.quarter}）失效条件已修订 {review.count} 次，超过 2 次，需要复盘失效条件的写法。
+          </p>
+        )}
       </div>
 
       {notice && (
@@ -154,6 +217,15 @@ export default function ResearchThesisDetailPage() {
             → {to}
           </button>
         ))}
+        {(thesis.status === 'INVALIDATED' || thesis.status === 'CLOSED') && (
+          <button
+            onClick={() => setShowSupersede((v) => !v)}
+            disabled={busy}
+            className="rounded border border-purple-400 px-3 py-1.5 text-sm text-purple-900 hover:bg-purple-50 disabled:opacity-50"
+          >
+            {showSupersede ? '收起取代表单' : '以新 thesis 取代（§7.4.3）'}
+          </button>
+        )}
         <button
           onClick={runMonitor}
           disabled={busy}
@@ -163,12 +235,61 @@ export default function ResearchThesisDetailPage() {
         </button>
       </div>
 
+      {showSupersede && (
+        <form onSubmit={supersede} className="space-y-3 rounded-lg border border-purple-300 p-4">
+          <h2 className="text-base font-medium">新 thesis（取代 {thesis.title}）</h2>
+          <p className="text-xs text-gray-600">方向仍对但支柱错：全部字段重新填写，不继承旧 thesis；窗口从创建时刻起算。</p>
+          <ThesisFormFields form={supersedeForm} setForm={setSupersedeForm} />
+          <button type="submit" disabled={busy} className="rounded bg-purple-700 px-4 py-2 text-sm text-white disabled:opacity-50">
+            {busy ? '创建中…' : '创建取代 thesis（初始 DRAFT）'}
+          </button>
+        </form>
+      )}
+
       <div className="grid gap-3 md:grid-cols-2">
         <section className="rounded-lg border p-4">
-          <h2 className="mb-2 text-base font-medium">失效条件</h2>
+          <h2 className="mb-2 text-base font-medium">支柱（{(thesis.pillars ?? []).length}）</h2>
           <ul className="list-disc space-y-1 pl-5 text-sm">
-            {thesis.invalidation_conditions.map((c, i) => <li key={i}>{c}</li>)}
+            {(thesis.pillars ?? []).map((p) => (
+              <li key={p.id}>
+                {p.text}
+                <span className="text-xs text-gray-500">{p.resolvable_by ? ` · 判定：${p.resolvable_by}` : ''}{p.deadline ? ` · 截止 ${p.deadline}` : ''}</span>
+              </li>
+            ))}
+            {(thesis.pillars ?? []).length === 0 && <li className="list-none text-gray-500">未填写支柱。支柱错误走「取代」，不可原地修改。</li>}
           </ul>
+        </section>
+        <section className="rounded-lg border p-4">
+          <h2 className="mb-2 text-base font-medium">催化剂（{(thesis.catalysts ?? []).length}）</h2>
+          <ul className="list-disc space-y-1 pl-5 text-sm">
+            {(thesis.catalysts ?? []).map((c, i) => <li key={i}>{c.text}{c.expected_date ? <span className="text-xs text-gray-500"> · 预期 {c.expected_date}</span> : null}</li>)}
+            {(thesis.catalysts ?? []).length === 0 && <li className="list-none text-gray-500">未填写催化剂。</li>}
+          </ul>
+        </section>
+        <section className="rounded-lg border p-4">
+          <h2 className="mb-2 text-base font-medium">失效条件</h2>
+          <ul className="space-y-1 text-sm">
+            {thesis.invalidation_conditions.map((c, i) => (
+              <li key={i} className="flex items-start gap-2">
+                <span className="flex-1">{i + 1}. {c}</span>
+                {thesis.status !== 'CLOSED' && (
+                  <button onClick={() => reviseKillCondition(i, c)} disabled={busy} className="rounded border px-2 py-0.5 text-xs hover:bg-gray-50 disabled:opacity-50" title="只允许修正口径写错，原版保留">
+                    修订写法
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+          {(thesis.kill_condition_revisions ?? []).length > 0 && (
+            <details className="mt-3 text-xs text-gray-600">
+              <summary>修订历史（{(thesis.kill_condition_revisions ?? []).length}）{review ? ` · 本季 ${review.count} 次` : ''}</summary>
+              <ul className="mt-1 space-y-1">
+                {(thesis.kill_condition_revisions ?? []).map((r, i) => (
+                  <li key={i}>{r.at} · 条件 {r.index + 1}：「{r.old_text}」→「{r.new_text}」（{r.reason}）</li>
+                ))}
+              </ul>
+            </details>
+          )}
         </section>
         <section className="rounded-lg border p-4">
           <h2 className="mb-2 text-base font-medium">观察指标</h2>
@@ -229,7 +350,11 @@ export default function ResearchThesisDetailPage() {
               <div className="mt-1 text-gray-600">
                 {e.event_type === 'STATUS_CHANGE'
                   ? `${String(e.detail.from)} → ${String(e.detail.to)}${e.detail.reason ? `（${String(e.detail.reason)}）` : ''}`
-                  : String(e.detail.rationale ?? '')}
+                  : e.event_type === 'KILL_CONDITION_REVISED'
+                    ? `失效条件 ${Number(e.detail.index) + 1}：「${String(e.detail.old_text)}」→「${String(e.detail.new_text)}」${e.detail.reason ? `（${String(e.detail.reason)}）` : ''}`
+                    : e.event_type === 'NOTE' && typeof e.detail.superseded_by === 'string'
+                      ? <>已被新 thesis 取代：<Link className="underline" href={`/research/theses/${e.detail.superseded_by}`}>{e.detail.superseded_by}</Link>{e.detail.reason ? `（${String(e.detail.reason)}）` : ''}</>
+                      : String(e.detail.rationale ?? '')}
               </div>
             </li>
           ))}

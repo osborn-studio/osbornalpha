@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
 import { requireResearchUser, isUuid } from '@/lib/research/store';
-import { getThesis, listThesisEvents } from '@/lib/research/theses';
+import { getThesis, killConditionRevisionsInQuarter, listThesisEvents } from '@/lib/research/theses';
 import { withResearch } from '@/lib/research/api';
 
 export const dynamic = 'force-dynamic';
 
-/** Thesis detail + event timeline (STATUS_CHANGE + monitor alerts). */
+/** Thesis detail + event timeline (STATUS_CHANGE + monitor alerts) + WP-A7 quarterly revision review. */
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   return withResearch(async () => {
@@ -17,6 +17,6 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
         { status: 404 },
       );
     }
-    return { thesis, events: await listThesisEvents(ctx, thesis.id) };
+    return { thesis, events: await listThesisEvents(ctx, thesis.id), review: killConditionRevisionsInQuarter(thesis) };
   });
 }

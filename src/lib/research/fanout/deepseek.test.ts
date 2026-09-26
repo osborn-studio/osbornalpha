@@ -61,4 +61,11 @@ describe('deepseek backend',()=>{
   expect(withBaseline.user).toContain('最早材料正文');
   expect(withBaseline.user).toMatch(/Q5/);
  });
+ it('lists WP-A7 pillars and opportunity type in the prompt when present',()=>{
+  const modern={...input(),theses:[{...thesis(T1,'A'),opportunity_type:'C' as const,pillars:[{id:'p1',text:'支柱甲',resolvable_by:'季报',deadline:null}]}]};
+  const {user}=buildFanoutPrompt(modern);
+  expect(user).toContain('机会类型: C');
+  expect(user).toContain('支柱: 支柱甲');
+  expect(buildFanoutPrompt(input()).user).not.toContain('支柱:');
+ });
 });
