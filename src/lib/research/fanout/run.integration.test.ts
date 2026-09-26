@@ -180,4 +180,23 @@ describe.skipIf(!enabled)('WP-A6 fan-out run against the real ledger',()=>{
   const replayed=(await runFanout({ctx,actor,backends:{rule:ruleBackend,deepseek:ds,jev:jv},escalate:null,sinceIso})).judgments;
   expect(replayed).toEqual({written:0,duplicate:s.theses*4,conflict:0});
  });
+
+ it('drops a controlled copy whose S4 binding was revoked, audits it, and keeps judging the other sources',async()=>{
+  const fresh=new Date(Date.now()+1).toISOString();const sinceIso=fresh;
+  const pack=testPack(actor.userId,{raw:'恒生电子签约新客户（PA 导出，随后撤销）。'});
+  await admin.query('insert into research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[actor.userId,pack.binding.approvedPayloadHash,pack.binding]);
+  await importCandidate(actor,JSON.stringify(pack.pack));
+  const copyRow=(await admin.query(`select * from public.research_source_documents where user_id=$1 and metadata->>'s4_controlled_copy'='true' order by ingested_at desc limit 1`,[actor.userId])).rows[0];
+  await admin.query('update research_s4_bindings set revoked=true where user_id=$1 and payload_hash=$2',[actor.userId,pack.binding.approvedPayloadHash]);
+  const pub=randomUUID();
+  await admin.query(`insert into public.research_source_documents(id,user_id,source_type,title,raw_text,content_hash) values($1,$2,'NEWS','t5','恒生电子发布新版本。',$3)`,[pub,actor.userId,'hash-'+pub]);
+  // The service-role listing (RLS bypassed) still sees the revoked copy; fan-out must re-check it under S4 authorization.
+  store.seed('research_source_documents',[sourceRow(copyRow.id,{source_type:'MANUAL',title:copyRow.title,raw_text:copyRow.raw_text,url:null,permission:'private',trust_level:'LOW',metadata:{s4_controlled_copy:true},ingested_at:fresh,available_at:fresh}),sourceRow(pub,{raw_text:'恒生电子发布新版本。',ingested_at:fresh,available_at:fresh})]);
+  const s=await runFanout({ctx,actor,backends:{rule:ruleBackend,deepseek:null,jev:null},escalate:null,sinceIso});
+  expect(s.sources).toBe(2);
+  expect(s.controlled_copies_skipped_unauthorized).toBe(1);
+  expect(await judgments(`source_id='${copyRow.id}'`)).toHaveLength(0);
+  expect((await judgments(`source_id='${pub}'`)).length).toBe(s.theses*4);
+  expect(Number((await admin.query(`select count(*) n from public.research_audit_log where user_id=$1 and action='fanout.source_unauthorized'`,[actor.userId])).rows[0].n)).toBe(1);
+ });
 });

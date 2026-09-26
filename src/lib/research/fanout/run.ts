@@ -49,6 +49,8 @@ export interface RunSummary {
   judgments: { written: number; duplicate: number; conflict: number };
   per_backend: Record<'rule' | 'llm_deepseek' | 'jev' | 'jev_escalated', BackendStats>;
   private_sources_skipped_external: number;
+  /** S4 controlled copies listed by the service client but not authorized under the S4 visibility policy (revoked/expired binding). */
+  controlled_copies_skipped_unauthorized: number;
   budget: BudgetState;
   entity_table_version: string;
 }
@@ -106,6 +108,24 @@ async function clusterBaseline(ctx: ResearchCtx, source: SourceDocument): Promis
   return first && mayLeaveMachine(first) ? { source_id: first.id, title: first.title, text: first.raw_text } : null;
 }
 
+/** Keep every ordinary source; keep a controlled copy only if the S4 runtime role can see it under RLS. */
+async function authorizedSources(actor: S4Actor, listed: SourceDocument[], run_id: string, summary: RunSummary): Promise<SourceDocument[]> {
+  const copies = listed.filter(isControlledCopy);
+  if (copies.length === 0) return listed;
+  const visible = new Set<string>(await transaction(actor, async db =>
+    (await db.query('select id from public.research_source_documents where user_id=$1 and id=any($2::uuid[])', [actor.userId, copies.map(c => c.id)])).rows.map((r: { id: string }) => r.id)));
+  const kept: SourceDocument[] = [];
+  for (const source of listed) {
+    if (isControlledCopy(source) && !visible.has(source.id)) {
+      summary.controlled_copies_skipped_unauthorized++;
+      await auditRun(actor, 'fanout.source_unauthorized', { run_id, source_id: source.id, reason: 's4_controlled_copy_not_visible' });
+      continue;
+    }
+    kept.push(source);
+  }
+  return kept;
+}
+
 /** Sum of today's metered spend (UTC day), from `fanout.spend` audit rows. */
 async function spentToday(actor: S4Actor): Promise<number> {
   return transaction(actor, async db => Number((await db.query(
@@ -136,10 +156,13 @@ export async function runFanout(opts: RunOptions): Promise<RunSummary> {
   const stats = (): BackendStats => ({ answers: 0, skipped: 0, errors: 0, cost_micros: 0 });
   const summary: RunSummary = { run_id, sources: 0, theses: 0, judgments: { written: 0, duplicate: 0, conflict: 0 },
     per_backend: { rule: stats(), llm_deepseek: stats(), jev: stats(), jev_escalated: stats() },
-    private_sources_skipped_external: 0, budget: budgetState(0, budget.daily_budget_micros), entity_table_version: '' };
+    private_sources_skipped_external: 0, controlled_copies_skipped_unauthorized: 0, budget: budgetState(0, budget.daily_budget_micros), entity_table_version: '' };
 
-  const [theses, sources] = await Promise.all([listThesesByStatus(opts.ctx, [...ACTIVE_STATUSES]), listSourcesSince(opts.ctx, since)]);
-  summary.theses = theses.length; summary.sources = sources.length;
+  const [theses, listed] = await Promise.all([listThesesByStatus(opts.ctx, [...ACTIVE_STATUSES]), listSourcesSince(opts.ctx, since)]);
+  summary.theses = theses.length; summary.sources = listed.length;
+  // The service client bypasses RLS; controlled copies must pass the S4 visibility policy (binding not revoked, rights current)
+  // before any backend sees them. Unauthorized ones are dropped and audited; the run continues with the rest.
+  const sources = await authorizedSources(opts.actor, listed, run_id, summary);
   if (theses.length === 0 || sources.length === 0) return summary;
   const [aliases, entity_table_version] = await Promise.all([aliasMap(opts.ctx, theses), entityTableVersion(opts.ctx)]);
   summary.entity_table_version = entity_table_version;
