@@ -1,0 +1,236 @@
+{
+  "ran_at": "2026-09-26T07:19:27.374Z",
+  "database": "isolated PostgreSQL 17 via scripts/s4/local-db.ts + PostgREST 16.4 gateway (local only)",
+  "owner_note": "throwaway owner uuid; synthetic text only",
+  "seeded": {
+    "companies": 21,
+    "securities": 21
+  },
+  "first_run": {
+    "cluster": {
+      "scanned": 8,
+      "fresh": 8,
+      "written": 8,
+      "clusters": 6
+    },
+    "align": {
+      "scanned": 8,
+      "sources_aligned": 4,
+      "sources_ambiguous": 1,
+      "rows_written": 6,
+      "entity_ids_merged": 4
+    }
+  },
+  "second_run": {
+    "cluster": {
+      "scanned": 8,
+      "fresh": 0,
+      "written": 0,
+      "clusters": 0
+    },
+    "align": {
+      "scanned": 8,
+      "sources_aligned": 0,
+      "sources_ambiguous": 0,
+      "rows_written": 0,
+      "entity_ids_merged": 0
+    }
+  },
+  "clusters": [
+    [
+      "Palantir posts record US commercial growth",
+      "Palantir posts record US commercial growth - Example News"
+    ],
+    [
+      "恒生电子发布三季度业绩"
+    ],
+    [
+      "恒生电子发布三季度业绩 | 财经网"
+    ],
+    [
+      "Sector roundup: fintech software",
+      "Fintech software roundup (syndicated)"
+    ],
+    [
+      "Two names in one story"
+    ],
+    [
+      "Unrelated macro note"
+    ]
+  ],
+  "alignments": [
+    {
+      "source": "Palantir posts record US commercial growth",
+      "entity": "Palantir",
+      "method": "rule",
+      "status": "aligned",
+      "confidence": "0.800",
+      "evidence": {
+        "hits": 2,
+        "alias": "Palantir",
+        "position": 0
+      }
+    },
+    {
+      "source": "Palantir posts record US commercial growth - Example News",
+      "entity": "Palantir",
+      "method": "rule",
+      "status": "aligned",
+      "confidence": "0.800",
+      "evidence": {
+        "hits": 2,
+        "alias": "Palantir",
+        "position": 0
+      }
+    },
+    {
+      "source": "恒生电子发布三季度业绩",
+      "entity": "Hundsun",
+      "method": "rule",
+      "status": "aligned",
+      "confidence": "0.800",
+      "evidence": {
+        "hits": 2,
+        "alias": "恒生电子",
+        "position": 0
+      }
+    },
+    {
+      "source": "恒生电子发布三季度业绩 | 财经网",
+      "entity": "Hundsun",
+      "method": "rule",
+      "status": "aligned",
+      "confidence": "0.800",
+      "evidence": {
+        "hits": 2,
+        "alias": "恒生电子",
+        "position": 0
+      }
+    },
+    {
+      "source": "Two names in one story",
+      "entity": "Hundsun",
+      "method": "rule",
+      "status": "ambiguous",
+      "confidence": null,
+      "evidence": {
+        "hits": 1,
+        "alias": "恒生电子",
+        "position": 23
+      }
+    },
+    {
+      "source": "Two names in one story",
+      "entity": "Palantir",
+      "method": "rule",
+      "status": "ambiguous",
+      "confidence": null,
+      "evidence": {
+        "hits": 1,
+        "alias": "Palantir",
+        "position": 29
+      }
+    }
+  ],
+  "entity_ids_after": [
+    {
+      "title": "Palantir posts record US commercial growth",
+      "cluster_first": true,
+      "entity_ids": [
+        "Palantir"
+      ]
+    },
+    {
+      "title": "Palantir posts record US commercial growth - Example News",
+      "cluster_first": false,
+      "entity_ids": [
+        "Palantir"
+      ]
+    },
+    {
+      "title": "恒生电子发布三季度业绩",
+      "cluster_first": true,
+      "entity_ids": [
+        "Hundsun"
+      ]
+    },
+    {
+      "title": "恒生电子发布三季度业绩 | 财经网",
+      "cluster_first": true,
+      "entity_ids": [
+        "Hundsun"
+      ]
+    },
+    {
+      "title": "Sector roundup: fintech software",
+      "cluster_first": true,
+      "entity_ids": []
+    },
+    {
+      "title": "Fintech software roundup (syndicated)",
+      "cluster_first": false,
+      "entity_ids": []
+    },
+    {
+      "title": "Two names in one story",
+      "cluster_first": true,
+      "entity_ids": []
+    },
+    {
+      "title": "Unrelated macro note",
+      "cluster_first": true,
+      "entity_ids": []
+    }
+  ],
+  "audit": [
+    {
+      "action": "cluster.run",
+      "detail": {
+        "fresh": 8,
+        "since": null,
+        "jaccard": null,
+        "scanned": 8,
+        "written": 8,
+        "clusters": 6
+      }
+    },
+    {
+      "action": "align.run",
+      "detail": {
+        "since": null,
+        "aliases": 96,
+        "scanned": 8,
+        "rows_written": 6,
+        "sources_aligned": 4,
+        "entity_ids_merged": 4,
+        "sources_ambiguous": 1
+      }
+    },
+    {
+      "action": "cluster.run",
+      "detail": {
+        "fresh": 0,
+        "since": null,
+        "jaccard": null,
+        "scanned": 8,
+        "written": 0,
+        "clusters": 0
+      }
+    },
+    {
+      "action": "align.run",
+      "detail": {
+        "since": null,
+        "aliases": 96,
+        "scanned": 8,
+        "rows_written": 0,
+        "sources_aligned": 0,
+        "entity_ids_merged": 0,
+        "sources_ambiguous": 0
+      }
+    }
+  ],
+  "sample": "8 rows (population 8, seed 1) → docs/handoffs/alpha-a5/sample-2026-09-26.csv",
+  "report_on_unlabeled_sample": "| metric | correct/labeled | rate | Wilson 95% |\n|---|---|---|---|\n| cluster | 0/0 | — | 0.0%–100.0% |\n| alignment | 0/0 | — | 0.0%–100.0% |\n\nsample size: 8",
+  "postgrest_log": "26/Sep/2026:00:19:24 -0700: Starting PostgREST 16.4...\n26/Sep/2026:00:19:24 -0700: Successfully connected to PostgreSQL 17.10 (Homebrew) on aarch64-apple-darwin25.4.0, compiled by Apple clang version "
+}

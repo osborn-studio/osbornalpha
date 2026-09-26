@@ -1,0 +1,9 @@
+source_id,title,url,cluster_id,cluster_first,cluster_size,cluster_peer_title,aligned_entities,ambiguous_candidates,label_cluster_correct,label_alignment_correct
+ee14dce7-3c78-4d11-868a-a7c4ff7b72ea,Palantir posts record US commercial growth,https://www.example-news.com/pltr-q3?utm_source=x&utm_medium=y,f5579028-c8f2-83ba-aff2-a721ad72782b,true,2,Palantir posts record US commercial growth - Example News,Palantir Technologies Inc.,,,
+6876d8a5-aa62-424d-88f7-ac6025c94e41,Palantir posts record US commercial growth - Example News,https://example-news.com/pltr-q3,f5579028-c8f2-83ba-aff2-a721ad72782b,false,2,Palantir posts record US commercial growth,Palantir Technologies Inc.,,,
+0b4d4b0f-dd8e-4857-9e91-9a8a45f9273b,Sector roundup: fintech software,https://c.test/roundup-1,4b0dfcb8-0307-81c6-a596-d6f8085874ca,true,2,Fintech software roundup (syndicated),,,,
+cb71064f-33d6-40e4-956b-7294cee179a1,Fintech software roundup (syndicated),https://d.test/roundup-syndicated,4b0dfcb8-0307-81c6-a596-d6f8085874ca,false,2,Sector roundup: fintech software,,,,
+4bde9f1d-55eb-47f2-9474-839c9eb8edb8,恒生电子发布三季度业绩 | 财经网,https://b.test/hs-q3-copy,c3483a76-3599-800c-9d74-bee54eeee770,true,1,,Hundsun Technologies Inc.,,,
+388263bb-b5f5-4d3b-9d0e-fff7f5badba8,Two names in one story,https://e.test/two,3ef16ce4-56e3-8781-b281-9e7bbca5f541,true,1,,,Hundsun Technologies Inc.; Palantir Technologies Inc.,,
+852a4b73-97b7-4ae3-abeb-5d39bafe82e3,恒生电子发布三季度业绩,https://a.test/hs-q3,20032c5f-3ce9-8ddb-ba46-b13f1c9b54e7,true,1,,Hundsun Technologies Inc.,,,
+a660da6f-b025-4ae4-ab9c-d90ab1584941,Unrelated macro note,https://f.test/macro,2c207954-44be-83ea-821c-29ede4835fbf,true,1,,,,,
