@@ -86,3 +86,12 @@ describe('judgeWlPairs',()=>{
   expect(pairsHash({...doc([pair(1),pair(2)]),pack_hash:'b'.repeat(64)})).not.toBe(a);
  });
 });
+
+describe('invalid envelopes',()=>{
+ it('keeps a 200 without answers out of the answers file so it is retried',async()=>{
+  const {fn}=fakeFetch([{},{error:'overloaded'}]);
+  const out=await judgeWlPairs({pairs:[pair(1),pair(2)],existing:[],fetch:fn,apiKey:'k'.repeat(20),maxCostUsd:1,now:()=>'2026-09-26T01:00:00.000Z'});
+  expect(out.answers).toEqual([]);
+  expect(out.errors.map(e=>e.pair_id)).toEqual([pair(1).pair_id,pair(2).pair_id]);
+ });
+});

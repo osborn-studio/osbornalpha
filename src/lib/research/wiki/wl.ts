@@ -133,6 +133,8 @@ export async function judgeWlPairs(opts: JudgeOptions): Promise<JudgeResult> {
         body, signal: AbortSignal.timeout(opts.timeoutMs ?? 60_000) });
       if (!res.ok) throw new Error(`jev ${res.status}`);
       const data = await res.json() as { model?: string; answers?: Record<string, unknown>; usage?: { input_tokens?: number; output_tokens?: number } };
+      // A 200 without an answers object is not a judgment: fail so the item is retried, never cached.
+      if (!data || typeof data !== 'object' || !data.answers || typeof data.answers !== 'object' || Array.isArray(data.answers)) throw new Error('jev response has no answers');
       const tokens = (data.usage?.input_tokens ?? 0) + (data.usage?.output_tokens ?? 0);
       const cost = microsForTokens(tokens > 0 ? tokens : estimateTokens(body), price);
       answer = { pair_id: pair.pair_id, ...parseWlAnswer(data.answers?.WL), backend_model: typeof data.model === 'string' && data.model ? data.model : JEV_MODEL, cost_micros: cost };

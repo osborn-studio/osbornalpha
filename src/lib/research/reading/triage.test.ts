@@ -61,3 +61,12 @@ describe('judgeTriageItems',()=>{
   expect(itemsHash(doc([item(2)]))).not.toBe(a);
  });
 });
+
+describe('Codex round 2 regression',()=>{
+ it('treats a 200 without an answers object as a retryable failure, not a cached abstention',async()=>{
+  const {fn}=fakeFetch([{},{error:'overloaded'},response({t0_TR1:noul(0.9),t0_TR2:noul(0.1),t0_TR3:noul(0.8)})]);
+  const out=await judgeTriageItems({items:[item(1),item(2),item(3)],theses:[thesis('a')],existing:[],fetch:fn,apiKey:'k'.repeat(20),maxCostUsd:1,now:()=>'2026-09-26T01:00:00.000Z'});
+  expect(out.answers.map(a=>a.item_id)).toEqual(['cnt_3']);
+  expect(out.errors.map(e=>e.item_id)).toEqual(['cnt_1','cnt_2']);
+ });
+});
