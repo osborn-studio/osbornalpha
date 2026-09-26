@@ -55,3 +55,8 @@ export function inWindow(iso: string, since: string, until?: string): boolean {
   const t = Date.parse(iso);
   return Number.isFinite(t) && t >= Date.parse(since) && (until === undefined || t < Date.parse(until));
 }
+
+/** Calendar date (YYYY-MM-DD) of an ISO instant in a fixed UTC offset, for date-only upstream queries (UTC+8 for 巨潮 and HKEX). */
+export function localDate(iso: string, offsetHours: number): string {
+  return new Date(Date.parse(iso) + offsetHours * 3600_000).toISOString().slice(0, 10);
+}

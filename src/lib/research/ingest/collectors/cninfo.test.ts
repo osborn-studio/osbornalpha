@@ -54,4 +54,17 @@ describe('cninfo collector',()=>{
   expect(await resolveOrgId('600570',{fetch,userAgent:'ua'})).toEqual({orgId:'gssh0600570',name:'恒生电子',category:'A股'});
   expect(await resolveOrgId('600571',{fetch,userAgent:'ua'})).toBeNull();
  });
+
+ it('keeps the exclusive until cutoff exact and asks the server for Beijing calendar dates covering the window',async()=>{
+  let seDate='';
+  const fetch=vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{seDate=decodeURIComponent(/seDate=([^&]+)/.exec(String(init?.body))?.[1]??'');return ok(fx('cninfo-his-600570.json'));});
+  // 2026-09-23T00:00+08:00 == 2026-09-22T16:00Z is exactly the fixture's first announcementTime: excluded by the exclusive bound.
+  const r=await collectCninfo({ctx,companies:[{...hundsun,cninfo_org_id:'gssh0600570'}],since:'2026-09-01T00:00:00Z',until:'2026-09-22T16:00:00Z',fetch,minIntervalMs:0});
+  expect(store.rows('research_source_documents').some(x=>x.metadata.announcement_id==='1225576776')).toBe(false);
+  expect(r.inserted).toBe(4);
+  // since 2026-08-31T20:00Z is already 2026-09-01 in Beijing; until 2026-09-22T16:00Z is 2026-09-23 in Beijing.
+  const fetch2=vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{seDate=decodeURIComponent(/seDate=([^&]+)/.exec(String(init?.body))?.[1]??'');return ok(JSON.stringify({announcements:[],hasMore:false}));});
+  await collectCninfo({ctx,companies:[{...hundsun,cninfo_org_id:'gssh0600570'}],since:'2026-08-31T20:00:00Z',until:'2026-09-22T16:00:00Z',fetch:fetch2,minIntervalMs:0});
+  expect(seDate).toBe('2026-09-01~2026-09-23');
+ });
 });

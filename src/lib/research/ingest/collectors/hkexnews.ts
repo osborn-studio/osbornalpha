@@ -4,7 +4,7 @@
  * title, PDF link). No official JSON; layout drift is reported, never thrown
  * past the receipt.
  */
-import { companyName, createClient, errorMessage, inWindow, isoDate, Receipt, writeDocument } from './shared';
+import { companyName, createClient, errorMessage, inWindow, isoDate, localDate, Receipt, writeDocument } from './shared';
 import type { CollectOptions, CollectReceipt } from './types';
 
 export const HKEX_PREFIX = 'https://www1.hkexnews.hk/search/prefix.do';
@@ -43,7 +43,8 @@ export function parseTitleSearch(html: string): HkexRow[] {
 }
 
 const hkCode = (codes: string[]) => codes.map(c => /^(\d{4,5})\.HK$/.exec(c)?.[1]).find(Boolean);
-const yyyymmdd = (iso: string) => isoDate(iso).replace(/-/g, '');
+// HKEX filters by Hong Kong calendar date (UTC+8); cover every date the UTC window touches, then filter by exact instant.
+const yyyymmdd = (iso: string) => localDate(iso, 8).replace(/-/g, '');
 
 export async function collectHkexnews(opts: CollectOptions): Promise<CollectReceipt> {
   const clock = opts.now ?? (() => new Date());

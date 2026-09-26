@@ -46,4 +46,14 @@ describe('HKEX title search collector',()=>{
   expect(r.failures.map(f=>f.stage)).toEqual(['lookup','lookup']);
   expect(r.ok).toBe(false);
  });
+
+ it('requests Hong Kong calendar dates that cover the UTC window, then filters by exact instant',async()=>{
+  let body='';
+  const fetch=vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{const url=String(input);
+   if(url.includes('/search/prefix.do')) return new Response(fx('hkex-prefix-0268.js'),{status:200});
+   body=String(init?.body);return new Response(fx('hkex-titlesearch-0268.html'),{status:200});});
+  // 2026-09-25T20:00Z is already 26 Sep in Hong Kong; 2026-07-31T17:00Z is 1 Aug.
+  await collectHkexnews({ctx,companies:[kingdee],since:'2026-07-31T17:00:00Z',until:'2026-09-25T20:00:00Z',fetch,minIntervalMs:0});
+  expect(body).toContain('from=20260801');expect(body).toContain('to=20260926');
+ });
 });

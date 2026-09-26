@@ -3,7 +3,7 @@
  * hisAnnouncement/query lists announcements (PDF links). Unofficial endpoint:
  * one request every 500 ms, declared User-Agent, title + metadata only.
  */
-import { companyName, createClient, errorMessage, inWindow, isoDate, Receipt, writeDocument, type Client } from './shared';
+import { companyName, createClient, errorMessage, inWindow, isoDate, localDate, Receipt, writeDocument, type Client } from './shared';
 import type { CollectOptions, CollectReceipt } from './types';
 
 export const CNINFO_TOPSEARCH = 'http://www.cninfo.com.cn/new/information/topSearch/query';
@@ -27,7 +27,8 @@ export async function resolveOrgId(code: string, opts: { fetch?: typeof fetch; u
 }
 
 const aShareCode = (codes: string[]) => codes.map(c => /^(\d{6})\.(SH|SZ)$/.exec(c)).find(Boolean) as RegExpExecArray | undefined;
-const seDate = (since: string, until?: string) => `${isoDate(since)}~${isoDate(until ?? new Date().toISOString())}`;
+// The server filters by Beijing calendar date; ask for every date the UTC window can touch, then filter by exact instant.
+const seDate = (since: string, until: string) => `${localDate(since, 8)}~${localDate(until, 8)}`;
 
 interface Announcement { announcementId: string; announcementTitle: string; announcementTime: number; adjunctUrl: string; adjunctType?: string; secCode?: string; orgId?: string }
 
@@ -52,7 +53,7 @@ export async function collectCninfo(opts: CollectOptions): Promise<CollectReceip
     let taken = 0;
     for (let pageNum = 1; taken < cap; pageNum++) {
       const body = new URLSearchParams({ pageNum: String(pageNum), pageSize: String(PAGE_SIZE), column, tabName: 'fulltext', plate: '', stock: `${code},${orgId}`, searchkey: '', secid: '', category: '', trade: '',
-        seDate: seDate(opts.since, opts.until), sortName: '', sortType: '', isHLtitle: 'true' }).toString();
+        seDate: seDate(opts.since, opts.until ?? clock().toISOString()), sortName: '', sortType: '', isHLtitle: 'true' }).toString();
       let page: { announcements?: Announcement[] | null; hasMore?: boolean };
       try {
         const res = await client.post(CNINFO_HISTORY, body);
@@ -63,8 +64,8 @@ export async function collectCninfo(opts: CollectOptions): Promise<CollectReceip
       for (const a of list) {
         if (taken >= cap) break;
         const eventTime = new Date(a.announcementTime).toISOString();
-        const beijingDate = isoDate(new Date(a.announcementTime + 8 * 3600_000).toISOString()); // announcementTime is Beijing midnight
-        if (!inWindow(eventTime, opts.since, opts.until && `${isoDate(opts.until)}T23:59:59.999Z`)) continue;
+        const beijingDate = localDate(eventTime, 8); // announcementTime is Beijing midnight
+        if (!inWindow(eventTime, opts.since, opts.until)) continue;
         taken++; receipt.r.fetched++;
         const url = STATIC + a.adjunctUrl;
         const title = a.announcementTitle.replace(/<[^>]+>/g, '');
