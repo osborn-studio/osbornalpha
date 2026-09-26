@@ -253,3 +253,78 @@ export function evaluateStopRules(metrics: BackendMetrics[], baseline?: { metric
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Artifact, Markdown and runner
+// ---------------------------------------------------------------------------
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { QUESTION_SET_VERSION } from './questions';
+
+export interface CalibrationArtifact {
+  schema_name: 'alpha-calibration-report'; schema_version: '1.0'; question_set_version: string;
+  generated_at: string; since: string | null; rows: number; labeled: number;
+  metrics: BackendMetrics[]; proposals: ThresholdProposal[]; stop_rules: StopVerdict[]; baseline_generated_at: string | null;
+}
+
+export function buildCalibrationArtifact(input: { rows: ReportRow[]; since: string | null; generatedAt: string; baseline: CalibrationArtifact | null }): CalibrationArtifact {
+  const metrics = classMetrics(input.rows);
+  return {
+    schema_name: 'alpha-calibration-report', schema_version: '1.0', question_set_version: QUESTION_SET_VERSION,
+    generated_at: input.generatedAt, since: input.since, rows: input.rows.length, labeled: input.rows.filter(r => r.label !== null).length,
+    metrics, proposals: proposeThresholds(input.rows), stop_rules: evaluateStopRules(metrics, input.baseline ? { metrics: input.baseline.metrics } : undefined),
+    baseline_generated_at: input.baseline?.generated_at ?? null,
+  };
+}
+
+const f = (v: number | null | undefined, d = 3) => (v === null || v === undefined ? '—' : v.toFixed(d));
+const ci = (r: Rate) => (r.rate === null ? '—' : `${f(r.rate)} [${f(r.low)}, ${f(r.high)}] (k=${r.k}, n=${r.n})`);
+
+export function renderCalibrationMarkdown(a: CalibrationArtifact): string {
+  const lines = [`# 校准重拟报告 ${a.generated_at.slice(0, 10)}`, '', `问题集 ${a.question_set_version}；判断 ${a.rows} 条，其中有标签 ${a.labeled} 条${a.since ? `；起自 ${a.since}` : ''}${a.baseline_generated_at ? `；基线 ${a.baseline_generated_at}` : ''}。`, '', '## 类① 指标', ''];
+  for (const m of a.metrics) {
+    lines.push(`### ${m.backend}（标签 ${m.labels}）`, '', `- important_recall（Q1）：${ci(m.important_recall)}`, `- false_support（Q2）：${ci(m.false_support)}`, '',
+      '| question | n | labeled | accuracy | abstain | ECE before | ECE after | p50 ms | p95 ms | µ$/1k |', '|---|---|---|---|---|---|---|---|---|---|');
+    for (const q of m.questions) lines.push(`| ${q.question_id} | ${q.n} | ${q.labeled} | ${f(q.accuracy)} | ${f(q.abstain_rate)} | ${f(q.ece_before)} | ${f(q.ece_after)} | ${q.p50_latency_ms ?? '—'} | ${q.p95_latency_ms ?? '—'} | ${q.cost_micros_per_1k} |`);
+    lines.push('');
+  }
+  lines.push('## 阈值重拟', '', '| question | 标签 | 状态 | 当前 | 提议 | 指标 |', '|---|---|---|---|---|---|');
+  for (const p of a.proposals) lines.push(`| ${p.question_id} | ${p.labeled} | ${p.status} | ${JSON.stringify(p.current)} | ${p.proposed ? JSON.stringify(p.proposed) : '—'} | ${Object.keys(p.metrics).length ? JSON.stringify(p.metrics) : '—'} |`);
+  lines.push('', '应用方式：人工修改 `src/lib/research/fanout/questions.ts` 的 `THRESHOLDS` 并提升 `question_set_version`，在冻结集上回归后提交。', '', '## 停止 / 换后端', '', '| 规则 | 触发 | 状态 | 证据 |', '|---|---|---|---|');
+  for (const v of a.stop_rules) lines.push(`| ${v.rule} | ${v.triggered ? '是' : '否'} | ${v.status} | ${v.evidence} |`);
+  return `${lines.join('\n')}\n`;
+}
+
+export interface CalibrationCliDeps { load: (since?: string) => Promise<ReportRow[]>; now?: () => string }
+
+/** Argument parsing + file writing; the loader is injected so the runner is testable without a database. */
+export async function runCalibrationCli(args: readonly string[], deps: CalibrationCliDeps): Promise<{ exitCode: number; output: string }> {
+  const fail = (code: number, error: string) => ({ exitCode: code, output: JSON.stringify({ error }) });
+  const values = new Map<string, string>();
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i], v = args[i + 1];
+    if (!a || !['--out', '--since', '--baseline'].includes(a) || v === undefined || values.has(a)) return fail(2, 'invalid_arguments');
+    values.set(a, v); i++;
+  }
+  const out = values.get('--out');
+  if (!out || !path.isAbsolute(out)) return fail(2, 'invalid_arguments');
+  const since = values.get('--since');
+  if (since !== undefined && (Number.isNaN(Date.parse(since)) || !/^\d{4}-\d{2}-\d{2}/.test(since))) return fail(2, 'invalid_arguments');
+  const baselinePath = values.get('--baseline');
+  if (baselinePath !== undefined && !path.isAbsolute(baselinePath)) return fail(2, 'invalid_arguments');
+  let baseline: CalibrationArtifact | null = null;
+  if (baselinePath) {
+    try { const parsed = JSON.parse(readFileSync(baselinePath, 'utf8')); if (parsed?.schema_name !== 'alpha-calibration-report') return fail(1, 'baseline_invalid'); baseline = parsed; }
+    catch { return fail(1, 'baseline_unreadable'); }
+  }
+  const generatedAt = (deps.now ?? (() => new Date().toISOString()))();
+  const rows = await deps.load(since);
+  const artifact = buildCalibrationArtifact({ rows, since: since ?? null, generatedAt, baseline });
+  const day = generatedAt.slice(0, 10);
+  const json = path.join(out, `${day}.json`), markdown = path.join(out, `${day}.md`);
+  mkdirSync(out, { recursive: true });
+  writeFileSync(json, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
+  writeFileSync(markdown, renderCalibrationMarkdown(artifact), 'utf8');
+  return { exitCode: 0, output: JSON.stringify({ rows: artifact.rows, labeled: artifact.labeled, json, markdown,
+    stop_rules: artifact.stop_rules.map(v => ({ rule: v.rule, triggered: v.triggered, status: v.status })), proposals: artifact.proposals.map(p => ({ question_id: p.question_id, status: p.status })) }) };
+}

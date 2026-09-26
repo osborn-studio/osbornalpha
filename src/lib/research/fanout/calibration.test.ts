@@ -126,3 +126,42 @@ describe('evaluateStopRules (§10.3)',()=>{
   expect(verdicts.find(v=>v.rule==='lock_version_recalibrate')).toMatchObject({triggered:true});
  });
 });
+
+import {buildCalibrationArtifact,renderCalibrationMarkdown,runCalibrationCli} from './calibration';
+import {mkdtempSync,readFileSync,realpathSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+
+describe('artifact, markdown and CLI runner',()=>{
+ const rows=()=>{const out:ReportRow[]=[];for(let i=0;i<40;i++){out.push(q1(0.75+(i%5)*0.05,'true'));out.push(q1(0.05+(i%6)*0.05,'false'));out.push(q2(0.9,'support','support'));}return out;};
+ it('builds a deterministic artifact with metrics, proposals and verdicts',()=>{
+  const a=buildCalibrationArtifact({rows:rows(),since:null,generatedAt:'2026-09-26T00:00:00.000Z',baseline:null});
+  expect(a).toMatchObject({schema_name:'alpha-calibration-report',schema_version:'1.0',question_set_version:'v1.0',generated_at:'2026-09-26T00:00:00.000Z',rows:120,labeled:120});
+  expect(a.metrics.map(m=>m.backend)).toEqual(['jev']);
+  expect(a.proposals.find(p=>p.question_id==='Q1')?.status).toBe('proposed');
+  expect(a.stop_rules.map(v=>v.rule)).toEqual(['jev_q3q4_only','do_not_introduce_jev','switch_local_probe','lock_version_recalibrate']);
+  expect(JSON.stringify(a)).toBe(JSON.stringify(buildCalibrationArtifact({rows:rows(),since:null,generatedAt:'2026-09-26T00:00:00.000Z',baseline:null})));
+  const md=renderCalibrationMarkdown(a);
+  for(const h of ['## 类① 指标','## 阈值重拟','## 停止 / 换后端']) expect(md).toContain(h);
+  expect(md).toContain('important_recall');
+  expect(md).not.toMatch(/undefined/);
+ });
+ it('the runner validates arguments, writes dated json + md files and never prints row content',async()=>{
+  const dir=mkdtempSync(path.join(realpathSync(tmpdir()),'calib-'));
+  try{
+   const load=async()=>rows();
+   expect(await runCalibrationCli([],{load})).toMatchObject({exitCode:2});
+   expect(await runCalibrationCli(['--out','relative'],{load})).toMatchObject({exitCode:2});
+   expect(await runCalibrationCli(['--out',dir,'--since','yesterday'],{load})).toMatchObject({exitCode:2});
+   const ok=await runCalibrationCli(['--out',dir],{load,now:()=>'2026-09-26T05:06:07.000Z'});
+   expect(ok.exitCode).toBe(0);
+   const summary=JSON.parse(ok.output);
+   expect(summary).toMatchObject({rows:120,labeled:120,json:path.join(dir,'2026-09-26.json'),markdown:path.join(dir,'2026-09-26.md')});
+   expect(readFileSync(path.join(dir,'2026-09-26.md'),'utf8')).toContain('## 阈值重拟');
+   const again=await runCalibrationCli(['--out',dir,'--baseline',path.join(dir,'2026-09-26.json')],{load,now:()=>'2026-09-27T00:00:00.000Z'});
+   expect(again.exitCode).toBe(0);
+   expect(JSON.parse(readFileSync(path.join(dir,'2026-09-27.json'),'utf8')).stop_rules.find((v:any)=>v.rule==='lock_version_recalibrate')).toMatchObject({status:'evaluated',triggered:false});
+   expect(ok.output).not.toContain('support');
+  }finally{rmSync(dir,{recursive:true,force:true});}
+ });
+});
