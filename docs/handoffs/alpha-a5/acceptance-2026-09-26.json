@@ -1,5 +1,5 @@
 {
-  "ran_at": "2026-09-26T07:19:27.374Z",
+  "ran_at": "2026-09-26T07:26:31.686Z",
   "database": "isolated PostgreSQL 17 via scripts/s4/local-db.ts + PostgREST 16.4 gateway (local only)",
   "owner_note": "throwaway owner uuid; synthetic text only",
   "seeded": {
@@ -198,7 +198,7 @@
       "action": "align.run",
       "detail": {
         "since": null,
-        "aliases": 96,
+        "aliases": 97,
         "scanned": 8,
         "rows_written": 6,
         "sources_aligned": 4,
@@ -221,7 +221,7 @@
       "action": "align.run",
       "detail": {
         "since": null,
-        "aliases": 96,
+        "aliases": 97,
         "scanned": 8,
         "rows_written": 0,
         "sources_aligned": 0,
@@ -232,5 +232,5 @@
   ],
   "sample": "8 rows (population 8, seed 1) → docs/handoffs/alpha-a5/sample-2026-09-26.csv",
   "report_on_unlabeled_sample": "| metric | correct/labeled | rate | Wilson 95% |\n|---|---|---|---|\n| cluster | 0/0 | — | 0.0%–100.0% |\n| alignment | 0/0 | — | 0.0%–100.0% |\n\nsample size: 8",
-  "postgrest_log": "26/Sep/2026:00:19:24 -0700: Starting PostgREST 16.4...\n26/Sep/2026:00:19:24 -0700: Successfully connected to PostgreSQL 17.10 (Homebrew) on aarch64-apple-darwin25.4.0, compiled by Apple clang version "
+  "postgrest_log": "26/Sep/2026:00:26:27 -0700: Starting PostgREST 16.4...\n26/Sep/2026:00:26:27 -0700: Successfully connected to PostgreSQL 17.10 (Homebrew) on aarch64-apple-darwin25.4.0, compiled by Apple clang version "
 }

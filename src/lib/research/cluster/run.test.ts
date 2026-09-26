@@ -37,6 +37,25 @@ describe('runCluster',()=>{
  });
 });
 
+describe('runCluster with a --since window',()=>{
+ it('keeps the original first member when the window excludes it, and still matches new duplicates against old clusters',async()=>{
+  const a=src(1,{url:'https://a.test/p'}),b=src(2,{url:'https://a.test/p?utm_source=x'});
+  const {ctx,store}=mk({research_source_documents:[a,b]});
+  await runCluster(ctx,{});
+  const rows=()=>store.rows('research_source_documents');
+  const cid=rows().find(r=>r.id===a.id)!.cluster_id as string;
+  // Window holds only b: nothing fresh, so nothing is written and b is not promoted.
+  expect(await runCluster(ctx,{since:at(2)})).toMatchObject({scanned:1,fresh:0,written:0});
+  expect(rows().find(r=>r.id===b.id)).toMatchObject({cluster_id:cid,cluster_first:false});
+  // A later duplicate inside the window joins the old cluster as a non-first member.
+  const c=src(9,{url:'https://www.a.test/p'});
+  store.seed('research_source_documents',[{user_id:ctx.userId,...c}]);
+  expect(await runCluster(ctx,{since:at(5)})).toMatchObject({scanned:1,fresh:1,written:1,clusters:1});
+  expect(rows().find(r=>r.id===c.id)).toMatchObject({cluster_id:cid,cluster_first:false});
+  expect(rows().find(r=>r.id===a.id)).toMatchObject({cluster_id:cid,cluster_first:true});
+ });
+});
+
 describe('runAlign',()=>{
  const ent=(name:string,aliases:string[],ticker:string|null=null)=>({id:randomUUID(),type:'COMPANY',name,aliases,ticker});
  it('aligns single-candidate sources, queues multi-candidate ones, merges entity_ids, audits, and is idempotent',async()=>{
@@ -64,5 +83,29 @@ describe('runAlign',()=>{
   expect(out).toMatchObject({rows_written:0,entity_ids_merged:0});
   expect(store.rows('research_source_entity_alignments')).toHaveLength(1);
   expect(store.rows('research_source_documents')[0].entity_ids).toEqual([]);
+ });
+ it('reconciles entity_ids from an existing aligned row instead of skipping the source outright',async()=>{
+  const hs=ent('Hundsun Technologies',['恒生电子']);
+  const s=src(1,{raw_text:'恒生电子',entity_ids:[]});
+  const {ctx,store}=mk({research_entities:[hs],research_source_documents:[s],research_source_entity_alignments:[{source_id:s.id,entity_id:hs.id,method:'rule',status:'aligned',confidence:0.8,evidence:{},decided_at:at(0),decided_by:'rule'}]});
+  expect(await runAlign(ctx,{})).toMatchObject({rows_written:0,entity_ids_merged:1});
+  expect(store.rows('research_source_documents')[0].entity_ids).toEqual([hs.id]);
+ });
+ it('records collector-provided entity_ids as aligned (method collector) and does not second-guess them with the text rule',async()=>{
+  const hs=ent('Hundsun Technologies',['恒生电子']),th=ent('Hithink RoyalFlush',['同花顺']);
+  const s=src(1,{raw_text:'恒生电子与同花顺双双上涨。',entity_ids:[hs.id,'not-a-known-entity']});
+  const {ctx,store}=mk({research_entities:[hs,th],research_source_documents:[s]});
+  expect(await runAlign(ctx,{})).toMatchObject({sources_aligned:1,sources_ambiguous:0,rows_written:1,entity_ids_merged:0});
+  expect(store.rows('research_source_entity_alignments')).toMatchObject([{source_id:s.id,entity_id:hs.id,method:'collector',status:'aligned',confidence:1,decided_by:'collector'}]);
+  expect(store.rows('research_source_documents')[0].entity_ids).toEqual([hs.id,'not-a-known-entity']);
+ });
+ it('matches A2 entity-key names and listing codes, not only the legacy entity row',async()=>{
+  const hs=ent('Hundsun',[]);
+  const s=src(1,{raw_text:'Hundsun Tech (600570.SH) reported results.'});
+  const {ctx,store}=mk({research_entities:[hs],research_source_documents:[s],
+   research_entity_keys:[{entity_id:hs.id,names_en:['Hundsun Technologies Inc.','Hundsun Tech'],names_zh:['恒生电子'],aliases:[],home_market:'A',in_scope:true,updated_at:at(0)}],
+   research_entity_securities:[{id:randomUUID(),entity_id:hs.id,exchange_code:'600570.SH',market:'A',security_type:'common',is_primary:true,valid_from:'2003-12-16'}]});
+  expect(await runAlign(ctx,{})).toMatchObject({sources_aligned:1,rows_written:1});
+  expect(store.rows('research_source_entity_alignments')[0]).toMatchObject({entity_id:hs.id,status:'aligned',evidence:{hits:3}}); // "Hundsun", "Hundsun Tech" and "600570.SH" all hit
  });
 });
