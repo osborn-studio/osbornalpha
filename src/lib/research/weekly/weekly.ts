@@ -77,10 +77,10 @@ export async function decideCard({ actor, readCards, weekOf, card_id, action, re
   if (!weekOk(weekOf) || !isUuid(card_id) || !DECISION_ACTIONS.includes(action) || !text(reason)) fail('invalid_schema');
   if (time_spent_minutes != null && !(Number.isSafeInteger(time_spent_minutes) && time_spent_minutes >= 0)) fail('invalid_schema');
   const card = (await readCards(weekOf)).find(c => c.id === card_id);
-  if (!card) fail('scope_denied');
+  if (!card) { fail('scope_denied'); throw new Error('unreachable'); }
   const status = await weeklyStatus({ actor, readCards, weekOf });
   const thesis = status.theses.find(t => t.thesis_id === card.thesis_id);
-  if (!thesis?.baseline) fail('policy_blocked');
+  if (!thesis?.baseline) { fail('policy_blocked'); throw new Error('unreachable'); }
   if (thesis.collab_by_card[card_id]) fail('idempotency_conflict');
   const cited = await existingJudgments(actor, cardJudgments(card));
   const made = await recordDecision(actor, { thesis_id: card.thesis_id, week_of: weekOf, arm: 'collab', action, reason, card_id, cited_judgment_ids: cited, time_spent_minutes: time_spent_minutes ?? null, observation_id: observation_id ?? null });
