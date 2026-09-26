@@ -56,7 +56,10 @@ export interface RunSummary {
 type ExternalBackend = 'llm_deepseek' | 'jev' | 'jev_escalated';
 
 export function thesisVersion(t: Thesis): string {
-  return digest({ title: t.title, body: t.body, invalidation_conditions: t.invalidation_conditions, watch_metrics: t.watch_metrics, updated_at: t.updated_at });
+  // WP-A7: pillars and opportunity type change what is being judged; catalysts and horizons do not.
+  // Missing fields hash like the migration defaults so pre-A7 versions stay stable.
+  return digest({ title: t.title, body: t.body, invalidation_conditions: t.invalidation_conditions, watch_metrics: t.watch_metrics, updated_at: t.updated_at,
+    opportunity_type: t.opportunity_type ?? 'other', pillars: (t.pillars ?? []).map(p => ({ id: p.id, text: p.text, resolvable_by: p.resolvable_by, deadline: p.deadline })) });
 }
 
 /** External models only see public material that is not a private observation (§6.2, §11). */

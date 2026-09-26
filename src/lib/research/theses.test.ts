@@ -226,7 +226,7 @@ describe('supersedeThesis (§7.4.3)', () => {
     expect(thesis.supersedes).toBe(oldId);
     expect(thesis.id).not.toBe(oldId);
     expect(thesis.invalidation_conditions).toEqual(['新失效条件']);
-    expect(thesis.pillars.map((p) => p.text)).toEqual(['新支柱']);
+    expect(thesis.pillars!.map((p) => p.text)).toEqual(['新支柱']);
     expect(thesis.kill_condition_revisions).toEqual([]);
     const note = (await listThesisEvents(ctx, oldId)).find((e) => e.event_type === 'NOTE');
     expect(note?.detail).toEqual({ superseded_by: thesis.id, reason: '支柱 2 判断错误' });
@@ -249,8 +249,8 @@ describe('reviseKillCondition (§7.4.4)', () => {
     const t = await reviseKillCondition(ctx, id, { index: 1, new_text: 'hyperscaler capex 指引连续两季同比下调', reason: '原文写成环比，口径错误' });
     expect(t.invalidation_conditions).toEqual(['推理 token 单价跌破成本线', 'hyperscaler capex 指引连续两季同比下调']);
     expect(t.kill_condition_revisions).toHaveLength(1);
-    expect(t.kill_condition_revisions[0]).toMatchObject({ index: 1, old_text: 'hyperscaler capex 指引连续两季下调', new_text: 'hyperscaler capex 指引连续两季同比下调', reason: '原文写成环比，口径错误' });
-    expect(t.kill_condition_revisions[0].at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(t.kill_condition_revisions![0]).toMatchObject({ index: 1, old_text: 'hyperscaler capex 指引连续两季下调', new_text: 'hyperscaler capex 指引连续两季同比下调', reason: '原文写成环比，口径错误' });
+    expect(t.kill_condition_revisions![0].at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     const ev = (await listThesisEvents(ctx, id)).find((e) => e.event_type === 'KILL_CONDITION_REVISED');
     expect(ev?.detail).toMatchObject({ index: 1, old_text: 'hyperscaler capex 指引连续两季下调' });
     expect(store.rows('research_audit_log').filter((a) => a.action === 'thesis.revise_kill_condition')).toHaveLength(1);

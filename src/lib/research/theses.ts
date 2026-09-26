@@ -176,7 +176,7 @@ function optionalDate(v: unknown, field: string): string | null {
 }
 
 /** Validate the §5.3 extension fields; missing ones get the migration defaults. */
-function extensionFields(input: CreateThesisInput): Pick<Thesis, 'opportunity_type' | 'pillars' | 'catalysts' | 'horizon_weeks'> {
+function extensionFields(input: CreateThesisInput): { opportunity_type: OpportunityType; pillars: ThesisPillar[]; catalysts: ThesisCatalyst[]; horizon_weeks: number[] } {
   const opportunity_type = input.opportunity_type ?? 'other';
   if (!OPPORTUNITY_TYPES.includes(opportunity_type)) {
     throw new ThesisError(`opportunity_type must be one of ${OPPORTUNITY_TYPES.join(', ')}`, 422);

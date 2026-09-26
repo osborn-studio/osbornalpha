@@ -37,5 +37,11 @@ describe('mayLeaveMachine / thesisVersion',()=>{
   expect(thesisVersion({...t,company_ids:['c']})).toBe(v);
   expect(thesisVersion({...t,invalidation_conditions:['z']})).not.toBe(v);
   expect(thesisVersion({...t,updated_at:'2026-01-03T00:00:00Z'})).not.toBe(v);
+  // WP-A7: pillars and opportunity type are part of the judged thesis; catalysts and horizons are not.
+  expect(thesisVersion({...t,pillars:[{id:'p1',text:'支柱',resolvable_by:'',deadline:null}]})).not.toBe(v);
+  expect(thesisVersion({...t,opportunity_type:'B'})).not.toBe(v);
+  expect(thesisVersion({...t,catalysts:[{text:'c',expected_date:null}],horizon_weeks:[4]})).toBe(v);
+  // A row without the new fields hashes like one with the defaults.
+  expect(thesisVersion({...t,opportunity_type:'other',pillars:[]})).toBe(v);
  });
 });
