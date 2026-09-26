@@ -290,3 +290,21 @@ describe('Codex round 4 regressions',()=>{
   expect(classMetrics(rows)[0]!.labels).toBe(30);
  });
 });
+
+describe('Codex round 5 regressions',()=>{
+ it('applies the inclusive three-point and two-point bands with floating-point tolerance',()=>{
+  const metric=(backend:string,acc:number,abstain:number)=>({backend,labels:400,important_recall:{k:90,n:100,rate:0.9,low:0.83,high:0.94},false_support:{k:2,n:100,rate:0.02,low:0,high:0.07},
+   questions:[{question_id:'Q1',n:100,labeled:100,decided:100,accuracy:acc,abstain_rate:abstain,ece_before:null,ece_after:null}]}) as any;
+  expect(evaluateStopRules([metric('jev',90/100,0.2),metric('rule',87/100,0.1)]).find(v=>v.rule==='do_not_introduce_jev')).toMatchObject({triggered:true});
+  expect(evaluateStopRules([metric('jev',90/100,0.2),metric('local_probe',88/100,0.2)]).find(v=>v.rule==='switch_local_probe')).toMatchObject({triggered:true});
+ });
+ it('derives P(true) from a false-only noul distribution',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<30;i++)rows.push(row({question_id:'Q1',confidence:null,distribution:{false:0.1},selected:'true',abstained:false,label:'true'}));
+  for(let i=0;i<30;i++)rows.push(row({question_id:'Q1',confidence:null,distribution:{false:0.9},selected:'false',abstained:false,label:'false'}));
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q1')!;
+  expect(p.status).toBe('proposed');
+  expect(p.metrics.recall).toBe(1);
+  expect(classMetrics(rows)[0]!.questions[0]!.ece_before).not.toBeNull();
+ });
+});

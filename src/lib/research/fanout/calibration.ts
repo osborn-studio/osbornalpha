@@ -89,7 +89,7 @@ function scoredPoints(rows: ReportRow[]): IsotonicPoint[] {
     if (r.label === null || r.abstained) continue;
     const score = calibrationScore(r);
     if (score == null) continue;
-    const isNoul = r.confidence == null && typeof r.distribution?.true === 'number';
+    const isNoul = r.confidence == null && (typeof r.distribution?.true === 'number' || typeof r.distribution?.false === 'number');
     out.push({ score, hit: isNoul ? (r.label === 'true' ? 1 : 0) : isCorrect(r) ? 1 : 0 });
   }
   return out;
@@ -168,7 +168,12 @@ export interface ThresholdProposal {
   current: Record<string, number | string>; proposed: Record<string, number> | null; metrics: Record<string, number | null>;
 }
 const grid = (from: number, to: number, step: number) => { const out: number[] = []; for (let v = from; v <= to + 1e-9; v += step) out.push(Math.round(v * 100) / 100); return out; };
-const pTrue = (r: ReportRow) => (typeof r.distribution?.true === 'number' ? r.distribution.true : null);
+/** P(true) of a noul row; a false-only distribution implies its complement, like decide(). */
+const pTrue = (r: ReportRow): number | null => {
+  if (typeof r.distribution?.true === 'number') return r.distribution.true;
+  if (typeof r.distribution?.false === 'number') return 1 - r.distribution.false;
+  return null;
+};
 const argmax = (d: Record<string, number>) => Object.entries(d).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 
 export function proposeThresholds(rows: ReportRow[]): ThresholdProposal[] {
@@ -306,7 +311,9 @@ export function evaluateStopRules(metrics: BackendMetrics[], baseline?: { metric
       comparable = true;
       const a = meanAccuracy(jev, qs), b = meanAccuracy(other, qs);
       if (a === null || b === null) continue;
-      const within = rule === 'do_not_introduce_jev' ? a - b <= 0.03 && (meanAbstain(other, qs) ?? 1) < (meanAbstain(jev, qs) ?? 0) : b >= a - 0.02;
+      // Inclusive bands in percentage points, compared on rounded differences (90/100 − 87/100 is 3 pt, not 3.0000000000000027).
+      const diff = Math.round((a - b) * 1e6) / 1e6;
+      const within = rule === 'do_not_introduce_jev' ? diff <= 0.03 && (meanAbstain(other, qs) ?? 1) < (meanAbstain(jev, qs) ?? 0) : diff <= 0.02;
       if (within) hits.push(`${other.backend}: ${b.toFixed(3)} vs jev ${a.toFixed(3)} over ${qs.join('/')}`);
     }
     if (!comparable) { out.push({ rule, triggered: false, status: 'insufficient_evidence', evidence: `no question with ≥ ${MIN_LABELS} labels on both sides` }); continue; }

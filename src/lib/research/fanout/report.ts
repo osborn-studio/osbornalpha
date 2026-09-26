@@ -46,14 +46,17 @@ function percentile(values: number[], p: number): number | null {
 export function calibrationScore(r: ReportRow): number | null {
   if (r.confidence != null) return r.confidence;
   const p = r.distribution?.true;
-  return typeof p === 'number' ? p : null;
+  if (typeof p === 'number') return p;
+  // A noul given as its false probability implies P(true), matching decide().
+  const q = r.distribution?.false;
+  return typeof q === 'number' ? 1 - q : null;
 }
 export function isCorrect(r: ReportRow): boolean { return r.label !== null && r.selected === r.label; }
 
 /** Expected calibration error with equal-width bins; nouls compare P(true) against label==='true'. */
 export function ece(rows: ReportRow[]): number | null {
   const scored = rows.filter(r => r.label !== null && !r.abstained).map(r => {
-    const isNoul = r.confidence == null && typeof r.distribution?.true === 'number';
+    const isNoul = r.confidence == null && (typeof r.distribution?.true === 'number' || typeof r.distribution?.false === 'number');
     const conf = calibrationScore(r);
     if (conf == null) return null;
     return { conf, hit: isNoul ? (r.label === 'true' ? 1 : 0) : (isCorrect(r) ? 1 : 0) };
