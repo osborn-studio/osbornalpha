@@ -5,6 +5,7 @@
 // 不进 G 系 i18n（next-intl messages）管辖。见 docs/research-os/2026-07-04-phase1-skeleton.md T2。
 
 import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import type { SourceDocument } from '@/lib/research/types';
 
 const SOURCE_TYPES = ['GITHUB_RADAR', 'MODEL_USAGE', 'EARNINGS_CALL', 'NEWS', 'FILING', 'NOTE', 'MANUAL'];
@@ -139,9 +140,9 @@ export default function ResearchSourcesPage() {
             const isDiligence = meta.kind === 'diligence';
             const stale = isDiligence && Date.now() - Date.parse(s.ingested_at) > 30 * 86400e3;
             return (
-              <li key={s.id} className="p-3 text-sm">
+              <li key={s.id} id={`src-${s.id}`} className="p-3 text-sm target:bg-yellow-50">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium">{s.title}</span>
+                  <Link href={`/research/sources/${s.id}`} className="font-medium underline">{s.title}</Link>
                   {isDiligence ? (
                     <span className="shrink-0 rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-800">🏢 尽调 v{String(meta.version ?? 1)}</span>
                   ) : (

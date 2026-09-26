@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { checkMemoAxioms, hasBlockingFailure, type MemoForCheck } from './axioms';
+import { checkCardAxioms, checkMemoAxioms, hasBlockingFailure, type MemoForCheck } from './axioms';
 import { AXIOM_SEEDS } from './seed';
 import type { Axiom, SourceDocument } from './types';
 
@@ -142,5 +142,22 @@ describe('checkMemoAxioms plumbing', () => {
     expect(hasBlockingFailure(warnOnly)).toBe(false);
     const block = [...warnOnly, { axiom_code: 'AX001', severity: 'BLOCK' as const, passed: false, message: '' }];
     expect(hasBlockingFailure(block)).toBe(true);
+  });
+});
+
+describe('AX006 — change cards may not contain trading advice (WP-A8 §7.5)', () => {
+  const card = (texts: string[]) => texts.map((text, i) => ({ id: `a${i}`, text }));
+  it('blocks buy/sell/position/target-price language anywhere in the card', () => {
+    for (const bad of ['建议买入并加仓', '目标价 120 元', '仓位控制在三成', '短线做空', '止损位 80', '抄底时机']) {
+      const r = checkCardAxioms({ title: 'x', assertions: card([bad]) }, AXIOMS);
+      expect(result(r, 'AX006').passed, bad).toBe(false);
+      expect(hasBlockingFailure(r), bad).toBe(true);
+    }
+    expect(result(checkCardAxioms({ title: '必涨的机会', assertions: [] }, AXIOMS), 'AX005').passed).toBe(false);
+  });
+  it('passes analytical language and reports both card axioms only', () => {
+    const r = checkCardAxioms({ title: '推理需求转向', assertions: card(['数据中心营收同比增长 50%', '市场可能低估毛利率韧性']) }, AXIOMS);
+    expect(r.map((x) => x.axiom_code).sort()).toEqual(['AX005', 'AX006']);
+    expect(hasBlockingFailure(r)).toBe(false);
   });
 });

@@ -83,6 +83,12 @@ export const AXIOM_SEEDS: AxiomSeed[] = [
     description: '结论/thesis 含"必涨、保证、稳赚、无风险"等收益承诺字样时直接阻断。',
     severity: 'BLOCK',
   },
+  {
+    code: 'AX006',
+    title: '变化卡不得含买卖建议',
+    description: '变化卡任何断言含买入/卖出/建仓/加仓/减仓/清仓/目标价/止损/止盈/仓位/做多/做空/买点/卖点/抄底/逃顶等交易建议字样时直接阻断（总纲 §7.5）。',
+    severity: 'BLOCK',
+  },
 ];
 
 export interface SeedResult {
@@ -103,6 +109,16 @@ export async function seedResearchData(ctx: ResearchCtx): Promise<SeedResult> {
   for (const t of THEME_SEEDS) {
     await upsertEntity(ctx, { type: 'THEME', name: t.name, description: t.description });
   }
+  await seedAxioms(ctx);
+  return {
+    companies: COMPANY_SEEDS.length,
+    themes: THEME_SEEDS.length,
+    axioms: AXIOM_SEEDS.length,
+  };
+}
+
+/** Upsert the axiom seeds by (user_id, code). Idempotent; never touches `active` on existing rows. */
+export async function seedAxioms(ctx: ResearchCtx): Promise<number> {
   // Axiom upsert by (user_id, code): update the mutable columns on existing
   // rows (never their id — same semantics as the old ON CONFLICT DO UPDATE),
   // insert the rest. `active` is the Postgres column for the app's `enabled`.
@@ -138,9 +154,5 @@ export async function seedResearchData(ctx: ResearchCtx): Promise<SeedResult> {
       if (error) throw new Error(error.message);
     }
   }
-  return {
-    companies: COMPANY_SEEDS.length,
-    themes: THEME_SEEDS.length,
-    axioms: AXIOM_SEEDS.length,
-  };
+  return AXIOM_SEEDS.length;
 }

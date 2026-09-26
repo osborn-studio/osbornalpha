@@ -12,6 +12,7 @@ const NAV = [
   ...(process.env.ALPHA_S4_ENABLED === '1' ? [{ href: '/research/observations', label: '变化与观察' }] : []),
   { href: '/research/signals', label: 'Signals' },
   { href: '/research/theses', label: 'Theses' },
+  { href: '/research/cards', label: 'Cards' },
   { href: '/research/memos', label: 'Memos' },
   { href: '/research/playbooks', label: 'Playbooks' },
   { href: '/research/evals', label: 'Evals' },

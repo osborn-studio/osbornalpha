@@ -1,4 +1,6 @@
 'use client';
+
+import Link from 'next/link';
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useTranslations } from 'next-intl';
 import { classifyMarket } from '@/lib/utils';
@@ -441,7 +443,7 @@ export function CopilotClient({ initialTicker = '', initialQuestion = '', autoSt
                 {saving ? t('savingBrain') : t('saveToBrain')}
               </button>
               {saved.startsWith('v:') && (
-                <a href="/research/sources" className="text-xs text-up">{t('savedToBrain', { version: saved.slice(2) })}</a>
+                <Link href="/research/sources" className="text-xs text-up">{t('savedToBrain', { version: saved.slice(2) })}</Link>
               )}
               {saved === 'forbidden' && <span className="text-xs text-down">{t('needAdmin')}</span>}
               {saved.startsWith('error:') && <span className="text-xs text-down">{saved.slice(6)}</span>}
