@@ -1,0 +1,357 @@
+{
+  "ran_at": "2026-09-26T08:26:37.525Z",
+  "database": "isolated PostgreSQL 17 (scripts/s4/local-db.ts); ledger read through the S4 runtime pool; Supabase paths through a local PostgREST 16.4 gateway",
+  "model": "fake-local (no external call); synthetic text only; throwaway owner uuid",
+  "fixture": {
+    "theses": 3,
+    "sources": 6,
+    "notes": [
+      "S4 private → excluded_private",
+      "S5 cluster_first=false → not evidence",
+      "S0 available last week → its host sec.gov is familiar; blog.newsite.org is unfamiliar",
+      "T3 has no judgments"
+    ]
+  },
+  "dry_run": {
+    "run_id": "136883de-606a-4772-a136-8741d56ddefe",
+    "week_of": "2026-09-21",
+    "ledger_rows": 16,
+    "theses_with_evidence": 2,
+    "excluded_private": 1,
+    "selected": 3,
+    "counter_card": "counter_evidence",
+    "written": 0,
+    "blocked": 0,
+    "skipped_existing": 0,
+    "cards": [
+      {
+        "kind": "evidence",
+        "thesis_id": "a250bca3-1db1-427c-b51b-041d2420cd4f",
+        "title": "(dry-run)",
+        "status": "dry-run",
+        "support": 1,
+        "counter": 1
+      },
+      {
+        "kind": "evidence",
+        "thesis_id": "34e5f596-a4c4-42ac-b43d-c763785b5955",
+        "title": "(dry-run)",
+        "status": "dry-run",
+        "support": 1,
+        "counter": 0
+      },
+      {
+        "kind": "counter",
+        "thesis_id": "a250bca3-1db1-427c-b51b-041d2420cd4f",
+        "title": "(dry-run)",
+        "status": "dry-run",
+        "support": 1,
+        "counter": 1
+      }
+    ]
+  },
+  "run_1": {
+    "run_id": "4d298f2c-d185-45a8-bb27-4c594e6823b9",
+    "week_of": "2026-09-21",
+    "ledger_rows": 16,
+    "theses_with_evidence": 2,
+    "excluded_private": 1,
+    "selected": 3,
+    "counter_card": "counter_evidence",
+    "written": 3,
+    "blocked": 0,
+    "skipped_existing": 0,
+    "cards": [
+      {
+        "kind": "evidence",
+        "thesis_id": "a250bca3-1db1-427c-b51b-041d2420cd4f",
+        "title": "反证卡（合成）",
+        "status": "generated",
+        "support": 1,
+        "counter": 1
+      },
+      {
+        "kind": "evidence",
+        "thesis_id": "34e5f596-a4c4-42ac-b43d-c763785b5955",
+        "title": "反证卡（合成）",
+        "status": "generated",
+        "support": 1,
+        "counter": 0
+      },
+      {
+        "kind": "counter",
+        "thesis_id": "a250bca3-1db1-427c-b51b-041d2420cd4f",
+        "title": "反证卡（合成）",
+        "status": "generated",
+        "support": 1,
+        "counter": 1
+      }
+    ]
+  },
+  "run_2_idempotent": {
+    "run_id": "7a5da74f-6384-48b6-8c44-f7e01721ad73",
+    "week_of": "2026-09-21",
+    "ledger_rows": 16,
+    "theses_with_evidence": 2,
+    "excluded_private": 1,
+    "selected": 3,
+    "counter_card": "counter_evidence",
+    "written": 0,
+    "blocked": 0,
+    "skipped_existing": 3,
+    "cards": []
+  },
+  "blocked_week": {
+    "run_id": "440fb7e9-aaaa-4eb8-aa75-288d4bdd990b",
+    "week_of": "2026-09-28",
+    "ledger_rows": 2,
+    "theses_with_evidence": 1,
+    "excluded_private": 0,
+    "selected": 1,
+    "counter_card": "none",
+    "written": 1,
+    "blocked": 1,
+    "skipped_existing": 0,
+    "cards": [
+      {
+        "kind": "evidence",
+        "thesis_id": "a250bca3-1db1-427c-b51b-041d2420cd4f",
+        "title": "x",
+        "status": "blocked",
+        "support": 1,
+        "counter": 0
+      }
+    ]
+  },
+  "llm_calls": 3,
+  "cards": [
+    {
+      "week_of": "2026-09-28",
+      "kind": "evidence",
+      "thesis": "T1 推理需求转向",
+      "status": "blocked",
+      "title": "x",
+      "fields": {
+        "change_and_timing": [
+          "建议买入 [424d062f@1, 2 judgments]"
+        ],
+        "next_fact_to_verify": "待研究",
+        "beneficiaries_and_losers": "待研究",
+        "market_may_underestimate": "待研究",
+        "profit_or_moat_transmission": "待研究",
+        "support_counter_independence": "待研究",
+        "watch_points_weeks_and_half_year": "待研究"
+      },
+      "evidence": {
+        "counter": 0,
+        "support": 1,
+        "uncertainty": "1 条支持、0 条反证、1 个独立来源；独立来源不足 2 个，结论不确定；本周未见反证，可能存在未覆盖的反面材料",
+        "excluded_private": 0,
+        "unfamiliar_hosts": [],
+        "independent_sources": 1
+      },
+      "generation": {
+        "model": "fake-local",
+        "run_id": "440fb7e9-aaaa-4eb8-aa75-288d4bdd990b",
+        "generated_at": "…",
+        "prompt_sha256": "6e3591f65b8eede1db51088d274de2d2fb2c7cb746fec7656811d809db728596",
+        "unsupported_dropped": 0
+      },
+      "axiom_results": [
+        {
+          "passed": true,
+          "message": "无收益承诺话术",
+          "severity": "BLOCK",
+          "axiom_code": "AX005"
+        },
+        {
+          "passed": false,
+          "message": "断言 a1 含交易建议字样「买入」，直接阻断",
+          "severity": "BLOCK",
+          "axiom_code": "AX006"
+        }
+      ]
+    },
+    {
+      "week_of": "2026-09-21",
+      "kind": "counter",
+      "thesis": "T1 推理需求转向",
+      "status": "generated",
+      "title": "反证卡（合成）",
+      "fields": {
+        "change_and_timing": [
+          "合成断言：变化与时间 [424d062f@1, 3 judgments]"
+        ],
+        "next_fact_to_verify": [
+          "合成：核实口径 [424d062f@1, 3 judgments]"
+        ],
+        "beneficiaries_and_losers": "待研究",
+        "market_may_underestimate": "待研究",
+        "profit_or_moat_transmission": [
+          "合成断言：传导 [424d062f@1, 3 judgments]"
+        ],
+        "support_counter_independence": [
+          "合成：支持与反证 [7191d605@1, 3 judgments]"
+        ],
+        "watch_points_weeks_and_half_year": [
+          "合成：下季拆分 [424d062f@1, 3 judgments]"
+        ]
+      },
+      "evidence": {
+        "counter": 1,
+        "support": 1,
+        "uncertainty": "1 条支持、1 条反证、2 个独立来源；含陌生来源：blog.newsite.org",
+        "excluded_private": 1,
+        "unfamiliar_hosts": [
+          "blog.newsite.org"
+        ],
+        "independent_sources": 2
+      },
+      "generation": {
+        "model": "fake-local",
+        "run_id": "4d298f2c-d185-45a8-bb27-4c594e6823b9",
+        "generated_at": "…",
+        "prompt_sha256": "07e656c95c1b7c4d990c93a420d2fc8da424429d7bfa1828162e7189136381e6",
+        "unsupported_dropped": 1
+      },
+      "axiom_results": [
+        {
+          "passed": true,
+          "message": "无收益承诺话术",
+          "severity": "BLOCK",
+          "axiom_code": "AX005"
+        },
+        {
+          "passed": true,
+          "message": "无买卖建议",
+          "severity": "BLOCK",
+          "axiom_code": "AX006"
+        }
+      ]
+    },
+    {
+      "week_of": "2026-09-21",
+      "kind": "evidence",
+      "thesis": "T1 推理需求转向",
+      "status": "generated",
+      "title": "反证卡（合成）",
+      "fields": {
+        "change_and_timing": [
+          "合成断言：变化与时间 [424d062f@1, 3 judgments]"
+        ],
+        "next_fact_to_verify": [
+          "合成：核实口径 [424d062f@1, 3 judgments]"
+        ],
+        "beneficiaries_and_losers": "待研究",
+        "market_may_underestimate": "待研究",
+        "profit_or_moat_transmission": [
+          "合成断言：传导 [424d062f@1, 3 judgments]"
+        ],
+        "support_counter_independence": [
+          "合成：支持与反证 [7191d605@1, 3 judgments]"
+        ],
+        "watch_points_weeks_and_half_year": [
+          "合成：下季拆分 [424d062f@1, 3 judgments]"
+        ]
+      },
+      "evidence": {
+        "counter": 1,
+        "support": 1,
+        "uncertainty": "1 条支持、1 条反证、2 个独立来源；含陌生来源：blog.newsite.org",
+        "excluded_private": 1,
+        "unfamiliar_hosts": [
+          "blog.newsite.org"
+        ],
+        "independent_sources": 2
+      },
+      "generation": {
+        "model": "fake-local",
+        "run_id": "4d298f2c-d185-45a8-bb27-4c594e6823b9",
+        "generated_at": "…",
+        "prompt_sha256": "8590b52ce6042fc22f2fa89b41a7e95b3988d4147d6ad0b4e0dc85bdb3f28e27",
+        "unsupported_dropped": 1
+      },
+      "axiom_results": [
+        {
+          "passed": true,
+          "message": "无收益承诺话术",
+          "severity": "BLOCK",
+          "axiom_code": "AX005"
+        },
+        {
+          "passed": true,
+          "message": "无买卖建议",
+          "severity": "BLOCK",
+          "axiom_code": "AX006"
+        }
+      ]
+    },
+    {
+      "week_of": "2026-09-21",
+      "kind": "evidence",
+      "thesis": "T2 金融 IT 国产化",
+      "status": "generated",
+      "title": "反证卡（合成）",
+      "fields": {
+        "change_and_timing": [
+          "合成断言：变化与时间 [359202bd@1, 3 judgments]"
+        ],
+        "next_fact_to_verify": [
+          "合成：核实口径 [359202bd@1, 3 judgments]"
+        ],
+        "beneficiaries_and_losers": "待研究",
+        "market_may_underestimate": "待研究",
+        "profit_or_moat_transmission": [
+          "合成断言：传导 [359202bd@1, 3 judgments]"
+        ],
+        "support_counter_independence": [
+          "合成：支持与反证 [359202bd@1, 3 judgments]"
+        ],
+        "watch_points_weeks_and_half_year": [
+          "合成：下季拆分 [359202bd@1, 3 judgments]"
+        ]
+      },
+      "evidence": {
+        "counter": 0,
+        "support": 1,
+        "uncertainty": "1 条支持、0 条反证、1 个独立来源；独立来源不足 2 个，结论不确定；本周未见反证，可能存在未覆盖的反面材料；含陌生来源：cninfo.com.cn",
+        "excluded_private": 1,
+        "unfamiliar_hosts": [
+          "cninfo.com.cn"
+        ],
+        "independent_sources": 1
+      },
+      "generation": {
+        "model": "fake-local",
+        "run_id": "4d298f2c-d185-45a8-bb27-4c594e6823b9",
+        "generated_at": "…",
+        "prompt_sha256": "b0b42ecb465040ad3dc7b6efb108a3a739c00b54e347ac01baa1fad0fe3dc0c2",
+        "unsupported_dropped": 1
+      },
+      "axiom_results": [
+        {
+          "passed": true,
+          "message": "无收益承诺话术",
+          "severity": "BLOCK",
+          "axiom_code": "AX005"
+        },
+        {
+          "passed": true,
+          "message": "无买卖建议",
+          "severity": "BLOCK",
+          "axiom_code": "AX006"
+        }
+      ]
+    }
+  ],
+  "audit": [
+    {
+      "action": "card.generate",
+      "n": 4
+    },
+    {
+      "action": "cards.run",
+      "n": 3
+    }
+  ]
+}
