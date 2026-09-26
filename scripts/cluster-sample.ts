@@ -21,7 +21,7 @@ async function main() {
   const ctx = getServiceResearchCtx();
   const population: SampleSource[] = (await listSourcesSince(ctx, '1970-01-01T00:00:00.000Z'))
     .filter(s => s.cluster_id !== null)
-    .map(s => ({ id: s.id, title: s.title, url: s.url, cluster_id: s.cluster_id as string, cluster_first: s.cluster_first, entity_ids: s.entity_ids }));
+    .map(s => ({ id: s.id, title: s.title, url: s.url ?? null, cluster_id: s.cluster_id as string, cluster_first: s.cluster_first ?? null, entity_ids: s.entity_ids }));
   const sample = pickSample(population, n, seed);
   const alignments: Record<string, SampleAlignment[]> = {};
   for (let i = 0; i < sample.length; i += 200) {

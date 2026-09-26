@@ -22,7 +22,7 @@ export interface ClusterRunSummary { scanned: number; fresh: number; written: nu
 export interface AlignRunSummary { scanned: number; sources_aligned: number; sources_ambiguous: number; rows_written: number; entity_ids_merged: number }
 
 const toClusterInput = (s: SourceDocument): ClusterInputSource => ({
-  id: s.id, title: s.title, url: s.url, raw_text: s.raw_text, available_at: s.available_at, cluster_id: s.cluster_id, cluster_first: s.cluster_first,
+  id: s.id, title: s.title ?? null, url: s.url ?? null, raw_text: s.raw_text, available_at: s.available_at ?? s.ingested_at, cluster_id: s.cluster_id ?? null, cluster_first: s.cluster_first ?? null,
 });
 
 export async function runCluster(ctx: ResearchCtx, opts: RunWindow & { jaccard?: number }): Promise<ClusterRunSummary> {
