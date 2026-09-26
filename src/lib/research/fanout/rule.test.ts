@@ -20,7 +20,8 @@ describe('rule backend',()=>{
   expect(q('Q3').selected).toBe('analyst_or_media'); // news domain
   expect(q('Q4').selected).toBe('completed');        // 已完成
   expect(r.answers.map(a=>a.question_id).sort()).toEqual(['Q1','Q2','Q3','Q4']);
-  expect(await ruleBackend(input())).toEqual(r);
+  const again=await ruleBackend(input());
+  expect({...again,latency_ms:0}).toEqual({...r,latency_ms:0});
  });
  it('flags an invalidation condition quoted in the material',async()=>{
   const r=await ruleBackend(input(source({raw_text:'报告称券商 IT 投入连续两年下滑，恒生电子订单承压。'})));
