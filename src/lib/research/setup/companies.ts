@@ -125,3 +125,13 @@ export function reconcileAddedCompany(answers: Record<string, OwnerCompanyAnswer
   if (!created) return answers;
   return { ...rest, [entityId]: { ...created, entity_id: entityId } };
 }
+
+/**
+ * The roster as the draft knows it: selected existing companies (any key that is an entity id,
+ * including ones created earlier in a partially successful run) and still-to-create `new:` answers.
+ * Deriving it from the draft rather than from the fetched company list keeps retries usable.
+ */
+export function rosterKeys(answers: Record<string, OwnerCompanyAnswer>): { selected: string[]; added: string[] } {
+  const keys = Object.keys(answers);
+  return { selected: keys.filter((k) => !k.startsWith('new:')), added: keys.filter((k) => k.startsWith('new:')) };
+}

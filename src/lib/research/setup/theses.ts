@@ -137,3 +137,8 @@ export function saveOutcomeMessage(input: { title: string; activate: boolean; ac
   if (input.activated) return `已保存并激活：${input.title}`;
   return `已保存为草稿：${input.title}；激活失败（${input.error ?? '未知错误'}），请到 theses 页手动激活，不要重复提交`;
 }
+
+/** Selected company ids that are no longer in scope (a persisted draft outliving a roster change). */
+export function staleCompanyIds(selected: readonly string[], inScopeIds: readonly string[]): string[] {
+  return selected.filter((id) => !inScopeIds.includes(id));
+}

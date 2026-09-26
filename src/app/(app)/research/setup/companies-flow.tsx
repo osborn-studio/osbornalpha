@@ -6,7 +6,7 @@ import { useMemo, useState } from 'react';
 import type { ScopedCompany } from '@/lib/research/entity-keys/scope';
 import { HOME_MARKETS, KEY_NAMES, type HomeMarket, type KeyName } from '@/lib/research/entity-keys/types';
 import { COMPANY_QUESTIONS, type CompanyQuestionId } from '@/lib/research/setup/questions';
-import { companiesStepErrors, companiesSubmitErrors, reconcileAddedCompany, type OwnerCompanyAnswer } from '@/lib/research/setup/companies';
+import { companiesStepErrors, companiesSubmitErrors, reconcileAddedCompany, rosterKeys, type OwnerCompanyAnswer } from '@/lib/research/setup/companies';
 import { TARGETS } from '@/lib/research/setup/progress';
 import { inputClass, labelClass, ProgressBar, QuestionCard, WizardNav } from './wizard';
 
@@ -39,8 +39,10 @@ export function CompaniesFlow({ companies, answers, step, onAnswersChange, onSte
   const [errors, setErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const selectedIds = useMemo(() => companies.filter((c) => answers[c.entity_id]).map((c) => c.entity_id), [companies, answers]);
-  const newKeys = useMemo(() => Object.keys(answers).filter((k) => k.startsWith('new:')), [answers]);
+  // Roster from the draft, not from the fetched list: a company created in a partial run stays selectable before refresh.
+  const { selected: selectedIds, added: newKeys } = useMemo(() => rosterKeys(answers), [answers]);
+  const rowOf = (id: string) => companies.find((x) => x.entity_id === id);
+  const nameOf = (id: string) => rowOf(id)?.names_zh[0] ?? rowOf(id)?.names_en[0] ?? answers[id]?.names_zh.split('\n')[0] ?? answers[id]?.names_en.split('\n')[0] ?? id;
   const total = selectedIds.length + 3;
   const byMarket = useMemo(() => {
     const groups = new Map<string, ScopedCompany[]>();
@@ -70,14 +72,21 @@ export function CompaniesFlow({ companies, answers, step, onAnswersChange, onSte
     const failures: string[] = [];
     let current = answers;
     const lines = (s: string) => s.split('\n').map((x) => x.trim()).filter(Boolean);
+    const post = async (url: string, method: string, body: unknown): Promise<{ ok: boolean; data: { company?: { entity_id: string }; error?: { message?: string } }; status: string }> => {
+      try {
+        const res = await fetch(url, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        return { ok: res.ok, data: await res.json().catch(() => ({})), status: String(res.status) };
+      } catch (e) {
+        return { ok: false, data: {}, status: e instanceof Error ? e.message : '网络错误' };
+      }
+    };
     try {
       // 1. Owner-added companies first: each success is reconciled into the draft as an existing company,
       //    so a retry after a later failure PATCHes it instead of POSTing it again (which would be 409).
       for (const k of newKeys) {
         const a = current[k]!;
-        const res = await fetch('/api/research/entity-keys', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(a) });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) { failures.push(`${a.names_zh || a.names_en}：${data?.error?.message ?? res.status}`); continue; }
+        const { ok, data, status } = await post('/api/research/entity-keys', 'POST', a);
+        if (!ok || !data.company) { failures.push(`${a.names_zh || a.names_en}：${data.error?.message ?? status}`); continue; }
         current = reconcileAddedCompany(current, k, data.company.entity_id);
         onAnswersChange(current);
       }
@@ -85,17 +94,16 @@ export function CompaniesFlow({ companies, answers, step, onAnswersChange, onSte
       for (const id of Object.keys(current).filter((k) => !k.startsWith('new:'))) {
         const a = current[id]!;
         const keys = Object.fromEntries(KEY_NAMES.filter((k) => a.keys[k].trim() !== '').map((k) => [k, a.keys[k].trim()]));
-        const res = await fetch(`/api/research/entity-keys/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ in_scope: true, rationale: a.rationale, keys, ...(lines(a.names_zh).length ? { names_zh: lines(a.names_zh) } : {}), ...(lines(a.names_en).length ? { names_en: lines(a.names_en) } : {}) }) });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) failures.push(`${a.names_zh.split('\n')[0] || id}：${data?.error?.message ?? res.status}`);
+        const { ok, data, status } = await post(`/api/research/entity-keys/${id}`, 'PATCH',
+          { in_scope: true, rationale: a.rationale, keys, ...(lines(a.names_zh).length ? { names_zh: lines(a.names_zh) } : {}), ...(lines(a.names_en).length ? { names_en: lines(a.names_en) } : {}) });
+        if (!ok) failures.push(`${nameOf(id)}：${data.error?.message ?? status}`);
       }
       // 3. Removals last, and only when everything above succeeded: nothing leaves the list on a partial run.
       if (failures.length === 0) {
         for (const c of companies) {
           if (c.in_scope && !current[c.entity_id]) {
-            const res = await fetch(`/api/research/entity-keys/${c.entity_id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ in_scope: false, rationale: '本轮未入选' }) });
-            if (!res.ok) failures.push(`${c.names_zh[0] ?? c.names_en[0]}：移出失败 ${res.status}`);
+            const { ok, data, status } = await post(`/api/research/entity-keys/${c.entity_id}`, 'PATCH', { in_scope: false, rationale: '本轮未入选' });
+            if (!ok) failures.push(`${c.names_zh[0] ?? c.names_en[0]}：移出失败 ${data.error?.message ?? status}`);
           }
         }
       }
@@ -130,11 +138,11 @@ export function CompaniesFlow({ companies, answers, step, onAnswersChange, onSte
     }
     if (step <= selectedIds.length) {
       const id = selectedIds[step - 1]!;
-      const c = companies.find((x) => x.entity_id === id)!;
       const a = answers[id]!;
+      const c = rowOf(id) ?? { entity_id: id, keys: { lei: null, usci: null, cninfo_org_id: null, cik: null }, missing: [] as KeyName[], names_zh: [], names_en: [] };
       const set = (patch: Partial<OwnerCompanyAnswer>) => setAnswer(id, { ...a, ...patch });
       return (
-        <QuestionCard question={{ ...q('rationale'), prompt: `${c.names_zh[0] ?? c.names_en[0]}：${q('rationale').prompt}` }} errors={errors}>
+        <QuestionCard question={{ ...q('rationale'), prompt: `${nameOf(id)}：${q('rationale').prompt}` }} errors={errors}>
           <textarea className={inputClass} rows={3} value={a.rationale} onChange={(e) => set({ rationale: e.target.value })} placeholder={q('rationale').example} autoFocus />
           <details className="rounded border p-3 text-sm" open={c.missing.length > 0}>
             <summary className="cursor-pointer">{q('keys').prompt}{c.missing.length > 0 && <span className="ml-2 text-xs text-amber-700">缺 {c.missing.join(' / ')}</span>}</summary>
@@ -191,8 +199,8 @@ export function CompaniesFlow({ companies, answers, step, onAnswersChange, onSte
         <table className="w-full text-sm">
           <thead><tr className="text-left text-gray-500"><th className="py-1">公司</th><th>市场</th><th>代码</th><th>缺失键</th><th>理由</th></tr></thead>
           <tbody>
-            {selectedIds.map((id) => { const c = companies.find((x) => x.entity_id === id)!; const a = answers[id]!; return (
-              <tr key={id} className="border-t"><td className="py-1">{c.names_zh[0] ?? c.names_en[0]}</td><td>{MARKET_LABEL[c.home_market as HomeMarket] ?? c.home_market}</td><td>{c.securities.find((s) => s.is_primary)?.exchange_code}</td><td>{c.missing.filter((k) => a.keys[k].trim() === '').join(' / ') || '—'}</td><td className="text-gray-700">{a.rationale}</td></tr>
+            {selectedIds.map((id) => { const c = rowOf(id); const a = answers[id]!; return (
+              <tr key={id} className="border-t"><td className="py-1">{nameOf(id)}{!c && <span className="ml-1 text-xs text-blue-700">已创建，待刷新</span>}</td><td>{MARKET_LABEL[(c?.home_market ?? a.home_market) as HomeMarket]}</td><td>{c?.securities.find((s) => s.is_primary)?.exchange_code ?? a.exchange_code.toUpperCase()}</td><td>{(c?.missing ?? KEY_NAMES).filter((k) => a.keys[k].trim() === '').join(' / ') || '—'}</td><td className="text-gray-700">{a.rationale}</td></tr>
             ); })}
             {newKeys.map((k) => { const a = answers[k]!; return (
               <tr key={k} className="border-t"><td className="py-1">{a.names_zh} <span className="text-xs text-blue-700">新增</span></td><td>{MARKET_LABEL[a.home_market]}</td><td>{a.exchange_code.toUpperCase()}</td><td>{KEY_NAMES.filter((x) => a.keys[x].trim() === '').join(' / ') || '—'}</td><td className="text-gray-700">{a.rationale}</td></tr>

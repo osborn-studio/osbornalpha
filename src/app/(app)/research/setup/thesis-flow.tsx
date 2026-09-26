@@ -5,7 +5,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import type { ScopedCompany } from '@/lib/research/entity-keys/scope';
 import { THESIS_QUESTIONS, type ThesisQuestionId } from '@/lib/research/setup/questions';
-import { saveOutcomeMessage, thesisFormToInput, validateThesisStep, type ThesisDraft } from '@/lib/research/setup/theses';
+import { saveOutcomeMessage, staleCompanyIds, thesisFormToInput, validateThesisStep, type ThesisDraft } from '@/lib/research/setup/theses';
 import { OPPORTUNITY_TYPES } from '@/lib/research/types';
 import { OPPORTUNITY_LABELS } from '../theses/thesis-form';
 import { inputClass, labelClass, ListEditor, ProgressBar, QuestionCard, WizardNav } from './wizard';
@@ -119,7 +119,19 @@ export function ThesisFlow({ companies, draft, step, onDraftChange, onStepChange
         ))}
       </div>
     ),
-    companies: () => inScope.length === 0
+    companies: () => (
+      <div className="space-y-3">
+        {staleCompanyIds(draft.company_ids, vctx.inScopeIds).length > 0 && (
+          <div className="rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900">
+            以下已选公司已不在名单里，请移除：
+            {staleCompanyIds(draft.company_ids, vctx.inScopeIds).map((id) => (
+              <button key={id} type="button" className="ml-2 rounded border px-2 text-xs" onClick={() => set({ company_ids: draft.company_ids.filter((x) => x !== id) })}>
+                {companies.find((c) => c.entity_id === id)?.names_zh[0] ?? id.slice(0, 8)} ×
+              </button>
+            ))}
+          </div>
+        )}
+        {inScope.length === 0
       ? <p className="text-sm text-amber-800">名单里还没有 in_scope 的公司，请先完成「公司名单」流程。</p>
       : (
         <div className="grid gap-1 md:grid-cols-2">
@@ -130,7 +142,9 @@ export function ThesisFlow({ companies, draft, step, onDraftChange, onStepChange
             </label>
           ))}
         </div>
-      ),
+      )}
+      </div>
+    ),
     pillars: () => (
       <div className="space-y-3">
         {draft.pillars.map((p, i) => (

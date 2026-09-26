@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { COMPANY_QUESTIONS, THESIS_QUESTIONS } from './questions';
-import { EMPTY_THESIS_DRAFT, isCalendarDate, saveOutcomeMessage, thesisFormToInput, validateThesisStep, type ThesisDraft } from './theses';
-import { companiesStepErrors, companiesSubmitErrors, ownerCompanyToCohort, reconcileAddedCompany, validateCompanyAnswer, type OwnerCompanyAnswer } from './companies';
+import { EMPTY_THESIS_DRAFT, isCalendarDate, saveOutcomeMessage, staleCompanyIds, thesisFormToInput, validateThesisStep, type ThesisDraft } from './theses';
+import { companiesStepErrors, companiesSubmitErrors, ownerCompanyToCohort, reconcileAddedCompany, rosterKeys, validateCompanyAnswer, type OwnerCompanyAnswer } from './companies';
 import { setupProgress, TARGETS } from './progress';
 import { parseDraft, resetCompanyDraft, resetThesisDraft, serializeDraft } from './draft';
 
@@ -212,5 +212,21 @@ describe('Codex round 3 regressions', () => {
     expect(saveOutcomeMessage({ title: 'T', activate: false, activated: null })).toBe('已保存为草稿：T');
     expect(saveOutcomeMessage({ title: 'T', activate: true, activated: true })).toBe('已保存并激活：T');
     expect(saveOutcomeMessage({ title: 'T', activate: true, activated: false, error: 'network' })).toBe('已保存为草稿：T；激活失败（network），请到 theses 页手动激活，不要重复提交');
+  });
+});
+
+
+describe('Codex round 4 regressions', () => {
+  const a: OwnerCompanyAnswer = { entity_id: 'e1', rationale: 'r', names_zh: '', names_en: '', home_market: 'A', exchange_code: '', listed_on: '', keys: { lei: '', usci: '', cninfo_org_id: '', cik: '' } };
+
+  it('exposes stale thesis selections so they can be removed from the picker', () => {
+    expect(staleCompanyIds(['e1', 'gone', 'e2'], ['e1', 'e2'])).toEqual(['gone']);
+    expect(staleCompanyIds(['e1'], ['e1'])).toEqual([]);
+  });
+
+  it('derives the roster from the draft, so a company created in a partial run counts before the list is refreshed', () => {
+    const answers = { e1: a, 'new:1': { ...a, entity_id: null, names_zh: '金证' }, e9: { ...a, entity_id: 'e9' } };
+    expect(rosterKeys(answers)).toEqual({ selected: ['e1', 'e9'], added: ['new:1'] });
+    expect(companiesSubmitErrors({ selected: [answers.e9], added: [] }).errors).toEqual([]);
   });
 });
