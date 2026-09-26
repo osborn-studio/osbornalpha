@@ -313,12 +313,23 @@ export async function reviseKillCondition(ctx: ResearchCtx, id: string, input: R
   const revision: KillConditionRevision = { index, old_text: oldText, new_text: newText, reason, at };
   const conditions = [...thesis.invalidation_conditions];
   conditions[index] = newText;
+  const priorRevisions = thesis.kill_condition_revisions ?? [];
+  // Optimistic concurrency: the update only applies to the snapshot we read
+  // (matched on updated_at); a concurrent revision makes it a no-op, which the
+  // re-read detects → 409 instead of silently overwriting the other change.
   const { error: upErr } = await ctx.supabase
     .from(TABLE)
-    .update({ invalidation_conditions: conditions, kill_condition_revisions: [...(thesis.kill_condition_revisions ?? []), revision], updated_at: at })
+    .update({ invalidation_conditions: conditions, kill_condition_revisions: [...priorRevisions, revision], updated_at: at })
     .eq('user_id', ctx.userId)
-    .eq('id', id);
+    .eq('id', id)
+    .eq('updated_at', thesis.updated_at);
   if (upErr) throw new Error(upErr.message);
+  const after = (await getThesis(ctx, id))!;
+  const written = after.kill_condition_revisions ?? [];
+  const last = written[written.length - 1];
+  if (written.length !== priorRevisions.length + 1 || !last || last.at !== at || last.index !== index || last.new_text !== newText) {
+    throw new ThesisError('thesis changed concurrently; reload and retry the revision', 409);
+  }
   const { error: evErr } = await ctx.supabase.from(EVENTS).insert({
     id: crypto.randomUUID(),
     user_id: ctx.userId,
@@ -329,7 +340,7 @@ export async function reviseKillCondition(ctx: ResearchCtx, id: string, input: R
   });
   if (evErr) throw new Error(evErr.message);
   await audit(ctx, 'thesis.revise_kill_condition', id, { index, reason });
-  return (await getThesis(ctx, id))!;
+  return after;
 }
 
 export interface QuarterRevisionCount { count: number; quarter: string; needs_review: boolean }

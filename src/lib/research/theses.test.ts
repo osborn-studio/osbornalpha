@@ -273,6 +273,24 @@ describe('reviseKillCondition (§7.4.4)', () => {
     expect(await listThesisEvents(ctx, id)).toHaveLength(0);
   });
 
+  it('rejects a concurrent revision with 409 instead of silently dropping one of them', async () => {
+    const { ctx, store } = newCtx();
+    const id = await mkThesis(ctx, store, 'ACTIVE');
+    // Both calls read the same snapshot before either writes (the mock awaits between read and write).
+    const results = await Promise.allSettled([
+      reviseKillCondition(ctx, id, { index: 0, new_text: '版本甲', reason: 'a' }),
+      reviseKillCondition(ctx, id, { index: 1, new_text: '版本乙', reason: 'b' }),
+    ]);
+    const rejected = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].reason).toBeInstanceOf(ThesisError);
+    expect((rejected[0].reason as ThesisError).status).toBe(409);
+    const t = (await getThesis(ctx, id))!;
+    expect(t.kill_condition_revisions).toHaveLength(1);
+    expect(await listThesisEvents(ctx, id)).toHaveLength(1);
+    expect(store.rows('research_audit_log').filter((a) => a.action === 'thesis.revise_kill_condition')).toHaveLength(1);
+  });
+
   it('refuses on a CLOSED thesis and 404s on a missing one', async () => {
     const { ctx, store } = newCtx();
     const id = await mkThesis(ctx, store, 'CLOSED');

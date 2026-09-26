@@ -1,5 +1,5 @@
 import {describe,expect,it,vi} from 'vitest';
-import {JEV_MODEL,JEV_URL,createJevBackend} from './backends/jev';
+import {JEV_MODEL,JEV_URL,buildJevRequest,createJevBackend} from './backends/jev';
 import type {FanoutInput} from './backends/types';
 import type {SourceDocument,Thesis} from '../types';
 
@@ -67,5 +67,12 @@ describe('jev backend',()=>{
   expect(Object.keys(body.questions)).toContain('t0_Q5');
   expect(body.state.cluster_baseline).toMatchObject({source_id:'b1',text:'最早材料正文'});
   expect(r.answers.find(a=>a.thesis_id===T1&&a.question_id==='Q5')).toMatchObject({selected:'true'});
+ });
+ it('sends WP-A7 pillars and opportunity type to Jev, falling back to watch metrics for legacy theses',()=>{
+  const legacy=buildJevRequest(input()).state as any;
+  expect(legacy.theses[0]).toMatchObject({id:T1,pillars:['指标B'],opportunity_type:'other',invalidation_conditions:['条件A']});
+  const modern={...input(),theses:[{...thesis(T1),opportunity_type:'B' as const,pillars:[{id:'p1',text:'推理需求增速高于训练',resolvable_by:'季报',deadline:null}]}]};
+  const state=buildJevRequest(modern).state as any;
+  expect(state.theses[0]).toMatchObject({pillars:['推理需求增速高于训练'],opportunity_type:'B'});
  });
 });
