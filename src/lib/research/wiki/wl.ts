@@ -67,18 +67,20 @@ export function parseWlAnswer(raw: unknown): Parsed {
   if (!raw || typeof raw !== 'object' || (raw as any).type !== 'choice') return ABSTAIN;
   const probs = (raw as any).probabilities;
   if (!probs || typeof probs !== 'object' || Array.isArray(probs)) return ABSTAIN;
+  const rawProbs: Partial<Record<WlVerdict, number>> = {};
   const distribution: Partial<Record<WlVerdict, number>> = {};
   let sum = 0;
   for (const [k, v] of Object.entries(probs as Record<string, unknown>)) {
     if (!(WL_OPTIONS as readonly string[]).includes(k) || typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1) return ABSTAIN;
-    distribution[k as WlVerdict] = Math.round(v * 1000) / 1000; sum += v;
+    rawProbs[k as WlVerdict] = v; distribution[k as WlVerdict] = Math.round(v * 1000) / 1000; sum += v;
   }
   if (Object.keys(distribution).length === 0 || sum < 0.98 || sum > 1.02) return ABSTAIN;
   const conf = (raw as any).confidence;
   const rawConfidence = typeof conf === 'number' && conf >= 0 && conf <= 1 ? conf : null;
   // Threshold on the raw value; rounding is only for serialization (0.5999 must still abstain).
   const confidence = rawConfidence === null ? null : Math.round(rawConfidence * 1000) / 1000;
-  const best = (Object.entries(distribution) as [WlVerdict, number][]).sort((a, b) => b[1] - a[1])[0]![0];
+  // The verdict comes from the raw probabilities; rounding is only for serialization.
+  const best = (Object.entries(rawProbs) as [WlVerdict, number][]).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]![0];
   if (rawConfidence === null || rawConfidence < WL_MIN_CONFIDENCE) return { selected: null, confidence, distribution, abstained: true };
   return { selected: best, confidence, distribution, abstained: false };
 }
@@ -99,7 +101,11 @@ export interface JudgeOptions {
   timeoutMs?: number;
 }
 export interface JudgeResult {
-  answers: WlAnswer[]; spent_micros: number; stopped: boolean; skipped_existing: number;
+  answers: WlAnswer[];
+  /** Reported/estimated cost of successful calls plus the estimate charged for every failed call. */
+  spent_micros: number;
+  failed_charged_micros: number;
+  stopped: boolean; skipped_existing: number;
   errors: Array<{ pair_id: string; error: string }>;
 }
 
@@ -112,7 +118,7 @@ export async function judgeWlPairs(opts: JudgeOptions): Promise<JudgeResult> {
   const price = opts.microsPer1kTokens ?? 45;
   const budget = Math.round(opts.maxCostUsd * 1_000_000);
   const done = new Set(opts.existing.map(e => e.pair_id));
-  const out: JudgeResult = { answers: [], spent_micros: 0, stopped: false, skipped_existing: 0, errors: [] };
+  const out: JudgeResult = { answers: [], spent_micros: 0, failed_charged_micros: 0, stopped: false, skipped_existing: 0, errors: [] };
   let calls = 0;
   for (const pair of opts.pairs) {
     if (done.has(pair.pair_id)) { out.skipped_existing++; continue; }
@@ -127,14 +133,21 @@ export async function judgeWlPairs(opts: JudgeOptions): Promise<JudgeResult> {
         body, signal: AbortSignal.timeout(opts.timeoutMs ?? 60_000) });
       if (!res.ok) throw new Error(`jev ${res.status}`);
       const data = await res.json() as { model?: string; answers?: Record<string, unknown>; usage?: { input_tokens?: number; output_tokens?: number } };
+      // A 200 without an answers object is not a judgment: fail so the item is retried, never cached.
+      if (!data || typeof data !== 'object' || !data.answers || typeof data.answers !== 'object' || Array.isArray(data.answers)) throw new Error('jev response has no answers');
       const tokens = (data.usage?.input_tokens ?? 0) + (data.usage?.output_tokens ?? 0);
       const cost = microsForTokens(tokens > 0 ? tokens : estimateTokens(body), price);
       answer = { pair_id: pair.pair_id, ...parseWlAnswer(data.answers?.WL), backend_model: typeof data.model === 'string' && data.model ? data.model : JEV_MODEL, cost_micros: cost };
       calls++;
       out.spent_micros += cost;
     } catch (e) {
+      // Transport failures are not judgments: leave the pair unanswered so a rerun retries it.
+      // The request may still have been billed, so its estimate is charged against the budget.
       out.errors.push({ pair_id: pair.pair_id, error: e instanceof Error ? e.message : String(e) });
-      answer = { pair_id: pair.pair_id, ...ABSTAIN, backend_model: JEV_MODEL, cost_micros: 0 };
+      out.failed_charged_micros += estimate;
+      out.spent_micros += estimate;
+      calls++;
+      continue;
     }
     out.answers.push(answer);
   }

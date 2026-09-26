@@ -39,8 +39,9 @@ describe('verifyPublicSources batching',()=>{
   (ctx.supabase as any).from=(table:string)=>{const q:any=from(table);const origIn=q.in.bind(q);q.in=(col:string,values:unknown[])=>{batches.push(values.length);return origIn(col,values);};return q;};
   const pairs=ids.map((id,i)=>({...pair(i),pair_id:String(i%10).repeat(64).slice(0,64),cited_snippets:[],candidate:{...pair(i).candidate,source_id:id}}));
   await expect(verifyPublicSources(ctx,doc(pairs))).resolves.toEqual({checked:1200});
-  expect(batches.length).toBeGreaterThanOrEqual(3);
-  expect(Math.max(...batches)).toBeLessThanOrEqual(500);
+  // Small batches keep the PostgREST GET URL well under gateway request-line limits.
+  expect(batches.length).toBeGreaterThanOrEqual(12);
+  expect(Math.max(...batches)).toBeLessThanOrEqual(100);
  });
 });
 

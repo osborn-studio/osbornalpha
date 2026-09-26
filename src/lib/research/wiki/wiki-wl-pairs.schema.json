@@ -5,15 +5,28 @@
   "description": "Assertion × new public Source pairs exported by brain-wiki-lint for the Alpha judge-wl script. Contains only material from the Alpha public source pack.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_name", "schema_version", "generated_at", "pack_hash", "pairs"],
+  "required": [
+    "schema_name",
+    "schema_version",
+    "generated_at",
+    "pack_hash",
+    "pairs"
+  ],
   "properties": {
-    "schema_name": { "const": "brain-wiki-wl-pairs" },
-    "schema_version": { "const": "1.0" },
+    "schema_name": {
+      "const": "brain-wiki-wl-pairs"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
     "generated_at": {
       "type": "string",
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})$"
     },
-    "pack_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "pack_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
     "pairs": {
       "type": "array",
       "maxItems": 5000,
@@ -30,53 +43,109 @@
           "candidate"
         ],
         "properties": {
-          "pair_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-          "page": { "type": "string", "pattern": "^wiki/entities/[A-Za-z0-9._-]+\\.md$" },
+          "pair_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "page": {
+            "type": "string",
+            "pattern": "^wiki/entities/(?!\\.)[^/\\\\]+\\.md$",
+            "maxLength": 300,
+            "description": "Direct child of wiki/entities; any filename Obsidian accepts, no path traversal."
+          },
           "entity_id": {
             "type": "string",
             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
           },
-          "assertion_index": { "type": "integer", "minimum": 0 },
-          "assertion_text": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "assertion_index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "assertion_text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
           "cited_snippets": {
             "type": "array",
             "maxItems": 12,
             "items": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["source_id", "source_version", "start", "end", "text"],
+              "required": [
+                "source_id",
+                "source_version",
+                "start",
+                "end",
+                "text"
+              ],
               "properties": {
                 "source_id": {
                   "type": "string",
                   "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
                 },
-                "source_version": { "type": "string", "pattern": "^[1-9][0-9]{0,8}$" },
-                "start": { "type": "integer", "minimum": 0 },
-                "end": { "type": "integer", "minimum": 1 },
-                "text": { "type": "string", "minLength": 1, "maxLength": 4000 }
+                "source_version": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]{0,8}$"
+                },
+                "start": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "end": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4000
+                }
               }
             }
           },
           "candidate": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["source_id", "source_version", "title", "available_at", "text"],
+            "required": [
+              "source_id",
+              "source_version",
+              "title",
+              "available_at",
+              "text"
+            ],
             "properties": {
               "source_id": {
                 "type": "string",
                 "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
               },
-              "source_version": { "type": "string", "pattern": "^[1-9][0-9]{0,8}$" },
-              "title": { "type": "string", "minLength": 1, "maxLength": 2000 },
+              "source_version": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,8}$"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
               "available_at": {
                 "type": "string",
                 "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})$"
               },
-              "text": { "type": "string", "minLength": 1, "maxLength": 8000 }
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8000
+              }
             }
           }
         }
       }
+    },
+    "truncated": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Pairs dropped to respect the 5000-item limit; the exported list is a deterministic prefix."
     }
   }
 }

@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest';
-import {WL_QUESTION,WL_QUESTION_VERSION,buildWlRequest,judgeWlPairs,pairsHash,parseWlAnswer,type WlPair} from './wl';
+import {WL_QUESTION,WL_QUESTION_VERSION,buildWlRequest,estimateForPair,judgeWlPairs,pairsHash,parseWlAnswer,type WlPair} from './wl';
 
 const S=(n:number)=>`bbbbbbbb-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const pair=(n:number,over:Partial<WlPair>={}):WlPair=>({pair_id:String(n).repeat(64).slice(0,64),page:'wiki/entities/co.md',entity_id:'aaaaaaaa-0000-4000-8000-000000000001',assertion_index:n,assertion_text:`断言 ${n}。`,
@@ -56,12 +56,26 @@ describe('judgeWlPairs',()=>{
   expect(tight.stopped).toBe(true);
   expect(tight.spent_micros).toBe(900);
  });
- it('records transport errors as abstentions without throwing',async()=>{
-  const {fn}=fakeFetch([new Error('boom'),{status:429}]);
-  const out=await judgeWlPairs({pairs:[pair(1),pair(2)],existing:[],fetch:fn,apiKey:'k'.repeat(20),maxCostUsd:1,now:()=>'2026-09-26T01:00:00.000Z'});
-  expect(out.answers.map(a=>a.abstained)).toEqual([true,true]);
-  expect(out.errors).toHaveLength(2);
-  expect(out.answers[0]!.cost_micros).toBe(0);
+ it('keeps transport failures out of the answers so they are retried next run',async()=>{
+  const {fn}=fakeFetch([new Error('boom'),{status:429},response({consistent:0.9,contradicts:0.05,superseded:0.03,unrelated:0.02},0.9)]);
+  const out=await judgeWlPairs({pairs:[pair(1),pair(2),pair(3)],existing:[],fetch:fn,apiKey:'k'.repeat(20),maxCostUsd:1,now:()=>'2026-09-26T01:00:00.000Z'});
+  expect(out.answers.map(a=>a.pair_id)).toEqual([pair(3).pair_id]);
+  expect(out.errors.map(e=>e.pair_id)).toEqual([pair(1).pair_id,pair(2).pair_id]);
+  // Failed requests may still have been billed: their estimate is charged against the budget.
+  const est=estimateForPair(pair(1));
+  expect(est).toBeGreaterThan(0);
+  expect(out.failed_charged_micros).toBe(2*est);
+  expect(out.spent_micros).toBe(46+2*est);
+  // Repeated failures cannot run past the budget.
+  const failing=fakeFetch(Array.from({length:50},()=>new Error('boom')));
+  const capped=await judgeWlPairs({pairs:Array.from({length:50},(_,i)=>pair(i)),existing:[],fetch:failing.fn,apiKey:'k'.repeat(20),maxCostUsd:est*5/1_000_000,now:()=>'2026-09-26T01:00:00.000Z'});
+  expect(capped.stopped).toBe(true);
+  expect(failing.calls.length).toBeLessThanOrEqual(5);
+ });
+ it('selects the verdict from the raw probabilities, rounding only for output',()=>{
+  const parsed=parseWlAnswer({type:'choice',probabilities:{contradicts:0.4996,consistent:0.5004},confidence:0.8});
+  expect(parsed.selected).toBe('consistent');
+  expect(parsed.distribution).toEqual({contradicts:0.5,consistent:0.5});
  });
  it('hashes the pairs document deterministically',()=>{
   const a=pairsHash(doc([pair(1),pair(2)]));
@@ -70,5 +84,14 @@ describe('judgeWlPairs',()=>{
   expect(pairsHash({...doc([pair(1),pair(2)]),generated_at:'2027-01-01T00:00:00.000Z'})).toBe(a);
   // Same pairs from a different source pack are a different document.
   expect(pairsHash({...doc([pair(1),pair(2)]),pack_hash:'b'.repeat(64)})).not.toBe(a);
+ });
+});
+
+describe('invalid envelopes',()=>{
+ it('keeps a 200 without answers out of the answers file so it is retried',async()=>{
+  const {fn}=fakeFetch([{},{error:'overloaded'}]);
+  const out=await judgeWlPairs({pairs:[pair(1),pair(2)],existing:[],fetch:fn,apiKey:'k'.repeat(20),maxCostUsd:1,now:()=>'2026-09-26T01:00:00.000Z'});
+  expect(out.answers).toEqual([]);
+  expect(out.errors.map(e=>e.pair_id)).toEqual([pair(1).pair_id,pair(2).pair_id]);
  });
 });

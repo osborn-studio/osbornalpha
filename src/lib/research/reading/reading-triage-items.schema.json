@@ -1,0 +1,96 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://osborn.local/schemas/reading-triage-items-v1.json",
+  "title": "Reading triage items",
+  "description": "Reading-plan candidates that content policy allows to leave the machine, exported by brain-reading-triage for the Alpha judge-triage script. Excluded items carry only an id and a reason.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_name",
+    "schema_version",
+    "generated_at",
+    "plan_id",
+    "policy_version",
+    "question",
+    "items",
+    "excluded"
+  ],
+  "properties": {
+    "schema_name": { "const": "brain-reading-triage-items" },
+    "schema_version": { "const": "1.0" },
+    "generated_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "plan_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "policy_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "question": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "items": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "item_id",
+          "version_id",
+          "title",
+          "source_url",
+          "text",
+          "body_sha256",
+          "local"
+        ],
+        "properties": {
+          "item_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "version_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "title": { "type": "string", "maxLength": 2000 },
+          "source_url": { "type": ["string", "null"], "maxLength": 4000 },
+          "text": { "type": "string", "minLength": 1, "maxLength": 24000 },
+          "body_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "local": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["selected", "disposition", "semantic_conclusion"],
+            "properties": {
+              "selected": { "type": "boolean" },
+              "disposition": {
+                "enum": [
+                  "selected",
+                  "outside_budget",
+                  "too_long",
+                  "unrelated",
+                  "deferred",
+                  "unavailable"
+                ]
+              },
+              "semantic_conclusion": { "enum": ["read", "defer", "investigate", "unknown", null] }
+            }
+          }
+        }
+      }
+    },
+    "excluded": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["item_id", "reason"],
+        "properties": {
+          "item_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "reason": {
+            "enum": [
+              "policy_unknown",
+              "policy_not_cloud_allowed",
+              "policy_restricted",
+              "rights_external_processing_denied",
+              "no_version",
+              "no_body_hash",
+              "no_text"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
