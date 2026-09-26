@@ -9,9 +9,11 @@ import { createHash } from 'node:crypto';
 import { audit, isUuid, type ResearchCtx } from './store';
 import {
   MARKETS,
+  ORIGIN_TYPES,
   PERMISSIONS,
   SOURCE_TYPES,
   type Market,
+  type OriginType,
   type Permission,
   type SourceDocument,
   type SourceType,
@@ -39,6 +41,10 @@ export interface IngestSourceInput {
   market?: Market | null;
   /** WP-A1: defaults to private for NOTE/MANUAL, public otherwise. */
   permission?: Permission;
+  /** WP-A4: vintage of this URL's content; collectors pass max+1 when a URL's content changed. Default '1'. */
+  source_version?: string;
+  /** WP-A1 enumeration; collectors set 'filing' for official disclosures. */
+  origin_type?: OriginType | null;
 }
 
 export interface IngestResult {
@@ -149,6 +155,13 @@ export async function ingestSource(ctx: ResearchCtx, input: IngestSourceInput): 
   if (!PERMISSIONS.includes(permission)) {
     throw new SourceValidationError(`permission must be one of ${PERMISSIONS.join(', ')}`);
   }
+  const sourceVersion = input.source_version ?? '1';
+  if (!/^[1-9][0-9]{0,8}$/.test(sourceVersion)) {
+    throw new SourceValidationError('source_version must be a positive integer string');
+  }
+  if (input.origin_type != null && !ORIGIN_TYPES.includes(input.origin_type)) {
+    throw new SourceValidationError(`origin_type must be one of ${ORIGIN_TYPES.join(', ')}`);
+  }
 
   const hash = contentHash(input.raw_text);
   const existing = await findByHash(ctx, hash);
@@ -173,7 +186,8 @@ export async function ingestSource(ctx: ResearchCtx, input: IngestSourceInput): 
     // WP-A1: availability defaults to this ingestion; vintage starts at 1.
     event_time: input.event_time ?? null,
     available_at: input.available_at ?? ingestedAt,
-    source_version: '1',
+    source_version: sourceVersion,
+    origin_type: input.origin_type ?? null,
     market: input.market ?? null,
     permission,
   });
