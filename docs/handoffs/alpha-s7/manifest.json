@@ -128,13 +128,13 @@
     },
     {
       "path": "package-lock.json",
-      "size_bytes": 223997,
-      "sha256": "4cb04b6b0f64d21559ef2e9f9372e5c09c91eaf8488b44fd2f98ca4156509828"
+      "size_bytes": 222960,
+      "sha256": "5f76ec15797c0fd5577942412a7704ef3b2a81666e29a1589d88e82e16c9bdb2"
     },
     {
       "path": "package.json",
-      "size_bytes": 1820,
-      "sha256": "b001eea6b98c6a016376ad73e0544dfb2c47b92829ebe15623800f0975f650e1"
+      "size_bytes": 1850,
+      "sha256": "436873d06b632ad5b8798ea313887bff07a9fb37f65bcc563d0ed6ab221f7ae3"
     },
     {
       "path": "scripts/s6/check-market-handoff.ts",
