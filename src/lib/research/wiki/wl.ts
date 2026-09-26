@@ -67,18 +67,20 @@ export function parseWlAnswer(raw: unknown): Parsed {
   if (!raw || typeof raw !== 'object' || (raw as any).type !== 'choice') return ABSTAIN;
   const probs = (raw as any).probabilities;
   if (!probs || typeof probs !== 'object' || Array.isArray(probs)) return ABSTAIN;
+  const rawProbs: Partial<Record<WlVerdict, number>> = {};
   const distribution: Partial<Record<WlVerdict, number>> = {};
   let sum = 0;
   for (const [k, v] of Object.entries(probs as Record<string, unknown>)) {
     if (!(WL_OPTIONS as readonly string[]).includes(k) || typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1) return ABSTAIN;
-    distribution[k as WlVerdict] = Math.round(v * 1000) / 1000; sum += v;
+    rawProbs[k as WlVerdict] = v; distribution[k as WlVerdict] = Math.round(v * 1000) / 1000; sum += v;
   }
   if (Object.keys(distribution).length === 0 || sum < 0.98 || sum > 1.02) return ABSTAIN;
   const conf = (raw as any).confidence;
   const rawConfidence = typeof conf === 'number' && conf >= 0 && conf <= 1 ? conf : null;
   // Threshold on the raw value; rounding is only for serialization (0.5999 must still abstain).
   const confidence = rawConfidence === null ? null : Math.round(rawConfidence * 1000) / 1000;
-  const best = (Object.entries(distribution) as [WlVerdict, number][]).sort((a, b) => b[1] - a[1])[0]![0];
+  // The verdict comes from the raw probabilities; rounding is only for serialization.
+  const best = (Object.entries(rawProbs) as [WlVerdict, number][]).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]![0];
   if (rawConfidence === null || rawConfidence < WL_MIN_CONFIDENCE) return { selected: null, confidence, distribution, abstained: true };
   return { selected: best, confidence, distribution, abstained: false };
 }
@@ -133,8 +135,9 @@ export async function judgeWlPairs(opts: JudgeOptions): Promise<JudgeResult> {
       calls++;
       out.spent_micros += cost;
     } catch (e) {
+      // Transport failures are not judgments: leave the pair unanswered so a rerun retries it.
       out.errors.push({ pair_id: pair.pair_id, error: e instanceof Error ? e.message : String(e) });
-      answer = { pair_id: pair.pair_id, ...ABSTAIN, backend_model: JEV_MODEL, cost_micros: 0 };
+      continue;
     }
     out.answers.push(answer);
   }
