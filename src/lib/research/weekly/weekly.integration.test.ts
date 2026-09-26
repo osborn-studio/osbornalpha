@@ -5,7 +5,7 @@ import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {closeS4Pool} from '../s4/db';
 import {recordJudgment} from '../s4/ledger';
 import type {ResearchCard} from '../types';
-import {decideCard,freezeBaseline,revealCards,thesisObservations,weeklyStatus} from './weekly';
+import {decideCard,freezeBaseline,recordCardExposure,revealCards,thesisObservations,weeklyStatus} from './weekly';
 import {loadArmRows} from '../s6/arm-report-db';
 import {summarizeArms} from '../s6/arm-report';
 
@@ -41,6 +41,10 @@ describe.skipIf(!enabled)('WP-A9 weekend flow on real PostgreSQL',()=>{
   await expect(freezeBaseline({actor,weekOf:WEEK,thesis_id:t1,action:'adopt',reason:'again'})).rejects.toThrow('idempotency_conflict');
   await expect(freezeBaseline({actor,weekOf:WEEK,thesis_id:randomUUID(),action:'adopt',reason:'x'})).rejects.toThrow('scope_denied');
   await expect(freezeBaseline({actor,weekOf:'2026-9-21',thesis_id:t1,action:'adopt',reason:'x'})).rejects.toThrow('invalid_schema');
+  // Frozen but not yet revealed: cards stay hidden and cannot be decided, so the AI stance is always recorded first.
+  const frozen=await weeklyStatus({actor,readCards,weekOf:WEEK});
+  expect(frozen.theses.find(t=>t.thesis_id===t1)!.cards).toBeNull();expect(frozen.theses.find(t=>t.thesis_id===t1)!.revealed).toBe(false);
+  await expect(decideCard({actor,readCards,weekOf:WEEK,card_id:cards[0].id,action:'adopt',reason:'r',time_spent_minutes:3})).rejects.toThrow('policy_blocked');
   const revealed=await revealCards({actor,readCards,weekOf:WEEK});
   expect(revealed.cards.map(c=>c.thesis_id)).toEqual([t1,t1]);expect(revealed.ai_candidate_recorded).toBe(2);
   expect((await revealCards({actor,readCards,weekOf:WEEK})).ai_candidate_recorded).toBe(0);
@@ -49,7 +53,7 @@ describe.skipIf(!enabled)('WP-A9 weekend flow on real PostgreSQL',()=>{
   expect(ai.find((r:any)=>r.card_id===cards[0].id)).toMatchObject({action:'adopt',cited_judgment_ids:[judgmentId]}); // unknown judgment ids are dropped, existing ones cited
   expect(ai.find((r:any)=>r.card_id===cards[1].id)).toMatchObject({action:'reject'});
   const mid=await weeklyStatus({actor,readCards,weekOf:WEEK});
-  const one=mid.theses.find(t=>t.thesis_id===t1)!;expect(one.cards).toHaveLength(2);expect(one.baseline).toMatchObject({action:'shadow'});
+  const one=mid.theses.find(t=>t.thesis_id===t1)!;expect(one.cards).toHaveLength(2);expect(one.revealed).toBe(true);expect(one.baseline).toMatchObject({action:'shadow'});
   expect(mid.theses.find(t=>t.thesis_id===t2)!.cards).toBeNull();expect(mid.all_unlocked).toBe(false);
  });
  it('records one collab decision per card with citations, timing and an optional owned observation',async()=>{
@@ -70,6 +74,31 @@ describe.skipIf(!enabled)('WP-A9 weekend flow on real PostgreSQL',()=>{
   // Another owner sees no decisions, so every thesis with cards stays locked (the card reader itself is owner-scoped in production).
   const theirs=await weeklyStatus({actor:other,readCards,weekOf:WEEK});
   expect(theirs.all_unlocked).toBe(false);expect(theirs.theses.every(t=>t.cards===null&&t.baseline===null)).toBe(true);
+ });
+ it('refuses a baseline for a thesis whose cards were already exposed through another read path',async()=>{
+  const t3=randomUUID();await admin.query(`insert into public.research_theses(id,user_id,title,body,invalidation_conditions,watch_metrics,status) values($1,$2,'thesis three','b','["k"]','["m"]','ACTIVE')`,[t3,actor.userId]);
+  const c3=card(t3,'evidence',[]);cards.push(c3);
+  await recordCardExposure({actor,cards:[c3],origin:'cards_page'});
+  await expect(freezeBaseline({actor,weekOf:WEEK,thesis_id:t3,action:'adopt',reason:'saw it already'})).rejects.toThrow('exposure_required');
+  const audit=(await admin.query("select detail from public.research_audit_log where user_id=$1 and action='weekly.cards_exposed' and detail->>'thesis_id'=$2",[actor.userId,t3])).rows;
+  expect(audit).toHaveLength(1);expect(audit[0].detail).toMatchObject({week_of:WEEK,thesis_id:t3,origin:'cards_page'});
+  await recordCardExposure({actor,cards:[c3],origin:'cards_page'}); // exposure is recorded once per thesis-week
+  expect((await admin.query("select count(*)::int n from public.research_audit_log where user_id=$1 and action='weekly.cards_exposed' and detail->>'thesis_id'=$2",[actor.userId,t3])).rows[0].n).toBe(1);
+  // Exposure of a different week/thesis does not block this one.
+  expect((await weeklyStatus({actor,readCards,weekOf:WEEK})).theses.find(t=>t.thesis_id===t3)!.exposed_before_baseline).toBe(true);
+ });
+ it('serializes concurrent freezes and decisions so the append-only ledger never gets duplicates',async()=>{
+  const t4=randomUUID();await admin.query(`insert into public.research_theses(id,user_id,title,body,invalidation_conditions,watch_metrics,status) values($1,$2,'thesis four','b','["k"]','["m"]','ACTIVE')`,[t4,actor.userId]);
+  const c4=card(t4,'evidence',[]);cards.push(c4);
+  const freezes=await Promise.allSettled([1,2,3].map(()=>freezeBaseline({actor,weekOf:WEEK,thesis_id:t4,action:'adopt',reason:'race'})));
+  expect(freezes.filter(r=>r.status==='fulfilled')).toHaveLength(1);
+  expect(freezes.filter(r=>r.status==='rejected'&&/idempotency_conflict/.test(String((r as PromiseRejectedResult).reason)))).toHaveLength(2);
+  const reveals=await Promise.all([1,2].map(()=>revealCards({actor,readCards,weekOf:WEEK})));
+  expect(reveals.reduce((n,r)=>n+r.ai_candidate_recorded,0)).toBe(1);
+  const decides=await Promise.allSettled([1,2].map(()=>decideCard({actor,readCards,weekOf:WEEK,card_id:c4.id,action:'adopt',reason:'race',time_spent_minutes:1})));
+  expect(decides.filter(r=>r.status==='fulfilled')).toHaveLength(1);
+  const counts=(await admin.query("select arm,count(*)::int n from public.research_decisions where user_id=$1 and thesis_id=$2 group by arm order by arm",[actor.userId,t4])).rows;
+  expect(counts).toEqual([{arm:'ai_candidate',n:1},{arm:'collab',n:1},{arm:'human_baseline',n:1}]);
  });
  it('ships the analyst identity map with owner RLS and replays',async()=>{
   await expect(admin.query(readFileSync('supabase/migrations/20260926140000_research_analyst_identities.sql','utf8'))).resolves.toBeDefined();
