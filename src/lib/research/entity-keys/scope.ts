@@ -74,7 +74,15 @@ export async function setScope(ctx: ResearchCtx, entityId: string, input: ScopeI
   const entity = await getEntity(ctx, entityId);
   if (entity) {
     const metadata = { ...entity.metadata, in_scope: input.in_scope, scope_rationale: rationale, scope_updated_at: now };
-    const { error: entityErr } = await ctx.supabase.from(ENTITIES_TABLE).update({ metadata, updated_at: now }).eq('user_id', ctx.userId).eq('id', entityId);
+    // Name corrections reach the entity too (the company pages render research_entities.name/aliases):
+    // canonical name = first English name, aliases = the other names, as resolveCompanyEntity does.
+    const renamed = input.names_zh !== undefined || input.names_en !== undefined || input.aliases !== undefined;
+    const patch: Record<string, unknown> = { metadata, updated_at: now };
+    if (renamed) {
+      patch.name = names_en[0];
+      patch.aliases = [...new Set([...names_zh, ...names_en.slice(1), ...aliases])];
+    }
+    const { error: entityErr } = await ctx.supabase.from(ENTITIES_TABLE).update(patch).eq('user_id', ctx.userId).eq('id', entityId);
     if (entityErr) throw new Error(entityErr.message);
   }
   const updated = (await listEntityKeys(ctx)).find((r) => r.entity_id === entityId);
@@ -109,9 +117,12 @@ export async function addOwnerCompany(ctx: ResearchCtx, answer: OwnerCompanyAnsw
   const [entities, keyRows] = await Promise.all([listEntities(ctx, { type: 'COMPANY' }), listEntityKeys(ctx)]);
   // Only a company that already has a researched key row is protected: an entity without one (legacy
   // seed, or a stranded earlier attempt) is enriched by upsertEntityKeys and becomes scopeable.
-  const keyed = new Set(keyRows.map((r) => r.entity_id));
+  // An incomplete earlier creation (owner-input key row without researched keys and without a security row)
+  // may be resumed: upsertEntityKeys updates that same row and adds the missing security.
+  const resumable = (r: EntityKeysRow) => KEY_NAMES.every((k) => r.keys[k] === null) && r.securities.length === 0;
+  const keyed = new Set(keyRows.filter((r) => !resumable(r)).map((r) => r.entity_id));
   const byName = entities.find((e) => keyed.has(e.id) && (names.has(lower(e.name)) || lower(e.ticker) === ticker || e.aliases.some((a) => names.has(lower(a)))));
-  const byKeys = keyRows.find((r) => [...r.names_zh, ...r.names_en, ...r.aliases].some((n) => names.has(lower(n))) || r.securities.some((sec) => lower(sec.exchange_code) === ticker));
+  const byKeys = keyRows.find((r) => !resumable(r) && ([...r.names_zh, ...r.names_en, ...r.aliases].some((n) => names.has(lower(n))) || r.securities.some((sec) => lower(sec.exchange_code) === ticker)));
   if (byName || byKeys) throw new ScopeError('company already exists; scope the existing record instead of adding it again', 409);
   let entityId: string;
   try {

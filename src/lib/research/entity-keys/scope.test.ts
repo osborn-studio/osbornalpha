@@ -94,3 +94,29 @@ describe('Codex round 5 regression',()=>{
   await expect(addOwnerCompany(ctx,{entity_id:null,rationale:'again',names_zh:'金证股份',names_en:'Kingdom Technology',home_market:'A',exchange_code:'600446.SH',listed_on:'',keys:{lei:'',usci:'',cninfo_org_id:'',cik:''}},{today:'2026-09-27'})).rejects.toMatchObject({status:409});
  });
 });
+
+
+describe('Codex round 6 regressions',()=>{
+ const kingdom=(rationale='券商 IT 第二梯队')=>({entity_id:null,rationale,names_zh:'金证股份',names_en:'Kingdom Technology',home_market:'A' as const,exchange_code:'600446.SH',listed_on:'2003-12-16',keys:{lei:'',usci:'',cninfo_org_id:'',cik:''}});
+ it('resumes an incomplete owner-input creation (key row without securities) instead of refusing it forever',async()=>{
+  // A previous POST persisted the entity and its owner-input key row, then failed before the security row.
+  const legacy=await upsertEntity(ctx,{type:'COMPANY',name:'Kingdom Technology',aliases:['金证股份'],ticker:'600446.SH'});
+  await ctx.supabase.from('research_entity_keys').insert({user_id:ctx.userId,entity_id:legacy,lei:null,usci:null,cninfo_org_id:null,cik:null,names_zh:['金证股份'],names_en:['Kingdom Technology'],aliases:[],home_market:'A',in_scope:true,cohort:'scope-2026-09',provenance:{},missing:['lei','usci','cninfo_org_id','cik'],updated_at:'2026-09-27T00:00:00Z'});
+  const row=await addOwnerCompany(ctx,kingdom(),{today:'2026-09-27'});
+  expect(row.entity_id).toBe(legacy);
+  expect(row.securities).toHaveLength(1);
+  expect(store.count('research_entity_keys')).toBe(1);
+  // A row that carries researched keys is still protected.
+  const {entity_id}=await upsertEntityKeys(ctx,hundsun());
+  await expect(addOwnerCompany(ctx,{...kingdom(),names_zh:'恒生电子',names_en:'Hundsun Technologies Inc.',exchange_code:'600570.SH'},{today:'2026-09-27'})).rejects.toMatchObject({status:409});
+  expect((await listEntityKeys(ctx)).find(r=>r.entity_id===entity_id)!.keys.lei).toBe('3003003LS77D1DRDDE25');
+ });
+ it('synchronizes the entity name and aliases when the owner corrects names',async()=>{
+  const {entity_id}=await upsertEntityKeys(ctx,hundsun());
+  await setScope(ctx,entity_id,{in_scope:true,rationale:'r',today:'2026-09-27',names_en:['Hundsun Technologies'],names_zh:['恒生电子','恒生电子股份有限公司'],aliases:['Hundsun','HS']});
+  const entity=(await getEntity(ctx,entity_id))!;
+  expect(entity.name).toBe('Hundsun Technologies');
+  expect(entity.aliases).toEqual(['恒生电子','恒生电子股份有限公司','Hundsun','HS']);
+  expect(entity.metadata).toMatchObject({in_scope:true,scope_rationale:'r'});
+ });
+});
