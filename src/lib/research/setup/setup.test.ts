@@ -3,7 +3,7 @@ import { COMPANY_QUESTIONS, THESIS_QUESTIONS } from './questions';
 import { EMPTY_THESIS_DRAFT, isCalendarDate, saveOutcomeMessage, staleCompanyIds, thesisFormToInput, validateThesisStep, type ThesisDraft } from './theses';
 import { companiesStepErrors, companiesSubmitErrors, ownerCompanyToCohort, reconcileAddedCompany, rosterKeys, validateCompanyAnswer, type OwnerCompanyAnswer } from './companies';
 import { setupProgress, TARGETS } from './progress';
-import { parseDraft, resetCompanyDraft, resetThesisDraft, serializeDraft } from './draft';
+import { clearPendingActivation, markThesisCreated, parseDraft, resetCompanyDraft, resetThesisDraft, serializeDraft } from './draft';
 import { companiesFromResponse } from './roster';
 
 const filled = (): ThesisDraft => ({
@@ -241,5 +241,20 @@ describe('Codex round 9 regression', () => {
     expect(companiesFromResponse(true, {})).toEqual({ error: '名单加载失败，请重试' });
     expect(companiesFromResponse(true, { companies: 'x' })).toEqual({ error: '名单加载失败，请重试' });
     expect(companiesFromResponse(true, null)).toEqual({ error: '名单加载失败，请重试' });
+  });
+});
+
+
+describe('Codex round 12 regression', () => {
+  it('finalizes the stored draft the moment a thesis is created and remembers a pending activation', () => {
+    const draft = { version: 1 as const, thesis: filled(), thesisStep: 8, companies: {}, companyStep: 0 };
+    const created = markThesisCreated(draft, { id: 't1', title: 'T' });
+    expect(created.thesis).toEqual(EMPTY_THESIS_DRAFT);
+    expect(created.thesisStep).toBe(0);
+    expect(created.pendingActivation).toEqual({ id: 't1', title: 'T' });
+    // Survives a reload: the pending activation round-trips through the persisted draft.
+    expect(parseDraft(serializeDraft(created))?.pendingActivation).toEqual({ id: 't1', title: 'T' });
+    expect(clearPendingActivation(created).pendingActivation).toBeNull();
+    expect(parseDraft(JSON.stringify({ ...created, pendingActivation: 'bad' }))).toBeNull();
   });
 });

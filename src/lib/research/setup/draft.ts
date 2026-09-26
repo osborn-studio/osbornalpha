@@ -14,6 +14,8 @@ export interface SetupDraft {
   /** Answers keyed by entity_id, or by a client-generated `new:<n>` key for owner-added companies. */
   companies: Record<string, OwnerCompanyAnswer>;
   companyStep: number;
+  /** A thesis that was created but whose activation did not complete (reload mid-save): offer to finish it. */
+  pendingActivation?: { id: string; title: string } | null;
 }
 
 export function serializeDraft(draft: SetupDraft): string {
@@ -27,6 +29,8 @@ export function parseDraft(raw: string | null | undefined): SetupDraft | null {
     if (!parsed || typeof parsed !== 'object' || parsed.version !== 1) return null;
     if (!parsed.thesis || typeof parsed.thesis !== 'object' || typeof parsed.thesisStep !== 'number') return null;
     if (!parsed.companies || typeof parsed.companies !== 'object' || typeof parsed.companyStep !== 'number') return null;
+    const p = parsed.pendingActivation;
+    if (p !== undefined && p !== null && (typeof p !== 'object' || typeof p.id !== 'string' || typeof p.title !== 'string')) return null;
     return parsed as SetupDraft;
   } catch {
     return null;
@@ -41,4 +45,16 @@ export function resetThesisDraft(prev: SetupDraft): SetupDraft {
 /** After the roster is written: clear the company answers and the step together. */
 export function resetCompanyDraft(prev: SetupDraft): SetupDraft {
   return { ...prev, companies: {}, companyStep: 0 };
+}
+
+/**
+ * The thesis exists from this moment: clear the answers immediately (before activation is awaited) so a
+ * reload can never resubmit them, and remember the activation still owed.
+ */
+export function markThesisCreated(prev: SetupDraft, created: { id: string; title: string }): SetupDraft {
+  return { ...resetThesisDraft(prev), pendingActivation: { id: created.id, title: created.title } };
+}
+
+export function clearPendingActivation(prev: SetupDraft): SetupDraft {
+  return { ...prev, pendingActivation: null };
 }

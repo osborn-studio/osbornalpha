@@ -16,13 +16,15 @@ const OPPORTUNITY_HINTS: Record<string, string> = {
   other: '不属于以上两类；请在核心逻辑里说明为什么值得跟。',
 };
 
-export function ThesisFlow({ companies, draft, step, onDraftChange, onStepChange, onSaved, busy, setBusy }: {
+export function ThesisFlow({ companies, draft, step, onDraftChange, onStepChange, onSaved, onCreated, busy, setBusy }: {
   companies: ScopedCompany[];
   draft: ThesisDraft;
   step: number;
   onDraftChange: (d: ThesisDraft) => void;
   onStepChange: (s: number) => void;
   onSaved: (message: string) => void;
+  /** Called the moment the thesis exists, before activation is awaited: the page finalizes the stored draft. */
+  onCreated: (created: { id: string; title: string }) => void;
   /** In-flight submission lock, owned by the page so a remount cannot reset it. */
   busy: boolean;
   setBusy: (b: boolean) => void;
@@ -61,8 +63,9 @@ export function ThesisFlow({ companies, draft, step, onDraftChange, onStepChange
         setNotice(`保存失败：${e instanceof Error ? e.message : '网络错误'}；草稿已保留，可重试`);
         return;
       }
-      // From here the thesis exists: the draft is finalized whatever happens to activation, so a retry
-      // never creates a duplicate. Activation transport or server failures are reported, not swallowed.
+      // From here the thesis exists: the stored draft is finalized NOW (a reload during activation must not
+      // resubmit it) and the activation still owed is remembered by the page. Failures are reported, not swallowed.
+      onCreated(created);
       let activated: boolean | null = null, error: string | undefined;
       if (activate) {
         try {

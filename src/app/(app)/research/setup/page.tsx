@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import type { ScopedCompany } from '@/lib/research/entity-keys/scope';
 import type { Thesis } from '@/lib/research/types';
-import { DRAFT_KEY, parseDraft, resetCompanyDraft, resetThesisDraft, serializeDraft, type SetupDraft } from '@/lib/research/setup/draft';
+import { clearPendingActivation, DRAFT_KEY, markThesisCreated, parseDraft, resetCompanyDraft, serializeDraft, type SetupDraft } from '@/lib/research/setup/draft';
 import { setupProgress } from '@/lib/research/setup/progress';
 import { EMPTY_THESIS_DRAFT } from '@/lib/research/setup/theses';
 import { companiesFromResponse } from '@/lib/research/setup/roster';
@@ -53,6 +53,20 @@ export default function ResearchSetupPage() {
   const update = (patch: Partial<SetupDraft>) => setDraft((prev) => { const next = { ...prev, ...patch }; writeDraft(next); return next; });
   const reset = (fn: (prev: SetupDraft) => SetupDraft) => setDraft((prev) => { const next = fn(prev); writeDraft(next); return next; });
 
+  async function activatePending() {
+    const pending = draft.pendingActivation;
+    if (!pending || busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/research/theses/${pending.id}/transition`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: 'ACTIVE', reason: 'setup wizard (resumed)' }) });
+      const data = await res.json().catch(() => ({}));
+      // An already-active thesis answers 422 (illegal transition): the activation is done either way.
+      if (res.ok || res.status === 422) { reset(clearPendingActivation); setNotice(res.ok ? `已激活：${pending.title}` : `「${pending.title}」已不是草稿，无需再激活`); await load(); }
+      else setNotice(`激活失败：${data?.error?.message ?? res.status}`);
+    } catch (e) { setNotice(`激活失败：${e instanceof Error ? e.message : '网络错误'}`); }
+    finally { setBusy(false); }
+  }
+
   if (disabled) {
     return <div className="rounded-lg border border-amber-300 bg-amber-50 p-6 text-sm text-amber-900">Research OS 该模块暂未开放——需以 admin 角色登录后访问（个人云工具规格）。</div>;
   }
@@ -85,6 +99,13 @@ export default function ResearchSetupPage() {
       </div>
 
       {notice && <p className="rounded border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">{notice}</p>}
+      {draft.pendingActivation && !busy && (
+        <p className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" role="status">
+          上次创建的 thesis「{draft.pendingActivation.title}」尚未确认激活。
+          <button type="button" className="ml-2 underline" onClick={() => void activatePending()}>现在激活</button>
+          <button type="button" className="ml-2 underline" onClick={() => reset(clearPendingActivation)}>保留为草稿</button>
+        </p>
+      )}
       {loadError && (
         <p className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-900" role="alert">
           {loadError} <button type="button" className="ml-2 underline" onClick={() => void load()}>重试</button>
@@ -99,7 +120,8 @@ export default function ResearchSetupPage() {
       {flow === 'thesis' && companies && (
         <ThesisFlow companies={companies} draft={draft.thesis} step={draft.thesisStep} busy={busy} setBusy={setBusy}
           onDraftChange={(thesis) => update({ thesis })} onStepChange={(thesisStep) => update({ thesisStep })}
-          onSaved={async (m) => { reset(resetThesisDraft); setNotice(m); await load(); }} />
+          onCreated={(created) => reset((prev) => markThesisCreated(prev, created))}
+          onSaved={async (m) => { reset(clearPendingActivation); setNotice(m); await load(); }} />
       )}
       {flow === null && <p className="text-sm text-gray-500">点上面任一张卡开始。</p>}
     </div>
