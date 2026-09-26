@@ -55,7 +55,7 @@ create or replace function public.research_forbid_source_mutation() returns trig
 
 ## 代码 / Code
 
-- `types.ts`：`SourceDocument` 增加 `event_time: string|null`、`available_at: string`、`source_version: string`、`cluster_id: string|null`、`cluster_first: boolean|null`、`origin_type: OriginType|null`、`market: Market|null`、`permission: Permission`；导出 `ORIGIN_TYPES`、`MARKETS`、`PERMISSIONS` 常量与类型。
+- `types.ts`：`SourceDocument` 增加（在 TS 类型上声明为可选，以保持既有 fixture 与 prompt 测试编译；数据库与 `rowToSource` 总会填值） `event_time: string|null`、`available_at: string`、`source_version: string`、`cluster_id: string|null`、`cluster_first: boolean|null`、`origin_type: OriginType|null`、`market: Market|null`、`permission: Permission`；导出 `ORIGIN_TYPES`、`MARKETS`、`PERMISSIONS` 常量与类型。
 - `sources.ts`：`rowToSource` 对缺列的旧行给默认（`available_at ?? ingested_at`、`source_version ?? '1'`、`permission ?? 'public'`、其余 `null`），保证 mock 与旧库行为不变；`IngestSourceInput` 增加可选 `event_time`、`available_at`、`market`、`permission`，逐一校验（ISO 时间、枚举），插入时 `available_at` 缺省等于本次 `ingested_at`，`permission` 缺省按 source_type（NOTE/MANUAL → private，其余 public），与回填规则一致。
 - `s4/import.ts` 的插入语句不改：新列全部有默认或允许 null；`available_at` 由数据库默认 `now()` 填充，`ingested_at` 同时刻。
 
