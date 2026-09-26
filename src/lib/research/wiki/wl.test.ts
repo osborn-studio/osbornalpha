@@ -24,6 +24,9 @@ describe('WL question and request',()=>{
   expect(ok).toMatchObject({selected:'contradicts',confidence:0.8,abstained:false});
   expect(parseWlAnswer({type:'choice',probabilities:{contradicts:0.4,superseded:0.3,consistent:0.2,unrelated:0.1},confidence:0.4})).toMatchObject({selected:null,abstained:true,confidence:0.4});
   expect(parseWlAnswer({type:'choice',probabilities:{maybe:1}})).toMatchObject({selected:null,abstained:true,distribution:{}});
+  // The threshold applies to the raw confidence; rounding is only for serialization.
+  expect(parseWlAnswer({type:'choice',probabilities:{contradicts:0.9,superseded:0.1},confidence:0.5999})).toMatchObject({selected:null,abstained:true,confidence:0.6});
+  expect(parseWlAnswer({type:'choice',probabilities:{contradicts:0.9,superseded:0.1},confidence:0.6})).toMatchObject({selected:'contradicts',abstained:false});
   expect(parseWlAnswer(undefined)).toMatchObject({abstained:true});
   expect(parseWlAnswer({type:'noul',noul:0.9})).toMatchObject({abstained:true});
  });

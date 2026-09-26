@@ -75,9 +75,11 @@ export function parseWlAnswer(raw: unknown): Parsed {
   }
   if (Object.keys(distribution).length === 0 || sum < 0.98 || sum > 1.02) return ABSTAIN;
   const conf = (raw as any).confidence;
-  const confidence = typeof conf === 'number' && conf >= 0 && conf <= 1 ? Math.round(conf * 1000) / 1000 : null;
+  const rawConfidence = typeof conf === 'number' && conf >= 0 && conf <= 1 ? conf : null;
+  // Threshold on the raw value; rounding is only for serialization (0.5999 must still abstain).
+  const confidence = rawConfidence === null ? null : Math.round(rawConfidence * 1000) / 1000;
   const best = (Object.entries(distribution) as [WlVerdict, number][]).sort((a, b) => b[1] - a[1])[0]![0];
-  if (confidence === null || confidence < WL_MIN_CONFIDENCE) return { selected: null, confidence, distribution, abstained: true };
+  if (rawConfidence === null || rawConfidence < WL_MIN_CONFIDENCE) return { selected: null, confidence, distribution, abstained: true };
   return { selected: best, confidence, distribution, abstained: false };
 }
 
