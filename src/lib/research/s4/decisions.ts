@@ -1,9 +1,12 @@
 import Ajv from 'ajv';
-import observationSchema from '../../../../docs/handoffs/alpha-s4/alpha-observation-contract.schema.json';
-const validObservation=new Ajv({strict:true}).compile(observationSchema);
+import observationSchemaV2 from '../../../../docs/handoffs/alpha-s6/alpha-observation-contract-v2.schema.json';
+// New registrations use alpha-observation-contract/2.0 (E3b); existing 1.0 observations stay as recorded.
+const validObservation=new Ajv({strict:true}).compile(observationSchemaV2);
 import { randomUUID } from 'node:crypto';
 import { fail } from '../ingest/pa-v1/json.js';
-import { timestamp, CALENDAR_HASH, MARKET_POLICY, MARKET_POLICY_HASH, planObservationSessions } from '../market-policy';
+import { timestamp, CALENDAR_HASH, MARKET_POLICY_V2, MARKET_POLICY_V2_HASH, OBSERVATION_CONTRACT_V2, planObservationSessions } from '../market-policy';
+/** stocks_universe venue codes accepted as the XNYS listing identity. */
+const XNYS_ALIASES=['XNYS','NYSE'];
 import { addRecord, candidateFor, replayRequest, saveRequest } from './records';
 import { assertWritableChain, serverTime, transaction, type S4Actor } from './db';
 import { weekPeriod } from './cards';
@@ -40,7 +43,8 @@ export async function submitDecision(actor:S4Actor,candidateId:string,input:Deci
       exposure.payload.actor_kind!==actor.kind) fail('exposure_required');
     if(input.reviewAt && timestamp(input.reviewAt)<=Date.parse(eligibilityAt)) fail('invalid_schema');
     const security=input.securityTicker?(await db.query('select ticker,exchange,currency,market,metadata from public.stocks_universe where ticker=$1 and is_active=true',[input.securityTicker])).rows[0]:null;
-    if(input.securityTicker&&(!security||!['XNYS','NYSE'].includes(security.exchange)||security.currency!=='USD')) fail('security_unresolved');
+    if(input.securityTicker&&(!security||!XNYS_ALIASES.includes(security.exchange)||security.currency!=='USD')) fail('security_unresolved');
+    if(security&&security.ticker===MARKET_POLICY_V2.benchmark.ticker) fail('security_unresolved'); // the benchmark is never an observation target
     if(security && !!security.metadata?.synthetic !== row.imported.synthetic) fail('scope_denied');
     const company=input.companyEntityId?(await db.query("select id,name from public.research_entities where user_id=$1 and id=$2 and type='COMPANY'",[actor.userId,input.companyEntityId])).rows[0]:null;
     if(input.companyEntityId&&!company) fail('scope_denied');
@@ -59,21 +63,21 @@ export async function submitDecision(actor:S4Actor,candidateId:string,input:Deci
       judgment_ref:card.payload.judgment_ref,thesis_revision_ref:card.payload.thesis_revision_ref,
       wiki_reference:row.imported.wiki,wiki_available_at:row.created_at.toISOString(),input_cutoff_at:frozenAt,
       label_ref:label.id,exposure_refs:[exposure.id],rights_policy_ref:row.imported.rights.policy_id,
-      company_mapping:company||null,security_mapping:security?{ticker:security.ticker,exchange:'XNYS',source_exchange:security.exchange,currency:security.currency}:null});
+      company_mapping:company||null,security_mapping:security?{ticker:security.ticker,listing_mic:'XNYS',source_exchange:security.exchange,currency:security.currency}:null});
     if(makeObservation) {
       const predecessor=observationId;observationId=randomUUID();
-      const plan=planObservationSessions(frozenAt,eligibilityAt);
-      const observation={schema_version:'alpha-observation-contract/1.0',id:observationId,
+      const plan=planObservationSessions(frozenAt,eligibilityAt,'market-policy/2.0');
+      const observation={schema_version:OBSERVATION_CONTRACT_V2,id:observationId,
         owner_scope:{user_id:actor.userId,workspace_id:null},decision_or_candidate_ref:decisionId,
         candidate_ref:row.id,thesis_revision_ref:card.payload.thesis_revision_ref,input_snapshot_ref:snapshot.id,
         input_snapshot_hash:snapshot.payload_hash,record_origin:'forward',research_stream:'descriptive',
         contamination_reasons:label.payload.contamination_reasons,actor_kind:actor.kind,synthetic:row.imported.synthetic,
-        observation_kind:input.action==='reject'?'shadow':'decision',securities:[{ticker:security.ticker,exchange:'XNYS',currency:'USD',company_entity_id:company?.id||null,synthetic:!!security.metadata?.synthetic}],
-        frozen_at:frozenAt,recorded_at:frozenAt,eligibility_at:eligibilityAt,start_rule:MARKET_POLICY.start_rule,
-        start_plan:plan,actual_start_at:null,windows:MARKET_POLICY.windows_trading_sessions.map(n=>({trading_sessions:n,starts_at:null,ends_at:null,result:null})),
-        benchmarks:[MARKET_POLICY.benchmark],currency_basis:MARKET_POLICY.currency,return_method:MARKET_POLICY.return_method,
-        market_policy_version:MARKET_POLICY.schema_version,market_policy_hash:MARKET_POLICY_HASH,market_policy:MARKET_POLICY,
-        calendar_version:MARKET_POLICY.calendar_version,calendar_hash:CALENDAR_HASH,status:'pending_start',
+        observation_kind:input.action==='reject'?'shadow':'decision',securities:[{ticker:security.ticker,listing_mic:'XNYS',currency:'USD',company_entity_id:company?.id||null,synthetic:!!security.metadata?.synthetic}],
+        frozen_at:frozenAt,recorded_at:frozenAt,eligibility_at:eligibilityAt,start_rule:MARKET_POLICY_V2.start_rule,
+        start_plan:plan,actual_start_at:null,windows:MARKET_POLICY_V2.windows_trading_sessions.map(n=>({trading_sessions:n,starts_at:null,ends_at:null,result:null})),
+        benchmarks:[MARKET_POLICY_V2.benchmark],currency_basis:MARKET_POLICY_V2.currency,return_method:MARKET_POLICY_V2.return_method,
+        market_policy_version:MARKET_POLICY_V2.schema_version,market_policy_hash:MARKET_POLICY_V2_HASH,market_policy:MARKET_POLICY_V2,
+        calendar_version:MARKET_POLICY_V2.calendar_version,calendar_hash:CALENDAR_HASH,status:'pending_start',
         predecessor_id:predecessor,anchor_status:'anchor_pending',provenance_level:'local_receipt'};
       if(!validObservation(observation)) fail('invalid_schema');
       await addRecord(db,actor,row.id,'Observation',observation,{id:observationId});

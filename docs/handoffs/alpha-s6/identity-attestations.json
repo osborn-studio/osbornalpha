@@ -1,0 +1,32 @@
+{
+  "schema_version": "alpha-identity-attestations/1.0",
+  "rules": [
+    "identity_evidence_sha256 must equal the sha256 of the kind=identity evidence carried in the market handoff bundle",
+    "real entries must cite an issuer or exchange listing page and be attested_by a named operator, never synthetic-fixture",
+    "synthetic entries never authorize real securities"
+  ],
+  "entries": [
+    {
+      "ticker": "S6SYNTH",
+      "listing_mic": "XNYS",
+      "currency": "USD",
+      "synthetic": true,
+      "identity_evidence_sha256": "214fe16d94c90c7a58e80f8581bb8f4587425756dc31889c916079baaca92409",
+      "source_url": "synthetic://fixture/identity",
+      "attested_at": "2026-09-26T00:00:00.000Z",
+      "attested_by": "synthetic-fixture",
+      "note": "Invented synthetic identity for local engineering only; not a real security."
+    },
+    {
+      "ticker": "SPY",
+      "listing_mic": "ARCX",
+      "currency": "USD",
+      "synthetic": true,
+      "identity_evidence_sha256": "480c1b4c934dd51c9524448e1953276ef0e1f74737b973b45c2ef19580be07b3",
+      "source_url": "synthetic://fixture/identity",
+      "attested_at": "2026-09-26T00:00:00.000Z",
+      "attested_by": "synthetic-fixture",
+      "note": "Invented synthetic identity for local engineering only; not a real security."
+    }
+  ]
+}

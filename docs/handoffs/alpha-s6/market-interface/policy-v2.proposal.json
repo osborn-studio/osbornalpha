@@ -1,10 +1,12 @@
 {
   "schema_version": "alpha-market-policy-proposal/1.0",
-  "status": "unreleased",
+  "status": "released",
   "parent_market_policy_version": "market-policy/1.0",
   "parent_market_policy_sha256": "9f31b8c1ad67aa62fa6b9743044763b530f1a69e6f5ebdb468e33597fddb5089",
   "identity_field": "security.listing_mic",
-  "target_listing_mics": ["XNYS"],
+  "target_listing_mics": [
+    "XNYS"
+  ],
   "benchmark": {
     "ticker": "SPY",
     "listing_mic": "ARCX",
@@ -18,5 +20,9 @@
   "range_alignment": "same_calendar_sessions_and_query_range",
   "missing_session": "data_insufficient_not_zero",
   "availability_basis": "local_retrieval_only_until_independent_attestation",
-  "real_evaluation": "closed_until_versioned_engine_and_trusted_evidence"
+  "real_evaluation": "open_for_policy_2_observations_with_attested_handoff_bundles",
+  "released_as": "docs/handoffs/alpha-s6/market-policy-v2.json",
+  "released_market_policy_version": "market-policy/2.0",
+  "released_market_policy_sha256": "9d7c851c81343ad77420c5302fea30fb6056b7b15231a3019fae7df0eafc566c",
+  "engine": "dsh-trade-strategy-evaluator@0.3.0 (osanalyst-engine/1.1.0 for 2.0 observations)"
 }

@@ -14,7 +14,7 @@ import {createEvaluationHttpClient} from 'dsh-trade-strategy-evaluator/adapters'
 // @ts-expect-error Fixed S5 conformance export has no bundled declaration.
 import {assertEvaluationStoreConformance} from 'dsh-trade-strategy-evaluator/conformance';
 import {evaluatorRpc} from './http';
-import {freezeMarket} from './market';
+import {freezeMarket,freezeMarketHandoff,benchmarkIdentity} from './market';
 import {observationReport} from './report';
 import {syntheticMapping} from '../../../../scripts/s6/fixtures';
 import {runRelFixture} from './shadow';
@@ -34,8 +34,12 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
   const r=await revealCards(actor,candidate,{requestKey:randomUUID(),judgment:'Synthetic S6 only',alreadySeen:[],independentJudgment:false});
   id=(await submitDecision(actor,candidate,{requestKey:randomUUID(),expectedRevision:0,action:'observe',reason:'Synthetic integration',cardId:r.cards[0].id,labelId:r.labelId,exposureId:r.exposureId,securityTicker:'S6SYNTH',companyEntityId:null,newObservation:true,reviewAt:null})).observationId!;
   const observation=(await createS6Store(actor).readObservation(id)).observation;
+  // E3b: new registrations are alpha-observation-contract/2.0 with a listing MIC; SPY is the ARCX benchmark.
+  expect(observation.schema_version).toBe('alpha-observation-contract/2.0');
+  expect(observation.securities[0]).toMatchObject({ticker:'S6SYNTH',listing_mic:'XNYS',currency:'USD',synthetic:true});
+  expect(observation.market_policy_version).toBe('market-policy/2.0');
   const marketIds=[];
-  for(const security of [observation.securities[0],{...observation.securities[0],ticker:'SPY'}]){
+  for(const security of [observation.securities[0],benchmarkIdentity(true)]){
    const mapping=syntheticMapping(security),frozen=await freezeMarket(actor,id,mapping,'synthetic');marketIds.push(frozen.id);
    expect((await freezeMarket(actor,id,mapping,'synthetic')).duplicate).toBe(true);
    await expect(freezeMarket(actor,id,{...mapping,evidence:{...mapping.evidence,raw_sha256:'0'.repeat(64)}},'synthetic')).rejects.toMatchObject({code:'hash_mismatch'});
@@ -141,6 +145,28 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
    expect(injected.fetched_at.getTime()).toBeGreaterThan(Date.now()-60000);
   }finally{await connection.query('rollback');connection.release();}
  });
+ it('E3b: freezes attested market-handoff bundles for a 2.0 observation and evaluates under engine 1.1.0',async()=>{
+  const base='docs/handoffs/alpha-s6/market-interface/';
+  const target=readFileSync(base+'split.synthetic.json','utf8'),spy=readFileSync(base+'spy.synthetic.json','utf8');
+  const t=await freezeMarketHandoff(actor,id,{raw:target,id:'handoff-target'}),s=await freezeMarketHandoff(actor,id,{raw:spy,id:'handoff-spy'});
+  expect(t.duplicate).toBe(false);expect((await freezeMarketHandoff(actor,id,{raw:target,id:'handoff-target'})).duplicate).toBe(true);
+  await expect(freezeMarketHandoff(actor,id,{raw:target.replace('"close": 100','"close": 101'),id:'handoff-target'})).rejects.toMatchObject({code:'idempotency_conflict'});
+  const stored=(await admin.query('select snapshot,evidence from research_s6_markets where user_id=$1 and id in ($2,$3) order by id',[actor.userId,'handoff-spy','handoff-target'])).rows;
+  expect(stored.map((r:any)=>[r.snapshot.schema_version,r.snapshot.security.ticker,r.snapshot.security.listing_mic,r.evidence.kind])).toEqual([['market-snapshot/2.0','SPY','ARCX','synthetic'],['market-snapshot/2.0','S6SYNTH','XNYS','synthetic']]);
+  expect(stored[1].snapshot.security.company_entity_id).toBe(body.input.observation.securities[0].company_entity_id);
+  expect(stored[1].evidence.proof.attestation).toMatchObject({ticker:'S6SYNTH',listing_mic:'XNYS',attested_by:'synthetic-fixture'});
+  const input=await prepareInput(actor,id,[t.id,s.id],new Date().toISOString());
+  const r=evaluateObservation(input);expect(r.ok).toBe(true);
+  if(r.ok){expect(r.result.engine_version).toBe('osanalyst-engine/1.1.0');expect(r.result.rule_version).toBe('market-policy/2.0');expect(r.result.status).toBe('pending_start');}
+  // Bundles whose identity is not attested, or that belong to another security, are refused.
+  const foreign=JSON.parse(target);foreign.security.ticker='OTHERX';for(const e of foreign.evidence)e.source_url=e.source_url.replace('S6SYNTH','OTHERX');
+  await expect(freezeMarketHandoff(actor,id,{raw:JSON.stringify(foreign)})).rejects.toMatchObject({code:'scope_denied'});
+  const unattested=JSON.parse(target);unattested.evidence.find((e:any)=>e.kind==='identity').content+=' ';unattested.evidence.find((e:any)=>e.kind==='identity').sha256=tokenHash(unattested.evidence.find((e:any)=>e.kind==='identity').content);
+  await expect(freezeMarketHandoff(actor,id,{raw:JSON.stringify(unattested)})).rejects.toMatchObject({code:'data_insufficient'});
+  // A real bundle can never be frozen onto a synthetic observation.
+  const real=JSON.parse(target);real.synthetic=false;for(const e of real.evidence)e.source_url='https://example.invalid/'+e.id;
+  await expect(freezeMarketHandoff(actor,id,{raw:JSON.stringify(real)})).rejects.toMatchObject({code:'scope_denied'});
+ });
  it('durably reserves REL fixture credits, retains unknown cost and never dispatches retries',async()=>{
   let calls=0;
   const adapter:RelFixtureAdapter={kind:'fixture',version:'fixture-v1',evaluate:async()=>{
@@ -220,7 +246,7 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
   await expect(transaction(actor,db=>db.query('update research_s6_rel_limits set credit_limit=1001 where user_id=$1',[actor.userId]))).rejects.toThrow('permission denied');
   await expect(transaction(actor,db=>db.query("insert into research_s6_rel_runs(user_id,request_key,observation_id,candidate_id,request_hash,request,state,reserved,actual,receipt_hash) select user_id,$2,observation_id,candidate_id,request_hash,request,'settled',1,0,$3 from research_s6_rel_runs where user_id=$1 limit 1",[actor.userId,randomUUID(),'0'.repeat(64)]))).rejects.toThrow('invalid_rel_initial_state');
   await transaction(actor,async()=>{await expect(admin.query('update research_s6_rel_limits set credit_limit=1000 where user_id=$1',[actor.userId])).rejects.toThrow('owner_busy_retry');});
-  await expect(freezeMarket(actor,id,{...syntheticMapping(body.input.observation.securities[0]),security:{...body.input.observation.securities[0],ticker:'SPY',synthetic:false}},'authorized-provider')).rejects.toMatchObject({code:'rule_unsupported'});
+  await expect(freezeMarket(actor,id,{...syntheticMapping(body.input.observation.securities[0]),security:{...benchmarkIdentity(false)}},'authorized-provider')).rejects.toMatchObject({code:'rule_unsupported'});
   expect(Number((await admin.query("select count(*) from research_s6_markets where (snapshot->'security'->>'synthetic')::boolean is not true")).rows[0].count)).toBe(0);
   await admin.query('update research_s6_rel_limits set hard_stop=false where user_id=$1',[actor.userId]);
   let startInvalid!:()=>void,finishInvalid!:(value:unknown)=>void;

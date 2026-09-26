@@ -1,0 +1,100 @@
+{
+  "ok": true,
+  "result": {
+    "schema_version": "evaluator-input-output/1.0",
+    "engine_version": "osanalyst-engine/1.1.0",
+    "rule_version": "market-policy/2.0",
+    "observation_ref": "00000001-0000-4000-8000-000000000000",
+    "observation_sha256": "0cd83fa8c337e2ca728ea3ebcd9cf0ea9ca61690898eaa747afd4a31ddab0eb8",
+    "input_sha256": "f8c4fc203a4008b8f89d7468cf526cdeeb7aa726ce9ceb9f2ff9a269719d3570",
+    "market_snapshot_refs": [
+      {
+        "id": "synthetic-market-v2-0",
+        "sha256": "6346fa2182b069d9225a079d47697149693624d7c720e4bf23dc11ef8756c67b",
+        "adapter_version": "s6-fixture/1.0"
+      },
+      {
+        "id": "synthetic-market-v2-1",
+        "sha256": "59793757ea170568fb4e7b8200b43b01d8e51c7b2faf313065be6f9cbf8d0698",
+        "adapter_version": "s6-fixture/1.0"
+      }
+    ],
+    "market_policy_hash": "9d7c851c81343ad77420c5302fea30fb6056b7b15231a3019fae7df0eafc566c",
+    "calendar_hash": "9c81226f191c390e69478a9651025254d789d671c72b9aef2b78bc941af302a4",
+    "computed_at": "2026-12-17T21:00:00.000Z",
+    "record_origin": "forward",
+    "research_stream": "descriptive",
+    "synthetic": true,
+    "contamination_reasons": [
+      "synthetic_agent_operated",
+      "upstream_exposure_history_unknown"
+    ],
+    "anchor_status": "anchor_pending",
+    "provenance_level": "local_receipt",
+    "security": {
+      "ticker": "S6SYNTH",
+      "listing_mic": "XNYS",
+      "currency": "USD",
+      "company_entity_id": null,
+      "synthetic": true
+    },
+    "input_snapshot_ref": "00000005-0000-4000-8000-000000000000",
+    "input_snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "return_method": "split_adjusted_price_return_excluding_cash_dividends",
+    "portfolio_return": null,
+    "status": "resolved",
+    "reason": null,
+    "actual_start_at": "2026-09-23T20:00:00.000Z",
+    "windows": [
+      {
+        "trading_sessions": 5,
+        "starts_at": "2026-09-23T20:00:00.000Z",
+        "ends_at": "2026-09-30T20:00:00.000Z",
+        "status": "resolved",
+        "reason": null,
+        "result": {
+          "price_return": 0.05,
+          "benchmark_price_return": 0.025,
+          "benchmark_difference": 0.025,
+          "max_drawdown": 0,
+          "benchmark": "SPY",
+          "currency": "USD",
+          "benchmark_listing_mic": "ARCX"
+        }
+      },
+      {
+        "trading_sessions": 20,
+        "starts_at": "2026-09-23T20:00:00.000Z",
+        "ends_at": "2026-10-21T20:00:00.000Z",
+        "status": "resolved",
+        "reason": null,
+        "result": {
+          "price_return": 0.2,
+          "benchmark_price_return": 0.1,
+          "benchmark_difference": 0.1,
+          "max_drawdown": 0,
+          "benchmark": "SPY",
+          "currency": "USD",
+          "benchmark_listing_mic": "ARCX"
+        }
+      },
+      {
+        "trading_sessions": 60,
+        "starts_at": "2026-09-23T20:00:00.000Z",
+        "ends_at": "2026-12-17T21:00:00.000Z",
+        "status": "resolved",
+        "reason": null,
+        "result": {
+          "price_return": 0.6,
+          "benchmark_price_return": 0.3,
+          "benchmark_difference": 0.3,
+          "max_drawdown": 0,
+          "benchmark": "SPY",
+          "currency": "USD",
+          "benchmark_listing_mic": "ARCX"
+        }
+      }
+    ]
+  },
+  "result_sha256": "7fc298e65665e48daed4e1139208b689aabca804c02c244197f5ebdf2c5cf289"
+}
