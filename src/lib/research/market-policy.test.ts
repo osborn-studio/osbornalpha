@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import calendar from '../../../docs/handoffs/alpha-s4/calendar.json';
 import { readFileSync } from 'node:fs';
-import { planObservationSessions, observationWindowEnds, MARKET_POLICY_HASH, CALENDAR_HASH, MARKET_POLICY } from './market-policy';
+import { planObservationSessions, observationWindowEnds, MARKET_POLICY_HASH, CALENDAR_HASH, MARKET_POLICY, MARKET_POLICY_V2, MARKET_POLICY_V2_HASH } from './market-policy';
+import { POLICY_V2_HASH, POLICY_HASH, digest as engineDigest } from 'dsh-trade-strategy-evaluator/engine';
 
 describe('market-policy/1.0 frozen rules', () => {
   it('pins the holiday, early-close and DST source facts', () => {
@@ -56,5 +57,28 @@ describe('market-policy/1.0 frozen rules', () => {
   });
   it('does not invent sessions outside the frozen calendar', () => {
     expect(() => planObservationSessions('2029-01-01T00:00:00Z', '2029-01-01T00:00:00Z')).toThrow('rule_unsupported');
+  });
+});
+
+describe('market-policy/2.0 released rules (E3b)', () => {
+  it('matches the engine constant, the published .sha256 file and the frozen 1.0 hash', () => {
+    expect(MARKET_POLICY_V2_HASH).toBe(POLICY_V2_HASH);
+    expect(MARKET_POLICY_V2_HASH).toBe(readFileSync('docs/handoffs/alpha-s6/market-policy-v2.json.sha256', 'utf8').trim());
+    expect(MARKET_POLICY_HASH).toBe(POLICY_HASH);
+    expect(engineDigest(MARKET_POLICY_V2)).toBe(MARKET_POLICY_V2_HASH);
+  });
+  it('separates listing identity from the session calendar and keeps the 1.0 windows', () => {
+    expect(MARKET_POLICY_V2.benchmark).toEqual({ ticker: 'SPY', listing_mic: 'ARCX', currency: 'USD' });
+    expect(MARKET_POLICY_V2.target_listing_mics).toEqual(['XNYS']);
+    expect(MARKET_POLICY_V2.calendar_mic).toBe('XNYS');
+    expect(MARKET_POLICY_V2.windows_trading_sessions).toEqual(MARKET_POLICY.windows_trading_sessions);
+    expect(Object.isFrozen(MARKET_POLICY_V2)).toBe(true);
+  });
+  it('plans the same sessions under 2.0 but stamps the 2.0 policy hash', () => {
+    const v1 = planObservationSessions('2026-09-22T13:30:00Z', '2026-09-22T13:30:00Z');
+    const v2 = planObservationSessions('2026-09-22T13:30:00Z', '2026-09-22T13:30:00Z', 'market-policy/2.0');
+    expect(v2.intendedStart).toEqual(v1.intendedStart);
+    expect(v2.marketPolicyHash).toBe(MARKET_POLICY_V2_HASH);
+    expect(v1.marketPolicyHash).toBe(MARKET_POLICY_HASH);
   });
 });

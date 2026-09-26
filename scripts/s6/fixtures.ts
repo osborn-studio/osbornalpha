@@ -1,8 +1,8 @@
 /** Generated synthetic HTTP DTO/evidence only; never a provider accuracy claim. */
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
-import {bytesDigest,type MarketSnapshot} from 'dsh-trade-strategy-evaluator/engine';
-export function syntheticMapping(security:MarketSnapshot['security']){
+import {bytesDigest,type MarketSnapshot,type MarketSnapshotV2} from 'dsh-trade-strategy-evaluator/engine';
+export function syntheticMapping<S extends MarketSnapshot['security']|MarketSnapshotV2['security']>(security:S){
  const dto=JSON.parse(readFileSync('docs/handoffs/alpha-s4/kline-none.synthetic.json','utf8'));
  dto.ticker=security.ticker;dto.bars[0].time=Date.parse('2026-01-05T21:00:00Z')/1000;
  Object.assign(dto.meta,{market:'US',timezone:'America/New_York',currencyCode:'USD',currency:'$',coverageStart:'2026-01-05',coverageEnd:'2026-01-05',asOf:'2026-01-05',fetchedAt:'2026-01-06T00:00:00.000Z'});

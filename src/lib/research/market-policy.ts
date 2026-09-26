@@ -1,4 +1,5 @@
 import policy from '../../../docs/handoffs/alpha-s4/market-policy.json';
+import policyV2 from '../../../docs/handoffs/alpha-s6/market-policy-v2.json';
 import calendar from '../../../docs/handoffs/alpha-s4/calendar.json';
 import { digest } from './ingest/pa-v1/json.js';
 
@@ -11,7 +12,16 @@ function freeze<T>(value: T): Readonly<T> {
 }
 export const MARKET_POLICY = freeze(policy);
 export const MARKET_POLICY_HASH = digest(policy);
+/** market-policy/2.0 (E3a/E3b): listing MIC identity, SPY/ARCX benchmark, same XNYS session calendar and rules. */
+export const MARKET_POLICY_V2 = freeze(policyV2);
+export const MARKET_POLICY_V2_HASH = digest(policyV2);
 export const CALENDAR_HASH = digest(calendar);
+export type MarketPolicyVersion = 'market-policy/1.0' | 'market-policy/2.0';
+export const OBSERVATION_CONTRACT_V2 = 'alpha-observation-contract/2.0';
+if (policyV2.schema_version !== 'market-policy/2.0' || policyV2.calendar_version !== calendar.version || policyV2.calendar_mic !== 'XNYS' ||
+    policyV2.benchmark.ticker !== 'SPY' || policyV2.benchmark.listing_mic !== 'ARCX' || !policyV2.target_listing_mics.includes('XNYS') ||
+    digest(policyV2.windows_trading_sessions) !== digest(policy.windows_trading_sessions) || policyV2.max_wait_trading_sessions !== policy.max_wait_trading_sessions ||
+    policyV2.start_rule !== policy.start_rule || policyV2.return_method !== policy.return_method) throw new Error('invalid_market_policy_v2');
 
 export class MarketPolicyError extends Error {
   readonly code: 'invalid_schema' | 'data_insufficient';
@@ -48,7 +58,7 @@ for (let i = 0; i < calendar.sessions.length; i++) {
 freeze(calendar);
 
 /** Pure rule planning: no prices, networking or assumed valid market closes. */
-export function planObservationSessions(frozenAt: string, eligibilityAt: string) {
+export function planObservationSessions(frozenAt: string, eligibilityAt: string, version: MarketPolicyVersion = 'market-policy/1.0') {
   const cutoff = Math.max(timestamp(frozenAt), timestamp(eligibilityAt));
   if (cutoff < Date.parse(calendar.range[0]) || cutoff >= Date.parse(calendar.range[1]) + 86400000) {
     throw new MarketPolicyError('rule_unsupported');
@@ -62,7 +72,7 @@ export function planObservationSessions(frozenAt: string, eligibilityAt: string)
   // Registration must support all frozen windows, even if a valid start occurs last.
   observationWindowEnds(full.at(-1)!.close);
   return { intendedStart: full[0], fallbackCandidates: full.slice(1), waitExpiresAt: candidates.at(-1)!.close,
-    marketPolicyHash: MARKET_POLICY_HASH, calendarHash: CALENDAR_HASH };
+    marketPolicyHash: version === 'market-policy/2.0' ? MARKET_POLICY_V2_HASH : MARKET_POLICY_HASH, calendarHash: CALENDAR_HASH };
 }
 
 export function observationWindowEnds(actualStartAt: string) {

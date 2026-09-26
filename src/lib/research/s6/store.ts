@@ -1,9 +1,10 @@
 import {randomUUID,createHash} from 'node:crypto';
 import type {PoolClient} from 'pg';
-import {digest,inputDigest,evaluateObservation,type EvaluationInput,type Observation,type MarketSnapshot,type InformationSet} from 'dsh-trade-strategy-evaluator/engine';
+import {digest,inputDigest,evaluateObservation,type EvaluationInput,type Observation,type InformationSet} from 'dsh-trade-strategy-evaluator/engine';
 import {validateCommit,type EvaluationStore} from 'dsh-trade-strategy-evaluator/adapters';
 import calendar from '../../../../docs/handoffs/alpha-s4/calendar.json';
 import {fail} from '../ingest/pa-v1/json.js';
+import {OBSERVATION_CONTRACT_V2} from '../market-policy';
 import {assertWritableChain,transaction,serverTime,type S4Actor} from '../s4/db';
 import {candidateFor,addRecord} from '../s4/records';
 
@@ -50,7 +51,9 @@ export async function marketFor(db:PoolClient,actor:S4Actor,id:string){
  const r=(await db.query('select * from research_s6_markets where user_id=$1 and id=$2',[actor.userId,id])).rows[0];
  if(!r)fail('not_found');
  const o=await observationFor(db,actor,r.observation_id);
- if(r.evidence.kind==='synthetic'?!o.payload.synthetic:r.evidence.kind!=='authorized-provider'||o.payload.synthetic||process.env.ALPHA_S6_REAL_MARKET!=='1')fail('policy_blocked');
+ // synthetic evidence ↔ synthetic observation; real evidence needs the real-market switch and, for handoff bundles, a 2.0 observation.
+ const v2=(o.payload as {schema_version:string}).schema_version===OBSERVATION_CONTRACT_V2;
+ if(r.evidence.kind==='synthetic'?!o.payload.synthetic:!['authorized-provider','attested-handoff'].includes(r.evidence.kind)||o.payload.synthetic||process.env.ALPHA_S6_REAL_MARKET!=='1'||(r.evidence.kind==='attested-handoff'&&!v2))fail('policy_blocked');
  if(digest(r.snapshot)!==r.snapshot_hash||tokenHash(r.raw_response)!==r.snapshot.raw_sha256||digest(r.evidence)!==r.evidence_hash)fail('hash_mismatch');
  return r;
 }
@@ -58,8 +61,12 @@ async function inputFor(db:PoolClient,actor:S4Actor,id:string,marketIds:string[]
  if(!Array.isArray(marketIds)||marketIds.length>2||new Set(marketIds).size!==marketIds.length)fail('invalid_schema');
  if(typeof asOf!=='string'||!Number.isFinite(Date.parse(asOf)))fail('invalid_schema');
  if(Date.parse(asOf)>Date.parse(await serverTime(db)))fail('future_input');
- const row=await observationFor(db,actor,id),markets:MarketSnapshot[]=[];
- if(!row.payload.synthetic)fail('rule_unsupported'); // Real issuer identity needs the next policy/engine contract.
+ const row=await observationFor(db,actor,id),markets:EvaluationInput['market_snapshots']=[];
+ if(!row.payload.synthetic){
+  // 1.0 observations predate the listing-identity contract: real evaluation stays closed for them.
+  if((row.payload as {schema_version:string}).schema_version!==OBSERVATION_CONTRACT_V2)fail('rule_unsupported');
+  if(process.env.ALPHA_S6_REAL_MARKET!=='1')fail('policy_blocked');
+ }
  for(const mid of marketIds){const m=await marketFor(db,actor,mid);if(m.observation_id!==id)fail('scope_denied');markets.push(m.snapshot);}
  const input:EvaluationInput={schema_version:'evaluator-input-output/1.0',observation:row.payload,observation_sha256:row.payload_hash,
   calendar:calendar as EvaluationInput['calendar'],market_snapshots:markets,market_snapshot_sha256s:markets.map(digest),

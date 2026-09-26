@@ -88,7 +88,8 @@ export function validateMarketHandoff(raw:string|Buffer,now=new Date().toISOStri
  const missingSessions=sessions.filter(s=>!filled.has(s.date)).map(s=>s.date);
  return {schema_version:'alpha-market-handoff-check/1.0',status:missingSessions.length||!p.splits.coverage.complete?'contract_incomplete':'contract_valid',
   bundle_sha256:digest(p),raw_sha256:sha256(raw),synthetic:p.synthetic,security:p.security,bar_count:p.bars.length,missing_sessions:missingSessions,
-  readiness:'provider_claims_unverified',engine_compatible:false,accepted_for_evaluation:false,
-  blockers:['availability_timestamps_unverified','synthetic_flag_unverified','source_rights_unverified','issuer_identity_unverified','price_adjustment_unverified','split_evidence_unverified','engine_policy_upgrade_required',...(missingSessions.length?['missing_sessions']:[]),...(!p.splits.coverage.complete?['incomplete_split_coverage']:[])],
+  // engine_compatible: the format converts through mapMarketHandoff (engine 0.3.0, market-policy/2.0); acceptance still needs an attested identity and a 2.0 observation.
+  readiness:'provider_claims_unverified',engine_compatible:true,engine_policy_version:'market-policy/2.0',accepted_for_evaluation:false,
+  blockers:['availability_timestamps_unverified','synthetic_flag_unverified','source_rights_unverified','issuer_identity_unverified','identity_attestation_required','price_adjustment_unverified','split_evidence_unverified',...(missingSessions.length?['missing_sessions']:[]),...(!p.splits.coverage.complete?['incomplete_split_coverage']:[])],
   availability_basis:'local_retrieval_only',observed_at:p.observed_at};
 }

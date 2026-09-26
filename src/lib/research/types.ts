@@ -338,6 +338,17 @@ export const THESIS_TRANSITIONS: Readonly<Record<ThesisStatus, readonly ThesisSt
   CLOSED: [],
 };
 
+/** WP-A7 (§5.3): B = 业绩/事件驱动机会, C = 结构性变化, other. */
+export type OpportunityType = 'B' | 'C' | 'other';
+export const OPPORTUNITY_TYPES: readonly OpportunityType[] = ['B', 'C', 'other'] as const;
+export const DEFAULT_HORIZON_WEEKS: readonly number[] = [4, 13, 26] as const;
+
+/** A thesis pillar: a claim that must hold, how it can be resolved, and by when. */
+export interface ThesisPillar { id: string; text: string; resolvable_by: string; deadline: string | null }
+export interface ThesisCatalyst { text: string; expected_date: string | null }
+/** §7.4.4: a kill condition whose wording was wrong; the original text is kept here forever. */
+export interface KillConditionRevision { index: number; old_text: string; new_text: string; reason: string; at: string }
+
 export interface Thesis {
   id: string;
   title: string;
@@ -353,6 +364,15 @@ export interface Thesis {
   next_review_at?: string | null;
   created_at: string;
   updated_at: string;
+  // WP-A7 (§5.3). Optional on the type (like the A1 source fields) so existing
+  // fixtures compile; rowToThesis always fills them with the migration defaults.
+  opportunity_type?: OpportunityType;
+  pillars?: ThesisPillar[];
+  catalysts?: ThesisCatalyst[];
+  horizon_weeks?: number[];
+  /** §7.4.3: the INVALIDATED/CLOSED thesis this one replaces; windows restart from zero. */
+  supersedes?: string | null;
+  kill_condition_revisions?: KillConditionRevision[];
 }
 
 export type ThesisEventType =
@@ -360,6 +380,7 @@ export type ThesisEventType =
   | 'WEAKEN'
   | 'INVALIDATE'
   | 'STATUS_CHANGE'
+  | 'KILL_CONDITION_REVISED'
   | 'NOTE';
 
 export interface ThesisEvent {

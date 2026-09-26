@@ -23,7 +23,7 @@
     "@supabase/supabase-js": "^2.46.1",
     "ajv": "8.17.1",
     "clsx": "^2.1.1",
-    "dsh-trade-strategy-evaluator": "file:vendor/dsh-trade-strategy-evaluator-0.2.0.tgz",
+    "dsh-trade-strategy-evaluator": "file:vendor/dsh-trade-strategy-evaluator-0.3.0.tgz",
     "geist": "^1.7.1",
     "iconv-lite": "^0.7.2",
     "lightweight-charts": "^4.2.1",

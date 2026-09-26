@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import type { Thesis, ThesisStatus } from '@/lib/research/types';
+import { EMPTY_FORM, OPPORTUNITY_LABELS, ThesisFormFields, formToInput } from './thesis-form';
 
 const STATUS_COLORS: Record<ThesisStatus, string> = {
   DRAFT: 'bg-gray-100 text-gray-700',
@@ -23,9 +24,7 @@ export default function ResearchThesesPage() {
   const [disabled, setDisabled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [form, setForm] = useState({
-    title: '', body: '', invalidation_conditions: '', watch_metrics: '', next_review_at: '',
-  });
+  const [form, setForm] = useState(EMPTY_FORM);
 
   const load = useCallback(async () => {
     const res = await fetch('/api/research/theses');
@@ -51,24 +50,17 @@ export default function ResearchThesesPage() {
     setBusy(true);
     setNotice(null);
     try {
-      const lines = (s: string) => s.split('\n').map((x) => x.trim()).filter(Boolean);
       const res = await fetch('/api/research/theses', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          title: form.title,
-          body: form.body,
-          invalidation_conditions: lines(form.invalidation_conditions),
-          watch_metrics: lines(form.watch_metrics),
-          next_review_at: form.next_review_at,
-        }),
+        body: JSON.stringify(formToInput(form)),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setNotice(`创建失败：${data?.error?.message ?? res.status}`);
       } else {
         setNotice(`创建成功：${data.thesis.title}`);
-        setForm({ title: '', body: '', invalidation_conditions: '', watch_metrics: '', next_review_at: '' });
+        setForm(EMPTY_FORM);
         await load();
       }
     } finally {
@@ -90,57 +82,7 @@ export default function ResearchThesesPage() {
 
       <form onSubmit={submit} className="space-y-3 rounded-lg border p-4">
         <h2 className="text-base font-medium">新建 thesis</h2>
-        <div className="grid gap-3 md:grid-cols-2">
-          <label className="text-sm md:col-span-2">
-            标题
-            <input
-              className="mt-1 w-full rounded border px-2 py-1.5"
-              value={form.title}
-              onChange={(e) => setForm({ ...form, title: e.target.value })}
-              required
-            />
-          </label>
-          <label className="text-sm md:col-span-2">
-            正文（核心逻辑）
-            <textarea
-              className="mt-1 w-full rounded border px-2 py-1.5"
-              rows={3}
-              value={form.body}
-              onChange={(e) => setForm({ ...form, body: e.target.value })}
-              required
-            />
-          </label>
-          <label className="text-sm">
-            失效条件（每行一条，≥1，没有失效条件的 thesis 不允许存在）
-            <textarea
-              className="mt-1 w-full rounded border px-2 py-1.5"
-              rows={3}
-              value={form.invalidation_conditions}
-              onChange={(e) => setForm({ ...form, invalidation_conditions: e.target.value })}
-              required
-            />
-          </label>
-          <label className="text-sm">
-            观察指标（每行一条，≥1）
-            <textarea
-              className="mt-1 w-full rounded border px-2 py-1.5"
-              rows={3}
-              value={form.watch_metrics}
-              onChange={(e) => setForm({ ...form, watch_metrics: e.target.value })}
-              required
-            />
-          </label>
-          <label className="text-sm">
-            下次复核日期
-            <input
-              type="date"
-              className="mt-1 w-full rounded border px-2 py-1.5"
-              value={form.next_review_at}
-              onChange={(e) => setForm({ ...form, next_review_at: e.target.value })}
-              required
-            />
-          </label>
-        </div>
+        <ThesisFormFields form={form} setForm={setForm} />
         <button
           type="submit"
           disabled={busy}
@@ -165,8 +107,9 @@ export default function ResearchThesesPage() {
                   {t.title}
                 </Link>
                 <div className="mt-0.5 text-xs text-gray-500">
-                  失效条件 {t.invalidation_conditions.length} · 观察指标 {t.watch_metrics.length}
+                  {OPPORTUNITY_LABELS[t.opportunity_type ?? 'other']} · 支柱 {(t.pillars ?? []).length} · 失效条件 {t.invalidation_conditions.length} · 观察指标 {t.watch_metrics.length}
                   {t.next_review_at ? ` · 下次复核 ${t.next_review_at}` : ''}
+                  {t.supersedes ? ' · 取代旧 thesis' : ''}
                 </div>
               </li>
             ))}
