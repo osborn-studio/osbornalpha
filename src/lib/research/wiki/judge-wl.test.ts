@@ -30,6 +30,20 @@ describe('verifyPublicSources',()=>{
  });
 });
 
+describe('verifyPublicSources batching',()=>{
+ it('checks more than 1000 distinct sources in bounded batches',async()=>{
+  const ids=Array.from({length:1200},(_,i)=>S(1000+i));
+  const {ctx}=makeMockCtx({research_source_documents:ids.map(id=>row(id))});
+  const batches:number[]=[];
+  const from=ctx.supabase.from.bind(ctx.supabase);
+  (ctx.supabase as any).from=(table:string)=>{const q:any=from(table);const origIn=q.in.bind(q);q.in=(col:string,values:unknown[])=>{batches.push(values.length);return origIn(col,values);};return q;};
+  const pairs=ids.map((id,i)=>({...pair(i),pair_id:String(i%10).repeat(64).slice(0,64),cited_snippets:[],candidate:{...pair(i).candidate,source_id:id}}));
+  await expect(verifyPublicSources(ctx,doc(pairs))).resolves.toEqual({checked:1200});
+  expect(batches.length).toBeGreaterThanOrEqual(3);
+  expect(Math.max(...batches)).toBeLessThanOrEqual(500);
+ });
+});
+
 describe('runJudgeWl',()=>{
  const fetchOk=(async()=>reply()) as unknown as typeof fetch;
  it('merges with an existing answers file for the same pairs and refuses a different one',async()=>{

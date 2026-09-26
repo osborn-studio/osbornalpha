@@ -65,5 +65,7 @@ describe('judgeWlPairs',()=>{
   expect(a).toMatch(/^[0-9a-f]{64}$/);
   expect(pairsHash(doc([pair(2),pair(1)]))).not.toBe(a);
   expect(pairsHash({...doc([pair(1),pair(2)]),generated_at:'2027-01-01T00:00:00.000Z'})).toBe(a);
+  // Same pairs from a different source pack are a different document.
+  expect(pairsHash({...doc([pair(1),pair(2)]),pack_hash:'b'.repeat(64)})).not.toBe(a);
  });
 });

@@ -10,6 +10,7 @@ import type { ResearchCtx } from '../store';
 import pairsSchema from './wiki-wl-pairs.schema.json';
 import { answersDocument, buildWlRequest, estimateForPair, judgeWlPairs, pairsHash, type JudgeResult, type WlAnswersDocument, type WlPairsDocument } from './wl';
 
+const PUBLIC_CHECK_BATCH = 500;
 const ajv = new Ajv({ strict: true, allErrors: false });
 const validatePairs = ajv.compile<WlPairsDocument>(pairsSchema as object);
 
@@ -22,9 +23,14 @@ export function loadPairsDocument(value: unknown): WlPairsDocument {
 export async function verifyPublicSources(ctx: ResearchCtx, doc: WlPairsDocument): Promise<{ checked: number }> {
   const ids = [...new Set(doc.pairs.flatMap(p => [p.candidate.source_id, ...p.cited_snippets.map(s => s.source_id)]))].sort();
   if (ids.length === 0) return { checked: 0 };
-  const { data, error } = await ctx.supabase.from('research_source_documents').select('id,permission').eq('user_id', ctx.userId).in('id', ids);
-  if (error) throw new Error(error.message);
-  const seen = new Map<string, string>((data ?? []).map((r: any) => [r.id, r.permission]));
+  // Bounded batches: PostgREST caps a response at max_rows (1000) and long id lists blow the URL limit.
+  const seen = new Map<string, string>();
+  for (let i = 0; i < ids.length; i += PUBLIC_CHECK_BATCH) {
+    const batch = ids.slice(i, i + PUBLIC_CHECK_BATCH);
+    const { data, error } = await ctx.supabase.from('research_source_documents').select('id,permission').eq('user_id', ctx.userId).in('id', batch);
+    if (error) throw new Error(error.message);
+    for (const r of (data ?? []) as any[]) seen.set(r.id, r.permission);
+  }
   for (const id of ids) if (seen.get(id) !== 'public') fail('not_public');
   return { checked: ids.length };
 }

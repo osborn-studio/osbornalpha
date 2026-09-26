@@ -6,7 +6,8 @@
  */
 import { JEV_MODEL, JEV_URL } from '../fanout/backends/jev';
 import { estimateTokens, microsForTokens } from '../fanout/backends/shared';
-import { canonicalJson, computePackHash } from './source-pack';
+import { createHash } from 'node:crypto';
+import { canonicalJson } from './source-pack';
 
 export const WL_QUESTION_VERSION = 'wl/1.0';
 export const WL_OPTIONS = ['contradicts', 'superseded', 'consistent', 'unrelated'] as const;
@@ -39,10 +40,10 @@ export interface WlAnswersDocument {
   schema_name: 'alpha-wiki-wl-answers'; schema_version: '1.0'; generated_at: string; pairs_hash: string; question_version: string; answers: WlAnswer[];
 }
 
-/** Identity of a pairs file: everything but the export timestamp. */
+/** Identity of a pairs file: everything but the export timestamp (the source pack hash included). */
 export function pairsHash(doc: WlPairsDocument): string {
   const { generated_at: _ignored, ...rest } = doc;
-  return computePackHash({ ...rest, pack_hash: rest.pack_hash });
+  return createHash('sha256').update(canonicalJson(rest), 'utf8').digest('hex');
 }
 
 /** One System One request per pair; the pair id never leaves the machine. */
