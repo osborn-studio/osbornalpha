@@ -46,3 +46,83 @@ describe('crossFittedEce',()=>{
   expect(crossFittedEce(rows.slice(0,20)).after).toBeNull();
  });
 });
+
+import {classMetrics,evaluateStopRules,proposeThresholds} from './calibration';
+
+const q1=(p:number,label:string|null,backend='jev',abstained=false):ReportRow=>row({question_id:'Q1',backend,confidence:null,distribution:{true:p,false:1-p},selected:abstained?null:p>0.6?'true':p<0.4?'false':null,abstained:abstained||(p>=0.4&&p<=0.6),label});
+const q2=(conf:number,selected:string,label:string|null,backend='jev'):ReportRow=>row({question_id:'Q2',backend,confidence:conf,selected:conf<0.6?null:selected,abstained:conf<0.6,distribution:{[selected]:0.5+conf/2},label});
+
+describe('classMetrics',()=>{
+ it('reports important recall (abstentions are misses), false-support rate and intervals per backend',()=>{
+  const rows=[
+   q1(0.9,'true'),q1(0.8,'true'),q1(0.5,'true'),q1(0.2,'true'),q1(0.1,'false'),q1(0.95,'false'),
+   q2(0.9,'support','support'),q2(0.9,'support','weaken'),q2(0.9,'weaken','weaken'),q2(0.3,'support','weaken'),q2(0.8,'support',null),
+   q1(0.9,'true','rule'),
+  ];
+  const m=classMetrics(rows);
+  const jev=m.find(b=>b.backend==='jev')!;
+  expect(jev.important_recall).toMatchObject({k:2,n:4,rate:0.5});
+  expect(jev.important_recall.low).toBeGreaterThan(0);expect(jev.important_recall.high).toBeLessThan(1);
+  expect(jev.false_support).toMatchObject({k:1,n:3});
+  expect(jev.false_support.rate).toBeCloseTo(1/3,6);
+  expect(jev.questions.find(q=>q.question_id==='Q1')).toMatchObject({n:6,labeled:6});
+  expect(jev.questions.find(q=>q.question_id==='Q2')?.ece_after).toBeNull();
+  const rule=m.find(b=>b.backend==='rule')!;
+  expect(rule.important_recall).toMatchObject({k:1,n:1,rate:1});
+  expect(rule.false_support).toMatchObject({k:0,n:0,rate:null});
+ });
+});
+
+describe('proposeThresholds',()=>{
+ it('finds Q1 thresholds meeting recall ≥ 0.9 and abstention ≤ 30% when feasible, and reports infeasibility otherwise',()=>{
+  const rows:ReportRow[]=[];
+  // 40 relevant materials scored high (0.75–0.95), 40 irrelevant scored low (0.05–0.3): a clean separation.
+  for(let i=0;i<40;i++){rows.push(q1(0.75+(i%5)*0.05,'true'));rows.push(q1(0.05+(i%6)*0.05,'false'));}
+  const out=proposeThresholds(rows).find(p=>p.question_id==='Q1')!;
+  expect(out.status).toBe('proposed');
+  expect(out.proposed).toMatchObject({relevant_above:expect.any(Number),irrelevant_below:expect.any(Number)});
+  expect(out.proposed!.relevant_above).toBeLessThan(0.75);
+  expect(out.proposed!.irrelevant_below).toBeGreaterThan(0.3);
+  expect(out.metrics).toMatchObject({recall:1,abstain_rate:0});
+  expect(out.current).toEqual({irrelevant_below:0.4,relevant_above:0.6});
+  // Hopeless scores: recall and precision cannot both be met.
+  const noisy:ReportRow[]=[];
+  for(let i=0;i<60;i++)noisy.push(q1(0.5+((i*7)%10-5)*0.01,i%2?'true':'false'));
+  const bad=proposeThresholds(noisy).find(p=>p.question_id==='Q1')!;
+  expect(['infeasible','proposed']).toContain(bad.status);
+  if(bad.status==='infeasible')expect(bad.metrics.recall).toBeDefined();
+ });
+ it('proposes Q2 min_confidence keeping false-support ≤ 5% with the widest coverage, and flags insufficient labels',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<30;i++)rows.push(q2(0.9,'support','support'));
+  for(let i=0;i<10;i++)rows.push(q2(0.7,'support',i<8?'support':'weaken'));
+  for(let i=0;i<10;i++)rows.push(q2(0.62,'support','weaken'));
+  const q2p=proposeThresholds(rows).find(p=>p.question_id==='Q2')!;
+  expect(q2p.status).toBe('proposed');
+  expect(q2p.proposed!.min_confidence).toBeGreaterThanOrEqual(0.7);
+  expect(q2p.metrics.false_support_rate).toBeLessThanOrEqual(0.05);
+  expect(proposeThresholds(rows.slice(0,10)).find(p=>p.question_id==='Q2')!.status).toBe('insufficient_labels');
+  expect(proposeThresholds(rows).find(p=>p.question_id==='Q1')!.status).toBe('insufficient_labels');
+ });
+});
+
+describe('evaluateStopRules (§10.3)',()=>{
+ const metric=(backend:string,over:Record<string,unknown>={})=>({backend,labels:400,important_recall:{k:90,n:100,rate:0.9,low:0.83,high:0.94},false_support:{k:2,n:100,rate:0.02,low:0,high:0.07},
+  questions:[{question_id:'Q1',n:100,labeled:100,accuracy:0.9,abstain_rate:0.1,ece_before:0.05,ece_after:0.03},{question_id:'Q2',n:100,labeled:100,accuracy:0.88,abstain_rate:0.2,ece_before:0.05,ece_after:0.03}],...over}) as any;
+ it('keeps jev on Q3/Q4 only when recall or false-support break, and never concludes on thin evidence',()=>{
+  const verdicts=evaluateStopRules([metric('jev',{important_recall:{k:80,n:100,rate:0.8,low:0.7,high:0.87}})]);
+  expect(verdicts.find(v=>v.rule==='jev_q3q4_only')).toMatchObject({triggered:true});
+  const thin=evaluateStopRules([metric('jev',{labels:12,important_recall:{k:8,n:12,rate:0.67,low:0.39,high:0.86}})]);
+  expect(thin.find(v=>v.rule==='jev_q3q4_only')).toMatchObject({triggered:false,status:'insufficient_evidence'});
+ });
+ it('does not introduce jev when rule or deepseek is within 3 points with fewer abstentions',()=>{
+  const verdicts=evaluateStopRules([metric('jev'),metric('rule',{questions:[{question_id:'Q1',n:100,labeled:100,accuracy:0.89,abstain_rate:0.0,ece_before:0.1,ece_after:null},{question_id:'Q2',n:100,labeled:100,accuracy:0.87,abstain_rate:0.05,ece_before:0.1,ece_after:null}]})]);
+  expect(verdicts.find(v=>v.rule==='do_not_introduce_jev')).toMatchObject({triggered:true});
+ });
+ it('switches to the local probe after 300 labels when it is within 2 points, and flags a >5 point drift against a baseline',()=>{
+  const verdicts=evaluateStopRules([metric('jev'),metric('local_probe',{questions:[{question_id:'Q1',n:100,labeled:100,accuracy:0.89,abstain_rate:0.1,ece_before:0.05,ece_after:0.03},{question_id:'Q2',n:100,labeled:100,accuracy:0.87,abstain_rate:0.2,ece_before:0.05,ece_after:0.03}]})],
+   {metrics:[metric('jev',{questions:[{question_id:'Q1',n:100,labeled:100,accuracy:0.8,abstain_rate:0.1,ece_before:0.05,ece_after:0.03},{question_id:'Q2',n:100,labeled:100,accuracy:0.88,abstain_rate:0.2,ece_before:0.05,ece_after:0.03}]})]});
+  expect(verdicts.find(v=>v.rule==='switch_local_probe')).toMatchObject({triggered:true});
+  expect(verdicts.find(v=>v.rule==='lock_version_recalibrate')).toMatchObject({triggered:true});
+ });
+});

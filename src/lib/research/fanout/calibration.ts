@@ -100,3 +100,156 @@ export function crossFittedEce(rows: ReportRow[]): { before: number | null; afte
 }
 
 export { summarize };
+
+// ---------------------------------------------------------------------------
+// §10.1 class ① metrics per backend
+// ---------------------------------------------------------------------------
+import { QUESTION_IDS, THRESHOLDS, type QuestionId } from './questions';
+
+export interface Rate { k: number; n: number; rate: number | null; low: number | null; high: number | null }
+export interface QuestionMetrics {
+  question_id: string; n: number; labeled: number; accuracy: number | null; abstain_rate: number;
+  ece_before: number | null; ece_after: number | null; p50_latency_ms: number | null; p95_latency_ms: number | null; cost_micros_per_1k: number;
+}
+export interface BackendMetrics { backend: string; labels: number; important_recall: Rate; false_support: Rate; questions: QuestionMetrics[] }
+
+const rate = (k: number, n: number): Rate => ({ k, n, rate: n === 0 ? null : round6(k / n), ...wilson(k, n) });
+
+export function classMetrics(rows: ReportRow[]): BackendMetrics[] {
+  const backends = [...new Set(rows.map(r => r.backend))].sort();
+  const summary = summarize(rows);
+  return backends.map(backend => {
+    const mine = rows.filter(r => r.backend === backend);
+    const q1True = mine.filter(r => r.question_id === 'Q1' && r.label === 'true');
+    const q2Decided = mine.filter(r => r.question_id === 'Q2' && r.label !== null && !r.abstained);
+    const questions = summary.filter(m => m.backend === backend).map(m => {
+      const e = crossFittedEce(mine.filter(r => r.question_id === m.question_id));
+      return { question_id: m.question_id, n: m.n, labeled: m.labeled, accuracy: m.accuracy, abstain_rate: round6(m.abstain_rate),
+        ece_before: e.before, ece_after: e.after, p50_latency_ms: m.p50_latency_ms, p95_latency_ms: m.p95_latency_ms, cost_micros_per_1k: m.cost_micros_per_1k };
+    });
+    return {
+      backend, labels: mine.filter(r => r.label !== null).length,
+      important_recall: rate(q1True.filter(r => !r.abstained && r.selected === 'true').length, q1True.length),
+      false_support: rate(q2Decided.filter(r => r.selected === 'support' && r.label !== 'support').length, q2Decided.length),
+      questions,
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Threshold proposals (§6.1 reset after labelling, §10.2 targets)
+// ---------------------------------------------------------------------------
+export interface ThresholdProposal {
+  question_id: QuestionId; backend_used: string | null; labeled: number;
+  status: 'proposed' | 'infeasible' | 'insufficient_labels';
+  current: Record<string, number | string>; proposed: Record<string, number> | null; metrics: Record<string, number | null>;
+}
+const grid = (from: number, to: number, step: number) => { const out: number[] = []; for (let v = from; v <= to + 1e-9; v += step) out.push(Math.round(v * 100) / 100); return out; };
+const pTrue = (r: ReportRow) => (typeof r.distribution?.true === 'number' ? r.distribution.true : null);
+const argmax = (d: Record<string, number>) => Object.entries(d).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+
+export function proposeThresholds(rows: ReportRow[]): ThresholdProposal[] {
+  const jev = rows.filter(r => r.backend === 'jev');
+  const pool = jev.length > 0 ? jev : rows;
+  const backendUsed = jev.length > 0 ? 'jev' : rows.length ? 'all' : null;
+  return QUESTION_IDS.map((q): ThresholdProposal => {
+    const labeled = pool.filter(r => r.question_id === q && r.label !== null);
+    const current = { ...(THRESHOLDS as Record<string, Record<string, number | string>>)[q] } as Record<string, number | string>;
+    const base = { question_id: q, backend_used: backendUsed, labeled: labeled.length, current };
+    if (labeled.length < MIN_LABELS) return { ...base, status: 'insufficient_labels', proposed: null, metrics: {} };
+    if (q === 'Q1') {
+      const pts = labeled.map(r => ({ p: pTrue(r), t: r.label === 'true' })).filter((x): x is { p: number; t: boolean } => x.p !== null);
+      const relevant = pts.filter(x => x.t).length;
+      let best: { lo: number; hi: number; recall: number; abstain: number; precision: number; feasible: boolean } | null = null;
+      for (const hi of grid(0.5, 0.95, 0.05)) for (const lo of grid(0.05, 0.5, 0.05)) {
+        if (lo >= hi) continue;
+        const sel = pts.filter(x => x.p > hi), abst = pts.filter(x => x.p >= lo && x.p <= hi);
+        const recall = relevant ? sel.filter(x => x.t).length / relevant : 0, abstain = abst.length / pts.length;
+        const precision = sel.length ? sel.filter(x => x.t).length / sel.length : 0;
+        const feasible = recall >= 0.9 && abstain <= 0.3;
+        const cand = { lo, hi, recall, abstain, precision, feasible };
+        const better = !best ? true : feasible !== best.feasible ? feasible
+          : feasible ? (precision > best.precision || (precision === best.precision && (hi > best.hi || (hi === best.hi && lo > best.lo))))
+          : (recall > best.recall || (recall === best.recall && abstain < best.abstain));
+        if (better) best = cand;
+      }
+      if (!best) return { ...base, status: 'infeasible', proposed: null, metrics: {} };
+      return { ...base, status: best.feasible ? 'proposed' : 'infeasible', proposed: best.feasible ? { irrelevant_below: best.lo, relevant_above: best.hi } : null,
+        metrics: { recall: round6(best.recall), abstain_rate: round6(best.abstain), precision: round6(best.precision) } };
+    }
+    if (q === 'Q5') {
+      const pts = labeled.map(r => ({ p: pTrue(r), t: r.label === 'true' })).filter((x): x is { p: number; t: boolean } => x.p !== null);
+      let best: { t: number; acc: number } | null = null;
+      for (const t of grid(0.2, 0.8, 0.05)) { const acc = pts.filter(x => (x.p >= t) === x.t).length / pts.length; if (!best || acc > best.acc) best = { t, acc }; }
+      return { ...base, status: 'proposed', proposed: { retelling_below: best!.t }, metrics: { accuracy: round6(best!.acc) } };
+    }
+    // Choice questions: a minimum confidence.
+    const pts = labeled.map(r => ({ c: r.confidence, sel: argmax(r.distribution ?? {}) ?? r.selected, label: r.label as string })).filter((x): x is { c: number; sel: string; label: string } => typeof x.c === 'number');
+    let best: { t: number; coverage: number; fs: number; acc: number; feasible: boolean } | null = null;
+    for (const t of grid(0.3, 0.95, 0.05)) {
+      const decided = pts.filter(x => x.c >= t);
+      const coverage = decided.length / pts.length;
+      const fs = decided.length ? decided.filter(x => x.sel === 'support' && x.label !== 'support').length / decided.length : 0;
+      const acc = decided.length ? decided.filter(x => x.sel === x.label).length / decided.length : 0;
+      const feasible = q === 'Q2' ? fs <= 0.05 : 1 - coverage <= 0.3;
+      const cand = { t, coverage, fs, acc, feasible };
+      const better = !best ? true : feasible !== best.feasible ? feasible
+        // Ties keep the higher threshold: same observed coverage, less exposure to unseen scores.
+        : q === 'Q2' ? (coverage > best.coverage || (coverage === best.coverage && t > best.t)) : (acc > best.acc || (acc === best.acc && coverage > best.coverage));
+      if (better) best = cand;
+    }
+    if (!best) return { ...base, status: 'infeasible', proposed: null, metrics: {} };
+    return { ...base, status: best.feasible ? 'proposed' : 'infeasible', proposed: best.feasible ? { min_confidence: best.t } : null,
+      metrics: { coverage: round6(best.coverage), false_support_rate: round6(best.fs), accuracy: round6(best.acc) } };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// §10.3 stop / switch rules
+// ---------------------------------------------------------------------------
+export type StopRule = 'jev_q3q4_only' | 'do_not_introduce_jev' | 'switch_local_probe' | 'lock_version_recalibrate';
+export interface StopVerdict { rule: StopRule; triggered: boolean; status: 'evaluated' | 'insufficient_evidence' | 'not_applicable'; evidence: string }
+
+const meanAccuracy = (m: BackendMetrics, questions: string[]) => {
+  const vals = m.questions.filter(q => questions.includes(q.question_id) && q.accuracy !== null).map(q => q.accuracy as number);
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+};
+const meanAbstain = (m: BackendMetrics, questions: string[]) => {
+  const vals = m.questions.filter(q => questions.includes(q.question_id)).map(q => q.abstain_rate);
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+};
+
+export function evaluateStopRules(metrics: BackendMetrics[], baseline?: { metrics: BackendMetrics[] }): StopVerdict[] {
+  const jev = metrics.find(m => m.backend === 'jev');
+  const out: StopVerdict[] = [];
+  const shared = (a: BackendMetrics, b: BackendMetrics) => a.questions.map(q => q.question_id).filter(id => b.questions.some(q => q.question_id === id && q.accuracy !== null) && a.questions.find(q => q.question_id === id)?.accuracy !== null);
+  if (!jev) out.push({ rule: 'jev_q3q4_only', triggered: false, status: 'not_applicable', evidence: 'no jev judgments' });
+  else if (jev.labels < MIN_LABELS) out.push({ rule: 'jev_q3q4_only', triggered: false, status: 'insufficient_evidence', evidence: `jev labels ${jev.labels} < ${MIN_LABELS}` });
+  else {
+    const recall = jev.important_recall.rate, fs = jev.false_support.rate;
+    const triggered = (recall !== null && recall < 0.85) || (fs !== null && fs > 0.08);
+    out.push({ rule: 'jev_q3q4_only', triggered, status: 'evaluated', evidence: `recall ${recall ?? 'n/a'} (n=${jev.important_recall.n}), false-support ${fs ?? 'n/a'} (n=${jev.false_support.n})` });
+  }
+  for (const rule of ['do_not_introduce_jev', 'switch_local_probe'] as const) {
+    const others = rule === 'do_not_introduce_jev' ? ['rule', 'llm_deepseek'] : ['local_probe'];
+    const candidates = metrics.filter(m => others.includes(m.backend));
+    if (!jev || candidates.length === 0) { out.push({ rule, triggered: false, status: 'not_applicable', evidence: 'missing backend' }); continue; }
+    if (jev.labels < MIN_LABELS || (rule === 'switch_local_probe' && jev.labels < 300)) { out.push({ rule, triggered: false, status: 'insufficient_evidence', evidence: `jev labels ${jev.labels}` }); continue; }
+    const hits: string[] = [];
+    for (const other of candidates) {
+      const qs = shared(jev, other);
+      const a = meanAccuracy(jev, qs), b = meanAccuracy(other, qs);
+      if (a === null || b === null) continue;
+      const within = rule === 'do_not_introduce_jev' ? a - b <= 0.03 && (meanAbstain(other, qs) ?? 1) < (meanAbstain(jev, qs) ?? 0) : b >= a - 0.02;
+      if (within) hits.push(`${other.backend}: ${b.toFixed(3)} vs jev ${a.toFixed(3)} over ${qs.join('/')}`);
+    }
+    out.push({ rule, triggered: hits.length > 0, status: 'evaluated', evidence: hits.join('; ') || 'no candidate within band' });
+  }
+  if (!baseline || !jev) out.push({ rule: 'lock_version_recalibrate', triggered: false, status: 'not_applicable', evidence: baseline ? 'no jev judgments' : 'no baseline supplied' });
+  else {
+    const prev = baseline.metrics.find(m => m.backend === 'jev');
+    const drifts = prev ? jev.questions.map(q => { const p = prev.questions.find(x => x.question_id === q.question_id); return p && p.accuracy !== null && q.accuracy !== null ? { q: q.question_id, d: q.accuracy - p.accuracy } : null; }).filter((x): x is { q: string; d: number } => x !== null && Math.abs(x.d) > 0.05) : [];
+    out.push({ rule: 'lock_version_recalibrate', triggered: drifts.length > 0, status: prev ? 'evaluated' : 'not_applicable', evidence: drifts.map(d => `${d.q} ${d.d >= 0 ? '+' : ''}${(d.d * 100).toFixed(1)} pt`).join(', ') || 'within 5 pt' });
+  }
+  return out;
+}
