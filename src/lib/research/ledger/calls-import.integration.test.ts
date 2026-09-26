@@ -21,7 +21,8 @@ describe.skipIf(!enabled)('WP-A10 calls import on real PostgreSQL',()=>{
  const deps={
   theses:{find:async(title:string)=>(await admin.query('select id from public.research_theses where user_id=$1 and title=$2',[actor.userId,title])).rows[0]?.id??null,
    create:async(input:any)=>{const id=randomUUID();await admin.query(`insert into public.research_theses(id,user_id,title,body,invalidation_conditions,watch_metrics,next_review_at,status) values($1,$2,$3,$4,$5,$6,$7,'DRAFT')`,[id,actor.userId,input.title,input.body,JSON.stringify(input.invalidation_conditions),JSON.stringify(input.watch_metrics),input.next_review_at]);return id;}},
-  ledger:{existingCardIds:async()=>new Set<string>((await transaction(actor,db=>db.query("select card_id from public.research_decisions where user_id=$1 and card_id like 'hiphon:%'",[actor.userId]))).rows.map((r:any)=>r.card_id)),
+  ledger:{existingDecisions:async()=>new Map<string,string>((await transaction(actor,db=>db.query("select card_id,id from public.research_decisions where user_id=$1 and card_id like 'hiphon:%'",[actor.userId]))).rows.map((r:any)=>[r.card_id,r.id])),
+   existingOutcomeEvaluationIds:async()=>new Set<string>((await transaction(actor,db=>db.query("select evaluation_id from public.research_outcomes where user_id=$1 and evaluation_id like 'hiphon-journal:%'",[actor.userId]))).rows.map((r:any)=>r.evaluation_id)),
    recordDecision:(input:any)=>recordDecision(actor,input),recordOutcome:(input:any)=>recordOutcome(actor,input)},
  };
  const call=(id:string,rating:HiphonCall['rating'],ts:string):HiphonCall=>({kind:'call',call_id:id,ts_utc:ts,exchange_session:'A:'+ts.slice(0,10),ticker:'000000.TEST',name:'合成',market:'A',rating,thesis:'合成 thesis '+id,entry_basis:'next_open',entry_price_ref:1,target_pct:10,stop_price:0.9,stop_pct:-10,size_pct:1,horizon_days:250,signal_mix:['x'],chain_role:null,evidence:'low',source:'test'});
@@ -37,7 +38,8 @@ describe.skipIf(!enabled)('WP-A10 calls import on real PostgreSQL',()=>{
   const theses=(await admin.query("select title,status from public.research_theses where user_id=$1 order by title",[actor.userId])).rows;
   expect(theses.map((t:any)=>[t.title,t.status])).toEqual([['[hiphon-pm] c-1','DRAFT'],['[hiphon-pm] c-2','DRAFT']]);
   const again=await importCalls({journal,scorecard:null,dryRun:false,...deps});
-  expect(again).toMatchObject({imported:0,skipped:2,outcomes:0,outcomes_unmatched:['c-1']});
+  expect(again).toMatchObject({imported:0,skipped:2,outcomes:0,outcomes_unmatched:[]});
+  expect(Number((await admin.query('select count(*) from public.research_outcomes where user_id=$1',[actor.userId])).rows[0].count)).toBe(1);
   expect(Number((await admin.query('select count(*) from public.research_decisions where user_id=$1',[actor.userId])).rows[0].count)).toBe(2);
  });
 });

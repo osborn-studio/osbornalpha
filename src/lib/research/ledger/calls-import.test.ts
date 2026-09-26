@@ -12,6 +12,7 @@ describe('parseCallsJournal',()=>{
   expect(()=>parseCallsJournal(journal([{...call(),rating:'yolo'}]))).toThrow(/rating/);
   expect(()=>parseCallsJournal(journal([{...call(),ts_utc:'yesterday'}]))).toThrow(/ts_utc/);
   expect(()=>parseCallsJournal(journal([{kind:'event',call_id:'x',ts_utc:'2026-08-01T07:00:00Z',event:'hit_target'}]))).toThrow(/event/);
+  expect(()=>parseCallsJournal(journal([call(),call()]))).toThrow(/duplicate call_id/);
   expect(parseCallsJournal('\n\n').calls).toEqual([]);
  });
 });
@@ -47,7 +48,7 @@ describe('importCalls (injected dependencies)',()=>{
   const theses=new Map<string,string>(),decisions:any[]=[],outcomes:any[]=[];
   return {theses,decisions,outcomes,io:{
    theses:{find:async(title:string)=>theses.get(title)??null,create:async(input:any)=>{const id=`t-${theses.size+1}`;theses.set(input.title,id);return id;}},
-   ledger:{existingCardIds:async()=>new Set(decisions.map(d=>d.card_id)),recordDecision:async(input:any)=>{decisions.push(input);return {id:`d-${decisions.length}`,created_at:'x'};},recordOutcome:async(input:any)=>{outcomes.push(input);return {id:`o-${outcomes.length}`,judged_at:'x'};}},
+   ledger:{existingDecisions:async()=>new Map(decisions.map((d,i)=>[d.card_id,`d-${i+1}`])),existingOutcomeEvaluationIds:async()=>new Set(outcomes.map(o=>o.evaluation_id)),recordDecision:async(input:any)=>{decisions.push(input);return {id:`d-${decisions.length}`,created_at:'x'};},recordOutcome:async(input:any)=>{outcomes.push(input);return {id:`o-${outcomes.length}`,judged_at:'x'};}},
   }};
  };
  it('imports each call once, links events to outcomes, and is idempotent',async()=>{
@@ -57,8 +58,18 @@ describe('importCalls (injected dependencies)',()=>{
   expect(d.decisions.map(x=>x.action)).toEqual(['adopt','shadow']);
   expect(d.outcomes[0]).toMatchObject({decision_id:'d-1',window_weeks:50,judged_by:'hiphon-pm-journal',price_result:{state:'closed',reason:'manual',note:'thesis broken'}});
   const again=await importCalls({journal:text,scorecard:null,dryRun:false,...d.io});
-  expect(again).toMatchObject({imported:0,skipped:2,outcomes:0,theses_created:0});
-  expect(d.decisions).toHaveLength(2);
+  expect(again).toMatchObject({imported:0,skipped:2,outcomes:0,theses_created:0,outcomes_unmatched:[]});
+  expect(d.decisions).toHaveLength(2);expect(d.outcomes).toHaveLength(1);
+ });
+ it('resumes an interrupted import: decisions already committed get their missing outcomes without duplicates',async()=>{
+  const d=deps();const text=journal([call(),{kind:'event',call_id:'2026-07-01-TESTSH-001',ts_utc:'2026-08-01T07:00:00Z',event:'manual_close',note:'cut'}]);
+  // Simulate a crash after the decision was written but before the outcome.
+  d.decisions.push(mapCall(call()).decision);
+  const resumed=await importCalls({journal:text,scorecard:null,dryRun:false,...d.io});
+  expect(resumed).toMatchObject({imported:0,skipped:1,outcomes:1,outcomes_unmatched:[]});
+  expect(d.outcomes[0]).toMatchObject({decision_id:'d-1',evaluation_id:'hiphon-journal:2026-07-01-TESTSH-001:2026-08-01T07:00:00Z'});
+  expect(await importCalls({journal:text,scorecard:null,dryRun:false,...d.io})).toMatchObject({outcomes:0});
+  expect(d.outcomes).toHaveLength(1);
  });
  it('dry-run writes nothing but reports the plan and scorecard consistency',async()=>{
   const d=deps();

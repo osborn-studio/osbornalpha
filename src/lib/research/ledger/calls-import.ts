@@ -23,6 +23,7 @@ const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinit
 
 export function parseCallsJournal(raw: string): { calls: HiphonCall[]; events: HiphonEvent[] } {
   const calls: HiphonCall[] = [], events: HiphonEvent[] = [];
+  const seen = new Set<string>();
   raw.split('\n').forEach((line, i) => {
     if (!line.trim()) return;
     let r: any; try { r = JSON.parse(line); } catch { throw new Error(`line ${i + 1}: invalid JSON`); }
@@ -31,6 +32,8 @@ export function parseCallsJournal(raw: string): { calls: HiphonCall[]; events: H
       if (!isoInstant(r.ts_utc)) throw new Error(`line ${i + 1}: call.ts_utc must be an ISO UTC instant`);
       if (!RATINGS.includes(r.rating)) throw new Error(`line ${i + 1}: call.rating must be one of ${RATINGS.join(', ')}`);
       if (!num(r.horizon_days) || r.horizon_days <= 0) throw new Error(`line ${i + 1}: call.horizon_days must be a positive number`);
+      if (seen.has(r.call_id)) throw new Error(`line ${i + 1}: duplicate call_id ${r.call_id} (the journal is append-only; a second call is a new call_id)`);
+      seen.add(r.call_id);
       calls.push({ ...r, signal_mix: Array.isArray(r.signal_mix) ? r.signal_mix.filter(text) : [], chain_role: r.chain_role ?? null, evidence: r.evidence ?? null, source: r.source ?? 'unknown' });
     } else if (r.kind === 'event') {
       if (!text(r.call_id) || !isoInstant(r.ts_utc)) throw new Error(`line ${i + 1}: event.call_id and ts_utc are required`);
@@ -76,34 +79,48 @@ export function compareWithScorecard(summary: CallsSummary, scorecard: Scorecard
   return { consistent: differences.length === 0, differences };
 }
 
+export const outcomeEvaluationId = (e: HiphonEvent) => `hiphon-journal:${e.call_id}:${e.ts_utc}`;
 export interface ImportDeps {
   theses: { find: (title: string) => Promise<string | null>; create: (input: CreateThesisInput) => Promise<string> };
-  ledger: { existingCardIds: () => Promise<Set<string>>; recordDecision: (input: DecisionInput) => Promise<{ id: string; created_at: string }>; recordOutcome: (input: OutcomeInput) => Promise<{ id: string; judged_at: string }> };
+  ledger: {
+    /** card_id (hiphon:<call_id>) → decision id for decisions already in the ledger. */
+    existingDecisions: () => Promise<Map<string, string>>;
+    /** evaluation_id values of outcomes already recorded, so an interrupted import can resume without duplicates. */
+    existingOutcomeEvaluationIds: () => Promise<Set<string>>;
+    recordDecision: (input: DecisionInput) => Promise<{ id: string; created_at: string }>;
+    recordOutcome: (input: OutcomeInput) => Promise<{ id: string; judged_at: string }>;
+  };
 }
 export interface ImportResult { calls: number; events: number; planned: number; imported: number; skipped: number; theses_created: number; outcomes: number; outcomes_unmatched: string[]; summary: CallsSummary; scorecard: ReturnType<typeof compareWithScorecard> }
 
 export async function importCalls({ journal, scorecard, dryRun, theses, ledger }: { journal: string; scorecard: Scorecard | null; dryRun: boolean } & ImportDeps): Promise<ImportResult> {
   const { calls, events } = parseCallsJournal(journal);
   const summary = summarizeCalls(calls, events);
-  const existing = await ledger.existingCardIds();
+  const decisionIds = await ledger.existingDecisions();
+  const outcomesDone = await ledger.existingOutcomeEvaluationIds();
   const result: ImportResult = { calls: calls.length, events: events.length, planned: 0, imported: 0, skipped: 0, theses_created: 0, outcomes: 0, outcomes_unmatched: [], summary, scorecard: compareWithScorecard(summary, scorecard) };
-  const decisionIds = new Map<string, string>();
   for (const c of calls) {
-    if (existing.has(cardIdFor(c.call_id))) { result.skipped++; continue; }
+    const cardId = cardIdFor(c.call_id);
+    if (decisionIds.has(cardId)) { result.skipped++; continue; }
     result.planned++;
     if (dryRun) continue;
     const m = mapCall(c);
     let thesisId = await theses.find(m.thesis.title);
     if (!thesisId) { thesisId = await theses.create(m.thesis); result.theses_created++; }
     const made = await ledger.recordDecision({ ...m.decision, thesis_id: thesisId });
-    decisionIds.set(c.call_id, made.id); result.imported++;
+    decisionIds.set(cardId, made.id); result.imported++;
   }
-  if (!dryRun) for (const e of events) {
-    const decisionId = decisionIds.get(e.call_id);
-    if (!decisionId) { result.outcomes_unmatched.push(e.call_id); continue; } // already imported earlier or unknown call: never double-record
-    const call = calls.find(c => c.call_id === e.call_id)!;
-    await ledger.recordOutcome({ decision_id: decisionId, window_weeks: Math.max(1, Math.ceil(call.horizon_days / 5)), evaluation_id: `hiphon-journal:${e.ts_utc}`, price_result: { state: 'closed', reason: 'manual', closed_at: e.ts_utc, note: e.note ?? null, ref_call_id: e.ref_call_id ?? null }, judged_by: 'hiphon-pm-journal' });
-    result.outcomes++;
+  // Outcomes resolve against every known decision (this run or earlier ones) and are keyed by evaluation_id,
+  // so a retry after a partial failure completes the missing ones without duplicating the successful ones.
+  for (const e of events) {
+    const decisionId = decisionIds.get(cardIdFor(e.call_id));
+    const call = calls.find(c => c.call_id === e.call_id);
+    if (!decisionId || !call) { result.outcomes_unmatched.push(e.call_id); continue; }
+    const evaluationId = outcomeEvaluationId(e);
+    if (outcomesDone.has(evaluationId)) continue;
+    if (dryRun) { result.planned++; continue; }
+    await ledger.recordOutcome({ decision_id: decisionId, window_weeks: Math.max(1, Math.ceil(call.horizon_days / 5)), evaluation_id: evaluationId, price_result: { state: 'closed', reason: 'manual', closed_at: e.ts_utc, note: e.note ?? null, ref_call_id: e.ref_call_id ?? null }, judged_by: 'hiphon-pm-journal' });
+    outcomesDone.add(evaluationId); result.outcomes++;
   }
   return result;
 }

@@ -26,7 +26,9 @@ async function main() {
   const result = await importCalls({
     journal: readFileSync(journalPath, 'utf8'), scorecard, dryRun: args.includes('--dry-run'),
     theses: { find: async title => (await listTheses(ctx)).find(t => t.title === title)?.id ?? null, create: async input => (await createThesis(ctx, input)).id },
-    ledger: { existingCardIds: async () => new Set<string>((await transaction(actor, db => db.query("select card_id from public.research_decisions where user_id=$1 and card_id like 'hiphon:%'", [owner]))).rows.map((r: { card_id: string }) => r.card_id)),
+    ledger: {
+      existingDecisions: async () => new Map<string, string>((await transaction(actor, db => db.query("select card_id,id from public.research_decisions where user_id=$1 and card_id like 'hiphon:%'", [owner]))).rows.map((r: { card_id: string; id: string }) => [r.card_id, r.id])),
+      existingOutcomeEvaluationIds: async () => new Set<string>((await transaction(actor, db => db.query("select evaluation_id from public.research_outcomes where user_id=$1 and evaluation_id like 'hiphon-journal:%'", [owner]))).rows.map((r: { evaluation_id: string }) => r.evaluation_id)),
       recordDecision: input => recordDecision(actor, input), recordOutcome: input => recordOutcome(actor, input) },
   });
   console.log(JSON.stringify(result, null, 2));
