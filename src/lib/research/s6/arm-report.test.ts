@@ -42,4 +42,20 @@ describe('summarizeArms',()=>{
   const md=renderArmMarkdown(s);
   expect(md).toContain('| arm |');expect(md).toContain('事实区');expect(md).not.toMatch(/建议|买入|卖出/);
  });
+ it('aggregates repeated decisions per arm and thesis-week: a later resolved window is not suppressed by an earlier open one',()=>{
+  const rows:ArmRow[]=[
+   row('human_baseline','t1','2026-09-21',evaluation([win(5,'open')])),                                                       // earlier decision, still open
+   row('human_baseline','t1','2026-09-21',evaluation([win(5,'resolved',{price_return:.10,benchmark_price_return:0,max_drawdown:0})])), // later decision resolved
+   row('ai_candidate','t1','2026-09-21',evaluation([win(5,'resolved',{price_return:.20,benchmark_price_return:0,max_drawdown:0})])),
+   row('ai_candidate','t1','2026-09-21',evaluation([win(5,'resolved',{price_return:.40,benchmark_price_return:0,max_drawdown:0})])),  // latest resolved wins
+  ];
+  const s=summarizeArms(rows);
+  expect(s.arms.averaged).toMatchObject({pairs:1});
+  expect(s.arms.averaged.windows['5']).toMatchObject({n:1,resolved:1,mean_price_return:.25});
+ });
+ it('reports blocked observations as unevaluated with the blocking code',()=>{
+  const s=summarizeArms([{...row('collab','t1','2026-09-21',null),blocked:'policy_blocked'}]);
+  expect(s.arms.collab).toMatchObject({decisions:1,with_observation:1,evaluated:0,blocked:1});
+  expect(renderArmMarkdown(s)).toContain('blocked');
+ });
 });

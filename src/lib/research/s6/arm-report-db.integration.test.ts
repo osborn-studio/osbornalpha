@@ -4,21 +4,20 @@ import {Pool} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {closeS4Pool} from '../s4/db';
 import {loadArmRows} from './arm-report-db';
+import {testPack} from '../../../../scripts/s4/test-pack';
+import {importCandidate} from '../s4/import';
+import {revealCards} from '../s4/cards';
+import {submitDecision} from '../s4/decisions';
 
 const enabled=!!process.env.S4_TEST_STATE;
 describe.skipIf(!enabled)('E4 arm report loader on real PostgreSQL',()=>{
  let admin:Pool;const actor={userId:randomUUID(),kind:'agent' as const};const sha=(x:string)=>createHash('sha256').update(x).digest('hex');
- let thesisId:string;const observations:string[]=[];
+ let thesisId:string,candidateId:string,revision=0;
+ // Observations come from the real S4 path so observationFor's authorization checks apply exactly as in production.
  const seedObservation=async()=>{
-  const src=randomUUID(),ver=randomUUID(),cand=randomUUID(),obs=randomUUID(),hash=sha('pack'+cand);
-  await admin.query(`insert into public.research_source_documents(id,user_id,source_type,title,raw_text,content_hash) values($1,$2,'MANUAL','t','b',$3)`,[src,actor.userId,sha('b'+src)]);
-  await admin.query(`insert into public.research_source_versions(user_id,id,source_document_id,version_identity,source_key,source_ref,source_version) values($1,$2,$3,$4,$5,'{}','{}')`,[actor.userId,ver,src,'v-'+ver,'k-'+ver]);
-  await admin.query(`insert into public.research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)`,[actor.userId,hash,{localUserId:actor.userId,approvedPayloadHash:hash}]);
-  await admin.query(`insert into public.research_s4_candidates(user_id,id,source_version_id,external_candidate_id,payload_hash,imported,status) values($1,$2,$3,$4,$5,'{}','observe')`,[actor.userId,cand,ver,randomUUID(),hash]);
-  const payload={synthetic:true,n:observations.length};
-  await admin.query(`insert into public.research_s4_records(user_id,id,candidate_id,kind,payload,payload_hash) values($1,$2,$3,'Observation',$4,$5)`,[actor.userId,obs,cand,JSON.stringify(payload),sha(JSON.stringify(payload))]);
-  await admin.query(`insert into public.research_s4_observation_state(user_id,observation_id,status) values($1,$2,'pending_start')`,[actor.userId,obs]);
-  observations.push(obs);return obs;
+  const r=await revealCards(actor,candidateId,{requestKey:randomUUID(),judgment:'E4 arm report fixture',alreadySeen:[],independentJudgment:false});
+  const d=await submitDecision(actor,candidateId,{requestKey:randomUUID(),expectedRevision:revision,action:'observe',reason:'E4 fixture',cardId:r.cards[0].id,labelId:r.labelId,exposureId:r.exposureId,securityTicker:'S6SYNTH',companyEntityId:null,newObservation:true,reviewAt:null});
+  revision=d.revision;return d.observationId!;
  };
  const evaluation=async(obs:string,revision:number,priceReturn:number)=>{
   const result={status:'resolved',windows:[{trading_sessions:5,status:'resolved',result:{price_return:priceReturn,benchmark_price_return:0.01,benchmark_difference:priceReturn-0.01,max_drawdown:0.02,benchmark:'SPY',currency:'USD'}}]};
@@ -31,6 +30,9 @@ describe.skipIf(!enabled)('E4 arm report loader on real PostgreSQL',()=>{
   await admin.query('insert into auth.users(id,email) values($1,$2)',[actor.userId,`${actor.userId}@example.test`]);
   await admin.query("update public.profiles set role='admin' where id=$1",[actor.userId]);
   thesisId=randomUUID();await admin.query(`insert into public.research_theses(id,user_id,title) values($1,$2,'thesis')`,[thesisId,actor.userId]);
+  await admin.query(`insert into stocks_universe(ticker,name,market,exchange,currency,metadata) values('S6SYNTH','Synthetic S6','US','XNYS','USD','{"synthetic":true}') on conflict do nothing`);
+  const p=testPack(actor.userId);await admin.query('insert into research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[actor.userId,p.binding.approvedPayloadHash,p.binding]);
+  candidateId=(await importCandidate(actor,JSON.stringify(p.pack))).id;
  });
  afterAll(async()=>{await closeS4Pool();await admin?.end();});
  it('joins decisions to the latest evaluation of their observation and filters by week',async()=>{
@@ -40,10 +42,15 @@ describe.skipIf(!enabled)('E4 arm report loader on real PostgreSQL',()=>{
   await insert('human_baseline','2026-09-21',a);await insert('ai_candidate','2026-09-21',b);await insert('collab','2026-09-14',null);
   const rows=await loadArmRows(actor);
   expect(rows).toHaveLength(3);
+  expect(rows.map(r=>r.week_of).sort()).toEqual(['2026-09-14','2026-09-21','2026-09-21']); // date-only, never shifted by the process time zone
   const withA=rows.find(r=>r.observation_id===a)!;expect(withA.arm).toBe('human_baseline');expect(withA.evaluation?.windows[0].result?.price_return).toBe(0.07);
   expect(rows.find(r=>r.observation_id===b)!.evaluation).toBeNull();
   expect(rows.find(r=>r.arm==='collab')!.observation_id).toBeNull();
   expect((await loadArmRows(actor,{since:'2026-09-21'})).map(r=>r.arm).sort()).toEqual(['ai_candidate','human_baseline']);
   await expect(loadArmRows(actor,{since:'2026-9-1'})).rejects.toThrow('invalid_schema');
+  // Observation-level authorization applies exactly as in observationReport: a cancelled observation's evaluation is not exported.
+  await admin.query("update public.research_s4_observation_state set status='cancelled' where user_id=$1 and observation_id=$2",[actor.userId,a]);
+  const afterCancel=(await loadArmRows(actor)).find(r=>r.observation_id===a)!;
+  expect(afterCancel.evaluation).toBeNull();expect(afterCancel.blocked).toBe('policy_blocked');
  });
 });
