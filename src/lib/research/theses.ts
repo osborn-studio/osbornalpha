@@ -154,6 +154,12 @@ export interface CreateThesisInput {
   pillars?: Array<{ id?: string; text: string; resolvable_by?: string; deadline?: string | null }>;
   catalysts?: Array<{ text: string; expected_date?: string | null }>;
   horizon_weeks?: number[];
+  /**
+   * WP-A11 client idempotency key. When present, pillar ids are stamped `<submission_id>:<index>` (so the
+   * key is stored without a schema change) and a repeated submission returns the existing thesis instead
+   * of inserting another one. Requires at least one pillar.
+   */
+  submission_id?: string;
 }
 
 function requireStringArray(v: unknown, field: string): string[] {
@@ -207,8 +213,23 @@ function extensionFields(input: CreateThesisInput): { opportunity_type: Opportun
  * watch_metrics/next_review_at → 422: a thesis without invalidation
  * conditions is not allowed to exist (AX001 spirit).
  */
+const SUBMISSION_ID = /^[A-Za-z0-9_-]{8,64}$/;
+
 export async function createThesis(ctx: ResearchCtx, input: CreateThesisInput): Promise<Thesis> {
-  return insertThesis(ctx, input, null);
+  if (input.submission_id === undefined) return insertThesis(ctx, input, null);
+  if (typeof input.submission_id !== 'string' || !SUBMISSION_ID.test(input.submission_id)) {
+    throw new ThesisError('submission_id must be 8–64 characters of [A-Za-z0-9_-]', 422);
+  }
+  if (!Array.isArray(input.pillars) || input.pillars.length === 0) {
+    throw new ThesisError('submission_id requires at least one pillar (the id is stored in the pillar ids)', 422);
+  }
+  const prefix = `${input.submission_id}:`;
+  // Idempotent create: the same submission already stored → return it, never insert again.
+  const existing = (await listTheses(ctx)).find((t) => (t.pillars ?? []).some((p) => typeof p.id === 'string' && p.id.startsWith(prefix)));
+  if (existing) return existing;
+  const stamped: CreateThesisInput = { ...input, pillars: input.pillars.map((p, i) => ({ ...p, id: `${prefix}${i}` })) };
+  delete (stamped as { submission_id?: string }).submission_id;
+  return insertThesis(ctx, stamped, null);
 }
 
 async function insertThesis(ctx: ResearchCtx, input: CreateThesisInput, supersedes: string | null): Promise<Thesis> {

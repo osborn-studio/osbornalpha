@@ -154,7 +154,9 @@ export function newSubmissionId(): string {
  * without any schema change. Reconciliation matches on it, never on content.
  */
 export function withSubmissionId(input: CreateThesisInput, submissionId: string): CreateThesisInput {
-  return { ...input, pillars: (input.pillars ?? []).map((p, i) => ({ ...p, id: `${submissionId}:${i}` })) };
+  // The server enforces the idempotency (createThesis dedupes by submission_id); the pillar ids are stamped
+  // here as well so the identity is visible in the draft and in any lookup.
+  return { ...input, submission_id: submissionId, pillars: (input.pillars ?? []).map((p, i) => ({ ...p, id: `${submissionId}:${i}` })) };
 }
 
 /** The thesis the server stored for this submission, identified by the stamped pillar ids. */

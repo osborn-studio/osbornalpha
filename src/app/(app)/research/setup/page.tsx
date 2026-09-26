@@ -63,7 +63,9 @@ export default function ResearchSetupPage() {
       const lookup = await fetch('/api/research/theses').then((r) => (r.ok ? r.json() : null)).catch(() => null);
       if (!lookup?.theses) { setNotice('仍无法连接服务器，稍后再试「重新确认」'); return; }
       const found = findCreatedThesis(lookup.theses, pending.submissionId);
-      if (!found) { reset(clearPendingCreate); setNotice('服务器未记录上一次提交，草稿已保留，可重新提交'); return; }
+      // Not found is not proof of failure (the insert may still be committing): keep the attempt; the thesis
+      // flow's 「重发上次提交」 re-sends the same submission id and the server deduplicates.
+      if (!found) { setNotice('服务器暂未记录上一次提交；在 thesis 流程里按「重发上次提交」以同一提交号重发，不会重复创建'); return; }
       reset((prev) => markThesisCreated(clearPendingCreate(prev), found));
       let activated: boolean | null = null, error: string | undefined;
       if (pending.activate) {
@@ -129,6 +131,7 @@ export default function ResearchSetupPage() {
         <p className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" role="status">
           上一次提交「{draft.pendingCreate.input.title}」的结果尚未确认（响应丢失）。
           <button type="button" className="ml-2 underline" onClick={() => void reconcilePendingCreate()}>重新确认</button>
+          <button type="button" className="ml-2 underline" onClick={() => { reset(clearPendingCreate); setNotice('已放弃上一次提交的记录；若它其实已创建，theses 页会显示一条草稿'); }}>放弃</button>
         </p>
       )}
       {draft.pendingActivation && !busy && (
@@ -154,7 +157,7 @@ export default function ResearchSetupPage() {
           onDraftChange={(thesis) => update({ thesis })} onStepChange={(thesisStep) => update({ thesisStep })}
           onPendingCreate={(pending) => reset((prev) => markCreatePending(prev, pending))}
           onCreateResolved={() => reset(clearPendingCreate)}
-          hasPendingCreate={!!draft.pendingCreate}
+          pendingCreate={draft.pendingCreate ?? null}
           onCreated={(created) => reset((prev) => markThesisCreated(clearPendingCreate(prev), created))}
           onSaved={async (m) => { reset(clearPendingActivation); setNotice(m); await load(); }} />
       )}

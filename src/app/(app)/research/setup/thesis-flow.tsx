@@ -16,7 +16,7 @@ const OPPORTUNITY_HINTS: Record<string, string> = {
   other: '不属于以上两类；请在核心逻辑里说明为什么值得跟。',
 };
 
-export function ThesisFlow({ companies, draft, step, onDraftChange, onStepChange, onSaved, onCreated, onPendingCreate, onCreateResolved, hasPendingCreate, busy, setBusy }: {
+export function ThesisFlow({ companies, draft, step, onDraftChange, onStepChange, onSaved, onCreated, onPendingCreate, onCreateResolved, pendingCreate, busy, setBusy }: {
   companies: ScopedCompany[];
   draft: ThesisDraft;
   step: number;
@@ -27,9 +27,9 @@ export function ThesisFlow({ companies, draft, step, onDraftChange, onStepChange
   onCreated: (created: { id: string; title: string }) => void;
   /** Called before the POST with the attempt's identity; the page persists it so a lost response is only ever reconciled. */
   onPendingCreate: (pending: { submissionId: string; input: ReturnType<typeof thesisFormToInput>; activate: boolean }) => void;
-  /** An unresolved earlier create: saving is disabled until the page reconciles it. */
-  hasPendingCreate: boolean;
-  /** The outcome is known and nothing was created: the page drops the pending attempt. */
+  /** An unresolved earlier create; saving re-sends it under the same submission id (the server deduplicates). */
+  pendingCreate: { submissionId: string; input: ReturnType<typeof thesisFormToInput>; activate: boolean } | null;
+  /** The outcome is definitively known and nothing was created: the page drops the pending attempt. */
   onCreateResolved: () => void;
   /** In-flight submission lock, owned by the page so a remount cannot reset it. */
   busy: boolean;
@@ -53,17 +53,24 @@ export function ThesisFlow({ companies, draft, step, onDraftChange, onStepChange
   };
   const prev = () => { setErrors([]); onStepChange(Math.max(step - 1, 0)); };
 
-  async function save(activate: boolean) {
-    if (busy || hasPendingCreate) return;
-    const allErrors = THESIS_QUESTIONS.flatMap((q) => validateThesisStep(q.id, draft, vctx));
-    if (allErrors.length) { setErrors(allErrors); return; }
+  async function save(requestedActivate: boolean) {
+    if (busy) return;
+    // An unresolved attempt is re-sent as-is under the same submission id: the server deduplicates, so a
+    // lost response can never turn into a second thesis. Only a fresh save gets a new id.
+    const resend = pendingCreate;
+    if (!resend) {
+      const allErrors = THESIS_QUESTIONS.flatMap((q) => validateThesisStep(q.id, draft, vctx));
+      if (allErrors.length) { setErrors(allErrors); return; }
+    }
+    const activate = resend ? resend.activate : requestedActivate;
     setBusy(true); setNotice(null);
     try {
       let created: { id: string; title: string };
-      const submissionId = newSubmissionId();
-      const input = withSubmissionId(thesisFormToInput(draft), submissionId);
-      // Persisted before the request: if the response is lost, the only way forward is reconciliation by id.
-      onPendingCreate({ submissionId, input, activate });
+      const submissionId = resend ? resend.submissionId : newSubmissionId();
+      const input = resend ? resend.input : withSubmissionId(thesisFormToInput(draft), submissionId);
+      // Persisted before the request: if the response is lost, the only way forward is reconciliation or a
+      // re-send under this same id.
+      if (!resend) onPendingCreate({ submissionId, input, activate });
       let outcome: ReturnType<typeof classifyCreateResponse>;
       try {
         const res = await fetch('/api/research/theses', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) });
@@ -76,9 +83,10 @@ export function ThesisFlow({ companies, draft, step, onDraftChange, onStepChange
         // 5xx, lost response or an incomplete success body: the server may have stored the thesis anyway.
         // Reconcile by submission id. If the lookup itself fails, the attempt stays pending — no new create.
         const lookup = await fetch('/api/research/theses').then((r) => (r.ok ? r.json() : null)).catch(() => null);
-        if (!lookup?.theses) { setNotice(`保存结果未确认（${outcome.reason}）：网络恢复后点击上方「重新确认」，不要重新提交`); return; }
-        const found = findCreatedThesis(lookup.theses, submissionId);
-        if (!found) { onCreateResolved(); setNotice(`保存失败：${outcome.reason}；服务器未记录本次提交，草稿已保留，可重试`); return; }
+        const found = lookup?.theses ? findCreatedThesis(lookup.theses, submissionId) : null;
+        // A negative lookup is not proof of failure (the insert may still be committing): the attempt stays
+        // pending and the next save re-sends the same submission id.
+        if (!found) { setNotice(`保存结果未确认（${outcome.reason}）：稍后再按「保存」会以同一提交号重发，不会重复创建`); return; }
         created = found;
       } else {
         created = outcome.thesis;
@@ -118,13 +126,13 @@ export function ThesisFlow({ companies, draft, step, onDraftChange, onStepChange
             <p><span className="text-gray-500">窗口：</span>{input.horizon_weeks?.join(' / ')} 周 · 下次复核 {input.next_review_at}</p>
           </article>
           {errors.length > 0 && <ul className="text-sm text-red-700" role="alert">{errors.map((e) => <li key={e}>{e}</li>)}</ul>}
-          {hasPendingCreate && <p className="text-sm text-amber-800">上一次提交的结果尚未确认，请先在页面顶部「重新确认」。</p>}
+          {pendingCreate && <p className="text-sm text-amber-800">上一次提交「{pendingCreate.input.title}」的结果尚未确认；再按「保存」会以同一提交号重发（服务器去重），不会重复创建。</p>}
           {notice && <p className="text-sm text-blue-800">{notice}</p>}
           <div className="flex items-center justify-between gap-2">
             <button type="button" onClick={prev} disabled={busy} className="rounded border px-3 py-1.5 text-sm">上一题</button>
             <div className="flex gap-2">
-              <button type="button" onClick={() => void save(false)} disabled={busy || hasPendingCreate} className="rounded border px-3 py-1.5 text-sm disabled:opacity-50">保存为草稿</button>
-              <button type="button" onClick={() => void save(true)} disabled={busy || hasPendingCreate} className="rounded bg-black px-4 py-1.5 text-sm text-white disabled:opacity-50">{busy ? '保存中…' : '保存并激活'}</button>
+              <button type="button" onClick={() => void save(false)} disabled={busy} className="rounded border px-3 py-1.5 text-sm disabled:opacity-50">{pendingCreate ? '重发上次提交' : '保存为草稿'}</button>
+              <button type="button" onClick={() => void save(true)} disabled={busy} className="rounded bg-black px-4 py-1.5 text-sm text-white disabled:opacity-50">{busy ? '保存中…' : pendingCreate ? '重发并按原计划激活' : '保存并激活'}</button>
             </div>
           </div>
         </section>
