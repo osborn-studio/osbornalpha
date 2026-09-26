@@ -107,7 +107,10 @@ export async function addOwnerCompany(ctx: ResearchCtx, answer: OwnerCompanyAnsw
   const names = new Set([answer.names_zh, answer.names_en].map(lower).filter(Boolean));
   const ticker = lower(answer.exchange_code);
   const [entities, keyRows] = await Promise.all([listEntities(ctx, { type: 'COMPANY' }), listEntityKeys(ctx)]);
-  const byName = entities.find((e) => names.has(lower(e.name)) || lower(e.ticker) === ticker || e.aliases.some((a) => names.has(lower(a))));
+  // Only a company that already has a researched key row is protected: an entity without one (legacy
+  // seed, or a stranded earlier attempt) is enriched by upsertEntityKeys and becomes scopeable.
+  const keyed = new Set(keyRows.map((r) => r.entity_id));
+  const byName = entities.find((e) => keyed.has(e.id) && (names.has(lower(e.name)) || lower(e.ticker) === ticker || e.aliases.some((a) => names.has(lower(a)))));
   const byKeys = keyRows.find((r) => [...r.names_zh, ...r.names_en, ...r.aliases].some((n) => names.has(lower(n))) || r.securities.some((sec) => lower(sec.exchange_code) === ticker));
   if (byName || byKeys) throw new ScopeError('company already exists; scope the existing record instead of adding it again', 409);
   let entityId: string;

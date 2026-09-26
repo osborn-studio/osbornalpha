@@ -26,7 +26,7 @@ export const emptyAnswer = (row: ScopedCompany | null): OwnerCompanyAnswer => ({
 });
 
 /** Screens: 0 = select, 1..n = one per selected company, n+1 = new companies, n+2 = review. */
-export function CompaniesFlow({ companies, answers, step, onAnswersChange, onStepChange, onSaved, onRefresh }: {
+export function CompaniesFlow({ companies, answers, step, onAnswersChange, onStepChange, onSaved, onRefresh, busy, setBusy }: {
   companies: ScopedCompany[];
   answers: Record<string, OwnerCompanyAnswer>;
   step: number;
@@ -35,9 +35,11 @@ export function CompaniesFlow({ companies, answers, step, onAnswersChange, onSte
   onSaved: (message: string) => void;
   /** Reload the company list after a partially successful submission. */
   onRefresh: () => Promise<void>;
+  /** In-flight submission lock, owned by the page so a remount cannot reset it. */
+  busy: boolean;
+  setBusy: (b: boolean) => void;
 }) {
   const [errors, setErrors] = useState<string[]>([]);
-  const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   // Roster from the draft, not from the fetched list: a company created in a partial run stays selectable before refresh.
   const { selected: selectedIds, added: newKeys } = useMemo(() => rosterKeys(answers), [answers]);
@@ -65,6 +67,7 @@ export function CompaniesFlow({ companies, answers, step, onAnswersChange, onSte
   const prev = () => { setErrors([]); onStepChange(Math.max(step - 1, 0)); };
 
   async function submit() {
+    if (busy) return;
     // Every answer is validated before the first write; an incomplete one sends the owner back to its screen.
     const check = companiesSubmitErrors({ selected: selectedIds.map((id) => answers[id]!), added: newKeys.map((k) => answers[k]!) });
     if (check.errors.length) { setErrors(check.errors); if (check.firstStep !== null) onStepChange(check.firstStep); return; }

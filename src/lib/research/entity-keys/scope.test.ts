@@ -2,7 +2,7 @@ import {beforeEach,describe,expect,it} from 'vitest';
 import {makeMockCtx,type MockStore} from '../test-support';
 import type {ResearchCtx} from '../store';
 import {listEntityKeys,upsertEntityKeys} from './store';
-import {getEntity} from '../entities';
+import {getEntity,upsertEntity} from '../entities';
 import cohort from './first-cohort.json';
 import type {CohortCompany} from './types';
 import {addOwnerCompany,listScopedCompanies,setScope,ScopeError} from './scope';
@@ -78,5 +78,19 @@ describe('Codex round 1 regressions',()=>{
   expect((await listScopedCompanies(ctx))[0]).toMatchObject({entity_id,scope_rationale:null});
   await setScope(ctx,entity_id,{in_scope:true,rationale:'金融 IT 龙头',today:'2026-09-27'});
   expect((await listScopedCompanies(ctx))[0]).toMatchObject({entity_id,in_scope:true,scope_rationale:'金融 IT 龙头'});
+ });
+});
+
+
+describe('Codex round 5 regression',()=>{
+ it('enriches an existing entity that has no key row instead of refusing it, while still protecting researched keys',async()=>{
+  // Legacy COMPANY entity (e.g. from research-seed) without any research_entity_keys row.
+  const legacy=await upsertEntity(ctx,{type:'COMPANY',name:'Kingdom Technology',aliases:['金证股份'],ticker:'600446.SH'});
+  const row=await addOwnerCompany(ctx,{entity_id:null,rationale:'券商 IT 第二梯队',names_zh:'金证股份',names_en:'Kingdom Technology',home_market:'A',exchange_code:'600446.SH',listed_on:'2003-12-16',keys:{lei:'',usci:'',cninfo_org_id:'',cik:''}},{today:'2026-09-27'});
+  expect(row.entity_id).toBe(legacy);
+  expect(store.count('research_entities')).toBe(1);
+  expect(store.count('research_entity_keys')).toBe(1);
+  // Once a key row exists, adding it again is refused.
+  await expect(addOwnerCompany(ctx,{entity_id:null,rationale:'again',names_zh:'金证股份',names_en:'Kingdom Technology',home_market:'A',exchange_code:'600446.SH',listed_on:'',keys:{lei:'',usci:'',cninfo_org_id:'',cik:''}},{today:'2026-09-27'})).rejects.toMatchObject({status:409});
  });
 });

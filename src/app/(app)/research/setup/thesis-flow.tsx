@@ -16,16 +16,18 @@ const OPPORTUNITY_HINTS: Record<string, string> = {
   other: '不属于以上两类；请在核心逻辑里说明为什么值得跟。',
 };
 
-export function ThesisFlow({ companies, draft, step, onDraftChange, onStepChange, onSaved }: {
+export function ThesisFlow({ companies, draft, step, onDraftChange, onStepChange, onSaved, busy, setBusy }: {
   companies: ScopedCompany[];
   draft: ThesisDraft;
   step: number;
   onDraftChange: (d: ThesisDraft) => void;
   onStepChange: (s: number) => void;
   onSaved: (message: string) => void;
+  /** In-flight submission lock, owned by the page so a remount cannot reset it. */
+  busy: boolean;
+  setBusy: (b: boolean) => void;
 }) {
   const [errors, setErrors] = useState<string[]>([]);
-  const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const total = THESIS_QUESTIONS.length + 1; // + preview
   const inScope = useMemo(() => companies.filter((c) => c.in_scope), [companies]);
@@ -44,6 +46,7 @@ export function ThesisFlow({ companies, draft, step, onDraftChange, onStepChange
   const prev = () => { setErrors([]); onStepChange(Math.max(step - 1, 0)); };
 
   async function save(activate: boolean) {
+    if (busy) return;
     const allErrors = THESIS_QUESTIONS.flatMap((q) => validateThesisStep(q.id, draft, vctx));
     if (allErrors.length) { setErrors(allErrors); return; }
     setBusy(true); setNotice(null);

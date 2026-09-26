@@ -29,6 +29,8 @@ export default function ResearchSetupPage() {
   const [flow, setFlow] = useState<'companies' | 'thesis' | null>(null);
   const [draft, setDraft] = useState<SetupDraft>(EMPTY_DRAFT);
   const [notice, setNotice] = useState<string | null>(null);
+  // Submission lock lives here: switching flows unmounts the child, which must not reset an in-flight write.
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     const res = await fetch('/api/research/entity-keys');
@@ -64,12 +66,12 @@ export default function ResearchSetupPage() {
       <p className="text-sm text-gray-600">阶段 0 的两项输入。每题一屏，带提示与范例；随时可中断，草稿留在本浏览器，提交后写入权威表。</p>
 
       <div className="grid gap-3 md:grid-cols-2">
-        <button type="button" onClick={() => setFlow('companies')} className={`rounded-lg border p-4 text-left hover:bg-gray-50 ${flow === 'companies' ? 'border-black' : ''}`}>
+        <button type="button" disabled={busy} onClick={() => setFlow('companies')} className={`rounded-lg border p-4 text-left hover:bg-gray-50 ${flow === 'companies' ? 'border-black' : ''}`}>
           <div className="text-3xl font-semibold">{companies === null ? '…' : progress.companies.count}<span className="text-base text-gray-400"> / {progress.companies.min}–{progress.companies.max}</span></div>
           <div className="text-sm text-gray-500">公司名单（in_scope）</div>
           <div className={`text-xs ${tone(progress.companies.status)}`}>{progress.companies.status === 'ok' ? '在目标区间内' : progress.companies.status === 'below' ? '还不够，点此圈定' : '超出目标，可精简'}</div>
         </button>
-        <button type="button" onClick={() => setFlow('thesis')} className={`rounded-lg border p-4 text-left hover:bg-gray-50 ${flow === 'thesis' ? 'border-black' : ''}`}>
+        <button type="button" disabled={busy} onClick={() => setFlow('thesis')} className={`rounded-lg border p-4 text-left hover:bg-gray-50 ${flow === 'thesis' ? 'border-black' : ''}`}>
           <div className="text-3xl font-semibold">{progress.theses.count}<span className="text-base text-gray-400"> / {progress.theses.min}–{progress.theses.max}</span></div>
           <div className="text-sm text-gray-500">thesis（激活 {progress.theses.active} · 草稿 {progress.theses.draft}）</div>
           <div className={`text-xs ${tone(progress.theses.status)}`}>{progress.theses.status === 'ok' ? '在目标区间内' : progress.theses.status === 'below' ? '还不够，点此录入' : '超出目标，可合并'}</div>
@@ -79,12 +81,12 @@ export default function ResearchSetupPage() {
       {notice && <p className="rounded border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">{notice}</p>}
 
       {flow === 'companies' && companies && (
-        <CompaniesFlow companies={companies} answers={draft.companies} step={draft.companyStep}
+        <CompaniesFlow companies={companies} answers={draft.companies} step={draft.companyStep} busy={busy} setBusy={setBusy}
           onAnswersChange={(companies) => update({ companies })} onStepChange={(companyStep) => update({ companyStep })}
           onSaved={async (m) => { reset(resetCompanyDraft); setNotice(m); await load(); }} onRefresh={load} />
       )}
       {flow === 'thesis' && companies && (
-        <ThesisFlow companies={companies} draft={draft.thesis} step={draft.thesisStep}
+        <ThesisFlow companies={companies} draft={draft.thesis} step={draft.thesisStep} busy={busy} setBusy={setBusy}
           onDraftChange={(thesis) => update({ thesis })} onStepChange={(thesisStep) => update({ thesisStep })}
           onSaved={async (m) => { reset(resetThesisDraft); setNotice(m); await load(); }} />
       )}
