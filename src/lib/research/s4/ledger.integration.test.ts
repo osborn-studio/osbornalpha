@@ -3,7 +3,7 @@ import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {closeS4Pool,transaction} from './db';
-import {addLabel,judgmentId,recordDecision,recordJudgment,recordOutcome,snapshotId,type DecisionInput,type JudgmentInput} from './ledger';
+import {addLabel,judgmentId,recordDecision,recordJudgment,recordOutcome,replayJudgments,snapshotId,type DecisionInput,type JudgmentInput} from './ledger';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20260926000000_research_judgment_ledger.sql';
@@ -135,5 +135,32 @@ describe.skipIf(!enabled)('WP-A3 judgment ledger on real PostgreSQL',()=>{
   expect((await admin.query('select * from public.research_outcomes where user_id=$1 and id=$2',[actor.userId,made.id])).rows[0]).toMatchObject({decision_id:decision.id,window_weeks:4,evaluation_id:'eval-1',pillar_results:{p1:'resolved_true'},price_result:{alpha:0.01},judged_by:'evaluator'});
   expect(await audits('ledger.outcome',made.id)).toBe(1);
   expect(await count('research_outcomes',other.userId)).toBe(0);
+ });
+
+ it('replays judgments deterministically, filtered by source availability at as_of',async()=>{
+  const thesis2=randomUUID(),late=randomUUID();
+  await admin.query(`insert into public.research_theses(id,user_id,title) values($1,$2,'replay thesis')`,[thesis2,actor.userId]);
+  await admin.query(`insert into public.research_source_documents(id,user_id,source_type,title,raw_text,content_hash,ingested_at) values($1,$2,'NEWS','late','late body',$3,'2026-09-30T00:00:00Z')`,[late,actor.userId,`hash-${randomUUID()}`]);
+  const early=await recordJudgment(actor,judgment({snapshot:{source_id:sourceId,source_version:'1',thesis_id:thesis2,thesis_version:'1',entity_table_version:'2026-09-25'},question_id:'Q1'}));
+  const earlyQ2=await recordJudgment(actor,judgment({snapshot:{source_id:sourceId,source_version:'1',thesis_id:thesis2,thesis_version:'1',entity_table_version:'2026-09-25'},question_id:'Q2',backend:'jev',backend_model:'jev-1.13.0'}));
+  const lateJ=await recordJudgment(actor,judgment({snapshot:{source_id:late,source_version:'1',thesis_id:thesis2,thesis_version:'1',entity_table_version:'2026-09-25'},question_id:'Q1'}));
+  // Decision time before the late source existed: only early judgments, boundary inclusive.
+  const ids=(rows:any[])=>rows.map(r=>r.id);
+  expect(ids(await replayJudgments(actor,thesis2,'2026-09-25T00:00:00Z')).sort()).toEqual([early.id,earlyQ2.id].sort());
+  expect(ids(await replayJudgments(actor,thesis2,'2026-09-20T00:00:00Z')).sort()).toEqual([early.id,earlyQ2.id].sort());
+  expect(ids(await replayJudgments(actor,thesis2,'2026-09-19T23:59:59Z'))).toEqual([]);
+  const all=await replayJudgments(actor,thesis2,'2026-10-01T00:00:00Z');
+  expect(ids(all).sort()).toEqual([early.id,earlyQ2.id,lateJ.id].sort());
+  // Order is by content address, not by insertion, and identical across calls.
+  const key=(r:any)=>[r.snapshot_id,r.question_set_version,r.question_id,r.backend,r.backend_model,r.id].join('|');
+  expect(all.map(key)).toEqual([...all].map(key).sort());
+  expect(JSON.stringify(await replayJudgments(actor,thesis2,'2026-10-01T00:00:00Z'))).toBe(JSON.stringify(all));
+  expect(all[0]).not.toHaveProperty('raw_text');
+  expect(all.find(r=>r.id===lateJ.id)).toMatchObject({source_id:late,available_at:'2026-09-30T00:00:00.000Z',confidence:0.8,distribution:{true:0.8,false:0.2}});
+  // Other theses and other owners never leak in; as_of must be a strict instant.
+  expect(await replayJudgments(actor,randomUUID(),'2026-10-01T00:00:00Z')).toEqual([]);
+  expect(await replayJudgments(other,thesis2,'2026-10-01T00:00:00Z')).toEqual([]);
+  await expect(replayJudgments(actor,thesis2,'2026-10-01')).rejects.toThrow('invalid_schema');
+  await expect(replayJudgments(actor,'thesis',  '2026-10-01T00:00:00Z')).rejects.toThrow('invalid_schema');
  });
 });
