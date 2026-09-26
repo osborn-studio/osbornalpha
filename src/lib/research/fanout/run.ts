@@ -15,7 +15,7 @@ import { entityTableVersion, listEntityKeys } from '../entity-keys/store';
 import type { LlmFn } from '../memos';
 import { transaction, type S4Actor } from '../s4/db';
 import { recordJudgment, snapshotId, type JudgmentBackend, type JudgmentInput, type JudgmentSnapshot } from '../s4/ledger';
-import { legacySourceVisible, rowToSource } from '../sources';
+import { rowToSource } from '../sources';
 import type { ResearchCtx } from '../store';
 import { listThesesByStatus } from '../theses';
 import type { SourceDocument, Thesis } from '../types';
@@ -59,12 +59,17 @@ export function thesisVersion(t: Thesis): string {
   return digest({ title: t.title, body: t.body, invalidation_conditions: t.invalidation_conditions, watch_metrics: t.watch_metrics, updated_at: t.updated_at });
 }
 
-/** External models only see public material that is not a private observation (§6.2, §11). */
+/** PA-exported material imported by S4: judged locally, never sent to an external model (S4 grants deny external processing). */
+export const isControlledCopy = (source: SourceDocument): boolean => source.metadata?.s4_controlled_copy === true;
+
+/** External models only see public material that is not a private observation or an S4 controlled copy (§6.2, §11). */
 export function mayLeaveMachine(source: SourceDocument): boolean {
-  return source.permission === 'public' && source.origin_type !== 'private_observation';
+  return source.permission === 'public' && source.origin_type !== 'private_observation' && !isControlledCopy(source);
 }
 
-/** Whole window, oldest first, paged past the PostgREST cap with an id tie-breaker. */
+/** Whole window, oldest first, paged past the PostgREST cap with an id tie-breaker.
+ * S4 controlled copies are included on purpose (owner decision 2026-09-26): fan-out is not a legacy client,
+ * and mayLeaveMachine keeps them off every external backend. */
 export async function listSourcesSince(ctx: ResearchCtx, sinceIso: string): Promise<SourceDocument[]> {
   const out: SourceDocument[] = [];
   for (let from = 0; ; from += PAGE) {
@@ -72,7 +77,7 @@ export async function listSourcesSince(ctx: ResearchCtx, sinceIso: string): Prom
       .gte('ingested_at', sinceIso).order('ingested_at', { ascending: true }).order('id', { ascending: true }).range(from, from + PAGE - 1);
     if (error) throw new Error(error.message);
     const page = (data ?? []) as any[];
-    out.push(...page.filter(legacySourceVisible).map(rowToSource));
+    out.push(...page.map(rowToSource));
     if (page.length < PAGE) return out;
   }
 }
@@ -97,7 +102,7 @@ async function clusterBaseline(ctx: ResearchCtx, source: SourceDocument): Promis
   const { data, error } = await ctx.supabase.from('research_source_documents').select('*').eq('user_id', ctx.userId).eq('cluster_id', source.cluster_id)
     .order('available_at', { ascending: true }).limit(2);
   if (error) throw new Error(error.message);
-  const first = ((data ?? []) as any[]).filter(legacySourceVisible).map(rowToSource).find(s => s.id !== source.id);
+  const first = ((data ?? []) as any[]).map(rowToSource).find(s => s.id !== source.id);
   return first && mayLeaveMachine(first) ? { source_id: first.id, title: first.title, text: first.raw_text } : null;
 }
 

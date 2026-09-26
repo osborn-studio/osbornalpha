@@ -15,10 +15,12 @@ describe('listSourcesSince',()=>{
   expect(out.map(s=>s.ingested_at)).toEqual([...out.map(s=>s.ingested_at)].sort());
   expect(new Set(out.map(s=>s.id)).size).toBe(1203);
  });
- it('drops S4 controlled copies and respects the window start',async()=>{
-  const rows=[src(1),{...src(2),metadata:{s4_controlled_copy:true}},{...src(3),ingested_at:'2000-01-01T00:00:00Z'}];
+ it('includes S4 controlled copies (PA-exported material) and respects the window start',async()=>{
+  const rows=[src(1),{...src(2),metadata:{s4_controlled_copy:true},source_type:'MANUAL',permission:'private'},{...src(3),ingested_at:'2000-01-01T00:00:00Z'}];
   const {ctx}=makeMockCtx({research_source_documents:rows}) as unknown as {ctx:ResearchCtx};
-  expect(await listSourcesSince(ctx,'2020-01-01T00:00:00Z')).toHaveLength(1);
+  const out=await listSourcesSince(ctx,'2020-01-01T00:00:00Z');
+  expect(out).toHaveLength(2);
+  expect(out.some(s=>s.metadata?.s4_controlled_copy===true)).toBe(true);
  });
 });
 
@@ -29,6 +31,8 @@ describe('mayLeaveMachine / thesisVersion',()=>{
   expect(mayLeaveMachine(base({permission:'private'}))).toBe(false);
   expect(mayLeaveMachine(base({permission:'licensed'}))).toBe(false);
   expect(mayLeaveMachine(base({origin_type:'private_observation'}))).toBe(false);
+  // A controlled copy came from PA under a grant that denies external processing: never external, whatever permission says.
+  expect(mayLeaveMachine(base({permission:'public',metadata:{s4_controlled_copy:true}}))).toBe(false);
  });
  it('changes the thesis version when pillars or invalidation conditions change, not when unrelated fields do',()=>{
   const t:Thesis={id:'t',title:'a',body:'b',company_ids:[],theme_ids:[],supporting_evidence_ids:[],invalidation_conditions:['x'],watch_metrics:['y'],status:'ACTIVE',created_at:'2026-01-01T00:00:00Z',updated_at:'2026-01-02T00:00:00Z'};
