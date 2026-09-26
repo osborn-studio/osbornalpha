@@ -70,12 +70,9 @@ export async function setScope(ctx: ResearchCtx, entityId: string, input: ScopeI
   const cohort = input.in_scope ? (text(input.cohort) ? input.cohort!.trim() : scopeCohort(input.today)) : row.cohort;
   const now = new Date().toISOString();
 
-  const { error } = await ctx.supabase.from(KEYS_TABLE).update({
-    in_scope: input.in_scope, cohort, lei: keys.lei, usci: keys.usci, cninfo_org_id: keys.cninfo_org_id, cik: keys.cik,
-    names_zh, names_en, aliases, provenance, missing: [...missing], updated_at: now,
-  }).eq('user_id', ctx.userId).eq('entity_id', entityId);
-  if (error) throw new Error(error.message);
-
+  // Write order matters for retries: the wizard derives every retry decision (removals still pending, names
+  // still differing) from the key row, so the entity is written first and the key row last. A failure in
+  // between leaves the key row unchanged and the whole operation is simply replayed.
   const entity = await getEntity(ctx, entityId);
   if (entity) {
     const metadata = { ...entity.metadata, in_scope: input.in_scope, scope_rationale: rationale, scope_updated_at: now };
@@ -92,6 +89,13 @@ export async function setScope(ctx: ResearchCtx, entityId: string, input: ScopeI
     const { error: entityErr } = await ctx.supabase.from(ENTITIES_TABLE).update(patch).eq('user_id', ctx.userId).eq('id', entityId);
     if (entityErr) throw new Error(entityErr.message);
   }
+
+  const { error } = await ctx.supabase.from(KEYS_TABLE).update({
+    in_scope: input.in_scope, cohort, lei: keys.lei, usci: keys.usci, cninfo_org_id: keys.cninfo_org_id, cik: keys.cik,
+    names_zh, names_en, aliases, provenance, missing: [...missing], updated_at: now,
+  }).eq('user_id', ctx.userId).eq('entity_id', entityId);
+  if (error) throw new Error(error.message);
+
   const updated = (await listEntityKeys(ctx)).find((r) => r.entity_id === entityId);
   if (!updated) throw new ScopeError('entity not found', 404);
   return updated;

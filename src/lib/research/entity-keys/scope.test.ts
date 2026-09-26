@@ -206,3 +206,33 @@ describe('Codex round 10 regression',()=>{
   await expect(addOwnerCompany(ctx,{...withLei,keys:{...withLei.keys,lei:'5493001KJTIIGC8Y1R12'}},{today:'2026-09-28'})).rejects.toMatchObject({status:409});
  });
 });
+
+
+describe('Codex round 11 regression',()=>{
+ it('writes the entity before the key row, so a failed entity update leaves the key row untouched and the retry redoes both',async()=>{
+  const {entity_id}=await upsertEntityKeys(ctx,hundsun());
+  const supabase=ctx.supabase as unknown as {from:(t:string)=>any};
+  const real=supabase.from.bind(supabase);
+  let failEntityUpdate=true;
+  supabase.from=(t:string)=>{
+   const chain=real(t);
+   if(t==='research_entities'&&failEntityUpdate){
+    const update=chain.update.bind(chain);
+    chain.update=(patch:unknown)=>{failEntityUpdate=false;void update;return{eq:()=>({eq:()=>Promise.resolve({error:{message:'boom'}})})};};
+   }
+   return chain;
+  };
+  await expect(setScope(ctx,entity_id,{in_scope:false,rationale:'本轮未入选',today:'2026-09-27',names_en:['Hundsun Tech']})).rejects.toThrow('boom');
+  // Nothing about the key row changed: the client derives every retry decision from it.
+  const row=(await listEntityKeys(ctx)).find(r=>r.entity_id===entity_id)!;
+  expect(row.in_scope).toBe(true);
+  expect(row.names_en).toEqual(['Hundsun Technologies Inc.']);
+  // The retry applies both writes.
+  const after=await setScope(ctx,entity_id,{in_scope:false,rationale:'本轮未入选',today:'2026-09-27',names_en:['Hundsun Tech']});
+  expect(after.in_scope).toBe(false);
+  expect(after.names_en).toEqual(['Hundsun Tech','Hundsun Technologies Inc.']);
+  const entity=(await getEntity(ctx,entity_id))!;
+  expect(entity.name).toBe('Hundsun Tech');
+  expect(entity.metadata).toMatchObject({in_scope:false,scope_rationale:'本轮未入选'});
+ });
+});
