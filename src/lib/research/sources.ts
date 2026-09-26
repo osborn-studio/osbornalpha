@@ -8,7 +8,11 @@
 import { createHash } from 'node:crypto';
 import { audit, isUuid, type ResearchCtx } from './store';
 import {
+  MARKETS,
+  PERMISSIONS,
   SOURCE_TYPES,
+  type Market,
+  type Permission,
   type SourceDocument,
   type SourceType,
   type TrustLevel,
@@ -28,6 +32,13 @@ export interface IngestSourceInput {
   trust_level?: TrustLevel;
   entity_ids?: string[];
   metadata?: Record<string, unknown>;
+  /** WP-A1: event date described by the document (ISO 8601). */
+  event_time?: string | null;
+  /** WP-A1: first instant we could obtain it; defaults to the ingestion instant. */
+  available_at?: string;
+  market?: Market | null;
+  /** WP-A1: defaults to private for NOTE/MANUAL, public otherwise. */
+  permission?: Permission;
 }
 
 export interface IngestResult {
@@ -63,8 +74,23 @@ export function rowToSource(row: any): SourceDocument {
     trust_level: row.trust_level,
     entity_ids: Array.isArray(row.entity_ids) ? (row.entity_ids as string[]) : [],
     metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : {},
+    // WP-A1 fields: rows from databases or mocks that predate the migration get
+    // exactly the values the migration backfills.
+    event_time: row.event_time ?? null,
+    available_at: row.available_at ?? row.ingested_at,
+    source_version: row.source_version ?? '1',
+    cluster_id: row.cluster_id ?? null,
+    cluster_first: row.cluster_first ?? null,
+    origin_type: row.origin_type ?? null,
+    market: row.market ?? null,
+    permission: row.permission ?? 'public',
   };
 }
+
+const isIsoInstant = (value: unknown): value is string =>
+  typeof value === 'string' && Number.isFinite(Date.parse(value));
+const defaultPermission = (type: SourceType): Permission =>
+  type === 'NOTE' || type === 'MANUAL' ? 'private' : 'public';
 
 async function findByHash(ctx: ResearchCtx, hash: string): Promise<string | null> {
   const { data, error } = await ctx.supabase
@@ -101,12 +127,26 @@ export async function ingestSource(ctx: ResearchCtx, input: IngestSourceInput): 
   if (input.entity_ids !== undefined && !Array.isArray(input.entity_ids)) {
     throw new SourceValidationError('entity_ids must be an array of entity ids');
   }
+  if (input.event_time != null && !isIsoInstant(input.event_time)) {
+    throw new SourceValidationError('event_time must be an ISO 8601 instant');
+  }
+  if (input.available_at !== undefined && !isIsoInstant(input.available_at)) {
+    throw new SourceValidationError('available_at must be an ISO 8601 instant');
+  }
+  if (input.market != null && !MARKETS.includes(input.market)) {
+    throw new SourceValidationError(`market must be one of ${MARKETS.join(', ')}`);
+  }
+  const permission = input.permission ?? defaultPermission(input.source_type);
+  if (!PERMISSIONS.includes(permission)) {
+    throw new SourceValidationError(`permission must be one of ${PERMISSIONS.join(', ')}`);
+  }
 
   const hash = contentHash(input.raw_text);
   const existing = await findByHash(ctx, hash);
   if (existing) return { id: existing, duplicate: true };
 
   const id = crypto.randomUUID();
+  const ingestedAt = new Date().toISOString();
   const { error } = await ctx.supabase.from(TABLE).insert({
     id,
     user_id: ctx.userId,
@@ -115,12 +155,18 @@ export async function ingestSource(ctx: ResearchCtx, input: IngestSourceInput): 
     url: input.url ?? null,
     author: input.author ?? null,
     published_at: input.published_at ?? null,
-    ingested_at: new Date().toISOString(),
+    ingested_at: ingestedAt,
     raw_text: input.raw_text,
     content_hash: hash,
     trust_level: trust,
     entity_ids: input.entity_ids ?? [],
     metadata: input.metadata ?? {},
+    // WP-A1: availability defaults to this ingestion; vintage starts at 1.
+    event_time: input.event_time ?? null,
+    available_at: input.available_at ?? ingestedAt,
+    source_version: '1',
+    market: input.market ?? null,
+    permission,
   });
   if (error) {
     // Unique (user_id, content_hash) race: someone inserted the same text

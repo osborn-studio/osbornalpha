@@ -80,3 +80,35 @@ describe('listing', () => {
     expect(rows[0].id).toBe(hit.id);
   });
 });
+
+describe('WP-A1 source extension fields', () => {
+  it('rowToSource gives legacy rows the backfill defaults', async () => {
+    const { rowToSource } = await import('./sources');
+    const legacy = { id: 'x', source_type: 'NEWS', title: 't', url: null, author: null, published_at: null, ingested_at: '2026-09-25T00:00:00.000Z', raw_text: 'b', content_hash: 'h', trust_level: 'MEDIUM', entity_ids: [], metadata: {} };
+    expect(rowToSource(legacy)).toMatchObject({ available_at: '2026-09-25T00:00:00.000Z', source_version: '1', permission: 'public', event_time: null, cluster_id: null, cluster_first: null, origin_type: null, market: null });
+    expect(rowToSource({ ...legacy, available_at: '2026-09-24T00:00:00.000Z', source_version: '3', permission: 'licensed', market: 'HK', origin_type: 'filing', cluster_id: 'c', cluster_first: true, event_time: '2026-09-20T00:00:00.000Z' })).toMatchObject({ available_at: '2026-09-24T00:00:00.000Z', source_version: '3', permission: 'licensed', market: 'HK', origin_type: 'filing', cluster_id: 'c', cluster_first: true, event_time: '2026-09-20T00:00:00.000Z' });
+  });
+
+  it('rejects malformed extension fields on ingest', async () => {
+    await expect(ingestSource(ctx, { ...valid, permission: 'secret' as any })).rejects.toThrow(/permission/);
+    await expect(ingestSource(ctx, { ...valid, market: 'EU' as any })).rejects.toThrow(/market/);
+    await expect(ingestSource(ctx, { ...valid, available_at: 'yesterday' })).rejects.toThrow(/available_at/);
+    await expect(ingestSource(ctx, { ...valid, event_time: 'soon' })).rejects.toThrow(/event_time/);
+  });
+
+  it('defaults availability to the ingestion instant and permission by source type', async () => {
+    const news = await getSource(ctx, (await ingestSource(ctx, valid)).id);
+    expect(news!.available_at).toBe(news!.ingested_at);
+    expect(news!.permission).toBe('public');
+    expect(news!.source_version).toBe('1');
+    expect(news!.market).toBeNull();
+    const note = await getSource(ctx, (await ingestSource(ctx, { ...valid, source_type: 'NOTE', raw_text: 'a private note' })).id);
+    expect(note!.permission).toBe('private');
+  });
+
+  it('passes explicit extension values through', async () => {
+    const res = await ingestSource(ctx, { ...valid, raw_text: 'explicit', available_at: '2026-09-20T00:00:00.000Z', event_time: '2026-09-19T00:00:00.000Z', market: 'US', permission: 'licensed' });
+    const src = (await getSource(ctx, res.id))!;
+    expect(src).toMatchObject({ available_at: '2026-09-20T00:00:00.000Z', event_time: '2026-09-19T00:00:00.000Z', market: 'US', permission: 'licensed' });
+  });
+});

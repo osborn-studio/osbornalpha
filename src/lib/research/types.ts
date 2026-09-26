@@ -42,6 +42,17 @@ export const SOURCE_TYPES: readonly SourceType[] = [
 
 export type TrustLevel = 'LOW' | 'MEDIUM' | 'HIGH';
 
+/** WP-A1 (plan 2026-09-22 §5.1): provenance and permission facets of a source. */
+export const ORIGIN_TYPES = [
+  'filing', 'company_statement', 'third_party_data', 'analyst_or_media', 'retelling', 'private_observation', 'unknown',
+] as const;
+export type OriginType = (typeof ORIGIN_TYPES)[number];
+export const MARKETS = ['A', 'HK', 'US', 'other'] as const;
+export type Market = (typeof MARKETS)[number];
+/** Only `public` sources may ever be sent to Jev. */
+export const PERMISSIONS = ['public', 'licensed', 'private'] as const;
+export type Permission = (typeof PERMISSIONS)[number];
+
 export interface SourceDocument {
   id: string;
   source_type: SourceType;
@@ -55,6 +66,19 @@ export interface SourceDocument {
   trust_level: TrustLevel;
   entity_ids: string[];
   metadata?: Record<string, unknown>;
+  // WP-A1 facets. Optional in the type so pre-migration fixtures and prompt
+  // tests keep compiling; rowToSource and the database always populate them.
+  /** Event date the document describes, when known. */
+  event_time?: string | null;
+  /** First instant we could have obtained it; immutable once written. */
+  available_at?: string;
+  /** Vintage counter for the same URL; immutable once written. */
+  source_version?: string;
+  cluster_id?: string | null;
+  cluster_first?: boolean | null;
+  origin_type?: OriginType | null;
+  market?: Market | null;
+  permission?: Permission;
 }
 
 export type Confidence = 'LOW' | 'MEDIUM' | 'HIGH';
