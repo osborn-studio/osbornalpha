@@ -5,9 +5,9 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import type { EntityKeysRow } from '@/lib/research/entity-keys/store';
+import type { ScopedCompany } from '@/lib/research/entity-keys/scope';
 import type { Thesis } from '@/lib/research/types';
-import { DRAFT_KEY, parseDraft, serializeDraft, type SetupDraft } from '@/lib/research/setup/draft';
+import { DRAFT_KEY, parseDraft, resetCompanyDraft, resetThesisDraft, serializeDraft, type SetupDraft } from '@/lib/research/setup/draft';
 import { setupProgress } from '@/lib/research/setup/progress';
 import { EMPTY_THESIS_DRAFT } from '@/lib/research/setup/theses';
 import { CompaniesFlow } from './companies-flow';
@@ -23,7 +23,7 @@ function writeDraft(d: SetupDraft) {
 }
 
 export default function ResearchSetupPage() {
-  const [companies, setCompanies] = useState<EntityKeysRow[] | null>(null);
+  const [companies, setCompanies] = useState<ScopedCompany[] | null>(null);
   const [theses, setTheses] = useState<Thesis[]>([]);
   const [disabled, setDisabled] = useState(false);
   const [flow, setFlow] = useState<'companies' | 'thesis' | null>(null);
@@ -41,7 +41,9 @@ export default function ResearchSetupPage() {
   }, []);
 
   useEffect(() => { setDraft(readDraft()); void load(); }, [load]);
-  const update = (patch: Partial<SetupDraft>) => { const next = { ...draft, ...patch }; setDraft(next); writeDraft(next); };
+  // Functional updates: two callbacks in one tick (answers, then step) must not overwrite each other.
+  const update = (patch: Partial<SetupDraft>) => setDraft((prev) => { const next = { ...prev, ...patch }; writeDraft(next); return next; });
+  const reset = (fn: (prev: SetupDraft) => SetupDraft) => setDraft((prev) => { const next = fn(prev); writeDraft(next); return next; });
 
   if (disabled) {
     return <div className="rounded-lg border border-amber-300 bg-amber-50 p-6 text-sm text-amber-900">Research OS 该模块暂未开放——需以 admin 角色登录后访问（个人云工具规格）。</div>;
@@ -79,12 +81,12 @@ export default function ResearchSetupPage() {
       {flow === 'companies' && companies && (
         <CompaniesFlow companies={companies} answers={draft.companies} step={draft.companyStep}
           onAnswersChange={(companies) => update({ companies })} onStepChange={(companyStep) => update({ companyStep })}
-          onSaved={async (m) => { setNotice(m); await load(); }} />
+          onSaved={async (m) => { reset(resetCompanyDraft); setNotice(m); await load(); }} />
       )}
       {flow === 'thesis' && companies && (
         <ThesisFlow companies={companies} draft={draft.thesis} step={draft.thesisStep}
           onDraftChange={(thesis) => update({ thesis })} onStepChange={(thesisStep) => update({ thesisStep })}
-          onSaved={async (m) => { setNotice(m); await load(); }} />
+          onSaved={async (m) => { reset(resetThesisDraft); setNotice(m); await load(); }} />
       )}
       {flow === null && <p className="text-sm text-gray-500">点上面任一张卡开始。</p>}
     </div>

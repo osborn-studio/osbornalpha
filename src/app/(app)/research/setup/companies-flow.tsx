@@ -3,10 +3,10 @@
 // WP-A11 — 公司名单流程：勾选候选 → 每家一屏（理由 / 已知实体键 / 名称纠正）→ 候选外公司 → 汇总确认 → 写入。
 
 import { useMemo, useState } from 'react';
-import type { EntityKeysRow } from '@/lib/research/entity-keys/store';
+import type { ScopedCompany } from '@/lib/research/entity-keys/scope';
 import { HOME_MARKETS, KEY_NAMES, type HomeMarket, type KeyName } from '@/lib/research/entity-keys/types';
 import { COMPANY_QUESTIONS, type CompanyQuestionId } from '@/lib/research/setup/questions';
-import { validateCompanyAnswer, type OwnerCompanyAnswer } from '@/lib/research/setup/companies';
+import { companiesStepErrors, type OwnerCompanyAnswer } from '@/lib/research/setup/companies';
 import { TARGETS } from '@/lib/research/setup/progress';
 import { inputClass, labelClass, ProgressBar, QuestionCard, WizardNav } from './wizard';
 
@@ -14,9 +14,9 @@ const MARKET_LABEL: Record<HomeMarket, string> = { A: 'A 股', HK: '港股', US:
 const KEY_LABEL: Record<KeyName, string> = { lei: 'LEI（20 位）', usci: '统一社会信用代码（18 位）', cninfo_org_id: '巨潮 orgId', cik: 'SEC CIK' };
 const q = (id: CompanyQuestionId) => COMPANY_QUESTIONS.find((x) => x.id === id)!;
 
-export const emptyAnswer = (row: EntityKeysRow | null): OwnerCompanyAnswer => ({
+export const emptyAnswer = (row: ScopedCompany | null): OwnerCompanyAnswer => ({
   entity_id: row?.entity_id ?? null,
-  rationale: row ? String((row.provenance as Record<string, unknown>).scope_rationale ?? '') : '',
+  rationale: row?.scope_rationale ?? '',
   names_zh: row?.names_zh.join('\n') ?? '',
   names_en: row?.names_en.join('\n') ?? '',
   home_market: (row?.home_market as HomeMarket) ?? 'A',
@@ -27,7 +27,7 @@ export const emptyAnswer = (row: EntityKeysRow | null): OwnerCompanyAnswer => ({
 
 /** Screens: 0 = select, 1..n = one per selected company, n+1 = new companies, n+2 = review. */
 export function CompaniesFlow({ companies, answers, step, onAnswersChange, onStepChange, onSaved }: {
-  companies: EntityKeysRow[];
+  companies: ScopedCompany[];
   answers: Record<string, OwnerCompanyAnswer>;
   step: number;
   onAnswersChange: (a: Record<string, OwnerCompanyAnswer>) => void;
@@ -41,7 +41,7 @@ export function CompaniesFlow({ companies, answers, step, onAnswersChange, onSte
   const newKeys = useMemo(() => Object.keys(answers).filter((k) => k.startsWith('new:')), [answers]);
   const total = selectedIds.length + 3;
   const byMarket = useMemo(() => {
-    const groups = new Map<string, EntityKeysRow[]>();
+    const groups = new Map<string, ScopedCompany[]>();
     for (const c of companies) (groups.get(c.home_market) ?? groups.set(c.home_market, []).get(c.home_market)!).push(c);
     return [...groups.entries()].sort();
   }, [companies]);
@@ -51,11 +51,9 @@ export function CompaniesFlow({ companies, answers, step, onAnswersChange, onSte
     onAnswersChange(next);
   };
 
+  const stepErrors = (s: number) => companiesStepErrors({ step: s, selected: selectedIds.map((id) => answers[id]!), added: newKeys.map((k) => answers[k]!) });
   const next = () => {
-    let errs: string[] = [];
-    if (step === 0 && selectedIds.length === 0 && newKeys.length === 0) errs = ['至少勾选或添加 1 家公司'];
-    else if (step >= 1 && step <= selectedIds.length) errs = validateCompanyAnswer(answers[selectedIds[step - 1]!]!);
-    else if (step === selectedIds.length + 1) errs = newKeys.flatMap((k) => validateCompanyAnswer(answers[k]!).map((e) => `${answers[k]!.names_zh || answers[k]!.names_en || k}：${e}`));
+    const errs = stepErrors(step);
     setErrors(errs);
     if (errs.length) return;
     onStepChange(Math.min(step + 1, total - 1));
@@ -63,6 +61,9 @@ export function CompaniesFlow({ companies, answers, step, onAnswersChange, onSte
   const prev = () => { setErrors([]); onStepChange(Math.max(step - 1, 0)); };
 
   async function submit() {
+    const errs = stepErrors(total - 1);
+    setErrors(errs);
+    if (errs.length) return;
     setBusy(true); setNotice(null);
     const failures: string[] = [];
     try {
@@ -89,9 +90,7 @@ export function CompaniesFlow({ companies, answers, step, onAnswersChange, onSte
         if (!res.ok) failures.push(`${a.names_zh || a.names_en}：${data?.error?.message ?? res.status}`);
       }
       if (failures.length) { setErrors(failures); return; }
-      onAnswersChange({});
-      onStepChange(0);
-      onSaved(`名单已写入：${selectedIds.length + newKeys.length} 家`);
+      onSaved(`名单已写入：${selectedIds.length + newKeys.length} 家`); // the page resets answers and step atomically
     } finally { setBusy(false); }
   }
 
@@ -114,7 +113,8 @@ export function CompaniesFlow({ companies, answers, step, onAnswersChange, onSte
               </div>
             </div>
           ))}
-          <p className="text-xs text-gray-500">已选 {selectedIds.length + newKeys.length} 家（目标 {TARGETS.companies[0]}–{TARGETS.companies[1]}）。候选外公司在后面的步骤添加。</p>
+          <p className="text-xs text-gray-500">已选 {selectedIds.length + newKeys.length} 家（目标 {TARGETS.companies[0]}–{TARGETS.companies[1]}）。一家都不勾也可以直接下一步，去添加候选外公司。</p>
+          <button type="button" className="text-sm underline" onClick={() => { setAnswer(`new:${Date.now()}`, emptyAnswer(null)); onStepChange(selectedIds.length + 1); }}>添加候选外公司</button>
         </QuestionCard>
       );
     }

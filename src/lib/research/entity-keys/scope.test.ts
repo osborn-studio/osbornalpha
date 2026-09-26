@@ -5,7 +5,7 @@ import {listEntityKeys,upsertEntityKeys} from './store';
 import {getEntity} from '../entities';
 import cohort from './first-cohort.json';
 import type {CohortCompany} from './types';
-import {addOwnerCompany,setScope,ScopeError} from './scope';
+import {addOwnerCompany,listScopedCompanies,setScope,ScopeError} from './scope';
 
 let ctx:ResearchCtx,store:MockStore;
 beforeEach(()=>{({ctx,store}=makeMockCtx() as unknown as {ctx:ResearchCtx;store:MockStore});});
@@ -55,5 +55,28 @@ describe('addOwnerCompany',()=>{
  it('refuses an answer that fails the wizard validation before touching the store',async()=>{
   await expect(addOwnerCompany(ctx,{entity_id:null,rationale:'',names_zh:'',names_en:'',home_market:'A',exchange_code:'x',listed_on:'',keys:{lei:'',usci:'',cninfo_org_id:'',cik:''}},{today:'2026-09-27'})).rejects.toMatchObject({status:422});
   expect(store.count('research_entities')).toBe(0);
+ });
+});
+
+
+describe('Codex round 1 regressions',()=>{
+ it('refuses to add a company that already exists instead of replacing its researched keys',async()=>{
+  const {entity_id}=await upsertEntityKeys(ctx,hundsun());
+  const before=(await listEntityKeys(ctx))[0]!;
+  const dup={entity_id:null,rationale:'重复录入',names_zh:'恒生电子',names_en:'Hundsun Technologies Inc.',home_market:'A' as const,exchange_code:'600570.SH',listed_on:'',keys:{lei:'',usci:'',cninfo_org_id:'',cik:''}};
+  await expect(addOwnerCompany(ctx,dup,{today:'2026-09-27'})).rejects.toMatchObject({status:409});
+  // Same by ticker only, different spelling of the names.
+  await expect(addOwnerCompany(ctx,{...dup,names_zh:'恒生',names_en:'HS Tech'},{today:'2026-09-27'})).rejects.toMatchObject({status:409});
+  const after=(await listEntityKeys(ctx))[0]!;
+  expect(after.keys).toEqual(before.keys);
+  expect(after.provenance).toEqual(before.provenance);
+  expect(after.entity_id).toBe(entity_id);
+  expect(store.count('research_entities')).toBe(1);
+ });
+ it('lists companies with the stored scope rationale so a fresh browser can prefill it',async()=>{
+  const {entity_id}=await upsertEntityKeys(ctx,hundsun());
+  expect((await listScopedCompanies(ctx))[0]).toMatchObject({entity_id,scope_rationale:null});
+  await setScope(ctx,entity_id,{in_scope:true,rationale:'金融 IT 龙头',today:'2026-09-27'});
+  expect((await listScopedCompanies(ctx))[0]).toMatchObject({entity_id,in_scope:true,scope_rationale:'金融 IT 龙头'});
  });
 });

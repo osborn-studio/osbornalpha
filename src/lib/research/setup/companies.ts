@@ -84,3 +84,18 @@ export function ownerCompanyToCohort(a: OwnerCompanyAnswer, opts: { today: strin
 export function scopeCohort(today: string): string {
   return `scope-${today.slice(0, 7)}`;
 }
+
+/**
+ * Screen order of the companies flow: 0 = select, 1..n = one per selected company, n+1 = owner-added
+ * companies, n+2 = review. Leaving the selection screen with nothing selected is allowed (owner-added
+ * companies are entered later); the non-empty roster is enforced at review.
+ */
+export function companiesStepErrors(input: { step: number; selected: OwnerCompanyAnswer[]; added: OwnerCompanyAnswer[] }): string[] {
+  const n = input.selected.length;
+  if (input.step >= 1 && input.step <= n) return validateCompanyAnswer(input.selected[input.step - 1]!);
+  if (input.step === n + 1) {
+    return input.added.flatMap((a) => validateCompanyAnswer({ ...a, entity_id: null }).map((e) => `${a.names_zh.trim() || a.names_en.trim() || '新公司'}：${e}`));
+  }
+  if (input.step === n + 2 && n + input.added.length === 0) return ['至少勾选或添加 1 家公司'];
+  return [];
+}

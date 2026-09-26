@@ -2,7 +2,7 @@
  * WP-A11 — 名单圈定的写路径：改 in_scope / cohort、记录理由、补录实体键，或新增候选外公司。
  * 只写 research_entity_keys 与 research_entities.metadata；证券与既有键不动；新增走 upsertEntityKeys 的全套校验。
  */
-import { getEntity } from '../entities';
+import { getEntity, listEntities } from '../entities';
 import { isUuid, type ResearchCtx } from '../store';
 import { ownerCompanyToCohort, OWNER_SOURCE, RATIONALE_MAX, scopeCohort, validateCompanyAnswer, type OwnerCompanyAnswer } from '../setup/companies';
 import { isValidCik, isValidLei, isValidUsci } from './identifiers';
@@ -82,10 +82,34 @@ export async function setScope(ctx: ResearchCtx, entityId: string, input: ScopeI
   return updated;
 }
 
-/** Add a company outside the candidate list: wizard validation → CohortCompany → store validation → scope + rationale. */
+export interface ScopedCompany extends EntityKeysRow {
+  /** research_entities.metadata.scope_rationale, so a fresh browser can prefill the owner's reason. */
+  scope_rationale: string | null;
+}
+
+/** Key rows joined with the entity's scope rationale (the GET shape of /api/research/entity-keys). */
+export async function listScopedCompanies(ctx: ResearchCtx): Promise<ScopedCompany[]> {
+  const [rows, entities] = await Promise.all([listEntityKeys(ctx), listEntities(ctx, { type: 'COMPANY' })]);
+  const rationale = new Map(entities.map((e) => [e.id, typeof e.metadata.scope_rationale === 'string' ? (e.metadata.scope_rationale as string) : null]));
+  return rows.map((r) => ({ ...r, scope_rationale: rationale.get(r.entity_id) ?? null }));
+}
+
+const lower = (v: unknown) => (typeof v === 'string' ? v.trim().toLowerCase() : '');
+
+/**
+ * Add a company outside the candidate list: wizard validation → CohortCompany → store validation → scope + rationale.
+ * A company that already exists (by any name, alias or primary ticker) is refused with 409: upsertEntityKeys would
+ * otherwise replace its researched key row with the wizard's blank identifiers. Scope the existing row instead.
+ */
 export async function addOwnerCompany(ctx: ResearchCtx, answer: OwnerCompanyAnswer, opts: { today: string }): Promise<EntityKeysRow> {
   const errors = validateCompanyAnswer({ ...answer, entity_id: null });
   if (errors.length) throw new ScopeError(errors.join('；'), 422);
+  const names = new Set([answer.names_zh, answer.names_en].map(lower).filter(Boolean));
+  const ticker = lower(answer.exchange_code);
+  const [entities, keyRows] = await Promise.all([listEntities(ctx, { type: 'COMPANY' }), listEntityKeys(ctx)]);
+  const byName = entities.find((e) => names.has(lower(e.name)) || lower(e.ticker) === ticker || e.aliases.some((a) => names.has(lower(a))));
+  const byKeys = keyRows.find((r) => [...r.names_zh, ...r.names_en, ...r.aliases].some((n) => names.has(lower(n))) || r.securities.some((sec) => lower(sec.exchange_code) === ticker));
+  if (byName || byKeys) throw new ScopeError('company already exists; scope the existing record instead of adding it again', 409);
   let entityId: string;
   try {
     entityId = (await upsertEntityKeys(ctx, ownerCompanyToCohort(answer, opts))).entity_id;

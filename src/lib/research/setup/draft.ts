@@ -3,7 +3,7 @@
  * 版本化：版本不符或无法解析一律视为没有草稿。
  */
 import type { OwnerCompanyAnswer } from './companies';
-import type { ThesisDraft } from './theses';
+import { EMPTY_THESIS_DRAFT, type ThesisDraft } from './theses';
 
 export const DRAFT_KEY = 'research-setup-draft:v1';
 
@@ -31,4 +31,14 @@ export function parseDraft(raw: string | null | undefined): SetupDraft | null {
   } catch {
     return null;
   }
+}
+
+/** After a thesis is saved: clear the answers and the step together (one state write, one persistence). */
+export function resetThesisDraft(prev: SetupDraft): SetupDraft {
+  return { ...prev, thesis: { ...EMPTY_THESIS_DRAFT, pillars: EMPTY_THESIS_DRAFT.pillars.map((p) => ({ ...p })), invalidation_conditions: [...EMPTY_THESIS_DRAFT.invalidation_conditions], watch_metrics: [...EMPTY_THESIS_DRAFT.watch_metrics], catalysts: [], company_ids: [] }, thesisStep: 0 };
+}
+
+/** After the roster is written: clear the company answers and the step together. */
+export function resetCompanyDraft(prev: SetupDraft): SetupDraft {
+  return { ...prev, companies: {}, companyStep: 0 };
 }

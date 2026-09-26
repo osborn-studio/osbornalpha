@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { COMPANY_QUESTIONS, THESIS_QUESTIONS } from './questions';
 import { EMPTY_THESIS_DRAFT, thesisFormToInput, validateThesisStep, type ThesisDraft } from './theses';
-import { ownerCompanyToCohort, validateCompanyAnswer, type OwnerCompanyAnswer } from './companies';
+import { companiesStepErrors, ownerCompanyToCohort, validateCompanyAnswer, type OwnerCompanyAnswer } from './companies';
 import { setupProgress, TARGETS } from './progress';
-import { parseDraft, serializeDraft } from './draft';
+import { parseDraft, resetCompanyDraft, resetThesisDraft, serializeDraft } from './draft';
 
 const filled = (): ThesisDraft => ({
   ...EMPTY_THESIS_DRAFT,
@@ -135,5 +135,27 @@ describe('draft persistence', () => {
     expect(parseDraft('{"version":2}')).toBeNull();
     expect(parseDraft('not json')).toBeNull();
     expect(parseDraft(null)).toBeNull();
+  });
+});
+
+
+describe('Codex round 1 regressions', () => {
+  const answer: OwnerCompanyAnswer = { entity_id: 'e1', rationale: 'r', names_zh: '', names_en: '', home_market: 'A', exchange_code: '', listed_on: '', keys: { lei: '', usci: '', cninfo_org_id: '', cik: '' } };
+
+  it('lets the owner leave the selection screen with nothing selected and enforces the roster at review', () => {
+    // Nothing selected yet: the next screen is where owner-added companies are entered.
+    expect(companiesStepErrors({ step: 0, selected: [], added: [] })).toEqual([]);
+    expect(companiesStepErrors({ step: 1, selected: [], added: [] })).toEqual([]); // new-company screen
+    expect(companiesStepErrors({ step: 2, selected: [], added: [] })).toEqual(['至少勾选或添加 1 家公司']); // review
+    expect(companiesStepErrors({ step: 1, selected: [answer], added: [] })).toEqual([]);
+    expect(companiesStepErrors({ step: 1, selected: [{ ...answer, rationale: '' }], added: [] })).toEqual(['请写一句为什么这家公司进名单']);
+    const bad = { ...answer, entity_id: null, names_zh: '金证', names_en: '', exchange_code: 'x' };
+    expect(companiesStepErrors({ step: 2, selected: [answer], added: [bad] })[0]).toMatch(/^金证：/);
+  });
+
+  it('resets the saved flow atomically so a saved thesis or roster cannot be resubmitted from the draft', () => {
+    const draft = { version: 1 as const, thesis: filled(), thesisStep: 8, companies: { e1: answer }, companyStep: 3 };
+    expect(resetThesisDraft(draft)).toEqual({ ...draft, thesis: EMPTY_THESIS_DRAFT, thesisStep: 0 });
+    expect(resetCompanyDraft(draft)).toEqual({ ...draft, companies: {}, companyStep: 0 });
   });
 });

@@ -3,9 +3,9 @@
 // WP-A11 — thesis 流程：8 题一屏一题 → 预览 → 保存为草稿 / 保存并激活。
 
 import { useMemo, useState, type ReactNode } from 'react';
-import type { EntityKeysRow } from '@/lib/research/entity-keys/store';
+import type { ScopedCompany } from '@/lib/research/entity-keys/scope';
 import { THESIS_QUESTIONS, type ThesisQuestionId } from '@/lib/research/setup/questions';
-import { EMPTY_THESIS_DRAFT, thesisFormToInput, validateThesisStep, type ThesisDraft } from '@/lib/research/setup/theses';
+import { thesisFormToInput, validateThesisStep, type ThesisDraft } from '@/lib/research/setup/theses';
 import { OPPORTUNITY_TYPES } from '@/lib/research/types';
 import { OPPORTUNITY_LABELS } from '../theses/thesis-form';
 import { inputClass, labelClass, ListEditor, ProgressBar, QuestionCard, WizardNav } from './wizard';
@@ -17,7 +17,7 @@ const OPPORTUNITY_HINTS: Record<string, string> = {
 };
 
 export function ThesisFlow({ companies, draft, step, onDraftChange, onStepChange, onSaved }: {
-  companies: EntityKeysRow[];
+  companies: ScopedCompany[];
   draft: ThesisDraft;
   step: number;
   onDraftChange: (d: ThesisDraft) => void;
@@ -56,9 +56,7 @@ export function ThesisFlow({ companies, draft, step, onDraftChange, onStepChange
         const tData = await t.json().catch(() => ({}));
         message = t.ok ? `已保存并激活：${data.thesis.title}` : `已保存为草稿，但激活失败：${tData?.error?.message ?? t.status}`;
       }
-      onDraftChange({ ...EMPTY_THESIS_DRAFT });
-      onStepChange(0);
-      onSaved(message);
+      onSaved(message); // the page resets answers and step atomically
     } finally { setBusy(false); }
   }
 
