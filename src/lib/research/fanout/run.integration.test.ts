@@ -7,6 +7,8 @@ import type {ResearchCtx} from '../store';
 import {closeS4Pool} from '../s4/db';
 import {runFanout,type RunSummary} from './run';
 import {ruleBackend} from './backends/rule';
+import {testPack} from '../../../../scripts/s4/test-pack';
+import {importCandidate} from '../s4/import';
 import type {BackendResult,FanoutBackend,FanoutInput} from './backends/types';
 
 const enabled=!!process.env.S4_TEST_STATE;
@@ -155,5 +157,46 @@ describe.skipIf(!enabled)('WP-A6 fan-out run against the real ledger',()=>{
   expect(s.theses).toBe(3);
   expect(s.judgments.conflict).toBe(1);
   expect(Number((await admin.query(`select count(*) n from public.research_audit_log where user_id=$1 and action='fanout.judgment_conflict'`,[actor.userId])).rows[0].n)).toBe(1);
+ });
+
+ it('judges an S4 controlled copy (imported through the real candidate path) with the rule backend only, never sending it to an external model',async()=>{
+  const fresh=new Date(Date.now()+1).toISOString();const sinceIso=fresh;
+  const pack=testPack(actor.userId,{raw:'恒生电子宣布完成 UF3.0 上线（PA 导出）。'});
+  await admin.query('insert into research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[actor.userId,pack.binding.approvedPayloadHash,pack.binding]);
+  await importCandidate(actor,JSON.stringify(pack.pack));
+  const copyRow=(await admin.query(`select * from public.research_source_documents where user_id=$1 and metadata->>'s4_controlled_copy'='true' order by ingested_at desc limit 1`,[actor.userId])).rows[0];
+  expect(copyRow.source_type).toBe('MANUAL');
+  store.seed('research_source_documents',[sourceRow(copyRow.id,{source_type:'MANUAL',title:copyRow.title,raw_text:copyRow.raw_text,url:null,permission:copyRow.permission,trust_level:'LOW',metadata:{s4_controlled_copy:true},ingested_at:fresh,available_at:fresh})]);
+  const ds=fake('llm_deepseek'),jv=fake('jev');
+  const s=await runFanout({ctx,actor,backends:{rule:ruleBackend,deepseek:ds,jev:jv},escalate:null,sinceIso});
+  expect(s.sources).toBe(1);
+  expect(s.per_backend.rule.answers).toBe(s.theses*4);
+  expect(s.private_sources_skipped_external).toBe(1);
+  expect(ds.calls).toHaveLength(0);expect(jv.calls).toHaveLength(0);
+  const rows=await judgments(`source_id='${copyRow.id}'`);
+  expect(rows).toHaveLength(s.theses*4);
+  expect(rows.every((r:any)=>r.backend==='rule')).toBe(true);
+  // Replay sees the copy through the S4-visible path as well.
+  const replayed=(await runFanout({ctx,actor,backends:{rule:ruleBackend,deepseek:ds,jev:jv},escalate:null,sinceIso})).judgments;
+  expect(replayed).toEqual({written:0,duplicate:s.theses*4,conflict:0});
+ });
+
+ it('drops a controlled copy whose S4 binding was revoked, audits it, and keeps judging the other sources',async()=>{
+  const fresh=new Date(Date.now()+1).toISOString();const sinceIso=fresh;
+  const pack=testPack(actor.userId,{raw:'恒生电子签约新客户（PA 导出，随后撤销）。'});
+  await admin.query('insert into research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[actor.userId,pack.binding.approvedPayloadHash,pack.binding]);
+  await importCandidate(actor,JSON.stringify(pack.pack));
+  const copyRow=(await admin.query(`select * from public.research_source_documents where user_id=$1 and metadata->>'s4_controlled_copy'='true' order by ingested_at desc limit 1`,[actor.userId])).rows[0];
+  await admin.query('update research_s4_bindings set revoked=true where user_id=$1 and payload_hash=$2',[actor.userId,pack.binding.approvedPayloadHash]);
+  const pub=randomUUID();
+  await admin.query(`insert into public.research_source_documents(id,user_id,source_type,title,raw_text,content_hash) values($1,$2,'NEWS','t5','恒生电子发布新版本。',$3)`,[pub,actor.userId,'hash-'+pub]);
+  // The service-role listing (RLS bypassed) still sees the revoked copy; fan-out must re-check it under S4 authorization.
+  store.seed('research_source_documents',[sourceRow(copyRow.id,{source_type:'MANUAL',title:copyRow.title,raw_text:copyRow.raw_text,url:null,permission:'private',trust_level:'LOW',metadata:{s4_controlled_copy:true},ingested_at:fresh,available_at:fresh}),sourceRow(pub,{raw_text:'恒生电子发布新版本。',ingested_at:fresh,available_at:fresh})]);
+  const s=await runFanout({ctx,actor,backends:{rule:ruleBackend,deepseek:null,jev:null},escalate:null,sinceIso});
+  expect(s.sources).toBe(2);
+  expect(s.controlled_copies_skipped_unauthorized).toBe(1);
+  expect(await judgments(`source_id='${copyRow.id}'`)).toHaveLength(0);
+  expect((await judgments(`source_id='${pub}'`)).length).toBe(s.theses*4);
+  expect(Number((await admin.query(`select count(*) n from public.research_audit_log where user_id=$1 and action='fanout.source_unauthorized'`,[actor.userId])).rows[0].n)).toBe(1);
  });
 });
