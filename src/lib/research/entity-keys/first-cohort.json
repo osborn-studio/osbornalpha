@@ -20,7 +20,7 @@
    "keys": {
     "lei": "3003003LS77D1DRDDE25",
     "usci": "913300002539329145",
-    "cninfo_org_id": null,
+    "cninfo_org_id": "gssh0600570",
     "cik": null
    },
    "provenance": {
@@ -33,10 +33,14 @@
      "source": "gleif-api",
      "retrieved_at": "2026-09-25",
      "ref": "GLEIF registeredAs"
+    },
+    "cninfo_org_id": {
+     "source": "web:cninfo.com.cn",
+     "retrieved_at": "2026-09-26",
+     "ref": "http://www.cninfo.com.cn/new/information/topSearch/query keyWord=600570"
     }
    },
    "missing": [
-    "cninfo_org_id",
     "cik"
    ],
    "securities": [
@@ -92,7 +96,7 @@
    "keys": {
     "lei": "300300TIQA4R0NPLQE78",
     "usci": "9133000070337747XE",
-    "cninfo_org_id": null,
+    "cninfo_org_id": "9900008416",
     "cik": null
    },
    "provenance": {
@@ -105,10 +109,14 @@
      "source": "gleif-api",
      "retrieved_at": "2026-09-25",
      "ref": "GLEIF registeredAs"
+    },
+    "cninfo_org_id": {
+     "source": "web:cninfo.com.cn",
+     "retrieved_at": "2026-09-26",
+     "ref": "http://www.cninfo.com.cn/new/information/topSearch/query keyWord=300033"
     }
    },
    "missing": [
-    "cninfo_org_id",
     "cik"
    ],
    "securities": [
@@ -164,7 +172,7 @@
    "keys": {
     "lei": "836800ZFB0ZEK3KKW487",
     "usci": "913100007714584745",
-    "cninfo_org_id": null,
+    "cninfo_org_id": "9900010488",
     "cik": null
    },
    "provenance": {
@@ -177,10 +185,14 @@
      "source": "gleif-api",
      "retrieved_at": "2026-09-25",
      "ref": "GLEIF registeredAs"
+    },
+    "cninfo_org_id": {
+     "source": "web:cninfo.com.cn",
+     "retrieved_at": "2026-09-26",
+     "ref": "http://www.cninfo.com.cn/new/information/topSearch/query keyWord=300059"
     }
    },
    "missing": [
-    "cninfo_org_id",
     "cik"
    ],
    "securities": [
@@ -236,7 +248,7 @@
    "keys": {
     "lei": "836800A7FZPWZAQNXG69",
     "usci": "91440300708447860Y",
-    "cninfo_org_id": null,
+    "cninfo_org_id": "gssh0600446",
     "cik": null
    },
    "provenance": {
@@ -249,10 +261,14 @@
      "source": "gleif-api",
      "retrieved_at": "2026-09-25",
      "ref": "GLEIF registeredAs"
+    },
+    "cninfo_org_id": {
+     "source": "web:cninfo.com.cn",
+     "retrieved_at": "2026-09-26",
+     "ref": "http://www.cninfo.com.cn/new/information/topSearch/query keyWord=600446"
     }
    },
    "missing": [
-    "cninfo_org_id",
     "cik"
    ],
    "securities": [
@@ -308,7 +324,7 @@
    "keys": {
     "lei": "655600Z0N7U1P3WRI630",
     "usci": "91350000260188521B",
-    "cninfo_org_id": null,
+    "cninfo_org_id": "9900023072",
     "cik": null
    },
    "provenance": {
@@ -321,10 +337,14 @@
      "source": "gleif-api",
      "retrieved_at": "2026-09-25",
      "ref": "GLEIF registeredAs"
+    },
+    "cninfo_org_id": {
+     "source": "web:cninfo.com.cn",
+     "retrieved_at": "2026-09-26",
+     "ref": "http://www.cninfo.com.cn/new/information/topSearch/query keyWord=603383"
     }
    },
    "missing": [
-    "cninfo_org_id",
     "cik"
    ],
    "securities": [
@@ -380,7 +400,7 @@
    "keys": {
     "lei": null,
     "usci": "91440300797975760B",
-    "cninfo_org_id": null,
+    "cninfo_org_id": "9900022732",
     "cik": null
    },
    "provenance": {
@@ -388,11 +408,15 @@
      "source": "web:qcc.com",
      "retrieved_at": "2026-09-25",
      "ref": "https://www.qcc.com/firm/4f431b3395e623d84c45908d0d5edc76.html"
+    },
+    "cninfo_org_id": {
+     "source": "web:cninfo.com.cn",
+     "retrieved_at": "2026-09-26",
+     "ref": "http://www.cninfo.com.cn/new/information/topSearch/query keyWord=688318"
     }
    },
    "missing": [
     "lei",
-    "cninfo_org_id",
     "cik"
    ],
    "securities": [
@@ -447,7 +471,7 @@
    "keys": {
     "lei": null,
     "usci": "91440300736295868L",
-    "cninfo_org_id": null,
+    "cninfo_org_id": "9900022198",
     "cik": null
    },
    "provenance": {
@@ -455,11 +479,15 @@
      "source": "web:tianyancha.com",
      "retrieved_at": "2026-09-25",
      "ref": "https://www.tianyancha.com/company/3444863781"
+    },
+    "cninfo_org_id": {
+     "source": "web:cninfo.com.cn",
+     "retrieved_at": "2026-09-26",
+     "ref": "http://www.cninfo.com.cn/new/information/topSearch/query keyWord=300348"
     }
    },
    "missing": [
     "lei",
-    "cninfo_org_id",
     "cik"
    ],
    "securities": [
@@ -515,7 +543,7 @@
    "keys": {
     "lei": null,
     "usci": "911101087921006070",
-    "cninfo_org_id": null,
+    "cninfo_org_id": "9900034352",
     "cik": null
    },
    "provenance": {
@@ -523,11 +551,15 @@
      "source": "web:qcc.com",
      "retrieved_at": "2026-09-25",
      "ref": "https://www.qcc.com/firm/3d6ebd0fcf6d2fbc1b20315745c837f8.html"
+    },
+    "cninfo_org_id": {
+     "source": "web:cninfo.com.cn",
+     "retrieved_at": "2026-09-26",
+     "ref": "http://www.cninfo.com.cn/new/information/topSearch/query keyWord=300674"
     }
    },
    "missing": [
     "lei",
-    "cninfo_org_id",
     "cik"
    ],
    "securities": [
@@ -582,7 +614,7 @@
    "keys": {
     "lei": null,
     "usci": "911101086976555404",
-    "cninfo_org_id": null,
+    "cninfo_org_id": "9900038942",
     "cik": null
    },
    "provenance": {
@@ -590,11 +622,15 @@
      "source": "web:qianzhan.com",
      "retrieved_at": "2026-09-25",
      "ref": "https://stock.qianzhan.com/hs/gongsixinxi_002987.SZ.html"
+    },
+    "cninfo_org_id": {
+     "source": "web:cninfo.com.cn",
+     "retrieved_at": "2026-09-26",
+     "ref": "http://www.cninfo.com.cn/new/information/topSearch/query keyWord=002987"
     }
    },
    "missing": [
     "lei",
-    "cninfo_org_id",
     "cik"
    ],
    "securities": [
@@ -649,7 +685,7 @@
    "keys": {
     "lei": "655600PURKEB2ZMVS763",
     "usci": "913100006075916282",
-    "cninfo_org_id": null,
+    "cninfo_org_id": "9900031487",
     "cik": null
    },
    "provenance": {
@@ -662,10 +698,14 @@
      "source": "gleif-api",
      "retrieved_at": "2026-09-25",
      "ref": "GLEIF registeredAs"
+    },
+    "cninfo_org_id": {
+     "source": "web:cninfo.com.cn",
+     "retrieved_at": "2026-09-26",
+     "ref": "http://www.cninfo.com.cn/new/information/topSearch/query keyWord=688590"
     }
    },
    "missing": [
-    "cninfo_org_id",
     "cik"
    ],
    "securities": [
