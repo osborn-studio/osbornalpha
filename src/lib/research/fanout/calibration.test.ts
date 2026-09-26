@@ -1,6 +1,7 @@
 import {describe,expect,it} from 'vitest';
 import type {ReportRow} from './report';
 import {applyIsotonic,crossFittedEce,isotonicFit,wilson} from './calibration';
+import {QUESTION_SET_VERSION} from './questions';
 
 const row=(over:Partial<ReportRow>):ReportRow=>({source_id:'s1',backend:'jev',question_id:'Q2',selected:'support',confidence:0.8,abstained:false,latency_ms:100,cost_micros:10,distribution:{support:0.8,weaken:0.2},label:'support',...over});
 
@@ -306,5 +307,39 @@ describe('Codex round 5 regressions',()=>{
   expect(p.status).toBe('proposed');
   expect(p.metrics.recall).toBe(1);
   expect(classMetrics(rows)[0]!.questions[0]!.ece_before).not.toBeNull();
+ });
+});
+
+describe('Codex round 7 regressions',()=>{
+ it('re-evaluates follow-up proposals under the proposed Q1 gate, not the historical one',()=>{
+  const rows:ReportRow[]=[];
+  // Q1: 40 relevant sources at 0.9, 20 irrelevant at 0.65 → proposal {irrelevant_below:0.8, relevant_above:0.85} (ties keep the higher pair).
+  for(let i=0;i<60;i++){
+   const p=i<40?0.9:0.65;
+   rows.push(row({source_id:`s${i}`,question_id:'Q1',confidence:null,distribution:{true:p,false:1-p},selected:'true',abstained:false,label:i<40?'true':'false'}));
+   // Q2 was open under the historical gate for every source, but the proposed gate closes the 0.65 ones.
+   rows.push(row({source_id:`s${i}`,question_id:'Q2',confidence:0.9,selected:'support',label:'support',gate_open:true,gate_p_true:p}));
+  }
+  const proposals=proposeThresholds(rows);
+  expect(proposals.find(p=>p.question_id==='Q1')?.proposed).toEqual({irrelevant_below:0.8,relevant_above:0.85});
+  const q2p=proposals.find(p=>p.question_id==='Q2')!;
+  expect(q2p.status).toBe('proposed');
+  expect(q2p.metrics.coverage).toBeCloseTo(40/60,6);
+  expect(q2p.metrics.gated_by_proposed_q1).toBe(20);
+ });
+ it('partitions rows by question-set version and backend model before calibrating',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<40;i++){
+   rows.push(row({source_id:`old${i}`,question_id:'Q2',confidence:0.5,label:'weaken',question_set_version:'v0.9',backend_model:'m1'}));
+   rows.push(row({source_id:`m1_${i}`,question_id:'Q2',confidence:0.5,label:'weaken',question_set_version:QUESTION_SET_VERSION,backend_model:'m1'}));
+   rows.push(row({source_id:`cur${i}`,question_id:'Q2',confidence:0.9,label:'support',question_set_version:QUESTION_SET_VERSION,backend_model:'m2'}));
+  }
+  const a=buildCalibrationArtifact({rows,since:null,generatedAt:'2026-09-26T00:00:00.000Z',baseline:null});
+  // Only the current question set and, per backend, the most recent model are calibrated.
+  expect(a.rows).toBe(40);
+  expect(a.excluded).toEqual([{question_set_version:'v0.9',backend:'jev',backend_model:'m1',rows:40},{question_set_version:QUESTION_SET_VERSION,backend:'jev',backend_model:'m1',rows:40}]);
+  expect(a.metrics[0]!.backend_model).toBe('m2');
+  expect(a.metrics[0]!.questions[0]).toMatchObject({question_id:'Q2',n:40,accuracy:1});
+  expect(renderCalibrationMarkdown(a)).toContain('v0.9');
  });
 });

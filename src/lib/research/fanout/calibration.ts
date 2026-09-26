@@ -133,7 +133,7 @@ export interface QuestionMetrics {
   decided: number; accuracy: number | null; abstain_rate: number;
   ece_before: number | null; ece_after: number | null; p50_latency_ms: number | null; p95_latency_ms: number | null; cost_micros_per_1k: number;
 }
-export interface BackendMetrics { backend: string; labels: number; important_recall: Rate; false_support: Rate; questions: QuestionMetrics[] }
+export interface BackendMetrics { backend: string; backend_model?: string | null; labels: number; important_recall: Rate; false_support: Rate; questions: QuestionMetrics[] }
 
 const rate = (k: number, n: number): Rate => ({ k, n, rate: n === 0 ? null : round6(k / n), ...wilson(k, n) });
 
@@ -150,8 +150,9 @@ export function classMetrics(rows: ReportRow[]): BackendMetrics[] {
       return { question_id: m.question_id, n: m.n, labeled: m.labeled, decided: qRows.filter(r => r.label !== null && !r.abstained).length, accuracy: m.accuracy, abstain_rate: round6(m.abstain_rate),
         ece_before: e.before, ece_after: e.after, p50_latency_ms: m.p50_latency_ms, p95_latency_ms: m.p95_latency_ms, cost_micros_per_1k: m.cost_micros_per_1k };
     });
+    const models = [...new Set(mine.map(r => r.backend_model ?? null))];
     return {
-      backend, labels: dedupeMaterialLevel(mine).filter(r => r.label !== null).length,
+      backend, backend_model: models.length === 1 ? models[0] : null, labels: dedupeMaterialLevel(mine).filter(r => r.label !== null).length,
       important_recall: rate(q1True.filter(r => !r.abstained && r.selected === 'true').length, q1True.length),
       false_support: rate(q2Decided.filter(r => r.selected === 'support' && r.label !== 'support').length, q2Decided.length),
       questions,
@@ -176,11 +177,31 @@ const pTrue = (r: ReportRow): number | null => {
 };
 const argmax = (d: Record<string, number>) => Object.entries(d).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 
+/**
+ * Whether a follow-up row's gate is open once the Q1 proposal is applied: its Q1 P(true) must clear
+ * the proposed `relevant_above`. Without a Q1 proposal or a recorded Q1 score, the historical gate stands.
+ */
+const gateOpenUnder = (r: ReportRow, q1: { relevant_above: number } | null): boolean => {
+  if (q1 && typeof r.gate_p_true === 'number') return r.gate_p_true > q1.relevant_above;
+  return r.gate_open !== false;
+};
+
 export function proposeThresholds(rows: ReportRow[]): ThresholdProposal[] {
   const jev = rows.filter(r => r.backend === 'jev');
   const pool = jev.length > 0 ? jev : rows;
   const backendUsed = jev.length > 0 ? 'jev' : rows.length ? 'all' : null;
-  return QUESTION_IDS.map((q): ThresholdProposal => {
+  // Q1 first: its proposal re-gates the follow-ups, so their metrics describe the thresholds applied together.
+  let q1Proposed: { relevant_above: number } | null = null;
+  const ordered = [...QUESTION_IDS].sort((a, b) => (a === 'Q1' ? -1 : b === 'Q1' ? 1 : 0));
+  const byQuestion = new Map<QuestionId, ThresholdProposal>();
+  for (const q of ordered) {
+    const proposal = proposeOne(q);
+    if (q === 'Q1' && proposal.proposed && typeof proposal.proposed.relevant_above === 'number') q1Proposed = { relevant_above: proposal.proposed.relevant_above };
+    byQuestion.set(q, proposal);
+  }
+  return QUESTION_IDS.map(q => byQuestion.get(q)!);
+
+  function proposeOne(q: QuestionId): ThresholdProposal {
     const labeled = dedupeMaterialLevel(pool).filter(r => r.question_id === q && r.label !== null);
     const current = { ...(THRESHOLDS as Record<string, Record<string, number | string>>)[q] } as Record<string, number | string>;
     const base = { question_id: q, backend_used: backendUsed, labeled: labeled.length, current };
@@ -210,19 +231,23 @@ export function proposeThresholds(rows: ReportRow[]): ThresholdProposal[] {
         metrics: { recall: round6(best.recall), abstain_rate: round6(best.abstain), precision: round6(best.precision) } };
     }
     if (q === 'Q5') {
-      // Q5 is thesis-gated too: closed rows are abstentions at every threshold.
-      const open = labeled.filter(r => r.gate_open !== false);
+      // Q5 is thesis-gated too: rows closed under the proposed Q1 gate are abstentions at every threshold.
+      const open = labeled.filter(r => gateOpenUnder(r, q1Proposed));
+      const gated = labeled.length - open.length;
       const pts = open.map(r => ({ p: pTrue(r), t: r.label === 'true' })).filter((x): x is { p: number; t: boolean } => x.p !== null);
       if (pts.length < MIN_LABELS) return { ...base, status: 'insufficient_labels', proposed: null, metrics: {} };
       const abstainRate = (labeled.length - pts.length) / labeled.length;
       let best: { t: number; acc: number } | null = null;
       for (const t of grid(0.2, 0.8, 0.05)) { const acc = pts.filter(x => (x.p >= t) === x.t).length / labeled.length; if (!best || acc > best.acc) best = { t, acc }; }
-      return { ...base, status: abstainRate <= 0.3 ? 'proposed' : 'infeasible', proposed: abstainRate <= 0.3 ? { retelling_below: best!.t } : null, metrics: { accuracy: round6(best!.acc), abstain_rate: round6(abstainRate) } };
+      return { ...base, status: abstainRate <= 0.3 ? 'proposed' : 'infeasible', proposed: abstainRate <= 0.3 ? { retelling_below: best!.t } : null, metrics: { accuracy: round6(best!.acc), abstain_rate: round6(abstainRate), gated_by_proposed_q1: gated } };
     }
     // Choice questions: a minimum confidence.
     // Rows closed by the relevance gate (Q1 said "not relevant") can never be decided by this
     // question's threshold: they count as unavoidable abstentions, like score-less rows.
-    const pts = labeled.filter(r => r.gate_open !== false).map(r => ({ c: r.confidence, sel: argmax(r.distribution ?? {}) ?? r.selected, label: r.label as string })).filter((x): x is { c: number; sel: string; label: string } => typeof x.c === 'number');
+    // The gate is evaluated under the proposed Q1 thresholds, so the proposals describe one runtime.
+    const openRows = labeled.filter(r => gateOpenUnder(r, q1Proposed));
+    const gated = labeled.length - openRows.length;
+    const pts = openRows.map(r => ({ c: r.confidence, sel: argmax(r.distribution ?? {}) ?? r.selected, label: r.label as string })).filter((x): x is { c: number; sel: string; label: string } => typeof x.c === 'number');
     if (pts.length < MIN_LABELS) return { ...base, status: 'insufficient_labels', proposed: null, metrics: {} };
     const unscored = labeled.length - pts.length;
     if (q === 'Q2') {
@@ -241,7 +266,7 @@ export function proposeThresholds(rows: ReportRow[]): ThresholdProposal[] {
       }
       if (!best) return { ...base, status: 'infeasible', proposed: null, metrics: {} };
       return { ...base, status: best.feasible ? 'proposed' : 'infeasible', proposed: best.feasible ? { min_confidence: best.t } : null,
-        metrics: { coverage: round6(best.coverage), false_support_rate: round6(best.fs), accuracy: round6(best.acc) } };
+        metrics: { coverage: round6(best.coverage), false_support_rate: round6(best.fs), accuracy: round6(best.acc), gated_by_proposed_q1: gated } };
     }
     // Q3/Q4 never abstain at runtime: below the threshold `decide()` answers the fallback option,
     // so the evaluated classifier is "argmax above t, fallback below t" and accuracy covers every row.
@@ -259,8 +284,8 @@ export function proposeThresholds(rows: ReportRow[]): ThresholdProposal[] {
     }
     if (!bestQ) return { ...base, status: 'infeasible', proposed: null, metrics: {} };
     return { ...base, status: feasible ? 'proposed' : 'infeasible', proposed: feasible ? { min_confidence: bestQ.t } : null,
-      metrics: { accuracy: round6(bestQ.acc), fallback_rate: round6(bestQ.fallback_rate), abstain_rate: round6(abstainRate) } };
-  });
+      metrics: { accuracy: round6(bestQ.acc), fallback_rate: round6(bestQ.fallback_rate), abstain_rate: round6(abstainRate), ...(q === 'Q4' ? { gated_by_proposed_q1: gated } : {}) } };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -339,9 +364,12 @@ import path from 'node:path';
 import { QUESTION_SET_VERSION } from './questions';
 
 export interface CalibrationFit { backend: string; question_id: string; labeled: number; segments: IsotonicSegment[] }
+export interface ExcludedPartition { question_set_version: string | null; backend: string; backend_model: string | null; rows: number }
 export interface CalibrationArtifact {
   schema_name: 'alpha-calibration-report'; schema_version: '1.0'; question_set_version: string;
   generated_at: string; since: string | null; rows: number; labeled: number;
+  /** Judgments of other question-set versions or superseded backend models, left out of the calibration. */
+  excluded: ExcludedPartition[];
   metrics: BackendMetrics[]; fits: CalibrationFit[]; proposals: ThresholdProposal[]; stop_rules: StopVerdict[]; baseline_generated_at: string | null;
 }
 
@@ -359,12 +387,33 @@ export function calibrationFits(rows: ReportRow[]): CalibrationFit[] {
   return out;
 }
 
+/**
+ * One classifier per report: only the current question-set version, and per backend only the model
+ * seen most recently (rows arrive in created_at order). Everything else is reported as excluded.
+ */
+export function partitionRows(rows: ReportRow[]): { kept: ReportRow[]; excluded: ExcludedPartition[] } {
+  const current = rows.filter(r => (r.question_set_version ?? QUESTION_SET_VERSION) === QUESTION_SET_VERSION);
+  const latestModel = new Map<string, string | null>();
+  for (const r of current) latestModel.set(r.backend, r.backend_model ?? null);
+  const kept: ReportRow[] = [];
+  const counts = new Map<string, ExcludedPartition>();
+  for (const r of rows) {
+    const version = r.question_set_version ?? QUESTION_SET_VERSION, model = r.backend_model ?? null;
+    if (version === QUESTION_SET_VERSION && model === latestModel.get(r.backend)) { kept.push(r); continue; }
+    const key = `${version}|${r.backend}|${model}`;
+    const e = counts.get(key) ?? { question_set_version: version, backend: r.backend, backend_model: model, rows: 0 };
+    e.rows++; counts.set(key, e);
+  }
+  return { kept, excluded: [...counts.values()] };
+}
+
 export function buildCalibrationArtifact(input: { rows: ReportRow[]; since: string | null; generatedAt: string; baseline: CalibrationArtifact | null }): CalibrationArtifact {
-  const metrics = classMetrics(input.rows);
+  const { kept, excluded } = partitionRows(input.rows);
+  const metrics = classMetrics(kept);
   return {
     schema_name: 'alpha-calibration-report', schema_version: '1.0', question_set_version: QUESTION_SET_VERSION,
-    generated_at: input.generatedAt, since: input.since, rows: input.rows.length, labeled: input.rows.filter(r => r.label !== null).length,
-    metrics, fits: calibrationFits(input.rows), proposals: proposeThresholds(input.rows), stop_rules: evaluateStopRules(metrics, input.baseline ? { metrics: input.baseline.metrics } : undefined),
+    generated_at: input.generatedAt, since: input.since, rows: kept.length, labeled: kept.filter(r => r.label !== null).length, excluded,
+    metrics, fits: calibrationFits(kept), proposals: proposeThresholds(kept), stop_rules: evaluateStopRules(metrics, input.baseline ? { metrics: input.baseline.metrics } : undefined),
     baseline_generated_at: input.baseline?.generated_at ?? null,
   };
 }
@@ -373,9 +422,15 @@ const f = (v: number | null | undefined, d = 3) => (v === null || v === undefine
 const ci = (r: Rate) => (r.rate === null ? '—' : `${f(r.rate)} [${f(r.low)}, ${f(r.high)}] (k=${r.k}, n=${r.n})`);
 
 export function renderCalibrationMarkdown(a: CalibrationArtifact): string {
-  const lines = [`# 校准重拟报告 ${a.generated_at.slice(0, 10)}`, '', `问题集 ${a.question_set_version}；判断 ${a.rows} 条，其中有标签 ${a.labeled} 条${a.since ? `；起自 ${a.since}` : ''}${a.baseline_generated_at ? `；基线 ${a.baseline_generated_at}` : ''}。`, '', '## 类① 指标', ''];
+  const lines = [`# 校准重拟报告 ${a.generated_at.slice(0, 10)}`, '', `问题集 ${a.question_set_version}；判断 ${a.rows} 条，其中有标签 ${a.labeled} 条${a.since ? `；起自 ${a.since}` : ''}${a.baseline_generated_at ? `；基线 ${a.baseline_generated_at}` : ''}。`, ''];
+  if (a.excluded.length) {
+    lines.push('未纳入（其它问题集版本或已被替换的模型）：', '');
+    for (const e of a.excluded) lines.push(`- ${e.question_set_version ?? '未知版本'} / ${e.backend} / ${e.backend_model ?? '未知模型'}：${e.rows} 条`);
+    lines.push('');
+  }
+  lines.push('## 类① 指标', '');
   for (const m of a.metrics) {
-    lines.push(`### ${m.backend}（标签 ${m.labels}）`, '', `- important_recall（Q1）：${ci(m.important_recall)}`, `- false_support（Q2）：${ci(m.false_support)}`, '',
+    lines.push(`### ${m.backend}${m.backend_model ? ` · ${m.backend_model}` : ''}（标签 ${m.labels}）`, '', `- important_recall（Q1）：${ci(m.important_recall)}`, `- false_support（Q2）：${ci(m.false_support)}`, '',
       '| question | n | labeled | accuracy | abstain | ECE before | ECE after | p50 ms | p95 ms | µ$/1k |', '|---|---|---|---|---|---|---|---|---|---|');
     for (const q of m.questions) lines.push(`| ${q.question_id} | ${q.n} | ${q.labeled} | ${f(q.accuracy)} | ${f(q.abstain_rate)} | ${f(q.ece_before)} | ${f(q.ece_after)} | ${q.p50_latency_ms ?? '—'} | ${q.p95_latency_ms ?? '—'} | ${q.cost_micros_per_1k} |`);
     lines.push('');
@@ -385,7 +440,7 @@ export function renderCalibrationMarkdown(a: CalibrationArtifact): string {
   if (a.fits.length === 0) lines.push(`| — | — | — | 无问题达到 ${MIN_LABELS} 条标签 |`);
   lines.push('', '## 阈值重拟', '', '| question | 标签 | 状态 | 当前 | 提议 | 指标 |', '|---|---|---|---|---|---|');
   for (const p of a.proposals) lines.push(`| ${p.question_id} | ${p.labeled} | ${p.status} | ${JSON.stringify(p.current)} | ${p.proposed ? JSON.stringify(p.proposed) : '—'} | ${Object.keys(p.metrics).length ? JSON.stringify(p.metrics) : '—'} |`);
-  lines.push('', '应用方式：人工修改 `src/lib/research/fanout/questions.ts` 的 `THRESHOLDS` 并提升 `question_set_version`，在冻结集上回归后提交。', '', '## 停止 / 换后端', '', '| 规则 | 触发 | 状态 | 证据 |', '|---|---|---|---|');
+  lines.push('', 'Q2/Q4/Q5 的指标按提议的 Q1 门槛重新判定相关性（`gated_by_proposed_q1` 为因此关闭的行数），因此各提议应一起应用。', '应用方式：人工修改 `src/lib/research/fanout/questions.ts` 的 `THRESHOLDS` 并提升 `question_set_version`，在冻结集上回归后提交。', '', '## 停止 / 换后端', '', '| 规则 | 触发 | 状态 | 证据 |', '|---|---|---|---|');
   for (const v of a.stop_rules) lines.push(`| ${v.rule} | ${v.triggered ? '是' : '否'} | ${v.status} | ${v.evidence} |`);
   return `${lines.join('\n')}\n`;
 }

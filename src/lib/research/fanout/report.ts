@@ -21,6 +21,11 @@ export interface ReportRow {
    * threshold is; `null`/absent means unknown (treated as open).
    */
   gate_open?: boolean | null;
+  /** P(true) of that same Q1 judgment, so proposals can re-evaluate the gate under new Q1 thresholds. */
+  gate_p_true?: number | null;
+  /** Ledger versions of the judgment; absent means unknown (treated as current). */
+  question_set_version?: string | null;
+  backend_model?: string | null;
 }
 
 export interface ReportMetric {

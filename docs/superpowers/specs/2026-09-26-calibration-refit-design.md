@@ -18,8 +18,10 @@
    - Q3/Q4：`min_confidence` 网格，约束弃权 ≤ 30%，取准确率最高。
    - Q5：`retelling_below` 网格，取准确率最高。
    - 输出与当前 `THRESHOLDS` 并列，附 n 与区间；应用阈值 = 人工修改 `questions.ts` 并提交（问题集版本化，§6.2）。
+   - 门槛联动：Q2/Q4/Q5 是论点门控问题，行上带同一快照 Q1 的 `gate_open` 与 `gate_p_true`；提议时先定 Q1，再以「Q1 P(true) > 提议的 relevant_above」重新判定每行门是否开启，关闭的行计为不可避免的弃权（指标含 `gated_by_proposed_q1`）。因此各问提议描述的是同一套运行时，须一起应用。
 6. 停止/换后端规则（§10.3）按后端逐条给结论 + 证据：召回 < 0.85 或 false-support > 8% → `jev_q3q4_only`；rule 或 DeepSeek 与 jev 准确率差 ≤ 3 pt 且弃权更少 → `do_not_introduce_jev`；标签 ≥ 300 且 local_probe ≥ jev − 2 pt → `switch_local_probe`；提供 `--baseline` 上次工件时，任一问准确率变动 > 5 pt → `lock_version_recalibrate`。样本不足（标签 < 30）→ `insufficient_evidence`，不下结论。
 7. 每季度重跑同一脚本即「重拟」；工件含 `question_set_version`、`generated_at`、`since`、行数与标签数。
+8. 分区：只校准当前 `QUESTION_SET_VERSION` 的判断，且每后端只取最近出现的 `backend_model`（台账按 created_at 排序）；其余版本/模型的行数记入工件 `excluded` 并在报告开头列出，不与当前分类器混算，基线比较因此只比较同一版本。
 
 ## 交付
 
