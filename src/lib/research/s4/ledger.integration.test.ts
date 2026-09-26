@@ -78,6 +78,16 @@ describe.skipIf(!enabled)('WP-A3 judgment ledger on real PostgreSQL',()=>{
   expect(await audits('ledger.judgment',first.id)).toBe(1);
  });
 
+ it('stores the normalized five-field snapshot so retries with extra keys stay idempotent',async()=>{
+  const noisy=judgment({question_id:'Q5',snapshot:{source_id:sourceId,source_version:'1',thesis_id:thesisId,thesis_version:'1',entity_table_version:'2026-09-25',fetched_by:'collector-7'} as any});
+  const first=await recordJudgment(actor,noisy);
+  expect(first.duplicate).toBe(false);
+  const stored=(await admin.query('select snapshot from public.research_judgments where user_id=$1 and id=$2',[actor.userId,first.id])).rows[0].snapshot;
+  expect(Object.keys(stored).sort()).toEqual(['entity_table_version','source_id','source_version','thesis_id','thesis_version']);
+  expect(await recordJudgment(actor,noisy)).toEqual({...first,duplicate:true});
+  expect(await recordJudgment(actor,judgment({question_id:'Q5'}))).toEqual({...first,duplicate:true});
+ });
+
  it('validates judgment inputs before touching the database',async()=>{
   const before=await count('research_judgments');
   await expect(recordJudgment(actor,judgment({backend:'oracle' as any}))).rejects.toThrow('invalid_schema');

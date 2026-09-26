@@ -33,11 +33,16 @@ export const isUuid = (v: unknown): v is string => typeof v === 'string' && UUID
 const text = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0 && v.length <= 256;
 
 /** sha256 of the canonical five-field snapshot. Extra keys are ignored. */
-export function snapshotId(snapshot: JudgmentSnapshot): string {
+/** The five addressed fields only; extra keys never reach the hash or the row. */
+export function normalizeSnapshot(snapshot: JudgmentSnapshot): JudgmentSnapshot {
   if (!isUuid(snapshot?.source_id) || !isUuid(snapshot?.thesis_id)) fail('invalid_schema');
   for (const k of ['source_version','thesis_version','entity_table_version'] as const) if (!text(snapshot[k])) fail('invalid_schema');
-  return digest({ source_id: snapshot.source_id, source_version: snapshot.source_version, thesis_id: snapshot.thesis_id,
-    thesis_version: snapshot.thesis_version, entity_table_version: snapshot.entity_table_version });
+  return { source_id: snapshot.source_id, source_version: snapshot.source_version, thesis_id: snapshot.thesis_id,
+    thesis_version: snapshot.thesis_version, entity_table_version: snapshot.entity_table_version };
+}
+
+export function snapshotId(snapshot: JudgmentSnapshot): string {
+  return digest(normalizeSnapshot(snapshot));
 }
 
 /** Content-addressed uuid (RFC 9562 v8) over the §5.4 key; same inputs → same id. */
@@ -72,8 +77,7 @@ const plainObject = (v: unknown): v is Record<string, unknown> =>
 
 /** Fields that define the judgment's content; runtime measurements are excluded. */
 function judgmentContent(input: JudgmentInput) {
-  return canonicalize({ snapshot: { source_id: input.snapshot.source_id, source_version: input.snapshot.source_version, thesis_id: input.snapshot.thesis_id,
-    thesis_version: input.snapshot.thesis_version, entity_table_version: input.snapshot.entity_table_version },
+  return canonicalize({ snapshot: normalizeSnapshot(input.snapshot),
     prompt_sha256: input.prompt_sha256 ?? null, distribution: input.distribution, selected: input.selected ?? null,
     confidence: input.confidence ?? null, abstained: input.abstained });
 }
@@ -120,7 +124,7 @@ export async function recordJudgment(actor: S4Actor, input: JudgmentInput): Prom
     await db.query(`insert into public.research_judgments(user_id,id,snapshot_id,snapshot,source_id,thesis_id,run_id,question_set_version,question_id,backend,backend_model,
       prompt_sha256,input_token_count,distribution,selected,confidence,abstained,latency_ms,cost_micros,created_at)
       values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
-      [actor.userId, id, snapshot_id, canonicalize(input.snapshot), input.snapshot.source_id, input.snapshot.thesis_id, input.run_id,
+      [actor.userId, id, snapshot_id, canonicalize(normalizeSnapshot(input.snapshot)), input.snapshot.source_id, input.snapshot.thesis_id, input.run_id,
        input.question_set_version, input.question_id, input.backend, input.backend_model, input.prompt_sha256 ?? null, input.input_token_count ?? null,
        canonicalize(input.distribution), input.selected ?? null, input.confidence ?? null, input.abstained, input.latency_ms ?? null, input.cost_micros ?? null, at]);
     await audit(db, actor, 'ledger.judgment', 'research_judgment', id, { snapshot_id, run_id: input.run_id, backend: input.backend, question_id: input.question_id }, at);
