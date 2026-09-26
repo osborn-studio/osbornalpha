@@ -326,3 +326,24 @@ describe('createThesis idempotency (WP-A11 submission_id)', () => {
     await expect(createThesis(ctx, { ...VALID_INPUT, submission_id: '5f4d3c2b-0000-4000-8000-000000000003' })).rejects.toThrow(/pillar/);
   });
 });
+
+describe('createThesis idempotency is atomic (Codex round 17)', () => {
+  it('two concurrent creates with the same submission_id yield one row and the same id', async () => {
+    const { ctx, store } = makeMockCtx() as unknown as { ctx: ResearchCtx; store: MockStore };
+    const input = { ...VALID_INPUT, submission_id: '5f4d3c2b-0000-4000-8000-00000000c0de', pillars: [{ text: 'p1', resolvable_by: 'r1' }] };
+    const [a, b] = await Promise.all([createThesis(ctx, input), createThesis(ctx, input)]);
+    expect(a.id).toBe(b.id);
+    expect(store.count('research_theses')).toBe(1);
+    // The id is derived from (user, submission_id): a third call later returns the same row without inserting.
+    const c = await createThesis(ctx, input);
+    expect(c.id).toBe(a.id);
+    expect(store.count('research_theses')).toBe(1);
+  });
+
+  it('the mock store enforces primary-key uniqueness like PostgreSQL (23505)', async () => {
+    const { ctx } = makeMockCtx() as unknown as { ctx: ResearchCtx };
+    await ctx.supabase.from('research_theses').insert({ id: 'x', user_id: ctx.userId, title: 't' });
+    const { error } = await ctx.supabase.from('research_theses').insert({ id: 'x', user_id: ctx.userId, title: 't2' });
+    expect(error).toMatchObject({ code: '23505' });
+  });
+});

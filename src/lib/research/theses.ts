@@ -10,6 +10,7 @@
  * into detail.source_document_ids and surfaced back as the typed field.
  */
 
+import { digest } from './ingest/pa-v1/json.js';
 import { audit, isUuid, type ResearchCtx } from './store';
 import {
   DEFAULT_HORIZON_WEEKS,
@@ -215,6 +216,17 @@ function extensionFields(input: CreateThesisInput): { opportunity_type: Opportun
  */
 const SUBMISSION_ID = /^[A-Za-z0-9_-]{8,64}$/;
 
+/**
+ * The thesis id for a submission: a content-addressed uuid (RFC 9562 v8) over (user, submission_id). The
+ * primary key then makes the idempotency atomic — two concurrent creates collide on the key and the loser
+ * returns the winner's row — with no schema change and no read-before-insert race.
+ */
+export function submissionThesisId(userId: string, submissionId: string): string {
+  const hex = digest({ user_id: userId, submission_id: submissionId });
+  const variant = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
 export async function createThesis(ctx: ResearchCtx, input: CreateThesisInput): Promise<Thesis> {
   if (input.submission_id === undefined) return insertThesis(ctx, input, null);
   if (typeof input.submission_id !== 'string' || !SUBMISSION_ID.test(input.submission_id)) {
@@ -223,16 +235,25 @@ export async function createThesis(ctx: ResearchCtx, input: CreateThesisInput): 
   if (!Array.isArray(input.pillars) || input.pillars.length === 0) {
     throw new ThesisError('submission_id requires at least one pillar (the id is stored in the pillar ids)', 422);
   }
-  const prefix = `${input.submission_id}:`;
-  // Idempotent create: the same submission already stored → return it, never insert again.
-  const existing = (await listTheses(ctx)).find((t) => (t.pillars ?? []).some((p) => typeof p.id === 'string' && p.id.startsWith(prefix)));
+  const id = submissionThesisId(ctx.userId, input.submission_id);
+  const existing = await getThesis(ctx, id);
   if (existing) return existing;
+  const prefix = `${input.submission_id}:`;
   const stamped: CreateThesisInput = { ...input, pillars: input.pillars.map((p, i) => ({ ...p, id: `${prefix}${i}` })) };
   delete (stamped as { submission_id?: string }).submission_id;
-  return insertThesis(ctx, stamped, null);
+  try {
+    return await insertThesis(ctx, stamped, null, id);
+  } catch (e) {
+    // Lost the race: the same submission was inserted concurrently. Its row is the answer.
+    if (e instanceof Error && (e as { code?: string }).code === '23505') {
+      const winner = await getThesis(ctx, id);
+      if (winner) return winner;
+    }
+    throw e;
+  }
 }
 
-async function insertThesis(ctx: ResearchCtx, input: CreateThesisInput, supersedes: string | null): Promise<Thesis> {
+async function insertThesis(ctx: ResearchCtx, input: CreateThesisInput, supersedes: string | null, fixedId?: string): Promise<Thesis> {
   if (typeof input.title !== 'string' || input.title.trim() === '') {
     throw new ThesisError('title is required', 422);
   }
@@ -246,7 +267,7 @@ async function insertThesis(ctx: ResearchCtx, input: CreateThesisInput, supersed
   }
   const ext = extensionFields(input);
 
-  const id = crypto.randomUUID();
+  const id = fixedId ?? crypto.randomUUID();
   const now = new Date().toISOString();
   const { error } = await ctx.supabase.from(TABLE).insert({
     id,
@@ -266,7 +287,7 @@ async function insertThesis(ctx: ResearchCtx, input: CreateThesisInput, supersed
     supersedes,
     kill_condition_revisions: [],
   });
-  if (error) throw new Error(error.message);
+  if (error) throw Object.assign(new Error(error.message), { code: (error as { code?: string }).code });
   await audit(ctx, 'thesis.create', id, {
     title: input.title.trim(),
     invalidation_conditions: invalidation.length,
