@@ -134,6 +134,8 @@ export async function judgeTriageItems(opts: JudgeTriageOptions): Promise<JudgeT
     const estimate = microsForTokens(estimateTokens(body), price);
     const average = calls === 0 ? 0 : out.spent_micros / calls;
     if (out.spent_micros + Math.max(estimate, average) > budget) { out.stopped = true; break; }
+    // What a failure costs: the estimate until Jev reports real usage, then the reported usage.
+    let charge = estimate;
     try {
       const res = await opts.fetch(JEV_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${opts.apiKey}` }, body, signal: AbortSignal.timeout(opts.timeoutMs ?? 60_000) });
       if (!res.ok) throw new Error(`jev ${res.status}`);
@@ -142,6 +144,7 @@ export async function judgeTriageItems(opts: JudgeTriageOptions): Promise<JudgeT
       if (!data || typeof data !== 'object' || !data.answers || typeof data.answers !== 'object' || Array.isArray(data.answers)) throw new Error('jev response has no answers');
       const tokens = (data.usage?.input_tokens ?? 0) + (data.usage?.output_tokens ?? 0);
       const cost = microsForTokens(tokens > 0 ? tokens : estimateTokens(body), price);
+      charge = cost;
       const parsed = parseTriageAnswers(opts.theses, data.answers);
       // Missing or malformed answers are not a judgment: fail so the item is retried, never cached as an abstention.
       if (!parsed.complete) throw new Error('jev response incomplete');
@@ -150,8 +153,8 @@ export async function judgeTriageItems(opts: JudgeTriageOptions): Promise<JudgeT
       out.spent_micros += cost;
     } catch (e) {
       out.errors.push({ item_id: item.item_id, error: e instanceof Error ? e.message : String(e) });
-      out.failed_charged_micros += estimate;
-      out.spent_micros += estimate;
+      out.failed_charged_micros += charge;
+      out.spent_micros += charge;
       calls++;
     }
   }

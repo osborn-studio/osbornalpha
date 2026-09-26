@@ -96,3 +96,14 @@ describe('Codex round 5 regression',()=>{
   expect(parseTriageAnswers([thesis('a')],{t0_TR1:noul(0.5),t0_TR2:noul(0.9),t0_TR3:noul(0.9)}).complete).toBe(true);
  });
 });
+
+describe('Codex round 6 regression',()=>{
+ it('charges the reported usage, not the estimate, when an incomplete response is rejected',async()=>{
+  const {fn}=fakeFetch([response({t0_TR1:noul(0.9)},{input_tokens:20000,output_tokens:0})]);
+  const out=await judgeTriageItems({items:[item(1)],theses:[thesis('a')],existing:[],fetch:fn,apiKey:'k'.repeat(20),maxCostUsd:1,now:()=>'2026-09-26T01:00:00.000Z'});
+  expect(out.errors).toEqual([{item_id:'cnt_1',error:'jev response incomplete'}]);
+  // 20 000 tokens at 45 µ$/1k = 900 µ$, far above the tiny estimate of the request body.
+  expect(out.failed_charged_micros).toBe(900);
+  expect(out.spent_micros).toBe(900);
+ });
+});
