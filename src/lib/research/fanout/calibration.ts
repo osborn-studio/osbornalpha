@@ -178,6 +178,18 @@ const pTrue = (r: ReportRow): number | null => {
   if (typeof r.distribution?.false === 'number') return 1 - r.distribution.false;
   return null;
 };
+/** Count of scores < v. */
+function lowerBound(sorted: { p: number }[], v: number): number {
+  let lo = 0, hi = sorted.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid]!.p < v) lo = mid + 1; else hi = mid; }
+  return lo;
+}
+/** Count of scores ≤ v. */
+function upperBound(sorted: { p: number }[], v: number): number {
+  let lo = 0, hi = sorted.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid]!.p <= v) lo = mid + 1; else hi = mid; }
+  return lo;
+}
 /**
  * Grid values plus two cut points inside every gap between adjacent distinct observed scores (at one
  * and two thirds), so an abstention band `[lo, hi]` can sit strictly inside a gap; plus the range ends.
@@ -192,7 +204,23 @@ function thresholdCandidates(scores: number[]): number[] {
   if (distinct.length) { out.add(round6(distinct[0]! / 2)); out.add(round6((distinct[distinct.length - 1]! + 1) / 2)); }
   return [...out].filter(v => v > 0 && v < 1).sort((a, b) => a - b);
 }
-const argmax = (d: Record<string, number>) => Object.entries(d).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+/**
+ * The option the runtime's argmax picked. decide() takes the first maximal key in the *original*
+ * distribution order, which JSONB storage does not preserve; the ledger's `selected` is that winner
+ * whenever the judgment cleared its threshold (Q2 decided, Q3/Q4 not on the fallback). Otherwise the
+ * maximum is recomputed and a tie is flagged as ambiguous (resolved alphabetically for determinism).
+ */
+function choiceWinner(r: ReportRow, q: QuestionId): { sel: string | null; ambiguous: boolean } {
+  const entries = Object.entries(r.distribution ?? {}).filter(([, v]) => typeof v === 'number');
+  if (entries.length === 0) return { sel: r.selected, ambiguous: false };
+  const max = Math.max(...entries.map(([, v]) => v));
+  const winners = entries.filter(([, v]) => v === max).map(([k]) => k).sort();
+  const t = (THRESHOLDS as Record<string, Record<string, unknown>>)[q] ?? {};
+  const decidedAboveThreshold = r.selected !== null && !r.abstained && typeof r.confidence === 'number'
+    && (q === 'Q2' || (typeof t.min_confidence === 'number' && r.confidence >= t.min_confidence));
+  if (decidedAboveThreshold && winners.includes(r.selected as string)) return { sel: r.selected, ambiguous: false };
+  return { sel: winners[0] ?? null, ambiguous: winners.length > 1 };
+}
 
 /**
  * Whether a follow-up row's gate is open once the Q1 proposal is applied: its Q1 P(true) must clear
@@ -234,11 +262,17 @@ export function proposeThresholds(rows: ReportRow[]): ThresholdProposal[] {
       // Candidates: the coarse grid plus the midpoints between adjacent observed scores (and the range
       // ends), so samples separable below 0.05 or between grid points are not declared infeasible.
       const candidates = thresholdCandidates(pts.map(x => x.p));
+      // Sorted scores with prefix counts of relevant labels: every pair is evaluated with two binary
+      // searches instead of a rescan, so the search is O(C² log n) rather than cubic in the sample.
+      const sorted = [...pts].sort((a, b) => a.p - b.p);
+      const prefixTrue = [0]; for (const x of sorted) prefixTrue.push(prefixTrue[prefixTrue.length - 1]! + (x.t ? 1 : 0));
+      const totalTrue = prefixTrue[sorted.length]!;
       for (const hi of candidates) for (const lo of candidates) {
         if (lo >= hi) continue;
-        const sel = pts.filter(x => x.p > hi), abst = pts.filter(x => x.p >= lo && x.p <= hi);
-        const recall = relevant ? sel.filter(x => x.t).length / relevant : 0, abstain = (abst.length + unscored) / all.length;
-        const precision = sel.length ? sel.filter(x => x.t).length / sel.length : 0;
+        const le = upperBound(sorted, hi), selN = sorted.length - le, selTrue = totalTrue - prefixTrue[le]!;
+        const abstN = le - lowerBound(sorted, lo);
+        const recall = relevant ? selTrue / relevant : 0, abstain = (abstN + unscored) / all.length;
+        const precision = selN ? selTrue / selN : 0;
         const feasible = recall >= 0.9 && abstain <= 0.3;
         const cand = { lo, hi, recall, abstain, precision, feasible };
         const better = !best ? true : feasible !== best.feasible ? feasible
@@ -267,7 +301,8 @@ export function proposeThresholds(rows: ReportRow[]): ThresholdProposal[] {
     // The gate is evaluated under the proposed Q1 thresholds, so the proposals describe one runtime.
     const openRows = labeled.filter(r => gateOpenUnder(r, q1Proposed));
     const gated = labeled.length - openRows.length;
-    const pts = openRows.map(r => ({ c: r.confidence, sel: argmax(r.distribution ?? {}) ?? r.selected, label: r.label as string })).filter((x): x is { c: number; sel: string; label: string } => typeof x.c === 'number');
+    let ambiguousTies = 0;
+    const pts = openRows.map(r => { const w = choiceWinner(r, q); if (w.ambiguous) ambiguousTies++; return { c: r.confidence, sel: w.sel, label: r.label as string }; }).filter((x): x is { c: number; sel: string; label: string } => typeof x.c === 'number' && x.sel !== null);
     if (pts.length < MIN_LABELS) return { ...base, status: 'insufficient_labels', proposed: null, metrics: {} };
     const unscored = labeled.length - pts.length;
     if (q === 'Q2') {
@@ -286,7 +321,7 @@ export function proposeThresholds(rows: ReportRow[]): ThresholdProposal[] {
       }
       if (!best) return { ...base, status: 'infeasible', proposed: null, metrics: {} };
       return { ...base, status: best.feasible ? 'proposed' : 'infeasible', proposed: best.feasible ? { min_confidence: best.t } : null,
-        metrics: { coverage: round6(best.coverage), false_support_rate: round6(best.fs), accuracy: round6(best.acc), gated_by_proposed_q1: gated } };
+        metrics: { coverage: round6(best.coverage), false_support_rate: round6(best.fs), accuracy: round6(best.acc), gated_by_proposed_q1: gated, ambiguous_ties: ambiguousTies } };
     }
     // Q3/Q4 never abstain at runtime: below the threshold `decide()` answers the fallback option,
     // so the evaluated classifier is "argmax above t, fallback below t" and accuracy covers every row.
@@ -304,7 +339,7 @@ export function proposeThresholds(rows: ReportRow[]): ThresholdProposal[] {
     }
     if (!bestQ) return { ...base, status: 'infeasible', proposed: null, metrics: {} };
     return { ...base, status: feasible ? 'proposed' : 'infeasible', proposed: feasible ? { min_confidence: bestQ.t } : null,
-      metrics: { accuracy: round6(bestQ.acc), fallback_rate: round6(bestQ.fallback_rate), abstain_rate: round6(abstainRate), ...(q === 'Q4' ? { gated_by_proposed_q1: gated } : {}) } };
+      metrics: { accuracy: round6(bestQ.acc), fallback_rate: round6(bestQ.fallback_rate), abstain_rate: round6(abstainRate), ambiguous_ties: ambiguousTies, ...(q === 'Q4' ? { gated_by_proposed_q1: gated } : {}) } };
   }
 }
 

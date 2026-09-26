@@ -380,3 +380,48 @@ describe('Codex round 9 regressions',()=>{
   expect(p.proposed!.relevant_above).toBeLessThan(0.08);
  });
 });
+
+describe('Codex round 10 regressions',()=>{
+ it('uses the ledger-recorded winner for tied choice distributions and counts unresolvable ties',()=>{
+  const rows:ReportRow[]=[];
+  // JSONB may reorder keys: `planned` first, but the runtime picked `completed` (first key at judgment time).
+  for(let i=0;i<40;i++)rows.push(row({source_id:`t${i}`,question_id:'Q4',confidence:0.9,selected:'completed',label:'completed',distribution:{planned:0.5,completed:0.5}}));
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q4')!;
+  expect(p.status).toBe('proposed');
+  expect(p.metrics.accuracy).toBe(1);
+  expect(p.metrics.ambiguous_ties).toBe(0);
+  // Below the current threshold the ledger holds the fallback, so a tie cannot be resolved: reported.
+  const low:ReportRow[]=[];
+  for(let i=0;i<40;i++)low.push(row({source_id:`l${i}`,question_id:'Q4',confidence:0.5,selected:'unknown',label:'completed',distribution:{planned:0.5,completed:0.5}}));
+  expect(proposeThresholds(low).find(x=>x.question_id==='Q4')!.metrics.ambiguous_ties).toBe(40);
+ });
+ it('searches Q1 thresholds in near-linear time and matches the brute-force answer',()=>{
+  const rows:ReportRow[]=[];
+  let seed=7;const rnd=()=>{seed=(seed*48271)%2147483647;return seed/2147483647;};
+  for(let i=0;i<3000;i++){const t=rnd()<0.5;const p=Math.round((t?0.4+0.6*rnd():0.6*rnd())*1e4)/1e4;rows.push(row({source_id:`q${i}`,question_id:'Q1',confidence:null,distribution:{true:p,false:1-p},selected:null,abstained:true,label:t?'true':'false'}));}
+  const started=Date.now();
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q1')!;
+  expect(Date.now()-started).toBeLessThan(4000);
+  expect(p.status).toBe('proposed');
+  // Brute force on a small subsample must agree exactly.
+  const small=rows.slice(0,60);
+  const fast=proposeThresholds(small).find(x=>x.question_id==='Q1')!;
+  expect(fast).toEqual(bruteForceQ1(small));
+ });
+});
+function bruteForceQ1(rows:ReportRow[]){
+  const pts=rows.map(r=>({p:r.distribution.true!,t:r.label==='true'}));
+  const scores=[...new Set(pts.map(x=>x.p))].sort((a,b)=>a-b);
+  const cands=new Set<number>();for(let v=0.05;v<=0.9501;v+=0.05)cands.add(Math.round(v*100)/100);
+  for(let i=0;i+1<scores.length;i++){const a=scores[i]!,b=scores[i+1]!;cands.add(Math.round((a+(b-a)/3)*1e6)/1e6);cands.add(Math.round((a+2*(b-a)/3)*1e6)/1e6);}
+  cands.add(Math.round(scores[0]!/2*1e6)/1e6);cands.add(Math.round((scores[scores.length-1]!+1)/2*1e6)/1e6);
+  const cs=[...cands].filter(v=>v>0&&v<1).sort((a,b)=>a-b);
+  const relevant=pts.filter(x=>x.t).length;let best:any=null;
+  for(const hi of cs)for(const lo of cs){if(lo>=hi)continue;const sel=pts.filter(x=>x.p>hi),abst=pts.filter(x=>x.p>=lo&&x.p<=hi);
+   const recall=sel.filter(x=>x.t).length/relevant,abstain=abst.length/pts.length,precision=sel.length?sel.filter(x=>x.t).length/sel.length:0,feasible=recall>=0.9&&abstain<=0.3;
+   const c={lo,hi,recall,abstain,precision,feasible};
+   const better=!best?true:feasible!==best.feasible?feasible:feasible?(precision>best.precision||(precision===best.precision&&(hi>best.hi||(hi===best.hi&&lo>best.lo)))):(recall>best.recall||(recall===best.recall&&abstain<best.abstain));
+   if(better)best=c;}
+  const r6=(v:number)=>Math.round(v*1e6)/1e6;
+  return {question_id:'Q1',backend_used:'jev',labeled:rows.length,current:{irrelevant_below:0.4,relevant_above:0.6},status:best.feasible?'proposed':'infeasible',proposed:best.feasible?{irrelevant_below:best.lo,relevant_above:best.hi}:null,metrics:{recall:r6(best.recall),abstain_rate:r6(best.abstain),precision:r6(best.precision)}};
+}
