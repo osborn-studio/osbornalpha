@@ -33,7 +33,7 @@ alter table public.research_theses
 ## 类型 / Types
 
 - `OpportunityType = 'B'|'C'|'other'`；`ThesisPillar {id, text, resolvable_by, deadline: string|null}`；`ThesisCatalyst {text, expected_date: string|null}`；`KillConditionRevision {index, old_text, new_text, reason, at}`。
-- `Thesis` 增加 `opportunity_type`、`pillars`、`catalysts`、`horizon_weeks`、`supersedes: string|null`、`kill_condition_revisions`（TS 上均为必填；`rowToThesis` 对旧行给默认值）。
+- `Thesis` 增加 `opportunity_type`、`pillars`、`catalysts`、`horizon_weeks`、`supersedes: string|null`、`kill_condition_revisions`（TS 上声明为可选，与 A1 的 Source 字段同一做法，保证既有 fixture 编译；`rowToThesis` 总是填入迁移默认值）。
 - `ThesisEventType` 增加 `'KILL_CONDITION_REVISED'`。
 
 ## 服务 / `theses.ts`
