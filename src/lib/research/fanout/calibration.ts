@@ -13,10 +13,17 @@ const round6 = (v: number) => Math.round(v * 1e6) / 1e6;
 
 /** Pool-adjacent-violators regression of hit rate on score; adjacent equal-p blocks are merged. */
 export function isotonicFit(points: IsotonicPoint[]): IsotonicFit {
-  const sorted = [...points].filter(p => Number.isFinite(p.score)).sort((a, b) => a.score - b.score);
+  // Equal scores are pooled into one weighted block first, so the fit cannot depend on input order.
+  const byScore = new Map<number, { sum: number; n: number }>();
+  for (const p of points) {
+    if (!Number.isFinite(p.score)) continue;
+    const b = byScore.get(p.score) ?? { sum: 0, n: 0 };
+    b.sum += p.hit; b.n += 1; byScore.set(p.score, b);
+  }
+  const sorted = [...byScore.entries()].sort((a, b) => a[0] - b[0]);
   const blocks: { sum: number; n: number; x_min: number; x_max: number }[] = [];
-  for (const p of sorted) {
-    blocks.push({ sum: p.hit, n: 1, x_min: p.score, x_max: p.score });
+  for (const [score, agg] of sorted) {
+    blocks.push({ sum: agg.sum, n: agg.n, x_min: score, x_max: score });
     while (blocks.length > 1) {
       const last = blocks[blocks.length - 1]!, prev = blocks[blocks.length - 2]!;
       if (prev.sum / prev.n <= last.sum / last.n) break;
@@ -63,6 +70,19 @@ export function wilson(k: number, n: number): { low: number | null; high: number
 export const MIN_LABELS = 30;
 const FOLDS = 5;
 
+const MATERIAL_LEVEL = new Set(['Q3']);
+/** Material-level questions are asked once per source: keep one judgment per (source, backend, question). */
+export function dedupeMaterialLevel(rows: ReportRow[]): ReportRow[] {
+  const seen = new Set<string>();
+  return rows.filter(r => {
+    if (!MATERIAL_LEVEL.has(r.question_id)) return true;
+    const k = `${r.source_id}|${r.backend}|${r.question_id}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
 function scoredPoints(rows: ReportRow[]): IsotonicPoint[] {
   const out: IsotonicPoint[] = [];
   for (const r of rows) {
@@ -84,7 +104,7 @@ function eceOfPoints(points: IsotonicPoint[]): number | null {
 
 /** ECE before and after isotonic calibration; `after` is 5-fold cross-fitted (folds by row order). */
 export function crossFittedEce(rows: ReportRow[]): { before: number | null; after: number | null; labeled: number } {
-  const points = scoredPoints(rows);
+  const points = scoredPoints(dedupeMaterialLevel(rows));
   const before = eceOfPoints(points);
   if (points.length < MIN_LABELS) return { before, after: null, labeled: points.length };
   const calibrated: IsotonicPoint[] = [];
@@ -153,7 +173,7 @@ export function proposeThresholds(rows: ReportRow[]): ThresholdProposal[] {
   const pool = jev.length > 0 ? jev : rows;
   const backendUsed = jev.length > 0 ? 'jev' : rows.length ? 'all' : null;
   return QUESTION_IDS.map((q): ThresholdProposal => {
-    const labeled = pool.filter(r => r.question_id === q && r.label !== null);
+    const labeled = dedupeMaterialLevel(pool).filter(r => r.question_id === q && r.label !== null);
     const current = { ...(THRESHOLDS as Record<string, Record<string, number | string>>)[q] } as Record<string, number | string>;
     const base = { question_id: q, backend_used: backendUsed, labeled: labeled.length, current };
     if (labeled.length < MIN_LABELS) return { ...base, status: 'insufficient_labels', proposed: null, metrics: {} };
@@ -185,22 +205,36 @@ export function proposeThresholds(rows: ReportRow[]): ThresholdProposal[] {
     }
     // Choice questions: a minimum confidence.
     const pts = labeled.map(r => ({ c: r.confidence, sel: argmax(r.distribution ?? {}) ?? r.selected, label: r.label as string })).filter((x): x is { c: number; sel: string; label: string } => typeof x.c === 'number');
-    let best: { t: number; coverage: number; fs: number; acc: number; feasible: boolean } | null = null;
-    for (const t of grid(0.3, 0.95, 0.05)) {
-      const decided = pts.filter(x => x.c >= t);
-      const coverage = decided.length / pts.length;
-      const fs = decided.length ? decided.filter(x => x.sel === 'support' && x.label !== 'support').length / decided.length : 0;
-      const acc = decided.length ? decided.filter(x => x.sel === x.label).length / decided.length : 0;
-      const feasible = q === 'Q2' ? fs <= 0.05 : 1 - coverage <= 0.3;
-      const cand = { t, coverage, fs, acc, feasible };
-      const better = !best ? true : feasible !== best.feasible ? feasible
+    if (q === 'Q2') {
+      let best: { t: number; coverage: number; fs: number; acc: number; feasible: boolean } | null = null;
+      for (const t of grid(0.3, 0.95, 0.05)) {
+        const decided = pts.filter(x => x.c >= t);
+        const coverage = decided.length / pts.length;
+        const fs = decided.length ? decided.filter(x => x.sel === 'support' && x.label !== 'support').length / decided.length : 0;
+        const acc = decided.length ? decided.filter(x => x.sel === x.label).length / decided.length : 0;
+        const feasible = fs <= 0.05;
+        const cand = { t, coverage, fs, acc, feasible };
         // Ties keep the higher threshold: same observed coverage, less exposure to unseen scores.
-        : q === 'Q2' ? (coverage > best.coverage || (coverage === best.coverage && t > best.t)) : (acc > best.acc || (acc === best.acc && coverage > best.coverage));
-      if (better) best = cand;
+        const better = !best ? true : feasible !== best.feasible ? feasible : coverage > best.coverage || (coverage === best.coverage && t > best.t);
+        if (better) best = cand;
+      }
+      if (!best) return { ...base, status: 'infeasible', proposed: null, metrics: {} };
+      return { ...base, status: best.feasible ? 'proposed' : 'infeasible', proposed: best.feasible ? { min_confidence: best.t } : null,
+        metrics: { coverage: round6(best.coverage), false_support_rate: round6(best.fs), accuracy: round6(best.acc) } };
     }
-    if (!best) return { ...base, status: 'infeasible', proposed: null, metrics: {} };
-    return { ...base, status: best.feasible ? 'proposed' : 'infeasible', proposed: best.feasible ? { min_confidence: best.t } : null,
-      metrics: { coverage: round6(best.coverage), false_support_rate: round6(best.fs), accuracy: round6(best.acc) } };
+    // Q3/Q4 never abstain at runtime: below the threshold `decide()` answers the fallback option,
+    // so the evaluated classifier is "argmax above t, fallback below t" and accuracy covers every row.
+    const fallback = String((THRESHOLDS as Record<string, Record<string, unknown>>)[q]?.fallback ?? '');
+    let bestQ: { t: number; acc: number; fallback_rate: number } | null = null;
+    for (const t of grid(0.3, 0.95, 0.05)) {
+      const predicted = pts.map(x => (x.c >= t ? x.sel : fallback));
+      const acc = pts.length ? predicted.filter((p, i) => p === pts[i]!.label).length / pts.length : 0;
+      const fallbackRate = pts.length ? pts.filter(x => x.c < t).length / pts.length : 0;
+      const better = !bestQ ? true : acc > bestQ.acc || (acc === bestQ.acc && fallbackRate < bestQ.fallback_rate);
+      if (better) bestQ = { t, acc, fallback_rate: fallbackRate };
+    }
+    if (!bestQ) return { ...base, status: 'infeasible', proposed: null, metrics: {} };
+    return { ...base, status: 'proposed', proposed: { min_confidence: bestQ.t }, metrics: { accuracy: round6(bestQ.acc), fallback_rate: round6(bestQ.fallback_rate) } };
   });
 }
 
@@ -222,9 +256,14 @@ const meanAbstain = (m: BackendMetrics, questions: string[]) => {
 export function evaluateStopRules(metrics: BackendMetrics[], baseline?: { metrics: BackendMetrics[] }): StopVerdict[] {
   const jev = metrics.find(m => m.backend === 'jev');
   const out: StopVerdict[] = [];
-  const shared = (a: BackendMetrics, b: BackendMetrics) => a.questions.map(q => q.question_id).filter(id => b.questions.some(q => q.question_id === id && q.accuracy !== null) && a.questions.find(q => q.question_id === id)?.accuracy !== null);
+  // Questions where both backends have an accuracy from at least MIN_LABELS labels each.
+  const shared = (a: BackendMetrics, b: BackendMetrics) => a.questions.map(q => q.question_id).filter(id => {
+    const qa = a.questions.find(q => q.question_id === id), qb = b.questions.find(q => q.question_id === id);
+    return !!qa && !!qb && qa.accuracy !== null && qb.accuracy !== null && qa.labeled >= MIN_LABELS && qb.labeled >= MIN_LABELS;
+  });
   if (!jev) out.push({ rule: 'jev_q3q4_only', triggered: false, status: 'not_applicable', evidence: 'no jev judgments' });
-  else if (jev.labels < MIN_LABELS) out.push({ rule: 'jev_q3q4_only', triggered: false, status: 'insufficient_evidence', evidence: `jev labels ${jev.labels} < ${MIN_LABELS}` });
+  else if (jev.important_recall.n < MIN_LABELS || jev.false_support.n < MIN_LABELS)
+    out.push({ rule: 'jev_q3q4_only', triggered: false, status: 'insufficient_evidence', evidence: `Q1 relevant labels ${jev.important_recall.n}, Q2 decided labels ${jev.false_support.n}; need ${MIN_LABELS} each` });
   else {
     const recall = jev.important_recall.rate, fs = jev.false_support.rate;
     const triggered = (recall !== null && recall < 0.85) || (fs !== null && fs > 0.08);
@@ -234,22 +273,28 @@ export function evaluateStopRules(metrics: BackendMetrics[], baseline?: { metric
     const others = rule === 'do_not_introduce_jev' ? ['rule', 'llm_deepseek'] : ['local_probe'];
     const candidates = metrics.filter(m => others.includes(m.backend));
     if (!jev || candidates.length === 0) { out.push({ rule, triggered: false, status: 'not_applicable', evidence: 'missing backend' }); continue; }
-    if (jev.labels < MIN_LABELS || (rule === 'switch_local_probe' && jev.labels < 300)) { out.push({ rule, triggered: false, status: 'insufficient_evidence', evidence: `jev labels ${jev.labels}` }); continue; }
+    if (rule === 'switch_local_probe' && jev.labels < 300) { out.push({ rule, triggered: false, status: 'insufficient_evidence', evidence: `jev labels ${jev.labels} < 300` }); continue; }
     const hits: string[] = [];
+    let comparable = false;
     for (const other of candidates) {
       const qs = shared(jev, other);
+      if (qs.length === 0) continue;
+      comparable = true;
       const a = meanAccuracy(jev, qs), b = meanAccuracy(other, qs);
       if (a === null || b === null) continue;
       const within = rule === 'do_not_introduce_jev' ? a - b <= 0.03 && (meanAbstain(other, qs) ?? 1) < (meanAbstain(jev, qs) ?? 0) : b >= a - 0.02;
       if (within) hits.push(`${other.backend}: ${b.toFixed(3)} vs jev ${a.toFixed(3)} over ${qs.join('/')}`);
     }
+    if (!comparable) { out.push({ rule, triggered: false, status: 'insufficient_evidence', evidence: `no question with ≥ ${MIN_LABELS} labels on both sides` }); continue; }
     out.push({ rule, triggered: hits.length > 0, status: 'evaluated', evidence: hits.join('; ') || 'no candidate within band' });
   }
   if (!baseline || !jev) out.push({ rule: 'lock_version_recalibrate', triggered: false, status: 'not_applicable', evidence: baseline ? 'no jev judgments' : 'no baseline supplied' });
   else {
     const prev = baseline.metrics.find(m => m.backend === 'jev');
-    const drifts = prev ? jev.questions.map(q => { const p = prev.questions.find(x => x.question_id === q.question_id); return p && p.accuracy !== null && q.accuracy !== null ? { q: q.question_id, d: q.accuracy - p.accuracy } : null; }).filter((x): x is { q: string; d: number } => x !== null && Math.abs(x.d) > 0.05) : [];
-    out.push({ rule: 'lock_version_recalibrate', triggered: drifts.length > 0, status: prev ? 'evaluated' : 'not_applicable', evidence: drifts.map(d => `${d.q} ${d.d >= 0 ? '+' : ''}${(d.d * 100).toFixed(1)} pt`).join(', ') || 'within 5 pt' });
+    const comparable = prev ? jev.questions.map(q => { const p = prev.questions.find(x => x.question_id === q.question_id); return p && p.accuracy !== null && q.accuracy !== null && p.labeled >= MIN_LABELS && q.labeled >= MIN_LABELS ? { q: q.question_id, d: q.accuracy - p.accuracy } : null; }).filter((x): x is { q: string; d: number } => x !== null) : [];
+    const drifts = comparable.filter(x => Math.abs(x.d) > 0.05);
+    out.push({ rule: 'lock_version_recalibrate', triggered: drifts.length > 0, status: !prev ? 'not_applicable' : comparable.length === 0 ? 'insufficient_evidence' : 'evaluated',
+      evidence: drifts.map(d => `${d.q} ${d.d >= 0 ? '+' : ''}${(d.d * 100).toFixed(1)} pt`).join(', ') || (comparable.length ? 'within 5 pt' : `no question with ≥ ${MIN_LABELS} labels in both reports`) });
   }
   return out;
 }
@@ -261,10 +306,25 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { QUESTION_SET_VERSION } from './questions';
 
+export interface CalibrationFit { backend: string; question_id: string; labeled: number; segments: IsotonicSegment[] }
 export interface CalibrationArtifact {
   schema_name: 'alpha-calibration-report'; schema_version: '1.0'; question_set_version: string;
   generated_at: string; since: string | null; rows: number; labeled: number;
-  metrics: BackendMetrics[]; proposals: ThresholdProposal[]; stop_rules: StopVerdict[]; baseline_generated_at: string | null;
+  metrics: BackendMetrics[]; fits: CalibrationFit[]; proposals: ThresholdProposal[]; stop_rules: StopVerdict[]; baseline_generated_at: string | null;
+}
+
+/** Full-sample isotonic fit per backend × question with at least MIN_LABELS eligible observations. */
+export function calibrationFits(rows: ReportRow[]): CalibrationFit[] {
+  const deduped = dedupeMaterialLevel(rows);
+  const keys = [...new Set(deduped.map(r => `${r.backend}|${r.question_id}`))].sort();
+  const out: CalibrationFit[] = [];
+  for (const key of keys) {
+    const [backend, question_id] = key.split('|') as [string, string];
+    const points = scoredPoints(deduped.filter(r => r.backend === backend && r.question_id === question_id));
+    if (points.length < MIN_LABELS) continue;
+    out.push({ backend, question_id, labeled: points.length, segments: isotonicFit(points).segments });
+  }
+  return out;
 }
 
 export function buildCalibrationArtifact(input: { rows: ReportRow[]; since: string | null; generatedAt: string; baseline: CalibrationArtifact | null }): CalibrationArtifact {
@@ -272,7 +332,7 @@ export function buildCalibrationArtifact(input: { rows: ReportRow[]; since: stri
   return {
     schema_name: 'alpha-calibration-report', schema_version: '1.0', question_set_version: QUESTION_SET_VERSION,
     generated_at: input.generatedAt, since: input.since, rows: input.rows.length, labeled: input.rows.filter(r => r.label !== null).length,
-    metrics, proposals: proposeThresholds(input.rows), stop_rules: evaluateStopRules(metrics, input.baseline ? { metrics: input.baseline.metrics } : undefined),
+    metrics, fits: calibrationFits(input.rows), proposals: proposeThresholds(input.rows), stop_rules: evaluateStopRules(metrics, input.baseline ? { metrics: input.baseline.metrics } : undefined),
     baseline_generated_at: input.baseline?.generated_at ?? null,
   };
 }
@@ -288,7 +348,10 @@ export function renderCalibrationMarkdown(a: CalibrationArtifact): string {
     for (const q of m.questions) lines.push(`| ${q.question_id} | ${q.n} | ${q.labeled} | ${f(q.accuracy)} | ${f(q.abstain_rate)} | ${f(q.ece_before)} | ${f(q.ece_after)} | ${q.p50_latency_ms ?? '—'} | ${q.p95_latency_ms ?? '—'} | ${q.cost_micros_per_1k} |`);
     lines.push('');
   }
-  lines.push('## 阈值重拟', '', '| question | 标签 | 状态 | 当前 | 提议 | 指标 |', '|---|---|---|---|---|---|');
+  lines.push('## Isotonic 拟合', '', '| backend | question | labeled | segments (x_min–x_max → p) |', '|---|---|---|---|');
+  for (const fit of a.fits) lines.push(`| ${fit.backend} | ${fit.question_id} | ${fit.labeled} | ${fit.segments.map(s => `${s.x_min}–${s.x_max}→${s.p}`).join('; ')} |`);
+  if (a.fits.length === 0) lines.push(`| — | — | — | 无问题达到 ${MIN_LABELS} 条标签 |`);
+  lines.push('', '## 阈值重拟', '', '| question | 标签 | 状态 | 当前 | 提议 | 指标 |', '|---|---|---|---|---|---|');
   for (const p of a.proposals) lines.push(`| ${p.question_id} | ${p.labeled} | ${p.status} | ${JSON.stringify(p.current)} | ${p.proposed ? JSON.stringify(p.proposed) : '—'} | ${Object.keys(p.metrics).length ? JSON.stringify(p.metrics) : '—'} |`);
   lines.push('', '应用方式：人工修改 `src/lib/research/fanout/questions.ts` 的 `THRESHOLDS` 并提升 `question_set_version`，在冻结集上回归后提交。', '', '## 停止 / 换后端', '', '| 规则 | 触发 | 状态 | 证据 |', '|---|---|---|---|');
   for (const v of a.stop_rules) lines.push(`| ${v.rule} | ${v.triggered ? '是' : '否'} | ${v.status} | ${v.evidence} |`);

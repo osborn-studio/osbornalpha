@@ -165,3 +165,49 @@ describe('artifact, markdown and CLI runner',()=>{
   }finally{rmSync(dir,{recursive:true,force:true});}
  });
 });
+
+describe('Codex round 1 regressions',()=>{
+ it('pools equal scores before PAV so the fit is order-independent',()=>{
+  expect(applyIsotonic(isotonicFit([{score:0.8,hit:0},{score:0.8,hit:1}]),0.8)).toBeCloseTo(0.5,6);
+  expect(applyIsotonic(isotonicFit([{score:0.8,hit:1},{score:0.8,hit:0}]),0.8)).toBeCloseTo(0.5,6);
+  expect(isotonicFit([{score:0.8,hit:1},{score:0.8,hit:0}]).segments).toEqual([{x_min:0.8,x_max:0.8,p:0.5}]);
+ });
+ it('evaluates Q3/Q4 thresholds with the runtime fallback prediction instead of abstentions',()=>{
+  // Below the threshold the runtime answers "unknown"; a label of "unknown" is then a hit, not an abstention.
+  const q3=(i:number,conf:number,selected:string,label:string):ReportRow=>row({question_id:'Q3',source_id:`m${i}`,confidence:conf,selected,abstained:false,distribution:{[selected]:0.5+conf/2},label});
+  const rows:ReportRow[]=[];
+  for(let i=0;i<20;i++)rows.push(q3(i,0.9,'filing_or_regulator','filing_or_regulator'));
+  for(let i=0;i<20;i++)rows.push(q3(100+i,0.4,'analyst_or_media','unknown'));
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q3')!;
+  expect(p.status).toBe('proposed');
+  expect(p.proposed!.min_confidence).toBeGreaterThan(0.4);
+  expect(p.metrics.accuracy).toBe(1);
+  expect(p.metrics).not.toHaveProperty('coverage');
+ });
+ it('gates stop verdicts on the compared samples, not only on jev totals',()=>{
+  const metric=(backend:string,labels:number,q:Array<[string,number,number|null]>)=>({backend,labels,important_recall:{k:90,n:100,rate:0.9,low:0.83,high:0.94},false_support:{k:2,n:100,rate:0.02,low:0,high:0.07},
+   questions:q.map(([id,labeled,acc])=>({question_id:id,n:labeled,labeled,accuracy:acc,abstain_rate:0.1,ece_before:null,ece_after:null}))}) as any;
+  const v=evaluateStopRules([metric('jev',400,[['Q1',200,0.9],['Q4',200,0.9]]),metric('local_probe',1,[['Q4',1,1]])]);
+  expect(v.find(x=>x.rule==='switch_local_probe')).toMatchObject({triggered:false,status:'insufficient_evidence'});
+  const thinQ1=evaluateStopRules([{...metric('jev',400,[['Q4',400,0.9]]),important_recall:{k:2,n:3,rate:0.67,low:0.2,high:0.94},false_support:{k:0,n:2,rate:0,low:0,high:0.66}}]);
+  expect(thinQ1.find(x=>x.rule==='jev_q3q4_only')).toMatchObject({triggered:false,status:'insufficient_evidence'});
+  const drift=evaluateStopRules([metric('jev',400,[['Q1',200,0.9]])],{metrics:[metric('jev',5,[['Q1',5,0.6]])]});
+  expect(drift.find(x=>x.rule==='lock_version_recalibrate')).toMatchObject({triggered:false,status:'insufficient_evidence'});
+ });
+ it('deduplicates material-level Q3 judgments before calibration',()=>{
+  const dup:ReportRow[]=[];
+  for(let i=0;i<30;i++)dup.push(row({question_id:'Q3',source_id:'same',confidence:0.9,selected:'filing_or_regulator',label:'filing_or_regulator',distribution:{filing_or_regulator:0.9}}));
+  const m=classMetrics(dup)[0]!.questions.find(q=>q.question_id==='Q3')!;
+  expect(m.labeled).toBe(1);
+  expect(m.ece_after).toBeNull();
+  expect(proposeThresholds(dup).find(p=>p.question_id==='Q3')!.status).toBe('insufficient_labels');
+ });
+ it('persists per backend × question isotonic fits in the artifact',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<40;i++){rows.push(q1(0.75+(i%5)*0.05,'true'));rows.push(q1(0.05+(i%6)*0.05,'false'));}
+  const a=buildCalibrationArtifact({rows,since:null,generatedAt:'2026-09-26T00:00:00.000Z',baseline:null});
+  expect(a.fits).toEqual([expect.objectContaining({backend:'jev',question_id:'Q1',labeled:80})]);
+  expect(a.fits[0]!.segments.length).toBeGreaterThan(0);
+  expect(renderCalibrationMarkdown(a)).toContain('## Isotonic 拟合');
+ });
+});
