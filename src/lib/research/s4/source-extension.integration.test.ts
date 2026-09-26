@@ -35,16 +35,29 @@ describe.skipIf(!enabled)('WP-A1 source extension on real PostgreSQL',()=>{
   const news=await row(await insertLegacy('NEWS','news body'));
   expect(news.available_at.toISOString()).toBe(news.ingested_at.toISOString());
   expect(news).toMatchObject({source_version:'1',permission:'public',market:null,cluster_id:null,cluster_first:null,origin_type:null,event_time:null});
-  // NOTE/MANUAL inserted through the legacy path arrive as public; the migration's
-  // backfill statement turns them private and is idempotent on replay.
+  // NOTE/MANUAL inserted through the legacy path are private from the insert
+  // trigger; replaying the migration (backfill included) changes nothing.
   const note=await row(await insertLegacy('NOTE','note body'));
-  expect(note.permission).toBe('public');
+  expect(note.permission).toBe('private');
   await admin.query(readFileSync(MIGRATION,'utf8'));
   expect((await row(note.id)).permission).toBe('private');
   expect((await row(news.id)).permission).toBe('public');
   // pg returns timestamptz as Date; rowToSource passes values through unchanged.
   const mapped=rowToSource(await row(news.id));
   expect(mapped).toMatchObject({available_at:news.available_at,source_version:'1',permission:'public',market:null,origin_type:null,event_time:null});
+ });
+
+ it('defaults every writer at insert time: permission by type, availability from the explicit ingestion instant',async()=>{
+  // The S4 import writer inserts MANUAL rows with an explicit ingested_at and no permission.
+  const id=randomUUID();const ingested='2026-09-20T01:02:03.004Z';
+  await admin.query(`insert into ${TABLE}(id,user_id,source_type,title,raw_text,content_hash,ingested_at) values($1,$2,'MANUAL','t','controlled copy',$3,$4)`,[id,userId,`hash-${randomUUID()}`,ingested]);
+  const r=await row(id);
+  expect(r.permission).toBe('private');
+  expect(r.available_at.toISOString()).toBe(ingested);
+  // An explicit permission is kept even for MANUAL.
+  const id2=randomUUID();
+  await admin.query(`insert into ${TABLE}(id,user_id,source_type,title,raw_text,content_hash,permission) values($1,$2,'MANUAL','t','shared note',$3,'public')`,[id2,userId,`hash-${randomUUID()}`]);
+  expect((await row(id2)).permission).toBe('public');
  });
 
  it('rejects values outside the contract',async()=>{

@@ -19,7 +19,23 @@ update public.research_source_documents set permission = 'private'
   where source_type in ('NOTE','MANUAL') and permission = 'public';
 
 alter table public.research_source_documents alter column available_at set not null;
-alter table public.research_source_documents alter column available_at set default now();
+-- No column defaults for available_at/permission: a BEFORE INSERT trigger derives
+-- them from the row itself so every writer (ingestSource, the S4 import path,
+-- scripts) gets ingestion-time availability and type-based permission without
+-- code changes. now() would be the transaction start, not the ingestion instant.
+alter table public.research_source_documents alter column available_at drop default;
+alter table public.research_source_documents alter column permission drop default;
+create or replace function public.research_source_insert_defaults() returns trigger as $$
+begin
+  if new.available_at is null then new.available_at := new.ingested_at; end if;
+  if new.permission is null then
+    new.permission := case when new.source_type in ('NOTE','MANUAL') then 'private' else 'public' end;
+  end if;
+  return new;
+end; $$ language plpgsql;
+drop trigger if exists research_sources_insert_defaults on public.research_source_documents;
+create trigger research_sources_insert_defaults before insert on public.research_source_documents
+  for each row execute function public.research_source_insert_defaults();
 
 alter table public.research_source_documents drop constraint if exists research_sources_origin_type_check;
 alter table public.research_source_documents add constraint research_sources_origin_type_check
