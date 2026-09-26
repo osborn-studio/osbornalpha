@@ -9,7 +9,20 @@ import type { ResearchCtx } from '../store';
 import { isValidCik, isValidIsin, isValidLei, isValidUsci } from './identifiers';
 import { HOME_MARKETS, KEY_NAMES, SECURITY_TYPES, type CohortCompany, type CohortSecurity, type KeyName } from './types';
 
-const KEYS_TABLE = 'research_entity_keys', SECURITIES_TABLE = 'research_entity_securities';
+const KEYS_TABLE = 'research_entity_keys', SECURITIES_TABLE = 'research_entity_securities', ENTITIES_TABLE = 'research_entities';
+/** PostgREST caps a response at max_rows (1000); read whole tables page by page in a fixed order. */
+const PAGE = 1000;
+async function fetchAll<T>(query: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>): Promise<T[]> {
+  const out: T[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await query(from, from + PAGE - 1);
+    if (error) throw new Error(error.message);
+    const page = (data ?? []) as T[];
+    out.push(...page);
+    if (page.length < PAGE) return out;
+  }
+}
+const lower = (v: unknown) => (typeof v === 'string' ? v.trim().toLowerCase() : '');
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const text = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
 /** PostgREST returns dates as YYYY-MM-DD strings; pg returns Date objects. */
@@ -47,12 +60,38 @@ function validateSecurity(s: CohortSecurity, market: string) {
   if (!ISO_DATE.test(s.valid_from) || (s.valid_to != null && (!ISO_DATE.test(s.valid_to) || s.valid_to <= s.valid_from))) fail('invalid_schema');
 }
 
+interface EntityRow { id: string; name: string; aliases?: unknown; ticker?: string | null; metadata?: Record<string, unknown> | null }
+
+/**
+ * Find the owner's existing COMPANY entity for this cohort record by any of
+ * its names/aliases or its primary ticker (the legacy seed uses short names
+ * like "Palantir"), and enrich it without touching fields outside this
+ * package's scope (description, other metadata). Create one only if none match.
+ */
+async function resolveCompanyEntity(ctx: ResearchCtx, company: CohortCompany, ticker: string): Promise<string> {
+  const candidates = new Set([...company.names_en, ...company.names_zh, ...company.aliases].map(lower));
+  const rows = await fetchAll<EntityRow>((from, to) => ctx.supabase.from(ENTITIES_TABLE).select('id, name, aliases, ticker, metadata')
+    .eq('user_id', ctx.userId).eq('type', 'COMPANY').order('id').range(from, to));
+  const match = rows.find(r => candidates.has(lower(r.name)) || lower(r.ticker) === lower(ticker) ||
+    (Array.isArray(r.aliases) && r.aliases.some(a => candidates.has(lower(a)))));
+  if (!match) {
+    return upsertEntity(ctx, { type: 'COMPANY', name: company.names_en[0], aliases: [...company.names_zh, ...company.aliases], ticker,
+      metadata: { home_market: company.home_market, in_scope: company.in_scope } });
+  }
+  const aliases = [...new Set([...(Array.isArray(match.aliases) ? match.aliases.filter(text) : []), ...company.names_en.filter(n => lower(n) !== lower(match.name)),
+    ...company.names_zh, ...company.aliases])];
+  const { error } = await ctx.supabase.from(ENTITIES_TABLE).update({ aliases, ticker,
+    metadata: { ...(match.metadata ?? {}), home_market: company.home_market, in_scope: company.in_scope }, updated_at: new Date().toISOString() })
+    .eq('user_id', ctx.userId).eq('id', match.id);
+  if (error) throw new Error(error.message);
+  return match.id;
+}
+
 /** Upsert a company's entity, key row and securities. Securities match on (exchange_code, valid_from). */
 export async function upsertEntityKeys(ctx: ResearchCtx, company: CohortCompany): Promise<{ entity_id: string; securities: number }> {
   validateCompany(company);
   const primary = company.securities.find(s => s.is_primary)!;
-  const entity_id = await upsertEntity(ctx, { type: 'COMPANY', name: company.names_en[0], aliases: [...company.names_zh, ...company.aliases],
-    ticker: primary.exchange_code, metadata: { home_market: company.home_market, in_scope: company.in_scope } });
+  const entity_id = await resolveCompanyEntity(ctx, company, primary.exchange_code);
   const now = new Date().toISOString();
   const keyRow = { user_id: ctx.userId, entity_id, lei: company.keys.lei ?? null, usci: company.keys.usci ?? null, cninfo_org_id: company.keys.cninfo_org_id ?? null,
     cik: company.keys.cik ?? null, names_zh: company.names_zh, names_en: company.names_en, aliases: company.aliases, home_market: company.home_market,
@@ -81,17 +120,15 @@ export async function upsertEntityKeys(ctx: ResearchCtx, company: CohortCompany)
 }
 
 export async function listEntityKeys(ctx: ResearchCtx): Promise<EntityKeysRow[]> {
-  const [{ data: keys, error: e1 }, { data: secs, error: e2 }] = await Promise.all([
-    ctx.supabase.from(KEYS_TABLE).select('*').eq('user_id', ctx.userId).order('entity_id'),
-    ctx.supabase.from(SECURITIES_TABLE).select('*').eq('user_id', ctx.userId).order('exchange_code'),
+  const [keys, secs] = await Promise.all([
+    fetchAll<any>((from, to) => ctx.supabase.from(KEYS_TABLE).select('*').eq('user_id', ctx.userId).order('entity_id').range(from, to)),
+    fetchAll<any>((from, to) => ctx.supabase.from(SECURITIES_TABLE).select('*').eq('user_id', ctx.userId).order('id').range(from, to)),
   ]);
-  if (e1) throw new Error(e1.message);
-  if (e2) throw new Error(e2.message);
   const grouped = new Map<string, EntityKeysRow['securities']>();
-  for (const s of (secs ?? []) as any[]) (grouped.get(s.entity_id) ?? grouped.set(s.entity_id, []).get(s.entity_id)!).push({
+  for (const s of secs) (grouped.get(s.entity_id) ?? grouped.set(s.entity_id, []).get(s.entity_id)!).push({
     id: s.id, exchange_code: s.exchange_code, mic: s.mic ?? null, isin: s.isin ?? null, market: s.market, security_type: s.security_type,
     is_primary: !!s.is_primary, valid_from: dateOnly(s.valid_from), valid_to: s.valid_to ? dateOnly(s.valid_to) : null, provenance: s.provenance ?? {} });
-  return ((keys ?? []) as any[]).map(r => ({
+  return keys.map(r => ({
     entity_id: r.entity_id, keys: { lei: r.lei ?? null, usci: r.usci ?? null, cninfo_org_id: r.cninfo_org_id ?? null, cik: r.cik ?? null },
     names_zh: r.names_zh ?? [], names_en: r.names_en ?? [], aliases: r.aliases ?? [], home_market: r.home_market, in_scope: !!r.in_scope,
     cohort: r.cohort ?? null, provenance: r.provenance ?? {}, missing: r.missing ?? [], updated_at: r.updated_at,

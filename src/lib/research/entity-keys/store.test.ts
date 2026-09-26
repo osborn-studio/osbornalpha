@@ -4,6 +4,9 @@ import type {ResearchCtx} from '../store';
 import {entityTableVersion,listEntityKeys,upsertEntityKeys,versionInput} from './store';
 import {seedEntityKeys} from './seed';
 import cohort from './first-cohort.json';
+import {seedResearchData,COMPANY_SEEDS,THEME_SEEDS} from '../seed';
+import {getEntity,listEntities} from '../entities';
+import {randomUUID} from 'node:crypto';
 import type {CohortCompany} from './types';
 
 let ctx:ResearchCtx,store:MockStore;
@@ -63,5 +66,39 @@ describe('seedEntityKeys',()=>{
   expect(store.count('research_entities')).toBe(21);
   expect(store.count('research_entity_keys')).toBe(21);
   expect(store.count('research_entity_securities')).toBe(21);
+ });
+
+ it('reuses companies already seeded under short names and never erases their description or metadata',async()=>{
+  await seedResearchData(ctx);
+  const before=await listEntities(ctx,{type:'COMPANY'});
+  const palantir=before.find(e=>e.name==='Palantir')!;
+  await ctx.supabase.from('research_entities').update({description:'owner note',metadata:{sector:'software'}}).eq('id',palantir.id);
+  await seedEntityKeys(ctx);
+  const after=await listEntities(ctx,{type:'COMPANY'});
+  // Palantir, ServiceNow and Salesforce already existed: 21 - 3 new companies.
+  expect(after).toHaveLength(COMPANY_SEEDS.length+21-3);
+  expect(store.count('research_entities')).toBe(COMPANY_SEEDS.length+THEME_SEEDS.length+21-3);
+  const kept=(await getEntity(ctx,palantir.id))!;
+  expect(kept.description).toBe('owner note');
+  expect(kept.metadata).toMatchObject({sector:'software',home_market:'US',in_scope:true});
+  expect(kept.aliases).toEqual(expect.arrayContaining(['帕兰提尔','Palantir Technologies Inc.']));
+  expect(kept.ticker).toBe('PLTR');
+  const keys=await listEntityKeys(ctx);
+  expect(keys.find(k=>k.entity_id===palantir.id)?.keys.cik).toBe('1321655');
+  expect(keys.filter(k=>k.names_en[0]==='Palantir Technologies Inc.')).toHaveLength(1);
+ });
+ it('reads every row beyond the PostgREST page size so the table version covers the whole table',async()=>{
+  const rows=[] as any[],secs=[] as any[];
+  for(let i=0;i<1203;i++){const id=randomUUID();rows.push({user_id:ctx.userId,entity_id:id,lei:null,usci:null,cninfo_org_id:null,cik:String(100000+i),names_zh:[],names_en:[`Co ${i}`],aliases:[],home_market:'US',in_scope:true,cohort:'bulk',provenance:{},missing:['lei','usci','cninfo_org_id'],updated_at:'2026-01-01T00:00:00Z'});
+   secs.push({user_id:ctx.userId,id:randomUUID(),entity_id:id,exchange_code:`C${i}`,mic:'XNYS',isin:null,market:'US',security_type:'common',is_primary:true,valid_from:'2020-01-01',valid_to:null,provenance:{}});}
+  store.seed('research_entity_keys',rows);store.seed('research_entity_securities',secs);
+  const listed=await listEntityKeys(ctx);
+  expect(listed).toHaveLength(1203);
+  expect(listed.every(r=>r.securities.length===1)).toBe(true);
+  const v1=await entityTableVersion(ctx);
+  // Change a row that a single 1000-row page would have dropped.
+  const last=[...store.rows('research_entity_keys')].sort((a,b)=>a.entity_id.localeCompare(b.entity_id))[1202];
+  last.cik='1';
+  expect(await entityTableVersion(ctx)).not.toBe(v1);
  });
 });
