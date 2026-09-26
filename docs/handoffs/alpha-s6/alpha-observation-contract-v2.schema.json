@@ -1,0 +1,382 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "owner_scope",
+    "decision_or_candidate_ref",
+    "candidate_ref",
+    "thesis_revision_ref",
+    "input_snapshot_ref",
+    "input_snapshot_hash",
+    "record_origin",
+    "research_stream",
+    "contamination_reasons",
+    "actor_kind",
+    "synthetic",
+    "observation_kind",
+    "securities",
+    "frozen_at",
+    "recorded_at",
+    "eligibility_at",
+    "start_rule",
+    "start_plan",
+    "actual_start_at",
+    "windows",
+    "benchmarks",
+    "currency_basis",
+    "return_method",
+    "market_policy_version",
+    "market_policy_hash",
+    "market_policy",
+    "calendar_version",
+    "calendar_hash",
+    "status",
+    "predecessor_id",
+    "anchor_status",
+    "provenance_level"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "alpha-observation-contract/2.0"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "owner_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user_id",
+        "workspace_id"
+      ],
+      "properties": {
+        "user_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "workspace_id": {
+          "type": "null"
+        }
+      }
+    },
+    "decision_or_candidate_ref": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "candidate_ref": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "thesis_revision_ref": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "input_snapshot_ref": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "input_snapshot_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "record_origin": {
+      "const": "forward"
+    },
+    "research_stream": {
+      "const": "descriptive"
+    },
+    "contamination_reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "actor_kind": {
+      "enum": [
+        "human",
+        "agent"
+      ]
+    },
+    "synthetic": {
+      "type": "boolean"
+    },
+    "observation_kind": {
+      "enum": [
+        "decision",
+        "shadow"
+      ]
+    },
+    "securities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ticker",
+          "listing_mic",
+          "currency",
+          "company_entity_id",
+          "synthetic"
+        ],
+        "properties": {
+          "ticker": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "listing_mic": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{4}$"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "company_entity_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "synthetic": {
+            "type": "boolean"
+          }
+        }
+      },
+      "minItems": 1,
+      "maxItems": 1
+    },
+    "frozen_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "recorded_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "eligibility_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "start_rule": {
+      "const": "first_full_regular_session_open_strictly_after_max_frozen_eligibility_then_valid_close"
+    },
+    "start_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intendedStart",
+        "fallbackCandidates",
+        "waitExpiresAt",
+        "marketPolicyHash",
+        "calendarHash"
+      ],
+      "properties": {
+        "intendedStart": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "date",
+            "open",
+            "close",
+            "full"
+          ],
+          "properties": {
+            "date": {
+              "type": "string"
+            },
+            "open": {
+              "type": "string"
+            },
+            "close": {
+              "type": "string"
+            },
+            "full": {
+              "type": "boolean"
+            }
+          }
+        },
+        "fallbackCandidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "date",
+              "open",
+              "close",
+              "full"
+            ],
+            "properties": {
+              "date": {
+                "type": "string"
+              },
+              "open": {
+                "type": "string"
+              },
+              "close": {
+                "type": "string"
+              },
+              "full": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "waitExpiresAt": {
+          "type": "string"
+        },
+        "marketPolicyHash": {
+          "const": "9d7c851c81343ad77420c5302fea30fb6056b7b15231a3019fae7df0eafc566c"
+        },
+        "calendarHash": {
+          "type": "string"
+        }
+      }
+    },
+    "actual_start_at": {
+      "type": "null"
+    },
+    "windows": {
+      "const": [
+        {
+          "trading_sessions": 5,
+          "starts_at": null,
+          "ends_at": null,
+          "result": null
+        },
+        {
+          "trading_sessions": 20,
+          "starts_at": null,
+          "ends_at": null,
+          "result": null
+        },
+        {
+          "trading_sessions": 60,
+          "starts_at": null,
+          "ends_at": null,
+          "result": null
+        }
+      ]
+    },
+    "benchmarks": {
+      "const": [
+        {
+          "ticker": "SPY",
+          "listing_mic": "ARCX",
+          "currency": "USD"
+        }
+      ]
+    },
+    "currency_basis": {
+      "const": "USD"
+    },
+    "return_method": {
+      "const": "split_adjusted_price_return_excluding_cash_dividends"
+    },
+    "market_policy_version": {
+      "const": "market-policy/2.0"
+    },
+    "market_policy_hash": {
+      "const": "9d7c851c81343ad77420c5302fea30fb6056b7b15231a3019fae7df0eafc566c"
+    },
+    "market_policy": {
+      "const": {
+        "schema_version": "market-policy/2.0",
+        "identity_field": "security.listing_mic",
+        "target_listing_mics": [
+          "XNYS"
+        ],
+        "calendar_mic": "XNYS",
+        "timezone": "America/New_York",
+        "calendar_version": "XNYS-2026-2028-frozen-2026-09-22",
+        "calendar_source": "https://www.nyse.com/trade/hours-calendars",
+        "calendar_frozen_at": "2026-09-22",
+        "regular_open": "09:30",
+        "regular_close": "16:00",
+        "start_rule": "first_full_regular_session_open_strictly_after_max_frozen_eligibility_then_valid_close",
+        "early_close_start": "skip",
+        "suspension": "wait_first_valid_close",
+        "max_wait_trading_sessions": 10,
+        "windows_trading_sessions": [
+          5,
+          20,
+          60
+        ],
+        "window_count": "exclude_start_session_include_early_close_sessions",
+        "endpoint_missing": {
+          "status": "data_insufficient",
+          "reason": "missing_close"
+        },
+        "benchmark": {
+          "ticker": "SPY",
+          "listing_mic": "ARCX",
+          "currency": "USD"
+        },
+        "currency": "USD",
+        "return_method": "split_adjusted_price_return_excluding_cash_dividends",
+        "adjustment": "none_with_verified_split_factors",
+        "missing_benchmark": "data_insufficient",
+        "missing_split_factors": "data_insufficient",
+        "calendar_out_of_range": {
+          "status": "data_insufficient",
+          "reason": "rule_unsupported"
+        },
+        "calendar_changes": "append_new_policy_for_new_observations_only",
+        "multi_security_aggregation": "disabled",
+        "policy_selection_basis": "registered_before_any_price_window_results",
+        "max_wait_anchor": "first_full_session",
+        "max_wait_count": "include_first_full_session",
+        "suspension_start_early_close": "skip",
+        "suspension_evidence": "provider_session_status_and_receipt_required_for_every_skipped_full_session; unknown_or_missing_is_data_insufficient_not_suspension",
+        "start_resolution": "earliest_candidate_with_valid_close; all_prior_candidates_require_verified_unavailable_status; arbitrary_candidate_selection_forbidden",
+        "identity_attestation": "operator_attestation_list_required",
+        "availability_basis": "local_retrieval_only",
+        "calendar_venue_compatibility": "assumed_same_sessions_unverified",
+        "parent_market_policy_version": "market-policy/1.0"
+      }
+    },
+    "calendar_version": {
+      "const": "XNYS-2026-2028-frozen-2026-09-22"
+    },
+    "calendar_hash": {
+      "const": "9c81226f191c390e69478a9651025254d789d671c72b9aef2b78bc941af302a4"
+    },
+    "status": {
+      "const": "pending_start"
+    },
+    "predecessor_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "anchor_status": {
+      "const": "anchor_pending"
+    },
+    "provenance_level": {
+      "const": "local_receipt"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:osborn:alpha-observation-contract:1.0"
+}

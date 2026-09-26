@@ -6,6 +6,8 @@
 
 2026-09-22 行情并行交接：新增 [行情接口联调包](market-interface/README.md) 与 [07 共享契约交接](../alpha-s7/README.md)。离线检查覆盖结构、证据哈希、保守接收时间、拆股乘数、缺日及标的/SPY 双包对齐；真实身份、授权与原始响应解析尚待核验。接口由用户安排的负责人实现。
 
+2026-09-26 E3a/E3b：引擎 0.3.0 与 market-policy/2.0 已采用，真实证券路径对「2.0 观察 + 已证明身份的交接包 + `ALPHA_S6_REAL_MARKET=1`」打开；见 [E3b 交接](../alpha-e3b/README.md)。
+
 ## 已实现
 
 - 固定 `dsh-trade-strategy-evaluator@0.2.0` 包，SHA-256 `a071a1fcfc2499a54af5a7ced2f18d57ff7cd61d8aa17f8af3def13777fc5869`；干净离线消费者的 golden/Replay 一致。

@@ -1,6 +1,8 @@
 # 真实 SPY 的下一版契约交接
 
-状态：已发现并阻断当前契约冲突；[分离挂牌身份与会话日历的未发布提案](market-interface/policy-v2.proposal.json) 及双包检查已实现，新引擎/正式政策包尚未发布。不能以此文档替换任何已有 Observation 的 policy/hash。
+状态（2026-09-26 更新）：提案已作为 [market-policy/2.0](market-policy-v2.json) 发布（JCS SHA-256 见同名 `.sha256`），引擎 `dsh-trade-strategy-evaluator@0.3.0`（`osanalyst-engine/1.1.0` 只作用于 2.0 观察）已 vendor；新注册的观察使用 `alpha-observation-contract/2.0`；交接包经 `freezeMarketHandoff` 与 [身份证明清单](identity-attestations.json) 进入 2.0 评价。**本仓库只随附合成证明；真实证券仍需接口负责人提供交接包与发行人/交易所身份证明，并由操作员写入清单。** 旧 1.0 观察保持原 policy/hash，不改写。详见 [E3b 交接](../alpha-e3b/README.md)。
+
+以下为 2026-09-22 的原始分析，作为背景保留。
 
 ## 已核实事实
 

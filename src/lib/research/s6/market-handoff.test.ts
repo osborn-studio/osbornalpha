@@ -9,13 +9,13 @@ const check=(p:MarketHandoff)=>validateMarketHandoff(JSON.stringify(p),now);
 describe('offline market provider handoff',()=>{
  it('validates forward split but never grants evaluation or verified status',()=>{
   expect(check(fixture()).blockers).toEqual(expect.arrayContaining(['availability_timestamps_unverified','synthetic_flag_unverified']));
-  expect(check(fixture())).toMatchObject({status:'contract_valid',accepted_for_evaluation:false,engine_compatible:false,readiness:'provider_claims_unverified',missing_sessions:[]});
+  expect(check(fixture())).toMatchObject({status:'contract_valid',accepted_for_evaluation:false,engine_compatible:true,engine_policy_version:'market-policy/2.0',readiness:'provider_claims_unverified',missing_sessions:[]});expect(check(fixture()).blockers).toContain('identity_attestation_required');
  });
  it('exports the exact executable schema',()=>expect(JSON.parse(readFileSync(folder+'schema.json','utf8'))).toEqual(marketHandoffSchema));
  it('validates reverse splits using price multiplier old/new',()=>{const p=fixture();p.splits.events[0].new_shares=1;p.splits.events[0].old_shares=10;p.bars[0].split_factor=10;expect(check(p).status).toBe('contract_valid');});
  it('reports missing sessions without zero filling',()=>{const p=fixture();p.bars.pop();expect(check(p)).toMatchObject({status:'contract_incomplete',missing_sessions:['2026-01-06'],bar_count:1});});
  it('requires evidence for unavailable sessions',()=>{const p=fixture();p.bars.pop();p.unavailable_sessions.push({session_date:'2026-01-06',status:'suspended',available_at:p.observed_at,evidence_ref:'session_status'});expect(check(p).status).toBe('contract_valid');p.unavailable_sessions[0].evidence_ref='prices';expect(()=>check(p)).toThrow('data_insufficient');});
- it('does not equate listing MIC with calendar or authorize a real provider assertion',()=>{const p=fixture();p.synthetic=false;p.security.ticker='SPY';p.security.listing_mic='ARCX';for(const e of p.evidence)e.source_url='https://example.invalid/'+e.id;expect(check(p)).toMatchObject({engine_compatible:false,accepted_for_evaluation:false,security:{listing_mic:'ARCX'}});});
+ it('does not equate listing MIC with calendar or authorize a real provider assertion',()=>{const p=fixture();p.synthetic=false;p.security.ticker='SPY';p.security.listing_mic='ARCX';for(const e of p.evidence)e.source_url='https://example.invalid/'+e.id;expect(check(p)).toMatchObject({engine_compatible:true,accepted_for_evaluation:false,security:{listing_mic:'ARCX'}});});
  it.each([
   ['pre-close price evidence',(p:MarketHandoff)=>{p.evidence[0].received_at='2026-01-05T22:00:00.000Z';},'invalid_timeline'],
   ['future session range',(p:MarketHandoff)=>{p.range.to='2026-01-07';p.splits.basis_date='2026-01-07';p.splits.coverage.to='2026-01-07';},'future_input'],

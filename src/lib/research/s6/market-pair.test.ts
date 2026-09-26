@@ -9,9 +9,9 @@ const check=(a:MarketHandoff,b:MarketHandoff)=>validateMarketPair(JSON.stringify
 describe('two-leg market handoff',()=>{
  it('aligns XNYS target and ARCX SPY using one session calendar without granting evaluation',()=>{
   const result=check(load('split'),load('spy'));
-  expect(result.proposed_policy_status).toBe('unreleased');
+  expect(result.proposed_policy_status).toBe('released');expect(result.released_market_policy_version).toBe('market-policy/2.0');
   expect(result.proposed_policy_jcs_sha256).toMatch(/^[a-f0-9]{64}$/);
-  expect(result).toMatchObject({status:'contract_valid',aligned_session_count:2,accepted_for_evaluation:false,engine_compatible:false,target:{listing_mic:'XNYS'},benchmark:{listing_mic:'ARCX'},unavailable_sessions:[]});
+  expect(result).toMatchObject({status:'contract_valid',aligned_session_count:2,accepted_for_evaluation:false,engine_compatible:true,target:{listing_mic:'XNYS'},benchmark:{listing_mic:'ARCX'},unavailable_sessions:[]});
  });
  it('requires SPY under ARCX, never relabels it XNYS',()=>{
   const spy=load('spy');spy.security.listing_mic='XNYS';expect(()=>check(load('split'),spy)).toThrow('market_identity_mismatch');
