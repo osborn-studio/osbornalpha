@@ -81,6 +81,10 @@ export default function ResearchDashboardPage() {
         <p className="text-sm text-gray-500">加载中…</p>
       ) : (
         <>
+          <Link href="/research/setup" className="block rounded-lg border border-dashed p-4 hover:bg-gray-50">
+            <div className="text-sm font-medium">🧭 研究设置向导</div>
+            <div className="text-sm text-gray-500">圈定 12–15 家公司、录入 8–12 条 thesis——每题带提示的简答题，阶段 0 的固定入口。</div>
+          </Link>
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
             <Link href="/research/sources" className="rounded-lg border p-4 hover:bg-gray-50">
               <div className="text-3xl font-semibold">{sources.length}</div>

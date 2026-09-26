@@ -1,0 +1,97 @@
+/**
+ * WP-A11 — 名单圈定的写路径：改 in_scope / cohort、记录理由、补录实体键，或新增候选外公司。
+ * 只写 research_entity_keys 与 research_entities.metadata；证券与既有键不动；新增走 upsertEntityKeys 的全套校验。
+ */
+import { getEntity } from '../entities';
+import { isUuid, type ResearchCtx } from '../store';
+import { ownerCompanyToCohort, OWNER_SOURCE, RATIONALE_MAX, scopeCohort, validateCompanyAnswer, type OwnerCompanyAnswer } from '../setup/companies';
+import { isValidCik, isValidLei, isValidUsci } from './identifiers';
+import { listEntityKeys, upsertEntityKeys, type EntityKeysRow } from './store';
+import { KEY_NAMES, type KeyName, type Provenance } from './types';
+
+const KEYS_TABLE = 'research_entity_keys', ENTITIES_TABLE = 'research_entities';
+
+export class ScopeError extends Error {
+  constructor(message: string, public readonly status: number) { super(message); this.name = 'ScopeError'; }
+}
+
+export interface ScopeInput {
+  in_scope: boolean;
+  rationale: string;
+  /** YYYY-MM-DD; drives the cohort label and owner-input provenance. */
+  today: string;
+  cohort?: string;
+  keys?: Partial<Record<KeyName, string>>;
+  names_zh?: string[];
+  names_en?: string[];
+  aliases?: string[];
+}
+
+const text = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '';
+const cleanList = (v: unknown, field: string): string[] | undefined => {
+  if (v === undefined) return undefined;
+  if (!Array.isArray(v) || !v.every(text)) throw new ScopeError(`${field} must be a list of non-empty strings`, 422);
+  return [...new Set(v.map((s) => s.trim()))];
+};
+
+/** Change a listed company's scope and rationale; optionally fill in keys or names the owner knows. */
+export async function setScope(ctx: ResearchCtx, entityId: string, input: ScopeInput): Promise<EntityKeysRow> {
+  if (!isUuid(entityId)) throw new ScopeError('entity id must be a uuid', 400);
+  const rationale = typeof input.rationale === 'string' ? input.rationale.trim() : '';
+  if (rationale === '') throw new ScopeError('rationale is required', 422);
+  if (rationale.length > RATIONALE_MAX) throw new ScopeError(`rationale must be at most ${RATIONALE_MAX} characters`, 422);
+  if (typeof input.in_scope !== 'boolean') throw new ScopeError('in_scope must be a boolean', 422);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.today)) throw new ScopeError('today must be YYYY-MM-DD', 422);
+  const row = (await listEntityKeys(ctx)).find((r) => r.entity_id === entityId);
+  if (!row) throw new ScopeError('entity not found', 404);
+
+  const keys = { ...row.keys };
+  const provenance = { ...(row.provenance as Record<string, unknown>) };
+  const missing = new Set<KeyName>(row.missing);
+  const attribution: Provenance = { source: OWNER_SOURCE, retrieved_at: input.today };
+  for (const k of KEY_NAMES) {
+    const v = input.keys?.[k];
+    if (v === undefined || v.trim() === '') continue;
+    const value = v.trim();
+    if ((k === 'lei' && !isValidLei(value)) || (k === 'usci' && !isValidUsci(value)) || (k === 'cik' && !isValidCik(value))) {
+      throw new ScopeError(`${k} is not a valid identifier`, 422);
+    }
+    keys[k] = value; provenance[k] = attribution; missing.delete(k);
+  }
+  const names_zh = cleanList(input.names_zh, 'names_zh') ?? row.names_zh;
+  const names_en = cleanList(input.names_en, 'names_en') ?? row.names_en;
+  const aliases = cleanList(input.aliases, 'aliases') ?? row.aliases;
+  if (names_en.length === 0) throw new ScopeError('names_en must keep at least one name', 422);
+  const cohort = input.in_scope ? (text(input.cohort) ? input.cohort!.trim() : scopeCohort(input.today)) : row.cohort;
+  const now = new Date().toISOString();
+
+  const { error } = await ctx.supabase.from(KEYS_TABLE).update({
+    in_scope: input.in_scope, cohort, lei: keys.lei, usci: keys.usci, cninfo_org_id: keys.cninfo_org_id, cik: keys.cik,
+    names_zh, names_en, aliases, provenance, missing: [...missing], updated_at: now,
+  }).eq('user_id', ctx.userId).eq('entity_id', entityId);
+  if (error) throw new Error(error.message);
+
+  const entity = await getEntity(ctx, entityId);
+  if (entity) {
+    const metadata = { ...entity.metadata, in_scope: input.in_scope, scope_rationale: rationale, scope_updated_at: now };
+    const { error: entityErr } = await ctx.supabase.from(ENTITIES_TABLE).update({ metadata, updated_at: now }).eq('user_id', ctx.userId).eq('id', entityId);
+    if (entityErr) throw new Error(entityErr.message);
+  }
+  const updated = (await listEntityKeys(ctx)).find((r) => r.entity_id === entityId);
+  if (!updated) throw new ScopeError('entity not found', 404);
+  return updated;
+}
+
+/** Add a company outside the candidate list: wizard validation → CohortCompany → store validation → scope + rationale. */
+export async function addOwnerCompany(ctx: ResearchCtx, answer: OwnerCompanyAnswer, opts: { today: string }): Promise<EntityKeysRow> {
+  const errors = validateCompanyAnswer({ ...answer, entity_id: null });
+  if (errors.length) throw new ScopeError(errors.join('；'), 422);
+  let entityId: string;
+  try {
+    entityId = (await upsertEntityKeys(ctx, ownerCompanyToCohort(answer, opts))).entity_id;
+  } catch (e) {
+    if (e instanceof Error && e.message === 'invalid_schema') throw new ScopeError('company record failed validation', 422);
+    throw e;
+  }
+  return setScope(ctx, entityId, { in_scope: true, rationale: answer.rationale, today: opts.today });
+}
