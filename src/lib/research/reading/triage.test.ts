@@ -83,3 +83,16 @@ describe('Codex round 2 regression',()=>{
   expect(out.errors.map(e=>e.item_id)).toEqual(['cnt_1','cnt_2']);
  });
 });
+
+describe('Codex round 5 regression',()=>{
+ it('keeps an incomplete answers object retryable instead of caching an abstention',async()=>{
+  // Only TR1 answered for the single thesis: incomplete, so a failure (charged, retried next run).
+  const {fn}=fakeFetch([response({t0_TR1:noul(0.9)}),response({t0_TR1:noul(0.9),t0_TR2:noul(0.1),t0_TR3:noul(0.8)})]);
+  const out=await judgeTriageItems({items:[item(1),item(2)],theses:[thesis('a')],existing:[],fetch:fn,apiKey:'k'.repeat(20),maxCostUsd:1,now:()=>'2026-09-26T01:00:00.000Z'});
+  expect(out.answers.map(a=>a.item_id)).toEqual(['cnt_2']);
+  expect(out.errors).toEqual([{item_id:'cnt_1',error:'jev response incomplete'}]);
+  expect(parseTriageAnswers([thesis('a')],{t0_TR1:noul(0.9)}).complete).toBe(false);
+  // A genuine uncertainty-band abstention is complete and stays cached.
+  expect(parseTriageAnswers([thesis('a')],{t0_TR1:noul(0.5),t0_TR2:noul(0.9),t0_TR3:noul(0.9)}).complete).toBe(true);
+ });
+});

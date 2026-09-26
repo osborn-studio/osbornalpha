@@ -83,9 +83,12 @@ const band = (p: number | null, above: number, below: number | null): boolean | 
   return p < below ? false : null;
 };
 
-export function parseTriageAnswers(theses: TriageThesis[], answers: Record<string, unknown> | undefined): { triage: TriageDecision; verdicts: TriageVerdict[] } {
+/** `complete` is false when any asked question lacks a valid noul answer: such a response is not a judgment. */
+export function parseTriageAnswers(theses: TriageThesis[], answers: Record<string, unknown> | undefined): { triage: TriageDecision; verdicts: TriageVerdict[]; complete: boolean } {
+  let complete = true;
   const verdicts: TriageVerdict[] = theses.map((t, i) => {
     const pr = prob(answers?.[`t${i}_TR1`]), pc = prob(answers?.[`t${i}_TR2`]), pn = prob(answers?.[`t${i}_TR3`]);
+    if (pr === null || pc === null || pn === null) complete = false;
     return {
       thesis_id: t.id,
       relevant: band(pr, TRIAGE_THRESHOLDS.relevant_above, TRIAGE_THRESHOLDS.irrelevant_below),
@@ -102,7 +105,7 @@ export function parseTriageAnswers(theses: TriageThesis[], answers: Record<strin
     : relevant.some(v => v.counter === true || v.novel === true) ? 'read'
     : relevant.some(v => v.counter === null || v.novel === null) ? 'abstain'
     : 'skip';
-  return { triage, verdicts };
+  return { triage, verdicts, complete };
 }
 
 export function estimateForItem(item: TriageItem, theses: TriageThesis[], microsPer1kTokens = 45): number {
@@ -140,6 +143,8 @@ export async function judgeTriageItems(opts: JudgeTriageOptions): Promise<JudgeT
       const tokens = (data.usage?.input_tokens ?? 0) + (data.usage?.output_tokens ?? 0);
       const cost = microsForTokens(tokens > 0 ? tokens : estimateTokens(body), price);
       const parsed = parseTriageAnswers(opts.theses, data.answers);
+      // Missing or malformed answers are not a judgment: fail so the item is retried, never cached as an abstention.
+      if (!parsed.complete) throw new Error('jev response incomplete');
       out.answers.push({ item_id: item.item_id, triage: parsed.triage, verdicts: parsed.verdicts, backend_model: typeof data.model === 'string' && data.model ? data.model : JEV_MODEL, cost_micros: cost });
       calls++;
       out.spent_micros += cost;
