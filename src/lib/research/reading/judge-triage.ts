@@ -7,7 +7,7 @@ import Ajv from 'ajv';
 import { fail } from '../ingest/pa-v1/json.js';
 import type { Thesis } from '../types';
 import itemsSchema from './reading-triage-items.schema.json';
-import { answersDocument, estimateForItem, itemsHash, judgeTriageItems, type JudgeTriageResult, type TriageAnswersDocument, type TriageItemsDocument, type TriageThesis } from './triage';
+import { answersDocument, estimateForItem, itemsHash, judgeTriageItems, thesesHash, type JudgeTriageResult, type TriageAnswersDocument, type TriageItemsDocument, type TriageThesis } from './triage';
 
 const ajv = new Ajv({ strict: true, allErrors: false });
 const validateItems = ajv.compile<TriageItemsDocument>(itemsSchema as object);
@@ -19,13 +19,14 @@ export function loadItemsDocument(value: unknown): TriageItemsDocument {
 
 const ACTIVE = new Set(['ACTIVE', 'WATCH', 'AT_RISK']);
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim() !== '') : []);
+/** Structured entries (`ThesisPillar`, `ThesisCatalyst`) carry their wording in `text`; plain strings are accepted too. */
+const texts = (v: unknown): string[] => (Array.isArray(v) ? v.map(x => (typeof x === 'string' ? x : x && typeof x === 'object' && typeof (x as { text?: unknown }).text === 'string' ? (x as { text: string }).text : '')).filter(x => x.trim() !== '') : []);
 
 /** Active theses in the triage shape; explicit pillars first, watch metrics as the fallback. */
 export function thesesForTriage(theses: Thesis[]): TriageThesis[] {
   return theses.filter(t => ACTIVE.has(t.status)).map(t => {
-    const pillars = strings((t as unknown as { pillars?: unknown }).pillars);
-    return { id: t.id, title: t.title, pillars: pillars.length ? pillars : strings(t.watch_metrics), invalidation_conditions: strings(t.invalidation_conditions),
-      catalysts: strings((t as unknown as { catalysts?: unknown }).catalysts) };
+    const pillars = texts(t.pillars);
+    return { id: t.id, title: t.title, pillars: pillars.length ? pillars : strings(t.watch_metrics), invalidation_conditions: strings(t.invalidation_conditions), catalysts: texts(t.catalysts) };
   });
 }
 
@@ -42,6 +43,8 @@ export async function runJudgeTriage(input: RunJudgeTriageInput): Promise<RunJud
   if (input.theses.length === 0) fail('no_active_theses');
   const hash = itemsHash(input.items);
   if (input.existing && input.existing.items_hash !== hash) fail('items_mismatch');
+  // Answers are only reusable against the same thesis context and question version.
+  if (input.existing && input.existing.theses_hash !== thesesHash(input.theses)) fail('theses_mismatch');
   const existingAnswers = input.existing?.answers ?? [];
   const done = new Set(existingAnswers.map(a => a.item_id));
   const pending = input.items.items.filter(i => !done.has(i.item_id));

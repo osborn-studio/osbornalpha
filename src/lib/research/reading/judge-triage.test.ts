@@ -5,7 +5,7 @@ import type {TriageItem,TriageItemsDocument} from './triage';
 const item=(n:number):TriageItem=>({item_id:`cnt_${n}`,version_id:`ver_${n}`,title:`标题 ${n}`,source_url:null,text:`正文 ${n} `.repeat(3),body_sha256:'b'.repeat(64),local:{selected:true,disposition:'selected',semantic_conclusion:'read'}});
 const doc=(items:TriageItem[]):TriageItemsDocument=>({schema_name:'brain-reading-triage-items',schema_version:'1.0',generated_at:'2026-09-26T00:00:00.000Z',plan_id:'plan_1',policy_version:'local-reading-v2',question:'AI 在券商',items,excluded:[]});
 const reply=()=>new Response(JSON.stringify({model:'jev-1.13.0',answers:{t0_TR1:{type:'noul',noul:0.9},t0_TR2:{type:'noul',noul:0.1},t0_TR3:{type:'noul',noul:0.8}},usage:{input_tokens:100,output_tokens:10}}),{status:200});
-const thesis={id:'t1',title:'T1',status:'ACTIVE',watch_metrics:['支柱'],invalidation_conditions:['失效'],catalysts:['催化'],pillars:['支柱 P']} as any;
+const thesis={id:'t1',title:'T1',status:'ACTIVE',watch_metrics:['支柱'],invalidation_conditions:['失效'],catalysts:[{text:'催化',expected_date:null}],pillars:[{id:'p1',text:'支柱 P',resolvable_by:'2026-12-31',deadline:null}]} as any;
 
 describe('loadItemsDocument',()=>{
  it('validates the Brain items shape',()=>{
@@ -45,5 +45,20 @@ describe('runJudgeTriage',()=>{
   const out=await runJudgeTriage({items:doc([item(1),item(2)]),theses:thesesForTriage([thesis]),existing:null,fetch:counting,apiKey:'k'.repeat(20),maxCostUsd:1,now:()=>'2026-09-26T01:00:00.000Z',dryRun:true});
   expect(calls).toBe(0);
   expect(out.plan).toEqual({items:2,to_judge:2,skipped_existing:0,theses:1,estimated_micros:expect.any(Number)});
+ });
+});
+
+
+describe('Codex round 1 regressions',()=>{
+ it('reuses answers only for the same thesis context and question version',async()=>{
+  const items=doc([item(1),item(2)]);
+  const theses=thesesForTriage([thesis]);
+  const fetchOk=(async()=>reply()) as unknown as typeof fetch;
+  const first=await runJudgeTriage({items,theses,existing:null,fetch:fetchOk,apiKey:'k'.repeat(20),maxCostUsd:1,now:()=>'2026-09-26T01:00:00.000Z'});
+  expect(first.document.theses_hash).toMatch(/^[0-9a-f]{64}$/);
+  const revised=thesesForTriage([{...thesis,invalidation_conditions:['新的失效条件']}]);
+  await expect(runJudgeTriage({items,theses:revised,existing:first.document,fetch:fetchOk,apiKey:'k'.repeat(20),maxCostUsd:1,now:()=>'2026-09-26T02:00:00.000Z'})).rejects.toThrow(/theses_mismatch/);
+  const added=thesesForTriage([thesis,{...thesis,id:'t2'}]);
+  await expect(runJudgeTriage({items,theses:added,existing:first.document,fetch:fetchOk,apiKey:'k'.repeat(20),maxCostUsd:1,now:()=>'2026-09-26T02:00:00.000Z'})).rejects.toThrow(/theses_mismatch/);
  });
 });

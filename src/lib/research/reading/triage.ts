@@ -36,13 +36,18 @@ export interface TriageVerdict {
 export type TriageDecision = 'read' | 'skip' | 'abstain';
 export interface TriageAnswer { item_id: string; triage: TriageDecision; verdicts: TriageVerdict[]; backend_model: string; cost_micros: number }
 export interface TriageAnswersDocument {
-  schema_name: 'alpha-reading-triage-answers'; schema_version: '1.0'; generated_at: string; items_hash: string; question_version: string;
+  schema_name: 'alpha-reading-triage-answers'; schema_version: '1.0'; generated_at: string; items_hash: string; theses_hash: string; question_version: string;
   theses: { thesis_id: string; title: string }[]; answers: TriageAnswer[];
 }
 
 export function itemsHash(doc: TriageItemsDocument): string {
   const { generated_at: _ignored, ...rest } = doc;
   return createHash('sha256').update(canonicalJson(rest), 'utf8').digest('hex');
+}
+
+/** Fingerprint of everything the verdicts depend on besides the item: theses text and the question set. */
+export function thesesHash(theses: TriageThesis[]): string {
+  return createHash('sha256').update(canonicalJson({ question_version: TRIAGE_QUESTION_VERSION, theses }), 'utf8').digest('hex');
 }
 
 /** One request per item; only pack material and thesis text enter the state (no ids of Brain's local view). */
@@ -140,6 +145,6 @@ export async function judgeTriageItems(opts: JudgeTriageOptions): Promise<JudgeT
 }
 
 export function answersDocument(input: { items: TriageItemsDocument; theses: TriageThesis[]; answers: TriageAnswer[]; generatedAt: string }): TriageAnswersDocument {
-  return { schema_name: 'alpha-reading-triage-answers', schema_version: '1.0', generated_at: input.generatedAt, items_hash: itemsHash(input.items),
+  return { schema_name: 'alpha-reading-triage-answers', schema_version: '1.0', generated_at: input.generatedAt, items_hash: itemsHash(input.items), theses_hash: thesesHash(input.theses),
     question_version: TRIAGE_QUESTION_VERSION, theses: input.theses.map(t => ({ thesis_id: t.id, title: t.title.slice(0, 500) })), answers: input.answers };
 }
