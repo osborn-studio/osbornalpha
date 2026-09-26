@@ -108,7 +108,7 @@ describe('proposeThresholds',()=>{
 
 describe('evaluateStopRules (§10.3)',()=>{
  const metric=(backend:string,over:Record<string,unknown>={})=>({backend,labels:400,important_recall:{k:90,n:100,rate:0.9,low:0.83,high:0.94},false_support:{k:2,n:100,rate:0.02,low:0,high:0.07},
-  questions:[{question_id:'Q1',n:100,labeled:100,accuracy:0.9,abstain_rate:0.1,ece_before:0.05,ece_after:0.03},{question_id:'Q2',n:100,labeled:100,accuracy:0.88,abstain_rate:0.2,ece_before:0.05,ece_after:0.03}],...over}) as any;
+  questions:[{question_id:'Q1',n:100,labeled:100,decided:100,accuracy:0.9,abstain_rate:0.1,ece_before:0.05,ece_after:0.03},{question_id:'Q2',n:100,labeled:100,decided:100,accuracy:0.88,abstain_rate:0.2,ece_before:0.05,ece_after:0.03}],...over}) as any;
  it('keeps jev on Q3/Q4 only when recall or false-support break, and never concludes on thin evidence',()=>{
   const verdicts=evaluateStopRules([metric('jev',{important_recall:{k:80,n:100,rate:0.8,low:0.7,high:0.87}})]);
   expect(verdicts.find(v=>v.rule==='jev_q3q4_only')).toMatchObject({triggered:true});
@@ -116,12 +116,12 @@ describe('evaluateStopRules (§10.3)',()=>{
   expect(thin.find(v=>v.rule==='jev_q3q4_only')).toMatchObject({triggered:false,status:'insufficient_evidence'});
  });
  it('does not introduce jev when rule or deepseek is within 3 points with fewer abstentions',()=>{
-  const verdicts=evaluateStopRules([metric('jev'),metric('rule',{questions:[{question_id:'Q1',n:100,labeled:100,accuracy:0.89,abstain_rate:0.0,ece_before:0.1,ece_after:null},{question_id:'Q2',n:100,labeled:100,accuracy:0.87,abstain_rate:0.05,ece_before:0.1,ece_after:null}]})]);
+  const verdicts=evaluateStopRules([metric('jev'),metric('rule',{questions:[{question_id:'Q1',n:100,labeled:100,decided:100,accuracy:0.89,abstain_rate:0.0,ece_before:0.1,ece_after:null},{question_id:'Q2',n:100,labeled:100,decided:100,accuracy:0.87,abstain_rate:0.05,ece_before:0.1,ece_after:null}]})]);
   expect(verdicts.find(v=>v.rule==='do_not_introduce_jev')).toMatchObject({triggered:true});
  });
  it('switches to the local probe after 300 labels when it is within 2 points, and flags a >5 point drift against a baseline',()=>{
-  const verdicts=evaluateStopRules([metric('jev'),metric('local_probe',{questions:[{question_id:'Q1',n:100,labeled:100,accuracy:0.89,abstain_rate:0.1,ece_before:0.05,ece_after:0.03},{question_id:'Q2',n:100,labeled:100,accuracy:0.87,abstain_rate:0.2,ece_before:0.05,ece_after:0.03}]})],
-   {metrics:[metric('jev',{questions:[{question_id:'Q1',n:100,labeled:100,accuracy:0.8,abstain_rate:0.1,ece_before:0.05,ece_after:0.03},{question_id:'Q2',n:100,labeled:100,accuracy:0.88,abstain_rate:0.2,ece_before:0.05,ece_after:0.03}]})]});
+  const verdicts=evaluateStopRules([metric('jev'),metric('local_probe',{questions:[{question_id:'Q1',n:100,labeled:100,decided:100,accuracy:0.89,abstain_rate:0.1,ece_before:0.05,ece_after:0.03},{question_id:'Q2',n:100,labeled:100,decided:100,accuracy:0.87,abstain_rate:0.2,ece_before:0.05,ece_after:0.03}]})],
+   {metrics:[metric('jev',{questions:[{question_id:'Q1',n:100,labeled:100,decided:100,accuracy:0.8,abstain_rate:0.1,ece_before:0.05,ece_after:0.03},{question_id:'Q2',n:100,labeled:100,decided:100,accuracy:0.88,abstain_rate:0.2,ece_before:0.05,ece_after:0.03}]})]});
   expect(verdicts.find(v=>v.rule==='switch_local_probe')).toMatchObject({triggered:true});
   expect(verdicts.find(v=>v.rule==='lock_version_recalibrate')).toMatchObject({triggered:true});
  });
@@ -186,7 +186,7 @@ describe('Codex round 1 regressions',()=>{
  });
  it('gates stop verdicts on the compared samples, not only on jev totals',()=>{
   const metric=(backend:string,labels:number,q:Array<[string,number,number|null]>)=>({backend,labels,important_recall:{k:90,n:100,rate:0.9,low:0.83,high:0.94},false_support:{k:2,n:100,rate:0.02,low:0,high:0.07},
-   questions:q.map(([id,labeled,acc])=>({question_id:id,n:labeled,labeled,accuracy:acc,abstain_rate:0.1,ece_before:null,ece_after:null}))}) as any;
+   questions:q.map(([id,labeled,acc])=>({question_id:id,n:labeled,labeled,decided:labeled,accuracy:acc,abstain_rate:0.1,ece_before:null,ece_after:null}))}) as any;
   const v=evaluateStopRules([metric('jev',400,[['Q1',200,0.9],['Q4',200,0.9]]),metric('local_probe',1,[['Q4',1,1]])]);
   expect(v.find(x=>x.rule==='switch_local_probe')).toMatchObject({triggered:false,status:'insufficient_evidence'});
   const thinQ1=evaluateStopRules([{...metric('jev',400,[['Q4',400,0.9]]),important_recall:{k:2,n:3,rate:0.67,low:0.2,high:0.94},false_support:{k:0,n:2,rate:0,low:0,high:0.66}}]);
@@ -209,5 +209,39 @@ describe('Codex round 1 regressions',()=>{
   expect(a.fits).toEqual([expect.objectContaining({backend:'jev',question_id:'Q1',labeled:80})]);
   expect(a.fits[0]!.segments.length).toBeGreaterThan(0);
   expect(renderCalibrationMarkdown(a)).toContain('## Isotonic 拟合');
+ });
+});
+
+describe('Codex round 2 regressions',()=>{
+ it('keeps score-less abstentions as unavoidable misses when proposing Q1 thresholds',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<30;i++)rows.push(q1(0.9,'true'));
+  for(let i=0;i<30;i++)rows.push(row({question_id:'Q1',confidence:null,distribution:{},selected:null,abstained:true,label:'true'}));
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q1')!;
+  expect(p.status).toBe('infeasible');
+  expect(p.metrics.recall).toBeCloseTo(0.5,6);
+  expect(p.metrics.abstain_rate).toBeCloseTo(0.5,6);
+  // Fitting needs 30 usable scores, not 30 labels.
+  const thin=[...rows.slice(0,10),...rows.slice(30)];
+  expect(proposeThresholds(thin).find(x=>x.question_id==='Q1')!.status).toBe('insufficient_labels');
+ });
+ it('evaluates the two jev stop conditions independently',()=>{
+  const m=(recall:{k:number;n:number},fs:{k:number;n:number})=>({backend:'jev',labels:400,important_recall:{...recall,rate:recall.n?recall.k/recall.n:null,low:0,high:1},false_support:{...fs,rate:fs.n?fs.k/fs.n:null,low:0,high:1},questions:[]}) as any;
+  // Recall clearly broken with ample evidence, Q2 thin: still a verdict.
+  expect(evaluateStopRules([m({k:50,n:100},{k:0,n:3})]).find(v=>v.rule==='jev_q3q4_only')).toMatchObject({triggered:true,status:'evaluated'});
+  // Recall fine with ample evidence, Q2 thin: cannot conclude that neither fails.
+  expect(evaluateStopRules([m({k:95,n:100},{k:0,n:3})]).find(v=>v.rule==='jev_q3q4_only')).toMatchObject({triggered:false,status:'insufficient_evidence'});
+  // Both ample and fine.
+  expect(evaluateStopRules([m({k:95,n:100},{k:1,n:100})]).find(v=>v.rule==='jev_q3q4_only')).toMatchObject({triggered:false,status:'evaluated'});
+ });
+ it('gates accuracy comparisons on decided labels, not on labels that were abstentions',()=>{
+  const metric=(backend:string,decided:number,acc:number)=>({backend,labels:400,important_recall:{k:90,n:100,rate:0.9,low:0.83,high:0.94},false_support:{k:2,n:100,rate:0.02,low:0,high:0.07},
+   questions:[{question_id:'Q4',n:400,labeled:100,decided,accuracy:acc,abstain_rate:0.5,ece_before:null,ece_after:null}]}) as any;
+  const v=evaluateStopRules([metric('jev',100,0.9),metric('local_probe',1,1)]);
+  expect(v.find(x=>x.rule==='switch_local_probe')).toMatchObject({triggered:false,status:'insufficient_evidence'});
+  const rows:ReportRow[]=[];
+  for(let i=0;i<40;i++)rows.push(q2(0.9,'support','support'));
+  for(let i=0;i<40;i++)rows.push(q2(0.3,'support','support'));
+  expect(classMetrics(rows)[0]!.questions.find(q=>q.question_id==='Q2')).toMatchObject({labeled:80,decided:40});
  });
 });

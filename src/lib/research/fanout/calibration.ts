@@ -128,7 +128,9 @@ import { QUESTION_IDS, THRESHOLDS, type QuestionId } from './questions';
 
 export interface Rate { k: number; n: number; rate: number | null; low: number | null; high: number | null }
 export interface QuestionMetrics {
-  question_id: string; n: number; labeled: number; accuracy: number | null; abstain_rate: number;
+  question_id: string; n: number; labeled: number;
+  /** Labeled rows that were actually decided (not abstained): the accuracy denominator. */
+  decided: number; accuracy: number | null; abstain_rate: number;
   ece_before: number | null; ece_after: number | null; p50_latency_ms: number | null; p95_latency_ms: number | null; cost_micros_per_1k: number;
 }
 export interface BackendMetrics { backend: string; labels: number; important_recall: Rate; false_support: Rate; questions: QuestionMetrics[] }
@@ -143,8 +145,9 @@ export function classMetrics(rows: ReportRow[]): BackendMetrics[] {
     const q1True = mine.filter(r => r.question_id === 'Q1' && r.label === 'true');
     const q2Decided = mine.filter(r => r.question_id === 'Q2' && r.label !== null && !r.abstained);
     const questions = summary.filter(m => m.backend === backend).map(m => {
-      const e = crossFittedEce(mine.filter(r => r.question_id === m.question_id));
-      return { question_id: m.question_id, n: m.n, labeled: m.labeled, accuracy: m.accuracy, abstain_rate: round6(m.abstain_rate),
+      const qRows = dedupeMaterialLevel(mine.filter(r => r.question_id === m.question_id));
+      const e = crossFittedEce(qRows);
+      return { question_id: m.question_id, n: m.n, labeled: m.labeled, decided: qRows.filter(r => r.label !== null && !r.abstained).length, accuracy: m.accuracy, abstain_rate: round6(m.abstain_rate),
         ece_before: e.before, ece_after: e.after, p50_latency_ms: m.p50_latency_ms, p95_latency_ms: m.p95_latency_ms, cost_micros_per_1k: m.cost_micros_per_1k };
     });
     return {
@@ -176,15 +179,18 @@ export function proposeThresholds(rows: ReportRow[]): ThresholdProposal[] {
     const labeled = dedupeMaterialLevel(pool).filter(r => r.question_id === q && r.label !== null);
     const current = { ...(THRESHOLDS as Record<string, Record<string, number | string>>)[q] } as Record<string, number | string>;
     const base = { question_id: q, backend_used: backendUsed, labeled: labeled.length, current };
-    if (labeled.length < MIN_LABELS) return { ...base, status: 'insufficient_labels', proposed: null, metrics: {} };
     if (q === 'Q1') {
-      const pts = labeled.map(r => ({ p: pTrue(r), t: r.label === 'true' })).filter((x): x is { p: number; t: boolean } => x.p !== null);
-      const relevant = pts.filter(x => x.t).length;
+      // Rows without a usable score are unavoidable abstentions: misses for recall, abstentions for the rate.
+      const all = labeled.map(r => ({ p: pTrue(r), t: r.label === 'true' }));
+      const pts = all.filter((x): x is { p: number; t: boolean } => x.p !== null);
+      const unscored = all.length - pts.length, unscoredRelevant = all.filter(x => x.p === null && x.t).length;
+      if (pts.length < MIN_LABELS) return { ...base, status: 'insufficient_labels', proposed: null, metrics: {} };
+      const relevant = pts.filter(x => x.t).length + unscoredRelevant;
       let best: { lo: number; hi: number; recall: number; abstain: number; precision: number; feasible: boolean } | null = null;
       for (const hi of grid(0.5, 0.95, 0.05)) for (const lo of grid(0.05, 0.5, 0.05)) {
         if (lo >= hi) continue;
         const sel = pts.filter(x => x.p > hi), abst = pts.filter(x => x.p >= lo && x.p <= hi);
-        const recall = relevant ? sel.filter(x => x.t).length / relevant : 0, abstain = abst.length / pts.length;
+        const recall = relevant ? sel.filter(x => x.t).length / relevant : 0, abstain = (abst.length + unscored) / all.length;
         const precision = sel.length ? sel.filter(x => x.t).length / sel.length : 0;
         const feasible = recall >= 0.9 && abstain <= 0.3;
         const cand = { lo, hi, recall, abstain, precision, feasible };
@@ -199,17 +205,21 @@ export function proposeThresholds(rows: ReportRow[]): ThresholdProposal[] {
     }
     if (q === 'Q5') {
       const pts = labeled.map(r => ({ p: pTrue(r), t: r.label === 'true' })).filter((x): x is { p: number; t: boolean } => x.p !== null);
+      if (pts.length < MIN_LABELS) return { ...base, status: 'insufficient_labels', proposed: null, metrics: {} };
       let best: { t: number; acc: number } | null = null;
       for (const t of grid(0.2, 0.8, 0.05)) { const acc = pts.filter(x => (x.p >= t) === x.t).length / pts.length; if (!best || acc > best.acc) best = { t, acc }; }
       return { ...base, status: 'proposed', proposed: { retelling_below: best!.t }, metrics: { accuracy: round6(best!.acc) } };
     }
     // Choice questions: a minimum confidence.
     const pts = labeled.map(r => ({ c: r.confidence, sel: argmax(r.distribution ?? {}) ?? r.selected, label: r.label as string })).filter((x): x is { c: number; sel: string; label: string } => typeof x.c === 'number');
+    if (pts.length < MIN_LABELS) return { ...base, status: 'insufficient_labels', proposed: null, metrics: {} };
+    const unscored = labeled.length - pts.length;
     if (q === 'Q2') {
       let best: { t: number; coverage: number; fs: number; acc: number; feasible: boolean } | null = null;
       for (const t of grid(0.3, 0.95, 0.05)) {
         const decided = pts.filter(x => x.c >= t);
-        const coverage = decided.length / pts.length;
+        // Score-less abstentions can never be decided, so they lower coverage at every threshold.
+        const coverage = decided.length / (pts.length + unscored);
         const fs = decided.length ? decided.filter(x => x.sel === 'support' && x.label !== 'support').length / decided.length : 0;
         const acc = decided.length ? decided.filter(x => x.sel === x.label).length / decided.length : 0;
         const feasible = fs <= 0.05;
@@ -259,15 +269,19 @@ export function evaluateStopRules(metrics: BackendMetrics[], baseline?: { metric
   // Questions where both backends have an accuracy from at least MIN_LABELS labels each.
   const shared = (a: BackendMetrics, b: BackendMetrics) => a.questions.map(q => q.question_id).filter(id => {
     const qa = a.questions.find(q => q.question_id === id), qb = b.questions.find(q => q.question_id === id);
-    return !!qa && !!qb && qa.accuracy !== null && qb.accuracy !== null && qa.labeled >= MIN_LABELS && qb.labeled >= MIN_LABELS;
+    return !!qa && !!qb && qa.accuracy !== null && qb.accuracy !== null && qa.decided >= MIN_LABELS && qb.decided >= MIN_LABELS;
   });
   if (!jev) out.push({ rule: 'jev_q3q4_only', triggered: false, status: 'not_applicable', evidence: 'no jev judgments' });
-  else if (jev.important_recall.n < MIN_LABELS || jev.false_support.n < MIN_LABELS)
-    out.push({ rule: 'jev_q3q4_only', triggered: false, status: 'insufficient_evidence', evidence: `Q1 relevant labels ${jev.important_recall.n}, Q2 decided labels ${jev.false_support.n}; need ${MIN_LABELS} each` });
   else {
+    // Either breach is sufficient on its own evidence; concluding that neither fails needs both.
+    const recallOk = jev.important_recall.n >= MIN_LABELS, fsOk = jev.false_support.n >= MIN_LABELS;
     const recall = jev.important_recall.rate, fs = jev.false_support.rate;
-    const triggered = (recall !== null && recall < 0.85) || (fs !== null && fs > 0.08);
-    out.push({ rule: 'jev_q3q4_only', triggered, status: 'evaluated', evidence: `recall ${recall ?? 'n/a'} (n=${jev.important_recall.n}), false-support ${fs ?? 'n/a'} (n=${jev.false_support.n})` });
+    const recallFails = recallOk && recall !== null && recall < 0.85;
+    const fsFails = fsOk && fs !== null && fs > 0.08;
+    const evidence = `recall ${recall ?? 'n/a'} (n=${jev.important_recall.n}${recallOk ? '' : ', thin'}), false-support ${fs ?? 'n/a'} (n=${jev.false_support.n}${fsOk ? '' : ', thin'})`;
+    if (recallFails || fsFails) out.push({ rule: 'jev_q3q4_only', triggered: true, status: 'evaluated', evidence });
+    else if (recallOk && fsOk) out.push({ rule: 'jev_q3q4_only', triggered: false, status: 'evaluated', evidence });
+    else out.push({ rule: 'jev_q3q4_only', triggered: false, status: 'insufficient_evidence', evidence });
   }
   for (const rule of ['do_not_introduce_jev', 'switch_local_probe'] as const) {
     const others = rule === 'do_not_introduce_jev' ? ['rule', 'llm_deepseek'] : ['local_probe'];
@@ -291,7 +305,7 @@ export function evaluateStopRules(metrics: BackendMetrics[], baseline?: { metric
   if (!baseline || !jev) out.push({ rule: 'lock_version_recalibrate', triggered: false, status: 'not_applicable', evidence: baseline ? 'no jev judgments' : 'no baseline supplied' });
   else {
     const prev = baseline.metrics.find(m => m.backend === 'jev');
-    const comparable = prev ? jev.questions.map(q => { const p = prev.questions.find(x => x.question_id === q.question_id); return p && p.accuracy !== null && q.accuracy !== null && p.labeled >= MIN_LABELS && q.labeled >= MIN_LABELS ? { q: q.question_id, d: q.accuracy - p.accuracy } : null; }).filter((x): x is { q: string; d: number } => x !== null) : [];
+    const comparable = prev ? jev.questions.map(q => { const p = prev.questions.find(x => x.question_id === q.question_id); return p && p.accuracy !== null && q.accuracy !== null && p.decided >= MIN_LABELS && q.decided >= MIN_LABELS ? { q: q.question_id, d: q.accuracy - p.accuracy } : null; }).filter((x): x is { q: string; d: number } => x !== null) : [];
     const drifts = comparable.filter(x => Math.abs(x.d) > 0.05);
     out.push({ rule: 'lock_version_recalibrate', triggered: drifts.length > 0, status: !prev ? 'not_applicable' : comparable.length === 0 ? 'insufficient_evidence' : 'evaluated',
       evidence: drifts.map(d => `${d.q} ${d.d >= 0 ? '+' : ''}${(d.d * 100).toFixed(1)} pt`).join(', ') || (comparable.length ? 'within 5 pt' : `no question with ≥ ${MIN_LABELS} labels in both reports`) });
