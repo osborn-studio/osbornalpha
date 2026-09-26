@@ -20,7 +20,7 @@ export async function POST(req: Request) {
   return withResearch(async () => {
     const ctx = await requireResearchUser();
     const body = await req.json().catch(() => ({}));
-    const company = await addOwnerCompany(ctx, { ...body, entity_id: null }, { today: today() });
+    const company = await addOwnerCompany(ctx, body, { today: today() });
     return NextResponse.json({ company }, { status: 201 });
   });
 }

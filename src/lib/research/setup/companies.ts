@@ -135,3 +135,20 @@ export function rosterKeys(answers: Record<string, OwnerCompanyAnswer>): { selec
   const keys = Object.keys(answers);
   return { selected: keys.filter((k) => !k.startsWith('new:')), added: keys.filter((k) => k.startsWith('new:')) };
 }
+
+/**
+ * Runtime shape guard for request bodies: every field becomes the string the form would hold
+ * (non-strings → ''), so the typed validator can report 422s instead of throwing on `.trim()`.
+ */
+export function coerceOwnerCompanyAnswer(raw: unknown): OwnerCompanyAnswer {
+  const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const str = (v: unknown) => (typeof v === 'string' ? v : '');
+  const rawKeys = o.keys && typeof o.keys === 'object' && !Array.isArray(o.keys) ? (o.keys as Record<string, unknown>) : {};
+  const market = HOME_MARKETS.includes(o.home_market as HomeMarket) ? (o.home_market as HomeMarket) : 'other';
+  return {
+    entity_id: typeof o.entity_id === 'string' ? o.entity_id : null,
+    rationale: str(o.rationale), names_zh: str(o.names_zh), names_en: str(o.names_en), home_market: market,
+    exchange_code: str(o.exchange_code), listed_on: str(o.listed_on),
+    keys: Object.fromEntries(KEY_NAMES.map((k) => [k, str(rawKeys[k])])) as Record<KeyName, string>,
+  };
+}

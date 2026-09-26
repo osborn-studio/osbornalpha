@@ -4,7 +4,7 @@
  */
 import { getEntity, listEntities } from '../entities';
 import { isUuid, type ResearchCtx } from '../store';
-import { ownerCompanyToCohort, OWNER_SOURCE, RATIONALE_MAX, scopeCohort, validateCompanyAnswer, type OwnerCompanyAnswer } from '../setup/companies';
+import { coerceOwnerCompanyAnswer, ownerCompanyToCohort, OWNER_SOURCE, RATIONALE_MAX, scopeCohort, validateCompanyAnswer, type OwnerCompanyAnswer } from '../setup/companies';
 import { isValidCik, isValidLei, isValidUsci } from './identifiers';
 import { listEntityKeys, upsertEntityKeys, type EntityKeysRow } from './store';
 import { KEY_NAMES, type KeyName, type Provenance } from './types';
@@ -42,6 +42,8 @@ export async function setScope(ctx: ResearchCtx, entityId: string, input: ScopeI
   if (rationale.length > RATIONALE_MAX) throw new ScopeError(`rationale must be at most ${RATIONALE_MAX} characters`, 422);
   if (typeof input.in_scope !== 'boolean') throw new ScopeError('in_scope must be a boolean', 422);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.today)) throw new ScopeError('today must be YYYY-MM-DD', 422);
+  if (input.keys !== undefined && (input.keys === null || typeof input.keys !== 'object' || Array.isArray(input.keys)
+      || Object.values(input.keys).some((v) => v !== undefined && typeof v !== 'string'))) throw new ScopeError('keys must be an object of strings', 422);
   const row = (await listEntityKeys(ctx)).find((r) => r.entity_id === entityId);
   if (!row) throw new ScopeError('entity not found', 404);
 
@@ -114,7 +116,8 @@ const lower = (v: unknown) => (typeof v === 'string' ? v.trim().toLowerCase() : 
  * A company that already exists (by any name, alias or primary ticker) is refused with 409: upsertEntityKeys would
  * otherwise replace its researched key row with the wizard's blank identifiers. Scope the existing row instead.
  */
-export async function addOwnerCompany(ctx: ResearchCtx, answer: OwnerCompanyAnswer, opts: { today: string }): Promise<EntityKeysRow> {
+export async function addOwnerCompany(ctx: ResearchCtx, rawAnswer: OwnerCompanyAnswer | unknown, opts: { today: string }): Promise<EntityKeysRow> {
+  const answer = coerceOwnerCompanyAnswer(rawAnswer);
   const errors = validateCompanyAnswer({ ...answer, entity_id: null });
   if (errors.length) throw new ScopeError(errors.join('；'), 422);
   const names = new Set([answer.names_zh, answer.names_en].map(lower).filter(Boolean));
@@ -131,9 +134,14 @@ export async function addOwnerCompany(ctx: ResearchCtx, answer: OwnerCompanyAnsw
   const byName = entities.find((e) => keyed.has(e.id) && (names.has(lower(e.name)) || lower(e.ticker) === ticker || e.aliases.some((a) => names.has(lower(a)))));
   const byKeys = keyRows.find((r) => !resumable(r) && ([...r.names_zh, ...r.names_en, ...r.aliases].some((n) => names.has(lower(n))) || r.securities.some((sec) => lower(sec.exchange_code) === ticker)));
   if (byName || byKeys) throw new ScopeError('company already exists; scope the existing record instead of adding it again', 409);
+  // Resuming: keep the listing date persisted by the earlier attempt, otherwise a blank date retried on another
+  // day would become a second (exchange_code, valid_from) security row.
+  const resumed = keyRows.find((r) => resumable(r) && r.securities.some((sec) => lower(sec.exchange_code) === ticker));
+  const persistedDate = resumed?.securities.find((sec) => lower(sec.exchange_code) === ticker)?.valid_from;
+  const effective = answer.listed_on.trim() === '' && persistedDate ? { ...answer, listed_on: persistedDate } : answer;
   let entityId: string;
   try {
-    entityId = (await upsertEntityKeys(ctx, ownerCompanyToCohort(answer, opts))).entity_id;
+    entityId = (await upsertEntityKeys(ctx, ownerCompanyToCohort(effective, opts))).entity_id;
   } catch (e) {
     if (e instanceof Error && e.message === 'invalid_schema') throw new ScopeError('company record failed validation', 422);
     throw e;

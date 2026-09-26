@@ -154,3 +154,25 @@ describe('Codex round 7 regressions',()=>{
   await expect(addOwnerCompany(ctx,{...answer,exchange_code:'600447.SH'},{today:'2026-09-27'})).rejects.toMatchObject({status:409});
  });
 });
+
+
+describe('Codex round 8 regressions',()=>{
+ const blankDate={entity_id:null,rationale:'券商 IT 第二梯队',names_zh:'金证股份',names_en:'Kingdom Technology',home_market:'A' as const,exchange_code:'600446.SH',listed_on:'',keys:{lei:'',usci:'',cninfo_org_id:'',cik:''}};
+ it('reuses the persisted listing date when a blank-date creation is retried on another day',async()=>{
+  const first=await addOwnerCompany(ctx,blankDate,{today:'2026-09-27'});
+  const again=await addOwnerCompany(ctx,blankDate,{today:'2026-09-28'});
+  expect(again.entity_id).toBe(first.entity_id);
+  expect(again.securities).toHaveLength(1);
+  expect(again.securities[0]!.valid_from).toBe('2026-09-27');
+  expect(store.count('research_entity_securities')).toBe(1);
+ });
+ it('turns malformed request bodies into 422 validation errors instead of TypeErrors',async()=>{
+  for (const body of [{}, {rationale:'r'}, {rationale:5,names_zh:['x'],keys:'nope'}, null, 'text']) {
+   await expect(addOwnerCompany(ctx,body as never,{today:'2026-09-27'})).rejects.toMatchObject({status:422});
+  }
+  expect(store.count('research_entities')).toBe(0);
+  const {entity_id}=await upsertEntityKeys(ctx,hundsun());
+  await expect(setScope(ctx,entity_id,{in_scope:true,rationale:'r',today:'2026-09-27',keys:{lei:7} as never})).rejects.toMatchObject({status:422});
+  await expect(setScope(ctx,entity_id,{in_scope:'yes',rationale:'r',today:'2026-09-27'} as never)).rejects.toMatchObject({status:422});
+ });
+});
