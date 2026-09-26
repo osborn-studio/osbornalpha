@@ -99,3 +99,29 @@ export function companiesStepErrors(input: { step: number; selected: OwnerCompan
   if (input.step === n + 2 && n + input.added.length === 0) return ['至少勾选或添加 1 家公司'];
   return [];
 }
+
+/**
+ * Everything the review screen must know before a single write is issued: every selected and added
+ * answer validated, and the first screen the owner has to go back to (selection screen when the
+ * roster is empty; the k-th company's screen; or the owner-added screen n + 1).
+ */
+export function companiesSubmitErrors(input: { selected: OwnerCompanyAnswer[]; added: OwnerCompanyAnswer[] }): { errors: string[]; firstStep: number | null } {
+  const n = input.selected.length;
+  if (n + input.added.length === 0) return { errors: ['至少勾选或添加 1 家公司'], firstStep: 0 };
+  const errors: string[] = [];
+  let firstStep: number | null = null;
+  input.selected.forEach((a, i) => {
+    const e = validateCompanyAnswer(a);
+    if (e.length) { errors.push(...e.map((m) => `第 ${i + 1} 家：${m}`)); firstStep ??= i + 1; }
+  });
+  const addedErrors = companiesStepErrors({ step: n + 1, selected: input.selected, added: input.added });
+  if (addedErrors.length) { errors.push(...addedErrors); firstStep ??= n + 1; }
+  return { errors, firstStep };
+}
+
+/** A `new:<n>` answer whose POST succeeded becomes a selected existing company keyed by its entity id. */
+export function reconcileAddedCompany(answers: Record<string, OwnerCompanyAnswer>, key: string, entityId: string): Record<string, OwnerCompanyAnswer> {
+  const { [key]: created, ...rest } = answers;
+  if (!created) return answers;
+  return { ...rest, [entityId]: { ...created, entity_id: entityId } };
+}

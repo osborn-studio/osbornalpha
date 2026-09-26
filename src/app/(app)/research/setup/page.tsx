@@ -81,7 +81,7 @@ export default function ResearchSetupPage() {
       {flow === 'companies' && companies && (
         <CompaniesFlow companies={companies} answers={draft.companies} step={draft.companyStep}
           onAnswersChange={(companies) => update({ companies })} onStepChange={(companyStep) => update({ companyStep })}
-          onSaved={async (m) => { reset(resetCompanyDraft); setNotice(m); await load(); }} />
+          onSaved={async (m) => { reset(resetCompanyDraft); setNotice(m); await load(); }} onRefresh={load} />
       )}
       {flow === 'thesis' && companies && (
         <ThesisFlow companies={companies} draft={draft.thesis} step={draft.thesisStep}

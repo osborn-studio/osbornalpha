@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { COMPANY_QUESTIONS, THESIS_QUESTIONS } from './questions';
 import { EMPTY_THESIS_DRAFT, thesisFormToInput, validateThesisStep, type ThesisDraft } from './theses';
-import { companiesStepErrors, ownerCompanyToCohort, validateCompanyAnswer, type OwnerCompanyAnswer } from './companies';
+import { companiesStepErrors, companiesSubmitErrors, ownerCompanyToCohort, reconcileAddedCompany, validateCompanyAnswer, type OwnerCompanyAnswer } from './companies';
 import { setupProgress, TARGETS } from './progress';
 import { parseDraft, resetCompanyDraft, resetThesisDraft, serializeDraft } from './draft';
 
@@ -157,5 +157,30 @@ describe('Codex round 1 regressions', () => {
     const draft = { version: 1 as const, thesis: filled(), thesisStep: 8, companies: { e1: answer }, companyStep: 3 };
     expect(resetThesisDraft(draft)).toEqual({ ...draft, thesis: EMPTY_THESIS_DRAFT, thesisStep: 0 });
     expect(resetCompanyDraft(draft)).toEqual({ ...draft, companies: {}, companyStep: 0 });
+  });
+});
+
+
+describe('Codex round 2 regressions', () => {
+  const ok: OwnerCompanyAnswer = { entity_id: 'e1', rationale: 'r', names_zh: '', names_en: '', home_market: 'A', exchange_code: '', listed_on: '', keys: { lei: '', usci: '', cninfo_org_id: '', cik: '' } };
+  const added: OwnerCompanyAnswer = { ...ok, entity_id: null, names_zh: '金证股份', names_en: 'Kingdom', exchange_code: '600446.SH' };
+
+  it('validates every selected and added answer before any write and points at the first incomplete screen', () => {
+    expect(companiesSubmitErrors({ selected: [ok], added: [added] })).toEqual({ errors: [], firstStep: null });
+    // Second selected company skipped its rationale screen (jumped to 添加候选外公司): step 2 is where to go back to.
+    const r = companiesSubmitErrors({ selected: [ok, { ...ok, entity_id: 'e2', rationale: '' }], added: [{ ...added, exchange_code: 'x' }] });
+    expect(r.firstStep).toBe(2);
+    expect(r.errors).toEqual(['第 2 家：请写一句为什么这家公司进名单', '金证股份：主证券代码格式如 600570.SH / 0268.HK / PLTR，并与主市场一致']);
+    expect(companiesSubmitErrors({ selected: [], added: [] })).toEqual({ errors: ['至少勾选或添加 1 家公司'], firstStep: 0 });
+    // Only an added company is wrong: go to the new-company screen (n + 1).
+    expect(companiesSubmitErrors({ selected: [ok], added: [{ ...added, names_en: '' }] }).firstStep).toBe(2);
+  });
+
+  it('turns a successfully created company into a selected existing one so a retry patches instead of re-posting', () => {
+    const answers = { e1: ok, 'new:1': added, 'new:2': { ...added, names_zh: '另一家' } };
+    const next = reconcileAddedCompany(answers, 'new:1', 'e9');
+    expect(Object.keys(next).sort()).toEqual(['e1', 'e9', 'new:2']);
+    expect(next.e9).toEqual({ ...added, entity_id: 'e9' });
+    expect(next['new:2']).toBe(answers['new:2']);
   });
 });

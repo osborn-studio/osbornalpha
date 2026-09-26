@@ -6,7 +6,7 @@ import { useMemo, useState } from 'react';
 import type { ScopedCompany } from '@/lib/research/entity-keys/scope';
 import { HOME_MARKETS, KEY_NAMES, type HomeMarket, type KeyName } from '@/lib/research/entity-keys/types';
 import { COMPANY_QUESTIONS, type CompanyQuestionId } from '@/lib/research/setup/questions';
-import { companiesStepErrors, type OwnerCompanyAnswer } from '@/lib/research/setup/companies';
+import { companiesStepErrors, companiesSubmitErrors, reconcileAddedCompany, type OwnerCompanyAnswer } from '@/lib/research/setup/companies';
 import { TARGETS } from '@/lib/research/setup/progress';
 import { inputClass, labelClass, ProgressBar, QuestionCard, WizardNav } from './wizard';
 
@@ -26,13 +26,15 @@ export const emptyAnswer = (row: ScopedCompany | null): OwnerCompanyAnswer => ({
 });
 
 /** Screens: 0 = select, 1..n = one per selected company, n+1 = new companies, n+2 = review. */
-export function CompaniesFlow({ companies, answers, step, onAnswersChange, onStepChange, onSaved }: {
+export function CompaniesFlow({ companies, answers, step, onAnswersChange, onStepChange, onSaved, onRefresh }: {
   companies: ScopedCompany[];
   answers: Record<string, OwnerCompanyAnswer>;
   step: number;
   onAnswersChange: (a: Record<string, OwnerCompanyAnswer>) => void;
   onStepChange: (s: number) => void;
   onSaved: (message: string) => void;
+  /** Reload the company list after a partially successful submission. */
+  onRefresh: () => Promise<void>;
 }) {
   const [errors, setErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -61,36 +63,44 @@ export function CompaniesFlow({ companies, answers, step, onAnswersChange, onSte
   const prev = () => { setErrors([]); onStepChange(Math.max(step - 1, 0)); };
 
   async function submit() {
-    const errs = stepErrors(total - 1);
-    setErrors(errs);
-    if (errs.length) return;
+    // Every answer is validated before the first write; an incomplete one sends the owner back to its screen.
+    const check = companiesSubmitErrors({ selected: selectedIds.map((id) => answers[id]!), added: newKeys.map((k) => answers[k]!) });
+    if (check.errors.length) { setErrors(check.errors); if (check.firstStep !== null) onStepChange(check.firstStep); return; }
     setBusy(true); setNotice(null);
     const failures: string[] = [];
+    let current = answers;
+    const lines = (s: string) => s.split('\n').map((x) => x.trim()).filter(Boolean);
     try {
-      // Companies unchecked this round that are currently in scope leave the list with a standard reason.
-      for (const c of companies) {
-        if (c.in_scope && !answers[c.entity_id]) {
-          const res = await fetch(`/api/research/entity-keys/${c.entity_id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ in_scope: false, rationale: '本轮未入选' }) });
-          if (!res.ok) failures.push(`${c.names_zh[0] ?? c.names_en[0]}：移出失败 ${res.status}`);
-        }
+      // 1. Owner-added companies first: each success is reconciled into the draft as an existing company,
+      //    so a retry after a later failure PATCHes it instead of POSTing it again (which would be 409).
+      for (const k of newKeys) {
+        const a = current[k]!;
+        const res = await fetch('/api/research/entity-keys', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(a) });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { failures.push(`${a.names_zh || a.names_en}：${data?.error?.message ?? res.status}`); continue; }
+        current = reconcileAddedCompany(current, k, data.company.entity_id);
+        onAnswersChange(current);
       }
-      for (const id of selectedIds) {
-        const a = answers[id]!;
+      // 2. Selected companies (including the ones just created).
+      for (const id of Object.keys(current).filter((k) => !k.startsWith('new:'))) {
+        const a = current[id]!;
         const keys = Object.fromEntries(KEY_NAMES.filter((k) => a.keys[k].trim() !== '').map((k) => [k, a.keys[k].trim()]));
-        const lines = (s: string) => s.split('\n').map((x) => x.trim()).filter(Boolean);
         const res = await fetch(`/api/research/entity-keys/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ in_scope: true, rationale: a.rationale, keys, ...(lines(a.names_zh).length ? { names_zh: lines(a.names_zh) } : {}), ...(lines(a.names_en).length ? { names_en: lines(a.names_en) } : {}) }) });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) failures.push(`${a.names_zh.split('\n')[0] || id}：${data?.error?.message ?? res.status}`);
       }
-      for (const k of newKeys) {
-        const a = answers[k]!;
-        const res = await fetch('/api/research/entity-keys', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(a) });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) failures.push(`${a.names_zh || a.names_en}：${data?.error?.message ?? res.status}`);
+      // 3. Removals last, and only when everything above succeeded: nothing leaves the list on a partial run.
+      if (failures.length === 0) {
+        for (const c of companies) {
+          if (c.in_scope && !current[c.entity_id]) {
+            const res = await fetch(`/api/research/entity-keys/${c.entity_id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ in_scope: false, rationale: '本轮未入选' }) });
+            if (!res.ok) failures.push(`${c.names_zh[0] ?? c.names_en[0]}：移出失败 ${res.status}`);
+          }
+        }
       }
-      if (failures.length) { setErrors(failures); return; }
-      onSaved(`名单已写入：${selectedIds.length + newKeys.length} 家`); // the page resets answers and step atomically
+      if (failures.length) { setErrors([...failures, '已成功的部分已写入并保留在草稿里；修正后可直接重试。']); await onRefresh(); return; }
+      onSaved(`名单已写入：${Object.keys(current).length} 家`); // the page resets answers and step atomically
     } finally { setBusy(false); }
   }
 
