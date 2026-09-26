@@ -128,7 +128,7 @@ describe('evaluateStopRules (§10.3)',()=>{
  });
 });
 
-import {buildCalibrationArtifact,renderCalibrationMarkdown,runCalibrationCli} from './calibration';
+import {buildCalibrationArtifact,calibrationFits,renderCalibrationMarkdown,runCalibrationCli} from './calibration';
 import {mkdtempSync,readFileSync,realpathSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
@@ -313,7 +313,7 @@ describe('Codex round 5 regressions',()=>{
 describe('Codex round 7 regressions',()=>{
  it('re-evaluates follow-up proposals under the proposed Q1 gate, not the historical one',()=>{
   const rows:ReportRow[]=[];
-  // Q1: 40 relevant sources at 0.9, 20 irrelevant at 0.65 → proposal {irrelevant_below:0.8, relevant_above:0.85} (ties keep the higher pair).
+  // Q1: 40 relevant sources at 0.9, 20 irrelevant at 0.65 → a proposal with both thresholds inside (0.65, 0.9).
   for(let i=0;i<60;i++){
    const p=i<40?0.9:0.65;
    rows.push(row({source_id:`s${i}`,question_id:'Q1',confidence:null,distribution:{true:p,false:1-p},selected:'true',abstained:false,label:i<40?'true':'false'}));
@@ -321,7 +321,10 @@ describe('Codex round 7 regressions',()=>{
    rows.push(row({source_id:`s${i}`,question_id:'Q2',confidence:0.9,selected:'support',label:'support',gate_open:true,gate_p_true:p}));
   }
   const proposals=proposeThresholds(rows);
-  expect(proposals.find(p=>p.question_id==='Q1')?.proposed).toEqual({irrelevant_below:0.8,relevant_above:0.85});
+  const q1p=proposals.find(p=>p.question_id==='Q1')!.proposed!;
+  // Any pair separating 0.65 from 0.9 without abstentions is optimal; ties keep the higher pair.
+  expect(q1p.relevant_above).toBeGreaterThan(0.65);expect(q1p.relevant_above).toBeLessThan(0.9);
+  expect(q1p.irrelevant_below).toBeGreaterThan(0.65);expect(q1p.irrelevant_below).toBeLessThan(q1p.relevant_above);
   const q2p=proposals.find(p=>p.question_id==='Q2')!;
   expect(q2p.status).toBe('proposed');
   expect(q2p.metrics.coverage).toBeCloseTo(40/60,6);
@@ -352,5 +355,28 @@ describe('Codex round 8 regression',()=>{
   const v=buildCalibrationArtifact({rows,since:null,generatedAt:'2026-09-26T00:00:00.000Z',baseline:old}).stop_rules.find(x=>x.rule==='lock_version_recalibrate')!;
   expect(v).toMatchObject({triggered:false,status:'not_applicable'});
   expect(v.evidence).toContain('v0.9');
+ });
+});
+
+describe('Codex round 9 regressions',()=>{
+ it('fits isotonic curves on labeled noul abstentions too, since the target is the label not the decision',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<30;i++)rows.push(row({source_id:`f${i}`,question_id:'Q1',confidence:null,distribution:{true:0.45,false:0.55},selected:null,abstained:true,label:'false'}));
+  for(let i=0;i<30;i++)rows.push(row({source_id:`t${i}`,question_id:'Q1',confidence:null,distribution:{true:0.55,false:0.45},selected:null,abstained:true,label:'true'}));
+  expect(calibrationFits(rows)).toHaveLength(1);
+  expect(crossFittedEce(rows).labeled).toBe(60);
+  // Choice questions still fit only on decided rows.
+  const choice:ReportRow[]=[];for(let i=0;i<40;i++)choice.push(row({source_id:`c${i}`,confidence:0.5,selected:null,abstained:true}));
+  expect(calibrationFits(choice)).toHaveLength(0);
+ });
+ it('proposes Q1 thresholds from observed score boundaries when the coarse grid cannot separate the samples',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<30;i++)rows.push(row({source_id:`r${i}`,question_id:'Q1',confidence:null,distribution:{true:0.08,false:0.92},selected:'false',abstained:false,label:'true'}));
+  for(let i=0;i<30;i++)rows.push(row({source_id:`i${i}`,question_id:'Q1',confidence:null,distribution:{true:0.02,false:0.98},selected:'false',abstained:false,label:'false'}));
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q1')!;
+  expect(p.status).toBe('proposed');
+  expect(p.metrics).toMatchObject({recall:1,precision:1,abstain_rate:0});
+  expect(p.proposed!.irrelevant_below).toBeGreaterThan(0.02);
+  expect(p.proposed!.relevant_above).toBeLessThan(0.08);
  });
 });

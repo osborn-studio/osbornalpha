@@ -86,10 +86,13 @@ export function dedupeMaterialLevel(rows: ReportRow[]): ReportRow[] {
 function scoredPoints(rows: ReportRow[]): IsotonicPoint[] {
   const out: IsotonicPoint[] = [];
   for (const r of rows) {
-    if (r.label === null || r.abstained) continue;
+    if (r.label === null) continue;
+    const isNoul = r.confidence == null && (typeof r.distribution?.true === 'number' || typeof r.distribution?.false === 'number');
+    // A noul's target is the label itself, so an abstention in the uncertainty band is still a valid
+    // (P(true), label) pair — the very region that needs calibrating. Choice targets need a decision.
+    if (!isNoul && r.abstained) continue;
     const score = calibrationScore(r);
     if (score == null) continue;
-    const isNoul = r.confidence == null && (typeof r.distribution?.true === 'number' || typeof r.distribution?.false === 'number');
     out.push({ score, hit: isNoul ? (r.label === 'true' ? 1 : 0) : isCorrect(r) ? 1 : 0 });
   }
   return out;
@@ -175,6 +178,20 @@ const pTrue = (r: ReportRow): number | null => {
   if (typeof r.distribution?.false === 'number') return 1 - r.distribution.false;
   return null;
 };
+/**
+ * Grid values plus two cut points inside every gap between adjacent distinct observed scores (at one
+ * and two thirds), so an abstention band `[lo, hi]` can sit strictly inside a gap; plus the range ends.
+ */
+function thresholdCandidates(scores: number[]): number[] {
+  const out = new Set<number>(grid(0.05, 0.95, 0.05));
+  const distinct = [...new Set(scores)].sort((a, b) => a - b);
+  for (let i = 0; i + 1 < distinct.length; i++) {
+    const a = distinct[i]!, b = distinct[i + 1]!;
+    out.add(round6(a + (b - a) / 3)); out.add(round6(a + (2 * (b - a)) / 3));
+  }
+  if (distinct.length) { out.add(round6(distinct[0]! / 2)); out.add(round6((distinct[distinct.length - 1]! + 1) / 2)); }
+  return [...out].filter(v => v > 0 && v < 1).sort((a, b) => a - b);
+}
 const argmax = (d: Record<string, number>) => Object.entries(d).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 
 /**
@@ -214,7 +231,10 @@ export function proposeThresholds(rows: ReportRow[]): ThresholdProposal[] {
       const relevant = pts.filter(x => x.t).length + unscoredRelevant;
       let best: { lo: number; hi: number; recall: number; abstain: number; precision: number; feasible: boolean } | null = null;
       // Full range: decide() accepts any pair with lo < hi, so miscalibrated but separable scores can be refitted.
-      for (const hi of grid(0.05, 0.95, 0.05)) for (const lo of grid(0.05, 0.95, 0.05)) {
+      // Candidates: the coarse grid plus the midpoints between adjacent observed scores (and the range
+      // ends), so samples separable below 0.05 or between grid points are not declared infeasible.
+      const candidates = thresholdCandidates(pts.map(x => x.p));
+      for (const hi of candidates) for (const lo of candidates) {
         if (lo >= hi) continue;
         const sel = pts.filter(x => x.p > hi), abst = pts.filter(x => x.p >= lo && x.p <= hi);
         const recall = relevant ? sel.filter(x => x.t).length / relevant : 0, abstain = (abst.length + unscored) / all.length;

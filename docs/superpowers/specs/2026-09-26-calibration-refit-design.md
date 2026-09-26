@@ -11,9 +11,9 @@
    - `false_support_rate`（Q2）：后端选 `support` 且标签 ≠ `support` 的数量 / 标签存在且未弃权的 Q2 判断数。Wilson 区间。
    - 每问 `accuracy`、`abstain_rate`、`ece_before`、`ece_after`（isotonic），p50/p95、每千判断成本（沿用 `summarize`）。
    - `ece_after` 用 5 折交叉拟合（按行序确定性分折）避免同样本乐观；标签 < 30 条的问题不报 `ece_after`。
-4. isotonic：PAV（pool adjacent violators）逐问拟合 `score → P(正确)`；noul 用 `P(true)` 对 `label==='true'`，choice 用 confidence 对 `selected===label`。拟合结果输出为分段表（`[x_min, x_max, p]`）。
+4. isotonic：PAV（pool adjacent violators）逐问拟合 `score → P(正确)`；noul 用 `P(true)` 对 `label==='true'`，choice 用 confidence 对 `selected===label`。noul 的弃权行（分数落在不确定带）仍是有效的 (P(true), 标签) 样本，参与拟合；choice 只用已决定的行。拟合结果输出为分段表（`[x_min, x_max, p]`）。
 5. 阈值重拟（每问，标签 ≥ 30 才提议，否则 `insufficient_labels`）：
-   - Q1：网格搜索 `(irrelevant_below, relevant_above)`，约束「重要材料召回 ≥ 0.90 且弃权 ≤ 30%」（§10.2），在可行解中取 `true` 精确率最高者；不可行则给出最接近解并标 `infeasible`。
+   - Q1：在「0.05 步长网格 ∪ 相邻观测分数间隔的三分点 ∪ 区间两端」的候选集上搜索 `(irrelevant_below, relevant_above)`，约束「重要材料召回 ≥ 0.90 且弃权 ≤ 30%」（§10.2），在可行解中取 `true` 精确率最高者；不可行则给出最接近解并标 `infeasible`。
    - Q2：网格搜索 `min_confidence`，约束 false-support ≤ 5%，取覆盖率（1 − 弃权）最高者。
    - Q3/Q4：`min_confidence` 网格，约束弃权 ≤ 30%，取准确率最高。
    - Q5：`retelling_below` 网格，取准确率最高。
