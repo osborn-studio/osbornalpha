@@ -55,6 +55,14 @@ export function researchError(e: unknown): NextResponse {
       { status: e.status },
     );
   }
+  // S4/ledger failures carry a stable `code` (fail() in ingest/pa-v1/json.js); map them like the S4 HTTP layer does.
+  const code = e && typeof e === 'object' && 'code' in e && typeof (e as { code: unknown }).code === 'string' ? (e as { code: string }).code : null;
+  const S4_STATUS: Record<string, number> = { invalid_schema: 400, input_limit: 413, not_authenticated: 401, scope_denied: 403, policy_blocked: 403, not_found: 404,
+    idempotency_conflict: 409, revision_conflict: 409, source_version_conflict: 409, observation_scope_conflict: 409, exposure_required: 409, rule_unsupported: 422, data_insufficient: 422,
+    hash_mismatch: 422, invalid_timeline: 422, future_input: 422, not_configured: 503, source_unavailable: 503 };
+  if (code && S4_STATUS[code]) {
+    return NextResponse.json({ error: { code, message: code } }, { status: S4_STATUS[code] });
+  }
   const message = e instanceof Error ? e.message : 'internal error';
   return NextResponse.json(
     { error: { code: 'INTERNAL_ERROR', message } },

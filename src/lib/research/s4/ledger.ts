@@ -186,6 +186,10 @@ export const isIsoInstant = (v: unknown): v is string => typeof v === 'string' &
  * in this owner's ledger; a human_baseline decision must carry frozen_at.
  */
 export async function recordDecision(actor: S4Actor, input: DecisionInput): Promise<{ id: string; created_at: string }> {
+  return transaction(actor, db => recordDecisionWithin(db, actor, input));
+}
+/** Same as recordDecision, but inside a caller-owned transaction so check-then-append flows stay atomic under the owner lock. */
+export async function recordDecisionWithin(db: PoolClient, actor: S4Actor, input: DecisionInput): Promise<{ id: string; created_at: string }> {
   if (!isUuid(input?.thesis_id) || !isIsoDate(input.week_of) || !DECISION_ARMS.includes(input.arm) || !DECISION_ACTIONS.includes(input.action) || !text(input.reason)) fail('invalid_schema');
   const cited = input.cited_judgment_ids ?? [];
   if (!Array.isArray(cited) || !cited.every(isUuid) || new Set(cited).size !== cited.length) fail('invalid_schema');
@@ -197,7 +201,7 @@ export async function recordDecision(actor: S4Actor, input: DecisionInput): Prom
   if (!WORKSPACE.test(workspace) || (input.analyst_id != null && !isUuid(input.analyst_id))) fail('invalid_schema');
   const observationId = input.observation_id ?? null;
   if (observationId !== null && !isUuid(observationId)) fail('invalid_schema');
-  return transaction(actor, async db => {
+  {
     if (!await exists(db, 'research_theses', actor.userId, input.thesis_id)) fail('scope_denied');
     if (observationId !== null) {
       const owned = (await db.query('select 1 from public.research_s4_observation_state where user_id=$1 and observation_id=$2', [actor.userId, observationId])).rowCount;
@@ -214,7 +218,7 @@ export async function recordDecision(actor: S4Actor, input: DecisionInput): Prom
        input.time_spent_minutes ?? null, input.frozen_at ?? null, workspace, input.analyst_id ?? null, observationId, at]);
     await audit(db, actor, 'ledger.decision', 'research_decision', id, { thesis_id: input.thesis_id, week_of: input.week_of, arm: input.arm, action: input.action, cited_judgment_ids: cited, observation_id: observationId }, at);
     return { id, created_at: at };
-  });
+  }
 }
 
 export interface OutcomeInput {

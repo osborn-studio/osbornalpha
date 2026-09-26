@@ -13,6 +13,7 @@ const NAV = [
   { href: '/research/signals', label: 'Signals' },
   { href: '/research/theses', label: 'Theses' },
   { href: '/research/cards', label: 'Cards' },
+  { href: '/research/weekly', label: 'Weekly' },
   { href: '/research/memos', label: 'Memos' },
   { href: '/research/playbooks', label: 'Playbooks' },
   { href: '/research/evals', label: 'Evals' },
