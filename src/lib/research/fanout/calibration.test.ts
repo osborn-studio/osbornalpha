@@ -414,7 +414,7 @@ function bruteForceQ1(rows:ReportRow[]){
   const scores=[...new Set(pts.map(x=>x.p))].sort((a,b)=>a-b);
   const cands=new Set<number>();for(let v=0.05;v<=0.9501;v+=0.05)cands.add(Math.round(v*100)/100);
   for(let i=0;i+1<scores.length;i++){const a=scores[i]!,b=scores[i+1]!;cands.add(Math.round((a+(b-a)/3)*1e6)/1e6);cands.add(Math.round((a+2*(b-a)/3)*1e6)/1e6);}
-  cands.add(Math.round(scores[0]!/2*1e6)/1e6);cands.add(Math.round((scores[scores.length-1]!+1)/2*1e6)/1e6);
+  const f=scores[0]!,l=scores[scores.length-1]!;for(const v of [f/3,2*f/3,l+(1-l)/3,l+2*(1-l)/3])cands.add(Math.round(v*1e6)/1e6);
   const cs=[...cands].filter(v=>v>0&&v<1).sort((a,b)=>a-b);
   const relevant=pts.filter(x=>x.t).length;let best:any=null;
   for(const hi of cs)for(const lo of cs){if(lo>=hi)continue;const sel=pts.filter(x=>x.p>hi),abst=pts.filter(x=>x.p>=lo&&x.p<=hi);
@@ -425,3 +425,14 @@ function bruteForceQ1(rows:ReportRow[]){
   const r6=(v:number)=>Math.round(v*1e6)/1e6;
   return {question_id:'Q1',backend_used:'jev',labeled:rows.length,current:{irrelevant_below:0.4,relevant_above:0.6},status:best.feasible?'proposed':'infeasible',proposed:best.feasible?{irrelevant_below:best.lo,relevant_above:best.hi}:null,metrics:{recall:r6(best.recall),abstain_rate:r6(best.abstain),precision:r6(best.precision)}};
 }
+
+describe('Codex round 11 regression',()=>{
+ it('offers two cutoffs below the lowest observed score so uniformly low relevant scores are still separable',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<30;i++)rows.push(row({source_id:`p${i}`,question_id:'Q1',confidence:null,distribution:{true:0.02,false:0.98},selected:'false',abstained:false,label:'true'}));
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q1')!;
+  expect(p.status).toBe('proposed');
+  expect(p.metrics).toMatchObject({recall:1,abstain_rate:0,precision:1});
+  expect(p.proposed!.relevant_above).toBeLessThan(0.02);
+ });
+});

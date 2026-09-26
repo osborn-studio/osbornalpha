@@ -201,7 +201,12 @@ function thresholdCandidates(scores: number[]): number[] {
     const a = distinct[i]!, b = distinct[i + 1]!;
     out.add(round6(a + (b - a) / 3)); out.add(round6(a + (2 * (b - a)) / 3));
   }
-  if (distinct.length) { out.add(round6(distinct[0]! / 2)); out.add(round6((distinct[distinct.length - 1]! + 1) / 2)); }
+  // The gaps to the range ends get two cut points as well, so an abstention band can sit below (or above) every score.
+  if (distinct.length) {
+    const first = distinct[0]!, last = distinct[distinct.length - 1]!;
+    out.add(round6(first / 3)); out.add(round6((2 * first) / 3));
+    out.add(round6(last + (1 - last) / 3)); out.add(round6(last + (2 * (1 - last)) / 3));
+  }
   return [...out].filter(v => v > 0 && v < 1).sort((a, b) => a - b);
 }
 /**
