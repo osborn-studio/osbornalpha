@@ -4,7 +4,10 @@
  * outcomes are human events. All four tables are append-only (database
  * trigger) and every write here runs inside the S4 owner transaction.
  */
+import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import { canonicalize, digest, fail } from '../ingest/pa-v1/json.js';
+import { serverTime, transaction, type S4Actor } from './db';
 
 export const JUDGMENT_BACKENDS = ['rule','llm_deepseek','jev','jev_escalated','local_probe','human'] as const;
 export type JudgmentBackend = typeof JUDGMENT_BACKENDS[number];
@@ -48,3 +51,94 @@ export function judgmentId(key: JudgmentKey): string {
   return `${hex.slice(0,8)}-${hex.slice(8,12)}-8${hex.slice(13,16)}-${variant}${hex.slice(17,20)}-${hex.slice(20,32)}`;
 }
 
+
+export interface JudgmentInput extends Omit<JudgmentKey,'snapshot_id'> {
+  snapshot: JudgmentSnapshot;
+  run_id: string;
+  prompt_sha256?: string | null;
+  input_token_count?: number | null;
+  distribution: Record<string, unknown>;
+  selected?: string | null;
+  confidence?: number | null;
+  abstained: boolean;
+  latency_ms?: number | null;
+  cost_micros?: number | null;
+}
+export interface JudgmentReceipt { id: string; snapshot_id: string; duplicate: boolean }
+
+const optionalCount = (v: unknown) => v == null || (Number.isSafeInteger(v) && (v as number) >= 0);
+const plainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v) && [Object.prototype, null].includes(Object.getPrototypeOf(v));
+
+/** Fields that define the judgment's content; runtime measurements are excluded. */
+function judgmentContent(input: JudgmentInput) {
+  return canonicalize({ snapshot: { source_id: input.snapshot.source_id, source_version: input.snapshot.source_version, thesis_id: input.snapshot.thesis_id,
+    thesis_version: input.snapshot.thesis_version, entity_table_version: input.snapshot.entity_table_version },
+    prompt_sha256: input.prompt_sha256 ?? null, distribution: input.distribution, selected: input.selected ?? null,
+    confidence: input.confidence ?? null, abstained: input.abstained });
+}
+
+function validateJudgment(input: JudgmentInput): { snapshot_id: string; id: string } {
+  const snapshot_id = snapshotId(input.snapshot);
+  const id = judgmentId({ snapshot_id, question_set_version: input.question_set_version, backend: input.backend,
+    backend_model: input.backend_model, question_id: input.question_id });
+  if (!isUuid(input.run_id) || typeof input.abstained !== 'boolean' || !plainObject(input.distribution)) fail('invalid_schema');
+  if (input.prompt_sha256 != null && !SHA256.test(input.prompt_sha256)) fail('invalid_schema');
+  if (input.selected != null && typeof input.selected !== 'string') fail('invalid_schema');
+  if (input.confidence != null && !(typeof input.confidence === 'number' && input.confidence >= 0 && input.confidence <= 1)) fail('invalid_schema');
+  if (![input.input_token_count, input.latency_ms, input.cost_micros].every(optionalCount)) fail('invalid_schema');
+  return { snapshot_id, id };
+}
+
+async function audit(db: PoolClient, actor: S4Actor, action: string, objectType: string, objectId: string, detail: Record<string, unknown>, at: string) {
+  await db.query(`insert into public.research_audit_log(id,user_id,actor,action,object_type,object_id,detail,created_at) values($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [randomUUID(), actor.userId, actor.kind, action, objectType, objectId, canonicalize(detail), at]);
+}
+
+async function exists(db: PoolClient, table: string, userId: string, id: string) {
+  return !!(await db.query(`select 1 from public.${table} where user_id=$1 and id=$2`, [userId, id])).rowCount;
+}
+
+/**
+ * Append a judgment. Same content at the same address → {duplicate:true} and
+ * no new row; same address with different content → idempotency_conflict.
+ * The owner must own both the source and the thesis named in the snapshot.
+ */
+export async function recordJudgment(actor: S4Actor, input: JudgmentInput): Promise<JudgmentReceipt> {
+  const { snapshot_id, id } = validateJudgment(input);
+  return transaction(actor, async db => {
+    const existing = (await db.query('select snapshot,prompt_sha256,distribution,selected,confidence,abstained from public.research_judgments where user_id=$1 and id=$2', [actor.userId, id])).rows[0];
+    if (existing) {
+      const stored = canonicalize({ snapshot: existing.snapshot, prompt_sha256: existing.prompt_sha256, distribution: existing.distribution,
+        selected: existing.selected, confidence: existing.confidence === null ? null : Number(existing.confidence), abstained: existing.abstained });
+      if (stored !== judgmentContent(input)) fail('idempotency_conflict');
+      return { id, snapshot_id, duplicate: true };
+    }
+    if (!await exists(db, 'research_source_documents', actor.userId, input.snapshot.source_id) ||
+        !await exists(db, 'research_theses', actor.userId, input.snapshot.thesis_id)) fail('scope_denied');
+    const at = await serverTime(db);
+    await db.query(`insert into public.research_judgments(user_id,id,snapshot_id,snapshot,source_id,thesis_id,run_id,question_set_version,question_id,backend,backend_model,
+      prompt_sha256,input_token_count,distribution,selected,confidence,abstained,latency_ms,cost_micros,created_at)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+      [actor.userId, id, snapshot_id, canonicalize(input.snapshot), input.snapshot.source_id, input.snapshot.thesis_id, input.run_id,
+       input.question_set_version, input.question_id, input.backend, input.backend_model, input.prompt_sha256 ?? null, input.input_token_count ?? null,
+       canonicalize(input.distribution), input.selected ?? null, input.confidence ?? null, input.abstained, input.latency_ms ?? null, input.cost_micros ?? null, at]);
+    await audit(db, actor, 'ledger.judgment', 'research_judgment', id, { snapshot_id, run_id: input.run_id, backend: input.backend, question_id: input.question_id }, at);
+    return { id, snapshot_id, duplicate: false };
+  });
+}
+
+export interface LabelInput { judgment_id: string; label: string; labeler: string }
+
+/** Human or second-labeler label for an existing judgment (append-only). */
+export async function addLabel(actor: S4Actor, input: LabelInput): Promise<{ id: string; labeled_at: string }> {
+  if (!isUuid(input?.judgment_id) || !text(input.label) || !text(input.labeler)) fail('invalid_schema');
+  return transaction(actor, async db => {
+    if (!await exists(db, 'research_judgments', actor.userId, input.judgment_id)) fail('scope_denied');
+    const id = randomUUID(), at = await serverTime(db);
+    await db.query('insert into public.research_labels(user_id,id,judgment_id,label,labeler,labeled_at) values($1,$2,$3,$4,$5,$6)',
+      [actor.userId, id, input.judgment_id, input.label, input.labeler, at]);
+    await audit(db, actor, 'ledger.label', 'research_label', id, { judgment_id: input.judgment_id, labeler: input.labeler }, at);
+    return { id, labeled_at: at };
+  });
+}

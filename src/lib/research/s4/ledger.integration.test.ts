@@ -2,6 +2,8 @@ import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {closeS4Pool,transaction} from './db';
+import {addLabel,judgmentId,recordJudgment,snapshotId,type JudgmentInput} from './ledger';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20260926000000_research_judgment_ledger.sql';
@@ -23,7 +25,10 @@ describe.skipIf(!enabled)('WP-A3 judgment ledger on real PostgreSQL',()=>{
   await admin.query(`insert into public.research_source_documents(id,user_id,source_type,title,raw_text,content_hash,ingested_at) values($1,$2,'NEWS','t','body',$3,'2026-09-20T00:00:00Z')`,[sourceId,actor.userId,`hash-${randomUUID()}`]);
   await admin.query(`insert into public.research_theses(id,user_id,title) values($1,$2,'thesis')`,[thesisId,actor.userId]);
  });
- afterAll(async()=>{await admin?.end();});
+ afterAll(async()=>{await closeS4Pool();await admin?.end();});
+ const judgment=(over:Partial<JudgmentInput>={}):JudgmentInput=>({snapshot:{source_id:sourceId,source_version:'1',thesis_id:thesisId,thesis_version:'1',entity_table_version:'2026-09-25'},run_id:randomUUID(),question_set_version:'v1.0',question_id:'Q1',backend:'rule',backend_model:'rules-1',distribution:{true:0.8,false:0.2},selected:'true',confidence:0.8,abstained:false,latency_ms:3,cost_micros:0,...over});
+ const count=async(table:string,userId=actor.userId)=>Number((await admin.query(`select count(*) n from public.${table} where user_id=$1`,[userId])).rows[0].n);
+ const audits=async(action:string,objectId:string)=>Number((await admin.query('select count(*) n from public.research_audit_log where user_id=$1 and action=$2 and object_id=$3',[actor.userId,action,objectId])).rows[0].n);
 
  it('creates the four append-only tables with forced RLS and replays without error',async()=>{
   const rows=(await admin.query(`select c.relname,c.relrowsecurity,c.relforcerowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1)`,[TABLES])).rows;
@@ -53,5 +58,47 @@ describe.skipIf(!enabled)('WP-A3 judgment ledger on real PostgreSQL',()=>{
   await expect(admin.query(`insert into public.research_decisions(user_id,id,thesis_id,week_of,arm,action,reason,created_at) values($1,$2,$3,'2026-09-21','human_baseline','adopt','r',now())`,[actor.userId,randomUUID(),thesisId])).rejects.toThrow(/research_decisions_baseline_frozen/);
   await expect(admin.query(`insert into public.research_judgments(user_id,id,snapshot_id,snapshot,source_id,thesis_id,run_id,question_set_version,question_id,backend,backend_model,distribution,abstained,created_at)
    values($1,$2,repeat('a',64),'{}',$3,$4,$5,'v1.0','Q1','oracle','x','{}',false,now())`,[actor.userId,randomUUID(),sourceId,thesisId,randomUUID()])).rejects.toThrow(/check constraint/);
+ });
+
+ it('records judgments idempotently by content address and audits each write once',async()=>{
+  const input=judgment();
+  const before=await count('research_judgments');
+  const first=await recordJudgment(actor,input);
+  const expectedSnapshot=snapshotId(input.snapshot);
+  expect(first).toEqual({id:judgmentId({snapshot_id:expectedSnapshot,question_set_version:'v1.0',backend:'rule',backend_model:'rules-1',question_id:'Q1'}),snapshot_id:expectedSnapshot,duplicate:false});
+  const row=(await admin.query('select * from public.research_judgments where user_id=$1 and id=$2',[actor.userId,first.id])).rows[0];
+  expect(row).toMatchObject({snapshot_id:expectedSnapshot,source_id:sourceId,thesis_id:thesisId,backend:'rule',selected:'true',abstained:false,distribution:{true:0.8,false:0.2}});
+  expect(row.snapshot).toEqual(input.snapshot);
+  // Same content, new batch: runtime fields (run_id, latency, cost) do not change the address.
+  expect(await recordJudgment(actor,judgment({run_id:randomUUID(),latency_ms:99,cost_micros:5}))).toEqual({...first,duplicate:true});
+  expect(await count('research_judgments')).toBe(before+1);
+  // Same address, different answer: the ledger refuses to silently keep either.
+  await expect(recordJudgment(actor,judgment({selected:'false',distribution:{true:0.2,false:0.8}}))).rejects.toThrow('idempotency_conflict');
+  expect(await count('research_judgments')).toBe(before+1);
+  expect(await audits('ledger.judgment',first.id)).toBe(1);
+ });
+
+ it('validates judgment inputs before touching the database',async()=>{
+  const before=await count('research_judgments');
+  await expect(recordJudgment(actor,judgment({backend:'oracle' as any}))).rejects.toThrow('invalid_schema');
+  await expect(recordJudgment(actor,judgment({confidence:1.5}))).rejects.toThrow('invalid_schema');
+  await expect(recordJudgment(actor,judgment({distribution:[] as any}))).rejects.toThrow('invalid_schema');
+  await expect(recordJudgment(actor,judgment({prompt_sha256:'abc'}))).rejects.toThrow('invalid_schema');
+  await expect(recordJudgment(actor,judgment({run_id:'batch-1'}))).rejects.toThrow('invalid_schema');
+  expect(await count('research_judgments')).toBe(before);
+ });
+
+ it('scopes judgments and labels to the owner of the source and thesis',async()=>{
+  const mine=await recordJudgment(actor,judgment({question_id:'Q2'}));
+  // Another owner cannot address my source/thesis, cannot see my rows, cannot label them.
+  await expect(recordJudgment(other,judgment({question_id:'Q2'}))).rejects.toThrow('scope_denied');
+  await transaction(other,async db=>expect((await db.query('select id from public.research_judgments')).rows).toEqual([]));
+  await expect(addLabel(other,{judgment_id:mine.id,label:'true',labeler:'other'})).rejects.toThrow('scope_denied');
+  await expect(addLabel(actor,{judgment_id:randomUUID(),label:'true',labeler:'owner'})).rejects.toThrow('scope_denied');
+  await expect(addLabel(actor,{judgment_id:mine.id,label:' ',labeler:'owner'})).rejects.toThrow('invalid_schema');
+  const label=await addLabel(actor,{judgment_id:mine.id,label:'true',labeler:'owner'});
+  expect((await admin.query('select label,labeler,labeled_at from public.research_labels where user_id=$1 and id=$2',[actor.userId,label.id])).rows[0]).toMatchObject({label:'true',labeler:'owner'});
+  expect(await audits('ledger.label',label.id)).toBe(1);
+  expect(await count('research_labels',other.userId)).toBe(0);
  });
 });
