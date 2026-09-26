@@ -5,7 +5,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import type { ScopedCompany } from '@/lib/research/entity-keys/scope';
 import { THESIS_QUESTIONS, type ThesisQuestionId } from '@/lib/research/setup/questions';
-import { findCreatedThesis, saveOutcomeMessage, staleCompanyIds, thesisFormToInput, validateThesisStep, type ThesisDraft } from '@/lib/research/setup/theses';
+import { classifyCreateResponse, findCreatedThesis, saveOutcomeMessage, staleCompanyIds, thesisFormToInput, validateThesisStep, type ThesisDraft } from '@/lib/research/setup/theses';
 import { OPPORTUNITY_TYPES } from '@/lib/research/types';
 import { OPPORTUNITY_LABELS } from '../theses/thesis-form';
 import { inputClass, labelClass, ListEditor, ProgressBar, QuestionCard, WizardNav } from './wizard';
@@ -55,18 +55,23 @@ export function ThesisFlow({ companies, draft, step, onDraftChange, onStepChange
     try {
       let created: { id: string; title: string };
       const input = thesisFormToInput(draft);
+      let outcome: ReturnType<typeof classifyCreateResponse>;
       try {
         const res = await fetch('/api/research/theses', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) { setNotice(`保存失败：${data?.error?.message ?? res.status}`); return; }
-        created = data.thesis;
+        outcome = classifyCreateResponse(res.status, await res.json().catch(() => null));
       } catch (e) {
-        // The response was lost: the server may have stored the thesis anyway. Reconcile before inviting a retry,
-        // otherwise the next submit would create a duplicate.
+        outcome = { kind: 'ambiguous', reason: e instanceof Error ? e.message : '网络错误' };
+      }
+      if (outcome.kind === 'rejected') { setNotice(`保存失败：${outcome.message}`); return; }
+      if (outcome.kind === 'ambiguous') {
+        // 5xx, lost response or an incomplete success body: the server may have stored the thesis anyway.
+        // Reconcile before inviting a retry, otherwise the next submit would create a duplicate.
         const found = await fetch('/api/research/theses').then((r) => (r.ok ? r.json() : null)).catch(() => null)
           .then((d) => (d?.theses ? findCreatedThesis(d.theses, input, new Date().toISOString()) : null));
-        if (!found) { setNotice(`保存失败：${e instanceof Error ? e.message : '网络错误'}；未找到已创建的记录，草稿已保留，可重试`); return; }
+        if (!found) { setNotice(`保存失败：${outcome.reason}；未找到已创建的记录，草稿已保留，可重试`); return; }
         created = found;
+      } else {
+        created = outcome.thesis;
       }
       // From here the thesis exists: the stored draft is finalized NOW (a reload during activation must not
       // resubmit it) and the activation still owed is remembered by the page. Failures are reported, not swallowed.

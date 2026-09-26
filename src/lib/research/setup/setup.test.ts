@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { COMPANY_QUESTIONS, THESIS_QUESTIONS } from './questions';
-import { EMPTY_THESIS_DRAFT, findCreatedThesis, isCalendarDate, saveOutcomeMessage, staleCompanyIds, thesisFormToInput, validateThesisStep, type ThesisDraft } from './theses';
+import { classifyCreateResponse, EMPTY_THESIS_DRAFT, findCreatedThesis, isCalendarDate, saveOutcomeMessage, staleCompanyIds, thesisFormToInput, validateThesisStep, type ThesisDraft } from './theses';
 import { companiesStepErrors, companiesSubmitErrors, ownerCompanyToCohort, reconcileAddedCompany, rosterKeys, validateCompanyAnswer, type OwnerCompanyAnswer } from './companies';
 import { setupProgress, TARGETS } from './progress';
 import { clearPendingActivation, markThesisCreated, parseDraft, resetCompanyDraft, resetThesisDraft, serializeDraft } from './draft';
@@ -269,5 +269,19 @@ describe('Codex round 13 regression (theses)', () => {
     // Same text but an old record (not this session's create) is not reconciled.
     expect(findCreatedThesis([{ ...stored, created_at: '2026-09-01T00:00:00.000Z' }] as never, input, '2026-09-27T01:02:00.000Z')).toBeNull();
     expect(findCreatedThesis([] as never, input, '2026-09-27T01:02:00.000Z')).toBeNull();
+  });
+});
+
+
+describe('Codex round 14 regression', () => {
+  it('classifies a create response: definitive rejections, valid creations, and everything ambiguous', () => {
+    expect(classifyCreateResponse(201, { thesis: { id: 't1', title: 'T' } })).toEqual({ kind: 'created', thesis: { id: 't1', title: 'T' } });
+    expect(classifyCreateResponse(422, { error: { message: 'title is required' } })).toEqual({ kind: 'rejected', message: 'title is required' });
+    expect(classifyCreateResponse(400, {})).toEqual({ kind: 'rejected', message: '400' });
+    // The server may have stored the thesis: 5xx, an unreadable body, or a 201 without a valid thesis must reconcile.
+    expect(classifyCreateResponse(500, { error: { message: 'audit failed' } })).toEqual({ kind: 'ambiguous', reason: 'audit failed' });
+    expect(classifyCreateResponse(201, {})).toEqual({ kind: 'ambiguous', reason: '响应不完整' });
+    expect(classifyCreateResponse(201, { thesis: { id: 5 } })).toEqual({ kind: 'ambiguous', reason: '响应不完整' });
+    expect(classifyCreateResponse(null, null)).toEqual({ kind: 'ambiguous', reason: '网络错误' });
   });
 });

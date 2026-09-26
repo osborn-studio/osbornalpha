@@ -158,3 +158,24 @@ export function findCreatedThesis(
     && Number.isFinite(Date.parse(t.created_at)) && now - Date.parse(t.created_at) <= 10 * 60 * 1000 && Date.parse(t.created_at) <= now + 60 * 1000);
   return match ? { id: match.id, title: match.title } : null;
 }
+
+export type CreateOutcome =
+  | { kind: 'created'; thesis: { id: string; title: string } }
+  | { kind: 'rejected'; message: string }
+  | { kind: 'ambiguous'; reason: string };
+
+/**
+ * What a create response means for the draft. Only a definitive 4xx is a rejection (the server did not
+ * store anything). A 5xx, a transport failure or a success whose body does not carry a valid thesis is
+ * ambiguous: the server may hold the thesis, so the caller must reconcile before allowing another create.
+ */
+export function classifyCreateResponse(status: number | null, body: unknown): CreateOutcome {
+  if (status === null) return { kind: 'ambiguous', reason: '网络错误' };
+  const b = body && typeof body === 'object' ? (body as { thesis?: unknown; error?: { message?: unknown } }) : {};
+  const message = typeof b.error?.message === 'string' ? b.error.message : String(status);
+  if (status >= 400 && status < 500) return { kind: 'rejected', message };
+  if (status >= 500) return { kind: 'ambiguous', reason: message };
+  const t = b.thesis && typeof b.thesis === 'object' ? (b.thesis as { id?: unknown; title?: unknown }) : null;
+  if (t && typeof t.id === 'string' && t.id !== '' && typeof t.title === 'string') return { kind: 'created', thesis: { id: t.id, title: t.title } };
+  return { kind: 'ambiguous', reason: '响应不完整' };
+}
