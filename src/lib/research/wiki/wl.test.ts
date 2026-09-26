@@ -56,12 +56,17 @@ describe('judgeWlPairs',()=>{
   expect(tight.stopped).toBe(true);
   expect(tight.spent_micros).toBe(900);
  });
- it('records transport errors as abstentions without throwing',async()=>{
-  const {fn}=fakeFetch([new Error('boom'),{status:429}]);
-  const out=await judgeWlPairs({pairs:[pair(1),pair(2)],existing:[],fetch:fn,apiKey:'k'.repeat(20),maxCostUsd:1,now:()=>'2026-09-26T01:00:00.000Z'});
-  expect(out.answers.map(a=>a.abstained)).toEqual([true,true]);
-  expect(out.errors).toHaveLength(2);
-  expect(out.answers[0]!.cost_micros).toBe(0);
+ it('keeps transport failures out of the answers so they are retried next run',async()=>{
+  const {fn}=fakeFetch([new Error('boom'),{status:429},response({consistent:0.9,contradicts:0.05,superseded:0.03,unrelated:0.02},0.9)]);
+  const out=await judgeWlPairs({pairs:[pair(1),pair(2),pair(3)],existing:[],fetch:fn,apiKey:'k'.repeat(20),maxCostUsd:1,now:()=>'2026-09-26T01:00:00.000Z'});
+  expect(out.answers.map(a=>a.pair_id)).toEqual([pair(3).pair_id]);
+  expect(out.errors.map(e=>e.pair_id)).toEqual([pair(1).pair_id,pair(2).pair_id]);
+  expect(out.spent_micros).toBe(46);
+ });
+ it('selects the verdict from the raw probabilities, rounding only for output',()=>{
+  const parsed=parseWlAnswer({type:'choice',probabilities:{contradicts:0.4996,consistent:0.5004},confidence:0.8});
+  expect(parsed.selected).toBe('consistent');
+  expect(parsed.distribution).toEqual({contradicts:0.5,consistent:0.5});
  });
  it('hashes the pairs document deterministically',()=>{
   const a=pairsHash(doc([pair(1),pair(2)]));
