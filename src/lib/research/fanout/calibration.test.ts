@@ -343,3 +343,14 @@ describe('Codex round 7 regressions',()=>{
   expect(renderCalibrationMarkdown(a)).toContain('v0.9');
  });
 });
+
+describe('Codex round 8 regression',()=>{
+ it('does not compare against a baseline of another question-set version',()=>{
+  const rows:ReportRow[]=[];for(let i=0;i<40;i++)rows.push(row({source_id:`c${i}`,question_id:'Q2',confidence:0.9,label:'support'}));
+  const current=buildCalibrationArtifact({rows,since:null,generatedAt:'2026-09-26T00:00:00.000Z',baseline:null});
+  const old={...current,question_set_version:'v0.9',generated_at:'2026-06-01T00:00:00.000Z',metrics:current.metrics.map(m=>({...m,questions:m.questions.map(q=>({...q,accuracy:0.5}))}))};
+  const v=buildCalibrationArtifact({rows,since:null,generatedAt:'2026-09-26T00:00:00.000Z',baseline:old}).stop_rules.find(x=>x.rule==='lock_version_recalibrate')!;
+  expect(v).toMatchObject({triggered:false,status:'not_applicable'});
+  expect(v.evidence).toContain('v0.9');
+ });
+});

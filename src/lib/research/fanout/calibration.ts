@@ -303,7 +303,7 @@ const meanAbstain = (m: BackendMetrics, questions: string[]) => {
   return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
 };
 
-export function evaluateStopRules(metrics: BackendMetrics[], baseline?: { metrics: BackendMetrics[] }): StopVerdict[] {
+export function evaluateStopRules(metrics: BackendMetrics[], baseline?: { metrics: BackendMetrics[]; question_set_version?: string }): StopVerdict[] {
   const jev = metrics.find(m => m.backend === 'jev');
   const out: StopVerdict[] = [];
   // Questions where both backends have an accuracy from at least MIN_LABELS labels each.
@@ -344,7 +344,9 @@ export function evaluateStopRules(metrics: BackendMetrics[], baseline?: { metric
     if (!comparable) { out.push({ rule, triggered: false, status: 'insufficient_evidence', evidence: `no question with ≥ ${MIN_LABELS} labels on both sides` }); continue; }
     out.push({ rule, triggered: hits.length > 0, status: 'evaluated', evidence: hits.join('; ') || 'no candidate within band' });
   }
-  if (!baseline || !jev) out.push({ rule: 'lock_version_recalibrate', triggered: false, status: 'not_applicable', evidence: baseline ? 'no jev judgments' : 'no baseline supplied' });
+  // A baseline of another question set measured different questions or thresholds: not drift, not comparable.
+  const foreign = baseline?.question_set_version !== undefined && baseline.question_set_version !== QUESTION_SET_VERSION;
+  if (!baseline || !jev || foreign) out.push({ rule: 'lock_version_recalibrate', triggered: false, status: 'not_applicable', evidence: !baseline ? 'no baseline supplied' : foreign ? `baseline question set ${baseline.question_set_version} ≠ ${QUESTION_SET_VERSION}` : 'no jev judgments' });
   else {
     const prev = baseline.metrics.find(m => m.backend === 'jev');
     const comparable = prev ? jev.questions.map(q => { const p = prev.questions.find(x => x.question_id === q.question_id); return p && p.accuracy !== null && q.accuracy !== null && p.decided >= MIN_LABELS && q.decided >= MIN_LABELS ? { q: q.question_id, d: q.accuracy - p.accuracy } : null; }).filter((x): x is { q: string; d: number } => x !== null) : [];
@@ -413,7 +415,7 @@ export function buildCalibrationArtifact(input: { rows: ReportRow[]; since: stri
   return {
     schema_name: 'alpha-calibration-report', schema_version: '1.0', question_set_version: QUESTION_SET_VERSION,
     generated_at: input.generatedAt, since: input.since, rows: kept.length, labeled: kept.filter(r => r.label !== null).length, excluded,
-    metrics, fits: calibrationFits(kept), proposals: proposeThresholds(kept), stop_rules: evaluateStopRules(metrics, input.baseline ? { metrics: input.baseline.metrics } : undefined),
+    metrics, fits: calibrationFits(kept), proposals: proposeThresholds(kept), stop_rules: evaluateStopRules(metrics, input.baseline ? { metrics: input.baseline.metrics, question_set_version: input.baseline.question_set_version } : undefined),
     baseline_generated_at: input.baseline?.generated_at ?? null,
   };
 }
