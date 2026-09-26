@@ -61,11 +61,10 @@ type Filter =
 
 class QueryBuilder implements PromiseLike<{ data: any; error: any }> {
   private filters: Filter[] = [];
-  private orderCol: string | null = null;
+  private orders: Array<{ col: string; asc: boolean }> = [];
   private rangeFrom: number | null = null;
   private rangeTo: number | null = null;
   static readonly MAX_ROWS = 1000;
-  private orderAsc = true;
   private limitN: number | null = null;
   private pending: { op: 'insert' | 'update' | 'upsert'; payload: any } | null = null;
   private single = false;
@@ -134,9 +133,9 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any }> {
     return this;
   }
 
+  /** Multiple order() calls compose like PostgREST: earlier keys take precedence, later ones break ties. */
   order(col: string, opts?: { ascending?: boolean }): this {
-    this.orderCol = col;
-    this.orderAsc = opts?.ascending !== false;
+    this.orders.push({ col, asc: opts?.ascending !== false });
     return this;
   }
 
@@ -210,14 +209,16 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any }> {
 
     // read
     let out = table.filter((r) => this.matches(r));
-    if (this.orderCol) {
-      const col = this.orderCol;
+    if (this.orders.length) {
       out = [...out].sort((a, b) => {
-        const av = a[col];
-        const bv = b[col];
-        if (av === bv) return 0;
-        const cmp = av < bv ? -1 : 1;
-        return this.orderAsc ? cmp : -cmp;
+        for (const { col, asc } of this.orders) {
+          const av = a[col];
+          const bv = b[col];
+          if (av === bv) continue;
+          const cmp = av < bv ? -1 : 1;
+          return asc ? cmp : -cmp;
+        }
+        return 0;
       });
     }
     if (this.limitN !== null) out = out.slice(0, this.limitN);
