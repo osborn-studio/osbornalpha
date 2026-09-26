@@ -7,7 +7,8 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import type { ScopedCompany } from '@/lib/research/entity-keys/scope';
 import type { Thesis } from '@/lib/research/types';
-import { clearPendingActivation, DRAFT_KEY, markThesisCreated, parseDraft, resetCompanyDraft, serializeDraft, type SetupDraft } from '@/lib/research/setup/draft';
+import { clearPendingActivation, clearPendingCreate, DRAFT_KEY, markCreatePending, markThesisCreated, parseDraft, resetCompanyDraft, serializeDraft, type SetupDraft } from '@/lib/research/setup/draft';
+import { findCreatedThesis, saveOutcomeMessage } from '@/lib/research/setup/theses';
 import { setupProgress } from '@/lib/research/setup/progress';
 import { EMPTY_THESIS_DRAFT } from '@/lib/research/setup/theses';
 import { companiesFromResponse } from '@/lib/research/setup/roster';
@@ -52,6 +53,31 @@ export default function ResearchSetupPage() {
   // Functional updates: two callbacks in one tick (answers, then step) must not overwrite each other.
   const update = (patch: Partial<SetupDraft>) => setDraft((prev) => { const next = { ...prev, ...patch }; writeDraft(next); return next; });
   const reset = (fn: (prev: SetupDraft) => SetupDraft) => setDraft((prev) => { const next = fn(prev); writeDraft(next); return next; });
+
+  /** Reconcile an unresolved create by its submission id: never creates, only looks up (then activates if asked). */
+  async function reconcilePendingCreate() {
+    const pending = draft.pendingCreate;
+    if (!pending || busy) return;
+    setBusy(true);
+    try {
+      const lookup = await fetch('/api/research/theses').then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      if (!lookup?.theses) { setNotice('仍无法连接服务器，稍后再试「重新确认」'); return; }
+      const found = findCreatedThesis(lookup.theses, pending.submissionId);
+      if (!found) { reset(clearPendingCreate); setNotice('服务器未记录上一次提交，草稿已保留，可重新提交'); return; }
+      reset((prev) => markThesisCreated(clearPendingCreate(prev), found));
+      let activated: boolean | null = null, error: string | undefined;
+      if (pending.activate) {
+        try {
+          const t = await fetch(`/api/research/theses/${found.id}/transition`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: 'ACTIVE', reason: 'setup wizard (reconciled)' }) });
+          const tData = await t.json().catch(() => ({}));
+          activated = t.ok; if (!t.ok) error = tData?.error?.message ?? String(t.status);
+        } catch (e) { activated = false; error = e instanceof Error ? e.message : '网络错误'; }
+      }
+      if (activated !== false) reset(clearPendingActivation);
+      setNotice(saveOutcomeMessage({ title: found.title, activate: pending.activate, activated, error }));
+      await load();
+    } finally { setBusy(false); }
+  }
 
   async function activatePending() {
     const pending = draft.pendingActivation;
@@ -99,6 +125,12 @@ export default function ResearchSetupPage() {
       </div>
 
       {notice && <p className="rounded border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">{notice}</p>}
+      {draft.pendingCreate && !busy && (
+        <p className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" role="status">
+          上一次提交「{draft.pendingCreate.input.title}」的结果尚未确认（响应丢失）。
+          <button type="button" className="ml-2 underline" onClick={() => void reconcilePendingCreate()}>重新确认</button>
+        </p>
+      )}
       {draft.pendingActivation && !busy && (
         <p className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" role="status">
           上次创建的 thesis「{draft.pendingActivation.title}」尚未确认激活。
@@ -120,7 +152,10 @@ export default function ResearchSetupPage() {
       {flow === 'thesis' && companies && (
         <ThesisFlow companies={companies} draft={draft.thesis} step={draft.thesisStep} busy={busy} setBusy={setBusy}
           onDraftChange={(thesis) => update({ thesis })} onStepChange={(thesisStep) => update({ thesisStep })}
-          onCreated={(created) => reset((prev) => markThesisCreated(prev, created))}
+          onPendingCreate={(pending) => reset((prev) => markCreatePending(prev, pending))}
+          onCreateResolved={() => reset(clearPendingCreate)}
+          hasPendingCreate={!!draft.pendingCreate}
+          onCreated={(created) => reset((prev) => markThesisCreated(clearPendingCreate(prev), created))}
           onSaved={async (m) => { reset(clearPendingActivation); setNotice(m); await load(); }} />
       )}
       {flow === null && <p className="text-sm text-gray-500">点上面任一张卡开始。</p>}

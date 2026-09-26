@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { COMPANY_QUESTIONS, THESIS_QUESTIONS } from './questions';
-import { classifyCreateResponse, EMPTY_THESIS_DRAFT, findCreatedThesis, isCalendarDate, saveOutcomeMessage, staleCompanyIds, thesisFormToInput, validateThesisStep, type ThesisDraft } from './theses';
+import { classifyCreateResponse, EMPTY_THESIS_DRAFT, findCreatedThesis, isCalendarDate, withSubmissionId, saveOutcomeMessage, staleCompanyIds, thesisFormToInput, validateThesisStep, type ThesisDraft } from './theses';
 import { companiesStepErrors, companiesSubmitErrors, ownerCompanyToCohort, reconcileAddedCompany, rosterKeys, validateCompanyAnswer, type OwnerCompanyAnswer } from './companies';
 import { setupProgress, TARGETS } from './progress';
-import { clearPendingActivation, markThesisCreated, parseDraft, resetCompanyDraft, resetThesisDraft, serializeDraft } from './draft';
+import { clearPendingActivation, clearPendingCreate, markCreatePending, markThesisCreated, parseDraft, resetCompanyDraft, resetThesisDraft, serializeDraft } from './draft';
 import { companiesFromResponse } from './roster';
 
 const filled = (): ThesisDraft => ({
@@ -261,17 +261,16 @@ describe('Codex round 12 regression', () => {
 
 
 describe('Codex round 13 regression (theses)', () => {
-  it('reconciles a lost create response by finding the thesis the server already stored', () => {
-    const input = thesisFormToInput(filled());
-    const stored = { id: 't1', title: input.title, body: input.body, company_ids: input.company_ids, status: 'DRAFT', created_at: '2026-09-27T01:00:00.000Z' };
-    const other = { ...stored, id: 't0', title: '别的论点' };
-    expect(findCreatedThesis([other, stored] as never, input, '2026-09-27T01:02:00.000Z')).toEqual({ id: 't1', title: input.title });
-    // Same text but an old record (not this session's create) is not reconciled.
-    expect(findCreatedThesis([{ ...stored, created_at: '2026-09-01T00:00:00.000Z' }] as never, input, '2026-09-27T01:02:00.000Z')).toBeNull();
-    expect(findCreatedThesis([] as never, input, '2026-09-27T01:02:00.000Z')).toBeNull();
+  it('reconciles a lost create response by the submission id carried in the pillar ids, never by content', () => {
+    const input = withSubmissionId(thesisFormToInput(filled()), 'sub-1');
+    expect(input.pillars!.map((p) => p.id)).toEqual(['sub-1:0', 'sub-1:1']);
+    const stored = { id: 't1', title: 'renamed later', pillars: input.pillars };
+    const lookalike = { id: 't0', title: input.title, body: input.body, company_ids: input.company_ids, pillars: [{ id: 'other:0', text: 'x' }] };
+    expect(findCreatedThesis([lookalike, stored] as never, 'sub-1')).toEqual({ id: 't1', title: 'renamed later' });
+    expect(findCreatedThesis([lookalike] as never, 'sub-1')).toBeNull();
+    expect(findCreatedThesis([] as never, 'sub-1')).toBeNull();
   });
 });
-
 
 describe('Codex round 14 regression', () => {
   it('classifies a create response: definitive rejections, valid creations, and everything ambiguous', () => {
@@ -283,5 +282,24 @@ describe('Codex round 14 regression', () => {
     expect(classifyCreateResponse(201, {})).toEqual({ kind: 'ambiguous', reason: '响应不完整' });
     expect(classifyCreateResponse(201, { thesis: { id: 5 } })).toEqual({ kind: 'ambiguous', reason: '响应不完整' });
     expect(classifyCreateResponse(null, null)).toEqual({ kind: 'ambiguous', reason: '网络错误' });
+  });
+});
+
+
+describe('Codex round 15 regression', () => {
+  it('persists an unresolved create before the POST and keeps it until reconciliation succeeds', () => {
+    const draft = { version: 1 as const, thesis: filled(), thesisStep: 8, companies: {}, companyStep: 0 };
+    const input = withSubmissionId(thesisFormToInput(filled()), 'sub-9');
+    const pending = markCreatePending(draft, { submissionId: 'sub-9', input, activate: true });
+    expect(pending.pendingCreate).toEqual({ submissionId: 'sub-9', input, activate: true });
+    // The answers stay (nothing is confirmed yet) and the state survives a reload.
+    expect(pending.thesis).toEqual(filled());
+    expect(parseDraft(serializeDraft(pending))?.pendingCreate?.submissionId).toBe('sub-9');
+    expect(parseDraft(JSON.stringify({ ...pending, pendingCreate: { submissionId: 1 } }))).toBeNull();
+    // Reconciled: the created thesis finalizes the draft and clears the unresolved create.
+    const done = markThesisCreated(clearPendingCreate(pending), { id: 't9', title: 'T' });
+    expect(done.pendingCreate).toBeNull();
+    expect(done.thesis).toEqual(EMPTY_THESIS_DRAFT);
+    expect(done.pendingActivation).toEqual({ id: 't9', title: 'T' });
   });
 });

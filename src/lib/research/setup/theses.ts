@@ -143,19 +143,27 @@ export function staleCompanyIds(selected: readonly string[], inScopeIds: readonl
   return selected.filter((id) => !inScopeIds.includes(id));
 }
 
+/** A client-side idempotency key for one create attempt. */
+export function newSubmissionId(): string {
+  return globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `sub-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 /**
- * Reconcile a create whose response was lost: the server may already hold the thesis. It is the one with
- * the same title, body and companies created within the last ten minutes; anything older is a different record.
+ * Stamp the submission id into the pillar ids (`<submissionId>:<index>`): pillars are always present in
+ * wizard theses and their ids are stored verbatim, so the server keeps an exact identifier of this create
+ * without any schema change. Reconciliation matches on it, never on content.
  */
+export function withSubmissionId(input: CreateThesisInput, submissionId: string): CreateThesisInput {
+  return { ...input, pillars: (input.pillars ?? []).map((p, i) => ({ ...p, id: `${submissionId}:${i}` })) };
+}
+
+/** The thesis the server stored for this submission, identified by the stamped pillar ids. */
 export function findCreatedThesis(
-  theses: ReadonlyArray<{ id: string; title: string; body: string; company_ids: string[]; created_at: string }>,
-  input: CreateThesisInput,
-  nowIso: string,
+  theses: ReadonlyArray<{ id: string; title: string; pillars?: ReadonlyArray<{ id?: string }> }>,
+  submissionId: string,
 ): { id: string; title: string } | null {
-  const now = Date.parse(nowIso);
-  const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && [...a].sort().every((v, i) => v === [...b].sort()[i]);
-  const match = theses.find((t) => t.title === input.title && t.body === input.body && same(t.company_ids ?? [], input.company_ids ?? [])
-    && Number.isFinite(Date.parse(t.created_at)) && now - Date.parse(t.created_at) <= 10 * 60 * 1000 && Date.parse(t.created_at) <= now + 60 * 1000);
+  const prefix = `${submissionId}:`;
+  const match = theses.find((t) => (t.pillars ?? []).some((p) => typeof p.id === 'string' && p.id.startsWith(prefix)));
   return match ? { id: match.id, title: match.title } : null;
 }
 

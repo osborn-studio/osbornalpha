@@ -3,6 +3,7 @@
  * 版本化：版本不符或无法解析一律视为没有草稿。
  */
 import type { OwnerCompanyAnswer } from './companies';
+import type { CreateThesisInput } from '../theses';
 import { EMPTY_THESIS_DRAFT, type ThesisDraft } from './theses';
 
 export const DRAFT_KEY = 'research-setup-draft:v1';
@@ -16,6 +17,11 @@ export interface SetupDraft {
   companyStep: number;
   /** A thesis that was created but whose activation did not complete (reload mid-save): offer to finish it. */
   pendingActivation?: { id: string; title: string } | null;
+  /**
+   * A create whose outcome is unknown (response lost and reconciliation not yet successful). Written before
+   * the POST; no new create is allowed until it is reconciled by its submission id.
+   */
+  pendingCreate?: { submissionId: string; input: CreateThesisInput; activate: boolean } | null;
 }
 
 export function serializeDraft(draft: SetupDraft): string {
@@ -31,6 +37,8 @@ export function parseDraft(raw: string | null | undefined): SetupDraft | null {
     if (!parsed.companies || typeof parsed.companies !== 'object' || typeof parsed.companyStep !== 'number') return null;
     const p = parsed.pendingActivation;
     if (p !== undefined && p !== null && (typeof p !== 'object' || typeof p.id !== 'string' || typeof p.title !== 'string')) return null;
+    const c = parsed.pendingCreate;
+    if (c !== undefined && c !== null && (typeof c !== 'object' || typeof c.submissionId !== 'string' || !c.input || typeof c.input !== 'object' || typeof c.activate !== 'boolean')) return null;
     return parsed as SetupDraft;
   } catch {
     return null;
@@ -57,4 +65,13 @@ export function markThesisCreated(prev: SetupDraft, created: { id: string; title
 
 export function clearPendingActivation(prev: SetupDraft): SetupDraft {
   return { ...prev, pendingActivation: null };
+}
+
+/** Before the POST: remember the attempt so a lost response can only be reconciled, never re-created. */
+export function markCreatePending(prev: SetupDraft, pending: { submissionId: string; input: CreateThesisInput; activate: boolean }): SetupDraft {
+  return { ...prev, pendingCreate: pending };
+}
+
+export function clearPendingCreate(prev: SetupDraft): SetupDraft {
+  return { ...prev, pendingCreate: null };
 }
