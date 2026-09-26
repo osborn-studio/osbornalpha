@@ -1,0 +1,438 @@
+import {describe,expect,it} from 'vitest';
+import type {ReportRow} from './report';
+import {applyIsotonic,crossFittedEce,isotonicFit,wilson} from './calibration';
+import {QUESTION_SET_VERSION} from './questions';
+
+const row=(over:Partial<ReportRow>):ReportRow=>({source_id:'s1',backend:'jev',question_id:'Q2',selected:'support',confidence:0.8,abstained:false,latency_ms:100,cost_micros:10,distribution:{support:0.8,weaken:0.2},label:'support',...over});
+
+describe('isotonicFit (PAV)',()=>{
+ it('pools adjacent violators into a monotone step function',()=>{
+  const fit=isotonicFit([{score:0.1,hit:0},{score:0.2,hit:1},{score:0.3,hit:0},{score:0.9,hit:1},{score:0.95,hit:1}]);
+  const ps=fit.segments.map(s=>s.p);
+  for(let i=1;i<ps.length;i++)expect(ps[i]).toBeGreaterThanOrEqual(ps[i-1]!);
+  // 0.2 (hit) followed by 0.3 (miss) violates monotonicity: pooled to 0.5; equal-p neighbours merge.
+  expect(fit.segments).toEqual([{x_min:0.1,x_max:0.1,p:0},{x_min:0.2,x_max:0.3,p:0.5},{x_min:0.9,x_max:0.95,p:1}]);
+ });
+ it('reproduces perfectly calibrated bins and clamps outside the fitted range',()=>{
+  const points=[...Array(10)].flatMap((_,i)=>[{score:0.2,hit:i<2?1:0},{score:0.7,hit:i<7?1:0}]);
+  const fit=isotonicFit(points);
+  expect(applyIsotonic(fit,0.2)).toBeCloseTo(0.2,6);
+  expect(applyIsotonic(fit,0.7)).toBeCloseTo(0.7,6);
+  expect(applyIsotonic(fit,0.45)).toBeCloseTo(0.45,6); // linear interpolation between segments
+  expect(applyIsotonic(fit,0.0)).toBeCloseTo(0.2,6);
+  expect(applyIsotonic(fit,1.0)).toBeCloseTo(0.7,6);
+  expect(isotonicFit([]).segments).toEqual([]);
+ });
+});
+
+describe('wilson',()=>{
+ it('matches reference intervals and handles empty samples',()=>{
+  const w=wilson(90,100);
+  expect(w.low).toBeCloseTo(0.8256,3);expect(w.high).toBeCloseTo(0.9448,3);
+  expect(wilson(0,0)).toEqual({low:null,high:null});
+  expect(wilson(0,10).low).toBe(0);
+ });
+});
+
+describe('crossFittedEce',()=>{
+ it('reduces ECE for an over-confident but rankable backend and is null under 30 labels',()=>{
+  // Confidence 0.95 but only 60% correct; confidence 0.6 but 100% correct: isotonic fixes both.
+  const rows:ReportRow[]=[];
+  for(let i=0;i<50;i++)rows.push(row({confidence:0.95,label:i%5<3?'support':'weaken'}));
+  for(let i=0;i<50;i++)rows.push(row({confidence:0.6,label:'support'}));
+  const out=crossFittedEce(rows);
+  expect(out.before).toBeGreaterThan(0.25);
+  expect(out.after).not.toBeNull();
+  expect(out.after!).toBeLessThan(out.before!);
+  expect(crossFittedEce(rows.slice(0,20)).after).toBeNull();
+ });
+});
+
+import {classMetrics,evaluateStopRules,proposeThresholds} from './calibration';
+
+const q1=(p:number,label:string|null,backend='jev',abstained=false):ReportRow=>row({question_id:'Q1',backend,confidence:null,distribution:{true:p,false:1-p},selected:abstained?null:p>0.6?'true':p<0.4?'false':null,abstained:abstained||(p>=0.4&&p<=0.6),label});
+const q2=(conf:number,selected:string,label:string|null,backend='jev'):ReportRow=>row({question_id:'Q2',backend,confidence:conf,selected:conf<0.6?null:selected,abstained:conf<0.6,distribution:{[selected]:0.5+conf/2},label});
+
+describe('classMetrics',()=>{
+ it('reports important recall (abstentions are misses), false-support rate and intervals per backend',()=>{
+  const rows=[
+   q1(0.9,'true'),q1(0.8,'true'),q1(0.5,'true'),q1(0.2,'true'),q1(0.1,'false'),q1(0.95,'false'),
+   q2(0.9,'support','support'),q2(0.9,'support','weaken'),q2(0.9,'weaken','weaken'),q2(0.3,'support','weaken'),q2(0.8,'support',null),
+   q1(0.9,'true','rule'),
+  ];
+  const m=classMetrics(rows);
+  const jev=m.find(b=>b.backend==='jev')!;
+  expect(jev.important_recall).toMatchObject({k:2,n:4,rate:0.5});
+  expect(jev.important_recall.low).toBeGreaterThan(0);expect(jev.important_recall.high).toBeLessThan(1);
+  expect(jev.false_support).toMatchObject({k:1,n:3});
+  expect(jev.false_support.rate).toBeCloseTo(1/3,6);
+  expect(jev.questions.find(q=>q.question_id==='Q1')).toMatchObject({n:6,labeled:6});
+  expect(jev.questions.find(q=>q.question_id==='Q2')?.ece_after).toBeNull();
+  const rule=m.find(b=>b.backend==='rule')!;
+  expect(rule.important_recall).toMatchObject({k:1,n:1,rate:1});
+  expect(rule.false_support).toMatchObject({k:0,n:0,rate:null});
+ });
+});
+
+describe('proposeThresholds',()=>{
+ it('finds Q1 thresholds meeting recall ≥ 0.9 and abstention ≤ 30% when feasible, and reports infeasibility otherwise',()=>{
+  const rows:ReportRow[]=[];
+  // 40 relevant materials scored high (0.75–0.95), 40 irrelevant scored low (0.05–0.3): a clean separation.
+  for(let i=0;i<40;i++){rows.push(q1(0.75+(i%5)*0.05,'true'));rows.push(q1(0.05+(i%6)*0.05,'false'));}
+  const out=proposeThresholds(rows).find(p=>p.question_id==='Q1')!;
+  expect(out.status).toBe('proposed');
+  expect(out.proposed).toMatchObject({relevant_above:expect.any(Number),irrelevant_below:expect.any(Number)});
+  expect(out.proposed!.relevant_above).toBeLessThan(0.75);
+  expect(out.proposed!.irrelevant_below).toBeGreaterThan(0.3);
+  expect(out.metrics).toMatchObject({recall:1,abstain_rate:0});
+  expect(out.current).toEqual({irrelevant_below:0.4,relevant_above:0.6});
+  // Hopeless scores: recall and precision cannot both be met.
+  const noisy:ReportRow[]=[];
+  for(let i=0;i<60;i++)noisy.push(q1(0.5+((i*7)%10-5)*0.01,i%2?'true':'false'));
+  const bad=proposeThresholds(noisy).find(p=>p.question_id==='Q1')!;
+  expect(['infeasible','proposed']).toContain(bad.status);
+  if(bad.status==='infeasible')expect(bad.metrics.recall).toBeDefined();
+ });
+ it('proposes Q2 min_confidence keeping false-support ≤ 5% with the widest coverage, and flags insufficient labels',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<30;i++)rows.push(q2(0.9,'support','support'));
+  for(let i=0;i<10;i++)rows.push(q2(0.7,'support',i<8?'support':'weaken'));
+  for(let i=0;i<10;i++)rows.push(q2(0.62,'support','weaken'));
+  const q2p=proposeThresholds(rows).find(p=>p.question_id==='Q2')!;
+  expect(q2p.status).toBe('proposed');
+  expect(q2p.proposed!.min_confidence).toBeGreaterThanOrEqual(0.7);
+  expect(q2p.metrics.false_support_rate).toBeLessThanOrEqual(0.05);
+  expect(proposeThresholds(rows.slice(0,10)).find(p=>p.question_id==='Q2')!.status).toBe('insufficient_labels');
+  expect(proposeThresholds(rows).find(p=>p.question_id==='Q1')!.status).toBe('insufficient_labels');
+ });
+});
+
+describe('evaluateStopRules (§10.3)',()=>{
+ const metric=(backend:string,over:Record<string,unknown>={})=>({backend,labels:400,important_recall:{k:90,n:100,rate:0.9,low:0.83,high:0.94},false_support:{k:2,n:100,rate:0.02,low:0,high:0.07},
+  questions:[{question_id:'Q1',n:100,labeled:100,decided:100,accuracy:0.9,abstain_rate:0.1,ece_before:0.05,ece_after:0.03},{question_id:'Q2',n:100,labeled:100,decided:100,accuracy:0.88,abstain_rate:0.2,ece_before:0.05,ece_after:0.03}],...over}) as any;
+ it('keeps jev on Q3/Q4 only when recall or false-support break, and never concludes on thin evidence',()=>{
+  const verdicts=evaluateStopRules([metric('jev',{important_recall:{k:80,n:100,rate:0.8,low:0.7,high:0.87}})]);
+  expect(verdicts.find(v=>v.rule==='jev_q3q4_only')).toMatchObject({triggered:true});
+  const thin=evaluateStopRules([metric('jev',{labels:12,important_recall:{k:8,n:12,rate:0.67,low:0.39,high:0.86}})]);
+  expect(thin.find(v=>v.rule==='jev_q3q4_only')).toMatchObject({triggered:false,status:'insufficient_evidence'});
+ });
+ it('does not introduce jev when rule or deepseek is within 3 points with fewer abstentions',()=>{
+  const verdicts=evaluateStopRules([metric('jev'),metric('rule',{questions:[{question_id:'Q1',n:100,labeled:100,decided:100,accuracy:0.89,abstain_rate:0.0,ece_before:0.1,ece_after:null},{question_id:'Q2',n:100,labeled:100,decided:100,accuracy:0.87,abstain_rate:0.05,ece_before:0.1,ece_after:null}]})]);
+  expect(verdicts.find(v=>v.rule==='do_not_introduce_jev')).toMatchObject({triggered:true});
+ });
+ it('switches to the local probe after 300 labels when it is within 2 points, and flags a >5 point drift against a baseline',()=>{
+  const verdicts=evaluateStopRules([metric('jev'),metric('local_probe',{questions:[{question_id:'Q1',n:100,labeled:100,decided:100,accuracy:0.89,abstain_rate:0.1,ece_before:0.05,ece_after:0.03},{question_id:'Q2',n:100,labeled:100,decided:100,accuracy:0.87,abstain_rate:0.2,ece_before:0.05,ece_after:0.03}]})],
+   {metrics:[metric('jev',{questions:[{question_id:'Q1',n:100,labeled:100,decided:100,accuracy:0.8,abstain_rate:0.1,ece_before:0.05,ece_after:0.03},{question_id:'Q2',n:100,labeled:100,decided:100,accuracy:0.88,abstain_rate:0.2,ece_before:0.05,ece_after:0.03}]})]});
+  expect(verdicts.find(v=>v.rule==='switch_local_probe')).toMatchObject({triggered:true});
+  expect(verdicts.find(v=>v.rule==='lock_version_recalibrate')).toMatchObject({triggered:true});
+ });
+});
+
+import {buildCalibrationArtifact,calibrationFits,renderCalibrationMarkdown,runCalibrationCli} from './calibration';
+import {mkdtempSync,readFileSync,realpathSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+
+describe('artifact, markdown and CLI runner',()=>{
+ const rows=()=>{const out:ReportRow[]=[];for(let i=0;i<40;i++){out.push(q1(0.75+(i%5)*0.05,'true'));out.push(q1(0.05+(i%6)*0.05,'false'));out.push(q2(0.9,'support','support'));}return out;};
+ it('builds a deterministic artifact with metrics, proposals and verdicts',()=>{
+  const a=buildCalibrationArtifact({rows:rows(),since:null,generatedAt:'2026-09-26T00:00:00.000Z',baseline:null});
+  expect(a).toMatchObject({schema_name:'alpha-calibration-report',schema_version:'1.0',question_set_version:'v1.0',generated_at:'2026-09-26T00:00:00.000Z',rows:120,labeled:120});
+  expect(a.metrics.map(m=>m.backend)).toEqual(['jev']);
+  expect(a.proposals.find(p=>p.question_id==='Q1')?.status).toBe('proposed');
+  expect(a.stop_rules.map(v=>v.rule)).toEqual(['jev_q3q4_only','do_not_introduce_jev','switch_local_probe','lock_version_recalibrate']);
+  expect(JSON.stringify(a)).toBe(JSON.stringify(buildCalibrationArtifact({rows:rows(),since:null,generatedAt:'2026-09-26T00:00:00.000Z',baseline:null})));
+  const md=renderCalibrationMarkdown(a);
+  for(const h of ['## 类① 指标','## 阈值重拟','## 停止 / 换后端']) expect(md).toContain(h);
+  expect(md).toContain('important_recall');
+  expect(md).not.toMatch(/undefined/);
+ });
+ it('the runner validates arguments, writes dated json + md files and never prints row content',async()=>{
+  const dir=mkdtempSync(path.join(realpathSync(tmpdir()),'calib-'));
+  try{
+   const load=async()=>rows();
+   expect(await runCalibrationCli([],{load})).toMatchObject({exitCode:2});
+   expect(await runCalibrationCli(['--out','relative'],{load})).toMatchObject({exitCode:2});
+   expect(await runCalibrationCli(['--out',dir,'--since','yesterday'],{load})).toMatchObject({exitCode:2});
+   const ok=await runCalibrationCli(['--out',dir],{load,now:()=>'2026-09-26T05:06:07.000Z'});
+   expect(ok.exitCode).toBe(0);
+   const summary=JSON.parse(ok.output);
+   expect(summary).toMatchObject({rows:120,labeled:120,json:path.join(dir,'2026-09-26.json'),markdown:path.join(dir,'2026-09-26.md')});
+   expect(readFileSync(path.join(dir,'2026-09-26.md'),'utf8')).toContain('## 阈值重拟');
+   const again=await runCalibrationCli(['--out',dir,'--baseline',path.join(dir,'2026-09-26.json')],{load,now:()=>'2026-09-27T00:00:00.000Z'});
+   expect(again.exitCode).toBe(0);
+   expect(JSON.parse(readFileSync(path.join(dir,'2026-09-27.json'),'utf8')).stop_rules.find((v:any)=>v.rule==='lock_version_recalibrate')).toMatchObject({status:'evaluated',triggered:false});
+   expect(ok.output).not.toContain('support');
+  }finally{rmSync(dir,{recursive:true,force:true});}
+ });
+});
+
+describe('Codex round 1 regressions',()=>{
+ it('pools equal scores before PAV so the fit is order-independent',()=>{
+  expect(applyIsotonic(isotonicFit([{score:0.8,hit:0},{score:0.8,hit:1}]),0.8)).toBeCloseTo(0.5,6);
+  expect(applyIsotonic(isotonicFit([{score:0.8,hit:1},{score:0.8,hit:0}]),0.8)).toBeCloseTo(0.5,6);
+  expect(isotonicFit([{score:0.8,hit:1},{score:0.8,hit:0}]).segments).toEqual([{x_min:0.8,x_max:0.8,p:0.5}]);
+ });
+ it('evaluates Q3/Q4 thresholds with the runtime fallback prediction instead of abstentions',()=>{
+  // Below the threshold the runtime answers "unknown"; a label of "unknown" is then a hit, not an abstention.
+  const q3=(i:number,conf:number,selected:string,label:string):ReportRow=>row({question_id:'Q3',source_id:`m${i}`,confidence:conf,selected,abstained:false,distribution:{[selected]:0.5+conf/2},label});
+  const rows:ReportRow[]=[];
+  for(let i=0;i<20;i++)rows.push(q3(i,0.9,'filing_or_regulator','filing_or_regulator'));
+  for(let i=0;i<20;i++)rows.push(q3(100+i,0.4,'analyst_or_media','unknown'));
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q3')!;
+  expect(p.status).toBe('proposed');
+  expect(p.proposed!.min_confidence).toBeGreaterThan(0.4);
+  expect(p.metrics.accuracy).toBe(1);
+  expect(p.metrics).not.toHaveProperty('coverage');
+ });
+ it('gates stop verdicts on the compared samples, not only on jev totals',()=>{
+  const metric=(backend:string,labels:number,q:Array<[string,number,number|null]>)=>({backend,labels,important_recall:{k:90,n:100,rate:0.9,low:0.83,high:0.94},false_support:{k:2,n:100,rate:0.02,low:0,high:0.07},
+   questions:q.map(([id,labeled,acc])=>({question_id:id,n:labeled,labeled,decided:labeled,accuracy:acc,abstain_rate:0.1,ece_before:null,ece_after:null}))}) as any;
+  const v=evaluateStopRules([metric('jev',400,[['Q1',200,0.9],['Q4',200,0.9]]),metric('local_probe',1,[['Q4',1,1]])]);
+  expect(v.find(x=>x.rule==='switch_local_probe')).toMatchObject({triggered:false,status:'insufficient_evidence'});
+  const thinQ1=evaluateStopRules([{...metric('jev',400,[['Q4',400,0.9]]),important_recall:{k:2,n:3,rate:0.67,low:0.2,high:0.94},false_support:{k:0,n:2,rate:0,low:0,high:0.66}}]);
+  expect(thinQ1.find(x=>x.rule==='jev_q3q4_only')).toMatchObject({triggered:false,status:'insufficient_evidence'});
+  const drift=evaluateStopRules([metric('jev',400,[['Q1',200,0.9]])],{metrics:[metric('jev',5,[['Q1',5,0.6]])]});
+  expect(drift.find(x=>x.rule==='lock_version_recalibrate')).toMatchObject({triggered:false,status:'insufficient_evidence'});
+ });
+ it('deduplicates material-level Q3 judgments before calibration',()=>{
+  const dup:ReportRow[]=[];
+  for(let i=0;i<30;i++)dup.push(row({question_id:'Q3',source_id:'same',confidence:0.9,selected:'filing_or_regulator',label:'filing_or_regulator',distribution:{filing_or_regulator:0.9}}));
+  const m=classMetrics(dup)[0]!.questions.find(q=>q.question_id==='Q3')!;
+  expect(m.labeled).toBe(1);
+  expect(m.ece_after).toBeNull();
+  expect(proposeThresholds(dup).find(p=>p.question_id==='Q3')!.status).toBe('insufficient_labels');
+ });
+ it('persists per backend × question isotonic fits in the artifact',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<40;i++){rows.push(q1(0.75+(i%5)*0.05,'true'));rows.push(q1(0.05+(i%6)*0.05,'false'));}
+  const a=buildCalibrationArtifact({rows,since:null,generatedAt:'2026-09-26T00:00:00.000Z',baseline:null});
+  expect(a.fits).toEqual([expect.objectContaining({backend:'jev',question_id:'Q1',labeled:80})]);
+  expect(a.fits[0]!.segments.length).toBeGreaterThan(0);
+  expect(renderCalibrationMarkdown(a)).toContain('## Isotonic 拟合');
+ });
+});
+
+describe('Codex round 2 regressions',()=>{
+ it('keeps score-less abstentions as unavoidable misses when proposing Q1 thresholds',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<30;i++)rows.push(q1(0.9,'true'));
+  for(let i=0;i<30;i++)rows.push(row({question_id:'Q1',confidence:null,distribution:{},selected:null,abstained:true,label:'true'}));
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q1')!;
+  expect(p.status).toBe('infeasible');
+  expect(p.metrics.recall).toBeCloseTo(0.5,6);
+  expect(p.metrics.abstain_rate).toBeCloseTo(0.5,6);
+  // Fitting needs 30 usable scores, not 30 labels.
+  const thin=[...rows.slice(0,10),...rows.slice(30)];
+  expect(proposeThresholds(thin).find(x=>x.question_id==='Q1')!.status).toBe('insufficient_labels');
+ });
+ it('evaluates the two jev stop conditions independently',()=>{
+  const m=(recall:{k:number;n:number},fs:{k:number;n:number})=>({backend:'jev',labels:400,important_recall:{...recall,rate:recall.n?recall.k/recall.n:null,low:0,high:1},false_support:{...fs,rate:fs.n?fs.k/fs.n:null,low:0,high:1},questions:[]}) as any;
+  // Recall clearly broken with ample evidence, Q2 thin: still a verdict.
+  expect(evaluateStopRules([m({k:50,n:100},{k:0,n:3})]).find(v=>v.rule==='jev_q3q4_only')).toMatchObject({triggered:true,status:'evaluated'});
+  // Recall fine with ample evidence, Q2 thin: cannot conclude that neither fails.
+  expect(evaluateStopRules([m({k:95,n:100},{k:0,n:3})]).find(v=>v.rule==='jev_q3q4_only')).toMatchObject({triggered:false,status:'insufficient_evidence'});
+  // Both ample and fine.
+  expect(evaluateStopRules([m({k:95,n:100},{k:1,n:100})]).find(v=>v.rule==='jev_q3q4_only')).toMatchObject({triggered:false,status:'evaluated'});
+ });
+ it('gates accuracy comparisons on decided labels, not on labels that were abstentions',()=>{
+  const metric=(backend:string,decided:number,acc:number)=>({backend,labels:400,important_recall:{k:90,n:100,rate:0.9,low:0.83,high:0.94},false_support:{k:2,n:100,rate:0.02,low:0,high:0.07},
+   questions:[{question_id:'Q4',n:400,labeled:100,decided,accuracy:acc,abstain_rate:0.5,ece_before:null,ece_after:null}]}) as any;
+  const v=evaluateStopRules([metric('jev',100,0.9),metric('local_probe',1,1)]);
+  expect(v.find(x=>x.rule==='switch_local_probe')).toMatchObject({triggered:false,status:'insufficient_evidence'});
+  const rows:ReportRow[]=[];
+  for(let i=0;i<40;i++)rows.push(q2(0.9,'support','support'));
+  for(let i=0;i<40;i++)rows.push(q2(0.3,'support','support'));
+  expect(classMetrics(rows)[0]!.questions.find(q=>q.question_id==='Q2')).toMatchObject({labeled:80,decided:40});
+ });
+});
+
+describe('Codex round 3 regressions',()=>{
+ it('searches Q1 thresholds across the full probability range',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<30;i++){rows.push(q1(0.45,'true'));rows.push(q1(0.1,'false'));}
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q1')!;
+  expect(p.status).toBe('proposed');
+  expect(p.proposed!.relevant_above).toBeLessThan(0.45);
+  expect(p.proposed!.irrelevant_below).toBeGreaterThan(0.1);
+  expect(p.metrics.recall).toBe(1);
+ });
+ it('counts score-less Q3/Q4 abstentions against the 30% limit',()=>{
+  const q3=(i:number,conf:number|null,selected:string|null,label:string):ReportRow=>row({question_id:'Q3',source_id:`m${i}`,confidence:conf,selected,abstained:conf===null,distribution:conf===null?{}:{[selected as string]:0.5+conf/2},label});
+  const rows:ReportRow[]=[];
+  for(let i=0;i<30;i++)rows.push(q3(i,0.9,'filing_or_regulator','filing_or_regulator'));
+  for(let i=0;i<70;i++)rows.push(q3(100+i,null,null,'filing_or_regulator'));
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q3')!;
+  expect(p.status).toBe('infeasible');
+  expect(p.metrics.abstain_rate).toBeCloseTo(0.7,6);
+ });
+ it('treats exactly five points of drift as within tolerance',()=>{
+  const metric=(acc:number)=>({backend:'jev',labels:400,important_recall:{k:90,n:100,rate:0.9,low:0.83,high:0.94},false_support:{k:2,n:100,rate:0.02,low:0,high:0.07},
+   questions:[{question_id:'Q1',n:100,labeled:100,decided:100,accuracy:acc,abstain_rate:0.1,ece_before:null,ece_after:null}]}) as any;
+  const v=evaluateStopRules([metric(90/100)],{metrics:[metric(85/100)]});
+  expect(v.find(x=>x.rule==='lock_version_recalibrate')).toMatchObject({triggered:false,status:'evaluated'});
+  expect(evaluateStopRules([metric(0.91)],{metrics:[metric(0.85)]}).find(x=>x.rule==='lock_version_recalibrate')).toMatchObject({triggered:true});
+ });
+});
+
+describe('Codex round 4 regressions',()=>{
+ it('treats relevance-gated Q2 rows as unavoidable abstentions when proposing thresholds',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<30;i++)rows.push(q2(0.9,'support','support'));
+  // Gated by Q1 = not relevant: distribution kept, but the runtime abstains whatever Q2's threshold is.
+  for(let i=0;i<30;i++)rows.push({...q2(0.9,'support','support'),selected:null,abstained:true,gate_open:false});
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q2')!;
+  expect(p.status).toBe('proposed');
+  expect(p.metrics.coverage).toBeLessThanOrEqual(0.5);
+ });
+ it('counts labels per backend on deduplicated material-level rows',()=>{
+  const rows:ReportRow[]=[];
+  for(let m=0;m<30;m++)for(let t=0;t<10;t++)rows.push(row({question_id:'Q3',source_id:`m${m}`,confidence:0.9,selected:'filing_or_regulator',label:'filing_or_regulator',distribution:{filing_or_regulator:0.9}}));
+  expect(classMetrics(rows)[0]!.labels).toBe(30);
+ });
+});
+
+describe('Codex round 5 regressions',()=>{
+ it('applies the inclusive three-point and two-point bands with floating-point tolerance',()=>{
+  const metric=(backend:string,acc:number,abstain:number)=>({backend,labels:400,important_recall:{k:90,n:100,rate:0.9,low:0.83,high:0.94},false_support:{k:2,n:100,rate:0.02,low:0,high:0.07},
+   questions:[{question_id:'Q1',n:100,labeled:100,decided:100,accuracy:acc,abstain_rate:abstain,ece_before:null,ece_after:null}]}) as any;
+  expect(evaluateStopRules([metric('jev',90/100,0.2),metric('rule',87/100,0.1)]).find(v=>v.rule==='do_not_introduce_jev')).toMatchObject({triggered:true});
+  expect(evaluateStopRules([metric('jev',90/100,0.2),metric('local_probe',88/100,0.2)]).find(v=>v.rule==='switch_local_probe')).toMatchObject({triggered:true});
+ });
+ it('derives P(true) from a false-only noul distribution',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<30;i++)rows.push(row({question_id:'Q1',confidence:null,distribution:{false:0.1},selected:'true',abstained:false,label:'true'}));
+  for(let i=0;i<30;i++)rows.push(row({question_id:'Q1',confidence:null,distribution:{false:0.9},selected:'false',abstained:false,label:'false'}));
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q1')!;
+  expect(p.status).toBe('proposed');
+  expect(p.metrics.recall).toBe(1);
+  expect(classMetrics(rows)[0]!.questions[0]!.ece_before).not.toBeNull();
+ });
+});
+
+describe('Codex round 7 regressions',()=>{
+ it('re-evaluates follow-up proposals under the proposed Q1 gate, not the historical one',()=>{
+  const rows:ReportRow[]=[];
+  // Q1: 40 relevant sources at 0.9, 20 irrelevant at 0.65 → a proposal with both thresholds inside (0.65, 0.9).
+  for(let i=0;i<60;i++){
+   const p=i<40?0.9:0.65;
+   rows.push(row({source_id:`s${i}`,question_id:'Q1',confidence:null,distribution:{true:p,false:1-p},selected:'true',abstained:false,label:i<40?'true':'false'}));
+   // Q2 was open under the historical gate for every source, but the proposed gate closes the 0.65 ones.
+   rows.push(row({source_id:`s${i}`,question_id:'Q2',confidence:0.9,selected:'support',label:'support',gate_open:true,gate_p_true:p}));
+  }
+  const proposals=proposeThresholds(rows);
+  const q1p=proposals.find(p=>p.question_id==='Q1')!.proposed!;
+  // Any pair separating 0.65 from 0.9 without abstentions is optimal; ties keep the higher pair.
+  expect(q1p.relevant_above).toBeGreaterThan(0.65);expect(q1p.relevant_above).toBeLessThan(0.9);
+  expect(q1p.irrelevant_below).toBeGreaterThan(0.65);expect(q1p.irrelevant_below).toBeLessThan(q1p.relevant_above);
+  const q2p=proposals.find(p=>p.question_id==='Q2')!;
+  expect(q2p.status).toBe('proposed');
+  expect(q2p.metrics.coverage).toBeCloseTo(40/60,6);
+  expect(q2p.metrics.gated_by_proposed_q1).toBe(20);
+ });
+ it('partitions rows by question-set version and backend model before calibrating',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<40;i++){
+   rows.push(row({source_id:`old${i}`,question_id:'Q2',confidence:0.5,label:'weaken',question_set_version:'v0.9',backend_model:'m1'}));
+   rows.push(row({source_id:`m1_${i}`,question_id:'Q2',confidence:0.5,label:'weaken',question_set_version:QUESTION_SET_VERSION,backend_model:'m1'}));
+   rows.push(row({source_id:`cur${i}`,question_id:'Q2',confidence:0.9,label:'support',question_set_version:QUESTION_SET_VERSION,backend_model:'m2'}));
+  }
+  const a=buildCalibrationArtifact({rows,since:null,generatedAt:'2026-09-26T00:00:00.000Z',baseline:null});
+  // Only the current question set and, per backend, the most recent model are calibrated.
+  expect(a.rows).toBe(40);
+  expect(a.excluded).toEqual([{question_set_version:'v0.9',backend:'jev',backend_model:'m1',rows:40},{question_set_version:QUESTION_SET_VERSION,backend:'jev',backend_model:'m1',rows:40}]);
+  expect(a.metrics[0]!.backend_model).toBe('m2');
+  expect(a.metrics[0]!.questions[0]).toMatchObject({question_id:'Q2',n:40,accuracy:1});
+  expect(renderCalibrationMarkdown(a)).toContain('v0.9');
+ });
+});
+
+describe('Codex round 8 regression',()=>{
+ it('does not compare against a baseline of another question-set version',()=>{
+  const rows:ReportRow[]=[];for(let i=0;i<40;i++)rows.push(row({source_id:`c${i}`,question_id:'Q2',confidence:0.9,label:'support'}));
+  const current=buildCalibrationArtifact({rows,since:null,generatedAt:'2026-09-26T00:00:00.000Z',baseline:null});
+  const old={...current,question_set_version:'v0.9',generated_at:'2026-06-01T00:00:00.000Z',metrics:current.metrics.map(m=>({...m,questions:m.questions.map(q=>({...q,accuracy:0.5}))}))};
+  const v=buildCalibrationArtifact({rows,since:null,generatedAt:'2026-09-26T00:00:00.000Z',baseline:old}).stop_rules.find(x=>x.rule==='lock_version_recalibrate')!;
+  expect(v).toMatchObject({triggered:false,status:'not_applicable'});
+  expect(v.evidence).toContain('v0.9');
+ });
+});
+
+describe('Codex round 9 regressions',()=>{
+ it('fits isotonic curves on labeled noul abstentions too, since the target is the label not the decision',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<30;i++)rows.push(row({source_id:`f${i}`,question_id:'Q1',confidence:null,distribution:{true:0.45,false:0.55},selected:null,abstained:true,label:'false'}));
+  for(let i=0;i<30;i++)rows.push(row({source_id:`t${i}`,question_id:'Q1',confidence:null,distribution:{true:0.55,false:0.45},selected:null,abstained:true,label:'true'}));
+  expect(calibrationFits(rows)).toHaveLength(1);
+  expect(crossFittedEce(rows).labeled).toBe(60);
+  // Choice questions still fit only on decided rows.
+  const choice:ReportRow[]=[];for(let i=0;i<40;i++)choice.push(row({source_id:`c${i}`,confidence:0.5,selected:null,abstained:true}));
+  expect(calibrationFits(choice)).toHaveLength(0);
+ });
+ it('proposes Q1 thresholds from observed score boundaries when the coarse grid cannot separate the samples',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<30;i++)rows.push(row({source_id:`r${i}`,question_id:'Q1',confidence:null,distribution:{true:0.08,false:0.92},selected:'false',abstained:false,label:'true'}));
+  for(let i=0;i<30;i++)rows.push(row({source_id:`i${i}`,question_id:'Q1',confidence:null,distribution:{true:0.02,false:0.98},selected:'false',abstained:false,label:'false'}));
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q1')!;
+  expect(p.status).toBe('proposed');
+  expect(p.metrics).toMatchObject({recall:1,precision:1,abstain_rate:0});
+  expect(p.proposed!.irrelevant_below).toBeGreaterThan(0.02);
+  expect(p.proposed!.relevant_above).toBeLessThan(0.08);
+ });
+});
+
+describe('Codex round 10 regressions',()=>{
+ it('uses the ledger-recorded winner for tied choice distributions and counts unresolvable ties',()=>{
+  const rows:ReportRow[]=[];
+  // JSONB may reorder keys: `planned` first, but the runtime picked `completed` (first key at judgment time).
+  for(let i=0;i<40;i++)rows.push(row({source_id:`t${i}`,question_id:'Q4',confidence:0.9,selected:'completed',label:'completed',distribution:{planned:0.5,completed:0.5}}));
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q4')!;
+  expect(p.status).toBe('proposed');
+  expect(p.metrics.accuracy).toBe(1);
+  expect(p.metrics.ambiguous_ties).toBe(0);
+  // Below the current threshold the ledger holds the fallback, so a tie cannot be resolved: reported.
+  const low:ReportRow[]=[];
+  for(let i=0;i<40;i++)low.push(row({source_id:`l${i}`,question_id:'Q4',confidence:0.5,selected:'unknown',label:'completed',distribution:{planned:0.5,completed:0.5}}));
+  expect(proposeThresholds(low).find(x=>x.question_id==='Q4')!.metrics.ambiguous_ties).toBe(40);
+ });
+ it('searches Q1 thresholds in near-linear time and matches the brute-force answer',()=>{
+  const rows:ReportRow[]=[];
+  let seed=7;const rnd=()=>{seed=(seed*48271)%2147483647;return seed/2147483647;};
+  for(let i=0;i<3000;i++){const t=rnd()<0.5;const p=Math.round((t?0.4+0.6*rnd():0.6*rnd())*1e4)/1e4;rows.push(row({source_id:`q${i}`,question_id:'Q1',confidence:null,distribution:{true:p,false:1-p},selected:null,abstained:true,label:t?'true':'false'}));}
+  const started=Date.now();
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q1')!;
+  expect(Date.now()-started).toBeLessThan(4000);
+  expect(p.status).toBe('proposed');
+  // Brute force on a small subsample must agree exactly.
+  const small=rows.slice(0,60);
+  const fast=proposeThresholds(small).find(x=>x.question_id==='Q1')!;
+  expect(fast).toEqual(bruteForceQ1(small));
+ });
+});
+function bruteForceQ1(rows:ReportRow[]){
+  const pts=rows.map(r=>({p:r.distribution.true!,t:r.label==='true'}));
+  const scores=[...new Set(pts.map(x=>x.p))].sort((a,b)=>a-b);
+  const cands=new Set<number>();for(let v=0.05;v<=0.9501;v+=0.05)cands.add(Math.round(v*100)/100);
+  for(let i=0;i+1<scores.length;i++){const a=scores[i]!,b=scores[i+1]!;cands.add(Math.round((a+(b-a)/3)*1e6)/1e6);cands.add(Math.round((a+2*(b-a)/3)*1e6)/1e6);}
+  const f=scores[0]!,l=scores[scores.length-1]!;for(const v of [f/3,2*f/3,l+(1-l)/3,l+2*(1-l)/3])cands.add(Math.round(v*1e6)/1e6);
+  const cs=[...cands].filter(v=>v>0&&v<1).sort((a,b)=>a-b);
+  const relevant=pts.filter(x=>x.t).length;let best:any=null;
+  for(const hi of cs)for(const lo of cs){if(lo>=hi)continue;const sel=pts.filter(x=>x.p>hi),abst=pts.filter(x=>x.p>=lo&&x.p<=hi);
+   const recall=sel.filter(x=>x.t).length/relevant,abstain=abst.length/pts.length,precision=sel.length?sel.filter(x=>x.t).length/sel.length:0,feasible=recall>=0.9&&abstain<=0.3;
+   const c={lo,hi,recall,abstain,precision,feasible};
+   const better=!best?true:feasible!==best.feasible?feasible:feasible?(precision>best.precision||(precision===best.precision&&(hi>best.hi||(hi===best.hi&&lo>best.lo)))):(recall>best.recall||(recall===best.recall&&abstain<best.abstain));
+   if(better)best=c;}
+  const r6=(v:number)=>Math.round(v*1e6)/1e6;
+  return {question_id:'Q1',backend_used:'jev',labeled:rows.length,current:{irrelevant_below:0.4,relevant_above:0.6},status:best.feasible?'proposed':'infeasible',proposed:best.feasible?{irrelevant_below:best.lo,relevant_above:best.hi}:null,metrics:{recall:r6(best.recall),abstain_rate:r6(best.abstain),precision:r6(best.precision)}};
+}
+
+describe('Codex round 11 regression',()=>{
+ it('offers two cutoffs below the lowest observed score so uniformly low relevant scores are still separable',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<30;i++)rows.push(row({source_id:`p${i}`,question_id:'Q1',confidence:null,distribution:{true:0.02,false:0.98},selected:'false',abstained:false,label:'true'}));
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q1')!;
+  expect(p.status).toBe('proposed');
+  expect(p.metrics).toMatchObject({recall:1,abstain_rate:0,precision:1});
+  expect(p.proposed!.relevant_above).toBeLessThan(0.02);
+ });
+});

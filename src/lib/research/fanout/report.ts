@@ -15,6 +15,17 @@ export interface ReportRow {
   distribution: Record<string, number>;
   /** Latest human label for the judgment, or null. */
   label: string | null;
+  /**
+   * For thesis-gated follow-ups (Q2/Q4/Q5): whether the same run's Q1 for this source × thesis ×
+   * backend answered "relevant". `false` means the runtime abstains whatever the follow-up's own
+   * threshold is; `null`/absent means unknown (treated as open).
+   */
+  gate_open?: boolean | null;
+  /** P(true) of that same Q1 judgment, so proposals can re-evaluate the gate under new Q1 thresholds. */
+  gate_p_true?: number | null;
+  /** Ledger versions of the judgment; absent means unknown (treated as current). */
+  question_set_version?: string | null;
+  backend_model?: string | null;
 }
 
 export interface ReportMetric {
@@ -37,17 +48,20 @@ function percentile(values: number[], p: number): number | null {
 }
 
 /** Confidence used for calibration: backend confidence for choices, P(true) for nouls. */
-function calibrationScore(r: ReportRow): number | null {
+export function calibrationScore(r: ReportRow): number | null {
   if (r.confidence != null) return r.confidence;
   const p = r.distribution?.true;
-  return typeof p === 'number' ? p : null;
+  if (typeof p === 'number') return p;
+  // A noul given as its false probability implies P(true), matching decide().
+  const q = r.distribution?.false;
+  return typeof q === 'number' ? 1 - q : null;
 }
-function isCorrect(r: ReportRow): boolean { return r.label !== null && r.selected === r.label; }
+export function isCorrect(r: ReportRow): boolean { return r.label !== null && r.selected === r.label; }
 
 /** Expected calibration error with equal-width bins; nouls compare P(true) against label==='true'. */
-function ece(rows: ReportRow[]): number | null {
+export function ece(rows: ReportRow[]): number | null {
   const scored = rows.filter(r => r.label !== null && !r.abstained).map(r => {
-    const isNoul = r.confidence == null && typeof r.distribution?.true === 'number';
+    const isNoul = r.confidence == null && (typeof r.distribution?.true === 'number' || typeof r.distribution?.false === 'number');
     const conf = calibrationScore(r);
     if (conf == null) return null;
     return { conf, hit: isNoul ? (r.label === 'true' ? 1 : 0) : (isCorrect(r) ? 1 : 0) };
