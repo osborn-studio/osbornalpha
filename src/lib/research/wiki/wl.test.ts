@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest';
-import {WL_QUESTION,WL_QUESTION_VERSION,buildWlRequest,judgeWlPairs,pairsHash,parseWlAnswer,type WlPair} from './wl';
+import {WL_QUESTION,WL_QUESTION_VERSION,buildWlRequest,estimateForPair,judgeWlPairs,pairsHash,parseWlAnswer,type WlPair} from './wl';
 
 const S=(n:number)=>`bbbbbbbb-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const pair=(n:number,over:Partial<WlPair>={}):WlPair=>({pair_id:String(n).repeat(64).slice(0,64),page:'wiki/entities/co.md',entity_id:'aaaaaaaa-0000-4000-8000-000000000001',assertion_index:n,assertion_text:`断言 ${n}。`,
@@ -61,7 +61,16 @@ describe('judgeWlPairs',()=>{
   const out=await judgeWlPairs({pairs:[pair(1),pair(2),pair(3)],existing:[],fetch:fn,apiKey:'k'.repeat(20),maxCostUsd:1,now:()=>'2026-09-26T01:00:00.000Z'});
   expect(out.answers.map(a=>a.pair_id)).toEqual([pair(3).pair_id]);
   expect(out.errors.map(e=>e.pair_id)).toEqual([pair(1).pair_id,pair(2).pair_id]);
-  expect(out.spent_micros).toBe(46);
+  // Failed requests may still have been billed: their estimate is charged against the budget.
+  const est=estimateForPair(pair(1));
+  expect(est).toBeGreaterThan(0);
+  expect(out.failed_charged_micros).toBe(2*est);
+  expect(out.spent_micros).toBe(46+2*est);
+  // Repeated failures cannot run past the budget.
+  const failing=fakeFetch(Array.from({length:50},()=>new Error('boom')));
+  const capped=await judgeWlPairs({pairs:Array.from({length:50},(_,i)=>pair(i)),existing:[],fetch:failing.fn,apiKey:'k'.repeat(20),maxCostUsd:est*5/1_000_000,now:()=>'2026-09-26T01:00:00.000Z'});
+  expect(capped.stopped).toBe(true);
+  expect(failing.calls.length).toBeLessThanOrEqual(5);
  });
  it('selects the verdict from the raw probabilities, rounding only for output',()=>{
   const parsed=parseWlAnswer({type:'choice',probabilities:{contradicts:0.4996,consistent:0.5004},confidence:0.8});

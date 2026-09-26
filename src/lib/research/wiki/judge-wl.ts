@@ -10,7 +10,8 @@ import type { ResearchCtx } from '../store';
 import pairsSchema from './wiki-wl-pairs.schema.json';
 import { answersDocument, buildWlRequest, estimateForPair, judgeWlPairs, pairsHash, type JudgeResult, type WlAnswersDocument, type WlPairsDocument } from './wl';
 
-const PUBLIC_CHECK_BATCH = 500;
+/** 100 UUIDs ≈ 3.7 KB of query string: safely under gateway request-line limits. */
+const PUBLIC_CHECK_BATCH = 100;
 const ajv = new Ajv({ strict: true, allErrors: false });
 const validatePairs = ajv.compile<WlPairsDocument>(pairsSchema as object);
 

@@ -101,7 +101,11 @@ export interface JudgeOptions {
   timeoutMs?: number;
 }
 export interface JudgeResult {
-  answers: WlAnswer[]; spent_micros: number; stopped: boolean; skipped_existing: number;
+  answers: WlAnswer[];
+  /** Reported/estimated cost of successful calls plus the estimate charged for every failed call. */
+  spent_micros: number;
+  failed_charged_micros: number;
+  stopped: boolean; skipped_existing: number;
   errors: Array<{ pair_id: string; error: string }>;
 }
 
@@ -114,7 +118,7 @@ export async function judgeWlPairs(opts: JudgeOptions): Promise<JudgeResult> {
   const price = opts.microsPer1kTokens ?? 45;
   const budget = Math.round(opts.maxCostUsd * 1_000_000);
   const done = new Set(opts.existing.map(e => e.pair_id));
-  const out: JudgeResult = { answers: [], spent_micros: 0, stopped: false, skipped_existing: 0, errors: [] };
+  const out: JudgeResult = { answers: [], spent_micros: 0, failed_charged_micros: 0, stopped: false, skipped_existing: 0, errors: [] };
   let calls = 0;
   for (const pair of opts.pairs) {
     if (done.has(pair.pair_id)) { out.skipped_existing++; continue; }
@@ -136,7 +140,11 @@ export async function judgeWlPairs(opts: JudgeOptions): Promise<JudgeResult> {
       out.spent_micros += cost;
     } catch (e) {
       // Transport failures are not judgments: leave the pair unanswered so a rerun retries it.
+      // The request may still have been billed, so its estimate is charged against the budget.
       out.errors.push({ pair_id: pair.pair_id, error: e instanceof Error ? e.message : String(e) });
+      out.failed_charged_micros += estimate;
+      out.spent_micros += estimate;
+      calls++;
       continue;
     }
     out.answers.push(answer);
