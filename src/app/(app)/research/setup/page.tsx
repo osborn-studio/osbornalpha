@@ -10,6 +10,7 @@ import type { Thesis } from '@/lib/research/types';
 import { DRAFT_KEY, parseDraft, resetCompanyDraft, resetThesisDraft, serializeDraft, type SetupDraft } from '@/lib/research/setup/draft';
 import { setupProgress } from '@/lib/research/setup/progress';
 import { EMPTY_THESIS_DRAFT } from '@/lib/research/setup/theses';
+import { companiesFromResponse } from '@/lib/research/setup/roster';
 import { CompaniesFlow } from './companies-flow';
 import { ThesisFlow } from './thesis-flow';
 
@@ -29,14 +30,19 @@ export default function ResearchSetupPage() {
   const [flow, setFlow] = useState<'companies' | 'thesis' | null>(null);
   const [draft, setDraft] = useState<SetupDraft>(EMPTY_DRAFT);
   const [notice, setNotice] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   // Submission lock lives here: switching flows unmounts the child, which must not reset an in-flight write.
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const res = await fetch('/api/research/entity-keys');
+    let res: Response;
+    try { res = await fetch('/api/research/entity-keys'); } catch { setLoadError('名单加载失败，请重试'); return; }
     if (res.status === 401 || res.status === 403) { setDisabled(true); return; }
-    const data = await res.json().catch(() => ({ companies: [] }));
-    setCompanies(data.companies ?? []);
+    // A failed or malformed load must not become an empty roster: removals are derived from this list.
+    const parsed = companiesFromResponse<ScopedCompany>(res.ok, await res.json().catch(() => null));
+    if ('error' in parsed) { setLoadError(parsed.error); return; }
+    setLoadError(null);
+    setCompanies(parsed.companies);
     const tRes = await fetch('/api/research/theses');
     const tData = await tRes.json().catch(() => ({ theses: [] }));
     setTheses(tData.theses ?? []);
@@ -79,6 +85,11 @@ export default function ResearchSetupPage() {
       </div>
 
       {notice && <p className="rounded border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">{notice}</p>}
+      {loadError && (
+        <p className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-900" role="alert">
+          {loadError} <button type="button" className="ml-2 underline" onClick={() => void load()}>重试</button>
+        </p>
+      )}
 
       {flow === 'companies' && companies && (
         <CompaniesFlow companies={companies} answers={draft.companies} step={draft.companyStep} busy={busy} setBusy={setBusy}

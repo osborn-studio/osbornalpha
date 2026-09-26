@@ -4,6 +4,7 @@ import { EMPTY_THESIS_DRAFT, isCalendarDate, saveOutcomeMessage, staleCompanyIds
 import { companiesStepErrors, companiesSubmitErrors, ownerCompanyToCohort, reconcileAddedCompany, rosterKeys, validateCompanyAnswer, type OwnerCompanyAnswer } from './companies';
 import { setupProgress, TARGETS } from './progress';
 import { parseDraft, resetCompanyDraft, resetThesisDraft, serializeDraft } from './draft';
+import { companiesFromResponse } from './roster';
 
 const filled = (): ThesisDraft => ({
   ...EMPTY_THESIS_DRAFT,
@@ -228,5 +229,17 @@ describe('Codex round 4 regressions', () => {
     const answers = { e1: a, 'new:1': { ...a, entity_id: null, names_zh: '金证' }, e9: { ...a, entity_id: 'e9' } };
     expect(rosterKeys(answers)).toEqual({ selected: ['e1', 'e9'], added: ['new:1'] });
     expect(companiesSubmitErrors({ selected: [answers.e9], added: [] }).errors).toEqual([]);
+  });
+});
+
+
+describe('Codex round 9 regression', () => {
+  it('a failed or malformed roster load is an error, never an empty roster that enables the wizard', () => {
+    expect(companiesFromResponse(true, { companies: [] })).toEqual({ companies: [] });
+    expect(companiesFromResponse(true, { companies: [{ entity_id: 'e1' }] })).toEqual({ companies: [{ entity_id: 'e1' }] });
+    expect(companiesFromResponse(false, { companies: [] })).toEqual({ error: '名单加载失败，请重试' });
+    expect(companiesFromResponse(true, {})).toEqual({ error: '名单加载失败，请重试' });
+    expect(companiesFromResponse(true, { companies: 'x' })).toEqual({ error: '名单加载失败，请重试' });
+    expect(companiesFromResponse(true, null)).toEqual({ error: '名单加载失败，请重试' });
   });
 });

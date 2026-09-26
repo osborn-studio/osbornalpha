@@ -128,8 +128,12 @@ export async function addOwnerCompany(ctx: ResearchCtx, rawAnswer: OwnerCompanyA
   // An earlier creation of this very company that did not get to the scope step (owner-input key row with no
   // researched keys; no securities, or only the same primary listing) may be resumed: upsertEntityKeys updates
   // that same row and the scope step below finishes the job. Anything with researched keys is protected.
+  // "Owner submission" means: nothing researched anywhere — no entity keys, no key provenance, and securities
+  // (if any) that are the same listing with no MIC/ISIN and only owner-input provenance.
+  const ownerOnly = (prov: Record<string, unknown>) => Object.values(prov).every((p) => (p as { source?: string } | null)?.source === OWNER_SOURCE);
   const resumable = (r: EntityKeysRow) => KEY_NAMES.every((k) => r.keys[k] === null)
-    && r.securities.every((sec) => lower(sec.exchange_code) === ticker);
+    && ownerOnly(r.provenance as Record<string, unknown>)
+    && r.securities.every((sec) => lower(sec.exchange_code) === ticker && sec.mic === null && sec.isin === null && ownerOnly(sec.provenance));
   const keyed = new Set(keyRows.filter((r) => !resumable(r)).map((r) => r.entity_id));
   const byName = entities.find((e) => keyed.has(e.id) && (names.has(lower(e.name)) || lower(e.ticker) === ticker || e.aliases.some((a) => names.has(lower(a)))));
   const byKeys = keyRows.find((r) => !resumable(r) && ([...r.names_zh, ...r.names_en, ...r.aliases].some((n) => names.has(lower(n))) || r.securities.some((sec) => lower(sec.exchange_code) === ticker)));

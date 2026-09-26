@@ -176,3 +176,17 @@ describe('Codex round 8 regressions',()=>{
   await expect(setScope(ctx,entity_id,{in_scope:'yes',rationale:'r',today:'2026-09-27'} as never)).rejects.toMatchObject({status:422});
  });
 });
+
+
+describe('Codex round 9 regressions',()=>{
+ it('does not treat a company with researched security data as a resumable owner submission',async()=>{
+  // All four entity keys unknown, but the security row carries researched MIC/ISIN and provenance.
+  const c=hundsun(); c.keys={lei:null,usci:null,cninfo_org_id:null,cik:null}; c.missing=['lei','usci','cninfo_org_id','cik']; c.provenance={};
+  const {entity_id}=await upsertEntityKeys(ctx,c);
+  const before=(await listEntityKeys(ctx)).find(r=>r.entity_id===entity_id)!;
+  expect(before.securities[0]!.isin).toBeTruthy();
+  await expect(addOwnerCompany(ctx,{entity_id:null,rationale:'r',names_zh:'恒生电子',names_en:'Hundsun Technologies Inc.',home_market:'A',exchange_code:'600570.SH',listed_on:'',keys:{lei:'',usci:'',cninfo_org_id:'',cik:''}},{today:'2026-09-27'})).rejects.toMatchObject({status:409});
+  const after=(await listEntityKeys(ctx)).find(r=>r.entity_id===entity_id)!;
+  expect(after.securities).toEqual(before.securities);
+ });
+});
