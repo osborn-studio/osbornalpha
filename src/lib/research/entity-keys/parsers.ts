@@ -16,8 +16,9 @@ export function parseSecCompanyTickers(json: string, tickers: string[]): SecTick
   const byTicker = new Map<string, SecTickerHit>();
   for (const row of Object.values(doc as Record<string, unknown>)) {
     const r = row as { cik_str?: unknown; ticker?: unknown; title?: unknown };
-    if (typeof r?.ticker !== 'string' || typeof r.title !== 'string' || (typeof r.cik_str !== 'number' && typeof r.cik_str !== 'string')) fail('invalid_schema');
-    byTicker.set(r.ticker.toUpperCase(), { cik: normalizeCik(r.cik_str), title: r.title });
+    const ticker = r?.ticker, title = r?.title, cik = r?.cik_str;
+    if (typeof ticker !== 'string' || typeof title !== 'string' || (typeof cik !== 'number' && typeof cik !== 'string')) { fail('invalid_schema'); continue; }
+    byTicker.set(ticker.toUpperCase(), { cik: normalizeCik(cik), title });
   }
   const found: Record<string, SecTickerHit> = {}, missing: string[] = [];
   for (const t of tickers) {
