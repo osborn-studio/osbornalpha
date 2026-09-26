@@ -12,10 +12,16 @@
 
 import { audit, isUuid, type ResearchCtx } from './store';
 import {
+  DEFAULT_HORIZON_WEEKS,
+  OPPORTUNITY_TYPES,
   THESIS_STATUSES,
   THESIS_TRANSITIONS,
+  type KillConditionRevision,
+  type OpportunityType,
   type Thesis,
+  type ThesisCatalyst,
   type ThesisEvent,
+  type ThesisPillar,
   type ThesisStatus,
 } from './types';
 
@@ -52,6 +58,13 @@ function rowToThesis(row: any): Thesis {
     next_review_at: row.next_review_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    // WP-A7: rows from before the migration get exactly the migration defaults.
+    opportunity_type: OPPORTUNITY_TYPES.includes(row.opportunity_type) ? row.opportunity_type : 'other',
+    pillars: arr<ThesisPillar>(row.pillars),
+    catalysts: arr<ThesisCatalyst>(row.catalysts),
+    horizon_weeks: Array.isArray(row.horizon_weeks) && row.horizon_weeks.length > 0 ? row.horizon_weeks : [...DEFAULT_HORIZON_WEEKS],
+    supersedes: typeof row.supersedes === 'string' ? row.supersedes : null,
+    kill_condition_revisions: arr<KillConditionRevision>(row.kill_condition_revisions),
   };
 }
 
@@ -136,6 +149,11 @@ export interface CreateThesisInput {
   company_ids?: string[];
   theme_ids?: string[];
   supporting_evidence_ids?: string[];
+  // WP-A7 (§5.3), all optional.
+  opportunity_type?: OpportunityType;
+  pillars?: Array<{ id?: string; text: string; resolvable_by?: string; deadline?: string | null }>;
+  catalysts?: Array<{ text: string; expected_date?: string | null }>;
+  horizon_weeks?: number[];
 }
 
 function requireStringArray(v: unknown, field: string): string[] {
@@ -148,12 +166,52 @@ function requireStringArray(v: unknown, field: string): string[] {
   return arr2;
 }
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}(T.*)?$/;
+function optionalDate(v: unknown, field: string): string | null {
+  if (v === undefined || v === null || v === '') return null;
+  if (typeof v !== 'string' || !ISO_DATE.test(v) || !Number.isFinite(Date.parse(v))) {
+    throw new ThesisError(`${field} must be an ISO date`, 422);
+  }
+  return v;
+}
+
+/** Validate the §5.3 extension fields; missing ones get the migration defaults. */
+function extensionFields(input: CreateThesisInput): Pick<Thesis, 'opportunity_type' | 'pillars' | 'catalysts' | 'horizon_weeks'> {
+  const opportunity_type = input.opportunity_type ?? 'other';
+  if (!OPPORTUNITY_TYPES.includes(opportunity_type)) {
+    throw new ThesisError(`opportunity_type must be one of ${OPPORTUNITY_TYPES.join(', ')}`, 422);
+  }
+  if (input.pillars !== undefined && !Array.isArray(input.pillars)) throw new ThesisError('pillars must be an array', 422);
+  const ids = new Set<string>();
+  const pillars: ThesisPillar[] = (input.pillars ?? []).map((p, i) => {
+    if (!p || typeof p.text !== 'string' || p.text.trim() === '') throw new ThesisError(`pillars[${i}].text is required`, 422);
+    const id = typeof p.id === 'string' && p.id.trim() !== '' ? p.id.trim() : `p${i + 1}`;
+    if (ids.has(id)) throw new ThesisError(`pillars[${i}].id "${id}" is duplicated`, 422);
+    ids.add(id);
+    return { id, text: p.text.trim(), resolvable_by: typeof p.resolvable_by === 'string' ? p.resolvable_by.trim() : '', deadline: optionalDate(p.deadline, `pillars[${i}].deadline`) };
+  });
+  if (input.catalysts !== undefined && !Array.isArray(input.catalysts)) throw new ThesisError('catalysts must be an array', 422);
+  const catalysts: ThesisCatalyst[] = (input.catalysts ?? []).map((c, i) => {
+    if (!c || typeof c.text !== 'string' || c.text.trim() === '') throw new ThesisError(`catalysts[${i}].text is required`, 422);
+    return { text: c.text.trim(), expected_date: optionalDate(c.expected_date, `catalysts[${i}].expected_date`) };
+  });
+  const horizon_weeks = input.horizon_weeks ?? [...DEFAULT_HORIZON_WEEKS];
+  if (!Array.isArray(horizon_weeks) || horizon_weeks.length === 0 || !horizon_weeks.every((w) => Number.isInteger(w) && w > 0)) {
+    throw new ThesisError('horizon_weeks must be a non-empty array of positive integers', 422);
+  }
+  return { opportunity_type, pillars, catalysts, horizon_weeks: [...horizon_weeks] };
+}
+
 /**
  * Create a DRAFT thesis. Missing title/body/invalidation_conditions/
  * watch_metrics/next_review_at → 422: a thesis without invalidation
  * conditions is not allowed to exist (AX001 spirit).
  */
 export async function createThesis(ctx: ResearchCtx, input: CreateThesisInput): Promise<Thesis> {
+  return insertThesis(ctx, input, null);
+}
+
+async function insertThesis(ctx: ResearchCtx, input: CreateThesisInput, supersedes: string | null): Promise<Thesis> {
   if (typeof input.title !== 'string' || input.title.trim() === '') {
     throw new ThesisError('title is required', 422);
   }
@@ -165,6 +223,7 @@ export async function createThesis(ctx: ResearchCtx, input: CreateThesisInput): 
   if (typeof input.next_review_at !== 'string' || input.next_review_at.trim() === '') {
     throw new ThesisError('next_review_at is required', 422);
   }
+  const ext = extensionFields(input);
 
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
@@ -182,14 +241,110 @@ export async function createThesis(ctx: ResearchCtx, input: CreateThesisInput): 
     next_review_at: input.next_review_at.trim(),
     created_at: now,
     updated_at: now,
+    ...ext,
+    supersedes,
+    kill_condition_revisions: [],
   });
   if (error) throw new Error(error.message);
   await audit(ctx, 'thesis.create', id, {
     title: input.title.trim(),
     invalidation_conditions: invalidation.length,
     watch_metrics: metrics.length,
+    opportunity_type: ext.opportunity_type,
+    pillars: ext.pillars.length,
+    supersedes,
   });
   return (await getThesis(ctx, id))!;
+}
+
+// ---------------------------------------------------------------------------
+// WP-A7 §7.4.3 — supersede: direction still right, a pillar was wrong → a NEW
+// thesis. Nothing is inherited; the window starts from zero. Only a thesis that
+// has already been INVALIDATED or CLOSED by a human can be superseded.
+
+export async function supersedeThesis(
+  ctx: ResearchCtx,
+  oldId: string,
+  input: CreateThesisInput,
+  reason = '',
+): Promise<{ thesis: Thesis; superseded: Thesis }> {
+  const old = await getThesis(ctx, oldId);
+  if (!old) throw new ThesisError('thesis not found', 404);
+  if (old.status !== 'INVALIDATED' && old.status !== 'CLOSED') {
+    throw new ThesisError(`supersede requires the old thesis to be INVALIDATED or CLOSED (is ${old.status})`, 422);
+  }
+  const thesis = await insertThesis(ctx, input, old.id);
+  const now = new Date().toISOString();
+  const { error } = await ctx.supabase.from(EVENTS).insert({
+    id: crypto.randomUUID(),
+    user_id: ctx.userId,
+    thesis_id: old.id,
+    kind: 'NOTE',
+    detail: { superseded_by: thesis.id, reason },
+    created_at: now,
+  });
+  if (error) throw new Error(error.message);
+  await audit(ctx, 'thesis.supersede', thesis.id, { supersedes: old.id, old_status: old.status, reason });
+  return { thesis, superseded: old };
+}
+
+// ---------------------------------------------------------------------------
+// WP-A7 §7.4.4 — the one allowed edit to a kill condition: its wording was
+// wrong. The original text is kept forever in kill_condition_revisions; pillars
+// and status are untouched. More than two revisions in a quarter → review.
+
+export interface ReviseKillConditionInput { index: number; new_text: string; reason: string }
+
+export async function reviseKillCondition(ctx: ResearchCtx, id: string, input: ReviseKillConditionInput): Promise<Thesis> {
+  const thesis = await getThesis(ctx, id);
+  if (!thesis) throw new ThesisError('thesis not found', 404);
+  if (thesis.status === 'CLOSED') throw new ThesisError('cannot revise a kill condition on a CLOSED thesis', 422);
+  const { index } = input;
+  if (!Number.isInteger(index) || index < 0 || index >= thesis.invalidation_conditions.length) {
+    throw new ThesisError(`index must be between 0 and ${thesis.invalidation_conditions.length - 1}`, 422);
+  }
+  const newText = typeof input.new_text === 'string' ? input.new_text.trim() : '';
+  const reason = typeof input.reason === 'string' ? input.reason.trim() : '';
+  if (newText === '') throw new ThesisError('new_text is required', 422);
+  if (reason === '') throw new ThesisError('reason is required', 422);
+  const oldText = thesis.invalidation_conditions[index];
+  if (newText === oldText) throw new ThesisError('new_text is identical to the current condition', 422);
+  const at = new Date().toISOString();
+  const revision: KillConditionRevision = { index, old_text: oldText, new_text: newText, reason, at };
+  const conditions = [...thesis.invalidation_conditions];
+  conditions[index] = newText;
+  const { error: upErr } = await ctx.supabase
+    .from(TABLE)
+    .update({ invalidation_conditions: conditions, kill_condition_revisions: [...(thesis.kill_condition_revisions ?? []), revision], updated_at: at })
+    .eq('user_id', ctx.userId)
+    .eq('id', id);
+  if (upErr) throw new Error(upErr.message);
+  const { error: evErr } = await ctx.supabase.from(EVENTS).insert({
+    id: crypto.randomUUID(),
+    user_id: ctx.userId,
+    thesis_id: id,
+    kind: 'KILL_CONDITION_REVISED',
+    detail: { ...revision },
+    created_at: at,
+  });
+  if (evErr) throw new Error(evErr.message);
+  await audit(ctx, 'thesis.revise_kill_condition', id, { index, reason });
+  return (await getThesis(ctx, id))!;
+}
+
+export interface QuarterRevisionCount { count: number; quarter: string; needs_review: boolean }
+
+/** Revisions whose `at` falls in the UTC calendar quarter of `now`; >2 → review (§7.4.4). */
+export function killConditionRevisionsInQuarter(thesis: Pick<Thesis, 'kill_condition_revisions'>, now: Date = new Date()): QuarterRevisionCount {
+  const year = now.getUTCFullYear();
+  const q = Math.floor(now.getUTCMonth() / 3);
+  const start = Date.UTC(year, q * 3, 1);
+  const end = Date.UTC(year, q * 3 + 3, 1);
+  const count = (thesis.kill_condition_revisions ?? []).filter((r) => {
+    const t = Date.parse(r.at);
+    return Number.isFinite(t) && t >= start && t < end;
+  }).length;
+  return { count, quarter: `${year}Q${q + 1}`, needs_review: count > 2 };
 }
 
 // ---------------------------------------------------------------------------
