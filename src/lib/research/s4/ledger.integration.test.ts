@@ -134,6 +134,37 @@ describe.skipIf(!enabled)('WP-A3 judgment ledger on real PostgreSQL',()=>{
   expect(await audits('ledger.decision',made.id)).toBe(1);
  });
 
+ it('E4: links a decision to one of the owner\'s S4 observations and refuses foreign or unknown observations',async()=>{
+  await expect(admin.query(readFileSync('supabase/migrations/20260926130000_research_decisions_observation.sql','utf8'))).resolves.toBeDefined();
+  const col=(await admin.query("select is_nullable from information_schema.columns where table_schema='public' and table_name='research_decisions' and column_name='observation_id'")).rows[0];
+  expect(col?.is_nullable).toBe('YES');
+  // Minimal S4 observation state for the owner (binding → source version → candidate → Observation record → state).
+  const seedObservation=async(userId:string)=>{
+   const {createHash}=await import('node:crypto');const sha=(x:string)=>createHash('sha256').update(x).digest('hex');
+   const src=randomUUID(),ver=randomUUID(),cand=randomUUID(),obs=randomUUID(),hash=sha('pack'+cand);
+   await admin.query(`insert into public.research_source_documents(id,user_id,source_type,title,raw_text,content_hash) values($1,$2,'MANUAL','t','b',$3)`,[src,userId,sha('b'+src)]);
+   await admin.query(`insert into public.research_source_versions(user_id,id,source_document_id,version_identity,source_key,source_ref,source_version) values($1,$2,$3,$4,$5,'{}','{}')`,[userId,ver,src,'v-'+ver,'k-'+ver]);
+   await admin.query(`insert into public.research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)`,[userId,hash,{localUserId:userId,approvedPayloadHash:hash}]);
+   await admin.query(`insert into public.research_s4_candidates(user_id,id,source_version_id,external_candidate_id,payload_hash,imported,status) values($1,$2,$3,$4,$5,'{}','observe')`,[userId,cand,ver,randomUUID(),hash]);
+   const payload={synthetic:true};
+   await admin.query(`insert into public.research_s4_records(user_id,id,candidate_id,kind,payload,payload_hash) values($1,$2,$3,'Observation',$4,$5)`,[userId,obs,cand,JSON.stringify(payload),sha(JSON.stringify(payload))]);
+   await admin.query(`insert into public.research_s4_observation_state(user_id,observation_id,status) values($1,$2,'pending_start')`,[userId,obs]);
+   return obs;
+  };
+  const mine=await seedObservation(actor.userId),theirs=await seedObservation(other.userId);
+  const base:DecisionInput={thesis_id:thesisId,week_of:'2026-09-21',arm:'ai_candidate',action:'shadow',reason:'linked to an observation'};
+  await expect(recordDecision(actor,{...base,observation_id:'not-a-uuid'})).rejects.toThrow('invalid_schema');
+  await expect(recordDecision(actor,{...base,observation_id:randomUUID()})).rejects.toThrow('scope_denied');
+  await expect(recordDecision(actor,{...base,observation_id:theirs})).rejects.toThrow('scope_denied');
+  const linked=await recordDecision(actor,{...base,observation_id:mine});
+  const row=(await admin.query('select observation_id from public.research_decisions where user_id=$1 and id=$2',[actor.userId,linked.id])).rows[0];
+  expect(row.observation_id).toBe(mine);
+  const detail=(await admin.query('select detail from public.research_audit_log where user_id=$1 and object_id=$2',[actor.userId,linked.id])).rows[0].detail;
+  expect(detail.observation_id).toBe(mine);
+  const unlinked=await recordDecision(actor,{...base,reason:'no observation yet'});
+  expect((await admin.query('select observation_id from public.research_decisions where user_id=$1 and id=$2',[actor.userId,unlinked.id])).rows[0].observation_id).toBeNull();
+ });
+
  it('records outcomes only against the owner\'s existing decisions',async()=>{
   const decision=await recordDecision(actor,{thesis_id:thesisId,week_of:'2026-09-21',arm:'ai_candidate',action:'shadow',reason:'shadow run'});
   const outcome={decision_id:decision.id,window_weeks:4,evaluation_id:'eval-1',pillar_results:{p1:'resolved_true'},price_result:{alpha:0.01},judged_by:'evaluator'};
