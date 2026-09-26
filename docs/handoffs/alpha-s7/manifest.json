@@ -2,6 +2,11 @@
   "schema_version": "alpha-shared-handoff/1.0",
   "files": [
     {
+      "path": "docs/handoffs/alpha-e3b/README.md",
+      "size_bytes": 3182,
+      "sha256": "5dee6b5ece9ca464235887421ecf716baca730ca4ee09f843a865bd5164210f5"
+    },
+    {
       "path": "docs/handoffs/alpha-s4/alpha-observation-contract.schema.json",
       "size_bytes": 9574,
       "sha256": "ee9fb5bbe5d6cef9794cb715bbcd4f62a9601d6363f14d11ea6beb0b353c3647"
@@ -73,13 +78,23 @@
     },
     {
       "path": "docs/handoffs/alpha-s6/POLICY-NEXT.md",
-      "size_bytes": 3201,
-      "sha256": "a00e0871f7834b502b4460b0ae9b6dbfb7f397d9d7fd60ae740927f0d0a48a88"
+      "size_bytes": 3649,
+      "sha256": "815df0593b551485eab0c212cce2bde209045072dc839b621d5aa705961c9c90"
     },
     {
       "path": "docs/handoffs/alpha-s6/README.md",
-      "size_bytes": 5659,
-      "sha256": "f1a8d93c302bdcbc5ac24227a3ea9aca258f1450e50646d97598e56b96c9e054"
+      "size_bytes": 5875,
+      "sha256": "5d9c7bb0070c5fcb86d2b4693b115506fb035b4e7fa4c6c07bd14325fba600b9"
+    },
+    {
+      "path": "docs/handoffs/alpha-s6/alpha-observation-contract-v2.schema.json",
+      "size_bytes": 10243,
+      "sha256": "840bb630a6f43d61a197945838f89ab0424095a6bccb84e74aecef2c343a0517"
+    },
+    {
+      "path": "docs/handoffs/alpha-s6/fixtures/golden-input-v2.json",
+      "size_bytes": 172618,
+      "sha256": "f2bf9bc9c9b67af6fa1745f2225cc6cf6cbbe71675d1153ed43bec6618450fc8"
     },
     {
       "path": "docs/handoffs/alpha-s6/fixtures/golden-input.json",
@@ -87,9 +102,19 @@
       "sha256": "bb7c630e4e004e3dbf88b95df332886ff26c1b166e55b35461df355a2139e574"
     },
     {
+      "path": "docs/handoffs/alpha-s6/fixtures/golden-result-v2.json",
+      "size_bytes": 3398,
+      "sha256": "2b31569b182196f125afed4b91ef7ebe2d40a8f97cdd1ae2249eed430fff8623"
+    },
+    {
       "path": "docs/handoffs/alpha-s6/fixtures/golden-result.json",
       "size_bytes": 3260,
       "sha256": "18f61f693ebecb2f824e3ecead907a1449e84f4cff7419ced528d610dfcebd1e"
+    },
+    {
+      "path": "docs/handoffs/alpha-s6/identity-attestations.json",
+      "size_bytes": 1308,
+      "sha256": "5248db49206f3be2e0dd612d24d4b3e83999d58a392d39be7332ef0c3784852c"
     },
     {
       "path": "docs/handoffs/alpha-s6/market-interface/README.md",
@@ -103,8 +128,8 @@
     },
     {
       "path": "docs/handoffs/alpha-s6/market-interface/policy-v2.proposal.json",
-      "size_bytes": 834,
-      "sha256": "6af68773e643a30ec5ef9cee4d31ae2d74126ad9f3ac3ada146faed9e668e442"
+      "size_bytes": 1171,
+      "sha256": "bdf2531e93cbde8b4b17b3cdf535bad015a872db5a9ffffdb8bf559996a5ba26"
     },
     {
       "path": "docs/handoffs/alpha-s6/market-interface/schema.json",
@@ -122,19 +147,29 @@
       "sha256": "bc4e52bcc4d6e8d5fddbd090157861d02e30ef685a9f3e46e1c45a0b15a5729d"
     },
     {
+      "path": "docs/handoffs/alpha-s6/market-policy-v2.json",
+      "size_bytes": 2161,
+      "sha256": "93e1260f46bc0f47107399d256d2222e6354ae8acd021e3123f30db1caa3ceaf"
+    },
+    {
+      "path": "docs/handoffs/alpha-s6/market-policy-v2.json.sha256",
+      "size_bytes": 65,
+      "sha256": "9186d4d6b23b4c6af88c530fcf4102158eef6386a3daf361db18e194fa250f15"
+    },
+    {
       "path": "docs/handoffs/alpha-s7/README.md",
       "size_bytes": 4455,
       "sha256": "d691db2f540a74a4e45034162fe3c0ae27568e7d0066aca49895352f7c07ba5d"
     },
     {
       "path": "package-lock.json",
-      "size_bytes": 222960,
-      "sha256": "5f76ec15797c0fd5577942412a7704ef3b2a81666e29a1589d88e82e16c9bdb2"
+      "size_bytes": 221759,
+      "sha256": "814d0b046aa16d9f024305be8c0c9832729ad25485b02cbf1e0a1c895c37e18d"
     },
     {
       "path": "package.json",
       "size_bytes": 1850,
-      "sha256": "436873d06b632ad5b8798ea313887bff07a9fb37f65bcc563d0ed6ab221f7ae3"
+      "sha256": "a770f86f6ae105c747e3a57cc73c9c27d35677c1153188fd4f9bf2ab6bef07c3"
     },
     {
       "path": "scripts/s6/check-market-handoff.ts",
@@ -147,14 +182,29 @@
       "sha256": "b58a967b640f8414ade2567546cd800c14c143d02fb55e6acdc1c890d2f45148"
     },
     {
+      "path": "scripts/s6/freeze-market-handoff.ts",
+      "size_bytes": 1806,
+      "sha256": "950cdddc383e8ed3686e496f003e3d2efa8f679407f57b5d4763a8bfcc47cceb"
+    },
+    {
       "path": "scripts/s6/market-file.ts",
       "size_bytes": 1468,
       "sha256": "9d13820c19982dc40d36d742b91fd39f988e4516e13e89343e592bdd386ec89c"
     },
     {
+      "path": "scripts/s6/verify-engine.ts",
+      "size_bytes": 2150,
+      "sha256": "dc55623566e7814e4490d61a6a22b28785282032cfa93a64edc522704d633a1d"
+    },
+    {
+      "path": "scripts/s7/build-manifest.ts",
+      "size_bytes": 1549,
+      "sha256": "88d9d726b6bef02f7f9a2a40928b1099be37757e89f15f9d88a80313f1638339"
+    },
+    {
       "path": "scripts/s7/verify-handoff.ts",
-      "size_bytes": 4203,
-      "sha256": "85c572a4f9abd29c2816cd85d57e4d4903b2efff1b5590f053e3e24d0eb5c96c"
+      "size_bytes": 5649,
+      "sha256": "9a27fbcd67d5a47bae655c02070c503a864f249dad636d416ff9ec08769be744"
     },
     {
       "path": "src/lib/research/ingest/__fixtures__/s3/candidate-pack/candidate.json",
@@ -222,24 +272,39 @@
       "sha256": "8c994980caa8f8eb41e873befcbe4ebbd2b0d9286f17dad39a0c85a945ea8989"
     },
     {
+      "path": "src/lib/research/market-policy.ts",
+      "size_bytes": 5250,
+      "sha256": "404302409bcbf43efa4ea8f6a394bf7a3e0f369a2f27deb358fa592ec5863f1e"
+    },
+    {
       "path": "src/lib/research/s6/market-handoff.ts",
-      "size_bytes": 8646,
-      "sha256": "3a790082f32fb8880eda48d2b487404201002f86030f7f510774f8c453a60466"
+      "size_bytes": 8857,
+      "sha256": "e0a1766bf1dacb0af5c85f6b9c4118020c5708855f9cb187ff10d31131bc50dd"
     },
     {
       "path": "src/lib/research/s6/market-pair.test.ts",
-      "size_bytes": 3970,
-      "sha256": "d6cbb2b0a2c885d528202d92fe3329d0af1217b75c217ffe651c9567ea614956"
+      "size_bytes": 4039,
+      "sha256": "6a911a15a57bc4c8ecaa144958f14e1792e8a8477001f0ab73cb00456cc5c5d6"
     },
     {
       "path": "src/lib/research/s6/market-pair.ts",
-      "size_bytes": 5055,
-      "sha256": "0666dcbad5a50d64c57961c1f2c242f93411628088f8ae9c4a1d18f1602ec0e6"
+      "size_bytes": 5482,
+      "sha256": "5f362eba9d17877acae023e53a5612e79dfa9f0775ec95d6161fe25ad7e30116"
+    },
+    {
+      "path": "src/lib/research/s6/market.ts",
+      "size_bytes": 10024,
+      "sha256": "f47738f8bc6dfd445346d5dc6e46fd9b85faa4bd3d04b203587986fac4c3c0f7"
     },
     {
       "path": "vendor/dsh-trade-strategy-evaluator-0.2.0.tgz",
       "size_bytes": 262636,
       "sha256": "a071a1fcfc2499a54af5a7ced2f18d57ff7cd61d8aa17f8af3def13777fc5869"
+    },
+    {
+      "path": "vendor/dsh-trade-strategy-evaluator-0.3.0.tgz",
+      "size_bytes": 268788,
+      "sha256": "c39241a0465da6fe4a8b41da60367b78c7ab37b7e7a69ead1f027cfe635741d4"
     }
   ]
 }
