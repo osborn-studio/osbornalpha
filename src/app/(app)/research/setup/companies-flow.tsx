@@ -90,8 +90,7 @@ export function CompaniesFlow({ companies, answers, step, onAnswersChange, onSte
         const a = current[k]!;
         const { ok, data, status } = await post('/api/research/entity-keys', 'POST', a);
         if (!ok || !data.company) { failures.push(`${a.names_zh || a.names_en}：${data.error?.message ?? status}`); continue; }
-        current = reconcileAddedCompany(current, k, data.company.entity_id);
-        onAnswersChange(current);
+        current = reconcileAddedCompany(current, k, data.company.entity_id); // persisted once the run ends
       }
       // 2. Selected companies (including the ones just created).
       for (const id of Object.keys(current).filter((k) => !k.startsWith('new:'))) {
@@ -115,13 +114,22 @@ export function CompaniesFlow({ companies, answers, step, onAnswersChange, onSte
           }
         }
       }
-      if (failures.length) { setErrors([...failures, '已成功的部分已写入并保留在草稿里；修正后可直接重试。']); await onRefresh(); return; }
+      if (failures.length) {
+        // Persist the reconciled draft now (created companies become existing selections) and stay on review.
+        onAnswersChange(current);
+        setErrors([...failures, '已成功的部分已写入并保留在草稿里；修正后可直接重试。']);
+        await onRefresh();
+        return;
+      }
       onSaved(`名单已写入：${Object.keys(current).length} 家`); // the page resets answers and step atomically
     } finally { setBusy(false); }
   }
 
+  // While a submission runs the review screen stays (reconciliation must not shift the step math into an
+  // editable screen) and every answer input is disabled: edits made mid-flight could not be captured.
+  const shownStep = busy ? total - 1 : step;
   const screen = (() => {
-    if (step === 0) {
+    if (shownStep === 0) {
       const question = q('select');
       return (
         <QuestionCard question={question} errors={errors}>
@@ -144,8 +152,8 @@ export function CompaniesFlow({ companies, answers, step, onAnswersChange, onSte
         </QuestionCard>
       );
     }
-    if (step <= selectedIds.length) {
-      const id = selectedIds[step - 1]!;
+    if (shownStep <= selectedIds.length) {
+      const id = selectedIds[shownStep - 1]!;
       const a = answers[id]!;
       const c = rowOf(id) ?? { entity_id: id, keys: { lei: null, usci: null, cninfo_org_id: null, cik: null }, missing: [] as KeyName[], names_zh: [], names_en: [] };
       const set = (patch: Partial<OwnerCompanyAnswer>) => setAnswer(id, { ...a, ...patch });
@@ -174,7 +182,7 @@ export function CompaniesFlow({ companies, answers, step, onAnswersChange, onSte
         </QuestionCard>
       );
     }
-    if (step === selectedIds.length + 1) {
+    if (shownStep === selectedIds.length + 1) {
       const question = q('new_company');
       return (
         <QuestionCard question={question} errors={errors}>
@@ -223,8 +231,8 @@ export function CompaniesFlow({ companies, answers, step, onAnswersChange, onSte
 
   return (
     <div className="space-y-4">
-      <ProgressBar index={step} total={total} />
-      {screen}
+      <ProgressBar index={shownStep} total={total} />
+      <fieldset disabled={busy} className="min-w-0 border-0 p-0">{busy && <p className="mb-2 text-sm text-blue-800">正在写入名单，请稍候…</p>}{screen}</fieldset>
       <WizardNav onPrev={prev} canPrev={step > 0} busy={busy}
         onNext={step === total - 1 ? () => void submit() : next}
         nextLabel={step === total - 1 ? '确认并写入名单' : step === total - 2 ? '汇总' : '下一题'}

@@ -131,7 +131,11 @@ export async function addOwnerCompany(ctx: ResearchCtx, rawAnswer: OwnerCompanyA
   // "Owner submission" means: nothing researched anywhere — no entity keys, no key provenance, and securities
   // (if any) that are the same listing with no MIC/ISIN and only owner-input provenance.
   const ownerOnly = (prov: Record<string, unknown>) => Object.values(prov).every((p) => (p as { source?: string } | null)?.source === OWNER_SOURCE);
-  const resumable = (r: EntityKeysRow) => KEY_NAMES.every((k) => r.keys[k] === null)
+  // Identifiers the owner typed in an earlier attempt are part of the same submission when their provenance is
+  // owner-input and the value is what this request carries; anything else on the row is researched data.
+  const sameOwnerKey = (r: EntityKeysRow, k: KeyName) => r.keys[k] === null
+    || ((r.provenance as Record<string, { source?: string } | undefined>)[k]?.source === OWNER_SOURCE && r.keys[k] === (answer.keys[k] ?? '').trim());
+  const resumable = (r: EntityKeysRow) => KEY_NAMES.every((k) => sameOwnerKey(r, k))
     && ownerOnly(r.provenance as Record<string, unknown>)
     && r.securities.every((sec) => lower(sec.exchange_code) === ticker && sec.mic === null && sec.isin === null && ownerOnly(sec.provenance));
   const keyed = new Set(keyRows.filter((r) => !resumable(r)).map((r) => r.entity_id));

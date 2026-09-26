@@ -190,3 +190,19 @@ describe('Codex round 9 regressions',()=>{
   expect(after.securities).toEqual(before.securities);
  });
 });
+
+
+describe('Codex round 10 regression',()=>{
+ it('resumes a partial creation that carried owner-entered identifiers, but not one whose identifiers differ or are researched',async()=>{
+  const {ownerCompanyToCohort}=await import('../setup/companies');
+  const withLei={entity_id:null,rationale:'r',names_zh:'金证股份',names_en:'Kingdom Technology',home_market:'A' as const,exchange_code:'600446.SH',listed_on:'2003-12-16',keys:{lei:'3003003LS77D1DRDDE25',usci:'',cninfo_org_id:'',cik:''}};
+  // Key row (with the owner-entered LEI) persisted, scope step never ran.
+  await upsertEntityKeys(ctx,ownerCompanyToCohort(withLei,{today:'2026-09-27'}));
+  const row=await addOwnerCompany(ctx,withLei,{today:'2026-09-28'});
+  expect(store.count('research_entities')).toBe(1);
+  expect(row.keys.lei).toBe('3003003LS77D1DRDDE25');
+  expect((await getEntity(ctx,row.entity_id))!.metadata.scope_rationale).toBe('r');
+  // A different owner-entered value for the same company is not a retry.
+  await expect(addOwnerCompany(ctx,{...withLei,keys:{...withLei.keys,lei:'5493001KJTIIGC8Y1R12'}},{today:'2026-09-28'})).rejects.toMatchObject({status:409});
+ });
+});
