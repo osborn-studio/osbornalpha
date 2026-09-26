@@ -58,9 +58,12 @@ export async function setScope(ctx: ResearchCtx, entityId: string, input: ScopeI
     }
     keys[k] = value; provenance[k] = attribution; missing.delete(k);
   }
-  const names_zh = cleanList(input.names_zh, 'names_zh') ?? row.names_zh;
-  const names_en = cleanList(input.names_en, 'names_en') ?? row.names_en;
-  const aliases = cleanList(input.aliases, 'aliases') ?? row.aliases;
+  // Name corrections add identifiers and may change the canonical (first) English name; they never
+  // drop identifiers already known to the key row or the entity — fanout matches companies by them.
+  const union = (first: string[], rest: string[]) => [...new Set([...first, ...rest])];
+  const names_zh = union(cleanList(input.names_zh, 'names_zh') ?? [], row.names_zh);
+  const names_en = union(cleanList(input.names_en, 'names_en') ?? [], row.names_en);
+  const aliases = union(cleanList(input.aliases, 'aliases') ?? [], row.aliases);
   if (names_en.length === 0) throw new ScopeError('names_en must keep at least one name', 422);
   const cohort = input.in_scope ? (text(input.cohort) ? input.cohort!.trim() : scopeCohort(input.today)) : row.cohort;
   const now = new Date().toISOString();
@@ -79,8 +82,10 @@ export async function setScope(ctx: ResearchCtx, entityId: string, input: ScopeI
     const renamed = input.names_zh !== undefined || input.names_en !== undefined || input.aliases !== undefined;
     const patch: Record<string, unknown> = { metadata, updated_at: now };
     if (renamed) {
-      patch.name = names_en[0];
-      patch.aliases = [...new Set([...names_zh, ...names_en.slice(1), ...aliases])];
+      const name = names_en[0]!;
+      // Existing entity aliases and the previous canonical name are kept; only the new canonical name leaves the alias list.
+      patch.name = name;
+      patch.aliases = [...new Set([...names_zh, ...names_en, ...aliases, ...entity.aliases, entity.name])].filter((a) => a !== name);
     }
     const { error: entityErr } = await ctx.supabase.from(ENTITIES_TABLE).update(patch).eq('user_id', ctx.userId).eq('id', entityId);
     if (entityErr) throw new Error(entityErr.message);
@@ -117,9 +122,11 @@ export async function addOwnerCompany(ctx: ResearchCtx, answer: OwnerCompanyAnsw
   const [entities, keyRows] = await Promise.all([listEntities(ctx, { type: 'COMPANY' }), listEntityKeys(ctx)]);
   // Only a company that already has a researched key row is protected: an entity without one (legacy
   // seed, or a stranded earlier attempt) is enriched by upsertEntityKeys and becomes scopeable.
-  // An incomplete earlier creation (owner-input key row without researched keys and without a security row)
-  // may be resumed: upsertEntityKeys updates that same row and adds the missing security.
-  const resumable = (r: EntityKeysRow) => KEY_NAMES.every((k) => r.keys[k] === null) && r.securities.length === 0;
+  // An earlier creation of this very company that did not get to the scope step (owner-input key row with no
+  // researched keys; no securities, or only the same primary listing) may be resumed: upsertEntityKeys updates
+  // that same row and the scope step below finishes the job. Anything with researched keys is protected.
+  const resumable = (r: EntityKeysRow) => KEY_NAMES.every((k) => r.keys[k] === null)
+    && r.securities.every((sec) => lower(sec.exchange_code) === ticker);
   const keyed = new Set(keyRows.filter((r) => !resumable(r)).map((r) => r.entity_id));
   const byName = entities.find((e) => keyed.has(e.id) && (names.has(lower(e.name)) || lower(e.ticker) === ticker || e.aliases.some((a) => names.has(lower(a)))));
   const byKeys = keyRows.find((r) => !resumable(r) && ([...r.names_zh, ...r.names_en, ...r.aliases].some((n) => names.has(lower(n))) || r.securities.some((sec) => lower(sec.exchange_code) === ticker)));

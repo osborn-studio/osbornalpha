@@ -90,8 +90,12 @@ describe('Codex round 5 regression',()=>{
   expect(row.entity_id).toBe(legacy);
   expect(store.count('research_entities')).toBe(1);
   expect(store.count('research_entity_keys')).toBe(1);
-  // Once a key row exists, adding it again is refused.
-  await expect(addOwnerCompany(ctx,{entity_id:null,rationale:'again',names_zh:'金证股份',names_en:'Kingdom Technology',home_market:'A',exchange_code:'600446.SH',listed_on:'',keys:{lei:'',usci:'',cninfo_org_id:'',cik:''}},{today:'2026-09-27'})).rejects.toMatchObject({status:409});
+  // Re-adding the very same owner-input company is an idempotent retry (same entity, no duplicate rows);
+  // only rows with researched keys, or a different listing, are refused (round 7 tests).
+  const again=await addOwnerCompany(ctx,{entity_id:null,rationale:'again',names_zh:'金证股份',names_en:'Kingdom Technology',home_market:'A',exchange_code:'600446.SH',listed_on:'',keys:{lei:'',usci:'',cninfo_org_id:'',cik:''}},{today:'2026-09-27'});
+  expect(again.entity_id).toBe(legacy);
+  expect(store.count('research_entities')).toBe(1);
+  expect(store.count('research_entity_keys')).toBe(1);
  });
 });
 
@@ -116,7 +120,37 @@ describe('Codex round 6 regressions',()=>{
   await setScope(ctx,entity_id,{in_scope:true,rationale:'r',today:'2026-09-27',names_en:['Hundsun Technologies'],names_zh:['恒生电子','恒生电子股份有限公司'],aliases:['Hundsun','HS']});
   const entity=(await getEntity(ctx,entity_id))!;
   expect(entity.name).toBe('Hundsun Technologies');
-  expect(entity.aliases).toEqual(['恒生电子','恒生电子股份有限公司','Hundsun','HS']);
+  // Union: corrections add identifiers; the previous canonical name stays as an alias (round 7).
+  expect(new Set(entity.aliases)).toEqual(new Set(['恒生电子','恒生电子股份有限公司','Hundsun','HS','Hundsun Technologies Inc.']));
   expect(entity.metadata).toMatchObject({in_scope:true,scope_rationale:'r'});
+ });
+});
+
+
+describe('Codex round 7 regressions',()=>{
+ it('preserves existing entity identifiers when names are corrected (union, old canonical name kept as alias)',async()=>{
+  const {entity_id}=await upsertEntityKeys(ctx,hundsun());
+  // The entity may hold identifiers the key row never had (legacy seed aliases).
+  await ctx.supabase.from('research_entities').update({aliases:['恒生电子股份有限公司','恒生电子','Hundsun','HSTECH']}).eq('user_id',ctx.userId).eq('id',entity_id);
+  await setScope(ctx,entity_id,{in_scope:true,rationale:'r',today:'2026-09-27',names_en:['Hundsun Technologies'],names_zh:['恒生电子']});
+  const entity=(await getEntity(ctx,entity_id))!;
+  expect(entity.name).toBe('Hundsun Technologies');
+  expect(new Set(entity.aliases)).toEqual(new Set(['恒生电子','恒生电子股份有限公司','Hundsun','HSTECH','Hundsun Technologies Inc.']));
+  const row=(await listEntityKeys(ctx)).find(r=>r.entity_id===entity_id)!;
+  expect(new Set(row.names_zh)).toEqual(new Set(['恒生电子','恒生电子股份有限公司']));
+  expect(row.names_en).toEqual(['Hundsun Technologies','Hundsun Technologies Inc.']);
+ });
+ it('retries a creation whose scope step failed: the complete owner-input row is finished, not refused',async()=>{
+  const answer={entity_id:null,rationale:'券商 IT 第二梯队',names_zh:'金证股份',names_en:'Kingdom Technology',home_market:'A' as const,exchange_code:'600446.SH',listed_on:'2003-12-16',keys:{lei:'',usci:'',cninfo_org_id:'',cik:''}};
+  const {ownerCompanyToCohort}=await import('../setup/companies');
+  // upsertEntityKeys succeeded (entity, key row, security) but setScope never ran.
+  await upsertEntityKeys(ctx,ownerCompanyToCohort(answer,{today:'2026-09-27'}));
+  expect((await getEntity(ctx,(await listEntityKeys(ctx))[0]!.entity_id))!.metadata.scope_rationale).toBeUndefined();
+  const row=await addOwnerCompany(ctx,answer,{today:'2026-09-27'});
+  expect(store.count('research_entities')).toBe(1);
+  expect(row.securities).toHaveLength(1);
+  expect((await getEntity(ctx,row.entity_id))!.metadata).toMatchObject({scope_rationale:'券商 IT 第二梯队'});
+  // A different listing code for the same name is not a retry.
+  await expect(addOwnerCompany(ctx,{...answer,exchange_code:'600447.SH'},{today:'2026-09-27'})).rejects.toMatchObject({status:409});
  });
 });

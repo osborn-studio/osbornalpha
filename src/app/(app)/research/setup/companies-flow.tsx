@@ -97,8 +97,13 @@ export function CompaniesFlow({ companies, answers, step, onAnswersChange, onSte
       for (const id of Object.keys(current).filter((k) => !k.startsWith('new:'))) {
         const a = current[id]!;
         const keys = Object.fromEntries(KEY_NAMES.filter((k) => a.keys[k].trim() !== '').map((k) => [k, a.keys[k].trim()]));
+        // Names are sent only when the owner changed them from the prefilled record (a scope-only save leaves identifiers alone).
+        const row = rowOf(id);
+        const zh = lines(a.names_zh), en = lines(a.names_en);
+        const zhChanged = row ? zh.join('\n') !== row.names_zh.join('\n') : zh.length > 0;
+        const enChanged = row ? en.join('\n') !== row.names_en.join('\n') : en.length > 0;
         const { ok, data, status } = await post(`/api/research/entity-keys/${id}`, 'PATCH',
-          { in_scope: true, rationale: a.rationale, keys, ...(lines(a.names_zh).length ? { names_zh: lines(a.names_zh) } : {}), ...(lines(a.names_en).length ? { names_en: lines(a.names_en) } : {}) });
+          { in_scope: true, rationale: a.rationale, keys, ...(zhChanged && zh.length ? { names_zh: zh } : {}), ...(enChanged && en.length ? { names_en: en } : {}) });
         if (!ok) failures.push(`${nameOf(id)}：${data.error?.message ?? status}`);
       }
       // 3. Removals last, and only when everything above succeeded: nothing leaves the list on a partial run.
