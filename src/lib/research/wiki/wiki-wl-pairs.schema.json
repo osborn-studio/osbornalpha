@@ -49,7 +49,9 @@
           },
           "page": {
             "type": "string",
-            "pattern": "^wiki/entities/[A-Za-z0-9._-]+\\.md$"
+            "pattern": "^wiki/entities/(?!\\.)[^/\\\\]+\\.md$",
+            "maxLength": 300,
+            "description": "Direct child of wiki/entities; any filename Obsidian accepts, no path traversal."
           },
           "entity_id": {
             "type": "string",
