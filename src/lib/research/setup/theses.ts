@@ -142,3 +142,19 @@ export function saveOutcomeMessage(input: { title: string; activate: boolean; ac
 export function staleCompanyIds(selected: readonly string[], inScopeIds: readonly string[]): string[] {
   return selected.filter((id) => !inScopeIds.includes(id));
 }
+
+/**
+ * Reconcile a create whose response was lost: the server may already hold the thesis. It is the one with
+ * the same title, body and companies created within the last ten minutes; anything older is a different record.
+ */
+export function findCreatedThesis(
+  theses: ReadonlyArray<{ id: string; title: string; body: string; company_ids: string[]; created_at: string }>,
+  input: CreateThesisInput,
+  nowIso: string,
+): { id: string; title: string } | null {
+  const now = Date.parse(nowIso);
+  const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && [...a].sort().every((v, i) => v === [...b].sort()[i]);
+  const match = theses.find((t) => t.title === input.title && t.body === input.body && same(t.company_ids ?? [], input.company_ids ?? [])
+    && Number.isFinite(Date.parse(t.created_at)) && now - Date.parse(t.created_at) <= 10 * 60 * 1000 && Date.parse(t.created_at) <= now + 60 * 1000);
+  return match ? { id: match.id, title: match.title } : null;
+}

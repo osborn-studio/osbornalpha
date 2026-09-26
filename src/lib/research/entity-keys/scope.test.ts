@@ -236,3 +236,16 @@ describe('Codex round 11 regression',()=>{
   expect(entity.metadata).toMatchObject({in_scope:false,scope_rationale:'本轮未入选'});
  });
 });
+
+
+describe('Codex round 13 regression (securities)',()=>{
+ it('a resumed creation with a corrected listing date updates the owner-entered security instead of adding a second one',async()=>{
+  const blank={entity_id:null,rationale:'r',names_zh:'金证股份',names_en:'Kingdom Technology',home_market:'A' as const,exchange_code:'600446.SH',listed_on:'',keys:{lei:'',usci:'',cninfo_org_id:'',cik:''}};
+  const first=await addOwnerCompany(ctx,blank,{today:'2026-09-27'});
+  const fixed=await addOwnerCompany(ctx,{...blank,listed_on:'2003-12-16'},{today:'2026-09-28'});
+  expect(fixed.entity_id).toBe(first.entity_id);
+  expect(fixed.securities).toHaveLength(1);
+  expect(fixed.securities[0]).toMatchObject({exchange_code:'600446.SH',valid_from:'2003-12-16',is_primary:true});
+  expect(store.count('research_entity_securities')).toBe(1);
+ });
+});

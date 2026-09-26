@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { COMPANY_QUESTIONS, THESIS_QUESTIONS } from './questions';
-import { EMPTY_THESIS_DRAFT, isCalendarDate, saveOutcomeMessage, staleCompanyIds, thesisFormToInput, validateThesisStep, type ThesisDraft } from './theses';
+import { EMPTY_THESIS_DRAFT, findCreatedThesis, isCalendarDate, saveOutcomeMessage, staleCompanyIds, thesisFormToInput, validateThesisStep, type ThesisDraft } from './theses';
 import { companiesStepErrors, companiesSubmitErrors, ownerCompanyToCohort, reconcileAddedCompany, rosterKeys, validateCompanyAnswer, type OwnerCompanyAnswer } from './companies';
 import { setupProgress, TARGETS } from './progress';
 import { clearPendingActivation, markThesisCreated, parseDraft, resetCompanyDraft, resetThesisDraft, serializeDraft } from './draft';
@@ -256,5 +256,18 @@ describe('Codex round 12 regression', () => {
     expect(parseDraft(serializeDraft(created))?.pendingActivation).toEqual({ id: 't1', title: 'T' });
     expect(clearPendingActivation(created).pendingActivation).toBeNull();
     expect(parseDraft(JSON.stringify({ ...created, pendingActivation: 'bad' }))).toBeNull();
+  });
+});
+
+
+describe('Codex round 13 regression (theses)', () => {
+  it('reconciles a lost create response by finding the thesis the server already stored', () => {
+    const input = thesisFormToInput(filled());
+    const stored = { id: 't1', title: input.title, body: input.body, company_ids: input.company_ids, status: 'DRAFT', created_at: '2026-09-27T01:00:00.000Z' };
+    const other = { ...stored, id: 't0', title: '别的论点' };
+    expect(findCreatedThesis([other, stored] as never, input, '2026-09-27T01:02:00.000Z')).toEqual({ id: 't1', title: input.title });
+    // Same text but an old record (not this session's create) is not reconciled.
+    expect(findCreatedThesis([{ ...stored, created_at: '2026-09-01T00:00:00.000Z' }] as never, input, '2026-09-27T01:02:00.000Z')).toBeNull();
+    expect(findCreatedThesis([] as never, input, '2026-09-27T01:02:00.000Z')).toBeNull();
   });
 });

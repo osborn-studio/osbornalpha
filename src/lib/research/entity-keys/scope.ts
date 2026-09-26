@@ -149,8 +149,17 @@ export async function addOwnerCompany(ctx: ResearchCtx, rawAnswer: OwnerCompanyA
   // Resuming: keep the listing date persisted by the earlier attempt, otherwise a blank date retried on another
   // day would become a second (exchange_code, valid_from) security row.
   const resumed = keyRows.find((r) => resumable(r) && r.securities.some((sec) => lower(sec.exchange_code) === ticker));
-  const persistedDate = resumed?.securities.find((sec) => lower(sec.exchange_code) === ticker)?.valid_from;
+  const persisted = resumed?.securities.find((sec) => lower(sec.exchange_code) === ticker);
+  const persistedDate = persisted?.valid_from;
   const effective = answer.listed_on.trim() === '' && persistedDate ? { ...answer, listed_on: persistedDate } : answer;
+  // A corrected listing date on a resume updates the owner-entered security in place: upsertEntityKeys
+  // matches securities by (exchange_code, valid_from), so leaving the old row would create a second primary.
+  if (persisted && persistedDate && effective.listed_on.trim() !== persistedDate) {
+    const { error } = await ctx.supabase.from('research_entity_securities').update({
+      valid_from: effective.listed_on.trim(), provenance: { ...persisted.provenance, valid_from: { source: OWNER_SOURCE, retrieved_at: opts.today } },
+    }).eq('user_id', ctx.userId).eq('id', persisted.id);
+    if (error) throw new Error(error.message);
+  }
   let entityId: string;
   try {
     entityId = (await upsertEntityKeys(ctx, ownerCompanyToCohort(effective, opts))).entity_id;
