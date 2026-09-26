@@ -62,6 +62,9 @@ type Filter =
 class QueryBuilder implements PromiseLike<{ data: any; error: any }> {
   private filters: Filter[] = [];
   private orderCol: string | null = null;
+  private rangeFrom: number | null = null;
+  private rangeTo: number | null = null;
+  static readonly MAX_ROWS = 1000;
   private orderAsc = true;
   private limitN: number | null = null;
   private pending: { op: 'insert' | 'update' | 'upsert'; payload: any } | null = null;
@@ -142,6 +145,13 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any }> {
     return this;
   }
 
+  /** PostgREST-style inclusive range; without it reads are capped like `max_rows = 1000`. */
+  range(from: number, to: number): this {
+    this.rangeFrom = from;
+    this.rangeTo = to;
+    return this;
+  }
+
   maybeSingle(): Promise<{ data: any; error: any }> {
     this.single = true;
     return this.exec();
@@ -211,6 +221,8 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any }> {
       });
     }
     if (this.limitN !== null) out = out.slice(0, this.limitN);
+    if (this.rangeFrom !== null && this.rangeTo !== null) out = out.slice(this.rangeFrom, this.rangeTo + 1);
+    else if (out.length > QueryBuilder.MAX_ROWS) out = out.slice(0, QueryBuilder.MAX_ROWS);
     out = clone(out);
     if (this.single) {
       return { data: out.length ? out[0] : null, error: null };
