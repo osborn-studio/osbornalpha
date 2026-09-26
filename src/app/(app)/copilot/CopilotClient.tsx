@@ -1,6 +1,7 @@
 'use client';
 
-import Link from 'next/link';import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import Link from 'next/link';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useTranslations } from 'next-intl';
 import { classifyMarket } from '@/lib/utils';
 import { QuotaNotice } from '@/components/QuotaNotice';
