@@ -9,7 +9,8 @@ import {freezeMarketHandoff} from '../../src/lib/research/s6/market';
 import {closeS4Pool} from '../../src/lib/research/s4/db';
 const args=process.argv.slice(2);
 const idIndex=args.indexOf('--id'),id=idIndex>=0?args[idIndex+1]:undefined;
-const positional=args.filter((a,i)=>a!=='--id'&&i!==idIndex+1);
+// Only the flag and its value are non-positional; with no --id every argument is positional.
+const positional=args.filter((_,i)=>idIndex<0||(i!==idIndex&&i!==idIndex+1));
 async function main(){
  if(positional.length!==4)fail('usage: tsx scripts/s6/freeze-market-handoff.ts <state.json> <owner-uuid> <observation-id> <bundle.json> [--id ID]');
  const [statePath,owner,observationId,bundlePath]=positional;
