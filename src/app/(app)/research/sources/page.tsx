@@ -139,7 +139,7 @@ export default function ResearchSourcesPage() {
             const isDiligence = meta.kind === 'diligence';
             const stale = isDiligence && Date.now() - Date.parse(s.ingested_at) > 30 * 86400e3;
             return (
-              <li key={s.id} className="p-3 text-sm">
+              <li key={s.id} id={`src-${s.id}`} className="p-3 text-sm target:bg-yellow-50">
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-medium">{s.title}</span>
                   {isDiligence ? (
