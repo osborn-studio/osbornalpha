@@ -7,8 +7,10 @@ export interface FanoutInput {
   theses: Thesis[];
   /** thesis_id → company names/aliases from the entity table (rule backend keyword source). */
   aliases: Map<string, string[]>;
-  /** Q5 needs a cluster; false until WP-A5 assigns cluster_id. */
+  /** Q5 needs a cluster baseline; false until WP-A5 assigns cluster_id and the earliest public material is loaded. */
   askQ5: boolean;
+  /** The cluster's earliest material (public), required whenever askQ5 is true. */
+  baseline?: { source_id: string; title: string; text: string };
 }
 
 export interface BackendAnswer {

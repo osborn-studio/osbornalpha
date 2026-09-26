@@ -32,7 +32,7 @@ function truncate(text: string, max: number): string {
 
 export function buildFanoutPrompt(input: FanoutInput): { system: string; user: string; prompt_sha256: string } {
   const theses = input.theses.map(t => `- thesis_id: ${t.id}\n  标题: ${t.title}\n  失效条件: ${t.invalidation_conditions.join('；')}\n  观察指标: ${t.watch_metrics.join('；')}`).join('\n');
-  const user = `材料（source_id ${input.source.id}，类型 ${input.source.source_type}，来源 ${input.source.url ?? '无'}）：\n标题：${input.source.title}\n正文：\n${truncate(input.source.raw_text, MATERIAL_CHARS)}\n\nthesis 列表：\n${theses}\n\n${input.askQ5 ? '本材料属于一个已有簇，请回答 Q5。' : '不要回答 Q5。'}\n请按 system 里的 JSON 结构输出，theses 的键必须是上面的 thesis_id。`;
+  const user = `材料（source_id ${input.source.id}，类型 ${input.source.source_type}，来源 ${input.source.url ?? '无'}）：\n标题：${input.source.title}\n正文：\n${truncate(input.source.raw_text, MATERIAL_CHARS)}\n\nthesis 列表：\n${theses}\n\n${input.askQ5 && input.baseline ? `本材料属于一个已有簇，簇内最早材料（source_id ${input.baseline.source_id}）如下，请据此回答 Q5：\n标题：${input.baseline.title}\n正文：\n${truncate(input.baseline.text, 6000)}` : '不要回答 Q5。'}\n请按 system 里的 JSON 结构输出，theses 的键必须是上面的 thesis_id。`;
   return { system: SYSTEM, user, prompt_sha256: digest({ system: SYSTEM, user }) };
 }
 

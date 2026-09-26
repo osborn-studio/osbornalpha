@@ -62,9 +62,10 @@ describe('jev backend',()=>{
  });
  it('asks Q5 only when the caller requests it',async()=>{
   const fetch=fetchWith(200,{...fixture,answers:{...fixture.answers,t0_Q5:{type:'noul',noul:0.7},t1_Q5:{type:'noul',noul:0.2}}});
-  const r=await createJevBackend({apiKey:'k',fetch})({...input(),askQ5:true});
+  const r=await createJevBackend({apiKey:'k',fetch})({...input(),askQ5:true,baseline:{source_id:'b1',title:'earliest',text:'最早材料正文'}});
   const body=JSON.parse((fetch.mock.calls[0] as unknown as [string,RequestInit])[1].body as string);
   expect(Object.keys(body.questions)).toContain('t0_Q5');
+  expect(body.state.cluster_baseline).toMatchObject({source_id:'b1',text:'最早材料正文'});
   expect(r.answers.find(a=>a.thesis_id===T1&&a.question_id==='Q5')).toMatchObject({selected:'true'});
  });
 });

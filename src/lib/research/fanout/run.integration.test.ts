@@ -83,9 +83,25 @@ describe.skipIf(!enabled)('WP-A6 fan-out run against the real ledger',()=>{
   expect(store.count('research_thesis_events')).toBe(0);
   expect((await admin.query('select status from public.research_theses where user_id=$1',[actor.userId])).rows.every((r:any)=>r.status==='ACTIVE')).toBe(true);
  });
- it('is idempotent: a second run over the same material writes nothing new',async()=>{
-  const second=await runFanout({ctx,actor,backends:{rule:ruleBackend,deepseek:fake('llm_deepseek'),jev:fake('jev')},escalate:null});
-  expect(second.judgments).toEqual({written:0,duplicate:32,conflict:0});
+ it('records every answer with the shared response latency and gates Q2/Q4 on relevance',async()=>{
+  const rows=await judgments(`source_id='${publicSrc}' and backend='jev'`);
+  expect(rows.every((r:any)=>r.latency_ms===5)).toBe(true);
+  // The fake answers Q1 true for every thesis, so nothing is gated here; the rule backend's own Q1 decides for it.
+  const ruleRows=await judgments(`source_id='${privateSrc}' and backend='rule'`);
+  const q1=ruleRows.filter((r:any)=>r.question_id==='Q1');
+  for(const r of q1){const gated=ruleRows.filter((x:any)=>x.thesis_id===r.thesis_id&&['Q2','Q4'].includes(x.question_id));
+   if(r.selected!=='true') expect(gated.every((x:any)=>x.abstained&&x.selected===null)).toBe(true);}
+ });
+ it('is idempotent and does not pay twice: a second run over the same material makes no external calls and adds no spend',async()=>{
+  const ds=fake('llm_deepseek'),jv=fake('jev');
+  const spentBefore=Number((await admin.query(`select coalesce(sum((detail->>'cost_micros')::bigint),0) n from public.research_audit_log where user_id=$1 and action='fanout.spend'`,[actor.userId])).rows[0].n);
+  expect(spentBefore).toBe(325); // 280 deepseek + 45 jev for the one public source
+  const second=await runFanout({ctx,actor,backends:{rule:ruleBackend,deepseek:ds,jev:jv},escalate:null});
+  // External backends are not re-invoked for inputs they already judged, so only the rule rows are re-derived (as duplicates).
+  expect(second.judgments).toEqual({written:0,duplicate:16,conflict:0});
+  expect(second.per_backend.llm_deepseek.skipped).toBe(1);expect(second.per_backend.jev.skipped).toBe(1);
+  expect(ds.calls).toHaveLength(0);expect(jv.calls).toHaveLength(0);
+  expect(second.budget.spent_micros).toBe(325);
   expect(await count('research_judgments')).toBe(32);
  });
  it('escalates a jev Q2 abstention with a confident Q1 through the explanation LLM, still without state change',async()=>{
@@ -100,7 +116,21 @@ describe.skipIf(!enabled)('WP-A6 fan-out run against the real ledger',()=>{
   expect(esc).toHaveLength(1);
   expect(esc[0]).toMatchObject({question_id:'Q2',thesis_id:thesisA,source_id:src,selected:null,abstained:true,backend_model:'deepseek-v4-flash'});
   expect(esc[0].distribution).toEqual({explanation:'材料相关但作用方向不明。'});
+  expect(Number(esc[0].cost_micros)).toBeGreaterThan(0); // escalation is a paid call and is metered
+  expect(s.per_backend.jev_escalated.cost_micros).toBe(Number(esc[0].cost_micros));
   expect(await count('research_thesis_events')).toBe(0);
+ });
+ it('never escalates once the budget is exhausted by the backend calls of the same run',async()=>{
+  const src=randomUUID();const fresh=new Date(Date.now()+1).toISOString();const sinceIso=fresh;
+  await admin.query(`insert into public.research_source_documents(id,user_id,source_type,title,raw_text,content_hash) values($1,$2,'NEWS','t4','恒生电子扩大合作。',$3)`,[src,actor.userId,'hash-'+src]);
+  store.seed('research_source_documents',[sourceRow(src,{raw_text:'恒生电子扩大合作。',ingested_at:fresh,available_at:fresh})]);
+  let explained=0;const explain=async()=>{explained++;return {content:'x',model:'m'};};
+  const spent=Number((await admin.query(`select coalesce(sum((detail->>'cost_micros')::bigint),0) n from public.research_audit_log where user_id=$1 and action='fanout.spend'`,[actor.userId])).rows[0].n);
+  // Limit leaves room for exactly the two backend calls (325) but nothing for an escalation.
+  const s=await runFanout({ctx,actor,backends:{rule:ruleBackend,deepseek:fake('llm_deepseek'),jev:fake('jev',{escalate:true})},escalate:explain,sinceIso,budget:{daily_budget_micros:spent+325,jev_micros_per_1k:45,deepseek_micros_per_1k:280}});
+  expect(explained).toBe(0);
+  expect(s.per_backend.jev_escalated.answers).toBe(0);
+  expect(s.per_backend.jev_escalated.skipped).toBeGreaterThanOrEqual(1);
  });
  it('stops the external backends when the daily budget is spent and records the stop',async()=>{
   const src=randomUUID();const fresh=new Date(Date.now()+1).toISOString();const sinceIso=fresh;
@@ -117,9 +147,12 @@ describe.skipIf(!enabled)('WP-A6 fan-out run against the real ledger',()=>{
  });
 
  it('keeps running when a backend changes its answer for an already-recorded address, counting and auditing the conflict',async()=>{
-  const sinceIso='2000-01-01T00:00:00Z';
-  const s=await runFanout({ctx,actor,backends:{rule:ruleBackend,deepseek:fake('llm_deepseek'),jev:fake('jev',{escalate:true})},escalate:null,sinceIso});
-  // publicSrc (and the escalation source) already hold jev Q2 answers for thesis A; the abstaining fake conflicts on publicSrc only.
+  // A new thesis makes every source "not fully judged" again, so jev is re-invoked; the abstaining fake now disagrees with the stored Q2 for thesis A on the first public source.
+  const thesisC=randomUUID();
+  await admin.query(`insert into public.research_theses(id,user_id,title,body,company_ids,invalidation_conditions,watch_metrics,status) values($1,$2,'C','b',$3,'["券商 IT 投入连续两年下滑"]','["信创订单"]','ACTIVE')`,[thesisC,actor.userId,JSON.stringify([entity])]);
+  store.seed('research_theses',[thesisRow(thesisC,'C')]);
+  const s=await runFanout({ctx,actor,backends:{rule:ruleBackend,deepseek:fake('llm_deepseek'),jev:fake('jev',{escalate:true})},escalate:null,sinceIso:'2000-01-01T00:00:00Z'});
+  expect(s.theses).toBe(3);
   expect(s.judgments.conflict).toBe(1);
   expect(Number((await admin.query(`select count(*) n from public.research_audit_log where user_id=$1 and action='fanout.judgment_conflict'`,[actor.userId])).rows[0].n)).toBe(1);
  });

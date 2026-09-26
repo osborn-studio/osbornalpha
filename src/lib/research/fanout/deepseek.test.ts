@@ -57,5 +57,8 @@ describe('deepseek backend',()=>{
   expect(buildFanoutPrompt(input()).prompt_sha256).not.toBe(p1.prompt_sha256);
   expect(p1.system).toMatch(/JSON/);
   expect(p1.system).not.toMatch(/买入|卖出|建议/);
+  const withBaseline=buildFanoutPrompt({...input(),askQ5:true,baseline:{source_id:'b1',title:'earliest',text:'最早材料正文'}});
+  expect(withBaseline.user).toContain('最早材料正文');
+  expect(withBaseline.user).toMatch(/Q5/);
  });
 });

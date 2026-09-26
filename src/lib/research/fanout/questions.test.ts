@@ -39,6 +39,11 @@ describe('decide (abstention bands and fallbacks)',()=>{
   expect(()=>decide('Q2',{yes:1},0.9)).toThrow('invalid_schema');
   expect(()=>decide('Q9' as any,{true:1},null)).toThrow('invalid_schema');
  });
+ it('rejects distributions whose probabilities do not sum to one',()=>{
+  expect(()=>decide('Q4',{completed:0.5,planned:0.5,denied:0.02,conditional:0.02,not_applicable:0.02},0.9)).toThrow('invalid_schema');
+  expect(()=>decide('Q1',{true:0.3,false:0.3},null)).toThrow('invalid_schema');
+  expect(decide('Q1',{true:0.7},null).selected).toBe('true'); // a lone noul probability implies its complement
+ });
  it('treats an empty distribution as an abstention',()=>{
   expect(decide('Q2',{},null)).toEqual({selected:null,abstained:true,confidence:null});
  });

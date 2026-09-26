@@ -65,7 +65,7 @@ function q4(text: string): Record<string, number> {
   const total = Object.values(scores).reduce((a, b) => a + b, 0);
   if (total === 0) return { completed: 0.05, planned: 0.05, denied: 0.02, conditional: 0.03, not_applicable: 0.85 };
   const dist: Record<string, number> = { not_applicable: 0.08 };
-  for (const [k, v] of Object.entries(scores)) dist[k] = round(0.02 + 0.9 * (v / total));
+  for (const [k, v] of Object.entries(scores)) dist[k] = round(0.02 + 0.84 * (v / total)); // 0.08 + 4×0.02 + 0.84 = 1
   return dist;
 }
 

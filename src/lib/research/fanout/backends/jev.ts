@@ -36,6 +36,7 @@ export function buildJevRequest(input: FanoutInput) {
     material: { source_id: input.source.id, type: input.source.source_type, title: input.source.title, url: input.source.url,
       text: input.source.raw_text.slice(0, MATERIAL_CHARS) },
     theses: input.theses.map(t => ({ id: t.id, title: t.title, pillars: t.watch_metrics, invalidation_conditions: t.invalidation_conditions })),
+    ...(input.askQ5 && input.baseline ? { cluster_baseline: { source_id: input.baseline.source_id, title: input.baseline.title, text: input.baseline.text.slice(0, MATERIAL_CHARS) } } : {}),
   };
   return { state, model: JEV_MODEL, questions };
 }

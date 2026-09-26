@@ -71,6 +71,9 @@ export function decide(question: QuestionId, distribution: Record<string, number
   if (!keys.every(k => def.options.includes(k)) || !Object.values(distribution ?? {}).every(isProb)) fail('invalid_schema');
   if (confidence != null && !isProb(confidence)) fail('invalid_schema');
   if (keys.length === 0) return { selected: null, abstained: true, confidence: null };
+  const sum = Object.values(distribution).reduce((a, b) => a + b, 0);
+  // A noul may be given as a single probability (its complement is implied); every other distribution must sum to one.
+  if (!(def.type === 'noul' && keys.length === 1) && (sum < 0.98 || sum > 1.02)) fail('invalid_schema');
   if (def.type === 'noul') {
     const p = distribution.true ?? (distribution.false != null ? 1 - distribution.false : 0);
     if (question === 'Q1') {

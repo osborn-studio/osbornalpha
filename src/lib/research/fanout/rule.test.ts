@@ -48,4 +48,9 @@ describe('rule backend',()=>{
   const r=await ruleBackend({...input(),askQ5:true});
   expect(r.answers.some(a=>a.question_id==='Q5')).toBe(true);
  });
+
+ it('emits only normalized distributions, including Q4 when status cues match',async()=>{
+  const r=await ruleBackend(input(source({raw_text:'恒生电子宣布已完成上线，并计划明年扩大，若监管批准。'})));
+  for(const a of r.answers){const sum=Object.values(a.distribution).reduce((x,y)=>x+y,0);expect(sum,`${a.question_id} ${JSON.stringify(a.distribution)}`).toBeGreaterThan(0.99);expect(sum).toBeLessThan(1.01);}
+ });
 });
