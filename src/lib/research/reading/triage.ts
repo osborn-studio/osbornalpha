@@ -69,11 +69,13 @@ export function buildTriageRequest(item: TriageItem, theses: TriageThesis[]) {
   };
 }
 
+/** Raw probability of a noul answer; bands are applied to this, rounding happens only when serializing. */
 const prob = (raw: unknown): number | null => {
   if (!raw || typeof raw !== 'object' || (raw as any).type !== 'noul') return null;
   const p = (raw as any).noul;
-  return typeof p === 'number' && p >= 0 && p <= 1 ? Math.round(p * 1000) / 1000 : null;
+  return typeof p === 'number' && p >= 0 && p <= 1 ? p : null;
 };
+const round3 = (p: number | null): number | null => (p === null ? null : Math.round(p * 1000) / 1000);
 const band = (p: number | null, above: number, below: number | null): boolean | null => {
   if (p === null) return null;
   if (p > above) return true;
@@ -89,12 +91,17 @@ export function parseTriageAnswers(theses: TriageThesis[], answers: Record<strin
       relevant: band(pr, TRIAGE_THRESHOLDS.relevant_above, TRIAGE_THRESHOLDS.irrelevant_below),
       counter: band(pc, TRIAGE_THRESHOLDS.counter_above, null),
       novel: band(pn, TRIAGE_THRESHOLDS.novel_above, null),
-      p_relevant: pr, p_counter: pc, p_novel: pn,
+      p_relevant: round3(pr), p_counter: round3(pc), p_novel: round3(pn),
     };
   });
   const decided = verdicts.filter(v => v.relevant !== null);
+  const relevant = verdicts.filter(v => v.relevant === true);
+  // `skip` needs every relevant thesis to be decidably neither counter-evidence nor novel; a missing
+  // TR2/TR3 answer on a relevant thesis is an incomplete judgment and stays an abstention (retryable).
   const triage: TriageDecision = decided.length === 0 ? 'abstain'
-    : verdicts.some(v => v.relevant === true && (v.counter === true || v.novel === true)) ? 'read' : 'skip';
+    : relevant.some(v => v.counter === true || v.novel === true) ? 'read'
+    : relevant.some(v => v.counter === null || v.novel === null) ? 'abstain'
+    : 'skip';
   return { triage, verdicts };
 }
 

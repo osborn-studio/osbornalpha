@@ -36,6 +36,19 @@ describe('triage questions and request',()=>{
   // Missing or malformed answers are nulls, not crashes.
   expect(parseTriageAnswers([thesis('a')],{}).verdicts[0]).toEqual({thesis_id:'a',relevant:null,counter:null,novel:null,p_relevant:null,p_counter:null,p_novel:null});
  });
+ it('abstains when a relevant thesis lacks the answers needed to decide, instead of skipping',()=>{
+  // Relevant, but TR2/TR3 missing: an incomplete judgment must not become a cached rejection.
+  expect(parseTriageAnswers([thesis('a')],{t0_TR1:noul(0.9)}).triage).toBe('abstain');
+  expect(parseTriageAnswers([thesis('a')],{t0_TR1:noul(0.9),t0_TR2:noul(0.1)}).triage).toBe('abstain');
+  // Only irrelevant theses are decidable: skip is still legitimate.
+  expect(parseTriageAnswers([thesis('a'),thesis('b')],{t0_TR1:noul(0.1),t1_TR1:noul(0.9)}).triage).toBe('abstain');
+  expect(parseTriageAnswers([thesis('a')],{t0_TR1:noul(0.1)}).triage).toBe('skip');
+ });
+ it('applies the bands to raw probabilities and rounds only the serialized fields',()=>{
+  const r=parseTriageAnswers([thesis('a')],{t0_TR1:noul(0.6004),t0_TR2:noul(0.1),t0_TR3:noul(0.5004)});
+  expect(r.verdicts[0]).toMatchObject({relevant:true,novel:true,p_relevant:0.6,p_novel:0.5});
+  expect(r.triage).toBe('read');
+ });
 });
 
 describe('judgeTriageItems',()=>{
