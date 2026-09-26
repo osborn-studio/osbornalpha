@@ -17,6 +17,9 @@ describe('HKEX title search collector',()=>{
   expect(rows[0]).toEqual({released_at:'2026-09-03T08:38:00.000Z',stock_code:'00268',short_name:'金蝶國際',headline:'財務報表/環境、社會及管治資料 - [中期/半年度報告]',title:'二零二六年中期報告',document_url:'https://www1.hkexnews.hk/listedco/listconews/sehk/2026/0903/2026090300863_c.pdf'});
   expect(rows.every(r=>/^https:\/\/www1\.hkexnews\.hk\/listedco\//.test(r.document_url))).toBe(true);
  });
+ it('returns an empty list for a genuine no-results page (recorded) instead of flagging layout drift',()=>{
+  expect(parseTitleSearch(fx('hkex-empty-0268.html'))).toEqual([]);
+ });
  it('returns an empty list with a layout_changed marker when the table is missing',()=>{
   expect(()=>parseTitleSearch('<html><body>maintenance</body></html>')).toThrow('layout_changed');
  });

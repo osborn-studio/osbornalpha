@@ -37,7 +37,8 @@ export function parseTitleSearch(html: string): HkexRow[] {
     if (!released || !link) continue;
     rows.push({ released_at: released, stock_code: code, short_name: name, headline, title: decode(link[2]), document_url: link[1].startsWith('http') ? link[1] : BASE + link[1] });
   }
-  if (rows.length === 0 && !/no matching|沒有相關|没有相关/i.test(html)) throw new Error('layout_changed: no rows parsed');
+  // Empty result pages keep the table shell and say 沒有找到訊息 (recorded 2026-09-26); anything else with no rows is layout drift.
+  if (rows.length === 0 && !/沒有找到訊息|没有找到信息|No (?:matching )?records? found|沒有相關|没有相关/i.test(html)) throw new Error('layout_changed: no rows parsed');
   return rows;
 }
 
