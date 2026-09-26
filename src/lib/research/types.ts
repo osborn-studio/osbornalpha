@@ -373,6 +373,75 @@ export interface ThesisEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Change cards (WP-A8, plan §7.1.2 / §7.5)
+
+export type CardKind = 'evidence' | 'counter';
+export const CARD_KINDS: readonly CardKind[] = ['evidence', 'counter'] as const;
+export type CardStatus = 'generated' | 'blocked';
+
+/** The seven card fields, in display order (§7.1.2). */
+export const CARD_FIELDS = [
+  'change_and_timing',
+  'profit_or_moat_transmission',
+  'beneficiaries_and_losers',
+  'market_may_underestimate',
+  'support_counter_independence',
+  'next_fact_to_verify',
+  'watch_points_weeks_and_half_year',
+] as const;
+export type CardField = typeof CARD_FIELDS[number];
+export const CARD_FIELD_LABELS: Record<CardField, string> = {
+  change_and_timing: '变化与时间',
+  profit_or_moat_transmission: '盈利或竞争力传导',
+  beneficiaries_and_losers: '受益、受损标的与依据',
+  market_may_underestimate: '市场可能低估什么',
+  support_counter_independence: '支持、反证、独立来源数与不确定性',
+  next_fact_to_verify: '下一步最值得核实的事实',
+  watch_points_weeks_and_half_year: '数周与半年观察点',
+};
+/** Placeholder a field carries when the evidence does not support any assertion. */
+export const CARD_PENDING = '待研究';
+
+export interface CardAssertion {
+  id: string;
+  field: CardField;
+  text: string;
+  source_id: string;
+  source_version: string;
+  judgment_ids: string[];
+}
+export interface CardEvidenceSummary {
+  support: number;
+  counter: number;
+  independent_sources: number;
+  uncertainty: string;
+  excluded_private: number;
+  unfamiliar_hosts: string[];
+}
+export interface CardGeneration {
+  model: string;
+  prompt_sha256: string;
+  run_id: string;
+  generated_at: string;
+  unsupported_dropped: number;
+}
+export interface ResearchCard {
+  id: string;
+  week_of: string;
+  thesis_id: string;
+  kind: CardKind;
+  title: string;
+  /** Field → assertion ids, or the CARD_PENDING placeholder. */
+  fields: Record<CardField, string[] | typeof CARD_PENDING>;
+  assertions: CardAssertion[];
+  evidence: CardEvidenceSummary;
+  generation: CardGeneration;
+  axiom_results: AxiomCheckResult[];
+  status: CardStatus;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
 // Playbooks (Phase 3)
 
 export type ProposedAction =
