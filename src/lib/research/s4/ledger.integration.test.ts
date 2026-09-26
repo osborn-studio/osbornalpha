@@ -3,7 +3,7 @@ import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {closeS4Pool,transaction} from './db';
-import {addLabel,judgmentId,recordJudgment,snapshotId,type JudgmentInput} from './ledger';
+import {addLabel,judgmentId,recordDecision,recordJudgment,recordOutcome,snapshotId,type DecisionInput,type JudgmentInput} from './ledger';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20260926000000_research_judgment_ledger.sql';
@@ -100,5 +100,40 @@ describe.skipIf(!enabled)('WP-A3 judgment ledger on real PostgreSQL',()=>{
   expect((await admin.query('select label,labeler,labeled_at from public.research_labels where user_id=$1 and id=$2',[actor.userId,label.id])).rows[0]).toMatchObject({label:'true',labeler:'owner'});
   expect(await audits('ledger.label',label.id)).toBe(1);
   expect(await count('research_labels',other.userId)).toBe(0);
+ });
+
+ it('records decisions that cite only the owner\'s judgments and freezes the human baseline',async()=>{
+  const cited=await recordJudgment(actor,judgment({question_id:'Q3'}));
+  const decision=(over:Partial<DecisionInput>={}):DecisionInput=>({thesis_id:thesisId,week_of:'2026-09-21',arm:'collab',action:'adopt',reason:'Q3 supports the thesis',cited_judgment_ids:[cited.id],card_id:'card-1',time_spent_minutes:7,...over});
+  const before=await count('research_decisions');
+  await expect(recordDecision(actor,decision({cited_judgment_ids:[randomUUID()]}))).rejects.toThrow('scope_denied');
+  await expect(recordDecision(other,decision())).rejects.toThrow('scope_denied');
+  await expect(recordDecision(actor,decision({arm:'human_baseline'}))).rejects.toThrow('invalid_schema');
+  await expect(recordDecision(actor,decision({arm:'oracle' as any}))).rejects.toThrow('invalid_schema');
+  await expect(recordDecision(actor,decision({action:'buy' as any}))).rejects.toThrow('invalid_schema');
+  await expect(recordDecision(actor,decision({reason:'  '}))).rejects.toThrow('invalid_schema');
+  await expect(recordDecision(actor,decision({week_of:'2026-9-1'}))).rejects.toThrow('invalid_schema');
+  await expect(recordDecision(actor,decision({workspace:'team:'}))).rejects.toThrow('invalid_schema');
+  expect(await count('research_decisions')).toBe(before);
+  const made=await recordDecision(actor,decision());
+  const baseline=await recordDecision(actor,decision({arm:'human_baseline',frozen_at:'2026-09-20T08:00:00Z',cited_judgment_ids:[]}));
+  const rows=(await admin.query('select * from public.research_decisions where user_id=$1 and id=any($2::uuid[]) order by created_at',[actor.userId,[made.id,baseline.id]])).rows;
+  expect(rows[0]).toMatchObject({thesis_id:thesisId,arm:'collab',action:'adopt',cited_judgment_ids:[cited.id],card_id:'card-1',time_spent_minutes:7,workspace:'personal',analyst_id:null});
+  expect(rows[0].week_of.toISOString().slice(0,10)).toBe('2026-09-21');
+  expect(rows[1].frozen_at.toISOString()).toBe('2026-09-20T08:00:00.000Z');
+  expect(await audits('ledger.decision',made.id)).toBe(1);
+ });
+
+ it('records outcomes only against the owner\'s existing decisions',async()=>{
+  const decision=await recordDecision(actor,{thesis_id:thesisId,week_of:'2026-09-21',arm:'ai_candidate',action:'shadow',reason:'shadow run'});
+  const outcome={decision_id:decision.id,window_weeks:4,evaluation_id:'eval-1',pillar_results:{p1:'resolved_true'},price_result:{alpha:0.01},judged_by:'evaluator'};
+  await expect(recordOutcome(other,outcome)).rejects.toThrow('scope_denied');
+  await expect(recordOutcome(actor,{...outcome,decision_id:randomUUID()})).rejects.toThrow('scope_denied');
+  await expect(recordOutcome(actor,{...outcome,window_weeks:0})).rejects.toThrow('invalid_schema');
+  await expect(recordOutcome(actor,{...outcome,pillar_results:[] as any})).rejects.toThrow('invalid_schema');
+  const made=await recordOutcome(actor,outcome);
+  expect((await admin.query('select * from public.research_outcomes where user_id=$1 and id=$2',[actor.userId,made.id])).rows[0]).toMatchObject({decision_id:decision.id,window_weeks:4,evaluation_id:'eval-1',pillar_results:{p1:'resolved_true'},price_result:{alpha:0.01},judged_by:'evaluator'});
+  expect(await audits('ledger.outcome',made.id)).toBe(1);
+  expect(await count('research_outcomes',other.userId)).toBe(0);
  });
 });

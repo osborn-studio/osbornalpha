@@ -142,3 +142,90 @@ export async function addLabel(actor: S4Actor, input: LabelInput): Promise<{ id:
     return { id, labeled_at: at };
   });
 }
+
+export const DECISION_ARMS = ['human_baseline','ai_candidate','collab','averaged'] as const;
+export const DECISION_ACTIONS = ['adopt','shadow','reject','extend','invalidate'] as const;
+export type DecisionArm = typeof DECISION_ARMS[number];
+export type DecisionAction = typeof DECISION_ACTIONS[number];
+
+export interface DecisionInput {
+  thesis_id: string;
+  /** ISO calendar date (YYYY-MM-DD) of the review week. */
+  week_of: string;
+  arm: DecisionArm;
+  action: DecisionAction;
+  reason: string;
+  cited_judgment_ids?: string[];
+  card_id?: string | null;
+  time_spent_minutes?: number | null;
+  /** Required for human_baseline: the instant the baseline was locked before any card was shown. */
+  frozen_at?: string | null;
+  workspace?: string;
+  analyst_id?: string | null;
+}
+
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+const WORKSPACE = /^(personal|team:[A-Za-z0-9_-]{1,64})$/;
+const isIsoDate = (v: unknown): v is string => {
+  if (typeof v !== 'string') return false;
+  const m = ISO_DATE.exec(v); if (!m) return false;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3];
+};
+export const isIsoInstant = (v: unknown): v is string => typeof v === 'string' && ISO_INSTANT.test(v) && Number.isFinite(Date.parse(v));
+
+/**
+ * Append a human decision for a thesis. Every cited judgment must already be
+ * in this owner's ledger; a human_baseline decision must carry frozen_at.
+ */
+export async function recordDecision(actor: S4Actor, input: DecisionInput): Promise<{ id: string; created_at: string }> {
+  if (!isUuid(input?.thesis_id) || !isIsoDate(input.week_of) || !DECISION_ARMS.includes(input.arm) || !DECISION_ACTIONS.includes(input.action) || !text(input.reason)) fail('invalid_schema');
+  const cited = input.cited_judgment_ids ?? [];
+  if (!Array.isArray(cited) || !cited.every(isUuid) || new Set(cited).size !== cited.length) fail('invalid_schema');
+  if (input.card_id != null && !text(input.card_id)) fail('invalid_schema');
+  if (!optionalCount(input.time_spent_minutes)) fail('invalid_schema');
+  if (input.frozen_at != null && !isIsoInstant(input.frozen_at)) fail('invalid_schema');
+  if (input.arm === 'human_baseline' && input.frozen_at == null) fail('invalid_schema');
+  const workspace = input.workspace ?? 'personal';
+  if (!WORKSPACE.test(workspace) || (input.analyst_id != null && !isUuid(input.analyst_id))) fail('invalid_schema');
+  return transaction(actor, async db => {
+    if (!await exists(db, 'research_theses', actor.userId, input.thesis_id)) fail('scope_denied');
+    if (cited.length) {
+      const found = (await db.query('select count(*) n from public.research_judgments where user_id=$1 and id=any($2::uuid[])', [actor.userId, cited])).rows[0].n;
+      if (Number(found) !== cited.length) fail('scope_denied');
+    }
+    const id = randomUUID(), at = await serverTime(db);
+    await db.query(`insert into public.research_decisions(user_id,id,thesis_id,week_of,arm,action,reason,cited_judgment_ids,card_id,time_spent_minutes,frozen_at,workspace,analyst_id,created_at)
+      values($1,$2,$3,$4,$5,$6,$7,$8::uuid[],$9,$10,$11,$12,$13,$14)`,
+      [actor.userId, id, input.thesis_id, input.week_of, input.arm, input.action, input.reason, cited, input.card_id ?? null,
+       input.time_spent_minutes ?? null, input.frozen_at ?? null, workspace, input.analyst_id ?? null, at]);
+    await audit(db, actor, 'ledger.decision', 'research_decision', id, { thesis_id: input.thesis_id, week_of: input.week_of, arm: input.arm, action: input.action, cited_judgment_ids: cited }, at);
+    return { id, created_at: at };
+  });
+}
+
+export interface OutcomeInput {
+  decision_id: string;
+  window_weeks: number;
+  evaluation_id?: string | null;
+  pillar_results?: Record<string, unknown>;
+  price_result?: Record<string, unknown>;
+  judged_by: string;
+}
+
+/** Append an outcome for one of this owner's decisions. */
+export async function recordOutcome(actor: S4Actor, input: OutcomeInput): Promise<{ id: string; judged_at: string }> {
+  if (!isUuid(input?.decision_id) || !(Number.isSafeInteger(input.window_weeks) && input.window_weeks > 0) || !text(input.judged_by)) fail('invalid_schema');
+  if (input.evaluation_id != null && !text(input.evaluation_id)) fail('invalid_schema');
+  const pillar = input.pillar_results ?? {}, price = input.price_result ?? {};
+  if (!plainObject(pillar) || !plainObject(price)) fail('invalid_schema');
+  return transaction(actor, async db => {
+    if (!await exists(db, 'research_decisions', actor.userId, input.decision_id)) fail('scope_denied');
+    const id = randomUUID(), at = await serverTime(db);
+    await db.query(`insert into public.research_outcomes(user_id,id,decision_id,window_weeks,evaluation_id,pillar_results,price_result,judged_by,judged_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [actor.userId, id, input.decision_id, input.window_weeks, input.evaluation_id ?? null, canonicalize(pillar), canonicalize(price), input.judged_by, at]);
+    await audit(db, actor, 'ledger.outcome', 'research_outcome', id, { decision_id: input.decision_id, window_weeks: input.window_weeks, evaluation_id: input.evaluation_id ?? null }, at);
+    return { id, judged_at: at };
+  });
+}
