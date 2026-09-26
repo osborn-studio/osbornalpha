@@ -37,15 +37,15 @@ function percentile(values: number[], p: number): number | null {
 }
 
 /** Confidence used for calibration: backend confidence for choices, P(true) for nouls. */
-function calibrationScore(r: ReportRow): number | null {
+export function calibrationScore(r: ReportRow): number | null {
   if (r.confidence != null) return r.confidence;
   const p = r.distribution?.true;
   return typeof p === 'number' ? p : null;
 }
-function isCorrect(r: ReportRow): boolean { return r.label !== null && r.selected === r.label; }
+export function isCorrect(r: ReportRow): boolean { return r.label !== null && r.selected === r.label; }
 
 /** Expected calibration error with equal-width bins; nouls compare P(true) against label==='true'. */
-function ece(rows: ReportRow[]): number | null {
+export function ece(rows: ReportRow[]): number | null {
   const scored = rows.filter(r => r.label !== null && !r.abstained).map(r => {
     const isNoul = r.confidence == null && typeof r.distribution?.true === 'number';
     const conf = calibrationScore(r);
