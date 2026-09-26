@@ -4,7 +4,7 @@
  */
 import { isValidCik, isValidLei, isValidUsci } from '../entity-keys/identifiers';
 import { HOME_MARKETS, KEY_NAMES, type CohortCompany, type HomeMarket, type KeyName, type Provenance } from '../entity-keys/types';
-import { ISO_DATE } from './theses';
+import { isCalendarDate } from './theses';
 
 export interface OwnerCompanyAnswer {
   /** Existing cohort company being scoped, or null for a company added by the owner. */
@@ -42,7 +42,7 @@ export function validateCompanyAnswer(a: OwnerCompanyAnswer): string[] {
     if (!HOME_MARKETS.includes(a.home_market)) errors.push('请选择主市场');
     const pattern = EXCHANGE_CODE[a.home_market] ?? EXCHANGE_CODE.other;
     if (!pattern.test(trimmed(a.exchange_code).toUpperCase())) errors.push('主证券代码格式如 600570.SH / 0268.HK / PLTR，并与主市场一致');
-    if (trimmed(a.listed_on) !== '' && !ISO_DATE.test(trimmed(a.listed_on))) errors.push('上市日期请用 YYYY-MM-DD，或留空');
+    if (trimmed(a.listed_on) !== '' && !isCalendarDate(trimmed(a.listed_on))) errors.push('上市日期请用 YYYY-MM-DD 的真实日期，或留空');
   }
   const lei = trimmed(a.keys.lei), usci = trimmed(a.keys.usci), cik = trimmed(a.keys.cik);
   if (lei !== '' && !isValidLei(lei)) errors.push('LEI 应为 20 位且校验位正确');

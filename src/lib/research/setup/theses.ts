@@ -32,10 +32,24 @@ export const EMPTY_THESIS_DRAFT: ThesisDraft = {
 export const TITLE_MAX = 120;
 export const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const nonEmpty = (s: string) => s.trim() !== '';
-const isoOrEmpty = (s: string) => s.trim() === '' || ISO_DATE.test(s.trim());
+
+/** YYYY-MM-DD that exists on the calendar (2026-02-30 does not): a bad date must fail here, not in PostgreSQL after partial writes. */
+export function isCalendarDate(s: string): boolean {
+  if (!ISO_DATE.test(s)) return false;
+  const [y, m, d] = s.split('-').map(Number) as [number, number, number];
+  if (m < 1 || m > 12 || d < 1) return false;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+const isoOrEmpty = (s: string) => s.trim() === '' || isCalendarDate(s.trim());
+
+export interface ThesisValidationContext {
+  /** Entity ids currently in scope; when given, selections outside it are rejected (stale drafts). */
+  inScopeIds?: readonly string[];
+}
 
 /** Errors for one step (empty array = the step may be left). */
-export function validateThesisStep(step: ThesisQuestionId, d: ThesisDraft): string[] {
+export function validateThesisStep(step: ThesisQuestionId, d: ThesisDraft, ctx: ThesisValidationContext = {}): string[] {
   const errors: string[] = [];
   switch (step) {
     case 'title':
@@ -48,9 +62,14 @@ export function validateThesisStep(step: ThesisQuestionId, d: ThesisDraft): stri
     case 'opportunity_type':
       if (!OPPORTUNITY_TYPES.includes(d.opportunity_type)) errors.push('请选择机会类型');
       break;
-    case 'companies':
+    case 'companies': {
       if (d.company_ids.length === 0) errors.push('至少关联 1 家名单内公司');
+      if (ctx.inScopeIds) {
+        const stale = d.company_ids.filter((id) => !ctx.inScopeIds!.includes(id)).length;
+        if (stale > 0) errors.push(`有 ${stale} 家已选公司不在当前名单里，请重新选择`);
+      }
       break;
+    }
     case 'pillars': {
       const pillars = d.pillars.filter((p) => nonEmpty(p.text) || nonEmpty(p.resolvable_by) || nonEmpty(p.deadline));
       if (pillars.length < 2) errors.push('至少写 2 条支柱');
@@ -81,7 +100,7 @@ export function validateThesisStep(step: ThesisQuestionId, d: ThesisDraft): stri
     case 'horizon': {
       const weeks = parseWeeks(d.horizon_weeks);
       if (weeks === null) errors.push('观察窗口请填正整数周数，逗号分隔，如 4,13,26');
-      if (!ISO_DATE.test(d.next_review_at.trim())) errors.push('下次复核日期请用 YYYY-MM-DD');
+      if (!isCalendarDate(d.next_review_at.trim())) errors.push('下次复核日期请用 YYYY-MM-DD 的真实日期');
       break;
     }
   }
@@ -110,4 +129,11 @@ export function thesisFormToInput(d: ThesisDraft): CreateThesisInput {
     horizon_weeks: parseWeeks(d.horizon_weeks) ?? [4, 13, 26],
     next_review_at: d.next_review_at.trim(),
   };
+}
+
+/** Message after saving: a created thesis is final even when activation failed, so the draft must not be resubmitted. */
+export function saveOutcomeMessage(input: { title: string; activate: boolean; activated: boolean | null; error?: string }): string {
+  if (!input.activate) return `已保存为草稿：${input.title}`;
+  if (input.activated) return `已保存并激活：${input.title}`;
+  return `已保存为草稿：${input.title}；激活失败（${input.error ?? '未知错误'}），请到 theses 页手动激活，不要重复提交`;
 }

@@ -5,7 +5,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import type { ScopedCompany } from '@/lib/research/entity-keys/scope';
 import { THESIS_QUESTIONS, type ThesisQuestionId } from '@/lib/research/setup/questions';
-import { thesisFormToInput, validateThesisStep, type ThesisDraft } from '@/lib/research/setup/theses';
+import { saveOutcomeMessage, thesisFormToInput, validateThesisStep, type ThesisDraft } from '@/lib/research/setup/theses';
 import { OPPORTUNITY_TYPES } from '@/lib/research/types';
 import { OPPORTUNITY_LABELS } from '../theses/thesis-form';
 import { inputClass, labelClass, ListEditor, ProgressBar, QuestionCard, WizardNav } from './wizard';
@@ -29,12 +29,13 @@ export function ThesisFlow({ companies, draft, step, onDraftChange, onStepChange
   const [notice, setNotice] = useState<string | null>(null);
   const total = THESIS_QUESTIONS.length + 1; // + preview
   const inScope = useMemo(() => companies.filter((c) => c.in_scope), [companies]);
+  const vctx = useMemo(() => ({ inScopeIds: inScope.map((c) => c.entity_id) }), [inScope]);
   const set = (patch: Partial<ThesisDraft>) => onDraftChange({ ...draft, ...patch });
 
   const next = () => {
     const q = THESIS_QUESTIONS[step];
     if (q) {
-      const errs = validateThesisStep(q.id, draft);
+      const errs = validateThesisStep(q.id, draft, vctx);
       setErrors(errs);
       if (errs.length) return;
     }
@@ -43,20 +44,31 @@ export function ThesisFlow({ companies, draft, step, onDraftChange, onStepChange
   const prev = () => { setErrors([]); onStepChange(Math.max(step - 1, 0)); };
 
   async function save(activate: boolean) {
-    const allErrors = THESIS_QUESTIONS.flatMap((q) => validateThesisStep(q.id, draft));
+    const allErrors = THESIS_QUESTIONS.flatMap((q) => validateThesisStep(q.id, draft, vctx));
     if (allErrors.length) { setErrors(allErrors); return; }
     setBusy(true); setNotice(null);
     try {
-      const res = await fetch('/api/research/theses', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(thesisFormToInput(draft)) });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setNotice(`保存失败：${data?.error?.message ?? res.status}`); return; }
-      let message = `已保存为草稿：${data.thesis.title}`;
-      if (activate) {
-        const t = await fetch(`/api/research/theses/${data.thesis.id}/transition`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: 'ACTIVE', reason: 'setup wizard' }) });
-        const tData = await t.json().catch(() => ({}));
-        message = t.ok ? `已保存并激活：${data.thesis.title}` : `已保存为草稿，但激活失败：${tData?.error?.message ?? t.status}`;
+      let created: { id: string; title: string };
+      try {
+        const res = await fetch('/api/research/theses', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(thesisFormToInput(draft)) });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { setNotice(`保存失败：${data?.error?.message ?? res.status}`); return; }
+        created = data.thesis;
+      } catch (e) {
+        setNotice(`保存失败：${e instanceof Error ? e.message : '网络错误'}；草稿已保留，可重试`);
+        return;
       }
-      onSaved(message); // the page resets answers and step atomically
+      // From here the thesis exists: the draft is finalized whatever happens to activation, so a retry
+      // never creates a duplicate. Activation transport or server failures are reported, not swallowed.
+      let activated: boolean | null = null, error: string | undefined;
+      if (activate) {
+        try {
+          const t = await fetch(`/api/research/theses/${created.id}/transition`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: 'ACTIVE', reason: 'setup wizard' }) });
+          const tData = await t.json().catch(() => ({}));
+          activated = t.ok; if (!t.ok) error = tData?.error?.message ?? String(t.status);
+        } catch (e) { activated = false; error = e instanceof Error ? e.message : '网络错误'; }
+      }
+      onSaved(saveOutcomeMessage({ title: created.title, activate, activated, error })); // the page resets answers and step atomically
     } finally { setBusy(false); }
   }
 

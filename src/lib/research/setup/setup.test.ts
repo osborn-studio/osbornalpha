@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { COMPANY_QUESTIONS, THESIS_QUESTIONS } from './questions';
-import { EMPTY_THESIS_DRAFT, thesisFormToInput, validateThesisStep, type ThesisDraft } from './theses';
+import { EMPTY_THESIS_DRAFT, isCalendarDate, saveOutcomeMessage, thesisFormToInput, validateThesisStep, type ThesisDraft } from './theses';
 import { companiesStepErrors, companiesSubmitErrors, ownerCompanyToCohort, reconcileAddedCompany, validateCompanyAnswer, type OwnerCompanyAnswer } from './companies';
 import { setupProgress, TARGETS } from './progress';
 import { parseDraft, resetCompanyDraft, resetThesisDraft, serializeDraft } from './draft';
@@ -182,5 +182,35 @@ describe('Codex round 2 regressions', () => {
     expect(Object.keys(next).sort()).toEqual(['e1', 'e9', 'new:2']);
     expect(next.e9).toEqual({ ...added, entity_id: 'e9' });
     expect(next['new:2']).toBe(answers['new:2']);
+  });
+});
+
+
+describe('Codex round 3 regressions', () => {
+  it('rejects nonexistent calendar dates everywhere a date is entered', () => {
+    expect(isCalendarDate('2026-02-28')).toBe(true);
+    expect(isCalendarDate('2024-02-29')).toBe(true);
+    for (const bad of ['2026-02-30', '2026-13-01', '2026-04-31', '2026-00-10', '2026-2-3', '']) expect(isCalendarDate(bad)).toBe(false);
+    const d = filled();
+    expect(validateThesisStep('pillars', { ...d, pillars: [{ ...d.pillars[0]!, deadline: '2026-02-30' }, d.pillars[1]!] })[0]).toMatch(/日期/);
+    expect(validateThesisStep('metrics_catalysts', { ...d, catalysts: [{ text: 'x', expected_date: '2026-04-31' }] })[0]).toMatch(/日期/);
+    expect(validateThesisStep('horizon', { ...d, next_review_at: '2026-02-30' })[0]).toMatch(/复核/);
+    const answer: OwnerCompanyAnswer = { entity_id: null, rationale: 'r', names_zh: '金证', names_en: 'Kingdom', home_market: 'A', exchange_code: '600446.SH', listed_on: '2026-02-30', keys: { lei: '', usci: '', cninfo_org_id: '', cik: '' } };
+    expect(validateCompanyAnswer(answer)[0]).toMatch(/上市日期/);
+  });
+
+  it('refuses a thesis whose selected companies are no longer in scope', () => {
+    const d = filled();
+    const inScope = ['3f2b1c40-0000-4000-8000-000000000001'];
+    expect(validateThesisStep('companies', d, { inScopeIds: inScope })).toEqual([]);
+    expect(validateThesisStep('companies', { ...d, company_ids: [...d.company_ids, 'gone'] }, { inScopeIds: inScope })).toEqual(['有 1 家已选公司不在当前名单里，请重新选择']);
+    // Without a scope list (unit contexts) the check is skipped, never a crash.
+    expect(validateThesisStep('companies', { ...d, company_ids: ['gone'] })).toEqual([]);
+  });
+
+  it('describes the save outcome so a created thesis is finalized even when activation fails', () => {
+    expect(saveOutcomeMessage({ title: 'T', activate: false, activated: null })).toBe('已保存为草稿：T');
+    expect(saveOutcomeMessage({ title: 'T', activate: true, activated: true })).toBe('已保存并激活：T');
+    expect(saveOutcomeMessage({ title: 'T', activate: true, activated: false, error: 'network' })).toBe('已保存为草稿：T；激活失败（network），请到 theses 页手动激活，不要重复提交');
   });
 });
