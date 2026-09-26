@@ -124,6 +124,42 @@ export function checkMemoAxioms(
   return results;
 }
 
+// ---------------------------------------------------------------------------
+// WP-A8 change cards (§7.5): no trading advice, no profit promises.
+
+/** Trading-advice vocabulary a change card may never contain. */
+export const TRADING_ADVICE_PATTERN = /买入|卖出|建仓|加仓|减仓|清仓|目标价|止损|止盈|仓位|做多|做空|买点|卖点|抄底|逃顶/;
+
+export interface CardForCheck { title: string; assertions: Array<{ id: string; text: string }> }
+
+type CardRuleFn = (card: CardForCheck) => { passed: boolean; message: string };
+const CARD_RULES: Record<string, CardRuleFn> = {
+  AX005: (card) => {
+    const hit = [card.title, ...card.assertions.map((a) => a.text)].join('\n').match(PROMISE_PATTERN);
+    return { passed: !hit, message: hit ? `卡片含收益承诺话术「${hit[0]}」，直接阻断` : '无收益承诺话术' };
+  },
+  AX006: (card) => {
+    for (const a of [{ id: 'title', text: card.title }, ...card.assertions]) {
+      const hit = a.text.match(TRADING_ADVICE_PATTERN);
+      if (hit) return { passed: false, message: `断言 ${a.id} 含交易建议字样「${hit[0]}」，直接阻断` };
+    }
+    return { passed: true, message: '无买卖建议' };
+  },
+};
+
+/** Run the card axioms (AX005, AX006) that are enabled. Pure. */
+export function checkCardAxioms(card: CardForCheck, axioms: Axiom[]): AxiomCheckResult[] {
+  const results: AxiomCheckResult[] = [];
+  for (const axiom of axioms) {
+    if (!axiom.enabled) continue;
+    const rule = CARD_RULES[axiom.code];
+    if (!rule) continue;
+    const { passed, message } = rule(card);
+    results.push({ axiom_code: axiom.code, severity: axiom.severity, passed, message });
+  }
+  return results;
+}
+
 /** True when any BLOCK-severity axiom failed (gates review/approval). */
 export function hasBlockingFailure(results: AxiomCheckResult[]): boolean {
   return results.some((r) => r.severity === 'BLOCK' && !r.passed);
