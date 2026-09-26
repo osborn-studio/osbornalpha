@@ -85,6 +85,7 @@
               "policy_restricted",
               "rights_external_processing_denied",
               "no_version",
+              "no_body_hash",
               "no_text"
             ]
           }
