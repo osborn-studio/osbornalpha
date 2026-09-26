@@ -10,6 +10,7 @@
 
 - 不做 fan-out 监控与三后端调用（A6）、不做四臂界面与自动建 observation（A9）、不做战绩映射（A10）。
 - 不导出 JSON Schema（O1 归 ontology 仓）；本文"契约对齐"一节是给 O1 的输入。
+- **WP-O1 已导出（2026-09-26）**：契约为 ontology-driven `docs/contracts/judgment-ledger-v1.md` + `schemas/judgment-ledger-v1.json`（分支 `codex/wp-o1-judgment-ledger-contract`）。其中 `$defs.alpha_judgment_row` 即本文 `research_judgments` 一行的 JSON 形态；本仓 `ledger.ts` 的 `judgmentId()`/`snapshotId()` 与契约 §2 一致，四表触发器对应契约 §3，`replayJudgments()` 对应 §5。后续改动以契约为准，先改契约再改表。
 - 不改 S4 现有表、触发器、`transaction()` 语义。
 
 ## 契约对齐说明 / Contract alignment with the ontology pilot
