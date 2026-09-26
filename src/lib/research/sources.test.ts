@@ -112,3 +112,13 @@ describe('WP-A1 source extension fields', () => {
     expect(src).toMatchObject({ available_at: '2026-09-20T00:00:00.000Z', event_time: '2026-09-19T00:00:00.000Z', market: 'US', permission: 'licensed' });
   });
 });
+
+describe('WP-A1 instant validation is strict', () => {
+  it('rejects calendar-invalid and zone-less instants, accepts explicit offsets', async () => {
+    await expect(ingestSource(ctx, { ...valid, available_at: '2026-02-30T00:00:00Z' })).rejects.toThrow(/available_at/);
+    await expect(ingestSource(ctx, { ...valid, event_time: '2026-09-20 00:00' })).rejects.toThrow(/event_time/);
+    await expect(ingestSource(ctx, { ...valid, available_at: '2026-09-20T00:00:00' })).rejects.toThrow(/available_at/);
+    const res = await ingestSource(ctx, { ...valid, raw_text: 'offset ok', available_at: '2026-09-20T08:00:00+08:00' });
+    expect((await getSource(ctx, res.id))!.available_at).toBe('2026-09-20T08:00:00+08:00');
+  });
+});

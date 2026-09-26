@@ -87,8 +87,17 @@ export function rowToSource(row: any): SourceDocument {
   };
 }
 
-const isIsoInstant = (value: unknown): value is string =>
-  typeof value === 'string' && Number.isFinite(Date.parse(value));
+// Strict ISO 8601 instant: date, 'T', time, and an explicit zone. Calendar
+// validity is checked separately because Date.parse normalizes 2026-02-30.
+const ISO_INSTANT = /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+const isIsoInstant = (value: unknown): value is string => {
+  if (typeof value !== 'string') return false;
+  const match = ISO_INSTANT.exec(value);
+  if (!match || !Number.isFinite(Date.parse(value))) return false;
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  const utc = new Date(Date.UTC(year, month - 1, day));
+  return utc.getUTCFullYear() === year && utc.getUTCMonth() === month - 1 && utc.getUTCDate() === day;
+};
 const defaultPermission = (type: SourceType): Permission =>
   type === 'NOTE' || type === 'MANUAL' ? 'private' : 'public';
 
