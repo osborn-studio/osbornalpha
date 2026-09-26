@@ -20,7 +20,9 @@ export const CARD_SYSTEM_PROMPT = `你是研究助理，为一条投资 thesis �
 每条断言必须在 source_ids 里引用至少一个给出的 source_id；证据不足的字段给空数组（系统会写"待研究"），不要编造。
 不得给出买卖建议、仓位、目标价、止损止盈、做多做空；不得使用"必涨、保证、稳赚、无风险"。只写事实与推断，并区分二者。用中文。`;
 
-export interface CardPromptInput { card: SelectedCard; thesis: Thesis; sources: SourceDocument[]; weekOf: string }
+/** WP-A7 adds pillars to Thesis; until that lands on main the prompt reads them structurally. */
+export type ThesisForCard = Thesis & { pillars?: Array<{ id?: string; text: string; resolvable_by?: string; deadline?: string | null }> };
+export interface CardPromptInput { card: SelectedCard; thesis: ThesisForCard; sources: SourceDocument[]; weekOf: string }
 export interface CardPrompt { system: string; user: string; prompt_sha256: string; source_ids: string[] }
 
 export function buildCardPrompt({ card, thesis, sources, weekOf }: CardPromptInput): CardPrompt {

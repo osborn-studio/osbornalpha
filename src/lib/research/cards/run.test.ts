@@ -15,7 +15,7 @@ const judge=(s:any,t:any,dir='support',extra:Partial<LedgerRow>[]=[]):LedgerRow[
  {id:`j${++n}`,source_id:s.id,thesis_id:t.id,question_id:'Q1',backend:'rule',selected:'true',abstained:false},
  {id:`j${++n}`,source_id:s.id,thesis_id:t.id,question_id:'Q2',backend:'rule',selected:dir,abstained:false},
  ...extra.map(e=>({id:`j${++n}`,source_id:s.id,thesis_id:t.id,backend:'rule',abstained:false,question_id:'Q3',selected:'filing_or_regulator',...e}))];
-const axioms=AXIOM_SEEDS.map((a,i)=>({id:`ax${i}`,user_id:owner,code:a.code,title:a.title,description:a.description,severity:a.severity,enabled:true,created_at:at(-90)}));
+const axioms=AXIOM_SEEDS.map((a,i)=>({id:`ax${i}`,user_id:owner,code:a.code,title:a.title,description:a.description,severity:a.severity,active:true,created_at:at(-90)})); // research_axioms uses `active`
 const draft=(title:string,sid:string)=>({title,fields:{change_and_timing:[{text:'变化',source_ids:[sid]}],next_fact_to_verify:[{text:'核实',source_ids:[sid]}]}});
 
 describe('weekOfMonday',()=>{

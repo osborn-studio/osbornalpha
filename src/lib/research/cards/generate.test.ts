@@ -1,12 +1,12 @@
 import {describe,expect,it} from 'vitest';
-import {buildCardPrompt,generateCard,validateCardDraft} from './generate';
+import {buildCardPrompt,generateCard,validateCardDraft,type ThesisForCard} from './generate';
 import type {SelectedCard} from './select';
 import {AXIOM_SEEDS} from '../seed';
-import type {Axiom,SourceDocument,Thesis} from '../types';
+import type {Axiom,SourceDocument} from '../types';
 
 const AXIOMS:Axiom[]=AXIOM_SEEDS.map((a,i)=>({id:`ax-${i}`,code:a.code,title:a.title,description:a.description,severity:a.severity,enabled:true,created_at:'2026-07-04T00:00:00.000Z'}));
 const S1='11111111-1111-4111-8111-111111111111',S2='22222222-2222-4222-8222-222222222222';
-const thesis:Thesis={id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',title:'推理需求转向',body:'正文',company_ids:[],theme_ids:[],supporting_evidence_ids:[],invalidation_conditions:['单价跌破成本'],watch_metrics:['DC 营收'],status:'ACTIVE',created_at:'2026-09-01T00:00:00Z',updated_at:'2026-09-01T00:00:00Z',pillars:[{id:'p1',text:'推理占比上升',resolvable_by:'季报',deadline:null}]};
+const thesis:ThesisForCard={id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',title:'推理需求转向',body:'正文',company_ids:[],theme_ids:[],supporting_evidence_ids:[],invalidation_conditions:['单价跌破成本'],watch_metrics:['DC 营收'],status:'ACTIVE',created_at:'2026-09-01T00:00:00Z',updated_at:'2026-09-01T00:00:00Z',pillars:[{id:'p1',text:'推理占比上升',resolvable_by:'季报',deadline:null}]};
 const src=(id:string,title:string):SourceDocument=>({id,source_type:'NEWS',title,url:`https://n.example.com/${id.slice(0,1)}`,author:null,published_at:null,ingested_at:'2026-09-22T00:00:00Z',raw_text:'正文 '+title,content_hash:'h'+id,trust_level:'MEDIUM',entity_ids:[],metadata:{},event_time:null,available_at:'2026-09-22T00:00:00Z',source_version:'2',cluster_id:null,cluster_first:null,origin_type:null,market:'US',permission:'public'});
 const selected:SelectedCard={kind:'evidence',thesis_id:thesis.id,evidence:{thesis_id:thesis.id,
  support:[{source_id:S1,source_version:'2',judgment_ids:['j1','j2'],origin:'filing_or_regulator',host:'n.example.com',unfamiliar:false,direction:'support'}],
