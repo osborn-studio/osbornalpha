@@ -166,6 +166,8 @@ export interface DecisionInput {
   frozen_at?: string | null;
   workspace?: string;
   analyst_id?: string | null;
+  /** WP-E4: the S4 observation this decision produced (must belong to the owner); null until one exists. */
+  observation_id?: string | null;
 }
 
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -193,18 +195,24 @@ export async function recordDecision(actor: S4Actor, input: DecisionInput): Prom
   if (input.arm === 'human_baseline' && input.frozen_at == null) fail('invalid_schema');
   const workspace = input.workspace ?? 'personal';
   if (!WORKSPACE.test(workspace) || (input.analyst_id != null && !isUuid(input.analyst_id))) fail('invalid_schema');
+  const observationId = input.observation_id ?? null;
+  if (observationId !== null && !isUuid(observationId)) fail('invalid_schema');
   return transaction(actor, async db => {
     if (!await exists(db, 'research_theses', actor.userId, input.thesis_id)) fail('scope_denied');
+    if (observationId !== null) {
+      const owned = (await db.query('select 1 from public.research_s4_observation_state where user_id=$1 and observation_id=$2', [actor.userId, observationId])).rowCount;
+      if (owned !== 1) fail('scope_denied');
+    }
     if (cited.length) {
       const found = (await db.query('select count(*) n from public.research_judgments where user_id=$1 and id=any($2::uuid[])', [actor.userId, cited])).rows[0].n;
       if (Number(found) !== cited.length) fail('scope_denied');
     }
     const id = randomUUID(), at = await serverTime(db);
-    await db.query(`insert into public.research_decisions(user_id,id,thesis_id,week_of,arm,action,reason,cited_judgment_ids,card_id,time_spent_minutes,frozen_at,workspace,analyst_id,created_at)
-      values($1,$2,$3,$4,$5,$6,$7,$8::uuid[],$9,$10,$11,$12,$13,$14)`,
+    await db.query(`insert into public.research_decisions(user_id,id,thesis_id,week_of,arm,action,reason,cited_judgment_ids,card_id,time_spent_minutes,frozen_at,workspace,analyst_id,observation_id,created_at)
+      values($1,$2,$3,$4,$5,$6,$7,$8::uuid[],$9,$10,$11,$12,$13,$14,$15)`,
       [actor.userId, id, input.thesis_id, input.week_of, input.arm, input.action, input.reason, cited, input.card_id ?? null,
-       input.time_spent_minutes ?? null, input.frozen_at ?? null, workspace, input.analyst_id ?? null, at]);
-    await audit(db, actor, 'ledger.decision', 'research_decision', id, { thesis_id: input.thesis_id, week_of: input.week_of, arm: input.arm, action: input.action, cited_judgment_ids: cited }, at);
+       input.time_spent_minutes ?? null, input.frozen_at ?? null, workspace, input.analyst_id ?? null, observationId, at]);
+    await audit(db, actor, 'ledger.decision', 'research_decision', id, { thesis_id: input.thesis_id, week_of: input.week_of, arm: input.arm, action: input.action, cited_judgment_ids: cited, observation_id: observationId }, at);
     return { id, created_at: at };
   });
 }
