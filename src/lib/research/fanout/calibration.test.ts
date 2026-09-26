@@ -273,3 +273,20 @@ describe('Codex round 3 regressions',()=>{
   expect(evaluateStopRules([metric(0.91)],{metrics:[metric(0.85)]}).find(x=>x.rule==='lock_version_recalibrate')).toMatchObject({triggered:true});
  });
 });
+
+describe('Codex round 4 regressions',()=>{
+ it('treats relevance-gated Q2 rows as unavoidable abstentions when proposing thresholds',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<30;i++)rows.push(q2(0.9,'support','support'));
+  // Gated by Q1 = not relevant: distribution kept, but the runtime abstains whatever Q2's threshold is.
+  for(let i=0;i<30;i++)rows.push({...q2(0.9,'support','support'),selected:null,abstained:true,gate_open:false});
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q2')!;
+  expect(p.status).toBe('proposed');
+  expect(p.metrics.coverage).toBeLessThanOrEqual(0.5);
+ });
+ it('counts labels per backend on deduplicated material-level rows',()=>{
+  const rows:ReportRow[]=[];
+  for(let m=0;m<30;m++)for(let t=0;t<10;t++)rows.push(row({question_id:'Q3',source_id:`m${m}`,confidence:0.9,selected:'filing_or_regulator',label:'filing_or_regulator',distribution:{filing_or_regulator:0.9}}));
+  expect(classMetrics(rows)[0]!.labels).toBe(30);
+ });
+});

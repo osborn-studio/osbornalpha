@@ -15,6 +15,12 @@ export interface ReportRow {
   distribution: Record<string, number>;
   /** Latest human label for the judgment, or null. */
   label: string | null;
+  /**
+   * For thesis-gated follow-ups (Q2/Q4/Q5): whether the same run's Q1 for this source × thesis ×
+   * backend answered "relevant". `false` means the runtime abstains whatever the follow-up's own
+   * threshold is; `null`/absent means unknown (treated as open).
+   */
+  gate_open?: boolean | null;
 }
 
 export interface ReportMetric {

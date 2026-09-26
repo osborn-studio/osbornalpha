@@ -151,7 +151,7 @@ export function classMetrics(rows: ReportRow[]): BackendMetrics[] {
         ece_before: e.before, ece_after: e.after, p50_latency_ms: m.p50_latency_ms, p95_latency_ms: m.p95_latency_ms, cost_micros_per_1k: m.cost_micros_per_1k };
     });
     return {
-      backend, labels: mine.filter(r => r.label !== null).length,
+      backend, labels: dedupeMaterialLevel(mine).filter(r => r.label !== null).length,
       important_recall: rate(q1True.filter(r => !r.abstained && r.selected === 'true').length, q1True.length),
       false_support: rate(q2Decided.filter(r => r.selected === 'support' && r.label !== 'support').length, q2Decided.length),
       questions,
@@ -205,14 +205,19 @@ export function proposeThresholds(rows: ReportRow[]): ThresholdProposal[] {
         metrics: { recall: round6(best.recall), abstain_rate: round6(best.abstain), precision: round6(best.precision) } };
     }
     if (q === 'Q5') {
-      const pts = labeled.map(r => ({ p: pTrue(r), t: r.label === 'true' })).filter((x): x is { p: number; t: boolean } => x.p !== null);
+      // Q5 is thesis-gated too: closed rows are abstentions at every threshold.
+      const open = labeled.filter(r => r.gate_open !== false);
+      const pts = open.map(r => ({ p: pTrue(r), t: r.label === 'true' })).filter((x): x is { p: number; t: boolean } => x.p !== null);
       if (pts.length < MIN_LABELS) return { ...base, status: 'insufficient_labels', proposed: null, metrics: {} };
+      const abstainRate = (labeled.length - pts.length) / labeled.length;
       let best: { t: number; acc: number } | null = null;
-      for (const t of grid(0.2, 0.8, 0.05)) { const acc = pts.filter(x => (x.p >= t) === x.t).length / pts.length; if (!best || acc > best.acc) best = { t, acc }; }
-      return { ...base, status: 'proposed', proposed: { retelling_below: best!.t }, metrics: { accuracy: round6(best!.acc) } };
+      for (const t of grid(0.2, 0.8, 0.05)) { const acc = pts.filter(x => (x.p >= t) === x.t).length / labeled.length; if (!best || acc > best.acc) best = { t, acc }; }
+      return { ...base, status: abstainRate <= 0.3 ? 'proposed' : 'infeasible', proposed: abstainRate <= 0.3 ? { retelling_below: best!.t } : null, metrics: { accuracy: round6(best!.acc), abstain_rate: round6(abstainRate) } };
     }
     // Choice questions: a minimum confidence.
-    const pts = labeled.map(r => ({ c: r.confidence, sel: argmax(r.distribution ?? {}) ?? r.selected, label: r.label as string })).filter((x): x is { c: number; sel: string; label: string } => typeof x.c === 'number');
+    // Rows closed by the relevance gate (Q1 said "not relevant") can never be decided by this
+    // question's threshold: they count as unavoidable abstentions, like score-less rows.
+    const pts = labeled.filter(r => r.gate_open !== false).map(r => ({ c: r.confidence, sel: argmax(r.distribution ?? {}) ?? r.selected, label: r.label as string })).filter((x): x is { c: number; sel: string; label: string } => typeof x.c === 'number');
     if (pts.length < MIN_LABELS) return { ...base, status: 'insufficient_labels', proposed: null, metrics: {} };
     const unscored = labeled.length - pts.length;
     if (q === 'Q2') {
