@@ -245,3 +245,31 @@ describe('Codex round 2 regressions',()=>{
   expect(classMetrics(rows)[0]!.questions.find(q=>q.question_id==='Q2')).toMatchObject({labeled:80,decided:40});
  });
 });
+
+describe('Codex round 3 regressions',()=>{
+ it('searches Q1 thresholds across the full probability range',()=>{
+  const rows:ReportRow[]=[];
+  for(let i=0;i<30;i++){rows.push(q1(0.45,'true'));rows.push(q1(0.1,'false'));}
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q1')!;
+  expect(p.status).toBe('proposed');
+  expect(p.proposed!.relevant_above).toBeLessThan(0.45);
+  expect(p.proposed!.irrelevant_below).toBeGreaterThan(0.1);
+  expect(p.metrics.recall).toBe(1);
+ });
+ it('counts score-less Q3/Q4 abstentions against the 30% limit',()=>{
+  const q3=(i:number,conf:number|null,selected:string|null,label:string):ReportRow=>row({question_id:'Q3',source_id:`m${i}`,confidence:conf,selected,abstained:conf===null,distribution:conf===null?{}:{[selected as string]:0.5+conf/2},label});
+  const rows:ReportRow[]=[];
+  for(let i=0;i<30;i++)rows.push(q3(i,0.9,'filing_or_regulator','filing_or_regulator'));
+  for(let i=0;i<70;i++)rows.push(q3(100+i,null,null,'filing_or_regulator'));
+  const p=proposeThresholds(rows).find(x=>x.question_id==='Q3')!;
+  expect(p.status).toBe('infeasible');
+  expect(p.metrics.abstain_rate).toBeCloseTo(0.7,6);
+ });
+ it('treats exactly five points of drift as within tolerance',()=>{
+  const metric=(acc:number)=>({backend:'jev',labels:400,important_recall:{k:90,n:100,rate:0.9,low:0.83,high:0.94},false_support:{k:2,n:100,rate:0.02,low:0,high:0.07},
+   questions:[{question_id:'Q1',n:100,labeled:100,decided:100,accuracy:acc,abstain_rate:0.1,ece_before:null,ece_after:null}]}) as any;
+  const v=evaluateStopRules([metric(90/100)],{metrics:[metric(85/100)]});
+  expect(v.find(x=>x.rule==='lock_version_recalibrate')).toMatchObject({triggered:false,status:'evaluated'});
+  expect(evaluateStopRules([metric(0.91)],{metrics:[metric(0.85)]}).find(x=>x.rule==='lock_version_recalibrate')).toMatchObject({triggered:true});
+ });
+});

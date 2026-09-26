@@ -187,7 +187,8 @@ export function proposeThresholds(rows: ReportRow[]): ThresholdProposal[] {
       if (pts.length < MIN_LABELS) return { ...base, status: 'insufficient_labels', proposed: null, metrics: {} };
       const relevant = pts.filter(x => x.t).length + unscoredRelevant;
       let best: { lo: number; hi: number; recall: number; abstain: number; precision: number; feasible: boolean } | null = null;
-      for (const hi of grid(0.5, 0.95, 0.05)) for (const lo of grid(0.05, 0.5, 0.05)) {
+      // Full range: decide() accepts any pair with lo < hi, so miscalibrated but separable scores can be refitted.
+      for (const hi of grid(0.05, 0.95, 0.05)) for (const lo of grid(0.05, 0.95, 0.05)) {
         if (lo >= hi) continue;
         const sel = pts.filter(x => x.p > hi), abst = pts.filter(x => x.p >= lo && x.p <= hi);
         const recall = relevant ? sel.filter(x => x.t).length / relevant : 0, abstain = (abst.length + unscored) / all.length;
@@ -235,16 +236,20 @@ export function proposeThresholds(rows: ReportRow[]): ThresholdProposal[] {
     // Q3/Q4 never abstain at runtime: below the threshold `decide()` answers the fallback option,
     // so the evaluated classifier is "argmax above t, fallback below t" and accuracy covers every row.
     const fallback = String((THRESHOLDS as Record<string, Record<string, unknown>>)[q]?.fallback ?? '');
+    // Score-less rows (missing or invalid answers) are unavoidable abstentions at every threshold.
+    const abstainRate = labeled.length ? unscored / labeled.length : 0;
+    const feasible = abstainRate <= 0.3;
     let bestQ: { t: number; acc: number; fallback_rate: number } | null = null;
     for (const t of grid(0.3, 0.95, 0.05)) {
       const predicted = pts.map(x => (x.c >= t ? x.sel : fallback));
-      const acc = pts.length ? predicted.filter((p, i) => p === pts[i]!.label).length / pts.length : 0;
+      const acc = labeled.length ? predicted.filter((p, i) => p === pts[i]!.label).length / labeled.length : 0;
       const fallbackRate = pts.length ? pts.filter(x => x.c < t).length / pts.length : 0;
       const better = !bestQ ? true : acc > bestQ.acc || (acc === bestQ.acc && fallbackRate < bestQ.fallback_rate);
       if (better) bestQ = { t, acc, fallback_rate: fallbackRate };
     }
     if (!bestQ) return { ...base, status: 'infeasible', proposed: null, metrics: {} };
-    return { ...base, status: 'proposed', proposed: { min_confidence: bestQ.t }, metrics: { accuracy: round6(bestQ.acc), fallback_rate: round6(bestQ.fallback_rate) } };
+    return { ...base, status: feasible ? 'proposed' : 'infeasible', proposed: feasible ? { min_confidence: bestQ.t } : null,
+      metrics: { accuracy: round6(bestQ.acc), fallback_rate: round6(bestQ.fallback_rate), abstain_rate: round6(abstainRate) } };
   });
 }
 
@@ -306,7 +311,8 @@ export function evaluateStopRules(metrics: BackendMetrics[], baseline?: { metric
   else {
     const prev = baseline.metrics.find(m => m.backend === 'jev');
     const comparable = prev ? jev.questions.map(q => { const p = prev.questions.find(x => x.question_id === q.question_id); return p && p.accuracy !== null && q.accuracy !== null && p.decided >= MIN_LABELS && q.decided >= MIN_LABELS ? { q: q.question_id, d: q.accuracy - p.accuracy } : null; }).filter((x): x is { q: string; d: number } => x !== null) : [];
-    const drifts = comparable.filter(x => Math.abs(x.d) > 0.05);
+    // "More than five points": compare on rounded percentage points so 85/100 → 90/100 is not a drift.
+    const drifts = comparable.filter(x => Math.round(Math.abs(x.d) * 1e6) / 1e6 > 0.05);
     out.push({ rule: 'lock_version_recalibrate', triggered: drifts.length > 0, status: !prev ? 'not_applicable' : comparable.length === 0 ? 'insufficient_evidence' : 'evaluated',
       evidence: drifts.map(d => `${d.q} ${d.d >= 0 ? '+' : ''}${(d.d * 100).toFixed(1)} pt`).join(', ') || (comparable.length ? 'within 5 pt' : `no question with ≥ ${MIN_LABELS} labels in both reports`) });
   }
