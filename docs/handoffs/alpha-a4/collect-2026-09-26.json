@@ -1,0 +1,167 @@
+{
+  "ran_at": "2026-09-26T03:28:04.509Z",
+  "since": "2026-09-19T03:27:40.317Z",
+  "companies": 21,
+  "max_per_company": 5,
+  "store": "in-memory (no database)",
+  "receipts": [
+    {
+      "source": "edgar",
+      "started_at": "2026-09-26T03:27:40.318Z",
+      "finished_at": "2026-09-26T03:27:44.192Z",
+      "companies": 9,
+      "fetched": 1,
+      "inserted": 1,
+      "duplicates": 0,
+      "versioned": 0,
+      "skipped": 0,
+      "lookups": 0,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "source": "cninfo",
+      "started_at": "2026-09-26T03:27:44.193Z",
+      "finished_at": "2026-09-26T03:27:52.083Z",
+      "companies": 10,
+      "fetched": 9,
+      "inserted": 9,
+      "duplicates": 0,
+      "versioned": 0,
+      "skipped": 0,
+      "lookups": 0,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "source": "hkexnews",
+      "started_at": "2026-09-26T03:27:52.084Z",
+      "finished_at": "2026-09-26T03:28:04.509Z",
+      "companies": 2,
+      "fetched": 2,
+      "inserted": 2,
+      "duplicates": 0,
+      "versioned": 0,
+      "skipped": 0,
+      "lookups": 2,
+      "failures": [],
+      "ok": true
+    }
+  ],
+  "rows": 12,
+  "rows_by_market": {
+    "US": 1,
+    "A": 9,
+    "HK": 2
+  },
+  "sample": [
+    {
+      "market": "US",
+      "title": "8-K 8-K (FactSet Research Systems Inc., 2026-09-25)",
+      "url": "https://www.sec.gov/Archives/edgar/data/1013237/000162828026063495/fds-20260923.htm",
+      "event_time": "2026-09-25T00:00:00.000Z",
+      "available_at": "2026-09-25T07:01:25.000Z",
+      "source_version": "1",
+      "raw_text_chars": 4037
+    },
+    {
+      "market": "A",
+      "title": "恒生电子股份有限公司关于股票期权限制行权期间的提示性公告",
+      "url": "http://static.cninfo.com.cn/finalpage/2026-09-23/1225576776.PDF",
+      "event_time": "2026-09-22T16:00:00.000Z",
+      "available_at": "2026-09-26T03:27:45.585Z",
+      "source_version": "1",
+      "raw_text_chars": 132
+    },
+    {
+      "market": "A",
+      "title": "东方财富信息股份有限公司关于签署最高额保证合同的公告",
+      "url": "http://static.cninfo.com.cn/finalpage/2026-09-24/1225579911.PDF",
+      "event_time": "2026-09-23T16:00:00.000Z",
+      "available_at": "2026-09-26T03:27:46.875Z",
+      "source_version": "1",
+      "raw_text_chars": 130
+    },
+    {
+      "market": "A",
+      "title": "东方财富信息股份有限公司关于签署最高额保证合同的公告",
+      "url": "http://static.cninfo.com.cn/finalpage/2026-09-22/1225575206.PDF",
+      "event_time": "2026-09-21T16:00:00.000Z",
+      "available_at": "2026-09-26T03:27:46.876Z",
+      "source_version": "1",
+      "raw_text_chars": 130
+    },
+    {
+      "market": "A",
+      "title": "关于2026年第二次临时股东会更正补充公告",
+      "url": "http://static.cninfo.com.cn/finalpage/2026-09-24/1225579351.PDF",
+      "event_time": "2026-09-23T16:00:00.000Z",
+      "available_at": "2026-09-26T03:27:49.351Z",
+      "source_version": "1",
+      "raw_text_chars": 125
+    },
+    {
+      "market": "A",
+      "title": "董事、高级管理人员薪酬管理制度(2026年9月修订)",
+      "url": "http://static.cninfo.com.cn/finalpage/2026-09-23/1225576301.PDF",
+      "event_time": "2026-09-22T16:00:00.000Z",
+      "available_at": "2026-09-26T03:27:49.352Z",
+      "source_version": "1",
+      "raw_text_chars": 130
+    },
+    {
+      "market": "A",
+      "title": "关于召开2026年第二次临时股东会的通知",
+      "url": "http://static.cninfo.com.cn/finalpage/2026-09-23/1225576299.PDF",
+      "event_time": "2026-09-22T16:00:00.000Z",
+      "available_at": "2026-09-26T03:27:49.352Z",
+      "source_version": "1",
+      "raw_text_chars": 124
+    },
+    {
+      "market": "A",
+      "title": "中国银河证券股份有限公司关于深圳市财富趋势科技股份有限公司使用部分超募资金永久补充流动资金的核查意见",
+      "url": "http://static.cninfo.com.cn/finalpage/2026-09-23/1225576298.PDF",
+      "event_time": "2026-09-22T16:00:00.000Z",
+      "available_at": "2026-09-26T03:27:49.352Z",
+      "source_version": "1",
+      "raw_text_chars": 154
+    },
+    {
+      "market": "A",
+      "title": "关于修订《董事、高级管理人员薪酬管理制度》的公告",
+      "url": "http://static.cninfo.com.cn/finalpage/2026-09-23/1225576291.PDF",
+      "event_time": "2026-09-22T16:00:00.000Z",
+      "available_at": "2026-09-26T03:27:49.352Z",
+      "source_version": "1",
+      "raw_text_chars": 128
+    },
+    {
+      "market": "A",
+      "title": "股东减持股份结果公告",
+      "url": "http://static.cninfo.com.cn/finalpage/2026-09-22/1225574176.PDF",
+      "event_time": "2026-09-21T16:00:00.000Z",
+      "available_at": "2026-09-26T03:27:52.083Z",
+      "source_version": "1",
+      "raw_text_chars": 114
+    },
+    {
+      "market": "HK",
+      "title": "翌日披露報表",
+      "url": "https://www1.hkexnews.hk/listedco/listconews/sehk/2026/0925/2026092500932_c.pdf",
+      "event_time": "2026-09-25T10:20:00.000Z",
+      "available_at": "2026-09-26T03:27:58.754Z",
+      "source_version": "1",
+      "raw_text_chars": 156
+    },
+    {
+      "market": "HK",
+      "title": "根據2024年股份計劃授出含表現目標的股份獎勵及更新受限制股份單位計劃限額",
+      "url": "https://www1.hkexnews.hk/listedco/listconews/sehk/2026/0922/2026092201424_c.pdf",
+      "event_time": "2026-09-22T14:22:00.000Z",
+      "available_at": "2026-09-26T03:27:58.754Z",
+      "source_version": "1",
+      "raw_text_chars": 186
+    }
+  ]
+}
