@@ -2,7 +2,9 @@
  * WP-A2 identifier check digits. The database only constrains shape; these
  * pure functions are the authority on validity for ISIN, LEI, USCI and CIK.
  */
-import { fail } from '../ingest/pa-v1/json.js';
+// Same error shape as ingest/pa-v1/json.js fail(), without importing it: that module pulls in
+// node:crypto and this file is also bundled for the browser (research setup wizard).
+const fail = (code: string): never => { throw Object.assign(new Error(code), { code, recovery: 'Check the source and retry.' }); };
 
 const base36 = (s: string) => [...s].map(c => parseInt(c, 36).toString()).join('');
 
