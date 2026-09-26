@@ -13,7 +13,7 @@ function Assertion({ a }: { a: CardAssertion }) {
   return (
     <li>
       {a.text}{' '}
-      <Link href={`/research/sources#src-${a.source_id}`} className="text-xs text-gray-500 underline" title={`判断 ${a.judgment_ids.length} 条`}>
+      <Link href={`/research/sources/${a.source_id}?v=${encodeURIComponent(a.source_version)}`} className="text-xs text-gray-500 underline" title={`判断 ${a.judgment_ids.length} 条`}>
         [{a.source_id.slice(0, 8)}@{a.source_version}]
       </Link>
     </li>

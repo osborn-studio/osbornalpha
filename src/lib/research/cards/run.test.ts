@@ -65,4 +65,35 @@ describe('runCards',()=>{
   const out=await runCards(ctx,{userId:owner,kind:'agent'},{weekOf:'2026-09-21',llm:async()=>({content:'{}',model:'x'}),loadLedger:async()=>[]});
   expect(out).toMatchObject({theses_with_evidence:0,selected:0,written:0,counter_card:'none'});
  });
+ it('seeds the card axioms when an older installation lacks them, and fails closed when AX006 is disabled',async()=>{
+  const t1=thesis(1),s1=src(1);
+  const rows=judge(s1,t1,'support');
+  const advice=async()=>({content:JSON.stringify({title:'卡',fields:{change_and_timing:[{text:'建议买入',source_ids:[s1.id]}]}}),model:'x'});
+  // No research_axioms rows at all (pre-A8 database): the runner backfills the seeds before generating.
+  const fresh=makeMockCtx({research_theses:[t1],research_source_documents:[s1]}) as unknown as {ctx:ResearchCtx;store:any};
+  const out=await runCards(fresh.ctx,{userId:owner,kind:'agent'},{weekOf:'2026-09-21',llm:advice,loadLedger:async()=>rows});
+  expect(out.blocked).toBeGreaterThan(0);
+  expect(fresh.store.rows('research_axioms').map((a:any)=>a.code)).toEqual(expect.arrayContaining(['AX005','AX006']));
+  // AX006 deliberately disabled: never generate advice-unchecked cards.
+  const disabled=makeMockCtx({research_theses:[t1],research_source_documents:[s1],research_axioms:axioms.map(a=>a.code==='AX006'?{...a,active:false}:a)}) as unknown as {ctx:ResearchCtx;store:any};
+  await expect(runCards(disabled.ctx,{userId:owner,kind:'agent'},{weekOf:'2026-09-21',llm:advice,loadLedger:async()=>rows})).rejects.toThrow(/AX006/);
+  expect(disabled.store.rows('research_cards')).toHaveLength(0);
+ });
+ it('honours the weekly limits across repeated runs: ≤4 evidence and ≤1 counter card per week including persisted cards',async()=>{
+  const theses=Array.from({length:6},(_,i)=>thesis(i));
+  const sources=theses.map((_,i)=>src(i,{url:`https://s${i}.example.com/a`}));
+  const existing=theses.slice(0,3).map(t=>({id:randomUUID(),week_of:'2026-09-21',thesis_id:t.id,kind:'evidence',title:'old',fields:{},assertions:[],evidence:{},generation:{},axiom_results:[],status:'generated',created_at:at(3)}));
+  existing.push({...existing[0],id:randomUUID(),kind:'counter'});
+  const {ctx,store}=makeMockCtx({research_theses:theses,research_source_documents:sources,research_axioms:axioms,research_cards:existing}) as unknown as {ctx:ResearchCtx;store:any};
+  // New judgments make theses 3,4,5 eligible (and give thesis 4 counter-evidence).
+  const rows=[...judge(sources[3],theses[3],'support'),...judge(sources[4],theses[4],'weaken'),...judge(sources[5],theses[5],'support'),...judge(sources[0],theses[0],'support')];
+  const llm=async({user}:{system:string;user:string})=>{const sid=sources.find(s=>user.includes(s.id))!.id;return {content:JSON.stringify(draft('卡',sid)),model:'fake'};};
+  const out=await runCards(ctx,{userId:owner,kind:'agent'},{weekOf:'2026-09-21',llm,loadLedger:async()=>rows});
+  // 3 evidence cards already exist → one slot left; a counter card already exists → none.
+  expect(out).toMatchObject({written:1,skipped_existing:1,skipped_limit:expect.any(Number)});
+  expect(out.skipped_limit).toBeGreaterThanOrEqual(1);
+  const cards=store.rows('research_cards');
+  expect(cards.filter((c:any)=>c.kind==='evidence')).toHaveLength(4);
+  expect(cards.filter((c:any)=>c.kind==='counter')).toHaveLength(1);
+ });
 });

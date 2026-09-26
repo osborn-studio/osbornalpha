@@ -7,13 +7,15 @@
 import { randomUUID } from 'node:crypto';
 import { listSourcesSince } from '../fanout/run';
 import { loadAxioms, type LlmFn } from '../memos';
+import { seedAxioms } from '../seed';
+import type { Axiom } from '../types';
 import { transaction, type S4Actor } from '../s4/db';
 import { audit, type ResearchCtx } from '../store';
 import { getThesis } from '../theses';
 import type { ResearchCard, SourceDocument } from '../types';
 import { collectEvidence, hostOf, type LedgerRow } from './evidence';
 import { generateCard } from './generate';
-import { selectCards, type CounterCardReason } from './select';
+import { MAX_EVIDENCE_CARDS, selectCards, type CounterCardReason } from './select';
 
 const CARDS = 'research_cards';
 const EPOCH = '1970-01-01T00:00:00.000Z';
@@ -35,9 +37,28 @@ export async function loadLedgerWeek(actor: S4Actor, weekOf: string): Promise<Le
 }
 
 export interface RunCardsOptions { weekOf?: string; llm: LlmFn; loadLedger?: (actor: S4Actor, weekOf: string) => Promise<LedgerRow[]>; dryRun?: boolean; runId?: string }
+export const CARD_AXIOMS = ['AX005', 'AX006'] as const;
+
+/**
+ * The card gate is mandatory: an installation seeded before AX006 existed gets
+ * the seeds backfilled; a deliberately disabled or still-missing card axiom
+ * fails the run closed instead of generating unchecked cards.
+ */
+export async function ensureCardAxioms(ctx: ResearchCtx): Promise<Axiom[]> {
+  let axioms = await loadAxioms(ctx);
+  const present = (code: string) => axioms.some(a => a.code === code);
+  if (!CARD_AXIOMS.every(present)) { await seedAxioms(ctx); axioms = await loadAxioms(ctx); }
+  for (const code of CARD_AXIOMS) {
+    const a = axioms.find(x => x.code === code);
+    if (!a) throw new Error(`card axiom ${code} is missing; seeding failed`);
+    if (!a.enabled) throw new Error(`card axiom ${code} is disabled; change cards cannot be generated without the trading-advice gate`);
+  }
+  return axioms;
+}
+
 export interface RunCardsSummary {
   run_id: string; week_of: string; ledger_rows: number; theses_with_evidence: number; excluded_private: number;
-  selected: number; counter_card: CounterCardReason; written: number; blocked: number; skipped_existing: number;
+  selected: number; counter_card: CounterCardReason; written: number; blocked: number; skipped_existing: number; skipped_limit: number;
   cards: Array<{ kind: string; thesis_id: string; title: string; status: string; support: number; counter: number }>;
 }
 
@@ -51,18 +72,24 @@ export async function runCards(ctx: ResearchCtx, actor: S4Actor, opts: RunCardsO
   const evidence = collectEvidence({ rows, sources: allSources, priorHosts });
   const selection = selectCards(evidence.theses);
   const summary: RunCardsSummary = { run_id, week_of: weekOf, ledger_rows: rows.length, theses_with_evidence: evidence.theses.length, excluded_private: evidence.excluded_private,
-    selected: selection.cards.length, counter_card: selection.counter_card, written: 0, blocked: 0, skipped_existing: 0, cards: [] };
+    selected: selection.cards.length, counter_card: selection.counter_card, written: 0, blocked: 0, skipped_existing: 0, skipped_limit: 0, cards: [] };
   if (opts.dryRun) {
     summary.cards = selection.cards.map(c => ({ kind: c.kind, thesis_id: c.thesis_id, title: '(dry-run)', status: 'dry-run', support: c.evidence.support.length, counter: c.evidence.counter.length }));
     return summary;
   }
   const { data: existingRows, error: existingError } = await ctx.supabase.from(CARDS).select('thesis_id, kind').eq('user_id', ctx.userId).eq('week_of', weekOf);
   if (existingError) throw new Error(existingError.message);
-  const existing = new Set(((existingRows ?? []) as Array<{ thesis_id: string; kind: string }>).map(r => `${r.thesis_id}|${r.kind}`));
-  const axioms = await loadAxioms(ctx);
+  const persisted = (existingRows ?? []) as Array<{ thesis_id: string; kind: string }>;
+  const existing = new Set(persisted.map(r => `${r.thesis_id}|${r.kind}`));
+  // Weekly limits count persisted cards too: ≤MAX_EVIDENCE_CARDS evidence and one counter card per week.
+  let evidenceSlots = MAX_EVIDENCE_CARDS - persisted.filter(r => r.kind === 'evidence').length;
+  let counterSlots = 1 - persisted.filter(r => r.kind === 'counter').length;
+  const axioms = await ensureCardAxioms(ctx);
   const byId = new Map(allSources.map(s => [s.id, s]));
   for (const card of selection.cards) {
     if (existing.has(`${card.thesis_id}|${card.kind}`)) { summary.skipped_existing++; continue; }
+    if (card.kind === 'evidence' ? evidenceSlots <= 0 : counterSlots <= 0) { summary.skipped_limit++; continue; }
+    if (card.kind === 'evidence') evidenceSlots--; else counterSlots--;
     const thesis = await getThesis(ctx, card.thesis_id);
     if (!thesis) continue;
     const sources = [...card.evidence.support, ...card.evidence.counter].map(e => byId.get(e.source_id)).filter((s): s is SourceDocument => !!s);

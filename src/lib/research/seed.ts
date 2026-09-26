@@ -109,6 +109,16 @@ export async function seedResearchData(ctx: ResearchCtx): Promise<SeedResult> {
   for (const t of THEME_SEEDS) {
     await upsertEntity(ctx, { type: 'THEME', name: t.name, description: t.description });
   }
+  await seedAxioms(ctx);
+  return {
+    companies: COMPANY_SEEDS.length,
+    themes: THEME_SEEDS.length,
+    axioms: AXIOM_SEEDS.length,
+  };
+}
+
+/** Upsert the axiom seeds by (user_id, code). Idempotent; never touches `active` on existing rows. */
+export async function seedAxioms(ctx: ResearchCtx): Promise<number> {
   // Axiom upsert by (user_id, code): update the mutable columns on existing
   // rows (never their id — same semantics as the old ON CONFLICT DO UPDATE),
   // insert the rest. `active` is the Postgres column for the app's `enabled`.
@@ -144,9 +154,5 @@ export async function seedResearchData(ctx: ResearchCtx): Promise<SeedResult> {
       if (error) throw new Error(error.message);
     }
   }
-  return {
-    companies: COMPANY_SEEDS.length,
-    themes: THEME_SEEDS.length,
-    axioms: AXIOM_SEEDS.length,
-  };
+  return AXIOM_SEEDS.length;
 }
