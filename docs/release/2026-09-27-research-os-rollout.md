@@ -28,5 +28,14 @@ Production also carries `20260904090000` (watchlist decision metadata) from the 
 - Database: the 14 migrations are additive (new tables/columns/policies); the previous build ignores them. Restore the pre-rollout archive only if an additive change itself must be undone.
 
 ## Deferred
-- `research_entity_keys` is empty in production: the WP-A2 seed (21 §13 candidates) has never run there. The setup wizard's candidate list stays empty until `scripts/entity-keys/seed.ts` runs against production (owner decision).
+- ~~`research_entity_keys` is empty in production~~ — resolved the same day, see *Addendum: entity-keys seed*.
 - S4 runtime (`ALPHA_S4_*`) is not configured in production; S4/S6 routes stay dormant.
+
+## Addendum: entity-keys seed (2026-09-27, owner-authorized)
+- Pre-check (read-only, production env injected in memory via `vercel env run`): `RESEARCH_OWNER_USER_ID` exists in `auth.users` and is the single admin profile.
+- Snapshot of the owner's `research_entities` before the write (26 rows) saved to `_release-backups/osbornalpha/2026-09-27/research_entities.before-seed.json` (not committed).
+- Dry run of the seed's entity matching: 18 new entities; 3 existing ones updated (Palantir, ServiceNow, Salesforce), tickers unchanged, only aliases and metadata merged; no other existing row touched.
+- `scripts/entity-keys/seed.ts`: upserted 21 companies, 21 securities; `entity_table_version=f6e6472627500e98c970a441c2d04203a7cdfed05b6241a7e491a7cd034e5d38`.
+- After: `research_entities` 26 → 44, `research_entity_keys` 0 → 21 (all `in_scope`), `research_entity_securities` 0 → 21 (all primary).
+- All 21 start `in_scope`, which is above the wizard's 12–15 target; the owner prunes in `/research/setup`.
+- Rollback: delete the owner's `research_entity_keys` / `research_entity_securities` rows and the 18 created entities, then restore the three updated entities from the snapshot.
