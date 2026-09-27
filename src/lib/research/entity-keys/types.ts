@@ -11,8 +11,8 @@ export interface Provenance { source: string; retrieved_at: string; ref?: string
 
 export interface CohortSecurity {
   exchange_code: string;            // 600570.SH / 0268.HK / PLTR
-  mic: string;                      // ISO 10383
-  isin: string;
+  mic: string | null;               // ISO 10383; null when unknown (owner-entered)
+  isin: string | null;
   market: HomeMarket;
   security_type: SecurityType;
   is_primary: boolean;

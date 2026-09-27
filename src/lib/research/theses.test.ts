@@ -306,3 +306,44 @@ describe('reviseKillCondition (§7.4.4)', () => {
     expect(killConditionRevisionsInQuarter({} as any, new Date('2026-01-01T00:00:00Z'))).toEqual({ count: 0, quarter: '2026Q1', needs_review: false });
   });
 });
+
+describe('createThesis idempotency (WP-A11 submission_id)', () => {
+  it('returns the same thesis for a repeated submission_id and stamps it into the pillar ids', async () => {
+    const { ctx, store } = makeMockCtx() as unknown as { ctx: ResearchCtx; store: MockStore };
+    const input = { ...VALID_INPUT, submission_id: '5f4d3c2b-0000-4000-8000-000000000001', pillars: [{ text: 'p1', resolvable_by: 'r1' }, { text: 'p2', resolvable_by: 'r2' }] };
+    const first = await createThesis(ctx, input);
+    expect(first.pillars!.map((p) => p.id)).toEqual(['5f4d3c2b-0000-4000-8000-000000000001:0', '5f4d3c2b-0000-4000-8000-000000000001:1']);
+    const again = await createThesis(ctx, { ...input, title: 'retry with the same submission id' });
+    expect(again.id).toBe(first.id);
+    expect(again.title).toBe(first.title);
+    expect(store.count('research_theses')).toBe(1);
+    // A different submission id is a different thesis; a missing one keeps today's behaviour.
+    const other = await createThesis(ctx, { ...input, submission_id: '5f4d3c2b-0000-4000-8000-000000000002' });
+    expect(other.id).not.toBe(first.id);
+    await createThesis(ctx, { ...VALID_INPUT, pillars: input.pillars });
+    expect(store.count('research_theses')).toBe(3);
+    await expect(createThesis(ctx, { ...input, submission_id: 'bad id!' })).rejects.toBeInstanceOf(ThesisError);
+    await expect(createThesis(ctx, { ...VALID_INPUT, submission_id: '5f4d3c2b-0000-4000-8000-000000000003' })).rejects.toThrow(/pillar/);
+  });
+});
+
+describe('createThesis idempotency is atomic (Codex round 17)', () => {
+  it('two concurrent creates with the same submission_id yield one row and the same id', async () => {
+    const { ctx, store } = makeMockCtx() as unknown as { ctx: ResearchCtx; store: MockStore };
+    const input = { ...VALID_INPUT, submission_id: '5f4d3c2b-0000-4000-8000-00000000c0de', pillars: [{ text: 'p1', resolvable_by: 'r1' }] };
+    const [a, b] = await Promise.all([createThesis(ctx, input), createThesis(ctx, input)]);
+    expect(a.id).toBe(b.id);
+    expect(store.count('research_theses')).toBe(1);
+    // The id is derived from (user, submission_id): a third call later returns the same row without inserting.
+    const c = await createThesis(ctx, input);
+    expect(c.id).toBe(a.id);
+    expect(store.count('research_theses')).toBe(1);
+  });
+
+  it('the mock store enforces primary-key uniqueness like PostgreSQL (23505)', async () => {
+    const { ctx } = makeMockCtx() as unknown as { ctx: ResearchCtx };
+    await ctx.supabase.from('research_theses').insert({ id: 'x', user_id: ctx.userId, title: 't' });
+    const { error } = await ctx.supabase.from('research_theses').insert({ id: 'x', user_id: ctx.userId, title: 't2' });
+    expect(error).toMatchObject({ code: '23505' });
+  });
+});

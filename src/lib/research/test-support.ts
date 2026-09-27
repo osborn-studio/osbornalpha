@@ -188,6 +188,12 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any }> {
       const { op, payload } = this.pending;
       if (op === 'insert') {
         const rows = Array.isArray(payload) ? payload : [payload];
+        // Primary-key uniqueness on `id`, as PostgreSQL enforces it (SQLSTATE 23505).
+        for (const r of rows) {
+          if (r.id !== undefined && table.some((x) => x.id === r.id)) {
+            return { data: null, error: { code: '23505', message: `duplicate key value violates unique constraint (${this.table}.id)` } };
+          }
+        }
         for (const r of rows) table.push(clone(r));
         return { data: null, error: null };
       }

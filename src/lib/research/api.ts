@@ -10,6 +10,7 @@ import { SourceValidationError } from './sources';
 import { ThesisError } from './theses';
 import { AxiomBlocked, PlaybookError } from './playbooks';
 import { EvalError } from './evals';
+import { ScopeError } from './entity-keys/scope';
 
 export function researchError(e: unknown): NextResponse {
   if (e instanceof ResearchForbidden) {
@@ -46,6 +47,12 @@ export function researchError(e: unknown): NextResponse {
   if (e instanceof PlaybookError) {
     return NextResponse.json(
       { error: { code: 'PLAYBOOK_ERROR', message: e.message } },
+      { status: e.status },
+    );
+  }
+  if (e instanceof ScopeError) {
+    return NextResponse.json(
+      { error: { code: 'SCOPE_ERROR', message: e.message } },
       { status: e.status },
     );
   }
