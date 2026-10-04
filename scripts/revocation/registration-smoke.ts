@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {randomUUID,generateKeyPairSync,sign} from 'node:crypto';
 import {Pool} from 'pg';
+import {importRegisteredCandidate} from '../../src/lib/research/s4/import';
+import {closeS4Pool} from '../../src/lib/research/s4/db';
 import {startLocalDatabase,stopLocalDatabase} from '../s4/local-db';
 import {testPack} from '../s4/test-pack';
 import {canonicalize,digest} from '../../src/lib/research/ingest/pa-v1/json.js';
@@ -15,7 +17,11 @@ async function main(){
  const state=await startLocalDatabase(),db=new Pool({connectionString:state.adminUrl,max:3,connectionTimeoutMillis:5000,statement_timeout:10000});let primary:unknown;
  try{
   await db.query(readFileSync('scripts/revocation/candidate-schema.sql','utf8'));
+  // Disposable runtime role only; no production ACL provisioning is claimed.
+  await db.query('grant usage on schema research_revocation_candidate to alpha_s4_runtime; grant select on all tables in schema research_revocation_candidate to alpha_s4_runtime');
+  process.env.ALPHA_S4_ENABLED='1';process.env.ALPHA_S4_DATABASE_URL=state.runtimeUrl;
   const actor=randomUUID(),t=testPack(actor),feedId=randomUUID();
+  const s4Actor={userId:actor,kind:'agent' as const};
   const expected={feedId,scope:t.scope,sourceId:t.sourceId,grantId:t.config.grant.grant_id,grantVersion:1};
   const reference={protocol_version:'pa-grant-reference/v1',feed_id:feedId,owner_scope:t.scope,source_id:t.sourceId,grant_id:expected.grantId,grant_version:1,observed_at:t.version.ingested_at,revocation_seq_at_export:'0'};
   t.pack.manifest.extensions['pa.revocation_reference']=reference;t.pack.files['manifest.json']=canonicalize(t.pack.manifest);t.binding.approvedManifestHash=digest(t.pack.manifest);
@@ -24,6 +30,7 @@ async function main(){
   const rejected=(promise:Promise<unknown>,cause:string)=>assert.rejects(promise,e=>e instanceof Error&&e.message==='revocation_registration_failed'&&e.cause===cause);
   const register=()=>registerCandidateReference(db,actor,hash,raw,expected);
   await db.query('insert into auth.users(id) values($1)',[actor]);
+  await db.query("update public.profiles set role='admin' where id=$1",[actor]);
   await db.query('insert into research_revocation_candidate.feed(feed_id,local_owner,upstream_user) values($1,$2,$3)',[feedId,actor,t.scope.user_id]);
   await rejected(register(),'binding_missing'); // no approval, no side-effect
   await db.query('insert into public.research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[actor,hash,t.binding]);
@@ -33,6 +40,8 @@ async function main(){
   const page={protocol_version:'pa-revocation/v1',feed_id:feedId,owner_scope:t.scope,from_seq:'0',through_seq:'0',latest_seq:'0',published_at:new Date().toISOString(),events:[]};
   const apply=async(p:unknown)=>{const b=Buffer.from(JSON.stringify(p));return applyRevocationPage(db,registration,b,sign(null,b,privateKey).toString('hex'));};
   await apply(page);
+  await assert.rejects(importRegisteredCandidate(s4Actor,raw),/revocation_access_denied/);
+  assert.equal((await db.query('select count(*)::int n from public.research_s4_candidates')).rows[0].n,0);
   let called=false;
   await assert.rejects(withRegisteredCandidate(db,actor,hash,expected,async()=>{called=true;return 'denied';}),/revocation_access_denied/);
   assert.equal(called,false);
@@ -56,6 +65,23 @@ async function main(){
   await db.query('drop trigger reject_mapping on research_revocation_candidate.binding_map');
   assert.deepEqual((await Promise.all([register(),register()])).map(x=>x.status).sort(),['duplicate','registered']);
   assert.equal((await db.query('select cursor from research_revocation_candidate.feed')).rows[0].cursor,'0');
+  const imported=await importRegisteredCandidate(s4Actor,raw);
+  assert.equal(imported.duplicate,false);
+  assert.deepEqual(await importRegisteredCandidate(s4Actor,raw),{id:imported.id,duplicate:true});
+  await db.query("insert into public.research_s4_integrity(user_id,reason) values($1,'anchor_integrity_failed')",[actor]);
+  await assert.rejects(importRegisteredCandidate(s4Actor,raw),/anchor_integrity_failed/);
+  await db.query('delete from public.research_s4_integrity where user_id=$1',[actor]);
+  for(const change of [{grant_version:2},{source_id:randomUUID()},{revocation_seq_at_export:'1'}]){
+   const changed=structuredClone(t.pack);changed.manifest.extensions['pa.revocation_reference']={...reference,...change};changed.files['manifest.json']=canonicalize(changed.manifest);
+   await db.query('update public.research_s4_bindings set binding=$2 where user_id=$1',[actor,{...t.binding,approvedManifestHash:digest(changed.manifest)}]);
+   await assert.rejects(importRegisteredCandidate(s4Actor,JSON.stringify(changed)),change.revocation_seq_at_export?/export_watermark_ahead/:/invalid_revocation_candidate/);
+   assert.equal((await db.query('select count(*)::int n from public.research_s4_candidates')).rows[0].n,1);
+  }
+  await db.query('update public.research_s4_bindings set binding=$2 where user_id=$1',[actor,t.binding]);
+  const tampered=structuredClone(t.pack);tampered.manifest.extensions['pa.revocation_reference']={...reference,grant_version:2};tampered.files['manifest.json']=canonicalize(tampered.manifest);
+  await assert.rejects(importRegisteredCandidate(s4Actor,JSON.stringify(tampered)),error=>error instanceof Error&&error.message==='policy_blocked');
+  assert.equal((await db.query('select count(*)::int n from public.research_s4_candidates')).rows[0].n,1);
+
   assert.equal(await withRegisteredCandidate(db,actor,hash,expected,async client=>(await client.query('select 7 as value')).rows[0].value),7);
   const deniedAccess=async(e=expected,cause?:string)=>{
    let entered=false;
@@ -183,6 +209,8 @@ async function main(){
    assert.equal(leaked,false);assert.equal((await deniedClient.query('commit')).command,'ROLLBACK');
   }finally{await deniedClient.query('rollback');deniedClient.release();}
   await rejected(register(),'binding_revoked');
+  await assert.rejects(importRegisteredCandidate(s4Actor,raw),/revocation_access_denied/);
+  assert.equal((await db.query('select count(*)::int n from public.research_s4_candidates')).rows[0].n,1);
   await assert.rejects(withRegisteredCandidate(db,actor,hash,expected,async()=>true),/revocation_access_denied/);
   // Even an accidentally reset binding must not bypass a retained tombstone.
   await db.query('update public.research_s4_bindings set revoked=false where user_id=$1',[actor]);await rejected(register(),'grant_version_revoked');await deniedAccess(expected,'grant_version_revoked');
@@ -214,6 +242,6 @@ async function main(){
   await rejected(register(),'inbox_coverage_gap');await deniedAccess(expected,'inbox_coverage_gap');
   if(interrupted)throw new Error('interrupted');
   console.log('Registration acceptance passed: missing approval, freshness/scope, rollback, concurrent idempotency, consumer revoke and tombstone denial.');
- }catch(error){primary=error;throw error;}finally{try{await db.end();}finally{stopLocalDatabase(state,primary);}}
+ }catch(error){primary=error;throw error;}finally{try{await closeS4Pool();await db.end();}finally{stopLocalDatabase(state,primary);}}
 }
 void main().catch(error=>{console.error(error instanceof Error?error.message:'registration test failed');process.exitCode=1;});

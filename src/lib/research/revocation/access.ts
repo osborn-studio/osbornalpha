@@ -1,4 +1,5 @@
 import type {Pool,PoolClient} from 'pg';
+import {fail} from '../ingest/pa-v1/json.js';
 import {validateCandidateBinding} from '../ingest/candidate';
 import type {ExpectedGrantReference} from './candidate';
 import {assertRevocationFresh} from './freshness';
@@ -10,7 +11,7 @@ const deny=(code:string):never=>{throw new AccessGateError(code);};
  * DB-only work cannot control transactions, mutate security tables or emit results.
  * Caller retains session/role authorization and source/payload integrity duties. */
 export async function withRegisteredCandidateInTransaction<T>(db:PoolClient,actor:string,payloadHash:string,expectedOrResolve:ExpectedGrantReference|((db:PoolClient)=>Promise<ExpectedGrantReference>),work:(db:PoolClient)=>Promise<T>):Promise<T>{
- let transactionId:string|null=null;
+ let transactionId:string|null=null;let inWork=false;
  try{
   const state=(await db.query("select pg_catalog.pg_current_xact_id_if_assigned()::text as id,current_setting('transaction_isolation') as isolation")).rows[0];
   transactionId=state.id;
@@ -40,7 +41,7 @@ export async function withRegisteredCandidateInTransaction<T>(db:PoolClient,acto
    if(config.grant?.grant_id!==expected.grantId||[config.rights?.valid_until,config.grant?.valid_until].some(t=>!t||!Number.isFinite(Date.parse(t))||Date.parse(t)<=now))deny('grant_invalid_or_expired');
    assertRevocationFresh({feedId:row.feed_id,scope:{user_id:row.upstream_user,workspace_id:row.workspace_id},cursor:row.cursor,latestSeq:row.latest_seq,publishedAt:row.published_at?.toISOString()??null},{feedId:expected.feedId,scope:expected.scope},now);
   };
-  await check();const result=await work(db);
+  await check();inWork=true;const result=await work(db);inWork=false;
   if((await db.query('select pg_catalog.pg_current_xact_id()::text as id')).rows[0].id!==transactionId)deny('transaction_changed');
   // A long operation must not commit or disclose its result on an expired checkpoint.
   await check();return result;
@@ -51,6 +52,8 @@ export async function withRegisteredCandidateInTransaction<T>(db:PoolClient,acto
    const current=(await db.query('select pg_catalog.pg_current_xact_id_if_assigned()::text as id')).rows[0].id;
    if(transactionId!==null&&current===transactionId)await db.query('select 1/0');
   }catch{/* Already aborted, disconnected, or deliberately poisoned. */}
+  const code=(error as {code?:unknown})?.code;
+  if(inWork&&error instanceof Error&&typeof code==='string'&&/^[a-z][a-z_]{0,63}$/.test(code)&&error.message===code&&typeof (error as {recovery?:unknown}).recovery==='string')fail(code);
   throw new Error('revocation_access_denied',{cause:error instanceof AccessGateError?error.message:'validation_or_database'});
  }
 }
