@@ -3,6 +3,8 @@ import {readFileSync} from 'node:fs';
 import {randomUUID,generateKeyPairSync,sign} from 'node:crypto';
 import {Pool} from 'pg';
 import {importRegisteredCandidate} from '../../src/lib/research/s4/import';
+import {registeredCandidateStatus} from '../../src/lib/research/s4/read';
+import {revealRegisteredCards} from '../../src/lib/research/s4/cards';
 import {closeS4Pool} from '../../src/lib/research/s4/db';
 import {startLocalDatabase,stopLocalDatabase} from '../s4/local-db';
 import {testPack} from '../s4/test-pack';
@@ -67,6 +69,49 @@ async function main(){
   assert.equal((await db.query('select cursor from research_revocation_candidate.feed')).rows[0].cursor,'0');
   const imported=await importRegisteredCandidate(s4Actor,raw);
   assert.equal(imported.duplicate,false);
+  assert.deepEqual(await registeredCandidateStatus(s4Actor,imported.id),{revision:0,observations:[]});
+  const revealInput={requestKey:randomUUID(),judgment:'Synthetic automated acceptance only',alreadySeen:[],independentJudgment:false};
+  const shown=await revealRegisteredCards(s4Actor,imported.id,revealInput);
+  assert.ok(shown);
+  const label=(await db.query("select payload from public.research_s4_records where user_id=$1 and kind='HumanLabel'",[actor])).rows[0].payload;
+  assert.equal(label.actor_kind,'agent');assert.equal(label.independent,false);
+  const businessCounts=async()=>{
+   const counts:Record<string,number>={};
+   for(const table of ['research_s4_records','research_s4_requests','research_s4_outbox','research_audit_log','research_judgments','research_labels','research_decisions']){
+    counts[table]=(await db.query('select count(*)::int n from public.'+table+' where user_id=$1',[actor])).rows[0].n;
+   }
+   return counts;
+  };
+  const savedImported=(await db.query('select imported from public.research_s4_candidates where id=$1',[imported.id])).rows[0].imported;
+  for(const mutation of ['missing','version','watermark','source']){
+   const changed=structuredClone(savedImported);
+   if(mutation==='missing')delete changed.manifest.extensions['pa.revocation_reference'];
+   if(mutation==='version')changed.manifest.extensions['pa.revocation_reference'].grant_version=2;
+   if(mutation==='watermark')changed.manifest.extensions['pa.revocation_reference'].revocation_seq_at_export='1';
+   if(mutation==='source')changed.sourceRef.source_id=randomUUID();
+   await db.query('update public.research_s4_candidates set imported=$2 where id=$1',[imported.id,changed]);
+   await db.query('update public.research_s4_bindings set binding=$2 where user_id=$1',[actor,{...t.binding,approvedManifestHash:digest(changed.manifest)}]);
+   const before=await businessCounts(),code=mutation==='watermark'?'export_watermark_ahead':'invalid_revocation_candidate';
+   for(const op of [()=>registeredCandidateStatus(s4Actor,imported.id),()=>revealRegisteredCards(s4Actor,imported.id,{...revealInput,requestKey:randomUUID()})]){
+    await assert.rejects(op(),error=>error instanceof Error&&error.message===code);
+   }
+   assert.deepEqual(await businessCounts(),before);
+  }
+  await db.query('update public.research_s4_candidates set imported=$2 where id=$1',[imported.id,savedImported]);
+  await db.query('update public.research_s4_bindings set binding=$2 where user_id=$1',[actor,t.binding]);
+  await db.query("create function research_revocation_candidate.delay_request() returns trigger language plpgsql as $$ begin perform pg_sleep(6);return new;end $$;create trigger synthetic_delay_request before insert on public.research_s4_requests for each row execute function research_revocation_candidate.delay_request()");
+  const slowInput={...revealInput,requestKey:randomUUID()},beforeSlow=await businessCounts();
+  await db.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '55 seconds'");
+  const slowStarted=performance.now();
+  await assert.rejects(revealRegisteredCards(s4Actor,imported.id,slowInput),/revocation_access_denied/);
+  assert.ok(performance.now()-slowStarted>=5900,'must reach delayed request insert before post-check denial');
+  assert.deepEqual(await businessCounts(),beforeSlow);
+  await assert.rejects(revealRegisteredCards(s4Actor,imported.id,slowInput),/revocation_access_denied/);
+  await assert.rejects(registeredCandidateStatus(s4Actor,imported.id),/revocation_access_denied/);
+  assert.deepEqual(await businessCounts(),beforeSlow);
+  await db.query('drop trigger synthetic_delay_request on public.research_s4_requests');
+  await db.query('update research_revocation_candidate.feed set published_at=clock_timestamp()');
+
   assert.deepEqual(await importRegisteredCandidate(s4Actor,raw),{id:imported.id,duplicate:true});
   await db.query("insert into public.research_s4_integrity(user_id,reason) values($1,'anchor_integrity_failed')",[actor]);
   await assert.rejects(importRegisteredCandidate(s4Actor,raw),/anchor_integrity_failed/);
@@ -208,12 +253,20 @@ async function main(){
    await assert.rejects(withStoredCandidateInTransaction(deniedClient,actor,hash,async()=>{leaked=true;}),/revocation_access_denied/);
    assert.equal(leaked,false);assert.equal((await deniedClient.query('commit')).command,'ROLLBACK');
   }finally{await deniedClient.query('rollback');deniedClient.release();}
+  const recordsBefore=(await db.query('select count(*)::int n from public.research_s4_records where user_id=$1',[actor])).rows[0].n;
+  await assert.rejects(registeredCandidateStatus(s4Actor,imported.id),/revocation_access_denied/);
+  await assert.rejects(revealRegisteredCards(s4Actor,imported.id,revealInput),/revocation_access_denied/);
+  assert.equal((await db.query('select count(*)::int n from public.research_s4_records where user_id=$1',[actor])).rows[0].n,recordsBefore);
   await rejected(register(),'binding_revoked');
   await assert.rejects(importRegisteredCandidate(s4Actor,raw),/revocation_access_denied/);
   assert.equal((await db.query('select count(*)::int n from public.research_s4_candidates')).rows[0].n,1);
   await assert.rejects(withRegisteredCandidate(db,actor,hash,expected,async()=>true),/revocation_access_denied/);
   // Even an accidentally reset binding must not bypass a retained tombstone.
   await db.query('update public.research_s4_bindings set revoked=false where user_id=$1',[actor]);await rejected(register(),'grant_version_revoked');await deniedAccess(expected,'grant_version_revoked');
+  for(const op of [()=>registeredCandidateStatus(s4Actor,imported.id),()=>revealRegisteredCards(s4Actor,imported.id,revealInput)]){
+   await assert.rejects(op(),error=>error instanceof Error&&error.cause==='grant_version_revoked');
+  }
+
   const storedTombstone=await db.connect();
   try{
    await storedTombstone.query('begin');let entered=false;

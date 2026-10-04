@@ -1,3 +1,4 @@
+import {registeredCandidateTransaction} from './registered';
 import Ajv from 'ajv';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
@@ -80,9 +81,12 @@ async function buildCards(db:PoolClient,actor:S4Actor,row:any) {
   }
   return cards;
 }
-export async function revealCards(actor:S4Actor,candidateId:string,input:BeforeInput) {
+export async function revealCards(actor:S4Actor,candidateId:string,input:BeforeInput) {return revealCardsWithPolicy(actor,candidateId,input,false);}
+/** Candidate entrypoint; no production route activation. */
+export async function revealRegisteredCards(actor:S4Actor,candidateId:string,input:BeforeInput) {return revealCardsWithPolicy(actor,candidateId,input,true);}
+async function revealCardsWithPolicy(actor:S4Actor,candidateId:string,input:BeforeInput,registered:boolean) {
   if(!validateBefore(input)||!input.judgment.trim()) fail('invalid_schema');
-  return transaction(actor,async db=>{
+  const work=async (db:PoolClient)=>{
     await assertWritableChain(db,actor);
     const {row}=await candidateFor(db,actor,candidateId);
     const request={action:'reveal',candidateId,...input,actor_kind:actor.kind};
@@ -108,5 +112,6 @@ export async function revealCards(actor:S4Actor,candidateId:string,input:BeforeI
     const response={candidateId:row.id,revision:row.revision,cards:cards.map(c=>({...c,occurrence_count:occurrenceCount})),
       labelId:label.id,exposureId:exposure.id,researchStream:'descriptive',contaminationReasons:reasons};
     await saveRequest(db,actor,input.requestKey,request,response);return response;
-  });
+  };
+  return registered?registeredCandidateTransaction(actor,candidateId,work):transaction(actor,work);
 }

@@ -1,3 +1,5 @@
+import type {PoolClient} from 'pg';
+import {registeredCandidateTransaction} from './registered';
 import { fail, digest, sha256 } from '../ingest/pa-v1/json.js';
 import { transaction, serverTime, type S4Actor } from './db';
 import { addRecord, candidateFor } from './records';
@@ -33,13 +35,17 @@ export async function researchOptions(actor:S4Actor) {
     companies:(await db.query("select id,name from public.research_entities where user_id=$1 and type='COMPANY' order by name limit 1000",[actor.userId])).rows,
   }));
 }
-export async function candidateStatus(actor:S4Actor,id:string) {
-  return transaction(actor,async db=>{
+export async function candidateStatus(actor:S4Actor,id:string) {return candidateStatusWithPolicy(actor,id,false);}
+/** Candidate entrypoint; no production route activation. */
+export async function registeredCandidateStatus(actor:S4Actor,id:string) {return candidateStatusWithPolicy(actor,id,true);}
+async function candidateStatusWithPolicy(actor:S4Actor,id:string,registered:boolean) {
+  const work=async (db:PoolClient)=>{
     const {row}=await candidateFor(db,actor,id);
     const observations=(await db.query(`select s.observation_id,s.status,s.anchor_status from public.research_s4_observation_state s
       join public.research_s4_records r on r.user_id=s.user_id and r.id=s.observation_id where r.user_id=$1 and r.candidate_id=$2`,[actor.userId,id])).rows;
     return {revision:row.revision,observations};
-  });
+  };
+  return registered?registeredCandidateTransaction(actor,id,work):transaction(actor,work);
 }
 export async function citation(actor:S4Actor,id:string,cardId:string,index:number) {
   if(!Number.isInteger(index)||index<0||index>7||!/^[0-9a-f-]{36}$/.test(cardId))fail('invalid_schema');
