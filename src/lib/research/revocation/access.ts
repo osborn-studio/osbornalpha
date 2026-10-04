@@ -4,15 +4,21 @@ import type {ExpectedGrantReference} from './candidate';
 import {assertRevocationFresh} from './freshness';
 class AccessGateError extends Error {}
 const deny=(code:string):never=>{throw new AccessGateError(code);};
-/** Candidate protected-operation boundary. Trusted caller supplies pool/expected.
- * Work is trusted application code: DB-only, no external side effects, transaction
- * control, or mutation of security tables. This is not a sandbox for arbitrary SQL.
- * Not routed in production. All revocation writers must share the owner lock. */
-export async function withRegisteredCandidate<T>(pool:Pool,actor:string,payloadHash:string,expected:ExpectedGrantReference,work:(db:PoolClient)=>Promise<T>):Promise<T>{
- const db=await pool.connect();let discard=false;
+/** Composes with an existing explicit READ COMMITTED transaction on this client.
+ * Enter before any transaction writes/row locks; commit immediately after return.
+ * Failure aborts the unchanged transaction; caller must rollback. Trusted
+ * DB-only work cannot control transactions, mutate security tables or emit results.
+ * Caller retains session/role authorization and source/payload integrity duties. */
+export async function withRegisteredCandidateInTransaction<T>(db:PoolClient,actor:string,payloadHash:string,expected:ExpectedGrantReference,work:(db:PoolClient)=>Promise<T>):Promise<T>{
+ let transactionId:string|null=null;
  try{
-  await db.query('begin isolation level read committed');
+  const state=(await db.query("select pg_catalog.pg_current_xact_id_if_assigned()::text as id,current_setting('transaction_isolation') as isolation")).rows[0];
+  transactionId=state.id;
+  if(state.id!==null)deny('transaction_not_clean');
+  if(state.isolation!=='read committed')deny('transaction_isolation');
+  transactionId=(await db.query('select pg_catalog.pg_current_xact_id()::text as id')).rows[0].id;
   await db.query('select pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1::uuid::text,0))',[actor]);
+  if((await db.query('select pg_catalog.pg_current_xact_id()::text as id')).rows[0].id!==transactionId)deny('explicit_transaction_required');
   const check=async()=>{
    const binding=(await db.query('select binding,revoked from public.research_s4_bindings where user_id=$1 and payload_hash=$2',[actor,payloadHash])).rows[0];
    if(!binding||binding.revoked)deny('binding_unavailable');
@@ -23,18 +29,36 @@ export async function withRegisteredCandidate<T>(pool:Pool,actor:string,payloadH
     where m.local_owner=$1 and m.payload_hash=$2`,[actor,payloadHash])).rows;
    if(rows.length!==1)throw new Error();const row=rows[0];
    if(row.feed_id!==expected.feedId||row.source_id!==expected.sourceId||row.grant_id!==expected.grantId||row.grant_version!==expected.grantVersion)throw new Error();
-   const now=(await db.query('select pg_catalog.clock_timestamp() as now')).rows[0].now.getTime();
-   const config=b.trustedConfig as {rights?:{valid_until?:string};grant?:{grant_id?:string;valid_until?:string}};
-   if(config.grant?.grant_id!==expected.grantId||[config.rights?.valid_until,config.grant?.valid_until].some(t=>!t||!Number.isFinite(Date.parse(t))||Date.parse(t)<=now))deny('grant_invalid_or_expired');
-   assertRevocationFresh({feedId:row.feed_id,scope:{user_id:row.upstream_user,workspace_id:row.workspace_id},cursor:row.cursor,latestSeq:row.latest_seq,publishedAt:row.published_at?.toISOString()??null},{feedId:expected.feedId,scope:expected.scope},now);
    const coverage=(await db.query('select count(*)::text as count,max(sequence)::text as last from research_revocation_candidate.inbox where feed_id=$1',[expected.feedId])).rows[0];
    if(coverage.count!==row.cursor||(coverage.last??'0')!==row.cursor)deny('inbox_coverage_gap');
    if((await db.query(`select 1 from research_revocation_candidate.inbox where feed_id=$1
     and event->>'source_id'=$2 and event->>'grant_id'=$3 and (event->>'grant_version')::integer=$4 limit 1`,[expected.feedId,expected.sourceId,expected.grantId,expected.grantVersion])).rowCount)deny('grant_version_revoked');
+   const now=(await db.query('select pg_catalog.clock_timestamp() as now')).rows[0].now.getTime();
+   const config=b.trustedConfig as {rights?:{valid_until?:string};grant?:{grant_id?:string;valid_until?:string}};
+   if(config.grant?.grant_id!==expected.grantId||[config.rights?.valid_until,config.grant?.valid_until].some(t=>!t||!Number.isFinite(Date.parse(t))||Date.parse(t)<=now))deny('grant_invalid_or_expired');
+   assertRevocationFresh({feedId:row.feed_id,scope:{user_id:row.upstream_user,workspace_id:row.workspace_id},cursor:row.cursor,latestSeq:row.latest_seq,publishedAt:row.published_at?.toISOString()??null},{feedId:expected.feedId,scope:expected.scope},now);
   };
   await check();const result=await work(db);
+  if((await db.query('select pg_catalog.pg_current_xact_id()::text as id')).rows[0].id!==transactionId)deny('transaction_changed');
   // A long operation must not commit or disclose its result on an expired checkpoint.
-  await check();await db.query('commit');return result;
- }catch(error){try{await db.query('rollback');}catch{discard=true;}throw new Error('revocation_access_denied',{cause:error instanceof AccessGateError?error.message:'validation_or_database'});}
+  await check();return result;
+ }catch(error){
+  // Do not allow a caller's catch-and-COMMIT path to publish denied work. Never
+  // abort a different transaction created by a callback that broke the contract.
+  try{
+   const current=(await db.query('select pg_catalog.pg_current_xact_id_if_assigned()::text as id')).rows[0].id;
+   if(transactionId!==null&&current===transactionId)await db.query('select 1/0');
+  }catch{/* Already aborted, disconnected, or deliberately poisoned. */}
+  throw new Error('revocation_access_denied',{cause:error instanceof AccessGateError?error.message:'validation_or_database'});
+ }
+}
+/** Standalone candidate adapter. Do not nest inside an existing pool transaction. */
+export async function withRegisteredCandidate<T>(pool:Pool,actor:string,payloadHash:string,expected:ExpectedGrantReference,work:(db:PoolClient)=>Promise<T>):Promise<T>{
+ const db=await pool.connect();let discard=false;
+ try{
+  await db.query('begin isolation level read committed');
+  const result=await withRegisteredCandidateInTransaction(db,actor,payloadHash,expected,work);
+  await db.query('commit');return result;
+ }catch(error){try{await db.query('rollback');}catch{discard=true;}throw error;}
  finally{db.release(discard);}
 }

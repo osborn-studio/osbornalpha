@@ -7,7 +7,7 @@ import {testPack} from '../s4/test-pack';
 import {canonicalize,digest} from '../../src/lib/research/ingest/pa-v1/json.js';
 import {prepareRevocationCandidate} from '../../src/lib/research/revocation/candidate';
 import {registerCandidateReference} from '../../src/lib/research/revocation/register';
-import {withRegisteredCandidate} from '../../src/lib/research/revocation/access';
+import {withRegisteredCandidate,withRegisteredCandidateInTransaction} from '../../src/lib/research/revocation/access';
 import {applyRevocationPage} from '../../src/lib/research/revocation/consumer';
 let interrupted=false;const interrupt=()=>{interrupted=true;};process.on('SIGINT',interrupt);process.on('SIGTERM',interrupt);
 async function main(){
@@ -72,6 +72,44 @@ async function main(){
   }
   await db.query('update public.research_s4_bindings set binding=$2 where user_id=$1',[actor,t.binding]);
   await db.query('create table research_revocation_candidate.synthetic_access_result(value integer)');
+  // Compose on one checked-out client: require a clean outer transaction;
+  // denied work cannot be committed by a catch-and-COMMIT caller. A single-connection pool would
+  // deadlock if the helper tried to acquire a nested connection.
+  const single=new Pool({connectionString:state.adminUrl,max:1,connectionTimeoutMillis:500,statement_timeout:10000});
+  const client=await single.connect();
+  try{
+   let entered=false;
+   await assert.rejects(withRegisteredCandidateInTransaction(client,actor,hash,expected,async()=>{entered=true;}),error=>error instanceof Error&&error.cause==='explicit_transaction_required');
+   assert.equal(entered,false);
+   await client.query('begin isolation level repeatable read');
+   await assert.rejects(withRegisteredCandidateInTransaction(client,actor,hash,expected,async()=>{entered=true;}),error=>error instanceof Error&&error.cause==='transaction_isolation');
+   assert.equal(entered,false);await client.query('rollback');
+   await client.query('begin isolation level read committed');
+   await client.query('insert into research_revocation_candidate.synthetic_access_result values(9)');
+   await assert.rejects(withRegisteredCandidateInTransaction(client,actor,hash,expected,async()=>{entered=true;}),error=>error instanceof Error&&error.cause==='transaction_not_clean');
+   assert.equal(entered,false);
+   assert.equal((await client.query('commit')).command,'ROLLBACK');
+   await client.query('begin isolation level read committed');
+   const count=await withRegisteredCandidateInTransaction(client,actor,hash,expected,async same=>{
+    await same.query('insert into research_revocation_candidate.synthetic_access_result values(9)');
+    assert.equal(same,client);
+    return (await same.query('select count(*)::int n from research_revocation_candidate.synthetic_access_result')).rows[0].n;
+   });
+   assert.equal(count,1);await client.query('rollback');
+   assert.equal((await client.query('select count(*)::int n from research_revocation_candidate.synthetic_access_result')).rows[0].n,0);
+   await client.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '55 seconds'");
+   await client.query('begin');
+   let postEntered=false;
+   await assert.rejects(withRegisteredCandidateInTransaction(client,actor,hash,expected,async same=>{
+    postEntered=true;await same.query('insert into research_revocation_candidate.synthetic_access_result values(10)');
+    await same.query('select pg_sleep(6)');return true;
+   }),/revocation_access_denied/);
+   assert.equal(postEntered,true);assert.equal((await client.query('commit')).command,'ROLLBACK');
+   assert.equal((await client.query('select count(*)::int n from research_revocation_candidate.synthetic_access_result')).rows[0].n,0);
+   await client.query('update research_revocation_candidate.feed set published_at=clock_timestamp()');
+   await client.query('begin');
+   await assert.rejects(withRegisteredCandidateInTransaction(client,actor,hash,expected,async same=>{await same.query('rollback');return 'must not return';}),error=>error instanceof Error&&error.cause==='transaction_changed');
+  }finally{await client.query('rollback');client.release();await single.end();}
   // Real elapsed database time, without mutating security state inside work.
   await db.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '55 seconds'");
   let elapsedEntered=false;
