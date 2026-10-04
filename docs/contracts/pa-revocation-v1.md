@@ -33,3 +33,9 @@ The signing key must be dedicated to this protocol/feed; no cross-protocol reuse
 Multiple committed heads may legitimately share a millisecond timestamp; latest_seq provides ordering and must not regress. Heartbeat replay within the validity window is allowed but never refreshes published_at. The five-second forward clock allowance means the tolerated age can reach 65 seconds relative to a consumer's initial receipt clock; 60 seconds is not yet a certified end-to-end upper bound. Production acceptance must measure clock skew and end-to-end lag and tighten thresholds if the agreed bound is 60 seconds.
 
 Claude CLI claude-opus-5-5 reviewed the initial validator, 28 tests and contract; no blocking findings. Follow-up adds five boundary tests (33 total), including duplicate JSON keys, full/oversized byte limits, sequence maximum and unchanged heartbeat time. Follow-up tests and these clarifications are host-verified, not separately audited.
+
+## Per-operation freshness guard
+
+`assertRevocationFresh(checkpoint, expected, nowMs)` rechecks the persisted watermark at each protected operation, requiring exact configured feed epoch, user/workspace scope, caught-up cursor and unexpired publication time. `expected` is trusted operation configuration, never request-supplied claims. Missing state, pending pages, invalid times and scope mismatches fail closed. This guard is not yet connected to request/database paths; it is not current production protection or a substitute for grant expiry and authorization.
+
+The guard adds 20 tests, bringing this directory to 53 tests. A separate Opus5.5 audit found missing explicit expected-scope comparison; fixed with epoch/user/workspace checks and four regression cases. The final fix is host-verified, not independently re-reviewed. Persistence must later distinguish committed checkpoints from uncommitted page plans.
