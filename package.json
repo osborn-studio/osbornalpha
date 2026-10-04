@@ -18,7 +18,8 @@
     "securities:sync": "tsx scripts/securities-sync.ts",
     "securities:reconcile": "tsx scripts/securities-reconcile.ts",
     "test:db": "tsx scripts/ci/research-db.ts",
-    "test:migrations": "tsx scripts/ci/migration-rehearsal.ts"
+    "test:migrations": "tsx scripts/ci/migration-rehearsal.ts",
+    "check:migration-history": "tsx scripts/ci/check-migration-history.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
