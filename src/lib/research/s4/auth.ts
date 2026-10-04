@@ -1,3 +1,4 @@
+import {assertResearchRequest} from '../runtime/request';
 import {createHmac,timingSafeEqual} from 'node:crypto';
 import {parseStrict,fail} from '../ingest/pa-v1/json.js';
 import {requireResearchUser} from '../store';
@@ -11,8 +12,8 @@ export function localSessionToken(userId:string,secret:string,expiresAt:number) 
 export async function requireS4Actor(req:Request):Promise<S4Actor> {
   s4Pool();
   const origin=process.env.ALPHA_S4_ORIGIN;
-  if(!origin || req.headers.get('host')!==new URL(origin).host||new URL(req.url).protocol!==new URL(origin).protocol || !['localhost','127.0.0.1','[::1]'].includes(new URL(origin).hostname))fail('scope_denied');
-  if(req.headers.get('sec-fetch-site')==='cross-site'||(req.method!=='GET'&&req.headers.get('origin')!==origin))fail('scope_denied');
+  assertResearchRequest(req,origin);
+  if(!['localhost','127.0.0.1','[::1]'].includes(new URL(origin!).hostname))fail('scope_denied');
   if(process.env.ALPHA_S4_LOCAL_AUTH==='1') {
     const secret=process.env.ALPHA_S4_LOCAL_SESSION_SECRET;
     if(!secret||secret.length<32)fail('not_configured');

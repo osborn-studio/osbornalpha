@@ -40,6 +40,14 @@ jobs:
         run: npm run test:migrations
         env:
           S4_POSTGRES_BIN: /usr/lib/postgresql/17/bin
+      - name: Restricted runtime role verification
+        run: npm run test:runtime-privileges
+        env:
+          S4_POSTGRES_BIN: /usr/lib/postgresql/17/bin
+      - name: Runtime TLS handshake verification
+        run: npm run test:runtime-tls
+        env:
+          S4_POSTGRES_BIN: /usr/lib/postgresql/17/bin
       - name: Sanitized database summaries
         uses: actions/upload-artifact@v4
         if: always()
