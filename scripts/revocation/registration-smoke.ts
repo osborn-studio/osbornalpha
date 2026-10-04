@@ -3,7 +3,8 @@ import {readFileSync} from 'node:fs';
 import {randomUUID,generateKeyPairSync,sign} from 'node:crypto';
 import {Pool} from 'pg';
 import {importRegisteredCandidate} from '../../src/lib/research/s4/import';
-import {registeredCandidateStatus} from '../../src/lib/research/s4/read';
+import {submitRegisteredDecision,type DecisionInput} from '../../src/lib/research/s4/decisions';
+import {registeredCandidateStatus,registeredCitation,registeredReviewHistory} from '../../src/lib/research/s4/read';
 import {revealRegisteredCards} from '../../src/lib/research/s4/cards';
 import {closeS4Pool} from '../../src/lib/research/s4/db';
 import {startLocalDatabase,stopLocalDatabase} from '../s4/local-db';
@@ -75,9 +76,19 @@ async function main(){
   assert.ok(shown);
   const label=(await db.query("select payload from public.research_s4_records where user_id=$1 and kind='HumanLabel'",[actor])).rows[0].payload;
   assert.equal(label.actor_kind,'agent');assert.equal(label.independent,false);
+  await db.query(`insert into public.stocks_universe(ticker,name,market,exchange,currency,metadata) values('REVTEST','Synthetic','US','XNYS','USD','{"synthetic":true}')`);
+  const decision:DecisionInput={requestKey:randomUUID(),expectedRevision:0,action:'observe',reason:'Synthetic automated test; not investment advice',cardId:shown.cards[0].id,labelId:shown.labelId,exposureId:shown.exposureId,securityTicker:'REVTEST',companyEntityId:null,newObservation:true,reviewAt:null};
+  const decided=await submitRegisteredDecision(s4Actor,imported.id,decision);
+  assert.equal(decided.revision,1);assert.equal(decided.duplicate,false);
+  assert.equal((await submitRegisteredDecision(s4Actor,imported.id,decision)).duplicate,true);
+  await assert.rejects(submitRegisteredDecision(s4Actor,imported.id,{...decision,reason:'changed'}),/idempotency_conflict/);
+  await assert.rejects(submitRegisteredDecision(s4Actor,imported.id,{...decision,requestKey:randomUUID()}),/revision_conflict/);
+  assert.equal((await registeredCitation(s4Actor,imported.id,shown.cards[0].id,0)).text,t.raw);
+  assert.ok((await registeredReviewHistory(s4Actor,imported.id)).records.some((r:{kind:string})=>r.kind==='Decision'));
+
   const businessCounts=async()=>{
    const counts:Record<string,number>={};
-   for(const table of ['research_s4_records','research_s4_requests','research_s4_outbox','research_audit_log','research_judgments','research_labels','research_decisions']){
+   for(const table of ['research_s4_records','research_s4_requests','research_s4_outbox','research_audit_log','research_judgments','research_labels','research_decisions','research_s4_observation_state']){
     counts[table]=(await db.query('select count(*)::int n from public.'+table+' where user_id=$1',[actor])).rows[0].n;
    }
    return counts;
@@ -91,24 +102,66 @@ async function main(){
    if(mutation==='source')changed.sourceRef.source_id=randomUUID();
    await db.query('update public.research_s4_candidates set imported=$2 where id=$1',[imported.id,changed]);
    await db.query('update public.research_s4_bindings set binding=$2 where user_id=$1',[actor,{...t.binding,approvedManifestHash:digest(changed.manifest)}]);
-   const before=await businessCounts(),code=mutation==='watermark'?'export_watermark_ahead':'invalid_revocation_candidate';
-   for(const op of [()=>registeredCandidateStatus(s4Actor,imported.id),()=>revealRegisteredCards(s4Actor,imported.id,{...revealInput,requestKey:randomUUID()})]){
+   const before=await businessCounts(),code=mutation==='watermark'?'export_watermark_ahead':mutation==='source'?'source_version_conflict':'invalid_revocation_candidate';
+   for(const op of [()=>registeredCitation(s4Actor,imported.id,shown.cards[0].id,0),()=>registeredReviewHistory(s4Actor,imported.id),()=>submitRegisteredDecision(s4Actor,imported.id,decision),()=>registeredCandidateStatus(s4Actor,imported.id),()=>revealRegisteredCards(s4Actor,imported.id,{...revealInput,requestKey:randomUUID()})]){
     await assert.rejects(op(),error=>error instanceof Error&&error.message===code);
    }
    assert.deepEqual(await businessCounts(),before);
   }
   await db.query('update public.research_s4_candidates set imported=$2 where id=$1',[imported.id,savedImported]);
   await db.query('update public.research_s4_bindings set binding=$2 where user_id=$1',[actor,t.binding]);
+  const sourceVersion=(await db.query('select v.* from public.research_source_versions v join public.research_s4_candidates c on c.source_version_id=v.id and c.user_id=v.user_id where c.id=$1',[imported.id])).rows[0];
+  // Privileged corruption rehearsal in this disposable database only. Normal
+  // writes are already rejected by immutable triggers; preserve that evidence.
+  await assert.rejects(db.query('update public.research_source_versions set source_key=source_key where id=$1',[sourceVersion.id]),/immutable_record/);
+  await db.query('alter table public.research_source_versions disable trigger research_source_versions_immutable');
+  for(const field of ['source_ref','source_key']){
+   const changed=field==='source_ref'?{...sourceVersion.source_ref,source_id:randomUUID()}:digest({synthetic:'unrelated version'});
+   await db.query('update public.research_source_versions set '+field+'=$2 where id=$1',[sourceVersion.id,changed]);
+   const before=await businessCounts();
+   for(const op of [()=>registeredCandidateStatus(s4Actor,imported.id),()=>revealRegisteredCards(s4Actor,imported.id,revealInput),()=>registeredCitation(s4Actor,imported.id,shown.cards[0].id,0),()=>registeredReviewHistory(s4Actor,imported.id),()=>submitRegisteredDecision(s4Actor,imported.id,decision)])await assert.rejects(op(),/source_version_conflict/);
+   assert.deepEqual(await businessCounts(),before);
+   await db.query('update public.research_source_versions set '+field+'=$2 where id=$1',[sourceVersion.id,sourceVersion[field]]);
+  }
+  await db.query('alter table public.research_source_versions enable trigger research_source_versions_immutable');
+  const storedCard=(await db.query('select payload from public.research_s4_records where id=$1',[shown.cards[0].id])).rows[0].payload;
+  await assert.rejects(db.query('update public.research_s4_records set payload=payload where id=$1',[shown.cards[0].id]),/immutable_record/);
+  await db.query('alter table public.research_s4_records disable trigger research_s4_records_immutable');
+  const changedCard=structuredClone(storedCard);changedCard.facts[0].source_ref.source_id=randomUUID();
+  await db.query('update public.research_s4_records set payload=$2 where id=$1',[shown.cards[0].id,changedCard]);
+  const beforeCitation=await businessCounts();
+  await assert.rejects(registeredCitation(s4Actor,imported.id,shown.cards[0].id,0),/hash_mismatch/);
+  assert.deepEqual(await businessCounts(),beforeCitation);
+  await db.query('update public.research_s4_records set payload=$2 where id=$1',[shown.cards[0].id,storedCard]);
+  await db.query('alter table public.research_s4_records enable trigger research_s4_records_immutable');
   await db.query("create function research_revocation_candidate.delay_request() returns trigger language plpgsql as $$ begin perform pg_sleep(6);return new;end $$;create trigger synthetic_delay_request before insert on public.research_s4_requests for each row execute function research_revocation_candidate.delay_request()");
+  // Positive controls use exactly the same slow trigger and runtime role.
+  await db.query('update research_revocation_candidate.feed set published_at=clock_timestamp()');
+  const positiveBefore=await businessCounts();
+  assert.ok(await revealRegisteredCards(s4Actor,imported.id,{...revealInput,requestKey:randomUUID()}));
+  const positiveDecision=await submitRegisteredDecision(s4Actor,imported.id,{...decision,requestKey:randomUUID(),expectedRevision:1,action:'defer',newObservation:false});
+  assert.equal(positiveDecision.revision,2);
+  assert.ok((await businessCounts()).research_s4_requests>positiveBefore.research_s4_requests);
   const slowInput={...revealInput,requestKey:randomUUID()},beforeSlow=await businessCounts();
   await db.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '55 seconds'");
   const slowStarted=performance.now();
-  await assert.rejects(revealRegisteredCards(s4Actor,imported.id,slowInput),/revocation_access_denied/);
+  await assert.rejects(revealRegisteredCards(s4Actor,imported.id,slowInput),error=>error instanceof Error&&error.cause==='revocation_stale');
   assert.ok(performance.now()-slowStarted>=5900,'must reach delayed request insert before post-check denial');
   assert.deepEqual(await businessCounts(),beforeSlow);
-  await assert.rejects(revealRegisteredCards(s4Actor,imported.id,slowInput),/revocation_access_denied/);
+  await assert.rejects(revealRegisteredCards(s4Actor,imported.id,slowInput),error=>error instanceof Error&&error.cause==='revocation_stale');
   await assert.rejects(registeredCandidateStatus(s4Actor,imported.id),/revocation_access_denied/);
   assert.deepEqual(await businessCounts(),beforeSlow);
+
+  const delayedDecision={...decision,requestKey:randomUUID(),expectedRevision:2,action:'defer' as const,newObservation:false};
+  const statusBefore=(await db.query('select revision,status,last_observation_id from public.research_s4_candidates where id=$1',[imported.id])).rows[0];
+  const countsBefore=await businessCounts();
+  await db.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '55 seconds'");
+  const decisionStarted=performance.now();
+  await assert.rejects(submitRegisteredDecision(s4Actor,imported.id,delayedDecision),error=>error instanceof Error&&error.cause==='revocation_stale');
+  assert.ok(performance.now()-decisionStarted>=5900);
+  assert.deepEqual((await db.query('select revision,status,last_observation_id from public.research_s4_candidates where id=$1',[imported.id])).rows[0],statusBefore);
+  assert.deepEqual(await businessCounts(),countsBefore);
+  for(const op of [()=>submitRegisteredDecision(s4Actor,imported.id,delayedDecision),()=>registeredReviewHistory(s4Actor,imported.id),()=>registeredCitation(s4Actor,imported.id,shown.cards[0].id,0)])await assert.rejects(op(),/revocation_access_denied/);
   await db.query('drop trigger synthetic_delay_request on public.research_s4_requests');
   await db.query('update research_revocation_candidate.feed set published_at=clock_timestamp()');
 
@@ -254,6 +307,7 @@ async function main(){
    assert.equal(leaked,false);assert.equal((await deniedClient.query('commit')).command,'ROLLBACK');
   }finally{await deniedClient.query('rollback');deniedClient.release();}
   const recordsBefore=(await db.query('select count(*)::int n from public.research_s4_records where user_id=$1',[actor])).rows[0].n;
+  for(const op of [()=>submitRegisteredDecision(s4Actor,imported.id,decision),()=>registeredReviewHistory(s4Actor,imported.id),()=>registeredCitation(s4Actor,imported.id,shown.cards[0].id,0)])await assert.rejects(op(),/revocation_access_denied/);
   await assert.rejects(registeredCandidateStatus(s4Actor,imported.id),/revocation_access_denied/);
   await assert.rejects(revealRegisteredCards(s4Actor,imported.id,revealInput),/revocation_access_denied/);
   assert.equal((await db.query('select count(*)::int n from public.research_s4_records where user_id=$1',[actor])).rows[0].n,recordsBefore);
@@ -263,7 +317,7 @@ async function main(){
   await assert.rejects(withRegisteredCandidate(db,actor,hash,expected,async()=>true),/revocation_access_denied/);
   // Even an accidentally reset binding must not bypass a retained tombstone.
   await db.query('update public.research_s4_bindings set revoked=false where user_id=$1',[actor]);await rejected(register(),'grant_version_revoked');await deniedAccess(expected,'grant_version_revoked');
-  for(const op of [()=>registeredCandidateStatus(s4Actor,imported.id),()=>revealRegisteredCards(s4Actor,imported.id,revealInput)]){
+  for(const op of [()=>registeredCitation(s4Actor,imported.id,shown.cards[0].id,0),()=>registeredReviewHistory(s4Actor,imported.id),()=>submitRegisteredDecision(s4Actor,imported.id,decision),()=>registeredCandidateStatus(s4Actor,imported.id),()=>revealRegisteredCards(s4Actor,imported.id,revealInput)]){
    await assert.rejects(op(),error=>error instanceof Error&&error.cause==='grant_version_revoked');
   }
 

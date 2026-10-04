@@ -2,7 +2,7 @@ import type {PoolClient} from 'pg';
 import {transaction,type S4Actor} from './db';
 import {candidateFor} from './records';
 import {withStoredCandidateInTransaction} from '../revocation/registered-access';
-import {fail} from '../ingest/pa-v1/json.js';
+import {fail,canonicalize,digest} from '../ingest/pa-v1/json.js';
 /** Candidate-only composition for one stored candidate. Resolve without row locks
  * before guard entry; validate the stored content before any business work. */
 export function registeredCandidateTransaction<T>(actor:S4Actor,id:string,work:(db:PoolClient)=>Promise<T>){
@@ -12,6 +12,10 @@ export function registeredCandidateTransaction<T>(actor:S4Actor,id:string,work:(
   if(!selected)fail('scope_denied');
   return withStoredCandidateInTransaction(db,actor.userId,selected.payload_hash,async(client,expected)=>{
    const {row}=await candidateFor(client,actor,id);
+   const version=(await client.query('select source_ref,source_key,source_version from public.research_source_versions where user_id=$1 and id=$2',[actor.userId,row.source_version_id])).rows[0];
+   if(!version||canonicalize(version.source_ref)!==canonicalize(row.imported.sourceRef)
+    ||version.source_key!==row.imported.sourceKey||version.source_key!==digest(version.source_ref)
+    ||canonicalize(version.source_version)!==canonicalize(row.imported.sourceVersion))fail('source_version_conflict');
    const ref=row.imported.manifest.extensions?.['pa.revocation_reference'];
    if(row.payload_hash!==selected.payload_hash||!ref||ref.protocol_version!=='pa-grant-reference/v1'
     ||ref.feed_id!==expected.feedId||ref.source_id!==expected.sourceId||ref.grant_id!==expected.grantId||ref.grant_version!==expected.grantVersion

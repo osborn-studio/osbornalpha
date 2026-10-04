@@ -30,8 +30,8 @@ export async function withRegisteredCandidateInTransaction<T>(db:PoolClient,acto
    const rows=(await db.query(`select m.source_id,m.grant_id,m.grant_version,f.* from research_revocation_candidate.binding_map m
     join research_revocation_candidate.feed f on f.feed_id=m.feed_id and f.local_owner=m.local_owner
     where m.local_owner=$1 and m.payload_hash=$2`,[actor,payloadHash])).rows;
-   if(rows.length!==1)throw new Error();const row=rows[0];
-   if(row.feed_id!==expected.feedId||row.source_id!==expected.sourceId||row.grant_id!==expected.grantId||row.grant_version!==expected.grantVersion)throw new Error();
+   if(rows.length!==1)deny('mapping_mismatch');const row=rows[0];
+   if(row.feed_id!==expected.feedId||row.source_id!==expected.sourceId||row.grant_id!==expected.grantId||row.grant_version!==expected.grantVersion)deny('mapping_mismatch');
    const coverage=(await db.query('select count(*)::text as count,max(sequence)::text as last from research_revocation_candidate.inbox where feed_id=$1',[expected.feedId])).rows[0];
    if(coverage.count!==row.cursor||(coverage.last??'0')!==row.cursor)deny('inbox_coverage_gap');
    if((await db.query(`select 1 from research_revocation_candidate.inbox where feed_id=$1
@@ -39,7 +39,7 @@ export async function withRegisteredCandidateInTransaction<T>(db:PoolClient,acto
    const now=(await db.query('select pg_catalog.clock_timestamp() as now')).rows[0].now.getTime();
    const config=b.trustedConfig as {rights?:{valid_until?:string};grant?:{grant_id?:string;valid_until?:string}};
    if(config.grant?.grant_id!==expected.grantId||[config.rights?.valid_until,config.grant?.valid_until].some(t=>!t||!Number.isFinite(Date.parse(t))||Date.parse(t)<=now))deny('grant_invalid_or_expired');
-   assertRevocationFresh({feedId:row.feed_id,scope:{user_id:row.upstream_user,workspace_id:row.workspace_id},cursor:row.cursor,latestSeq:row.latest_seq,publishedAt:row.published_at?.toISOString()??null},{feedId:expected.feedId,scope:expected.scope},now);
+   try{assertRevocationFresh({feedId:row.feed_id,scope:{user_id:row.upstream_user,workspace_id:row.workspace_id},cursor:row.cursor,latestSeq:row.latest_seq,publishedAt:row.published_at?.toISOString()??null},{feedId:expected.feedId,scope:expected.scope},now);}catch{deny('revocation_stale');}
   };
   await check();inWork=true;const result=await work(db);inWork=false;
   if((await db.query('select pg_catalog.pg_current_xact_id()::text as id')).rows[0].id!==transactionId)deny('transaction_changed');

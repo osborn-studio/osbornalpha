@@ -1,3 +1,5 @@
+import type {PoolClient} from 'pg';
+import {registeredCandidateTransaction} from './registered';
 import Ajv from 'ajv';
 import observationSchemaV2 from '../../../../docs/handoffs/alpha-s6/alpha-observation-contract-v2.schema.json';
 // New registrations use alpha-observation-contract/2.0 (E3b); existing 1.0 observations stay as recorded.
@@ -24,9 +26,12 @@ const validate=new Ajv({strict:true}).compile({type:'object',additionalPropertie
     securityTicker:{anyOf:[{type:'null'},{type:'string',minLength:1,maxLength:40}]},companyEntityId:{anyOf:[{type:'null'},uuid]},
     newObservation:{type:'boolean'},reviewAt:{anyOf:[{type:'null'},{type:'string',maxLength:40}]}}});
 
-export async function submitDecision(actor:S4Actor,candidateId:string,input:DecisionInput) {
+export async function submitDecision(actor:S4Actor,candidateId:string,input:DecisionInput) {return submitDecisionWithPolicy(actor,candidateId,input,false);}
+/** Candidate entrypoint; no production route activation. */
+export async function submitRegisteredDecision(actor:S4Actor,candidateId:string,input:DecisionInput) {return submitDecisionWithPolicy(actor,candidateId,input,true);}
+async function submitDecisionWithPolicy(actor:S4Actor,candidateId:string,input:DecisionInput,registered:boolean) {
   if(!validate(input)||!input.reason.trim()) fail('invalid_schema');
-  return transaction(actor,async db=>{
+  const work=async (db:PoolClient)=>{
     await assertWritableChain(db,actor);
     const {row}=await candidateFor(db,actor,candidateId);
     const request={candidateId,...input,actor_kind:actor.kind};
@@ -101,5 +106,6 @@ export async function submitDecision(actor:S4Actor,candidateId:string,input:Deci
     const state=(await db.query('select status,anchor_status from public.research_s4_observation_state where user_id=$1 and observation_id=$2',[actor.userId,observationId])).rows[0];
     const response={decisionId,observationId,revision:row.revision+1,status:state.status,anchorStatus:state.anchor_status,duplicate:false};
     await saveRequest(db,actor,input.requestKey,request,response);return response;
-  });
+  };
+  return registered?registeredCandidateTransaction(actor,candidateId,work):transaction(actor,work);
 }
