@@ -1,2 +1,3 @@
 # Frozen producer snapshot: preserve mixed line endings and byte-level hashes.
 src/lib/research/ingest/__fixtures__/s3/candidate-pack/source/snapshots/raw.txt -text -diff
+supabase/migrations/*.sql -text

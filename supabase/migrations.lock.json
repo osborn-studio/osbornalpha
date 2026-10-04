@@ -1,0 +1,161 @@
+{
+  "source": "repository snapshot ef669e7352f5db8d095eb624a49f75a0293bbfdb plus recovered historical file; NOT proof of production bytes",
+  "migrations": [
+    {
+      "file": "20260515000000_initial_schema.sql",
+      "sha256": "6ef9b590ae6e382a7fb56bf6e100e83ffe22688cb4dc5f1b1ca262e8b07cfe8b"
+    },
+    {
+      "file": "20260621000000_profiles_and_billing_hooks.sql",
+      "sha256": "442b2f0853440add25a363141e36414ba5f9d5f26db254207f7adc9a148ad914"
+    },
+    {
+      "file": "20260624090000_llm_settings.sql",
+      "sha256": "e3922d6db5cab175a441382bb4019169ef6a467a691f278e00a17c4b018100d6"
+    },
+    {
+      "file": "20260702090000_decision_layer.sql",
+      "sha256": "1c840ecc52e913ceca6de9332e4bf94dc827ecca4996f9e6356f8e7fbaa0f27b"
+    },
+    {
+      "file": "20260703090000_usage_events.sql",
+      "sha256": "a5b3471faa107d9cef5ac5b2a817cbd16c73ae58c4b874e7b597037e9f9b2149"
+    },
+    {
+      "file": "20260703120000_stripe_billing.sql",
+      "sha256": "2421140eeba71f403436743b91bbf0160fe8e0a8364341b07fdcb6d7f1703ef0"
+    },
+    {
+      "file": "20260704000000_timezone_auto_default.sql",
+      "sha256": "0211b3abc927322fb492c76b94ffbde38c01f2f4f77dc1487c2d77a9a95ce46e"
+    },
+    {
+      "file": "20260704090000_markets_jp_kr_tw.sql",
+      "sha256": "f5f6ca3075dd98d9af42fbb88988621ca48032a065c4528c96a2039c1dc77749"
+    },
+    {
+      "file": "20260705000000_research_os_tables.sql",
+      "sha256": "debd31ccfea8d4ed3e44aaac0999fed560033c27dbcffdf9a32d0c2df9b87bcc"
+    },
+    {
+      "file": "20260706120000_deal_memo.sql",
+      "sha256": "db2ca84433f68f7234b7f9744f0a1b2ead928d866c2bf59a6d42956b0d759d8c"
+    },
+    {
+      "file": "20260715000000_user_events.sql",
+      "sha256": "d46e7bcd6fd64dc823e07da5846c6418d2e6c77506d08ffac5e80282d652f386"
+    },
+    {
+      "file": "20260715090000_beta_observability.sql",
+      "sha256": "bc7d9def2baae4c34adb091a960482deafda70d48a48f2f7679df6b0a895e766"
+    },
+    {
+      "file": "20260715130000_security_master_data.sql",
+      "sha256": "9f51beed1a74e5f8a0644f149302ca0ee3c0490f0bab28d6abf86e4c1d6adcfd"
+    },
+    {
+      "file": "20260715140000_watchlist_security_fk.sql",
+      "sha256": "af2e015fe5722b8b2cd458c97c2247bc15daa4700bfb809c55e9e51a7e1d717f"
+    },
+    {
+      "file": "20260721080000_auth_funnel_milestones.sql",
+      "sha256": "1f15664a5831bd38754076fdfa15ea95e0ab2e1dd20f609292896df14e7b29c1"
+    },
+    {
+      "file": "20260721081500_service_alert_runs.sql",
+      "sha256": "1f91a3a626f5c2c329fc8d55cbafbddb9917492b2364289d382b01e6c536538f"
+    },
+    {
+      "file": "20260721083000_auth_email_probes.sql",
+      "sha256": "81d36060bc917f430f795c8eaf2f00fecb63ee106d712024d3fb62458e9fbbf8"
+    },
+    {
+      "file": "20260728090000_llm_daily_cost_budget.sql",
+      "sha256": "be69355704c6c2ac1ddcba5f84f3bbfc5694f5bb6788f53976c123d2ac6cafb7"
+    },
+    {
+      "file": "20260728100000_usage_event_status.sql",
+      "sha256": "7a72c0d5bc15a7c4b3b24c8c78c6adcf7e2d7978c96509103e32a797dbd4e2bf"
+    },
+    {
+      "file": "20260728110000_llm_incurred_budget.sql",
+      "sha256": "387eb0240b5ae71f4b929f2a5c606bd95e8552c07f178130ffad079a15e85928"
+    },
+    {
+      "file": "20260728120000_llm_reservation_usage_audit.sql",
+      "sha256": "2c1f7f8584810879f8f8f3e71545b49e3f1bb634710fdd216a27b55e70d75488"
+    },
+    {
+      "file": "20260728130000_usage_run_lifecycle.sql",
+      "sha256": "e44d038d553dc22ae5184ac9d165e877044e6a246e4b0e31c8c7a3aa257f49e1"
+    },
+    {
+      "file": "20260728140000_cap_exempt_platform_audit.sql",
+      "sha256": "f419a7c309df87f0b75d475e341ba280c1f53229ef583809830aa66dc28987ed"
+    },
+    {
+      "file": "20260728150000_profile_entitlement_security.sql",
+      "sha256": "7ca4ef4955ee57c17ead45799c966999f756dc3fd8b0cfa2a07507617ff3c0d5"
+    },
+    {
+      "file": "20260904090000_watchlist_decision_sync.sql",
+      "sha256": "31b96984bd7fb6b3a3db557618a830ee6cd77d45ee3186452eefe7b218019107"
+    },
+    {
+      "file": "20260922090000_research_s4.sql",
+      "sha256": "056b0a42552c9d49ad8591804305d7a4711dbd454387367ac12e8fb45eae11f8"
+    },
+    {
+      "file": "20260922100000_research_s6.sql",
+      "sha256": "a92ab9c6a3851f125b5028b7984211c7be41dbe1601fe6a2b1d1672f29453d3f"
+    },
+    {
+      "file": "20260922101000_research_s6_hardening.sql",
+      "sha256": "e0a7f714e8f26e9629b462e1172e80f802d6511120bc65ffa6662d5d63aede4e"
+    },
+    {
+      "file": "20260922102000_research_s6_session_clock.sql",
+      "sha256": "aff58dfc855bfca7dd1f8e2b68e326a3ea523db048dccf3cc5fbbfd619977577"
+    },
+    {
+      "file": "20260922103000_research_s6_receipt_clock.sql",
+      "sha256": "368b70924c4a07f4539ad361713e83376890c33b3f76eea437c686f9a2295efb"
+    },
+    {
+      "file": "20260922104000_research_s6_rel_fixture.sql",
+      "sha256": "255a4280ac99a5984f958751b1a903ef44beb68f83accf0d2a26e7a5d2e8f90a"
+    },
+    {
+      "file": "20260925230000_research_source_extension.sql",
+      "sha256": "54aa9b68ceea3ee87810d2b2fc24e54a5cd82e1c72fe70194b22f16e1d3824b2"
+    },
+    {
+      "file": "20260926000000_research_judgment_ledger.sql",
+      "sha256": "e1226abc7ca8e96c37835ae7fb7b9db94d5fa9ea8491f41edc349a33370482db"
+    },
+    {
+      "file": "20260926010000_research_entity_keys.sql",
+      "sha256": "9a455d19a0157e4ea9e50f3791382e6f56cf3ab8f49e7038f7c133a5e3a1652a"
+    },
+    {
+      "file": "20260926100000_research_source_entity_alignments.sql",
+      "sha256": "07d6b59353cff4a94763f955d1927051d45f783cf2a250e405e1519787ec80f0"
+    },
+    {
+      "file": "20260926110000_research_thesis_extension.sql",
+      "sha256": "0de2c2ba8a0b9989c5aab206aa74497062a04563b71c436b0d7dd7a8c1041a70"
+    },
+    {
+      "file": "20260926120000_research_cards.sql",
+      "sha256": "b5da06f28ea8d366ed22a7eaaaeecb5e3f87ebee91413e0652f2f0efd4ec46fb"
+    },
+    {
+      "file": "20260926130000_research_decisions_observation.sql",
+      "sha256": "000b4bbddb1dcfd9ed74de46eefd934a90267e664226c0e6045c450dc1482e60"
+    },
+    {
+      "file": "20260926140000_research_analyst_identities.sql",
+      "sha256": "fea8f4607d3b33b7be2613477e6bf1ea5ed9dcf88018b62ad04017ae61b7fb94"
+    }
+  ]
+}
