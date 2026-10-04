@@ -22,7 +22,8 @@
     "check:migration-history": "tsx scripts/ci/check-migration-history.ts",
     "test:runtime-privileges": "tsx scripts/s4/runtime-privileges-smoke.ts",
     "preflight:research": "tsx scripts/s4/runtime-preflight.ts",
-    "test:runtime-tls": "tsx scripts/s4/runtime-tls-smoke.ts"
+    "test:runtime-tls": "tsx scripts/s4/runtime-tls-smoke.ts",
+    "test:revocation-consumer": "tsx scripts/revocation/consumer-smoke.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
