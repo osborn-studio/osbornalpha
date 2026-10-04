@@ -8,6 +8,7 @@ import {canonicalize,digest} from '../../src/lib/research/ingest/pa-v1/json.js';
 import {prepareRevocationCandidate} from '../../src/lib/research/revocation/candidate';
 import {registerCandidateReference} from '../../src/lib/research/revocation/register';
 import {withRegisteredCandidate,withRegisteredCandidateInTransaction} from '../../src/lib/research/revocation/access';
+import {withStoredCandidateInTransaction} from '../../src/lib/research/revocation/registered-access';
 import {applyRevocationPage} from '../../src/lib/research/revocation/consumer';
 let interrupted=false;const interrupt=()=>{interrupted=true;};process.on('SIGINT',interrupt);process.on('SIGTERM',interrupt);
 async function main(){
@@ -89,8 +90,20 @@ async function main(){
    await assert.rejects(withRegisteredCandidateInTransaction(client,actor,hash,expected,async()=>{entered=true;}),error=>error instanceof Error&&error.cause==='transaction_not_clean');
    assert.equal(entered,false);
    assert.equal((await client.query('commit')).command,'ROLLBACK');
+   for(const [owner,payload] of [[randomUUID(),hash],[actor,'0'.repeat(64)],['invalid-uuid',hash]]){
+    await client.query('begin');
+    await assert.rejects(withStoredCandidateInTransaction(client,owner,payload,async()=>{entered=true;}),/revocation_access_denied/);
+    assert.equal(entered,false);assert.equal((await client.query('commit')).command,'ROLLBACK');
+   }
+   await client.query('begin');
+   await client.query('insert into research_revocation_candidate.synthetic_access_result values(99)');
+   await assert.rejects(withStoredCandidateInTransaction(client,actor,'0'.repeat(64),async()=>{entered=true;}),error=>error instanceof Error&&error.message==='revocation_access_denied'&&error.cause==='transaction_not_clean');
+   assert.equal(entered,false);assert.equal((await client.query('commit')).command,'ROLLBACK');
+   await client.query('begin');await assert.rejects(client.query('select 1/0'));
+   await assert.rejects(withStoredCandidateInTransaction(client,actor,hash,async()=>{entered=true;}),error=>error instanceof Error&&error.message==='revocation_access_denied');
+   assert.equal(entered,false);assert.equal((await client.query('commit')).command,'ROLLBACK');
    await client.query('begin isolation level read committed');
-   const count=await withRegisteredCandidateInTransaction(client,actor,hash,expected,async same=>{
+   const count=await withStoredCandidateInTransaction(client,actor,hash,async same=>{
     await same.query('insert into research_revocation_candidate.synthetic_access_result values(9)');
     assert.equal(same,client);
     return (await same.query('select count(*)::int n from research_revocation_candidate.synthetic_access_result')).rows[0].n;
@@ -100,7 +113,7 @@ async function main(){
    await client.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '55 seconds'");
    await client.query('begin');
    let postEntered=false;
-   await assert.rejects(withRegisteredCandidateInTransaction(client,actor,hash,expected,async same=>{
+   await assert.rejects(withStoredCandidateInTransaction(client,actor,hash,async same=>{
     postEntered=true;await same.query('insert into research_revocation_candidate.synthetic_access_result values(10)');
     await same.query('select pg_sleep(6)');return true;
    }),/revocation_access_denied/);
@@ -163,10 +176,23 @@ async function main(){
   }finally{release();await settled;}
   assert.equal(await operation,'committed before revocation');await consume;
   assert.equal((await db.query('select value from research_revocation_candidate.synthetic_access_result')).rows[0].value,2);
+  const deniedClient=await db.connect();
+  try{
+   await deniedClient.query('begin');let leaked=false;
+   await assert.rejects(withStoredCandidateInTransaction(deniedClient,actor,hash,async()=>{leaked=true;}),/revocation_access_denied/);
+   assert.equal(leaked,false);assert.equal((await deniedClient.query('commit')).command,'ROLLBACK');
+  }finally{await deniedClient.query('rollback');deniedClient.release();}
   await rejected(register(),'binding_revoked');
   await assert.rejects(withRegisteredCandidate(db,actor,hash,expected,async()=>true),/revocation_access_denied/);
   // Even an accidentally reset binding must not bypass a retained tombstone.
   await db.query('update public.research_s4_bindings set revoked=false where user_id=$1',[actor]);await rejected(register(),'grant_version_revoked');await deniedAccess(expected,'grant_version_revoked');
+  const storedTombstone=await db.connect();
+  try{
+   await storedTombstone.query('begin');let entered=false;
+   await assert.rejects(withStoredCandidateInTransaction(storedTombstone,actor,hash,async()=>{entered=true;}),error=>error instanceof Error&&error.cause==='grant_version_revoked');
+   assert.equal(entered,false);assert.equal((await storedTombstone.query('commit')).command,'ROLLBACK');
+  }finally{await storedTombstone.query('rollback');storedTombstone.release();}
+
   await assert.rejects(db.query('insert into research_revocation_candidate.binding_map values($1,$2,$3,$4,$5,$6) on conflict do nothing',[feedId,actor,t.sourceId,expected.grantId,1,hash]),/grant_version_revoked/);
   assert.equal((await db.query('select count(*)::int n from research_revocation_candidate.binding_map')).rows[0].n,1);
   // Reverse ordering: retained tombstone is visible only after the writer commits.

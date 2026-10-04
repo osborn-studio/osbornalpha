@@ -9,7 +9,7 @@ const deny=(code:string):never=>{throw new AccessGateError(code);};
  * Failure aborts the unchanged transaction; caller must rollback. Trusted
  * DB-only work cannot control transactions, mutate security tables or emit results.
  * Caller retains session/role authorization and source/payload integrity duties. */
-export async function withRegisteredCandidateInTransaction<T>(db:PoolClient,actor:string,payloadHash:string,expected:ExpectedGrantReference,work:(db:PoolClient)=>Promise<T>):Promise<T>{
+export async function withRegisteredCandidateInTransaction<T>(db:PoolClient,actor:string,payloadHash:string,expectedOrResolve:ExpectedGrantReference|((db:PoolClient)=>Promise<ExpectedGrantReference>),work:(db:PoolClient)=>Promise<T>):Promise<T>{
  let transactionId:string|null=null;
  try{
   const state=(await db.query("select pg_catalog.pg_current_xact_id_if_assigned()::text as id,current_setting('transaction_isolation') as isolation")).rows[0];
@@ -19,6 +19,8 @@ export async function withRegisteredCandidateInTransaction<T>(db:PoolClient,acto
   transactionId=(await db.query('select pg_catalog.pg_current_xact_id()::text as id')).rows[0].id;
   await db.query('select pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1::uuid::text,0))',[actor]);
   if((await db.query('select pg_catalog.pg_current_xact_id()::text as id')).rows[0].id!==transactionId)deny('explicit_transaction_required');
+  // Resolver is trusted read-only application code; never supplied by a request.
+  const expected=typeof expectedOrResolve==='function'?await expectedOrResolve(db):expectedOrResolve;
   const check=async()=>{
    const binding=(await db.query('select binding,revoked from public.research_s4_bindings where user_id=$1 and payload_hash=$2',[actor,payloadHash])).rows[0];
    if(!binding||binding.revoked)deny('binding_unavailable');
