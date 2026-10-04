@@ -1,3 +1,4 @@
+import {requireProductionResearchActor} from '../runtime/session';
 import {assertResearchRequest} from '../runtime/request';
 import {createHmac,timingSafeEqual} from 'node:crypto';
 import {parseStrict,fail} from '../ingest/pa-v1/json.js';
@@ -11,6 +12,7 @@ export function localSessionToken(userId:string,secret:string,expiresAt:number) 
 }
 export async function requireS4Actor(req:Request):Promise<S4Actor> {
   s4Pool();
+  if(process.env.ALPHA_RESEARCH_RUNTIME_MODE==='production')return requireProductionResearchActor(req);
   const origin=process.env.ALPHA_S4_ORIGIN;
   assertResearchRequest(req,origin);
   if(!['localhost','127.0.0.1','[::1]'].includes(new URL(origin!).hostname))fail('scope_denied');

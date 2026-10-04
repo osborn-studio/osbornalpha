@@ -34,3 +34,7 @@ The session entrypoint now requires request URL origin and Host to match the ope
 - No production database, resources, role grants, flags or secrets are changed. Operational storage location, runner identity, fault domain, independent checkpoint and capacity budget remain unknown; no fictional host or account is selected here.
 
 References: [node-postgres SSL configuration](https://node-postgres.com/features/ssl), [PostgreSQL 17 privilege inquiry functions](https://www.postgresql.org/docs/17/functions-info.html). The SSL documentation warns that URL SSL parameters can replace explicit TLS options; this implementation passes individual connection fields instead.
+
+## Candidate owner/session integration
+
+`requireProductionResearchActor` now reuses verified Supabase identity and admin-profile authorization and applies the explicit owner allowlist. It accepts only the original Route Handler Request, rejects local acceptance cookies, fixes actor kind to human and sanitizes provider errors. It does not trust body identity, role claims or forwarded headers. It remains behind the hard-closed s4Pool production guard. The helper and provider boundary have synthetic tests; real deployment session refresh, environment configuration and profile-RLS acceptance remain release gates.
