@@ -1,3 +1,4 @@
+import {revocationHttpError} from '../revocation/http-error';
 import {NextResponse} from 'next/server';
 import {parseStrict,fail} from '../ingest/pa-v1/json.js';
 import {ResearchForbidden} from '../store';
@@ -12,6 +13,8 @@ export async function bodyJson(req:Request){return parseStrict(await bodyText(re
 export async function s4Http(fn:()=>Promise<unknown>) {
   try{return NextResponse.json(await fn(),{headers:{'Cache-Control':'no-store'}});}
   catch(e){
+  const revocation=revocationHttpError(e);
+  if(revocation)return Response.json({error:{code:revocation.code}},{status:revocation.status,headers:{'Cache-Control':'no-store'}});
     let code=(e as {code?:string}).code||'internal_error';
     if(e instanceof ResearchForbidden)code='scope_denied';
     if(e instanceof Error&&e.message==='not authenticated')code='not_authenticated';

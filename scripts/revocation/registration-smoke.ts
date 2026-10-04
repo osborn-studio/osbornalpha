@@ -1,3 +1,4 @@
+import {s4Http} from '../../src/lib/research/s4/http';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {randomUUID,generateKeyPairSync,sign} from 'node:crypto';
@@ -44,6 +45,8 @@ async function main(){
   const apply=async(p:unknown)=>{const b=Buffer.from(JSON.stringify(p));return applyRevocationPage(db,registration,b,sign(null,b,privateKey).toString('hex'));};
   await apply(page);
   await assert.rejects(importRegisteredCandidate(s4Actor,raw),/revocation_access_denied/);
+  const httpDenied=await s4Http(()=>importRegisteredCandidate(s4Actor,raw));
+  assert.equal(httpDenied.status,503);
   assert.equal((await db.query('select count(*)::int n from public.research_s4_candidates')).rows[0].n,0);
   let called=false;
   await assert.rejects(withRegisteredCandidate(db,actor,hash,expected,async()=>{called=true;return 'denied';}),/revocation_access_denied/);
@@ -148,6 +151,7 @@ async function main(){
   await assert.rejects(revealRegisteredCards(s4Actor,imported.id,slowInput),error=>error instanceof Error&&error.cause==='revocation_stale');
   assert.ok(performance.now()-slowStarted>=5900,'must reach delayed request insert before post-check denial');
   assert.deepEqual(await businessCounts(),beforeSlow);
+  assert.equal((await s4Http(()=>registeredCandidateStatus(s4Actor,imported.id))).status,503);
   await assert.rejects(revealRegisteredCards(s4Actor,imported.id,slowInput),error=>error instanceof Error&&error.cause==='revocation_stale');
   await assert.rejects(registeredCandidateStatus(s4Actor,imported.id),/revocation_access_denied/);
   assert.deepEqual(await businessCounts(),beforeSlow);
@@ -168,6 +172,7 @@ async function main(){
   assert.deepEqual(await importRegisteredCandidate(s4Actor,raw),{id:imported.id,duplicate:true});
   await db.query("insert into public.research_s4_integrity(user_id,reason) values($1,'anchor_integrity_failed')",[actor]);
   await assert.rejects(importRegisteredCandidate(s4Actor,raw),/anchor_integrity_failed/);
+  assert.equal((await s4Http(()=>importRegisteredCandidate(s4Actor,raw))).status,403);
   await db.query('delete from public.research_s4_integrity where user_id=$1',[actor]);
   for(const change of [{grant_version:2},{source_id:randomUUID()},{revocation_seq_at_export:'1'}]){
    const changed=structuredClone(t.pack);changed.manifest.extensions['pa.revocation_reference']={...reference,...change};changed.files['manifest.json']=canonicalize(changed.manifest);
@@ -192,7 +197,7 @@ async function main(){
     const binding=structuredClone(t.binding);const config=binding.trustedConfig as unknown as Record<string,Record<string,unknown>>;
     config[field].valid_until=expiry;
     await db.query('update public.research_s4_bindings set binding=$2 where user_id=$1',[actor,binding]);
-    await deniedAccess(expected,'grant_invalid_or_expired');
+    await deniedAccess(expected,expiry===undefined?'grant_config_invalid':'grant_expired');
    }
   }
   await db.query('update public.research_s4_bindings set binding=$2 where user_id=$1',[actor,t.binding]);
@@ -267,7 +272,7 @@ async function main(){
   await assert.rejects(withRegisteredCandidate(db,actor,hash,expected,async client=>{
    grantEntered=true;await client.query('insert into research_revocation_candidate.synthetic_access_result values(3)');
    await client.query('select pg_sleep(6)');return true;
-  }),error=>error instanceof Error&&error.cause==='grant_invalid_or_expired');
+  }),error=>error instanceof Error&&error.cause==='grant_expired');
   assert.equal(grantEntered,true);
   assert.equal((await db.query('select count(*)::int n from research_revocation_candidate.synthetic_access_result')).rows[0].n,0);
   await db.query('update public.research_s4_bindings set binding=$2 where user_id=$1',[actor,t.binding]);
@@ -312,6 +317,7 @@ async function main(){
   await assert.rejects(revealRegisteredCards(s4Actor,imported.id,revealInput),/revocation_access_denied/);
   assert.equal((await db.query('select count(*)::int n from public.research_s4_records where user_id=$1',[actor])).rows[0].n,recordsBefore);
   await rejected(register(),'binding_revoked');
+  assert.equal((await s4Http(()=>importRegisteredCandidate(s4Actor,raw))).status,403);
   await assert.rejects(importRegisteredCandidate(s4Actor,raw),/revocation_access_denied/);
   assert.equal((await db.query('select count(*)::int n from public.research_s4_candidates')).rows[0].n,1);
   await assert.rejects(withRegisteredCandidate(db,actor,hash,expected,async()=>true),/revocation_access_denied/);

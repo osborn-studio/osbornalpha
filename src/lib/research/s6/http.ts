@@ -1,3 +1,4 @@
+import {revocationHttpError} from '../revocation/http-error';
 import {parseStrict} from 'dsh-trade-strategy-evaluator/engine';
 import {fail} from '../ingest/pa-v1/json.js';
 import {bodyText} from '../s4/http';
@@ -7,6 +8,8 @@ import {createS6Store,type Commit} from './store';
 export async function s6Http(fn:()=>Promise<unknown>){
  try{return Response.json(await fn(),{headers:{'Cache-Control':'no-store'}});}
  catch(e){
+  const revocation=revocationHttpError(e);
+  if(revocation)return Response.json({error:{code:revocation.code}},{status:revocation.status,headers:{'Cache-Control':'no-store'}});
   let code=(e as {code?:string}).code||'internal_error';
   if(e instanceof ResearchForbidden)code='scope_denied';
   if(e instanceof Error&&e.message==='not authenticated')code='not_authenticated';

@@ -1,3 +1,4 @@
+import {RevocationAccessDenied} from './error';
 import type {Pool,PoolClient} from 'pg';
 import {fail} from '../ingest/pa-v1/json.js';
 import {validateCandidateBinding} from '../ingest/candidate';
@@ -24,7 +25,8 @@ export async function withRegisteredCandidateInTransaction<T>(db:PoolClient,acto
   const expected=typeof expectedOrResolve==='function'?await expectedOrResolve(db):expectedOrResolve;
   const check=async()=>{
    const binding=(await db.query('select binding,revoked from public.research_s4_bindings where user_id=$1 and payload_hash=$2',[actor,payloadHash])).rows[0];
-   if(!binding||binding.revoked)deny('binding_unavailable');
+   if(!binding)deny('binding_missing');
+   if(binding.revoked)deny('binding_revoked');
    validateCandidateBinding(binding.binding);const b=binding.binding;
    if(b.localUserId!==actor||b.revoked||b.approvedPayloadHash!==payloadHash||b.upstreamScope.user_id!==expected.scope.user_id||b.upstreamScope.workspace_id!==expected.scope.workspace_id)throw new Error();
    const rows=(await db.query(`select m.source_id,m.grant_id,m.grant_version,f.* from research_revocation_candidate.binding_map m
@@ -38,7 +40,9 @@ export async function withRegisteredCandidateInTransaction<T>(db:PoolClient,acto
     and event->>'source_id'=$2 and event->>'grant_id'=$3 and (event->>'grant_version')::integer=$4 limit 1`,[expected.feedId,expected.sourceId,expected.grantId,expected.grantVersion])).rowCount)deny('grant_version_revoked');
    const now=(await db.query('select pg_catalog.clock_timestamp() as now')).rows[0].now.getTime();
    const config=b.trustedConfig as {rights?:{valid_until?:string};grant?:{grant_id?:string;valid_until?:string}};
-   if(config.grant?.grant_id!==expected.grantId||[config.rights?.valid_until,config.grant?.valid_until].some(t=>!t||!Number.isFinite(Date.parse(t))||Date.parse(t)<=now))deny('grant_invalid_or_expired');
+   const expiries=[config.rights?.valid_until,config.grant?.valid_until];
+   if(config.grant?.grant_id!==expected.grantId||expiries.some(t=>!t||!Number.isFinite(Date.parse(t))))deny('grant_config_invalid');
+   if(expiries.some(t=>Date.parse(t!)<=now))deny('grant_expired');
    try{assertRevocationFresh({feedId:row.feed_id,scope:{user_id:row.upstream_user,workspace_id:row.workspace_id},cursor:row.cursor,latestSeq:row.latest_seq,publishedAt:row.published_at?.toISOString()??null},{feedId:expected.feedId,scope:expected.scope},now);}catch{deny('revocation_stale');}
   };
   await check();inWork=true;const result=await work(db);inWork=false;
@@ -54,7 +58,7 @@ export async function withRegisteredCandidateInTransaction<T>(db:PoolClient,acto
   }catch{/* Already aborted, disconnected, or deliberately poisoned. */}
   const code=(error as {code?:unknown})?.code;
   if(inWork&&error instanceof Error&&typeof code==='string'&&/^[a-z][a-z_]{0,63}$/.test(code)&&error.message===code&&typeof (error as {recovery?:unknown}).recovery==='string')fail(code);
-  throw new Error('revocation_access_denied',{cause:error instanceof AccessGateError?error.message:'validation_or_database'});
+  throw new RevocationAccessDenied(error instanceof AccessGateError?error.message:'validation_or_database');
  }
 }
 /** Standalone candidate adapter. Do not nest inside an existing pool transaction. */
