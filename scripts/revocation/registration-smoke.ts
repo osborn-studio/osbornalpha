@@ -13,7 +13,7 @@ import {testPack} from '../s4/test-pack';
 import {canonicalize,digest} from '../../src/lib/research/ingest/pa-v1/json.js';
 import {prepareRevocationCandidate} from '../../src/lib/research/revocation/candidate';
 import {registerCandidateReference} from '../../src/lib/research/revocation/register';
-import {withRegisteredCandidate,withRegisteredCandidateInTransaction} from '../../src/lib/research/revocation/access';
+import {withRegisteredCandidate,withRegisteredCandidateInTransaction,withRegisteredCandidatesInTransaction} from '../../src/lib/research/revocation/access';
 import {withStoredCandidateInTransaction} from '../../src/lib/research/revocation/registered-access';
 import {applyRevocationPage} from '../../src/lib/research/revocation/consumer';
 let interrupted=false;const interrupt=()=>{interrupted=true;};process.on('SIGINT',interrupt);process.on('SIGTERM',interrupt);
@@ -205,6 +205,72 @@ async function main(){
   // Compose on one checked-out client: require a clean outer transaction;
   // denied work cannot be committed by a catch-and-COMMIT caller. A single-connection pool would
   // deadlock if the helper tried to acquire a nested connection.
+  const secondHash='e'.repeat(64);
+  await db.query('insert into public.research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[actor,secondHash,{...t.binding,approvedPayloadHash:secondHash}]);
+  await db.query('insert into research_revocation_candidate.binding_map values($1,$2,$3,$4,$5,$6)',[feedId,actor,t.sourceId,expected.grantId,1,secondHash]);
+  const batchItems=[{payloadHash:hash,expected},{payloadHash:secondHash,expected}];
+  const batchClient=await db.connect();
+  try{
+   await batchClient.query('begin isolation level read committed');
+   assert.equal(await withRegisteredCandidatesInTransaction(batchClient,actor,async()=>batchItems,async()=>2),2);
+   await batchClient.query('rollback');
+   await db.query('update public.research_s4_bindings set revoked=true where user_id=$1 and payload_hash=$2',[actor,secondHash]);
+   await batchClient.query('begin isolation level read committed');let entered=false;
+   await assert.rejects(withRegisteredCandidatesInTransaction(batchClient,actor,async()=>batchItems,async()=>{entered=true;return 2;}),error=>error instanceof Error&&error.cause==='binding_revoked');
+   assert.equal(entered,false);assert.equal((await batchClient.query('commit')).command,'ROLLBACK');
+   await batchClient.query('begin isolation level read committed');
+   await assert.rejects(withRegisteredCandidatesInTransaction(batchClient,actor,async()=>[batchItems[0],batchItems[0]],async()=>{entered=true;}),error=>error instanceof Error&&error.cause==='invalid_batch');
+   assert.equal(entered,false);await batchClient.query('rollback');
+   await db.query('update public.research_s4_bindings set revoked=false where user_id=$1 and payload_hash=$2',[actor,secondHash]);
+   for(const items of [[],Array(101).fill(batchItems[0]),[{}],null]){
+    await batchClient.query('begin isolation level read committed');
+    await assert.rejects(withRegisteredCandidatesInTransaction(batchClient,actor,async()=>items as typeof batchItems,async()=>{entered=true;}),error=>error instanceof Error&&error.cause==='invalid_batch');
+    assert.equal(entered,false);assert.equal((await batchClient.query('commit')).command,'ROLLBACK');
+   }
+   await batchClient.query('begin isolation level read committed');
+   const original=structuredClone(batchItems);
+   assert.equal(await withRegisteredCandidatesInTransaction(batchClient,actor,async()=>original,async(_,authorized)=>{
+    original.splice(0);assert.equal(authorized.length,2);assert.ok(Object.isFrozen(authorized[0].expected.scope));return 2;
+   }),2);await batchClient.query('rollback');
+   const short=structuredClone(t.binding);
+   const setShort=async()=>{
+    (short.trustedConfig.grant as Record<string,unknown>).valid_until=(await db.query("select clock_timestamp()+interval '5 seconds' as t")).rows[0].t.toISOString();
+    await db.query('update public.research_s4_bindings set binding=$2 where user_id=$1 and payload_hash=$3',[actor,short,hash]);
+   };
+   await setShort();await batchClient.query('begin isolation level read committed');
+   // Delay only the later reference read; it has a fresh grant. The common
+   // final clock must still reject the earlier reference's expired grant.
+   let delayed=false;
+   const proxy=new Proxy(batchClient,{get(target,key){if(key==='query')return async(text:string,values?:unknown[])=>{
+    if(!delayed&&text.startsWith('select binding,revoked')&&values?.[1]===secondHash){delayed=true;await target.query('select pg_sleep(6)');}
+    return target.query(text,values);
+   };return Reflect.get(target,key);}});
+   await assert.rejects(withRegisteredCandidatesInTransaction(proxy,actor,async()=>batchItems,async()=>{entered=true;}),error=>error instanceof Error&&error.cause==='grant_expired');
+   assert.equal(entered,false);assert.equal(delayed,true);assert.equal((await batchClient.query('commit')).command,'ROLLBACK');
+   for(const businessError of [false,true]){
+    await setShort();await batchClient.query('begin isolation level read committed');let workEntered=false;
+    await assert.rejects(withRegisteredCandidatesInTransaction(batchClient,actor,async()=>batchItems,async client=>{
+     workEntered=true;await client.query('insert into research_revocation_candidate.synthetic_access_result values(77)');await client.query('select pg_sleep(6)');
+     if(businessError)throw Object.assign(new Error('revision_conflict'),{code:'revision_conflict',recovery:'synthetic'});return 2;
+    }),error=>error instanceof Error&&error.cause==='grant_expired');
+    assert.equal(workEntered,true);assert.equal((await batchClient.query('commit')).command,'ROLLBACK');
+    assert.equal((await db.query('select count(*)::int n from research_revocation_candidate.synthetic_access_result')).rows[0].n,0);
+   }
+   await db.query('update public.research_s4_bindings set binding=$2 where user_id=$1 and payload_hash=$3',[actor,t.binding,hash]);
+   const hundred=Array.from({length:100},(_,i)=>({payloadHash:(i+1).toString(16).padStart(64,'0'),expected}));
+   for(const item of hundred){
+    await db.query('insert into public.research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[actor,item.payloadHash,{...t.binding,approvedPayloadHash:item.payloadHash}]);
+    await db.query('insert into research_revocation_candidate.binding_map values($1,$2,$3,$4,$5,$6)',[feedId,actor,t.sourceId,expected.grantId,1,item.payloadHash]);
+   }
+   await db.query('update research_revocation_candidate.feed set published_at=clock_timestamp()');
+   await batchClient.query('begin isolation level read committed');
+   assert.equal(await withRegisteredCandidatesInTransaction(batchClient,actor,async()=>hundred,async(_,items)=>items.length),100);
+   await batchClient.query('rollback');
+   await db.query('delete from research_revocation_candidate.binding_map where payload_hash=any($1::text[])',[hundred.map(i=>i.payloadHash)]);
+   await db.query('delete from public.research_s4_bindings where payload_hash=any($1::text[])',[hundred.map(i=>i.payloadHash)]);
+  }finally{await batchClient.query('rollback');batchClient.release();}
+  await db.query('delete from research_revocation_candidate.binding_map where payload_hash=$1',[secondHash]);
+  await db.query('delete from public.research_s4_bindings where payload_hash=$1',[secondHash]);
   const single=new Pool({connectionString:state.adminUrl,max:1,connectionTimeoutMillis:500,statement_timeout:10000});
   const client=await single.connect();
   try{
