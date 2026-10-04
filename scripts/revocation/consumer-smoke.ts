@@ -11,6 +11,7 @@ async function main(){
  const state=await startLocalDatabase();const db=new Pool({connectionString:state.adminUrl,max:3,connectionTimeoutMillis:5000,statement_timeout:15000});let primary:unknown;
  try{
   await db.query(readFileSync('scripts/revocation/candidate-schema.sql','utf8'));
+  await db.query(readFileSync('scripts/revocation/retention-guards.sql','utf8'));
   const {privateKey,publicKey}=generateKeyPairSync('ed25519');
   const registration={feedId:id(1),localOwner:id(2),scope:{user_id:id(3),workspace_id:null},key:publicKey};
   await db.query('insert into auth.users(id) values($1),($2)',[id(2),id(9)]);

@@ -24,7 +24,8 @@
     "preflight:research": "tsx scripts/s4/runtime-preflight.ts",
     "test:runtime-tls": "tsx scripts/s4/runtime-tls-smoke.ts",
     "test:revocation-consumer": "tsx scripts/revocation/consumer-smoke.ts",
-    "test:revocation-registration": "tsx scripts/revocation/registration-smoke.ts"
+    "test:revocation-registration": "tsx scripts/revocation/registration-smoke.ts",
+    "test:revocation-retention": "tsx scripts/revocation/retention-smoke.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
