@@ -3,7 +3,7 @@ import {requireS4Actor} from '@/lib/research/s4/auth';
 import {bodyJson} from '@/lib/research/s4/http';
 import {s6Http} from '@/lib/research/s6/http';
 import {registeredObservationReport} from '@/lib/research/s6/report';
-import {prepareInput,prepareEvaluation,makeCommit,createS6Store} from '@/lib/research/s6/store';
+import {prepareRegisteredInput,prepareEvaluation,makeCommit,createRegisteredS6Store} from '@/lib/research/s6/store';
 import {fail} from '@/lib/research/ingest/pa-v1/json';
 const valid=new Ajv({strict:true}).compile({oneOf:[
  {type:'object',additionalProperties:false,required:['action'],properties:{action:{enum:['read','prepare']}}},
@@ -15,10 +15,11 @@ export async function POST(req:Request,ctx:{params:Promise<{id:string}>}){
  return s6Http(async()=>{
   const actor=await requireS4Actor(req),body=await bodyJson(req),{id}=await ctx.params;
   if(!valid(body))fail('invalid_schema');
+  // Prepare metadata is still legacy pending disclosure/exposure adoption.
   if(body.action==='prepare')return prepareEvaluation(actor,id);
   if(body.action==='evaluate'){
-   const input=await prepareInput(actor,id,body.marketIds,body.asOf);
-   return createS6Store(actor).commitEvaluationResult(makeCommit(input,body.key,body.revision));
+   const input=await prepareRegisteredInput(actor,id,body.marketIds,body.asOf);
+   return createRegisteredS6Store(actor).commitEvaluationResult(makeCommit(input,body.key,body.revision));
   }
   return registeredObservationReport(actor,id,body.action==='replay'?body.evaluationId:undefined);
  });
