@@ -10,7 +10,7 @@ export async function s6Http(fn:()=>Promise<unknown>){
  catch(e){
   const revocation=revocationHttpError(e);
   if(revocation)return Response.json({error:{code:revocation.code}},{status:revocation.status,headers:{'Cache-Control':'no-store'}});
-  let code=(e as {code?:string}).code||'internal_error';
+  let code=(e as {code?:string}|null)?.code||'internal_error';
   if(e instanceof ResearchForbidden)code='scope_denied';
   if(e instanceof Error&&e.message==='not authenticated')code='not_authenticated';
   const status=code==='not_authenticated'?401:code==='not_found'?404:code==='not_configured'?503:

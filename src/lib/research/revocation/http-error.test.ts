@@ -36,3 +36,28 @@ for(const [name,http] of [['S4',s4Http],['S6',s6Http]] as const){
   });
  });
 }
+
+describe('S4 registered import error contract',()=>{
+ for(const [code,status] of [['invalid_revocation_candidate',422],['export_watermark_ahead',503]] as const){
+  it(code,async()=>{
+   const response=await s4Http(async()=>fail(code));
+   expect(response.status).toBe(status);
+   expect(response.headers.get('cache-control')).toBe('no-store');
+   expect(response.headers.get('retry-after')).toBeNull();
+   expect(await response.json()).toEqual({error:{code}});
+   const collision=await s4Http(async()=>{throw new Error(code);});
+   expect(collision.status).toBe(500);
+   expect(await collision.json()).toEqual({error:{code:'internal_error'}});
+  });
+ }
+});
+for(const [name,http] of [['S4',s4Http],['S6',s6Http]] as const){
+ for(const value of [null,undefined,'private database text',123]){
+  it(name+' sanitizes non-Error throws '+String(value),async()=>{
+   const response=await http(async()=>{throw value;});
+   expect(response.status).toBe(500);
+   expect(response.headers.get('cache-control')).toBe('no-store');
+   expect(await response.json()).toEqual({error:{code:'internal_error'}});
+  });
+ }
+}

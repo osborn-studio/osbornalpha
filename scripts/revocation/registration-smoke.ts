@@ -108,6 +108,9 @@ async function main(){
    const before=await businessCounts(),code=mutation==='watermark'?'export_watermark_ahead':mutation==='source'?'source_version_conflict':'invalid_revocation_candidate';
    for(const op of [()=>registeredCitation(s4Actor,imported.id,shown.cards[0].id,0),()=>registeredReviewHistory(s4Actor,imported.id),()=>submitRegisteredDecision(s4Actor,imported.id,decision),()=>registeredCandidateStatus(s4Actor,imported.id),()=>revealRegisteredCards(s4Actor,imported.id,{...revealInput,requestKey:randomUUID()})]){
     await assert.rejects(op(),error=>error instanceof Error&&error.message===code);
+    const response=await s4Http(op);
+    assert.equal(response.status,code==='export_watermark_ahead'?503:code==='source_version_conflict'?409:422);
+    assert.deepEqual(await response.json(),{error:{code}});
    }
    assert.deepEqual(await businessCounts(),before);
   }
@@ -174,13 +177,23 @@ async function main(){
   await assert.rejects(importRegisteredCandidate(s4Actor,raw),/anchor_integrity_failed/);
   assert.equal((await s4Http(()=>importRegisteredCandidate(s4Actor,raw))).status,403);
   await db.query('delete from public.research_s4_integrity where user_id=$1',[actor]);
-  for(const change of [{grant_version:2},{source_id:randomUUID()},{revocation_seq_at_export:'1'}]){
+  for(const change of [{grant_version:2},{source_id:randomUUID()},{revocation_seq_at_export:'1'},{revocation_seq_at_export:'1.5'},{revocation_seq_at_export:'-1'},{revocation_seq_at_export:''},{revocation_seq_at_export:1},{revocation_seq_at_export:'01'},{revocation_seq_at_export:'9223372036854775808'}]){
    const changed=structuredClone(t.pack);changed.manifest.extensions['pa.revocation_reference']={...reference,...change};changed.files['manifest.json']=canonicalize(changed.manifest);
    await db.query('update public.research_s4_bindings set binding=$2 where user_id=$1',[actor,{...t.binding,approvedManifestHash:digest(changed.manifest)}]);
-   await assert.rejects(importRegisteredCandidate(s4Actor,JSON.stringify(changed)),change.revocation_seq_at_export?/export_watermark_ahead/:/invalid_revocation_candidate/);
+   await assert.rejects(importRegisteredCandidate(s4Actor,JSON.stringify(changed)),change.revocation_seq_at_export==='1'?/export_watermark_ahead/:/invalid_revocation_candidate/);
+   const response=await s4Http(()=>importRegisteredCandidate(s4Actor,JSON.stringify(changed)));
+   assert.equal(response.status,change.revocation_seq_at_export==='1'?503:422);
+   assert.deepEqual(await response.json(),{error:{code:change.revocation_seq_at_export==='1'?'export_watermark_ahead':'invalid_revocation_candidate'}});
    assert.equal((await db.query('select count(*)::int n from public.research_s4_candidates')).rows[0].n,1);
   }
   await db.query('update public.research_s4_bindings set binding=$2 where user_id=$1',[actor,t.binding]);
+  // Unsafe JSON numbers are rejected by the strict parser before reference validation.
+  const unsafe=structuredClone(t.pack);
+  unsafe.files['manifest.json']=t.pack.files['manifest.json'].replace(/"revocation_seq_at_export":"0"/,'"revocation_seq_at_export":9007199254740992');
+  assert.notEqual(unsafe.files['manifest.json'],t.pack.files['manifest.json']);
+  const unsafeResponse=await s4Http(()=>importRegisteredCandidate(s4Actor,JSON.stringify(unsafe)));
+  assert.equal(unsafeResponse.status,422);
+  assert.deepEqual(await unsafeResponse.json(),{error:{code:'invalid_schema'}});
   const tampered=structuredClone(t.pack);tampered.manifest.extensions['pa.revocation_reference']={...reference,grant_version:2};tampered.files['manifest.json']=canonicalize(tampered.manifest);
   await assert.rejects(importRegisteredCandidate(s4Actor,JSON.stringify(tampered)),error=>error instanceof Error&&error.message==='policy_blocked');
   assert.equal((await db.query('select count(*)::int n from public.research_s4_candidates')).rows[0].n,1);
