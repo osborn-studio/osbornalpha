@@ -1,3 +1,4 @@
+import {registeredObservationReport} from '../../src/lib/research/s6/report';
 import {revealRegisteredCards} from '../../src/lib/research/s4/cards';
 import {submitRegisteredDecision} from '../../src/lib/research/s4/decisions';
 import {createRegisteredS6Store,prepareRegisteredEvaluation,prepareRegisteredInput,makeCommit} from '../../src/lib/research/s6/store';
@@ -18,7 +19,7 @@ import {listRegisteredCandidates,type CandidatePageCursor} from '../../src/lib/r
 import {closeS4Pool} from '../../src/lib/research/s4/db';
 import {s4Http} from '../../src/lib/research/s4/http';
 async function main(){
- const state=await startLocalDatabase(),db=new Pool({connectionString:state.adminUrl});let primary:unknown;
+ const state=await startLocalDatabase(),db=new Pool({connectionString:state.adminUrl,statement_timeout:10000,connectionTimeoutMillis:5000});let primary:unknown;
  try{
   await db.query(readFileSync('scripts/revocation/candidate-schema.sql','utf8'));
   await db.query('grant usage on schema research_revocation_candidate to alpha_s4_runtime;grant select on all tables in schema research_revocation_candidate to alpha_s4_runtime');
@@ -150,10 +151,48 @@ async function main(){
   const bytes=Buffer.from(JSON.stringify({...affected.page,through_seq:'1',latest_seq:'1',published_at:new Date().toISOString(),events:[event]}));
   const unaffectedSnapshot=async()=>({binding:(await db.query('select * from public.research_s4_bindings where user_id=$1 and payload_hash=$2',[actor.userId,seeds[1].t.binding.approvedPayloadHash])).rows,feed:(await db.query('select * from research_revocation_candidate.feed where feed_id=$1',[seeds[1].feedId])).rows,mapping:(await db.query('select * from research_revocation_candidate.binding_map where feed_id=$1',[seeds[1].feedId])).rows});
   const unaffectedBefore=await unaffectedSnapshot();
-  await applyRevocationPage(db,affected.registration,bytes,sign(null,bytes,privateKey).toString('hex'));
+  // A real registered commit owns the source lock while a synthetic DB gate
+  // pauses its insert. Observe both lock waits before releasing either path.
+  const contender=evaluations[0],preparedRace=await prepareRegisteredEvaluation(actor,contender.id);
+  const raceInput=await prepareRegisteredInput(actor,contender.id,preparedRace.marketIds,preparedRace.asOf);
+  const raceBody=makeCommit(raceInput,randomUUID(),preparedRace.revision),gateKey=Math.floor(Math.random()*1000000000);
+  const gate=await db.connect();
+  const installGate=()=>db.query(`create function public.synthetic_pair_commit_gate() returns trigger language plpgsql as $$ begin perform pg_advisory_xact_lock(713,${gateKey}); return new; end $$; create trigger synthetic_pair_commit_gate before insert on public.research_s6_evaluations for each row execute function public.synthetic_pair_commit_gate()`);
+  let commitRace:ReturnType<typeof store.commitEvaluationResult>|undefined,consumerRace:ReturnType<typeof applyRevocationPage>|undefined;
+  const waitFor=async(query:string,values:unknown[])=>{for(let i=0;i<1000;i++){const row=(await db.query(query,values)).rows[0];if(row)return row;await db.query('select pg_sleep(0.01)');}assert.fail('expected real database lock contention');};
+  let racedEvaluation='';
+  try{
+   await gate.query('begin');await gate.query('select pg_advisory_xact_lock(713,$1)',[gateKey]);await installGate();
+   const beforeRace=await storeSnapshot();
+   commitRace=store.commitEvaluationResult(raceBody);void commitRace.catch(()=>{});
+   const blockedCommit=await waitFor("select pid from pg_locks where locktype='advisory' and classid=713 and objid=$1 and objsubid=2 and not granted",[gateKey]);
+   consumerRace=applyRevocationPage(db,affected.registration,bytes,sign(null,bytes,privateKey).toString('hex'));void consumerRace.catch(()=>{});
+   const waiting=await waitFor(`select w.pid from pg_locks h join pg_locks w on h.locktype=w.locktype and h.database=w.database and h.classid=w.classid and h.objid=w.objid and h.objsubid=w.objsubid
+    where h.pid=$1 and h.locktype='advisory' and h.objsubid=1 and h.granted and not w.granted
+    and h.classid::bigint=((hashtextextended($2,0)>>32)&4294967295) and h.objid::bigint=(hashtextextended($2,0)&4294967295)`,[blockedCommit.pid,actor.userId]);
+   assert.notEqual(waiting.pid,blockedCommit.pid);
+   assert.deepEqual(await storeSnapshot(),beforeRace);
+   await gate.query('commit');
+   const committed=await commitRace;assert.equal(committed.status,'accepted');assert.equal(committed.revision,preparedRace.revision+1);
+   racedEvaluation=committed.evaluation_ref;
+   await consumerRace;
+   assert.equal((await db.query('select cursor::text from research_revocation_candidate.feed where feed_id=$1',[affected.feedId])).rows[0].cursor,'1');
+   assert.equal((await db.query('select count(*)::int n from research_revocation_candidate.inbox where feed_id=$1',[affected.feedId])).rows[0].n,1);
+   assert.equal((await db.query('select revision from public.research_s4_observation_state where user_id=$1 and observation_id=$2',[actor.userId,contender.id])).rows[0].revision,preparedRace.revision+1);
+   assert.equal((await db.query("select count(*)::int n from public.research_s4_records where user_id=$1 and kind='ControlEvent' and payload->>'evaluation_ref'=$2",[actor.userId,racedEvaluation])).rows[0].n,1);
+   assert.equal((await db.query('select count(*)::int n from public.research_s6_evaluations where user_id=$1 and id=$2',[actor.userId,committed.evaluation_ref])).rows[0].n,1);
+  }finally{
+   let gateFailure:unknown;try{await gate.query('rollback');}catch(error){gateFailure=error;}finally{gate.release(true);}
+   let timer:ReturnType<typeof setTimeout>|undefined;
+   try{await Promise.race([Promise.allSettled([commitRace,consumerRace].filter(Boolean)),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('race cleanup deadline')),15000);})]);}
+   finally{if(timer)clearTimeout(timer);await db.query('drop trigger if exists synthetic_pair_commit_gate on public.research_s6_evaluations; drop function if exists public.synthetic_pair_commit_gate()');}
+   if(gateFailure)throw gateFailure;
+  }
+
   assert.deepEqual(await unaffectedSnapshot(),unaffectedBefore);
   assert.equal((await db.query('select revoked from public.research_s4_bindings where user_id=$1 and payload_hash=$2',[actor.userId,affected.t.binding.approvedPayloadHash])).rows[0].revoked,true);
   const consumedBefore=await storeSnapshot();
+  await assert.rejects(registeredObservationReport(actor,contender.id,racedEvaluation),e=>e instanceof Error&&e.cause==='binding_revoked');
   for(const op of [()=>store.readObservation(evaluations[0].id),...evaluations[0].marketIds.map(mid=>()=>store.readMarketSnapshot(mid)),()=>store.commitEvaluationResult(evaluations[0].body)])await assert.rejects(op(),e=>e instanceof Error&&e.cause==='binding_revoked');
   assert.equal((await store.readObservation(evaluations[1].id)).observation.id,evaluations[1].id);
   for(const mid of evaluations[1].marketIds)assert.equal((await store.readMarketSnapshot(mid)).snapshot.id,mid);
