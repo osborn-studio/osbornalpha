@@ -9,7 +9,7 @@ import {localSessionToken} from '../../src/lib/research/s4/auth';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {randomUUID,generateKeyPairSync,sign} from 'node:crypto';
-import {Pool} from 'pg';
+import {Pool,type PoolClient} from 'pg';
 import {startLocalDatabase,stopLocalDatabase} from '../s4/local-db';
 import {testPack} from '../s4/test-pack';
 import {canonicalize,digest} from '../../src/lib/research/ingest/pa-v1/json.js';
@@ -18,8 +18,17 @@ import {applyRevocationPage} from '../../src/lib/research/revocation/consumer';
 import {listRegisteredCandidates,type CandidatePageCursor} from '../../src/lib/research/s4/registered-list';
 import {closeS4Pool} from '../../src/lib/research/s4/db';
 import {s4Http} from '../../src/lib/research/s4/http';
+async function cleanupGate(gate:PoolClient,pending:Array<Promise<unknown>|undefined>,db:Pool,ddl:string,bodyFailure:unknown){
+ const errors:unknown[]=[];
+ try{await gate.query('rollback');}catch(error){errors.push(error);}finally{gate.release(true);}
+ let timer:ReturnType<typeof setTimeout>|undefined;
+ try{await Promise.race([Promise.allSettled(pending.filter(Boolean)),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('race cleanup deadline')),15000);})]);}catch(error){errors.push(error);}finally{if(timer)clearTimeout(timer);}
+ try{await db.query(ddl);}catch(error){errors.push(error);}
+ if(bodyFailure!==undefined)throw bodyFailure;
+ if(errors.length)throw new AggregateError(errors,'race cleanup failed');
+}
 async function main(){
- const state=await startLocalDatabase(),db=new Pool({connectionString:state.adminUrl,statement_timeout:10000,connectionTimeoutMillis:5000});let primary:unknown;
+ const state=await startLocalDatabase(),db=new Pool({connectionString:state.adminUrl,statement_timeout:30000,connectionTimeoutMillis:5000});let primary:unknown;
  try{
   await db.query(readFileSync('scripts/revocation/candidate-schema.sql','utf8'));
   await db.query('grant usage on schema research_revocation_candidate to alpha_s4_runtime;grant select on all tables in schema research_revocation_candidate to alpha_s4_runtime');
@@ -159,8 +168,8 @@ async function main(){
   const gate=await db.connect();
   const installGate=()=>db.query(`create function public.synthetic_pair_commit_gate() returns trigger language plpgsql as $$ begin perform pg_advisory_xact_lock(713,${gateKey}); return new; end $$; create trigger synthetic_pair_commit_gate before insert on public.research_s6_evaluations for each row execute function public.synthetic_pair_commit_gate()`);
   let commitRace:ReturnType<typeof store.commitEvaluationResult>|undefined,consumerRace:ReturnType<typeof applyRevocationPage>|undefined;
-  const waitFor=async(query:string,values:unknown[])=>{for(let i=0;i<1000;i++){const row=(await db.query(query,values)).rows[0];if(row)return row;await db.query('select pg_sleep(0.01)');}assert.fail('expected real database lock contention');};
-  let racedEvaluation='';
+  const waitFor=async(query:string,values:unknown[])=>{for(const deadline=performance.now()+3000;performance.now()<deadline;){const row=(await db.query(query,values)).rows[0];if(row)return row;await db.query('select pg_sleep(0.01)');}assert.fail('expected real database lock contention');};
+  let racedEvaluation='',forwardFailure:unknown;
   try{
    await gate.query('begin');await gate.query('select pg_advisory_xact_lock(713,$1)',[gateKey]);await installGate();
    const beforeRace=await storeSnapshot();
@@ -181,13 +190,10 @@ async function main(){
    assert.equal((await db.query('select revision from public.research_s4_observation_state where user_id=$1 and observation_id=$2',[actor.userId,contender.id])).rows[0].revision,preparedRace.revision+1);
    assert.equal((await db.query("select count(*)::int n from public.research_s4_records where user_id=$1 and kind='ControlEvent' and payload->>'evaluation_ref'=$2",[actor.userId,racedEvaluation])).rows[0].n,1);
    assert.equal((await db.query('select count(*)::int n from public.research_s6_evaluations where user_id=$1 and id=$2',[actor.userId,committed.evaluation_ref])).rows[0].n,1);
-  }finally{
-   let gateFailure:unknown;try{await gate.query('rollback');}catch(error){gateFailure=error;}finally{gate.release(true);}
-   let timer:ReturnType<typeof setTimeout>|undefined;
-   try{await Promise.race([Promise.allSettled([commitRace,consumerRace].filter(Boolean)),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('race cleanup deadline')),15000);})]);}
-   finally{if(timer)clearTimeout(timer);await db.query('drop trigger if exists synthetic_pair_commit_gate on public.research_s6_evaluations; drop function if exists public.synthetic_pair_commit_gate()');}
-   if(gateFailure)throw gateFailure;
+  }catch(error){forwardFailure=error;}finally{
+   await cleanupGate(gate,[commitRace,consumerRace],db,'drop trigger if exists synthetic_pair_commit_gate on public.research_s6_evaluations; drop function if exists public.synthetic_pair_commit_gate()',forwardFailure);
   }
+
 
   assert.deepEqual(await unaffectedSnapshot(),unaffectedBefore);
   assert.equal((await db.query('select revoked from public.research_s4_bindings where user_id=$1 and payload_hash=$2',[actor.userId,affected.t.binding.approvedPayloadHash])).rows[0].revoked,true);
@@ -214,6 +220,34 @@ async function main(){
   const freshReceipt=await store.commitEvaluationResult(makeCommit(nextInput,randomUUID(),next.revision));assert.equal(freshReceipt.status,'accepted');assert.equal(freshReceipt.revision,next.revision+1);
   await db.query('delete from research_revocation_candidate.inbox where feed_id=$1',[affected.feedId]);
   await assert.rejects(listRegisteredCandidates(actor,2),e=>e instanceof Error&&e.cause==='inbox_coverage_gap');
+  // Reverse handoff: signed consumer holds owner lock before a previously
+  // prepared evaluation queues. The prepared input must not authorize a write.
+  const reverseSeed=seeds[1],reversePreparation=await prepareRegisteredEvaluation(actor,allowed.id);
+  const reverseInput=await prepareRegisteredInput(actor,allowed.id,reversePreparation.marketIds,reversePreparation.asOf);
+  const reverseBody=makeCommit(reverseInput,randomUUID(),reversePreparation.revision),reverseBefore=await storeSnapshot();
+  const reverseBytes=Buffer.from(JSON.stringify({...reverseSeed.page,through_seq:'1',latest_seq:'1',published_at:new Date().toISOString(),events:[{revocation_id:randomUUID(),monotonic_seq:'1',source_id:reverseSeed.t.sourceId,grant_id:reverseSeed.t.config.grant.grant_id,grant_version:1,effective_at:new Date().toISOString()}]}));
+  let reverseFailure:unknown;
+  const reverseGate=await db.connect();let reverseConsumer:ReturnType<typeof applyRevocationPage>|undefined,reverseCommit:ReturnType<typeof store.commitEvaluationResult>|undefined;
+  try{
+   await reverseGate.query('begin');await reverseGate.query('select pg_advisory_xact_lock(714,$1)',[gateKey]);
+   await db.query(`create function research_revocation_candidate.synthetic_consumer_gate() returns trigger language plpgsql as $$ begin perform pg_advisory_xact_lock(714,${gateKey}); return new; end $$; create trigger synthetic_consumer_gate before insert on research_revocation_candidate.inbox for each row execute function research_revocation_candidate.synthetic_consumer_gate()`);
+   reverseConsumer=applyRevocationPage(db,reverseSeed.registration,reverseBytes,sign(null,reverseBytes,privateKey).toString('hex'));void reverseConsumer.catch(()=>{});
+   const consumerPid=(await waitFor("select pid from pg_locks where locktype='advisory' and classid=714 and objid=$1 and objsubid=2 and not granted",[gateKey])).pid;
+   reverseCommit=store.commitEvaluationResult(reverseBody);void reverseCommit.catch(()=>{});
+   const commitWaiter=await waitFor(`select w.pid from pg_locks h join pg_locks w on h.locktype=w.locktype and h.database=w.database and h.classid=w.classid and h.objid=w.objid and h.objsubid=w.objsubid
+    where h.pid=$1 and h.locktype='advisory' and h.objsubid=1 and h.granted and not w.granted
+    and h.classid::bigint=((hashtextextended($2,0)>>32)&4294967295) and h.objid::bigint=(hashtextextended($2,0)&4294967295)`,[consumerPid,actor.userId]);
+   assert.notEqual(commitWaiter.pid,consumerPid);
+   assert.equal((await db.query('select wait_event_type from pg_stat_activity where pid=$1',[consumerPid])).rows[0].wait_event_type,'Lock');
+   await reverseGate.query('commit');await reverseConsumer;
+   await assert.rejects(reverseCommit,e=>e instanceof Error&&e.cause==='binding_revoked');
+   assert.deepEqual(await storeSnapshot(),reverseBefore);
+   assert.equal((await db.query('select cursor::text from research_revocation_candidate.feed where feed_id=$1',[reverseSeed.feedId])).rows[0].cursor,'1');
+   assert.equal((await db.query('select count(*)::int n from research_revocation_candidate.inbox where feed_id=$1',[reverseSeed.feedId])).rows[0].n,1);
+   assert.equal((await db.query('select revoked from public.research_s4_bindings where user_id=$1 and payload_hash=$2',[actor.userId,reverseSeed.t.binding.approvedPayloadHash])).rows[0].revoked,true);
+  }catch(error){reverseFailure=error;}finally{
+   await cleanupGate(reverseGate,[reverseConsumer,reverseCommit],db,'drop trigger if exists synthetic_consumer_gate on research_revocation_candidate.inbox; drop function if exists research_revocation_candidate.synthetic_consumer_gate()',reverseFailure);
+  }
   console.log('Registered list acceptance passed: microsecond pagination, bounds, two feeds, stale/tombstone/pruning fail closed.');
  }catch(e){primary=e;throw e;}finally{try{await closeS4Pool();await db.end();}finally{stopLocalDatabase(state,primary);}}
 }
