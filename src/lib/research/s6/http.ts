@@ -13,10 +13,10 @@ export async function s6Http(fn:()=>Promise<unknown>){
   let code=(e as {code?:string}|null)?.code||'internal_error';
   if(e instanceof ResearchForbidden)code='scope_denied';
   if(e instanceof Error&&e.message==='not authenticated')code='not_authenticated';
-  const status=code==='not_authenticated'?401:code==='not_found'?404:code==='not_configured'?503:
+  const status=code==='not_authenticated'?401:code==='not_found'?404:['not_configured','export_watermark_ahead'].includes(code)?503:
    ['scope_denied','policy_blocked','anchor_integrity_failed','source_withdrawn','exposure_required'].includes(code)?403:
    ['idempotency_conflict','revision_conflict','source_version_conflict','observation_scope_conflict'].includes(code)?409:
-   code==='input_limit'?413:['invalid_schema','unsupported_version','hash_mismatch','future_input','invalid_timeline','data_insufficient','rule_unsupported','source_unavailable','duplicate_key','security_unresolved'].includes(code)?422:500;
+   code==='input_limit'?413:['invalid_revocation_candidate','invalid_schema','unsupported_version','hash_mismatch','future_input','invalid_timeline','data_insufficient','rule_unsupported','source_unavailable','duplicate_key','security_unresolved'].includes(code)?422:500;
   if(status===500)code='internal_error';
   return Response.json({error:{code}},{status,headers:{'Cache-Control':'no-store'}});
  }

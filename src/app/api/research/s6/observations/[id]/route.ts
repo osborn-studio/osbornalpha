@@ -2,7 +2,7 @@ import Ajv from 'ajv';
 import {requireS4Actor} from '@/lib/research/s4/auth';
 import {bodyJson} from '@/lib/research/s4/http';
 import {s6Http} from '@/lib/research/s6/http';
-import {observationReport} from '@/lib/research/s6/report';
+import {registeredObservationReport} from '@/lib/research/s6/report';
 import {prepareInput,prepareEvaluation,makeCommit,createS6Store} from '@/lib/research/s6/store';
 import {fail} from '@/lib/research/ingest/pa-v1/json';
 const valid=new Ajv({strict:true}).compile({oneOf:[
@@ -20,6 +20,6 @@ export async function POST(req:Request,ctx:{params:Promise<{id:string}>}){
    const input=await prepareInput(actor,id,body.marketIds,body.asOf);
    return createS6Store(actor).commitEvaluationResult(makeCommit(input,body.key,body.revision));
   }
-  return observationReport(actor,id,body.action==='replay'?body.evaluationId:undefined);
+  return registeredObservationReport(actor,id,body.action==='replay'?body.evaluationId:undefined);
  });
 }

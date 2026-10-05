@@ -1,3 +1,4 @@
+import {POST as observationReport} from '../../../app/api/research/s6/observations/[id]/route';
 import {Pool,Client} from 'pg';
 import {it,expect,vi,afterEach} from 'vitest';
 import {researchConfig} from './config';
@@ -21,6 +22,13 @@ it.each([undefined,'1'])('production item routes remain disabled before connecti
  for(const handler of [status,reveal,decisions,history,citation]){
   const response=await handler(new Request('https://alpha.example.test/api/research/s4/candidates/'+owner+'/status'),{params:Promise.resolve({id:owner})});
   expect(response.status).toBe(503);expect(await response.json()).toEqual({error:{code:'not_configured'}});
+ }
+ for(const s6Enabled of [undefined,'1']){
+  vi.stubEnv('ALPHA_S6_ENABLED',s6Enabled);
+  for(const body of [{action:'read'},{action:'replay',evaluationId:owner},{action:'prepare'},{action:'evaluate',asOf:'2026-10-05T00:00:00Z',key:'synthetic-production-gate',revision:0,marketIds:[]}]){
+   const response=await observationReport(new Request('https://alpha.example.test/api/research/s6/observations/'+owner,{method:'POST',headers:{host:'alpha.example.test',origin:'https://alpha.example.test','content-type':'application/json'},body:JSON.stringify(body)}),{params:Promise.resolve({id:owner})});
+   expect(response.status).toBe(503);expect(await response.json()).toEqual({error:{code:'not_configured'}});expect(response.headers.get('cache-control')).toBe('no-store');
+  }
  }
  expect(pool).not.toHaveBeenCalled();expect(client).not.toHaveBeenCalled();
 });
