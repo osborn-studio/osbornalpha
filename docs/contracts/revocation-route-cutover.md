@@ -288,3 +288,16 @@ business counts unchanged. No real REL, human judgment or dormant feature is
 activated. This is helper/socket acceptance, not served-browser rendering. The
 real-time reveal/decision week-boundary edge remains explicit; policy is never
 bypassed to make the fixture pass.
+
+
+### Session revoker-first disclosure handoff
+
+Synthetic evaluator HTTP acceptance holds the owner lock through an uncommitted
+session revocation, observes exactly one runtime waiter on the same bigint key,
+then commits and requires401 with all business/exposure rows unchanged. A separate
+known-revoked-token request returns401 while another transaction still holds the
+owner lock, establishing pre-lock rejection. Cleanup preserves staged revocation
+instead of letting a queued synthetic read succeed after an assertion failure.
+Session revocation value is checked; full session metadata immutability and the
+opposite read-first ordering are not claimed by this test. No production race or
+served-Next browser acceptance is implied.
