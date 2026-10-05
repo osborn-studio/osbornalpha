@@ -10,9 +10,8 @@ import {enabled,observationFor,currentMarketIds,marketFor} from './store';
 
 /** Display and export append exposure before returning material, in the same transaction. */
 export async function observationReport(actor:S4Actor,id:string,replayId?:string){return reportWithPolicy(actor,id,replayId,false);}
-/** Candidate report adapter only. Replay/export is closed until its market
- * observation binding and rollback acceptance are completed; HTTP is unchanged. */
-export async function registeredObservationReport(actor:S4Actor,id:string,replayId?:string){if(replayId!==undefined)fail('not_configured');return reportWithPolicy(actor,id,undefined,true);}
+/** Candidate report/replay adapter; HTTP adoption is still separate. */
+export async function registeredObservationReport(actor:S4Actor,id:string,replayId?:string){return reportWithPolicy(actor,id,replayId,true);}
 async function reportWithPolicy(actor:S4Actor,id:string,replayId:string|undefined,registered:boolean){
  if(replayId!==undefined&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(replayId))fail('invalid_schema');
  enabled();const work=async(db:PoolClient)=>{
@@ -21,10 +20,18 @@ async function reportWithPolicy(actor:S4Actor,id:string,replayId:string|undefine
   const selected=replayId?(await db.query('select * from research_s6_evaluations where user_id=$1 and observation_id=$2 and id=$3',[actor.userId,id,replayId])).rows[0]:undefined;
   if(replayId&&!selected)fail('not_found');
   for(const r of rows)if(digest(r.result)!==r.result_hash)fail('hash_mismatch');
+  if(selected){
+   const controls=(await db.query(`select payload,payload_hash from research_s4_records where user_id=$1 and candidate_id=$2 and kind='ControlEvent'
+    and payload->>'type'='evaluation.append' and payload->>'evaluation_ref'=$3`,[actor.userId,o.candidate_id,replayId])).rows;
+   const control=controls[0];
+   if(controls.length!==1||digest(control.payload)!==control.payload_hash||control.payload.observation_ref!==id
+    ||control.payload.input_sha256!==selected.receipt.input_sha256||control.payload.result_sha256!==selected.result_hash||control.payload.revision!==selected.receipt.revision)fail('hash_mismatch');
+   if(!Array.isArray(selected.input?.market_snapshots))fail('hash_mismatch');
+  }
   const candidate=(await db.query('select imported from research_s4_candidates where user_id=$1 and id=$2',[actor.userId,o.candidate_id])).rows[0];
   const source=candidate.imported.sourceRef;
   await addRecord(db,actor,o.candidate_id,'ExposureEvent',{actor_ref:actor.userId,actor_kind:actor.kind,evaluation_period_id:weekPeriod(at),
-   subject_refs:[digest([source.owner_system,source.owner_scope,source.source_id])],exposed_artifact_ids:replayId?[replayId]:rows.slice(0,100).map(r=>r.id),
+   subject_refs:[digest([source.owner_system,source.owner_scope,source.source_id])],exposed_artifact_ids:replayId?[replayId,...selected.input.market_snapshots.map((m:{id:string})=>m.id)]:rows.slice(0,100).map(r=>r.id),
    displayed_at:at,origin:replayId?'alpha_evaluation_replay':'alpha_evaluation_report',shadow_exposed:o.payload.observation_kind==='shadow'});
   if(selected){
    if(selected.input.observation_sha256!==o.payload_hash||selected.receipt.idempotency_key!==selected.idempotency_key||selected.receipt.owner_scope?.user_id!==actor.userId)fail('hash_mismatch');
@@ -32,7 +39,7 @@ async function reportWithPolicy(actor:S4Actor,id:string,replayId:string|undefine
    const outcome={ok:true as const,result:selected.result,result_sha256:selected.result_hash};
    const replay=replayObservation(selected.input,outcome);if(!replay.matches)fail('hash_mismatch');
    const markets=[];
-   for(const frozen of selected.input.market_snapshots){const m=await marketFor(db,actor,frozen.id);if(m.observation_id!==id||digest(m.snapshot)!==digest(frozen))fail('hash_mismatch');markets.push(m);}
+   for(const frozen of selected.input.market_snapshots){const m=await marketFor(db,actor,frozen.id,id);if(m.observation_id!==id||digest(m.snapshot)!==digest(frozen))fail('hash_mismatch');markets.push(m);}
    return {schema_version:'alpha-replay-export/1.0',input:selected.input,outcome,receipt:selected.receipt,replay,anchor_status_now:o.current_anchor,
     market_evidence:markets.map(m=>({id:m.id,raw_sha256:m.snapshot.raw_sha256,evidence_sha256:m.evidence_hash,kind:m.evidence.kind,raw_response:m.raw_response,evidence:m.evidence})),
     authorization_as_of:at,synthetic:o.payload.synthetic,research_stream:o.payload.research_stream};

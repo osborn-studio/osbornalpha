@@ -46,10 +46,10 @@ async function informationFor(db:PoolClient,actor:S4Actor,o:Observation):Promise
  if(p.wiki_reference)versions.push({ref:'wiki:'+digest(p.wiki_reference),sha256:digest(p.wiki_reference),available_at:p.wiki_available_at});
  return {snapshot_ref:row.id,snapshot_sha256:row.payload_hash,input_cutoff_at:p.input_cutoff_at,versions};
 }
-export async function marketFor(db:PoolClient,actor:S4Actor,id:string){
+export async function marketFor(db:PoolClient,actor:S4Actor,id:string,expectedObservationId?:string){
  if(typeof id!=='string'||!/^[A-Za-z0-9._:-]{1,128}$/.test(id))fail('invalid_schema');
- const r=(await db.query('select * from research_s6_markets where user_id=$1 and id=$2',[actor.userId,id])).rows[0];
- if(!r)fail('not_found');
+ const r=(await db.query('select * from research_s6_markets where user_id=$1 and id=$2 and ($3::uuid is null or observation_id=$3)',[actor.userId,id,expectedObservationId??null])).rows[0];
+ if(!r)fail(expectedObservationId===undefined?'not_found':'hash_mismatch');
  const o=await observationFor(db,actor,r.observation_id);
  // synthetic evidence ↔ synthetic observation; real evidence needs the real-market switch and, for handoff bundles, a 2.0 observation.
  const v2=(o.payload as {schema_version:string}).schema_version===OBSERVATION_CONTRACT_V2;
