@@ -331,6 +331,30 @@ is harmless, while actual development env files are refused.
 
 Owned Next/browser process groups and the database are stopped after the run;
 Next output never shares the working checkout's .next. Evidence remains local.
-Operational deployment, production auth and delayed in-flight UI disclosure races
+Operational deployment, production auth and durable pending-write recovery
 remain separate acceptance work. Sidebar and dormant research capabilities are
 not activated.
+
+
+## Evaluation view lifecycle and retry delivery (2026-10-05)
+
+EvaluationPanel invalidates continuations synchronously on teardown/observation
+change. Delayed prepare responses cannot start an evaluation after the panel is
+removed; delayed replay responses cannot create a download. Already-sent writes
+may still commit: this is not cancellation or durable reconciliation.
+
+The served browser harness holds two authentic server responses across candidate
+unselect/remount, checks no evaluate request, no replay anchor click or download,
+and unchanged evaluation count. It also drops one response after an actual
+successful evaluation commit: the visible retry sends the identical payload/key
+and produces only one new evaluation. Unrelated read/replay errors no longer
+clear the pending evaluation identity. Lifecycle tests use the real development
+server/database; transport delay/loss is injected, with no fabricated API body.
+Assertions after delivery have a bounded250ms settling interval. In-place id
+change and explicit StrictMode instrumentation are not separately certified.
+
+Verified Opus5.5 review identified retry affordance/key loss, passive-effect timing
+and weak negative assertions; addressed. Final task_96696e01 passed browser,
+typecheck and lint. The earlier task_66ef5b61 browser passed but lint failed;
+that evidence is retained. Final corrections host-verified. Pending attempts are
+still memory-only and do not survive unmount/reload; this remains follow-up work.
