@@ -6,7 +6,7 @@ import calendar from '../../../../docs/handoffs/alpha-s4/calendar.json';
 import {fail} from '../ingest/pa-v1/json.js';
 import {OBSERVATION_CONTRACT_V2} from '../market-policy';
 import {assertWritableChain,transaction,serverTime,type S4Actor} from '../s4/db';
-import {registeredObservationTransaction} from './registered';
+import {registeredObservationTransaction,withRegisteredObservationInTransaction} from './registered';
 import {candidateFor,addRecord} from '../s4/records';
 
 export type Commit=Parameters<EvaluationStore['commitEvaluationResult']>[0];
@@ -108,29 +108,37 @@ export function makeCommit(input:EvaluationInput,key:string,revision:number):Com
   engine_version:computed.result.engine_version,rule_version:computed.result.rule_version,input_sha256:normalized.input_sha256,input:normalized,
   result:computed.result,result_sha256:computed.result_sha256,expected_revision:revision,idempotency_key:key,request_key:key};
 }
-export function createS6Store(actor:S4Actor,sessionToken?:string):EvaluationStore{
- async function run<T>(purpose:string,fn:(db:PoolClient)=>Promise<T>){enabled();return transaction(actor,async db=>{await authorizeSession(db,actor,sessionToken,purpose);
+export function createS6Store(actor:S4Actor,sessionToken?:string):EvaluationStore{return storeWithPolicy(actor,sessionToken,false);}
+/** Candidate internal adapter; existing HTTP continues using the legacy store. */
+export function createRegisteredS6Store(actor:S4Actor,sessionToken?:string):EvaluationStore{return storeWithPolicy(actor,sessionToken,true);}
+function storeWithPolicy(actor:S4Actor,sessionToken:string|undefined,registered:boolean):EvaluationStore{
+ async function run<T>(purpose:string,resolve:(db:PoolClient)=>Promise<string>,fn:(db:PoolClient,id:string)=>Promise<T>){enabled();return transaction(actor,async db=>{await authorizeSession(db,actor,sessionToken,purpose);
   // A session can expire while DB-only work runs under the owner lock.
   // Recheck before either a success result or business error leaves the transaction.
   await db.query('savepoint s6_session_work');
   let result:T;
-  try{result=await fn(db);}
+  try{const id=await resolve(db);result=registered?await withRegisteredObservationInTransaction(db,actor,id,client=>fn(client,id)):await fn(db,id);}
   catch(error){await db.query('rollback to savepoint s6_session_work');await authorizeSession(db,actor,sessionToken,purpose);throw error;}
   await authorizeSession(db,actor,sessionToken,purpose);
   await db.query('release savepoint s6_session_work');return result;},sessionToken===undefined?undefined:db=>authorizeSession(db,actor,sessionToken,purpose));}
  return {
-  readObservation:id=>run('observation:read',async db=>{const r=await observationFor(db,actor,id);return {schema_version:'evaluator-rpc/1.0',owner_scope:r.payload.owner_scope,revision:r.revision,sha256:r.payload_hash,observation:r.payload};}),
-  readMarketSnapshot:id=>run('observation:read',async db=>{const r=await marketFor(db,actor,id);return {schema_version:'evaluator-rpc/1.0',owner_scope:{user_id:actor.userId,workspace_id:null},revision:0,sha256:r.snapshot_hash,snapshot:r.snapshot};}),
+  readObservation:id=>run('observation:read',async()=>id,async db=>{const r=await observationFor(db,actor,id);return {schema_version:'evaluator-rpc/1.0',owner_scope:r.payload.owner_scope,revision:r.revision,sha256:r.payload_hash,observation:r.payload};}),
+  readMarketSnapshot:id=>run('observation:read',async db=>{
+   if(!registered)return '';
+   if(typeof id!=='string'||!/^[A-Za-z0-9._:-]{1,128}$/.test(id))fail('invalid_schema');
+   const row=(await db.query('select observation_id from research_s6_markets where user_id=$1 and id=$2',[actor.userId,id])).rows[0];
+   if(!row)fail('not_found');return row.observation_id;
+  },async(db,observationId)=>{const r=await marketFor(db,actor,id,registered?observationId:undefined);return {schema_version:'evaluator-rpc/1.0',owner_scope:{user_id:actor.userId,workspace_id:null},revision:0,sha256:r.snapshot_hash,snapshot:r.snapshot};}),
   commitEvaluationResult:async body=>{
-   return run('evaluation:append',async db=>{
+   return run('evaluation:append',async()=>{validateCommit(body);return body.observation_ref.id;},async db=>{
     validateCommit(body); // Authenticate first; then recompute even a correctly hashed forgery.
     const row=await observationFor(db,actor,body.observation_ref.id);
-    const authoritative=await inputFor(db,actor,row.id,body.market_snapshot_refs.map(r=>r.id),body.input.as_of);
+    const authoritative=await inputFor(db,actor,row.id,body.market_snapshot_refs.map(r=>r.id),body.input.as_of,registered);
     if(digest(authoritative)!==digest(body.input))fail('hash_mismatch');
     const computed=evaluateObservation(authoritative);
     if(!computed.ok||computed.result_sha256!==body.result_sha256)fail('hash_mismatch');
     if(!computed.ok)throw new Error('unreachable');
-    const hash=digest(body),old=(await db.query('select body_hash,receipt from research_s6_evaluations where user_id=$1 and idempotency_key=$2',[actor.userId,body.idempotency_key])).rows[0];
+    const hash=digest(body),old=(await db.query('select body_hash,receipt from research_s6_evaluations where user_id=$1 and idempotency_key=$2 and ($3::uuid is null or observation_id=$3)',[actor.userId,body.idempotency_key,registered?row.id:null])).rows[0];
     if(old){if(old.body_hash!==hash)fail('idempotency_conflict');return {...old.receipt,status:'duplicate'};}
     // New projections represent the current authority set, not a caller-selected backtest.
     // Exact retries stay valid after this five-minute preparation window expires.

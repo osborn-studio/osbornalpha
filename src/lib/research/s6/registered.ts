@@ -8,7 +8,11 @@ import {fail} from '../ingest/pa-v1/json.js';
  * This browser/internal adapter does not authorize an evaluator session token. */
 export function registeredObservationTransaction<T>(actor:S4Actor,id:string,work:(db:PoolClient)=>Promise<T>){
  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id))fail('invalid_schema');
- return transaction(actor,async db=>{
+ return transaction(actor,db=>withRegisteredObservationInTransaction(db,actor,id,work));
+}
+/** Requires a clean owner-locked transaction; no nested transactions or external IO. */
+export async function withRegisteredObservationInTransaction<T>(db:PoolClient,actor:S4Actor,id:string,work:(db:PoolClient)=>Promise<T>){
+ if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id))fail('invalid_schema');
   const selected=(await db.query(`select r.candidate_id,c.payload_hash from public.research_s4_records r
    join public.research_s4_candidates c on c.user_id=r.user_id and c.id=r.candidate_id
    where r.user_id=$1 and r.id=$2 and r.kind='Observation'`,[actor.userId,id])).rows[0];
@@ -17,5 +21,4 @@ export function registeredObservationTransaction<T>(actor:S4Actor,id:string,work
    await validateRegisteredStoredCandidate(client,actor,selected.candidate_id,selected.payload_hash,expected);
    return work(client);
   });
- });
 }

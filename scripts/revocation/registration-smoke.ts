@@ -1,4 +1,4 @@
-import {prepareRegisteredInput,prepareRegisteredEvaluation,prepareInput,prepareEvaluation,makeCommit,createS6Store} from '../../src/lib/research/s6/store';
+import {prepareRegisteredInput,prepareRegisteredEvaluation,prepareInput,prepareEvaluation,makeCommit,createS6Store,createRegisteredS6Store,tokenHash} from '../../src/lib/research/s6/store';
 import {freezeMarket,benchmarkIdentity} from '../../src/lib/research/s6/market';
 import {syntheticMapping} from '../s6/fixtures';
 import {addRecord} from '../../src/lib/research/s4/records';
@@ -111,7 +111,7 @@ async function main(){
 
   const businessCounts=async()=>{
    const counts:Record<string,number>={};
-   for(const table of ['research_s4_records','research_s4_requests','research_s4_outbox','research_audit_log','research_judgments','research_labels','research_decisions','research_s4_observation_state']){
+   for(const table of ['research_s6_evaluations','research_s4_records','research_s4_requests','research_s4_outbox','research_audit_log','research_judgments','research_labels','research_decisions','research_s4_observation_state']){
     counts[table]=(await db.query('select count(*)::int n from public.'+table+' where user_id=$1',[actor])).rows[0].n;
    }
    return counts;
@@ -131,6 +131,12 @@ async function main(){
   const frozenObservation=(await createS6Store(s4Actor).readObservation(decided.observationId)).observation;
   for(const security of [frozenObservation.securities[0],benchmarkIdentity(true)])await freezeMarket(s4Actor,decided.observationId,syntheticMapping(security),'synthetic');
   const preparation=await prepareRegisteredEvaluation(s4Actor,decided.observationId);
+  const registeredToken='synthetic-session-'+randomUUID();
+  await db.query("insert into public.research_s6_sessions(user_id,token_hash,subject,audience,scopes,expires_at) values($1,$2,'synthetic-registered','alpha-evaluator',array['observation:read','evaluation:append'],clock_timestamp()+interval '1 hour')",[actor,tokenHash(registeredToken)]);
+  const registeredStore=createRegisteredS6Store(s4Actor,registeredToken);
+  assert.deepEqual(await registeredStore.readObservation(decided.observationId),await createS6Store(s4Actor).readObservation(decided.observationId));
+  for(const mid of preparation.marketIds)assert.deepEqual(await registeredStore.readMarketSnapshot(mid),await createS6Store(s4Actor).readMarketSnapshot(mid));
+  await assert.rejects(createRegisteredS6Store(s4Actor,'invalid').readObservation(decided.observationId),/not_authenticated/);
   const preparedInput=await prepareRegisteredInput(s4Actor,decided.observationId,preparation.marketIds,preparation.asOf);
   assert.deepEqual(preparedInput,await prepareInput(s4Actor,decided.observationId,preparation.marketIds,preparation.asOf));
   assert.equal(preparedInput.observation.id,decided.observationId);
@@ -148,6 +154,13 @@ async function main(){
   const noPreparedDisclosure=async()=>{const before=await businessCounts();await assert.rejects(prepareRegisteredInput(s4Actor,decided.observationId,preparation.marketIds,preparation.asOf),/hash_mismatch/);assert.deepEqual(await businessCounts(),before);};
   await db.query('alter table public.research_s4_records disable trigger research_s4_records_immutable');
   try{
+   try{
+    await db.query('update public.research_s4_records set candidate_id=$3 where user_id=$1 and id=$2',[actor,observationRecord.id,deniedCandidate]);
+    const before=await businessCounts();
+    for(const op of [()=>registeredStore.readObservation(decided.observationId),()=>registeredStore.readMarketSnapshot(preparation.marketIds[0]),()=>registeredStore.commitEvaluationResult(makeCommit(preparedInput,randomUUID(),preparation.revision))])await assert.rejects(op(),/revocation_access_denied/);
+    assert.deepEqual(await businessCounts(),before);
+   }finally{await db.query('update public.research_s4_records set candidate_id=$3 where user_id=$1 and id=$2',[actor,observationRecord.id,imported.id]);}
+   assert.deepEqual(await registeredStore.readObservation(decided.observationId),await createS6Store(s4Actor).readObservation(decided.observationId));
    for(const id of [snapshot.id,snapshot.payload.card_ref,snapshot.payload.label_ref,...snapshot.payload.exposure_refs,...(snapshot.payload.thesis_revision_ref?[snapshot.payload.thesis_revision_ref]:[])]){
     try{await db.query('update public.research_s4_records set candidate_id=$3 where user_id=$1 and id=$2',[actor,id,deniedCandidate]);await noPreparedDisclosure();}
     finally{await db.query('update public.research_s4_records set candidate_id=$3 where user_id=$1 and id=$2',[actor,id,imported.id]);}
@@ -170,7 +183,23 @@ async function main(){
    await db.query('delete from public.research_s4_candidates where user_id=$1 and id=$2',[actor,deniedCandidate]);
    await db.query('delete from public.research_s4_bindings where user_id=$1 and payload_hash=$2',[actor,deniedHash]);
   }
-  const evaluation=await createS6Store(s4Actor).commitEvaluationResult(makeCommit(preparedInput,'synthetic-registered-replay',preparation.revision));
+  const commitBody=makeCommit(preparedInput,'synthetic-registered-replay',preparation.revision);
+  await db.query(`create function public.synthetic_registered_commit_delay() returns trigger language plpgsql as $$ begin perform pg_sleep(6); return new; end $$; create trigger synthetic_registered_commit_delay before insert on public.research_s6_evaluations for each row execute function public.synthetic_registered_commit_delay()`);
+  try{
+   for(const mode of ['feed','session']){
+    await db.query('update research_revocation_candidate.feed set published_at=clock_timestamp()');
+    if(mode==='feed')await db.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '55 seconds'");
+    if(mode==='session')await db.query("update public.research_s6_sessions set expires_at=clock_timestamp()+interval '5 seconds' where user_id=$1 and token_hash=$2",[actor,tokenHash(registeredToken)]);
+    const before=await businessCounts(),state=(await db.query('select * from public.research_s4_observation_state where user_id=$1 and observation_id=$2',[actor,decided.observationId])).rows[0],started=performance.now();
+    try{await assert.rejects(registeredStore.commitEvaluationResult(commitBody),e=>e instanceof Error&&(mode==='session'?e.message==='not_authenticated':e.cause==='revocation_stale'));assert.ok(performance.now()-started>=5900);assert.deepEqual(await businessCounts(),before);assert.deepEqual((await db.query('select * from public.research_s4_observation_state where user_id=$1 and observation_id=$2',[actor,decided.observationId])).rows[0],state);}
+    finally{await db.query('update public.research_s4_bindings set binding=$2 where user_id=$1 and payload_hash=$3',[actor,t.binding,hash]);await db.query("update public.research_s6_sessions set expires_at=created_at+interval '1 hour' where user_id=$1 and token_hash=$2",[actor,tokenHash(registeredToken)]);}
+   }
+   await db.query('update research_revocation_candidate.feed set published_at=clock_timestamp()');
+   assert.equal((await registeredStore.commitEvaluationResult(commitBody)).status,'accepted');
+  }finally{await db.query('drop trigger synthetic_registered_commit_delay on public.research_s6_evaluations; drop function public.synthetic_registered_commit_delay()');}
+  const evaluation=await registeredStore.commitEvaluationResult(commitBody);assert.equal(evaluation.status,'duplicate');
+  await assert.rejects(registeredStore.commitEvaluationResult({...commitBody,expected_revision:commitBody.expected_revision+1}),/idempotency_conflict/);
+  await assert.rejects(registeredStore.commitEvaluationResult(makeCommit(preparedInput,randomUUID(),preparation.revision)),/revision_conflict/);
   const replayId=evaluation.evaluation_ref;
   const replayBefore=await businessCounts(),replayed=await registeredObservationReport(s4Actor,decided.observationId,replayId);
   assert.equal(replayed.schema_version,'alpha-replay-export/1.0');assert.equal(replayed.replay?.matches,true);assert.equal(replayed.market_evidence?.length,2);
@@ -232,7 +261,7 @@ async function main(){
   assert.deepEqual(await businessCounts(),beforeOther);
   const conflictResponse=await route('decisions',{...decision,requestKey:randomUUID()});assert.equal(conflictResponse.status,409);assert.deepEqual(await conflictResponse.json(),{error:{code:'revision_conflict'}});
   await db.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '61 seconds'");await denyRoutes(503);
-  for(const op of [()=>prepareRegisteredEvaluation(s4Actor,decided.observationId),()=>prepareRegisteredInput(s4Actor,decided.observationId,preparation.marketIds,preparation.asOf)])await assert.rejects(op(),e=>e instanceof Error&&e.cause==='revocation_stale');
+  for(const op of [()=>registeredStore.readObservation(decided.observationId),()=>registeredStore.readMarketSnapshot(preparation.marketIds[0]),()=>registeredStore.commitEvaluationResult(makeCommit(preparedInput,'synthetic-registered-replay',preparation.revision)),()=>prepareRegisteredEvaluation(s4Actor,decided.observationId),()=>prepareRegisteredInput(s4Actor,decided.observationId,preparation.marketIds,preparation.asOf)])await assert.rejects(op(),e=>e instanceof Error&&e.cause==='revocation_stale');
   await assert.rejects(registeredObservationReport(s4Actor,decided.observationId),e=>e instanceof Error&&e.cause==='revocation_stale');
   await db.query('update research_revocation_candidate.feed set published_at=clock_timestamp()');
   // Report writes an exposure; final expiry must roll that real write back.
@@ -263,7 +292,7 @@ async function main(){
    await db.query('update public.research_s4_candidates set imported=$2 where id=$1',[imported.id,changed]);
    await db.query('update public.research_s4_bindings set binding=$2 where user_id=$1',[actor,{...t.binding,approvedManifestHash:digest(changed.manifest)}]);
    const before=await businessCounts(),code=mutation==='watermark'?'export_watermark_ahead':mutation==='source'?'source_version_conflict':'invalid_revocation_candidate';
-   for(const op of [()=>prepareRegisteredEvaluation(s4Actor,decided.observationId),()=>prepareRegisteredInput(s4Actor,decided.observationId,preparation.marketIds,preparation.asOf),()=>registeredObservationReport(s4Actor,decided.observationId),()=>registeredCitation(s4Actor,imported.id,shown.cards[0].id,0),()=>registeredReviewHistory(s4Actor,imported.id),()=>submitRegisteredDecision(s4Actor,imported.id,decision),()=>registeredCandidateStatus(s4Actor,imported.id),()=>revealRegisteredCards(s4Actor,imported.id,{...revealInput,requestKey:randomUUID()})]){
+   for(const op of [()=>registeredStore.readObservation(decided.observationId),()=>registeredStore.readMarketSnapshot(preparation.marketIds[0]),()=>registeredStore.commitEvaluationResult(makeCommit(preparedInput,'synthetic-registered-replay',preparation.revision)),()=>prepareRegisteredEvaluation(s4Actor,decided.observationId),()=>prepareRegisteredInput(s4Actor,decided.observationId,preparation.marketIds,preparation.asOf),()=>registeredObservationReport(s4Actor,decided.observationId),()=>registeredCitation(s4Actor,imported.id,shown.cards[0].id,0),()=>registeredReviewHistory(s4Actor,imported.id),()=>submitRegisteredDecision(s4Actor,imported.id,decision),()=>registeredCandidateStatus(s4Actor,imported.id),()=>revealRegisteredCards(s4Actor,imported.id,{...revealInput,requestKey:randomUUID()})]){
     await assert.rejects(op(),error=>error instanceof Error&&error.message===code);
     const response=await s4Http(op);
     assert.equal(response.status,code==='export_watermark_ahead'?503:code==='source_version_conflict'?409:422);
@@ -282,7 +311,7 @@ async function main(){
    const changed=field==='source_ref'?{...sourceVersion.source_ref,source_id:randomUUID()}:digest({synthetic:'unrelated version'});
    await db.query('update public.research_source_versions set '+field+'=$2 where id=$1',[sourceVersion.id,changed]);
    const before=await businessCounts();
-   for(const op of [()=>prepareRegisteredEvaluation(s4Actor,decided.observationId),()=>prepareRegisteredInput(s4Actor,decided.observationId,preparation.marketIds,preparation.asOf),()=>registeredObservationReport(s4Actor,decided.observationId),()=>registeredCandidateStatus(s4Actor,imported.id),()=>revealRegisteredCards(s4Actor,imported.id,revealInput),()=>registeredCitation(s4Actor,imported.id,shown.cards[0].id,0),()=>registeredReviewHistory(s4Actor,imported.id),()=>submitRegisteredDecision(s4Actor,imported.id,decision)])await assert.rejects(op(),/source_version_conflict/);
+   for(const op of [()=>registeredStore.readObservation(decided.observationId),()=>registeredStore.readMarketSnapshot(preparation.marketIds[0]),()=>registeredStore.commitEvaluationResult(makeCommit(preparedInput,'synthetic-registered-replay',preparation.revision)),()=>prepareRegisteredEvaluation(s4Actor,decided.observationId),()=>prepareRegisteredInput(s4Actor,decided.observationId,preparation.marketIds,preparation.asOf),()=>registeredObservationReport(s4Actor,decided.observationId),()=>registeredCandidateStatus(s4Actor,imported.id),()=>revealRegisteredCards(s4Actor,imported.id,revealInput),()=>registeredCitation(s4Actor,imported.id,shown.cards[0].id,0),()=>registeredReviewHistory(s4Actor,imported.id),()=>submitRegisteredDecision(s4Actor,imported.id,decision)])await assert.rejects(op(),/source_version_conflict/);
    assert.deepEqual(await businessCounts(),before);
    await db.query('update public.research_source_versions set '+field+'=$2 where id=$1',[sourceVersion.id,sourceVersion[field]]);
   }
