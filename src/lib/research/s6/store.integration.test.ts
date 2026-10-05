@@ -395,6 +395,50 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
    expect(await rows()).toEqual(businessBefore);
   }finally{await holder.query('rollback');holder.release();}
  },10000);
+ it('commits an already owner-locked disclosure before a queued session revoker',async()=>{
+  const raceToken=actor.userId+'.'+randomBytes(32).toString('hex'),hash=tokenHash(raceToken);
+  await admin.query("insert into research_s6_sessions(user_id,token_hash,subject,audience,scopes,expires_at) values($1,$2,'synthetic-read-first','alpha-evaluator',array['observation:read'],clock_timestamp()+interval '1 hour')",[actor.userId,hash]);
+  await admin.query('update research_revocation_candidate.feed set published_at=clock_timestamp() where feed_id=$1',[feedId]);
+  await admin.query(`create function s6_read_gate() returns trigger language plpgsql as $$ begin
+   if new.user_id='${actor.userId}'::uuid and new.kind='ExposureEvent' and new.payload->>'session_token_hash'='${hash}' then perform pg_advisory_xact_lock(74321,1);end if;return new;end $$;
+   create trigger s6_read_gate before insert on research_s4_records for each row execute function s6_read_gate()`);
+  const gate=await admin.connect(),revoker=await admin.connect();let released=false,readPid:number|undefined,primary:unknown;
+  let read:Promise<unknown>|undefined,revoke:Promise<unknown>|undefined;
+  const client=createEvaluationHttpClient({baseUrl:origin,ownerScope:{user_id:actor.userId,workspace_id:null},tokenProvider:async()=>raceToken,timeoutMs:12000});
+  const waitFor=async(query:string,values:unknown[])=>{const deadline=performance.now()+3000;while(performance.now()<deadline){const r=await admin.query(query,values);if(r.rowCount){expect(r.rowCount).toBe(1);return r.rows[0];}await new Promise(r=>setTimeout(r,10));}throw Error('synthetic lock witness missing');};
+  try{
+   await gate.query('begin');await gate.query('select pg_advisory_xact_lock(74321,1)');
+   await revoker.query("set statement_timeout='10000ms'");const revokerPid=(await revoker.query('select pg_backend_pid() as pid')).rows[0].pid;
+   read=client.readObservation(id);void read.catch(()=>{});
+   const blocked=await waitFor("select w.pid from pg_locks w join pg_stat_activity a on a.pid=w.pid where w.locktype='advisory' and w.classid=74321 and w.objid=1 and w.objsubid=2 and not w.granted and a.application_name='alpha-s4'",[]);
+   readPid=blocked.pid;
+   revoke=revoker.query('update research_s6_sessions set revoked=true where user_id=$1 and token_hash=$2',[actor.userId,hash]);void revoke.catch(()=>{});
+   await waitFor(`select w.pid from pg_locks h join pg_locks w on h.locktype=w.locktype and h.database=w.database and h.classid=w.classid and h.objid=w.objid and h.objsubid=w.objsubid
+    where h.pid=$1 and w.pid=$2 and h.locktype='advisory' and h.granted and not w.granted and h.objsubid=1
+    and h.classid=((hashtextextended($3,0)>>32)&4294967295)::oid and h.objid=(hashtextextended($3,0)&4294967295)::oid`,[blocked.pid,revokerPid,actor.userId]);
+   await gate.query('commit');released=true;
+   const response=await read;expect(response).toMatchObject({observation:{id}});await revoke;
+   const exposures=(await admin.query("select payload from research_s4_records where user_id=$1 and kind='ExposureEvent' and payload->>'session_token_hash'=$2",[actor.userId,hash])).rows;
+   expect(exposures).toHaveLength(1);expect(exposures[0].payload.exposed_artifact_ids).toEqual([id]);
+   const session=(await admin.query('select revoked from research_s6_sessions where user_id=$1 and token_hash=$2',[actor.userId,hash])).rows[0];expect(session.revoked).toBe(true);
+   const n=await counts();await expect(client.readObservation(id)).rejects.toMatchObject({status:401,code:'not_authenticated'});await expect(client.readMarketSnapshot(body.market_snapshot_refs[0].id)).rejects.toMatchObject({status:401,code:'not_authenticated'});expect(await counts()).toEqual(n);
+   expect((await admin.query("select payload from research_s4_records where user_id=$1 and kind='ExposureEvent' and payload->>'session_token_hash'=$2",[actor.userId,hash])).rows).toEqual(exposures);
+  }catch(error){primary=error;throw error;}finally{
+   const failures:unknown[]=[];
+   try{if(!released)await gate.query('rollback');}catch(error){failures.push(error);}finally{gate.release(true);}
+   // Only terminate the positively identified backend of this disposable test on failure.
+   if(primary&&readPid)try{await admin.query('select pg_terminate_backend($1)',[readPid]);}catch(error){failures.push(error);}
+   await Promise.allSettled([read,revoke].filter((v):v is Promise<unknown>=>v!==undefined));
+   try{
+    await revoker.query("set lock_timeout='3000ms';set statement_timeout='10000ms'");
+    for(const [query,args] of [
+     ['update research_s6_sessions set revoked=true where user_id=$1 and token_hash=$2',[actor.userId,hash]],
+     ['drop trigger s6_read_gate on research_s4_records;drop function s6_read_gate()',[]],
+    ] as const)try{await revoker.query(query,[...args]);}catch(error){failures.push(error);}
+   }catch(error){failures.push(error);}finally{revoker.release(true);}
+   if(failures.length&&!primary)throw new AggregateError(failures,'synthetic read-first cleanup failed');
+  }
+ },45000);
  it('marks synthetic rejected-observation disclosure as shadow without changing its decision sibling',async()=>{
   await admin.query('update research_revocation_candidate.feed set published_at=clock_timestamp() where feed_id=$1',[feedId]);
   const original=(await admin.query("select r.payload,r.payload_hash,s.revision,s.status,s.anchor_status from research_s4_records r join research_s4_observation_state s on s.observation_id=r.id and s.user_id=r.user_id where r.user_id=$1 and r.id=$2",[actor.userId,id])).rows[0];

@@ -301,3 +301,16 @@ instead of letting a queued synthetic read succeed after an assertion failure.
 Session revocation value is checked; full session metadata immutability and the
 opposite read-first ordering are not claimed by this test. No production race or
 served-Next browser acceptance is implied.
+
+
+### Session read-first disclosure handoff
+
+The opposite ordering is now covered over synthetic evaluator HTTP: an exposure
+insert pauses behind a test gate while holding the owner lock; a specific session
+revoker backend waits on that exact key. Releasing the gate lets one exposure
+commit before revocation; subsequent observation and market reads return401 with
+no additional token-specific exposure or business counts. The lock graph supplies
+ordering evidence, not promise resolution order. Cleanup uses bounded lock/query
+waits, discards configured connections, preserves primary failures and terminates
+only a positively identified test backend on failure. Production concurrency and
+recovery from an unresponsive database remain unclaimed.
