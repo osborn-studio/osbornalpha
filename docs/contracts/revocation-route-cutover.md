@@ -274,3 +274,17 @@ and retryable, not code alone. The pinned client considers500 retryable; this is
 not an instruction for unbounded retries. Internal business errors retain their
 existing .code contract; only revocation message/cause impersonation is rejected
 by the branded revocation boundary.
+
+
+### Synthetic shadow disclosure acceptance
+
+A registered agent reject creates a separate synthetic shadow observation through
+the existing decision API. Tests bind its fresh decision/predecessor references,
+freeze two synthetic markets, and verify exactly four shadow exposures from
+machine observation/market HTTP reads and registered browser preparation helper.
+They preserve the original sibling's payload/hash/status/anchor/revision and full
+market/evaluation rows. Stale access denies every read with exact exposure IDs and
+business counts unchanged. No real REL, human judgment or dormant feature is
+activated. This is helper/socket acceptance, not served-browser rendering. The
+real-time reveal/decision week-boundary edge remains explicit; policy is never
+bypassed to make the fixture pass.

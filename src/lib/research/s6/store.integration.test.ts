@@ -8,8 +8,8 @@ import {applyRevocationPage} from '../revocation/consumer';
 import {canonicalize} from '../ingest/pa-v1/json.js';
 import {testPack} from '../../../../scripts/s4/test-pack';
 import {importCandidate} from '../s4/import';
-import {revealCards} from '../s4/cards';
-import {submitDecision} from '../s4/decisions';
+import {revealRegisteredCards,revealCards} from '../s4/cards';
+import {submitRegisteredDecision,submitDecision} from '../s4/decisions';
 import {closeS4Pool,transaction} from '../s4/db';
 import {digest,evaluateObservation} from 'dsh-trade-strategy-evaluator/engine';
 import {createS6Store,prepareInput,prepareEvaluation,makeCommit,tokenHash,currentMarketIds} from './store';
@@ -18,7 +18,7 @@ import {createEvaluationHttpClient} from 'dsh-trade-strategy-evaluator/adapters'
 import {assertEvaluationStoreConformance} from 'dsh-trade-strategy-evaluator/conformance';
 import {evaluatorRpc} from './http';
 import {freezeMarket,freezeMarketHandoff,benchmarkIdentity} from './market';
-import {observationReport} from './report';
+import {prepareRegisteredEvaluationDisplay,observationReport} from './report';
 import {syntheticMapping} from '../../../../scripts/s6/fixtures';
 import {runRelFixture} from './shadow';
 import {runRelReadiness,settleRelFixture,releaseRelReservation,type RelFixtureAdapter} from './rel-readiness';
@@ -355,6 +355,37 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
    await admin.query('drop trigger s6_test_expiry_delay on research_s6_evaluations; drop function s6_test_expiry_delay()');
   }
  },15000);
+ it('marks synthetic rejected-observation disclosure as shadow without changing its decision sibling',async()=>{
+  await admin.query('update research_revocation_candidate.feed set published_at=clock_timestamp() where feed_id=$1',[feedId]);
+  const original=(await admin.query("select r.payload,r.payload_hash,s.revision,s.status,s.anchor_status from research_s4_records r join research_s4_observation_state s on s.observation_id=r.id and s.user_id=r.user_id where r.user_id=$1 and r.id=$2",[actor.userId,id])).rows[0];
+  const siblingMaterial=async()=>({markets:(await admin.query('select * from research_s6_markets where user_id=$1 and observation_id=$2 order by id',[actor.userId,id])).rows,evaluations:(await admin.query('select * from research_s6_evaluations where user_id=$1 and observation_id=$2 order by id',[actor.userId,id])).rows});
+  const siblingBefore=await siblingMaterial();
+  const shown=await revealRegisteredCards(actor,candidate,{requestKey:randomUUID(),judgment:'Synthetic agent shadow acceptance only',alreadySeen:[],independentJudgment:false});
+  const revision=(await admin.query('select revision from research_s4_candidates where user_id=$1 and id=$2',[actor.userId,candidate])).rows[0].revision;
+  const rejected=await submitRegisteredDecision(actor,candidate,{requestKey:randomUUID(),expectedRevision:revision,action:'reject',reason:'Synthetic scenario, not a human investment judgment',cardId:shown.cards[0].id,labelId:shown.labelId,exposureId:shown.exposureId,securityTicker:'S6SYNTH',companyEntityId:null,newObservation:true,reviewAt:null});
+  const shadowId=rejected.observationId!;expect(shadowId).not.toBe(id);expect(rejected.duplicate).toBe(false);
+  const observation=(await createS6Store(actor).readObservation(shadowId)).observation;
+  expect(observation.decision_or_candidate_ref).toBe(rejected.decisionId);expect(observation.predecessor_id).toBe(id);expect(observation.observation_kind).toBe('shadow');expect(observation.actor_kind).toBe('agent');expect(observation.synthetic).toBe(true);
+  const marketIds=[];for(const security of [observation.securities[0],benchmarkIdentity(true)])marketIds.push((await freezeMarket(actor,shadowId,syntheticMapping(security),'synthetic')).id);
+  const before=new Set((await admin.query("select id from research_s4_records where user_id=$1 and kind='ExposureEvent'",[actor.userId])).rows.map(r=>r.id));
+  expect((await remote().readObservation(shadowId)).observation.id).toBe(shadowId);
+  for(const mid of marketIds)expect((await remote().readMarketSnapshot(mid)).snapshot.id).toBe(mid);
+  const prepared=await prepareRegisteredEvaluationDisplay(actor,shadowId);expect(prepared.marketIds.sort()).toEqual([...marketIds].sort());
+  const exposed=(await admin.query("select id,candidate_id,payload from research_s4_records where user_id=$1 and kind='ExposureEvent'",[actor.userId])).rows.filter(r=>!before.has(r.id));
+  expect(exposed).toHaveLength(4);
+  for(const e of exposed){expect(e.candidate_id).toBe(candidate);expect(e.payload.actor_kind).toBe('agent');expect(e.payload.shadow_exposed).toBe(true);}
+  const machine=exposed.filter(e=>e.payload.origin.startsWith('alpha_evaluator_'));
+  expect(machine.flatMap(e=>e.payload.exposed_artifact_ids).sort()).toEqual([shadowId,...marketIds].sort());
+  for(const e of machine)expect(e.payload.session_token_hash).toBe(tokenHash(token));
+  const prep=exposed.find(e=>e.payload.origin==='alpha_evaluation_prepare')!;expect(prep.payload.exposed_artifact_ids.sort()).toEqual([shadowId,...marketIds].sort());expect(prep.payload.displayed_at).toBe(prepared.asOf);
+  expect((await admin.query("select r.payload,r.payload_hash,s.revision,s.status,s.anchor_status from research_s4_records r join research_s4_observation_state s on s.observation_id=r.id and s.user_id=r.user_id where r.user_id=$1 and r.id=$2",[actor.userId,id])).rows[0]).toEqual(original);
+  expect(await siblingMaterial()).toEqual(siblingBefore);
+  const exposureIds=async()=> (await admin.query("select id from research_s4_records where user_id=$1 and kind='ExposureEvent' order by id",[actor.userId])).rows;
+  const exposureBefore=await exposureIds();
+  const n=await counts();await admin.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '61 seconds' where feed_id=$1",[feedId]);
+  try{await expect(remote().readObservation(shadowId)).rejects.toMatchObject({status:503,code:'source_unavailable'});for(const mid of marketIds)await expect(remote().readMarketSnapshot(mid)).rejects.toMatchObject({status:503,code:'source_unavailable'});await expect(prepareRegisteredEvaluationDisplay(actor,shadowId)).rejects.toMatchObject({message:'revocation_access_denied',cause:'revocation_stale'});expect(await counts()).toEqual(n);expect(await exposureIds()).toEqual(exposureBefore);expect(await siblingMaterial()).toEqual(siblingBefore);}
+  finally{await admin.query('update research_revocation_candidate.feed set published_at=clock_timestamp() where feed_id=$1',[feedId]);}
+ });
  it('immutable results reject updates and source revocation also blocks duplicate replay',async()=>{
   const evaluation=(await admin.query('select id from research_s6_evaluations where user_id=$1 limit 1',[actor.userId])).rows[0];
   const replay=await observationReport(actor,id,evaluation.id);expect('replay' in replay&&replay.replay?.matches).toBe(true);
