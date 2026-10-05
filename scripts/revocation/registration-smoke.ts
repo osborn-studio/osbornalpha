@@ -1,5 +1,5 @@
 import {POST as observationRoute} from '../../src/app/api/research/s6/observations/[id]/route';
-import {prepareRegisteredInput,prepareRegisteredEvaluation,prepareInput,prepareEvaluation,makeCommit,createS6Store,createRegisteredS6Store,tokenHash} from '../../src/lib/research/s6/store';
+import {prepareRegisteredInput,prepareRegisteredEvaluation,prepareInput,prepareEvaluation,makeCommit,createS6Store,createRegisteredS6Store,createRegisteredEvaluatorStore,tokenHash} from '../../src/lib/research/s6/store';
 import {freezeMarket,benchmarkIdentity} from '../../src/lib/research/s6/market';
 import {syntheticMapping} from '../s6/fixtures';
 import {addRecord} from '../../src/lib/research/s4/records';
@@ -139,6 +139,53 @@ async function main(){
   assert.deepEqual(await registeredStore.readObservation(decided.observationId),await createS6Store(s4Actor).readObservation(decided.observationId));
   for(const mid of preparation.marketIds)assert.deepEqual(await registeredStore.readMarketSnapshot(mid),await createS6Store(s4Actor).readMarketSnapshot(mid));
   await assert.rejects(createRegisteredS6Store(s4Actor,'invalid').readObservation(decided.observationId),/not_authenticated/);
+  // Machine disclosure adapter: no transport activation, synthetic session only.
+  const evaluatorStore=createRegisteredEvaluatorStore(s4Actor,registeredToken);
+  assert.throws(()=>createRegisteredEvaluatorStore(s4Actor,undefined as unknown as string),/not_authenticated/);
+  for(const [origin,id,read,control] of [
+   ['alpha_evaluator_observation',decided.observationId,()=>evaluatorStore.readObservation(decided.observationId),()=>registeredStore.readObservation(decided.observationId)],
+   ['alpha_evaluator_market',preparation.marketIds[0],()=>evaluatorStore.readMarketSnapshot(preparation.marketIds[0]),()=>registeredStore.readMarketSnapshot(preparation.marketIds[0])],
+  ] as const){
+   const before=await businessCounts();assert.deepEqual(await read(),await control());
+   const after=await businessCounts();
+   for(const table of ['research_s4_records','research_s4_outbox','research_audit_log'])assert.equal(after[table],before[table]+1);
+   const exposures=(await db.query("select candidate_id,payload from public.research_s4_records where user_id=$1 and kind='ExposureEvent' and payload->>'origin'=$2",[actor,origin])).rows;
+   assert.equal(exposures.length,1);const e=exposures[0];assert.equal(e.candidate_id,imported.id);
+   assert.deepEqual(e.payload.exposed_artifact_ids,[id]);assert.deepEqual(e.payload.subject_refs,reportExposure[0].payload.subject_refs);
+   assert.equal(e.payload.actor_ref,actor);assert.equal(e.payload.session_token_hash,tokenHash(registeredToken));assert.ok(!JSON.stringify(e.payload).includes(registeredToken));assert.equal(e.payload.actor_kind,'agent');assert.equal(e.payload.shadow_exposed,false);assert.equal(e.payload.evaluation_period_id,weekPeriod(e.payload.displayed_at));
+  }
+  const repeatBefore=await businessCounts();await evaluatorStore.readObservation(decided.observationId);await evaluatorStore.readMarketSnapshot(preparation.marketIds[1]);assert.equal((await businessCounts()).research_s4_records,repeatBefore.research_s4_records+2);
+  const repeated=(await db.query("select payload from public.research_s4_records where user_id=$1 and payload->>'origin'='alpha_evaluator_observation'",[actor])).rows;assert.equal(repeated.length,2);
+  assert.throws(()=>createRegisteredEvaluatorStore(s4Actor,''),/not_authenticated/);
+  assert.throws(()=>createRegisteredEvaluatorStore({...s4Actor,kind:'human'},registeredToken),/scope_denied/);
+  for(const [mutation,code] of [["revoked=true",'not_authenticated'],["scopes=array['evaluation:append']",'scope_denied']] as const){
+   const before=await businessCounts();
+   await db.query('update public.research_s6_sessions set '+mutation+' where user_id=$1 and token_hash=$2',[actor,tokenHash(registeredToken)]);
+   try{for(const read of [()=>evaluatorStore.readObservation(decided.observationId),()=>evaluatorStore.readMarketSnapshot(preparation.marketIds[0])])await assert.rejects(read(),new RegExp(code));assert.deepEqual(await businessCounts(),before);}
+   finally{await db.query("update public.research_s6_sessions set revoked=false,scopes=array['observation:read','evaluation:append'] where user_id=$1 and token_hash=$2",[actor,tokenHash(registeredToken)]);}
+  }
+  const foreignSessionBefore=await businessCounts();await assert.rejects(createRegisteredEvaluatorStore({userId:randomUUID(),kind:'agent'},registeredToken).readObservation(decided.observationId),/not_authenticated/);assert.deepEqual(await businessCounts(),foreignSessionBefore);
+  const missingBefore=await businessCounts();await assert.rejects(createRegisteredEvaluatorStore(s4Actor,'invalid').readObservation(decided.observationId),/not_authenticated/);assert.deepEqual(await businessCounts(),missingBefore);
+  await db.query(`create function research_revocation_candidate.delay_machine_exposure() returns trigger language plpgsql as $$ begin
+   if new.kind='ExposureEvent' and new.payload->>'origin' in ('alpha_evaluator_observation','alpha_evaluator_market') then perform pg_sleep(6);end if;return new;end $$;
+   create trigger delay_machine_exposure before insert on public.research_s4_records for each row execute function research_revocation_candidate.delay_machine_exposure()`);
+  try{
+   for(const read of [()=>evaluatorStore.readObservation(decided.observationId),()=>evaluatorStore.readMarketSnapshot(preparation.marketIds[0])]){
+    for(const mode of ['session','feed']){
+     await db.query('update research_revocation_candidate.feed set published_at=clock_timestamp()');
+     if(mode==='session')await db.query("update public.research_s6_sessions set expires_at=clock_timestamp()+interval '5 seconds' where user_id=$1 and token_hash=$2",[actor,tokenHash(registeredToken)]);
+     else await db.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '55 seconds'");
+     const before=await businessCounts(),started=performance.now();
+     await assert.rejects(read(),e=>e instanceof Error&&(mode==='session'?e.message==='not_authenticated':e.cause==='revocation_stale'));
+     assert.ok(performance.now()-started>=5900);assert.deepEqual(await businessCounts(),before);
+     await db.query("update public.research_s6_sessions set expires_at=created_at+interval '1 hour' where user_id=$1 and token_hash=$2",[actor,tokenHash(registeredToken)]);
+    }
+   }
+  }finally{
+   await db.query('drop trigger delay_machine_exposure on public.research_s4_records');
+   await db.query('update research_revocation_candidate.feed set published_at=clock_timestamp()');
+   await db.query("update public.research_s6_sessions set expires_at=created_at+interval '1 hour' where user_id=$1 and token_hash=$2",[actor,tokenHash(registeredToken)]);
+  }
   const preparedInput=await prepareRegisteredInput(s4Actor,decided.observationId,preparation.marketIds,preparation.asOf);
   assert.deepEqual(preparedInput,await prepareInput(s4Actor,decided.observationId,preparation.marketIds,preparation.asOf));
   assert.equal(preparedInput.observation.id,decided.observationId);

@@ -221,3 +221,22 @@ even when both timestamps are past, and isolated uppercase UUID rejection.
 Opus5.5 challenged attribution and fixture coverage; disposition records both
 corrections and remaining limits. Local and Linux validation are tracked in the
 central osstack progress rather than treating a previous head as current green.
+
+
+### Registered evaluator disclosure adapter (transport adoption pending)
+
+`createRegisteredEvaluatorStore` requires a nonempty session and machine actor;
+readObservation/readMarketSnapshot append ExposureEvent, audit and outbox in the
+same registered owner transaction as the read. The exposure identifies exactly
+the returned artifact, source subject and a non-bearer session digest. Repeated
+reads append repeated exposures. The existing internal registered store remains
+without disclosure writes. Purpose scopes remain owner-wide; machine identity
+must never be treated as a human judgment. Owner-scoped market ID resolution is
+trusted metadata lookup and does not promise existence indistinguishability.
+
+Late feed/session expiry rolls the entire disclosure back. Savepoint recovery
+is private to the store's outer transaction, always rethrows, and enables session
+reauthorization after SQL errors. This is not a transaction sandbox for untrusted
+callbacks. `evaluatorRpc` still uses the legacy adapter: transport acceptance,
+bearer owner binding, production-route gating and shadow-positive tests remain
+separate release gates; this addition enables no production capability.
