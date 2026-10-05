@@ -109,7 +109,15 @@ export function makeCommit(input:EvaluationInput,key:string,revision:number):Com
   result:computed.result,result_sha256:computed.result_sha256,expected_revision:revision,idempotency_key:key,request_key:key};
 }
 export function createS6Store(actor:S4Actor,sessionToken?:string):EvaluationStore{
- async function run<T>(purpose:string,fn:(db:PoolClient)=>Promise<T>){enabled();return transaction(actor,async db=>{await authorizeSession(db,actor,sessionToken,purpose);return fn(db);},sessionToken===undefined?undefined:db=>authorizeSession(db,actor,sessionToken,purpose));}
+ async function run<T>(purpose:string,fn:(db:PoolClient)=>Promise<T>){enabled();return transaction(actor,async db=>{await authorizeSession(db,actor,sessionToken,purpose);
+  // A session can expire while DB-only work runs under the owner lock.
+  // Recheck before either a success result or business error leaves the transaction.
+  await db.query('savepoint s6_session_work');
+  let result:T;
+  try{result=await fn(db);}
+  catch(error){await db.query('rollback to savepoint s6_session_work');await authorizeSession(db,actor,sessionToken,purpose);throw error;}
+  await authorizeSession(db,actor,sessionToken,purpose);
+  await db.query('release savepoint s6_session_work');return result;},sessionToken===undefined?undefined:db=>authorizeSession(db,actor,sessionToken,purpose));}
  return {
   readObservation:id=>run('observation:read',async db=>{const r=await observationFor(db,actor,id);return {schema_version:'evaluator-rpc/1.0',owner_scope:r.payload.owner_scope,revision:r.revision,sha256:r.payload_hash,observation:r.payload};}),
   readMarketSnapshot:id=>run('observation:read',async db=>{const r=await marketFor(db,actor,id);return {schema_version:'evaluator-rpc/1.0',owner_scope:{user_id:actor.userId,workspace_id:null},revision:0,sha256:r.snapshot_hash,snapshot:r.snapshot};}),

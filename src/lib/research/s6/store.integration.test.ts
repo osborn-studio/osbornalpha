@@ -265,6 +265,40 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
   await expect(observationReport(actor,id,'-'.repeat(36))).rejects.toMatchObject({code:'invalid_schema'});
   expect('market_evidence' in replay&&replay.market_evidence?.length).toBe(2);
  },30000);
+ it('rolls back a complete evaluation when its machine session expires during work',async()=>{
+  // A separate fresh token and delayed real insert; no wall-clock mocks.
+  const boundedToken=actor.userId+'.'+randomBytes(32).toString('hex');
+  await admin.query("insert into research_s6_sessions(user_id,token_hash,subject,audience,scopes,expires_at) values($1,$2,'synthetic-expiry','alpha-evaluator',array['evaluation:append'],clock_timestamp()+interval '1 hour')",[actor.userId,tokenHash(boundedToken)]);
+  await admin.query(`create function s6_test_expiry_delay() returns trigger language plpgsql as $$ begin if new.user_id='${actor.userId}'::uuid then perform pg_sleep(2); end if; return new; end $$;
+   create trigger s6_test_expiry_delay before insert on research_s6_evaluations for each row execute function s6_test_expiry_delay()`);
+  try{
+   const p=await prepareEvaluation(actor,id),input=await prepareInput(actor,id,p.marketIds,p.asOf);
+   const commit=makeCommit(input,randomUUID(),p.revision),before=await counts();
+   await admin.query("update research_s6_sessions set expires_at=clock_timestamp()+interval '1 second' where user_id=$1 and token_hash=$2",[actor.userId,tokenHash(boundedToken)]);
+   const started=Date.now();
+   await expect(createS6Store(actor,boundedToken).commitEvaluationResult(commit)).rejects.toMatchObject({code:'not_authenticated'});
+   expect(Date.now()-started).toBeGreaterThanOrEqual(1900);expect(await counts()).toEqual(before);
+   expect((await createS6Store(actor).readObservation(id)).revision).toBe(p.revision);
+   await admin.query("update research_s6_sessions set expires_at=created_at+interval '1 hour' where user_id=$1 and token_hash=$2",[actor.userId,tokenHash(boundedToken)]);
+   // An aborted SQL transaction must be restored before the session check so
+   // a fresh credential retains the original trigger error.
+   await admin.query(`create function s6_test_token_error() returns trigger language plpgsql as $$ begin if new.user_id='${actor.userId}'::uuid then raise exception 'synthetic_token_sql_failure'; end if; return new; end $$; create trigger s6_test_token_error before insert on research_s4_outbox for each row execute function s6_test_token_error()`);
+   try{
+    await expect(createS6Store(actor,boundedToken).commitEvaluationResult(commit)).rejects.toThrow('synthetic_token_sql_failure');
+    expect(await counts()).toEqual(before);
+    await admin.query("update research_s6_sessions set expires_at=clock_timestamp()+interval '1 second' where user_id=$1 and token_hash=$2",[actor.userId,tokenHash(boundedToken)]);
+    await expect(createS6Store(actor,boundedToken).commitEvaluationResult(commit)).rejects.toMatchObject({code:'not_authenticated'});
+    expect(await counts()).toEqual(before);
+   }finally{await admin.query('drop trigger s6_test_token_error on research_s4_outbox; drop function s6_test_token_error()');}
+   await admin.query("update research_s6_sessions set expires_at=created_at+interval '1 hour' where user_id=$1 and token_hash=$2",[actor.userId,tokenHash(boundedToken)]);
+   const revoker=await admin.connect();
+   try{await revoker.query("set lock_timeout='100ms'");await transaction(actor,async()=>{await expect(revoker.query('update research_s6_sessions set revoked=true where user_id=$1 and token_hash=$2',[actor.userId,tokenHash(boundedToken)])).rejects.toMatchObject({code:'55P03'});});}
+   finally{await revoker.query('reset lock_timeout');revoker.release();}
+   expect((await createS6Store(actor,boundedToken).commitEvaluationResult(commit)).status).toBe('accepted');
+  }finally{
+   await admin.query('drop trigger s6_test_expiry_delay on research_s6_evaluations; drop function s6_test_expiry_delay()');
+  }
+ },15000);
  it('immutable results reject updates and source revocation also blocks duplicate replay',async()=>{
   const evaluation=(await admin.query('select id from research_s6_evaluations where user_id=$1 limit 1',[actor.userId])).rows[0];
   const replay=await observationReport(actor,id,evaluation.id);expect('replay' in replay&&replay.replay?.matches).toBe(true);
@@ -276,4 +310,6 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
   await expect(createS6Store(actor).readMarketSnapshot(body.market_snapshot_refs[0].id)).rejects.toMatchObject({code:'scope_denied'});
   expect(evaluateObservation(body.input).ok).toBe(true); // Offline Replay remains deterministic, not current authorization.
  });
+
+
 });
