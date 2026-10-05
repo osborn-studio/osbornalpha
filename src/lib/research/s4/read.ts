@@ -17,7 +17,7 @@ export async function listCandidates(actor:S4Actor) {
   });
 }
 export async function reviewHistory(actor:S4Actor,id:string) {return reviewHistoryWithPolicy(actor,id,false);}
-/** Candidate entrypoint; no production route activation. */
+/** Used by local candidate routes; production remains hard-disabled. */
 export async function registeredReviewHistory(actor:S4Actor,id:string) {return reviewHistoryWithPolicy(actor,id,true);}
 async function reviewHistoryWithPolicy(actor:S4Actor,id:string,registered:boolean) {
   const work=async (db:PoolClient)=>{
@@ -40,7 +40,7 @@ export async function researchOptions(actor:S4Actor) {
   }));
 }
 export async function candidateStatus(actor:S4Actor,id:string) {return candidateStatusWithPolicy(actor,id,false);}
-/** Candidate entrypoint; no production route activation. */
+/** Used by local candidate routes; production remains hard-disabled. */
 export async function registeredCandidateStatus(actor:S4Actor,id:string) {return candidateStatusWithPolicy(actor,id,true);}
 async function candidateStatusWithPolicy(actor:S4Actor,id:string,registered:boolean) {
   const work=async (db:PoolClient)=>{
@@ -52,7 +52,7 @@ async function candidateStatusWithPolicy(actor:S4Actor,id:string,registered:bool
   return registered?registeredCandidateTransaction(actor,id,work):transaction(actor,work);
 }
 export async function citation(actor:S4Actor,id:string,cardId:string,index:number) {return citationWithPolicy(actor,id,cardId,index,false);}
-/** Candidate entrypoint; no production route activation. */
+/** Used by local candidate routes; production remains hard-disabled. */
 export async function registeredCitation(actor:S4Actor,id:string,cardId:string,index:number) {return citationWithPolicy(actor,id,cardId,index,true);}
 async function citationWithPolicy(actor:S4Actor,id:string,cardId:string,index:number,registered:boolean) {
   if(!Number.isInteger(index)||index<0||index>7||!/^[0-9a-f-]{36}$/.test(cardId))fail('invalid_schema');

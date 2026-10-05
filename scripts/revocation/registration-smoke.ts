@@ -1,7 +1,13 @@
+import {localSessionToken} from '../../src/lib/research/s4/auth';
+import {GET as statusRoute} from '../../src/app/api/research/s4/candidates/[id]/status/route';
+import {POST as revealRoute} from '../../src/app/api/research/s4/candidates/[id]/reveal/route';
+import {POST as decisionsRoute} from '../../src/app/api/research/s4/candidates/[id]/decisions/route';
+import {POST as historyRoute} from '../../src/app/api/research/s4/candidates/[id]/history/route';
+import {POST as citationRoute} from '../../src/app/api/research/s4/candidates/[id]/citation/route';
 import {s4Http} from '../../src/lib/research/s4/http';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {randomUUID,generateKeyPairSync,sign} from 'node:crypto';
+import {randomUUID,generateKeyPairSync,sign,createHmac} from 'node:crypto';
 import {Pool} from 'pg';
 import {importRegisteredCandidate} from '../../src/lib/research/s4/import';
 import {submitRegisteredDecision,type DecisionInput} from '../../src/lib/research/s4/decisions';
@@ -24,6 +30,7 @@ async function main(){
   // Disposable runtime role only; no production ACL provisioning is claimed.
   await db.query('grant usage on schema research_revocation_candidate to alpha_s4_runtime; grant select on all tables in schema research_revocation_candidate to alpha_s4_runtime');
   process.env.ALPHA_S4_ENABLED='1';process.env.ALPHA_S4_DATABASE_URL=state.runtimeUrl;
+  process.env.ALPHA_S4_LOCAL_AUTH='1';process.env.ALPHA_S4_ORIGIN='http://127.0.0.1:3199';process.env.ALPHA_S4_LOCAL_SESSION_SECRET=randomUUID();
   const actor=randomUUID(),t=testPack(actor),feedId=randomUUID();
   const s4Actor={userId:actor,kind:'agent' as const};
   const expected={feedId,scope:t.scope,sourceId:t.sourceId,grantId:t.config.grant.grant_id,grantVersion:1};
@@ -73,17 +80,24 @@ async function main(){
   assert.equal((await db.query('select cursor from research_revocation_candidate.feed')).rows[0].cursor,'0');
   const imported=await importRegisteredCandidate(s4Actor,raw);
   assert.equal(imported.duplicate,false);
+  const handlers={status:statusRoute,reveal:revealRoute,decisions:decisionsRoute,history:historyRoute,citation:citationRoute};
+  const origin=process.env.ALPHA_S4_ORIGIN,cookie='alpha_s4_local_session='+localSessionToken(actor,process.env.ALPHA_S4_LOCAL_SESSION_SECRET,Date.now()+3600000);
+  const route=(name:keyof typeof handlers,body:unknown={},query='',headers:Record<string,string>={})=>handlers[name](new Request(origin+'/api/research/s4/candidates/'+imported.id+'/'+name+query,{method:name==='status'?'GET':'POST',headers:{host:'127.0.0.1:3199',origin,cookie,'content-type':'application/json',...headers},...(name==='status'?{}:{body:JSON.stringify(body)})}),{params:Promise.resolve({id:imported.id})});
+  const success=async(response:Promise<Response>)=>{const result=await response;assert.equal(result.status,200);assert.equal(result.headers.get('cache-control'),'no-store');return result.json();};
+  for(const name of Object.keys(handlers) as Array<keyof typeof handlers>){assert.equal((await route(name,{},'',{cookie:''})).status,401);assert.equal((await route(name,{},'',{host:'evil.example'})).status,403);assert.equal((await route(name,{},'',{'sec-fetch-site':'cross-site'})).status,403);}
+  assert.deepEqual(await success(route('status')),{revision:0,observations:[]});
+
   assert.deepEqual(await registeredCandidateStatus(s4Actor,imported.id),{revision:0,observations:[]});
   const revealInput={requestKey:randomUUID(),judgment:'Synthetic automated acceptance only',alreadySeen:[],independentJudgment:false};
-  const shown=await revealRegisteredCards(s4Actor,imported.id,revealInput);
+  const shown=await success(route('reveal',revealInput));
   assert.ok(shown);
   const label=(await db.query("select payload from public.research_s4_records where user_id=$1 and kind='HumanLabel'",[actor])).rows[0].payload;
   assert.equal(label.actor_kind,'agent');assert.equal(label.independent,false);
   await db.query(`insert into public.stocks_universe(ticker,name,market,exchange,currency,metadata) values('REVTEST','Synthetic','US','XNYS','USD','{"synthetic":true}')`);
   const decision:DecisionInput={requestKey:randomUUID(),expectedRevision:0,action:'observe',reason:'Synthetic automated test; not investment advice',cardId:shown.cards[0].id,labelId:shown.labelId,exposureId:shown.exposureId,securityTicker:'REVTEST',companyEntityId:null,newObservation:true,reviewAt:null};
-  const decided=await submitRegisteredDecision(s4Actor,imported.id,decision);
+  const decided=await success(route('decisions',decision));
   assert.equal(decided.revision,1);assert.equal(decided.duplicate,false);
-  assert.equal((await submitRegisteredDecision(s4Actor,imported.id,decision)).duplicate,true);
+  assert.equal((await success(route('decisions',decision))).duplicate,true);
   await assert.rejects(submitRegisteredDecision(s4Actor,imported.id,{...decision,reason:'changed'}),/idempotency_conflict/);
   await assert.rejects(submitRegisteredDecision(s4Actor,imported.id,{...decision,requestKey:randomUUID()}),/revision_conflict/);
   assert.equal((await registeredCitation(s4Actor,imported.id,shown.cards[0].id,0)).text,t.raw);
@@ -96,6 +110,26 @@ async function main(){
    }
    return counts;
   };
+  const citationQuery='?cardId='+shown.cards[0].id+'&index=0';
+  assert.equal((await success(route('citation',{},citationQuery))).text,t.raw);
+  assert.ok((await success(route('history'))).records.some((r:{kind:string})=>r.kind==='Decision'));
+  for(const query of ['?cardId='+shown.cards[0].id,'?cardId='+shown.cards[0].id+'&index=','?cardId='+shown.cards[0].id+'&index=0&index=1','?cardId='+shown.cards[0].id+'&index=00','?cardId='+shown.cards[0].id+'&index=8','?cardId='+shown.cards[0].id+'&index=0&extra=1','?cardId='+shown.cards[0].id+'&cardId='+shown.cards[0].id+'&index=0'])assert.equal((await route('citation',{},query)).status,422);
+  const denyRoutes=async(status:number)=>{const before=await businessCounts(),candidateBefore=(await db.query('select revision,status,last_observation_id from public.research_s4_candidates where id=$1',[imported.id])).rows[0];for(const [name,body,query] of [['status',{},''],['history',{},''],['citation',{},citationQuery],['reveal',revealInput,''],['decisions',decision,'']] as const){const response=await route(name,body,query);assert.equal(response.status,status);assert.deepEqual(await response.json(),{error:{code:status===403?'revocation_access_denied':'revocation_check_unavailable'}});}assert.deepEqual(await businessCounts(),before);assert.deepEqual((await db.query('select revision,status,last_observation_id from public.research_s4_candidates where id=$1',[imported.id])).rows[0],candidateBefore);};
+  const signed=(payload:unknown)=>{const encoded=Buffer.from(JSON.stringify(payload)).toString('base64url');return 'alpha_s4_local_session='+encoded+'.'+createHmac('sha256',process.env.ALPHA_S4_LOCAL_SESSION_SECRET!).update(encoded).digest('base64url');};
+  const now=Date.now(),session={userId:actor,kind:'agent',purpose:'alpha_s4_acceptance',issuedAt:now-1000,expiresAt:now+60000};
+  const invalidCookies=['alpha_s4_local_session=forged.x',...[
+   {...session,expiresAt:now-1},{...session,issuedAt:now+60000},{...session,expiresAt:now+7200000},{...session,purpose:'wrong'},{...session,kind:'human'}
+  ].map(signed)];
+  const beforeAuth=await businessCounts();
+  for(const bad of invalidCookies)for(const name of Object.keys(handlers) as Array<keyof typeof handlers>)assert.equal((await route(name,{},'',{cookie:bad})).status,401);
+  assert.deepEqual(await businessCounts(),beforeAuth);
+  const other=randomUUID();await db.query('insert into auth.users(id) values($1)',[other]);await db.query("update public.profiles set role='admin' where id=$1",[other]);
+  const otherCookie='alpha_s4_local_session='+localSessionToken(other,process.env.ALPHA_S4_LOCAL_SESSION_SECRET,Date.now()+3600000),beforeOther=await businessCounts();
+  for(const [name,body,query] of [['status',{},''],['history',{},''],['citation',{},citationQuery],['reveal',revealInput,''],['decisions',decision,'']] as const){const response=await route(name,body,query,{cookie:otherCookie});assert.equal(response.status,403);assert.deepEqual(await response.json(),{error:{code:'scope_denied'}});}
+  assert.deepEqual(await businessCounts(),beforeOther);
+  const conflictResponse=await route('decisions',{...decision,requestKey:randomUUID()});assert.equal(conflictResponse.status,409);assert.deepEqual(await conflictResponse.json(),{error:{code:'revision_conflict'}});
+  await db.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '61 seconds'");await denyRoutes(503);
+  await db.query('update research_revocation_candidate.feed set published_at=clock_timestamp()');
   const savedImported=(await db.query('select imported from public.research_s4_candidates where id=$1',[imported.id])).rows[0].imported;
   for(const mutation of ['missing','version','watermark','source']){
    const changed=structuredClone(savedImported);
@@ -151,7 +185,7 @@ async function main(){
   const slowInput={...revealInput,requestKey:randomUUID()},beforeSlow=await businessCounts();
   await db.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '55 seconds'");
   const slowStarted=performance.now();
-  await assert.rejects(revealRegisteredCards(s4Actor,imported.id,slowInput),error=>error instanceof Error&&error.cause==='revocation_stale');
+  const delayedRevealResponse=await route('reveal',slowInput);assert.equal(delayedRevealResponse.status,503);assert.deepEqual(await delayedRevealResponse.json(),{error:{code:'revocation_check_unavailable'}});
   assert.ok(performance.now()-slowStarted>=5900,'must reach delayed request insert before post-check denial');
   assert.deepEqual(await businessCounts(),beforeSlow);
   assert.equal((await s4Http(()=>registeredCandidateStatus(s4Actor,imported.id))).status,503);
@@ -164,7 +198,7 @@ async function main(){
   const countsBefore=await businessCounts();
   await db.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '55 seconds'");
   const decisionStarted=performance.now();
-  await assert.rejects(submitRegisteredDecision(s4Actor,imported.id,delayedDecision),error=>error instanceof Error&&error.cause==='revocation_stale');
+  const delayedDecisionResponse=await route('decisions',delayedDecision);assert.equal(delayedDecisionResponse.status,503);assert.deepEqual(await delayedDecisionResponse.json(),{error:{code:'revocation_check_unavailable'}});
   assert.ok(performance.now()-decisionStarted>=5900);
   assert.deepEqual((await db.query('select revision,status,last_observation_id from public.research_s4_candidates where id=$1',[imported.id])).rows[0],statusBefore);
   assert.deepEqual(await businessCounts(),countsBefore);
@@ -401,7 +435,7 @@ async function main(){
   assert.equal((await db.query('select count(*)::int n from public.research_s4_candidates')).rows[0].n,1);
   await assert.rejects(withRegisteredCandidate(db,actor,hash,expected,async()=>true),/revocation_access_denied/);
   // Even an accidentally reset binding must not bypass a retained tombstone.
-  await db.query('update public.research_s4_bindings set revoked=false where user_id=$1',[actor]);await rejected(register(),'grant_version_revoked');await deniedAccess(expected,'grant_version_revoked');
+  await db.query('update public.research_s4_bindings set revoked=false where user_id=$1',[actor]);await rejected(register(),'grant_version_revoked');await deniedAccess(expected,'grant_version_revoked');await denyRoutes(403);
   for(const op of [()=>registeredCitation(s4Actor,imported.id,shown.cards[0].id,0),()=>registeredReviewHistory(s4Actor,imported.id),()=>submitRegisteredDecision(s4Actor,imported.id,decision),()=>registeredCandidateStatus(s4Actor,imported.id),()=>revealRegisteredCards(s4Actor,imported.id,revealInput)]){
    await assert.rejects(op(),error=>error instanceof Error&&error.cause==='grant_version_revoked');
   }

@@ -27,7 +27,7 @@ const validate=new Ajv({strict:true}).compile({type:'object',additionalPropertie
     newObservation:{type:'boolean'},reviewAt:{anyOf:[{type:'null'},{type:'string',maxLength:40}]}}});
 
 export async function submitDecision(actor:S4Actor,candidateId:string,input:DecisionInput) {return submitDecisionWithPolicy(actor,candidateId,input,false);}
-/** Candidate entrypoint; no production route activation. */
+/** Used by local candidate routes; production remains hard-disabled. */
 export async function submitRegisteredDecision(actor:S4Actor,candidateId:string,input:DecisionInput) {return submitDecisionWithPolicy(actor,candidateId,input,true);}
 async function submitDecisionWithPolicy(actor:S4Actor,candidateId:string,input:DecisionInput,registered:boolean) {
   if(!validate(input)||!input.reason.trim()) fail('invalid_schema');

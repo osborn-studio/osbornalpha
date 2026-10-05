@@ -82,7 +82,7 @@ async function buildCards(db:PoolClient,actor:S4Actor,row:any) {
   return cards;
 }
 export async function revealCards(actor:S4Actor,candidateId:string,input:BeforeInput) {return revealCardsWithPolicy(actor,candidateId,input,false);}
-/** Candidate entrypoint; no production route activation. */
+/** Used by local candidate routes; production remains hard-disabled. */
 export async function revealRegisteredCards(actor:S4Actor,candidateId:string,input:BeforeInput) {return revealCardsWithPolicy(actor,candidateId,input,true);}
 async function revealCardsWithPolicy(actor:S4Actor,candidateId:string,input:BeforeInput,registered:boolean) {
   if(!validateBefore(input)||!input.judgment.trim()) fail('invalid_schema');
