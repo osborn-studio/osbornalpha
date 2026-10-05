@@ -6,12 +6,28 @@ import {transaction,serverTime} from '../s4/db';
 import {addRecord} from '../s4/records';
 import {weekPeriod} from '../s4/cards';
 import {fail} from '../ingest/pa-v1/json.js';
-import {enabled,observationFor,currentMarketIds,marketFor} from './store';
+import {enabled,observationFor,currentMarketIds,marketFor,assertEvaluationPolicy} from './store';
 
 /** Display and export append exposure before returning material, in the same transaction. */
 export async function observationReport(actor:S4Actor,id:string,replayId?:string){return reportWithPolicy(actor,id,replayId,false);}
 /** Candidate report/replay adapter; HTTP adoption is still separate. */
 export async function registeredObservationReport(actor:S4Actor,id:string,replayId?:string){return reportWithPolicy(actor,id,replayId,true);}
+/** Browser preparation discloses only revision/time/market IDs, with an
+ * exposure ledger entry committed under the same registration guard. */
+export async function prepareRegisteredEvaluationDisplay(actor:S4Actor,id:string){
+ enabled();return registeredObservationTransaction(actor,id,async db=>{
+  const o=await observationFor(db,actor,id),at=await serverTime(db),marketIds=await currentMarketIds(db,actor,id,at);
+  assertEvaluationPolicy(o.payload);
+  if(marketIds.length>2)fail('input_limit');
+  for(const mid of marketIds)await marketFor(db,actor,mid,id);
+  const candidate=(await db.query('select imported from research_s4_candidates where user_id=$1 and id=$2',[actor.userId,o.candidate_id])).rows[0];
+  const source=candidate.imported.sourceRef;
+  await addRecord(db,actor,o.candidate_id,'ExposureEvent',{actor_ref:actor.userId,actor_kind:actor.kind,evaluation_period_id:weekPeriod(at),
+   subject_refs:[digest([source.owner_system,source.owner_scope,source.source_id])],exposed_artifact_ids:[id,...marketIds],
+   displayed_at:at,origin:'alpha_evaluation_prepare',shadow_exposed:o.payload.observation_kind==='shadow'});
+  return {asOf:at,revision:o.revision,marketIds};
+ });
+}
 async function reportWithPolicy(actor:S4Actor,id:string,replayId:string|undefined,registered:boolean){
  if(replayId!==undefined&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(replayId))fail('invalid_schema');
  enabled();const work=async(db:PoolClient)=>{

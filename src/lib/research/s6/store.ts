@@ -62,16 +62,18 @@ export async function marketFor(db:PoolClient,actor:S4Actor,id:string,expectedOb
  if(digest(r.snapshot)!==r.snapshot_hash||tokenHash(r.raw_response)!==r.snapshot.raw_sha256||digest(r.evidence)!==r.evidence_hash)fail('hash_mismatch');
  return r;
 }
+export function assertEvaluationPolicy(observation:Observation){
+ if(!observation.synthetic){
+  if((observation as {schema_version:string}).schema_version!==OBSERVATION_CONTRACT_V2)fail('rule_unsupported');
+  if(process.env.ALPHA_S6_REAL_MARKET!=='1')fail('policy_blocked');
+ }
+}
 async function inputFor(db:PoolClient,actor:S4Actor,id:string,marketIds:string[],asOf:string,registered=false):Promise<EvaluationInput>{
  if(!Array.isArray(marketIds)||marketIds.length>2||new Set(marketIds).size!==marketIds.length)fail('invalid_schema');
  if(typeof asOf!=='string'||!Number.isFinite(Date.parse(asOf)))fail('invalid_schema');
  if(Date.parse(asOf)>Date.parse(await serverTime(db)))fail('future_input');
  const row=await observationFor(db,actor,id),markets:EvaluationInput['market_snapshots']=[];
- if(!row.payload.synthetic){
-  // 1.0 observations predate the listing-identity contract: real evaluation stays closed for them.
-  if((row.payload as {schema_version:string}).schema_version!==OBSERVATION_CONTRACT_V2)fail('rule_unsupported');
-  if(process.env.ALPHA_S6_REAL_MARKET!=='1')fail('policy_blocked');
- }
+ assertEvaluationPolicy(row.payload);
  for(const mid of marketIds){const m=await marketFor(db,actor,mid,registered?id:undefined);if(m.observation_id!==id)fail('scope_denied');markets.push(m.snapshot);}
  const input:EvaluationInput={schema_version:'evaluator-input-output/1.0',observation:row.payload,observation_sha256:row.payload_hash,
   calendar:calendar as EvaluationInput['calendar'],market_snapshots:markets,market_snapshot_sha256s:markets.map(digest),
@@ -96,6 +98,7 @@ async function preparationFor(db:PoolClient,actor:S4Actor,id:string){
 export async function prepareEvaluation(actor:S4Actor,id:string){
  enabled();return transaction(actor,db=>preparationFor(db,actor,id));
 }
+/** Internal metadata only; browser callers must use prepareRegisteredEvaluationDisplay. */
 export async function prepareRegisteredEvaluation(actor:S4Actor,id:string){
  enabled();return registeredObservationTransaction(actor,id,db=>preparationFor(db,actor,id));
 }
