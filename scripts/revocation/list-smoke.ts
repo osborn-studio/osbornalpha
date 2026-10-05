@@ -1,3 +1,8 @@
+import {revealRegisteredCards} from '../../src/lib/research/s4/cards';
+import {submitRegisteredDecision} from '../../src/lib/research/s4/decisions';
+import {createRegisteredS6Store,prepareRegisteredEvaluation,prepareRegisteredInput,makeCommit} from '../../src/lib/research/s6/store';
+import {freezeMarket,benchmarkIdentity} from '../../src/lib/research/s6/market';
+import {syntheticMapping} from '../s6/fixtures';
 import {GET,POST} from '../../src/app/api/research/s4/candidates/route';
 import {localSessionToken} from '../../src/lib/research/s4/auth';
 import assert from 'node:assert/strict';
@@ -31,7 +36,7 @@ async function main(){
   assert.equal((await get('',{'sec-fetch-site':'cross-site'})).status,403);
   assert.deepEqual(await (await get()).json(),{candidates:[],nextCursor:null});
   const {privateKey,publicKey}=generateKeyPairSync('ed25519');
-  const seeds=[];
+  const seeds:Array<{t:ReturnType<typeof testPack>;feedId:string;registration:Parameters<typeof applyRevocationPage>[1];page:Record<string,unknown>;id:string}>=[];
   for(let i=0;i<2;i++){
    const t=testPack(actor.userId),feedId=randomUUID();
    const expected={feedId,scope:t.scope,sourceId:t.sourceId,grantId:t.config.grant.grant_id,grantVersion:1};
@@ -54,6 +59,40 @@ async function main(){
   }
   await assert.rejects(db.query(`insert into public.research_s4_candidates(user_id,id,source_version_id,external_candidate_id,payload_hash,imported)
    select user_id,$2,source_version_id,external_candidate_id,payload_hash,imported from public.research_s4_candidates where id=$1`,[seeds[0].id,randomUUID()]),e=>e instanceof Error&&(e as {code?:string}).code==='23505'&&(e as {constraint?:string}).constraint==='research_s4_candidates_user_id_payload_hash_key');
+  process.env.ALPHA_S6_ENABLED='1';
+  await db.query(`insert into public.stocks_universe(ticker,name,market,exchange,currency,metadata) values('PAIRTEST','Synthetic','US','XNYS','USD','{"synthetic":true}')`);
+  const store=createRegisteredS6Store(actor);
+  const evaluations:Array<{id:string;body:ReturnType<typeof makeCommit>;receipt:Awaited<ReturnType<typeof store.commitEvaluationResult>>;marketIds:string[]}>=[];
+  for(const seed of seeds){
+   const cards=await revealRegisteredCards(actor,seed.id,{requestKey:randomUUID(),judgment:'Synthetic agent pair isolation',alreadySeen:[],independentJudgment:false});
+   const result=await submitRegisteredDecision(actor,seed.id,{requestKey:randomUUID(),expectedRevision:0,action:'observe',reason:'Synthetic agent test only',cardId:cards.cards[0].id,labelId:cards.labelId,exposureId:cards.exposureId,securityTicker:'PAIRTEST',companyEntityId:null,newObservation:true,reviewAt:null});
+   const id=result.observationId!;
+   const observation=(await store.readObservation(id)).observation;
+   const frozenIds=[];for(const security of [observation.securities[0],benchmarkIdentity(true)])frozenIds.push((await freezeMarket(actor,id,syntheticMapping(security),'synthetic')).id);
+   const preparation=await prepareRegisteredEvaluation(actor,id),input=await prepareRegisteredInput(actor,id,preparation.marketIds,preparation.asOf);
+   assert.equal(preparation.marketIds.length,2);assert.deepEqual(input.market_snapshots.map(m=>m.id).sort(),frozenIds.sort());
+   const body=makeCommit(input,randomUUID(),preparation.revision),receipt=await store.commitEvaluationResult(body);
+   assert.equal(receipt.status,'accepted');
+   const stored=(await db.query('select observation_id,input from public.research_s6_evaluations where user_id=$1 and id=$2',[actor.userId,receipt.evaluation_ref])).rows[0];assert.equal(stored.observation_id,id);assert.deepEqual(stored.input.market_snapshots.map((m:{id:string})=>m.id).sort(),frozenIds);
+   evaluations.push({id,body,receipt,marketIds:preparation.marketIds});
+  }
+  assert.notEqual(evaluations[0].id,evaluations[1].id);
+  assert.equal(new Set(evaluations.flatMap(e=>e.marketIds)).size,4);
+  const storeSnapshot=async()=>({
+   markets:(await db.query('select * from public.research_s6_markets where user_id=$1 order by id',[actor.userId])).rows,
+   evaluations:(await db.query('select * from public.research_s6_evaluations where user_id=$1 order by id',[actor.userId])).rows,
+   states:(await db.query('select * from public.research_s4_observation_state where user_id=$1 order by observation_id',[actor.userId])).rows,
+   records:(await db.query('select * from public.research_s4_records where user_id=$1 order by id',[actor.userId])).rows,
+   outbox:(await db.query('select * from public.research_s4_outbox where user_id=$1 order by sequence',[actor.userId])).rows,
+  });
+  const healthyNext=await prepareRegisteredEvaluation(actor,evaluations[1].id),healthyInput=await prepareRegisteredInput(actor,evaluations[1].id,healthyNext.marketIds,healthyNext.asOf);
+  const healthyBefore=await storeSnapshot();
+  await assert.rejects(store.commitEvaluationResult(makeCommit(healthyInput,evaluations[0].body.idempotency_key,healthyNext.revision)),e=>e instanceof Error&&e.cause==='validation_or_database');
+  assert.deepEqual(await storeSnapshot(),healthyBefore);
+  const unique=(await db.query("select conname,pg_get_constraintdef(oid) definition from pg_constraint where conrelid='public.research_s6_evaluations'::regclass and contype='u'")).rows;
+  assert.ok(unique.some(r=>r.definition==='UNIQUE (user_id, idempotency_key)'));
+  await assert.rejects(db.query(`insert into public.research_s6_evaluations(user_id,id,observation_id,idempotency_key,body_hash,input,result,result_hash,receipt) select user_id,$2,observation_id,idempotency_key,body_hash,input,result,result_hash,receipt from public.research_s6_evaluations where user_id=$1 and id=$3`,[actor.userId,randomUUID(),evaluations[0].receipt.evaluation_ref]),e=>typeof e==='object'&&e!==null&&(e as {code?:string}).code==='23505'&&unique.some(r=>r.conname===(e as {constraint?:string}).constraint));
+  assert.equal((await store.commitEvaluationResult(makeCommit(healthyInput,randomUUID(),healthyNext.revision))).status,'accepted');
   const first=await listRegisteredCandidates(actor,1);assert.equal(first.candidates[0].id,seeds[1].id);assert.ok(first.nextCursor);
   assert.deepEqual(first.nextCursor,{createdAt:'2026-10-01T00:00:00.000002Z',id:seeds[1].id});
   const httpFirst=await get('?limit=1');assert.equal(httpFirst.status,200);assert.equal(httpFirst.headers.get('cache-control'),'no-store');
@@ -109,9 +148,31 @@ async function main(){
   await db.query('update research_revocation_candidate.feed set published_at=clock_timestamp() where feed_id=$1',[affected.feedId]);
   const event={revocation_id:randomUUID(),monotonic_seq:'1',source_id:affected.t.sourceId,grant_id:affected.t.config.grant.grant_id,grant_version:1,effective_at:new Date().toISOString()};
   const bytes=Buffer.from(JSON.stringify({...affected.page,through_seq:'1',latest_seq:'1',published_at:new Date().toISOString(),events:[event]}));
+  const unaffectedSnapshot=async()=>({binding:(await db.query('select * from public.research_s4_bindings where user_id=$1 and payload_hash=$2',[actor.userId,seeds[1].t.binding.approvedPayloadHash])).rows,feed:(await db.query('select * from research_revocation_candidate.feed where feed_id=$1',[seeds[1].feedId])).rows,mapping:(await db.query('select * from research_revocation_candidate.binding_map where feed_id=$1',[seeds[1].feedId])).rows});
+  const unaffectedBefore=await unaffectedSnapshot();
   await applyRevocationPage(db,affected.registration,bytes,sign(null,bytes,privateKey).toString('hex'));
+  assert.deepEqual(await unaffectedSnapshot(),unaffectedBefore);
+  assert.equal((await db.query('select revoked from public.research_s4_bindings where user_id=$1 and payload_hash=$2',[actor.userId,affected.t.binding.approvedPayloadHash])).rows[0].revoked,true);
+  const consumedBefore=await storeSnapshot();
+  for(const op of [()=>store.readObservation(evaluations[0].id),...evaluations[0].marketIds.map(mid=>()=>store.readMarketSnapshot(mid)),()=>store.commitEvaluationResult(evaluations[0].body)])await assert.rejects(op(),e=>e instanceof Error&&e.cause==='binding_revoked');
+  assert.equal((await store.readObservation(evaluations[1].id)).observation.id,evaluations[1].id);
+  for(const mid of evaluations[1].marketIds)assert.equal((await store.readMarketSnapshot(mid)).snapshot.id,mid);
+  assert.equal((await store.commitEvaluationResult(evaluations[1].body)).status,'duplicate');assert.deepEqual(await storeSnapshot(),consumedBefore);
+  // Separate operator-reset corruption case below isolates retained tombstones.
+
   await db.query('update public.research_s4_bindings set revoked=false where user_id=$1 and payload_hash=$2',[actor.userId,affected.t.binding.approvedPayloadHash]);
   await assert.rejects(listRegisteredCandidates(actor,2),e=>e instanceof Error&&e.cause==='grant_version_revoked');
+  const denied=evaluations[0],allowed=evaluations[1],beforeStore=await storeSnapshot();
+  for(const op of [()=>store.readObservation(denied.id),...denied.marketIds.map(mid=>()=>store.readMarketSnapshot(mid)),()=>store.commitEvaluationResult(denied.body)])await assert.rejects(op(),e=>e instanceof Error&&e.cause==='grant_version_revoked');
+  assert.equal((await store.readObservation(allowed.id)).observation.id,allowed.id);
+  for(const mid of allowed.marketIds)assert.equal((await store.readMarketSnapshot(mid)).snapshot.id,mid);
+  assert.equal((await store.commitEvaluationResult(allowed.body)).status,'duplicate');
+  assert.deepEqual(await storeSnapshot(),beforeStore);
+  // Foreign globally unique key never returns the denied candidate's receipt.
+  const next=await prepareRegisteredEvaluation(actor,allowed.id),nextInput=await prepareRegisteredInput(actor,allowed.id,next.marketIds,next.asOf);
+  await assert.rejects(store.commitEvaluationResult(makeCommit(nextInput,denied.body.idempotency_key,next.revision)),e=>e instanceof Error&&e.message==='revocation_access_denied'&&e.cause==='validation_or_database');
+  assert.deepEqual(await storeSnapshot(),beforeStore);
+  const freshReceipt=await store.commitEvaluationResult(makeCommit(nextInput,randomUUID(),next.revision));assert.equal(freshReceipt.status,'accepted');assert.equal(freshReceipt.revision,next.revision+1);
   await db.query('delete from research_revocation_candidate.inbox where feed_id=$1',[affected.feedId]);
   await assert.rejects(listRegisteredCandidates(actor,2),e=>e instanceof Error&&e.cause==='inbox_coverage_gap');
   console.log('Registered list acceptance passed: microsecond pagination, bounds, two feeds, stale/tombstone/pruning fail closed.');
