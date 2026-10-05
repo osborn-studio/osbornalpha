@@ -258,3 +258,19 @@ headers because native fetch can normalize them. Actual Next exports reject vali
 production configuration before DB connections. This is not served-Next GUI or
 production acceptance; internal legacy helpers, operational roles/transport and
 shadow-positive/concurrent-session disclosure evidence remain separate gates.
+
+
+### RPC error vocabulary completion
+
+RPC1.0 additionally maps invalid candidate/duplicate JSON keys to invalid_schema,
+export-ahead availability to source_unavailable, and withdrawn source to
+policy_blocked, preserving original HTTP statuses. Branded transaction failures
+remain internal_error500. A typed exhaustive mapping and real pinned-client
+roundtrips protect compatibility; browser vocabulary is unchanged.
+
+Direct source_unavailable422 still describes terminal input validation, while
+503 describes temporary access-check availability. Consumers must inspect status
+and retryable, not code alone. The pinned client considers500 retryable; this is
+not an instruction for unbounded retries. Internal business errors retain their
+existing .code contract; only revocation message/cause impersonation is rejected
+by the branded revocation boundary.

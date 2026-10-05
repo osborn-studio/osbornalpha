@@ -5,12 +5,16 @@ import {bodyText} from '../s4/http';
 import {ResearchForbidden} from '../store';
 import {createRegisteredEvaluatorStore,type Commit} from './store';
 
+const rpcRevocationCodes:Record<NonNullable<ReturnType<typeof revocationHttpError>>['code'],string>={
+ revocation_access_denied:'policy_blocked',revocation_check_unavailable:'source_unavailable',internal_error:'internal_error',
+};
+
 export async function s6Http(fn:()=>Promise<unknown>,dialect?:'evaluator-rpc/1.0'){
  try{return Response.json(await fn(),{headers:{'Cache-Control':'no-store'}});}
  catch(e){
   const revocation=revocationHttpError(e);
   // RPC 1.0 clients have a fixed code allowlist; preserve actionable semantics.
-  if(revocation)return Response.json({error:{code:dialect?(revocation.status===403?'policy_blocked':'source_unavailable'):revocation.code}},{status:revocation.status,headers:{'Cache-Control':'no-store'}});
+  if(revocation)return Response.json({error:{code:dialect?rpcRevocationCodes[revocation.code]:revocation.code}},{status:revocation.status,headers:{'Cache-Control':'no-store'}});
   let code=(e as {code?:string}|null)?.code||'internal_error';
   if(e instanceof ResearchForbidden)code='scope_denied';
   if(e instanceof Error&&e.message==='not authenticated')code='not_authenticated';
@@ -19,6 +23,11 @@ export async function s6Http(fn:()=>Promise<unknown>,dialect?:'evaluator-rpc/1.0
    ['idempotency_conflict','revision_conflict','source_version_conflict','observation_scope_conflict'].includes(code)?409:
    code==='input_limit'?413:['invalid_revocation_candidate','invalid_schema','unsupported_version','hash_mismatch','future_input','invalid_timeline','data_insufficient','rule_unsupported','source_unavailable','duplicate_key','security_unresolved'].includes(code)?422:500;
   if(status===500)code='internal_error';
+  else if(dialect){
+   if(code==='invalid_revocation_candidate'||code==='duplicate_key')code='invalid_schema';
+   else if(code==='export_watermark_ahead')code='source_unavailable';
+   else if(code==='source_withdrawn')code='policy_blocked';
+  }
   return Response.json({error:{code}},{status,headers:{'Cache-Control':'no-store'}});
  }
 }
