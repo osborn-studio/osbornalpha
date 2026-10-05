@@ -590,20 +590,23 @@ async function main(){
   let holderPid=0;
   let release!:()=>void,entered!:()=>void;
   const barrier=new Promise<void>(r=>{release=r;}),started=new Promise<void>(r=>{entered=r;});
-  await assert.rejects(apply({...page,through_seq:'1',latest_seq:'1',published_at:new Date().toISOString(),events:[{revocation_id:randomUUID(),monotonic_seq:'1',source_id:'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA',grant_id:expected.grantId,grant_version:1,effective_at:new Date().toISOString()}]}),/revocation_apply_failed/);
+  const malformedAt=(await db.query('select clock_timestamp() as now')).rows[0].now.toISOString();
+  await assert.rejects(apply({...page,through_seq:'1',latest_seq:'1',published_at:malformedAt,events:[{revocation_id:randomUUID(),monotonic_seq:'1',source_id:'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA',grant_id:expected.grantId,grant_version:1,effective_at:malformedAt}]}),/revocation_apply_failed/);
   assert.equal((await db.query('select count(*)::int n from research_revocation_candidate.inbox')).rows[0].n,0);
   const operation=withRegisteredCandidate(db,actor,hash,expected,async client=>{
    holderPid=(await client.query('select pg_backend_pid() as pid')).rows[0].pid;entered();await barrier;
    await client.query('insert into research_revocation_candidate.synthetic_access_result values(2)');return 'committed before revocation';
   });
   await started;
-  const consume=apply({...page,through_seq:'1',latest_seq:'1',published_at:new Date().toISOString(),events:[{revocation_id:randomUUID(),monotonic_seq:'1',source_id:t.sourceId,grant_id:expected.grantId,grant_version:1,effective_at:new Date().toISOString()}]});
+  // One instant: separate wall-clock reads can make effective_at later than publication.
+  const revokedAt=(await db.query('select clock_timestamp() as now')).rows[0].now.toISOString();
+  const consume=apply({...page,through_seq:'1',latest_seq:'1',published_at:revokedAt,events:[{revocation_id:randomUUID(),monotonic_seq:'1',source_id:t.sourceId,grant_id:expected.grantId,grant_version:1,effective_at:revokedAt}]});
   // Attach handlers immediately, and always release the transaction on failure.
   const settled=Promise.allSettled([operation,consume]);
   try{
    await lockWait(holderPid);
   }finally{release();await settled;}
-  assert.equal(await operation,'committed before revocation');await consume;
+  assert.equal(await operation,'committed before revocation');await assert.doesNotReject(consume,'signed consumer after owner-lock handoff');
   assert.equal((await db.query('select value from research_revocation_candidate.synthetic_access_result')).rows[0].value,2);
   const deniedClient=await db.connect();
   try{

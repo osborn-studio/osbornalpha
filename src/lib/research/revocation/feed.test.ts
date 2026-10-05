@@ -50,3 +50,19 @@ it('does not renew a heartbeat publication time on replay',()=>{
  expect(check(heartbeat,cp,now+60000).checkpoint.publishedAt).toBe(cp.publishedAt);
  expect(()=>check(heartbeat,cp,now+60001)).toThrow();
 });
+
+it('accepts a shared event/publication instant but rejects a one millisecond construction race',()=>{
+ const p=page();p.events[0].effective_at=p.published_at;
+ expect(check(p).caughtUp).toBe(true);
+ p.events[0].effective_at=new Date(now+1).toISOString();
+ // Both timestamps are in the past at verification: this is ordering, not future clock skew.
+ expect(()=>check(p,checkpoint,now+1000)).toThrow('invalid_revocation_page');
+});
+
+it('rejects uppercase event UUID while the otherwise identical lowercase page passes',()=>{
+ const p=page();p.events[0].effective_at=p.published_at;
+ p.events[0].source_id='AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA';
+ expect(()=>check(p)).toThrow('invalid_revocation_page');
+ p.events[0].source_id=p.events[0].source_id.toLowerCase();
+ expect(check(p).caughtUp).toBe(true);
+});

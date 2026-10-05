@@ -206,3 +206,18 @@ prepare now uses a dedicated registered display adapter. It returns only asOf/re
 Opus5.5 identified real-policy parity, market validation evidence and weak exposure assertions. Added synthetic corruption tests for policy-blocked real-shaped observations, snapshot/raw/evidence digest changes and invalid evidence kinds with no-write denial. Exposure assertions bind exact displayed_at to returned asOf, enforce one event, verify revision, period, actor, source and artifact IDs, and shadow=false for the synthetic fixture. Fresh delayed prepare succeeds; stale during exposure returns503 and rolls back its ledger writes. Final fixes host verified.
 
 Preparation lists the current market inventory, not a historical replay contract. Zero or fewer markets can legitimately precede freezing; it does not require two or compare against historical evaluation market IDs. A moved/absent market therefore leaves the current set, while replay and explicit evaluation inputs retain strict expected-observation checks. This distinction is intentional and is not historical completeness validation. Shadow-positive and served-router/UI cases remain separate acceptance work; no real-market flag is activated.
+
+
+### 2026-10-05 synthetic CI clock correction
+
+Linux run37284210835 at923dda1 failed registration acceptance with sanitized
+`revocation_apply_failed` near the signed consumer handoff. Found event fixture
+construction taking publication time before a separate effective-time read; a
+millisecond rollover violates `effective_at <= published_at`. This is a probable
+cause, not forensic proof of that run. Registration and both list handoffs now
+share one database-sourced instant. Production verifier and freshness windows are
+unchanged. Signed unit cases prove equality acceptance, later-event rejection
+even when both timestamps are past, and isolated uppercase UUID rejection.
+Opus5.5 challenged attribution and fixture coverage; disposition records both
+corrections and remaining limits. Local and Linux validation are tracked in the
+central osstack progress rather than treating a previous head as current green.

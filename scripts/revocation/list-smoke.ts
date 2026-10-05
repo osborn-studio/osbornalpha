@@ -156,8 +156,9 @@ async function main(){
   const routeStale=await get();assert.equal(routeStale.status,503);assert.deepEqual(await routeStale.json(),{error:{code:'revocation_check_unavailable'}});
   const stale=await s4Http(()=>listRegisteredCandidates(actor,2));assert.equal(stale.status,503);assert.deepEqual(await stale.json(),{error:{code:'revocation_check_unavailable'}});
   await db.query('update research_revocation_candidate.feed set published_at=clock_timestamp() where feed_id=$1',[affected.feedId]);
-  const event={revocation_id:randomUUID(),monotonic_seq:'1',source_id:affected.t.sourceId,grant_id:affected.t.config.grant.grant_id,grant_version:1,effective_at:new Date().toISOString()};
-  const bytes=Buffer.from(JSON.stringify({...affected.page,through_seq:'1',latest_seq:'1',published_at:new Date().toISOString(),events:[event]}));
+  const forwardAt=(await db.query('select clock_timestamp() as now')).rows[0].now.toISOString();
+  const event={revocation_id:randomUUID(),monotonic_seq:'1',source_id:affected.t.sourceId,grant_id:affected.t.config.grant.grant_id,grant_version:1,effective_at:forwardAt};
+  const bytes=Buffer.from(JSON.stringify({...affected.page,through_seq:'1',latest_seq:'1',published_at:forwardAt,events:[event]}));
   const unaffectedSnapshot=async()=>({binding:(await db.query('select * from public.research_s4_bindings where user_id=$1 and payload_hash=$2',[actor.userId,seeds[1].t.binding.approvedPayloadHash])).rows,feed:(await db.query('select * from research_revocation_candidate.feed where feed_id=$1',[seeds[1].feedId])).rows,mapping:(await db.query('select * from research_revocation_candidate.binding_map where feed_id=$1',[seeds[1].feedId])).rows});
   const unaffectedBefore=await unaffectedSnapshot();
   // A real registered commit owns the source lock while a synthetic DB gate
@@ -225,7 +226,8 @@ async function main(){
   const reverseSeed=seeds[1],reversePreparation=await prepareRegisteredEvaluation(actor,allowed.id);
   const reverseInput=await prepareRegisteredInput(actor,allowed.id,reversePreparation.marketIds,reversePreparation.asOf);
   const reverseBody=makeCommit(reverseInput,randomUUID(),reversePreparation.revision),reverseBefore=await storeSnapshot();
-  const reverseBytes=Buffer.from(JSON.stringify({...reverseSeed.page,through_seq:'1',latest_seq:'1',published_at:new Date().toISOString(),events:[{revocation_id:randomUUID(),monotonic_seq:'1',source_id:reverseSeed.t.sourceId,grant_id:reverseSeed.t.config.grant.grant_id,grant_version:1,effective_at:new Date().toISOString()}]}));
+  const reverseAt=(await db.query('select clock_timestamp() as now')).rows[0].now.toISOString();
+  const reverseBytes=Buffer.from(JSON.stringify({...reverseSeed.page,through_seq:'1',latest_seq:'1',published_at:reverseAt,events:[{revocation_id:randomUUID(),monotonic_seq:'1',source_id:reverseSeed.t.sourceId,grant_id:reverseSeed.t.config.grant.grant_id,grant_version:1,effective_at:reverseAt}]}));
   let reverseFailure:unknown;
   const reverseGate=await db.connect();let reverseConsumer:ReturnType<typeof applyRevocationPage>|undefined,reverseCommit:ReturnType<typeof store.commitEvaluationResult>|undefined;
   try{
