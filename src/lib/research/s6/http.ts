@@ -3,13 +3,14 @@ import {parseStrict} from 'dsh-trade-strategy-evaluator/engine';
 import {fail} from '../ingest/pa-v1/json.js';
 import {bodyText} from '../s4/http';
 import {ResearchForbidden} from '../store';
-import {createS6Store,type Commit} from './store';
+import {createRegisteredEvaluatorStore,type Commit} from './store';
 
-export async function s6Http(fn:()=>Promise<unknown>){
+export async function s6Http(fn:()=>Promise<unknown>,dialect?:'evaluator-rpc/1.0'){
  try{return Response.json(await fn(),{headers:{'Cache-Control':'no-store'}});}
  catch(e){
   const revocation=revocationHttpError(e);
-  if(revocation)return Response.json({error:{code:revocation.code}},{status:revocation.status,headers:{'Cache-Control':'no-store'}});
+  // RPC 1.0 clients have a fixed code allowlist; preserve actionable semantics.
+  if(revocation)return Response.json({error:{code:dialect?(revocation.status===403?'policy_blocked':'source_unavailable'):revocation.code}},{status:revocation.status,headers:{'Cache-Control':'no-store'}});
   let code=(e as {code?:string}|null)?.code||'internal_error';
   if(e instanceof ResearchForbidden)code='scope_denied';
   if(e instanceof Error&&e.message==='not authenticated')code='not_authenticated';
@@ -31,11 +32,11 @@ export async function evaluatorRpc(req:Request,operation:'observation'|'market'|
   if(req.headers.get('x-evaluator-protocol')!=='evaluator-rpc/1.0')fail('unsupported_version');
   const match=/^Bearer ([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.[0-9a-f]{64})$/.exec(req.headers.get('authorization')||'');
   if(!match)fail('not_authenticated');
-  const token=match![1],store=createS6Store({userId:token.split('.')[0],kind:'agent'},token);
+  const token=match![1],store=createRegisteredEvaluatorStore({userId:token.split('.')[0],kind:'agent'},token);
   if(operation==='observation')return store.readObservation(id!);
   if(operation==='market')return store.readMarketSnapshot(id!);
   const body=parseStrict(await bodyText(req)) as Commit;
   if(req.headers.get('idempotency-key')!==body.idempotency_key)fail('invalid_schema');
   return store.commitEvaluationResult(body);
- });
+ },'evaluator-rpc/1.0');
 }

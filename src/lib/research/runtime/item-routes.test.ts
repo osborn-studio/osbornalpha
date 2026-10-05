@@ -1,3 +1,6 @@
+import {GET as machineObservation} from '../../../app/api/evaluator/v1/observations/[id]/route';
+import {GET as machineMarket} from '../../../app/api/evaluator/v1/market-snapshots/[id]/route';
+import {POST as machineCommit} from '../../../app/api/evaluator/v1/evaluation-results/route';
 import {POST as observationReport} from '../../../app/api/research/s6/observations/[id]/route';
 import {Pool,Client} from 'pg';
 import {it,expect,vi,afterEach} from 'vitest';
@@ -30,5 +33,13 @@ it.each([undefined,'1'])('production item routes remain disabled before connecti
    expect(response.status).toBe(503);expect(await response.json()).toEqual({error:{code:'not_configured'}});expect(response.headers.get('cache-control')).toBe('no-store');
   }
  }
+ // Machine transport is loopback-only even with otherwise valid production configuration.
+ const headers={host:'alpha.example.test',authorization:'Bearer '+owner+'.'+'1'.repeat(64),'x-evaluator-protocol':'evaluator-rpc/1.0'};
+ for(const handler of [machineObservation,machineMarket]){
+  const response=await handler(new Request('https://alpha.example.test/api/evaluator/v1/observations/'+owner,{headers}),{params:Promise.resolve({id:owner})});
+  expect(response.status).toBe(403);expect(await response.json()).toEqual({error:{code:'scope_denied'}});expect(response.headers.get('cache-control')).toBe('no-store');
+ }
+ const denied=await machineCommit(new Request('https://alpha.example.test/api/evaluator/v1/evaluation-results',{method:'POST',headers,body:'{}'}));
+ expect(denied.status).toBe(403);expect(await denied.json()).toEqual({error:{code:'scope_denied'}});expect(denied.headers.get('cache-control')).toBe('no-store');
  expect(pool).not.toHaveBeenCalled();expect(client).not.toHaveBeenCalled();
 });

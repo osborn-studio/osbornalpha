@@ -1,8 +1,11 @@
 import {beforeAll,afterAll,describe,it,expect} from 'vitest';
 import {readFileSync} from 'node:fs';
-import {randomUUID,randomBytes} from 'node:crypto';
-import {createServer,type Server} from 'node:http';
+import {randomUUID,randomBytes,generateKeyPairSync,sign} from 'node:crypto';
+import {createServer,request as httpRequest,type Server} from 'node:http';
 import {Pool} from 'pg';
+import {registerCandidateReference} from '../revocation/register';
+import {applyRevocationPage} from '../revocation/consumer';
+import {canonicalize} from '../ingest/pa-v1/json.js';
 import {testPack} from '../../../../scripts/s4/test-pack';
 import {importCandidate} from '../s4/import';
 import {revealCards} from '../s4/cards';
@@ -21,7 +24,7 @@ import {runRelFixture} from './shadow';
 import {runRelReadiness,settleRelFixture,releaseRelReservation,type RelFixtureAdapter} from './rel-readiness';
 
 describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',()=>{
- let admin:Pool,id:string,candidate:string,body:ReturnType<typeof makeCommit>,server:Server,origin:string,token:string;
+ let admin:Pool,id:string,candidate:string,body:ReturnType<typeof makeCommit>,server:Server,origin:string,token:string,feedId:string,applySignedRevocation:()=>Promise<unknown>;
  const actor={userId:randomUUID(),kind:'agent' as const},other={userId:randomUUID(),kind:'agent' as const};
  beforeAll(async()=>{
   const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
@@ -29,7 +32,23 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
   admin=new Pool({connectionString:state.adminUrl});
   for(const a of [actor,other]){await admin.query('insert into auth.users(id,email) values($1,$2)',[a.userId,a.userId+'@example.test']);await admin.query("update profiles set role='admin' where id=$1",[a.userId]);}
   await admin.query(`insert into stocks_universe(ticker,name,market,exchange,currency,metadata) values('S6SYNTH','Synthetic S6','US','XNYS','USD','{"synthetic":true}') on conflict do nothing`);
-  const p=testPack(actor.userId);await admin.query('insert into research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[actor.userId,p.binding.approvedPayloadHash,p.binding]);
+  // Isolated candidate schema and operator approval; no production provisioning.
+  await admin.query(readFileSync('scripts/revocation/candidate-schema.sql','utf8'));
+  await admin.query('grant usage on schema research_revocation_candidate to alpha_s4_runtime; grant select on all tables in schema research_revocation_candidate to alpha_s4_runtime');
+  const p=testPack(actor.userId);feedId=randomUUID();
+  const expected={feedId,scope:p.scope,sourceId:p.sourceId,grantId:p.config.grant.grant_id,grantVersion:1};
+  p.pack.manifest.extensions['pa.revocation_reference']={protocol_version:'pa-grant-reference/v1',feed_id:feedId,owner_scope:p.scope,source_id:p.sourceId,grant_id:expected.grantId,grant_version:1,observed_at:p.version.ingested_at,revocation_seq_at_export:'0'};
+  p.pack.files['manifest.json']=canonicalize(p.pack.manifest);p.binding.approvedManifestHash=digest(p.pack.manifest);
+  await admin.query('insert into research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[actor.userId,p.binding.approvedPayloadHash,p.binding]);
+  await admin.query('insert into research_revocation_candidate.feed(feed_id,local_owner,upstream_user) values($1,$2,$3)',[feedId,actor.userId,p.scope.user_id]);
+  const keys=generateKeyPairSync('ed25519'),raw=Buffer.from(JSON.stringify({protocol_version:'pa-revocation/v1',feed_id:feedId,owner_scope:p.scope,from_seq:'0',through_seq:'0',latest_seq:'0',published_at:new Date().toISOString(),events:[]}));
+  await applyRevocationPage(admin,{feedId,localOwner:actor.userId,scope:p.scope,key:keys.publicKey},raw,sign(null,raw,keys.privateKey).toString('hex'));
+  await registerCandidateReference(admin,actor.userId,p.binding.approvedPayloadHash,JSON.stringify(p.pack),expected);
+  applySignedRevocation=async()=>{
+   const at=(await admin.query('select clock_timestamp() as now')).rows[0].now.toISOString();
+   const bytes=Buffer.from(JSON.stringify({protocol_version:'pa-revocation/v1',feed_id:feedId,owner_scope:p.scope,from_seq:'0',through_seq:'1',latest_seq:'1',published_at:at,events:[{revocation_id:randomUUID(),monotonic_seq:'1',source_id:p.sourceId,grant_id:expected.grantId,grant_version:1,effective_at:at}]}));
+   return applyRevocationPage(admin,{feedId,localOwner:actor.userId,scope:p.scope,key:keys.publicKey},bytes,sign(null,bytes,keys.privateKey).toString('hex'));
+  };
   candidate=(await importCandidate(actor,JSON.stringify(p.pack))).id;
   const r=await revealCards(actor,candidate,{requestKey:randomUUID(),judgment:'Synthetic S6 only',alreadySeen:[],independentJudgment:false});
   id=(await submitDecision(actor,candidate,{requestKey:randomUUID(),expectedRevision:0,action:'observe',reason:'Synthetic integration',cardId:r.cards[0].id,labelId:r.labelId,exposureId:r.exposureId,securityTicker:'S6SYNTH',companyEntityId:null,newObservation:true,reviewAt:null})).observationId!;
@@ -69,6 +88,43 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
   const after=await store.readObservation(id);expect(after.observation).toEqual(before.observation);expect(after.revision).toBe(1);
   expect(body.result.status).toBe('pending_start');
   await expect(store.commitEvaluationResult({...body,expected_revision:1})).rejects.toMatchObject({code:'idempotency_conflict'});
+ });
+ it('records RPC material disclosures and rejects stale/revoked access including exact commit retry',async()=>{
+  const readExposure=async()=> (await admin.query("select payload from research_s4_records where user_id=$1 and kind='ExposureEvent' and payload->>'origin' like 'alpha_evaluator_%'",[actor.userId])).rows;
+  const before=await readExposure();await remote().readObservation(id);
+  for(const m of body.market_snapshot_refs)await remote().readMarketSnapshot(m.id);
+  const after=await readExposure();expect(after.length).toBe(before.length+3);
+  for(const e of after){expect(e.payload.session_token_hash).toBe(tokenHash(token));expect(JSON.stringify(e.payload)).not.toContain(token);}
+  for(const mode of ['stale','revoked']){
+   if(mode==='stale')await admin.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '61 seconds' where feed_id=$1",[feedId]);
+   else await admin.query('update research_s4_bindings set revoked=true where user_id=$1',[actor.userId]);
+   const n=await counts();
+   try{
+    for(const request of [()=>remote().readObservation(id),()=>remote().readMarketSnapshot(body.market_snapshot_refs[0].id),()=>remote().commitEvaluationResult(body)]){
+     await expect(request()).rejects.toMatchObject({status:mode==='stale'?503:403,code:mode==='stale'?'source_unavailable':'policy_blocked'});
+    }
+    expect(await counts()).toEqual(n);expect((await readExposure()).length).toBe(after.length);
+   }finally{await admin.query('update research_revocation_candidate.feed set published_at=clock_timestamp() where feed_id=$1',[feedId]);await admin.query('update research_s4_bindings set revoked=false where user_id=$1',[actor.userId]);}
+  }
+ });
+ it('rejects transport headers and dead sessions on every RPC operation without writes',async()=>{
+  const headers={authorization:'Bearer '+token,'x-evaluator-protocol':'evaluator-rpc/1.0'};
+  const before=await counts();
+  for(const [patch,status] of [[{origin},403],[{'sec-fetch-site':'cross-site'},403],[{host:'localhost:9'},403],[{'x-evaluator-protocol':'wrong'},422]] as Array<[Record<string,string>,number]>){
+   // Native fetch may normalize forbidden headers; raw HTTP preserves attack inputs.
+   const response=await new Promise<{status:number;cache:string|undefined}>((resolve,reject)=>{
+    const request=httpRequest(origin+'/api/evaluator/v1/observations/'+id,{headers:{...headers,...patch}},res=>{res.resume();res.on('end',()=>resolve({status:res.statusCode!,cache:res.headers['cache-control']}));});
+    request.on('error',reject);request.end();
+   });
+   expect(response.status,JSON.stringify(patch)).toBe(status);expect(response.cache).toBe('no-store');
+  }
+  const mismatch=await fetch(origin+'/api/evaluator/v1/evaluation-results',{method:'POST',headers:{...headers,'idempotency-key':'different'},body:JSON.stringify(body)});expect(mismatch.status).toBe(422);
+  for(const mutation of ["revoked=true","expires_at=clock_timestamp()-interval '1 second'"]){
+   await admin.query('update research_s6_sessions set '+mutation+' where user_id=$1',[actor.userId]);
+   try{for(const request of [()=>remote().readObservation(id),()=>remote().readMarketSnapshot(body.market_snapshot_refs[0].id),()=>remote().readMarketSnapshot('missing-market'),()=>remote().commitEvaluationResult(body)])await expect(request()).rejects.toMatchObject({status:401,code:'not_authenticated'});}
+   finally{await admin.query("update research_s6_sessions set revoked=false,expires_at=created_at+interval '1 hour' where user_id=$1",[actor.userId]);}
+  }
+  expect(await counts()).toEqual(before);
  });
  it('revalidates server session expiry, revocation, scope and rejects body authority overrides',async()=>{
   await admin.query('update research_s6_sessions set revoked=true where user_id=$1',[actor.userId]);
@@ -303,7 +359,15 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
   const evaluation=(await admin.query('select id from research_s6_evaluations where user_id=$1 limit 1',[actor.userId])).rows[0];
   const replay=await observationReport(actor,id,evaluation.id);expect('replay' in replay&&replay.replay?.matches).toBe(true);
   await expect(admin.query("update research_s6_evaluations set result='{}' where user_id=$1",[actor.userId])).rejects.toThrow('immutable_record');
-  await admin.query('update research_s4_bindings set revoked=true where user_id=$1',[actor.userId]);
+  await applySignedRevocation();
+  expect((await admin.query('select cursor from research_revocation_candidate.feed where feed_id=$1',[feedId])).rows[0].cursor).toBe('1');
+  expect((await admin.query('select count(*)::int n from research_revocation_candidate.inbox where feed_id=$1',[feedId])).rows[0].n).toBe(1);
+  const noDisclosure=await counts();
+  for(const request of [()=>remote().readObservation(id),()=>remote().readMarketSnapshot(body.market_snapshot_refs[0].id),()=>remote().commitEvaluationResult(body)])await expect(request()).rejects.toMatchObject({status:403,code:'policy_blocked'});
+  // Independent retained tombstone protection, despite an accidentally reset binding.
+  await admin.query('update research_s4_bindings set revoked=false where user_id=$1',[actor.userId]);
+  try{await expect(remote().readObservation(id)).rejects.toMatchObject({status:403,code:'policy_blocked'});expect(await counts()).toEqual(noDisclosure);}
+  finally{await admin.query('update research_s4_bindings set revoked=true where user_id=$1',[actor.userId]);}
   await expect(createS6Store(actor).readObservation(id)).rejects.toMatchObject({code:'scope_denied'});
   await expect(createS6Store(actor).commitEvaluationResult(body)).rejects.toMatchObject({code:'scope_denied'});
   await expect(observationReport(actor,id)).rejects.toMatchObject({code:'scope_denied'});

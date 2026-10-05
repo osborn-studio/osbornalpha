@@ -240,3 +240,21 @@ reauthorization after SQL errors. This is not a transaction sandbox for untruste
 callbacks. `evaluatorRpc` still uses the legacy adapter: transport acceptance,
 bearer owner binding, production-route gating and shadow-positive tests remain
 separate release gates; this addition enables no production capability.
+
+
+### Evaluator RPC adoption
+
+`evaluatorRpc` now uses the mandatory-session registered disclosure adapter for
+observation, market and commit. RPC1.0's existing fixed client error vocabulary is
+preserved: revocation unavailability maps to `source_unavailable`503 and denial to
+`policy_blocked`403. Browser errors retain their existing names. No new protocol
+version or dependency update is required.
+
+Synthetic loopback HTTP conformance uses an approved mapping and signed feed;
+terminal signed revocation and independent tombstones deny material and receipt
+retries without extra exposure/writes. Origin/host/cross-site/protocol/key denials
+and revoked/expired sessions cover all operations. Raw HTTP is required for attack
+headers because native fetch can normalize them. Actual Next exports reject valid
+production configuration before DB connections. This is not served-Next GUI or
+production acceptance; internal legacy helpers, operational roles/transport and
+shadow-positive/concurrent-session disclosure evidence remain separate gates.
