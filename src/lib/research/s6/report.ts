@@ -1,3 +1,5 @@
+import {registeredObservationTransaction} from './registered';
+import type {PoolClient} from 'pg';
 import {digest,inputDigest,replayObservation} from 'dsh-trade-strategy-evaluator/engine';
 import type {S4Actor} from '../s4/db';
 import {transaction,serverTime} from '../s4/db';
@@ -7,9 +9,13 @@ import {fail} from '../ingest/pa-v1/json.js';
 import {enabled,observationFor,currentMarketIds,marketFor} from './store';
 
 /** Display and export append exposure before returning material, in the same transaction. */
-export async function observationReport(actor:S4Actor,id:string,replayId?:string){
+export async function observationReport(actor:S4Actor,id:string,replayId?:string){return reportWithPolicy(actor,id,replayId,false);}
+/** Candidate report adapter only. Replay/export is closed until its market
+ * observation binding and rollback acceptance are completed; HTTP is unchanged. */
+export async function registeredObservationReport(actor:S4Actor,id:string,replayId?:string){if(replayId!==undefined)fail('not_configured');return reportWithPolicy(actor,id,undefined,true);}
+async function reportWithPolicy(actor:S4Actor,id:string,replayId:string|undefined,registered:boolean){
  if(replayId!==undefined&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(replayId))fail('invalid_schema');
- enabled();return transaction(actor,async db=>{
+ enabled();const work=async(db:PoolClient)=>{
   const o=await observationFor(db,actor,id),at=await serverTime(db);
   const rows=replayId?[]:(await db.query('select id,result,result_hash,receipt,created_at from research_s6_evaluations where user_id=$1 and observation_id=$2 order by (receipt->>\'revision\')::int desc limit 101',[actor.userId,id])).rows;
   const selected=replayId?(await db.query('select * from research_s6_evaluations where user_id=$1 and observation_id=$2 and id=$3',[actor.userId,id,replayId])).rows[0]:undefined;
@@ -35,5 +41,6 @@ export async function observationReport(actor:S4Actor,id:string,replayId?:string
    contaminationReasons:o.payload.contamination_reasons,observationKind:o.payload.observation_kind,marketIds:await currentMarketIds(db,actor,id,at),
    brier:'not_applicable',jev:'not_run',independentBaseline:false,historyTruncated:rows.length>100,
    evaluations:rows.slice(0,100)};
- });
+ };
+ return registered?registeredObservationTransaction(actor,id,work):transaction(actor,work);
 }
