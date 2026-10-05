@@ -248,6 +248,50 @@ async function main(){
   }catch(error){reverseFailure=error;}finally{
    await cleanupGate(reverseGate,[reverseConsumer,reverseCommit],db,'drop trigger if exists synthetic_consumer_gate on research_revocation_candidate.inbox; drop function if exists research_revocation_candidate.synthetic_consumer_gate()',reverseFailure);
   }
+  // Independently issue and approve each grant; never shorten only the
+  // trusted binding after the source pack has already been signed/approved.
+  for(const expiresDuringWork of [false,true]){
+   const template=testPack(actor.userId),config=structuredClone(template.config);
+   config.grant.valid_until=(await db.query(`select clock_timestamp()+interval '${expiresDuringWork?'8':'60'} seconds' as t`)).rows[0].t.toISOString();
+   const short=testPack(actor.userId,{sourceId:template.sourceId,scope:template.scope,config}),shortFeed=randomUUID();
+   const expected={feedId:shortFeed,scope:short.scope,sourceId:short.sourceId,grantId:short.config.grant.grant_id,grantVersion:1};
+   short.pack.manifest.extensions['pa.revocation_reference']={protocol_version:'pa-grant-reference/v1',feed_id:shortFeed,owner_scope:short.scope,source_id:short.sourceId,grant_id:expected.grantId,grant_version:1,observed_at:short.version.ingested_at,revocation_seq_at_export:'0'};
+   short.pack.files['manifest.json']=canonicalize(short.pack.manifest);short.binding.approvedManifestHash=digest(short.pack.manifest);
+   await db.query('insert into public.research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[actor.userId,short.binding.approvedPayloadHash,short.binding]);
+   await db.query('insert into research_revocation_candidate.feed(feed_id,local_owner,upstream_user) values($1,$2,$3)',[shortFeed,actor.userId,short.scope.user_id]);
+   const shortPage=Buffer.from(JSON.stringify({protocol_version:'pa-revocation/v1',feed_id:shortFeed,owner_scope:short.scope,from_seq:'0',through_seq:'0',latest_seq:'0',published_at:new Date().toISOString(),events:[]}));
+   await applyRevocationPage(db,{feedId:shortFeed,localOwner:actor.userId,scope:short.scope,key:publicKey},shortPage,sign(null,shortPage,privateKey).toString('hex'));
+   const raw=JSON.stringify(short.pack);await registerCandidateReference(db,actor.userId,short.binding.approvedPayloadHash,raw,expected);
+   const imported=await POST(new Request(origin+'/api/research/s4/candidates',{method:'POST',headers:{host:'127.0.0.1:3199',origin,cookie,'content-type':'application/json'},body:raw}));assert.equal(imported.status,200);
+   const candidateId=(await imported.json()).id;
+   const persisted=(await db.query('select imported from public.research_s4_candidates where user_id=$1 and id=$2',[actor.userId,candidateId])).rows[0].imported;
+   assert.equal(persisted.grant.valid_until,config.grant.valid_until);assert.equal(short.binding.trustedConfig.grant.valid_until,config.grant.valid_until);
+   assert.equal(digest(short.pack.manifest),short.binding.approvedManifestHash);assert.equal(short.pack.manifest.payload_digest,short.binding.approvedPayloadHash);
+   const cards=await revealRegisteredCards(actor,candidateId,{requestKey:randomUUID(),judgment:'Synthetic expiry fixture',alreadySeen:[],independentJudgment:false});
+   const decision=await submitRegisteredDecision(actor,candidateId,{requestKey:randomUUID(),expectedRevision:0,action:'observe',reason:'Synthetic expiry only',cardId:cards.cards[0].id,labelId:cards.labelId,exposureId:cards.exposureId,securityTicker:'PAIRTEST',companyEntityId:null,newObservation:true,reviewAt:null});
+   const oid=decision.observationId!,observation=(await store.readObservation(oid)).observation;
+   for(const security of [observation.securities[0],benchmarkIdentity(true)])await freezeMarket(actor,oid,syntheticMapping(security),'synthetic');
+   const prep=await prepareRegisteredEvaluation(actor,oid),input=await prepareRegisteredInput(actor,oid,prep.marketIds,prep.asOf),body=makeCommit(input,randomUUID(),prep.revision);
+   const trustSnapshot=async()=>({binding:(await db.query('select * from public.research_s4_bindings where user_id=$1 and payload_hash=$2',[actor.userId,short.binding.approvedPayloadHash])).rows,feed:(await db.query('select * from research_revocation_candidate.feed where feed_id=$1',[shortFeed])).rows,mapping:(await db.query('select * from research_revocation_candidate.binding_map where feed_id=$1',[shortFeed])).rows,inbox:(await db.query('select * from research_revocation_candidate.inbox where feed_id=$1',[shortFeed])).rows,candidate:(await db.query('select * from public.research_s4_candidates where user_id=$1 and id=$2',[actor.userId,candidateId])).rows});
+   const before=await storeSnapshot(),trustBefore=await trustSnapshot();
+   const witnessTables=['research_s6_evaluations','research_s4_observation_state','research_s4_records','research_s4_outbox'];
+   await db.query(`create function public.synthetic_grant_write_witness() returns trigger language plpgsql security definer set search_path=pg_catalog as $$ begin perform nextval(('research_revocation_candidate.synthetic_witness_'||TG_TABLE_NAME)::regclass); return new; end $$`);
+   for(const table of witnessTables){await db.query('create sequence research_revocation_candidate.synthetic_witness_'+table);await db.query('create trigger synthetic_grant_write_witness after '+(table==='research_s4_observation_state'?'update':'insert')+' on public.'+table+' for each row execute function public.synthetic_grant_write_witness()');}
+
+   await db.query(`create function public.synthetic_grant_expiry_delay() returns trigger language plpgsql as $$ begin if '${config.grant.valid_until}'::timestamptz-clock_timestamp()<=interval '0.5 seconds' then raise exception 'grant_setup_overrun'; end if; perform pg_sleep(9); return new; end $$; create trigger synthetic_grant_expiry_delay before insert on public.research_s6_evaluations for each row execute function public.synthetic_grant_expiry_delay()`);
+   try{
+    const started=performance.now();
+    if(expiresDuringWork){await assert.rejects(store.commitEvaluationResult(body),e=>e instanceof Error&&e.cause==='grant_expired');assert.deepEqual(await storeSnapshot(),before);}
+    else{const receipt=await store.commitEvaluationResult(body);assert.equal(receipt.status,'accepted');assert.equal(receipt.revision,prep.revision+1);
+     assert.equal((await db.query('select count(*)::int n from public.research_s6_evaluations where user_id=$1 and id=$2',[actor.userId,receipt.evaluation_ref])).rows[0].n,1);
+     assert.equal((await db.query('select revision from public.research_s4_observation_state where user_id=$1 and observation_id=$2',[actor.userId,oid])).rows[0].revision,receipt.revision);
+     assert.equal((await db.query("select count(*)::int n from public.research_s4_records r join public.research_s4_outbox o on o.user_id=r.user_id and o.record_id=r.id where r.user_id=$1 and r.kind='ControlEvent' and r.payload->>'type'='evaluation.append' and r.payload->>'evaluation_ref'=$2",[actor.userId,receipt.evaluation_ref])).rows[0].n,1);
+    }
+    for(const table of witnessTables){const witness=(await db.query('select last_value::text,is_called from research_revocation_candidate.synthetic_witness_'+table)).rows[0];assert.deepEqual(witness,{last_value:'1',is_called:true});}
+    assert.ok(performance.now()-started>=8900);
+    assert.deepEqual(await trustSnapshot(),trustBefore);
+   }finally{await db.query('drop trigger synthetic_grant_expiry_delay on public.research_s6_evaluations; drop function public.synthetic_grant_expiry_delay()');for(const table of witnessTables)await db.query('drop trigger synthetic_grant_write_witness on public.'+table+'; drop sequence research_revocation_candidate.synthetic_witness_'+table);await db.query('drop function public.synthetic_grant_write_witness()');}
+  }
   console.log('Registered list acceptance passed: microsecond pagination, bounds, two feeds, stale/tombstone/pruning fail closed.');
  }catch(e){primary=e;throw e;}finally{try{await closeS4Pool();await db.end();}finally{stopLocalDatabase(state,primary);}}
 }
