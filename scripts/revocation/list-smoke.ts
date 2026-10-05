@@ -1,3 +1,5 @@
+import {GET,POST} from '../../src/app/api/research/s4/candidates/route';
+import {localSessionToken} from '../../src/lib/research/s4/auth';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {randomUUID,generateKeyPairSync,sign} from 'node:crypto';
@@ -7,7 +9,6 @@ import {testPack} from '../s4/test-pack';
 import {canonicalize,digest} from '../../src/lib/research/ingest/pa-v1/json.js';
 import {registerCandidateReference} from '../../src/lib/research/revocation/register';
 import {applyRevocationPage} from '../../src/lib/research/revocation/consumer';
-import {importRegisteredCandidate} from '../../src/lib/research/s4/import';
 import {listRegisteredCandidates,type CandidatePageCursor} from '../../src/lib/research/s4/registered-list';
 import {closeS4Pool} from '../../src/lib/research/s4/db';
 import {s4Http} from '../../src/lib/research/s4/http';
@@ -17,10 +18,18 @@ async function main(){
   await db.query(readFileSync('scripts/revocation/candidate-schema.sql','utf8'));
   await db.query('grant usage on schema research_revocation_candidate to alpha_s4_runtime;grant select on all tables in schema research_revocation_candidate to alpha_s4_runtime');
   process.env.ALPHA_S4_ENABLED='1';process.env.ALPHA_S4_DATABASE_URL=state.runtimeUrl;
+  process.env.ALPHA_S4_LOCAL_AUTH='1';process.env.ALPHA_S4_ORIGIN='http://127.0.0.1:3199';process.env.ALPHA_S4_LOCAL_SESSION_SECRET=randomUUID();
   const actor={userId:randomUUID(),kind:'agent' as const};
   await db.query('insert into auth.users(id) values($1)',[actor.userId]);
   await db.query("update public.profiles set role='admin' where id=$1",[actor.userId]);
   assert.deepEqual(await listRegisteredCandidates(actor),{candidates:[],nextCursor:null});
+  const origin=process.env.ALPHA_S4_ORIGIN;
+  const cookie='alpha_s4_local_session='+localSessionToken(actor.userId,process.env.ALPHA_S4_LOCAL_SESSION_SECRET,Date.now()+3600000);
+  const get=(query='',headers:Record<string,string>={})=>GET(new Request(origin+'/api/research/s4/candidates'+query,{headers:{host:'127.0.0.1:3199',cookie,...headers}}));
+  assert.equal((await get('',{cookie:''})).status,401);
+  assert.equal((await get('',{host:'evil.example'})).status,403);
+  assert.equal((await get('',{'sec-fetch-site':'cross-site'})).status,403);
+  assert.deepEqual(await (await get()).json(),{candidates:[],nextCursor:null});
   const {privateKey,publicKey}=generateKeyPairSync('ed25519');
   const seeds=[];
   for(let i=0;i<2;i++){
@@ -33,8 +42,13 @@ async function main(){
    const registration={feedId,localOwner:actor.userId,scope:t.scope,key:publicKey};
    const page={protocol_version:'pa-revocation/v1',feed_id:feedId,owner_scope:t.scope,from_seq:'0',through_seq:'0',latest_seq:'0',published_at:new Date().toISOString(),events:[]};
    const bytes=Buffer.from(JSON.stringify(page));await applyRevocationPage(db,registration,bytes,sign(null,bytes,privateKey).toString('hex'));
-   const raw=JSON.stringify(t.pack);await registerCandidateReference(db,actor.userId,t.binding.approvedPayloadHash,raw,expected);
-   const imported=await importRegisteredCandidate(actor,raw);
+   const raw=JSON.stringify(t.pack);
+   const post=()=>POST(new Request(origin+'/api/research/s4/candidates',{method:'POST',headers:{host:'127.0.0.1:3199',origin,cookie,'content-type':'application/json'},body:raw}));
+   assert.equal((await post()).status,503);
+   await registerCandidateReference(db,actor.userId,t.binding.approvedPayloadHash,raw,expected);
+   const response=await post();assert.equal(response.status,200);const imported=await response.json();assert.equal(imported.duplicate,false);
+   assert.equal((await (await get()).json()).candidates.length,i+1);
+   assert.deepEqual(await (await post()).json(),{id:imported.id,duplicate:true});
    await db.query('update public.research_s4_candidates set created_at=$2 where id=$1',[imported.id,`2026-10-01T00:00:00.00000${i+1}Z`]);
    seeds.push({t,feedId,registration,page,id:imported.id});
   }
@@ -42,6 +56,13 @@ async function main(){
    select user_id,$2,source_version_id,external_candidate_id,payload_hash,imported from public.research_s4_candidates where id=$1`,[seeds[0].id,randomUUID()]),e=>e instanceof Error&&(e as {code?:string}).code==='23505'&&(e as {constraint?:string}).constraint==='research_s4_candidates_user_id_payload_hash_key');
   const first=await listRegisteredCandidates(actor,1);assert.equal(first.candidates[0].id,seeds[1].id);assert.ok(first.nextCursor);
   assert.deepEqual(first.nextCursor,{createdAt:'2026-10-01T00:00:00.000002Z',id:seeds[1].id});
+  const httpFirst=await get('?limit=1');assert.equal(httpFirst.status,200);assert.equal(httpFirst.headers.get('cache-control'),'no-store');
+  const wireFirst=await httpFirst.json();assert.deepEqual(wireFirst.nextCursor,first.nextCursor);
+  const wireSecond=await (await get('?'+new URLSearchParams({limit:'1',...wireFirst.nextCursor}).toString())).json();assert.equal(wireSecond.candidates[0].id,seeds[0].id);
+  for(const query of ['?limit=0','?limit=101','?limit=999','?createdAt=x','?unknown='+('x'.repeat(2050)),'?limit=01','?limit=1&limit=2','?unknown=1','?id='+seeds[0].id,'?createdAt=x&id='+seeds[0].id]){
+   const response=await get(query);assert.equal(response.status,422);assert.deepEqual(await response.json(),{error:{code:'invalid_schema'}});
+  }
+  assert.equal((await get('?limit=100')).status,200);
   const second=await listRegisteredCandidates(actor,1,first.nextCursor!);assert.equal(second.candidates[0].id,seeds[0].id);assert.ok(second.nextCursor);
   assert.deepEqual(await listRegisteredCandidates(actor,1,second.nextCursor!),{candidates:[],nextCursor:null});
   assert.equal((await listRegisteredCandidates(actor,2)).candidates.length,2);
@@ -53,6 +74,7 @@ async function main(){
   assert.deepEqual(await listRegisteredCandidates(other),{candidates:[],nextCursor:null});
   const mapping=(await db.query('delete from research_revocation_candidate.binding_map where feed_id=$1 returning *',[seeds[0].feedId])).rows[0];
   assert.equal((await s4Http(()=>listRegisteredCandidates(actor,2))).status,503);
+  const missing=await get();assert.equal(missing.status,503);assert.deepEqual(await missing.json(),{error:{code:'revocation_check_unavailable'}});
   await db.query('insert into research_revocation_candidate.binding_map values($1,$2,$3,$4,$5,$6)',[mapping.feed_id,mapping.local_owner,mapping.source_id,mapping.grant_id,mapping.grant_version,mapping.payload_hash]);
   const original=(await db.query('select imported from public.research_s4_candidates where id=$1',[seeds[0].id])).rows[0].imported;
   const changed=structuredClone(original);changed.sourceRef.source_id=randomUUID();
@@ -82,6 +104,7 @@ async function main(){
   assert.equal((await listRegisteredCandidates(actor,1)).candidates[0].id,seeds[1].id);
   await assert.rejects(listRegisteredCandidates(actor,1,first.nextCursor!),e=>e instanceof Error&&e.cause==='revocation_stale');
   assert.deepEqual(await listRegisteredCandidates(actor,1,second.nextCursor!),{candidates:[],nextCursor:null});
+  const routeStale=await get();assert.equal(routeStale.status,503);assert.deepEqual(await routeStale.json(),{error:{code:'revocation_check_unavailable'}});
   const stale=await s4Http(()=>listRegisteredCandidates(actor,2));assert.equal(stale.status,503);assert.deepEqual(await stale.json(),{error:{code:'revocation_check_unavailable'}});
   await db.query('update research_revocation_candidate.feed set published_at=clock_timestamp() where feed_id=$1',[affected.feedId]);
   const event={revocation_id:randomUUID(),monotonic_seq:'1',source_id:affected.t.sourceId,grant_id:affected.t.config.grant.grant_id,grant_version:1,effective_at:new Date().toISOString()};

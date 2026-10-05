@@ -10,13 +10,18 @@ async function main(){
  try{
  const page=await browser.newPage();const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
  const decisions:unknown[]=[];
+ let optionsFailed=true;
+ let nextFailed=true,nextRequests=0;
  let listFailed=true,denied=false,holdCitation=false,release:(()=>void)|undefined,citationStarted=false,holdDecision=false,decisionStarted=false,releaseDecision:(()=>void)|undefined;
  await page.route('**/*',async route=>{
   const url=new URL(route.request().url());if(url.origin!==origin)return route.abort();
   if(!url.pathname.startsWith('/api/'))return route.continue();
   const respond=(body:unknown,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(body)});
-  if(url.pathname.endsWith('/candidates'))return listFailed?respond({error:{code:'revocation_check_unavailable'}},503):respond({candidates:[candidate]});
-  if(url.pathname.endsWith('/options'))return respond({securities:[],companies:[]});
+  if(url.pathname.endsWith('/candidates')){
+   if(url.searchParams.has('id')){nextRequests++;if(nextFailed)return respond({error:{code:'revocation_check_unavailable'}},503);expect(url.searchParams.get('createdAt')).toBe('2026-10-04T00:00:00.000001Z');return respond({candidates:[],nextCursor:null});}
+   return listFailed?respond({error:{code:'revocation_check_unavailable'}},503):respond({candidates:[candidate],nextCursor:{id,createdAt:'2026-10-04T00:00:00.000001Z'}});
+  }
+  if(url.pathname.endsWith('/options'))return optionsFailed?respond({error:{code:'internal_error'}},500):respond({securities:[],companies:[]});
   if(url.pathname.endsWith('/history'))return respond({records:[],revision:1});
   if(url.pathname.endsWith('/status'))return denied?respond({error:{code:'revocation_check_unavailable'}},503):respond({observations:[]});
   if(url.pathname.endsWith('/decisions')){decisions.push(route.request().postDataJSON());decisionStarted=true;if(holdDecision)await new Promise<void>(resolve=>{releaseDecision=resolve;});return respond({ok:true});}
@@ -29,6 +34,18 @@ async function main(){
  await expect(page.getByText(/此前材料已隐藏/)).toHaveCount(0);
  await expect(page.getByText('尚无可访问候选。导入后即可开始记录。')).toHaveCount(0);
  listFailed=false;await page.getByRole('button',{name:'重试读取候选'}).click();
+ await page.getByRole('button',{name:'下一页候选'}).click();
+ await expect(page.getByText('候选列表暂不可用，不能据此判断没有资料。')).toBeVisible();
+ await page.getByRole('button',{name:'返回第一页'}).click();
+ await page.getByRole('button',{name:'下一页候选'}).click();
+ await expect(page.getByText('候选列表暂不可用，不能据此判断没有资料。')).toBeVisible();
+ nextFailed=false;await page.getByRole('button',{name:'重试读取候选'}).click();
+ await expect(page.getByText('本页没有更多候选。')).toBeVisible();expect(nextRequests).toBe(3);
+ await expect(page.getByText('尚无可访问候选。导入后即可开始记录。')).toHaveCount(0);
+ await page.getByRole('button',{name:'返回第一页'}).click();
+ await expect(page.getByText('决定选项暂不可用，暂不能提交决定。')).toBeVisible();
+ optionsFailed=false;await page.getByRole('button',{name:'重试读取决定选项'}).click();
+ await expect(page.getByText('决定选项暂不可用，暂不能提交决定。')).toHaveCount(0);
  await page.getByLabel('选择候选',{exact:true}).selectOption(id);
  await page.getByLabel('已有判断',{exact:true}).fill('Synthetic unsent judgment');
  await page.getByRole('button',{name:'保存已有判断并查看变化卡'}).click();

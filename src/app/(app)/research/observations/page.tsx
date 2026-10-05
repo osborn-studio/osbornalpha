@@ -4,6 +4,7 @@ import {useCallback,useEffect,useRef,useState} from 'react';
 import {ChangeCards,type CardView} from '@/components/research/s4/ChangeCards';
 import {DecisionForm,type OptionsView} from '@/components/research/s4/DecisionForm';
 import {EvaluationPanel} from '@/components/research/s4/EvaluationPanel';
+type PageCursor={createdAt:string;id:string};
 const base='/api/research/s4';
 const explanations:Record<string,string>={submission_unresolved:'提交结果尚未确认。请重新核实权限后刷新历史；重试决定将沿用原始提交内容与请求键。',revocation_access_denied:'材料授权已撤回或过期，已隐藏此前显示的内容。',revocation_check_unavailable:'暂时无法核实材料权限，已隐藏此前内容。请稍后手动重试；你的未提交判断仍保留。',export_watermark_ahead:'授权同步尚未追上此导出包，请稍后手动重试。',invalid_revocation_candidate:'候选包的授权引用无效，请核对已批准的导出包。',network_unavailable:'网络请求未完成，已隐藏此前内容。你的未提交判断仍保留。',invalid_response:'服务返回无法识别的结果，请稍后重试。',observation_scope_conflict:'所选证券、公司或研究观点与原观察不同。请追加新观察；延期须保留原范围。',anchor_integrity_failed:'回执链完整性检查失败，新增登记已暂停。请由操作员核查数据库与原始备份。',data_insufficient:'当前冻结日历不足以覆盖新观察窗口，请先发布新的规则版本。原记录不会改写。',input_limit:'输入超过当前容量限制，请减小文件。',future_input:'资料包含未来可用时间，不能进入当前输入。',source_version_conflict:'同一资料版本已登记不同内容或元数据。',hash_mismatch:'内容摘要不匹配，请核对原包。',internal_error:'服务暂时未能完成请求，请重试或查看本地服务日志。',not_authenticated:'请先登录获准的研究账号。',not_configured:'本地观察服务尚未启用。',scope_denied:'当前账号没有这份材料的权限，或授权已撤回。',policy_blocked:'材料授权已过期或变更，需重新确认授权。',revision_conflict:'已有新决定，请重新查看后提交。',idempotency_conflict:'该请求键已用于另一份决定。',security_unresolved:'请选择符合当前规则的证券；公司可保持未解决。',exposure_required:'请先保存已有判断并查看本周变化卡。',invalid_schema:'请检查必填字段及文件格式。',fixture_not_operational:'测试 golden 不能作为真实候选导入。'};
 async function fetchRequest(path:string,body?:unknown,raw=false){
@@ -11,6 +12,7 @@ async function fetchRequest(path:string,body?:unknown,raw=false){
   const data=await res.json().catch(()=>{throw new Error('invalid_response');});if(!res.ok)throw new Error(data?.error?.code||'request_failed');
   const resource=path.split('?')[0];
   if(!data||typeof data!=='object'||(resource==='/candidates'&&body===undefined&&!Array.isArray(data.candidates))||(resource==='/options'&&(!Array.isArray(data.securities)||!Array.isArray(data.companies)))||(/\/status$/.test(resource)&&!Array.isArray(data.observations))||(/\/history$/.test(resource)&&!Array.isArray(data.records))||(/\/reveal$/.test(resource)&&(!Array.isArray(data.cards)||!Number.isInteger(data.revision))))throw new Error('invalid_response');
+  if(resource==='/candidates'&&body===undefined&&data.nextCursor!=null&&(typeof data.nextCursor!=='object'||Object.keys(data.nextCursor).sort().join(',')!=='createdAt,id'||typeof data.nextCursor.id!=='string'||typeof data.nextCursor.createdAt!=='string'||data.nextCursor.id.length!==36||!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/.test(data.nextCursor.createdAt)))throw new Error('invalid_response');
   return data;
 }
 export default function ObservationsPage(){
@@ -20,6 +22,10 @@ export default function ObservationsPage(){
   const [revealed,setRevealed]=useState<any>(null),[cardId,setCardId]=useState(''),[history,setHistory]=useState<any[]>([]);
   const [citation,setCitation]=useState<any>(null),[busy,setBusy]=useState(false),[notice,setNotice]=useState(''),[loading,setLoading]=useState(true);
   const [revision,setRevision]=useState(0);
+  const [optionsReady,setOptionsReady]=useState(false),[optionsFailed,setOptionsFailed]=useState(false);
+  const optionsSequence=useRef(0);
+  const [nextCursor,setNextCursor]=useState<PageCursor|null>(null),[onLaterPage,setOnLaterPage]=useState(false);
+  const attemptedPage=useRef<PageCursor|null>(null);
   const [listState,setListState]=useState<'loading'|'ready'|'failed'>('loading');
   const [unavailable,setUnavailable]=useState(false),[decisionVisible,setDecisionVisible]=useState(false);
   const [decisionPending,setDecisionPending]=useState(false);
@@ -32,7 +38,9 @@ export default function ObservationsPage(){
   const current=useRef('');
   const attempt=useRef({signature:'',key:''});
   const report=useCallback((e:unknown)=>{if(!mounted.current||e instanceof ObsoleteViewRequest)return;const code=e instanceof Error?e.message:'internal_error';setNotice(explanations[code]||`操作失败：${code}`);},[]);
-  const load=useCallback(async()=>{const sequence=++listSequence.current;setListState('loading');try{const [a,b]=await Promise.all([fetchRequest('/candidates'),fetchRequest('/options')]);if(!mounted.current||sequence!==listSequence.current)return;setCandidates(a.candidates);setOptions(b);setListState('ready');}catch(e){if(mounted.current&&sequence===listSequence.current){setCandidates([]);setListState('failed');}throw e;}},[]);
+  const load=useCallback(async(cursor:PageCursor|null=null)=>{const sequence=++listSequence.current;attemptedPage.current=cursor;setListState('loading');const query=cursor?'?'+new URLSearchParams(cursor).toString():'';try{const a=await fetchRequest('/candidates'+query);if(!mounted.current||sequence!==listSequence.current)return;setCandidates(a.candidates);setNextCursor(a.nextCursor??null);setOnLaterPage(cursor!==null);setListState('ready');}catch(e){if(mounted.current&&sequence===listSequence.current){setCandidates([]);setListState('failed');}throw e;}},[]);
+  const loadOptions=useCallback(async()=>{const sequence=++optionsSequence.current;try{const data=await fetchRequest('/options');if(mounted.current&&sequence===optionsSequence.current){setOptions(data);setOptionsReady(true);setOptionsFailed(false);}}catch{if(mounted.current&&sequence===optionsSequence.current){setOptionsReady(false);setOptionsFailed(true);}}},[]);
+  useEffect(()=>{void loadOptions();},[loadOptions]);
   useEffect(()=>{load().catch(report).finally(()=>setLoading(false));},[load,report]);
   // Revalidate access without redisplaying material. Clear visible cached content on revocation.
   useEffect(()=>{if(!selected||unavailable)return;const timer=setInterval(()=>{request(`/candidates/${selected}/status`).then(data=>{if(current.current===selected)setHistory(prev=>prev.map(r=>({...r,...data.observations.find((s:any)=>s.observation_id===r.id)})));}).catch(report);},10000);return()=>clearInterval(timer);},[selected,unavailable,report,request]);
@@ -48,7 +56,7 @@ export default function ObservationsPage(){
   async function decide(body:Record<string,unknown>){setBusy(true);setNotice('');
    pendingDecision.current??={...body,cardId,labelId:revealed.labelId,exposureId:revealed.exposureId};setDecisionPending(true);
    try{await request(`/candidates/${selected}/decisions`,pendingDecision.current);pendingDecision.current=null;setDecisionPending(false);setNotice('决定已保存。');
-    try{await historyLoad();await load();}catch{setNotice('决定已保存，但资料刷新失败。请重新核实权限后刷新历史，无需重复提交。');}
+    try{await historyLoad();await load(attemptedPage.current);}catch{setNotice('决定已保存，但资料刷新失败。请重新核实权限后刷新历史，无需重复提交。');}
    }catch(e){if(e instanceof Error&&['revision_conflict','idempotency_conflict','scope_denied','policy_blocked','revocation_access_denied','invalid_schema','security_unresolved','exposure_required'].includes(e.message)){pendingDecision.current=null;setDecisionPending(false);}report(e);}finally{setBusy(false);}
   }
   return <div className="mx-auto max-w-5xl space-y-6 text-text">
@@ -59,8 +67,10 @@ export default function ObservationsPage(){
       <h2 className="text-lg font-semibold">候选资料</h2><label className="block text-sm">导入已获准的 PA 候选包<input aria-label="导入候选包" type="file" accept=".json,application/json" disabled={busy||decisionPending} className="mt-2 block w-full text-sm" onChange={e=>{const f=e.target.files?.[0];if(f)void upload(f);}}/></label>
       <label className="block text-sm">选择候选<select aria-label="选择候选" value={selected} onChange={e=>choose(e.target.value)} disabled={busy||decisionPending} className="mt-1 w-full rounded border border-border bg-bg p-2">
         <option value="">{loading?'正在读取…':'请选择候选'}</option>{selected&&!candidates.some(c=>c.id===selected)&&<option value={selected}>当前候选（列表待确认）</option>}{candidates.map(c=><option key={c.id} value={c.id}>{new Date(c.created_at).toLocaleString()} · {c.id.slice(0,8)} · {c.status}</option>)}</select></label>
-      {listState==='failed'&&<p role="status">候选列表暂不可用，不能据此判断没有资料。<button disabled={busy} onClick={()=>load().catch(report)} className="ml-2 underline">重试读取候选</button></p>}
-      {listState==='ready'&&!loading&&!candidates.length&&<p className="text-sm text-text-dim">尚无可访问候选。导入后即可开始记录。</p>}
+      {listState==='failed'&&<p role="status">候选列表暂不可用，不能据此判断没有资料。<button disabled={busy} onClick={()=>load(attemptedPage.current).catch(report)} className="ml-2 underline">重试读取候选</button></p>}
+      {listState==='failed'&&attemptedPage.current&&<button disabled={busy} onClick={()=>load().catch(report)} className="text-sm underline">返回第一页</button>}
+      {listState==='ready'&&<div className="flex gap-3 text-sm">{onLaterPage&&<button disabled={busy} onClick={()=>load().catch(report)} className="underline">返回第一页</button>}{nextCursor&&<button disabled={busy} onClick={()=>load(nextCursor).catch(report)} className="underline">下一页候选</button>}</div>}
+      {listState==='ready'&&!loading&&!candidates.length&&<p className="text-sm text-text-dim">{onLaterPage?'本页没有更多候选。':'尚无可访问候选。导入后即可开始记录。'}</p>}
     </section>
     {selected&&!revealed&&<form onSubmit={reveal} className="space-y-3 rounded-lg border border-border bg-bg-card p-4" aria-label="查看前记录">
       <h2 className="text-lg font-semibold">{decisionVisible?'重新查看材料（此前已查看）':'查看前，记录你的判断'}</h2>
@@ -73,7 +83,8 @@ export default function ObservationsPage(){
     {revealed&&<><ChangeCards cards={revealed.cards as CardView[]} selected={cardId} onSelect={id=>{citationSequence.current++;setCitation(null);setCardId(id);}} onCitation={cite}/>
       {citation&&<section aria-label="引用原文" className="rounded-lg border border-accent bg-bg-card p-4"><h2 className="font-semibold">引用原文</h2><p className="mt-2 whitespace-pre-wrap break-words text-sm">{citation.text}</p><p className="mt-2 break-all text-xs text-text-dim">版本摘要：{citation.source_ref.raw_sha256} · UTF-8 字节 {citation.span.start}–{citation.span.end}</p><button onClick={()=>setCitation(null)} className="mt-2 text-sm underline">收起引用</button></section>}
       </>}
-    {selected&&decisionVisible&&<DecisionForm key={selected} options={options} revision={revision} busy={busy} lockDraft={decisionPending} blocked={!revealed||unavailable} onSubmit={decide}/>}
+    {optionsFailed&&<p role="status">决定选项暂不可用，暂不能提交决定。<button className="ml-2 underline" onClick={()=>void loadOptions()}>重试读取决定选项</button></p>}
+    {selected&&decisionVisible&&<DecisionForm key={selected} options={options} revision={revision} busy={busy} lockDraft={decisionPending} blocked={!revealed||unavailable||!optionsReady} onSubmit={decide}/>}
     {selected&&<section className="space-y-3" aria-label="复核与观察历史"><div className="flex items-center justify-between"><h2 className="text-lg font-semibold">复核与观察历史</h2><button disabled={busy} onClick={()=>historyLoad().catch(report)} className="text-sm text-accent underline">查看 / 刷新历史</button></div>
       {history.filter(r=>['Decision','Observation'].includes(r.kind)).map(r=><article key={r.id} className="rounded-lg border border-border bg-bg-card p-4 text-sm">
         {r.kind==='Decision'?<><h3 className="font-semibold">决定 · {r.payload.action} · 版本 {r.payload.revision}</h3><p className="mt-2 whitespace-pre-wrap">{r.payload.reason}</p><p className="mt-2 text-xs text-text-dim">{r.payload.review_at?`下次复核：${new Date(r.payload.review_at).toLocaleString()}`:'尚未指定下次复核时间'}{r.payload.preserves_original_window?' · 保留原观察窗口':''}</p></>:
