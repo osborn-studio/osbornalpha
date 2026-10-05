@@ -314,3 +314,23 @@ ordering evidence, not promise resolution order. Cleanup uses bounded lock/query
 waits, discards configured connections, preserves primary failures and terminates
 only a positively identified test backend on failure. Production concurrency and
 recovery from an unresponsive database remain unclaimed.
+
+
+### Served local browser acceptance
+
+`scripts/revocation/browser-smoke.ts <evidence-directory>` creates a synthetic
+registered candidate and disposable PostgreSQL, copies the app into an isolated
+build directory, and starts real Next development mode and Chromium. No API
+responses are mocked. The flow saves pending-start evaluation, downloads and
+verifies replay, reloads history, checks320px horizontal overflow, denies missing
+credentials, recovers from stale authority and hides reports after signed
+revocation. This tests pending state, not numeric60-session returns or production
+Next serving. The harness uses canonical localhost origin because Next dev
+normalizes its Request URL; Host/Origin validation remains strict. `.env.example`
+is harmless, while actual development env files are refused.
+
+Owned Next/browser process groups and the database are stopped after the run;
+Next output never shares the working checkout's .next. Evidence remains local.
+Operational deployment, production auth and delayed in-flight UI disclosure races
+remain separate acceptance work. Sidebar and dormant research capabilities are
+not activated.

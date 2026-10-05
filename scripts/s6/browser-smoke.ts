@@ -1,3 +1,5 @@
+import {createPrivateKey,createPublicKey,randomUUID,sign} from 'node:crypto';
+import {applyRevocationPage} from '../../src/lib/research/revocation/consumer';
 import {chromium,expect} from '@playwright/test';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
@@ -24,11 +26,20 @@ async function main(){
   await page.reload();await page.getByLabel('选择候选',{exact:true}).selectOption(demo.candidateId);await page.getByRole('button',{name:'查看 / 刷新历史'}).click();await page.getByRole('button',{name:'查看计算报告'}).click();await expect(page.getByRole('heading',{name:'等待起点',exact:true})).toBeVisible();
   const count=(await db.query('select count(*) from research_s6_evaluations where user_id=$1',[demo.actor.userId])).rows[0].count;expect(count).toBe('1');
   const unauth=await browser.newContext();expect((await unauth.request.post(web.origin+'/api/research/s6/observations/'+demo.observationId,{headers:{Origin:web.origin},data:{action:'read'}})).status()).toBe(401);
-  await db.query('update research_s4_bindings set revoked=true where user_id=$1',[demo.actor.userId]);
+  if(demo.revocation){
+   writeFileSync(join(state.directory,'stop-feed'),'stop');await new Promise(r=>setTimeout(r,6000));
+   await db.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '61 seconds' where feed_id=$1",[demo.revocation.feedId]);
+   const stale=await ctx.request.post(web.origin+'/api/research/s6/observations/'+demo.observationId,{headers:{Origin:web.origin},data:{action:'read'}});expect(stale.status()).toBe(503);expect(await stale.json()).toEqual({error:{code:'revocation_check_unavailable'}});
+   await page.getByRole('button',{name:'查看计算报告'}).click();await expect(page.getByText('暂时无法核实材料权限，请稍后重新查看报告。')).toBeVisible();
+   await db.query('update research_revocation_candidate.feed set published_at=clock_timestamp() where feed_id=$1',[demo.revocation.feedId]);
+   await page.getByRole('button',{name:'查看计算报告'}).click();await expect(page.getByRole('heading',{name:'等待起点',exact:true})).toBeVisible();
+   const r=demo.revocation,at=new Date().toISOString(),key=createPrivateKey(r.privateKey),raw=Buffer.from(JSON.stringify({protocol_version:'pa-revocation/v1',feed_id:r.feedId,owner_scope:r.scope,from_seq:'0',through_seq:'1',latest_seq:'1',published_at:at,events:[{revocation_id:randomUUID(),monotonic_seq:'1',source_id:r.sourceId,grant_id:r.grantId,grant_version:1,effective_at:at}]}));
+   await applyRevocationPage(db,{feedId:r.feedId,localOwner:demo.actor.userId,scope:r.scope,key:createPublicKey(key)},raw,sign(null,raw,key).toString('hex'));
+  }else await db.query('update research_s4_bindings set revoked=true where user_id=$1',[demo.actor.userId]);
+  const denied=await ctx.request.post(web.origin+'/api/research/s6/observations/'+demo.observationId,{headers:{Origin:web.origin},data:{action:'read'}});expect(denied.status()).toBe(403);expect(await denied.json()).toEqual({error:{code:'revocation_access_denied'}});
   await page.getByRole('button',{name:'查看计算报告'}).click();await expect(page.getByText('材料权限已撤回或当前账号无权访问。')).toBeVisible();await expect(page.getByRole('button',{name:'校验并导出 Replay'})).toHaveCount(0);
-  await db.query('update research_s4_bindings set revoked=false where user_id=$1',[demo.actor.userId]);
   expect(errors).toEqual([]);
-  const evidence={passed:true,synthetic:true,real_next:true,real_postgres:true,mocked_api_responses:0,checks:['authorized_S3_package','report_exposure','server_computation','5_20_60_windows','offline_replay','reload_persistence','320px_no_overflow','revocation_clears_report','unauthenticated_401','no_page_errors']};
+  const evidence={passed:true,synthetic:true,real_next:true,serve_mode:'development',signed_revocation:!!demo.revocation,real_postgres:true,mocked_api_responses:0,checks:['synthetic_candidate','report_exposure','pending_start_persisted','offline_replay','reload_persistence','320px_no_overflow','revocation_clears_report','unauthenticated_401','no_uncaught_page_errors']};
   writeFileSync(join(state.directory,'s6-browser-result.json'),JSON.stringify(evidence,null,2));console.log(JSON.stringify(evidence));
  }finally{await db.end();await browser.close();}
 }
