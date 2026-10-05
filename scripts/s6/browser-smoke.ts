@@ -4,11 +4,15 @@ import {chromium,expect} from '@playwright/test';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {Pool} from 'pg';
+import {setDefaultResultOrder} from 'node:dns';
+setDefaultResultOrder('ipv4first');
 import {localSessionToken} from '../../src/lib/research/s4/auth';
 import {replayObservation} from 'dsh-trade-strategy-evaluator/engine';
 const state=JSON.parse(readFileSync(process.argv[2],'utf8')),web=JSON.parse(readFileSync(join(state.directory,'web-state.json'),'utf8')),demo=JSON.parse(readFileSync(join(state.directory,'s6-demo.json'),'utf8'));
 async function main(){
- const db=new Pool({connectionString:state.adminUrl}),browser=await chromium.launch({headless:true});
+ const db=new Pool({connectionString:state.adminUrl}),server=await chromium.launchServer({headless:true,args:['--host-resolver-rules=MAP localhost 127.0.0.1']});
+ writeFileSync(join(state.directory,'chromium-pid.json'),JSON.stringify({pid:server.process().pid}),{mode:0o600});
+ const browser=await chromium.connect(server.wsEndpoint());
  try{
   const ctx=await browser.newContext({viewport:{width:1280,height:1000}});await ctx.addCookies([{name:'alpha_s4_local_session',value:localSessionToken(demo.actor.userId,web.secret,Date.now()+3600000),url:web.origin,httpOnly:true,sameSite:'Strict'}]);
   const page=await ctx.newPage(),errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
@@ -96,8 +100,8 @@ async function main(){
   const denied=await ctx.request.post(web.origin+'/api/research/s6/observations/'+demo.observationId,{headers:{Origin:web.origin},data:{action:'read'}});expect(denied.status()).toBe(403);expect(await denied.json()).toEqual({error:{code:'revocation_access_denied'}});
   await page.getByRole('button',{name:'查看计算报告'}).click();await expect(page.getByText('材料权限已撤回或当前账号无权访问。')).toBeVisible();await expect(page.getByRole('button',{name:'校验并导出 Replay'})).toHaveCount(0);
   expect(errors).toEqual([]);
-  const evidence={passed:true,synthetic:true,real_next:true,serve_mode:'development',signed_revocation:!!demo.revocation,real_postgres:true,mocked_api_responses:0,delayed_real_responses:2,aborted_committed_response:1,checks:['lost_commit_response_retries_same_key','unmounted_prepare_does_not_evaluate','unmounted_replay_does_not_download','synthetic_candidate','report_exposure','pending_start_persisted','offline_replay','reload_persistence','320px_no_overflow','revocation_clears_report','unauthenticated_401','no_uncaught_page_errors']};
+  const evidence={child_checks_passed:true,synthetic:true,real_next:true,serve_mode:web.serveMode||'development',research_runtime:'local',production_deployment_verified:false,signed_revocation:!!demo.revocation,real_postgres:true,mocked_api_responses:0,delayed_real_responses:2,aborted_committed_response:1,checks:['lost_commit_response_retries_same_key','unmounted_prepare_does_not_evaluate','unmounted_replay_does_not_download','synthetic_candidate','report_exposure','pending_start_persisted','offline_replay','reload_persistence','320px_no_overflow','revocation_clears_report','unauthenticated_401','no_uncaught_page_errors']};
   writeFileSync(join(state.directory,'s6-browser-result.json'),JSON.stringify(evidence,null,2));console.log(JSON.stringify(evidence));
- }finally{await db.end();await browser.close();}
+ }finally{await db.end();await browser.close();await server.close();}
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});

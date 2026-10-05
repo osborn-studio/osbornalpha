@@ -358,3 +358,35 @@ and weak negative assertions; addressed. Final task_96696e01 passed browser,
 typecheck and lint. The earlier task_66ef5b61 browser passed but lint failed;
 that evidence is retained. Final corrections host-verified. Pending attempts are
 still memory-only and do not survive unmount/reload; this remains follow-up work.
+
+
+## Built bundle served locally (2026-10-05)
+
+`npx tsx scripts/revocation/browser-smoke.ts <new-evidence-directory> built`
+builds a copied application without database or session credentials, then runs
+`next start` with synthetic local-runtime credentials and isolated PostgreSQL.
+This exercises the same browser flow as development mode. It does not enable or
+certify the production research runtime, deployment configuration or real data.
+
+Readiness checks a random public nonce, all current listening process groups on
+the port, and the served build manifest. Node prefers IPv4 and Chromium resolves
+localhost to127.0.0.1; strict application Host/Origin checks are unchanged.
+`acceptance-result.json` is written only after successful cleanup. It records
+BUILD_ID, copied-app digest, selected repository inputs (src/scripts/migrations),
+Node/Next/React versions and lockfile digest. Source symlinks are rejected except
+the explicit shared node_modules directory. This is scoped evidence, not a
+hermetic dependency or deployed-release attestation; dependency caches remain
+shared and installed package contents are not completely hashed.
+
+Signal handlers unwind owned build/Next/test groups; Chromium's distinct group
+is recorded by the child and checked separately. Unconfirmed cleanup retains
+local state while attempting to stop the database. Catchable interrupts during
+build and active Chromium are fault-tested; SIGKILL/power loss and every possible
+startup/OS failure are not certified. Child results say child_checks_passed and
+are not overall acceptance. Earlier pre-cleanup manifests remain historical
+artifacts and must be read with their osstack outcome.
+
+Two verified Opus5.5 audits challenged interruption cleanup, evidence provenance,
+listener identity, Chromium process isolation and hash scope. Final corrections
+are host-verified. Durable pending evaluation across unmount/reload, operational
+feed deployment and production release gates remain open.
