@@ -1,0 +1,9 @@
+# Null-valued gateway quote fallback
+
+The route formerly used map.has to exclude symbols from fallback but only inserted truthy gateway quotes. A present null/undefined value could therefore suppress public fallback and return a failed symbol. The real adapter currently only inserts validated non-null values; this patch defensively aligns the boundary, with no claimed observed production incident.
+
+A shared gatewayHit lookup now normalizes absent/null/undefined entries and supplies both fallback selection and preferred insertion; the map type exposes the nullish contract without a cast. Four synthetic cases cover mixed valid preferred/nullish public fallback including lowercase original US keys, native TW batch fallback, and empty fallback with explicit attempted/failed/retry diagnostics. Valid preferred quotes retain precedence.
+
+Finite osstack task_b75e1617 initially passed; strict source/synthetic claude-opus-5-5 review accepted three findings (shared lookup, accurate spelling assertions and retry counters). Final task_e9aa5851 passed three focused suites, typecheck/lint/diff with zero verifier issues; final refinements host-verified, not second-reviewed. Evidence: /Users/osborn/.osborn/verification/knowledge-cycle-alpha-i1/opus-gateway-null-20261006-2254/disposition.md and loop-tasks.json. Global loop exit2 reflects historical escalated tasks; this task and both command exit codes passed.
+
+No provider/production/private material/notifications/activation. Prior2071-test full database/build gate at f4784ae remains separate evidence. This small follow-up is local pending a later aggregate push. Published187c43e CI has one manual run37543546276 because stacked PR71 does not match main-only automatic triggers; that run does not test this follow-up. No merge/deployment implied.
