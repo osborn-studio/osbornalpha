@@ -21,7 +21,7 @@
  */
 
 import { unstable_cache } from 'next/cache';
-import { withQuoteSourceTimeout } from '@/lib/quotes/source-timeout';
+import { createSharedSourceRequests } from '@/lib/quotes/shared-source-request';
 import type { Market } from '@/lib/supabase/database.types';
 import type { UniverseRow } from '@/lib/data/mock';
 import { KlineProviderError, type KlineAdjustment, type SourceKlineBar } from '@/lib/data/kline/types';
@@ -281,6 +281,7 @@ async function fetchWithTimeout(url: string, referer: string, timeoutMs = 4000):
 const quoteCache = new Map<string, { q: TwseQuote; at: number; generation: number }>();
 let quoteRequestGeneration = 0;
 const QUOTE_TTL_MS = 60_000;
+const sharedQuoteRequest = createSharedSourceRequests<Map<string, TwseQuote | null>>(4_000);
 
 /**
  * Fetch quotes for a set of TW/TWO tickers in ONE mis request ('|'-joined).
@@ -299,7 +300,7 @@ export async function fetchTwseQuotesBatch(tickers: string[], signal?: AbortSign
   }
   if (misses.length === 0) return result;
   try {
-    const fetched = await withQuoteSourceTimeout(child => fetchTwseQuotes(misses, child), 4_000, signal);
+    const fetched = await sharedQuoteRequest(JSON.stringify([...misses].sort()), child => fetchTwseQuotes(misses, child), signal);
     signal?.throwIfAborted();
     for (const [ticker, value] of fetched) result.set(ticker, value);
   } catch (error) {
@@ -347,7 +348,7 @@ async function fetchTwseQuotes(misses: string[], signal: AbortSignal): Promise<M
   // sharing the same numeric code clobber each other (ranges not disjoint).
   const byKey = new Map<string, MisMsg>();
   for (const m of msgArray) {
-    if (!m.c) continue;
+    if (!m || typeof m !== 'object' || Array.isArray(m) || !m.c) continue;
     const code = String(m.c).toUpperCase();
     byKey.set(m.ex ? `${String(m.ex).toLowerCase()}_${code}` : code, m);
   }

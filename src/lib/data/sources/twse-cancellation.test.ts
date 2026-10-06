@@ -24,11 +24,14 @@ describe('TWSE quote synthetic cancellation and cache safety', () => {
     let deliver:(v:Response)=>void=()=>{};const fetcher=vi.fn().mockImplementationOnce(()=>new Promise(resolve=>{deliver=resolve;})).mockResolvedValueOnce(Response.json(payload('9104')));vi.stubGlobal('fetch',fetcher);
     const c=new AbortController();const result=fetchTwseQuotesBatch(['9104.TW'],c.signal).catch((e:Error)=>e.name);c.abort();expect(await result).toBe('AbortError');const json=vi.fn(async()=>payload('9104'));deliver({ok:true,json} as unknown as Response);await new Promise(resolve=>setTimeout(resolve,0));expect(json).not.toHaveBeenCalled();await fetchTwseQuotesBatch(['9104.TW']);expect(fetcher).toHaveBeenCalledTimes(2);
   });
-  it('keeps independent concurrent callers and successful cache hits intact', async () => {
-    const fetcher=vi.fn().mockImplementationOnce((_,opts)=>new Promise((_,reject)=>opts.signal.addEventListener('abort',()=>reject(new DOMException('synthetic','AbortError')),{once:true}))).mockResolvedValueOnce(Response.json(payload('9105')));vi.stubGlobal('fetch',fetcher);
-    const c=new AbortController();const cancelled=fetchTwseQuotesBatch(['9105.TW'],c.signal).catch((e:Error)=>e.name);const successful=fetchTwseQuotesBatch(['9105.TW']);c.abort();expect(await cancelled).toBe('AbortError');expect((await successful).get('9105.TW')?.price).toBe(12);
-    expect((await fetchTwseQuotesBatch(['9105.TW'])).get('9105.TW')?.source).toBe('twse');expect(fetcher).toHaveBeenCalledTimes(2);
-    const aborted=new AbortController();aborted.abort();await expect(fetchTwseQuotesBatch(['9105.TW'],aborted.signal)).rejects.toMatchObject({name:'AbortError'});expect(fetcher).toHaveBeenCalledTimes(2);
+  it('shares an identical miss batch without letting one caller cancel another', async () => {
+    let child: AbortSignal | undefined;
+    let deliver: (response: Response) => void = () => {};
+    const fetcher=vi.fn().mockImplementationOnce((_,opts)=>{child=opts.signal;return new Promise<Response>(resolve=>{deliver=resolve;});});vi.stubGlobal('fetch',fetcher);
+    const c=new AbortController();const cancelled=fetchTwseQuotesBatch(['9105.TW'],c.signal).catch((e:Error)=>e.name);const successful=fetchTwseQuotesBatch(['9105.TW']);c.abort();expect(await cancelled).toBe('AbortError');expect(child!.aborted).toBe(false);
+    deliver(Response.json(payload('9105')));expect((await successful).get('9105.TW')?.price).toBe(12);
+    expect((await fetchTwseQuotesBatch(['9105.TW'])).get('9105.TW')?.source).toBe('twse');expect(fetcher).toHaveBeenCalledOnce();
+    const aborted=new AbortController();aborted.abort();await expect(fetchTwseQuotesBatch(['9105.TW'],aborted.signal)).rejects.toMatchObject({name:'AbortError'});expect(fetcher).toHaveBeenCalledOnce();
   });
   it('keeps fresh cache hits when another ticker misses and times out', async () => {
     vi.useFakeTimers();const fetcher=vi.fn().mockResolvedValueOnce(Response.json(payload('9111'))).mockImplementationOnce(()=>new Promise(()=>{}));vi.stubGlobal('fetch',fetcher);
@@ -46,4 +49,31 @@ describe('TWSE quote synthetic cancellation and cache safety', () => {
     const fetcher=vi.fn().mockResolvedValueOnce(new Response('{')).mockResolvedValueOnce(Response.json({msgArray:[]}));vi.stubGlobal('fetch',fetcher);
     expect((await fetchTwseQuotesBatch(['9106.TW'])).get('9106.TW')).toBe(null);expect((await fetchTwseQuotesBatch(['9107.TW','NOT-TW'])).get('9107.TW')).toBe(null);expect(fetcher).toHaveBeenCalledTimes(2);
   });
+  it('shares sorted miss sets despite different cached-hit input composition', async () => {
+    let deliver: (response: Response) => void = () => {};
+    const fetcher = vi.fn().mockResolvedValueOnce(Response.json(payload('9301')))
+      .mockImplementationOnce(() => new Promise<Response>(resolve => { deliver = resolve; }));
+    vi.stubGlobal('fetch', fetcher); await fetchTwseQuotesBatch(['9301.TW']);
+    const a = fetchTwseQuotesBatch(['9303.TW', '9302.TW']);
+    const b = fetchTwseQuotesBatch(['9301.TW', '9302.TW', '9303.TW']);
+    deliver(Response.json({ msgArray: [...payload('9302').msgArray, ...payload('9303').msgArray] }));
+    expect((await a).get('9302.TW')?.price).toBe(12); expect((await b).get('9301.TW')?.price).toBe(12);
+    expect((await b).get('9303.TW')?.price).toBe(12); expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+  it('does not deduplicate different overlapping miss sets', async () => {
+    const fetcher = vi.fn().mockImplementation(async () => Response.json({ msgArray: [...payload('9304').msgArray, ...payload('9305').msgArray] }));
+    vi.stubGlobal('fetch', fetcher);
+    const a = fetchTwseQuotesBatch(['9304.TW']); const b = fetchTwseQuotesBatch(['9304.TW', '9305.TW']);
+    expect((await a).get('9304.TW')?.price).toBe(12); expect((await b).get('9305.TW')?.price).toBe(12); expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+  it('skips malformed message elements for every subscriber while preserving missing nulls', async () => {
+    let deliver: (response: Response) => void = () => {};
+    const fetcher = vi.fn().mockImplementation(() => new Promise<Response>(resolve => { deliver = resolve; }));
+    vi.stubGlobal('fetch', fetcher);
+    const a = fetchTwseQuotesBatch(['9306.TW', '9307.TW']); const b = fetchTwseQuotesBatch(['9307.TW', '9306.TW']);
+    deliver(Response.json({ msgArray: [null, [], 4, 'synthetic', ...payload('9306').msgArray] }));
+    for (const pending of [a, b]) { const result = await pending; expect(result.get('9306.TW')?.price).toBe(12); expect(result.get('9307.TW')).toBeNull(); }
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
 });

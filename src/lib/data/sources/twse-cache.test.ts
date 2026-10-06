@@ -57,7 +57,7 @@ describe('TWSE single-layer quote cache synthetic fixtures', () => {
       .mockResolvedValueOnce(Response.json(payload(code, '13')))
       .mockResolvedValueOnce(Response.json(payload(code, '16')));
     vi.stubGlobal('fetch', fetcher);
-    const older = fetchTwseQuotesBatch([ticker]);
+    const older = fetchTwseQuotesBatch([ticker, '9299.TW']);
     const laterStart = equalTicks ? 1000 : 2000;
     clock.mockReturnValue(laterStart);
     expect((await fetchTwseQuotesBatch([ticker])).get(ticker)?.price).toBe(13);
