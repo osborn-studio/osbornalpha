@@ -38,8 +38,33 @@ export function freezeArmPlan(cohort:unknown,arm:PlanArm,payoff:unknown,serverTi
  if(!PLAN_ARMS.includes(arm))fail('invalid_schema');
  if(now<instant(c.enrolled_at)||now>=instant(c.confirmation_deadline))fail('not_configured');
  const choice:Readonly<ArmPayoffPlan>=parseArmPayoffPlan(payoff);
+ return buildArmPlan(c,arm,choice,serverTime);
+}
+function buildArmPlan(c:Readonly<ArmCohort>,arm:PlanArm,choice:Readonly<ArmPayoffPlan>,cutoff:string){
  const payload=Object.freeze({protocol:ARM_PLAN_PROTOCOL,cohort_hash:digest(c),enrollment_id:c.enrollment_id,owner_id:c.owner_id,candidate_id:c.candidate_id,thesis_id:c.thesis_id,
   arm,observation_id:c.observation_ids[arm],security_identity_hash:c.security_identity_hash,calendar_hash:c.calendar_hash,evaluation_policy_hash:c.evaluation_policy_hash,
-  information_cutoff:serverTime,confirmation_deadline:c.confirmation_deadline,session_anchor:c.session_anchor,payoff:choice});
+  information_cutoff:cutoff,confirmation_deadline:c.confirmation_deadline,session_anchor:c.session_anchor,payoff:choice});
  return Object.freeze({payload,payload_hash:digest(payload)});
+
+}
+
+/** Verify canonical field equality at delayed construction against the separately trusted
+ * originating freeze-event hash. Caller must resolve that event under owner lock;
+ * a client-supplied expected hash would provide no immutability/authority proof.
+ * No current time parameter: preserve the original cutoff and common anchor.
+ * Revocation, freshness and whether construction is now allowed remain caller checks. */
+export function verifyFrozenArmPlan(cohort:unknown,arm:PlanArm,value:unknown,expectedPlanHash:string){
+ if(typeof expectedPlanHash!=='string'||!/^[0-9a-f]{64}$/.test(expectedPlanHash))fail('invalid_schema');
+ const envelope=object(value,['payload','payload_hash']);
+ const p=object(envelope.payload,['protocol','cohort_hash','enrollment_id','owner_id','candidate_id','thesis_id','arm','observation_id','security_identity_hash','calendar_hash','evaluation_policy_hash','information_cutoff','confirmation_deadline','session_anchor','payoff']);
+ if(envelope.payload_hash!==expectedPlanHash)fail('hash_mismatch');
+ const c=parseArmCohort(cohort),cutoff=instant(p.information_cutoff);
+ if(!PLAN_ARMS.includes(arm))fail('invalid_schema');
+ if(cutoff<instant(c.enrolled_at)||cutoff>=instant(c.confirmation_deadline))fail('hash_mismatch');
+ const expected=buildArmPlan(c,arm,parseArmPayoffPlan(p.payoff),p.information_cutoff as string);
+ if(expected.payload_hash!==expectedPlanHash)fail('hash_mismatch');
+ for(const [key,v] of Object.entries(expected.payload)){
+  if(key!=='payoff'&&p[key]!==v)fail('hash_mismatch');
+ }
+ return expected;
 }
