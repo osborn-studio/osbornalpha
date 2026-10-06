@@ -52,8 +52,7 @@ create table public.research_s6_arm_events (
  recorded_at timestamptz not null default clock_timestamp(),
  primary key(user_id,id),unique(user_id,enrollment_id),unique(user_id,request_key),
  foreign key(user_id,enrollment_id) references public.research_s6_arm_enrollments(user_id,id),
- check ((sequence=1 and previous_event_hash is null) or
-  (sequence>1 and previous_event_hash is not null and previous_event_hash ~ '^[0-9a-f]{64}$')),
+ check (previous_event_hash is null),
  check (jsonb_typeof(payload)='object'),
  check (event_type<>'terminated' or (
   jsonb_typeof(payload->'reason')='string' and payload->>'reason'='refusal'

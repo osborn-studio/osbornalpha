@@ -94,9 +94,9 @@ describe.skipIf(!process.env.S4_TEST_STATE)('arm lineage actual writer JSONB rou
   const p=testPack(actor.userId,{companyName:'Synthetic arm storage'});
   await admin.query('insert into research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[actor.userId,p.binding.approvedPayloadHash,p.binding]);
   const candidate=await importCandidate(actor,JSON.stringify(p.pack));
-  const enrollment=randomUUID();const now=Date.now();
+  const enrollment=randomUUID();const now=(await admin.query('select clock_timestamp() as t')).rows[0].t.getTime() as number;
   // Structural storage fixture only; never a confirmed human arm or comparison.
-  const cohort=parseArmCohort({protocol:ARM_PLAN_PROTOCOL,owner_id:actor.userId,enrollment_id:enrollment,candidate_id:candidate.id,thesis_id:randomUUID(),security_identity_hash:'a'.repeat(64),calendar_hash:'b'.repeat(64),evaluation_policy_hash:'c'.repeat(64),enrolled_at:new Date(now-1000).toISOString(),confirmation_deadline:new Date(now+60000).toISOString(),session_anchor:new Date(now+120000).toISOString(),observation_ids:{human_baseline:randomUUID(),ai_candidate:randomUUID(),collab:randomUUID()}});
+  const cohort=parseArmCohort({protocol:ARM_PLAN_PROTOCOL,owner_id:actor.userId,enrollment_id:enrollment,candidate_id:candidate.id,thesis_id:randomUUID(),security_identity_hash:'a'.repeat(64),calendar_hash:'b'.repeat(64),evaluation_policy_hash:'c'.repeat(64),enrolled_at:new Date(now-30000).toISOString(),confirmation_deadline:new Date(now+1800000).toISOString(),session_anchor:new Date(now+3600000).toISOString(),observation_ids:{human_baseline:randomUUID(),ai_candidate:randomUUID(),collab:randomUUID()}});
   const hash=digest(cohort),eventId=randomUUID(),key=randomUUID();
   await transaction(actor,async db=>{
    await db.query('insert into research_s6_arm_enrollments(user_id,id,candidate_id,cohort,cohort_hash) values($1,$2,$3,$4,$5)',[actor.userId,enrollment,candidate.id,cohort,hash]);
@@ -128,6 +128,11 @@ describe.skipIf(!process.env.S4_TEST_STATE)('arm lineage actual writer JSONB rou
   for(const [sequence,previous,payload,requestKey] of [[1,null,{reason:'refusal',previous_state:'enrolled'},key],[2,null,{reason:'refusal',previous_state:'enrolled'},randomUUID()],[2,'a'.repeat(64),{},randomUUID()]] as const){
    await expect(transaction(actor,db=>db.query(`insert into research_s6_arm_events(user_id,enrollment_id,id,sequence,event_type,previous_event_hash,payload,payload_hash,request_key,request_hash) values($1,$2,$3,$4,'terminated',$5,$6,$7,$8,$7)`,[actor.userId,enrollment,randomUUID(),sequence,previous,payload,digest(payload),requestKey]))).rejects.toMatchObject({code:sequence===1?'23505':'23514'});
   }
+  const assertValidCohortControl=async()=>{
+   const id=randomUUID(),payload={...cohort,enrollment_id:id};
+   await transaction(actor,db=>db.query('insert into research_s6_arm_enrollments(user_id,id,candidate_id,cohort,cohort_hash) values($1,$2,$3,$4,$5)',[actor.userId,id,candidate.id,payload,digest(payload)]));
+  };
+  await assertValidCohortControl();
   for(const patch of [{extra:true},{owner_id:randomUUID()},{calendar_hash:null},{enrolled_at:new Date(now+600000).toISOString(),confirmation_deadline:new Date(now+900000).toISOString(),session_anchor:new Date(now+1200000).toISOString()},{confirmation_deadline:cohort.enrolled_at},{observation_ids:{...cohort.observation_ids,collab:cohort.observation_ids.ai_candidate}},{session_anchor:'2026-10-07T24:00:00.000Z'}]){
    const id=randomUUID();const payload={...cohort,enrollment_id:id,...patch};await expect(transaction(actor,db=>db.query('insert into research_s6_arm_enrollments(user_id,id,candidate_id,cohort,cohort_hash) values($1,$2,$3,$4,$5)',[actor.userId,id,candidate.id,payload,digest(payload)]))).rejects.toMatchObject({code:'23514'});
   }
@@ -137,6 +142,34 @@ describe.skipIf(!process.env.S4_TEST_STATE)('arm lineage actual writer JSONB rou
   const terminalPayload={reason:'refusal',previous_state:'enrolled'};
   for(const [target,requestKey,constraint] of [[enrollment,randomUUID(),'research_s6_arm_events_user_id_enrollment_id_key'],[second,key,'research_s6_arm_events_user_id_request_key_key']]){
    await expect(transaction(actor,db=>db.query(`insert into research_s6_arm_events(user_id,enrollment_id,id,sequence,event_type,payload,payload_hash,request_key,request_hash) values($1,$2,$3,1,'terminated',$4,$5,$6,$5)`,[actor.userId,target,randomUUID(),terminalPayload,digest(terminalPayload),requestKey]))).rejects.toMatchObject({code:'23505',constraint});
+  }
+
+  // Matching owner claims do not permit a foreign owner's real candidate/enrollment.
+  const other={userId:randomUUID(),kind:'agent' as const};
+  await admin.query('insert into auth.users(id,email) values($1,$2)',[other.userId,other.userId+'@example.test']);
+  await admin.query("update profiles set role='admin' where id=$1",[other.userId]);
+  const foreignId=randomUUID(),foreignCohort={...cohort,owner_id:other.userId,enrollment_id:foreignId};
+  await expect(transaction(other,db=>db.query('insert into research_s6_arm_enrollments(user_id,id,candidate_id,cohort,cohort_hash) values($1,$2,$3,$4,$5)',[other.userId,foreignId,candidate.id,foreignCohort,digest(foreignCohort)]))).rejects.toMatchObject({code:'23503',constraint:'research_s6_arm_enrollments_user_id_candidate_id_fkey'});
+  await expect(transaction(other,db=>db.query(`insert into research_s6_arm_events(user_id,enrollment_id,id,sequence,event_type,payload,payload_hash,request_key,request_hash) values($1,$2,$3,1,'terminated',$4,$5,$6,$5)`,[other.userId,enrollment,randomUUID(),terminalPayload,digest(terminalPayload),randomUUID()]))).rejects.toMatchObject({code:'23503',constraint:'research_s6_arm_events_user_id_enrollment_id_fkey'});
+  for(const role of ['anon','authenticated','service_role'])for(const table of ['research_s6_arm_enrollments','research_s6_arm_events']){
+   const db=await admin.connect();try{
+    await db.query('begin');await db.query(`set local role ${role}`);
+    if(table==='research_s6_arm_enrollments')await expect(db.query('insert into research_s6_arm_enrollments(user_id,id,candidate_id,cohort,cohort_hash) values($1,$2,$3,$4,$5)',[actor.userId,second,candidate.id,secondCohort,digest(secondCohort)])).rejects.toMatchObject({code:'42501'});
+    else await expect(db.query(`insert into research_s6_arm_events(user_id,enrollment_id,id,sequence,event_type,payload,payload_hash,request_key,request_hash) values($1,$2,$3,1,'terminated',$4,$5,$6,$5)`,[actor.userId,second,randomUUID(),terminalPayload,digest(terminalPayload),randomUUID()])).rejects.toMatchObject({code:'42501'});
+   }finally{await db.query('rollback');db.release();}
+  }
+  const invalidCohorts:Record<string,unknown>[]=[];
+  for(const field of ['thesis_id','security_identity_hash','calendar_hash','evaluation_policy_hash','enrolled_at','confirmation_deadline','session_anchor'])for(const value of [0,null,[]])invalidCohorts.push({...cohort,[field]:value});
+  const missing={...cohort} as Record<string,unknown>;delete missing.thesis_id;invalidCohorts.push(missing,{...cohort,thesis_id:'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA'},{...cohort,observation_ids:{...cohort.observation_ids,extra:randomUUID()}},{...cohort,session_anchor:cohort.confirmation_deadline});
+  await assertValidCohortControl();
+  for(const raw of invalidCohorts){
+   const id=randomUUID(),payload={...raw,enrollment_id:id};await expect(transaction(actor,db=>db.query('insert into research_s6_arm_enrollments(user_id,id,candidate_id,cohort,cohort_hash) values($1,$2,$3,$4,$5)',[actor.userId,id,candidate.id,payload,digest(payload)]))).rejects.toMatchObject({code:'23514'});
+  }
+  // Any non-null previous hash is forbidden at seq1; no hash-format coverage claimed.
+  // Unused enrollment isolates CHECK refusals from unique-enrollment collisions.
+  for(const patch of [{sequence:0},{sequence:101},{event_type:'baseline.confirmed'},{previous_event_hash:'a'.repeat(64)},{request_key:'short'},{request_key:'invalid key'},{payload:[]},{payload:{reason:'revocation',previous_state:'enrolled'}},{payload:{reason:'refusal',previous_state:'ai_exposed'}},{payload:{reason:0,previous_state:'enrolled'}},{payload:{...terminalPayload,extra:true}}]){
+   const input={sequence:1,event_type:'terminated',previous_event_hash:null,request_key:randomUUID(),payload:terminalPayload,...patch};
+   await expect(transaction(actor,db=>db.query('insert into research_s6_arm_events(user_id,enrollment_id,id,sequence,event_type,previous_event_hash,payload,payload_hash,request_key,request_hash) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$8)',[actor.userId,second,randomUUID(),input.sequence,input.event_type,input.previous_event_hash,input.payload,digest(input.payload),input.request_key]))).rejects.toMatchObject({code:'23514'});
   }
   const rollbackId=randomUUID();
   await expect(transaction(actor,async db=>{await db.query('insert into research_s6_arm_enrollments(user_id,id,candidate_id,cohort,cohort_hash) values($1,$2,$3,$4,$5)',[actor.userId,rollbackId,candidate.id,{...cohort,enrollment_id:rollbackId},hash]);throw new Error('synthetic rollback');})).rejects.toThrow('synthetic rollback');
