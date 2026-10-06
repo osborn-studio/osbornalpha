@@ -17,7 +17,7 @@ describe('research database CI cannot silently skip', () => {
     r.testResults[0].assertionResults = [];
     expect(() => verifyDatabaseReport(r)).toThrow('missing/empty');
   });
-  it('accepts executed critical tests', () => expect(verifyDatabaseReport(report()).criticalPassed).toBe(12));
+  it('accepts executed critical tests', () => expect(verifyDatabaseReport(report()).criticalPassed).toBe(criticalSuites.length));
   it('pins the recovered historical SQL and rejects deletion/duplicate versions/tampering', () => {
     expect(migrationInventory().some(m => m.file === recoveredMigration.file)).toBe(true);
     const root = mkdtempSync(join(tmpdir(), 'alpha-migration-contract-'));

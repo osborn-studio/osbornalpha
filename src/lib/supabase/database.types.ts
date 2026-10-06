@@ -497,6 +497,10 @@ export type Database = {
       stripe_events: { Row: StripeEvent; Insert: Partial<StripeEvent>; Update: Partial<StripeEvent> };
     };
     Functions: {
+      quote_alert_window_samples: {
+        Args: { p_from: string; p_to: string };
+        Returns: Array<{ event_name: string; metadata: { count: number | null; stale: number | null } }>;
+      };
       search_securities: {
         Args: { p_query: string; p_limit?: number };
         Returns: SecuritySearchRow[];
