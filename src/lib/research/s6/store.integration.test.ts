@@ -1,3 +1,6 @@
+import {addRecord} from '../s4/records';
+import {loadArmEvaluationHistory} from './arm-evaluation-read';
+import {verifyArmEvaluationBatch} from './arm-evaluations';
 import {fenceEvaluationIntents} from './intent-fence';
 import {beforeAll,afterAll,describe,it,expect} from 'vitest';
 import {readFileSync} from 'node:fs';
@@ -86,6 +89,30 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
   const store=remote(),before=await store.readObservation(id);
   const proof=await assertEvaluationStoreConformance({store,input:body.input});expect(proof.passed).toBe(true);
   const accepted=proof.commit_receipt;expect(accepted.status).toBe('accepted');
+  const history=(await admin.query('select * from research_s6_evaluations where user_id=$1 and observation_id=$2',[actor.userId,id])).rows;
+  const controls=(await admin.query("select * from research_s4_records where user_id=$1 and candidate_id=$2 and kind='ControlEvent' and payload->>'type'='evaluation.append' and payload->>'observation_ref'=$3",[actor.userId,candidate,id])).rows;
+  const verify=(rows=history,events=controls)=>verifyArmEvaluationBatch(actor.userId,candidate,id,before.sha256,rows,events);
+  expect(verify().highestInBatch?.id).toBe(accepted.evaluation_ref);
+  expect((await transaction(actor,db=>loadArmEvaluationHistory(db,actor,candidate,id,before.sha256)))?.id).toBe(accepted.evaluation_ref);
+  const preCorruption=await counts();
+  for(const patch of [{observation_ref:randomUUID()},{evaluation_ref:randomUUID()}]){
+   await expect(transaction(actor,async db=>{
+    await addRecord(db,actor,candidate,'ControlEvent',{...controls[0].payload,...patch},{outbox:false});
+    return loadArmEvaluationHistory(db,actor,candidate,id,before.sha256);
+   })).rejects.toThrow('hash_mismatch');
+   expect(await counts()).toEqual(preCorruption);
+  }
+  expect(()=>verify(history,[])).toThrow('hash_mismatch');
+  expect(()=>verify([...history,...history],[...controls,...controls])).toThrow('hash_mismatch');
+  const tampered=structuredClone(controls);tampered[0].payload.input_sha256='0'.repeat(64);tampered[0].payload_hash=digest(tampered[0].payload);
+  expect(()=>verify(history,tampered)).toThrow('hash_mismatch');
+  expect(()=>verifyArmEvaluationBatch(actor.userId,candidate,id,'0'.repeat(64),history,controls)).toThrow('hash_mismatch');
+  expect(()=>verify(Array.from({length:101},()=>history[0]),[])).toThrow('input_limit');
+  expect(()=>verify(history,Array.from({length:101},()=>controls[0]))).toThrow('input_limit');
+  for(const patch of [{user_id:randomUUID()},{candidate_id:randomUUID()},{kind:'HumanLabel'}])expect(()=>verify(history,[{...controls[0],...patch}])).toThrow('hash_mismatch');
+  for(const patch of [{revision:99},{expected_revision:99},{observation_ref:randomUUID()}]){
+   const c=structuredClone(controls[0]);Object.assign(c.payload,patch);c.payload_hash=digest(c.payload);expect(()=>verify(history,[c])).toThrow('hash_mismatch');
+  }
   const n=await counts();const retry=await store.commitEvaluationResult(body);expect(retry.status).toBe('duplicate');expect(retry.evaluation_ref).toBe(accepted.evaluation_ref);expect(await counts()).toEqual(n);
   const after=await store.readObservation(id);expect(after.observation).toEqual(before.observation);expect(after.revision).toBe(1);
   expect(body.result.status).toBe('pending_start');
@@ -243,6 +270,12 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
     await expect(fenceEvaluationIntents(other,id,recoveryKey)).rejects.toMatchObject({code:'not_found'});
     const revision=order==='cancel-first'?1:2;
     const later=await store.commitEvaluationResult(makeCommit(commit.input,randomUUID(),revision));expect(later.revision).toBe(revision+1);
+    const history=(await admin.query('select * from research_s6_evaluations where user_id=$1 and observation_id=$2',[actor.userId,id])).rows;
+    const controls=(await admin.query("select * from research_s4_records where user_id=$1 and kind='ControlEvent' and payload->>'type'='evaluation.append' and payload->>'observation_ref'=$2",[actor.userId,id])).rows;
+    const candidateId=controls[0].candidate_id;
+    expect((await transaction(actor,db=>loadArmEvaluationHistory(db,actor,candidateId,id,commit.input.observation_sha256)))?.id).toBe(later.evaluation_ref);
+    expect(verifyArmEvaluationBatch(actor.userId,candidateId,id,commit.input.observation_sha256,[...history].sort((a,b)=>b.receipt.revision-a.receipt.revision),controls).highestInBatch?.id).toBe(later.evaluation_ref);
+
     const checkpoint=await before();expect(await resolve()).toMatchObject({status:'fenced',revision});expect(await before()).toEqual(checkpoint);
     expect((await store.readObservation(id)).revision).toBe(revision+1);
    }
@@ -524,7 +557,14 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
  });
  it('exports old Replay beyond the bounded report page',async()=>{
   const p=await prepareEvaluation(actor,id),input=await prepareInput(actor,id,p.marketIds,p.asOf),store=createS6Store(actor);
-  for(let revision=p.revision;revision<103;revision++)await store.commitEvaluationResult(makeCommit(input,randomUUID(),revision));
+  let checked100=false;
+  for(let revision=p.revision;revision<103;revision++){
+   const receipt=await store.commitEvaluationResult(makeCommit(input,randomUUID(),revision));
+   const count=Number((await admin.query('select count(*) n from research_s6_evaluations where user_id=$1 and observation_id=$2',[actor.userId,id])).rows[0].n);
+   if(count===100){checked100=true;expect((await transaction(actor,db=>loadArmEvaluationHistory(db,actor,candidate,id,input.observation_sha256)))?.id).toBe(receipt.evaluation_ref);}
+  }
+  expect(checked100).toBe(true);
+  await expect(transaction(actor,db=>loadArmEvaluationHistory(db,actor,candidate,id,input.observation_sha256))).rejects.toThrow('input_limit');
   const report=await observationReport(actor,id);expect('evaluations' in report&&report.evaluations?.length).toBe(100);expect('historyTruncated' in report&&report.historyTruncated).toBe(true);
   const oldest=(await admin.query('select id from research_s6_evaluations where user_id=$1 and idempotency_key=$2',[actor.userId,body.idempotency_key])).rows[0];
   const replay=await observationReport(actor,id,oldest.id);expect('replay' in replay&&replay.replay?.matches).toBe(true);

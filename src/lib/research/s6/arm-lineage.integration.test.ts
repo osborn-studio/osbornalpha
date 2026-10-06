@@ -6,9 +6,11 @@ import {testPack} from '../../../../scripts/s4/test-pack';
 import {importCandidate} from '../s4/import';
 import {revealCards} from '../s4/cards';
 import {submitDecision} from '../s4/decisions';
-import {closeS4Pool} from '../s4/db';
+import {transaction,closeS4Pool} from '../s4/db';
 import {validateArmS4Lineage,type ArmLineageRecord} from './arm-lineage';
 import type {ArmRoutingRow} from './arm-eligibility';
+import {loadArmRoutingWindow} from './arm-routing';
+import {recordDecision} from '../s4/ledger';
 import {digest} from '../ingest/pa-v1/json.js';
 // Actual legacy S4 writers with synthetic agent input. Not registered disclosure acceptance.
 describe.skipIf(!process.env.S4_TEST_STATE)('arm lineage actual writer JSONB round-trip',()=>{
@@ -48,6 +50,17 @@ describe.skipIf(!process.env.S4_TEST_STATE)('arm lineage actual writer JSONB rou
   const row:ArmRoutingRow={decision_id:randomUUID(),research_card_id:randomUUID(),thesis_id:thesis,week_of:l.payload.evaluation_period_id as string,arm:'collab',action:'adopt',observation_id:o.id};
   expect(validateArmS4Lineage(actor.userId,row,records).s4_decision_id).toBe(d.id);
   expect(()=>validateArmS4Lineage(actor.userId,{...row,arm:'human_baseline'},records)).toThrow('not_configured');
+  // Actual ledger read projection, still not proof that this synthetic card ID exists.
+  expect(await transaction(actor,db=>loadArmRoutingWindow(db,actor))).toEqual([]);
+  const ledger=await recordDecision(actor,{thesis_id:thesis,week_of:row.week_of,arm:'collab',action:'adopt',reason:'Synthetic routing test only',card_id:row.research_card_id,observation_id:o.id});
+  const routed=await transaction(actor,db=>loadArmRoutingWindow(db,actor,row.week_of));
+  expect(routed).toEqual([{...row,decision_id:ledger.id}]);
+  expect(typeof routed[0].week_of).toBe('string');
+  expect(await transaction(actor,db=>loadArmRoutingWindow(db,actor,'9999-12-31'))).toEqual([]);
+  await recordDecision(actor,{thesis_id:thesis,week_of:'1900-01-01',arm:'collab',action:'adopt',reason:'Synthetic unsupported row with missing observation'});
+  await expect(transaction(actor,db=>loadArmRoutingWindow(db,actor))).rejects.toThrow('not_configured');
+  await recordDecision(actor,{thesis_id:thesis,week_of:'1900-01-08',arm:'collab',action:'adopt',reason:'Synthetic observation reuse across boundary',card_id:row.research_card_id,observation_id:o.id});
+  await expect(transaction(actor,db=>loadArmRoutingWindow(db,actor,row.week_of))).rejects.toThrow('not_configured');
   const bad=structuredClone(records);bad[2].payload.card_hash='0'.repeat(64);bad[2].payload_hash=digest(bad[2].payload);bad[0].payload.input_snapshot_hash=bad[2].payload_hash;bad[0].payload_hash=digest(bad[0].payload);
   expect(()=>validateArmS4Lineage(actor.userId,row,bad)).toThrow('hash_mismatch');
   expect(()=>validateArmS4Lineage(randomUUID(),row,records)).toThrow('hash_mismatch');
@@ -63,5 +76,15 @@ describe.skipIf(!process.env.S4_TEST_STATE)('arm lineage actual writer JSONB rou
   const shadowSnapshot=newer.find(r=>r.id===shadowObs.payload.input_snapshot_ref)!;
   expect(shadowObs.payload.observation_kind).toBe('shadow');
   expect(validateArmS4Lineage(actor.userId,{...row,action:'reject',observation_id:shadowObs.id},[shadowObs,shadowDecision,shadowSnapshot,c,t,l]).observation_id).toBe(shadowObs.id);
+ });
+ it('detects 101 persisted rows before unsupported-row checks, rather than silently truncating at100',async()=>{
+  const a={userId:randomUUID(),kind:'agent' as const};
+  await admin.query('insert into auth.users(id,email) values($1,$2)',[a.userId,a.userId+'@example.test']);
+  await admin.query("update profiles set role='admin' where id=$1",[a.userId]);
+  const thesis=(await admin.query("insert into research_theses(user_id,title,body) values($1,'Synthetic overflow','Synthetic only') returning id",[a.userId])).rows[0].id;
+  for(let i=0;i<100;i++)await recordDecision(a,{thesis_id:thesis,week_of:'2026-10-05',arm:'collab',action:'adopt',reason:'Synthetic unlinked routing count'});
+  await expect(transaction(a,db=>loadArmRoutingWindow(db,a))).rejects.toThrow('not_configured');
+  await recordDecision(a,{thesis_id:thesis,week_of:'2026-10-05',arm:'collab',action:'adopt',reason:'Synthetic overflow row101'});
+  await expect(transaction(a,db=>loadArmRoutingWindow(db,a))).rejects.toThrow('input_limit');
  });
 });
