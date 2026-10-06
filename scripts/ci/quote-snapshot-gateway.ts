@@ -8,10 +8,12 @@ import assert from 'node:assert/strict';
 import { Pool } from 'pg';
 import { startLocalDatabase, stopLocalDatabase } from '../s4/local-db';
 import { startOwnedGateway, stopOwnedGateway, bounded } from './owned-gateway';
+import { verifyAlertReceipts } from './alert-receipt-acceptance';
 
 async function main() {
   const binary = process.env.QUOTE_TEST_POSTGREST_BIN || '/opt/homebrew/bin/postgrest';
   const version = execFileSync(binary, ['--version'], { encoding: 'utf8', timeout: 5000 }).trim();
+  assert.equal(version, 'PostgREST 16.4', 'This acceptance is pinned to the tested gateway version');
   const state = await startLocalDatabase();
   const db = new Pool({ connectionString: state.adminUrl, connectionTimeoutMillis: 5000, statement_timeout: 10000 });
   let owned: ReturnType<typeof startOwnedGateway> | undefined;
@@ -41,9 +43,9 @@ async function main() {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     assert(ready, 'Owned gateway readiness timeout');
-    function token(role: string) {
+    function token(role: string, expired = false) {
       const encoded = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
-      const data = encoded({ alg: 'HS256', typ: 'JWT' }) + '.' + encoded({ role, exp: Math.floor(Date.now() / 1000) + 120 });
+      const data = encoded({ alg: 'HS256', typ: 'JWT' }) + '.' + encoded({ role, exp: Math.floor(Date.now() / 1000) + (expired ? -60 : 120) });
       return data + '.' + createHmac('sha256', secret).update(data).digest('base64url');
     }
     const headers = { authorization: 'Bearer ' + token('service_role'), 'content-type': 'application/json' };
@@ -61,6 +63,7 @@ async function main() {
       response = await fetch(origin + '/rpc/quote_alert_window_samples', { method: 'POST', headers: { ...headers, authorization: 'Bearer ' + token(role) }, body: JSON.stringify(window), signal: AbortSignal.timeout(5000) });
       assert.equal(response.status, role === 'anon' ? 401 : 403); assert.equal((await response.json()).code, '42501');
     }
+    await verifyAlertReceipts(origin, token, db);
     console.log(JSON.stringify({ scope: 'synthetic owned loopback gateway; not production equivalence', postgrest: version, postgres: state.postgresVersion, rowCap: 1000, tableRows: 1000, scalarSamples: 1500, sentinel: 10001, deniedRoles: ['anon', 'authenticated'] }));
   } catch (error) { primary = error; }
   finally {
