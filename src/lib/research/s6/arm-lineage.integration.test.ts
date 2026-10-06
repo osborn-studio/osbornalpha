@@ -11,6 +11,7 @@ import {validateArmS4Lineage,type ArmLineageRecord} from './arm-lineage';
 import type {ArmRoutingRow} from './arm-eligibility';
 import {loadArmRoutingWindow} from './arm-routing';
 import {recordDecision} from '../s4/ledger';
+import {parseArmCohort,ARM_PLAN_PROTOCOL} from './arm-plan';
 import {digest} from '../ingest/pa-v1/json.js';
 // Actual legacy S4 writers with synthetic agent input. Not registered disclosure acceptance.
 describe.skipIf(!process.env.S4_TEST_STATE)('arm lineage actual writer JSONB round-trip',()=>{
@@ -20,6 +21,8 @@ describe.skipIf(!process.env.S4_TEST_STATE)('arm lineage actual writer JSONB rou
   const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
   process.env.ALPHA_S4_ENABLED='1';process.env.ALPHA_S4_DATABASE_URL=state.runtimeUrl;
   admin=new Pool({connectionString:state.adminUrl});
+  // Explicit isolated fixture DDL, deliberately not a deployable migration.
+  await admin.query(readFileSync('docs/contracts/prototypes/arm-enrollment-storage.sql','utf8'));
   await admin.query('insert into auth.users(id,email) values($1,$2)',[actor.userId,actor.userId+'@example.test']);
   await admin.query("update profiles set role='admin' where id=$1",[actor.userId]);
   await admin.query(`insert into stocks_universe(ticker,name,market,exchange,currency,metadata) values('ARMSYNTH','Synthetic','US','XNYS','USD','{"synthetic":true}') on conflict do nothing`);
@@ -87,4 +90,58 @@ describe.skipIf(!process.env.S4_TEST_STATE)('arm lineage actual writer JSONB rou
   await recordDecision(a,{thesis_id:thesis,week_of:'2026-10-05',arm:'collab',action:'adopt',reason:'Synthetic overflow row101'});
   await expect(transaction(a,db=>loadArmRoutingWindow(db,a))).rejects.toThrow('input_limit');
  });
+ it('persists candidate-only arm enrollment storage with real owner RLS, immutable rows and rollback',async()=>{
+  const p=testPack(actor.userId,{companyName:'Synthetic arm storage'});
+  await admin.query('insert into research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[actor.userId,p.binding.approvedPayloadHash,p.binding]);
+  const candidate=await importCandidate(actor,JSON.stringify(p.pack));
+  const enrollment=randomUUID();const now=Date.now();
+  // Structural storage fixture only; never a confirmed human arm or comparison.
+  const cohort=parseArmCohort({protocol:ARM_PLAN_PROTOCOL,owner_id:actor.userId,enrollment_id:enrollment,candidate_id:candidate.id,thesis_id:randomUUID(),security_identity_hash:'a'.repeat(64),calendar_hash:'b'.repeat(64),evaluation_policy_hash:'c'.repeat(64),enrolled_at:new Date(now-1000).toISOString(),confirmation_deadline:new Date(now+60000).toISOString(),session_anchor:new Date(now+120000).toISOString(),observation_ids:{human_baseline:randomUUID(),ai_candidate:randomUUID(),collab:randomUUID()}});
+  const hash=digest(cohort),eventId=randomUUID(),key=randomUUID();
+  await transaction(actor,async db=>{
+   await db.query('insert into research_s6_arm_enrollments(user_id,id,candidate_id,cohort,cohort_hash) values($1,$2,$3,$4,$5)',[actor.userId,enrollment,candidate.id,cohort,hash]);
+   const payload={reason:'refusal',previous_state:'enrolled'};
+   await db.query(`insert into research_s6_arm_events(user_id,enrollment_id,id,sequence,event_type,payload,payload_hash,request_key,request_hash) values($1,$2,$3,1,'terminated',$4,$5,$6,$5)`,[actor.userId,enrollment,eventId,payload,digest(payload),key]);
+  });
+  const rows=await transaction(actor,db=>db.query('select cohort,cohort_hash from research_s6_arm_enrollments where id=$1',[enrollment]));
+  expect(rows.rows[0]).toEqual({cohort,cohort_hash:hash});
+  const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
+  const runtime=new Pool({connectionString:state.runtimeUrl});const db=await runtime.connect();
+  try{
+   await db.query('begin');await db.query("select set_config('request.jwt.claim.sub',$1,true)",[randomUUID()]);
+   expect((await db.query('select * from research_s6_arm_enrollments where id=$1',[enrollment])).rowCount).toBe(0);
+   expect((await db.query('select * from research_s6_arm_events where id=$1',[eventId])).rowCount).toBe(0);
+   await expect(db.query('insert into research_s6_arm_enrollments(user_id,id,candidate_id,cohort,cohort_hash) values($1,$2,$3,$4,$5)',[actor.userId,randomUUID(),candidate.id,cohort,hash])).rejects.toMatchObject({code:'42501'});
+  }finally{await db.query('rollback');db.release();await runtime.end();}
+  for(const role of ['anon','authenticated','service_role'])for(const table of ['research_s6_arm_enrollments','research_s6_arm_events']){
+   const db=await admin.connect();try{await db.query('begin');await db.query(`set local role ${role}`);await expect(db.query(`select * from ${table}`)).rejects.toMatchObject({code:'42501'});}finally{await db.query('rollback');db.release();}
+   expect((await admin.query("select has_any_column_privilege($1,$2,'INSERT') as allowed",[role,table])).rows[0].allowed).toBe(false);
+  }
+  for(const table of ['research_s6_arm_enrollments','research_s6_arm_events']){
+   for(const action of [`update ${table} set recorded_at=now()`,`delete from ${table}`,`truncate ${table}`])await expect(transaction(actor,db=>db.query(action))).rejects.toMatchObject({code:'42501'});
+   await expect(admin.query(`truncate ${table} cascade`)).rejects.toMatchObject({code:'23514'});
+
+   await expect(admin.query(`update ${table} set recorded_at=now() where user_id=$1`,[actor.userId])).rejects.toMatchObject({code:'23514'});
+   await expect(admin.query(`delete from ${table} where user_id=$1`,[actor.userId])).rejects.toMatchObject({code:'23514'});
+  }
+  await expect(transaction(actor,db=>db.query('insert into research_s6_arm_enrollments(user_id,id,candidate_id,cohort,cohort_hash) values($1,$2,$3,$4,$5)',[actor.userId,randomUUID(),candidate.id,cohort,hash]))).rejects.toMatchObject({code:'23514'});
+  for(const [sequence,previous,payload,requestKey] of [[1,null,{reason:'refusal',previous_state:'enrolled'},key],[2,null,{reason:'refusal',previous_state:'enrolled'},randomUUID()],[2,'a'.repeat(64),{},randomUUID()]] as const){
+   await expect(transaction(actor,db=>db.query(`insert into research_s6_arm_events(user_id,enrollment_id,id,sequence,event_type,previous_event_hash,payload,payload_hash,request_key,request_hash) values($1,$2,$3,$4,'terminated',$5,$6,$7,$8,$7)`,[actor.userId,enrollment,randomUUID(),sequence,previous,payload,digest(payload),requestKey]))).rejects.toMatchObject({code:sequence===1?'23505':'23514'});
+  }
+  for(const patch of [{extra:true},{owner_id:randomUUID()},{calendar_hash:null},{enrolled_at:new Date(now+600000).toISOString(),confirmation_deadline:new Date(now+900000).toISOString(),session_anchor:new Date(now+1200000).toISOString()},{confirmation_deadline:cohort.enrolled_at},{observation_ids:{...cohort.observation_ids,collab:cohort.observation_ids.ai_candidate}},{session_anchor:'2026-10-07T24:00:00.000Z'}]){
+   const id=randomUUID();const payload={...cohort,enrollment_id:id,...patch};await expect(transaction(actor,db=>db.query('insert into research_s6_arm_enrollments(user_id,id,candidate_id,cohort,cohort_hash) values($1,$2,$3,$4,$5)',[actor.userId,id,candidate.id,payload,digest(payload)]))).rejects.toMatchObject({code:'23514'});
+  }
+  await expect(transaction(actor,db=>db.query('insert into research_s6_arm_enrollments(user_id,id,candidate_id,cohort,cohort_hash,recorded_at) values($1,$2,$3,$4,$5,now())',[actor.userId,randomUUID(),candidate.id,cohort,hash]))).rejects.toMatchObject({code:'42501'});
+  const second=randomUUID();const secondCohort={...cohort,enrollment_id:second};
+  await transaction(actor,db=>db.query('insert into research_s6_arm_enrollments(user_id,id,candidate_id,cohort,cohort_hash) values($1,$2,$3,$4,$5)',[actor.userId,second,candidate.id,secondCohort,digest(secondCohort)]));
+  const terminalPayload={reason:'refusal',previous_state:'enrolled'};
+  for(const [target,requestKey,constraint] of [[enrollment,randomUUID(),'research_s6_arm_events_user_id_enrollment_id_key'],[second,key,'research_s6_arm_events_user_id_request_key_key']]){
+   await expect(transaction(actor,db=>db.query(`insert into research_s6_arm_events(user_id,enrollment_id,id,sequence,event_type,payload,payload_hash,request_key,request_hash) values($1,$2,$3,1,'terminated',$4,$5,$6,$5)`,[actor.userId,target,randomUUID(),terminalPayload,digest(terminalPayload),requestKey]))).rejects.toMatchObject({code:'23505',constraint});
+  }
+  const rollbackId=randomUUID();
+  await expect(transaction(actor,async db=>{await db.query('insert into research_s6_arm_enrollments(user_id,id,candidate_id,cohort,cohort_hash) values($1,$2,$3,$4,$5)',[actor.userId,rollbackId,candidate.id,{...cohort,enrollment_id:rollbackId},hash]);throw new Error('synthetic rollback');})).rejects.toThrow('synthetic rollback');
+  expect((await admin.query('select 1 from research_s6_arm_enrollments where id=$1',[rollbackId])).rowCount).toBe(0);
+  expect((await admin.query('select 1 from research_s6_arm_events where enrollment_id=$1',[enrollment])).rowCount).toBe(1);
+ });
+
 });
