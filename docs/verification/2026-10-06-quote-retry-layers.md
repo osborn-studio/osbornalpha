@@ -145,3 +145,41 @@ Next Data Cache30s plus module cache60s freshness, concurrent-miss deduplication
 Tushare cached cancellation and provider Retry-After remain open. No freshness
 or shared-cache policy was silently changed. Remote PR71 still draft1bf26cc;
 local work held for aggregate push with no new Actions or production requests.
+
+## Tushare owned request deadline (16:54 batch)
+
+The low-level Tushare call now keeps its existing default8s budget across both
+fetch and JSON decoding, rather than clearing the timer immediately on receiving
+headers. Source-timeout races uncooperative fetch/body promises, aborts owned
+resources and guards late completion before mapping rows. HTTP/provider errors,
+empty rows and malformed JSON behavior remain unchanged; no automatic provider
+retry was added. Invalid nonfinite/nonpositive timeout values refuse dispatch.
+
+This affects all low-level Tushare consumers. Existing Next unstable_cache TTLs
+and arguments are unchanged. Cached operations own their request deadline; no
+caller AbortSignal is serialized into cache keys or allowed to cancel another
+subscriber's owned work. A route subscriber can stop awaiting at2.5s while that
+owned request continues for up to8s. Immediate cancellation of paid work/cost
+reversal is not implemented or claimed. Six new synthetic tests exercise body
+stall, combined slow fetch/body, ignored abort, errors/mapping and refusal.
+
+Initial task_cdcbde1e passed nine focused suites/typecheck/lint/diff with0
+verifier issues; no provider/production requests, database or Actions run.
+Provider Retry-After, richer provider failure metadata and shared-cache freshness
+remain open follow-up work.
+
+Opus5.5 task_5ad42030 accepted three minor findings: reject delays above
+2^31-1 to avoid Node timer overflow; identify Tushare deadline errors with
+Tushare-specific wording and stable TimeoutError name; verify real body stream
+release rather than signal-only synthetic controls. Original code used ordinary
+AbortController (not AbortSignal.timeout); supplied consumers/cached wrappers
+contained no DOMException instanceof dependency, and route diagnostics classify
+timed-out messages. Existing non-timeout errors still propagate unchanged.
+
+Added a real undici fixture with an owned127.0.0.1 HTTP server. The provider URL
+is intercepted, only the synthetic token/body reaches loopback, and a stalled
+JSON stream closes on the250ms deadline; server connections/listener are cleaned.
+No external provider or production network request is made. Final task_c23f55c9
+passed nine suites/typecheck/lint/diff with0 verifier issues. Seven new tests.
+Final fixes host verified, not second-reviewed; subsequent formatting-only
+indentation verified with diff check.
