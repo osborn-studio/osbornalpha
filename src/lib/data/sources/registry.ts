@@ -25,7 +25,7 @@ export interface NamedFetcher {
 const eastmoney: NamedFetcher = { name: 'eastmoney', fetch: (t, signal) => fetchEastmoneyQuote(t, signal) };
 const sina: NamedFetcher = { name: 'sina', fetch: (t, signal) => fetchSinaQuote(t, 4000, signal) };
 const tencent: NamedFetcher = { name: 'tencent', fetch: (t, signal) => fetchTencentQuote(t, 4000, signal) };
-const twse: NamedFetcher = { name: 'twse', fetch: (t) => fetchTwseQuote(t) };
+const twse: NamedFetcher = { name: 'twse', fetch: (t, signal) => fetchTwseQuote(t, signal) };
 const eodhd: NamedFetcher = { name: 'eodhd', fetch: (t) => fetchEodhdQuote(t) };
 const datagatewayWind: NamedFetcher = { name: 'datagateway-wind', fetch: (t, signal) => fetchDatagatewayRealtimeQuote(t, { signal }) };
 

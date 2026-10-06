@@ -100,6 +100,13 @@ describe('GET /api/quote/batch DataGateway routing', () => {
     const pending=GET(new Request('https://example.test/api/quote/batch?tickers=600777.SH&_=1'));
     await vi.advanceTimersByTimeAsync(2700);expect((await pending).status).toBe(200);expect(mocks.paidDaily).toHaveBeenCalledTimes(1);expect(mocks.paidBasic).toHaveBeenCalledTimes(1);await vi.advanceTimersByTimeAsync(20_000);expect(mocks.paidDaily).toHaveBeenCalledTimes(1);expect(vi.getTimerCount()).toBe(0);
   });
+  it('forwards route disconnect to TWSE and discards late provider results', async () => {
+    let deliver:(v:Map<string,ReturnType<typeof quote>>)=>void=()=>{};let child:AbortSignal|undefined;
+    mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map());mocks.fetchTwseQuotesBatch.mockImplementationOnce((_,signal)=>{child=signal;return new Promise(resolve=>{deliver=resolve;});});
+    const c=new AbortController();const pending=GET(new Request('https://example.test/api/quote/batch?tickers=9115.TW',{signal:c.signal}));await new Promise(resolve=>setTimeout(resolve,0));expect(child).toBeInstanceOf(AbortSignal);c.abort();expect((await pending).status).toBe(503);expect(child!.aborted).toBe(true);
+    deliver(new Map([['9115.TW',quote('9115.TW','twse')]]));await new Promise(resolve=>setTimeout(resolve,0));mocks.fetchTwseQuotesBatch.mockResolvedValue(new Map());
+    const body=await (await GET(new Request('https://example.test/api/quote/batch?tickers=9115.TW'))).json();expect(body.quotes['9115.TW']).toBe(null);expect(body.meta.selected_sources['9115.TW']).toBeUndefined();
+  });
   it('queries DataGateway once and falls back only for missing tickers', async () => {
     const response = await GET(new Request('https://example.test/api/quote/batch?tickers=AAPL,MSFT&_=1'));
     const body = await response.json();

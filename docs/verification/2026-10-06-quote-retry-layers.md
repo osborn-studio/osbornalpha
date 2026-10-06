@@ -101,3 +101,47 @@ preserves partial results; add pre-abort/disconnect/late-cache/partial-stale rou
 regressions. Also addressed retry-sleep cleanup and paid-wrapper overlap notes.
 Remaining TWSE/Tushare inner cancellation and server provider Retry-After
 semantics are still open; this batch is not all of D3.2.
+
+## TWSE inner quote cancellation (interrupted15:54, resumed16:24)
+
+TWSE quote APIs accept an optional AbortSignal; batch route and registry pass
+it through. A4s provider wrapper covers both fetch and JSON-body await, with
+cooperative abort and a race for implementations ignoring abort. Checks before
+dispatch and before synchronous provider-cache writes prevent late cancelled
+responses/bodies populating the shared TWSE quote cache. Successful independent
+callers and60s cache hits keep existing semantics; pre-aborted cache reads are
+refused. Daily/universe network helpers remain unchanged.
+
+Six new synthetic tests cover pre-abort, cooperative fetch abort, stalled body
+deadline/late-cache refusal, late fetch response, independent caller/cache-hit
+isolation, invalid JSON and missing tickers. Initial task_5fcc7576 passed eight
+focused suites (TWSE existing/new plus six quote/route suites), typecheck/lint/diff.
+No live TWSE request, production call or Actions run was made.
+
+The previous15:54 turn was interrupted after passing local verification and
+before audit/disposition/commit;16:24 resumed those exact worktree changes.
+Tushare shared cached operations and provider Retry-After remain independent
+follow-up work. This does not claim abort stops all underlying provider compute.
+
+Opus5.5 task_d768769b found three issues, all addressed: fresh module-cache hits
+were lost on timeout; a one-microtask late-response test could miss guard damage;
+route/registry forwarding lacked regression coverage. Cache lookup now precedes
+the miss-only timeout wrapper. Provider timeout retains hits and returns null
+for misses, preserving the prior null failure contract; caller cancellation
+always throws. This means provider timeout misses are recorded as empty by the
+existing route metadata, not as a newly invented timeout marker. A richer
+provider outcome contract remains possible follow-up work.
+
+Late-response controls now use JSON spies and drained event-loop turns: after
+cancellation/expiry the body must not be read and a follow-up request must fetch
+again. Added timeout mixed hit/miss, late-fetch timeout, registry pre-abort and
+route TWSE disconnect/late-cache tests. No claim of individual guard mutation
+coverage: guards are redundant, and no mutation harness was run in this batch.
+Final task_410d8652 passed all eight selected suites/typecheck/lint/diff with0
+verifier issues. Nine new provider tests and the route forwarding regression
+are synthetic. Final edits host verified, not second-reviewed.
+
+Next Data Cache30s plus module cache60s freshness, concurrent-miss deduplication,
+Tushare cached cancellation and provider Retry-After remain open. No freshness
+or shared-cache policy was silently changed. Remote PR71 still draft1bf26cc;
+local work held for aggregate push with no new Actions or production requests.
