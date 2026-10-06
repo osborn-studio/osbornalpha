@@ -69,25 +69,33 @@ export async function dispatchOperationalAlert(input: AlertMessageInput) {
   const channels: Record<string, Record<string, unknown>> = {};
 
   if (process.env.RESEND_API_KEY && recipients.length > 0) {
-    const result = await sendEmail({
-      to: recipients,
-      from: process.env.ALERT_EMAIL_FROM || process.env.EMAIL_FROM,
-      subject: message.subject,
-      html: message.html,
-      text: message.text,
-    });
-    channels.email = result.ok
-      ? { ok: true, status: result.status ?? 200 }
-      : { ok: false, status: result.status ?? null, error_code: 'email_delivery_failed' };
+    try {
+      const result = await sendEmail({
+        to: recipients,
+        from: process.env.ALERT_EMAIL_FROM || process.env.EMAIL_FROM,
+        subject: message.subject,
+        html: message.html,
+        text: message.text,
+      });
+      channels.email = result.ok
+        ? { ok: true, status: result.status ?? 200 }
+        : { ok: false, status: result.status ?? null, error_code: 'email_delivery_failed' };
+    } catch {
+      channels.email = { ok: false, error_code: 'email_delivery_threw' };
+    }
   } else {
     channels.email = { ok: false, skipped: 'not_configured' };
   }
 
   if (isTelegramConfigured()) {
-    const result = await sendTelegram(message.text, { parseMode: 'none', autoSplit: true });
-    channels.telegram = result.ok
-      ? { ok: true, chunks_sent: result.chunks_sent }
-      : { ok: false, error_code: 'telegram_delivery_failed' };
+    try {
+      const result = await sendTelegram(message.text, { parseMode: 'none', autoSplit: true });
+      channels.telegram = result.ok
+        ? { ok: true, chunks_sent: result.chunks_sent }
+        : { ok: false, error_code: 'telegram_delivery_failed', chunks_sent: result.chunks_sent };
+    } catch {
+      channels.telegram = { ok: false, error_code: 'telegram_delivery_threw' };
+    }
   } else {
     channels.telegram = { ok: false, skipped: 'not_configured' };
   }
