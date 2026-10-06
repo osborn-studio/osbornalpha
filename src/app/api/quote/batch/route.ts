@@ -15,6 +15,7 @@ import {
   type SourceAttempt,
   type SourceOutcome,
 } from '@/lib/quotes/diagnostics';
+import { withQuoteRequestBudget, waitQuoteRetry } from '@/lib/quotes/request-budget';
 import { withQuoteSourceTimeout } from '@/lib/quotes/source-timeout';
 import { fetchDatagatewayRealtimeQuotes, isDatagatewayConfigured } from '@/lib/data/sources/datagateway-quote';
 
@@ -124,16 +125,19 @@ async function tushareFallback(ticker: string): Promise<QuoteShape | null> {
 async function withRetry<T>(
   ticker: string,
   source: string,
-  fn: (signal: AbortSignal) => Promise<T | null>
+  fn: (signal: AbortSignal) => Promise<T | null>,
+  parent: AbortSignal,
 ): Promise<{ value: T | null; attempt: SourceAttempt }> {
   const startedAt = Date.now();
   let attempts = 0;
   let failureOutcome: Exclude<SourceOutcome, 'success' | 'empty'> | null = null;
 
-  for (let index = 0; index < 2; index += 1) {
+  const maxAttempts = source === 'tushare' ? 1 : 2; // Uncancellable cached paid work must not overlap a retry.
+  for (let index = 0; index < maxAttempts; index += 1) {
+    parent.throwIfAborted();
     attempts += 1;
     try {
-      const value = await withQuoteSourceTimeout(fn, SOURCE_ATTEMPT_TIMEOUT_MS);
+      const value = await withQuoteSourceTimeout(fn, SOURCE_ATTEMPT_TIMEOUT_MS, parent);
       if (value) {
         return {
           value,
@@ -141,9 +145,10 @@ async function withRetry<T>(
         };
       }
     } catch (error) {
+      parent.throwIfAborted();
       failureOutcome = classifySourceFailure(error);
     }
-    if (index === 0) await new Promise((resolve) => setTimeout(resolve, 200));
+    if (index + 1 < maxAttempts) await waitQuoteRetry(parent);
   }
 
   return {
@@ -180,11 +185,11 @@ interface QuoteResolution {
   selectedSource: string | null;
 }
 
-async function resolveQuote(ticker: string, skipDatagateway = false): Promise<QuoteResolution> {
+async function resolveQuote(ticker: string, skipDatagateway: boolean, signal: AbortSignal): Promise<QuoteResolution> {
   const attempts: SourceAttempt[] = [];
   for (const s of quoteSourcesFor(classifyMarket(ticker))) {
     if (skipDatagateway && s.name === 'datagateway-wind') continue;
-    const result = await withRetry(ticker, s.name, (signal) => s.fetch(ticker, signal));
+    const result = await withRetry(ticker, s.name, (signal) => s.fetch(ticker, signal), signal);
     attempts.push(result.attempt);
     if (result.value) {
       return { quote: result.value as unknown as QuoteShape, attempts, selectedSource: s.name };
@@ -193,7 +198,7 @@ async function resolveQuote(ticker: string, skipDatagateway = false): Promise<Qu
 
   // Final layer: Tushare (A-share only, costs 积分)
   if (/\.(SH|SZ|BJ)$/i.test(ticker)) {
-    const result = await withRetry(ticker, 'tushare', () => tushareFallback(ticker));
+    const result = await withRetry(ticker, 'tushare', () => tushareFallback(ticker), signal);
     attempts.push(result.attempt);
     if (result.value) return { quote: result.value, attempts, selectedSource: 'tushare' };
   }
@@ -202,6 +207,20 @@ async function resolveQuote(ticker: string, skipDatagateway = false): Promise<Qu
 }
 
 export async function GET(req: Request) {
+  try {
+    return await withQuoteRequestBudget(req.signal, signal => quoteBatch(req, signal));
+  } catch (error) {
+    if (error instanceof Error && error.name === 'TimeoutError') {
+      return NextResponse.json({ error: 'quote_request_timeout' }, { status: 503 });
+    }
+    if (error instanceof Error && error.name === 'AbortError') {
+      return NextResponse.json({ error: 'quote_request_cancelled' }, { status: 503 });
+    }
+    throw error;
+  }
+}
+
+async function quoteBatch(req: Request, signal: AbortSignal) {
   const startedAt = Date.now();
   const url = new URL(req.url);
   const tickersParam = url.searchParams.get('tickers') || '';
@@ -250,9 +269,10 @@ export async function GET(req: Request) {
   if (isDatagatewayConfigured() && toFetch.length > 0) {
     windAttempts = 1;
     try {
-      windMap = await fetchDatagatewayRealtimeQuotes(toFetch) as Map<string, QuoteShape | null>;
+      windMap = await withQuoteSourceTimeout(s => fetchDatagatewayRealtimeQuotes(toFetch, { signal: s }), 5_000, signal) as Map<string, QuoteShape | null>;
       windFailure = null;
     } catch (error) {
+      signal.throwIfAborted();
       windFailure = classifySourceFailure(error);
     }
   }
@@ -266,14 +286,16 @@ export async function GET(req: Request) {
   let twFailure: Exclude<SourceOutcome, 'success' | 'empty'> | null = null;
   const [twMap, results] = await Promise.all([
     twTickers.length > 0
-      ? fetchTwseQuotesBatch(twTickers).catch((error) => {
+      ? withQuoteSourceTimeout(() => fetchTwseQuotesBatch(twTickers), 5_000, signal).catch((error) => {
           twFailure = classifySourceFailure(error);
           return new Map<string, QuoteShape | null>();
         })
       : Promise.resolve(new Map<string, QuoteShape | null>()),
-    Promise.allSettled(otherTickers.map((ticker) => resolveQuote(ticker, true))),
+    Promise.allSettled(otherTickers.map((ticker) =>
+      withQuoteSourceTimeout(child => resolveQuote(ticker, true, child), 14_000, signal))),
   ]);
 
+  signal.throwIfAborted(); // Late provider completion must not update caches.
   const quotes: Record<string, QuoteShape | null> = { ...freshQuotes };
   const sourceAttempts: SourceAttempt[] = [];
   if (isDatagatewayConfigured()) {

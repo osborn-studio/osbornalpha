@@ -68,3 +68,36 @@ redundant; it was not added.
 Remote PR71 remains draft1bf26cc; this local batch is held for aggregate push.
 Server admission/production flags, credentials, provider selection and Actions
 schedules remain unchanged. D3.2 is partial; D3.3/D3.4 are not claimed complete.
+
+## Server budget candidate follow-up (15:24 batch)
+
+The quote route now awaits at most20s with caller-disconnect cancellation.
+An already-aborted request dispatches no provider work. Gateway and TWSE waits
+are additionally bounded at5s; fallback source attempts receive the route signal
+as a parent of the existing2.5s timeout. A cancelled fallback aborts its loop
+before subsequent retries or sources. Before any route cache write, the request
+signal is checked; late returned provider work cannot populate quoteCache.
+Caller-cancelled requests return503 with quote_request_cancelled; hard-budget
+expiry has a distinct TimeoutError and quote_request_timeout code.
+
+This does not cancel all underlying work: TWSE batch and cached Tushare functions
+still ignore the supplied route signal, and shared provider caches may perform
+work independently. Their wrappers stop awaiting them and prevent new route
+steps, but no paid-work cancellation or complete end-to-end compute/cost cap
+is claimed. Signal support and provider Retry-After handling remain explicit
+D3.2 follow-up work. No provider order, paid fallback configuration or workflow
+frequency is changed. Existing normal partial/stale behavior remains covered.
+
+Opus audit identified partial results lost at the hard deadline. Added a14s
+per-ticker soft fallback bound after the <=5s gateway wait: normally at <=19s
+the route proceeds through its existing stale/null assembly, preserving valid
+gateway/fresh-cache results. The outer20s bound remains a final guard.
+Cancelled/soft-expired source loops stop further dispatch; retry sleeps now
+remove listeners/timers on cancellation. Tushare wrappers use a single attempt
+to avoid overlapping new paid calls while an abort-ignoring previous call runs.
+
+Accepted all3 Opus findings: fix exact signal-call test signature; soft deadline
+preserves partial results; add pre-abort/disconnect/late-cache/partial-stale route
+regressions. Also addressed retry-sleep cleanup and paid-wrapper overlap notes.
+Remaining TWSE/Tushare inner cancellation and server provider Retry-After
+semantics are still open; this batch is not all of D3.2.
