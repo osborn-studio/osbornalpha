@@ -271,21 +271,22 @@ async function quoteBatch(req: Request, signal: AbortSignal) {
 
   // Wind/DataGateway is queried once for the whole uncached set. Only the
   // missing symbols continue to the existing per-source fallback cascade.
-  let windMap = new Map<string, QuoteShape | null>();
+  let windMap = new Map<string, QuoteShape | null | undefined>();
   let windFailure: Exclude<SourceOutcome, 'success' | 'empty'> | null = null;
   let windAttempts = 0;
   const windStartedAt = Date.now();
   if (isDatagatewayConfigured() && toFetch.length > 0) {
     windAttempts = 1;
     try {
-      windMap = await withQuoteSourceTimeout(s => fetchDatagatewayRealtimeQuotes(toFetch, { signal: s }), 5_000, signal) as Map<string, QuoteShape | null>;
+      windMap = await withQuoteSourceTimeout(s => fetchDatagatewayRealtimeQuotes(toFetch, { signal: s }), 5_000, signal);
       windFailure = null;
     } catch (error) {
       signal.throwIfAborted();
       windFailure = classifySourceFailure(error);
     }
   }
-  const fallbackTickers = toFetch.filter((ticker) => !windMap.has(ticker.toUpperCase()));
+  const gatewayHit = (ticker: string): QuoteShape | null => windMap.get(ticker.toUpperCase()) ?? null;
+  const fallbackTickers = toFetch.filter((ticker) => !gatewayHit(ticker));
   // TW group: one native multi-symbol mis request (rate limit ~3 req / 5 s);
   // remaining markets go through the per-ticker registry cascade.
   const twTickers = fallbackTickers.filter((t) => classifyMarket(t) === 'TW');
@@ -309,7 +310,7 @@ async function quoteBatch(req: Request, signal: AbortSignal) {
   const sourceAttempts: SourceAttempt[] = [];
   if (isDatagatewayConfigured()) {
     for (const ticker of toFetch) {
-      const value = windMap.get(ticker.toUpperCase()) ?? null;
+      const value = gatewayHit(ticker);
       sourceAttempts.push({
         ticker,
         source: 'datagateway-wind',

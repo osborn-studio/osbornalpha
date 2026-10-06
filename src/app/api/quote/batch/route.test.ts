@@ -128,6 +128,42 @@ describe('GET /api/quote/batch DataGateway routing', () => {
     });
   });
 
+  it.each([null, undefined])('falls back for a gateway key with no quote (%s), keeping valid preferred quotes', async missing => {
+    mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map([
+      ['AAPL', quote('AAPL', 'datagateway-wind')], ['MSFT', missing],
+    ]));
+    const response = await GET(new Request('https://example.test/api/quote/batch?tickers=AAPL,msft&_=1'));
+    const body = await response.json(); expect(response.status).toBe(200);
+    expect(mocks.fallbackFetch).toHaveBeenCalledExactlyOnceWith('msft', expect.any(AbortSignal));
+    expect(body.meta.selected_sources).toEqual({ AAPL: 'datagateway-wind', msft: 'public-fallback' });
+    expect(body.meta.sources['datagateway-wind']).toMatchObject({ attempted: 2, succeeded: 1, failed: 1 });
+    expect(body.quotes.msft).toMatchObject({ ticker: 'msft', source: 'public-fallback' });
+    expect(body.quotes.MSFT).toBeUndefined();
+    expect(body.meta.failed).toBe(0); expect(body.meta.stale).toBe(0);
+  });
+  it('routes null gateway TW quotes through one native fallback batch, for both missing symbols', async () => {
+    mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map([['9211.TW', null], ['9212.TW', null]]));
+    mocks.fetchTwseQuotesBatch.mockResolvedValue(new Map([['9211.TW', quote('9211.TW', 'twse')], ['9212.TW', quote('9212.TW', 'twse')]]));
+    const response = await GET(new Request('https://example.test/api/quote/batch?tickers=9211.TW,9212.TW&_=1'));
+    const body = await response.json(); expect(response.status).toBe(200);
+    expect(mocks.fetchTwseQuotesBatch).toHaveBeenCalledExactlyOnceWith(['9211.TW', '9212.TW'], expect.any(AbortSignal));
+    expect(mocks.fallbackFetch).not.toHaveBeenCalled(); expect(body.meta.failed).toBe(0);
+    expect(body.meta.selected_sources).toEqual({ '9211.TW': 'twse', '9212.TW': 'twse' });
+    expect(body.meta.sources['datagateway-wind']).toMatchObject({ attempted: 2, succeeded: 0, failed: 2 });
+  });
+  it('reports a failed ticker if gateway key is null and all configured public fallback results are empty', async () => {
+    mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map([['MSFT', null]]));
+    mocks.fallbackFetch.mockResolvedValue(null);
+    const response = await GET(new Request('https://example.test/api/quote/batch?tickers=MSFT&_=1'));
+    const body = await response.json(); expect(response.status).toBe(200);
+    expect(mocks.fallbackFetch).toHaveBeenCalledTimes(2);
+    expect(body.quotes.MSFT).toBeNull(); expect(body.meta.failed_tickers).toEqual(['MSFT']);
+    expect(body.meta.failed).toBe(1); expect(body.meta.selected_sources.MSFT).toBeUndefined();
+    expect(body.meta.sources['public-fallback']).toMatchObject({ attempted: 1, succeeded: 0, failed: 1, retries: 1 });
+    expect(body.meta.stale).toBe(0);
+    expect(body.meta.sources['datagateway-wind']).toMatchObject({ succeeded: 0, failed: 1 });
+  });
+
   it('falls back after one bounded DataGateway attempt', async () => {
     mocks.fetchDatagatewayRealtimeQuotes.mockRejectedValue(
       Object.assign(new Error('timed out'), { kind: 'transient', retryable: true }),
