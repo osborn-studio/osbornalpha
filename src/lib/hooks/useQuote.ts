@@ -9,11 +9,12 @@ import {
   classifyQuoteBatchOutcome,
   chunkQuoteTickers,
   mergeQuoteBatchResults,
-  shouldRetryQuoteBatchError,
   shouldReportQuoteBatch,
   type QuoteBatchMeta,
   type QuoteBatchPayload,
 } from '@/lib/quotes/batch-client';
+
+import { requestQuoteBatch } from '@/lib/quotes/batch-request';
 
 export interface LiveQuote {
   source: string;
@@ -145,7 +146,6 @@ interface BatchState {
   meta: QuoteBatchMeta | null;
 }
 
-const BATCH_REQUEST_TIMEOUT_MS = 25_000;
 const BATCH_RESULT_TTL_MS = 5_000;
 const batchInflight = new Map<string, Promise<QuoteBatchPayload<LiveQuote>>>();
 const batchResultCache = new Map<string, { payload: QuoteBatchPayload<LiveQuote>; ts: number }>();
@@ -156,26 +156,10 @@ async function fetchQuoteBatchChunk(url: string): Promise<QuoteBatchPayload<Live
   const existing = batchInflight.get(url);
   if (existing) return existing;
 
-  const request = (async () => {
-    for (let attempt = 0; ; attempt += 1) {
-      const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), BATCH_REQUEST_TIMEOUT_MS);
-      try {
-        const response = await fetch(url, { signal: controller.signal });
-        if (!response.ok) throw new Error(`quote batch HTTP ${response.status}`);
-        const payload = await response.json();
-        if (!payload || typeof payload !== 'object') throw new Error('invalid quote batch response');
-        const typedPayload = payload as QuoteBatchPayload<LiveQuote>;
-        batchResultCache.set(url, { payload: typedPayload, ts: Date.now() });
-        return typedPayload;
-      } catch (error) {
-        if (!shouldRetryQuoteBatchError(error, attempt)) throw error;
-        await new Promise((resolve) => window.setTimeout(resolve, 250));
-      } finally {
-        window.clearTimeout(timeout);
-      }
-    }
-  })();
+  const request = requestQuoteBatch<LiveQuote>(url).then((payload) => {
+    batchResultCache.set(url, { payload, ts: Date.now() });
+    return payload;
+  });
   batchInflight.set(url, request);
   try {
     return await request;
