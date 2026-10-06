@@ -97,7 +97,7 @@ async function main(){
   });
   const healthyNext=await prepareRegisteredEvaluation(actor,evaluations[1].id),healthyInput=await prepareRegisteredInput(actor,evaluations[1].id,healthyNext.marketIds,healthyNext.asOf);
   const healthyBefore=await storeSnapshot();
-  await assert.rejects(store.commitEvaluationResult(makeCommit(healthyInput,evaluations[0].body.idempotency_key,healthyNext.revision)),e=>e instanceof Error&&e.cause==='validation_or_database');
+  await assert.rejects(store.commitEvaluationResult(makeCommit(healthyInput,evaluations[0].body.idempotency_key,healthyNext.revision)),e=>e instanceof Error&&e.message==='idempotency_conflict');
   assert.deepEqual(await storeSnapshot(),healthyBefore);
   const unique=(await db.query("select conname,pg_get_constraintdef(oid) definition from pg_constraint where conrelid='public.research_s6_evaluations'::regclass and contype='u'")).rows;
   assert.ok(unique.some(r=>r.definition==='UNIQUE (user_id, idempotency_key)'));
@@ -210,13 +210,15 @@ async function main(){
   await assert.rejects(listRegisteredCandidates(actor,2),e=>e instanceof Error&&e.cause==='grant_version_revoked');
   const denied=evaluations[0],allowed=evaluations[1],beforeStore=await storeSnapshot();
   for(const op of [()=>store.readObservation(denied.id),...denied.marketIds.map(mid=>()=>store.readMarketSnapshot(mid)),()=>store.commitEvaluationResult(denied.body)])await assert.rejects(op(),e=>e instanceof Error&&e.cause==='grant_version_revoked');
+  // A revoked target must deny before exposing a key collision, even after operator reset.
+  await assert.rejects(store.commitEvaluationResult({...denied.body,idempotency_key:allowed.body.idempotency_key,request_key:allowed.body.idempotency_key}),e=>e instanceof Error&&e.cause==='grant_version_revoked');
   assert.equal((await store.readObservation(allowed.id)).observation.id,allowed.id);
   for(const mid of allowed.marketIds)assert.equal((await store.readMarketSnapshot(mid)).snapshot.id,mid);
   assert.equal((await store.commitEvaluationResult(allowed.body)).status,'duplicate');
   assert.deepEqual(await storeSnapshot(),beforeStore);
   // Foreign globally unique key never returns the denied candidate's receipt.
   const next=await prepareRegisteredEvaluation(actor,allowed.id),nextInput=await prepareRegisteredInput(actor,allowed.id,next.marketIds,next.asOf);
-  await assert.rejects(store.commitEvaluationResult(makeCommit(nextInput,denied.body.idempotency_key,next.revision)),e=>e instanceof Error&&e.message==='revocation_access_denied'&&e.cause==='validation_or_database');
+  await assert.rejects(store.commitEvaluationResult(makeCommit(nextInput,denied.body.idempotency_key,next.revision)),e=>e instanceof Error&&e.message==='idempotency_conflict');
   assert.deepEqual(await storeSnapshot(),beforeStore);
   const freshReceipt=await store.commitEvaluationResult(makeCommit(nextInput,randomUUID(),next.revision));assert.equal(freshReceipt.status,'accepted');assert.equal(freshReceipt.revision,next.revision+1);
   await db.query('delete from research_revocation_candidate.inbox where feed_id=$1',[affected.feedId]);

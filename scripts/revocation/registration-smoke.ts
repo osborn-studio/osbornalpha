@@ -272,9 +272,30 @@ async function main(){
   await transaction(s4Actor,async client=>{await addRecord(client,s4Actor,imported.id,'Observation',{...frozenObservation,id:foreignObservation},{id:foreignObservation});await client.query("insert into public.research_s4_observation_state(user_id,observation_id,status) values($1,$2,'pending_start')",[actor,foreignObservation]);});
   const foreignPreparation=await prepareEvaluation(s4Actor,foreignObservation);
   const foreignEvaluation=await createS6Store(s4Actor).commitEvaluationResult(makeCommit(await prepareInput(s4Actor,foreignObservation,foreignPreparation.marketIds,foreignPreparation.asOf),'synthetic-foreign-replay',foreignPreparation.revision));
+  await db.query('update research_revocation_candidate.feed set published_at=clock_timestamp()');
   const collisionBefore=await businessCounts();
   const collision=await evaluateRoute(foreignObservation,{action:'evaluate',asOf:foreignPreparation.asOf,key:commitBody.idempotency_key,revision:foreignPreparation.revision+1,marketIds:foreignPreparation.marketIds});
-  assert.equal(collision.status,503);assert.equal(collision.headers.get('cache-control'),'no-store');assert.deepEqual(await collision.json(),{error:{code:'revocation_check_unavailable'}});assert.deepEqual(await businessCounts(),collisionBefore);
+  // The owner-wide key lookup detects another observation before attempting an insert.
+  // This is a deterministic conflict, not an unavailable revocation service.
+  assert.equal(collision.status,409);assert.equal(collision.headers.get('cache-control'),'no-store');assert.deepEqual(await collision.json(),{error:{code:'idempotency_conflict'}});assert.deepEqual(await businessCounts(),collisionBefore);
+  // Authorization denial must win over the same cross-observation key conflict.
+  const crossKeyBody=makeCommit(await prepareInput(s4Actor,foreignObservation,foreignPreparation.marketIds,foreignPreparation.asOf),commitBody.idempotency_key,foreignPreparation.revision+1);
+  for(const deniedStatus of [503,403]){
+   if(deniedStatus===503)await db.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '61 seconds'");
+   else await db.query('update public.research_s4_bindings set revoked=true where user_id=$1 and payload_hash=$2',[actor,hash]);
+   const before=await businessCounts(),state=(await db.query('select * from public.research_s4_observation_state where user_id=$1 order by observation_id',[actor])).rows;
+   try{
+    const denied=await evaluateRoute(foreignObservation,{action:'evaluate',asOf:foreignPreparation.asOf,key:commitBody.idempotency_key,revision:foreignPreparation.revision+1,marketIds:foreignPreparation.marketIds});
+    await assert.rejects(registeredStore.commitEvaluationResult(crossKeyBody),e=>e instanceof Error&&e.cause===(deniedStatus===403?'binding_revoked':'revocation_stale'));
+    assert.equal(denied.status,deniedStatus);assert.equal(denied.headers.get('cache-control'),'no-store');
+    assert.deepEqual(await denied.json(),{error:{code:deniedStatus===403?'revocation_access_denied':'revocation_check_unavailable'}});
+    assert.deepEqual(await businessCounts(),before);assert.deepEqual((await db.query('select * from public.research_s4_observation_state where user_id=$1 order by observation_id',[actor])).rows,state);
+   }finally{await db.query('update research_revocation_candidate.feed set published_at=clock_timestamp()');await db.query('update public.research_s4_bindings set revoked=false where user_id=$1 and payload_hash=$2',[actor,hash]);}
+  }
+  const expiredBefore=await businessCounts();
+  await db.query("update public.research_s6_sessions set expires_at=clock_timestamp()-interval '1 second' where user_id=$1 and token_hash=$2",[actor,tokenHash(registeredToken)]);
+  try{await assert.rejects(registeredStore.commitEvaluationResult(crossKeyBody),e=>e instanceof Error&&e.message==='not_authenticated');assert.deepEqual(await businessCounts(),expiredBefore);}
+  finally{await db.query("update public.research_s6_sessions set expires_at=created_at+interval '1 hour' where user_id=$1 and token_hash=$2",[actor,tokenHash(registeredToken)]);}
   const crossReplayBefore=await businessCounts();await assert.rejects(registeredObservationReport(s4Actor,decided.observationId,foreignEvaluation.evaluation_ref),/not_found/);assert.deepEqual(await businessCounts(),crossReplayBefore);
   await db.query("update public.research_s4_observation_state set status='cancelled' where user_id=$1 and observation_id=$2",[actor,foreignObservation]);
   const marketId=preparation.marketIds[0];
@@ -707,4 +728,4 @@ async function main(){
   console.log('Registration acceptance passed: missing approval, freshness/scope, rollback, concurrent idempotency, consumer revoke and tombstone denial.');
  }catch(error){primary=error;throw error;}finally{try{await closeS4Pool();await db.end();}finally{stopLocalDatabase(state,primary);}}
 }
-void main().catch(error=>{console.error(error instanceof Error?error.message:'registration test failed');process.exitCode=1;});
+void main().catch(error=>{console.error(error instanceof Error?error.stack:'registration test failed');process.exitCode=1;});
