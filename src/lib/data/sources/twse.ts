@@ -279,6 +279,13 @@ async function fetchWithTimeout(url: string, referer: string, timeoutMs = 4000):
 // Monotonic elapsed time owns this TTL. Misses bypass Next Data Cache so a
 // stale revalidation response cannot be stamped as newly fetched here.
 const quoteCache = new Map<string, { q: TwseQuote; at: number; generation: number }>();
+const quoteRetention = new WeakMap<object, number>();
+
+/** Internal process-local retention provenance; never serialized into quote JSON. */
+export function twseQuoteRetentionStart(quote: object): number | undefined {
+  return quoteRetention.get(quote);
+}
+
 let quoteRequestGeneration = 0;
 const QUOTE_TTL_MS = 60_000;
 const sharedQuoteRequest = createSharedSourceRequests<Map<string, TwseQuote | null>>(4_000);
@@ -357,6 +364,7 @@ async function fetchTwseQuotes(misses: string[], signal: AbortSignal): Promise<M
     const code = codePart.replace(/\.tw$/i, '').toUpperCase();
     const msg = byKey.get(`${board}_${code}`) ?? byKey.get(code);
     const q = msg ? parseMisQuote(msg, t) : null;
+    if (q) quoteRetention.set(q, startedAt);
     // Older in-flight requests must not replace a later request's cache entry.
     // Generation also orders requests when the monotonic clock has equal ticks.
     if (q && (quoteCache.get(t)?.generation ?? 0) < generation) {
