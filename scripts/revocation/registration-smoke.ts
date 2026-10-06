@@ -1,6 +1,8 @@
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 import {POST as observationRoute} from '../../src/app/api/research/s6/observations/[id]/route';
 import {prepareRegisteredInput,prepareRegisteredEvaluation,prepareInput,prepareEvaluation,makeCommit,createS6Store,createRegisteredS6Store,createRegisteredEvaluatorStore,tokenHash} from '../../src/lib/research/s6/store';
-import {freezeMarket,benchmarkIdentity} from '../../src/lib/research/s6/market';
+import {freezeRegisteredMarket,freezeRegisteredMarketHandoff,benchmarkIdentity} from '../../src/lib/research/s6/market';
 import {syntheticMapping} from '../s6/fixtures';
 import {addRecord} from '../../src/lib/research/s4/records';
 import {transaction} from '../../src/lib/research/s4/db';
@@ -13,7 +15,7 @@ import {POST as historyRoute} from '../../src/app/api/research/s4/candidates/[id
 import {POST as citationRoute} from '../../src/app/api/research/s4/candidates/[id]/citation/route';
 import {s4Http} from '../../src/lib/research/s4/http';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {readFileSync,writeFileSync} from 'node:fs';
 import {randomUUID,generateKeyPairSync,sign,createHmac} from 'node:crypto';
 import {Pool} from 'pg';
 import {importRegisteredCandidate} from '../../src/lib/research/s4/import';
@@ -131,7 +133,53 @@ async function main(){
   // Generate an actual synthetic evaluation through the existing S6 fixture API.
   // This setup is not a claim that evaluator commit/market paths are registered.
   const frozenObservation=(await createS6Store(s4Actor).readObservation(decided.observationId)).observation;
-  for(const security of [frozenObservation.securities[0],benchmarkIdentity(true)])await freezeMarket(s4Actor,decided.observationId,syntheticMapping(security),'synthetic');
+  const handoffRaw=readFileSync('docs/handoffs/alpha-s6/market-interface/spy.synthetic.json','utf8');
+  const handoffId='registered-handoff-spy';
+  const handoffCli=async(statePath=state.stateFile,bundlePath='docs/handoffs/alpha-s6/market-interface/spy.synthetic.json',extraEnv:Record<string,string>={})=>{
+   try{const result=await promisify(execFile)(process.execPath,['node_modules/tsx/dist/cli.mjs','scripts/s6/freeze-market-handoff.ts',statePath,actor,decided.observationId,bundlePath,'--id',handoffId],{env:{PATH:process.env.PATH,NODE_ENV:'test',...extraEnv},timeout:30000});return {code:0,result:JSON.parse(result.stdout)};}
+   catch(error){const e=error as {code:number;stdout:string};return {code:e.code,result:JSON.parse(e.stdout)};}
+  };
+  const handoffCliPositive=await handoffCli();assert.equal(handoffCliPositive.code,0);assert.equal(handoffCliPositive.result.duplicate,false);
+  assert.equal((await handoffCli()).result.duplicate,true);
+  assert.equal((await freezeRegisteredMarketHandoff(s4Actor,decided.observationId,{raw:handoffRaw,id:handoffId})).duplicate,true);
+  assert.equal((await db.query('select count(*)::int n from research_s6_markets where user_id=$1 and id=$2',[actor,handoffId])).rows[0].n,1);
+  assert.equal((await db.query("select count(*)::int n from research_s4_records where user_id=$1 and payload->>'type'='market.freeze' and payload->>'snapshot_ref'=$2",[actor,handoffId])).rows[0].n,1);
+  const registeredMappings=[frozenObservation.securities[0],benchmarkIdentity(true)].map(security=>syntheticMapping(security));
+  for(const mapping of registeredMappings){
+   assert.equal((await freezeRegisteredMarket(s4Actor,decided.observationId,mapping,'synthetic')).duplicate,false);
+   assert.equal((await freezeRegisteredMarket(s4Actor,decided.observationId,mapping,'synthetic')).duplicate,true);
+  }
+  const freezeSnapshot=async()=>({counts:await businessCounts(),markets:(await db.query('select * from public.research_s6_markets where user_id=$1 order by id',[actor])).rows});
+  const beforeCliGuards=await freezeSnapshot();
+  for(const change of [{runtimeUrl:state.runtimeUrl.replace('127.0.0.1','192.0.2.1')},{runtimeUrl:state.runtimeUrl+'?host=192.0.2.1'},{directory:''}]){
+   const badState=state.directory+'/bad-state.json';writeFileSync(badState,JSON.stringify({...state,...change}),{mode:0o600});
+   const denied=await handoffCli(badState);assert.equal(denied.code,3);assert.equal(denied.result.code,'local_acceptance_only');
+  }
+  const realBundle=state.directory+'/real-flag.synthetic-test.json';writeFileSync(realBundle,JSON.stringify({...JSON.parse(handoffRaw),synthetic:false}),{mode:0o600});
+  const deniedReal=await handoffCli(state.stateFile,realBundle,{ALPHA_S6_REAL_MARKET:'1'});assert.equal(deniedReal.code,1);assert.equal(deniedReal.result.code,'rule_unsupported');assert.deepEqual(await freezeSnapshot(),beforeCliGuards);
+  for(const cause of ['revocation_stale','binding_revoked'] as const){
+   if(cause==='revocation_stale')await db.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '61 seconds'");
+   else await db.query('update public.research_s4_bindings set revoked=true where user_id=$1 and payload_hash=$2',[actor,hash]);
+   const before=await freezeSnapshot();
+   try{for(const id of [handoffId,randomUUID()])await assert.rejects(freezeRegisteredMarketHandoff(s4Actor,decided.observationId,{raw:handoffRaw,id}),e=>e instanceof Error&&e.cause===cause);const cliDenied=await handoffCli();assert.equal(cliDenied.code,3);assert.equal(cliDenied.result.code,cause==='revocation_stale'?'revocation_check_unavailable':'revocation_access_denied');for(const id of [registeredMappings[0].id,randomUUID()])await assert.rejects(freezeRegisteredMarket(s4Actor,decided.observationId,{...registeredMappings[0],id},'synthetic'),e=>e instanceof Error&&e.cause===cause);assert.deepEqual(await freezeSnapshot(),before);}
+   finally{await db.query('update research_revocation_candidate.feed set published_at=clock_timestamp()');await db.query('update public.research_s4_bindings set revoked=false where user_id=$1 and payload_hash=$2',[actor,hash]);}
+  }
+  const beforeMarketNegatives=await freezeSnapshot();
+  await assert.rejects(freezeRegisteredMarket(s4Actor,decided.observationId,{...registeredMappings[0],providerVersion:'synthetic-changed/2'},'synthetic'),/idempotency_conflict/);
+  await assert.rejects(freezeRegisteredMarket(s4Actor,decided.observationId,{...registeredMappings[0],security:{...registeredMappings[0].security,ticker:'OUTSIDE'}},'synthetic'),/scope_denied/);
+  await assert.rejects(freezeRegisteredMarket(s4Actor,'invalid',registeredMappings[0],'synthetic'),/invalid_schema/);
+  await assert.rejects(freezeRegisteredMarket(s4Actor,randomUUID(),registeredMappings[0],'synthetic'),/not_found/);
+  await assert.rejects(freezeRegisteredMarketHandoff(s4Actor,decided.observationId,{raw:JSON.stringify({...JSON.parse(handoffRaw),synthetic:false}),id:randomUUID()}),/rule_unsupported/);
+  assert.deepEqual(await freezeSnapshot(),beforeMarketNegatives);
+  // Actual insert completes only after freshness expires; all market/control/outbox writes roll back.
+  await db.query(`create function public.synthetic_market_delay() returns trigger language plpgsql as $$ begin perform pg_sleep(6); return new; end $$; create trigger synthetic_market_delay before insert on public.research_s6_markets for each row execute function public.synthetic_market_delay()`);
+  const beforeSlowMarket=await freezeSnapshot();
+  try{
+   await db.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '55 seconds'");
+   const started=performance.now();await assert.rejects(freezeRegisteredMarket(s4Actor,decided.observationId,{...registeredMappings[0],id:randomUUID()},'synthetic'),e=>e instanceof Error&&e.cause==='revocation_stale');
+   assert.ok(performance.now()-started>=5900);assert.deepEqual(await freezeSnapshot(),beforeSlowMarket);
+  }finally{await db.query('drop trigger synthetic_market_delay on public.research_s6_markets; drop function public.synthetic_market_delay()');await db.query('update research_revocation_candidate.feed set published_at=clock_timestamp()');}
+
   const preparation=await prepareRegisteredEvaluation(s4Actor,decided.observationId);
   const registeredToken='synthetic-session-'+randomUUID();
   await db.query("insert into public.research_s6_sessions(user_id,token_hash,subject,audience,scopes,expires_at) values($1,$2,'synthetic-registered','alpha-evaluator',array['observation:read','evaluation:append'],clock_timestamp()+interval '1 hour')",[actor,tokenHash(registeredToken)]);
@@ -207,6 +255,7 @@ async function main(){
     await db.query('update public.research_s4_records set candidate_id=$3 where user_id=$1 and id=$2',[actor,observationRecord.id,deniedCandidate]);
     const before=await businessCounts();
     for(const op of [()=>registeredStore.readObservation(decided.observationId),()=>registeredStore.readMarketSnapshot(preparation.marketIds[0]),()=>registeredStore.commitEvaluationResult(makeCommit(preparedInput,randomUUID(),preparation.revision))])await assert.rejects(op(),/revocation_access_denied/);
+    const marketBefore=await freezeSnapshot();await assert.rejects(freezeRegisteredMarket(s4Actor,decided.observationId,registeredMappings[0],'synthetic'),/revocation_access_denied/);assert.deepEqual(await freezeSnapshot(),marketBefore);
     assert.deepEqual(await businessCounts(),before);
    }finally{await db.query('update public.research_s4_records set candidate_id=$3 where user_id=$1 and id=$2',[actor,observationRecord.id,imported.id]);}
    assert.deepEqual(await registeredStore.readObservation(decided.observationId),await createS6Store(s4Actor).readObservation(decided.observationId));
@@ -219,6 +268,7 @@ async function main(){
     try{
      await db.query('update public.research_s4_records set payload=$3,payload_hash=$4 where user_id=$1 and id=$2',[actor,id,payload,digest(payload)]);
      if(id===snapshot.id){const changed={...observationRecord.payload,input_snapshot_hash:digest(payload)};await db.query('update public.research_s4_records set payload=$3,payload_hash=$4 where user_id=$1 and id=$2',[actor,observationRecord.id,changed,digest(changed)]);}
+     if(id===observationRecord.id){const before=await freezeSnapshot();await assert.rejects(freezeRegisteredMarket(s4Actor,decided.observationId,registeredMappings[0],'synthetic'),/hash_mismatch/);assert.deepEqual(await freezeSnapshot(),before);}
      await noPreparedDisclosure();
     }finally{
      await db.query('update public.research_s4_records set payload=$3,payload_hash=$4 where user_id=$1 and id=$2',[actor,id,original.payload,original.payload_hash]);
@@ -347,6 +397,7 @@ async function main(){
   assert.deepEqual(await businessCounts(),beforeAuth);
   const other=randomUUID();await db.query('insert into auth.users(id) values($1)',[other]);await db.query("update public.profiles set role='admin' where id=$1",[other]);
   const foreignBefore=await businessCounts(),otherRecords=(await db.query('select count(*)::int n from public.research_s4_records where user_id=$1',[other])).rows[0].n;
+  await assert.rejects(freezeRegisteredMarket({userId:other,kind:'agent'},decided.observationId,registeredMappings[0],'synthetic'),/not_found/);
   await assert.rejects(registeredObservationReport({userId:other,kind:'agent'},decided.observationId),/not_found/);await assert.rejects(registeredObservationReport({userId:other,kind:'agent'},decided.observationId,replayId),/not_found/);
   await assert.rejects(registeredObservationReport(s4Actor,randomUUID()),/not_found/);
   await assert.rejects(prepareRegisteredEvaluation({userId:other,kind:'agent'},decided.observationId),/not_found/);
@@ -693,7 +744,9 @@ async function main(){
   assert.equal((await db.query('select count(*)::int n from public.research_s4_candidates')).rows[0].n,1);
   await assert.rejects(withRegisteredCandidate(db,actor,hash,expected,async()=>true),/revocation_access_denied/);
   // Even an accidentally reset binding must not bypass a retained tombstone.
+  const marketTombstoneBefore=await freezeSnapshot();
   await db.query('update public.research_s4_bindings set revoked=false where user_id=$1',[actor]);await rejected(register(),'grant_version_revoked');await deniedAccess(expected,'grant_version_revoked');await denyRoutes(403);await assert.rejects(registeredObservationReport(s4Actor,decided.observationId),e=>e instanceof Error&&e.cause==='grant_version_revoked');
+  await assert.rejects(freezeRegisteredMarket(s4Actor,decided.observationId,registeredMappings[0],'synthetic'),e=>e instanceof Error&&e.cause==='grant_version_revoked');assert.deepEqual(await freezeSnapshot(),marketTombstoneBefore);
   for(const op of [()=>registeredCitation(s4Actor,imported.id,shown.cards[0].id,0),()=>registeredReviewHistory(s4Actor,imported.id),()=>submitRegisteredDecision(s4Actor,imported.id,decision),()=>registeredCandidateStatus(s4Actor,imported.id),()=>revealRegisteredCards(s4Actor,imported.id,revealInput)]){
    await assert.rejects(op(),error=>error instanceof Error&&error.cause==='grant_version_revoked');
   }

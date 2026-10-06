@@ -10,6 +10,7 @@ import {OBSERVATION_CONTRACT_V2} from '../market-policy';
 import {transaction,serverTime,type S4Actor} from '../s4/db';
 import {addRecord} from '../s4/records';
 import {enabled,observationFor} from './store';
+import {registeredObservationTransaction} from './registered';
 
 type Mapping=Parameters<typeof mapAlphaKline>[0];
 type SecurityV2=MarketSnapshotV2['security'];
@@ -43,11 +44,20 @@ async function persistSnapshot(db:PoolClient,actor:S4Actor,observationId:string,
 /** Server/operator-only evidence. Never accepted from an evaluator/browser HTTP body.
  * Kline DTO path: synthetic material only. For a 2.0 observation the mapped 1.0 snapshot is
  * re-labelled with the observation's listing identity (target XNYS, benchmark SPY/ARCX). */
-export async function freezeMarket(actor:S4Actor,observationId:string,mapping:Omit<Mapping,'calendar'|'security'>&{security:MarketSnapshot['security']|SecurityV2},evidenceKind:'synthetic'|'authorized-provider'){
+type FreezeMapping=Omit<Mapping,'calendar'|'security'>&{security:MarketSnapshot['security']|SecurityV2};
+export function freezeMarket(actor:S4Actor,observationId:string,mapping:FreezeMapping,evidenceKind:'synthetic'|'authorized-provider'){
+ return freezeMarketWithPolicy(actor,observationId,mapping,evidenceKind,false);
+}
+/** Registered operator/internal adapter. No HTTP route or real-market capability is enabled. */
+export function freezeRegisteredMarket(actor:S4Actor,observationId:string,mapping:FreezeMapping,evidenceKind:'synthetic'){
+ if(evidenceKind!=='synthetic')fail('rule_unsupported');
+ return freezeMarketWithPolicy(actor,observationId,mapping,evidenceKind,true);
+}
+async function freezeMarketWithPolicy(actor:S4Actor,observationId:string,mapping:FreezeMapping,evidenceKind:'synthetic'|'authorized-provider',registered:boolean){
  enabled();
  requireCurrentPolicy(mapping.security);
  if(evidenceKind==='authorized-provider')requireRawProvider(mapping.raw);
- return transaction(actor,async db=>{
+ const work=async(db:PoolClient)=>{
   const o=(await observationFor(db,actor,observationId)).payload as {schema_version:string;synthetic:boolean;securities:Array<Record<string,unknown>>;candidate_ref:string};
   if(evidenceKind==='synthetic'?!o.synthetic:o.synthetic||process.env.ALPHA_S6_REAL_MARKET!=='1')fail('policy_blocked');
   const ticker=mapping.security.ticker,target=o.securities[0];
@@ -73,7 +83,8 @@ export async function freezeMarket(actor:S4Actor,observationId:string,mapping:Om
    validateMarketSnapshot(snapshot,frozenCalendar,now);
   }
   return persistSnapshot(db,actor,observationId,o.candidate_ref,snapshot,mapping.raw,{kind:evidenceKind,proof:mapping.evidence});
- });
+ };
+ return registered?registeredObservationTransaction(actor,observationId,work):transaction(actor,work);
 }
 /**
  * E3b: freeze one leg (target or SPY) of an `alpha-market-handoff/1.0` bundle for a 2.0 observation.
@@ -81,11 +92,19 @@ export async function freezeMarket(actor:S4Actor,observationId:string,mapping:Om
  * bundle; a real observation additionally requires ALPHA_S6_REAL_MARKET=1 and a non-synthetic bundle.
  * The bundle is operator/server supplied, never an evaluator/browser HTTP body.
  */
-export async function freezeMarketHandoff(actor:S4Actor,observationId:string,input:{raw:string;id?:string}){
+export function freezeMarketHandoff(actor:S4Actor,observationId:string,input:{raw:string;id?:string}){
+ return freezeHandoffWithPolicy(actor,observationId,input,false);
+}
+/** Registered operator adapter, deliberately synthetic-only until real-data admission is reviewed. */
+export function freezeRegisteredMarketHandoff(actor:S4Actor,observationId:string,input:{raw:string;id?:string}){
+ return freezeHandoffWithPolicy(actor,observationId,input,true);
+}
+async function freezeHandoffWithPolicy(actor:S4Actor,observationId:string,input:{raw:string;id?:string},registered:boolean){
  enabled();
  const bundle=parseStrict(input.raw) as {synthetic?:boolean;security?:{ticker?:string}};
+ if(registered&&bundle?.synthetic!==true)fail('rule_unsupported');
  const id=input.id??randomUUID();
- return transaction(actor,async db=>{
+ const work=async(db:PoolClient)=>{
   const o=(await observationFor(db,actor,observationId)).payload as {schema_version:string;synthetic:boolean;securities:Array<Record<string,unknown>>;candidate_ref:string};
   if(!isV2(o))fail('rule_unsupported');
   if(typeof bundle?.synthetic!=='boolean'||bundle.synthetic!==o.synthetic)fail('scope_denied');
@@ -100,7 +119,8 @@ export async function freezeMarketHandoff(actor:S4Actor,observationId:string,inp
   const attestation=attestations.find(a=>a.ticker===security.ticker&&a.listing_mic===security.listing_mic)??null;
   const evidence={kind:o.synthetic?'synthetic':'attested-handoff',proof:{format:'alpha-market-handoff/1.0',bundle_sha256:bytesDigest(input.raw),adapter_version:mapped.snapshot.adapter_version,attestation}};
   return persistSnapshot(db,actor,observationId,o.candidate_ref,mapped.snapshot,input.raw,evidence);
- });
+ };
+ return registered?registeredObservationTransaction(actor,observationId,work):transaction(actor,work);
 }
 /** Fetch actual Alpha HTTP bytes; a trusted evidence resolver must supply split/session proofs.
  * No evidence => no snapshot. HTTP is opt-in, bounded, exact-origin and never follows redirects. */

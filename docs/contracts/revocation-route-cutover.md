@@ -426,3 +426,17 @@ The UI exposes a count and explains browser/profile-local storage, no upload, re
 - Verified Claude CLI `claude-opus-5-5` reviews used source and synthetic fixtures only. Findings and host verification are recorded under `/Users/osborn/.osborn/verification/knowledge-cycle-alpha-i1/`. Final same-instance audit judged the design sound, with narrower assertion/route-error diagnostics and same-id counter coverage noted as non-blocking limitations. The audit preceded execution; the host subsequently verified the successful task and acceptance artifact.
 
 Production mode remains hard-disabled. Terminal/archive/index, ledger/arm/anchor eligibility, operational feed credentials, real human inputs and production release gates remain outside this completed recovery batch.
+
+
+## Registered synthetic market freeze (local candidate)
+
+`freezeRegisteredMarket` shares mapping/persistence with the legacy helper and executes under the registered observation transaction. It accepts synthetic evidence only, including at runtime. No HTTP/CLI adoption or real-market activation occurs. Observation payload/column consistency remains enforced by `observationFor` before ControlEvent persistence.
+
+Task `task_211a9a82` passes real PostgreSQL registration acceptance plus typecheck/lint: positive/duplicate freezes, stale/revoked same/new keys, late insert freshness rollback, changed-provider collision, wrong ticker, malformed/unknown observation, foreign owner, candidate-column/payload corruption and retained tombstone after flag reset. Verified Opus5.5 findings addressed; final corrections host verified. The following handoff/CLI batch supersedes that remaining adoption step.
+
+
+## Registered synthetic handoff and operator CLI
+
+`freezeRegisteredMarketHandoff` now shares validated mapping/persistence with the legacy handoff helper under the registered observation transaction. Its registered path rejects non-synthetic bundles even when the real-market environment flag is set. The local operator `freeze-market-handoff.ts` uses this registered adapter. It requires fixture-local state, expected loopback PostgreSQL users/database and equal explicit ports; URL query/hash overrides are rejected. These checks prevent operator mistakes, not privileged local fixture forgery. Stale and revoked errors are classified separately without internal causes.
+
+Task `task_fc099b63` passes full isolated PostgreSQL regression (1861 tests,96 critical,zero skips,41 migrations), registration/actual child CLI acceptance,typecheck/lint/diff. Actual CLI first write produces one market row and one freeze ControlEvent; duplicate is stable. Stale/revoked same/new ids and CLI denial preserve state; non-loopback/host-query/bad-directory cases and synthetic:false with real flag set are rejected. This is no-write evidence, not a network capture. Verified Opus5.5 findings handled; final corrections host verified. Legacy library adapters remain for existing fixtures; remaining ledger/arm/anchor and terminal/archive/index paths and production admission are open.
