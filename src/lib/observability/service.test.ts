@@ -5,11 +5,15 @@ vi.mock('./delivery', () => ({ dispatchOperationalAlert }));
 
 import { recordAndDeliverCheck } from './service';
 
-function fakeDb(insertResult: { data: { id: string } | null; error: { code: string } | null }, prior?: Record<string, unknown>, faults: { read?: boolean; update?: boolean } = {}) {
+function fakeDb(insertResult: { data: { id: string } | null; error: { code: string } | null }, prior?: Record<string, unknown>, faults: { read?: boolean; update?: boolean; receiptId?: string | null } = {}) {
   const read = { eq: vi.fn(() => read), maybeSingle: vi.fn(async () => ({ data: prior ?? null, error: faults.read ? { code: 'synthetic' } : null })) };
-  const update = vi.fn(() => ({ eq: vi.fn(async () => ({ error: faults.update ? { code: 'synthetic' } : null })) }));
+  const receiptSingle = vi.fn(async () => ({ data: faults.receiptId === null ? null : { id: faults.receiptId ?? insertResult.data?.id }, error: faults.update ? { code: 'synthetic' } : null }));
+  const receiptSelect = vi.fn(() => ({ single: receiptSingle }));
+  const receiptEq = vi.fn(() => ({ select: receiptSelect }));
+  const update = vi.fn(() => ({ eq: receiptEq }));
   return {
     update,
+    receiptSingle, receiptSelect, receiptEq,
     read,
     db: {
       from: vi.fn(() => ({
@@ -37,6 +41,7 @@ describe('service alert persistence', () => {
     expect(result.status).toBe('healthy');
     expect(dispatchOperationalAlert).not.toHaveBeenCalled();
     expect(update).toHaveBeenCalledOnce();
+    expect(update).toHaveBeenCalledWith({ delivery: { skipped: { reason: 'healthy' } } });
   });
 
   it('deduplicates a retried cron window before delivery', async () => {
@@ -86,6 +91,58 @@ describe('service alert persistence', () => {
   });
   it('saves a fixed failure receipt if the dispatcher unexpectedly rejects',async()=>{
     dispatchOperationalAlert.mockImplementation(async () => { throw new Error('synthetic-private'); });const {db,update}=fakeDb({data:{id:'new'},error:null});const outcome=await recordAndDeliverCheck(db,input).then(()=>'unexpected success',(error:Error)=>error.message);expect(outcome).toBe('service alert delivery incomplete');expect(update).toHaveBeenCalledWith({delivery:{dispatch:{ok:false,error_code:'alert_dispatch_threw'}}});
+  });
+
+  it('confirms the inserted row ID after the receipt update before reporting success', async () => {
+    dispatchOperationalAlert.mockResolvedValue({ email: { ok: true } });
+    const { db, receiptEq, receiptSelect, receiptSingle } = fakeDb({ data: { id: 'new' }, error: null });
+    expect((await recordAndDeliverCheck(db, input)).ok).toBe(true);
+    expect(receiptEq).toHaveBeenCalledWith('id', 'new'); expect(receiptSelect).toHaveBeenCalledWith('id'); expect(receiptSingle).toHaveBeenCalledOnce();
+  });
+  it.each([null, 'different'])('does not acknowledge an absent or wrong receipt update row %s', async receiptId => {
+    dispatchOperationalAlert.mockResolvedValue({ email: { ok: true } });
+    const { db } = fakeDb({ data: { id: 'new' }, error: null }, undefined, { receiptId });
+    await expect(recordAndDeliverCheck(db, input)).rejects.toThrow('delivery status unavailable');
+    const retry = fakeDb({ data: null, error: { code: '23505' } }, { id: 'new', status: 'alerting', metrics: {}, violations: input.violations, delivery: {} });
+    await expect(recordAndDeliverCheck(retry.db, input)).rejects.toThrow('prior delivery unresolved');
+    expect(dispatchOperationalAlert).toHaveBeenCalledOnce();
+  });
+  it('requires receipt update acknowledgement for healthy first runs too', async () => {
+    const { db, receiptEq, update } = fakeDb({ data: { id: 'healthy' }, error: null }, undefined, { receiptId: null });
+    await expect(recordAndDeliverCheck(db, { ...input, violations: [] })).rejects.toThrow('delivery status unavailable');
+    expect(dispatchOperationalAlert).not.toHaveBeenCalled();
+    expect(receiptEq).toHaveBeenCalledWith('id', 'healthy');
+    expect(update).toHaveBeenCalledWith({ delivery: { skipped: { reason: 'healthy' } } });
+  });
+
+  it('makes thrown acknowledgement exceptions generic without resending', async () => {
+    dispatchOperationalAlert.mockResolvedValue({ email: { ok: true } });
+    const { db, receiptSingle } = fakeDb({ data: { id: 'new' }, error: null });
+    receiptSingle.mockRejectedValueOnce(new Error('synthetic-private'));
+    await expect(recordAndDeliverCheck(db, input)).rejects.toThrow('service alert delivery status unavailable');
+    expect(dispatchOperationalAlert).toHaveBeenCalledOnce();
+  });
+  it('prioritizes failed storage acknowledgement over failed delivery', async () => {
+    dispatchOperationalAlert.mockResolvedValue({ email: { ok: false } });
+    const { db } = fakeDb({ data: { id: 'new' }, error: null }, undefined, { update: true });
+    await expect(recordAndDeliverCheck(db, input)).rejects.toThrow('delivery status unavailable');
+    expect(dispatchOperationalAlert).toHaveBeenCalledOnce();
+  });
+  it.each([
+    { id: 'prior', status: 'healthy', metrics: {}, violations: [], delivery: {} },
+    { id: 'prior', status: 'alerting', metrics: {}, violations: input.violations, delivery: { email: { ok: true } } },
+    { id: 'prior', status: 'alerting', metrics: {}, violations: input.violations, delivery: {} },
+    { id: 'prior', status: 'error', metrics: {}, violations: [], delivery: {} },
+    undefined,
+  ])('never overwrites or repairs stored rows on a conflict %s', async prior => {
+    const { db, update } = fakeDb({ data: null, error: { code: '23505' } }, prior);
+    await recordAndDeliverCheck(db, input).catch(() => undefined);
+    expect(update).not.toHaveBeenCalled(); expect(dispatchOperationalAlert).not.toHaveBeenCalled();
+  });
+  it('does not update stored rows when conflict read fails', async () => {
+    const { db, update } = fakeDb({ data: null, error: { code: '23505' } }, undefined, { read: true });
+    await expect(recordAndDeliverCheck(db, input)).rejects.toThrow('prior run unavailable');
+    expect(update).not.toHaveBeenCalled(); expect(dispatchOperationalAlert).not.toHaveBeenCalled();
   });
 
 });

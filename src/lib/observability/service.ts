@@ -63,8 +63,13 @@ export async function recordAndDeliverCheck(db: AlertDb, input: RecordCheckInput
     try { delivery = await dispatchOperationalAlert(input); }
     catch { delivery = { dispatch: { ok: false, error_code: 'alert_dispatch_threw' } }; }
   }
-  const update = await db.from('service_alert_runs').update({ delivery }).eq('id', data.id);
-  if (update.error) throw new Error('service alert delivery status unavailable');
+  try {
+    const update = await db.from('service_alert_runs').update({ delivery }).eq('id', data.id).select('id').single();
+    if (update.error || update.data?.id !== data.id) throw new Error('Receipt acknowledgement failed');
+  } catch {
+    // Client/transport exceptions must not expose their raw message either.
+    throw new Error('service alert delivery status unavailable');
+  }
   if (status === 'alerting' && !recordedDeliverySucceeded(delivery)) {
     throw new Error('service alert delivery incomplete');
   }
