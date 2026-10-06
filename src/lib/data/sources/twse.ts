@@ -276,7 +276,10 @@ async function fetchWithTimeout(url: string, referer: string, timeoutMs = 4000):
 
 // Module-level quote cache: mis is rate-limited (~3 req/5 s), so repeat
 // requests within 60 s are served from memory with zero new connections.
-const quoteCache = new Map<string, { q: TwseQuote; at: number }>();
+// Monotonic elapsed time owns this TTL. Misses bypass Next Data Cache so a
+// stale revalidation response cannot be stamped as newly fetched here.
+const quoteCache = new Map<string, { q: TwseQuote; at: number; generation: number }>();
+let quoteRequestGeneration = 0;
 const QUOTE_TTL_MS = 60_000;
 
 /**
@@ -286,9 +289,9 @@ const QUOTE_TTL_MS = 60_000;
 export async function fetchTwseQuotesBatch(tickers: string[], signal?: AbortSignal): Promise<Map<string, TwseQuote | null>> {
   signal?.throwIfAborted();
   const result = new Map<string, TwseQuote | null>();
-  const now = Date.now();
+  const now = performance.now();
   const misses: string[] = [];
-  for (const t of tickers) {
+  for (const t of new Set(tickers)) {
     const cached = quoteCache.get(t);
     if (cached && now - cached.at < QUOTE_TTL_MS) result.set(t, cached.q);
     else if (twseExCh(t)) misses.push(t);
@@ -309,12 +312,14 @@ export async function fetchTwseQuotesBatch(tickers: string[], signal?: AbortSign
 
 async function fetchTwseQuotes(misses: string[], signal: AbortSignal): Promise<Map<string, TwseQuote | null>> {
   signal.throwIfAborted();
+  const startedAt = performance.now();
+  const generation = ++quoteRequestGeneration;
   const result = new Map<string, TwseQuote | null>();
   const exChs = misses.map((t) => twseExCh(t)!);
   const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${exChs.join('|')}&json=1&delay=0`;
   let resp: Response | null;
   try {
-    resp = await fetch(url, { headers: { Referer: MIS_REFERER, 'User-Agent': UA }, signal, next: { revalidate: 30 } });
+    resp = await fetch(url, { headers: { Referer: MIS_REFERER, 'User-Agent': UA }, signal, cache: 'no-store' });
   } catch {
     signal.throwIfAborted();
     resp = null;
@@ -351,7 +356,11 @@ async function fetchTwseQuotes(misses: string[], signal: AbortSignal): Promise<M
     const code = codePart.replace(/\.tw$/i, '').toUpperCase();
     const msg = byKey.get(`${board}_${code}`) ?? byKey.get(code);
     const q = msg ? parseMisQuote(msg, t) : null;
-    if (q) quoteCache.set(t, { q, at: Date.now() });
+    // Older in-flight requests must not replace a later request's cache entry.
+    // Generation also orders requests when the monotonic clock has equal ticks.
+    if (q && (quoteCache.get(t)?.generation ?? 0) < generation) {
+      quoteCache.set(t, { q, at: startedAt, generation });
+    }
     result.set(t, q);
   }
   return result;
