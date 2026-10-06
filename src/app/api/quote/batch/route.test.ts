@@ -136,4 +136,22 @@ describe('GET /api/quote/batch DataGateway routing', () => {
     expect(body.quotes.AAPL).toMatchObject({ source: 'public-fallback', ticker: 'AAPL' });
     expect(body.meta.sources['datagateway-wind']).toMatchObject({ attempted: 1, failed: 1, retries: 0 });
   });
+  it('reaches paid fallback within the ticker budget after all three free providers hang', async () => {
+    vi.useFakeTimers(); mocks.sourceNames = ['eastmoney', 'sina', 'tencent']; mocks.paidConfigured = true;
+    mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map()); mocks.fallbackFetch.mockImplementation(() => new Promise(() => {}));
+    mocks.paidDaily.mockResolvedValue([]); mocks.paidBasic.mockResolvedValue(null);
+    const pending = GET(new Request('https://example.test/api/quote/batch?tickers=600778.SH&_=1'));
+    await vi.advanceTimersByTimeAsync(7500); const body = await (await pending).json();
+    expect(mocks.fallbackFetch).toHaveBeenCalledTimes(3); expect(mocks.paidDaily).toHaveBeenCalledOnce(); expect(mocks.paidBasic).toHaveBeenCalledOnce();
+    for (const source of mocks.sourceNames) expect(body.meta.sources[source].retries).toBe(0);
+    expect(body.quotes['600778.SH']).toBeNull(); expect(vi.getTimerCount()).toBe(0);
+  });
+  it('does not start paid fallback after cancellation during hanging free providers', async () => {
+    vi.useFakeTimers(); mocks.sourceNames = ['eastmoney', 'sina', 'tencent']; mocks.paidConfigured = true;
+    mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map()); mocks.fallbackFetch.mockImplementation(() => new Promise(() => {}));
+    const c = new AbortController(); const pending = GET(new Request('https://example.test/api/quote/batch?tickers=600779.SH&_=1', { signal: c.signal }));
+    await vi.advanceTimersByTimeAsync(3000); c.abort(); expect((await pending).status).toBe(503);
+    expect(mocks.paidDaily).not.toHaveBeenCalled(); expect(mocks.paidBasic).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+  });
+
 });

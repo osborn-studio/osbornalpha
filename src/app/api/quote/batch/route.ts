@@ -120,7 +120,8 @@ async function tushareFallback(ticker: string): Promise<QuoteShape | null> {
 
 /**
  * Run a single fetcher with one transient-failure retry.
- * Transient = throws OR returns null. Retry after 200ms.
+ * Fast errors/empty responses retry after 200ms; exhausted source deadlines
+ * move to the next provider so hanging free sources cannot starve paid fallback.
  */
 async function withRetry<T>(
   ticker: string,
@@ -147,6 +148,7 @@ async function withRetry<T>(
     } catch (error) {
       parent.throwIfAborted();
       failureOutcome = classifySourceFailure(error);
+      if (failureOutcome === 'timeout') break;
     }
     if (index + 1 < maxAttempts) await waitQuoteRetry(parent);
   }
