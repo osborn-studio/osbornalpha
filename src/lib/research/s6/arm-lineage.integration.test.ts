@@ -1,0 +1,67 @@
+import {beforeAll,afterAll,describe,it,expect} from 'vitest';
+import {readFileSync} from 'node:fs';
+import {randomUUID} from 'node:crypto';
+import {Pool} from 'pg';
+import {testPack} from '../../../../scripts/s4/test-pack';
+import {importCandidate} from '../s4/import';
+import {revealCards} from '../s4/cards';
+import {submitDecision} from '../s4/decisions';
+import {closeS4Pool} from '../s4/db';
+import {validateArmS4Lineage,type ArmLineageRecord} from './arm-lineage';
+import type {ArmRoutingRow} from './arm-eligibility';
+import {digest} from '../ingest/pa-v1/json.js';
+// Actual legacy S4 writers with synthetic agent input. Not registered disclosure acceptance.
+describe.skipIf(!process.env.S4_TEST_STATE)('arm lineage actual writer JSONB round-trip',()=>{
+ let admin:Pool;
+ const actor={userId:randomUUID(),kind:'agent' as const};
+ beforeAll(async()=>{
+  const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
+  process.env.ALPHA_S4_ENABLED='1';process.env.ALPHA_S4_DATABASE_URL=state.runtimeUrl;
+  admin=new Pool({connectionString:state.adminUrl});
+  await admin.query('insert into auth.users(id,email) values($1,$2)',[actor.userId,actor.userId+'@example.test']);
+  await admin.query("update profiles set role='admin' where id=$1",[actor.userId]);
+  await admin.query(`insert into stocks_universe(ticker,name,market,exchange,currency,metadata) values('ARMSYNTH','Synthetic','US','XNYS','USD','{"synthetic":true}') on conflict do nothing`);
+ });
+ afterAll(async()=>{await closeS4Pool();await admin?.end();});
+ it('validates fresh writer records and rejects DB-derived tampering without inventing human labels',async()=>{
+  const company=randomUUID();
+  await admin.query("insert into research_entities(id,user_id,type,name) values($1,$2,'COMPANY','Arm synthetic company')",[company,actor.userId]);
+  const thesis=(await admin.query("insert into research_theses(user_id,title,body,company_ids) values($1,'Synthetic arm thesis','Synthetic only',$2) returning id",[actor.userId,JSON.stringify([company])])).rows[0].id;
+  const p=testPack(actor.userId,{companyName:'Arm synthetic company'});
+  await admin.query('insert into research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[actor.userId,p.binding.approvedPayloadHash,p.binding]);
+  const candidate=await importCandidate(actor,JSON.stringify(p.pack));
+  const revealed=await revealCards(actor,candidate.id,{requestKey:randomUUID(),judgment:'Synthetic engineering sample; no human investment judgment',alreadySeen:[],independentJudgment:false});
+  const card=revealed.cards.find((c:{payload:Record<string,unknown>})=>c.payload.thesis_id===thesis)!;expect(card).toBeTruthy();
+  const input={requestKey:randomUUID(),expectedRevision:0,action:'adopt' as const,reason:'Synthetic writer acceptance only',cardId:card.id,labelId:revealed.labelId,exposureId:revealed.exposureId,securityTicker:'ARMSYNTH',companyEntityId:company,newObservation:true,reviewAt:null};
+  const decision=await submitDecision(actor,candidate.id,input);
+  const all=(await admin.query('select id,user_id,candidate_id,kind,payload,payload_hash from research_s4_records where user_id=$1 and candidate_id=$2',[actor.userId,candidate.id])).rows as ArmLineageRecord[];
+  const o=all.find(r=>r.id===decision.observationId)!;
+  const d=all.find(r=>r.id===o.payload.decision_or_candidate_ref)!;
+  const s=all.find(r=>r.id===o.payload.input_snapshot_ref)!;
+  const t=all.find(r=>r.id===o.payload.thesis_revision_ref)!;
+  const l=all.find(r=>r.id===s.payload.label_ref)!;
+  const c=all.find(r=>r.id===s.payload.card_ref)!;
+  const records=[o,d,s,c,t,l];
+  expect(l.payload.actor_kind).toBe('agent');expect(l.payload.independent).toBe(false);
+  for(const r of records)expect(digest(r.payload)).toBe(r.payload_hash);
+  // Routing values are synthetic projections, not proof of a persisted ledger/ResearchCard link.
+  const row:ArmRoutingRow={decision_id:randomUUID(),research_card_id:randomUUID(),thesis_id:thesis,week_of:l.payload.evaluation_period_id as string,arm:'collab',action:'adopt',observation_id:o.id};
+  expect(validateArmS4Lineage(actor.userId,row,records).s4_decision_id).toBe(d.id);
+  expect(()=>validateArmS4Lineage(actor.userId,{...row,arm:'human_baseline'},records)).toThrow('not_configured');
+  const bad=structuredClone(records);bad[2].payload.card_hash='0'.repeat(64);bad[2].payload_hash=digest(bad[2].payload);bad[0].payload.input_snapshot_hash=bad[2].payload_hash;bad[0].payload_hash=digest(bad[0].payload);
+  expect(()=>validateArmS4Lineage(actor.userId,row,bad)).toThrow('hash_mismatch');
+  expect(()=>validateArmS4Lineage(randomUUID(),row,records)).toThrow('hash_mismatch');
+  await submitDecision(actor,candidate.id,{...input,requestKey:randomUUID(),expectedRevision:decision.revision,action:'reject',newObservation:false});
+  // Original observation lineage remains immutable, not a statement that it is still eligible.
+  const after=(await admin.query('select payload,payload_hash from research_s4_records where id=$1',[o.id])).rows[0];
+  expect(after).toEqual({payload:o.payload,payload_hash:o.payload_hash});
+  expect(()=>validateArmS4Lineage(actor.userId,{...row,action:'reject'},records)).toThrow('not_configured');
+  const shadow=await submitDecision(actor,candidate.id,{...input,requestKey:randomUUID(),expectedRevision:decision.revision+1,action:'reject',newObservation:true});
+  const newer=(await admin.query('select id,user_id,candidate_id,kind,payload,payload_hash from research_s4_records where user_id=$1 and candidate_id=$2',[actor.userId,candidate.id])).rows as ArmLineageRecord[];
+  const shadowObs=newer.find(r=>r.id===shadow.observationId)!;
+  const shadowDecision=newer.find(r=>r.id===shadowObs.payload.decision_or_candidate_ref)!;
+  const shadowSnapshot=newer.find(r=>r.id===shadowObs.payload.input_snapshot_ref)!;
+  expect(shadowObs.payload.observation_kind).toBe('shadow');
+  expect(validateArmS4Lineage(actor.userId,{...row,action:'reject',observation_id:shadowObs.id},[shadowObs,shadowDecision,shadowSnapshot,c,t,l]).observation_id).toBe(shadowObs.id);
+ });
+});

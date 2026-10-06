@@ -8,7 +8,7 @@ export const recoveredMigration = {
 };
 export const criticalSuites = [
   's4/integration.test.ts', 's4/ledger.integration.test.ts', 's4/source-extension.integration.test.ts',
-  's6/store.integration.test.ts', 's6/arm-report-db.integration.test.ts',
+  's6/arm-lineage.integration.test.ts', 's6/store.integration.test.ts', 's6/arm-report-db.integration.test.ts',
   'entity-keys/entity-keys.integration.test.ts', 'ledger/calls-import.integration.test.ts',
   'cluster/alignments.integration.test.ts', 'fanout/run.integration.test.ts',
   'cards/cards.integration.test.ts', 'thesis-extension.integration.test.ts', 'weekly/weekly.integration.test.ts',
