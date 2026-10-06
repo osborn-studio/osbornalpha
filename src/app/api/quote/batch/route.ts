@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { quoteSourcesFor } from '@/lib/data/sources/registry';
-import { fetchTwseQuotesBatch } from '@/lib/data/sources/twse';
+import { fetchTwseQuotesBatch, twseQuoteRetentionStart } from '@/lib/data/sources/twse';
 import { classifyMarket } from '@/lib/utils';
 import {
   isTushareConfigured,
@@ -53,7 +53,8 @@ interface QuoteShape {
   delayed: boolean;
 }
 
-const quoteCache = new Map<string, { quote: QuoteShape; ts: number }>();
+const quoteCache = new Map<string, { quote: QuoteShape; ts: number; generation: number }>();
+let quoteRequestGeneration = 0;
 
 function lookupName(ticker: string): string {
   const hit = MOCK_UNIVERSE.find((u) => u.t === ticker);
@@ -224,6 +225,12 @@ export async function GET(req: Request) {
 
 async function quoteBatch(req: Request, signal: AbortSignal) {
   const startedAt = Date.now();
+  const retentionStart = performance.now();
+  const generation = ++quoteRequestGeneration;
+  const retain = (ticker: string, quote: QuoteShape, providerStart?: number) => {
+    if ((quoteCache.get(ticker)?.generation ?? 0) > generation) return;
+    quoteCache.set(ticker, { quote, ts: Math.min(retentionStart, providerStart ?? retentionStart), generation });
+  };
   const url = new URL(req.url);
   const tickersParam = url.searchParams.get('tickers') || '';
   const tickers = tickersParam
@@ -248,7 +255,7 @@ async function quoteBatch(req: Request, signal: AbortSignal) {
   }
 
   const force = url.searchParams.has('_');
-  const now = Date.now();
+  const now = performance.now();
   const freshQuotes: Record<string, QuoteShape> = {};
   const selectedSources: Record<string, string> = {};
   const toFetch: string[] = [];
@@ -311,7 +318,7 @@ async function quoteBatch(req: Request, signal: AbortSignal) {
         duration_ms: Date.now() - windStartedAt,
       });
       if (value) {
-        quoteCache.set(ticker, { quote: value, ts: Date.now() });
+        retain(ticker, value);
         quotes[ticker] = value;
         selectedSources[ticker] = 'datagateway-wind';
       }
@@ -336,13 +343,13 @@ async function quoteBatch(req: Request, signal: AbortSignal) {
     sourceAttempts.push(...resolution.attempts);
     const value = resolution.quote;
     if (value) {
-      quoteCache.set(ticker, { quote: value, ts: Date.now() });
+      retain(ticker, value);
       quotes[ticker] = value;
       if (resolution.selectedSource) selectedSources[ticker] = resolution.selectedSource;
       return;
     }
     const cached = quoteCache.get(ticker);
-    if (cached && Date.now() - cached.ts < STALE_TTL_MS) {
+    if (cached && performance.now() - cached.ts < STALE_TTL_MS) {
       stale += 1;
       quotes[ticker] = { ...cached.quote, delayed: true };
       selectedSources[ticker] = 'stale-cache';
@@ -360,13 +367,13 @@ async function quoteBatch(req: Request, signal: AbortSignal) {
       duration_ms: Date.now() - twStartedAt,
     });
     if (value) {
-      quoteCache.set(t, { quote: value, ts: Date.now() });
+      retain(t, value, twseQuoteRetentionStart(value));
       quotes[t] = value;
       selectedSources[t] = 'twse';
       continue;
     }
     const cached = quoteCache.get(t);
-    if (cached && Date.now() - cached.ts < STALE_TTL_MS) {
+    if (cached && performance.now() - cached.ts < STALE_TTL_MS) {
       stale += 1;
       quotes[t] = { ...cached.quote, delayed: true };
       selectedSources[t] = 'stale-cache';

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchTwseQuotesBatch } from './twse';
+import { fetchTwseQuotesBatch, twseQuoteRetentionStart } from './twse';
 const payload = (code: string, price = '12') => ({ msgArray: [{ c: code, ex: 'tse', z: price, y: '11', d: '20261006', t: '12:00:00' }] });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -82,4 +82,17 @@ describe('TWSE single-layer quote cache synthetic fixtures', () => {
     expect((await fetchTwseQuotesBatch(['9217.TW'])).get('9217.TW')?.price).toBe(17);
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
+  it('retains process-local provenance on module hits without serializing metadata', async () => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(1000);
+    const fetcher = vi.fn().mockResolvedValueOnce(Response.json(payload('9411')));
+    vi.stubGlobal('fetch', fetcher);
+    const first = (await fetchTwseQuotesBatch(['9411.TW'])).get('9411.TW')!;
+    clock.mockReturnValue(60_000);
+    const hit = (await fetchTwseQuotesBatch(['9411.TW'])).get('9411.TW')!;
+    expect(hit).toBe(first); expect(twseQuoteRetentionStart(hit)).toBe(1000);
+    expect(twseQuoteRetentionStart({ ...hit })).toBeUndefined();
+    expect(Object.keys(hit)).not.toContain('retentionStart'); expect(Object.keys(hit)).not.toContain('generation');
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
 });
