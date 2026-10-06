@@ -22,6 +22,17 @@ function boundedOwnArray(value: unknown): unknown[] {
  }
  return out;
 }
+export function allocatedJournalRefs(e:JournalEnvelope):string[] {
+  switch(e.type){
+   case 'baseline.confirmed': case 'collaboration.confirmed': return [e.payload.plan_ref,e.payload.confirmation_ref];
+   case 'generation.reserved': return [e.payload.reservation_ref];
+   case 'stance.generated': return [e.payload.stance_ref];
+   case 'ai.exposed': return [e.payload.ai_plan_ref,e.payload.disclosure_ref,e.payload.reveal_confirmation_ref];
+   case 'bindings.completed': return [e.payload.baseline_binding_ref,e.payload.ai_binding_ref,e.payload.collaboration_binding_ref];
+   case 'terminated': return [e.payload.cause_ref];
+  }
+}
+
 /** Inactive STRUCTURAL integrity replay only. Caller must load this head and all rows
  * under owner lock from trusted storage, not a submitted prefix. Does NOT resolve v2
  * genesis, typed actors/origins, grants, deadline/exposure or current report authority.
@@ -34,16 +45,6 @@ export function replayJournalIntegrity(rows: unknown, trustedHead: unknown) {
  let state:JournalState='enrolled',previous=h.genesis_hash as string,time=created;
  let baseline:JournalEnvelope|undefined,reservation:JournalEnvelope|undefined,stance:JournalEnvelope|undefined,exposure:JournalEnvelope|undefined;
  const ids=new Set<string>(),requests=new Set<string>(),artifactIds=new Set<string>();const events:JournalEnvelope[]=[];
- const newArtifacts = (e:JournalEnvelope):string[] => {
-  switch(e.type){
-   case 'baseline.confirmed': case 'collaboration.confirmed': return [e.payload.plan_ref,e.payload.confirmation_ref];
-   case 'generation.reserved': return [e.payload.reservation_ref];
-   case 'stance.generated': return [e.payload.stance_ref];
-   case 'ai.exposed': return [e.payload.ai_plan_ref,e.payload.disclosure_ref,e.payload.reveal_confirmation_ref];
-   case 'bindings.completed': return [e.payload.baseline_binding_ref,e.payload.ai_binding_ref,e.payload.collaboration_binding_ref];
-   case 'terminated': return [e.payload.cause_ref];
-  }
- };
  for(let i=0;i<values.length;i++){
   const row=object(values[i],['envelope','event_hash']);if(!hash(row.event_hash))fail('invalid_schema');
   const e=parseJournalEnvelope(row.envelope),eventHash=digest(e),now=instant(e.occurred_at);
@@ -53,7 +54,7 @@ export function replayJournalIntegrity(rows: unknown, trustedHead: unknown) {
   // New arm artifact IDs are globally distinct within this cohort, including event
   // and request identities. Repeated links to an existing artifact keep its identity.
   if(e.id===e.request_ref||requests.has(e.id)||ids.has(e.request_ref)||artifactIds.has(e.id)||artifactIds.has(e.request_ref))fail('hash_mismatch');
-  for(const ref of newArtifacts(e)){
+  for(const ref of allocatedJournalRefs(e)){
    if(artifactIds.has(ref)||ids.has(ref)||requests.has(ref)||ref===e.id||ref===e.request_ref)fail('hash_mismatch');
    artifactIds.add(ref);
   }

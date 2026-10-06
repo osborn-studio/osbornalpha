@@ -33,6 +33,7 @@ describe('inactive exact v2 genesis integrity, no real human/source authority',(
  it('refuses every cross-object identity alias while allowing owner actor principal equality',()=>{
   const paths=[['enrollment_id'],['candidate_id'],['thesis_id'],['calendar_session_ref'],['authorization_ref'],['observation_ids','human_baseline'],['observation_ids','ai_candidate'],['observation_ids','collab'],['source_bundle','source_reference','feed_id'],['source_bundle','source_reference','source_id'],['source_bundle','purpose_map','capture','grant_id'],['source_bundle','purpose_map','disclosure','grant_id'],['source_bundle','purpose_map','processing','grant_id']];
   const get=(v:unknown,path:string[]):unknown=>path.reduce((o,k)=>(o as Record<string,unknown>)[k],v);
+  for(const principal of [id(1),id(9)])for(const path of paths){const f=fixture(true);const parent=get(f,path.slice(0,-1)) as Record<string,unknown>;parent[path.at(-1)!]=principal;expect(()=>parseArmGenesis(f)).toThrow('invalid_schema');}
   for(let a=0;a<paths.length;a++)for(let b=a+1;b<paths.length;b++){const f=fixture(true);const parent=get(f,paths[b].slice(0,-1)) as Record<string,unknown>;parent[paths[b].at(-1)!]=get(f,paths[a]);expect(()=>parseArmGenesis(f)).toThrow('invalid_schema');}
   const f=fixture();f.creator_actor_ref=f.owner_id;expect(parseArmGenesis(f).creator_actor_ref).toBe(f.owner_id);
  });

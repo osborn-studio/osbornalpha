@@ -33,9 +33,9 @@ export function parseArmGenesis(value:unknown):Readonly<ArmGenesis>{
  if(!(start<deadline&&deadline<anchor))fail('invalid_schema');
  const source_bundle=parseArmSourceBundle(r.source_bundle);
  // New v2 objects have disjoint identities. Owner/creator principal identifiers
- // are excluded: an authenticated owner actor may legitimately reuse owner_id.
+ // may equal each other, but no logical object may reuse either principal ID.
  const identities=[r.enrollment_id,r.candidate_id,r.thesis_id,r.calendar_session_ref,r.authorization_ref,...Object.values(ids),source_bundle.source_reference.feed_id,source_bundle.source_reference.source_id,...Object.values(source_bundle.purpose_map).filter(g=>g!==null).map(g=>g.grant_id)];
- if(new Set(identities).size!==identities.length)fail('invalid_schema');
+ if(new Set(identities).size!==identities.length||identities.some(id=>id===r.owner_id||id===r.creator_actor_ref))fail('invalid_schema');
  return Object.freeze({...r,observation_ids:Object.freeze(ids),source_bundle}) as unknown as Readonly<ArmGenesis>;
 }
 /** Expected digest must be independently loaded from trusted immutable genesis
