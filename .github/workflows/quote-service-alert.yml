@@ -17,21 +17,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
       - name: Verify Vercel reaches local DataGateway/Wind
         run: |
           set -euo pipefail
-          payload="$(curl --fail-with-body --retry 2 --retry-all-errors --max-time 30 \
+          payload="$(curl --fail-with-body --retry 2 --retry-all-errors --max-time 30 --max-filesize 2097152 \
             "https://osbornalpha.com/api/quote/batch?tickers=600519.SH,AAPL&_=$(date +%s)")"
-          if ! jq -e '
-            .meta.failed == 0 and
-            .meta.stale == 0 and
-            .meta.selected_sources["600519.SH"] == "datagateway-wind" and
-            .meta.selected_sources["AAPL"] == "datagateway-wind"
-          ' <<< "$payload" >/dev/null; then
-            echo "DataGateway/Wind is not the selected quote source for all probe tickers."
-            echo "$payload"
-            exit 1
-          fi
+          # Fixed-field classification keeps availability and preferred source separate.
+          # Never print the raw quote/provider payload to Actions logs.
+          python3 scripts/quotes/probe_quality.py <<< "$payload"
 
   check:
     runs-on: ubuntu-latest
