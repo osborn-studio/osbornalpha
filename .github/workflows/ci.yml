@@ -48,5 +48,7 @@ jobs:
           path: |
             reports/research-db-summary.json
             reports/migration-rehearsal.json
+      - name: Next-resolved patched image runtime
+        run: node scripts/ci/sharp-runtime-smoke.mjs
       - run: npm run build
       - run: npm audit --omit=dev --audit-level=high
