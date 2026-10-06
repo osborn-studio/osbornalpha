@@ -286,7 +286,7 @@ async function quoteBatch(req: Request, signal: AbortSignal) {
   let twFailure: Exclude<SourceOutcome, 'success' | 'empty'> | null = null;
   const [twMap, results] = await Promise.all([
     twTickers.length > 0
-      ? withQuoteSourceTimeout(() => fetchTwseQuotesBatch(twTickers), 5_000, signal).catch((error) => {
+      ? withQuoteSourceTimeout(child => fetchTwseQuotesBatch(twTickers, child), 5_000, signal).catch((error) => {
           twFailure = classifySourceFailure(error);
           return new Map<string, QuoteShape | null>();
         })
