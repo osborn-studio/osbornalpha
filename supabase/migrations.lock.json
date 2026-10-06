@@ -156,6 +156,14 @@
     {
       "file": "20260926140000_research_analyst_identities.sql",
       "sha256": "fea8f4607d3b33b7be2613477e6bf1ea5ed9dcf88018b62ad04017ae61b7fb94"
+    },
+    {
+      "file": "20261005165000_evaluation_intent_cancel.sql",
+      "sha256": "8f521316cb4efe9efebd09857b7330af359ed6e133ff103262898a98eaa9a413"
+    },
+    {
+      "file": "20261005175000_evaluation_intent_fence.sql",
+      "sha256": "a069bf27f9d37916d0a247481df95bf3036958fb13210871791cf74e95e0d1a0"
     }
   ]
 }

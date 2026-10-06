@@ -25,7 +25,8 @@ export async function transaction<T>(actor: S4Actor, work: (db: PoolClient) => P
   const db = await s4Pool().connect();
   let released=false;
   try {
-    await db.query('begin');
+    // Queued owner-lock work must observe the preceding owner's committed writes.
+    await db.query('begin isolation level read committed');
     await assertRuntimePrivileges(db);
     await db.query("select pg_catalog.set_config('request.jwt.claim.sub',$1,true)", [actor.userId]);
     // Machine sessions reject invalid tokens before contending for the owner lock.

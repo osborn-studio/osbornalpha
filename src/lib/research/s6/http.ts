@@ -20,12 +20,13 @@ export async function s6Http(fn:()=>Promise<unknown>,dialect?:'evaluator-rpc/1.0
   if(e instanceof Error&&e.message==='not authenticated')code='not_authenticated';
   const status=code==='not_authenticated'?401:code==='not_found'?404:['not_configured','export_watermark_ahead'].includes(code)?503:
    ['scope_denied','policy_blocked','anchor_integrity_failed','source_withdrawn','exposure_required'].includes(code)?403:
-   ['idempotency_conflict','revision_conflict','source_version_conflict','observation_scope_conflict'].includes(code)?409:
+   ['evaluation_intent_cancelled','idempotency_conflict','revision_conflict','source_version_conflict','observation_scope_conflict'].includes(code)?409:
    code==='input_limit'?413:['invalid_revocation_candidate','invalid_schema','unsupported_version','hash_mismatch','future_input','invalid_timeline','data_insufficient','rule_unsupported','source_unavailable','duplicate_key','security_unresolved'].includes(code)?422:500;
   if(status===500)code='internal_error';
   else if(dialect){
    if(code==='invalid_revocation_candidate'||code==='duplicate_key')code='invalid_schema';
    else if(code==='export_watermark_ahead')code='source_unavailable';
+   else if(code==='evaluation_intent_cancelled')code='policy_blocked';
    else if(code==='source_withdrawn')code='policy_blocked';
   }
   return Response.json({error:{code}},{status,headers:{'Cache-Control':'no-store'}});

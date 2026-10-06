@@ -112,6 +112,15 @@ export function makeCommit(input:EvaluationInput,key:string,revision:number):Com
   engine_version:computed.result.engine_version,rule_version:computed.result.rule_version,input_sha256:normalized.input_sha256,input:normalized,
   result:computed.result,result_sha256:computed.result_sha256,expected_revision:revision,idempotency_key:key,request_key:key};
 }
+export async function cancelledEvaluationIntent(db:PoolClient,actor:S4Actor,id:string,key:string,candidateId:string){
+ const rows=(await db.query(`select candidate_id,payload,payload_hash from research_s4_records where user_id=$1 and kind='ControlEvent'
+  and payload->>'type'='evaluation.intent_cancel' and payload->>'idempotency_key'=$2`,[actor.userId,key])).rows;
+ if(rows.length>1||rows.some(row=>digest(row.payload)!==row.payload_hash||row.payload.actor_ref!==actor.userId||!['human','agent'].includes(row.payload.actor_kind)||typeof row.payload.observation_ref!=='string'))fail('hash_mismatch');
+ if(rows[0]?.payload.observation_ref!==undefined&&rows[0].payload.observation_ref!==id)fail('idempotency_conflict');
+ if(rows[0]&&rows[0].candidate_id!==candidateId)fail('hash_mismatch');
+ return rows.length===1;
+}
+
 export function createS6Store(actor:S4Actor,sessionToken?:string):EvaluationStore{return storeWithPolicy(actor,sessionToken,false);}
 /** Candidate internal adapter; existing HTTP continues using the legacy store. */
 export function createRegisteredS6Store(actor:S4Actor,sessionToken?:string):EvaluationStore{return storeWithPolicy(actor,sessionToken,true);}
@@ -161,8 +170,13 @@ function storeWithPolicy(actor:S4Actor,sessionToken:string|undefined,registered:
     const computed=evaluateObservation(authoritative);
     if(!computed.ok||computed.result_sha256!==body.result_sha256)fail('hash_mismatch');
     if(!computed.ok)throw new Error('unreachable');
-    const hash=digest(body),old=(await db.query('select body_hash,receipt from research_s6_evaluations where user_id=$1 and idempotency_key=$2 and ($3::uuid is null or observation_id=$3)',[actor.userId,body.idempotency_key,registered?row.id:null])).rows[0];
+    const hash=digest(body),found=(await db.query('select observation_id,body_hash,receipt from research_s6_evaluations where user_id=$1 and idempotency_key=$2',[actor.userId,body.idempotency_key])).rows;
+    if(found.length>1)fail('hash_mismatch');const old=found[0];
+    if(old&&old.observation_id!==row.id)fail('idempotency_conflict');
+    const cancelled=await cancelledEvaluationIntent(db,actor,row.id,body.idempotency_key,row.candidate_id);
+    if(old&&cancelled)fail('hash_mismatch');
     if(old){if(old.body_hash!==hash)fail('idempotency_conflict');return {...old.receipt,status:'duplicate'};}
+    if(cancelled)fail('evaluation_intent_cancelled');
     // New projections represent the current authority set, not a caller-selected backtest.
     // Exact retries stay valid after this five-minute preparation window expires.
     const now=Date.parse(await serverTime(db)),asOf=Date.parse(body.input.as_of);

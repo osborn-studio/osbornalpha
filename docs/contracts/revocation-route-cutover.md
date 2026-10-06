@@ -390,3 +390,39 @@ Two verified Opus5.5 audits challenged interruption cleanup, evidence provenance
 listener identity, Chromium process isolation and hash scope. Final corrections
 are host-verified. Durable pending evaluation across unmount/reload, operational
 feed deployment and production release gates remain open.
+
+
+## Durable evaluation intent and explicit recovery (local candidate)
+
+This section supersedes the intermediate recovery checkpoints. Earlier sections are dated implementation history, not the current route inventory or release approval.
+
+### Delivery and known-key resolution
+
+The browser durably claims one evaluation intent per authenticated actor/observation scope in IndexedDB before dispatch. Reloads and concurrent tabs reuse the original key; acknowledgements compare the stored key, and stale continuations cannot recreate cleared work. Storage failure pauses calculation while retaining report access. A five-second local timeout is an unknown outcome, not proof that nothing committed.
+
+The authenticated `resolve-intent` operation runs under the registered owner lock. An existing result is checked against its persisted historical receipt, without invoking the current evaluation engine. An absent result receives an immutable cancellation event, audit and outbox entry atomically. A late commit for that key is rejected. Cross-observation key collisions and contradictory records fail closed. Transactions explicitly use READ COMMITTED so work queued behind the owner lock observes preceding commits.
+
+### Damaged journal recovery
+
+Only explicit user confirmation claims a recovery marker and invokes `fence-intents`. The marker has a unique persisted generation nonce and idempotency key. The server atomically advances the observation revision, records the fence and persists its response; replay returns that original response without fencing newer work again. Existing saved reports remain available; prepared but unsaved calculations become invalid.
+
+The browser transport posts only action/key, uses same-origin credentials, rejects redirects and aborts after 15 seconds. The response must match the authenticated observation and journal scope. Its private, single-use confirmation capability authorizes a compare-and-swap acknowledgement; it is an accidental-misuse guard, not protection from arbitrary same-origin script. Lost responses retain the marker and reuse the same key after reload. Navigation and stale loads cannot release another generation.
+
+Bounded JSON damage is snapshotted privately and disposed after a confirmed fence. Unsupported structured-clone originals are preserved in a local quarantine before replacing the pending record. Quarantine capacity is two entries per scope; reaching capacity preserves the original and prevents dispatch. Raw local contents never enter the server request or diagnostic UI.
+
+### Quarantine lifecycle
+
+The UI exposes a count and explains browser/profile-local storage, no upload, retention across logout and irreversible deletion. No arbitrary structured-clone export is offered. Explicit erase confirmation is bound to the exact selected key set; changed sets are refused. Active or malformed recovery blocks erasure. Authenticated scope is checked before selection and after confirmation. Only selected quarantine entries are deleted; pending state, other scopes and server reports survive. Unknown erase outcomes are recounted once, never automatically retried.
+
+### Candidate migrations and rollout limits
+
+`20261005165000_evaluation_intent_cancel.sql` and `20261005175000_evaluation_intent_fence.sql` add NULL-safe shape checks and scoped uniqueness. Both use short lock/statement timeouts and transactional installation. The matching cancellation/fence preflight SQL reports malformed or duplicate legacy records and index state without changing records. Production rollout still requires a fresh approved backup, actual legacy-data preflight, reviewed role provisioning and serial migration/deployment admission. These local rehearsals do not establish production equivalence.
+
+### Verification and audit evidence
+
+- Isolated PostgreSQL 17 task `task_1e8f7dff`: 1861 tests passed, including 96 critical tests with zero skips; 41 migrations applied. Trigger gates and actual lock witnesses cover cancellation/commit and fence orderings, rollback and replay.
+- Built Next/real PostgreSQL/Chromium task `task_850f81b6`: browser acceptance, owned-process cleanup, typecheck and lint passed. Covers response loss, reload, cross-tab behavior, storage failures, recovery confirmation, quarantine cancellation/erasure/races and authenticated denial without mutations.
+- A dedicated test-only React root preserves the actual EvaluationPanel instance across observation-id changes. Held real context replies run in both success/denial orders. Both originals pass; two in-memory guard-removal mutants produce positive wrong-state witnesses. Production source bytes remain unchanged. This proves the combined stale guard for cross-id transitions; it does not independently prove the same-id load-counter term.
+- Verified Claude CLI `claude-opus-5-5` reviews used source and synthetic fixtures only. Findings and host verification are recorded under `/Users/osborn/.osborn/verification/knowledge-cycle-alpha-i1/`. Final same-instance audit judged the design sound, with narrower assertion/route-error diagnostics and same-id counter coverage noted as non-blocking limitations. The audit preceded execution; the host subsequently verified the successful task and acceptance artifact.
+
+Production mode remains hard-disabled. Terminal/archive/index, ledger/arm/anchor eligibility, operational feed credentials, real human inputs and production release gates remain outside this completed recovery batch.

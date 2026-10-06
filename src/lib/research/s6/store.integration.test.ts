@@ -1,3 +1,4 @@
+import {fenceEvaluationIntents} from './intent-fence';
 import {beforeAll,afterAll,describe,it,expect} from 'vitest';
 import {readFileSync} from 'node:fs';
 import {randomUUID,randomBytes,generateKeyPairSync,sign} from 'node:crypto';
@@ -6,13 +7,14 @@ import {Pool} from 'pg';
 import {registerCandidateReference} from '../revocation/register';
 import {applyRevocationPage} from '../revocation/consumer';
 import {canonicalize} from '../ingest/pa-v1/json.js';
+import {resolveEvaluationIntent} from './intent';
 import {testPack} from '../../../../scripts/s4/test-pack';
 import {importCandidate} from '../s4/import';
 import {revealRegisteredCards,revealCards} from '../s4/cards';
 import {submitRegisteredDecision,submitDecision} from '../s4/decisions';
 import {closeS4Pool,transaction} from '../s4/db';
 import {digest,evaluateObservation} from 'dsh-trade-strategy-evaluator/engine';
-import {createS6Store,prepareInput,prepareEvaluation,makeCommit,tokenHash,currentMarketIds} from './store';
+import {createS6Store,createRegisteredS6Store,prepareInput,prepareEvaluation,makeCommit,tokenHash,currentMarketIds,cancelledEvaluationIntent} from './store';
 import {createEvaluationHttpClient} from 'dsh-trade-strategy-evaluator/adapters';
 // @ts-expect-error Fixed S5 conformance export has no bundled declaration.
 import {assertEvaluationStoreConformance} from 'dsh-trade-strategy-evaluator/conformance';
@@ -89,6 +91,214 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
   expect(body.result.status).toBe('pending_start');
   await expect(store.commitEvaluationResult({...body,expected_revision:1})).rejects.toMatchObject({code:'idempotency_conflict'});
  });
+ it('resolves committed keys and persists cancellation before rejecting a late commit',async()=>{
+  const before=await counts();const resolved=await resolveEvaluationIntent(actor,id,body.idempotency_key);
+  expect(resolved.status).toBe('committed');expect(await counts()).toEqual(before);
+  const key=randomUUID(),late=makeCommit(body.input,key,1);
+  await expect(resolveEvaluationIntent(other,id,key)).rejects.toMatchObject({code:'not_found'});
+  expect(await resolveEvaluationIntent(actor,id,key)).toEqual({status:'cancelled',key});
+  await expect(transaction(actor,db=>cancelledEvaluationIntent(db,actor,randomUUID(),key,candidate))).rejects.toMatchObject({code:'idempotency_conflict'});
+  const cancelled=await counts();expect(Number(cancelled.results)).toBe(Number(before.results));
+  expect(Number(cancelled.audit)).toBe(Number(before.audit)+1);expect(Number(cancelled.outbox)).toBe(Number(before.outbox)+1);
+  expect(await resolveEvaluationIntent(actor,id,key)).toEqual({status:'cancelled',key});expect(await counts()).toEqual(cancelled);
+  const persisted=(await admin.query("select * from research_s4_records where user_id=$1 and payload->>'type'='evaluation.intent_cancel' and payload->>'idempotency_key'=$2",[actor.userId,key])).rows[0];
+  const insert=(payload:Record<string,unknown>)=>admin.query('insert into research_s4_records(user_id,id,candidate_id,kind,payload,payload_hash) values($1,$2,$3,$4,$5,$6)',[actor.userId,randomUUID(),candidate,'ControlEvent',payload,digest(payload)]);
+  await expect(insert(persisted.payload)).rejects.toMatchObject({code:'23505',constraint:'research_s6_intent_cancel_owner_key'});
+  await expect(insert({...persisted.payload,observation_ref:randomUUID()})).rejects.toMatchObject({code:'23505',constraint:'research_s6_intent_cancel_owner_key'});
+  for(const field of ['idempotency_key','observation_ref','actor_ref','actor_kind']){
+   const missing={...persisted.payload,idempotency_key:randomUUID()};delete missing[field];
+   await expect(insert(missing)).rejects.toMatchObject({code:'23514',constraint:'research_s6_intent_cancel_shape'});
+   await expect(insert({...persisted.payload,idempotency_key:randomUUID(),[field]:null})).rejects.toMatchObject({code:'23514',constraint:'research_s6_intent_cancel_shape'});
+  }
+  await expect(insert({...persisted.payload,idempotency_key:randomUUID(),actor_ref:other.userId})).rejects.toMatchObject({code:'23514'});
+  expect(await counts()).toEqual(cancelled);
+
+  for(const patch of [{idempotency_key:123},{observation_ref:[]},{observation_ref:{}},{observation_ref:id.toUpperCase()},{idempotency_key:''},{idempotency_key:'x'.repeat(129)},{actor_kind:'system'}])
+   await expect(insert({...persisted.payload,idempotency_key:randomUUID(),...patch})).rejects.toMatchObject({code:'23514'});
+  await expect(admin.query("update research_s4_records set payload=jsonb_set(payload,'{type}','\"other\"') where user_id=$1 and id=$2",[actor.userId,persisted.id])).rejects.toThrow('immutable_record');
+  await expect(admin.query('delete from research_s4_records where user_id=$1 and id=$2',[actor.userId,persisted.id])).rejects.toThrow('immutable_record');
+  await expect(transaction(actor,db=>db.query('truncate research_s4_records'))).rejects.toMatchObject({code:'42501'});
+  await expect(remote().commitEvaluationResult(late)).rejects.toMatchObject({code:'policy_blocked'});
+  await expect(createS6Store(actor).commitEvaluationResult(late)).rejects.toMatchObject({code:'evaluation_intent_cancelled'});
+  expect(await counts()).toEqual(cancelled);
+ });
+ it.each(['valid','missing','kind','duplicate'])('rehearses cancellation upgrade against legacy %s history atomically',async mode=>{
+  const db=await admin.connect();
+  try{
+   await db.query('begin');
+   await db.query('drop index research_s6_intent_cancel_owner_key;alter table research_s4_records drop constraint research_s6_intent_cancel_shape');
+   const row=(await db.query("select * from research_s4_records where user_id=$1 and payload->>'type'='evaluation.intent_cancel' limit 1",[actor.userId])).rows[0];
+   if(mode!=='valid'){
+    const payload={...row.payload};if(mode==='missing')delete payload.observation_ref;if(mode==='kind')payload.actor_kind='system';
+    if(mode==='duplicate')payload.observation_ref=randomUUID();else payload.idempotency_key=randomUUID();
+    await db.query('insert into research_s4_records(user_id,id,candidate_id,kind,payload,payload_hash) values($1,$2,$3,$4,$5,$6)',[actor.userId,randomUUID(),candidate,'ControlEvent',payload,digest(payload)]);
+   }
+   const snapshot=async()=> (await db.query("select id,payload,payload_hash from research_s4_records where user_id=$1 order by id",[actor.userId])).rows;
+   const preflight=readFileSync('scripts/s6/cancellation-preflight.sql','utf8').replace(/^begin read only;$/m,'').replace(/^rollback;$/m,'');
+   const reports=await db.query(preflight) as unknown as Array<{command:string;rows:Array<{invalid_shape:boolean;duplicate_key:boolean}>}>;
+   const issues=reports.filter(r=>r.command==='SELECT')[0].rows;
+   expect(issues).toHaveLength(mode==='valid'?0:mode==='duplicate'?2:1);
+   if(mode!=='valid')expect(issues.every(r=>mode==='duplicate'?r.duplicate_key:r.invalid_shape)).toBe(true);
+   const before=await snapshot();await db.query('savepoint legacy');
+   // Run exact DDL inside a savepoint to preserve the intentionally bad pre-state
+   // for inspection; outer rollback restores the shared disposable test schema.
+   const ddl=readFileSync('supabase/migrations/20261005165000_evaluation_intent_cancel.sql','utf8').replace(/^begin;$/m,'').replace(/^commit;$/m,'');
+   if(mode==='valid')await db.query(ddl);
+   else{await expect(db.query(ddl)).rejects.toMatchObject({code:mode==='duplicate'?'23505':'23514'});await db.query('rollback to savepoint legacy');}
+   expect(await snapshot()).toEqual(before);
+   const schema=(await db.query("select exists(select 1 from pg_constraint where conname='research_s6_intent_cancel_shape') as shape,to_regclass('public.research_s6_intent_cancel_owner_key') is not null as idx")).rows[0];
+   expect(schema).toEqual({shape:mode==='valid',idx:mode==='valid'});
+  }finally{try{await db.query('rollback');}finally{db.release(true);}}
+ });
+ it.each(['valid','missing','null','string','fraction','negative','overflow','gap','duplicate','request_key_number','request_key_format','observation_upper','actor_ref_foreign','actor_kind_system'])('rehearses fence constraint over legacy %s history',async mode=>{
+  const db=await admin.connect();
+  try{
+   await db.query('begin');await db.query('drop index research_s6_intent_fence_owner_key;alter table research_s4_records drop constraint research_s6_intent_fence_shape');
+   const payload:Record<string,unknown>={type:'evaluation.intent_fence',observation_ref:id,request_key:randomUUID(),previous_revision:1,revision:2,actor_ref:actor.userId,actor_kind:'agent'};
+   if(mode==='missing')delete payload.previous_revision;if(mode==='null')payload.revision=null;if(mode==='string')payload.revision='2';
+   if(mode==='fraction')payload.revision=2.5;if(mode==='negative')payload.previous_revision=-1;
+   if(mode==='overflow'){payload.previous_revision=2147483647;payload.revision=2147483648;}if(mode==='gap')payload.revision=3;
+   if(mode==='request_key_number')payload.request_key=123;if(mode==='request_key_format')payload.request_key='bad.key';
+   if(mode==='observation_upper')payload.observation_ref=id.toUpperCase();if(mode==='actor_ref_foreign')payload.actor_ref=other.userId;if(mode==='actor_kind_system')payload.actor_kind='system';
+   const insert=async(value:Record<string,unknown>)=>db.query('insert into research_s4_records(user_id,id,candidate_id,kind,payload,payload_hash) values($1,$2,$3,$4,$5,$6)',[actor.userId,randomUUID(),candidate,'ControlEvent',value,digest(value)]);
+   await insert(payload);if(mode==='duplicate')await insert({...payload,observation_ref:randomUUID()});
+   const before=(await db.query("select id,payload,payload_hash from research_s4_records where user_id=$1 order by id",[actor.userId])).rows;
+   const preflight=readFileSync('scripts/s6/fence-preflight.sql','utf8').replace(/^begin read only;$/m,'').replace(/^rollback;$/m,'');
+   const reports=await db.query(preflight) as unknown as Array<{command:string;rows:Array<{invalid_shape:boolean;duplicate_key:boolean}>}>;
+   const issues=reports.filter(r=>r.command==='SELECT')[0].rows;expect(issues).toHaveLength(mode==='valid'?0:mode==='duplicate'?2:1);
+   if(mode!=='valid')expect(issues.every(r=>mode==='duplicate'?r.duplicate_key:r.invalid_shape)).toBe(true);
+   await db.query('savepoint legacy');
+   const ddl=readFileSync('supabase/migrations/20261005175000_evaluation_intent_fence.sql','utf8').replace(/^begin;$/m,'').replace(/^commit;$/m,'');
+   if(mode==='valid')await db.query(ddl);
+   else{await expect(db.query(ddl)).rejects.toMatchObject({code:mode==='duplicate'?'23505':'23514',constraint:mode==='duplicate'?'research_s6_intent_fence_owner_key':'research_s6_intent_fence_shape'});await db.query('rollback to savepoint legacy');}
+   expect((await db.query("select id,payload,payload_hash from research_s4_records where user_id=$1 order by id",[actor.userId])).rows).toEqual(before);
+   expect((await db.query("select exists(select 1 from pg_constraint where conname='research_s6_intent_fence_shape') as shape,to_regclass('public.research_s6_intent_fence_owner_key') is not null as idx")).rows[0]).toEqual({shape:mode==='valid',idx:mode==='valid'});
+   if(mode==='valid'){await db.query('savepoint live');await expect(insert({...payload,request_key:'bad.key'})).rejects.toMatchObject({code:'23514',constraint:'research_s6_intent_fence_shape'});await db.query('rollback to savepoint live');}
+  }finally{try{await db.query('rollback');}finally{db.release(true);}}
+ });
+ it.each(['cancellation','fence'])('preflight %s refuses RLS-filtered runtime visibility',async name=>{
+  const sql=readFileSync('scripts/s6/'+name+'-preflight.sql','utf8').replace(/^begin read only;$/m,'').replace(/^rollback;$/m,'');
+  await expect(transaction(actor,db=>db.query(sql))).rejects.toMatchObject({code:'42501'});
+ });
+ it.each([['cancel-first',false],['commit-first',false],['cancel-first',true],['commit-first',true]] as const)('serializes queued intent resolution: %s fence=%s',async(order,fence)=>{
+  const actor={userId:randomUUID(),kind:'agent' as const};
+  await admin.query('insert into auth.users(id,email) values($1,$2)',[actor.userId,actor.userId+'@example.test']);
+  await admin.query("update profiles set role='admin' where id=$1",[actor.userId]);
+  const p=testPack(actor.userId);const feedId=randomUUID();
+  const expected={feedId,scope:p.scope,sourceId:p.sourceId,grantId:p.config.grant.grant_id,grantVersion:1};
+  p.pack.manifest.extensions['pa.revocation_reference']={protocol_version:'pa-grant-reference/v1',feed_id:feedId,owner_scope:p.scope,source_id:p.sourceId,grant_id:expected.grantId,grant_version:1,observed_at:p.version.ingested_at,revocation_seq_at_export:'0'};
+  p.pack.files['manifest.json']=canonicalize(p.pack.manifest);p.binding.approvedManifestHash=digest(p.pack.manifest);
+  await admin.query('insert into research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[actor.userId,p.binding.approvedPayloadHash,p.binding]);
+  await admin.query('insert into research_revocation_candidate.feed(feed_id,local_owner,upstream_user) values($1,$2,$3)',[feedId,actor.userId,p.scope.user_id]);
+  const keys=generateKeyPairSync('ed25519'),raw=Buffer.from(JSON.stringify({protocol_version:'pa-revocation/v1',feed_id:feedId,owner_scope:p.scope,from_seq:'0',through_seq:'0',latest_seq:'0',published_at:new Date().toISOString(),events:[]}));
+  await applyRevocationPage(admin,{feedId,localOwner:actor.userId,scope:p.scope,key:keys.publicKey},raw,sign(null,raw,keys.privateKey).toString('hex'));
+  await registerCandidateReference(admin,actor.userId,p.binding.approvedPayloadHash,JSON.stringify(p.pack),expected);
+  const candidate=(await importCandidate(actor,JSON.stringify(p.pack))).id;
+  const r=await revealCards(actor,candidate,{requestKey:randomUUID(),judgment:'Synthetic S6 only',alreadySeen:[],independentJudgment:false});
+  const id=(await submitDecision(actor,candidate,{requestKey:randomUUID(),expectedRevision:0,action:'observe',reason:'Synthetic integration',cardId:r.cards[0].id,labelId:r.labelId,exposureId:r.exposureId,securityTicker:'S6SYNTH',companyEntityId:null,newObservation:true,reviewAt:null})).observationId!;
+  const key=order==='cancel-first'?'a':'a.b:c',store=createRegisteredS6Store(actor);
+  const commit=makeCommit(await prepareInput(actor,id,[],new Date().toISOString()),key,0);
+  const before=async()=> (await admin.query(`select (select count(*) from research_s6_evaluations where user_id=$1) results,
+   (select count(*) from research_s4_records where user_id=$1 and payload->>'type'='evaluation.intent_cancel') cancels,
+   (select count(*) from research_s4_outbox where user_id=$1) outbox,(select count(*) from research_audit_log where user_id=$1) audit`,[actor.userId])).rows[0];
+  const baseline=await before(),type=order==='cancel-first'?(fence?'evaluation.intent_fence':'evaluation.intent_cancel'):'evaluation.append';
+  const gate=await admin.connect(),gateName='s6_intent_'+randomUUID().replaceAll('-','');let released=false,primary:unknown,created=false;
+  const pids:number[]=[];let earlyError:unknown;
+  let first:Promise<unknown>|undefined,second:Promise<unknown>|undefined;
+  const waitFor=async(query:string,values:unknown[])=>{const deadline=performance.now()+3000;while(performance.now()<deadline){if(earlyError)throw earlyError;const r=await admin.query(query,values);if(r.rowCount){expect(r.rowCount).toBe(1);return r.rows[0];}await new Promise(r=>setTimeout(r,10));}throw Error('synthetic intent lock witness missing');};
+  const recoveryKey=randomUUID();
+  const resolve=()=>fence?fenceEvaluationIntents(actor,id,recoveryKey):resolveEvaluationIntent(actor,id,key),write=()=>store.commitEvaluationResult(commit);
+  try{
+  await admin.query(`create function ${gateName}() returns trigger language plpgsql as $$ begin
+   if current_setting('transaction_isolation')<>'read committed' then raise exception 'unsafe isolation';end if;
+   if new.user_id='${actor.userId}'::uuid and new.kind='ControlEvent' and new.payload->>'type'='${type}' then perform pg_advisory_xact_lock(74322,1);end if;return new;end $$;
+   create trigger ${gateName} before insert on research_s4_records for each row execute function ${gateName}()`);
+   created=true;
+   await gate.query('begin');await gate.query('select pg_advisory_xact_lock(74322,1)');
+   first=order==='cancel-first'?resolve():write();void first.catch(error=>{earlyError=error;});
+   const blocked=await waitFor("select w.pid from pg_locks w join pg_stat_activity a on a.pid=w.pid where w.locktype='advisory' and w.classid=74322 and w.objid=1 and w.objsubid=2 and not w.granted and a.application_name='alpha-s4'",[]);
+   pids.push(blocked.pid);
+   second=order==='cancel-first'?write():resolve();void second.catch(()=>{});
+   const queued=await waitFor(`select w.pid from pg_locks h join pg_locks w on h.locktype=w.locktype and h.database=w.database and h.classid=w.classid and h.objid=w.objid and h.objsubid=w.objsubid
+    join pg_stat_activity a on a.pid=w.pid
+    where h.pid=$1 and h.locktype='advisory' and h.granted and not w.granted and h.objsubid=1 and a.application_name='alpha-s4' and a.wait_event_type='Lock'
+    and h.classid=((hashtextextended($2,0)>>32)&4294967295)::oid and h.objid=(hashtextextended($2,0)&4294967295)::oid`,[blocked.pid,actor.userId]);
+   expect(queued.pid).not.toBe(blocked.pid);pids.push(queued.pid);
+   await gate.query('commit');released=true;
+   if(order==='cancel-first'){
+    if(fence)expect(await first).toMatchObject({status:'fenced',key:recoveryKey,revision:1});else expect(await first).toEqual({status:'cancelled',key});
+    await expect(second).rejects.toMatchObject({code:fence?'revision_conflict':'evaluation_intent_cancelled'});
+   }else{
+    const receipt=await first as {evaluation_ref:string;status:string};expect(receipt.status).toBe('accepted');
+    if(fence)expect(await second).toMatchObject({status:'fenced',key:recoveryKey,revision:2});else expect(await second).toEqual({status:'committed',key,evaluationId:receipt.evaluation_ref});
+   }
+   expect((await admin.query('select revision from research_s4_observation_state where user_id=$1 and observation_id=$2',[actor.userId,id])).rows[0].revision).toBe((order==='cancel-first'?0:1)+(fence?1:0));
+   const after=await before();expect(Number(after.results)).toBe(order==='cancel-first'?0:1);expect(Number(after.cancels)).toBe(order==='cancel-first'&&!fence?1:0);
+   expect(Number(after.audit)).toBe(Number(baseline.audit)+(fence&&order==='commit-first'?2:1));expect(Number(after.outbox)).toBe(Number(baseline.outbox)+(fence&&order==='commit-first'?2:1));
+   expect((await resolve()).status).toBe(fence?'fenced':order==='cancel-first'?'cancelled':'committed');
+   if(order==='cancel-first')await expect(write()).rejects.toMatchObject({code:fence?'revision_conflict':'evaluation_intent_cancelled'});
+   else expect((await write()).status).toBe('duplicate');
+   expect(await before()).toEqual(after);
+   if(fence){
+    await expect(fenceEvaluationIntents(other,id,recoveryKey)).rejects.toMatchObject({code:'not_found'});
+    const revision=order==='cancel-first'?1:2;
+    const later=await store.commitEvaluationResult(makeCommit(commit.input,randomUUID(),revision));expect(later.revision).toBe(revision+1);
+    const checkpoint=await before();expect(await resolve()).toMatchObject({status:'fenced',revision});expect(await before()).toEqual(checkpoint);
+    expect((await store.readObservation(id)).revision).toBe(revision+1);
+   }
+   if(fence&&order==='cancel-first'){
+    const snapshot=async()=>({counts:await before(),revision:(await store.readObservation(id)).revision,requests:(await admin.query('select count(*) as n from research_s4_requests where user_id=$1',[actor.userId])).rows[0].n,fences:(await admin.query("select count(*) as n from research_s4_records where user_id=$1 and payload->>'type'='evaluation.intent_fence'",[actor.userId])).rows[0].n});
+    for(const table of ['research_s4_outbox','research_s4_requests']){
+     const failedKey=randomUUID(),name='s6_fence_fail_'+randomUUID().replaceAll('-','');
+     const predicate=table==='research_s4_requests'?"new.request_key='intent-fence:"+failedKey+"'":"exists(select 1 from research_s4_records r where r.user_id=new.user_id and r.id=new.record_id and r.payload->>'type'='evaluation.intent_fence')";
+     const original=await snapshot();
+     try{
+      await admin.query(`create sequence ${name}_hit;grant usage on sequence ${name}_hit to alpha_s4_runtime;create function ${name}() returns trigger language plpgsql as $$ begin if new.user_id='${actor.userId}'::uuid and (${predicate}) then perform nextval('public.${name}_hit');raise exception 'synthetic_fence_failure';end if;return new;end $$;create trigger ${name} before insert on ${table} for each row execute function ${name}()`);
+      await expect(fenceEvaluationIntents(actor,id,failedKey)).rejects.toThrow('revocation_access_denied');
+      expect((await admin.query(`select is_called from ${name}_hit`)).rows[0].is_called).toBe(true);expect(await snapshot()).toEqual(original);
+     }finally{await admin.query(`drop trigger if exists ${name} on ${table};drop function if exists ${name}();drop sequence if exists ${name}_hit`);}
+     const recovered=await fenceEvaluationIntents(actor,id,failedKey);expect(recovered.revision).toBe(original.revision+1);
+     const completed=await snapshot();expect(Number(completed.fences)).toBe(Number(original.fences)+1);expect(Number(completed.requests)).toBe(Number(original.requests)+1);
+     expect(await fenceEvaluationIntents(actor,id,failedKey)).toEqual(recovered);expect(await snapshot()).toEqual(completed);
+    }
+    for(const bad of ['x'.repeat(7),'x'.repeat(101),'bad.key.test'])await expect(fenceEvaluationIntents(actor,id,bad)).rejects.toMatchObject({code:'invalid_schema'});
+    for(const good of ['x'.repeat(8),'x'.repeat(100)])expect((await fenceEvaluationIntents(actor,id,good)).status).toBe('fenced');
+    // A receipt-key collision is a visible conflict, never an overwrite/refence.
+    const collision='collision-key';await admin.query('insert into research_s4_requests(user_id,request_key,request_hash,response) values($1,$2,$3,$4)',[actor.userId,'intent-fence:'+collision,digest({other:'synthetic'}),{}]);
+    const checkpoint=await snapshot();await expect(fenceEvaluationIntents(actor,id,collision)).rejects.toMatchObject({code:'idempotency_conflict'});expect(await snapshot()).toEqual(checkpoint);
+    // Orphan event simulates missing request receipt without deleting history.
+    const orphan='orphan-key',payload={type:'evaluation.intent_fence',observation_ref:id,request_key:orphan,previous_revision:0,revision:1,actor_ref:actor.userId,actor_kind:'agent'};
+    await admin.query('insert into research_s4_records(user_id,id,candidate_id,kind,payload,payload_hash) values($1,$2,$3,$4,$5,$6)',[actor.userId,randomUUID(),candidate,'ControlEvent',payload,digest(payload)]);
+    const orphaned=await snapshot();await expect(fenceEvaluationIntents(actor,id,orphan)).rejects.toMatchObject({code:'hash_mismatch'});expect(await snapshot()).toEqual(orphaned);
+    for(const response of [{status:'fenced',key:'malformed-replay',revision:0,recordId:'bad'},{status:'fenced',key:'malformed-replay',revision:1,recordId:'bad'}]){
+     const badKey=randomUUID(),request={operation:'evaluation.intent_fence',observationId:id,key:badKey};
+     await admin.query('insert into research_s4_requests(user_id,request_key,request_hash,response) values($1,$2,$3,$4)',[actor.userId,'intent-fence:'+badKey,digest(request),{...response,key:badKey}]);
+     const beforeBad=await snapshot();await expect(fenceEvaluationIntents(actor,id,badKey)).rejects.toMatchObject({code:'hash_mismatch'});expect(await snapshot()).toEqual(beforeBad);
+    }
+   }
+   if(fence){
+    const nextCards=await revealRegisteredCards(actor,candidate,{requestKey:randomUUID(),judgment:'Synthetic recovery namespace test',alreadySeen:[],independentJudgment:false});
+    const candidateRevision=(await admin.query('select revision from research_s4_candidates where user_id=$1 and id=$2',[actor.userId,candidate])).rows[0].revision;
+    const nextObservation=(await submitRegisteredDecision(actor,candidate,{requestKey:randomUUID(),expectedRevision:candidateRevision,action:'observe',reason:'Synthetic scope test only',cardId:nextCards.cards[0].id,labelId:nextCards.labelId,exposureId:nextCards.exposureId,securityTicker:'S6SYNTH',companyEntityId:null,newObservation:true,reviewAt:null})).observationId!;
+    expect(nextObservation).not.toBe(id);
+    const scoped=await before();await expect(fenceEvaluationIntents(actor,nextObservation,recoveryKey)).rejects.toMatchObject({code:'idempotency_conflict'});expect(await before()).toEqual(scoped);
+   }
+   // Both isolated owners may cancel the same key: namespace is not global.
+   expect(await resolveEvaluationIntent(actor,id,'shared-cancel-key')).toEqual({status:'cancelled',key:'shared-cancel-key'});
+   if(order==='commit-first'&&!fence){
+    const short=await store.commitEvaluationResult(makeCommit(commit.input,'a',1));
+    expect(await resolveEvaluationIntent(actor,id,'a')).toEqual({status:'committed',key:'a',evaluationId:short.evaluation_ref});
+   }
+  }catch(error){primary=error;throw error;}finally{
+   const failures:unknown[]=[];
+   try{if(!released)await gate.query('rollback');}catch(error){failures.push(error);}finally{gate.release(true);}
+   if(primary&&!released)for(const pid of pids)try{await admin.query('select pg_terminate_backend($1)',[pid]);}catch(error){failures.push(error);}
+   // Runtime statements are bounded to 15s by researchConfig; gate is released first.
+   await Promise.allSettled([first,second].filter((v):v is Promise<unknown>=>v!==undefined));
+   try{if(created)await admin.query(`drop trigger ${gateName} on research_s4_records;drop function ${gateName}()`);}catch(error){failures.push(error);}
+   if(failures.length&&!primary)throw new AggregateError(failures,'synthetic intent cleanup failed');
+  }
+ },45000);
  it('records RPC material disclosures and rejects stale/revoked access including exact commit retry',async()=>{
   const readExposure=async()=> (await admin.query("select payload from research_s4_records where user_id=$1 and kind='ExposureEvent' and payload->>'origin' like 'alpha_evaluator_%'",[actor.userId])).rows;
   const before=await readExposure();await remote().readObservation(id);
