@@ -267,7 +267,9 @@ export function replayJudgments(actor: S4Actor, thesisId: string, asOf: string):
  * registered source authority or authentic human knowledge. created_at is a
  * pre-commit writer-supplied wall-clock stamp (backdating/clock steps possible),
  * not a trustworthy historical visibility fence. Return exact UTC microseconds
- * for this view; legacy Date formatting remains unchanged. Legacy source-only
+ * for this view; reject more than100 rows without returning a partial prefix.
+ * This result cap does not bound SQL scan/sort cost or per-row JSON size.
+ * Legacy Date formatting and unbounded retrospective results remain unchanged. Legacy source-only
  * replay remains available for retrospective derivations and is not this view. */
 export function replayTimestampFilteredJudgments(actor: S4Actor, thesisId: string, asOf: string): Promise<ReplayedJudgment[]> {
   return replayJudgmentsWithCutoff(actor, thesisId, asOf, true);
@@ -281,7 +283,9 @@ async function replayJudgmentsWithCutoff(actor: S4Actor, thesisId: string, asOf:
         to_char(s.available_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as available_at_exact
       from public.research_judgments j join public.research_source_documents s on s.user_id=j.user_id and s.id=j.source_id
       where j.user_id=$1 and j.thesis_id=$2 and s.available_at<=$3::timestamptz and (not $4::boolean or j.created_at<=$3::timestamptz)
-      order by j.snapshot_id,j.question_set_version,j.question_id,j.backend,j.backend_model,j.id`, [actor.userId, thesisId, asOf, recordedOnly])).rows;
+      order by j.snapshot_id,j.question_set_version,j.question_id,j.backend,j.backend_model,j.id
+      limit $5::integer`, [actor.userId, thesisId, asOf, recordedOnly, recordedOnly ? 101 : null])).rows;
+    if (recordedOnly && rows.length > 100) fail('input_limit');
     return rows.map(({created_at_exact, available_at_exact, ...r}) => ({ ...r, confidence: r.confidence === null ? null : Number(r.confidence),
       cost_micros: r.cost_micros === null ? null : Number(r.cost_micros),
       created_at: recordedOnly ? created_at_exact : r.created_at.toISOString(),
