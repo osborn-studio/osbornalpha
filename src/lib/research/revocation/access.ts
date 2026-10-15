@@ -4,6 +4,7 @@ import {fail} from '../ingest/pa-v1/json.js';
 import {validateCandidateBinding} from '../ingest/candidate';
 import type {ExpectedGrantReference} from './candidate';
 import {assertRevocationFresh} from './freshness';
+import {publicWorkErrorCode} from './work-error';
 class AccessGateError extends Error {}
 const deny=(code:string):never=>{throw new AccessGateError(code);};
 /** Composes with an existing explicit READ COMMITTED transaction on this client.
@@ -66,8 +67,7 @@ export async function withRegisteredCandidatesInTransaction<T>(db:PoolClient,act
   try{inWork=true;result=await work(db,items);inWork=false;}
   catch(error){
    inWork=false;
-   const code=(error as {code?:unknown})?.code;
-   if(error instanceof Error&&typeof code==='string'&&/^[a-z][a-z_]{0,63}$/.test(code)&&error.message===code&&typeof (error as {recovery?:unknown}).recovery==='string'){
+   if(publicWorkErrorCode(error)!==null){
     if((await db.query('select pg_catalog.pg_current_xact_id()::text as id')).rows[0].id!==transactionId)deny('transaction_changed');
     await checkAll();inWork=true;
    }
@@ -83,8 +83,8 @@ export async function withRegisteredCandidatesInTransaction<T>(db:PoolClient,act
    const current=(await db.query('select pg_catalog.pg_current_xact_id_if_assigned()::text as id')).rows[0].id;
    if(transactionId!==null&&current===transactionId)await db.query('select 1/0');
   }catch{/* Already aborted, disconnected, or deliberately poisoned. */}
-  const code=(error as {code?:unknown})?.code;
-  if(inWork&&error instanceof Error&&typeof code==='string'&&/^[a-z][a-z_]{0,63}$/.test(code)&&error.message===code&&typeof (error as {recovery?:unknown}).recovery==='string')fail(code);
+  const code=inWork?publicWorkErrorCode(error):null;
+  if(code!==null)fail(code);
   throw new RevocationAccessDenied(error instanceof AccessGateError?error.message:'validation_or_database');
  }
 }
