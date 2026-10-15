@@ -12,8 +12,8 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -23,6 +23,30 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm test
+      - name: Install PostgreSQL 17 binaries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common
+          echo "create_main_cluster = false" | sudo tee -a /etc/postgresql-common/createcluster.conf
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get update
+          sudo apt-get install -y postgresql-17
+          pg_lsclusters --no-header | awk '$4 ~ /^online/ {exit 1}'
+      - name: Unit and real database tests (critical suites may not skip)
+        run: npm run test:db
+        env:
+          S4_POSTGRES_BIN: /usr/lib/postgresql/17/bin
+      - name: Fresh and seeded migration rehearsal
+        run: npm run test:migrations
+        env:
+          S4_POSTGRES_BIN: /usr/lib/postgresql/17/bin
+      - name: Sanitized database summaries
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: database-verification
+          path: |
+            reports/research-db-summary.json
+            reports/migration-rehearsal.json
       - run: npm run build
       - run: npm audit --omit=dev --audit-level=high
