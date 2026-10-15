@@ -1,5 +1,6 @@
 'use client';
 import {createViewRequests,ObsoleteViewRequest} from '@/lib/research/s4/view-requests';
+import {resetsDecisionDraft} from '@/lib/research/s4/decision-rejections';
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {ChangeCards,type CardView} from '@/components/research/s4/ChangeCards';
 import {DecisionForm,type OptionsView} from '@/components/research/s4/DecisionForm';
@@ -57,7 +58,7 @@ export default function ObservationsPage(){
    pendingDecision.current??={...body,cardId,labelId:revealed.labelId,exposureId:revealed.exposureId};setDecisionPending(true);
    try{await request(`/candidates/${selected}/decisions`,pendingDecision.current);pendingDecision.current=null;setDecisionPending(false);setNotice('决定已保存。');
     try{await historyLoad();await load(attemptedPage.current);}catch{setNotice('决定已保存，但资料刷新失败。请重新核实权限后刷新历史，无需重复提交。');}
-   }catch(e){if(e instanceof Error&&['revision_conflict','idempotency_conflict','scope_denied','policy_blocked','revocation_access_denied','invalid_schema','security_unresolved','exposure_required'].includes(e.message)){pendingDecision.current=null;setDecisionPending(false);}report(e);}finally{setBusy(false);}
+   }catch(e){if(resetsDecisionDraft(e instanceof Error?e.message:undefined)){pendingDecision.current=null;setDecisionPending(false);}report(e);}finally{setBusy(false);}
   }
   return <div className="mx-auto max-w-5xl space-y-6 text-text">
     <header><h1 className="text-2xl font-semibold">变化与观察</h1><p className="mt-2 text-sm text-text-dim">先留下已有判断，再看系统变化卡。决定与观察保留历史，无行情时继续等待。</p></header>

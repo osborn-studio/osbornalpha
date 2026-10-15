@@ -1,11 +1,12 @@
 'use client';
 import {useCallback,useLayoutEffect,useRef,useState} from 'react';
+import {JOURNAL_CONTEXT_UNAVAILABLE,journalContextFailure} from '@/lib/research/s6/journal-context-failure';
 import {evaluationQuarantineCount,prepareEvaluationQuarantineErase,eraseEvaluationQuarantine,claimEvaluationRecovery,requestEvaluationFence,acknowledgeEvaluationRecovery,EvaluationJournalError,pendingEvaluation,claimEvaluation,resumeEvaluation,acknowledgeEvaluation,type EvaluationAttempt} from './evaluation-journal';
 import type {EvaluationResult} from 'dsh-trade-strategy-evaluator/engine';
 type Report={revision:number;marketIds:string[];anchorStatus:string;synthetic:boolean;historyTruncated:boolean;observationKind:string;contaminationReasons:string[];evaluations:Array<{id:string;result:EvaluationResult;result_hash:string}>};
 const statusNames:Record<string,string>={pending_start:'等待起点',open:'观察未到期',resolved:'已计算',data_insufficient:'行情或证据不足'};
 const reasons:Record<string,string>={max_wait_exceeded:'已超过冻结政策的起点等待期',missing_start_evidence:'缺少起点行情或停牌证据',missing_benchmark:'缺少基准行情',missing_close:'缺少收盘行情',rule_unsupported:'冻结日历或政策不受支持'};
-const journalMessages:Record<string,string>={evaluation_journal_unavailable:'无法读取本机计算记录，计算已暂停；仍可查看报告。',evaluation_journal_damaged:'本机待确认记录格式异常，计算已暂停；记录已保留，仍可查看报告。',evaluation_recovery_pending:'本机记录正在等待恢复确认，计算已暂停；请保留记录，仍可查看报告。',evaluation_recovery_damaged:'本机恢复记录格式异常，计算已暂停；请保留记录，仍可查看报告。',evaluation_quarantine_full:'本机隔离记录已达保留上限，计算已暂停；记录未删除，仍可查看报告。'};
+const journalMessages:Record<string,string>={[JOURNAL_CONTEXT_UNAVAILABLE]:'无法读取计算上下文，计算已暂停；可重试读取，仍可查看报告。',evaluation_journal_unavailable:'无法读取本机计算记录，计算已暂停；仍可查看报告。',evaluation_journal_damaged:'本机待确认记录格式异常，计算已暂停；记录已保留，仍可查看报告。',evaluation_recovery_pending:'本机记录正在等待恢复确认，计算已暂停；请保留记录，仍可查看报告。',evaluation_recovery_damaged:'本机恢复记录格式异常，计算已暂停；请保留记录，仍可查看报告。',evaluation_quarantine_full:'本机隔离记录已达保留上限，计算已暂停；记录未删除，仍可查看报告。'};
 const messages:Record<string,string>={evaluation_quarantine_changed:'隔离副本已变化，请重新读取后再次确认删除。',quarantine_erase_unresolved:'本机删除结果尚未确认，请重新读取记录核实；不会自动重试删除。',evaluation_fence_unavailable:'恢复结果尚未确认，请重新读取本机记录后重试恢复；不会自动新建计算。',evaluation_intent_cancelled:'此计算已取消，不会再保存；请点击核实结果以清理本机待确认记录。',evaluation_resolution_ack_unavailable:'原计算已核实或取消，但本机确认状态未知；请重新读取本机记录。',evaluation_ack_unavailable:'计算已保存，但本机确认状态未知；请重新读取本机记录，系统不会自动新建。',evaluation_journal_unavailable:'无法确认本机计算记录，计算已暂停；请重新读取本机记录。',not_configured:'观察计算尚未启用。',revocation_access_denied:'材料权限已撤回或当前账号无权访问。',revocation_check_unavailable:'暂时无法核实材料权限，请稍后重新查看报告。',scope_denied:'材料权限已撤回或当前账号无权访问。',policy_blocked:'材料授权不可用。',anchor_integrity_failed:'回执完整性异常，计算已暂停。',revision_conflict:'计算版本已变化，保留原记录等待核实；不会自动新建计算。',source_version_conflict:'冻结行情已变化，保留原记录等待核实；不会自动新建计算。',source_unavailable:'缺少可核查行情，不能计算。',data_insufficient:'数据或政策证据不足。',future_input:'计算时间超前，请重新准备计算。',invalid_timeline:'计算准备已过期，保留原记录等待核实；不会自动新建计算。'};
 export function EvaluationPanel({id}:{id:string}){
  const [data,setData]=useState<Report|null>(null),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
@@ -23,7 +24,7 @@ export function EvaluationPanel({id}:{id:string}){
   try{
   let context:{journalScope:string};
   try{context=await request({action:'journal-context'});if(!active())return;if(!/^[0-9a-f]{64}$/.test(context.journalScope))throw Error('invalid_response');journalScope.current=context.journalScope;}
-  catch(e){if(active()){setData(null);setNotice(messages[(e as Error).message]||`未完成：${(e as Error).message}`);}return;}
+  catch(e){if(active()){const failure=journalContextFailure((e as Error).message,messages);setData(null);setNotice(failure.notice);setJournalReady(false);setJournalError(failure.journalError);}return;}
   try{const count=await evaluationQuarantineCount(context.journalScope);if(!active())return;setQuarantineCount(count);const value=await pendingEvaluation(context.journalScope);if(!active())return;journalScope.current=context.journalScope;attempt.current=value;setJournalError(null);setJournalReady(true);if(value)setNotice('发现待确认的计算，请重试同一计算核实结果。');}
   catch(error){if(active()){setJournalReady(false);setJournalError(error instanceof EvaluationJournalError?error.code:'evaluation_journal_unavailable');}}
   }finally{if(active())setJournalLoading(false);}
