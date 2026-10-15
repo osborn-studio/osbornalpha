@@ -3,7 +3,7 @@
 // error) keeps the draft and its request key so a retry replays the identical submission.
 export const DEFINITIVE_DECISION_REJECTIONS = Object.freeze([
   'revision_conflict', 'idempotency_conflict', 'scope_denied', 'policy_blocked', 'revocation_access_denied',
-  'invalid_schema', 'security_unresolved', 'exposure_required', 'observation_scope_conflict',
+  'invalid_schema', 'security_unresolved', 'exposure_required', 'observation_scope_conflict', 'data_insufficient',
 ] as const);
 
 export function resetsDecisionDraft(code: unknown): boolean {

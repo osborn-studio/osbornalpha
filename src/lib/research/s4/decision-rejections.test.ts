@@ -7,6 +7,10 @@ describe('resetsDecisionDraft', () => {
   it('releases the draft after an observation scope conflict (Codex P2, 2026-10-15)', () => {
     expect(resetsDecisionDraft('observation_scope_conflict')).toBe(true);
   });
+  it('releases the draft after insufficient frozen-calendar coverage (Codex P2 r3, 2026-10-15)', () => {
+    // planObservationSessions throws MarketPolicyError data_insufficient and the transaction rolls back.
+    expect(resetsDecisionDraft('data_insufficient')).toBe(true);
+  });
   it('releases the draft after the other definitive rejections', () => {
     for (const code of ['revision_conflict', 'idempotency_conflict', 'scope_denied', 'policy_blocked', 'revocation_access_denied', 'invalid_schema', 'security_unresolved', 'exposure_required']) {
       expect(resetsDecisionDraft(code), code).toBe(true);
