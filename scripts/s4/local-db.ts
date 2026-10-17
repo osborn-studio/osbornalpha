@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:net';
 import { Pool } from 'pg';
 
-export function stopLocalDatabase(state: { bin: string; directory: string }, primaryError?: unknown) {
+export function stopLocalDatabase(state: { bin: string; directory: string }, primaryError?: unknown, retainDirectory = false) {
   const data = join(state.directory, 'data');
   try {
     if (existsSync(join(data, 'postmaster.pid'))) {
@@ -21,7 +21,7 @@ export function stopLocalDatabase(state: { bin: string; directory: string }, pri
       }
     }
     if (existsSync(join(data, 'postmaster.pid'))) throw new Error('Postmaster pid remains; retaining directory');
-    rmSync(state.directory, { recursive: true, force: true });
+    if (!retainDirectory) rmSync(state.directory, { recursive: true, force: true });
   } catch (cleanupError) {
     throw new AggregateError(primaryError ? [primaryError, cleanupError] : [cleanupError],
       `${primaryError instanceof Error ? primaryError.message + '; ' : ''}Local cleanup failed; retained ${state.directory}`);

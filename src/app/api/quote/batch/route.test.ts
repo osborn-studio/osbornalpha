@@ -1,9 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   fetchDatagatewayRealtimeQuotes: vi.fn(),
   fallbackFetch: vi.fn(),
   fetchTwseQuotesBatch: vi.fn(),
+  twseQuoteRetentionStart: vi.fn(),
+  sourceNames: ['public-fallback'],
+  paidConfigured: false,
+  paidDaily: vi.fn(),
+  paidBasic: vi.fn(),
 }));
 
 vi.mock('@/lib/data/sources/datagateway-quote', () => ({
@@ -12,20 +17,21 @@ vi.mock('@/lib/data/sources/datagateway-quote', () => ({
 }));
 
 vi.mock('@/lib/data/sources/registry', () => ({
-  quoteSourcesFor: () => [{ name: 'public-fallback', fetch: mocks.fallbackFetch }],
+  quoteSourcesFor: () => mocks.sourceNames.map(name => ({ name, fetch: mocks.fallbackFetch })),
 }));
 
 vi.mock('@/lib/data/sources/twse', () => ({
   fetchTwseQuotesBatch: mocks.fetchTwseQuotesBatch,
+  twseQuoteRetentionStart: mocks.twseQuoteRetentionStart,
 }));
 
 vi.mock('@/lib/data/sources/tushare-cached', () => ({
-  isTushareConfigured: () => false,
-  fetchTushareDaily: vi.fn(),
-  fetchTushareDailyBasic: vi.fn(),
+  isTushareConfigured: () => mocks.paidConfigured,
+  fetchTushareDaily: mocks.paidDaily,
+  fetchTushareDailyBasic: mocks.paidBasic,
 }));
 
-import { GET } from './route';
+let GET: typeof import('./route')['GET'];
 
 function quote(ticker: string, source: string) {
   return {
@@ -56,8 +62,13 @@ function quote(ticker: string, source: string) {
 }
 
 describe('GET /api/quote/batch DataGateway routing', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ GET } = await import('./route'));
     vi.clearAllMocks();
+    mocks.twseQuoteRetentionStart.mockReset();
+    mocks.sourceNames = ['public-fallback'];
+    mocks.paidConfigured = false;
     mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map([
       ['AAPL', quote('AAPL', 'datagateway-wind')],
     ]));
@@ -65,12 +76,48 @@ describe('GET /api/quote/batch DataGateway routing', () => {
     mocks.fetchTwseQuotesBatch.mockResolvedValue(new Map());
   });
 
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+  it('pre-aborted request dispatches no providers', async () => {
+    const c=new AbortController();c.abort(); const r=await GET(new Request('https://example.test/api/quote/batch?tickers=PREABORT', {signal:c.signal}));
+    expect(r.status).toBe(503);expect(mocks.fetchDatagatewayRealtimeQuotes).not.toHaveBeenCalled();expect(mocks.fallbackFetch).not.toHaveBeenCalled();expect(mocks.fetchTwseQuotesBatch).not.toHaveBeenCalled();
+  });
+  it('disconnect discards late gateway results without writing cache or starting fallback', async () => {
+    let deliver:(v:Map<string,ReturnType<typeof quote>>)=>void=()=>{};
+    mocks.fetchDatagatewayRealtimeQuotes.mockImplementationOnce(()=>new Promise(resolve=>{deliver=resolve;}));
+    const c=new AbortController();const pending=GET(new Request('https://example.test/api/quote/batch?tickers=DISCONNECT',{signal:c.signal}));c.abort();
+    expect((await pending).status).toBe(503);deliver(new Map([['DISCONNECT',quote('DISCONNECT','datagateway-wind')]])); await Promise.resolve();
+    expect(mocks.fallbackFetch).not.toHaveBeenCalled();mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map());
+    const body=await (await GET(new Request('https://example.test/api/quote/batch?tickers=DISCONNECT'))).json();expect(mocks.fetchDatagatewayRealtimeQuotes).toHaveBeenCalledTimes(2);expect(body.meta.selected_sources.DISCONNECT).toBe('public-fallback');
+  });
+  it('soft ticker budget preserves gateway success and stale cache with no later dispatch', async () => {
+    vi.useFakeTimers();
+    await GET(new Request('https://example.test/api/quote/batch?tickers=SLOWSTALE&_=1'));
+    mocks.sourceNames=['synthetic1','synthetic2','synthetic3','synthetic4'];mocks.fallbackFetch.mockImplementation(()=>new Promise(()=>{}));
+    mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map([['FASTPARTIAL',quote('FASTPARTIAL','datagateway-wind')]]));
+    const pending=GET(new Request('https://example.test/api/quote/batch?tickers=FASTPARTIAL,SLOWSTALE,EMPTYBUDGET&_=1'));
+    await vi.advanceTimersByTimeAsync(14_000);const response=await pending;const body=await response.json();
+    expect(response.status).toBe(200);expect(body.meta.selected_sources).toEqual({FASTPARTIAL:'datagateway-wind',SLOWSTALE:'stale-cache'});expect(body.quotes.SLOWSTALE.delayed).toBe(true);expect(body.quotes.EMPTYBUDGET).toBe(null);expect(body.meta.failed).toBe(1);expect(body.meta.stale).toBe(1);
+    const count=mocks.fallbackFetch.mock.calls.length;await vi.advanceTimersByTimeAsync(10_000);expect(mocks.fallbackFetch).toHaveBeenCalledTimes(count);expect(vi.getTimerCount()).toBe(0);
+  });
+  it('does not retry uncancellable paid helpers after timeout', async () => {
+    vi.useFakeTimers(); mocks.paidConfigured=true; mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map()); mocks.fallbackFetch.mockResolvedValue(null);
+    mocks.paidDaily.mockImplementation(()=>new Promise(()=>{}));mocks.paidBasic.mockImplementation(()=>new Promise(()=>{}));
+    const pending=GET(new Request('https://example.test/api/quote/batch?tickers=600777.SH&_=1'));
+    await vi.advanceTimersByTimeAsync(2700);expect((await pending).status).toBe(200);expect(mocks.paidDaily).toHaveBeenCalledTimes(1);expect(mocks.paidBasic).toHaveBeenCalledTimes(1);await vi.advanceTimersByTimeAsync(20_000);expect(mocks.paidDaily).toHaveBeenCalledTimes(1);expect(vi.getTimerCount()).toBe(0);
+  });
+  it('forwards route disconnect to TWSE and discards late provider results', async () => {
+    let deliver:(v:Map<string,ReturnType<typeof quote>>)=>void=()=>{};let child:AbortSignal|undefined;
+    mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map());mocks.fetchTwseQuotesBatch.mockImplementationOnce((_,signal)=>{child=signal;return new Promise(resolve=>{deliver=resolve;});});
+    const c=new AbortController();const pending=GET(new Request('https://example.test/api/quote/batch?tickers=9115.TW',{signal:c.signal}));await new Promise(resolve=>setTimeout(resolve,0));expect(child).toBeInstanceOf(AbortSignal);c.abort();expect((await pending).status).toBe(503);expect(child!.aborted).toBe(true);
+    deliver(new Map([['9115.TW',quote('9115.TW','twse')]]));await new Promise(resolve=>setTimeout(resolve,0));mocks.fetchTwseQuotesBatch.mockResolvedValue(new Map());
+    const body=await (await GET(new Request('https://example.test/api/quote/batch?tickers=9115.TW'))).json();expect(body.quotes['9115.TW']).toBe(null);expect(body.meta.selected_sources['9115.TW']).toBeUndefined();
+  });
   it('queries DataGateway once and falls back only for missing tickers', async () => {
     const response = await GET(new Request('https://example.test/api/quote/batch?tickers=AAPL,MSFT&_=1'));
     const body = await response.json();
 
     expect(mocks.fetchDatagatewayRealtimeQuotes).toHaveBeenCalledTimes(1);
-    expect(mocks.fetchDatagatewayRealtimeQuotes).toHaveBeenCalledWith(['AAPL', 'MSFT']);
+    expect(mocks.fetchDatagatewayRealtimeQuotes).toHaveBeenCalledWith(['AAPL', 'MSFT'], { signal: expect.any(AbortSignal) });
     expect(mocks.fallbackFetch).toHaveBeenCalledTimes(1);
     expect(mocks.fallbackFetch).toHaveBeenCalledWith('MSFT', expect.any(AbortSignal));
     expect(body.quotes.AAPL).toMatchObject({ source: 'datagateway-wind', ticker: 'AAPL' });
@@ -79,6 +126,42 @@ describe('GET /api/quote/batch DataGateway routing', () => {
       AAPL: 'datagateway-wind',
       MSFT: 'public-fallback',
     });
+  });
+
+  it.each([null, undefined])('falls back for a gateway key with no quote (%s), keeping valid preferred quotes', async missing => {
+    mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map([
+      ['AAPL', quote('AAPL', 'datagateway-wind')], ['MSFT', missing],
+    ]));
+    const response = await GET(new Request('https://example.test/api/quote/batch?tickers=AAPL,msft&_=1'));
+    const body = await response.json(); expect(response.status).toBe(200);
+    expect(mocks.fallbackFetch).toHaveBeenCalledExactlyOnceWith('msft', expect.any(AbortSignal));
+    expect(body.meta.selected_sources).toEqual({ AAPL: 'datagateway-wind', msft: 'public-fallback' });
+    expect(body.meta.sources['datagateway-wind']).toMatchObject({ attempted: 2, succeeded: 1, failed: 1 });
+    expect(body.quotes.msft).toMatchObject({ ticker: 'msft', source: 'public-fallback' });
+    expect(body.quotes.MSFT).toBeUndefined();
+    expect(body.meta.failed).toBe(0); expect(body.meta.stale).toBe(0);
+  });
+  it('routes null gateway TW quotes through one native fallback batch, for both missing symbols', async () => {
+    mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map([['9211.TW', null], ['9212.TW', null]]));
+    mocks.fetchTwseQuotesBatch.mockResolvedValue(new Map([['9211.TW', quote('9211.TW', 'twse')], ['9212.TW', quote('9212.TW', 'twse')]]));
+    const response = await GET(new Request('https://example.test/api/quote/batch?tickers=9211.TW,9212.TW&_=1'));
+    const body = await response.json(); expect(response.status).toBe(200);
+    expect(mocks.fetchTwseQuotesBatch).toHaveBeenCalledExactlyOnceWith(['9211.TW', '9212.TW'], expect.any(AbortSignal));
+    expect(mocks.fallbackFetch).not.toHaveBeenCalled(); expect(body.meta.failed).toBe(0);
+    expect(body.meta.selected_sources).toEqual({ '9211.TW': 'twse', '9212.TW': 'twse' });
+    expect(body.meta.sources['datagateway-wind']).toMatchObject({ attempted: 2, succeeded: 0, failed: 2 });
+  });
+  it('reports a failed ticker if gateway key is null and all configured public fallback results are empty', async () => {
+    mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map([['MSFT', null]]));
+    mocks.fallbackFetch.mockResolvedValue(null);
+    const response = await GET(new Request('https://example.test/api/quote/batch?tickers=MSFT&_=1'));
+    const body = await response.json(); expect(response.status).toBe(200);
+    expect(mocks.fallbackFetch).toHaveBeenCalledTimes(2);
+    expect(body.quotes.MSFT).toBeNull(); expect(body.meta.failed_tickers).toEqual(['MSFT']);
+    expect(body.meta.failed).toBe(1); expect(body.meta.selected_sources.MSFT).toBeUndefined();
+    expect(body.meta.sources['public-fallback']).toMatchObject({ attempted: 1, succeeded: 0, failed: 1, retries: 1 });
+    expect(body.meta.stale).toBe(0);
+    expect(body.meta.sources['datagateway-wind']).toMatchObject({ succeeded: 0, failed: 1 });
   });
 
   it('falls back after one bounded DataGateway attempt', async () => {
@@ -94,4 +177,62 @@ describe('GET /api/quote/batch DataGateway routing', () => {
     expect(body.quotes.AAPL).toMatchObject({ source: 'public-fallback', ticker: 'AAPL' });
     expect(body.meta.sources['datagateway-wind']).toMatchObject({ attempted: 1, failed: 1, retries: 0 });
   });
+  it('reaches paid fallback within the ticker budget after all three free providers hang', async () => {
+    vi.useFakeTimers(); mocks.sourceNames = ['eastmoney', 'sina', 'tencent']; mocks.paidConfigured = true;
+    mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map()); mocks.fallbackFetch.mockImplementation(() => new Promise(() => {}));
+    mocks.paidDaily.mockResolvedValue([]); mocks.paidBasic.mockResolvedValue(null);
+    const pending = GET(new Request('https://example.test/api/quote/batch?tickers=600778.SH&_=1'));
+    await vi.advanceTimersByTimeAsync(7500); const body = await (await pending).json();
+    expect(mocks.fallbackFetch).toHaveBeenCalledTimes(3); expect(mocks.paidDaily).toHaveBeenCalledOnce(); expect(mocks.paidBasic).toHaveBeenCalledOnce();
+    for (const source of mocks.sourceNames) expect(body.meta.sources[source].retries).toBe(0);
+    expect(body.quotes['600778.SH']).toBeNull(); expect(vi.getTimerCount()).toBe(0);
+  });
+  it('does not start paid fallback after cancellation during hanging free providers', async () => {
+    vi.useFakeTimers(); mocks.sourceNames = ['eastmoney', 'sina', 'tencent']; mocks.paidConfigured = true;
+    mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map()); mocks.fallbackFetch.mockImplementation(() => new Promise(() => {}));
+    const c = new AbortController(); const pending = GET(new Request('https://example.test/api/quote/batch?tickers=600779.SH&_=1', { signal: c.signal }));
+    await vi.advanceTimersByTimeAsync(3000); c.abort(); expect((await pending).status).toBe(503);
+    expect(mocks.paidDaily).not.toHaveBeenCalled(); expect(mocks.paidBasic).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not renew an old TWSE module-cache hit in the route cache', async () => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(1000);
+    mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map());
+    const original = quote('9401.TW', 'twse');
+    mocks.fetchTwseQuotesBatch.mockResolvedValue(new Map([['9401.TW', original]]));
+    mocks.twseQuoteRetentionStart.mockImplementation(value => value === original ? 1000 : undefined);
+    await GET(new Request('https://example.test/api/quote/batch?tickers=9401.TW&_=1'));
+    clock.mockReturnValue(60_000);
+    await GET(new Request('https://example.test/api/quote/batch?tickers=9401.TW&_=1'));
+    clock.mockReturnValue(62_000);
+    const body = await (await GET(new Request('https://example.test/api/quote/batch?tickers=9401.TW'))).json();
+    expect(body.meta.selected_sources['9401.TW']).toBe('twse'); expect(mocks.fetchTwseQuotesBatch).toHaveBeenCalledTimes(3);
+    expect(mocks.twseQuoteRetentionStart).toHaveBeenCalledWith(original);
+  });
+  it('does not let an older in-flight route overwrite a newer route cache result', async () => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(1000);
+    let deliver: (value: Map<string, ReturnType<typeof quote>>) => void = () => {};
+    mocks.fetchDatagatewayRealtimeQuotes.mockImplementationOnce(() => new Promise(resolve => { deliver = resolve; }))
+      .mockResolvedValueOnce(new Map([['CACHEORDER', { ...quote('CACHEORDER', 'datagateway-wind'), price: 102 }]]));
+    const older = GET(new Request('https://example.test/api/quote/batch?tickers=CACHEORDER&_=1'));
+    expect(mocks.fetchDatagatewayRealtimeQuotes).toHaveBeenCalledOnce(); // Dispatch established before advancing the clock.
+    clock.mockReturnValue(2000);
+    await GET(new Request('https://example.test/api/quote/batch?tickers=CACHEORDER&_=1'));
+    clock.mockReturnValue(4900); deliver(new Map([['CACHEORDER', { ...quote('CACHEORDER', 'datagateway-wind'), price: 101 }]])); await older;
+    const body = await (await GET(new Request('https://example.test/api/quote/batch?tickers=CACHEORDER'))).json();
+    expect(body.meta.selected_sources.CACHEORDER).toBe('cache'); expect(body.quotes.CACHEORDER.price).toBe(102);
+  });
+  it('counts in-flight time and ignores wall-clock rollback for route retention', async () => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(1000);
+    const wall = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+    let deliver: (value: Map<string, ReturnType<typeof quote>>) => void = () => {};
+    mocks.fetchDatagatewayRealtimeQuotes.mockImplementationOnce(() => new Promise(resolve => { deliver = resolve; }));
+    const pending = GET(new Request('https://example.test/api/quote/batch?tickers=CACHETIME&_=1'));
+    clock.mockReturnValue(4900); deliver(new Map([['CACHETIME', quote('CACHETIME', 'datagateway-wind')]])); await pending;
+    wall.mockReturnValue(1); clock.mockReturnValue(61_000);
+    mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map([['CACHETIME', quote('CACHETIME', 'datagateway-wind')]]));
+    const body = await (await GET(new Request('https://example.test/api/quote/batch?tickers=CACHETIME'))).json();
+    expect(body.meta.selected_sources.CACHETIME).toBe('datagateway-wind'); expect(mocks.fetchDatagatewayRealtimeQuotes).toHaveBeenCalledTimes(2);
+  });
+
 });

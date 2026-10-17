@@ -1,3 +1,4 @@
+import { withQuoteSourceTimeout } from '@/lib/quotes/source-timeout';
 /**
  * Tushare Pro HTTP API client.
  *
@@ -47,29 +48,37 @@ export async function tushareCall<T = Record<string, any>>(
   const token = process.env.TUSHARE_TOKEN;
   if (!token) throw new TushareError(-1, 'TUSHARE_TOKEN not configured');
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  let resp: Response;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) throw new RangeError('invalid Tushare timeout');
+  // Bound fetch AND response decoding. Cached wrappers own this work; a caller
+  // abandoning its wait must not cancel another cache subscriber's request.
   try {
-    resp = await fetch(TUSHARE_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_name, token, params, fields }),
-      signal: ctrl.signal,
-    });
-  } finally {
-    clearTimeout(timer);
+    return await withQuoteSourceTimeout(async (signal) => {
+      const resp = await fetch(TUSHARE_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_name, token, params, fields }),
+        signal,
+      });
+      signal.throwIfAborted();
+      if (!resp.ok) throw new TushareError(resp.status, `HTTP ${resp.status}`);
+      const json: TushareResp = await resp.json();
+      signal.throwIfAborted();
+      if (json.code !== 0) throw new TushareError(json.code, json.msg || 'Tushare error');
+      if (!json.data) return [];
+      return json.data.items.map((row) => {
+        const obj: Record<string, any> = {};
+        json.data!.fields.forEach((f, i) => (obj[f] = row[i]));
+        return obj as T;
+      });
+    }, timeoutMs);
+  } catch (error) {
+    if (error instanceof Error && error.name === 'TimeoutError') {
+      const timeout = new Error(`Tushare request timed out after ${Math.max(1, Math.floor(timeoutMs))}ms`);
+      timeout.name = 'TimeoutError';
+      throw timeout;
+    }
+    throw error;
   }
-  if (!resp.ok) throw new TushareError(resp.status, `HTTP ${resp.status}`);
-  const json: TushareResp = await resp.json();
-  if (json.code !== 0) throw new TushareError(json.code, json.msg || 'Tushare error');
-  if (!json.data) return [];
-
-  return json.data.items.map((row) => {
-    const obj: Record<string, any> = {};
-    json.data!.fields.forEach((f, i) => (obj[f] = row[i]));
-    return obj as T;
-  });
 }
 
 // ─── Normalize ticker for Tushare ───
