@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { quoteSourcesFor } from '@/lib/data/sources/registry';
-import { fetchTwseQuotesBatch } from '@/lib/data/sources/twse';
+import { fetchTwseQuotesBatch, twseQuoteRetentionStart } from '@/lib/data/sources/twse';
 import { classifyMarket } from '@/lib/utils';
 import {
   isTushareConfigured,
@@ -15,6 +15,7 @@ import {
   type SourceAttempt,
   type SourceOutcome,
 } from '@/lib/quotes/diagnostics';
+import { withQuoteRequestBudget, waitQuoteRetry } from '@/lib/quotes/request-budget';
 import { withQuoteSourceTimeout } from '@/lib/quotes/source-timeout';
 import { fetchDatagatewayRealtimeQuotes, isDatagatewayConfigured } from '@/lib/data/sources/datagateway-quote';
 
@@ -52,7 +53,8 @@ interface QuoteShape {
   delayed: boolean;
 }
 
-const quoteCache = new Map<string, { quote: QuoteShape; ts: number }>();
+const quoteCache = new Map<string, { quote: QuoteShape; ts: number; generation: number }>();
+let quoteRequestGeneration = 0;
 
 function lookupName(ticker: string): string {
   const hit = MOCK_UNIVERSE.find((u) => u.t === ticker);
@@ -119,21 +121,25 @@ async function tushareFallback(ticker: string): Promise<QuoteShape | null> {
 
 /**
  * Run a single fetcher with one transient-failure retry.
- * Transient = throws OR returns null. Retry after 200ms.
+ * Fast errors/empty responses retry after 200ms; exhausted source deadlines
+ * move to the next provider so hanging free sources cannot starve paid fallback.
  */
 async function withRetry<T>(
   ticker: string,
   source: string,
-  fn: (signal: AbortSignal) => Promise<T | null>
+  fn: (signal: AbortSignal) => Promise<T | null>,
+  parent: AbortSignal,
 ): Promise<{ value: T | null; attempt: SourceAttempt }> {
   const startedAt = Date.now();
   let attempts = 0;
   let failureOutcome: Exclude<SourceOutcome, 'success' | 'empty'> | null = null;
 
-  for (let index = 0; index < 2; index += 1) {
+  const maxAttempts = source === 'tushare' ? 1 : 2; // Uncancellable cached paid work must not overlap a retry.
+  for (let index = 0; index < maxAttempts; index += 1) {
+    parent.throwIfAborted();
     attempts += 1;
     try {
-      const value = await withQuoteSourceTimeout(fn, SOURCE_ATTEMPT_TIMEOUT_MS);
+      const value = await withQuoteSourceTimeout(fn, SOURCE_ATTEMPT_TIMEOUT_MS, parent);
       if (value) {
         return {
           value,
@@ -141,9 +147,11 @@ async function withRetry<T>(
         };
       }
     } catch (error) {
+      parent.throwIfAborted();
       failureOutcome = classifySourceFailure(error);
+      if (failureOutcome === 'timeout') break;
     }
-    if (index === 0) await new Promise((resolve) => setTimeout(resolve, 200));
+    if (index + 1 < maxAttempts) await waitQuoteRetry(parent);
   }
 
   return {
@@ -180,11 +188,11 @@ interface QuoteResolution {
   selectedSource: string | null;
 }
 
-async function resolveQuote(ticker: string, skipDatagateway = false): Promise<QuoteResolution> {
+async function resolveQuote(ticker: string, skipDatagateway: boolean, signal: AbortSignal): Promise<QuoteResolution> {
   const attempts: SourceAttempt[] = [];
   for (const s of quoteSourcesFor(classifyMarket(ticker))) {
     if (skipDatagateway && s.name === 'datagateway-wind') continue;
-    const result = await withRetry(ticker, s.name, (signal) => s.fetch(ticker, signal));
+    const result = await withRetry(ticker, s.name, (signal) => s.fetch(ticker, signal), signal);
     attempts.push(result.attempt);
     if (result.value) {
       return { quote: result.value as unknown as QuoteShape, attempts, selectedSource: s.name };
@@ -193,7 +201,7 @@ async function resolveQuote(ticker: string, skipDatagateway = false): Promise<Qu
 
   // Final layer: Tushare (A-share only, costs 积分)
   if (/\.(SH|SZ|BJ)$/i.test(ticker)) {
-    const result = await withRetry(ticker, 'tushare', () => tushareFallback(ticker));
+    const result = await withRetry(ticker, 'tushare', () => tushareFallback(ticker), signal);
     attempts.push(result.attempt);
     if (result.value) return { quote: result.value, attempts, selectedSource: 'tushare' };
   }
@@ -202,7 +210,27 @@ async function resolveQuote(ticker: string, skipDatagateway = false): Promise<Qu
 }
 
 export async function GET(req: Request) {
+  try {
+    return await withQuoteRequestBudget(req.signal, signal => quoteBatch(req, signal));
+  } catch (error) {
+    if (error instanceof Error && error.name === 'TimeoutError') {
+      return NextResponse.json({ error: 'quote_request_timeout' }, { status: 503 });
+    }
+    if (error instanceof Error && error.name === 'AbortError') {
+      return NextResponse.json({ error: 'quote_request_cancelled' }, { status: 503 });
+    }
+    throw error;
+  }
+}
+
+async function quoteBatch(req: Request, signal: AbortSignal) {
   const startedAt = Date.now();
+  const retentionStart = performance.now();
+  const generation = ++quoteRequestGeneration;
+  const retain = (ticker: string, quote: QuoteShape, providerStart?: number) => {
+    if ((quoteCache.get(ticker)?.generation ?? 0) > generation) return;
+    quoteCache.set(ticker, { quote, ts: Math.min(retentionStart, providerStart ?? retentionStart), generation });
+  };
   const url = new URL(req.url);
   const tickersParam = url.searchParams.get('tickers') || '';
   const tickers = tickersParam
@@ -227,7 +255,7 @@ export async function GET(req: Request) {
   }
 
   const force = url.searchParams.has('_');
-  const now = Date.now();
+  const now = performance.now();
   const freshQuotes: Record<string, QuoteShape> = {};
   const selectedSources: Record<string, string> = {};
   const toFetch: string[] = [];
@@ -243,20 +271,22 @@ export async function GET(req: Request) {
 
   // Wind/DataGateway is queried once for the whole uncached set. Only the
   // missing symbols continue to the existing per-source fallback cascade.
-  let windMap = new Map<string, QuoteShape | null>();
+  let windMap = new Map<string, QuoteShape | null | undefined>();
   let windFailure: Exclude<SourceOutcome, 'success' | 'empty'> | null = null;
   let windAttempts = 0;
   const windStartedAt = Date.now();
   if (isDatagatewayConfigured() && toFetch.length > 0) {
     windAttempts = 1;
     try {
-      windMap = await fetchDatagatewayRealtimeQuotes(toFetch) as Map<string, QuoteShape | null>;
+      windMap = await withQuoteSourceTimeout(s => fetchDatagatewayRealtimeQuotes(toFetch, { signal: s }), 5_000, signal);
       windFailure = null;
     } catch (error) {
+      signal.throwIfAborted();
       windFailure = classifySourceFailure(error);
     }
   }
-  const fallbackTickers = toFetch.filter((ticker) => !windMap.has(ticker.toUpperCase()));
+  const gatewayHit = (ticker: string): QuoteShape | null => windMap.get(ticker.toUpperCase()) ?? null;
+  const fallbackTickers = toFetch.filter((ticker) => !gatewayHit(ticker));
   // TW group: one native multi-symbol mis request (rate limit ~3 req / 5 s);
   // remaining markets go through the per-ticker registry cascade.
   const twTickers = fallbackTickers.filter((t) => classifyMarket(t) === 'TW');
@@ -266,19 +296,21 @@ export async function GET(req: Request) {
   let twFailure: Exclude<SourceOutcome, 'success' | 'empty'> | null = null;
   const [twMap, results] = await Promise.all([
     twTickers.length > 0
-      ? fetchTwseQuotesBatch(twTickers).catch((error) => {
+      ? withQuoteSourceTimeout(child => fetchTwseQuotesBatch(twTickers, child), 5_000, signal).catch((error) => {
           twFailure = classifySourceFailure(error);
           return new Map<string, QuoteShape | null>();
         })
       : Promise.resolve(new Map<string, QuoteShape | null>()),
-    Promise.allSettled(otherTickers.map((ticker) => resolveQuote(ticker, true))),
+    Promise.allSettled(otherTickers.map((ticker) =>
+      withQuoteSourceTimeout(child => resolveQuote(ticker, true, child), 14_000, signal))),
   ]);
 
+  signal.throwIfAborted(); // Late provider completion must not update caches.
   const quotes: Record<string, QuoteShape | null> = { ...freshQuotes };
   const sourceAttempts: SourceAttempt[] = [];
   if (isDatagatewayConfigured()) {
     for (const ticker of toFetch) {
-      const value = windMap.get(ticker.toUpperCase()) ?? null;
+      const value = gatewayHit(ticker);
       sourceAttempts.push({
         ticker,
         source: 'datagateway-wind',
@@ -287,7 +319,7 @@ export async function GET(req: Request) {
         duration_ms: Date.now() - windStartedAt,
       });
       if (value) {
-        quoteCache.set(ticker, { quote: value, ts: Date.now() });
+        retain(ticker, value);
         quotes[ticker] = value;
         selectedSources[ticker] = 'datagateway-wind';
       }
@@ -312,13 +344,13 @@ export async function GET(req: Request) {
     sourceAttempts.push(...resolution.attempts);
     const value = resolution.quote;
     if (value) {
-      quoteCache.set(ticker, { quote: value, ts: Date.now() });
+      retain(ticker, value);
       quotes[ticker] = value;
       if (resolution.selectedSource) selectedSources[ticker] = resolution.selectedSource;
       return;
     }
     const cached = quoteCache.get(ticker);
-    if (cached && Date.now() - cached.ts < STALE_TTL_MS) {
+    if (cached && performance.now() - cached.ts < STALE_TTL_MS) {
       stale += 1;
       quotes[ticker] = { ...cached.quote, delayed: true };
       selectedSources[ticker] = 'stale-cache';
@@ -336,13 +368,13 @@ export async function GET(req: Request) {
       duration_ms: Date.now() - twStartedAt,
     });
     if (value) {
-      quoteCache.set(t, { quote: value, ts: Date.now() });
+      retain(t, value, twseQuoteRetentionStart(value));
       quotes[t] = value;
       selectedSources[t] = 'twse';
       continue;
     }
     const cached = quoteCache.get(t);
-    if (cached && Date.now() - cached.ts < STALE_TTL_MS) {
+    if (cached && performance.now() - cached.ts < STALE_TTL_MS) {
       stale += 1;
       quotes[t] = { ...cached.quote, delayed: true };
       selectedSources[t] = 'stale-cache';

@@ -21,6 +21,7 @@
  */
 
 import { unstable_cache } from 'next/cache';
+import { createSharedSourceRequests } from '@/lib/quotes/shared-source-request';
 import type { Market } from '@/lib/supabase/database.types';
 import type { UniverseRow } from '@/lib/data/mock';
 import { KlineProviderError, type KlineAdjustment, type SourceKlineBar } from '@/lib/data/kline/types';
@@ -275,33 +276,63 @@ async function fetchWithTimeout(url: string, referer: string, timeoutMs = 4000):
 
 // Module-level quote cache: mis is rate-limited (~3 req/5 s), so repeat
 // requests within 60 s are served from memory with zero new connections.
-const quoteCache = new Map<string, { q: TwseQuote; at: number }>();
+// Monotonic elapsed time owns this TTL. Misses bypass Next Data Cache so a
+// stale revalidation response cannot be stamped as newly fetched here.
+const quoteCache = new Map<string, { q: TwseQuote; at: number; generation: number }>();
+const quoteRetention = new WeakMap<object, number>();
+
+/** Internal process-local retention provenance; never serialized into quote JSON. */
+export function twseQuoteRetentionStart(quote: object): number | undefined {
+  return quoteRetention.get(quote);
+}
+
+let quoteRequestGeneration = 0;
 const QUOTE_TTL_MS = 60_000;
+const sharedQuoteRequest = createSharedSourceRequests<Map<string, TwseQuote | null>>(4_000);
 
 /**
  * Fetch quotes for a set of TW/TWO tickers in ONE mis request ('|'-joined).
  * Cache hits skip the network entirely; only cache misses are requested.
  */
-export async function fetchTwseQuotesBatch(tickers: string[]): Promise<Map<string, TwseQuote | null>> {
+export async function fetchTwseQuotesBatch(tickers: string[], signal?: AbortSignal): Promise<Map<string, TwseQuote | null>> {
+  signal?.throwIfAborted();
   const result = new Map<string, TwseQuote | null>();
-  const now = Date.now();
+  const now = performance.now();
   const misses: string[] = [];
-
-  for (const t of tickers) {
+  for (const t of new Set(tickers)) {
     const cached = quoteCache.get(t);
-    if (cached && now - cached.at < QUOTE_TTL_MS) {
-      result.set(t, cached.q);
-    } else if (twseExCh(t)) {
-      misses.push(t);
-    } else {
-      result.set(t, null); // not a TW ticker
-    }
+    if (cached && now - cached.at < QUOTE_TTL_MS) result.set(t, cached.q);
+    else if (twseExCh(t)) misses.push(t);
+    else result.set(t, null);
   }
   if (misses.length === 0) return result;
+  try {
+    const fetched = await sharedQuoteRequest(JSON.stringify([...misses].sort()), child => fetchTwseQuotes(misses, child), signal);
+    signal?.throwIfAborted();
+    for (const [ticker, value] of fetched) result.set(ticker, value);
+  } catch (error) {
+    signal?.throwIfAborted(); // Caller cancellation always propagates, including cache hits.
+    if (!(error instanceof Error && error.name === 'TimeoutError')) throw error;
+    for (const ticker of misses) result.set(ticker, null);
+  }
+  return result;
+}
 
+async function fetchTwseQuotes(misses: string[], signal: AbortSignal): Promise<Map<string, TwseQuote | null>> {
+  signal.throwIfAborted();
+  const startedAt = performance.now();
+  const generation = ++quoteRequestGeneration;
+  const result = new Map<string, TwseQuote | null>();
   const exChs = misses.map((t) => twseExCh(t)!);
   const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${exChs.join('|')}&json=1&delay=0`;
-  const resp = await fetchWithTimeout(url, MIS_REFERER);
+  let resp: Response | null;
+  try {
+    resp = await fetch(url, { headers: { Referer: MIS_REFERER, 'User-Agent': UA }, signal, cache: 'no-store' });
+  } catch {
+    signal.throwIfAborted();
+    resp = null;
+  }
+  signal.throwIfAborted();
   if (!resp || !resp.ok) {
     for (const t of misses) result.set(t, null);
     return result;
@@ -310,18 +341,21 @@ export async function fetchTwseQuotesBatch(tickers: string[]): Promise<Map<strin
   let msgArray: MisMsg[] = [];
   try {
     const json = await resp.json();
+    signal.throwIfAborted();
     msgArray = Array.isArray(json?.msgArray) ? json.msgArray : [];
   } catch {
+    signal.throwIfAborted();
     for (const t of misses) result.set(t, null);
     return result;
   }
 
+  signal.throwIfAborted(); // No late body may populate the shared quote cache.
   // Map responses back by board+code — mis echoes the board in `ex`
   // ('tse'|'otc'); keying on bare code would let a TSE and a TPEx listing
   // sharing the same numeric code clobber each other (ranges not disjoint).
   const byKey = new Map<string, MisMsg>();
   for (const m of msgArray) {
-    if (!m.c) continue;
+    if (!m || typeof m !== 'object' || Array.isArray(m) || !m.c) continue;
     const code = String(m.c).toUpperCase();
     byKey.set(m.ex ? `${String(m.ex).toLowerCase()}_${code}` : code, m);
   }
@@ -330,14 +364,19 @@ export async function fetchTwseQuotesBatch(tickers: string[]): Promise<Map<strin
     const code = codePart.replace(/\.tw$/i, '').toUpperCase();
     const msg = byKey.get(`${board}_${code}`) ?? byKey.get(code);
     const q = msg ? parseMisQuote(msg, t) : null;
-    if (q) quoteCache.set(t, { q, at: Date.now() });
+    if (q) quoteRetention.set(q, startedAt);
+    // Older in-flight requests must not replace a later request's cache entry.
+    // Generation also orders requests when the monotonic clock has equal ticks.
+    if (q && (quoteCache.get(t)?.generation ?? 0) < generation) {
+      quoteCache.set(t, { q, at: startedAt, generation });
+    }
     result.set(t, q);
   }
   return result;
 }
 
-export async function fetchTwseQuote(ticker: string): Promise<TwseQuote | null> {
-  const map = await fetchTwseQuotesBatch([ticker]);
+export async function fetchTwseQuote(ticker: string, signal?: AbortSignal): Promise<TwseQuote | null> {
+  const map = await fetchTwseQuotesBatch([ticker], signal);
   return map.get(ticker) ?? null;
 }
 

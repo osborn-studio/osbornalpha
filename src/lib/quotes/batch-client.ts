@@ -48,11 +48,11 @@ export function quoteBatchErrorCode(error: unknown): string {
 }
 
 export function shouldRetryQuoteBatchError(error: unknown, attempt: number): boolean {
-  if (attempt >= 1) return false;
+  if (!Number.isInteger(attempt) || attempt < 0 || attempt >= 1) return false;
   const code = quoteBatchErrorCode(error);
   if (code === 'network_error' || code === 'timeout') return true;
   const status = Number(code.match(/^http_(\d{3})$/)?.[1]);
-  return status === 408 || status === 429 || status >= 500;
+  return status === 408 || status === 429 || (status >= 500 && status <= 599);
 }
 
 export function classifyQuoteBatchOutcome(input: {
