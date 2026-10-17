@@ -1,27 +1,35 @@
+import {addRecord} from '../s4/records';
+import {loadArmEvaluationHistory} from './arm-evaluation-read';
+import {verifyArmEvaluationBatch} from './arm-evaluations';
+import {fenceEvaluationIntents} from './intent-fence';
 import {beforeAll,afterAll,describe,it,expect} from 'vitest';
 import {readFileSync} from 'node:fs';
-import {randomUUID,randomBytes} from 'node:crypto';
-import {createServer,type Server} from 'node:http';
+import {randomUUID,randomBytes,generateKeyPairSync,sign} from 'node:crypto';
+import {createServer,request as httpRequest,type Server} from 'node:http';
 import {Pool} from 'pg';
+import {registerCandidateReference} from '../revocation/register';
+import {applyRevocationPage} from '../revocation/consumer';
+import {canonicalize} from '../ingest/pa-v1/json.js';
+import {resolveEvaluationIntent} from './intent';
 import {testPack} from '../../../../scripts/s4/test-pack';
 import {importCandidate} from '../s4/import';
-import {revealCards} from '../s4/cards';
-import {submitDecision} from '../s4/decisions';
+import {revealRegisteredCards,revealCards} from '../s4/cards';
+import {submitRegisteredDecision,submitDecision} from '../s4/decisions';
 import {closeS4Pool,transaction} from '../s4/db';
 import {digest,evaluateObservation} from 'dsh-trade-strategy-evaluator/engine';
-import {createS6Store,prepareInput,prepareEvaluation,makeCommit,tokenHash,currentMarketIds} from './store';
+import {createS6Store,createRegisteredS6Store,prepareInput,prepareEvaluation,makeCommit,tokenHash,currentMarketIds,cancelledEvaluationIntent} from './store';
 import {createEvaluationHttpClient} from 'dsh-trade-strategy-evaluator/adapters';
 // @ts-expect-error Fixed S5 conformance export has no bundled declaration.
 import {assertEvaluationStoreConformance} from 'dsh-trade-strategy-evaluator/conformance';
 import {evaluatorRpc} from './http';
 import {freezeMarket,freezeMarketHandoff,benchmarkIdentity} from './market';
-import {observationReport} from './report';
+import {prepareRegisteredEvaluationDisplay,observationReport} from './report';
 import {syntheticMapping} from '../../../../scripts/s6/fixtures';
 import {runRelFixture} from './shadow';
 import {runRelReadiness,settleRelFixture,releaseRelReservation,type RelFixtureAdapter} from './rel-readiness';
 
 describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',()=>{
- let admin:Pool,id:string,candidate:string,body:ReturnType<typeof makeCommit>,server:Server,origin:string,token:string;
+ let admin:Pool,id:string,candidate:string,body:ReturnType<typeof makeCommit>,server:Server,origin:string,token:string,feedId:string,applySignedRevocation:()=>Promise<unknown>;
  const actor={userId:randomUUID(),kind:'agent' as const},other={userId:randomUUID(),kind:'agent' as const};
  beforeAll(async()=>{
   const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
@@ -29,7 +37,23 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
   admin=new Pool({connectionString:state.adminUrl});
   for(const a of [actor,other]){await admin.query('insert into auth.users(id,email) values($1,$2)',[a.userId,a.userId+'@example.test']);await admin.query("update profiles set role='admin' where id=$1",[a.userId]);}
   await admin.query(`insert into stocks_universe(ticker,name,market,exchange,currency,metadata) values('S6SYNTH','Synthetic S6','US','XNYS','USD','{"synthetic":true}') on conflict do nothing`);
-  const p=testPack(actor.userId);await admin.query('insert into research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[actor.userId,p.binding.approvedPayloadHash,p.binding]);
+  // Isolated candidate schema and operator approval; no production provisioning.
+  await admin.query(readFileSync('scripts/revocation/candidate-schema.sql','utf8'));
+  await admin.query('grant usage on schema research_revocation_candidate to alpha_s4_runtime; grant select on all tables in schema research_revocation_candidate to alpha_s4_runtime');
+  const p=testPack(actor.userId);feedId=randomUUID();
+  const expected={feedId,scope:p.scope,sourceId:p.sourceId,grantId:p.config.grant.grant_id,grantVersion:1};
+  p.pack.manifest.extensions['pa.revocation_reference']={protocol_version:'pa-grant-reference/v1',feed_id:feedId,owner_scope:p.scope,source_id:p.sourceId,grant_id:expected.grantId,grant_version:1,observed_at:p.version.ingested_at,revocation_seq_at_export:'0'};
+  p.pack.files['manifest.json']=canonicalize(p.pack.manifest);p.binding.approvedManifestHash=digest(p.pack.manifest);
+  await admin.query('insert into research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[actor.userId,p.binding.approvedPayloadHash,p.binding]);
+  await admin.query('insert into research_revocation_candidate.feed(feed_id,local_owner,upstream_user) values($1,$2,$3)',[feedId,actor.userId,p.scope.user_id]);
+  const keys=generateKeyPairSync('ed25519'),raw=Buffer.from(JSON.stringify({protocol_version:'pa-revocation/v1',feed_id:feedId,owner_scope:p.scope,from_seq:'0',through_seq:'0',latest_seq:'0',published_at:new Date().toISOString(),events:[]}));
+  await applyRevocationPage(admin,{feedId,localOwner:actor.userId,scope:p.scope,key:keys.publicKey},raw,sign(null,raw,keys.privateKey).toString('hex'));
+  await registerCandidateReference(admin,actor.userId,p.binding.approvedPayloadHash,JSON.stringify(p.pack),expected);
+  applySignedRevocation=async()=>{
+   const at=(await admin.query('select clock_timestamp() as now')).rows[0].now.toISOString();
+   const bytes=Buffer.from(JSON.stringify({protocol_version:'pa-revocation/v1',feed_id:feedId,owner_scope:p.scope,from_seq:'0',through_seq:'1',latest_seq:'1',published_at:at,events:[{revocation_id:randomUUID(),monotonic_seq:'1',source_id:p.sourceId,grant_id:expected.grantId,grant_version:1,effective_at:at}]}));
+   return applyRevocationPage(admin,{feedId,localOwner:actor.userId,scope:p.scope,key:keys.publicKey},bytes,sign(null,bytes,keys.privateKey).toString('hex'));
+  };
   candidate=(await importCandidate(actor,JSON.stringify(p.pack))).id;
   const r=await revealCards(actor,candidate,{requestKey:randomUUID(),judgment:'Synthetic S6 only',alreadySeen:[],independentJudgment:false});
   id=(await submitDecision(actor,candidate,{requestKey:randomUUID(),expectedRevision:0,action:'observe',reason:'Synthetic integration',cardId:r.cards[0].id,labelId:r.labelId,exposureId:r.exposureId,securityTicker:'S6SYNTH',companyEntityId:null,newObservation:true,reviewAt:null})).observationId!;
@@ -65,10 +89,285 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
   const store=remote(),before=await store.readObservation(id);
   const proof=await assertEvaluationStoreConformance({store,input:body.input});expect(proof.passed).toBe(true);
   const accepted=proof.commit_receipt;expect(accepted.status).toBe('accepted');
+  const history=(await admin.query('select * from research_s6_evaluations where user_id=$1 and observation_id=$2',[actor.userId,id])).rows;
+  const controls=(await admin.query("select * from research_s4_records where user_id=$1 and candidate_id=$2 and kind='ControlEvent' and payload->>'type'='evaluation.append' and payload->>'observation_ref'=$3",[actor.userId,candidate,id])).rows;
+  const verify=(rows=history,events=controls)=>verifyArmEvaluationBatch(actor.userId,candidate,id,before.sha256,rows,events);
+  expect(verify().highestInBatch?.id).toBe(accepted.evaluation_ref);
+  expect((await transaction(actor,db=>loadArmEvaluationHistory(db,actor,candidate,id,before.sha256)))?.id).toBe(accepted.evaluation_ref);
+  const preCorruption=await counts();
+  for(const patch of [{observation_ref:randomUUID()},{evaluation_ref:randomUUID()}]){
+   await expect(transaction(actor,async db=>{
+    await addRecord(db,actor,candidate,'ControlEvent',{...controls[0].payload,...patch},{outbox:false});
+    return loadArmEvaluationHistory(db,actor,candidate,id,before.sha256);
+   })).rejects.toThrow('hash_mismatch');
+   expect(await counts()).toEqual(preCorruption);
+  }
+  expect(()=>verify(history,[])).toThrow('hash_mismatch');
+  expect(()=>verify([...history,...history],[...controls,...controls])).toThrow('hash_mismatch');
+  const tampered=structuredClone(controls);tampered[0].payload.input_sha256='0'.repeat(64);tampered[0].payload_hash=digest(tampered[0].payload);
+  expect(()=>verify(history,tampered)).toThrow('hash_mismatch');
+  expect(()=>verifyArmEvaluationBatch(actor.userId,candidate,id,'0'.repeat(64),history,controls)).toThrow('hash_mismatch');
+  expect(()=>verify(Array.from({length:101},()=>history[0]),[])).toThrow('input_limit');
+  expect(()=>verify(history,Array.from({length:101},()=>controls[0]))).toThrow('input_limit');
+  for(const patch of [{user_id:randomUUID()},{candidate_id:randomUUID()},{kind:'HumanLabel'}])expect(()=>verify(history,[{...controls[0],...patch}])).toThrow('hash_mismatch');
+  for(const patch of [{revision:99},{expected_revision:99},{observation_ref:randomUUID()}]){
+   const c=structuredClone(controls[0]);Object.assign(c.payload,patch);c.payload_hash=digest(c.payload);expect(()=>verify(history,[c])).toThrow('hash_mismatch');
+  }
   const n=await counts();const retry=await store.commitEvaluationResult(body);expect(retry.status).toBe('duplicate');expect(retry.evaluation_ref).toBe(accepted.evaluation_ref);expect(await counts()).toEqual(n);
   const after=await store.readObservation(id);expect(after.observation).toEqual(before.observation);expect(after.revision).toBe(1);
   expect(body.result.status).toBe('pending_start');
   await expect(store.commitEvaluationResult({...body,expected_revision:1})).rejects.toMatchObject({code:'idempotency_conflict'});
+ });
+ it('resolves committed keys and persists cancellation before rejecting a late commit',async()=>{
+  const before=await counts();const resolved=await resolveEvaluationIntent(actor,id,body.idempotency_key);
+  expect(resolved.status).toBe('committed');expect(await counts()).toEqual(before);
+  const key=randomUUID(),late=makeCommit(body.input,key,1);
+  await expect(resolveEvaluationIntent(other,id,key)).rejects.toMatchObject({code:'not_found'});
+  expect(await resolveEvaluationIntent(actor,id,key)).toEqual({status:'cancelled',key});
+  await expect(transaction(actor,db=>cancelledEvaluationIntent(db,actor,randomUUID(),key,candidate))).rejects.toMatchObject({code:'idempotency_conflict'});
+  const cancelled=await counts();expect(Number(cancelled.results)).toBe(Number(before.results));
+  expect(Number(cancelled.audit)).toBe(Number(before.audit)+1);expect(Number(cancelled.outbox)).toBe(Number(before.outbox)+1);
+  expect(await resolveEvaluationIntent(actor,id,key)).toEqual({status:'cancelled',key});expect(await counts()).toEqual(cancelled);
+  const persisted=(await admin.query("select * from research_s4_records where user_id=$1 and payload->>'type'='evaluation.intent_cancel' and payload->>'idempotency_key'=$2",[actor.userId,key])).rows[0];
+  const insert=(payload:Record<string,unknown>)=>admin.query('insert into research_s4_records(user_id,id,candidate_id,kind,payload,payload_hash) values($1,$2,$3,$4,$5,$6)',[actor.userId,randomUUID(),candidate,'ControlEvent',payload,digest(payload)]);
+  await expect(insert(persisted.payload)).rejects.toMatchObject({code:'23505',constraint:'research_s6_intent_cancel_owner_key'});
+  await expect(insert({...persisted.payload,observation_ref:randomUUID()})).rejects.toMatchObject({code:'23505',constraint:'research_s6_intent_cancel_owner_key'});
+  for(const field of ['idempotency_key','observation_ref','actor_ref','actor_kind']){
+   const missing={...persisted.payload,idempotency_key:randomUUID()};delete missing[field];
+   await expect(insert(missing)).rejects.toMatchObject({code:'23514',constraint:'research_s6_intent_cancel_shape'});
+   await expect(insert({...persisted.payload,idempotency_key:randomUUID(),[field]:null})).rejects.toMatchObject({code:'23514',constraint:'research_s6_intent_cancel_shape'});
+  }
+  await expect(insert({...persisted.payload,idempotency_key:randomUUID(),actor_ref:other.userId})).rejects.toMatchObject({code:'23514'});
+  expect(await counts()).toEqual(cancelled);
+
+  for(const patch of [{idempotency_key:123},{observation_ref:[]},{observation_ref:{}},{observation_ref:id.toUpperCase()},{idempotency_key:''},{idempotency_key:'x'.repeat(129)},{actor_kind:'system'}])
+   await expect(insert({...persisted.payload,idempotency_key:randomUUID(),...patch})).rejects.toMatchObject({code:'23514'});
+  await expect(admin.query("update research_s4_records set payload=jsonb_set(payload,'{type}','\"other\"') where user_id=$1 and id=$2",[actor.userId,persisted.id])).rejects.toThrow('immutable_record');
+  await expect(admin.query('delete from research_s4_records where user_id=$1 and id=$2',[actor.userId,persisted.id])).rejects.toThrow('immutable_record');
+  await expect(transaction(actor,db=>db.query('truncate research_s4_records'))).rejects.toMatchObject({code:'42501'});
+  await expect(remote().commitEvaluationResult(late)).rejects.toMatchObject({code:'policy_blocked'});
+  await expect(createS6Store(actor).commitEvaluationResult(late)).rejects.toMatchObject({code:'evaluation_intent_cancelled'});
+  expect(await counts()).toEqual(cancelled);
+ });
+ it.each(['valid','missing','kind','duplicate'])('rehearses cancellation upgrade against legacy %s history atomically',async mode=>{
+  const db=await admin.connect();
+  try{
+   await db.query('begin');
+   await db.query('drop index research_s6_intent_cancel_owner_key;alter table research_s4_records drop constraint research_s6_intent_cancel_shape');
+   const row=(await db.query("select * from research_s4_records where user_id=$1 and payload->>'type'='evaluation.intent_cancel' limit 1",[actor.userId])).rows[0];
+   if(mode!=='valid'){
+    const payload={...row.payload};if(mode==='missing')delete payload.observation_ref;if(mode==='kind')payload.actor_kind='system';
+    if(mode==='duplicate')payload.observation_ref=randomUUID();else payload.idempotency_key=randomUUID();
+    await db.query('insert into research_s4_records(user_id,id,candidate_id,kind,payload,payload_hash) values($1,$2,$3,$4,$5,$6)',[actor.userId,randomUUID(),candidate,'ControlEvent',payload,digest(payload)]);
+   }
+   const snapshot=async()=> (await db.query("select id,payload,payload_hash from research_s4_records where user_id=$1 order by id",[actor.userId])).rows;
+   const preflight=readFileSync('scripts/s6/cancellation-preflight.sql','utf8').replace(/^begin read only;$/m,'').replace(/^rollback;$/m,'');
+   const reports=await db.query(preflight) as unknown as Array<{command:string;rows:Array<{invalid_shape:boolean;duplicate_key:boolean}>}>;
+   const issues=reports.filter(r=>r.command==='SELECT')[0].rows;
+   expect(issues).toHaveLength(mode==='valid'?0:mode==='duplicate'?2:1);
+   if(mode!=='valid')expect(issues.every(r=>mode==='duplicate'?r.duplicate_key:r.invalid_shape)).toBe(true);
+   const before=await snapshot();await db.query('savepoint legacy');
+   // Run exact DDL inside a savepoint to preserve the intentionally bad pre-state
+   // for inspection; outer rollback restores the shared disposable test schema.
+   const ddl=readFileSync('supabase/migrations/20261005165000_evaluation_intent_cancel.sql','utf8').replace(/^begin;$/m,'').replace(/^commit;$/m,'');
+   if(mode==='valid')await db.query(ddl);
+   else{await expect(db.query(ddl)).rejects.toMatchObject({code:mode==='duplicate'?'23505':'23514'});await db.query('rollback to savepoint legacy');}
+   expect(await snapshot()).toEqual(before);
+   const schema=(await db.query("select exists(select 1 from pg_constraint where conname='research_s6_intent_cancel_shape') as shape,to_regclass('public.research_s6_intent_cancel_owner_key') is not null as idx")).rows[0];
+   expect(schema).toEqual({shape:mode==='valid',idx:mode==='valid'});
+  }finally{try{await db.query('rollback');}finally{db.release(true);}}
+ });
+ it.each(['valid','missing','null','string','fraction','negative','overflow','gap','duplicate','request_key_number','request_key_format','observation_upper','actor_ref_foreign','actor_kind_system'])('rehearses fence constraint over legacy %s history',async mode=>{
+  const db=await admin.connect();
+  try{
+   await db.query('begin');await db.query('drop index research_s6_intent_fence_owner_key;alter table research_s4_records drop constraint research_s6_intent_fence_shape');
+   const payload:Record<string,unknown>={type:'evaluation.intent_fence',observation_ref:id,request_key:randomUUID(),previous_revision:1,revision:2,actor_ref:actor.userId,actor_kind:'agent'};
+   if(mode==='missing')delete payload.previous_revision;if(mode==='null')payload.revision=null;if(mode==='string')payload.revision='2';
+   if(mode==='fraction')payload.revision=2.5;if(mode==='negative')payload.previous_revision=-1;
+   if(mode==='overflow'){payload.previous_revision=2147483647;payload.revision=2147483648;}if(mode==='gap')payload.revision=3;
+   if(mode==='request_key_number')payload.request_key=123;if(mode==='request_key_format')payload.request_key='bad.key';
+   if(mode==='observation_upper')payload.observation_ref=id.toUpperCase();if(mode==='actor_ref_foreign')payload.actor_ref=other.userId;if(mode==='actor_kind_system')payload.actor_kind='system';
+   const insert=async(value:Record<string,unknown>)=>db.query('insert into research_s4_records(user_id,id,candidate_id,kind,payload,payload_hash) values($1,$2,$3,$4,$5,$6)',[actor.userId,randomUUID(),candidate,'ControlEvent',value,digest(value)]);
+   await insert(payload);if(mode==='duplicate')await insert({...payload,observation_ref:randomUUID()});
+   const before=(await db.query("select id,payload,payload_hash from research_s4_records where user_id=$1 order by id",[actor.userId])).rows;
+   const preflight=readFileSync('scripts/s6/fence-preflight.sql','utf8').replace(/^begin read only;$/m,'').replace(/^rollback;$/m,'');
+   const reports=await db.query(preflight) as unknown as Array<{command:string;rows:Array<{invalid_shape:boolean;duplicate_key:boolean}>}>;
+   const issues=reports.filter(r=>r.command==='SELECT')[0].rows;expect(issues).toHaveLength(mode==='valid'?0:mode==='duplicate'?2:1);
+   if(mode!=='valid')expect(issues.every(r=>mode==='duplicate'?r.duplicate_key:r.invalid_shape)).toBe(true);
+   await db.query('savepoint legacy');
+   const ddl=readFileSync('supabase/migrations/20261005175000_evaluation_intent_fence.sql','utf8').replace(/^begin;$/m,'').replace(/^commit;$/m,'');
+   if(mode==='valid')await db.query(ddl);
+   else{await expect(db.query(ddl)).rejects.toMatchObject({code:mode==='duplicate'?'23505':'23514',constraint:mode==='duplicate'?'research_s6_intent_fence_owner_key':'research_s6_intent_fence_shape'});await db.query('rollback to savepoint legacy');}
+   expect((await db.query("select id,payload,payload_hash from research_s4_records where user_id=$1 order by id",[actor.userId])).rows).toEqual(before);
+   expect((await db.query("select exists(select 1 from pg_constraint where conname='research_s6_intent_fence_shape') as shape,to_regclass('public.research_s6_intent_fence_owner_key') is not null as idx")).rows[0]).toEqual({shape:mode==='valid',idx:mode==='valid'});
+   if(mode==='valid'){await db.query('savepoint live');await expect(insert({...payload,request_key:'bad.key'})).rejects.toMatchObject({code:'23514',constraint:'research_s6_intent_fence_shape'});await db.query('rollback to savepoint live');}
+  }finally{try{await db.query('rollback');}finally{db.release(true);}}
+ });
+ it.each(['cancellation','fence'])('preflight %s refuses RLS-filtered runtime visibility',async name=>{
+  const sql=readFileSync('scripts/s6/'+name+'-preflight.sql','utf8').replace(/^begin read only;$/m,'').replace(/^rollback;$/m,'');
+  await expect(transaction(actor,db=>db.query(sql))).rejects.toMatchObject({code:'42501'});
+ });
+ it.each([['cancel-first',false],['commit-first',false],['cancel-first',true],['commit-first',true]] as const)('serializes queued intent resolution: %s fence=%s',async(order,fence)=>{
+  const actor={userId:randomUUID(),kind:'agent' as const};
+  await admin.query('insert into auth.users(id,email) values($1,$2)',[actor.userId,actor.userId+'@example.test']);
+  await admin.query("update profiles set role='admin' where id=$1",[actor.userId]);
+  const p=testPack(actor.userId);const feedId=randomUUID();
+  const expected={feedId,scope:p.scope,sourceId:p.sourceId,grantId:p.config.grant.grant_id,grantVersion:1};
+  p.pack.manifest.extensions['pa.revocation_reference']={protocol_version:'pa-grant-reference/v1',feed_id:feedId,owner_scope:p.scope,source_id:p.sourceId,grant_id:expected.grantId,grant_version:1,observed_at:p.version.ingested_at,revocation_seq_at_export:'0'};
+  p.pack.files['manifest.json']=canonicalize(p.pack.manifest);p.binding.approvedManifestHash=digest(p.pack.manifest);
+  await admin.query('insert into research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[actor.userId,p.binding.approvedPayloadHash,p.binding]);
+  await admin.query('insert into research_revocation_candidate.feed(feed_id,local_owner,upstream_user) values($1,$2,$3)',[feedId,actor.userId,p.scope.user_id]);
+  const keys=generateKeyPairSync('ed25519'),raw=Buffer.from(JSON.stringify({protocol_version:'pa-revocation/v1',feed_id:feedId,owner_scope:p.scope,from_seq:'0',through_seq:'0',latest_seq:'0',published_at:new Date().toISOString(),events:[]}));
+  await applyRevocationPage(admin,{feedId,localOwner:actor.userId,scope:p.scope,key:keys.publicKey},raw,sign(null,raw,keys.privateKey).toString('hex'));
+  await registerCandidateReference(admin,actor.userId,p.binding.approvedPayloadHash,JSON.stringify(p.pack),expected);
+  const candidate=(await importCandidate(actor,JSON.stringify(p.pack))).id;
+  const r=await revealCards(actor,candidate,{requestKey:randomUUID(),judgment:'Synthetic S6 only',alreadySeen:[],independentJudgment:false});
+  const id=(await submitDecision(actor,candidate,{requestKey:randomUUID(),expectedRevision:0,action:'observe',reason:'Synthetic integration',cardId:r.cards[0].id,labelId:r.labelId,exposureId:r.exposureId,securityTicker:'S6SYNTH',companyEntityId:null,newObservation:true,reviewAt:null})).observationId!;
+  const key=order==='cancel-first'?'a':'a.b:c',store=createRegisteredS6Store(actor);
+  const commit=makeCommit(await prepareInput(actor,id,[],new Date().toISOString()),key,0);
+  const before=async()=> (await admin.query(`select (select count(*) from research_s6_evaluations where user_id=$1) results,
+   (select count(*) from research_s4_records where user_id=$1 and payload->>'type'='evaluation.intent_cancel') cancels,
+   (select count(*) from research_s4_outbox where user_id=$1) outbox,(select count(*) from research_audit_log where user_id=$1) audit`,[actor.userId])).rows[0];
+  const baseline=await before(),type=order==='cancel-first'?(fence?'evaluation.intent_fence':'evaluation.intent_cancel'):'evaluation.append';
+  const gate=await admin.connect(),gateName='s6_intent_'+randomUUID().replaceAll('-','');let released=false,primary:unknown,created=false;
+  const pids:number[]=[];let earlyError:unknown;
+  let first:Promise<unknown>|undefined,second:Promise<unknown>|undefined;
+  const waitFor=async(query:string,values:unknown[])=>{const deadline=performance.now()+3000;while(performance.now()<deadline){if(earlyError)throw earlyError;const r=await admin.query(query,values);if(r.rowCount){expect(r.rowCount).toBe(1);return r.rows[0];}await new Promise(r=>setTimeout(r,10));}throw Error('synthetic intent lock witness missing');};
+  const recoveryKey=randomUUID();
+  const resolve=()=>fence?fenceEvaluationIntents(actor,id,recoveryKey):resolveEvaluationIntent(actor,id,key),write=()=>store.commitEvaluationResult(commit);
+  try{
+  await admin.query(`create function ${gateName}() returns trigger language plpgsql as $$ begin
+   if current_setting('transaction_isolation')<>'read committed' then raise exception 'unsafe isolation';end if;
+   if new.user_id='${actor.userId}'::uuid and new.kind='ControlEvent' and new.payload->>'type'='${type}' then perform pg_advisory_xact_lock(74322,1);end if;return new;end $$;
+   create trigger ${gateName} before insert on research_s4_records for each row execute function ${gateName}()`);
+   created=true;
+   await gate.query('begin');await gate.query('select pg_advisory_xact_lock(74322,1)');
+   first=order==='cancel-first'?resolve():write();void first.catch(error=>{earlyError=error;});
+   const blocked=await waitFor("select w.pid from pg_locks w join pg_stat_activity a on a.pid=w.pid where w.locktype='advisory' and w.classid=74322 and w.objid=1 and w.objsubid=2 and not w.granted and a.application_name='alpha-s4'",[]);
+   pids.push(blocked.pid);
+   second=order==='cancel-first'?write():resolve();void second.catch(()=>{});
+   const queued=await waitFor(`select w.pid from pg_locks h join pg_locks w on h.locktype=w.locktype and h.database=w.database and h.classid=w.classid and h.objid=w.objid and h.objsubid=w.objsubid
+    join pg_stat_activity a on a.pid=w.pid
+    where h.pid=$1 and h.locktype='advisory' and h.granted and not w.granted and h.objsubid=1 and a.application_name='alpha-s4' and a.wait_event_type='Lock'
+    and h.classid=((hashtextextended($2,0)>>32)&4294967295)::oid and h.objid=(hashtextextended($2,0)&4294967295)::oid`,[blocked.pid,actor.userId]);
+   expect(queued.pid).not.toBe(blocked.pid);pids.push(queued.pid);
+   await gate.query('commit');released=true;
+   if(order==='cancel-first'){
+    if(fence)expect(await first).toMatchObject({status:'fenced',key:recoveryKey,revision:1});else expect(await first).toEqual({status:'cancelled',key});
+    await expect(second).rejects.toMatchObject({code:fence?'revision_conflict':'evaluation_intent_cancelled'});
+   }else{
+    const receipt=await first as {evaluation_ref:string;status:string};expect(receipt.status).toBe('accepted');
+    if(fence)expect(await second).toMatchObject({status:'fenced',key:recoveryKey,revision:2});else expect(await second).toEqual({status:'committed',key,evaluationId:receipt.evaluation_ref});
+   }
+   expect((await admin.query('select revision from research_s4_observation_state where user_id=$1 and observation_id=$2',[actor.userId,id])).rows[0].revision).toBe((order==='cancel-first'?0:1)+(fence?1:0));
+   const after=await before();expect(Number(after.results)).toBe(order==='cancel-first'?0:1);expect(Number(after.cancels)).toBe(order==='cancel-first'&&!fence?1:0);
+   expect(Number(after.audit)).toBe(Number(baseline.audit)+(fence&&order==='commit-first'?2:1));expect(Number(after.outbox)).toBe(Number(baseline.outbox)+(fence&&order==='commit-first'?2:1));
+   expect((await resolve()).status).toBe(fence?'fenced':order==='cancel-first'?'cancelled':'committed');
+   if(order==='cancel-first')await expect(write()).rejects.toMatchObject({code:fence?'revision_conflict':'evaluation_intent_cancelled'});
+   else expect((await write()).status).toBe('duplicate');
+   expect(await before()).toEqual(after);
+   if(fence){
+    await expect(fenceEvaluationIntents(other,id,recoveryKey)).rejects.toMatchObject({code:'not_found'});
+    const revision=order==='cancel-first'?1:2;
+    const later=await store.commitEvaluationResult(makeCommit(commit.input,randomUUID(),revision));expect(later.revision).toBe(revision+1);
+    const history=(await admin.query('select * from research_s6_evaluations where user_id=$1 and observation_id=$2',[actor.userId,id])).rows;
+    const controls=(await admin.query("select * from research_s4_records where user_id=$1 and kind='ControlEvent' and payload->>'type'='evaluation.append' and payload->>'observation_ref'=$2",[actor.userId,id])).rows;
+    const candidateId=controls[0].candidate_id;
+    expect((await transaction(actor,db=>loadArmEvaluationHistory(db,actor,candidateId,id,commit.input.observation_sha256)))?.id).toBe(later.evaluation_ref);
+    expect(verifyArmEvaluationBatch(actor.userId,candidateId,id,commit.input.observation_sha256,[...history].sort((a,b)=>b.receipt.revision-a.receipt.revision),controls).highestInBatch?.id).toBe(later.evaluation_ref);
+
+    const checkpoint=await before();expect(await resolve()).toMatchObject({status:'fenced',revision});expect(await before()).toEqual(checkpoint);
+    expect((await store.readObservation(id)).revision).toBe(revision+1);
+   }
+   if(fence&&order==='cancel-first'){
+    const snapshot=async()=>({counts:await before(),revision:(await store.readObservation(id)).revision,requests:(await admin.query('select count(*) as n from research_s4_requests where user_id=$1',[actor.userId])).rows[0].n,fences:(await admin.query("select count(*) as n from research_s4_records where user_id=$1 and payload->>'type'='evaluation.intent_fence'",[actor.userId])).rows[0].n});
+    for(const table of ['research_s4_outbox','research_s4_requests']){
+     const failedKey=randomUUID(),name='s6_fence_fail_'+randomUUID().replaceAll('-','');
+     const predicate=table==='research_s4_requests'?"new.request_key='intent-fence:"+failedKey+"'":"exists(select 1 from research_s4_records r where r.user_id=new.user_id and r.id=new.record_id and r.payload->>'type'='evaluation.intent_fence')";
+     const original=await snapshot();
+     try{
+      await admin.query(`create sequence ${name}_hit;grant usage on sequence ${name}_hit to alpha_s4_runtime;create function ${name}() returns trigger language plpgsql as $$ begin if new.user_id='${actor.userId}'::uuid and (${predicate}) then perform nextval('public.${name}_hit');raise exception 'synthetic_fence_failure';end if;return new;end $$;create trigger ${name} before insert on ${table} for each row execute function ${name}()`);
+      await expect(fenceEvaluationIntents(actor,id,failedKey)).rejects.toThrow('revocation_access_denied');
+      expect((await admin.query(`select is_called from ${name}_hit`)).rows[0].is_called).toBe(true);expect(await snapshot()).toEqual(original);
+     }finally{await admin.query(`drop trigger if exists ${name} on ${table};drop function if exists ${name}();drop sequence if exists ${name}_hit`);}
+     const recovered=await fenceEvaluationIntents(actor,id,failedKey);expect(recovered.revision).toBe(original.revision+1);
+     const completed=await snapshot();expect(Number(completed.fences)).toBe(Number(original.fences)+1);expect(Number(completed.requests)).toBe(Number(original.requests)+1);
+     expect(await fenceEvaluationIntents(actor,id,failedKey)).toEqual(recovered);expect(await snapshot()).toEqual(completed);
+    }
+    for(const bad of ['x'.repeat(7),'x'.repeat(101),'bad.key.test'])await expect(fenceEvaluationIntents(actor,id,bad)).rejects.toMatchObject({code:'invalid_schema'});
+    for(const good of ['x'.repeat(8),'x'.repeat(100)])expect((await fenceEvaluationIntents(actor,id,good)).status).toBe('fenced');
+    // A receipt-key collision is a visible conflict, never an overwrite/refence.
+    const collision='collision-key';await admin.query('insert into research_s4_requests(user_id,request_key,request_hash,response) values($1,$2,$3,$4)',[actor.userId,'intent-fence:'+collision,digest({other:'synthetic'}),{}]);
+    const checkpoint=await snapshot();await expect(fenceEvaluationIntents(actor,id,collision)).rejects.toMatchObject({code:'idempotency_conflict'});expect(await snapshot()).toEqual(checkpoint);
+    // Orphan event simulates missing request receipt without deleting history.
+    const orphan='orphan-key',payload={type:'evaluation.intent_fence',observation_ref:id,request_key:orphan,previous_revision:0,revision:1,actor_ref:actor.userId,actor_kind:'agent'};
+    await admin.query('insert into research_s4_records(user_id,id,candidate_id,kind,payload,payload_hash) values($1,$2,$3,$4,$5,$6)',[actor.userId,randomUUID(),candidate,'ControlEvent',payload,digest(payload)]);
+    const orphaned=await snapshot();await expect(fenceEvaluationIntents(actor,id,orphan)).rejects.toMatchObject({code:'hash_mismatch'});expect(await snapshot()).toEqual(orphaned);
+    for(const response of [{status:'fenced',key:'malformed-replay',revision:0,recordId:'bad'},{status:'fenced',key:'malformed-replay',revision:1,recordId:'bad'}]){
+     const badKey=randomUUID(),request={operation:'evaluation.intent_fence',observationId:id,key:badKey};
+     await admin.query('insert into research_s4_requests(user_id,request_key,request_hash,response) values($1,$2,$3,$4)',[actor.userId,'intent-fence:'+badKey,digest(request),{...response,key:badKey}]);
+     const beforeBad=await snapshot();await expect(fenceEvaluationIntents(actor,id,badKey)).rejects.toMatchObject({code:'hash_mismatch'});expect(await snapshot()).toEqual(beforeBad);
+    }
+   }
+   if(fence){
+    const nextCards=await revealRegisteredCards(actor,candidate,{requestKey:randomUUID(),judgment:'Synthetic recovery namespace test',alreadySeen:[],independentJudgment:false});
+    const candidateRevision=(await admin.query('select revision from research_s4_candidates where user_id=$1 and id=$2',[actor.userId,candidate])).rows[0].revision;
+    const nextObservation=(await submitRegisteredDecision(actor,candidate,{requestKey:randomUUID(),expectedRevision:candidateRevision,action:'observe',reason:'Synthetic scope test only',cardId:nextCards.cards[0].id,labelId:nextCards.labelId,exposureId:nextCards.exposureId,securityTicker:'S6SYNTH',companyEntityId:null,newObservation:true,reviewAt:null})).observationId!;
+    expect(nextObservation).not.toBe(id);
+    const scoped=await before();await expect(fenceEvaluationIntents(actor,nextObservation,recoveryKey)).rejects.toMatchObject({code:'idempotency_conflict'});expect(await before()).toEqual(scoped);
+   }
+   // Both isolated owners may cancel the same key: namespace is not global.
+   expect(await resolveEvaluationIntent(actor,id,'shared-cancel-key')).toEqual({status:'cancelled',key:'shared-cancel-key'});
+   if(order==='commit-first'&&!fence){
+    const short=await store.commitEvaluationResult(makeCommit(commit.input,'a',1));
+    expect(await resolveEvaluationIntent(actor,id,'a')).toEqual({status:'committed',key:'a',evaluationId:short.evaluation_ref});
+   }
+  }catch(error){primary=error;throw error;}finally{
+   const failures:unknown[]=[];
+   try{if(!released)await gate.query('rollback');}catch(error){failures.push(error);}finally{gate.release(true);}
+   if(primary&&!released)for(const pid of pids)try{await admin.query('select pg_terminate_backend($1)',[pid]);}catch(error){failures.push(error);}
+   // Runtime statements are bounded to 15s by researchConfig; gate is released first.
+   await Promise.allSettled([first,second].filter((v):v is Promise<unknown>=>v!==undefined));
+   try{if(created)await admin.query(`drop trigger ${gateName} on research_s4_records;drop function ${gateName}()`);}catch(error){failures.push(error);}
+   if(failures.length&&!primary)throw new AggregateError(failures,'synthetic intent cleanup failed');
+  }
+ },45000);
+ it('records RPC material disclosures and rejects stale/revoked access including exact commit retry',async()=>{
+  const readExposure=async()=> (await admin.query("select payload from research_s4_records where user_id=$1 and kind='ExposureEvent' and payload->>'origin' like 'alpha_evaluator_%'",[actor.userId])).rows;
+  const before=await readExposure();await remote().readObservation(id);
+  for(const m of body.market_snapshot_refs)await remote().readMarketSnapshot(m.id);
+  const after=await readExposure();expect(after.length).toBe(before.length+3);
+  for(const e of after){expect(e.payload.session_token_hash).toBe(tokenHash(token));expect(JSON.stringify(e.payload)).not.toContain(token);}
+  for(const mode of ['stale','revoked']){
+   if(mode==='stale')await admin.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '61 seconds' where feed_id=$1",[feedId]);
+   else await admin.query('update research_s4_bindings set revoked=true where user_id=$1',[actor.userId]);
+   const n=await counts();
+   try{
+    for(const request of [()=>remote().readObservation(id),()=>remote().readMarketSnapshot(body.market_snapshot_refs[0].id),()=>remote().commitEvaluationResult(body)]){
+     await expect(request()).rejects.toMatchObject({status:mode==='stale'?503:403,code:mode==='stale'?'source_unavailable':'policy_blocked'});
+    }
+    expect(await counts()).toEqual(n);expect((await readExposure()).length).toBe(after.length);
+   }finally{await admin.query('update research_revocation_candidate.feed set published_at=clock_timestamp() where feed_id=$1',[feedId]);await admin.query('update research_s4_bindings set revoked=false where user_id=$1',[actor.userId]);}
+  }
+ });
+ it('rejects transport headers and dead sessions on every RPC operation without writes',async()=>{
+  const headers={authorization:'Bearer '+token,'x-evaluator-protocol':'evaluator-rpc/1.0'};
+  const before=await counts();
+  for(const [patch,status] of [[{origin},403],[{'sec-fetch-site':'cross-site'},403],[{host:'localhost:9'},403],[{'x-evaluator-protocol':'wrong'},422]] as Array<[Record<string,string>,number]>){
+   // Native fetch may normalize forbidden headers; raw HTTP preserves attack inputs.
+   const response=await new Promise<{status:number;cache:string|undefined}>((resolve,reject)=>{
+    const request=httpRequest(origin+'/api/evaluator/v1/observations/'+id,{headers:{...headers,...patch}},res=>{res.resume();res.on('end',()=>resolve({status:res.statusCode!,cache:res.headers['cache-control']}));});
+    request.on('error',reject);request.end();
+   });
+   expect(response.status,JSON.stringify(patch)).toBe(status);expect(response.cache).toBe('no-store');
+  }
+  const mismatch=await fetch(origin+'/api/evaluator/v1/evaluation-results',{method:'POST',headers:{...headers,'idempotency-key':'different'},body:JSON.stringify(body)});expect(mismatch.status).toBe(422);
+  for(const mutation of ["revoked=true","expires_at=clock_timestamp()-interval '1 second'"]){
+   await admin.query('update research_s6_sessions set '+mutation+' where user_id=$1',[actor.userId]);
+   try{for(const request of [()=>remote().readObservation(id),()=>remote().readMarketSnapshot(body.market_snapshot_refs[0].id),()=>remote().readMarketSnapshot('missing-market'),()=>remote().commitEvaluationResult(body)])await expect(request()).rejects.toMatchObject({status:401,code:'not_authenticated'});}
+   finally{await admin.query("update research_s6_sessions set revoked=false,expires_at=created_at+interval '1 hour' where user_id=$1",[actor.userId]);}
+  }
+  expect(await counts()).toEqual(before);
  });
  it('revalidates server session expiry, revocation, scope and rejects body authority overrides',async()=>{
   await admin.query('update research_s6_sessions set revoked=true where user_id=$1',[actor.userId]);
@@ -258,22 +557,188 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
  });
  it('exports old Replay beyond the bounded report page',async()=>{
   const p=await prepareEvaluation(actor,id),input=await prepareInput(actor,id,p.marketIds,p.asOf),store=createS6Store(actor);
-  for(let revision=p.revision;revision<103;revision++)await store.commitEvaluationResult(makeCommit(input,randomUUID(),revision));
+  let checked100=false;
+  for(let revision=p.revision;revision<103;revision++){
+   const receipt=await store.commitEvaluationResult(makeCommit(input,randomUUID(),revision));
+   const count=Number((await admin.query('select count(*) n from research_s6_evaluations where user_id=$1 and observation_id=$2',[actor.userId,id])).rows[0].n);
+   if(count===100){checked100=true;expect((await transaction(actor,db=>loadArmEvaluationHistory(db,actor,candidate,id,input.observation_sha256)))?.id).toBe(receipt.evaluation_ref);}
+  }
+  expect(checked100).toBe(true);
+  await expect(transaction(actor,db=>loadArmEvaluationHistory(db,actor,candidate,id,input.observation_sha256))).rejects.toThrow('input_limit');
   const report=await observationReport(actor,id);expect('evaluations' in report&&report.evaluations?.length).toBe(100);expect('historyTruncated' in report&&report.historyTruncated).toBe(true);
   const oldest=(await admin.query('select id from research_s6_evaluations where user_id=$1 and idempotency_key=$2',[actor.userId,body.idempotency_key])).rows[0];
   const replay=await observationReport(actor,id,oldest.id);expect('replay' in replay&&replay.replay?.matches).toBe(true);
   await expect(observationReport(actor,id,'-'.repeat(36))).rejects.toMatchObject({code:'invalid_schema'});
   expect('market_evidence' in replay&&replay.market_evidence?.length).toBe(2);
  },30000);
+ it('rolls back a complete evaluation when its machine session expires during work',async()=>{
+  // A separate fresh token and delayed real insert; no wall-clock mocks.
+  const boundedToken=actor.userId+'.'+randomBytes(32).toString('hex');
+  await admin.query("insert into research_s6_sessions(user_id,token_hash,subject,audience,scopes,expires_at) values($1,$2,'synthetic-expiry','alpha-evaluator',array['evaluation:append'],clock_timestamp()+interval '1 hour')",[actor.userId,tokenHash(boundedToken)]);
+  await admin.query(`create function s6_test_expiry_delay() returns trigger language plpgsql as $$ begin if new.user_id='${actor.userId}'::uuid then perform pg_sleep(2); end if; return new; end $$;
+   create trigger s6_test_expiry_delay before insert on research_s6_evaluations for each row execute function s6_test_expiry_delay()`);
+  try{
+   const p=await prepareEvaluation(actor,id),input=await prepareInput(actor,id,p.marketIds,p.asOf);
+   const commit=makeCommit(input,randomUUID(),p.revision),before=await counts();
+   await admin.query("update research_s6_sessions set expires_at=clock_timestamp()+interval '1 second' where user_id=$1 and token_hash=$2",[actor.userId,tokenHash(boundedToken)]);
+   const started=Date.now();
+   await expect(createS6Store(actor,boundedToken).commitEvaluationResult(commit)).rejects.toMatchObject({code:'not_authenticated'});
+   expect(Date.now()-started).toBeGreaterThanOrEqual(1900);expect(await counts()).toEqual(before);
+   expect((await createS6Store(actor).readObservation(id)).revision).toBe(p.revision);
+   await admin.query("update research_s6_sessions set expires_at=created_at+interval '1 hour' where user_id=$1 and token_hash=$2",[actor.userId,tokenHash(boundedToken)]);
+   // An aborted SQL transaction must be restored before the session check so
+   // a fresh credential retains the original trigger error.
+   await admin.query(`create function s6_test_token_error() returns trigger language plpgsql as $$ begin if new.user_id='${actor.userId}'::uuid then raise exception 'synthetic_token_sql_failure'; end if; return new; end $$; create trigger s6_test_token_error before insert on research_s4_outbox for each row execute function s6_test_token_error()`);
+   try{
+    await expect(createS6Store(actor,boundedToken).commitEvaluationResult(commit)).rejects.toThrow('synthetic_token_sql_failure');
+    expect(await counts()).toEqual(before);
+    await admin.query("update research_s6_sessions set expires_at=clock_timestamp()+interval '1 second' where user_id=$1 and token_hash=$2",[actor.userId,tokenHash(boundedToken)]);
+    await expect(createS6Store(actor,boundedToken).commitEvaluationResult(commit)).rejects.toMatchObject({code:'not_authenticated'});
+    expect(await counts()).toEqual(before);
+   }finally{await admin.query('drop trigger s6_test_token_error on research_s4_outbox; drop function s6_test_token_error()');}
+   await admin.query("update research_s6_sessions set expires_at=created_at+interval '1 hour' where user_id=$1 and token_hash=$2",[actor.userId,tokenHash(boundedToken)]);
+   const revoker=await admin.connect();
+   try{await revoker.query("set lock_timeout='100ms'");await transaction(actor,async()=>{await expect(revoker.query('update research_s6_sessions set revoked=true where user_id=$1 and token_hash=$2',[actor.userId,tokenHash(boundedToken)])).rejects.toMatchObject({code:'55P03'});});}
+   finally{await revoker.query('reset lock_timeout');revoker.release();}
+   expect((await createS6Store(actor,boundedToken).commitEvaluationResult(commit)).status).toBe('accepted');
+  }finally{
+   await admin.query('drop trigger s6_test_expiry_delay on research_s6_evaluations; drop function s6_test_expiry_delay()');
+  }
+ },15000);
+ it('denies a queued evaluator disclosure after the session revoker commits its owner lock',async()=>{
+  const raceToken=actor.userId+'.'+randomBytes(32).toString('hex');
+  await admin.query("insert into research_s6_sessions(user_id,token_hash,subject,audience,scopes,expires_at) values($1,$2,'synthetic-session-handoff','alpha-evaluator',array['observation:read'],clock_timestamp()+interval '1 hour')",[actor.userId,tokenHash(raceToken)]);
+  await admin.query('update research_revocation_candidate.feed set published_at=clock_timestamp() where feed_id=$1',[feedId]);
+  const exposureRows=async()=> (await admin.query("select * from research_s4_records where user_id=$1 and kind='ExposureEvent' order by id",[actor.userId])).rows;
+  const rows=async()=>{const out:Record<string,unknown[]>={};for(const table of ['research_s4_records','research_s4_observation_state','research_s6_evaluations','research_s4_outbox','research_audit_log'])out[table]=(await admin.query('select * from '+table+' where user_id=$1',[actor.userId])).rows.sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));return out;};
+  const before=await counts(),exposures=await exposureRows(),businessBefore=await rows(),revoker=await admin.connect();
+  let begun=false,committed=false;
+  let pending:Promise<{ok:true}|{ok:false;error:unknown}>|undefined;
+  try{
+   await revoker.query('begin');begun=true;await revoker.query("set local statement_timeout='3000ms'");
+   await revoker.query('update research_s6_sessions set revoked=true where user_id=$1 and token_hash=$2',[actor.userId,tokenHash(raceToken)]);
+   const pid=(await revoker.query('select pg_backend_pid() as pid')).rows[0].pid;
+   // The old session is committed; queued disclosure must reauthorize after handoff.
+   pending=remote(raceToken).readObservation(id).then(()=>({ok:true as const}),error=>({ok:false as const,error}));
+   const deadline=performance.now()+3000;let queued=false;
+   while(performance.now()<deadline){
+    const row=await admin.query(`select w.pid from pg_locks h join pg_locks w on h.locktype=w.locktype and h.database=w.database and h.classid=w.classid and h.objid=w.objid and h.objsubid=w.objsubid
+     join pg_stat_activity a on a.pid=w.pid
+     where h.pid=$1 and h.locktype='advisory' and h.granted and not w.granted and a.application_name='alpha-s4' and w.objsubid=1 and a.wait_event_type='Lock' and a.query like '%pg_advisory_xact_lock%'
+     and h.classid=((hashtextextended($2,0)>>32)&4294967295)::oid and h.objid=(hashtextextended($2,0)&4294967295)::oid`,[pid,actor.userId]);
+    if(row.rowCount){expect(row.rowCount).toBe(1);queued=true;break;}await new Promise(r=>setTimeout(r,10));
+   }
+   expect(queued).toBe(true);await revoker.query('commit');committed=true;
+   const result=await pending;expect(result.ok).toBe(false);if(!result.ok)expect(result.error).toMatchObject({status:401,code:'not_authenticated'});
+   expect((await admin.query('select revoked from research_s6_sessions where user_id=$1 and token_hash=$2',[actor.userId,tokenHash(raceToken)])).rows[0].revoked).toBe(true);
+   await expect(remote(raceToken).readMarketSnapshot(body.market_snapshot_refs[0].id)).rejects.toMatchObject({status:401,code:'not_authenticated'});
+   expect(await counts()).toEqual(before);expect(await exposureRows()).toEqual(exposures);expect(await rows()).toEqual(businessBefore);
+  }finally{
+   // On assertion failure still commit the already-staged revocation before unblocking the read.
+   let discard=false;try{if(begun&&!committed){await revoker.query('commit');committed=true;}}catch{discard=true;}finally{revoker.release(discard);await pending;}
+   await admin.query('update research_s6_sessions set revoked=true where user_id=$1 and token_hash=$2',[actor.userId,tokenHash(raceToken)]);
+  }
+  // A known-dead session must reject before contending for an owner lock.
+  const holder=await admin.connect();
+  try{await holder.query('begin');await holder.query('select pg_advisory_xact_lock(hashtextextended($1,0))',[actor.userId]);
+   await expect(remote(raceToken).readObservation(id)).rejects.toMatchObject({status:401,code:'not_authenticated'});
+   expect(await rows()).toEqual(businessBefore);
+  }finally{await holder.query('rollback');holder.release();}
+ },10000);
+ it('commits an already owner-locked disclosure before a queued session revoker',async()=>{
+  const raceToken=actor.userId+'.'+randomBytes(32).toString('hex'),hash=tokenHash(raceToken);
+  await admin.query("insert into research_s6_sessions(user_id,token_hash,subject,audience,scopes,expires_at) values($1,$2,'synthetic-read-first','alpha-evaluator',array['observation:read'],clock_timestamp()+interval '1 hour')",[actor.userId,hash]);
+  await admin.query('update research_revocation_candidate.feed set published_at=clock_timestamp() where feed_id=$1',[feedId]);
+  await admin.query(`create function s6_read_gate() returns trigger language plpgsql as $$ begin
+   if new.user_id='${actor.userId}'::uuid and new.kind='ExposureEvent' and new.payload->>'session_token_hash'='${hash}' then perform pg_advisory_xact_lock(74321,1);end if;return new;end $$;
+   create trigger s6_read_gate before insert on research_s4_records for each row execute function s6_read_gate()`);
+  const gate=await admin.connect(),revoker=await admin.connect();let released=false,readPid:number|undefined,primary:unknown;
+  let read:Promise<unknown>|undefined,revoke:Promise<unknown>|undefined;
+  const client=createEvaluationHttpClient({baseUrl:origin,ownerScope:{user_id:actor.userId,workspace_id:null},tokenProvider:async()=>raceToken,timeoutMs:12000});
+  const waitFor=async(query:string,values:unknown[])=>{const deadline=performance.now()+3000;while(performance.now()<deadline){const r=await admin.query(query,values);if(r.rowCount){expect(r.rowCount).toBe(1);return r.rows[0];}await new Promise(r=>setTimeout(r,10));}throw Error('synthetic lock witness missing');};
+  try{
+   await gate.query('begin');await gate.query('select pg_advisory_xact_lock(74321,1)');
+   await revoker.query("set statement_timeout='10000ms'");const revokerPid=(await revoker.query('select pg_backend_pid() as pid')).rows[0].pid;
+   read=client.readObservation(id);void read.catch(()=>{});
+   const blocked=await waitFor("select w.pid from pg_locks w join pg_stat_activity a on a.pid=w.pid where w.locktype='advisory' and w.classid=74321 and w.objid=1 and w.objsubid=2 and not w.granted and a.application_name='alpha-s4'",[]);
+   readPid=blocked.pid;
+   revoke=revoker.query('update research_s6_sessions set revoked=true where user_id=$1 and token_hash=$2',[actor.userId,hash]);void revoke.catch(()=>{});
+   await waitFor(`select w.pid from pg_locks h join pg_locks w on h.locktype=w.locktype and h.database=w.database and h.classid=w.classid and h.objid=w.objid and h.objsubid=w.objsubid
+    where h.pid=$1 and w.pid=$2 and h.locktype='advisory' and h.granted and not w.granted and h.objsubid=1
+    and h.classid=((hashtextextended($3,0)>>32)&4294967295)::oid and h.objid=(hashtextextended($3,0)&4294967295)::oid`,[blocked.pid,revokerPid,actor.userId]);
+   await gate.query('commit');released=true;
+   const response=await read;expect(response).toMatchObject({observation:{id}});await revoke;
+   const exposures=(await admin.query("select payload from research_s4_records where user_id=$1 and kind='ExposureEvent' and payload->>'session_token_hash'=$2",[actor.userId,hash])).rows;
+   expect(exposures).toHaveLength(1);expect(exposures[0].payload.exposed_artifact_ids).toEqual([id]);
+   const session=(await admin.query('select revoked from research_s6_sessions where user_id=$1 and token_hash=$2',[actor.userId,hash])).rows[0];expect(session.revoked).toBe(true);
+   const n=await counts();await expect(client.readObservation(id)).rejects.toMatchObject({status:401,code:'not_authenticated'});await expect(client.readMarketSnapshot(body.market_snapshot_refs[0].id)).rejects.toMatchObject({status:401,code:'not_authenticated'});expect(await counts()).toEqual(n);
+   expect((await admin.query("select payload from research_s4_records where user_id=$1 and kind='ExposureEvent' and payload->>'session_token_hash'=$2",[actor.userId,hash])).rows).toEqual(exposures);
+  }catch(error){primary=error;throw error;}finally{
+   const failures:unknown[]=[];
+   try{if(!released)await gate.query('rollback');}catch(error){failures.push(error);}finally{gate.release(true);}
+   // Only terminate the positively identified backend of this disposable test on failure.
+   if(primary&&readPid)try{await admin.query('select pg_terminate_backend($1)',[readPid]);}catch(error){failures.push(error);}
+   await Promise.allSettled([read,revoke].filter((v):v is Promise<unknown>=>v!==undefined));
+   try{
+    await revoker.query("set lock_timeout='3000ms';set statement_timeout='10000ms'");
+    for(const [query,args] of [
+     ['update research_s6_sessions set revoked=true where user_id=$1 and token_hash=$2',[actor.userId,hash]],
+     ['drop trigger s6_read_gate on research_s4_records;drop function s6_read_gate()',[]],
+    ] as const)try{await revoker.query(query,[...args]);}catch(error){failures.push(error);}
+   }catch(error){failures.push(error);}finally{revoker.release(true);}
+   if(failures.length&&!primary)throw new AggregateError(failures,'synthetic read-first cleanup failed');
+  }
+ },45000);
+ it('marks synthetic rejected-observation disclosure as shadow without changing its decision sibling',async()=>{
+  await admin.query('update research_revocation_candidate.feed set published_at=clock_timestamp() where feed_id=$1',[feedId]);
+  const original=(await admin.query("select r.payload,r.payload_hash,s.revision,s.status,s.anchor_status from research_s4_records r join research_s4_observation_state s on s.observation_id=r.id and s.user_id=r.user_id where r.user_id=$1 and r.id=$2",[actor.userId,id])).rows[0];
+  const siblingMaterial=async()=>({markets:(await admin.query('select * from research_s6_markets where user_id=$1 and observation_id=$2 order by id',[actor.userId,id])).rows,evaluations:(await admin.query('select * from research_s6_evaluations where user_id=$1 and observation_id=$2 order by id',[actor.userId,id])).rows});
+  const siblingBefore=await siblingMaterial();
+  const shown=await revealRegisteredCards(actor,candidate,{requestKey:randomUUID(),judgment:'Synthetic agent shadow acceptance only',alreadySeen:[],independentJudgment:false});
+  const revision=(await admin.query('select revision from research_s4_candidates where user_id=$1 and id=$2',[actor.userId,candidate])).rows[0].revision;
+  const rejected=await submitRegisteredDecision(actor,candidate,{requestKey:randomUUID(),expectedRevision:revision,action:'reject',reason:'Synthetic scenario, not a human investment judgment',cardId:shown.cards[0].id,labelId:shown.labelId,exposureId:shown.exposureId,securityTicker:'S6SYNTH',companyEntityId:null,newObservation:true,reviewAt:null});
+  const shadowId=rejected.observationId!;expect(shadowId).not.toBe(id);expect(rejected.duplicate).toBe(false);
+  const observation=(await createS6Store(actor).readObservation(shadowId)).observation;
+  expect(observation.decision_or_candidate_ref).toBe(rejected.decisionId);expect(observation.predecessor_id).toBe(id);expect(observation.observation_kind).toBe('shadow');expect(observation.actor_kind).toBe('agent');expect(observation.synthetic).toBe(true);
+  const marketIds=[];for(const security of [observation.securities[0],benchmarkIdentity(true)])marketIds.push((await freezeMarket(actor,shadowId,syntheticMapping(security),'synthetic')).id);
+  const before=new Set((await admin.query("select id from research_s4_records where user_id=$1 and kind='ExposureEvent'",[actor.userId])).rows.map(r=>r.id));
+  expect((await remote().readObservation(shadowId)).observation.id).toBe(shadowId);
+  for(const mid of marketIds)expect((await remote().readMarketSnapshot(mid)).snapshot.id).toBe(mid);
+  const prepared=await prepareRegisteredEvaluationDisplay(actor,shadowId);expect(prepared.marketIds.sort()).toEqual([...marketIds].sort());
+  const exposed=(await admin.query("select id,candidate_id,payload from research_s4_records where user_id=$1 and kind='ExposureEvent'",[actor.userId])).rows.filter(r=>!before.has(r.id));
+  expect(exposed).toHaveLength(4);
+  for(const e of exposed){expect(e.candidate_id).toBe(candidate);expect(e.payload.actor_kind).toBe('agent');expect(e.payload.shadow_exposed).toBe(true);}
+  const machine=exposed.filter(e=>e.payload.origin.startsWith('alpha_evaluator_'));
+  expect(machine.flatMap(e=>e.payload.exposed_artifact_ids).sort()).toEqual([shadowId,...marketIds].sort());
+  for(const e of machine)expect(e.payload.session_token_hash).toBe(tokenHash(token));
+  const prep=exposed.find(e=>e.payload.origin==='alpha_evaluation_prepare')!;expect(prep.payload.exposed_artifact_ids.sort()).toEqual([shadowId,...marketIds].sort());expect(prep.payload.displayed_at).toBe(prepared.asOf);
+  expect((await admin.query("select r.payload,r.payload_hash,s.revision,s.status,s.anchor_status from research_s4_records r join research_s4_observation_state s on s.observation_id=r.id and s.user_id=r.user_id where r.user_id=$1 and r.id=$2",[actor.userId,id])).rows[0]).toEqual(original);
+  expect(await siblingMaterial()).toEqual(siblingBefore);
+  const exposureIds=async()=> (await admin.query("select id from research_s4_records where user_id=$1 and kind='ExposureEvent' order by id",[actor.userId])).rows;
+  const exposureBefore=await exposureIds();
+  const n=await counts();await admin.query("update research_revocation_candidate.feed set published_at=clock_timestamp()-interval '61 seconds' where feed_id=$1",[feedId]);
+  try{await expect(remote().readObservation(shadowId)).rejects.toMatchObject({status:503,code:'source_unavailable'});for(const mid of marketIds)await expect(remote().readMarketSnapshot(mid)).rejects.toMatchObject({status:503,code:'source_unavailable'});await expect(prepareRegisteredEvaluationDisplay(actor,shadowId)).rejects.toMatchObject({message:'revocation_access_denied',cause:'revocation_stale'});expect(await counts()).toEqual(n);expect(await exposureIds()).toEqual(exposureBefore);expect(await siblingMaterial()).toEqual(siblingBefore);}
+  finally{await admin.query('update research_revocation_candidate.feed set published_at=clock_timestamp() where feed_id=$1',[feedId]);}
+ });
  it('immutable results reject updates and source revocation also blocks duplicate replay',async()=>{
   const evaluation=(await admin.query('select id from research_s6_evaluations where user_id=$1 limit 1',[actor.userId])).rows[0];
   const replay=await observationReport(actor,id,evaluation.id);expect('replay' in replay&&replay.replay?.matches).toBe(true);
   await expect(admin.query("update research_s6_evaluations set result='{}' where user_id=$1",[actor.userId])).rejects.toThrow('immutable_record');
-  await admin.query('update research_s4_bindings set revoked=true where user_id=$1',[actor.userId]);
+  await applySignedRevocation();
+  expect((await admin.query('select cursor from research_revocation_candidate.feed where feed_id=$1',[feedId])).rows[0].cursor).toBe('1');
+  expect((await admin.query('select count(*)::int n from research_revocation_candidate.inbox where feed_id=$1',[feedId])).rows[0].n).toBe(1);
+  const noDisclosure=await counts();
+  for(const request of [()=>remote().readObservation(id),()=>remote().readMarketSnapshot(body.market_snapshot_refs[0].id),()=>remote().commitEvaluationResult(body)])await expect(request()).rejects.toMatchObject({status:403,code:'policy_blocked'});
+  // Independent retained tombstone protection, despite an accidentally reset binding.
+  await admin.query('update research_s4_bindings set revoked=false where user_id=$1',[actor.userId]);
+  try{await expect(remote().readObservation(id)).rejects.toMatchObject({status:403,code:'policy_blocked'});expect(await counts()).toEqual(noDisclosure);}
+  finally{await admin.query('update research_s4_bindings set revoked=true where user_id=$1',[actor.userId]);}
   await expect(createS6Store(actor).readObservation(id)).rejects.toMatchObject({code:'scope_denied'});
   await expect(createS6Store(actor).commitEvaluationResult(body)).rejects.toMatchObject({code:'scope_denied'});
   await expect(observationReport(actor,id)).rejects.toMatchObject({code:'scope_denied'});
   await expect(createS6Store(actor).readMarketSnapshot(body.market_snapshot_refs[0].id)).rejects.toMatchObject({code:'scope_denied'});
   expect(evaluateObservation(body.input).ok).toBe(true); // Offline Replay remains deterministic, not current authorization.
  });
+
+
 });

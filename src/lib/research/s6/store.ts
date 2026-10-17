@@ -6,7 +6,9 @@ import calendar from '../../../../docs/handoffs/alpha-s4/calendar.json';
 import {fail} from '../ingest/pa-v1/json.js';
 import {OBSERVATION_CONTRACT_V2} from '../market-policy';
 import {assertWritableChain,transaction,serverTime,type S4Actor} from '../s4/db';
+import {registeredObservationTransaction,withRegisteredObservationInTransaction} from './registered';
 import {candidateFor,addRecord} from '../s4/records';
+import {weekPeriod} from '../s4/cards';
 
 export type Commit=Parameters<EvaluationStore['commitEvaluationResult']>[0];
 export function enabled(){if(process.env.ALPHA_S6_ENABLED!=='1')fail('not_configured');}
@@ -27,29 +29,33 @@ export async function observationFor(db:PoolClient,actor:S4Actor,id:string){
  await assertWritableChain(db,actor);await candidateFor(db,actor,row.candidate_id);
  if(row.current_anchor==='integrity_failed')fail('anchor_integrity_failed');
  if(row.current_status==='cancelled')fail('policy_blocked');
- if(digest(row.payload)!==row.payload_hash)fail('hash_mismatch');
+ if(digest(row.payload)!==row.payload_hash||row.payload.candidate_ref!==row.candidate_id)fail('hash_mismatch');
  return row as typeof row & {payload:Observation};
 }
 async function informationFor(db:PoolClient,actor:S4Actor,o:Observation):Promise<InformationSet>{
- const row=(await db.query("select * from research_s4_records where user_id=$1 and id=$2 and kind='InputSnapshot'",[actor.userId,o.input_snapshot_ref])).rows[0];
+ const row=(await db.query("select * from research_s4_records where user_id=$1 and id=$2 and candidate_id=$3 and kind='InputSnapshot'",[actor.userId,o.input_snapshot_ref,o.candidate_ref])).rows[0];
  if(!row||row.candidate_id!==o.candidate_ref||digest(row.payload)!==o.input_snapshot_hash||row.payload_hash!==o.input_snapshot_hash)fail('hash_mismatch');
  const p=row.payload;
+ const candidate=(await db.query('select source_version_id from research_s4_candidates where user_id=$1 and id=$2',[actor.userId,o.candidate_ref])).rows[0];
+ if(!candidate||candidate.source_version_id!==p.source_version_id)fail('hash_mismatch');
  const source=(await db.query('select * from research_source_versions where user_id=$1 and id=$2',[actor.userId,p.source_version_id])).rows[0];
  if(!source||digest(p.source_refs)!==digest([source.source_ref]))fail('hash_mismatch');
  const versions:InformationSet['versions']=[{ref:source.id,sha256:digest(source.source_version),available_at:source.received_at.toISOString()}];
- const refs=[p.card_ref,p.label_ref,...p.exposure_refs,...(p.thesis_revision_ref?[p.thesis_revision_ref]:[])];
- for(const id of [...new Set(refs)]){
-  const r=(await db.query('select * from research_s4_records where user_id=$1 and id=$2',[actor.userId,id])).rows[0];
+ const refs:[string,string][]=[[p.card_ref,'ChangeCard'],[p.label_ref,'HumanLabel'],...p.exposure_refs.map((id:string):[string,string]=>[id,'ExposureEvent']),...(p.thesis_revision_ref?[[p.thesis_revision_ref,'ThesisRevision'] as [string,string]]:[])];
+ const seen=new Set<string>();
+ for(const [id,kind] of refs){
+  const r=(await db.query('select * from research_s4_records where user_id=$1 and id=$2 and candidate_id=$3 and kind=$4',[actor.userId,id,o.candidate_ref,kind])).rows[0];
   if(!r||digest(r.payload)!==r.payload_hash||(id===p.card_ref&&r.payload_hash!==p.card_hash))fail('hash_mismatch');
-  versions.push({ref:id,sha256:r.payload_hash,available_at:r.recorded_at.toISOString()});
+  if(!seen.has(id))versions.push({ref:id,sha256:r.payload_hash,available_at:r.recorded_at.toISOString()});
+  seen.add(id);
  }
  if(p.wiki_reference)versions.push({ref:'wiki:'+digest(p.wiki_reference),sha256:digest(p.wiki_reference),available_at:p.wiki_available_at});
  return {snapshot_ref:row.id,snapshot_sha256:row.payload_hash,input_cutoff_at:p.input_cutoff_at,versions};
 }
-export async function marketFor(db:PoolClient,actor:S4Actor,id:string){
+export async function marketFor(db:PoolClient,actor:S4Actor,id:string,expectedObservationId?:string){
  if(typeof id!=='string'||!/^[A-Za-z0-9._:-]{1,128}$/.test(id))fail('invalid_schema');
- const r=(await db.query('select * from research_s6_markets where user_id=$1 and id=$2',[actor.userId,id])).rows[0];
- if(!r)fail('not_found');
+ const r=(await db.query('select * from research_s6_markets where user_id=$1 and id=$2 and ($3::uuid is null or observation_id=$3)',[actor.userId,id,expectedObservationId??null])).rows[0];
+ if(!r)fail(expectedObservationId===undefined?'not_found':'hash_mismatch');
  const o=await observationFor(db,actor,r.observation_id);
  // synthetic evidence ↔ synthetic observation; real evidence needs the real-market switch and, for handoff bundles, a 2.0 observation.
  const v2=(o.payload as {schema_version:string}).schema_version===OBSERVATION_CONTRACT_V2;
@@ -57,33 +63,45 @@ export async function marketFor(db:PoolClient,actor:S4Actor,id:string){
  if(digest(r.snapshot)!==r.snapshot_hash||tokenHash(r.raw_response)!==r.snapshot.raw_sha256||digest(r.evidence)!==r.evidence_hash)fail('hash_mismatch');
  return r;
 }
-async function inputFor(db:PoolClient,actor:S4Actor,id:string,marketIds:string[],asOf:string):Promise<EvaluationInput>{
+export function assertEvaluationPolicy(observation:Observation){
+ if(!observation.synthetic){
+  if((observation as {schema_version:string}).schema_version!==OBSERVATION_CONTRACT_V2)fail('rule_unsupported');
+  if(process.env.ALPHA_S6_REAL_MARKET!=='1')fail('policy_blocked');
+ }
+}
+async function inputFor(db:PoolClient,actor:S4Actor,id:string,marketIds:string[],asOf:string,registered=false):Promise<EvaluationInput>{
  if(!Array.isArray(marketIds)||marketIds.length>2||new Set(marketIds).size!==marketIds.length)fail('invalid_schema');
  if(typeof asOf!=='string'||!Number.isFinite(Date.parse(asOf)))fail('invalid_schema');
  if(Date.parse(asOf)>Date.parse(await serverTime(db)))fail('future_input');
  const row=await observationFor(db,actor,id),markets:EvaluationInput['market_snapshots']=[];
- if(!row.payload.synthetic){
-  // 1.0 observations predate the listing-identity contract: real evaluation stays closed for them.
-  if((row.payload as {schema_version:string}).schema_version!==OBSERVATION_CONTRACT_V2)fail('rule_unsupported');
-  if(process.env.ALPHA_S6_REAL_MARKET!=='1')fail('policy_blocked');
- }
- for(const mid of marketIds){const m=await marketFor(db,actor,mid);if(m.observation_id!==id)fail('scope_denied');markets.push(m.snapshot);}
+ assertEvaluationPolicy(row.payload);
+ for(const mid of marketIds){const m=await marketFor(db,actor,mid,registered?id:undefined);if(m.observation_id!==id)fail('scope_denied');markets.push(m.snapshot);}
  const input:EvaluationInput={schema_version:'evaluator-input-output/1.0',observation:row.payload,observation_sha256:row.payload_hash,
   calendar:calendar as EvaluationInput['calendar'],market_snapshots:markets,market_snapshot_sha256s:markets.map(digest),
   information_set:await informationFor(db,actor,row.payload),as_of:asOf,input_sha256:''};
  input.input_sha256=inputDigest(input);return input;
 }
 export async function prepareInput(actor:S4Actor,id:string,marketIds:string[],asOf:string){enabled();return transaction(actor,db=>inputFor(db,actor,id,marketIds,asOf));}
+/** Evaluator-internal preparation for an already authenticated actor. No display/export
+ * exposure is appended; do not return this material directly from a browser route.
+ * Machine session authorization remains separate. */
+export async function prepareRegisteredInput(actor:S4Actor,id:string,marketIds:string[],asOf:string){enabled();return registeredObservationTransaction(actor,id,db=>inputFor(db,actor,id,marketIds,asOf,true));}
 export async function currentMarketIds(db:PoolClient,actor:S4Actor,id:string,asOf:string|null):Promise<string[]>{
  return (await db.query(`select distinct on(snapshot->'security'->>'ticker') id from research_s6_markets
   where user_id=$1 and observation_id=$2 and ($3::timestamptz is null or fetched_at<=$3)
    and (snapshot->>'fetched_at')::timestamptz<=coalesce($3::timestamptz,clock_timestamp())
   order by snapshot->'security'->>'ticker',(snapshot->>'fetched_at')::timestamptz desc,fetched_at desc,id`,[actor.userId,id,asOf])).rows.map(r=>r.id).sort();
 }
+async function preparationFor(db:PoolClient,actor:S4Actor,id:string){
+ const o=await observationFor(db,actor,id),asOf=await serverTime(db);
+ return {asOf,revision:o.revision,marketIds:await currentMarketIds(db,actor,id,asOf)};
+}
 export async function prepareEvaluation(actor:S4Actor,id:string){
- enabled();return transaction(actor,async db=>{const o=await observationFor(db,actor,id),asOf=await serverTime(db);
-  return {asOf,revision:o.revision,marketIds:await currentMarketIds(db,actor,id,asOf)};
- });
+ enabled();return transaction(actor,db=>preparationFor(db,actor,id));
+}
+/** Internal metadata only; browser callers must use prepareRegisteredEvaluationDisplay. */
+export async function prepareRegisteredEvaluation(actor:S4Actor,id:string){
+ enabled();return registeredObservationTransaction(actor,id,db=>preparationFor(db,actor,id));
 }
 export function makeCommit(input:EvaluationInput,key:string,revision:number):Commit{
  const normalized={...input,input_sha256:inputDigest(input)},computed=evaluateObservation(normalized);
@@ -94,22 +112,71 @@ export function makeCommit(input:EvaluationInput,key:string,revision:number):Com
   engine_version:computed.result.engine_version,rule_version:computed.result.rule_version,input_sha256:normalized.input_sha256,input:normalized,
   result:computed.result,result_sha256:computed.result_sha256,expected_revision:revision,idempotency_key:key,request_key:key};
 }
-export function createS6Store(actor:S4Actor,sessionToken?:string):EvaluationStore{
- async function run<T>(purpose:string,fn:(db:PoolClient)=>Promise<T>){enabled();return transaction(actor,async db=>{await authorizeSession(db,actor,sessionToken,purpose);return fn(db);},sessionToken===undefined?undefined:db=>authorizeSession(db,actor,sessionToken,purpose));}
+export async function cancelledEvaluationIntent(db:PoolClient,actor:S4Actor,id:string,key:string,candidateId:string){
+ const rows=(await db.query(`select candidate_id,payload,payload_hash from research_s4_records where user_id=$1 and kind='ControlEvent'
+  and payload->>'type'='evaluation.intent_cancel' and payload->>'idempotency_key'=$2`,[actor.userId,key])).rows;
+ if(rows.length>1||rows.some(row=>digest(row.payload)!==row.payload_hash||row.payload.actor_ref!==actor.userId||!['human','agent'].includes(row.payload.actor_kind)||typeof row.payload.observation_ref!=='string'))fail('hash_mismatch');
+ if(rows[0]?.payload.observation_ref!==undefined&&rows[0].payload.observation_ref!==id)fail('idempotency_conflict');
+ if(rows[0]&&rows[0].candidate_id!==candidateId)fail('hash_mismatch');
+ return rows.length===1;
+}
+
+export function createS6Store(actor:S4Actor,sessionToken?:string):EvaluationStore{return storeWithPolicy(actor,sessionToken,false);}
+/** Candidate internal adapter; existing HTTP continues using the legacy store. */
+export function createRegisteredS6Store(actor:S4Actor,sessionToken?:string):EvaluationStore{return storeWithPolicy(actor,sessionToken,true);}
+/** External evaluator adapter: a session is mandatory and each material read
+ * commits exposure inside the registration/session transaction. Sessions retain the
+ * existing owner-wide purpose scopes; agent denotes this transport, not a human judgment.
+ * RPC adoption is separate. */
+export function createRegisteredEvaluatorStore(actor:S4Actor,sessionToken:string):EvaluationStore{
+ if(typeof sessionToken!=='string'||!sessionToken)fail('not_authenticated');
+ if(actor.kind!=='agent')fail('scope_denied');
+ return storeWithPolicy(actor,sessionToken,true,true);
+}
+function storeWithPolicy(actor:S4Actor,sessionToken:string|undefined,registered:boolean,disclose=false):EvaluationStore{
+ async function expose(db:PoolClient,observationId:string,artifactId:string,origin:string){
+  const o=await observationFor(db,actor,observationId),at=await serverTime(db);
+  const {row}=await candidateFor(db,actor,o.candidate_id),source=row.imported.sourceRef;
+  await addRecord(db,actor,o.candidate_id,'ExposureEvent',{actor_ref:actor.userId,actor_kind:actor.kind,evaluation_period_id:weekPeriod(at),
+   subject_refs:[digest([source.owner_system,source.owner_scope,source.source_id])],exposed_artifact_ids:[artifactId],
+   displayed_at:at,origin,session_token_hash:tokenHash(sessionToken!),shadow_exposed:o.payload.observation_kind==='shadow'});
+ }
+
+ async function run<T>(purpose:string,resolve:(db:PoolClient)=>Promise<string>,fn:(db:PoolClient,id:string)=>Promise<T>){enabled();return transaction(actor,async db=>{await authorizeSession(db,actor,sessionToken,purpose);
+  // A session can expire while DB-only work runs under the owner lock.
+  // Recheck before either a success result or business error leaves the transaction.
+  await db.query('savepoint s6_session_work');
+  let result:T;
+  try{const id=await resolve(db);result=registered?await withRegisteredObservationInTransaction(db,actor,id,client=>fn(client,id)):await fn(db,id);}
+  catch(error){await db.query('rollback to savepoint s6_session_work');await authorizeSession(db,actor,sessionToken,purpose);throw error;}
+  await authorizeSession(db,actor,sessionToken,purpose);
+  await db.query('release savepoint s6_session_work');return result;},sessionToken===undefined?undefined:db=>authorizeSession(db,actor,sessionToken,purpose));}
  return {
-  readObservation:id=>run('observation:read',async db=>{const r=await observationFor(db,actor,id);return {schema_version:'evaluator-rpc/1.0',owner_scope:r.payload.owner_scope,revision:r.revision,sha256:r.payload_hash,observation:r.payload};}),
-  readMarketSnapshot:id=>run('observation:read',async db=>{const r=await marketFor(db,actor,id);return {schema_version:'evaluator-rpc/1.0',owner_scope:{user_id:actor.userId,workspace_id:null},revision:0,sha256:r.snapshot_hash,snapshot:r.snapshot};}),
+  readObservation:id=>run('observation:read',async()=>id,async db=>{const r=await observationFor(db,actor,id);if(disclose)await expose(db,id,id,'alpha_evaluator_observation');return {schema_version:'evaluator-rpc/1.0',owner_scope:r.payload.owner_scope,revision:r.revision,sha256:r.payload_hash,observation:r.payload};}),
+  readMarketSnapshot:id=>run('observation:read',async db=>{
+   if(!registered)return '';
+   if(typeof id!=='string'||!/^[A-Za-z0-9._:-]{1,128}$/.test(id))fail('invalid_schema');
+   // Trusted owner-scoped ID resolution only; does not disclose snapshot material.
+   // Error classes do not promise existence indistinguishability within one owner.
+   const row=(await db.query('select observation_id from research_s6_markets where user_id=$1 and id=$2',[actor.userId,id])).rows[0];
+   if(!row)fail('not_found');return row.observation_id;
+  },async(db,observationId)=>{const r=await marketFor(db,actor,id,registered?observationId:undefined);if(disclose)await expose(db,observationId,id,'alpha_evaluator_market');return {schema_version:'evaluator-rpc/1.0',owner_scope:{user_id:actor.userId,workspace_id:null},revision:0,sha256:r.snapshot_hash,snapshot:r.snapshot};}),
   commitEvaluationResult:async body=>{
-   return run('evaluation:append',async db=>{
+   return run('evaluation:append',async()=>{validateCommit(body);return body.observation_ref.id;},async db=>{
     validateCommit(body); // Authenticate first; then recompute even a correctly hashed forgery.
     const row=await observationFor(db,actor,body.observation_ref.id);
-    const authoritative=await inputFor(db,actor,row.id,body.market_snapshot_refs.map(r=>r.id),body.input.as_of);
+    const authoritative=await inputFor(db,actor,row.id,body.market_snapshot_refs.map(r=>r.id),body.input.as_of,registered);
     if(digest(authoritative)!==digest(body.input))fail('hash_mismatch');
     const computed=evaluateObservation(authoritative);
     if(!computed.ok||computed.result_sha256!==body.result_sha256)fail('hash_mismatch');
     if(!computed.ok)throw new Error('unreachable');
-    const hash=digest(body),old=(await db.query('select body_hash,receipt from research_s6_evaluations where user_id=$1 and idempotency_key=$2',[actor.userId,body.idempotency_key])).rows[0];
+    const hash=digest(body),found=(await db.query('select observation_id,body_hash,receipt from research_s6_evaluations where user_id=$1 and idempotency_key=$2',[actor.userId,body.idempotency_key])).rows;
+    if(found.length>1)fail('hash_mismatch');const old=found[0];
+    if(old&&old.observation_id!==row.id)fail('idempotency_conflict');
+    const cancelled=await cancelledEvaluationIntent(db,actor,row.id,body.idempotency_key,row.candidate_id);
+    if(old&&cancelled)fail('hash_mismatch');
     if(old){if(old.body_hash!==hash)fail('idempotency_conflict');return {...old.receipt,status:'duplicate'};}
+    if(cancelled)fail('evaluation_intent_cancelled');
     // New projections represent the current authority set, not a caller-selected backtest.
     // Exact retries stay valid after this five-minute preparation window expires.
     const now=Date.parse(await serverTime(db)),asOf=Date.parse(body.input.as_of);

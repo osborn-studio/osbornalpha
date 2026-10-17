@@ -48,6 +48,22 @@ jobs:
         run: npm run test:runtime-tls
         env:
           S4_POSTGRES_BIN: /usr/lib/postgresql/17/bin
+      - name: Candidate revocation consumer transactions
+        run: npm run test:revocation-consumer
+        env:
+          S4_POSTGRES_BIN: /usr/lib/postgresql/17/bin
+      - name: Candidate approved binding registration
+        run: npm run test:revocation-registration
+        env:
+          S4_POSTGRES_BIN: /usr/lib/postgresql/17/bin
+      - name: Candidate bounded registered list
+        run: npm run test:revocation-list
+        env:
+          S4_POSTGRES_BIN: /usr/lib/postgresql/17/bin
+      - name: Candidate revocation evidence retention
+        run: npm run test:revocation-retention
+        env:
+          S4_POSTGRES_BIN: /usr/lib/postgresql/17/bin
       - name: Sanitized database summaries
         uses: actions/upload-artifact@v4
         if: always()

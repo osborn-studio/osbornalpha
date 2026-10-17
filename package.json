@@ -22,12 +22,16 @@
     "check:migration-history": "tsx scripts/ci/check-migration-history.ts",
     "test:runtime-privileges": "tsx scripts/s4/runtime-privileges-smoke.ts",
     "preflight:research": "tsx scripts/s4/runtime-preflight.ts",
-    "test:runtime-tls": "tsx scripts/s4/runtime-tls-smoke.ts"
+    "test:runtime-tls": "tsx scripts/s4/runtime-tls-smoke.ts",
+    "test:revocation-consumer": "tsx scripts/revocation/consumer-smoke.ts",
+    "test:revocation-registration": "tsx scripts/revocation/registration-smoke.ts",
+    "test:revocation-retention": "tsx scripts/revocation/retention-smoke.ts",
+    "test:revocation-list": "tsx scripts/revocation/list-smoke.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.46.1",
-    "ajv": "8.17.1",
+    "ajv": "8.20.0",
     "clsx": "^2.1.1",
     "dsh-trade-strategy-evaluator": "file:vendor/dsh-trade-strategy-evaluator-0.3.0.tgz",
     "geist": "^1.7.1",

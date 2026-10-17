@@ -1,18 +1,36 @@
 import { randomUUID } from 'node:crypto';
+import {prepareRevocationCandidate,type ExpectedGrantReference} from '../revocation/candidate';
+import {withStoredCandidateInTransaction} from '../revocation/registered-access';
+import type {PoolClient} from 'pg';
 import { prepareCandidate } from '../ingest/candidate';
 import { canonicalize, digest, fail, parseStrict, sha256 } from '../ingest/pa-v1/json.js';
 import { bindingFor, assertWritableChain, serverTime, transaction, type S4Actor } from './db';
 import { addRecord } from './records';
 
 export async function importCandidate(actor:S4Actor,raw:string) {
+  return importWithPolicy(actor,raw,false);
+}
+/** Candidate integration entrypoint; requires trusted prior registration. Not
+ * routed or enabled in production. Existing payload/manifest checks still apply. */
+export async function importRegisteredCandidate(actor:S4Actor,raw:string) {
+  return importWithPolicy(actor,raw,true);
+}
+async function importWithPolicy(actor:S4Actor,raw:string,registered:boolean) {
   // Digest only selects a server-provisioned binding; it never grants access.
   const envelope = parseStrict(raw);
   const manifest = parseStrict(envelope?.files?.['manifest.json'] || 'null');
   if (!manifest || typeof manifest.payload_digest !== 'string') fail('invalid_schema');
-  return transaction(actor,async db => {
+  const work=async (db:PoolClient,expected?:ExpectedGrantReference) => {
     await assertWritableChain(db,actor);
     const binding = await bindingFor(db,actor,manifest.payload_digest);
     const prepared = prepareCandidate(raw,actor.userId,binding);
+    if(expected){
+      let reference;
+      try{reference=prepareRevocationCandidate(raw,actor.userId,binding,expected).reference;}
+      catch{fail('invalid_revocation_candidate');}
+      const feed=(await db.query('select cursor from research_revocation_candidate.feed where feed_id=$1 and local_owner=$2',[expected.feedId,actor.userId])).rows[0];
+      if(!feed||BigInt(feed.cursor)<BigInt(reference!.revocation_seq_at_export))fail('export_watermark_ahead');
+    }
     const existing = (await db.query('select id from public.research_s4_candidates where user_id=$1 and payload_hash=$2',[actor.userId,prepared.payloadHash])).rows[0];
     if (existing) return { id:existing.id as string,duplicate:true };
     const receivedAt = await serverTime(db);
@@ -45,5 +63,8 @@ export async function importCandidate(actor:S4Actor,raw:string) {
       source_document_id:source.id,payload_hash:prepared.payloadHash,received_at:receivedAt,input_cutoff_at:receivedAt,
       wiki_reference:prepared.wiki,rights_policy_ref:prepared.rights.policy_id,claim_refs:[],history_completeness:'unknown' });
     return { id,duplicate:false };
-  });
+  };
+  return transaction(actor,db=>registered
+    ?withStoredCandidateInTransaction(db,actor.userId,manifest.payload_digest,work)
+    :work(db));
 }
