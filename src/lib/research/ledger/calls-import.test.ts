@@ -77,4 +77,18 @@ describe('importCalls (injected dependencies)',()=>{
   expect(r).toMatchObject({calls:1,imported:0,planned:1,scorecard:{consistent:true}});
   expect(d.decisions).toHaveLength(0);expect(d.theses.size).toBe(0);
  });
+ it('previews new-call outcomes once without mutating dependencies and matches real-run plan counts',async()=>{
+  const d=deps(),event={kind:'event',call_id:call().call_id,ts_utc:'2026-08-01T07:00:00Z',event:'manual_close'};
+  const text=journal([call(),event,event]);
+  const decisions=new Map<string,string>(),outcomes=new Set<string>();
+  const io={...d.io,ledger:{...d.io.ledger,existingDecisions:async()=>decisions,existingOutcomeEvaluationIds:async()=>outcomes}};
+  const preview=await importCalls({journal:text,scorecard:null,dryRun:true,...io});
+  expect(preview).toMatchObject({planned:1,outcomes_planned:1,imported:0,outcomes:0,outcomes_unmatched:[]});
+  expect(d.decisions).toHaveLength(0);expect(d.outcomes).toHaveLength(0);expect(d.theses.size).toBe(0);
+  expect(decisions.size).toBe(0);expect(outcomes.size).toBe(0);
+  const actual=await importCalls({journal:text,scorecard:null,dryRun:false,...io});
+  expect(actual).toMatchObject({planned:preview.planned,outcomes_planned:preview.outcomes_planned,imported:1,outcomes:1,outcomes_unmatched:[]});
+  expect(d.decisions).toHaveLength(1);expect(d.outcomes).toHaveLength(1);
+ });
+
 });
