@@ -1,14 +1,13 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {generateKeyPairSync,sign} from 'node:crypto';
-import {Pool} from 'pg';
-import {startLocalDatabase,stopLocalDatabase} from '../s4/local-db';
+import {startLocalDatabase,stopLocalDatabase,ownedPool} from '../s4/local-db';
 import {applyRevocationPage} from '../../src/lib/research/revocation/consumer';
 const id=(n:number)=>`2000000a-0000-4000-8000-${String(n).padStart(12,'0')}`;
 let interrupted=false;const interrupt=()=>{interrupted=true;};
 process.on('SIGINT',interrupt);process.on('SIGTERM',interrupt);
 async function main(){
- const state=await startLocalDatabase();const db=new Pool({connectionString:state.adminUrl,max:3,connectionTimeoutMillis:5000,statement_timeout:15000});let primary:unknown;
+ const state=await startLocalDatabase();const db=ownedPool({connectionString:state.adminUrl,max:3,connectionTimeoutMillis:5000,statement_timeout:15000});let primary:unknown;
  try{
   await db.query(readFileSync('scripts/revocation/candidate-schema.sql','utf8'));
   await db.query(readFileSync('scripts/revocation/retention-guards.sql','utf8'));

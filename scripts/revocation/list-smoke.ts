@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {randomUUID,generateKeyPairSync,sign} from 'node:crypto';
 import {Pool,type PoolClient} from 'pg';
-import {startLocalDatabase,stopLocalDatabase} from '../s4/local-db';
+import {startLocalDatabase,stopLocalDatabase,ownedPool} from '../s4/local-db';
 import {testPack} from '../s4/test-pack';
 import {canonicalize,digest} from '../../src/lib/research/ingest/pa-v1/json.js';
 import {registerCandidateReference} from '../../src/lib/research/revocation/register';
@@ -28,7 +28,7 @@ async function cleanupGate(gate:PoolClient,pending:Array<Promise<unknown>|undefi
  if(errors.length)throw new AggregateError(errors,'race cleanup failed');
 }
 async function main(){
- const state=await startLocalDatabase(),db=new Pool({connectionString:state.adminUrl,statement_timeout:30000,connectionTimeoutMillis:5000});let primary:unknown;
+ const state=await startLocalDatabase(),db=ownedPool({connectionString:state.adminUrl,statement_timeout:30000,connectionTimeoutMillis:5000});let primary:unknown;
  try{
   await db.query(readFileSync('scripts/revocation/candidate-schema.sql','utf8'));
   await db.query('grant usage on schema research_revocation_candidate to alpha_s4_runtime;grant select on all tables in schema research_revocation_candidate to alpha_s4_runtime');

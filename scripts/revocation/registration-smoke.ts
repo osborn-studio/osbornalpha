@@ -17,13 +17,12 @@ import {s4Http} from '../../src/lib/research/s4/http';
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {randomUUID,generateKeyPairSync,sign,createHmac} from 'node:crypto';
-import {Pool} from 'pg';
 import {importRegisteredCandidate} from '../../src/lib/research/s4/import';
 import {submitRegisteredDecision,type DecisionInput} from '../../src/lib/research/s4/decisions';
 import {registeredCandidateStatus,registeredCitation,registeredReviewHistory} from '../../src/lib/research/s4/read';
 import {revealRegisteredCards,weekPeriod} from '../../src/lib/research/s4/cards';
 import {closeS4Pool} from '../../src/lib/research/s4/db';
-import {startLocalDatabase,stopLocalDatabase} from '../s4/local-db';
+import {startLocalDatabase,stopLocalDatabase,ownedPool} from '../s4/local-db';
 import {testPack} from '../s4/test-pack';
 import {canonicalize,digest} from '../../src/lib/research/ingest/pa-v1/json.js';
 import {prepareRevocationCandidate} from '../../src/lib/research/revocation/candidate';
@@ -33,7 +32,7 @@ import {withStoredCandidateInTransaction} from '../../src/lib/research/revocatio
 import {applyRevocationPage} from '../../src/lib/research/revocation/consumer';
 let interrupted=false;const interrupt=()=>{interrupted=true;};process.on('SIGINT',interrupt);process.on('SIGTERM',interrupt);
 async function main(){
- const state=await startLocalDatabase(),db=new Pool({connectionString:state.adminUrl,max:3,connectionTimeoutMillis:5000,statement_timeout:10000});let primary:unknown;
+ const state=await startLocalDatabase(),db=ownedPool({connectionString:state.adminUrl,max:3,connectionTimeoutMillis:5000,statement_timeout:10000});let primary:unknown;
  try{
   await db.query(readFileSync('scripts/revocation/candidate-schema.sql','utf8'));
   // Disposable runtime role only; no production ACL provisioning is claimed.
@@ -624,7 +623,7 @@ async function main(){
   }finally{await batchClient.query('rollback');batchClient.release();}
   await db.query('delete from research_revocation_candidate.binding_map where payload_hash=$1',[secondHash]);
   await db.query('delete from public.research_s4_bindings where payload_hash=$1',[secondHash]);
-  const single=new Pool({connectionString:state.adminUrl,max:1,connectionTimeoutMillis:500,statement_timeout:10000});
+  const single=ownedPool({connectionString:state.adminUrl,max:1,connectionTimeoutMillis:500,statement_timeout:10000});
   const client=await single.connect();
   try{
    let entered=false;

@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
-import {Pool} from 'pg';
-import {startLocalDatabase,stopLocalDatabase} from '../s4/local-db';
+import {startLocalDatabase,stopLocalDatabase,ownedPool} from '../s4/local-db';
 let interrupted=false;const interrupt=()=>{interrupted=true;};process.on('SIGINT',interrupt);process.on('SIGTERM',interrupt);
 async function main(){
- const state=await startLocalDatabase(),db=new Pool({connectionString:state.adminUrl,max:2,connectionTimeoutMillis:5000,statement_timeout:10000});let primary:unknown;
+ const state=await startLocalDatabase(),db=ownedPool({connectionString:state.adminUrl,max:2,connectionTimeoutMillis:5000,statement_timeout:10000});let primary:unknown;
  try{
   await db.query(readFileSync('scripts/revocation/candidate-schema.sql','utf8'));
   await db.query(readFileSync('scripts/revocation/retention-guards.sql','utf8'));
