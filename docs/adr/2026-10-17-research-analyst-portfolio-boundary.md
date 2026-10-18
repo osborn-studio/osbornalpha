@@ -30,7 +30,7 @@ v4 主张把 OSanalyst 融进 `/portfolio`。本 ADR 改为分层。按 2026-09-
 
 ## 已知局限（首轮）
 
-- 模拟成交价在首次评分时冻结；之后 A 股前复权重算（送转 / 分红）或港美股不复权的拆股会让成交价与最新收盘的基准漂移，页面如实显示 `last_close_date`，不修正。
+- 价格基准漂移已通过 `recommendation_scores.base_close` 解决（`20261018090000_recommendation_scores_base_close.sql`）：`fill_price` 是首次评分基准下的基准日收盘并永久冻结，而每次刷新 `scoreForward` 都会在当前 K 线基准下重新算出同一根基准 K 线的 `base_close`，账本成交价 / 平仓价优先取它，与同次刷新的 `last_close` 同基准，无需复权因子。A 股前复权重算（送转 / 分红）由此自动跟随；港美股不复权的拆股在拆股当天到该代码下次刷新之间仍会短暂失真，刷新后即恢复。旧评分行 `base_close` 为 null 时回退到 `fill_price`；时间线「模拟成交价」列仍显示冻结值，两者不同时以悬停提示标出当前基准值。
 - 某标的上所有建议停止再评分后（60 日已满或建议超过 130 天），其最新收盘冻结在最后一次评分。
 - 建议日早于完整 120 根日线窗口首根 K 线的建议跳过不计分，也不会有模拟成交价。
 - 追加写入已由数据库触发器保证（`20261017120000_recommendations_append_only.sql`）：`recommendations` 的 BEFORE UPDATE 触发器只放行 `withdrawn_at` / `withdraw_reason` 从 null 一次写入、`fill_price` / `fill_date` 从 null 一次成对写入，已撤回的行冻结，其余列任何改动一律拒绝并点名列名；持有本人 JWT 直写 Supabase 也绕不过。现有 `decisions` 表仍无同等保护，属 v4 M1a 债务。

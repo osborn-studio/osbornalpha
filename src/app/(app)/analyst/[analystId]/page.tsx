@@ -96,7 +96,8 @@ export default function AnalystDetailPage() {
                         <td className="py-1"><Link href={`/stock/${encodeURIComponent(r.ticker)}`} className="text-accent hover:underline">{r.ticker}</Link></td>
                         <td className="py-1">{t(`action.${r.action}`)}</td>
                         <td className="py-1">{r.reference_price === null ? '--' : formatFill(r.reference_price, r.market)}</td>
-                        <td className="py-1">{r.fill_price === null ? <span className="text-[var(--text-dim)]">{t('scores.pending')}</span> : formatFill(r.fill_price, r.market)}</td>
+                        {/* Shows the frozen first-score fill; when the latest refresh restated it on a new price basis (qfq / split) the title carries both. */}
+                        <td className="py-1" title={r.fill_price !== null && r.score?.base_close !== null && r.score?.base_close !== undefined && r.score.base_close !== r.fill_price ? `${formatFill(r.fill_price, r.market)} → ${formatFill(r.score.base_close, r.market)} (${r.score.base_date ?? ''})` : undefined}>{r.fill_price === null ? <span className="text-[var(--text-dim)]">{t('scores.pending')}</span> : formatFill(r.fill_price, r.market)}</td>
                         <td className="py-1">{r.confidence ?? '--'}</td>
                         <td className="py-1">{pctOrDash(r.score?.forward_5d_pct ?? null)}</td>
                         <td className="py-1">{pctOrDash(r.score?.forward_20d_pct ?? null)}</td>
