@@ -137,7 +137,7 @@ create index decisions_recommendation on public.decisions (recommendation_id) wh
 
 语义约束（由应用层保证，与现有表同等级别）：
 
-- `recommendations` 追加写入。API 只开放创建和撤回；`fill_price` / `fill_date` 只由评分任务写一次。浏览器直写 Supabase 的路径与现有 `decisions` 表同样存在，属 v4 M1a 的既有债务，不在本轮解决。
+- `recommendations` 追加写入。API 只开放创建和撤回；`fill_price` / `fill_date` 只由评分任务写一次。数据库层由 `20261017120000_recommendations_append_only.sql` 的 BEFORE UPDATE 触发器兜底：只允许撤回字段与成交价字段各从 null 一次写入，其余列改动一律拒绝，浏览器直写 Supabase 的路径因此对本表失效（现有 `decisions` 表仍属 v4 M1a 的既有债务）。
 - `reference_price` 只记录分析师当时说的价格，**不作为成交价**。成交价统一用建议日（或其后首个交易日）的 K 线收盘价，与评分基准同源（现有 `fetchEastmoneyKline` 默认：A 股前复权，港 / 美股不复权），避免分析师口述价与 K 线价混算。
 - `analyst_profiles.is_self` 的档案在用户首次访问 `/analyst` 时由服务端 `ensureSelfProfile()` 懒创建，显示名取 profiles 昵称或「我」。
 - `research_decisions.analyst_id`、`research_analyst_identities.analyst_id` 在语义上等于 `analyst_profiles.id`，但不建外键：S4 运行时连接 `ALPHA_S4_DATABASE_URL`，与组合库是否同库尚未核实（v4 §8.1）。
