@@ -61,7 +61,7 @@ async function readAll<T>(make: (from: number, to: number) => PromiseLike<{ data
 
 type Supabase = Awaited<ReturnType<typeof getServerSupabase>>;
 
-async function readAllRecommendations(supabase: Supabase, userId: string, analystId?: string): Promise<Recommendation[]> {
+export async function readAllRecommendations(supabase: Supabase, userId: string, analystId?: string): Promise<Recommendation[]> {
   const rows = await readAll<Record<string, unknown>>((a, b) => {
     let q = supabase.from('recommendations').select('*').eq('user_id', userId)
       .order('recommended_at', { ascending: true }).order('created_at', { ascending: true }).order('id', { ascending: true }).range(a, b);
@@ -71,7 +71,7 @@ async function readAllRecommendations(supabase: Supabase, userId: string, analys
   return rows.map(coerceRecommendationRow);
 }
 
-async function readAllScores(supabase: Supabase, userId: string): Promise<RecommendationScore[]> {
+export async function readAllScores(supabase: Supabase, userId: string): Promise<RecommendationScore[]> {
   const rows = await readAll<Record<string, unknown>>((a, b) =>
     supabase.from('recommendation_scores').select('*').eq('user_id', userId).order('recommendation_id', { ascending: true }).range(a, b));
   return rows.map(coerceScoreRow);
