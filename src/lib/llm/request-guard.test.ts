@@ -56,6 +56,8 @@ describe('readLlmBody', () => {
     const big = JSON.stringify({ apiKey: 'x'.repeat(9000) });
     expect(((await readLlmBody(req(big))) as { response: Response }).response.status).toBe(413);
     expect(((await readLlmBody(req('{}', { 'content-length': '99999' }))) as { response: Response }).response.status).toBe(413);
+    // multibyte: 3,000 CJK characters are 9,000 bytes although only 3,000 UTF-16 units
+    expect(((await readLlmBody(req(JSON.stringify({ apiKey: '密'.repeat(3000) })))) as { response: Response }).response.status).toBe(413);
     expect(((await readLlmBody(req('[1]'))) as { response: Response }).response.status).toBe(400);
     expect(((await readLlmBody(req('nope'))) as { response: Response }).response.status).toBe(400);
   });

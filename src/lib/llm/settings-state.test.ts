@@ -185,6 +185,16 @@ describe('settings-state: readiness is evidence bound to the saved configuration
     s = reduce(s, { type: 'probeFinished', seq: 3, provider: 'deepseek', model: 'deepseek-chat', response: { ok: false, class: 'auth', status: 401, key_source: 'saved', version: 'v1' } });
     expect(s.readiness).toBe('configured_unverified');
   });
+  it('an early server failure (key_required after another tab changed the row) withdraws ready', () => {
+    let s = loaded();
+    s = reduce(s, { type: 'probeStarted', seq: 1, model: 'deepseek-chat' });
+    s = reduce(s, { type: 'probeFinished', seq: 1, provider: 'deepseek', model: 'deepseek-chat', response: ok('v1', 'saved') });
+    expect(s.readiness).toBe('ready');
+    s = reduce(s, { type: 'probeStarted', seq: 2, model: 'deepseek-chat' });
+    s = reduce(s, { type: 'probeFinished', seq: 2, provider: 'deepseek', model: 'deepseek-chat', response: { ok: false, error: 'key_required' } });
+    expect(s.readiness).toBe('configured_unverified');
+    expect(s.probes['deepseek-chat']).toEqual({ status: 'failed', error: 'key_required' });
+  });
   it('failed probes record the failure class and never set ready', () => {
     let s = loaded();
     s = reduce(s, { type: 'probeStarted', seq: 1, model: 'deepseek-chat' });

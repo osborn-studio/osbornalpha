@@ -174,6 +174,12 @@ describe('response shape validation', () => {
     await expect(toolChat(CFG, { messages: [], tools: [] })).rejects.toMatchObject({ name: 'LlmResponseShapeError' });
   });
 
+  it('accepts tool_calls: null (some providers send it on plain text turns)', async () => {
+    mockFetch({ choices: [{ message: { content: 'text', tool_calls: null } }] });
+    await expect(chat(CFG, MSG)).resolves.toMatchObject({ content: 'text' });
+    await expect(toolChat(CFG, { messages: [], tools: [] })).resolves.toMatchObject({ content: 'text', toolCalls: [] });
+  });
+
   it('accepts a null content with well-formed tool_calls and an omitted content', async () => {
     mockFetch({ choices: [{ message: { content: null, tool_calls: [{ id: '1', function: { name: 'f', arguments: '{}' } }] } }] });
     await expect(toolChat(CFG, { messages: [], tools: [] })).resolves.toMatchObject({ toolCalls: [{ id: '1', name: 'f' }] });

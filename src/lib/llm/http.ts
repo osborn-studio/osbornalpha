@@ -18,7 +18,8 @@ type BodyLike = {
   json(): Promise<unknown>;
 };
 
-async function readBounded(res: BodyLike, limit: number): Promise<{ text: string; truncated: boolean }> {
+/** Read at most `limit` bytes of a body (streamed when possible), cancelling the rest. */
+export async function readBounded(res: BodyLike, limit: number): Promise<{ text: string; truncated: boolean }> {
   const reader = res.body && typeof res.body.getReader === 'function' ? res.body.getReader() : null;
   if (!reader) {
     const text = await res.text();

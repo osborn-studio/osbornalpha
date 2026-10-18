@@ -7,6 +7,7 @@ import { getServerSupabase } from '@/lib/supabase/server';
 import { decrypt } from './crypto';
 import { getProvider, MODEL_ID_PATTERN, type ProviderDef } from './providers';
 import { LlmStoreError, readUserLlm } from './settings-store';
+import { readBounded } from './http';
 
 export const LLM_BODY_LIMIT_BYTES = 8 * 1024;
 export const LLM_API_KEY_MAX_LENGTH = 512;
@@ -32,11 +33,13 @@ export async function readLlmBody(req: Request): Promise<Guarded<Record<string, 
   if (Number.isFinite(declared) && declared > LLM_BODY_LIMIT_BYTES) return { ok: false, response: reject(413, 'body_too_large') };
   let text: string;
   try {
-    text = await req.text();
+    // Streamed with a byte cap: an oversize upload is cut off, never buffered whole.
+    const read = await readBounded(req, LLM_BODY_LIMIT_BYTES);
+    if (read.truncated) return { ok: false, response: reject(413, 'body_too_large') };
+    text = read.text;
   } catch {
     return { ok: false, response: reject(400, 'invalid_body') };
   }
-  if (text.length > LLM_BODY_LIMIT_BYTES) return { ok: false, response: reject(413, 'body_too_large') };
   try {
     const parsed: unknown = JSON.parse(text || '{}');
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { ok: false, response: reject(400, 'invalid_body') };

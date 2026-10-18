@@ -76,7 +76,7 @@ async function postJson(
 }
 
 interface ChatCompletionChoice {
-  message: { content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> };
+  message: { content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> | null };
   finish_reason?: string;
 }
 
@@ -92,7 +92,7 @@ function validateChoice(data: unknown): { choice: ChatCompletionChoice; usage: u
     throw new LlmResponseShapeError('message.content is not a string');
   }
   const toolCalls = first.message.tool_calls;
-  if (toolCalls !== undefined) {
+  if (toolCalls !== undefined && toolCalls !== null) {
     if (!Array.isArray(toolCalls)) throw new LlmResponseShapeError('message.tool_calls is not an array');
     for (const tc of toolCalls) {
       if (!isRecord(tc) || typeof tc.id !== 'string' || !isRecord(tc.function)

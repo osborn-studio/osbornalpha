@@ -33,6 +33,8 @@ export type SaveResponse =
 export interface ProbeState {
   status: 'running' | 'ok' | 'failed';
   seq?: number;
+  /** The probe targeted the saved provider+model with the saved key (no typed key). */
+  aboutSaved?: boolean;
   latency_ms?: number;
   failure?: LlmFailure;
   error?: string;
@@ -81,6 +83,7 @@ export function initialState(providers: Array<{ id: string; suggestedModel: stri
   };
 }
 
+const typedKey = (s: SettingsState) => s.draft.key.trim();
 const suggested = (s: SettingsState, provider: string) => s.providers.find((p) => p.id === provider)?.suggestedModel ?? null;
 const dropReady = (r: Readiness): Readiness => (r === 'ready' || r === 'stale' ? 'configured_unverified' : r);
 const baseline = (saved: SavedConfig | null): Readiness => (saved?.configured ? 'configured_unverified' : 'unconfigured');
@@ -125,24 +128,26 @@ export function reduce(s: SettingsState, e: Event): SettingsState {
       if ('error' in r) return { ...s, discovery: { status: 'failed', error: r.error } };
       return { ...s, discovery: { status: 'failed', failure: { class: r.class, status: r.status } } };
     }
-    case 'probeStarted':
-      return { ...s, probes: { ...s.probes, [e.model]: { status: 'running', seq: e.seq } } };
+    case 'probeStarted': {
+      const aboutSaved = !typedKey(s) && Boolean(s.saved?.configured) && s.saved?.provider === s.draft.provider && s.saved?.model === e.model;
+      return { ...s, probes: { ...s.probes, [e.model]: { status: 'running', seq: e.seq, aboutSaved } } };
+    }
     case 'probeFinished': {
       const current = s.probes[e.model];
       if (!current || current.status !== 'running' || current.seq !== e.seq || s.draft.provider !== e.provider) return s;
       const r = e.response;
       const probes = { ...s.probes };
       const saved = s.saved;
-      const keySource = 'key_source' in r ? r.key_source : undefined;
-      const aboutSaved = keySource === 'saved' && Boolean(saved?.configured) && saved?.provider === e.provider && saved?.model === e.model;
+      // Whether this probe targeted the saved configuration was decided when it started, so an
+      // early failure (key_required because another tab changed the row) still withdraws evidence.
+      const aboutSaved = current.aboutSaved === true;
       if (!r.ok) {
         probes[e.model] = 'error' in r ? { status: 'failed', error: r.error } : { status: 'failed', failure: { class: r.class, status: r.status } };
-        // A failed retest of the saved configuration withdraws earlier evidence.
         return { ...s, probes, readiness: aboutSaved ? dropReady(s.readiness) : s.readiness };
       }
       probes[e.model] = { status: 'ok', latency_ms: r.latency_ms };
       let readiness = s.readiness;
-      if (aboutSaved) readiness = r.version === saved!.version ? 'ready' : 'stale';
+      if (aboutSaved && r.key_source === 'saved' && saved) readiness = r.version === saved.version ? 'ready' : 'stale';
       return { ...s, probes, readiness };
     }
     case 'saveStarted':
@@ -170,7 +175,6 @@ export function reduce(s: SettingsState, e: Event): SettingsState {
 
 // ---- selectors / request builders ------------------------------------------------------------
 
-const typedKey = (s: SettingsState) => s.draft.key.trim();
 export const savedKeyUsable = (s: SettingsState) => Boolean(s.saved?.configured && s.saved.known && s.saved.provider === s.draft.provider);
 export const hasKey = (s: SettingsState) => typedKey(s).length > 0 || savedKeyUsable(s);
 
