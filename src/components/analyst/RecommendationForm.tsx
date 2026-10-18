@@ -13,13 +13,12 @@ const HORIZONS: Array<DecisionHorizon | ''> = ['', 'short', 'mid', 'long'];
 const inputCls = 'rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1 text-sm';
 const num = (s: string) => (s.trim() ? Number(s) : undefined);
 
-export function RecommendationForm({ profiles, defaultAnalystId, onCreated }: {
+export function RecommendationForm({ profiles, onCreated }: {
   profiles: AnalystProfile[];
-  defaultAnalystId?: string;
   onCreated: () => void;
 }) {
   const t = useTranslations('analyst');
-  const [analystId, setAnalystId] = useState(defaultAnalystId ?? profiles[0]?.id ?? '');
+  const [analystId, setAnalystId] = useState(profiles[0]?.id ?? '');
   const [ticker, setTicker] = useState('');
   const [market, setMarket] = useState<Market>('A');
   const [marketTouched, setMarketTouched] = useState(false);
