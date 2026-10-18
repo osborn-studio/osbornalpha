@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button, Panel } from '@/components/ui';
 import { createRecommendation } from '@/lib/hooks/useAnalyst';
-import { inferCoreMarket } from '@/lib/securities/normalize';
+import { inferCoreMarket } from '@/lib/securities/ticker';
 import type { AnalystProfile, DecisionAction, DecisionHorizon, Market } from '@/lib/supabase/database.types';
 
 const ACTIONS: DecisionAction[] = ['buy', 'add', 'trim', 'sell', 'hold', 'pass'];
