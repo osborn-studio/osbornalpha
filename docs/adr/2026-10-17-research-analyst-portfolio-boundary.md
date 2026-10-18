@@ -12,7 +12,7 @@ OsbornAlpha 内部按产出物分三层。层间只以建议 id 单向连接（�
 | 分析 Analyst | `/analyst` | 分析师模拟账本 + 前向评分 | 冻结规则，系统自己是权威 |
 | 我的投资 Portfolio | `/portfolio` | 真实交易 + 持仓 | 外部事实（手工记录，将来券商同步） |
 
-- research 产出建议（首轮建议由人手工在 /analyst 登记，research 侧尚无自动产出，`thesis_ref` 只是可选引用；research → analyst 的自动投递是后续工作）；analyst 登记建议、在首次评分时冻结模拟成交价（建议日交易所本地日的 K 线收盘）、按等权规则模拟、用前向 5/20/60 个交易日打分；portfolio 的决定可通过 `decisions.recommendation_id` 引用一条同标的、未撤回的建议（采纳）。
+- research 产出建议（首条自动投递通道：research 的 playbook `PAPER_TRADE` 运行审批通过后，可在 /research/playbooks 一键登记为建议，归属 Agent 档案「Research Playbook」，`source_type = 'playbook'`，`source_ref` 记 run / thesis / memo / entity；其他来源仍为手工登记，`thesis_ref` 为可选引用。设计见 `docs/superpowers/specs/2026-10-18-playbook-to-recommendation-design.md`）；analyst 登记建议、在首次评分时冻结模拟成交价（建议日交易所本地日的 K 线收盘）、按等权规则模拟、用前向 5/20/60 个交易日打分；portfolio 的决定可通过 `decisions.recommendation_id` 引用一条同标的、未撤回的建议（采纳）。
 - 实盘永远不改写建议和评分；analyst 永远不写 `trades`。连接是单向的：portfolio 只读 analyst 表，只写自己的 `recommendation_id`。
 - 建议只追加：API 只开放创建与撤回；`analyst_profiles` 与 `recommendations` 不开 RLS delete 策略，档案只归档。
 - 前向评分内核只有一份：`src/lib/scoring/forward.ts`。portfolio 的决定复盘（`review.ts`）与 analyst 的建议评分（`score-store.ts`）共用，规则冻结：基准 = 建议日交易所本地日起首根 K 线收盘；hit = 5 日方向；score = 方向调整后的 20 日收益（缺则 5 日）；hold 不计 hit / score；pass 按看空方向计分。

@@ -1,6 +1,6 @@
 # research → analyst 建议投递（一）：playbook PAPER_TRADE 一键登记为建议
 
-日期：2026-10-18。分支 `codex/playbook-recommendations`，基于 `main`（含 PR #78–#81）。状态：设计待审阅，未实施。
+日期：2026-10-18。分支 `codex/playbook-recommendations`，基于 `main`（含 PR #78–#81）。状态：已实施（分支 `codex/playbook-recommendations`）。
 
 ## 1. 背景与边界
 

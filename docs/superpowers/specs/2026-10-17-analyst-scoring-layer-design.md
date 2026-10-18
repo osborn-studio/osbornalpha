@@ -21,7 +21,7 @@ OsbornAlpha 内部分三层，只以「建议 id」单向连接：
 1. **「我的决定」属于 portfolio。** `decisions` 表是实盘账本上的采纳事件，留在 `/portfolio` 不迁移。它的前向打分内核（`review.ts`）抽成共享纯函数，analyst 用同一内核给建议打分。`/portfolio/review` 行为不变。
 2. **S4/S6 留在 research，不搬。** 证据：`research_decisions.arm ∈ {human_baseline, ai_candidate, collab, averaged}`，四臂报表按 `(thesis_id, week_of)` 配对。它评的是研究方法哪条路径更准，是方法论自检，与 `/research/evals` 同类，不是分析师的建议表现。S5 引擎目前只服务这条路径（XNYS/USD/SPY），本轮 analyst 不接 S5。
 3. **账本粒度按分析师。** 一个分析师一本模拟账本。论点（thesis）只是建议上的可选引用，按论点的统计是分组查询，不另开账本。
-4. **AI Agent 是分析师。** `analyst_profiles.kind ∈ {human, agent}`。John Cameron、playbook 的 `PAPER_TRADE` 都是将来的建议来源；本轮只做手工录入，`source_type` 枚举预留 `copilot` / `playbook`。
+4. **AI Agent 是分析师。** `analyst_profiles.kind ∈ {human, agent}`。John Cameron、playbook 的 `PAPER_TRADE` 都是将来的建议来源；本轮只做手工录入，`source_type` 枚举预留 `copilot` / `playbook`。playbook 投递已于 2026-10-18 实现（见同目录 playbook-to-recommendation 设计）。
 5. **portfolio 本轮不加账户层。** 唯一改动是 `decisions.recommendation_id`（可空）作为采纳链接。
 
 ## 2. 范围
