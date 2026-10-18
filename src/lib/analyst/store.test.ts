@@ -22,13 +22,20 @@ describe('coerceRecommendationRow', () => {
 
 describe('coerceScoreRow', () => {
   it('coerces every numeric column and preserves booleans', () => {
-    const out = coerceScoreRow({ recommendation_id: 'r1', forward_5d_pct: '1.5', forward_20d_pct: null, forward_60d_pct: '-2', score: '3', hit: true, last_close: '110', last_close_date: '2026-07-01' });
+    const out = coerceScoreRow({ recommendation_id: 'r1', forward_5d_pct: '1.5', forward_20d_pct: null, forward_60d_pct: '-2', score: '3', hit: true, last_close: '110', last_close_date: '2026-07-01', base_close: '50', base_date: '2026-06-01' });
     expect(out.forward_5d_pct).toBe(1.5);
     expect(out.forward_20d_pct).toBeNull();
     expect(out.forward_60d_pct).toBe(-2);
     expect(out.score).toBe(3);
     expect(out.hit).toBe(true);
     expect(out.last_close).toBe(110);
+    expect(out.base_close).toBe(50);
+    expect(out.base_date).toBe('2026-06-01');
+  });
+
+  it('keeps base_close null for rows scored before the column existed', () => {
+    const out = coerceScoreRow({ recommendation_id: 'r1', forward_5d_pct: null, forward_20d_pct: null, forward_60d_pct: null, score: null, hit: null, last_close: null, last_close_date: null, base_close: null, base_date: null });
+    expect(out.base_close).toBeNull();
   });
 });
 

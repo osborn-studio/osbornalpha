@@ -6,8 +6,13 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatPrice(v: number, currency = '') {
-  return `${currency}${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+export function formatPrice(v: number, currency = '', digits = 2) {
+  return `${currency}${v.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+}
+
+/** Per-share price/cost: HK ticks at three decimals, every other market keeps two. */
+export function formatPriceFor(market: Market, v: number, currency = '') {
+  return formatPrice(v, currency, market === 'HK' ? 3 : 2);
 }
 
 export function formatSignedPrice(v: number, currency = '') {

@@ -18,6 +18,12 @@
     "openPositions": "模拟持仓",
     "view": "查看账本 →"
   },
+  "profile": {
+    "rename": "改名",
+    "archive": "归档",
+    "archiveConfirm": "归档后该分析师将从总览隐藏，已有建议与评分保留。确定归档？",
+    "renamePrompt": "输入新的显示名称"
+  },
   "profileForm": {
     "title": "新建分析师",
     "displayName": "显示名称",

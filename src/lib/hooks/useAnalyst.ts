@@ -21,6 +21,9 @@ const post = (url: string, body?: unknown) =>
 
 export const fetchProfiles = () => fetch('/api/analyst/profiles').then((r) => json<{ profiles: ProfileWithSummary[] }>(r));
 export const createProfile = (body: Record<string, unknown>) => post('/api/analyst/profiles', body).then((r) => json<{ profile: AnalystProfile }>(r));
+export const patchProfile = (id: string, body: { display_name?: string; note?: string | null; archived?: boolean }) =>
+  fetch(`/api/analyst/profiles/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    .then((r) => json<{ profile: AnalystProfile }>(r));
 
 export const fetchRecommendations = (q: { analyst?: string; ticker?: string; open?: boolean } = {}) => {
   const qs = new URLSearchParams();

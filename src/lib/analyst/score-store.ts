@@ -4,7 +4,10 @@
 // recommendation and a portfolio decision made at the same time score alike.
 // First successful score also writes the recommendation's one-shot fill_price
 // (= base close) which the paper book uses as the hypothetical fill.
-// Known limits: fills are frozen on the price basis of the first refresh, so later qfq re-adjustments (A-share 送转/dividends) or unadjusted HK/US splits make fill and last_close drift; last_close freezes once a ticker's calls stop being re-scored.
+// Every refresh also writes base_close/base_date to the score row: the same exchange-local bar as
+// fill_price, but on the price basis the source reports NOW (qfq re-adjusted after A-share 送转/dividends,
+// unadjusted after an HK/US split). The book prefers it over the frozen fill so fill and last_close share
+// one basis. Known limit: last_close freezes once a ticker's calls stop being re-scored.
 
 import type { Recommendation, RecommendationScore } from '@/lib/supabase/database.types';
 import { fetchEastmoneyKline } from '@/lib/data/sources/eastmoney';
@@ -60,6 +63,7 @@ export function buildScoreWrites(
       forward_5d_pct: s.forward_5d_pct, forward_20d_pct: s.forward_20d_pct, forward_60d_pct: s.forward_60d_pct,
       hit: s.hit, score: s.score, calibration_bucket: s.calibration_bucket,
       last_close: s.last_close, last_close_date: s.last_close_date,
+      base_close: s.base_close, base_date: s.base_date,
     });
     // Fill = close of the call's exchange-local day (an intraday look-ahead of a few hours, accepted by design).
     if (r.fill_price === null) fills.push({ id: r.id, fill_price: s.base_close, fill_date: s.base_date });

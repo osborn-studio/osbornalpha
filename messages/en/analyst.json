@@ -18,6 +18,12 @@
     "openPositions": "Simulated Positions",
     "view": "View Book →"
   },
+  "profile": {
+    "rename": "Rename",
+    "archive": "Archive",
+    "archiveConfirm": "Archiving hides this analyst from the overview; existing recommendations and scores are kept. Archive?",
+    "renamePrompt": "Enter a new display name"
+  },
   "profileForm": {
     "title": "New Analyst",
     "displayName": "Display Name",

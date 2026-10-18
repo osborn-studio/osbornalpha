@@ -1,12 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button, Panel, Tag } from '@/components/ui';
 import { exchangeDate } from '@/lib/scoring/forward';
-import { fetchBook, fetchRecommendations, withdrawRecommendation, type Book, type RecommendationView } from '@/lib/hooks/useAnalyst';
+import { fetchBook, fetchRecommendations, patchProfile, withdrawRecommendation, type Book, type RecommendationView } from '@/lib/hooks/useAnalyst';
 import type { AnalystProfile } from '@/lib/supabase/database.types';
 import { AnalystDisclaimer } from '@/components/analyst/AnalystDisclaimer';
 import { BookSummaryPanel, BookTables, formatFill, pctOrDash } from '@/components/analyst/BookTables';
@@ -17,6 +17,7 @@ const RECS_CAP = 500;
 export default function AnalystDetailPage() {
   const t = useTranslations('analyst');
   const { analystId } = useParams<{ analystId: string }>();
+  const router = useRouter();
   const [profile, setProfile] = useState<AnalystProfile | null>(null);
   const [book, setBook] = useState<Book | null>(null);
   const [recs, setRecs] = useState<RecommendationView[]>([]);
@@ -48,6 +49,30 @@ export default function AnalystDetailPage() {
     } finally { setBusyId(null); }
   }
 
+  async function rename() {
+    if (!profile) return;
+    const name = window.prompt(t('profile.renamePrompt'), profile.display_name)?.trim();
+    if (!name || name === profile.display_name) return; // cancelled or unchanged
+    setActionError(null);
+    try {
+      const r = await patchProfile(analystId, { display_name: name });
+      setProfile(r.profile);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function archive() {
+    if (!window.confirm(t('profile.archiveConfirm'))) return;
+    setActionError(null);
+    try {
+      await patchProfile(analystId, { archived: true });
+      router.push('/analyst');
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   const th = 'pb-1 font-normal';
   return (
     <div className="space-y-4 p-4">
@@ -62,6 +87,13 @@ export default function AnalystDetailPage() {
             <h1 className="text-xl font-semibold">{profile.is_self ? t('profiles.self') : profile.display_name}</h1>
             <Tag tone={profile.kind === 'agent' ? 'accent' : 'neutral'}>{t(`kind.${profile.kind}`)}</Tag>
             {profile.note && <span className="text-sm text-[var(--text-dim)]">{profile.note}</span>}
+            {/* The self profile always renders as "我" and cannot be archived, so it gets neither button. */}
+            {!profile.is_self && (
+              <span className="ml-auto flex gap-1.5">
+                <Button size="sm" variant="ghost" onClick={rename}>{t('profile.rename')}</Button>
+                <Button size="sm" variant="ghost" onClick={archive}>{t('profile.archive')}</Button>
+              </span>
+            )}
           </header>
           <BookSummaryPanel book={book} />
           <BookTables book={book} />
@@ -96,7 +128,8 @@ export default function AnalystDetailPage() {
                         <td className="py-1"><Link href={`/stock/${encodeURIComponent(r.ticker)}`} className="text-accent hover:underline">{r.ticker}</Link></td>
                         <td className="py-1">{t(`action.${r.action}`)}</td>
                         <td className="py-1">{r.reference_price === null ? '--' : formatFill(r.reference_price, r.market)}</td>
-                        <td className="py-1">{r.fill_price === null ? <span className="text-[var(--text-dim)]">{t('scores.pending')}</span> : formatFill(r.fill_price, r.market)}</td>
+                        {/* Shows the frozen first-score fill; when the latest refresh restated it on a new price basis (qfq / split) the title carries both. */}
+                        <td className="py-1" title={r.fill_price !== null && r.score?.base_close !== null && r.score?.base_close !== undefined && r.score.base_close !== r.fill_price ? `${formatFill(r.fill_price, r.market)} → ${formatFill(r.score.base_close, r.market)} (${r.score.base_date ?? ''})` : undefined}>{r.fill_price === null ? <span className="text-[var(--text-dim)]">{t('scores.pending')}</span> : formatFill(r.fill_price, r.market)}</td>
                         <td className="py-1">{r.confidence ?? '--'}</td>
                         <td className="py-1">{pctOrDash(r.score?.forward_5d_pct ?? null)}</td>
                         <td className="py-1">{pctOrDash(r.score?.forward_20d_pct ?? null)}</td>

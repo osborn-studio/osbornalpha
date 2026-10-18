@@ -35,6 +35,7 @@ export function coerceScoreRow(row: Record<string, unknown>): RecommendationScor
     forward_60d_pct: n(r.forward_60d_pct),
     score: n(r.score),
     last_close: n(r.last_close),
+    base_close: n(r.base_close),
   };
 }
 
@@ -82,7 +83,9 @@ export async function readAllScores(supabase: Supabase, userId: string): Promise
 // The owner's own "我" profile is created lazily; the partial unique index on
 // (user_id) where is_self makes a concurrent double-create fail with 23505, in
 // which case we simply re-read. If 23505 instead comes from a display-name
-// collision, it falls back to the default name '我'.
+// collision, the name falls back in three levels: the profile display name,
+// then '我', then `我 (<first 8 chars of userId>)`; only when all three are
+// taken does it throw 'analyst name taken'. (Pure I/O, so not unit-tested.)
 export async function ensureSelfProfile(): Promise<AnalystProfile> {
   const { supabase, userId } = await requireUser();
   const { data: existing, error } = await supabase.from('analyst_profiles').select('*').eq('user_id', userId).eq('is_self', true).maybeSingle();
@@ -101,7 +104,10 @@ export async function ensureSelfProfile(): Promise<AnalystProfile> {
     if (againErr) throw new Error(againErr.message);
     if (again) return coerceProfileRow(again as Record<string, unknown>);
     ({ data: created, error: insErr } = await insertSelf('我'));
-    if (insErr?.code === '23505') throw new Error('analyst name taken');
+    if (insErr?.code === '23505') {
+      ({ data: created, error: insErr } = await insertSelf(`我 (${userId.slice(0, 8)})`));
+      if (insErr?.code === '23505') throw new Error('analyst name taken');
+    }
   }
   if (insErr) throw new Error(insErr.message);
   return coerceProfileRow(created);

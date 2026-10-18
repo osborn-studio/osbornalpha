@@ -12,7 +12,7 @@ const rec = (o: Partial<Recommendation>): Recommendation => ({
 });
 const score = (o: Partial<RecommendationScore>): RecommendationScore => ({
   recommendation_id: 'r1', user_id: 'u', scored_at: 'x', forward_5d_pct: 1, forward_20d_pct: null, forward_60d_pct: null,
-  hit: true, score: 1, calibration_bucket: null, last_close: 1, last_close_date: '2026-01-01', ...o,
+  hit: true, score: 1, calibration_bucket: null, last_close: 1, last_close_date: '2026-01-01', base_close: 1, base_date: '2026-01-01', ...o,
 });
 const DAY = 86400000;
 
@@ -60,7 +60,9 @@ describe('buildScoreWrites', () => {
     const w = buildScoreWrites([call()], new Map([['NVDA', bars]]), 'u', NOW);
     expect(w.skipped).toBe(0);
     expect(w.scoreUpserts).toHaveLength(1);
-    expect(Object.keys(w.scoreUpserts[0])).toHaveLength(11);
+    expect(Object.keys(w.scoreUpserts[0])).toHaveLength(13);
+    // Every refresh re-states the fill on the current price basis next to last_close.
+    expect(w.scoreUpserts[0]).toMatchObject({ base_close: 100, base_date: '2026-06-01' });
     expect(w.fills).toEqual([{ id: 'r1', fill_price: 100, fill_date: '2026-06-01' }]);
   });
   it('skips a call dated before a full window', () => {
@@ -87,5 +89,7 @@ describe('buildScoreWrites', () => {
     const w = buildScoreWrites([call({ fill_price: 99, fill_date: '2026-06-01' })], new Map([['NVDA', bars]]), 'u', NOW);
     expect(w.scoreUpserts).toHaveLength(1);
     expect(w.fills).toHaveLength(0);
+    // The frozen fill (99) stays; the score row carries the kernel's current-basis base close (100).
+    expect(w.scoreUpserts[0]).toMatchObject({ base_close: 100, base_date: '2026-06-01' });
   });
 });
