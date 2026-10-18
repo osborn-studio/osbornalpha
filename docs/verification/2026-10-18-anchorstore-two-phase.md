@@ -22,7 +22,7 @@ Inputs: ADR 2026-10-18 §4 and §7, plan 02 §3 (interface shape, identity, reco
 
 **Watchdog**: the flush and the ACK+COMMIT leg each run under an injectable deadline (`watchdogMs`, default 5 000 ms). On expiry the runner destroys the pooled client (the server rolls the transaction back and releases the owner lock), records the owner as paused for the rest of the process, and resolves with `{status:'paused', reason:'flush_timeout'|'ack_timeout', appended:0, acknowledged:0}`. Every later `drainOutboxTwoPhase` for that owner in the same process throws `anchor_paused`; recovery is a restart whose first Phase A reconciles the journal tail against the outbox (a completed append becomes recovered and is acknowledged once; a torn line fails closed and quarantines).
 
-**Fencing**: the authoritative generation comes from an injectable `fence` that stands in for the C1 checkpoint registry and `research_s4_runtime_identity`, neither of which exists yet; by default it returns the manifest's own generation, so local mode has no external authority. Generation movement between A and B aborts to A; a generation above the manifest refuses both append and ACK. The journal has no generation header because the file format is frozen; the ADR's three-way comparison is therefore two-way until I1.4b/I1.5 add the SQL and C1 sides.
+**Fencing**: the authoritative generation comes from an injectable `fence` that stands in for the C1 checkpoint registry and for `research_s4_runtime_identity`; by default it returns the manifest's own generation, so local mode has no external authority. I1.4b (PR #83, merged while this branch was open) created that identity table and the runner's SECURITY DEFINER functions in a disabled state, but nothing registers an identity in any environment, and this drain does not call those functions yet (see below). Generation movement between A and B aborts to A; a generation above the manifest refuses both append and ACK. The journal has no generation header because the file format is frozen; the ADR's three-way comparison is therefore two-way until I1.4b/I1.5 add the SQL and C1 sides.
 
 **Quarantine**: an `anchor_integrity_failed` from either phase runs the same `quarantineOwner` as the oracle (integrity row, every observation `integrity_failed`, one ControlEvent per observation).
 
@@ -75,10 +75,14 @@ The first full `LC_ALL=C npm run test:db` with this suite on the shared harness 
 | `LC_ALL=C npm run test:db` | exit 0: 260 files / 2227 tests, 16 critical suites / 133 critical tests / 0 skipped, 44 migrations, PostgreSQL 17.10 (second run, after the suite moved to its own cluster; the first run's 13 failures are explained above) |
 | `npm run build` | exit 0 |
 
+## Relation to I1.4b (main after PR #83)
+
+`docs/verification/2026-10-18-anchor-runner-functions.md` adds the roles `alpha_anchor_fn_owner` / `alpha_anchor_runner`, the tables `research_s4_runtime_identity`, `research_s4_anchor_principals`, `research_s4_anchor_checkpoints`, the functions `research_s4_anchor_tail` / `_read_outbox` / `_ack` / `_confirm_checkpoint` and the evaluation gate, all inactive until operations register an identity. This branch is the runner side and was developed in parallel: the two-phase drain still reads the outbox directly under the web role's RLS and acknowledges through the oracle's `acknowledgeRow` (the web role keeps `UPDATE(anchored_at, receipt_hash)` on the outbox), so it reaches parity with `drainOutbox` on today's privileges. Wiring Phase A to `research_s4_anchor_tail` / `_read_outbox`, Phase B to `research_s4_anchor_ack` under a runner login, replacing the injected fence with the registered generation, and the post-commit `_confirm_checkpoint` call are the next step, after which the web role's outbox UPDATE grant can be revoked as that doc anticipates. The merge touched only `criticalSuites` (now 17); both suites create their own owners and the runner suite uses the shared harness database while this one owns a cluster.
+
 ## Not covered and deliberately absent
 
-- No production path: no migration, no runner role, no SQL functions, no `research_s4_runtime_identity`, no C1 client, no checkpoint cache, no evaluation gate, no worker flag. The fence is an injected interface; the default fence is the manifest itself.
-- `store_id` and `database_identity` are validated for shape and carried into results; nothing registers or compares them yet (I1.4b/I1.5).
+- No production path from this branch: no migration, no flag, no host, no C1 client, no worker change. The fence is an injected interface; the default fence is the manifest itself. The I1.4b objects on main are not called here.
+- `store_id` and `database_identity` are validated for shape and carried into results; nothing compares them with `research_s4_runtime_identity` or a C1 registration yet (I1.5).
 - `provenance_level` stays `local_receipt`; a local file is not WORM and not a third-party timestamp.
 - A stalled fsync leaks the stuck file handle for the life of the process; the pause makes that process disposable by design.
 - Timings are from one Mac run; CI on Linux reruns the same assertions but records no thresholds.
