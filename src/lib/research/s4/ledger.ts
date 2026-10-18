@@ -259,16 +259,36 @@ export interface ReplayedJudgment {
  * source was available at or before as_of, ordered by content address so the
  * same ledger state always yields byte-identical output.
  */
-export async function replayJudgments(actor: S4Actor, thesisId: string, asOf: string): Promise<ReplayedJudgment[]> {
+export function replayJudgments(actor: S4Actor, thesisId: string, asOf: string): Promise<ReplayedJudgment[]> {
+  return replayJudgmentsWithCutoff(actor, thesisId, asOf, false);
+}
+/** Inactive timestamp-filtered view: source availability AND stored judgment time
+ * must be at or before the cutoff. No claim of historical commit visibility, exposure,
+ * registered source authority or authentic human knowledge. created_at is a
+ * pre-commit writer-supplied wall-clock stamp (backdating/clock steps possible),
+ * not a trustworthy historical visibility fence. Return exact UTC microseconds
+ * for this view; reject more than100 rows without returning a partial prefix.
+ * This result cap does not bound SQL scan/sort cost or per-row JSON size.
+ * Legacy Date formatting and unbounded retrospective results remain unchanged. Legacy source-only
+ * replay remains available for retrospective derivations and is not this view. */
+export function replayTimestampFilteredJudgments(actor: S4Actor, thesisId: string, asOf: string): Promise<ReplayedJudgment[]> {
+  return replayJudgmentsWithCutoff(actor, thesisId, asOf, true);
+}
+async function replayJudgmentsWithCutoff(actor: S4Actor, thesisId: string, asOf: string, recordedOnly: boolean): Promise<ReplayedJudgment[]> {
   if (!isUuid(thesisId) || !isIsoInstant(asOf)) fail('invalid_schema');
   return transaction(actor, async db => {
     const rows = (await db.query(`select j.id,j.snapshot_id,j.snapshot,j.source_id,j.thesis_id,j.run_id,j.question_set_version,j.question_id,j.backend,j.backend_model,
-        j.prompt_sha256,j.input_token_count,j.distribution,j.selected,j.confidence,j.abstained,j.latency_ms,j.cost_micros,j.created_at,s.available_at
+        j.prompt_sha256,j.input_token_count,j.distribution,j.selected,j.confidence,j.abstained,j.latency_ms,j.cost_micros,j.created_at,s.available_at,
+        to_char(j.created_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at_exact,
+        to_char(s.available_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as available_at_exact
       from public.research_judgments j join public.research_source_documents s on s.user_id=j.user_id and s.id=j.source_id
-      where j.user_id=$1 and j.thesis_id=$2 and s.available_at<=$3::timestamptz
-      order by j.snapshot_id,j.question_set_version,j.question_id,j.backend,j.backend_model,j.id`, [actor.userId, thesisId, asOf])).rows;
-    return rows.map(r => ({ ...r, confidence: r.confidence === null ? null : Number(r.confidence),
+      where j.user_id=$1 and j.thesis_id=$2 and s.available_at<=$3::timestamptz and (not $4::boolean or j.created_at<=$3::timestamptz)
+      order by j.snapshot_id,j.question_set_version,j.question_id,j.backend,j.backend_model,j.id
+      limit $5::integer`, [actor.userId, thesisId, asOf, recordedOnly, recordedOnly ? 101 : null])).rows;
+    if (recordedOnly && rows.length > 100) fail('input_limit');
+    return rows.map(({created_at_exact, available_at_exact, ...r}) => ({ ...r, confidence: r.confidence === null ? null : Number(r.confidence),
       cost_micros: r.cost_micros === null ? null : Number(r.cost_micros),
-      created_at: r.created_at.toISOString(), available_at: r.available_at.toISOString() }));
+      created_at: recordedOnly ? created_at_exact : r.created_at.toISOString(),
+      available_at: recordedOnly ? available_at_exact : r.available_at.toISOString() }));
   });
 }

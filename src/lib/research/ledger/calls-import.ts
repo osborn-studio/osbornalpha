@@ -91,19 +91,20 @@ export interface ImportDeps {
     recordOutcome: (input: OutcomeInput) => Promise<{ id: string; judged_at: string }>;
   };
 }
-export interface ImportResult { calls: number; events: number; planned: number; imported: number; skipped: number; theses_created: number; outcomes: number; outcomes_unmatched: string[]; summary: CallsSummary; scorecard: ReturnType<typeof compareWithScorecard> }
+export interface ImportResult { calls: number; events: number; planned: number; outcomes_planned: number; imported: number; skipped: number; theses_created: number; outcomes: number; outcomes_unmatched: string[]; summary: CallsSummary; scorecard: ReturnType<typeof compareWithScorecard> }
 
 export async function importCalls({ journal, scorecard, dryRun, theses, ledger }: { journal: string; scorecard: Scorecard | null; dryRun: boolean } & ImportDeps): Promise<ImportResult> {
   const { calls, events } = parseCallsJournal(journal);
   const summary = summarizeCalls(calls, events);
-  const decisionIds = await ledger.existingDecisions();
-  const outcomesDone = await ledger.existingOutcomeEvaluationIds();
-  const result: ImportResult = { calls: calls.length, events: events.length, planned: 0, imported: 0, skipped: 0, theses_created: 0, outcomes: 0, outcomes_unmatched: [], summary, scorecard: compareWithScorecard(summary, scorecard) };
+  const decisionIds = new Map(await ledger.existingDecisions());
+  const plannedCalls = new Set<string>();
+  const outcomesDone = new Set(await ledger.existingOutcomeEvaluationIds());
+  const result: ImportResult = { calls: calls.length, events: events.length, planned: 0, outcomes_planned: 0, imported: 0, skipped: 0, theses_created: 0, outcomes: 0, outcomes_unmatched: [], summary, scorecard: compareWithScorecard(summary, scorecard) };
   for (const c of calls) {
     const cardId = cardIdFor(c.call_id);
     if (decisionIds.has(cardId)) { result.skipped++; continue; }
     result.planned++;
-    if (dryRun) continue;
+    if (dryRun) { plannedCalls.add(cardId); continue; }
     const m = mapCall(c);
     let thesisId = await theses.find(m.thesis.title);
     if (!thesisId) { thesisId = await theses.create(m.thesis); result.theses_created++; }
@@ -115,11 +116,12 @@ export async function importCalls({ journal, scorecard, dryRun, theses, ledger }
   for (const e of events) {
     const decisionId = decisionIds.get(cardIdFor(e.call_id));
     const call = calls.find(c => c.call_id === e.call_id);
-    if (!decisionId || !call) { result.outcomes_unmatched.push(e.call_id); continue; }
+    if ((!decisionId && !plannedCalls.has(cardIdFor(e.call_id))) || !call) { result.outcomes_unmatched.push(e.call_id); continue; }
     const evaluationId = outcomeEvaluationId(e);
     if (outcomesDone.has(evaluationId)) continue;
-    if (dryRun) { result.planned++; continue; }
-    await ledger.recordOutcome({ decision_id: decisionId, window_weeks: Math.max(1, Math.ceil(call.horizon_days / 5)), evaluation_id: evaluationId, price_result: { state: 'closed', reason: 'manual', closed_at: e.ts_utc, note: e.note ?? null, ref_call_id: e.ref_call_id ?? null }, judged_by: 'hiphon-pm-journal' });
+    result.outcomes_planned++;
+    if (dryRun) { outcomesDone.add(evaluationId); continue; }
+    await ledger.recordOutcome({ decision_id: decisionId!, window_weeks: Math.max(1, Math.ceil(call.horizon_days / 5)), evaluation_id: evaluationId, price_result: { state: 'closed', reason: 'manual', closed_at: e.ts_utc, note: e.note ?? null, ref_call_id: e.ref_call_id ?? null }, judged_by: 'hiphon-pm-journal' });
     outcomesDone.add(evaluationId); result.outcomes++;
   }
   return result;

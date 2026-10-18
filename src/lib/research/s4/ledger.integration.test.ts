@@ -1,9 +1,9 @@
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
-import {Pool} from 'pg';
-import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {Pool,Client} from 'pg';
+import {afterAll,beforeAll,describe,expect,it,vi} from 'vitest';
 import {closeS4Pool,transaction} from './db';
-import {addLabel,judgmentId,recordDecision,recordJudgment,recordOutcome,replayJudgments,snapshotId,type DecisionInput,type JudgmentInput} from './ledger';
+import {addLabel,judgmentId,recordDecision,recordJudgment,recordOutcome,replayJudgments,replayTimestampFilteredJudgments,snapshotId,type DecisionInput,type JudgmentInput} from './ledger';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20260926000000_research_judgment_ledger.sql';
@@ -204,4 +204,73 @@ describe.skipIf(!enabled)('WP-A3 judgment ledger on real PostgreSQL',()=>{
   await expect(replayJudgments(actor,thesis2,'2026-10-01')).rejects.toThrow('invalid_schema');
   await expect(replayJudgments(actor,'thesis',  '2026-10-01T00:00:00Z')).rejects.toThrow('invalid_schema');
  });
+ it('recorded-time replay excludes later judgments of an already available source, with inclusive cutoff',async()=>{
+  const thesis=randomUUID();
+  await admin.query("insert into public.research_theses(id,user_id,title) values($1,$2,'synthetic recorded-time replay')",[thesis,actor.userId]);
+  const input=judgment({snapshot:{source_id:sourceId,source_version:'1',thesis_id:thesis,thesis_version:'1',entity_table_version:'fixture'},question_id:'EARLY'});
+  const first=await recordJudgment(actor,input);
+  const at=(await admin.query('select created_at from public.research_judgments where user_id=$1 and id=$2',[actor.userId,first.id])).rows[0].created_at.toISOString();
+  await admin.query('select pg_sleep(0.01)'); // Only isolated DB; ensure a distinct persisted millisecond.
+  const later=await recordJudgment(actor,{...input,question_id:'LATER',run_id:randomUUID()});
+  const laterAt=(await admin.query('select created_at from public.research_judgments where user_id=$1 and id=$2',[actor.userId,later.id])).rows[0].created_at.toISOString();
+  expect(Date.parse(laterAt)).toBeGreaterThan(Date.parse(at));
+  expect((await replayJudgments(actor,thesis,at)).map(r=>r.id).sort()).toEqual([first.id,later.id].sort());
+  const boundary=await replayTimestampFilteredJudgments(actor,thesis,at);
+  expect(boundary.map(r=>r.id)).toEqual([first.id]);
+  expect(await replayTimestampFilteredJudgments(actor,thesis,new Date(Date.parse(at)-1).toISOString())).toEqual([]);
+  expect((await replayTimestampFilteredJudgments(actor,thesis,laterAt)).map(r=>r.id).sort()).toEqual([first.id,later.id].sort());
+  expect(JSON.stringify(await replayTimestampFilteredJudgments(actor,thesis,at))).toBe(JSON.stringify(boundary));
+  const future=randomUUID();
+  await admin.query(`insert into public.research_source_documents(id,user_id,source_type,title,raw_text,content_hash,ingested_at) values($1,$2,'NEWS','synthetic future availability','fixture',$3,clock_timestamp()+interval '1 day')`,[future,actor.userId,`hash-${randomUUID()}`]);
+  const unavailable=await recordJudgment(actor,{...input,snapshot:{...input.snapshot,source_id:future},question_id:'UNAVAILABLE',run_id:randomUUID()});
+  const afterFuture=(await admin.query('select created_at from public.research_judgments where user_id=$1 and id=$2',[actor.userId,unavailable.id])).rows[0].created_at.toISOString();
+  expect((await replayTimestampFilteredJudgments(actor,thesis,afterFuture)).map(r=>r.id).sort()).toEqual([first.id,later.id].sort());
+  // Privileged synthetic insert exposes the existing column's unconstrained stamp;
+  // these rows prove SQL filtering/precision only, not valid origins or addresses.
+  const tie=randomUUID(),micro=randomUUID(),microAt=at.slice(0,-1)+'500Z';
+  for(const [id,q,time] of [[tie,'SYNTHETIC_TIE',at],[micro,'SYNTHETIC_MICRO',microAt]]){
+   await admin.query(`insert into public.research_judgments(user_id,id,snapshot_id,snapshot,source_id,thesis_id,run_id,question_set_version,question_id,backend,backend_model,distribution,abstained,created_at)
+    select user_id,$1,snapshot_id,snapshot,source_id,thesis_id,run_id,question_set_version,$2,backend,backend_model,distribution,abstained,$3::timestamptz
+    from public.research_judgments where user_id=$4 and id=$5`,[id,q,time,actor.userId,first.id]);
+  }
+  expect((await replayTimestampFilteredJudgments(actor,thesis,at)).map(r=>r.id).sort()).toEqual([first.id,tie].sort());
+  const exact=await replayTimestampFilteredJudgments(actor,thesis,microAt);
+  expect(exact.find(r=>r.id===micro)?.created_at).toBe(microAt);
+  expect(exact.map(r=>r.id).sort()).toEqual([first.id,tie,micro].sort());
+  expect((await replayTimestampFilteredJudgments(actor,thesis,exact.find(r=>r.id===micro)!.created_at)).map(r=>r.id).sort()).toEqual([first.id,tie,micro].sort());
+  expect(await replayTimestampFilteredJudgments(other,thesis,laterAt)).toEqual([]);
+  await expect(replayTimestampFilteredJudgments(actor,thesis,'2026-10-06')).rejects.toThrow('invalid_schema');
+ });
+
+ it('timestamp view accepts100 real synthetic writer rows and refuses101 without truncating legacy replay',async()=>{
+  const thesis=randomUUID();
+  await admin.query("insert into public.research_theses(id,user_id,title) values($1,$2,'synthetic bounded replay')",[thesis,actor.userId]);
+  const input=judgment({snapshot:{source_id:sourceId,source_version:'1',thesis_id:thesis,thesis_version:'1',entity_table_version:'fixture'}});
+  for(let i=0;i<100;i++)await recordJudgment(actor,{...input,question_id:`BOUNDED_${i}`,run_id:randomUUID()});
+  const rows100=await replayTimestampFilteredJudgments(actor,thesis,new Date(Date.now()+60000).toISOString());
+  expect(rows100).toHaveLength(100);
+  const last100=rows100.map(r=>r.created_at).sort().at(-1)!;
+  const future=randomUUID();
+  await admin.query(`insert into public.research_source_documents(id,user_id,source_type,title,raw_text,content_hash,ingested_at) values($1,$2,'NEWS','synthetic unavailable overflow','fixture',$3,clock_timestamp()+interval '1 day')`,[future,actor.userId,`hash-${randomUUID()}`]);
+  const unavailable=await recordJudgment(actor,{...input,snapshot:{...input.snapshot,source_id:future},question_id:'BOUNDED_FUTURE',run_id:randomUUID()});
+  const futureAt=(await admin.query('select created_at from public.research_judgments where user_id=$1 and id=$2',[actor.userId,unavailable.id])).rows[0].created_at.toISOString();
+  expect(await replayTimestampFilteredJudgments(actor,thesis,futureAt)).toHaveLength(100);
+  await admin.query('select pg_sleep(0.01)');
+  const overflow=await recordJudgment(actor,{...input,question_id:'BOUNDED_100',run_id:randomUUID()});
+  const overflowAt=(await admin.query('select created_at from public.research_judgments where user_id=$1 and id=$2',[actor.userId,overflow.id])).rows[0].created_at.toISOString();
+  expect(Date.parse(overflowAt)).toBeGreaterThan(Date.parse(last100));
+  // Spy observes actual pg Client SQL/params, without replacing DB execution.
+  const querySpy=vi.spyOn(Client.prototype,'query');
+  try{
+   expect(await replayTimestampFilteredJudgments(actor,thesis,last100)).toHaveLength(100);
+   await expect(replayTimestampFilteredJudgments(actor,thesis,overflowAt)).rejects.toThrow('input_limit');
+   expect(await replayJudgments(actor,thesis,overflowAt)).toHaveLength(101);
+   const calls=(querySpy.mock.calls as unknown as Array<[unknown,unknown]>).filter(([sql])=>typeof sql==='string'&&sql.includes('from public.research_judgments j join'));
+   expect(calls).toHaveLength(3);
+   for(const [sql] of calls)expect(sql).toMatch(/limit \$5::integer/);
+   expect(calls.map(([,params])=>(params as unknown[])[4])).toEqual([101,101,null]);
+  }finally{querySpy.mockRestore();}
+
+ });
+
 });
