@@ -1,0 +1,34 @@
+[Unit]
+Description=Alpha anchor runner (research S4 outbox -> journal -> checkpoint registry)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=alpha-anchor
+Group=alpha-anchor
+WorkingDirectory=/opt/osbornalpha
+EnvironmentFile=/etc/alpha-anchor/runner.env
+ExecStart=/usr/bin/node --import tsx scripts/anchor/runner.ts --watch
+Restart=on-failure
+RestartSec=30
+# A watchdog pause exits with code 2 and must not be auto-restarted into a second writer
+# without an operator reconciling the journal tail first.
+RestartPreventExitStatus=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/alpha-anchor
+StateDirectory=alpha-anchor
+StateDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target

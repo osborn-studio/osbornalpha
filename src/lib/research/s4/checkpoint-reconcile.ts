@@ -4,6 +4,9 @@ import {fail} from '../ingest/pa-v1/json.js';
 export interface CheckpointRef { last_sequence:string; last_hash:string; generation:number }
 export interface ReconcileInput {
  manifestGeneration:number;
+ /** The registry's current generation for this identity (`identity_state`), the authority the
+  * manifest and the database must match. Checkpoint rows may carry older generations. */
+ registryGeneration:number;
  /** Latest row in the independent registry for this owner, or null when it has none. */
  registry:CheckpointRef|null;
  /** `research_s4_anchor_checkpoints` row in the Alpha database, or null. */
@@ -47,9 +50,12 @@ function ref(value:CheckpointRef|null){
 export function reconcileCheckpoint(input:ReconcileInput):ReconcileResult{
  const manifest=generation(input.manifestGeneration),registry=ref(input.registry),cache=ref(input.cache);
  const dbGeneration=generation(input.database.generation),anchored=sequence(input.database.last_anchored_sequence),dbHash=hash(input.database.receipt_hash_at_registry_sequence);
- const generations=[manifest,dbGeneration,...(registry?[registry.generation]:[]),...(cache?[cache.generation]:[])];
+ const registryGeneration=generation(input.registryGeneration);
  const confirmedThrough=registry?registry.sequence.toString():null;
- if(generations.some(g=>g!==manifest))return {state:'paused',reason:'generation_mismatch',confirmedThrough};
+ // Authorities must agree exactly; checkpoint rows written under an earlier generation stay valid,
+ // but a row from a generation this manifest has not reached means another writer is ahead.
+ if(registryGeneration!==manifest||dbGeneration!==manifest)return {state:'paused',reason:'generation_mismatch',confirmedThrough};
+ if((registry&&registry.generation>manifest)||(cache&&cache.generation>manifest))return {state:'paused',reason:'generation_mismatch',confirmedThrough};
  if(!registry){
   if(cache)return {state:'paused',reason:'registry_behind_cache',confirmedThrough:null};
   return {state:'consistent',confirmedThrough:null,pendingFrom:'1'};
