@@ -703,7 +703,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       run.memo_id ? getMemo(ctx, run.memo_id) : Promise.resolve(null),
     ]);
     const defaults = registrationDefaults(run, thesis, memo);
-    const analyst = await ensurePlaybookProfile();
+    // A human profile already named "Research Playbook" blocks the agent profile; surface it as a 409 the page can show.
+    const analyst = await ensurePlaybookProfile().catch((e: unknown) => {
+      if (e instanceof Error && e.message === 'analyst name taken') throw new PlaybookError('analyst name taken: rename the existing “Research Playbook” profile in /analyst', 409);
+      throw e;
+    });
 
     const inputs: RecommendationInput[] = [];
     for (let i = 0; i < parsed.value.items.length; i++) {
