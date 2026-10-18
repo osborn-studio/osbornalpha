@@ -158,11 +158,11 @@ export interface RecommendationView extends Recommendation {
   adopted_by: string[];
 }
 
-export function joinViews(recs: Recommendation[], scores: RecommendationScore[], decisions: Array<{ id: string; recommendation_id: string | null }>): RecommendationView[] {
+export function joinViews(recs: Recommendation[], scores: RecommendationScore[], decisions: Array<{ id: string; recommendation_id: string | null; status?: string }>): RecommendationView[] {
   const byId = new Map(scores.map((s) => [s.recommendation_id, s]));
   const adopted = new Map<string, string[]>();
   for (const d of decisions) {
-    if (!d.recommendation_id) continue;
+    if (!d.recommendation_id || d.status === 'cancelled') continue; // a cancelled decision frees the recommendation
     adopted.set(d.recommendation_id, [...(adopted.get(d.recommendation_id) ?? []), d.id]);
   }
   return recs.map((r) => ({ ...r, score: byId.get(r.id) ?? null, adopted_by: adopted.get(r.id) ?? [] }));
@@ -181,10 +181,10 @@ export async function listRecommendations(opts: { analystId?: string; ticker?: s
   if (recs.length === 0) return [];
   const [scores, { data: decisionRows, error: dErr }] = await Promise.all([
     readAllScores(supabase, userId),
-    supabase.from('decisions').select('id, recommendation_id').eq('user_id', userId).not('recommendation_id', 'is', null),
+    supabase.from('decisions').select('id, recommendation_id, status').eq('user_id', userId).not('recommendation_id', 'is', null),
   ]);
   if (dErr) throw new Error(dErr.message);
-  return joinViews(recs, scores, (decisionRows ?? []) as Array<{ id: string; recommendation_id: string | null }>);
+  return joinViews(recs, scores, (decisionRows ?? []) as Array<{ id: string; recommendation_id: string | null; status?: string }>);
 }
 
 export async function createRecommendation(input: RecommendationInput): Promise<Recommendation> {

@@ -25,14 +25,17 @@ export function DecisionForm({ ticker, onDone }: { ticker: string; onDone: () =>
   // Open, not-yet-adopted analyst recommendations for this ticker (adoption link, spec §3.3).
   const [recs, setRecs] = useState<RecommendationView[]>([]);
   const [recommendationId, setRecommendationId] = useState('');
+  const [refreshKey, setRefreshKey] = useState(0);
   useEffect(() => {
     let alive = true;
+    setRecs([]);
     setRecommendationId('');
+    if (!action) return; // only load once the decision bar is open
     fetchRecommendations({ ticker, open: true })
       .then((r) => { if (alive) setRecs(r.recommendations.filter((x) => x.adopted_by.length === 0)); })
       .catch(() => { if (alive) setRecs([]); });
     return () => { alive = false; };
-  }, [ticker]);
+  }, [ticker, action, refreshKey]);
 
   async function submit() {
     if (!action) return;
@@ -45,6 +48,7 @@ export function DecisionForm({ ticker, onDone }: { ticker: string; onDone: () =>
         recommendation_id: recommendationId || undefined,
       });
       setAction(null); setThesis(''); setTarget(''); setStop(''); setRecommendationId('');
+      setRefreshKey((k) => k + 1);
       onDone();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));

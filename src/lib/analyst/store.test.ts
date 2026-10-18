@@ -47,10 +47,12 @@ describe('joinViews', () => {
       { id: 'd1', recommendation_id: 'r2' },
       { id: 'd2', recommendation_id: 'r2' },
       { id: 'd3', recommendation_id: null },
+      { id: 'd4', recommendation_id: 'r2', status: 'cancelled' },
+      { id: 'd5', recommendation_id: 'r1', status: 'cancelled' },
     ];
     const [first, second] = joinViews(recs, scores, decisions);
     expect(first.score).toEqual(scores[0]);
-    expect(first.adopted_by).toEqual([]);
+    expect(first.adopted_by).toEqual([]); // d5 is cancelled
     expect(second.score).toBeNull();
     expect(second.adopted_by).toEqual(['d1', 'd2']);
   });

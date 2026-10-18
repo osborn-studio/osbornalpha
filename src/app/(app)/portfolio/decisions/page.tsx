@@ -5,7 +5,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Panel, Button, Tag } from '@/components/ui';
 import { formatPrice } from '@/lib/utils';
-import { fetchRecommendations } from '@/lib/hooks/useAnalyst';
 import type { Decision, DecisionStatus } from '@/lib/supabase/database.types';
 
 function SubNav({ current }: { current: 'cockpit' | 'decisions' | 'positions' | 'review' }) {
@@ -63,13 +62,8 @@ export default function DecisionsPage() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<DecisionStatus | 'all'>('all');
   const [cancellingId, setCancellingId] = useState<string | null>(null);
-  // recommendation id → withdrawn? Loaded once; the analyst layer is read-only from here.
-  const [withdrawn, setWithdrawn] = useState<Record<string, boolean>>({});
-  useEffect(() => {
-    fetchRecommendations()
-      .then((r) => setWithdrawn(Object.fromEntries(r.recommendations.map((x) => [x.id, x.withdrawn_at !== null]))))
-      .catch(() => setWithdrawn({}));
-  }, []);
+  // Ids of withdrawn recommendations, served alongside the decisions.
+  const [withdrawnIds, setWithdrawnIds] = useState(() => new Set<string>());
 
   const refetch = useCallback(async () => {
     try {
@@ -77,6 +71,7 @@ export default function DecisionsPage() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || `http ${res.status}`);
       setDecisions(json.decisions ?? []);
+      setWithdrawnIds(new Set<string>(json.withdrawn_recommendation_ids ?? []));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -166,8 +161,8 @@ export default function DecisionsPage() {
                   <td className="py-1">
                     {d.recommendation_id ? (
                       <Link href="/analyst" className="hover:underline">
-                        <Tag tone={withdrawn[d.recommendation_id] ? 'down' : 'up'}>
-                          {withdrawn[d.recommendation_id] ? t('decisions.adoptedWithdrawn') : t('decisions.adopted')}
+                        <Tag tone={withdrawnIds.has(d.recommendation_id) ? 'down' : 'up'}>
+                          {withdrawnIds.has(d.recommendation_id) ? t('decisions.adoptedWithdrawn') : t('decisions.adopted')}
                         </Tag>
                       </Link>
                     ) : (

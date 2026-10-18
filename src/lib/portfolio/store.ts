@@ -53,10 +53,11 @@ export async function createDecision(input: DecisionInput): Promise<Decision> {
   // RLS already hides other users' rows, so "not found" covers both cases.
   if (input.recommendation_id) {
     const { data: rec, error: rErr } = await supabase
-      .from('recommendations').select('id, withdrawn_at').eq('id', input.recommendation_id).eq('user_id', userId).maybeSingle();
+      .from('recommendations').select('id, withdrawn_at, ticker').eq('id', input.recommendation_id).eq('user_id', userId).maybeSingle();
     if (rErr) throw new Error(rErr.message);
     if (!rec) throw new Error('recommendation not found');
     if ((rec as { withdrawn_at: string | null }).withdrawn_at) throw new Error('recommendation withdrawn');
+    if ((rec as { ticker: string }).ticker !== input.ticker) throw new Error('recommendation ticker mismatch');
   }
   const { data, error } = await (supabase as any)
     .from('decisions')
@@ -65,6 +66,14 @@ export async function createDecision(input: DecisionInput): Promise<Decision> {
     .single();
   if (error) throw new Error(error.message);
   return coerceDecisionRow(data);
+}
+
+// Ids of the caller's withdrawn recommendations (small set; the decision log marks adopted-then-withdrawn rows).
+export async function listWithdrawnRecommendationIds(): Promise<string[]> {
+  const { supabase, userId } = await requireUser();
+  const { data, error } = await supabase.from('recommendations').select('id').eq('user_id', userId).not('withdrawn_at', 'is', null);
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
 }
 
 export async function updateDecisionStatus(id: string, status: DecisionStatus): Promise<void> {
