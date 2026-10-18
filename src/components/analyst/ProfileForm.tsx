@@ -6,7 +6,7 @@ import { Button, Panel } from '@/components/ui';
 import { createProfile } from '@/lib/hooks/useAnalyst';
 import type { AnalystKind } from '@/lib/supabase/database.types';
 
-const inputCls = 'w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1 text-sm';
+const inputCls = 'rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1 text-sm';
 
 export function ProfileForm({ onCreated }: { onCreated: () => void }) {
   const t = useTranslations('analyst');
@@ -29,7 +29,7 @@ export function ProfileForm({ onCreated }: { onCreated: () => void }) {
 
   return (
     <Panel title={t('profileForm.title')}>
-      <div className="flex flex-wrap items-end gap-2 text-xs">
+      <form className="flex flex-wrap items-end gap-2 text-xs" onSubmit={(e) => { e.preventDefault(); if (!busy) void submit(); }}>
         <label className="flex flex-col gap-0.5">{t('profileForm.displayName')}
           <input value={name} onChange={(e) => setName(e.target.value)} className={`${inputCls} w-40`} maxLength={60} />
         </label>
@@ -42,8 +42,8 @@ export function ProfileForm({ onCreated }: { onCreated: () => void }) {
         <label className="flex flex-col gap-0.5">{t('profileForm.note')}
           <input value={note} onChange={(e) => setNote(e.target.value)} className={`${inputCls} w-56`} />
         </label>
-        <Button size="sm" onClick={submit} disabled={busy || !name.trim()}>{busy ? t('profileForm.submitting') : t('profileForm.submit')}</Button>
-      </div>
+        <Button size="sm" type="submit" disabled={busy || !name.trim()}>{busy ? t('profileForm.submitting') : t('profileForm.submit')}</Button>
+      </form>
       {err && <p className="mt-1 text-xs text-[var(--down)]">{err}</p>}
     </Panel>
   );

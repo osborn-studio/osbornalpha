@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button, Panel, Tag } from '@/components/ui';
+import { formatPct } from '@/lib/utils';
 import { fetchProfiles, refreshScores, type ProfileWithSummary } from '@/lib/hooks/useAnalyst';
 import { AnalystDisclaimer } from '@/components/analyst/AnalystDisclaimer';
 import { ProfileForm } from '@/components/analyst/ProfileForm';
@@ -14,7 +15,7 @@ export default function AnalystOverviewPage() {
   const [profiles, setProfiles] = useState<ProfileWithSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
+  const [refreshMsg, setRefreshMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -23,7 +24,7 @@ export default function AnalystOverviewPage() {
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-      setProfiles([]);
+      setProfiles((p) => p ?? []);
     }
   }, []);
 
@@ -33,10 +34,10 @@ export default function AnalystOverviewPage() {
     setRefreshing(true); setRefreshMsg(null);
     try {
       const r = await refreshScores();
-      setRefreshMsg(t('scores.result', r));
+      setRefreshMsg({ ok: true, text: t('scores.result', r) });
       await load();
     } catch (e) {
-      setRefreshMsg(e instanceof Error ? e.message : String(e));
+      setRefreshMsg({ ok: false, text: e instanceof Error ? e.message : String(e) });
     } finally { setRefreshing(false); }
   }
 
@@ -49,15 +50,14 @@ export default function AnalystOverviewPage() {
         </div>
         <div className="flex flex-col items-end gap-1">
           <Button size="sm" variant="secondary" onClick={refresh} disabled={refreshing}>{refreshing ? t('scores.refreshing') : t('scores.refresh')}</Button>
-          {refreshMsg && <span className="text-xs text-[var(--text-dim)]">{refreshMsg}</span>}
+          {refreshMsg && <span className={`text-xs ${refreshMsg.ok ? 'text-[var(--text-dim)]' : 'text-[var(--down)]'}`}>{refreshMsg.text}</span>}
         </div>
       </header>
 
+      {error && <p className="text-sm text-[var(--down)]">{t('common.error', { message: error })}</p>}
       {profiles === null ? (
         <p className="text-sm text-[var(--text-dim)]">{t('common.loading')}</p>
-      ) : error ? (
-        <p className="text-sm text-[var(--down)]">{t('common.error', { message: error })}</p>
-      ) : (
+      ) : error && profiles.length === 0 ? null : (
         <Panel title={t('profiles.title', { count: profiles.length })}>
           {profiles.length === 0 ? (
             <p className="text-sm text-[var(--text-dim)]">{t('profiles.empty')}</p>
@@ -71,7 +71,7 @@ export default function AnalystOverviewPage() {
                   </div>
                   <dl className="num mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
                     <dt className="text-[var(--text-dim)]">{t('profiles.recommendations')}</dt><dd>{p.summary.recommendations}</dd>
-                    <dt className="text-[var(--text-dim)]">{t('profiles.hitRate')}</dt><dd>{p.summary.hit_rate === null ? '--' : `${p.summary.hit_rate.toFixed(0)}% · ${t('common.n', { n: p.summary.scorable })}`}</dd>
+                    <dt className="text-[var(--text-dim)]">{t('profiles.hitRate')}</dt><dd>{p.summary.hit_rate === null ? '--' : `${formatPct(p.summary.hit_rate, false)} · ${t('common.n', { n: p.summary.scorable })}`}</dd>
                     <dt className="text-[var(--text-dim)]">{t('profiles.avgScore')}</dt><dd>{p.summary.avg_score === null ? '--' : p.summary.avg_score.toFixed(1)}</dd>
                     <dt className="text-[var(--text-dim)]">{t('profiles.openPositions')}</dt><dd>{p.summary.open_positions}</dd>
                   </dl>

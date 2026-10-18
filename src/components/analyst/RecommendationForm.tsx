@@ -64,7 +64,7 @@ export function RecommendationForm({ profiles, defaultAnalystId, onCreated }: {
 
   return (
     <Panel title={t('recommendationForm.title')}>
-      <div className="flex flex-wrap items-end gap-2 text-xs">
+      <form className="flex flex-wrap items-end gap-2 text-xs" onSubmit={(e) => { e.preventDefault(); if (!busy) void submit(); }}>
         <label className="flex flex-col gap-0.5">{t('recommendationForm.analyst')}
           <select value={analystId} onChange={(e) => setAnalystId(e.target.value)} className={`${inputCls} w-36`}>
             {profiles.map((p) => <option key={p.id} value={p.id}>{p.is_self ? t('profiles.self') : p.display_name}</option>)}
@@ -109,10 +109,10 @@ export function RecommendationForm({ profiles, defaultAnalystId, onCreated }: {
         <label className="flex w-full flex-col gap-0.5">{t('recommendationForm.rationale')}
           <input value={rationale} onChange={(e) => setRationale(e.target.value)} className={inputCls} maxLength={4000} />
         </label>
-        <Button size="sm" onClick={submit} disabled={busy || !analystId || !ticker.trim()}>
+        <Button size="sm" type="submit" disabled={busy || !analystId || !ticker.trim()}>
           {busy ? t('recommendationForm.submitting') : t('recommendationForm.submit')}
         </Button>
-      </div>
+      </form>
       {msg && <p className={`mt-1 text-xs ${msg.ok ? 'text-[var(--up)]' : 'text-[var(--down)]'}`}>{msg.text}</p>}
     </Panel>
   );
