@@ -9,7 +9,7 @@ function rec(o: Partial<Recommendation>): Recommendation {
     id: `r${seq}`, user_id: 'u', analyst_id: 'a', ticker: '600519.SH', market: 'A', action: 'buy',
     reference_price: null, rationale: null, confidence: null, target_price: null, stop_loss: null,
     horizon: null, thesis_ref: null, source_type: 'manual', source_ref: null,
-    recommended_at: `2026-06-${String(seq).padStart(2, '0')}T01:00:00Z`, created_at: '2026-06-01T01:00:00Z',
+    recommended_at: new Date(Date.UTC(2026, 5, 1) + seq * 86_400_000).toISOString().replace('.000Z', 'Z'), created_at: '2026-06-01T01:00:00Z',
     withdrawn_at: null, withdraw_reason: null, fill_price: 100, fill_date: '2026-06-01', ...o,
   };
 }
@@ -124,8 +124,80 @@ describe('buildBook — exclusions and counters', () => {
     expect(book.closed).toEqual([]);
     expect(book.summary).toEqual({
       recommendations: 0, scorable: 0, hits: 0, hit_rate: null, n_score: 0, avg_score: null,
-      open_positions: 0, avg_unrealized_pct: null, closed_lots: 0, avg_realized_pct: null,
+      open_positions: 0, avg_unrealized_pct: null, n_unrealized: 0, closed_lots: 0, closed_units: 0, avg_realized_pct: null,
       unpriced: 0, no_position_to_sell: 0,
     });
+  });
+});
+
+describe('buildBook — review follow-ups', () => {
+  it('averages realized pct per unit, not per lot', () => {
+    const x1 = rec({ ticker: 'XXX.SH', action: 'buy', fill_price: 100 });
+    const x2 = rec({ ticker: 'XXX.SH', action: 'add', fill_price: 100 });
+    const xt = rec({ ticker: 'XXX.SH', action: 'trim', fill_price: 150 });
+    const y1 = rec({ ticker: 'YYY.SH', action: 'buy', fill_price: 100 });
+    const y2 = rec({ ticker: 'YYY.SH', action: 'add', fill_price: 100 });
+    const ys = rec({ ticker: 'YYY.SH', action: 'sell', fill_price: 80 });
+    const book = buildBook([x1, x2, xt, y1, y2, ys].map((r) => row(r)));
+    expect(book.summary.closed_lots).toBe(2);
+    expect(book.summary.closed_units).toBe(3);
+    expect(book.summary.avg_realized_pct).toBe(3.33); // (50 + 2 * -20) / 3
+  });
+
+  it('trim on a one-unit position closes it', () => {
+    const book = buildBook([row(rec({ action: 'buy', fill_price: 100 })), row(rec({ action: 'trim', fill_price: 110 }))]);
+    expect(book.positions).toEqual([]);
+    expect(book.closed[0].units).toBe(1);
+  });
+
+  it('reopens a closed ticker with a fresh opened_at and avg_fill', () => {
+    const a = rec({ action: 'buy', fill_price: 100 });
+    const b = rec({ action: 'sell', fill_price: 120 });
+    const c = rec({ action: 'buy', fill_price: 90 });
+    const book = buildBook([a, b, c].map((r) => row(r)));
+    expect(book.positions).toHaveLength(1);
+    expect(book.positions[0].opened_at).toBe(c.recommended_at);
+    expect(book.positions[0].avg_fill).toBe(90);
+  });
+
+  it('does not count unpriced hold or pass rows as unpriced', () => {
+    const book = buildBook([
+      row(rec({ action: 'hold', fill_price: null, fill_date: null })),
+      row(rec({ action: 'pass', fill_price: null, fill_date: null })),
+    ]);
+    expect(book.summary.unpriced).toBe(0);
+    expect(book.summary.recommendations).toBe(2);
+  });
+
+  it('keeps avg_fill unrounded while rounding percentages', () => {
+    const a = rec({ action: 'buy', fill_price: 100 });
+    const b = rec({ action: 'add', fill_price: 101 });
+    const c = rec({ action: 'add', fill_price: 101 });
+    const book = buildBook([row(a), row(b), row(c, score(c.id, { last_close: 110 }))]);
+    expect(book.positions[0].avg_fill).toBeCloseTo(100.6667, 3);
+    expect(book.positions[0].unrealized_pct).toBe(9.27);
+    expect(book.summary.n_unrealized).toBe(1);
+  });
+
+  it('keeps the average fill through a trim', () => {
+    const rows = [
+      rec({ action: 'buy', fill_price: 100 }),
+      rec({ action: 'add', fill_price: 200 }),
+      rec({ action: 'trim', fill_price: 150 }),
+      rec({ action: 'add', fill_price: 300 }),
+    ].map((r) => row(r));
+    const book = buildBook(rows);
+    expect(book.positions[0].units).toBe(2);
+    expect(book.positions[0].avg_fill).toBe(225);
+  });
+
+  it('treats the same ticker string in different markets as separate positions', () => {
+    const a = rec({ ticker: '0700', market: 'A' });
+    const b = rec({ ticker: '0700', market: 'HK' });
+    const book = buildBook([row(a, score(a.id, { last_close: 105 })), row(b)]);
+    expect(book.positions).toHaveLength(2);
+    expect(book.positions.map((p) => p.market)).toEqual(['A', 'HK']);
+    expect(book.positions[0].last_close).toBe(105);
+    expect(book.positions[1].last_close).toBeNull(); // price does not leak across markets
   });
 });
