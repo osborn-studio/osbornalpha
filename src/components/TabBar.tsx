@@ -101,7 +101,7 @@ export function TabBar() {
   const pathname = usePathname();
   // Tab labels are the app's primary nav and already live in common.nav
   // (established in G1a). Reuse that single source instead of duplicating
-  // the same six strings under components.tabBar.
+  // the same seven strings under components.tabBar.
   const tNav = useTranslations('common.nav');
   return (
     <nav
