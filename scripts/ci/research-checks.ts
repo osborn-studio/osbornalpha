@@ -7,7 +7,7 @@ export const recoveredMigration = {
   sha256: '31b96984bd7fb6b3a3db557618a830ee6cd77d45ee3186452eefe7b218019107',
 };
 export const criticalSuites = [
-  's4/integration.test.ts', 's4/anchor-two-phase.integration.test.ts', 's4/anchor-runner.integration.test.ts', 's4/ledger.integration.test.ts', 's4/source-extension.integration.test.ts',
+  's4/integration.test.ts', 's4/anchor-two-phase.integration.test.ts', 's4/anchor-runner.integration.test.ts', 's4/checkpoint-registry.integration.test.ts', 's4/ledger.integration.test.ts', 's4/source-extension.integration.test.ts',
   's6/arm-lineage.integration.test.ts', 's6/store.integration.test.ts', 's6/arm-report-db.integration.test.ts',
   'entity-keys/entity-keys.integration.test.ts', 'ledger/calls-import.integration.test.ts',
   'cluster/alignments.integration.test.ts', 'fanout/run.integration.test.ts',
