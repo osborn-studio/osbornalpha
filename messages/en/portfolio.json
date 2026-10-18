@@ -167,7 +167,7 @@
   },
   "review": {
     "loading": "Loading…",
-    "empty": "No scorable decisions yet — a decision is scored automatically once it has been open for 5 trading days",
+    "empty": "No scorable decisions yet — a decision is scored when you open or reload this page once 5 trading days have passed; decisions older than the latest 120 daily bars are not scored, and Hold decisions have no hit/miss",
     "refreshing": "Refreshing scores…",
     "overviewTitle": "Review Overview",
     "scored": "Scored",
