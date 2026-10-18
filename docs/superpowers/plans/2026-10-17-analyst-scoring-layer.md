@@ -718,6 +718,11 @@ describe('parseRecommendationInput', () => {
     const future = new Date(Date.now() + 86400000).toISOString();
     expect(parseRecommendationInput({ ...base, recommended_at: future })).toEqual({ ok: false, error: 'recommended_at must not be in the future' });
   });
+  it('rejects a date-only recommended_at (would be read as UTC midnight and shift US calls a day)', () => {
+    expect(parseRecommendationInput({ ...base, recommended_at: '2026-06-03' })).toEqual({ ok: false, error: 'recommended_at must include a time' });
+    const r = parseRecommendationInput({ ...base, recommended_at: '2026-06-03T09:30:00+08:00' });
+    expect(r.ok && r.value.recommended_at).toBe('2026-06-03T01:30:00.000Z');
+  });
   it('keeps a known source_type and drops arrays passed as source_ref', () => {
     const r = parseRecommendationInput({ ...base, source_type: 'playbook', source_ref: [1, 2] });
     expect(r.ok && r.value.source_type).toBe('playbook');
@@ -855,6 +860,8 @@ export function parseRecommendationInput(body: unknown): Parsed<RecommendationIn
   if (typeof b.recommended_at === 'string') {
     const ms = Date.parse(b.recommended_at);
     if (isNaN(ms)) return { ok: false, error: 'recommended_at must be a valid date string' };
+    // A bare date parses as UTC midnight, which is the previous trading day in New York.
+    if (!/T\d{2}:\d{2}/.test(b.recommended_at)) return { ok: false, error: 'recommended_at must include a time' };
     if (ms > Date.now() + 60_000) return { ok: false, error: 'recommended_at must not be in the future' };
     recommended_at = new Date(ms).toISOString();
   }
