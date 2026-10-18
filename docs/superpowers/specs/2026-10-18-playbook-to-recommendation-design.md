@@ -99,11 +99,11 @@ interface RegistrationView {
 服务端：
 
 1. `requireResearchUser()`；读 run，不是 `PAPER_TRADE` 或 `approval_status ≠ APPROVED` → 422 `run_not_registrable`。
-2. `items` 1–20 条；每条拼成 `RecommendationInput`（`analyst_id` 为「Research Playbook」档案，`source_type = 'playbook'`，`source_ref = { playbook_run_id, thesis_id, memo_id, entity_id, model: memo.provenance.model ?? null }`，`thesis_ref = run.thesis_id`，`recommended_at` 整批同值）并过 `parseRecommendationInput`；任一条失败 → 400，响应 `{ error, item_index, entity_id }`，整批不写。
+2. `items` 1–20 条；每条拼成 `RecommendationInput`（校验阶段 `analyst_id` 用占位 uuid，真实档案 id 在校验全部通过后再填；`source_type = 'playbook'`，`source_ref = { playbook_run_id, thesis_id, memo_id, entity_id, model: memo.provenance.model ?? null }`，`thesis_ref = run.thesis_id`，`recommended_at` 整批同值，理由默认截断到 4000 字）并过 `parseRecommendationInput`；`entity_id` 非空时必须属于该 run 的 thesis/memo 公司集合，否则 400 `entity_not_in_run`；任一条失败 → 400，响应 `{ error: { code: 'VALIDATION_ERROR', message, item_index, entity_id } }`，整批不写。批内重复按规范化后的 `(ticker, market)` 或重复的 `entity_id` 判定 → 400 `duplicate_item`。
 3. 幂等（纯函数 `splitRegistration(items, existing)`）：`existing` = 该用户 `source_type = 'playbook'` 且 `source_ref->>'playbook_run_id' = run.id` 的建议；按 `(entity_id)` 命中则跳过，`entity_id` 为 null 的手填行按 `(ticker, market)` 命中则跳过。
-4. `ensurePlaybookProfile()`：按 `display_name = 'Research Playbook'` 且 `archived_at is null` 查，没有则插 `{ kind: 'agent', note: 'research playbook PAPER_TRADE 的自动归属' }`；23505 重读。放在 `src/lib/analyst/store.ts`，与 `ensureSelfProfile` 同风格。
+4. 幂等分集后若无可写条目，直接返回 `{ created: [], skipped, analyst_id: 现有档案 id 或 null }`，不创建也不取消归档档案。否则 `ensurePlaybookProfile()`：按 `display_name = 'Research Playbook'`、`kind = agent` 查（活动行优先），已归档则取消归档并在审计里记 `profile_unarchived`，没有则插 `{ kind: 'agent', note: 'research playbook PAPER_TRADE 的自动归属' }`；23505 重读，仍冲突（同名的人工档案）→ 409。放在 `src/lib/analyst/store.ts`，与 `ensureSelfProfile` 同风格。
 5. 一次 `insert` 全部待写行（Supabase 多行 insert 单请求）；成功后 `audit(ctx, 'playbook.register', run.id, { created_ids, skipped_entity_ids, analyst_id })`。
-6. 响应 `{ created: Recommendation[], skipped: Array<{ entity_id|null, ticker, reason: 'already_registered' }>, analyst_id }`。
+6. 响应 `{ created: Recommendation[], skipped: Array<{ entity_id|null, ticker, reason: 'already_registered' }>, analyst_id: string | null }`（`skipped.ticker` 为规范化后的标的）。
 
 写 analyst 表走 `createRecommendation` 的同一套校验；但为了单请求批量插入，新增 `createRecommendations(inputs: RecommendationInput[])`（逐条校验由路由完成，store 只负责插入与 coerce）。
 
@@ -126,7 +126,7 @@ interface RegistrationView {
 - run 不存在 → 404；不是 PAPER_TRADE 或未批准 → 422 `run_not_registrable`。
 - 「Research Playbook」档案被用户归档 → `ensurePlaybookProfile` 取消归档而不是新建同名（避免 23505），并在审计里记一笔。
 - 同一 run 重复提交 → 全部命中幂等，`created = []`，200。
-- 两条 item 指向同一 `(ticker, market)` → 400 `duplicate_item`。
+- 两条 item 指向同一规范化 `(ticker, market)`，或同一 `entity_id` → 400 `duplicate_item`；`entity_id` 不属于该 run 的公司集合 → 400 `entity_not_in_run`。
 - 候选为空且用户未手填 → 表单禁用提交。
 - `recommended_at` 晚于现在 → 由 `parseRecommendationInput` 拒绝（400）。
 
