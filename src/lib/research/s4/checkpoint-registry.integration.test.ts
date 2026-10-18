@@ -1,7 +1,8 @@
 import {beforeAll,afterAll,describe,it,expect} from 'vitest';
 import {readFileSync} from 'node:fs';
 import {randomBytes,randomUUID} from 'node:crypto';
-import {Pool} from 'pg';
+import type {Pool} from 'pg';
+import {ownedPool} from '../../../../scripts/s4/local-db';
 import {checkpointRegistryConfig,createCheckpointRegistry} from './checkpoint-registry';
 
 // I1.5: the independent checkpoint registry is a separate database (here: a second database in
@@ -15,7 +16,7 @@ describe.skipIf(!enabled)('independent checkpoint registry on real PostgreSQL',(
  const dbName='alpha_anchor_checkpoint_'+randomBytes(4).toString('hex');
  beforeAll(async()=>{
   const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
-  admin=new Pool({connectionString:state.adminUrl,max:1});
+  admin=ownedPool({connectionString:state.adminUrl,max:1});
   const password=randomBytes(18).toString('hex');clientPassword=password;
   await admin.query(`create database ${dbName}`);
   await admin.query(`do $$ begin
@@ -24,15 +25,25 @@ describe.skipIf(!enabled)('independent checkpoint registry on real PostgreSQL',(
    end $$`);
   await admin.query(`create role s4_checkpoint_test login password '${password}' nosuperuser nobypassrls inherit; grant alpha_checkpoint_client to s4_checkpoint_test`);
   const url=new URL(state.adminUrl);url.pathname='/'+dbName;clientPort=url.port;
-  registryAdmin=new Pool({connectionString:url.toString(),max:1});
+  registryAdmin=ownedPool({connectionString:url.toString(),max:1});
   await registryAdmin.query(`grant create on database ${dbName} to alpha_checkpoint_owner; grant alpha_checkpoint_owner to s4_admin`);
   const c=await registryAdmin.connect();
   try{await c.query('set role alpha_checkpoint_owner');await c.query(readFileSync('ops/anchor-checkpoint/schema.sql','utf8'));await c.query('reset role');}finally{c.release();}
   const clientUrl=new URL(url);clientUrl.username='s4_checkpoint_test';clientUrl.password=password;
-  rawClient=new Pool({connectionString:clientUrl.toString(),max:1});
+  rawClient=ownedPool({connectionString:clientUrl.toString(),max:1});
   client=createCheckpointRegistry(checkpointRegistryConfig({ALPHA_ANCHOR_REGISTRY_HOST:'127.0.0.1',ALPHA_ANCHOR_REGISTRY_PORT:url.port,ALPHA_ANCHOR_REGISTRY_DATABASE:dbName,ALPHA_ANCHOR_REGISTRY_USER:'s4_checkpoint_test',ALPHA_ANCHOR_REGISTRY_PASSWORD:password,ALPHA_ANCHOR_REGISTRY_INSECURE_LOOPBACK:'1'}));
  });
- afterAll(async()=>{await client?.close();await rawClient?.end();await registryAdmin?.end();await admin?.query(`drop database if exists ${dbName} with (force)`).catch(()=>{});await admin?.end();});
+ afterAll(async()=>{
+  await client?.close();await rawClient?.end();await registryAdmin?.end();
+  // pool.end() resolves before sockets close; a forced drop would FATAL those backends, so wait
+  // until the server sees no session on the registry database before dropping it.
+  if(admin){
+   for(let i=0;i<50&&Number((await admin.query('select count(*) n from pg_stat_activity where datname=$1',[dbName])).rows[0].n)>0;i++)await new Promise(r=>setTimeout(r,100));
+   await admin.query(`drop database if exists ${dbName}`).catch(()=>{});
+   await admin.query('drop role if exists s4_checkpoint_test').catch(()=>{});
+   await admin.end();
+  }
+ });
  const asOwner=async(sql:string,values:unknown[]=[])=>{const c=await registryAdmin.connect();try{await c.query('set role alpha_checkpoint_owner');return await c.query(sql,values);}finally{await c.query('reset role').catch(()=>{});c.release();}};
 
  it('refuses the client everything except the three granted functions',async()=>{
