@@ -18,6 +18,7 @@ import { coerceDecisionRow } from './store';
 const MAX_SCORING_AGE_MS = 130 * 24 * 60 * 60 * 1000;
 
 export const REVIEW_KLINE_BARS = 120;
+const REVIEW_KLINE_FETCH_TIMEOUT_MS = 20_000;
 
 
 // PostgREST serializes Postgres `numeric` as JSON strings; coerce at the read
@@ -96,7 +97,9 @@ export async function refreshReviews(): Promise<{ scored: number; skipped: numbe
   const barsByTicker = new Map<string, KlineBar[] | null>();
   for (const ticker of tickers) {
     try {
-      barsByTicker.set(ticker, (await fetchEastmoneyKline(ticker, 'D', REVIEW_KLINE_BARS))?.bars ?? null);
+      // signal → cache: 'no-store'; the next.revalidate variant stalls inside POST handlers on Vercel
+      // (see KLINE_FETCH_TIMEOUT_MS in src/lib/analyst/score-store.ts).
+      barsByTicker.set(ticker, (await fetchEastmoneyKline(ticker, 'D', REVIEW_KLINE_BARS, { signal: AbortSignal.timeout(REVIEW_KLINE_FETCH_TIMEOUT_MS) }))?.bars ?? null);
     } catch {
       // Skip this ticker's candidates rather than failing the whole refresh.
       barsByTicker.set(ticker, null);
