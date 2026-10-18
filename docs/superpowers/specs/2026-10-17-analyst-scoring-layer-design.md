@@ -153,9 +153,9 @@ export interface ForwardScore { base_close: number; base_date: string; forward_5
 export function scoreForward(call: ForwardCall, bars: KlineBar[]): ForwardScore | null
 ```
 
-规则与现有完全一致：基准 = 决定日交易所本地日期起首根 K 线收盘；5 日缺则不计分；hit = 5 日方向；score = 20 日（缺则 5 日）× 方向；hold / pass 的 hit 与 score 为 null；信心分桶 20 一档。新增返回 `base_close`、`base_date`、`last_close`、`last_close_date` 供账本使用。`review.ts` 改为薄包装，现有 `review.test.ts` 不改且通过。
+规则与现有完全一致：基准 = 决定日交易所本地日期起首根 K 线收盘；5 日缺则不计分；hit = 5 日方向；score = 20 日（缺则 5 日）× 方向；hold 的 hit 与 score 为 null；pass 按看空方向计分（沿用 `review.ts` 既有规则：buy/add = +1，sell/trim/pass = −1）；信心分桶 20 一档。新增返回 `base_close`、`base_date`、`last_close`、`last_close_date` 供账本使用。`review.ts` 改为薄包装，现有 `review.test.ts` 不改且通过。
 
-`src/lib/analyst/score-store.ts` 的 `refreshRecommendationScores()` 对未撤回且（无评分或评分未满 90 天）的建议拉 K 线评分，首次评分时写 `fill_price = base_close`、`fill_date = base_date`。与 `/api/reviews` 一样是按需 POST 刷新，不做 cron（仓库没有 service-role 模式）。
+`src/lib/analyst/score-store.ts` 的 `refreshRecommendationScores()` 对未撤回且（无评分、或 fill 尚未写入、或 60 日窗口未满且建议未超过 130 天）的建议拉 K 线评分（每代码 120 根日线，4 路并发），首次评分时写 `fill_price = base_close`、`fill_date = base_date`。130 天而非 90 天：60 个交易日约 86–91 个自然日，跨春节 / 国庆更长，手动刷新需要余量；120 根日线仍覆盖基准 K 线。建议日早于完整 120 根窗口首根 K 线的建议跳过不计分（否则内核会误把窗口首根当基准并冻结错误成交价）；窗口不满 120 根说明是新上市，顺延到首根属正常。与 `/api/reviews` 一样是按需 POST 刷新，不做 cron（仓库没有 service-role 模式）。
 
 ## 6. 模拟账本
 
@@ -170,7 +170,9 @@ export function scoreForward(call: ForwardCall, bars: KlineBar[]): ForwardScore 
 - 平仓：卖出时按均价结算，每份已实现% = 卖价 / 均价 − 1；账本已实现% = 全部已平份数的简单平均。
 - 摘要：建议数、可计分数、命中率（hit 非 null 的样本）、平均 20 日收益、持仓数、浮动%均值、已实现%均值、待定价数、无仓可卖数。所有比率都带 n。
 
-明确不算：现金、NAV、费用、滑点、汇率、分红、拆股调整（成交价与最新价同出一个 K 线源，账本内部自洽；港 / 美股不复权带来的拆股失真照实显示，不修正；跨币种只按币种分组不相加）。
+明确不算：现金、NAV、费用、滑点、汇率、分红、拆股调整（成交价与最新价同出一个 K 线源；港 / 美股不复权带来的拆股失真照实显示，不修正；跨币种只按币种分组不相加）。
+
+已知局限：成交价在首次评分时冻结，之后 A 股前复权因送转 / 分红重算历史、或港美股不复权的拆股，会让成交价与最新价基准漂移；某代码上所有建议停止再评分后（60 日已满或超过 130 天），其最新价冻结在最后一次评分。两者都如实显示 `last_close_date`，不修正。
 
 ## 7. API
 
