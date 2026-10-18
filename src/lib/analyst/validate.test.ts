@@ -49,6 +49,10 @@ describe('parseRecommendationInput', () => {
     expect(r.value.reference_price).toBeUndefined();
     expect(r.value.recommended_at).toBeUndefined();
   });
+  it('rejects a missing or over-long ticker', () => {
+    expect(parseRecommendationInput({ analyst_id: UUID, market: 'A', action: 'buy' })).toEqual({ ok: false, error: 'ticker required' });
+    expect(parseRecommendationInput({ ...base, ticker: 'x'.repeat(21) })).toEqual({ ok: false, error: 'ticker too long (max 20)' });
+  });
   it('rejects a non-uuid analyst_id', () => {
     expect(parseRecommendationInput({ ...base, analyst_id: 'abc' })).toEqual({ ok: false, error: 'analyst_id must be a uuid' });
   });
@@ -58,12 +62,16 @@ describe('parseRecommendationInput', () => {
   });
   it('rejects non-positive reference_price and out-of-range confidence', () => {
     expect(parseRecommendationInput({ ...base, reference_price: 0 })).toEqual({ ok: false, error: 'reference_price must be > 0' });
-    expect(parseRecommendationInput({ ...base, confidence: 101 })).toEqual({ ok: false, error: 'confidence must be 0-100' });
+    expect(parseRecommendationInput({ ...base, confidence: 101 })).toEqual({ ok: false, error: 'confidence must be an integer 0-100' });
+    expect(parseRecommendationInput({ ...base, confidence: 50.5 })).toEqual({ ok: false, error: 'confidence must be an integer 0-100' });
   });
   it('rejects a future recommended_at and an unparseable one', () => {
     expect(parseRecommendationInput({ ...base, recommended_at: 'yesterday' })).toEqual({ ok: false, error: 'recommended_at must be a valid date string' });
     const future = new Date(Date.now() + 86400000).toISOString();
     expect(parseRecommendationInput({ ...base, recommended_at: future })).toEqual({ ok: false, error: 'recommended_at must not be in the future' });
+  });
+  it('rejects a non-string recommended_at instead of falling back to now', () => {
+    expect(parseRecommendationInput({ ...base, recommended_at: 123 })).toEqual({ ok: false, error: 'recommended_at must be a string' });
   });
   it('rejects a date-only recommended_at (would be read as UTC midnight and shift US calls a day)', () => {
     expect(parseRecommendationInput({ ...base, recommended_at: '2026-06-03' })).toEqual({ ok: false, error: 'recommended_at must include a time' });
@@ -74,6 +82,10 @@ describe('parseRecommendationInput', () => {
     const r = parseRecommendationInput({ ...base, source_type: 'playbook', source_ref: [1, 2] });
     expect(r.ok && r.value.source_type).toBe('playbook');
     expect(r.ok && r.value.source_ref).toBeUndefined();
+  });
+  it('keeps a plain-object source_ref as-is', () => {
+    const r = parseRecommendationInput({ ...base, source_ref: { playbook_run_id: 'p1' } });
+    expect(r.ok && r.value.source_ref).toEqual({ playbook_run_id: 'p1' });
   });
   it('caps rationale and thesis_ref length', () => {
     expect(parseRecommendationInput({ ...base, rationale: 'x'.repeat(4001) })).toEqual({ ok: false, error: 'rationale too long (max 4000)' });

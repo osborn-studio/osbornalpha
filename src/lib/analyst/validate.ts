@@ -94,16 +94,18 @@ export function parseRecommendationInput(body: unknown): Parsed<RecommendationIn
   const reference_price = num(b, 'reference_price');
   if (b.reference_price !== undefined && !(reference_price !== undefined && reference_price > 0)) return { ok: false, error: 'reference_price must be > 0' };
   const confidence = num(b, 'confidence');
-  if (confidence !== undefined && (confidence < 0 || confidence > 100)) return { ok: false, error: 'confidence must be 0-100' };
+  if (confidence !== undefined && (!Number.isInteger(confidence) || confidence < 0 || confidence > 100)) return { ok: false, error: 'confidence must be an integer 0-100' };
   const rationale = optionalString(b.rationale, MAX_TEXT, 'rationale');
   if (!rationale.ok) return rationale;
   const thesis_ref = optionalString(b.thesis_ref, MAX_THESIS_REF, 'thesis_ref');
   if (!thesis_ref.ok) return thesis_ref;
   let recommended_at: string | undefined;
+  if (b.recommended_at !== undefined && b.recommended_at !== null && typeof b.recommended_at !== 'string') return { ok: false, error: 'recommended_at must be a string' };
   if (typeof b.recommended_at === 'string') {
     const ms = Date.parse(b.recommended_at);
     if (isNaN(ms)) return { ok: false, error: 'recommended_at must be a valid date string' };
     // A bare date parses as UTC midnight, which is the previous trading day in New York.
+    // A time without a zone (e.g. 2026-06-03T09:30) parses as server-local time; the UI always sends an ISO string with Z, so only direct API callers are affected.
     if (!/T\d{2}:\d{2}/.test(b.recommended_at)) return { ok: false, error: 'recommended_at must include a time' };
     if (ms > Date.now() + 60_000) return { ok: false, error: 'recommended_at must not be in the future' };
     recommended_at = new Date(ms).toISOString();
