@@ -66,12 +66,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       inputs.push(candidate.value);
     }
 
+    // Compare with stored rows using the validator's normalized tickers (e.g. 0700.HK → 00700.HK).
+    const normalizedItems = items.map((item, i) => ({ ...item, ticker: inputs[i].ticker }));
     const existing = (await listPlaybookRecommendations(run.id)).map(toExistingPlaybookRecommendation);
-    const { toCreate, skipped } = splitRegistration(items, existing);
-    // splitRegistration returns the same item objects, and inputs is index-aligned with items:
-    // select by identity so the validator's ticker normalization (0700.HK → 00700.HK) cannot desync the two sides.
+    const { toCreate, skipped } = splitRegistration(normalizedItems, existing);
+    // splitRegistration returns the same item objects and inputs is index-aligned with normalizedItems: select by identity.
     const createSet = new Set(toCreate);
-    const created = await createRecommendations(inputs.filter((_, i) => createSet.has(items[i])));
+    const created = await createRecommendations(inputs.filter((_, i) => createSet.has(normalizedItems[i])));
     await audit(ctx, 'playbook.register', run.id, {
       created_ids: created.map((r) => r.id), skipped_entity_ids: skipped.map((s) => s.entity_id), analyst_id: analyst.id,
     });
