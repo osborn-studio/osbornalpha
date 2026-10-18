@@ -64,7 +64,7 @@ interface RegistrationCandidate {
   market: 'A' | 'HK' | 'US' | null;
   ticker_source: 'security' | 'entity' | 'none';
   supported: boolean;         // false → 不可勾选（market other 或无标的）
-  selected: boolean;          // 默认：supported && 未登记
+  selected: boolean;          // 默认：supported && 未登记 && ticker 来自 securities；来自 entities.ticker（自由文本推断）的行需用户手动勾选
   registered_recommendation_id: string | null;  // 已登记过则给出
 }
 interface RegistrationView {
@@ -80,7 +80,7 @@ interface RegistrationView {
 规则：
 
 - 公司集合：thesis 的 `company_ids` 优先；memo 的 `company_ids` 追加去重；都空则候选为空，`registrable` 仍可为 true 但表单只能手填一行。
-- 标的：取该 entity 的 securities 中 `is_primary = true` 且 `valid_to is null` 的首行，`ticker = exchange_code`、`market = market`；没有则取 `entities.ticker` 并用 `inferCoreMarket` 推市场；再没有则 `ticker = null`。随后统一过 `normalizeSecurityTicker(ticker, market)`，结果为 null 视为无标的。`market = other` 或无标的 → `supported = false`。
+- 标的：取该 entity 的 securities 中 `is_primary = true` 且 `valid_to is null` 的首行，`ticker = exchange_code`、`market = market`；没有则取 `entities.ticker` 并用 `inferCoreMarket` 推市场；再没有则 `ticker = null`。随后统一过 `normalizeSecurityTicker(ticker, market)`，结果为 null 视为无标的。`market = other` 或无标的 → `supported = false`。有主 security 行但其市场不支持时，不回退到 `entities.ticker`（securities 是人工核验过的权威记录）。同一实体有多行主 security 时按 `exchange_code` 排序取首行，保证确定性。
 - 默认值：`action = 'buy'`；`confidence`：memo.confidence LOW 30 / MEDIUM 60 / HIGH 85，无 memo 50；`horizon`：thesis.horizon_weeks 的最大值 ≤ 8 → short，≤ 26 → mid，> 26 → long，无 thesis → null；`recommended_at = run.review_at`（审批时间），为空则 `run.created_at`；`rationale = run.rationale`；`thesis_ref = run.thesis_id`。
 - 候选顺序：按 `companyIdsFor` 的顺序——thesis 的 company_ids 在前（保持 thesis 内顺序），其后是 memo 新增的公司；不按名称重排。
 
