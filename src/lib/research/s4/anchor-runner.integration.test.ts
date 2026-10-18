@@ -43,7 +43,18 @@ describe.skipIf(!enabled)('anchor runner functions on real PostgreSQL',()=>{
    await admin.query('insert into research_s4_observation_state(user_id,observation_id) values($1,$2)',[actor.userId,record.id]);observations.push(record.id);
   }
  });
- afterAll(async()=>{await closeS4Pool();await runner?.end();await admin?.end();});
+ afterAll(async()=>{
+  await closeS4Pool();await runner?.end();
+  // The suite database is shared with every other S4_TEST_STATE suite: registering the singleton
+  // identity switches the checkpoint gate on for all of them, so remove it and the rows it scoped.
+  if(admin){
+   await admin.query('delete from research_s4_anchor_checkpoints where user_id=$1',[actor.userId]);
+   await admin.query('delete from research_s4_anchor_principals where principal_id=$1',[principal]);
+   await admin.query('delete from research_s4_runtime_identity');
+   await admin.query('drop role if exists s4_anchor_test');
+   await admin.end();
+  }
+ });
 
  it('runner login holds no table privileges and the gate is inactive before identity registration',async()=>{
   await expect(asRunner(db=>db.query('select * from public.research_s4_outbox'))).rejects.toThrow(/permission denied/);
