@@ -16,7 +16,11 @@ export function s4Pool(): Pool {
   if(!config||config.mode!=='local')fail('not_configured');
   const digest=createHash('sha256').update(JSON.stringify(config!.db)).digest('hex');
   if(pool&&poolConfigDigest!==digest)fail('not_configured');
-  if(!pool){pool=new Pool(config!.db);poolConfigDigest=digest;}
+  if(!pool){
+    pool=new Pool(config!.db);poolConfigDigest=digest;
+    // An idle client dropped by the server would otherwise crash the process; log only the SQLSTATE.
+    pool.on('error',error=>{console.error('research pool idle client error',{code:(error as {code?:string}).code??'unknown'});});
+  }
   return pool;
 }
 export async function closeS4Pool() { await pool?.end(); pool = undefined; poolConfigDigest=undefined; }

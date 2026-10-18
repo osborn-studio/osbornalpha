@@ -3,8 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { Pool } from 'pg';
-import { startLocalDatabase, stopLocalDatabase } from '../s4/local-db';
+import { startLocalDatabase, stopLocalDatabase, ownedPool } from '../s4/local-db';
 import { migrationInventory, recoveredMigration } from './research-checks';
 
 async function main() {
@@ -38,7 +37,7 @@ async function main() {
     const fresh = dump(states[0]);
     if (fresh !== dump(states[1])) throw new Error('Fresh and seeded-upgrade public schemas differ');
     schemaHash = createHash('sha256').update(fresh).digest('hex');
-    const db = new Pool({ connectionString: states[1].adminUrl });
+    const db = ownedPool({ connectionString: states[1].adminUrl });
     try {
       const item = (await db.query("select notes,status,decision_version from public.watchlist_items where ticker='SYNTH'")).rows[0];
       if (item?.notes !== 'preserve me' || item.status !== 'watching' || item.decision_version !== 0) throw new Error('Upgrade did not preserve existing item/defaults');

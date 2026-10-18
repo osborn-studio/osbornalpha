@@ -5,7 +5,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:net';
-import { Pool } from 'pg';
+import { Pool, type PoolConfig } from 'pg';
+
+/** pg-pool re-emits an idle client's error on the pool, and Node throws when nothing listens.
+ * pool.end() resolves before the server has processed each Terminate, so a cluster stopped
+ * synchronously right afterwards can still deliver FATAL 57P01 to a half-closed client.
+ * Report only the SQLSTATE: no message, host or credentials reach the log. */
+export function ownedPool(config: PoolConfig): Pool {
+  const pool = new Pool(config);
+  pool.on('error', error => { console.error('owned pool idle client error', { code: (error as { code?: string }).code ?? 'unknown' }); });
+  return pool;
+}
 
 export function stopLocalDatabase(state: { bin: string; directory: string }, primaryError?: unknown, retainDirectory = false) {
   const data = join(state.directory, 'data');
@@ -53,7 +63,7 @@ export async function startLocalDatabase(options: { rehearsalDefaultTableGrants?
   const adminUrl = `postgres://s4_admin:${password}@127.0.0.1:${port}/postgres`;
   const runtimeUrl = `postgres://s4_app:${appPassword}@127.0.0.1:${port}/postgres`;
   started = true;
-  admin = new Pool({ connectionString:adminUrl, connectionTimeoutMillis: 5000, statement_timeout: 30000 });
+  admin = ownedPool({ connectionString:adminUrl, connectionTimeoutMillis: 5000, statement_timeout: 30000 });
     await admin.query(`create role postgres nologin superuser; create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
       create schema auth; create table auth.users(id uuid primary key,email text,raw_user_meta_data jsonb default '{}');
       create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;

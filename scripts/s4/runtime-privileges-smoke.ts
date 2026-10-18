@@ -1,13 +1,12 @@
 /** Dedicated synthetic cluster: privilege mutations never touch the shared suite database. */
 import assert from 'node:assert/strict';
-import {Pool} from 'pg';
-import {startLocalDatabase,stopLocalDatabase} from './local-db';
+import {startLocalDatabase,stopLocalDatabase,ownedPool} from './local-db';
 import {assertRuntimePrivileges} from '../../src/lib/research/runtime/privileges';
 let interrupted=false;
 const interrupt=()=>{interrupted=true;};
 process.on('SIGINT',interrupt);process.on('SIGTERM',interrupt);
 async function main(){
- const state=await startLocalDatabase();const admin=new Pool({connectionString:state.adminUrl,connectionTimeoutMillis:5000,statement_timeout:15000}),runtime=new Pool({connectionString:state.runtimeUrl,connectionTimeoutMillis:5000,statement_timeout:15000});
+ const state=await startLocalDatabase();const admin=ownedPool({connectionString:state.adminUrl,connectionTimeoutMillis:5000,statement_timeout:15000}),runtime=ownedPool({connectionString:state.runtimeUrl,connectionTimeoutMillis:5000,statement_timeout:15000});
  let primary:unknown;let checks=0;
  const check=async()=>{const db=await runtime.connect();try{await assertRuntimePrivileges(db);}finally{db.release();}};
  try{
