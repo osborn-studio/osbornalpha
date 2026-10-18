@@ -27,6 +27,7 @@ export interface BookPosition {
 
 export interface ClosedLot {
   ticker: string;
+  market: Market;
   units: number;
   avg_fill: number;
   exit_price: number;
@@ -92,7 +93,7 @@ export function buildBook(rows: BookInput[]): Book {
     if (!pos) { noPositionToSell += 1; continue; }
     const units = r.action === 'sell' ? pos.units : 1;
     closed.push({
-      ticker: r.ticker, units, avg_fill: pos.avg_fill, exit_price: r.fill_price,
+      ticker: r.ticker, market: r.market, units, avg_fill: pos.avg_fill, exit_price: r.fill_price,
       realized_pct: pctChange(pos.avg_fill, r.fill_price), closed_at: r.recommended_at, recommendation_id: r.id,
     });
     pos.units -= units;

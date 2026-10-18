@@ -61,7 +61,7 @@ describe('buildBook — exits', () => {
     const c = rec({ action: 'trim', fill_price: 150 });
     const book = buildBook([row(a), row(b), row(c)]);
     expect(book.positions[0].units).toBe(1);
-    expect(book.closed).toEqual([{ ticker: '600519.SH', units: 1, avg_fill: 100, exit_price: 150, realized_pct: 50, closed_at: c.recommended_at, recommendation_id: c.id }]);
+    expect(book.closed).toEqual([{ ticker: '600519.SH', market: 'A', units: 1, avg_fill: 100, exit_price: 150, realized_pct: 50, closed_at: c.recommended_at, recommendation_id: c.id }]);
   });
 
   it('sell closes every unit at the average fill', () => {
