@@ -8,6 +8,7 @@ import { isUuid } from '@/lib/portfolio/validate';
 
 interface Ctx { params: Promise<{ id: string }> }
 
+// PATCH { display_name?, note?, archived? } → { profile }; 404 analyst not found; 409 analyst name taken | self profile cannot be archived
 export async function PATCH(req: Request, { params }: Ctx) {
   const { id } = await params;
   if (!isUuid(id)) return NextResponse.json({ error: 'id must be a uuid' }, { status: 400 });

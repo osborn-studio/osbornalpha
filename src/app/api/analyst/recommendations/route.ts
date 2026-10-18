@@ -23,6 +23,7 @@ export async function GET(req: Request) {
   }
 }
 
+// POST RecommendationInput → 201 { recommendation }; 404 analyst not found; 409 analyst archived
 export async function POST(req: Request) {
   const parsed = parseRecommendationInput(await req.json().catch(() => ({})));
   if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });

@@ -8,6 +8,7 @@ import { isUuid } from '@/lib/portfolio/validate';
 
 interface Ctx { params: Promise<{ id: string }> }
 
+// POST { reason? } → { recommendation }; 404 recommendation not found; 409 recommendation withdrawn
 export async function POST(req: Request, { params }: Ctx) {
   const { id } = await params;
   if (!isUuid(id)) return NextResponse.json({ error: 'id must be a uuid' }, { status: 400 });

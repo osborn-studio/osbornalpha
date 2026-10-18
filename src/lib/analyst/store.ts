@@ -234,7 +234,12 @@ export async function loadBookRowsByAnalyst(): Promise<Map<string, BookInput[]>>
   const groups = new Map<string, BookInput[]>();
   for (const recommendation of recs) {
     const row = { recommendation, score: byId.get(recommendation.id) ?? null };
-    groups.set(recommendation.analyst_id, [...(groups.get(recommendation.analyst_id) ?? []), row]);
+    let g = groups.get(recommendation.analyst_id);
+    if (!g) {
+      g = [];
+      groups.set(recommendation.analyst_id, g);
+    }
+    g.push(row);
   }
   return groups;
 }
