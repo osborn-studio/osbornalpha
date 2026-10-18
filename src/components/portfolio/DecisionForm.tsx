@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui';
 import { postDecision } from '@/lib/hooks/usePortfolio';
@@ -27,16 +27,26 @@ export function DecisionForm({ ticker, onDone }: { ticker: string; onDone: () =>
   const [recs, setRecs] = useState<RecommendationView[]>([]);
   const [recommendationId, setRecommendationId] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
+  // The adopt selection belongs to the ticker, not the action button: switching buy/sell/hold must
+  // keep it, so reset only when the ticker changes. `action` going null → non-null just triggers
+  // the first load; `refreshKey` (bumped after a submit) reloads the list.
+  const prevTicker = useRef(ticker);
+  useEffect(() => {
+    if (prevTicker.current !== ticker) {
+      prevTicker.current = ticker;
+      setRecs([]);
+      setRecommendationId('');
+    }
+  }, [ticker]);
+  const open = action !== null;
   useEffect(() => {
     let alive = true;
-    setRecs([]);
-    setRecommendationId('');
-    if (!action) return; // only load once the decision bar is open
+    if (!open) return; // only load once the decision bar is open
     fetchRecommendations({ ticker, open: true })
       .then((r) => { if (alive) setRecs(r.recommendations.filter((x) => x.adopted_by.length === 0 && Date.now() - new Date(x.recommended_at).getTime() < 90 * 86400000)); })
       .catch(() => { if (alive) setRecs([]); });
     return () => { alive = false; };
-  }, [ticker, action, refreshKey]);
+  }, [ticker, open, refreshKey]);
 
   async function submit() {
     if (!action) return;
@@ -48,7 +58,7 @@ export function DecisionForm({ ticker, onDone }: { ticker: string; onDone: () =>
         stop_loss: stop ? Number(stop) : undefined, source_type: 'manual',
         recommendation_id: recommendationId || undefined,
       });
-      setAction(null); setThesis(''); setTarget(''); setStop(''); setRecommendationId('');
+      setAction(null); setThesis(''); setTarget(''); setStop(''); setRecommendationId(''); setRecs([]);
       setRefreshKey((k) => k + 1);
       onDone();
     } catch (e) {
