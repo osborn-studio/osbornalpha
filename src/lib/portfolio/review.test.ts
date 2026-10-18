@@ -7,7 +7,7 @@ const d = (o: Partial<Decision>): Decision => ({
   id: 'd1', user_id: 'u', ticker: '300750', market: 'A', action: 'buy', thesis: null,
   confidence: null, entry_low: null, entry_high: null, target_price: null, stop_loss: null,
   horizon: null, source_type: 'manual', source_ref: null, status: 'executed',
-  decided_at: '2026-06-01T00:00:00Z', expires_at: null, ...o,
+  decided_at: '2026-06-01T00:00:00Z', expires_at: null, recommendation_id: null, ...o,
 });
 
 // Helper: build N bars starting at a given date, one per day, with given closes.
@@ -178,7 +178,7 @@ describe('review hardening (post-review fixes)', () => {
     id: 'd1', user_id: 'u', ticker: '300750', market: 'A', action: 'buy', thesis: null,
     confidence: null, entry_low: null, entry_high: null, target_price: null, stop_loss: null,
     horizon: null, source_type: 'manual', source_ref: null, status: 'open',
-    decided_at: '2026-06-01T00:00:00Z', expires_at: null, ...o,
+    decided_at: '2026-06-01T00:00:00Z', expires_at: null, recommendation_id: null, ...o,
   });
 
   it('refuses to score when base close is 0 (bad feed guard)', () => {
