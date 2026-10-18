@@ -31,6 +31,7 @@
     "analyst": "Analyst",
     "ticker": "Ticker",
     "tickerPlaceholder": "600519.SH / 00700.HK / NVDA",
+    "unsupportedTicker": "Only A-share, HK and US tickers are supported",
     "market": "Market",
     "action": "Action",
     "referencePrice": "Reference Price (as stated; not the fill price)",

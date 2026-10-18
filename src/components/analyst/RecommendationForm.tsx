@@ -34,6 +34,7 @@ export function RecommendationForm({ profiles, defaultAnalystId, onCreated }: {
   const [recommendedAt, setRecommendedAt] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const unsupportedTicker = ticker.trim() !== '' && inferCoreMarket(ticker) === null;
 
   function onTicker(v: string) {
     setTicker(v);
@@ -71,7 +72,8 @@ export function RecommendationForm({ profiles, defaultAnalystId, onCreated }: {
           </select>
         </label>
         <label className="flex flex-col gap-0.5">{t('recommendationForm.ticker')}
-          <input value={ticker} onChange={(e) => onTicker(e.target.value)} placeholder={t('recommendationForm.tickerPlaceholder')} className={`${inputCls} w-36`} />
+          <input value={ticker} onChange={(e) => onTicker(e.target.value)} placeholder={t('recommendationForm.tickerPlaceholder')} className={`${inputCls} w-36`} aria-invalid={unsupportedTicker} aria-describedby={unsupportedTicker ? 'rec-ticker-hint' : undefined} />
+          {unsupportedTicker && <span id="rec-ticker-hint" role="alert" className="max-w-[14rem] text-[var(--down)]">{t('recommendationForm.unsupportedTicker')}</span>}
         </label>
         <label className="flex flex-col gap-0.5">{t('recommendationForm.market')}
           <select value={market} onChange={(e) => { setMarket(e.target.value as Market); setMarketTouched(true); }} className={`${inputCls} w-24`}>
@@ -109,7 +111,7 @@ export function RecommendationForm({ profiles, defaultAnalystId, onCreated }: {
         <label className="flex w-full flex-col gap-0.5">{t('recommendationForm.rationale')}
           <input value={rationale} onChange={(e) => setRationale(e.target.value)} className={inputCls} maxLength={4000} />
         </label>
-        <Button size="sm" type="submit" disabled={busy || !analystId || !ticker.trim()}>
+        <Button size="sm" type="submit" disabled={busy || !analystId || !ticker.trim() || unsupportedTicker}>
           {busy ? t('recommendationForm.submitting') : t('recommendationForm.submit')}
         </Button>
       </form>
