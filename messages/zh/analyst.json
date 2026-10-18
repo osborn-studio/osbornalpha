@@ -3,7 +3,7 @@
   "subtitle": "分析师建议的模拟账本与前向评分。研究在研究页里做，实盘在「我的投资」里记，这里只回答：建议如果照做，结果如何。",
   "disclaimer": "分析师模拟账本为假设成交的记分工具，历史评分不代表未来表现，不构成投资建议。",
   "nav": { "back": "← 返回总览" },
-  "common": { "loading": "加载中…", "none": "--", "n": "n={n}", "error": "加载失败：{message}" },
+  "common": { "loading": "加载中…", "n": "n={n}", "error": "加载失败：{message}" },
   "kind": { "human": "真人", "agent": "Agent" },
   "action": { "buy": "买入", "sell": "卖出", "trim": "减仓", "add": "加仓", "hold": "持有", "pass": "观望" },
   "horizon": { "short": "短期", "mid": "中期", "long": "长期", "none": "未定" },
@@ -31,6 +31,7 @@
     "analyst": "分析师",
     "ticker": "标的",
     "tickerPlaceholder": "600519.SH / 00700.HK / NVDA",
+    "unsupportedTicker": "仅支持 A 股 / 港股 / 美股代码",
     "market": "市场",
     "action": "动作",
     "referencePrice": "参考价（分析师口述，不作模拟成交价）",
@@ -54,7 +55,6 @@
   "book": {
     "summaryTitle": "账本摘要",
     "recommendations": "建议数",
-    "scorable": "可计分",
     "hitRate": "命中率",
     "avgScore": "平均评分",
     "openPositions": "持仓数",
@@ -81,6 +81,7 @@
   },
   "timeline": {
     "title": "建议时间线 · {count}",
+    "capped": "仅显示最近 {count} 条",
     "empty": "尚无建议",
     "columns": {
       "date": "日期",
@@ -94,8 +95,7 @@
       "d60": "60d",
       "hit": "命中",
       "score": "评分",
-      "status": "状态",
-      "actions": ""
+      "status": "状态"
     },
     "hitYes": "✓",
     "hitNo": "✗",

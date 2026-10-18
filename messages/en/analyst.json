@@ -3,7 +3,7 @@
   "subtitle": "Simulated books and forward scores for analyst recommendations. Research happens on the Research page, real trades under Portfolio; this page only answers: if the recommendations were followed, how did they do?",
   "disclaimer": "Analyst simulated books are hypothetical-fill scorekeeping. Past scores do not predict future results and nothing here constitutes investment advice.",
   "nav": { "back": "← Back to overview" },
-  "common": { "loading": "Loading…", "none": "--", "n": "n={n}", "error": "Failed to load: {message}" },
+  "common": { "loading": "Loading…", "n": "n={n}", "error": "Failed to load: {message}" },
   "kind": { "human": "Human", "agent": "Agent" },
   "action": { "buy": "Buy", "sell": "Sell", "trim": "Trim", "add": "Add", "hold": "Hold", "pass": "Pass" },
   "horizon": { "short": "Short", "mid": "Mid", "long": "Long", "none": "Unset" },
@@ -31,6 +31,7 @@
     "analyst": "Analyst",
     "ticker": "Ticker",
     "tickerPlaceholder": "600519.SH / 00700.HK / NVDA",
+    "unsupportedTicker": "Only A-share, HK and US tickers are supported",
     "market": "Market",
     "action": "Action",
     "referencePrice": "Reference Price (as stated; not the fill price)",
@@ -54,7 +55,6 @@
   "book": {
     "summaryTitle": "Book Summary",
     "recommendations": "Recommendations",
-    "scorable": "Scorable",
     "hitRate": "Hit Rate",
     "avgScore": "Avg Score",
     "openPositions": "Positions",
@@ -81,6 +81,7 @@
   },
   "timeline": {
     "title": "Recommendation Timeline · {count}",
+    "capped": "Showing the latest {count}",
     "empty": "No recommendations yet",
     "columns": {
       "date": "Date",
@@ -94,8 +95,7 @@
       "d60": "60d",
       "hit": "Hit",
       "score": "Score",
-      "status": "Status",
-      "actions": ""
+      "status": "Status"
     },
     "hitYes": "✓",
     "hitNo": "✗",

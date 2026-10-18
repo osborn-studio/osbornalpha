@@ -3,7 +3,7 @@
 // treatment as src/lib/llm/settings-store.ts).
 
 import { describe, expect, it } from 'vitest';
-import { coerceDecisionRow, coercePositionRow, coerceTradeRow } from './store';
+import { buildAdoptedRecommendations, coerceDecisionRow, coercePositionRow, coerceTradeRow } from './store';
 
 describe('coerceTradeRow', () => {
   it('coerces string numerics from PostgREST into numbers', () => {
@@ -93,5 +93,25 @@ describe('coerceDecisionRow', () => {
     expect(out.confidence).toBe(70);
     expect(out.status).toBe('open');
     expect(out.ticker).toBe('600519');
+  });
+});
+
+describe('buildAdoptedRecommendations', () => {
+  it('joins analyst names and flags withdrawn recommendations', () => {
+    const out = buildAdoptedRecommendations(
+      [
+        { id: 'r1', analyst_id: 'a1', withdrawn_at: null },
+        { id: 'r2', analyst_id: 'a2', withdrawn_at: '2026-07-02T00:00:00Z' },
+      ],
+      [{ id: 'a1', display_name: 'Alice' }, { id: 'a2', display_name: 'Bob' }],
+    );
+    expect(out).toEqual([
+      { id: 'r1', analyst_id: 'a1', analyst_name: 'Alice', withdrawn: false },
+      { id: 'r2', analyst_id: 'a2', analyst_name: 'Bob', withdrawn: true },
+    ]);
+  });
+
+  it('falls back to an empty name when the profile is missing', () => {
+    expect(buildAdoptedRecommendations([{ id: 'r1', analyst_id: 'gone', withdrawn_at: null }], [])[0].analyst_name).toBe('');
   });
 });

@@ -106,7 +106,7 @@
     "biasBull": "多",
     "biasBear": "空",
     "biasNeutral": "中",
-    "hitRateSummary": "5日胜率 {hitRate}% · 均5日 {avgForward5d}%",
+    "hitRateSummary": "5日命中率 {hitRate}% · 均5日 {avgForward5d}%",
     "openDecisionsTitle": "未平决策 · {count}",
     "noOpenDecisions": "暂无未平决策",
     "copilotHint": "🎩 按 ⌘K 呼出 Copilot 分析当前标的"
@@ -129,6 +129,7 @@
     },
     "cancel": "取消",
     "adopted": "采纳建议",
+    "adoptedFrom": "采纳自 {name}",
     "adoptedWithdrawn": "建议已撤回",
     "sourceSelf": "自主"
   },
@@ -170,7 +171,7 @@
     "refreshing": "正在刷新评分…",
     "overviewTitle": "复盘概览",
     "scored": "已评分",
-    "hitRate": "胜率",
+    "hitRate": "命中率",
     "avg5d": "均 5d",
     "avg20d": "均 20d",
     "calibrationTitle": "信心校准",
@@ -192,15 +193,15 @@
       "score": "评分"
     },
     "vsSignalTitle": "决策 vs 信号",
-    "vsSignalEmpty": "暂无可评分决策，无法对照信号胜率",
-    "myOverallHitRate": "我的总胜率",
-    "signalAvgHitRate": "信号平均胜率",
-    "copilotHitRate": "Copilot决策胜率{countSuffix}",
+    "vsSignalEmpty": "暂无可评分决策，无法对照信号命中率",
+    "myOverallHitRate": "我的总命中率",
+    "signalAvgHitRate": "信号平均命中率",
+    "copilotHitRate": "Copilot决策命中率{countSuffix}",
     "vsSignalColumns": {
       "ticker": "标的",
       "scoredCount": "已评分决策数",
       "myHitRate": "我的决策命中率",
-      "signalHitRate5d": "信号5日胜率",
+      "signalHitRate5d": "信号5日命中率",
       "diff": "差值"
     }
   }

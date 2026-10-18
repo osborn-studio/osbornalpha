@@ -6,9 +6,13 @@ import { Metric, Panel, metricTrendClass } from '@/components/ui';
 import { formatPct, formatPrice } from '@/lib/utils';
 import { exchangeDate } from '@/lib/scoring/forward';
 import type { Book } from '@/lib/analyst/book';
+import type { Market } from '@/lib/supabase/database.types';
 
 type T = (key: string, values?: Record<string, number>) => string;
 export const pctOrDash = (v: number | null) => (v === null ? '--' : formatPct(v));
+// HK quotes tick at three decimals; formatPrice would round them to two.
+export const formatFill = (price: number, market: Market) =>
+  market === 'HK' ? price.toLocaleString(undefined, { minimumFractionDigits: 3, maximumFractionDigits: 3 }) : formatPrice(price);
 const withN = (v: number | null, n: number, t: T) => (v === null ? '--' : `${formatPct(v, false)} · ${t('common.n', { n })}`);
 
 export function BookSummaryPanel({ book }: { book: Book }) {
@@ -60,8 +64,8 @@ export function BookTables({ book }: { book: Book }) {
                     <td className="py-1"><Link href={`/stock/${encodeURIComponent(p.ticker)}`} className="text-accent hover:underline">{p.ticker}</Link></td>
                     <td className="py-1">{t(`market.${p.market}`)}</td>
                     <td className="py-1">{p.units}</td>
-                    <td className="py-1">{formatPrice(p.avg_fill)}</td>
-                    <td className="py-1" title={p.last_close_date ?? undefined}>{p.last_close === null ? '--' : formatPrice(p.last_close)}</td>
+                    <td className="py-1">{formatFill(p.avg_fill, p.market)}</td>
+                    <td className="py-1" title={p.last_close_date ?? undefined}>{p.last_close === null ? '--' : formatFill(p.last_close, p.market)}</td>
                     <td className={`py-1 ${p.unrealized_pct === null ? '' : metricTrendClass(p.unrealized_pct)}`}>{pctOrDash(p.unrealized_pct)}</td>
                     <td className="py-1">{formatPct(p.weight * 100, false)}</td>
                     <td className="py-1">{exchangeDate(p.opened_at, p.market)}</td>
@@ -93,8 +97,8 @@ export function BookTables({ book }: { book: Book }) {
                     <td className="py-1"><Link href={`/stock/${encodeURIComponent(c.ticker)}`} className="text-accent hover:underline">{c.ticker}</Link></td>
                     <td className="py-1">{t(`market.${c.market}`)}</td>
                     <td className="py-1">{c.units}</td>
-                    <td className="py-1">{formatPrice(c.avg_fill)}</td>
-                    <td className="py-1">{formatPrice(c.exit_price)}</td>
+                    <td className="py-1">{formatFill(c.avg_fill, c.market)}</td>
+                    <td className="py-1">{formatFill(c.exit_price, c.market)}</td>
                     <td className={`py-1 ${metricTrendClass(c.realized_pct)}`}>{formatPct(c.realized_pct)}</td>
                     <td className="py-1">{exchangeDate(c.closed_at, c.market)}</td>
                   </tr>

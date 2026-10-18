@@ -129,6 +129,7 @@
     },
     "cancel": "Cancel",
     "adopted": "Adopted",
+    "adoptedFrom": "Adopted from {name}",
     "adoptedWithdrawn": "Rec. Withdrawn",
     "sourceSelf": "Own"
   },

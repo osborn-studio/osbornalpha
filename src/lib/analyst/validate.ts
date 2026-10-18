@@ -3,7 +3,7 @@
 
 import type { AnalystKind, DecisionAction, DecisionHorizon, Market, RecommendationSource } from '@/lib/supabase/database.types';
 import { isUuid, type Parsed } from '@/lib/portfolio/validate';
-import { normalizeSecurityTicker } from '@/lib/securities/normalize';
+import { normalizeSecurityTicker } from '@/lib/securities/ticker';
 import type { CoreMarket } from '@/lib/securities/model';
 
 const KINDS: AnalystKind[] = ['human', 'agent'];
