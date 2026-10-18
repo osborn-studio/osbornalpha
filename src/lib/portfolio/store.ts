@@ -3,7 +3,7 @@
 // after every trade insert we recompute that ticker from full trade history.
 
 import { getServerSupabase } from '@/lib/supabase/server';
-import type { Decision, DecisionStatus, Position, Trade } from '@/lib/supabase/database.types';
+import type { AnalystProfile, Decision, DecisionStatus, Position, Recommendation, Trade } from '@/lib/supabase/database.types';
 import { computePositions } from './positions';
 import type { DecisionInput, TradeInput } from './validate';
 
@@ -75,6 +75,42 @@ export async function listWithdrawnRecommendationIds(): Promise<string[]> {
   const { data, error } = await supabase.from('recommendations').select('id').eq('user_id', userId).not('withdrawn_at', 'is', null);
   if (error) throw new Error(error.message);
   return ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
+}
+
+export interface AdoptedRecommendation {
+  id: string;
+  analyst_id: string;
+  analyst_name: string;
+  withdrawn: boolean;
+}
+
+// Joins adopted recommendations to their analyst's display name for the decision log.
+export function buildAdoptedRecommendations(
+  recs: Array<Pick<Recommendation, 'id' | 'analyst_id' | 'withdrawn_at'>>,
+  profiles: Array<Pick<AnalystProfile, 'id' | 'display_name'>>,
+): AdoptedRecommendation[] {
+  const names = new Map(profiles.map((p) => [p.id, p.display_name]));
+  return recs.map((r) => ({
+    id: r.id,
+    analyst_id: r.analyst_id,
+    analyst_name: names.get(r.analyst_id) ?? '',
+    withdrawn: r.withdrawn_at !== null,
+  }));
+}
+
+// The caller's recommendations referenced by the given decisions, with analyst names (RLS + user_id scoped).
+export async function listAdoptedRecommendations(decisions: Array<Pick<Decision, 'recommendation_id'>>): Promise<AdoptedRecommendation[]> {
+  const ids = [...new Set(decisions.map((d) => d.recommendation_id).filter((id): id is string => id !== null))];
+  if (ids.length === 0) return [];
+  const { supabase, userId } = await requireUser();
+  const { data: recs, error } = await supabase.from('recommendations').select('id, analyst_id, withdrawn_at').eq('user_id', userId).in('id', ids);
+  if (error) throw new Error(error.message);
+  const recRows = (recs ?? []) as Array<Pick<Recommendation, 'id' | 'analyst_id' | 'withdrawn_at'>>;
+  const analystIds = [...new Set(recRows.map((r) => r.analyst_id))];
+  if (analystIds.length === 0) return [];
+  const { data: profiles, error: pErr } = await supabase.from('analyst_profiles').select('id, display_name').eq('user_id', userId).in('id', analystIds);
+  if (pErr) throw new Error(pErr.message);
+  return buildAdoptedRecommendations(recRows, (profiles ?? []) as Array<Pick<AnalystProfile, 'id' | 'display_name'>>);
 }
 
 export async function updateDecisionStatus(id: string, status: DecisionStatus): Promise<void> {

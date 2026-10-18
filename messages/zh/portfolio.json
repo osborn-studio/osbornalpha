@@ -129,6 +129,7 @@
     },
     "cancel": "取消",
     "adopted": "采纳建议",
+    "adoptedFrom": "采纳自 {name}",
     "adoptedWithdrawn": "建议已撤回",
     "sourceSelf": "自主"
   },

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Panel, Button, Tag } from '@/components/ui';
 import { formatPrice } from '@/lib/utils';
+import type { AdoptedRecommendation } from '@/lib/portfolio/store';
 import type { Decision, DecisionStatus } from '@/lib/supabase/database.types';
 
 function SubNav({ current }: { current: 'cockpit' | 'decisions' | 'positions' | 'review' }) {
@@ -62,8 +63,8 @@ export default function DecisionsPage() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<DecisionStatus | 'all'>('all');
   const [cancellingId, setCancellingId] = useState<string | null>(null);
-  // Ids of withdrawn recommendations, served alongside the decisions.
-  const [withdrawnIds, setWithdrawnIds] = useState(() => new Set<string>());
+  // Adopted recommendations (analyst + withdrawn flag), served alongside the decisions.
+  const [adopted, setAdopted] = useState(() => new Map<string, AdoptedRecommendation>());
 
   const refetch = useCallback(async () => {
     try {
@@ -71,7 +72,7 @@ export default function DecisionsPage() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || `http ${res.status}`);
       setDecisions(json.decisions ?? []);
-      setWithdrawnIds(new Set<string>(json.withdrawn_recommendation_ids ?? []));
+      setAdopted(new Map<string, AdoptedRecommendation>(((json.adopted_recommendations ?? []) as AdoptedRecommendation[]).map((r) => [r.id, r])));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -103,6 +104,16 @@ export default function DecisionsPage() {
     } finally {
       setCancellingId(null);
     }
+  };
+
+  const adoptedTag = (recommendationId: string) => {
+    const rec = adopted.get(recommendationId);
+    const label = rec?.withdrawn ? t('decisions.adoptedWithdrawn') : rec?.analyst_name ? t('decisions.adoptedFrom', { name: rec.analyst_name }) : t('decisions.adopted');
+    return (
+      <Link href={rec ? `/analyst/${encodeURIComponent(rec.analyst_id)}` : '/analyst'} className="hover:underline">
+        <Tag tone={rec?.withdrawn ? 'down' : 'up'}>{label}</Tag>
+      </Link>
+    );
   };
 
   return (
@@ -160,11 +171,7 @@ export default function DecisionsPage() {
                   <td className="py-1"><Tag tone={STATUS_TONE[d.status]}>{STATUS_LABEL[d.status]}</Tag></td>
                   <td className="py-1">
                     {d.recommendation_id ? (
-                      <Link href="/analyst" className="hover:underline">
-                        <Tag tone={withdrawnIds.has(d.recommendation_id) ? 'down' : 'up'}>
-                          {withdrawnIds.has(d.recommendation_id) ? t('decisions.adoptedWithdrawn') : t('decisions.adopted')}
-                        </Tag>
-                      </Link>
+                      adoptedTag(d.recommendation_id)
                     ) : (
                       <span className="text-[var(--text-dim)]">{t('decisions.sourceSelf')}</span>
                     )}

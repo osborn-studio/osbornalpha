@@ -1,7 +1,7 @@
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import { listDecisions, createDecision, listWithdrawnRecommendationIds } from '@/lib/portfolio/store';
+import { listDecisions, createDecision, listWithdrawnRecommendationIds, listAdoptedRecommendations } from '@/lib/portfolio/store';
 import { parseDecisionInput } from '@/lib/portfolio/validate';
 import type { DecisionStatus } from '@/lib/supabase/database.types';
 
@@ -21,7 +21,9 @@ export async function GET(req: Request) {
       }),
       listWithdrawnRecommendationIds(),
     ]);
-    return NextResponse.json({ decisions, withdrawn_recommendation_ids });
+    const adopted_recommendations = await listAdoptedRecommendations(decisions);
+    // withdrawn_recommendation_ids is deprecated (read adopted_recommendations[].withdrawn); kept one version for compatibility.
+    return NextResponse.json({ decisions, adopted_recommendations, withdrawn_recommendation_ids });
   } catch (e) {
     const msg = (e as Error).message;
     return NextResponse.json({ error: msg }, { status: msg === 'not authenticated' ? 401 : 500 });
