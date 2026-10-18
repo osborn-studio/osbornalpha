@@ -11,8 +11,24 @@ do $$ begin
     create role alpha_anchor_runner nologin noinherit nosuperuser nobypassrls nocreaterole nocreatedb;
   end if;
 end $$;
+-- Hosted Supabase applies migrations as a non-superuser `postgres` (CREATEROLE only, PostgreSQL 17,
+-- createrole_self_grant empty). There, creating a role grants the creator ADMIN OPTION but no SET
+-- membership, and `alter function ... owner to alpha_anchor_fn_owner` below needs two things the
+-- executor does not get for free: the ability to SET ROLE to the new owner, and CREATE on the schema
+-- for the new owner. Grant both to whichever role runs this file (never a hard-coded role name).
+-- A superuser already satisfies both, so the statements are harmless there. The membership stays,
+-- matching the production project (applied 2026-10-18 as part of version 20261018120000); CREATE on
+-- public is temporary and revoked at the end of this file.
+do $$ begin
+  if current_user <> 'alpha_anchor_fn_owner' and not pg_catalog.pg_has_role(current_user, 'alpha_anchor_fn_owner', 'SET') then
+    execute pg_catalog.format('grant alpha_anchor_fn_owner to %I with set true, inherit false', current_user);
+  end if;
+end $$;
+grant create on schema public to alpha_anchor_fn_owner;
 grant usage on schema public to alpha_anchor_fn_owner, alpha_anchor_runner;
-grant usage on schema auth to alpha_anchor_fn_owner;
+-- No USAGE on schema auth: the anchor functions name only pg_catalog and public objects, and the
+-- foreign-key checks against auth.users run as that table's owner. On hosted Supabase `postgres`
+-- holds USAGE on auth without grant option, so such a grant would only emit a WARNING anyway.
 
 -- One registered database identity per deployment. Written only by the release executor.
 create table public.research_s4_runtime_identity (
@@ -57,13 +73,18 @@ create policy s4_identity_read on public.research_s4_runtime_identity for select
 grant select on public.research_s4_anchor_checkpoints to alpha_s4_runtime;
 create policy s4_owner on public.research_s4_anchor_checkpoints for select to alpha_s4_runtime using (user_id = auth.uid());
 
+-- Hosted Supabase's default privileges in public also hand EXECUTE on new functions to anon and
+-- authenticated, which `revoke ... from public` alone does not undo, so both are named explicitly.
+-- Grants on each function are issued while the executor still owns it, i.e. before the owner is
+-- changed: a non-superuser executor does not inherit the owner role, so afterwards it could only
+-- warn "no privileges were granted" instead of granting EXECUTE to the runner.
 -- Function owner: transaction-scoped owner plus the principal mapping of the real session_user.
 -- A caller-preset GUC alone never grants access; the mapping must also name session_user and the owner.
 create function public.research_s4_anchor_scope() returns uuid
 language sql stable security definer set search_path = pg_catalog, public, pg_temp as $$
   select nullif(pg_catalog.current_setting('alpha.anchor_owner', true), '')::uuid
 $$;
-revoke all on function public.research_s4_anchor_scope() from public;
+revoke all on function public.research_s4_anchor_scope() from public, anon, authenticated;
 alter function public.research_s4_anchor_scope() owner to alpha_anchor_fn_owner;
 
 grant select on public.research_s4_runtime_identity to alpha_anchor_fn_owner;
@@ -98,7 +119,7 @@ begin
   perform pg_catalog.set_config('alpha.anchor_owner', p_owner::text, true);
   return p.principal_id;
 end $$;
-revoke all on function public.research_s4_anchor_principal(uuid, bigint) from public;
+revoke all on function public.research_s4_anchor_principal(uuid, bigint) from public, anon, authenticated;
 alter function public.research_s4_anchor_principal(uuid, bigint) owner to alpha_anchor_fn_owner;
 
 create function public.research_s4_anchor_tail(p_owner uuid, p_generation bigint)
@@ -114,9 +135,9 @@ begin
     i.database_identity, i.generation
   from public.research_s4_runtime_identity i;
 end $$;
-revoke all on function public.research_s4_anchor_tail(uuid, bigint) from public;
-alter function public.research_s4_anchor_tail(uuid, bigint) owner to alpha_anchor_fn_owner;
+revoke all on function public.research_s4_anchor_tail(uuid, bigint) from public, anon, authenticated;
 grant execute on function public.research_s4_anchor_tail(uuid, bigint) to alpha_anchor_runner;
+alter function public.research_s4_anchor_tail(uuid, bigint) owner to alpha_anchor_fn_owner;
 
 create function public.research_s4_anchor_read_outbox(p_owner uuid, p_generation bigint, p_after bigint, p_limit integer)
 returns table (sequence bigint, candidate_id uuid, record_id uuid, event jsonb, event_hash text, anchored_at timestamptz, receipt_hash text)
@@ -127,9 +148,9 @@ begin
   return query select o.sequence, o.candidate_id, o.record_id, o.event, o.event_hash, o.anchored_at, o.receipt_hash
     from public.research_s4_outbox o where o.user_id = p_owner and o.sequence > p_after order by o.sequence limit p_limit;
 end $$;
-revoke all on function public.research_s4_anchor_read_outbox(uuid, bigint, bigint, integer) from public;
-alter function public.research_s4_anchor_read_outbox(uuid, bigint, bigint, integer) owner to alpha_anchor_fn_owner;
+revoke all on function public.research_s4_anchor_read_outbox(uuid, bigint, bigint, integer) from public, anon, authenticated;
 grant execute on function public.research_s4_anchor_read_outbox(uuid, bigint, bigint, integer) to alpha_anchor_runner;
+alter function public.research_s4_anchor_read_outbox(uuid, bigint, bigint, integer) owner to alpha_anchor_fn_owner;
 
 -- Acknowledge one durable receipt. Serialized with web transactions by the same owner advisory lock
 -- (see src/lib/research/s4/db.ts). Chain order and hashes are enforced in SQL; a repeated identical
@@ -179,9 +200,9 @@ begin
         'execution_principal_id', principal, 'store_id', p_store_id), at);
   return query select true, false;
 end $$;
-revoke all on function public.research_s4_anchor_ack(uuid, bigint, bigint, text, text, text, uuid, jsonb, text) from public;
-alter function public.research_s4_anchor_ack(uuid, bigint, bigint, text, text, text, uuid, jsonb, text) owner to alpha_anchor_fn_owner;
+revoke all on function public.research_s4_anchor_ack(uuid, bigint, bigint, text, text, text, uuid, jsonb, text) from public, anon, authenticated;
 grant execute on function public.research_s4_anchor_ack(uuid, bigint, bigint, text, text, text, uuid, jsonb, text) to alpha_anchor_runner;
+alter function public.research_s4_anchor_ack(uuid, bigint, bigint, text, text, text, uuid, jsonb, text) owner to alpha_anchor_fn_owner;
 
 -- Record that the independent registry confirmed a checkpoint. Only anchored sequences of the
 -- registered identity, never backwards, and one store per owner.
@@ -210,6 +231,9 @@ begin
   end if;
   return query select true, p_last_sequence;
 end $$;
-revoke all on function public.research_s4_anchor_confirm_checkpoint(uuid, bigint, uuid, uuid, bigint, text) from public;
-alter function public.research_s4_anchor_confirm_checkpoint(uuid, bigint, uuid, uuid, bigint, text) owner to alpha_anchor_fn_owner;
+revoke all on function public.research_s4_anchor_confirm_checkpoint(uuid, bigint, uuid, uuid, bigint, text) from public, anon, authenticated;
 grant execute on function public.research_s4_anchor_confirm_checkpoint(uuid, bigint, uuid, uuid, bigint, text) to alpha_anchor_runner;
+alter function public.research_s4_anchor_confirm_checkpoint(uuid, bigint, uuid, uuid, bigint, text) owner to alpha_anchor_fn_owner;
+
+-- Temporary privilege for the ownership transfers above; the owner role keeps USAGE only.
+revoke create on schema public from alpha_anchor_fn_owner;
