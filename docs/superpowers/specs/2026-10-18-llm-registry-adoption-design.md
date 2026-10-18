@@ -129,6 +129,7 @@
 - MiniMax：存储 id `minimax`（旧行、env）→ `/text/chatcompletion_v2` 不论模型；`minimax_cn`（本版保存）→ `/v1/chat/completions`；设置页推荐 `models.json` 最新。
 - env 回退的默认模型 5 家逐字不变。
 - 用量记录里的 provider 字符串按 §5 改名。
+- PA 回复（2026-10-18，分支 `codex/llm-registry-endpoint-auth`，未合并）：注册表将加端点级 `auth` 覆盖（gemini 的 OpenAI 兼容端点声明 Bearer）并在 overrides 补 5 条 doubao 条目（上下文 256k / 输出 32k 为保守值，待核对）。下次刷新快照时：`derive.ts` 改读端点级 auth 并删掉"openai 一律 Bearer"规则，`SUGGESTED_MODEL_PIN` 的 doubao 钉死可以去掉。env 变量名按 `secret.id → Alpha env` 的映射留在 Alpha 侧（即现在的 `ENV_KEY`）。
 - **回滚**（r2 P2-8）：回滚到旧版代码前，`llm_settings.provider` 中旧版不认识的值（`minimax_cn` 与所有新供应商 id）会让旧版 `resolveUserLlm()` 返回 null 并回落平台 key。回滚步骤：先 `select user_id, provider from llm_settings where provider not in ('ark','deepseek','openai','kimi','minimax')` 看影响范围，再决定把 `minimax_cn` 改回 `minimax`（路径也随之回旧版）并删除其余行（用户重新填 key），然后才回滚部署。设置页在本版不会产生除此之外的状态。
 - 后续工作（本次不做）：`getUserLlm()` 读取失败与解密失败在 `resolveLlm()` 里回落平台 key 的既有行为；组件级 jsdom 交互测试；本地 Supabase（PG 15）跑不过 anchor runner 迁移。
 
