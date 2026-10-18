@@ -3142,10 +3142,22 @@ In `messages/GLOSSARY.md`, in the main `核心术语对照` table, add after the
 ```markdown
 | 建议（分析师建议） | Recommendation | analyst 层对象；与"决策 Decision"（portfolio 实盘采纳事件）区分 |
 | 分析师 | Analyst | 含 AI Agent；主导航 tab「分析」= Analyst |
-| 模拟账本 / 模拟持仓 | Simulated Book / Paper Position | analyst 层等权假设账本，不是实盘 |
+| 模拟账本 / 模拟持仓 | Simulated Book / Simulated Position | analyst 层等权假设账本，不是实盘；不用 paper |
+| 模拟成交价 | Simulated Fill | 建议日 K 线收盘，非真实成交；表头可缩写 Sim. Fill |
 | 采纳 | Adopt | 实盘决定引用一条建议 |
 | 撤回 | Withdraw | 建议只能撤回不能修改 |
+| 份 / 份数 | Unit / Units | 等权名义仓单位，不是股数 Shares |
+| 份数权重 | Unit Weight | 份数 / 总份数，不是市值权重 |
+| 命中率 | Hit Rate | 5 日方向命中；analyst 统一用命中率，不用胜率 |
+| 评分 | Score | 方向调整后的 20 日收益（缺则 5 日） |
+| 参考价 | Reference Price | 分析师口述价格，不作成交价 |
+| 期限 | Horizon | short / mid / long |
+| 待定价 | Unpriced | 尚无模拟成交价的建议 |
+| 关联研究 | Linked Research | 建议上的可选 thesis 引用（`thesis_ref`） |
+| 平仓价 | Exit Price | 模拟账本平仓用的成交价 |
 ```
+
+Also change the existing row `| 置信度 | Confidence | |` to `| 信心 / 置信度 | Confidence | 产品文案统一用「信心」 |` since every page already uses 信心.
 
 - [ ] **Step 3: Commit**
 
