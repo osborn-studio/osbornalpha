@@ -1,33 +1,11 @@
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, type FileHandle } from 'node:fs/promises';
+import { open } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 import type {PoolClient} from 'pg';
-import { canonicalize, digest, fail, parseStrict } from '../ingest/pa-v1/json.js';
+import { canonicalize, digest, fail } from '../ingest/pa-v1/json.js';
 import { serverTime, transaction, type S4Actor } from './db';
 import { addRecord } from './records';
-const ZERO='0'.repeat(64);
-async function controlledDirectory(path:string) {
-  await mkdir(path,{recursive:true,mode:0o700});
-  const stat=await lstat(path);
-  if(!stat.isDirectory()||stat.isSymbolicLink()||(stat.mode&0o077)!==0||stat.uid!==process.getuid?.()) fail('scope_denied');
-}
-/** Bounded memory, no lifetime row/byte cap. An interrupted partial line fails closed. */
-async function* journalEntries(file:FileHandle,size:number) {
-  let pending=Buffer.alloc(0),position=0;
-  while(position<size){
-    const buffer=Buffer.alloc(Math.min(65536,size-position));const {bytesRead}=await file.read(buffer,0,buffer.length,position);
-    if(!bytesRead)fail('anchor_integrity_failed');position+=bytesRead;
-    pending=Buffer.concat([pending,buffer.subarray(0,bytesRead)]);
-    let end:number;
-    while((end=pending.indexOf(10))>=0){
-      if(end>16384)fail('anchor_integrity_failed');
-      let entry;try{entry=parseStrict(pending.subarray(0,end));}catch{fail('anchor_integrity_failed');}
-      pending=pending.subarray(end+1);yield entry;
-    }
-    if(pending.length>16384)fail('anchor_integrity_failed');
-  }
-  if(pending.length)fail('anchor_integrity_failed');
-}
+import { ZERO_HASH as ZERO, controlledDirectory, journalEntries } from './anchor-store';
 async function* outboxRows(db:PoolClient,userId:string){
   let after='0';
   for(;;){const rows=(await db.query('select * from public.research_s4_outbox where user_id=$1 and sequence>$2 order by sequence limit 1000',[userId,after])).rows;
@@ -35,15 +13,33 @@ async function* outboxRows(db:PoolClient,userId:string){
     if(rows.length<1000)return;
   }
 }
-function receiptBody(row:any,userId:string,previous:string,exportedAt:string){
+export function receiptBody(row:any,userId:string,previous:string,exportedAt:string){
   return {sequence:row.sequence,owner_scope_hash:digest(userId),record_id:row.record_id,event_hash:row.event_hash,
     record_kind:row.event.kind,observation_hash:row.event.observation_hash,rule_hash:row.event.rule_hash,
     server_time:row.event.server_time,exported_at:exportedAt,previous_hash:previous,provenance_level:'local_receipt'};
+}
+/** SQL ACK of one outbox row against its durable receipt: outbox mark, observation gate, AnchorReceipt record. */
+export async function acknowledgeRow(db:PoolClient,actor:S4Actor,row:any,entry:any){
+  await db.query('update public.research_s4_outbox set anchored_at=clock_timestamp(),receipt_hash=$3 where user_id=$1 and sequence=$2',[actor.userId,row.sequence,entry.receipt_hash]);
+  if(row.event.kind==='Observation'){
+    await db.query("update public.research_s4_observation_state set anchor_status='anchored',revision=revision+1 where user_id=$1 and observation_id=$2 and anchor_status='anchor_pending'",[actor.userId,row.record_id]);
+    await addRecord(db,actor,row.candidate_id,'AnchorReceipt',{observation_ref:row.record_id,outbox_sequence:row.sequence,receipt_hash:entry.receipt_hash,previous_hash:entry.previous_hash,provenance_level:'local_receipt',journal_ref:'receipts.jsonl'},{outbox:false});
+  }
+}
+/** Quarantines the owner's whole chain after an integrity failure: no truncation, hash repair or provenance restoration. */
+export async function quarantineOwner(actor:S4Actor){
+  await transaction(actor,async db=>{
+    await db.query("insert into public.research_s4_integrity(user_id,reason) values($1,'anchor_integrity_failed') on conflict do nothing",[actor.userId]);
+    const changed=await db.query("update public.research_s4_observation_state set anchor_status='integrity_failed',revision=revision+1 where user_id=$1 and anchor_status<>'integrity_failed' returning observation_id",[actor.userId]);
+    for(const r of changed.rows){const record=(await db.query('select candidate_id from public.research_s4_records where user_id=$1 and id=$2',[actor.userId,r.observation_id])).rows[0];
+      await addRecord(db,actor,record.candidate_id,'ControlEvent',{observation_ref:r.observation_id,reason:'anchor_integrity_failed',research_stream:'descriptive'},{outbox:false});}
+  }).catch(()=>{console.error('S4 anchor integrity failure: quarantine transaction failed; stop evaluation and retry operator investigation.');});
 }
 /** Internal worker API: root is operator config, never an HTTP input. One root per DB.
  * Journal and SQL share the same owner lock; entries are durable before SQL commit.
  * Integrity failures deliberately quarantine the owner's whole chain until operator
  * investigation. No automatic truncation, hash repair, or provenance restoration.
+ * Kept as the single-transaction regression oracle for the two-phase drain (anchor-two-phase.ts).
  */
 export async function drainOutbox(actor:S4Actor,root:string) {
   if(!isAbsolute(root)||typeof process.getuid!=='function') fail('scope_denied');
@@ -62,14 +58,7 @@ export async function drainOutbox(actor:S4Actor,root:string) {
       // Any recovered bytes must be durable before SQL acknowledges them.
       await file.sync();
       const pending:Array<{row:any;entry:any}>=[];
-      const acknowledge=async(row:any,entry:any)=>{
-        await db.query('update public.research_s4_outbox set anchored_at=clock_timestamp(),receipt_hash=$3 where user_id=$1 and sequence=$2',[actor.userId,row.sequence,entry.receipt_hash]);
-        if(row.event.kind==='Observation'){
-          await db.query("update public.research_s4_observation_state set anchor_status='anchored',revision=revision+1 where user_id=$1 and observation_id=$2 and anchor_status='anchor_pending'",[actor.userId,row.record_id]);
-          await addRecord(db,actor,row.candidate_id,'AnchorReceipt',{observation_ref:row.record_id,outbox_sequence:row.sequence,receipt_hash:entry.receipt_hash,previous_hash:entry.previous_hash,provenance_level:'local_receipt',journal_ref:'receipts.jsonl'},{outbox:false});
-        }
-        acknowledged++;
-      };
+      const acknowledge=async(row:any,entry:any)=>{await acknowledgeRow(db,actor,row,entry);acknowledged++;};
       for await(const row of outboxRows(db,actor.userId)){
         if(digest(row.event)!==row.event_hash)fail('anchor_integrity_failed');
         let entry=next.done?null:next.value;const recovered=!!entry;
@@ -97,14 +86,7 @@ export async function drainOutbox(actor:S4Actor,root:string) {
       return {appended,acknowledged,remaining,last_hash:previous,provenance_level:'local_receipt'};
     }finally{await file.close();}
   });}catch(e){
-    if((e as {code?:string}).code==='anchor_integrity_failed'){
-      await transaction(actor,async db=>{
-        await db.query("insert into public.research_s4_integrity(user_id,reason) values($1,'anchor_integrity_failed') on conflict do nothing",[actor.userId]);
-        const changed=await db.query("update public.research_s4_observation_state set anchor_status='integrity_failed',revision=revision+1 where user_id=$1 and anchor_status<>'integrity_failed' returning observation_id",[actor.userId]);
-        for(const r of changed.rows){const record=(await db.query('select candidate_id from public.research_s4_records where user_id=$1 and id=$2',[actor.userId,r.observation_id])).rows[0];
-          await addRecord(db,actor,record.candidate_id,'ControlEvent',{observation_ref:r.observation_id,reason:'anchor_integrity_failed',research_stream:'descriptive'},{outbox:false});}
-      }).catch(()=>{console.error('S4 anchor integrity failure: quarantine transaction failed; stop evaluation and retry operator investigation.');});
-    }
+    if((e as {code?:string}).code==='anchor_integrity_failed')await quarantineOwner(actor);
     throw e;
   }
 }
