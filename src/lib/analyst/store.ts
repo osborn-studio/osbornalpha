@@ -35,6 +35,7 @@ export function coerceScoreRow(row: Record<string, unknown>): RecommendationScor
     forward_60d_pct: n(r.forward_60d_pct),
     score: n(r.score),
     last_close: n(r.last_close),
+    base_close: n(r.base_close),
   };
 }
 
