@@ -27,8 +27,9 @@ beforeEach(() => {
 
 describe('readUserLlm / getUserLlm', () => {
   it('returns the row with its version', async () => {
-    mocks.from.mockReturnValue(chain({ data: { provider: 'ark', model: 'm', api_key_cipher: 'c', updated_at: '2026-10-18T01:00:00.000Z' }, error: null }));
-    expect(await readUserLlm()).toEqual({ provider: 'ark', model: 'm', apiKeyCipher: 'c', updatedAt: '2026-10-18T01:00:00.000Z' });
+    mocks.from.mockReturnValue(chain({ data: { provider: 'ark', model: 'm', api_key_cipher: 'c', updated_at: '2026-10-18T01:00:00.391+00:00' }, error: null }));
+    // PostgREST's +00:00 form is normalized to the same ISO Z form the save functions return
+    expect(await readUserLlm()).toEqual({ provider: 'ark', model: 'm', apiKeyCipher: 'c', updatedAt: '2026-10-18T01:00:00.391Z' });
   });
   it('readUserLlm throws typed errors; getUserLlm folds them into null (resolve.ts contract)', async () => {
     mocks.from.mockReturnValue(chain({ data: null, error: { message: 'boom' } }));

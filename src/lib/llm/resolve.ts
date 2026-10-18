@@ -101,7 +101,7 @@ export function resolvePlatformLlm(): ResolvedLlm | null {
       provider: def.id,
       // Env configurations predate the registry: an unpinned or legacy-pinned provider keeps the
       // legacy chat path (MiniMax); only an explicit registry id opts into the registry path.
-      ...llmConfigFor(def, { model, apiKey: key, storedProviderId: explicitProvider ?? def.legacyId ?? def.id }),
+      ...llmConfigFor(def, { model, apiKey: key, storedProviderId: explicitProvider || def.legacyId || def.id }),
       protocol: def.protocol,
       source: 'env',
     };

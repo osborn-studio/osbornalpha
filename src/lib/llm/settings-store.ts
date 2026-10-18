@@ -22,6 +22,13 @@ export interface UserLlm {
   updatedAt: string | null;
 }
 
+/** PostgREST serializes timestamptz as `+00:00`; saves generate `Z`. One format for comparisons. */
+export function normalizeVersion(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? v : new Date(t).toISOString();
+}
+
 export class LlmStoreError extends Error {
   constructor(public readonly kind: 'not_authenticated' | 'store_unavailable') {
     super(kind);
@@ -68,7 +75,7 @@ export async function readUserLlm(): Promise<UserLlm | null> {
     provider: data.provider as string,
     model: data.model as string,
     apiKeyCipher: data.api_key_cipher as string,
-    updatedAt: typeof data.updated_at === 'string' ? data.updated_at : null,
+    updatedAt: normalizeVersion(data.updated_at),
   };
 }
 

@@ -110,8 +110,9 @@ export function reduce(s: SettingsState, e: Event): SettingsState {
     }
     case 'editKey':
       if (s.saving) return s;
-      // Probe results describe the key they ran with; a different key makes them (and in-flight ones) meaningless.
-      return { ...s, draft: { ...s.draft, key: e.key, keyGeneration: s.draft.keyGeneration + 1 }, probes: {}, readiness: dropReady(s.readiness), saveError: null };
+      // Probe and discovery results describe the key they ran with; a different key makes them (and
+      // in-flight ones) meaningless.
+      return { ...s, draft: { ...s.draft, key: e.key, keyGeneration: s.draft.keyGeneration + 1 }, discovery: { status: 'idle' }, probes: {}, readiness: dropReady(s.readiness), saveError: null };
     case 'selectModel':
       if (s.saving) return s;
       return { ...s, draft: { ...s.draft, model: e.model }, readiness: dropReady(s.readiness), saveError: null };
@@ -131,16 +132,17 @@ export function reduce(s: SettingsState, e: Event): SettingsState {
       if (!current || current.status !== 'running' || current.seq !== e.seq || s.draft.provider !== e.provider) return s;
       const r = e.response;
       const probes = { ...s.probes };
+      const saved = s.saved;
+      const keySource = 'key_source' in r ? r.key_source : undefined;
+      const aboutSaved = keySource === 'saved' && Boolean(saved?.configured) && saved?.provider === e.provider && saved?.model === e.model;
       if (!r.ok) {
         probes[e.model] = 'error' in r ? { status: 'failed', error: r.error } : { status: 'failed', failure: { class: r.class, status: r.status } };
-        return { ...s, probes };
+        // A failed retest of the saved configuration withdraws earlier evidence.
+        return { ...s, probes, readiness: aboutSaved ? dropReady(s.readiness) : s.readiness };
       }
       probes[e.model] = { status: 'ok', latency_ms: r.latency_ms };
       let readiness = s.readiness;
-      const saved = s.saved;
-      if (r.key_source === 'saved' && saved?.configured && saved.provider === e.provider && saved.model === e.model) {
-        readiness = r.version === saved.version ? 'ready' : 'stale';
-      }
+      if (aboutSaved) readiness = r.version === saved!.version ? 'ready' : 'stale';
       return { ...s, probes, readiness };
     }
     case 'saveStarted':

@@ -112,6 +112,18 @@ describe('settings-state: late responses are discarded', () => {
     s = reduce(s, { type: 'discoverFinished', seq: 2, provider: 'minimax_cn', response: { ok: true, latency_ms: 5, models: ['MiniMax-M3'], truncated: true, key_source: 'request' } });
     expect(s.discovery).toMatchObject({ status: 'done', result: { models: ['MiniMax-M3'], truncated: true } });
   });
+  it('drops discovery results, finished or in flight, when the key changes', () => {
+    let s = loaded();
+    s = reduce(s, { type: 'editKey', key: 'A' });
+    s = reduce(s, { type: 'discoverStarted', seq: 1 });
+    s = reduce(s, { type: 'editKey', key: 'B' });
+    s = reduce(s, { type: 'discoverFinished', seq: 1, provider: 'deepseek', response: { ok: true, latency_ms: 5, models: ['deepseek-chat'], truncated: false, key_source: 'request' } });
+    expect(s.discovery.status).toBe('idle');
+    s = reduce(s, { type: 'discoverStarted', seq: 2 });
+    s = reduce(s, { type: 'discoverFinished', seq: 2, provider: 'deepseek', response: { ok: true, latency_ms: 5, models: ['deepseek-chat'], truncated: false, key_source: 'request' } });
+    expect(s.discovery.status).toBe('done');
+    expect(reduce(s, { type: 'editKey', key: 'C' }).discovery.status).toBe('idle');
+  });
   it('ignores a probe response after the key changed', () => {
     let s = loaded();
     s = reduce(s, { type: 'probeStarted', seq: 1, model: 'deepseek-chat' });
@@ -159,6 +171,18 @@ describe('settings-state: readiness is evidence bound to the saved configuration
     expect(reduce(ready(), { type: 'selectProvider', provider: 'minimax_cn' }).readiness).toBe('configured_unverified');
     let s = reduce(ready(), { type: 'saveStarted', seq: 5 });
     s = reduce(s, { type: 'saveFinished', seq: 5, response: { ok: true, provider: 'deepseek', legacyId: 'deepseek', storedProvider: 'deepseek', model: 'deepseek-chat', version: 'v2', legacyPath: false } });
+    expect(s.readiness).toBe('configured_unverified');
+  });
+  it('a failed retest of the saved configuration withdraws ready; a failed probe of another model does not', () => {
+    let s = loaded();
+    s = reduce(s, { type: 'probeStarted', seq: 1, model: 'deepseek-chat' });
+    s = reduce(s, { type: 'probeFinished', seq: 1, provider: 'deepseek', model: 'deepseek-chat', response: ok('v1', 'saved') });
+    expect(s.readiness).toBe('ready');
+    s = reduce(s, { type: 'probeStarted', seq: 2, model: 'deepseek-reasoner' });
+    s = reduce(s, { type: 'probeFinished', seq: 2, provider: 'deepseek', model: 'deepseek-reasoner', response: { ok: false, class: 'not_found', status: 404, key_source: 'saved', version: 'v1' } });
+    expect(s.readiness).toBe('ready');
+    s = reduce(s, { type: 'probeStarted', seq: 3, model: 'deepseek-chat' });
+    s = reduce(s, { type: 'probeFinished', seq: 3, provider: 'deepseek', model: 'deepseek-chat', response: { ok: false, class: 'auth', status: 401, key_source: 'saved', version: 'v1' } });
     expect(s.readiness).toBe('configured_unverified');
   });
   it('failed probes record the failure class and never set ready', () => {

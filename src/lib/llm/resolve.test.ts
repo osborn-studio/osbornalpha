@@ -161,6 +161,9 @@ describe('resolvePlatformLlm', () => {
 
   it('keeps the legacy MiniMax path for the unpinned auto fallback (only MINIMAX_API_KEY set)', () => {
     process.env.MINIMAX_API_KEY = 'k';
+    process.env.LLM_PROVIDER = '  ';
+    expect(resolvePlatformLlm()).toEqual(expect.objectContaining({ chatPath: '/text/chatcompletion_v2' }));
+    delete process.env.LLM_PROVIDER;
     expect(resolvePlatformLlm()).toEqual(expect.objectContaining({
       provider: 'minimax_cn',
       baseUrl: 'https://api.minimaxi.com/v1',
