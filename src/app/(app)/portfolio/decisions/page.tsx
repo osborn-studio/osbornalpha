@@ -62,6 +62,8 @@ export default function DecisionsPage() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<DecisionStatus | 'all'>('all');
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  // Ids of withdrawn recommendations, served alongside the decisions.
+  const [withdrawnIds, setWithdrawnIds] = useState(() => new Set<string>());
 
   const refetch = useCallback(async () => {
     try {
@@ -69,6 +71,7 @@ export default function DecisionsPage() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || `http ${res.status}`);
       setDecisions(json.decisions ?? []);
+      setWithdrawnIds(new Set<string>(json.withdrawn_recommendation_ids ?? []));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -140,6 +143,7 @@ export default function DecisionsPage() {
                 <th className="pb-1 font-normal">{t('decisions.columns.targetPrice')}</th>
                 <th className="pb-1 font-normal">{t('decisions.columns.stopLoss')}</th>
                 <th className="pb-1 font-normal">{t('decisions.columns.status')}</th>
+                <th className="pb-1 font-normal">{t('decisions.columns.source')}</th>
                 <th className="pb-1 font-normal"></th>
               </tr>
             </thead>
@@ -154,6 +158,17 @@ export default function DecisionsPage() {
                   <td className="py-1">{d.target_price !== null ? formatPrice(d.target_price) : '--'}</td>
                   <td className="py-1">{d.stop_loss !== null ? formatPrice(d.stop_loss) : '--'}</td>
                   <td className="py-1"><Tag tone={STATUS_TONE[d.status]}>{STATUS_LABEL[d.status]}</Tag></td>
+                  <td className="py-1">
+                    {d.recommendation_id ? (
+                      <Link href="/analyst" className="hover:underline">
+                        <Tag tone={withdrawnIds.has(d.recommendation_id) ? 'down' : 'up'}>
+                          {withdrawnIds.has(d.recommendation_id) ? t('decisions.adoptedWithdrawn') : t('decisions.adopted')}
+                        </Tag>
+                      </Link>
+                    ) : (
+                      <span className="text-[var(--text-dim)]">{t('decisions.sourceSelf')}</span>
+                    )}
+                  </td>
                   <td className="py-1">
                     {d.status === 'open' && (
                       <Button size="sm" variant="danger" disabled={cancellingId === d.id} onClick={() => cancel(d.id)}>

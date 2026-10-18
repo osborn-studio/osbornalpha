@@ -7,7 +7,7 @@ import type { ReactElement } from 'react';
 
 interface TabDef {
   id: string;
-  navKey: 'today' | 'watchlist' | 'intel' | 'portfolio' | 'tools' | 'settings';
+  navKey: 'today' | 'watchlist' | 'intel' | 'portfolio' | 'analyst' | 'tools' | 'settings';
   href: string;
   /** Line-art icon — 24×24, 1.5px stroke, currentColor */
   Icon: (props: { className?: string }) => ReactElement;
@@ -67,6 +67,16 @@ const TABS: TabDef[] = [
     ),
   },
   {
+    id: 'analyst', navKey: 'analyst', href: '/analyst',
+    // Scoreboard glyph — rounded frame + two score rows
+    Icon: ({ className }) => (
+      <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
+        <rect x="3" y="5" width="18" height="14" rx="2" />
+        <path d="M7 10h4M13 10h4M7 14h4M13 14h4" />
+      </svg>
+    ),
+  },
+  {
     id: 'tools', navKey: 'tools', href: '/tools',
     // Toolbox glyph (wrench + box line-art)
     Icon: ({ className }) => (
@@ -91,7 +101,7 @@ export function TabBar() {
   const pathname = usePathname();
   // Tab labels are the app's primary nav and already live in common.nav
   // (established in G1a). Reuse that single source instead of duplicating
-  // the same six strings under components.tabBar.
+  // the same seven strings under components.tabBar.
   const tNav = useTranslations('common.nav');
   return (
     <nav

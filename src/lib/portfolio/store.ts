@@ -49,6 +49,17 @@ export async function listDecisions(opts: { ticker?: string; status?: DecisionSt
 
 export async function createDecision(input: DecisionInput): Promise<Decision> {
   const { supabase, userId } = await requireUser();
+  // Adoption link: the recommendation must be the caller's and still open.
+  // RLS already hides other users' rows, so "not found" covers both cases.
+  if (input.recommendation_id) {
+    const { data: rec, error: rErr } = await supabase
+      .from('recommendations').select('id, withdrawn_at, ticker, market').eq('id', input.recommendation_id).eq('user_id', userId).maybeSingle();
+    if (rErr) throw new Error(rErr.message);
+    if (!rec) throw new Error('recommendation not found');
+    if ((rec as { withdrawn_at: string | null }).withdrawn_at) throw new Error('recommendation withdrawn');
+    if ((rec as { ticker: string }).ticker !== input.ticker) throw new Error('recommendation ticker mismatch');
+    if ((rec as { market: string }).market !== input.market) throw new Error('recommendation market mismatch');
+  }
   const { data, error } = await (supabase as any)
     .from('decisions')
     .insert({ ...input, user_id: userId })
@@ -56,6 +67,14 @@ export async function createDecision(input: DecisionInput): Promise<Decision> {
     .single();
   if (error) throw new Error(error.message);
   return coerceDecisionRow(data);
+}
+
+// Ids of the caller's withdrawn recommendations (small set; the decision log marks adopted-then-withdrawn rows).
+export async function listWithdrawnRecommendationIds(): Promise<string[]> {
+  const { supabase, userId } = await requireUser();
+  const { data, error } = await supabase.from('recommendations').select('id').eq('user_id', userId).not('withdrawn_at', 'is', null);
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
 }
 
 export async function updateDecisionStatus(id: string, status: DecisionStatus): Promise<void> {

@@ -250,6 +250,61 @@ export type DecisionHorizon = 'short' | 'mid' | 'long';
 // The executable subset of DecisionAction — derived so the two can't drift.
 export type TradeDirection = Extract<DecisionAction, 'buy' | 'sell'>;
 
+// ─── Analyst scoring layer (spec 2026-10-17) ───
+export type AnalystKind = 'human' | 'agent';
+export type RecommendationSource = 'manual' | 'copilot' | 'playbook' | 'signal' | 'import';
+
+export interface AnalystProfile {
+  id: string;
+  user_id: string;
+  display_name: string;
+  kind: AnalystKind;
+  is_self: boolean;
+  note: string | null;
+  created_at: string;
+  archived_at: string | null;
+}
+
+export interface Recommendation {
+  id: string;
+  user_id: string;
+  analyst_id: string;
+  ticker: string;
+  market: Market;
+  action: DecisionAction;
+  /** What the analyst said; never used as the fill price. */
+  reference_price: number | null;
+  rationale: string | null;
+  confidence: number | null;
+  target_price: number | null;
+  stop_loss: number | null;
+  horizon: DecisionHorizon | null;
+  thesis_ref: string | null;
+  source_type: RecommendationSource;
+  source_ref: Record<string, unknown> | null;
+  recommended_at: string;
+  created_at: string;
+  withdrawn_at: string | null;
+  withdraw_reason: string | null;
+  /** Close of the first bar on/after recommended_at; set once by the scorer. */
+  fill_price: number | null;
+  fill_date: string | null;
+}
+
+export interface RecommendationScore {
+  recommendation_id: string;
+  user_id: string;
+  scored_at: string;
+  forward_5d_pct: number | null;
+  forward_20d_pct: number | null;
+  forward_60d_pct: number | null;
+  hit: boolean | null;
+  score: number | null;
+  calibration_bucket: string | null;
+  last_close: number | null;
+  last_close_date: string | null;
+}
+
 export interface Decision {
   id: string;
   user_id: string;
@@ -268,6 +323,8 @@ export interface Decision {
   status: DecisionStatus;
   decided_at: string;
   expires_at: string | null;
+  /** Adoption link to an analyst recommendation (nullable). */
+  recommendation_id: string | null;
 }
 
 export interface Trade {
@@ -486,6 +543,9 @@ export type Database = {
       trades: { Row: Trade; Insert: Partial<Trade>; Update: Partial<Trade> };
       positions: { Row: Position; Insert: Partial<Position>; Update: Partial<Position> };
       decision_reviews: { Row: DecisionReview; Insert: Partial<DecisionReview>; Update: Partial<DecisionReview> };
+      analyst_profiles: { Row: AnalystProfile; Insert: Partial<AnalystProfile>; Update: Partial<AnalystProfile> };
+      recommendations: { Row: Recommendation; Insert: Partial<Recommendation>; Update: Partial<Recommendation> };
+      recommendation_scores: { Row: RecommendationScore; Insert: Partial<RecommendationScore>; Update: Partial<RecommendationScore> };
       artifacts: { Row: Artifact; Insert: Partial<Artifact>; Update: Partial<Artifact> };
       usage_events: { Row: UsageEvent; Insert: Partial<UsageEvent>; Update: Partial<UsageEvent> };
       llm_cost_reservations: { Row: LlmCostReservation; Insert: Partial<LlmCostReservation>; Update: Partial<LlmCostReservation> };

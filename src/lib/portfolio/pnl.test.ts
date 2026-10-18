@@ -81,7 +81,7 @@ describe('latestOpenDecision', () => {
     id: 'd1', user_id: 'u', ticker: '300750', market: 'A', action: 'buy', thesis: null,
     confidence: null, entry_low: null, entry_high: null, target_price: 520, stop_loss: 418,
     horizon: null, source_type: 'manual', source_ref: null, status: 'open',
-    decided_at: '2026-06-28T00:00:00Z', expires_at: null, ...o,
+    decided_at: '2026-06-28T00:00:00Z', expires_at: null, recommendation_id: null, ...o,
   });
   it('picks the newest open decision for the ticker', () => {
     const got = latestOpenDecision(

@@ -81,7 +81,9 @@
     "targetPrice": "Target Price",
     "stopLoss": "Stop Loss",
     "submitting": "Recording…",
-    "submit": "Record Decision"
+    "submit": "Record Decision",
+    "adopt": "Adopt Recommendation",
+    "adoptNone": "None"
   },
   "tradeForm": {
     "label": "Trade Entry",
@@ -122,9 +124,13 @@
       "confidence": "Confidence",
       "targetPrice": "Target Price",
       "stopLoss": "Stop Loss",
-      "status": "Status"
+      "status": "Status",
+      "source": "Source"
     },
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "adopted": "Adopted",
+    "adoptedWithdrawn": "Rec. Withdrawn",
+    "sourceSelf": "Own"
   },
   "positions": {
     "overviewTitle": "Positions Overview",

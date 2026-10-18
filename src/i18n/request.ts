@@ -15,6 +15,8 @@ const MESSAGE_DOMAINS = [
   'briefs', 'radar', 'watchlist',
   // Internal operations dashboard:
   'admin',
+  // Analyst scoring layer (spec 2026-10-17):
+  'analyst',
 ] as const;
 
 export default getRequestConfig(async () => {

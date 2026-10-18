@@ -15,6 +15,12 @@ const MAX_TEXT = 4000;
 const MAX_CURRENCY = 8;
 const MAX_SOURCE_REF_BYTES = 16384;
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function isUuid(v: unknown): v is string {
+  return typeof v === 'string' && UUID_RE.test(v);
+}
+
 // Required non-blank string, trimmed and capped. Used for ticker.
 function requiredTicker(v: unknown): Parsed<string> {
   if (typeof v !== 'string' || !v.trim()) return { ok: false, error: 'ticker required' };
@@ -51,6 +57,7 @@ export interface DecisionInput {
   source_type: DecisionSource;
   source_ref?: Record<string, unknown>;
   expires_at?: string;
+  recommendation_id?: string;
 }
 
 export function parseDecisionInput(body: unknown): Parsed<DecisionInput> {
@@ -81,6 +88,11 @@ export function parseDecisionInput(body: unknown): Parsed<DecisionInput> {
   }
   const horizon = HORIZONS.includes(b.horizon as DecisionHorizon) ? (b.horizon as DecisionHorizon) : undefined;
   const source_type = SOURCES.includes(b.source_type as DecisionSource) ? (b.source_type as DecisionSource) : 'manual';
+  let recommendation_id: string | undefined;
+  if (b.recommendation_id !== undefined && b.recommendation_id !== null) {
+    if (!isUuid(b.recommendation_id)) return { ok: false, error: 'recommendation_id must be a uuid' };
+    recommendation_id = b.recommendation_id;
+  }
   return {
     ok: true,
     value: {
@@ -97,6 +109,7 @@ export function parseDecisionInput(body: unknown): Parsed<DecisionInput> {
       source_type,
       source_ref,
       expires_at: expires_at.value,
+      recommendation_id,
     },
   };
 }
