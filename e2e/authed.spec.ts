@@ -22,6 +22,9 @@ test('login flow reaches /today, then key authed pages render', async ({ page })
   await page.goto('/portfolio');
   await expect(page.locator('.grid.grid-cols-1.gap-4.lg\\:grid-cols-\\[280px_1fr_320px\\]')).toBeVisible();
 
+  await page.goto('/analyst');
+  await expect(page.getByText(/不构成投资建议/)).toBeVisible();
+
   await page.goto('/tools');
   await expect(page.locator('.grid.gap-3.sm\\:grid-cols-2')).toBeVisible();
 });
