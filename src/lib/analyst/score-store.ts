@@ -71,7 +71,8 @@ export async function refreshRecommendationScores(): Promise<{ scored: number; s
   if (candidates.length === 0) return { scored: 0, skipped: 0 };
 
   // 120 daily bars ≈ 6 months; a recommendation older than that has no base bar
-  // in range and is skipped (same limitation as decision reviews).
+  // in range and is skipped by buildScoreWrites. (portfolio/review-store.ts has no
+  // such guard yet and would take the window's first bar as base — follow-up.)
   const tickers = [...new Set(candidates.map((r) => r.ticker))];
   const barsByTicker = new Map<string, KlineBar[] | null>();
   let next = 0;
