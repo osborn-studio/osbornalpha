@@ -3,7 +3,8 @@
 // src/lib/portfolio/store.test.ts).
 
 import { describe, expect, it } from 'vitest';
-import { coerceProfileRow, coerceRecommendationRow, coerceScoreRow } from './store';
+import { coerceProfileRow, coerceRecommendationRow, coerceScoreRow, joinViews } from './store';
+import type { Recommendation, RecommendationScore } from '@/lib/supabase/database.types';
 
 describe('coerceRecommendationRow', () => {
   it('turns PostgREST numeric strings into numbers and keeps nulls', () => {
@@ -35,5 +36,22 @@ describe('coerceProfileRow', () => {
   it('passes rows through untouched (no numerics)', () => {
     const row = { id: 'a1', user_id: 'u', display_name: '我', kind: 'human', is_self: true, note: null, created_at: 'x', archived_at: null };
     expect(coerceProfileRow(row)).toEqual(row);
+  });
+});
+
+describe('joinViews', () => {
+  it('attaches scores by recommendation id and collects adopting decisions', () => {
+    const recs = [{ id: 'r1' }, { id: 'r2' }] as unknown as Recommendation[];
+    const scores = [{ recommendation_id: 'r1', score: 3 }] as unknown as RecommendationScore[];
+    const decisions = [
+      { id: 'd1', recommendation_id: 'r2' },
+      { id: 'd2', recommendation_id: 'r2' },
+      { id: 'd3', recommendation_id: null },
+    ];
+    const [first, second] = joinViews(recs, scores, decisions);
+    expect(first.score).toEqual(scores[0]);
+    expect(first.adopted_by).toEqual([]);
+    expect(second.score).toBeNull();
+    expect(second.adopted_by).toEqual(['d1', 'd2']);
   });
 });

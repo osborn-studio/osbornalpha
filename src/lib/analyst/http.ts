@@ -15,5 +15,7 @@ const STATUS: Record<string, number> = {
 
 export function analystError(e: unknown) {
   const msg = e instanceof Error ? e.message : String(e);
-  return NextResponse.json({ error: msg }, { status: STATUS[msg] ?? 500 });
+  const status = STATUS[msg] ?? 500;
+  if (status === 500) console.error('[analyst]', msg);
+  return NextResponse.json({ error: msg }, { status });
 }

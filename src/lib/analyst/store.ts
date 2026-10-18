@@ -45,6 +45,37 @@ export async function requireUser() {
   return { supabase, userId: data.user.id };
 }
 
+// Supabase caps any single read at max_rows (1000 in supabase/config.toml); page with range().
+const PAGE = 1000;
+async function readAll<T>(make: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>): Promise<T[]> {
+  const out: T[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await make(from, from + PAGE - 1);
+    if (error) throw new Error(error.message);
+    const rows = (data ?? []) as T[];
+    out.push(...rows);
+    if (rows.length < PAGE) return out;
+  }
+}
+
+type Supabase = Awaited<ReturnType<typeof getServerSupabase>>;
+
+async function readAllRecommendations(supabase: Supabase, userId: string, analystId?: string): Promise<Recommendation[]> {
+  const rows = await readAll<Record<string, unknown>>((a, b) => {
+    let q = supabase.from('recommendations').select('*').eq('user_id', userId)
+      .order('recommended_at', { ascending: true }).order('created_at', { ascending: true }).order('id', { ascending: true }).range(a, b);
+    if (analystId) q = q.eq('analyst_id', analystId);
+    return q;
+  });
+  return rows.map(coerceRecommendationRow);
+}
+
+async function readAllScores(supabase: Supabase, userId: string): Promise<RecommendationScore[]> {
+  const rows = await readAll<Record<string, unknown>>((a, b) =>
+    supabase.from('recommendation_scores').select('*').eq('user_id', userId).order('recommendation_id', { ascending: true }).range(a, b));
+  return rows.map(coerceScoreRow);
+}
+
 // ─── Profiles ───
 
 // The owner's own "我" profile is created lazily; the partial unique index on
@@ -57,18 +88,20 @@ export async function ensureSelfProfile(): Promise<AnalystProfile> {
   if (existing) return coerceProfileRow(existing as Record<string, unknown>);
 
   const { data: profile } = await supabase.from('profiles').select('display_name').eq('id', userId).maybeSingle();
-  const display_name = (profile as { display_name?: string | null } | null)?.display_name?.trim() || '我';
-  const { data: created, error: insErr } = await (supabase as any)
-    .from('analyst_profiles')
-    .insert({ user_id: userId, display_name, kind: 'human', is_self: true })
-    .select('*')
-    .single();
-  if (insErr) {
-    if (insErr.code !== '23505') throw new Error(insErr.message);
-    const { data: again, error: againErr } = await supabase.from('analyst_profiles').select('*').eq('user_id', userId).eq('is_self', true).single();
+  const raw = (profile as { display_name?: string | null } | null)?.display_name?.trim() || '我';
+  const display_name = Array.from(raw).slice(0, 60).join(''); // column check is 1-60 chars
+  const insertSelf = (name: string) => (supabase as any).from('analyst_profiles')
+    .insert({ user_id: userId, display_name: name, kind: 'human', is_self: true }).select('*').single();
+  let { data: created, error: insErr } = await insertSelf(display_name);
+  if (insErr?.code === '23505') {
+    // Either a concurrent self-create (re-read wins) or the display-name index (fall back to the default name).
+    const { data: again, error: againErr } = await supabase.from('analyst_profiles').select('*').eq('user_id', userId).eq('is_self', true).maybeSingle();
     if (againErr) throw new Error(againErr.message);
-    return coerceProfileRow(again as Record<string, unknown>);
+    if (again) return coerceProfileRow(again as Record<string, unknown>);
+    ({ data: created, error: insErr } = await insertSelf('我'));
+    if (insErr?.code === '23505') throw new Error('analyst name taken');
   }
+  if (insErr) throw new Error(insErr.message);
   return coerceProfileRow(created);
 }
 
@@ -108,7 +141,7 @@ export async function patchProfile(id: string, patch: ProfilePatch): Promise<Ana
   const update: Record<string, unknown> = {};
   if (patch.display_name !== undefined) update.display_name = patch.display_name;
   if (patch.note !== undefined) update.note = patch.note;
-  if (patch.archived !== undefined) update.archived_at = patch.archived ? new Date().toISOString() : null;
+  if (patch.archived !== undefined && patch.archived !== Boolean(current.archived_at)) update.archived_at = patch.archived ? new Date().toISOString() : null;
   const { data, error } = await (supabase as any)
     .from('analyst_profiles').update(update).eq('id', id).eq('user_id', userId).select('*').single();
   if (error) throw new Error(error.code === '23505' ? 'analyst name taken' : error.message);
@@ -123,9 +156,20 @@ export interface RecommendationView extends Recommendation {
   adopted_by: string[];
 }
 
+export function joinViews(recs: Recommendation[], scores: RecommendationScore[], decisions: Array<{ id: string; recommendation_id: string | null }>): RecommendationView[] {
+  const byId = new Map(scores.map((s) => [s.recommendation_id, s]));
+  const adopted = new Map<string, string[]>();
+  for (const d of decisions) {
+    if (!d.recommendation_id) continue;
+    adopted.set(d.recommendation_id, [...(adopted.get(d.recommendation_id) ?? []), d.id]);
+  }
+  return recs.map((r) => ({ ...r, score: byId.get(r.id) ?? null, adopted_by: adopted.get(r.id) ?? [] }));
+}
+
 export async function listRecommendations(opts: { analystId?: string; ticker?: string; openOnly?: boolean } = {}): Promise<RecommendationView[]> {
   const { supabase, userId } = await requireUser();
-  let q = supabase.from('recommendations').select('*').eq('user_id', userId).order('recommended_at', { ascending: false }).limit(500);
+  // Display cap for the timeline; the paper book uses the unlimited loaders below.
+  let q = supabase.from('recommendations').select('*').eq('user_id', userId).order('recommended_at', { ascending: false }).order('created_at', { ascending: false }).limit(500);
   if (opts.analystId) q = q.eq('analyst_id', opts.analystId);
   if (opts.ticker) q = q.eq('ticker', opts.ticker.trim().toUpperCase());
   if (opts.openOnly) q = q.is('withdrawn_at', null);
@@ -133,20 +177,12 @@ export async function listRecommendations(opts: { analystId?: string; ticker?: s
   if (error) throw new Error(error.message);
   const recs = ((data ?? []) as Record<string, unknown>[]).map(coerceRecommendationRow);
   if (recs.length === 0) return [];
-  const ids = recs.map((r) => r.id);
-  const [{ data: scoreRows, error: sErr }, { data: decisionRows, error: dErr }] = await Promise.all([
-    supabase.from('recommendation_scores').select('*').eq('user_id', userId).in('recommendation_id', ids),
-    supabase.from('decisions').select('id, recommendation_id').eq('user_id', userId).in('recommendation_id', ids),
+  const [scores, { data: decisionRows, error: dErr }] = await Promise.all([
+    readAllScores(supabase, userId),
+    supabase.from('decisions').select('id, recommendation_id').eq('user_id', userId).not('recommendation_id', 'is', null),
   ]);
-  if (sErr) throw new Error(sErr.message);
   if (dErr) throw new Error(dErr.message);
-  const scores = new Map(((scoreRows ?? []) as Record<string, unknown>[]).map(coerceScoreRow).map((s) => [s.recommendation_id, s]));
-  const adopted = new Map<string, string[]>();
-  for (const d of (decisionRows ?? []) as Array<{ id: string; recommendation_id: string | null }>) {
-    if (!d.recommendation_id) continue;
-    adopted.set(d.recommendation_id, [...(adopted.get(d.recommendation_id) ?? []), d.id]);
-  }
-  return recs.map((r) => ({ ...r, score: scores.get(r.id) ?? null, adopted_by: adopted.get(r.id) ?? [] }));
+  return joinViews(recs, scores, (decisionRows ?? []) as Array<{ id: string; recommendation_id: string | null }>);
 }
 
 export async function createRecommendation(input: RecommendationInput): Promise<Recommendation> {
@@ -173,33 +209,30 @@ export async function withdrawRecommendation(id: string, reason: string | undefi
   if (error) throw new Error(error.message);
   const rows = (data ?? []) as Record<string, unknown>[];
   if (rows.length === 0) {
-    const { data: existing } = await supabase.from('recommendations').select('id').eq('id', id).eq('user_id', userId).maybeSingle();
+    const { data: existing, error: existErr } = await supabase.from('recommendations').select('id').eq('id', id).eq('user_id', userId).maybeSingle();
+    if (existErr) throw new Error(existErr.message);
     throw new Error(existing ? 'recommendation withdrawn' : 'recommendation not found');
   }
   return coerceRecommendationRow(rows[0]);
 }
 
-// Strip the view-only fields so buildBook() receives a plain Recommendation.
-function toBookInput(view: RecommendationView): BookInput {
-  const { score, ...rest } = view;
-  const recommendation: Recommendation & { adopted_by?: string[] } = { ...rest };
-  delete recommendation.adopted_by;
-  return { recommendation, score };
-}
-
-// Rows for buildBook(): every recommendation of one analyst with its score.
+// Rows for buildBook(): every recommendation of one analyst with its score (unlimited, paged).
 export async function loadBookRows(analystId: string): Promise<BookInput[]> {
-  const views = await listRecommendations({ analystId });
-  return views.map(toBookInput);
+  const { supabase, userId } = await requireUser();
+  const [recs, scores] = await Promise.all([readAllRecommendations(supabase, userId, analystId), readAllScores(supabase, userId)]);
+  const byId = new Map(scores.map((s) => [s.recommendation_id, s]));
+  return recs.map((recommendation) => ({ recommendation, score: byId.get(recommendation.id) ?? null }));
 }
 
 // Rows for every analyst at once (overview summaries), grouped by analyst_id.
 export async function loadBookRowsByAnalyst(): Promise<Map<string, BookInput[]>> {
-  const views = await listRecommendations();
+  const { supabase, userId } = await requireUser();
+  const [recs, scores] = await Promise.all([readAllRecommendations(supabase, userId), readAllScores(supabase, userId)]);
+  const byId = new Map(scores.map((s) => [s.recommendation_id, s]));
   const groups = new Map<string, BookInput[]>();
-  for (const view of views) {
-    const row = toBookInput(view);
-    groups.set(view.analyst_id, [...(groups.get(view.analyst_id) ?? []), row]);
+  for (const recommendation of recs) {
+    const row = { recommendation, score: byId.get(recommendation.id) ?? null };
+    groups.set(recommendation.analyst_id, [...(groups.get(recommendation.analyst_id) ?? []), row]);
   }
   return groups;
 }
