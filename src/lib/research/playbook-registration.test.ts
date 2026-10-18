@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  buildRegistrationCandidates, companyIdsFor, confidenceFromMemo, findDuplicateItem, horizonFromWeeks,
+  buildRegistrationCandidates, clampRationale, companyIdsFor, confidenceFromMemo, findDuplicateItem, horizonFromWeeks,
   isRegistrable, parseRegisterBody, registrationDefaults, splitRegistration,
   type ExistingPlaybookRecommendation, type RegisterItem, type SecurityRow,
 } from './playbook-registration';
@@ -106,6 +106,29 @@ describe('defaults', () => {
     expect(registrationDefaults(run({ review_at: null, thesis_id: null }), null, null)).toEqual({
       action: 'buy', confidence: 50, horizon: null, recommended_at: '2026-06-01T00:00:00Z', rationale: '算力缺口持续', thesis_ref: null,
     });
+  });
+});
+
+describe('defaults — recommended_at clamp', () => {
+  it('clamps a future review_at to now', () => {
+    expect(registrationDefaults(run({ review_at: '2030-01-01T00:00:00Z' }), null, null, '2026-10-18T00:00:00Z').recommended_at).toBe('2026-10-18T00:00:00Z');
+  });
+  it('keeps a past review_at', () => {
+    expect(registrationDefaults(run(), null, null, '2026-10-18T00:00:00Z').recommended_at).toBe('2026-06-03T02:00:00Z');
+  });
+});
+
+describe('clampRationale', () => {
+  it('leaves a 4000-unit string unchanged', () => {
+    const s = 'a'.repeat(4000);
+    expect(clampRationale(s)).toBe(s);
+  });
+  it('clips a 4001-unit string to 4000', () => {
+    expect(clampRationale('a'.repeat(4001))).toHaveLength(4000);
+  });
+  it('does not split a surrogate pair at the boundary', () => {
+    const out = clampRationale('a'.repeat(3999) + '😀');
+    expect(out).toBe('a'.repeat(3999));
   });
 });
 

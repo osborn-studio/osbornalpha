@@ -7,11 +7,18 @@ import type { CoreMarket } from '@/lib/securities/model';
 import { inferCoreMarket, normalizeSecurityTicker } from '@/lib/securities/ticker';
 import type { Confidence, Entity, InvestmentMemo, PlaybookRun, Thesis } from './types';
 
-export const CORE_MARKETS: CoreMarket[] = ['A', 'HK', 'US'];
+const CORE_MARKETS: CoreMarket[] = ['A', 'HK', 'US'];
 const ACTIONS: DecisionAction[] = ['buy', 'sell', 'trim', 'add', 'hold', 'pass'];
 const HORIZONS: DecisionHorizon[] = ['short', 'mid', 'long'];
 const MAX_ITEMS = 20;
-const MAX_TEXT = 4000;
+export const MAX_RATIONALE = 4000;
+
+/** Clip to the analyst validator's limit (UTF-16 units, as String.length counts) without splitting a surrogate pair. */
+export function clampRationale(text: string, max = MAX_RATIONALE): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
+}
 
 /** Subset of research_entity_securities the resolver needs. */
 export interface SecurityRow { entity_id: string; exchange_code: string; market: string; is_primary: boolean; valid_to: string | null }
@@ -126,13 +133,19 @@ export function horizonFromWeeks(weeks: number[] | undefined): DecisionHorizon |
   return max <= 8 ? 'short' : max <= 26 ? 'mid' : 'long';
 }
 
-export function registrationDefaults(run: PlaybookRun, thesis: Thesis | null, memo: InvestmentMemo | null): RegistrationDefaults {
+export function registrationDefaults(
+  run: PlaybookRun, thesis: Thesis | null, memo: InvestmentMemo | null, now: string = new Date().toISOString(),
+): RegistrationDefaults {
+  // review_at is the approval time in the UI flow, but the approve API also accepts a future follow-up date;
+  // a recommendation cannot be dated in the future.
+  const candidate = run.review_at ?? run.created_at;
+  const recommended_at = new Date(candidate).getTime() > new Date(now).getTime() ? now : candidate;
   return {
     action: 'buy',
     confidence: confidenceFromMemo(memo?.confidence),
     horizon: horizonFromWeeks(thesis?.horizon_weeks),
     // The research judgment was made when the run was approved, not when the user clicks register.
-    recommended_at: run.review_at ?? run.created_at,
+    recommended_at,
     rationale: run.rationale,
     thesis_ref: run.thesis_id ?? null,
   };
@@ -163,7 +176,7 @@ export function parseRegisterBody(body: unknown): Parsed<RegisterBody> {
       stop_loss: num(it.stop_loss),
     });
   }
-  if (b.rationale !== undefined && (typeof b.rationale !== 'string' || b.rationale.length > MAX_TEXT)) return { ok: false, error: `rationale must be a string up to ${MAX_TEXT} chars` };
+  if (b.rationale !== undefined && (typeof b.rationale !== 'string' || b.rationale.length > MAX_RATIONALE)) return { ok: false, error: `rationale must be a string up to ${MAX_RATIONALE} chars` };
   if (b.recommended_at !== undefined && typeof b.recommended_at !== 'string') return { ok: false, error: 'recommended_at must be a string' };
   return { ok: true, value: { items, rationale: b.rationale as string | undefined, recommended_at: b.recommended_at as string | undefined } };
 }

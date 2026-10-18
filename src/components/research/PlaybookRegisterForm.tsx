@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import type { RegistrationCandidate, RegistrationDefaults } from '@/lib/research/playbook-registration';
+import { clampRationale, type RegistrationCandidate, RegistrationDefaults } from '@/lib/research/playbook-registration';
 import type { CoreMarket } from '@/lib/securities/model';
 import type { DecisionAction, DecisionHorizon } from '@/lib/supabase/database.types';
 
@@ -72,7 +72,7 @@ export function PlaybookRegisterForm({ runId, onRegistered }: { runId: string; o
       if (!res.ok || !data) { setNotice(`读取失败：${data?.error?.message ?? res.status}`); return; }
       const v = data as RegistrationView;
       setView(v);
-      setRationale(v.defaults.rationale);
+      setRationale(clampRationale(v.defaults.rationale));
       setRecommendedAt(toLocalInput(v.defaults.recommended_at));
       setRows(v.candidates.map((c) => ({
         key: c.entity_id, entity_id: c.entity_id, name: c.name, ticker: c.ticker ?? '', market: c.market ?? '',
@@ -99,7 +99,7 @@ export function PlaybookRegisterForm({ runId, onRegistered }: { runId: string; o
 
   const chosen = rows.filter((r) => r.selected && !r.registered && r.ticker.trim() && r.market);
   const incomplete = rows.filter((r) => r.selected && !r.registered && (!r.ticker.trim() || !r.market)).length;
-  const rationaleChanged = view ? rationale !== view.defaults.rationale : true;
+  const rationaleChanged = view ? rationale !== clampRationale(view.defaults.rationale) : true;
 
   async function submit() {
     if (!view || chosen.length === 0 || chosen.length > MAX_BATCH) return;

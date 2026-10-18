@@ -7,7 +7,7 @@ import { getPlaybookRun, PlaybookError } from '@/lib/research/playbooks';
 import { getThesis } from '@/lib/research/theses';
 import { getMemo } from '@/lib/research/memos';
 import {
-  companyIdsFor, findDuplicateItem, isRegistrable, parseRegisterBody, registrationDefaults, splitRegistration,
+  clampRationale, companyIdsFor, findDuplicateItem, isRegistrable, parseRegisterBody, registrationDefaults, splitRegistration,
 } from '@/lib/research/playbook-registration';
 import { parseRecommendationInput, type RecommendationInput } from '@/lib/analyst/validate';
 import { createRecommendations, ensurePlaybookProfile, findPlaybookProfile, listPlaybookRecommendations, toExistingPlaybookRecommendation } from '@/lib/analyst/store';
@@ -18,7 +18,6 @@ const bad = (message: string, extra: Record<string, unknown> = {}) =>
 // Validator only needs a syntactically valid uuid here; the real analyst id is set after validation,
 // so a 400 never leaves a freshly created (or un-archived) agent profile behind.
 const PLACEHOLDER_ANALYST_ID = '00000000-0000-4000-8000-000000000001';
-const MAX_RATIONALE = 4000;
 
 /**
  * POST { items, rationale?, recommended_at? } → { created, skipped, analyst_id } (spec §6).
@@ -40,7 +39,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     ]);
     const defaults = registrationDefaults(run, thesis, memo);
     const runCompanies = new Set(companyIdsFor(thesis, memo));
-    const rationale = parsed.value.rationale ?? Array.from(defaults.rationale).slice(0, MAX_RATIONALE).join('');
+    const rationale = parsed.value.rationale ?? clampRationale(defaults.rationale);
 
     const inputs: RecommendationInput[] = [];
     for (let i = 0; i < parsed.value.items.length; i++) {
@@ -97,10 +96,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const createSet = new Set(toCreate);
     const toInsert = inputs.filter((_, i) => createSet.has(normalizedItems[i])).map((inp) => ({ ...inp, analyst_id: analyst.id }));
     const created = await createRecommendations(toInsert);
-    await audit(ctx, 'playbook.register', run.id, {
-      created_ids: created.map((r) => r.id), skipped_entity_ids: skipped.map((s) => s.entity_id), analyst_id: analyst.id,
-      ...(profileUnarchived ? { profile_unarchived: true } : {}),
-    });
+    // Rows already exist, so an audit failure must not fail the request; the next GET shows them registered.
+    try {
+      await audit(ctx, 'playbook.register', run.id, {
+        created_ids: created.map((r) => r.id), skipped_entity_ids: skipped.map((s) => s.entity_id), analyst_id: analyst.id,
+        ...(profileUnarchived ? { profile_unarchived: true } : {}),
+      });
+    } catch (e) {
+      console.error('[research] playbook.register audit failed', e instanceof Error ? e.message : e);
+    }
     return { created, skipped, analyst_id: analyst.id };
   });
 }
