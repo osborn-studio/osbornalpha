@@ -193,7 +193,7 @@ export function scoreForward(call: ForwardCall, bars: KlineBar[]): ForwardScore 
 
 - K 线源不可用：评分任务跳过该建议并在返回里计数 `skipped`，页面显示「评分待刷新」，账本把它归入「待定价」。
 - 档案被归档后其建议仍可读、仍计分；归档档案在总览隐藏，详情页可直达。
-- 删除档案不提供 API，只归档；外键用 cascade 以便 auth 用户删除时级联，不靠 restrict 保护。
+- 删除档案不提供 API，只归档；analyst_profiles 与 recommendations 不开 delete 策略，靠 RLS 保护。外键用 cascade 只为 auth 用户删除时级联。
 - 采纳链接指向的建议被撤回：决定上保留链接并标「建议已撤回」。
 
 ## 9. 测试

@@ -24,8 +24,6 @@ create unique index analyst_profiles_user_self on public.analyst_profiles (user_
 create table public.recommendations (
   id              uuid primary key default gen_random_uuid(),
   user_id         uuid not null references auth.users(id) on delete cascade,
-  -- cascade (not restrict) so deleting an auth user can cascade through profiles.
-  -- Profiles are never deleted by the API; they are archived.
   analyst_id      uuid not null,
   ticker          text not null,
   market          text not null check (market in ('A','HK','US')),
@@ -48,6 +46,8 @@ create table public.recommendations (
   check ((fill_price is null) = (fill_date is null)),
   check (withdraw_reason is null or withdrawn_at is not null),
   unique (user_id, id),
+  -- Ownership-checked FK (FK checks bypass RLS). Cascade so deleting an auth user flows through
+  -- profiles; the API never deletes profiles (archive only) and RLS grants no delete policy.
   foreign key (user_id, analyst_id) references public.analyst_profiles(user_id, id) on delete cascade
 );
 create index recommendations_user_analyst on public.recommendations (user_id, analyst_id, recommended_at desc);
