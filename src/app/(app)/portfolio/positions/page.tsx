@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Panel, Metric } from '@/components/ui';
 import { usePortfolio } from '@/lib/hooks/usePortfolio';
-import { cn, formatPrice } from '@/lib/utils';
+import { classifyMarket, cn, formatPrice, formatPriceFor } from '@/lib/utils';
 import type { Trade } from '@/lib/supabase/database.types';
 
 function SubNav({ current }: { current: 'cockpit' | 'decisions' | 'positions' | 'review' }) {
@@ -136,7 +136,7 @@ export default function PositionsPage() {
                   >
                     <td className="py-1"><Link href={`/stock/${encodeURIComponent(p.ticker)}`} className="text-accent hover:underline">{p.ticker}</Link></td>
                     <td className="py-1">{p.shares}</td>
-                    <td className="py-1">{formatPrice(p.avg_cost)}</td>
+                    <td className="py-1">{formatPriceFor(classifyMarket(p.ticker), p.avg_cost)}</td>
                     <td className="py-1">{formatPrice(p.realized_pnl)}</td>
                     <td className="py-1">{p.currency}</td>
                     <td className="py-1">{p.opened_at?.slice(0, 10) ?? '--'}</td>
@@ -178,7 +178,7 @@ export default function PositionsPage() {
                   <td className="py-1">{tr.executed_at.slice(0, 10)}</td>
                   <td className="py-1"><Link href={`/stock/${encodeURIComponent(tr.ticker)}`} className="text-accent hover:underline">{tr.ticker}</Link></td>
                   <td className="py-1">{DIRECTION_LABEL[tr.direction]}</td>
-                  <td className="py-1">{formatPrice(tr.price)}</td>
+                  <td className="py-1">{formatPriceFor(classifyMarket(tr.ticker), tr.price)}</td>
                   <td className="py-1">{tr.quantity}</td>
                   <td className="py-1">{formatPrice(tr.fee)}</td>
                   <td className="py-1" title={tr.decision_id ?? undefined}>{truncateId(tr.decision_id)}</td>
