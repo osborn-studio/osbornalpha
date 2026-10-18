@@ -7,12 +7,14 @@ function keys(value: unknown, prefix = ''): string[] {
   return Object.entries(value).flatMap(([key, child]) => keys(child, prefix ? `${prefix}.${key}` : key));
 }
 
-function messageKeys(locale: 'en' | 'zh', file: 'common' | 'components') {
+type Domain = 'common' | 'components' | 'portfolio' | 'analyst';
+
+function messageKeys(locale: 'en' | 'zh', file: Domain) {
   const path = resolve(process.cwd(), 'messages', locale, `${file}.json`);
   return keys(JSON.parse(readFileSync(path, 'utf8'))).sort();
 }
 
-function section(locale: 'en' | 'zh', file: 'common' | 'components', name: string): Record<string, string> {
+function section(locale: 'en' | 'zh', file: Domain, name: string): Record<string, string> {
   const path = resolve(process.cwd(), 'messages', locale, `${file}.json`);
   return JSON.parse(readFileSync(path, 'utf8'))[name];
 }
@@ -22,8 +24,8 @@ function placeholders(value: string): string[] {
 }
 
 describe('usage notice translations', () => {
-  it('keeps Chinese and English common/component keys in parity', () => {
-    for (const file of ['common', 'components'] as const) {
+  it('keeps Chinese and English keys in parity', () => {
+    for (const file of ['common', 'components', 'portfolio', 'analyst'] as const) {
       expect(messageKeys('zh', file)).toEqual(messageKeys('en', file));
     }
   });
