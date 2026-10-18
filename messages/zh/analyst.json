@@ -82,6 +82,7 @@
   },
   "timeline": {
     "title": "建议时间线 · {count}",
+    "capped": "仅显示最近 {count} 条",
     "empty": "尚无建议",
     "columns": {
       "date": "日期",

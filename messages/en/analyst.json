@@ -82,6 +82,7 @@
   },
   "timeline": {
     "title": "Recommendation Timeline · {count}",
+    "capped": "Showing the latest {count}",
     "empty": "No recommendations yet",
     "columns": {
       "date": "Date",

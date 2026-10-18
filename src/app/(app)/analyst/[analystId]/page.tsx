@@ -11,6 +11,9 @@ import type { AnalystProfile } from '@/lib/supabase/database.types';
 import { AnalystDisclaimer } from '@/components/analyst/AnalystDisclaimer';
 import { BookSummaryPanel, BookTables, formatFill, pctOrDash } from '@/components/analyst/BookTables';
 
+// Mirrors the .limit(500) in listRecommendations (lib/analyst/store.ts).
+const RECS_CAP = 500;
+
 export default function AnalystDetailPage() {
   const t = useTranslations('analyst');
   const { analystId } = useParams<{ analystId: string }>();
@@ -63,6 +66,7 @@ export default function AnalystDetailPage() {
           <BookSummaryPanel book={book} />
           <BookTables book={book} />
           <Panel title={t('timeline.title', { count: recs.length })}>
+            {recs.length === RECS_CAP && <p className="mb-1 text-xs text-[var(--text-dim)]">{t('timeline.capped', { count: RECS_CAP })}</p>}
             {recs.length === 0 ? (
               <p className="text-sm text-[var(--text-dim)]">{t('timeline.empty')}</p>
             ) : (
