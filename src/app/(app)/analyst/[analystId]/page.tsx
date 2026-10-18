@@ -5,12 +5,11 @@ import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button, Panel, Tag } from '@/components/ui';
-import { formatPrice } from '@/lib/utils';
 import { exchangeDate } from '@/lib/scoring/forward';
 import { fetchBook, fetchRecommendations, withdrawRecommendation, type Book, type RecommendationView } from '@/lib/hooks/useAnalyst';
 import type { AnalystProfile } from '@/lib/supabase/database.types';
 import { AnalystDisclaimer } from '@/components/analyst/AnalystDisclaimer';
-import { BookSummaryPanel, BookTables, pctOrDash } from '@/components/analyst/BookTables';
+import { BookSummaryPanel, BookTables, formatFill, pctOrDash } from '@/components/analyst/BookTables';
 
 export default function AnalystDetailPage() {
   const t = useTranslations('analyst');
@@ -92,8 +91,8 @@ export default function AnalystDetailPage() {
                         <td className="py-1">{exchangeDate(r.recommended_at, r.market)}</td>
                         <td className="py-1"><Link href={`/stock/${encodeURIComponent(r.ticker)}`} className="text-accent hover:underline">{r.ticker}</Link></td>
                         <td className="py-1">{t(`action.${r.action}`)}</td>
-                        <td className="py-1">{r.reference_price === null ? '--' : formatPrice(r.reference_price)}</td>
-                        <td className="py-1">{r.fill_price === null ? <span className="text-[var(--text-dim)]">{t('scores.pending')}</span> : formatPrice(r.fill_price)}</td>
+                        <td className="py-1">{r.reference_price === null ? '--' : formatFill(r.reference_price, r.market)}</td>
+                        <td className="py-1">{r.fill_price === null ? <span className="text-[var(--text-dim)]">{t('scores.pending')}</span> : formatFill(r.fill_price, r.market)}</td>
                         <td className="py-1">{r.confidence ?? '--'}</td>
                         <td className="py-1">{pctOrDash(r.score?.forward_5d_pct ?? null)}</td>
                         <td className="py-1">{pctOrDash(r.score?.forward_20d_pct ?? null)}</td>
