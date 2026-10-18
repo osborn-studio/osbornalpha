@@ -45,16 +45,17 @@ export async function requireUser() {
   return { supabase, userId: data.user.id };
 }
 
-// Supabase caps any single read at max_rows (1000 in supabase/config.toml); page with range().
+// PostgREST caps every read at the server's max_rows (1000 locally; hosted may differ), so page by range() and advance by the rows actually returned; stop on an empty page.
 const PAGE = 1000;
 async function readAll<T>(make: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>): Promise<T[]> {
   const out: T[] = [];
-  for (let from = 0; ; from += PAGE) {
+  for (let from = 0; ; ) {
     const { data, error } = await make(from, from + PAGE - 1);
     if (error) throw new Error(error.message);
     const rows = (data ?? []) as T[];
+    if (rows.length === 0) return out;
     out.push(...rows);
-    if (rows.length < PAGE) return out;
+    from += rows.length;
   }
 }
 
@@ -80,7 +81,8 @@ async function readAllScores(supabase: Supabase, userId: string): Promise<Recomm
 
 // The owner's own "我" profile is created lazily; the partial unique index on
 // (user_id) where is_self makes a concurrent double-create fail with 23505, in
-// which case we simply re-read.
+// which case we simply re-read. If 23505 instead comes from a display-name
+// collision, it falls back to the default name '我'.
 export async function ensureSelfProfile(): Promise<AnalystProfile> {
   const { supabase, userId } = await requireUser();
   const { data: existing, error } = await supabase.from('analyst_profiles').select('*').eq('user_id', userId).eq('is_self', true).maybeSingle();
