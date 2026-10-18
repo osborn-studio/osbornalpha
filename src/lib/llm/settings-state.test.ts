@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   initialState,
+  locked,
   reduce,
   canDiscover,
   canProbe,
@@ -25,6 +26,21 @@ const NONE: SavedConfig = { provider: null, legacyId: null, storedProvider: null
 function loaded(saved: SavedConfig = SAVED): SettingsState {
   return reduce(initialState(PROVIDERS), { type: 'loaded', saved });
 }
+
+describe('settings-state: nothing is editable until the saved configuration has loaded', () => {
+  it('ignores edits and refuses actions before loaded, so a slow initial request cannot swallow a pasted key', () => {
+    let s = reduce(initialState(PROVIDERS), { type: 'editKey', key: 'pasted-early' });
+    expect(s.draft.key).toBe('');
+    expect(locked(s)).toBe(true);
+    expect(canSave(s)).toBe(false);
+    expect(canDiscover(s)).toBe(false);
+    s = reduce(s, { type: 'selectProvider', provider: 'minimax_cn' });
+    expect(s.draft.provider).toBe('deepseek');
+    s = reduce(s, { type: 'loaded', saved: NONE });
+    expect(locked(s)).toBe(false);
+    expect(reduce(s, { type: 'editKey', key: 'k' }).draft.key).toBe('k');
+  });
+});
 
 describe('settings-state: loading', () => {
   it('init seeds the provider list and replays an already-loaded saved configuration', () => {

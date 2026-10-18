@@ -84,6 +84,8 @@ export function initialState(providers: Array<{ id: string; suggestedModel: stri
 }
 
 const typedKey = (s: SettingsState) => s.draft.key.trim();
+/** Editing is locked until the saved configuration has been loaded and while a save is in flight. */
+export const locked = (s: SettingsState) => s.saving || s.saved === null;
 const suggested = (s: SettingsState, provider: string) => s.providers.find((p) => p.id === provider)?.suggestedModel ?? null;
 const dropReady = (r: Readiness): Readiness => (r === 'ready' || r === 'stale' ? 'configured_unverified' : r);
 const baseline = (saved: SavedConfig | null): Readiness => (saved?.configured ? 'configured_unverified' : 'unconfigured');
@@ -100,7 +102,7 @@ export function reduce(s: SettingsState, e: Event): SettingsState {
       return { ...s, saved: e.saved, draft: { provider, key: '', keyGeneration: s.draft.keyGeneration + 1, model }, discovery: { status: 'idle' }, probes: {}, readiness: baseline(e.saved) };
     }
     case 'selectProvider': {
-      if (s.saving) return s;
+      if (locked(s)) return s;
       const model = s.saved?.provider === e.provider && s.saved.model ? s.saved.model : suggested(s, e.provider);
       return {
         ...s,
@@ -112,12 +114,12 @@ export function reduce(s: SettingsState, e: Event): SettingsState {
       };
     }
     case 'editKey':
-      if (s.saving) return s;
+      if (locked(s)) return s;
       // Probe and discovery results describe the key they ran with; a different key makes them (and
       // in-flight ones) meaningless.
       return { ...s, draft: { ...s.draft, key: e.key, keyGeneration: s.draft.keyGeneration + 1 }, discovery: { status: 'idle' }, probes: {}, readiness: dropReady(s.readiness), saveError: null };
     case 'selectModel':
-      if (s.saving) return s;
+      if (locked(s)) return s;
       return { ...s, draft: { ...s.draft, model: e.model }, readiness: dropReady(s.readiness), saveError: null };
     case 'discoverStarted':
       return { ...s, discovery: { status: 'running', seq: e.seq } };
@@ -178,9 +180,9 @@ export function reduce(s: SettingsState, e: Event): SettingsState {
 export const savedKeyUsable = (s: SettingsState) => Boolean(s.saved?.configured && s.saved.known && s.saved.provider === s.draft.provider);
 export const hasKey = (s: SettingsState) => typedKey(s).length > 0 || savedKeyUsable(s);
 
-export const canDiscover = (s: SettingsState) => !s.saving && hasKey(s) && s.discovery.status !== 'running';
-export const canProbe = (s: SettingsState, model: string) => !s.saving && hasKey(s) && s.probes[model]?.status !== 'running';
-export const canSave = (s: SettingsState) => !s.saving && hasKey(s) && Boolean(s.draft.model);
+export const canDiscover = (s: SettingsState) => !locked(s) && hasKey(s) && s.discovery.status !== 'running';
+export const canProbe = (s: SettingsState, model: string) => !locked(s) && hasKey(s) && s.probes[model]?.status !== 'running';
+export const canSave = (s: SettingsState) => !locked(s) && hasKey(s) && Boolean(s.draft.model);
 
 function withKey<T extends object>(s: SettingsState, body: T): T & { apiKey?: string } {
   const key = typedKey(s);

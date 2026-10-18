@@ -14,6 +14,7 @@ import {
   canProbe,
   canSave,
   discoverRequest,
+  locked as isLocked,
   initialState,
   modelRows,
   probeRequest,
@@ -65,7 +66,10 @@ export function LlmSettings() {
       const saved = await fetch('/api/llm/settings', { cache: 'no-store' }).then((r) => r.json()).catch(() => null);
       if (cancelled) return;
       dispatch({ type: 'init', providers: cat.providers });
-      if (saved && typeof saved === 'object' && 'configured' in saved) dispatch({ type: 'loaded', saved });
+      // Editing stays locked until this event; a failed read unlocks as "not configured" so the
+      // card is still usable (saving will then tell the user what is wrong).
+      const usable = saved && typeof saved === 'object' && 'configured' in saved;
+      dispatch({ type: 'loaded', saved: usable ? saved : { provider: null, legacyId: null, storedProvider: null, model: null, version: null, legacyPath: false, known: false, configured: false } });
     })();
     return () => { cancelled = true; };
   }, []);
@@ -125,7 +129,7 @@ export function LlmSettings() {
     else show(t('saveFailed', { reason: reason(undefined, response.error) }));
   };
 
-  const locked = state.saving;
+  const locked = isLocked(state);
   const saved = state.saved;
   const savedLabel = saved?.configured ? providers.find((p) => p.id === saved.provider)?.label ?? saved.storedProvider ?? '' : '';
   const statusTone = state.readiness === 'ready' ? 'text-accent' : state.readiness === 'stale' ? 'text-warn' : 'text-text-dim';
