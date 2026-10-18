@@ -310,8 +310,7 @@ function resolveTicker(entity: Entity, securities: SecurityRow[]): Pick<Registra
 }
 
 /**
- * One candidate per known company id. Order: thesis/memo order for the ids
- * that came from the thesis, then the remaining ones by entity name.
+ * One candidate per known company id, in companyIdsFor() order (thesis ids first, then memo ids).
  */
 export function buildRegistrationCandidates(
   entities: Entity[],
@@ -421,7 +420,7 @@ export function splitRegistration(items: RegisterItem[], existing: ExistingPlayb
 - [ ] **Step 4: Run the tests**
 
 Run: `npx vitest run src/lib/research/playbook-registration.test.ts`
-Expected: PASS (17 tests). Then `npm run typecheck` → exit 0 and `npx eslint src/lib/research/playbook-registration.ts src/lib/research/playbook-registration.test.ts` → clean. If `Thesis` in `./types` does not allow `horizon_weeks` in the fixture spread, it is declared optional there already (`horizon_weeks?: number[]`); do not edit types.
+Expected: PASS (19 tests). Then `npm run typecheck` → exit 0 and `npx eslint src/lib/research/playbook-registration.ts src/lib/research/playbook-registration.test.ts` → clean. If `Thesis` in `./types` does not allow `horizon_weeks` in the fixture spread, it is declared optional there already (`horizon_weeks?: number[]`); do not edit types.
 
 - [ ] **Step 5: Commit**
 

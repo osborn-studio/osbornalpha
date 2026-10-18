@@ -82,7 +82,7 @@ interface RegistrationView {
 - 公司集合：thesis 的 `company_ids` 优先；memo 的 `company_ids` 追加去重；都空则候选为空，`registrable` 仍可为 true 但表单只能手填一行。
 - 标的：取该 entity 的 securities 中 `is_primary = true` 且 `valid_to is null` 的首行，`ticker = exchange_code`、`market = market`；没有则取 `entities.ticker` 并用 `inferCoreMarket` 推市场；再没有则 `ticker = null`。随后统一过 `normalizeSecurityTicker(ticker, market)`，结果为 null 视为无标的。`market = other` 或无标的 → `supported = false`。
 - 默认值：`action = 'buy'`；`confidence`：memo.confidence LOW 30 / MEDIUM 60 / HIGH 85，无 memo 50；`horizon`：thesis.horizon_weeks 的最大值 ≤ 8 → short，≤ 26 → mid，> 26 → long，无 thesis → null；`recommended_at = run.review_at`（审批时间），为空则 `run.created_at`；`rationale = run.rationale`；`thesis_ref = run.thesis_id`。
-- 候选顺序：thesis 公司在前，按 entities 名称排序。
+- 候选顺序：按 `companyIdsFor` 的顺序——thesis 的 company_ids 在前（保持 thesis 内顺序），其后是 memo 新增的公司；不按名称重排。
 
 ## 6. 登记请求与写入
 
