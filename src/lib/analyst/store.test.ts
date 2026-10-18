@@ -3,7 +3,7 @@
 // src/lib/portfolio/store.test.ts).
 
 import { describe, expect, it } from 'vitest';
-import { coerceProfileRow, coerceRecommendationRow, coerceScoreRow, joinViews } from './store';
+import { coerceProfileRow, coerceRecommendationRow, coerceScoreRow, joinViews, toExistingPlaybookRecommendation } from './store';
 import type { Recommendation, RecommendationScore } from '@/lib/supabase/database.types';
 
 describe('coerceRecommendationRow', () => {
@@ -55,5 +55,16 @@ describe('joinViews', () => {
     expect(first.adopted_by).toEqual([]); // d5 is cancelled
     expect(second.score).toBeNull();
     expect(second.adopted_by).toEqual(['d1', 'd2']);
+  });
+});
+
+describe('toExistingPlaybookRecommendation', () => {
+  it('reads entity_id from source_ref and keeps ticker/market', () => {
+    const rec = { id: 'r1', ticker: '600519.SH', market: 'A', source_ref: { playbook_run_id: 'run-1', entity_id: 'e-a' } } as unknown as Parameters<typeof toExistingPlaybookRecommendation>[0];
+    expect(toExistingPlaybookRecommendation(rec)).toEqual({ id: 'r1', ticker: '600519.SH', market: 'A', entity_id: 'e-a' });
+  });
+  it('yields entity_id null when source_ref lacks a string entity_id', () => {
+    const rec = { id: 'r2', ticker: 'NVDA', market: 'US', source_ref: { playbook_run_id: 'run-1' } } as unknown as Parameters<typeof toExistingPlaybookRecommendation>[0];
+    expect(toExistingPlaybookRecommendation(rec).entity_id).toBeNull();
   });
 });
