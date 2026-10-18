@@ -35,7 +35,7 @@
 | 撤回 | Withdraw | 建议只能撤回不能修改 |
 | 份 / 份数 | Unit / Units | 等权名义仓单位，不是股数 Shares |
 | 份数权重 | Unit Weight | 份数 / 总份数，不是市值权重 |
-| 命中率 | Hit Rate | 5 日方向命中；全站统一用命中率，portfolio 现存「胜率」文案待统一（跟进项） |
+| 命中率 | Hit Rate | 5 日方向命中；全站统一用命中率 |
 | 评分 | Score | 方向调整后的 20 日收益（缺则 5 日） |
 | 参考价 | Reference Price | 分析师口述价格，不作成交价 |
 | 期限 | Horizon | short / mid / long |
