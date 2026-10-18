@@ -17,7 +17,7 @@ function score(id: string, o: Partial<RecommendationScore> = {}): Recommendation
   return {
     recommendation_id: id, user_id: 'u', scored_at: '2026-07-01T00:00:00Z',
     forward_5d_pct: 1, forward_20d_pct: 2, forward_60d_pct: null, hit: true, score: 2,
-    calibration_bucket: null, last_close: 110, last_close_date: '2026-07-01', ...o,
+    calibration_bucket: null, last_close: 110, last_close_date: '2026-07-01', base_close: null, base_date: null, ...o,
   };
 }
 const row = (r: Recommendation, s: RecommendationScore | null = null): BookInput => ({ recommendation: r, score: s });
@@ -199,5 +199,47 @@ describe('buildBook — review follow-ups', () => {
     expect(book.positions.map((p) => p.market)).toEqual(['A', 'HK']);
     expect(book.positions[0].last_close).toBe(105);
     expect(book.positions[1].last_close).toBeNull(); // price does not leak across markets
+  });
+});
+
+describe('buildBook — price basis', () => {
+  it('prefers the score base_close over the frozen fill_price (A-share qfq re-adjustment)', () => {
+    // 10送10 after the first score: qfq halves history, so fill_price 100 is now 50 on the current basis.
+    const a = rec({ action: 'buy', fill_price: 100 });
+    const book = buildBook([row(a, score(a.id, { base_close: 50, base_date: '2026-06-01', last_close: 55 }))]);
+    expect(book.positions[0].avg_fill).toBe(50);
+    expect(book.positions[0].unrealized_pct).toBe(10); // not -45
+  });
+
+  it('falls back to fill_price when the score has no base_close', () => {
+    const a = rec({ action: 'buy', fill_price: 100 });
+    const book = buildBook([row(a, score(a.id, { base_close: null, base_date: null, last_close: 110 }))]);
+    expect(book.positions[0].avg_fill).toBe(100);
+    expect(book.positions[0].unrealized_pct).toBe(10);
+  });
+
+  it('falls back to fill_price when there is no score at all', () => {
+    const book = buildBook([row(rec({ action: 'buy', fill_price: 100 }))]);
+    expect(book.positions[0].avg_fill).toBe(100);
+  });
+
+  it('uses base_close for the exit price of a sell as well', () => {
+    const a = rec({ action: 'buy', fill_price: 100 });
+    const b = rec({ action: 'sell', fill_price: 120 });
+    const book = buildBook([
+      row(a, score(a.id, { base_close: 50, base_date: '2026-06-01', last_close: 55 })),
+      row(b, score(b.id, { base_close: 60, base_date: '2026-06-02', last_close: 55 })),
+    ]);
+    expect(book.closed[0].avg_fill).toBe(50);
+    expect(book.closed[0].exit_price).toBe(60);
+    expect(book.closed[0].realized_pct).toBe(20);
+  });
+
+  it('still books a row whose fill_price is null when the score carries base_close', () => {
+    // fill write failed/retried but a score exists: base_close is the same bar, so the row is priced.
+    const a = rec({ action: 'buy', fill_price: null, fill_date: null });
+    const book = buildBook([row(a, score(a.id, { base_close: 50, base_date: '2026-06-01', last_close: 55 }))]);
+    expect(book.positions).toHaveLength(1);
+    expect(book.summary.unpriced).toBe(0);
   });
 });

@@ -303,6 +303,9 @@ export interface RecommendationScore {
   calibration_bucket: string | null;
   last_close: number | null;
   last_close_date: string | null;
+  /** Fill on the current price basis (base bar of the latest refresh); null for rows scored before 20261018090000. */
+  base_close: number | null;
+  base_date: string | null;
 }
 
 export interface Decision {

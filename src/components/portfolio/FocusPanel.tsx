@@ -6,7 +6,7 @@ import { KlineChart } from '@/components/KlineChart';
 import { DecisionForm } from './DecisionForm';
 import { TradeForm } from './TradeForm';
 import { latestOpenDecision, unrealizedPnl } from '@/lib/portfolio/pnl';
-import { classifyMarket, currencyCodeOfMarket, currencyOfMarket, formatPct, formatPrice, formatSignedPrice } from '@/lib/utils';
+import { classifyMarket, currencyCodeOfMarket, currencyOfMarket, formatPct, formatPrice, formatPriceFor, formatSignedPrice } from '@/lib/utils';
 import { formatDateLocale, type AppLocale } from '@/lib/i18n/locale';
 import type { Decision, Position } from '@/lib/supabase/database.types';
 import type { LiveQuote } from '@/lib/hooks/useQuote';
@@ -38,7 +38,7 @@ export function FocusPanel({ ticker, quote, position, decisions, onChanged }: {
         {quote && (
           <div className="num text-base">
             <span className={quote.change_pct >= 0 ? 'text-up' : 'text-down'}>
-              {formatPrice(quote.price)} {formatPct(quote.change_pct)}
+              {formatPriceFor(market, quote.price)} {formatPct(quote.change_pct)}
             </span>
           </div>
         )}
@@ -57,9 +57,9 @@ export function FocusPanel({ ticker, quote, position, decisions, onChanged }: {
         <PositionMetricCard
           label={t('focusPanel.price')}
           primaryLabel={t('focusPanel.currentPrice')}
-          primaryValue={quote ? formatPrice(quote.price, currencySymbol) : '--'}
+          primaryValue={quote ? formatPriceFor(market, quote.price, currencySymbol) : '--'}
           secondaryLabel={t('focusPanel.averagePrice')}
-          secondaryValue={position ? formatPrice(position.avg_cost, currencySymbol) : '--'}
+          secondaryValue={position ? formatPriceFor(market, position.avg_cost, currencySymbol) : '--'}
         />
         <PositionMetricCard
           label={t('focusPanel.positionPnl')}
@@ -72,8 +72,8 @@ export function FocusPanel({ ticker, quote, position, decisions, onChanged }: {
       </div>
 
       <div data-density="data" className="grid grid-cols-2 gap-[var(--row-gap)] sm:grid-cols-3">
-        <Metric label={t('focusPanel.targetPrice')} value={open?.target_price ? formatPrice(open.target_price) : '--'} />
-        <Metric label={t('focusPanel.stopLoss')} value={open?.stop_loss ? formatPrice(open.stop_loss) : '--'} />
+        <Metric label={t('focusPanel.targetPrice')} value={open?.target_price ? formatPriceFor(market, open.target_price) : '--'} />
+        <Metric label={t('focusPanel.stopLoss')} value={open?.stop_loss ? formatPriceFor(market, open.stop_loss) : '--'} />
         <Metric label={t('focusPanel.confidence')} value={open?.confidence != null ? `${open.confidence}%` : '--'} />
       </div>
 

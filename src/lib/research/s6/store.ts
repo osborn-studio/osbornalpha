@@ -1,4 +1,5 @@
 import {randomUUID,createHash} from 'node:crypto';
+import {assertCheckpointed} from '../s4/anchor-gate';
 import type {PoolClient} from 'pg';
 import {digest,inputDigest,evaluateObservation,type EvaluationInput,type Observation,type InformationSet} from 'dsh-trade-strategy-evaluator/engine';
 import {validateCommit,type EvaluationStore} from 'dsh-trade-strategy-evaluator/adapters';
@@ -74,6 +75,9 @@ async function inputFor(db:PoolClient,actor:S4Actor,id:string,marketIds:string[]
  if(typeof asOf!=='string'||!Number.isFinite(Date.parse(asOf)))fail('invalid_schema');
  if(Date.parse(asOf)>Date.parse(await serverTime(db)))fail('future_input');
  const row=await observationFor(db,actor,id),markets:EvaluationInput['market_snapshots']=[];
+ // Once a runtime identity is registered, evaluation input requires the observation's outbox
+ // event to be anchored and covered by the last confirmed checkpoint (ADR 2026-10-18 §4).
+ await assertCheckpointed(db,actor,id);
  assertEvaluationPolicy(row.payload);
  for(const mid of marketIds){const m=await marketFor(db,actor,mid,registered?id:undefined);if(m.observation_id!==id)fail('scope_denied');markets.push(m.snapshot);}
  const input:EvaluationInput={schema_version:'evaluator-input-output/1.0',observation:row.payload,observation_sha256:row.payload_hash,

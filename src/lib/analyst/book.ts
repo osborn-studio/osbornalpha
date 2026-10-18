@@ -3,10 +3,21 @@
 // carrying last_close), so no live quotes are needed and the same rows always
 // produce the same book.
 //
-// Rules (spec §6): buy/add opens 1 notional unit at fill_price; trim removes 1
+// Rules (spec §6): buy/add opens 1 notional unit at the fill; trim removes 1
 // unit; sell removes all units; hold/pass leave the book alone. Unpriced rows,
 // sells with no position, and withdrawn rows are counted, never booked. No cash,
-// NAV, fees, FX or corporate-action adjustments.
+// NAV, fees or FX.
+//
+// Price basis: recommendation.fill_price is the base close frozen at the FIRST
+// score, on the price basis the source reported back then. score.base_close is
+// the same exchange-local bar re-read at the LATEST refresh, i.e. on the basis
+// last_close is on now (A-share qfq re-adjusts all history after 送转/dividends;
+// HK/US unadjusted series shift at a split). Fill and exit therefore take
+// score.base_close when present and fall back to fill_price (rows scored before
+// the column existed, or never scored) — no adjustment factor needed, because
+// the kernel re-derives the fill under the current basis on every refresh.
+// Residual drift: between an HK/US split and that ticker's next refresh, and
+// forever for tickers whose calls are no longer re-scored.
 
 import type { Market, Recommendation, RecommendationScore } from '@/lib/supabase/database.types';
 
@@ -76,15 +87,17 @@ export function buildBook(rows: BookInput[]): Book {
   let unpriced = 0;
   let noPositionToSell = 0;
 
-  for (const { recommendation: r } of live) {
+  for (const { recommendation: r, score: s } of live) {
     if (r.action === 'hold' || r.action === 'pass') continue;
-    if (r.fill_price === null) { unpriced += 1; continue; }
+    // Current-basis fill first (see header); the frozen fill only when no refresh has restated it.
+    const fill = s?.base_close ?? r.fill_price;
+    if (fill === null) { unpriced += 1; continue; }
     const key = `${r.market}:${r.ticker}`;
     const pos = open.get(key);
     if (r.action === 'buy' || r.action === 'add') {
-      if (!pos) open.set(key, { ticker: r.ticker, market: r.market, units: 1, avg_fill: r.fill_price, opened_at: r.recommended_at });
+      if (!pos) open.set(key, { ticker: r.ticker, market: r.market, units: 1, avg_fill: fill, opened_at: r.recommended_at });
       else {
-        pos.avg_fill = (pos.avg_fill * pos.units + r.fill_price) / (pos.units + 1);
+        pos.avg_fill = (pos.avg_fill * pos.units + fill) / (pos.units + 1);
         pos.units += 1;
       }
       continue;
@@ -93,8 +106,8 @@ export function buildBook(rows: BookInput[]): Book {
     if (!pos) { noPositionToSell += 1; continue; }
     const units = r.action === 'sell' ? pos.units : 1;
     closed.push({
-      ticker: r.ticker, market: r.market, units, avg_fill: pos.avg_fill, exit_price: r.fill_price,
-      realized_pct: pctChange(pos.avg_fill, r.fill_price), closed_at: r.recommended_at, recommendation_id: r.id,
+      ticker: r.ticker, market: r.market, units, avg_fill: pos.avg_fill, exit_price: fill,
+      realized_pct: pctChange(pos.avg_fill, fill), closed_at: r.recommended_at, recommendation_id: r.id,
     });
     pos.units -= units;
     if (pos.units === 0) open.delete(key);
