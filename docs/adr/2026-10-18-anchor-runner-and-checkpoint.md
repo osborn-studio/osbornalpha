@@ -1,6 +1,6 @@
 # I1.1: anchor runner, AnchorStore and independent checkpoint
 
-Status: **proposed, awaiting owner decision**. No host, database, role, flag or secret was created or changed for this document. It selects among resources that already exist and are already authorized, and names the two points where only the owner can act. Until the decisions in section 8 are taken, I1b stays `blocked_external` exactly as the 2026-10-04 plan (05 §8) requires, and `s4Pool()` keeps rejecting production.
+Status: **accepted for R1 and C1 by the owner on 2026-10-18** ("anchor runner 放在 Lighthouse 主机，独立检查点用上海托管 PostgreSQL 的专用库"). Items 3–5 of section 8 remain open. No host, database, role, flag or secret was created or changed for this document; the approval authorizes the design and the local-only implementation (I1.4a/I1.4b/I1.5 code), not a production release. `s4Pool()` keeps rejecting production until the release gates in 04 are met.
 
 Inputs: 02 §3 (receipt semantics, identity, recovery states), 06 §D (runner privileges, two-phase algorithm, storage fence, recovery identity), 04 §release gates 1–7, verification rows V09–V14, the current implementation in `src/lib/research/s4/anchor.ts` and `scripts/s4/anchor-worker.ts`, Alpha PRs #69/#70/#73, Brain `docs/deployment/{HOST-REBUILD,CLOUD-BACKUP}.md` and `docs/deployment/deletion-ledger/*`.
 
