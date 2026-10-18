@@ -1,6 +1,6 @@
 # 分析师评分层（analyst）首轮设计
 
-日期：2026-10-17。分支 `codex/analyst-scoring-m1`，基于 `main` `afa59b7`。状态：设计待审阅，未实施。
+日期：2026-10-17。分支 `codex/analyst-scoring-m1`，基于 `main` `afa59b7`。状态：已实施（分支 `codex/analyst-scoring-m1`）；边界决定见 `docs/adr/2026-10-17-research-analyst-portfolio-boundary.md`。
 
 ## 1. 边界决定
 

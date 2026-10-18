@@ -35,7 +35,7 @@
 | 撤回 | Withdraw | 建议只能撤回不能修改 |
 | 份 / 份数 | Unit / Units | 等权名义仓单位，不是股数 Shares |
 | 份数权重 | Unit Weight | 份数 / 总份数，不是市值权重 |
-| 命中率 | Hit Rate | 5 日方向命中；analyst 统一用命中率，不用胜率 |
+| 命中率 | Hit Rate | 5 日方向命中；全站统一用命中率，portfolio 现存「胜率」文案待统一（跟进项） |
 | 评分 | Score | 方向调整后的 20 日收益（缺则 5 日） |
 | 参考价 | Reference Price | 分析师口述价格，不作成交价 |
 | 期限 | Horizon | short / mid / long |
@@ -43,10 +43,10 @@
 | 关联研究 | Linked Research | 建议上的可选 thesis 引用（`thesis_ref`） |
 | 平仓价 | Exit Price | 模拟账本平仓用的成交价 |
 | 交易 | Trade | |
-| 持仓 | Holding | 与"仓位/Position"近义，静态展示语境用 Holding |
+| 持仓 | Holding | 与"仓位/Position"近义；英文实际使用 Position（portfolio、analyst 均是），Holding 仅静态展示语境 |
 | 回测 | Backtest | |
 | 信号 | Signal | |
-| 信心 / 置信度 | Confidence | 产品文案统一用「信心」 |
+| 信心 / 置信度 | Confidence | 产品文案统一用「信心」（portfolio focusPanel 原「信心度」已改） |
 | 免责声明 | Disclaimer | |
 | 工作台 | Workbench | 落地页语境亦可用 "Cockpit"，两者互斥，同一页面内保持一致 |
 | 委托 / 委托单 | Order | |

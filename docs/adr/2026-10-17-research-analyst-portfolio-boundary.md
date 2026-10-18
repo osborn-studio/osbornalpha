@@ -1,10 +1,10 @@
 # 研究 / 分析 / 我的投资 三层边界
 
-状态：已采纳（2026-10-17）。首轮实施见 `docs/superpowers/specs/2026-10-17-analyst-scoring-layer-design.md`，分支 `codex/analyst-scoring-m1`。
+状态：已采纳（2026-10-17）。首轮实施见 `docs/superpowers/specs/2026-10-17-analyst-scoring-layer-design.md`；实施分支 `codex/analyst-scoring-m1`，合并后以 PR 为准。
 
 ## 决定
 
-OsbornAlpha 内部按产出物分三层，只以建议 id 单向连接：
+OsbornAlpha 内部按产出物分三层。层间只以建议 id 单向连接（另有 research 侧 `analyst_id` 与 `analyst_profiles.id` 的语义对应，不是数据链接）：
 
 | 层 | 路由 | 产出物 | 真值来源 |
 |---|---|---|---|
@@ -12,7 +12,7 @@ OsbornAlpha 内部按产出物分三层，只以建议 id 单向连接：
 | 分析 Analyst | `/analyst` | 分析师模拟账本 + 前向评分 | 冻结规则，系统自己是权威 |
 | 我的投资 Portfolio | `/portfolio` | 真实交易 + 持仓 | 外部事实（手工记录，将来券商同步） |
 
-- research 产出建议；analyst 登记建议、在首次评分时冻结模拟成交价（建议日交易所本地日的 K 线收盘）、按等权规则模拟、用前向 5/20/60 个交易日打分；portfolio 的决定可通过 `decisions.recommendation_id` 引用一条同标的、未撤回的建议（采纳）。
+- research 产出建议（首轮建议由人手工在 /analyst 登记，research 侧尚无自动产出，`thesis_ref` 只是可选引用；research → analyst 的自动投递是后续工作）；analyst 登记建议、在首次评分时冻结模拟成交价（建议日交易所本地日的 K 线收盘）、按等权规则模拟、用前向 5/20/60 个交易日打分；portfolio 的决定可通过 `decisions.recommendation_id` 引用一条同标的、未撤回的建议（采纳）。
 - 实盘永远不改写建议和评分；analyst 永远不写 `trades`。连接是单向的：portfolio 只读 analyst 表，只写自己的 `recommendation_id`。
 - 建议只追加：API 只开放创建与撤回；`analyst_profiles` 与 `recommendations` 不开 RLS delete 策略，档案只归档。
 - 前向评分内核只有一份：`src/lib/scoring/forward.ts`。portfolio 的决定复盘（`review.ts`）与 analyst 的建议评分（`score-store.ts`）共用，规则冻结：基准 = 建议日交易所本地日起首根 K 线收盘；hit = 5 日方向；score = 方向调整后的 20 日收益（缺则 5 日）；hold 不计 hit / score；pass 按看空方向计分。
@@ -26,14 +26,17 @@ OsbornAlpha 内部按产出物分三层，只以建议 id 单向连接：
 
 ## 与 2026-09-22 v4 方案的关系
 
-v4 主张把 OSanalyst 融进 `/portfolio`。本 ADR 改为分层：v4 反对的是同一账户两份真值，而实盘账本与分析师模拟账本是不同账户，模拟成交不进 `trades`，所以不冲突。v4 的 M2（权重 / NAV / 规则执行）、M3（团队权限）如需实施，落在 analyst 层。
+v4 主张把 OSanalyst 融进 `/portfolio`。本 ADR 改为分层。按 2026-09-22 审计 README 的理解，v4 的核心顾虑是同一账户出现两份真值；实盘账本与分析师模拟账本是不同账户，模拟成交不进 `trades`，所以不冲突。v4 的 M2（权重 / NAV / 规则执行）、M3（团队权限）本轮延后，若实施需另行决定归属，倾向落在 analyst 层。
 
 ## 已知局限（首轮）
 
 - 模拟成交价在首次评分时冻结；之后 A 股前复权重算（送转 / 分红）或港美股不复权的拆股会让成交价与最新收盘的基准漂移，页面如实显示 `last_close_date`，不修正。
 - 某标的上所有建议停止再评分后（60 日已满或建议超过 130 天），其最新收盘冻结在最后一次评分。
 - 建议日早于完整 120 根日线窗口首根 K 线的建议跳过不计分，也不会有模拟成交价。
-- 追加写入只由 API 保证；持有本人 JWT 的客户端仍可直写 Supabase，与现有 `decisions` 表同级的 v4 M1a 债务。
+- 追加写入只由 API 保证：RLS 的 update 策略允许持有本人 JWT 的客户端直写 Supabase 改写建议内容（不只是撤回字段），与现有 `decisions` 表相同，属 v4 M1a 债务。
+- 模拟成交价取建议日交易所本地日的收盘，盘中登记的建议因此带有数小时的前视，属设计上的接受项。
+- 建议超过 130 个自然日后不再重新评分（60 个交易日约 86–91 个自然日，跨长假更久；130 天仍能让基准 K 线留在 120 根抓取窗口内）。
+- 建议时间线最多显示 500 条（`listRecommendations` 的显示上限）；模拟账本不受此上限。
 - `portfolio/review-store.ts` 尚无同样的 K 线窗口保护，待跟进。
 
 ## 术语

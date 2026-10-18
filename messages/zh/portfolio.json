@@ -67,7 +67,7 @@
     "unrealized": "浮盈",
     "targetPrice": "目标价",
     "stopLoss": "止损",
-    "confidence": "信心度",
+    "confidence": "信心",
     "openDecisionPrefix": "📌 未平决策：",
     "confidenceInline": " · 信心 {pct}%",
     "thesisInline": " · 「{thesis}」",
