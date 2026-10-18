@@ -4,7 +4,8 @@
 --   one-shot fill_price/fill_date are ever updated (enforced by the API layer).
 -- recommendation_scores: forward 5/20/60 results, same kernel as decision_reviews.
 -- decisions.recommendation_id: the single research→analyst→portfolio link ("adopted").
--- All tables RLS own-rows-only, same pattern as 20260702090000_decision_layer.sql.
+-- RLS own-rows select/insert/update; no delete policy on analyst_profiles/recommendations (archive/withdraw only).
+-- Same do-block pattern as 20260702090000_decision_layer.sql.
 
 create table public.analyst_profiles (
   id           uuid primary key default gen_random_uuid(),
@@ -14,9 +15,10 @@ create table public.analyst_profiles (
   is_self      boolean not null default false,
   note         text,
   created_at   timestamptz not null default now(),
-  archived_at  timestamptz
+  archived_at  timestamptz,
+  unique (user_id, id)
 );
-create unique index analyst_profiles_user_name on public.analyst_profiles (user_id, lower(display_name)) where archived_at is null;
+create unique index analyst_profiles_user_name on public.analyst_profiles (user_id, lower(btrim(display_name))) where archived_at is null;
 create unique index analyst_profiles_user_self on public.analyst_profiles (user_id) where is_self;
 
 create table public.recommendations (
@@ -24,7 +26,7 @@ create table public.recommendations (
   user_id         uuid not null references auth.users(id) on delete cascade,
   -- cascade (not restrict) so deleting an auth user can cascade through profiles.
   -- Profiles are never deleted by the API; they are archived.
-  analyst_id      uuid not null references public.analyst_profiles(id) on delete cascade,
+  analyst_id      uuid not null,
   ticker          text not null,
   market          text not null check (market in ('A','HK','US')),
   action          text not null check (action in ('buy','sell','trim','add','hold','pass')),
@@ -42,13 +44,17 @@ create table public.recommendations (
   withdrawn_at    timestamptz,
   withdraw_reason text,
   fill_price      numeric check (fill_price > 0),
-  fill_date       date
+  fill_date       date,
+  check ((fill_price is null) = (fill_date is null)),
+  check (withdraw_reason is null or withdrawn_at is not null),
+  unique (user_id, id),
+  foreign key (user_id, analyst_id) references public.analyst_profiles(user_id, id) on delete cascade
 );
 create index recommendations_user_analyst on public.recommendations (user_id, analyst_id, recommended_at desc);
 create index recommendations_user_ticker  on public.recommendations (user_id, ticker, recommended_at desc);
 
 create table public.recommendation_scores (
-  recommendation_id  uuid primary key references public.recommendations(id) on delete cascade,
+  recommendation_id  uuid primary key,
   user_id            uuid not null references auth.users(id) on delete cascade,
   scored_at          timestamptz not null default now(),
   forward_5d_pct     numeric,
@@ -58,9 +64,11 @@ create table public.recommendation_scores (
   score              numeric,
   calibration_bucket text,
   last_close         numeric,
-  last_close_date    date
+  last_close_date    date,
+  foreign key (user_id, recommendation_id) references public.recommendations(user_id, id) on delete cascade
 );
 
+-- Simple FK on purpose: the column-list ON DELETE SET NULL form needs Postgres 15 and the hosted version is unverified; ownership is checked in the API.
 alter table public.decisions add column recommendation_id uuid references public.recommendations(id) on delete set null;
 create index decisions_recommendation on public.decisions (recommendation_id) where recommendation_id is not null;
 
@@ -73,6 +81,8 @@ begin
     execute format('create policy %I on public.%I for select using (auth.uid() = user_id)', t || ' own select', t);
     execute format('create policy %I on public.%I for insert with check (auth.uid() = user_id)', t || ' own insert', t);
     execute format('create policy %I on public.%I for update using (auth.uid() = user_id)', t || ' own update', t);
-    execute format('create policy %I on public.%I for delete using (auth.uid() = user_id)', t || ' own delete', t);
+    if t = 'recommendation_scores' then
+      execute format('create policy %I on public.%I for delete using (auth.uid() = user_id)', t || ' own delete', t);
+    end if;
   end loop;
 end $$;

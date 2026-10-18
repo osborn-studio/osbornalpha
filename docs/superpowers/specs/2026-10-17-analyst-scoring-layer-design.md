@@ -68,7 +68,7 @@ i18n：新增 `messages/zh/analyst.json`、`messages/en/analyst.json`，按 G �
 
 ## 4. 数据模型
 
-迁移 `supabase/migrations/20261017090000_analyst_scoring.sql`。全部表 RLS own-rows-only 四动词，沿用 `20260702090000_decision_layer.sql` 的 `do $$ … $$` 模式。
+迁移 `supabase/migrations/20261017090000_analyst_scoring.sql`。全部表 RLS own-rows，select/insert/update 三动词；analyst_profiles 与 recommendations 不开 delete 策略（只归档 / 撤回），recommendation_scores 保留 delete，沿用 `20260702090000_decision_layer.sql` 的 `do $$ … $$` 模式。
 
 ```sql
 create table public.analyst_profiles (
@@ -79,15 +79,16 @@ create table public.analyst_profiles (
   is_self      boolean not null default false,
   note         text,
   created_at   timestamptz not null default now(),
-  archived_at  timestamptz
+  archived_at  timestamptz,
+  unique (user_id, id)
 );
-create unique index analyst_profiles_user_name on public.analyst_profiles (user_id, lower(display_name)) where archived_at is null;
+create unique index analyst_profiles_user_name on public.analyst_profiles (user_id, lower(btrim(display_name))) where archived_at is null;
 create unique index analyst_profiles_user_self on public.analyst_profiles (user_id) where is_self;
 
 create table public.recommendations (
   id              uuid primary key default gen_random_uuid(),
   user_id         uuid not null references auth.users(id) on delete cascade,
-  analyst_id      uuid not null references public.analyst_profiles(id) on delete cascade,
+  analyst_id      uuid not null,
   ticker          text not null,
   market          text not null check (market in ('A','HK','US')),
   action          text not null check (action in ('buy','sell','trim','add','hold','pass')),
@@ -105,13 +106,17 @@ create table public.recommendations (
   withdrawn_at    timestamptz,
   withdraw_reason text,
   fill_price      numeric check (fill_price > 0),
-  fill_date       date
+  fill_date       date,
+  check ((fill_price is null) = (fill_date is null)),
+  check (withdraw_reason is null or withdrawn_at is not null),
+  unique (user_id, id),
+  foreign key (user_id, analyst_id) references public.analyst_profiles(user_id, id) on delete cascade
 );
 create index recommendations_user_analyst on public.recommendations (user_id, analyst_id, recommended_at desc);
 create index recommendations_user_ticker  on public.recommendations (user_id, ticker, recommended_at desc);
 
 create table public.recommendation_scores (
-  recommendation_id uuid primary key references public.recommendations(id) on delete cascade,
+  recommendation_id uuid primary key,
   user_id           uuid not null references auth.users(id) on delete cascade,
   scored_at         timestamptz not null default now(),
   forward_5d_pct    numeric,
@@ -121,7 +126,8 @@ create table public.recommendation_scores (
   score             numeric,
   calibration_bucket text,
   last_close        numeric,
-  last_close_date   date
+  last_close_date   date,
+  foreign key (user_id, recommendation_id) references public.recommendations(user_id, id) on delete cascade
 );
 
 alter table public.decisions add column recommendation_id uuid references public.recommendations(id) on delete set null;
