@@ -24,6 +24,12 @@ const MAX_FIRST_SCORE_AGE_MS = 170 * 24 * 60 * 60 * 1000;
 
 export const KLINE_BARS = 120;
 
+// Outer guard per ticker (US tickers try up to three Eastmoney prefixes at 5 s each). Passing a
+// signal also makes fetchJsonp use cache: 'no-store' instead of next.revalidate: inside a POST
+// route handler on Vercel the revalidate variant stalled until its timeout and every call was
+// skipped (observed on production 2026-10-18); the GET routes that pass a signal were fine.
+export const KLINE_FETCH_TIMEOUT_MS = 20_000;
+
 export function needsScoring(rec: Recommendation, score: RecommendationScore | undefined): boolean {
   if (rec.withdrawn_at !== null) return false;
   const age = Date.now() - new Date(rec.recommended_at).getTime();
@@ -87,7 +93,9 @@ export async function refreshRecommendationScores(): Promise<{ scored: number; s
   await Promise.all(Array.from({ length: Math.min(4, tickers.length) }, async () => {
     while (next < tickers.length) {
       const ticker = tickers[next++];
-      try { barsByTicker.set(ticker, (await fetchEastmoneyKline(ticker, 'D', KLINE_BARS))?.bars ?? null); }
+      try {
+        barsByTicker.set(ticker, (await fetchEastmoneyKline(ticker, 'D', KLINE_BARS, { signal: AbortSignal.timeout(KLINE_FETCH_TIMEOUT_MS) }))?.bars ?? null);
+      }
       catch { barsByTicker.set(ticker, null); } // skip this ticker, keep going
     }
   }));
