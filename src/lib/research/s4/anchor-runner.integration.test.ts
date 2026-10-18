@@ -1,7 +1,7 @@
 import {beforeAll,afterAll,describe,it,expect} from 'vitest';
-import {readFileSync} from 'node:fs';
 import {randomBytes,randomUUID} from 'node:crypto';
 import {Pool,type PoolClient} from 'pg';
+import {ownedPool,startLocalDatabase,stopLocalDatabase} from '../../../../scripts/s4/local-db';
 import {testPack} from '../../../../scripts/s4/test-pack';
 import {importCandidate} from './import';
 import {transaction,closeS4Pool} from './db';
@@ -15,8 +15,10 @@ import {assertCheckpointed,anchorGateActive} from './anchor-gate';
 // fenced by the registered runtime identity generation (ADR 2026-10-18 §4, 06 §D).
 const enabled=!!process.env.S4_TEST_STATE;
 const ZERO='0'.repeat(64);
+/** Owns a disposable cluster: registering the singleton runtime identity switches the checkpoint
+ * gate on for every suite sharing a database, so this suite must not share one. */
 describe.skipIf(!enabled)('anchor runner functions on real PostgreSQL',()=>{
- let admin:Pool,runner:Pool,candidateId:string;
+ let admin:Pool,runner:Pool,candidateId:string,cluster:Awaited<ReturnType<typeof startLocalDatabase>>|undefined;
  const actor={userId:randomUUID(),kind:'agent' as const},other={userId:randomUUID(),kind:'agent' as const};
  const principal=randomUUID(),databaseIdentity=randomUUID(),storeId=randomUUID();
  const observations:string[]=[];
@@ -27,9 +29,11 @@ describe.skipIf(!enabled)('anchor runner functions on real PostgreSQL',()=>{
   overrides.owner??actor.userId,generation,String(row.sequence),overrides.event_hash??row.event_hash,receipt.receipt_hash,receipt.previous_hash,storeId,
   canonicalize({...receipt,store_id:storeId,execution_principal_id:principal}),digest({...receipt,store_id:storeId,execution_principal_id:principal})]);
  beforeAll(async()=>{
-  const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
+  delete process.env.S4_TEST_STATE;delete process.env.ALPHA_S4_DATABASE_URL;
+  cluster=await startLocalDatabase();
+  const state={adminUrl:cluster.adminUrl,runtimeUrl:cluster.runtimeUrl};
   process.env.ALPHA_S4_ENABLED='1';process.env.ALPHA_S4_DATABASE_URL=state.runtimeUrl;
-  admin=new Pool({connectionString:state.adminUrl});
+  admin=ownedPool({connectionString:state.adminUrl});
   const password=randomBytes(18).toString('hex'),url=new URL(state.adminUrl);url.username='s4_anchor_test';url.password=password;
   await admin.query(`create role s4_anchor_test login password '${password}' nosuperuser nobypassrls inherit; grant alpha_anchor_runner to s4_anchor_test`);
   runner=new Pool({connectionString:url.toString(),max:2});
@@ -42,19 +46,8 @@ describe.skipIf(!enabled)('anchor runner functions on real PostgreSQL',()=>{
    const record=await transaction(actor,db=>addRecord(db,actor,candidateId,'Observation',{synthetic:true,index:i,candidate_ref:candidateId,market_policy_hash:digest({synthetic_policy:i})}));
    await admin.query('insert into research_s4_observation_state(user_id,observation_id) values($1,$2)',[actor.userId,record.id]);observations.push(record.id);
   }
- });
- afterAll(async()=>{
-  await closeS4Pool();await runner?.end();
-  // The suite database is shared with every other S4_TEST_STATE suite: registering the singleton
-  // identity switches the checkpoint gate on for all of them, so remove it and the rows it scoped.
-  if(admin){
-   await admin.query('delete from research_s4_anchor_checkpoints where user_id=$1',[actor.userId]);
-   await admin.query('delete from research_s4_anchor_principals where principal_id=$1',[principal]);
-   await admin.query('delete from research_s4_runtime_identity');
-   await admin.query('drop role if exists s4_anchor_test');
-   await admin.end();
-  }
- });
+ },180000);
+ afterAll(async()=>{await closeS4Pool();await runner?.end();await admin?.end();if(cluster)stopLocalDatabase(cluster);});
 
  it('runner login holds no table privileges and the gate is inactive before identity registration',async()=>{
   await expect(asRunner(db=>db.query('select * from public.research_s4_outbox'))).rejects.toThrow(/permission denied/);
