@@ -3,7 +3,7 @@
 // and withdraw, nothing else mutates a row except the scorer's one-shot fill.
 
 import { getServerSupabase } from '@/lib/supabase/server';
-import type { AnalystProfile, Recommendation, RecommendationScore } from '@/lib/supabase/database.types';
+import type { AnalystProfile, Recommendation, RecommendationScore, RecommendationSource } from '@/lib/supabase/database.types';
 import type { ProfileInput, ProfilePatch, RecommendationInput } from './validate';
 import type { BookInput } from './book';
 
@@ -174,13 +174,14 @@ export function joinViews(recs: Recommendation[], scores: RecommendationScore[],
   return recs.map((r) => ({ ...r, score: byId.get(r.id) ?? null, adopted_by: adopted.get(r.id) ?? [] }));
 }
 
-export async function listRecommendations(opts: { analystId?: string; ticker?: string; openOnly?: boolean } = {}): Promise<RecommendationView[]> {
+export async function listRecommendations(opts: { analystId?: string; ticker?: string; openOnly?: boolean; sourceType?: RecommendationSource } = {}): Promise<RecommendationView[]> {
   const { supabase, userId } = await requireUser();
-  // Display cap for the timeline; the paper book uses the unlimited loaders below.
+  // Display cap for the timeline (so per-run counts built from ?source=playbook undercount past 500 rows); the paper book uses the unlimited loaders below.
   let q = supabase.from('recommendations').select('*').eq('user_id', userId).order('recommended_at', { ascending: false }).order('created_at', { ascending: false }).limit(500);
   if (opts.analystId) q = q.eq('analyst_id', opts.analystId);
   if (opts.ticker) q = q.eq('ticker', opts.ticker.trim().toUpperCase());
   if (opts.openOnly) q = q.is('withdrawn_at', null);
+  if (opts.sourceType) q = q.eq('source_type', opts.sourceType);
   const { data, error } = await q;
   if (error) throw new Error(error.message);
   const recs = ((data ?? []) as Record<string, unknown>[]).map(coerceRecommendationRow);
@@ -205,6 +206,81 @@ export async function createRecommendation(input: RecommendationInput): Promise<
     .single();
   if (error) throw new Error(error.message);
   return coerceRecommendationRow(data);
+}
+
+// ─── Playbook delivery (research → analyst) ───
+
+/** Display name of the agent profile that owns every recommendation registered from a research playbook run. */
+export const PLAYBOOK_ANALYST_NAME = 'Research Playbook';
+
+// Identity is by name: renaming the profile makes the next registration create a fresh one; any agent profile named "Research Playbook" is adopted.
+/** The playbook agent profile, archived or not; null when it was never created. */
+export async function findPlaybookProfile(): Promise<AnalystProfile | null> {
+  const { supabase, userId } = await requireUser();
+  const { data, error } = await supabase.from('analyst_profiles').select('*').eq('user_id', userId).eq('kind', 'agent')
+    .ilike('display_name', PLAYBOOK_ANALYST_NAME)
+    // Active row first: an archived twin may exist beside a newer active one.
+    .order('archived_at', { ascending: false, nullsFirst: true }).order('created_at', { ascending: true }).limit(1).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? coerceProfileRow(data as Record<string, unknown>) : null;
+}
+
+/**
+ * Lazily create the playbook agent profile. An archived one is un-archived
+ * rather than duplicated (the active-name unique index would reject a twin).
+ */
+export async function ensurePlaybookProfile(): Promise<AnalystProfile> {
+  const existing = await findPlaybookProfile();
+  if (existing && existing.archived_at === null) return existing;
+  const { supabase, userId } = await requireUser();
+  if (existing) {
+    const { data, error } = await (supabase as any).from('analyst_profiles').update({ archived_at: null })
+      .eq('id', existing.id).eq('user_id', userId).select('*').single();
+    if (error?.code === '23505') throw new Error('analyst name taken');
+    if (error) throw new Error(error.message);
+    return coerceProfileRow(data);
+  }
+  const { data, error } = await (supabase as any).from('analyst_profiles')
+    .insert({ user_id: userId, display_name: PLAYBOOK_ANALYST_NAME, kind: 'agent', note: 'research playbook PAPER_TRADE 的自动归属' })
+    .select('*').single();
+  if (error?.code === '23505') {
+    const again = await findPlaybookProfile();
+    if (again) return again;
+    throw new Error('analyst name taken');
+  }
+  if (error) throw new Error(error.message);
+  return coerceProfileRow(data);
+}
+
+// Returned rows follow INSERT … RETURNING order; do not match them to inputs by index.
+/** Insert several already-validated recommendations in one request. All must belong to the same, active analyst. */
+export async function createRecommendations(inputs: RecommendationInput[]): Promise<Recommendation[]> {
+  if (inputs.length === 0) return [];
+  const { supabase, userId } = await requireUser();
+  const analystIds = new Set(inputs.map((i) => i.analyst_id));
+  if (analystIds.size !== 1) throw new Error('recommendations must share one analyst');
+  const analyst = await getProfile(inputs[0].analyst_id);
+  if (analyst.archived_at) throw new Error('analyst archived');
+  const now = new Date().toISOString();
+  const rows = inputs.map(({ recommended_at, ...rest }) => ({ ...rest, user_id: userId, recommended_at: recommended_at ?? now }));
+  const { data, error } = await (supabase as any).from('recommendations').insert(rows).select('*');
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as Record<string, unknown>[]).map(coerceRecommendationRow);
+}
+
+/** Shape the research side needs to compute "already registered" (pure; tested). */
+export function toExistingPlaybookRecommendation(r: Recommendation): { id: string; ticker: string; market: string; entity_id: string | null } {
+  const entity = r.source_ref && typeof r.source_ref.entity_id === 'string' ? r.source_ref.entity_id : null;
+  return { id: r.id, ticker: r.ticker, market: r.market, entity_id: entity };
+}
+
+/** Every recommendation the signed-in user registered from one playbook run (withdrawn ones included — they still count as registered). */
+export async function listPlaybookRecommendations(runId: string): Promise<Recommendation[]> {
+  const { supabase, userId } = await requireUser();
+  const { data, error } = await supabase.from('recommendations').select('*').eq('user_id', userId)
+    .eq('source_type', 'playbook').eq('source_ref->>playbook_run_id', runId).order('created_at', { ascending: true });
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as Record<string, unknown>[]).map(coerceRecommendationRow);
 }
 
 export async function withdrawRecommendation(id: string, reason: string | undefined): Promise<Recommendation> {

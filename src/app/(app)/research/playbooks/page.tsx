@@ -15,6 +15,7 @@ import type {
   Thesis,
 } from '@/lib/research/types';
 import { PROPOSED_ACTIONS } from '@/lib/research/types';
+import { PlaybookRegisterForm } from '@/components/research/PlaybookRegisterForm';
 
 const STATUS_BADGES: Record<ApprovalStatus, string> = {
   NOT_REQUIRED: 'bg-gray-100 text-gray-700',
@@ -55,6 +56,9 @@ export default function ResearchPlaybooksPage() {
     risks: '',
   });
   const [decisions, setDecisions] = useState<Record<string, string>>({});
+  const [openRegister, setOpenRegister] = useState<string | null>(null);
+  // playbook_run_id → { count, analyst_id } for "已登记 N 条 · 查看"
+  const [registered, setRegistered] = useState<Record<string, { count: number; analyst_id: string }>>({});
 
   const load = useCallback(async () => {
     const res = await fetch('/api/research/playbooks');
@@ -68,6 +72,15 @@ export default function ResearchPlaybooksPage() {
     const mRes = await fetch('/api/research/memos');
     const mData = await mRes.json().catch(() => ({ memos: [] }));
     setMemos((mData.memos ?? []).filter((m: InvestmentMemo) => m.status === 'REVIEWED'));
+    const rRes = await fetch('/api/analyst/recommendations?source=playbook');
+    const rData = await rRes.json().catch(() => ({ recommendations: [] }));
+    const byRun: Record<string, { count: number; analyst_id: string }> = {};
+    for (const rec of (rData.recommendations ?? []) as Array<{ analyst_id: string; source_ref: Record<string, unknown> | null }>) {
+      const runId = rec.source_ref && typeof rec.source_ref.playbook_run_id === 'string' ? rec.source_ref.playbook_run_id : null;
+      if (!runId) continue;
+      byRun[runId] = { count: (byRun[runId]?.count ?? 0) + 1, analyst_id: rec.analyst_id };
+    }
+    setRegistered(byRun);
   }, []);
 
   useEffect(() => { void load(); }, [load]);
@@ -354,6 +367,23 @@ export default function ResearchPlaybooksPage() {
                 {run.human_decision ? ` · 意见「${run.human_decision}」` : ''}
               </div>
               <p className="mt-0.5 text-xs text-gray-600">{run.rationale}</p>
+              {run.proposed_action === 'PAPER_TRADE' && run.approval_status === 'APPROVED' && (
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setOpenRegister((cur) => (cur === run.id ? null : run.id))}
+                    className="rounded border border-blue-300 px-2 py-0.5 text-blue-800"
+                  >
+                    {openRegister === run.id ? '收起' : registered[run.id] ? '再登记' : '登记为建议'}
+                  </button>
+                  {registered[run.id] && (
+                    <Link href={`/analyst/${registered[run.id].analyst_id}`} className="underline">
+                      已登记 {registered[run.id].count} 条 · 查看
+                    </Link>
+                  )}
+                </div>
+              )}
+              {openRegister === run.id && <PlaybookRegisterForm runId={run.id} onRegistered={() => void load()} />}
             </li>
           ))}
         </ul>
