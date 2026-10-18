@@ -57,6 +57,7 @@ export interface DecisionInput {
   source_type: DecisionSource;
   source_ref?: Record<string, unknown>;
   expires_at?: string;
+  recommendation_id?: string;
 }
 
 export function parseDecisionInput(body: unknown): Parsed<DecisionInput> {
@@ -87,6 +88,11 @@ export function parseDecisionInput(body: unknown): Parsed<DecisionInput> {
   }
   const horizon = HORIZONS.includes(b.horizon as DecisionHorizon) ? (b.horizon as DecisionHorizon) : undefined;
   const source_type = SOURCES.includes(b.source_type as DecisionSource) ? (b.source_type as DecisionSource) : 'manual';
+  let recommendation_id: string | undefined;
+  if (b.recommendation_id !== undefined && b.recommendation_id !== null) {
+    if (!isUuid(b.recommendation_id)) return { ok: false, error: 'recommendation_id must be a uuid' };
+    recommendation_id = b.recommendation_id;
+  }
   return {
     ok: true,
     value: {
@@ -103,6 +109,7 @@ export function parseDecisionInput(body: unknown): Parsed<DecisionInput> {
       source_type,
       source_ref,
       expires_at: expires_at.value,
+      recommendation_id,
     },
   };
 }

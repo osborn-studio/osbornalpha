@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui';
 import { postDecision } from '@/lib/hooks/usePortfolio';
+import { fetchRecommendations, type RecommendationView } from '@/lib/hooks/useAnalyst';
 import { classifyMarket } from '@/lib/utils';
 import type { DecisionAction } from '@/lib/supabase/database.types';
 
@@ -21,6 +22,17 @@ export function DecisionForm({ ticker, onDone }: { ticker: string; onDone: () =>
   const [stop, setStop] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Open, not-yet-adopted analyst recommendations for this ticker (adoption link, spec §3.3).
+  const [recs, setRecs] = useState<RecommendationView[]>([]);
+  const [recommendationId, setRecommendationId] = useState('');
+  useEffect(() => {
+    let alive = true;
+    setRecommendationId('');
+    fetchRecommendations({ ticker, open: true })
+      .then((r) => { if (alive) setRecs(r.recommendations.filter((x) => x.adopted_by.length === 0)); })
+      .catch(() => { if (alive) setRecs([]); });
+    return () => { alive = false; };
+  }, [ticker]);
 
   async function submit() {
     if (!action) return;
@@ -30,8 +42,9 @@ export function DecisionForm({ ticker, onDone }: { ticker: string; onDone: () =>
         ticker, market: classifyMarket(ticker), action, thesis: thesis || undefined,
         confidence, target_price: target ? Number(target) : undefined,
         stop_loss: stop ? Number(stop) : undefined, source_type: 'manual',
+        recommendation_id: recommendationId || undefined,
       });
-      setAction(null); setThesis(''); setTarget(''); setStop('');
+      setAction(null); setThesis(''); setTarget(''); setStop(''); setRecommendationId('');
       onDone();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -50,6 +63,17 @@ export function DecisionForm({ ticker, onDone }: { ticker: string; onDone: () =>
       </div>
       {action && (
         <div className="mt-2 flex flex-wrap items-end gap-2 text-xs">
+          {recs.length > 0 && (
+            <label className="flex flex-col gap-0.5">{t('decisionForm.adopt')}
+              <select value={recommendationId} onChange={(e) => setRecommendationId(e.target.value)}
+                className="w-48 rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1">
+                <option value="">{t('decisionForm.adoptNone')}</option>
+                {recs.map((r) => (
+                  <option key={r.id} value={r.id}>{r.recommended_at.slice(0, 10)} · {t(`action.${r.action}`)}{r.rationale ? ` · ${r.rationale.slice(0, 24)}` : ''}</option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="flex flex-col gap-0.5">{t('decisionForm.thesis')}
             <input value={thesis} onChange={(e) => setThesis(e.target.value)} placeholder={t('decisionForm.thesisPlaceholder')}
               className="w-44 rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1" />

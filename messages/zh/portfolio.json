@@ -81,7 +81,9 @@
     "targetPrice": "目标价",
     "stopLoss": "止损",
     "submitting": "记录中…",
-    "submit": "记录决策"
+    "submit": "记录决策",
+    "adopt": "采纳建议",
+    "adoptNone": "不关联"
   },
   "tradeForm": {
     "label": "成交录入",
@@ -122,9 +124,13 @@
       "confidence": "信心",
       "targetPrice": "目标价",
       "stopLoss": "止损",
-      "status": "状态"
+      "status": "状态",
+      "source": "来源"
     },
-    "cancel": "取消"
+    "cancel": "取消",
+    "adopted": "采纳建议",
+    "adoptedWithdrawn": "建议已撤回",
+    "sourceSelf": "自主"
   },
   "positions": {
     "overviewTitle": "持仓概览",

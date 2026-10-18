@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Panel, Button, Tag } from '@/components/ui';
 import { formatPrice } from '@/lib/utils';
+import { fetchRecommendations } from '@/lib/hooks/useAnalyst';
 import type { Decision, DecisionStatus } from '@/lib/supabase/database.types';
 
 function SubNav({ current }: { current: 'cockpit' | 'decisions' | 'positions' | 'review' }) {
@@ -62,6 +63,13 @@ export default function DecisionsPage() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<DecisionStatus | 'all'>('all');
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  // recommendation id → withdrawn? Loaded once; the analyst layer is read-only from here.
+  const [withdrawn, setWithdrawn] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    fetchRecommendations()
+      .then((r) => setWithdrawn(Object.fromEntries(r.recommendations.map((x) => [x.id, x.withdrawn_at !== null]))))
+      .catch(() => setWithdrawn({}));
+  }, []);
 
   const refetch = useCallback(async () => {
     try {
@@ -140,6 +148,7 @@ export default function DecisionsPage() {
                 <th className="pb-1 font-normal">{t('decisions.columns.targetPrice')}</th>
                 <th className="pb-1 font-normal">{t('decisions.columns.stopLoss')}</th>
                 <th className="pb-1 font-normal">{t('decisions.columns.status')}</th>
+                <th className="pb-1 font-normal">{t('decisions.columns.source')}</th>
                 <th className="pb-1 font-normal"></th>
               </tr>
             </thead>
@@ -154,6 +163,17 @@ export default function DecisionsPage() {
                   <td className="py-1">{d.target_price !== null ? formatPrice(d.target_price) : '--'}</td>
                   <td className="py-1">{d.stop_loss !== null ? formatPrice(d.stop_loss) : '--'}</td>
                   <td className="py-1"><Tag tone={STATUS_TONE[d.status]}>{STATUS_LABEL[d.status]}</Tag></td>
+                  <td className="py-1">
+                    {d.recommendation_id ? (
+                      <Link href="/analyst" className="hover:underline">
+                        <Tag tone={withdrawn[d.recommendation_id] ? 'down' : 'up'}>
+                          {withdrawn[d.recommendation_id] ? t('decisions.adoptedWithdrawn') : t('decisions.adopted')}
+                        </Tag>
+                      </Link>
+                    ) : (
+                      <span className="text-[var(--text-dim)]">{t('decisions.sourceSelf')}</span>
+                    )}
+                  </td>
                   <td className="py-1">
                     {d.status === 'open' && (
                       <Button size="sm" variant="danger" disabled={cancellingId === d.id} onClick={() => cancel(d.id)}>

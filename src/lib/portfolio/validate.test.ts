@@ -81,3 +81,23 @@ describe('parseTradeInput', () => {
     expect(parseTradeInput({ ticker: 'X', direction: 'buy', price: 10, quantity: 1, currency: 'TOOLONGCUR' }).ok).toBe(false);
   });
 });
+
+describe('parseDecisionInput — recommendation_id', () => {
+  const base = { ticker: '600519.SH', market: 'A', action: 'buy', source_type: 'manual' };
+  it('is undefined when omitted', () => {
+    const r = parseDecisionInput(base);
+    expect(r.ok && r.value.recommendation_id).toBeUndefined();
+  });
+  it('accepts a uuid', () => {
+    const r = parseDecisionInput({ ...base, recommendation_id: '11111111-1111-4111-8111-111111111111' });
+    expect(r.ok && r.value.recommendation_id).toBe('11111111-1111-4111-8111-111111111111');
+  });
+  it('rejects a non-uuid and an empty string', () => {
+    expect(parseDecisionInput({ ...base, recommendation_id: 'abc' })).toEqual({ ok: false, error: 'recommendation_id must be a uuid' });
+    expect(parseDecisionInput({ ...base, recommendation_id: '' })).toEqual({ ok: false, error: 'recommendation_id must be a uuid' });
+  });
+  it('treats null as omitted', () => {
+    const r = parseDecisionInput({ ...base, recommendation_id: null });
+    expect(r.ok && r.value.recommendation_id).toBeUndefined();
+  });
+});

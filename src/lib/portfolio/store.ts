@@ -49,6 +49,15 @@ export async function listDecisions(opts: { ticker?: string; status?: DecisionSt
 
 export async function createDecision(input: DecisionInput): Promise<Decision> {
   const { supabase, userId } = await requireUser();
+  // Adoption link: the recommendation must be the caller's and still open.
+  // RLS already hides other users' rows, so "not found" covers both cases.
+  if (input.recommendation_id) {
+    const { data: rec, error: rErr } = await supabase
+      .from('recommendations').select('id, withdrawn_at').eq('id', input.recommendation_id).eq('user_id', userId).maybeSingle();
+    if (rErr) throw new Error(rErr.message);
+    if (!rec) throw new Error('recommendation not found');
+    if ((rec as { withdrawn_at: string | null }).withdrawn_at) throw new Error('recommendation withdrawn');
+  }
   const { data, error } = await (supabase as any)
     .from('decisions')
     .insert({ ...input, user_id: userId })
