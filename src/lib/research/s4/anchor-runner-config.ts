@@ -34,7 +34,9 @@ export function anchorRunnerConfig(env:Env=process.env):AnchorRunnerConfig{
   if(!Number.isInteger(watchdogMs)||watchdogMs<100||watchdogMs>30000)deny();
   const db:PoolConfig={host:host==='localhost'?'127.0.0.1':host,port,database,user,
     ssl:insecure?false:{rejectUnauthorized:true,servername:host},
-    max:2,connectionTimeoutMillis:5000,statement_timeout:15000,idle_in_transaction_session_timeout:30000,application_name:'alpha-anchor-runner',options:'-c search_path=pg_catalog'};
+    max:2,connectionTimeoutMillis:5000,statement_timeout:15000,idle_in_transaction_session_timeout:30000,application_name:'alpha-anchor-runner'};
+  // No startup `options`: the pooler path may reject them, and every runner call is a fully
+  // qualified SECURITY DEFINER function with its own pinned search_path.
   Object.defineProperty(db,'password',{value:password,enumerable:false,writable:false});
   let registry:CheckpointRegistryConfig;
   try{registry=checkpointRegistryConfig(env);}catch{return deny();}
