@@ -10,12 +10,18 @@
  */
 
 import { normalizeUsage, type NormalizedUsage } from '../billing/llm-pricing';
+import { LlmResponseShapeError, isRecord, readErrorText, readJsonBounded } from './http';
 
 export interface LlmConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
   chatPath?: string;
+  /** Auth header for anthropic-protocol providers; the OpenAI adapter always sends Bearer. */
+  authHeader?: string;
+  authPrefix?: string;
+  /** Upper bound on a 2xx body; over it the call fails as invalid_output. */
+  maxResponseBytes?: number;
 }
 
 export interface ToolDef {
@@ -41,7 +47,7 @@ function buildUrl(cfg: LlmConfig): string {
 
 async function postJson(
   url: string,
-  apiKey: string,
+  cfg: LlmConfig,
   body: unknown,
   timeoutMs: number,
 ): Promise<unknown> {
@@ -51,20 +57,54 @@ async function postJson(
     const res = await fetch(url, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${apiKey}`,
+        'Authorization': `Bearer ${cfg.apiKey}`,
         'content-type': 'application/json',
       },
       body: JSON.stringify(body),
+      // A redirect would carry the user's key to another host.
+      redirect: 'error',
       signal: controller.signal,
     });
     if (!res.ok) {
-      const text = await res.text().catch(() => '');
+      const text = await readErrorText(res);
       throw new Error('llm ' + res.status + ': ' + text);
     }
-    return await res.json();
+    return await readJsonBounded(res, cfg.maxResponseBytes);
   } finally {
     clearTimeout(timer);
   }
+}
+
+interface ChatCompletionChoice {
+  message: { content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> };
+  finish_reason?: string;
+}
+
+/** The fields every consumer reads must have the documented types; anything else is invalid_output. */
+function validateChoice(data: unknown): { choice: ChatCompletionChoice; usage: unknown } {
+  if (!isRecord(data)) throw new LlmResponseShapeError('response is not an object');
+  const choices = data.choices;
+  if (!Array.isArray(choices) || choices.length === 0) throw new LlmResponseShapeError('choices missing or empty');
+  const first = choices[0];
+  if (!isRecord(first) || !isRecord(first.message)) throw new LlmResponseShapeError('choices[0].message is not an object');
+  const content = first.message.content;
+  if (content !== undefined && content !== null && typeof content !== 'string') {
+    throw new LlmResponseShapeError('message.content is not a string');
+  }
+  const toolCalls = first.message.tool_calls;
+  if (toolCalls !== undefined) {
+    if (!Array.isArray(toolCalls)) throw new LlmResponseShapeError('message.tool_calls is not an array');
+    for (const tc of toolCalls) {
+      if (!isRecord(tc) || typeof tc.id !== 'string' || !isRecord(tc.function)
+        || typeof tc.function.name !== 'string' || typeof tc.function.arguments !== 'string') {
+        throw new LlmResponseShapeError('malformed tool_call');
+      }
+    }
+  }
+  if (first.finish_reason !== undefined && typeof first.finish_reason !== 'string') {
+    throw new LlmResponseShapeError('finish_reason is not a string');
+  }
+  return { choice: first as unknown as ChatCompletionChoice, usage: data.usage };
 }
 
 export async function chat(
@@ -91,12 +131,9 @@ export async function chat(
   if (typeof opts.temperature === 'number') body.temperature = opts.temperature;
   if (opts.responseJson) body.response_format = { type: 'json_object' };
 
-  const data = (await postJson(buildUrl(cfg), cfg.apiKey, body, timeoutMs)) as {
-    choices?: Array<{ message?: { content?: string } }>;
-    usage?: unknown;
-  };
-  const content = data?.choices?.[0]?.message?.content ?? '';
-  const usage = normalizeUsage(data?.usage);
+  const { choice, usage: rawUsage } = validateChoice(await postJson(buildUrl(cfg), cfg, body, timeoutMs));
+  const content = choice.message.content ?? '';
+  const usage = normalizeUsage(rawUsage);
   return { content, usage };
 }
 
@@ -137,21 +174,10 @@ export async function toolChat(
   if (typeof opts.max_tokens === 'number') body.max_tokens = opts.max_tokens;
   if (opts.thinking) body.thinking = { type: opts.thinking };
 
-  const data = (await postJson(buildUrl(cfg), cfg.apiKey, body, timeoutMs)) as {
-    choices?: Array<{
-      message?: {
-        content?: string | null;
-        tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
-      };
-      finish_reason?: string;
-    }>;
-    usage?: unknown;
-  };
-
-  const choice = data?.choices?.[0];
-  const rawContent = choice?.message?.content;
+  const { choice, usage: rawUsage } = validateChoice(await postJson(buildUrl(cfg), cfg, body, timeoutMs));
+  const rawContent = choice.message.content;
   const content = rawContent == null ? '' : rawContent;
-  const rawCalls = choice?.message?.tool_calls ?? [];
+  const rawCalls = choice.message.tool_calls ?? [];
   const toolCalls: ToolCall[] = rawCalls.map((tc) => {
     let args: any = {};
     try {
@@ -161,7 +187,7 @@ export async function toolChat(
     }
     return { id: tc.id, name: tc.function.name, arguments: args };
   });
-  const finishReason = choice?.finish_reason ?? '';
-  const usage = normalizeUsage(data?.usage);
+  const finishReason = choice.finish_reason ?? '';
+  const usage = normalizeUsage(rawUsage);
   return { content, toolCalls, finishReason, usage };
 }

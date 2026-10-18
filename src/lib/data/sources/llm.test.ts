@@ -120,6 +120,35 @@ describe('chat', () => {
     expect(result.est_cost_usd).toBe(0);
   });
 
+  it('passes the resolved auth header and prefix through to the Anthropic adapter', async () => {
+    vi.mocked(resolveLlm).mockResolvedValue({
+      provider: 'claude',
+      baseUrl: 'https://api.anthropic.com',
+      apiKey: 'sk-ant',
+      model: 'claude-test',
+      chatPath: '/v1/messages',
+      protocol: 'anthropic',
+      authHeader: 'x-api-key',
+      authPrefix: '',
+      source: 'user',
+    });
+    vi.mocked(compatAnthropicChat).mockResolvedValue({
+      content: 'answer',
+      usage: { inputTokens: 1, cacheHitInputTokens: 0, cacheMissInputTokens: 1, outputTokens: 1, estimated: false },
+    });
+
+    await chat({ messages: [{ role: 'user', content: 'hi' }] });
+
+    expect(vi.mocked(compatAnthropicChat).mock.calls[0][0]).toEqual({
+      baseUrl: 'https://api.anthropic.com',
+      apiKey: 'sk-ant',
+      model: 'claude-test',
+      chatPath: '/v1/messages',
+      authHeader: 'x-api-key',
+      authPrefix: '',
+    });
+  });
+
   it('never falls back to a platform provider after a resolved BYO call fails', async () => {
     vi.mocked(resolveLlm).mockResolvedValue({
       provider: 'deepseek',

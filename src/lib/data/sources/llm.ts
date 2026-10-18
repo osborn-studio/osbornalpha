@@ -74,6 +74,8 @@ export async function chatResolved(
     apiKey: resolved.apiKey,
     model: resolved.model,
     chatPath: resolved.chatPath,
+    authHeader: resolved.authHeader,
+    authPrefix: resolved.authPrefix,
   };
   if (resolved.protocol === 'anthropic') {
     const { anthropicChat: compatChat } = await import('@/lib/llm/anthropic-compat');

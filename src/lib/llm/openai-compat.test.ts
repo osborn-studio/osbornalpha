@@ -39,9 +39,18 @@ describe('chat', () => {
     const [url, init] = fn.mock.calls[0] as unknown as [string, any];
     expect(url).toBe('https://api.example.com/v1/chat/completions');
     expect(init.headers.Authorization).toBe('Bearer sk-test-123');
+    expect(init.redirect).toBe('error');
     const body = JSON.parse(init.body);
     expect(body.model).toBe('test-model');
     expect(body.messages[0]).toEqual({ role: 'system', content: 'sys' });
+  });
+
+  it('ignores authHeader/authPrefix overrides: the OpenAI wire format is always Bearer', async () => {
+    const fn = mockFetch({ choices: [{ message: { content: 'x' } }], usage: {} });
+    await chat({ ...CFG, authHeader: 'x-goog-api-key', authPrefix: '' }, { messages: [{ role: 'user', content: 'hi' }] });
+    const init = (fn.mock.calls[0] as any)[1];
+    expect(init.headers.Authorization).toBe('Bearer sk-test-123');
+    expect(init.headers['x-goog-api-key']).toBeUndefined();
   });
 
   it('uses chatPath override (e.g. MiniMax)', async () => {
@@ -141,5 +150,43 @@ describe('error handling', () => {
     // @ts-expect-error test stub
     global.fetch = vi.fn(async () => ({ ok: false, status: 401, json: async () => ({}), text: async () => 'unauthorized' }));
     await expect(chat(CFG, { messages: [{ role: 'user', content: 'hi' }] })).rejects.toThrow('llm 401: unauthorized');
+  });
+
+  it('truncates a non-ok body to 64 KB in the thrown message', async () => {
+    const big = 'x'.repeat(100_000);
+    global.fetch = vi.fn(async () => new Response(big, { status: 500 }));
+    await expect(chat(CFG, { messages: [{ role: 'user', content: 'hi' }] })).rejects.toThrow(/^llm 500: x{65536}$/);
+  });
+});
+
+describe('response shape validation', () => {
+  const MSG = { messages: [{ role: 'user' as const, content: 'hi' }] };
+  it.each([
+    ['no choices', {}],
+    ['empty choices', { choices: [] }],
+    ['message not an object', { choices: [{ message: 'x' }] }],
+    ['content not a string', { choices: [{ message: { content: 123 } }] }],
+    ['tool_calls not an array', { choices: [{ message: { content: null, tool_calls: {} } }] }],
+    ['tool_call without function name', { choices: [{ message: { content: null, tool_calls: [{ id: '1', function: { arguments: '{}' } }] } }] }],
+  ])('rejects %s as LlmResponseShapeError', async (_label, canned) => {
+    mockFetch(canned);
+    await expect(chat(CFG, MSG)).rejects.toMatchObject({ name: 'LlmResponseShapeError' });
+    await expect(toolChat(CFG, { messages: [], tools: [] })).rejects.toMatchObject({ name: 'LlmResponseShapeError' });
+  });
+
+  it('accepts a null content with well-formed tool_calls and an omitted content', async () => {
+    mockFetch({ choices: [{ message: { content: null, tool_calls: [{ id: '1', function: { name: 'f', arguments: '{}' } }] } }] });
+    await expect(toolChat(CFG, { messages: [], tools: [] })).resolves.toMatchObject({ toolCalls: [{ id: '1', name: 'f' }] });
+    mockFetch({ choices: [{ message: {} }] });
+    await expect(chat(CFG, MSG)).resolves.toMatchObject({ content: '' });
+  });
+
+  it('reads a streamed JSON body within maxResponseBytes and rejects one over it', async () => {
+    const ok = JSON.stringify({ choices: [{ message: { content: 'streamed' } }] });
+    global.fetch = vi.fn(async () => new Response(ok, { status: 200, headers: { 'content-type': 'application/json' } }));
+    await expect(chat({ ...CFG, maxResponseBytes: 1024 }, MSG)).resolves.toMatchObject({ content: 'streamed' });
+    const huge = JSON.stringify({ choices: [{ message: { content: 'y'.repeat(5000) } }] });
+    global.fetch = vi.fn(async () => new Response(huge, { status: 200 }));
+    await expect(chat({ ...CFG, maxResponseBytes: 1024 }, MSG)).rejects.toMatchObject({ name: 'LlmResponseShapeError' });
   });
 });

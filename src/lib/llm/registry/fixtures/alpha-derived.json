@@ -1,0 +1,196 @@
+{
+  "providers": {
+    "dashscope_cn": {
+      "protocol": "openai",
+      "endpoint": "openai-chat-completions",
+      "base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "chat_path": "/chat/completions",
+      "keys": [
+        "DASHSCOPE_TEXT_API_KEY",
+        "DASHSCOPE_API_KEY"
+      ],
+      "label": "阿里云百炼 · 国内（Qwen）",
+      "region": "cn",
+      "stream_usage": true,
+      "alias": null
+    },
+    "dashscope_us": {
+      "protocol": "openai",
+      "endpoint": "openai-chat-completions",
+      "base": "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+      "chat_path": "/chat/completions",
+      "keys": [
+        "DASHSCOPE_API_KEY"
+      ],
+      "label": "阿里云百炼 · 美国（Qwen）",
+      "region": "us",
+      "stream_usage": true,
+      "alias": null
+    },
+    "dashscope_intl": {
+      "protocol": "openai",
+      "endpoint": "openai-chat-completions",
+      "base": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "chat_path": "/chat/completions",
+      "keys": [
+        "DASHSCOPE_TEXT_API_KEY",
+        "DASHSCOPE_API_KEY"
+      ],
+      "label": "阿里云百炼 · 新加坡（Qwen）",
+      "region": "intl",
+      "stream_usage": true,
+      "alias": null
+    },
+    "openai": {
+      "protocol": "openai",
+      "endpoint": "openai-chat-completions",
+      "base": "https://api.openai.com/v1",
+      "chat_path": "/chat/completions",
+      "keys": [
+        "OPENAI_API_KEY"
+      ],
+      "label": "OpenAI",
+      "region": "intl",
+      "stream_usage": true,
+      "alias": "openai"
+    },
+    "deepseek": {
+      "protocol": "openai",
+      "endpoint": "openai-chat-completions",
+      "base": "https://api.deepseek.com",
+      "chat_path": "/chat/completions",
+      "keys": [
+        "DEEPSEEK_API_KEY"
+      ],
+      "label": "DeepSeek（深度求索）",
+      "region": "cn",
+      "stream_usage": true,
+      "alias": "deepseek"
+    },
+    "gemini": {
+      "protocol": "openai",
+      "endpoint": "openai-chat-completions",
+      "base": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "chat_path": "/chat/completions",
+      "keys": [
+        "GEMINI_API_KEY"
+      ],
+      "label": "Gemini（Google）",
+      "region": "intl",
+      "stream_usage": true,
+      "alias": null
+    },
+    "kimi_cn": {
+      "protocol": "openai",
+      "endpoint": "openai-chat-completions",
+      "base": "https://api.moonshot.cn/v1",
+      "chat_path": "/chat/completions",
+      "keys": [
+        "MOONSHOT_API_KEY"
+      ],
+      "label": "Kimi（月之暗面 · 国内）",
+      "region": "cn",
+      "stream_usage": true,
+      "alias": "kimi"
+    },
+    "kimi_intl": {
+      "protocol": "openai",
+      "endpoint": "openai-chat-completions",
+      "base": "https://api.moonshot.ai/v1",
+      "chat_path": "/chat/completions",
+      "keys": [
+        "MOONSHOT_INTL_API_KEY",
+        "MOONSHOT_API_KEY"
+      ],
+      "label": "Kimi（Moonshot · 海外）",
+      "region": "intl",
+      "stream_usage": true,
+      "alias": null
+    },
+    "zhipu": {
+      "protocol": "openai",
+      "endpoint": "openai-chat-completions",
+      "base": "https://open.bigmodel.cn/api/paas/v4",
+      "chat_path": "/chat/completions",
+      "keys": [
+        "ZHIPU_API_KEY"
+      ],
+      "label": "智谱 GLM",
+      "region": "cn",
+      "stream_usage": true,
+      "alias": null
+    },
+    "minimax_cn": {
+      "protocol": "openai",
+      "endpoint": "openai-chat-completions",
+      "base": "https://api.minimaxi.com/v1",
+      "chat_path": "/chat/completions",
+      "keys": [
+        "MINIMAX_API_KEY"
+      ],
+      "label": "MiniMax · 国内",
+      "region": "cn",
+      "stream_usage": true,
+      "alias": "minimax"
+    },
+    "minimax_intl": {
+      "protocol": "openai",
+      "endpoint": "openai-chat-completions",
+      "base": "https://api.minimax.io/v1",
+      "chat_path": "/chat/completions",
+      "keys": [
+        "MINIMAX_INTL_API_KEY",
+        "MINIMAX_API_KEY"
+      ],
+      "label": "MiniMax · 海外",
+      "region": "intl",
+      "stream_usage": true,
+      "alias": null
+    },
+    "openrouter": {
+      "protocol": "openai",
+      "endpoint": "openai-chat-completions",
+      "base": "https://openrouter.ai/api/v1",
+      "chat_path": "/chat/completions",
+      "keys": [
+        "OPENROUTER_API_KEY"
+      ],
+      "label": "OpenRouter",
+      "region": "intl",
+      "stream_usage": true,
+      "alias": null
+    },
+    "doubao": {
+      "protocol": "openai",
+      "endpoint": "openai-chat-completions",
+      "base": "https://ark.cn-beijing.volces.com/api/v3",
+      "chat_path": "/chat/completions",
+      "keys": [
+        "ARK_API_KEY"
+      ],
+      "label": "豆包（火山方舟）",
+      "region": "cn",
+      "stream_usage": true,
+      "alias": "ark"
+    },
+    "claude": {
+      "protocol": "anthropic",
+      "endpoint": "anthropic-messages",
+      "base": "https://api.anthropic.com",
+      "chat_path": "/v1/messages",
+      "keys": [
+        "ANTHROPIC_API_KEY"
+      ],
+      "label": "Claude（Anthropic）",
+      "region": "intl",
+      "stream_usage": true,
+      "alias": null
+    }
+  },
+  "unsupported": [
+    {
+      "id": "ollama",
+      "reason": "local_only"
+    }
+  ]
+}
