@@ -22,8 +22,8 @@ export function anchorRunnerConfig(env:Env=process.env):AnchorRunnerConfig{
   const owners=(env.ALPHA_ANCHOR_OWNERS??'').split(',').map(s=>s.trim()).filter(Boolean);
   if(!owners.length||owners.length>10||owners.some(o=>!UUID.test(o))||new Set(owners).size!==owners.length)deny();
   const host=env.ALPHA_ANCHOR_DB_HOST,database=env.ALPHA_ANCHOR_DB_DATABASE,user=env.ALPHA_ANCHOR_DB_USER,password=env.ALPHA_ANCHOR_DB_PASSWORD;
-  if(!host||!/^[A-Za-z0-9.:\-]+$/.test(host)||!database||!/^[A-Za-z0-9_]+$/.test(database)||!user||!/^[A-Za-z0-9_]+$/.test(user)||!password)deny();
-  if(ADMIN_NAMES.includes(user!.toLowerCase()))deny();
+  if(!host||!/^[A-Za-z0-9.:\-]+$/.test(host)||!database||!/^[A-Za-z0-9_]+$/.test(database)||!user||!/^[A-Za-z0-9_.]+$/.test(user)||!password)deny(); // pooler logins are role.projectref
+  if(ADMIN_NAMES.includes(user!.toLowerCase().split('.')[0]))deny();
   const port=Number(env.ALPHA_ANCHOR_DB_PORT);
   if(!Number.isInteger(port)||port<1||port>65535)deny();
   const loopback=LOOPBACK.includes(host!),insecure=env.ALPHA_ANCHOR_DB_INSECURE_LOOPBACK==='1';

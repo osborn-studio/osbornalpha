@@ -27,6 +27,10 @@ describe('anchor runner configuration',()=>{
    {ALPHA_ANCHOR_REGISTRY_URL:'postgres://x:y@z/db'},
   ])expect(()=>anchorRunnerConfig({...env,...bad})).toThrow('runner_configuration_invalid');
  });
+ it('accepts a pooler-style login name but still refuses administrative base names',()=>{
+  expect(anchorRunnerConfig({...env,ALPHA_ANCHOR_DB_USER:'alpha_anchor_app.mzfcaabhuwtfvsvadvsv'}).db.user).toBe('alpha_anchor_app.mzfcaabhuwtfvsvadvsv');
+  expect(()=>anchorRunnerConfig({...env,ALPHA_ANCHOR_DB_USER:'postgres.mzfcaabhuwtfvsvadvsv'})).toThrow('runner_configuration_invalid');
+ });
  it('allows plaintext only for an explicit loopback test target',()=>{
   const c=anchorRunnerConfig({...env,ALPHA_ANCHOR_DB_HOST:'localhost',ALPHA_ANCHOR_DB_INSECURE_LOOPBACK:'1'});
   expect(c.db.ssl).toBe(false);expect(c.db.host).toBe('127.0.0.1');
