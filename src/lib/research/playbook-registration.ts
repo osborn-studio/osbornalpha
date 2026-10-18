@@ -26,6 +26,7 @@ export interface RegistrationCandidate {
   market: CoreMarket | null;
   ticker_source: 'security' | 'entity' | 'none';
   supported: boolean;
+  /** Pre-checked in the form: only curated security rows that are not yet registered. */
   selected: boolean;
   registered_recommendation_id: string | null;
 }
@@ -52,6 +53,7 @@ export interface RegisterItem {
 
 export interface RegisterBody { items: RegisterItem[]; rationale?: string; recommended_at?: string }
 
+// Mirrors Parsed<T> in src/lib/portfolio/validate.ts; kept local so research does not import portfolio internals.
 export type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
 
 export function isRegistrable(run: PlaybookRun): boolean {
@@ -65,8 +67,12 @@ export function companyIdsFor(thesis: Thesis | null, memo: InvestmentMemo | null
   return out;
 }
 
+// The curated security row is authoritative, so an unsupported market does not fall back to the free-text entity ticker.
 function resolveTicker(entity: Entity, securities: SecurityRow[]): Pick<RegistrationCandidate, 'ticker' | 'market' | 'ticker_source'> {
-  const primary = securities.find((s) => s.entity_id === entity.id && s.is_primary && s.valid_to === null);
+  const primaries = securities
+    .filter((s) => s.entity_id === entity.id && s.is_primary && s.valid_to === null)
+    .sort((a, b) => a.exchange_code.localeCompare(b.exchange_code));
+  const primary = primaries[0];
   if (primary) {
     const market = CORE_MARKETS.includes(primary.market as CoreMarket) ? (primary.market as CoreMarket) : null;
     const ticker = market ? normalizeSecurityTicker(primary.exchange_code, market) : null;
@@ -81,8 +87,7 @@ function resolveTicker(entity: Entity, securities: SecurityRow[]): Pick<Registra
 }
 
 /**
- * One candidate per known company id. Order: thesis/memo order for the ids
- * that came from the thesis, then the remaining ones by entity name.
+ * One candidate per known company id, in companyIdsFor() order (thesis ids first, then memo ids).
  */
 export function buildRegistrationCandidates(
   entities: Entity[],
@@ -102,7 +107,7 @@ export function buildRegistrationCandidates(
       name: entity.name,
       ...resolved,
       supported,
-      selected: supported && registered === null,
+      selected: supported && registered === null && resolved.ticker_source === 'security',
       registered_recommendation_id: registered?.id ?? null,
     };
   });
@@ -174,6 +179,7 @@ export function findDuplicateItem(items: RegisterItem[]): number | null {
   return null;
 }
 
+// Duplicate tickers across recommendations are legal; findDuplicateItem only guards within one request.
 /** Idempotency: an item is skipped when its entity was already registered from this run, or — for manual rows — the same ticker+market was. */
 export function splitRegistration(items: RegisterItem[], existing: ExistingPlaybookRecommendation[]) {
   const toCreate: RegisterItem[] = [];

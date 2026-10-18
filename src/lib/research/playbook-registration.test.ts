@@ -48,14 +48,30 @@ describe('buildRegistrationCandidates — ticker resolution', () => {
   });
   it('falls back to entities.ticker and infers the market', () => {
     const c = buildRegistrationCandidates([entity('e-a', { ticker: '0700.hk' })], ['e-a'], [], []);
-    expect(c[0]).toMatchObject({ ticker: '00700.HK', market: 'HK', ticker_source: 'entity', supported: true });
+    expect(c[0]).toMatchObject({ ticker: '00700.HK', market: 'HK', ticker_source: 'entity', supported: true, selected: false });
+  });
+  it('normalizes a short HK entity ticker and a short HK security code', () => {
+    const fromEntity = buildRegistrationCandidates([entity('e-a', { ticker: '0268.hk' })], ['e-a'], [], []);
+    expect(fromEntity[0]).toMatchObject({ ticker: '00268.HK', market: 'HK', selected: false });
+    const fromSecurity = buildRegistrationCandidates([entity('e-a')], ['e-a'], [sec('e-a', '268', 'HK')], []);
+    expect(fromSecurity[0]).toMatchObject({ ticker: '00268.HK', market: 'HK', ticker_source: 'security', selected: true });
+  });
+  it('picks the primary security deterministically (lowest exchange_code) regardless of input order', () => {
+    const a = sec('e-a', '600519.SH', 'A');
+    const b = sec('e-a', '000001.SZ', 'A');
+    expect(buildRegistrationCandidates([entity('e-a')], ['e-a'], [a, b], [])[0].ticker).toBe('000001.SZ');
+    expect(buildRegistrationCandidates([entity('e-a')], ['e-a'], [b, a], [])[0].ticker).toBe('000001.SZ');
+  });
+  it('does not fall back to the entity ticker after an unsupported primary security', () => {
+    const c = buildRegistrationCandidates([entity('e-a', { ticker: 'AAPL' })], ['e-a'], [sec('e-a', 'XYZ', 'other')], []);
+    expect(c[0]).toMatchObject({ ticker: null, ticker_source: 'none', supported: false });
   });
   it('marks market=other and unparseable tickers as unsupported', () => {
     const c = buildRegistrationCandidates([entity('e-a', { ticker: '7203.T' }), entity('e-b')], ['e-a', 'e-b'], [sec('e-b', 'XYZ', 'other')], []);
     expect(c.map((x) => x.supported)).toEqual([false, false]);
     expect(c.map((x) => x.ticker)).toEqual([null, null]);
   });
-  it('keeps thesis order, then sorts the rest by name, and drops unknown ids', () => {
+  it('keeps companyIds order (thesis then memo) and drops unknown ids', () => {
     const c = buildRegistrationCandidates([entity('e-c', { name: 'Zeta' }), entity('e-b', { name: 'Alpha' }), entity('e-a', { name: 'Mid' })], ['e-a', 'e-c', 'e-b', 'ghost'], [], []);
     expect(c.map((x) => x.entity_id)).toEqual(['e-a', 'e-c', 'e-b']);
   });
