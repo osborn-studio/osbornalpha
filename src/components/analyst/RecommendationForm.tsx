@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button, Panel } from '@/components/ui';
 import { createRecommendation } from '@/lib/hooks/useAnalyst';
-import { classifyMarket } from '@/lib/utils';
+import { inferCoreMarket } from '@/lib/securities/normalize';
 import type { AnalystProfile, DecisionAction, DecisionHorizon, Market } from '@/lib/supabase/database.types';
 
 const ACTIONS: DecisionAction[] = ['buy', 'add', 'trim', 'sell', 'hold', 'pass'];
@@ -38,8 +38,8 @@ export function RecommendationForm({ profiles, defaultAnalystId, onCreated }: {
   function onTicker(v: string) {
     setTicker(v);
     if (!marketTouched) {
-      const m = classifyMarket(v);
-      if (MARKETS.includes(m)) setMarket(m);
+      const m = inferCoreMarket(v);
+      if (m) setMarket(m);
     }
   }
 

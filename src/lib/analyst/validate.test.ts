@@ -53,6 +53,16 @@ describe('parseRecommendationInput', () => {
     expect(parseRecommendationInput({ analyst_id: UUID, market: 'A', action: 'buy' })).toEqual({ ok: false, error: 'ticker required' });
     expect(parseRecommendationInput({ ...base, ticker: 'x'.repeat(21) })).toEqual({ ok: false, error: 'ticker too long (max 20)' });
   });
+  it('stores the canonical ticker for the market', () => {
+    const val = (ticker: string, market: string) => {
+      const r = parseRecommendationInput({ ...base, ticker, market });
+      return r.ok ? r.value.ticker : r;
+    };
+    expect(val('0700.HK', 'HK')).toBe('00700.HK');
+    expect(val('600519', 'A')).toBe('600519.SH');
+    expect(val('nvda', 'US')).toBe('NVDA');
+    expect(parseRecommendationInput({ ...base, ticker: 'NVDA', market: 'A' })).toEqual({ ok: false, error: 'ticker not valid for market' });
+  });
   it('rejects a non-uuid analyst_id', () => {
     expect(parseRecommendationInput({ ...base, analyst_id: 'abc' })).toEqual({ ok: false, error: 'analyst_id must be a uuid' });
   });

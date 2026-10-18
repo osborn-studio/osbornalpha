@@ -16,14 +16,18 @@ import { readAllRecommendations, readAllScores, requireUser } from './store';
 // resolve the 60d window on a manual refresh while the base bar stays inside the 120-bar fetch.
 const MAX_SCORING_AGE_MS = 130 * 24 * 60 * 60 * 1000;
 
+// ≈ 120 trading days: older calls have no base bar in the fetch window
+const MAX_FIRST_SCORE_AGE_MS = 170 * 24 * 60 * 60 * 1000;
+
 export const KLINE_BARS = 120;
 
 export function needsScoring(rec: Recommendation, score: RecommendationScore | undefined): boolean {
   if (rec.withdrawn_at !== null) return false;
-  // Never scored, or the one-shot fill write failed/was skipped: retry (cheap — skipped again if bars don't reach).
-  if (!score || rec.fill_price === null) return true;
+  const age = Date.now() - new Date(rec.recommended_at).getTime();
+  // Never scored, or the one-shot fill is missing: retry while a base bar can still be fetched.
+  if (!score || rec.fill_price === null) return age < MAX_FIRST_SCORE_AGE_MS;
   if (score.forward_60d_pct !== null) return false;
-  return Date.now() - new Date(rec.recommended_at).getTime() < MAX_SCORING_AGE_MS;
+  return age < MAX_SCORING_AGE_MS;
 }
 
 export interface ScoreWrites {

@@ -129,6 +129,7 @@ create table public.recommendation_scores (
   last_close_date   date,
   foreign key (user_id, recommendation_id) references public.recommendations(user_id, id) on delete cascade
 );
+create index recommendation_scores_user on public.recommendation_scores (user_id, recommendation_id);
 
 alter table public.decisions add column recommendation_id uuid references public.recommendations(id) on delete set null;
 create index decisions_recommendation on public.decisions (recommendation_id) where recommendation_id is not null;

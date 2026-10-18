@@ -53,11 +53,12 @@ export async function createDecision(input: DecisionInput): Promise<Decision> {
   // RLS already hides other users' rows, so "not found" covers both cases.
   if (input.recommendation_id) {
     const { data: rec, error: rErr } = await supabase
-      .from('recommendations').select('id, withdrawn_at, ticker').eq('id', input.recommendation_id).eq('user_id', userId).maybeSingle();
+      .from('recommendations').select('id, withdrawn_at, ticker, market').eq('id', input.recommendation_id).eq('user_id', userId).maybeSingle();
     if (rErr) throw new Error(rErr.message);
     if (!rec) throw new Error('recommendation not found');
     if ((rec as { withdrawn_at: string | null }).withdrawn_at) throw new Error('recommendation withdrawn');
     if ((rec as { ticker: string }).ticker !== input.ticker) throw new Error('recommendation ticker mismatch');
+    if ((rec as { market: string }).market !== input.market) throw new Error('recommendation market mismatch');
   }
   const { data, error } = await (supabase as any)
     .from('decisions')

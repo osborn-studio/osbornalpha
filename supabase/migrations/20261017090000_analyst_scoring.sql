@@ -67,6 +67,7 @@ create table public.recommendation_scores (
   last_close_date    date,
   foreign key (user_id, recommendation_id) references public.recommendations(user_id, id) on delete cascade
 );
+create index recommendation_scores_user on public.recommendation_scores (user_id, recommendation_id);
 
 -- Simple FK on purpose: the column-list ON DELETE SET NULL form needs Postgres 15 and the hosted version is unverified; ownership is checked in the API.
 alter table public.decisions add column recommendation_id uuid references public.recommendations(id) on delete set null;

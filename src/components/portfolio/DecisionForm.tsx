@@ -6,6 +6,7 @@ import { Button } from '@/components/ui';
 import { postDecision } from '@/lib/hooks/usePortfolio';
 import { fetchRecommendations, type RecommendationView } from '@/lib/hooks/useAnalyst';
 import { classifyMarket } from '@/lib/utils';
+import { exchangeDate } from '@/lib/scoring/forward';
 import type { DecisionAction } from '@/lib/supabase/database.types';
 
 export function DecisionForm({ ticker, onDone }: { ticker: string; onDone: () => void }) {
@@ -32,7 +33,7 @@ export function DecisionForm({ ticker, onDone }: { ticker: string; onDone: () =>
     setRecommendationId('');
     if (!action) return; // only load once the decision bar is open
     fetchRecommendations({ ticker, open: true })
-      .then((r) => { if (alive) setRecs(r.recommendations.filter((x) => x.adopted_by.length === 0)); })
+      .then((r) => { if (alive) setRecs(r.recommendations.filter((x) => x.adopted_by.length === 0 && Date.now() - new Date(x.recommended_at).getTime() < 90 * 86400000)); })
       .catch(() => { if (alive) setRecs([]); });
     return () => { alive = false; };
   }, [ticker, action, refreshKey]);
@@ -73,7 +74,7 @@ export function DecisionForm({ ticker, onDone }: { ticker: string; onDone: () =>
                 className="w-48 rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1">
                 <option value="">{t('decisionForm.adoptNone')}</option>
                 {recs.map((r) => (
-                  <option key={r.id} value={r.id}>{r.recommended_at.slice(0, 10)} · {t(`action.${r.action}`)}{r.rationale ? ` · ${r.rationale.slice(0, 24)}` : ''}</option>
+                  <option key={r.id} value={r.id}>{exchangeDate(r.recommended_at, r.market)} · {t(`action.${r.action}`)}{r.rationale ? ` · ${r.rationale.slice(0, 24)}` : ''}</option>
                 ))}
               </select>
             </label>

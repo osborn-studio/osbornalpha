@@ -30,7 +30,7 @@
     "title": "Record Recommendation",
     "analyst": "Analyst",
     "ticker": "Ticker",
-    "tickerPlaceholder": "600519.SH / 0700.HK / NVDA",
+    "tickerPlaceholder": "600519.SH / 00700.HK / NVDA",
     "market": "Market",
     "action": "Action",
     "referencePrice": "Reference Price (as stated; not the fill price)",

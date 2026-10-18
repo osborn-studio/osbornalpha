@@ -36,7 +36,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ decision }, { status: 201 });
   } catch (e) {
     const msg = (e as Error).message;
-    const status = msg === 'not authenticated' ? 401 : msg === 'recommendation not found' ? 404 : msg === 'recommendation withdrawn' || msg === 'recommendation ticker mismatch' ? 409 : 500;
+    const status = msg === 'not authenticated' ? 401 : msg === 'recommendation not found' ? 404 : msg === 'recommendation withdrawn' || msg === 'recommendation ticker mismatch' || msg === 'recommendation market mismatch' ? 409 : 500;
     return NextResponse.json({ error: msg }, { status });
   }
 }

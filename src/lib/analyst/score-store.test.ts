@@ -32,6 +32,10 @@ describe('needsScoring', () => {
   it('gives up on immature rows older than 130 days', () => {
     expect(needsScoring(rec({ recommended_at: new Date(Date.now() - 131 * DAY).toISOString() }), score({}))).toBe(false);
   });
+  it('stops trying never-scored calls older than 170 days', () => {
+    expect(needsScoring(rec({ recommended_at: new Date(Date.now() - 171 * DAY).toISOString() }), undefined)).toBe(false);
+    expect(needsScoring(rec({ recommended_at: new Date(Date.now() - 100 * DAY).toISOString() }), undefined)).toBe(true);
+  });
   it('never scores withdrawn rows', () => {
     expect(needsScoring(rec({ withdrawn_at: 'x' }), undefined)).toBe(false);
   });

@@ -3,6 +3,8 @@
 
 import type { AnalystKind, DecisionAction, DecisionHorizon, Market, RecommendationSource } from '@/lib/supabase/database.types';
 import { isUuid, type Parsed } from '@/lib/portfolio/validate';
+import { normalizeSecurityTicker } from '@/lib/securities/normalize';
+import type { CoreMarket } from '@/lib/securities/model';
 
 const KINDS: AnalystKind[] = ['human', 'agent'];
 const MARKETS: Market[] = ['A', 'HK', 'US'];
@@ -87,10 +89,12 @@ export function parseRecommendationInput(body: unknown): Parsed<RecommendationIn
   const b = (body ?? {}) as Record<string, unknown>;
   if (!isUuid(b.analyst_id)) return { ok: false, error: 'analyst_id must be a uuid' };
   if (typeof b.ticker !== 'string' || !b.ticker.trim()) return { ok: false, error: 'ticker required' };
-  const ticker = b.ticker.trim().toUpperCase();
-  if (ticker.length > MAX_TICKER) return { ok: false, error: `ticker too long (max ${MAX_TICKER})` };
+  const rawTicker = b.ticker.trim();
+  if (rawTicker.length > MAX_TICKER) return { ok: false, error: `ticker too long (max ${MAX_TICKER})` };
   if (!MARKETS.includes(b.market as Market)) return { ok: false, error: 'market must be A|HK|US' };
   if (!ACTIONS.includes(b.action as DecisionAction)) return { ok: false, error: `action must be one of ${ACTIONS.join('|')}` };
+  const ticker = normalizeSecurityTicker(rawTicker, b.market as CoreMarket);
+  if (!ticker) return { ok: false, error: 'ticker not valid for market' };
   const reference_price = num(b, 'reference_price');
   if (b.reference_price !== undefined && !(reference_price !== undefined && reference_price > 0)) return { ok: false, error: 'reference_price must be > 0' };
   const confidence = num(b, 'confidence');

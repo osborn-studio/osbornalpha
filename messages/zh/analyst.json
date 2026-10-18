@@ -30,7 +30,7 @@
     "title": "登记建议",
     "analyst": "分析师",
     "ticker": "标的",
-    "tickerPlaceholder": "600519.SH / 0700.HK / NVDA",
+    "tickerPlaceholder": "600519.SH / 00700.HK / NVDA",
     "market": "市场",
     "action": "动作",
     "referencePrice": "参考价（分析师口述，不作模拟成交价）",
