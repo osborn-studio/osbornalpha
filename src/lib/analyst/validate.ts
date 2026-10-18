@@ -10,7 +10,7 @@ const KINDS: AnalystKind[] = ['human', 'agent'];
 const MARKETS: Market[] = ['A', 'HK', 'US'];
 const ACTIONS: DecisionAction[] = ['buy', 'sell', 'trim', 'add', 'hold', 'pass'];
 const HORIZONS: DecisionHorizon[] = ['short', 'mid', 'long'];
-const SOURCES: RecommendationSource[] = ['manual', 'copilot', 'playbook', 'signal', 'import'];
+export const RECOMMENDATION_SOURCES: RecommendationSource[] = ['manual', 'copilot', 'playbook', 'signal', 'import'];
 
 const MAX_NAME = 60;
 const MAX_TICKER = 20;
@@ -135,7 +135,7 @@ export function parseRecommendationInput(body: unknown): Parsed<RecommendationIn
       stop_loss: num(b, 'stop_loss'),
       horizon: HORIZONS.includes(b.horizon as DecisionHorizon) ? (b.horizon as DecisionHorizon) : undefined,
       thesis_ref: thesis_ref.value,
-      source_type: SOURCES.includes(b.source_type as RecommendationSource) ? (b.source_type as RecommendationSource) : 'manual',
+      source_type: RECOMMENDATION_SOURCES.includes(b.source_type as RecommendationSource) ? (b.source_type as RecommendationSource) : 'manual',
       source_ref,
       recommended_at,
     },

@@ -170,7 +170,7 @@ export function joinViews(recs: Recommendation[], scores: RecommendationScore[],
 
 export async function listRecommendations(opts: { analystId?: string; ticker?: string; openOnly?: boolean; sourceType?: RecommendationSource } = {}): Promise<RecommendationView[]> {
   const { supabase, userId } = await requireUser();
-  // Display cap for the timeline; the paper book uses the unlimited loaders below.
+  // Display cap for the timeline (so per-run counts built from ?source=playbook undercount past 500 rows); the paper book uses the unlimited loaders below.
   let q = supabase.from('recommendations').select('*').eq('user_id', userId).order('recommended_at', { ascending: false }).order('created_at', { ascending: false }).limit(500);
   if (opts.analystId) q = q.eq('analyst_id', opts.analystId);
   if (opts.ticker) q = q.eq('ticker', opts.ticker.trim().toUpperCase());
@@ -207,11 +207,14 @@ export async function createRecommendation(input: RecommendationInput): Promise<
 /** Display name of the agent profile that owns every recommendation registered from a research playbook run. */
 export const PLAYBOOK_ANALYST_NAME = 'Research Playbook';
 
+// Identity is by name: renaming the profile makes the next registration create a fresh one; any agent profile named "Research Playbook" is adopted.
 /** The playbook agent profile, archived or not; null when it was never created. */
 export async function findPlaybookProfile(): Promise<AnalystProfile | null> {
   const { supabase, userId } = await requireUser();
   const { data, error } = await supabase.from('analyst_profiles').select('*').eq('user_id', userId).eq('kind', 'agent')
-    .ilike('display_name', PLAYBOOK_ANALYST_NAME).order('created_at', { ascending: true }).limit(1).maybeSingle();
+    .ilike('display_name', PLAYBOOK_ANALYST_NAME)
+    // Active row first: an archived twin may exist beside a newer active one.
+    .order('archived_at', { ascending: false, nullsFirst: true }).order('created_at', { ascending: true }).limit(1).maybeSingle();
   if (error) throw new Error(error.message);
   return data ? coerceProfileRow(data as Record<string, unknown>) : null;
 }
@@ -227,6 +230,7 @@ export async function ensurePlaybookProfile(): Promise<AnalystProfile> {
   if (existing) {
     const { data, error } = await (supabase as any).from('analyst_profiles').update({ archived_at: null })
       .eq('id', existing.id).eq('user_id', userId).select('*').single();
+    if (error?.code === '23505') throw new Error('analyst name taken');
     if (error) throw new Error(error.message);
     return coerceProfileRow(data);
   }
@@ -236,11 +240,13 @@ export async function ensurePlaybookProfile(): Promise<AnalystProfile> {
   if (error?.code === '23505') {
     const again = await findPlaybookProfile();
     if (again) return again;
+    throw new Error('analyst name taken');
   }
   if (error) throw new Error(error.message);
   return coerceProfileRow(data);
 }
 
+// Returned rows follow INSERT … RETURNING order; do not match them to inputs by index.
 /** Insert several already-validated recommendations in one request. All must belong to the same, active analyst. */
 export async function createRecommendations(inputs: RecommendationInput[]): Promise<Recommendation[]> {
   if (inputs.length === 0) return [];
