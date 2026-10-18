@@ -2547,8 +2547,8 @@ export function BookSummaryPanel({ book }: { book: Book }) {
         <Metric label={t('book.hitRate')} value={withN(s.hit_rate, s.scorable, t)} />
         <Metric label={t('book.avgScore')} value={s.avg_score === null ? '--' : `${s.avg_score.toFixed(1)} · ${t('common.n', { n: s.n_score })}`} change={s.avg_score ?? undefined} />
         <Metric label={t('book.openPositions')} value={String(s.open_positions)} />
-        <Metric label={t('book.avgUnrealized')} value={pctOrDash(s.avg_unrealized_pct)} change={s.avg_unrealized_pct ?? undefined} />
-        <Metric label={t('book.avgRealized')} value={withN(s.avg_realized_pct, s.closed_lots, t)} change={s.avg_realized_pct ?? undefined} />
+        <Metric label={t('book.avgUnrealized')} value={withN(s.avg_unrealized_pct, s.n_unrealized, t)} change={s.avg_unrealized_pct ?? undefined} />
+        <Metric label={t('book.avgRealized')} value={withN(s.avg_realized_pct, s.closed_units, t)} change={s.avg_realized_pct ?? undefined} />
         <Metric label={t('book.unpriced')} value={String(s.unpriced)} />
         <Metric label={t('book.noPositionToSell')} value={String(s.no_position_to_sell)} />
       </div>
