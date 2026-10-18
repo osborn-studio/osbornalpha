@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyMarket, currencyCodeOfMarket, formatSignedPrice } from './utils';
+import { classifyMarket, currencyCodeOfMarket, formatPriceFor, formatSignedPrice } from './utils';
 
 describe('classifyMarket — six markets', () => {
   it.each([
@@ -27,5 +27,16 @@ describe('formatSignedPrice', () => {
     expect(formatSignedPrice(10000, '¥')).toBe('+¥10,000.00');
     expect(formatSignedPrice(-250.5, '$')).toBe('-$250.50');
     expect(formatSignedPrice(0, 'HK$')).toBe('HK$0.00');
+  });
+});
+
+describe('formatPriceFor', () => {
+  it('uses three decimals for HK and keeps thousands separators', () => {
+    expect(formatPriceFor('HK', 12.345)).toBe('12.345');
+    expect(formatPriceFor('HK', 1234.5, 'HK$')).toBe('HK$1,234.500');
+  });
+  it.each(['A', 'US', 'JP', 'KR', 'TW'] as const)('%s keeps two decimals', (market) => {
+    expect(formatPriceFor(market, 12.345)).toBe('12.35');
+    expect(formatPriceFor(market, 1234.5, '$')).toBe('$1,234.50');
   });
 });
