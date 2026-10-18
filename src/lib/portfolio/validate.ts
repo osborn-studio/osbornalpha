@@ -15,6 +15,12 @@ const MAX_TEXT = 4000;
 const MAX_CURRENCY = 8;
 const MAX_SOURCE_REF_BYTES = 16384;
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function isUuid(v: unknown): v is string {
+  return typeof v === 'string' && UUID_RE.test(v);
+}
+
 // Required non-blank string, trimmed and capped. Used for ticker.
 function requiredTicker(v: unknown): Parsed<string> {
   if (typeof v !== 'string' || !v.trim()) return { ok: false, error: 'ticker required' };
