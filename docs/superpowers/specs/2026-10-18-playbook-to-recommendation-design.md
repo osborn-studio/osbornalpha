@@ -81,7 +81,7 @@ interface RegistrationView {
 
 - 公司集合：thesis 的 `company_ids` 优先；memo 的 `company_ids` 追加去重；都空则候选为空，`registrable` 仍可为 true 但表单只能手填一行。
 - 标的：取该 entity 的 securities 中 `is_primary = true` 且 `valid_to is null` 的首行，`ticker = exchange_code`、`market = market`；没有则取 `entities.ticker` 并用 `inferCoreMarket` 推市场；再没有则 `ticker = null`。随后统一过 `normalizeSecurityTicker(ticker, market)`，结果为 null 视为无标的。`market = other` 或无标的 → `supported = false`。有主 security 行但其市场不支持时，不回退到 `entities.ticker`（securities 是人工核验过的权威记录）。同一实体有多行主 security 时按 `exchange_code` 排序取首行，保证确定性。
-- 默认值：`action = 'buy'`；`confidence`：memo.confidence LOW 30 / MEDIUM 60 / HIGH 85，无 memo 50；`horizon`：thesis.horizon_weeks 的最大值 ≤ 8 → short，≤ 26 → mid，> 26 → long，无 thesis → null；`recommended_at = run.review_at`（审批时间），为空则 `run.created_at`；`rationale = run.rationale`；`thesis_ref = run.thesis_id`。
+- 默认值：`action = 'buy'`；`confidence`：memo.confidence LOW 30 / MEDIUM 60 / HIGH 85，无 memo 50；`horizon`：thesis.horizon_weeks 的最大值 ≤ 8 → short，≤ 26 → mid，> 26 → long，无 thesis → null；`recommended_at = min(run.review_at ?? run.created_at, now)`（审批时间；approve API 允许把 `review_at` 设成将来的复核日期，此时钳到当前时间）；`rationale = run.rationale`；`thesis_ref = run.thesis_id`。
 - 候选顺序：按 `companyIdsFor` 的顺序——thesis 的 company_ids 在前（保持 thesis 内顺序），其后是 memo 新增的公司；不按名称重排。
 
 ## 6. 登记请求与写入
@@ -92,14 +92,14 @@ interface RegistrationView {
 {
   items: Array<{ entity_id: string | null; ticker: string; market: 'A'|'HK'|'US'; action: DecisionAction; confidence?: number; horizon?: 'short'|'mid'|'long'; target_price?: number; stop_loss?: number }>;
   rationale?: string;        // 整批共用，默认 run.rationale
-  recommended_at?: string;   // 整批共用，默认 run.review_at；不得晚于现在
+  recommended_at?: string;   // 整批共用，默认 min(run.review_at ?? created_at, now)；不得晚于现在
 }
 ```
 
 服务端：
 
 1. `requireResearchUser()`；读 run，不是 `PAPER_TRADE` 或 `approval_status ≠ APPROVED` → 422 `run_not_registrable`。
-2. `items` 1–20 条；每条拼成 `RecommendationInput`（校验阶段 `analyst_id` 用占位 uuid，真实档案 id 在校验全部通过后再填；`source_type = 'playbook'`，`source_ref = { playbook_run_id, thesis_id, memo_id, entity_id, model: memo.provenance.model ?? null }`，`thesis_ref = run.thesis_id`，`recommended_at` 整批同值，理由默认截断到 4000 字）并过 `parseRecommendationInput`；`entity_id` 非空时必须属于该 run 的 thesis/memo 公司集合，否则 400 `entity_not_in_run`；任一条失败 → 400，响应 `{ error: { code: 'VALIDATION_ERROR', message, item_index, entity_id } }`，整批不写。批内重复按规范化后的 `(ticker, market)` 或重复的 `entity_id` 判定 → 400 `duplicate_item`。
+2. `items` 1–20 条；每条拼成 `RecommendationInput`（校验阶段 `analyst_id` 用占位 uuid，真实档案 id 在校验全部通过后再填；`source_type = 'playbook'`，`source_ref = { playbook_run_id, thesis_id, memo_id, entity_id, model: memo.provenance.model ?? null }`，`thesis_ref = run.thesis_id`，`recommended_at` 整批同值，理由默认按 UTF-16 长度截到 4000 且不拆代理对）并过 `parseRecommendationInput`；`entity_id` 非空时必须属于该 run 的 thesis/memo 公司集合，否则 400 `entity_not_in_run`；任一条失败 → 400，响应 `{ error: { code: 'VALIDATION_ERROR', message, item_index, entity_id } }`，整批不写。批内重复按规范化后的 `(ticker, market)` 或重复的 `entity_id` 判定 → 400 `duplicate_item`。
 3. 幂等（纯函数 `splitRegistration(items, existing)`）：`existing` = 该用户 `source_type = 'playbook'` 且 `source_ref->>'playbook_run_id' = run.id` 的建议；按 `(entity_id)` 命中则跳过，`entity_id` 为 null 的手填行按 `(ticker, market)` 命中则跳过。
 4. 幂等分集后若无可写条目，直接返回 `{ created: [], skipped, analyst_id: 现有档案 id 或 null }`，不创建也不取消归档档案。否则 `ensurePlaybookProfile()`：按 `display_name = 'Research Playbook'`、`kind = agent` 查（活动行优先），已归档则取消归档并在审计里记 `profile_unarchived`，没有则插 `{ kind: 'agent', note: 'research playbook PAPER_TRADE 的自动归属' }`；23505 重读，仍冲突（同名的人工档案）→ 409。放在 `src/lib/analyst/store.ts`，与 `ensureSelfProfile` 同风格。
 5. 一次 `insert` 全部待写行（Supabase 多行 insert 单请求）；成功后 `audit(ctx, 'playbook.register', run.id, { created_ids, skipped_entity_ids, analyst_id })`。
@@ -135,7 +135,7 @@ interface RegistrationView {
 - `src/lib/research/playbook-registration.ts`（纯函数）+ `.test.ts`：
   - 公司集合 thesis 优先、memo 追加去重；
   - 标的解析优先级 security → entity.ticker → none，`other` 市场与无标的不可选；
-  - 默认值映射（confidence 三档与无 memo；horizon 三档与无 thesis；recommended_at 取 review_at 再退 created_at）；
+  - 默认值映射（confidence 三档与无 memo；horizon 三档与无 thesis；recommended_at 取 review_at 再退 created_at，将来的 review_at 钳到 now）；
   - `splitRegistration` 的幂等分集（entity 命中、手填 ticker 命中、都不命中）。
 - `src/lib/analyst/store.test.ts`：无新增纯逻辑则不加。
 - 路由：typecheck / lint；`npm run build` 列出两个新路由。
