@@ -7,7 +7,7 @@ import type { ReactElement } from 'react';
 
 interface TabDef {
   id: string;
-  navKey: 'today' | 'watchlist' | 'intel' | 'portfolio' | 'tools' | 'settings';
+  navKey: 'today' | 'watchlist' | 'intel' | 'portfolio' | 'analyst' | 'tools' | 'settings';
   href: string;
   /** Line-art icon — 24×24, 1.5px stroke, currentColor */
   Icon: (props: { className?: string }) => ReactElement;
@@ -63,6 +63,16 @@ const TABS: TabDef[] = [
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
         <rect x="3" y="7.5" width="18" height="12.5" rx="2" />
         <path d="M9 7.5V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1.5M3 13h18" />
+      </svg>
+    ),
+  },
+  {
+    id: 'analyst', navKey: 'analyst', href: '/analyst',
+    // Scoreboard glyph — rounded frame + two score rows
+    Icon: ({ className }) => (
+      <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
+        <rect x="3" y="5" width="18" height="14" rx="2" />
+        <path d="M7 10h4M13 10h4M7 14h4M13 14h4" />
       </svg>
     ),
   },
