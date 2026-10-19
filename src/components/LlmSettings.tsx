@@ -55,13 +55,21 @@ export function LlmSettings() {
   const [query, setQuery] = useState('');
   const [chatOnly, setChatOnly] = useState(true);
   const [custom, setCustom] = useState('');
+  const [loadError, setLoadError] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   // Catalog, then the saved configuration. The reducer is re-seeded with the provider list once.
+  // A failed catalog fetch shows an error with a retry instead of leaving the card locked.
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      setLoadError(false);
       const cat = await fetch('/api/llm/catalog', { cache: 'no-store' }).then((r) => r.json()).catch(() => null);
-      if (cancelled || !cat?.providers) return;
+      if (cancelled) return;
+      if (!Array.isArray(cat?.providers) || cat.providers.length === 0) {
+        setLoadError(true);
+        return;
+      }
       setProviders(cat.providers);
       const saved = await fetch('/api/llm/settings', { cache: 'no-store' }).then((r) => r.json()).catch(() => null);
       if (cancelled) return;
@@ -72,7 +80,7 @@ export function LlmSettings() {
       dispatch({ type: 'loaded', saved: usable ? saved : { provider: null, legacyId: null, storedProvider: null, model: null, version: null, legacyPath: false, known: false, configured: false } });
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [loadAttempt]);
 
   // Catalog models for the selected provider, fetched once per provider.
   const provider = state.draft.provider;
@@ -136,6 +144,12 @@ export function LlmSettings() {
 
   return (
     <div className="space-y-4" data-llm-settings data-readiness={state.readiness}>
+      {loadError && (
+        <div className="flex items-center gap-2 text-xs text-warn" role="alert" data-load-error>
+          <span>{t('loadFailed')}</span>
+          <button type="button" onClick={() => setLoadAttempt((n) => n + 1)} className="rounded-md bg-bg-card px-2 py-1 text-xs">{t('retry')}</button>
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className={`rounded-full border border-border px-2 py-0.5 ${statusTone}`} data-status-badge>{t(`status.${state.readiness}`)}</span>
         {saved?.configured && saved.model && (

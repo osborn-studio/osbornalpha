@@ -211,6 +211,14 @@ describe('settings-state: readiness is evidence bound to the saved configuration
     expect(s.readiness).toBe('configured_unverified');
     expect(s.probes['deepseek-chat']).toEqual({ status: 'failed', error: 'key_required' });
   });
+  it('selecting another model while a saved-model probe is in flight stops its late success from setting ready', () => {
+    let s = loaded();
+    s = reduce(s, { type: 'probeStarted', seq: 1, model: 'deepseek-chat' });
+    s = reduce(s, { type: 'selectModel', model: 'deepseek-reasoner' });
+    s = reduce(s, { type: 'probeFinished', seq: 1, provider: 'deepseek', model: 'deepseek-chat', response: ok('v1', 'saved') });
+    expect(s.probes['deepseek-chat']).toMatchObject({ status: 'ok' });
+    expect(s.readiness).toBe('configured_unverified');
+  });
   it('failed probes record the failure class and never set ready', () => {
     let s = loaded();
     s = reduce(s, { type: 'probeStarted', seq: 1, model: 'deepseek-chat' });

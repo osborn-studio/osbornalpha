@@ -156,7 +156,9 @@
       "invalid_api_key": "Invalid API key format",
       "network": "Network error, retry"
     },
-    "description": "Applies to Copilot, per-stock AI perspectives, DCF assumption autofill and other signed-in AI features. Daily briefs and radar pushes are scheduled jobs on the platform model. Without a key, everything falls back to the platform default. “Ready” only means a plain chat call succeeded."
+    "description": "Applies to Copilot, per-stock AI perspectives, DCF assumption autofill and other signed-in AI features. Daily briefs and radar pushes are scheduled jobs on the platform model. Without a key, everything falls back to the platform default. “Ready” only means a plain chat call succeeded.",
+    "loadFailed": "Could not load the provider catalog",
+    "retry": "Retry"
   },
   "perspectiveCard": {
     "confidence": "Confidence",

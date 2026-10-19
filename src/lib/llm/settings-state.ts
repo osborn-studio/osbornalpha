@@ -118,9 +118,13 @@ export function reduce(s: SettingsState, e: Event): SettingsState {
       // Probe and discovery results describe the key they ran with; a different key makes them (and
       // in-flight ones) meaningless.
       return { ...s, draft: { ...s.draft, key: e.key, keyGeneration: s.draft.keyGeneration + 1 }, discovery: { status: 'idle' }, probes: {}, readiness: dropReady(s.readiness), saveError: null };
-    case 'selectModel':
+    case 'selectModel': {
       if (locked(s)) return s;
-      return { ...s, draft: { ...s.draft, model: e.model }, readiness: dropReady(s.readiness), saveError: null };
+      // In-flight probes of the saved model keep their row result but can no longer count as
+      // readiness evidence: the edit invalidated it, and a late response must not undo that.
+      const probes = Object.fromEntries(Object.entries(s.probes).map(([m, p]) => [m, p.status === 'running' ? { ...p, aboutSaved: false } : p]));
+      return { ...s, draft: { ...s.draft, model: e.model }, probes, readiness: dropReady(s.readiness), saveError: null };
+    }
     case 'discoverStarted':
       return { ...s, discovery: { status: 'running', seq: e.seq } };
     case 'discoverFinished': {

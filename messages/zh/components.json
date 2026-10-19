@@ -156,7 +156,9 @@
       "invalid_api_key": "API Key 格式不合法",
       "network": "网络错误，请重试"
     },
-    "description": "此配置作用于 Copilot、个股 AI 观点与 DCF 假设填充等需要登录的 AI 功能；每日简报/雷达推送为定时任务，使用平台统一模型。未配置时全部功能回落平台默认。“可用”仅表示普通对话调用已通过。"
+    "description": "此配置作用于 Copilot、个股 AI 观点与 DCF 假设填充等需要登录的 AI 功能；每日简报/雷达推送为定时任务，使用平台统一模型。未配置时全部功能回落平台默认。“可用”仅表示普通对话调用已通过。",
+    "loadFailed": "加载供应商目录失败",
+    "retry": "重试"
   },
   "perspectiveCard": {
     "confidence": "信心",
