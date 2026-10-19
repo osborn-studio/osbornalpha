@@ -412,6 +412,8 @@ export async function POST(req: Request) {
           apiKey: provider.apiKey,
           model: provider.model,
           chatPath: provider.chatPath,
+          authHeader: provider.authHeader,
+          authPrefix: provider.authPrefix,
         };
         const common = {
           system: systemPrompt,

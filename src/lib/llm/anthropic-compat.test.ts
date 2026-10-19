@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { anthropicChat, oaiToAnthropic, toolDefsToAnthropic, responseToTurn } from './anthropic-compat';
+import { anthropicChat, anthropicToolChat, oaiToAnthropic, toolDefsToAnthropic, responseToTurn } from './anthropic-compat';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -148,6 +148,59 @@ describe('anthropicChat', () => {
         estimated: false,
       },
     });
+  });
+});
+
+describe('anthropicToolChat auth', () => {
+  it('defaults to Authorization: Bearer (ARK), never follows redirects', async () => {
+    const fn = vi.fn(async () => ({ ok: true, json: async () => ({ content: [], usage: { input_tokens: 1, output_tokens: 1 } }) }));
+    // @ts-expect-error test stub
+    global.fetch = fn;
+    await anthropicChat({ baseUrl: 'https://ark.example/api/coding', apiKey: 'ark-key', model: 'm' }, { messages: [{ role: 'user', content: 'hi' }] });
+    const [url, init] = fn.mock.calls[0] as unknown as [string, any];
+    expect(url).toBe('https://ark.example/api/coding/v1/messages');
+    expect(init.headers.Authorization).toBe('Bearer ark-key');
+    expect(init.headers['anthropic-version']).toBe('2023-06-01');
+    expect(init.redirect).toBe('error');
+  });
+
+  it('uses the configured auth header and prefix (Claude: x-api-key with no prefix)', async () => {
+    const fn = vi.fn(async () => ({ ok: true, json: async () => ({ content: [], usage: { input_tokens: 1, output_tokens: 1 } }) }));
+    // @ts-expect-error test stub
+    global.fetch = fn;
+    await anthropicChat(
+      { baseUrl: 'https://api.anthropic.com', apiKey: 'sk-ant', model: 'm', authHeader: 'x-api-key', authPrefix: '' },
+      { messages: [{ role: 'user', content: 'hi' }] },
+    );
+    const init = (fn.mock.calls[0] as any)[1];
+    expect(init.headers['x-api-key']).toBe('sk-ant');
+    expect(init.headers.Authorization).toBeUndefined();
+  });
+});
+
+describe('anthropic response shape validation', () => {
+  const stub = (canned: unknown) => {
+    // @ts-expect-error test stub
+    global.fetch = vi.fn(async () => ({ ok: true, json: async () => canned }));
+  };
+  it.each([
+    ['error envelope', { type: 'error', error: { type: 'authentication_error', message: 'bad key' } }],
+    ['content missing', {}],
+    ['content not an array', { content: 'x' }],
+    ['null block', { content: [null] }],
+    ['block without type', { content: [{ text: 'x' }] }],
+    ['text block without string text', { content: [{ type: 'text', text: 1 }] }],
+    ['tool_use block without id', { content: [{ type: 'tool_use', name: 'f', input: {} }] }],
+  ])('rejects %s as LlmResponseShapeError', async (_label, canned) => {
+    stub(canned);
+    await expect(anthropicChat({ baseUrl: 'https://a.example', apiKey: 'k', model: 'm' }, { messages: [{ role: 'user', content: 'hi' }] }))
+      .rejects.toMatchObject({ name: 'LlmResponseShapeError' });
+  });
+
+  it('accepts text and tool_use blocks and unknown block types', async () => {
+    stub({ content: [{ type: 'text', text: 'a' }, { type: 'tool_use', id: 't1', name: 'f', input: { q: 1 } }, { type: 'thinking', thinking: '...' }], stop_reason: 'tool_use', usage: { input_tokens: 1, output_tokens: 1 } });
+    await expect(anthropicToolChat({ baseUrl: 'https://a.example', apiKey: 'k', model: 'm' }, { messages: [{ role: 'user', content: 'hi' }], tools: [] }))
+      .resolves.toMatchObject({ content: 'a', toolCalls: [{ id: 't1', name: 'f', arguments: { q: 1 } }], finishReason: 'tool_use' });
   });
 });
 

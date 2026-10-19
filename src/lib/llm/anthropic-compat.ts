@@ -4,6 +4,7 @@
 
 import type { LlmConfig, ToolDef, ToolCall } from './openai-compat';
 import { normalizeUsage, type NormalizedUsage } from '../billing/llm-pricing';
+import { LlmResponseShapeError, isRecord, readErrorText, readJsonBounded } from './http';
 
 type Block =
   | { type: 'text'; text: string }
@@ -44,10 +45,6 @@ export function oaiToAnthropic(messages: any[]): AnthropicMessage[] {
 
 export function toolDefsToAnthropic(tools: ToolDef[]) {
   return tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }
 
 function tokenCount(value: unknown): number | undefined {
@@ -94,6 +91,24 @@ function normalizeAnthropicUsage(raw: unknown): NormalizedUsage {
   });
 }
 
+/** The fields the consumers read must have the documented types; an error envelope is never a turn. */
+export function validateMessageResponse(data: unknown): { content: any[]; stop_reason?: string; usage?: unknown } {
+  if (!isRecord(data)) throw new LlmResponseShapeError('response is not an object');
+  if (data.type === 'error') throw new LlmResponseShapeError('error envelope');
+  if (!Array.isArray(data.content)) throw new LlmResponseShapeError('content is not an array');
+  for (const b of data.content) {
+    if (!isRecord(b) || typeof b.type !== 'string') throw new LlmResponseShapeError('malformed content block');
+    if (b.type === 'text' && typeof b.text !== 'string') throw new LlmResponseShapeError('text block without text');
+    if (b.type === 'tool_use' && (typeof b.id !== 'string' || typeof b.name !== 'string')) {
+      throw new LlmResponseShapeError('tool_use block without id/name');
+    }
+  }
+  if (data.stop_reason !== undefined && data.stop_reason !== null && typeof data.stop_reason !== 'string') {
+    throw new LlmResponseShapeError('stop_reason is not a string');
+  }
+  return data as { content: any[]; stop_reason?: string; usage?: unknown };
+}
+
 export function responseToTurn(data: { content?: any[]; stop_reason?: string; usage?: unknown }): {
   content: string; toolCalls: ToolCall[]; finishReason: string; usage: NormalizedUsage;
 } {
@@ -116,10 +131,12 @@ export async function anthropicToolChat(
     const res = await fetch(cfg.baseUrl + (cfg.chatPath ?? '/v1/messages'), {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${cfg.apiKey}`,
+        [cfg.authHeader ?? 'Authorization']: `${cfg.authPrefix ?? 'Bearer '}${cfg.apiKey}`,
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json',
       },
+      // A redirect would carry the user's key to another host.
+      redirect: 'error',
       body: JSON.stringify({
         model: cfg.model,
         max_tokens: opts.max_tokens ?? 1500,
@@ -129,8 +146,8 @@ export async function anthropicToolChat(
       }),
       signal: controller.signal,
     });
-    if (!res.ok) throw new Error('llm ' + res.status + ': ' + (await res.text().catch(() => '')));
-    return responseToTurn(await res.json());
+    if (!res.ok) throw new Error('llm ' + res.status + ': ' + (await readErrorText(res)));
+    return responseToTurn(validateMessageResponse(await readJsonBounded(res, cfg.maxResponseBytes)));
   } finally {
     clearTimeout(timer);
   }

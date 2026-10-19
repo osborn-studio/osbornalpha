@@ -52,11 +52,14 @@ describe('resolveLlm', () => {
 
     expect(r).toEqual(
       expect.objectContaining({
-        provider: 'ark',
+        provider: 'doubao',
         baseUrl: 'https://ark.cn-beijing.volces.com/api/coding',
+        chatPath: '/v1/messages',
         model: 'doubao-seed-code',
         apiKey: 'ark-test',
         protocol: 'anthropic',
+        authHeader: 'Authorization',
+        authPrefix: 'Bearer ',
         source: 'env',
       })
     );
@@ -66,7 +69,7 @@ describe('resolveLlm', () => {
     vi.mocked(getUserLlm).mockResolvedValue({
       provider: 'deepseek',
       model: 'deepseek-chat',
-      apiKeyCipher: 'cipher',
+      apiKeyCipher: 'cipher', updatedAt: null,
     });
     vi.mocked(decrypt).mockReturnValue('sk-user');
 
@@ -112,10 +115,69 @@ describe('resolvePlatformLlm', () => {
     process.env.DEEPSEEK_API_KEY = 'deepseek-test';
 
     expect(resolvePlatformLlm()).toEqual(expect.objectContaining({
-      provider: 'ark',
+      provider: 'doubao',
       model: 'doubao-seed-code',
       apiKey: 'ark-test',
     }));
+  });
+
+  it('accepts the registry id in LLM_PROVIDER as well as the legacy id', () => {
+    process.env.LLM_PROVIDER = 'doubao';
+    process.env.ARK_API_KEY = 'ark-test';
+
+    expect(resolvePlatformLlm()).toEqual(expect.objectContaining({ provider: 'doubao', apiKey: 'ark-test' }));
+  });
+
+  it('keeps the env-fallback default models byte for byte for all five legacy providers', () => {
+    const cases: Array<[string, string, string]> = [
+      ['ark', 'ARK_API_KEY', 'doubao-seed-code'],
+      ['deepseek', 'DEEPSEEK_API_KEY', 'deepseek-v4-flash'],
+      ['openai', 'OPENAI_API_KEY', 'gpt-4o'],
+      ['kimi', 'KIMI_API_KEY', 'moonshot-v1-32k'],
+      ['minimax', 'MINIMAX_API_KEY', 'MiniMax-Text-01'],
+    ];
+    for (const [legacy, envKey, model] of cases) {
+      for (const k of ENV_KEYS) delete process.env[k];
+      process.env.LLM_PROVIDER = legacy;
+      process.env[envKey] = 'k';
+      expect(resolvePlatformLlm()).toEqual(expect.objectContaining({ model, apiKey: 'k', source: 'env' }));
+    }
+  });
+
+  it('keeps LLM_PROVIDER=minimax on the legacy chat path for any model; minimax_cn uses the registry path', () => {
+    process.env.LLM_PROVIDER = 'minimax';
+    process.env.MINIMAX_API_KEY = 'k';
+    expect(resolvePlatformLlm()).toEqual(expect.objectContaining({
+      provider: 'minimax_cn',
+      baseUrl: 'https://api.minimaxi.com/v1',
+      chatPath: '/text/chatcompletion_v2',
+      model: 'MiniMax-Text-01',
+    }));
+    process.env.LLM_MODEL = 'MiniMax-M3';
+    expect(resolvePlatformLlm()).toEqual(expect.objectContaining({ chatPath: '/text/chatcompletion_v2', model: 'MiniMax-M3' }));
+    process.env.LLM_PROVIDER = 'minimax_cn';
+    expect(resolvePlatformLlm()).toEqual(expect.objectContaining({ chatPath: '/chat/completions', model: 'MiniMax-M3' }));
+  });
+
+  it('keeps the legacy MiniMax path for the unpinned auto fallback (only MINIMAX_API_KEY set)', () => {
+    process.env.MINIMAX_API_KEY = 'k';
+    process.env.LLM_PROVIDER = '  ';
+    expect(resolvePlatformLlm()).toEqual(expect.objectContaining({ chatPath: '/text/chatcompletion_v2' }));
+    delete process.env.LLM_PROVIDER;
+    expect(resolvePlatformLlm()).toEqual(expect.objectContaining({
+      provider: 'minimax_cn',
+      baseUrl: 'https://api.minimaxi.com/v1',
+      chatPath: '/text/chatcompletion_v2',
+      model: 'MiniMax-Text-01',
+    }));
+  });
+
+  it('never resolves a registry provider without an Alpha env binding from the environment', () => {
+    process.env.LLM_PROVIDER = 'zhipu';
+    process.env.ZHIPU_API_KEY = 'k';
+    expect(resolvePlatformLlm()).toBeNull();
+    delete process.env.LLM_PROVIDER;
+    expect(resolvePlatformLlm()).toBeNull();
   });
 
   it('fails closed when an explicit provider is missing its own key', () => {
@@ -141,6 +203,58 @@ describe('resolvePlatformLlm', () => {
 });
 
 describe('resolveUserLlm', () => {
+  it('resolves a legacy saved provider id through the alias without changing its endpoint', async () => {
+    vi.mocked(getUserLlm).mockResolvedValue({ provider: 'ark', model: 'doubao-seed-code', apiKeyCipher: 'c', updatedAt: null });
+    vi.mocked(decrypt).mockReturnValue('sk-user');
+
+    await expect(resolveUserLlm()).resolves.toEqual(expect.objectContaining({
+      provider: 'doubao',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/coding',
+      chatPath: '/v1/messages',
+      protocol: 'anthropic',
+      authHeader: 'Authorization',
+      authPrefix: 'Bearer ',
+      model: 'doubao-seed-code',
+      source: 'user',
+    }));
+  });
+
+  it('keeps a row stored under the legacy minimax id on the legacy chat path whatever its model', async () => {
+    vi.mocked(getUserLlm).mockResolvedValue({ provider: 'minimax', model: 'some-custom-model', apiKeyCipher: 'c', updatedAt: null });
+    vi.mocked(decrypt).mockReturnValue('sk-user');
+
+    await expect(resolveUserLlm()).resolves.toEqual(expect.objectContaining({
+      provider: 'minimax_cn',
+      baseUrl: 'https://api.minimaxi.com/v1',
+      chatPath: '/text/chatcompletion_v2',
+      model: 'some-custom-model',
+    }));
+
+    vi.mocked(getUserLlm).mockResolvedValue({ provider: 'minimax_cn', model: 'MiniMax-M3', apiKeyCipher: 'c', updatedAt: null });
+    await expect(resolveUserLlm()).resolves.toEqual(expect.objectContaining({
+      provider: 'minimax_cn',
+      chatPath: '/chat/completions',
+    }));
+  });
+
+  it('passes the registry auth header for anthropic-protocol providers such as claude', async () => {
+    vi.mocked(getUserLlm).mockResolvedValue({ provider: 'claude', model: 'claude-sonnet-4-6', apiKeyCipher: 'c', updatedAt: null });
+    vi.mocked(decrypt).mockReturnValue('sk-ant');
+
+    await expect(resolveUserLlm()).resolves.toEqual(expect.objectContaining({
+      provider: 'claude',
+      protocol: 'anthropic',
+      authHeader: 'x-api-key',
+      authPrefix: '',
+    }));
+  });
+
+  it('returns null for a saved row whose provider is unknown to the catalog', async () => {
+    vi.mocked(getUserLlm).mockResolvedValue({ provider: 'bogus', model: 'm', apiKeyCipher: 'c', updatedAt: null });
+    vi.mocked(decrypt).mockReturnValue('sk');
+    await expect(resolveUserLlm()).resolves.toBeNull();
+  });
+
   it('never falls back to the platform key when the user has no BYO settings', async () => {
     vi.mocked(getUserLlm).mockResolvedValue(null);
     process.env.LLM_PROVIDER = 'deepseek';
@@ -153,7 +267,7 @@ describe('resolveUserLlm', () => {
     vi.mocked(getUserLlm).mockResolvedValue({
       provider: 'deepseek',
       model: 'deepseek-chat',
-      apiKeyCipher: 'cipher',
+      apiKeyCipher: 'cipher', updatedAt: null,
     });
     vi.mocked(decrypt).mockReturnValue('sk-user');
     process.env.DEEPSEEK_API_KEY = 'platform-key';
