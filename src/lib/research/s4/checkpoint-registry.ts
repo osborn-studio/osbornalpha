@@ -1,3 +1,5 @@
+import {readFileSync} from 'node:fs';
+import {isAbsolute} from 'node:path';
 import {Pool,type PoolConfig} from 'pg';
 
 /** Client for the independent checkpoint registry (ADR 2026-10-18 §4, candidate C1).
@@ -31,8 +33,17 @@ export function checkpointRegistryConfig(env:Env=process.env):CheckpointRegistry
  const loopback=LOOPBACK.includes(host!);
  const insecure=env.ALPHA_ANCHOR_REGISTRY_INSECURE_LOOPBACK==='1';
  if(insecure&&!loopback)deny();
+ // A managed instance may present a certificate from the provider's private CA (Tencent). The CA
+ // file is operator configuration, must be absolute, and is read once here; it is not a secret.
+ const caFile=env.ALPHA_ANCHOR_REGISTRY_CA_FILE;
+ let ca:string|undefined;
+ if(caFile!==undefined){
+  if(insecure||!isAbsolute(caFile))deny();
+  try{ca=readFileSync(caFile,'utf8');}catch{return deny();}
+  if(!/-----BEGIN CERTIFICATE-----/.test(ca))deny();
+ }
  const db:PoolConfig={host:host==='localhost'?'127.0.0.1':host,port,database,user,
-  ssl:insecure?false:{rejectUnauthorized:true,servername:host},
+  ssl:insecure?false:{rejectUnauthorized:true,servername:host,...(ca?{ca}:{})},
   max:1,connectionTimeoutMillis:5000,statement_timeout:DEFAULT_DEADLINE_MS,application_name:'alpha-anchor-registry',options:'-c search_path=pg_catalog'};
  // Keep the secret out of any serialized copy of the configuration; pg reads it by property access.
  Object.defineProperty(db,'password',{value:password,enumerable:false,writable:false});

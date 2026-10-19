@@ -22,8 +22,8 @@ export function anchorRunnerConfig(env:Env=process.env):AnchorRunnerConfig{
   const owners=(env.ALPHA_ANCHOR_OWNERS??'').split(',').map(s=>s.trim()).filter(Boolean);
   if(!owners.length||owners.length>10||owners.some(o=>!UUID.test(o))||new Set(owners).size!==owners.length)deny();
   const host=env.ALPHA_ANCHOR_DB_HOST,database=env.ALPHA_ANCHOR_DB_DATABASE,user=env.ALPHA_ANCHOR_DB_USER,password=env.ALPHA_ANCHOR_DB_PASSWORD;
-  if(!host||!/^[A-Za-z0-9.:\-]+$/.test(host)||!database||!/^[A-Za-z0-9_]+$/.test(database)||!user||!/^[A-Za-z0-9_]+$/.test(user)||!password)deny();
-  if(ADMIN_NAMES.includes(user!.toLowerCase()))deny();
+  if(!host||!/^[A-Za-z0-9.:\-]+$/.test(host)||!database||!/^[A-Za-z0-9_]+$/.test(database)||!user||!/^[A-Za-z0-9_.]+$/.test(user)||!password)deny(); // pooler logins are role.projectref
+  if(ADMIN_NAMES.includes(user!.toLowerCase().split('.')[0]))deny();
   const port=Number(env.ALPHA_ANCHOR_DB_PORT);
   if(!Number.isInteger(port)||port<1||port>65535)deny();
   const loopback=LOOPBACK.includes(host!),insecure=env.ALPHA_ANCHOR_DB_INSECURE_LOOPBACK==='1';
@@ -34,7 +34,9 @@ export function anchorRunnerConfig(env:Env=process.env):AnchorRunnerConfig{
   if(!Number.isInteger(watchdogMs)||watchdogMs<100||watchdogMs>30000)deny();
   const db:PoolConfig={host:host==='localhost'?'127.0.0.1':host,port,database,user,
     ssl:insecure?false:{rejectUnauthorized:true,servername:host},
-    max:2,connectionTimeoutMillis:5000,statement_timeout:15000,idle_in_transaction_session_timeout:30000,application_name:'alpha-anchor-runner',options:'-c search_path=pg_catalog'};
+    max:2,connectionTimeoutMillis:5000,statement_timeout:15000,idle_in_transaction_session_timeout:30000,application_name:'alpha-anchor-runner'};
+  // No startup `options`: the pooler path may reject them, and every runner call is a fully
+  // qualified SECURITY DEFINER function with its own pinned search_path.
   Object.defineProperty(db,'password',{value:password,enumerable:false,writable:false});
   let registry:CheckpointRegistryConfig;
   try{registry=checkpointRegistryConfig(env);}catch{return deny();}
