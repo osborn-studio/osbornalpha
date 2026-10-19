@@ -6,10 +6,10 @@ from the Osborn-PA repository (`@osborn-pa/llm-registry` 0.1.0, not yet publishe
 | | |
 |---|---|
 | Repository | osborn-studio/Osborn-PA |
-| Branch | `main` (merge of PR #140, endpoint-level auth + doubao overrides) |
-| Branch head at copy time | `6b52e76a` |
-| Last commit touching the package | `e3ff7019cae58c48da7f7b0eb6d64061aaaeac96` |
-| Copied on | 2026-10-19 (first snapshot 2026-10-18 from `codex/llm-provider-learnings` @ `af7dfe66`) |
+| Branch | `main` (PR #140 endpoint-level auth + doubao overrides; PR #141 doubao release dates) |
+| Branch head at copy time | `860e48cf` |
+| Last commit touching the package | `d82eaf8fe4f5e408182e394b87996cb002c32fd7` |
+| Copied on | 2026-10-19, second refresh (first snapshot 2026-10-18 from `codex/llm-provider-learnings` @ `af7dfe66`, then `main` `6b52e76a`) |
 | Read-only endpoint (not consumed yet) | `https://www.osbornpa.com/api/llm-registry/v1/{providers,models}.json` |
 | Schema | `osborn-llm-registry/providers@1`, `osborn-llm-registry/models@1` |
 
