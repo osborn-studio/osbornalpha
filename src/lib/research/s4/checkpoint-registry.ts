@@ -1,5 +1,6 @@
 import {readFileSync} from 'node:fs';
 import {isAbsolute} from 'node:path';
+import {checkServerIdentity} from 'node:tls';
 import {Pool,type PoolConfig} from 'pg';
 
 /** Client for the independent checkpoint registry (ADR 2026-10-18 §4, candidate C1).
@@ -43,7 +44,7 @@ export function checkpointRegistryConfig(env:Env=process.env):CheckpointRegistry
   if(!/-----BEGIN CERTIFICATE-----/.test(ca))deny();
  }
  const db:PoolConfig={host:host==='localhost'?'127.0.0.1':host,port,database,user,
-  ssl:insecure?false:{rejectUnauthorized:true,...(/^(\d{1,3}\.){3}\d{1,3}$/.test(host!)||host!.includes(':')?{}:{servername:host}),...(ca?{ca}:{})},
+  ssl:insecure?false:{rejectUnauthorized:true,...(/^(\d{1,3}\.){3}\d{1,3}$/.test(host!)||host!.includes(':')?{checkServerIdentity:(_h:string,cert:Parameters<typeof checkServerIdentity>[1])=>checkServerIdentity(host!,cert)}:{servername:host}),...(ca?{ca}:{})},
   max:1,connectionTimeoutMillis:5000,statement_timeout:DEFAULT_DEADLINE_MS,application_name:'alpha-anchor-registry',options:'-c search_path=pg_catalog'};
  // Keep the secret out of any serialized copy of the configuration; pg reads it by property access.
  Object.defineProperty(db,'password',{value:password,enumerable:false,writable:false});
