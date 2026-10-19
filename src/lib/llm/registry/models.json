@@ -3535,6 +3535,73 @@
     "hint_zh": null
    }
   },
+  "doubao": {
+   "doubao-seed-1-6-flash-250828": {
+    "source": "override",
+    "context": 256000,
+    "output": 32768,
+    "structured_output": true,
+    "reasoning": true,
+    "cost_usd": null,
+    "release_date": null,
+    "price_cny_micro": null,
+    "response_model": null,
+    "response_model_verified_at": null,
+    "hint_zh": "火山方舟模型，上下文/输出上限与价格待核对（models.dev 无 doubao 来源）"
+   },
+   "doubao-seed-2-0-lite-260215": {
+    "source": "override",
+    "context": 256000,
+    "output": 32768,
+    "structured_output": true,
+    "reasoning": true,
+    "cost_usd": null,
+    "release_date": null,
+    "price_cny_micro": null,
+    "response_model": null,
+    "response_model_verified_at": null,
+    "hint_zh": "火山方舟模型，上下文/输出上限与价格待核对（models.dev 无 doubao 来源）"
+   },
+   "doubao-seed-2-0-mini-260215": {
+    "source": "override",
+    "context": 256000,
+    "output": 32768,
+    "structured_output": true,
+    "reasoning": true,
+    "cost_usd": null,
+    "release_date": null,
+    "price_cny_micro": null,
+    "response_model": null,
+    "response_model_verified_at": null,
+    "hint_zh": "火山方舟模型，上下文/输出上限与价格待核对（models.dev 无 doubao 来源）"
+   },
+   "doubao-seed-2-0-pro-260215": {
+    "source": "override",
+    "context": 256000,
+    "output": 32768,
+    "structured_output": true,
+    "reasoning": true,
+    "cost_usd": null,
+    "release_date": null,
+    "price_cny_micro": null,
+    "response_model": null,
+    "response_model_verified_at": null,
+    "hint_zh": "火山方舟模型，上下文/输出上限与价格待核对（models.dev 无 doubao 来源）"
+   },
+   "doubao-seed-code": {
+    "source": "override",
+    "context": 256000,
+    "output": 32768,
+    "structured_output": true,
+    "reasoning": true,
+    "cost_usd": null,
+    "release_date": null,
+    "price_cny_micro": null,
+    "response_model": null,
+    "response_model_verified_at": null,
+    "hint_zh": "ARK coding plan（Anthropic 兼容端点）；火山方舟模型，上下文/输出上限与价格待核对（models.dev 无 doubao 来源）"
+   }
+  },
   "gemini": {
    "gemini-2.0-flash": {
     "source": "override",

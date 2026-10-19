@@ -293,7 +293,12 @@
         "openai-chat-completions": {
           "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
           "chat_path": "/chat/completions",
-          "discovery_path": "/models"
+          "discovery_path": "/models",
+          "auth": {
+            "type": "api-key",
+            "header": "Authorization",
+            "prefix": "Bearer "
+          }
         }
       },
       "default_endpoint": "gemini-generate-content",

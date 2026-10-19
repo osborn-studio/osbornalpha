@@ -10,10 +10,11 @@
 //   - doubao uses the anthropic-messages endpoint (ARK coding plan keys only work at /api/coding).
 //   - rows stored under the legacy id `minimax` keep the pre-registry chat path for every model (the
 //     registry path is unverified for them); rows this build writes use `minimax_cn` and the new path.
-//   - openai-protocol providers always authenticate with `Authorization: Bearer` (the wire standard;
-//     the registry's per-provider auth is for its default endpoint, e.g. gemini's x-goog-api-key).
+// Auth comes from the registry per endpoint (authFor): gemini's OpenAI-compatible endpoint declares
+// Bearer, claude declares x-api-key.
 
 import {
+  authFor,
   deriveProviders,
   providerById,
   registryModels,
@@ -79,7 +80,7 @@ const PLATFORM_DEFAULT_MODEL: Record<string, string> = {
 /** Reviewed settings-page suggestions that must not drift with models.json. */
 const SUGGESTED_MODEL_PIN: Record<string, string> = {
   deepseek: 'deepseek-v4-flash', // the reviewed platform default
-  doubao: 'doubao-seed-code', // models.json has no doubao entries (no models.dev source)
+  doubao: 'doubao-seed-code', // the doubao catalog entries are hand-written overrides without release dates
 };
 
 /** Newest chat model in models.json for a provider: latest release_date, ties by id, undated last. */
@@ -99,7 +100,8 @@ function build(p: RegistryProvider, derived: { protocol: string; endpoint: Endpo
   const endpointType = ENDPOINT_OVERRIDE[p.id] ?? derived.endpoint;
   const endpoint = p.endpoints[endpointType] as RegistryEndpoint;
   const protocol: Protocol = endpointType === 'anthropic-messages' ? 'anthropic' : 'openai';
-  const registryAuth = p.auth.type === 'api-key' ? p.auth : { header: 'Authorization', prefix: 'Bearer ' };
+  const auth = authFor(p, endpointType);
+  const registryAuth = auth.type === 'api-key' ? auth : { header: 'Authorization', prefix: 'Bearer ' };
   const legacyId = derived.alias;
   return {
     id: p.id,
@@ -110,8 +112,8 @@ function build(p: RegistryProvider, derived: { protocol: string; endpoint: Endpo
     chatPath: endpoint.chat_path,
     discoveryPath: endpoint.discovery_path,
     protocol,
-    authHeader: protocol === 'openai' ? 'Authorization' : registryAuth.header,
-    authPrefix: protocol === 'openai' ? 'Bearer ' : registryAuth.prefix,
+    authHeader: registryAuth.header,
+    authPrefix: registryAuth.prefix,
     platformDefaultModel: PLATFORM_DEFAULT_MODEL[p.id] ?? null,
     suggestedModel: SUGGESTED_MODEL_PIN[p.id] ?? newestCatalogModel(p.id),
     keyUrl: p.links?.api_key ?? null,

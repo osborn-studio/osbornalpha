@@ -125,7 +125,8 @@ describe('llm/providers (derived from the registry snapshot)', () => {
   it('suggested models: reviewed pins for deepseek and doubao, newest chat model elsewhere, null when the catalog is empty', () => {
     expect(getProvider('deepseek')!.suggestedModel).toBe('deepseek-v4-flash');
     expect(getProvider('doubao')!.suggestedModel).toBe('doubao-seed-code');
-    expect(registryModels.providers.doubao).toBeUndefined();
+    // doubao entries are hand-written overrides without release dates, so the pin stays
+    expect(Object.keys(registryModels.providers.doubao ?? {})).toContain('doubao-seed-code');
     for (const id of PROVIDER_IDS) {
       const def = PROVIDERS[id];
       const catalog = registryModels.providers[id];
@@ -149,15 +150,14 @@ describe('llm/providers (derived from the registry snapshot)', () => {
     expect(getProvider('minimax')!.suggestedModel).toBe('MiniMax-M3');
   });
 
-  it('auth: openai-protocol providers always use Bearer; anthropic-protocol providers use the registry auth', () => {
+  it('auth comes from the registry per endpoint (gemini OpenAI-compatible = Bearer, claude = x-api-key)', () => {
     for (const id of PROVIDER_IDS) {
       const def = PROVIDERS[id];
-      if (def.protocol === 'openai') {
-        expect(def.authHeader).toBe('Authorization');
-        expect(def.authPrefix).toBe('Bearer ');
-      }
+      const derived = (fixture.providers as Record<string, { auth: { header: string; prefix: string } }>)[id];
+      expect(def.authHeader).toBe(derived.auth.header);
+      expect(def.authPrefix).toBe(derived.auth.prefix);
+      if (def.protocol === 'openai') expect(def.authHeader).toBe('Authorization');
     }
-    // gemini's registry auth is x-goog-api-key, but its OpenAI-compatible endpoint takes Bearer
     expect(getProvider('gemini')!.authHeader).toBe('Authorization');
     expect(getProvider('claude')!.protocol).toBe('anthropic');
     expect(getProvider('claude')!.authHeader).toBe('x-api-key');

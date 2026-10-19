@@ -58,8 +58,10 @@ describe('GET /api/llm/catalog', () => {
     expect(k3).toMatchObject({ context: expect.any(Number), output: expect.any(Number), price: { input: expect.any(Number), output: expect.any(Number), reference: true } });
 
     expect((await catalogGet(new Request('https://x/api/llm/catalog?provider=nope'))).status).toBe(404);
-    const empty = await json(await catalogGet(new Request('https://x/api/llm/catalog?provider=doubao')));
-    expect(empty.body.models).toEqual([]);
+    // doubao entries are hand-written overrides: present, unpriced, with a verification hint
+    const doubao = await json(await catalogGet(new Request('https://x/api/llm/catalog?provider=doubao')));
+    expect(doubao.body.models.map((m: { id: string }) => m.id)).toContain('doubao-seed-code');
+    expect(doubao.body.models.find((m: { id: string }) => m.id === 'doubao-seed-code')).toMatchObject({ price: null, hint: expect.stringContaining('待核对') });
   });
 });
 

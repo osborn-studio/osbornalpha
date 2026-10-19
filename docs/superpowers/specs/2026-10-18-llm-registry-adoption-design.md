@@ -23,7 +23,7 @@
 | 供应商 id | 运行时**规范 id = 注册表 id**（`doubao / kimi_cn / minimax_cn / ...`）。存量 `llm_settings.provider` 的 `ark / kimi / minimax` 经 `aliases.alpha` 反查，**不迁移数据**。**存储 id**（r1 P1-5）：`ark / deepseek / openai / kimi` 继续写旧 id（回滚到旧版代码仍可读）；`minimax_cn` 写注册表 id（见下一行，存储 id 同时编码请求路径代际）；其余新供应商写注册表 id。`LLM_PROVIDER` env 也接受旧 id。 |
 | 目录范围 | 全部 `deriveProviders('alpha')` 的 14 家都进设置页（目录来自注册表，不再 Alpha 自选）。env 回退只认原 5 家（规范 id），顺序不变。 |
 | ARK coding plan | Alpha 侧显式覆盖：`doubao` 用 `anthropic-messages` 端点（`https://ark.cn-beijing.volces.com/api/coding` + `/v1/messages`，discovery `/v1/models`）。不要求注册表加 `preferred_endpoint`。 |
-| 鉴权头 | `protocol: 'openai'` 固定 `Authorization: Bearer`（OpenAI 线格式的标准，修正 gemini 的 per-provider auth 与端点不符）；`protocol: 'anthropic'` 用注册表 `auth.header / auth.prefix`（ARK/Kimi/MiniMax/智谱 = Bearer，Claude = `x-api-key`）。`LlmConfig` 增可选 `authHeader / authPrefix`，缺省 Bearer，老调用方不变。 |
+| 鉴权头 | 来自注册表的端点级 auth（`authFor`，2026-10-19 快照起；之前是"openai 一律 Bearer"的 Alpha 规则，结果相同）：OpenAI 兼容端点都是 `Authorization: Bearer`，Claude = `x-api-key`。`LlmConfig` 增可选 `authHeader / authPrefix`，缺省 Bearer，老调用方不变。 |
 | 默认模型（r1 P2-7：两个概念分开） | **平台默认** `platformDefaultModel`：只给 env 回退（`LLM_MODEL` 未设时）用，5 家逐字保持今天的值（`doubao-seed-code / deepseek-v4-flash / gpt-4o / moonshot-v1-32k / MiniMax-Text-01`），其余供应商无平台默认（env 回退本来也只认这 5 家）。**目录推荐** `suggestedModel`：设置页预选用，钉死 `deepseek → deepseek-v4-flash`、`doubao → doubao-seed-code`（注册表无数据）；其余 = `models.json` 中该供应商聊天模型里 `release_date` 最新者（同日按 id 升序取首个；无 `release_date` 排最后）；无模型则 `null`，页面要求先选。推荐只是预选，保存前用户看得见、改得了。 |
 | 模型持久化 | `llm_settings` 结构不动，所以**只能保存一个模型**：列表是单选（radio），勾中的即保存的 `model`；允许自定义模型名（正则 `^[A-Za-z0-9._:/-]{1,100}$`，与 PA `models-list.js` 一致）。"每个模型行的真实调用测试"按行提供。 |
 | 目录模型 ≠ 可用模型（r1 P1-1） | 不做静态兼容规则（注册表没有端点/参数兼容字段，`gpt-5-pro` 只走 Responses、`o3` 不收 `max_tokens` 这类差异无法从数据判断）。目录里的模型一律标"未验证"，**唯一的可用证据是模型行的真实调用测试**（走 Alpha 实际的适配器路径与请求形状），测试通过才 `ready`；测试失败按 class 给动作（`bad_request` → 换一个模型）。这是 Vox "资格是证据不是凭据存在"原则的直接应用。 |
@@ -129,7 +129,7 @@
 - MiniMax：存储 id `minimax`（旧行、env）→ `/text/chatcompletion_v2` 不论模型；`minimax_cn`（本版保存）→ `/v1/chat/completions`；设置页推荐 `models.json` 最新。
 - env 回退的默认模型 5 家逐字不变。
 - 用量记录里的 provider 字符串按 §5 改名。
-- PA 回复（2026-10-18，分支 `codex/llm-registry-endpoint-auth`，未合并）：注册表将加端点级 `auth` 覆盖（gemini 的 OpenAI 兼容端点声明 Bearer）并在 overrides 补 5 条 doubao 条目（上下文 256k / 输出 32k 为保守值，待核对）。下次刷新快照时：`derive.ts` 改读端点级 auth 并删掉"openai 一律 Bearer"规则，`SUGGESTED_MODEL_PIN` 的 doubao 钉死可以去掉。env 变量名按 `secret.id → Alpha env` 的映射留在 Alpha 侧（即现在的 `ENV_KEY`）。
+- PA 回复（2026-10-18，分支 `codex/llm-registry-endpoint-auth`，未合并）：注册表将加端点级 `auth` 覆盖（gemini 的 OpenAI 兼容端点声明 Bearer）并在 overrides 补 5 条 doubao 条目（上下文 256k / 输出 32k 为保守值，待核对）。2026-10-19 已刷新快照到 PA `main` `6b52e76a`（包 `e3ff7019`）：`derive.ts` 移植 `authFor`，`providers.ts` 的鉴权头全部来自注册表端点级 auth，"openai 一律 Bearer"规则删除（结果不变：gemini 兼容端点声明 Bearer）；doubao 有 5 条 override 条目但没有 `release_date`，"最新"规则无意义，`doubao-seed-code` 的推荐钉死保留。env 变量名按 `secret.id → Alpha env` 的映射留在 Alpha 侧（即现在的 `ENV_KEY`）。PA 线上只读端点已上线，Alpha 仍用仓内快照（拉取 + 快照兜底留到下一步）。
 - **回滚**（r2 P2-8）：回滚到旧版代码前，`llm_settings.provider` 中旧版不认识的值（`minimax_cn` 与所有新供应商 id）会让旧版 `resolveUserLlm()` 返回 null 并回落平台 key。回滚步骤：先 `select user_id, provider from llm_settings where provider not in ('ark','deepseek','openai','kimi','minimax')` 看影响范围，再决定把 `minimax_cn` 改回 `minimax`（路径也随之回旧版）并删除其余行（用户重新填 key），然后才回滚部署。设置页在本版不会产生除此之外的状态。
 - 后续工作（本次不做）：`getUserLlm()` 读取失败与解密失败在 `resolveLlm()` 里回落平台 key 的既有行为；组件级 jsdom 交互测试；本地 Supabase（PG 15）跑不过 anchor runner 迁移。
 

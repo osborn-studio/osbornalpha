@@ -8,11 +8,15 @@ import modelsDoc from './models.json';
 
 export type EndpointType = 'openai-chat-completions' | 'openai-responses' | 'anthropic-messages' | 'gemini-generate-content';
 
+export type RegistryAuth = { type: 'api-key'; header: string; prefix: string } | { type: 'none' };
+
 export interface RegistryEndpoint {
   base_url: string;
   chat_path: string;
   discovery_path: string;
   stream_chat_path?: string;
+  /** Endpoint-level override of the provider's auth (added upstream after Alpha's feedback, 2026-10-18). */
+  auth?: RegistryAuth;
   dialect?: {
     stream_options?: boolean;
     developer_role?: boolean;
@@ -30,7 +34,7 @@ export interface RegistryProvider {
   aliases?: Record<string, string>;
   sources?: Record<string, string>;
   secret: { id: string; env: string[]; required: boolean };
-  auth: { type: 'api-key'; header: string; prefix: string } | { type: 'none' };
+  auth: RegistryAuth;
   endpoints: Partial<Record<EndpointType, RegistryEndpoint>>;
   default_endpoint: EndpointType;
   links?: { docs?: string; api_key?: string; models?: string };
@@ -104,6 +108,11 @@ function appRules(appId: string) {
   return r;
 }
 
+/** Auth for one endpoint: the endpoint's own override when present, else the provider's. */
+export function authFor(p: RegistryProvider, endpointType: EndpointType): RegistryAuth {
+  return p.endpoints[endpointType]?.auth ?? p.auth;
+}
+
 /** The endpoint an app should use for a provider: its default when the app speaks it, else the first endpoint the app does speak. */
 export function endpointFor(appId: string, p: RegistryProvider): EndpointType | null {
   const protocols = appRules(appId);
@@ -121,6 +130,7 @@ export interface DerivedProvider {
   region: string;
   stream_usage: boolean;
   alias: string | null;
+  auth: RegistryAuth;
 }
 
 /** Providers the app can call today, in the app's legacy catalog shape. Same key order as the registry. */
@@ -142,6 +152,7 @@ export function deriveProviders(appId: string): Record<string, DerivedProvider> 
       region: p.region,
       stream_usage: e.dialect?.stream_options !== false,
       alias: p.aliases?.[appId] ?? null,
+      auth: { ...authFor(p, type) },
     };
   }
   return out;

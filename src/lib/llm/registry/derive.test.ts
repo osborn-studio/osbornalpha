@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   deriveProviders,
   unsupportedProviders,
+  authFor,
   endpointFor,
   providerById,
   resolveUrl,
@@ -26,6 +27,13 @@ describe('registry/derive (port of @osborn-pa/llm-registry derive.js)', () => {
 
   it('rejects unknown app ids', () => {
     expect(() => deriveProviders('nope')).toThrow(/unknown app/);
+  });
+
+  it('authFor returns the endpoint override when present, else the provider auth', () => {
+    const gemini = providerById('gemini')!;
+    expect(authFor(gemini, 'openai-chat-completions')).toEqual({ type: 'api-key', header: 'Authorization', prefix: 'Bearer ' });
+    expect(authFor(gemini, 'gemini-generate-content')).toEqual({ type: 'api-key', header: 'x-goog-api-key', prefix: '' });
+    expect(authFor(providerById('claude')!, 'anthropic-messages')).toEqual({ type: 'api-key', header: 'x-api-key', prefix: '' });
   });
 
   it('endpointFor prefers the default endpoint when the app speaks it, else the first spoken endpoint', () => {
