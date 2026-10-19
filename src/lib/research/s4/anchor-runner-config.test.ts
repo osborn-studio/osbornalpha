@@ -31,6 +31,14 @@ describe('anchor runner configuration',()=>{
   expect(anchorRunnerConfig({...env,ALPHA_ANCHOR_DB_USER:'alpha_anchor_app.mzfcaabhuwtfvsvadvsv'}).db.user).toBe('alpha_anchor_app.mzfcaabhuwtfvsvadvsv');
   expect(()=>anchorRunnerConfig({...env,ALPHA_ANCHOR_DB_USER:'postgres.mzfcaabhuwtfvsvadvsv'})).toThrow('runner_configuration_invalid');
  });
+ it('trusts an operator-supplied database CA file and omits SNI for an IP host',async()=>{
+  const {writeFileSync,mkdtempSync}=await import('node:fs');const {join}=await import('node:path');const {tmpdir}=await import('node:os');
+  const dir=mkdtempSync(join(tmpdir(),'alpha-dbca-'));const pem=join(dir,'ca.pem');writeFileSync(pem,'-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n');
+  expect(anchorRunnerConfig({...env,ALPHA_ANCHOR_DB_CA_FILE:pem}).db.ssl).toMatchObject({rejectUnauthorized:true,servername:'db.example.test',ca:expect.stringContaining('BEGIN CERTIFICATE')});
+  for(const file of ['relative/ca.pem',join(dir,'missing.pem')])expect(()=>anchorRunnerConfig({...env,ALPHA_ANCHOR_DB_CA_FILE:file})).toThrow('runner_configuration_invalid');
+  const ip=anchorRunnerConfig({...env,ALPHA_ANCHOR_DB_HOST:'10.60.2.10'}).db.ssl as Record<string,unknown>;
+  expect(ip.rejectUnauthorized).toBe(true);expect('servername' in ip).toBe(false);
+ });
  it('allows plaintext only for an explicit loopback test target',()=>{
   const c=anchorRunnerConfig({...env,ALPHA_ANCHOR_DB_HOST:'localhost',ALPHA_ANCHOR_DB_INSECURE_LOOPBACK:'1'});
   expect(c.db.ssl).toBe(false);expect(c.db.host).toBe('127.0.0.1');

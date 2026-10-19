@@ -26,6 +26,10 @@ describe('checkpoint registry configuration',()=>{
   for(const file of ['relative/ca.pem',join(dir,'missing.pem'),bad])expect(()=>checkpointRegistryConfig({...env,ALPHA_ANCHOR_REGISTRY_CA_FILE:file})).toThrow('registry_configuration_invalid');
   expect(()=>checkpointRegistryConfig({...env,ALPHA_ANCHOR_REGISTRY_HOST:'127.0.0.1',ALPHA_ANCHOR_REGISTRY_INSECURE_LOOPBACK:'1',ALPHA_ANCHOR_REGISTRY_CA_FILE:pem})).toThrow('registry_configuration_invalid');
  });
+ it('omits SNI for an IP-literal registry host while still verifying the certificate',()=>{
+  const ssl=checkpointRegistryConfig({...env,ALPHA_ANCHOR_REGISTRY_HOST:'10.60.2.10'}).db.ssl as Record<string,unknown>;
+  expect(ssl.rejectUnauthorized).toBe(true);expect('servername' in ssl).toBe(false);
+ });
  it('allows plaintext only for an explicit loopback test target',()=>{
   expect(()=>checkpointRegistryConfig({...env,ALPHA_ANCHOR_REGISTRY_INSECURE_LOOPBACK:'1'})).toThrow('registry_configuration_invalid');
   const c=checkpointRegistryConfig({...env,ALPHA_ANCHOR_REGISTRY_HOST:'127.0.0.1',ALPHA_ANCHOR_REGISTRY_INSECURE_LOOPBACK:'1'});
