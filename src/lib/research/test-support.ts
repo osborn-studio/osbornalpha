@@ -68,6 +68,8 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any }> {
   private limitN: number | null = null;
   private pending: { op: 'insert' | 'update' | 'upsert'; payload: any } | null = null;
   private single = false;
+  /** A filter PostgreSQL would reject; surfaced as the query's error, as PostgREST does. */
+  private readError: { code: string; message: string } | null = null;
 
   constructor(private store: MockStore, private table: string) {}
 
@@ -100,8 +102,17 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any }> {
     return this;
   }
 
-  contains(col: string, arr: any[]): this {
-    this.filters.push({ kind: 'contains', col, arr });
+  /**
+   * Every research_* column filtered with contains() is jsonb. supabase-js
+   * encodes a JS array as a PostgreSQL array literal (`cs.{…}`), which jsonb @>
+   * rejects (SQLSTATE 22P02); callers must pass the needle as a JSON string.
+   */
+  contains(col: string, value: any[] | string): this {
+    if (typeof value === 'string') {
+      this.filters.push({ kind: 'contains', col, arr: JSON.parse(value) });
+    } else {
+      this.readError = { code: '22P02', message: 'invalid input syntax for type json' };
+    }
     return this;
   }
 
@@ -214,6 +225,7 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any }> {
     }
 
     // read
+    if (this.readError) return { data: null, error: this.readError };
     let out = table.filter((r) => this.matches(r));
     if (this.orders.length) {
       out = [...out].sort((a, b) => {

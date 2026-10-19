@@ -240,13 +240,18 @@ export async function listSources(ctx: ResearchCtx, opts: ListSourcesOpts = {}):
   return ((data ?? []) as any[]).filter(legacySourceVisible).map(rowToSource);
 }
 
-/** Sources whose entity_ids jsonb array contains the given entity id. */
+/**
+ * Sources whose entity_ids jsonb array contains the given entity id.
+ * The needle is passed as a JSON string: supabase-js encodes a JS array as a
+ * PostgreSQL array literal (`cs.{…}`), which jsonb @> rejects with
+ * "invalid input syntax for type json".
+ */
 export async function listSourcesForEntity(ctx: ResearchCtx, entityId: string): Promise<SourceDocument[]> {
   const { data, error } = await ctx.supabase
     .from(TABLE)
     .select('*')
     .eq('user_id', ctx.userId)
-    .contains('entity_ids', [entityId])
+    .contains('entity_ids', JSON.stringify([entityId]))
     .order('ingested_at', { ascending: false });
   if (error) throw new Error(error.message);
   return ((data ?? []) as any[]).filter(legacySourceVisible).map(rowToSource);
