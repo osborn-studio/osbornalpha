@@ -1,4 +1,5 @@
 import {readFileSync} from 'node:fs';
+import {checkServerIdentity} from 'node:tls';
 import {isAbsolute} from 'node:path';
 import type {PoolConfig} from 'pg';
 import {checkpointRegistryConfig,type CheckpointRegistryConfig} from './checkpoint-registry';
@@ -44,7 +45,7 @@ export function anchorRunnerConfig(env:Env=process.env):AnchorRunnerConfig{
     if(!/-----BEGIN CERTIFICATE-----/.test(ca))deny();
   }
   const db:PoolConfig={host:host==='localhost'?'127.0.0.1':host,port,database,user,
-    ssl:insecure?false:{rejectUnauthorized:true,...(isIpLiteral(host!)?{}:{servername:host}),...(ca?{ca}:{})},
+    ssl:insecure?false:{rejectUnauthorized:true,...(isIpLiteral(host!)?{checkServerIdentity:(_h:string,cert:Parameters<typeof checkServerIdentity>[1])=>checkServerIdentity(host!,cert)}:{servername:host}),...(ca?{ca}:{})},
     max:2,connectionTimeoutMillis:5000,statement_timeout:15000,idle_in_transaction_session_timeout:30000,application_name:'alpha-anchor-runner'};
   // No startup `options`: the pooler path may reject them, and every runner call is a fully
   // qualified SECURITY DEFINER function with its own pinned search_path.

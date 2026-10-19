@@ -27,8 +27,10 @@ describe('checkpoint registry configuration',()=>{
   expect(()=>checkpointRegistryConfig({...env,ALPHA_ANCHOR_REGISTRY_HOST:'127.0.0.1',ALPHA_ANCHOR_REGISTRY_INSECURE_LOOPBACK:'1',ALPHA_ANCHOR_REGISTRY_CA_FILE:pem})).toThrow('registry_configuration_invalid');
  });
  it('omits SNI for an IP-literal registry host while still verifying the certificate',()=>{
-  const ssl=checkpointRegistryConfig({...env,ALPHA_ANCHOR_REGISTRY_HOST:'10.60.2.10'}).db.ssl as Record<string,unknown>;
-  expect(ssl.rejectUnauthorized).toBe(true);expect('servername' in ssl).toBe(false);
+  const ssl=checkpointRegistryConfig({...env,ALPHA_ANCHOR_REGISTRY_HOST:'10.60.2.10'}).db.ssl as {rejectUnauthorized:boolean;servername?:string;checkServerIdentity:(h:string,c:{subject:{CN:string};subjectaltname:string})=>Error|undefined};
+  expect(ssl.rejectUnauthorized).toBe(true);expect(ssl.servername).toBeUndefined();
+  expect(ssl.checkServerIdentity('ignored',{subject:{CN:'10.60.2.10'},subjectaltname:'IP Address:10.60.2.10'})).toBeUndefined();
+  expect(ssl.checkServerIdentity('ignored',{subject:{CN:'10.60.2.11'},subjectaltname:'IP Address:10.60.2.11'})).toBeInstanceOf(Error);
  });
  it('allows plaintext only for an explicit loopback test target',()=>{
   expect(()=>checkpointRegistryConfig({...env,ALPHA_ANCHOR_REGISTRY_INSECURE_LOOPBACK:'1'})).toThrow('registry_configuration_invalid');
