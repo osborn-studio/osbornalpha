@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 import {isAbsolute} from 'node:path';
 import type {PoolConfig} from 'pg';
 import {checkpointRegistryConfig,type CheckpointRegistryConfig} from './checkpoint-registry';
@@ -14,6 +15,8 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]
 const LOOPBACK=['127.0.0.1','::1','localhost'];
 const ADMIN_NAMES=['postgres','supabase_admin','service_role','authenticated','anon','root','admin','s4_admin'];
 const deny=():never=>{throw new Error('runner_configuration_invalid');};
+/** RFC 6066 forbids an IP literal as SNI; Node still checks the IP SAN against the host. */
+export function isIpLiteral(host:string):boolean{return /^(\d{1,3}\.){3}\d{1,3}$/.test(host)||host.includes(':');}
 
 export function anchorRunnerConfig(env:Env=process.env):AnchorRunnerConfig{
   if(env.ALPHA_ANCHOR_DB_URL!==undefined)deny();
@@ -32,8 +35,16 @@ export function anchorRunnerConfig(env:Env=process.env):AnchorRunnerConfig{
   if(!Number.isInteger(intervalSeconds)||intervalSeconds<5||intervalSeconds>3600)deny();
   const watchdogMs=env.ALPHA_ANCHOR_WATCHDOG_MS===undefined?5000:Number(env.ALPHA_ANCHOR_WATCHDOG_MS);
   if(!Number.isInteger(watchdogMs)||watchdogMs<100||watchdogMs>30000)deny();
+  // The hosted database may present a chain from the provider's own CA (Supabase prod CA).
+  const caFile=env.ALPHA_ANCHOR_DB_CA_FILE;
+  let ca:string|undefined;
+  if(caFile!==undefined){
+    if(insecure||!isAbsolute(caFile))deny();
+    try{ca=readFileSync(caFile,'utf8');}catch{return deny();}
+    if(!/-----BEGIN CERTIFICATE-----/.test(ca))deny();
+  }
   const db:PoolConfig={host:host==='localhost'?'127.0.0.1':host,port,database,user,
-    ssl:insecure?false:{rejectUnauthorized:true,servername:host},
+    ssl:insecure?false:{rejectUnauthorized:true,...(isIpLiteral(host!)?{}:{servername:host}),...(ca?{ca}:{})},
     max:2,connectionTimeoutMillis:5000,statement_timeout:15000,idle_in_transaction_session_timeout:30000,application_name:'alpha-anchor-runner'};
   // No startup `options`: the pooler path may reject them, and every runner call is a fully
   // qualified SECURITY DEFINER function with its own pinned search_path.
