@@ -1,0 +1,12 @@
+#!/bin/bash
+# B1: daily export of the anchor journal and manifest, CMS-encrypted to the owner's backup
+# certificate (private key stays on the owner's Mac). Installed at /usr/local/sbin, run by
+# alpha-anchor-export.timer. Keeps the newest 14 exports.
+set -euo pipefail; export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+umask 077
+ts=$(date -u +%Y%m%dT%H%M%SZ); out=/var/backups/alpha-anchor/anchor-$ts
+tar -C / -cf - var/lib/alpha-anchor/store etc/alpha-anchor/manifest.json | xz -6 > "$out.tar.xz"
+openssl cms -encrypt -binary -aes256 -in "$out.tar.xz" -outform DER -out "$out.cms" /etc/osborn-brain/backup-recipient.pem
+sha256sum "$out.cms" | cut -d' ' -f1 > "$out.cms.sha256"; rm -f "$out.tar.xz"
+ls -1t /var/backups/alpha-anchor/anchor-*.cms | tail -n +15 | while read f; do rm -f "$f" "$f.sha256"; done
+echo "exported $out.cms $(stat -c %s "$out.cms") bytes"

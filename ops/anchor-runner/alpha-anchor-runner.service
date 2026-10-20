@@ -7,9 +7,9 @@ Wants=network-online.target
 Type=simple
 User=alpha-anchor
 Group=alpha-anchor
-WorkingDirectory=/opt/osbornalpha
+WorkingDirectory=/opt/alpha-anchor
 EnvironmentFile=/etc/alpha-anchor/runner.env
-ExecStart=/usr/bin/node --import tsx scripts/anchor/runner.ts --watch
+ExecStart=/opt/alpha-anchor/node/bin/node /opt/alpha-anchor/alpha-anchor-runner.mjs --watch
 Restart=on-failure
 RestartSec=30
 # A watchdog pause exits with code 2 and must not be auto-restarted into a second writer
@@ -27,8 +27,6 @@ RestrictSUIDSGID=true
 LockPersonality=true
 CapabilityBoundingSet=
 ReadWritePaths=/var/lib/alpha-anchor
-StateDirectory=alpha-anchor
-StateDirectoryMode=0700
 
 [Install]
 WantedBy=multi-user.target

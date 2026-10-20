@@ -1,0 +1,5 @@
+[Unit]
+Description=Alpha anchor journal export (CMS-encrypted to the owner's backup certificate)
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/alpha-anchor-export

@@ -1,6 +1,6 @@
 # Alpha anchor runner (R1 + S1 + B1)
 
-Owner-only installation on the Tencent Lighthouse host per ADR `docs/adr/2026-10-18-anchor-runner-and-checkpoint.md` §4 and §8 items 1, 3 and 4. Status: **program, unit and notes exist; nothing is installed.** The registry side is `ops/anchor-checkpoint/README.md`.
+Owner-only installation on the Tencent Lighthouse host per ADR `docs/adr/2026-10-18-anchor-runner-and-checkpoint.md` §4 and §8 items 1, 3 and 4. Status: **installed on the Daoplatform Lighthouse host on 2026-10-19 and running in disabled state** (production S4/S6 closed, so every cycle drains zero rows). Record: `docs/verification/2026-10-19-anchor-runner-installation.md`. The registry side is `ops/anchor-checkpoint/README.md`.
 
 ## What the process does
 
@@ -36,7 +36,11 @@ Every cycle, per owner in `ALPHA_ANCHOR_OWNERS`: reconcile registry, database ta
    ALPHA_ANCHOR_REGISTRY_USER=alpha_checkpoint_app
    ALPHA_ANCHOR_REGISTRY_PASSWORD=<secret>
    ALPHA_ANCHOR_INTERVAL_SECONDS=60
+   ALPHA_ANCHOR_DB_CA_FILE=/etc/alpha-anchor/supabase-ca.pem
+   ALPHA_ANCHOR_REGISTRY_CA_FILE=/etc/alpha-anchor/registry-ca.pem
    ```
+
+   The hosted database is reached through the Supabase pooler (`aws-1-<region>.pooler.supabase.com:5432`, session mode, user `alpha_anchor_app.<project ref>`) because the direct host is IPv6-only; its chain is rooted in `Supabase Root 2021 CA`, which must be pinned from two independent network views (SHA-256 fingerprint recorded in the installation record). The registry instance presents Tencent's private CA with the IP as SAN.
 
    `alpha_anchor_app` is a login role granted `alpha_anchor_runner` (no table privileges), created by the release executor together with the `research_s4_anchor_principals` row (`session_role = 'alpha_anchor_app'`, the owner, environment, generation 1, `valid_until`).
 
