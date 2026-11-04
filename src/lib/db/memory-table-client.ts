@@ -17,11 +17,14 @@ export function memoryTableClient(keys:Record<string,string[]>={}):TableClient&{
   },
   async update(t,match,patch){for(const r of rowsOf(t))if(matches(r,match))Object.assign(r,patch);},
   async select(t,match,opts={}){
+   if(opts.offset!==undefined&&!opts.orderBy)throw new Error('offset_requires_orderBy');
    let out=rowsOf(t).filter(r=>matches(r,match)).map(r=>({...r}));
    if(opts.orderBy){const k=opts.orderBy;out.sort((a,b)=>(a[k] as number)<(b[k] as number)?-1:(a[k] as number)>(b[k] as number)?1:0);if(opts.desc)out.reverse();}
-   if(opts.limit)out=out.slice(0,opts.limit);
+   if(opts.offset)out=out.slice(opts.offset);
+   if(opts.limit!==undefined)out=out.slice(0,opts.limit);
    return out;
   },
+  async count(t,match){return rowsOf(t).filter(r=>matches(r,match)).length;},
   async upsert(t,row,onConflict){
    const cols=onConflict.split(',').map(s=>s.trim());
    const rows=rowsOf(t);const hit=rows.find(r=>cols.every(c=>r[c]===row[c]));
