@@ -1,0 +1,31 @@
+﻿url,status,evidence_level,headings,text_characters,captured_at_shanghai,sha256
+https://www.chaosaiagent.com/benchmark/a16z-show,200,公开HTML正文/元数据；未运行交互,他山之石 · a16z Show / 已收录单期,5726,2026-11-04T20:25:49+08:00,e2e4ccf5fecf0f2084fa329ef6a1090c984a310cf7d7730df411cc1617f592f9
+https://www.chaosaiagent.com/benchmark,200,公开HTML正文/元数据；未运行交互,他山之石 / 节目索引,1182,2026-11-04T20:25:01+08:00,a64e724205d6cc681a830be42968c5f89f49b95c5e79832a796cdf91b921ba8b
+https://www.chaosaiagent.com/company/alphabet,200,仅HTML壳层；正文待浏览器验证,,229,2026-11-04T20:25:46+08:00,2614d2e645279e2141b73f29708135658fc8277c7dabd90e5c5f797a3c68cb12
+https://www.chaosaiagent.com/company,200,HTML壳层 + 公开客户端资源；未运行交互,,229,2026-11-04T20:24:59+08:00,d73843ae71159a2a6a867d0fe556165114be163e778a8b8b01302f8d296d38e8
+https://www.chaosaiagent.com/competition/nvidia-amd,200,公开HTML正文/元数据；未运行交互,英伟达 vs AMD / 市场格局：全球AI加速器市场 / 战略与产品对比 / 财务对比 / 护城河：CUDA vs ROCm / 情景分析与风险 / 估值与结论,5763,2026-11-04T20:25:47+08:00,fda9630cfe3cc27abbc7d9a7c5438437b9a6685b644562490e30c909bf014df4
+https://www.chaosaiagent.com/competition,200,公开HTML正文/元数据；未运行交互,竞争分析,4085,2026-11-04T20:24:59+08:00,b3cfecd764faff06f6a5c67c15c5886fa5815d26daf11a9ae132ab1489221b71
+https://www.chaosaiagent.com/foreign-research,200,HTML壳层 + 公开客户端资源；未运行交互,,229,2026-11-04T20:25:00+08:00,46c110c951db6ea58ffc9ba12a8d6f3d37b922ac025507ca52607de608ad7d43
+https://www.chaosaiagent.com/industries/ai-agent,200,公开HTML正文/元数据；未运行交互,AI智能体行业 / AI智能体行业 / AI Agent子行业优先级四象限,1518,2026-11-04T20:25:46+08:00,faba844accc7c9ded4f8715684a6f303ee1de63744bfa245af70a8e507641813
+https://www.chaosaiagent.com/industries/token-interactive/index.html,200,独立嵌入HTML；未运行交互,"Token Factory Unit Economics / 一、NVIDIA基座单位经济学底层数学引擎与实时推导 / TCO_annual 公式 / Output_actual 实际年吞吐公式 / CPMC 综合单位成本公式 / 
+                        算力成本配置
+                     / 
+                        收入与定价模型
+                     / 单位成本结构拆解 (每百万 Tokens) / 8年长期经营仿真利润曲线 (P&L 趋势) / 💡 Agent 渗透率影响传导 / ⚙️ 核心财务逻辑：Token 工厂模型",1281,2026-11-04T20:27:12+08:00,9f7d88ed2fb9fd7399f821077a4ea6888c420cf4ae617cc3c9658ad4bda2839c
+https://www.chaosaiagent.com/industries/token-interactive,200,页面框架/来源/入口；动态或嵌入内容仅部分核查,🧮Token 单位经济学交互模型,581,2026-11-04T20:25:46+08:00,a9ea6c92823a658bb25d6ae4025032f1f9a30a58733cf559c0df6f49b24dba1b
+https://www.chaosaiagent.com/industries,200,公开HTML正文/元数据；未运行交互,行业研究 / 行业生命周期 6 阶段模型 / 📊 申万一级行业 · 财务指标热力图 / 📈 申万行业 · 6 阶段分布 / 📡 10 个代表行业 · 5 维景气度雷达 / 📊 申万一级行业 · 估值分位数(PE/PB/PS) / 📝 定性分析:基于 PB + PS 的估值结论 / 🎯 ChaosAI 已覆盖细分行业 · 生命周期矩阵 / AI 行业 · Gartner 创新曲线(2026) / 人形机器人 · Gartner 创新曲线(2026) / 🎯 6 阶段选股模型表 / 📁 细分行业索引 · 原 9 大行业卡片,10242,2026-11-04T20:25:00+08:00,505c569e979da3806061c4f81bff18490decb607c1fbad6a87aa0b5773ea01eb
+https://www.chaosaiagent.com/industry-data/ai-ecosystem,200,公开HTML正文/元数据；未运行交互,🏗️中国 AI 厂商工程实力 · HuggingFace + GitHub / 📊 厂商一览,2703,2026-11-04T20:25:41+08:00,0d610d976fba055cc65fbd35d0b3a2f0c3b072f742c6f60abbed0aa1ff021cc4
+https://www.chaosaiagent.com/industry-data/ai-trends,200,公开HTML正文/元数据；未运行交互,🔥AI 技术新趋势 · HuggingFace + GitHub Trending / 📊 趋势速览,5958,2026-11-04T20:25:48+08:00,576cf4c1b5f814d774d996f1144c5dff9a7e61f81c198fbe8a54e7121d835a9a
+https://www.chaosaiagent.com/industry-data/aicpb-rankings,200,公开HTML正文/元数据；未运行交互,📱AI 产品榜,7285,2026-11-04T20:25:42+08:00,0062ee3723778c82763e4a6ade3e48f385e68301217f648bee0a2ea678df24d5
+https://www.chaosaiagent.com/industry-data/arena-leaderboards,200,公开HTML正文/元数据；未运行交互,🏟️ Arena AI 排行榜,677,2026-11-04T20:25:44+08:00,706f5aa18bd80425a66294e24197f32137b29c09a904cfec35f23f62b3990ed5
+https://www.chaosaiagent.com/industry-data/jefferies-ai-data-tracking,200,页面框架/来源/入口；动态或嵌入内容仅部分核查,,297,2026-11-04T20:25:45+08:00,2fe484a991bf5e22ae0a343b35ae1482aedbb9024a7028cf4507a262702a3d5b
+https://www.chaosaiagent.com/industry-data/llm-pricing,200,公开HTML正文/元数据；未运行交互,💰 LLM Token 价格,2190,2026-11-04T20:25:45+08:00,de9aa1eca0d6f4867711cd68684cd1c9a843d85ccc3b74679e037362e0530cb2
+https://www.chaosaiagent.com/industry-data/llm-rankings/aa-leaderboards,200,公开HTML正文/元数据；未运行交互,🏆 AA 模型能力榜,2389,2026-11-04T20:25:40+08:00,2593d2c9775735ea86d4acf80d374a2a9e6b0a87759a249921efc2d36ecae6fc
+https://www.chaosaiagent.com/industry-data/llm-rankings,200,公开HTML正文/元数据；未运行交互,📊 LLM 生态榜单,8144,2026-11-04T20:25:44+08:00,f7c9bbe8c955c557f5e2c3f16bdcb29d966d687a8132e4d949e85d0e82e00ce6
+https://www.chaosaiagent.com/industry-data,200,公开HTML正文/元数据；未运行交互,📈 行业数据 / 已上线数据源,2116,2026-11-04T20:25:01+08:00,ced7275cc4feed5fecce31b3c4870cea5ea66dd28a1f76320a743483174a2554
+https://www.chaosaiagent.com/macro-strategy/cycle-asset-table/index.html,200,独立嵌入HTML；未运行交互,2000 年以来美联储加息 / 降息周期内各类资产表现 / 加息周期 · 2000年以来共 4 轮 / 降息周期 · 2000年以来共 4 轮 / 几大关键观察 / 数据来源,4856,2026-11-04T20:27:12+08:00,4c814528df0bf82ac8c6c712360b703d11edd72a716d0498ae2002ed5ee63816
+https://www.chaosaiagent.com/macro-strategy,200,公开HTML正文/元数据；未运行交互,🌀 宏观策略 / 🧭美林时钟大盘 / 🇺🇸美国 / 🇨🇳中国 / 🇺🇸美国指标 / 📊 美国 8 个宏观指标汇总 / 📋 8 个指标卡片网格 / 🔗 美国宏观 × 资产价格 关联分析 / 🇨🇳中国指标 / 📊 中国 13 个宏观指标汇总 / 📋 指标卡片网格 / 🔗 中国宏观 × 资产价格 关联分析 / 🔗宏观→资产价格传导链 / 📊 6 段传导流程图 / 📚 4 象限剧本 / 📚 美林时钟 4 象限 · 完整传导剧本 / 🎯 当前剧本 / 🌏美联储 → 中国资产 / 🔗 核心机制图 / 📜历史快照,50112,2026-11-04T20:24:30+08:00,46f482497fcbe82d6507795625ed9363bafe3f4d92dd7508d0a877aab944509e
+https://www.chaosaiagent.com/monitor,200,公开HTML正文/元数据；未运行交互,重点公司监控 / 核心逻辑26Q3 验证 / 核心跟踪指标26Q3目标标准 vs 26Q3 实际 vs 置信度变化 / 机构评级中报后卖方目标价与评级动作 / 业绩说明会纪要管理层公开表述 · 共 1 期 / 跟踪事件业绩发布 · 风险事件 · 共 2 条 / 基本面动态已过滤行情噪音,46999,2026-11-04T20:25:03+08:00,18fb3270404fefc7b9cfa1eee3e2899c2ba6fe1151fcab661c0b8ac6682a3b0d
+https://www.chaosaiagent.com/research/dario-interview,200,页面框架/来源/入口；动态或嵌入内容仅部分核查,Dario Amodei 70 分钟访谈,760,2026-11-04T20:25:47+08:00,5ea556a9d276107003f9cc4961b834317287af846529b0c992e970ea7a55ce59
+https://www.chaosaiagent.com/research,200,公开HTML正文/元数据；未运行交互,专题研究,577,2026-11-04T20:24:59+08:00,e7dbd4a830646cef1d7c63bc2c0f76e5632c5875d6f83d34da63d57d85989585
+https://www.chaosaiagent.com/macro-strategy/methodology,404,HTTP直接读取与web工具均404,,0,2026-11-04,
