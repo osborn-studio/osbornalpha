@@ -7,14 +7,31 @@ import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261105090000_dq_foundation.sql';
 const TABLES=['ingest_batches','dq_quarantine','dq_reconciliations','dq_freshness'];
+const ds=()=>'dq-'+randomUUID().slice(0,8);
 
 describe.skipIf(!enabled)('WP-F0 dq foundation on real PostgreSQL',()=>{
  let admin:Pool;
+ const batches:string[]=[];
+ const datasets:string[]=[];
+ const newDs=()=>{const d=ds();datasets.push(d);return d;};
+ const insertBatch=async(dataset:string)=>{
+  const id=randomUUID();batches.push(id);
+  await admin.query(`insert into public.ingest_batches(batch_id,producer,dataset) values($1,'test',$2)`,[id,dataset]);
+  return id;
+ };
  beforeAll(async()=>{
   const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
   admin=new Pool({connectionString:state.adminUrl});
  });
- afterAll(async()=>{await admin?.end();});
+ afterAll(async()=>{
+  if(admin){
+   await admin.query(`delete from public.dq_quarantine where dataset=any($1) or batch_id=any($2::uuid[])`,[datasets,batches]);
+   await admin.query(`delete from public.dq_reconciliations where dataset=any($1) or batch_id=any($2::uuid[])`,[datasets,batches]);
+   await admin.query(`delete from public.ingest_batches where batch_id=any($1::uuid[]) or dataset=any($2)`,[batches,datasets]);
+   await admin.query(`delete from public.dq_freshness where dataset=any($1)`,[datasets]);
+   await admin.end();
+  }
+ });
 
  it('creates the four tables with RLS enabled and no policies, and replays without error',async()=>{
   const rows=(await admin.query(`select c.relname,c.relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1)`,[TABLES])).rows;
@@ -25,23 +42,57 @@ describe.skipIf(!enabled)('WP-F0 dq foundation on real PostgreSQL',()=>{
   await expect(admin.query(readFileSync(MIGRATION,'utf8'))).resolves.toBeDefined();
  });
 
- it('enforces batch status, quarantine status and freshness cadence check constraints',async()=>{
-  const batch=randomUUID();
-  await admin.query(`insert into public.ingest_batches(batch_id,producer,dataset) values($1,'test','unit')`,[batch]);
-  await expect(admin.query(`insert into public.ingest_batches(batch_id,producer,dataset,status) values($1,'test','unit','bogus')`,[randomUUID()])).rejects.toThrow(/check constraint/);
-  await admin.query(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id) values($1,'unit','t','k','range',$2)`,[randomUUID(),batch]);
-  await expect(admin.query(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,status) values($1,'unit','t','k','range',$2,'done')`,[randomUUID(),batch])).rejects.toThrow(/check constraint/);
-  await expect(admin.query(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id) values($1,'unit','t','k','range',$2)`,[randomUUID(),randomUUID()])).rejects.toThrow(/foreign key/);
-  await admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status) values('unit','daily','missing')`);
-  await expect(admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status) values('unit2','weekly','missing')`)).rejects.toThrow(/check constraint/);
+ it('enforces named check, foreign-key and invariant constraints on all four tables',async()=>{
+  const d=newDs();
+  const batch=await insertBatch(d);
+  const ins=(cols:string,vals:string,params:unknown[])=>admin.query(`insert into public.ingest_batches(batch_id,producer,dataset,${cols}) values($1,'test',$2,${vals})`,[randomUUID(),d,...params]);
+  await expect(ins('status,finished_at',`'bogus',now()`,[])).rejects.toThrow(/ingest_batches_status_check/);
+  await expect(ins('triggered_by',`'robot'`,[])).rejects.toThrow(/ingest_batches_triggered_by_check/);
+  await expect(ins('status,started_at,finished_at',`'success',$3,$4`,['2026-01-02T00:00:00Z','2026-01-01T00:00:00Z'])).rejects.toThrow(/ingest_batches_finished_after_started/);
+  await expect(ins('status',`'success'`,[])).rejects.toThrow(/ingest_batches_running_iff_unfinished/);
+  await expect(ins('counts',`'[]'::jsonb`,[])).rejects.toThrow(/ingest_batches_counts_object/);
+
+  const q=(extraCols:string,extraVals:string,batchId:string,params:unknown[]=[])=>admin.query(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id${extraCols}) values($1,$2,'t','k','range',$3${extraVals})`,[randomUUID(),d,batchId,...params]);
+  await q('','',batch);
+  await expect(q(',status,resolved_by,resolved_at',`,'done',$4,now()`,batch,[randomUUID()])).rejects.toThrow(/dq_quarantine_status_check/);
+  await expect(q('','',randomUUID())).rejects.toThrow(/dq_quarantine_batch_id_fkey/);
+  await expect(q(',status,resolved_by',`,'resolved_accept',$4`,batch,[randomUUID()])).rejects.toThrow(/dq_quarantine_open_iff_unresolved/);
+
+  await admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'daily','missing')`,[d]);
+  const f2=newDs();
+  await expect(admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'weekly','missing')`,[f2])).rejects.toThrow(/dq_freshness_expected_cadence_check/);
+  await expect(admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status,consecutive_errors) values($1,'daily','error',-1)`,[f2])).rejects.toThrow(/dq_freshness_consecutive_errors_check/);
+  await expect(admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'daily','fresh')`,[f2])).rejects.toThrow(/dq_freshness_ok_requires_last_ok/);
  });
 
- it('denies anon and authenticated roles while service_role bypasses',async()=>{
+ it('restricts batch deletion while quarantine evidence exists and nulls reconciliation batch_id on delete',async()=>{
+  const d=newDs();
+  const quarantined=await insertBatch(d);
+  await admin.query(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id) values($1,$2,'t','k','range',$3)`,[randomUUID(),d,quarantined]);
+  await expect(admin.query(`delete from public.ingest_batches where batch_id=$1`,[quarantined])).rejects.toThrow(/dq_quarantine_batch_id_fkey/);
+
+  const reconciled=await insertBatch(d);
+  const recId=randomUUID();
+  await admin.query(`insert into public.dq_reconciliations(id,dataset,left_source,right_source,natural_key,tolerance,passed,batch_id) values($1,$2,'a','b','k',0,true,$3)`,[recId,d,reconciled]);
+  await admin.query(`delete from public.ingest_batches where batch_id=$1`,[reconciled]);
+  const rec=(await admin.query(`select batch_id from public.dq_reconciliations where id=$1`,[recId])).rows[0];
+  expect(rec.batch_id).toBeNull();
+ });
+
+ it('revokes SELECT/INSERT/TRUNCATE from anon and authenticated, denies anon reads, and service_role bypasses RLS',async()=>{
+  for(const role of ['anon','authenticated']) for(const t of TABLES) for(const priv of ['SELECT','INSERT','TRUNCATE']){
+   const allowed=(await admin.query(`select has_table_privilege($1,'public.'||$2,$3) ok`,[role,t,priv])).rows[0].ok;
+   expect({role,t,priv,allowed}).toEqual({role,t,priv,allowed:false});
+  }
+  const bypass=(await admin.query(`select rolbypassrls from pg_roles where rolname='service_role'`)).rows[0]?.rolbypassrls;
+  expect(bypass).toBe(true);
   const c=await admin.connect();
   try{
    await c.query(`set role anon`);
    await expect(c.query(`select * from public.ingest_batches`)).rejects.toThrow(/permission denied/);
-   await c.query(`reset role`);
-  }finally{c.release();}
+  }finally{
+   await c.query('reset role').catch(()=>{});
+   c.release();
+  }
  });
 });
