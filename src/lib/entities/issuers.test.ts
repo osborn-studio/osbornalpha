@@ -341,6 +341,24 @@ describe('attachSecurity',()=>{
   expect(await attachSecurity(c,{...sec,isin:'US0378331005'})).toBe('conflict');
   expect(claims(c)).toEqual([{issuer_id:'a',id_type:'isin',value:'US0378331005'}]);
  });
+ it('reports conflict and claims the ISIN when an ISIN exclusion violation (23P01) names issuer_securities_isin_no_overlap',async()=>{
+  const c=client();
+  const base=c.insert.bind(c);
+  c.insert=async(t,row)=>{if(t==='issuer_securities')throw new TableError('insert','issuer_securities','conflicting key value violates exclusion constraint "issuer_securities_isin_no_overlap"','23P01');return base(t,row);};
+  expect(await attachSecurity(c,{...sec,isin:'US0378331005'})).toBe('conflict');
+  expect(claims(c)).toEqual([{issuer_id:'a',id_type:'isin',value:'US0378331005'}]);
+  expect(c.rows('issuer_securities')).toEqual([]);
+ });
+ it('compares the ISIN against same-issuer overlapping rows with a different valid_from',async()=>{
+  const c=client();
+  expect(await attachSecurity(c,{...sec,isin:'US0378331005'})).toBe('inserted');
+  expect(await attachSecurity(c,{...sec,valid_from:'2026-11-05',isin:'US0378331005'})).toBe('duplicate');
+  expect(await attachSecurity(c,{...sec,valid_from:'2026-11-05'})).toBe('duplicate');
+  expect(c.rows('issuer_identifier_claims')).toEqual([]);
+  expect(await attachSecurity(c,{...sec,valid_from:'2026-11-05',isin:'US5949181045'})).toBe('conflict');
+  expect(claims(c)).toEqual([{issuer_id:'a',id_type:'isin',value:'US5949181045'}]);
+  expect(c.rows('issuer_securities')).toHaveLength(1);
+ });
  it('maps the inactive-issuer trigger (SQLSTATE 23514) to issuer_not_active and rethrows other check violations',async()=>{
   const c=client();
   c.insert=async(t)=>{throw new TableError('insert',t,'issuer_not_active: issuer a (status merged) cannot hold open security AAPL','23514');};

@@ -100,6 +100,16 @@ describe('planResearchLink',()=>{
   expect(plan.securities.map(s=>[s.ticker,s.share_class])).toEqual([['00700.HK','H'],['00005.HK','unknown'],['01398.HK','H'],['900901.SH','other'],['200596.SZ','other']]);
   expect(plan.skipped.map(s=>s.reason)).toEqual(['invalid_ticker:ABCDEF','market_mismatch:00941.HK']);
  });
+
+ it('links the exact upper-cased code before normalizing it (BRK.A never collapses to BRK)',()=>{
+  const plan=planResearchLink(
+   [key({entity_id:'b',cik:'1067983',names_en:['Berkshire Hathaway']})],
+   [sec({id:'1',entity_id:'b',exchange_code:'brk.a'}),sec({id:'2',entity_id:'b',exchange_code:'BRK/A',market:'other'})],
+   universe({'BRK.A':'US',BRK:'US'}),AS_OF,
+  );
+  expect(plan.securities.map(s=>s.ticker)).toEqual(['BRK.A','BRK.A']);
+  expect(plan.skipped).toEqual([]);
+ });
 });
 
 describe('applyResearchLink',()=>{

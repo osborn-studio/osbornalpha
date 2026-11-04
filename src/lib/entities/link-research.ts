@@ -55,10 +55,16 @@ function shareClass(s:EntitySecurityRow,ticker:string,entity:EntityKeyRow):Share
  return s.market==='US'?'common':'unknown';
 }
 
-/** Ticker plus the market it was resolved in; null ticker when a core-market code does not parse. */
-function resolveTicker(s:EntitySecurityRow):{ticker:string|null;market:CoreMarket|null}{
+/**
+ * Ticker plus the market it was resolved in; null ticker when a core-market code does not parse.
+ * The code as written (upper-cased, `/` read as `.`) wins when the universe lists it, as in
+ * load-sec.ts, so `BRK.A` never collapses to `BRK` through Wind-suffix stripping.
+ */
+function resolveTicker(s:EntitySecurityRow,universe:ReadonlyMap<string,string>):{ticker:string|null;market:CoreMarket|null}{
+ const exact=s.exchange_code.trim().toUpperCase().replace(/\//g,'.');
+ const market=s.market!=='other'?s.market:inferCoreMarket(s.exchange_code);
+ if(exact&&universe.has(exact))return {ticker:exact,market};
  if(s.market!=='other')return {ticker:normalizeSecurityTicker(s.exchange_code,s.market),market:s.market};
- const market=inferCoreMarket(s.exchange_code);
  return {ticker:(market&&normalizeSecurityTicker(s.exchange_code,market))||s.exchange_code.trim().toUpperCase(),market};
 }
 
@@ -87,7 +93,7 @@ export function planResearchLink(keys:EntityKeyRow[],securities:EntitySecurityRo
   const skip=(reason:string)=>plan.skipped.push({entity_key,security_id:s.id,reason});
   const entity=promoted.get(entity_key);
   if(!entity){skip('entity_not_promoted');continue;}
-  const {ticker:t,market}=resolveTicker(s);
+  const {ticker:t,market}=resolveTicker(s,universe);
   if(!t){skip(`invalid_ticker:${s.exchange_code}`);continue;}
   const listed=universe.get(t);
   if(listed===undefined){skip(`ticker_not_in_universe:${t}`);continue;}

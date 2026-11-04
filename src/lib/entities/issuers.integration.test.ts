@@ -167,6 +167,29 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
   await sec(b,t,'2021-01-01',null);
  },30000);
 
+ it('rejects merge chains: an issuer that others merged into cannot itself be merged or dissolved',async()=>{
+  const a=await newIssuer(),b=await newIssuer(),c=await newIssuer();
+  await admin.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b]);
+  await expect(admin.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[b,c])).rejects.toThrow(/merge_target_has_referrers/);
+  await expect(admin.query(`update public.issuers set status='dissolved' where issuer_id=$1`,[b])).rejects.toThrow(/merge_target_has_referrers/);
+  // Re-point the referrer first, then the former target can be retired.
+  await admin.query(`update public.issuers set merged_into=$2 where issuer_id=$1`,[a,c]);
+  await admin.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[b,c]);
+  const rows=(await admin.query(`select issuer_id,status,merged_into from public.issuers where issuer_id=any($1::uuid[]) order by issuer_id`,[[a,b,c]])).rows;
+  expect(rows).toEqual([{issuer_id:a,status:'merged',merged_into:c},{issuer_id:b,status:'merged',merged_into:c},{issuer_id:c,status:'active',merged_into:null}].sort((x,y)=>x.issuer_id.localeCompare(y.issuer_id)));
+ },30000);
+
+ it('refuses to retire an issuer that still holds an open security row',async()=>{
+  const a=await newIssuer(),b=await newIssuer();
+  const t=await usTicker();
+  await sec(a,t,'2020-01-01',null);
+  await expect(admin.query(`update public.issuers set status='dissolved' where issuer_id=$1`,[a])).rejects.toThrow(/open_securities_exist/);
+  await expect(admin.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b])).rejects.toThrow(/open_securities_exist/);
+  await admin.query(`update public.issuer_securities set valid_to='2024-01-01' where issuer_id=$1 and ticker=$2`,[a,t]);
+  await admin.query(`update public.issuers set status='dissolved' where issuer_id=$1`,[a]);
+  expect((await admin.query(`select status from public.issuers where issuer_id=$1`,[a])).rows[0].status).toBe('dissolved');
+ },30000);
+
  it('enforces the industry hierarchy and membership windows',async()=>{
   const version=await newVersion();
   const cls=(code:string,parent:string|null)=>admin.query(`insert into public.industry_classifications(scheme,version,code,level,name_en,parent_code) values('custom',$1,$2,2,'Sub',$3)`,[version,code,parent]);

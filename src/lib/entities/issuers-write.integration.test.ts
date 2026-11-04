@@ -7,6 +7,7 @@ import {randomBytes,randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {pgTableClient} from '../db/pg-table-client';
+import {isValidIsin} from '../research/entity-keys/identifiers';
 import type {TableClient} from '../db/table-client';
 import {fileClaim} from './claims';
 import {attachSecurity,upsertIssuerByIdentifiers} from './issuers';
@@ -14,6 +15,8 @@ import {attachSecurity,upsertIssuerByIdentifiers} from './issuers';
 const enabled=!!process.env.S4_TEST_STATE;
 const hex=(n:number)=>randomBytes(n).toString('hex').toUpperCase();
 const randomCik=()=>String(1+Math.floor(Math.random()*9))+String(Math.floor(Math.random()*1e9)).padStart(9,'0');
+/** A checksum-valid random ISIN (ZZ test prefix + Luhn check digit), so runs never share one. */
+const randomIsin=()=>{const base='USZZ'+hex(4).slice(0,7);return [...'0123456789'].map(d=>base+d).find(isValidIsin)!;};
 /** ISO 17442: 18 random characters + two mod-97 check digits. */
 const randomLei=()=>{
  const base=hex(9);
@@ -146,6 +149,31 @@ describe.skipIf(!enabled)('issuer write path on real PostgreSQL',()=>{
   expect(await attachSecurity(blindFirstRead(replay),sec(a,t,'2010-01-01'))).toBe('duplicate');
   expect(replay.code).toBe('23505');
   expect(Number((await admin.query(`select count(*) from public.issuer_securities where ticker=$1`,[t])).rows[0].count)).toBe(1);
+ });
+
+ it('checks the ISIN against same-issuer overlapping rows with a different valid_from',async()=>{
+  const a=await newIssuer();
+  const t=await usTicker();
+  const isin=randomIsin(),other=randomIsin();
+  expect(await attachSecurity(db,{...sec(a,t,'2010-01-01'),isin})).toBe('inserted');
+  expect(await attachSecurity(db,{...sec(a,t,'2015-01-01'),isin})).toBe('duplicate');
+  expect(await attachSecurity(db,sec(a,t,'2015-01-01'))).toBe('duplicate');
+  expect(await pendingClaims(a)).toEqual([]);
+  expect(await attachSecurity(db,{...sec(a,t,'2015-01-01'),isin:other})).toBe('conflict');
+  expect(await pendingClaims(a)).toEqual([{id_type:'isin',value:other}]);
+  expect(Number((await admin.query(`select count(*) from public.issuer_securities where ticker=$1`,[t])).rows[0].count)).toBe(1);
+ });
+
+ it('maps the ISIN no-overlap exclusion (real 23P01) on another ticker to conflict with one pending ISIN claim',async()=>{
+  const a=await newIssuer(),b=await newIssuer();
+  const t1=await usTicker(),t2=await usTicker();
+  const isin=randomIsin();
+  expect(await attachSecurity(db,{...sec(a,t1,'2010-01-01','2020-01-01'),isin})).toBe('inserted');
+  const seen:{code?:string|null}={};
+  expect(await attachSecurity(blindFirstRead(seen),{...sec(b,t2,'2015-01-01'),isin})).toBe('conflict');
+  expect(seen.code).toBe('23P01');
+  expect(await pendingClaims(b)).toEqual([{id_type:'isin',value:isin}]);
+  expect(Number((await admin.query(`select count(*) from public.issuer_securities where ticker=$1`,[t2])).rows[0].count)).toBe(0);
  });
 
  it('rejects an open security on an issuer merged into an active one with issuer_not_active, but keeps closed history',async()=>{

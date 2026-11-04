@@ -7,8 +7,11 @@
 -- drop-then-create policies.
 -- Deletes: link FKs and child FKs are RESTRICT by design — retire with status='merged'/'dissolved',
 -- never delete. Ownership windows are half-open [valid_from, valid_to) and may not overlap, per
--- ticker and per ISIN (btree_gist exclusion constraints); merges may only target an active
--- issuer, and only an active issuer may hold an open (valid_to is null) security row.
+-- ticker and per ISIN (btree_gist exclusion constraints).
+-- Lifecycle: merges may only target an active issuer; an issuer may not be retired (merged or
+-- dissolved) while other issuers' merged_into still points at it (re-point them first), so merge
+-- chains and cycles cannot form; an issuer may not be retired while it holds an open
+-- (valid_to is null) security row (close it first); and only an active issuer may hold one.
 -- provenance (issuers, issuer_securities, issuer_industry_memberships) is PUBLIC (anon SELECT):
 -- writers must store only source names, ids and dates — never URLs with tokens or internal notes.
 
@@ -40,7 +43,8 @@ create unique index if not exists issuers_usci_idx on public.issuers(usci) where
 create unique index if not exists issuers_cninfo_idx on public.issuers(cninfo_org_id) where cninfo_org_id is not null;
 create index if not exists issuers_merged_into_idx on public.issuers(merged_into) where merged_into is not null;
 
--- A merge may only point at an active issuer: blocks cycles (A->B then B->A) and chains (A->B->C).
+-- A merge may only point at an active issuer (blocks A->B then B->A), and an issuer that others
+-- were merged into may not itself be retired (blocks A->B then B->C): referrers are re-pointed first.
 create or replace function public.issuers_merge_target_active() returns trigger
 language plpgsql set search_path = '' as $$
 declare target_status text;
@@ -51,6 +55,11 @@ begin
       raise exception 'merge_target_not_active: issuer % cannot merge into % (status %)', new.issuer_id, new.merged_into, coalesce(target_status, 'missing')
         using errcode = '23514';
     end if;
+  end if;
+  if new.status in ('merged','dissolved')
+     and exists (select 1 from public.issuers r where r.merged_into = new.issuer_id and r.issuer_id <> new.issuer_id) then
+    raise exception 'merge_target_has_referrers: issuer % is the merge target of other issuers and cannot become %', new.issuer_id, new.status
+      using errcode = '23514';
   end if;
   return new;
 end $$;
@@ -111,6 +120,21 @@ end $$;
 drop trigger if exists issuer_securities_owner_active on public.issuer_securities;
 create trigger issuer_securities_owner_active before insert or update on public.issuer_securities
   for each row execute function public.issuer_securities_owner_active();
+
+-- The reverse direction: an issuer may not be retired while it still holds an open security row.
+create or replace function public.issuers_retire_requires_closed_securities() returns trigger
+language plpgsql set search_path = '' as $$
+begin
+  if new.status in ('merged','dissolved')
+     and exists (select 1 from public.issuer_securities s where s.issuer_id = new.issuer_id and s.valid_to is null) then
+    raise exception 'open_securities_exist: issuer % holds open security rows and cannot become %', new.issuer_id, new.status
+      using errcode = '23514';
+  end if;
+  return new;
+end $$;
+drop trigger if exists issuers_retire_requires_closed_securities on public.issuers;
+create trigger issuers_retire_requires_closed_securities before update of status on public.issuers
+  for each row execute function public.issuers_retire_requires_closed_securities();
 
 create table if not exists public.issuer_identifier_claims (
   id          uuid primary key,

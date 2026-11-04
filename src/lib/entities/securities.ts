@@ -42,7 +42,9 @@ export async function attachSecurity(client:TableClient,raw:IssuerSecurityInput)
   }
   const hit=rows.filter(r=>overlaps(r,sec));
   if(!hit.length)return null;
-  if(hit.every(r=>r.issuer_id===sec.issuer_id))return 'duplicate';
+  // Same issuer under a different valid_from: a duplicate unless the incoming ISIN contradicts
+  // an overlapping row's ISIN (an absent incoming ISIN never contradicts).
+  if(hit.every(r=>r.issuer_id===sec.issuer_id))return sec.isin!==null&&hit.some(r=>r.isin!==sec.isin)?conflict():'duplicate';
   return conflict();
  };
  const before=await classify();
@@ -57,8 +59,9 @@ export async function attachSecurity(client:TableClient,raw:IssuerSecurityInput)
   const code=(e as {code?:unknown})?.code;
   if(code==='23514'&&e instanceof Error&&e.message.includes('issuer_not_active:'))throw new Error('issuer_not_active');
   if(!isUnique(e))throw e;
-  // The ISIN index (isin, valid_from) spans tickers: another ticker already carries this ISIN.
-  if(e instanceof Error&&e.message.includes('issuer_securities_isin_idx'))return conflict();
+  // The ISIN index (isin, valid_from) and the ISIN no-overlap exclusion span tickers: another
+  // ticker already carries this ISIN over an overlapping window. A ticker-only re-read cannot see it.
+  if(e instanceof Error&&(e.message.includes('issuer_securities_isin_idx')||(code==='23P01'&&e.message.includes('issuer_securities_isin_no_overlap'))))return conflict();
   // A concurrent writer took the window (PK, open-owner index or no-overlap exclusion): re-read once.
   const after=await classify();
   if(after)return after;
