@@ -2,7 +2,7 @@
 // reference batch_id, and finishes with counts + errors. Status is derived from counts and
 // errors so dashboards never guess: success = no failures and no errors; quarantined rows do
 // not degrade status. The row is written with finished_at:null so the DB invariant
-// (status='running' iff finished_at is null) holds.
+// (status='running' iff finished_at is null) holds. Only a running batch can be finished.
 import {randomUUID} from 'node:crypto';
 import type {TableClient} from '../db/table-client';
 
@@ -36,7 +36,10 @@ export async function startBatch(client:TableClient,input:StartBatchInput):Promi
 }
 
 export async function finishBatch(client:TableClient,batchId:string,result:{counts:BatchCounts;errors:BatchError[];rejected?:boolean}):Promise<BatchStatus>{
+ const [batch]=await client.select('ingest_batches',{batch_id:batchId},{limit:1});
+ if(!batch||batch.status!=='running')throw new Error('batch_not_running');
  const status=batchStatusFromCounts(result.counts,result.errors,{rejected:result.rejected});
- await client.update('ingest_batches',{batch_id:batchId},{status,counts:result.counts,errors:result.errors,finished_at:new Date().toISOString()});
+ // Matching on status='running' keeps a concurrent finish from being overwritten.
+ await client.update('ingest_batches',{batch_id:batchId,status:'running'},{status,counts:result.counts,errors:result.errors,finished_at:new Date().toISOString()});
  return status;
 }

@@ -33,6 +33,13 @@ describe('batches',()=>{
   const {batchId}=await startBatch(c,{producer:'p',dataset:'d'});
   expect(await finishBatch(c,batchId,{counts:{...emptyCounts(),inserted:1},errors:[]})).toBe('success');
  });
+ it('refuses to finish a batch that is not running',async()=>{
+  const c=memoryTableClient({ingest_batches:['batch_id']});
+  const {batchId}=await startBatch(c,{producer:'p',dataset:'d'});
+  await finishBatch(c,batchId,{counts:emptyCounts(),errors:[]});
+  await expect(finishBatch(c,batchId,{counts:emptyCounts(),errors:[]})).rejects.toThrow('batch_not_running');
+  await expect(finishBatch(c,'00000000-0000-0000-0000-00000000dead',{counts:emptyCounts(),errors:[]})).rejects.toThrow('batch_not_running');
+ });
  it('rejects producer or dataset outside 1..64 chars and an unknown trigger',async()=>{
   const c=memoryTableClient();
   await expect(startBatch(c,{producer:'x'.repeat(65),dataset:'d'})).rejects.toThrow('invalid_batch');
