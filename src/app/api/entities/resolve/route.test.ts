@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ resolveIssuer: vi.fn(), from: vi.fn() }));
 vi.mock('@/lib/supabase/anon', () => ({ getAnonSupabase: () => ({ from: mocks.from }) }));
@@ -18,6 +18,10 @@ async function expectError(res: Response, status: number, code: string) {
 
 describe('GET /api/entities/resolve', () => {
   beforeEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
 
   it('400 empty_query with no-store', async () => {
     await expectError(await get(''), 400, 'empty_query');
@@ -58,16 +62,55 @@ describe('GET /api/entities/resolve', () => {
     expect(cc).toContain('s-maxage=');
     expect(cc).toContain('stale-while-revalidate=600');
     expect(await res.json()).toEqual({ issuer_id: 'a' });
-    expect(mocks.resolveIssuer).toHaveBeenCalledWith(expect.anything(), { ticker: 'brk/b' }, { includeExpired: true });
+    expect(mocks.resolveIssuer).toHaveBeenCalledWith(expect.anything(), { ticker: 'brk/b' }, { includeExpired: true, today: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
     expect(mocks.from).not.toHaveBeenCalled();
   });
 
-  it('maps resolver validation errors to 400 and anything else to an opaque 500', async () => {
+  it('uses one clock for today and the cache lifetime', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-05T23:30:00Z'));
+    mocks.resolveIssuer.mockImplementation(async () => {
+      vi.setSystemTime(new Date('2026-11-05T23:45:00Z'));
+      return { issuer_id: 'a' };
+    });
+    const res = await get('?ticker=AAPL');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Cache-Control')).toBe('public, s-maxage=1800, stale-while-revalidate=600');
+    expect(mocks.resolveIssuer).toHaveBeenCalledWith(expect.anything(), { ticker: 'AAPL' }, { includeExpired: false, today: '2026-11-05' });
+  });
+
+  it('responds no-store when the UTC date flips while resolving', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-05T23:59:59Z'));
+    mocks.resolveIssuer.mockImplementation(async () => {
+      vi.setSystemTime(new Date('2026-11-06T00:00:01Z'));
+      return { issuer_id: 'a' };
+    });
+    const res = await get('?ticker=AAPL');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Cache-Control')).toBe('no-store');
+    expect(await res.json()).toEqual({ issuer_id: 'a' });
+    expect(mocks.resolveIssuer).toHaveBeenCalledWith(expect.anything(), { ticker: 'AAPL' }, { includeExpired: false, today: '2026-11-05' });
+  });
+
+  it('maps resolver validation errors to 400 and anything else to a logged, opaque 500', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     mocks.resolveIssuer.mockRejectedValueOnce(new Error('invalid_identifier:isin'));
     await expectError(await get('?isin=US123'), 400, 'invalid_identifier:isin');
+    expect(log).not.toHaveBeenCalled();
     mocks.resolveIssuer.mockRejectedValueOnce(new Error('issuers select: secret detail'));
     const res = await get('?ticker=AAPL');
     await expectError(res.clone(), 500, 'internal');
     expect(JSON.stringify(await res.json())).not.toContain('secret');
+    expect(log).toHaveBeenCalledWith('[entities/resolve]', 'issuers select: secret detail');
+    mocks.resolveIssuer.mockRejectedValueOnce('not an error');
+    await expectError(await get('?ticker=AAPL'), 500, 'internal');
+    expect(log).toHaveBeenLastCalledWith('[entities/resolve]', 'not an error');
+  });
+
+  it('treats invalid_today from the resolver as a server error, not a client one', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.resolveIssuer.mockRejectedValueOnce(new Error('invalid_today'));
+    await expectError(await get('?ticker=AAPL'), 500, 'internal');
   });
 });

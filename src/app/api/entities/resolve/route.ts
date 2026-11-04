@@ -7,10 +7,15 @@ import {resolveIssuer,successCacheControl,type ResolveQuery} from '@/lib/entitie
 export const dynamic='force-dynamic';
 const SAFE=/^[A-Za-z0-9.\/\-]{1,24}$/;
 const KEYS=['ticker','isin','cik','lei'] as const;
-const CLIENT_ERRORS=new Set(['empty_query','ambiguous_query','invalid_today']);
+// invalid_today is deliberately absent: the route always passes a well-formed `today`, so that
+// error would be a server bug and correctly surfaces as a 500.
+const CLIENT_ERRORS=new Set(['empty_query','ambiguous_query']);
+const utcDate=(d:Date)=>d.toISOString().slice(0,10);
 const err=(code:string,message:string,status:number)=>NextResponse.json({error:{code,message}},{status,headers:{'Cache-Control':'no-store'}});
 
 export async function GET(req:Request){
+ // One clock for the whole request: `today` for the resolver and the cache lifetime share it.
+ const now=new Date();
  const url=new URL(req.url);
  // searchParams values are already percent-decoded; do not decode again.
  for(const k of [...KEYS,'includeExpired'])if(url.searchParams.getAll(k).length>1)return err('duplicate_parameter',`${k} given more than once`,400);
@@ -28,13 +33,18 @@ export async function GET(req:Request){
  if(includeExpired!==null&&includeExpired!=='1')return err('invalid_parameter','includeExpired must be 1 or absent',400);
  try{
   // Public reference data: the anon client respects RLS (issuer tables grant anon SELECT).
-  const result=await resolveIssuer(supabaseTableClient(getAnonSupabase()),q,{includeExpired:includeExpired==='1'});
+  const today=utcDate(now);
+  const result=await resolveIssuer(supabaseTableClient(getAnonSupabase()),q,{includeExpired:includeExpired==='1',today});
   if(!result)return err('not_found','no issuer',404);
-  return NextResponse.json(result,{headers:{'Cache-Control':successCacheControl(new Date())}});
+  // The UTC date flipped while resolving: the answer is for yesterday's windows, so a shared
+  // cache must not keep it under today's key.
+  const cacheControl=utcDate(new Date())!==today?'no-store':successCacheControl(now);
+  return NextResponse.json(result,{headers:{'Cache-Control':cacheControl}});
  }catch(e){
   const m=e instanceof Error?e.message:'';
   if(m.startsWith('invalid_identifier:')||CLIENT_ERRORS.has(m))return err(m,'invalid query',400);
-  // TableError, ambiguous_owner and anything unexpected: never leak internal messages.
+  // TableError, ambiguous_owner and anything unexpected: log server-side, never leak to the client.
+  console.error('[entities/resolve]',e instanceof Error?e.message:e);
   return err('internal','resolve failed',500);
  }
 }

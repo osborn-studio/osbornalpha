@@ -6,9 +6,9 @@
 -- (pending merges/conflicts) are service-role only. Replayable: guarded create statements,
 -- drop-then-create policies.
 -- Deletes: link FKs and child FKs are RESTRICT by design — retire with status='merged'/'dissolved',
--- never delete. Ownership windows are half-open [valid_from, valid_to) and may not overlap
--- (btree_gist exclusion constraints); merges may only target an active issuer, and only an active
--- issuer may hold an open (valid_to is null) security row.
+-- never delete. Ownership windows are half-open [valid_from, valid_to) and may not overlap, per
+-- ticker and per ISIN (btree_gist exclusion constraints); merges may only target an active
+-- issuer, and only an active issuer may hold an open (valid_to is null) security row.
 -- provenance (issuers, issuer_securities, issuer_industry_memberships) is PUBLIC (anon SELECT):
 -- writers must store only source names, ids and dates — never URLs with tokens or internal notes.
 
@@ -83,6 +83,14 @@ do $$ begin
   if not exists (select 1 from pg_constraint where conrelid = 'public.issuer_securities'::regclass and conname = 'issuer_securities_no_overlap') then
     alter table public.issuer_securities add constraint issuer_securities_no_overlap
       exclude using gist (ticker with =, daterange(valid_from, valid_to, '[)') with &&);
+  end if;
+end $$;
+-- An ISIN belongs to at most one security row at any date: no two rows (any issuer, any ticker)
+-- may carry the same ISIN over overlapping windows, so an ISIN resolves to a single owner.
+do $$ begin
+  if not exists (select 1 from pg_constraint where conrelid = 'public.issuer_securities'::regclass and conname = 'issuer_securities_isin_no_overlap') then
+    alter table public.issuer_securities add constraint issuer_securities_isin_no_overlap
+      exclude using gist (isin with =, daterange(valid_from, valid_to, '[)') with &&) where (isin is not null);
   end if;
 end $$;
 

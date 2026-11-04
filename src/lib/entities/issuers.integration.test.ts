@@ -136,6 +136,21 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
   expect(rows).toEqual([{issuer_id:a,valid_from:'2020-01-01',valid_to:'2021-01-01'},{issuer_id:b,valid_from:'2021-01-01',valid_to:null}]);
  },30000);
 
+ it('rejects one ISIN on two tickers over overlapping windows and accepts sequential ones',async()=>{
+  const a=await newIssuer();
+  const b=await newIssuer();
+  const isin='USZ'+hex(4)+'5';
+  const [t1,t2,t3]=[await usTicker(),await usTicker(),await usTicker()];
+  await sec(a,t1,'2020-01-01','2022-01-01',',isin',',$5',[isin]);
+  await expect(sec(b,t2,'2021-01-01','2023-01-01',',isin',',$5',[isin])).rejects.toThrow(/issuer_securities_isin_no_overlap/);
+  await expect(sec(b,t2,'2021-06-01',null,',isin',',$5',[isin])).rejects.toThrow(/issuer_securities_isin_no_overlap/);
+  await expect(sec(b,t2,'2019-01-01','2020-06-01',',isin',',$5',[isin])).rejects.toThrow(/issuer_securities_isin_no_overlap/);
+  await sec(b,t2,'2022-01-01','2024-01-01',',isin',',$5',[isin]);
+  await sec(a,t3,'2024-01-01',null,',isin',',$5',[isin]);
+  const rows=(await admin.query(`select issuer_id,ticker,valid_from::text from public.issuer_securities where isin=$1 order by valid_from`,[isin])).rows;
+  expect(rows).toEqual([{issuer_id:a,ticker:t1,valid_from:'2020-01-01'},{issuer_id:b,ticker:t2,valid_from:'2022-01-01'},{issuer_id:a,ticker:t3,valid_from:'2024-01-01'}]);
+ },30000);
+
  it('enforces the merge and ownership lifecycle',async()=>{
   const a=await newIssuer();
   const b=await newIssuer();

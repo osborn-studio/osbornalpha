@@ -69,6 +69,17 @@ describe('resolveIssuer',()=>{
   expect((await resolveIssuer(c,{ticker:'AAPL.O'},{today:TODAY}))?.issuer_id).toBe('a');
   expect((await resolveIssuer(c,{ticker:'aapl'},{today:TODAY}))?.issuer_id).toBe('a');
  });
+ it('falls back to the normalized ticker only when the exact ticker has no rows at all',async()=>{
+  const c=await seed();
+  for(const id of ['old-xyz','xyz'])await c.insert('issuers',{issuer_id:id,canonical_name_en:id,canonical_name_zh:null,cik:null,lei:null,usci:null,status:'active',merged_into:null});
+  await c.insert('issuer_securities',{issuer_id:'old-xyz',ticker:'XYZ.A',isin:null,figi:null,share_class:'A',is_primary:true,valid_from:'2000-01-01',valid_to:'2010-01-01',source:'t'});
+  await c.insert('issuer_securities',{issuer_id:'xyz',ticker:'XYZ',isin:null,figi:null,share_class:'common',is_primary:true,valid_from:'2000-01-01',valid_to:null,source:'t'});
+  // XYZ.A exists but is expired-only: null, not the current holder of XYZ
+  expect(await resolveIssuer(c,{ticker:'XYZ.A'},{today:TODAY})).toBeNull();
+  expect((await resolveIssuer(c,{ticker:'XYZ.A'},{today:'2005-01-01'}))?.issuer_id).toBe('old-xyz');
+  // XYZ.N has no rows at all: falls back to XYZ
+  expect((await resolveIssuer(c,{ticker:'XYZ.N'},{today:TODAY}))?.issuer_id).toBe('xyz');
+ });
  it('throws ambiguous_owner when two issuers own the same ticker today',async()=>{
   const c=await seed();
   await c.insert('issuers',{issuer_id:'dup',canonical_name_en:'Dup',canonical_name_zh:null,cik:'2',lei:null,usci:null,status:'active',merged_into:null});

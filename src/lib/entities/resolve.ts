@@ -39,7 +39,9 @@ function resolveToday(today?:string):string{
 /**
  * Ticker candidates in lookup order. The exact (trimmed, upper-cased, '/'→'.') form comes first:
  * the shared normalizer strips Wind suffixes (.A/.N/.O/...), which would turn BRK.A into BRK.
- * The normalized form is only a fallback when the exact form has no current row.
+ * The normalized form is only a fallback when the exact form has NO rows at all: a ticker the
+ * schema knows (even if only expired or future rows exist) is authoritative, so XYZ.A with only
+ * expired rows resolves to null rather than to whoever holds XYZ today.
  */
 function tickerCandidates(raw:string):string[]{
  const exact=raw.trim().toUpperCase().replace(/\//g,'.');
@@ -65,11 +67,11 @@ function parseQuery(q:ResolveQuery):Lookup{
  }
 }
 
-/** The single issuer owning a current row; null if none; 'ambiguous_owner' if several. */
-async function currentOwner(client:TableClient,column:'isin'|'ticker',value:string,today:string):Promise<string|null>{
- const rows=(await client.select('issuer_securities',{[column]:value})).filter(r=>isCurrent(r,today));
- const owners=new Set(rows.map(r=>str(r.issuer_id)).filter((v):v is string=>v!==null));
- // The schema's exclusion constraint should make this impossible; keep it as defense.
+/** The single issuer owning a current row among `rows`; null if none; 'ambiguous_owner' if several. */
+function currentOwner(rows:Row[],today:string):string|null{
+ const owners=new Set(rows.filter(r=>isCurrent(r,today)).map(r=>str(r.issuer_id)).filter((v):v is string=>v!==null));
+ // Prevented by the schema for both lookups (issuer_securities_no_overlap per ticker,
+ // issuer_securities_isin_no_overlap per ISIN); kept as defense against non-conforming data.
  if(owners.size>1)throw new Error('ambiguous_owner');
  return owners.values().next().value??null;
 }
@@ -81,9 +83,15 @@ export async function resolveIssuer(client:TableClient,q:ResolveQuery,opts:Resol
  if(lookup.column==='lei'||lookup.column==='cik'){
   issuerId=str((await client.select('issuers',{[lookup.column]:lookup.value},{limit:1}))[0]?.issuer_id);
  }else if(lookup.column==='ticker'){
-  for(const v of lookup.values){issuerId=await currentOwner(client,'ticker',v,today);if(issuerId)break;}
+  // Fall back to the next candidate only when this one has no rows at all (see tickerCandidates).
+  for(const v of lookup.values){
+   const rows=await client.select('issuer_securities',{ticker:v});
+   if(rows.length===0)continue;
+   issuerId=currentOwner(rows,today);
+   break;
+  }
  }else{
-  issuerId=await currentOwner(client,'isin',lookup.value,today);
+  issuerId=currentOwner(await client.select('issuer_securities',{isin:lookup.value}),today);
  }
  if(!issuerId)return null;
  let issuer=(await client.select('issuers',{issuer_id:issuerId},{limit:1}))[0];
@@ -110,7 +118,8 @@ export async function resolveIssuer(client:TableClient,q:ResolveQuery,opts:Resol
 /**
  * Cache-Control for a successful resolve. Validity windows flip at UTC date boundaries, so a
  * shared cache may hold a response at most until the next UTC midnight (clamped to [60, 3600]s);
- * stale-while-revalidate is kept short so a post-midnight flip is served stale for <= 10 minutes.
+ * stale-while-revalidate is kept short, so a pre-midnight answer can still be served after the
+ * flip: worst case ≈ 11 minutes past midnight (the 60s floor plus the 600s revalidate window).
  */
 export function successCacheControl(now:Date):string{
  const nextMidnight=Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()+1);
