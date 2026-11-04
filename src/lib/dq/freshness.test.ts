@@ -23,9 +23,15 @@ describe('computeFreshness',()=>{
  it('lets a weekday-only daily feed survive a weekend (Fri ok -> Mon is fresh)',()=>{
   expect(computeFreshness({cadence:'daily',lastOkAt:T('2026-10-30T22:00:00Z'),consecutiveErrors:0,now:T('2026-11-02T22:00:00Z')})).toBe('fresh');
  });
- it('fails closed: an unparseable lastOkAt is stale',()=>{
-  expect(computeFreshness({cadence:'daily',lastOkAt:new Date('garbage'),consecutiveErrors:0,now:T('2026-11-05T00:00:00Z')})).toBe('stale');
-  expect(computeFreshness({cadence:'monthly',lastOkAt:T('2026-11-04T00:00:00Z'),consecutiveErrors:0,now:new Date(NaN)})).toBe('stale');
+ it('fails closed: an unparseable lastOkAt is missing, even for event cadence',()=>{
+  expect(computeFreshness({cadence:'daily',lastOkAt:new Date('garbage'),consecutiveErrors:0,now:T('2026-11-05T00:00:00Z')})).toBe('missing');
+  expect(computeFreshness({cadence:'event',lastOkAt:new Date('garbage'),consecutiveErrors:0,now:T('2026-11-05T00:00:00Z')})).toBe('missing');
+  expect(computeFreshness({cadence:'event',lastOkAt:new Date('garbage'),consecutiveErrors:2,now:T('2026-11-05T00:00:00Z')})).toBe('error');
+ });
+ it('throws invalid_now for an invalid now, before the event shortcut',()=>{
+  expect(()=>computeFreshness({cadence:'monthly',lastOkAt:T('2026-11-04T00:00:00Z'),consecutiveErrors:0,now:new Date(NaN)})).toThrow('invalid_now');
+  expect(()=>computeFreshness({cadence:'event',lastOkAt:T('2026-11-04T00:00:00Z'),consecutiveErrors:0,now:new Date(NaN)})).toThrow('invalid_now');
+  expect(()=>computeFreshness({cadence:'event',lastOkAt:null,consecutiveErrors:5,now:'2026-11-05' as never})).toThrow('invalid_now');
  });
 });
 
@@ -43,6 +49,11 @@ describe('recordAttempt',()=>{
   const c=memoryTableClient();
   await expect(recordAttempt(c,'',{ok:true,cadence:'daily'})).rejects.toThrow('invalid_dataset');
  });
+ it('rejects an invalid now without writing',async()=>{
+  const c=memoryTableClient();
+  await expect(recordAttempt(c,'d',{ok:true,cadence:'event',now:new Date('x')})).rejects.toThrow('invalid_now');
+  expect(c.rows('dq_freshness')).toEqual([]);
+ });
 });
 
 describe('freshnessOf',()=>{
@@ -58,6 +69,12 @@ describe('freshnessOf',()=>{
   await recordAttempt(c,'macro',{ok:true,cadence:'daily',now:T('2026-11-04T12:00:00Z')});
   const rows=await freshnessOf(c,T('2026-11-05T00:00:00Z'));
   expect(rows.map(r=>[r.dataset,r.status])).toEqual([['macro','fresh'],['odd','error']]);
+ });
+ it('reads an unparseable stored last_ok_at as missing',async()=>{
+  const c=memoryTableClient();
+  await c.insert('dq_freshness',{dataset:'bad',expected_cadence:'event',last_ok_at:'not-a-date',consecutive_errors:0,status:'fresh'});
+  const rows=await freshnessOf(c,T('2026-11-05T00:00:00Z'));
+  expect(rows.map(r=>[r.dataset,r.status])).toEqual([['bad','missing']]);
  });
  it('reads every row past one page',async()=>{
   const c=memoryTableClient();

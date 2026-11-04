@@ -12,6 +12,13 @@ describe('batchStatusFromCounts',()=>{
   expect(batchStatusFromCounts({...emptyCounts()},[{code:'network'}])).toBe('failed');
   expect(batchStatusFromCounts({...emptyCounts(),inserted:5},[],{rejected:true})).toBe('rejected');
  });
+ it('is failed when rows were fetched but none has an outcome',()=>{
+  expect(batchStatusFromCounts({...emptyCounts(),fetched:10},[])).toBe('failed');
+  expect(batchStatusFromCounts({...emptyCounts(),fetched:10,duplicates:10},[])).toBe('success');
+  expect(batchStatusFromCounts({...emptyCounts(),fetched:10,quarantined:1},[])).toBe('success');
+  expect(batchStatusFromCounts({...emptyCounts(),fetched:0},[])).toBe('success');
+  expect(batchStatusFromCounts({...emptyCounts(),fetched:10},[],{rejected:true})).toBe('rejected');
+ });
 });
 
 describe('batches',()=>{
@@ -70,6 +77,21 @@ describe('batches',()=>{
   const {batchId:b2}=await startBatch(c,{producer:'p',dataset:'d'});
   await finishBatch(c,b2,{counts:emptyCounts(),errors:[]},new Date('2099-01-01T00:00:00Z'));
   expect(c.rows('ingest_batches')[1].finished_at).toBe('2099-01-01T00:00:00.000Z');
+ });
+ it('finishes an unaccounted receipt as failed and records the unaccounted error first',async()=>{
+  const c=memoryTableClient({ingest_batches:['batch_id']});
+  const {batchId}=await startBatch(c,{producer:'p',dataset:'d'});
+  expect(await finishBatch(c,batchId,{counts:{...emptyCounts(),fetched:7},errors:[{code:'parse'}]})).toBe('failed');
+  expect(c.rows('ingest_batches')[0]).toMatchObject({status:'failed',errors:[{code:'unaccounted',message:'fetched rows without outcomes'},{code:'parse'}]});
+ });
+ it('throws invalid_now for an invalid now or an unparseable stored started_at, without writing',async()=>{
+  const c=memoryTableClient({ingest_batches:['batch_id']});
+  const {batchId}=await startBatch(c,{producer:'p',dataset:'d'});
+  await expect(finishBatch(c,batchId,{counts:emptyCounts(),errors:[]},new Date('garbage'))).rejects.toThrow('invalid_now');
+  await expect(finishBatch(c,batchId,{counts:emptyCounts(),errors:[]},'2026-01-01' as never)).rejects.toThrow('invalid_now');
+  await c.update('ingest_batches',{batch_id:batchId},{started_at:'not a date'});
+  await expect(finishBatch(c,batchId,{counts:emptyCounts(),errors:[]})).rejects.toThrow('invalid_now');
+  expect(c.rows('ingest_batches')[0]).toMatchObject({status:'running',finished_at:null});
  });
  it('throws batch_not_running when a concurrent finish wins between read and update',async()=>{
   const c=memoryTableClient({ingest_batches:['batch_id']});

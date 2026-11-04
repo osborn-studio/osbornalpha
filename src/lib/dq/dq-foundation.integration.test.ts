@@ -53,9 +53,11 @@ describe.skipIf(!enabled)('WP-F0 dq foundation on real PostgreSQL',()=>{
   await expect(ins('counts',`'[]'::jsonb`,[])).rejects.toThrow(/ingest_batches_counts_object/);
 
   const q=(extraCols:string,extraVals:string,batchId:string,params:unknown[]=[])=>admin.query(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id${extraCols}) values($1,$2,'t','k','range',$3${extraVals})`,[randomUUID(),d,batchId,...params]);
+  // The FK case runs before the valid open insert: an open row with the same key would make the
+  // open-key unique index fire first and mask the FK violation.
+  await expect(q('','',randomUUID())).rejects.toThrow(/dq_quarantine_batch_id_fkey/);
   await q('','',batch);
   await expect(q(',status,resolved_by,resolved_at',`,'done',$4,now()`,batch,[randomUUID()])).rejects.toThrow(/dq_quarantine_status_check/);
-  await expect(q('','',randomUUID())).rejects.toThrow(/dq_quarantine_batch_id_fkey/);
   await expect(q(',status,resolved_by',`,'resolved_accept',$4`,batch,[randomUUID()])).rejects.toThrow(/dq_quarantine_open_iff_unresolved/);
 
   await admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'daily','missing')`,[d]);
@@ -63,6 +65,22 @@ describe.skipIf(!enabled)('WP-F0 dq foundation on real PostgreSQL',()=>{
   await expect(admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'weekly','missing')`,[f2])).rejects.toThrow(/dq_freshness_expected_cadence_check/);
   await expect(admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status,consecutive_errors) values($1,'daily','error',-1)`,[f2])).rejects.toThrow(/dq_freshness_consecutive_errors_check/);
   await expect(admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'daily','fresh')`,[f2])).rejects.toThrow(/dq_freshness_ok_requires_last_ok/);
+ });
+
+ it('allows one open item per (dataset, table_name, natural_key, reason_code); resolved rows may repeat',async()=>{
+  const d=newDs();
+  const batch=await insertBatch(d);
+  const open=()=>admin.query(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id) values($1,$2,'t','k','range',$3)`,[randomUUID(),d,batch]);
+  await open();
+  await expect(open()).rejects.toThrow(/dq_quarantine_open_key_uniq/);
+  // Same key on another reason or table is a different item.
+  await admin.query(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id) values($1,$2,'t','k','jump',$3)`,[randomUUID(),d,batch]);
+  // A resolved row with the same key coexists with the open one and with a new open row once the first is resolved.
+  await admin.query(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,status,resolved_by,resolved_at) values($1,$2,'t','k','range',$3,'resolved_reject',$4,now())`,[randomUUID(),d,batch,randomUUID()]);
+  await admin.query(`update public.dq_quarantine set status='resolved_accept',resolved_by=$2,resolved_at=now() where dataset=$1 and natural_key='k' and reason_code='range' and status='open'`,[d,randomUUID()]);
+  await open();
+  const n=(await admin.query(`select status,count(*)::int n from public.dq_quarantine where dataset=$1 and reason_code='range' group by status order by status`,[d])).rows;
+  expect(n).toEqual([{status:'open',n:1},{status:'resolved_accept',n:1},{status:'resolved_reject',n:1}]);
  });
 
  it('restricts batch deletion while quarantine evidence exists and nulls reconciliation batch_id on delete',async()=>{

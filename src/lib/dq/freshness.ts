@@ -1,7 +1,8 @@
 // Freshness registry (spec §5.1 dq_freshness). Status is a pure function of cadence window
 // and grace; writers store it, readers recompute it with `now` (freshnessOf) because a
-// producer that stops running never calls recordAttempt again. Unknown cadence or an
-// unparseable timestamp fails closed (error / stale), never fresh.
+// producer that stops running never calls recordAttempt again. Fails closed, never fresh: an
+// unknown stored cadence reads as error, an unparseable lastOkAt as missing, and an invalid `now`
+// throws invalid_now (validated before the event-cadence shortcut).
 import {selectAll} from '../db/table-client';
 import type {Row,TableClient} from '../db/table-client';
 
@@ -13,13 +14,17 @@ const WINDOW_MS:Record<Cadence,number|null>={daily:1*DAY,monthly:31*DAY,quarterl
 const GRACE_MS:Record<Cadence,number>={daily:2*DAY,monthly:3*DAY,quarterly:3*DAY,event:0};
 const CADENCES:readonly Cadence[]=['daily','monthly','quarterly','event'];
 
+const validDate=(d:unknown):d is Date=>d instanceof Date&&Number.isFinite(d.getTime());
+
 export function computeFreshness(input:{cadence:Cadence;lastOkAt:Date|null;consecutiveErrors:number;now:Date}):FreshnessStatus{
+ if(!validDate(input.now))throw new Error('invalid_now');
+ const lastOkAt=validDate(input.lastOkAt)?input.lastOkAt:null;
  if(input.consecutiveErrors>=2)return 'error';
- if(!input.lastOkAt)return 'missing';
+ if(!lastOkAt)return 'missing';
  const window=WINDOW_MS[input.cadence];
  if(window===null)return 'fresh';
- const age=input.now.getTime()-input.lastOkAt.getTime();
- return age<=window+GRACE_MS[input.cadence]?'fresh':'stale'; // NaN age -> stale
+ const age=input.now.getTime()-lastOkAt.getTime();
+ return age<=window+GRACE_MS[input.cadence]?'fresh':'stale';
 }
 
 /**
@@ -30,8 +35,10 @@ export async function recordAttempt(client:TableClient,dataset:string,input:{ok:
  if(typeof dataset!=='string'||dataset.length<1||dataset.length>64)throw new Error('invalid_dataset');
  if(!CADENCES.includes(input.cadence))throw new Error('invalid_cadence');
  const now=input.now??new Date();
+ if(!validDate(now))throw new Error('invalid_now');
  const existing=(await client.select('dq_freshness',{dataset}))[0];
- const prevOk=existing?.last_ok_at?new Date(existing.last_ok_at as string):null;
+ const storedOk=existing?.last_ok_at?new Date(existing.last_ok_at as string):null;
+ const prevOk=validDate(storedOk)?storedOk:null; // unparseable stored value is dropped, not re-written
  const prevErrors=Number(existing?.consecutive_errors??0);
  const consecutiveErrors=input.ok?0:prevErrors+1;
  const lastOkAt=input.ok?now:prevOk;

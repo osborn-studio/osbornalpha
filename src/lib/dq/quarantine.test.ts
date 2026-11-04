@@ -1,5 +1,7 @@
 import {describe,it,expect} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
+import {TableError} from '../db/table-client';
+import type {TableClient} from '../db/table-client';
 import {startBatch} from './batches';
 import {quarantine,resolveQuarantine,listOpenQuarantine} from './quarantine';
 
@@ -48,9 +50,38 @@ describe('quarantine',()=>{
   c.update=async()=>0;
   expect(await resolveQuarantine(c,id,{status:'resolved_accept',resolvedBy:USER})).toBe('already_resolved');
  });
- it('rejects an unknown resolution status and a missing resolver',async()=>{
+ it('rejects an unknown resolution status, a non-UUID id and a non-UUID resolver',async()=>{
   const c=memoryTableClient();
-  await expect(resolveQuarantine(c,'x',{status:'done' as never,resolvedBy:USER})).rejects.toThrow('invalid_status');
-  await expect(resolveQuarantine(c,'x',{status:'resolved_accept',resolvedBy:''})).rejects.toThrow('invalid_resolver');
+  const ID='00000000-0000-0000-0000-0000000000aa';
+  await expect(resolveQuarantine(c,ID,{status:'done' as never,resolvedBy:USER})).rejects.toThrow('invalid_status');
+  await expect(resolveQuarantine(c,'x',{status:'resolved_accept',resolvedBy:USER})).rejects.toThrow('invalid_id');
+  await expect(resolveQuarantine(c,undefined as never,{status:'resolved_accept',resolvedBy:USER})).rejects.toThrow('invalid_id');
+  await expect(resolveQuarantine(c,ID,{status:'resolved_accept',resolvedBy:''})).rejects.toThrow('invalid_resolver');
+  await expect(resolveQuarantine(c,ID,{status:'resolved_accept',resolvedBy:'admin'})).rejects.toThrow('invalid_resolver');
+ });
+ it('returns the concurrent winner id when the insert loses the open-key race (23505)',async()=>{
+  const WINNER='00000000-0000-0000-0000-0000000000bb';
+  let selects=0;const inserted:unknown[]=[];
+  const stub:TableClient={
+   select:async()=>(selects++===0?[]:[{id:WINNER,status:'open'}]),
+   insert:async(t,row)=>{inserted.push(row);throw new TableError('insert',t,'duplicate key value violates unique constraint "dq_quarantine_open_key_uniq"','23505');},
+   update:async()=>0,upsert:async()=>{},count:async()=>0,
+  };
+  expect(await quarantine(stub,{dataset:'d',table:'t',naturalKey:'k',reasonCode:'r',batchId:'00000000-0000-0000-0000-000000000003'})).toBe(WINNER);
+  expect(selects).toBe(2);
+  expect(inserted).toHaveLength(1);
+ });
+ it('rethrows a 23505 when no open row exists afterwards, and any non-unique error',async()=>{
+  const input={dataset:'d',table:'t',naturalKey:'k',reasonCode:'r',batchId:'00000000-0000-0000-0000-000000000003'};
+  const base={update:async()=>0,upsert:async()=>{},count:async()=>0,select:async()=>[]};
+  const dup=new TableError('insert','dq_quarantine','duplicate key','23505');
+  await expect(quarantine({...base,insert:async()=>{throw dup;}},input)).rejects.toBe(dup);
+  const fk=new TableError('insert','dq_quarantine','violates foreign key','23503');
+  await expect(quarantine({...base,insert:async()=>{throw fk;}},input)).rejects.toBe(fk);
+ });
+ it('listOpenQuarantine validates limit as an integer 1..1000',async()=>{
+  const c=memoryTableClient();
+  for(const bad of [0,-1,1.5,NaN,1001])await expect(listOpenQuarantine(c,'d',bad)).rejects.toThrow('invalid_limit');
+  await expect(listOpenQuarantine(c,'d',1000)).resolves.toEqual([]);
  });
 });

@@ -47,6 +47,9 @@ create table if not exists public.dq_quarantine (
   constraint dq_quarantine_resolved_by_required check (status = 'open' or resolved_by is not null)
 );
 create index if not exists dq_quarantine_open_idx on public.dq_quarantine(dataset, created_at desc) where status = 'open';
+-- At most one OPEN item per key; resolved rows are history and may repeat. quarantine() relies on
+-- this to converge concurrent producers (insert loses with 23505, re-reads the winner).
+create unique index if not exists dq_quarantine_open_key_uniq on public.dq_quarantine(dataset, table_name, natural_key, reason_code) where status = 'open';
 create index if not exists dq_quarantine_batch_idx on public.dq_quarantine(batch_id);
 
 create table if not exists public.dq_reconciliations (
