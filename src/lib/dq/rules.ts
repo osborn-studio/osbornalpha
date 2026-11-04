@@ -6,6 +6,12 @@ export const RULES_VERSION='dq-rules/1.0';
 export interface RuleResult{ruleId:string;passed:boolean;detail?:Record<string,unknown>}
 const num=(v:unknown):v is number=>typeof v==='number'&&Number.isFinite(v);
 const nonNegative=(v:unknown):v is number=>num(v)&&v>=0;
+/**
+ * Renders an arbitrary input for a RuleResult detail without ever calling String() on objects
+ * (which can throw, e.g. {toString:null}): strings, numbers and booleans as-is, null for
+ * null/undefined, '[non-primitive]' otherwise.
+ */
+const renderValue=(v:unknown)=>v==null?null:typeof v==='string'||typeof v==='number'||typeof v==='boolean'?v:'[non-primitive]';
 const invalid=(ruleId:string,params:Record<string,unknown>):RuleResult=>({ruleId,passed:false,detail:{...params,reason:'invalid_params'}});
 
 /** Inclusive min ≤ value ≤ max. Infinite bounds are allowed (open range); NaN bounds or min > max are invalid_params. */
@@ -36,14 +42,16 @@ export function identityRule(ruleId:string,left:unknown,right:unknown,tolerance:
 /**
  * Relative jump |cur − prev| / max(|prev|,1) must be ≤ maxRelJump. Only a null/undefined previous
  * value counts as missing (→ pass); any other non-finite previous fails with previous_not_a_number.
+ * Failure details render inputs via renderValue (non-finite numeric previous as 'NaN'/'Infinity'),
+ * so non-primitive inputs never throw.
  * Computed in scaled space so extreme values cannot overflow. The scale floor of 1 assumes
  * unit-scale data, as in identityRule.
  */
 export function jumpRule(ruleId:string,current:unknown,previous:unknown,maxRelJump:number):RuleResult{
  if(!nonNegative(maxRelJump))return invalid(ruleId,{maxRelJump});
- if(!num(current))return {ruleId,passed:false,detail:{current:current??null,reason:'not_a_number'}};
+ if(!num(current))return {ruleId,passed:false,detail:{current:renderValue(current),reason:'not_a_number'}};
  if(previous===null||previous===undefined)return {ruleId,passed:true};
- if(!num(previous))return {ruleId,passed:false,detail:{current,previous:String(previous),reason:'previous_not_a_number'}};
+ if(!num(previous))return {ruleId,passed:false,detail:{current,previous:typeof previous==='number'?String(previous):renderValue(previous),reason:'previous_not_a_number'}};
  const scale=Math.max(Math.abs(previous),1);
  const rel=Math.abs(current/scale-previous/scale);
  return rel<=maxRelJump?{ruleId,passed:true}:{ruleId,passed:false,detail:{current,previous,rel,maxRelJump}};
@@ -51,15 +59,13 @@ export function jumpRule(ruleId:string,current:unknown,previous:unknown,maxRelJu
 
 /**
  * The unit must be a string listed in `allowed` (exact, case-sensitive match: 'CNY' ≠ 'cny').
- * Anything else fails with reason 'invalid_unit'; detail.unit echoes strings, numbers and booleans,
- * null for null/undefined and '[non-primitive]' otherwise (String() is never called on objects,
- * which can throw). An empty or non-string `allowed` list is invalid_params.
+ * Anything else fails with reason 'invalid_unit'; detail.unit is renderValue(unit).
+ * An empty or non-string `allowed` list is invalid_params.
  */
-const echoUnit=(u:unknown)=>u==null?null:typeof u==='string'||typeof u==='number'||typeof u==='boolean'?u:'[non-primitive]';
 export function unitRule(ruleId:string,unit:unknown,allowed:readonly string[]):RuleResult{
  if(!Array.isArray(allowed)||allowed.length===0||allowed.some(a=>typeof a!=='string'))return invalid(ruleId,{allowed:Array.isArray(allowed)?[...allowed]:null});
  if(typeof unit==='string'&&allowed.includes(unit))return {ruleId,passed:true};
- return {ruleId,passed:false,detail:{unit:echoUnit(unit),allowed:[...allowed],reason:'invalid_unit'}};
+ return {ruleId,passed:false,detail:{unit:renderValue(unit),allowed:[...allowed],reason:'invalid_unit'}};
 }
 
 export function runRules(results:RuleResult[]):{passed:boolean;failed:RuleResult[];version:string}{

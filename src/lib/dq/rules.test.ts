@@ -46,6 +46,12 @@ describe('dq rules',()=>{
   expect(jumpRule('j',null,100,1)).toEqual({ruleId:'j',passed:false,detail:{current:null,reason:'not_a_number'}});
   expect(jumpRule('j',NaN,100,1).detail).toMatchObject({current:NaN,reason:'not_a_number'});
  });
+ it('jumpRule never throws on non-primitive values',()=>{
+  const evil=JSON.parse('{"toString":null}');
+  expect(jumpRule('j',1,evil,1)).toEqual({ruleId:'j',passed:false,detail:{current:1,previous:'[non-primitive]',reason:'previous_not_a_number'}});
+  expect(jumpRule('j',evil,1,1)).toEqual({ruleId:'j',passed:false,detail:{current:'[non-primitive]',reason:'not_a_number'}});
+  expect(jumpRule('j',5,[1],1).detail).toMatchObject({previous:'[non-primitive]',reason:'previous_not_a_number'});
+ });
  it('fails with invalid_params for negative/non-finite tolerances and min > max',()=>{
   for(const bad of [-0.1,NaN,Infinity]){
    expect(jumpRule('j',1,1,bad).detail).toMatchObject({reason:'invalid_params'});
