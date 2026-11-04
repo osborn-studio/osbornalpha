@@ -1,5 +1,7 @@
 // Issuer master-data shapes (spec 2026-11-04 data foundation §3.1–3.2).
 export type HardIdType='lei'|'cik'|'usci';
+/** id_type values allowed by the issuer_identifier_claims check constraint. */
+export type ClaimIdType=HardIdType|'isin'|'figi'|'cninfo_org_id';
 export interface IssuerIdentifiers{lei?:string|null;cik?:string|null;usci?:string|null;cninfo_org_id?:string|null}
 export interface IssuerInput extends IssuerIdentifiers{
  canonical_name_zh?:string|null;canonical_name_en?:string|null;country_code?:string|null;hkex_stock_code_primary?:string|null;

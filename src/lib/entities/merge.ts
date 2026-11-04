@@ -2,7 +2,10 @@
 import type {HardIdType,IssuerIdentifiers} from './types';
 
 export const HARD_IDS:readonly HardIdType[]=['lei','cik','usci'];
-export type MatchResult={kind:'same';issuer_id:string}|{kind:'new'}|{kind:'conflict';issuer_ids:string[];reason:'identifiers_split'|'hard_id_mismatch'};
+// 'inactive_issuer' is never produced by matchIssuer (pure, status-blind); issuers.ts raises it when a
+// hit is dissolved or merged into a non-active issuer.
+export type ConflictReason='identifiers_split'|'hard_id_mismatch'|'inactive_issuer';
+export type MatchResult={kind:'same';issuer_id:string}|{kind:'new'}|{kind:'conflict';issuer_ids:string[];reason:ConflictReason};
 
 export function matchIssuer(candidates:(IssuerIdentifiers&{issuer_id:string})[],incoming:IssuerIdentifiers):MatchResult{
  const present=HARD_IDS.filter(k=>incoming[k]);
