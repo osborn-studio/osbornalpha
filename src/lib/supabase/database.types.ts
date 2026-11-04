@@ -7,6 +7,9 @@
 // + 20260728110000_llm_incurred_budget.sql (durable pre-network spend state)
 // + 20260728140000_cap_exempt_platform_audit.sql (cap-exempt durable accounting)
 // + 20260728150000_profile_entitlement_security.sql (backend-managed entitlements)
+// + 20261105090000_dq_foundation.sql (ingest_batches, dq_quarantine, dq_reconciliations, dq_freshness)
+// + migrations up to 20261105091000_issuers.sql (issuers, issuer_securities, issuer_identifier_claims,
+//   industry_classifications, issuer_industry_memberships; research_entity_* link columns are not typed here)
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -522,6 +525,135 @@ export interface StripeEvent {
   created_at: string;
 }
 
+// Data foundation (supabase/migrations/20261105090000_dq_foundation.sql) — service-role only.
+export type IngestBatchStatus = 'running' | 'success' | 'partial' | 'failed' | 'rejected';
+export interface IngestBatch {
+  batch_id: string;
+  producer: string;
+  dataset: string;
+  status: IngestBatchStatus;
+  started_at: string;
+  finished_at: string | null;
+  counts: Record<string, unknown>;
+  errors: unknown[];
+  tool_versions: Record<string, unknown>;
+  code_version: string | null;
+  triggered_by: 'cron' | 'manual' | 'script';
+}
+
+export type DqQuarantineStatus = 'open' | 'resolved_accept' | 'resolved_reject';
+export interface DqQuarantine {
+  id: string;
+  dataset: string;
+  table_name: string;
+  natural_key: string;
+  reason_code: string;
+  detail: Record<string, unknown>;
+  payload: Record<string, unknown>;
+  batch_id: string;
+  status: DqQuarantineStatus;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  created_at: string;
+}
+
+// numeric columns are returned by PostgREST as JSON numbers.
+export interface DqReconciliation {
+  id: string;
+  dataset: string;
+  left_source: string;
+  right_source: string;
+  natural_key: string;
+  left_value: number | null;
+  right_value: number | null;
+  abs_diff: number | null;
+  rel_diff: number | null;
+  tolerance: number;
+  passed: boolean;
+  batch_id: string | null;
+  created_at: string;
+}
+
+export type DqFreshnessStatus = 'fresh' | 'stale' | 'error' | 'missing';
+export interface DqFreshness {
+  dataset: string;
+  expected_cadence: 'daily' | 'monthly' | 'quarterly' | 'event';
+  last_ok_at: string | null;
+  last_attempt_at: string | null;
+  consecutive_errors: number;
+  status: DqFreshnessStatus;
+  detail: Record<string, unknown>;
+  updated_at: string;
+}
+
+// Issuers (supabase/migrations/20261105091000_issuers.sql). issuers, issuer_securities,
+// industry_classifications and issuer_industry_memberships are public read; claims are service-role only.
+export type IssuerStatus = 'active' | 'merged' | 'dissolved';
+export interface Issuer {
+  issuer_id: string;
+  canonical_name_zh: string | null;
+  canonical_name_en: string | null;
+  country_code: string | null;
+  lei: string | null;
+  cik: string | null;
+  usci: string | null;
+  cninfo_org_id: string | null;
+  hkex_stock_code_primary: string | null;
+  status: IssuerStatus;
+  merged_into: string | null;
+  provenance: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ShareClass = 'A' | 'H' | 'ADR' | 'common' | 'preferred' | 'other' | 'unknown';
+export interface IssuerSecurity {
+  issuer_id: string;
+  ticker: string;
+  isin: string | null;
+  figi: string | null;
+  share_class: ShareClass;
+  is_primary: boolean;
+  valid_from: string;
+  valid_to: string | null;
+  source: string;
+  provenance: Record<string, unknown>;
+}
+
+export type IssuerIdentifierType = 'lei' | 'cik' | 'usci' | 'isin' | 'figi' | 'cninfo_org_id';
+export interface IssuerIdentifierClaim {
+  id: string;
+  issuer_id: string;
+  id_type: IssuerIdentifierType;
+  value: string;
+  source: string;
+  confidence: number;
+  status: 'accepted' | 'pending' | 'rejected';
+  created_at: string;
+}
+
+export type IndustryScheme = 'sw2021' | 'sw2014' | 'gics' | 'csrc' | 'custom';
+export interface IndustryClassification {
+  scheme: IndustryScheme;
+  version: string;
+  code: string;
+  level: number;
+  name_zh: string | null;
+  name_en: string | null;
+  parent_code: string | null;
+}
+
+export interface IssuerIndustryMembership {
+  issuer_id: string;
+  scheme: IndustryScheme;
+  version: string;
+  code: string;
+  valid_from: string;
+  valid_to: string | null;
+  source: string;
+  provenance: Record<string, unknown>;
+}
+
 export type Database = {
   public: {
     Tables: {
@@ -558,6 +690,15 @@ export type Database = {
       auth_email_probe_runs: { Row: AuthEmailProbeRun; Insert: Partial<AuthEmailProbeRun>; Update: Partial<AuthEmailProbeRun> };
       resend_webhook_events: { Row: ResendWebhookEvent; Insert: Partial<ResendWebhookEvent>; Update: Partial<ResendWebhookEvent> };
       stripe_events: { Row: StripeEvent; Insert: Partial<StripeEvent>; Update: Partial<StripeEvent> };
+      ingest_batches: { Row: IngestBatch; Insert: Partial<IngestBatch>; Update: Partial<IngestBatch> };
+      dq_quarantine: { Row: DqQuarantine; Insert: Partial<DqQuarantine>; Update: Partial<DqQuarantine> };
+      dq_reconciliations: { Row: DqReconciliation; Insert: Partial<DqReconciliation>; Update: Partial<DqReconciliation> };
+      dq_freshness: { Row: DqFreshness; Insert: Partial<DqFreshness>; Update: Partial<DqFreshness> };
+      issuers: { Row: Issuer; Insert: Partial<Issuer>; Update: Partial<Issuer> };
+      issuer_securities: { Row: IssuerSecurity; Insert: Partial<IssuerSecurity>; Update: Partial<IssuerSecurity> };
+      issuer_identifier_claims: { Row: IssuerIdentifierClaim; Insert: Partial<IssuerIdentifierClaim>; Update: Partial<IssuerIdentifierClaim> };
+      industry_classifications: { Row: IndustryClassification; Insert: Partial<IndustryClassification>; Update: Partial<IndustryClassification> };
+      issuer_industry_memberships: { Row: IssuerIndustryMembership; Insert: Partial<IssuerIndustryMembership>; Update: Partial<IssuerIndustryMembership> };
     };
     Functions: {
       quote_alert_window_samples: {
