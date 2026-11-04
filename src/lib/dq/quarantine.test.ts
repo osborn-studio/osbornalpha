@@ -41,6 +41,13 @@ describe('quarantine',()=>{
   expect(await resolveQuarantine(c,id,{status:'resolved_reject',resolvedBy:'00000000-0000-0000-0000-000000000002'})).toBe('already_resolved');
   expect(c.rows('dq_quarantine')[0]).toMatchObject({status:'resolved_accept',resolved_by:USER});
  });
+ it('reports already_resolved when another resolver wins between the read and the update',async()=>{
+  const c=memoryTableClient({ingest_batches:['batch_id'],dq_quarantine:['id']});
+  const {batchId}=await startBatch(c,{producer:'p',dataset:'d'});
+  const id=await quarantine(c,{dataset:'d',table:'t',naturalKey:'k',reasonCode:'r',batchId});
+  c.update=async()=>0;
+  expect(await resolveQuarantine(c,id,{status:'resolved_accept',resolvedBy:USER})).toBe('already_resolved');
+ });
  it('rejects an unknown resolution status and a missing resolver',async()=>{
   const c=memoryTableClient();
   await expect(resolveQuarantine(c,'x',{status:'done' as never,resolvedBy:USER})).rejects.toThrow('invalid_status');

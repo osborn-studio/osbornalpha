@@ -37,9 +37,10 @@ export async function resolveQuarantine(client:TableClient,id:string,input:{stat
  const [row]=await client.select(TABLE,{id},{limit:1});
  if(!row)return 'not_found';
  if(row.status!=='open')return 'already_resolved';
- // Matching on status='open' keeps a concurrent resolution from being overwritten.
- await client.update(TABLE,{id,status:'open'},{status:input.status,resolved_by:input.resolvedBy,resolved_at:new Date().toISOString()});
- return 'resolved';
+ // Matching on status='open' keeps a concurrent resolution from being overwritten; zero
+ // rows means another resolver won after our read.
+ const n=await client.update(TABLE,{id,status:'open'},{status:input.status,resolved_by:input.resolvedBy,resolved_at:new Date().toISOString()});
+ return n===1?'resolved':'already_resolved';
 }
 
 export async function listOpenQuarantine(client:TableClient,dataset?:string,limit=100):Promise<Row[]>{
