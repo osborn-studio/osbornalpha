@@ -111,6 +111,8 @@ scripts/entity-keys/    现有脚本改写目标表 + 新增 fill-isin / link-ah
 
 ## 4. F2 披露事实库
 
+> **已被取代（2026-11-04）**：本节的全部设计由 `docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md` 取代（披露日志模型、日期精度可得性、Tushare 1/4/5 三类报表与巨潮挂接、租约与暂存发布、`financial_history` 改造推迟）。以下文字仅作历史记录。
+
 ### 4.1 概念目录（canonical concepts）
 
 `src/lib/facts/concepts.ts` 导出 `FACT_CONCEPTS`，首批 24 个：
