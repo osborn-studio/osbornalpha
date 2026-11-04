@@ -1,6 +1,6 @@
 import {describe,it,expect} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
-import {startBatch,finishBatch,emptyCounts,batchStatusFromCounts} from './batches';
+import {startBatch,finishBatch,emptyCounts,batchStatusFromCounts,INFO_CODES} from './batches';
 
 describe('batchStatusFromCounts',()=>{
  it('is success with no failures/errors, partial with some, failed when nothing landed, rejected when flagged',()=>{
@@ -11,6 +11,22 @@ describe('batchStatusFromCounts',()=>{
   expect(batchStatusFromCounts({...emptyCounts(),failed:3},[])).toBe('failed');
   expect(batchStatusFromCounts({...emptyCounts()},[{code:'network'}])).toBe('failed');
   expect(batchStatusFromCounts({...emptyCounts(),inserted:5},[],{rejected:true})).toBe('rejected');
+ });
+ it('ignores informational codes (skips, relinks) when deciding status but keeps them in errors',()=>{
+  expect(INFO_CODES).toEqual(['skipped_summary','relink']);
+  const info=[{code:'skipped_summary',message:'{"not_in_universe":3}'},{code:'relink',key:'k',message:'a->b'}];
+  expect(batchStatusFromCounts({...emptyCounts(),fetched:4,inserted:1},info)).toBe('success');
+  expect(batchStatusFromCounts({...emptyCounts(),fetched:4,inserted:1},[...info,{code:'range'}])).toBe('partial');
+  expect(batchStatusFromCounts({...emptyCounts(),fetched:4,inserted:1,failed:1},info)).toBe('partial');
+  expect(batchStatusFromCounts({...emptyCounts(),fetched:4},info)).toBe('failed');
+  expect(batchStatusFromCounts({...emptyCounts()},[...info,{code:'empty_plan'}])).toBe('failed');
+ });
+ it('finishes with informational errors stored and a success status',async()=>{
+  const c=memoryTableClient({ingest_batches:['batch_id']});
+  const {batchId}=await startBatch(c,{producer:'p',dataset:'d'});
+  const errors=[{code:'skipped_summary',message:'{"x":1}'}];
+  expect(await finishBatch(c,batchId,{counts:{...emptyCounts(),fetched:2,inserted:1},errors})).toBe('success');
+  expect(c.rows('ingest_batches')[0].errors).toEqual(errors);
  });
  it('is failed when rows were fetched but none has an outcome',()=>{
   expect(batchStatusFromCounts({...emptyCounts(),fetched:10},[])).toBe('failed');

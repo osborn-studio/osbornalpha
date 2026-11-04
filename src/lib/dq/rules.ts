@@ -48,6 +48,18 @@ export function jumpRule(ruleId:string,current:unknown,previous:unknown,maxRelJu
  const rel=Math.abs(current/scale-previous/scale);
  return rel<=maxRelJump?{ruleId,passed:true}:{ruleId,passed:false,detail:{current,previous,rel,maxRelJump}};
 }
+
+/**
+ * The unit must be a string listed in `allowed` (exact, case-sensitive match: 'CNY' ≠ 'cny').
+ * Anything else fails with reason 'invalid_unit'. An empty or non-string `allowed` list is
+ * invalid_params.
+ */
+export function unitRule(ruleId:string,unit:unknown,allowed:readonly string[]):RuleResult{
+ if(!Array.isArray(allowed)||allowed.length===0||allowed.some(a=>typeof a!=='string'))return invalid(ruleId,{allowed:Array.isArray(allowed)?[...allowed]:null});
+ if(typeof unit==='string'&&allowed.includes(unit))return {ruleId,passed:true};
+ return {ruleId,passed:false,detail:{unit:typeof unit==='string'?unit:unit==null?null:String(unit),allowed:[...allowed],reason:'invalid_unit'}};
+}
+
 export function runRules(results:RuleResult[]):{passed:boolean;failed:RuleResult[];version:string}{
  const failed=results.filter(r=>!r.passed);
  return {passed:failed.length===0,failed,version:RULES_VERSION};

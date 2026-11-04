@@ -136,7 +136,6 @@
     "refreshedAt": "Refreshed {time}",
     "accept": "Accept",
     "reject": "Reject",
-    "resolved": "Resolved",
     "alreadyResolved": "Already resolved by someone else; list refreshed.",
     "notFound": "Item not found.",
     "prev": "Previous",

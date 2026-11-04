@@ -1,7 +1,16 @@
 import {describe,it,expect} from 'vitest';
-import {rangeRule,identityRule,jumpRule,runRules,RULES_VERSION} from './rules';
+import {rangeRule,identityRule,jumpRule,unitRule,runRules,RULES_VERSION} from './rules';
 
 describe('dq rules',()=>{
+ it('unitRule passes only listed units, exactly',()=>{
+  const allowed=['CNY','USD'] as const;
+  expect(unitRule('rev_unit','CNY',allowed)).toEqual({ruleId:'rev_unit',passed:true});
+  expect(unitRule('rev_unit','cny',allowed)).toEqual({ruleId:'rev_unit',passed:false,detail:{unit:'cny',allowed:['CNY','USD'],reason:'invalid_unit'}});
+  expect(unitRule('rev_unit',undefined,allowed)).toEqual({ruleId:'rev_unit',passed:false,detail:{unit:null,allowed:['CNY','USD'],reason:'invalid_unit'}});
+  expect(unitRule('rev_unit',42,allowed).detail).toMatchObject({unit:'42',reason:'invalid_unit'});
+  expect(unitRule('rev_unit','CNY',[]).detail).toMatchObject({reason:'invalid_params'});
+  expect(unitRule('rev_unit','CNY',[1] as unknown as string[]).detail).toMatchObject({reason:'invalid_params'});
+ });
  it('rangeRule is inclusive and reports the offending value',()=>{
   expect(rangeRule('pmi_range',50,0,100).passed).toBe(true);
   expect(rangeRule('pmi_range',100,0,100).passed).toBe(true);

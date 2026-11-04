@@ -21,12 +21,12 @@ import type {TableClient} from '../../src/lib/db/table-client';
 import {emptyCounts,finishBatch,startBatch} from '../../src/lib/dq/batches';
 import type {BatchError,BatchStatus} from '../../src/lib/dq/batches';
 import {recordAttempt} from '../../src/lib/dq/freshness';
-import {applyResearchLink,planResearchLink} from '../../src/lib/entities/link-research';
+import {RESEARCH_LINK_DATASET,applyResearchLink,planResearchLink} from '../../src/lib/entities/link-research';
 import type {EntityKeyRow,EntitySecurityRow} from '../../src/lib/entities/link-research';
 import {errorMessage,loaderOutcome} from '../../src/lib/entities/load-sec';
 import {getAdminSupabase} from '../../src/lib/supabase/admin';
 
-const DATASET='entities.research-link';
+const DATASET=RESEARCH_LINK_DATASET;
 const USAGE='usage: link-research-entities.ts [--user <uuid>] [--apply]   (user defaults to RESEARCH_OWNER_USER_ID)';
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -61,15 +61,16 @@ async function dryRun(client:TableClient,userId:string){
 
 async function apply(client:TableClient,user_id:string):Promise<0|1>{
  // The batch starts before any read so a failed read still leaves a failed receipt. The user id
- // lives only here (service-only receipt), never in the public issuer rows.
- const {batchId}=await startBatch(client,{producer:'research-entity-link',dataset:DATASET,toolVersions:{user_id}});
+ // and the research origin live only here (service-only receipt), never in the public issuer rows,
+ // whose provenance says 'curated'.
+ const {batchId}=await startBatch(client,{producer:'research-entity-link',dataset:DATASET,toolVersions:{user_id,origin:'research_entity_keys'}});
  let counts=emptyCounts();
  let errors:BatchError[]=[];
  let skipped:Record<string,number>={};
  let status:BatchStatus='failed';
  try{
   const {plan}=await loadPlan(client,user_id);
-  const result=await applyResearchLink(client,plan,{userId:user_id});
+  const result=await applyResearchLink(client,plan,{userId:user_id,batchId});
   ({counts,errors}=result);
   skipped=result.skippedSummary;
  }catch(e){

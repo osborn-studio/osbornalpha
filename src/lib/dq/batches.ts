@@ -1,7 +1,7 @@
 // Ingest receipts (spec §5.1 ingest_batches). Every producer starts a batch, writes rows that
 // reference batch_id, and finishes with counts + errors. Status is derived from counts and
-// errors so dashboards never guess: success = no failures and no errors; quarantined rows do
-// not degrade status. The row is written with finished_at:null so the DB invariant
+// errors so dashboards never guess: success = no failures and no non-informational errors;
+// quarantined rows and informational entries (INFO_CODES) do not degrade status. The row is written with finished_at:null so the DB invariant
 // (status='running' iff finished_at is null) holds. Only a running batch can be finished.
 import {randomUUID} from 'node:crypto';
 import type {TableClient} from '../db/table-client';
@@ -38,16 +38,29 @@ function capErrors(errors:BatchError[]):BatchError[]{
  return errors.length>MAX_ERRORS?[...kept,{code:'truncated',message:`${errors.length-MAX_ERRORS} more`}]:kept;
 }
 
+/**
+ * Error codes that only inform the receipt reader (a summary of skipped input rows, a research
+ * entity re-pointed to another issuer). They stay in `errors` but never make a batch partial or
+ * failed.
+ */
+export const INFO_CODES=['skipped_summary','relink'] as const;
+export type InfoCode=typeof INFO_CODES[number];
+export const isInfoError=(e:BatchError)=>(INFO_CODES as readonly string[]).includes(e.code);
+
 const accounted=(c:BatchCounts)=>c.inserted+c.duplicates+c.versioned+c.quarantined+c.failed;
 export const UNACCOUNTED_ERROR:BatchError={code:'unaccounted',message:'fetched rows without outcomes'};
 
-/** Pure status: rejected flag wins; fetched rows with no outcome → failed; any failure/error → partial if something landed, else failed. */
+/**
+ * Pure status: rejected flag wins; fetched rows with no outcome → failed; any failure or
+ * non-informational error → partial if something landed, else failed. Errors whose code is in
+ * INFO_CODES are ignored here (a run whose only entries are skips/relinks is a success).
+ */
 export function batchStatusFromCounts(counts:BatchCounts,errors:BatchError[],flags:{rejected?:boolean}={}):BatchStatus{
  assertCounts(counts);
  if(flags.rejected)return 'rejected';
  if(counts.fetched>0&&accounted(counts)===0)return 'failed';
  const landed=counts.inserted+counts.duplicates+counts.versioned+counts.quarantined;
- if(counts.failed>0||errors.length>0)return landed>0?'partial':'failed';
+ if(counts.failed>0||errors.some(e=>!isInfoError(e)))return landed>0?'partial':'failed';
  return 'success';
 }
 

@@ -6,9 +6,6 @@ import {fileClaim,isUnique} from './claims';
 import {isBlank,normalizeIsin,normalizeTicker} from './normalize';
 import type {IssuerSecurityInput} from './types';
 
-// Re-exported for existing importers (link-research.ts); new code should import './normalize'.
-export {isBlank,normalizeIsin} from './normalize';
-
 export type AttachResult='inserted'|'duplicate'|'conflict';
 
 type Window={valid_from:string;valid_to:string|null};

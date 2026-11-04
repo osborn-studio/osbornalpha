@@ -9,6 +9,26 @@ const MIGRATION='supabase/migrations/20261105090000_dq_foundation.sql';
 const TABLES=['ingest_batches','dq_quarantine','dq_reconciliations','dq_freshness'];
 const ds=()=>'dq-'+randomUUID().slice(0,8);
 
+// Replays a migration in one transaction with a short lock_timeout, retrying lock timeouts
+// (55P03) and deadlocks (40P01). Same policy as issuers.integration.test.ts: the DB suites
+// run concurrently and the issuers migration alters research_entity_* tables that other suites use,
+// so replays must not queue behind (and block) foreign locks.
+const RETRYABLE=new Set(['55P03','40P01']);
+async function replayMigration(pool:Pool,sql:string,attempts=3):Promise<void>{
+ for(let attempt=1;;attempt++){
+  const c=await pool.connect();
+  try{
+   await c.query(`begin; set local lock_timeout='3s';\n${sql}\n;commit;`);
+   return;
+  }catch(e){
+   await c.query('rollback').catch(()=>{});
+   const code=(e as {code?:string}).code;
+   if(attempt>=attempts||!code||!RETRYABLE.has(code))throw e;
+   await new Promise(r=>setTimeout(r,500));
+  }finally{c.release();}
+ }
+}
+
 describe.skipIf(!enabled)('WP-F0 dq foundation on real PostgreSQL',()=>{
  let admin:Pool;
  const batches:string[]=[];
@@ -39,8 +59,8 @@ describe.skipIf(!enabled)('WP-F0 dq foundation on real PostgreSQL',()=>{
   for(const r of rows) expect(r.relrowsecurity).toBe(true);
   const policies=(await admin.query(`select count(*)::int n from pg_policies where schemaname='public' and tablename=any($1)`,[TABLES])).rows[0].n;
   expect(policies).toBe(0);
-  await expect(admin.query(readFileSync(MIGRATION,'utf8'))).resolves.toBeDefined();
- });
+  await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();
+ },30000);
 
  it('enforces named check, foreign-key and invariant constraints on all four tables',async()=>{
   const d=newDs();

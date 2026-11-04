@@ -6,6 +6,7 @@ import {
 } from '@/lib/admin/auth';
 import { supabaseTableClient } from '@/lib/db/table-client';
 import { resolveQuarantine, type QuarantineStatus } from '@/lib/dq/quarantine';
+import { audit, type ResearchSupabase } from '@/lib/research/store';
 import { getAdminSupabase } from '@/lib/supabase/admin';
 
 export const dynamic = 'force-dynamic';
@@ -36,8 +37,19 @@ export async function POST(request: Request, { params }: Ctx) {
       return NextResponse.json({ error: 'invalid_status' }, { status: 400 });
     }
 
-    const client = supabaseTableClient(getAdminSupabase());
+    const admin = getAdminSupabase();
+    const client = supabaseTableClient(admin);
     const outcome = await resolveQuarantine(client, id, { status: status as QuarantineStatus, resolvedBy: user.id });
+    if (outcome === 'resolved') {
+      // Audit trail through the shared research_audit_log helper (service role, scoped to the
+      // resolving admin). The resolution is already committed, so an audit failure is logged
+      // rather than turned into a 500 that would invite a retry answered with 409.
+      try {
+        await audit({ supabase: admin as unknown as ResearchSupabase, userId: user.id }, 'dq.quarantine_resolve', id, { id, status });
+      } catch (auditError) {
+        console.error('[admin/dq] audit failed', auditError instanceof Error ? auditError.message : auditError);
+      }
+    }
     return NextResponse.json({ id, outcome }, { status: HTTP_STATUS[outcome] });
   } catch (error) {
     if (error instanceof AdminUnauthenticated) {

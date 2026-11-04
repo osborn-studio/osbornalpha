@@ -3,7 +3,9 @@
 // returns receipt counts (the script owns the ingest batch). Only entities with a valid hard
 // identifier (lei/usci/cik) and a name are promoted. The public tables are anon-readable, so the
 // public rows carry only source/as_of provenance: user and entity ids stay in the service-only
-// receipt (tool_versions and error keys).
+// receipt (tool_versions and error keys). The public provenance names the neutral source
+// 'curated'; the research origin appears only in that receipt and its errors. Conflicts are parked
+// as dq_quarantine rows of the run's batch.
 import type {TableClient} from '../db/table-client';
 import type {BatchError} from '../dq/batches';
 import {emptyCounts} from '../dq/batches';
@@ -11,7 +13,7 @@ import {isValidLei,isValidUsci,normalizeCik} from '../research/entity-keys/ident
 import {inferCoreMarket,normalizeSecurityTicker} from '../securities/ticker';
 import {attachSecurity,upsertIssuerByIdentifiers} from './issuers';
 import type {ApplyResult} from './load-sec';
-import {errorMessage,summarizeSkips,withSkippedSummary} from './load-sec';
+import {errorMessage,issuerReasonCode,parkConflict,summarizeSkips,withSkippedSummary} from './load-sec';
 import type {IssuerInput,ShareClass} from './types';
 
 type Market='A'|'HK'|'US'|'other';
@@ -19,12 +21,13 @@ type CoreMarket=Exclude<Market,'other'>;
 export interface EntityKeyRow{user_id:string;entity_id:string;lei:string|null;usci:string|null;cik:string|null;cninfo_org_id:string|null;names_zh:unknown;names_en:unknown;home_market:Market;issuer_id:string|null}
 export interface EntitySecurityRow{user_id:string;id:string;entity_id:string;exchange_code:string;isin:string|null;market:Market;security_type:'common'|'adr'|'preferred'|'other';is_primary:boolean;valid_from:string;valid_to:string|null}
 export interface PlannedIssuer{entity_key:string;user_id:string;entity_id:string;current_issuer_id:string|null;input:IssuerInput}
-export interface PlannedSecurity{entity_key:string;user_id:string;entity_id:string;security_id:string;ticker:string;isin:string|null;share_class:ShareClass;is_primary:boolean;valid_from:string;valid_to:string|null;source:'research_entity_securities';provenance:{source:'research_entity_securities'}}
+export interface PlannedSecurity{entity_key:string;user_id:string;entity_id:string;security_id:string;ticker:string;isin:string|null;share_class:ShareClass;is_primary:boolean;valid_from:string;valid_to:string|null;source:typeof CURATED;provenance:{source:typeof CURATED;as_of:string}}
 export interface SkippedLink{entity_key:string;security_id?:string;reason:string}
 export interface PlannedLink{fetched:number;issuers:PlannedIssuer[];securities:PlannedSecurity[];skipped:SkippedLink[]}
 
-const KEY_SOURCE='research_entity_keys';
-const SEC_SOURCE='research_entity_securities';
+/** Neutral public source name: the public rows never name the private research tables. */
+export const CURATED='curated';
+export const RESEARCH_LINK_DATASET='entities.research-link';
 const CORE:readonly string[]=['A','HK','US'];
 const keyOf=(r:{user_id:string;entity_id:string})=>`${r.user_id}:${r.entity_id}`;
 const str=(v:unknown)=>typeof v==='string'&&v.trim()!==''?v.trim():null;
@@ -70,7 +73,7 @@ function resolveTicker(s:EntitySecurityRow,universe:ReadonlyMap<string,string>):
 
 /**
  * `universe` maps stocks_universe tickers to their market. `asOf` (YYYY-MM-DD of the run) dates
- * the public issuer provenance.
+ * the public issuer and security provenance.
  */
 export function planResearchLink(keys:EntityKeyRow[],securities:EntitySecurityRow[],universe:ReadonlyMap<string,string>,asOf:string):PlannedLink{
  const plan:PlannedLink={fetched:keys.length,issuers:[],securities:[],skipped:[]};
@@ -83,7 +86,7 @@ export function planResearchLink(keys:EntityKeyRow[],securities:EntitySecurityRo
   const canonical_name_zh=firstName(k.names_zh),canonical_name_en=firstName(k.names_en);
   if(!canonical_name_zh&&!canonical_name_en){plan.skipped.push({entity_key,reason:'name_required'});continue;}
   const fields={...ids,cninfo_org_id:str(k.cninfo_org_id),canonical_name_zh,canonical_name_en,country_code:ids.usci?'CN':null};
-  const origin={source:KEY_SOURCE,as_of:asOf};
+  const origin={source:CURATED,as_of:asOf};
   const provenance=Object.fromEntries(Object.entries(fields).filter(([,v])=>v!==null).map(([f])=>[f,{...origin}]));
   plan.issuers.push({entity_key,user_id:k.user_id,entity_id:k.entity_id,current_issuer_id:str(k.issuer_id),input:{...fields,provenance}});
   promoted.set(entity_key,k);
@@ -98,7 +101,7 @@ export function planResearchLink(keys:EntityKeyRow[],securities:EntitySecurityRo
   const listed=universe.get(t);
   if(listed===undefined){skip(`ticker_not_in_universe:${t}`);continue;}
   if(market&&CORE.includes(listed)&&listed!==market){skip(`market_mismatch:${t}`);continue;}
-  plan.securities.push({entity_key,user_id:s.user_id,entity_id:s.entity_id,security_id:s.id,ticker:t,isin:str(s.isin),share_class:shareClass(s,t,entity),is_primary:s.is_primary===true,valid_from:s.valid_from,valid_to:s.valid_to??null,source:SEC_SOURCE,provenance:{source:SEC_SOURCE}});
+  plan.securities.push({entity_key,user_id:s.user_id,entity_id:s.entity_id,security_id:s.id,ticker:t,isin:str(s.isin),share_class:shareClass(s,t,entity),is_primary:s.is_primary===true,valid_from:s.valid_from,valid_to:s.valid_to??null,source:CURATED,provenance:{source:CURATED,as_of:asOf}});
  }
  return plan;
 }
@@ -107,9 +110,11 @@ export function planResearchLink(keys:EntityKeyRow[],securities:EntitySecurityRo
  * Writes the plan for `userId` only (every private update matches on user_id). A public write is
  * counted before its private link update; a link update that does not hit exactly one row adds a
  * failure (`link_failed`). Securities whose issuer failed, was quarantined or could not be linked
- * count as failed (`blocked_by_issuer`). Skips are summarized in one `skipped_summary` error.
+ * count as failed (`blocked_by_issuer`). Issuer conflicts (key: the first hard id, cik/lei/usci) and
+ * ownership conflicts (key: ticker) are quarantined under `opts.batchId`; the entity key stays in
+ * the service-only quarantine detail. Skips are summarized in one `skipped_summary` error.
  */
-export async function applyResearchLink(client:TableClient,plan:PlannedLink,opts:{userId:string}):Promise<ApplyResult>{
+export async function applyResearchLink(client:TableClient,plan:PlannedLink,opts:{userId:string;batchId:string}):Promise<ApplyResult>{
  const user_id=opts.userId;
  if([...plan.issuers,...plan.securities].some(i=>i.user_id!==user_id))throw new Error('plan_user_mismatch');
  const counts=emptyCounts();
@@ -126,7 +131,11 @@ export async function applyResearchLink(client:TableClient,plan:PlannedLink,opts
   let res;
   try{res=await upsertIssuerByIdentifiers(client,input);}
   catch(e){counts.failed++;errors.push({code:'issuer_error',key:entity_key,message:errorMessage(e)});continue;}
-  if(res.conflict||!res.issuer_id){counts.quarantined++;errors.push({code:'issuer_conflict',key:entity_key,message:res.reason});continue;}
+  if(res.conflict||!res.issuer_id){
+   const naturalKey=String(input.cik??input.lei??input.usci);
+   await parkConflict(client,{dataset:RESEARCH_LINK_DATASET,table:'issuers',naturalKey,reasonCode:issuerReasonCode(res.reason),detail:{reason:res.reason??null,entity_key},batchId:opts.batchId},counts,errors,{code:'issuer_conflict',key:entity_key,message:res.reason});
+   continue;
+  }
   if(res.created)counts.inserted++;else counts.duplicates++;
   if(current_issuer_id&&current_issuer_id!==res.issuer_id)errors.push({code:'relink',key:entity_key,message:`${current_issuer_id}->${res.issuer_id}`});
   try{
@@ -149,7 +158,10 @@ export async function applyResearchLink(client:TableClient,plan:PlannedLink,opts
    errors.push({code:msg==='issuer_not_active'?'issuer_not_active':'security_error',key,message:msg});
    continue;
   }
-  if(res==='conflict'){counts.quarantined++;errors.push({code:'ownership_conflict',key,message:sec.ticker});continue;}
+  if(res==='conflict'){
+   await parkConflict(client,{dataset:RESEARCH_LINK_DATASET,table:'issuer_securities',naturalKey:sec.ticker,reasonCode:'ownership_conflict',detail:{reason:'ticker_owned_by_other_issuer',entity_key:key},batchId:opts.batchId},counts,errors,{code:'ownership_conflict',key,message:sec.ticker});
+   continue;
+  }
   if(res==='inserted')counts.inserted++;else counts.duplicates++;
   try{
    const n=await client.update('research_entity_securities',{user_id,id:security_id},{ticker:sec.ticker});

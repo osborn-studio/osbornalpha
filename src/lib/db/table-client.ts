@@ -90,8 +90,9 @@ const applyRange=(q:any,opts:RangeOptions)=>{
 interface PgError{message:string;code?:string;details?:string|null;hint?:string|null}
 
 export function supabaseTableClient(client:SupabaseClient):TableClient{
- // The hand-maintained Database type lacks the new tables; a loosely typed handle keeps
- // callers typed through TableClient instead of casting at every call site.
+ // The hand-maintained Database type does describe the dq/issuer tables, but TableClient takes
+ // table names as plain strings so the same callers run over the in-memory client too; the
+ // loosely typed handle keeps that parity instead of casting at every call site.
  const db=client as unknown as {from:(t:string)=>any};
  const fail=(op:string,table:string,error:PgError):never=>{throw new TableError(op,table,error.message,error.code??null,{details:error.details,hint:error.hint,cause:error});};
  return {

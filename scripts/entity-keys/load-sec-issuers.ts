@@ -19,11 +19,11 @@ import type {TableClient} from '../../src/lib/db/table-client';
 import {emptyCounts,finishBatch,startBatch} from '../../src/lib/dq/batches';
 import type {BatchError,BatchStatus} from '../../src/lib/dq/batches';
 import {recordAttempt} from '../../src/lib/dq/freshness';
-import {applySecLoad,errorMessage,loaderOutcome,planSecLoad} from '../../src/lib/entities/load-sec';
+import {SEC_DATASET,applySecLoad,errorMessage,loaderOutcome,planSecLoad} from '../../src/lib/entities/load-sec';
 import {MAX_SEC_FILE_BYTES,parseSecCompanyTickersExchange} from '../../src/lib/research/entity-keys/parsers';
 import {getAdminSupabase} from '../../src/lib/supabase/admin';
 
-const DATASET='entities.sec';
+const DATASET=SEC_DATASET;
 const USAGE='usage: load-sec-issuers.ts <company_tickers_exchange.json> [--apply] [--as-of YYYY-MM-DD]';
 
 /** A YYYY-MM-DD that names a real calendar day (2026-02-30 is rejected). */
@@ -70,7 +70,7 @@ async function apply(client:TableClient,file:string,asOf:string):Promise<0|1>{
  let status:BatchStatus='failed';
  try{
   const {parsed,plan}=await loadPlan(client,file,asOf);
-  const result=await applySecLoad(client,plan,{asOf,batchProducerMeta:{sourceRows:parsed.rows.length+parsed.rejected.length,rejected:parsed.rejected}});
+  const result=await applySecLoad(client,plan,{asOf,batchId,batchProducerMeta:{sourceRows:parsed.rows.length+parsed.rejected.length,rejected:parsed.rejected}});
   ({counts,errors}=result);
   skipped=result.skippedSummary;
  }catch(e){

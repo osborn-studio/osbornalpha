@@ -29,6 +29,7 @@ vi.mock('./issuers',()=>({
 beforeEach(()=>{fake.issuers.clear();fake.owners.clear();fake.conflicts.clear();});
 
 const AS_OF='2026-11-05';
+const BATCH='33333333-3333-3333-3333-333333333333';
 const prov={source:'sec_company_tickers_exchange',as_of:AS_OF};
 
 describe('planSecLoad',()=>{
@@ -81,10 +82,10 @@ describe('applySecLoad',()=>{
  it('counts issuer and security outcomes; a second run is all duplicates and succeeds',async()=>{
   const c=memoryTableClient();
   const plan=planSecLoad(rows,new Set(['AAPL','GOOG','GOOGL']),AS_OF);
-  const first=await applySecLoad(c,plan,{asOf:AS_OF,batchProducerMeta:meta()});
+  const first=await applySecLoad(c,plan,{asOf:AS_OF,batchId:BATCH,batchProducerMeta:meta()});
   expect(first.counts).toEqual({fetched:3,inserted:5,duplicates:0,versioned:0,quarantined:0,failed:0});
   expect(first.errors).toEqual([]);
-  const second=await applySecLoad(c,plan,{asOf:AS_OF,batchProducerMeta:meta()});
+  const second=await applySecLoad(c,plan,{asOf:AS_OF,batchId:BATCH,batchProducerMeta:meta()});
   expect(second.counts).toEqual({fetched:3,inserted:0,duplicates:5,versioned:0,quarantined:0,failed:0});
   const status=batchStatusFromCounts(second.counts,second.errors);
   expect(status).toBe('success');
@@ -95,18 +96,53 @@ describe('applySecLoad',()=>{
   fake.conflicts.add('1652044');
   const c=memoryTableClient();
   const plan=planSecLoad([...rows,{cik:'5',name:'Gone',ticker:'ZZZZ',exchange:'OTC'}],new Set(['AAPL','GOOG','GOOGL']),AS_OF);
-  const res=await applySecLoad(c,plan,{asOf:AS_OF,batchProducerMeta:{sourceRows:5,rejected:[{index:4,reason:'invalid_cik'}]}});
+  const res=await applySecLoad(c,plan,{asOf:AS_OF,batchId:BATCH,batchProducerMeta:{sourceRows:5,rejected:[{index:4,reason:'invalid_cik'}]}});
   expect(res.counts).toEqual({fetched:5,inserted:2,duplicates:0,versioned:0,quarantined:1,failed:2});
   expect(res.skippedSummary).toEqual({rejected_invalid_cik:1,not_in_universe:1});
   expect(res.errors[0]).toEqual({code:'skipped_summary',message:JSON.stringify({rejected_invalid_cik:1,not_in_universe:1})});
   expect(res.errors.slice(1).map(e=>e.code)).toEqual(['issuer_conflict','blocked_by_issuer','blocked_by_issuer']);
   expect(c.rows('issuer_securities').map(r=>r.ticker)).toEqual(['AAPL']);
+  expect(c.rows('dq_quarantine').map(({dataset,table_name,natural_key,reason_code,detail,batch_id,status})=>({dataset,table_name,natural_key,reason_code,detail,batch_id,status}))).toEqual([
+   {dataset:'entities.sec',table_name:'issuers',natural_key:'1652044',reason_code:'issuer_conflict',detail:{reason:'hard_id_conflict'},batch_id:BATCH,status:'open'},
+  ]);
   const status=batchStatusFromCounts(res.counts,res.errors);
   expect(loaderOutcome(status,res.counts)).toEqual({ok:false,exitCode:1});
+  // A rerun reuses the open quarantine row instead of adding another.
+  await applySecLoad(c,plan,{asOf:AS_OF,batchId:BATCH,batchProducerMeta:{sourceRows:5,rejected:[]}});
+  expect(c.rows('dq_quarantine')).toHaveLength(1);
+ });
+
+ it('quarantines a ticker owned by another issuer under the ticker key',async()=>{
+  fake.owners.set('GOOGL','iss-someone-else');
+  const c=memoryTableClient();
+  const res=await applySecLoad(c,planSecLoad(rows,new Set(['AAPL','GOOG','GOOGL']),AS_OF),{asOf:AS_OF,batchId:BATCH,batchProducerMeta:meta()});
+  expect(res.counts).toEqual({fetched:3,inserted:4,duplicates:0,versioned:0,quarantined:1,failed:0});
+  expect(res.errors).toEqual([{code:'ownership_conflict',key:'GOOGL'}]);
+  expect(c.rows('dq_quarantine').map(({dataset,table_name,natural_key,reason_code,detail,batch_id})=>({dataset,table_name,natural_key,reason_code,detail,batch_id}))).toEqual([
+   {dataset:'entities.sec',table_name:'issuer_securities',natural_key:'GOOGL',reason_code:'ownership_conflict',detail:{reason:'ticker_owned_by_other_issuer',cik:'1652044'},batch_id:BATCH},
+  ]);
+ });
+
+ it('counts the row as failed when the quarantine write itself fails',async()=>{
+  fake.conflicts.add('320193');
+  const c=memoryTableClient();
+  const insert=c.insert.bind(c);
+  c.insert=async(t,r)=>{if(t==='dq_quarantine')throw new Error('boom');return insert(t,r);};
+  const res=await applySecLoad(c,planSecLoad(rows.slice(0,1),new Set(['AAPL']),AS_OF),{asOf:AS_OF,batchId:BATCH,batchProducerMeta:meta(1)});
+  expect(res.counts).toEqual({fetched:1,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:2});
+  expect(res.errors.map(e=>e.code)).toEqual(['issuer_conflict','quarantine_error','blocked_by_issuer']);
+ });
+
+ it('uses the inactive_issuer reason code when the match is a retired issuer',async()=>{
+  const {upsertIssuerByIdentifiers}=await import('./issuers');
+  vi.mocked(upsertIssuerByIdentifiers).mockResolvedValueOnce({issuer_id:null,created:false,conflict:true,reason:'inactive_issuer'});
+  const c=memoryTableClient();
+  await applySecLoad(c,planSecLoad(rows.slice(0,1),new Set(['AAPL']),AS_OF),{asOf:AS_OF,batchId:BATCH,batchProducerMeta:meta(1)});
+  expect(c.rows('dq_quarantine').map(r=>[r.natural_key,r.reason_code])).toEqual([['320193','inactive_issuer']]);
  });
 
  it('reports an empty plan as an error that finishes the batch as failed',async()=>{
-  const res=await applySecLoad(memoryTableClient(),planSecLoad(rows,new Set(),AS_OF),{asOf:AS_OF,batchProducerMeta:meta()});
+  const res=await applySecLoad(memoryTableClient(),planSecLoad(rows,new Set(),AS_OF),{asOf:AS_OF,batchId:BATCH,batchProducerMeta:meta()});
   expect(res.errors.map(e=>e.code)).toEqual(['skipped_summary','empty_plan']);
   const status=batchStatusFromCounts(res.counts,res.errors);
   expect(status).toBe('failed');
@@ -114,7 +150,7 @@ describe('applySecLoad',()=>{
  });
 
  it('rejects an as-of that differs from the plan',async()=>{
-  await expect(applySecLoad(memoryTableClient(),planSecLoad(rows,new Set(['AAPL']),AS_OF),{asOf:'2026-11-06',batchProducerMeta:meta()})).rejects.toThrow('as_of_mismatch');
+  await expect(applySecLoad(memoryTableClient(),planSecLoad(rows,new Set(['AAPL']),AS_OF),{asOf:'2026-11-06',batchId:BATCH,batchProducerMeta:meta()})).rejects.toThrow('as_of_mismatch');
  });
 });
 

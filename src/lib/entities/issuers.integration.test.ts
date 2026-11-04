@@ -11,6 +11,26 @@ const PUBLIC_TABLES=TABLES.filter(t=>t!=='issuer_identifier_claims');
 const hex=(n:number)=>randomBytes(n).toString('hex').toUpperCase();
 const randomCik=()=>String(1+Math.floor(Math.random()*9))+String(Math.floor(Math.random()*1e9)).padStart(9,'0');
 
+// Replays a migration in one transaction with a short lock_timeout, retrying lock timeouts
+// (55P03) and deadlocks (40P01). The issuers migration alters research_entity_keys and
+// research_entity_securities, which other DB suites use concurrently; without a timeout the ALTER
+// would queue behind (and block) their locks.
+const RETRYABLE=new Set(['55P03','40P01']);
+async function replayMigration(pool:Pool,sql:string,attempts=3):Promise<void>{
+ for(let attempt=1;;attempt++){
+  const c=await pool.connect();
+  try{
+   await c.query(`begin; set local lock_timeout='3s';\n${sql}\n;commit;`);
+   return;
+  }catch(e){
+   await c.query('rollback').catch(()=>{});
+   const code=(e as {code?:string}).code;
+   if(attempt>=attempts||!code||!RETRYABLE.has(code))throw e;
+   await new Promise(r=>setTimeout(r,500));
+  }finally{c.release();}
+ }
+}
+
 describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
  let admin:Pool;
  const issuers:string[]=[];
@@ -65,7 +85,7 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
   expect(policies).toEqual([...PUBLIC_TABLES].sort().map(t=>({tablename:t,policyname:`${t} public read`})));
   const cols=(await admin.query(`select table_name,column_name,data_type from information_schema.columns where table_schema='public' and ((table_name='research_entity_keys' and column_name='issuer_id') or (table_name='research_entity_securities' and column_name='ticker')) order by table_name`)).rows;
   expect(cols).toEqual([{table_name:'research_entity_keys',column_name:'issuer_id',data_type:'uuid'},{table_name:'research_entity_securities',column_name:'ticker',data_type:'text'}]);
-  await expect(admin.query(readFileSync(MIGRATION,'utf8'))).resolves.toBeDefined();
+  await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();
  },30000);
 
  it('enforces named issuer constraints',async()=>{

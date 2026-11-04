@@ -1,11 +1,14 @@
 // Load US issuers and their listed securities from SEC company_tickers_exchange.json.
 // planSecLoad is pure. applySecLoad performs the public writes through a TableClient and returns
-// receipt counts; the script owns the ingest batch. SEC exchange membership does not establish
+// receipt counts; the script owns the ingest batch, and every conflict is parked as a dq_quarantine
+// row of that batch. SEC exchange membership does not establish
 // domicile and the file carries no share class, so country_code is never set and share_class is
 // always 'unknown'.
 import type {TableClient} from '../db/table-client';
 import type {BatchCounts,BatchError,BatchStatus} from '../dq/batches';
 import {emptyCounts} from '../dq/batches';
+import type {QuarantineInput} from '../dq/quarantine';
+import {quarantine} from '../dq/quarantine';
 import {normalizeSecurityTicker} from '../securities/ticker';
 import type {SecExchangeParse,SecExchangeRow} from '../research/entity-keys/parsers';
 import {MAX_SEC_ROWS} from '../research/entity-keys/parsers';
@@ -76,12 +79,29 @@ export function loaderOutcome(status:BatchStatus,counts:BatchCounts):{ok:boolean
  return {ok,exitCode:status==='failed'||counts.failed>0?1:0};
 }
 
-export interface SecApplyOptions{asOf:string;batchProducerMeta:{sourceRows:number;rejected:SecExchangeParse['rejected']}}
+/**
+ * Records a conflict: pushes `error`, then parks the row in dq_quarantine (deduped on the open
+ * key). The row counts as quarantined only once the quarantine row is written; if that write
+ * fails it counts as failed with an extra `quarantine_error`.
+ */
+export async function parkConflict(client:TableClient,input:QuarantineInput,counts:BatchCounts,errors:BatchError[],error:BatchError):Promise<void>{
+ errors.push(error);
+ try{await quarantine(client,input);counts.quarantined++;}
+ catch(e){counts.failed++;errors.push({code:'quarantine_error',key:error.key,message:errorMessage(e)});}
+}
+
+/** Quarantine reason code for an issuer conflict: a match on a retired issuer is kept apart. */
+export const issuerReasonCode=(reason:string|undefined)=>reason==='inactive_issuer'?'inactive_issuer':'issuer_conflict';
+
+export const SEC_DATASET='entities.sec';
+
+export interface SecApplyOptions{asOf:string;batchId:string;batchProducerMeta:{sourceRows:number;rejected:SecExchangeParse['rejected']}}
 
 /**
  * Writes the plan to the public issuer master. `fetched` is the number of SEC data rows; each
  * issuer and security write has one outcome; securities whose issuer failed or was quarantined
- * count as failed (`blocked_by_issuer`). Rejected and not-in-universe rows are summarized.
+ * count as failed (`blocked_by_issuer`). Issuer conflicts (key: cik) and ownership conflicts (key:
+ * ticker) are quarantined under `opts.batchId`. Rejected and not-in-universe rows are summarized.
  */
 export async function applySecLoad(client:TableClient,plan:SecLoadPlan,opts:SecApplyOptions):Promise<ApplyResult>{
  if(plan.asOf!==opts.asOf)throw new Error('as_of_mismatch');
@@ -101,7 +121,10 @@ export async function applySecLoad(client:TableClient,plan:SecLoadPlan,opts:SecA
  for(const issuer of plan.issuers){
   try{
    const res=await upsertIssuerByIdentifiers(client,issuer);
-   if(res.conflict||!res.issuer_id){counts.quarantined++;errors.push({code:'issuer_conflict',key:issuer.cik,message:res.reason});continue;}
+   if(res.conflict||!res.issuer_id){
+    await parkConflict(client,{dataset:SEC_DATASET,table:'issuers',naturalKey:issuer.cik,reasonCode:issuerReasonCode(res.reason),detail:{reason:res.reason??null},batchId:opts.batchId},counts,errors,{code:'issuer_conflict',key:issuer.cik,message:res.reason});
+    continue;
+   }
    issuerByCik.set(issuer.cik,res.issuer_id);
    if(res.created)counts.inserted++;else counts.duplicates++;
   }catch(e){counts.failed++;errors.push({code:'issuer_error',key:issuer.cik,message:errorMessage(e)});}
@@ -115,7 +138,7 @@ export async function applySecLoad(client:TableClient,plan:SecLoadPlan,opts:SecA
    const res=await attachSecurity(client,{...rest,issuer_id});
    if(res==='inserted')counts.inserted++;
    else if(res==='duplicate')counts.duplicates++;
-   else{counts.quarantined++;errors.push({code:'ownership_conflict',key:sec.ticker});}
+   else await parkConflict(client,{dataset:SEC_DATASET,table:'issuer_securities',naturalKey:sec.ticker,reasonCode:'ownership_conflict',detail:{reason:'ticker_owned_by_other_issuer',cik:sec.cik},batchId:opts.batchId},counts,errors,{code:'ownership_conflict',key:sec.ticker});
   }catch(e){
    counts.failed++;
    const msg=errorMessage(e);

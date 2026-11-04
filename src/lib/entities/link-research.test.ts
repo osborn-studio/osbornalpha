@@ -36,7 +36,8 @@ const LEI='3003003LS77D1DRDDE25',USCI='913300002539329145';
 const key=(over:Partial<EntityKeyRow>):EntityKeyRow=>({user_id:U,entity_id:'e',lei:null,usci:null,cik:null,cninfo_org_id:null,names_zh:[],names_en:['Name'],home_market:'US',issuer_id:null,...over});
 const sec=(over:Partial<EntitySecurityRow>):EntitySecurityRow=>({user_id:U,id:'s',entity_id:'e',exchange_code:'AAPL',isin:null,market:'US',security_type:'common',is_primary:false,valid_from:'2000-01-01',valid_to:null,...over});
 const universe=(entries:Record<string,string>)=>new Map(Object.entries(entries));
-const kprov={source:'research_entity_keys',as_of:AS_OF};
+const BATCH='33333333-3333-3333-3333-333333333333';
+const kprov={source:'curated',as_of:AS_OF};
 
 describe('planResearchLink',()=>{
  it('promotes only valid, named, hard-identified entities with source-only provenance and evidence-based country/share class',()=>{
@@ -54,10 +55,10 @@ describe('planResearchLink',()=>{
    {entity_key:`${U}:e1`,user_id:U,entity_id:'e1',current_issuer_id:null,input:{lei:LEI,usci:USCI,cik:null,cninfo_org_id:'gssh0600570',canonical_name_zh:'恒生电子',canonical_name_en:'Hundsun Technologies Inc.',country_code:'CN',provenance:{lei:kprov,usci:kprov,cninfo_org_id:kprov,canonical_name_zh:kprov,canonical_name_en:kprov,country_code:kprov}}},
    {entity_key:`${U}:e3`,user_id:U,entity_id:'e3',current_issuer_id:'already',input:{lei:null,usci:null,cik:'320193',cninfo_org_id:null,canonical_name_zh:null,canonical_name_en:'Apple Inc.',country_code:null,provenance:{cik:kprov,canonical_name_en:kprov}}},
   ]);
-  const sprov={source:'research_entity_securities'};
+  const sprov={source:'curated',as_of:AS_OF};
   expect(plan.securities).toEqual([
-   {entity_key:`${U}:e1`,user_id:U,entity_id:'e1',security_id:'s1',ticker:'600570.SH',isin:'CNE000001GN7',share_class:'A',is_primary:true,valid_from:'2003-12-16',valid_to:null,source:'research_entity_securities',provenance:sprov},
-   {entity_key:`${U}:e3`,user_id:U,entity_id:'e3',security_id:'s2',ticker:'AAPL',isin:null,share_class:'ADR',is_primary:false,valid_from:'2000-01-01',valid_to:null,source:'research_entity_securities',provenance:sprov},
+   {entity_key:`${U}:e1`,user_id:U,entity_id:'e1',security_id:'s1',ticker:'600570.SH',isin:'CNE000001GN7',share_class:'A',is_primary:true,valid_from:'2003-12-16',valid_to:null,source:'curated',provenance:sprov},
+   {entity_key:`${U}:e3`,user_id:U,entity_id:'e3',security_id:'s2',ticker:'AAPL',isin:null,share_class:'ADR',is_primary:false,valid_from:'2000-01-01',valid_to:null,source:'curated',provenance:sprov},
   ]);
   expect(plan.skipped).toEqual([{entity_key:`${U}:e2`,reason:'no_hard_identifier'},{entity_key:`${U}:e3`,security_id:'s3',reason:'ticker_not_in_universe:NOPE'}]);
  });
@@ -135,12 +136,12 @@ describe('applyResearchLink',()=>{
  it('links issuers and securities for one user; a second run is all duplicates and succeeds; other users are untouched',async()=>{
   const c=await seed();
   const otherBefore=[c.rows('research_entity_keys').filter(r=>r.user_id===OTHER),c.rows('research_entity_securities').filter(r=>r.user_id===OTHER)];
-  const first=await applyResearchLink(c,await planFor(c),{userId:U});
+  const first=await applyResearchLink(c,await planFor(c),{userId:U,batchId:BATCH});
   expect(first.counts).toEqual({fetched:2,inserted:4,duplicates:0,versioned:0,quarantined:0,failed:0});
   expect(first.errors).toEqual([]);
   expect(c.rows('research_entity_keys').filter(r=>r.user_id===U).map(r=>r.issuer_id)).toEqual(['iss-320193','iss-789019']);
   expect(c.rows('research_entity_securities').filter(r=>r.user_id===U).map(r=>r.ticker)).toEqual(['AAPL','MSFT']);
-  const second=await applyResearchLink(c,await planFor(c),{userId:U});
+  const second=await applyResearchLink(c,await planFor(c),{userId:U,batchId:BATCH});
   expect(second.counts).toEqual({fetched:2,inserted:0,duplicates:4,versioned:0,quarantined:0,failed:0});
   const status=batchStatusFromCounts(second.counts,second.errors);
   expect(status).toBe('success');
@@ -148,25 +149,41 @@ describe('applyResearchLink',()=>{
   expect([c.rows('research_entity_keys').filter(r=>r.user_id===OTHER),c.rows('research_entity_securities').filter(r=>r.user_id===OTHER)]).toEqual(otherBefore);
   const pub=JSON.stringify([c.rows('issuers'),c.rows('issuer_securities')]);
   for(const secret of [U,'e1','e2','s1','s2'])expect(pub).not.toMatch(new RegExp(`"${secret}"`));
+  expect(pub).not.toContain('research_entity');
  });
 
  it('quarantines a conflicting issuer, links nothing for it and blocks its securities as failed',async()=>{
   fake.conflicts.add('789019');
   const c=await seed();
-  const res=await applyResearchLink(c,await planFor(c),{userId:U});
+  const res=await applyResearchLink(c,await planFor(c),{userId:U,batchId:BATCH});
   expect(res.counts).toEqual({fetched:2,inserted:2,duplicates:0,versioned:0,quarantined:1,failed:1});
   expect(res.errors.map(e=>[e.code,e.key])).toEqual([['issuer_conflict',`${U}:e2`],['blocked_by_issuer',`${U}:e2:s2`]]);
   expect(c.rows('research_entity_keys').find(r=>r.user_id===U&&r.entity_id==='e2')?.issuer_id).toBeNull();
   expect(c.rows('research_entity_securities').find(r=>r.user_id===U&&r.id==='s2')?.ticker).toBeNull();
   expect(c.rows('issuer_securities').map(r=>r.ticker)).toEqual(['AAPL']);
+  expect(c.rows('dq_quarantine').map(({dataset,table_name,natural_key,reason_code,detail,batch_id,status})=>({dataset,table_name,natural_key,reason_code,detail,batch_id,status}))).toEqual([
+   {dataset:'entities.research-link',table_name:'issuers',natural_key:'789019',reason_code:'issuer_conflict',detail:{reason:'hard_id_conflict',entity_key:`${U}:e2`},batch_id:BATCH,status:'open'},
+  ]);
   expect(loaderOutcome(batchStatusFromCounts(res.counts,res.errors),res.counts).exitCode).toBe(1);
+ });
+
+ it('quarantines a ticker owned by another issuer and leaves the private ticker unset',async()=>{
+  fake.owners.set('MSFT','iss-someone-else');
+  const c=await seed();
+  const res=await applyResearchLink(c,await planFor(c),{userId:U,batchId:BATCH});
+  expect(res.counts).toEqual({fetched:2,inserted:3,duplicates:0,versioned:0,quarantined:1,failed:0});
+  expect(res.errors).toEqual([{code:'ownership_conflict',key:`${U}:e2:s2`,message:'MSFT'}]);
+  expect(c.rows('research_entity_securities').find(r=>r.user_id===U&&r.id==='s2')?.ticker).toBeNull();
+  expect(c.rows('dq_quarantine').map(({dataset,table_name,natural_key,reason_code,detail,batch_id})=>({dataset,table_name,natural_key,reason_code,detail,batch_id}))).toEqual([
+   {dataset:'entities.research-link',table_name:'issuer_securities',natural_key:'MSFT',reason_code:'ownership_conflict',detail:{reason:'ticker_owned_by_other_issuer',entity_key:`${U}:e2:s2`},batch_id:BATCH},
+  ]);
  });
 
  it('counts the public insert, then fails the link when the private update hits no row',async()=>{
   const c=memoryTableClient(KEYS);
   await c.insert('stocks_universe',{ticker:'AAPL',market:'US'});
   const plan=planResearchLink([key({entity_id:'ghost',cik:'320193'})],[sec({id:'gs',entity_id:'ghost'})],universe({AAPL:'US'}),AS_OF);
-  const res=await applyResearchLink(c,plan,{userId:U});
+  const res=await applyResearchLink(c,plan,{userId:U,batchId:BATCH});
   expect(res.counts).toEqual({fetched:1,inserted:1,duplicates:0,versioned:0,quarantined:0,failed:2});
   expect(res.errors.map(e=>e.code)).toEqual(['link_failed','blocked_by_issuer']);
   const status=batchStatusFromCounts(res.counts,res.errors);
@@ -177,17 +194,17 @@ describe('applyResearchLink',()=>{
  it('records a relink and still updates the link',async()=>{
   const c=await seed();
   await c.update('research_entity_keys',{user_id:U,entity_id:'e1'},{issuer_id:'old-issuer'});
-  const res=await applyResearchLink(c,await planFor(c),{userId:U});
+  const res=await applyResearchLink(c,await planFor(c),{userId:U,batchId:BATCH});
   expect(res.errors).toEqual([{code:'relink',key:`${U}:e1`,message:'old-issuer->iss-320193'}]);
   expect(c.rows('research_entity_keys').find(r=>r.user_id===U&&r.entity_id==='e1')?.issuer_id).toBe('iss-320193');
  });
 
  it('summarizes skips in one error, fails an empty plan and refuses a plan for another user',async()=>{
   const empty=planResearchLink([key({entity_id:'x'})],[],new Map(),AS_OF);
-  const res=await applyResearchLink(memoryTableClient(),empty,{userId:U});
+  const res=await applyResearchLink(memoryTableClient(),empty,{userId:U,batchId:BATCH});
   expect(res.errors).toEqual([{code:'skipped_summary',message:'{"no_hard_identifier":1}'},{code:'empty_plan',message:'no research entity qualified for promotion'}]);
   expect(batchStatusFromCounts(res.counts,res.errors)).toBe('failed');
   const plan=planResearchLink([key({entity_id:'x',cik:'1'})],[],new Map(),AS_OF);
-  await expect(applyResearchLink(memoryTableClient(),plan,{userId:OTHER})).rejects.toThrow('plan_user_mismatch');
+  await expect(applyResearchLink(memoryTableClient(),plan,{userId:OTHER,batchId:BATCH})).rejects.toThrow('plan_user_mismatch');
  });
 });
