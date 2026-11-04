@@ -21,6 +21,7 @@
   --accent-dim: #a16207;                      /* Brass darker (hover) */
   --accent-wash: rgba(202, 138, 4, 0.12);     /* Brass Wash */
   --warn: #eab308;
+  --danger: #e11d48;
   --bullish: #e11d48;                         /* Pulse Red (CN convention) */
   --neutral: #eab308;                         /* Pulse Amber */
   --bearish: #16a34a;                         /* Pulse Green (CN convention) */
@@ -42,6 +43,7 @@
   --accent-dim: #a16207;
   --accent-wash: rgba(202, 138, 4, 0.10);
   --warn: #ca8a04;
+  --danger: #e11d48;
   --bullish: #e11d48;
   --neutral: #eab308;
   --bearish: #16a34a;

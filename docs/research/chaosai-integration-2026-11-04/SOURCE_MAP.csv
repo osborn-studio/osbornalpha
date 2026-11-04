@@ -1,0 +1,42 @@
+﻿id,module,metric,site_declared_source,recommended_origin,reference_url,access_path,cadence,risk,verification
+US_RATE,宏观,DFF,FRED,美联储 / FRED,https://fred.stlouisfed.org/docs/api/fred/,series observations,日频，跟随发布,实际成交利率不是目标区间,官方契约已阅读，生产请求未执行
+US_10Y,宏观,DGS10,FRED,美联储 H.15 / FRED,https://fred.stlouisfed.org/docs/api/fred/,series observations,日频,bp变化；非交易日缺失,官方契约已阅读，生产请求未执行
+US_BROAD_USD,宏观,DTWEXBGS,FRED,美联储 / FRED,https://fred.stlouisfed.org/series/DTWEXBGS,series observations,日频,不可与ICE DXY混用,官方序列定义已核对
+US_CPI,宏观,CPIAUCSL,FRED,BLS / FRED,https://fred.stlouisfed.org/series/CPIAUCSL,原指数+显式同比变换,月度,季调、非季调、指数、同比分别标记,官方序列定义已核对
+US_UNEMP,宏观,UNRATE,FRED,BLS / FRED,https://fred.stlouisfed.org/docs/api/fred/,series observations,月度,数据月不是发布日期,契约已核对，历史数值未全量审计
+US_PMI,宏观,NAPM,FRED,ISM / 授权供应商,https://fred.stlouisfed.org/news/2016/06/institute-for-supply-management-data-to-be-removed-from-fred,需选新供应商,月度,FRED已移除；不可继续伪装可用,当前series链接重定向至移除公告
+US_PPI,宏观,PPIFIS,FRED,BLS / FRED,https://fred.stlouisfed.org/series/PPIFIS,原指数+显式同比变换,月度,官方为最终需求，非制成品,官方序列定义已核对
+US_VIX,宏观,VIXCLS,FRED,Cboe / FRED,https://fred.stlouisfed.org/docs/api/fred/,series observations,日频,核对单序列使用范围；不是资金流,接口方向确定，使用范围待确认
+CN_MLF,宏观,CN_MLF_1Y,FRED/akshare/CMS总注释；合并利率卡,人民银行操作公告,https://www.pbc.gov.cn/,官方公告或授权网关,按政策操作,制度变化，工具期限,接入方向建议，接口待验证
+CN_LPR,宏观,CN_LPR_1Y / CN_LPR_5Y,合并利率卡,全国银行间同业拆借中心；AKShare可作分发适配,https://akshare.akfamily.xyz/data/macro/macro_china.html,macro_china_lpr,按发布,旧贷款基准利率与LPR字段区分,适配器官方文档已核对
+CN_10Y,宏观,CN_CGB_10Y,akshare,中债 / 授权供应商,https://www.chinabond.com.cn/,授权网关或经验证适配,日频,期限与收益率类型,接入方向建议，未验证接口
+CN_FX,宏观,CN_USDCNY,akshare,外汇交易中心 / 外汇局 / 授权供应商,https://www.safe.gov.cn/,指定口径汇率序列,日频,中间价与收盘分开,接入方向建议，未验证接口
+CN_CPI_PPI,宏观,CN_CPI_YOY / CN_PPI_YOY,akshare,国家统计局,https://data.stats.gov.cn/,官方发布表+校验适配,月度,原发布同比与原指数分开,来源方向核对，适配待验证
+CN_GDP,宏观,CN_GDP_YOY,akshare,国家统计局,https://data.stats.gov.cn/,官方季度表,季度,单季/累计；禁止伪造月度独立样本,来源方向核对，适配待验证
+CN_M2,宏观,CN_M2_YOY,akshare,人民银行；东方财富分发,https://akshare.akfamily.xyz/data/macro/macro_china.html,macro_china_money_supply,月度,同比与数量分别存,适配器官方文档已核对
+CN_AFRE,宏观,CN_SHRZ_YOY,akshare,人民银行存量统计,https://www.pbc.gov.cn/diaochatongjisi/attachDir/2025/11/2025110416000670943.pdf,存量表提取或授权网关,月度,macro_china_shrzgm为增量，不能代替存量同比,官方报告例子及适配器语义已核对
+CN_PMI,宏观,CN_PMI,akshare,国家统计局,https://data.stats.gov.cn/,官方发布表,月度,官方制造业与其他PMI分开,来源方向核对，适配待验证
+CN_EXPORT,宏观,CN_EXPORT_YOY,akshare,海关总署,https://www.customs.gov.cn/,官方发布表或授权网关,月度,美元/人民币；当月/累计,接入方向建议，未验证接口
+MARKET_SERIES,关联图,股票指数 / TLT / 商品期货,yahoo（公开序列元数据）,已有DataGateway优先盘点,https://www.chaosaiagent.com/macro-strategy,独立资产catalog与provider契约,依资产频率,当前仓库证券接口不保证指数与期货覆盖,代码有证券适配；新品类未验证
+HISTORY_INDICES,历史周期表,中美港指数,MiniMax Finance,供应商身份及产品待确认；可考虑已有授权源,https://www.chaosaiagent.com/macro-strategy/cycle-asset-table/index.html,待确认,日/月边界必须明确,原表有发布前回溯序列,仅核对站点声明
+HISTORY_DXY,历史周期表,DXY,Statista / ICE,ICE或授权指数供应商,https://www.chaosaiagent.com/macro-strategy/cycle-asset-table/index.html,授权序列,原表月度,与广义美元不是同一序列,仅核对站点声明
+HISTORY_FX,历史周期表,USDCNY,CurrencyNews / 外汇局,统一口径的汇率源,https://www.chaosaiagent.com/macro-strategy/cycle-asset-table/index.html,指定收盘或中间价,日频,不得混合口径,仅核对站点声明
+HISTORY_GOLD,历史周期表,黄金,World Bank Pink Sheet / Goldprice.today,指定价格基准与频率,https://www.chaosaiagent.com/macro-strategy/cycle-asset-table/index.html,待选定契约,月/年及月末混用需清理,月均和月末不可混为收盘,仅核对站点声明
+HISTORY_OIL,历史周期表,WTI / Brent,WorldOilMonitor / EIA,EIA或授权行情,https://www.chaosaiagent.com/macro-strategy/cycle-asset-table/index.html,待选定契约,日/月,现货期货、均值收盘分开,仅核对站点声明
+HISTORY_METALS,历史周期表,LME铜铝,Metalcharts / Macrotrends,授权LME相关数据源,https://www.chaosaiagent.com/macro-strategy/cycle-asset-table/index.html,待选定契约,日/月,三月期与现货、展期口径,仅核对站点声明
+POLICY_EVENTS,宏观事件,FOMC日期,FOMC / Investopedia / 百度百科,官方FOMC公告,https://www.chaosaiagent.com/macro-strategy/cycle-asset-table/index.html,官方事件表与公告链接,事件触发,公告时点与交易时点,站点声明核对；事件库待建设
+INDUSTRY_FIN,行业,收入利润毛利率ROE,恒生聚源 / XLSX,已授权金融供应商或官方财报聚合,https://www.chaosaiagent.com/industries,字段覆盖评估+财报聚合,季度/年度,整体法、历史成员、缺报、重述,站点声明核对；许可未确认
+INDUSTRY_VAL,行业,PE PB PS,申万指数周频,申万或已有授权供应商,https://www.swsresearch.com/,历史估值序列,周频或供应商频率,分类版本、负PE、样本窗口,站点声明核对；官网本次超时
+OPENROUTER_RANK,AI生态,应用/模型使用榜,OpenRouter frontend rankings,OpenRouter,https://www.chaosaiagent.com/industry-data/llm-rankings,公开榜单契约需确认,建议日快照,平台份额非全市场；非稳定承诺接口,站点来源标签已核对
+OPENROUTER_CATALOG,AI价格,模型价格/上下文,可作为新接入源,OpenRouter正式API,https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties,GET /api/v1/models,建议日快照,不包含完整使用排名能力,官方API文档已核对
+AA,AI能力,模型能力价格速度,Artificial Analysis网页,Artificial Analysis Data API,https://artificialanalysis.ai/data-api/docs,/api/v2/language/models等,建议日快照,key与套餐字段；评测版本,正式API文档已核对，未执行认证请求
+AICPB,AI使用度,网站流量榜,AICPB / SimilarWeb等,AICPB数据协议或许可快照,https://www.chaosaiagent.com/industry-data/aicpb-rankings,月度导入/接口待确认,月度,版次不等于观察月；非MAU,站点来源标签已核对，供应商契约未确认
+HF,AI生态,模型下载/趋势/新发布,Hugging Face,Hugging Face Hub,https://huggingface.co/docs/hub/api,Hub models metadata,建议6h或日快照,下载统计窗口、任务和模型实体,官方API文档已核对
+GITHUB,AI生态,仓库stars与活跃度,GitHub / Trending,GitHub REST,https://docs.github.com/en/rest/activity/starring,仓库元数据快照；历史能力按权限,建议日快照,总量净增非新增stars；历史访问限制,官方文档已核对
+TOKENCOST,AI价格,多模型价格,AgentOps-AI/tokencost,tokencost + 厂商定价交叉核对,https://github.com/AgentOps-AI/tokencost,model_prices.json固定commit,建议日采集周归档,单位、缓存、模式、commit；HTTP Date不是价格生效日,上游仓库与站点来源已核对
+ARENA,AI能力,人类偏好榜,arena.ai抓取,原站支持的数据渠道,https://www.chaosaiagent.com/industry-data/arena-leaderboards,契约待确认,站点声明1h,当前抓取失败；CI与任务口径,失败状态已观察；上游接口未验证
+JEFFERIES,研究表格,AI行业追踪,Jefferies AI Series,合法可用的原报告,https://www.chaosaiagent.com/industry-data/jefferies-ai-data-tracking,文档导入/OCR/表格复核,随报告,不是实时API；页码、版本与权限,仅入口和tab结构可见
+COMPANY,公司研究,估值/胜率/凯利/评级,内部Markdown汇总与深度报告,公司披露与独立研究模型,https://www.chaosaiagent.com/company,复用现有Sources/Entities,随财报与研究更新,主观胜率不可当统计胜率,公开客户端资源观察，交互未验证
+FOREIGN_REPORT,外资研报,机构目标价与摘要,机构研究报告,用户可合法使用的报告,https://www.chaosaiagent.com/foreign-research,私有文档导入+引用,随报告,分发、页码、币种、报告时价格,公开客户端资源观察，交互未验证
+PODCAST,他山之石,访谈转写与观点,RSS / 节目原音频 / STT,节目原始来源,https://www.chaosaiagent.com/benchmark/a16z-show,转写+时间戳+章节+来源,随节目,事实与嘉宾观点分开；翻译/全文范围,目录及工作流声明已观察
+TOKEN_ECON,研究工具,算力单位经济模型,中金研究口径 / 独立HTML,硬件/运营假设+授权研究材料,https://www.chaosaiagent.com/industries/token-interactive,独立确定性计算器,随假设或硬件参数,吞吐/SLO/利用率/折旧单位,页面与嵌入HTML已读取，滑块未运行

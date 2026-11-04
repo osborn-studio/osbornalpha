@@ -108,7 +108,12 @@
       "lastResult": "Last result",
       "error": "Error code"
     },
-    "statuses": { "healthy": "Healthy", "warning": "Review", "error": "Error", "unknown": "Not run" },
+    "statuses": {
+      "healthy": "Healthy",
+      "warning": "Review",
+      "error": "Error",
+      "unknown": "Not run"
+    },
     "scopes": {
       "a_stock": "A shares",
       "a_exchange_fund": "A-share exchange funds",
@@ -117,6 +122,71 @@
       "sp500": "S&P 500",
       "nasdaq_top500": "NASDAQ top 500 by market cap",
       "us_china": "US-listed China equities and ADRs"
+    }
+  },
+  "dq": {
+    "title": "Data Quality",
+    "subtitle": "Batch receipts · quarantine queue · failed reconciliations · freshness (recomputed on read)",
+    "deniedTitle": "Access denied",
+    "deniedBody": "This page is available to administrators only.",
+    "loading": "Updating data…",
+    "loadFailed": "Data failed to load. Please try again shortly.",
+    "resolveFailed": "Action failed. Please try again.",
+    "refresh": "Refresh",
+    "refreshedAt": "Refreshed {time}",
+    "accept": "Accept",
+    "reject": "Reject",
+    "alreadyResolved": "Already resolved by someone else; list refreshed.",
+    "notFound": "Item not found.",
+    "prev": "Previous",
+    "next": "Next",
+    "page": "Page {page} / {pages} · {total} items",
+    "all": "All datasets",
+    "empty": "No records",
+    "tiles": {
+      "notFresh": "Non-fresh datasets",
+      "openQuarantine": "Open quarantine items",
+      "failedReconciliations": "Failed reconciliations (all time)",
+      "batches24h": "Batches (24 hours)",
+      "notFreshNote": "stale {stale} · missing {missing} · error {error}",
+      "batchesNote": "success {success} · partial {partial} · failed {failed}",
+      "openQuarantineNote": "Real count, not a truncated sample"
+    },
+    "sections": {
+      "freshness": "Freshness",
+      "batches": "Recent batches",
+      "quarantine": "Quarantine queue",
+      "reconciliations": "Failed reconciliations",
+      "reconciliationsLatest": "latest {shown} of {total}"
+    },
+    "columns": {
+      "dataset": "Dataset",
+      "cadence": "Cadence",
+      "lastOk": "Last success",
+      "status": "Status (now)",
+      "stored": "Stored",
+      "started": "Started",
+      "producer": "Producer",
+      "batchStatus": "Status",
+      "inserted": "Inserted",
+      "quarantined": "Quarantined",
+      "failed": "Failed",
+      "time": "Time",
+      "table": "Table",
+      "naturalKey": "Natural key",
+      "reason": "Reason",
+      "detail": "Detail",
+      "actions": "Actions",
+      "leftSource": "Left source",
+      "leftValue": "Left value",
+      "rightSource": "Right source",
+      "rightValue": "Right value",
+      "relDiff": "Rel. diff",
+      "tolerance": "Tolerance"
+    },
+    "notes": {
+      "freshness": "Status is recomputed against the current time; ≠ marks a mismatch with the status stored at write time.",
+      "quarantine": "Accept/reject only changes the item's status and never writes the target table; if someone else already resolved it, you'll be told and the list refreshes."
     }
   }
 }

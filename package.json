@@ -19,6 +19,7 @@
     "securities:reconcile": "tsx scripts/securities-reconcile.ts",
     "test:db": "tsx scripts/ci/research-db.ts",
     "test:migrations": "tsx scripts/ci/migration-rehearsal.ts",
+    "supabase:types": "echo 'database.types.ts is hand-maintained; see docs/runbooks/data-foundation.md' && exit 1",
     "check:migration-history": "tsx scripts/ci/check-migration-history.ts",
     "test:runtime-privileges": "tsx scripts/s4/runtime-privileges-smoke.ts",
     "preflight:research": "tsx scripts/s4/runtime-preflight.ts",

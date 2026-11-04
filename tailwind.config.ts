@@ -23,6 +23,7 @@ const config: Config = {
         up: "var(--up)",
         down: "var(--down)",
         warn: "var(--warn)",
+        danger: "var(--danger)",
         bullish: "var(--bullish)",
         neutral: "var(--neutral)",
         bearish: "var(--bearish)",

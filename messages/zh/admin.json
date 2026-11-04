@@ -108,7 +108,12 @@
       "lastResult": "最近结果",
       "error": "错误码"
     },
-    "statuses": { "healthy": "正常", "warning": "需关注", "error": "异常", "unknown": "未运行" },
+    "statuses": {
+      "healthy": "正常",
+      "warning": "需关注",
+      "error": "异常",
+      "unknown": "未运行"
+    },
     "scopes": {
       "a_stock": "A 股",
       "a_exchange_fund": "A 股场内基金",
@@ -117,6 +122,71 @@
       "sp500": "标普 500",
       "nasdaq_top500": "NASDAQ 市值前 500",
       "us_china": "美股中概与 ADR"
+    }
+  },
+  "dq": {
+    "title": "数据质量看板",
+    "subtitle": "批次回执 · 隔离队列 · 对账失败 · 新鲜度（读时重算）",
+    "deniedTitle": "无权访问",
+    "deniedBody": "此页面仅对管理员开放。",
+    "loading": "正在更新数据…",
+    "loadFailed": "数据加载失败，请稍后重试。",
+    "resolveFailed": "处理失败，请重试。",
+    "refresh": "刷新",
+    "refreshedAt": "刷新于 {time}",
+    "accept": "接受",
+    "reject": "拒绝",
+    "alreadyResolved": "该项已被处理，列表已刷新。",
+    "notFound": "该项不存在。",
+    "prev": "上一页",
+    "next": "下一页",
+    "page": "第 {page} / {pages} 页 · 共 {total} 项",
+    "all": "全部数据集",
+    "empty": "暂无记录",
+    "tiles": {
+      "notFresh": "非 fresh 数据集",
+      "openQuarantine": "待处理隔离项",
+      "failedReconciliations": "对账失败（累计）",
+      "batches24h": "批次（24 小时）",
+      "notFreshNote": "stale {stale} · missing {missing} · error {error}",
+      "batchesNote": "success {success} · partial {partial} · failed {failed}",
+      "openQuarantineNote": "真实计数（count），非截断样本"
+    },
+    "sections": {
+      "freshness": "新鲜度",
+      "batches": "最近批次",
+      "quarantine": "隔离队列",
+      "reconciliations": "对账失败",
+      "reconciliationsLatest": "最近 {shown} / {total}"
+    },
+    "columns": {
+      "dataset": "数据集",
+      "cadence": "节奏",
+      "lastOk": "最近成功",
+      "status": "状态（读时）",
+      "stored": "写入时",
+      "started": "开始",
+      "producer": "生产者",
+      "batchStatus": "状态",
+      "inserted": "入库",
+      "quarantined": "隔离",
+      "failed": "失败",
+      "time": "时间",
+      "table": "表",
+      "naturalKey": "自然键",
+      "reason": "原因",
+      "detail": "详情",
+      "actions": "操作",
+      "leftSource": "左源",
+      "leftValue": "左值",
+      "rightSource": "右源",
+      "rightValue": "右值",
+      "relDiff": "相对差",
+      "tolerance": "容差"
+    },
+    "notes": {
+      "freshness": "状态按当前时间读时重算；≠ 表示与写入时存储的状态不一致。",
+      "quarantine": "接受/拒绝只改变隔离项状态，不会写入目标表；若已被他人处理，将提示并刷新列表。"
     }
   }
 }

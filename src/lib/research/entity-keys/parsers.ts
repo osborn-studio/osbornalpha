@@ -46,3 +46,51 @@ export function selectIsinsForLeis(lines: Iterable<string>, leis: Set<string>): 
   if (first) fail('invalid_schema');
   return { found, missing: [...leis].filter(l => !found[l]) };
 }
+
+export interface SecExchangeRow { cik: string; name: string; ticker: string; exchange: string }
+export interface SecExchangeParse {
+  rows: SecExchangeRow[];
+  rejected: { index: number; reason: 'invalid_cik' | 'missing_ticker' | 'missing_name' }[];
+}
+
+/** A CIK that normalizeCik accepts (1–10 digits, not zero; number or digit string), unpadded. */
+function secExchangeCik(v: unknown): string | null {
+  try { return normalizeCik(v); } catch { return null; }
+}
+
+/** Upper bounds checked before the JSON is parsed / the plan is built. */
+export const MAX_SEC_FILE_BYTES = 50 * 1024 * 1024;
+export const MAX_SEC_ROWS = 100_000;
+
+const nonEmpty = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
+
+/**
+ * SEC `company_tickers_exchange.json`: `{fields:[...], data:[[...], ...]}` with at least
+ * cik/name/ticker/exchange columns. Malformed rows are listed in `rejected`, never coerced.
+ * Throws file_too_large above MAX_SEC_FILE_BYTES (before parsing) and too_many_rows above MAX_SEC_ROWS.
+ */
+export function parseSecCompanyTickersExchange(json: string): SecExchangeParse {
+  if (json.length > MAX_SEC_FILE_BYTES || Buffer.byteLength(json, 'utf8') > MAX_SEC_FILE_BYTES) throw new Error('file_too_large');
+  let doc: unknown;
+  try { doc = JSON.parse(json); } catch { throw new Error('invalid_sec_exchange_file'); }
+  const d = doc as { fields?: unknown; data?: unknown } | null;
+  if (typeof d !== 'object' || d === null || !Array.isArray(d.fields) || !Array.isArray(d.data)) throw new Error('invalid_sec_exchange_file');
+  const fields = d.fields as unknown[];
+  const col = (name: string) => fields.indexOf(name);
+  const [ci, ni, ti, ei] = ['cik', 'name', 'ticker', 'exchange'].map(col);
+  if (ci < 0 || ni < 0 || ti < 0 || ei < 0) throw new Error('invalid_sec_exchange_file');
+  if (d.data.length > MAX_SEC_ROWS) throw new Error('too_many_rows');
+  const out: SecExchangeParse = { rows: [], rejected: [] };
+  (d.data as unknown[]).forEach((raw, index) => {
+    const r = Array.isArray(raw) ? raw : [];
+    const cik = secExchangeCik(r[ci]);
+    if (cik === null) { out.rejected.push({ index, reason: 'invalid_cik' }); return; }
+    const ticker = nonEmpty(r[ti]);
+    if (ticker === null) { out.rejected.push({ index, reason: 'missing_ticker' }); return; }
+    const name = nonEmpty(r[ni]);
+    if (name === null) { out.rejected.push({ index, reason: 'missing_name' }); return; }
+    const exchange = typeof r[ei] === 'string' ? (r[ei] as string).trim() : '';
+    out.rows.push({ cik, name, ticker, exchange });
+  });
+  return out;
+}

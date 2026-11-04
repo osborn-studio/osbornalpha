@@ -164,6 +164,38 @@
     {
       "file": "20261005175000_evaluation_intent_fence.sql",
       "sha256": "a069bf27f9d37916d0a247481df95bf3036958fb13210871791cf74e95e0d1a0"
+    },
+    {
+      "file": "20261006212400_quote_alert_window_samples.sql",
+      "sha256": "ce4f420936d042b9685d7e8db15286a6792b4c16969199066b8d3ea5ce068fd0"
+    },
+    {
+      "file": "20261017090000_analyst_scoring.sql",
+      "sha256": "1b3ad4f9e8ff5d4333ee2e7ea2b442d89d446c5087bafa1a61fc6f74d16a6150"
+    },
+    {
+      "file": "20261017120000_recommendations_append_only.sql",
+      "sha256": "9c2b9020a7780222bf624f503bddd60f72af02b922deea62166607de025a0001"
+    },
+    {
+      "file": "20261018090000_recommendation_scores_base_close.sql",
+      "sha256": "5783ba47307de908f6a667699c461ed3fa78220cec3c81bbe17ad99b1abbe2d9"
+    },
+    {
+      "file": "20261018120000_anchor_runner.sql",
+      "sha256": "29e0a175176161bd23af9b54913a25aea54b7644c87dc7e371353016768597c0"
+    },
+    {
+      "file": "20261018150000_anchor_runner_cache_read.sql",
+      "sha256": "2ee2efabbe184cfe5a401d88b594d0fae08d218c8f1dbc3a35104966a65c1a19"
+    },
+    {
+      "file": "20261105090000_dq_foundation.sql",
+      "sha256": "54d094cbfb15e5f29a9d08ba24dba6893b65e390d8a08bf470db6d72bb75ad1a"
+    },
+    {
+      "file": "20261105091000_issuers.sql",
+      "sha256": "951ff948e896480a81fb99e0a2e3eb6858664c99dc8620055144afb753354a62"
     }
   ]
 }
