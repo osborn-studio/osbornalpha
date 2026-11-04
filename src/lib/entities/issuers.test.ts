@@ -10,10 +10,17 @@ const LEI_APPLE='HWUPKR0MPOU8FGXBT394';
 const LEI_OTHER='529900T8BM49AURSDO55';
 const KEYS={issuers:['issuer_id'],issuer_securities:['issuer_id','ticker','valid_from'],issuer_identifier_claims:['id']};
 const client=()=>memoryTableClient(KEYS);
-const issuer=(over:Row):Row=>({status:'active',merged_into:null,lei:null,cik:null,usci:null,cninfo_org_id:null,canonical_name_en:null,provenance:{},updated_at:'2020-01-01T00:00:00.000Z',...over});
-const dupErr=(t:string,code='23505')=>new TableError('insert',t,'duplicate key value violates unique constraint',code);
+// The memory client matches with ===, so every column a real row has must be present (null when absent),
+// and the fixture must be a state PostgreSQL allows (issuers_has_name: at least one name).
+const issuer=(over:Row):Row=>({
+ status:'active',merged_into:null,lei:null,cik:null,usci:null,cninfo_org_id:null,hkex_stock_code_primary:null,
+ canonical_name_zh:null,canonical_name_en:'Test Co',country_code:null,provenance:{},
+ created_at:'2020-01-01T00:00:00.000Z',updated_at:'2020-01-01T00:00:00.000Z',...over,
+});
+const dupErr=(t:string,code='23505',msg='duplicate key value violates unique constraint')=>new TableError('insert',t,msg,code);
+const claims=(c:ReturnType<typeof client>)=>c.rows('issuer_identifier_claims').map(r=>({issuer_id:r.issuer_id,id_type:r.id_type,value:r.value})).sort((a,b)=>`${a.issuer_id}${a.id_type}`.localeCompare(`${b.issuer_id}${b.id_type}`));
 
-afterEach(()=>{vi.useRealTimers();});
+afterEach(()=>{vi.useRealTimers();vi.restoreAllMocks();});
 
 describe('upsertIssuerByIdentifiers',()=>{
  it('creates a new issuer, reuses it on a matching hard id, enriches null fields and merges provenance per key',async()=>{
@@ -39,35 +46,44 @@ describe('upsertIssuerByIdentifiers',()=>{
  });
  it('files exactly one pending claim for a repeated identical conflict',async()=>{
   const c=client();
-  await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_APPLE});
+  await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_APPLE,canonical_name_en:'Apple'});
   for(let i=0;i<3;i++)expect(await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_OTHER})).toMatchObject({conflict:true});
   expect(c.rows('issuer_identifier_claims')).toHaveLength(1);
  });
  it('treats a 23505 on claim insert as an already-filed claim',async()=>{
   const c=client();
-  await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_APPLE});
+  await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_APPLE,canonical_name_en:'Apple'});
   const base=c.insert.bind(c);
   c.insert=async(t,row)=>{if(t==='issuer_identifier_claims')throw dupErr(t);return base(t,row);};
   expect(await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_OTHER})).toMatchObject({conflict:true});
  });
- it('rejects invalid hard identifiers before touching the database',async()=>{
+ it('rejects invalid identifiers before touching the database',async()=>{
   const c=memoryTableClient();
   await expect(upsertIssuerByIdentifiers(c,{cik:'abc',canonical_name_en:'X'})).rejects.toThrow('invalid_identifier:cik');
   await expect(upsertIssuerByIdentifiers(c,{lei:'BAD',canonical_name_en:'X'})).rejects.toThrow('invalid_identifier:lei');
   await expect(upsertIssuerByIdentifiers(c,{usci:'123',canonical_name_en:'X'})).rejects.toThrow('invalid_identifier:usci');
   await expect(upsertIssuerByIdentifiers(c,{cik:'320193',isin:'US0378331006'} as IssuerInput)).rejects.toThrow('invalid_identifier:isin');
+  for(const hk of ['123456','0700.HK','abc'])await expect(upsertIssuerByIdentifiers(c,{cik:'1',canonical_name_en:'X',hkex_stock_code_primary:hk})).rejects.toThrow('invalid_identifier:hkex');
   expect(c.rows('issuers')).toHaveLength(0);
  });
  it('treats blank identifier strings as missing',async()=>{
   const c=client();
-  const out=await upsertIssuerByIdentifiers(c,{cik:'320193',lei:'  ',usci:'',cninfo_org_id:' ',canonical_name_en:''});
+  const out=await upsertIssuerByIdentifiers(c,{cik:'320193',lei:'  ',usci:'',cninfo_org_id:' ',hkex_stock_code_primary:' ',canonical_name_en:'',canonical_name_zh:'苹果'});
   expect(out.created).toBe(true);
-  expect(c.rows('issuers')[0]).toMatchObject({lei:null,usci:null,cninfo_org_id:null,canonical_name_en:null});
+  expect(c.rows('issuers')[0]).toMatchObject({lei:null,usci:null,cninfo_org_id:null,hkex_stock_code_primary:null,canonical_name_en:null,canonical_name_zh:'苹果'});
   await expect(upsertIssuerByIdentifiers(c,{lei:' ',cik:''})).rejects.toThrow('no_hard_identifier');
+ });
+ it('requires a name to create an issuer but not to match an existing one',async()=>{
+  const c=client();
+  await expect(upsertIssuerByIdentifiers(c,{cik:'320193'})).rejects.toThrow('name_required');
+  await expect(upsertIssuerByIdentifiers(c,{cik:'320193',canonical_name_en:' ',canonical_name_zh:''})).rejects.toThrow('name_required');
+  expect(c.rows('issuers')).toHaveLength(0);
+  await upsertIssuerByIdentifiers(c,{cik:'320193',canonical_name_en:'Apple'});
+  expect(await upsertIssuerByIdentifiers(c,{cik:'320193'})).toMatchObject({created:false});
  });
  it('pads a short HKEX stock code to five digits',async()=>{
   const c=client();
-  await upsertIssuerByIdentifiers(c,{cik:'1',hkex_stock_code_primary:' 700 '});
+  await upsertIssuerByIdentifiers(c,{cik:'1',canonical_name_en:'Tencent',hkex_stock_code_primary:' 700 '});
   expect(c.rows('issuers')[0].hkex_stock_code_primary).toBe('00700');
  });
  it('recovers from a unique-index race by re-reading and reusing the winner',async()=>{
@@ -80,8 +96,8 @@ describe('upsertIssuerByIdentifiers',()=>{
  });
  it('redirects a merged candidate to its active target without copying the merged-away id',async()=>{
   const c=client();
-  await c.insert('issuers',issuer({issuer_id:'old',status:'merged',merged_into:'new',cik:'111'}));
   await c.insert('issuers',issuer({issuer_id:'new',cik:'222'}));
+  await c.insert('issuers',issuer({issuer_id:'old',status:'merged',merged_into:'new',cik:'111'}));
   const out=await upsertIssuerByIdentifiers(c,{cik:'111',lei:LEI_APPLE,provenance:{cik:{source:'x'},lei:{source:'gleif'}}});
   expect(out).toEqual({issuer_id:'new',created:false});
   const target=c.rows('issuers').find(r=>r.issuer_id==='new')!;
@@ -89,54 +105,121 @@ describe('upsertIssuerByIdentifiers',()=>{
   expect(target.provenance).not.toHaveProperty('cik');
   expect(c.rows('issuers')).toHaveLength(2);
  });
- it('reports inactive_issuer when a merge target is not active',async()=>{
+ it('reports inactive_issuer when a merge target is not active and claims only differing ids on the holder',async()=>{
   const c=client();
-  await c.insert('issuers',issuer({issuer_id:'old',status:'merged',merged_into:'gone',cik:'111'}));
   await c.insert('issuers',issuer({issuer_id:'gone',status:'dissolved',cik:'222'}));
+  await c.insert('issuers',issuer({issuer_id:'old',status:'merged',merged_into:'gone',cik:'111'}));
   expect(await upsertIssuerByIdentifiers(c,{cik:'111'})).toEqual({issuer_id:null,created:false,conflict:true,reason:'inactive_issuer'});
+  expect(claims(c)).toEqual([]);
+  expect(await upsertIssuerByIdentifiers(c,{cik:'111',lei:LEI_APPLE})).toMatchObject({conflict:true,reason:'inactive_issuer'});
+  expect(claims(c)).toEqual([{issuer_id:'old',id_type:'lei',value:LEI_APPLE}]);
   expect(c.rows('issuers')).toHaveLength(2);
  });
- it('reports inactive_issuer and files a claim when a candidate is dissolved',async()=>{
+ it('reports inactive_issuer for a dissolved candidate, writes nothing and claims only the differing id',async()=>{
   const c=client();
   await c.insert('issuers',issuer({issuer_id:'d',status:'dissolved',cik:'111'}));
-  const out=await upsertIssuerByIdentifiers(c,{cik:'111',canonical_name_en:'Zombie',provenance:{cik:{source:'sec'}}});
+  const out=await upsertIssuerByIdentifiers(c,{cik:'111',lei:LEI_APPLE,canonical_name_zh:'僵尸',provenance:{lei:{source:'gleif'}}});
   expect(out).toEqual({issuer_id:null,created:false,conflict:true,reason:'inactive_issuer'});
-  expect(c.rows('issuers')).toHaveLength(1);
-  expect(c.rows('issuers')[0].canonical_name_en).toBeNull();
-  expect(c.rows('issuer_identifier_claims')).toEqual([expect.objectContaining({issuer_id:'d',id_type:'cik',value:'111',source:'sec',status:'pending'})]);
+  expect(c.rows('issuers')).toEqual([expect.objectContaining({issuer_id:'d',lei:null,canonical_name_zh:null})]);
+  expect(c.rows('issuer_identifier_claims')).toEqual([expect.objectContaining({issuer_id:'d',id_type:'lei',value:LEI_APPLE,source:'gleif',status:'pending'})]);
  });
- it('files a claim and does not overwrite when a conditional enrichment loses a race',async()=>{
+ it('reports identifiers_split when incoming ids hit an active and an inactive issuer',async()=>{
   const c=client();
-  await c.insert('issuers',issuer({issuer_id:'a',cik:'320193'}));
+  await c.insert('issuers',issuer({issuer_id:'a',cik:'222'}));
+  await c.insert('issuers',issuer({issuer_id:'d',status:'dissolved',cik:'111',lei:LEI_APPLE}));
+  const out=await upsertIssuerByIdentifiers(c,{cik:'222',lei:LEI_APPLE});
+  expect(out).toEqual({issuer_id:null,created:false,conflict:true,reason:'identifiers_split'});
+  expect(claims(c)).toEqual([{issuer_id:'a',id_type:'lei',value:LEI_APPLE},{issuer_id:'d',id_type:'cik',value:'222'}]);
+ });
+ it('returns hard_id_mismatch and files a claim when a conditional hard-id enrichment loses a race',async()=>{
+  const c=client();
+  await c.insert('issuers',issuer({issuer_id:'a',cik:'320193',canonical_name_en:null,canonical_name_zh:'苹果'}));
   const base=c.update.bind(c);
   c.update=async(t,match,patch)=>{
-   if(t==='issuers'&&'lei' in match){await base('issuers',{issuer_id:'a'},{lei:LEI_OTHER});return 0;}
+   if(t==='issuers'&&'lei' in match){await base('issuers',{issuer_id:'a'},{lei:LEI_OTHER});return base(t,match,patch);}
    return base(t,match,patch);
   };
-  const out=await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_APPLE,canonical_name_en:'Apple',provenance:{lei:{source:'gleif'},canonical_name_en:{source:'sec'}}});
-  expect(out).toEqual({issuer_id:'a',created:false});
+  const out=await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_APPLE,canonical_name_en:'Apple',provenance:{lei:{source:'gleif'}}});
+  expect(out).toEqual({issuer_id:null,created:false,conflict:true,reason:'hard_id_mismatch'});
   const row=c.rows('issuers')[0];
-  expect(row).toMatchObject({lei:LEI_OTHER,canonical_name_en:'Apple',provenance:{canonical_name_en:{source:'sec'}}});
-  expect(row.provenance).not.toHaveProperty('lei');
-  expect(c.rows('issuer_identifier_claims')).toEqual([expect.objectContaining({issuer_id:'a',id_type:'lei',value:LEI_APPLE})]);
+  expect(row).toMatchObject({lei:LEI_OTHER,canonical_name_en:null,provenance:{}});
+  expect(c.rows('issuer_identifier_claims')).toEqual([expect.objectContaining({issuer_id:'a',id_type:'lei',value:LEI_APPLE,source:'gleif'})]);
  });
  it('accepts a lost enrichment race when the winner wrote the same value',async()=>{
   const c=client();
   await c.insert('issuers',issuer({issuer_id:'a',cik:'320193'}));
   const base=c.update.bind(c);
-  c.update=async(t,match,patch)=>{if(t==='issuers'&&'lei' in match){await base('issuers',{issuer_id:'a'},{lei:LEI_APPLE});return 0;}return base(t,match,patch);};
-  await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_APPLE});
+  c.update=async(t,match,patch)=>{if(t==='issuers'&&'lei' in match){await base('issuers',{issuer_id:'a'},{lei:LEI_APPLE});return base(t,match,patch);}return base(t,match,patch);};
+  expect(await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_APPLE})).toEqual({issuer_id:'a',created:false});
   expect(c.rows('issuer_identifier_claims')).toHaveLength(0);
  });
- it('files a claim and continues when enrichment hits a unique violation',async()=>{
+ it('returns hard_id_mismatch and files a claim when a hard-id enrichment hits a unique violation',async()=>{
   const c=client();
-  await c.insert('issuers',issuer({issuer_id:'a',cik:'320193'}));
+  await c.insert('issuers',issuer({issuer_id:'a',cik:'320193',canonical_name_en:null,canonical_name_zh:'苹果'}));
   const base=c.update.bind(c);
   c.update=async(t,match,patch)=>{if(t==='issuers'&&'lei' in match)throw new TableError('update','issuers','duplicate key','23505');return base(t,match,patch);};
   const out=await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_APPLE,canonical_name_en:'Apple'});
-  expect(out).toEqual({issuer_id:'a',created:false});
-  expect(c.rows('issuers')[0]).toMatchObject({lei:null,canonical_name_en:'Apple'});
+  expect(out).toEqual({issuer_id:null,created:false,conflict:true,reason:'hard_id_mismatch'});
+  expect(c.rows('issuers')[0]).toMatchObject({lei:null,canonical_name_en:null});
   expect(c.rows('issuer_identifier_claims')).toEqual([expect.objectContaining({issuer_id:'a',id_type:'lei',value:LEI_APPLE})]);
+ });
+ it('files a claim and continues when a cninfo_org_id enrichment hits a unique violation',async()=>{
+  const c=client();
+  await c.insert('issuers',issuer({issuer_id:'a',cik:'320193',canonical_name_en:null,canonical_name_zh:'苹果'}));
+  const base=c.update.bind(c);
+  c.update=async(t,match,patch)=>{if(t==='issuers'&&'cninfo_org_id' in match)throw new TableError('update','issuers','duplicate key','23505');return base(t,match,patch);};
+  const out=await upsertIssuerByIdentifiers(c,{cik:'320193',cninfo_org_id:'gssz0000001',canonical_name_en:'Apple'});
+  expect(out).toEqual({issuer_id:'a',created:false});
+  expect(c.rows('issuers')[0]).toMatchObject({cninfo_org_id:null,canonical_name_en:'Apple'});
+  expect(claims(c)).toEqual([{issuer_id:'a',id_type:'cninfo_org_id',value:'gssz0000001'}]);
+ });
+ it('claims a cninfo_org_id that contradicts the stored value and continues enrichment',async()=>{
+  const c=client();
+  await c.insert('issuers',issuer({issuer_id:'a',cik:'320193',cninfo_org_id:'gssz0000001',canonical_name_en:null,canonical_name_zh:'苹果'}));
+  const out=await upsertIssuerByIdentifiers(c,{cik:'320193',cninfo_org_id:'gssz0000002',canonical_name_en:'Apple'});
+  expect(out).toEqual({issuer_id:'a',created:false});
+  expect(c.rows('issuers')[0]).toMatchObject({cninfo_org_id:'gssz0000001',canonical_name_en:'Apple'});
+  expect(claims(c)).toEqual([{issuer_id:'a',id_type:'cninfo_org_id',value:'gssz0000002'}]);
+ });
+ it('returns inactive_issuer and claims differing ids when the issuer is merged during enrichment',async()=>{
+  const c=client();
+  await c.insert('issuers',issuer({issuer_id:'b'}));
+  await c.insert('issuers',issuer({issuer_id:'a',cik:'320193'}));
+  const base=c.update.bind(c);
+  c.update=async(t,match,patch)=>{
+   if(t==='issuers'&&'lei' in match)await base('issuers',{issuer_id:'a'},{status:'merged',merged_into:'b'});
+   return base(t,match,patch);
+  };
+  const out=await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_APPLE,canonical_name_en:'Apple'});
+  expect(out).toEqual({issuer_id:null,created:false,conflict:true,reason:'inactive_issuer'});
+  expect(c.rows('issuers').find(r=>r.issuer_id==='a')).toMatchObject({lei:null,canonical_name_en:'Test Co',status:'merged'});
+  expect(claims(c)).toEqual([{issuer_id:'a',id_type:'lei',value:LEI_APPLE}]);
+ });
+ it('returns inactive_issuer without claims when the issuer disappears during enrichment',async()=>{
+  const c=client();
+  await c.insert('issuers',issuer({issuer_id:'a',cik:'320193'}));
+  let gone=false;
+  const baseU=c.update.bind(c),baseS=c.select.bind(c);
+  c.update=async(t,match,patch)=>{if(t==='issuers'&&'lei' in match){gone=true;return 0;}return baseU(t,match,patch);};
+  c.select=async(t,match,opts)=>gone&&t==='issuers'?[]:baseS(t,match,opts);
+  expect(await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_APPLE})).toEqual({issuer_id:null,created:false,conflict:true,reason:'inactive_issuer'});
+  expect(claims(c)).toEqual([]);
+ });
+ it('retries the provenance merge once when updated_at moved underneath it',async()=>{
+  const c=client();
+  await c.insert('issuers',issuer({issuer_id:'a',cik:'320193',provenance:{cik:{source:'sec'}}}));
+  const base=c.update.bind(c);let raced=false;const provMatches:Row[]=[];
+  c.update=async(t,match,patch)=>{
+   if(t==='issuers'&&'provenance' in patch){
+    provMatches.push(match);
+    if(!raced){raced=true;await base('issuers',{issuer_id:'a'},{provenance:{cik:{source:'sec'},country_code:{source:'other'}},updated_at:'2030-01-01T00:00:00.000Z'});}
+   }
+   return base(t,match,patch);
+  };
+  expect(await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_APPLE,provenance:{lei:{source:'gleif'}}})).toEqual({issuer_id:'a',created:false});
+  expect(provMatches).toHaveLength(2);
+  expect(provMatches[0]).toMatchObject({issuer_id:'a',status:'active'});
+  expect(c.rows('issuers')[0].provenance).toEqual({cik:{source:'sec'},country_code:{source:'other'},lei:{source:'gleif'}});
  });
  it('does not touch updated_at on a no-op reload',async()=>{
   vi.useFakeTimers({toFake:['Date']});
@@ -165,6 +248,13 @@ describe('attachSecurity',()=>{
   expect(await attachSecurity(c,{...sec,valid_from:'2026-11-05'})).toBe('duplicate');
   expect(c.rows('issuer_securities')).toHaveLength(1);
  });
+ it('trims and upper-cases the ticker and rejects a blank one',async()=>{
+  const c=client();
+  expect(await attachSecurity(c,{...sec,ticker:' aapl '})).toBe('inserted');
+  expect(c.rows('issuer_securities')[0].ticker).toBe('AAPL');
+  expect(await attachSecurity(c,sec)).toBe('duplicate');
+  await expect(attachSecurity(c,{...sec,ticker:'  '})).rejects.toThrow('invalid_ticker');
+ });
  it('reports conflict and writes nothing when another issuer currently owns the ticker',async()=>{
   const c=client();
   await attachSecurity(c,sec);
@@ -176,11 +266,36 @@ describe('attachSecurity',()=>{
   await attachSecurity(c,{...sec,valid_to:'2010-01-01'});
   expect(await attachSecurity(c,{...sec,issuer_id:'b',valid_from:'2010-01-01'})).toBe('inserted');
  });
+ it('inserts closed history that ends before the open owner starts',async()=>{
+  const c=client();
+  expect(await attachSecurity(c,{...sec,valid_from:'2010-01-01'})).toBe('inserted');
+  expect(await attachSecurity(c,{...sec,issuer_id:'b',valid_from:'2000-01-01',valid_to:'2005-01-01'})).toBe('inserted');
+  expect(await attachSecurity(c,{...sec,issuer_id:'c',valid_from:'2005-01-01',valid_to:'2010-01-01'})).toBe('inserted');
+  expect(c.rows('issuer_securities')).toHaveLength(3);
+ });
+ it('reports conflict without an ISIN claim when a closed window overlaps another issuer',async()=>{
+  const c=client();
+  await attachSecurity(c,{...sec,valid_from:'2010-01-01'});
+  expect(await attachSecurity(c,{...sec,issuer_id:'b',valid_from:'2005-01-01',valid_to:'2012-01-01'})).toBe('conflict');
+  expect(c.rows('issuer_securities')).toHaveLength(1);
+  expect(c.rows('issuer_identifier_claims')).toEqual([]);
+ });
  it('reports duplicate when a closed interval is replayed',async()=>{
   const c=client();
   expect(await attachSecurity(c,{...sec,valid_to:'2010-01-01'})).toBe('inserted');
   expect(await attachSecurity(c,{...sec,valid_to:'2010-01-01'})).toBe('duplicate');
   expect(c.rows('issuer_securities')).toHaveLength(1);
+ });
+ it('reports conflict when a replay changes valid_to or the ISIN, claiming only a differing ISIN',async()=>{
+  const c=client();
+  expect(await attachSecurity(c,{...sec,valid_to:'2010-01-01',isin:'US0378331005'})).toBe('inserted');
+  expect(await attachSecurity(c,{...sec,valid_to:'2011-01-01'})).toBe('conflict');
+  expect(await attachSecurity(c,{...sec,valid_to:null})).toBe('conflict');
+  expect(c.rows('issuer_identifier_claims')).toEqual([]);
+  expect(await attachSecurity(c,{...sec,valid_to:'2010-01-01'})).toBe('duplicate');
+  expect(await attachSecurity(c,{...sec,valid_to:'2010-01-01',isin:'US5949181045'})).toBe('conflict');
+  expect(claims(c)).toEqual([{issuer_id:'a',id_type:'isin',value:'US5949181045'}]);
+  expect(c.rows('issuer_securities')).toEqual([expect.objectContaining({valid_to:'2010-01-01',isin:'US0378331005'})]);
  });
  it('validates and upper-cases the ISIN',async()=>{
   const c=client();
@@ -194,7 +309,7 @@ describe('attachSecurity',()=>{
   for(let i=0;i<2;i++)expect(await attachSecurity(c,{...sec,issuer_id:'b',isin:'US0378331005'})).toBe('conflict');
   expect(c.rows('issuer_identifier_claims')).toEqual([expect.objectContaining({issuer_id:'b',id_type:'isin',value:'US0378331005'})]);
  });
- it('classifies a raced insert by re-reading the open owner',async()=>{
+ it('classifies a raced insert by re-reading the overlapping rows',async()=>{
   const same=client();raceInsert(same,'a');
   expect(await attachSecurity(same,sec)).toBe('duplicate');
   const other=client();raceInsert(other,'b');
@@ -204,14 +319,33 @@ describe('attachSecurity',()=>{
   const c=client();raceInsert(c,'b','23P01');
   expect(await attachSecurity(c,sec)).toBe('conflict');
  });
- it('rethrows a unique violation when no open owner explains it',async()=>{
+ it('reports duplicate when a concurrent identical closed replay wins the insert',async()=>{
+  const c=client();
+  const closed={...sec,valid_to:'2010-01-01'};
+  const base=c.insert.bind(c);let raced=false;
+  c.insert=async(t,row)=>{if(t==='issuer_securities'&&!raced){raced=true;await base(t,row);throw dupErr(t);}return base(t,row);};
+  expect(await attachSecurity(c,closed)).toBe('duplicate');
+  expect(c.rows('issuer_securities')).toHaveLength(1);
+ });
+ it('treats an unexplained 23505 as a replay race but rethrows an unexplained 23P01',async()=>{
   const c=client();
   c.insert=async(t)=>{throw dupErr(t);};
+  expect(await attachSecurity(c,sec)).toBe('duplicate');
+  c.insert=async(t)=>{throw dupErr(t,'23P01','conflicting key value violates exclusion constraint');};
   await expect(attachSecurity(c,sec)).rejects.toBeInstanceOf(TableError);
  });
- it('maps the inactive-issuer trigger to issuer_not_active',async()=>{
+ it('reports conflict and claims the ISIN when another ticker already carries it',async()=>{
   const c=client();
-  c.insert=async(t)=>{throw new TableError('insert',t,'issuer_not_active','P0001');};
+  const base=c.insert.bind(c);
+  c.insert=async(t,row)=>{if(t==='issuer_securities')throw dupErr(t,'23505','duplicate key value violates unique constraint "issuer_securities_isin_idx"');return base(t,row);};
+  expect(await attachSecurity(c,{...sec,isin:'US0378331005'})).toBe('conflict');
+  expect(claims(c)).toEqual([{issuer_id:'a',id_type:'isin',value:'US0378331005'}]);
+ });
+ it('maps the inactive-issuer trigger (SQLSTATE 23514) to issuer_not_active and rethrows other check violations',async()=>{
+  const c=client();
+  c.insert=async(t)=>{throw new TableError('insert',t,'issuer_not_active: issuer a (status merged) cannot hold open security AAPL','23514');};
   await expect(attachSecurity(c,sec)).rejects.toThrow(/^issuer_not_active$/);
+  c.insert=async(t)=>{throw new TableError('insert',t,'new row violates check constraint "issuer_securities_window"','23514');};
+  await expect(attachSecurity(c,sec)).rejects.toBeInstanceOf(TableError);
  });
 });
