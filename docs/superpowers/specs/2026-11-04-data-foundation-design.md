@@ -392,3 +392,22 @@ supabase/migrations/…   docs/runbooks/data-foundation.md
 - 总纲与三板块方案：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md`
 - 宏观工作台规格（与 §5 共用 `ingest_batches`）：`docs/superpowers/specs/2026-11-04-macro-workbench-design.md`
 - 仓库勘察来源：本规格 §2
+
+---
+
+## 14. 实施记录与偏差（2026-11-05，计划一落地后补记）
+
+计划一（`docs/superpowers/plans/2026-11-04-data-foundation-1-dq-and-issuers.md`）已在分支 `claude/data-foundation-1` 实现，经 Claude 规格复审、质量复审与 Codex（gpt-6-astra）审计多轮修正。以下为与本规格文字的差异，均为有意决定：
+
+| 规格条目 | 实施 | 原因 |
+|---|---|---|
+| §3.1 `issuer_securities` 仅 `UNIQUE (ticker, valid_from)` | 增加 `btree_gist` 互斥约束：同一 ticker、同一 ISIN 的持有窗口不得重叠；`valid_to is null` 的开放持有人每 ticker 唯一；子表外键改为 `on delete restrict`；触发器禁止合并到非活跃发行人、禁止非活跃发行人持有开放证券 | 审计发现仅凭唯一键无法阻止区间重叠与生命周期不一致 |
+| §3.1 `share_class` 枚举 | 增加 `'unknown'`，SEC 名单与无证据的港股普通股均记 `unknown`；H 股仅在 `home_market='A'` 或有统一社会信用代码时判定 | 上市地不等于股份类别或注册地 |
+| §3.2 现有脚本改写目标表 | SEC 装载与研究实体挂接已实现（`load-sec`、`link-research`，apply 逻辑入库可测）；GLEIF/巨潮脚本改写、ISIN/FIGI、A/H 配对移至计划三 | 范围控制 |
+| §3.2 研究实体升格 | 仅限 `--user` 指定的单个用户；公共来源信息不含用户/实体 ID；`country_code` 仅在有 USCI 时记 `CN` | 租户边界与隐私 |
+| §3.4 解析接口 | 响应字段为 `issuer_id`，不含 provenance；缓存改为 CDN `Cache-Control`（按 UTC 日界封顶，错误 `no-store`）而非 `unstable_cache`；每次只接受一个标识符；使用 anon 客户端 | 公共只读路由的安全与一致性 |
+| §5.1 `ingest_batches.counts` | 固定六个计数器（fetched/inserted/duplicates/versioned/quarantined/failed），跳过项汇总进 `errors` 的 `skipped_summary` 条目 | 保持 jsonb 形状约束 |
+| §5.1 `dq_freshness` | 增加 `consecutive_errors`；状态读时重算；daily 宽限 2 天 | 生产者停摆也要能变 stale；周末 |
+| §5.2 `/admin/dq` | 处理隔离项返回 resolved / already_resolved / not_found；POST 校验 Origin 与 Content-Type；`research_audit_log` 写入与跨来源对账运行器（`reconcile.ts`）、财报日历新鲜度移至计划三 | 审计建议与范围控制 |
+| §6 `database.types.ts` | 手工补齐九张表类型；`supabase:types` 脚本仍缺 | 待定自动生成方案（开放问题 5） |
+| 测试 | 新增测试用 `pg-table-client`（仅测试使用）与 `issuers-write.integration.test.ts`，写路径在真实 PostgreSQL 上验证 | 内存桩无法表达数据库约束 |
