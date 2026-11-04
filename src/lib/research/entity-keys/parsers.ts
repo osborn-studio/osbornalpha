@@ -53,22 +53,24 @@ export interface SecExchangeParse {
   rejected: { index: number; reason: 'invalid_cik' | 'missing_ticker' | 'missing_name' }[];
 }
 
-/** A non-negative integer CIK (number, or a digit string); returned as the integer's decimal string. */
+/** A CIK that normalizeCik accepts (1–10 digits, not zero; number or digit string), unpadded. */
 function secExchangeCik(v: unknown): string | null {
-  let n: number;
-  if (typeof v === 'number') n = v;
-  else if (typeof v === 'string' && /^\d+$/.test(v.trim())) n = Number(v.trim());
-  else return null;
-  return Number.isSafeInteger(n) && n >= 0 ? String(n) : null;
+  try { return normalizeCik(v); } catch { return null; }
 }
+
+/** Upper bounds checked before the JSON is parsed / the plan is built. */
+export const MAX_SEC_FILE_BYTES = 50 * 1024 * 1024;
+export const MAX_SEC_ROWS = 100_000;
 
 const nonEmpty = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
 
 /**
  * SEC `company_tickers_exchange.json`: `{fields:[...], data:[[...], ...]}` with at least
  * cik/name/ticker/exchange columns. Malformed rows are listed in `rejected`, never coerced.
+ * Throws file_too_large above MAX_SEC_FILE_BYTES (before parsing) and too_many_rows above MAX_SEC_ROWS.
  */
 export function parseSecCompanyTickersExchange(json: string): SecExchangeParse {
+  if (json.length > MAX_SEC_FILE_BYTES || Buffer.byteLength(json, 'utf8') > MAX_SEC_FILE_BYTES) throw new Error('file_too_large');
   let doc: unknown;
   try { doc = JSON.parse(json); } catch { throw new Error('invalid_sec_exchange_file'); }
   const d = doc as { fields?: unknown; data?: unknown } | null;
@@ -77,6 +79,7 @@ export function parseSecCompanyTickersExchange(json: string): SecExchangeParse {
   const col = (name: string) => fields.indexOf(name);
   const [ci, ni, ti, ei] = ['cik', 'name', 'ticker', 'exchange'].map(col);
   if (ci < 0 || ni < 0 || ti < 0 || ei < 0) throw new Error('invalid_sec_exchange_file');
+  if (d.data.length > MAX_SEC_ROWS) throw new Error('too_many_rows');
   const out: SecExchangeParse = { rows: [], rejected: [] };
   (d.data as unknown[]).forEach((raw, index) => {
     const r = Array.isArray(raw) ? raw : [];
