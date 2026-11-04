@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest';
-import {parseSecCompanyTickers,selectIsinsForLeis} from './parsers';
+import {parseSecCompanyTickers,parseSecCompanyTickersExchange,selectIsinsForLeis} from './parsers';
 
 describe('parseSecCompanyTickers',()=>{
  const fixture=JSON.stringify({'0':{cik_str:1321655,ticker:'PLTR',title:'Palantir Technologies Inc.'},'1':{cik_str:1108524,ticker:'CRM',title:'Salesforce, Inc.'},'2':{cik_str:99,ticker:'ODD',title:'Odd Co'}});
@@ -29,5 +29,17 @@ describe('selectIsinsForLeis',()=>{
  it('works on a generator without materializing the file',()=>{
   function* gen(){yield 'LEI,ISIN\n';for(let i=0;i<1000;i++)yield `X${String(i).padStart(19,'0')},US0000000000\n`;yield '549300UVN46B3BBDHO85,US69608A1088\n';}
   expect(selectIsinsForLeis(gen(),new Set(['549300UVN46B3BBDHO85'])).found).toEqual({'549300UVN46B3BBDHO85':['US69608A1088']});
+ });
+});
+
+describe('parseSecCompanyTickersExchange',()=>{
+ it('parses the fields/data layout and separates malformed rows',()=>{
+  const json=JSON.stringify({fields:['cik','name','ticker','exchange'],data:[[320193,'Apple Inc.','AAPL','Nasdaq'],['789019','MICROSOFT CORP','MSFT','Nasdaq'],['abc','Bad','BAD','NYSE'],[1,'No ticker','','NYSE']]});
+  const out=parseSecCompanyTickersExchange(json);
+  expect(out.rows).toEqual([{cik:'320193',name:'Apple Inc.',ticker:'AAPL',exchange:'Nasdaq'},{cik:'789019',name:'MICROSOFT CORP',ticker:'MSFT',exchange:'Nasdaq'}]);
+  expect(out.rejected).toEqual([{index:2,reason:'invalid_cik'},{index:3,reason:'missing_ticker'}]);
+ });
+ it('rejects a payload without the four expected fields',()=>{
+  expect(()=>parseSecCompanyTickersExchange(JSON.stringify({fields:['cik'],data:[]}))).toThrow('invalid_sec_exchange_file');
  });
 });

@@ -46,3 +46,48 @@ export function selectIsinsForLeis(lines: Iterable<string>, leis: Set<string>): 
   if (first) fail('invalid_schema');
   return { found, missing: [...leis].filter(l => !found[l]) };
 }
+
+export interface SecExchangeRow { cik: string; name: string; ticker: string; exchange: string }
+export interface SecExchangeParse {
+  rows: SecExchangeRow[];
+  rejected: { index: number; reason: 'invalid_cik' | 'missing_ticker' | 'missing_name' }[];
+}
+
+/** A non-negative integer CIK (number, or a digit string); returned as the integer's decimal string. */
+function secExchangeCik(v: unknown): string | null {
+  let n: number;
+  if (typeof v === 'number') n = v;
+  else if (typeof v === 'string' && /^\d+$/.test(v.trim())) n = Number(v.trim());
+  else return null;
+  return Number.isSafeInteger(n) && n >= 0 ? String(n) : null;
+}
+
+const nonEmpty = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
+
+/**
+ * SEC `company_tickers_exchange.json`: `{fields:[...], data:[[...], ...]}` with at least
+ * cik/name/ticker/exchange columns. Malformed rows are listed in `rejected`, never coerced.
+ */
+export function parseSecCompanyTickersExchange(json: string): SecExchangeParse {
+  let doc: unknown;
+  try { doc = JSON.parse(json); } catch { throw new Error('invalid_sec_exchange_file'); }
+  const d = doc as { fields?: unknown; data?: unknown } | null;
+  if (typeof d !== 'object' || d === null || !Array.isArray(d.fields) || !Array.isArray(d.data)) throw new Error('invalid_sec_exchange_file');
+  const fields = d.fields as unknown[];
+  const col = (name: string) => fields.indexOf(name);
+  const [ci, ni, ti, ei] = ['cik', 'name', 'ticker', 'exchange'].map(col);
+  if (ci < 0 || ni < 0 || ti < 0 || ei < 0) throw new Error('invalid_sec_exchange_file');
+  const out: SecExchangeParse = { rows: [], rejected: [] };
+  (d.data as unknown[]).forEach((raw, index) => {
+    const r = Array.isArray(raw) ? raw : [];
+    const cik = secExchangeCik(r[ci]);
+    if (cik === null) { out.rejected.push({ index, reason: 'invalid_cik' }); return; }
+    const ticker = nonEmpty(r[ti]);
+    if (ticker === null) { out.rejected.push({ index, reason: 'missing_ticker' }); return; }
+    const name = nonEmpty(r[ni]);
+    if (name === null) { out.rejected.push({ index, reason: 'missing_name' }); return; }
+    const exchange = typeof r[ei] === 'string' ? (r[ei] as string).trim() : '';
+    out.rows.push({ cik, name, ticker, exchange });
+  });
+  return out;
+}

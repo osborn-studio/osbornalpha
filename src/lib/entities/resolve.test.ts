@@ -1,6 +1,6 @@
 import {describe,it,expect} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
-import {resolveIssuer} from './resolve';
+import {resolveIssuer,successCacheControl} from './resolve';
 
 const TODAY='2026-11-05';
 async function seed(){
@@ -45,5 +45,66 @@ describe('resolveIssuer',()=>{
   await expect(resolveIssuer(c,{cik:'abc'})).rejects.toThrow('invalid_identifier:cik');
   await expect(resolveIssuer(c,{isin:'US123'})).rejects.toThrow('invalid_identifier:isin');
   await expect(resolveIssuer(c,{lei:'nope'})).rejects.toThrow('invalid_identifier:lei');
+ });
+
+ it('rejects more than one identifier and validates today',async()=>{
+  const c=await seed();
+  await expect(resolveIssuer(c,{ticker:'AAPL',cik:'320193'},{today:TODAY})).rejects.toThrow('ambiguous_query');
+  await expect(resolveIssuer(c,{isin:'US0378331005',lei:'HWUPKR0MPOU8FGXBT394'},{today:TODAY})).rejects.toThrow('ambiguous_query');
+  // blank values do not count as supplied
+  expect((await resolveIssuer(c,{ticker:'AAPL',cik:'  '},{today:TODAY}))?.issuer_id).toBe('a');
+  for(const today of ['2026-13-01','2026-02-30','20261105','2026-1-05',' 2026-11-05'])
+   await expect(resolveIssuer(c,{ticker:'AAPL'},{today})).rejects.toThrow('invalid_today');
+ });
+ it('tries the exact ticker before the normalized form',async()=>{
+  const c=await seed();
+  await c.insert('issuers',{issuer_id:'brk',canonical_name_en:'Berkshire',canonical_name_zh:null,cik:'1067983',lei:null,usci:null,status:'active',merged_into:null});
+  await c.insert('issuers',{issuer_id:'other',canonical_name_en:'Other BRK',canonical_name_zh:null,cik:'1',lei:null,usci:null,status:'active',merged_into:null});
+  await c.insert('issuer_securities',{issuer_id:'brk',ticker:'BRK.A',isin:null,figi:null,share_class:'A',is_primary:true,valid_from:'2000-01-01',valid_to:null,source:'sec'});
+  await c.insert('issuer_securities',{issuer_id:'brk',ticker:'BRK.B',isin:null,figi:null,share_class:'B',is_primary:false,valid_from:'2000-01-01',valid_to:null,source:'sec'});
+  await c.insert('issuer_securities',{issuer_id:'other',ticker:'BRK',isin:null,figi:null,share_class:'common',is_primary:true,valid_from:'2000-01-01',valid_to:null,source:'sec'});
+  expect((await resolveIssuer(c,{ticker:'BRK.A'},{today:TODAY}))?.issuer_id).toBe('brk');
+  expect((await resolveIssuer(c,{ticker:'brk/b'},{today:TODAY}))?.issuer_id).toBe('brk');
+  // no exact row: falls back to the normalized (Wind-suffix stripped) form
+  expect((await resolveIssuer(c,{ticker:'AAPL.O'},{today:TODAY}))?.issuer_id).toBe('a');
+  expect((await resolveIssuer(c,{ticker:'aapl'},{today:TODAY}))?.issuer_id).toBe('a');
+ });
+ it('throws ambiguous_owner when two issuers own the same ticker today',async()=>{
+  const c=await seed();
+  await c.insert('issuers',{issuer_id:'dup',canonical_name_en:'Dup',canonical_name_zh:null,cik:'2',lei:null,usci:null,status:'active',merged_into:null});
+  await c.insert('issuer_securities',{issuer_id:'dup',ticker:'AAPL',isin:null,figi:null,share_class:'common',is_primary:true,valid_from:'2020-01-01',valid_to:null,source:'sec'});
+  await expect(resolveIssuer(c,{ticker:'AAPL'},{today:TODAY})).rejects.toThrow('ambiguous_owner');
+ });
+ it('passes a dissolved status through',async()=>{
+  const c=await seed();
+  await c.insert('issuers',{issuer_id:'d',canonical_name_en:'Gone Corp',canonical_name_zh:null,cik:'4242',lei:null,usci:null,status:'dissolved',merged_into:null});
+  expect(await resolveIssuer(c,{cik:'4242'},{today:TODAY})).toMatchObject({issuer_id:'d',status:'dissolved',securities:[]});
+ });
+ it('resolves an ISIN to its current owner, ignoring expired and future rows',async()=>{
+  const c=await seed();
+  for(const id of ['x1','x2','x3'])await c.insert('issuers',{issuer_id:id,canonical_name_en:id,canonical_name_zh:null,cik:null,lei:null,usci:null,status:'active',merged_into:null});
+  const isin='US5949181045';
+  await c.insert('issuer_securities',{issuer_id:'x1',ticker:'X1',isin,figi:null,share_class:null,is_primary:true,valid_from:'2000-01-01',valid_to:'2020-01-01',source:'t'});
+  await c.insert('issuer_securities',{issuer_id:'x2',ticker:'X2',isin,figi:null,share_class:null,is_primary:true,valid_from:'2020-01-01',valid_to:null,source:'t'});
+  await c.insert('issuer_securities',{issuer_id:'x3',ticker:'X3',isin,figi:null,share_class:null,is_primary:true,valid_from:'2027-01-01',valid_to:null,source:'t'});
+  expect((await resolveIssuer(c,{isin},{today:TODAY}))?.issuer_id).toBe('x2');
+  expect((await resolveIssuer(c,{isin},{today:'2010-06-01'}))?.issuer_id).toBe('x1');
+ });
+ it('resolves a secondary security of a merged issuer to the target and its securities',async()=>{
+  const c=await seed();
+  await c.insert('issuer_securities',{issuer_id:'old',ticker:'OLDX',isin:null,figi:null,share_class:'common',is_primary:false,valid_from:'2001-01-01',valid_to:null,source:'sec'});
+  const out=await resolveIssuer(c,{ticker:'OLDX'},{today:TODAY});
+  expect(out).toMatchObject({issuer_id:'a',redirected_from:'old'});
+  expect(out?.securities.map(s=>s.ticker)).toEqual(['AAPL']);
+ });
+});
+
+describe('successCacheControl',()=>{
+ const sm=(d:string)=>Number(/s-maxage=(\d+)/.exec(successCacheControl(new Date(d)))?.[1]);
+ it('caches until the next UTC midnight, clamped to [60, 3600]',()=>{
+  expect(successCacheControl(new Date('2026-11-05T23:30:00Z'))).toBe('public, s-maxage=1800, stale-while-revalidate=600');
+  expect(sm('2026-11-05T23:59:30Z')).toBe(60);
+  expect(sm('2026-11-05T00:00:00Z')).toBe(3600);
+  expect(sm('2026-11-05T12:00:00Z')).toBe(3600);
  });
 });
