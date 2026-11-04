@@ -39,9 +39,11 @@ function capErrors(errors:BatchError[]):BatchError[]{
 }
 
 /**
- * Error codes that only inform the receipt reader (a summary of skipped input rows, a research
+ * Error codes that only inform the receipt reader: `skipped_summary` (input rows left out by
+ * expected filtering, e.g. not in the universe or not promotable yet) and `relink` (a research
  * entity re-pointed to another issuer). They stay in `errors` but never make a batch partial or
- * failed.
+ * failed. `rejected_summary` (malformed or invalid input rows) is deliberately NOT informational:
+ * it makes the batch partial, or failed when nothing landed.
  */
 export const INFO_CODES=['skipped_summary','relink'] as const;
 export type InfoCode=typeof INFO_CODES[number];

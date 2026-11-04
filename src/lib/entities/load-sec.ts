@@ -53,7 +53,8 @@ export function planSecLoad(rows:SecExchangeRow[],universe:ReadonlySet<string>,a
  return {asOf,issuers:[...issuers.values()],securities,skipped};
 }
 
-export interface ApplyResult{counts:BatchCounts;errors:BatchError[];skippedSummary:Record<string,number>}
+/** skippedSummary: expected filtering (informational); rejectedSummary: invalid input (degrades status). */
+export interface ApplyResult{counts:BatchCounts;errors:BatchError[];skippedSummary:Record<string,number>;rejectedSummary:Record<string,number>}
 
 export const errorMessage=(e:unknown)=>e instanceof Error?e.message:String(e);
 
@@ -64,19 +65,27 @@ export function summarizeSkips(reasons:Iterable<string>):Record<string,number>{
  return out;
 }
 
-/** Skipped items cannot be counted in BatchCounts, so they surface as ONE leading error entry. */
-export function withSkippedSummary(errors:BatchError[],summary:Record<string,number>):BatchError[]{
- return Object.keys(summary).length?[{code:'skipped_summary',message:JSON.stringify(summary)},...errors]:errors;
+/**
+ * Skipped and rejected items cannot be counted in BatchCounts, so each kind surfaces as ONE leading
+ * error entry: `skipped_summary` (informational) then `rejected_summary` (not informational, so
+ * the batch becomes partial or failed).
+ */
+export function withSkippedSummary(errors:BatchError[],summary:Record<string,number>,rejected:Record<string,number>={}):BatchError[]{
+ const lead:BatchError[]=[];
+ if(Object.keys(summary).length)lead.push({code:'skipped_summary',message:JSON.stringify(summary)});
+ if(Object.keys(rejected).length)lead.push({code:'rejected_summary',message:JSON.stringify(rejected)});
+ return [...lead,...errors];
 }
 
 /**
- * Shared status/exit/freshness policy for the entity loaders: exit 1 when the batch failed or any
- * row failed; the freshness attempt is ok only on success, or on a partial run with no failures
- * that actually landed rows (a run that only quarantined is not ok).
+ * Shared status/exit/freshness policy for the entity loaders: exit 1 when the batch failed, any
+ * row failed or any input row was rejected as invalid; the freshness attempt is ok only on
+ * success, or on a partial run with no failures that actually landed rows (a run that only
+ * quarantined is not ok).
  */
-export function loaderOutcome(status:BatchStatus,counts:BatchCounts):{ok:boolean;exitCode:0|1}{
+export function loaderOutcome(status:BatchStatus,counts:BatchCounts,rejected:Record<string,number>={}):{ok:boolean;exitCode:0|1}{
  const ok=status==='success'||(status==='partial'&&counts.failed===0&&counts.inserted+counts.duplicates>0);
- return {ok,exitCode:status==='failed'||counts.failed>0?1:0};
+ return {ok,exitCode:status==='failed'||counts.failed>0||Object.keys(rejected).length>0?1:0};
 }
 
 /**
@@ -101,20 +110,19 @@ export interface SecApplyOptions{asOf:string;batchId:string;batchProducerMeta:{s
  * Writes the plan to the public issuer master. `fetched` is the number of SEC data rows; each
  * issuer and security write has one outcome; securities whose issuer failed or was quarantined
  * count as failed (`blocked_by_issuer`). Issuer conflicts (key: cik) and ownership conflicts (key:
- * ticker) are quarantined under `opts.batchId`. Rejected and not-in-universe rows are summarized.
+ * `ticker:valid_from`) are quarantined under `opts.batchId` with the rejected input as payload.
+ * Not-in-universe rows go to skippedSummary; producer rejects (`rejected_*`) to rejectedSummary.
  */
 export async function applySecLoad(client:TableClient,plan:SecLoadPlan,opts:SecApplyOptions):Promise<ApplyResult>{
  if(plan.asOf!==opts.asOf)throw new Error('as_of_mismatch');
  const counts=emptyCounts();
  const errors:BatchError[]=[];
  counts.fetched=opts.batchProducerMeta.sourceRows;
- const skippedSummary=summarizeSkips([
-  ...opts.batchProducerMeta.rejected.map(r=>`rejected_${r.reason}`),
-  ...plan.skipped.map(()=>'not_in_universe'),
- ]);
+ const skippedSummary=summarizeSkips(plan.skipped.map(()=>'not_in_universe'));
+ const rejectedSummary=summarizeSkips(opts.batchProducerMeta.rejected.map(r=>`rejected_${r.reason}`));
  if(plan.issuers.length===0){
   errors.push({code:'empty_plan',message:'no SEC row matched the US universe'});
-  return {counts,errors:withSkippedSummary(errors,skippedSummary),skippedSummary};
+  return {counts,errors:withSkippedSummary(errors,skippedSummary,rejectedSummary),skippedSummary,rejectedSummary};
  }
 
  const issuerByCik=new Map<string,string>();
@@ -122,7 +130,7 @@ export async function applySecLoad(client:TableClient,plan:SecLoadPlan,opts:SecA
   try{
    const res=await upsertIssuerByIdentifiers(client,issuer);
    if(res.conflict||!res.issuer_id){
-    await parkConflict(client,{dataset:SEC_DATASET,table:'issuers',naturalKey:issuer.cik,reasonCode:issuerReasonCode(res.reason),detail:{reason:res.reason??null},batchId:opts.batchId},counts,errors,{code:'issuer_conflict',key:issuer.cik,message:res.reason});
+    await parkConflict(client,{dataset:SEC_DATASET,table:'issuers',naturalKey:issuer.cik,reasonCode:issuerReasonCode(res.reason),detail:{reason:res.reason??null},payload:{cik:issuer.cik,canonical_name_en:issuer.canonical_name_en},batchId:opts.batchId},counts,errors,{code:'issuer_conflict',key:issuer.cik,message:res.reason});
     continue;
    }
    issuerByCik.set(issuer.cik,res.issuer_id);
@@ -138,12 +146,13 @@ export async function applySecLoad(client:TableClient,plan:SecLoadPlan,opts:SecA
    const res=await attachSecurity(client,{...rest,issuer_id});
    if(res==='inserted')counts.inserted++;
    else if(res==='duplicate')counts.duplicates++;
-   else await parkConflict(client,{dataset:SEC_DATASET,table:'issuer_securities',naturalKey:sec.ticker,reasonCode:'ownership_conflict',detail:{reason:'ticker_owned_by_other_issuer',cik:sec.cik},batchId:opts.batchId},counts,errors,{code:'ownership_conflict',key:sec.ticker});
+   else await parkConflict(client,{dataset:SEC_DATASET,table:'issuer_securities',naturalKey:`${sec.ticker}:${sec.valid_from}`,reasonCode:'ownership_conflict',detail:{reason:'ticker_owned_by_other_issuer',cik:sec.cik},
+    payload:{ticker:sec.ticker,isin:null,share_class:sec.share_class,is_primary:sec.is_primary,valid_from:sec.valid_from,valid_to:null,cik:sec.cik},batchId:opts.batchId},counts,errors,{code:'ownership_conflict',key:sec.ticker});
   }catch(e){
    counts.failed++;
    const msg=errorMessage(e);
    errors.push({code:msg==='issuer_not_active'?'issuer_not_active':'security_error',key:sec.ticker,message:msg});
   }
  }
- return {counts,errors:withSkippedSummary(errors,skippedSummary),skippedSummary};
+ return {counts,errors:withSkippedSummary(errors,skippedSummary,rejectedSummary),skippedSummary,rejectedSummary};
 }

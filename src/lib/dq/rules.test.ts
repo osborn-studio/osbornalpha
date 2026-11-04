@@ -7,7 +7,10 @@ describe('dq rules',()=>{
   expect(unitRule('rev_unit','CNY',allowed)).toEqual({ruleId:'rev_unit',passed:true});
   expect(unitRule('rev_unit','cny',allowed)).toEqual({ruleId:'rev_unit',passed:false,detail:{unit:'cny',allowed:['CNY','USD'],reason:'invalid_unit'}});
   expect(unitRule('rev_unit',undefined,allowed)).toEqual({ruleId:'rev_unit',passed:false,detail:{unit:null,allowed:['CNY','USD'],reason:'invalid_unit'}});
-  expect(unitRule('rev_unit',42,allowed).detail).toMatchObject({unit:'42',reason:'invalid_unit'});
+  expect(unitRule('rev_unit',42,allowed).detail).toMatchObject({unit:42,reason:'invalid_unit'});
+  expect(unitRule('rev_unit',true,allowed).detail).toMatchObject({unit:true,reason:'invalid_unit'});
+  expect(unitRule('rev_unit',JSON.parse('{"toString":null}'),allowed)).toEqual({ruleId:'rev_unit',passed:false,detail:{unit:'[non-primitive]',allowed:['CNY','USD'],reason:'invalid_unit'}});
+  expect(unitRule('rev_unit',['CNY'],allowed).detail).toMatchObject({unit:'[non-primitive]',reason:'invalid_unit'});
   expect(unitRule('rev_unit','CNY',[]).detail).toMatchObject({reason:'invalid_params'});
   expect(unitRule('rev_unit','CNY',[1] as unknown as string[]).detail).toMatchObject({reason:'invalid_params'});
  });

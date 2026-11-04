@@ -92,18 +92,19 @@ describe('applySecLoad',()=>{
   expect(loaderOutcome(status,second.counts)).toEqual({ok:true,exitCode:0});
  });
 
- it('quarantines a conflicting issuer and blocks its securities as failed; skips and rejects are summarized in one error',async()=>{
+ it('quarantines a conflicting issuer and blocks its securities as failed; skips and rejects are summarized apart',async()=>{
   fake.conflicts.add('1652044');
   const c=memoryTableClient();
   const plan=planSecLoad([...rows,{cik:'5',name:'Gone',ticker:'ZZZZ',exchange:'OTC'}],new Set(['AAPL','GOOG','GOOGL']),AS_OF);
   const res=await applySecLoad(c,plan,{asOf:AS_OF,batchId:BATCH,batchProducerMeta:{sourceRows:5,rejected:[{index:4,reason:'invalid_cik'}]}});
   expect(res.counts).toEqual({fetched:5,inserted:2,duplicates:0,versioned:0,quarantined:1,failed:2});
-  expect(res.skippedSummary).toEqual({rejected_invalid_cik:1,not_in_universe:1});
-  expect(res.errors[0]).toEqual({code:'skipped_summary',message:JSON.stringify({rejected_invalid_cik:1,not_in_universe:1})});
-  expect(res.errors.slice(1).map(e=>e.code)).toEqual(['issuer_conflict','blocked_by_issuer','blocked_by_issuer']);
+  expect(res.skippedSummary).toEqual({not_in_universe:1});
+  expect(res.rejectedSummary).toEqual({rejected_invalid_cik:1});
+  expect(res.errors.slice(0,2)).toEqual([{code:'skipped_summary',message:JSON.stringify({not_in_universe:1})},{code:'rejected_summary',message:JSON.stringify({rejected_invalid_cik:1})}]);
+  expect(res.errors.slice(2).map(e=>e.code)).toEqual(['issuer_conflict','blocked_by_issuer','blocked_by_issuer']);
   expect(c.rows('issuer_securities').map(r=>r.ticker)).toEqual(['AAPL']);
-  expect(c.rows('dq_quarantine').map(({dataset,table_name,natural_key,reason_code,detail,batch_id,status})=>({dataset,table_name,natural_key,reason_code,detail,batch_id,status}))).toEqual([
-   {dataset:'entities.sec',table_name:'issuers',natural_key:'1652044',reason_code:'issuer_conflict',detail:{reason:'hard_id_conflict'},batch_id:BATCH,status:'open'},
+  expect(c.rows('dq_quarantine').map(({dataset,table_name,natural_key,reason_code,detail,payload,batch_id,status})=>({dataset,table_name,natural_key,reason_code,detail,payload,batch_id,status}))).toEqual([
+   {dataset:'entities.sec',table_name:'issuers',natural_key:'1652044',reason_code:'issuer_conflict',detail:{reason:'hard_id_conflict'},payload:{cik:'1652044',canonical_name_en:'Alphabet Inc.'},batch_id:BATCH,status:'open'},
   ]);
   const status=batchStatusFromCounts(res.counts,res.errors);
   expect(loaderOutcome(status,res.counts)).toEqual({ok:false,exitCode:1});
@@ -112,15 +113,29 @@ describe('applySecLoad',()=>{
   expect(c.rows('dq_quarantine')).toHaveLength(1);
  });
 
- it('quarantines a ticker owned by another issuer under the ticker key',async()=>{
+ it('quarantines a ticker owned by another issuer under the ticker:valid_from key with the rejected row as payload',async()=>{
   fake.owners.set('GOOGL','iss-someone-else');
   const c=memoryTableClient();
   const res=await applySecLoad(c,planSecLoad(rows,new Set(['AAPL','GOOG','GOOGL']),AS_OF),{asOf:AS_OF,batchId:BATCH,batchProducerMeta:meta()});
   expect(res.counts).toEqual({fetched:3,inserted:4,duplicates:0,versioned:0,quarantined:1,failed:0});
   expect(res.errors).toEqual([{code:'ownership_conflict',key:'GOOGL'}]);
-  expect(c.rows('dq_quarantine').map(({dataset,table_name,natural_key,reason_code,detail,batch_id})=>({dataset,table_name,natural_key,reason_code,detail,batch_id}))).toEqual([
-   {dataset:'entities.sec',table_name:'issuer_securities',natural_key:'GOOGL',reason_code:'ownership_conflict',detail:{reason:'ticker_owned_by_other_issuer',cik:'1652044'},batch_id:BATCH},
+  expect(c.rows('dq_quarantine').map(({dataset,table_name,natural_key,reason_code,detail,payload,batch_id})=>({dataset,table_name,natural_key,reason_code,detail,payload,batch_id}))).toEqual([
+   {dataset:'entities.sec',table_name:'issuer_securities',natural_key:`GOOGL:${AS_OF}`,reason_code:'ownership_conflict',detail:{reason:'ticker_owned_by_other_issuer',cik:'1652044'},
+    payload:{ticker:'GOOGL',isin:null,share_class:'unknown',is_primary:false,valid_from:AS_OF,valid_to:null,cik:'1652044'},batch_id:BATCH},
   ]);
+ });
+
+ it('reports producer rejects in rejectedSummary so a run that loaded rows is partial and exits 1',async()=>{
+  const c=memoryTableClient();
+  const rejected=Array.from({length:99},(_,i)=>({index:i+1,reason:'invalid_cik' as const}));
+  const res=await applySecLoad(c,planSecLoad(rows.slice(0,1),new Set(['AAPL']),AS_OF),{asOf:AS_OF,batchId:BATCH,batchProducerMeta:{sourceRows:100,rejected}});
+  expect(res.counts).toEqual({fetched:100,inserted:2,duplicates:0,versioned:0,quarantined:0,failed:0});
+  expect(res.skippedSummary).toEqual({});
+  expect(res.rejectedSummary).toEqual({rejected_invalid_cik:99});
+  expect(res.errors).toEqual([{code:'rejected_summary',message:JSON.stringify({rejected_invalid_cik:99})}]);
+  const status=batchStatusFromCounts(res.counts,res.errors);
+  expect(status).toBe('partial');
+  expect(loaderOutcome(status,res.counts,res.rejectedSummary)).toEqual({ok:true,exitCode:1});
  });
 
  it('counts the row as failed when the quarantine write itself fails',async()=>{
@@ -162,5 +177,9 @@ describe('loaderOutcome',()=>{
   expect(loaderOutcome('partial',counts({quarantined:1}))).toEqual({ok:false,exitCode:0});
   expect(loaderOutcome('partial',counts({inserted:1,failed:1}))).toEqual({ok:false,exitCode:1});
   expect(loaderOutcome('failed',counts({}))).toEqual({ok:false,exitCode:1});
+ });
+ it('exits 1 when any input row was rejected as invalid, even without failed rows',()=>{
+  expect(loaderOutcome('partial',counts({inserted:1}),{rejected_invalid_cik:1})).toEqual({ok:true,exitCode:1});
+  expect(loaderOutcome('success',counts({inserted:1}),{})).toEqual({ok:true,exitCode:0});
  });
 });

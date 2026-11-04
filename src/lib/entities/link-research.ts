@@ -34,6 +34,13 @@ const str=(v:unknown)=>typeof v==='string'&&v.trim()!==''?v.trim():null;
 const firstName=(v:unknown)=>Array.isArray(v)?v.map(str).find((s):s is string=>s!==null)??null:null;
 // B shares trade under A-share codes but are a different class.
 const B_SHARE=/^(900\d{3}\.SH|200\d{3}\.SZ)$/;
+/**
+ * Skip codes that mean invalid research data (→ rejectedSummary, degrades the batch). Every other
+ * code is expected filtering (→ skippedSummary): no_hard_identifier and entity_not_promoted (not
+ * promotable yet) and ticker_not_in_universe.
+ */
+const REJECT_CODES:readonly string[]=['invalid_identifier','name_required','invalid_ticker','market_mismatch'];
+const isReject=(reason:string)=>REJECT_CODES.includes(reason.split(':')[0]);
 
 type Ids={lei:string|null;usci:string|null;cik:string|null};
 /** Validated hard ids, or the first invalid field. */
@@ -111,8 +118,10 @@ export function planResearchLink(keys:EntityKeyRow[],securities:EntitySecurityRo
  * counted before its private link update; a link update that does not hit exactly one row adds a
  * failure (`link_failed`). Securities whose issuer failed, was quarantined or could not be linked
  * count as failed (`blocked_by_issuer`). Issuer conflicts (key: the first hard id, cik/lei/usci) and
- * ownership conflicts (key: ticker) are quarantined under `opts.batchId`; the entity key stays in
- * the service-only quarantine detail. Skips are summarized in one `skipped_summary` error.
+ * ownership conflicts (key: `ticker:valid_from`) are quarantined under `opts.batchId` with the
+ * rejected input as payload; the entity key stays in the service-only quarantine detail/payload.
+ * Expected filtering is summarized in `skipped_summary`, invalid data (REJECT_CODES) in
+ * `rejected_summary`.
  */
 export async function applyResearchLink(client:TableClient,plan:PlannedLink,opts:{userId:string;batchId:string}):Promise<ApplyResult>{
  const user_id=opts.userId;
@@ -120,10 +129,12 @@ export async function applyResearchLink(client:TableClient,plan:PlannedLink,opts
  const counts=emptyCounts();
  const errors:BatchError[]=[];
  counts.fetched=plan.fetched;
- const skippedSummary=summarizeSkips(plan.skipped.map(s=>s.reason));
+ const skippedSummary=summarizeSkips(plan.skipped.filter(s=>!isReject(s.reason)).map(s=>s.reason));
+ const rejectedSummary=summarizeSkips(plan.skipped.filter(s=>isReject(s.reason)).map(s=>s.reason));
+ const finish=():ApplyResult=>({counts,errors:withSkippedSummary(errors,skippedSummary,rejectedSummary),skippedSummary,rejectedSummary});
  if(plan.issuers.length===0){
   errors.push({code:'empty_plan',message:'no research entity qualified for promotion'});
-  return {counts,errors:withSkippedSummary(errors,skippedSummary),skippedSummary};
+  return finish();
  }
 
  const issuerByEntity=new Map<string,string>();
@@ -133,7 +144,8 @@ export async function applyResearchLink(client:TableClient,plan:PlannedLink,opts
   catch(e){counts.failed++;errors.push({code:'issuer_error',key:entity_key,message:errorMessage(e)});continue;}
   if(res.conflict||!res.issuer_id){
    const naturalKey=String(input.cik??input.lei??input.usci);
-   await parkConflict(client,{dataset:RESEARCH_LINK_DATASET,table:'issuers',naturalKey,reasonCode:issuerReasonCode(res.reason),detail:{reason:res.reason??null,entity_key},batchId:opts.batchId},counts,errors,{code:'issuer_conflict',key:entity_key,message:res.reason});
+   const payload={lei:input.lei??null,usci:input.usci??null,cik:input.cik??null,cninfo_org_id:input.cninfo_org_id??null,canonical_name_zh:input.canonical_name_zh??null,canonical_name_en:input.canonical_name_en??null};
+   await parkConflict(client,{dataset:RESEARCH_LINK_DATASET,table:'issuers',naturalKey,reasonCode:issuerReasonCode(res.reason),detail:{reason:res.reason??null,entity_key},payload,batchId:opts.batchId},counts,errors,{code:'issuer_conflict',key:entity_key,message:res.reason});
    continue;
   }
   if(res.created)counts.inserted++;else counts.duplicates++;
@@ -159,7 +171,8 @@ export async function applyResearchLink(client:TableClient,plan:PlannedLink,opts
    continue;
   }
   if(res==='conflict'){
-   await parkConflict(client,{dataset:RESEARCH_LINK_DATASET,table:'issuer_securities',naturalKey:sec.ticker,reasonCode:'ownership_conflict',detail:{reason:'ticker_owned_by_other_issuer',entity_key:key},batchId:opts.batchId},counts,errors,{code:'ownership_conflict',key,message:sec.ticker});
+   const payload={ticker:sec.ticker,isin:sec.isin,share_class:sec.share_class,is_primary:sec.is_primary,valid_from:sec.valid_from,valid_to:sec.valid_to,entity_key:key};
+   await parkConflict(client,{dataset:RESEARCH_LINK_DATASET,table:'issuer_securities',naturalKey:`${sec.ticker}:${sec.valid_from}`,reasonCode:'ownership_conflict',detail:{reason:'ticker_owned_by_other_issuer',entity_key:key},payload,batchId:opts.batchId},counts,errors,{code:'ownership_conflict',key,message:sec.ticker});
    continue;
   }
   if(res==='inserted')counts.inserted++;else counts.duplicates++;
@@ -168,5 +181,5 @@ export async function applyResearchLink(client:TableClient,plan:PlannedLink,opts
    if(n!==1){counts.failed++;errors.push({code:'link_failed',key,message:`expected 1 row, updated ${n}`});}
   }catch(e){counts.failed++;errors.push({code:'link_failed',key,message:errorMessage(e)});}
  }
- return {counts,errors:withSkippedSummary(errors,skippedSummary),skippedSummary};
+ return finish();
 }

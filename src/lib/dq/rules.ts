@@ -51,13 +51,15 @@ export function jumpRule(ruleId:string,current:unknown,previous:unknown,maxRelJu
 
 /**
  * The unit must be a string listed in `allowed` (exact, case-sensitive match: 'CNY' ≠ 'cny').
- * Anything else fails with reason 'invalid_unit'. An empty or non-string `allowed` list is
- * invalid_params.
+ * Anything else fails with reason 'invalid_unit'; detail.unit echoes strings, numbers and booleans,
+ * null for null/undefined and '[non-primitive]' otherwise (String() is never called on objects,
+ * which can throw). An empty or non-string `allowed` list is invalid_params.
  */
+const echoUnit=(u:unknown)=>u==null?null:typeof u==='string'||typeof u==='number'||typeof u==='boolean'?u:'[non-primitive]';
 export function unitRule(ruleId:string,unit:unknown,allowed:readonly string[]):RuleResult{
  if(!Array.isArray(allowed)||allowed.length===0||allowed.some(a=>typeof a!=='string'))return invalid(ruleId,{allowed:Array.isArray(allowed)?[...allowed]:null});
  if(typeof unit==='string'&&allowed.includes(unit))return {ruleId,passed:true};
- return {ruleId,passed:false,detail:{unit:typeof unit==='string'?unit:unit==null?null:String(unit),allowed:[...allowed],reason:'invalid_unit'}};
+ return {ruleId,passed:false,detail:{unit:echoUnit(unit),allowed:[...allowed],reason:'invalid_unit'}};
 }
 
 export function runRules(results:RuleResult[]):{passed:boolean;failed:RuleResult[];version:string}{

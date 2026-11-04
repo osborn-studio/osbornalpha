@@ -21,6 +21,13 @@ describe('batchStatusFromCounts',()=>{
   expect(batchStatusFromCounts({...emptyCounts(),fetched:4},info)).toBe('failed');
   expect(batchStatusFromCounts({...emptyCounts()},[...info,{code:'empty_plan'}])).toBe('failed');
  });
+ it('treats rejected_summary (invalid input) as a real error: partial when something landed, else failed',()=>{
+  expect(INFO_CODES).not.toContain('rejected_summary');
+  const rejected=[{code:'skipped_summary',message:'{"not_in_universe":3}'},{code:'rejected_summary',message:'{"rejected_invalid_cik":99}'}];
+  expect(batchStatusFromCounts({...emptyCounts(),fetched:103,inserted:1},rejected)).toBe('partial');
+  expect(batchStatusFromCounts({...emptyCounts(),fetched:103,quarantined:1},rejected)).toBe('partial');
+  expect(batchStatusFromCounts({...emptyCounts(),fetched:0},rejected)).toBe('failed');
+ });
  it('finishes with informational errors stored and a success status',async()=>{
   const c=memoryTableClient({ingest_batches:['batch_id']});
   const {batchId}=await startBatch(c,{producer:'p',dataset:'d'});

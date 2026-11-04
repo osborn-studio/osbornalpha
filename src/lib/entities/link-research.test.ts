@@ -161,8 +161,9 @@ describe('applyResearchLink',()=>{
   expect(c.rows('research_entity_keys').find(r=>r.user_id===U&&r.entity_id==='e2')?.issuer_id).toBeNull();
   expect(c.rows('research_entity_securities').find(r=>r.user_id===U&&r.id==='s2')?.ticker).toBeNull();
   expect(c.rows('issuer_securities').map(r=>r.ticker)).toEqual(['AAPL']);
-  expect(c.rows('dq_quarantine').map(({dataset,table_name,natural_key,reason_code,detail,batch_id,status})=>({dataset,table_name,natural_key,reason_code,detail,batch_id,status}))).toEqual([
-   {dataset:'entities.research-link',table_name:'issuers',natural_key:'789019',reason_code:'issuer_conflict',detail:{reason:'hard_id_conflict',entity_key:`${U}:e2`},batch_id:BATCH,status:'open'},
+  expect(c.rows('dq_quarantine').map(({dataset,table_name,natural_key,reason_code,detail,payload,batch_id,status})=>({dataset,table_name,natural_key,reason_code,detail,payload,batch_id,status}))).toEqual([
+   {dataset:'entities.research-link',table_name:'issuers',natural_key:'789019',reason_code:'issuer_conflict',detail:{reason:'hard_id_conflict',entity_key:`${U}:e2`},
+    payload:{lei:null,usci:null,cik:'789019',cninfo_org_id:null,canonical_name_zh:null,canonical_name_en:'Microsoft'},batch_id:BATCH,status:'open'},
   ]);
   expect(loaderOutcome(batchStatusFromCounts(res.counts,res.errors),res.counts).exitCode).toBe(1);
  });
@@ -174,8 +175,22 @@ describe('applyResearchLink',()=>{
   expect(res.counts).toEqual({fetched:2,inserted:3,duplicates:0,versioned:0,quarantined:1,failed:0});
   expect(res.errors).toEqual([{code:'ownership_conflict',key:`${U}:e2:s2`,message:'MSFT'}]);
   expect(c.rows('research_entity_securities').find(r=>r.user_id===U&&r.id==='s2')?.ticker).toBeNull();
-  expect(c.rows('dq_quarantine').map(({dataset,table_name,natural_key,reason_code,detail,batch_id})=>({dataset,table_name,natural_key,reason_code,detail,batch_id}))).toEqual([
-   {dataset:'entities.research-link',table_name:'issuer_securities',natural_key:'MSFT',reason_code:'ownership_conflict',detail:{reason:'ticker_owned_by_other_issuer',entity_key:`${U}:e2:s2`},batch_id:BATCH},
+  expect(c.rows('dq_quarantine').map(({dataset,table_name,natural_key,reason_code,detail,payload,batch_id})=>({dataset,table_name,natural_key,reason_code,detail,payload,batch_id}))).toEqual([
+   {dataset:'entities.research-link',table_name:'issuer_securities',natural_key:'MSFT:2000-01-01',reason_code:'ownership_conflict',detail:{reason:'ticker_owned_by_other_issuer',entity_key:`${U}:e2:s2`},
+    payload:{ticker:'MSFT',isin:null,share_class:'common',is_primary:false,valid_from:'2000-01-01',valid_to:null,entity_key:`${U}:e2:s2`},batch_id:BATCH},
+  ]);
+ });
+
+ it('quarantines each conflicting validity window of the same ticker as its own item',async()=>{
+  fake.owners.set('MSFT','iss-someone-else');
+  const c=await seed();
+  await c.update('research_entity_securities',{user_id:U,id:'s2'},{valid_to:'2009-12-31'});
+  await c.insert('research_entity_securities',{...sec({id:'s3',entity_id:'e2',exchange_code:'MSFT',isin:'US5949181045',is_primary:true,valid_from:'2010-01-01'}),ticker:null});
+  const res=await applyResearchLink(c,await planFor(c),{userId:U,batchId:BATCH});
+  expect(res.counts).toEqual({fetched:2,inserted:3,duplicates:0,versioned:0,quarantined:2,failed:0});
+  expect(c.rows('dq_quarantine').map(({natural_key,payload})=>({natural_key,payload}))).toEqual([
+   {natural_key:'MSFT:2000-01-01',payload:{ticker:'MSFT',isin:null,share_class:'common',is_primary:false,valid_from:'2000-01-01',valid_to:'2009-12-31',entity_key:`${U}:e2:s2`}},
+   {natural_key:'MSFT:2010-01-01',payload:{ticker:'MSFT',isin:'US5949181045',share_class:'common',is_primary:true,valid_from:'2010-01-01',valid_to:null,entity_key:`${U}:e2:s3`}},
   ]);
  });
 
@@ -197,6 +212,29 @@ describe('applyResearchLink',()=>{
   const res=await applyResearchLink(c,await planFor(c),{userId:U,batchId:BATCH});
   expect(res.errors).toEqual([{code:'relink',key:`${U}:e1`,message:'old-issuer->iss-320193'}]);
   expect(c.rows('research_entity_keys').find(r=>r.user_id===U&&r.entity_id==='e1')?.issuer_id).toBe('iss-320193');
+ });
+
+ it('keeps expected filtering in skippedSummary (still success) and invalid data in rejectedSummary (partial)',async()=>{
+  const c=await seed();
+  await c.insert('research_entity_securities',{...sec({id:'s9',entity_id:'e1',exchange_code:'NOPE'}),ticker:null});
+  const ok=await applyResearchLink(c,await planFor(c),{userId:U,batchId:BATCH});
+  expect(ok.skippedSummary).toEqual({ticker_not_in_universe:1});
+  expect(ok.rejectedSummary).toEqual({});
+  expect(ok.errors).toEqual([{code:'skipped_summary',message:'{"ticker_not_in_universe":1}'}]);
+  const okStatus=batchStatusFromCounts(ok.counts,ok.errors);
+  expect(okStatus).toBe('success');
+  expect(loaderOutcome(okStatus,ok.counts,ok.rejectedSummary)).toEqual({ok:true,exitCode:0});
+
+  await c.insert('research_entity_keys',{...key({entity_id:'bad',lei:'NOTALEI000000000000X'})});
+  await c.insert('research_entity_keys',{...key({entity_id:'nameless',cik:'1',names_en:[]})});
+  await c.insert('research_entity_securities',{...sec({id:'s8',entity_id:'e1',exchange_code:'ABCDEF',market:'A'}),ticker:null});
+  const bad=await applyResearchLink(c,await planFor(c),{userId:U,batchId:BATCH});
+  expect(bad.skippedSummary).toEqual({ticker_not_in_universe:1});
+  expect(bad.rejectedSummary).toEqual({invalid_identifier:1,name_required:1,invalid_ticker:1});
+  expect(bad.errors).toEqual([{code:'skipped_summary',message:'{"ticker_not_in_universe":1}'},{code:'rejected_summary',message:'{"invalid_identifier":1,"name_required":1,"invalid_ticker":1}'}]);
+  const badStatus=batchStatusFromCounts(bad.counts,bad.errors);
+  expect(badStatus).toBe('partial');
+  expect(loaderOutcome(badStatus,bad.counts,bad.rejectedSummary).exitCode).toBe(1);
  });
 
  it('summarizes skips in one error, fails an empty plan and refuses a plan for another user',async()=>{

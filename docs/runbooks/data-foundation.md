@@ -90,11 +90,12 @@ node --env-file=.env.local --import tsx scripts/entity-keys/link-research-entiti
 ### 3.3 退出码与状态策略（两脚本相同）
 
 - 批次状态（`batchStatusFromCounts`）：有 fetched 但无任何计数落账 → `failed`；有失败/错误但有落账（inserted+duplicates+versioned+quarantined）→ `partial`，无落账 → `failed`；否则 `success`。空计划也视为 failed。
-- 信息性错误码（`INFO_CODES`：`skipped_summary`、`relink`）保留在 `errors` 中，但**不参与**状态判定：只有跳过（不在 universe、被拒行等）或重新链接的运行仍是 `success`，跳过不会让批次变成 partial。
-- 冲突即隔离：发行人冲突（`issuer_conflict`；命中已退役发行人时 reason_code 为 `inactive_issuer`）与 ticker 归属冲突（`ownership_conflict`）各写一条 `dq_quarantine`，`dataset` 为脚本的 dataset，`table_name` 为 `issuers` / `issuer_securities`，`natural_key` 为 cik（研究链接取第一个硬标识 cik→lei→usci）或 ticker，`batch_id` 为本次批次，`detail={reason, entity_key?}`（SEC 归属冲突带 `cik`）。同一 open 键重跑不会重复建行（复用已有 open 行）。只有隔离行写入成功才计入 `counts.quarantined`；写入失败则计 `failed` 并追加 `quarantine_error`。这些隔离项在 `/admin/dq` 隔离面板处理。
-- 退出码：`2` 参数错误；`1` 批次 failed 或 `counts.failed > 0`；否则 `0`。
+- 信息性错误码（`INFO_CODES`：`skipped_summary`、`relink`）保留在 `errors` 中，但**不参与**状态判定：跳过（**预期过滤**：不在 universe、无硬标识、实体未提升）或重新链接的运行仍是 `success`，跳过不会让批次变成 partial。
+- 拒绝（**无效输入**）单独汇总为 `rejected_summary`，**不是**信息性错误码：SEC 生产者拒绝的行（`rejected_*`，如 `rejected_invalid_cik`）与研究实体中的无效数据（`invalid_identifier`、`name_required`、`invalid_ticker`、`market_mismatch`）会让批次变为 `partial`（无落账则 `failed`），脚本以 `1` 退出。
+- 冲突即隔离：发行人冲突（`issuer_conflict`；命中已退役发行人时 reason_code 为 `inactive_issuer`）与 ticker 归属冲突（`ownership_conflict`）各写一条 `dq_quarantine`，`dataset` 为脚本的 dataset，`table_name` 为 `issuers` / `issuer_securities`，`natural_key` 为 cik（研究链接取第一个硬标识 cik→lei→usci）或 `ticker:valid_from`（同一 ticker 不同有效期各成一条），`batch_id` 为本次批次，`detail={reason, entity_key?}`（SEC 归属冲突带 `cik`），`payload` 为被拒的输入（发行人：名称与硬标识；证券：ticker、isin、share_class、is_primary、valid_from、valid_to，外加 SEC 的 `cik` 或研究链接的 `entity_key`）。同一 open 键重跑不会重复建行（复用已有 open 行）。只有隔离行写入成功才计入 `counts.quarantined`；写入失败则计 `failed` 并追加 `quarantine_error`。这些隔离项在 `/admin/dq` 隔离面板处理。
+- 退出码：`2` 参数错误；`1` 批次 failed、`counts.failed > 0` 或存在 `rejected_summary`；否则 `0`。
 - 新鲜度（cadence `event`）：`success`，或 `partial` 且 failed=0 且 inserted+duplicates>0 时记一次成功；否则记失败（`consecutive_errors+1`，≥2 即 error）。
-- 回执 JSON 输出 `batchId`、`status`、`counts`、`skipped`（`skippedSummary`：按跳过原因计数，如不在 universe、被拒行等）与前 20 条 `errors`。同一 `batchId` 可在 `/admin/dq` 批次面板查到。
+- 回执 JSON 输出 `batchId`、`status`、`counts`、`skipped`（`skippedSummary`：按预期过滤原因计数）、`rejected`（`rejectedSummary`：按无效输入原因计数）与前 20 条 `errors`。同一 `batchId` 可在 `/admin/dq` 批次面板查到。
 
 ## 4. 标识符声明审核
 
