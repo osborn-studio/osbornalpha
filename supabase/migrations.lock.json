@@ -192,6 +192,10 @@
     {
       "file": "20261105090000_dq_foundation.sql",
       "sha256": "9f44818e1ace9f52a721d8f1bb9c35007f6decbd1aa4c4fdd92c617e0c28d832"
+    },
+    {
+      "file": "20261105091000_issuers.sql",
+      "sha256": "f3c31b40717825ea419a1078a4682ff88de7cc0923992df8159462b79470dc46"
     }
   ]
 }
