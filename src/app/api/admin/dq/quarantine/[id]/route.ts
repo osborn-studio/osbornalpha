@@ -19,6 +19,14 @@ const HTTP_STATUS = { resolved: 200, not_found: 404, already_resolved: 409 } as 
 export async function POST(request: Request, { params }: Ctx) {
   try {
     const user = await requireAdminUser();
+    if (!(request.headers.get('content-type') ?? '').toLowerCase().startsWith('application/json')) {
+      return NextResponse.json({ error: 'unsupported_media_type' }, { status: 415 });
+    }
+    // Defence in depth against cross-site form posts: a browser-sent Origin must be ours.
+    const origin = request.headers.get('origin');
+    if (origin !== null && origin !== new URL(request.url).origin) {
+      return NextResponse.json({ error: 'forbidden_origin' }, { status: 403 });
+    }
     const { id } = await params;
     if (!UUID_RE.test(id)) return NextResponse.json({ error: 'invalid_id' }, { status: 400 });
 
@@ -38,7 +46,7 @@ export async function POST(request: Request, { params }: Ctx) {
     if (error instanceof AdminForbidden) {
       return NextResponse.json({ error: 'admin role required' }, { status: 403 });
     }
-    console.error('admin dq quarantine resolve failed');
+    console.error('[admin/dq]', error instanceof Error ? error.message : error);
     return NextResponse.json({ error: 'quarantine resolve unavailable' }, { status: 500 });
   }
 }

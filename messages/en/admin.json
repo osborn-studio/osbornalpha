@@ -108,7 +108,12 @@
       "lastResult": "Last result",
       "error": "Error code"
     },
-    "statuses": { "healthy": "Healthy", "warning": "Review", "error": "Error", "unknown": "Not run" },
+    "statuses": {
+      "healthy": "Healthy",
+      "warning": "Review",
+      "error": "Error",
+      "unknown": "Not run"
+    },
     "scopes": {
       "a_stock": "A shares",
       "a_exchange_fund": "A-share exchange funds",
@@ -132,6 +137,8 @@
     "accept": "Accept",
     "reject": "Reject",
     "resolved": "Resolved",
+    "alreadyResolved": "Already resolved by someone else; list refreshed.",
+    "notFound": "Item not found.",
     "prev": "Previous",
     "next": "Next",
     "page": "Page {page} / {pages} · {total} items",
@@ -140,14 +147,18 @@
     "tiles": {
       "notFresh": "Non-fresh datasets",
       "openQuarantine": "Open quarantine items",
-      "failedReconciliations": "Failed reconciliations",
-      "batches24h": "Batches (24 hours)"
+      "failedReconciliations": "Failed reconciliations (all time)",
+      "batches24h": "Batches (24 hours)",
+      "notFreshNote": "stale {stale} · missing {missing} · error {error}",
+      "batchesNote": "success {success} · partial {partial} · failed {failed}",
+      "openQuarantineNote": "Real count, not a truncated sample"
     },
     "sections": {
       "freshness": "Freshness",
       "batches": "Recent batches",
       "quarantine": "Quarantine queue",
-      "reconciliations": "Failed reconciliations"
+      "reconciliations": "Failed reconciliations",
+      "reconciliationsLatest": "latest {shown} of {total}"
     },
     "columns": {
       "dataset": "Dataset",

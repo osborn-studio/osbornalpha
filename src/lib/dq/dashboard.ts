@@ -1,5 +1,7 @@
-// Pure view-model helpers for the /admin/dq dashboard. The API route does the reads; this
-// module only shapes them so the counting and query validation stay unit-testable.
+// View-model helpers for the /admin/dq dashboard. loadDqDashboard does the reads over a
+// TableClient (stubbable in tests); the rest is pure shaping and query validation.
+import type {Row,TableClient} from '../db/table-client';
+import {freshnessOf} from './freshness';
 
 export interface DqSummaryInput{
  batches:{dataset:string;status:string}[];
@@ -34,15 +36,19 @@ export function summarizeDq(input:DqSummaryInput):DqSummary{
  };
 }
 
-/** Rows whose `field` timestamp is within `ms` before `now`; unparseable timestamps are excluded. */
+/** Writer clocks may run slightly ahead of ours; rows up to this far in the future still count. */
+export const CLOCK_SKEW_MS=60_000;
+
+/** Rows whose `field` timestamp is within `ms` before `now` (+ CLOCK_SKEW_MS ahead); unparseable timestamps are excluded. */
 export function within<T extends Record<string,unknown>>(rows:T[],field:string,now:Date,ms:number):T[]{
- const from=now.getTime()-ms;
- return rows.filter(r=>{const t=Date.parse(String(r[field]??''));return Number.isFinite(t)&&t>=from&&t<=now.getTime();});
+ const from=now.getTime()-ms,to=now.getTime()+CLOCK_SKEW_MS;
+ return rows.filter(r=>{const t=Date.parse(String(r[field]??''));return Number.isFinite(t)&&t>=from&&t<=to;});
 }
 
 export const DQ_DEFAULT_PAGE_SIZE=50;
 export const DQ_MAX_PAGE_SIZE=200;
-const DATASET_RE=/^[a-z0-9._-]{1,64}$/;
+// Used only as an equality filter (parameterised by PostgREST); the DB enforces length 1..64.
+const DATASET_RE=/^[^\x00-\x1f\x7f]{1,64}$/u;
 export type DqQuery={dataset?:string;page:number;pageSize:number};
 
 const positiveInt=(raw:string|null,fallback:number):number|null=>{
@@ -60,4 +66,56 @@ export function parseDqQuery(params:URLSearchParams):{ok:true;query:DqQuery}|{ok
  const rawDataset=params.get('dataset');
  if(rawDataset!==null&&rawDataset!==''&&!DATASET_RE.test(rawDataset))return {ok:false,error:'invalid_dataset'};
  return {ok:true,query:{dataset:rawDataset?rawDataset:undefined,page,pageSize}};
+}
+
+export const DQ_RECENT_BATCHES=50;
+export const DQ_RECENT_RECONCILIATIONS=50;
+const DAY_MS=86_400_000;
+
+export interface DqDashboard{
+ summary:DqSummary;
+ batches24hTruncated:boolean;
+ batches:Row[];
+ freshness:Awaited<ReturnType<typeof freshnessOf>>;
+ quarantine:{rows:Row[];page:number;pageSize:number;total:number};
+ reconciliations:Row[];
+ refreshedAt:string;
+}
+
+/**
+ * All dashboard reads. The open-quarantine KPI is a global count; the pager total is a
+ * separate count filtered by the selected dataset, so filtering never changes the KPI.
+ */
+export async function loadDqDashboard(client:TableClient,query:DqQuery,now:Date):Promise<DqDashboard>{
+ const {dataset,page,pageSize}=query;
+ const openMatch:Row={status:'open'};
+ const pageMatch:Row=dataset?{status:'open',dataset}:openMatch;
+ const [batches,freshness,openQuarantineTotal,quarantineTotal,quarantineRows,failedReconciliationsTotal,reconciliations]=
+  await Promise.all([
+   client.select('ingest_batches',{},{orderBy:'started_at',desc:true,limit:DQ_RECENT_BATCHES}),
+   freshnessOf(client,now),
+   client.count('dq_quarantine',openMatch),
+   dataset?client.count('dq_quarantine',pageMatch):null,
+   client.select('dq_quarantine',pageMatch,{orderBy:'created_at',desc:true,limit:pageSize,offset:(page-1)*pageSize}),
+   client.count('dq_reconciliations',{passed:false}),
+   client.select('dq_reconciliations',{passed:false},{orderBy:'created_at',desc:true,limit:DQ_RECENT_RECONCILIATIONS}),
+  ]);
+ const batches24h=within(batches,'started_at',now,DAY_MS);
+ const summary=summarizeDq({
+  batches:batches24h.map(b=>({dataset:String(b.dataset),status:String(b.status)})),
+  freshness:freshness.map(f=>({dataset:String(f.dataset),status:f.status,stored_status:f.stored_status})),
+  openQuarantineTotal,
+  failedReconciliationsTotal,
+ });
+ return {
+  summary,
+  // The 24h tile is derived from the latest DQ_RECENT_BATCHES rows; if all of them fall in
+  // the window there may be more, and the client shows the count as a lower bound.
+  batches24hTruncated:batches.length===DQ_RECENT_BATCHES&&batches24h.length===DQ_RECENT_BATCHES,
+  batches,
+  freshness,
+  quarantine:{rows:quarantineRows,page,pageSize,total:quarantineTotal??openQuarantineTotal},
+  reconciliations,
+  refreshedAt:now.toISOString(),
+ };
 }

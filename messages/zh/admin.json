@@ -108,7 +108,12 @@
       "lastResult": "最近结果",
       "error": "错误码"
     },
-    "statuses": { "healthy": "正常", "warning": "需关注", "error": "异常", "unknown": "未运行" },
+    "statuses": {
+      "healthy": "正常",
+      "warning": "需关注",
+      "error": "异常",
+      "unknown": "未运行"
+    },
     "scopes": {
       "a_stock": "A 股",
       "a_exchange_fund": "A 股场内基金",
@@ -132,6 +137,8 @@
     "accept": "接受",
     "reject": "拒绝",
     "resolved": "已处理",
+    "alreadyResolved": "该项已被处理，列表已刷新。",
+    "notFound": "该项不存在。",
     "prev": "上一页",
     "next": "下一页",
     "page": "第 {page} / {pages} 页 · 共 {total} 项",
@@ -140,14 +147,18 @@
     "tiles": {
       "notFresh": "非 fresh 数据集",
       "openQuarantine": "待处理隔离项",
-      "failedReconciliations": "对账失败（未通过）",
-      "batches24h": "批次（24 小时）"
+      "failedReconciliations": "对账失败（累计）",
+      "batches24h": "批次（24 小时）",
+      "notFreshNote": "stale {stale} · missing {missing} · error {error}",
+      "batchesNote": "success {success} · partial {partial} · failed {failed}",
+      "openQuarantineNote": "真实计数（count），非截断样本"
     },
     "sections": {
       "freshness": "新鲜度",
       "batches": "最近批次",
       "quarantine": "隔离队列",
-      "reconciliations": "对账失败"
+      "reconciliations": "对账失败",
+      "reconciliationsLatest": "最近 {shown} / {total}"
     },
     "columns": {
       "dataset": "数据集",
