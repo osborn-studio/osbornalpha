@@ -38,6 +38,7 @@ const canon=(s:string)=>{
 /** numeric equality on decimal strings without exponent: sign of zero, leading and trailing zeros ignored. */
 export function numericEquals(a:string,b:string):boolean{return canon(a)===canon(b);}
 
+const ASYNC_METHODS=['claimLease','beginRun','stageFilings','stageFacts','quarantineFacts','publishRun','abandonRun','releaseLease','resolveFactsQuarantine','replaceMetrics','readFacts','factsByIds','openConflicts','filingsOfIssuer','updateFilingLink','reconcileScope','scopeDue','scopeRows','metricsOfIssuer'] as const satisfies readonly (keyof FactsDb)[];
 const sk=(issuer:string,market:Market)=>`${issuer}|${market}`;
 type KeyPart=Pick<FactRow,'concept'|'period_start'|'period_end'|'consolidation'|'unit'>;
 const keyOf=(f:KeyPart)=>[f.concept,f.period_start??'',f.period_end,f.consolidation,f.unit].join('|');
@@ -50,10 +51,12 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
  const runs=new Map<string,MemoryRun>();
  const filings=new Map<string,FilingRow>();
  const facts=new Map<string,FactRow>();
- const ord=new Map<string,number>();let seq=0;
+ let lastStamp='';
  let metrics:MetricRow[]=[];
  let fixedNow:string|null=null;
  const now=()=>fixedNow??new Date().toISOString();
+ // created_at of one stageFacts call: one value per call (SQL now() = transaction start), strictly increasing across calls
+ const stamp=()=>{const t=now();if(t>lastStamp){lastStamp=t;}else{lastStamp=new Date(Date.parse(lastStamp)+1).toISOString();}return lastStamp;};
  const scopeOf=(issuer:string,market:Market)=>scope.get(sk(issuer,market));
  const bump=(issuer:string,market:Market)=>{const s=scopeOf(issuer,market);if(s)s.state_rev+=1;};
  const leaseCheck=(issuer:string,market:Market,batch:string)=>{
@@ -101,13 +104,13 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
   }
   return n;
  };
- const byDisclosure=(a:FactRow,b:FactRow)=>cmp(a.available_date,b.available_date)||((ord.get(a.fact_id)??0)-(ord.get(b.fact_id)??0))||cmp(a.fact_id,b.fact_id);
+ const byDisclosure=(a:FactRow,b:FactRow)=>cmp(a.available_date,b.available_date)||cmp(a.created_at,b.created_at)||cmp(a.fact_id,b.fact_id);
  // key ranking of read_facts: period_end desc, concept, period_start desc nulls last, consolidation, unit
  const keyOrder=(a:KeyPart,b:KeyPart)=>cmp(b.period_end,a.period_end)||cmp(a.concept,b.concept)
   ||(a.period_start===b.period_start?0:a.period_start===null?1:b.period_start===null?-1:cmp(b.period_start,a.period_start))
   ||cmp(a.consolidation,b.consolidation)||cmp(a.unit,b.unit);
 
- const db:MemoryFactsDb={
+ const raw:MemoryFactsDb={
   tables,
   setNow:iso=>{fixedNow=iso;},
   expireLease:(issuer,market)=>{const s=scopeOf(issuer,market);if(s&&s.lease_until!==null)s.lease_until='1970-01-01T00:00:00.000Z';},
@@ -134,13 +137,14 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
    for(const row of input){
     const existing=[...filings.values()].find(g=>g.source===row.source&&g.source_ref===row.sourceRef);
     if(existing){if(existing.issuer_id===r.issuer_id&&existing.market===r.market)out.set(row.sourceRef,existing.filing_id);continue;}
+    if(filings.has(row.filing_id))throw new FactsDbError('duplicate_key','filings_pkey');
     filings.set(row.filing_id,{filing_id:row.filing_id,issuer_id:r.issuer_id,market:r.market,source:row.source,origin:row.origin,form_type:row.formType,fiscal_year:row.fiscalYear,fiscal_period:row.fiscalPeriod,period_end:row.periodEnd,available_date:row.availableDate,source_ref:row.sourceRef,url:row.url,document_ref:null,document_url:null,link_attempts:0,mapping_gen:0,run_id:run,created_at:now()});
     out.set(row.sourceRef,row.filing_id);
    }
    return out;
   },
   async stageFacts(run,input){
-   const r=runLock(run);
+   const r=runLock(run);const at=stamp();
    const existingKeys=new Set([...facts.values()].filter(f=>f.issuer_id===r.issuer_id).map(f=>`${keyOf(f)}|${f.filing_id}|${f.mapping_gen}`));
    const fresh:FactRow[]=[];
    for(const row of input){
@@ -153,9 +157,9 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
     if(existingKeys.has(candidate))continue;
     if(facts.has(row.fact_id)||fresh.some(f=>f.fact_id===row.fact_id))throw new FactsDbError('duplicate_key','financial_facts_pkey');
     existingKeys.add(candidate);
-    fresh.push({fact_id:row.fact_id,issuer_id:r.issuer_id,market:r.market,filing_id:row.filing_id,run_id:run,concept:row.concept,source_concept:row.source_concept,statement:row.statement,period_start:row.period_start,period_end:row.period_end,duration:row.duration,value:row.value,value_text:row.value,unit:row.unit,consolidation:row.consolidation,available_date:row.available_date,mapping_gen:r.mapping_gen,mapping_version:row.mapping_version,status:'staged',raw_hash:row.raw_hash,created_at:now()});
+    fresh.push({fact_id:row.fact_id,issuer_id:r.issuer_id,market:r.market,filing_id:row.filing_id,run_id:run,concept:row.concept,source_concept:row.source_concept,statement:row.statement,period_start:row.period_start,period_end:row.period_end,duration:row.duration,value:row.value,value_text:row.value,unit:row.unit,consolidation:row.consolidation,available_date:row.available_date,mapping_gen:r.mapping_gen,mapping_version:row.mapping_version,status:'staged',raw_hash:row.raw_hash,created_at:at});
    }
-   for(const f of fresh){facts.set(f.fact_id,f);ord.set(f.fact_id,++seq);}
+   for(const f of fresh)facts.set(f.fact_id,f);
    return fresh.length;
   },
   async quarantineFacts(run,factIds,itemId){
@@ -223,6 +227,8 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
   async replaceMetrics(issuer,market,basedOnRev,input){
    const rev=scopeOf(issuer,market)?.state_rev??0;
    if(rev!==basedOnRev)throw new FactsDbError('stale_computation');
+   const pk=(m:MetricRow)=>[m.metric,m.period_start,m.period_end,m.input_unit,m.basis,m.formula_version].join('|');
+   if(new Set(input.map(pk)).size!==input.length)throw new FactsDbError('duplicate_key','financial_metrics_pkey');
    metrics=metrics.filter(m=>!(m.issuer_id===issuer&&m.market===market)).concat(input.map(m=>({...clone(m),issuer_id:issuer,market,based_on_rev:basedOnRev})));
    return input.length;
   },
@@ -283,5 +289,14 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
    return clone(rows);
   },
  };
+ // Every FactsDb method (reads included) runs through one promise chain per instance, so no operation
+ // observes or interleaves with another's partial writes across awaits (SQL: one transaction each).
+ let chain:Promise<unknown>=Promise.resolve();
+ const serialize=<A extends unknown[],T>(fn:(...a:A)=>Promise<T>)=>(...a:A):Promise<T>=>{const next=chain.then(()=>fn(...a));chain=next.catch(()=>undefined);return next;};
+ const db={...raw} as MemoryFactsDb;
+ for(const k of ASYNC_METHODS){
+  const f=raw[k] as unknown as (...a:unknown[])=>Promise<unknown>;
+  (db as unknown as Record<string,unknown>)[k]=serialize(f);
+ }
  return db;
 }

@@ -5,6 +5,7 @@
 import {randomUUID} from 'node:crypto';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {describe,expect,it} from 'vitest';
+import {quarantine} from '../dq/quarantine';
 import {FactsDbError,supabaseFactsDb,toFactsDbError} from './db';
 import {factInsert,factsDbContract,filingInsert} from './db-contract';
 import {memoryFactsDb,numericEquals} from './memory-facts-db';
@@ -37,6 +38,20 @@ describe('memoryFactsDb specifics',()=>{
   expect(db.facts()).toEqual([]);
   expect(await db.stageFacts(run,[good])).toBe(1);
   await expect(db.stageFacts(run,[{...factInsert(iss,f,{concept:'net_income'}),fact_id:good.fact_id}])).rejects.toMatchObject({code:'duplicate_key'});
+ });
+ it('serializes operations: concurrent quarantineFacts keep both members; a read during publish never sees new rows with the old state_rev',async()=>{
+  const db=memoryFactsDb();const iss=randomUUID();const b=randomUUID();
+  await db.reconcileScope('US',[{issuer_id:iss,reasons:[],priority:1,fetch_key:'k'}]);await db.claimLease(iss,'US',b,60);
+  const run=await db.beginRun(iss,'US',b,1);const f=filingInsert(iss);await db.stageFilings(run,[f]);
+  const c1=factInsert(iss,f,{value:'1'});const c2=factInsert(iss,f,{concept:'net_income',value:'2'});await db.stageFacts(run,[c1,c2]);
+  const item=await quarantine(db.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${iss}:US:x:2024-02-01`,reasonCode:'same_day_conflict',batchId:b,payload:{key:{},fact_ids:[],run_id:run}});
+  expect(await Promise.all([db.quarantineFacts(run,[c1.fact_id],item),db.quarantineFacts(run,[c2.fact_id],item)])).toEqual([1,1]);
+  expect(((await db.tables.select('dq_quarantine',{id:item}))[0].payload as {fact_ids:string[]}).fact_ids.sort()).toEqual([c1.fact_id,c2.fact_id].sort());
+  const run2=await db.beginRun(iss,'US',b,1);const g=filingInsert(iss);await db.stageFilings(run2,[g]);
+  await db.stageFacts(run2,[factInsert(iss,g,{concept:'net_income',value:'9'})]);
+  const [n,seen]=await Promise.all([db.publishRun(run2,[g.filing_id]),db.readFacts(iss,'US',{concepts:['net_income'],asOf:'2030-01-01'})]);
+  expect(n).toBe(1);expect(seen.rows.length).toBe(seen.stateRev);   // (0 rows, rev 0) or (1 row, rev 1)
+  expect((await db.readFacts(iss,'US',{concepts:['net_income'],asOf:'2030-01-01'})).stateRev).toBe(1);
  });
  it('shares dq_quarantine with the TableClient it was given',async()=>{
   const db=memoryFactsDb();
@@ -75,16 +90,16 @@ describe('supabaseFactsDb',()=>{
  type Op=[string,unknown[]];
  type FromResponder=(table:string,ops:Op[])=>unknown[];
  /** A thenable PostgREST-like builder: every chained call is recorded, `respond` answers when awaited. */
- const builder=(table:string,respond:FromResponder)=>{
+ const builder=(table:string,respond:FromResponder,count?:(table:string)=>number)=>{
   const ops:Op[]=[];
   const proxy:Record<string|symbol,unknown>=new Proxy({},{get:(_t,m)=>m==='then'
-   ?(res:(v:unknown)=>unknown,rej:(e:unknown)=>unknown)=>Promise.resolve({data:respond(table,ops),error:null}).then(res,rej)
+   ?(res:(v:unknown)=>unknown,rej:(e:unknown)=>unknown)=>Promise.resolve({data:respond(table,ops),error:null,count:count?count(table):null}).then(res,rej)
    :(...a:unknown[])=>{ops.push([String(m),a]);return proxy;}});
   return proxy;
  };
- const stub=(respond:(fn:string,args:Record<string,unknown>)=>{data?:unknown;error?:{message:string;code?:string}|null},from:FromResponder=()=>{throw new Error('from() not expected');})=>{
+ const stub=(respond:(fn:string,args:Record<string,unknown>)=>{data?:unknown;error?:{message:string;code?:string}|null},from:FromResponder=()=>{throw new Error('from() not expected');},count?:(table:string)=>number)=>{
   const calls:Call[]=[];
-  const client={rpc:async(fn:string,args:Record<string,unknown>)=>{calls.push({fn,args});const r=respond(fn,args);return {data:r.data??null,error:r.error??null};},from:(table:string)=>builder(table,from)};
+  const client={rpc:async(fn:string,args:Record<string,unknown>)=>{calls.push({fn,args});const r=respond(fn,args);return {data:r.data??null,error:r.error??null};},from:(table:string)=>builder(table,from,count)};
   return {calls,db:supabaseFactsDb(client as unknown as SupabaseClient)};
  };
  it('pages complete-set table reads past PostgREST max_rows in a fixed order and pushes filters into the query (round-1 #7)',async()=>{
@@ -96,7 +111,7 @@ describe('supabaseFactsDb',()=>{
    pages.push(ops);
    const [from,to]=ops.find(o=>o[0]==='range')![1] as [number,number];
    return Array.from({length:Math.max(0,Math.min(totals[table],to+1)-from)},(_,i)=>table==='financial_metrics'?metric(from+i):table==='filings'?{filing_id:`f${from+i}`,value_text:'1'}:table==='fact_sync_scope'?scope(from+i):{fact_id:`a${from+i}`,value_text:'1'});
-  });
+  },t=>totals[t]);
   const ranges=(from:number)=>pages.slice(from).map(ops=>ops.find(o=>o[0]==='range')![1]);
   const metrics=await db.metricsOfIssuer('iss','US','v');
   expect(metrics).toHaveLength(1005);expect(metrics[1004]).toMatchObject({metric:'m1004',based_on_rev:2});
@@ -117,6 +132,25 @@ describe('supabaseFactsDb',()=>{
   expect(await db.factsByIds(['a0','a1'])).toHaveLength(2);
   expect(pages[n]).toContainEqual(['in',['fact_id',['a0','a1']]]);
   expect(await db.scopeRows('US',[])).toEqual([]);expect(await db.factsByIds([])).toEqual([]);
+ });
+ it('metrics read: a replacement between pages (mixed based_on_rev or a short count) retries the whole read, persistent instability fails as metrics_unstable',async()=>{
+  const row=(i:number,rev:number)=>({issuer_id:'iss',market:'US',metric:`m${String(i).padStart(4,'0')}`,period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:1,value_text:'1',unit:'u',input_unit:'USD',basis:'us_standard',formula_version:'v',inputs:[],based_on_rev:rev,as_of:'2024-01-01'});
+  const page=(from:number,to:number,rev:(from:number)=>number)=>Array.from({length:Math.max(0,Math.min(1005,to+1)-from)},(_,i)=>row(from+i,rev(from)));
+  let reads=0;
+  const flaky=stub(()=>({data:null}),(_t,ops)=>{
+   const [from,to]=ops.find(o=>o[0]==='range')![1] as [number,number];
+   reads++;
+   return page(from,to,f=>reads===2&&f===1000?3:2);                 // 2nd page of the 1st attempt comes from a newer revision
+  },()=>1005);
+  expect((await flaky.db.metricsOfIssuer('iss','US','v')).every(m=>m.based_on_rev===2)).toBe(true);
+  expect(reads).toBe(4);                                              // 2 pages, retried once
+  let n=0;
+  const broken=stub(()=>({data:null}),(_t,ops)=>{
+   const [from,to]=ops.find(o=>o[0]==='range')![1] as [number,number];
+   n++;return page(from,to,()=>2).slice(0,from===0?1000:4);          // 1005 counted, 1004 returned
+  },()=>1005);
+  await expect(broken.db.metricsOfIssuer('iss','US','v')).rejects.toMatchObject({code:'unknown',message:'metrics_unstable'});
+  expect(n).toBe(6);                                                  // 3 attempts x 2 pages
  });
  it('calls the SQL functions with p_ arguments and chunks staging at 500 rows (an empty batch still calls once)',async()=>{
   const {calls,db}=stub((fn,args)=>fn==='stage_facts'?{data:(args.p_rows as unknown[]).length}:fn==='stage_filings'?{data:Object.fromEntries((args.p_rows as {source_ref:string;filing_id:string}[]).map(r=>[r.source_ref,r.filing_id]))}:{data:true});

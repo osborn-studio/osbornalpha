@@ -151,6 +151,27 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect((await item(foreign)).status).toBe('open');
   });
 
+  it('ordering: equal-day disclosures tie-break by created_at then fact_id (rows of one stageFacts call share created_at, so the larger fact_id is current)',async()=>{
+   const {iss,b}=await ready();const run=await db.beginRun(iss,'US',b,1);
+   const fa=filingInsert(iss);const fb=filingInsert(iss);await db.stageFilings(run,[fa,fb]);
+   const [lo,hi]=[randomUUID(),randomUUID()].sort();
+   const opts={concept:'net_income',value:'5'};
+   expect(await db.stageFacts(run,[factInsert(iss,fa,{...opts,fact_id:hi}),factInsert(iss,fb,{...opts,fact_id:lo})])).toBe(2);   // larger id inserted first
+   expect(await db.publishRun(run,[fa.filing_id,fb.filing_id])).toBe(2);
+   expect((await current(iss,['net_income'])).rows.map(y=>[y.fact_id,y.disclosure_seq,y.is_current,y.is_revision])).toEqual([[lo,1,false,false],[hi,2,true,false]]);
+  });
+
+  it('duplicate keys: a filing_id reused with another source_ref and a repeated metric primary key are duplicate_key and leave state unchanged',async()=>{
+   const {iss,b,f,r}=await (async()=>{const x=await published();return {...x};})();
+   const run=await db.beginRun(iss,'US',b,1);
+   expect((await code(db.stageFilings(run,[filingInsert(iss,{filing_id:f.filing_id})]))).startsWith('duplicate_key')).toBe(true);
+   await db.abandonRun(run);
+   const row=(v:string):MetricRow=>({issuer_id:iss,market:'US',metric:'gross_margin',period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:v,unit:'ratio',input_unit:'USD',basis:'us_standard',formula_version:'facts-derive/1.0',inputs:[{fact_id:r,concept:'revenue',filing_id:'f',available_date:'2024-02-01'}],based_on_rev:0,as_of:'2024-03-01'});
+   expect(await db.replaceMetrics(iss,'US',1,[row('0.5')])).toBe(1);
+   expect((await code(db.replaceMetrics(iss,'US',1,[row('0.6'),row('0.7')]))).startsWith('duplicate_key')).toBe(true);
+   expect((await db.metricsOfIssuer(iss,'US','facts-derive/1.0')).map(m=>m.value)).toEqual(['0.5']);
+  });
+
   it('metrics: stale based_on_rev is refused after publish; replacement is per issuer and atomic; metricsOfIssuer filters by formula version',async()=>{
    const {iss,b,r}=await published();
    const row=(v:string,metric='gross_margin'):MetricRow=>({issuer_id:iss,market:'US',metric,period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:v,unit:'ratio',input_unit:'USD',basis:'us_standard',formula_version:'facts-derive/1.0',inputs:[{fact_id:r,concept:'revenue',filing_id:'f',available_date:'2024-02-01'}],based_on_rev:0,as_of:'2024-03-01'});

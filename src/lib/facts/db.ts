@@ -25,6 +25,8 @@ export const READ_FACTS_CAP=10000;
 export const READ_PAGE=1000;
 /** ids per `.in()` filter (URL length). */
 export const IN_CHUNK=200;
+/** attempts of a metrics read before it fails as metrics_unstable. */
+export const METRICS_ATTEMPTS=3;
 const MESSAGE_CODES:readonly FactsDbErrorCode[]=['run_pending','run_published','mapping_gen_regression','stale_computation'];
 
 export interface PgErrorLike{message?:string;code?:string|null;details?:string|null;hint?:string|null}
@@ -89,7 +91,7 @@ export function chunkIds(ids:string[],size=IN_CHUNK):string[][]{
  const out:string[][]=[];for(let i=0;i<ids.length;i+=size)out.push(ids.slice(i,i+size));return out;
 }
 
-interface RpcResult{data:unknown;error:PgErrorLike|null}
+interface RpcResult{data:unknown;error:PgErrorLike|null;count?:number|null}
 // The query builder is left untyped on purpose (same as table-client.ts): the hand-maintained
 // Database type lacks the Relationships/Views that supabase-js inference now needs.
 interface NarrowClient{rpc:(fn:string,args:Record<string,unknown>)=>PromiseLike<RpcResult>;from:(table:string)=>any}
@@ -155,7 +157,23 @@ export function supabaseFactsDb(client:SupabaseClient):FactsDb{
    return out;
   },
   async metricsOfIssuer(issuer,market,formulaVersion){
-   return (await pageAll<Record<string,unknown>>(()=>c.from('financial_metrics').select('*').eq('issuer_id',issuer).eq('market',market).eq('formula_version',formulaVersion).order('metric').order('period_end').order('period_start').order('input_unit').order('basis'))).map(metricFromTable);
+   // Pages may span a concurrent replace_financial_metrics: accept a read only when every row carries
+   // the same based_on_rev and the row count equals the first page's exact count; else retry, then fail.
+   for(let attempt=0;attempt<METRICS_ATTEMPTS;attempt++){
+    const out:Record<string,unknown>[]=[];let total:number|null=null;
+    for(let from=0;;from+=READ_PAGE){
+     const q=c.from('financial_metrics').select('*',from===0?{count:'exact'}:undefined).eq('issuer_id',issuer).eq('market',market).eq('formula_version',formulaVersion).order('metric').order('period_end').order('period_start').order('input_unit').order('basis') as Query;
+     const {data,error,count}=await q.range(from,from+READ_PAGE-1);
+     if(error)throw toFactsDbError(error);
+     if(from===0)total=count??null;
+     const part=(data??[]) as Record<string,unknown>[];
+     out.push(...part);
+     if(part.length<READ_PAGE)break;
+    }
+    const rev=out[0]?.based_on_rev;
+    if(total===out.length&&out.every(r=>Number(r.based_on_rev)===Number(rev)))return out.map(metricFromTable);
+   }
+   throw new FactsDbError('unknown','metrics_unstable');
   },
  };
 }
