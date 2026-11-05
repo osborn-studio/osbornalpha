@@ -76,7 +76,7 @@ describe('GET /api/facts/[ticker]',()=>{
   body=await (await get('AAPL',`factIds=${F1}`)).json();
   expect(body.facts).toEqual([]);
  });
- it('canonicalises tickers (US slash form) and rejects a malformed percent escape and ambiguous owners',async()=>{
+ it('normalises the slash form and rejects a malformed percent escape and ambiguous owners',async()=>{
   await get('BRK/B','concepts=revenue');
   expect(mocks.resolve).toHaveBeenLastCalledWith(expect.anything(),{ticker:'BRK.B'},{today:TODAY});
   const mal=await GET(new Request('https://alpha.example/api/facts/%E0%A4%A?concepts=revenue'),{params:Promise.resolve({ticker:'%E0%A4%A'})});

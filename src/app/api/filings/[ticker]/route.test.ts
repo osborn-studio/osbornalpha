@@ -33,12 +33,19 @@ describe('GET /api/filings/[ticker]',()=>{
   const body=await (await get('600519.SH','limit=2')).json();
   expect(body.filings.map((f:{filingId:string})=>f.filingId)).toEqual(['p1','p2']);
  });
- it('canonicalises CN tickers and answers 400 for malformed percent-encoding, 409 for ambiguous owners',async()=>{
-  for(const t of ['600519','SH600519','600519.SS']){
-   const b=await (await get(t,'')).json();
-   expect(b).toMatchObject({ticker:'600519.SH',market:'CN'});
+ it('resolves the original ticker first (BRK.A is BRK.A, not BRK) and falls back to the CN canonical form',async()=>{
+  const sec=(t:string)=>({ticker:t,isin:null,figi:null,share_class:null,is_primary:true,valid_from:'2000-01-01',valid_to:null});
+  const by:Record<string,string>={'BRK':'11111111-1111-4111-8111-111111111111','BRK.A':'22222222-2222-4222-8222-222222222222','BRK.B':'33333333-3333-4333-8333-333333333333','600519.SH':ISSUER};
+  mocks.resolve.mockImplementation(async(_c:unknown,q:{ticker:string})=>by[q.ticker]?{issuer_id:by[q.ticker],status:'active',names:{zh:null,en:null},identifiers:{cik:null,lei:null,usci:null},securities:[sec(q.ticker)]}:null);
+  for(const [t,id] of [['BRK.A',by['BRK.A']],['BRK.B',by['BRK.B']],['BRK',by['BRK']]]){
+   expect(await (await get(t,'')).json()).toMatchObject({issuerId:id,ticker:t,market:'US'});
   }
-  expect(mocks.resolve.mock.calls.every((c:unknown[])=>(c[1] as {ticker:string}).ticker==='600519.SH')).toBe(true);
+  expect(await (await get('BRK/B','')).json()).toMatchObject({issuerId:by['BRK.B'],ticker:'BRK.B'});
+  for(const t of ['600519','SH600519','600519.SS','600519.SH']){
+   expect(await (await get(t,'')).json()).toMatchObject({issuerId:ISSUER,ticker:'600519.SH',market:'CN'});
+  }
+ });
+ it('answers 400 for a malformed percent escape and 409 for ambiguous owners',async()=>{
   const mal=await GET(new Request('https://alpha.example/api/filings/%E0%A4%A'),{params:Promise.resolve({ticker:'%E0%A4%A'})});
   expect(mal.status).toBe(400);expect((await mal.json()).error.code).toBe('invalid_parameter:ticker');
   mocks.resolve.mockRejectedValue(new Error('ambiguous_owner'));

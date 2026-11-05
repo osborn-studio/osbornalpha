@@ -56,20 +56,30 @@ export const errorResponse=(code:string,message:string,status:number)=>NextRespo
 export const paramErrorResponse=(e:unknown)=>e instanceof QueryError?errorResponse(e.message,`invalid ${e.param}`,400):null;
 
 export interface PublicIssuer{issuerId:string;ticker:string;market:Market}
-/** Canonical ticker + market from the repo's securities parser (600519 / SH600519 / 600519.SS → 600519.SH); null for HK or unparsable input. */
-export function canonicalTicker(raw:string):{ticker:string;market:Market}|null{
- const core=inferCoreMarket(raw);
- if(core!=='A'&&core!=='US')return null;
- const ticker=normalizeSecurityTicker(raw,core);
- return ticker?{ticker,market:core==='A'?'CN':'US'}:null;
+/** CN canonical form (600519 / SH600519 / 600519.SS → 600519.SH) from the repo's securities parser; null for anything that is not an A-share code. */
+export function cnCanonicalTicker(raw:string):string|null{
+ if(inferCoreMarket(raw)!=='A')return null;
+ return normalizeSecurityTicker(raw,'A');
 }
 /** Percent-decoded path segment, or null when malformed. */
 export function decodeTicker(raw:string):string|null{try{return decodeURIComponent(raw);}catch{return null;}}
-/** Ticker → issuer by today's ownership (one merge hop is followed by resolveIssuer). Throws Error('ambiguous_owner') through. */
+/**
+ * Ticker → issuer by today's ownership (one merge hop is followed by resolveIssuer). The ORIGINAL
+ * ticker is resolved first, exactly like /api/entities/resolve (so BRK.A is BRK.A, never BRK); only
+ * when that finds nothing is the CN canonical form tried. Market and echoed ticker come from the
+ * resolved security row, not from string normalisation. Throws Error('ambiguous_owner') through.
+ */
 export async function resolvePublicIssuer(tables:TableClient,rawTicker:string,today:string):Promise<PublicIssuer|null>{
- const c=canonicalTicker(rawTicker);if(!c)return null;
- const r=await resolveIssuer(tables,{ticker:c.ticker},{today});
- return r?{issuerId:r.issuer_id,ticker:c.ticker,market:c.market}:null;
+ const given=rawTicker.trim().toUpperCase().replace(/\//g,'.');
+ const cn=cnCanonicalTicker(given);
+ for(const t of cn&&cn!==given?[given,cn]:[given]){
+  const r=await resolveIssuer(tables,{ticker:t},{today});
+  if(!r)continue;
+  const sec=r.securities.find(x=>x.ticker.toUpperCase()===t);
+  const ticker=sec?sec.ticker:t;
+  return {issuerId:r.issuer_id,ticker,market:marketOfTicker(ticker)};
+ }
+ return null;
 }
 /** Failure → response: ambiguous ownership is the caller's 409, everything else a logged, code-only 500. */
 export function failureResponse(e:unknown,tag:string,internalMessage:string){
