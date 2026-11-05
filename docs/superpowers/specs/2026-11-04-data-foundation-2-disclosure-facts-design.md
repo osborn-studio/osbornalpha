@@ -1,6 +1,6 @@
 # 数据底座二 · F2 披露事实库 设计规格
 
-日期：2026-11-04（第 5 稿。审计轨迹 `docs/audits/2026-11-04-data-foundation-2/`：01 Codex 一轮、02 独立 Claude 复审、03 Codex 二轮、04 二轮处置、05 Codex 三轮、06 三轮处置、07 Codex 四轮、08 四轮处置）
+日期：2026-11-04（第 6 稿。审计轨迹 `docs/audits/2026-11-04-data-foundation-2/`：01 Codex 一轮、02 独立 Claude 复审、03 Codex 二轮、04 二轮处置、05 Codex 三轮、06 三轮处置、07 Codex 四轮、08 四轮处置、09 Codex 五轮、10 五轮处置）
 状态：草案，待 owner 评审（§14 有三项 owner 决策）
 上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（下称"规格一"）§4、§8–§10 的 F2 部分。本规格**取代**规格一 §4；规格一 §14 记录的计划一偏差在此视为既定事实。
 总纲：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5（owner 2026-11-04 确认）。本规格逐条对照其硬约束：只用一手来源（EDGAR、交易所定期报告；Tushare 仅作适配器并记录上游与巨潮公告定位）、每个数字可回放（源文件哈希、行定位、可得日期、变换、代码版本）、事实与判断分离、缺失保持缺失（不做代理指标、不填占位、不做静默换算、不混口径、不混报表版本）。
@@ -122,8 +122,6 @@ batch_id      uuid not null references ingest_batches(batch_id) on delete restri
 mapping_gen   int not null
 status        text not null default 'staged' check (status in ('staged','published','abandoned'))
 manifest      jsonb not null default '[]' check (jsonb_typeof(manifest) = 'array')   -- 本次完整处理过的 filing_id 列表（含零输出的）
-conflict_dispositions jsonb not null default '[]' check (jsonb_typeof(conflict_dispositions) = 'array')
-              -- 发布时要对**已发布**行执行的 ok→quarantined 变更：[{fact_id, quarantine_item_id}]（§5.3）；发布前不改公共数据
 started_at    timestamptz not null default now()
 published_at  timestamptz
 index (issuer_id, market, status)
@@ -246,12 +244,13 @@ fact_sync_scope
 | `begin_sync_run(issuer, market, batch, mapping_gen)` → run_id | 租约校验；对本发行人本市场所有 `status='staged'` 的旧运行执行废弃（同 `abandon_sync_run` 的顺序：**先标 `abandoned`，再删其事实**，再删它创建的、已无事实且 `mapping_gen=0` 的 filings——该删除由函数内设置 `set_config('facts.allow_filing_delete','on',true)` 放行）；插入新运行（`staged`） |
 | `stage_filings(run, rows jsonb)` → jsonb | 租约与运行校验；逐行 `insert … on conflict (source, source_ref) do nothing`，返回 `{source_ref → filing_id}`（含已存在者） |
 | `stage_facts(run, rows jsonb)` → int | 租约与运行校验；`insert` 为 `staged`（`on conflict do nothing`），返回插入数 |
-| `quarantine_facts(run, fact_ids uuid[], dispositions jsonb)` → int | 租约与运行校验；本运行行 `staged→quarantined`；`dispositions`（对已发布 `ok` 行的待执行 `ok→quarantined`，§5.3）追加到 `fact_sync_runs.conflict_dispositions`，**此时不改公共行** |
-| `publish_sync_run(run, manifest uuid[])` → int | 租约与运行校验；一个事务内：本运行 `staged→ok`；执行 `conflict_dispositions`（已发布行 `ok→quarantined`）；manifest 内每个 filing：`filings.mapping_gen > run.mapping_gen` → `raise 'mapping_gen_regression'`，否则置为 `run.mapping_gen`；运行标 `published`、写 `manifest`；`state_rev + 1`；返回发布行数 |
-| `abandon_sync_run(run)` | 租约校验；运行必须是 `staged`（已发布 → `raise 'run_published'`）；**先标 `abandoned`，再删本运行事实**（触发器据运行状态放行）；`conflict_dispositions` 随之作废，已发布行不变 |
+| `quarantine_facts(run, fact_ids uuid[])` → int | 租约与运行校验；本运行行 `staged→quarantined`；**不改公共行** |
+| `publish_sync_run(run, manifest uuid[])` → int | 租约与运行校验；一个事务内：本运行 `staged→ok`；**争议组处置**：对每个 `open` 的 `same_day_conflict` 隔离项（`payload.fact_ids` 中含本运行的行），把该项引用的所有仍为 `ok` 的行（无论来自哪个运行，含曾被废弃运行登记过的）置 `quarantined`（审计 R5-1：处置从争议项推导，不依赖运行上的记录）；manifest 内每个 filing：`filings.mapping_gen > run.mapping_gen` → `raise 'mapping_gen_regression'`，否则置为 `run.mapping_gen`；运行标 `published`、写 `manifest`；`state_rev + 1`；返回发布行数 |
+| `abandon_sync_run(run)` | 租约校验；运行必须是 `staged`（已发布 → `raise 'run_published'`）；**先标 `abandoned`，再删本运行事实**（触发器据运行状态放行）；已发布行不变；争议项保持 `open`（其中指向已删行的 id 在后续发布时忽略） |
 | `release_fact_sync_lease(issuer, market, batch, outcome, next_due)` | `for update`；`lease_batch_id <> batch` → `raise 'lease_lost'`；清租约，写 `last_*`、`next_due_at` |
 | `promote_quarantined(issuer, market, fact_ids uuid[])` → int | 管理员钩子专用；持行锁；只提升同时满足的行：当前 `quarantined`；所属运行 `published`；`filings.mapping_gen = 行.mapping_gen`；该行的 K/日期没有 `open` 的 `same_day_conflict` 项；若该行曾属于某个已处理的 `same_day_conflict` 项，则必须在该项 `detail.chosen_fact_ids` 内；不被其他 `open` 隔离项引用。满足者 `→ok`，`state_rev + 1`；返回提升数（§7.3） |
 | `replace_financial_metrics(issuer, market, based_on_rev, rows jsonb)` → int | 持行锁；`state_rev <> based_on_rev` → `raise 'stale_computation'`；否则删该发行人该市场全部物化行并插入 |
+| `fact_state_rev(issuer, market)` → bigint | `security definer`、`stable`，**授予 anon/authenticated/service_role**；只返回 `state_rev`（不暴露 `fact_sync_scope` 的其他列）；供 `read_facts` 在同一语句（同一快照）内调用（审计 R5-2） |
 
 ### 4.6 读取函数 `read_facts`
 
@@ -263,7 +262,7 @@ returns jsonb   -- 单个信封 {state_rev, rows: [...], truncated: bool, row_co
 language sql stable security invoker …
 ```
 
-**返回一个 `jsonb` 信封而不是行集**（审计 R4-5：PostgREST 的 `max_rows`——本地 `supabase/config.toml` 为 1000——对返回表的函数同样截断，而单个标量值不受影响）。单条语句（一个快照）内：`financial_facts f join filings g on g.filing_id = f.filing_id and f.mapping_gen = g.mapping_gen`，`f.market = p_market`，`f.available_date <= p_as_of`，`period_end between`，`f.status='ok'`（`p_include_non_ok=true` 时含 `staged/quarantined`，RLS 使匿名调用者仍只见 `ok`）；按自然键分区用窗口函数算 `disclosure_seq`（`order by available_date, created_at, fact_id`）、`is_current`、`is_revision`（`value <> lag(value)`）；`p_history=false` 只返回 `is_current` 行；硬上限 10,000 行，超出时 `truncated=true` 且不返回行以外的任何部分结果给内部调用者——**规划与派生在 `truncated=true` 时拒绝继续**（该发行人 `failed`，码 `read_truncated`）；公共路由把 `truncated` 透传。信封带当前 `state_rev`（同一快照内读取）。`security invoker` + `grant execute to anon, authenticated, service_role`。
+**返回一个 `jsonb` 信封而不是行集**（审计 R4-5：PostgREST 的 `max_rows`——本地 `supabase/config.toml` 为 1000——对返回表的函数同样截断，而单个标量值不受影响）。单条语句（一个快照）内：`financial_facts f join filings g on g.filing_id = f.filing_id and f.mapping_gen = g.mapping_gen`，`f.market = p_market`，`f.available_date <= p_as_of`，`period_end between`，`f.status='ok'`（`p_include_non_ok=true` 时含 `staged/quarantined`，RLS 使匿名调用者仍只见 `ok`）；按自然键分区用窗口函数算 `disclosure_seq`（`order by available_date, created_at, fact_id`）、`is_current`、`is_revision`（`value <> lag(value)`）；`p_history=false` 只返回 `is_current` 行；硬上限 10,000 行，超出时 `truncated=true` 且不返回行以外的任何部分结果给内部调用者——**规划与派生在 `truncated=true` 时拒绝继续**（该发行人 `failed`，码 `read_truncated`）；公共路由把 `truncated` 透传。信封的 `state_rev` 通过 `fact_state_rev()`（`security definer`，§4.5）在同一语句内取得，匿名调用者因此不需要读 `fact_sync_scope`。`read_facts` 本身 `security invoker` + `grant execute to anon, authenticated, service_role`。
 
 ### 4.7 权限、桶
 
@@ -281,7 +280,7 @@ export interface FactsDb {
   beginRun(issuer, market, batch, mappingGen): Promise<string>;            // rpc begin_sync_run
   stageFilings(run, rows): Promise<Map<sourceRef, filingId>>;
   stageFacts(run, rows): Promise<number>;                                 // 分块 ≤ 500
-  quarantineFacts(run, factIds, dispositions): Promise<number>;
+  quarantineFacts(run, factIds): Promise<number>;
   publishRun(run, manifest): Promise<number>;
   abandonRun(run): Promise<void>;
   releaseLease(issuer, market, batch, outcome, nextDue): Promise<void>;
@@ -321,7 +320,7 @@ export interface FactsDb {
 - 同一 filing、同一 K、同一标签多个不同 `value` → 不写，隔离 `ambiguous_value`。
 - **同日冲突**（到达顺序无关，审计 R4-2/R4-3）：一个 (K, `available_date`) 若存在 `open` 的 `same_day_conflict` 隔离项，就是**争议中**的。规划时对每个候选 c：
   1. 若 (K, 日期) 争议中 → c 以 `staged` 写入后 `quarantine_facts`，并并入该项的 `fact_ids`（§7.1 的并入规则）；无论 c 的值是否与某一方相同。
-  2. 否则若存在 r（已发布 `ok` 行，或本运行另一候选）同 K、同日、值不同 → c（及本运行的另一候选）`quarantine_facts`；对已发布的 r 登记 **disposition**（`{fact_id: r, quarantine_item_id}`），新建 `same_day_conflict` 项引用 c 与 r。r 的 `ok→quarantined` **只在 `publish_sync_run` 内执行**；本运行若被废弃，r 不受影响。
+  2. 否则若存在 r（已发布 `ok` 行，或本运行另一候选）同 K、同日、值不同 → c（及本运行的另一候选）`quarantine_facts`，新建 `same_day_conflict` 项引用 c 与 r（r 仍 `ok`）。r 的 `ok→quarantined` **只在 `publish_sync_run` 内由争议项推导执行**（§4.5）；本运行若被废弃，r 不受影响，争议项保持 `open`，重试时 c' 走分支 1 并入，发布时仍会处置 r（审计 R5-1）。
   效果：发布后该日对该 K 没有 `ok` 值，当前值回落到更早日期；两份文件谁先到结果相同；后到的第三方也进入同一争议组。解决见 §7.3。
 - 计数：新行值等于写入前当前值或此前无披露 → `inserted`；不同 → `versioned`；隔离 → `quarantined`。
 - 值相等判断用**规范十进制形式**（§6.2）。
@@ -356,7 +355,7 @@ export interface SyncDeps { db: FactsDb; tables: TableClient; storage: SnapshotS
 4. 解析（§6.2/§6.3）→ 候选事实与 filings（含零候选的 filing）。
 5. `readFacts(issuer, market, {concepts: all, asOf: 今天, history: true, includeNonOk: true})`（`truncated` → `read_truncated`，废弃运行）+ `openConflicts` → `planFactWrites`（§5.3，纯函数：输出新行、隔离集、冲突处置、并入项）。
 6. `stageFilings` → `stageFacts`（staged）。
-7. 规则（§7）：组 = 本运行新行所在的 (filing, period, unit)，输入 = 新行 ∪ 该组当前代 `ok` 行；先写/并入 `dq_quarantine` 项（payload 含自然键分量、`fact_ids`、`run_id`），再 `quarantineFacts(run, ids, dispositions)`。
+7. 规则（§7）：组 = 本运行新行所在的 (filing, period, unit)，输入 = 新行 ∪ 该组当前代 `ok` 行；先写/并入 `dq_quarantine` 项（payload 含自然键分量、`fact_ids`、`run_id`），再 `quarantineFacts(run, ids)`。
 8. `publishRun(run, manifest)`；`mapping_gen_regression` → 废弃运行，`failed`。
 9. CN：`linkCn` 对本发行人 `document_ref is null and link_attempts < 5` 的 filing（含历史）；`updateFilingLink`。
 10. `materialize(issuer, market)`（§8）：读 `readFacts` 信封得 `stateRev`，`replaceMetrics(…, stateRev, rows)`；`stale_computation` → 重算一次。
@@ -490,7 +489,7 @@ export interface SyncDeps { db: FactsDb; tables: TableClient; storage: SnapshotS
 
 ### 11.2 数据库（`test:db`，critical）
 
-`src/lib/facts/facts.integration.test.ts`：迁移可重放；唯一约束与两条复合外键；触发器；**每个函数**（租约互斥/过期/续租、`lease_lost` 在并发事务下、`begin_sync_run`/`abandon_sync_run` 先标后删且保留已发布运行的 quarantined 行、`abandon` 拒绝已发布运行、`publish_sync_run` 原子性 + 冲突处置 + `mapping_gen_regression` + `state_rev` 递增、废弃运行不影响已发布行、`promote_quarantined` 的全部资格规则（未发布运行的行不提升；争议中不提升；已裁决只提升 chosen）、`replace_financial_metrics` 的 `stale_computation` 在"发布—提升—物化"交错下、`read_facts` 信封在 1,001 行与 10,001 行下的 `truncated`、`reconcile_fact_sync_scope` 不动租约与调度列）；真实角色权限（anon/authenticated/service_role 都不能直接写事实表与 `filings.mapping_gen`；service_role 只能改三列链接；anon 能执行 `read_facts` 且只见 `ok`；anon 不能执行写函数）；`value_text` 与 20 位整数一致。
+`src/lib/facts/facts.integration.test.ts`：迁移可重放；唯一约束与两条复合外键；触发器；**每个函数**（租约互斥/过期/续租、`lease_lost` 在并发事务下、`begin_sync_run`/`abandon_sync_run` 先标后删且保留已发布运行的 quarantined 行、`abandon` 拒绝已发布运行、`publish_sync_run` 原子性 + 争议组处置（含"登记—废弃—重试—发布"序列后原 `ok` 行被处置）+ `mapping_gen_regression` + `state_rev` 递增、废弃运行不影响已发布行、`fact_state_rev` 对 anon 可用而 `fact_sync_scope` 不可读、争议项在运行未发布时拒绝处理、`promote_quarantined` 的全部资格规则（未发布运行的行不提升；争议中不提升；已裁决只提升 chosen）、`replace_financial_metrics` 的 `stale_computation` 在"发布—提升—物化"交错下、`read_facts` 信封在 1,001 行与 10,001 行下的 `truncated`、`reconcile_fact_sync_scope` 不动租约与调度列）；真实角色权限（anon/authenticated/service_role 都不能直接写事实表与 `filings.mapping_gen`；service_role 只能改三列链接；anon 能执行 `read_facts` 且只见 `ok`；anon 不能执行写函数）；`value_text` 与 20 位整数一致。
 
 ### 11.3 离线集成（critical）
 
@@ -534,7 +533,7 @@ export interface SyncDeps { db: FactsDb; tables: TableClient; storage: SnapshotS
 
 ## 13. 独立验证
 
-Codex 四轮（01/03/05/07）与处置（04/06/08）；独立 Claude 复审（02）；黄金断言由实施者之外的人抄录；SEC dry-run 3 家；Tushare 核对（token 环境）；会计口径复核（§3 七处分列）。
+Codex 五轮（01/03/05/07/09）与处置（04/06/08/10）；独立 Claude 复审（02）；黄金断言由实施者之外的人抄录；SEC dry-run 3 家；Tushare 核对（token 环境）；会计口径复核（§3 七处分列）。
 
 ---
 
