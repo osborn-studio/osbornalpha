@@ -1,6 +1,6 @@
 # 数据底座二 · F2 披露事实库 设计规格
 
-日期：2026-11-04（第 6 稿。审计轨迹 `docs/audits/2026-11-04-data-foundation-2/`：01 Codex 一轮、02 独立 Claude 复审、03 Codex 二轮、04 二轮处置、05 Codex 三轮、06 三轮处置、07 Codex 四轮、08 四轮处置、09 Codex 五轮、10 五轮处置）
+日期：2026-11-04（第 7 稿。审计轨迹 `docs/audits/2026-11-04-data-foundation-2/`：01 Codex 一轮、02 独立 Claude 复审、03 Codex 二轮、04 二轮处置、05 Codex 三轮、06 三轮处置、07 Codex 四轮、08 四轮处置、09 Codex 五轮、10 五轮处置、11 Codex 六轮、12 六轮处置）
 状态：草案，待 owner 评审（§14 有三项 owner 决策）
 上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（下称"规格一"）§4、§8–§10 的 F2 部分。本规格**取代**规格一 §4；规格一 §14 记录的计划一偏差在此视为既定事实。
 总纲：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5（owner 2026-11-04 确认）。本规格逐条对照其硬约束：只用一手来源（EDGAR、交易所定期报告；Tushare 仅作适配器并记录上游与巨潮公告定位）、每个数字可回放（源文件哈希、行定位、可得日期、变换、代码版本）、事实与判断分离、缺失保持缺失（不做代理指标、不填占位、不做静默换算、不混口径、不混报表版本）。
@@ -250,6 +250,7 @@ fact_sync_scope
 | `release_fact_sync_lease(issuer, market, batch, outcome, next_due)` | `for update`；`lease_batch_id <> batch` → `raise 'lease_lost'`；清租约，写 `last_*`、`next_due_at` |
 | `promote_quarantined(issuer, market, fact_ids uuid[])` → int | 管理员钩子专用；持行锁；只提升同时满足的行：当前 `quarantined`；所属运行 `published`；`filings.mapping_gen = 行.mapping_gen`；该行的 K/日期没有 `open` 的 `same_day_conflict` 项；若该行曾属于某个已处理的 `same_day_conflict` 项，则必须在该项 `detail.chosen_fact_ids` 内；不被其他 `open` 隔离项引用。满足者 `→ok`，`state_rev + 1`；返回提升数（§7.3） |
 | `replace_financial_metrics(issuer, market, based_on_rev, rows jsonb)` → int | 持行锁；`state_rev <> based_on_rev` → `raise 'stale_computation'`；否则删该发行人该市场全部物化行并插入 |
+| `resolve_facts_quarantine(item_id, chosen uuid[])` → jsonb | 管理员钩子专用（审计 R6-1）；持行锁；读取该项 `payload.fact_ids` 对应的**全部**现存行：任一行所属运行仍为 `staged` → `raise 'run_pending'`；把 `chosen`（`same_day_conflict` 时为裁决，其他类型为 `payload.fact_ids`）持久化到 `detail.chosen_fact_ids`；再按 `promote_quarantined` 的资格规则提升；`state_rev + 1`；返回 `{promoted, skipped}`。裁决、成员检查与提升在同一把锁内，与发布串行 |
 | `fact_state_rev(issuer, market)` → bigint | `security definer`、`stable`，**授予 anon/authenticated/service_role**；只返回 `state_rev`（不暴露 `fact_sync_scope` 的其他列）；供 `read_facts` 在同一语句（同一快照）内调用（审计 R5-2） |
 
 ### 4.6 读取函数 `read_facts`
@@ -284,7 +285,7 @@ export interface FactsDb {
   publishRun(run, manifest): Promise<number>;
   abandonRun(run): Promise<void>;
   releaseLease(issuer, market, batch, outcome, nextDue): Promise<void>;
-  promoteQuarantined(issuer, market, factIds): Promise<number>;
+  resolveFactsQuarantine(itemId, chosen): Promise<{promoted, skipped}>;   // rpc resolve_facts_quarantine（抛 RunPending）
   replaceMetrics(issuer, market, basedOnRev, rows): Promise<number>;      // 抛 StaleComputation
   readFacts(issuer, market, opts: {concepts, asOf, from?, to?, history?, limit?, includeNonOk?}): Promise<{stateRev, rows, truncated}>;   // rpc read_facts（信封）
   factsByIds(ids): Promise<FactRow[]>;                                    // 证据查询，不限 generation（按 RLS）
@@ -411,12 +412,12 @@ export interface SyncDeps { db: FactsDb; tables: TableClient; storage: SnapshotS
 
 `src/lib/dq/facts-resolver.ts`（只做 facts）：
 - `resolved_accept`：
-  - `same_day_conflict`：POST 体可带 `chosen_fact_ids`（必须是 payload 内的子集，且所选行的值全部相同）；路由先把 `chosen_fact_ids` 持久化到 `detail.chosen_fact_ids`（持久的争议裁决，`promote_quarantined` 对该组所有成员永久遵守，审计 R4-4），再 `promoteQuarantined(issuer, market, chosen)`；无 `chosen_fact_ids` 则仅确认知晓（`detail.chosen_fact_ids=[]`，组内任何行此后都不能被其他项提升）。
-  - `identity_*`：`promoteQuarantined(issuer, market, payload.fact_ids)`（函数按 §4.5 的资格规则过滤：运行已发布、代已激活、无争议、不违反已裁决、不被其他 open 项引用、仍存在）。
-  - 无事实行的三种：确认知晓。
+  - `same_day_conflict`：POST 体可带 `chosen_fact_ids`（必须是 payload 内的子集，且所选行的值全部相同）；`resolve_facts_quarantine(item, chosen ?? [])` 在一把锁内持久化裁决（`detail.chosen_fact_ids`，`promote_quarantined` 对该组所有成员永久遵守，审计 R4-4）并提升；无 `chosen_fact_ids` 则仅确认知晓（`[]`，组内任何行此后都不能被其他项提升）。
+  - `identity_*`：`resolve_facts_quarantine(item, payload.fact_ids)`（资格规则：运行已发布、代已激活、无争议、不违反已裁决、不被其他 open 项引用、仍存在）。
+  - 无事实行的三种：确认知晓（函数只做 `run_pending` 检查与记录）。
   - 随后 `materialize(issuer, market)`。
 - `resolved_reject`：不动。
-- `POST /api/admin/dq/quarantine/[id]` 对 `facts.*` 项先检查 `payload.run_id` 对应的运行：仍为 `staged` 则拒绝处理（409 `run_pending`，审计 R5-3：争议在贡献它的运行发布前不能裁决；运行被废弃后项内指向已删行的 id 在处理时忽略）。
+- `POST /api/admin/dq/quarantine/[id]` 对 `facts.*` 项的接受走 `resolve_facts_quarantine(item, chosen)`（§4.5）：该函数在行锁内检查项内**全部**现存行所属的运行（不只是创建项的运行），任一仍 `staged` → 函数抛 `run_pending`，路由返回 409 且**不翻转**项状态（审计 R5-3、R6-1：争议在所有贡献运行发布前不能裁决）；运行被废弃后项内指向已删行的 id 忽略。状态翻转在函数成功后进行。
 - 钩子阶段写入 `dq_quarantine.detail.hook = {stage: 'promote'|'materialize'|'done', state: 'done'|'failed', at, message?}`；对 `resolved_accept` 项再次 POST：`stage != done` 时从失败阶段继续（幂等），返回 `{resolved:'already_resolved', hook}`；审计日志记录。
 
 ---
@@ -490,7 +491,7 @@ export interface SyncDeps { db: FactsDb; tables: TableClient; storage: SnapshotS
 
 ### 11.2 数据库（`test:db`，critical）
 
-`src/lib/facts/facts.integration.test.ts`：迁移可重放；唯一约束与两条复合外键；触发器；**每个函数**（租约互斥/过期/续租、`lease_lost` 在并发事务下、`begin_sync_run`/`abandon_sync_run` 先标后删且保留已发布运行的 quarantined 行、`abandon` 拒绝已发布运行、`publish_sync_run` 原子性 + 争议组处置（含"登记—废弃—重试—发布"序列后原 `ok` 行被处置）+ `mapping_gen_regression` + `state_rev` 递增、废弃运行不影响已发布行、`fact_state_rev` 对 anon 可用而 `fact_sync_scope` 不可读、争议项在运行未发布时拒绝处理、`promote_quarantined` 的全部资格规则（未发布运行的行不提升；争议中不提升；已裁决只提升 chosen）、`replace_financial_metrics` 的 `stale_computation` 在"发布—提升—物化"交错下、`read_facts` 信封在 1,001 行与 10,001 行下的 `truncated`、`reconcile_fact_sync_scope` 不动租约与调度列）；真实角色权限（anon/authenticated/service_role 都不能直接写事实表与 `filings.mapping_gen`；service_role 只能改三列链接；anon 能执行 `read_facts` 且只见 `ok`；anon 不能执行写函数）；`value_text` 与 20 位整数一致。
+`src/lib/facts/facts.integration.test.ts`：迁移可重放；唯一约束与两条复合外键；触发器；**每个函数**（租约互斥/过期/续租、`lease_lost` 在并发事务下、`begin_sync_run`/`abandon_sync_run` 先标后删且保留已发布运行的 quarantined 行、`abandon` 拒绝已发布运行、`publish_sync_run` 原子性 + 争议组处置（含"登记—废弃—重试—发布"序列后原 `ok` 行被处置）+ `mapping_gen_regression` + `state_rev` 递增、废弃运行不影响已发布行、`fact_state_rev` 对 anon 可用而 `fact_sync_scope` 不可读、`resolve_facts_quarantine` 在任一成员行的运行仍 staged 时抛 `run_pending`（含"登记—废弃—重试并入—发布前裁决"序列被拒）、`promote_quarantined` 的全部资格规则（未发布运行的行不提升；争议中不提升；已裁决只提升 chosen）、`replace_financial_metrics` 的 `stale_computation` 在"发布—提升—物化"交错下、`read_facts` 信封在 1,001 行与 10,001 行下的 `truncated`、`reconcile_fact_sync_scope` 不动租约与调度列）；真实角色权限（anon/authenticated/service_role 都不能直接写事实表与 `filings.mapping_gen`；service_role 只能改三列链接；anon 能执行 `read_facts` 且只见 `ok`；anon 不能执行写函数）；`value_text` 与 20 位整数一致。
 
 ### 11.3 离线集成（critical）
 
@@ -534,7 +535,7 @@ export interface SyncDeps { db: FactsDb; tables: TableClient; storage: SnapshotS
 
 ## 13. 独立验证
 
-Codex 五轮（01/03/05/07/09）与处置（04/06/08/10）；独立 Claude 复审（02）；黄金断言由实施者之外的人抄录；SEC dry-run 3 家；Tushare 核对（token 环境）；会计口径复核（§3 七处分列）。
+Codex 六轮（01/03/05/07/09/11）与处置（04/06/08/10/12）；独立 Claude 复审（02）；黄金断言由实施者之外的人抄录；SEC dry-run 3 家；Tushare 核对（token 环境）；会计口径复核（§3 七处分列）。
 
 ---
 
