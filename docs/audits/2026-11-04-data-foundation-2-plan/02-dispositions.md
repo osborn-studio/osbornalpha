@@ -1,7 +1,10 @@
-# 计划二实施计划 — Codex round-1 审计处置
+# 计划二实施计划 — Codex 审计处置（round 1、round 2）
 
-审计：`01-codex-plan-audit-round1.md`（2026-11-04，24 条：9 P1 + 15 P2）。
-对象：`docs/superpowers/plans/2026-11-04-data-foundation-2-disclosure-facts.md`（draft 1 → draft 2）。
+对象：`docs/superpowers/plans/2026-11-04-data-foundation-2-disclosure-facts.md`。
+
+## Round 1
+
+审计：`01-codex-plan-audit-round1.md`（2026-11-04，24 条：9 P1 + 15 P2）。draft 1 → draft 2。
 处置：24 条全部 ACCEPT；每条的实现代码与断言它的测试都已改在计划正文里（代码保持完整内联）。无 DECLINE。
 
 | # | 决定 | 落实位置 |
@@ -47,3 +50,18 @@
 - `sync.ts` 删除不再使用的 `FAR_FUTURE`；`SyncDeps` 新增可选 `coverageCn`；`IssuerOutcome` 新增 code `scope_unresolved`（`fetchKey:''`）。
 - `cninfo-link.ts` 新增导出 `KIND_VETO`；`scope.ts` 新增导出 `currentSecurities`、`scopeRowFor`、`ScopeInputRow`；`db.ts` 新增导出 `READ_PAGE`、`IN_CHUNK`、`chunkIds`；迁移新增内部函数 `fact_item_members`。
 - 计划各处用例计数与 Expected 行已按新增用例更新（facts.integration 16；pg 契约 9；db.test 18；read 7；sync 26；cninfo-link 7+1；sync-us 8；sync-cn 6；scope 6；deps 7）。
+
+## Round 2
+
+审计：`03-codex-plan-audit-round2.md`（2026-11-04：20 条 RESOLVED、4 条 PARTIAL、新增 N1 P1 / N2 P2）。draft 2 → draft 3。
+处置：六项残余全部 ACCEPT。无 DECLINE。
+
+| # | 决定 | 落实位置 |
+|---|---|---|
+| 5（PARTIAL） | ACCEPT | Task 10 Step 1：`fetch` mock 的初始化式不再读取 `fetch.mock.calls`（自引用 → TS7022/TS7024），改用独立的 `attempts` 计数器决定 429/503/200；mock 仍显式类型 `vi.fn<FetchFn>` |
+| 13（PARTIAL） | ACCEPT | Task 8 Step 6 `selectScopes`：去掉 `.slice(0,opts.limit)`——`limit` 只约束调度路径，每个显式请求的发行人都得到 outcome（处理全部，不报错截断）；`SyncOptions` 注释、实现要点、runbook 8.8 写明；Task 8 Step 2 的 #13 用例追加 `limit:1` + 两个发行人 → 两个 outcome 的断言 |
+| 19（PARTIAL）/ N2 | ACCEPT | Task 11 Step 2 黄金用例：第 2 步改为 `expect(gold.ready).toBe(true)`（`ready:false` 时有录入条目也不通过，失败信息指向 runbook 8.11-6）；第 3 步矩阵改为按发行人 → 期间 → 科目集合统计，要求 ≥ 6 家且每家至少 2 个期间各自 ≥ 6 科目；被断言的美股发行人必须在 `CIK` 表且 `issuers[ticker]` 已创建；`FIX` 由 `CIK` 派生，两次回放运行改为 `run(Object.values(issuers))`，使新增黄金发行人自动被采集；Task 13 Step 7 CN 黄金用例在 `ready` 下对每个 CN 发行人做同样的逐期间矩阵；Task 11 Step 1 文件说明、Task 11 Step 5 / Task 18 Step 5 Expected、runbook 8.11-6 同步 |
+| 21（PARTIAL） | ACCEPT | Task 8 Step 6 `linkFilings`：请求前预算已取消或不足 30 s → break（不计）；请求一旦开始，抛错或被预算中途切断都 `failed++` 并持久化 `link_attempts+1`，切断后 break；Task 8 Step 2 用例改为三段：抛错计次封顶 5、中途切断计 1 次并出 `link_failed`、请求前预算不足（推进时钟使剩余 20 s）不调用 `linkCn` 且 `link_attempts` 为 0；实现要点更新 |
+| N1 | ACCEPT | Task 8 Step 2：`coverageCn` 夹具提成 `const coverage:CoverageEntry[]=[…]`（两种 `years` 形状不再被推断成可选键），`sync.test.ts` 增加 `import type {CoverageEntry,SyncDeps} from './sync'` |
+
+未执行项不变：计划只做静态改写；PostgreSQL 17、完整 Vitest、录制夹具与黄金值由各任务的 Run/Expected 在实施时验证。

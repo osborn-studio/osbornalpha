@@ -4339,7 +4339,7 @@ import {memoryTableClient} from '../db/memory-table-client';
 import {memoryFactsDb} from './memory-facts-db';
 import {memorySnapshotStore} from './snapshot-store';
 import {runFactsSync,makeBudget,resolveCodeVersion,LEASE_TTL_S,MAX_LINK_ATTEMPTS} from './sync';
-import type {SyncDeps} from './sync';
+import type {CoverageEntry,SyncDeps} from './sync';
 import {SyncError} from './errors';
 import {FactsDbError} from './types';
 import type {Duration,FactCandidate,FactsDb,FilingCandidate,Market,ParseResult,RawSnapshot} from './types';
@@ -4595,7 +4595,8 @@ describe('runFactsSync — round-1 audit cases',()=>{
  });
  it('parser skip counters become one skipped_summary(parser) and CN coverage one compact coverage_summary per issuer (#12)',async()=>{
   const cn=parsed([cnFiling()],[cnRevenue()],{skipped:[{reason:'is_calc',n:1},{reason:'null:bonds_payable',n:3}]});
-  const {deps}=harness(cn,{coverageCn:()=>[{api:'income',report_type:1,years:{'2023':1}},{api:'cashflow',report_type:1,years:{'2022':4,'2023':4}}]},CN_SCOPE);
+  const coverage:CoverageEntry[]=[{api:'income',report_type:1,years:{'2023':1}},{api:'cashflow',report_type:1,years:{'2022':4,'2023':4}}];   // annotated: inference would widen the two `years` shapes to optional keys (TS2322, round-2 N1)
+  const {deps}=harness(cn,{coverageCn:()=>coverage},CN_SCOPE);
   const r=await run(deps,{market:'CN'});
   expect(r.status).toBe('success');
   expect(r.errors).toEqual([
@@ -4618,8 +4619,10 @@ describe('runFactsSync — round-1 audit cases',()=>{
   expect(mocks.reconcileScope).not.toHaveBeenCalled();                                   // explicit issuers never reconcile the whole market
   expect(mocks.scopeRowFor).toHaveBeenCalledWith(tables,'US',ISSUER2,{today:'2027-03-01'});
   expect((await current(db)).rows).toHaveLength(2);
+  const both=await run(deps,{dryRun:true,issuerIds:[ISSUER,ISSUER2],limit:1});            // limit never drops a requested issuer (round-2 #13)
+  expect(both.issuers.map(i=>i.issuerId)).toEqual([ISSUER,ISSUER2]);
  });
- it('a thrown cninfo request still counts as a persisted link attempt, capped at MAX_LINK_ATTEMPTS; a budget cancelled before the request counts nothing (#21)',async()=>{
+ it('a thrown cninfo request still counts as a persisted link attempt, capped at MAX_LINK_ATTEMPTS; a request cut by the budget counts too; a budget too low BEFORE the request counts nothing (#21)',async()=>{
   const linkCn=vi.fn(async()=>{throw new Error('cninfo 500');});
   const {db,deps}=harness(parsed([cnFiling()],[cnRevenue()]),{linkCn},CN_SCOPE);
   const r=await run(deps,{market:'CN'});
@@ -4628,12 +4631,20 @@ describe('runFactsSync — round-1 audit cases',()=>{
   for(let i=0;i<6;i++)await run(deps,{market:'CN',issuerIds:[ISSUER]});
   expect((await db.filingsOfIssuer(ISSUER,'CN',{}))[0].link_attempts).toBe(MAX_LINK_ATTEMPTS);
   expect(linkCn).toHaveBeenCalledTimes(MAX_LINK_ATTEMPTS);
-  const cancelled=vi.fn(async(_f:unknown,b:{signal:AbortSignal})=>{const c=new AbortController();c.abort();Object.defineProperty(b,'signal',{value:c.signal});throw new Error('aborted');});
-  const second=harness(parsed([cnFiling()],[cnRevenue()]),{linkCn:cancelled as unknown as SyncDeps['linkCn']},CN_SCOPE);
+  // started, then cut by the budget mid-request: still one persisted attempt (round-2 #21)
+  const cut=vi.fn(async(_f:unknown,b:{signal:AbortSignal})=>{const c=new AbortController();c.abort();Object.defineProperty(b,'signal',{value:c.signal});throw new Error('aborted');});
+  const second=harness(parsed([cnFiling()],[cnRevenue()]),{linkCn:cut as unknown as SyncDeps['linkCn']},CN_SCOPE);
   const r2=await run(second.deps,{market:'CN'});
   expect(r2.issuers[0].outcome).toBe('published');
-  expect(r2.issuers[0].errors.some(e=>e.key===`${ISSUER}:cninfo_link`)).toBe(false);
-  expect((await second.db.filingsOfIssuer(ISSUER,'CN',{}))[0].link_attempts).toBe(0);
+  expect(r2.issuers[0].errors).toContainEqual({code:'skipped_summary',key:`${ISSUER}:cninfo_link`,message:'{"link_failed":1}'});
+  expect((await second.db.filingsOfIssuer(ISSUER,'CN',{}))[0].link_attempts).toBe(1);
+  // budget already below MIN_ISSUER_MS/3 when linking starts (the clock advances during the fetch): no request, nothing persisted
+  let t=NOW.getTime();const never=vi.fn();
+  const third=harness(parsed([cnFiling()],[cnRevenue()]),{linkCn:never,now:()=>new Date(t),deadline:new Date(NOW.getTime()+100_000),fetchCn:async()=>{t+=80_000;return [snap('{"code":0}')];}},CN_SCOPE);
+  const r3=await run(third.deps,{market:'CN'});
+  expect(r3.issuers[0].outcome).toBe('published');
+  expect(never).not.toHaveBeenCalled();
+  expect((await third.db.filingsOfIssuer(ISSUER,'CN',{}))[0].link_attempts).toBe(0);
  });
 });
 
@@ -4810,7 +4821,8 @@ export interface SyncDeps{
  * next_due_at ignored. Their scope rows are read by id; a missing row is computed from the issuer
  * tables (scopeRowFor): seeded through reconcileScope with reasons ['explicit'] when applying,
  * constructed read-only for a dry run. An issuer whose fetch_key cannot be derived is reported as
- * outcome 'failed' / code 'scope_unresolved' — never silently skipped (round-1 #13).
+ * outcome 'failed' / code 'scope_unresolved' — never silently skipped (round-1 #13). `limit` applies
+ * to the scheduled path only: every explicitly requested issuer is processed (round-2 #13).
  */
 export interface SyncOptions{market:Market;limit:number;issuerIds?:string[];dryRun:boolean;triggeredBy:TriggeredBy;sinceYear?:number;mappingGen?:number}
 /** 'planned' is the dry-run outcome of an issuer that fetched, parsed and planned without writing. */
@@ -4986,18 +4998,20 @@ async function linkFilings(deps:SyncDeps,issuer:string,market:Market,budget:Budg
  const pending=(await deps.db.filingsOfIssuer(issuer,market,{unlinkedOnly:true})).filter(f=>f.link_attempts<MAX_LINK_ATTEMPTS&&f.origin!=='bse'&&LINKABLE_FORMS.has(f.form_type));
  let failed=0;
  for(const f of pending){
-  // Cancellation before a request starts is not an attempt: link_attempts stays untouched (round-1 #21).
+  // Cancellation BEFORE a request starts is not an attempt: link_attempts stays untouched (round-1 #21).
   if(budget.signal.aborted||budget.remainingMs()<MIN_ISSUER_MS/3)break;
   let patch:{document_ref?:string;document_url?:string;link_attempts:number}={link_attempts:f.link_attempts+1};
+  let cut=false;
   try{
    const r=await deps.linkCn!(f,budget);
    if(typeof r!=='string')patch={...r,link_attempts:f.link_attempts+1};
   }catch(e){
    if(dbCode(e)==='lease_lost')throw e;
-   if(budget.signal.aborted)break;                       // cut by the budget mid-request: not a refusal
-   failed++;                                             // transport/HTTP failure: the attempt counts towards the five-attempt cap (§6.3)
+   failed++;                                             // transport/HTTP failure OR a request cut by the budget: a started request is an attempt (§6.3; round-2 #21)
+   cut=budget.signal.aborted;
   }
-  await deps.db.updateFilingLink(f.filing_id,patch);     // none / ambiguous / success / thrown — every started request is persisted
+  await deps.db.updateFilingLink(f.filing_id,patch);     // none / ambiguous / success / thrown / cut — every STARTED request is persisted
+  if(cut)break;                                          // no budget left for the next request
  }
  if(failed>0)out.errors.push({code:'skipped_summary',key:`${issuer}:cninfo_link`,message:JSON.stringify({link_failed:failed})});
 }
@@ -5013,7 +5027,9 @@ const unresolvedOutcome=(issuerId:string):IssuerOutcome=>({issuerId,fetchKey:'',
  */
 async function selectScopes(deps:SyncDeps,opts:SyncOptions):Promise<Selected[]>{
  if(opts.issuerIds===undefined)return (await deps.db.scopeDue(opts.market,deps.now().toISOString(),opts.limit)).map(scope=>({scope}));
- const ids=[...new Set(opts.issuerIds)].slice(0,opts.limit);
+ // Every explicitly requested issuer gets an outcome: `limit` bounds the scheduled path only and is
+ // never used to silently drop requested ids (round-2 #13).
+ const ids=[...new Set(opts.issuerIds)];
  const have=new Map((await deps.db.scopeRows(opts.market,ids)).map(s=>[s.issuer_id,s]));
  const today=isoDate(deps.now());const seed:ScopeInputRow[]=[];
  for(const id of ids){
@@ -5098,7 +5114,7 @@ export async function runFactsSync(deps:SyncDeps,opts:SyncOptions):Promise<SyncR
 }
 ```
 
-实现要点对照 §6.1 步骤：0 未指定 `issuerIds` 时先 `reconcileScope({db,tables},market)` 再 `scopeDue`；指定时 `selectScopes` 用 `db.scopeRows` 按 id 直取（不对账、不看 `next_due_at`），缺行者 `scopeRowFor` 算出 → apply 时 `reconcileScope` 补建（`reasons:['explicit']`）、dry-run 时构造只读行，算不出的以 `scope_unresolved` 失败计入回执（round-1 #13）；1 `claimLease(…,600)`（失败 → `skipped_summary(leased)`）；2 `beginRun`；3 抓取 + `storage.put`（快照 sha256 记入 `IssuerOutcome.snapshotSha256`）；4 解析（异常 → `parse_error`，只带消息前 200 字；适配器抛的 `ProviderError` 是 `SyncError` 的别名，其 `code` 直接成为批次错误码）；**解析器遗留三类先落隔离**（`ambiguous_value` / `odd_duration` / `missing_available_date`，不依赖 filing 行；round-1 #9），`parsed.skipped` → `skipped_summary(<issuer>:parser)`，CN 且注入 `coverageCn` → `coverage_summary`（紧凑串，round-1 #12），然后才判"无文件无候选 → 发布空运行 + `no_rows`"；解析器的 `ambiguous[].key` 只是适配器内部分组串，落库时用 `ambiguousKey(issuer,market,K,filingRef,gen)` 渲染 §7.1 自然键并把原串存为 `payload.parser_key`；5 先 `stageFilings`（on-conflict 返回既有 id，使 FactInsert 在规划前就有 `filing_id` 与权威 `available_date`），再 `readFacts(all, 今天, history, includeNonOk)`（`truncated` → `read_truncated` 废弃）+ `openConflicts` → `planFactWrites`；6 `stageFacts`；7 `ambiguous_value`；`same_day_conflict` → `quarantine()` 后 `quarantineFacts(run, newIds, item)`；争议并入 → `quarantineFacts(run, ids, item)`；规则 → `quarantine()` + `quarantineFacts`；8 `publishRun(run, manifest=全部 filing)`（`mapping_gen_regression` → 废弃、failed）；**发布成功后置 `publishedRun=true`：之后任何失败都不再 `abandonRun`**（它只会抛 `run_published` 盖掉原错误），发行人 outcome 保持 `published`，原错误按自身码记入 `errors`，租约以 `failed` 释放（round-1 #11）；9 CN `linkCn` 对 `document_ref is null and link_attempts < 5` 且非 BJ、`form_type ∈ LINKABLE_FORMS` 的 filing，`updateFilingLink`——none / ambiguous / 成功 / **请求抛错**都持久化 `link_attempts+1`，只有预算在请求开始前已取消（`budget.signal.aborted`）才不计（round-1 #21）；10 `materialize`（`stale_computation`/`read_truncated` 记错不撤发布；重算一次在 Task 15 的 `materialize` 内完成）；11 `releaseLease(outcome, now+7d | now+1d)`。`lease_lost` 在任何位置 → 不再调用 `abandonRun/releaseLease`；发布前 → 该发行人 failed，发布后 → 保持 published 并记 `lease_lost`。预算中止（`AbortError` 或 `budget.signal.aborted`）→ 发布前：废弃运行、失败释放、`deadline_hit`（信息码，不计 `failed`）；发布后：不废弃、失败释放、记 `deadline_hit`。`fetched` = 候选数；发行人级失败 `failed += max(1, fetched)`，使"fetched>0 无结果"不会被误判为 `unaccounted`。
+实现要点对照 §6.1 步骤：0 未指定 `issuerIds` 时先 `reconcileScope({db,tables},market)` 再 `scopeDue`；指定时 `selectScopes` 用 `db.scopeRows` 按 id 直取（不对账、不看 `next_due_at`、不受 `limit` 约束——每个显式发行人都有一个 outcome，round-2 #13），缺行者 `scopeRowFor` 算出 → apply 时 `reconcileScope` 补建（`reasons:['explicit']`）、dry-run 时构造只读行，算不出的以 `scope_unresolved` 失败计入回执（round-1 #13）；1 `claimLease(…,600)`（失败 → `skipped_summary(leased)`）；2 `beginRun`；3 抓取 + `storage.put`（快照 sha256 记入 `IssuerOutcome.snapshotSha256`）；4 解析（异常 → `parse_error`，只带消息前 200 字；适配器抛的 `ProviderError` 是 `SyncError` 的别名，其 `code` 直接成为批次错误码）；**解析器遗留三类先落隔离**（`ambiguous_value` / `odd_duration` / `missing_available_date`，不依赖 filing 行；round-1 #9），`parsed.skipped` → `skipped_summary(<issuer>:parser)`，CN 且注入 `coverageCn` → `coverage_summary`（紧凑串，round-1 #12），然后才判"无文件无候选 → 发布空运行 + `no_rows`"；解析器的 `ambiguous[].key` 只是适配器内部分组串，落库时用 `ambiguousKey(issuer,market,K,filingRef,gen)` 渲染 §7.1 自然键并把原串存为 `payload.parser_key`；5 先 `stageFilings`（on-conflict 返回既有 id，使 FactInsert 在规划前就有 `filing_id` 与权威 `available_date`），再 `readFacts(all, 今天, history, includeNonOk)`（`truncated` → `read_truncated` 废弃）+ `openConflicts` → `planFactWrites`；6 `stageFacts`；7 `ambiguous_value`；`same_day_conflict` → `quarantine()` 后 `quarantineFacts(run, newIds, item)`；争议并入 → `quarantineFacts(run, ids, item)`；规则 → `quarantine()` + `quarantineFacts`；8 `publishRun(run, manifest=全部 filing)`（`mapping_gen_regression` → 废弃、failed）；**发布成功后置 `publishedRun=true`：之后任何失败都不再 `abandonRun`**（它只会抛 `run_published` 盖掉原错误），发行人 outcome 保持 `published`，原错误按自身码记入 `errors`，租约以 `failed` 释放（round-1 #11）；9 CN `linkCn` 对 `document_ref is null and link_attempts < 5` 且非 BJ、`form_type ∈ LINKABLE_FORMS` 的 filing，`updateFilingLink`——none / ambiguous / 成功 / **请求抛错** / **请求中途被预算切断**都持久化 `link_attempts+1`（已开始的请求就是一次尝试），只有在请求开始前预算已取消或不足 30 s 才不计、直接停止（round-1 #21、round-2 #21）；10 `materialize`（`stale_computation`/`read_truncated` 记错不撤发布；重算一次在 Task 15 的 `materialize` 内完成）；11 `releaseLease(outcome, now+7d | now+1d)`。`lease_lost` 在任何位置 → 不再调用 `abandonRun/releaseLease`；发布前 → 该发行人 failed，发布后 → 保持 published 并记 `lease_lost`。预算中止（`AbortError` 或 `budget.signal.aborted`）→ 发布前：废弃运行、失败释放、`deadline_hit`（信息码，不计 `failed`）；发布后：不废弃、失败释放、记 `deadline_hit`。`fetched` = 候选数；发行人级失败 `failed += max(1, fetched)`，使"fetched>0 无结果"不会被误判为 `unaccounted`。
 
 - [ ] **Step 7: 运行通过**
 
@@ -5697,7 +5713,8 @@ describe('fetchCompanyFacts',()=>{
  it('backs off 1/2/4/8 s on 429/503 and keeps the 120 ms pace, then returns a sha256-stamped snapshot',async()=>{
   const waits:number[]=[];const sleep=vi.fn(async(ms:number)=>{waits.push(ms);});
   let t=1_000_000;const now=()=>t;
-  const fetch=vi.fn<FetchFn>(async()=>{t+=10;return fetch.mock.calls.length<3?new Response('',{status:fetch.mock.calls.length===1?429:503}):ok();});
+  let attempts=0;   // own counter: an initializer that reads `fetch.mock.calls` refers to the variable being declared (TS7022/TS7024, round-2 #5)
+  const fetch=vi.fn<FetchFn>(async()=>{attempts++;t+=10;return attempts<3?new Response('',{status:attempts===1?429:503}):ok();});
   const s=await fetchCompanyFacts('0000320193',budget(300_000),{fetch,sleep,now,userAgent:'ua'});
   expect(fetch).toHaveBeenCalledTimes(3);
   expect(fetch.mock.calls[0][0]).toBe(companyFactsUrl('0000320193'));
@@ -6217,7 +6234,7 @@ git commit -m "feat(facts): EDGAR companyfacts adapter, fixture recorder and AAP
 }
 ```
 
-文件模式（供 owner 录入）：`entries[]` 每项 `{issuer:{ticker,market}, concept, period_end, unit, value(规范十进制字符串), as_of?(YYYY-MM-DD|null), source:{document,page_or_row,url}, recorded_by(姓名|'<pending>'), recorded_at(ISO|null)}`；顶层 `ready:boolean`、`required:{US,CN}`。规格要求 6 家 × 2 期 × 6 科目；模板只给 3 条示例，owner 按同格式扩充。**门禁语义（round-1 #19）**：`required.US=true`（默认）→ AAPL 与 MSFT 各至少一条已录入条目，否则套件失败并打印 `gold entry for <ticker> is still <pending>`；`ready=true` → 文件内不得再有 `<pending>`、每个被断言的美股发行人必须有 `fixtures/edgar/CIK<10>.trimmed.json`（`record-fixture.ts --edgar`，并把它加进测试的 `CIK`/`FIX` 表）、且满足 ≥ 6 家 × 每家 ≥ 2 期 × ≥ 6 科目；已录入条目逐条从 `read_facts` 回放核对 `value_text`。owner 步骤见 runbook 8.11-6。
+文件模式（供 owner 录入）：`entries[]` 每项 `{issuer:{ticker,market}, concept, period_end, unit, value(规范十进制字符串), as_of?(YYYY-MM-DD|null), source:{document,page_or_row,url}, recorded_by(姓名|'<pending>'), recorded_at(ISO|null)}`；顶层 `ready:boolean`、`required:{US,CN}`。规格要求 6 家 × 2 期 × 6 科目；模板只给 3 条示例，owner 按同格式扩充。**门禁语义（round-1 #19）**：`required.US=true`（默认）→ AAPL 与 MSFT 各至少一条已录入条目，否则套件失败并打印 `gold entry for <ticker> is still <pending>`；`ready` 是完成门禁：`ready=false` 时黄金用例始终失败（仅录入条目不算完成）；`ready=true` → 文件内不得再有 `<pending>`、每个被断言的美股发行人必须有 `fixtures/edgar/CIK<10>.trimmed.json`（`record-fixture.ts --edgar`，并把它加进测试的 `CIK` 表——`FIX` 与全部回放运行都从 `CIK` 派生，所以它同时被采集）、且满足 ≥ 6 家 × 每家 ≥ 2 期 × **每期** ≥ 6 科目（round-2 N2：按期间内的科目数计，不是跨期并集）；已录入条目逐条从 `read_facts` 回放核对 `value_text`。owner 步骤见 runbook 8.11-6。
 
 - [ ] **Step 2: 写集成测试（先失败）**
 
@@ -6247,8 +6264,9 @@ import type {FactRow,FactsDb,RawSnapshot} from './types';
 const enabled=!!process.env.S4_TEST_STATE;
 // Deterministic issuer ids so any other suite loading the same fixture shares the issuer (filings.source_ref is global).
 // Every gold-asserted US issuer must appear here with a recorded fixture (gold `ready` gate).
+// Adding a gold issuer = add it here (after record-fixture.ts --edgar <cik>): FIX and every replay run derive from CIK, so it is ingested too (round-2 #19).
 const CIK:Record<string,string>={AAPL:'320193',MSFT:'789019'};
-const FIX:Record<string,string>={'0000320193':'CIK0000320193.trimmed.json','0000789019':'CIK0000789019.trimmed.json'};
+const FIX:Record<string,string>=Object.fromEntries(Object.values(CIK).map(c=>[c.padStart(10,'0'),`CIK${c.padStart(10,'0')}.trimmed.json`]));
 const REVISED='CIK0000320193.revised.json';
 const fx=(n:string)=>new Uint8Array(readFileSync(new URL(`./fixtures/edgar/${n}`,import.meta.url)));
 const today=()=>new Date().toISOString().slice(0,10);
@@ -6285,8 +6303,8 @@ describe.skipIf(!enabled)('F2-3 US offline replay on real PostgreSQL',()=>{
  afterAll(async()=>{await admin?.end();});
 
  it('first run publishes both issuers; AAPL revenue asOf 2024-06-30 is the 2023-11-03 10-K row, not a later comparative',async()=>{
-  const r1=await run([issuers.AAPL,issuers.MSFT]);
-  expect(r1.status).toBe('success');expect(r1.detail).toMatchObject({published:2,failed:0});
+  const r1=await run(Object.values(issuers));                                           // every fixture-backed issuer, so every gold issuer has facts
+  expect(r1.status).toBe('success');expect(r1.detail).toMatchObject({published:Object.keys(CIK).length,failed:0});
   expect(r1.counts.inserted+r1.counts.duplicates).toBeGreaterThan(100);
   const rows=await revenueFy23('2024-06-30',false);
   expect(rows).toHaveLength(1);
@@ -6296,7 +6314,7 @@ describe.skipIf(!enabled)('F2-3 US offline replay on real PostgreSQL',()=>{
 
  it('second run is all duplicates: nothing inserted or versioned, no new facts visible',async()=>{
   const before=(await db.readFacts(issuers.AAPL,'US',{concepts:['revenue','total_assets'],asOf:today(),history:true})).rows.length;
-  const r2=await run([issuers.AAPL,issuers.MSFT]);
+  const r2=await run(Object.values(issuers));
   expect(r2.status).toBe('success');
   expect(r2.counts).toMatchObject({inserted:0,versioned:0,quarantined:0,failed:0});
   expect(r2.counts.duplicates).toBeGreaterThan(100);
@@ -6379,19 +6397,20 @@ describe.skipIf(!enabled)('F2-3 US offline replay on real PostgreSQL',()=>{
   const us=gold.entries.filter(e=>e.issuer.market==='US');
   // 1. required.US (true by default): an explicit, named failure until the owner records AAPL and MSFT.
   if(gold.required.US)for(const t of Object.keys(CIK))expect(us.some(e=>e.issuer.ticker===t&&!isPending(e)),`gold entry for ${t} is still <pending> — owner step (runbook 8.11-6) blocks F2-7`).toBe(true);
-  // 2. ready: the file is complete — no template left, every asserted US issuer fixture-backed, §11.4 matrix (6 × 2 × 6) satisfied.
-  if(gold.ready){
-   expect(gold.entries.filter(isPending).map(e=>`${e.issuer.ticker}/${e.concept}/${e.period_end}`),'pending entries in a ready gold file').toEqual([]);
-   for(const e of us)expect(e.issuer.ticker in CIK,`${e.issuer.ticker}: no recorded fixture (record-fixture.ts --edgar, then add it to CIK/FIX here)`).toBe(true);
-   const byIssuer=new Map<string,GoldEntry[]>();
-   for(const e of gold.entries)(byIssuer.get(e.issuer.ticker)??byIssuer.set(e.issuer.ticker,[]).get(e.issuer.ticker)!).push(e);
-   expect(byIssuer.size,'§11.4: at least 6 issuers').toBeGreaterThanOrEqual(6);
-   for(const [t,es] of byIssuer){
-    expect(new Set(es.map(e=>e.period_end)).size,`${t}: at least 2 periods`).toBeGreaterThanOrEqual(2);
-    expect(new Set(es.map(e=>e.concept)).size,`${t}: at least 6 concepts`).toBeGreaterThanOrEqual(6);
-   }
+  // 2. completion gate: the file must be marked ready — recorded entries alone never pass (round-2 #19).
+  expect(gold.ready,'gold file is not ready (ready:false) — the §11.4 matrix is not asserted; owner step (runbook 8.11-6) blocks F2-7').toBe(true);
+  // 3. ready: no template left; every asserted US issuer fixture-backed AND ingested by this suite; the
+  //    §11.4 matrix PER PERIOD: each of >= 6 issuers has >= 2 period_ends that each carry >= 6 concepts (round-2 N2).
+  expect(gold.entries.filter(isPending).map(e=>`${e.issuer.ticker}/${e.concept}/${e.period_end}`),'pending entries in a ready gold file').toEqual([]);
+  for(const e of us)expect(e.issuer.ticker in CIK&&issuers[e.issuer.ticker]!==undefined,`${e.issuer.ticker}: no recorded fixture (record-fixture.ts --edgar, then add it to CIK here so it is ingested)`).toBe(true);
+  const byIssuer=new Map<string,Map<string,Set<string>>>();
+  for(const e of gold.entries){const periods=byIssuer.get(e.issuer.ticker)??byIssuer.set(e.issuer.ticker,new Map()).get(e.issuer.ticker)!;(periods.get(e.period_end)??periods.set(e.period_end,new Set()).get(e.period_end)!).add(e.concept);}
+  expect(byIssuer.size,'§11.4: at least 6 issuers').toBeGreaterThanOrEqual(6);
+  for(const [t,periods] of byIssuer){
+   const full=[...periods].filter(([,concepts])=>concepts.size>=6).map(([p])=>p);
+   expect(full.length,`${t}: at least 2 periods with >= 6 concepts each (have ${[...periods].map(([p,c])=>`${p}:${c.size}`).join(', ')})`).toBeGreaterThanOrEqual(2);
   }
-  // 3. every recorded US entry replays (asOf = as_of or today; the current row of that period and unit).
+  // 4. every recorded US entry replays (asOf = as_of or today; the current row of that period and unit).
   for(const e of us.filter(e=>!isPending(e))){
    const issuer=issuers[e.issuer.ticker];
    expect(issuer,`no fixture-backed issuer for ${e.issuer.ticker}`).toBeDefined();
@@ -6416,7 +6435,7 @@ Expected: `sync-us.integration.test.ts` 失败：第一个用例 `expected 0 to 
 - [ ] **Step 5: 运行通过**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:db && npm run typecheck && npm run lint`
-Expected: `sync-us.integration.test.ts` 8 个用例中 7 passed，**1 failed = 黄金门禁**：`gold entry for AAPL is still <pending> — owner step (runbook 8.11-6) blocks F2-7`。这是设计的"未完成"状态（round-1 #19）：`required.US` 必须保持 true，不得为了变绿改模板；owner 录入 AAPL/MSFT 条目后该用例转绿。`reports/research-db-summary.json` 的 `criticalSuites` 比之前多 1。typecheck、lint 无错误。
+Expected: `sync-us.integration.test.ts` 8 个用例中 7 passed，**1 failed = 黄金门禁**：`gold entry for AAPL is still <pending> — owner step (runbook 8.11-6) blocks F2-7`。这是设计的"未完成"状态（round-1 #19）：`required.US` 必须保持 true，不得为了变绿改模板。owner 录入 AAPL/MSFT 后失败信息变为 `gold file is not ready (ready:false)`——该用例**只在 `ready:true` 且逐发行人、逐期间矩阵（≥ 6 家 × 每家 ≥ 2 期 × 每期 ≥ 6 科目）满足、每个被断言的美股发行人都在 `CIK` 表（因而被本套件采集）时转绿**（round-2 #19/N2）。`reports/research-db-summary.json` 的 `criticalSuites` 比之前多 1。typecheck、lint 无错误。
 
 - [ ] **Step 6: 提交**
 
@@ -7311,7 +7330,11 @@ describe.skipIf(!enabled)('F2-4 A-share offline replay on real PostgreSQL',()=>{
   if(gold.required.CN)for(const code of Object.keys(issuers))expect(cn.some(e=>e.issuer.ticker===code&&!isPending(e)),`gold entry for ${code} is still <pending> — owner step (runbook 8.11-5/6)`).toBe(true);
   if(gold.ready){
    expect(cn.filter(isPending).map(e=>`${e.issuer.ticker}/${e.concept}/${e.period_end}`),'pending CN entries in a ready gold file').toEqual([]);
-   for(const e of cn)expect(e.issuer.ticker in issuers,`${e.issuer.ticker}: no recorded Tushare fixture`).toBe(true);
+   for(const e of cn)expect(e.issuer.ticker in issuers,`${e.issuer.ticker}: no recorded Tushare fixture (every asserted issuer is ingested by this suite)`).toBe(true);
+   for(const code of new Set(cn.map(e=>e.issuer.ticker))){   // per-period matrix for each CN issuer (round-2 N2); the 6-issuer total is checked by the US suite over the whole file
+    const periods=new Map<string,Set<string>>();for(const e of cn.filter(e=>e.issuer.ticker===code))(periods.get(e.period_end)??periods.set(e.period_end,new Set()).get(e.period_end)!).add(e.concept);
+    expect([...periods.values()].filter(c=>c.size>=6).length,`${code}: at least 2 periods with >= 6 concepts each`).toBeGreaterThanOrEqual(2);
+   }
   }
   const recorded=cn.filter(e=>!isPending(e));
   for(const e of recorded){
@@ -9143,7 +9166,7 @@ node --env-file=.env.local --import tsx scripts/facts/materialize.ts --market US
 node --env-file=.env.local --import tsx scripts/facts/materialize.ts --market US --all
 ```
 
-cron：`GET|POST /api/cron/facts-sync?market=US|CN[&limit=n]`，Bearer `CRON_SECRET`，`maxDuration=300`，截止 240 s，默认 `limit=25`；`vercel.json` 只登记 `market=US`（`5 */4 * * *`）。CN 只在 A 股夹具与黄金断言进入 CI 后加入。回执：`{ok, market, limit, started_at, receipt:{batchId, status, counts, errors, idle, detail:{attempted, published, failed, skipped, idle}, issuers:[{issuerId, fetchKey, runId, outcome:'published'|'planned'|'failed'|'skipped', code?, counts, errors, warnings, snapshotSha256:[…]}]}}`（`SyncReceipt`，`src/lib/facts/sync.ts`）。cron 先 `reconcileScope` 再取到期发行人；脚本 `--issuer` / `--no-db` 直指发行人时不对账：scope 行按 id 直取，缺行时 `--apply` 由发行人表算出并补建（`reasons:['explicit']`，下一次 cron 对账若来源表不含该发行人会把它退到 `priority 0`），dry-run 构造只读行；算不出 `fetch_key`（无 CIK / 无 A 股上市）的发行人以 `outcome:'failed', code:'scope_unresolved'` 出现在回执里，脚本退出码 1。`errors` 的信息码：`skipped_summary`（含 `<issuer>:parser` 的解析器跳过计数与 `<issuer>:cninfo_link`）、`coverage_summary`（CN，`{"<api>:rt<n>":"<首年>-<末年>:<期末数>"}`）、`rule_warning_summary`、`deadline_hit`。发布之后的失败（挂接、物化、释放）不撤发布：发行人 outcome 仍 `published`，原错误按自身码记入 `errors`，租约以 `failed` 释放（1 天后重试）。新鲜度 dataset `facts.us` / `facts.cn`，`ok` = 空转或 `published ≥ max(1, ceil(attempted/2))`。
+cron：`GET|POST /api/cron/facts-sync?market=US|CN[&limit=n]`，Bearer `CRON_SECRET`，`maxDuration=300`，截止 240 s，默认 `limit=25`；`vercel.json` 只登记 `market=US`（`5 */4 * * *`）。CN 只在 A 股夹具与黄金断言进入 CI 后加入。回执：`{ok, market, limit, started_at, receipt:{batchId, status, counts, errors, idle, detail:{attempted, published, failed, skipped, idle}, issuers:[{issuerId, fetchKey, runId, outcome:'published'|'planned'|'failed'|'skipped', code?, counts, errors, warnings, snapshotSha256:[…]}]}}`（`SyncReceipt`，`src/lib/facts/sync.ts`）。cron 先 `reconcileScope` 再取到期发行人；脚本 `--issuer` / `--no-db` 直指发行人时不对账且不受 `limit` 约束（每个显式发行人都有 outcome）：scope 行按 id 直取，缺行时 `--apply` 由发行人表算出并补建（`reasons:['explicit']`，下一次 cron 对账若来源表不含该发行人会把它退到 `priority 0`），dry-run 构造只读行；算不出 `fetch_key`（无 CIK / 无 A 股上市）的发行人以 `outcome:'failed', code:'scope_unresolved'` 出现在回执里，脚本退出码 1。`errors` 的信息码：`skipped_summary`（含 `<issuer>:parser` 的解析器跳过计数与 `<issuer>:cninfo_link`）、`coverage_summary`（CN，`{"<api>:rt<n>":"<首年>-<末年>:<期末数>"}`）、`rule_warning_summary`、`deadline_hit`。发布之后的失败（挂接、物化、释放）不撤发布：发行人 outcome 仍 `published`，原错误按自身码记入 `errors`，租约以 `failed` 释放（1 天后重试）。新鲜度 dataset `facts.us` / `facts.cn`，`ok` = 空转或 `published ≥ max(1, ceil(attempted/2))`。
 
 ### 8.9 悬空 `running` 批次
 
@@ -9211,7 +9234,7 @@ select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where
 3. `scripts/facts/sync.ts --market US --limit 20 --apply` 首轮；查看 `/admin/dq` 的 `facts.us` 新鲜度与隔离项。
 4. `GET /api/facts/AAPL?concepts=revenue&asOf=2024-06-30` 核对验收样例 1（期末 2023-09-30 的 2023-11-03 披露行，`disclosureSeq=1`）。
 5. CN：提供 `TUSHARE_TOKEN` 给录制环境 → 完成 8.7 核对 → 夹具与黄金断言进 CI → 把 `fixtures/gold/plan2.json` 的 `required.CN` 置 true → 把 `facts-sync?market=CN` 加入 `vercel.json`。
-6. 黄金集抄录（**F2-7 完成的阻塞项**，由实施者之外的人完成）：`src/lib/facts/fixtures/gold/plan2.json` 的 `required.US` 默认 true，`sync-us.integration.test.ts` 的黄金用例在 AAPL 与 MSFT 各有至少一条 `recorded_by` 非 `<pending>` 的条目之前**一直失败**（打印 `gold entry for <ticker> is still <pending>`）——这是设计的未完成状态，不要为了变绿改 `required`。步骤：(a) 对每条目从一手文件（10-K / 年报 PDF）抄 `value`（规范十进制字符串）、`source.page_or_row`、`source.url`，填 `recorded_by`（姓名）与 `recorded_at`（ISO）；(b) 跑 `npm run test:db`，黄金用例逐条回放 `read_facts(asOf = as_of)`；(c) 全部 6 家 × 2 期 × 6 科目抄录完毕后把顶层 `ready` 置 true：此后任何 `<pending>` 都是失败，套件还会检查 ≥ 6 家、每家 ≥ 2 期 × ≥ 6 科目，且每个被断言的发行人都有录制夹具（美股：`record-fixture.ts --edgar <cik>` 并把 ticker/CIK 加进 `sync-us.integration.test.ts` 的 `CIK`/`FIX` 表；A 股：`--tushare`）。
+6. 黄金集抄录（**F2-7 完成的阻塞项**，由实施者之外的人完成）：`src/lib/facts/fixtures/gold/plan2.json` 的 `required.US` 默认 true，`sync-us.integration.test.ts` 的黄金用例在 AAPL 与 MSFT 各有至少一条 `recorded_by` 非 `<pending>` 的条目之前**一直失败**（打印 `gold entry for <ticker> is still <pending>`）——这是设计的未完成状态，不要为了变绿改 `required`。步骤：(a) 对每条目从一手文件（10-K / 年报 PDF）抄 `value`（规范十进制字符串）、`source.page_or_row`、`source.url`，填 `recorded_by`（姓名）与 `recorded_at`（ISO）；(b) 跑 `npm run test:db`，黄金用例逐条回放 `read_facts(asOf = as_of)`；(c) 全部 6 家 × 2 期 × 6 科目抄录完毕后把顶层 `ready` 置 true——**在此之前黄金用例永远是红**（`gold file is not ready`），录入条目不等于完成；此后任何 `<pending>` 都是失败，套件还会检查 ≥ 6 家、每家 ≥ 2 期且**每期** ≥ 6 科目，且每个被断言的发行人都有录制夹具并被回放套件采集（美股：`record-fixture.ts --edgar <cik>` 并把 ticker/CIK 加进 `sync-us.integration.test.ts` 的 `CIK` 表；A 股：`--tushare` 并把 ts_code 加进 `sync-cn.integration.test.ts` 的发行人表）。
 ```
 
 - [ ] **Step 3: 规格 §16 存根**
@@ -9278,7 +9301,7 @@ npm test && npm run typecheck && npm run lint
 LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:db
 LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:migrations
 ```
-Expected: 全部绿，**唯一允许的红是 `sync-us.integration.test.ts` 的黄金门禁**（`gold entry for <ticker> is still <pending>`，round-1 #19）——它在 owner 完成 runbook 8.11-6 之前一直是红，F2-7 在那之前**不算完成**；把这一状态写进 `docs/audits/2026-11-04-data-foundation-2/16-implementation-log.md`（"F2-7：代码与文档齐备；黄金门禁待 owner 录入，日期"）。owner 录入后（`required.US` 仍为 true，`ready` 按 8.11-6 置 true）重跑本步，必须全绿。`test:db` 的 critical 清单包含 `src/lib/facts/facts.integration.test.ts` 与 `src/lib/facts/sync-us.integration.test.ts`（`sync-cn` 只在夹具存在时存在），`verifyCriticalSuiteInventory` 无 `Database suite inventory drift`。已知本地全套偶发失败见记忆 `alpha-local-db-harness-env`，重跑一次仍失败才算失败。
+Expected: 全部绿，**唯一允许的红是 `sync-us.integration.test.ts` 的黄金门禁**（`gold entry for <ticker> is still <pending>`，round-1 #19）——它在 owner 完成 runbook 8.11-6 之前一直是红，F2-7 在那之前**不算完成**；把这一状态写进 `docs/audits/2026-11-04-data-foundation-2/16-implementation-log.md`（"F2-7：代码与文档齐备；黄金门禁待 owner 录入，日期"）。owner 录入后（`required.US` 仍为 true，`ready` 按 8.11-6 置 true——`ready:false` 时黄金用例不会因为有录入条目而通过，逐期间矩阵只在 `ready` 下断言）重跑本步，必须全绿。`test:db` 的 critical 清单包含 `src/lib/facts/facts.integration.test.ts` 与 `src/lib/facts/sync-us.integration.test.ts`（`sync-cn` 只在夹具存在时存在），`verifyCriticalSuiteInventory` 无 `Database suite inventory drift`。已知本地全套偶发失败见记忆 `alpha-local-db-harness-env`，重跑一次仍失败才算失败。
 
 - [ ] **Step 6: 提交**
 
@@ -9338,4 +9361,6 @@ git commit -m "docs(facts): runbook chapter for the disclosure log, spec §16 de
 
 **提交纪律**：19 个提交步骤都是单独一行 `git commit -m … -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"`，命令块里没有 `-n` token（`grep` 一律用 `-c` 或无行号）；三个含 `S4_TEST_STATE` 的测试文件（`facts.integration`、`sync-us.integration`、`sync-cn.integration`）各有一步把自己加进 `criticalSuites`，`sync-cn` 与其登记在同一提交。
 
-**Codex round-1 审计（2026-11-04，`docs/audits/2026-11-04-data-foundation-2-plan/01-codex-plan-audit-round1.md`，24 条：9 P1 + 15 P2）**：全部 ACCEPT 并落实（处置表 `docs/audits/2026-11-04-data-foundation-2-plan/02-round1-disposition.md`）。要点：BEFORE UPDATE 触发器改为显式列比较（#1）；`resolve_facts_quarantine` 锁后重建成员集并检查锚定运行（#2、#10）；提升资格加 (K, date) 的 open 争议检查（#3）；`readonly ConceptDef[]`、mock 类型、未用的 eslint-disable（#4–#6）；Supabase 完整集读取分页 + `scopeRows`（#7、#13）；报告类型互斥（#8）；解析器遗留先于 `no_rows`（#9）；发布后失败不撤发布（#11）；`coverage_summary`/`skipped_summary(parser)` 接入回执（#12）；`sequencesOf` 非 ok 行不进序列（#14）；修订夹具保持生效 + 代号前推（#15）；A 股同日冲突改用第二份 filing（#16）；四处断言修正（#17）；`reviseEdgar` 按期间选基准（#18）；黄金门禁默认强制（#19）；执行顺序去循环（#20）；抛错的巨潮请求也计次（#21）；复用落地的有效期谓词（#22）；冻结内存库时钟（#23）；回滚顺序补全（#24）。审计"未验证"项（真实 PostgreSQL 17 执行、完整装配后的 typecheck/vitest、录制夹具字面量、黄金值）仍由各任务的 Run/Expected 步骤在实施时验证。
+**Codex round-1 审计（2026-11-04，`docs/audits/2026-11-04-data-foundation-2-plan/01-codex-plan-audit-round1.md`，24 条：9 P1 + 15 P2）**：全部 ACCEPT 并落实（处置表 `docs/audits/2026-11-04-data-foundation-2-plan/02-dispositions.md`）。要点：BEFORE UPDATE 触发器改为显式列比较（#1）；`resolve_facts_quarantine` 锁后重建成员集并检查锚定运行（#2、#10）；提升资格加 (K, date) 的 open 争议检查（#3）；`readonly ConceptDef[]`、mock 类型、未用的 eslint-disable（#4–#6）；Supabase 完整集读取分页 + `scopeRows`（#7、#13）；报告类型互斥（#8）；解析器遗留先于 `no_rows`（#9）；发布后失败不撤发布（#11）；`coverage_summary`/`skipped_summary(parser)` 接入回执（#12）；`sequencesOf` 非 ok 行不进序列（#14）；修订夹具保持生效 + 代号前推（#15）；A 股同日冲突改用第二份 filing（#16）；四处断言修正（#17）；`reviseEdgar` 按期间选基准（#18）；黄金门禁默认强制（#19）；执行顺序去循环（#20）；抛错的巨潮请求也计次（#21）；复用落地的有效期谓词（#22）；冻结内存库时钟（#23）；回滚顺序补全（#24）。审计"未验证"项（真实 PostgreSQL 17 执行、完整装配后的 typecheck/vitest、录制夹具字面量、黄金值）仍由各任务的 Run/Expected 步骤在实施时验证。
+
+**Codex round-2 审计（2026-11-04，`docs/audits/2026-11-04-data-foundation-2-plan/03-codex-plan-audit-round2.md`：20 条 RESOLVED、4 条 PARTIAL、新增 N1 P1 / N2 P2）**：六项残余全部 ACCEPT 并落实（处置表 `02-dispositions.md` 的 round-2 节）：#5 Task 10 Step 1 的 `fetch` mock 改用独立计数器，不再在初始化式里引用自身（TS7022/TS7024）；#13 显式 `issuerIds` 不再被 `limit` 截断，每个请求的发行人都有 outcome（`SyncOptions` 注释、实现要点、runbook 8.8、新增断言）；#19/N2 Task 11/13 黄金用例：`ready:false` 直接失败（录入条目不算完成），`ready:true` 下矩阵按"每家 ≥ 2 期且每期 ≥ 6 科目"逐期间计，`FIX` 与全部回放运行从 `CIK` 派生使每个被断言的美股发行人都被采集；#21 请求中途被预算切断也持久化 `link_attempts+1`（已开始即一次尝试），只有请求前预算不足才不计，Task 8 Step 2 用例改为三段（抛错 / 中途切断 / 请求前不足）；N1 Task 8 Step 2 的 `coverageCn` 夹具显式标注 `CoverageEntry[]`。
