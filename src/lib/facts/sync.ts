@@ -214,12 +214,21 @@ export async function syncIssuerFacts(deps:SyncDeps,batchId:string,input:{scope:
   // the empty-result branch below publishes an empty run. Parser-level ambiguity: the adapter's
   // `key` is its own grouping string (it knows no issuer); the §7.1 natural key is rendered here
   // from the first candidate and the parser key kept in the payload.
-  for(const a of parsed.ambiguous){
-   const c0=a.candidates[0];if(c0===undefined)continue;
-   await park('ambiguous_value',ambiguousKey(issuer,market,keyOfCandidate(c0),c0.filingRef,gen),{key:keyComponents(issuer,market,keyOfCandidate(c0)),parser_key:a.key,candidates:a.candidates});out.counts.quarantined+=a.candidates.length;
+  // One item per natural key (round-5): quarantine() returns the existing open item without touching its
+  // payload, so rows sharing a key are grouped here and their evidence lands together in `rows`.
+  // Counts stay per row.
+  const grouped=<T,>(items:T[],keyOf2:(x:T)=>string)=>{const m=new Map<string,T[]>();for(const x of items){const k=keyOf2(x);const g=m.get(k);if(g)g.push(x);else m.set(k,[x]);}return m;};
+  const ambiguousRows=parsed.ambiguous.flatMap(a=>a.candidates.map(c=>({c,parserKey:a.key}))).filter(x=>x.c!==undefined);
+  for(const [naturalKey,rows] of grouped(ambiguousRows,x=>ambiguousKey(issuer,market,keyOfCandidate(x.c),x.c.filingRef,gen))){
+   const c0=rows[0].c;
+   await park('ambiguous_value',naturalKey,{key:keyComponents(issuer,market,keyOfCandidate(c0)),parser_key:rows[0].parserKey,candidates:rows.map(x=>x.c),rows:rows.map(x=>x.c)});out.counts.quarantined+=rows.length;
   }
-  for(const c of parsed.oddDuration){await park('odd_duration',ambiguousKey(issuer,market,keyOfCandidate(c),c.filingRef,gen),{key:keyComponents(issuer,market,keyOfCandidate(c)),candidate:c});out.counts.quarantined++;}
-  for(const r of parsed.missingAvailableDate){await park('missing_available_date',missingDateKey(issuer,scope.fetch_key,r),{row:r});out.counts.quarantined++;}
+  for(const [naturalKey,rows] of grouped(parsed.oddDuration,c=>ambiguousKey(issuer,market,keyOfCandidate(c),c.filingRef,gen))){
+   await park('odd_duration',naturalKey,{key:keyComponents(issuer,market,keyOfCandidate(rows[0])),candidate:rows[0],rows});out.counts.quarantined+=rows.length;
+  }
+  for(const [naturalKey,rows] of grouped(parsed.missingAvailableDate,r=>missingDateKey(issuer,scope.fetch_key,r))){
+   await park('missing_available_date',naturalKey,{row:rows[0],rows});out.counts.quarantined+=rows.length;
+  }
   // Adapter summaries → the batch info channel (round-1 #12): skip counters always, CN coverage when wired.
   if(parsed.skipped.length>0)out.errors.push(skippedSummary(issuer,parsed.skipped));
   if(market==='CN'&&deps.coverageCn)out.errors.push({code:'coverage_summary',key:issuer,message:compactCoverage(deps.coverageCn(parsed))});

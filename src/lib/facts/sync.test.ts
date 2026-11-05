@@ -538,3 +538,29 @@ describe('runFactsSync — round-4 review cases',()=>{
   expect(claims).toBeGreaterThan(seen[1]);                              // and materialize by another
  });
 });
+
+describe('runFactsSync — grouped parser evidence',()=>{
+ it('parks rows sharing a natural key as ONE odd_duration item holding every row, counts per row (round-5)',async()=>{
+  const odd=(loc:string)=>({...cand('acc-1','revenue','1',{periodStart:'2023-08-01',duration:'3M',rawHash:loc.repeat(64)}),locator:`loc-${loc}`});
+  const {tables,deps}=harness(parsed([filing('acc-1','2023-11-03')],[cand('acc-1','revenue','100')],{oddDuration:[odd('b'),odd('c')]}));
+  const r=await run(deps);
+  const items=tables.rows('dq_quarantine').filter(i=>i.reason_code==='odd_duration');
+  expect(items).toHaveLength(1);
+  const payload=items[0].payload as {candidate:{locator:string};rows:{locator:string;rawHash:string}[]};
+  expect(payload.rows.map(x=>x.locator)).toEqual(['loc-b','loc-c']);
+  expect(payload.rows.map(x=>x.rawHash)).toEqual(['b'.repeat(64),'c'.repeat(64)]);
+  expect(payload.candidate.locator).toBe('loc-b');
+  expect(r.counts).toMatchObject({fetched:3,inserted:1,quarantined:2,failed:0});balanced(r.counts);
+ });
+ it('parks undated rows sharing a natural key as ONE missing_available_date item holding every row (round-5)',async()=>{
+  const row=(loc:string)=>({accn:'0000320193-23-000106',tag:'us-gaap:Revenues',start:'2022-10-01',end:'2023-09-30',unit:'USD',locator:loc});
+  const {tables,deps}=harness(parsed([],[],{missingAvailableDate:[row('l1'),row('l2'),{...row('l3'),end:'2022-09-30'}]}));
+  const r=await run(deps);
+  const items=tables.rows('dq_quarantine');
+  expect(items).toHaveLength(2);
+  const shared=items.find(i=>(i.payload as {rows:unknown[]}).rows.length===2)!;
+  expect((shared.payload as {rows:{locator:string}[]}).rows.map(x=>x.locator)).toEqual(['l1','l2']);
+  expect((shared.payload as {row:{locator:string}}).row.locator).toBe('l1');
+  expect(r.counts).toMatchObject({fetched:3,quarantined:3,failed:0});balanced(r.counts);
+ });
+});
