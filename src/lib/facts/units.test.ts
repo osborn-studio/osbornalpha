@@ -30,6 +30,14 @@ describe('units',()=>{
   expect(unitRule('unit_money','pure',allowedUnits('money')).passed).toBe(false);
   expect(unitRule('unit_per_share','USD/shares',allowedUnits('per_share')).passed).toBe(false);
  });
+ it('covers every currency Node knows except XDR and XSU, plus retired codes',()=>{
+  for(const c of ['BYR','CUC','CYP','EEK','HRK','LTL','LVL','MRO','MTL','SKK','SLL','STD','VEF','ZMK','ZWL'])expect(normalizeUnit(c)).toBe(c);
+  expect([...CURRENCIES]).toEqual([...CURRENCIES].sort());
+  if(typeof Intl.supportedValuesOf==='function'){
+   const known=Intl.supportedValuesOf('currency').filter(c=>c!=='XDR'&&c!=='XSU');
+   expect(known.filter(c=>!(CURRENCIES as readonly string[]).includes(c))).toEqual([]);
+  }
+ });
  it('classifies stored units back into kinds',()=>{
   expect(unitKindOf('USD')).toBe('money');expect(unitKindOf('shares')).toBe('shares');
   expect(unitKindOf('BHD')).toBe('money');expect(unitKindOf('PKR/share')).toBe('per_share');
