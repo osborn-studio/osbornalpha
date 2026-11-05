@@ -1,0 +1,39 @@
+{
+  "topic": "evals-gold-sets",
+  "target": { "path": "docs/superpowers/specs/2026-11-04-evals-and-gold-sets-design.md" },
+  "rounds": [
+    {
+      "n": 1,
+      "target_draft": 1,
+      "target_sha256": null,
+      "target_git_ref": "uncommitted",
+      "unverified_target": true,
+      "prompt_file": "00-prompt-round1.md",
+      "report_file": "01-codex-round1.md",
+      "model": "gpt-6-astra",
+      "effort": "medium",
+      "verdict": "not ready for implementation planning—the design can produce passing evidence without sufficient coverage, reproducible inputs, or trustworthy replay attribution.",
+      "findings": { "p1": 16, "p2": 12, "p3": 0 }
+    },
+    {
+      "n": 2,
+      "target_draft": 2,
+      "target_sha256": null,
+      "target_git_ref": "uncommitted",
+      "unverified_target": true,
+      "prompt_file": "00-prompt-round2.md",
+      "report_file": "02-codex-round2.md",
+      "model": "gpt-6-astra",
+      "effort": "medium",
+      "verdict": "not ready for implementation planning—the rewrite improves structure substantially, but still permits misleading passes and leaves incompatible read, replay, persistence, and release-evidence contracts.",
+      "findings": { "p1": 13, "p2": 9, "p3": 0 }
+    }
+  ],
+  "dispositions": [ { "file": "03-disposition.md", "covers_rounds": [1, 2] } ],
+  "current_draft": { "n": 3, "sha256": "6a9af13909aec7bb68580b2dff04b7c17e65f7af7b55e8fd5a7fec6af8b6b6b5", "git_ref": "uncommitted" },
+  "open": {
+    "owner": ["D1 thresholds", "D2 recorders and enforced approval", "D3 cadence", "D4 report retention", "D5 reference scope", "D6 ledger approver", "D7 release blocking", "D8 restricted artifact licensing"],
+    "verify": ["filingsOfIssuer filter options", "read_facts history semantics at from=to", "macro_regime_results history retention", "dq_reconciliations source namespace", "CDN behaviour of public read APIs", "PostgREST numeric serialization in production", "GitHub Actions artifact retention", "IFRS filer presence in plan2-us set"]
+  },
+  "final_verdict": "Round 2 (on draft 2): not ready for implementation planning. Draft 3 implements all 50 findings (see 03-disposition.md); not re-audited per the two-round rule — the next implementation-task audit covers it."
+}
