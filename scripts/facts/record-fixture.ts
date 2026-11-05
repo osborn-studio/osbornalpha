@@ -16,6 +16,7 @@
  *                                                                          → fixtures/cninfo/<ts_code>-<fy>-<kind>.json (real hisAnnouncement pages, no token)
  * Exit 2 on bad arguments or a missing TUSHARE_TOKEN.
  */
+import {createHash} from 'node:crypto';
 import {mkdirSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -95,13 +96,20 @@ async function recordCninfo(tsCode:string,availableDate:string,fiscalYear:string
  if(!/^\d{4}-\d{2}-\d{2}$/.test(availableDate)||!/^\d{4}$/.test(fiscalYear)||!['annual','semiannual','q1','q3'].includes(formType))fail(USAGE);
  const client=createClient({ctx:null as never,companies:[],since:''},500);
  const org=await resolveOrgId(m[1],{})??fail(`no orgId for ${tsCode}`);
- const pages:unknown[]=[];
+ // Raw response bytes are kept verbatim (body = their UTF-8 text) with sha256, byte length, http status and the request body
+ // (it carries the seDate window), like the EDGAR/Tushare recordings; the replay serves `body` and verifies the sha256.
+ const pages:{page:number;request_body:string;http_status:number;bytes:number;sha256:string;body:string}[]=[];
  for(let pageNum=1;;pageNum++){
-  const res=await client.post(CNINFO_HISTORY,cninfoQueryBody({code:m[1],orgId:org.orgId,column:m[2]==='SH'?'sse':'szse',availableDate,pageNum}));
+  const request_body=cninfoQueryBody({code:m[1],orgId:org.orgId,column:m[2]==='SH'?'sse':'szse',availableDate,pageNum});
+  const res=await client.post(CNINFO_HISTORY,request_body);
   if(!res.ok)fail(`cninfo ${res.status}`);
-  const page=await res.json() as {announcements?:unknown[]|null;hasMore?:boolean};
-  pages.push(page);
-  if(!page.hasMore||(page.announcements??[]).length<CNINFO_PAGE_SIZE)break;
+  const raw=new Uint8Array(await res.arrayBuffer());
+  const body=new TextDecoder('utf-8',{fatal:true}).decode(raw);
+  pages.push({page:pageNum,request_body,http_status:res.status,bytes:raw.byteLength,sha256:createHash('sha256').update(raw).digest('hex'),body});
+  const parsed=JSON.parse(body) as {announcements?:unknown[]|null;hasMore?:boolean;totalpages?:number};
+  if(!parsed.hasMore||(parsed.announcements??[]).length<CNINFO_PAGE_SIZE)break;
+  if(typeof parsed.totalpages==='number'&&parsed.totalpages>0&&pageNum>=parsed.totalpages)break;
+  if(pageNum>=10)fail('more than 10 pages: narrow the window');
  }
  write(`cninfo/${tsCode}-${fiscalYear}-${formType}.json`,JSON.stringify({__recorded:{at:new Date().toISOString(),url:CNINFO_HISTORY,ts_code:tsCode,org_id:org.orgId,available_date:availableDate,fiscal_year:Number(fiscalYear),form_type:formType},pages},null,1));
 }

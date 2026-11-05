@@ -1,4 +1,5 @@
 // src/lib/facts/providers/cninfo-link.test.ts
+import {createHash} from 'node:crypto';
 import {existsSync,readFileSync} from 'node:fs';
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 import type {Budget} from '../types';
@@ -19,7 +20,7 @@ const server=(pages:string[],onBody?:(b:string)=>void)=>vi.fn(async(input:Reques
 });
 
 describe('matchesAnnouncement',()=>{
- it('needs the fiscal year and a kind word, rejects 摘要/英文/已取消/补充, and 更正 unless the filing is a restatement or was corrected',()=>{
+ it('needs the fiscal year and a kind word, rejects 摘要/英文/已取消/补充, and 更正 unless the filing was corrected',()=>{
   expect(matchesAnnouncement('贵州茅台：2024年年度报告',annual)).toBe(true);
   expect(matchesAnnouncement('贵州茅台：<em>2024</em>年 年度报告',annual)).toBe(true);
   expect(matchesAnnouncement('贵州茅台：2024年年度报告摘要',annual)).toBe(false);
@@ -30,8 +31,12 @@ describe('matchesAnnouncement',()=>{
   expect(matchesAnnouncement('贵州茅台：2024年第三季度报告',annual)).toBe(false);
   expect(matchesAnnouncement('贵州茅台：关于2024年年度报告的更正公告',annual)).toBe(false);
   expect(matchesAnnouncement('贵州茅台：关于2024年年度报告的更正公告',{...annual,corrected:true})).toBe(true);
-  expect(matchesAnnouncement('贵州茅台：关于2023年半年度报告的更正公告',{form_type:'restatement',fiscal_year:2023,period_end:'2023-06-30',available_date:'2024-08-03'})).toBe(true);
-  expect(matchesAnnouncement('贵州茅台：2023年半年度报告',{form_type:'restatement',fiscal_year:2023,period_end:'2023-06-30',available_date:'2024-08-03'})).toBe(false);
+  // G1: a restatement (report_type 4) links the plain report of fiscal_year + 1 of the same kind, never a 更正 title
+  const restated:LinkFiling={form_type:'restatement',fiscal_year:2023,period_end:'2023-06-30',available_date:'2024-08-03'};
+  expect(matchesAnnouncement('贵州茅台：2024年半年度报告',restated)).toBe(true);
+  expect(matchesAnnouncement('贵州茅台：2023年半年度报告',restated)).toBe(false);
+  expect(matchesAnnouncement('贵州茅台：关于2023年半年度报告的更正公告',restated)).toBe(false);
+  expect(matchesAnnouncement('贵州茅台：2024年年度报告',restated)).toBe(false);
   expect(matchesAnnouncement('贵州茅台：2024年第一季度报告',{...annual,form_type:'q1',period_end:'2024-03-31'})).toBe(true);
   expect(matchesAnnouncement('贵州茅台：2024年半年度报告',{...annual,form_type:'semiannual'})).toBe(true);
   expect(matchesAnnouncement('贵州茅台：2024年年度报告',{...annual,form_type:'other'})).toBe(false);
@@ -65,8 +70,8 @@ describe('linkCninfoFiling',()=>{
  });
  it('walks every page while hasMore and the page is full; a short page ends the walk',async()=>{
   const full=Array.from({length:30},(_,i)=>ann(`f${i}`,`其他公告${i}`));
-  const fetch=server([page(full,true),page([ann('x','2024年年度报告')],true)]);
-  expect(await linkCninfoFiling(annual,{ts_code:'600519.SH',cninfo_org_id:'o'},{fetch,budget:budget(),minIntervalMs:0})).toEqual({document_ref:'x',document_url:`${CNINFO_STATIC}finalpage/2025-04-03/x.PDF`});
+  const fetch=server([page(full,true),page([ann('77','2024年年度报告')],true)]);
+  expect(await linkCninfoFiling(annual,{ts_code:'600519.SH',cninfo_org_id:'o'},{fetch,budget:budget(),minIntervalMs:0})).toEqual({document_ref:'77',document_url:`${CNINFO_STATIC}finalpage/2025-04-03/77.PDF`});
   expect(fetch).toHaveBeenCalledTimes(2);
  });
  it('uses column=szse for Shenzhen and resolves a missing orgId via topSearch; BJ and non-report filings never hit the network',async()=>{
@@ -85,11 +90,26 @@ describe('linkCninfoFiling',()=>{
   await expect(linkCninfoFiling(annual,{ts_code:'600519.SH',cninfo_org_id:'o'},{fetch:vi.fn(),budget:{remainingMs:()=>1000,signal:new AbortController().signal}})).rejects.toThrow(/budget_exhausted/);
  });
  const FIXTURE=new URL('../fixtures/cninfo/600519.SH-2024-annual.json',import.meta.url);
+ type Fx={__recorded:{org_id:string;available_date:string;fiscal_year:number;form_type:LinkFiling['form_type']};pages:{request_body:string;http_status:number;bytes:number;sha256:string;body:string}[]};
+ const REPORT_URL='https://static.cninfo.com.cn/finalpage/2025-04-03/1222993920.PDF';
+ it.skipIf(!existsSync(FIXTURE))('the recorded pages carry raw bytes, sha256, http status and the request body',()=>{
+  const fx=JSON.parse(readFileSync(FIXTURE,'utf8')) as Fx;
+  expect(fx.pages.length).toBeGreaterThan(0);
+  for(const p of fx.pages){
+   expect(p.http_status).toBe(200);expect(p.request_body).toContain('seDate=2025-03-31%7E2025-04-06');
+   expect(createHash('sha256').update(p.body).digest('hex')).toBe(p.sha256);expect(Buffer.byteLength(p.body)).toBe(p.bytes);
+  }
+ });
  it.skipIf(!existsSync(FIXTURE))('links the recorded 600519.SH 2024 annual report to exactly one PDF',async()=>{
-  const fx=JSON.parse(readFileSync(FIXTURE,'utf8')) as {__recorded:{org_id:string;available_date:string;fiscal_year:number;form_type:LinkFiling['form_type']};pages:unknown[]};
-  const fetch=server(fx.pages.map(p=>JSON.stringify(p)));
+  const fx=JSON.parse(readFileSync(FIXTURE,'utf8')) as Fx;
+  const fetch=server(fx.pages.map(p=>p.body));
   const r=await linkCninfoFiling({form_type:fx.__recorded.form_type,fiscal_year:fx.__recorded.fiscal_year,period_end:`${fx.__recorded.fiscal_year}-12-31`,available_date:fx.__recorded.available_date},{ts_code:'600519.SH',cninfo_org_id:fx.__recorded.org_id},{fetch,budget:budget(),minIntervalMs:0});
-  expect(r).toMatchObject({document_ref:expect.stringMatching(/^\d+$/),document_url:expect.stringMatching(/^http:\/\/static\.cninfo\.com\.cn\/.+\.PDF$/i)});
+  expect(r).toEqual({document_ref:'1222993920',document_url:REPORT_URL});
+ });
+ it.skipIf(!existsSync(FIXTURE))('G1: a restatement FY2023 announced 2025-04-03 links the plain 2024 annual report from the same recording',async()=>{
+  const fx=JSON.parse(readFileSync(FIXTURE,'utf8')) as Fx;
+  const r=await linkCninfoFiling({form_type:'restatement',fiscal_year:2023,period_end:'2023-12-31',available_date:'2025-04-03'},{ts_code:'600519.SH',cninfo_org_id:fx.__recorded.org_id},{fetch:server(fx.pages.map(p=>p.body)),budget:budget(),minIntervalMs:0});
+  expect(r).toEqual({document_ref:'1222993920',document_url:REPORT_URL});
  });
 });
 
@@ -107,7 +127,7 @@ describe('whole-title matching (follow-up P2)',()=>{
  });
  it('correction announcements use their own pattern',()=>{
   const c={...annual,corrected:true};
-  for(const t of ['贵州茅台：关于2024年年度报告的更正公告','关于2024年年度报告更正的公告'.replace('更正的公告','更正公告'),'贵州茅台：关于2024年年度报告的更正说明公告'])expect(matchesAnnouncement(t,c),t).toBe(true);
+  for(const t of ['贵州茅台：关于2024年年度报告的更正公告','关于2024年年度报告更正公告','贵州茅台：关于2024年年度报告的更正说明公告'])expect(matchesAnnouncement(t,c),t).toBe(true);
   for(const t of ['贵州茅台：2024年年度报告','贵州茅台：关于2024年年度报告的问询函','贵州茅台：关于2024年年度报告的更正公告摘要'])expect(matchesAnnouncement(t,c),t).toBe(false);
   expect(matchesAnnouncement('贵州茅台：关于2024年年度报告的更正公告',annual)).toBe(false);
  });
@@ -180,5 +200,41 @@ describe('shared pacing (follow-up P2)',()=>{
    expect(starts).toHaveLength(4);
    for(let i=1;i<starts.length;i++)expect(starts[i]-starts[i-1]).toBeGreaterThanOrEqual(500);
   }finally{vi.useRealTimers();}
+ });
+});
+
+describe('real title forms (review G1/1-4)',()=>{
+ it('annual title forms: 年度报告 without the doubled 年, long company names',()=>{
+  for(const t of ['招商银行2024年度报告','招商银行股份有限公司2024年度报告','招商银行：2024年度报告','招商银行：2024年年度报告','招商银行2024年年报'])expect(matchesAnnouncement(t,annual),t).toBe(true);
+  expect(matchesAnnouncement('招商银行2024年度独立董事述职报告',annual)).toBe(false);
+  expect(matchesAnnouncement('招商银行2024年度报告',{...annual,form_type:'semiannual'})).toBe(false);
+ });
+ it('全文 and （A股） are accepted, 正文 and H股 are not',()=>{
+  for(const t of ['招商银行：2024年年度报告全文','招商银行2024年度报告全文','招商银行：2024年年度报告（A股）','招商银行：2024年年度报告全文（A股）','招商银行：2024年年度报告(A股)'])expect(matchesAnnouncement(t,annual),t).toBe(true);
+  for(const t of ['招商银行：2024年年度报告正文','招商银行：2024年年度报告（H股）','招商银行：2024年年度报告全文（H股）','招商银行：2024年年度报告摘要（A股）'])expect(matchesAnnouncement(t,annual),t).toBe(false);
+ });
+ it('correction titles for a corrected filing',()=>{
+  const c={...annual,corrected:true};
+  for(const t of ['贵州茅台：关于2024年年度报告的更正公告','贵州茅台：关于2024年年度报告及摘要的更正公告','贵州茅台：关于2024年年度报告部分内容的更正公告','贵州茅台：关于2024年年度报告及摘要部分内容的更正公告','贵州茅台：关于2024年年度报告的更正的公告','关于更正2024年年度报告的公告','贵州茅台：关于更正2024年年度报告及摘要的公告','招商银行：关于2024年度报告的更正说明公告','贵州茅台：2024年年度报告（更正后）','贵州茅台：2024年年度报告（修订版）'])expect(matchesAnnouncement(t,c),t).toBe(true);
+  for(const t of ['贵州茅台：2024年年度报告','贵州茅台：关于2024年年度报告的更正及补充公告','贵州茅台：关于2024年年度报告的更正公告（英文版）','贵州茅台：关于2023年年度报告的更正公告'])expect(matchesAnnouncement(t,c),t).toBe(false);
+ });
+ it('rejects adjunct urls outside finalpage/<date>/<digits>.PDF and caps paging',async()=>{
+  const bad={...ann('5','贵州茅台：2024年年度报告'),adjunctUrl:'../x/5.PDF'};
+  expect(await linkCninfoFiling(annual,{ts_code:'600519.SH',cninfo_org_id:'o'},{fetch:server([page([bad])]),budget:budget(),minIntervalMs:0})).toBe('none');
+  const full=Array.from({length:30},(_,i)=>ann(`${100+i}`,`其他${i}`));
+  const endless=vi.fn(async()=>new Response(page(full,true)));
+  await expect(linkCninfoFiling(annual,{ts_code:'600519.SH',cninfo_org_id:'o'},{fetch:endless,budget:budget(),minIntervalMs:0})).rejects.toThrow(/^cninfo_too_many_pages$/);
+  expect(endless).toHaveBeenCalledTimes(10);
+  const two=vi.fn(async()=>new Response(JSON.stringify({announcements:full,hasMore:true,totalpages:2})));
+  expect(await linkCninfoFiling(annual,{ts_code:'600519.SH',cninfo_org_id:'o'},{fetch:two,budget:budget(),minIntervalMs:0})).toBe('none');
+  expect(two).toHaveBeenCalledTimes(2);
+ });
+ it('cancels failed response bodies and caps successful ones',async()=>{
+  const cancel=vi.fn();
+  const failed=vi.fn(async()=>({ok:false,status:502,body:{cancel}}) as unknown as Response);
+  await expect(linkCninfoFiling(annual,{ts_code:'600519.SH',cninfo_org_id:'o'},{fetch:failed,budget:budget(),minIntervalMs:0})).rejects.toThrow(/^cninfo 502$/);
+  expect(cancel).toHaveBeenCalled();
+  const huge=new Response(new ReadableStream({start(c){c.enqueue(new Uint8Array(1024*1024));c.enqueue(new Uint8Array(1024*1024+1));c.close();}}),{status:200});
+  await expect(linkCninfoFiling(annual,{ts_code:'600519.SH',cninfo_org_id:'o'},{fetch:async()=>huge,budget:budget(),minIntervalMs:0})).rejects.toThrow(/^cninfo_response_too_large$/);
  });
 });

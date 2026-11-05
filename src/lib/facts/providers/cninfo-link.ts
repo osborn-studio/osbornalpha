@@ -1,30 +1,38 @@
 // src/lib/facts/providers/cninfo-link.ts
 // 巨潮 filing linkage (spec §6.3 linkCn). For an A-share periodic filing, list hisAnnouncement/query over
-// available_date ± 3 days (every page) and keep titles that name the report year and kind and are not
-// 摘要/英文/已取消/补充; 更正 titles are excluded, except for restatement filings and filings that were
-// corrected (a type-5 row exists for the same key), which must match 更正 + year + kind. Exactly one hit →
-// {document_ref, document_url}; zero → 'none'; several → 'ambiguous'. SH/SZ only (BJ → 'none' without a
-// request). Same endpoint, 500 ms pacing and body as research/ingest/collectors/cninfo.ts; orgId from
-// issuers.cninfo_org_id, else resolveOrgId (not persisted here). Network errors throw; the caller still
-// counts the attempt (link_attempts + 1, stop at 5).
-// Title matching is whole-title (round-1 follow-up): [short name：]<YYYY>年<kind word>[permitted suffix] only; 更正 announcements
-// use their own pattern; inquiry letters, opinions, resolutions and other documents that merely mention the report never match.
-// Budget/pacing: every request (org lookup included) checks the budget first, waits for ONE module-level pacing slot (reserved
-// synchronously, >= 500 ms between request starts, shared by every caller in the process) and runs under budget.signal combined
-// with a per-request timeout capped at remaining - 20 s; errors are fixed codes (budget_aborted / budget_exhausted / cninfo <status>
-// / cninfo_timeout / cninfo_bad_body), never response bodies.
+// available_date ± 3 days (pages capped at totalpages or 10; more than that throws cninfo_too_many_pages) and keep titles that are
+// the report itself: whole-title match [short name：]<YYYY><kind word>[全文][（A股）][（修订版|更正后|…）]; 摘要/英文/H股/正文/已取消/补充/
+// 问询/意见/决议 forms never match. Exactly one hit → {document_ref, document_url}; zero → 'none'; several → 'ambiguous'.
+// SH/SZ only (BJ → 'none' without a request). Same endpoint and request body as research/ingest/collectors/cninfo.ts; the orgId
+// comes from issuers.cninfo_org_id, else a paced topSearch lookup (not persisted here). Only adjunctUrl values of the form
+// finalpage/YYYY-MM-DD/<digits>.PDF are accepted and the URL is built on https://static.cninfo.com.cn/.
+// SPEC DEVIATION (G1, commander decision): a 'restatement' filing (Tushare report_type 4: the prior-year comparative published
+// inside the NEXT year's report) links to the plain report of fiscal_year + 1 of the same report type (the primary source that
+// contains the comparative), NOT to a 更正 title. Only a filing flagged `corrected` (a type-5 row exists) is matched against
+// correction announcements: 关于<YYYY>年<kind>[及摘要][部分内容]的更正[的][说明]公告, 关于更正<YYYY>年<kind>…的公告, or the
+// corrected document itself (<YYYY>年<kind>（更正后|修订版）); on that branch 摘要 is not an exclusion.
+// Network errors throw; the caller still counts the attempt (link_attempts + 1, stop at 5).
+// Budget/pacing: every request (org lookup included) checks the budget first, waits for ONE module-level serialised pacer and runs
+// under budget.signal combined with a per-request timeout capped at remaining - 20 s; failed responses are cancelled unread and
+// successful bodies are size-capped; errors are fixed codes (budget_aborted / budget_exhausted / cninfo <status> / cninfo_timeout /
+// cninfo_bad_body / cninfo_response_too_large / cninfo_too_many_pages), never response bodies.
 import {DEFAULT_USER_AGENT} from '../../research/ingest/collectors/shared';
 import {CNINFO_HISTORY,CNINFO_TOPSEARCH} from '../../research/ingest/collectors/cninfo';
 import type {Budget,FilingRow} from '../types';
 import {createPacer,sleep} from './shared';
 
-export const CNINFO_STATIC='http://static.cninfo.com.cn/';
+export const CNINFO_STATIC='https://static.cninfo.com.cn/';
 export const CNINFO_PAGE_SIZE=30;
 export const CNINFO_WINDOW_DAYS=3;
 export const KIND_WORDS={annual:['年度报告','年报'],semiannual:['半年度报告','半年报','中期报告'],q1:['第一季度报告','一季度报告','第一季度季报'],q3:['第三季度报告','三季度报告','第三季度季报']} as const;
-export const EXCLUDE=/摘要|英文|已取消|补充|问询|意见|决议|函/;
+/** Never a report: (the 摘要 exclusion applies to the plain branch only, a correction may concern 报告及摘要). */
+export const EXCLUDE=/英文|已取消|补充|问询|意见|决议|函|正文|H股/;
+export const EXCLUDE_PLAIN=/摘要/;
 /** The only suffixes a report title may carry after the kind word. */
-export const PERMITTED_SUFFIX='(?:（(?:修订版|修订稿|修订后|更正后|更正版|更新后|更新版)）)?';
+export const PERMITTED_SUFFIX='(?:全文)?(?:（A股）)?(?:（(?:修订版|修订稿|修订后|更正后|更正版|更新后|更新版)）)?';
+export const ADJUNCT_URL=/^finalpage\/\d{4}-\d{2}-\d{2}\/\d+\.PDF$/i;
+export const CNINFO_MAX_PAGES=10;
+export const CNINFO_MAX_BODY_BYTES=2*1024*1024;
 export const CNINFO_MIN_INTERVAL_MS=500;
 export const CNINFO_RESERVE_MS=20_000;
 export const CNINFO_REQUEST_TIMEOUT_MS=30_000;
@@ -43,17 +51,26 @@ function kindOf(f:LinkFiling):keyof typeof KIND_WORDS|null{
 // Short company name: no digits, no brackets, never a 关于 lead-in; optionally followed by a colon.
 const NAME='[^\\d：:（）()]{0,20}';
 const HEAD=`(?!关于)${NAME}[：:]?`;
+/** `<YYYY>` + kind: the annual report also appears as <YYYY>年度报告. */
+const bodyOf=(kind:keyof typeof KIND_WORDS,fy:number)=>kind==='annual'?`${fy}(?:年年度报告|年度报告|年年报)`:`${fy}年(?:${KIND_WORDS[kind].join('|')})`;
 export function matchesAnnouncement(title:string,f:LinkFiling):boolean{
  const kind=kindOf(f);
  if(!kind||f.fiscal_year===null)return false;
  const t=title.replace(/<[^>]+>/g,'').replace(/\s+/g,'').replace(/\(/g,'（').replace(/\)/g,'）');
  if(EXCLUDE.test(t))return false;
- const words=`(?:${KIND_WORDS[kind].join('|')})`;
- const correction=f.form_type==='restatement'||f.corrected===true;
- const re=correction
-  ?new RegExp(`^(?:${NAME}[：:])?关于${NAME}${f.fiscal_year}年${words}的?更正(?:说明)?公告$`)
-  :new RegExp(`^${HEAD}${f.fiscal_year}年${words}${PERMITTED_SUFFIX}$`);
- return re.test(t);
+ const restatement=f.form_type==='restatement';
+ if(f.corrected===true&&!restatement){
+  const body=bodyOf(kind,f.fiscal_year),tail='(?:及摘要)?(?:部分内容)?';
+  return [
+   `^(?:${NAME}[：:])?关于${NAME}${body}${tail}的?更正(?:的)?(?:说明)?公告$`,
+   `^(?:${NAME}[：:])?关于更正${NAME}${body}${tail}的?公告$`,
+   `^${HEAD}${body}（(?:更正后|修订版)）$`,
+  ].some(r=>new RegExp(r).test(t));
+ }
+ if(EXCLUDE_PLAIN.test(t))return false;
+ // G1: a restatement (report_type 4) is the comparative inside the NEXT year's report of the same kind.
+ const fy=restatement?f.fiscal_year+1:f.fiscal_year;
+ return new RegExp(`^${HEAD}${bodyOf(kind,fy)}${PERMITTED_SUFFIX}$`).test(t);
 }
 const shiftDate=(ymd:string,days:number)=>new Date(Date.parse(`${ymd}T00:00:00Z`)+days*86_400_000).toISOString().slice(0,10);
 export function cninfoQueryBody(q:{code:string;orgId:string;column:'sse'|'szse';availableDate:string;pageNum:number}):string{
@@ -74,13 +91,25 @@ async function post(url:string,body:string,opts:LinkOptions,ua:string):Promise<{
  try{
   const res=await (opts.fetch??fetch)(url,{method:'POST',body,headers:{'User-Agent':ua,'Content-Type':'application/x-www-form-urlencoded'},signal});
   const status=res.status;
-  if(!res.ok)return {status,text:''};                       // body of a failed response is never read or surfaced
-  return {status,text:await res.text()};                   // consumed under the same signal
+  if(!res.ok){try{await res.body?.cancel();}catch{/* best effort */}return {status,text:''};}   // a failed response's body is never read or surfaced
+  return {status,text:await readCapped(res)};              // consumed under the same signal, size-capped
  }catch(e){
   if(budget.signal.aborted)throw new Error('budget_aborted');
   if(signal.aborted)throw new Error('cninfo_timeout');
   throw e instanceof Error&&/^cninfo/.test(e.message)?e:new Error('cninfo_network');
  }
+}
+async function readCapped(res:Response):Promise<string>{
+ if(!res.body)return '';
+ const reader=res.body.getReader(),dec=new TextDecoder();let total=0,out='';
+ for(;;){
+  const {done,value}=await reader.read();
+  if(done)break;
+  total+=value.byteLength;
+  if(total>CNINFO_MAX_BODY_BYTES){try{await reader.cancel();}catch{/* best effort */}throw new Error('cninfo_response_too_large');}
+  out+=dec.decode(value,{stream:true});
+ }
+ return out+dec.decode();
 }
 const parseJson=<T>(text:string):T=>{try{return JSON.parse(text) as T;}catch{throw new Error('cninfo_bad_body');}};
 
@@ -105,10 +134,13 @@ export async function linkCninfoFiling(filing:LinkFiling,issuer:LinkIssuer,opts:
  for(let pageNum=1;;pageNum++){
   const res=await post(CNINFO_HISTORY,cninfoQueryBody({code,orgId,column,availableDate:filing.available_date,pageNum}),opts,ua);
   if(res.status<200||res.status>=300)throw new Error(`cninfo ${res.status}`);
-  const page=parseJson<{announcements?:Announcement[]|null;hasMore?:boolean}>(res.text);
+  const page=parseJson<{announcements?:Announcement[]|null;hasMore?:boolean;totalpages?:number}>(res.text);
   const list=page.announcements??[];
-  for(const a of list)if(typeof a.announcementId==='string'&&typeof a.adjunctUrl==='string'&&matchesAnnouncement(a.announcementTitle??'',filing))hits.push({id:a.announcementId,url:CNINFO_STATIC+a.adjunctUrl});
+  for(const a of list)if(typeof a.announcementId==='string'&&typeof a.adjunctUrl==='string'&&ADJUNCT_URL.test(a.adjunctUrl)&&matchesAnnouncement(a.announcementTitle??'',filing))hits.push({id:a.announcementId,url:CNINFO_STATIC+a.adjunctUrl});
   if(!page.hasMore||list.length<CNINFO_PAGE_SIZE)break;
+  const total=typeof page.totalpages==='number'&&page.totalpages>0?page.totalpages:null;
+  if(total!==null&&pageNum>=total)break;
+  if(pageNum>=CNINFO_MAX_PAGES)throw new Error('cninfo_too_many_pages');
  }
  if(hits.length===0)return 'none';
  if(hits.length>1)return 'ambiguous';
