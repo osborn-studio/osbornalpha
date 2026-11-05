@@ -85,3 +85,42 @@ A OpenFIGI public display (default yes) · B no derived A-share ISIN · C gold-s
 ## Still open (OPEN-verify, §14)
 
 Official A+H list URL; OpenFIGI exchCode/securityType/compositeFIGI actual values; HKEX file headers; SEC `category` string variants; 52/53-week estimate adequacy; other iXBRL transformation formats in practice; Tushare `disclosure_date` entitlement and `modify_date` semantics; `document_ref` format alignment with cninfo announcement ids; submissions `files[]` pagination structure; `fact_sync_scope` placeholder rows for out-of-scope issuers in `set_merge`.
+
+## Round 3 (`04-codex-round3.md`, on the 3rd draft) — disposition in the 4th draft
+
+Codex round-3 verdict (quoted): "Verdict: not ready for an implementation plan—blocking items remain in restoration/current-evidence validation, lineage topology and conflict locking, candidate scope binding, evidence-reader and expected-key completeness, cycle success accounting, and unsupported historical deadline/ownership assertions, alongside R1–R3 above."
+
+| # | Decision | Reason / where in 4th draft |
+|---|---|---|
+| R1 restoration blocks itself | ACCEPT | §3.2 `restore_reconciled`: validate evidence → resolve the item first → then promote under the remaining checks (same order as plan 2 `resolve_facts_quarantine`); returns `{promoted, skipped}`; §5.6 route surfaces `no_rows_promoted`; R1 regression test in §9.2. |
+| R2 all-missing cycle reports success | ACCEPT | §3.1/§5.5: per-cursor `compared_passed/compared_failed/not_compared` (checked to sum to `expected` on `done`), cycle totals, `complete` only when `not_compared = 0` and no member exec failure, otherwise `complete_with_gaps` → freshness `ok:false`. Mismatches that were quarantined/reviewed do not make a cycle incomplete (they are findings, not gaps). |
+| R3 `set_merge` cannot repoint referrers | ACCEPT | §3.2 `set_merge` locks source, target and all referrers of both, repoints referrers (row_count = n), retires source (row_count = 1), bumps every affected `state_rev`; `issuers_topology_guard` trigger (§3.1) blocks any other `status/merged_into` write; `set_dissolved` added; A→B then B→C regression test. |
+| M8 candidate scope binding | ACCEPT | `adopt_candidate` derives issuer/market from the filing located by the candidate's `source_ref`, checks batch existence/status/dataset (`batch_mismatch`), locks that scope; route does the same lookup (§4.6). |
+| M11 topology write path | ACCEPT | Trigger + `set_merge`/`set_dissolved` as the only path (§3.1/§3.2/§4.4). |
+| M13 lineage conflict locks | ACCEPT | `resolve_lineage_conflict` locks the **current full lineage** of T (recomputed in-transaction), requires payload issuers ⊆ lineage (`lineage_changed`), re-queries the conflict group under lock, survivor check lineage-wide. |
+| M14 evidence reader | ACCEPT | New `read_filing_facts(filing, include_non_ok)` (all generations, all statuses); used for CN/US left-side binding and adoption duplicate checks (§3.2, §5.3, §5.4). |
+| M15 expected keys from the adapter under test | ACCEPT | §5.3: expected keys = union of adapter-derived and iXBRL-derived keys (`origin` recorded); one-sided keys stay in the denominator and surface as `left_missing`/`right_missing`; ≥ 4 keys per side. |
+| M18 rounding-to-nearest assumption | ACCEPT | §5.4: automatic quarantine only when the printed value is exact (元, 2 decimals); rounded printings create a non-quarantining `reconcile_review` item for a human. |
+| M19 hash equality cannot detect change | ACCEPT | §5.6: `inputs_hash_now` computed by the route at request time from current inputs via the same `computeInputsHash`; function compares it with `latest_result.inputs_hash`; `inputs_hash_current` removed. |
+| M20 one running cycle / ownership on completion | ACCEPT | Partial unique index on `(pair) where status='running'`; `done/failed` updates require `claimed_by = p_batch and claim_until > now()` (`lease_lost` otherwise). |
+| M21 calendar single full-range run | ACCEPT | §3.1/§6.2: `dq_calendar_passes` with `cursor_after`; a pass may span runs; freshness ok on pass completion, `ok:false` when a pass exceeds 2 days. |
+| M24 current category applied historically | ACCEPT | §6.1: per-fiscal-year categories from each 10-K cover (`dei:EntityFilerCategory`, `issuer_filer_categories`); FY N periods use FY N−1's cover category (Rule 12b-2 effectivity); no N−1 row → `no_rule`; submissions `category` is reference-only. |
+| M25 absences asserted as ownership boundary | ACCEPT | §4.3.1/§4.3.4: `sec_file_absent` is defined as an observation bound (not an effective date); no automatic `ticker_change`; replacement tickers recorded in provenance plus an `evidence_only` claim for a human with 8-K evidence. |
+
+Not re-audited beyond round 4's scope: round 4 (`05-codex-round4.md`) was limited to new defects introduced by the 4th draft plus a final verdict, per the coordinator's instruction.
+
+## Round 4 (`05-codex-round4.md`, on the 4th draft, scope = new defects only) — implemented in the 5th draft
+
+Codex round-4 verdict (quoted): "Verdict: not ready — the new topology guard and reconciliation lease handling permit untracked business mutations; the remaining prescribed fixes are required before planning."
+
+R1, R2, R3 confirmed RESOLVED by Codex. On the coordinator's instruction, S1–S7 were implemented in the 5th draft exactly as Codex prescribed; **no further Codex round was run**.
+
+| # | Severity | Status | Where in 5th draft |
+|---|---|---|---|
+| S1 topology guard fails open; flag not restored | P1 | implemented per Codex's prescribed fix (round 4), not re-audited | §3.1: `IS DISTINCT FROM 'on'`; both topology functions save the previous setting and restore it on normal and exception paths; §9.2 tests on a fresh connection and after `set_merge` returns within the same transaction. |
+| S2 `read_filing_facts` binding ambiguous across generations | P2 | implemented per Codex's prescribed fix (round 4), not re-audited | §3.2 `read_filing_facts` binding rule: active generation + published runs (`ok`/`quarantined`); rechecks bind to `payload.fact_ids`; multiple eligible rows → new outcome `left_ambiguous` (§3.1 enum); adoption duplicate check uses the full plan-2 candidate key incl. `mapping_gen`. |
+| S3 lease loss discards counters but not business effects | P1 | implemented per Codex's prescribed fix (round 4), not re-audited | §3.1 fence token `{pair, cycle_id, issuer_id, market, batch_id, attempt}`; `reconcile_quarantine(…, p_fence)` and new `apply_reconcile_result(p_fence, action, args)` lock the cursor row and validate ownership/attempt/expiry in the same transaction; `fence_failed` applies no mutation; §5.5 only accepted attempts contribute results or settlement counters. |
+| S4 failed cursors never claimable | P2 | implemented per Codex's prescribed fix (round 4), not re-audited | §5.5 claim predicate: `pending`, or `claimed and claim_until < clock_timestamp()`, or `failed and attempts < 3`; atomic claim replaces ownership, increments attempts, clears last error; three attempts terminal. |
+| S5 `drc_done_accounted` accepts NULL counters | P2 | implemented per Codex's prescribed fix (round 4), not re-audited | §3.1: `expected >= 0`, counters non-negative when present, `done` requires all three `IS NOT NULL` and sum = `expected`; settlement asserts the invariant and never coalesces to zero. |
+| S6 `reconcile_review` contradicts exhaustive dispatcher | P2 | implemented per Codex's prescribed fix (round 4), not re-audited | §4.6 dispatch table: `reconcile_review` → generic guarded status transition (accept and reject), no promotion/materialisation; five branches enumerated; tests in §9.1. |
+| S7 calendar pass lacks frozen membership/ownership | P2 | implemented per Codex's prescribed fix (round 4), not re-audited | §3.1 `dq_calendar_passes.members/next_index/failed_members/claimed_by/claim_until/status`; §6.2 one leased worker per market/pass, `replace_filing_expectations(…, p_pass_token)` fenced, advance only after successful replacement, finish only when every frozen member completed, additions enter the next pass, failures retried and block successful completion. |

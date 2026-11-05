@@ -1,6 +1,6 @@
 # 数据底座三 · F1b 标识符补全 + F5 对账与新鲜度 设计规格
 
-日期：2026-11-04（第 3 稿。审计轨迹：`docs/audits/2026-11-04-data-foundation-3/` —— 01 Codex 第一轮（35 项）、02 Codex 第二轮（28 项新发现 + 35 项复核）、03 处置表。两轮上限已用完；第 3 稿落实处置表中全部 ACCEPT 项，Codex 终审判定见处置表末尾）
+日期：2026-11-04（第 5 稿。审计轨迹：`docs/audits/2026-11-04-data-foundation-3/` —— 01 Codex 第一轮（35 项）、02 第二轮（28 项新发现 + 35 项复核）、03 处置表（含第三、四轮分节）、04 第三轮（R1–R3 + 28 项复核）、05 第四轮（只审第 4 稿新增缺陷，S1–S7，判定 not ready）。第 4 稿落实 R1–R3 与第三轮 PARTIAL 项；第 5 稿按 Codex 第四轮的规定修法逐字落实 S1–S7，**未再审计**）
 状态：草案，待 owner 评审（§13 有九项 owner 事项）
 上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（下称"规格一"）§3.2 F1b 行、§5.2、§10 WP-F1b 与 WP-F5、§12 开放问题 1；`docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md`（下称"规格二"，**第 8 稿**，Codex 第八轮判定可进入实施）§4.1、§4.5 函数表与行锁/`state_rev` 约定、§4.6 `read_facts` 信封、§4.8 `FactsDb`、§5.3、§7.1、§7.3、§15 开放问题 4/5/7。规格一 §14 与规格二第 8 稿全文在此视为既定事实；本规格只定义它们推迟的部分。规格二若再改版，§12 接口表须重新核对后才能进入计划。
 总纲：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5（owner 2026-11-04 确认）。本规格逐条对照：只用一手来源（GLEIF、SEC、HKEX、交易所上市日期；OpenFIGI 与 Tushare 仅作适配器，原始响应入桶并记哈希）、每个数字可回放（对账行记录两侧文件哈希与定位；窗口证据复制所用的源行值）、事实与判断分离（声明只记证据类别；不写置信度小数）、缺失保持缺失（**不推导 A 股 ISIN**；**8-A/25 只作证据、不生成所有权日期**；**申报人类别未知或仅 SRC 时不算法定应披露日**；**估计期末不计入法定逾期**）。
@@ -40,7 +40,7 @@
 - 规格二 `same_day_conflict` 的选定；`odd_duration`、`missing_available_date` 的人工选定（继续只能确认知晓）。
 - 美股 ticker 的上市日：SEC 数据不含；8-A/25 只作证据项（§4.3.3）。
 - 40-F 法定期限（随加拿大期限，无输入）；仅 SRC 字样、无加速类别的申报人期限（Rule 12b-2 下 SRC 可同时为加速申报人，无法从 SRC 字样推出期限）。
-- 发行人合并的证券转移工具：合并前的证券关闭/转移仍按 runbook §1.1 手工；本规格只提供把 `merged_into` 写入纳入锁协议的函数（§3.2 `set_merge`）。
+- 发行人合并前的证券关闭/转移工具：仍按 runbook §1.1 手工；本规格只提供拓扑写入函数（`set_merge` 含引用方改指、`set_dissolved`）并用触发器封死其他路径（§3.1/§3.2）。
 - 对账右侧的来源不确定性建模：右侧（年报印刷值、iXBRL 标注值）按其印刷/标注精度建区间，左侧按十进制原文精确；不再进一步建模。
 
 ---
@@ -105,7 +105,7 @@ create unique index issuer_identifier_claims_pending_unique on … (issuer_id, i
 ```
 pair     text not null default 'legacy'
 kind     text not null default 'numeric' check (kind in ('numeric','text','date'))
-outcome  text not null default 'compared' check (outcome in ('compared','left_missing','left_unlinked','right_missing','unsupported','right_ambiguous','legacy'))
+outcome  text not null default 'compared' check (outcome in ('compared','left_missing','left_unlinked','left_ambiguous','right_missing','unsupported','right_ambiguous','legacy'))
 detail   jsonb not null default '{}' check (jsonb_typeof(detail) = 'object')
 index (pair, created_at desc)
 constraint dq_reconciliations_numeric_sides check (kind <> 'numeric' or outcome <> 'compared' or (left_value is not null and right_value is not null))
@@ -119,16 +119,53 @@ constraint dq_reconciliations_nonnumeric_sides check (kind = 'numeric' or (left_
 ```
 dq_reconcile_cycles
   pair text not null, cycle_id text not null, started_at timestamptz not null, finished_at timestamptz,
-  members jsonb not null check (jsonb_typeof(members)='array'),     -- 冻结的 [{issuer_id, market}]
-  status text not null check (status in ('running','complete','complete_with_failures')),
+  members jsonb not null check (jsonb_typeof(members)='array'),     -- 冻结的 [{issuer_id, market, expected_keys}]
+  status text not null check (status in ('running','complete','complete_with_gaps')),
+  expected_total int not null, compared_passed int not null default 0, compared_failed int not null default 0,
+  not_compared int not null default 0, exec_failed_members int not null default 0,
+  detail jsonb not null default '{}' check (jsonb_typeof(detail)='object'),   -- pending_members（§3.2 set_merge 写入）等
   primary key (pair, cycle_id)
+  unique index (pair) where status = 'running'                       -- 同一 pair 同时只有一个运行中周期
 dq_reconcile_cursor
   pair text not null, cycle_id text not null, issuer_id uuid not null references issuers on delete restrict, market text not null,
+  expected int not null,                                               -- 该成员的预期键数（冻结）
   state text not null default 'pending' check (state in ('pending','claimed','done','failed')),
   claimed_by uuid references ingest_batches(batch_id) on delete set null, claim_until timestamptz,
   attempts int not null default 0, last_error text, done_at timestamptz,
+  compared_passed int, compared_failed int, not_compared int,          -- 完成时写入；done 行三者之和必须 = expected
   primary key (pair, cycle_id, issuer_id, market),
-  index (pair, cycle_id, state)
+  foreign key (pair, cycle_id) references dq_reconcile_cycles(pair, cycle_id) on delete restrict,
+  index (pair, cycle_id, state),
+  constraint drc_expected_nonneg check (expected >= 0),
+  constraint drc_counters_nonneg check ((compared_passed is null or compared_passed >= 0) and (compared_failed is null or compared_failed >= 0) and (not_compared is null or not_compared >= 0)),
+  constraint drc_done_accounted check (state <> 'done' or (compared_passed is not null and compared_failed is not null and not_compared is not null and compared_passed + compared_failed + not_compared = expected))
+```
+
+（S5 规定修法）`done` 行三个计数都必须非空且和等于 `expected`；结算前再断言每个 `done` 成员满足该不变式，**不得**把无效计数 coalesce 为 0。
+
+游标的认领与完成都要求所有权（§5.5）：`done/failed` 的更新带 `where claimed_by = p_batch and attempts = p_attempt and claim_until > clock_timestamp()`，0 行 → 该工作者的结果作废（`lease_lost`），不写计数。**围栏令牌**（S3 规定修法）：`fence = {pair, cycle_id, issuer_id, market, batch_id, attempt}`；每个由对账派生的业务写入（隔离、`latest_result` 更新、建 `reconcile_review`/`lineage_conflict` 工作项）都在**同一事务**内先 `select … from dq_reconcile_cursor where (pair, cycle_id, issuer_id, market) = fence for update`，校验 `claimed_by = fence.batch_id and attempts = fence.attempt and claim_until > clock_timestamp()`，不满足 → `raise 'fence_failed'`，**不做任何业务写入**；只有被接受的尝试才能贡献结果行与结算计数。
+
+**`dq_calendar_passes`**（§6.2）
+
+```
+market text not null, pass_id uuid not null, started_at timestamptz not null, finished_at timestamptz,
+members jsonb not null check (jsonb_typeof(members)='array'),   -- 创建时冻结的、按 issuer_id 升序的成员列表（S7）
+next_index int not null default 0,                               -- 下一个待处理成员的下标；只在成功替换后推进
+failed_members jsonb not null default '[]',                      -- [{issuer_id, attempts, last_error}]；可重试，非空时不能成功结束
+claimed_by uuid references ingest_batches(batch_id) on delete set null, claim_until timestamptz,   -- 每市场/每遍同一时刻一个持租工作者
+status text not null default 'running' check (status in ('running','complete','complete_with_failures')),
+primary key (market, pass_id)
+unique index (market) where finished_at is null
+```
+
+**`issuer_filer_categories`**（§6.1：按财年的申报人类别，来自该财年 10-K 封面）
+
+```
+issuer_id uuid not null references issuers on delete restrict, fiscal_year int not null,
+acceleration text not null check (acceleration in ('large_accelerated','accelerated','non_accelerated')),
+smaller_reporting boolean, category_raw text not null,
+source text not null check (source in ('ixbrl_dei')), accession text not null, evidence_sha256 text not null,
+as_of date not null, primary key (issuer_id, fiscal_year)
 ```
 
 **`dq_filing_expectations`**
@@ -167,8 +204,8 @@ constraint dfe_unknown_upstream_iff check ((disclosure_state = 'unknown_upstream
 
 ```
 issuer_id uuid not null references issuers on delete restrict, market text not null check (market in ('US','CN')),
-category_raw text, acceleration text not null default 'unknown' check (acceleration in ('large_accelerated','accelerated','non_accelerated','unknown')),
-smaller_reporting boolean, regime text not null check (regime in ('10-K','20-F','40-F','cn')),
+category_raw_current text,               -- submissions.category 原文，仅供参考与 sec.filer_category 对账，不决定期限
+regime text not null check (regime in ('10-K','20-F','40-F','cn')),
 fiscal_year_end text check (fiscal_year_end ~ '^(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])$'),
 week52_pattern boolean not null default false, source text not null, source_sha256 text, as_of date not null, updated_at timestamptz not null default now(),
 primary key (issuer_id, market)
@@ -178,9 +215,9 @@ primary key (issuer_id, market)
 
 **函数 `resolve_identifier_claim(p_id uuid, p_status text, p_resolved_by uuid, p_amend jsonb default null) returns jsonb`**（`security definer set search_path = public`，仅 service_role）：`select … for update` 声明行；非 `pending` → `raise 'already_resolved'`；`op='legacy'` → `raise 'legacy_claim'`；`op='evidence_only'` 且 `p_status='accepted'` → 要求 `p_amend` 把它改写为可执行 op（§4.2.1 修订规则），否则 `raise 'amend_required'`；校验 `detail` 符合 `claim/1` 模式、`detail.target.issuer_id = issuer_id`、`(op, id_type)` 配对合法（表 §4.2.1）；`rejected` → 只改状态；`accepted` → 在同一事务按 op 执行业务写入（每个分支为静态 SQL，目标发行人必须 `status='active'`；每个写入要求 `get diagnostics row_count = 1`，否则抛对应码回滚）并把 `detail.provenance_written`（白名单键）同时写入目标行的 `provenance`；成功写 `status/resolved_by/resolved_at`，返回 `{op, applied}`。
 
-**函数 `set_merge(p_source uuid, p_target uuid, p_resolved_by uuid) returns void`**：合并写入纳入锁协议（§4.4）。`security definer set search_path = public`；对 `fact_sync_scope` 中 `(p_source|p_target, market)` 的全部行（两市场；缺失的以 `priority=0, reasons='[]', fetch_key=''` 插入后）按 `(issuer_id, market)` 排序 `for update`；执行 `update issuers set status='merged', merged_into=p_target where issuer_id=p_source and status='active'`（计划一触发器校验目标活跃、源无开放证券）；两发行人各市场 `state_rev + 1`；为 pair `facts.lineage_same_day` 插入目标的游标行（`next cycle`）；写 `research_audit_log(action='entities.merge')`。runbook §1.1 的手工合并改为：手工关闭/转移证券 → 调用 `set_merge`。注意：`fact_sync_scope` 表来自规格二；本函数放在迁移二（§3.2）。
+**拓扑写入的唯一入口**：`issuers.status/merged_into` 的任何改变只能经迁移二的 `set_merge`/`set_dissolved`（§3.2）。迁移一先加触发器 `issuers_topology_guard`（`before update of status, merged_into`）：**`current_setting('entities.allow_topology_write', true) IS DISTINCT FROM 'on'` 时抛 `23514 topology_write_forbidden`**（S1 规定修法：设置缺失返回 NULL 也必须拒绝）；两个拓扑函数在进入时保存原值 `prev := current_setting('entities.allow_topology_write', true)`，`set_config('entities.allow_topology_write','on',true)`，并在**所有返回路径**（正常返回与 `exception … when others` 块内）恢复 `set_config('entities.allow_topology_write', coalesce(prev,''), true)` 后再返回或重新抛出。测试（§9.2）：在全新连接上直接 `update issuers set merged_into=…` 被拒；在同一事务内先成功调用 `set_merge` 再直接 update 也被拒。计划一的 `issuers_merge_target_active` 与 `issuers_retire_requires_closed_securities` 触发器保持不变，仍在函数内生效。runbook §1.1 的手工 SQL 合并改为：手工关闭/转移证券 → `set_merge`。在迁移二落地前（无 `fact_sync_scope` 表），迁移一只装触发器，合并暂不可执行（计划二落地前本来也没有事实需要谱系）。
 
-四张新表与 `issuer_identifier_claims` 为 service-role only。
+本迁移的全部新表（`dq_reconcile_cycles`、`dq_reconcile_cursor`、`dq_calendar_passes`、`dq_filing_expectations`、`issuer_filing_profiles`、`issuer_filer_categories`）与 `issuer_identifier_claims` 为 service-role only。
 
 **桶 `reconcile-raw`**：MIME 加 `application/pdf`；`upsert:false`，`409` 视为已存在（内容寻址，不可变）；上传失败 → 该发行人/该文件的处理 `failed`，不写依赖它的行。存：主文档、submissions JSON 与分页、HKEX 名单、GLEIF 子集（记原文件 sha256/大小）、OpenFIGI 请求与响应、Tushare `disclosure_date` 响应、黄金集引用的年报 PDF（抄录人用 `scripts/dq/gold-pdf.ts --upload` 上传，脚本校验 sha256 与 json 一致）。集成测试：anon/authenticated 不能读写该桶。
 
@@ -197,15 +234,18 @@ primary key (issuer_id, market)
 | 函数 | 行为 |
 |---|---|
 | `set_filing_acceptance(p_filing, p_accepted, p_source) returns boolean` | `accepted_at is null` 时写入 true；相同 false；不同 `raise 'acceptance_conflict'` |
-| `reconcile_quarantine(p_issuer, p_market, p_fact_ids uuid[], p_batch uuid, p_item uuid) returns int` | 持 `(p_issuer, p_market)` scope 行锁；只把属于该发行人该市场、`ok`、所属运行 `published` 的指定行置 `quarantined`；`state_rev + 1`；把项 `detail.quarantine_state='done'`（项由调用方先建，`quarantine_state='pending'`）；返回行数 |
-| `restore_reconciled(p_item uuid, p_batch uuid, p_resolved_by uuid) returns int` | 持锁；项必须 `open`、`reason_code='reconcile_mismatch'`；要求 `detail.latest_result.passed = true` 且 `detail.latest_result.inputs_hash = detail.inputs_hash_current`（运行器每轮同时更新两者：`inputs_hash` = sha256(左侧 raw_hash ‖ 右侧 sha256 ‖ parser/gold 版本)，两者相等即"最近一次通过的输入就是当前输入"）；满足则按 `promote_quarantined` 资格提升 `payload.fact_ids`，项 `resolved_accept`、`state_rev + 1`；否则 `raise 'not_passing'` |
-| `adopt_candidate(p_item uuid, p_index int, p_batch uuid, p_expected_rev bigint, p_resolved_by uuid) returns jsonb` | 持锁；`state_rev <> p_expected_rev` → `raise 'stale_evaluation'`（调用方在同一 `state_rev` 下做过规则评估，§4.6）；项 `open` 且 `ambiguous_value`；候选越界 → `invalid_choice`；候选字段完整（concept/period/unit/value/raw_hash/mapping_gen）否则 `invalid_candidate`；filing 存在且 `filings.mapping_gen = 候选.mapping_gen` 且 `> 0`（否则 `generation_moved`）；候选键不存在（`duplicate`）；同 K 同日无值不同的 `ok` 行且无 open 争议项（`conflict_exists`）；同一事务：插入 `fact_sync_runs(issuer, market, batch_id=p_batch, mapping_gen=候选.mapping_gen, status='published', manifest='[]', published_at=now())`（管理运行：不激活映射代，不改 `filings.mapping_gen`）；插入事实 `staged` 再 `→ok`；项 `status='resolved_accept'`、`resolved_by/at`、`detail.chosen_candidate_index`、`detail.adopted_fact_id`、`detail.run_id`、`detail.hook={stage:'materialize', state:'pending', at}`（**在同一事务内**写，崩溃后可从项恢复）；`state_rev + 1`；返回 `{fact_id, run_id}` |
-| `resolve_lineage_conflict(p_item uuid, p_keep uuid, p_batch uuid, p_resolved_by uuid) returns jsonb` | 项 `open`、`reason_code='lineage_conflict'`；`p_keep ∈ payload.fact_ids`；按 `(issuer_id, market)` 排序锁定 payload 中全部行的 scope 行；把 payload 中除 `p_keep` 外仍 `ok` 的行置 `quarantined`；要求结束后该 (K, 日期) 在谱系内恰有一个 `ok` 值（否则回滚 `unresolved`）；项 `resolved_accept`、`detail.chosen_fact_ids=[p_keep]`；涉及的每个 scope `state_rev + 1`；返回 `{quarantined}` |
+| `reconcile_quarantine(p_issuer, p_market, p_fact_ids uuid[], p_batch uuid, p_item uuid, p_fence jsonb) returns int` | 先锁 `p_fence` 指向的游标行并校验所有权/尝试号/未过期（§3.1 围栏；失败 `fence_failed`，无任何写入）；再持 `(p_issuer, p_market)` scope 行锁；只把属于该发行人该市场、`ok`、所属运行 `published` 的指定行置 `quarantined`；`state_rev + 1`；把项 `detail.quarantine_state='done'`（项由调用方先建，`quarantine_state='pending'`）；返回行数 |
+| `restore_reconciled(p_item uuid, p_batch uuid, p_inputs_hash_now text, p_resolved_by uuid) returns jsonb` | 持锁；项必须 `open`、`reason_code='reconcile_mismatch'`；要求 `detail.latest_result.passed = true` 且 `detail.latest_result.inputs_hash = p_inputs_hash_now`（**由路由在请求时**从当前输入计算：左侧 `raw_hash` ‖ 右侧文档 sha256 ‖ 当前黄金文件/样本清单 sha256 ‖ 解析器版本；运行器写 `latest_result.inputs_hash` 时用同一函数；因此任何输入在最近一次通过之后的变化都会使二者不等）；不满足 → `raise 'not_passing'`。满足则**先**把本项置 `resolved_accept`（`resolved_by/at`，`detail.restored_by_batch`），**再**按 `promote_quarantined` 的资格规则（含本规格附加条款——此时本项已关闭，不再阻塞自己；其他 open 的 `reconcile_mismatch`/争议项仍阻塞）提升 `payload.fact_ids`；`state_rev + 1`；返回 `{promoted, skipped:[{fact_id, reason}]}`。顺序与规格二 `resolve_facts_quarantine` 一致（先关项后提升） |
+| `read_filing_facts(p_filing uuid, p_include_non_ok boolean) returns jsonb` | **证据读取器**：返回该 filing 下**全部映射代、全部状态**（`p_include_non_ok=false` 时只 `ok`）的事实行（`financial_facts` 列 + `status`、`mapping_gen`、`run_id`、所属运行 `status`），不做窗口计算；`security definer`，仅 service_role。**绑定规则（S2 规定修法）**：常规对账把自然键绑定到该 filing **激活映射代**（`mapping_gen = filings.mapping_gen`）且所属运行 `published` 的行，状态 `ok` 或 `quarantined` 皆可；满足条件的行多于一行 → 结果 `left_ambiguous`，不比较；显式复查（已隔离项的重跑）绑定到 `payload.fact_ids`，不论代，绝不换成别的行；`adopt_candidate` 的重复检查用规格二完整候选键（K + `filing_id` + `mapping_gen`），仅旧代存在同键不构成重复 |
+| `adopt_candidate(p_item uuid, p_index int, p_batch uuid, p_expected_rev bigint, p_resolved_by uuid) returns jsonb` | 绑定：项 `dataset` 必须为 `facts.US`/`facts.CN`；候选含 `source_ref`，由 `filings(source, source_ref)` 唯一定位 filing，发行人与市场**取自该 filing 行**（不信任 payload）；`p_batch` 必须存在、`status='running'`、`dataset = 项.dataset`（否则 `batch_mismatch`）；持该 (filing.issuer_id, filing.market) 的 scope 行锁；`state_rev <> p_expected_rev` → `stale_evaluation`；项 `open` 且 `ambiguous_value`；越界 → `invalid_choice`；候选字段完整（concept/period_start/period_end/duration/unit/consolidation/value/raw_hash/mapping_gen/source_concept/statement）否则 `invalid_candidate`；`filings.mapping_gen = 候选.mapping_gen` 且 `> 0`（否则 `generation_moved`）；经 `read_filing_facts(filing, true)` 确认候选键在任何代、任何状态下不存在（`duplicate`）；同 K 同日无值不同的 `ok` 行且无 open 争议项（`conflict_exists`）；同一事务：插入 `fact_sync_runs(issuer=filing.issuer_id, market=filing.market, batch_id=p_batch, mapping_gen=候选.mapping_gen, status='published', manifest='[]', started_at=now(), published_at=now())`（管理运行：不激活映射代，不改 `filings.mapping_gen`）；插入事实 `staged` 再 `→ok`；项 `resolved_accept`、`resolved_by/at`、`detail.chosen_candidate_index/adopted_fact_id/run_id/issuer_id/market`、`detail.hook={stage:'materialize', state:'pending', at}`（同一事务）；`state_rev + 1`；返回 `{fact_id, run_id, issuer_id, market}` |
+| `resolve_lineage_conflict(p_item uuid, p_keep uuid, p_batch uuid, p_resolved_by uuid) returns jsonb` | 项 `open`、`reason_code='lineage_conflict'`；从 `natural_key` 取目标 T；在事务内先计算 **T 的当前完整谱系**（T ∪ 所有 `merged_into = T`）并按 `(issuer_id, market)` 排序锁定谱系每个成员的 scope 行（缺失 → `scope_missing`）；payload 中行的发行人必须 ⊆ 谱系（否则 `lineage_changed`）；`p_keep ∈ payload.fact_ids`；把谱系内该 (K, 日期) 除 `p_keep` 外仍 `ok` 的行（不限于 payload，锁下重新查询）置 `quarantined`；结束后该 (K, 日期) 在谱系内恰有一个 `ok` 值（否则回滚 `unresolved`）；项 `resolved_accept`、`detail.chosen_fact_ids=[p_keep]`、`detail.quarantined_fact_ids`；谱系每个 scope `state_rev + 1`；返回 `{quarantined}` |
 | `read_facts_lineage(p_issuers uuid[], p_market, p_concepts, p_as_of, p_from, p_to, p_history, p_limit, p_include_non_ok default false) returns jsonb` | 规格二 `read_facts` 的同一语句模板，`f.issuer_id = any(p_issuers)`，分区键去掉 `issuer_id`。**跨发行人冲突抑制只在 `array_length(p_issuers,1) > 1` 时生效，且只看 `ok` 行**：同 K 同 `available_date` 来自不同发行人且值不同的 `ok` 行不参与当前值，列入 `conflicts`；`p_include_non_ok=true` 带回的 `staged/quarantined` 行照规格二原样参与窗口计算、不参与抑制。信封 `{state_revs:[{issuer_id, state_rev}], lineage:[…], rows:[…含 issuer_id…], conflicts:[{key, available_date, fact_ids}], truncated, row_count}`。规格二 `read_facts(p_issuer, …)` 改为对单元素数组调用后映射：`state_rev = state_revs[0].state_rev`，去掉 `lineage/conflicts`；单发行人时抑制不生效，因此输出与第 8 稿语义**完全一致**（集成测试对 `ok`/`includeNonOk`/`history` 三种模式逐字段比较）。`security invoker`，`grant execute to anon, authenticated, service_role` |
-| `replace_financial_metrics_lineage(p_issuer, p_market, p_based_on jsonb, p_rows jsonb) returns int` | `p_based_on` 为 `[{issuer_id, state_rev}]`，要求 issuer_id 唯一且含 `p_issuer`；对每个成员的 scope 行按 `(issuer_id, market)` 排序 `for update`（缺失 → `raise 'scope_missing'`）；锁内重算谱系 `{p_issuer} ∪ {merged_into = p_issuer}` 与 `p_based_on` 集合比较，不等 → `stale_computation`；逐个 `state_rev` 比较，不等 → `stale_computation`；删 `(p_issuer, p_market)` 物化行并插入，`based_on_rev = p_issuer 的 state_rev`，`based_on_lineage = p_based_on`。`set_merge` 也持这些锁并递增 `state_rev`，因此合并不能插入到比较与写入之间 |
-| `set_merge(…)` | 见 §3.1（放在本迁移） |
+| `replace_financial_metrics_lineage(p_issuer, p_market, p_based_on jsonb, p_rows jsonb) returns int` | `p_based_on` 为 `[{issuer_id, state_rev}]`，要求 issuer_id 唯一且含 `p_issuer`；对每个成员的 scope 行按 `(issuer_id, market)` 排序 `for update`（缺失 → `raise 'scope_missing'`）；锁内重算谱系 `{p_issuer} ∪ {merged_into = p_issuer}` 与 `p_based_on` 集合比较，不等 → `stale_computation`；逐个 `state_rev` 比较，不等 → `stale_computation`；删 `(p_issuer, p_market)` 物化行并插入，`based_on_rev = p_issuer 的 state_rev`，`based_on_lineage = p_based_on`。拓扑函数也持这些锁并递增 `state_rev`，因此合并/改指不能插入到比较与写入之间 |
+| `set_merge(p_source uuid, p_target uuid, p_resolved_by uuid) returns jsonb` | **拓扑写入（含改指）**。事务内 `set_config('entities.allow_topology_write','on',true)`；受影响集合 = `{p_source, p_target} ∪ 当前 merged_into = p_source 的全部引用方 ∪ 当前 merged_into = p_target 的全部引用方`；为集合中每个发行人在两市场确保 scope 行存在（缺失则插入 `priority=0, reasons='[]', fetch_key=''`），按 `(issuer_id, market)` 排序 `for update`；锁下重新读取引用方集合（`for update` 读 `issuers` 行），期望行数 n；`update issuers set merged_into = p_target where merged_into = p_source` 要求 `row_count = n`；`update issuers set status='merged', merged_into=p_target where issuer_id=p_source and status='active'` 要求 `row_count = 1`（否则 `source_not_active`）；计划一触发器此时校验目标活跃且源无开放证券（失败即回滚，错误原样抛出）；集合中每个 scope `state_rev + 1`；为 pair `facts.lineage_same_day` 把 `p_target` 加入下个周期成员（写 `dq_reconcile_cycles.members` 的待加入列表 `detail.pending_members`，由运行器开新周期时合并）；`research_audit_log(action='entities.merge', detail={source, target, repointed:n})`；返回 `{repointed:n}`。A→B 后 B→C：`set_merge(B, C)` 先把 A 改指 C 再退役 B，一跳不变式保持。无谱系（无事实）时同样经此函数 |
+| `apply_reconcile_result(p_fence jsonb, p_action text, p_args jsonb) returns jsonb` | 对账派生写入的统一围栏入口（S3）：锁游标行、校验围栏；`p_action ∈ {'insert_reconciliation','update_latest_result','create_review_item','create_lineage_item'}`，各自为静态 SQL（写 `dq_reconciliations` 行 / 更新 `dq_quarantine.detail.latest_result` / 建 `reconcile_review` 或 `lineage_conflict` 项）；围栏失败 → `fence_failed`，无写入。运行器不再直接用 `TableClient` 写这些表 |
+| `set_dissolved(p_issuer uuid, p_resolved_by uuid) returns void` | 同样的锁集合（发行人 + 引用方）；要求无引用方（`has_referrers` → 调用方先 `set_merge` 改指）；`update issuers set status='dissolved' where issuer_id=p_issuer and status='active'` `row_count = 1`；`state_rev + 1`；审计日志 |
 
-**`FactsDb` 扩展**（三种实现都要）：`readFactsLineage(issuers, market, opts)`、`replaceMetricsLineage(issuer, market, basedOn, rows)`、`adoptCandidate(item, index, batch, expectedRev, resolvedBy)`、`reconcileQuarantine(issuer, market, factIds, batch, item)`、`restoreReconciled(item, batch, resolvedBy)`、`resolveLineageConflict(item, keep, batch, resolvedBy)`、`setFilingAcceptance(filing, acceptedAt, source)`、`setMerge(source, target, resolvedBy)`、`stateRevs(issuers, market)`。错误码并入 `FactsDbError`。
+**`FactsDb` 扩展**（三种实现都要）：`readFactsLineage(issuers, market, opts)`、`readFilingFacts(filingId, includeNonOk)`、`replaceMetricsLineage(issuer, market, basedOn, rows)`、`adoptCandidate(item, index, batch, expectedRev, resolvedBy)`、`reconcileQuarantine(issuer, market, factIds, batch, item)`、`restoreReconciled(item, batch, inputsHashNow, resolvedBy)`、`resolveLineageConflict(item, keep, batch, resolvedBy)`、`setFilingAcceptance(filing, acceptedAt, source)`、`setMerge(source, target, resolvedBy)`、`setDissolved(issuer, resolvedBy)`、`stateRevs(issuers, market)`。错误码并入 `FactsDbError`。
 
 ---
 
@@ -277,7 +317,7 @@ A 股 ISIN 的 NSIN 由中国境内的 ANNA 成员编码机构分配，与证券
 
 #### 4.3.1 语义
 
-`[valid_from, valid_to)` 半开。方法枚举见 §3.1。**上市日只属于该 ticker 在本库最早的持有行**；更晚的持有行（ticker 被另一发行人再用）保持原方法。
+`[valid_from, valid_to)` 半开。方法枚举见 §3.1，分两类：**观测界**（`first_observed`、`sec_file_absent`、`unrecorded`）表示"本库在此日期观测到/不再观测到"，不是生效日；**证据日**（`listing_date`、`delisting`、`ticker_change`、`merge_close`、`curated`）表示有文件支持的生效日。`ticker_change` 只能由人工声明（`close_security`/`backdate_window`，证据如 8-K Item 8.01 代码变更公告）写入，脚本不自动判定（§4.3.4）。读接口把方法原样返回，使用方据此判断区间端点的性质。**上市日只属于该 ticker 在本库最早的持有行**；更晚的持有行保持原方法。
 
 #### 4.3.2 回填 `scripts/entity-keys/backfill-windows.ts`（`DATASETS.entities.windows`）
 
@@ -303,10 +343,10 @@ A 股 ISIN 的 NSIN 由中国境内的 ANNA 成员编码机构分配，与证券
 - 本库未关闭、`source='sec_company_tickers_exchange'` 的 ticker 在文件中对该 CIK 消失：
   - 首次：`provenance.pending_change={first_missing_as_of, first_missing_sha256, first_missing_fetched_at, replacement_tickers:[本次该 CIK 新增且 securityType 不明的 ticker], sources:['sec_company_tickers_exchange']}`，不关闭。
   - 再次出现 → 删除 `pending_change`。
-  - 关闭条件（全部满足）：仍消失；`fetched_at − first_missing_fetched_at ≥ 7 天`；本次 sha256 ≠ 首次；**第二来源确认**：该 CIK 的 submissions `tickers[]`（本次运行抓取）不含 OLD。则 `valid_to = first_missing_as_of`；`valid_to_method` = `replacement_tickers` 非空且 submissions `tickers[]` 含其中之一 ? `'ticker_change'` : `'sec_file_absent'`；对应新行 `valid_from_method` 改为 `ticker_change`（守卫：仍为 `first_observed`）；`provenance.valid_to` 记两次文件哈希与 submissions 哈希。
+  - 关闭条件（全部满足）：仍消失；`fetched_at − first_missing_fetched_at ≥ 7 天`；本次 sha256 ≠ 首次；**第二来源确认**：该 CIK 的 submissions `tickers[]`（本次运行抓取）不含 OLD。则 `valid_to = first_missing_as_of`，`valid_to_method = 'sec_file_absent'`（**观测界**：最后一次观测到持有是 `first_missing_as_of` 之前的那次运行；不断言换码生效日），`provenance.valid_to` 记两次文件哈希、submissions 哈希与 `last_seen_as_of`；`replacement_tickers` 只保留在 `provenance.pending_change`，并为该发行人写一条 `evidence_only` claim（`params.suggested_op='backdate_window'`，`note='观测到 OLD 消失、NEW 出现；换码生效日需 8-K/公告证据'`），由人工把 NEW 行改为 `ticker_change` 并给出生效日。
   - 该 ticker 在文件中归另一 CIK → `ownership_conflict` 隔离，不关闭。
-  - 关闭后再次出现 → 新行 `first_observed`（从再出现的 `as_of` 起）；旧关闭行不改（观测史如实保留）。
-- 换码夹具：T0（CIK X 持 OLD）、T1（X 持 NEW，OLD 消失，`as_of=T0+1d`）、T2（仍无 OLD，`as_of=T0+8d`，不同 sha256，submissions 夹具 `tickers=['NEW']`）。断言：`resolveIssuer({ticker:'OLD'},{asOf:T0})` = X；T1 后 T2 前 `{asOf:T1}` = X；T2 后 `{asOf:T1}` = null、`{asOf:T0}` = X；NEW 行 `valid_from_method='ticker_change'`；缺少 submissions 确认时不关闭。
+  - 关闭后再次出现 → 新行 `first_observed`（从再出现的 `as_of` 起）；旧关闭行不改。
+- 换码夹具：T0（CIK X 持 OLD）、T1（X 持 NEW，OLD 消失，`as_of=T0+1d`）、T2（仍无 OLD，`as_of=T0+8d`，不同 sha256，submissions 夹具 `tickers=['NEW']`）。断言：`resolveIssuer({ticker:'OLD'},{asOf:T0})` = X；T1 后 T2 前 `{asOf:T1}` = X；T2 后 `{asOf:T1}` = null、`{asOf:T0}` = X；OLD 行 `valid_to_method='sec_file_absent'`、NEW 行仍 `first_observed`、存在一条 `evidence_only` claim；缺少 submissions 确认时不关闭。
 
 #### 4.3.5 `resolveIssuer` 的 `asOf`
 
@@ -315,7 +355,7 @@ A 股 ISIN 的 NSIN 由中国境内的 ANNA 成员编码机构分配，与证券
 ### 4.4 合并后发行人的事实归属（读时谱系）
 
 - 谱系 = `{T} ∪ {i | i.merged_into = T}`（一跳）。事实行保留原 `issuer_id`。读取用 `read_facts_lineage`；跨发行人同 K 同日不同值的 `ok` 行不参与当前值、进 `conflicts`。
-- 合并写入经 `set_merge`（§3.1/3.2）：持两发行人各市场 scope 锁、递增 `state_rev`、登记谱系对账游标。
+- 拓扑写入只经 `set_merge`/`set_dissolved`（§3.2；触发器 `issuers_topology_guard` 挡住其他路径）：持源、目标与两者全部引用方的 scope 锁、改指引用方、递增 `state_rev`、登记谱系对账成员。
 - 冲突处置：对账对 `facts.lineage_same_day`（游标：合并时登记 + 每周）对每个 `conflicts` 条目写对账行（`kind='numeric'`，`outcome='compared'`，`passed=false`）并建隔离项 `lineage_conflict`（`natural_key=<T>:<K>:<available_date>`，`payload={fact_ids, values:[{issuer_id, filing, value}]}`）。管理员 POST 体 `keep_fact_id` → `resolve_lineage_conflict`（原子、排序锁、结束后恰一个 `ok` 值、裁决持久化并被 `promote_quarantined` 附加条款遵守）。不自动择一。
 - `fact_sync_scope`：`merged` 发行人 `priority=0`、`reasons=[]`。
 - 物化目标：对发行人 i 的任何可见性操作（发布、提升、对账隔离、采用候选、谱系裁决）后，物化 `T(i) = i.merged_into ?? i`：`materialize(T, market)` = `readFactsLineage` → `replaceMetricsLineage(T, market, state_revs, rows)`；`stale_computation` → 重读重算一次。
@@ -327,9 +367,9 @@ A 股 ISIN 的 NSIN 由中国境内的 ANNA 成员编码机构分配，与证券
 
 ### 4.6 被隔离候选的人工选定（`ambiguous_value`）
 
-规格二 §7.3 规定 `facts.*` 项的接受全部经 `resolve_facts_quarantine`；本规格登记**两个分派例外**（`facts-resolver.ts` 的分派表穷举：`ambiguous_value` 带 `chosen_candidate_index` → `adopt_candidate`；`reconcile_mismatch` → `restore_reconciled`；`lineage_conflict` → `resolve_lineage_conflict`；其余 → 规格二路径）。
+规格二 §7.3 规定 `facts.*` 项的接受全部经 `resolve_facts_quarantine`；本规格登记**四个分派例外**（`facts-resolver.ts` 的分派表穷举，S6 规定修法：`ambiguous_value` 带 `chosen_candidate_index` → `adopt_candidate`；`reconcile_mismatch` → `restore_reconciled`；`lineage_conflict` → `resolve_lineage_conflict`；**`reconcile_review` → 计划一通用的守卫状态翻转（接受与拒绝都只改状态，不提升、不物化）**；其余 `facts.*` 原因 → 规格二 `resolve_facts_quarantine`）。分派表与其测试必须穷举以上五个分支。
 
-- 路由：读项与候选 → `readFacts(issuer, market, {concepts: 该组, asOf: 今天, includeNonOk:false})` 得 `stateRev` 与该组当前代 `ok` 行 → TS 评估规格二 §7 规则（候选 ∪ ok 行）；失败 → 400 `rule_failed`，不写库 → 新建批次（`producer='dq-resolver'`）→ `adoptCandidate(item, n, batch, stateRev, resolvedBy)`：`stale_evaluation` → 重读重评一次再调用，仍过期 → 409；其余码按 §8。
+- 路由：读项与候选 → 由候选 `source_ref` 经 `filingsOfIssuer`/`findFilingBySourceRef` 定位 filing，取其 `issuer_id/market`（不信任 payload）→ `readFacts(issuer, market, {concepts: 该组, asOf: 今天, includeNonOk:false})` 得 `stateRev` 与该组当前代 `ok` 行 → TS 评估规格二 §7 规则（候选 ∪ ok 行）；失败 → 400 `rule_failed`，不写库 → 新建批次（`producer='dq-resolver'`，`dataset = 项.dataset`）→ `adoptCandidate(item, n, batch, stateRev, resolvedBy)`：`stale_evaluation` → 重读重评一次再调用，仍过期 → 409；`batch_mismatch` 为编程错误 → 500；其余码按 §8。
 - 函数在同一事务写入 `detail.hook={stage:'materialize', state:'pending'}`；路由随后 `materialize(T(issuer), market)`，成功改 `{stage:'done', state:'done'}`，失败 `{stage:'materialize', state:'failed', message}`。重试：项已 `resolved_accept` 且 `detail.adopted_fact_id` 存在 → 只做物化。崩溃于函数提交与物化之间 → 项上 `hook.state='pending'` 可被重试与 `scripts/facts/materialize.ts --pending-hooks` 扫到。
 - 审计日志 `detail` 加索引与 `adopted_fact_id`。未带索引的接受仍是确认知晓（规格二路径）。
 
@@ -368,11 +408,11 @@ export interface ReconcilePair { id: ReconcilePairId; kind: 'numeric'|'text'|'da
 - 右侧键 = (标签, 规范化上下文, 单位)；同键多值 → `right_ambiguous`，不隔离左侧。
 - 左侧匹配：先左侧 `source_concept` + 同期同单位；没有 → 规格二回退顺序在同期同单位内取第一个存在标签（`detail.tag_mismatch=true`）；仍没有 → `right_missing`。
 - 精度：右侧 `precision = {decimals, scale}`；左侧 `precision = raw_hash 中原文的小数位`；比较区间：左侧点值，右侧 ± 0（iXBRL 标注值即申报值，不是印刷四舍五入）。`tolerance=0`。
-- 失败动作只对左侧 `ok` 行；左侧已 `quarantined` → 只写对账行并把项 `detail.latest_result={passed, reconciliation_id, at, inputs_hash}`、`detail.inputs_hash_current=inputs_hash` 更新（`TableClient.update`）。
+- 失败动作只对左侧 `ok` 行；左侧已 `quarantined` → 只写对账行并把项 `detail.latest_result={passed, reconciliation_id, at, inputs_hash}` 更新（`TableClient.update`；`inputs_hash` 由 §5.6 的 `computeInputsHash` 得到）。
 
 ### 5.3 美股样本与预期键清单
 
-`scripts/dq/select-us-sample.ts` 生成 `fixtures/gold/us-ixbrl-sample-v1.json`：`{schema, generated_at, issuers:[{cik, ticker, regime, filings:[{accn, form, period_end, raw_sha256, expected_keys:[{concept, period_start, period_end, unit, source_concept}]}]}]}`。**预期键独立于数据库状态**：由规格二 companyfacts 适配器直接解析该 accn 的原始快照（`raw_sha256` 入桶）得到的全部 (concept, period, unit)；每份文件 ≥ 4 个键否则清单无效。运行时按自然键解析为本地 fact_id（含 `quarantined`；经 `read_facts(includeNonOk:true, history:true)` 按 `filing_id` 筛）；解析不到 → `left_missing`。样本规则：规格二黄金美股必入；其余按 sp500 ticker 字典序等距至 30 家，含 ≥ 3 NYSE、≥ 3 Nasdaq、≥ 2 财年末非 12-31、≥ 2 `acceleration ≠ large_accelerated`；`10-K` 申报人取最近 10-K + 10-Q，`20-F` 取最近 20-F。清单变更走 PR；映射代升级后重生成。
+`scripts/dq/select-us-sample.ts` 生成 `fixtures/gold/us-ixbrl-sample-v1.json`：`{schema, generated_at, issuers:[{cik, ticker, regime, filings:[{accn, form, period_end, raw_sha256, doc_sha256, expected_keys:[{concept, period_start, period_end, unit, source_concept, origin:'left'|'right'|'both'}]}]}]}`。**预期键来自两个独立来源的并集**：(a) 规格二 companyfacts 适配器直接解析该 accn 原始快照得到的 (concept, period, unit)；(b) §5.2 解析器对该 accn 主文档得到的、标签在 `FACT_CONCEPTS` 内且上下文非维度的 (concept, period, unit)。每一侧 ≥ 4 个键否则清单无效；只在一侧出现的键也是预期键——运行时它必然得到 `left_missing` 或 `right_missing`，从而暴露适配器或解析器的遗漏，而不是缩小分母。运行时左侧经 `read_filing_facts(filing_id, true)`（不限代、含 `quarantined`）按自然键解析为本地 fact_id；解析不到 → `left_missing`。样本规则：规格二黄金美股必入；其余按 sp500 ticker 字典序等距至 30 家，含 ≥ 3 NYSE、≥ 3 Nasdaq、≥ 2 财年末非 12-31、≥ 2 `acceleration ≠ large_accelerated`；`10-K` 申报人取最近 10-K + 10-Q，`20-F` 取最近 20-F。清单变更走 PR；映射代升级后重生成。
 
 ### 5.4 A 股黄金集对账
 
@@ -391,24 +431,25 @@ export interface ReconcilePair { id: ReconcilePairId; kind: 'numeric'|'text'|'da
 - 六科目固定（都在年报"主要会计数据和财务指标"表；BS 科目 `INSTANT`，IS/CF `12M`；eps `CNY/share` 且 multiplier=1）。只抄"本期"列；`recorded_by/reviewed_by` 用代号。
 - **校验器**拒绝：`rows` 不是 `tickers × fiscal_years × concepts` 的**精确乘积**（每个组合恰一行、无多余行）；非法 ticker；`printed_value` 不匹配正则或小数位 ≠ `printed_decimals`；eps multiplier ≠ 1；缺页码/sha256/announcement_id/announcement_date；`recorded_by == reviewed_by`；`tickers` 为空。
 - **样本**：`tickers` = `scripts/dq/select-cn-sample.ts` 生成时 `fact_sync_scope(market='CN', priority>0)` 的发行人主 ticker，按 ticker 升序取前 `min(30, N)`；N=0 → 不能进入 F3-6（退出条件不满足，如实记录）。清单文件只含 ticker 与一手文件定位；范围由规格二决策 A 决定且该决策已承认公共事实可反推队列（本规格 owner 决策 H 再次确认授权用户 = `RESEARCH_OWNER_USER_ID`）。
-- **左侧绑定**：黄金行引用的年报由 `cninfo_announcement_id` 定位：左侧 = 该发行人 `filings.document_ref = announcement_id`（规格二巨潮挂接写入）且 `source_ref` 含 `:1:`（report_type=1）的 filing 下的匹配事实；该 filing 未挂接或不存在 → `left_unlinked`（detail 记 Tushare 公告日与巨潮日期）；同一 announcement 下另有 `:5:` filing → 另写一行（natural_key 带 report_type），门禁只数 `:1:` 行。事实经 `read_facts(includeNonOk:true, history:true)` 按 `filing_id` 筛；`ok`/`quarantined` 都比较，隔离只对 `ok`。
-- **印刷精度区间**：右侧值 = 印刷值 × multiplier，区间半径 = `0.5 × 10^(−printed_decimals) × multiplier`（四舍五入到印刷位的最大误差）；左侧点值（Tushare 原文十进制）；`passed` ⇔ 左侧 ∈ 区间，交叉相乘比较。写入 `tolerance` 列为 `半径 / max(|l|,|r|,1)`，`detail.tolerance_rule='printed_precision/1'`。owner 替代方案见决策 D。
+- **左侧绑定**：黄金行引用的年报由 `cninfo_announcement_id` 定位：左侧 = 该发行人 `filings.document_ref = announcement_id`（规格二巨潮挂接写入）且 `source_ref` 含 `:1:`（report_type=1）的 filing 下的匹配事实；该 filing 未挂接或不存在 → `left_unlinked`（detail 记 Tushare 公告日与巨潮日期）；同一 announcement 下另有 `:5:` filing → 另写一行（natural_key 带 report_type），门禁只数 `:1:` 行。事实经 **`read_filing_facts(filing_id, true)`**（不限代、含 `quarantined`）取得；`ok`/`quarantined` 都比较，隔离只对 `ok`。
+- **印刷精度区间与自动隔离的边界**：右侧值 = 印刷值 × multiplier，区间半径 = `0.5 × 10^(−printed_decimals) × multiplier`；左侧点值（Tushare 原文十进制）；`passed` ⇔ 左侧 ∈ 区间，交叉相乘比较；`tolerance` 列 = `半径 / max(|l|,|r|,1)`，`detail.tolerance_rule='printed_precision/1'`。**只有右侧为精确印刷**（`multiplier=1` 且 `printed_decimals=2`，即年报以元、两位小数列示，区间半径 0.005 元，与 Tushare 的元两位小数同精度）时，不一致才自动隔离左侧；右侧以千元/万元/百万元等舍入单位印刷时，不一致**不自动隔离**，而是建非隔离的人工复核项 `reason_code='reconcile_review'`（`dataset='facts.<market>'`，`payload` 同 §5.6，事实保持 `ok`），由人判断是舍入差还是数据差——因为"四舍五入到印刷位"是假定而非文件声明。E5 门禁的 `passed` 两种情形都计入（在区间内即通过）。owner 替代方案见决策 D。
 - **CI 门禁** `gold-cn.integration.test.ts`（critical，F3-6 退出条件要求登记且存在）：N 家 Tushare 夹具 + 巨潮挂接夹具 → CN 同步进本地库 → 本对账对 → 断言每黄金行恰一结果、`passed/expected ≥ 95%`、非 passed 全部在 `exceptions.json`。
 - 生产：游标周期（§5.5）；失败 → §5.6。
 
 ### 5.5 运行器 `src/lib/dq/reconcile/run.ts`
 
-- **周期**：pair 无 `running` 周期时，新建 `dq_reconcile_cycles(cycle_id = <pair>-<started_at ISO 日期>-<uuid 前 8 位>, members = expectedKeys 的发行人集合冻结, status='running')` 并为每个成员建游标 `pending`。周期内成员不变（范围变化下个周期生效）。
-- **认领**：每次运行（cron 或脚本）用本批次 id 认领 `pending` 或 `claim_until < now` 的游标（`update … set state='claimed', claimed_by, claim_until=now+10min where state in (…)` 按 `(issuer_id)` 顺序逐条，`row_count=1` 才处理），处理完 `done`，异常 `failed`（`attempts+1`、`last_error`）；`failed` 且 `attempts < 3` 在下次运行重试；≥ 3 → 留 `failed`。
-- **完成**：全部游标 `done` 或 `failed(attempts≥3)` → 周期 `complete`（无 failed）或 `complete_with_failures`，`finished_at`；新鲜度 `recordAttempt(DATASETS.reconcile(pair), {ok: status='complete', cadence:'weekly'})` **只在周期完成时记**。周期跨越日历周不影响 id。
-- **批次**：`producer='reconcile'`，`dataset=DATASETS.reconcile(pair)`，`tool_versions={pair, cycle_id, parser, gold_schema, sample_sha256, code_version}`；计数：`fetched` = 本次处理的预期键数；`inserted` = passed；`quarantined` = mismatch 且已隔离；`failed` = mismatch 但隔离失败 + 全部非 `compared` 结果（`left_missing/left_unlinked/right_missing/unsupported/right_ambiguous`）+ 解析异常——它们都是"未能完成比较"，如实降级批次状态；`errors` 带 `outcome_summary` 明细。
+- **周期**：pair 无 `running` 周期时（部分唯一索引保证同一 pair 最多一个；并发建周期的第二个插入 23505 → 读回已有），新建 `dq_reconcile_cycles(cycle_id = <pair>-<started_at ISO 日期>-<uuid 前 8 位>, members = expectedKeys 的发行人集合 ∪ `pending_members`，每成员记 `expected` 键数, expected_total = Σexpected, status='running')` 并为每个成员建游标 `pending`。周期内成员不变（范围变化下个周期生效）。
+- **认领（S4 规定修法）**：游标可认领当且仅当 `state='pending'`，或 `state='claimed' and claim_until < clock_timestamp()`，或 `state='failed' and attempts < 3`；认领原子完成：`update … set state='claimed', claimed_by=p_batch, claim_until=clock_timestamp()+interval '10 min', attempts=attempts+1, last_error=null where (pair,cycle_id,issuer_id,market)=… and (state='pending' or (state='claimed' and claim_until < clock_timestamp()) or (state='failed' and attempts < 3))`，按 `issuer_id` 顺序逐条，`row_count=1` 才处理；认领后的 `attempts` 即本次尝试的围栏令牌 `fence.attempt`。`failed` 且 `attempts = 3` 为终态。
+- **围栏与完成（S3 规定修法）**：本次尝试的每个业务写入（`reconcile_quarantine`、`latest_result` 更新、建 `reconcile_review`/`lineage_conflict` 项、写 `dq_reconciliations` 行）都带 `fence`，在同一事务内先锁游标行并校验所有权与未过期（§3.1），失败 → `fence_failed`，该写入不发生、本次尝试终止。处理完 `update … set state='done', compared_passed, compared_failed, not_compared, done_at where claimed_by=p_batch and attempts=fence.attempt and claim_until > clock_timestamp()`（0 行 → `lease_lost`，本次尝试的结果不计入结算——由于所有业务写入都已被围栏，此时不存在需要撤销的效果）；异常 → `state='failed'`（同样条件）、`last_error`。只有被接受的尝试贡献结果行与结算计数。
+- **周期结算**（每次运行结束时，若全部游标 `done` 或 `failed(attempts ≥ 3)`）：汇总 `compared_passed/compared_failed/not_compared = Σ游标`，`exec_failed_members = count(failed)`；`status = (not_compared = 0 and exec_failed_members = 0) ? 'complete' : 'complete_with_gaps'`；`finished_at`。**不一致（`compared_failed`）不是执行失败**：它们已通过隔离/复核项进入人工流程，周期仍可 `complete`；但任何预期键没有得到 `compared` 结果（缺失、未挂接、不支持、右侧矛盾）或任何成员执行失败，都使周期 `complete_with_gaps`。新鲜度 `recordAttempt(DATASETS.reconcile(pair), {ok: status='complete', cadence:'weekly', detail:{cycle_id, 四个计数}})` **只在周期结算时记**；`complete_with_gaps` 记 `ok:false`（连续两个周期有缺口 → `error`）。周期跨越日历周不影响 id。
+- **批次**：`producer='reconcile'`，`dataset=DATASETS.reconcile(pair)`，`tool_versions={pair, cycle_id, parser, gold_schema, sample_sha256, code_version}`；计数：`fetched` = 本次处理的预期键数；`inserted` = passed；`quarantined` = mismatch 且已隔离或已建复核项；`failed` = 隔离失败 + 全部非 `compared` 结果 + 解析异常；`errors` 带 `outcome_summary` 明细。批次状态（`partial`）反映本次运行；周期状态反映覆盖；两者在看板分列。
 - 预算：cron `deadline=start+240 s`，发行人开始前剩余 ≥ 60 s。
 - 触发：`/api/cron/reconcile?pair=<id>`：US 每日 02:00 UTC；CN 每日 03:00 UTC（黄金集进 CI 后加入）；lineage 每日 04:00 UTC（无成员时空转）。脚本 `scripts/dq/reconcile.ts --pair <id> [--issuer …] [--apply]`。
 
 ### 5.6 失败即隔离与恢复
 
-- 隔离：先 `quarantine({dataset:'facts.<market>', table:'financial_facts', naturalKey:'<pair>:<natural_key>:<fact_id>', reasonCode:'reconcile_mismatch', detail:{pair, reconciliation_id, inputs_hash, inputs_hash_current: inputs_hash, quarantine_state:'pending'}, payload:{key, fact_ids:[left], left_value, right_value, right_locator}})`，再 `reconcileQuarantine(issuer, market, [left], batch, item)`（函数把 `quarantine_state='done'`），再 `materialize(T, market)`。运行器每次开始先扫 `reconcile_mismatch` 且 `quarantine_state='pending'` 的 open 项重做第二步（可重试的工作项）。
-- 恢复：每轮对已隔离事实写 `latest_result` 与 `inputs_hash_current`；管理员 `resolved_accept` → `restore_reconciled`（要求最近一次通过且输入未变；否则 409 `not_passing`）。`resolved_reject` = 左侧确有问题，行保持 `quarantined`。规格二的 `resolve_facts_quarantine` 对 `reconcile_mismatch` 项不适用（分派表）。
+- 隔离：先 `quarantine({dataset:'facts.<market>', table:'financial_facts', naturalKey:'<pair>:<natural_key>:<fact_id>', reasonCode:'reconcile_mismatch', detail:{pair, reconciliation_id, inputs_hash, quarantine_state:'pending'}, payload:{key, fact_ids:[left], left_value, right_value, right_locator}})`，再 `reconcileQuarantine(issuer, market, [left], batch, item)`（函数把 `quarantine_state='done'`），再 `materialize(T, market)`。运行器每次开始先扫 `reconcile_mismatch` 且 `quarantine_state='pending'` 的 open 项重做第二步（可重试的工作项）。
+- 恢复：每轮对已隔离事实写 `detail.latest_result={passed, reconciliation_id, at, inputs_hash}`（`inputs_hash = computeInputsHash({left_raw_hash, right_sha256, gold_or_sample_sha256, parser_version})`，纯函数 `src/lib/dq/reconcile/inputs-hash.ts`）。管理员 `resolved_accept` → 路由用同一函数从**当前**输入算 `inputs_hash_now`（左侧 `raw_hash` 来自 `factsByIds`，右侧 sha256 来自桶 `meta.json`，黄金/样本文件 sha256 来自仓库当前文件，解析器版本来自代码）→ `restore_reconciled(item, batch, inputs_hash_now, resolvedBy)`（要求最近一次通过且哈希相等；否则 409 `not_passing`，响应说明"需先重跑对账"）。函数先关项后提升（§3.2），返回 `promoted/skipped`；`promoted=0` 时路由返回 200 但 `detail.restore_note='no_rows_promoted'` 并列出 skipped 原因（例如仍被争议项引用）。`resolved_reject` = 左侧确有问题，行保持 `quarantined`。规格二的 `resolve_facts_quarantine` 对 `reconcile_mismatch` 项不适用（分派表）。`reconcile_review` 项（§5.4）：接受/拒绝只改状态（无事实动作），由计划一通用路径处理。
 - 已公开事实被隔离会改变公共接口答案：owner 决策 F。
 
 ---
@@ -417,7 +458,7 @@ export interface ReconcilePair { id: ReconcilePairId; kind: 'numeric'|'text'|'da
 
 ### 6.1 规则 `src/lib/dq/calendar.ts`（纯函数，`CALENDAR_RULES_VERSION='filing-calendar/1'`）
 
-**档案（美股）**：`category_raw` 解析：含 "Large accelerated" → `large_accelerated`；否则含 "Accelerated filer" → `accelerated`；否则含 "Non-accelerated" → `non_accelerated`；否则（含仅 "Smaller reporting company"、空）→ `unknown`。`smaller_reporting` 单独记录，不参与期限。`regime` 按最近年报 `form_type`。`fiscal_year_end` = submissions `fiscalYearEnd`。档案只有当前值：期望行记 `profile_as_of`；**只对期末 ≥ `profile_as_of − 15 个月` 的期间按该档案给法定期限**（更早的期间 `deadline_state='no_rule'`，`due_rule='none.profile_not_effective/1'`）。
+**申报人类别（美股）——按财年、来自该财年 10-K 封面**：`issuer_filer_categories(issuer_id, fiscal_year)` 由 §5.2 解析器对每份 10-K 主文档的 `dei:EntityFilerCategory` 文本得到（`scripts/dq/filer-categories.ts` 与对账运行器共用解析器；范围内每个发行人最近 3 份 10-K；文档入桶，`evidence_sha256`）。解析：含 "Large accelerated" → `large_accelerated`；否则含 "Accelerated filer" → `accelerated`；否则含 "Non-accelerated" → `non_accelerated`；只有 "Smaller reporting company" 或无法解析 → 不写行（没有可用类别）。**类别的适用期**（Rule 12b-2：申报人状态在财年末确定，自下一财年第一份 10-Q 起生效）：财年 N 内各报告期（N 的三份 10-Q 与 N 的 10-K）使用 **财年 N−1 的 10-K 封面类别**；没有 N−1 行 → 该期间 `deadline_state='no_rule'`，`due_rule='none.no_category_for_fy/1'`。submissions 的 `category` 只存入 `issuer_filing_profiles.category_raw_current` 作参考，并经对账对 `sec.filer_category` 与最新 10-K 封面比对；不决定期限。`regime` 按最近年报 `form_type`；`fiscal_year_end` = submissions `fiscalYearEnd`（与最近 10-K `DocumentPeriodEndDate` 不一致 → `detail.fye_mismatch=true`，仍按 10-K 实际 `period_end` 推算）。
 
 **法定期限**：
 
@@ -426,7 +467,7 @@ export interface ReconcilePair { id: ReconcilePairId; kind: 'numeric'|'text'|'da
 | 10-K / large_accelerated | 财年末后 60 天 | 季末后 40 天 | `us.laf/1` |
 | 10-K / accelerated | 75 | 40 | `us.acc/1` |
 | 10-K / non_accelerated | 90 | 45 | `us.non/1` |
-| 10-K / unknown | `no_rule`（`none.unknown_category/1`） | 同 | — |
+| 10-K / 该财年无 N−1 封面类别 | `no_rule`（`none.no_category_for_fy/1`） | 同 | — |
 | 20-F | 财年末后 4 个月 | 无季报期望 | `us.20f/1` |
 | 40-F | `no_rule`（`none.40f/1`） | 无 | — |
 | cn | 年报 ≤ 次年 4-30 | Q1 ≤ 4-30、H1 ≤ 8-31、Q3 ≤ 10-31 | `cn.*/1` |
@@ -447,7 +488,7 @@ export interface ReconcilePair { id: ReconcilePairId; kind: 'numeric'|'text'|'da
 
 ### 6.2 写入 `src/lib/dq/calendar-sync.ts`
 
-`runCalendarSync(deps, {market, limit})`：批次 `producer='filing-calendar'`、`dataset=DATASETS.calendar(market)`；范围 = `fact_sync_scope(priority>0)` 按 `(coalesce(min computed_at), issuer_id)` 排序（最久未算的先算），预算内逐个；输入 = 档案 + `filingsOfIssuer` 最近 8 期（含运行状态）+ 上游列表；输出经 `replace_filing_expectations`。回执 `detail={issuers, rows, by_deadline_state, by_disclosure_state, upstream_unavailable, no_fiscal_year_end}`。触发：`/api/cron/filing-calendar?market=US` 与 `?market=CN` 各每日 01:00/01:10 UTC；新鲜度 `recordAttempt(DATASETS.calendar(market), {ok: 本次处理到范围末尾, cadence:'daily'})`（范围大于单次预算时按排序续跑，直到一次运行覆盖完整范围才记 ok）。
+`runCalendarSync(deps, {market, limit})`：批次 `producer='filing-calendar'`、`dataset=DATASETS.calendar(market)`。**按"遍"（pass）推进（S7 规定修法）**：`dq_calendar_passes` 中该市场无未完成的遍 → 新建并**冻结**成员列表 `members`（范围内发行人按 `issuer_id` 升序；遍进行中范围的增减进入下一遍）；每次运行先**租用**该遍（`update … set claimed_by=p_batch, claim_until=clock_timestamp()+interval '10 min' where market=… and finished_at is null and (claim_until is null or claim_until < clock_timestamp())`，0 行 → 本次运行不处理该市场，`skipped_summary(pass_claimed)`），同一市场同一遍同时只有一个持租工作者；按 `next_index` 取成员，预算内逐个：`replace_filing_expectations(issuer, market, rows, p_pass_token={pass_id, batch_id})` 在同一事务内锁遍行、校验 `claimed_by = batch_id and claim_until > clock_timestamp()`（否则 `fence_failed`，不写）并在成功替换后把 `next_index + 1`；替换失败 → 该成员记入 `failed_members`（`attempts+1`），`next_index` 照样推进，`failed_members` 中 `attempts < 3` 的成员在遍末尾重试；全部成员处理完且 `failed_members` 为空 → `status='complete'`、`finished_at`，新鲜度 `recordAttempt(DATASETS.calendar(market), {ok:true, cadence:'daily', detail:{pass_id, started_at, finished_at}})`；有终态失败成员 → `complete_with_failures`，记 `ok:false`；一遍从开始到结束超过 2 天也记 `ok:false`。输入 = 档案 + `issuer_filer_categories` + `filingsOfIssuer` 最近 8 期（含运行状态）+ 上游列表；输出经 `replace_filing_expectations`。回执 `detail={pass_id, issuers_done, rows, by_deadline_state, by_disclosure_state, upstream_unavailable, no_fiscal_year_end, no_category}`。触发：`/api/cron/filing-calendar?market=US` 与 `?market=CN` 各每日 01:00/01:10 UTC。
 
 ### 6.3 数据集登记 `src/lib/dq/datasets.ts`
 
@@ -515,6 +556,14 @@ export const DQ_DATASET_INVENTORY: readonly {dataset; producer; cadence:Cadence}
 | 隔离项建成但 `reconcile_quarantine` 失败 | 项 `quarantine_state='pending'`，下次重试 | `quarantine_error` | partial |
 | 游标认领失败（被他人认领） | 跳过 | `skipped_summary(claimed)` | — |
 | `adopt_candidate`：`stale_evaluation` | 重评一次后 409 | 同名 | — |
+| `adopt_candidate`：`batch_mismatch` / 候选 `source_ref` 定位不到 filing | 500（编程错误）/ 409 `filing_not_found` | 同名 | — |
+| `restore_reconciled`：`promoted=0` | 200，`restore_note='no_rows_promoted'` + skipped 原因 | — | — |
+| `resolve_lineage_conflict`：`lineage_changed` / `scope_missing` | 409 | 同名 | — |
+| 游标完成时所有权丢失 | 本工作者结果作废，对账行标 `superseded` | `lease_lost` | partial |
+| 周期结算 `complete_with_gaps` | 新鲜度 `ok:false` | `cycle_gaps`（信息） | — |
+| 拓扑：直接 SQL 改 `status/merged_into` | 触发器拒绝 | `topology_write_forbidden` | — |
+| `set_merge`：`source_not_active` / 计划一触发器错误；`set_dissolved`：`has_referrers` | 回滚，原样抛出 | 同名 | — |
+| 日历：财年无 N−1 封面类别 | `no_rule` 行 | `detail.no_category` 计数 | — |
 | `adopt_candidate`：`invalid_choice`/`invalid_candidate` → 400；`generation_moved`/`conflict_exists`/`duplicate` → 409 | 项保持 open | 同名 | — |
 | `restore_reconciled`：`not_passing` | 409 | 同名 | — |
 | `resolve_lineage_conflict`：`unresolved` | 409，回滚 | 同名 | — |
@@ -540,14 +589,15 @@ export const DQ_DATASET_INVENTORY: readonly {dataset; producer; cadence:Cadence}
 - `resolve.test.ts`：`asOf/today`；新字段。
 - `ixbrl.test.ts`：AAPL 10-K 裁剪夹具 + 非默认前缀改写夹具；每种 format 正则；nil；segment/scenario 任何子元素跳过；上下文规范化去重；重复标注；`dei:*`；unit divide。
 - `decimal.test.ts`：交叉相乘比较、区间判定、20 位整数。
-- `pairs.test.ts`/`run.test.ts`：自然键；印刷精度区间表驱动；每键恰一行；计数映射；周期创建/认领/重试/完成；新鲜度只在完成时记。
+- `pairs.test.ts`/`run.test.ts`：自然键；印刷精度区间表驱动（含精确印刷→隔离、舍入印刷→`reconcile_review`）；每键恰一行；计数映射；周期创建/认领/重试/结算；**全部 `not_compared` 的周期 → `complete_with_gaps`、新鲜度 `ok:false`（R2 回归）**；全部 mismatch 但已隔离的周期 → `complete`；并发建周期只留一个；`inputs-hash.test.ts`（输入任一项变化哈希即变）。
+- `filer-categories.test.ts`：封面文本解析、N−1 财年适用规则、无 N−1 → `no_rule`。
 - `gold-cn.schema.test.ts`：精确乘积、重复、小数位、空 tickers。
-- `calendar.test.ts`：类别解析；期限表；顺延；A 股节点；月末与 52/53 周（估计、匹配、替换）；档案时效 15 个月；6 个期间；状态矩阵（含 `unknown_upstream`、staged filing 不算收到、`no_rule` 可 `received`）；`disclosure_date` 精确匹配与修改。
-- `datasets.test.ts`；`facts-resolver.test.ts`（分派表穷举、`rule_failed`、`stale_evaluation` 重试、恢复禁用、`keep_fact_id`）；路由测试（`asOf/tickerAsOf`、admin dq 新字段与 `market`、claims 顺序与 `amend`、quarantine 新字段）；`messages/parity.test.ts`。
+- `calendar.test.ts`：类别解析；期限表；顺延；A 股节点；月末与 52/53 周（估计、匹配、替换）；N−1 财年类别适用；6 个期间；状态矩阵（含 `unknown_upstream`、staged filing 不算收到、`no_rule` 可 `received`）；`disclosure_date` 精确匹配与修改。
+- `datasets.test.ts`；`facts-resolver.test.ts`（分派表穷举五个分支含 `reconcile_review` 只改状态、`rule_failed`、`stale_evaluation` 重试、恢复禁用、`keep_fact_id`）；路由测试（`asOf/tickerAsOf`、admin dq 新字段与 `market`、claims 顺序与 `amend`、quarantine 新字段）；`messages/parity.test.ts`。
 
 ### 9.2 数据库（`test:db`，critical）
 
-`identifiers.integration.test.ts`、`dq-extensions.integration.test.ts`（含 `S4_TEST_STATE`，登记 `criticalSuites`）：两迁移在有数据库上升级 + 写入新证据后重放不改写；`valid_from` 更新受互斥约束；`resolve_identifier_claim` 每个 op 的成功/冲突回滚/目标不一致拒绝/非活跃发行人拒绝/`legacy`/`amend_required`/并发 409；`dq_reconciliations` 两条 kind 约束；`dq_filing_expectations` 全部约束组合；`replace_filing_expectations` 原子替换；`issuer_filing_profiles` 复合主键；`dq_freshness` weekly；`filings.accepted_at` 只允许 null→值且无角色可直写；`set_filing_acceptance`；`reconcile_quarantine` 持锁、只动本发行人 `ok` 行、`state_rev+1`、与并发 `publish_sync_run` 串行；`restore_reconciled` 的 `not_passing` 与通过路径；`adopt_candidate` 全部码、`stale_evaluation`、事务内 `hook` 写入、管理运行字段；`resolve_lineage_conflict` 原子性与 `unresolved` 回滚、`promote_quarantined` 附加条款生效；`read_facts_lineage` 单发行人三种模式与 `read_facts` 逐字段一致、双发行人抑制与 `conflicts`、anon 只见 `ok`；`replace_financial_metrics_lineage` 成员 rev / 集合变化 / `scope_missing`、包装函数一致、`based_on_lineage` 回填；`set_merge` 与物化交错（合并提交在比较之后 → `stale_computation`）；RLS 与桶策略（anon/authenticated 不可读写新表与桶）。
+`identifiers.integration.test.ts`、`dq-extensions.integration.test.ts`（含 `S4_TEST_STATE`，登记 `criticalSuites`）：两迁移在有数据库上升级 + 写入新证据后重放不改写；`valid_from` 更新受互斥约束；`resolve_identifier_claim` 每个 op 的成功/冲突回滚/目标不一致拒绝/非活跃发行人拒绝/`legacy`/`amend_required`/并发 409；`dq_reconciliations` 两条 kind 约束；`dq_filing_expectations` 全部约束组合；`replace_filing_expectations` 原子替换；`issuer_filing_profiles` 复合主键；`issuer_filer_categories`；`dq_reconcile_cycles` 单运行周期唯一索引与 `drc_done_accounted`；`dq_calendar_passes` 单未完成遍；`dq_freshness` weekly；`filings.accepted_at` 只允许 null→值且无角色可直写；`set_filing_acceptance`；`reconcile_quarantine` 持锁、只动本发行人 `ok` 行、`state_rev+1`、与并发 `publish_sync_run` 串行；**`restore_reconciled`：通过 + 哈希相等 → 项关闭且行真正提升（R1 回归）**、哈希不等 → `not_passing`、被其他 open 项引用 → `skipped`；`read_filing_facts` 不限代含 `quarantined`；`adopt_candidate` 全部码（含 `batch_mismatch`、发行人/市场取自 filing）、`stale_evaluation`、事务内 `hook` 写入、管理运行字段；`resolve_lineage_conflict` 锁定完整谱系、锁下重查、`lineage_changed`、`unresolved` 回滚、`promote_quarantined` 附加条款生效；`read_facts_lineage` 单发行人三种模式与 `read_facts` 逐字段一致、双发行人抑制与 `conflicts`、anon 只见 `ok`；`replace_financial_metrics_lineage` 成员 rev / 集合变化 / `scope_missing`、包装函数一致、`based_on_lineage` 回填；**拓扑：`issuers_topology_guard` 在全新连接上拒绝直接 update、在同一事务内 `set_merge` 成功返回后仍拒绝直接 update（S1 两项测试）、函数异常路径后设置已恢复；`set_merge` A→B 后 B→C 成功且 A 改指 C（R3 回归）、`row_count` 断言、与物化交错 → `stale_computation`；`set_dissolved` 的 `has_referrers`**；游标：`failed` 且 `attempts<3` 可认领、`attempts=3` 终态（S4）；`drc_done_accounted` 对 NULL 计数拒绝（S5）；围栏：过期/易主的尝试调用 `reconcile_quarantine`/`apply_reconcile_result` 得 `fence_failed` 且无写入，`done` 为 0 行（S3）；`read_filing_facts` 绑定在多代同键时返回 `left_ambiguous`（S2）；日历遍：第二个工作者租不到遍、`replace_filing_expectations` 围栏、冻结成员不受范围变化影响、失败成员重试与 `complete_with_failures`（S7）；RLS 与桶策略（anon/authenticated 不可读写新表与桶）。
 
 ### 9.3 离线集成（critical）
 
@@ -571,10 +621,10 @@ export const DQ_DATASET_INVENTORY: readonly {dataset; producer; cadence:Cadence}
 | F3-1 ISIN/FIGI | `identifiers/*`、`fill-identifiers.ts`、`fill-cninfo-org-id.ts` 改写、exchCode/HKEX 核对记录、夹具、`coverage.ts` | F3-0 | dry-run 预估报告；apply 回执；E1 数字入审计目录（未达标 → owner 决定） | 3 |
 | F3-2 持有区间与 `asOf` | `backfill-windows.ts`、`sec-submissions.ts`、`load-sec` 换码、`resolveIssuer(asOf)`、路由 | F3-0 | E2、E3；回填回执 | 3 |
 | F3-3 A+H 与声明接口/面板 | `names.ts`、`link-ah.ts`、claims 路由（含 amend）与面板、i18n | F3-1 | 集成测试绿 | 3 |
-| F3-4 迁移二 + 事实扩展 | `20261107091000`（函数、`promote_quarantined` 附加条款、`set_merge`、`based_on_lineage`）、`FactsDb` 三实现扩展、`tickerAsOf`/谱系读取与物化目标、受理时刻、候选选定、分派表 | **规格二 F2-6 落地** | §9.2 第二套绿；E7；E8；runbook 合并流程改为 `set_merge` | 4.5 |
+| F3-4 迁移二 + 事实扩展 | `20261107091000`（函数含 `read_filing_facts`/`set_merge`/`set_dissolved`、`promote_quarantined` 附加条款、`based_on_lineage`）、`FactsDb` 三实现扩展、`tickerAsOf`/谱系读取与物化目标、受理时刻、候选选定、分派表、拓扑触发器与 runbook 合并流程 | **规格二 F2-6 落地** | §9.2 第二套绿（含 R1/R3 回归）；E7；E8 | 5 |
 | F3-5 美股对账 | `ixbrl.ts`、`decimal.ts`、`pairs.ts`、`run.ts`（周期/游标/认领）、样本脚本（独立枚举键）、cron、看板对账面板 | F3-4 | E4 报告与失败解释 | 4 |
 | F3-6 A 股黄金集 | 清单脚本、校验器、`gold-pdf.ts`、抄录指引、夹具录制、CI 门禁、cron | F3-5；抄录人；token | E5；套件登记且绿 | 2（不含抄录） |
-| F3-7 日历 | `calendar.ts`、`calendar-sync.ts`、档案写入、两条 cron、看板日历面板与逾期卡 | F3-2、F3-4 | E6、E9 | 3.5 |
+| F3-7 日历 | `calendar.ts`、`calendar-sync.ts`（遍）、档案写入、`filer-categories.ts`（10-K 封面类别，复用 F3-5 解析器）、两条 cron、看板日历面板与逾期卡 | F3-2、F3-4、F3-5 | E6、E9 | 4 |
 | F3-8 收尾 | runbook、规格一 §3.2 撤回标注、规格二 §15 指向与分派例外登记、§15 偏差记录 | 全部 | 门禁全绿 | 1 |
 
 合计约 26.5 人日（不含抄录与外部等待）。F3-0 至 F3-3 不依赖规格二。
@@ -648,4 +698,4 @@ export const DQ_DATASET_INVENTORY: readonly {dataset; producer; cadence:Cadence}
 
 ## 15. 实施记录与偏差
 
-（计划三落地后补记，格式同规格一 §14。预先登记的接受限制：申报人档案只有当前值，按 15 个月时效追溯；52/53 周申报人的期末为估计值直至收到申报，且估计行不计逾期；对账的右侧不确定性只按印刷/标注精度建区间。）
+（计划三落地后补记，格式同规格一 §14。预先登记的接受限制：52/53 周申报人的期末为估计值直至收到申报，且估计行不计逾期；对账右侧不确定性只按印刷/标注精度建区间，且舍入印刷的不一致不自动隔离；换码生效日只来自人工声明，脚本只记观测界。）
