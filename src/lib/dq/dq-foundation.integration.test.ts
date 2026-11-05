@@ -14,7 +14,7 @@ const ds=()=>'dq-'+randomUUID().slice(0,8);
 // run concurrently and the issuers migration alters research_entity_* tables that other suites use,
 // so replays must not queue behind (and block) foreign locks.
 const RETRYABLE=new Set(['55P03','40P01']);
-async function replayMigration(pool:Pool,sql:string,attempts=3):Promise<void>{
+async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
  for(let attempt=1;;attempt++){
   const c=await pool.connect();
   try{
@@ -24,7 +24,7 @@ async function replayMigration(pool:Pool,sql:string,attempts=3):Promise<void>{
    await c.query('rollback').catch(()=>{});
    const code=(e as {code?:string}).code;
    if(attempt>=attempts||!code||!RETRYABLE.has(code))throw e;
-   await new Promise(r=>setTimeout(r,500));
+   await new Promise(r=>setTimeout(r,250*attempt+Math.floor(Math.random()*250)));   // jittered backoff: other suites hold locks on the shared DB
   }finally{c.release();}
  }
 }
@@ -60,7 +60,7 @@ describe.skipIf(!enabled)('WP-F0 dq foundation on real PostgreSQL',()=>{
   const policies=(await admin.query(`select count(*)::int n from pg_policies where schemaname='public' and tablename=any($1)`,[TABLES])).rows[0].n;
   expect(policies).toBe(0);
   await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();
- },30000);
+ },60000);
 
  it('enforces named check, foreign-key and invariant constraints on all four tables',async()=>{
   const d=newDs();

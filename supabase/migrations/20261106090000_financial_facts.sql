@@ -474,13 +474,24 @@ begin
   end if;
   update public.financial_facts set status = 'ok' where run_id = p_run and status = 'staged';
   get diagnostics n = row_count;
+  -- Set-based (no per-fact correlated scan): items found through the GIN index on this run's fact ids,
+  -- then the distinct members of those items; only still-ok rows of this scope are taken down.
   update public.financial_facts f set status = 'quarantined'
   where f.status = 'ok' and f.issuer_id = r.issuer_id and f.market = r.market
-    and exists (
-      select 1 from public.dq_quarantine q
-      where q.table_name = 'financial_facts' and q.reason_code = 'same_day_conflict' and q.status = 'open'
-        and jsonb_typeof(q.payload -> 'fact_ids') = 'array' and q.payload -> 'fact_ids' ? f.fact_id::text
-        and exists (select 1 from public.financial_facts x where x.run_id = p_run and q.payload -> 'fact_ids' ? x.fact_id::text));
+    and f.fact_id in (
+      select e::uuid
+      from (
+        select distinct q.id, q.payload -> 'fact_ids' as ids
+        from public.financial_facts x
+        join public.dq_quarantine q
+          on q.table_name = 'financial_facts' and q.payload -> 'fact_ids' ? x.fact_id::text
+        where x.run_id = p_run
+          and q.reason_code = 'same_day_conflict' and q.status = 'open'
+          and jsonb_typeof(q.payload -> 'fact_ids') = 'array'
+      ) hit
+      cross join lateral jsonb_array_elements_text(hit.ids) e
+      where e ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    );
   if exists (select 1 from public.filings g where g.filing_id = any(v_manifest) and g.issuer_id = r.issuer_id and g.market = r.market and g.mapping_gen > r.mapping_gen) then
     raise exception 'mapping_gen_regression' using errcode = 'P0001';
   end if;

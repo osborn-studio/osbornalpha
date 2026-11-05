@@ -23,7 +23,7 @@ const TABLES=['fact_sync_runs','filings','financial_facts','financial_metrics','
 // Same replay policy as dq-foundation.integration.test.ts (not exported there): one transaction,
 // short lock_timeout, retry on lock timeout (55P03) and deadlock (40P01).
 const RETRYABLE=new Set(['55P03','40P01']);
-async function replayMigration(pool:Pool,sql:string,attempts=3):Promise<void>{
+async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
  for(let attempt=1;;attempt++){
   const c=await pool.connect();
   try{
@@ -33,7 +33,7 @@ async function replayMigration(pool:Pool,sql:string,attempts=3):Promise<void>{
    await c.query('rollback').catch(()=>{});
    const code=(e as {code?:string}).code;
    if(attempt>=attempts||!code||!RETRYABLE.has(code))throw e;
-   await new Promise(r=>setTimeout(r,500));
+   await new Promise(r=>setTimeout(r,250*attempt+Math.floor(Math.random()*250)));   // jittered backoff: other suites hold locks on the shared DB
   }finally{c.release();}
  }
 }
@@ -142,7 +142,7 @@ describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()
   }
   for(const role of ['anon','authenticated','service_role'])expect(await fn(role,'public.fact_promote_rows(uuid,text,uuid[])')).toBe(false);
   await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();
- },30000);
+ },60000);
 
  it('enforces the candidate key (nulls not distinct), both composite foreign keys, the period checks, and keeps 20-digit values exact',async()=>{
   const iss=await issuer();const b=await batch();const run=randomUUID();
