@@ -1,0 +1,17 @@
+{
+ "version": 1,
+ "note": "Plan 2 §11.4 gold assertions (round-1 #19). A human transcribes value/page from the primary document. STATUS: ready=false means INCOMPLETE and the owner has not transcribed yet; sync-us.integration.test.ts reports it with a loud warning but does NOT fail while ready is false (commander decision 2026-11-04; the plan originally made it a designed red). Recorded (non-'<pending>') entries are still replayed against the published facts even while ready is false. Once the owner sets ready=true the suite enforces everything: required.US (every fixture-backed US issuer, AAPL and MSFT, has at least one recorded entry), no '<pending>' anywhere, every asserted US issuer present in FIXTURE_ISSUERS with a recorded fixture, and the §11.4 matrix (>= 6 issuers, each >= 2 period_ends that each carry >= 6 concepts). required.CN flips to true when the A-share fixtures are recorded. as_of is the asOf used to read the fact (defaults to today).",
+ "ready": false,
+ "required": {"US": true, "CN": false},
+ "entries": [
+  {"issuer": {"ticker": "AAPL", "market": "US"}, "concept": "revenue", "period_end": "2023-09-30", "unit": "USD", "value": "383285000000", "as_of": "2023-11-03",
+   "source": {"document": "Apple Inc. Form 10-K for the fiscal year ended September 30, 2023 (accession 0000320193-23-000106)", "page_or_row": "<pending>", "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019323000106/"},
+   "recorded_by": "<pending>", "recorded_at": null},
+  {"issuer": {"ticker": "MSFT", "market": "US"}, "concept": "revenue", "period_end": "2023-06-30", "unit": "USD", "value": "211915000000", "as_of": "2023-07-27",
+   "source": {"document": "Microsoft Corp. Form 10-K for the fiscal year ended June 30, 2023", "page_or_row": "<pending>", "url": "<pending>"},
+   "recorded_by": "<pending>", "recorded_at": null},
+  {"issuer": {"ticker": "600519.SH", "market": "CN"}, "concept": "revenue", "period_end": "2023-12-31", "unit": "CNY", "value": "<pending>", "as_of": null,
+   "source": {"document": "贵州茅台 2023 年年度报告（巨潮公告）", "page_or_row": "<pending>", "url": "<pending>"},
+   "recorded_by": "<pending>", "recorded_at": null}
+ ]
+}
