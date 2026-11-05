@@ -68,7 +68,45 @@ Codex 第二轮判定原句：**"The second draft is substantially improved, but
 | 51 | P2 | ACCEPT | 期望值必须独立来源（黄金断言 + 人工从 EDGAR index 抄录的 filing 列表）；集成测试加发布/物化交错、同批次两次 replace、回执迟提交；C1 退出要求可复现的浏览器证据（本机报告 + 复审者复跑），手动清单不算完成；§12.0、§12.2、§12.3 |
 | 52 | P2 | ACCEPT | `deadline_hit` 依赖规格二把它加入 `INFO_CODES`；落地前只写 `detail.deadlineHit`，不进 `errors`；批次六计数器映射明确；§6.3、§10.1 第 6 条 |
 
-## 未送审的第 3 稿改动（供下一轮或实施者复核）
+## 第三轮（第 3 稿 → 第 4 稿；`04-codex-round3.md`）
+
+第三轮判定原句：**"Verdict: not ready for an implementation plan—blocking items are #53–#56 and the remaining replay-evidence/publication-gate gap in #40; owner decisions remain pending separately."**
+
+| # | 严重度 | 处置 | 第 4 稿落点 / 理由 |
+|---|---|---|---|
+| 53 | P1 | ACCEPT | `replace_company_digest` 改为对 `fact_sync_scope` 行 `for update`（排他；PostgreSQL 允许多个 `for share` 并存，不能串行 digest 写者）；锁序固定：行锁 → 版本校验 → 写；集成测试加"两个会话提交不同事件集 → 活动集恰等于后者、无并集"；§4.6、§12.2(b)、§13 验收 7 |
+| 54 | P1 | ACCEPT | 尝试身份与事实版本分离：新增 `begin_company_digest_attempt` 返回 `attempt_id`（`attempt_seq` 计数器）、`last_success_attempt_id`；`mark_company_digest_failed(p_attempt_id)` 只在"没有更晚的成功尝试"时被忽略，同版本 sweep 失败照常记录退避；`replace` 以 `p_attempt_id < last_success_attempt_id` 抛 `stale_attempt`；`backlogFailed` 含这些失败，空转不洗绿；§4.4、§4.6、§4.7、§6.3、§12.1、§13 验收 5 |
+| 55 | P1 | ACCEPT | `revenueLines` 本次固定一行（合计），LLM 提示不请求收入拆分，合并不按索引深合并数组：长度固定 1，只允许写 `[0].cagr`，其他写入丢弃并 `warnings`；门控覆盖每个 `baseRevenue` 叶子；多行分解留待另立对账契约；单测加"LLM 返回两行"；§9.1、§11、§12.1 |
+| 56 | P1 | ACCEPT | 回放改为 F4 §10 契约 `view=as_known&asOf=`（默认 `latest` 须显式覆盖），断言响应 `view/asOf` 匹配否则不渲染；契约测试含截止后结算/校准记录；§10.4、§12.1 |
+| 40 | P1（遗留） | ACCEPT | 发布前门槛移到服务端：`statements/overview/metrics/packet/facts?history=1` 响应随附 `evidence` 字典，证据缺失或代码版本空的格在服务端置 `withheld`，数值不进响应；读者回放路径：EDGAR 快照提供 anon 签名下载 `GET /api/facts/snapshot?hash=`（美国政府公开数据）；Tushare 快照不可再分发 → CN 事实只有 `citation='linked'`（巨潮 PDF 可达）才对非 admin 显示，`pending` 置 `withheld`（比规格二决策 C 默认更严，理由总纲 §5）；§5.3 `Cell.withheld`、§5.6、§5.7、§6.1、§10.1 第 2 条、§11 |
+| 32 | P2（PARTIAL） | ACCEPT | incremental 与 sweep 按 4:1 交错执行，截止前 sweep 已按比例消耗预算；§6.3 第 2 条 |
+| 34 | P2（PARTIAL） | ACCEPT | 写者已由 `for update` 串行，同版本元数据刷新定义为后写者覆盖；§4.6 ⑥ |
+| 38 | P2（PARTIAL） | ACCEPT | overview 速览改用 `history:true` 信封；§5.10 |
+| 41 | P2（PARTIAL） | ACCEPT | `read_facts` 增 `p_include_filings`：filings 与事实同一语句同一快照（唯一能证明一致的方式）；`computedAt` 进 `financial_metrics`/`/metrics` 契约；§10.1 第 3 条、§6.3 第 3 条 |
+| 46 | P2（PARTIAL） | ACCEPT | 本地谓词改为非规范、不实现；显示门槛以 F4 `calibration`/`display.percent` 为准；§10.4 |
+| 47 | P2（PARTIAL） | ACCEPT | 同 #56 |
+| 48 | P2（PARTIAL） | ACCEPT | 函数校验事实 `mapping_gen = filings.mapping_gen` 与 `available_date ≤ current_date`，filing `available_date ≤ current_date`；`meta` 按 kind 允许列表；§4.6 ④ |
+| 49 | P2（PARTIAL） | ACCEPT | 同 #54 |
+| 51 | P2（PARTIAL） | ACCEPT | 集成测试明文加入：写间故障注入回滚 (c)、回执迟提交 (d)、不同事件集并发 (b)；§12.2 |
+| 52 | P2（PARTIAL） | ACCEPT | 批次六计数器改按流计（零变化成功 → `duplicates`，`fetched>0` 必有 outcome，不会 `unaccounted`），事件级数字只进 `detail`；§6.3 第 4 条 |
+| 44（评注） | — | OPEN-verify | 股份类别与封面股数对应关系的真实覆盖要外部核实（规格三） |
+
+## 第四轮（第 4 稿 → 第 5 稿；`05-codex-round4.md`）——按协调者指令逐字实施处方，未再送审
+
+判定原句：**"FINAL VERDICT: not ready for implementation planning—blocking P1s are #40 (incomplete evidence gating), #57 (admin responses eligible for public caching), and #58 (older success can erase a newer attempt's failure)."** #53–#56 判定 RESOLVED。
+
+| # | 严重度 | 处置 | 第 5 稿落点 |
+|---|---|---|---|
+| 40（遗留） | P1 | implemented per Codex's prescribed fix (round 4), not re-audited | 单一证据资格函数 `evidenceEligible`（§5.6）应用于所有展示财务数值：报表格、派生格 `inputs`、速览、事件/收件箱 payload（headline、`from/to`、`relChange`）、新代理路由 `GET /api/companies/[ticker]/metrics`（页面不再直接调规格二 `/metrics`）、packet、抽屉序列、DCF 事实种子（§9.1）；CN 事实须有逐值 PDF 定位 `locator.pdf = {page, table, row, column}`（来源规格三逐值核对登记，§10.1 第 2 条、§10.2），缺则 `withheld`；加入 §10.1 清单、`evidence-gate.test.ts` 与路由测试（§12.1） |
+| 57 | P1 | implemented per Codex's prescribed fix (round 4), not re-audited | 公共 `/api/companies/*`、`/api/facts/*` 永远按非 admin 置空、不读会话；未脱敏变体移到 `/api/admin/companies/[ticker]/statements|overview|events|metrics|packet` 与 `/api/admin/facts/[ticker]?history=1`，`requireAdminUser()`、每个响应 `private, no-store`、不共享 DTO 缓存；共享缓存夹具测试（admin 后匿名同 URL 无 pending-CN 值）；§6 共同约定、§6.4、§5.7、§11、§12.1 |
+| 58 | P1 | implemented per Codex's prescribed fix (round 4), not re-audited | 新增 `company_digest_state.last_failed_attempt_id`；`mark_company_digest_failed` 取 `greatest(existing, p_attempt_id)`；`replace_company_digest` ⑨ 总是记录物化，但只在 `p_attempt_id > last_failed_attempt_id` 时清除 `last_status/consecutive_failures/next_attempt_at` 并推进 `swept_at`；保留"更晚成功抑制迟到失败"；库测试两种完成顺序 (e)(f)；§4.4、§4.6、§12.2 |
+| 59 | P2 | implemented per Codex's prescribed fix (round 4), not re-audited | `EvidenceDto.snapshot.download` 为稳定端点 `/api/facts/snapshot?hash=`；端点每次校验已登记 EDGAR 对象、现铸 60 s 签名 URL、`302` + `no-store`；可缓存财务 JSON 不再嵌签名 URL；测试 60 s 后与过期后重复下载；§5.6、§6.4、§12.1 |
+| 60 | P2 | implemented per Codex's prescribed fix (round 4), not re-audited | `stale_attempt` 与 `unknown_stream` 流计入 `duplicates`，分别记 `detail.skippedStale`/`skippedUnknown`；完成批次要求 `fetched === inserted + duplicates + versioned + quarantined + failed`；用真实 `finishBatch` 测全跳过与混合批次无 `unaccounted`；§6.3 第 4 条、§12.1 |
+| 53（评注） | — | implemented (文字清理) | §6.3 第 6 条、§10.1 第 5 条改为 `for update`（排他） |
+
+仍未关闭（非本规格可单方面解决）：§10.1 对规格二的七点依赖请求（含 `fact_evidence`、`p_include_filings`、`fact_run_provenance`/快照 meta 登记、`METRIC_CATALOG`、`INFO_CODES`）**尚未被规格二书面接受**，规格二 §16 仍为空；§10.2 新增对规格三的"CN 逐值 PDF 定位登记"要求同样待接受。C0 的退出条件以这些接受为前提。
+
+## 未送审的第 3 稿改动（已由第三轮覆盖）
 
 - 新增表 `company_event_reads`（替代 `last_seen_at`）与其触发器。
 - `replace_company_digest` 签名增加 `p_rebuild_id`、`p_sweep`；`mark_company_digest_failed` 增加 `p_attempt_rev`。

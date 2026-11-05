@@ -1,7 +1,7 @@
 # 公司研究与跟踪模块 设计规格
 
-日期：2026-11-04（第 3 稿。审计轨迹：`docs/audits/2026-11-04-company-research/` —— 01 Codex 第一轮、02 Codex 第二轮、03 处置表；第 3 稿按第二轮 #31–#52 修订，未再送审）
-状态：草案，待 owner 评审（§15 有十一项 owner 决策）；Codex 第二轮判定"尚未可进入实施计划"，其 P1 在本稿逐条处置（见 03 处置表），C0 退出条件要求 §10.1 契约被规格二书面接受
+日期：2026-11-04（第 5 稿。审计轨迹：`docs/audits/2026-11-04-company-research/` —— 01 Codex 第一轮、02 Codex 第二轮、03 处置表（含第三、四轮各一节）、04 Codex 第三轮、05 Codex 第四轮）
+状态：草案，待 owner 评审（§15 有十一项 owner 决策）；第 5 稿按第四轮 #40、#57–#60 的处方逐字实施（未再送审），C0 退出条件要求 §10.1 契约被规格二书面接受（截至本稿规格二尚未接受）
 上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（规格一：`issuers`、`issuer_securities`、`resolveIssuer`、DQ 设施；§14 的实施偏差视为既定事实）；`docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md`（规格二，**第 8 稿**：`fact_sync_runs`、`filings`、`financial_facts`、`financial_metrics`、`fact_sync_scope.state_rev`、`read_facts` 信封 `{state_rev, rows, truncated}`、`fact_state_rev()`、`FactsDb.readFacts/factsByIds/filingsOfIssuer/metricsOfIssuer`、`/api/facts/[ticker]`、`/api/facts/[ticker]/metrics`、`/api/filings/[ticker]`、`citation` 状态、`asOf` 回放、**两个市场两路事实各自独立**）。本规格是规格二读接口的首个消费者，并接手规格二 §1.2/§15.6 留给公司研究规格的两件事：`/api/financials/[ticker]` 读者的迁移、`financial_history` 表的去留。规格二若再改稿，本规格 §10.1 的对齐清单以其最新稿为准。
 总纲：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5（owner 2026-11-04 确认）。逐条对照：本模块的事实视图只展示规格二从一手来源建立的事实，每个数字可打开披露历史抽屉看到源文件、定位、可得日期、全部变换（映射、单位归一、派生、显示缩放）与代码版本；事实区与判断区分开，判断的登记、结算、校准由判断层框架（F4）承担，本页按 F4 显示契约渲染，**没有结算机制的概率不以百分比出现**；缺失保持缺失（港股事实未入库就显示"待文档管道"，不拿第三方指标顶替；行情源算出的 PE/PB/ROE 不进本页）；外资研报不在本模块；UI 遵守 `DESIGN.md` 与 `globals.css` tokens，zh/en 双语，所有图表有表格等价视图（含保留的 K 线图）。
 对方站点（`chaosaiagent.com/company`、`/monitor`）只作功能参考与回归对照，其数据、评级、胜率一律不导入（§3）。
@@ -20,7 +20,7 @@
 成功标准（退出条件；夹具与期望值在 `src/lib/company/fixtures/manifest.json` 固定，§12.0）：
 
 - `GET /api/companies/AAPL/statements?statement=IS&basis=annual&asOf=2024-06-30`：period `2022-09-25:2023-09-30:12M` 的 revenue 单元格 `value` 等于规格二黄金断言 `fixtures/gold/plan2.json` 中 AAPL 该期值，`availableDate=2023-11-03`、`disclosureSeq=1`；去掉 `asOf` 后同一单元格 `disclosureSeq=2`、`isRevision=false`（规格二 §12 验收样例 1 的同一夹具）。
-- `GET /api/filings/600519.SH` 每条年报 filing 在文件视图显示 `citation`（`linked` 带巨潮 PDF 链接；`pending` 显示"巨潮公告未挂接"），视图内不出现价格或评级。
+- `GET /api/filings/600519.SH` 每条年报 filing 在文件视图显示 `citation`（`linked` 带巨潮 PDF 链接；`pending` 显示"巨潮公告未挂接"），视图内不出现价格或评级；`pending` filing 披露的事实在非 admin 的报表响应中为 `withheld`（§5.6），admin 响应中有数值。
 - `/stock/00700.HK`：页头正常；报表/指标/文件视图显示"港股披露事实待文档管道（F3）"，不显示任何代理数字。
 - 对规格二美股夹具回放后的数据库运行物化两遍：第二遍 `issuer_events` 零新增、零 `retired_at`、`first_seen_at` 逐行不变；注入一份更晚修订 filing 并发布后恰好新增一条 `fact_revised`；再把该修订行隔离（`ok→quarantined`）并物化后该事件 `retired_at` 非空，重新提升后 `retired_at` 回到 null 且 `first_seen_at` 仍是首次值。
 - 用户 A 登记跟踪，用户 B 的 `GET /api/tracking/watches` 不含 A 的行；anon 对 `company_watches`、`company_event_reads` 的 select 被拒；`issuer_events`、`issuer_coverage` 两张公共表没有用户列。
@@ -190,8 +190,11 @@ company_event_reads                                       -- 已读回执：按�
 issuer_id            uuid not null references issuers(issuer_id) on delete cascade
 market               text not null
 digested_rev         bigint not null default 0              -- 已成功物化到的 state_rev
+attempt_seq          bigint not null default 0              -- 尝试计数器：每次 begin_company_digest_attempt +1
+last_attempt_id      bigint                                 -- 最近一次尝试的 attempt_seq
+last_success_attempt_id bigint                              -- 最近一次成功的 attempt_seq（成功与失败的归属按它判定，与 state_rev 无关）
+last_failed_attempt_id  bigint                              -- 被接受的失败中最大的 attempt_seq（单调递增；成功只在 attempt_id 超过它时清除失败状态）
 last_attempt_at      timestamptz
-last_attempt_rev     bigint                                 -- 最近一次尝试针对的 state_rev
 last_status          text check (last_status in ('success','failed'))
 consecutive_failures int not null default 0
 next_attempt_at      timestamptz not null default 'epoch'   -- 失败退避：1h × 2^n，封顶 24h
@@ -202,7 +205,7 @@ index (next_attempt_at)
 index (swept_at nulls first)
 ```
 
-没有行的流视为 `digested_rev = 0, swept_at = null`（选择查询用 `fact_sync_scope left join company_digest_state`）。
+没有行的流在 `begin_company_digest_attempt` 时创建（`digested_rev = 0, swept_at = null`）；选择查询用 `fact_sync_scope left join company_digest_state`。**尝试身份与事实版本分离**：同一 `state_rev` 下的 sweep / 规则重建失败同样记录失败与退避；只有"存在更晚的成功尝试"才会让一次迟到的失败报告被忽略。
 
 ### 4.5 `financial_history`
 
@@ -226,14 +229,15 @@ end $$;
 
 | 函数 | 作用 |
 |---|---|
-| `replace_company_digest(p_issuer uuid, p_market text, p_batch uuid, p_rebuild_id uuid, p_based_on_rev bigint, p_sweep boolean, p_events jsonb, p_coverage jsonb) → jsonb {upserted, changed, retired, revived}` | 一个事务内，锁顺序固定：① `select state_rev into v_rev from public.fact_sync_scope where issuer_id = p_issuer and market = p_market for share`（与规格二发布/提升/裁决函数的 `for update` 互斥：发布中则等待，发布后读到的是新值；没有行 → `raise 'unknown_stream'`）；② `v_rev <> p_based_on_rev` → `raise 'stale_computation' using errcode='55P03'`（锁持有到事务结束，期间不可能有新发布）；③ 校验 `p_batch` 存在、`producer='company-digest'`、`status='running'`；④ 逐项校验 `p_events`：顶层键 ⊆ `{kind, natural_key, occurred_on, period_end, concept, filing_id, payload, meta}`，`kind` 在枚举内，`payload` 按 kind 的固定 schema 逐键校验（类型、必填、无多余键），`filing_id` 与 payload 内每个 `filingId` 必须存在于 `public.filings` 且 `issuer_id = p_issuer and market = p_market and mapping_gen > 0`，payload 内每个 `factId` 必须存在于 `public.financial_facts` 且 `issuer_id = p_issuer and market = p_market and status = 'ok'`，值字段必须等于该行的 `value_text`（函数内比对，防止调用方送入其他值），字符串字段长度 ≤ 256；任一失败 `raise 'invalid_event'`；⑤ 服务端计算 `event_id = encode(sha256(convert_to(canonical({issuer_id, market, kind, natural_key}), 'utf8')), 'hex')`、`payload_hash`（canonical 定义：键按码点排序、无空白、数字用 `value_text` 字符串）；⑥ upsert（冲突 `(issuer_id, market, kind, natural_key)`：更新 `occurred_on/period_end/concept/filing_id/payload/meta/payload_hash/based_on_rev/rebuilt_at/rebuild_id/rebuild_batch_id`，`payload_changed_at = case when excluded.payload_hash <> issuer_events.payload_hash then now() else issuer_events.payload_changed_at end`，`retired_at = null`；`first_seen_at` 不更新）；⑦ `update … set retired_at = now() where issuer_id = p_issuer and market = p_market and rebuild_id <> p_rebuild_id and retired_at is null`（按本次调用 id，不按批次）；⑧ `issuer_coverage` upsert（键集合校验）；⑨ `company_digest_state` upsert：`digested_rev = p_based_on_rev, last_attempt_rev = p_based_on_rev, last_status='success', consecutive_failures=0, next_attempt_at=now(), swept_at = case when p_sweep then now() else swept_at end`；返回计数 |
-| `mark_company_digest_failed(p_issuer, p_market, p_attempt_rev bigint, p_now timestamptz) → boolean` | 只在 `digested_rev < p_attempt_rev`（该版本尚未被别的工作者成功物化）时生效：`last_attempt_rev = p_attempt_rev, consecutive_failures + 1, next_attempt_at = p_now + least(interval '24 hours', interval '1 hour' * power(2, consecutive_failures)), last_status='failed'`；否则返回 false 不改 |
+| `begin_company_digest_attempt(p_issuer uuid, p_market text, p_now timestamptz) → bigint` | `insert … on conflict (issuer_id, market) do update set attempt_seq = attempt_seq + 1, last_attempt_id = attempt_seq + 1, last_attempt_at = p_now`（新行从 1 起）；返回 `attempt_id`。调用方在读取事实之前调用，attempt_id 贯穿本次尝试 |
+| `replace_company_digest(p_issuer uuid, p_market text, p_batch uuid, p_attempt_id bigint, p_rebuild_id uuid, p_based_on_rev bigint, p_sweep boolean, p_events jsonb, p_coverage jsonb) → jsonb {upserted, changed, retired, revived}` | 一个事务内，锁顺序固定：① `select state_rev into v_rev from public.fact_sync_scope where issuer_id = p_issuer and market = p_market for update`（**排他**：与规格二发布/提升/裁决函数互斥，也让两个 digest 写者串行——PostgreSQL 允许多个 `for share` 并存，所以不用 `for share`；替换是短事务，发布端等待可接受；没有行 → `raise 'unknown_stream'`）；② `v_rev <> p_based_on_rev` → `raise 'stale_computation' using errcode='55P03'`；`p_attempt_id < coalesce(last_success_attempt_id, 0)` → `raise 'stale_attempt'`（更晚的尝试已成功）；③ 校验 `p_batch` 存在、`producer='company-digest'`、`status='running'`；④ 逐项校验 `p_events`：顶层键 ⊆ `{kind, natural_key, occurred_on, period_end, concept, filing_id, payload, meta}`，`kind` 在枚举内，`payload` 与 `meta` 都按 kind 的固定 schema 逐键校验（类型、必填、无多余键；`meta` 允许键：`period_first_seen` 的 `headlineAsOf`，其余 kind 为空对象），`filing_id` 与 payload 内每个 `filingId` 必须存在于 `public.filings` 且 `issuer_id = p_issuer and market = p_market and mapping_gen > 0 and available_date <= current_date`，payload 内每个 `factId` 必须存在于 `public.financial_facts f join public.filings g on g.filing_id = f.filing_id` 且 `f.issuer_id = p_issuer and f.market = p_market and f.status = 'ok' and f.mapping_gen = g.mapping_gen and f.available_date <= current_date`（当前代、今日可见），值字段必须等于该行的 `value_text`，字符串字段长度 ≤ 256；任一失败 `raise 'invalid_event'`；⑤ 服务端计算 `event_id = encode(sha256(convert_to(canonical({issuer_id, market, kind, natural_key}), 'utf8')), 'hex')`、`payload_hash`（canonical 定义：键按码点排序、无空白、数字用 `value_text` 字符串）；⑥ upsert（冲突 `(issuer_id, market, kind, natural_key)`：更新 `occurred_on/period_end/concept/filing_id/payload/meta/payload_hash/based_on_rev/rebuilt_at/rebuild_id/rebuild_batch_id`，`payload_changed_at = case when excluded.payload_hash <> issuer_events.payload_hash then now() else issuer_events.payload_changed_at end`，`retired_at = null`；`first_seen_at` 不更新；因写者已串行，同版本的元数据刷新是后写者覆盖）；⑦ `update … set retired_at = now() where issuer_id = p_issuer and market = p_market and rebuild_id <> p_rebuild_id and retired_at is null`；⑧ `issuer_coverage` upsert（键集合校验）；⑨ `company_digest_state`：总是记录物化 `digested_rev = p_based_on_rev, last_success_attempt_id = greatest(coalesce(last_success_attempt_id,0), p_attempt_id)`；**只当 `p_attempt_id > coalesce(last_failed_attempt_id, 0)`** 时才清除失败状态与退避并推进 sweep：`last_status='success', consecutive_failures=0, next_attempt_at=now(), swept_at = case when p_sweep then now() else swept_at end`；否则这些字段保持不变（更新的尝试已失败，旧尝试的成功不能抹掉它）；返回计数 |
+| `mark_company_digest_failed(p_issuer, p_market, p_attempt_id bigint, p_now timestamptz) → boolean` | 持同一把 `fact_sync_scope` 行锁；只在 `p_attempt_id > coalesce(last_success_attempt_id, 0)`（没有更晚的成功尝试）时被接受：`last_failed_attempt_id = greatest(coalesce(last_failed_attempt_id,0), p_attempt_id), consecutive_failures + 1, next_attempt_at = p_now + least(interval '24 hours', interval '1 hour' * power(2, consecutive_failures)), last_status='failed'`；否则返回 false 不改。同一 `state_rev` 下的 sweep 失败因此照常记录；两种完成顺序（新失败→旧成功、新成功→旧失败）都有库测试（§12.2） |
 
 权限：
 - `issuer_events`、`issuer_coverage`：`grant select to anon, authenticated, service_role`，RLS `for select using (true)`；无任何角色的 insert/update/delete（只经函数）。
 - `company_watches`、`company_event_reads`：`grant select, insert, update, delete to authenticated`（reads 表无 update），策略 `auth.uid() = user_id`（insert/update 带 `with check`）；anon 无授权；service_role 全部（测试与运维）。
-- `company_digest_state`：`grant select, insert, update to service_role`。
-- 集成测试以真实角色验证：anon/authenticated/service_role 对两张公共表直接 `insert/update/delete` 都被拒；anon 读两张按用户表被拒；用户 B 读不到 A；anon/authenticated 执行两个函数被拒；`stale_computation`、`invalid_event`（跨流 filing、非 `ok` 事实、值不等于 `value_text`、多余键）被抛；发布与物化交错（会话 1 持 `for update` 发布中，会话 2 的 replace 阻塞，发布提交后会话 2 以旧 `p_based_on_rev` 被拒）。
+- `company_digest_state`：`grant select to service_role`（写只经三个函数）。
+- 集成测试以真实角色验证：anon/authenticated/service_role 对两张公共表直接 `insert/update/delete` 都被拒；anon 读两张按用户表被拒；用户 B 读不到 A；anon/authenticated 执行三个函数被拒；`stale_computation`、`invalid_event`（跨流 filing、非 `ok` 事实、值不等于 `value_text`、多余键）被抛；发布与物化交错（会话 1 持 `for update` 发布中，会话 2 的 replace 阻塞，发布提交后会话 2 以旧 `p_based_on_rev` 被拒）。
 
 ### 4.7 数据访问契约 `src/lib/company/db.ts`
 
@@ -242,8 +246,9 @@ export interface CompanyDb {
   // 物化（service_role）
   digestDue(now: Date, limit: number): Promise<{issuerId, market, stateRev, digestedRev}[]>;   // fact_sync_scope left join company_digest_state：state_rev > coalesce(digested_rev,0) and coalesce(next_attempt_at,'epoch') <= now；按 (state_rev - digested_rev) desc, issuer_id, market
   sweepDue(olderThan: Date, now: Date, limit: number): Promise<{issuerId, market, stateRev}[]>;   // (swept_at is null or swept_at < olderThan) and next_attempt_at <= now；按 swept_at nulls first, swept_at asc, issuer_id, market
-  replaceDigest(issuer, market, batch, rebuildId, basedOnRev, sweep, events, coverage): Promise<{upserted, changed, retired, revived}>;   // rpc，抛 StaleComputation / InvalidEvent / UnknownStream
-  markDigestFailed(issuer, market, attemptRev, now): Promise<boolean>;
+  beginAttempt(issuer, market, now): Promise<bigint>;                                           // rpc begin_company_digest_attempt
+  replaceDigest(issuer, market, batch, attemptId, rebuildId, basedOnRev, sweep, events, coverage): Promise<{upserted, changed, retired, revived}>;   // rpc，抛 StaleComputation / StaleAttempt / InvalidEvent / UnknownStream
+  markDigestFailed(issuer, market, attemptId, now): Promise<boolean>;
   backlog(): Promise<{failedStreams: number}>;                                                   // last_status='failed' 的流数（新鲜度 ok 判定用）
   // 公共读
   eventsOfIssuer(issuer, market, opts: {since?, until?, kinds?, cursor?, limit}): Promise<EventRow[]>;   // retired_at is null；keyset (occurred_on desc, event_id)
@@ -296,6 +301,7 @@ export interface CompanyDb {
 type Cell =
   | {kind: 'fact', factId, value: string /* value_text 原样 */, unit, availableDate, filingId, disclosureSeq, isRevision, mappingGen, rawHash, runId}
   | {kind: 'derived', metric, value: string, unit, inputUnit, basis, formulaVersion, inputs: {factId, concept, filingId, availableDate}[], rule?: 'a'|'b'}
+  | {kind: 'withheld', reason: 'evidence_incomplete' | 'citation_pending', factId}   // 服务端发布前门槛置空（§5.6、§6.1）
   | null;
 ```
 
@@ -307,7 +313,7 @@ type Cell =
 
 ### 5.4 指标视图（metrics）与估值模型区
 
-- 行 = 规格二 §8 全部 `metric`；列 = 期间键；`ratio` 显示百分比两位小数，货币按缩放，`shares` 原值。无 `asOf` 读表（当前 `formula_version`，显示 `basedOnRev`）；有 `asOf` 走 `/api/facts/[ticker]/metrics?asOf=` 实时 derive。
+- 行 = 规格二 §8 全部 `metric`；列 = 期间键；`ratio` 显示百分比两位小数，货币按缩放，`shares` 原值。数据经本页代理路由 `GET /api/companies/[ticker]/metrics`（§6.1，对每行 `inputs` 过证据门槛，不直接调规格二 `/metrics`）：无 `asOf` 读表（当前 `formula_version`，显示 `basedOnRev`）；有 `asOf` 为实时 derive。
 - 行点击 → 公式抽屉：`METRIC_CATALOG` 公式文本（zh/en）、`basis`、`inputUnit`、`inputs[]`（每个 fact 可点进披露历史抽屉）、`rule`、`asOf`、`computedAt`。未产出的格显示"未产出"，title 固定为"缺输入、单位不一致、分母为 0、期间匹配不唯一或版本不一致（规格二 §8）"——**不推断具体原因**。
 - 估值模型区（原 `DcfStudio`）放在本视图底部，标题"估值模型（假设含模型/默认/用户估计；不是事实）"，灰色分隔；回放模式下隐藏并显示"回放模式下不运行估值模型"；**不再挂载即运行**：进入时先展示"股权桥输入"面板（基期收入、在外股数、净债务，各带来源标签与 fact 链接），三项都有 `fact` 或 `user` 来源才出现"运行"按钮；缺项显示"无披露事实，需手工填写并确认"（用户填写即 `user` 来源）。种子与逐字段来源见 §9.1。
 
@@ -326,8 +332,8 @@ type Cell =
 | 值 · 单位 | `value_text` 原样；显示缩放另列"显示 = 原值 ÷ 1e8"之类的变换 |
 | 修订 | `isRevision` → 与前一行差值与相对变化 |
 | 变换链 | ① 映射：`sourceConcept → concept`（`mappingVersion`、`mappingGen`）② 单位归一（规格二 `units.ts` 规则名）③ 派生（仅派生格：`formulaVersion`、`basis`、`rule`）④ 显示缩放 |
-| 证据 DTO | `GET /api/facts/evidence?factId=`（§10.1 第 2 条）：`{rawHash, snapshot: {source, path, api|url, params（无 token）, fetchedAt, httpStatus, page}, locator: {jsonPointer（EDGAR：`/facts/<tax>/<tag>/units/<unit>/<index>`；Tushare：`/data/items/<rowIndex>` 与字段名）}, run: {runId, codeVersion, toolVersions}, mappingVersion, unitRule}`；原文入口 = 一手文件链接（EDGAR / 巨潮）；原始快照字节在私有桶，admin 可经 `GET /api/admin/facts/snapshot?hash=`（签名 URL，§6.4）下载——Tushare 响应原文的再分发受其条款限制（§15） |
-| 代码版本 | 证据 DTO 的 `run.codeVersion`。**证据 DTO 取不到或 `codeVersion` 为空 → 该单元格不显示数值**（显示"来源记录不完整"，网格级汇总计数），不显示替代值 |
+| 证据 DTO | 随每个含财务数值的响应一起返回（§6.1 发布前门槛，不是按需取）：`{rawHash, snapshot: {source, path, api|url, params（无 token）, fetchedAt, httpStatus, page, download: '/api/facts/snapshot?hash=<rawHash>' \| null}, locator: {jsonPointer（EDGAR：`/facts/<tax>/<tag>/units/<unit>/<index>`；Tushare：`/data/items/<rowIndex>` 与字段名）, pdf?: {page: number, table: string \| null, row: string, column: string}}, run: {runId, codeVersion, toolVersions}, mappingVersion, unitRule, sourceDocument: {kind: 'edgar_index' \| 'cninfo_pdf', url} \| null}`。`download` 是**稳定端点**，不是签名 URL（签名 URL 60 s 过期，不得嵌入可缓存的财务 JSON，#59）：`GET /api/facts/snapshot?hash=`（§6.4）在每次下载时校验该哈希是已登记的 EDGAR 对象、现铸 60 s 签名 URL 并以 `Cache-Control: no-store` 重定向；只对 `source='edgar'`（美国政府公开数据），Tushare 对象拒绝（条款限制，§15），其 `download = null`。**读者可回放性**：EDGAR 事实 → 下载原文字节、按 `jsonPointer` 定位、与 `rawHash` 核对；CN 事实 → 读者唯一可达的原件是巨潮 PDF，因此 CN 事实的证据必须含 **逐值 PDF 定位** `locator.pdf`（页码、表名、行名、列名——由规格三的巨潮逐值核对产生，§10.1 第 2 条），`citation='linked'` 且 `locator.pdf` 存在才算证据完整；缺任一 → 置 `withheld`（公共端点一律如此，不区分会话，#57）。这与规格二决策 C 的默认（`pending` 事实公共可见）不同：本页取更严格的一侧，理由是总纲 §5"做不到回放的数字不上线" |
+| 代码版本 | 证据 DTO 的 `run.codeVersion`。统一的证据资格函数 `evidenceEligible(dto, market)`（`src/lib/company/evidence-gate.ts`）：证据 DTO 缺失、`codeVersion` 为空、EDGAR 事实无 `rawHash`/`jsonPointer`、CN 事实无 `sourceDocument.cninfo_pdf` 或无 `locator.pdf` → 不合格；**所有**展示财务数值的地方（报表格、指标格及其 `inputs`、速览、事件 headline 与修订差值、Copilot packet、抽屉序列、DCF 事实种子）都经同一函数，不合格的值在服务端置 `withheld`（`{kind:'withheld', reason}`，前端显示"来源记录不完整"/"引用待挂接"，汇总计数），不显示替代值 |
 
 底部"复制可复现查询"给出上面的 URL。
 
@@ -339,7 +345,7 @@ type Cell =
 | 有行情无发行人 | resolve null，行情有 | 页头只有行情；事实视图"该证券尚未登记到发行人主数据（规格一），无披露事实" |
 | 发行人无事实 | `issuer_coverage` 无该市场行 | 事实视图"尚无披露事实（不在同步范围或尚未同步）"；admin 看到 `/admin/dq` 链接 |
 | 港股 | 发行人证券全为 `.HK` 且无 US/CN 行 | 事实视图"港股披露事实待文档管道（F3）" |
-| A 股引用待挂接 | filing `citation = pending` | `!` 徽标；文件视图灰徽标；页头计数 |
+| A 股引用待挂接 / 无逐值 PDF 定位 | filing `citation = pending`，或 `linked` 但该值无 `locator.pdf` | 公共端点：单元格"—（引用待挂接 / 待逐值核对）"（服务端置空，§5.6，不看会话）；admin 只能经 `/api/admin/companies/…`（§6.4）看到数值 + `!` 徽标；文件视图灰徽标；页头计数 |
 | 回放早于首个文件 | `asOf < earliest available_date` | 网格空，"截至该日尚无可见披露" |
 | 概念缺失 | 某期无该概念可见事实 | "—"，title 固定"该期无此概念的可见披露"（不推断原因） |
 | 读取被截断 | `truncated=true` | 错误卡，不显示部分数据 |
@@ -362,7 +368,7 @@ type Cell =
 
 | 视图 | 无 `asOf` | 有 `asOf` |
 |---|---|---|
-| overview | 速览：一次 `readFacts(asOf=今天, history:false)` 取事实 + 同一信封用 derive 算 `gross_margin/revenue_yoy`（不读物化指标表，避免 `basedOnRev` 不一致）；事件读物化表 | 速览同样从 `readFacts(asOf)` 一次信封算；事件按 `asOf` 现算（§6.1 `events`）；K 线（若按决策 J 保留）显示"不支持回放"横幅 |
+| overview | 速览：一次 `readFacts(asOf=今天, history:true)`（规范派生函数要求完整披露序列，规格二 §8）取事实并在同一信封上算 `gross_margin/revenue_yoy`（不读物化指标表，避免 `basedOnRev` 不一致）；事件读物化表 | 速览同样从 `readFacts(asOf, history:true)` 一次信封算；事件按 `asOf` 现算（§6.1 `events`）；K 线（若按决策 J 保留）显示"不支持回放"横幅 |
 | statements | `readFacts(asOf=今天)` | `readFacts(asOf)` |
 | metrics | 读 `financial_metrics`（显示 `basedOnRev`） | 实时 derive |
 | 估值模型区 | 按 §5.4 门控运行 | 隐藏 |
@@ -375,15 +381,16 @@ type Cell =
 
 ## 6. 读取与写入接口
 
-共同约定：公共只读路由用 anon 客户端（规格二 anon `FactsDb` + `supabaseCompanyDb(anon)`）、`force-dynamic`、参数重复 → 400 `invalid_parameter:<name>`、ticker 正则同 `/api/entities/resolve` 的 `SAFE`、`resolveIssuer({ticker},{today})` 无 → 404 `unknown_ticker`、`market` 由后缀决定；`asOf` 为 `YYYY-MM-DD` 且 ≤ 今天；错误与空结果 `no-store`；成功且 `asOf` 早于今天 → `public, max-age=600, s-maxage=3600`，否则 `successCacheControl(now)`；`truncated` 透传。按用户路由用会话客户端（RLS），响应 `Cache-Control: private, no-store`（成功与错误都是），未登录 401。
+共同约定：公共只读路由用 anon 客户端（规格二 anon `FactsDb` + `supabaseCompanyDb(anon)`）、`force-dynamic`、参数重复 → 400 `invalid_parameter:<name>`、ticker 正则同 `/api/entities/resolve` 的 `SAFE`、`resolveIssuer({ticker},{today})` 无 → 404 `unknown_ticker`、`market` 由后缀决定；`asOf` 为 `YYYY-MM-DD` 且 ≤ 今天；错误与空结果 `no-store`；成功且 `asOf` 早于今天 → `public, max-age=600, s-maxage=3600`，否则 `successCacheControl(now)`；`truncated` 透传。按用户路由用会话客户端（RLS），响应 `Cache-Control: private, no-store`（成功与错误都是），未登录 401。**公共端点永远按非 admin 规则置空**（`withheld`），不读取会话、不因调用者身份改变响应体——同一 URL 在共享缓存里只能有一种内容；未脱敏变体只存在于 `/api/admin/…`（§6.4），`requireAdminUser()` 门控，每个响应 `Cache-Control: private, no-store`，与公共端点不共享任何缓存的 DTO 对象（#57）。
 
 ### 6.1 公共
 
 | 路径 | 参数 | 返回 |
 |---|---|---|
 | `GET /api/companies/[ticker]/overview` | `asOf` | `{issuer: ResolvedIssuer, market, coverage: CoverageRow \| null, coverageOtherMarket: CoverageRow \| null, latestFiling: FilingSummary \| null（`available_date ≤ asOf` 的最近一条，来自完整的 `filingsOfIssuer`）, latest: {periodKey, facts: {revenue|revenue_operating, net_income_parent, operating_cash_flow: Cell}, derived: {gross_margin, revenue_yoy: Cell}, stateRev, truncated} \| null（同一 `readFacts` 信封），recentEvents: Event[≤3]}` |
-| `GET /api/companies/[ticker]/statements` | `statement=IS\|BS\|CF` 必填、`basis=disclosed\|annual\|quarterly`、`periods=8\|20\|40`、`asOf` | `{issuerId, ticker, market, asOf, mappingGen, stateRev, truncated, statement, basis, periods: [{key, periodStart, periodEnd, duration}], rows: [{concept, unit, unitKind, sourceConcepts, notes, cells: {[key]: Cell}}], filings: {[filingId]: FilingSummary（含 citation、linkAttempts、factCount）}}`；单元格级证据按需由 `GET /api/facts/evidence?factId=` 取（§5.6） |
-| `GET /api/companies/[ticker]/events` | `since`、`until`、`kinds`、`cursor`、`limit ≤ 200`（缺省 50）、`asOf` | 无 `asOf`：物化表（`retired_at is null`）keyset 分页；有 `asOf`：`readFacts(asOf, history: true)` + `filingsOfIssuer(to: asOf)` → `deriveIssuerEvents` 现算，不含 `firstSeenAt`，响应 `computed: 'live'`；`truncated` → 400 `replay_truncated` |
+| `GET /api/companies/[ticker]/statements` | `statement=IS\|BS\|CF` 必填、`basis=disclosed\|annual\|quarterly`、`periods=8\|20\|40`、`asOf` | `{issuerId, ticker, market, asOf, mappingGen, stateRev, truncated, statement, basis, periods: [{key, periodStart, periodEnd, duration}], rows: [{concept, unit, unitKind, sourceConcepts, notes, cells: {[key]: Cell}}], filings: {[filingId]: FilingSummary（含 citation、linkAttempts、factCount）}, evidence: {[factId]: EvidenceDto}, withheld: {evidenceIncomplete: n, citationPending: n}}`。**发布前门槛**：服务端对响应里每个将显示的 `factId`（含派生格的全部 `inputs`）调用 `fact_evidence`（≤ 100 id 一批，分批）并经 `evidenceEligible`（§5.6）；不合格的事实，其单元格（派生格则整格）在服务端改为 `withheld`，数值不进响应。同一门槛函数覆盖本模块**每一个**含财务数值的响应：`overview.latest`、`packet`、`events`/`inbox` 的 payload（headline 值、`fact_revised` 的 `from/to` 值与 `relChange`）、规格二 `/api/facts/[ticker]/metrics` 被本页直接消费时由本页的 `metrics` 代理路由 `GET /api/companies/[ticker]/metrics` 过门槛（本页不再直接调用规格二的 `/metrics`）、`/api/facts/[ticker]?history=1` 的抽屉序列（响应附带 `evidence`，§10.1 第 2 条）、DCF 事实种子（§9.1）。公共端点不看会话；admin 的未脱敏版本见 §6.4 |
+| `GET /api/companies/[ticker]/events` | `since`、`until`、`kinds`、`cursor`、`limit ≤ 200`（缺省 50）、`asOf` | 无 `asOf`：物化表（`retired_at is null`）keyset 分页；有 `asOf`：`readFacts(asOf, history: true, includeFilings: true)` → `deriveIssuerEvents` 现算，不含 `firstSeenAt`，响应 `computed: 'live'`；`truncated` → 400 `replay_truncated`。两种模式下 payload 内的数值（headline、`from/to`、`relChange`）都经证据门槛：引用的 `factId` 不合格 → 该值替换为 `{kind:'withheld', reason}`，响应附 `evidence` 字典 |
+| `GET /api/companies/[ticker]/metrics` | 与规格二 `/api/facts/[ticker]/metrics` 同参数 | 代理：调用规格二读取后对每行 `inputs` 的全部 `factId` 过证据门槛，任一不合格 → 该指标行 `withheld`；附 `evidence`；页面只用此路由，不直接调规格二 `/metrics` |
 | `GET /api/companies/[ticker]/packet` | `annualPeriods ≤ 10`（缺省 5）、`recentPeriods ≤ 8`（缺省 4） | Copilot 工具包：三张报表的年度行 + 最近若干披露期 + 六个指标，每值带 `factId/availableDate`，`provenance: {mappingGen, formulaVersion, stateRev}`，`clipped: {annual, recent}` 显式标出被裁的期数；JSON ≤ 32 KB 由裁期数保证 |
 | `GET /api/companies` | `market`、`q`（名称/ticker 前缀 ≤ 24）、`sort=latest_available_date\|latest_period_end\|name`、`page`、`pageSize ≤ 200` | `{total, rows: [{issuerId, market, names, primaryTicker, tickers[], latestPeriodEnd, latestAvailableDate, conceptsCovered, citationSummary, scopeLastSuccessAt, scopeLastStatus}]}`；不含任何按用户字段 |
 | `GET /api/companies/freshness` | — | `{datasets: [{dataset: 'facts.us'\|'facts.cn'\|'company.events', status, lastOkAt, lastAttemptAt}]}`；服务端用 `getAdminSupabase()` 读 `dq_freshness` 三行经 `freshnessOf(now)` 重算后只返回这四个字段；`public, max-age=60` |
@@ -399,7 +406,7 @@ type Cell =
 | `POST /api/tracking/watches/[issuerId]/read` | `{eventIds: string[]}`（≤ 500，必须是本次或此前 `inbox`/`events` 响应里返回过的 id；服务端只校验 id 属于该发行人且用户持有该 watch）→ 写回执 `on conflict do nothing`；返回 `{inserted}`。没有"全部标记已读"的时间戳语义；客户端的"标记本页已读"提交当前页的 id |
 | `DELETE /api/tracking/watches/[issuerId]` | 删除（回执级联删除） |
 | `POST /api/tracking/watches/import-watchlist` | 读当前用户服务端 `watchlist_items.ticker` 去重 → `resolveIssuer` → 逐条 `insert … on conflict do nothing`（触发器守上限）；返回 `{added[], existing[], unresolved[], skippedByLimit[]}`；无服务端自选 → 409 `no_server_watchlist` |
-| `GET /api/tracking/inbox` | `cursor`、`limit ≤ 200`、`kinds`、`unreadOnly=1`：未静音 watch × `issuer_events`（`retired_at is null`）左联回执，按 `(first_seen_at desc, event_id desc)` keyset；响应 `{rows: [{…event, read: boolean}], nextCursor}`；同发行人同日多条由客户端折叠；F4 事件的合并等 F4 事件 DTO（§1.2） |
+| `GET /api/tracking/inbox` | `cursor`、`limit ≤ 200`、`kinds`、`unreadOnly=1`：未静音 watch × `issuer_events`（`retired_at is null`）左联回执，按 `(first_seen_at desc, event_id desc)` keyset；响应 `{rows: [{…event, read: boolean}], nextCursor, evidence}`；payload 数值同样经证据门槛置 `withheld`（与 `events` 路由共用同一函数）；同发行人同日多条由客户端折叠；F4 事件的合并等 F4 事件 DTO（§1.2） |
 
 CSRF：POST/PATCH/DELETE 校验 `Origin` 与 `Content-Type: application/json`（同 `/api/admin/dq/quarantine/[id]`）。
 
@@ -408,15 +415,17 @@ CSRF：POST/PATCH/DELETE 校验 `Origin` 与 `Content-Type: application/json`（
 `CRON_SECRET` Bearer；`maxDuration = 300`；`deadline = start + 240 s`。核心 `src/lib/company/digest.ts::runCompanyDigest(deps, {mode: 'incremental' | 'full', issuerIds?, limit})`：
 
 1. `startBatch({producer: 'company-digest', dataset: 'company.events', toolVersions: {events: EVENTS_VERSION, mappingGen, formulaVersion}, codeVersion})`；`code_version` 规则同规格二 §6.1（取不到则拒绝 apply，`code_version_missing`）。
-2. 选流：预算 `limit`（缺省 200）按 80/20 分配：incremental = `digestDue(now, ceil(0.8·limit))`（`state_rev > digested_rev and next_attempt_at ≤ now`，按积压差降序）；sweep = `sweepDue(now − 7 d, now, floor(0.2·limit))`（`swept_at` 最旧优先，null 最先；保证 sweep 不被 incremental 饿死）；两份列表按 `(issuer_id, market)` 去重，同一流在一次运行里只处理一次（若两边都选中，以 `p_sweep=true` 处理）；full = 全部（脚本）。剩余预算 < 30 s 不再开始新流，`deadline_hit` 记入回执 `errors`（依赖规格二把它加入 `INFO_CODES`；规格二未落地前只写 `detail.deadlineHit=true`，不进 `errors`，以免 `finishBatch` 把它算作降级）。
-3. 每个流：`rebuildId = randomUUID()`；`readFacts(issuer, market, {concepts: 全部, asOf: 今天, history: true})` → `truncated` → `markDigestFailed(…, attemptRev = 信封 stateRev)`，码 `read_truncated`；否则 `filingsOfIssuer(issuer, market)`（**完整**列表，§10.1 第 3 条要求无上限或分页到尽；返回的 `stateRev` 必须等于信封的，否则重读一次）+ 流的 `fact_sync_scope` 行（`last_success_at/last_status`）→ `deriveIssuerEvents` + `summarizeCoverage` → `replaceDigest(…, rebuildId, basedOnRev = 信封 stateRev, sweep)`；`stale_computation` → 重读重算一次，再失败 `markDigestFailed`；`invalid_event` → 该流 failed 并记错（这是本模块的 bug 信号）；其他异常 → `markDigestFailed`。
-4. 结束：`finishBatch`（计数映射：`fetched` = 尝试的流数，`inserted` = `upserted − changed`，`versioned` = `changed`，`failed` = 失败流数）；`recordAttempt('company.events', {ok, cadence: 'daily', detail: {attempted, succeeded, failed, swept, idle, backlogFailed}})`，其中 `ok = failed === 0 && backlogFailed === 0`（`backlogFailed = CompanyDb.backlog().failedStreams`）：空转但仍有退避中的失败流 → `ok:false`，看板上数据集不会被空转"洗绿"。cron 与脚本不同时运行（runbook，与规格二同约束；`recordAttempt` 假设单一生产者）。
+2. 选流：预算 `limit`（缺省 200）按 80/20 分配：incremental = `digestDue(now, ceil(0.8·limit))`（`state_rev > digested_rev and next_attempt_at ≤ now`，按积压差降序）；sweep = `sweepDue(now − 7 d, now, floor(0.2·limit))`（`swept_at` 最旧优先，null 最先）；两份列表按 `(issuer_id, market)` 去重（两边都选中以 `p_sweep=true` 处理），然后**交错**成一个执行序列（每 4 个 incremental 后插 1 个 sweep），使截止到来时 sweep 已按比例消耗了预算，而不是排在末尾被饿死；full = 全部（脚本）。剩余预算 < 30 s 不再开始新流，`deadline_hit` 记入回执 `errors`（依赖规格二把它加入 `INFO_CODES`；规格二未落地前只写 `detail.deadlineHit=true`，不进 `errors`）。
+3. 每个流：`attemptId = beginAttempt(issuer, market, now)`；`rebuildId = randomUUID()`；`readFacts(issuer, market, {concepts: 全部, asOf: 今天, history: true, includeFilings: true})`（§10.1 第 3 条：filings 与事实同一快照、同一 `stateRev`）→ `truncated` → `markDigestFailed(…, attemptId)`，码 `read_truncated`；否则 + 流的 `fact_sync_scope` 行（`last_success_at/last_status`）→ `deriveIssuerEvents` + `summarizeCoverage` → `replaceDigest(…, attemptId, rebuildId, basedOnRev = 信封 stateRev, sweep)`；`stale_computation` → 同一 attemptId 重读重算一次，再失败 `markDigestFailed`；`stale_attempt` → 该流 `skipped_summary(stale_attempt)`（更晚的尝试已成功，不是失败）；`invalid_event` → `markDigestFailed` 并记错（本模块的 bug 信号）；其他异常 → `markDigestFailed`。sweep 在当前 `state_rev` 上失败同样经 `markDigestFailed` 记录退避（尝试身份与事实版本分离，§4.4）。
+4. 结束：`finishBatch`。批次六计数器按**流**计（事件级数字只进 `detail`，不参与状态判定）：`fetched` = 尝试的流数，`inserted` = 事件集有变化（`changed + retired + revived > 0`）的成功流数，`duplicates` = 成功但事件集无变化的流数（零事件、零变化的替换也算）**加上**被更晚尝试取代的 `stale_attempt` 流与尝试后发现的 `unknown_stream` 流（"这项工作已由更新的尝试完成或已无此流"归入 `duplicates`，同时分别计入 `detail.skippedStale`、`detail.skippedUnknown`），`failed` = 失败流数，`versioned`/`quarantined` = 0；完成的批次必须满足 `fetched === inserted + duplicates + versioned + quarantined + failed`（单测与集成测试用真实 `finishBatch` 断言全跳过批次与混合批次都没有 `unaccounted`）；`detail = {events: {upserted, changed, retired, revived}, attempted, succeeded, failed, skippedStale, skippedUnknown, swept, idle, backlogFailed}`。`recordAttempt('company.events', {ok, cadence: 'daily', detail})`，其中 `ok = failed === 0 && backlogFailed === 0`（`backlogFailed = CompanyDb.backlog().failedStreams`，即 `last_status='failed'` 的流数——含同版本 sweep 失败）：空转但仍有退避中的失败流 → `ok:false`。cron 与脚本不同时运行（runbook；`recordAttempt` 假设单一生产者）。
 5. `vercel.json`：`/api/cron/company-digest` 每小时第 20 分（`20 * * * *`）。脚本 `scripts/company/digest.ts --full [--issuer …] [--market …] [--apply]`：`EVENTS_VERSION`、映射代或公式版本变更后由 owner 运行。
-6. 时滞（目标值，吞吐实测后确认，§16）：事实可见性变化（发布、提升、裁决）→ 下一次 incremental（约 1 h + 失败退避）；巨潮挂接（`document_url` 更新，不改 `state_rev`）→ 读时从 `filings` 联查，徽标即时正确；`citation_summary` 滞后一个 sweep 周期（目标 7 天）。并发：`replaceDigest` 先取规格二的 `fact_sync_scope` 行共享锁再比对 `state_rev`，发布中的流让物化等待，发布后旧版本的物化被拒；同 `state_rev` 的两次计算经济内容相同，`payload_changed_at` 不变。
+6. 时滞（目标值，吞吐实测后确认，§16）：事实可见性变化（发布、提升、裁决）→ 下一次 incremental（约 1 h + 失败退避）；巨潮挂接（`document_url` 更新，不改 `state_rev`）→ 读时从 `filings` 联查，徽标即时正确；`citation_summary` 滞后一个 sweep 周期（目标 7 天）。并发：`replaceDigest` 先对规格二的 `fact_sync_scope` 行取 `for update`（排他）再比对 `state_rev`，发布中的流让物化等待，发布后旧版本的物化被拒，两个 digest 写者串行；同 `state_rev` 的两次计算经济内容相同，`payload_changed_at` 不变。
 
 ### 6.4 管理
 
-`GET /api/admin/facts/snapshot?hash=<sha256>&source=edgar|tushare&issuer=<uuid>`：`requireAdminUser()`；返回 `disclosure-raw` 桶对应对象的 60 s 签名 URL；审计日志 `research_audit_log('facts.snapshot.download')`。
+- 公共稳定下载端点 `GET /api/facts/snapshot?hash=<sha256>`（anon 可用）：校验该哈希对应的对象已登记且 `source='edgar'`（否则 404 / 403 `not_redistributable`），每次调用现铸 60 s 签名 URL，`302` 重定向并带 `Cache-Control: no-store`；不把签名 URL 写进任何可缓存响应（#59）；测试：对一份超过 60 s 的财务响应里的 `download` 仍能下载，过期后重复下载仍成功。
+- `GET /api/admin/facts/snapshot?hash=<sha256>&source=edgar|tushare&issuer=<uuid>`：`requireAdminUser()`；任意来源（含 Tushare）的对象的 60 s 签名 URL，`private, no-store`；审计日志 `research_audit_log('facts.snapshot.download')`。
+- 未脱敏变体（#57）：`GET /api/admin/companies/[ticker]/statements|overview|events|metrics|packet` 与 `GET /api/admin/facts/[ticker]?history=1`——与公共路由同参数同形状，但 `citation_pending` / 缺 `locator.pdf` 的 CN 值不置空（证据缺失与代码版本为空仍置空）；`requireAdminUser()`；每个响应 `Cache-Control: private, no-store`；实现上与公共路由不共享任何已构建的 DTO 缓存对象（各自从 `readFacts` 组装）。公共 `/api/companies/*`、`/api/facts/*` 路由不读会话。测试：共享缓存夹具中 admin 请求公共 URL 后匿名请求同一 URL，响应不含任何 pending-CN 值（公共 URL 对 admin 也是脱敏的）。
 
 ---
 
@@ -459,7 +468,9 @@ CSRF：POST/PATCH/DELETE 校验 `Origin` 与 `Content-Type: application/json`（
 - 单位约定（显式写进 `DcfAssumptions.meta`）：货币金额用 `currencyUnit`（CNY → 亿，除数 1e8；USD → 百万，除数 1e6）；`sharesDiluted` 用**同一除数**换算（股数 ÷ 1e8 或 ÷ 1e6），使 `equity / sharesDiluted` 直接得到每股货币单位；`netDebt` 同货币同除数。种子记录每个字段的除数。
 - 新纯函数 `src/lib/company/dcf-seed.ts::seedFromFacts(envelope, security): {seed, provenance: {[leafPath]: {source: 'fact', factIds, metric?, divisor, basis}}, missing: {field, reason}[]}`。输入是**一个** `readFacts(issuer, market, {concepts: 所需, asOf: 今天, history: true})` 信封（派生用规格二 `derive.ts` 在同一信封上算，不读物化指标表，避免跨 `basedOnRev` 混用）与当前证券的 `issuer_securities` 行：最近 `12M` 的 revenue（CN：`revenue_operating`）与同期 `gross_margin`；同一 `period_end` 的 instant `shares_outstanding`、`cash`、`borrowings_total`（`borrowings_total` 由同信封 derive）。映射（叶子路径）：`revenueLines[0].baseRevenue` ← revenue（`revenueLines[0].name`、`cagr` 不是事实，来源为 default/llm/user）；`grossMarginPct` ← `gross_margin`；`sharesDiluted` ← `shares_outstanding`（`basis: 'shares_outstanding'`，UI 标注"在外股数（封面日期），非稀释股数"）；`netDebt` ← `borrowings_total − cash`（`basis` 继承 `us_standard`/`cn_incl_bonds`，UI 标注"借款合计 − 货币资金；不含租赁负债、应付票据等"）；`currency`、`currencyUnit`、`divisor` ← 事实单位。期末不对齐、缺项、单位不一致 → 不种子并进 `missing`。
 - 股数适用性（肯定式检查，缺一不种子）：当前证券 `share_class ∈ {'common','A'}`；该发行人在当前市场只有一条未关闭证券；`shares_outstanding` 在封面日期只有一个当前事实（多类别股本 → `missing: 'multi_class_shares'`）。`unknown`（SEC 装载默认值）、`ADR`、`preferred`、`H`、`other` → `missing: 'share_basis_unverified'`。在规格三给出股份类别与 ADS 比例前，美股的股数种子多数不可用，这是如实的缺失。
-- 合并与门控：合并顺序 defaults < LLM < **facts** < user overrides，按叶子路径深合并；每个叶子带 `provenance ∈ fact | llm | default | user`；`currency/currencyUnit/divisor` 进入 LLM 提示、默认值与 overrides 的解释（LLM 输出按同一单位解释）。**股权桥三项**（`revenueLines[0].baseRevenue`、`sharesDiluted`、`netDebt`）必须全部为 `fact` 或 `user`，否则路由返回 `{status: 'unavailable', missing, provenance}` 不运行引擎——默认值与模型输出不得填充这三项。`warnings` 的"暂无财报数据"只在没有任何 `fact` 叶子时出现。
+- 收入行契约（引擎对 `revenueLines` 逐行求和，`src/lib/dcf/engine.ts::buildYearly`）：本次发布 `revenueLines` **固定为一行**——`[{name: '合计', baseRevenue: <事实或用户值>, cagr: <llm|default|user>}]`；LLM 提示只请求 `cagr` 与成本结构比率，不请求收入拆分；合并时 `revenueLines` 不按索引深合并：数组长度固定为 1，LLM/默认/用户只能写 `revenueLines[0].cagr`，任何对 `baseRevenue` 或数组长度的非事实/非用户写入被丢弃并记 `warnings`。收入分解（多行）留待另立契约（各行 `baseRevenue` 必须与事实合计对账）。门控检查覆盖**每一个** `revenueLines[i].baseRevenue` 叶子（当前即唯一一行）。
+- 事实种子过证据门槛：`seedFromFacts` 的每个 `fact` 叶子所引用的 `factIds` 必须全部通过 `evidenceEligible`（§5.6），否则该叶子不种子、进 `missing: 'evidence_incomplete'`（股权桥叶子因此可能转为需用户确认）；`/api/dcf` 响应附 `evidence` 字典。
+- 合并与门控：合并顺序 defaults < LLM < **facts** < user overrides，按叶子路径深合并（`revenueLines` 按上一条特殊处理）；每个叶子带 `provenance ∈ fact | llm | default | user`；`currency/currencyUnit/divisor` 进入 LLM 提示、默认值与 overrides 的解释（LLM 输出按同一单位解释）。**股权桥**（全部 `revenueLines[i].baseRevenue`、`sharesDiluted`、`netDebt`）必须全部为 `fact` 或 `user`，否则路由返回 `{status: 'unavailable', missing, provenance}` 不运行引擎——默认值与模型输出不得填充这些叶子。`warnings` 的"暂无财报数据"只在没有任何 `fact` 叶子时出现。
 - `/api/dcf/[ticker]` 不再自调 `/api/financials`；`DcfStudio` 不再挂载即运行（§5.4）；回放模式下不渲染（§5.10）。
 
 ### 9.2 `src/lib/agent/tools.ts` 的 `financials` 工具
@@ -487,10 +498,10 @@ C2 完成后该路由零内部调用（验证：`grep -rn "api/financials" src -
 C0 的退出条件之一是下列各点被规格二**书面接受**（写入规格二 §16 或 F2-6 任务并由其实施者确认），"记为偏差"不算完成：
 
 1. `derive.ts` 导出 `METRIC_CATALOG: {metric, formula: {zh, en}, inputs: concept[], basisByMarket}` 与可在任意信封上运行的规范派生函数（本规格的 `quarterly` 口径与 DCF 种子都调用它）。
-2. 证据 DTO：`read_facts` 行含 `run_id`；新增 `security definer`、`stable`、授予 anon/authenticated 的 `fact_evidence(fact_ids uuid[]) → jsonb`，内部联 `financial_facts → fact_sync_runs → ingest_batches` 与快照 `meta.json` 登记（规格二需把 `{sha256}.meta.json` 的内容同时登记到一张可查的表或在 `financial_facts` 旁存 `snapshot_meta_ref`），只返回 `{fact_id: {raw_hash, snapshot: {source, path, api|url, params, fetched_at, http_status, page}, locator: {json_pointer}, run: {run_id, code_version, tool_versions}, mapping_version, unit_rule}}`（无 token、无内部备注），上限 100 个 id；公共路由 `GET /api/facts/evidence?factId=`。同时解决规格二 §4.7 对 `fact_sync_runs` "public grant / 仅 service_role 可读"的自相矛盾（本规格只需要经函数的窄读，不需要表级公共读）。
-3. `/api/filings/[ticker]` 与 `FactsDb.filingsOfIssuer` 返回**完整**列表（无上限，或服务端分页到尽后合并）并带 `stateRev`，每条 filing 含 `factCount`、`linkAttempts`、`mappingGen`。
+2. 证据 DTO：`read_facts` 行含 `run_id`；新增 `security definer`、`stable`、授予 anon/authenticated 的 `fact_evidence(fact_ids uuid[]) → jsonb`，内部联 `financial_facts → fact_sync_runs → ingest_batches` 与快照 `meta.json` 登记（规格二需把 `{sha256}.meta.json` 的内容同时登记到一张可查的表或在 `financial_facts` 旁存 `snapshot_meta_ref`），只返回 `{fact_id: {raw_hash, snapshot: {source, path, api|url, params, fetched_at, http_status, page}, locator: {json_pointer}, run: {run_id, code_version, tool_versions}, mapping_version, unit_rule}}`（无 token、无内部备注），上限 100 个 id；`/api/facts/[ticker]` 在 `history=1` 时随响应附 `evidence` 字典；EDGAR 快照对象的公共稳定下载端点 `GET /api/facts/snapshot?hash=`（每次现铸签名 URL、`no-store` 重定向；只对 `source='edgar'`，Tushare 对象拒绝）。**CN 逐值 PDF 定位**：证据 DTO 对 CN 事实必须能给出 `locator.pdf = {page, table, row, column}`——来源是规格三的巨潮 PDF 逐值核对（`dq_reconciliations` 或其登记表须按 `fact_id` 存页/表/行/列），本规格把它列入对规格三的接口要求（§10.2）；在该登记存在之前，CN 事实在公共端点一律 `withheld`（本页如实显示为"待逐值核对"）。同时解决规格二 §4.7 对 `fact_sync_runs` "public grant / 仅 service_role 可读"的自相矛盾（本规格只需要经函数的窄读，不需要表级公共读）。
+3. 同快照的 filings：`read_facts` 增加 `p_include_filings boolean`，为 true 时信封含 `filings`（该发行人该市场 `mapping_gen > 0` 的**完整**列表，每条含 `factCount`、`linkAttempts`、`mappingGen`、`citation`），与事实行来自同一条语句、同一 `state_rev`——这是 digest 与 `statements` 路由建立事实/文件一致性的唯一方式（分页读 filings 再比对 `stateRev` 不能证明同快照）；`/api/filings/[ticker]` 的 `limit` 上限改为"无上限或到尽"。`financial_metrics` 行与 `/metrics` 响应含 `computedAt`（公式抽屉显示）。
 4. anon `FactsDb` 子集暴露 `readFacts`、`factsByIds`、`filingsOfIssuer`、`metricsOfIssuer`，供组合路由服务端直接调用（不经 HTTP 自调）。
-5. 确认 `state_rev` 在发布、`promote_quarantined`、`resolve_facts_quarantine` 三处递增，且三者都持 `fact_sync_scope` 行的 `for update` 锁（本规格 `replace_company_digest` 以 `for share` 与之互斥）；digest 不需要处理钩子回调。
+5. 确认 `state_rev` 在发布、`promote_quarantined`、`resolve_facts_quarantine` 三处递增，且三者都持 `fact_sync_scope` 行的 `for update` 锁（本规格 `replace_company_digest`、`mark_company_digest_failed` 也以 `for update` 取同一把行锁，与之互斥并让 digest 写者串行）；digest 不需要处理钩子回调。
 6. `INFO_CODES` 增 `deadline_hit`（规格二 §7.2 已列）；落地前本规格按 §6.3 第 2 条降级处理。
 7. `financial_history` 由本规格处理（规格二 §15.6 关闭；本次保留，§4.5）。
 
@@ -498,6 +509,7 @@ C0 的退出条件之一是下列各点被规格二**书面接受**（写入规�
 
 - 历史 ticker 归属：对齐后回放条可显示"该日归属"。
 - `dq_reconciliations` 通过的流/财期：对齐后单元格与文件视图加"已对账"徽标；需要公共读 `GET /api/facts/[ticker]/reconciliations`（只含 passed 布尔与对账日）。
+- **CN 逐值 PDF 定位登记**（本页 CN 数值公共显示的前提，#40）：巨潮逐值核对须按 `fact_id` 登记 `{page, table, row, column}` 并经一个 `security definer` 窄读函数供 `fact_evidence` 联查；登记缺失的 CN 事实在本页公共端点保持 `withheld`。
 - ADR/ADS 比例登记后 §9.1 的 ADR 限制解除。
 
 ### 10.3 F3 文档管道
@@ -511,11 +523,11 @@ C0 的退出条件之一是下列各点被规格二**书面接受**（写入规�
 
 本页只消费。**对齐说明（2026-11-04）**：并行编写的 F4 规格 `docs/superpowers/specs/2026-11-04-judgment-framework-design.md` §9.2 已定义 `JudgmentCard`（`subject`、`kind`、`lifecycle`、`calibration ∈ {insufficient, failed, self_assessed, calibrated}`、`display.percent`（仅 `calibration='calibrated'` 时非空）、`condition`、`settlement`、`calibration_summary`、`inputs`）、组件 `src/components/judgments/JudgmentCard.tsx` 与 `GET /api/judgments?subject_type=issuer&subject_key=<issuer_id>`。本页按 F4 的契约渲染，下面的接口草案只保留为**本页对 F4 的要求清单**，字段名以 F4 为准：
 - 本页不自行计算百分比，只渲染 `display.percent`，并在客户端再加一道失败关闭：`calibration !== 'calibrated'` 或 `lifecycle ∉ {open, settled}` 或 `display.percent` 非有限数 → 不显示百分比（防御 F4 响应缺陷）。
-- `asOf` 回放：请求 `GET /api/judgments?…&as_of=` 返回**当时版本**的卡（结算与校准晚于 `as_of` 的不出现）。
+- `asOf` 回放按 F4 §10 的契约：`GET /api/judgments?subject_type=issuer&subject_key=<issuer_id>&view=as_known&asOf=<YYYY-MM-DD>`（F4 默认 `view=latest`，必须显式传 `as_known`；cutoff = `asOf` 日终：判断 `registered_at ≤ cutoff`、结算 `settled_at ≤ cutoff`、校准 `computed_at ≤ cutoff`）。本页断言响应顶层 `view === 'as_known'` 且 `asOf` 等于请求值，否则不渲染判断区（显示"回放读取失败"）；契约测试用含"截止后才结算 / 截止后才校准"记录的录制夹具，断言这些结算与百分比在回放中不出现。无 `asOf` 时用 `view=latest`。
 - F4 §9.4 要本规格给出的两个参数：分数凯利系数 `k = 0.25`（总纲 §2.2 给出 ¼–½ 区间，取保守端）；**星级映射本次不定义、不显示**（对方的"值博率星级"没有可复现定义，决策 K）。
 - 事件 DTO（收件箱合并用）：F4 当前稿未定义；本规格 C5 等它。
 
-原草案（要求清单）：
+原草案（**非规范**，只作为对 F4 的要求清单保留；本仓库不实现 `canShowPercent`，显示门槛以 F4 §§8–9 的 `calibration`/`display.percent` 为准）：
 
 ```ts
 interface JudgmentCard {
@@ -536,7 +548,7 @@ interface JudgmentCard {
 }
 ```
 
-单一失败关闭的显示谓词 `canShowPercent(card, policy)`（`src/lib/company/judgment-display.ts`，单测覆盖每个条件单独为假）：`policy` 是 F4 发布的受信校准政策常量（本仓库从 F4 包导入，不来自卡片）：
+（以下谓词描述本页希望 F4 的 `display.percent` 门槛满足的条件，供 F4 核对，不在本仓库实现：）
 `falsifiableCondition` 两种语言非空 ∧ `settlesAt !== null` ∧ `settlement` 非空且 `ruleVersion`、`outcomeDefinition.zh/en`、`horizon` 非空 ∧ `probability` 存在且 `p` 有限且 `0 ≤ p ≤ 1` ∧ `calibration` 非空 ∧ `calibration.policyVersion === policy.version` ∧ `calibration.methodologyVersion === card.methodologyVersion` ∧ `calibration.appliesTo.kind === card.kind` ∧ `calibration.appliesTo.horizon === settlement.horizon` ∧ `Number.isInteger(n) && n >= policy.minN(card.kind)`（`policy.minN` ≥ 1）∧ `brier` 有限且 `0 ≤ brier ≤ 1` ∧ `evidenceRef` 匹配 F4 规定的 URL/ID 形式。不满足 → "研究员信心（未校准）"与定性档位，不显示百分比。满足 → 百分比并列 `n`、Brier、`evidenceRef` 链接。`visibility='private'` 只对作者可见（F4 负责 RLS，本页按会话读）。接口：`GET /api/judgments?issuerId=&asOf=`（会话、`private, no-store`；`asOf` 返回当时版本的卡，结算与校准不得晚于 `asOf`）。目录页不显示判断计数。F4 落地前"判断"视图只有空状态（决策 A 默认），不显示 `recommendations`。F4 事件 DTO（稳定 id、租户范围、观察时间、已读语义）由 F4 定义后，本规格 C5 接入收件箱。
 
 ### 10.5 行业研究规格
@@ -560,9 +572,14 @@ interface JudgmentCard {
 | `eventIds` 缺失、> 500、含不属于该发行人的 id | 400 | `invalid_parameter:eventIds` |
 | 导入无服务端自选 | 409 | `no_server_watchlist` |
 | 导入解析失败 ticker | 200，列于 `unresolved` | — |
-| 证据 DTO 取不到 / `codeVersion` 空 | 单元格不显示数值 | `evidence_incomplete`（网格汇总） |
-| DCF 股权桥缺事实且无用户确认 | 200 `status='unavailable'`，不运行引擎 | `dcf_bridge_missing` |
-| digest `stale_computation` | 重读重算一次；再失败 `markDigestFailed`、退避 | `stale_computation` |
+| 证据 DTO 取不到 / `codeVersion` 空 | 服务端置 `withheld`，数值不进响应 | `evidence_incomplete`（网格汇总） |
+| CN 事实 `citation=pending` 或无 `locator.pdf`（公共端点，不看会话） | 服务端置 `withheld` | `citation_pending`（网格汇总） |
+| 事件 / 收件箱 / 指标代理 / packet / DCF 种子引用不合格事实 | 该值 `withheld`（指标整行、DCF 叶子不种子） | `evidence_incomplete` / `citation_pending` |
+| `/api/facts/snapshot?hash=` 的哈希非 EDGAR 对象 | 403 | `not_redistributable` |
+| 管理路由被非 admin 调用 | 401 / 403，`private, no-store` | — |
+| DCF 股权桥缺事实且无用户确认；或 LLM 试图改写收入行 | 200 `status='unavailable'`，不运行引擎；后者丢弃并 `warnings` | `dcf_bridge_missing` / `dcf_revenue_line_rejected` |
+| digest `stale_computation` | 同一 attempt 重读重算一次；再失败 `markDigestFailed`、退避 | `stale_computation` |
+| digest `stale_attempt` | 该流跳过（更晚的尝试已成功） | `skipped_summary(stale_attempt)` |
 | digest `read_truncated` | 该流 failed、退避 | `read_truncated` |
 | digest `invalid_event` | 该流 failed、记错不退避（模块 bug） | `invalid_event` |
 | digest `unknown_stream` | 该流跳过 | `skipped_summary(unknown_stream)` |
@@ -587,16 +604,17 @@ interface JudgmentCard {
 - `events.test.ts`：三种事件数量与 key 确定性；同日同值无事件；迟到修订；中间插入（前、中、后三种位置）改变两条边；隔离移除 → 墓碑；提升 → 复活保留 `first_seen_at`；零事实 filing；映射代升级后 key 不变；两次运行逐字节相同。属性测试（种子随机 200 次）：`fact_revised` 数 = 各序列相邻值变化数之和。
 - `coverage.test.ts`：计数、`citation_summary`、`scope_last_*` 复制。
 - `statements-grid.test.ts`：三种口径、期间键、每行单位与 `U`、`periods` 裁剪、徽标、`truncated` 处理、`formatDecimalText`（20 位整数、小数、负数、除数）。
-- `dcf-seed.test.ts`：全量种子、三处除数一致、CN `revenue_operating`、期末不对齐、`share_class` 五种值与多类别股本、单信封派生、叶子路径合并（LLM 不覆盖事实；`revenueLines[0].cagr` 为 llm 时 `baseRevenue` 仍为 fact）、股权桥缺项 → `unavailable`、用户确认 → 运行。
+- `dcf-seed.test.ts`：全量种子、三处除数一致、CN `revenue_operating`、期末不对齐、`share_class` 五种值与多类别股本、单信封派生、叶子路径合并（LLM 不覆盖事实；`revenueLines[0].cagr` 为 llm 时 `baseRevenue` 仍为 fact）、**LLM 返回两行收入 → 第二行被丢弃、`revenueLines.length === 1`、引擎输入的收入合计等于事实值并有 `warnings`**、股权桥缺项 → `unavailable`、用户确认 → 运行。
 - `inbox.test.ts`：keyset 分页（并列 `first_seen_at`）、回执按 id、分页外与过滤外的行不被标读、折叠、静音。
-- `judgment-display.test.ts`：`canShowPercent` 每个条件单独为假（含 `n=0`、`minN` 来自政策而非卡、`appliesTo` 不匹配、`p`/`brier` 越界或非有限）。
-- `digest.test.ts`（`memoryCompanyDb` + `memoryFactsDb`）：`digestDue`/`sweepDue` 选择与 80/20 配额、去重、`stale_computation` 重试、`read_truncated`、`invalid_event`、退避、`markDigestFailed` 对已成功版本无效、截止、`code_version` 缺失拒绝、`ok` 在有积压失败时为 false、同批次两次 replace 同一流（第二次省略事件 → 墓碑）。
-- 路由测试（录制夹具）：`statements/events/packet/companies/overview/freshness` 参数校验、缓存头、`truncated`、`statement=CF`、`basis=quarterly` 对 BS 400；`tracking/*` 的 401、`private, no-store`、`eventIds` 校验、导入；`cron/company-digest` 鉴权；`dcf` 的叶子 `provenance` 与 `unavailable`；`packet` 的 `clipped` 与大小上限。
+- `judgments-contract.test.ts`：对 F4 录制夹具（含截止后结算、截止后校准的记录）：请求含 `view=as_known&asOf=`，响应 `view/asOf` 不匹配 → 不渲染；截止后结算与百分比不出现；`calibration !== 'calibrated'` 时客户端防御不显示百分比。
+- `digest.test.ts`（`memoryCompanyDb` + `memoryFactsDb`）：`digestDue`/`sweepDue` 选择与 80/20 配额、去重与 4:1 交错、`stale_computation` 重试、`stale_attempt` 跳过、`read_truncated`、`invalid_event`、退避、同版本 sweep 失败被记录且 `ok=false`、迟到失败在更晚成功后被忽略、截止时 sweep 已部分完成、`code_version` 缺失拒绝、批次计数按流（零变化 → `duplicates`，无 `unaccounted`）、同批次两次 replace 同一流（第二次省略事件 → 墓碑）。
+- `evidence-gate.test.ts`：`evidenceEligible` 每个不合格条件单独为假（缺 DTO、空 `codeVersion`、EDGAR 缺 `rawHash`/`jsonPointer`、CN 缺 `sourceDocument`、CN 缺 `locator.pdf`）；对报表格、派生格 `inputs`、事件 headline/`from/to`/`relChange`、指标行、packet、抽屉序列、DCF 叶子各一例"不合格 → `withheld`"。
+- 路由测试（录制夹具）：`statements/events/metrics/packet/companies/overview/freshness` 参数校验、缓存头、`truncated`、`statement=CF`、`basis=quarterly` 对 BS 400、每个响应的 `evidence` 字典与 `withheld` 计数；**共享缓存夹具**：admin 会话请求公共 URL 后匿名请求同一 URL，两者都不含 pending-CN 值；`/api/admin/companies/*` 对非 admin 401/403、对 admin 含 pending-CN 值且 `private, no-store`；`/api/facts/snapshot?hash=` 对 EDGAR 哈希 302 + `no-store`、对 Tushare 哈希 403、对 60 s 之前的响应里的 `download` 仍可下载、过期后重复下载成功；`tracking/*` 的 401、`private, no-store`、`eventIds` 校验、导入；`cron/company-digest` 鉴权；`dcf` 的叶子 `provenance`、`unavailable`、`evidence_incomplete` 叶子；`packet` 的 `clipped` 与大小上限；批次计数经真实 `finishBatch`：全 `stale_attempt` 批次与混合批次无 `unaccounted` 且 `fetched` 等于五项之和。
 - i18n：`MESSAGE_DOMAINS` 增 `company`、`tracking`；`messages-parity.test.ts` 的域循环与占位符检查加这两个域。
 
 ### 12.2 数据库（`test:db`，critical）
 
-`src/lib/company/company-research.integration.test.ts`（含 `S4_TEST_STATE`，加入 `criticalSuites`）：迁移可重放两遍；唯一约束与外键；`replace_company_digest`：`stale_computation`、`unknown_stream`、`invalid_event`（多余键、跨流 filing、非 `ok` 事实、值不等于 `value_text`）、服务端算出的 `event_id/payload_hash` 与 TS 实现一致、墓碑/复活/`first_seen_at`、`payload_changed_at` 只在哈希变化时更新、同批次两次调用不同 `rebuild_id` 的退役、`p_sweep` 写 `swept_at`；**交错测试**（两个 pg 连接）：会话 1 模拟规格二发布（对 `fact_sync_scope` 行 `for update` 并递增 `state_rev`，未提交），会话 2 的 replace 阻塞，会话 1 提交后会话 2 以旧 `p_based_on_rev` 被拒；两个 digest 会话同流串行；`mark_company_digest_failed` 对已成功版本无效、退避封顶；触发器 `watch_limit` 在并发插入下不超限且已存在键放行；`company_event_reads` 跨发行人 id 被拒、取消跟踪级联清回执；真实角色：三类角色对公共表直接写被拒、anon 读两张按用户表被拒、A/B 隔离、anon/authenticated 执行函数被拒；决策 C 选删除时另测 `financial_history` 守卫（有行中止、锁后检查）。
+`src/lib/company/company-research.integration.test.ts`（含 `S4_TEST_STATE`，加入 `criticalSuites`）：迁移可重放两遍；唯一约束与外键；`replace_company_digest`：`stale_computation`、`stale_attempt`、`unknown_stream`、`invalid_event`（多余键、`meta` 多余键、跨流 filing、非 `ok` 事实、旧映射代事实、`available_date` 晚于今天、值不等于 `value_text`）、服务端算出的 `event_id/payload_hash` 与 TS 实现一致、墓碑/复活/`first_seen_at`、`payload_changed_at` 只在哈希变化时更新、同批次两次调用不同 `rebuild_id` 的退役、`p_sweep` 写 `swept_at`；**交错测试**（两个 pg 连接）：(a) 会话 1 模拟规格二发布（对 `fact_sync_scope` 行 `for update` 并递增 `state_rev`，未提交），会话 2 的 replace 阻塞，会话 1 提交后会话 2 以旧 `p_based_on_rev` 被拒；(b) 两个 digest 会话对同一流提交**不同**事件集（模拟 `EVENTS_VERSION` 变更）：后者阻塞到前者提交后才执行，最终 `issuer_events` 活动行恰等于后者集合、`issuer_coverage` 与之一致，没有并集；(c) 写间故障注入：在事件 upsert 之后、覆盖 upsert 之前抛错（用测试专用的 `set_config('company.fail_after_events','on')` 开关，仅集成测试构建启用）→ 事务回滚，事件与覆盖都保持旧值；(d) 回执迟提交：会话 1 插入事件未提交，会话 2 读收件箱并按返回 id 标读，会话 1 提交后该事件仍未读。`begin/mark/replace` 的尝试归属：同版本 sweep 失败被记录、更晚尝试成功后的迟到失败报告被忽略、退避封顶；**两种完成顺序**（#58）：(e) 尝试 1 开始、尝试 2 开始、尝试 2 失败、尝试 1 成功 → 物化被记录（`digested_rev`、`last_success_attempt_id`）但 `last_status` 仍为 `failed`、退避与 `consecutive_failures` 保留、`swept_at` 不推进、`backlogFailed > 0`；(f) 尝试 1 开始、尝试 2 开始、尝试 2 成功、尝试 1 失败报告 → 被忽略（返回 false），状态为 success；触发器 `watch_limit` 在并发插入下不超限且已存在键放行；`company_event_reads` 跨发行人 id 被拒、取消跟踪级联清回执；真实角色：三类角色对公共表直接写被拒、anon 读两张按用户表被拒、A/B 隔离、anon/authenticated 执行函数被拒；决策 C 选删除时另测 `financial_history` 守卫（有行中止、锁后检查）。
 
 ### 12.3 端到端（Playwright，`e2e/company.spec.ts`）
 
@@ -640,9 +658,9 @@ interface JudgmentCard {
 2. 600519.SH 文件视图 `citation` 徽标；`pending` 年报的单元格显示 `!`。
 3. 注入修订夹具并发布后跑 digest：收件箱出现一条"修订"事件，`first_seen_at` 为本次运行时间，`occurred_on` 为修订文件可得日期；再隔离该行 → 事件墓碑；提升 → 复活且 `first_seen_at` 不变。
 4. 用户 B 看不到 A 的 watch 与回执；anon 调 `replace_company_digest` 被拒；并发插入第 201 个 watch 被触发器拒绝，而重复插入已有 watch 返回 200。
-5. 断网跑 digest：批次 failed，`issuer_events` 不变，`digested_rev` 不推进，`next_attempt_at` 退避；之后空转运行的新鲜度 `ok=false`。
+5. 断网跑 digest：批次 failed，`issuer_events` 不变，`digested_rev` 不推进，`next_attempt_at` 退避；之后空转运行的新鲜度 `ok=false`。同一 `state_rev` 下 sweep 失败（例如证据登记缺失）同样记录并使 `ok=false`，直到该流再次成功。
 6. `/api/dcf/600519.SH`：`provenance['revenueLines[0].baseRevenue'] = fact`（`revenue_operating`），`netDebt` 的 `basis = cn_incl_bonds`，除数 1e8 三处一致；`/api/dcf/AAPL` 在 `share_class='unknown'` 下 `status='unavailable'`。
-7. 发布与物化交错：规格二发布事务未提交时物化阻塞，提交后旧版本物化被拒；两个 digest 工作者同流串行，最终 `based_on_rev` 等于当前 `state_rev`。
+7. 发布与物化交错：规格二发布事务未提交时物化阻塞，提交后旧版本物化被拒；两个 digest 工作者对同流提交不同事件集时因 `for update` 串行，活动事件集恰等于后提交者的集合（无并集），`based_on_rev` 等于当前 `state_rev`。
 8. 收件箱标记当前页已读后，分页外与迟提交的事件仍为未读。
 
 ---
