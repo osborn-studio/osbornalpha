@@ -35,7 +35,7 @@
 - 任何页面与 `/admin/dq` 的改动，除 §7.3 一处处理钩子外。
 - 删除 `/api/financials/[ticker]`（五个读者）：只加 `Deprecation` 头。
 - 日内可得性：只到日期精度（§5.1）。
-- 精确十进制算术：数值**持久化**与**相等比较**无损（§6.2），规则与派生用双精度（15 位有效数字）。
+- 精确十进制算术：数值**持久化**与**相等比较**无损（§6.2），规则与派生用双精度（15 位有效数字）（**已被取代，见 §16**：实现为精确十进制）。
 - 同一发行人同时有美股与 A 股两路事实时的跨路合并：两路各自独立（§4.4、§8），不做合并视图。
 
 ---
@@ -567,4 +567,78 @@ Codex 七轮（01/03/05/07/09/11/13）与处置（04/06/08/10/12/14）；独立 
 
 ## 16. 实施记录与偏差
 
-（计划二落地后补记。）
+实施计划：`docs/superpowers/plans/2026-11-04-data-foundation-2-disclosure-facts.md`；实施日志：`docs/audits/2026-11-04-data-foundation-2/16-implementation-log.md`；Tushare 核对记录：`docs/audits/2026-11-04-data-foundation-2/17-tushare-verification.md`；运行手册：`docs/runbooks/data-foundation.md` 第 8 章。本节列出实施过程中发现的**全部**与本规格正文不一致之处；"位置"列是落地代码的位置。规格正文其余部分以代码为准的条款（未列出者）无偏差。
+
+### 16.1 数据模型与 SQL
+
+| 日期 | 条款 | 偏差 | 原因 | 位置 / 处置 |
+|---|---|---|---|---|
+| 2026-11-04 | §3 概念目录 | 目录落地 **35** 个概念（规格正文写 33，计划初稿期间曾为 34）：新增 `monetary_funds`（CN `balancesheet.money_cap`，货币资金，含受限资金）；CN `cash` **不映射**（`ts` 映射为 null，留缺）；US `cash` 不变。计划里"规格写 33 概念"的三处注记（计划第 2854/5645/9274 行附近）已过时，应读作 34→35 | 审计 Task 4：`money_cap` 含受限资金，不等于"现金及现金等价物"，硬映射到 `cash` 会让跨路比较口径错误 | `src/lib/facts/concepts.ts`（`MAPPING_GEN`/`MAPPING_VERSION` 同步）；接受 |
+| 2026-11-04 | §3 `shares_outstanding` | EDGAR 退回 `dei:EntityCommonStockSharesOutstanding` 时行的 `statement` 记为 `DEI`（不是 `BS`） | 规格写"BS/DEI"，由适配器按实际取用的标签落定 | `providers/edgar-companyfacts.ts`（`tax==='dei'?'DEI'`）；接受 |
+| 2026-11-04 | §4.4 | INSTANT 指标 `period_start = period_end` | 列 `period_start date not null` | `derive.ts` 头注释；接受 |
+| 2026-11-04 | §8 `inputs` | `inputs` 元素不含差分规则 a/b 字段，规则由两输入的 `filing_id` 是否相同推出；另外季度差分输入带 `quarter`（lineage）并在 `inputs` 去重键里 | `MetricRow.inputs` 元素类型固定四字段 `{fact_id, concept, filing_id, available_date}` + 可选 `quarter`；审计 Task 15 要求 ytd_rule / quarter 可从 lineage 还原 | `derive.ts`；接受 |
+| 2026-11-04 | §4.5 `fact_sync_scope` | 新增列 `scope_confirmed_at timestamptz not null default now()`；`reconcile_fact_sync_scope(p_market, p_rows, p_snapshot_at default null)`：`priority 0` 的写入仅当 `scope_confirmed_at <= p_snapshot_at`，活跃行即使未变更也刷新 `scope_confirmed_at`；`reconcileScope` 默认把快照时刻回拨 5 分钟（`SNAPSHOT_SKEW_MARGIN_MS`） | Codex 挑战 Task 14/17：并发对账会用陈旧快照把刚加入的发行人退役；时钟偏差只允许"推迟退役" | 迁移 `20261106090000_financial_facts.sql`（列与函数）；`scope.ts`；回滚签名见 runbook 8.10；接受 |
+| 2026-11-04 | §5.4 / §4.5 发布 | `publish_sync_run(p_run, p_manifest, p_expected_rev default null)`：`p_expected_rev` 非空且 ≠ `state_rev` → 错误码 `stale_plan`；sync 核心总是传入规划时读到的 `state_rev`，遇 `stale_plan` 废弃运行、记 failed、`next_due_at` 推后 10 分钟（`NEXT_DUE_STALE_MS`） | **P1**（Codex 挑战 Task 8）：规划之后管理员提升/裁决会让同日两值同时公开 | 迁移 `publish_sync_run`；`sync.ts`；`db.ts` 错误码映射；接受 |
+| 2026-11-04 | §7.3 处理钩子 | `resolve_facts_quarantine` 在同一事务里写 `hook:pending` 并返回**落库的** `chosen_fact_ids`；任一成员行所属运行仍 staged → `run_pending`；钩子恢复时以持久化的裁决人/状态/所选为准；内部错误文本不出客户端，路由按错误码映射 HTTP（失败的重试 → 502） | **P1**（Codex 挑战 Task 9）：提升先于持久化钩子状态，崩溃后无法恢复 | 迁移 `resolve_facts_quarantine`；`/api/admin/dq/quarantine/[id]` 与 `resolveFactsItem`；接受 |
+| 2026-11-04 | §7.3（未采纳） | Codex 挑战 Task 1 #3（"废弃的伙伴运行之后未选中的 ok 成员"）**驳回**：`chosen=[]` 仅确认知晓；发布处置全部成员；"带冲突处置的运行被废弃时已发布值不变" | 规格 §7.3 原文 | 无代码改动；记录以免重复提出 |
+| 2026-11-04 | §4.4 / §9 `financial_metrics` | 公共指标路由只提供 `based_on_rev = fact_state_rev(issuer, market)` 的行，否则返回无行 + `stale:true` | Codex 挑战 Task 1 #1 / Task 16：事实可见性变化（提升、裁决）后旧指标不得继续对外 | `src/app/api/facts/[ticker]/metrics/route.ts`（前后各读一次 rev，行不一致或读取不稳定 → stale）；接受 |
+
+### 16.2 采集、数值与定位
+
+| 日期 | 条款 | 偏差 | 原因 | 位置 / 处置 |
+|---|---|---|---|---|
+| 2026-11-04 | §1.2 / §6.2 精度（本文第 38 行） | 原文"规则与派生用双精度（15 位有效数字）"不再成立：**所有**规则与派生用**精确十进制**（BigInt 定标整数）；持久化与相等比较仍无损。比率保留 `RATIO_SCALE = 10` 位小数，**四舍五入取远离零方向**（half away from zero）；除数为零 → 无行 | 审计 Task 6/15：证据与阈值转 `Number` 会丢精度、边界值不稳定 | `derive.ts`（`RATIO_SCALE`、`div`）、`rules.ts`、`json-numbers.ts`（`canonicalDecimal`）；已在第 38 行加"见 §16"指针 |
+| 2026-11-04 | §4.7 / §6.2 定位串 | `raw_hash` 的定位串为**行级**：EDGAR 含 `units.<原始单位>[<数组下标>]`；Tushare 为 `<api>:rt<n>:p<页>[end_date,ann,update_flag,row=<行号>]`（规格只到分组级） | 同键多行（不同 `accn`/`end_date`）若共享分组级定位，只能留首行证据；审计 Task 10/12 | `providers/edgar-companyfacts.ts`、`providers/tushare-statements.ts`、`providers/shared.ts::rawHashOf`；接受 |
+| 2026-11-04 | §7.1 `missing_available_date` 与奇异键 | (a) 缺日期隔离的自然键含**期间、单位**以及 `api / accn / tag / page / row` 等定位分量（规格键不含期间/单位，会让不同期间碰撞）；(b) EDGAR 行回退到 `accn/tag`；(c) 同一自然键在一份快照里有多行时，`ambiguous_value` 隔离项把全部行聚合进 `payload.rows[]`（值、`raw_hash`、定位），解析器自己的分组串存 `payload.parser_key`；(d) 缺日期证据保留缺失值与哈希；(e) 奇异期间（`oddDuration`）冲突值也进隔离，不被丢弃 | 审计 Task 5/8/10：缺日期键跨期碰撞；低优先级标签替补；证据只留首行 | `sync.ts`（`missingDateKey`、`ambiguousKey`）、`keys.ts`；接受 |
+| 2026-11-04 | §6.3 `update_flag` | 同日、同键、值不同的 Tushare 行**不**按 `update_flag` 自动择一，保持 `ambiguous_value` 隔离；`update_flag` 仅进入定位串。`f_ann_date` 存在但非法时**不**回退 `ann_date`：该行以 `missing_available_date` 隔离（保留两个原始日期串） | commander 决定（Task 12）：`update_flag=1`=最新版本只来自文档，未与真实响应核对；回退会静默改变可得日期 | `providers/tushare-statements.ts`；待真实数据核对后再放宽（runbook 8.7）；接受 |
+| 2026-11-04 | §6.3 分页 / 字段 | Tushare 分页：`has_more=true` 一律续页，空页或页内容哈希（只含 `fields+items`）与上页相同 → `tushare_unavailable: paging_not_advancing`；最多 200 页；满页且 `has_more=false` 计 `skipped.page_full_no_more`。所有值列经 `tushareFieldsFor(api)` 无损解码为十进制字符串；行内 `ts_code` 与请求不符 → 拒绝 | 审计 Task 12：短页覆盖 `has_more`、张冠李戴；未核对真实分页行为 | `providers/tushare-statements.ts`、`providers/tushare-fixtures.ts`；接受 |
+| 2026-11-04 | §10 | 新增 §10 表中没有的 `SyncErrorCode`：`tushare_unavailable`（Tushare 非配额失败，含 `paging_not_advancing`）、`code_version_unavailable`（缺代码版本拒绝运行）、`snapshot_hash_mismatch`（快照读回哈希校验失败）、`snapshot_too_large`（响应超过 50 MB 上限） | §10 没有 Tushare 非配额失败一行；缺代码版本需有码 | `errors.ts`；接受 |
+| 2026-11-04 | §6.3 巨潮 | `restatement`（report_type 4：次年报告里的上年可比数）**改为挂接次年同类定期报告**（fiscal_year+1 的同一报告类型原文），不再挂"更正"标题；仅 `corrected`（存在 type 5 行）的 filing 才匹配更正公告。标题整串匹配（年度报告/全文/（A股）/更正多种写法），问询/意见/决议类标题永不命中；仅接受 `finalpage/YYYY-MM-DD/<digits>.PDF` 且 https 的 `adjunctUrl`；分页与体积有上限；SH/SZ 以外（BJ）直接 `none` 不发请求。取票规则复用 `chooseCnTicker`，无法挂接（无可选票据）**不消耗**尝试次数；已开始的请求（含抛错、中途被预算切断）计 `link_attempts+1`，上限 5 | commander 决定 G1；审计 Task 13/17 | `providers/cninfo-link.ts`、`deps.ts::cninfoLinker`；接受 |
+| 2026-11-04 | §6.4 CN 取数键 | CN 的 `fetch_key`：当前主 A 股票据，无主则唯一 A 股；B 股排除；多个主或多个非主候选 → 歧义跳过（`ambiguous_cn_ticker`），不进范围 | commander 决定（Task 14）；规格只写"主 A 股" | `scope.ts`（`chooseCnTicker`）；接受 |
+| 2026-11-04 | §6.4 范围读取 | 来源表与已有范围行一律读到穷尽（keyset 分页、固定排序），不从单页推断完整性；内存实现通过 `FactsDb.scopeAll`（新增方法）读已有范围行 | 审计 Task 14：单页读取会把未读到的行误退役 | `scope.ts`、`db.ts`、`memory-facts-db.ts`、`pg-facts-db.ts`；接受 |
+
+### 16.3 同步核心与触发
+
+| 日期 | 条款 | 偏差 | 原因 | 位置 / 处置 |
+|---|---|---|---|---|
+| 2026-11-04 | §6.1 | dry-run 不建 `ingest_batches` 行（`status:'dry_run'`，`batchId:null`，发行人 `outcome:'planned'`）；dry-run 遇 `truncated` 读取同样拒绝（不忽略） | 零写入的 dry-run 才能在只读环境与 `--no-db` 下运行 | `sync.ts`；`--apply` 才落回执；接受 |
+| 2026-11-04 | §6.1 | `issuerIds` 给定时不先 `reconcileScope`，且不受 `limit` 约束；缺 scope 行时 `scopeRowFor` 算出（`--apply` 经 `reconcile_fact_sync_scope` 补建 `reasons:['explicit']`，dry-run 构造只读行；算不出 → `outcome:'failed', code:'scope_unresolved'`） | 脚本 `--issuer`/`--no-db` 与回放测试的 scope 行由调用方放置，不能被来源表清零；审计 round-1 #13 | `sync.ts`、`scope.ts::scopeRowFor`；补建行会被下一次 cron 对账退到 priority 0（除非来源表含该发行人）；接受 |
+| 2026-11-04 | §6.1 / §10 | 发布之后的失败（挂接、物化、释放）不撤发布：outcome 保持 `published`，原错误按自身码记入 `errors`，租约以 `failed` 释放；物化失败不再记 success；计数在发布成功之后才并入批次；截止（deadline）在阶段之间检查，截止后的真实错误仍记录 | `abandon_sync_run` 对已发布运行只会抛 `run_published`；审计 round-1 #11、Task 8 | `sync.ts`；接受 |
+| 2026-11-04 | §6.1 | `SyncDeps` 多 `parseUs/parseCn`（解析器注入，`sync.ts` 不直接 import 适配器）；抓取器抛出的、不在解析白名单内的错误，消息只存前 200 字符，抓取器不得把响应体放进消息 | 可测试性；避免响应体泄漏进 `ingest_batches` | `deps.ts`、`sync.ts`；接受 |
+| 2026-11-04 | §6.3 `coverage_summary` | message 是紧凑串 `{"<api>:rt<n>":"<首年>-<末年>:<期末数>"}`，不是 `coverageSummary()` 的逐年对象 | `ingest_batches.errors` 单条 message 上限 500 字 | `sync.ts`；逐年对象可由 `coverageSummary(parseTushareStatements(快照))` 重算；接受 |
+| 2026-11-04 | §6.5 | `sync.ts` 增加 `--no-db --cik` 内存库冒烟模式（US 专用，排斥 `--apply/--issuer`） | 无环境也能做真实 SEC 网络冒烟 | `scripts/facts/sync.ts`；不写任何表；接受 |
+| 2026-11-04 | §6.5 / §14 | **CN 以 `FACTS_CN_ENABLED=1` 门控**：cron 路由对 `market=CN` 且开关未设 → 403 `cn_disabled`；`sync.ts --market CN --apply` 同样需要该开关；`vercel.json` 只登记 `market=US`。cron 的 HTTP 回执只含码与计数（无错误消息、警告、快照哈希）；`limit` 重复参数 → 400；`VERCEL_GIT_COMMIT_SHA` 缺失 → 503（cron 不回退到 git） | 本机无 `TUSHARE_TOKEN`，A 股夹具与黄金断言未进 CI（按 §12 降级）；计划原无门控，审计 Task 17 增加 | `src/app/api/cron/facts-sync/route.ts`、`scripts/facts/sync.ts`、`vercel.json`；runbook 8.11-5；接受 |
+| 2026-11-04 | §14 | 每 4 小时的 cron（`5 */4 * * *`）需要 **Vercel Pro**；Hobby 套餐只允许每日一次 | 平台限制；套餐未确认 | `vercel.json`；owner 事项 runbook 8.11-1 | 待 owner 确认套餐 |
+
+### 16.4 读取接口
+
+| 日期 | 条款 | 偏差 | 原因 | 位置 / 处置 |
+|---|---|---|---|---|
+| 2026-11-04 | §9 `/api/facts/{ticker}` | (a) `factIds` 证据模式下 `disclosureSeq / isCurrent / isRevision` 为 `null`（不伪造序列字段），且限本发行人本市场、已发布 filing 的 `ok` 行，不施加 `asOf`；(b) `durations` 过滤发生在**自然键限额之前**；(c) 返回的 filings 仅为被返回事实引用的**已发布**（`mapping_gen>0`）filing | Codex 挑战 Task 16：伪造 `isCurrent`、期限过滤晚于键限额、未发布 filing 公开 | `src/app/api/facts/[ticker]/route.ts`、`public-route.ts`；接受 |
+| 2026-11-04 | §9 `/api/filings/{ticker}` | 已发布过滤先于 `limit`（staged filing 不占页） | 同上 | `src/app/api/filings/[ticker]/route.ts`；接受 |
+| 2026-11-04 | §9 `/api/facts/{ticker}/metrics` | 响应多一个 `stale` 字段；新鲜物化指标 `Cache-Control: s-maxage=60`，stale `s-maxage=30`；带 `asOf` 时即时派生，`truncated` 时无行 | 见 16.1 `based_on_rev` 守卫；短缓存避免裁决后长期陈旧 | `metrics/route.ts`、`public-route.ts`（`FRESH_METRICS_CACHE_CONTROL`、`STALE_CACHE_CONTROL`）；接受 |
+| 2026-11-04 | §9 票据解析 | (a) 精确匹配优先，避免 `BRK.A` 被预先规范化成 `BRK`；(b) 市场取自**实际匹配到的证券行**（而非后缀猜测），HK 证券拒绝；(c) 合并后的发行人读源证券行重定向；(d) 畸形百分号编码 → 400 | Codex 挑战 Task 16 复审两个 P1 + P2 | `public-route.ts::resolvePublicIssuer`；使用真实 `resolveIssuer` 的 112 个单测；接受 |
+
+### 16.5 派生规则（§8）
+
+| 日期 | 条款 | 偏差 | 原因 | 位置 / 处置 |
+|---|---|---|---|---|
+| 2026-11-04 | §8 口径 | 派生只使用 `consolidation='consolidated'` 的事实；母公司与合并口径不混用 | 指标词表只有合并口径，`financial_metrics` 主键不含口径，混用会配对错误或主键冲突（Codex 挑战 Task 15） | `derive.ts` 第 96 行附近；接受 |
+| 2026-11-04 | §8 差分季度 | (a) 差分得到的季度必须校验区间恰为 3M；(b) 同一季度存在两种不同的差分结果、且无直接 3M 事实 → 该季度**留缺**（不按到达顺序取值）；直接 3M 事实优先；(c) lineage 记 `ytd_rule`（a：同一 filing 的当前披露；b：两序列均未被修订）与 `quarter` | 审计 Task 15：差分区间未校验；到达顺序决定取值 | `derive.ts`；接受 |
+| 2026-11-04 | §8 `roe` | 平均权益（期初 + 期末）≤ 0 → 不出行（不产生符号翻转的比率） | 规格未规定非正权益 | `derive.ts`；接受 |
+| 2026-11-04 | §8 `borrowings_total` | US 口径 = 短期借款 + `LongTermDebtNoncurrent`，**不含**长期债务的流动部分（目录问题，不在派生层修）；CN 含应付债券（`basis: cn_incl_bonds`） | 目录取舍 | `concepts.ts`、`derive.ts`；**后续**：由 owner 决定是否增加流动部分概念 |
+| 2026-11-04 | §8 CN 利润率 | CN 毛利率按 `revenue_operating`（营业收入）而非 `revenue`（总营收）；`revenue_yoy` 与 `q_single_revenue` 在 CN 仍用 `revenue` | 审计 Task 6 | `rules.ts`、`derive.ts`；`FORMULA_VERSION='facts-derive/1.0'`；若 owner 要统一口径，改 `Q_SINGLE_CONCEPTS.CN` 与 yoy 概念表并升版本 |
+| 2026-11-04 | §7.2 | `gross_margin_range` 取 [-1, 1]（`GROSS_MARGIN_RANGE`），按 \|分子\| ≤ \|分母\| 精确判断；`revenue_jump` 的先验依赖须先解析当前披露 | 规格未给上下界；审计 Task 6 | `rules.ts`；待 owner 确认区间 |
+
+### 16.6 测试与门禁
+
+| 日期 | 条款 | 偏差 | 原因 | 位置 / 处置 |
+|---|---|---|---|---|
+| 2026-11-04 | §11.4 黄金断言 | **黄金门在 `ready:false` 时只告警、不失败**（计划设计为红灯 `gold entry for <ticker> is still <pending>`）；`ready:true` 时全量强制（`required.US`、无 `<pending>`、≥ 6 家 × ≥ 2 期 × 每期 ≥ 6 科目、每个被断言发行人都有录制夹具并被回放）。已录入的非 `<pending>` 条目即使在 `ready:false` 也会被回放断言。**因此 `test:db` 绿 ≠ 黄金已核实**：当前 `plan2.json` 为 `ready:false`，3 条全是 `<pending>` 模板 | commander 决定（Task 11）：整套 `test:db` 不应因 owner 尚未抄录而长期红 | `src/lib/facts/sync-us.integration.test.ts`、`fixtures/gold/plan2.json`；**F2-7 在 owner 完成 runbook 8.11-6 之前不算完成**；写入实施日志、PR "已知后续"与 runbook |
+| 2026-11-04 | §11.3 | 美股回放集成测试补两项（commander 追加）：裁决后物化包含被选行（R7-1 物化半）；`stale_computation` 交错（`state_rev` 在 `readFacts` 与 `replaceMetrics` 之间被推进，重试一次成功） | 计划把这两项留给 Task 11 | `sync-us.integration.test.ts`；接受 |
+| 2026-11-04 | §11.3 / §12 | 未创建 `sync-cn.integration.test.ts`（无真实 Tushare 夹具）；A 股回放与黄金断言待 owner 提供 `TUSHARE_TOKEN` | 降级路径（§12） | 实施日志 Task 12/13；owner 事项 8.11-5 |
+| 2026-11-04 | §6.3 / §15 第 1 条 | Tushare `report_type` 1/4/5 核对：**未核对**（无 token），合成夹具假设见 `17-tushare-verification.md`；未与真实响应比对 `total_share` 单位与 `money_cap` 金额 | 无 `TUSHARE_TOKEN` | 8.7 核对表；CN cron 关闭 |
+
+### 16.7 无偏差的工作包
+
+Task 1（迁移骨架与锁纪律，除 16.1 所列）、Task 2/3（`FactsDb` 三实现与同一份契约用例）、Task 7（`sequencesOf` 纯参考实现；毫秒级 ISO 归一不复现亚毫秒顺序，已记录为限制，不影响 SQL 路径）无另外偏差。

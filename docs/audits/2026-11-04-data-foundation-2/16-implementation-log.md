@@ -22,3 +22,51 @@
 | 16 | Task 16 三个公共读路由 + /api/financials 弃用头 | 97fdd8c, 70debf4, c2ca875, 69eff08, 6e5da1d | ✅（+指挥要求：指标仅在 based_on_rev = fact_state_rev 时提供，否则 stale:true） | Needs fixes → 修后通过（新鲜指标短缓存；CN 票据规范化；畸形 % → 400） | 挑战: 3×P2（factIds 模式伪造 isCurrent、期限过滤晚于键限额、未发布 filing 公开）→ 修；复审 **P1 预先规范化使 BRK.A 解析成 BRK** → 精确优先；**P1 真实解析器回落后市场判为 US** → 以实际匹配的证券行定市场，拒绝 HK；P2 合并发行人重定向 → 读源证券行 | 4 | 112 路由/解析单测（真实 resolveIssuer） |
 | 13 | Task 13 巨潮挂接 cninfo-link（**降级：未创建 sync-cn 集成测试**） | 2c2d1d7, c676b85, 92259cc, 1b2e1d1, 34aceed | ✅（**restatement 改为挂接次年同类定期报告 — 规格偏差**） | Needs work → 修后通过（标题整串匹配：年度报告/全文/（A股）/更正多种写法；https、分页上限、体积上限；夹具保留原始字节与 sha256） | 挑战: 2×P2（子串匹配把问询函/审议意见当报告、未传播预算）+ review P2 节流 → 修；三适配器统一共享节流器（按实际起始时刻、预算不足不睡）；复审 P2 排队中不可取消 → 修 | 4 | 26 cninfo 单测；383 facts+sources 单测 |
 | 17 | Task 17 cron 路由、生产依赖装配、脚本、vercel.json | 614d1a6, 75bc0bd, 6f06775, 118446f | ✅（仅 US cron；CN 以 `FACTS_CN_ENABLED=1` 门控 — 计划无此门控，新增） | 修后通过（路由兜底 500 只回码；回执只含码与计数；重复 limit 参数） | 挑战: P2 对账退役与并发对账竞态 → **SQL 原子守卫：`reconcile_fact_sync_scope(p_snapshot_at)` + `scope_confirmed_at`**；P2 CN 挂接取票规则与范围不一致 → 复用 `chooseCnTicker`，无法挂接不耗尝试次数；复审 P2 时钟偏差 → 快照回拨 5 分钟、未变更的活跃确认也记时 → 修；终审无缺陷 | 3 | 327 单测；53 真实 PG；test:migrations 通过 |
+| 18 | Task 18 运行手册第 8 章 + 规格 §16 + 全量门禁 + 真实 SEC dry-run | （见本提交） | — | — | 全量门禁见下节；`test:db` 每轮仅 1–3 个非 facts 套件偶发失败（DDL 重放锁超时 / 死锁），逐个单独重跑全绿，facts 套件零失败 | 0 | **F2-7：代码与文档齐备；黄金门禁待 owner 录入（2026-11-04，`plan2.json` 为 `ready:false`，3 条全是 `<pending>`）— 黄金门只告警，`test:db` 绿 ≠ 黄金已核实** |
+
+## 全量门禁（Task 18 Step 5，2026-11-04，分支 `claude/data-foundation-2` @ `348f7ee`，工作树仅文档改动）
+
+| 命令 | 结果 |
+|---|---|
+| `npm test` | 通过：297 files passed、23 skipped；2827 tests passed、232 skipped（vitest 9.3 s） |
+| `npm run typecheck` | 通过（退出码 0） |
+| `npm run lint` | 通过（`--max-warnings=0`，退出码 0） |
+| `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:db` | **7 次完整运行：1 次全绿（320 files、3057 passed、2 skipped）；6 次各有 1–3 个非 facts 套件失败**（见下）。每次 `facts.integration.test.ts`（43 tests）与 `sync-us.integration.test.ts`（10 tests）全部通过；无 `Database suite inventory drift` |
+| `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:migrations` | 通过：`PASS: fresh schema equals seeded upgrade; existing rows preserved; both local clusters stopped.` |
+
+`test:db` 逐轮：
+
+| 轮 | 结果 | 失败项 |
+|---|---|---|
+| 1 | 319 files / 3056 passed、1 failed | `s4/ledger.integration`「creates the four append-only tables … replays」：`40P01` 死锁（`AccessExclusiveLock`） |
+| 2 | 同上 + 1 个未处理错误 | `dq/dq-foundation.integration`「creates the four tables … replays」：`55P03` lock timeout（`alter table public.dq_quarantine enable row level security`）；另有 `anchor-store.test` 的 `FileHandle` GC 未处理错误 |
+| 3 | 同上 | `dq/dq-foundation.integration`（同上） |
+| 4 | 同上 + 1 个未处理错误 | `s4/ledger.integration`（同上） |
+| 5 | 3 failed / 3054 passed | `dq/dq-foundation.integration`、`observability/owned-process-group.test`、`fanout/run.integration` |
+| 6 | **全绿**：320 files、3057 passed、2 skipped | — |
+| 7 | 1 failed / 3056 passed | `dq/dq-foundation.integration`（同上） |
+
+单独重跑（`LC_ALL=C PATH=… npx tsx .claude/scratch/db-one.ts <file>`）：`s4/ledger.integration.test.ts` 12/12 通过；`dq/dq-foundation.integration.test.ts` 5/5 通过。对照：排除 `src/lib/facts/*.integration.test.ts` 的整套运行 2 次 → 第 1 次 1 failed（`s4/anchor-two-phase` V10），第 2 次 318 files / 3004 passed 全绿。
+判断：失败全部是共享库上"整库 DDL 重放 / 竞争"类用例在整套负载下的锁超时（`dq-foundation` 的 `replayMigration` 是 3 s `lock_timeout` 的有限重试，`dq_quarantine` 又恰好被 facts 的集成套件在整套中并发使用，所以含 facts 套件时更常见），与 facts 代码无关；但**有 facts 套件时 6/7 轮出现该类偶发**，owner 如需稳定的 `test:db` 全绿，应把 `dq-foundation` 的重放放宽重试次数/超时，或让 facts 集成套件不与它并发——本任务不改代码，记为后续。
+
+## SEC 真实网络 dry-run（Task 18 Step 4，2026-11-05 06:12 UTC）
+
+命令：`node --import tsx scripts/facts/sync.ts --market US --no-db --cik 320193 --cik 789019 --cik 1045810`（无环境变量、内存库，不写任何库；退出码 0，耗时 2.9 s）。`codeVersion` = `348f7ee604db857764db259f90c31b29450895e3-dirty`（工作树含未提交文档改动）。`status:"dry_run"`，`batchId:null`，`errors:[]`，`detail:{attempted:3,published:0,failed:0,skipped:0,idle:false}`，总计 `fetched=inserted=8935`，`duplicates/versioned/quarantined/failed=0`。
+
+另用只读脚本（`.claude/scratch/sec-stats.ts`，未提交）对同一份 companyfacts 重新抓取并解析以取得细项；三家 `snapshot sha256` 与 `sync.ts` 输出逐位一致：
+
+| 发行人 | CIK（fetchKey） | outcome | fetched = inserted | filings | 概念数 | skipped | ambiguous / odd / missing_available_date | 快照 sha256 |
+|---|---|---|---|---|---|---|---|---|
+| AAPL | 0000320193 | planned | 3000 | 44 | 26 | `before_since_year` 2314 | 0 / 0 / 0 | `75a78f918313f3336823517d6c34908d23dd07f07e90e625c61e705e3bb6d27b`（3,858,323 字节） |
+| MSFT | 0000789019 | planned | 3033 | 46 | 25 | `before_since_year` 2313 | 0 / 0 / 0 | `8c1903c041f5c27e86ed15f37debb1f41882b7904bba129ef9edc76478b1e8ea`（4,938,072 字节） |
+| NVDA | 0001045810 | planned | 2902 | 44 | 26 | `before_since_year` 1943 | 0 / 0 / 0 | `19ef503a5770f5660964b3c3aea6937579d9b359da344afe6a9adf59c63d26ff`（4,092,966 字节） |
+
+抽查值（`duration=12M` 的最新两个财年；来自公开 companyfacts 原值，未与 10-K 原文逐页核对，**不是黄金断言**）：
+
+| 发行人 | revenue（标签） | net_income_parent（`us-gaap:NetIncomeLoss`） |
+|---|---|---|
+| AAPL | 2026-09-26 = 478834000000 USD；2025-09-27 = 416161000000 USD（`RevenueFromContractWithCustomerExcludingAssessedTax`） | 2026-09-26 = 132175000000；2025-09-27 = 112010000000 |
+| MSFT | 2026-06-30 = 331839000000 USD；2025-06-30 = 281724000000 USD（同上标签） | 2026-06-30 = 133749000000（同期有两次披露行，均为同值）；其前一财年见库内回放 |
+| NVDA | 2026-01-25 = 215938000000 USD；2025-01-26 = 130497000000 USD（`us-gaap:Revenues`） | 2026-01-25 = 120067000000（同期两次披露行，同值） |
+
+核对点：三家 `outcome='planned'`、`snapshotSha256` 恰一个 64 位 hex、`errors` 为空、`ambiguous/odd/missing` 全 0、`inserted = fetched − quarantined`（`quarantined=0`）。

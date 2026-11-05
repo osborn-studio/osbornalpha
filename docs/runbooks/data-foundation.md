@@ -1,6 +1,6 @@
-# 数据底座运行手册（DQ 基础 + 发行人主数据）
+# 数据底座运行手册（DQ 基础 + 发行人主数据 + 披露事实库）
 
-适用迁移：`supabase/migrations/20261105090000_dq_foundation.sql`、`supabase/migrations/20261105091000_issuers.sql`。
+适用迁移：`supabase/migrations/20261105090000_dq_foundation.sql`、`supabase/migrations/20261105091000_issuers.sql`、`supabase/migrations/20261106090000_financial_facts.sql`。
 类型定义：`src/lib/supabase/database.types.ts`（手工维护，与上述迁移逐列对应）。`npm run supabase:types` 只是占位：它打印提示并以退出码 1 结束，**不会**生成类型；改迁移时请同步手改该文件。
 
 ## 1. 表与访问权限
@@ -143,3 +143,198 @@ drop table if exists public.ingest_batches;
 - `/api/entities/resolve` 尚无限流。
 - 看板 dataset 下拉选项只来自当前已加载的 freshness/批次/隔离行，未出现在这些行中的隔离数据集选不到；需要一个独立的数据集清单（inventory）查询。
 - FIGI/ISIN 补全与 A/H 股配对放在 plan 3。
+
+## 8. 披露事实库（计划二）
+
+规格：`docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md`（第 8 稿；落地偏差见其 §16）。迁移 `supabase/migrations/20261106090000_financial_facts.sql`。代码 `src/lib/facts/`、`scripts/facts/`、`src/app/api/cron/facts-sync/route.ts`、公共读路由 `src/app/api/facts/[ticker]`（含 `/metrics`）与 `src/app/api/filings/[ticker]`。实施记录：`docs/audits/2026-11-04-data-foundation-2/16-implementation-log.md`。
+
+**当前状态（降级）**：美股链路完整（采集、发布、派生、读路由、cron）。A 股链路代码与合成夹具齐备，但**没有 `TUSHARE_TOKEN`、没有真实 A 股夹具、没有 `sync-cn` 集成测试**，因此 CN cron 关闭（`vercel.json` 只登记 `market=US`，路由对 `market=CN` 在 `FACTS_CN_ENABLED` 未设为 `1` 时返回 403 `cn_disabled`）；黄金断言未录入，黄金门禁目前只告警（见 8.11-6）。
+
+### 8.1 表与权限
+
+| 表 | 读 | 写 | 说明 |
+|---|---|---|---|
+| `fact_sync_runs` | 仅 service_role | 仅函数 | 一次发行人×市场的同步运行；`status` staged→published / abandoned；`manifest` = 本次发布的 filing 集合 |
+| `filings` | anon / authenticated / service_role 只读 | 仅函数；例外：service_role 可**列级** `update` `document_ref, document_url, link_attempts`（巨潮挂接） | `(source, source_ref)` 唯一；`mapping_gen` 只由 `publish_sync_run` 推进；公共路由只返回已发布（`mapping_gen>0`）的 filing |
+| `financial_facts` | anon / authenticated 只见 `status='ok'`；service_role 全见 | 仅函数 | 披露日志：同一自然键每份文件一行；`value_text` 为 `value::text`；候选键 K + filing + mapping_gen 唯一 |
+| `financial_metrics` | 三角色只读 | 仅 `replace_financial_metrics` | 按发行人×市场整体原子替换；`inputs` 扁平列出全部底层事实；`based_on_rev` = 计算所依据的 `state_rev` |
+| `fact_sync_scope` | 仅 service_role | `reconcile_fact_sync_scope`（`reasons/priority/fetch_key/scope_confirmed_at`）+ 租约/发布函数 | 调度输入 + 租约 + `state_rev`；`priority=0` = 已退出范围但保留历史；`scope_confirmed_at` = 对账最近一次确认该行仍在范围内（或改动它）的时刻，退役守卫用 |
+
+- 五表均 RLS 且对 `public, anon, authenticated, service_role` `revoke all` 后只 `grant select`；**没有角色有 insert/update/delete**（上表一处例外）。直接 `insert financial_facts`、`update financial_facts.status`、`update filings.mapping_gen` 都会被拒（集成测试 `src/lib/facts/facts.integration.test.ts` 覆盖）。
+- 桶 `disclosure-raw`（私有，50 MB = 52428800 字节，仅 `application/json`；迁移里 `insert … on conflict (id) do update` 可重放）。
+- `database.types.ts` 新增 `Filing / FinancialFact / FinancialMetric / FactSyncRun / FactSyncScope`；RPC 不登记到 `Functions`。
+- 概念目录 35 个（`src/lib/facts/concepts.ts`；规格正文写 33，见规格 §16）。其中 `monetary_funds` 是 CN `money_cap`（货币资金，含受限资金）；CN 的 `cash` **不映射**（留缺），US 的 `cash` 照常。
+
+### 8.2 函数清单
+
+| 函数 | 调用者 | 租约 | 作用 |
+|---|---|---|---|
+| `reconcile_fact_sync_scope(p_market, p_rows, p_snapshot_at default null)` → int | `reconcileScope` | 否 | 只改 `reasons/priority/fetch_key/scope_confirmed_at`；新行 `next_due_at=now()`。**退役守卫**：`priority 0` 的写入只在该行 `scope_confirmed_at <= p_snapshot_at` 时生效，较新的对账（激活或"未变更的确认"）不会被较旧快照的退役覆盖；活跃行未变更时也刷新 `scope_confirmed_at`。`reconcileScope` 默认把快照时刻回拨 5 分钟（时钟偏差只会推迟退役，不会错退） |
+| `claim_fact_sync_lease(p_issuer, p_market, p_batch, p_ttl_seconds)` → bool | sync 核心 | 建立 | 未租/过期/同批次续租 → true |
+| `begin_sync_run(p_issuer, p_market, p_batch, p_mapping_gen)` → uuid | sync 核心 | 校验 | 废弃本发行人旧 staged 运行（先标后删），插入新 staged 运行 |
+| `stage_filings(p_run, p_rows)` → jsonb | sync 核心 | 校验 | `on conflict (source, source_ref) do nothing`，返回 `source_ref→filing_id`；他人持有的 `source_ref` 不出现在返回表里（调用方把缺键当错误）；复用的 filing 保留原 `available_date`，调用方取返回行的日期 |
+| `stage_facts(p_run, p_rows)` → int | sync 核心 | 校验 | 插入 staged 行 |
+| `quarantine_facts(p_run, p_fact_ids, p_item)` → int | sync 核心 | 校验 | staged→quarantined，并把 id 并入隔离项 `payload.fact_ids` |
+| `publish_sync_run(p_run, p_manifest, p_expected_rev default null)` → int | sync 核心 | 校验 | 一个事务：staged→ok、争议组处置、`filings.mapping_gen` 激活（回退 → `mapping_gen_regression`）、`state_rev+1`。`p_expected_rev` 非空且 ≠ 当前 `state_rev` → `stale_plan`（规划之后管理员提升/裁决过同一发行人，需重新规划）；sync 核心总是传入规划时读到的 `state_rev` |
+| `abandon_sync_run(p_run)` | sync 核心 | 校验 | 只对 staged 运行；先标 abandoned 再删其事实 |
+| `release_fact_sync_lease(p_issuer, p_market, p_batch, p_outcome, p_next_due)` | sync 核心 | 校验 | 清租约，写 `last_*`、`next_due_at` |
+| `resolve_facts_quarantine(p_item, p_chosen, p_resolved_by)` → jsonb | 管理员钩子 | 否（持行锁） | 任一成员行运行仍 staged → `run_pending`；否则翻转项状态、**持久化 `chosen_fact_ids`**、同事务写 `hook:pending`、提升、`state_rev+1`；返回落库的 `chosen_fact_ids` |
+| `promote_quarantined(p_issuer, p_market, p_fact_ids)` | `resolve_facts_quarantine` | 否（持行锁） | 内部提升 |
+| `replace_financial_metrics(p_issuer, p_market, p_based_on_rev, p_rows)` → int | `materialize` | 否（持行锁） | `state_rev<>p_based_on_rev` → `stale_computation`；整体替换 |
+| `fact_state_rev(p_issuer, p_market)` → bigint | `read_facts`、指标路由 | — | anon 可执行；只暴露 `state_rev` |
+| `read_facts(p_issuer, p_market, p_concepts, p_as_of, p_from, p_to, p_history, p_limit, p_include_non_ok)` → jsonb | 读路由、派生、规划 | — | security invoker；单语句单快照信封 `{state_rev, rows, truncated, row_count}`；> 10,000 行 → `truncated=true` 且无行 |
+
+内部助手（不对客户端开放）：`fact_scope_lock`、`fact_run_lock`、`fact_abandon_run`、`fact_item_members`、`fact_promote_rows`；触发器函数 `financial_facts_lifecycle`、`filings_limited_update`。
+
+错误码：`lease_lost`（SQLSTATE 55P03）；`run_pending`、`run_published`、`mapping_gen_regression`、`stale_computation`、`stale_plan`（P0001，消息即码）；触发器 `financial_facts_lifecycle`、`filings_limited_update`（23514，消息前缀 `append_only:`）。`supabaseFactsDb` 把这些映射为 `FactsDbError.code`。`stale_plan`（发布前废弃运行、发行人记 failed，`next_due_at` 推后 10 分钟 = `NEXT_DUE_STALE_MS`）与 `mapping_gen_regression` 同属"发布被拒"；`lease_lost` 停止该发行人且不再有任何数据库调用。
+
+### 8.3 锁纪律
+
+- 所有改变事实可见性的函数都以 `select … from fact_sync_scope where issuer_id=… and market=… for update` 开始；采集函数再校验 `lease_batch_id = p_batch and lease_until > now()`。管理函数（`resolve_facts_quarantine`、`replace_financial_metrics`）不校验租约但持同一把锁，因此与发布串行。
+- 租约 600 s；`sync.ts --apply` 与 cron **不要同时运行**同一市场：后者只会得到 `skipped_summary(leased)`，但会浪费一轮。
+- 对账（`reconcile_fact_sync_scope`）按市场读取来源表全量后一次提交；并发的两次对账由 `scope_confirmed_at` 守卫兜底（见 8.2），不需要额外串行。退役（`priority 0`）总是可逆的：下一次对账在来源表仍含该发行人时会把它恢复。
+- 不要在 SQL 控制台里手工 `update fact_sync_scope set lease_until=null`：若工作者仍活着，它的后续写会抛 `lease_lost` 并把发行人记 failed，这是预期行为；真正悬空的租约会在 `lease_until` 过期后自然可取。
+
+### 8.4 快照路径约定
+
+桶 `disclosure-raw`：`{source}/{issuer_id}/{sha256}.json` 存响应原文字节，旁边 `{sha256}.meta.json`（`{source, api?, url?, params?, fields?, fetched_at, http_status, has_more?, page?, sha256, bytes}`，**不含 token**）。`upsert:false`，409 视为已存在。`financial_facts.raw_hash = sha256(<快照 sha256> + "\n" + <定位串>)`（`providers/shared.ts::rawHashOf`）。定位串为**行级**：EDGAR `facts.<tax>.<tag>.units.<原始单位>[<数组下标>]`（含 `accn/start/end` 以便人读）；Tushare `<api>:rt<report_type>:p<页号>[end_date=…,ann=…,update_flag=…,row=<行号>]`。要核对一行：按 `raw_hash` 无法反查定位串，但同一 `(filing, concept, period, unit)` 的候选可由适配器对同一快照重新解析得到相同 `raw_hash`，相等即证明该行来自该快照的该条目。同一自然键在一份快照里有多行时，隔离项 `payload.rows[]` 聚合列出每一行的证据（值、`raw_hash`、定位）。
+
+### 8.5 `available_date` 规则
+
+日期级（不是时间戳）。EDGAR = `filed`；Tushare = `f_ann_date ?? ann_date`，但 `f_ann_date` **存在但非法**时不回退（该行隔离，保留两个原始日期串）；两者都缺 → 隔离 `missing_available_date`，不写事实行。`missing_available_date` 的自然键含期间、单位与 `api/accn/tag/page/row` 等定位分量，不同期间/行不会碰撞。`asOf` 可见 ⇔ `available_date <= asOf`。同一自然键同一 `available_date` 出现不同值 → 同日冲突（`same_day_conflict`），发布后该日对该键没有 `ok` 值，当前值回落到更早日期，直到管理员在 `/admin/dq` 用 `chosen_fact_ids` 裁决（裁决不改 `ok` 以外的成员；空数组只表示"已知悉"）。
+
+### 8.6 录制夹具
+
+```bash
+npx tsx scripts/facts/record-fixture.ts --edgar 320193            # → fixtures/edgar/CIK0000320193.trimmed.json
+npx tsx scripts/facts/record-fixture.ts --edgar-revise 320193     # → CIK0000320193.revised.json（追加一条更晚 10-K 的 FY2023 revenue）
+node --env-file=<仓库外文件> --import tsx scripts/facts/record-fixture.ts --tushare 600519.SH --since-year 2016   # → fixtures/tushare/<ts_code>.manifest.json + <ts_code>.<api>.rt<n>.p<k>.<代号>.json + .meta.json
+npx tsx scripts/facts/record-fixture.ts --cninfo 600519.SH <YYYY-MM-DD> 2024 annual                        # → fixtures/cninfo/600519.SH-2024-annual.json
+```
+
+EDGAR 夹具裁剪到 §3 概念标签与 `end >= 2019-01-01` 的条目，顶层 `__recorded:{at, source_sha256, url, bytes, trimmed:{since_end, tags}}` 记录原始响应的 sha256 与裁剪规则；数字字面量原样写回（`stringifyPreservingNumbers`），没有任何值经过 JS number。Tushare 页按字节原样保存，`.meta.json` 记 `recorded_at/sha256/api/params/fields/page/has_more/http_status`，token 不落盘；重录先写临时目录并校验，再整体替换该发行人的文件集（清单最后原子替换，并删除清单外的旧页）。没有真实夹具时 `fixtures/tushare/_synthetic/`（`request_id: "synthetic"`）只供单测，永不用于黄金断言。巨潮夹具 `fixtures/cninfo/600519.SH-2024-annual.json` 保留原始响应字节与 sha256（已录制）。
+
+黄金断言 `src/lib/facts/fixtures/gold/plan2.json`：格式 `{issuer:{ticker,market}, concept, period_end, unit, value, as_of?, source:{document,page_or_row,url}, recorded_by, recorded_at}`；`recorded_by:'<pending>'` 的条目是模板，不断言；顶层 `required.US/CN`、`ready`：见 8.11-6。
+
+### 8.7 Tushare `report_type` 1/4/5 核对记录（规格 §6.3 / §15 第 1 条）
+
+完整记录：`docs/audits/2026-11-04-data-foundation-2/17-tushare-verification.md`（本表是它的摘要；两处同步更新）。**降级状态**：本机无 `TUSHARE_TOKEN`，未发起任何 Tushare 请求；CN cron 关闭，`FACTS_CN_ENABLED` 不设。
+
+| 项 | 观察（公司 / 期末 / 原文行） | 结论 |
+|---|---|---|
+| `limit=2000` / `offset` / `has_more` 的真实分页行为 | 未核对（无 token） | `has_more=true` 一律续页（短页也续）、`has_more=false` 即停；`has_more=true` 的空页或 `fields+items` 哈希与上页相同 → `tushare_unavailable: paging_not_advancing`；最多 200 页；满页且 `has_more=false` 计入 `skipped.page_full_no_more`。核对前不得宣称覆盖完整 |
+| type 1 被更正后 `ann_date` / `f_ann_date` 是否变化 | 未核对 | 合成夹具假设更正后 `f_ann_date` = 更正公告日 |
+| type 5 的公告日取哪一列 | 未核对 | 合成夹具假设 = 原始公告日（`f_ann_date ?? ann_date`） |
+| 同一 `end_date` 下 1 与 5 同日并存是否出现 | 未核对 | 出现时按 §5.3：不同 filing → `same_day_conflict`，同 filing → `ambiguous_value` |
+| `update_flag` 语义 | 据 Tushare 文档（未与真实响应比对）：`1` = 最新版本 | 政策：同日、同键、值不同的行保持 `ambiguous_value` 隔离，不按 `update_flag` 自动择一，待真实数据核对后再放宽 |
+| `is_calc=1` 行的处理 | 规格：跳过 | 计入 `skipped.is_calc` |
+| `balancesheet.total_share` 单位 | 据文档：股 | 按"股"存储（`shares`）；未与真实响应比对 |
+| `report_type` 1/4/5 语义、权限 ≥2000 积分、每次一个 `ts_code` | 据文档 | 适配器每个 `ts_code × api × report_type` 单独请求 |
+| `balancesheet.money_cap` 口径 | 目录 `monetary_funds`（货币资金，含受限资金），CN 不映射 `cash` | 未与原文核对金额 |
+| 数值小数/科学计数法、`report_type` 数字或字符串 | 未核对 | 两种形态都接受；所有值列按 `tushareFieldsFor(api)` 无损解码为十进制字符串 |
+| 真实 Tushare 夹具 | 未录制 | `_synthetic/` 仅供单测；黄金断言与 `sync-cn.integration.test.ts` 等待真实夹具 |
+| 巨潮夹具 `600519.SH-2024-annual.json` | 已录制 | `cninfo-link.test.ts` 全部用例运行 |
+
+核对后把"未核对/未录制"改为"已核对（日期，夹具 sha256 前 8 位）+ 观察"。
+
+### 8.8 运行同步与物化
+
+环境：`NEXT_PUBLIC_SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`；`EDGAR_USER_AGENT`（SEC 要求带联系方式；缺省 `DEFAULT_USER_AGENT`，生产务必设置真实值）；`TUSHARE_TOKEN`（仅 CN）；`CRON_SECRET`（cron；缺失 → 503 `cron_unavailable`）；`FACTS_CN_ENABLED=1`（CN `--apply` 与 CN cron 的开关，缺省关）；`VERCEL_GIT_COMMIT_SHA`（Vercel 自动注入；cron 路由只认它，缺失 → 503 `code_version_unavailable`；脚本回退到 `git rev-parse HEAD`，脏树加 `-dirty`；取不到则拒绝 `--apply`）。
+
+```bash
+# 美股 dry-run（读库、抓 SEC、不写）
+node --env-file=.env.local --import tsx scripts/facts/sync.ts --market US --issuer AAPL --issuer MSFT --issuer NVDA
+# 无任何环境的网络冒烟（内存库；只允许 US + --cik，不允许 --apply/--issuer）
+node --import tsx scripts/facts/sync.ts --market US --no-db --cik 320193 --cik 789019 --cik 1045810
+# 首轮应用（owner，合并后）；cron 与脚本不要同时跑
+node --env-file=.env.local --import tsx scripts/facts/sync.ts --market US --limit 20 --apply
+# 按发行人重算派生
+node --env-file=.env.local --import tsx scripts/facts/materialize.ts --market US --issuer AAPL
+node --env-file=.env.local --import tsx scripts/facts/materialize.ts --market US --all
+```
+
+cron：`GET|POST /api/cron/facts-sync?market=US|CN[&limit=n]`，Bearer `CRON_SECRET`（常量时间比较），`maxDuration=300`，截止 240 s，默认 `limit=25`，范围 1..200，参数重复 → 400；`vercel.json` 只登记 `market=US`（`5 */4 * * *`）。**每 4 小时的 cron 需要 Vercel Pro**（Hobby 只允许每天一次），见 8.11-1。CN 只在 `FACTS_CN_ENABLED=1` 且 A 股夹具与黄金断言进入 CI 后加入。HTTP 回执只含码与计数（不含错误消息、warnings、快照哈希）：`{ok, market, limit, started_at, receipt:{batchId, status, counts, errors:[{code,key?}], idle, detail:{attempted, published, failed, skipped, idle}, issuers:[{issuerId, fetchKey, outcome:'published'|'planned'|'failed'|'skipped', code?, counts, errors}]}}`；脚本输出完整的 `SyncReceipt`（含 `runId`、`warnings`、`snapshotSha256`）。cron 先 `reconcileScope` 再取到期发行人；脚本 `--issuer` / `--no-db` 直指发行人时不对账且不受 `limit` 约束（每个显式发行人都有 outcome）：scope 行按 id 直取，缺行时 `--apply` 由发行人表算出并补建（`reasons:['explicit']`，下一次 cron 对账若来源表不含该发行人会把它退到 `priority 0`），dry-run 构造只读行；算不出 `fetch_key`（无 CIK / 无 A 股上市）的发行人以 `outcome:'failed', code:'scope_unresolved'` 出现，脚本退出码 1。`errors` 的信息码：`skipped_summary`（含 `<issuer>:parser` 的解析器跳过计数与 `<issuer>:cninfo_link`）、`coverage_summary`（CN，`{"<api>:rt<n>":"<首年>-<末年>:<期末数>"}`）、`rule_warning_summary`、`deadline_hit`。抓取器抛出的、不在解析白名单内的错误，其消息只存前 200 字符，且抓取器不得把响应体放进消息。发布之后的失败（挂接、物化、释放）不撤发布：发行人 outcome 仍 `published`，原错误按自身码记入 `errors`，租约以 `failed` 释放（1 天后重试）。新鲜度 dataset `facts.us` / `facts.cn`，`ok` = 空转或 `published ≥ max(1, ceil(attempted/2))`。
+
+### 8.9 悬空 `running` 批次
+
+工作者在 `finishBatch` 前被杀（Vercel 超时、OOM）会留下 `status='running'` 的批次。确认启动时间早于 `maxDuration` 之外（> 10 分钟）后标 failed：
+
+```sql
+update public.ingest_batches
+   set status='failed', finished_at=now(),
+       errors=errors || '[{"code":"orphaned_running","message":"marked failed by runbook 8.9"}]'::jsonb
+ where producer='facts-sync' and status='running' and started_at < now() - interval '10 minutes';
+```
+
+其 staged 运行会在该发行人下一次 `begin_sync_run` 时被废弃；租约到期后自动可取，不要手工清。
+
+### 8.10 回滚顺序
+
+先导出 `dq_quarantine`（`dataset like 'facts.%'`）与 `fact_sync_runs`（审计证据）。依赖顺序：客户端函数 → 内部助手（`fact_scope_lock` / `fact_run_lock` 的返回类型是表的复合类型，必须先于表删除）→ 表（行触发器随表删除）→ 触发器函数（表删除后才无依赖）→ 计划一表上的索引 → 桶。然后（迁移角色执行；注意本迁移的**现行签名**含 `p_expected_rev` / `p_snapshot_at`）：
+
+```sql
+-- 1. client-facing functions
+drop function if exists public.read_facts(uuid,text,text[],date,date,date,boolean,int,boolean);
+drop function if exists public.fact_state_rev(uuid,text);
+drop function if exists public.replace_financial_metrics(uuid,text,bigint,jsonb);
+drop function if exists public.resolve_facts_quarantine(uuid,uuid[],uuid);
+drop function if exists public.promote_quarantined(uuid,text,uuid[]);
+drop function if exists public.release_fact_sync_lease(uuid,text,uuid,text,timestamptz);
+drop function if exists public.abandon_sync_run(uuid);
+drop function if exists public.publish_sync_run(uuid,uuid[],bigint);
+drop function if exists public.quarantine_facts(uuid,uuid[],uuid);
+drop function if exists public.stage_facts(uuid,jsonb);
+drop function if exists public.stage_filings(uuid,jsonb);
+drop function if exists public.begin_sync_run(uuid,text,uuid,int);
+drop function if exists public.claim_fact_sync_lease(uuid,text,uuid,int);
+drop function if exists public.reconcile_fact_sync_scope(text,jsonb,timestamptz);
+-- 2. internal helpers (return types depend on the tables' composite types)
+drop function if exists public.fact_promote_rows(uuid,text,uuid[]);
+drop function if exists public.fact_item_members(jsonb);
+drop function if exists public.fact_abandon_run(uuid,boolean);
+drop function if exists public.fact_run_lock(uuid);
+drop function if exists public.fact_scope_lock(uuid,text,uuid);
+-- 3. tables (row triggers go with them; FK order: facts → filings → runs; metrics and scope independent)
+drop table if exists public.financial_metrics;
+drop table if exists public.financial_facts;
+drop table if exists public.filings;
+drop table if exists public.fact_sync_runs;
+drop table if exists public.fact_sync_scope;
+-- 4. trigger functions (only now free of dependants)
+drop function if exists public.financial_facts_lifecycle();
+drop function if exists public.filings_limited_update();
+-- 5. the one object this migration added to a plan-1 table
+drop index if exists public.dq_quarantine_fact_ids_idx;
+-- 6. bucket: empty it through the Storage API first, then
+delete from storage.buckets where id='disclosure-raw';
+-- 7. inventory: nothing of the facts layer may remain
+select proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and (proname like 'fact\_%' or proname in ('read_facts','begin_sync_run','stage_filings','stage_facts','quarantine_facts','publish_sync_run','abandon_sync_run','release_fact_sync_lease','claim_fact_sync_lease','reconcile_fact_sync_scope','promote_quarantined','resolve_facts_quarantine','replace_financial_metrics','financial_facts_lifecycle','filings_limited_update'));
+select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and relname in ('fact_sync_runs','filings','financial_facts','financial_metrics','fact_sync_scope','dq_quarantine_fact_ids_idx');
+```
+
+两个清单查询都必须返回 0 行（任何遗留的旧签名重载会出现在第一个清单里：按它列出的签名补 `drop function`）。**演练**（合并前一次，在 `test:db` 的临时库上）：应用全部迁移 → 执行本节脚本 → 两个清单为空 → 重新应用 `20261106090000_financial_facts.sql` → `facts.integration.test.ts` 通过。`ingest_batches` 中 `producer='facts-sync'` 的回执与 `dq_freshness` 的 `facts.*` 行保留。同时从 `vercel.json` 移除 `facts-sync` 条目并重新部署，否则 cron 会打到已无表的函数上（503/500 进入 Vercel 日志）。
+
+### 8.11 owner 步骤
+
+1. Vercel 环境：`EDGAR_USER_AGENT`（真实联系方式）、`CRON_SECRET`；CN 之前再加 `TUSHARE_TOKEN` 与 `FACTS_CN_ENABLED=1`。**确认 Vercel 套餐**：`vercel.json` 的 `5 */4 * * *` 是每日多次的 cron，Hobby 套餐会拒绝部署，需要 Pro（规格 §14）；若停留在 Hobby，改成每日一次或由外部调度器调用该路由。
+2. 生产迁移 `20261106090000_financial_facts.sql`（按 `alpha-production-deploy-and-hosted-db` 记忆的 Management API 方式；非超级用户，不 `alter function … owner`）。
+3. `scripts/facts/sync.ts --market US --limit 20 --apply` 首轮；查看 `/admin/dq` 的 `facts.us` 新鲜度与隔离项；必要时 `materialize.ts --market US --all`。
+4. `GET /api/facts/AAPL?concepts=revenue&asOf=2024-06-30` 核对验收样例 1（期末 2023-09-30 的 2023-11-03 披露行，`disclosureSeq=1`）。
+5. CN：提供 `TUSHARE_TOKEN` 给录制环境 → 完成 8.7 核对 → 真实夹具与 `sync-cn.integration.test.ts` 进 CI → 把 `fixtures/gold/plan2.json` 的 `required.CN` 置 true → 设 `FACTS_CN_ENABLED=1` → 把 `facts-sync?market=CN` 加入 `vercel.json`。
+6. **黄金集抄录**（由实施者之外的人完成；当前"`test:db` 绿" ≠ "黄金已核实"）：`gold/plan2.json` 目前 `ready:false`，`sync-us.integration.test.ts` 的黄金用例在此状态下**只打印告警、不失败**（计划原设计为红灯，指挥决定改为告警；已录入的非 `<pending>` 条目仍会被回放断言）。步骤：(a) 6 家发行人 × 2 个期间 × 6 个科目，逐条从一手文件（10-K / 年报 PDF）抄 `value`（规范十进制字符串）、`source.page_or_row`、`source.url`，填 `recorded_by`（姓名）与 `recorded_at`（ISO）；(b) 每个被断言的发行人必须有录制夹具并被回放套件采集（美股：`record-fixture.ts --edgar <cik>` 并把 `{ticker,cik,name}` 加进 `sync-us.integration.test.ts` 的 `FIXTURE_ISSUERS`——预置与采集都从它派生，只改这一处；A 股：`--tushare` 并把 ts_code 加进 `sync-cn.integration.test.ts` 的发行人表）；(c) 跑 `npm run test:db` 逐条回放 `read_facts(asOf = as_of)`；(d) 全部抄录完毕后把顶层 `ready` 置 true——此后套件强制：`required.US`（AAPL 与 MSFT 各至少一条已录入）、不得有任何 `<pending>`、≥ 6 家且每家 ≥ 2 期、**每期** ≥ 6 科目。**在 `ready:true` 且全绿之前，不得宣称事实库数值已对照一手文件核实。**
+
+### 8.12 隔离项处置（`/admin/dq`）
+
+事实库的隔离数据集为 `facts.us` / `facts.cn`；常见原因码：`same_day_conflict`、`ambiguous_value`（含解析器的 `payload.parser_key`）、`odd_duration`、`missing_available_date`、规则警告。裁决入口是 `/admin/dq` 的处理钩子（`resolveFactsItem`，规格 §7.3）：
+
+- 对争议组选择要保留的 `chosen_fact_ids`；`[]` 只表示"已知悉"，发布时所有成员都已被处置，未选中的成员保持非 `ok`。
+- 钩子调用 `resolve_facts_quarantine`：该函数在同一事务里持久化 `chosen_fact_ids`、写 `hook:pending`、提升被选行、`state_rev+1`。任一成员行所属运行仍是 staged → 返回 `run_pending`（稍后重试，不要强行处理）。
+- `hook:pending` 或 `hook:failed` 的项表示事实侧已提升但后续步骤（审计/项状态收尾）未完成。**重试同一个项**：钩子以持久化的 `chosen_fact_ids`、裁决人与状态恢复收尾，不要换选项；若重试仍失败，路由返回 **502**（错误文本不出客户端，错误码映射在响应里，细节看服务端日志与审计行）。反复 502 时先检查数据库连接与 `dq_quarantine` 项的 `payload`，不要手工改 `financial_facts`（没有任何角色有写权限）。
+- 裁决之后该发行人的指标 `based_on_rev` 落后于 `state_rev`：公共指标路由此时返回 `stale:true`、无行，直到 `materialize`（下一轮 cron 发布，或 `scripts/facts/materialize.ts --issuer <ticker>`）重算。
+
+### 8.13 公共读路由要点
+
+- `GET /api/facts/{ticker}`：`concepts`（≤ 上限，按自然键 `limit` 截断，`durations` 过滤发生在键限额**之前**）或 `factIds`（≤ 100，证据模式：只返回本发行人本市场、已发布 filing 的 `ok` 行，`disclosureSeq/isCurrent/isRevision` 为 `null`，不施加 `asOf`）二选一。重复参数 → 400 `invalid_parameter:<name>`；未知票据 → 404 `unknown_ticker`。
+- `GET /api/facts/{ticker}/metrics`：无 `asOf` 时读物化行，且仅当所有行 `based_on_rev` = 当前 `fact_state_rev` 才返回，否则 `stale:true` + 无行；新鲜指标 `s-maxage=60`，stale `s-maxage=30`。带 `asOf` 时即时用 `read_facts` 信封派生，`truncated` 时无行。
+- `GET /api/filings/{ticker}`：只返回已发布（`mapping_gen>0`）的 filing，已发布过滤在 `limit` 之前。
+- 票据解析：精确匹配优先（`BRK.A` 不会被规范化成 `BRK`），市场取自实际匹配到的证券行（不是后缀猜测），HK 证券拒绝；合并后的发行人经源证券行重定向。
