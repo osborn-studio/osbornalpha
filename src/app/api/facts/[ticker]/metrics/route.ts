@@ -5,7 +5,7 @@
 import {NextResponse} from 'next/server';
 import {MAPPING_GEN} from '@/lib/facts/concepts';
 import {DERIVE_CONCEPTS,FORMULA_VERSION,deriveMetrics,metricNames} from '@/lib/facts/derive';
-import {STALE_CACHE_CONTROL,QueryError,TICKER_RE,dateParam,errorResponse,intParam,listParam,paramErrorResponse,publicClients,readParams,resolvePublicIssuer,successHeaders,utcDate} from '@/lib/facts/public-route';
+import {FRESH_METRICS_CACHE_CONTROL,STALE_CACHE_CONTROL,QueryError,TICKER_RE,dateParam,decodeTicker,errorResponse,failureResponse,intParam,listParam,paramErrorResponse,publicClients,readParams,resolvePublicIssuer,successHeaders,utcDate} from '@/lib/facts/public-route';
 import {FactsDbError} from '@/lib/facts/types';
 import type {MetricRow} from '@/lib/facts/types';
 
@@ -16,8 +16,8 @@ const publicMetric=(m:MetricRow)=>({metric:m.metric,periodStart:m.period_start,p
 
 export async function GET(req:Request,{params}:{params:Promise<{ticker:string}>}){
  const now=new Date();const today=utcDate(now);
- const {ticker:raw}=await params;const ticker=decodeURIComponent(raw);
- if(!TICKER_RE.test(ticker))return errorResponse('invalid_parameter:ticker','invalid ticker',400);
+ const {ticker:raw}=await params;const ticker=decodeTicker(raw);
+ if(ticker===null||!TICKER_RE.test(ticker))return errorResponse('invalid_parameter:ticker','invalid ticker',400);
  let p:Map<string,string>,from:string|undefined,to:string|undefined,asOf:string|undefined,limit:number;
  try{
   p=readParams(new URL(req.url),PARAMS);
@@ -48,9 +48,6 @@ export async function GET(req:Request,{params}:{params:Promise<{ticker:string}>}
   const wanted=metrics?new Set(metrics):null;
   rows=rows.filter(m=>(!wanted||wanted.has(m.metric))&&(from===undefined||m.period_end>=from)&&(to===undefined||m.period_end<=to)).slice(0,limit);
   const body={issuerId:issuer.issuerId,ticker:issuer.ticker,market:issuer.market,asOf:asOf??null,mappingGen:MAPPING_GEN,formulaVersion:FORMULA_VERSION,truncated,stale,metrics:rows.map(publicMetric)};
-  return NextResponse.json(body,{headers:stale?{'Cache-Control':STALE_CACHE_CONTROL}:successHeaders(now,asOf,rows.length===0||truncated)});
- }catch(e){
-  console.error('[facts/metrics]',e instanceof Error?e.message:e);
-  return errorResponse('internal','metrics read failed',500);
- }
+  return NextResponse.json(body,{headers:stale?{'Cache-Control':STALE_CACHE_CONTROL}:asOf===undefined&&rows.length>0?{'Cache-Control':FRESH_METRICS_CACHE_CONTROL}:successHeaders(now,asOf,rows.length===0||truncated)});
+ }catch(e){return failureResponse(e,'facts/metrics','metrics read failed');}
 }

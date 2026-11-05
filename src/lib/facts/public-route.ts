@@ -10,6 +10,7 @@ import {getAnonSupabase} from '../supabase/anon';
 import {supabaseTableClient} from '../db/table-client';
 import type {TableClient} from '../db/table-client';
 import {resolveIssuer,successCacheControl} from '../entities/resolve';
+import {inferCoreMarket,normalizeSecurityTicker} from '../securities/ticker';
 import {supabaseFactsDb} from './db';
 import type {FactRow,FactsDb,FilingRow,Market} from './types';
 
@@ -55,12 +56,30 @@ export const errorResponse=(code:string,message:string,status:number)=>NextRespo
 export const paramErrorResponse=(e:unknown)=>e instanceof QueryError?errorResponse(e.message,`invalid ${e.param}`,400):null;
 
 export interface PublicIssuer{issuerId:string;ticker:string;market:Market}
-/** Ticker → issuer by today's ownership (one merge hop is followed by resolveIssuer). */
-export async function resolvePublicIssuer(tables:TableClient,rawTicker:string,today:string):Promise<PublicIssuer|null>{
- const ticker=rawTicker.trim().toUpperCase().replace(/\//g,'.');
- const r=await resolveIssuer(tables,{ticker},{today});
- return r?{issuerId:r.issuer_id,ticker,market:marketOfTicker(ticker)}:null;
+/** Canonical ticker + market from the repo's securities parser (600519 / SH600519 / 600519.SS → 600519.SH); null for HK or unparsable input. */
+export function canonicalTicker(raw:string):{ticker:string;market:Market}|null{
+ const core=inferCoreMarket(raw);
+ if(core!=='A'&&core!=='US')return null;
+ const ticker=normalizeSecurityTicker(raw,core);
+ return ticker?{ticker,market:core==='A'?'CN':'US'}:null;
 }
+/** Percent-decoded path segment, or null when malformed. */
+export function decodeTicker(raw:string):string|null{try{return decodeURIComponent(raw);}catch{return null;}}
+/** Ticker → issuer by today's ownership (one merge hop is followed by resolveIssuer). Throws Error('ambiguous_owner') through. */
+export async function resolvePublicIssuer(tables:TableClient,rawTicker:string,today:string):Promise<PublicIssuer|null>{
+ const c=canonicalTicker(rawTicker);if(!c)return null;
+ const r=await resolveIssuer(tables,{ticker:c.ticker},{today});
+ return r?{issuerId:r.issuer_id,ticker:c.ticker,market:c.market}:null;
+}
+/** Failure → response: ambiguous ownership is the caller's 409, everything else a logged, code-only 500. */
+export function failureResponse(e:unknown,tag:string,internalMessage:string){
+ if(e instanceof Error&&e.message==='ambiguous_owner')return errorResponse('ambiguous_ticker','ticker maps to several issuers',409);
+ console.error(`[${tag}]`,e instanceof Error?e.message:e);
+ return errorResponse('internal',internalMessage,500);
+}
+/** Only published filings (active generation) are public; staged ones (mapping_gen 0) never are. */
+export const isPublished=(f:FilingRow)=>f.mapping_gen>0;
+
 /** anon clients; stateRev = fact_state_rev(issuer, market) (anon may execute it; only the version number leaves fact_sync_scope). */
 export function publicClients():{tables:TableClient;db:FactsDb;stateRev:(issuer:string,market:Market)=>Promise<number>}{
  const sb=getAnonSupabase();
@@ -80,8 +99,10 @@ export function successHeaders(now:Date,asOf:string|undefined,empty:boolean):Rec
 
 /** Metrics whose facts changed visibility since materialisation: nothing is served, shared caches keep it only briefly. */
 export const STALE_CACHE_CONTROL='public, max-age=0, s-maxage=30';
+/** Fresh materialised metrics can go stale at the next publish: short shared cache only. */
+export const FRESH_METRICS_CACHE_CONTROL='public, max-age=0, s-maxage=60';
 
 export type Citation='edgar'|'linked'|'pending';
 export const citationOf=(f:FilingRow):Citation=>f.market==='US'?'edgar':f.document_ref?'linked':'pending';
 export const publicFiling=(f:FilingRow)=>({filingId:f.filing_id,formType:f.form_type,periodEnd:f.period_end,availableDate:f.available_date,sourceRef:f.source_ref,url:f.url,documentRef:f.document_ref,documentUrl:f.document_url,citation:citationOf(f)});
-export const publicFact=(r:FactRow)=>({factId:r.fact_id,concept:r.concept,sourceConcept:r.source_concept,statement:r.statement,periodStart:r.period_start,periodEnd:r.period_end,duration:r.duration,value:r.value_text,unit:r.unit,availableDate:r.available_date,filingId:r.filing_id,disclosureSeq:r.disclosure_seq??null,isCurrent:r.is_current??true,isRevision:r.is_revision??false,mappingGen:r.mapping_gen,rawHash:r.raw_hash});
+export const publicFact=(r:FactRow)=>({factId:r.fact_id,concept:r.concept,sourceConcept:r.source_concept,statement:r.statement,periodStart:r.period_start,periodEnd:r.period_end,duration:r.duration,value:r.value_text,unit:r.unit,availableDate:r.available_date,filingId:r.filing_id,disclosureSeq:r.disclosure_seq??null,isCurrent:r.is_current??null,isRevision:r.is_revision??null,mappingGen:r.mapping_gen,rawHash:r.raw_hash});

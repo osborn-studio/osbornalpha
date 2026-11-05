@@ -94,10 +94,15 @@ async function handle(_req: Request, { params }: Ctx) {
 }
 
 // Spec (data foundation 2) §9: this Tushare summary is superseded by the disclosure log.
+// Every response (success, validation and error alike) carries the deprecation headers.
 export async function GET(req: Request, ctx: Ctx) {
-  const { ticker } = await ctx.params;
-  const res = await handle(req, ctx);
+  const { ticker: raw } = await ctx.params;
+  let decoded: string;
+  try { decoded = decodeURIComponent(raw); } catch { decoded = ''; }
+  const res = decoded
+    ? await handle(req, ctx)
+    : NextResponse.json({ source: 'error', ticker: raw, error: 'invalid ticker' }, { status: 400 });
   res.headers.set('Deprecation', 'true');
-  res.headers.set('Link', `</api/facts/${encodeURIComponent(decodeURIComponent(ticker))}>; rel="successor-version"`);
+  res.headers.set('Link', `</api/facts/${encodeURIComponent(decoded || raw)}>; rel="successor-version"`);
   return res;
 }

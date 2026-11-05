@@ -4,8 +4,8 @@ import type {FactRow,MetricRow} from '@/lib/facts/types';
 import {FORMULA_VERSION} from '@/lib/facts/derive';
 import {FactsDbError} from '@/lib/facts/types';
 
-const mocks=vi.hoisted(()=>({resolve:vi.fn(),readFacts:vi.fn(),metricsOfIssuer:vi.fn(),rev:vi.fn()}));
-vi.mock('@/lib/supabase/anon',()=>({getAnonSupabase:()=>({rpc:(fn:string)=>Promise.resolve(fn==='fact_state_rev'?{data:mocks.rev(),error:null}:{data:null,error:{message:'unexpected'}})})}));
+const mocks=vi.hoisted(()=>({resolve:vi.fn(),readFacts:vi.fn(),metricsOfIssuer:vi.fn(),rev:vi.fn(),revArgs:vi.fn(),revError:vi.fn((): {message:string}|null=>null)}));
+vi.mock('@/lib/supabase/anon',()=>({getAnonSupabase:()=>({rpc:(fn:string,args:unknown)=>Promise.resolve(fn==='fact_state_rev'?(mocks.revArgs(args),mocks.revError()?{data:null,error:mocks.revError()}:{data:mocks.rev(),error:null}):{data:null,error:{message:'unexpected'}})})}));
 vi.mock('@/lib/entities/resolve',async(importOriginal)=>({...await importOriginal<typeof import('@/lib/entities/resolve')>(),resolveIssuer:mocks.resolve}));
 vi.mock('@/lib/facts/db',()=>({supabaseFactsDb:()=>({readFacts:mocks.readFacts,metricsOfIssuer:mocks.metricsOfIssuer})}));
 
@@ -19,6 +19,7 @@ const get=(ticker:string,qs:string)=>GET(new Request(`https://alpha.example/api/
 describe('GET /api/facts/[ticker]/metrics',()=>{
  beforeEach(()=>{
   vi.clearAllMocks();
+  mocks.revError.mockReturnValue(null);
   mocks.rev.mockReturnValue(3);
   mocks.resolve.mockResolvedValue({issuer_id:ISSUER,status:'active',names:{zh:null,en:null},identifiers:{cik:null,lei:null,usci:null},securities:[]});
   mocks.metricsOfIssuer.mockResolvedValue([metric(),metric({metric:'net_margin',value:'0.1',period_end:'2024-06-30',period_start:'2024-04-01'})]);
@@ -32,7 +33,9 @@ describe('GET /api/facts/[ticker]/metrics',()=>{
   expect(body.metrics).toEqual([{metric:'gross_margin',periodStart:'2024-01-01',periodEnd:'2024-03-31',duration:'3M',value:'0.4',unit:'pure',inputUnit:'USD',basis:'us_standard',inputs:[{fact_id:'f1',concept:'gross_profit',filing_id:'g',available_date:'2024-05-01'}],basedOnRev:3}]);
   expect(mocks.metricsOfIssuer).toHaveBeenCalledWith(ISSUER,'US',FORMULA_VERSION);
   expect(mocks.readFacts).not.toHaveBeenCalled();
-  expect(res.headers.get('cache-control')).toMatch(/^public, s-maxage=/);
+  expect(res.headers.get('cache-control')).toBe('public, max-age=0, s-maxage=60');
+  expect(mocks.rev).toHaveBeenCalledTimes(2);
+  expect(mocks.revArgs).toHaveBeenCalledWith({p_issuer:ISSUER,p_market:'US'});
  });
  it('stale metrics (based_on_rev behind the current fact state) are not served: stale:true, no rows, short cache',async()=>{
   mocks.rev.mockReturnValue(4);
@@ -45,6 +48,14 @@ describe('GET /api/facts/[ticker]/metrics',()=>{
   mocks.rev.mockReturnValueOnce(3).mockReturnValue(4);
   const body=await (await get('AAPL','')).json();
   expect(body).toMatchObject({stale:true,metrics:[]});
+ });
+ it('a fact_state_rev RPC error is a 500, never reported as stale',async()=>{
+  mocks.revError.mockReturnValue({message:'rpc down'});
+  const spy=vi.spyOn(console,'error').mockImplementation(()=>{});
+  const res=await get('AAPL','');
+  spy.mockRestore();
+  expect(res.status).toBe(500);
+  expect((await res.json()).error.code).toBe('internal');
  });
  it('an unstable metrics read is stale, not a 500',async()=>{
   mocks.metricsOfIssuer.mockRejectedValue(new FactsDbError('unknown','metrics_unstable'));

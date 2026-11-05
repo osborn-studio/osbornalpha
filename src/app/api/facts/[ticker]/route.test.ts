@@ -60,6 +60,30 @@ describe('GET /api/facts/[ticker]',()=>{
   expect((await get('AAPL',`factIds=${Array.from({length:101},()=>F1).join(',')}`)).status).toBe(400);
   expect((await get('AAPL','factIds=not-a-uuid')).status).toBe(400);
  });
+ it('durations apply before the key limit: newest key 12M, older 3M key, durations=3M&limit=1 returns the 3M key',async()=>{
+  mocks.readFacts.mockResolvedValue({stateRev:1,rows:[fact({fact_id:'1'.repeat(36),period_end:'2024-12-31',duration:'12M'}),fact({fact_id:'2'.repeat(36),period_end:'2024-03-31',period_start:'2024-01-01',duration:'3M',disclosure_seq:1}),fact({fact_id:'3'.repeat(36),period_end:'2024-03-31',period_start:'2024-01-01',duration:'3M',disclosure_seq:2}),fact({fact_id:'4'.repeat(36),period_end:'2023-12-31',period_start:'2023-10-01',duration:'3M'})],truncated:false});
+  const body=await (await get('AAPL','concepts=revenue&history=1&durations=3M&limit=1')).json();
+  expect(body.facts.map((f:{factId:string})=>f.factId)).toEqual(['2'.repeat(36),'3'.repeat(36)]);   // one key, all its history rows
+ });
+ it('evidence mode does not invent revision flags and echoes asOf null; unpublished filings are not exposed',async()=>{
+  mocks.factsByIds.mockResolvedValue([fact({disclosure_seq:undefined,is_current:undefined,is_revision:undefined})]);
+  let body=await (await get('AAPL',`factIds=${F1}`)).json();
+  expect(body.asOf).toBeNull();
+  expect(body.facts[0]).toMatchObject({disclosureSeq:null,isCurrent:null,isRevision:null});
+  mocks.filingsOfIssuer.mockResolvedValue([filing({mapping_gen:0})]);
+  body=await (await get('AAPL','concepts=revenue')).json();
+  expect(body.filings).toEqual([]);
+  body=await (await get('AAPL',`factIds=${F1}`)).json();
+  expect(body.facts).toEqual([]);
+ });
+ it('canonicalises tickers (US slash form) and rejects a malformed percent escape and ambiguous owners',async()=>{
+  await get('BRK/B','concepts=revenue');
+  expect(mocks.resolve).toHaveBeenLastCalledWith(expect.anything(),{ticker:'BRK.B'},{today:TODAY});
+  const mal=await GET(new Request('https://alpha.example/api/facts/%E0%A4%A?concepts=revenue'),{params:Promise.resolve({ticker:'%E0%A4%A'})});
+  expect(mal.status).toBe(400);expect((await mal.json()).error.code).toBe('invalid_parameter:ticker');
+  mocks.resolve.mockRejectedValue(new Error('ambiguous_owner'));
+  expect((await get('AAPL','concepts=revenue')).status).toBe(409);
+ });
  it('validates parameters: missing concepts, unknown concept, bad asOf, future asOf, duplicate, bad limit, bad durations, history',async()=>{
   const bad=async(qs:string,code:string)=>{const res=await get('AAPL',qs);expect(res.status).toBe(400);expect((await res.json()).error.code).toBe(code);expect(res.headers.get('cache-control')).toBe('no-store');};
   await bad('','invalid_parameter:concepts');
@@ -79,7 +103,8 @@ describe('GET /api/facts/[ticker]',()=>{
   const res=await get('AAPL','concepts=revenue,net_income_parent&history=1&durations=3M&limit=1000');
   const body=await res.json();
   expect(body.facts.map((f:{duration:string})=>f.duration)).toEqual(['3M']);
-  expect(mocks.readFacts.mock.calls[0][2]).toMatchObject({concepts:['revenue','net_income_parent'],history:true,limit:1000,asOf:TODAY});
+  expect(mocks.readFacts.mock.calls[0][2]).toMatchObject({concepts:['revenue','net_income_parent'],history:true,asOf:TODAY});
+  expect(mocks.readFacts.mock.calls[0][2].limit).toBeUndefined();   // durations: no key limit at the db
   expect(res.headers.get('cache-control')).toMatch(/^public, s-maxage=\d+, stale-while-revalidate=600$/);
  });
  it('404 unknown_ticker, 500 internal on db failure, both no-store',async()=>{
