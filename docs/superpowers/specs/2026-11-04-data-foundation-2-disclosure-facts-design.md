@@ -63,7 +63,7 @@
 
 ## 3. 概念目录 `src/lib/facts/concepts.ts`
 
-`FACT_CONCEPTS` 导出 **33** 个概念。`MAPPING_GEN = 1`（整数，单调递增；任何映射改动 +1）、`MAPPING_VERSION = 'facts-map/1'`。每个概念：`id`、`statement`、`nature`、`unitKind`（money/shares/per_share）、`usGaap: string[]`、`ifrs: string[]`、`tushare`、`notes`。
+`FACT_CONCEPTS` 导出 **34** 个概念。`MAPPING_GEN = 1`（整数，单调递增；任何映射改动 +1）、`MAPPING_VERSION = 'facts-map/1'`。每个概念：`id`、`statement`、`nature`、`unitKind`（money/shares/per_share）、`usGaap: string[]`、`ifrs: string[]`、`tushare`、`notes`。
 
 **回退列表只放等价口径的别名**；口径不同的度量是不同概念。**选取规则**：对同一 filing、同一期间 (`start,end`)、同一单位，按顺序取第一个有条目的标签；更低优先级标签只在更高优先级标签没有该期间条目时补位。**同一标签**对同一 `accn+start+end+unit` 给出不同 `val` → 隔离 `ambiguous_value`。被选标签写入 `source_concept`。
 
