@@ -80,3 +80,46 @@
 | 表格聚类阈值未验证 | §7.2：F3-2 用录制主表页校验列数一致，结果进评测报告（§15 问题 5） |
 | 7 天轮询窗口无依据 | 改为一个 cron 周期（1 天）（§6.1） |
 | 签名 URL 300 s 的依据 | §8.1 改为"只用于随即发起的一次下载，owner 可调"的默认值 |
+
+## 第三轮（04）
+
+规格第 4 稿处理。第三轮把第二轮 N1/N5/N6/N7/N8/N9/N10/N13/N19/N20 评为 PARTIAL，并新增 R3-1。
+
+| # | 决定 | 第 4 稿处理 |
+|---|---|---|
+| R3-1 批量终结把被隔离候选标为已发布 | ACCEPT | `finish_candidate_publications` 改为逐条判定：事实 `ok` → `published`；`quarantined` → 保持 `staged`；事实不存在 → `abandoned`；返回 `{published, still_staged, abandoned}`；要求运行已 `published`；同一函数用于恢复；§12 验收样例 10 为混合结果运行（§4.6、§4.8、§7.7） |
+| N1 / N13 证据校验在发布事务之外 | ACCEPT | 新增 `publish_hk_run`：一个事务内先 `assert_run_evidence_complete`（对运行内**全部** staged 事实，不按发布行迭代；含引用 `integrity`、文档 = filing 的 `primary_document_id`、抽取版本 = 当前、每个事实恰有一条本运行发布行），再调用规格二 `publish_sync_run`；校验失败整体回滚。它是港股事实唯一的发布入口；§16 (d) 列出规格二需允许同事务内调用（§4.8、§7.7） |
+| N5 审批版本比对引用快照中不存在的列 | ACCEPT | `input_snapshot` 补 `table_algo_version`，但版本比对一律连接 `document_extractions` 行的三列，快照只作记录（§4.6、§4.8、§7.3） |
+| N6 验收样例 9 承诺旧代 `asOf` 可见 | ACCEPT | 样例 9 改为：旧代行保留为历史，`asOf` 读取不再返回，`factIds` 证据查询仍可取回（规格二 `factsByIds` 不限代）（§12） |
+| N7 同代二次确认与重试迁移 | ACCEPT | 本次暂存集合 = 活动集中在当前代下无 `staged|published` 行的候选；`abandoned→staged` 为同主键行更新；`staged` 且事实隔离的候选等待；`already_staged` 由筛选规则避免；同代再次发布要求规格二对相等代不抛回归（§4.6、§4.8、§7.7、§16 (d)） |
+| N8 / N9 第三次崩溃永远 pending | ACCEPT | `storedDue`/`candidatesDue` 不按 attempts 过滤；`claim_*` 在 attempts ≥ 3 时执行终态转换（`extract_failed`/`exhausted`）并返回 false（§4.8、§4.11、§7.3） |
+| N10 缺 checks 写入 RPC | ACCEPT | `write_candidate_checks(p_extraction, p_batch, p_rows)`：候选租约下、只对 `status='candidate'` 行、`checks` 列唯一写入路径；已决定行冻结（§4.8、§7.3） |
+| N19 `publicationsOf`/`approvalsFor` 未分页 | ACCEPT | `publicationsOf` 游标分页（按 candidateIds 或 runId）；`approvalsFor(limit 100)` 超限抛 `too_many_approvals` 并停止自动决定（§4.11） |
+| N20 `promotionDue` 遗漏恢复与新代 | ACCEPT | `promotionDue(pubGen)` 三类条件：待首发、`promoted` 但新代无行、当前代有 `staged` 行（恢复）；`runHkFactsSync` 第 0 步做恢复（§4.11、§7.3、§7.7） |
+| 外部语义未核实（EDGAR/HKEX/巨潮/PDF 运行时/Storage/PostgREST/Vercel） | OPEN-verify | 与前两轮相同，§15 问题 1–6、§14 |
+
+## 第四轮（05）—— 未处理，按协调指示停止
+
+第四轮 verdict："Verdict: not ready."（R3-1、N5、N6、N7 判 RESOLVED；N1/N13、N10 判 PARTIAL；新增 R4-1～R4-4 为 P1，R4-5～R4-7 为 P2）。协调方规则：第四轮仍 not ready 则停止并上报，不再改稿。以下为待 owner/下一轮处理的阻塞项，Codex 已给出可逐字套用的修法（见 `05-codex-round4.md`）：
+
+| # | 严重度 | 要点 | 建议处置 |
+|---|---|---|---|
+| R4-1 | P1 | §7.7 第 0 步恢复在取得规格二租约之前调用 `abandonRun` | 接受：先 `reconcileScope` + `claimLease`，持租约再做第 0 步，所有退出路径释放租约 |
+| R4-2 | P1 | `publish_hk_run` 校验证据时未锁定 `fact_sync_scope`、相关 `filings`、`disclosure_documents`，`current_extraction_id`/`primary_document_id` 可在校验后、发布前被改 | 接受：按 Codex 给出的锁顺序（scope 行 → filings 按 id → documents 按 id，均 `for update`）后再校验、再 `publish_sync_run`，锁持有到事务结束 |
+| R4-3 | P1 | `assert_run_evidence_complete` 只检查 `staged`，第 4 步先隔离的行绕过证据校验 | 接受：谓词改为 `status in ('staged','quarantined')`，任一不全则整次发布中止 |
+| R4-4 | P1 | 继承确认的候选在插入时即 `confirmed`，`checks` 为空且 RPC 拒绝已决定行，永远不可晋升 | 接受：`insert_candidates` 一律插 `candidate`；`write_candidate_checks` 写完检查后对通过者原子套用继承 |
+| R4-5 | P2 | `promotionDue` 条件 (b) 漏掉"已晋升候选在新代 `abandoned`"的重试 | 接受：(a)(b) 合并为"活动候选无 `pub_gen=当前 and state in ('staged','published')` 的行" |
+| R4-6 | P2 | §7.3 的 `storedDue` 仍写 `extract_attempts < 3`，与 §4.8/§4.11 矛盾 | 接受：删除该过滤；claim 返回 false 即跳过 |
+| R4-7 | P2 | 发布后、物化前崩溃 → 恢复只终结关联、走 `nothing_to_publish` 退出，不再物化 | 接受：发行人级"待物化"持久标记，由 `publish_hk_run` 原子置位、物化成功后清除，并纳入 `promotionDue` |
+
+## 第四轮（05）—— 第 5 稿按协调指示逐字落入，未再审计
+
+| # | 决定 | 第 5 稿处理 |
+|---|---|---|
+| R4-1 恢复先于租约 | implemented per Codex's prescribed fix (round 4), not re-audited | §7.7 第 0 步：`reconcileScope` → `claimLease`，false 则 `skipped_summary(leased)` 且不做恢复写入；持租约后恢复，恢复完成后才 `beginRun`；所有正常退出释放租约 |
+| R4-2 发布事务未锁定绑定 | implemented per Codex's prescribed fix (round 4), not re-audited | §4.8 `publish_hk_run` 锁契约：`fact_sync_scope` 行 → filings（按 id）→ documents（按 id）`FOR UPDATE`，校验租约与运行归属，取锁后校验证据，再 `publish_sync_run`，锁持有到事务结束 |
+| R4-3 隔离事实绕过证据校验 | implemented per Codex's prescribed fix (round 4), not re-audited | §4.8 `assert_run_evidence_complete` 谓词 `status IN ('staged','quarantined')`，"该集合中的每个事实"，隔离不豁免 |
+| R4-4 继承确认永不可晋升 | implemented per Codex's prescribed fix (round 4), not re-audited | §4.8 `insert_candidates` 一律插 `candidate` 不套用继承；`write_candidate_checks` 持候选行锁，先写检查，通过者原子套用人工继承；已决定行不可改 |
+| R4-5 `promotionDue` 漏重试 | implemented per Codex's prescribed fix (round 4), not re-audited | §4.11 (a)(b) 合并为"活动候选 `status in ('confirmed','promoted')` 且无 `pub_gen=pubGen and state in ('staged','published')` 行"；保留 (c)；新增 (d) 物化标记 |
+| R4-6 `storedDue` 残留 attempts 过滤 | implemented per Codex's prescribed fix (round 4), not re-audited | §7.3 去掉过滤；claim 返回 false 即跳过该文档全部写入 |
+| R4-7 发布后物化丢失 | implemented per Codex's prescribed fix (round 4), not re-audited | §7.7 第 0 步 `needs_materialization`；空运行退出前物化；§4.9 新表 `hk_materialization_due` 由 `publish_hk_run` 原子置位、`clear_materialization_due` 修订号校验后清除；`promotionDue` 条件 (d) |

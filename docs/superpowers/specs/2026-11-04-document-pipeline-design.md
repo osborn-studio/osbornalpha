@@ -1,6 +1,6 @@
 # 数据底座三 · F3 披露文档管道 设计规格
 
-日期：2026-11-04（第 3 稿，吸收 Codex 两轮共 49 项；审计轨迹：`docs/audits/2026-11-04-document-pipeline/`——01 Codex 一轮、02 Codex 二轮、03 处置表）
+日期：2026-11-04（第 5 稿，吸收 Codex 四轮共 57 项；第四轮 R4-1～R4-7 按 Codex 给定修法逐字落入，未再审计；审计轨迹：`docs/audits/2026-11-04-document-pipeline/`——01 Codex 一轮、02 Codex 二轮、03 处置表、04 Codex 三轮、05 Codex 四轮）
 状态：草案，待 owner 评审（§14 有七项 owner 决策）
 上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（规格一，F1 发行人与 F5 质量设施已落地，§14 偏差视为既定事实）；`docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md`（规格二，本稿写作时为第 8 稿：`fact_sync_runs` 同步运行、写入只经 `security definer` 函数、`read_facts` 信封、`materialize(issuer, market)`；港股事实与 PDF 页码引用明确延后到本规格。规格二仍在修订，本规格对它的依赖集中在 §16，以其落地版本为准）。
 总纲：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §4"文档管道"行与 §5 硬约束。本规格逐条对照：只用一手披露文件（EDGAR、巨潮、HKEXnews；PDF/HTML 原件入私有桶）、每个数字可回放到"源文件哈希 + 抽取版本 + 页码/字符区间 + 可得时间 + 变换 + 代码版本"、事实与判断分离（抽取结果先是候选，确认后才是事实；候选永不公开）、缺失保持缺失（扫描件不做 OCR 猜测、找不到的科目不补、倍数不明的值不晋升）、研报原文永不对外分发（许可先于功能）、本规格不含任何面向用户的页面，只定义"来源抽屉"的数据契约与待设计清单。
@@ -258,7 +258,7 @@ extraction_candidates
   approval_id      uuid references extraction_approvals(approval_id)
   decided_at       timestamptz
   inherited_from   uuid references extraction_candidates(candidate_id)   -- 决定继承来源（仅人工决定可继承）
-  input_snapshot   jsonb not null check (jsonb_typeof(input_snapshot) = 'object')   -- {content_sha256, pages_json_sha256, page_nos, extractor_version, code_version, hk_label_gen, hk_rules_version}
+  input_snapshot   jsonb not null check (jsonb_typeof(input_snapshot) = 'object')   -- {content_sha256, pages_json_sha256, page_nos, extractor_version, table_algo_version, code_version, hk_label_gen, hk_rules_version}；版本比对一律以 document_extractions 行为准（§4.8 decide_candidate），快照只作记录
   batch_id         uuid not null references ingest_batches(batch_id) on delete restrict
   created_at       timestamptz not null default now()
   foreign key (document_id, extraction_id) references document_extractions(document_id, extraction_id) on delete restrict   -- 候选的文档与抽取版本一致
@@ -283,7 +283,7 @@ candidate_publications                        -- 候选 × 发布代 的关联�
   index (run_id)
 ```
 
-状态语义：`promoted` = 至少有一条 `candidate_publications.state='published'`；`confirmed` 的候选可反复进入新的发布代。生命周期只经 §4.8 的候选函数。
+状态语义：`promoted` = 至少有一条 `candidate_publications.state='published'`；`confirmed` 的候选可反复进入新的发布代。发布行的迁移：`staged→published`（其事实 `ok` 且所属运行 `published`）、`staged→abandoned`（运行废弃）、`abandoned→staged`（新运行重新暂存：同一主键行被**更新**为新的 `run_id/fact_id`，`updated_at` 刷新）；`staged` 的行在运行已发布但事实 `quarantined` 时**保持 `staged`**，直到事实被提升为 `ok`。生命周期只经 §4.8 的候选函数。
 
 ### 4.7 `extraction_approvals` 与 `document_sync_scope`
 
@@ -339,22 +339,25 @@ document_sync_scope
 | `advance_document_cursor(p_issuer, p_source, p_batch, p_mode, p_cursor jsonb, p_done bool)` | scope 行锁 + 同步租约 | `p_mode='backfill'` 写 `backfill_cursor/backfill_done`；`'poll'` 写 `poll_cursor` |
 | `release_document_sync_lease(p_issuer, p_source, p_batch, p_outcome, p_next_due)` | scope 行锁；持有者才能释放 | 写 `last_*`、`next_due_at`，清租约 |
 | `reclassify_document(p_document, p_patch jsonb, p_actor uuid)` | 文档行 `for update`；管理员（路由已 `requireAdminUser`） | 只改 `doc_class/classifier_gen/fiscal_year/fiscal_period/period_end/filing_source_ref`；写审计由路由完成 |
-| `claim_document_extract_lease(p_document, p_batch, p_ttl)` → bool | 文档行 `for update` | `status='stored'` 且 `extract_attempts < 3` 且（未租 / 过期 / 同批次）→ 设租约，**`extract_attempts + 1`**（唯一的计数点；崩溃也被计入）；`extract_attempts >= 3` 的 `stored` 行由 `storedDue` 排除并在下次 claim 时转 `extract_failed` |
+| `claim_document_extract_lease(p_document, p_batch, p_ttl)` → bool | 文档行 `for update` | 要求 `status='stored'` 且（未租 / 过期 / 同批次）；若 `extract_attempts >= 3` → 置 `status='extract_failed'`、清租约、返回 false（第三次崩溃的行由此收尾）；否则设租约，**`extract_attempts + 1`**（唯一的计数点；崩溃也被计入），返回 true。`storedDue` **不**按 attempts 过滤，只按 `status='stored'` 与租约空/过期选取，让本函数完成终态转换 |
 | `finish_document_extract(p_document, p_batch, p_extraction jsonb, p_pages jsonb)` → uuid | 文档行锁 + 抽取租约校验（`extract_lease_batch_id = p_batch and extract_lease_until > now()`） | 插入 `document_extractions`（`candidates_role/candidates_status` 按 §7.3 规则在函数内判定）与全部 `document_pages`；`status = 'extracted'|'no_text_layer'`，`current_extraction_id` 指向新版本；清租约；返回 `extraction_id`。无任何删除 |
 | `fail_document_extract(p_document, p_batch, p_code)` | 文档行锁 + 抽取租约 | `extract_attempts >= 3` → `status='extract_failed'`；清租约（不再计数） |
 | `request_document_extract(p_document, p_actor uuid)` | 文档行锁；管理员 | 若已存在 `(document, EXTRACTOR_VERSION, TABLE_ALGO_VERSION)` 的版本 → `raise 'revision_exists'`（同版本重跑没有意义：版本不可变）；否则 `extracted|no_text_layer|extract_failed → stored`，`extract_attempts = 0` |
-| `claim_candidates_lease(p_extraction, p_batch, p_ttl)` → bool | 抽取版本行 `for update` | `candidates_status in ('pending','failed') and candidates_attempts < 3` 且（未租 / 过期 / 同批次）→ 设租约，`candidates_attempts + 1`；`failed and attempts >= 3` → 置 `exhausted`、返回 false |
+| `claim_candidates_lease(p_extraction, p_batch, p_ttl)` → bool | 抽取版本行 `for update` | 要求 `candidates_status in ('pending','failed')` 且（未租 / 过期 / 同批次）；若 `candidates_attempts >= 3` → 置 `exhausted`、清租约、返回 false（第三次崩溃的行由此收尾）；否则设租约，`candidates_attempts + 1`，返回 true。`candidatesDue` 不按 attempts 过滤 |
+| `write_candidate_checks(p_extraction, p_batch, p_rows jsonb)` → jsonb | 抽取版本行锁 + 候选租约 + 每个候选行 `for update` | （R4-4 修法）对本版本 `status='candidate'` 的行：先持久化新算出的 `checks/checks_passed`（`p_rows = [{candidate_id, checks, checks_passed}]`）；对 `checks_passed=true` 的行，随后执行同文档、`fingerprint` 相同、`decision_kind='human'`、`status in ('confirmed','promoted')` 的人工决定继承查找，有则在同一语句内原子套用继承确认：`status='confirmed'`、`decision_kind='human'`、`decided_by = 旧.decided_by`、`decided_at = now()`、`inherited_from = 旧.candidate_id`；检查失败的行保持 `candidate`。已决定的行不可改（`raise 'decided'`）。这是 `checks` 列唯一的写入路径；返回 `{written, inherited}` |
 | `finish_candidates(p_extraction, p_batch, p_status)` | 抽取版本行锁 + 候选租约 | `pending|failed → done|failed`；清租约 |
 | `request_candidates_regen(p_filter jsonb, p_actor uuid)` → int | 抽取版本行锁；管理员/脚本 | 把满足 §7.3 资格（`candidates_role <> 'none'` 且 `extraction_id = 所属文档 current_extraction_id`）且 `candidates_status in ('done','failed','exhausted')` 的版本置 `pending`、`candidates_attempts = 0`；`p_filter` 限定来源/发行人/文档 |
 | `insert_citation(p_row jsonb)` → uuid | 无锁（页不可变） | 校验 `char_end <= char_count`、`snippet = substr(text, char_start+1, char_end-char_start)`、`text_hash` 一致；插入 |
 | `publish_citations(p_ids uuid[])` → int | 无 | 只对 `created_by in ('human','module')` 且文档 `permission='public'` 的行 `visibility internal→public`；否则 `raise 'not_publishable'` |
-| `insert_candidates(p_extraction, p_batch, p_rows jsonb)` → jsonb | 抽取版本行锁 + 候选租约 | 校验每行引用的每个 `citation_id` 存在且 `extraction_id = p_extraction`，`document_id` 等于版本所属文档；`insert … on conflict (extraction_id, kind, extractor_ref, natural_key) do nothing`；对每个新行执行**决定继承**（§7.3）：查同文档、`fingerprint` 相同、`decision_kind='human'`、`status in ('confirmed','promoted')` 的旧候选，有则 `status='confirmed'`、`decision_kind='human'`、`decided_by = 旧.decided_by`、`decided_at = now()`、`inherited_from = 旧.candidate_id`（自动决定永不继承）；返回 `{inserted, inherited}` |
-| `decide_candidate(p_candidate, p_decision jsonb)` → jsonb | 候选行 `for update` | `{kind:'human', decided_by, status:'confirmed'|'rejected'|'candidate'}`：`candidate→confirmed` 要求 `checks_passed`（否则 `raise 'not_eligible'`）；`candidate→rejected`；`confirmed→candidate` 要求无 `candidate_publications` 行；`{kind:'auto', approval_id}`：要求 `status='candidate' and extractor_kind='rule' and checks_passed`、审批行未撤销且 `extractor_ref/extractor_version/table_algo_version/code_version` 与候选的 `extractor_ref` 及其 `input_snapshot` 完全相等、`payload->>'concept' = any(concepts)` → `confirmed` |
-| `stage_candidate_publication(p_candidate, p_pub_gen, p_run, p_fact_id)` | 候选行锁 | 要求 `status in ('confirmed','promoted')` 且本候选在 `p_pub_gen` 下无 `staged|published` 行；自动决定的候选再校验其审批行仍未撤销（否则 `raise 'approval_revoked'`，候选回 `candidate`）；插入 `candidate_publications(staged)` |
-| `finish_candidate_publications(p_run)` → int | 候选行锁（批量） | 本运行全部 `staged → published`，对应候选 `confirmed → promoted` |
+| `insert_candidates(p_extraction, p_batch, p_rows jsonb)` → jsonb | 抽取版本行锁 + 候选租约 | 校验每行引用的每个 `citation_id` 存在且 `extraction_id = p_extraction`，`document_id` 等于版本所属文档；`insert … on conflict (extraction_id, kind, extractor_ref, natural_key) do nothing`；（R4-4 修法）**每个新行一律以 `candidate` 插入，决定字段为空，本函数不套用任何继承**——人工决定的继承由 `write_candidate_checks` 在检查通过后原子套用（自动决定永不继承）；返回 `{inserted}` |
+| `decide_candidate(p_candidate, p_decision jsonb)` → jsonb | 候选行 `for update` | `{kind:'human', decided_by, status:'confirmed'|'rejected'|'candidate'}`：`candidate→confirmed` 要求 `checks_passed`（否则 `raise 'not_eligible'`）；`candidate→rejected`；`confirmed→candidate` 要求无 `candidate_publications` 行；`{kind:'auto', approval_id}`：要求 `status='candidate' and extractor_kind='rule' and checks_passed`、审批行未撤销、`approval.extractor_ref = candidate.extractor_ref`，且 `approval.extractor_version/table_algo_version/code_version` 与候选所属 **`document_extractions` 行**（经 `extraction_id` 连接）的三列完全相等、`payload->>'concept' = any(concepts)` → `confirmed` |
+| `stage_candidate_publication(p_candidate, p_pub_gen, p_run, p_fact_id)` | 候选行锁 | 要求 `status in ('confirmed','promoted')`；本候选在 `p_pub_gen` 下：无行 → 插入 `staged`；`abandoned` → 更新为 `staged`（新 `run_id/fact_id`）；`staged|published` → `raise 'already_staged'`（调用方按 §7.7 的筛选规则不会走到这里）；自动决定的候选再校验其审批行仍未撤销（否则 `raise 'approval_revoked'`，候选回 `candidate`） |
+| `finish_candidate_publications(p_run)` → jsonb | 候选行锁（批量；迁移二，因需读 `financial_facts`） | 要求该运行 `fact_sync_runs.status='published'`；对本运行每条 `staged` 行**逐条判定**：其 `fact_id` 的事实 `status='ok'` → `published`，候选 `confirmed→promoted`；事实 `quarantined` → 保持 `staged`；事实不存在 → `abandoned`。返回 `{published, still_staged, abandoned}`。同一函数用于正常完成与崩溃恢复（幂等） |
 | `abandon_candidate_publications(p_run)` → int | 同上 | 本运行全部 `staged → abandoned`（候选状态不变） |
-| `assert_run_evidence_complete(p_run)` | 无 | 对本运行（`candidate_publications.run_id = p_run`）每个 `fact_id`：`fact_citations` 必须含 `value`、`label`、`unit` 各恰好一条与 `period` 至少一条，且每条引用的文档等于该事实 filing 的 `primary_document_id`、抽取版本等于该文档 `current_extraction_id`；任一不满足 `raise 'evidence_incomplete'` |
-| `insert_fact_citations(p_run, p_rows jsonb)` → int | 无（迁移二） | 校验同上的逐行条件（文档公共、文档 = filing 的 `primary_document_id`、抽取版本 = 当前、事实 `status='staged'` 且属于 `p_run`）；插入 |
+| `publish_hk_run(p_issuer, p_batch, p_run, p_manifest uuid[])` → int | 迁移二；（R4-2 修法）锁契约：**在证据校验之前，先锁该发行人/HK 的 `fact_sync_scope` 行 `FOR UPDATE`，校验当前批次租约有效且 `p_run` 属于本发行人、本市场且状态为 `staged`；然后锁本运行或 manifest 引用的全部 `filings`（按 `filing_id` 排序）`FOR UPDATE`；再锁这些 filing 引用的 `disclosure_documents` 行（按 `document_id` 排序）`FOR UPDATE`。只有在取得这些锁之后才执行证据校验，然后在不释放任何锁的情况下调用规格二 `publish_sync_run(p_run, p_manifest)`，所有锁持有到事务结束。** 校验失败则整个事务回滚，事实不发布。（R4-7 修法）发布成功时在同一事务内原子写入 `hk_materialization_due(issuer_id, run_id, set_at)`（`on conflict (issuer_id) do update`） | 这是港股事实**唯一**的发布入口（`runHkFactsSync` 不直接调用 `publishRun`），证据完整性与绑定在发布事务内被锁保护 |
+| `assert_run_evidence_complete(p_run)` | 只在 `publish_hk_run` 内、取锁之后调用 | （R4-3 修法）输入谓词 **`run_id = p_run AND status IN ('staged','quarantined')`**（不是按发布行迭代）：对**该集合中的每个事实**：`fact_citations` 必须含 `value`、`label`、`unit` 各恰好一条与 `period` 至少一条；每条引用的文档 = 该事实 filing 的 `primary_document_id`，抽取版本 = 该文档 `current_extraction_id`，引用 `integrity='ok'`；且该集合中的每个事实恰有一条本运行的 `candidate_publications(staged)` 指向它；任一不满足 `raise 'evidence_incomplete'`。**隔离不豁免发布时证据校验：任一被隔离事实缺角色、绑定无效或缺发布关联都会中止整个运行的发布** |
+| `clear_materialization_due(p_issuer, p_state_rev bigint)` | 迁移二；`hk_materialization_due` 行锁 | （R4-7 修法）只有当 `materialize(issuer,'HK')` 成功且其所依据的 `state_rev` 不小于标记行写入时的 `fact_state_rev` 时删除标记；否则不删（标记保持，`promotionDue` 条件 (d) 会再次选中该发行人） |
+| `insert_fact_citations(p_run, p_rows jsonb)` → int | 无（迁移二） | 校验逐行条件（文档公共、文档 = filing 的 `primary_document_id`、抽取版本 = 当前、事实 `status='staged'` 且属于 `p_run`、角色集合合法）；插入 |
 | `read_documents(p_issuer, p_as_of date, p_source, p_doc_class, p_from, p_to, p_cursor jsonb, p_limit int)` → jsonb | `security invoker`（RLS 生效） | 信封 `{rows, next_cursor, row_count}`：在 `available_date <= p_as_of` 的行中按 `(source, source_ref)` 取最高 `source_version`，再按 `available_date between p_from and p_to` 过滤，按 `(available_at desc, document_id desc)` 游标分页；`p_limit ≤ 1000` |
 
 ### 4.9 迁移二：`fact_citations` 与规格二表的衔接
@@ -367,8 +370,15 @@ fact_citations
   primary key (fact_id, role, citation_id)
 
 alter table filings add column if not exists primary_document_id uuid references disclosure_documents(document_id) on delete restrict;
+
+hk_materialization_due                        -- （R4-7 修法）发行人级"待物化"持久标记
+  issuer_id    uuid primary key references issuers(issuer_id) on delete cascade
+  run_id       uuid not null
+  state_rev    bigint not null                 -- 写入时的 fact_state_rev(issuer,'HK')
+  set_at       timestamptz not null default now()
 ```
 
+- `hk_materialization_due` 只由 `publish_hk_run` 原子写入、只由 `clear_materialization_due` 在修订号校验通过的成功物化后删除；无角色可直接写。
 - 插入只经 `insert_fact_citations`（§4.8）；触发器禁止 `update` 与非级联 `delete`（`delete` 仅当 `pg_trigger_depth() > 0`，即由 `financial_facts` 的级联触发）。
 - 规格二枚举的**加法**修改（§16；若规格二在落地前自行纳入则本迁移对应语句为空操作）：`filings.market`、`financial_facts.market`、`fact_sync_runs.market`、`fact_sync_scope.market` 加 `'HK'`；`filings.source` 加 `'hkex'`；`filings.origin` 加 `'hkex'`。
 - 港股 `filings`：`source='hkex'`，`origin='hkex'`，`market='HK'`，**`source_ref = 'hkex:<文件标识>:v<source_version>'`**（如 `hkex:2026090300863_c:v1`）：每个中文文档行恰好一个 filing；替换版本是另一次申报，有自己的 `available_date`（= 文档 `available_date`，替换版本为观察日，不回溯）；英文版不建 filing。`form_type = 'annual'|'semiannual'`，`period_end`、`fiscal_year/fiscal_period` 来自文档行，`document_ref = document_id`，`document_url = source_url`，`url = source_url`，`primary_document_id = document_id`。同日冲突：原版与替换版同一 `available_date` 且同 K 不同值时，由规格二的规划器构造 `same_day_conflict`（§7.7），本规格不另设规则。
@@ -396,9 +406,9 @@ export interface DocumentsDb {
   // 写（全部 rpc，与 §4.8 一一对应）
   reconcileScope; claimSyncLease; insertDocumentVersion; insertUploadDocument; advanceCursor; releaseSyncLease; reclassifyDocument;
   claimExtractLease; finishExtract; failExtract; requestExtract;
-  claimCandidatesLease; finishCandidates; requestCandidatesRegen;
+  claimCandidatesLease; finishCandidates; requestCandidatesRegen; writeCandidateChecks;
   insertCitation; publishCitations; insertCandidates; decideCandidate;
-  stageCandidatePublication; finishCandidatePublications; abandonCandidatePublications; assertRunEvidenceComplete; insertFactCitations;
+  stageCandidatePublication; finishCandidatePublications; abandonCandidatePublications; publishHkRun; insertFactCitations;
   // 读：每个方法要么分页，要么有明示上限的"完整读"
   documentVersions(source, sourceRef, opts: {cursor?, limit}): Promise<Page<DocumentRow>>;
   knownSourceRefs(issuer, source, refs: string[]): Promise<Set<string>>;          // refs 分块 ≤ 500，每块一次请求
@@ -408,9 +418,12 @@ export interface DocumentsDb {
   pagesOf(extractionId, pageNos: number[]): Promise<PageRow[]>;                   // 显式页号，≤ 100 个
   citationById(id): Promise<CitationRow|null>; citationsByIds(ids: string[]): Promise<CitationRow[]>;   // ≤ 100
   candidatesOf(opts: {extractionId} | {status} | {issuer, status}, page: {cursor?, limit}): Promise<Page<CandidateRow>>;
-  publicationsOf(candidateIds: string[]): Promise<PublicationRow[]>;             // ≤ 100
-  approvalsFor(extractorRef): Promise<ApprovalRow[]>;                            // 同一 extractor_ref 的审批行数以个位计，完整读
-  storedDue(limit): Promise<DocumentRow[]>; candidatesDue(limit): Promise<ExtractionRow[]>; promotionDue(limit): Promise<{issuerId}[]>;
+  publicationsOf(opts: {candidateIds: string[]} | {runId}, page: {cursor?, limit}): Promise<Page<PublicationRow>>;   // candidateIds ≤ 100，结果按 (candidate_id, pub_gen) 游标分页
+  approvalsFor(extractorRef, opts: {limit: 100}): Promise<ApprovalRow[]>;         // 超过 limit 条 → 抛 DocumentsDbError('too_many_approvals')，调用方停止自动决定
+  storedDue(limit): Promise<DocumentRow[]>;          // status='stored' 且租约空/过期；不按 attempts 过滤（终态转换在 claim 内）
+  candidatesDue(limit): Promise<ExtractionRow[]>;    // candidates_status in ('pending','failed') 且租约空/过期且 extraction_id = 所属文档 current_extraction_id；不按 attempts 过滤
+  promotionDue(pubGen, limit): Promise<{issuerId}[]>;   // （R4-5 修法）发行人满足任一条件：(ab) 存在活动候选 status in ('confirmed','promoted') 且不存在 candidate_publications 行满足 pub_gen = pubGen and state in ('staged','published')；(c) 在 pubGen 下有 staged 行（崩溃或隔离后的恢复）；(d)（R4-7 修法）hk_materialization_due 存在该发行人的标记
+  clearMaterializationDue(issuer, stateRev): Promise<boolean>;   // rpc clear_materialization_due
   scopeDue(source, now, limit): Promise<ScopeRow[]>;
 }
 export interface ObjectStore {
@@ -549,11 +562,11 @@ type Cursor = { segment: string|null; index: number; item_attempts: number }   /
 
 ### 7.3 抽取、候选与晋升的调度
 
-- `runDocumentsExtract(deps, {limit, documentIds?, dryRun, triggeredBy})`：批次 `producer='documents-extract'`、`dataset='documents.extract'`。`storedDue(limit)`（`status='stored'`，`extract_attempts < 3`，租约空或过期，按 `created_at`），逐文档（剩余预算 < 90 s 不再开始）：`claimExtractLease(doc, batch, 600)`（计数点）→ `store.get` → `extractPdf/extractHtml`（超预算 → `failExtract(extract_timeout)`；抛错 → `failExtract(extract_error)`）→ `store.put(pages.json)`（失败 → 不调 `finishExtract`，租约到期后重试，计数已在 claim）→ `finishExtract`。`candidates_role` 在函数内判定：`market='HK' and doc_class in ('annual_report','interim_report') and has_text_layer` → `language='zh'` ? `primary` : `comparison`；否则 `none`；`role <> 'none'` → `candidates_status='pending'`。新鲜度 `recordAttempt('documents.extract', {ok, cadence:'daily'})`。
+- `runDocumentsExtract(deps, {limit, documentIds?, dryRun, triggeredBy})`：批次 `producer='documents-extract'`、`dataset='documents.extract'`。`storedDue(limit)`（（R4-6 修法）`status='stored'`，租约空或过期，按 `created_at` 排序；**不按 attempts 过滤**），逐文档（剩余预算 < 90 s 不再开始）：`claimExtractLease(doc, batch, 600)`（计数点）；**返回 false 则跳过本文档的抽取与后续全部写入——claim 可能已把它终态转换为 `extract_failed`** → `store.get` → `extractPdf/extractHtml`（超预算 → `failExtract(extract_timeout)`；抛错 → `failExtract(extract_error)`）→ `store.put(pages.json)`（失败 → 不调 `finishExtract`，租约到期后重试，计数已在 claim）→ `finishExtract`。`candidates_role` 在函数内判定：`market='HK' and doc_class in ('annual_report','interim_report') and has_text_layer` → `language='zh'` ? `primary` : `comparison`；否则 `none`；`role <> 'none'` → `candidates_status='pending'`。新鲜度 `recordAttempt('documents.extract', {ok, cadence:'daily'})`。
 - `runDocumentsCandidates(deps, {limit, extractionIds?, dryRun, triggeredBy})`：批次 `producer='documents-candidates'`、`dataset='documents.candidates'`、`tool_versions={hk_label_gen, hk_rules_version}`。三个阶段，各受预算约束：
-  1. **候选**：`candidatesDue(limit)`（`candidates_status in ('pending','failed')`，`candidates_attempts < 3`，租约空或过期；`extraction_id = 所属文档 current_extraction_id`）→ `claimCandidatesLease(…, 600)`（计数点）→ `store.get(pages_json_path)` → §7.5（`comparison` 版本同样产候选，只用于 §7.6 的 `en_cross_check`，永不可晋升）→ `insertCandidates`（幂等；含决定继承）→ 对本版本全部候选跑 §7.6 检查并写 `checks` → `finishCandidates(done)`；抛错 → `finishCandidates(failed)`。
-  2. **自动决定**：对 `status='candidate' and checks_passed and extractor_kind='rule'` 的候选（不限本批次——崩溃后重跑即可补上），若 `approvalsFor(extractor_ref)` 有未撤销且版本匹配的审批行且概念在范围内 → `decideCandidate({kind:'auto', approval_id})`；幂等。
-  3. **晋升**：`promotionDue(limit)` = 存在 `status='confirmed'` 且在当前 `HK_PUB_GEN` 下无 `staged|published` 发布行的候选的发行人 → 逐发行人 `runHkFactsSync`（§7.7）。人工确认的候选也由这一阶段兜底（§9 的确认路由会立即触发一次，失败则等 cron）。
+  1. **候选**：`candidatesDue(limit)`（§4.11；attempts 的终态转换由 `claimCandidatesLease` 完成）→ `claimCandidatesLease(…, 600)`（计数点；返回 false 则跳过）→ `store.get(pages_json_path)` → §7.5（`comparison` 版本同样产候选，只用于 §7.6 的 `en_cross_check`，永不可晋升）→ `insertCandidates`（幂等；含决定继承）→ 对本版本 `status='candidate'` 的候选跑 §7.6 检查 → `writeCandidateChecks`（唯一写入路径；已决定的行不重算）→ `finishCandidates(done)`；抛错 → `finishCandidates(failed)`。
+  2. **自动决定**：对 `status='candidate' and checks_passed and extractor_kind='rule'` 的候选（不限本批次——崩溃后重跑即可补上），若 `approvalsFor(extractor_ref)` 有未撤销且与候选所属抽取版本行三个版本列匹配的审批行且概念在范围内 → `decideCandidate({kind:'auto', approval_id})`；幂等。
+  3. **晋升**：`promotionDue(HK_PUB_GEN, limit)`（§4.11 的三类条件：待首发、待新代、待恢复）→ 逐发行人 `runHkFactsSync`（§7.7）。人工确认的候选也由这一阶段兜底（§9 的确认路由会立即触发一次，失败则等 cron）。
   新鲜度 `recordAttempt('documents.candidates', {ok, cadence:'daily'})`。
 - `HK_LABEL_GEN`/`HK_RULES_VERSION` 升级：`scripts/documents/candidates.ts --regenerate [--filter …]` 调 `request_candidates_regen`（只对当前抽取版本、`role <> 'none'` 的版本）；新 `extractor_ref` 产生新候选行（旧行保留）；**决定继承**只对人工决定、按 `fingerprint`（自然键 + 完整 payload + 四类引用片段）完全相同时发生，写新的 `decided_at` 与 `inherited_from`；自动决定永不继承（审批绑定旧版本）。`EXTRACTOR_VERSION` 升级：`request_document_extract` 对每份文档开新版本，新版本的候选从零生成，同样走继承。
 
@@ -601,12 +614,15 @@ type Cursor = { segment: string|null; index: number; item_attempts: number }   /
 
 **活动候选集**：对一份港股中文文档 = `extraction_id = current_extraction_id` 且 `extractor_ref = 当前 extractor_ref` 且 `status in ('confirmed','promoted')` 且满足资格（`kind='financial_fact'`、`extractor_kind='rule'`、文档 `permission='public'`、`source='hkexnews'`、`language='zh'`、`issuer_id` 等于运行发行人、`checks_passed`）的候选；其他代/版本的候选不参与（它们的发布行留作历史）。
 
-运行（一个发行人一次）：
-1. `reconcileScope('HK', [{issuer, priority: 0, fetch_key: hkex_stock_code_primary, reasons:['documents']}])` → `claimLease(issuer,'HK',batch,600)` → `beginRun(issuer,'HK',batch, HK_PUB_GEN)`。
-2. 对该发行人每份有活动候选集的文档（以及文档虽有候选但活动集为空的——零输出 filing 也进 manifest，使旧代行被新代"隐藏"）：`stageFilings`（§4.9 的港股 filing）；候选 → 事实行（`concept/statement/period/duration/value/unit/consolidation` 来自 `payload`，`source_concept` = 标签片段，`available_date` = 文档 `available_date`，`raw_hash` = `content_sha256`，`fact_id` 由写入端生成）；**规划用规格二的 `planFactWrites` + `openConflicts` 原样**（重复、同日冲突、`versioned` 计数都由它决定；港股原版与替换版同日不同值即进 `same_day_conflict`）；`stageFacts(run, rows)`（§16：返回每个输入键的 `fact_id` 与 `inserted|duplicate` 结果）→ 对每个候选 `stageCandidatePublication(candidate, HK_PUB_GEN, run, fact_id)`（重复行也登记，`fact_id` 为既有行）。
-3. **证据先于发布**：对本运行新暂存的每个事实 `insertFactCitations(run, rows)`（值、标签、单位各一条，期间证据数组每条一行）；`assertRunEvidenceComplete(run)`；任一失败 → `abandonRun`（级联删除未发布事实与其证据）→ `abandonCandidatePublications(run)` → 该发行人 `failed`（`evidence_failed`）。
-4. 规格二 `identity_bs/identity_gp` 规则（输入 = 本运行新行 ∪ 该 filing 当前 ok 行）→ `quarantineFacts` → `publishRun(manifest)`（一个事务：事实变 `ok`；`fact_citations` 与抽取器引用随 §4.12 策略同时可见）→ `finishCandidatePublications(run)`（崩溃在此之前：下次运行发现候选在本代已有 `staged` 行且其事实已 `ok` → 直接 `finishCandidatePublications`；事实已被删除 → `abandonCandidatePublications` 后重新暂存）→ `materialize(issuer, 'HK')` → `releaseLease`。
-5. 被规格二隔离的行：其候选的发布行停在 `staged`（事实 `quarantined`），规格二隔离处理提升为 `ok` 后，下次运行按第 4 步补 `finish`。`publishRun` 抛错 → `abandonRun` + `abandonCandidatePublications`，`publish_failed`。
+运行（一个发行人一次；每一步幂等，崩溃后重跑从第 0 步开始）：
+0. **租约先于恢复**（R4-1 修法）：先 `reconcileScope('HK', [{issuer, priority: 0, fetch_key: hkex_stock_code_primary, reasons:['documents']}])`，再为当前批次取得该发行人的 HK 租约 `claimLease(issuer,'HK',batch,600)`；返回 false → 以 `skipped_summary(leased)` 退出，**不做任何恢复写入**。持有该租约后执行恢复：对该发行人在 `HK_PUB_GEN` 下所有 `staged` 发布行，按 `run_id` 分组：运行 `published` → （R4-7 修法）先置本次运行的 `needs_materialization=true`，再 `finishCandidatePublications(run)`（逐条判定：事实 `ok` → `published`；`quarantined` → 保持 `staged`，本次运行不再暂存该候选；事实不存在 → `abandoned`）；运行 `staged`（上次崩溃在发布前）→ `abandonRun(run)`（级联删证据）+ `abandonCandidatePublications(run)`；运行 `abandoned` → `abandonCandidatePublications(run)`。所有恢复中的废弃调用都以当前租约持有者身份执行。`hk_materialization_due` 存在本发行人标记 → 同样置 `needs_materialization=true`。恢复完成后才 `beginRun(issuer,'HK',batch, HK_PUB_GEN)`。**每条正常退出路径（含 `nothing_to_publish`）都释放租约。**
+1. （并入第 0 步。）
+2. **本次暂存的候选** = 活动候选集中在 `HK_PUB_GEN` 下**没有** `staged|published` 行的候选（无行或 `abandoned`）；活动集中已 `published` 的候选不再暂存（它们的事实已是 `ok`，同代下规格二也会判为重复），`staged` 且事实 `quarantined` 的候选等待规格二隔离处理。对该发行人每份有活动候选集的文档（以及文档虽有候选但活动集为空的——零输出 filing 也进 manifest，使旧代行被新代"隐藏"）：`stageFilings`（§4.9 的港股 filing）；候选 → 事实行（`concept/statement/period/duration/value/unit/consolidation` 来自 `payload`，`source_concept` = 标签片段，`available_date` = 文档 `available_date`，`raw_hash` = `content_sha256`，`fact_id` 由写入端生成）；**规划用规格二的 `planFactWrites` + `openConflicts` 原样**（重复、同日冲突、`versioned` 计数都由它决定；港股原版与替换版同日不同值即进 `same_day_conflict`）；`stageFacts(run, rows)`（§16：返回每个输入键的 `fact_id` 与 `inserted|duplicate` 结果）→ 对每个本次暂存的候选 `stageCandidatePublication(candidate, HK_PUB_GEN, run, fact_id)`（结果为 `duplicate` 的候选也登记，`fact_id` 为既有行；既有行若已 `ok` 则第 4 步直接判为 `published`）。本次没有任何候选可暂存且没有零输出 filing → （R4-7 修法）废弃刚创建的空运行；若 `needs_materialization`，先调用 `materialize(issuer,'HK')`（成功后 `clearMaterializationDue(issuer, stateRev)`），再释放租约并以 `skipped_summary(nothing_to_publish)` 返回。物化失败必须独立于候选发布状态可持久重试：标记保留，`promotionDue` 条件 (d) 再次选中。
+3. **证据**：对本运行新暂存的每个事实 `insertFactCitations(run, rows)`（值、标签、单位各一条，期间证据数组每条一行）；失败 → `abandonRun`（级联删除未发布事实与其证据）→ `abandonCandidatePublications(run)` → 该发行人 `failed`（`evidence_failed`）。
+4. 规格二 `identity_bs/identity_gp` 规则（输入 = 本运行新行 ∪ 该 filing 当前 ok 行）→ `quarantineFacts` → **`publishHkRun(issuer, batch, run, manifest)`**（一个事务：先 `assert_run_evidence_complete`（对运行内全部 staged 事实），再规格二 `publish_sync_run`；证据不全则整个事务回滚、事实不发布，`evidence_incomplete` → `abandonRun` + `abandonCandidatePublications`，`failed`）→ `finishCandidatePublications(run)`（逐条判定，隔离行保持 `staged`）→ `materialize(issuer, 'HK')`（成功后 `clearMaterializationDue(issuer, stateRev)`；失败则标记保留、`promotionDue` 条件 (d) 重试）→ `releaseLease`。
+5. 被规格二隔离的行：其候选的发布行停在 `staged`（事实 `quarantined`），规格二隔离处理提升为 `ok` 后，`promotionDue` 条件 (c) 使下次运行在第 0 步补 `published`。`publishHkRun` 抛其他错 → `abandonRun` + `abandonCandidatePublications`，`publish_failed`。
+
+**同代第二次确认**：新确认的候选在下次运行按第 2 步单独暂存（已发布的不重复暂存），manifest 仍含其 filing，`filings.mapping_gen` 不变（规格二 `publishRun` 对相等的代不抛 `mapping_gen_regression`）。
 
 `raw_hash` 对港股的定位规则：桶内 `blobs/{content_sha256}.pdf` 的 `fact_citations(role='value')` 所指抽取版本、页与 bbox。
 
@@ -698,7 +714,8 @@ ingestUpload(deps, {ownerUserId, bytes, filename, mime: 'application/pdf', permi
 | 港股候选：定位/期间/单位/标签歧义、非综合报表 | 不产候选 | 信息码 `locate_ambiguous` / `period_unparsed` / `unit_ambiguous` / `label_ambiguous` / `not_consolidated`（各一条汇总，`key=extraction_id`） | 信息 |
 | 港股候选：阻断检查失败 | 不可晋升；恒等式失败另写隔离 `hk_identity_*` | — | `quarantined+1` |
 | 港股候选：比较数/中英不一致 | 可晋升；隔离 `hk_restated_comparative` / `hk_en_zh_mismatch` | 信息码 `restated_comparative` / `en_zh_mismatch` | `quarantined+1` |
-| 晋升：证据不完整 / `publishRun` 抛错 | `abandonRun` + `abandonCandidatePublications` | `evidence_failed` / `publish_failed` | `failed+1` |
+| 晋升：证据写入失败 / `publishHkRun` 证据校验回滚 / 其他发布错误 | `abandonRun` + `abandonCandidatePublications` | `evidence_failed` / `evidence_incomplete` / `publish_failed` | `failed+1` |
+| 晋升：无候选可暂存 | `abandonRun` | `skipped_summary(nothing_to_publish)` | 信息 |
 | 晋升：规格二规则隔离 | 发布行停在 `staged` | 规格二隔离项 | `quarantined+1` |
 | 决定：不合格候选 / 审批撤销 | 409 `not_eligible` / 候选回 `candidate` | `approval_revoked` | — |
 | 引用越界或片段为空 | 拒绝 | `invalid_citation` | — |
@@ -725,7 +742,7 @@ ingestUpload(deps, {ownerUserId, bytes, filename, mime: 'application/pdf', permi
 - `extract/html.test.ts`：复用 `edgar-8k-pltr-20260803.htm`；分页标记切页；无截断。
 - `citations.test.ts`：`cite/verify`、越界与空片段拒绝、码点 vs UTF-16 夹具、`integrity`、`currentExtraction`、`publish_citations` 只对 human/module。
 - `decimal.test.ts`：字符串乘 10 的幂、带符号加减、20 位整数。
-- `hk-facts/*.test.ts`：`locate`、`period`（年度/六個月、英文、中文数字、BS instant、中期 BS 只含年份 → 不产、期间证据两条）、`scale`（最长匹配、`港元` 不触发 `元`、只有货币 → null、eps 子单位）、`labels`、`values`、`checks`（blocking/非 blocking、显式数值转换、`identity_cf` 2%）、`decide`（人工 `checks_passed=false` → `not_eligible`；自动只在审批四版本完全相等；llm 永不；撤销后 `approval_revoked`）、`promote`（活动候选集；零输出 filing 进 manifest；`HK_PUB_GEN` 升级替换旧值；证据先于发布；`evidence_incomplete`；`publishRun` 失败后发布行 `abandoned`；崩溃在 `finishCandidatePublications` 前的恢复；规划器同日冲突）、`regenerate`（人工决定按 `fingerprint` 继承、自动不继承）。
+- `hk-facts/*.test.ts`：`locate`、`period`（年度/六個月、英文、中文数字、BS instant、中期 BS 只含年份 → 不产、期间证据两条）、`scale`（最长匹配、`港元` 不触发 `元`、只有货币 → null、eps 子单位）、`labels`、`values`、`checks`（blocking/非 blocking、显式数值转换、`identity_cf` 2%）、`decide`（人工 `checks_passed=false` → `not_eligible`；自动只在审批四版本完全相等；llm 永不；撤销后 `approval_revoked`）、`promote`（活动候选集；同代第二次确认只暂存新候选；零输出 filing 进 manifest；`HK_PUB_GEN` 升级替换旧值；`publishHkRun` 证据不全回滚；混合结果运行的逐条判定（`published/still_staged/abandoned`）；`abandoned→staged` 重暂存；第 0 步对三种运行状态的恢复；`promotionDue` 三类条件；规划器同日冲突；第三次崩溃后 `claim` 收尾为 `extract_failed/exhausted`；`writeCandidateChecks` 对已决定行拒绝）、`regenerate`（人工决定按 `fingerprint` 继承、自动不继承）。
 - 路由测试：参数、`asOf` 选版、游标、缓存头按类别（含 owner → 匿名、owner A → owner B）、`integrity/currentExtraction`、licensed 非持有人 404、`file` 未登录 401、管理接口的媒体类型/Origin、候选 POST 幂等与 409、审批 422。
 
 ### 11.2 数据库（`test:db`，全部 critical）
@@ -776,7 +793,8 @@ ingestUpload(deps, {ownerUserId, bytes, filename, mime: 'application/pdf', permi
 6. anon 与 owner B 读 owner A 的 licensed 文档 → 404；owner A → 200、`private, no-store`、`research_audit_log` 多一行。
 7. 断网运行三个 cron：批次 `failed`，内容表与桶无新行/对象。
 8. 自动决定：无审批行 → 候选全部 `candidate`；`precision=0.94` 的审批 → 422；合格审批后 → 范围内概念 `confirmed(auto)` 并在同一 cron 运行内发布；`HK_LABEL_GEN` 升级后 → 新候选无自动决定，人工决定按 `fingerprint` 继承。
-9. `HK_PUB_GEN` 升级后一次运行：同 K 新值以新代发布，旧代行 `asOf` 回放仍可见（规格二语义）。
+9. `HK_PUB_GEN` 升级后一次运行：同 K 新值以新代发布；旧代行保留为历史，`asOf` 读取（`read_facts` 只看 `filings.mapping_gen` 当前代）不再返回它们，但 `GET /api/facts/0268.HK?factIds=<旧 fact_id>` 仍能取回（规格二 `factsByIds` 不限代），其 `fact_citations` 仍可见。
+10. 混合结果运行：一次运行中 3 条新行发布、1 条被规格二 `identity_bs` 隔离 → `finishCandidatePublications` 返回 `{published:3, still_staged:1, abandoned:0}`，被隔离候选保持 `confirmed`、发布行 `staged`；管理员接受隔离项后下一次 cron 运行第 0 步把它转为 `published`。
 
 ---
 
@@ -824,7 +842,7 @@ ingestUpload(deps, {ownerUserId, bytes, filename, mime: 'application/pdf', permi
 
 | 对方 | 本规格需要 | 本规格提供 |
 |---|---|---|
-| 规格二（事实库） | (a) 四处 `market` 枚举加 `HK`，`filings.source/origin` 加 `hkex`；(b) `filings.primary_document_id` 与其列级 update 例外、触发器允许列；(c) **`stage_facts(run, rows jsonb)` 返回 `jsonb`：`{<input_key>: {fact_id, outcome:'inserted'|'duplicate'}}`，`input_key` 由调用方在每行提供，`fact_id` 由调用方生成随行传入（重复时返回既有行 id）；分块 ≤ 500 时每块返回各自映射；三种 `FactsDb` 实现与测试同步更新；(d) `FactsDb` 的 `reconcileScope/claimLease/beginRun/stageFilings/stageFacts/quarantineFacts/publishRun/abandonRun/releaseLease/factsByIds/readFacts/replaceMetrics/openConflicts` 与 `planFactWrites`、`materialize(issuer, market)` 可被 §7.7 以 `market='HK'` 调用；`abandon_sync_run`/`begin_sync_run` 删除未发布事实时允许 `fact_citations` 级联（本规格以 `on delete cascade` 配合）；(e) `/api/facts`、`/api/filings` 的 ticker 路由：`.HK` 后缀 → `market='HK'`；(f) 派生层对 `market='HK'` 的口径：`gross_margin = gross_profit / revenue`（无 `gross_profit` 时 `(revenue − cost_of_revenue)/revenue`）、`net_margin = net_income_parent / revenue`、`basis='standard'`；`fcf/borrowings_total/capex/q_single_*/ttm_*/roe` 因概念未抽取或只有 12M/6M 期间而缺失——本规格**不请求**新增年度 ROE 指标，港股 `roe` 在本期保持缺失；(g) `/api/facts` 接受 `citations=1`；(h) `INFO_CODES` 的 `deadline_hit/coverage_summary` 共用 | `fact_citations`（随事实级联）；港股 `filings`/`financial_facts` 的唯一写入者（经规格二函数）；A 股 `filings.document_ref` 反查 `document_id` |
+| 规格二（事实库） | (a) 四处 `market` 枚举加 `HK`，`filings.source/origin` 加 `hkex`；(b) `filings.primary_document_id` 与其列级 update 例外、触发器允许列；(c) **`stage_facts(run, rows jsonb)` 返回 `jsonb`：`{<input_key>: {fact_id, outcome:'inserted'|'duplicate'}}`，`input_key` 由调用方在每行提供，`fact_id` 由调用方生成随行传入（重复时返回既有行 id）；分块 ≤ 500 时每块返回各自映射；三种 `FactsDb` 实现与测试同步更新；(d) `FactsDb` 的 `reconcileScope/claimLease/beginRun/stageFilings/stageFacts/quarantineFacts/publishRun/abandonRun/releaseLease/factsByIds/readFacts/replaceMetrics/openConflicts` 与 `planFactWrites`、`materialize(issuer, market)` 可被 §7.7 以 `market='HK'` 调用；`abandon_sync_run`/`begin_sync_run` 删除未发布事实时允许 `fact_citations` 级联（本规格以 `on delete cascade` 配合）；`publish_sync_run` 可被本规格的 `publish_hk_run`（同为 `security definer`，service_role 调用）在同一事务内调用，且对 `filings.mapping_gen = run.mapping_gen`（同代再次发布）不抛 `mapping_gen_regression`；(e) `/api/facts`、`/api/filings` 的 ticker 路由：`.HK` 后缀 → `market='HK'`；(f) 派生层对 `market='HK'` 的口径：`gross_margin = gross_profit / revenue`（无 `gross_profit` 时 `(revenue − cost_of_revenue)/revenue`）、`net_margin = net_income_parent / revenue`、`basis='standard'`；`fcf/borrowings_total/capex/q_single_*/ttm_*/roe` 因概念未抽取或只有 12M/6M 期间而缺失——本规格**不请求**新增年度 ROE 指标，港股 `roe` 在本期保持缺失；(g) `/api/facts` 接受 `citations=1`；(h) `INFO_CODES` 的 `deadline_hit/coverage_summary` 共用 | `fact_citations`（随事实级联）；港股 `filings`/`financial_facts` 的唯一写入者（经规格二函数）；A 股 `filings.document_ref` 反查 `document_id` |
 | 规格四（判断框架） | 无 | 判断的输入快照可引用 `citation_id`；`created_by='module'`；发布判断时自行 `publish_citations` |
 | 规格六（评测） | 黄金集格式与阈值由其统一；LLM 候选的评测 harness | `eval-hk-facts.ts` 的输出格式；`extraction_candidates`、`extraction_approvals` 作为评测样本与审批记录 |
 | 计划三（标识符/对账） | 港股无第二事实来源，`dq_reconciliations` 对港股只能用"比较列 vs 上期主列"；租约表合并 | `hk_restated_comparative` 隔离项与信息码 |
