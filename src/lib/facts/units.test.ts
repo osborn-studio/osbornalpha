@@ -11,6 +11,8 @@ describe('units',()=>{
   expect(normalizeUnit('CNY/shares')).toBe('CNY/share');
   expect(normalizeUnit('pure')).toBe('pure');
   expect(normalizeUnit('EUR')).toBe('EUR');
+  expect(normalizeUnit('QAR')).toBe('QAR');
+  expect(normalizeUnit('KWD/shares')).toBe('KWD/share');
   for(const bad of ['USD/EUR','Year','sqft','usd','XXX','USD/share'])expect(normalizeUnit(bad)).toBeNull();
  });
  it('gives Tushare columns CNY-based units by kind',()=>{
@@ -30,6 +32,7 @@ describe('units',()=>{
  });
  it('classifies stored units back into kinds',()=>{
   expect(unitKindOf('USD')).toBe('money');expect(unitKindOf('shares')).toBe('shares');
+  expect(unitKindOf('BHD')).toBe('money');expect(unitKindOf('PKR/share')).toBe('per_share');
   expect(unitKindOf('CNY/share')).toBe('per_share');expect(unitKindOf('pure')).toBeNull();
  });
 });

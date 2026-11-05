@@ -2,7 +2,7 @@
 import {describe,it,expect} from 'vitest';
 import {FACT_CONCEPTS,CONCEPT_IDS,MAPPING_GEN,MAPPING_VERSION,MAX_READ_CONCEPTS,conceptById,conceptsForTushare,tushareFieldsFor,isConceptId} from './concepts';
 
-const EXPECTED_IDS=['revenue','revenue_operating','cost_of_revenue','gross_profit','operating_income','net_income','net_income_parent','eps_basic','eps_diluted','rd_expense','sga_expense','interest_expense','interest_expense_bank','income_tax','total_assets','total_liabilities','liabilities_and_equity','equity_parent','equity_total','cash','cash_and_restricted_cash','short_term_borrowings','long_term_borrowings','bonds_payable','shares_outstanding','operating_cash_flow','investing_cash_flow','financing_cash_flow','capex','capex_incl_intangibles','dividends_paid','dividends_and_interest_paid','net_change_in_cash','net_change_in_cash_and_restricted'];
+const EXPECTED_IDS=['revenue','revenue_operating','cost_of_revenue','gross_profit','operating_income','net_income','net_income_parent','eps_basic','eps_diluted','rd_expense','sga_expense','interest_expense','interest_expense_bank','income_tax','total_assets','total_liabilities','liabilities_and_equity','equity_parent','equity_total','cash','cash_and_restricted_cash','monetary_funds','short_term_borrowings','long_term_borrowings','bonds_payable','shares_outstanding','operating_cash_flow','investing_cash_flow','financing_cash_flow','capex','capex_incl_intangibles','dividends_paid','dividends_and_interest_paid','net_change_in_cash','net_change_in_cash_and_restricted'];
 
 describe('concepts',()=>{
  it('exports the catalogue in spec §3 order with the frozen mapping generation',()=>{
@@ -192,7 +192,7 @@ describe('concepts',()=>{
         "money",
         "CashAndCashEquivalentsAtCarryingValue",
         "CashAndCashEquivalents",
-        "balancesheet.money_cap",
+        "-",
       ],
       [
         "cash_and_restricted_cash",
@@ -202,6 +202,15 @@ describe('concepts',()=>{
         "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
         "",
         "-",
+      ],
+      [
+        "monetary_funds",
+        "BS",
+        "instant",
+        "money",
+        "",
+        "",
+        "balancesheet.money_cap",
       ],
       [
         "short_term_borrowings",

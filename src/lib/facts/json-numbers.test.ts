@@ -12,6 +12,13 @@ describe('scanJsonNumbers',()=>{
   expect(out.arr).toEqual([{__num:'0'},{__num:'1.25'},'2']);
   expect(isNumToken(out.a)).toBe(true);expect(isNumToken({__num:'1',x:1})).toBe(false);
  });
+ it('fails closed on the reserved marker key, also escaped, and on leading zeros',()=>{
+  expect(()=>scanJsonNumbers('{"val":{"__num":"123"}}')).toThrow('reserved_key');
+  expect(()=>scanJsonNumbers('{"val":{"\\u005f_num":"123"}}')).toThrow('reserved_key');
+  expect(()=>scanJsonNumbers('{"a":01}')).toThrow('invalid_json_number');
+  expect(()=>scanJsonNumbers('{"a":-01}')).toThrow('invalid_json_number');
+  expect(scanJsonNumbers('{"a":0.5,"b":-0,"c":10}')).toEqual({a:{__num:'0.5'},b:{__num:'-0'},c:{__num:'10'}});
+ });
  it('accepts bytes (utf-8) and rejects invalid JSON or invalid utf-8',()=>{
   expect(scanJsonNumbers(new TextEncoder().encode('{"val":1e5,"name":"贵州茅台"}'))).toEqual({val:{__num:'1e5'},name:'贵州茅台'});
   expect(()=>scanJsonNumbers('{"a":}')).toThrow();
@@ -57,6 +64,10 @@ describe('decodeWithSchema',()=>{
  it('fails loudly when a control field is not an integer',()=>{
   expect(()=>decodeWithSchema(scanJsonNumbers('{"cik":"320193"}'),EDGAR_NUMBER_SCHEMA)).not.toThrow();
   expect(()=>decodeWithSchema(scanJsonNumbers('{"fy":2023.5}'),EDGAR_NUMBER_SCHEMA)).toThrow('invalid_control_field:fy');
+ });
+ it('validates control fields on the exact decimal text before Number()',()=>{
+  for(const bad of ['1.00000000000000001','1e-400','9007199254740993','1.5'])expect(()=>decodeWithSchema(scanJsonNumbers(`{"fy":${bad}}`),EDGAR_NUMBER_SCHEMA)).toThrow('invalid_control_field:fy');
+  expect(decodeWithSchema(scanJsonNumbers('{"fy":2023.0}'),EDGAR_NUMBER_SCHEMA)).toEqual({fy:2023});
  });
  it('decodes positional Tushare rows by column name',()=>{
   const schema={control:TUSHARE_CONTROL_FIELDS,decimal:['total_revenue','basic_eps']};

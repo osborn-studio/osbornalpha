@@ -10,9 +10,18 @@ export const isNumToken=(v:unknown):v is NumToken=>typeof v==='object'&&v!==null
 
 const TOKEN=/"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
 /** JSON.parse with every numeric literal wrapped as {__num:'<original text>'}. Strings are left intact. */
+const JSON_INT=/^-?(?:0|[1-9]\d*)(?![\d])/;
 export function scanJsonNumbers(input:Uint8Array|string):unknown{
  const text=typeof input==='string'?input:new TextDecoder('utf-8',{fatal:true}).decode(input);
- const rewritten=text.replace(TOKEN,m=>m.charCodeAt(0)===34?m:`{"__num":"${m}"}`);
+ const rewritten=text.replace(TOKEN,m=>{
+  if(m.charCodeAt(0)===34){
+   // fail closed: the reserved marker key must not occur in source (also in escaped spellings)
+   if(m.length<=64&&JSON.parse(m)==='__num')throw new Error('reserved_key:__num');
+   return m;
+  }
+  if(!JSON_INT.test(m))throw new Error(`invalid_json_number:${m.slice(0,40)}`);
+  return `{"__num":"${m}"}`;
+ });
  return JSON.parse(rewritten);
 }
 
@@ -44,9 +53,15 @@ export const TUSHARE_CONTROL_FIELDS:readonly string[]=['code','has_more','report
 
 export function decodeNumber(raw:string,mode:'control'|'decimal'|'number',field:string|null):string|number{
  if(mode==='decimal')return canonicalDecimal(raw);
- const n=Number(raw);
- if(mode==='control'&&!Number.isSafeInteger(n))throw new Error(`invalid_control_field:${field??''}`);
- return n;
+ if(mode==='control'){
+  // integrality on the exact decimal text first; Number() would round 1.00000000000000001 to 1 and 1e-400 to 0
+  let canon:string;
+  try{canon=canonicalDecimal(raw);}catch{throw new Error(`invalid_control_field:${field??''}`);}
+  const n=Number(canon);
+  if(!/^-?\d+$/.test(canon)||!Number.isSafeInteger(n))throw new Error(`invalid_control_field:${field??''}`);
+  return n;
+ }
+ return Number(raw);
 }
 const modeOf=(schema:NumberSchema,field:string|null)=>field!==null&&schema.decimal.includes(field)?'decimal':field!==null&&schema.control.includes(field)?'control':'number';
 

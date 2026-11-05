@@ -4,7 +4,7 @@
 // period wins; a lower tag only fills periods the higher one lacks), the ifrs-full alias, and
 // the Tushare column (or a sum of columns). Only equivalent-basis aliases share a concept; a
 // different basis is a different concept (revenue vs revenue_operating, capex vs
-// capex_incl_intangibles). MAPPING_GEN and MAPPING_VERSION move together on any change here.
+// capex_incl_intangibles; cash vs monetary_funds, the latter being CN 货币资金 which includes restricted funds). MAPPING_GEN and MAPPING_VERSION move together on any change here.
 // 'dei:' prefixes a tag from the dei taxonomy (companyfacts facts.dei.*), everything else is
 // facts['us-gaap'].* ; the EDGAR adapter splits on that prefix.
 import type {ConceptDef,Statement,UnitKind} from './types';
@@ -38,8 +38,9 @@ export const FACT_CONCEPTS:readonly ConceptDef[]=[
  def('liabilities_and_equity','BS','instant','money',['LiabilitiesAndStockholdersEquity'],['EquityAndLiabilities'],null),
  def('equity_parent','BS','instant','money',['StockholdersEquity'],['EquityAttributableToOwnersOfParent'],ts('balancesheet','total_hldr_eqy_exc_min_int')),
  def('equity_total','BS','instant','money',['StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest'],['Equity'],ts('balancesheet','total_hldr_eqy_inc_min_int')),
- def('cash','BS','instant','money',['CashAndCashEquivalentsAtCarryingValue'],['CashAndCashEquivalents'],ts('balancesheet','money_cap')),
+ def('cash','BS','instant','money',['CashAndCashEquivalentsAtCarryingValue'],['CashAndCashEquivalents'],null),
  def('cash_and_restricted_cash','BS','instant','money',['CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents'],[],null),
+ def('monetary_funds','BS','instant','money',[],[],ts('balancesheet','money_cap'),'CN 货币资金 basis (includes restricted funds); not cash equivalents'),
  def('short_term_borrowings','BS','instant','money',['ShortTermBorrowings'],['ShorttermBorrowings'],ts('balancesheet','st_borr')),
  def('long_term_borrowings','BS','instant','money',['LongTermDebtNoncurrent'],['LongtermBorrowings'],ts('balancesheet','lt_borr')),
  def('bonds_payable','BS','instant','money',[],[],ts('balancesheet','bond_payable')),
