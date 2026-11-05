@@ -16,7 +16,7 @@ const get=(ticker:string,qs:string)=>GET(new Request(`https://alpha.example/api/
 describe('GET /api/filings/[ticker]',()=>{
  beforeEach(()=>{
   vi.clearAllMocks();
-  mocks.resolve.mockResolvedValue({issuer_id:ISSUER,status:'active',names:{zh:null,en:null},identifiers:{cik:null,lei:null,usci:null},securities:[]});
+  mocks.resolve.mockImplementation(async(_c:unknown,q:{ticker:string})=>({issuer_id:ISSUER,status:'active',names:{zh:null,en:null},identifiers:{cik:null,lei:null,usci:null},securities:[{ticker:q.ticker,isin:null,figi:null,share_class:null,is_primary:true,valid_from:'2000-01-01',valid_to:null}]}));
   mocks.filingsOfIssuer.mockResolvedValue([filing(),filing({filing_id:'h',form_type:'q1',document_ref:null,document_url:null,link_attempts:5,available_date:'2025-04-29'})]);
  });
  it('lists filings in the available_date window with citation and caches until midnight',async()=>{
@@ -32,18 +32,6 @@ describe('GET /api/filings/[ticker]',()=>{
   mocks.filingsOfIssuer.mockResolvedValue([filing({filing_id:'s1',mapping_gen:0}),filing({filing_id:'s2',mapping_gen:0}),filing({filing_id:'p1'}),filing({filing_id:'p2'})]);
   const body=await (await get('600519.SH','limit=2')).json();
   expect(body.filings.map((f:{filingId:string})=>f.filingId)).toEqual(['p1','p2']);
- });
- it('resolves the original ticker first (BRK.A is BRK.A, not BRK) and falls back to the CN canonical form',async()=>{
-  const sec=(t:string)=>({ticker:t,isin:null,figi:null,share_class:null,is_primary:true,valid_from:'2000-01-01',valid_to:null});
-  const by:Record<string,string>={'BRK':'11111111-1111-4111-8111-111111111111','BRK.A':'22222222-2222-4222-8222-222222222222','BRK.B':'33333333-3333-4333-8333-333333333333','600519.SH':ISSUER};
-  mocks.resolve.mockImplementation(async(_c:unknown,q:{ticker:string})=>by[q.ticker]?{issuer_id:by[q.ticker],status:'active',names:{zh:null,en:null},identifiers:{cik:null,lei:null,usci:null},securities:[sec(q.ticker)]}:null);
-  for(const [t,id] of [['BRK.A',by['BRK.A']],['BRK.B',by['BRK.B']],['BRK',by['BRK']]]){
-   expect(await (await get(t,'')).json()).toMatchObject({issuerId:id,ticker:t,market:'US'});
-  }
-  expect(await (await get('BRK/B','')).json()).toMatchObject({issuerId:by['BRK.B'],ticker:'BRK.B'});
-  for(const t of ['600519','SH600519','600519.SS','600519.SH']){
-   expect(await (await get(t,'')).json()).toMatchObject({issuerId:ISSUER,ticker:'600519.SH',market:'CN'});
-  }
  });
  it('answers 400 for a malformed percent escape and 409 for ambiguous owners',async()=>{
   const mal=await GET(new Request('https://alpha.example/api/filings/%E0%A4%A'),{params:Promise.resolve({ticker:'%E0%A4%A'})});

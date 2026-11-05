@@ -19,7 +19,7 @@ const TODAY=new Date().toISOString().slice(0,10);
 describe('GET /api/facts/[ticker]',()=>{
  beforeEach(()=>{
   vi.clearAllMocks();
-  mocks.resolve.mockResolvedValue({issuer_id:ISSUER,status:'active',names:{zh:null,en:'Apple'},identifiers:{cik:'320193',lei:null,usci:null},securities:[]});
+  mocks.resolve.mockImplementation(async(_c:unknown,q:{ticker:string})=>({issuer_id:ISSUER,status:'active',names:{zh:null,en:'Apple'},identifiers:{cik:'320193',lei:null,usci:null},securities:[{ticker:q.ticker,isin:null,figi:null,share_class:null,is_primary:true,valid_from:'2000-01-01',valid_to:null}]}));
   mocks.readFacts.mockResolvedValue({stateRev:5,rows:[fact()],truncated:false});
   mocks.filingsOfIssuer.mockResolvedValue([filing()]);
   mocks.factsByIds.mockResolvedValue([fact()]);
@@ -111,7 +111,7 @@ describe('GET /api/facts/[ticker]',()=>{
   mocks.resolve.mockResolvedValue(null);
   const nf=await get('ZZZZ','concepts=revenue');
   expect(nf.status).toBe(404);expect((await nf.json()).error.code).toBe('unknown_ticker');
-  mocks.resolve.mockResolvedValue({issuer_id:ISSUER,status:'active',names:{zh:null,en:null},identifiers:{cik:null,lei:null,usci:null},securities:[]});
+  mocks.resolve.mockImplementation(async(_c:unknown,q:{ticker:string})=>({issuer_id:ISSUER,status:'active',names:{zh:null,en:null},identifiers:{cik:null,lei:null,usci:null},securities:[{ticker:q.ticker,isin:null,figi:null,share_class:null,is_primary:true,valid_from:'2000-01-01',valid_to:null}]}));
   mocks.readFacts.mockRejectedValue(new Error('boom'));
   const spy=vi.spyOn(console,'error').mockImplementation(()=>{});
   const err=await get('AAPL','concepts=revenue');
