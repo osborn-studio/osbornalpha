@@ -1,9 +1,11 @@
 // src/lib/facts/providers/cninfo-link.test.ts
 import {existsSync,readFileSync} from 'node:fs';
-import {describe,expect,it,vi} from 'vitest';
+import {beforeEach,describe,expect,it,vi} from 'vitest';
 import type {Budget} from '../types';
 import {CNINFO_HISTORY,CNINFO_TOPSEARCH} from '../../research/ingest/collectors/cninfo';
-import {cninfoQueryBody,CNINFO_STATIC,linkCninfoFiling,matchesAnnouncement,type LinkFiling} from './cninfo-link';
+import {cninfoQueryBody,CNINFO_STATIC,linkCninfoFiling,matchesAnnouncement,resetCninfoPacing,type LinkFiling} from './cninfo-link';
+
+beforeEach(()=>resetCninfoPacing());
 
 const budget=():Budget=>({remainingMs:()=>300_000,signal:new AbortController().signal});
 const ann=(id:string,title:string)=>({announcementId:id,announcementTitle:title,announcementTime:1743552000000,adjunctUrl:`finalpage/2025-04-03/${id}.PDF`,adjunctType:'PDF'});
@@ -88,5 +90,95 @@ describe('linkCninfoFiling',()=>{
   const fetch=server(fx.pages.map(p=>JSON.stringify(p)));
   const r=await linkCninfoFiling({form_type:fx.__recorded.form_type,fiscal_year:fx.__recorded.fiscal_year,period_end:`${fx.__recorded.fiscal_year}-12-31`,available_date:fx.__recorded.available_date},{ts_code:'600519.SH',cninfo_org_id:fx.__recorded.org_id},{fetch,budget:budget(),minIntervalMs:0});
   expect(r).toMatchObject({document_ref:expect.stringMatching(/^\d+$/),document_url:expect.stringMatching(/^http:\/\/static\.cninfo\.com\.cn\/.+\.PDF$/i)});
+ });
+});
+
+describe('whole-title matching (follow-up P2)',()=>{
+ it('rejects documents that merely mention the report: inquiry letters, opinions, resolutions, notices',()=>{
+  for(const t of [
+   '关于贵州茅台2024年年度报告的信息披露监管问询函','贵州茅台：关于2024年年度报告的信息披露监管问询函','贵州茅台：2024年年度报告的董事会审议意见',
+   '贵州茅台：董事会关于2024年年度报告的审议意见','贵州茅台：第四届董事会关于审议2024年年度报告的决议公告','贵州茅台：关于披露2024年年度报告的提示性公告',
+   '贵州茅台：2024年年度报告披露时间的公告','贵州茅台：2024年年度报告（草案）','贵州茅台：2024年年度报告全文及摘要','贵州茅台：监事会关于2024年年度报告的书面审核意见',
+  ])expect(matchesAnnouncement(t,annual),t).toBe(false);
+ });
+ it('accepts the report with an optional short name and only the permitted suffixes',()=>{
+  for(const t of ['2024年年度报告','贵州茅台2024年年度报告','贵州茅台：2024年年度报告','贵州茅台：2024年年度报告（修订版）','贵州茅台：2024年年度报告（更正后）','贵州茅台：2024年年度报告(更新后)'])expect(matchesAnnouncement(t,annual),t).toBe(true);
+  expect(matchesAnnouncement('贵州茅台：2024年年度报告（其他）',annual)).toBe(false);
+ });
+ it('correction announcements use their own pattern',()=>{
+  const c={...annual,corrected:true};
+  for(const t of ['贵州茅台：关于2024年年度报告的更正公告','关于2024年年度报告更正的公告'.replace('更正的公告','更正公告'),'贵州茅台：关于2024年年度报告的更正说明公告'])expect(matchesAnnouncement(t,c),t).toBe(true);
+  for(const t of ['贵州茅台：2024年年度报告','贵州茅台：关于2024年年度报告的问询函','贵州茅台：关于2024年年度报告的更正公告摘要'])expect(matchesAnnouncement(t,c),t).toBe(false);
+  expect(matchesAnnouncement('贵州茅台：关于2024年年度报告的更正公告',annual)).toBe(false);
+ });
+ it('an inquiry letter plus the report in one result page links exactly the report',async()=>{
+  const fetch=server([page([ann('1','贵州茅台：关于2024年年度报告的信息披露监管问询函'),ann('2','贵州茅台：2024年年度报告'),ann('3','贵州茅台：2024年年度报告的董事会审议意见')])]);
+  expect(await linkCninfoFiling(annual,{ts_code:'600519.SH',cninfo_org_id:'o'},{fetch,budget:budget(),minIntervalMs:0})).toMatchObject({document_ref:'2'});
+ });
+});
+
+describe('budget handling (follow-up P2)',()=>{
+ const issuer={ts_code:'000333.SZ',cninfo_org_id:null};
+ it('checks the budget before the org-id lookup and before every request, with fixed codes',async()=>{
+  const fetch=vi.fn();
+  const ctl=new AbortController();ctl.abort();
+  await expect(linkCninfoFiling(annual,issuer,{fetch,budget:{remainingMs:()=>300_000,signal:ctl.signal},minIntervalMs:0})).rejects.toThrow(/^budget_aborted$/);
+  await expect(linkCninfoFiling(annual,issuer,{fetch,budget:{remainingMs:()=>20_000,signal:new AbortController().signal},minIntervalMs:0})).rejects.toThrow(/^budget_exhausted$/);
+  expect(fetch).not.toHaveBeenCalled();
+  // budget runs out between the lookup and the first history request
+  let left=300_000;
+  const f2=server([page([ann('9','美的集团：2024年年度报告')])]);
+  const b:Budget={remainingMs:()=>left,signal:new AbortController().signal};
+  const wrapped=vi.fn(async(i:RequestInfo|URL,init?:RequestInit)=>{const r=await f2(i,init);left=10_000;return r;});
+  await expect(linkCninfoFiling(annual,issuer,{fetch:wrapped,budget:b,minIntervalMs:0})).rejects.toThrow(/^budget_exhausted$/);
+  expect(wrapped).toHaveBeenCalledTimes(1);
+ });
+ it('passes a combined signal: aborting the budget mid-request cancels fetch and body wait',async()=>{
+  const ctl=new AbortController();
+  const fetch=vi.fn((_u:RequestInfo|URL,init?:RequestInit)=>new Promise<Response>((_,rej)=>init!.signal!.addEventListener('abort',()=>rej(new Error('aborted')))));
+  const p=linkCninfoFiling(annual,{ts_code:'600519.SH',cninfo_org_id:'o'},{fetch,budget:{remainingMs:()=>300_000,signal:ctl.signal},minIntervalMs:0});
+  await new Promise(r=>setTimeout(r,10));ctl.abort();
+  await expect(p).rejects.toThrow(/^budget_aborted$/);
+ });
+ it('caps the per-request timeout at remaining minus the 20 s reserve',async()=>{
+  const fetch=vi.fn((_u:RequestInfo|URL,init?:RequestInit)=>new Promise<Response>((_,rej)=>init!.signal!.addEventListener('abort',()=>rej(new Error('aborted')))));
+  await expect(linkCninfoFiling(annual,{ts_code:'600519.SH',cninfo_org_id:'o'},{fetch,budget:{remainingMs:()=>20_050,signal:new AbortController().signal},minIntervalMs:0})).rejects.toThrow(/^cninfo_timeout$/);
+ });
+ it('aborting while queued for a pacing slot gives budget_aborted',async()=>{
+  const ctl=new AbortController();
+  const fetch=server([page([])]);
+  const b={remainingMs:()=>300_000,signal:ctl.signal};
+  await linkCninfoFiling(annual,{ts_code:'600519.SH',cninfo_org_id:'o'},{fetch,budget:b});   // reserves a slot 500 ms ahead
+  const p=linkCninfoFiling(annual,{ts_code:'600519.SH',cninfo_org_id:'o'},{fetch,budget:b});
+  setTimeout(()=>ctl.abort(),20);
+  await expect(p).rejects.toThrow(/^budget_aborted$/);
+ });
+ it('error messages never carry response bodies',async()=>{
+  const fetch=async()=>new Response('SECRET-BODY',{status:503});
+  await expect(linkCninfoFiling(annual,{ts_code:'600519.SH',cninfo_org_id:'o'},{fetch,budget:budget(),minIntervalMs:0})).rejects.toThrow(/^cninfo 503$/);
+  await expect(linkCninfoFiling(annual,{ts_code:'600519.SH',cninfo_org_id:'o'},{fetch:async()=>new Response('SECRET-BODY',{status:200}),budget:budget(),minIntervalMs:0})).rejects.toThrow(/^cninfo_bad_body$/);
+ });
+});
+
+describe('shared pacing (follow-up P2)',()=>{
+ const clock=()=>{let t=1_000_000;const starts:number[]=[];return {now:()=>t,sleep:async(ms:number)=>{const target=t+ms;await Promise.resolve();t=Math.max(t,target);},starts,fetch:vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{starts.push(t);return server([page([])])(input,init);})};};
+ it('spaces org lookup and history pages >= 500 ms apart',async()=>{
+  const c=clock();
+  await linkCninfoFiling(annual,{ts_code:'000333.SZ',cninfo_org_id:null},{fetch:c.fetch,budget:budget(),now:c.now,sleep:c.sleep});
+  expect(c.starts).toHaveLength(2);expect(c.starts[1]-c.starts[0]).toBeGreaterThanOrEqual(500);
+ });
+ it('spaces successive and concurrent calls through one module-level slot queue',async()=>{
+  vi.useFakeTimers();
+  try{
+   const starts:number[]=[];
+   const fetch=vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{starts.push(Date.now());return server([page([])])(input,init);});
+   const o={fetch,budget:budget()};
+   const issuer={ts_code:'600519.SH',cninfo_org_id:'o'};
+   await linkCninfoFiling(annual,issuer,o);
+   const all=Promise.all([linkCninfoFiling(annual,issuer,o),linkCninfoFiling(annual,issuer,o),linkCninfoFiling(annual,issuer,o)]);
+   await vi.advanceTimersByTimeAsync(5000);await all;
+   expect(starts).toHaveLength(4);
+   for(let i=1;i<starts.length;i++)expect(starts[i]-starts[i-1]).toBeGreaterThanOrEqual(500);
+  }finally{vi.useRealTimers();}
  });
 });
