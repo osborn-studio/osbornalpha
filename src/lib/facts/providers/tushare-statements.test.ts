@@ -65,6 +65,12 @@ describe('lossless value columns (single source: tushareFieldsFor)',()=>{
 
 describe('fetchTushareStatements',()=>{
  beforeEach(()=>{resetTusharePacing();});
+ it('a pacing wait that would end inside the 20 s reserve is rejected without sleeping',async()=>{
+  const sleep=vi.fn(async()=>{});const t=7_000_000;
+  const call=vi.fn(async()=>raw([],false));
+  await expect(fetchTushareStatements('600519.SH',2014,budget(20_100),{call,sleep,now:()=>t})).rejects.toMatchObject({code:'tushare_unavailable',message:'tushare_unavailable: budget_exhausted'});
+  expect(sleep).not.toHaveBeenCalled();expect(call).toHaveBeenCalledTimes(1);
+ });
  it('calls 3 apis × report types 1/4/5 with start_date, pages by limit/offset until has_more is false or a short page, one snapshot per page',async()=>{
   // typed like tushareCallRaw: the options argument is optional there, so the mock takes it with a default (round-1 #5)
   const call=vi.fn(async(api:string,params:Record<string,unknown>,_f:string,o:{limit?:number;offset?:number}={})=>{

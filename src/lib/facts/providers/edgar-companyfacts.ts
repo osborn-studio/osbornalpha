@@ -21,7 +21,7 @@ import type {NumberSchema} from '../json-numbers';
 import {normalizeUnit,unitKindOf} from '../units';
 import {classifyDuration,daysBetween as daysBetweenOrNull,isDate} from '../classify';
 import {DEFAULT_USER_AGENT} from '../../research/ingest/collectors/shared';
-import {nearestDuration,ProviderError,rawHashOf,sleep,snapshotOf} from './shared';
+import {createPacer,nearestDuration,PacerError,ProviderError,rawHashOf,sleep,snapshotOf} from './shared';
 
 export const companyFactsUrl=(cik10:string)=>`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik10}.json`;
 export const MAX_SNAPSHOT_BYTES=50*1024*1024;
@@ -30,16 +30,9 @@ export const SEC_MIN_INTERVAL_MS=120;
 export const COMPANYFACTS_SCHEMA:NumberSchema=EDGAR_NUMBER_SCHEMA;
 const BACKOFF_MS=[1000,2000,4000,8000];
 const RESERVE_MS=20_000;
-let nextSlotAt=0;   // module-level: one pace across every issuer and every concurrent caller of this process
-/** Test hook: forget the reserved pacing slots (tests use fake clocks). */
-export const resetSecPacing=()=>{nextSlotAt=0;};
-/** Reserve the next request-start slot synchronously (so concurrent callers queue in call order), then wait for it. */
-async function paceSlot(now:()=>number,wait:typeof sleep,signal:AbortSignal){
- const at=Math.max(now(),nextSlotAt);
- nextSlotAt=at+SEC_MIN_INTERVAL_MS;
- const gap=at-now();
- if(gap>0)await wait(gap,signal);
-}
+const pacer=createPacer(SEC_MIN_INTERVAL_MS);   // module-level: one pace across every issuer and every concurrent caller of this process
+/** Test hook: forget the pacing state (tests use fake clocks). */
+export const resetSecPacing=()=>pacer.reset();
 
 export interface FetchOptions{fetch?:typeof fetch;userAgent?:string;sleep?:typeof sleep;now?:()=>number}
 
@@ -49,11 +42,9 @@ export async function fetchCompanyFacts(cik10:string,budget:Budget,opts:FetchOpt
  const ua=opts.userAgent??process.env.EDGAR_USER_AGENT??DEFAULT_USER_AGENT;
  const url=companyFactsUrl(cik10);
  for(let attempt=0;;attempt++){
-  if(budget.remainingMs()-RESERVE_MS<=0)throw new ProviderError('sec_unavailable','budget_exhausted');
-  try{await paceSlot(now,wait,budget.signal);}catch{throw new ProviderError('sec_unavailable','budget_aborted');}
-  // re-check after the pacing wait: the budget may have run out or been cancelled while queued
+  try{await pacer.admit({budget,reserveMs:RESERVE_MS,now,sleep:wait});}catch(e){throw new ProviderError('sec_unavailable',e instanceof PacerError?e.code:'budget_aborted');}
   const timeoutMs=Math.min(60_000,budget.remainingMs()-RESERVE_MS);
-  if(budget.signal.aborted||timeoutMs<=0)throw new ProviderError('sec_unavailable','budget_exhausted');
+  if(timeoutMs<=0)throw new ProviderError('sec_unavailable','budget_exhausted');
   let detail:string;
   try{
    const res=await doFetch(url,{headers:{'User-Agent':ua,'Accept-Encoding':'gzip, deflate',Accept:'application/json'},signal:AbortSignal.any([budget.signal,AbortSignal.timeout(timeoutMs)])});

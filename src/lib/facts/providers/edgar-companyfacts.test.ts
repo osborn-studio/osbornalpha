@@ -203,6 +203,13 @@ describe('review follow-up: selection, odd durations, locators, evidence',()=>{
 describe('fetchCompanyFacts: pacing and body failures',()=>{
  beforeEach(()=>{resetSecPacing();});
  afterEach(()=>{vi.useRealTimers();});
+ it('a pacing wait that would end inside the 20 s reserve is rejected without sleeping',async()=>{
+  const sleep=vi.fn(async()=>{});const fetch=vi.fn<FetchFn>(async()=>new Response('{"cik":1,"facts":{}}',{status:200}));
+  let t=5_000_000;
+  await fetchCompanyFacts('0000000001',budget(20_100),{fetch,sleep,now:()=>t,userAgent:'ua'});
+  await expect(fetchCompanyFacts('0000000001',budget(20_100),{fetch,sleep,now:()=>t,userAgent:'ua'})).rejects.toMatchObject({code:'sec_unavailable',message:'sec_unavailable: budget_exhausted'});
+  expect(sleep).not.toHaveBeenCalled();expect(fetch).toHaveBeenCalledTimes(1);
+ });
  it('12 concurrent calls start at least 120 ms apart',async()=>{
   vi.useFakeTimers();
   const starts:number[]=[];

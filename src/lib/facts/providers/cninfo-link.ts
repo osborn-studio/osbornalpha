@@ -16,7 +16,7 @@
 import {DEFAULT_USER_AGENT} from '../../research/ingest/collectors/shared';
 import {CNINFO_HISTORY,CNINFO_TOPSEARCH} from '../../research/ingest/collectors/cninfo';
 import type {Budget,FilingRow} from '../types';
-import {sleep} from './shared';
+import {createPacer,sleep} from './shared';
 
 export const CNINFO_STATIC='http://static.cninfo.com.cn/';
 export const CNINFO_PAGE_SIZE=30;
@@ -61,22 +61,14 @@ export function cninfoQueryBody(q:{code:string;orgId:string;column:'sse'|'szse';
  return new URLSearchParams({pageNum:String(q.pageNum),pageSize:String(CNINFO_PAGE_SIZE),column:q.column,tabName:'fulltext',plate:'',stock:`${q.code},${q.orgId}`,searchkey:'',secid:'',category:'',trade:'',seDate,sortName:'',sortType:'',isHLtitle:'true'}).toString();
 }
 
-let nextSlotAt=0;   // module-level: one pace across org lookups, history pages, successive filings and concurrent callers
-/** Test hook: forget the reserved pacing slots. */
-export const resetCninfoPacing=()=>{nextSlotAt=0;};
+const pacer=createPacer(CNINFO_MIN_INTERVAL_MS);   // one pace across org lookups, history pages, successive filings and concurrent callers
+/** Test hook: forget the pacing state. */
+export const resetCninfoPacing=()=>pacer.reset();
 
 /** One paced, budget-bound POST; returns status and the fully consumed body text. */
 async function post(url:string,body:string,opts:LinkOptions,ua:string):Promise<{status:number;text:string}>{
- const {budget}=opts,now=opts.now??Date.now,wait=opts.sleep??sleep,gapMs=opts.minIntervalMs??CNINFO_MIN_INTERVAL_MS;
- const check=()=>{
-  if(budget.signal.aborted)throw new Error('budget_aborted');
-  if(budget.remainingMs()<=CNINFO_RESERVE_MS)throw new Error('budget_exhausted');
- };
- check();
- const at=Math.max(now(),nextSlotAt);nextSlotAt=at+gapMs;   // reserved synchronously: concurrent callers queue in call order
- const gap=at-now();
- if(gap>0){try{await wait(gap,budget.signal);}catch{throw new Error('budget_aborted');}}
- check();                                                  // the budget may have run out while queued
+ const {budget}=opts;
+ await pacer.admit({budget,reserveMs:CNINFO_RESERVE_MS,now:opts.now,sleep:opts.sleep,minIntervalMs:opts.minIntervalMs});   // throws PacerError: budget_aborted | budget_exhausted
  const timeoutMs=Math.min(CNINFO_REQUEST_TIMEOUT_MS,budget.remainingMs()-CNINFO_RESERVE_MS);
  const signal=AbortSignal.any([budget.signal,AbortSignal.timeout(timeoutMs)]);
  try{
