@@ -108,7 +108,7 @@ export function deriveMetrics(allRows:FactRow[],opts:DeriveOptions):MetricRow[]{
    inputs:inputs.filter(i=>{const k=`${i.fact_id}|${i.quarter?.join('~')??''}`;return !seen.has(k)&&!!seen.add(k);}),based_on_rev:basedOnRev,as_of:asOf});
  };
  const ratio=(metric:string,ref:Cur&{row:{period_start:string}},num:Dec,den:Dec,basis:string,inputs:Cur[])=>{
-  const v=div(num,den);if(v)emit(metric,ref.row.period_start,ref.row.period_end,ref.row.duration,v,'pure',ref.row.unit,basis,inputs.map(inputOf));
+  const v=div(num,den);if(v)emit(metric,ref.row.period_start,ref.row.period_end,ref.row.duration,v,'pure',ref.row.unit,basis,inputs.map(x=>inputOf(x)));
  };
  // margins
  const revC=market==='US'?'revenue':'revenue_operating';
@@ -134,7 +134,7 @@ export function deriveMetrics(allRows:FactRow[],opts:DeriveOptions):MetricRow[]{
   const bonds=market==='CN'?instant('bonds_payable',st.row.period_end,st.row.unit):null;
   if(market==='CN'&&!bonds)continue;
   const total=bonds?add(add(st.dec,lt.dec),bonds.dec):add(st.dec,lt.dec);
-  emit('borrowings_total',st.row.period_end,st.row.period_end,'INSTANT',total,st.row.unit,st.row.unit,market==='US'?'us_standard':'cn_incl_bonds',[st,lt,...(bonds?[bonds]:[])].map(inputOf));
+  emit('borrowings_total',st.row.period_end,st.row.period_end,'INSTANT',total,st.row.unit,st.row.unit,market==='US'?'us_standard':'cn_incl_bonds',[st,lt,...(bonds?[bonds]:[])].map(x=>inputOf(x)));
  }
  // year over year
  for(const [metric,concept] of [['revenue_yoy','revenue'],['net_income_yoy','net_income_parent']] as const){
