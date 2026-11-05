@@ -50,15 +50,27 @@ const normTicker=(t:string)=>t.trim().toUpperCase().replace(/\//g,'.');
 const bump=(m:Record<string,number>,k:string)=>{m[k]=(m[k]??0)+1;};
 const isoToday=()=>new Date().toISOString().slice(0,10);
 
-/** selectAll with a range filter: same paging contract (fixed order, stop on an empty page). */
-async function pageAllRange(tables:TableClient,table:string,range:RangeOptions,orderBy:string):Promise<Row[]>{
- const out:Row[]=[];
- for(let offset=0;;){
-  const page=await tables.select(table,{},{...range,orderBy,offset,limit:MAX_PAGE});
-  if(page.length===0)return out;
-  out.push(...page);offset+=page.length;
+/**
+ * Keyset paging for tables whose key is composite while TableClient orders by ONE column: page on
+ * `orderBy` (not unique), and after a full page restart from the last value INCLUSIVE (gte), so every
+ * row tied with the boundary value is read again from its first row; `keyCols` de-duplicate. Offset
+ * paging would drop or repeat tied rows at a page boundary (a dropped current row retires an issuer).
+ * A single tie group of MAX_PAGE rows or more cannot advance and fails loudly.
+ */
+async function keysetAll(tables:TableClient,table:string,match:Row,range:RangeOptions,orderBy:string,keyCols:string[]):Promise<Row[]>{
+ const seen=new Set<string>(),out:Row[]=[];
+ let cursor:string|null=null;
+ for(;;){
+  const gte={...range.gte,...(cursor===null?{}:{[orderBy]:cursor})};
+  const page=await tables.select(table,match,{...range,gte,orderBy,limit:MAX_PAGE});
+  for(const r of page){const k=keyCols.map(c=>String(r[c])).join('\u0000');if(!seen.has(k)){seen.add(k);out.push(r);}}
+  if(page.length<MAX_PAGE)return out;
+  const last=String(page[page.length-1][orderBy]);
+  if(last===cursor)throw new Error('scope_tie_group_overflow');
+  cursor=last;
  }
 }
+const SEC_KEY=['issuer_id','ticker','valid_from'];
 
 /**
  * Security rows current at `today` by the landed predicate (isCurrentSecurity). Open rows page by
@@ -67,8 +79,8 @@ async function pageAllRange(tables:TableClient,table:string,range:RangeOptions,o
  */
 export async function currentSecurities(tables:TableClient,today:string):Promise<Row[]>{
  const open=await selectAll(tables,'issuer_securities',{valid_to:null},'ticker');
- // Rows with a scheduled end: paged to exhaustion by ticker (a tie on ticker needs two future-dated rows of one ticker; offset pages stay stable in practice).
- const ending=await pageAllRange(tables,'issuer_securities',{gte:{valid_to:today}},'ticker');
+ // Rows with a scheduled end: several validity windows per ticker are allowed, so ticker is not unique: keyset paging.
+ const ending=await keysetAll(tables,'issuer_securities',{},{gte:{valid_to:today}},'ticker',SEC_KEY);
  return [...open,...ending].filter(r=>isCurrentSecurity(r,today));
 }
 
@@ -120,8 +132,8 @@ function chooseCnTicker(secs:Row[]):{ticker:string}|{reason:'no_cn_ticker'|'ambi
 }
 
 async function desiredCn(tables:TableClient,today:string,skipped:Record<string,number>):Promise<DesiredRow[]>{
- // (user_id, entity_id) is the key and TableClient orders by one column: entity_id is a random uuid, unique in practice.
- const keys=await selectAll(tables,'research_entity_keys',{in_scope:true},'entity_id');
+ // (user_id, entity_id) is the key and TableClient orders by one column: keyset paging on entity_id, de-duplicated on the full key.
+ const keys=await keysetAll(tables,'research_entity_keys',{in_scope:true},{},'entity_id',['user_id','entity_id']);
  const issuerIds=new Set<string>();
  for(const k of keys){const id=str(k.issuer_id);if(id)issuerIds.add(id);else bump(skipped,'no_issuer');}
  const byIssuer=new Map<string,Row[]>();
@@ -147,7 +159,7 @@ export async function scopeRowFor(tables:TableClient,market:Market,issuerId:stri
  const today=opts.today??isoToday();
  const [issuer]=await tables.select('issuers',{issuer_id:issuerId},{limit:1});
  if(!issuer||issuer.status==='merged')return null;
- const secs=market==='CN'?(await selectAll(tables,'issuer_securities',{issuer_id:issuerId},'ticker')).filter(r=>isCurrentSecurity(r,today)):[];   // DB errors propagate
+ const secs=market==='CN'?(await keysetAll(tables,'issuer_securities',{issuer_id:issuerId},{},'ticker',SEC_KEY)).filter(r=>isCurrentSecurity(r,today)):[];   // DB errors propagate
  try{
   if(market==='US')return {issuer_id:issuerId,reasons:['explicit'],priority:SCOPE_PRIORITY,fetch_key:fetchKey('US',{cik:str(issuer.cik)})};
   const c=chooseCnTicker(secs);

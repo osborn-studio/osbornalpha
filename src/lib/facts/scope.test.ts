@@ -2,7 +2,7 @@
 import {describe,it,expect} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import {memoryFactsDb} from './memory-facts-db';
-import {fetchKey,reconcileScope,scopeRowFor} from './scope';
+import {currentSecurities,fetchKey,reconcileScope,scopeRowFor} from './scope';
 import type {FactsDb,Market} from './types';
 
 const A='11111111-1111-4111-8111-111111111111',M='22222222-2222-4222-8222-222222222222',K='33333333-3333-4333-8333-333333333333';
@@ -137,6 +137,23 @@ describe('reconcileScope: CN ticker choice, skips and paging',()=>{
   const r=await reconcileScope({tables,db},'CN',{today:TODAY});
   expect(r.desired).toBe(1101);expect(calls[0].rows).toHaveLength(1101);
  },60000);
+ it('tied tickers across a page boundary: a current and a future window of one ticker are both read, even when the server orders ties differently per request',async()=>{
+  const inner=memoryTableClient({issuer_securities:['issuer_id','ticker','valid_from']});
+  for(let n=0;n<999;n++)await inner.insert('issuer_securities',{issuer_id:`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`,ticker:`T${String(n).padStart(4,'0')}.SH`,is_primary:true,valid_from:'2010-01-01',valid_to:'2030-01-01'});
+  const CUR='99999999-9999-4999-8999-999999999999',NXT='99999999-9999-4999-8999-999999999998';
+  await inner.insert('issuer_securities',{issuer_id:CUR,ticker:'ZZ.SH',is_primary:true,valid_from:'2010-01-01',valid_to:'2030-01-01'});
+  await inner.insert('issuer_securities',{issuer_id:NXT,ticker:'ZZ.SH',is_primary:true,valid_from:'2030-01-01',valid_to:'2040-01-01'});
+  let calls=0;   // ties come back in a different order on every request, as an unordered-tie server may do
+  const tables:typeof inner={...inner,async select(t,m,o={}){
+   const {offset,limit,...rest}=o;const all=await inner.select(t,m,{...rest});
+   const flip=calls++%2===1;const ord=(r:Record<string,unknown>)=>String(r.valid_from);
+   all.sort((a,b)=>a.ticker===b.ticker?(flip?-1:1)*(ord(a)<ord(b)?-1:ord(a)>ord(b)?1:0):0);
+   return all.slice(offset??0,offset===undefined&&limit===undefined?undefined:(offset??0)+(limit??1000));
+  }};
+  const rows=await currentSecurities(tables,TODAY);
+  expect(rows).toHaveLength(1000);   // 999 fillers + the current ZZ window; the 2030 window is not yet current
+  expect(rows.some(r=>r.issuer_id===CUR&&r.ticker==='ZZ.SH')).toBe(true);
+ });
  it('retirement reads the scope rows through FactsDb, so memory harnesses retire too; DB errors propagate from scopeRowFor',async()=>{
   const tables=await seed();const {db}=recordingDb();
   await db.reconcileScope('CN',[{issuer_id:'99999999-9999-4999-8999-999999999999',reasons:['cohort'],priority:10,fetch_key:'688001.SH'}]);
