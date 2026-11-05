@@ -936,3 +936,21 @@ interface JudgmentCard {
 ## 19. 实施记录与偏差
 
 （实施后补记。）
+
+---
+
+## Claude Design 画布
+
+画布：[判断层 Judgment Framework](https://claude.ai/artifact/AaoLaRVJfowkr4T5dmfzJG)（2026-11-04；10 个画板：桌面 8、移动 2）。画布为私有，owner 从页面 Share 菜单共享后其他人才能打开。画板名前的数字即 §9.6 清单编号。
+
+| §9.6 待设计项 | 画板 |
+|---|---|
+| 1 `JudgmentCard` 可达组合 | 1 JudgmentCard · probability / categorical；1 JudgmentCard · score / interval / 终态 / 派生 |
+| 2 `InputsDrawer` | 2 InputsDrawer |
+| 3 `SettlementTimeline` | 3 SettlementTimeline |
+| 4 `/intel/methods` 与 `/intel/methods/[id]/[version]` | 4a 注册表；4b 方法详情 |
+| 5 `/admin/judgments` | 5 /admin/judgments |
+| 6 `/analyst` 信心列与自评 | 6 /analyst 信心列与自评 |
+| 7 移动端折叠态 | 7 移动 · 折叠态；7 移动 · 输入与结算 |
+
+组合按 §9.1 / §9.3 推出；`display.ts` 导出枚举后以枚举为准增删。约定：百分比只在 probability × calibrated 时出现，其余用三分位档位；黄铜只用于 calibrated 徽章与选中态，未校准用中性灰，命中/未命中用 `--up` / `--down`；可靠性图与维度都有表格视图；方法 id、主体与数值均为版式示意。偏差待 owner 确认：三级文字用 `#8b8b94` 代替 `#52525b`（对比度）。
