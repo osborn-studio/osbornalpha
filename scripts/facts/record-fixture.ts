@@ -8,12 +8,13 @@
  *   node --env-file=<file outside the repo with TUSHARE_TOKEN> --import tsx scripts/facts/record-fixture.ts --tushare <ts_code> [--since-year <yyyy>]
  *                                                                          → fixtures/tushare/<ts_code>.<api>.rt<n>.p<k>.json (+ .meta.json), byte-exact pages
  * Tushare pages are written byte-for-byte as received; the .meta.json sibling carries the request params, fields,
- * http status, has_more, recorded_at and the page sha256. Real fixtures (fixtures/tushare) replace the synthetic ones
+ * http status, has_more, recorded_at and the page sha256; <ts_code>.manifest.json lists the pages (the loader reads only those).
+ * A recording is a complete generation: written to a temp dir, validated, then it replaces the issuer's set (stale pages removed). Real fixtures (fixtures/tushare) replace the synthetic ones
  * (fixtures/tushare/_synthetic) in the loader automatically. After recording, do the report_type 1/4/5 and paging
  * check of spec §15 item 1 and write the result into docs/audits/2026-11-04-data-foundation-2/17-tushare-verification.md.
  * (--cninfo mode is added by Task 13.) Exit 2 on bad arguments or a missing TUSHARE_TOKEN.
  */
-import {mkdirSync,readFileSync,writeFileSync} from 'node:fs';
+import {mkdirSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {FACT_CONCEPTS} from '../../src/lib/facts/concepts';
@@ -21,6 +22,7 @@ import {scanJsonNumbers} from '../../src/lib/facts/json-numbers';
 import {budgetFor,padCik,stringifyPreservingNumbers} from '../../src/lib/facts/providers/shared';
 import {companyFactsUrl,fetchCompanyFacts,tagsOf} from '../../src/lib/facts/providers/edgar-companyfacts';
 import {fetchTushareStatements} from '../../src/lib/facts/providers/tushare-statements';
+import {commitRecording,writeRecording} from '../../src/lib/facts/providers/tushare-fixtures';
 
 const ROOT=fileURLToPath(new URL('../../src/lib/facts/fixtures/',import.meta.url));
 const SINCE_END='2019-01-01';
@@ -74,12 +76,14 @@ async function recordTushare(tsCode:string,sinceYear:number){
  if(!process.env.TUSHARE_TOKEN)fail('TUSHARE_TOKEN is not set (pass it with node --env-file=<file outside the repo>)');
  if(!Number.isInteger(sinceYear)||sinceYear<1990||sinceYear>2100)fail('bad --since-year');
  const snaps=await fetchTushareStatements(tsCode,sinceYear,budgetFor(600_000));
- for(const s of snaps){
-  const rt=(s.meta.params as {report_type:string}).report_type;
-  const base=`tushare/${tsCode}.${s.meta.api}.rt${rt}.p${s.meta.page}`;
-  const p=join(ROOT,`${base}.json`);mkdirSync(join(p,'..'),{recursive:true});writeFileSync(p,s.bytes);console.log(`wrote ${p} (${s.bytes.byteLength} bytes, sha256 ${s.sha256.slice(0,8)})`);
-  write(`${base}.meta.json`,JSON.stringify({recorded_at:s.meta.fetched_at,sha256:s.sha256,http_status:s.meta.http_status,has_more:s.meta.has_more,params:s.meta.params,fields:s.meta.fields},null,1));
- }
+ // One complete generation in a temp dir, validated by the loader (manifest, sha256, contiguous pages, last has_more=false),
+ // then it replaces the issuer's set atomically per file and pages absent from the new manifest are removed.
+ const dst=join(ROOT,'tushare'),tmp=join(dst,`.recording-${tsCode}-${process.pid}`);
+ try{
+  writeRecording(tmp,tsCode,snaps);
+  const r=commitRecording(tmp,dst,tsCode);
+  console.log(`wrote ${r.written.length} files to ${dst}; removed ${r.removed.length} stale: ${r.removed.join(', ')}`);
+ }finally{rmSync(tmp,{recursive:true,force:true});}
 }
 async function main(){
  const [mode,...rest]=process.argv.slice(2);

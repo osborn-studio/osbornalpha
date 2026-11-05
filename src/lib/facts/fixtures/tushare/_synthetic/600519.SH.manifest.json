@@ -1,0 +1,54 @@
+{
+ "ts_code": "600519.SH",
+ "recorded_at": "1970-01-01T00:00:00.000Z",
+ "pages": [
+  {
+   "file": "600519.SH.balancesheet.rt1.p1.json",
+   "api": "balancesheet",
+   "report_type": 1,
+   "page": 1,
+   "sha256": "74037b8a2a2775af0ebc48c39b6725af9f1c03cd0a8ef4b86b17ad43d0eee1ca",
+   "has_more": false
+  },
+  {
+   "file": "600519.SH.balancesheet.rt5.p1.json",
+   "api": "balancesheet",
+   "report_type": 5,
+   "page": 1,
+   "sha256": "5a9e93a03aacfe74bb08ede55c20ec662d946a86f1bff4dae90de39a9ff9e32c",
+   "has_more": false
+  },
+  {
+   "file": "600519.SH.cashflow.rt1.p1.json",
+   "api": "cashflow",
+   "report_type": 1,
+   "page": 1,
+   "sha256": "0361981e8333324ddf66dfd473f2c479c0b535f39210590c44776166dd95594e",
+   "has_more": false
+  },
+  {
+   "file": "600519.SH.income.rt1.p1.json",
+   "api": "income",
+   "report_type": 1,
+   "page": 1,
+   "sha256": "7761ed037490b9b256f38f8c2599c0d499a2546f157070ef036ca28807163350",
+   "has_more": false
+  },
+  {
+   "file": "600519.SH.income.rt4.p1.json",
+   "api": "income",
+   "report_type": 4,
+   "page": 1,
+   "sha256": "fe404494b69fb9fca321cba05e006df4b233187ac108b9d62ad4e0aba66b8353",
+   "has_more": false
+  },
+  {
+   "file": "600519.SH.income.rt5.p1.json",
+   "api": "income",
+   "report_type": 5,
+   "page": 1,
+   "sha256": "a7d20a40882e737d8f205d354c2e850d2f74833ab30ffeccb092c64094d0183e",
+   "has_more": false
+  }
+ ]
+}

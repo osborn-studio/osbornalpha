@@ -15,13 +15,23 @@
 // of the row (`values`, decimal strings) and `snapshot_sha256`. (3) A page that repeats the previous page's
 // bytes (offset ignored upstream) stops the fetch with tushare_unavailable instead of looping.
 // (4) Invalid calendar dates in end_date / ann dates are treated as row_shape / missing available date.
+// Review follow-up: (5) every row's ts_code must equal the snapshot's requested ts_code and all snapshots of one
+// parse must be for the same requested issuer (parse_error ts_code_mismatch). (6) has_more=true always continues
+// (even on a short page); an empty page with has_more=true or a page whose fields+items hash equals the previous
+// page's (request_id and other envelope fields are ignored) fails as paging_not_advancing; a full page with
+// has_more=false is reported as skipped reason page_full_no_more. (7) A present-but-invalid f_ann_date never
+// falls back to ann_date: the row is parked as missing_available_date with both original strings; ann_date is
+// used only when f_ann_date is absent/null/empty. (8) Budget: the 20 s reserve is applied once, here (the raw call
+// gets reserveMs 0 and an explicit timeout); TushareError -2 → budget_exhausted, -4 → snapshot_too_large, abort of
+// the budget signal → budget_aborted, any other abort/timeout → request_timeout. Parse failures of the JSON text
+// carry the fixed message json_invalid.
 import type {Budget,ConceptDef,Duration,FactCandidate,FilingCandidate,FormType,Origin,ParseResult,RawSnapshot} from '../types';
 import {FACT_CONCEPTS,tushareFieldsFor} from '../concepts';
 import type {NumberSchema} from '../json-numbers';
 import {TUSHARE_CONTROL_FIELDS,canonicalDecimal,decodeColumns,scanJsonNumbers} from '../json-numbers';
 import {classifyDuration,isDate} from '../classify';
 import {tushareCallRaw,type TushareRaw} from '../../data/sources/tushare';
-import {nearestDuration,ProviderError,rawHashOf,sleep,snapshotOf,ymd} from './shared';
+import {nearestDuration,ProviderError,rawHashOf,sha256Hex,sleep,snapshotOf,ymd} from './shared';
 
 export type TushareApi='income'|'balancesheet'|'cashflow';
 export const TUSHARE_APIS:TushareApi[]=['income','balancesheet','cashflow'];
@@ -31,6 +41,7 @@ export const PAGE_SIZE=2000;
 export const TUSHARE_MIN_INTERVAL_MS=300;
 const MAX_PAGES=200;
 const RESERVE_MS=20_000;
+const CALL_TIMEOUT_MS=30_000;
 const API_OF_STATEMENT:Record<string,TushareApi|undefined>={IS:'income',BS:'balancesheet',CF:'cashflow'};
 /** Decimal columns = every value column of every api, from the catalogue (single source, tushareFieldsFor). */
 export const TUSHARE_NUMBER_SCHEMA:NumberSchema={control:TUSHARE_CONTROL_FIELDS,decimal:[...new Set(TUSHARE_APIS.flatMap(a=>tushareFieldsFor(a)))]};
@@ -61,45 +72,59 @@ export async function fetchTushareStatements(tsCode:string,sinceYear:number,budg
  for(const api of TUSHARE_APIS)for(const rt of TUSHARE_REPORT_TYPES){
   const fields=fieldsFor(api,opts.concepts);
   const params={ts_code:tsCode,start_date:`${sinceYear}0101`,report_type:String(rt)};
-  let previousSha:string|null=null;
+  let previousContent:string|null=null;
   for(let page=1,offset=0;;page++){
    if(page>MAX_PAGES)throw new ProviderError('tushare_unavailable','too_many_pages');
    if(budget.remainingMs()<=RESERVE_MS)throw new ProviderError('tushare_unavailable','budget_exhausted');
    const at=Math.max(now(),nextSlotAt);nextSlotAt=at+TUSHARE_MIN_INTERVAL_MS;
    const gap=at-now();
    if(gap>0){try{await wait(gap,budget.signal);}catch{throw new ProviderError('tushare_unavailable','budget_aborted');}}
+   // re-check after the pacing wait: the budget may have run out while queued
+   if(budget.signal.aborted)throw new ProviderError('tushare_unavailable','budget_aborted');
+   if(budget.remainingMs()<=RESERVE_MS)throw new ProviderError('tushare_unavailable','budget_exhausted');
    let raw:TushareRaw;
-   try{raw=await call(api,params,fields,{limit:pageSize,offset,budget});}
+   try{raw=await call(api,params,fields,{limit:pageSize,offset,budget,reserveMs:0,timeoutMs:Math.min(CALL_TIMEOUT_MS,budget.remainingMs()-RESERVE_MS)});}
    catch(e){
     const code=(e as {code?:unknown}).code;
     if(code===429)throw new ProviderError('quota_exhausted','http_429');
+    if(code===-2)throw new ProviderError('tushare_unavailable','budget_exhausted');
+    if(code===-4)throw new ProviderError('snapshot_too_large','response_too_large');
+    if(budget.signal.aborted)throw new ProviderError('tushare_unavailable','budget_aborted');
+    const name=(e as {name?:unknown}).name;
+    if(name==='AbortError'||name==='TimeoutError')throw new ProviderError('tushare_unavailable','request_timeout');
     throw new ProviderError('tushare_unavailable',`request_failed_${typeof code==='number'&&Number.isInteger(code)?code:'x'}`);
    }
    if(raw.code!==0)throw new ProviderError(isTushareQuotaMessage(raw.msg)?'quota_exhausted':'tushare_unavailable',`api_code_${Number.isInteger(raw.code)?raw.code:'x'}`);
-   if(previousSha!==null&&previousSha===raw.sha256)throw new ProviderError('tushare_unavailable','paging_not_advancing');
-   previousSha=raw.sha256;
+   // content hash over fields+items only: a real response carries a unique request_id, so whole-body equality never repeats
+   const content=sha256Hex(JSON.stringify([raw.fields,raw.items]));
+   if(raw.hasMore&&raw.items.length===0)throw new ProviderError('tushare_unavailable','paging_not_advancing');
+   if(previousContent!==null&&previousContent===content)throw new ProviderError('tushare_unavailable','paging_not_advancing');
+   previousContent=content;
    out.push(snapshotOf(raw.bytes,{source:'tushare',api,params:{...params,limit:pageSize,offset},fields,http_status:raw.httpStatus,has_more:raw.hasMore,page}));
-   if(!raw.hasMore||raw.items.length<pageSize)break;
+   if(!raw.hasMore)break;
    offset+=raw.items.length;
   }
  }
  return out;
 }
 
-interface Decoded{api:TushareApi;reportType:number;page:number;sha256:string;rows:Record<string,unknown>[]}
+interface Decoded{api:TushareApi;tsCode:string;reportType:number;page:number;sha256:string;rows:Record<string,unknown>[];limit:number|null;hasMore:boolean}
 function decodeSnapshot(s:RawSnapshot):Decoded{
  const api=s.meta.api as TushareApi;
  if(!TUSHARE_APIS.includes(api))throw new ProviderError('parse_error','snapshot_api');
  const rt=Number((s.meta.params as {report_type?:string}|undefined)?.report_type);
  if(!(TUSHARE_REPORT_TYPES as readonly number[]).includes(rt))throw new ProviderError('parse_error','snapshot_report_type');
- let json:{data?:{fields?:unknown;items?:unknown}|null};
- try{json=scanJsonNumbers(s.bytes) as typeof json;}catch(e){throw new ProviderError('parse_error',`json: ${(e as Error).message}`);}
+ const requested=(s.meta.params as {ts_code?:unknown}|undefined)?.ts_code;
+ if(typeof requested!=='string'||requested==='')throw new ProviderError('parse_error','ts_code_missing');
+ let json:{data?:{fields?:unknown;items?:unknown;has_more?:unknown}|null};
+ try{json=scanJsonNumbers(s.bytes) as typeof json;}catch{throw new ProviderError('parse_error','json_invalid');}
  const data=json.data??null;
  const fields=Array.isArray(data?.fields)?data!.fields as string[]:[];
  const items=Array.isArray(data?.items)?data!.items as unknown[][]:[];
  let rows:Record<string,unknown>[];
  try{rows=decodeColumns(fields,items,TUSHARE_NUMBER_SCHEMA);}catch(e){throw new ProviderError('parse_error',(e as Error).message);}
- return {api,reportType:rt,page:s.meta.page??1,sha256:s.sha256,rows};
+ const limit=(s.meta.params as {limit?:unknown}|undefined)?.limit;
+ return {api,tsCode:requested,reportType:rt,page:s.meta.page??1,sha256:s.sha256,rows,limit:typeof limit==='number'&&limit>0?limit:null,hasMore:data?.has_more===true};
 }
 /** After decodeColumns a value column is a canonical decimal string (or null); control columns are integers. */
 const decOf=(v:unknown):string|null=>{if(typeof v!=='string'||v==='')return null;try{return canonicalDecimal(v);}catch{return null;}};
@@ -125,23 +150,30 @@ export function parseTushareStatements(snapshots:RawSnapshot[],opts:ParseTushare
  const sinceYear=opts.sinceYear??(opts.today??new Date()).getUTCFullYear()-10;
  const out:ParseResult={candidates:[],filings:[],skipped:[],ambiguous:[],oddDuration:[],missingAvailableDate:[]};
  const skip=new Map<string,number>();const bump=(r:string)=>skip.set(r,(skip.get(r)??0)+1);
+ let issuerCode:string|null=null;
  const filings=new Map<string,FilingCandidate>();
  const groups=new Map<string,{first:FactCandidate;values:Set<string>;all:FactCandidate[]}>();
  for(const s of snapshots){
   const d=decodeSnapshot(s);
+  if(issuerCode===null)issuerCode=d.tsCode;else if(issuerCode!==d.tsCode)throw new ProviderError('parse_error','ts_code_mismatch');
+  if(!d.hasMore&&d.limit!==null&&d.rows.length>=d.limit)bump('page_full_no_more');
   d.rows.forEach((row,rowNo)=>{
    const tsCode=strOf(row.ts_code),endDate=dateOf(row.end_date),rt=numOf(row.report_type);
+   if(tsCode!==null&&tsCode!==d.tsCode)throw new ProviderError('parse_error','ts_code_mismatch');
    if(!tsCode||!endDate||rt===null){bump('row_shape');return;}
    if(rt!==d.reportType){bump('report_type_mismatch');return;}
    if(Number(endDate.slice(0,4))<sinceYear){bump('before_since_year');return;}
    if(d.api==='cashflow'&&numOf(row.is_calc)===1){bump('is_calc');return;}
    const updateFlag=numOf(row.update_flag);
    const rowLocator=(ann:string)=>`${d.api}:rt${rt}:p${d.page}[end_date=${endDate},ann=${ann},update_flag=${updateFlag??''},row=${rowNo}]`;
-   const ann=dateOf(row.f_ann_date)??dateOf(row.ann_date);
+   // f_ann_date wins when present; an invalid one NEVER falls back to ann_date (that would invent an availability date)
+   const present=(v:unknown)=>v!==undefined&&v!==null&&v!=='';
+   const original=(v:unknown):string|null=>!present(v)?null:typeof v==='string'?v:String(v);
+   const ann=present(row.f_ann_date)?dateOf(row.f_ann_date):dateOf(row.ann_date);
    if(!ann){
     const values:Record<string,string>={};
     for(const f of tushareFieldsFor(d.api)){const v=decOf(row[f]);if(v!==null)values[f]=v;}
-    out.missingAvailableDate.push({ts_code:tsCode,end_date:endDate,report_type:rt,api:d.api,page:d.page,row:rowNo,update_flag:updateFlag,values,snapshot_sha256:d.sha256,locator:rowLocator('')});
+    out.missingAvailableDate.push({ts_code:tsCode,end_date:endDate,report_type:rt,api:d.api,page:d.page,row:rowNo,update_flag:updateFlag,f_ann_date:original(row.f_ann_date),ann_date:original(row.ann_date),values,snapshot_sha256:d.sha256,locator:rowLocator('')});
     return;
    }
    const sourceRef=`${tsCode}:${endDate}:${rt}:${ann}`;

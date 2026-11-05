@@ -608,21 +608,37 @@ export async function fetchTushareReportRc(
 // API-level errors (code !== 0) are returned, not thrown: the caller classifies quota vs other.
 // Thrown messages are fixed strings: a response body never reaches an Error message.
 export interface TushareRaw { bytes: Uint8Array; sha256: string; httpStatus: number; requestId: string | null; code: number; msg: string; fields: string[]; items: unknown[][]; hasMore: boolean }
-export interface TushareRawOptions { limit?: number; offset?: number; budget?: Budget; fetch?: typeof fetch; token?: string; timeoutMs?: number }
+export interface TushareRawOptions { limit?: number; offset?: number; budget?: Budget; fetch?: typeof fetch; token?: string; timeoutMs?: number; reserveMs?: number }
+/** A statements page is a few MB; anything above this is not a Tushare page (TushareError -4, mapped to snapshot_too_large by the adapter). */
+export const MAX_TUSHARE_RESPONSE_BYTES = 50 * 1024 * 1024;
+async function readBounded(res: Response, max: number): Promise<Uint8Array> {
+  if (!res.body) { const b = new Uint8Array(await res.arrayBuffer()); if (b.byteLength > max) throw new TushareError(-4, 'response too large'); return b; }
+  const reader = res.body.getReader(); const chunks: Uint8Array[] = []; let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) { await reader.cancel(); throw new TushareError(-4, 'response too large'); }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total); let o = 0; for (const c of chunks) { out.set(c, o); o += c.byteLength; }
+  return out;
+}
 const rawNumber = (v: unknown): number | null => typeof v === 'number' ? v : v && typeof v === 'object' && typeof (v as { __num?: unknown }).__num === 'string' ? Number((v as { __num: string }).__num) : null;
 
 export async function tushareCallRaw(api_name: string, params: Record<string, unknown>, fields: string, opts: TushareRawOptions = {}): Promise<TushareRaw> {
   const token = opts.token ?? process.env.TUSHARE_TOKEN;
   if (!token) throw new TushareError(-1, 'TUSHARE_TOKEN not configured');
-  const remaining = opts.budget ? opts.budget.remainingMs() - 20_000 : Infinity;
+  const remaining = opts.budget ? opts.budget.remainingMs() - (opts.reserveMs ?? 20_000) : Infinity;
   const timeoutMs = Math.min(opts.timeoutMs ?? 30_000, remaining);
   if (timeoutMs <= 0) throw new TushareError(-2, 'budget exhausted');
   const signals = [AbortSignal.timeout(timeoutMs)];
   if (opts.budget) signals.push(opts.budget.signal);
   const body = JSON.stringify({ api_name, token, params: { ...params, ...(opts.limit !== undefined ? { limit: opts.limit } : {}), ...(opts.offset !== undefined ? { offset: opts.offset } : {}) }, fields });
   const resp = await (opts.fetch ?? fetch)(TUSHARE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signal: AbortSignal.any(signals) });
-  const bytes = new Uint8Array(await resp.arrayBuffer());
   if (!resp.ok) throw new TushareError(resp.status, `HTTP ${resp.status}`);
+  if (Number(resp.headers.get('content-length') ?? '0') > MAX_TUSHARE_RESPONSE_BYTES) throw new TushareError(-4, 'response too large');
+  const bytes = await readBounded(resp, MAX_TUSHARE_RESPONSE_BYTES);
   let json: { request_id?: unknown; code?: unknown; msg?: unknown; data?: { fields?: unknown; items?: unknown; has_more?: unknown } | null };
   try { json = scanJsonNumbers(bytes) as typeof json; } catch { throw new TushareError(-3, 'malformed Tushare response'); }
   const code = rawNumber(json.code);

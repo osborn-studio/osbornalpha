@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import {describe,expect,it,vi} from 'vitest';
-import {TUSHARE_ENDPOINT,TushareError,tushareCallRaw} from './tushare';
+import {MAX_TUSHARE_RESPONSE_BYTES,TUSHARE_ENDPOINT,TushareError,tushareCallRaw} from './tushare';
 
 const body='{"request_id":"r-1","code":0,"msg":null,"data":{"fields":["ts_code","end_date","report_type","total_revenue"],"items":[["600519.SH","20231231",1,1.5056e11],["600519.SH","20221231",1,12345678901234567890]],"has_more":true}}';
 // Mocks typed against the real `typeof fetch` input (RequestInfo | URL, init optional), round-1 #5.
@@ -33,7 +33,15 @@ describe('tushareCallRaw',()=>{
  it('aborts on the budget and on the per-call timeout',async()=>{
   const ctl=new AbortController();ctl.abort(new Error('budget'));
   const fetch=vi.fn<FetchFn>(async(_u,init)=>{init?.signal?.throwIfAborted();return new Response(body);});
-  await expect(tushareCallRaw('income',{},'',{fetch,token:'t',budget:{remainingMs:()=>60_000,signal:ctl.signal}})).rejects.toBeDefined();
+  await expect(tushareCallRaw('income',{},'',{fetch,token:'t',budget:{remainingMs:()=>60_000,signal:ctl.signal}})).rejects.toMatchObject({message:'budget'});
   await expect(tushareCallRaw('income',{},'',{fetch,token:'t',budget:{remainingMs:()=>10_000,signal:new AbortController().signal}})).rejects.toMatchObject({code:-2});
+ });
+ it('applies the reserve from options (reserveMs 0 leaves the whole remaining time) and caps the response size',async()=>{
+  const fetch=vi.fn<FetchFn>(async()=>new Response(body));
+  await expect(tushareCallRaw('income',{},'',{fetch,token:'t',reserveMs:0,budget:{remainingMs:()=>10_000,signal:new AbortController().signal}})).resolves.toMatchObject({code:0});
+  const big=new Response('x',{headers:{'content-length':String(MAX_TUSHARE_RESPONSE_BYTES+1)}});
+  await expect(tushareCallRaw('income',{},'',{fetch:async()=>big,token:'t'})).rejects.toMatchObject({code:-4,message:'response too large'});
+  const stream=new Response(new ReadableStream({start(c){c.enqueue(new Uint8Array(MAX_TUSHARE_RESPONSE_BYTES));c.enqueue(new Uint8Array(1));c.close();}}));
+  await expect(tushareCallRaw('income',{},'',{fetch:async()=>stream,token:'t'})).rejects.toMatchObject({code:-4});
  });
 });
