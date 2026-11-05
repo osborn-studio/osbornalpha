@@ -1,0 +1,43 @@
+// src/lib/facts/providers/shared.ts
+// Provider plumbing shared by the EDGAR and Tushare adapters (spec §6.2/§6.3; §4.7 raw_hash rule):
+// typed provider failures (ProviderError IS SyncError from ../errors, so sync.ts reads `code` as the
+// batch error code without re-wrapping), snapshot construction with sha256, the raw_hash locator rule
+// sha256(snapshot.sha256 + "\n" + locator), and a number-preserving JSON serialiser used by the
+// fixture recorder (never JSON.parse → stringify a financial value).
+import {createHash} from 'node:crypto';
+import {SyncError} from '../errors';
+import type {SyncErrorCode} from '../errors';
+import type {Budget,Duration,RawSnapshot} from '../types';
+
+export type ProviderErrorCode=SyncErrorCode;
+export const ProviderError=SyncError;
+export type ProviderError=SyncError;
+
+export const sha256Hex=(data:Uint8Array|string)=>createHash('sha256').update(data).digest('hex');
+export const rawHashOf=(snapshotSha256:string,locator:string)=>sha256Hex(`${snapshotSha256}\n${locator}`);
+export function snapshotOf(bytes:Uint8Array,meta:Partial<RawSnapshot['meta']>&{source:RawSnapshot['meta']['source']}):RawSnapshot{
+ return {bytes,sha256:sha256Hex(bytes),meta:{fetched_at:new Date().toISOString(),http_status:200,...meta}};
+}
+export const padCik=(cik:string|number)=>String(cik).replace(/^0+/,'').padStart(10,'0');
+export const ymd=(d:string)=>/^\d{8}$/.test(d)?`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`:d;
+const BUCKETS:[number,Duration][]=[[90,'3M'],[182,'6M'],[273,'9M'],[365,'12M']];
+/** Closest duration bucket for an odd period length; only used to type oddDuration candidates (never written as facts). */
+export const nearestDuration=(days:number):Duration=>BUCKETS.reduce((best,cur)=>Math.abs(cur[0]-days)<Math.abs(best[0]-days)?cur:best)[1];
+export function sleep(ms:number,signal:AbortSignal):Promise<void>{
+ return new Promise((resolve,reject)=>{
+  if(signal.aborted)return reject(signal.reason);
+  const onAbort=()=>{clearTimeout(t);reject(signal.reason);};
+  const t=setTimeout(()=>{signal.removeEventListener('abort',onAbort);resolve();},ms);
+  signal.addEventListener('abort',onAbort,{once:true});
+ });
+}
+export function budgetFor(ms:number,parent?:AbortSignal):Budget{
+ const until=Date.now()+ms;const ctl=new AbortController();
+ parent?.addEventListener('abort',()=>ctl.abort(parent.reason),{once:true});
+ return {remainingMs:()=>until-Date.now(),signal:ctl.signal};
+}
+/** JSON text of a scanJsonNumbers() tree with every {__num:'<literal>'} written back as the literal. */
+export function stringifyPreservingNumbers(value:unknown,indent?:number):string{
+ const text=JSON.stringify(value,(_k,v)=>v&&typeof v==='object'&&typeof (v as {__num?:unknown}).__num==='string'?`\u0000${(v as {__num:string}).__num}\u0000`:v,indent);
+ return text.replace(/"\\u0000(-?[0-9.eE+]+)\\u0000"/g,'$1');
+}
