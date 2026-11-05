@@ -31,7 +31,7 @@ export function pgFactsDb(pool:Pool):FactsDb{
   publishRun:(runId,manifest,expectedRev)=>fn<number>('public.publish_sync_run($1,$2::uuid[],$3::bigint)',[runId,manifest,expectedRev??null]),
   async abandonRun(runId){await fn('public.abandon_sync_run($1)',[runId]);},
   async releaseLease(issuer,market,batch,outcome,nextDue){await fn('public.release_fact_sync_lease($1,$2,$3,$4,$5::timestamptz)',[issuer,market,batch,outcome,nextDue]);},
-  resolveFactsQuarantine:(item,chosen,by)=>fn<{promoted:number;skipped:number}>('public.resolve_facts_quarantine($1,$2::uuid[],$3)',[item,chosen,by]),
+  resolveFactsQuarantine:(item,chosen,by)=>fn<{promoted:number;skipped:number;chosen_fact_ids:string[]}>('public.resolve_facts_quarantine($1,$2::uuid[],$3)',[item,chosen,by]).then(x=>({promoted:Number(x.promoted),skipped:Number(x.skipped),chosenFactIds:x.chosen_fact_ids??[]})),
   replaceMetrics:(issuer,market,rev,input)=>fn<number>('public.replace_financial_metrics($1,$2,$3,$4::jsonb)',[issuer,market,rev,JSON.stringify(input.map(metricArgs))]),
   async readFacts(issuer,market,opts){
    const a=readArgs(issuer,market,opts);

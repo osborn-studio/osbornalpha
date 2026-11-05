@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { memoryTableClient } from '@/lib/db/memory-table-client';
 import { FactsDbError } from '@/lib/facts/types';
 
-const mocks = vi.hoisted(() => ({ requireAdmin: vi.fn(), getAdmin: vi.fn(), resolve: vi.fn(), resolveFacts: vi.fn(), insert: vi.fn(), from: vi.fn(), client: null as unknown }));
+const mocks = vi.hoisted(() => ({ requireAdmin: vi.fn(), getAdmin: vi.fn(), resolve: vi.fn(), resolveFacts: vi.fn(), markAudited: vi.fn(), insert: vi.fn(), from: vi.fn(), client: null as unknown }));
 vi.mock('@/lib/admin/auth', async (importOriginal) => {
   const original = await importOriginal<typeof import('@/lib/admin/auth')>();
   return { ...original, requireAdminUser: mocks.requireAdmin };
@@ -10,7 +10,7 @@ vi.mock('@/lib/admin/auth', async (importOriginal) => {
 vi.mock('@/lib/supabase/admin', () => ({ getAdminSupabase: mocks.getAdmin }));
 vi.mock('@/lib/db/table-client', async (importOriginal) => ({ ...await importOriginal<typeof import('@/lib/db/table-client')>(), supabaseTableClient: () => mocks.client }));
 vi.mock('@/lib/dq/quarantine', () => ({ resolveQuarantine: mocks.resolve }));
-vi.mock('@/lib/dq/facts-resolver', () => ({ resolveFactsItem: mocks.resolveFacts }));
+vi.mock('@/lib/dq/facts-resolver', () => ({ resolveFactsItem: mocks.resolveFacts, markAudited: mocks.markAudited }));
 vi.mock('@/lib/facts/db', () => ({ supabaseFactsDb: () => ({ facts: 'db' }) }));
 
 import { POST } from './route';
@@ -37,6 +37,7 @@ describe('POST /api/admin/dq/quarantine/[id]', () => {
     mocks.from.mockReturnValue({ insert: mocks.insert });
     mocks.getAdmin.mockReturnValue({ from: mocks.from });
     mocks.resolve.mockResolvedValue('resolved');
+    mocks.markAudited.mockResolvedValue(undefined);
     mocks.resolveFacts.mockResolvedValue({ outcome: 'resolved', hook: HOOK, promoted: 1, skipped: 0, chosenFactIds: [FACT_A] });
   });
   const facts = () => client.update('dq_quarantine', { id: ID }, { dataset: 'facts.us', table_name: 'financial_facts', reason_code: 'same_day_conflict', payload: { key: { issuer_id: 'i', market: 'US' }, fact_ids: [FACT_A, FACT_B] } });
@@ -165,15 +166,45 @@ describe('POST /api/admin/dq/quarantine/[id]', () => {
 
   it('maps DB-final-authority errors: invalid_chosen to 400, item_not_open to 409 already_resolved', async () => {
     await facts();
-    mocks.resolveFacts.mockRejectedValue(new FactsDbError('unknown', 'invalid_chosen'));
+    mocks.resolveFacts.mockRejectedValue(new FactsDbError('invalid_chosen'));
     const bad = await json({ status: 'resolved_accept', chosen_fact_ids: [FACT_A] });
     expect(bad.status).toBe(400);
     expect(await bad.json()).toEqual({ id: ID, outcome: 'invalid_choice' });
-    mocks.resolveFacts.mockRejectedValue(new FactsDbError('unknown', 'item_not_open'));
+    mocks.resolveFacts.mockRejectedValue(new FactsDbError('item_not_open'));
     const gone = await json({ status: 'resolved_accept' });
     expect(gone.status).toBe(409);
     expect(await gone.json()).toEqual({ id: ID, outcome: 'already_resolved' });
     expect(mocks.insert).not.toHaveBeenCalled();
+  });
+
+  it('answers 400 when chosen_fact_ids is given for a reject or for a non-conflict reason', async () => {
+    await facts();
+    expect((await json({ status: 'resolved_reject', chosen_fact_ids: [FACT_A] })).status).toBe(400);
+    await client.update('dq_quarantine', { id: ID }, { reason_code: 'identity_bs' });
+    const res = await json({ status: 'resolved_accept', chosen_fact_ids: [FACT_A] });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'chosen_fact_ids_not_applicable' });
+    expect(mocks.resolveFacts).not.toHaveBeenCalled();
+  });
+
+  it('retry of an accepted item: audits as resolved when the first request never audited, marks it, and answers 502 when materialize fails again', async () => {
+    await facts();
+    const failed = { stage: 'materialize', state: 'failed', at: HOOK.at, message: 'stale_computation' };
+    mocks.resolveFacts.mockResolvedValue({ outcome: 'hook_retried', hook: failed, auditAs: 'resolved' });
+    const res = await json({ status: 'resolved_accept' });
+    expect(res.status).toBe(502);
+    expect(mocks.insert.mock.calls[0][0]).toMatchObject({ detail: { outcome: 'resolved', hook: failed } });
+    expect(mocks.markAudited).toHaveBeenCalledWith(client, ID);
+  });
+
+  it('retry of an already audited item writes no second audit row (null) and a hook_retried one when it finally succeeds', async () => {
+    await facts();
+    mocks.resolveFacts.mockResolvedValue({ outcome: 'hook_retried', hook: { ...HOOK, state: 'failed' }, auditAs: null });
+    expect((await json({ status: 'resolved_accept' })).status).toBe(502);
+    expect(mocks.insert).not.toHaveBeenCalled();
+    mocks.resolveFacts.mockResolvedValue({ outcome: 'hook_retried', hook: HOOK, auditAs: 'hook_retried' });
+    expect((await json({ status: 'resolved_accept' })).status).toBe(200);
+    expect(mocks.insert.mock.calls[0][0]).toMatchObject({ detail: { outcome: 'hook_retried' } });
   });
 
   it('re-throws other FactsDb errors as a 500', async () => {

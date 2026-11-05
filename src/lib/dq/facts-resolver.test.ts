@@ -5,7 +5,7 @@ vi.mock('../facts/derive',()=>({materialize:mocks.materialize,FORMULA_VERSION:'f
 
 import {memoryTableClient} from '../db/memory-table-client';
 import {quarantine} from './quarantine';
-import {resolveFactsItem} from './facts-resolver';
+import {markAudited,resolveFactsItem} from './facts-resolver';
 import {FactsDbError} from '../facts/types';
 import type {FactRow,FactsDb} from '../facts/types';
 
@@ -19,7 +19,7 @@ const fact=(id:string,value:string):FactRow=>({fact_id:id,issuer_id:ISSUER,marke
 function harness(){
  const tables=memoryTableClient({dq_quarantine:['id']});
  const values=new Map([[A,'100'],[B,'1e2'],[C,'200']]);
- const resolve=vi.fn<(id:string,chosen:string[],by:string)=>Promise<{promoted:number;skipped:number}>>(async()=>({promoted:1,skipped:0}));
+ const resolve=vi.fn<(id:string,chosen:string[],by:string)=>Promise<{promoted:number;skipped:number}>>(async(_id,chosen)=>({promoted:1,skipped:0,chosenFactIds:chosen}));
  const db={resolveFactsQuarantine:resolve,factsByIds:async(ids:string[])=>ids.filter(i=>values.has(i)).map(i=>fact(i,values.get(i)!))} as unknown as FactsDb;
  const item=async(reasonCode:string,factIds:string[],key:Record<string,string|null>={issuer_id:ISSUER,market:'US'})=>{
   const id=await quarantine(tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`k:${reasonCode}`,reasonCode,batchId:BATCH,payload:{key,fact_ids:factIds,run_id:'r'}});
@@ -42,7 +42,7 @@ describe('resolveFactsItem',()=>{
  it('writes detail.hook on the item and keeps what the function wrote in detail',async()=>{
   const {tables,db,resolve,item,row}=harness();
   const it_=await item('identity_bs',[A]);
-  resolve.mockImplementationOnce(async(id:string,chosen:string[])=>{await tables.update('dq_quarantine',{id},{status:'resolved_accept',resolved_by:ADMIN,resolved_at:'x',detail:{chosen_fact_ids:chosen}});return {promoted:1,skipped:0};});
+  resolve.mockImplementationOnce(async(id:string,chosen:string[])=>{await tables.update('dq_quarantine',{id},{status:'resolved_accept',resolved_by:ADMIN,resolved_at:'x',detail:{chosen_fact_ids:chosen}});return {promoted:1,skipped:0,chosenFactIds:chosen};});
   await resolveFactsItem(db,tables,it_,{status:'resolved_accept',resolvedBy:ADMIN,now:NOW});
   expect(resolve).toHaveBeenCalledWith(it_.id,[A],ADMIN);
   expect((await row(String(it_.id))).detail).toEqual({chosen_fact_ids:[A],hook:{stage:'done',state:'done',at:'2026-11-04T09:00:00.000Z'}});
@@ -83,12 +83,75 @@ describe('resolveFactsItem',()=>{
   await tables.update('dq_quarantine',{id:it_.id},{status:'resolved_accept',resolved_by:ADMIN,resolved_at:'x'});
   const later=()=>new Date('2026-11-04T10:00:00.000Z');
   const second=await resolveFactsItem(db,tables,await row(String(it_.id)),{status:'resolved_accept',resolvedBy:ADMIN,now:later});
-  expect(second).toEqual({outcome:'hook_retried',hook:{stage:'done',state:'done',at:'2026-11-04T10:00:00.000Z'}});
+  expect(second).toEqual({outcome:'hook_retried',hook:{stage:'done',state:'done',at:'2026-11-04T10:00:00.000Z'},auditAs:'resolved'});
   expect(resolve).toHaveBeenCalledTimes(1);
   expect(mocks.materialize).toHaveBeenCalledTimes(2);
   const third=await resolveFactsItem(db,tables,await row(String(it_.id)),{status:'resolved_accept',resolvedBy:ADMIN});
   expect(third).toEqual({outcome:'already_resolved',hook:{stage:'done',state:'done',at:'2026-11-04T10:00:00.000Z'}});
   expect(mocks.materialize).toHaveBeenCalledTimes(2);
+ });
+ it('returns and reports the committed chosen ids, not the pre-lock snapshot (membership merged between read and resolve)',async()=>{
+  const {tables,db,resolve,item}=harness();
+  const it_=await item('same_day_conflict',[A,B]);
+  resolve.mockImplementationOnce(async()=>({promoted:2,skipped:0,chosenFactIds:[A,B]}));
+  const r=await resolveFactsItem(db,tables,it_,{status:'resolved_accept',chosenFactIds:[A],resolvedBy:ADMIN,now:NOW});
+  expect(r.chosenFactIds).toEqual([A,B]);
+  // identity item: the function rebuilt the member set after a merge; the answer carries the rebuilt set
+  const idt=await item('identity_bs',[A]);
+  resolve.mockImplementationOnce(async()=>({promoted:2,skipped:0,chosenFactIds:[A,C]}));
+  expect((await resolveFactsItem(db,tables,idt,{status:'resolved_accept',resolvedBy:ADMIN,now:NOW})).chosenFactIds).toEqual([A,C]);
+ });
+ it('ignores member ids that no longer exist in the value precheck and leaves the verdict to SQL',async()=>{
+  const {tables,db,resolve,item}=harness();
+  const GONE='20000000-0000-4000-8000-00000000d00d';
+  const it_=await item('same_day_conflict',[A,B,GONE]);
+  const r=await resolveFactsItem(db,tables,it_,{status:'resolved_accept',chosenFactIds:[A,GONE],resolvedBy:ADMIN,now:NOW});
+  expect(r.outcome).toBe('resolved');
+  expect(resolve).toHaveBeenCalledWith(it_.id,[A,GONE],ADMIN);
+ });
+ it('a hook-write failure after the function committed still answers resolved with hook failed',async()=>{
+  const {tables,db,item}=harness();
+  const it_=await item('identity_bs',[A]);
+  const spy=vi.spyOn(console,'error').mockImplementation(()=>{});
+  const update=vi.spyOn(tables,'update').mockRejectedValue(new Error('db gone secret-detail'));
+  const r=await resolveFactsItem(db,tables,it_,{status:'resolved_accept',resolvedBy:ADMIN,now:NOW});
+  update.mockRestore();spy.mockRestore();
+  expect(r.outcome).toBe('resolved');
+  expect(r.hook).toMatchObject({state:'failed',message:'hook_write_failed'});
+ });
+ it('an accepted item whose hook is pending or missing is unfinished: POST re-runs materialize only and audits as resolved once',async()=>{
+  for(const detail of [{chosen_fact_ids:[A],hook:{stage:'materialize',state:'pending',at:'x'}},{chosen_fact_ids:[A]}]){
+   vi.clearAllMocks();mocks.materialize.mockResolvedValue(1);
+   const {tables,db,resolve,item,row}=harness();
+   const it_=await item('identity_bs',[A]);
+   await tables.update('dq_quarantine',{id:it_.id},{status:'resolved_accept',resolved_by:ADMIN,resolved_at:'x',detail});
+   const r=await resolveFactsItem(db,tables,await row(String(it_.id)),{status:'resolved_accept',resolvedBy:ADMIN,now:NOW});
+   expect(r).toEqual({outcome:'hook_retried',hook:{stage:'done',state:'done',at:'2026-11-04T09:00:00.000Z'},auditAs:'resolved'});
+   expect(resolve).not.toHaveBeenCalled();
+   expect(mocks.materialize).toHaveBeenCalledTimes(1);
+   await markAudited(tables,String(it_.id));
+   // finished and audited: a further POST is a plain already_resolved
+   expect(await resolveFactsItem(db,tables,await row(String(it_.id)),{status:'resolved_accept',resolvedBy:ADMIN})).toMatchObject({outcome:'already_resolved'});
+  }
+ });
+ it('a retry of an already audited item with a failing materialize audits nothing; success audits as hook_retried',async()=>{
+  const {tables,db,item,row}=harness();
+  const it_=await item('identity_gp',[A]);
+  await tables.update('dq_quarantine',{id:it_.id},{status:'resolved_accept',resolved_by:ADMIN,resolved_at:'x',detail:{audit_written:true,hook:{stage:'materialize',state:'failed',at:'x'}}});
+  const spy=vi.spyOn(console,'error').mockImplementation(()=>{});
+  mocks.materialize.mockRejectedValueOnce(new Error('postgres: relation secret_table missing'));
+  const bad=await resolveFactsItem(db,tables,await row(String(it_.id)),{status:'resolved_accept',resolvedBy:ADMIN,now:NOW});
+  spy.mockRestore();
+  expect(bad).toMatchObject({outcome:'hook_retried',auditAs:null,hook:{state:'failed',message:'materialize_failed'}});
+  const ok=await resolveFactsItem(db,tables,await row(String(it_.id)),{status:'resolved_accept',resolvedBy:ADMIN,now:NOW});
+  expect(ok).toMatchObject({outcome:'hook_retried',auditAs:'hook_retried'});
+ });
+ it('an item without a valid issuer/market target gets hook failed no_target, not done',async()=>{
+  const {tables,db,item}=harness();
+  const it_=await item('identity_bs',[A],{});
+  const r=await resolveFactsItem(db,tables,it_,{status:'resolved_accept',resolvedBy:ADMIN,now:NOW});
+  expect(r.hook).toEqual({stage:'materialize',state:'failed',at:'2026-11-04T09:00:00.000Z',message:'no_target'});
+  expect(mocks.materialize).not.toHaveBeenCalled();
  });
  it('rejects through the generic transition and never touches fact rows',async()=>{
   const {tables,db,resolve,item,row}=harness();

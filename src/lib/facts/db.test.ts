@@ -79,7 +79,7 @@ describe('toFactsDbError',()=>{
   expect(toFactsDbError({message:'canceling statement due to lock timeout',code:'55P03'}).code).toBe('lease_lost');
   for(const c of ['run_pending','run_published','mapping_gen_regression','stale_computation','stale_plan'])expect(toFactsDbError({message:c,code:'P0001'}).code).toBe(c);
   expect(toFactsDbError({message:'duplicate key value violates unique constraint "filings_pkey"',code:'23505'}).code).toBe('duplicate_key');
-  expect(toFactsDbError({message:'item_not_open',code:'P0001'})).toMatchObject({code:'unknown',message:'item_not_open'});
+  expect(toFactsDbError({message:'item_not_open',code:'P0001'})).toMatchObject({code:'item_not_open',message:'item_not_open'});
   expect(toFactsDbError({message:undefined,code:undefined}).code).toBe('unknown');
   expect(toFactsDbError({message:'x'})).toBeInstanceOf(FactsDbError);
  });

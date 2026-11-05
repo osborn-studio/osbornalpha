@@ -42,6 +42,7 @@ const ASYNC_METHODS=['claimLease','beginRun','stageFilings','stageFacts','quaran
 /** Compile-time check: ASYNC_METHODS must cover every FactsDb method. */
 export type AsyncMethodsComplete=[Exclude<keyof FactsDb,typeof ASYNC_METHODS[number]>] extends [never]?true:never;
 export const asyncMethodsComplete:AsyncMethodsComplete=true;   // type error here ⇒ a FactsDb method is missing from ASYNC_METHODS
+const FACT_ROW_REASONS=['same_day_conflict','identity_bs','identity_gp'];
 const sk=(issuer:string,market:Market)=>`${issuer}|${market}`;
 type KeyPart=Pick<FactRow,'concept'|'period_start'|'period_end'|'consolidation'|'unit'>;
 const keyOf=(f:KeyPart)=>[f.concept,f.period_start??'',f.period_end,f.consolidation,f.unit].join('|');
@@ -172,7 +173,7 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
   async quarantineFacts(run,factIds,itemId){
    runLock(run);
    const [it]=await tables.select('dq_quarantine',{id:itemId,status:'open'},{limit:1});
-   if(!it)throw unknown('item_not_open');
+   if(!it)throw new FactsDbError('item_not_open');
    let n=0;
    for(const id of new Set(factIds)){const f=facts.get(id);if(f&&f.run_id===run&&f.status==='staged'){f.status='quarantined';n++;}}
    const merged=[...idsOf(it)];for(const id of factIds)if(!merged.includes(id))merged.push(id);
@@ -212,7 +213,7 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
   },
   async resolveFactsQuarantine(itemId,chosen,resolvedBy){
    const [it]=await tables.select('dq_quarantine',{id:itemId},{limit:1});
-   if(!it||it.status!=='open'||it.table_name!=='financial_facts')throw unknown('item_not_open');
+   if(!it||it.status!=='open'||it.table_name!=='financial_facts')throw new FactsDbError('item_not_open');
    const ids=idsOf(it);
    const existing=ids.map(id=>facts.get(id)).filter((f):f is FactRow=>!!f);
    const runId=runIdOf(it);
@@ -222,15 +223,15 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
    if(existing.some(f=>runs.get(f.run_id)?.status==='staged'))throw new FactsDbError('run_pending');
    if(runId!==null&&runs.get(runId)?.status==='staged')throw new FactsDbError('run_pending');
    let picked:string[];
-   if(it.reason_code==='same_day_conflict'){picked=[...chosen];if(picked.some(id=>!ids.includes(id)))throw unknown('invalid_chosen');
+   if(it.reason_code==='same_day_conflict'){picked=[...chosen];if(picked.some(id=>!ids.includes(id)))throw new FactsDbError('invalid_chosen');
     // spec 7.3: the chosen rows (those still existing) must all carry the same numeric value
     const chosenRows=picked.map(id=>facts.get(id)).filter((f):f is FactRow=>!!f);
-    if(chosenRows.some(f=>!numericEquals(f.value,chosenRows[0].value)))throw unknown('invalid_chosen');}
+    if(chosenRows.some(f=>!numericEquals(f.value,chosenRows[0].value)))throw new FactsDbError('invalid_chosen');}
    else picked=ids;
-   await tables.update('dq_quarantine',{id:itemId,status:'open'},{status:'resolved_accept',resolved_by:resolvedBy,resolved_at:now(),detail:{...((it.detail as Record<string,unknown>|undefined)??{}),chosen_fact_ids:picked}});
+   await tables.update('dq_quarantine',{id:itemId,status:'open'},{status:'resolved_accept',resolved_by:resolvedBy,resolved_at:now(),detail:{...((it.detail as Record<string,unknown>|undefined)??{}),chosen_fact_ids:picked,...(FACT_ROW_REASONS.includes(String(it.reason_code))?{hook:{stage:'materialize',state:'pending',at:now()}}:{})}});
    let promoted=0;
    if(anchor){promoted=await promote(anchor.issuer_id,anchor.market,picked);bump(anchor.issuer_id,anchor.market);}
-   return {promoted,skipped:picked.length-promoted};
+   return {promoted,skipped:picked.length-promoted,chosenFactIds:picked};
   },
   async replaceMetrics(issuer,market,basedOnRev,input){
    const rev=scopeOf(issuer,market)?.state_rev??0;

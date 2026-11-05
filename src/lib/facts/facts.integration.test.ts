@@ -297,13 +297,14 @@ describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()
   await publish(runB,[fb]);
   expect(await status(r)).toBe('quarantined');
   expect((await fails(resolve(itemId,[randomUUID()]))).message).toBe('invalid_chosen');
-  expect(await resolve(itemId,[r])).toEqual({promoted:1,skipped:0});
+  expect(await resolve(itemId,[r])).toMatchObject({promoted:1,skipped:0,chosen_fact_ids:[r]});
   expect(await item(itemId)).toEqual({status:'resolved_accept',fact_ids:[c,r],chosen:[r]});
+  expect(await one(`select detail->'hook' v from public.dq_quarantine where id=$1`,[itemId])).toMatchObject({stage:'materialize',state:'pending'});   // durable pending hook, same transaction
   expect(await status(r)).toBe('ok');expect(await status(c)).toBe('quarantined');expect(await rev(iss)).toBe(3);
   expect((await read(iss,{concepts:['revenue']})).rows.map(x=>x.fact_id)).toContain(r);   // chosen row really visible (R7-1)
   const other=randomUUID();
   await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload) values($1,'facts.us','financial_facts',$2,'identity_gp',$3,$4::jsonb)`,[other,`${iss}:US:IS:${other}`,b,JSON.stringify({key:{},fact_ids:[c],run_id:runB})]);
-  expect(await resolve(other,[])).toEqual({promoted:0,skipped:1});          // c is bound by the verdict
+  expect(await resolve(other,[])).toMatchObject({promoted:0,skipped:1});          // c is bound by the verdict
   expect(await status(c)).toBe('quarantined');
   expect((await fails(resolve(other,[]))).message).toBe('item_not_open');
   expect((await fails(resolve(randomUUID(),[]))).message).toBe('item_not_open');
@@ -350,7 +351,7 @@ describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()
    const pending=resolve(itemId,[r]);
    await stillBlockedBehind(admin,pid,pending);                                                 // waits for the scope row lock
    await commit();
-   expect(await pending).toEqual({promoted:1,skipped:0});                                       // saw the published run, not run_pending
+   expect(await pending).toMatchObject({promoted:1,skipped:0,chosen_fact_ids:[r]});                                       // saw the published run, not run_pending
   });
   expect(await status(r)).toBe('ok');expect(await status(c)).toBe('quarantined');expect(await rev(iss)).toBe(3);
  });
@@ -372,7 +373,7 @@ describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()
   expect(await item(itemId)).toMatchObject({status:'open',fact_ids:[c,r,c2]});
   expect(await status(r)).toBe('quarantined');                                        // nothing was promoted on the stale member set
   await publish(runC,[fc]);
-  expect(await resolve(itemId,[r])).toEqual({promoted:1,skipped:0});
+  expect(await resolve(itemId,[r])).toMatchObject({promoted:1,skipped:0});
   expect(await status(r)).toBe('ok');expect(await status(c2)).toBe('quarantined');
  });
 

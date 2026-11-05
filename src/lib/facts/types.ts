@@ -56,7 +56,7 @@ export interface ConflictItem{id:string;natural_key:string;fact_ids:string[];ava
 export interface ReadFactsOptions{concepts:string[];asOf:string;from?:string;to?:string;history?:boolean;limit?:number;includeNonOk?:boolean}
 export interface ReadFactsResult{stateRev:number;rows:FactRow[];truncated:boolean}
 
-export type FactsDbErrorCode='lease_lost'|'run_pending'|'run_published'|'mapping_gen_regression'|'stale_computation'|'stale_plan'|'run_abandoned'|'read_truncated'|'duplicate_key'|'unknown';
+export type FactsDbErrorCode='lease_lost'|'run_pending'|'run_published'|'mapping_gen_regression'|'stale_computation'|'stale_plan'|'run_abandoned'|'read_truncated'|'duplicate_key'|'invalid_chosen'|'item_not_open'|'unknown';
 export class FactsDbError extends Error{constructor(public code:FactsDbErrorCode,message?:string){super(message??code);this.name='FactsDbError';}}
 
 export interface FactsDb{
@@ -70,7 +70,7 @@ export interface FactsDb{
  publishRun(run:string,manifest:string[],expectedRev?:number):Promise<number>;
  abandonRun(run:string):Promise<void>;
  releaseLease(issuer:string,market:Market,batch:string,outcome:'success'|'failed',nextDue:string):Promise<void>;
- resolveFactsQuarantine(itemId:string,chosen:string[],resolvedBy:string):Promise<{promoted:number;skipped:number}>;
+ resolveFactsQuarantine(itemId:string,chosen:string[],resolvedBy:string):Promise<{promoted:number;skipped:number;chosenFactIds:string[]}>;
  replaceMetrics(issuer:string,market:Market,basedOnRev:number,rows:MetricRow[]):Promise<number>;
  readFacts(issuer:string,market:Market,opts:ReadFactsOptions):Promise<ReadFactsResult>;
  /** Rows for the given ids: deduped, ordered by fact_id; unknown ids are omitted. */

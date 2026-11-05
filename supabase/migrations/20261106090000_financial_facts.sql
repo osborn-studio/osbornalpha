@@ -543,7 +543,9 @@ grant execute on function public.promote_quarantined(uuid, text, uuid[]) to serv
 -- open). Otherwise, in one transaction: item → resolved_accept with detail.chosen_fact_ids (the
 -- verdict for same_day_conflict — must be a subset of payload.fact_ids — or all member ids
 -- otherwise), promotion by the eligibility rules (the item itself is closed by then, so it no
--- longer blocks its members), state_rev + 1. Returns {promoted, skipped}.
+-- longer blocks its members), state_rev + 1. For fact-row reasons the same update writes
+-- detail.hook = {stage:'materialize', state:'pending', at} so an unfinished materialize is durable.
+-- Returns {promoted, skipped, chosen_fact_ids} (the committed verdict, from the rebuilt member set).
 create or replace function public.resolve_facts_quarantine(p_item uuid, p_chosen uuid[], p_resolved_by uuid)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare q public.dq_quarantine; v_ids uuid[]; v_issuer uuid; v_market text; v_chosen uuid[]; v_promoted int := 0; v_run uuid;
@@ -583,12 +585,15 @@ begin
   update public.dq_quarantine
   set status = 'resolved_accept', resolved_by = p_resolved_by, resolved_at = now(),
       detail = detail || jsonb_build_object('chosen_fact_ids', to_jsonb(v_chosen))
+        || case when q.reason_code in ('same_day_conflict', 'identity_bs', 'identity_gp')
+                then jsonb_build_object('hook', jsonb_build_object('stage', 'materialize', 'state', 'pending', 'at', to_jsonb(now())))
+                else '{}'::jsonb end
   where id = p_item;
   if v_issuer is not null then
     v_promoted := public.fact_promote_rows(v_issuer, v_market, v_chosen);
     update public.fact_sync_scope set state_rev = state_rev + 1, updated_at = now() where issuer_id = v_issuer and market = v_market;
   end if;
-  return jsonb_build_object('promoted', v_promoted, 'skipped', cardinality(v_chosen) - v_promoted);
+  return jsonb_build_object('promoted', v_promoted, 'skipped', cardinality(v_chosen) - v_promoted, 'chosen_fact_ids', to_jsonb(v_chosen));
 end $$;
 revoke execute on function public.resolve_facts_quarantine(uuid, uuid[], uuid) from public, anon, authenticated;
 grant execute on function public.resolve_facts_quarantine(uuid, uuid[], uuid) to service_role;

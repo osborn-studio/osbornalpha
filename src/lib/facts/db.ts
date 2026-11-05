@@ -27,7 +27,7 @@ export const READ_PAGE=1000;
 export const IN_CHUNK=200;
 /** attempts of a metrics read before it fails as metrics_unstable. */
 export const METRICS_ATTEMPTS=3;
-const MESSAGE_CODES:readonly FactsDbErrorCode[]=['run_pending','run_published','mapping_gen_regression','stale_computation','stale_plan','run_abandoned'];
+const MESSAGE_CODES:readonly FactsDbErrorCode[]=['run_pending','run_published','mapping_gen_regression','stale_computation','stale_plan','run_abandoned','invalid_chosen','item_not_open'];
 
 export interface PgErrorLike{message?:string;code?:string|null;details?:string|null;hint?:string|null}
 /** PostgreSQL / PostgREST error → FactsDbError (shared by the Supabase and pg adapters). */
@@ -135,7 +135,7 @@ export function supabaseFactsDb(client:SupabaseClient):FactsDb{
   async publishRun(run,manifest,expectedRev){return Number(await call<unknown>('publish_sync_run',{p_run:run,p_manifest:manifest,p_expected_rev:expectedRev??null}));},
   async abandonRun(run){await call('abandon_sync_run',{p_run:run});},
   async releaseLease(issuer,market,batch,outcome,nextDue){await call('release_fact_sync_lease',{p_issuer:issuer,p_market:market,p_batch:batch,p_outcome:outcome,p_next_due:nextDue});},
-  async resolveFactsQuarantine(item,chosen,by){const x=await call<{promoted:unknown;skipped:unknown}>('resolve_facts_quarantine',{p_item:item,p_chosen:chosen,p_resolved_by:by});return {promoted:Number(x.promoted),skipped:Number(x.skipped)};},
+  async resolveFactsQuarantine(item,chosen,by){const x=await call<{promoted:unknown;skipped:unknown;chosen_fact_ids?:unknown}>('resolve_facts_quarantine',{p_item:item,p_chosen:chosen,p_resolved_by:by});return {promoted:Number(x.promoted),skipped:Number(x.skipped),chosenFactIds:Array.isArray(x.chosen_fact_ids)?x.chosen_fact_ids.map(String):[]};},
   async replaceMetrics(issuer,market,rev,input){return Number(await call<unknown>('replace_financial_metrics',{p_issuer:issuer,p_market:market,p_based_on_rev:rev,p_rows:input.map(metricArgs)}));},
   async readFacts(issuer,market,opts){return resultFromEnvelope(await call<ReadFactsEnvelope>('read_facts',readArgs(issuer,market,opts)));},
   async factsByIds(ids){

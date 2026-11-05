@@ -115,7 +115,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    const planned=(await current(iss)).stateRev;expect(planned).toBe(2);                 // the plan is made here: qd is not ok, so a different same-day value looks conflict-free
    const run3=await db.beginRun(iss,'US',b,1);const f3=filingInsert(iss,{availableDate:'2024-03-01'});await db.stageFilings(run3,[f3]);
    const a3=factInsert(iss,f3,{value:'200'});await db.stageFacts(run3,[a3]);
-   expect(await db.resolveFactsQuarantine(itemId,[qd.fact_id],randomUUID())).toEqual({promoted:1,skipped:0});   // admin promotes qd after planning
+   expect(await db.resolveFactsQuarantine(itemId,[qd.fact_id],randomUUID())).toMatchObject({promoted:1,skipped:0});   // admin promotes qd after planning
    expect(await code(db.publishRun(run3,[f3.filing_id],planned))).toBe('stale_plan:stale_plan');
    expect(await statusOf(a3.fact_id)).toBe('staged');expect(await statusOf(qd.fact_id)).toBe('ok');
    expect(await db.publishRun(run3,[f3.filing_id],planned+1)).toBe(1);
@@ -132,7 +132,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect(await statusOf(r)).toBe('ok');expect(await statusOf(c.fact_id)).toBeNull();expect((await item(itemId)).status).toBe('open');
    const runC=await db.beginRun(iss,'US',b,1);const fc=filingInsert(iss);await db.stageFilings(runC,[fc]);
    const c2=factInsert(iss,fc,{value:'200'});await db.stageFacts(runC,[c2]);
-   expect(await code(db.quarantineFacts(runC,[c2.fact_id],randomUUID()))).toBe('unknown:item_not_open');
+   expect(await code(db.quarantineFacts(runC,[c2.fact_id],randomUUID()))).toBe('item_not_open:item_not_open');
    expect(await db.quarantineFacts(runC,[c2.fact_id,c2.fact_id],itemId)).toBe(1);
    expect((await item(itemId)).fact_ids).toEqual([c.fact_id,r,c2.fact_id]);
    expect(await code(db.resolveFactsQuarantine(itemId,[r],randomUUID()))).toBe('run_pending:run_pending');
@@ -140,16 +140,16 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect(await db.publishRun(runC,[fc.filing_id])).toBe(0);
    expect(await statusOf(r)).toBe('quarantined');expect(await statusOf(c2.fact_id)).toBe('quarantined');
    expect((await current(iss,['revenue'],false)).rows.map(y=>[y.fact_id,y.value])).toEqual([[r0,'90']]);
-   expect(await code(db.resolveFactsQuarantine(itemId,[randomUUID()],randomUUID()))).toBe('unknown:invalid_chosen');
-   expect(await db.resolveFactsQuarantine(itemId,[r],randomUUID())).toEqual({promoted:1,skipped:0});
+   expect(await code(db.resolveFactsQuarantine(itemId,[randomUUID()],randomUUID()))).toBe('invalid_chosen:invalid_chosen');
+   expect(await db.resolveFactsQuarantine(itemId,[r],randomUUID())).toMatchObject({promoted:1,skipped:0});
    expect(await item(itemId)).toEqual({status:'resolved_accept',fact_ids:[c.fact_id,r,c2.fact_id],chosen:[r]});
    expect((await current(iss,['revenue'],false)).rows.map(y=>y.fact_id)).toEqual([r]);
    expect((await current(iss)).stateRev).toBe(3);
    expect(await db.openConflicts(iss,'US')).toEqual([]);
    const other=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${iss}:US:IS:${randomUUID()}`,reasonCode:'identity_gp',batchId:b,payload:{key:{},fact_ids:[c2.fact_id],run_id:runC}});
-   expect(await db.resolveFactsQuarantine(other,[],randomUUID())).toEqual({promoted:0,skipped:1});
+   expect(await db.resolveFactsQuarantine(other,[],randomUUID())).toMatchObject({promoted:0,skipped:1});
    expect(await statusOf(c2.fact_id)).toBe('quarantined');
-   expect(await code(db.resolveFactsQuarantine(other,[],randomUUID()))).toBe('unknown:item_not_open');
+   expect(await code(db.resolveFactsQuarantine(other,[],randomUUID()))).toBe('item_not_open:item_not_open');
   });
 
   it('resolve: chosen rows with differing values are invalid_chosen; an item of another table is not open',async()=>{
@@ -158,11 +158,15 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    const c=factInsert(iss,fb,{value:'200'});await db.stageFacts(runB,[c]);
    const itemId=await conflict(iss,b,runB,[c.fact_id,r]);await db.quarantineFacts(runB,[c.fact_id],itemId);
    expect(await db.publishRun(runB,[fb.filing_id])).toBe(0);
-   expect(await code(db.resolveFactsQuarantine(itemId,[c.fact_id,r],randomUUID()))).toBe('unknown:invalid_chosen');   // 200 vs 100
+   expect(await code(db.resolveFactsQuarantine(itemId,[c.fact_id,r],randomUUID()))).toBe('invalid_chosen:invalid_chosen');   // 200 vs 100
    expect((await item(itemId)).status).toBe('open');
-   expect(await db.resolveFactsQuarantine(itemId,[c.fact_id],randomUUID())).toEqual({promoted:1,skipped:0});
+   expect(await db.resolveFactsQuarantine(itemId,[c.fact_id],randomUUID())).toMatchObject({promoted:1,skipped:0,chosenFactIds:[c.fact_id]});
+   // the committed verdict and a durable pending hook land in the same transaction (review round: Codex P1)
+   const [done]=await h.tables.select('dq_quarantine',{id:itemId});
+   expect((done.detail as {chosen_fact_ids:string[]}).chosen_fact_ids).toEqual([c.fact_id]);
+   expect((done.detail as {hook:{stage:string;state:string;at:string}}).hook).toMatchObject({stage:'materialize',state:'pending'});
    const foreign=await quarantine(h.tables,{dataset:'facts.us',table:'other_table',naturalKey:`${iss}:US:${randomUUID()}`,reasonCode:'same_day_conflict',batchId:b,payload:{key:{},fact_ids:[],run_id:runB}});
-   expect(await code(db.resolveFactsQuarantine(foreign,[],randomUUID()))).toBe('unknown:item_not_open');
+   expect(await code(db.resolveFactsQuarantine(foreign,[],randomUUID()))).toBe('item_not_open:item_not_open');
    expect((await item(foreign)).status).toBe('open');
   });
 
@@ -284,10 +288,10 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    const identity=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${iss}:US:IS:${randomUUID()}`,reasonCode:'identity_gp',batchId:b,payload:{key:{issuer_id:iss,market:'US'},fact_ids:[c3.fact_id],run_id:runC}});
    await db.quarantineFacts(runC,[c3.fact_id],identity);
    expect(await db.publishRun(runC,[fc.filing_id])).toBe(0);
-   expect(await db.resolveFactsQuarantine(identity,[],randomUUID())).toEqual({promoted:0,skipped:1});   // (K, 2024-02-01) is still disputed
+   expect(await db.resolveFactsQuarantine(identity,[],randomUUID())).toMatchObject({promoted:0,skipped:1});   // (K, 2024-02-01) is still disputed
    expect(await statusOf(c3.fact_id)).toBe('quarantined');
    expect((await current(iss,['revenue'],false)).rows.map(y=>y.value)).toEqual(['90']);                  // the day still has no ok value
-   expect(await db.resolveFactsQuarantine(dispute,[r],randomUUID())).toEqual({promoted:1,skipped:0});
+   expect(await db.resolveFactsQuarantine(dispute,[r],randomUUID())).toMatchObject({promoted:1,skipped:0});
    expect(await statusOf(r)).toBe('ok');expect(await statusOf(c3.fact_id)).toBe('quarantined');       // c3 waits for promote_quarantined (§7.3), the dispute no longer blocks it
    expect((await current(iss,['revenue'],false)).rows.map(y=>y.fact_id)).toEqual([r]);
   });
@@ -299,14 +303,14 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect(await code(db.resolveFactsQuarantine(parked,[],randomUUID()))).toBe('run_pending:run_pending');
    expect((await item(parked)).status).toBe('open');
    expect(await db.publishRun(run,[])).toBe(0);
-   expect(await db.resolveFactsQuarantine(parked,[],randomUUID())).toEqual({promoted:0,skipped:0});
+   expect(await db.resolveFactsQuarantine(parked,[],randomUUID())).toMatchObject({promoted:0,skipped:0});
    expect((await item(parked)).status).toBe('resolved_accept');
    expect((await current(iss)).stateRev).toBe(3);                                         // publish + resolution
    const run2=await db.beginRun(iss,'US',b,1);
    const parked2=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${iss}:US:cash::2023-06-30:consolidated:USD:acc-9:1`,reasonCode:'odd_duration',batchId:b,payload:{key:{issuer_id:iss,market:'US'},fact_ids:[],run_id:run2}});
    expect(await code(db.resolveFactsQuarantine(parked2,[],randomUUID()))).toBe('run_pending:run_pending');
    await db.abandonRun(run2);
-   expect(await db.resolveFactsQuarantine(parked2,[],randomUUID())).toEqual({promoted:0,skipped:0});
+   expect(await db.resolveFactsQuarantine(parked2,[],randomUUID())).toMatchObject({promoted:0,skipped:0});
   });
 
   it('complete-set reads return every row past 1,000: filingsOfIssuer without limit, metricsOfIssuer, scopeRows (round-1 #7)',async()=>{
