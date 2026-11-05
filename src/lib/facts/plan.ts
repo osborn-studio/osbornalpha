@@ -39,6 +39,10 @@ export function planFactWrites(input:PlanInput):PlanResult{
  const dateOf=new Map(input.filingCandidates.map(f=>[f.sourceRef,f.availableDate]));
  const existingKeys=new Set(input.existing.map(r=>candidateKey(rowKey(r),r.filing_id,r.mapping_gen)));
  const okRows=input.existing.filter(r=>r.status==='ok');
+ // Rows that stay active after this run publishes: an ok row of a filing re-mapped in this run
+ // (older generation) is superseded, so it must not compete with its own replacement.
+ const stagedFilingIds=new Set(input.filings.values());
+ const activeRows=okRows.filter(r=>!(r.mapping_gen<mappingGen&&stagedFilingIds.has(r.filing_id)));
  const openByKey=new Map(input.openConflicts.map(i=>[i.natural_key,i]));
  const result:PlanResult={inserts:[],counts:{inserted:0,versioned:0,duplicates:0,quarantined:0},duplicates:[],ambiguous:[],conflicts:[],contestedJoins:[],outcomes:new Map(),quarantinedFactIds:[]};
  // 1. duplicates against the store, then group by candidate key
@@ -78,10 +82,10 @@ export function planFactWrites(input:PlanInput):PlanResult{
   const park=()=>{for(const r of inserts){result.outcomes.set(r.fact_id,'quarantined');result.quarantinedFactIds.push(r.fact_id);}result.counts.quarantined+=inserts.length;};
   const open=openByKey.get(dk);
   if(open){result.contestedJoins.push({itemId:open.id,factIds:inserts.map(r=>r.fact_id)});park();continue;}
-  const sameDayOk=okRows.filter(r=>r.available_date===date&&sameDayConflictKey(issuerId,market,rowKey(r),r.available_date)===dk);
+  const sameDayOk=activeRows.filter(r=>r.available_date===date&&sameDayConflictKey(issuerId,market,rowKey(r),r.available_date)===dk);
   const values=new Set([...inserts.map(r=>r.value),...sameDayOk.map(r=>canonicalDecimal(r.value))]);
   if(values.size>1){
-   result.conflicts.push({naturalKey:dk,key:keyComponents(issuerId,market,k),availableDate:date,newFactIds:inserts.map(r=>r.fact_id),existingOkFactIds:sameDayOk.map(r=>r.fact_id),
+   result.conflicts.push({naturalKey:dk,key:keyComponents(issuerId,market,k,date),availableDate:date,newFactIds:inserts.map(r=>r.fact_id),existingOkFactIds:sameDayOk.map(r=>r.fact_id),
     values:[...inserts.map(r=>({filing:r.filing_id,value:r.value})),...sameDayOk.map(r=>({filing:r.filing_id,value:canonicalDecimal(r.value)}))]});
    park();continue;
   }

@@ -18,5 +18,5 @@ export const ambiguousKey=(issuer:string,market:Market,k:FactKey,sourceRef:strin
 /** identity_bs (BS, period_end only) and identity_gp (IS, period_start:period_end) natural_key (§7.1). */
 export const identityKey=(issuer:string,market:Market,statement:Extract<Statement,'IS'|'BS'>,periodStart:string|null,periodEnd:string,unit:string,sourceRef:string,mappingGen:number):string=>
  statement==='BS'?[issuer,market,'BS',periodEnd,unit,sourceRef,String(mappingGen)].join(':'):[issuer,market,'IS',seg(periodStart),periodEnd,unit,sourceRef,String(mappingGen)].join(':');
-/** The K components as stored in quarantine payload.key. */
-export const keyComponents=(issuer:string,market:Market,k:FactKey):Record<string,string|null>=>({issuer_id:issuer,market,concept:k.concept,period_start:k.period_start,period_end:k.period_end,consolidation:k.consolidation,unit:k.unit});
+/** The K components as stored in quarantine payload.key; same_day_conflict items also carry available_date (promotion guard matches on it). */
+export const keyComponents=(issuer:string,market:Market,k:FactKey,availableDate?:string):Record<string,string|null>=>({issuer_id:issuer,market,concept:k.concept,period_start:k.period_start,period_end:k.period_end,consolidation:k.consolidation,unit:k.unit,...(availableDate===undefined?{}:{available_date:availableDate})});

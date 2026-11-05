@@ -60,6 +60,7 @@ describe('planFactWrites',()=>{
   expect(c.naturalKey).toBe(sameDayConflictKey(ISSUER,'US',K,'2023-11-03'));
   expect(c.newFactIds).toEqual(out.inserts.map(r=>r.fact_id));
   expect(c.existingOkFactIds).toEqual([]);
+  expect(c.key).toEqual({issuer_id:ISSUER,market:'US',concept:'revenue',period_start:'2022-10-01',period_end:'2023-09-30',consolidation:'consolidated',unit:'USD',available_date:'2023-11-03'});
   expect(c.values.map(v=>v.value).sort()).toEqual(['100','200']);
   expect(out.counts).toEqual({inserted:0,versioned:0,duplicates:0,quarantined:2});
   expect(out.quarantinedFactIds).toEqual(c.newFactIds);
@@ -68,6 +69,15 @@ describe('planFactWrites',()=>{
   expect(withOk.conflicts[0].newFactIds).toHaveLength(1);
   // same value on the same day from another filing is a normal insert
   expect(plan({existing:[row(F1,'100','2023-11-03')],candidates:[cand('acc-2','100')]}).conflicts).toHaveLength(0);
+ });
+ it('does not conflict a re-mapped filing with its own superseded row, but still detects distinct-filing conflicts',()=>{
+  const old=row(F1,'100','2023-11-03',{mapping_gen:0});
+  const fix=plan({existing:[old],candidates:[cand('acc-1','101')]});
+  expect(fix.conflicts).toHaveLength(0);expect(fix.counts).toEqual({inserted:0,versioned:1,duplicates:0,quarantined:0});
+  const other=row(F2,'100','2023-11-03');
+  expect(plan({existing:[old,other],candidates:[cand('acc-1','101')]}).conflicts).toHaveLength(1);
+  const old2=row(F2,'200','2023-11-03',{mapping_gen:0});
+  expect(plan({existing:[old2],candidates:[cand('acc-1','100')]}).conflicts).toHaveLength(0);
  });
  it('is independent of arrival order: one run with both, or either filing first, yields the same conflict',()=>{
   const both=plan({candidates:[cand('acc-1','100'),cand('acc-2','200')]});
