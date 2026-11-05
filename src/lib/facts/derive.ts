@@ -14,6 +14,7 @@
 import type {Duration,FactRow,FactsDb,Market,MetricDuration,MetricRow} from './types';
 import {FactsDbError} from './types';
 import {canonicalDecimal} from './json-numbers';
+import {classifyDuration} from './classify';
 
 export const FORMULA_VERSION='facts-derive/1.0';
 export const RATIO_SCALE=10;
@@ -70,7 +71,7 @@ const daysBetween=(from:string,to:string)=>Math.round((dayMs(to)-dayMs(from))/DA
 // ---- current disclosure per natural key ----
 interface Cur{row:FactRow;dec:Dec;revised:boolean}
 type Input=MetricRow['inputs'][number];
-const inputOf=(c:Cur):Input=>({fact_id:c.row.fact_id,concept:c.row.concept,filing_id:c.row.filing_id,available_date:c.row.available_date});
+const inputOf=(c:Cur,extra:Partial<Input>={}):Input=>({fact_id:c.row.fact_id,concept:c.row.concept,filing_id:c.row.filing_id,available_date:c.row.available_date,...extra});
 const cmpStr=(a:string,b:string)=>a<b?-1:a>b?1:0;
 function currentFacts(rows:FactRow[]):Map<string,Cur[]>{
  const groups=new Map<string,FactRow[]>();
@@ -86,7 +87,10 @@ function currentFacts(rows:FactRow[]):Map<string,Cur[]>{
  return out;
 }
 
-export function deriveMetrics(rows:FactRow[],opts:DeriveOptions):MetricRow[]{
+export function deriveMetrics(allRows:FactRow[],opts:DeriveOptions):MetricRow[]{
+ // Consolidated rows only: the metric vocabulary is consolidated-only and financial_metrics has no consolidation column in its key,
+ // so mixing bases would pair a consolidated revenue with a parent gross profit or collide on the primary key.
+ let rows=allRows.filter(r=>r.consolidation==='consolidated');
  if(rows.length===0)return [];
  const {market,asOf}=opts;const issuerId=rows[0].issuer_id;const basedOnRev=opts.basedOnRev??0;
  const facts=currentFacts(rows);
@@ -101,7 +105,7 @@ export function deriveMetrics(rows:FactRow[],opts:DeriveOptions):MetricRow[]{
  const emit=(metric:string,start:string,end:string,duration:MetricDuration,value:Dec,unit:string,inputUnit:string,basis:string,inputs:Input[])=>{
   const seen=new Set<string>();
   out.push({issuer_id:issuerId,market,metric,period_start:start,period_end:end,duration,value:decToString(value),unit,input_unit:inputUnit,basis,formula_version:FORMULA_VERSION,
-   inputs:inputs.filter(i=>!seen.has(i.fact_id)&&!!seen.add(i.fact_id)),based_on_rev:basedOnRev,as_of:asOf});
+   inputs:inputs.filter(i=>{const k=`${i.fact_id}|${i.quarter?.join('~')??''}`;return !seen.has(k)&&!!seen.add(k);}),based_on_rev:basedOnRev,as_of:asOf});
  };
  const ratio=(metric:string,ref:Cur&{row:{period_start:string}},num:Dec,den:Dec,basis:string,inputs:Cur[])=>{
   const v=div(num,den);if(v)emit(metric,ref.row.period_start,ref.row.period_end,ref.row.duration,v,'pure',ref.row.unit,basis,inputs.map(inputOf));
@@ -150,19 +154,26 @@ export function deriveMetrics(rows:FactRow[],opts:DeriveOptions):MetricRow[]{
   const quarters=new Map<string,Q>();
   const put=(q:Q)=>{const k=`${q.start}|${q.end}|${q.unit}`;if(!quarters.has(k))quarters.set(k,q);};   // a direct 3M fact wins over a difference
   const all=of(c).filter(isDuration);
-  for(const f of all)if(f.row.duration==='3M')put({start:f.row.period_start,end:f.row.period_end,unit:f.row.unit,dec:f.dec,inputs:[inputOf(f)]});
+  for(const f of all)if(f.row.duration==='3M')put({start:f.row.period_start,end:f.row.period_end,unit:f.row.unit,dec:f.dec,inputs:[inputOf(f,{quarter:[f.row.period_start,f.row.period_end]})]});
   for(const a of all){
    const bDur=STEP[a.row.duration];if(!bDur)continue;
    const b=unique(all.filter(x=>x.row.duration===bDur&&x.row.period_start===a.row.period_start&&x.row.unit===a.row.unit));
    if(!b||!compatible(a,b))continue;
-   put({start:addDays(b.row.period_end,1),end:a.row.period_end,unit:a.row.unit,dec:sub(a.dec,b.dec),inputs:[inputOf(a),inputOf(b)]});
+   const start=addDays(b.row.period_end,1),end=a.row.period_end;
+   if(classifyDuration(start,end)!=='3M')continue;   // the difference must itself be a single quarter
+   const tag:Partial<Input>={ytd_rule:a.row.filing_id===b.row.filing_id?'same_filing':'never_revised',quarter:[start,end]};
+   put({start,end,unit:a.row.unit,dec:sub(a.dec,b.dec),inputs:[inputOf(a,tag),inputOf(b,tag)]});
   }
   const qs=[...quarters.values()].sort((x,y)=>cmpStr(x.unit,y.unit)||cmpStr(x.end,y.end)||cmpStr(x.start,y.start));
   for(const q of qs)emit(`q_single_${c}`,q.start,q.end,'3M',q.dec,q.unit,q.unit,basisQ(c),q.inputs);
-  for(let i=0;i+3<qs.length;i++){
-   const w=qs.slice(i,i+4);
-   if(w.some((q,j)=>j>0&&(q.unit!==w[0].unit||q.start!==addDays(w[j-1].end,1))))continue;
-   const t:Q={start:w[0].start,end:w[3].end,unit:w[0].unit,dec:w.slice(1).reduce((acc,q)=>add(acc,q.dec),w[0].dec),inputs:w.flatMap(q=>q.inputs)};
+  const byEnd=new Map<string,Q[]>();
+  for(const q of qs){const k=`${q.unit}|${q.end}`;(byEnd.get(k)??byEnd.set(k,[]).get(k)!).push(q);}
+  for(const last of qs){
+   // exactly-adjacent quarters, each unique by (unit, period_end); any ambiguity skips this window
+   const w=[last];let ok=(byEnd.get(`${last.unit}|${last.end}`)?.length??0)===1;
+   for(let j=1;ok&&j<4;j++){const prev=byEnd.get(`${last.unit}|${addDays(w[0].start,-1)}`)??[];if(prev.length!==1)ok=false;else w.unshift(prev[0]);}
+   if(!ok)continue;
+   const t:Q={start:w[0].start,end:last.end,unit:last.unit,dec:w.slice(1).reduce((acc,q)=>add(acc,q.dec),w[0].dec),inputs:w.flatMap(q=>q.inputs)};
    emit(`ttm_${c}`,t.start,t.end,'TTM',t.dec,t.unit,t.unit,basisQ(c),t.inputs);
    if(c==='net_income_parent')ttmNetIncome.push(t);
   }

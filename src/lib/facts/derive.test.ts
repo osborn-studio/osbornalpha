@@ -62,7 +62,8 @@ describe('deriveMetrics: single quarters, TTM, YoY, ROE',()=>{
   const q4=out.find(r=>r.metric==='q_single_revenue'&&r.period_end==='2024-12-31')!;
   expect(q4.inputs.map(i=>i.concept)).toEqual(['revenue','revenue']);   // 12M and 9M facts, flattened
   const ttm=out.find(r=>r.metric==='ttm_revenue')!;
-  expect(new Set(ttm.inputs.map(i=>i.fact_id)).size).toBe(ttm.inputs.length);   // deduplicated lineage
+  expect(new Set(ttm.inputs.map(i=>`${i.fact_id}|${i.quarter}`)).size).toBe(ttm.inputs.length);   // deduplicated per (fact, quarter)
+  expect([...new Set(ttm.inputs.map(i=>String(i.quarter)))]).toEqual(['2024-01-01,2024-03-31','2024-04-01,2024-06-30','2024-07-01,2024-09-30','2024-10-01,2024-12-31']);   // replayable quarter grouping
  });
  it('compatibility rule: revised 9M with an unrevised 6M from another filing → no Q3; same filing → Q3 (rule a)',()=>{
   const nine=[dur('revenue','2024-01-01','2024-09-30','40',{filing_id:'F9',available_date:'2024-10-30',disclosure_seq:1,is_current:false}),
@@ -95,7 +96,8 @@ describe('deriveMetrics: single quarters, TTM, YoY, ROE',()=>{
   const off=[...ytd('net_income_parent',2024,['10','20','30','40']),inst('equity_parent','2023-12-30','180'),inst('equity_parent','2024-12-31','220')];
   expect(pick(deriveMetrics(off,opts),'roe')).toEqual([]);
   const roe=deriveMetrics(rows,opts).find(r=>r.metric==='roe')!;
-  expect(roe.inputs.map(i=>i.concept)).toEqual(['net_income_parent','net_income_parent','net_income_parent','net_income_parent','equity_parent','equity_parent']);   // 3M, 6M, 9M, 12M facts once each, then opening and closing equity
+  expect(roe.inputs.map(i=>i.concept)).toEqual([...Array(7).fill('net_income_parent'),'equity_parent','equity_parent']);   // Q1 (3M) + three differenced quarters (2 facts each), then opening and closing equity
+  expect(roe.inputs.filter(i=>i.concept==='equity_parent').every(i=>i.quarter===undefined)).toBe(true);
  });
  it('metricNames lists the market vocabulary and output is sorted deterministically',()=>{
   expect(metricNames('US')).toContain('q_single_capex');
@@ -119,6 +121,60 @@ describe('deriveMetrics: property (seeded LCG, 200 series)',()=>{
    expect(got).toEqual(q.map(Number));
    expect(Number(pick(out,'ttm_revenue')[0][2])).toBeCloseTo(q.reduce((a,v)=>a+Number(v),0),6);
   }
+ });
+});
+
+describe('deriveMetrics: review follow-ups',()=>{
+ const full=(c:string,y:number,q:[string,string,string,string],extra:Partial<FactRow>={})=>[
+  dur(c,`${y}-01-01`,`${y}-03-31`,q[0],extra),dur(c,`${y}-01-01`,`${y}-06-30`,q[1],extra),dur(c,`${y}-01-01`,`${y}-09-30`,q[2],extra),dur(c,`${y}-01-01`,`${y}-12-31`,q[3],extra)];
+ it('only consolidated rows are used: parent-only gross profit makes no margin; mixed bases never duplicate keys',()=>{
+  const parent=(r:FactRow):FactRow=>({...r,consolidation:'parent'});
+  expect(pick(deriveMetrics([dur('revenue','2024-01-01','2024-03-31','100'),parent(dur('gross_profit','2024-01-01','2024-03-31','40'))],opts),'gross_margin')).toEqual([]);
+  const base=[...full('revenue',2024,['10','25','45','70']),dur('gross_profit','2024-01-01','2024-03-31','4')];
+  const mixed=[...base,...base.map(r=>parent({...r,value:'999',value_text:'999'}))];
+  const out=deriveMetrics(mixed,opts);
+  expect(out).toEqual(deriveMetrics(base,opts));
+  const keys=out.map(m=>`${m.metric}|${m.period_start}|${m.period_end}|${m.input_unit}|${m.basis}`);
+  expect(new Set(keys).size).toBe(keys.length);
+ });
+ it('a differenced interval must itself classify as 3M: Jan 1-Apr 14 minus Jan 1-Jun 14 gives no quarter',()=>{
+  const out=deriveMetrics([dur('operating_cash_flow','2024-01-01','2024-04-14','10',{duration:'3M'}),dur('operating_cash_flow','2024-01-01','2024-06-14','30',{duration:'6M'})],opts);
+  expect(pick(out,'q_single_operating_cash_flow').map(r=>r[1])).toEqual(['2024-04-14']);   // only the direct 3M-classified fact
+  expect(out.filter(r=>r.metric==='q_single_operating_cash_flow').length).toBe(1);
+ });
+ it('cash-flow differencing: OCF Q2 = 6M - 3M, lineage records ytd_rule and quarter',()=>{
+  const out=deriveMetrics([...full('operating_cash_flow',2024,['10','25','45','70'],{filing_id:'Q1'}).slice(0,1),...full('operating_cash_flow',2024,['10','25','45','70'],{filing_id:'Q2'}).slice(1)],opts);
+  expect(pick(out,'q_single_operating_cash_flow')[1]).toEqual(['2024-04-01','2024-06-30','15']);
+  const q2=out.find(r=>r.metric==='q_single_operating_cash_flow'&&r.period_end==='2024-06-30')!;
+  expect(q2.inputs.map(i=>[i.ytd_rule,i.quarter])).toEqual([['never_revised',['2024-04-01','2024-06-30']],['never_revised',['2024-04-01','2024-06-30']]]);
+  const q1=out.find(r=>r.metric==='q_single_operating_cash_flow'&&r.period_end==='2024-03-31')!;
+  expect(q1.inputs).toHaveLength(1);expect(q1.inputs[0].ytd_rule).toBeUndefined();
+ });
+ it('lineage ytd_rule is same_filing when both facts come from one filing but are revised',()=>{
+  const rows=[dur('revenue','2024-01-01','2024-06-30','25',{filing_id:'K'}),dur('revenue','2024-01-01','2024-09-30','45',{filing_id:'K',is_revision:true})];
+  expect(deriveMetrics(rows,opts).find(r=>r.metric==='q_single_revenue')!.inputs.map(i=>i.ytd_rule)).toEqual(['same_filing','same_filing']);
+ });
+ it('TTM skips windows with two quarters ending on the same date, without duplicate keys',()=>{
+  const rows=[...full('revenue',2024,['10','25','45','70']),dur('revenue','2024-04-05','2024-06-30','7')];   // second Q2 candidate, same end, different start
+  const out=deriveMetrics(rows,opts);
+  expect(pick(out,'ttm_revenue')).toEqual([]);
+  const keys=out.map(m=>`${m.metric}|${m.period_start}|${m.period_end}|${m.input_unit}|${m.basis}`);
+  expect(new Set(keys).size).toBe(keys.length);
+ });
+ it('ratio rounding is half away from zero, also for negatives and exact halves',()=>{
+  const r=(rev:string,gp:string)=>pick(deriveMetrics([dur('revenue','2024-01-01','2024-03-31',rev),dur('gross_profit','2024-01-01','2024-03-31',gp)],opts),'gross_margin')[0][2];
+  expect(r('20000000000','1')).toBe('0.0000000001');      // exactly 5e-11 rounds up
+  expect(r('20000000000','-1')).toBe('-0.0000000001');    // exactly -5e-11 rounds away from zero
+  expect(r('30000000000','1')).toBe('0');                 // 3.3e-11 rounds down
+  expect(r('-3','1')).toBe('-0.3333333333');
+  expect(r('3','-1')).toBe('-0.3333333333');
+  expect(r('3','2')).toBe('0.6666666667');
+  expect(r('-3','2')).toBe('-0.6666666667');
+ });
+ it('CN borrowings_total with bonds_payable missing stays missing',()=>{
+  const cn={market:'CN' as Market,unit:'CNY'};
+  const out=deriveMetrics([inst('short_term_borrowings','2024-12-31','1',cn),inst('long_term_borrowings','2024-12-31','2',cn)],{market:'CN',asOf:'2025-01-01'});
+  expect(out.find(m=>m.metric==='borrowings_total')).toBeUndefined();
  });
 });
 
