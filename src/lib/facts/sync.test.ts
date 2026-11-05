@@ -41,6 +41,11 @@ const CN_SCOPE=[{issuer_id:ISSUER,fetch_key:'600519.SH',market:'CN' as Market}];
 const run=(deps:SyncDeps,over:Partial<Parameters<typeof runFactsSync>[1]>={})=>runFactsSync(deps,{market:'US',limit:25,dryRun:false,triggeredBy:'script',...over});
 const current=(db:FactsDb,asOf=NOW.toISOString().slice(0,10))=>db.readFacts(ISSUER,'US',{concepts:['revenue','net_income_parent','total_assets','liabilities_and_equity'],asOf,history:false});
 
+/** Counter contract: after a published run the outcomes add up to fetched; after a failure at least so. */
+const balanced=(c:{fetched:number;inserted:number;versioned:number;duplicates:number;quarantined:number;failed:number})=>{
+ const n=c.inserted+c.versioned+c.duplicates+c.quarantined+c.failed;
+ if(c.failed===0)expect(n).toBe(c.fetched);else expect(n).toBeGreaterThanOrEqual(c.fetched);
+};
 beforeEach(()=>{vi.clearAllMocks();mocks.materialize.mockResolvedValue(0);});
 
 describe('runFactsSync — lifecycle',()=>{
@@ -94,7 +99,7 @@ describe('runFactsSync — conflicts and rules',()=>{
  it('parks two same-day disclosures with different values into one same_day_conflict item and leaves no ok value for that day',async()=>{
   const {tables,db,deps}=harness(parsed([filing('acc-1','2023-11-03'),filing('acc-2','2023-11-03')],[cand('acc-1','revenue','100'),cand('acc-2','revenue','200')]));
   const r=await run(deps);
-  expect(r.counts).toMatchObject({inserted:0,versioned:0,quarantined:2});
+  expect(r.counts).toMatchObject({inserted:0,versioned:0,quarantined:2});balanced(r.counts);
   expect(r.status).toBe('success');
   const items=tables.rows('dq_quarantine');
   expect(items).toHaveLength(1);
@@ -124,7 +129,7 @@ describe('runFactsSync — conflicts and rules',()=>{
   const odd=cand('acc-1','revenue','1',{periodStart:'2023-08-01',duration:'3M'});
   const {tables,deps}=harness(parsed([filing('acc-1','2023-11-03')],[cand('acc-1','revenue','100'),cand('acc-1','cost_of_revenue','250')],{oddDuration:[odd],ambiguous:[{key:`${ISSUER}:US:cash::2023-09-30:consolidated:USD:acc-1:1`,candidates:[bs('acc-1','cash','1'),bs('acc-1','cash','2')]}]}));
   const r=await run(deps);
-  expect(r.counts).toMatchObject({inserted:2,quarantined:3});
+  expect(r.counts).toMatchObject({fetched:5,inserted:2,quarantined:3});balanced(r.counts);
   expect(tables.rows('dq_quarantine').map(i=>i.reason_code).sort()).toEqual(['ambiguous_value','odd_duration']);
   expect(r.errors).toEqual([{code:'rule_warning_summary',key:'gross_margin_range',message:JSON.stringify({count:1,keys:[`${ISSUER}:US:IS:2022-10-01:2023-09-30:USD:acc-1:1`]})}]);
   expect(r.status).toBe('success');
@@ -195,7 +200,7 @@ describe('runFactsSync — failures',()=>{
   await run(deps,{mappingGen:2});
   const r=await run(deps,{issuerIds:[ISSUER],mappingGen:1});
   expect(r.issuers[0]).toMatchObject({outcome:'failed',code:'mapping_gen_regression'});
-  expect(r.counts).toMatchObject({fetched:2,inserted:0,versioned:0,duplicates:0,quarantined:0,failed:2});   // nothing committed, failure counted once
+  expect(r.counts).toMatchObject({fetched:2,inserted:0,versioned:0,duplicates:0,quarantined:0,failed:2});balanced(r.counts);   // nothing committed, failure counted once
   expect(r.status).toBe('failed');
   expect(db.runs().map(x=>x.status)).toEqual(['published','abandoned']);
   expect((await db.filingsOfIssuer(ISSUER,'US',{}))[0].mapping_gen).toBe(2);
@@ -252,7 +257,7 @@ describe('runFactsSync — round-1 audit cases',()=>{
   const {tables,db,deps}=harness(parsed([],[],{missingAvailableDate:[{accn:'0000320193-23-000106',tag:'us-gaap:Revenues',end:'2023-09-30'},{accn:'0000320193-23-000106',tag:'us-gaap:Assets',end:'2023-09-30'}]}));
   const r=await run(deps);
   expect(r.issuers[0]).toMatchObject({outcome:'published',code:'no_rows'});
-  expect(r.counts).toMatchObject({fetched:0,inserted:0,quarantined:2,failed:0});
+  expect(r.counts).toMatchObject({fetched:2,inserted:0,quarantined:2,failed:0});
   expect(tables.rows('dq_quarantine').map(i=>[i.reason_code,i.natural_key]).sort()).toEqual([
    ['missing_available_date',`${ISSUER}:0000320193:0000320193-23-000106:us-gaap:Assets::2023-09-30:`],
    ['missing_available_date',`${ISSUER}:0000320193:0000320193-23-000106:us-gaap:Revenues::2023-09-30:`],
@@ -379,9 +384,9 @@ describe('runFactsSync — round-3 review cases',()=>{
   const r=await run(deps,{issuerIds:[ISSUER]});
   expect(r.issuers[0]).toMatchObject({outcome:'failed',code:'stale_plan'});
   expect(r.errors).toEqual([{code:'stale_plan',key:ISSUER}]);
-  expect(r.counts).toMatchObject({inserted:0,versioned:0,failed:1});
+  expect(r.counts).toMatchObject({inserted:0,versioned:0,failed:1});balanced(r.counts);
   expect(db.runs().map(x=>x.status)).toEqual(['published','abandoned']);
-  expect((await db.scopeDue('US','9999-12-31T00:00:00.000Z',10))[0]).toMatchObject({last_status:'failed',lease_batch_id:null,next_due_at:'2027-03-02T08:00:00.000Z'});
+  expect((await db.scopeDue('US','9999-12-31T00:00:00.000Z',10))[0]).toMatchObject({last_status:'failed',lease_batch_id:null,next_due_at:'2027-03-01T08:10:00.000Z'});   // stale plan retries in 10 minutes, not a day (round-4 #7)
   expect((await current(db)).rows.map(f=>f.value)).toEqual(['96995000000','383285000000']);
  });
  it('missing_available_date rows of one accession park distinctly per period and unit (#2)',async()=>{
@@ -396,12 +401,16 @@ describe('runFactsSync — round-3 review cases',()=>{
  });
  it('stops between phases when the budget is spent: with time left the run is abandoned, without it the staged run is left for the next beginRun; deadline_hit is information (#3)',async()=>{
   let t=NOW.getTime();
-  const spent=harness(FY23,{now:()=>new Date(t),deadline:new Date(NOW.getTime()+120_000),fetchUs:async()=>{t+=121_000;return snap('{"facts":{}}');}});
+  // The budget is driven through remainingMs (the injected clock), not the AbortSignal, so the spent case below is time-based.
+  const odd=cand('acc-1','revenue','1',{periodStart:'2023-08-01',duration:'3M'});
+  const spent=harness(parsed([filing('acc-1','2023-11-03')],[cand('acc-1','revenue','100')],{oddDuration:[odd]}),{now:()=>new Date(t),deadline:new Date(NOW.getTime()+120_000),fetchUs:async()=>{t+=121_000;return snap('{"facts":{}}');}});
   const r=await run(spent.deps);
   expect(r.issuers[0]).toMatchObject({outcome:'failed',code:'deadline_hit'});
   expect(r.errors).toEqual([{code:'deadline_hit',key:ISSUER}]);
   expect(spent.db.runs().map(x=>x.status)).toEqual(['staged']);
   expect(spent.db.filings()).toEqual([]);expect(r.counts.failed).toBe(0);expect(r.status).toBe('success');
+  expect(r.counts).toMatchObject({fetched:1,quarantined:1});balanced(r.counts);       // the odd_duration item survives and stays counted
+  expect((await spent.db.scopeRows('US',[ISSUER]))[0].lease_batch_id).not.toBeNull();   // no time to clean up: the lease is left to expire
   const cut=harness(FY23,{deadline:new Date(NOW.getTime()+120_000),fetchUs:async(_c,b)=>{Object.defineProperty(b,'signal',{value:ABORTED()});return snap('{"facts":{}}');}});
   const r2=await run(cut.deps);
   expect(r2.issuers[0]).toMatchObject({outcome:'failed',code:'deadline_hit'});
@@ -454,5 +463,78 @@ describe('runFactsSync — round-3 review cases',()=>{
   const quiet=harness();const q=vi.spyOn(quiet.db,'claimLease');
   await run(quiet.deps);
   expect(q).toHaveBeenCalledTimes(1);                                // a fresh lease is never renewed
+ });
+});
+
+describe('runFactsSync — round-4 review cases',()=>{
+ const ABORTED=()=>{const c=new AbortController();c.abort();return c.signal;};
+ it('never persists parser content in a parse_error message: native JSON errors fall back to fixed text (#1)',async()=>{
+  const {tables,deps}=harness();
+  deps.parseUs=():ParseResult=>{JSON.parse('PRIVATE_VALUE');return FY23;};
+  const r1=await run(deps);
+  expect(r1.errors).toEqual([{code:'parse_error',key:ISSUER,message:'parse_error'}]);
+  deps.parseUs=():ParseResult=>{try{JSON.parse('PRIVATE_VALUE');}catch(e){throw new Error(`json: ${(e as Error).message}`);}return FY23;};
+  const r2=await run(deps,{issuerIds:[ISSUER]});
+  expect(r2.errors[0].message).toBe('json');
+  deps.parseUs=()=>{throw new Error('invalid_control_field:PRIVATE_VALUE');};
+  const r3=await run(deps,{issuerIds:[ISSUER]});
+  expect(r3.errors[0].message).toBe('invalid_control_field');
+  expect(JSON.stringify([r1,r2,r3,tables.rows('ingest_batches')])).not.toContain('PRIVATE_VALUE');
+ });
+ it('cleanup never throws: a failing release is recorded as cleanup_failed beside the original code, called once, and the next issuer still runs (#2)',async()=>{
+  const {db,deps}=harness(FY23,{},[{issuer_id:ISSUER,fetch_key:'0000320193'},{issuer_id:ISSUER2,fetch_key:'0000789019'}]);
+  let n=0;deps.parseUs=()=>{if(n++===0)throw new Error('invalid_decimal:1');return FY23;};
+  const release=vi.spyOn(db,'releaseLease');
+  release.mockImplementationOnce(async()=>{throw new Error('net');});
+  const r=await run(deps);
+  const first=r.issuers.find(i=>i.issuerId===ISSUER)!;const second=r.issuers.find(i=>i.issuerId===ISSUER2)!;
+  expect(first).toMatchObject({outcome:'failed',code:'parse_error'});
+  expect(first.errors).toEqual([{code:'cleanup_failed',key:ISSUER,message:'release: net'},{code:'parse_error',key:ISSUER,message:'invalid_decimal'}]);
+  expect(second.outcome).toBe('published');
+  expect(release.mock.calls.filter(c=>c[0]===ISSUER)).toHaveLength(1);
+  expect(r.status).toBe('partial');
+ });
+ it('a per-request timeout with budget left is a genuine failure; a spent budget makes the same error a deadline (#3)',async()=>{
+  const timeout=()=>{const e=new Error('request timed out');e.name='TimeoutError';return e;};
+  const live=harness(FY23,{deadline:new Date(NOW.getTime()+600_000),fetchUs:async()=>{throw timeout();}});
+  expect((await run(live.deps)).issuers[0]).toMatchObject({outcome:'failed',code:'unknown'});
+  let t=NOW.getTime();
+  const spent=harness(FY23,{now:()=>new Date(t),deadline:new Date(NOW.getTime()+120_000),fetchUs:async()=>{t+=118_000;throw timeout();}});   // 2 s left < CLEANUP_MIN_MS
+  expect((await run(spent.deps)).issuers[0]).toMatchObject({outcome:'failed',code:'deadline_hit'});
+ });
+ it('a refused lease renewal is lease_lost: the issuer stops, nothing is abandoned (#9)',async()=>{
+  let t=NOW.getTime();
+  const {db,deps}=harness(FY23,{now:()=>new Date(t),fetchUs:async()=>{t+=500_000;return snap('{"facts":{}}');}});
+  const real=db.claimLease.bind(db);let calls=0;
+  vi.spyOn(db,'claimLease').mockImplementation(async(...a)=>calls++===0?real(...a):false);
+  const abandon=vi.spyOn(db,'abandonRun');
+  const r=await run(deps);
+  expect(r.issuers[0]).toMatchObject({outcome:'failed',code:'lease_lost'});
+  expect(abandon).not.toHaveBeenCalled();
+ });
+ it('lease_lost after publication keeps the issuer published and records lease_lost; run_abandoned counts as lease loss before it (#6, #9)',async()=>{
+  const {db,deps}=harness();
+  mocks.materialize.mockRejectedValueOnce(new FactsDbError('lease_lost'));
+  const r=await run(deps);
+  expect(r.issuers[0].outcome).toBe('published');
+  expect(r.errors).toEqual([{code:'lease_lost',key:ISSUER}]);
+  const h=harness();const abandon=vi.spyOn(h.db,'abandonRun');
+  h.db.stageFacts=async()=>{throw new FactsDbError('run_abandoned');};
+  expect((await run(h.deps)).issuers[0]).toMatchObject({outcome:'failed',code:'lease_lost'});
+  expect(abandon).not.toHaveBeenCalled();
+  expect(db.runs()[0].status).toBe('published');
+ });
+ it('renews the lease before every cninfo request and before materialize (#5)',async()=>{
+  let t=NOW.getTime();
+  const REF2='600519.SH:20221231:1:20230403';
+  const two=parsed([cnFiling(),filing(REF2,'2023-04-03',{market:'CN',source:'tushare',origin:'sse',formType:'annual',periodEnd:'2022-12-31'})],[cnRevenue(),cand(REF2,'revenue','90',{periodStart:'2022-01-01',periodEnd:'2022-12-31',unit:'CNY'})]);
+  let claims=0;const seen:number[]=[];
+  const linkCn=vi.fn(async()=>{seen.push(claims);t+=500_000;return 'none' as const;});
+  const {db,deps}=harness(two,{now:()=>new Date(t),linkCn},CN_SCOPE);
+  const real=db.claimLease.bind(db);vi.spyOn(db,'claimLease').mockImplementation(async(...a)=>{claims++;return real(...a);});
+  const r=await run(deps,{market:'CN'});
+  expect(r.issuers[0].outcome).toBe('published');
+  expect(seen).toHaveLength(2);expect(seen[1]).toBeGreaterThan(seen[0]);   // the second request was preceded by a renewal
+  expect(claims).toBeGreaterThan(seen[1]);                              // and materialize by another
  });
 });

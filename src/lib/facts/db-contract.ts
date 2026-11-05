@@ -84,7 +84,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect((await db.filingsOfIssuer(iss,'US',{})).map(g=>g.filing_id).sort()).toEqual([f0.filing_id,f.filing_id].sort());
    expect(await code(db.abandonRun(run))).toBe('run_published:run_published');
    await db.abandonRun(run3);await db.abandonRun(run3);
-   expect(await code(db.stageFacts(run3,[]))).toBe('unknown:run_abandoned');
+   expect(await code(db.stageFacts(run3,[]))).toBe('run_abandoned:run_abandoned');
    expect(await code(db.stageFacts(run,[]))).toBe('run_published:run_published');
    expect(await code(db.publishRun(randomUUID(),[]))).toBe('unknown:run_not_found');
    expect((await db.readFacts(iss,'US',{concepts:['revenue'],asOf:'2024-01-15'})).rows.map(y=>[y.fact_id,y.disclosure_seq,y.is_current])).toEqual([[r0,1,true]]);

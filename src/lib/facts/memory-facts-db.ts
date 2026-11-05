@@ -71,7 +71,7 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
   const r=runs.get(runId);if(!r)throw unknown('run_not_found');
   leaseCheck(r.issuer_id,r.market,r.batch_id);
   if(r.status==='published')throw new FactsDbError('run_published');
-  if(r.status==='abandoned')throw unknown('run_abandoned');
+  if(r.status==='abandoned')throw new FactsDbError('run_abandoned');
   return r;
  };
  const abandon=(r:MemoryRun,prune:boolean)=>{

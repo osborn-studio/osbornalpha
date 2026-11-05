@@ -27,7 +27,7 @@ export const READ_PAGE=1000;
 export const IN_CHUNK=200;
 /** attempts of a metrics read before it fails as metrics_unstable. */
 export const METRICS_ATTEMPTS=3;
-const MESSAGE_CODES:readonly FactsDbErrorCode[]=['run_pending','run_published','mapping_gen_regression','stale_computation','stale_plan'];
+const MESSAGE_CODES:readonly FactsDbErrorCode[]=['run_pending','run_published','mapping_gen_regression','stale_computation','stale_plan','run_abandoned'];
 
 export interface PgErrorLike{message?:string;code?:string|null;details?:string|null;hint?:string|null}
 /** PostgreSQL / PostgREST error → FactsDbError (shared by the Supabase and pg adapters). */

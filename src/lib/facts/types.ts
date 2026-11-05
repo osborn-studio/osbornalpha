@@ -56,7 +56,7 @@ export interface ConflictItem{id:string;natural_key:string;fact_ids:string[];ava
 export interface ReadFactsOptions{concepts:string[];asOf:string;from?:string;to?:string;history?:boolean;limit?:number;includeNonOk?:boolean}
 export interface ReadFactsResult{stateRev:number;rows:FactRow[];truncated:boolean}
 
-export type FactsDbErrorCode='lease_lost'|'run_pending'|'run_published'|'mapping_gen_regression'|'stale_computation'|'stale_plan'|'read_truncated'|'duplicate_key'|'unknown';
+export type FactsDbErrorCode='lease_lost'|'run_pending'|'run_published'|'mapping_gen_regression'|'stale_computation'|'stale_plan'|'run_abandoned'|'read_truncated'|'duplicate_key'|'unknown';
 export class FactsDbError extends Error{constructor(public code:FactsDbErrorCode,message?:string){super(message??code);this.name='FactsDbError';}}
 
 export interface FactsDb{
