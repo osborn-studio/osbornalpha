@@ -573,7 +573,7 @@ Codex 七轮（01/03/05/07/09/11/13）与处置（04/06/08/10/12/14）；独立 
 
 | 日期 | 条款 | 偏差 | 原因 | 位置 / 处置 |
 |---|---|---|---|---|
-| 2026-11-04 | §3 概念目录 | 目录落地 **35** 个概念（规格正文写 33，计划初稿期间曾为 34）：新增 `monetary_funds`（CN `balancesheet.money_cap`，货币资金，含受限资金）；CN `cash` **不映射**（`ts` 映射为 null，留缺）；US `cash` 不变。计划里"规格写 33 概念"的三处注记（计划第 2854/5645/9274 行附近）已过时，应读作 34→35 | 审计 Task 4：`money_cap` 含受限资金，不等于"现金及现金等价物"，硬映射到 `cash` 会让跨路比较口径错误 | `src/lib/facts/concepts.ts`（`MAPPING_GEN`/`MAPPING_VERSION` 同步）；接受 |
+| 2026-11-04 | §3 概念目录 | 目录落地 **35** 个概念（规格正文写 33，计划初稿期间曾为 34）：新增 `monetary_funds`（CN `balancesheet.money_cap`，货币资金，含受限资金）；CN `cash` **不映射**（`ts` 映射为 null，留缺）；US `cash` 不变。计划里"规格写 33 概念"的三处注记（计划第 2854/5645/9274 行附近）已过时，应读作 34→35 | 审计 Task 4：`money_cap` 含受限资金，不等于"现金及现金等价物"，硬映射到 `cash` 会让跨路比较口径错误 | `src/lib/facts/concepts.ts`（`MAPPING_GEN`/`MAPPING_VERSION` 同步）；commander 决定，**待 owner 确认** |
 | 2026-11-04 | §3 `shares_outstanding` | EDGAR 退回 `dei:EntityCommonStockSharesOutstanding` 时行的 `statement` 记为 `DEI`（不是 `BS`） | 规格写"BS/DEI"，由适配器按实际取用的标签落定 | `providers/edgar-companyfacts.ts`（`tax==='dei'?'DEI'`）；接受 |
 | 2026-11-04 | §4.4 | INSTANT 指标 `period_start = period_end` | 列 `period_start date not null` | `derive.ts` 头注释；接受 |
 | 2026-11-04 | §8 `inputs` | `inputs` 元素不含差分规则 a/b 字段，规则由两输入的 `filing_id` 是否相同推出；另外季度差分输入带 `quarter`（lineage）并在 `inputs` 去重键里 | `MetricRow.inputs` 元素类型固定四字段 `{fact_id, concept, filing_id, available_date}` + 可选 `quarter`；审计 Task 15 要求 ytd_rule / quarter 可从 lineage 还原 | `derive.ts`；接受 |
@@ -608,7 +608,7 @@ Codex 七轮（01/03/05/07/09/11/13）与处置（04/06/08/10/12/14）；独立 
 | 2026-11-04 | §6.3 `coverage_summary` | message 是紧凑串 `{"<api>:rt<n>":"<首年>-<末年>:<期末数>"}`，不是 `coverageSummary()` 的逐年对象 | `ingest_batches.errors` 单条 message 上限 500 字 | `sync.ts`；逐年对象可由 `coverageSummary(parseTushareStatements(快照))` 重算；接受 |
 | 2026-11-04 | §6.5 | `sync.ts` 增加 `--no-db --cik` 内存库冒烟模式（US 专用，排斥 `--apply/--issuer`） | 无环境也能做真实 SEC 网络冒烟 | `scripts/facts/sync.ts`；不写任何表；接受 |
 | 2026-11-04 | §6.5 / §14 | **CN 以 `FACTS_CN_ENABLED=1` 门控**：cron 路由对 `market=CN` 且开关未设 → 403 `cn_disabled`；`sync.ts --market CN --apply` 同样需要该开关；`vercel.json` 只登记 `market=US`。cron 的 HTTP 回执只含码与计数（无错误消息、警告、快照哈希）；`limit` 重复参数 → 400；`VERCEL_GIT_COMMIT_SHA` 缺失 → 503（cron 不回退到 git） | 本机无 `TUSHARE_TOKEN`，A 股夹具与黄金断言未进 CI（按 §12 降级）；计划原无门控，审计 Task 17 增加 | `src/app/api/cron/facts-sync/route.ts`、`scripts/facts/sync.ts`、`vercel.json`；runbook 8.11-5；接受 |
-| 2026-11-04 | §14 | 每 4 小时的 cron（`5 */4 * * *`）需要 **Vercel Pro**；Hobby 套餐只允许每日一次 | 平台限制；套餐未确认 | `vercel.json`；owner 事项 runbook 8.11-1 | 待 owner 确认套餐 |
+| 2026-11-04 | §14 | 每 4 小时的 cron（`5 */4 * * *`）需要 **Vercel Pro**；Hobby 套餐只允许每日一次 | 平台限制；套餐未确认 | `vercel.json`；owner 事项 runbook 8.11-1（部署前阻塞项）；待 owner 确认套餐 |
 
 ### 16.4 读取接口
 
@@ -634,7 +634,7 @@ Codex 七轮（01/03/05/07/09/11/13）与处置（04/06/08/10/12/14）；独立 
 
 | 日期 | 条款 | 偏差 | 原因 | 位置 / 处置 |
 |---|---|---|---|---|
-| 2026-11-04 | §11.4 黄金断言 | **黄金门在 `ready:false` 时只告警、不失败**（计划设计为红灯 `gold entry for <ticker> is still <pending>`）；`ready:true` 时全量强制（`required.US`、无 `<pending>`、≥ 6 家 × ≥ 2 期 × 每期 ≥ 6 科目、每个被断言发行人都有录制夹具并被回放）。已录入的非 `<pending>` 条目即使在 `ready:false` 也会被回放断言。**因此 `test:db` 绿 ≠ 黄金已核实**：当前 `plan2.json` 为 `ready:false`，3 条全是 `<pending>` 模板 | commander 决定（Task 11）：整套 `test:db` 不应因 owner 尚未抄录而长期红 | `src/lib/facts/sync-us.integration.test.ts`、`fixtures/gold/plan2.json`；**F2-7 在 owner 完成 runbook 8.11-6 之前不算完成**；写入实施日志、PR "已知后续"与 runbook |
+| 2026-11-04 | §11.4 黄金断言 | **黄金门在 `ready:false` 时只告警、不失败**（计划设计为红灯 `gold entry for <ticker> is still <pending>`）；`ready:true` 时全量强制（`required.US`、无 `<pending>`、≥ 6 家 × ≥ 2 期 × 每期 ≥ 6 科目、每个被断言发行人都有录制夹具并被回放）。已录入的非 `<pending>` 条目即使在 `ready:false` 也会被回放断言。**因此 `test:db` 绿 ≠ 黄金已核实**：当前 `plan2.json` 为 `ready:false`，3 条全是 `<pending>` 模板 | commander 决定（Task 11）：整套 `test:db` 不应因 owner 尚未抄录而长期红 | `src/lib/facts/sync-us.integration.test.ts`、`fixtures/gold/plan2.json`；commander 决定，**待 owner 确认**；**F2-7 在 owner 完成 runbook 8.11-6 之前不算完成**；写入实施日志、PR "已知后续"与 runbook |
 | 2026-11-04 | §11.3 | 美股回放集成测试补两项（commander 追加）：裁决后物化包含被选行（R7-1 物化半）；`stale_computation` 交错（`state_rev` 在 `readFacts` 与 `replaceMetrics` 之间被推进，重试一次成功） | 计划把这两项留给 Task 11 | `sync-us.integration.test.ts`；接受 |
 | 2026-11-04 | §11.3 / §12 | 未创建 `sync-cn.integration.test.ts`（无真实 Tushare 夹具）；A 股回放与黄金断言待 owner 提供 `TUSHARE_TOKEN` | 降级路径（§12） | 实施日志 Task 12/13；owner 事项 8.11-5 |
 | 2026-11-04 | §6.3 / §15 第 1 条 | Tushare `report_type` 1/4/5 核对：**未核对**（无 token），合成夹具假设见 `17-tushare-verification.md`；未与真实响应比对 `total_share` 单位与 `money_cap` 金额 | 无 `TUSHARE_TOKEN` | 8.7 核对表；CN cron 关闭 |

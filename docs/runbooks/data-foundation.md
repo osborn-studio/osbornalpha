@@ -179,14 +179,14 @@ drop table if exists public.ingest_batches;
 | `abandon_sync_run(p_run)` | sync 核心 | 校验 | 只对 staged 运行；先标 abandoned 再删其事实 |
 | `release_fact_sync_lease(p_issuer, p_market, p_batch, p_outcome, p_next_due)` | sync 核心 | 校验 | 清租约，写 `last_*`、`next_due_at` |
 | `resolve_facts_quarantine(p_item, p_chosen, p_resolved_by)` → jsonb | 管理员钩子 | 否（持行锁） | 任一成员行运行仍 staged → `run_pending`；否则翻转项状态、**持久化 `chosen_fact_ids`**、同事务写 `hook:pending`、提升、`state_rev+1`；返回落库的 `chosen_fact_ids` |
-| `promote_quarantined(p_issuer, p_market, p_fact_ids)` | `resolve_facts_quarantine` | 否（持行锁） | 内部提升 |
+| `promote_quarantined(p_issuer, p_market, p_fact_ids)` → int | service_role 直调（TS 代码不使用） | 否（持行锁） | 提升指定事实，返回提升行数；管理路径用 `resolve_facts_quarantine` |
 | `replace_financial_metrics(p_issuer, p_market, p_based_on_rev, p_rows)` → int | `materialize` | 否（持行锁） | `state_rev<>p_based_on_rev` → `stale_computation`；整体替换 |
 | `fact_state_rev(p_issuer, p_market)` → bigint | `read_facts`、指标路由 | — | anon 可执行；只暴露 `state_rev` |
 | `read_facts(p_issuer, p_market, p_concepts, p_as_of, p_from, p_to, p_history, p_limit, p_include_non_ok)` → jsonb | 读路由、派生、规划 | — | security invoker；单语句单快照信封 `{state_rev, rows, truncated, row_count}`；> 10,000 行 → `truncated=true` 且无行 |
 
 内部助手（不对客户端开放）：`fact_scope_lock`、`fact_run_lock`、`fact_abandon_run`、`fact_item_members`、`fact_promote_rows`；触发器函数 `financial_facts_lifecycle`、`filings_limited_update`。
 
-错误码：`lease_lost`（SQLSTATE 55P03）；`run_pending`、`run_published`、`mapping_gen_regression`、`stale_computation`、`stale_plan`（P0001，消息即码）；触发器 `financial_facts_lifecycle`、`filings_limited_update`（23514，消息前缀 `append_only:`）。`supabaseFactsDb` 把这些映射为 `FactsDbError.code`。`stale_plan`（发布前废弃运行、发行人记 failed，`next_due_at` 推后 10 分钟 = `NEXT_DUE_STALE_MS`）与 `mapping_gen_regression` 同属"发布被拒"；`lease_lost` 停止该发行人且不再有任何数据库调用。
+错误码（`db.ts::toFactsDbError`）：`lease_lost`（SQLSTATE 55P03 或消息头 `lease_lost`）；消息头即码的 `run_pending`、`run_published`、`mapping_gen_regression`、`stale_computation`、`stale_plan`、`run_abandoned`、`invalid_chosen`、`item_not_open`（`MESSAGE_CODES`，P0001）；23505 → `duplicate_key`；其余一律 `unknown`——包括触发器 `financial_facts_lifecycle`、`filings_limited_update` 的 23514（消息前缀 `append_only:`）。`stale_plan`（发布前废弃运行、发行人记 failed，`next_due_at` 推后 10 分钟 = `NEXT_DUE_STALE_MS`）与 `mapping_gen_regression` 同属"发布被拒"；`lease_lost` 停止该发行人且不再有任何数据库调用。
 
 ### 8.3 锁纪律
 
@@ -208,7 +208,7 @@ drop table if exists public.ingest_batches;
 ```bash
 npx tsx scripts/facts/record-fixture.ts --edgar 320193            # → fixtures/edgar/CIK0000320193.trimmed.json
 npx tsx scripts/facts/record-fixture.ts --edgar-revise 320193     # → CIK0000320193.revised.json（追加一条更晚 10-K 的 FY2023 revenue）
-node --env-file=<仓库外文件> --import tsx scripts/facts/record-fixture.ts --tushare 600519.SH --since-year 2016   # → fixtures/tushare/<ts_code>.manifest.json + <ts_code>.<api>.rt<n>.p<k>.<代号>.json + .meta.json
+node --env-file=<仓库外文件> --import tsx scripts/facts/record-fixture.ts --tushare 600519.SH --since-year 2016   # → fixtures/tushare/<ts_code>.manifest.json + <ts_code>.g<代号>.<api>.rt<n>.p<k>.json + .meta.json
 npx tsx scripts/facts/record-fixture.ts --cninfo 600519.SH <YYYY-MM-DD> 2024 annual                        # → fixtures/cninfo/600519.SH-2024-annual.json
 ```
 
@@ -241,6 +241,8 @@ EDGAR 夹具裁剪到 §3 概念标签与 `end >= 2019-01-01` 的条目，顶层
 
 环境：`NEXT_PUBLIC_SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`；`EDGAR_USER_AGENT`（SEC 要求带联系方式；缺省 `DEFAULT_USER_AGENT`，生产务必设置真实值）；`TUSHARE_TOKEN`（仅 CN）；`CRON_SECRET`（cron；缺失 → 503 `cron_unavailable`）；`FACTS_CN_ENABLED=1`（CN `--apply` 与 CN cron 的开关，缺省关）；`VERCEL_GIT_COMMIT_SHA`（Vercel 自动注入；cron 路由只认它，缺失 → 503 `code_version_unavailable`；脚本回退到 `git rev-parse HEAD`，脏树加 `-dirty`；取不到则拒绝 `--apply`）。
 
+`sync.ts` 参数：`--market US|CN`（必填）、`--issuer <ticker>`（可重复）、`--cik <cik>`（仅 `--no-db`，可重复）、`--limit n`（1..1000，默认 25；cron 路由另限 1..200）、`--since-year y`（1990..当年；缺省 = 当前 UTC 年 − 10）、`--apply`、`--no-db`。退出码 2（用法/前置错误，未做任何事）：未知参数或缺值、`--market` 非 US/CN、`--limit` 越界、`--since-year` 越界、`--no-db` 的组合不合法（需 `--market US` + `--cik`，排斥 `--apply/--issuer`）、非 `--no-db` 却给了 `--cik`、`--market CN --apply` 而 `FACTS_CN_ENABLED` 不是 `1`、`--apply` 取不到代码版本、`--issuer` 给了未知票据。退出码 1：运行出错或有发行人 `outcome:'failed'`（含 `scope_unresolved`）。
+
 ```bash
 # 美股 dry-run（读库、抓 SEC、不写）
 node --env-file=.env.local --import tsx scripts/facts/sync.ts --market US --issuer AAPL --issuer MSFT --issuer NVDA
@@ -263,8 +265,10 @@ cron：`GET|POST /api/cron/facts-sync?market=US|CN[&limit=n]`，Bearer `CRON_SEC
 update public.ingest_batches
    set status='failed', finished_at=now(),
        errors=errors || '[{"code":"orphaned_running","message":"marked failed by runbook 8.9"}]'::jsonb
- where producer='facts-sync' and status='running' and started_at < now() - interval '10 minutes';
+ where producer='facts-sync' and triggered_by='cron' and status='running' and started_at < now() - interval '10 minutes';
 ```
+
+上面的 SQL 只处理 `triggered_by='cron'` 的批次：`sync.ts --apply`（`triggered_by='script'`）没有截止时间，可以合法运行很久。执行前**确认没有人正在跑脚本**；脚本批次若确认已死（进程不在），再按同样方式单独处理（去掉 `triggered_by` 条件并人工核对 `started_at` 与进程）。
 
 其 staged 运行会在该发行人下一次 `begin_sync_run` 时被废弃；租约到期后自动可取，不要手工清。
 
@@ -305,18 +309,19 @@ drop function if exists public.financial_facts_lifecycle();
 drop function if exists public.filings_limited_update();
 -- 5. the one object this migration added to a plan-1 table
 drop index if exists public.dq_quarantine_fact_ids_idx;
--- 6. bucket: empty it through the Storage API first, then
-delete from storage.buckets where id='disclosure-raw';
+-- 6. bucket: see the paragraph below (Storage API first; SQL only as a fallback)
 -- 7. inventory: nothing of the facts layer may remain
 select proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and (proname like 'fact\_%' or proname in ('read_facts','begin_sync_run','stage_filings','stage_facts','quarantine_facts','publish_sync_run','abandon_sync_run','release_fact_sync_lease','claim_fact_sync_lease','reconcile_fact_sync_scope','promote_quarantined','resolve_facts_quarantine','replace_financial_metrics','financial_facts_lifecycle','filings_limited_update'));
 select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and relname in ('fact_sync_runs','filings','financial_facts','financial_metrics','fact_sync_scope','dq_quarantine_fact_ids_idx');
 ```
 
+**桶**：首选路径是经 Storage API 清空并删除（`supabase.storage.emptyBucket('disclosure-raw')` 然后 `deleteBucket('disclosure-raw')`，或 Supabase 控制台 Storage 页）。SQL `delete from storage.buckets where id='disclosure-raw';` 仅作后备（桶非空会被外键拒绝，托管环境也可能直接拒绝对 `storage` 模式的写入）。
+
 两个清单查询都必须返回 0 行（任何遗留的旧签名重载会出现在第一个清单里：按它列出的签名补 `drop function`）。**演练**（合并前一次，在 `test:db` 的临时库上）：应用全部迁移 → 执行本节脚本 → 两个清单为空 → 重新应用 `20261106090000_financial_facts.sql` → `facts.integration.test.ts` 通过。`ingest_batches` 中 `producer='facts-sync'` 的回执与 `dq_freshness` 的 `facts.*` 行保留。同时从 `vercel.json` 移除 `facts-sync` 条目并重新部署，否则 cron 会打到已无表的函数上（503/500 进入 Vercel 日志）。
 
 ### 8.11 owner 步骤
 
-1. Vercel 环境：`EDGAR_USER_AGENT`（真实联系方式）、`CRON_SECRET`；CN 之前再加 `TUSHARE_TOKEN` 与 `FACTS_CN_ENABLED=1`。**确认 Vercel 套餐**：`vercel.json` 的 `5 */4 * * *` 是每日多次的 cron，Hobby 套餐会拒绝部署，需要 Pro（规格 §14）；若停留在 Hobby，改成每日一次或由外部调度器调用该路由。
+1. Vercel 环境：`EDGAR_USER_AGENT`（真实联系方式）、`CRON_SECRET`；CN 之前再加 `TUSHARE_TOKEN` 与 `FACTS_CN_ENABLED=1`。**部署前的阻塞项——确认 Vercel 套餐**：`vercel.json` 的 `5 */4 * * *` 是每日多次的 cron，Hobby 套餐会拒绝含它的部署，需要 Pro（规格 §14）。套餐未确认或为 Hobby 时**不要部署**这份 `vercel.json`：先改成每日一次，或由外部调度器调用该路由。
 2. 生产迁移 `20261106090000_financial_facts.sql`（按 `alpha-production-deploy-and-hosted-db` 记忆的 Management API 方式；非超级用户，不 `alter function … owner`）。
 3. `scripts/facts/sync.ts --market US --limit 20 --apply` 首轮；查看 `/admin/dq` 的 `facts.us` 新鲜度与隔离项；必要时 `materialize.ts --market US --all`。
 4. `GET /api/facts/AAPL?concepts=revenue&asOf=2024-06-30` 核对验收样例 1（期末 2023-09-30 的 2023-11-03 披露行，`disclosureSeq=1`）。
@@ -329,7 +334,7 @@ select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where
 
 - 对争议组选择要保留的 `chosen_fact_ids`；`[]` 只表示"已知悉"，发布时所有成员都已被处置，未选中的成员保持非 `ok`。
 - 钩子调用 `resolve_facts_quarantine`：该函数在同一事务里持久化 `chosen_fact_ids`、写 `hook:pending`、提升被选行、`state_rev+1`。任一成员行所属运行仍是 staged → 返回 `run_pending`（稍后重试，不要强行处理）。
-- `hook:pending` 或 `hook:failed` 的项表示事实侧已提升但后续步骤（审计/项状态收尾）未完成。**重试同一个项**：钩子以持久化的 `chosen_fact_ids`、裁决人与状态恢复收尾，不要换选项；若重试仍失败，路由返回 **502**（错误文本不出客户端，错误码映射在响应里，细节看服务端日志与审计行）。反复 502 时先检查数据库连接与 `dq_quarantine` 项的 `payload`，不要手工改 `financial_facts`（没有任何角色有写权限）。
+- 只有 `same_day_conflict`、`identity_bs`、`identity_gp` 三类项在裁决时写 `hook:pending`（其余原因码没有后续物化钩子）。`hook:pending` 或 `hook:failed` 的项表示事实侧已提升但后续步骤（审计/项状态收尾）未完成。**重试同一个项**：钩子以持久化的 `chosen_fact_ids`、裁决人与状态恢复收尾，不要换选项；若重试仍失败，路由返回 **502**（错误文本不出客户端，错误码映射在响应里，细节看服务端日志与审计行）。反复 502 时先检查数据库连接与 `dq_quarantine` 项的 `payload`，不要手工改 `financial_facts`（没有任何角色有写权限）。
 - 裁决之后该发行人的指标 `based_on_rev` 落后于 `state_rev`：公共指标路由此时返回 `stale:true`、无行，直到 `materialize`（下一轮 cron 发布，或 `scripts/facts/materialize.ts --issuer <ticker>`）重算。
 
 ### 8.13 公共读路由要点
