@@ -10,6 +10,8 @@
 //    derived metrics then carry the chosen fact (and never the unchosen one) in their inputs;
 //  - a real stale_computation interleaving: state_rev moves between materialize's readFacts and
 //    replaceMetrics, materialize retries once and the stored metrics are based on the current state_rev.
+// The cases run in order and SHARE STATE by design (fixtures swapped to the revised one, activeGen bumped, ZZ issuer evolving); do not
+// run or reorder them in isolation.
 // Gold gate deviation from the plan: while the gold file says ready:false the gate WARNS and does not fail
 // (the owner has not transcribed yet); recorded entries are still replayed, and ready:true enforces it all.
 import {readFileSync} from 'node:fs';
@@ -21,7 +23,7 @@ import {pgFactsDb} from './pg-facts-db';
 import {memorySnapshotStore} from './snapshot-store';
 import {runFactsSync} from './sync';
 import type {SyncDeps,SyncOptions} from './sync';
-import {MAPPING_GEN} from './concepts';
+import {MAPPING_GEN,conceptById} from './concepts';
 import {FORMULA_VERSION,materialize} from './derive';
 import {ProviderError,snapshotOf} from './providers/shared';
 import {companyFactsUrl,parseCompanyFacts} from './providers/edgar-companyfacts';
@@ -42,19 +44,26 @@ const FIX:Record<string,string>=Object.fromEntries(FIXTURE_ISSUERS.map(i=>[i.cik
 const REVISED='CIK0000320193.revised.json';
 const fx=(n:string)=>new Uint8Array(readFileSync(new URL(`./fixtures/edgar/${n}`,import.meta.url)));
 const today=()=>new Date().toISOString().slice(0,10);
-interface GoldEntry{issuer:{ticker:string;market:'US'|'CN'};concept:string;period_end:string;unit:string;value:string;as_of?:string|null;recorded_by:string}
+interface GoldEntry{issuer:{ticker:string;market:'US'|'CN'};concept:string;period_end:string;unit:string;duration?:string;value:string;as_of?:string|null;source?:{document?:string;page_or_row?:string;url?:string};recorded_by:string;recorded_at?:string|null}
 interface GoldFile{ready:boolean;required:{US:boolean;CN:boolean};entries:GoldEntry[]}
 const isPending=(e:GoldEntry)=>e.recorded_by==='<pending>'||e.value==='<pending>';
+const blank=(v:unknown)=>typeof v!=='string'||v.trim()===''||v.trim()==='<pending>';
+/** Provenance a human must have written down: document, page/row, url and a recording timestamp. Returns the missing fields. */
+const provenanceGaps=(e:GoldEntry):string[]=>[...(['document','page_or_row','url'] as const).filter(k=>blank(e.source?.[k])).map(k=>`source.${k}`),...(e.recorded_at==null||blank(e.recorded_at)?['recorded_at']:[])];
+/** No CN replay suite exists yet (sync-cn.integration.test.ts is created only with real Tushare fixtures), so CN entries cannot be replay-verified here. */
+const CN_REPLAY_SUITE=false;
 
 // Synthetic issuer for the quarantine/materialize cases (not a gold issuer): FY2023 revenue disclosed twice on the
 // same day by two accessions with different values (a same_day_conflict), plus one net income in the first accession.
 const ZZ={ticker:'ZZCF',cik:'9990001',name:'ZZ Conflict Co'};
 const ZZ_CIK10=ZZ.cik.padStart(10,'0');
 const ZZ_ACCN_A='0009990001-24-000001',ZZ_ACCN_B='0009990001-24-000002';
+const ZZ_ACCN_C='0009990001-24-000003';
+let zzRevised=false;   // flips on when the competing writer of the stale_computation case publishes a later, changed FY2023 revenue
 const zzDoc=()=>{
- const e=(accn:string,val:number,form:string)=>({start:'2023-01-01',end:'2023-12-31',val,accn,fy:2023,fp:'FY',form,filed:'2024-02-15'});
+ const e=(accn:string,val:number,form:string,filed='2024-02-15')=>({start:'2023-01-01',end:'2023-12-31',val,accn,fy:2023,fp:'FY',form,filed});
  return new TextEncoder().encode(JSON.stringify({cik:Number(ZZ.cik),entityName:ZZ.name,facts:{'us-gaap':{
-  Revenues:{units:{USD:[e(ZZ_ACCN_A,1000,'10-K'),e(ZZ_ACCN_B,1001,'10-K/A')]}},
+  Revenues:{units:{USD:[e(ZZ_ACCN_A,1000,'10-K'),e(ZZ_ACCN_B,1001,'10-K/A'),...(zzRevised?[e(ZZ_ACCN_C,1002,'10-K/A','2024-03-01')]:[])]}},
   NetIncomeLoss:{units:{USD:[e(ZZ_ACCN_A,100,'10-K')]}},
  }}}));
 };
@@ -125,6 +134,8 @@ describe.skipIf(!enabled)('F2-3 US offline replay on real PostgreSQL',()=>{
 
  it('a later 10-K with a different FY2023 revenue is versioned=1 and replays on both sides of its filed date',async()=>{
   const before=await revenueFy23('2025-10-31');
+  expect(before.length).toBeGreaterThanOrEqual(2);
+  for(const x of before)expect(x.is_revision).toBe(false);                            // same value re-disclosed by later 10-Ks: sequence members, not revisions
   // The revised fixture stays active for the rest of the suite: the synthetic filing must be part of
   // every later manifest, or the generation bump below would leave it on the old generation (round-1 #15).
   fixtures['0000320193']=REVISED;
@@ -137,6 +148,10 @@ describe.skipIf(!enabled)('F2-3 US offline replay on real PostgreSQL',()=>{
   const earlier=await revenueFy23('2025-10-31');
   expect(earlier.map(x=>[x.fact_id,x.is_current])).toEqual(before.map(x=>[x.fact_id,x.is_current]));
   expect((await revenueFy23('2024-06-30',false))[0].value_text).toBe('383285000000');
+  // spec acceptance example: before the synthetic revision, the FY2023 current row is the second disclosure (a later 10-K comparative with the same value)
+  const june=(await revenueFy23('2025-06-30',false));
+  expect(june).toHaveLength(1);
+  expect(june[0]).toMatchObject({disclosure_seq:2,is_revision:false,is_current:true,value_text:'383285000000'});
  },120_000);
 
  it('a mapping-gen bump re-publishes under the new generation per filing; old-generation rows leave read_facts but stay fetchable by id',async()=>{
@@ -162,15 +177,25 @@ describe.skipIf(!enabled)('F2-3 US offline replay on real PostgreSQL',()=>{
   expect((await revenueFy23('2024-06-30',false))[0]).toMatchObject({value_text:'383285000000',mapping_gen:activeGen});   // asOf replay is generation-independent
  },120_000);
 
- it('two concurrent runs on one issuer: the lease serialises them, no staged run is left behind',async()=>{
-  const published=async()=>(await admin.query(`select status,count(*)::int n from public.fact_sync_runs where issuer_id=$1 and market='US' group by status`,[issuers.AAPL])).rows as {status:string;n:number}[];
-  const before=Object.fromEntries((await published()).map(r=>[r.status,r.n]));
-  const [a,b]=await Promise.all([run([issuers.AAPL]),run([issuers.AAPL])]);     // both on activeGen: a lower gen would be mapping_gen_regression
-  const total=a.detail.published+b.detail.published;
-  expect(total).toBeGreaterThanOrEqual(1);
-  for(const r of [a,b])if(r.detail.published===0){expect(r.detail.skipped).toBe(1);expect(r.errors.map(e=>e.code)).toContain('skipped_summary');}
-  const after=Object.fromEntries((await published()).map(r=>[r.status,r.n]));
-  expect(after.published??0).toBe((before.published??0)+total);
+ it('two concurrent runs on one issuer: B is refused the lease while A is held inside its fetch; A publishes exactly once, no staged run is left behind',async()=>{
+  const counts=async()=>Object.fromEntries((await admin.query(`select status,count(*)::int n from public.fact_sync_runs where issuer_id=$1 and market='US' group by status`,[issuers.AAPL])).rows.map(r=>[r.status,r.n as number]));
+  const before=await counts();
+  let entered!:()=>void;const inFetch=new Promise<void>(r=>{entered=r;});
+  let release!:()=>void;const gate=new Promise<void>(r=>{release=r;});
+  const heldDeps:SyncDeps={...deps,fetchUs:async(cik10,b)=>{entered();await gate;return deps.fetchUs(cik10,b);}};
+  const a=runFactsSync(heldDeps,{market:'US',limit:10,issuerIds:[issuers.AAPL],dryRun:false,triggeredBy:'script',mappingGen:activeGen});
+  await inFetch;                                                                  // A holds the lease and an open staged run
+  const mid=await counts();expect(mid.staged??0).toBe(1);
+  let bResult;
+  try{bResult=await run([issuers.AAPL]);}finally{release();}                      // A is released only after B has returned
+  const aResult=await a;
+  expect(bResult.detail).toMatchObject({attempted:1,published:0,skipped:1,failed:0});
+  expect(bResult.issuers[0]).toMatchObject({outcome:'skipped',code:'leased'});
+  const skipped=bResult.errors.filter(e=>e.code==='skipped_summary'&&e.key===issuers.AAPL);
+  expect(skipped).toHaveLength(1);expect(skipped[0].message).toContain('"leased":1');
+  expect(aResult.detail).toMatchObject({published:1,failed:0});
+  const after=await counts();
+  expect(after.published??0).toBe((before.published??0)+1);
   expect(after.staged??0).toBe(0);
  },120_000);
 
@@ -214,6 +239,12 @@ describe.skipIf(!enabled)('F2-3 US offline replay on real PostgreSQL',()=>{
   expect((await db.factsByIds([chosen.fact_id]))[0].status).toBe('ok');
   expect((await db.factsByIds([unchosen.fact_id]))[0].status).toBe('quarantined');
   expect(await db.openConflicts(zz,'US')).toEqual([]);
+  // a re-sync of the same disclosures must not reopen the resolved conflict or re-park anything
+  const again=await run([zz]);
+  expect(again.detail).toMatchObject({published:1,failed:0});expect(again.counts).toMatchObject({inserted:0,versioned:0,quarantined:0,failed:0});
+  expect(await db.openConflicts(zz,'US')).toEqual([]);
+  expect((await db.factsByIds([chosen.fact_id]))[0].status).toBe('ok');
+  expect((await db.factsByIds([unchosen.fact_id]))[0].status).toBe('quarantined');
   const m=await materialize(db,zz,'US');
   expect(m.rows).toBeGreaterThan(0);
   const metrics=await db.metricsOfIssuer(zz,'US',FORMULA_VERSION);
@@ -225,50 +256,72 @@ describe.skipIf(!enabled)('F2-3 US offline replay on real PostgreSQL',()=>{
   expect(metrics.every(x=>x.based_on_rev===m.stateRev)).toBe(true);
  },120_000);
 
- // A real interleaving: right after materialize's readFacts, another writer publishes for the same issuer (state_rev + 1),
- // so the first replaceMetrics is stale; materialize re-reads and recomputes exactly once.
- it('stale_computation interleaving: state_rev moves between readFacts and replaceMetrics, materialize retries once on the current state_rev',async()=>{
-  const startRev=Number((await admin.query(`select public.fact_state_rev($1,'US') v`,[zz])).rows[0].v);
-  let reads=0,bumpedTo=0;
+ // A real interleaving that CHANGES the inputs: right after materialize's readFacts, another writer publishes a later, revised
+ // FY2023 revenue (new accession, later filed date) for the same issuer. The first replaceMetrics is stale (state_rev + 1);
+ // materialize re-reads and recomputes once, and the stored metrics reflect the new fact and not the superseded one.
+ it('stale_computation interleaving: a competing publish changes the inputs, materialize retries once and stores metrics from the new fact on the current state_rev',async()=>{
+  const rev=async()=>Number((await admin.query(`select public.fact_state_rev($1,'US') v`,[zz])).rows[0].v);
+  const startRev=await rev();
+  const before=(await db.metricsOfIssuer(zz,'US',FORMULA_VERSION)).find(x=>x.metric==='net_margin'&&x.duration==='12M')!;
+  expect(before.value).toBe('0.0999000999');
+  const superseded=before.inputs.find(i=>i.concept==='revenue')!.fact_id;
+  let reads=0,bumpedTo=0;let competing!:Awaited<ReturnType<typeof run>>;
   const racing:FactsDb={...db,
    readFacts:async(i,m,o)=>{
     const env=await db.readFacts(i,m,o);reads++;
-    if(reads===1){                                                              // the competing writer: a full sync run publishes (+1) after our snapshot
-     const r=await run([zz]);expect(r.detail.published).toBe(1);
-     bumpedTo=Number((await admin.query(`select public.fact_state_rev($1,'US') v`,[zz])).rows[0].v);
+    if(reads===1){                                                              // the competing writer publishes a changed fact after our snapshot
+     zzRevised=true;competing=await run([zz]);
+     bumpedTo=await rev();
      expect(bumpedTo).toBeGreaterThan(env.stateRev);
     }
     return env;
    }};
   const m=await materialize(racing,zz,'US');
+  expect(competing.detail).toMatchObject({published:1,failed:0});
+  expect(competing.counts).toMatchObject({inserted:0,versioned:1,quarantined:0});   // exactly the new accession's revenue, counted as a version; the resolved conflict stays closed
+  expect(await db.openConflicts(zz,'US')).toEqual([]);
   expect(reads).toBe(2);expect(m.retried).toBe(true);
   expect(startRev).toBeLessThan(bumpedTo);
   expect(m.stateRev).toBe(bumpedTo);
-  const current=Number((await admin.query(`select public.fact_state_rev($1,'US') v`,[zz])).rows[0].v);
+  const current=await rev();
   expect(m.stateRev).toBe(current);
+  const rows=(await db.readFacts(zz,'US',{concepts:['revenue'],asOf:today(),history:true})).rows;
+  const fresh=rows.find(x=>x.value_text==='1002')!;
+  expect(fresh).toMatchObject({is_current:true,is_revision:true,available_date:'2024-03-01'});
   const metrics=await db.metricsOfIssuer(zz,'US',FORMULA_VERSION);
   expect(metrics.length).toBe(m.rows);expect(metrics.length).toBeGreaterThan(0);
-  for(const x of metrics)expect(x.based_on_rev).toBe(current);
+  for(const x of metrics){
+   expect(x.based_on_rev).toBe(current);
+   expect(x.inputs.map(i=>i.fact_id)).not.toContain(superseded);
+  }
+  const margin=metrics.find(x=>x.metric==='net_margin'&&x.duration==='12M')!;
+  expect(margin.value).toBe('0.0998003992');                                    // 100 / 1002
+  expect(margin.inputs.map(i=>i.fact_id)).toContain(fresh.fact_id);
  },120_000);
 
  // Gold gate. ready:false = the owner has not transcribed yet: warn loudly, do not fail (deviation from the plan's designed red).
  it('US gold gate: while ready:false it only reports (INCOMPLETE, non-failing); recorded entries always replay; ready:true enforces the whole matrix (round-1 #19)',async()=>{
   const gold=JSON.parse(readFileSync(new URL('./fixtures/gold/plan2.json',import.meta.url),'utf8')) as GoldFile;
   expect(gold.entries.length).toBeGreaterThan(0);
+  for(const e of gold.entries)expect(['US','CN'],`${e.issuer.ticker}/${e.concept}: market`).toContain(e.issuer.market);
   const us=gold.entries.filter(e=>e.issuer.market==='US');
   const missing=Object.keys(CIK).filter(t=>!us.some(e=>e.issuer.ticker===t&&!isPending(e)));
+  const gaps=gold.entries.map(e=>({e,gaps:provenanceGaps(e)})).filter(x=>x.gaps.length>0).map(x=>`${x.e.issuer.ticker}/${x.e.concept}/${x.e.period_end}: ${x.gaps.join(',')}`);
   if(!gold.ready){
-   console.warn(`GOLD INCOMPLETE (ready:false, not failing): ${gold.entries.filter(isPending).length}/${gold.entries.length} entries still <pending>; no recorded entry for ${missing.join(', ')||'-'}. Owner step (runbook 8.11-6) blocks F2-7.`);
+   console.warn(`GOLD INCOMPLETE (ready:false, not failing): ${gold.entries.filter(isPending).length}/${gold.entries.length} entries still <pending>; no recorded entry for ${missing.join(', ')||'-'}; incomplete provenance: ${gaps.join(' | ')||'-'}. Owner step (runbook 8.11-6) blocks F2-7.`);
   }else{
    // 1. required.US: an explicit, named failure when AAPL / MSFT are not recorded.
    if(gold.required.US)for(const t of Object.keys(CIK))expect(us.some(e=>e.issuer.ticker===t&&!isPending(e)),`gold entry for ${t} is still <pending> — owner step (runbook 8.11-6) blocks F2-7`).toBe(true);
-   // 2. ready: no template left; every asserted US issuer fixture-backed AND ingested by this suite; the
-   //    §11.4 matrix PER PERIOD: each of >= 6 issuers has >= 2 period_ends that each carry >= 6 concepts (round-2 N2).
+   // 2. ready: no template left, and every entry carries its provenance (document, page/row, url, recorded_at).
    expect(gold.entries.filter(isPending).map(e=>`${e.issuer.ticker}/${e.concept}/${e.period_end}`),'pending entries in a ready gold file').toEqual([]);
+   expect(gaps,'gold entries with incomplete provenance in a ready gold file').toEqual([]);
    for(const e of us)expect(e.issuer.ticker in CIK&&issuers[e.issuer.ticker]!==undefined,`${e.issuer.ticker}: no recorded fixture (record-fixture.ts --edgar, then add {ticker,cik,name} to FIXTURE_ISSUERS so it is provisioned and ingested)`).toBe(true);
+   // 3. the §11.4 matrix PER PERIOD, counting only entries this suite replay-verifies: fixture-backed US entries, and CN entries
+   //    only once a CN replay suite exists AND required.CN is true. Each of >= 6 issuers has >= 2 period_ends that each carry >= 6 concepts (round-2 N2).
+   const counted=gold.entries.filter(e=>!isPending(e)&&(e.issuer.market==='US'?e.issuer.ticker in CIK:CN_REPLAY_SUITE&&gold.required.CN));
    const byIssuer=new Map<string,Map<string,Set<string>>>();
-   for(const e of gold.entries){const periods=byIssuer.get(e.issuer.ticker)??byIssuer.set(e.issuer.ticker,new Map()).get(e.issuer.ticker)!;(periods.get(e.period_end)??periods.set(e.period_end,new Set()).get(e.period_end)!).add(e.concept);}
-   expect(byIssuer.size,'§11.4: at least 6 issuers').toBeGreaterThanOrEqual(6);
+   for(const e of counted){const periods=byIssuer.get(e.issuer.ticker)??byIssuer.set(e.issuer.ticker,new Map()).get(e.issuer.ticker)!;(periods.get(e.period_end)??periods.set(e.period_end,new Set()).get(e.period_end)!).add(e.concept);}
+   expect(byIssuer.size,'§11.4: at least 6 replay-verified issuers').toBeGreaterThanOrEqual(6);
    for(const [t,periods] of byIssuer){
     const full=[...periods].filter(([,concepts])=>concepts.size>=6).map(([p])=>p);
     expect(full.length,`${t}: at least 2 periods with >= 6 concepts each (have ${[...periods].map(([p,c])=>`${p}:${c.size}`).join(', ')})`).toBeGreaterThanOrEqual(2);
@@ -279,8 +332,9 @@ describe.skipIf(!enabled)('F2-3 US offline replay on real PostgreSQL',()=>{
    const issuer=issuers[e.issuer.ticker];
    expect(issuer,`no fixture-backed issuer for ${e.issuer.ticker}`).toBeDefined();
    const res=await db.readFacts(issuer,'US',{concepts:[e.concept],asOf:e.as_of??today(),from:e.period_end,to:e.period_end});
-   const row=res.rows.find(r=>r.period_end===e.period_end&&r.unit===e.unit&&r.is_current);
-   expect(row,`${e.issuer.ticker} ${e.concept} ${e.period_end} ${e.unit}`).toBeDefined();
+   const duration=e.duration??(conceptById(e.concept)?.nature==='instant'?'INSTANT':'12M');
+   const row=res.rows.find(r=>r.period_end===e.period_end&&r.unit===e.unit&&r.duration===duration&&r.is_current);
+   expect(row,`${e.issuer.ticker} ${e.concept} ${e.period_end} ${duration} ${e.unit}`).toBeDefined();
    expect(row!.value_text).toBe(e.value);
   }
  });
