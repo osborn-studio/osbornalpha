@@ -15,9 +15,21 @@ describe('scanJsonNumbers',()=>{
  it('fails closed on the reserved marker key, also escaped, and on leading zeros',()=>{
   expect(()=>scanJsonNumbers('{"val":{"__num":"123"}}')).toThrow('reserved_key');
   expect(()=>scanJsonNumbers('{"val":{"\\u005f_num":"123"}}')).toThrow('reserved_key');
-  expect(()=>scanJsonNumbers('{"a":01}')).toThrow('invalid_json_number');
-  expect(()=>scanJsonNumbers('{"a":-01}')).toThrow('invalid_json_number');
+  expect(()=>scanJsonNumbers('{"a":01}')).toThrow();
+  expect(()=>scanJsonNumbers('{"a":-01}')).toThrow();
   expect(scanJsonNumbers('{"a":0.5,"b":-0,"c":10}')).toEqual({a:{__num:'0.5'},b:{__num:'-0'},c:{__num:'10'}});
+ });
+ it('rejects the marker only as a key, not as a string value',()=>{
+  expect(scanJsonNumbers('{"label":"__num","val":1}')).toEqual({label:'__num',val:{__num:'1'}});
+  expect(scanJsonNumbers('["__num",{"k":"\\u005f_num"}, 2]')).toEqual(['__num',{k:'__num'},{__num:'2'}]);
+  expect(()=>scanJsonNumbers('{ "__num"\n : 1}')).toThrow('reserved_key');
+  expect(()=>scanJsonNumbers('[{"\\u005f_num":1}]')).toThrow('reserved_key');
+ });
+ it('fails fast on malformed input and handles escapes, whitespace and nesting',()=>{
+  const bad='{"a":"'+'\\"'.repeat(40000);
+  const t0=performance.now();expect(()=>scanJsonNumbers(bad)).toThrow();expect(performance.now()-t0).toBeLessThan(200);
+  expect(scanJsonNumbers('["a\\\\",5]')).toEqual(['a\\',{__num:'5'}]);
+  expect(scanJsonNumbers(' {\n "a" :\t [ [1, [2.5]] , [] ]\r\n} ')).toEqual({a:[[{__num:'1'},[{__num:'2.5'}]],[]]});
  });
  it('accepts bytes (utf-8) and rejects invalid JSON or invalid utf-8',()=>{
   expect(scanJsonNumbers(new TextEncoder().encode('{"val":1e5,"name":"贵州茅台"}'))).toEqual({val:{__num:'1e5'},name:'贵州茅台'});
@@ -44,6 +56,13 @@ describe('canonicalDecimal',()=>{
   expect(canonicalDecimal('-0')).toBe('0');expect(canonicalDecimal('-0.000')).toBe('0');expect(canonicalDecimal('0e9')).toBe('0');
   expect(canonicalDecimal('2.5')).toBe('2.5');expect(canonicalDecimal('-7')).toBe('-7');
  });
+ it('rejects over-long literals quickly',()=>{
+  const t0=performance.now();
+  expect(()=>canonicalDecimal('1'.repeat(1_000_000))).toThrow('invalid_decimal:length');
+  expect(()=>canonicalDecimal('0.'+'0'.repeat(300))).toThrow('invalid_decimal:length');
+  expect(performance.now()-t0).toBeLessThan(200);
+  expect(canonicalDecimal('1.'+'0'.repeat(200))).toBe('1');
+ });
  it('rejects non-decimal text and absurd exponents',()=>{
   for(const bad of ['','abc','1.','.5','1e','0x10','NaN','Infinity',' 1','1e1001'])expect(()=>canonicalDecimal(bad)).toThrow('invalid_decimal');
  });
@@ -68,6 +87,16 @@ describe('decodeWithSchema',()=>{
  it('validates control fields on the exact decimal text before Number()',()=>{
   for(const bad of ['1.00000000000000001','1e-400','9007199254740993','1.5'])expect(()=>decodeWithSchema(scanJsonNumbers(`{"fy":${bad}}`),EDGAR_NUMBER_SCHEMA)).toThrow('invalid_control_field:fy');
   expect(decodeWithSchema(scanJsonNumbers('{"fy":2023.0}'),EDGAR_NUMBER_SCHEMA)).toEqual({fy:2023});
+ });
+ it('keeps __proto__ as an own data property',()=>{
+  const out=decodeWithSchema(scanJsonNumbers('{"__proto__":{"polluted":1},"a":1}'),EDGAR_NUMBER_SCHEMA) as Record<string,unknown>;
+  expect(Object.keys(out)).toEqual(['__proto__','a']);
+  expect(Object.getPrototypeOf(out)).toBe(Object.prototype);
+  expect((out as {polluted?:unknown}).polluted).toBeUndefined();
+  expect(Object.getOwnPropertyDescriptor(out,'__proto__')?.value).toEqual({polluted:1});
+  expect(({} as {polluted?:unknown}).polluted).toBeUndefined();
+  const rows=decodeColumns(['__proto__','a'],[[1,2]],{control:[],decimal:[]});
+  expect(Object.keys(rows[0])).toEqual(['__proto__','a']);expect(Object.getPrototypeOf(rows[0])).toBe(Object.prototype);
  });
  it('decodes positional Tushare rows by column name',()=>{
   const schema={control:TUSHARE_CONTROL_FIELDS,decimal:['total_revenue','basic_eps']};

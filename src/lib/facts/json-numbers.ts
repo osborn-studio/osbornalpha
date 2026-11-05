@@ -9,14 +9,28 @@ export interface NumToken{__num:string}
 export const isNumToken=(v:unknown):v is NumToken=>typeof v==='object'&&v!==null&&typeof (v as NumToken).__num==='string'&&Object.keys(v as object).length===1;
 
 const TOKEN=/"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
-/** JSON.parse with every numeric literal wrapped as {__num:'<original text>'}. Strings are left intact. */
 const JSON_INT=/^-?(?:0|[1-9]\d*)(?![\d])/;
+/** True when the string token at [end) is followed by optional JSON whitespace and ':' (i.e. it is an object key). */
+function isKeyAt(text:string,end:number):boolean{
+ for(let i=end;i<text.length;i++){
+  const c=text.charCodeAt(i);
+  if(c===32||c===9||c===10||c===13)continue;
+  return c===58;
+ }
+ return false;
+}
+/**
+ * JSON.parse with every numeric literal wrapped as {__num:'<original text>'}. Strings are left intact.
+ * The input is first validated with a plain JSON.parse (malformed text fails fast, before the regex pass), and
+ * fails closed if an object key decodes to the reserved marker `__num` (also in escaped spellings).
+ */
 export function scanJsonNumbers(input:Uint8Array|string):unknown{
  const text=typeof input==='string'?input:new TextDecoder('utf-8',{fatal:true}).decode(input);
- const rewritten=text.replace(TOKEN,m=>{
+ JSON.parse(text);
+ const rewritten=text.replace(TOKEN,(m,offset:number)=>{
   if(m.charCodeAt(0)===34){
-   // fail closed: the reserved marker key must not occur in source (also in escaped spellings)
-   if(m.length<=64&&JSON.parse(m)==='__num')throw new Error('reserved_key:__num');
+   // only a string that could decode to '__num' (7..64 chars, starts with '"_' or has an escape) is parsed
+   if(m.length>=7&&m.length<=64&&(m.charCodeAt(1)===95||m.includes('\\'))&&isKeyAt(text,offset+m.length)&&JSON.parse(m)==='__num')throw new Error('reserved_key:__num');
    return m;
   }
   if(!JSON_INT.test(m))throw new Error(`invalid_json_number:${m.slice(0,40)}`);
@@ -29,6 +43,7 @@ const DECIMAL=/^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/;
 const MAX_EXPONENT=1000;
 /** Canonical decimal text: no exponent, no leading/trailing zeros, '-0' → '0'. Throws invalid_decimal. */
 export function canonicalDecimal(raw:string):string{
+ if(raw.length>256)throw new Error('invalid_decimal:length');
  const m=DECIMAL.exec(raw);
  if(!m)throw new Error(`invalid_decimal:${raw.slice(0,40)}`);
  const exp=m[4]===undefined?0:Number(m[4]);
@@ -40,7 +55,9 @@ export function canonicalDecimal(raw:string):string{
  else if(point>=digits.length){intPart=digits+'0'.repeat(point-digits.length);fracPart='';}
  else{intPart=digits.slice(0,point);fracPart=digits.slice(point);}
  intPart=intPart.replace(/^0+(?=\d)/,'');
- fracPart=fracPart.replace(/0+$/,'');
+ let end=fracPart.length;
+ while(end>0&&fracPart.charCodeAt(end-1)===48)end--;
+ fracPart=fracPart.slice(0,end);
  const zero=intPart==='0'&&fracPart==='';
  return `${m[1]==='-'&&!zero?'-':''}${intPart}${fracPart?`.${fracPart}`:''}`;
 }
@@ -70,9 +87,8 @@ export function decodeWithSchema(value:unknown,schema:NumberSchema,field:string|
  if(isNumToken(value))return decodeNumber(value.__num,modeOf(schema,field),field);
  if(Array.isArray(value))return value.map(v=>decodeWithSchema(v,schema,field));
  if(value!==null&&typeof value==='object'){
-  const out:Record<string,unknown>={};
-  for(const [k,v] of Object.entries(value as Record<string,unknown>))out[k]=decodeWithSchema(v,schema,k);
-  return out;
+  // fromEntries defines own properties, so a '__proto__' key stays data and never touches the prototype
+  return Object.fromEntries(Object.entries(value as Record<string,unknown>).map(([k,v])=>[k,decodeWithSchema(v,schema,k)]));
  }
  return value;
 }
@@ -81,8 +97,6 @@ export function decodeWithSchema(value:unknown,schema:NumberSchema,field:string|
 export function decodeColumns(fields:string[],items:unknown[][],schema:NumberSchema):Record<string,unknown>[]{
  return items.map(row=>{
   if(row.length!==fields.length)throw new Error(`invalid_row_width:${row.length}`);
-  const out:Record<string,unknown>={};
-  fields.forEach((f,i)=>{out[f]=decodeWithSchema(row[i],schema,f);});
-  return out;
+  return Object.fromEntries(fields.map((f,i)=>[f,decodeWithSchema(row[i],schema,f)]));
  });
 }
