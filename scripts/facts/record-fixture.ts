@@ -12,7 +12,9 @@
  * A recording is a complete generation: written to a temp dir, validated, then it replaces the issuer's set (stale pages removed). Real fixtures (fixtures/tushare) replace the synthetic ones
  * (fixtures/tushare/_synthetic) in the loader automatically. After recording, do the report_type 1/4/5 and paging
  * check of spec §15 item 1 and write the result into docs/audits/2026-11-04-data-foundation-2/17-tushare-verification.md.
- * (--cninfo mode is added by Task 13.) Exit 2 on bad arguments or a missing TUSHARE_TOKEN.
+ *   npx tsx scripts/facts/record-fixture.ts --cninfo <ts_code> <YYYY-MM-DD> <fiscal_year> <annual|semiannual|q1|q3>
+ *                                                                          → fixtures/cninfo/<ts_code>-<fy>-<kind>.json (real hisAnnouncement pages, no token)
+ * Exit 2 on bad arguments or a missing TUSHARE_TOKEN.
  */
 import {mkdirSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
@@ -21,12 +23,15 @@ import {FACT_CONCEPTS} from '../../src/lib/facts/concepts';
 import {scanJsonNumbers} from '../../src/lib/facts/json-numbers';
 import {budgetFor,padCik,stringifyPreservingNumbers} from '../../src/lib/facts/providers/shared';
 import {companyFactsUrl,fetchCompanyFacts,tagsOf} from '../../src/lib/facts/providers/edgar-companyfacts';
+import {CNINFO_HISTORY,resolveOrgId} from '../../src/lib/research/ingest/collectors/cninfo';
+import {createClient} from '../../src/lib/research/ingest/collectors/shared';
+import {CNINFO_PAGE_SIZE,cninfoQueryBody} from '../../src/lib/facts/providers/cninfo-link';
 import {fetchTushareStatements} from '../../src/lib/facts/providers/tushare-statements';
 import {commitRecording,writeRecording} from '../../src/lib/facts/providers/tushare-fixtures';
 
 const ROOT=fileURLToPath(new URL('../../src/lib/facts/fixtures/',import.meta.url));
 const SINCE_END='2019-01-01';
-const USAGE='usage: record-fixture.ts --edgar <cik> | --edgar-revise <cik> | --tushare <ts_code> [--since-year <yyyy>]';
+const USAGE='usage: record-fixture.ts --edgar <cik> | --edgar-revise <cik> | --tushare <ts_code> [--since-year <yyyy>] | --cninfo <ts_code> <YYYY-MM-DD> <fiscal_year> <annual|semiannual|q1|q3>';
 const TAGS=new Set(FACT_CONCEPTS.flatMap(tagsOf));
 // The revision used by sync-us.integration.test.ts: FY2023 revenue re-disclosed by a later 10-K with a
 // different value. The base entry is selected by accn AND the exact period (a 10-K carries comparative
@@ -85,11 +90,27 @@ async function recordTushare(tsCode:string,sinceYear:number){
   console.log(`wrote ${r.written.length} files to ${dst}; removed ${r.removed.length} stale: ${r.removed.join(', ')}`);
  }finally{rmSync(tmp,{recursive:true,force:true});}
 }
+async function recordCninfo(tsCode:string,availableDate:string,fiscalYear:string,formType:string){
+ const m=/^(\d{6})\.(SH|SZ)$/.exec(tsCode)??fail('ts_code must be SH/SZ');
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(availableDate)||!/^\d{4}$/.test(fiscalYear)||!['annual','semiannual','q1','q3'].includes(formType))fail(USAGE);
+ const client=createClient({ctx:null as never,companies:[],since:''},500);
+ const org=await resolveOrgId(m[1],{})??fail(`no orgId for ${tsCode}`);
+ const pages:unknown[]=[];
+ for(let pageNum=1;;pageNum++){
+  const res=await client.post(CNINFO_HISTORY,cninfoQueryBody({code:m[1],orgId:org.orgId,column:m[2]==='SH'?'sse':'szse',availableDate,pageNum}));
+  if(!res.ok)fail(`cninfo ${res.status}`);
+  const page=await res.json() as {announcements?:unknown[]|null;hasMore?:boolean};
+  pages.push(page);
+  if(!page.hasMore||(page.announcements??[]).length<CNINFO_PAGE_SIZE)break;
+ }
+ write(`cninfo/${tsCode}-${fiscalYear}-${formType}.json`,JSON.stringify({__recorded:{at:new Date().toISOString(),url:CNINFO_HISTORY,ts_code:tsCode,org_id:org.orgId,available_date:availableDate,fiscal_year:Number(fiscalYear),form_type:formType},pages},null,1));
+}
 async function main(){
  const [mode,...rest]=process.argv.slice(2);
  if(mode==='--edgar'&&rest[0])return recordEdgar(rest[0]);
  if(mode==='--edgar-revise'&&rest[0])return reviseEdgar(rest[0]);
  if(mode==='--tushare'&&rest[0]){const i=rest.indexOf('--since-year');return recordTushare(rest[0],i>=0?Number(rest[i+1]):new Date().getUTCFullYear()-10);}
+ if(mode==='--cninfo'&&rest.length===4)return recordCninfo(rest[0],rest[1],rest[2],rest[3]);
  fail(USAGE);
 }
 main().catch(e=>{console.error(e instanceof Error?e.message:String(e));process.exitCode=1;});
