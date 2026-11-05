@@ -20,7 +20,7 @@ describe('evaluateFactRules',()=>{
   const out=run([assets],[ok('liabilities_and_equity','1100')]);
   expect(out.quarantine).toHaveLength(1);
   expect(out.quarantine[0]).toMatchObject({reason:'identity_bs',rule:'identity_bs',factIds:[assets.fact_id],naturalKey:`${ISSUER}:US:BS:2023-09-30:USD:acc-1:1`,key:{statement:'BS',period_end:'2023-09-30',unit:'USD',source_ref:'acc-1'}});
-  expect(out.quarantine[0].detail).toMatchObject({left:1000,right:1100,concepts:['total_assets','liabilities_and_equity']});
+  expect(out.quarantine[0].detail).toMatchObject({left:'1000',right:'1100',concepts:['total_assets','liabilities_and_equity']});
  });
  it('falls back to liabilities + equity_total and skips the check when inputs are missing or in another unit',()=>{
   const bad=run([ins('total_assets','1000'),ins('total_liabilities','600'),ins('equity_total','300')]);
@@ -69,7 +69,7 @@ describe('evaluateFactRules',()=>{
   // 31-digit values: doubles keep ~15 significant digits, exact decimals keep all of them
   const big='1'+'0'.repeat(30);
   expect(run([ins('total_assets',big),ins('liabilities_and_equity',big+'.5')]).quarantine).toEqual([]);
-  expect(run([ins('total_assets',big),ins('liabilities_and_equity','1.006'+'0'.repeat(27))]).quarantine).toHaveLength(1);
+  expect(run([ins('total_assets',big),ins('liabilities_and_equity','1006'+'0'.repeat(27))]).quarantine).toHaveLength(1);
   // 300-digit literals overflow doubles to Infinity but stay exact here
   const huge='9'+'0'.repeat(299);
   expect(run([ins('total_assets',huge),ins('liabilities_and_equity',huge)]).quarantine).toEqual([]);
@@ -81,5 +81,32 @@ describe('evaluateFactRules',()=>{
   // gross margin boundary |margin| = 1 passes exactly; just beyond warns
   expect(run([ins('revenue','100',IS),ins('cost_of_revenue','200',IS)]).warnings.get('gross_margin_range')).toEqual([]);
   expect(run([ins('revenue','100',IS),ins('cost_of_revenue','200.0000000000000001',IS)]).warnings.get('gross_margin_range')).toHaveLength(1);
+ });
+ it('does not fill identity inputs from a superseded mapping generation',()=>{
+  const assets=ins('total_assets','1000',{mapping_gen:2});
+  expect(run([assets],[ok('liabilities_and_equity','1100',{mapping_gen:1})]).quarantine).toEqual([]);
+  expect(run([assets],[ok('liabilities_and_equity','1100',{mapping_gen:2})]).quarantine).toHaveLength(1);
+ });
+ it('checks CN gross margin against revenue_operating, not total revenue',()=>{
+  const cn=(rows:FactInsert[])=>evaluateFactRules({newRows:rows,okRows:[],sourceRefOf,issuerId:ISSUER,market:'CN',mappingGen:1});
+  const cny={...IS,unit:'CNY',market:'CN' as const};
+  expect(cn([ins('revenue','1000',cny),ins('revenue_operating','100',cny),ins('cost_of_revenue','250',cny)]).warnings.get('gross_margin_range')).toHaveLength(1);
+  expect(cn([ins('revenue','100',cny),ins('revenue_operating','1000',cny),ins('cost_of_revenue','250',cny)]).warnings.get('gross_margin_range')).toEqual([]);
+  expect(cn([ins('revenue','100',cny),ins('cost_of_revenue','250',cny)]).warnings.get('gross_margin_range')).toEqual([]);
+ });
+ it('resolves revenue_jump priors from new rows too: bulk and incremental ingestion agree',()=>{
+  const y1=ins('revenue','10',{...IS,period_start:'2021-10-01',period_end:'2022-09-30',filing_id:F2});
+  const y2=ins('revenue','1000',IS);
+  expect(run([y1,y2]).warnings.get('revenue_jump')).toHaveLength(1);
+  const stored=ok('revenue','10',{...IS,filing_id:F2,period_start:'2021-10-01',period_end:'2022-09-30',is_current:true});
+  expect(run([y2],[stored]).warnings.get('revenue_jump')).toHaveLength(1);
+ });
+ it('keeps operands as exact decimal strings and tests exact boundaries',()=>{
+  const q=run([ins('total_assets','9007199254740993'),ins('liabilities_and_equity','1')]).quarantine;
+  expect(q[0].detail).toMatchObject({left:'9007199254740993',right:'1'});
+  expect(run([ins('total_assets','995'),ins('liabilities_and_equity','1000')]).quarantine).toEqual([]);
+  const prior=ok('revenue','10',{...IS,filing_id:F2,period_start:'2021-10-01',period_end:'2022-09-30',is_current:true});
+  expect(run([ins('revenue','110',IS)],[prior]).warnings.get('revenue_jump')).toEqual([]);
+  expect(run([ins('revenue','111',IS)],[prior]).warnings.get('revenue_jump')).toHaveLength(1);
  });
 });

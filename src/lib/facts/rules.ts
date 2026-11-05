@@ -17,7 +17,7 @@ export type AnyFactRow=FactInsert|FactRow;
 export interface FactRulesInput{newRows:FactInsert[];okRows:FactRow[];sourceRefOf:Map<string,string>;issuerId:string;market:Market;mappingGen:number}
 export interface RuleQuarantine{reason:'identity_bs'|'identity_gp';naturalKey:string;key:Record<string,string|null>;factIds:string[];rule:string;detail:Record<string,unknown>}
 export interface FactRulesResult{quarantine:RuleQuarantine[];warnings:Map<string,string[]>}
-/** Rational tolerances as [numerator, denominator]; the *_NUM/_DEN pairs below are the exact forms. */
+/** Documentation-only double forms; the checks use the exact rational IDENTITY_TOL_RATIO (5/1000) and the integer REVENUE_MAX_JUMP, never these doubles for arithmetic on values. */
 export const IDENTITY_TOLERANCE=0.005;
 export const GROSS_MARGIN_RANGE:[number,number]=[-1,1];
 export const REVENUE_MAX_JUMP=10;
@@ -54,17 +54,15 @@ const within=(diff:Dec,scale:Dec,num:bigint,den:bigint):boolean=>{
  const [d,sc]=align(absDec(diff),scale);
  return d*den<=sc*num;
 };
-/** Display only: a finite double when representable, else the canonical string. */
-const shown=(v:string):number|string=>{const x=Number(v);return Number.isFinite(x)?x:v;};
 
 /** |left − right| ≤ tolerance × max(|left|,|right|,1) with exact arithmetic (same rule as dq identityRule). */
-function identity(ruleId:string,left:string,right:Dec,rightText:string):RuleResult{
+function identity(ruleId:string,left:string,right:Dec):RuleResult{
  const l=dec(left);
- if(l===null)return {ruleId,passed:false,detail:{left,right:rightText,reason:'not_a_number'}};
+ if(l===null)return {ruleId,passed:false,detail:{left,right:text(right),reason:'not_a_number'}};
  const diff=sub(l,right);
  const scale=maxDec(absDec(l),absDec(right),ONE);
  if(within(diff,scale,IDENTITY_TOL_RATIO[0],IDENTITY_TOL_RATIO[1]))return {ruleId,passed:true};
- return {ruleId,passed:false,detail:{left:shown(left),right:shown(rightText),tolerance:IDENTITY_TOLERANCE}};
+ return {ruleId,passed:false,detail:{left:text(l),right:text(right),tolerance:IDENTITY_TOLERANCE}};
 }
 const text=(d:Dec):string=>{
  const neg=d.n<0n;const digits=abs(d.n).toString().padStart(d.s+1,'0');
@@ -79,7 +77,9 @@ export function evaluateFactRules(input:FactRulesInput):FactRulesResult{
  const out:FactRulesResult={quarantine:[],warnings:new Map(WARNING_RULES.map(r=>[r,[]]))};
  const groups=new Map<string,{rows:Map<string,AnyFactRow>;fresh:Set<string>;sample:AnyFactRow}>();
  for(const r of input.newRows){const g=groups.get(cell(r))??{rows:new Map(),fresh:new Set(),sample:r};g.rows.set(r.concept,r);g.fresh.add(r.concept);groups.set(cell(r),g);}
- for(const r of input.okRows){const g=groups.get(cell(r));if(g&&!g.rows.has(r.concept))g.rows.set(r.concept,r);}
+ // ok rows only fill inputs of the same mapping generation: rows of a superseded generation of a filing
+ // being remapped disappear on publish, so using them would check an identity against a vanishing input.
+ for(const r of input.okRows){const g=groups.get(cell(r));if(g&&r.mapping_gen===g.sample.mapping_gen&&!g.rows.has(r.concept))g.rows.set(r.concept,r);}
  for(const g of groups.values()){
   const s=g.sample;const sourceRef=sourceRefOf.get(s.filing_id)??s.filing_id;
   const get=(c:string)=>g.rows.get(c);
@@ -98,31 +98,33 @@ export function evaluateFactRules(input:FactRulesInput):FactRulesResult{
    const leV=val('liabilities_and_equity');const liab=d('total_liabilities');const eq=d('equity_total');
    if(leV!==undefined){
     const le=dec(leV);
-    const res=le===null?{ruleId:'identity_bs',passed:false,detail:{left:assetsV,right:leV,reason:'not_a_number'}}:identity('identity_bs',assetsV,le,leV);
+    const res=le===null?{ruleId:'identity_bs',passed:false,detail:{left:assetsV,right:leV,reason:'not_a_number'}}:identity('identity_bs',assetsV,le);
     if(!res.passed)park('identity_bs','BS',res,['total_assets','liabilities_and_equity']);
    }else if(liab!==undefined&&eq!==undefined){
     const sum=liab!==null&&eq!==null?add(liab,eq):null;
-    const res=sum===null?{ruleId:'identity_bs',passed:false,detail:{left:assetsV,reason:'not_a_number'}}:identity('identity_bs',assetsV,sum,text(sum));
+    const res=sum===null?{ruleId:'identity_bs',passed:false,detail:{left:assetsV,reason:'not_a_number'}}:identity('identity_bs',assetsV,sum);
     if(!res.passed)park('identity_bs','BS',res,['total_assets','total_liabilities','equity_total']);
    }
   }
   // identity_gp: gross_profit = revenue − cost_of_revenue, only when gross_profit is disclosed
-  const gpV=val('gross_profit');const gp=d('gross_profit');const rev=d('revenue');const cost=d('cost_of_revenue');
+  const gpV=val('gross_profit');const gp=d('gross_profit');const rev=d('revenue');const margin=market==='CN'?d('revenue_operating'):rev;const cost=d('cost_of_revenue');
   if(gpV!==undefined&&rev!==undefined&&cost!==undefined){
    const net=rev!==null&&cost!==null?sub(rev,cost):null;
-   const res=net===null?{ruleId:'identity_gp',passed:false,detail:{left:gpV,reason:'not_a_number'}}:identity('identity_gp',gpV,net,text(net));
+   const res=net===null?{ruleId:'identity_gp',passed:false,detail:{left:gpV,reason:'not_a_number'}}:identity('identity_gp',gpV,net);
    if(!res.passed)park('identity_gp','IS',res,['gross_profit','revenue','cost_of_revenue']);
   }
   // warnings (never quarantine)
   const warnKey=identityKey(issuerId,market,'IS',s.period_start,s.period_end,s.unit,sourceRef,mappingGen);
-  if(rev!==undefined&&rev!==null&&rev.n!==0n&&(gp!==undefined||cost!==undefined)){
-   // |margin| ≤ 1 ⇔ |numerator| ≤ |revenue| (GROSS_MARGIN_RANGE is [-1,1]); a missing/invalid numerator input is skipped as before
-   const numer=gp!==undefined?gp:cost!==undefined&&cost!==null?sub(rev,cost):null;
-   if(numer!==null&&cmp(absDec(numer),absDec(rev))>0)out.warnings.get('gross_margin_range')!.push(warnKey);
+  // CN: cost_of_revenue is Tushare oper_cost, which pairs with revenue_operating (营业收入), not total revenue; skipped when absent
+  if(margin!==undefined&&margin!==null&&margin.n!==0n&&(gp!==undefined||cost!==undefined)){
+   // |margin| ≤ 1 ⇔ |numerator| ≤ |denominator| (GROSS_MARGIN_RANGE is [-1,1]); an invalid numerator input (null) is skipped
+   const numer=gp!==undefined?gp:cost!==undefined&&cost!==null?sub(margin,cost):null;
+   if(numer!==null&&cmp(absDec(numer),absDec(margin))>0)out.warnings.get('gross_margin_range')!.push(warnKey);
   }
   const revRow=get('revenue');
   if(revRow!==undefined&&g.fresh.has('revenue')&&revRow.duration!=='INSTANT'){
-   const prior=input.okRows.filter(r=>r.concept==='revenue'&&r.unit===revRow.unit&&r.duration===revRow.duration&&r.is_current!==false&&(()=>{const dd=daysBetween(r.period_end,revRow.period_end);return dd!==null&&dd>=350&&dd<=380;})());
+   // prior-year candidates come from stored ok rows and from the other new rows, so bulk and incremental ingestion agree
+   const prior=[...input.okRows,...input.newRows].filter(r=>r!==revRow&&r.concept==='revenue'&&(r as FactRow).is_current!==false&&r.unit===revRow.unit&&r.duration===revRow.duration&&(r as FactRow).is_current!==false&&(()=>{const dd=daysBetween(r.period_end,revRow.period_end);return dd!==null&&dd>=350&&dd<=380;})());
    const prev=new Set(prior.map(r=>dec(r.value)).map(x=>x===null?'':text(x)));
    const cur=dec(revRow.value);
    if(prev.size===1&&!prev.has('')&&cur!==null){
