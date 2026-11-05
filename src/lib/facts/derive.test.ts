@@ -178,6 +178,75 @@ describe('deriveMetrics: review follow-ups',()=>{
  });
 });
 
+describe('deriveMetrics: quality review follow-ups',()=>{
+ function lcg(seed:number){let x=seed>>>0;return ()=>{x=(Math.imul(x,1664525)+1013904223)>>>0;return x/4294967296;};}
+ const shuffled=<T,>(xs:T[],seed:number)=>{const r=lcg(seed),a=[...xs];for(let i=a.length-1;i>0;i--){const j=Math.floor(r()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};
+ const ytd=(c:string,y:number,v:string[],extra:Partial<FactRow>={})=>[['03-31','01-01'],['06-30','01-01'],['09-30','01-01'],['12-31','01-01']].slice(0,v.length).map(([e,st],i)=>dur(c,`${y}-${st}`,`${y}-${e}`,v[i],extra));
+ it('conflicting YTD differences for one quarter are ambiguous and independent of row order; equal ones keep the smallest fact ids',()=>{
+  const mk=(a2:string,b2:string)=>[dur('revenue','2024-01-01','2024-12-31','70',{fact_id:'a1'}),dur('revenue','2024-01-01','2024-09-30','45',{fact_id:'b1'}),
+   dur('revenue','2024-01-05','2024-12-31',a2,{fact_id:'a2'}),dur('revenue','2024-01-05','2024-09-30',b2,{fact_id:'b2'})];
+  const conflict=mk('80','45'),equal=mk('75','50');
+  const q4=(rows:FactRow[])=>deriveMetrics(rows,opts).filter(r=>r.metric==='q_single_revenue'&&r.period_end==='2024-12-31');
+  for(let seed=1;seed<=8;seed++){
+   expect(q4(shuffled(conflict,seed))).toEqual([]);
+   const eq=q4(shuffled(equal,seed));
+   expect(eq.map(r=>r.value)).toEqual(['25']);expect(eq[0].inputs.map(i=>i.fact_id)).toEqual(['a1','b1']);
+  }
+ });
+ it('whole output is permutation invariant',()=>{
+  const rows=[...ytd('revenue',2023,['10','25','45','70']),...ytd('revenue',2024,['12','30','54','80']),...ytd('net_income_parent',2024,['1','2','3','4']),
+   inst('equity_parent','2023-12-31','100'),inst('equity_parent','2024-12-31','120'),dur('revenue','2024-04-01','2024-06-30','18')];
+  const base=JSON.stringify(deriveMetrics(rows,opts));
+  for(let seed=1;seed<=10;seed++)expect(JSON.stringify(deriveMetrics(shuffled(rows,seed),opts))).toBe(base);
+ });
+ it('throws on several current rows, on mixed issuer/market, and on a market that differs from the options',()=>{
+  const a=dur('revenue','2024-01-01','2024-03-31','1',{fact_id:'x1',disclosure_seq:1,is_current:true}),b=dur('revenue','2024-01-01','2024-03-31','2',{fact_id:'x2',disclosure_seq:2,is_current:true});
+  expect(()=>deriveMetrics([a,b],opts)).toThrow('derive_multiple_current');
+  expect(()=>deriveMetrics([dur('revenue','2024-01-01','2024-03-31','1'),dur('revenue','2024-04-01','2024-06-30','1',{issuer_id:'J'})],opts)).toThrow('derive_mixed_scope');
+  expect(()=>deriveMetrics([dur('revenue','2024-01-01','2024-03-31','1',{market:'CN'})],opts)).toThrow('derive_mixed_scope');
+ });
+ it('revision fallback compares numbers, not strings (10 vs 10.0 is not a revision)',()=>{
+  const rows=[dur('revenue','2024-01-01','2024-06-30','25',{filing_id:'F6',is_revision:undefined,disclosure_seq:1,is_current:false,value_text:'25'}),
+   dur('revenue','2024-01-01','2024-06-30','25.0',{filing_id:'F6b',is_revision:undefined,disclosure_seq:2,is_current:true,available_date:'2024-02-01'}),
+   dur('revenue','2024-01-01','2024-09-30','45',{filing_id:'F9'})];
+  expect(pick(deriveMetrics(rows,opts),'q_single_revenue')).toEqual([['2024-07-01','2024-09-30','20']]);   // 25 → 25.0 is not a revision: rule b applies
+ });
+ it('both gross_margin branches list the numerator source first, then revenue',()=>{
+  const gp=deriveMetrics([dur('revenue','2024-01-01','2024-03-31','10'),dur('gross_profit','2024-01-01','2024-03-31','4')],opts).find(r=>r.metric==='gross_margin')!;
+  const cor=deriveMetrics([dur('revenue','2024-01-01','2024-03-31','10'),dur('cost_of_revenue','2024-01-01','2024-03-31','6')],opts).find(r=>r.metric==='gross_margin')!;
+  expect(gp.inputs.map(i=>i.concept)).toEqual(['gross_profit','revenue']);
+  expect(cor.inputs.map(i=>i.concept)).toEqual(['cost_of_revenue','revenue']);
+ });
+ it('TTM across a year boundary (2023Q4-2024Q3) from two YTD series',()=>{
+  const out=deriveMetrics([...ytd('revenue',2023,['10','25','45','70']),...ytd('revenue',2024,['12','30','54'])],opts);
+  expect(pick(out,'ttm_revenue').filter(r=>r[1]==='2024-09-30')).toEqual([['2023-10-01','2024-09-30','79']]);
+ });
+ it('random 2-year YTD series reproduce exact quarter and TTM strings (integer cents)',()=>{
+  const fmt=(c:number)=>{const n=Math.abs(c),i=Math.floor(n/100),f=String(n%100).padStart(2,'0').replace(/0+$/,'');return `${c<0?'-':''}${i}${f?`.${f}`:''}`;};
+  for(let seed=1;seed<=200;seed++){
+   const r=lcg(seed);const q=Array.from({length:8},()=>Math.floor(r()*2000001)-1000000);
+   const y=(k:number)=>{let acc=0;return q.slice(k*4,k*4+4).map(v=>fmt(acc+=v));};
+   const out=deriveMetrics([...ytd('revenue',2023,y(0)),...ytd('revenue',2024,y(1))],opts);
+   expect(pick(out,'q_single_revenue').map(x=>x[2])).toEqual(q.map(fmt));
+   expect(pick(out,'ttm_revenue').map(x=>x[2])).toEqual([3,4,5,6,7].map(i=>fmt(q.slice(i-3,i+1).reduce((a,v)=>a+v,0))));
+  }
+ });
+ it('YoY with a negative prior divides by its absolute value',()=>{
+  const out=deriveMetrics([dur('net_income_parent','2023-01-01','2023-12-31','-100'),dur('net_income_parent','2024-01-01','2024-12-31','-50')],opts);
+  expect(pick(out,'net_income_yoy')).toEqual([['2024-01-01','2024-12-31','0.5']]);
+ });
+ it('ROE: non-positive average equity → missing; opening equity on Feb 29 works; mixed-scale division is exact',()=>{
+  const q=(a:string,b:string)=>dur('net_income_parent',a,b,'5');
+  const leap=[q('2024-03-01','2024-05-31'),q('2024-06-01','2024-08-31'),q('2024-09-01','2024-11-30'),q('2024-12-01','2025-02-28')];
+  const roe=(e0:string,e1:string)=>pick(deriveMetrics([...leap,inst('equity_parent','2024-02-29',e0),inst('equity_parent','2025-02-28',e1)],opts),'roe');
+  expect(roe('90','110')).toEqual([['2024-03-01','2025-02-28','0.2']]);
+  expect(roe('-100','60')).toEqual([]);expect(roe('-100','100')).toEqual([]);
+  expect(roe('-10','50')).toEqual([['2024-03-01','2025-02-28','1']]);
+  const gm=deriveMetrics([dur('revenue','2024-01-01','2024-03-31','3.5'),dur('gross_profit','2024-01-01','2024-03-31','0.001')],opts);
+  expect(pick(gm,'gross_margin')).toEqual([['2024-01-01','2024-03-31','0.0002857143']]);
+ });
+});
+
 describe('materialize',()=>{
  const env=(stateRev:number,rows:FactRow[],truncated=false):ReadFactsResult=>({stateRev,rows,truncated});
  function fakeDb(envs:ReadFactsResult[],behaviour:{staleFirst?:boolean}={}){
@@ -203,6 +272,14 @@ describe('materialize',()=>{
   const {db}=fakeDb([env(1,[])]);
   const stale:Pick<FactsDb,'readFacts'|'replaceMetrics'>={...db,async replaceMetrics(){throw new FactsDbError('stale_computation');}};
   await expect(materialize(stale,'I','US')).rejects.toMatchObject({code:'stale_computation'});
+ });
+ it('empty facts still replace with []; rows of another issuer are refused',async()=>{
+  const {db,calls}=fakeDb([env(5,[])]);
+  expect(await materialize(db,'I','US',{today:'2025-01-01'})).toEqual({rows:0,stateRev:5,retried:false});
+  expect(calls).toEqual([{basedOnRev:5,rows:[]}]);
+  const other=fakeDb([env(5,[dur('revenue','2024-01-01','2024-03-31','1',{issuer_id:'OTHER'})])]);
+  await expect(materialize(other.db,'I','US')).rejects.toThrow('derive_scope_mismatch');
+  expect(other.calls).toEqual([]);
  });
  it('refuses a truncated envelope with read_truncated and writes nothing',async()=>{
   const {db,calls}=fakeDb([env(3,[],true)]);
