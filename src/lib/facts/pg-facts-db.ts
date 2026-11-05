@@ -17,6 +17,9 @@ export function pgFactsDb(pool:Pool):FactsDb{
   catch(e){throw toFactsDbError(e as PgErrorLike);}
  };
  const fn=async<T>(call:string,values:unknown[]):Promise<T>=>(await run(`select ${call} as v`,values)).rows[0].v as T;
+ // pg returns timestamptz as text ('2026-11-04 20:21:51.123456+00'); PostgREST returns ISO 8601: normalise to toISOString() like supabaseFactsDb consumers see it
+ const TS=['created_at','updated_at','next_due_at','lease_until','last_attempt_at','last_success_at'];
+ const iso=(r:Record<string,unknown>)=>{for(const k of TS){const v=r[k];if(typeof v==='string')r[k]=new Date(v).toISOString();}return r;};
  const rel=(table:string)=>`${ident('public')}.${ident(table)}`;
  return {
   claimLease:(issuer,market,batch,ttl)=>fn<boolean>('public.claim_fact_sync_lease($1,$2,$3,$4)',[issuer,market,batch,ttl]),
@@ -39,7 +42,7 @@ export function pgFactsDb(pool:Pool):FactsDb{
   },
   async factsByIds(ids){
    if(ids.length===0)return [];
-   return (await run(`select * from ${rel('financial_facts')} where fact_id = any($1::uuid[]) order by fact_id`,[[...new Set(ids)]])).rows.map(factRowFromTable);   // deduped, ordered by fact_id
+   return (await run(`select * from ${rel('financial_facts')} where fact_id = any($1::uuid[]) order by fact_id`,[[...new Set(ids)]])).rows.map(r=>factRowFromTable(iso(r)));   // deduped, ordered by fact_id
   },
   async openConflicts(issuer,market){
    return (await run(`select id, natural_key, payload from ${rel('dq_quarantine')} where table_name = 'financial_facts' and reason_code = 'same_day_conflict' and status = 'open' and natural_key like $1 order by created_at, id`,[`${conflictPrefix(issuer,market)}%`])).rows.map(conflictFromItem);
@@ -51,7 +54,7 @@ export function pgFactsDb(pool:Pool):FactsDb{
    if(opts.unlinkedOnly)where+=` and document_ref is null`;
    let limit='';
    if(opts.limit!==undefined){values.push(opts.limit);limit=` limit $${values.length}`;}   // no implicit cap (round-1 #7)
-   return (await run(`select * from ${rel('filings')} where ${where} order by available_date desc, filing_id${limit}`,values)).rows as FilingRow[];
+   return (await run(`select * from ${rel('filings')} where ${where} order by available_date desc, filing_id${limit}`,values)).rows.map(iso) as unknown as FilingRow[];
   },
   async updateFilingLink(filingId,patch){
    const p=linkPatch(patch);const cols=Object.keys(p);
@@ -60,11 +63,11 @@ export function pgFactsDb(pool:Pool):FactsDb{
   reconcileScope:(market,input)=>fn<number>('public.reconcile_fact_sync_scope($1,$2::jsonb)',[market,JSON.stringify(input)]),
   async scopeDue(market,now,limit){
    if(limit<1)return [];
-   return (await run(`select * from ${rel('fact_sync_scope')} where market = $1 and priority > 0 and next_due_at <= $2::timestamptz order by next_due_at, priority desc, issuer_id limit $3`,[market,now,limit])).rows.map(scopeFromTable);
+   return (await run(`select * from ${rel('fact_sync_scope')} where market = $1 and priority > 0 and next_due_at <= $2::timestamptz order by next_due_at, priority desc, issuer_id limit $3`,[market,now,limit])).rows.map(r=>scopeFromTable(iso(r)));
   },
   async scopeRows(market,issuerIds){
    if(issuerIds.length===0)return [];
-   return (await run(`select * from ${rel('fact_sync_scope')} where market = $1 and issuer_id = any($2::uuid[]) order by issuer_id`,[market,issuerIds])).rows.map(scopeFromTable);
+   return (await run(`select * from ${rel('fact_sync_scope')} where market = $1 and issuer_id = any($2::uuid[]) order by issuer_id`,[market,issuerIds])).rows.map(r=>scopeFromTable(iso(r)));
   },
   async metricsOfIssuer(issuer,market,formulaVersion){
    return (await run(`select * from ${rel('financial_metrics')} where issuer_id = $1 and market = $2 and formula_version = $3 order by metric, period_end, period_start, input_unit, basis`,[issuer,market,formulaVersion])).rows.map(metricFromTable);

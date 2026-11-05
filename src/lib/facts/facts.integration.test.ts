@@ -541,5 +541,81 @@ describe.skipIf(!enabled)('pgFactsDb on real PostgreSQL',()=>{
    expect(after.stateRev).toBe(1);expect(after.rows.map(y=>y.fact_id).sort()).toEqual([a.fact_id,t.fact_id].sort());
    expect((await db.factsByIds([a.fact_id])).map(y=>y.status)).toEqual(['ok']);         // run stayed published; beginRun abandoned nothing of it
   });
+
+  const opened=async(iss:string,b:string,run:string,ids:string[])=>(await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${iss}:US:BS:${randomUUID()}`,reasonCode:'identity_bs',batchId:b,payload:{key:{},fact_ids:ids,run_id:run}})) as string;
+  const itemIds=async(id:string)=>((await h.pool.query(`select payload from public.dq_quarantine where id=$1`,[id])).rows[0].payload.fact_ids as string[]);
+  const statusOf=async(id:string)=>(await h.db.factsByIds([id]))[0]?.status;
+  const stagedRun=async()=>{
+   const {db}=h;const {iss,b}=await ready();const run=await db.beginRun(iss,'US',b,1);const f=filingInsert(iss);await db.stageFilings(run,[f]);
+   const a=factInsert(iss,f);const t=factInsert(iss,f,{concept:'total_assets',statement:'BS',period_start:null,duration:'INSTANT'});
+   expect(await db.stageFacts(run,[a,t])).toBe(2);
+   return {iss,b,run,f,a,t,item:await opened(iss,b,run,[])};
+  };
+  /** Waits 300 ms and asserts p is still pending (blocked on a lock). */
+  const stillPending=async(p:Promise<unknown>)=>{let settled=false;p.then(()=>{settled=true;},()=>{settled=true;});await new Promise(res=>setTimeout(res,300));expect(settled).toBe(false);};
+
+  it('quarantine_facts waits behind an in-flight publish on the same scope, then fails run_published; nothing is merged, rows stay ok',async()=>{
+   const {db}=h;const {run,f,a,t,item}=await stagedRun();
+   const c1=await h.pool.connect();
+   try{
+    await c1.query('begin');
+    await c1.query(`select public.publish_sync_run($1,$2::uuid[])`,[run,[f.filing_id]]);
+    const q=db.quarantineFacts(run,[t.fact_id],item);q.catch(()=>{});await stillPending(q);
+    await c1.query('commit');
+    await expect(q).rejects.toMatchObject({name:'FactsDbError',code:'run_published'});
+   }finally{await c1.query('rollback').catch(()=>{});c1.release();}
+   expect(await itemIds(item)).toEqual([]);
+   expect(await statusOf(a.fact_id)).toBe('ok');expect(await statusOf(t.fact_id)).toBe('ok');
+  });
+
+  it('publish waits behind an in-flight quarantine_facts and sees the merge: the member stays quarantined, the item lists it, the rest becomes ok',async()=>{
+   const {db}=h;const {run,f,a,t,item}=await stagedRun();
+   const c1=await h.pool.connect();
+   try{
+    await c1.query('begin');
+    expect((await c1.query(`select public.quarantine_facts($1,$2::uuid[],$3) v`,[run,[t.fact_id],item])).rows[0].v).toBe(1);
+    const p=db.publishRun(run,[f.filing_id]);p.catch(()=>{});await stillPending(p);
+    await c1.query('commit');
+    expect(await p).toBe(1);
+   }finally{await c1.query('rollback').catch(()=>{});c1.release();}
+   expect(await itemIds(item)).toEqual([t.fact_id]);
+   expect(await statusOf(a.fact_id)).toBe('ok');expect(await statusOf(t.fact_id)).toBe('quarantined');
+  });
+
+  it('a write in flight while the lease changes hands: the new claim waits for the old holder\'s transaction, then the old holder is lease_lost and its staged rows never become ok',async()=>{
+   const {db}=h;
+   const iss=await h.issuer();const bA=await h.batch();const bB=await h.batch();
+   await db.reconcileScope('US',[{issuer_id:iss,reasons:['t'],priority:1,fetch_key:'k'}]);
+   expect(await db.claimLease(iss,'US',bA,1)).toBe(true);                               // 1 s lease
+   const run=await db.beginRun(iss,'US',bA,1);const f=filingInsert(iss);await db.stageFilings(run,[f]);
+   const x=factInsert(iss,f),y=factInsert(iss,f,{concept:'net_income',value:'5'});
+   const c1=await h.pool.connect();
+   try{
+    await c1.query('begin');
+    await c1.query(`select public.stage_facts($1,$2::jsonb)`,[run,JSON.stringify([x])]);   // holds the scope lock, lease still valid at its start
+    await new Promise(res=>setTimeout(res,1300));                                          // lease expires while the write is in flight
+    const claim=db.claimLease(iss,'US',bB,600);claim.catch(()=>{});await stillPending(claim);
+    await c1.query('commit');
+    expect(await claim).toBe(true);
+   }finally{await c1.query('rollback').catch(()=>{});c1.release();}
+   await expect(db.stageFacts(run,[y])).rejects.toMatchObject({code:'lease_lost'});
+   await expect(db.publishRun(run,[f.filing_id])).rejects.toMatchObject({name:'FactsDbError',code:'lease_lost'});
+   expect(await statusOf(x.fact_id)).toBe('staged');expect(await statusOf(y.fact_id)).toBeUndefined();
+   await db.beginRun(iss,'US',bB,1);                                                       // the new holder abandons the orphan
+   expect(await db.factsByIds([x.fact_id])).toEqual([]);
+  });
+
+  it('raw table reads return timestamps as ISO strings like PostgREST',async()=>{
+   const {db}=h;const {iss,b,run,f,a}=await stagedRun();
+   await db.publishRun(run,[f.filing_id]);
+   const isoRe=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+   const g=(await db.filingsOfIssuer(iss,'US',{}))[0];expect(g.created_at).toMatch(isoRe);expect(g.created_at).toBe(new Date(g.created_at).toISOString());
+   expect((await db.factsByIds([a.fact_id]))[0].created_at).toMatch(isoRe);
+   await db.releaseLease(iss,'US',b,'success','2030-01-01T00:00:00.000Z');
+   const sc=(await db.scopeRows('US',[iss]))[0];
+   for(const v of [sc.next_due_at,sc.last_attempt_at,sc.last_success_at])expect(v).toMatch(isoRe);
+   expect(sc.next_due_at).toBe('2030-01-01T00:00:00.000Z');
+   expect((await db.scopeDue('US','2031-01-01T00:00:00.000Z',5000)).some(r=>r.issuer_id===iss&&isoRe.test(r.next_due_at))).toBe(true);
+  });
  });
 });
