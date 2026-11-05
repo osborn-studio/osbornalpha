@@ -65,3 +65,11 @@
 | N1 | ACCEPT | Task 8 Step 2：`coverageCn` 夹具提成 `const coverage:CoverageEntry[]=[…]`（两种 `years` 形状不再被推断成可选键），`sync.test.ts` 增加 `import type {CoverageEntry,SyncDeps} from './sync'` |
 
 未执行项不变：计划只做静态改写；PostgreSQL 17、完整 Vitest、录制夹具与黄金值由各任务的 Run/Expected 在实施时验证。
+
+## Round 3
+
+审计：`04-codex-plan-audit-round3.md`（2026-11-04：#5/#13/#21/N1/N2 RESOLVED、#19 PARTIAL、新增 N3 P1）。draft 3 → draft 4。
+
+| # | 决定 | 落实位置 |
+|---|---|---|
+| N3（#19 残余） | ACCEPT | Task 11 Step 2：新增单一来源 `FIXTURE_ISSUERS:readonly {ticker;cik;name}[]`，`CIK` 与 `FIX` 由它派生；`beforeAll` 按外键顺序逐条预置 `stocks_universe`（`issuer_securities.ticker` 的父表，`ON CONFLICT DO NOTHING` 不能替代父行）→ `issuers` → `issuer_securities`，并断言每条都有夹具文件名；scope 行 `reconcileScope` 与两次回放运行同样取自该列表；`afterAll` 把列表内全部发行人的 scope 行退到 priority 0（事实/文件按设计不删，`test:db` 每次新建库）。黄金门禁（`required.US` 默认 true、`ready` 完成门、逐期间矩阵）不变。runbook 8.11-6、Task 11 Step 1 文件说明、Step 5 Expected 与黄金用例的失败信息改为"只在 `FIXTURE_ISSUERS` 加一条"。 |

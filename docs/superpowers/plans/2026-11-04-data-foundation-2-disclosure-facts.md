@@ -6234,7 +6234,7 @@ git commit -m "feat(facts): EDGAR companyfacts adapter, fixture recorder and AAP
 }
 ```
 
-文件模式（供 owner 录入）：`entries[]` 每项 `{issuer:{ticker,market}, concept, period_end, unit, value(规范十进制字符串), as_of?(YYYY-MM-DD|null), source:{document,page_or_row,url}, recorded_by(姓名|'<pending>'), recorded_at(ISO|null)}`；顶层 `ready:boolean`、`required:{US,CN}`。规格要求 6 家 × 2 期 × 6 科目；模板只给 3 条示例，owner 按同格式扩充。**门禁语义（round-1 #19）**：`required.US=true`（默认）→ AAPL 与 MSFT 各至少一条已录入条目，否则套件失败并打印 `gold entry for <ticker> is still <pending>`；`ready` 是完成门禁：`ready=false` 时黄金用例始终失败（仅录入条目不算完成）；`ready=true` → 文件内不得再有 `<pending>`、每个被断言的美股发行人必须有 `fixtures/edgar/CIK<10>.trimmed.json`（`record-fixture.ts --edgar`，并把它加进测试的 `CIK` 表——`FIX` 与全部回放运行都从 `CIK` 派生，所以它同时被采集）、且满足 ≥ 6 家 × 每家 ≥ 2 期 × **每期** ≥ 6 科目（round-2 N2：按期间内的科目数计，不是跨期并集）；已录入条目逐条从 `read_facts` 回放核对 `value_text`。owner 步骤见 runbook 8.11-6。
+文件模式（供 owner 录入）：`entries[]` 每项 `{issuer:{ticker,market}, concept, period_end, unit, value(规范十进制字符串), as_of?(YYYY-MM-DD|null), source:{document,page_or_row,url}, recorded_by(姓名|'<pending>'), recorded_at(ISO|null)}`；顶层 `ready:boolean`、`required:{US,CN}`。规格要求 6 家 × 2 期 × 6 科目；模板只给 3 条示例，owner 按同格式扩充。**门禁语义（round-1 #19）**：`required.US=true`（默认）→ AAPL 与 MSFT 各至少一条已录入条目，否则套件失败并打印 `gold entry for <ticker> is still <pending>`；`ready` 是完成门禁：`ready=false` 时黄金用例始终失败（仅录入条目不算完成）；`ready=true` → 文件内不得再有 `<pending>`、每个被断言的美股发行人必须有 `fixtures/edgar/CIK<10>.trimmed.json`（`record-fixture.ts --edgar`，并把 `{ticker,cik,name}` 加进测试的 `FIXTURE_ISSUERS` 列表——`stocks_universe`/`issuers`/`issuer_securities` 的预置、scope 行、`FIX` 与全部回放运行都从该列表派生，所以它同时被预置与采集；round-3 N3）、且满足 ≥ 6 家 × 每家 ≥ 2 期 × **每期** ≥ 6 科目（round-2 N2：按期间内的科目数计，不是跨期并集）；已录入条目逐条从 `read_facts` 回放核对 `value_text`。owner 步骤见 runbook 8.11-6。
 
 - [ ] **Step 2: 写集成测试（先失败）**
 
@@ -6264,9 +6264,15 @@ import type {FactRow,FactsDb,RawSnapshot} from './types';
 const enabled=!!process.env.S4_TEST_STATE;
 // Deterministic issuer ids so any other suite loading the same fixture shares the issuer (filings.source_ref is global).
 // Every gold-asserted US issuer must appear here with a recorded fixture (gold `ready` gate).
-// Adding a gold issuer = add it here (after record-fixture.ts --edgar <cik>): FIX and every replay run derive from CIK, so it is ingested too (round-2 #19).
-const CIK:Record<string,string>={AAPL:'320193',MSFT:'789019'};
-const FIX:Record<string,string>=Object.fromEntries(Object.values(CIK).map(c=>[c.padStart(10,'0'),`CIK${c.padStart(10,'0')}.trimmed.json`]));
+// THE fixture issuer list. Adding a gold issuer = record its fixture (record-fixture.ts --edgar <cik>) and add
+// one entry here: stocks_universe / issuers / issuer_securities provisioning, the scope rows, the fixture map
+// and every replay run all derive from this list, so nothing else needs touching (round-2 #19, round-3 N3).
+const FIXTURE_ISSUERS:readonly {ticker:string;cik:string;name:string}[]=[
+ {ticker:'AAPL',cik:'320193',name:'Apple Inc.'},
+ {ticker:'MSFT',cik:'789019',name:'Microsoft Corp.'},
+];
+const CIK:Record<string,string>=Object.fromEntries(FIXTURE_ISSUERS.map(i=>[i.ticker,i.cik]));
+const FIX:Record<string,string>=Object.fromEntries(FIXTURE_ISSUERS.map(i=>[i.cik.padStart(10,'0'),`CIK${i.cik.padStart(10,'0')}.trimmed.json`]));
 const REVISED='CIK0000320193.revised.json';
 const fx=(n:string)=>new Uint8Array(readFileSync(new URL(`./fixtures/edgar/${n}`,import.meta.url)));
 const today=()=>new Date().toISOString().slice(0,10);
@@ -6285,14 +6291,17 @@ describe.skipIf(!enabled)('F2-3 US offline replay on real PostgreSQL',()=>{
  beforeAll(async()=>{
   const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
   admin=new Pool({connectionString:state.adminUrl});
-  await admin.query(`insert into public.stocks_universe(ticker,name,market) values('AAPL','Apple Inc.','US'),('MSFT','Microsoft Corp.','US') on conflict (ticker) do nothing`);
-  for(const [ticker,cik] of Object.entries(CIK)){
-   await admin.query(`insert into public.issuers(issuer_id,canonical_name_en,country_code,cik) values($1,$2,'US',$3) on conflict do nothing`,[randomUUID(),ticker,cik]);
+  // Provision every fixture issuer from the one list, in FK order: stocks_universe (issuer_securities.ticker
+  // references it; ON CONFLICT DO NOTHING does not cover a missing parent) → issuers → issuer_securities.
+  for(const {ticker,cik,name} of FIXTURE_ISSUERS){
+   expect(FIX[cik.padStart(10,'0')],`${ticker}: fixture file name`).toBeDefined();
+   await admin.query(`insert into public.stocks_universe(ticker,name,market) values($1,$2,'US') on conflict (ticker) do nothing`,[ticker,name]);
+   await admin.query(`insert into public.issuers(issuer_id,canonical_name_en,country_code,cik) values($1,$2,'US',$3) on conflict do nothing`,[randomUUID(),name,cik]);
    issuers[ticker]=(await admin.query(`select issuer_id from public.issuers where cik=$1`,[cik])).rows[0].issuer_id;
    await admin.query(`insert into public.issuer_securities(issuer_id,ticker,share_class,is_primary,valid_from,source) values($1,$2,'common',true,'2000-01-01','test') on conflict do nothing`,[issuers[ticker],ticker]);
   }
   db=pgFactsDb(admin);
-  await db.reconcileScope('US',Object.entries(CIK).map(([t,cik])=>({issuer_id:issuers[t],reasons:['test'],priority:10,fetch_key:cik.padStart(10,'0')})));
+  await db.reconcileScope('US',FIXTURE_ISSUERS.map(i=>({issuer_id:issuers[i.ticker],reasons:['test'],priority:10,fetch_key:i.cik.padStart(10,'0')})));
   deps={db,tables:pgTableClient(admin),storage:memorySnapshotStore(),
    fetchUs:async(cik10:string):Promise<RawSnapshot>=>{const n=fixtures[cik10];if(!n)throw new ProviderError('no_companyfacts',cik10);return snapshotOf(fx(n),{source:'edgar',url:companyFactsUrl(cik10)});},
    fetchCn:async()=>{throw new ProviderError('tushare_unavailable','not in this suite');},
@@ -6300,9 +6309,15 @@ describe.skipIf(!enabled)('F2-3 US offline replay on real PostgreSQL',()=>{
    parseCn:()=>{throw new ProviderError('parse_error','not in this suite');},
    now:()=>new Date(),deadline:null,codeVersion:'test'};
  });
- afterAll(async()=>{await admin?.end();});
+ // Facts and filings are append-only and test:db builds a fresh database per run, so rows are not deleted;
+ // the cleanup that does apply covers every fixture issuer: retire their scope rows (priority 0) so no
+ // scheduled-path test of another suite picks them up.
+ afterAll(async()=>{
+  if(db&&Object.keys(issuers).length>0)await db.reconcileScope('US',FIXTURE_ISSUERS.filter(i=>issuers[i.ticker]).map(i=>({issuer_id:issuers[i.ticker],reasons:[],priority:0,fetch_key:i.cik.padStart(10,'0')}))).catch(()=>{});
+  await admin?.end();
+ });
 
- it('first run publishes both issuers; AAPL revenue asOf 2024-06-30 is the 2023-11-03 10-K row, not a later comparative',async()=>{
+ it('first run publishes every fixture issuer; AAPL revenue asOf 2024-06-30 is the 2023-11-03 10-K row, not a later comparative',async()=>{
   const r1=await run(Object.values(issuers));                                           // every fixture-backed issuer, so every gold issuer has facts
   expect(r1.status).toBe('success');expect(r1.detail).toMatchObject({published:Object.keys(CIK).length,failed:0});
   expect(r1.counts.inserted+r1.counts.duplicates).toBeGreaterThan(100);
@@ -6402,7 +6417,7 @@ describe.skipIf(!enabled)('F2-3 US offline replay on real PostgreSQL',()=>{
   // 3. ready: no template left; every asserted US issuer fixture-backed AND ingested by this suite; the
   //    §11.4 matrix PER PERIOD: each of >= 6 issuers has >= 2 period_ends that each carry >= 6 concepts (round-2 N2).
   expect(gold.entries.filter(isPending).map(e=>`${e.issuer.ticker}/${e.concept}/${e.period_end}`),'pending entries in a ready gold file').toEqual([]);
-  for(const e of us)expect(e.issuer.ticker in CIK&&issuers[e.issuer.ticker]!==undefined,`${e.issuer.ticker}: no recorded fixture (record-fixture.ts --edgar, then add it to CIK here so it is ingested)`).toBe(true);
+  for(const e of us)expect(e.issuer.ticker in CIK&&issuers[e.issuer.ticker]!==undefined,`${e.issuer.ticker}: no recorded fixture (record-fixture.ts --edgar, then add {ticker,cik,name} to FIXTURE_ISSUERS so it is provisioned and ingested)`).toBe(true);
   const byIssuer=new Map<string,Map<string,Set<string>>>();
   for(const e of gold.entries){const periods=byIssuer.get(e.issuer.ticker)??byIssuer.set(e.issuer.ticker,new Map()).get(e.issuer.ticker)!;(periods.get(e.period_end)??periods.set(e.period_end,new Set()).get(e.period_end)!).add(e.concept);}
   expect(byIssuer.size,'§11.4: at least 6 issuers').toBeGreaterThanOrEqual(6);
@@ -6435,7 +6450,7 @@ Expected: `sync-us.integration.test.ts` 失败：第一个用例 `expected 0 to 
 - [ ] **Step 5: 运行通过**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:db && npm run typecheck && npm run lint`
-Expected: `sync-us.integration.test.ts` 8 个用例中 7 passed，**1 failed = 黄金门禁**：`gold entry for AAPL is still <pending> — owner step (runbook 8.11-6) blocks F2-7`。这是设计的"未完成"状态（round-1 #19）：`required.US` 必须保持 true，不得为了变绿改模板。owner 录入 AAPL/MSFT 后失败信息变为 `gold file is not ready (ready:false)`——该用例**只在 `ready:true` 且逐发行人、逐期间矩阵（≥ 6 家 × 每家 ≥ 2 期 × 每期 ≥ 6 科目）满足、每个被断言的美股发行人都在 `CIK` 表（因而被本套件采集）时转绿**（round-2 #19/N2）。`reports/research-db-summary.json` 的 `criticalSuites` 比之前多 1。typecheck、lint 无错误。
+Expected: `sync-us.integration.test.ts` 8 个用例中 7 passed，**1 failed = 黄金门禁**：`gold entry for AAPL is still <pending> — owner step (runbook 8.11-6) blocks F2-7`。这是设计的"未完成"状态（round-1 #19）：`required.US` 必须保持 true，不得为了变绿改模板。owner 录入 AAPL/MSFT 后失败信息变为 `gold file is not ready (ready:false)`——该用例**只在 `ready:true` 且逐发行人、逐期间矩阵（≥ 6 家 × 每家 ≥ 2 期 × 每期 ≥ 6 科目）满足、每个被断言的美股发行人都在 `FIXTURE_ISSUERS` 列表（因而被本套件预置并采集）时转绿**（round-2 #19/N2）。`reports/research-db-summary.json` 的 `criticalSuites` 比之前多 1。typecheck、lint 无错误。
 
 - [ ] **Step 6: 提交**
 
@@ -9234,7 +9249,7 @@ select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where
 3. `scripts/facts/sync.ts --market US --limit 20 --apply` 首轮；查看 `/admin/dq` 的 `facts.us` 新鲜度与隔离项。
 4. `GET /api/facts/AAPL?concepts=revenue&asOf=2024-06-30` 核对验收样例 1（期末 2023-09-30 的 2023-11-03 披露行，`disclosureSeq=1`）。
 5. CN：提供 `TUSHARE_TOKEN` 给录制环境 → 完成 8.7 核对 → 夹具与黄金断言进 CI → 把 `fixtures/gold/plan2.json` 的 `required.CN` 置 true → 把 `facts-sync?market=CN` 加入 `vercel.json`。
-6. 黄金集抄录（**F2-7 完成的阻塞项**，由实施者之外的人完成）：`src/lib/facts/fixtures/gold/plan2.json` 的 `required.US` 默认 true，`sync-us.integration.test.ts` 的黄金用例在 AAPL 与 MSFT 各有至少一条 `recorded_by` 非 `<pending>` 的条目之前**一直失败**（打印 `gold entry for <ticker> is still <pending>`）——这是设计的未完成状态，不要为了变绿改 `required`。步骤：(a) 对每条目从一手文件（10-K / 年报 PDF）抄 `value`（规范十进制字符串）、`source.page_or_row`、`source.url`，填 `recorded_by`（姓名）与 `recorded_at`（ISO）；(b) 跑 `npm run test:db`，黄金用例逐条回放 `read_facts(asOf = as_of)`；(c) 全部 6 家 × 2 期 × 6 科目抄录完毕后把顶层 `ready` 置 true——**在此之前黄金用例永远是红**（`gold file is not ready`），录入条目不等于完成；此后任何 `<pending>` 都是失败，套件还会检查 ≥ 6 家、每家 ≥ 2 期且**每期** ≥ 6 科目，且每个被断言的发行人都有录制夹具并被回放套件采集（美股：`record-fixture.ts --edgar <cik>` 并把 ticker/CIK 加进 `sync-us.integration.test.ts` 的 `CIK` 表；A 股：`--tushare` 并把 ts_code 加进 `sync-cn.integration.test.ts` 的发行人表）。
+6. 黄金集抄录（**F2-7 完成的阻塞项**，由实施者之外的人完成）：`src/lib/facts/fixtures/gold/plan2.json` 的 `required.US` 默认 true，`sync-us.integration.test.ts` 的黄金用例在 AAPL 与 MSFT 各有至少一条 `recorded_by` 非 `<pending>` 的条目之前**一直失败**（打印 `gold entry for <ticker> is still <pending>`）——这是设计的未完成状态，不要为了变绿改 `required`。步骤：(a) 对每条目从一手文件（10-K / 年报 PDF）抄 `value`（规范十进制字符串）、`source.page_or_row`、`source.url`，填 `recorded_by`（姓名）与 `recorded_at`（ISO）；(b) 跑 `npm run test:db`，黄金用例逐条回放 `read_facts(asOf = as_of)`；(c) 全部 6 家 × 2 期 × 6 科目抄录完毕后把顶层 `ready` 置 true——**在此之前黄金用例永远是红**（`gold file is not ready`），录入条目不等于完成；此后任何 `<pending>` 都是失败，套件还会检查 ≥ 6 家、每家 ≥ 2 期且**每期** ≥ 6 科目，且每个被断言的发行人都有录制夹具并被回放套件采集（美股：`record-fixture.ts --edgar <cik>` 并把 `{ticker,cik,name}` 加进 `sync-us.integration.test.ts` 的 `FIXTURE_ISSUERS` 列表——`stocks_universe`/`issuers`/`issuer_securities` 预置与采集都从它派生，只改这一处；A 股：`--tushare` 并把 ts_code 加进 `sync-cn.integration.test.ts` 的发行人表）。
 ```
 
 - [ ] **Step 3: 规格 §16 存根**
@@ -9364,3 +9379,5 @@ git commit -m "docs(facts): runbook chapter for the disclosure log, spec §16 de
 **Codex round-1 审计（2026-11-04，`docs/audits/2026-11-04-data-foundation-2-plan/01-codex-plan-audit-round1.md`，24 条：9 P1 + 15 P2）**：全部 ACCEPT 并落实（处置表 `docs/audits/2026-11-04-data-foundation-2-plan/02-dispositions.md`）。要点：BEFORE UPDATE 触发器改为显式列比较（#1）；`resolve_facts_quarantine` 锁后重建成员集并检查锚定运行（#2、#10）；提升资格加 (K, date) 的 open 争议检查（#3）；`readonly ConceptDef[]`、mock 类型、未用的 eslint-disable（#4–#6）；Supabase 完整集读取分页 + `scopeRows`（#7、#13）；报告类型互斥（#8）；解析器遗留先于 `no_rows`（#9）；发布后失败不撤发布（#11）；`coverage_summary`/`skipped_summary(parser)` 接入回执（#12）；`sequencesOf` 非 ok 行不进序列（#14）；修订夹具保持生效 + 代号前推（#15）；A 股同日冲突改用第二份 filing（#16）；四处断言修正（#17）；`reviseEdgar` 按期间选基准（#18）；黄金门禁默认强制（#19）；执行顺序去循环（#20）；抛错的巨潮请求也计次（#21）；复用落地的有效期谓词（#22）；冻结内存库时钟（#23）；回滚顺序补全（#24）。审计"未验证"项（真实 PostgreSQL 17 执行、完整装配后的 typecheck/vitest、录制夹具字面量、黄金值）仍由各任务的 Run/Expected 步骤在实施时验证。
 
 **Codex round-2 审计（2026-11-04，`docs/audits/2026-11-04-data-foundation-2-plan/03-codex-plan-audit-round2.md`：20 条 RESOLVED、4 条 PARTIAL、新增 N1 P1 / N2 P2）**：六项残余全部 ACCEPT 并落实（处置表 `02-dispositions.md` 的 round-2 节）：#5 Task 10 Step 1 的 `fetch` mock 改用独立计数器，不再在初始化式里引用自身（TS7022/TS7024）；#13 显式 `issuerIds` 不再被 `limit` 截断，每个请求的发行人都有 outcome（`SyncOptions` 注释、实现要点、runbook 8.8、新增断言）；#19/N2 Task 11/13 黄金用例：`ready:false` 直接失败（录入条目不算完成），`ready:true` 下矩阵按"每家 ≥ 2 期且每期 ≥ 6 科目"逐期间计，`FIX` 与全部回放运行从 `CIK` 派生使每个被断言的美股发行人都被采集；#21 请求中途被预算切断也持久化 `link_attempts+1`（已开始即一次尝试），只有请求前预算不足才不计，Task 8 Step 2 用例改为三段（抛错 / 中途切断 / 请求前不足）；N1 Task 8 Step 2 的 `coverageCn` 夹具显式标注 `CoverageEntry[]`。
+
+**Codex round-3 审计（2026-11-04，`docs/audits/2026-11-04-data-foundation-2-plan/04-codex-plan-audit-round3.md`：5 条 RESOLVED、#19 PARTIAL、新增 N3 P1）**：N3 ACCEPT 并落实——Task 11 Step 2 改为单一 `FIXTURE_ISSUERS:{ticker,cik,name}[]` 列表，`CIK`/`FIX`、`beforeAll` 里按外键顺序的 `stocks_universe` → `issuers` → `issuer_securities` 预置、scope 行与全部回放运行都从它派生，`afterAll` 对列表内每个发行人把 scope 行退到 priority 0；黄金门禁（round-1 #19 / round-2 N2）不变；runbook 8.11-6、Task 11 Step 1/5 的说明改为"只加一条列表项"。
