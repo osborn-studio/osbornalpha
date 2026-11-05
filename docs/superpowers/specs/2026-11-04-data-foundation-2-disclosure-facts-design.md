@@ -416,6 +416,7 @@ export interface SyncDeps { db: FactsDb; tables: TableClient; storage: SnapshotS
   - 无事实行的三种：确认知晓。
   - 随后 `materialize(issuer, market)`。
 - `resolved_reject`：不动。
+- `POST /api/admin/dq/quarantine/[id]` 对 `facts.*` 项先检查 `payload.run_id` 对应的运行：仍为 `staged` 则拒绝处理（409 `run_pending`，审计 R5-3：争议在贡献它的运行发布前不能裁决；运行被废弃后项内指向已删行的 id 在处理时忽略）。
 - 钩子阶段写入 `dq_quarantine.detail.hook = {stage: 'promote'|'materialize'|'done', state: 'done'|'failed', at, message?}`；对 `resolved_accept` 项再次 POST：`stage != done` 时从失败阶段继续（幂等），返回 `{resolved:'already_resolved', hook}`；审计日志记录。
 
 ---
