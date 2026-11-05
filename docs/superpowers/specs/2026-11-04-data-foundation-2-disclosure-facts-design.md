@@ -1,7 +1,7 @@
 # 数据底座二 · F2 披露事实库 设计规格
 
 日期：2026-11-04（第 8 稿。审计轨迹 `docs/audits/2026-11-04-data-foundation-2/`：01 Codex 一轮、02 独立 Claude 复审、03 Codex 二轮、04 二轮处置、05 Codex 三轮、06 三轮处置、07 Codex 四轮、08 四轮处置、09 Codex 五轮、10 五轮处置、11 Codex 六轮、12 六轮处置、13 Codex 七轮、14 七轮处置）
-状态：草案，待 owner 评审（§14 有三项 owner 决策）
+状态：Codex 第八轮判定"可进入实施计划"（`docs/audits/2026-11-04-data-foundation-2/15-*.md`）；待 owner 评审与 §14 三项决策
 上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（下称"规格一"）§4、§8–§10 的 F2 部分。本规格**取代**规格一 §4；规格一 §14 记录的计划一偏差在此视为既定事实。
 总纲：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5（owner 2026-11-04 确认）。本规格逐条对照其硬约束：只用一手来源（EDGAR、交易所定期报告；Tushare 仅作适配器并记录上游与巨潮公告定位）、每个数字可回放（源文件哈希、行定位、可得日期、变换、代码版本）、事实与判断分离、缺失保持缺失（不做代理指标、不填占位、不做静默换算、不混口径、不混报表版本）。
 已定决策（owner 2026-11-04）：美股事实来源 EDGAR companyfacts；A 股事实来源 Tushare 三表 + 公告日期字段；港股延后到 F3；本规格不含任何页面。
