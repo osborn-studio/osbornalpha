@@ -447,11 +447,19 @@ grant execute on function public.quarantine_facts(uuid, uuid[], uuid) to service
 -- are simply absent); manifest filings activate run.mapping_gen (a filing already on a higher
 -- generation → mapping_gen_regression, nothing changes); run → published with manifest;
 -- state_rev + 1. Returns the number of rows that became ok.
-create or replace function public.publish_sync_run(p_run uuid, p_manifest uuid[])
+-- p_expected_rev (optional): the state_rev the caller's plan was read at; stage_*/quarantine_* never
+-- bump it, only publish and promotion do, so a mismatch under the scope lock means a promotion or
+-- resolution landed after planning and the plan is stale → stale_plan, nothing changes.
+drop function if exists public.publish_sync_run(uuid, uuid[]);
+create or replace function public.publish_sync_run(p_run uuid, p_manifest uuid[], p_expected_rev bigint default null)
 returns int language plpgsql security definer set search_path = public as $$
-declare r public.fact_sync_runs; n int; v_manifest uuid[] := coalesce(p_manifest, '{}'::uuid[]);
+declare r public.fact_sync_runs; n int; v_manifest uuid[] := coalesce(p_manifest, '{}'::uuid[]); v_rev bigint;
 begin
   r := public.fact_run_lock(p_run);
+  if p_expected_rev is not null then
+    select state_rev into v_rev from public.fact_sync_scope where issuer_id = r.issuer_id and market = r.market;
+    if v_rev is distinct from p_expected_rev then raise exception 'stale_plan' using errcode = 'P0001'; end if;
+  end if;
   update public.financial_facts set status = 'ok' where run_id = p_run and status = 'staged';
   get diagnostics n = row_count;
   update public.financial_facts f set status = 'quarantined'
@@ -470,8 +478,8 @@ begin
   update public.fact_sync_scope set state_rev = state_rev + 1, updated_at = now() where issuer_id = r.issuer_id and market = r.market;
   return n;
 end $$;
-revoke execute on function public.publish_sync_run(uuid, uuid[]) from public, anon, authenticated;
-grant execute on function public.publish_sync_run(uuid, uuid[]) to service_role;
+revoke execute on function public.publish_sync_run(uuid, uuid[], bigint) from public, anon, authenticated;
+grant execute on function public.publish_sync_run(uuid, uuid[], bigint) to service_role;
 
 -- Lease check; published → run_published; already abandoned → no-op; staged → mark, delete facts
 -- (this function never prunes filings: those the run created stay and a later run reuses them by

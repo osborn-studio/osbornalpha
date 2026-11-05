@@ -4,6 +4,7 @@
 // upsert:false, so identical bytes re-fetched later answer 'exists' and evidence is never
 // rewritten. A failed upload is snapshot_upload_failed and the caller abandons the run. The
 // budget's abort signal cuts the wait (the HTTP request itself is not cancellable in storage-js).
+import {createHash} from 'node:crypto';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import type {Budget,RawSnapshot,Source} from './types';
 import {SyncError} from './errors';
@@ -13,6 +14,8 @@ export interface SnapshotStore{put(snapshot:RawSnapshot,path:string,budget:Budge
 export const snapshotPath=(source:Source,issuerId:string,sha256:string):string=>`${source}/${issuerId}/${sha256}.json`;
 export const metaPath=(path:string):string=>path.replace(/\.json$/,'.meta.json');
 const PATH=/^(edgar|tushare)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{64}\.json$/;
+/** The bytes must be the ones the declared hash names, else the evidence path would lie (round-3 #8). */
+const verify=(s:RawSnapshot)=>{if(createHash('sha256').update(s.bytes).digest('hex')!==s.sha256)throw new SyncError('snapshot_hash_mismatch');};
 const metaOf=(s:RawSnapshot)=>JSON.stringify({...s.meta,sha256:s.sha256,bytes:s.bytes.byteLength});
 
 interface UploadError{message:string;statusCode?:string|number;status?:number}
@@ -37,6 +40,7 @@ export function supabaseSnapshotStore(admin:SupabaseClient):SnapshotStore{
  };
  return {
   async put(snapshot,path,budget){
+   verify(snapshot);
    if(!PATH.test(path))throw new SyncError('snapshot_upload_failed',`invalid_path:${path.slice(0,80)}`);
    const result=await upload(path,snapshot.bytes,budget);
    await upload(metaPath(path),metaOf(snapshot),budget);
@@ -45,15 +49,18 @@ export function supabaseSnapshotStore(admin:SupabaseClient):SnapshotStore{
  };
 }
 
-export function memorySnapshotStore():SnapshotStore&{objects:Map<string,string|Uint8Array>}{
+export function memorySnapshotStore():SnapshotStore&{objects:Map<string,string|Uint8Array>;read(path:string):string|Uint8Array|undefined}{
  const objects=new Map<string,string|Uint8Array>();
  return {
   objects,
+  read(path){const v=objects.get(path);return v instanceof Uint8Array?new Uint8Array(v):v;},   // copies out, too
   async put(snapshot,path,budget){
+   verify(snapshot);
    if(!PATH.test(path))throw new SyncError('snapshot_upload_failed',`invalid_path:${path.slice(0,80)}`);
    if(budget.signal.aborted)throw new SyncError('snapshot_upload_failed','budget_exhausted');
    if(objects.has(path))return 'exists';
-   objects.set(path,snapshot.bytes);objects.set(metaPath(path),metaOf(snapshot));
+   // a copy: later mutation of the caller's buffer cannot rewrite evidence
+   objects.set(path,new Uint8Array(snapshot.bytes));objects.set(metaPath(path),metaOf(snapshot));
    return 'stored';
   },
  };

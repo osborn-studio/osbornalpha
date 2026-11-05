@@ -19,7 +19,7 @@ const ISSUER='00000000-0000-4000-8000-000000000001',ISSUER2='00000000-0000-4000-
 const NOW=new Date('2027-03-01T08:00:00.000Z');   // later than any real clock during the test so new scope rows (next_due_at = now()) are due
 const snap=(text:string):RawSnapshot=>({bytes:new TextEncoder().encode(text),sha256:createHash('sha256').update(text).digest('hex'),meta:{source:'edgar',fetched_at:NOW.toISOString(),http_status:200}});
 const filing=(ref:string,availableDate:string,over:Partial<FilingCandidate>={}):FilingCandidate=>({sourceRef:ref,market:'US',source:'edgar',origin:'sec',formType:'10-K',fiscalYear:2023,fiscalPeriod:'FY',periodEnd:'2023-09-30',availableDate,url:null,...over});
-const cand=(ref:string,concept:string,value:string,over:Partial<FactCandidate>={}):FactCandidate=>({concept,sourceConcept:concept,statement:'IS',periodStart:'2022-10-01',periodEnd:'2023-09-30',duration:'12M' as Duration,value,unit:'USD',consolidation:'consolidated',filingRef:ref,rawHash:'h',...over});
+const cand=(ref:string,concept:string,value:string,over:Partial<FactCandidate>={}):FactCandidate=>({concept,sourceConcept:concept,statement:'IS',periodStart:'2022-10-01',periodEnd:'2023-09-30',duration:'12M' as Duration,value,unit:'USD',consolidation:'consolidated',filingRef:ref,rawHash:'a'.repeat(64),...over});
 const bs=(ref:string,concept:string,value:string):FactCandidate=>cand(ref,concept,value,{statement:'BS',periodStart:null,duration:'INSTANT'});
 const parsed=(filings:FilingCandidate[],candidates:FactCandidate[],extra:Partial<ParseResult>={}):ParseResult=>({candidates,filings,skipped:[],ambiguous:[],oddDuration:[],missingAvailableDate:[],...extra});
 const FY23=parsed([filing('acc-1','2023-11-03')],[cand('acc-1','revenue','383285000000'),cand('acc-1','net_income_parent','96995000000')]);
@@ -195,6 +195,8 @@ describe('runFactsSync — failures',()=>{
   await run(deps,{mappingGen:2});
   const r=await run(deps,{issuerIds:[ISSUER],mappingGen:1});
   expect(r.issuers[0]).toMatchObject({outcome:'failed',code:'mapping_gen_regression'});
+  expect(r.counts).toMatchObject({fetched:2,inserted:0,versioned:0,duplicates:0,quarantined:0,failed:2});   // nothing committed, failure counted once
+  expect(r.status).toBe('failed');
   expect(db.runs().map(x=>x.status)).toEqual(['published','abandoned']);
   expect((await db.filingsOfIssuer(ISSUER,'US',{}))[0].mapping_gen).toBe(2);
  });
@@ -206,6 +208,13 @@ describe('runFactsSync — failures',()=>{
   expect(r.errors).toEqual([{code:'stale_computation',key:ISSUER,message:'stale_computation'}]);
   expect(r.status).toBe('partial');
   expect((await current(db)).rows).toHaveLength(2);
+  // the lease is released as failed: the issuer retries on the failure schedule (round-3 #5)
+  expect((await db.scopeDue('US','9999-12-31T00:00:00.000Z',10))[0]).toMatchObject({last_status:'failed',lease_batch_id:null,next_due_at:'2027-03-02T08:00:00.000Z'});
+  mocks.materialize.mockRejectedValueOnce(new FactsDbError('read_truncated'));
+  const r2=await run(deps,{issuerIds:[ISSUER]});
+  expect(r2.issuers[0].outcome).toBe('published');
+  expect(r2.errors).toEqual([{code:'read_truncated',key:ISSUER,message:'read_truncated'}]);
+  expect((await db.scopeDue('US','9999-12-31T00:00:00.000Z',10))[0]).toMatchObject({last_status:'failed'});
  });
  it('skips the remaining issuers after quota_exhausted (CN)',async()=>{
   const {deps}=harness(parsed([],[]),{fetchCn:async()=>{throw new SyncError('quota_exhausted');}},[{issuer_id:ISSUER,fetch_key:'600519.SH',market:'CN'},{issuer_id:ISSUER2,fetch_key:'000333.SZ',market:'CN'}]);
@@ -245,8 +254,8 @@ describe('runFactsSync — round-1 audit cases',()=>{
   expect(r.issuers[0]).toMatchObject({outcome:'published',code:'no_rows'});
   expect(r.counts).toMatchObject({fetched:0,inserted:0,quarantined:2,failed:0});
   expect(tables.rows('dq_quarantine').map(i=>[i.reason_code,i.natural_key]).sort()).toEqual([
-   ['missing_available_date',`${ISSUER}:0000320193:0000320193-23-000106:us-gaap:Assets`],
-   ['missing_available_date',`${ISSUER}:0000320193:0000320193-23-000106:us-gaap:Revenues`],
+   ['missing_available_date',`${ISSUER}:0000320193:0000320193-23-000106:us-gaap:Assets::2023-09-30:`],
+   ['missing_available_date',`${ISSUER}:0000320193:0000320193-23-000106:us-gaap:Revenues::2023-09-30:`],
   ]);
   expect(db.runs()[0]).toMatchObject({status:'published',manifest:[]});
   expect(r.status).toBe('success');
@@ -354,5 +363,96 @@ describe('runFactsSync — dry run and code version',()=>{
   await new Promise(r=>setTimeout(r,5));
   expect(past.signal.aborted).toBe(true);
   expect(makeBudget(new Date(NOW.getTime()+5000),()=>NOW).remainingMs()).toBe(5000);
+ });
+});
+
+describe('runFactsSync — round-3 review cases',()=>{
+ const ABORTED=()=>{const c=new AbortController();c.abort();return c.signal;};
+ it('publishes with the state_rev of its planning read; a rev that moved afterwards is stale_plan: abandoned, failed, nothing counted, retried on the failure schedule (#1)',async()=>{
+  const {db,deps}=harness();
+  const spy=vi.spyOn(db,'publishRun');
+  await run(deps);
+  expect(spy).toHaveBeenLastCalledWith(expect.any(String),expect.any(Array),0);
+  const real=db.readFacts.bind(db);
+  db.readFacts=async(...a)=>{const r=await real(...a);return {...r,stateRev:r.stateRev-1};};   // as if a promotion landed after this read
+  deps.parseUs=()=>parsed([filing('acc-2','2024-11-01')],[cand('acc-2','revenue','383285000001')]);
+  const r=await run(deps,{issuerIds:[ISSUER]});
+  expect(r.issuers[0]).toMatchObject({outcome:'failed',code:'stale_plan'});
+  expect(r.errors).toEqual([{code:'stale_plan',key:ISSUER}]);
+  expect(r.counts).toMatchObject({inserted:0,versioned:0,failed:1});
+  expect(db.runs().map(x=>x.status)).toEqual(['published','abandoned']);
+  expect((await db.scopeDue('US','9999-12-31T00:00:00.000Z',10))[0]).toMatchObject({last_status:'failed',lease_batch_id:null,next_due_at:'2027-03-02T08:00:00.000Z'});
+  expect((await current(db)).rows.map(f=>f.value)).toEqual(['96995000000','383285000000']);
+ });
+ it('missing_available_date rows of one accession park distinctly per period and unit (#2)',async()=>{
+  const {tables,deps}=harness(parsed([],[],{missingAvailableDate:[
+   {accn:'0000320193-23-000106',tag:'us-gaap:Revenues',start:'2022-10-01',end:'2023-09-30',unit:'USD'},
+   {accn:'0000320193-23-000106',tag:'us-gaap:Revenues',start:'2021-10-01',end:'2022-09-30',unit:'USD'},
+   {accn:'0000320193-23-000106',tag:'us-gaap:Revenues',start:'2021-10-01',end:'2022-09-30',unit:'EUR'}]}));
+  const r=await run(deps);
+  expect(tables.rows('dq_quarantine')).toHaveLength(3);
+  expect(new Set(tables.rows('dq_quarantine').map(i=>i.natural_key)).size).toBe(3);
+  expect(r.counts.quarantined).toBe(3);
+ });
+ it('stops between phases when the budget is spent: with time left the run is abandoned, without it the staged run is left for the next beginRun; deadline_hit is information (#3)',async()=>{
+  let t=NOW.getTime();
+  const spent=harness(FY23,{now:()=>new Date(t),deadline:new Date(NOW.getTime()+120_000),fetchUs:async()=>{t+=121_000;return snap('{"facts":{}}');}});
+  const r=await run(spent.deps);
+  expect(r.issuers[0]).toMatchObject({outcome:'failed',code:'deadline_hit'});
+  expect(r.errors).toEqual([{code:'deadline_hit',key:ISSUER}]);
+  expect(spent.db.runs().map(x=>x.status)).toEqual(['staged']);
+  expect(spent.db.filings()).toEqual([]);expect(r.counts.failed).toBe(0);expect(r.status).toBe('success');
+  const cut=harness(FY23,{deadline:new Date(NOW.getTime()+120_000),fetchUs:async(_c,b)=>{Object.defineProperty(b,'signal',{value:ABORTED()});return snap('{"facts":{}}');}});
+  const r2=await run(cut.deps);
+  expect(r2.issuers[0]).toMatchObject({outcome:'failed',code:'deadline_hit'});
+  expect(cut.db.runs().map(x=>x.status)).toEqual(['abandoned']);
+  expect(cut.db.facts()).toEqual([]);
+ });
+ it('a genuine error after the abort signal fired is a failure, not deadline_hit (#3)',async()=>{
+  const {db,deps}=harness(FY23,{deadline:new Date(NOW.getTime()+120_000),fetchUs:async(_c,b)=>{Object.defineProperty(b,'signal',{value:ABORTED()});throw new Error('boom');}});
+  const r=await run(deps);
+  expect(r.issuers[0]).toMatchObject({outcome:'failed',code:'unknown'});
+  expect(r.errors).toEqual([{code:'unknown',key:ISSUER,message:'boom'}]);
+  expect(r.counts.failed).toBe(1);expect(r.status).toBe('failed');
+  expect(db.runs().map(x=>x.status)).toEqual(['abandoned']);
+ });
+ it('the dry run refuses a truncated read instead of planning against nothing (#6)',async()=>{
+  const {db,deps}=harness();
+  await mocks.reconcileScope(deps,'US');
+  const real=db.readFacts.bind(db);db.readFacts=async(...a)=>({...(await real(...a)),truncated:true});
+  const r=await run(deps,{dryRun:true});
+  expect(r.issuers[0]).toMatchObject({outcome:'failed',code:'read_truncated'});
+  expect(r.detail.failed).toBe(1);
+ });
+ it('parse_error carries the error kind and field name but never the value (#7)',async()=>{
+  const {deps}=harness();
+  deps.parseUs=()=>{throw new Error('invalid_control_field:update_flag');};
+  expect((await run(deps)).errors).toEqual([{code:'parse_error',key:ISSUER,message:'invalid_control_field: update_flag'}]);
+  deps.parseUs=()=>{throw new Error('invalid_decimal:98765432109876543210');};
+  const r=await run(deps,{issuerIds:[ISSUER]});
+  expect(r.errors[0].message).toBe('invalid_decimal');
+  deps.parseUs=()=>{throw new Error('json: invalid_json_number:12.5e+400');};
+  expect((await run(deps,{issuerIds:[ISSUER]})).errors[0].message).toBe('json: invalid_json_number');
+ });
+ it('refuses a snapshot whose bytes do not match its hash and candidates without a derived raw_hash (#8)',async()=>{
+  const bad:RawSnapshot={...snap('{"a":1}'),sha256:'f'.repeat(64)};
+  const {db,deps}=harness(FY23,{fetchUs:async()=>bad});
+  expect((await run(deps)).issuers[0]).toMatchObject({outcome:'failed',code:'snapshot_hash_mismatch'});
+  expect(db.facts()).toEqual([]);
+  const h2=harness(parsed([filing('acc-1','2023-11-03')],[cand('acc-1','revenue','1',{rawHash:'h'})]));
+  const r=await run(h2.deps);
+  expect(r.errors).toEqual([{code:'parse_error',key:ISSUER,message:'raw_hash_invalid'}]);
+ });
+ it('renews the lease before a phase when it would lapse within two minutes (#9)',async()=>{
+  let t=NOW.getTime();
+  const {db,deps}=harness(FY23,{now:()=>new Date(t),fetchUs:async()=>{t+=500_000;return snap('{"facts":{}}');}});
+  const claim=vi.spyOn(db,'claimLease');
+  const r=await run(deps);
+  expect(r.issuers[0].outcome).toBe('published');
+  expect(claim.mock.calls.length).toBeGreaterThanOrEqual(2);        // the claim and at least one renewal with the same batch
+  expect(claim.mock.calls[1].slice(0,3)).toEqual(claim.mock.calls[0].slice(0,3));
+  const quiet=harness();const q=vi.spyOn(quiet.db,'claimLease');
+  await run(quiet.deps);
+  expect(q).toHaveBeenCalledTimes(1);                                // a fresh lease is never renewed
  });
 });

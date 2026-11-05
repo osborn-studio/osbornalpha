@@ -27,7 +27,7 @@ export const READ_PAGE=1000;
 export const IN_CHUNK=200;
 /** attempts of a metrics read before it fails as metrics_unstable. */
 export const METRICS_ATTEMPTS=3;
-const MESSAGE_CODES:readonly FactsDbErrorCode[]=['run_pending','run_published','mapping_gen_regression','stale_computation'];
+const MESSAGE_CODES:readonly FactsDbErrorCode[]=['run_pending','run_published','mapping_gen_regression','stale_computation','stale_plan'];
 
 export interface PgErrorLike{message?:string;code?:string|null;details?:string|null;hint?:string|null}
 /** PostgreSQL / PostgREST error → FactsDbError (shared by the Supabase and pg adapters). */
@@ -132,7 +132,7 @@ export function supabaseFactsDb(client:SupabaseClient):FactsDb{
   },
   async stageFacts(run,input){let n=0;for(const part of chunk(input))n+=Number(await call<number>('stage_facts',{p_run:run,p_rows:part}));return n;},
   async quarantineFacts(run,ids,item){return Number(await call<unknown>('quarantine_facts',{p_run:run,p_fact_ids:ids,p_item:item}));},
-  async publishRun(run,manifest){return Number(await call<unknown>('publish_sync_run',{p_run:run,p_manifest:manifest}));},
+  async publishRun(run,manifest,expectedRev){return Number(await call<unknown>('publish_sync_run',{p_run:run,p_manifest:manifest,p_expected_rev:expectedRev??null}));},
   async abandonRun(run){await call('abandon_sync_run',{p_run:run});},
   async releaseLease(issuer,market,batch,outcome,nextDue){await call('release_fact_sync_lease',{p_issuer:issuer,p_market:market,p_batch:batch,p_outcome:outcome,p_next_due:nextDue});},
   async resolveFactsQuarantine(item,chosen,by){const x=await call<{promoted:unknown;skipped:unknown}>('resolve_facts_quarantine',{p_item:item,p_chosen:chosen,p_resolved_by:by});return {promoted:Number(x.promoted),skipped:Number(x.skipped)};},

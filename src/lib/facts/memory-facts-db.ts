@@ -179,8 +179,9 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
    await tables.update('dq_quarantine',{id:itemId,status:'open'},{payload:{...(it.payload as Record<string,unknown>),fact_ids:merged}});
    return n;
   },
-  async publishRun(run,manifest){
+  async publishRun(run,manifest,expectedRev){
    const r=runLock(run);
+   if(expectedRev!==undefined&&(scopeOf(r.issuer_id,r.market)?.state_rev??0)!==expectedRev)throw new FactsDbError('stale_plan');
    const mine=manifest.filter(id=>{const g=filings.get(id);return !!g&&g.issuer_id===r.issuer_id&&g.market===r.market;});
    if(mine.some(id=>filings.get(id)!.mapping_gen>r.mapping_gen))throw new FactsDbError('mapping_gen_regression');
    let n=0;

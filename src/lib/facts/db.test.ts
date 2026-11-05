@@ -77,7 +77,7 @@ describe('toFactsDbError',()=>{
  it('maps SQLSTATE and the code-as-message convention',()=>{
   expect(toFactsDbError({message:'lease_lost',code:'55P03'})).toMatchObject({name:'FactsDbError',code:'lease_lost'});
   expect(toFactsDbError({message:'canceling statement due to lock timeout',code:'55P03'}).code).toBe('lease_lost');
-  for(const c of ['run_pending','run_published','mapping_gen_regression','stale_computation'])expect(toFactsDbError({message:c,code:'P0001'}).code).toBe(c);
+  for(const c of ['run_pending','run_published','mapping_gen_regression','stale_computation','stale_plan'])expect(toFactsDbError({message:c,code:'P0001'}).code).toBe(c);
   expect(toFactsDbError({message:'duplicate key value violates unique constraint "filings_pkey"',code:'23505'}).code).toBe('duplicate_key');
   expect(toFactsDbError({message:'item_not_open',code:'P0001'})).toMatchObject({code:'unknown',message:'item_not_open'});
   expect(toFactsDbError({message:undefined,code:undefined}).code).toBe('unknown');
@@ -201,5 +201,10 @@ describe('supabaseFactsDb',()=>{
   await expect(db.beginRun('i','US','b',1)).rejects.toMatchObject({name:'FactsDbError',code:'lease_lost'});
   await expect(db.publishRun('r',[])).rejects.toMatchObject({code:'mapping_gen_regression'});
   await expect(db.abandonRun('r')).rejects.toMatchObject({code:'unknown',message:'boom'});
+ });
+ it('publishRun passes the expected state_rev (null when absent)',async()=>{
+  const {db,calls}=stub(()=>({data:1}));
+  await db.publishRun('r',['f']);await db.publishRun('r',['f'],4);
+  expect(calls.map(c=>c.args)).toEqual([{p_run:'r',p_manifest:['f'],p_expected_rev:null},{p_run:'r',p_manifest:['f'],p_expected_rev:4}]);
  });
 });

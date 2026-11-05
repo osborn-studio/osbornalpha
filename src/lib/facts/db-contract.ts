@@ -106,6 +106,21 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect((await current(iss)).stateRev).toBe(2);
   });
 
+  it('publish with expectedRev: a promotion after planning makes the plan stale (stale_plan, nothing published); the current rev publishes (round-3 P1)',async()=>{
+   const {iss,b}=await published();
+   const run2=await db.beginRun(iss,'US',b,1);const fq=filingInsert(iss,{availableDate:'2024-03-01'});await db.stageFilings(run2,[fq]);
+   const qd=factInsert(iss,fq,{value:'100'});await db.stageFacts(run2,[qd]);
+   const itemId=await conflict(iss,b,run2,[qd.fact_id],'2024-03-01');await db.quarantineFacts(run2,[qd.fact_id],itemId);
+   expect(await db.publishRun(run2,[fq.filing_id],1)).toBe(0);                          // matching rev publishes; the parked row stays out
+   const planned=(await current(iss)).stateRev;expect(planned).toBe(2);                 // the plan is made here: qd is not ok, so a different same-day value looks conflict-free
+   const run3=await db.beginRun(iss,'US',b,1);const f3=filingInsert(iss,{availableDate:'2024-03-01'});await db.stageFilings(run3,[f3]);
+   const a3=factInsert(iss,f3,{value:'200'});await db.stageFacts(run3,[a3]);
+   expect(await db.resolveFactsQuarantine(itemId,[qd.fact_id],randomUUID())).toEqual({promoted:1,skipped:0});   // admin promotes qd after planning
+   expect(await code(db.publishRun(run3,[f3.filing_id],planned))).toBe('stale_plan:stale_plan');
+   expect(await statusOf(a3.fact_id)).toBe('staged');expect(await statusOf(qd.fact_id)).toBe('ok');
+   expect(await db.publishRun(run3,[f3.filing_id],planned+1)).toBe(1);
+  });
+
   it('same-day conflict: register, abandon, retry, publish; resolve is run_pending until publish; the verdict promotes chosen rows and binds the rest',async()=>{
    const {iss,b,r0,r}=await published();
    const runB=await db.beginRun(iss,'US',b,1);const fb=filingInsert(iss);await db.stageFilings(runB,[fb]);

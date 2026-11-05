@@ -28,7 +28,7 @@ export function pgFactsDb(pool:Pool):FactsDb{
   },
   async stageFacts(runId,input){let n=0;for(const part of chunk(input))n+=Number(await fn<number>('public.stage_facts($1,$2::jsonb)',[runId,JSON.stringify(part)]));return n;},
   quarantineFacts:(runId,ids,item)=>fn<number>('public.quarantine_facts($1,$2::uuid[],$3)',[runId,ids,item]),
-  publishRun:(runId,manifest)=>fn<number>('public.publish_sync_run($1,$2::uuid[])',[runId,manifest]),
+  publishRun:(runId,manifest,expectedRev)=>fn<number>('public.publish_sync_run($1,$2::uuid[],$3::bigint)',[runId,manifest,expectedRev??null]),
   async abandonRun(runId){await fn('public.abandon_sync_run($1)',[runId]);},
   async releaseLease(issuer,market,batch,outcome,nextDue){await fn('public.release_fact_sync_lease($1,$2,$3,$4,$5::timestamptz)',[issuer,market,batch,outcome,nextDue]);},
   resolveFactsQuarantine:(item,chosen,by)=>fn<{promoted:number;skipped:number}>('public.resolve_facts_quarantine($1,$2::uuid[],$3)',[item,chosen,by]),

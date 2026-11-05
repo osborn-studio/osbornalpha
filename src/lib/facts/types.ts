@@ -56,7 +56,7 @@ export interface ConflictItem{id:string;natural_key:string;fact_ids:string[];ava
 export interface ReadFactsOptions{concepts:string[];asOf:string;from?:string;to?:string;history?:boolean;limit?:number;includeNonOk?:boolean}
 export interface ReadFactsResult{stateRev:number;rows:FactRow[];truncated:boolean}
 
-export type FactsDbErrorCode='lease_lost'|'run_pending'|'run_published'|'mapping_gen_regression'|'stale_computation'|'read_truncated'|'duplicate_key'|'unknown';
+export type FactsDbErrorCode='lease_lost'|'run_pending'|'run_published'|'mapping_gen_regression'|'stale_computation'|'stale_plan'|'read_truncated'|'duplicate_key'|'unknown';
 export class FactsDbError extends Error{constructor(public code:FactsDbErrorCode,message?:string){super(message??code);this.name='FactsDbError';}}
 
 export interface FactsDb{
@@ -66,7 +66,8 @@ export interface FactsDb{
  stageFilings(run:string,rows:FilingInsert[]):Promise<Map<string,string>>;
  stageFacts(run:string,rows:FactInsert[]):Promise<number>;
  quarantineFacts(run:string,factIds:string[],itemId:string):Promise<number>;
- publishRun(run:string,manifest:string[]):Promise<number>;
+ /** expectedRev: the state_rev the plan was read at; a different current value fails as stale_plan (a promotion landed after planning). */
+ publishRun(run:string,manifest:string[],expectedRev?:number):Promise<number>;
  abandonRun(run:string):Promise<void>;
  releaseLease(issuer:string,market:Market,batch:string,outcome:'success'|'failed',nextDue:string):Promise<void>;
  resolveFactsQuarantine(itemId:string,chosen:string[],resolvedBy:string):Promise<{promoted:number;skipped:number}>;

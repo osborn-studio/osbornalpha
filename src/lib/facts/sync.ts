@@ -5,7 +5,7 @@
 // functions); a lease_lost stops the issuer without any further database call; budget
 // exhaustion abandons the in-flight run. Pure helpers (plan, rules) decide, this file sequences.
 import {execFileSync} from 'node:child_process';
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import type {TableClient} from '../db/table-client';
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '../dq/batches';
@@ -61,11 +61,23 @@ export const MIN_ISSUER_MS=90_000;
 export const NEXT_DUE_OK_MS=7*DAY;
 export const NEXT_DUE_FAIL_MS=1*DAY;
 export const MAX_LINK_ATTEMPTS=5;
+/** Smallest budget left that still allows abandon + release (5 s) / a publish (2 s); lease is renewed when it lapses within 120 s. */
+export const CLEANUP_MIN_MS=5_000;
+export const PUBLISH_MIN_MS=2_000;
+export const LEASE_RENEW_MS=120_000;
 export const LINKABLE_FORMS=new Set(['annual','semiannual','q1','q3','restatement']);
 const COUNTERS=['fetched','inserted','duplicates','versioned','quarantined','failed'] as const;
 const ALL_CONCEPTS=FACT_CONCEPTS.map(c=>c.id);
 const isoDate=(d:Date)=>d.toISOString().slice(0,10);
 const errMsg=(e:unknown)=>(e instanceof Error?e.message:String(e)).slice(0,200);
+const abortError=()=>{const e=new Error('deadline');e.name='AbortError';return e;};
+/** Budget exhaustion: an abort/timeout error, or — once the signal fired — a budget_* message. Any other error stays a genuine failure (round-3 #3). */
+const isDeadline=(e:unknown,budget:Budget)=>e instanceof Error&&(e.name==='AbortError'||e.name==='TimeoutError'||(budget.signal.aborted&&/budget_(exhausted|aborted)/.test(e.message)));
+/** parse_error text for the batch: the error kind and, for field errors, the field NAME; never the offending value (round-3 #7). */
+const safeParseMessage=(raw:string):string=>{
+ const parts=raw.replace(/^parse_error: /,'').split(':').map(x=>x.trim());
+ return (parts[0]==='json'||parts[0]==='invalid_control_field'?parts.slice(0,2):parts.slice(0,1)).join(': ').replace(/[^\w .:-]/g,'').slice(0,100);
+};
 const dbCode=(e:unknown)=>e instanceof FactsDbError?e.code:null;
 const datasetOf=(m:Market)=>m==='US'?'facts.us':'facts.cn';
 const sourceOf=(m:Market):Source=>m==='US'?'edgar':'tushare';
@@ -103,14 +115,26 @@ interface Staged{parsed:ParseResult;filingIds:Map<string,string>;filingRows:Map<
 interface Fetched{parsed:ParseResult;sha256s:string[]}
 const keyOfCandidate=(c:FactCandidate)=>({concept:c.concept,period_start:c.periodStart,period_end:c.periodEnd,consolidation:c.consolidation,unit:c.unit});
 /** missing_available_date natural key (spec §7.1 `<issuer>:<ts_code>:<end_date>:<report_type>`; EDGAR rows carry accn/tag in those slots). */
-const missingDateKey=(issuer:string,fetchKey:string,r:Record<string,unknown>)=>[issuer,fetchKey,String(r.end_date??r.accn??''),String(r.report_type??r.tag??'')].join(':');
+const missingDateKey=(issuer:string,fetchKey:string,r:Record<string,unknown>)=>{
+ const s=(v:unknown)=>v===undefined||v===null?'':String(v);
+ // One accession carries many periods and units, and one Tushare statement many rows: the key names each source row (round-3 #2; deviates from spec §7.1's coarser key).
+ if('accn' in r)return [issuer,fetchKey,s(r.accn),s(r.tag),s(r.start),s(r.end),s(r.unit)].join(':');
+ return [issuer,fetchKey,s(r.end_date),s(r.report_type),s(r.api),s(r.page),s(r.row)].join(':');
+};
 
 async function fetchAndParse(deps:SyncDeps,market:Market,issuer:string,fetchKey:string,sinceYear:number,budget:Budget,store:boolean):Promise<Fetched>{
  const snapshots:RawSnapshot[]=market==='US'?[await deps.fetchUs(fetchKey,budget)]:await deps.fetchCn(fetchKey,sinceYear,budget);
  if(store)for(const s of snapshots)await deps.storage.put(s,snapshotPath(sourceOf(market),issuer,s.sha256),budget);
  const sha256s=snapshots.map(s=>s.sha256);
- try{return {parsed:market==='US'?deps.parseUs(snapshots[0],{sinceYear}):deps.parseCn(snapshots,{sinceYear}),sha256s};}
- catch(e){throw new SyncError('parse_error',e instanceof Error?e.message.slice(0,200):'unknown');}
+ // Evidence integrity: what is parsed (and stored) must be the bytes the declared hash names (round-3 #8).
+ for(const s of snapshots)if(createHash('sha256').update(s.bytes).digest('hex')!==s.sha256)throw new SyncError('snapshot_hash_mismatch');
+ let parsed:ParseResult;
+ try{parsed=market==='US'?deps.parseUs(snapshots[0],{sinceYear}):deps.parseCn(snapshots,{sinceYear});}
+ catch(e){throw new SyncError('parse_error',e instanceof Error?e.message:'unknown');}
+ // raw_hash is sha256(snapshot.sha256 + locator), so membership in the snapshot hashes cannot be checked
+ // here; the shape (64 hex) is, and it catches adapters that forgot to derive it.
+ if(parsed.candidates.some(c=>!/^[0-9a-f]{64}$/.test(c.rawHash)))throw new SyncError('parse_error','raw_hash_invalid');
+ return {parsed,sha256s};
 }
 
 export async function syncIssuerFacts(deps:SyncDeps,batchId:string,input:{scope:ScopeRow;market:Market;sinceYear:number;mappingGen?:number;budget:Budget}):Promise<IssuerOutcome>{
@@ -120,6 +144,7 @@ export async function syncIssuerFacts(deps:SyncDeps,batchId:string,input:{scope:
  const [issuerRow]=await tables.select('issuers',{issuer_id:issuer},{limit:1});
  if(issuerRow?.status==='merged')return skip('issuer_merged');
  if(!await db.claimLease(issuer,market,batchId,LEASE_TTL_S))return skip('leased');
+ let leaseUntil=deps.now().getTime()+LEASE_TTL_S*1000;
  let leaseHeld=true;let runId:string|null=null;let fetched=0;let publishedRun=false;
  const fail=(code:string,message?:string)=>{out.outcome='failed';out.code=code;out.errors.push(message===undefined?{code,key:issuer}:{code,key:issuer,message});out.counts.failed+=Math.max(1,fetched);return out;};
  // Only a run that is still staged can be abandoned: once publishRun committed the run is immutable
@@ -134,6 +159,15 @@ export async function syncIssuerFacts(deps:SyncDeps,batchId:string,input:{scope:
  // outcome stays 'published'; the original failure is recorded under its own code and the lease is
  // released as failed so the issuer returns in a day for the post-publish work (round-1 #11).
  const afterPublish=async(code:string,e:unknown)=>{out.errors.push({code,key:issuer,message:errMsg(e)});await release('failed');return out;};
+ // Called before every database phase: stops when the budget is spent (or has less than minMs left)
+ // and renews the lease when it would lapse within LEASE_RENEW_MS (round-3 #3, #9).
+ const phase=async(minMs=1)=>{
+  if(budget.signal.aborted||budget.remainingMs()<minMs)throw abortError();
+  if(leaseUntil-deps.now().getTime()<LEASE_RENEW_MS){
+   if(!await db.claimLease(issuer,market,batchId,LEASE_TTL_S))throw new FactsDbError('lease_lost');
+   leaseUntil=deps.now().getTime()+LEASE_TTL_S*1000;
+  }
+ };
  try{
   runId=await db.beginRun(issuer,market,batchId,gen);out.runId=runId;
   const {parsed,sha256s}=await fetchAndParse(deps,market,issuer,scope.fetch_key,sinceYear,budget,true);
@@ -154,15 +188,20 @@ export async function syncIssuerFacts(deps:SyncDeps,batchId:string,input:{scope:
   if(parsed.skipped.length>0)out.errors.push(skippedSummary(issuer,parsed.skipped));
   if(market==='CN'&&deps.coverageCn)out.errors.push({code:'coverage_summary',key:issuer,message:compactCoverage(deps.coverageCn(parsed))});
   if(parsed.filings.length===0&&parsed.candidates.length===0){
+   await phase(PUBLISH_MIN_MS);
    await db.publishRun(runId,[]);publishedRun=true;await release('success');out.outcome='published';return skip('no_rows');
   }
+  await phase();
   const staged=await stageFilings(db,runId,issuer,market,parsed);
   const filingCandidates=parsed.filings.map(f=>({...f,availableDate:staged.filingRows.get(staged.filingIds.get(f.sourceRef)??'')!.available_date}));
+  await phase();
   const read=await db.readFacts(issuer,market,{concepts:ALL_CONCEPTS,asOf:isoDate(deps.now()),history:true,includeNonOk:true});
   if(read.truncated){await abandon();await release('failed');return fail('read_truncated');}
   const open=await db.openConflicts(issuer,market);
   const plan=planFactWrites({existing:read.rows,openConflicts:open,candidates:parsed.candidates,filingCandidates,filings:staged.filingIds,issuerId:issuer,market,mappingGen:gen,mappingVersion:MAPPING_VERSION});
+  await phase();
   if(plan.inserts.length>0)await db.stageFacts(runId,plan.inserts);
+  await phase();
   for(const a of plan.ambiguous)await park('ambiguous_value',a.naturalKey,{key:a.key,candidates:a.candidates});
   for(const c of plan.conflicts){
    const itemId=await park('same_day_conflict',c.naturalKey,{key:c.key,fact_ids:[...c.newFactIds,...c.existingOkFactIds],values:c.values});
@@ -172,35 +211,45 @@ export async function syncIssuerFacts(deps:SyncDeps,batchId:string,input:{scope:
   const parked=new Set(plan.quarantinedFactIds);
   const sourceRefOf=new Map([...staged.filingRows.values()].map(f=>[f.filing_id,f.source_ref]));
   const rules=evaluateFactRules({newRows:plan.inserts.filter(r=>!parked.has(r.fact_id)),okRows:read.rows.filter(r=>r.status==='ok'),sourceRefOf,issuerId:issuer,market,mappingGen:gen});
+  await phase();
   for(const rq of rules.quarantine){
    const itemId=await park(rq.reason,rq.naturalKey,{key:rq.key,fact_ids:rq.factIds,rule:rq.rule,detail:rq.detail});
    await db.quarantineFacts(runId,rq.factIds,itemId);
    for(const id of rq.factIds)plan.outcomes.set(id,'quarantined');
   }
   out.warnings=rules.warnings;
-  for(const o of plan.outcomes.values())out.counts[o]++;
-  out.counts.duplicates=plan.counts.duplicates;
+  // Ambiguous items are evidence without fact rows: they survive an abandoned run and count now.
+  // Everything backed by staged fact rows (inserted / versioned / duplicates / parked rows) is only
+  // committed by publishRun; an abandon deletes those rows, so their counts are applied after it (round-3 #4).
   out.counts.quarantined+=plan.ambiguous.reduce((n,a)=>n+a.candidates.length,0);
+  const committed=emptyCounts();
+  for(const o of plan.outcomes.values())committed[o]++;
+  committed.duplicates=plan.counts.duplicates;
   const manifest=parsed.filings.map(f=>staged.filingIds.get(f.sourceRef)!);
-  try{await db.publishRun(runId,manifest);}
-  catch(e){if(dbCode(e)!=='mapping_gen_regression')throw e;await abandon();await release('failed');return fail('mapping_gen_regression');}
+  await phase(PUBLISH_MIN_MS);
+  try{await db.publishRun(runId,manifest,read.stateRev);}
+  catch(e){const c=dbCode(e);if(c!=='mapping_gen_regression'&&c!=='stale_plan')throw e;await abandon();await release('failed');return fail(c);}
   publishedRun=true;
   out.outcome='published';
+  for(const k of ['inserted','versioned','duplicates','quarantined'] as const)out.counts[k]+=committed[k];
   if(market==='CN'&&deps.linkCn)await linkFilings(deps,issuer,market,budget,out);
+  if(budget.signal.aborted||budget.remainingMs()<=0)return afterPublish('deadline_hit',new Error('materialize_not_started'));
   try{await materialize(db,issuer,market);}
-  catch(e){const code=dbCode(e);if(code!=='stale_computation'&&code!=='read_truncated')throw e;out.errors.push({code,key:issuer,message:errMsg(e)});}
+  catch(e){const code=dbCode(e);if(code!=='stale_computation'&&code!=='read_truncated')throw e;return afterPublish(code,e);}   // published stays; retried on the failure schedule
   await release('success');
   return out;
  }catch(e){
   if(dbCode(e)==='lease_lost'){leaseHeld=false;if(publishedRun){out.errors.push({code:'lease_lost',key:issuer});return out;}return fail('lease_lost');}
-  if(budget.signal.aborted||(e instanceof Error&&e.name==='AbortError')){
+  if(isDeadline(e,budget)){
    if(publishedRun)return afterPublish('deadline_hit',e);
-   await abandon();await release('failed');
-   out.outcome='failed';out.code='deadline_hit';out.errors.push({code:'deadline_hit',key:issuer});return out;
+   // With time left, clean up; without it the staged run is left for the next beginRun to abandon.
+   if(budget.remainingMs()>=CLEANUP_MIN_MS){await abandon();await release('failed');}
+   out.counts.fetched=0;out.outcome='failed';out.code='deadline_hit';out.errors.push({code:'deadline_hit',key:issuer});return out;
   }
   if(publishedRun)return afterPublish(e instanceof SyncError?e.code:dbCode(e)??'unknown',e);
   await abandon();await release('failed');
-  return fail(e instanceof SyncError?e.code:'unknown',e instanceof SyncError?undefined:errMsg(e));
+  if(e instanceof SyncError)return fail(e.code,e.code==='parse_error'?safeParseMessage(e.message):undefined);
+  return fail('unknown',errMsg(e));
  }
 }
 
@@ -284,9 +333,10 @@ async function dryRun(deps:SyncDeps,opts:SyncOptions,sinceYear:number,gen:number
    const known=new Map((await deps.db.filingsOfIssuer(scope.issuer_id,opts.market,{})).map(f=>[f.source_ref,f.filing_id]));
    const filings=new Map(parsed.filings.map(f=>[f.sourceRef,known.get(f.sourceRef)??randomUUID()]));
    const read=await deps.db.readFacts(scope.issuer_id,opts.market,{concepts:ALL_CONCEPTS,asOf:isoDate(deps.now()),history:true,includeNonOk:true});
+   if(read.truncated)throw new FactsDbError('read_truncated');
    const plan=planFactWrites({existing:read.rows,openConflicts:await deps.db.openConflicts(scope.issuer_id,opts.market),candidates:parsed.candidates,filingCandidates:parsed.filings,filings,issuerId:scope.issuer_id,market:opts.market,mappingGen:gen,mappingVersion:MAPPING_VERSION});
    Object.assign(out.counts,{fetched:parsed.candidates.length,...plan.counts});out.outcome='planned';
-  }catch(e){failed++;out.outcome='failed';out.code=e instanceof SyncError?e.code:'unknown';out.errors.push({code:out.code,key:scope.issuer_id,message:errMsg(e)});}
+  }catch(e){failed++;out.outcome='failed';out.code=e instanceof SyncError?e.code:dbCode(e)??'unknown';out.errors.push({code:out.code,key:scope.issuer_id,message:e instanceof SyncError&&e.code==='parse_error'?safeParseMessage(e.message):errMsg(e)});}
   issuers.push(out);for(const k of COUNTERS)counts[k]+=out.counts[k];errors.push(...out.errors);
  }
  const idle=selected.length===0;

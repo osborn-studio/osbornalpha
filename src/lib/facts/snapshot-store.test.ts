@@ -29,6 +29,22 @@ describe('memorySnapshotStore',()=>{
  });
 });
 
+describe('snapshot evidence integrity',()=>{
+ it('refuses bytes that do not match the declared hash and keeps its own copy of the bytes',async()=>{
+  const bad:RawSnapshot={...snap('{"a":1}'),sha256:'e'.repeat(64)};
+  await expect(memorySnapshotStore().put(bad,snapshotPath('edgar',ISSUER,bad.sha256),budget())).rejects.toThrow('snapshot_hash_mismatch');
+  const upload=vi.fn(async()=>({error:null}));
+  await expect(supabaseSnapshotStore({storage:{from:()=>({upload})}} as never).put(bad,snapshotPath('edgar',ISSUER,bad.sha256),budget())).rejects.toThrow('snapshot_hash_mismatch');
+  expect(upload).not.toHaveBeenCalled();
+  const store=memorySnapshotStore();const s=snap('{"a":1}');const path=snapshotPath('edgar',ISSUER,s.sha256);
+  await store.put(s,path,budget());
+  s.bytes[0]=0;                                                  // caller mutates its buffer afterwards
+  expect(new TextDecoder().decode(store.read(path) as Uint8Array)).toBe('{"a":1}');
+  (store.read(path) as Uint8Array)[0]=0;                          // and mutating a read copy changes nothing either
+  expect(new TextDecoder().decode(store.read(path) as Uint8Array)).toBe('{"a":1}');
+ });
+});
+
 describe('supabaseSnapshotStore',()=>{
  const fake=(upload:(path:string,body:unknown,opts:unknown)=>Promise<{error:unknown}>)=>{const from=vi.fn(()=>({upload}));return {admin:{storage:{from}} as never,from};};
  it('uploads body then sidecar with upsert:false into disclosure-raw',async()=>{
