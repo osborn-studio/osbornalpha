@@ -13,7 +13,7 @@ describe('batchStatusFromCounts',()=>{
   expect(batchStatusFromCounts({...emptyCounts(),inserted:5},[],{rejected:true})).toBe('rejected');
  });
  it('ignores informational codes (skips, relinks) when deciding status but keeps them in errors',()=>{
-  expect(INFO_CODES).toEqual(['skipped_summary','relink']);
+  expect(INFO_CODES).toEqual(['skipped_summary','relink','rule_warning_summary','coverage_summary','deadline_hit']);
   const info=[{code:'skipped_summary',message:'{"not_in_universe":3}'},{code:'relink',key:'k',message:'a->b'}];
   expect(batchStatusFromCounts({...emptyCounts(),fetched:4,inserted:1},info)).toBe('success');
   expect(batchStatusFromCounts({...emptyCounts(),fetched:4,inserted:1},[...info,{code:'range'}])).toBe('partial');

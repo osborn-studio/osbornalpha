@@ -196,6 +196,10 @@
     {
       "file": "20261105091000_issuers.sql",
       "sha256": "951ff948e896480a81fb99e0a2e3eb6858664c99dc8620055144afb753354a62"
+    },
+    {
+      "file": "20261106090000_financial_facts.sql",
+      "sha256": "62edb3eb740e4b652c66cd7bae6388287f35fe54c53afcbf27046ed9ddcf7f4d"
     }
   ]
 }

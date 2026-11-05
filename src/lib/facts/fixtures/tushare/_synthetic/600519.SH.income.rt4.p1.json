@@ -1,0 +1,4 @@
+{"request_id":"synthetic","code":0,"msg":null,"data":{"fields":["ts_code","ann_date","f_ann_date","end_date","report_type","comp_type","end_type","update_flag","total_revenue","revenue","oper_cost","operate_profit","n_income","n_income_attr_p","basic_eps","diluted_eps","rd_exp","sell_exp","admin_exp","fin_exp_int_exp","int_exp","income_tax"],"items":[
+["600519.SH","20240803","20240803","20230630",4,1,2,0,70900000000,69500000000,5400000000,47000000000,37000000000,35980000000,28.64,28.64,null,2100000000,4300000000,null,null,12000000000],
+["600519.SH",null,null,"20230331",4,1,1,0,39400000000,38700000000,3000000000,27000000000,21000000000,20795000000,16.55,16.55,null,1100000000,2200000000,null,null,7000000000]
+],"has_more":false}}

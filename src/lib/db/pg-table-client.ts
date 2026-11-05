@@ -54,7 +54,7 @@ export function upsertSql(rel:string,row:Row,onConflict:string):{text:string;val
 
 const RAW_TEXT=new Set([1082,1114,1184]); // date, timestamp, timestamptz
 const getTypeParser=types.getTypeParser as (oid:number,format?:string)=>unknown;
-const typeParsers={getTypeParser:(oid:number,format?:string)=>RAW_TEXT.has(oid)?(v:string)=>v:getTypeParser(oid,format)} as unknown as QueryConfig['types'];
+export const typeParsers={getTypeParser:(oid:number,format?:string)=>RAW_TEXT.has(oid)?(v:string)=>v:getTypeParser(oid,format)} as unknown as QueryConfig['types'];
 
 interface PgErr{message?:string;code?:string;detail?:string;hint?:string}
 

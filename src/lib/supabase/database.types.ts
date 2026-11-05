@@ -10,6 +10,7 @@
 // + 20261105090000_dq_foundation.sql (ingest_batches, dq_quarantine, dq_reconciliations, dq_freshness)
 // + migrations up to 20261105091000_issuers.sql (issuers, issuer_securities, issuer_identifier_claims,
 //   industry_classifications, issuer_industry_memberships; research_entity_* link columns are not typed here)
+// + 20261106090000_financial_facts.sql (fact_sync_runs, filings, financial_facts, financial_metrics, fact_sync_scope)
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -586,6 +587,98 @@ export interface DqFreshness {
   updated_at: string;
 }
 
+// 20261106090000_financial_facts.sql. numeric columns (value) arrive as JSON numbers and round in
+// JavaScript — readers use value_text. bigint (state_rev, based_on_rev) arrives as a JSON number.
+export type FactMarket = 'US' | 'CN';
+export interface FactSyncRun {
+  run_id: string;
+  issuer_id: string;
+  market: FactMarket;
+  batch_id: string;
+  mapping_gen: number;
+  status: 'staged' | 'published' | 'abandoned';
+  manifest: string[];
+  started_at: string;
+  published_at: string | null;
+}
+export interface Filing {
+  filing_id: string;
+  issuer_id: string;
+  market: FactMarket;
+  source: 'edgar' | 'tushare';
+  origin: 'sec' | 'sse' | 'szse' | 'bse';
+  form_type: string;
+  fiscal_year: number | null;
+  fiscal_period: 'FY' | 'Q1' | 'Q2' | 'Q3' | 'H1' | '9M' | null;
+  period_end: string | null;
+  available_date: string;
+  source_ref: string;
+  url: string | null;
+  document_ref: string | null;
+  document_url: string | null;
+  link_attempts: number;
+  mapping_gen: number;
+  run_id: string;
+  created_at: string;
+}
+export interface FinancialFact {
+  fact_id: string;
+  issuer_id: string;
+  market: FactMarket;
+  filing_id: string;
+  run_id: string;
+  concept: string;
+  source_concept: string;
+  statement: 'IS' | 'BS' | 'CF' | 'DEI';
+  period_start: string | null;
+  period_end: string;
+  duration: '3M' | '6M' | '9M' | '12M' | 'INSTANT';
+  value: number;
+  value_text: string;
+  unit: string;
+  consolidation: 'consolidated' | 'parent';
+  available_date: string;
+  mapping_gen: number;
+  mapping_version: string;
+  status: 'staged' | 'ok' | 'quarantined';
+  raw_hash: string;
+  created_at: string;
+}
+export interface FinancialMetric {
+  issuer_id: string;
+  market: FactMarket;
+  metric: string;
+  period_start: string;
+  period_end: string;
+  duration: '3M' | '6M' | '9M' | '12M' | 'TTM' | 'INSTANT';
+  value: number;
+  value_text: string;
+  unit: string;
+  input_unit: string;
+  basis: 'us_standard' | 'cn_standard' | 'cn_incl_intangibles' | 'cn_incl_bonds';
+  formula_version: string;
+  inputs: Array<{ fact_id: string; concept: string; filing_id: string; available_date: string }>;
+  based_on_rev: number;
+  as_of: string;
+  computed_at: string;
+}
+export interface FactSyncScope {
+  issuer_id: string;
+  market: FactMarket;
+  reasons: string[];
+  priority: number;
+  fetch_key: string;
+  next_due_at: string;
+  lease_until: string | null;
+  lease_batch_id: string | null;
+  state_rev: number;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_batch_id: string | null;
+  last_status: 'success' | 'failed' | null;
+  updated_at: string;
+}
+
 // Issuers (supabase/migrations/20261105091000_issuers.sql). issuers, issuer_securities,
 // industry_classifications and issuer_industry_memberships are public read; claims are service-role only.
 export type IssuerStatus = 'active' | 'merged' | 'dissolved';
@@ -699,6 +792,11 @@ export type Database = {
       issuer_identifier_claims: { Row: IssuerIdentifierClaim; Insert: Partial<IssuerIdentifierClaim>; Update: Partial<IssuerIdentifierClaim> };
       industry_classifications: { Row: IndustryClassification; Insert: Partial<IndustryClassification>; Update: Partial<IndustryClassification> };
       issuer_industry_memberships: { Row: IssuerIndustryMembership; Insert: Partial<IssuerIndustryMembership>; Update: Partial<IssuerIndustryMembership> };
+      fact_sync_runs: { Row: FactSyncRun; Insert: Partial<FactSyncRun>; Update: Partial<FactSyncRun> };
+      filings: { Row: Filing; Insert: Partial<Filing>; Update: Partial<Filing> };
+      financial_facts: { Row: FinancialFact; Insert: Partial<FinancialFact>; Update: Partial<FinancialFact> };
+      financial_metrics: { Row: FinancialMetric; Insert: Partial<FinancialMetric>; Update: Partial<FinancialMetric> };
+      fact_sync_scope: { Row: FactSyncScope; Insert: Partial<FactSyncScope>; Update: Partial<FactSyncScope> };
     };
     Functions: {
       quote_alert_window_samples: {
