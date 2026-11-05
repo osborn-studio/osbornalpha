@@ -4,7 +4,14 @@
  *   npx tsx scripts/facts/record-fixture.ts --edgar-revise <cik>          → CIK<10>.revised.json (trimmed + one later 10-K entry)
  * EDGAR trimming keeps only catalogue tags and entries with end >= 2019-01-01 and re-serialises with the
  * original number literals (scanJsonNumbers + stringifyPreservingNumbers; no value round-trips through a JS
- * number). (--tushare and --cninfo modes are added by Tasks 12/13.) Exit 2 on bad arguments.
+ * number).
+ *   node --env-file=<file outside the repo with TUSHARE_TOKEN> --import tsx scripts/facts/record-fixture.ts --tushare <ts_code> [--since-year <yyyy>]
+ *                                                                          → fixtures/tushare/<ts_code>.<api>.rt<n>.p<k>.json (+ .meta.json), byte-exact pages
+ * Tushare pages are written byte-for-byte as received; the .meta.json sibling carries the request params, fields,
+ * http status, has_more, recorded_at and the page sha256. Real fixtures (fixtures/tushare) replace the synthetic ones
+ * (fixtures/tushare/_synthetic) in the loader automatically. After recording, do the report_type 1/4/5 and paging
+ * check of spec §15 item 1 and write the result into docs/audits/2026-11-04-data-foundation-2/17-tushare-verification.md.
+ * (--cninfo mode is added by Task 13.) Exit 2 on bad arguments or a missing TUSHARE_TOKEN.
  */
 import {mkdirSync,readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
@@ -13,10 +20,11 @@ import {FACT_CONCEPTS} from '../../src/lib/facts/concepts';
 import {scanJsonNumbers} from '../../src/lib/facts/json-numbers';
 import {budgetFor,padCik,stringifyPreservingNumbers} from '../../src/lib/facts/providers/shared';
 import {companyFactsUrl,fetchCompanyFacts,tagsOf} from '../../src/lib/facts/providers/edgar-companyfacts';
+import {fetchTushareStatements} from '../../src/lib/facts/providers/tushare-statements';
 
 const ROOT=fileURLToPath(new URL('../../src/lib/facts/fixtures/',import.meta.url));
 const SINCE_END='2019-01-01';
-const USAGE='usage: record-fixture.ts --edgar <cik> | --edgar-revise <cik>';
+const USAGE='usage: record-fixture.ts --edgar <cik> | --edgar-revise <cik> | --tushare <ts_code> [--since-year <yyyy>]';
 const TAGS=new Set(FACT_CONCEPTS.flatMap(tagsOf));
 // The revision used by sync-us.integration.test.ts: FY2023 revenue re-disclosed by a later 10-K with a
 // different value. The base entry is selected by accn AND the exact period (a 10-K carries comparative
@@ -62,10 +70,22 @@ function reviseEdgar(cik:string){
  (tree.__recorded as Tree).revision={...REVISION};
  write(`edgar/CIK${cik10}.revised.json`,stringifyPreservingNumbers(tree,1));
 }
+async function recordTushare(tsCode:string,sinceYear:number){
+ if(!process.env.TUSHARE_TOKEN)fail('TUSHARE_TOKEN is not set (pass it with node --env-file=<file outside the repo>)');
+ if(!Number.isInteger(sinceYear)||sinceYear<1990||sinceYear>2100)fail('bad --since-year');
+ const snaps=await fetchTushareStatements(tsCode,sinceYear,budgetFor(600_000));
+ for(const s of snaps){
+  const rt=(s.meta.params as {report_type:string}).report_type;
+  const base=`tushare/${tsCode}.${s.meta.api}.rt${rt}.p${s.meta.page}`;
+  const p=join(ROOT,`${base}.json`);mkdirSync(join(p,'..'),{recursive:true});writeFileSync(p,s.bytes);console.log(`wrote ${p} (${s.bytes.byteLength} bytes, sha256 ${s.sha256.slice(0,8)})`);
+  write(`${base}.meta.json`,JSON.stringify({recorded_at:s.meta.fetched_at,sha256:s.sha256,http_status:s.meta.http_status,has_more:s.meta.has_more,params:s.meta.params,fields:s.meta.fields},null,1));
+ }
+}
 async function main(){
  const [mode,...rest]=process.argv.slice(2);
  if(mode==='--edgar'&&rest[0])return recordEdgar(rest[0]);
  if(mode==='--edgar-revise'&&rest[0])return reviseEdgar(rest[0]);
+ if(mode==='--tushare'&&rest[0]){const i=rest.indexOf('--since-year');return recordTushare(rest[0],i>=0?Number(rest[i+1]):new Date().getUTCFullYear()-10);}
  fail(USAGE);
 }
 main().catch(e=>{console.error(e instanceof Error?e.message:String(e));process.exitCode=1;});

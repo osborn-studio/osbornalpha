@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { scanJsonNumbers } from '@/lib/facts/json-numbers';
+import type { Budget } from '@/lib/facts/types';
 import { withQuoteSourceTimeout } from '@/lib/quotes/source-timeout';
 /**
  * Tushare Pro HTTP API client.
@@ -596,4 +599,38 @@ export async function fetchTushareReportRc(
     'ts_code,report_date,report_title,report_type,classify,org_name,author_name,quarter,op_rt,op_pr,tp,np,eps,pe,rd,roe,ev_ebitda,rating,max_price,min_price,imp_dg,create_time'
   );
   return rows.sort((a, b) => b.report_date.localeCompare(a.report_date));
+}
+
+// ─── Raw call for the disclosure facts adapters (plan 2 §6.3) ───
+// Keeps the response bytes (snapshot + raw_hash), request_id and has_more; numbers stay as
+// {__num:'<literal>'} (scanJsonNumbers) so the statements parser decodes value columns losslessly by
+// field name. limit/offset are passed through as params; their upstream semantics are unverified (§15).
+// API-level errors (code !== 0) are returned, not thrown: the caller classifies quota vs other.
+// Thrown messages are fixed strings: a response body never reaches an Error message.
+export interface TushareRaw { bytes: Uint8Array; sha256: string; httpStatus: number; requestId: string | null; code: number; msg: string; fields: string[]; items: unknown[][]; hasMore: boolean }
+export interface TushareRawOptions { limit?: number; offset?: number; budget?: Budget; fetch?: typeof fetch; token?: string; timeoutMs?: number }
+const rawNumber = (v: unknown): number | null => typeof v === 'number' ? v : v && typeof v === 'object' && typeof (v as { __num?: unknown }).__num === 'string' ? Number((v as { __num: string }).__num) : null;
+
+export async function tushareCallRaw(api_name: string, params: Record<string, unknown>, fields: string, opts: TushareRawOptions = {}): Promise<TushareRaw> {
+  const token = opts.token ?? process.env.TUSHARE_TOKEN;
+  if (!token) throw new TushareError(-1, 'TUSHARE_TOKEN not configured');
+  const remaining = opts.budget ? opts.budget.remainingMs() - 20_000 : Infinity;
+  const timeoutMs = Math.min(opts.timeoutMs ?? 30_000, remaining);
+  if (timeoutMs <= 0) throw new TushareError(-2, 'budget exhausted');
+  const signals = [AbortSignal.timeout(timeoutMs)];
+  if (opts.budget) signals.push(opts.budget.signal);
+  const body = JSON.stringify({ api_name, token, params: { ...params, ...(opts.limit !== undefined ? { limit: opts.limit } : {}), ...(opts.offset !== undefined ? { offset: opts.offset } : {}) }, fields });
+  const resp = await (opts.fetch ?? fetch)(TUSHARE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signal: AbortSignal.any(signals) });
+  const bytes = new Uint8Array(await resp.arrayBuffer());
+  if (!resp.ok) throw new TushareError(resp.status, `HTTP ${resp.status}`);
+  let json: { request_id?: unknown; code?: unknown; msg?: unknown; data?: { fields?: unknown; items?: unknown; has_more?: unknown } | null };
+  try { json = scanJsonNumbers(bytes) as typeof json; } catch { throw new TushareError(-3, 'malformed Tushare response'); }
+  const code = rawNumber(json.code);
+  if (code === null) throw new TushareError(-3, 'malformed Tushare response: code');
+  const data = json.data ?? null;
+  return {
+    bytes, sha256: createHash('sha256').update(bytes).digest('hex'), httpStatus: resp.status,
+    requestId: typeof json.request_id === 'string' ? json.request_id : null, code, msg: typeof json.msg === 'string' ? json.msg : '',
+    fields: Array.isArray(data?.fields) ? (data!.fields as string[]) : [], items: Array.isArray(data?.items) ? (data!.items as unknown[][]) : [], hasMore: data?.has_more === true,
+  };
 }

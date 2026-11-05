@@ -1,0 +1,3 @@
+{"request_id":"synthetic","code":0,"msg":null,"data":{"fields":["ts_code","ann_date","f_ann_date","end_date","report_type","comp_type","end_type","update_flag","total_assets","total_liab","total_hldr_eqy_exc_min_int","total_hldr_eqy_inc_min_int","money_cap","st_borr","lt_borr","bond_payable","total_share"],"items":[
+["600519.SH","20240403","20240403","20231231",1,1,4,1,272000000000,51000000000,215000000000,221000000000,69000000000,null,null,null,1256197800]
+],"has_more":false}}

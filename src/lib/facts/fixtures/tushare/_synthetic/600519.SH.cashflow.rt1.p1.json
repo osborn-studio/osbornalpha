@@ -1,0 +1,4 @@
+{"request_id":"synthetic","code":0,"msg":null,"data":{"fields":["ts_code","ann_date","f_ann_date","end_date","report_type","comp_type","end_type","update_flag","is_calc","n_cashflow_act","n_cashflow_inv_act","n_cash_flows_fnc_act","c_pay_acq_const_fiolta","c_pay_dist_dpcp_int_exp","n_incr_cash_cash_equ"],"items":[
+["600519.SH","20240403","20240403","20231231",1,1,4,1,0,66593000000,-4700000000,-57000000000,4800000000,56000000000,4800000000],
+["600519.SH","20240403","20240403","20231231",1,1,4,1,1,66593000000,-4700000000,-57000000000,4800000000,56000000000,4800000000]
+],"has_more":false}}
