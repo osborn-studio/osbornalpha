@@ -8,6 +8,7 @@ import type {FactRow} from './types';
 
 const F1='10000000-0000-4000-8000-000000000001',F2='10000000-0000-4000-8000-000000000002',F3='10000000-0000-4000-8000-000000000003';
 let n=0;
+const cmpS=(a:string,b:string)=>a<b?-1:a>b?1:0;
 const row=(filingId:string,value:string,availableDate:string,over:Partial<FactRow>={}):FactRow=>({fact_id:`20000000-0000-4000-8000-${String(++n).padStart(12,'0')}`,issuer_id:'i',market:'US',filing_id:filingId,run_id:'r',concept:'revenue',source_concept:'Revenues',statement:'IS',period_start:'2022-10-01',period_end:'2023-09-30',duration:'12M',value,value_text:value,unit:'USD',consolidation:'consolidated',available_date:availableDate,mapping_gen:1,mapping_version:'facts-map/1',status:'ok',raw_hash:'h',created_at:`2024-01-01T00:00:00.${String(n).padStart(3,'0')}Z`,...over});
 const filings=new Map([[F1,1],[F2,1],[F3,1]]);
 // AAPL FY2023 revenue: 10-K filed 2023-11-03, repeated unchanged in the FY2024 10-K filed 2024-11-01.
@@ -54,7 +55,7 @@ describe('sequencesOf',()=>{
   await db.tables.insert('dq_quarantine',{id:itemId,dataset:'facts.us',table_name:'financial_facts',natural_key:`${iss}:US:IS:x`,reason_code:'identity_gp',status:'open',payload:{key:{issuer_id:iss,market:'US'},fact_ids:[],run_id:run},detail:{},batch_id:b,resolved_by:null,resolved_at:null,created_at:'2026-01-01T00:00:00.000Z'});
   await db.quarantineFacts(run,[qd.fact_id],itemId);await db.publishRun(run,[f.filing_id]);
   const gens=new Map(db.filings().map(g=>[g.filing_id,g.mapping_gen]));
-  const shape=(rs:FactRow[])=>rs.map(r=>[r.fact_id,r.status,r.disclosure_seq??null,r.is_current,r.is_revision]).sort((a,b)=>String(a[0]).localeCompare(String(b[0])));
+  const shape=(rs:FactRow[])=>rs.map(r=>[r.fact_id,r.status,r.disclosure_seq??null,r.is_current,r.is_revision]).sort((a,b)=>cmpS(String(a[0]),String(b[0])));
   for(const history of [true,false]){
    const fromDb=(await db.readFacts(iss,'US',{concepts:['revenue'],asOf:'2030-01-01',history,includeNonOk:true})).rows;
    const pure=sequencesOf(db.facts(),{asOf:'2030-01-01',filings:gens,history,includeNonOk:true,concepts:['revenue']});
@@ -83,5 +84,43 @@ describe('sequencesOf',()=>{
   const early=row(F2,'1','2023-11-03',{created_at:'2024-01-01T01:00:00+01:00',fact_id:'20000000-0000-4000-8000-0000000000f2'});
   const late=row(F1,'2','2023-11-03',{created_at:'2024-01-01T00:30:00.000Z',fact_id:'20000000-0000-4000-8000-0000000000f1'});
   expect(sequencesOf([late,early],{asOf:'2030-01-01',filings,history:true}).map(r=>[r.fact_id,r.disclosure_seq])).toEqual([[early.fact_id,1],[late.fact_id,2]]);
+ });
+ it('scopes sequences per issuer and market',()=>{
+  const a=row(F1,'1','2023-11-03',{issuer_id:'A'});const b=row(F1,'2','2024-11-03',{issuer_id:'B'});const c=row(F1,'3','2024-11-04',{issuer_id:'A',market:'CN'});
+  const out=sequencesOf([a,b,c],{asOf:'2030-01-01',filings,history:true});
+  expect(out.map(r=>[r.issuer_id,r.market,r.disclosure_seq,r.is_current,r.is_revision])).toEqual([['A','CN',1,true,false],['A','US',1,true,false],['B','US',1,true,false]]);
+ });
+ it('compares equal instants as equal so fact_id breaks the tie; unparseable created_at sorts last',()=>{
+  const x=row(F1,'1','2023-11-03',{created_at:'2024-02-01T01:00:00+01:00',fact_id:'20000000-0000-4000-8000-0000000000b2'});
+  const y=row(F2,'2','2023-11-03',{created_at:'2024-02-01T00:00:00Z',fact_id:'20000000-0000-4000-8000-0000000000a1'});
+  expect(sequencesOf([x,y],{asOf:'2030-01-01',filings,history:true}).map(r=>r.fact_id)).toEqual([y.fact_id,x.fact_id]);
+  const bad=row(F3,'3','2023-11-03',{created_at:'garbage',fact_id:'20000000-0000-4000-8000-0000000000a0'});
+  expect(sequencesOf([bad,x,y],{asOf:'2030-01-01',filings,history:true}).map(r=>r.fact_id)).toEqual([y.fact_id,x.fact_id,bad.fact_id]);
+ });
+ it('separates units and consolidations, keeps null period_start rows in one sequence, flags A to B to A as revisions',()=>{
+  const usd=row(F1,'1','2023-11-03');const eur=row(F1,'1','2023-11-03',{unit:'EUR'});const other=row(F1,'1','2023-11-03',{consolidation:'parent'});
+  expect(sequencesOf([usd,eur,other],{asOf:'2030-01-01',filings,history:true}).map(r=>r.disclosure_seq)).toEqual([1,1,1]);
+  const c1=row(F1,'9','2023-11-03',{concept:'cash',statement:'BS',period_start:null,duration:'INSTANT'});
+  const c2=row(F2,'9','2024-11-03',{concept:'cash',statement:'BS',period_start:null,duration:'INSTANT'});
+  expect(sequencesOf([c1,c2],{asOf:'2030-01-01',filings,history:true}).map(r=>r.disclosure_seq)).toEqual([1,2]);
+  const a1=row(F1,'1','2023-11-03'),b=row(F2,'2','2024-11-03'),a2=row(F3,'1','2025-11-03');
+  expect(sequencesOf([a1,b,a2],{asOf:'2030-01-01',filings,history:true}).map(r=>r.is_revision)).toEqual([false,true,true]);
+ });
+ it('rejects malformed asOf/from/to',()=>{
+  expect(()=>sequencesOf([],{asOf:'2024-6-30',filings})).toThrow(RangeError);
+  expect(()=>sequencesOf([],{asOf:'2024-06-30',filings,from:'x'})).toThrow(RangeError);
+  expect(()=>sequencesOf([],{asOf:'2024-06-30',filings,to:'2024-13-45'})).toThrow(RangeError);
+ });
+ it('agrees with memoryFactsDb.readFacts over several keys (revisions, null period_start, two concepts)',async()=>{
+  const db=memoryFactsDb();const iss=randomUUID();const b=randomUUID();
+  await db.reconcileScope('US',[{issuer_id:iss,reasons:[],priority:1,fetch_key:'k'}]);await db.claimLease(iss,'US',b,600);
+  const disclose=async(available:string,vals:[string,string][])=>{const run=await db.beginRun(iss,'US',b,1);const f=filingInsert(iss,{availableDate:available});await db.stageFilings(run,[f]);await db.stageFacts(run,vals.map(([concept,value])=>factInsert(iss,f,{concept,value,...(concept==='cash'?{statement:'BS',period_start:null,duration:'INSTANT'}:{})} as never)));await db.publishRun(run,[f.filing_id]);};
+  await disclose('2024-02-01',[['revenue','100'],['cash','5']]);await disclose('2024-05-01',[['revenue','110'],['cash','5']]);await disclose('2024-08-01',[['revenue','100'],['cash','6']]);
+  const gens=new Map(db.filings().map(g=>[g.filing_id,g.mapping_gen]));
+  const shape=(rs:FactRow[])=>rs.map(r=>[r.fact_id,r.disclosure_seq??null,r.is_current,r.is_revision]).sort((x,y)=>cmpS(String(x[0]),String(y[0])));
+  for(const history of [true,false]){
+   const fromDb=(await db.readFacts(iss,'US',{concepts:['revenue','cash'],asOf:'2030-01-01',history})).rows;
+   expect(shape(sequencesOf(db.facts(),{asOf:'2030-01-01',filings:gens,history,concepts:['revenue','cash']}))).toEqual(shape(fromDb));
+  }
  });
 });
