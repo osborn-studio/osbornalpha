@@ -279,6 +279,20 @@ describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()
   expect((await fails(resolve(randomUUID(),[]))).message).toBe('item_not_open');
  });
 
+ it('resolve_facts_quarantine refuses chosen rows with differing values and non-facts items, without side effects',async()=>{
+  const {iss,b,r}=await published();                                         // r = revenue 100
+  const runB=await begin(iss,b);const fb=await filing(runB);const {ids:[c]}=await stage(runB,[{filing_id:fb,value:'200'}]);
+  const itemId=await conflictItem(iss,b,runB,[c,r]);await quarantine(runB,[c],itemId);await publish(runB,[fb]);
+  const before=await rev(iss);
+  expect(await fails(resolve(itemId,[r,c]))).toMatchObject({message:'invalid_chosen',code:'22023'});
+  expect((await item(itemId)).status).toBe('open');
+  expect(await status(r)).toBe('quarantined');expect(await status(c)).toBe('quarantined');expect(await rev(iss)).toBe(before);
+  const foreign=randomUUID();
+  await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload) values($1,'facts.us','other_table',$2,'identity_gp',$3,$4::jsonb)`,[foreign,`${iss}:other:${foreign}`,b,JSON.stringify({key:{},fact_ids:[c],run_id:runB})]);
+  expect(await fails(resolve(foreign,[]))).toMatchObject({message:'item_not_open',code:'P0001'});
+  expect((await item(foreign)).status).toBe('open');expect(await status(c)).toBe('quarantined');
+ });
+
  it('promote_quarantined eligibility: staged runs, open items and unchosen verdicts block; ok rows are skipped',async()=>{
   const {iss,b,f,r}=await published();
   const run=await begin(iss,b);

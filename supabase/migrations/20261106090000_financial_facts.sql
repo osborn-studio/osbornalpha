@@ -541,7 +541,7 @@ declare q public.dq_quarantine; v_ids uuid[]; v_issuer uuid; v_market text; v_ch
 begin
   if p_resolved_by is null then raise exception 'invalid_resolver' using errcode = '22023'; end if;
   select * into q from public.dq_quarantine where id = p_item;
-  if not found or q.status <> 'open' then raise exception 'item_not_open' using errcode = 'P0001'; end if;
+  if not found or q.status <> 'open' or q.table_name <> 'financial_facts' then raise exception 'item_not_open' using errcode = 'P0001'; end if;
   -- 1. provisional member read, only to locate the scope row to lock
   v_ids := public.fact_item_members(q.payload);
   select f.issuer_id, f.market into v_issuer, v_market from public.financial_facts f where f.fact_id = any(v_ids) limit 1;
@@ -566,6 +566,8 @@ begin
   if q.reason_code = 'same_day_conflict' then
     v_chosen := coalesce(p_chosen, '{}'::uuid[]);
     if not (v_chosen <@ v_ids) then raise exception 'invalid_chosen' using errcode = '22023'; end if;
+    -- spec 7.3: the chosen rows (those still existing) must all carry the same numeric value
+    if (select count(distinct f.value) from public.financial_facts f where f.fact_id = any(v_chosen)) > 1 then raise exception 'invalid_chosen' using errcode = '22023'; end if;
   else
     v_chosen := v_ids;
   end if;
