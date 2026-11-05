@@ -170,7 +170,7 @@ export async function scopeRowFor(tables:TableClient,market:Market,issuerId:stri
 
 /**
  * Safety margin subtracted from the client clock for the default snapshotAt. The snapshot is compared
- * with the database's now() (scope_changed_at); if this host's clock runs ahead by up to the margin, a
+ * with the database's now() (scope_confirmed_at); if this host's clock runs ahead by up to the margin, a
  * change another run made just after our sources were read would still look "older" than the snapshot
  * and be retired by our stale view. Backdating the snapshot makes skew fail safe: it can only DELAY a
  * retirement to the next reconcile (rows changed within the last margin are never retired), never

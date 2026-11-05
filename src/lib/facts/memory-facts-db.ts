@@ -52,7 +52,7 @@ const unknown=(message:string)=>new FactsDbError('unknown',message);
 
 export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantine:['id']})):MemoryFactsDb{
  const scope=new Map<string,ScopeRow>();
- const scopeChanged=new Map<string,string>();   // = fact_sync_scope.scope_changed_at: set only by reconcile
+ const scopeConfirmed=new Map<string,string>();   // = fact_sync_scope.scope_confirmed_at: set only by reconcile (change or active confirmation)
  const runs=new Map<string,MemoryRun>();
  const filings=new Map<string,FilingRow>();
  const facts=new Map<string,FactRow>();
@@ -278,12 +278,13 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
    let n=0;const snap=snapshotAt===undefined?null:new Date(snapshotAt).toISOString();
    for(const row of input){
     const k=sk(row.issuer_id,market);const s=scope.get(k);
-    if(!s){scopeChanged.set(k,now());scope.set(k,{issuer_id:row.issuer_id,market,reasons:[...row.reasons],priority:row.priority,fetch_key:row.fetch_key,next_due_at:now(),lease_until:null,lease_batch_id:null,state_rev:0,last_attempt_at:null,last_success_at:null,last_batch_id:null,last_status:null});n++;continue;}
+    if(!s){scopeConfirmed.set(k,now());scope.set(k,{issuer_id:row.issuer_id,market,reasons:[...row.reasons],priority:row.priority,fetch_key:row.fetch_key,next_due_at:now(),lease_until:null,lease_batch_id:null,state_rev:0,last_attempt_at:null,last_success_at:null,last_batch_id:null,last_status:null});n++;continue;}
     if(JSON.stringify(s.reasons)!==JSON.stringify(row.reasons)||s.priority!==row.priority||s.fetch_key!==row.fetch_key){
      // A retirement of a still-active row is refused when a newer reconcile changed it after the sources were read.
-     if(snap!==null&&row.priority===0&&s.priority>0&&(scopeChanged.get(k)??'')>snap)continue;
-     s.reasons=[...row.reasons];s.priority=row.priority;s.fetch_key=row.fetch_key;scopeChanged.set(k,now());n++;
+     if(snap!==null&&row.priority===0&&s.priority>0&&(scopeConfirmed.get(k)??'')>snap)continue;
+     s.reasons=[...row.reasons];s.priority=row.priority;s.fetch_key=row.fetch_key;scopeConfirmed.set(k,now());n++;
     }
+    else if(row.priority>0&&s.priority>0)scopeConfirmed.set(k,now());   // unchanged active row: confirmed, not counted
    }
    return n;
   },

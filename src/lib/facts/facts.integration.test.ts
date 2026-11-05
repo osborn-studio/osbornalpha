@@ -462,6 +462,17 @@ describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()
   expect(await call(10,'2000-01-01T00:00:00Z')).toBe(1);  // activation applies whatever the snapshot
  });
 
+ it('reconcile_fact_sync_scope: an unchanged active upsert by a newer reconcile also protects the row from an older retirement',async()=>{
+  const iss=await issuer();
+  const call=(p:number,snap:string|null)=>one(`select public.reconcile_fact_sync_scope('US',$1::jsonb,$2::timestamptz) v`,[JSON.stringify([{issuer_id:iss,reasons:['r'],priority:p,fetch_key:'0000000004'}]),snap]);
+  expect(await call(10,null)).toBe(1);
+  const snap=(await q(`select now()::text t`))[0].t as string;   // run A reads its sources here
+  await q(`select pg_sleep(0.05)`);
+  expect(await call(10,null)).toBe(0);                          // run B confirms the row unchanged (not counted)
+  expect(await call(0,snap)).toBe(0);                           // A's stale retirement is refused
+  expect((await q(`select priority from public.fact_sync_scope where issuer_id=$1`,[iss]))[0].priority).toBe(10);
+ });
+
  it('roles: no role writes the fact tables directly; service_role updates link columns only; anon and authenticated cannot call write functions',async()=>{
   const {iss,f,r,r0}=await published();
   const c=await admin.connect();

@@ -287,6 +287,17 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect((await db.scopeRows('US',[iss]))[0].priority).toBe(10);
   });
 
+  it('reconcileScope snapshotAt: an unchanged active confirmation by a newer reconcile also blocks an older retirement (and is not counted as a change)',async()=>{
+   const iss=await h.issuer();
+   const row=(priority:number)=>[{issuer_id:iss,reasons:priority>0?['r']:[],priority,fetch_key:'0000000008'}];
+   expect(await db.reconcileScope('US',row(10))).toBe(1);
+   const snap=new Date().toISOString();                                         // run A read its sources here
+   await new Promise(r=>setTimeout(r,40));
+   expect(await db.reconcileScope('US',row(10))).toBe(0);                       // run B confirms, unchanged
+   expect(await db.reconcileScope('US',row(0),snap)).toBe(0);                   // A's retirement is refused
+   expect((await db.scopeRows('US',[iss]))[0].priority).toBe(10);
+  });
+
   it("promotion blocks on an OPEN same_day_conflict for the row's (K, date) even when the row is not in that item's member list (round-1 #3)",async()=>{
    const {iss,b,r}=await published();                                                     // r: revenue 100 on 2024-02-01, ok
    const runB=await db.beginRun(iss,'US',b,1);const fb=filingInsert(iss);await db.stageFilings(runB,[fb]);
