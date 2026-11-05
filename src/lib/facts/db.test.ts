@@ -110,7 +110,7 @@ describe('supabaseFactsDb',()=>{
   const {db}=stub(()=>({data:null}),(table,ops)=>{
    pages.push(ops);
    const [from,to]=ops.find(o=>o[0]==='range')![1] as [number,number];
-   return Array.from({length:Math.max(0,Math.min(totals[table],to+1)-from)},(_,i)=>table==='financial_metrics'?metric(from+i):table==='filings'?{filing_id:`f${from+i}`,value_text:'1'}:table==='fact_sync_scope'?scope(from+i):{fact_id:`a${from+i}`,value_text:'1'});
+   return Array.from({length:Math.max(0,Math.min(totals[table],to+1)-from)},(_,i)=>table==='financial_metrics'?metric(from+i):table==='filings'?{filing_id:`f${from+i}`,value_text:'1',created_at:'2026-01-01T00:00:00+00:00'}:table==='fact_sync_scope'?scope(from+i):{fact_id:`a${from+i}`,value_text:'1',created_at:'2026-01-01T00:00:00+00:00'});
   },t=>totals[t]);
   const ranges=(from:number)=>pages.slice(from).map(ops=>ops.find(o=>o[0]==='range')![1]);
   const metrics=await db.metricsOfIssuer('iss','US','v');
@@ -132,6 +132,15 @@ describe('supabaseFactsDb',()=>{
   expect(await db.factsByIds(['a0','a1'])).toHaveLength(2);
   expect(pages[n]).toContainEqual(['in',['fact_id',['a0','a1']]]);
   expect(await db.scopeRows('US',[])).toEqual([]);expect(await db.factsByIds([])).toEqual([]);
+ });
+ it('table reads normalise PostgREST timestamps (offset form, microseconds) to toISOString() form',async()=>{
+  const {db}=stub(()=>({data:null}),table=>table==='filings'?[{filing_id:'f',created_at:'2030-01-01T00:00:00+00:00'}]
+   :table==='financial_facts'?[{fact_id:'x',value_text:'1',created_at:'2030-01-01T00:00:00.123456+00:00'}]
+   :[{issuer_id:'i',market:'US',reasons:[],priority:1,fetch_key:'k',next_due_at:'2030-01-01T00:00:00+00:00',lease_until:'2030-01-01T01:02:03.5+00:00',lease_batch_id:null,state_rev:'0',last_attempt_at:'2030-01-01T00:00:00.000001+00:00',last_success_at:null,last_batch_id:null,last_status:null}]);
+  expect((await db.filingsOfIssuer('i','US',{}))[0].created_at).toBe('2030-01-01T00:00:00.000Z');
+  expect((await db.factsByIds(['x']))[0].created_at).toBe('2030-01-01T00:00:00.123Z');
+  expect((await db.scopeRows('US',['i']))[0]).toMatchObject({next_due_at:'2030-01-01T00:00:00.000Z',lease_until:'2030-01-01T01:02:03.500Z',last_attempt_at:'2030-01-01T00:00:00.000Z',last_success_at:null});
+  expect((await db.scopeDue('US','2031-01-01T00:00:00.000Z',5))[0].next_due_at).toBe('2030-01-01T00:00:00.000Z');
  });
  it('metrics read: a replacement between pages (mixed based_on_rev or a short count) retries the whole read, persistent instability fails as metrics_unstable',async()=>{
   const row=(i:number,rev:number)=>({issuer_id:'iss',market:'US',metric:`m${String(i).padStart(4,'0')}`,period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:1,value_text:'1',unit:'u',input_unit:'USD',basis:'us_standard',formula_version:'v',inputs:[],based_on_rev:rev,as_of:'2024-01-01'});

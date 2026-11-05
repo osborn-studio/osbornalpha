@@ -38,6 +38,31 @@ async function replayMigration(pool:Pool,sql:string,attempts=3):Promise<void>{
  }
 }
 
+/** Runs body inside one transaction on its own connection (pid known); rolls back only if still open, and discards the connection if even that fails. */
+interface Tx{c:PoolClient;pid:number;commit():Promise<void>}
+async function inTx(pool:Pool,body:(tx:Tx)=>Promise<void>):Promise<void>{
+ const c=await pool.connect();let open=false;let broken:Error|undefined;
+ try{
+  await c.query('begin');open=true;
+  const pid=Number((await c.query('select pg_backend_pid() p')).rows[0].p);
+  await body({c,pid,commit:async()=>{await c.query('commit');open=false;}});
+ }finally{
+  if(open)await c.query('rollback').catch(e=>{broken=e as Error;});
+  c.release(broken);
+ }
+}
+/** Deterministic "is blocked": polls (20 ms, <= 3 s) until some backend waits on `pid`, then asserts p is still pending. */
+async function stillBlockedBehind(pool:Pool,pid:number,p:Promise<unknown>):Promise<void>{
+ let settled=false;p.then(()=>{settled=true;},()=>{settled=true;});
+ for(const deadline=Date.now()+3000;;){
+  const n=Number((await pool.query(`select count(*)::int n from pg_stat_activity where $1 = any(pg_blocking_pids(pid))`,[pid])).rows[0].n);
+  if(n>=1)break;
+  if(settled||Date.now()>deadline)throw new Error(`no backend blocked behind pid ${pid} (settled=${settled})`);
+  await new Promise(r=>setTimeout(r,20));
+ }
+ expect(settled).toBe(false);
+}
+
 type PgErr={message:string;code?:string};
 /** Resolves with the rejection (message + SQLSTATE) so tests can assert both. */
 const fails=(p:Promise<unknown>)=>p.then(()=>{throw new Error('expected rejection');},e=>e as PgErr);
@@ -318,17 +343,15 @@ describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()
   const {iss,b,r}=await published();
   const runB=await begin(iss,b);const fb=await filing(runB);const {ids:[c]}=await stage(runB,[{filing_id:fb,value:'200'}]);
   const itemId=await conflictItem(iss,b,runB,[c,r]);await quarantine(runB,[c],itemId);
-  const c1=await admin.connect();
-  try{
-   await c1.query('begin');await c1.query(`select public.publish_sync_run($1,$2::uuid[])`,[runB,[fb]]);
+  await inTx(admin,async({c:c1,pid,commit})=>{
+   await c1.query(`select public.publish_sync_run($1,$2::uuid[])`,[runB,[fb]]);
    const before=await read(iss,{concepts:['revenue']});
    expect(before.state_rev).toBe(1);expect(before.rows.map(x=>x.fact_id)).toContain(r);      // uncommitted publish invisible, read not blocked
-   let settled=false;
-   const pending=resolve(itemId,[r]).then(v=>{settled=true;return v;});
-   await new Promise(res=>setTimeout(res,300));expect(settled).toBe(false);                     // waits for the scope row lock
-   await c1.query('commit');
+   const pending=resolve(itemId,[r]);
+   await stillBlockedBehind(admin,pid,pending);                                                 // waits for the scope row lock
+   await commit();
    expect(await pending).toEqual({promoted:1,skipped:0});                                       // saw the published run, not run_pending
-  }finally{await c1.query('rollback').catch(()=>{});c1.release();}
+  });
   expect(await status(r)).toBe('ok');expect(await status(c)).toBe('quarantined');expect(await rev(iss)).toBe(3);
  });
 
@@ -339,15 +362,13 @@ describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()
   // Members [c, r] are both published: resolvable. Run C now stages c2 and merges it into the item
   // inside an open transaction (quarantine_facts holds the scope row lock through fact_run_lock).
   const runC=await begin(iss,b);const fc=await filing(runC);const {ids:[c2]}=await stage(runC,[{filing_id:fc,value:'300'}]);
-  const c1=await admin.connect();
-  try{
-   await c1.query('begin');await c1.query(`select public.quarantine_facts($1,$2::uuid[],$3)`,[runC,[c2],itemId]);
-   let settled=false;
-   const pending=fails(resolve(itemId,[r])).then(v=>{settled=true;return v;});       // provisional read saw [c, r]; now blocked on the scope lock
-   await new Promise(res=>setTimeout(res,300));expect(settled).toBe(false);
-   await c1.query('commit');
+  await inTx(admin,async({c:c1,pid,commit})=>{
+   await c1.query(`select public.quarantine_facts($1,$2::uuid[],$3)`,[runC,[c2],itemId]);
+   const pending=fails(resolve(itemId,[r]));                                          // provisional read saw [c, r]; now blocked on the scope lock
+   await stillBlockedBehind(admin,pid,pending);
+   await commit();
    expect(await pending).toMatchObject({message:'run_pending',code:'P0001'});          // rebuilt members include c2, whose run C is staged
-  }finally{await c1.query('rollback').catch(()=>{});c1.release();}
+  });
   expect(await item(itemId)).toMatchObject({status:'open',fact_ids:[c,r,c2]});
   expect(await status(r)).toBe('quarantined');                                        // nothing was promoted on the stale member set
   await publish(runC,[fc]);
@@ -464,7 +485,7 @@ describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()
 interface PgHarness extends ContractHarness{pool:Pool;close():Promise<void>}
 async function pgHarness():Promise<PgHarness>{
  const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
- const pool=new Pool({connectionString:state.adminUrl});
+ const pool=new Pool({connectionString:state.adminUrl,statement_timeout:4000});   // a regression that blocks fails cleanly instead of hanging afterAll
  return {
   pool,db:pgFactsDb(pool),tables:pgTableClient(pool),
   issuer:async()=>{const id=randomUUID();await pool.query(`insert into public.issuers(issuer_id,canonical_name_en) values($1,'ZZ Facts Contract')`,[id]);return id;},
@@ -525,18 +546,15 @@ describe.skipIf(!enabled)('pgFactsDb on real PostgreSQL',()=>{
    const run=await db.beginRun(iss,'US',b,1);const f=filingInsert(iss);await db.stageFilings(run,[f]);
    const a=factInsert(iss,f);const t=factInsert(iss,f,{concept:'total_assets',statement:'BS',period_start:null,duration:'INSTANT'});
    expect(await db.stageFacts(run,[a,t])).toBe(2);
-   const c1=await h.pool.connect();
-   try{
-    await c1.query('begin');
+   await inTx(h.pool,async({c:c1,pid,commit})=>{
     await c1.query(`select public.publish_sync_run($1,$2::uuid[])`,[run,[f.filing_id]]);
     const during=await db.readFacts(iss,'US',{concepts:['revenue','total_assets'],asOf:'2030-01-01',history:true,includeNonOk:true});
     expect(during).toEqual({stateRev:0,rows:[],truncated:false});                        // not blocked, nothing visible
-    let settled=false;
-    const next=db.beginRun(iss,'US',b,1).then(id=>{settled=true;return id;});
-    await new Promise(res=>setTimeout(res,300));expect(settled).toBe(false);              // waits for the scope lock
-    await c1.query('commit');
+    const next=db.beginRun(iss,'US',b,1);
+    await stillBlockedBehind(h.pool,pid,next);                                              // waits for the scope lock
+    await commit();
     const run2=await next;expect(run2).not.toBe(run);
-   }finally{await c1.query('rollback').catch(()=>{});c1.release();}
+   });
    const after=await db.readFacts(iss,'US',{concepts:['revenue','total_assets'],asOf:'2030-01-01',history:true});
    expect(after.stateRev).toBe(1);expect(after.rows.map(y=>y.fact_id).sort()).toEqual([a.fact_id,t.fact_id].sort());
    expect((await db.factsByIds([a.fact_id])).map(y=>y.status)).toEqual(['ok']);         // run stayed published; beginRun abandoned nothing of it
@@ -551,33 +569,29 @@ describe.skipIf(!enabled)('pgFactsDb on real PostgreSQL',()=>{
    expect(await db.stageFacts(run,[a,t])).toBe(2);
    return {iss,b,run,f,a,t,item:await opened(iss,b,run,[])};
   };
-  /** Waits 300 ms and asserts p is still pending (blocked on a lock). */
-  const stillPending=async(p:Promise<unknown>)=>{let settled=false;p.then(()=>{settled=true;},()=>{settled=true;});await new Promise(res=>setTimeout(res,300));expect(settled).toBe(false);};
 
   it('quarantine_facts waits behind an in-flight publish on the same scope, then fails run_published; nothing is merged, rows stay ok',async()=>{
    const {db}=h;const {run,f,a,t,item}=await stagedRun();
-   const c1=await h.pool.connect();
-   try{
-    await c1.query('begin');
+   await inTx(h.pool,async({c:c1,pid,commit})=>{
     await c1.query(`select public.publish_sync_run($1,$2::uuid[])`,[run,[f.filing_id]]);
-    const q=db.quarantineFacts(run,[t.fact_id],item);q.catch(()=>{});await stillPending(q);
-    await c1.query('commit');
+    const q=db.quarantineFacts(run,[t.fact_id],item);q.catch(()=>{});
+    await stillBlockedBehind(h.pool,pid,q);
+    await commit();
     await expect(q).rejects.toMatchObject({name:'FactsDbError',code:'run_published'});
-   }finally{await c1.query('rollback').catch(()=>{});c1.release();}
+   });
    expect(await itemIds(item)).toEqual([]);
    expect(await statusOf(a.fact_id)).toBe('ok');expect(await statusOf(t.fact_id)).toBe('ok');
   });
 
   it('publish waits behind an in-flight quarantine_facts and sees the merge: the member stays quarantined, the item lists it, the rest becomes ok',async()=>{
    const {db}=h;const {run,f,a,t,item}=await stagedRun();
-   const c1=await h.pool.connect();
-   try{
-    await c1.query('begin');
+   await inTx(h.pool,async({c:c1,pid,commit})=>{
     expect((await c1.query(`select public.quarantine_facts($1,$2::uuid[],$3) v`,[run,[t.fact_id],item])).rows[0].v).toBe(1);
-    const p=db.publishRun(run,[f.filing_id]);p.catch(()=>{});await stillPending(p);
-    await c1.query('commit');
+    const p=db.publishRun(run,[f.filing_id]);p.catch(()=>{});
+    await stillBlockedBehind(h.pool,pid,p);
+    await commit();
     expect(await p).toBe(1);
-   }finally{await c1.query('rollback').catch(()=>{});c1.release();}
+   });
    expect(await itemIds(item)).toEqual([t.fact_id]);
    expect(await statusOf(a.fact_id)).toBe('ok');expect(await statusOf(t.fact_id)).toBe('quarantined');
   });
@@ -586,18 +600,21 @@ describe.skipIf(!enabled)('pgFactsDb on real PostgreSQL',()=>{
    const {db}=h;
    const iss=await h.issuer();const bA=await h.batch();const bB=await h.batch();
    await db.reconcileScope('US',[{issuer_id:iss,reasons:['t'],priority:1,fetch_key:'k'}]);
-   expect(await db.claimLease(iss,'US',bA,1)).toBe(true);                               // 1 s lease
+   expect(await db.claimLease(iss,'US',bA,3)).toBe(true);                               // 3 s lease
    const run=await db.beginRun(iss,'US',bA,1);const f=filingInsert(iss);await db.stageFilings(run,[f]);
    const x=factInsert(iss,f),y=factInsert(iss,f,{concept:'net_income',value:'5'});
-   const c1=await h.pool.connect();
-   try{
-    await c1.query('begin');
+   await inTx(h.pool,async({c:c1,pid,commit})=>{
     await c1.query(`select public.stage_facts($1,$2::jsonb)`,[run,JSON.stringify([x])]);   // holds the scope lock, lease still valid at its start
-    await new Promise(res=>setTimeout(res,1300));                                          // lease expires while the write is in flight
-    const claim=db.claimLease(iss,'US',bB,600);claim.catch(()=>{});await stillPending(claim);
-    await c1.query('commit');
+    for(const deadline=Date.now()+6000;;){                                                 // the lease expires while the write is in flight
+     if((await h.pool.query(`select lease_until <= clock_timestamp() as expired from public.fact_sync_scope where issuer_id=$1 and market='US'`,[iss])).rows[0].expired)break;
+     if(Date.now()>deadline)throw new Error('lease never expired');
+     await new Promise(res=>setTimeout(res,50));
+    }
+    const claim=db.claimLease(iss,'US',bB,600);claim.catch(()=>{});
+    await stillBlockedBehind(h.pool,pid,claim);
+    await commit();
     expect(await claim).toBe(true);
-   }finally{await c1.query('rollback').catch(()=>{});c1.release();}
+   });
    await expect(db.stageFacts(run,[y])).rejects.toMatchObject({code:'lease_lost'});
    await expect(db.publishRun(run,[f.filing_id])).rejects.toMatchObject({name:'FactsDbError',code:'lease_lost'});
    expect(await statusOf(x.fact_id)).toBe('staged');expect(await statusOf(y.fact_id)).toBeUndefined();
@@ -605,7 +622,7 @@ describe.skipIf(!enabled)('pgFactsDb on real PostgreSQL',()=>{
    expect(await db.factsByIds([x.fact_id])).toEqual([]);
   });
 
-  it('raw table reads return timestamps as ISO strings like PostgREST',async()=>{
+  it('raw table reads return timestamps in toISOString() form, the same normalisation the Supabase adapter applies to PostgREST values',async()=>{
    const {db}=h;const {iss,b,run,f,a}=await stagedRun();
    await db.publishRun(run,[f.filing_id]);
    const isoRe=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;

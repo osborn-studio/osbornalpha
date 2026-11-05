@@ -48,12 +48,17 @@ export function rowFromEnvelope(r:Record<string,unknown>):FactRow{
 export function resultFromEnvelope(env:ReadFactsEnvelope):ReadFactsResult{
  return {stateRev:Number(env.state_rev),rows:(env.rows??[]).map(rowFromEnvelope),truncated:env.truncated===true};
 }
-/** A financial_facts table row (PostgREST or pg) → FactRow; value comes from value_text, never from the numeric. */
-export function factRowFromTable(r:Record<string,unknown>):FactRow{return {...(r as unknown as FactRow),value:String(r.value_text)};}
+/** Timestamps arrive as '2030-01-01T00:00:00+00:00' / microseconds (PostgREST) or '2030-01-01 00:00:00+00' (pg text): every adapter returns toISOString() form. */
+export const isoTs=(v:unknown):string=>new Date(String(v)).toISOString();
+const isoOrNull=(v:unknown):string|null=>v===null||v===undefined?null:isoTs(v);
+/** A financial_facts table row (PostgREST or pg) → FactRow; value comes from value_text, never from the numeric; created_at is ISO. */
+export function factRowFromTable(r:Record<string,unknown>):FactRow{return {...(r as unknown as FactRow),value:String(r.value_text),created_at:isoTs(r.created_at)};}
+/** A filings table row (PostgREST or pg) → FilingRow; created_at is ISO. */
+export function filingFromTable(r:Record<string,unknown>):FilingRow{return {...(r as unknown as FilingRow),created_at:isoTs(r.created_at)};}
 export function scopeFromTable(r:Record<string,unknown>):ScopeRow{
  return {issuer_id:String(r.issuer_id),market:r.market as Market,reasons:Array.isArray(r.reasons)?r.reasons as string[]:[],priority:Number(r.priority),fetch_key:String(r.fetch_key),
-  next_due_at:String(r.next_due_at),lease_until:r.lease_until===null?null:String(r.lease_until),lease_batch_id:r.lease_batch_id===null?null:String(r.lease_batch_id),state_rev:Number(r.state_rev),
-  last_attempt_at:r.last_attempt_at===null?null:String(r.last_attempt_at),last_success_at:r.last_success_at===null?null:String(r.last_success_at),last_batch_id:r.last_batch_id===null?null:String(r.last_batch_id),last_status:(r.last_status??null) as ScopeRow['last_status']};
+  next_due_at:isoTs(r.next_due_at),lease_until:isoOrNull(r.lease_until),lease_batch_id:r.lease_batch_id===null?null:String(r.lease_batch_id),state_rev:Number(r.state_rev),
+  last_attempt_at:isoOrNull(r.last_attempt_at),last_success_at:isoOrNull(r.last_success_at),last_batch_id:r.last_batch_id===null?null:String(r.last_batch_id),last_status:(r.last_status??null) as ScopeRow['last_status']};
 }
 export function metricFromTable(r:Record<string,unknown>):MetricRow{
  return {issuer_id:String(r.issuer_id),market:r.market as Market,metric:String(r.metric),period_start:String(r.period_start),period_end:String(r.period_end),duration:r.duration as MetricRow['duration'],
@@ -142,13 +147,13 @@ export function supabaseFactsDb(client:SupabaseClient):FactsDb{
    return (await pageAll<{id:string;natural_key:string;payload:Record<string,unknown>}>(()=>c.from('dq_quarantine').select('id,natural_key,payload').eq('table_name','financial_facts').eq('reason_code','same_day_conflict').eq('status','open').like('natural_key',`${conflictPrefix(issuer,market)}%`).order('created_at').order('id'))).map(conflictFromItem);
   },
   async filingsOfIssuer(issuer,market,opts){
-   return pageAll<FilingRow>(()=>{
+   return (await pageAll<Record<string,unknown>>(()=>{
     let q=c.from('filings').select('*').eq('issuer_id',issuer).eq('market',market);
     if(opts.from!==undefined)q=q.gte('available_date',opts.from);
     if(opts.to!==undefined)q=q.lte('available_date',opts.to);
     if(opts.unlinkedOnly)q=q.is('document_ref',null);
     return q.order('available_date',{ascending:false}).order('filing_id');
-   },opts.limit);
+   },opts.limit)).map(filingFromTable);
   },
   async updateFilingLink(filingId,patch){const {error}=await c.from('filings').update(linkPatch(patch)).eq('filing_id',filingId);if(error)throw toFactsDbError(error);},
   async reconcileScope(market,input){return Number(await call<unknown>('reconcile_fact_sync_scope',{p_market:market,p_rows:input}));},
