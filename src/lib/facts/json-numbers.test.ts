@@ -59,12 +59,19 @@ describe('canonicalDecimal',()=>{
  it('rejects over-long literals quickly',()=>{
   const t0=performance.now();
   expect(()=>canonicalDecimal('1'.repeat(1_000_000))).toThrow('invalid_decimal:length');
-  expect(()=>canonicalDecimal('0.'+'0'.repeat(300))).toThrow('invalid_decimal:length');
+  expect(()=>canonicalDecimal('1'.repeat(513))).toThrow('invalid_decimal:length');
+  expect(()=>canonicalDecimal('1'.repeat(500)+'e200')).toThrow('invalid_decimal:length');
   expect(performance.now()-t0).toBeLessThan(200);
   expect(canonicalDecimal('1.'+'0'.repeat(200))).toBe('1');
  });
+ it('is idempotent on every accepted literal and bounds the exponent',()=>{
+  const lits=['1e-200','1e200','-1e-200','-0.'+'0'.repeat(249)+'1','1'.repeat(256)+'e200','0.'+'0'.repeat(300),'12345.678e-150','-0','1.500','5e-3'];
+  for(const x of lits){const c=canonicalDecimal(x);expect(canonicalDecimal(c)).toBe(c);expect(c.length).toBeLessThanOrEqual(512);}
+  expect(()=>canonicalDecimal('1e-201')).toThrow('invalid_decimal');
+  expect(()=>canonicalDecimal('1e201')).toThrow('invalid_decimal');
+ });
  it('rejects non-decimal text and absurd exponents',()=>{
-  for(const bad of ['','abc','1.','.5','1e','0x10','NaN','Infinity',' 1','1e1001'])expect(()=>canonicalDecimal(bad)).toThrow('invalid_decimal');
+  for(const bad of ['','abc','1.','.5','1e','0x10','NaN','Infinity',' 1','1e1001','1e-201'])expect(()=>canonicalDecimal(bad)).toThrow('invalid_decimal');
  });
 });
 

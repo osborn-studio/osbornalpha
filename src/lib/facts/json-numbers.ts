@@ -40,10 +40,12 @@ export function scanJsonNumbers(input:Uint8Array|string):unknown{
 }
 
 const DECIMAL=/^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/;
-const MAX_EXPONENT=1000;
+/** Raw-input cap, exponent cap and output cap are chosen together: every accepted output is <= MAX_LITERAL chars, so canonicalDecimal is idempotent. */
+const MAX_LITERAL=512;
+const MAX_EXPONENT=200;
 /** Canonical decimal text: no exponent, no leading/trailing zeros, '-0' → '0'. Throws invalid_decimal. */
 export function canonicalDecimal(raw:string):string{
- if(raw.length>256)throw new Error('invalid_decimal:length');
+ if(raw.length>MAX_LITERAL)throw new Error('invalid_decimal:length');
  const m=DECIMAL.exec(raw);
  if(!m)throw new Error(`invalid_decimal:${raw.slice(0,40)}`);
  const exp=m[4]===undefined?0:Number(m[4]);
@@ -59,7 +61,9 @@ export function canonicalDecimal(raw:string):string{
  while(end>0&&fracPart.charCodeAt(end-1)===48)end--;
  fracPart=fracPart.slice(0,end);
  const zero=intPart==='0'&&fracPart==='';
- return `${m[1]==='-'&&!zero?'-':''}${intPart}${fracPart?`.${fracPart}`:''}`;
+ const out=`${m[1]==='-'&&!zero?'-':''}${intPart}${fracPart?`.${fracPart}`:''}`;
+ if(out.length>MAX_LITERAL)throw new Error('invalid_decimal:length');
+ return out;
 }
 export const decimalEquals=(a:string,b:string):boolean=>canonicalDecimal(a)===canonicalDecimal(b);
 
