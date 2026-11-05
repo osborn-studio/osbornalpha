@@ -1,6 +1,6 @@
 # 数据底座二 · F2 披露事实库 设计规格
 
-日期：2026-11-04（第 4 稿。审计轨迹 `docs/audits/2026-11-04-data-foundation-2/`：01 Codex 一轮、02 独立 Claude 复审、03 Codex 二轮、04 二轮处置、05 Codex 三轮、06 三轮处置）
+日期：2026-11-04（第 5 稿。审计轨迹 `docs/audits/2026-11-04-data-foundation-2/`：01 Codex 一轮、02 独立 Claude 复审、03 Codex 二轮、04 二轮处置、05 Codex 三轮、06 三轮处置、07 Codex 四轮、08 四轮处置）
 状态：草案，待 owner 评审（§14 有三项 owner 决策）
 上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（下称"规格一"）§4、§8–§10 的 F2 部分。本规格**取代**规格一 §4；规格一 §14 记录的计划一偏差在此视为既定事实。
 总纲：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5（owner 2026-11-04 确认）。本规格逐条对照其硬约束：只用一手来源（EDGAR、交易所定期报告；Tushare 仅作适配器并记录上游与巨潮公告定位）、每个数字可回放（源文件哈希、行定位、可得日期、变换、代码版本）、事实与判断分离、缺失保持缺失（不做代理指标、不填占位、不做静默换算、不混口径、不混报表版本）。
@@ -122,6 +122,8 @@ batch_id      uuid not null references ingest_batches(batch_id) on delete restri
 mapping_gen   int not null
 status        text not null default 'staged' check (status in ('staged','published','abandoned'))
 manifest      jsonb not null default '[]' check (jsonb_typeof(manifest) = 'array')   -- 本次完整处理过的 filing_id 列表（含零输出的）
+conflict_dispositions jsonb not null default '[]' check (jsonb_typeof(conflict_dispositions) = 'array')
+              -- 发布时要对**已发布**行执行的 ok→quarantined 变更：[{fact_id, quarantine_item_id}]（§5.3）；发布前不改公共数据
 started_at    timestamptz not null default now()
 published_at  timestamptz
 index (issuer_id, market, status)
@@ -211,12 +213,14 @@ input_unit       text not null
 basis            text not null                             -- 'us_standard' | 'cn_standard' | 'cn_incl_intangibles' | 'cn_incl_bonds'
 formula_version  text not null
 inputs           jsonb not null check (jsonb_typeof(inputs) = 'array')   -- 扁平：全部底层事实 [{fact_id, concept, filing_id, available_date}]
-based_on_run     uuid not null references fact_sync_runs(run_id)          -- 计算所依据的最新已发布运行
+based_on_rev     bigint not null                                           -- 计算所依据的事实状态版本 fact_sync_scope.state_rev（§4.5）
 as_of            date not null
 computed_at      timestamptz not null default now()
 primary key (issuer_id, market, metric, period_start, period_end, input_unit, basis, formula_version)
 index (issuer_id, market, metric, period_end desc)
 ```
+
+事实在当日披露即当日可见（`available_date` 永远 ≤ 今天），不存在"未来生效"的事实，物化不需要按日界刷新；物化只在发布与提升后发生。
 
 ### 4.5 `fact_sync_scope` 与 SQL 函数
 
@@ -226,44 +230,47 @@ fact_sync_scope
   reasons jsonb, priority int, fetch_key text
   next_due_at timestamptz not null default now()
   lease_until timestamptz, lease_batch_id uuid
+  state_rev bigint not null default 0            -- 事实状态版本：每次发布或提升 +1（审计 R4-6）
   last_attempt_at, last_success_at, last_batch_id, last_status ('success'|'failed'), updated_at
   index (market, next_due_at, priority desc, issuer_id) where priority > 0
 ```
 
-全部函数 `language plpgsql security definer set search_path = public`；`revoke execute from public, anon, authenticated`；`grant execute to service_role`（`read_facts` 例外，见 §4.6）。**每个写函数开头**：`select … from fact_sync_scope where issuer_id=p_issuer and market=p_market for update` 取行锁，再检查 `lease_batch_id = p_batch and lease_until > now()`，否则 `raise exception 'lease_lost' using errcode='55P03'`。行锁持续到事务结束，所以校验与变更在同一把锁内（审计 R3-4）。
+全部函数 `language plpgsql security definer set search_path = public`；`revoke execute from public, anon, authenticated`；`grant execute to service_role`（`read_facts` 例外，见 §4.6）。**所有改变事实可见性的函数**（下表除 `reconcile_fact_sync_scope`、`claim_fact_sync_lease` 外）都以 `select … from fact_sync_scope where issuer_id=p_issuer and market=p_market for update` 取同一把行锁开始；采集函数随后校验 `lease_batch_id = p_batch and lease_until > now()`，否则 `raise exception 'lease_lost' using errcode='55P03'`；管理函数（`promote_quarantined`、`replace_financial_metrics`）不校验租约但持同一把锁，因此与发布串行（审计 R3-4、R4-6）。
+
+**写函数前提的例外**（审计 R4-7）：`reconcile_fact_sync_scope` 不需要租约（它创建/更新调度输入）；`filings` 的 `document_ref/document_url/link_attempts` 三列对 `service_role` 开列级 `update` 权限（巨潮挂接，不触及事实可见性）。除此之外没有角色能直接写事实层表。
 
 | 函数 | 作用 |
 |---|---|
+| `reconcile_fact_sync_scope(market, rows jsonb)` → int | 仅 service_role；`insert … on conflict (issuer_id, market) do update set reasons, priority, fetch_key, updated_at`；不动 `next_due_at/lease_*/state_rev/last_*`；返回变更行数 |
 | `claim_fact_sync_lease(issuer, market, batch, ttl)` → bool | `for update` 后：未租 / 已过期 / 同批次续租 → 设租约、返回 true；否则 false |
-| `begin_sync_run(issuer, market, batch, mapping_gen)` → run_id | 租约校验；**先废弃**本发行人本市场所有 `status='staged'` 的旧运行（`abandon`：先删其 `financial_facts`，再标 `abandoned`；旧运行创建的 `filings` 若已无任何事实且 `mapping_gen=0` 则一并删除——此处 filings 删除由函数内 `security definer` 执行，触发器允许函数内部的这一路径通过 `set_config('facts.allow_filing_delete','on',true)` 标志）；插入新运行（`staged`） |
-| `stage_filings(run, rows jsonb)` → jsonb | 租约与运行校验；逐行 `insert … on conflict (source, source_ref) do nothing`，返回 `{source_ref → filing_id}` 映射（含已存在者） |
-| `stage_facts(run, rows jsonb)` → int | 租约与运行校验；`insert` 为 `staged`（`on conflict do nothing` 于自然键 + filing + gen），返回插入数 |
-| `quarantine_facts(run, fact_ids uuid[])` → int | 租约与运行校验；`staged→quarantined`，只影响本运行的行 |
-| `conflict_quarantine(run, fact_ids uuid[])` → int | 租约校验；用于同日冲突：允许把**其他已发布运行**的 `ok` 行置 `quarantined`（§5.3） |
-| `publish_sync_run(run, manifest uuid[])` → int | 租约与运行校验；一个事务内：本运行 `staged→ok`；对 manifest 内每个 filing：若 `filings.mapping_gen > run.mapping_gen` 则 `raise 'mapping_gen_regression'`，否则置为 `run.mapping_gen`；运行标 `published`，写 `manifest`；返回发布行数 |
-| `abandon_sync_run(run)` | 租约校验；删本运行事实、标 `abandoned`（截止/异常时主动调用；未调用则由下次 `begin_sync_run` 处理） |
+| `begin_sync_run(issuer, market, batch, mapping_gen)` → run_id | 租约校验；对本发行人本市场所有 `status='staged'` 的旧运行执行废弃（同 `abandon_sync_run` 的顺序：**先标 `abandoned`，再删其事实**，再删它创建的、已无事实且 `mapping_gen=0` 的 filings——该删除由函数内设置 `set_config('facts.allow_filing_delete','on',true)` 放行）；插入新运行（`staged`） |
+| `stage_filings(run, rows jsonb)` → jsonb | 租约与运行校验；逐行 `insert … on conflict (source, source_ref) do nothing`，返回 `{source_ref → filing_id}`（含已存在者） |
+| `stage_facts(run, rows jsonb)` → int | 租约与运行校验；`insert` 为 `staged`（`on conflict do nothing`），返回插入数 |
+| `quarantine_facts(run, fact_ids uuid[], dispositions jsonb)` → int | 租约与运行校验；本运行行 `staged→quarantined`；`dispositions`（对已发布 `ok` 行的待执行 `ok→quarantined`，§5.3）追加到 `fact_sync_runs.conflict_dispositions`，**此时不改公共行** |
+| `publish_sync_run(run, manifest uuid[])` → int | 租约与运行校验；一个事务内：本运行 `staged→ok`；执行 `conflict_dispositions`（已发布行 `ok→quarantined`）；manifest 内每个 filing：`filings.mapping_gen > run.mapping_gen` → `raise 'mapping_gen_regression'`，否则置为 `run.mapping_gen`；运行标 `published`、写 `manifest`；`state_rev + 1`；返回发布行数 |
+| `abandon_sync_run(run)` | 租约校验；运行必须是 `staged`（已发布 → `raise 'run_published'`）；**先标 `abandoned`，再删本运行事实**（触发器据运行状态放行）；`conflict_dispositions` 随之作废，已发布行不变 |
 | `release_fact_sync_lease(issuer, market, batch, outcome, next_due)` | `for update`；`lease_batch_id <> batch` → `raise 'lease_lost'`；清租约，写 `last_*`、`next_due_at` |
-| `promote_quarantined(issuer, market, fact_ids uuid[])` → int | 管理员钩子专用：`pg_advisory_xact_lock(hashtext(issuer||market))`；只把当前 `quarantined` 且**不被其他 open 隔离项引用**（通过 `dq_quarantine.payload->'fact_ids'` 检查，`status='open'`）的行置 `ok` |
-| `replace_financial_metrics(issuer, market, based_on_run, rows jsonb)` → int | `pg_advisory_xact_lock`；若存在 `published_at` 晚于 `based_on_run` 的已发布运行 → `raise 'stale_computation'`；否则删该发行人该市场全部物化行并插入 |
+| `promote_quarantined(issuer, market, fact_ids uuid[])` → int | 管理员钩子专用；持行锁；只提升同时满足的行：当前 `quarantined`；所属运行 `published`；`filings.mapping_gen = 行.mapping_gen`；该行的 K/日期没有 `open` 的 `same_day_conflict` 项；若该行曾属于某个已处理的 `same_day_conflict` 项，则必须在该项 `detail.chosen_fact_ids` 内；不被其他 `open` 隔离项引用。满足者 `→ok`，`state_rev + 1`；返回提升数（§7.3） |
+| `replace_financial_metrics(issuer, market, based_on_rev, rows jsonb)` → int | 持行锁；`state_rev <> based_on_rev` → `raise 'stale_computation'`；否则删该发行人该市场全部物化行并插入 |
 
 ### 4.6 读取函数 `read_facts`
 
 ```sql
 create or replace function public.read_facts(
   p_issuer uuid, p_market text, p_concepts text[], p_as_of date,
-  p_from date, p_to date, p_history boolean, p_limit int)
-returns table (… financial_facts 列 …, disclosure_seq int, is_current boolean, is_revision boolean, truncated boolean)
+  p_from date, p_to date, p_history boolean, p_limit int, p_include_non_ok boolean default false)
+returns jsonb   -- 单个信封 {state_rev, rows: [...], truncated: bool, row_count: int}
 language sql stable security invoker …
 ```
 
-单条语句（一个快照）内：`financial_facts f join filings g on g.filing_id = f.filing_id and f.mapping_gen = g.mapping_gen`，`f.status='ok'`，`f.market = p_market`，`f.available_date <= p_as_of`，`period_end between`；按自然键分区用窗口函数算 `disclosure_seq`（`order by available_date, created_at, fact_id`）、`is_current`（分区内最后一行）、`is_revision`（`value <> lag(value)`）；`p_history=false` 时只返回 `is_current` 行；硬上限 10,000 行，超出时最后一行 `truncated=true`。`security invoker` + `grant execute to anon, authenticated, service_role`：匿名调用受 `financial_facts` 的 RLS（`status='ok'`）约束。规划（§5.3）与派生（§8）也用它（service role）。
+**返回一个 `jsonb` 信封而不是行集**（审计 R4-5：PostgREST 的 `max_rows`——本地 `supabase/config.toml` 为 1000——对返回表的函数同样截断，而单个标量值不受影响）。单条语句（一个快照）内：`financial_facts f join filings g on g.filing_id = f.filing_id and f.mapping_gen = g.mapping_gen`，`f.market = p_market`，`f.available_date <= p_as_of`，`period_end between`，`f.status='ok'`（`p_include_non_ok=true` 时含 `staged/quarantined`，RLS 使匿名调用者仍只见 `ok`）；按自然键分区用窗口函数算 `disclosure_seq`（`order by available_date, created_at, fact_id`）、`is_current`、`is_revision`（`value <> lag(value)`）；`p_history=false` 只返回 `is_current` 行；硬上限 10,000 行，超出时 `truncated=true` 且不返回行以外的任何部分结果给内部调用者——**规划与派生在 `truncated=true` 时拒绝继续**（该发行人 `failed`，码 `read_truncated`）；公共路由把 `truncated` 透传。信封带当前 `state_rev`（同一快照内读取）。`security invoker` + `grant execute to anon, authenticated, service_role`。
 
 ### 4.7 权限、桶
 
 - `filings`、`financial_metrics`、`fact_sync_runs`：`grant select to anon, authenticated, service_role`，RLS `for select using (true)`（`fact_sync_runs` 仅 service_role 可读）。
 - `financial_facts`：`grant select to anon, authenticated, service_role`，策略 `using (status='ok')`，service_role 另有策略 `using (true)`。
 - `fact_sync_scope`：仅 service_role 可读。
-- **没有角色拥有事实层表的 insert/update/delete**；只有 §4.5 的 `security definer` 函数（owner 为迁移角色）能写。集成测试验证 `service_role` 直接 `insert` 被拒。
+- **没有角色拥有事实层表的 insert/update/delete**，两个明示例外：`service_role` 对 `filings` 的 `document_ref/document_url/link_attempts` 有列级 `update`（巨潮挂接）；`fact_sync_scope` 的调度输入经 `reconcile_fact_sync_scope`。其余写只经 §4.5 的 `security definer` 函数（owner 为迁移角色）。集成测试验证 `service_role` 直接 `insert` 事实、`update` 事实状态、`update filings.mapping_gen` 都被拒。
 - 桶 `disclosure-raw`：`insert into storage.buckets … ('disclosure-raw', false, 52428800, array['application/json']) on conflict …`；路径 `{source}/{issuer_id}/{sha256}.json` 存响应原文字节，旁边 `{sha256}.meta.json`（无 token）；`upsert:false`，`409` = 已存在。`raw_hash` 定位规则同第 3 稿（EDGAR：`facts[tax][tag].units[unit][]` 中 `accn` 与 `end/start` 匹配的条目；Tushare：该页响应中 `end_date`、`report_type`、公告日匹配的行）。上传失败 → 本运行废弃，`failed`。
 
 ### 4.8 数据访问契约 `src/lib/facts/db.ts`
@@ -274,19 +281,19 @@ export interface FactsDb {
   beginRun(issuer, market, batch, mappingGen): Promise<string>;            // rpc begin_sync_run
   stageFilings(run, rows): Promise<Map<sourceRef, filingId>>;
   stageFacts(run, rows): Promise<number>;                                 // 分块 ≤ 500
-  quarantineFacts(run, factIds): Promise<number>;
-  conflictQuarantine(run, factIds): Promise<number>;
+  quarantineFacts(run, factIds, dispositions): Promise<number>;
   publishRun(run, manifest): Promise<number>;
   abandonRun(run): Promise<void>;
   releaseLease(issuer, market, batch, outcome, nextDue): Promise<void>;
   promoteQuarantined(issuer, market, factIds): Promise<number>;
-  replaceMetrics(issuer, market, basedOnRun, rows): Promise<number>;      // 抛 StaleComputation
-  readFacts(issuer, market, opts: {concepts, asOf, from?, to?, history?, limit?}): Promise<{rows, truncated}>;   // rpc read_facts
-  factsByIds(ids): Promise<FactRow[]>;                                    // 证据查询，不限 generation（service/anon 按 RLS）
+  replaceMetrics(issuer, market, basedOnRev, rows): Promise<number>;      // 抛 StaleComputation
+  readFacts(issuer, market, opts: {concepts, asOf, from?, to?, history?, limit?, includeNonOk?}): Promise<{stateRev, rows, truncated}>;   // rpc read_facts（信封）
+  factsByIds(ids): Promise<FactRow[]>;                                    // 证据查询，不限 generation（按 RLS）
+  openConflicts(issuer, market): Promise<ConflictItem[]>;                 // dq_quarantine 中 open 的 same_day_conflict 项（§5.3）
   filingsOfIssuer(issuer, market, opts): Promise<Filing[]>;
-  updateFilingLink(filingId, patch: {document_ref?, document_url?, link_attempts}): Promise<void>;   // 唯一允许的直接 update（权限：service_role 对这三列有 update 权限的列级 grant）
-  latestPublishedRun(issuer, market): Promise<string|null>;
-  scopeDue(market, now, limit): Promise<ScopeRow[]>; upsertScope(rows): Promise<void>;
+  updateFilingLink(filingId, patch: {document_ref?, document_url?, link_attempts}): Promise<void>;   // 明示例外的列级 update
+  reconcileScope(market, rows): Promise<number>;                          // rpc reconcile_fact_sync_scope
+  scopeDue(market, now, limit): Promise<ScopeRow[]>;
   metricsOfIssuer(issuer, market, formulaVersion): Promise<MetricRow[]>;
 }
 ```
@@ -312,17 +319,20 @@ export interface FactsDb {
 
 - 候选键 = K + `filing_id` + `mapping_gen`。已存在（任何 `status`，任何运行）→ 不写，`duplicates`。
 - 同一 filing、同一 K、同一标签多个不同 `value` → 不写，隔离 `ambiguous_value`。
-- **同日冲突**（到达顺序无关）：本运行候选 c 与已存在的任一行 r（`ok` 或本运行 staged；同 K、同 `available_date`、值不同）冲突 → c 以 `staged` 写入后 `quarantine_facts`；若 r 是已发布的 `ok` 行，则 `conflict_quarantine([r])` 把它也置 `quarantined`。一个隔离项 `same_day_conflict` 引用全部相关行。效果：该日对该 K 没有 `ok` 值，当前值回落到更早日期；无论两份文件谁先到，结果相同。解决见 §7.3。
+- **同日冲突**（到达顺序无关，审计 R4-2/R4-3）：一个 (K, `available_date`) 若存在 `open` 的 `same_day_conflict` 隔离项，就是**争议中**的。规划时对每个候选 c：
+  1. 若 (K, 日期) 争议中 → c 以 `staged` 写入后 `quarantine_facts`，并并入该项的 `fact_ids`（§7.1 的并入规则）；无论 c 的值是否与某一方相同。
+  2. 否则若存在 r（已发布 `ok` 行，或本运行另一候选）同 K、同日、值不同 → c（及本运行的另一候选）`quarantine_facts`；对已发布的 r 登记 **disposition**（`{fact_id: r, quarantine_item_id}`），新建 `same_day_conflict` 项引用 c 与 r。r 的 `ok→quarantined` **只在 `publish_sync_run` 内执行**；本运行若被废弃，r 不受影响。
+  效果：发布后该日对该 K 没有 `ok` 值，当前值回落到更早日期；两份文件谁先到结果相同；后到的第三方也进入同一争议组。解决见 §7.3。
 - 计数：新行值等于写入前当前值或此前无披露 → `inserted`；不同 → `versioned`；隔离 → `quarantined`。
 - 值相等判断用**规范十进制形式**（§6.2）。
 
 ### 5.4 并发、原子性、一致性
 
-- 租约 + 行锁：所有写函数在 `fact_sync_scope` 行锁内校验租约（§4.5）。超时的旧工作者的任何写都抛 `lease_lost`。
-- 发布原子：`publish_sync_run` 一个事务内完成事实可见与映射代激活；manifest 含零输出的 filing。
-- 清理只针对 `staged` 运行；已发布运行的 `quarantined` 行是证据，保留。
-- 读取原子：`read_facts` 单语句单快照；跨概念、跨 filing 的当前值来自同一快照。
-- 派生过期拒绝：`replace_financial_metrics` 校验 `based_on_run`。
+- 租约 + 行锁：所有改变可见性的函数持同一把 `fact_sync_scope` 行锁；采集函数另校验租约（§4.5）。超时的旧工作者的任何写都抛 `lease_lost`。
+- 发布原子：`publish_sync_run` 一个事务内完成事实可见、冲突处置、映射代激活、`state_rev` 递增；manifest 含零输出的 filing。发布前不改任何公共行。
+- 废弃只针对 `staged` 运行，先标后删；已发布运行的 `quarantined` 行是证据，保留。
+- 读取原子：`read_facts` 单语句单快照，信封带 `state_rev`。
+- 派生过期拒绝：`replace_financial_metrics` 在同一把行锁下比较 `state_rev`。
 
 ---
 
@@ -344,12 +354,12 @@ export interface SyncDeps { db: FactsDb; tables: TableClient; storage: SnapshotS
 2. `run = beginRun(issuer, market, batch, MAPPING_GEN)`（函数内废弃旧的 staged 运行）。
 3. 抓取（预算内）→ 快照上传（`storage.put(bytes, b)` 带 abort）。
 4. 解析（§6.2/§6.3）→ 候选事实与 filings（含零候选的 filing）。
-5. `readFacts(issuer, market, {concepts: all, asOf: 今天, history: true})` + 本发行人 `quarantined/staged` 行（`factsByIds` 不适用；用 `filingsOfIssuer` + 服务角色读全部状态的一次 `read_facts` 变体 `p_include_non_ok=true`，仅 service_role）→ `planFactWrites`（§5.3，纯函数）。
+5. `readFacts(issuer, market, {concepts: all, asOf: 今天, history: true, includeNonOk: true})`（`truncated` → `read_truncated`，废弃运行）+ `openConflicts` → `planFactWrites`（§5.3，纯函数：输出新行、隔离集、冲突处置、并入项）。
 6. `stageFilings` → `stageFacts`（staged）。
-7. 规则（§7）：组 = 本运行新行所在的 (filing, period, unit)，输入 = 新行 ∪ 该组当前代 `ok` 行；先写 `dq_quarantine` 项（payload 含自然键分量、`fact_ids`、`run_id`），再 `quarantineFacts` / `conflictQuarantine`。
+7. 规则（§7）：组 = 本运行新行所在的 (filing, period, unit)，输入 = 新行 ∪ 该组当前代 `ok` 行；先写/并入 `dq_quarantine` 项（payload 含自然键分量、`fact_ids`、`run_id`），再 `quarantineFacts(run, ids, dispositions)`。
 8. `publishRun(run, manifest)`；`mapping_gen_regression` → 废弃运行，`failed`。
 9. CN：`linkCn` 对本发行人 `document_ref is null and link_attempts < 5` 的 filing（含历史）；`updateFilingLink`。
-10. `materialize(issuer, market, run)`（§8）；`stale_computation` → 重算一次。
+10. `materialize(issuer, market)`（§8）：读 `readFacts` 信封得 `stateRev`，`replaceMetrics(…, stateRev, rows)`；`stale_computation` → 重算一次。
 11. `releaseLease(outcome, nextDue)`：成功 `now + 7d`，失败 `now + 1d`。
 
 任何 `lease_lost` → 该发行人 `failed`，不再调用后续函数；预算耗尽 → `abandonRun`（若仍有租约与时间）。批次结束 `finishBatch`；新鲜度 `recordAttempt(dataset, {ok})`，`ok` = 无到期发行人（空转）或 `published ≥ max(1, ceil(attempted/2))`；`detail={attempted, published, failed, skipped, idle}`。
@@ -402,10 +412,10 @@ export interface SyncDeps { db: FactsDb; tables: TableClient; storage: SnapshotS
 
 `src/lib/dq/facts-resolver.ts`（只做 facts）：
 - `resolved_accept`：
-  - `same_day_conflict`：POST 体可带 `chosen_fact_ids`（必须是 payload 内的子集且同一 `available_date` 下只允许一个值）；有则 `promoteQuarantined(issuer, market, chosen)`，无则仅确认知晓（行保持 `quarantined`）。
-  - `identity_*`：`promoteQuarantined(issuer, market, payload.fact_ids)`（函数跳过被其他 open 项引用的行与已不存在的行）。
+  - `same_day_conflict`：POST 体可带 `chosen_fact_ids`（必须是 payload 内的子集，且所选行的值全部相同）；路由先把 `chosen_fact_ids` 持久化到 `detail.chosen_fact_ids`（持久的争议裁决，`promote_quarantined` 对该组所有成员永久遵守，审计 R4-4），再 `promoteQuarantined(issuer, market, chosen)`；无 `chosen_fact_ids` 则仅确认知晓（`detail.chosen_fact_ids=[]`，组内任何行此后都不能被其他项提升）。
+  - `identity_*`：`promoteQuarantined(issuer, market, payload.fact_ids)`（函数按 §4.5 的资格规则过滤：运行已发布、代已激活、无争议、不违反已裁决、不被其他 open 项引用、仍存在）。
   - 无事实行的三种：确认知晓。
-  - 随后 `materialize(issuer, market, latestPublishedRun)`。
+  - 随后 `materialize(issuer, market)`。
 - `resolved_reject`：不动。
 - 钩子阶段写入 `dq_quarantine.detail.hook = {stage: 'promote'|'materialize'|'done', state: 'done'|'failed', at, message?}`；对 `resolved_accept` 项再次 POST：`stage != done` 时从失败阶段继续（幂等），返回 `{resolved:'already_resolved', hook}`；审计日志记录。
 
@@ -417,7 +427,7 @@ export interface SyncDeps { db: FactsDb; tables: TableClient; storage: SnapshotS
 
 精确匹配：同期 = `period_start,period_end` 相等；上年同期 = 同 `duration` 且 `period_end` 在 350–380 天前的唯一事实；相邻 = `next.period_start = prev.period_end + 1 天`；期初 = `period_start − 1 天` 的 instant 事实。
 
-**版本一致性（审计 N14）**：差分 `A − B`（如 `9M − 6M`）中，`A` 取 `asOf` 下的当前值，`B` 取**在 A 的 `available_date` 当日可见的**最新披露（同一信息集）；无 → 不产出。`inputs` 列出两者。
+**版本一致性（审计 N14，第 5 稿收紧）**：差分 `A − B`（如 `9M − 6M`）只在两个操作数属于同一报表版本集时产出：(a) `A` 与 `B` 的当前披露来自**同一 filing**；或 (b) `A` 与 `B` 在 `asOf` 下的披露序列都**从未修订**（序列内没有值变化，`is_revision` 全为 false）。其余情形（例如 9M 已修订而 6M 未修订且无同 filing 的 6M 披露）不产出。`inputs` 列出两者与所依据的规则（`a` / `b`）。
 
 | metric | 公式 | duration | basis |
 |---|---|---|---|
@@ -430,7 +440,7 @@ export interface SyncDeps { db: FactsDb; tables: TableClient; storage: SnapshotS
 | revenue_yoy / net_income_yoy | `(本期 − 上年同期)/abs(上年同期)` | 同事实 | |
 | roe | `ttm_net_income_parent / avg(equity_parent@窗口起点−1 天, equity_parent@窗口期末)` | TTM | |
 
-`materialize(issuer, market, run)`：`as_of=今天`，算全部行，`replaceMetrics(issuer, market, run, rows)`；`stale_computation` → 以最新运行重算一次。重建测试比较除 `computed_at` 外的全部列。
+`materialize(issuer, market)`：`as_of=今天`，`readFacts` 信封（`truncated` → 拒绝物化，`read_truncated`）→ 算全部行 → `replaceMetrics(issuer, market, stateRev, rows)`；`stale_computation` → 重读重算一次。重建测试比较除 `computed_at` 外的全部列。
 
 ---
 
@@ -441,7 +451,7 @@ export interface SyncDeps { db: FactsDb; tables: TableClient; storage: SnapshotS
 | 路径 | 参数 | 返回 |
 |---|---|---|
 | `GET /api/facts/[ticker]` | `concepts`（必填，白名单）或 `factIds`（≤ 100，证据查询，不限代、只限 `ok`）、`from`/`to`、`asOf`、`durations`、`history=1`、`limit`（K 数，默认 200、最大 1000） | `{issuerId, ticker, market, asOf, mappingGen, truncated, facts:[{factId, concept, sourceConcept, statement, periodStart, periodEnd, duration, value: value_text, unit, availableDate, filingId, disclosureSeq, isCurrent, isRevision, mappingGen, rawHash}], filings:[{filingId, formType, periodEnd, availableDate, sourceRef, url, documentRef, documentUrl, citation}]}` |
-| `GET /api/facts/[ticker]/metrics` | `metrics`、`from`/`to`、`asOf`、`limit` | `{…, formulaVersion, metrics:[{metric, periodStart, periodEnd, duration, value, unit, inputUnit, basis, inputs, basedOnRun}]}`；无 `asOf` 读表（过滤当前 `formula_version`），有则实时 derive |
+| `GET /api/facts/[ticker]/metrics` | `metrics`、`from`/`to`、`asOf`、`limit` | `{…, formulaVersion, metrics:[{metric, periodStart, periodEnd, duration, value, unit, inputUnit, basis, inputs, basedOnRev}]}`；无 `asOf` 读表（过滤当前 `formula_version`），有则实时 derive |
 | `GET /api/filings/[ticker]` | `from`/`to`（`available_date`）、`limit` | `{issuerId, ticker, market, filings:[…]}` |
 | `GET|POST /api/cron/facts-sync` | §6.5 | 批次回执 |
 
@@ -461,6 +471,7 @@ export interface SyncDeps { db: FactsDb; tables: TableClient; storage: SnapshotS
 | 覆盖不足 | 照常 | `coverage_summary` | — |
 | 租约被占 / 丢失 | 跳过 / failed | `skipped_summary(leased)` / `lease_lost` | — / partial |
 | 映射代回退 | 废弃运行，failed | `mapping_gen_regression` | partial |
+| 读取被截断（> 10,000 行） | 废弃运行 / 拒绝物化 | `read_truncated` | partial |
 | 派生过期 | 重算一次，再失败记错 | `stale_computation` | partial |
 | 发行人 `merged` | 跳过 | `skipped_summary(issuer_merged)` | — |
 | 解析异常 | 废弃运行，failed（含字段名不含值） | `parse_error` | partial |
@@ -479,7 +490,7 @@ export interface SyncDeps { db: FactsDb; tables: TableClient; storage: SnapshotS
 
 ### 11.2 数据库（`test:db`，critical）
 
-`src/lib/facts/facts.integration.test.ts`：迁移可重放；唯一约束与两条复合外键；触发器；**每个函数**（租约互斥/过期/续租、`lease_lost` 在并发事务下、`begin_sync_run` 废弃旧 staged 并保留已发布运行的 quarantined 行、`publish_sync_run` 原子性与 `mapping_gen_regression`、`promote_quarantined` 跳过被引用行、`replace_financial_metrics` 的 `stale_computation`、`read_facts` 代过滤与 `truncated`）；真实角色权限（anon/authenticated/service_role 都不能直接写事实表；anon 能执行 `read_facts` 且只见 `ok`；anon 不能执行写函数）；`value_text` 与 20 位整数一致。
+`src/lib/facts/facts.integration.test.ts`：迁移可重放；唯一约束与两条复合外键；触发器；**每个函数**（租约互斥/过期/续租、`lease_lost` 在并发事务下、`begin_sync_run`/`abandon_sync_run` 先标后删且保留已发布运行的 quarantined 行、`abandon` 拒绝已发布运行、`publish_sync_run` 原子性 + 冲突处置 + `mapping_gen_regression` + `state_rev` 递增、废弃运行不影响已发布行、`promote_quarantined` 的全部资格规则（未发布运行的行不提升；争议中不提升；已裁决只提升 chosen）、`replace_financial_metrics` 的 `stale_computation` 在"发布—提升—物化"交错下、`read_facts` 信封在 1,001 行与 10,001 行下的 `truncated`、`reconcile_fact_sync_scope` 不动租约与调度列）；真实角色权限（anon/authenticated/service_role 都不能直接写事实表与 `filings.mapping_gen`；service_role 只能改三列链接；anon 能执行 `read_facts` 且只见 `ok`；anon 不能执行写函数）；`value_text` 与 20 位整数一致。
 
 ### 11.3 离线集成（critical）
 
@@ -513,7 +524,7 @@ export interface SyncDeps { db: FactsDb; tables: TableClient; storage: SnapshotS
 验收样例：
 1. `asOf=2024-06-30` 的 AAPL revenue → 2023-11-03 行 `disclosureSeq=1`；`asOf=2025-06-30` → `disclosureSeq=2`、`isRevision=false`。
 2. A 股修订对：`asOf` 早于更正日取调整前值；年报 `citation='linked'`。
-3. 同日冲突：两份文件以任意顺序到达，结果相同（该日无 `ok` 值）；管理员 `chosen_fact_ids` 选定一行后可见。
+3. 同日冲突：两份文件以任意顺序到达，结果相同（该日无 `ok` 值）；第三份同日文件进入同一争议组；带冲突处置的运行被废弃时已发布值不变；管理员 `chosen_fact_ids` 选定一行后可见，未选行此后不能被其他隔离项提升。
 4. 隔离 `identity_bs` → 接受 → 可见且指标重算；重复 POST 幂等；物化失败后重试从 `materialize` 阶段继续。
 5. 两个工作者争同一发行人：后者 `leased`；前者超时后任何写抛 `lease_lost`，其 staged 运行被新持有者废弃，已发布运行的 quarantined 行保留。
 6. 映射升级重跑：旧代行不再出现在当前值中，`factIds` 仍可取证。
@@ -523,7 +534,7 @@ export interface SyncDeps { db: FactsDb; tables: TableClient; storage: SnapshotS
 
 ## 13. 独立验证
 
-Codex 三轮（01/03/05）与处置（04/06）；独立 Claude 复审（02）；黄金断言由实施者之外的人抄录；SEC dry-run 3 家；Tushare 核对（token 环境）；会计口径复核（§3 七处分列）。
+Codex 四轮（01/03/05/07）与处置（04/06/08）；独立 Claude 复审（02）；黄金断言由实施者之外的人抄录；SEC dry-run 3 家；Tushare 核对（token 环境）；会计口径复核（§3 七处分列）。
 
 ---
 
