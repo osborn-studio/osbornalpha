@@ -2,7 +2,7 @@
 import {describe,it,expect} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import {memoryFactsDb} from './memory-facts-db';
-import {currentSecurities,fetchKey,reconcileScope,scopeRowFor} from './scope';
+import {SNAPSHOT_SKEW_MARGIN_MS,currentSecurities,fetchKey,reconcileScope,scopeRowFor} from './scope';
 import type {FactsDb,Market} from './types';
 
 const A='11111111-1111-4111-8111-111111111111',M='22222222-2222-4222-8222-222222222222',K='33333333-3333-4333-8333-333333333333';
@@ -97,6 +97,13 @@ describe('scopeRowFor',()=>{
 });
 
 describe('reconcileScope: snapshot guard',()=>{
+ it('the default snapshot is the (fake) clock minus the skew margin, so a client clock running ahead only delays retirements',async()=>{
+  const tables=await seed();const {db,calls}=recordingDb();
+  const t=Date.parse('2026-11-04T12:00:00.000Z');
+  await reconcileScope({tables,db},'US',{today:TODAY,now:()=>t});
+  expect(SNAPSHOT_SKEW_MARGIN_MS).toBe(300_000);
+  expect(calls[0].snapshot).toBe('2026-11-04T11:55:00.000Z');
+ });
  it('passes snapshotAt (taken before the sources are read) to the database; a stale snapshot cannot retire a newer activation',async()=>{
   const tables=await seed();const {db,calls}=recordingDb();
   await reconcileScope({tables,db},'US',{today:TODAY});          // activates the desired issuers now

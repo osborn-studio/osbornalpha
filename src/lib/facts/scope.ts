@@ -169,14 +169,22 @@ export async function scopeRowFor(tables:TableClient,market:Market,issuerId:stri
 }
 
 /**
- * snapshotAt (default: now, taken BEFORE any source is read) travels with the write: the database
- * retires a still-active row only if no newer reconcile changed it since (a stale run can no longer
- * undo another run's activation). The client clock is compared with the database's now(): skew in
- * either direction only ever delays a retirement to the next reconcile or, for a client clock running
- * ahead, lets a change made within the skew window be retired — keep the host clock in sync.
+ * Safety margin subtracted from the client clock for the default snapshotAt. The snapshot is compared
+ * with the database's now() (scope_changed_at); if this host's clock runs ahead by up to the margin, a
+ * change another run made just after our sources were read would still look "older" than the snapshot
+ * and be retired by our stale view. Backdating the snapshot makes skew fail safe: it can only DELAY a
+ * retirement to the next reconcile (rows changed within the last margin are never retired), never
+ * retire a newer activation. A clock running behind only delays further.
  */
-export async function reconcileScope(deps:ScopeDeps,market:Market,opts:{today?:string;snapshotAt?:string}={}):Promise<ScopeReconcileResult>{
- const snapshotAt=opts.snapshotAt??new Date().toISOString();
+export const SNAPSHOT_SKEW_MARGIN_MS=5*60_000;
+
+/**
+ * snapshotAt (default: now minus SNAPSHOT_SKEW_MARGIN_MS, taken BEFORE any source is read) travels with
+ * the write: the database retires a still-active row only if no newer reconcile changed it since.
+ * `now` is a test hook for the clock.
+ */
+export async function reconcileScope(deps:ScopeDeps,market:Market,opts:{today?:string;snapshotAt?:string;now?:()=>number}={}):Promise<ScopeReconcileResult>{
+ const snapshotAt=opts.snapshotAt??new Date((opts.now??Date.now)()-SNAPSHOT_SKEW_MARGIN_MS).toISOString();
  const today=opts.today??isoToday();
  const skipped:Record<string,number>={};
  const desired=market==='US'?await desiredUs(deps.tables,today,skipped):await desiredCn(deps.tables,today,skipped);
