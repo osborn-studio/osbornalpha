@@ -1,6 +1,6 @@
 # 外资研报模块 · 设计规格
 
-日期：2026-11-04（第 3 稿，Codex 两轮审计后；审计轨迹：`docs/audits/2026-11-04-foreign-research/` —— 01 Codex 第一轮、02 Codex 第二轮、03 处置表）
+日期：2026-11-04（第 4 稿，Codex 三轮审计后；审计轨迹：`docs/audits/2026-11-04-foreign-research/` —— 01 Codex 第一轮、02 Codex 第二轮、03 处置表（含第三轮处置）、04 Codex 第三轮、05 Codex 第四轮）
 状态：草案，待 owner 评审（§15.2 有七项 owner 决策；其中 D1 许可确认是本模块任何对外功能的前置条件）
 上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（规格一：发行人、DQ 层，已落地，§14 为既定事实）；`docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md`（规格二：披露事实库，设计稿，未落地）；`docs/superpowers/specs/2026-10-17-analyst-scoring-layer-design.md`（前向评分内核，已落地）。并行规格：文档管道 F3、判断框架 F4、评测 F6、计划三（标识符与对账）——依赖接口见 §11。
 总纲：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §3 与 §5。本规格逐条对照其硬约束：
@@ -30,7 +30,9 @@
 - `broker_research_settings.public_enabled=false` 时，anon 直接查任何公开视图都得 0 行。
 - 许可未确认、版本不匹配、`allows_public_metadata=false` 或不在有效期内时，报告在全部公开视图中消失；`allows_public_target_price=false` 时：目标价、空间、`target_*` 引用、含该数值的片段 / 摘要 / 标题都不出现（**以真实 anon 角色对视图做值级断言**）；`public_display=false` 的分析师名不出现在任何公开文本。
 - 许可实质性修改后：确认清空，已批准片段与摘要回到 `draft`，列表视图整体消失，直到重新确认并重新批准。
-- 黄金集评测回执（§12.4）为该版本五元组的**最新**回执且 `passed=true`、`corpus_kind='gold'`、`n_docs ≥ 30`，才允许含 LLM 字段的报告发布。
+- 黄金集评测回执（§12.4）为该**行为摘要**（`behavior_digest`，§4.3）的最新回执且 `passed=true`、`corpus_kind='gold'`、`corpus_hash = settings.approved_gold_corpus_hash`、`n_docs ≥ 30`，才允许含 LLM 字段的报告发布。
+- 摘要的输入摘要（`summary_input_digest`）在生成、批准、失效、发布四处用同一列比较；物化不改变证据与解析产物时不会使已批准摘要失效。
+- 分块抽取中同一 `(target_key, field, occurrence)` 的冲突候选全部保留并标记冲突组；冲突组内没有任何一行被自动选中，报告在冲突解决前被阻断 `field_pending`。
 - 含 `S4_TEST_STATE` 的集成测试文件已列入 `scripts/ci/research-checks.ts::criticalSuites`，全部门禁绿；`test:storage` 在本地 Supabase 栈上绿（发布前人工门禁，§12.3）。
 
 ### 1.2 本规格之外（含明示的总纲偏差）
@@ -97,11 +99,11 @@
 
 迁移 `supabase/migrations/20261107090000_broker_research.sql`，可重放。**所有基表只授 service_role；公开读一律经 §4.11 视图**；对每个视图与函数先 `revoke all … from public, anon, authenticated` 再按需 `grant`。视图**不调用任何函数**（视图里引用的函数需调用者有 EXECUTE 权；许可谓词内联为 SQL 表达式）。`database.types.ts` 手工补齐。
 
-表清单（20 张）：`broker_research_settings`、`broker_report_licences`、`broker_report_upload_intents`、`broker_report_documents`、`broker_report_runs`、`broker_research_reports`、`broker_report_targets`、`broker_report_target_overrides`、`broker_report_fields`、`broker_report_snippets`、`broker_report_summaries`、`broker_report_publications`、`broker_report_rule_receipts`、`research_institutions`、`research_rating_scales`、`research_analysts`、`broker_report_analysts`、`broker_report_access_log`、`broker_eval_receipts`、`broker_outbox`。
+表清单（21 张）：`broker_research_settings`、`broker_report_licences`、`broker_report_upload_intents`、`broker_report_documents`、`broker_report_runs`、`broker_research_reports`、`broker_report_targets`、`broker_report_target_overrides`、`broker_report_fields`、`broker_report_snippets`、`broker_report_summaries`、`broker_report_publications`、`broker_report_rule_receipts`、`broker_purge_steps`、`research_institutions`、`research_rating_scales`、`research_analysts`、`broker_report_analysts`、`broker_report_access_log`、`broker_eval_receipts`、`broker_outbox`。
 
 ### 4.1 `broker_research_settings` 与 `broker_report_licences`
 
-`broker_research_settings(id integer primary key check (id = 1), public_enabled boolean not null default false, updated_by, updated_at)`：单行；对外可见性谓词（§4.11）包含 `public_enabled`；只 service_role 可写（管理员路由）。
+`broker_research_settings(id integer primary key check (id = 1), public_enabled boolean not null default false, approved_gold_corpus_hash text null, approved_gold_corpus_by uuid null, approved_gold_corpus_at timestamptz null, updated_by, updated_at)`：单行；对外可见性谓词（§4.11）包含 `public_enabled`；`approved_gold_corpus_hash` 是 owner 批准的黄金集清单哈希（评测回执必须与之相等才能解除阻断，§4.4 第 13 条）；只 service_role 可写（管理员路由，写审计）。
 
 `broker_report_licences`：
 
@@ -126,7 +128,7 @@
 
 ### 4.2 `broker_report_upload_intents` 与 `broker_report_documents`
 
-`broker_report_upload_intents(intent_id PK, sha256 not null, byte_size bigint > 0, licence_id FK, original_filename, created_by not null, created_at, expires_at not null, status check in ('open','validating','committed','expired','abandoned'), staging_path text not null = 'staging/{intent_id}.pdf', document_id null FK, error_code text null)`。每个意向有自己的暂存路径；提交流程见 §6.1；重试同一 `intent_id` 在 `committed` 时直接返回 `document_id`。
+`broker_report_upload_intents(intent_id PK, sha256 not null, byte_size bigint > 0, licence_id FK, original_filename, created_by not null, created_at, expires_at not null, status check in ('open','validating','validated','promoting','committed','expired','abandoned'), staging_path text not null = 'staging/{intent_id}.pdf', document_id null FK, error_code text null, checkpoint_at timestamptz)`。每个意向有自己的暂存路径；提交是一台带持久检查点的状态机（§6.1），任何一步崩溃后重试同一 `intent_id` 都从检查点续作；`committed` 时直接返回 `document_id`。
 
 `broker_report_documents`：
 
@@ -141,7 +143,8 @@
 | `current_parse_run_id` uuid null FK runs | 最近成功解析运行 |
 | `status` check in (`uploaded`,`parsing`,`parsed`,`parse_failed`,`withdrawn`) | |
 | `lease_token` uuid null, `lease_until` timestamptz null | 解析 / 抽取 / 摘要互斥租约（CAS） |
-| `last_verified_at` timestamptz null | 每日核验游标 |
+| `promotion_pending` boolean not null default false | 上传提交的检查点：对象尚未从暂存路径移到正式路径（§6.1） |
+| `last_verified_at` timestamptz null, `verify_status` text null check in (`ok`,`failed`,`error`) | 每日核验游标与结果；失败也推进游标 |
 | `withdrawn_at`, `withdrawn_reason`, `purged_at` | |
 
 状态迁移：`uploaded|parse_failed|parsed --parse--> parsing`；`parsing --ok--> parsed`（`current_parse_run_id` 更新）；`parsing --fail--> parse_failed`（若此前有成功解析则回到 `parsed` 且 `current_parse_run_id` 不变）；任何状态 `--withdraw--> withdrawn`。**租约围栏**：取租约 = `update … set lease_token=$t, lease_until=now()+300s where document_id=$id and (lease_until is null or lease_until < now())`；收尾写入（状态、`current_parse_run_id`、运行收尾）都带 `where lease_token=$t`，不匹配 → 运行 `failed:lease_lost` 且不改文档；过期租约在下一次取租约时被覆盖，被覆盖者的收尾因围栏失败——这就是崩溃恢复。
@@ -155,6 +158,7 @@
 | `extractor_version` | `parse` 运行 |
 | `artifact_path`, `artifact_hash` | `parse`：`reports/{sha}.extract.{run_id}.json`（**按运行**命名，永不覆盖）与其 sha256 |
 | `model_id`, `registry_hash`, `prompt_version`, `schema_version`, `code_version` | LLM 运行必填 |
+| `behavior_digest` text not null（`extract` 运行） | **抽取行为摘要** = sha256 of `[extractor_version, model_id, registry_hash, prompt_version, schema_version, TYPED_VERSION, MERGE_VERSION, LOCATE_VERSION, parseBrokerTicker 版本, CURRENCY_MARKS 版本]`（常量清单 `BEHAVIOR_DIGEST_INPUTS` 在 `src/lib/broker-research/behavior.ts`，单测断言清单内容）；与部署 `code_version` 无关，只有影响抽取结果的组件变化才改变它 |
 | `licence_version` integer not null | 本次外部处理所依据的已确认许可版本 |
 | `request_path`, `response_path` | `runs/{run_id}.request.json` / `.response.json` |
 | `batch_id` FK, `status` check in (`running`,`succeeded`,`failed`), `started_at`, `finished_at`, `detail jsonb` | `detail`：`chunks`、`retries`、`error_code`、`lease_lost` |
@@ -176,7 +180,11 @@
 | `report_type`, `sector_as_stated`, `primary_target_key` | | |
 | `effective_hash` text null | 生效证据行的规范化哈希（物化输出，§6.3） | |
 | `materialized_hash` text null | 最近一次物化时的 `effective_hash` | |
+| `rules_input_hash` text null | **全部规则输入**的哈希（物化输出）：生效证据行 + 覆盖表行 + `institution_id` + 每个 target 选中的 `scale_id` 行 + `published_date` + 文档 `uploaded_at` + `resolution` 快照 + `RULES_VERSION`；规则回执绑定它 | |
+| `summary_input_digest` text null | **摘要输入摘要**（物化输出）= sha256(`effective_hash` ‖ `current_parse_run` 的 `artifact_hash` ‖ `institution_id` ‖ `title_public`)；摘要的生成、批准、失效、发布四处只与此列比较 | |
+| `title_restricted` boolean not null default false | 发布时计算：`title_original` 未通过披露检查（§4.11）；为真时引用视图排除 `title` 行，列表只显示 `title_public` | |
 | `evidence_ok` boolean not null default true | 每日核验结果；`false` → 视图隐藏 | |
+| `disclosure_ok` boolean not null default true | 披露输入（许可标志、分析师 `public_display`）变化后由触发器置 `false` → 视图隐藏；管理员重跑披露检查通过后置回 `true` | |
 | `review_status` check in (`pending`,`in_review`,`approved`,`rejected`) | | |
 | `status` check in (`draft`,`published`,`withdrawn`) default 'draft' | | |
 | `current_publication_id` uuid null FK publications | 当前发布快照 | |
@@ -196,11 +204,12 @@
 9. `target_cardinality`：`single_issuer` 的 targets 发行人数 ≠ 1 或行数 < 1；`multi_issuer` 发行人数 < 2；`sector/macro_strategy` 行数 ≠ 0
 10. `quarantine_open:<reason>`：`dq_quarantine` 中 `dataset='broker_research'`、`natural_key like '<sha256>:%'`、`status='open'` 且 `reason_code` ∈ 阻断集 `{upside_mismatch, currency_mismatch, date_order, nonpositive_price, unknown_rating_label, ambiguous_rating_label, ticker_issuer_conflict, unresolved_ticker}`
 11. `materialize_stale`：`materialized_hash is null or materialized_hash <> effective_hash`
-12. `rules_stale`：`broker_report_rule_receipts` 中不存在 `(report_id, rules_version = 当前, input_hash = effective_hash)` 的回执，或该回执含 `passed=false` 的阻断规则
-13. `eval_receipt_missing`：报告有任一生效证据行 `extractor like 'llm:%'`，而对其 `run_id` 的五元组 `(extractor_version, model_id, registry_hash, prompt_version, schema_version)` 在 `broker_eval_receipts` 中按 `ran_at` 最新的回执不是 `passed=true and corpus_kind='gold' and n_docs >= 30`，或该回执 `per_field` 对报告中出现的任一字段的 `tp+fn = 0`（未覆盖）
-14. `summary_stale`：存在 `approved` 摘要其 `input_hash <> effective_hash`
-15. `restricted_value_in_text:<surface>`：§4.11 内容级检查对 `title_original`（无 `title_public` 时）、任一 `approved` 片段或摘要不通过
-16. `evidence_drift`：`evidence_ok=false`
+12. `rules_stale`：`broker_report_rule_receipts` 中不存在 `(report_id, input_hash = rules_input_hash)` 的回执，或该回执含 `passed=false` 的阻断规则
+13. `eval_receipt_missing`：报告有任一生效证据行 `extractor like 'llm:%'`，而对其 `run_id` 的 `behavior_digest` 在 `broker_eval_receipts` 中按 `ran_at` 最新的回执不满足 `passed=true and corpus_kind='gold' and corpus_hash = settings.approved_gold_corpus_hash and n_docs >= 30`，或该回执 `per_field` 对报告中出现的任一字段 `tp+fn = 0`（未覆盖）；`approved_gold_corpus_hash is null` 时恒阻断
+14. `summary_stale`：存在 `approved` 摘要其 `input_hash <> reports.summary_input_digest`
+15. `restricted_value_in_text:<surface>`：§4.11 披露检查对以下任一面不通过：`title_public`、`title_zh`、`title_en`、任一 `approved` 片段、任一 `approved` 摘要；`title_original` 不通过且 `title_public is null` 也阻断（通过时发布函数写 `title_restricted := (title_original 不通过)`）
+16. `evidence_drift`：`evidence_ok=false`；`disclosure_stale`：`disclosure_ok=false`
+17. `conflict_unresolved:<field>[:<target_key>]`：存在未解决的候选冲突组（§6.2：同一 `(target_key, field, occurrence)` 有 ≥ 2 条 `extracted/unverified` 行且无生效行）
 
 **复核就绪谓词**：`blockers − {review_not_approved}` 为空（复核页"标记已复核"的条件）。
 
@@ -209,7 +218,8 @@
 触发器 `broker_reports_guard`（before insert or update）：
 - 插入时 `status` 必须为 `draft`。
 - 新值 `status='published'` 且旧值 ≠ → `current_setting('broker.publishing', true) = report_id::text` 必须成立，否则 `raise 'publish_direct_forbidden'`；且本次更新除 `status, current_publication_id, updated_at` 外不得改其他列。
-- 旧值 `published` 且新值 `published` → 只允许 `updated_at`、`evidence_ok`、`supersedes_report_id` 变化；其他 → `published_immutable`。
+- 旧值 `published` 且新值 `published` → 只允许 `updated_at`、`evidence_ok`、`disclosure_ok`、`supersedes_report_id` 变化；其他 → `published_immutable`。
+- 发布迁移允许函数同时写 `title_restricted`（它是发布时计算的结果列）。
 - 子表（`targets, target_overrides, fields, snippets, summaries, analysts`）的 before 触发器：所属报告 `published` 时拒绝，例外 `snippets/summaries` 的 `status → rejected|draft`（撤回片段 / 许可失效）。
 - 文档 `withdrawn` → `after update` 把报告置 `withdrawn`（允许从 `published` 直接到 `withdrawn`，outbox `claim.retract`）。
 
@@ -250,33 +260,34 @@
 | `value_source_text` text null | |
 | `extractor` text not null（`llm:<model_id>@<registry_hash>` / `human:<user_id>`）; `extractor_confidence` null | |
 | `status` check in (`extracted`,`unverified`,`confirmed`,`corrected`,`rejected`,`absent`) | |
-| `corrected_value_text`, `corrected_value_num`, `corrected_value_currency`, `corrected_value_unit`, `corrected_value_date` | `corrected` 时 `corrected_value_text` 必填 |
+| `corrected jsonb null` | `corrected` 时非空；对象键 ⊆ `{value_text, value_num, value_currency, value_unit, value_date}`；**键存在且值为 null = 显式清空**，键不存在 = 继承原值；`value_text` 键必须存在且非 null |
+| `conflict_group` text null | 分块合并时同一 `(target_key, field, occurrence)` 的多条候选共享一个组 id（§6.2） |
 | `detail jsonb`, `reviewed_by`, `reviewed_at`, `created_at` | |
 
-状态约束：`confirmed/corrected` → `page, char_start, char_end, value_source_text, parse_run_id` 非空；`absent` → `extractor like 'human:%'`、`field in ('rating','target_price','analyst','target_horizon')`、`page` 非空（封面）、跨度空、`value_text='ABSENT'`；`extracted/unverified` → `run_id` 非空。**生效值选择器**（SQL 函数 `broker_field_effective(field_row)` 与 TS `effectiveValue()` 同一规则）：`corrected_* ?? value_*`；物化、引用视图、规则、摘要落地都用它。唯一表达式索引 `(report_id, coalesce(target_key,''), field, occurrence) where status in ('confirmed','corrected','absent')`。
+状态约束：`confirmed/corrected` → `page, char_start, char_end, value_source_text, parse_run_id` 非空；`absent` → `extractor like 'human:%'`、`field in ('rating','target_price','analyst','target_horizon')`、`page` 非空（封面）、跨度空、`value_text='ABSENT'`；`extracted/unverified` → `run_id` 非空。**生效值选择器**（SQL 表达式 `broker_field_effective(...)`（`immutable` 函数，仅 service_role；视图内联等价 `case` 表达式）与 TS `effectiveValue()` 同一规则）：对每个分量 k：`corrected ? k` 键存在 → 取该值（可为 null）；否则取 `value_k`；物化、引用视图、规则、摘要落地都用它。唯一表达式索引 `(report_id, coalesce(target_key,''), field, occurrence) where status in ('confirmed','corrected','absent')`。
 
 ### 4.7 `broker_report_snippets` 与 `broker_report_summaries`
 
 片段：`snippet_id PK, report_id, target_key null, purpose check in ('rating','target','thesis','risk','method','other'), parse_run_id FK, page, char_start, char_end, text null, field_id null, status check in ('draft','approved','rejected'), disclosure_check jsonb, approved_by, approved_at, created_by, created_at`。`check (text is null or length(text) <= 500)`；`draft/approved` → `text` 非空；`approved` 触发器：`length(text) <= 当前 N` 且 `disclosure_check.passed`（§4.11）；读取时视图再按当前 N 过滤。
 
-摘要：`summary_id PK, report_id, lang check in ('zh','en'), kind = 'independent_summary', run_id FK, input_hash（= effective_hash ‖ artifact_hash）, summary_md, max_verbatim_overlap int, numeric_grounding jsonb, disclosure_check jsonb, status, approved_by, approved_at, generated_at`。唯一 `(report_id, lang) where status='approved'`。`approved` 触发器：`max_verbatim_overlap <= 当前 N`、`numeric_grounding.passed`、`disclosure_check.passed`、`input_hash = 报告 effective_hash ‖ 当前解析哈希`。
+摘要：`summary_id PK, report_id, lang check in ('zh','en'), kind = 'independent_summary', run_id FK, input_hash（= 生成时的 reports.summary_input_digest）, summary_md, max_verbatim_overlap int, numeric_grounding jsonb, disclosure_check jsonb, status, approved_by, approved_at, generated_at`。唯一 `(report_id, lang) where status='approved'`。`approved` 触发器：`max_verbatim_overlap <= 当前 N`、`numeric_grounding.passed`、`disclosure_check.passed`、`input_hash = reports.summary_input_digest`（生成、批准、失效（§6.3 第 4 步）、发布（§4.4 第 14 条）四处都只与这一列比较）。
 
 ### 4.8 `broker_report_publications`（不可变发布快照）与 `broker_report_rule_receipts`
 
-`broker_report_publications(publication_id PK, report_id, revision, snapshot jsonb not null, snapshot_hash text not null, licence_version int, rules_receipt_id FK, eval_receipt_id FK null, published_at, published_by, unpublished_at null, unpublish_reason null)`。`snapshot` = 报告列 + targets + 全部生效证据行（含 `field_id, parse_run_id, run_id, artifact_hash, page, char_*, 生效值`）+ `approved` 片段与摘要 id + `scale_id` 行 + 解析快照。只插入；`unpublished_at` 一次性写。F4 claims 绑定 `publication_id`（§10.2）。回放 = 从快照与桶内产物重建，不依赖活表。
+`broker_report_publications(publication_id PK, report_id, revision, snapshot jsonb not null, snapshot_hash text not null, licence_version int, rules_receipt_id FK, eval_receipt_id FK null, published_at, published_by, unpublished_at null, unpublish_reason null)`。`snapshot` = 报告列（含 `title_*`、`title_restricted`）+ targets + 全部生效证据行（含 `field_id, parse_run_id, run_id, artifact_hash, page, char_*, 生效值`）+ `approved` 片段**全文与出处**（`snippet_id, purpose, page, char_*, text, parse_run_id, disclosure_check`）+ `approved` 摘要**全文与出处**（`summary_id, lang, run_id, input_hash, summary_md, numeric_grounding, disclosure_check`）+ 选中的 `research_rating_scales` 行 + 覆盖表行 + 解析快照 + 披露输入（许可标志、涉及分析师的 `public_display`）。只插入；`unpublished_at` 一次性写。F4 claims 绑定 `publication_id`（§10.2）。回放 = 从快照与桶内产物重建，不依赖活表；`unpublish` 后对片段 / 摘要行的修改不影响已写快照。
 
-`broker_report_rule_receipts(receipt_id PK, report_id, rules_version, input_hash, results jsonb, code_version, created_at)`：每次规则运行一行；阻断函数第 12 条读与当前 `effective_hash` 匹配的最新回执。
+`broker_report_rule_receipts(receipt_id PK, report_id, rules_version, input_hash, results jsonb, code_version, created_at)`：每次规则运行一行；`input_hash = reports.rules_input_hash`（§4.4）；阻断函数第 12 条读与当前 `rules_input_hash` 匹配的最新回执。
 
 ### 4.9 实体表
 
 - `research_institutions(institution_id PK, name_en not null, name_zh, aliases text[], kind, rating_disclosure_url, created_at)`；唯一表达式索引 `(lower(name_en))`。
 - `research_rating_scales(scale_id PK, institution_id FK, raw_label not null, normalized check in ('buy','overweight','neutral','underweight','sell','not_rated'), source_url not null, valid_from not null, valid_to null, created_by, created_at, closed_by null, closed_at null)`。触发器：只允许 `valid_to` 从 null 改为日期（同时写 `closed_by/closed_at`），其他列不可更新；唯一表达式索引 `(institution_id, lower(raw_label), valid_from)`。选择规则：`valid_from ≤ published_date < coalesce(valid_to,'infinity')` 的唯一行。已发布报告的 `scale_id` 是发布快照的一部分，新映射行**不**回溯改变已发布报告；管理员总览列出"有更新映射可用"的已发布报告，重新物化需 `unpublish`。
-- `research_analysts(analyst_id PK, institution_id FK, display_name not null, name_variants text[], public_display boolean default false, created_at)`；`broker_report_analysts(report_id, analyst_id, role, field_id FK not null, primary key (report_id, analyst_id))`——每条绑定一条 `analyst` 证据行。
+- `research_analysts(analyst_id PK, institution_id FK, display_name not null, name_variants text[], public_display boolean default false, created_at)`；`broker_report_analysts(report_id, analyst_id, role, field_id FK not null, primary key (report_id, analyst_id))`——每条绑定一条 `analyst` 证据行。触发器 `analyst_disclosure_change`（`after update of public_display, display_name, name_variants`）：对所有绑定该分析师的报告置 `disclosure_ok=false`，其 `approved` 片段 / 摘要置 `draft`（`detail.reason='analyst_disclosure'`）；许可的 `after update`（§4.1）对其文档下的报告同样置 `disclosure_ok=false`。
 
 ### 4.10 `broker_report_access_log`、`broker_eval_receipts`、`broker_outbox`
 
 - 访问日志：`id, document_id, user_id, action check in ('upload','signed_url_issued','text_viewed','parse_run','extract_run','summary_run','unpublish','withdraw','purge','orphan_cleanup'), detail jsonb, created_at`。不记 IP。★ 路由先写后答。签名 URL 的后续对象 GET 由 Supabase Storage 服务，本模块不能观察（O10）。
-- 评测回执：`receipt_id, corpus_kind check in ('gold','synthetic'), corpus_hash, extractor_version, model_id, registry_hash, prompt_version, schema_version, code_version, n_docs, per_field jsonb {field:{tp,fp,fn,precision,recall}}, absence jsonb {tp,fp,fn}, precision_min, recall_min, passed, ran_at, ran_by`。`passed := precision_min >= 0.95 and recall_min >= 0.95`（按最差有覆盖字段；`tp+fp=0` 的 precision 与 `tp+fn=0` 的 recall 不参与 min，但阻断第 13 条要求报告出现的字段有覆盖）。`synthetic` 回执只在测试数据库出现，生产的阻断只认 `gold`。
+- 评测回执：`receipt_id, corpus_kind check in ('gold','synthetic'), corpus_hash, behavior_digest not null, extractor_version, model_id, registry_hash, prompt_version, schema_version, code_version, n_docs, per_field jsonb {field:{tp,fp,fn,precision,recall}}, absence jsonb {tp,fp,fn}, precision_min, recall_min, passed, ran_at, ran_by`。匹配键是 `behavior_digest`（§4.3）；五元组列只作展示。`passed := precision_min >= 0.95 and recall_min >= 0.95`（按最差有覆盖字段；`tp+fp=0` 的 precision 与 `tp+fn=0` 的 recall 不参与 min，但阻断第 13 条要求报告出现的字段有覆盖）。`synthetic` 回执只在测试数据库出现，生产的阻断只认 `gold`。
 - outbox：`event_id PK, kind check in ('claim.register','claim.revise','claim.retract','licence.changed','mapping.changed'), payload jsonb, status check in ('pending','delivered','failed'), attempts int, last_error, created_at, delivered_at`；由 `/api/cron/broker-research-outbox` 投递给 F4（§11.2），幂等键在 payload。
 
 ### 4.11 公开视图（owner `postgres`，`security_invoker=false, security_barrier=true`；每个视图 `revoke all from public, anon, authenticated; grant select to anon, authenticated`；视图不调用函数）
@@ -288,7 +299,7 @@ from broker_research_reports r
 join broker_report_documents d on d.document_id = r.document_id
 join broker_report_licences l on l.licence_id = d.licence_id
 join broker_research_settings s on s.id = 1
-where s.public_enabled and r.status = 'published' and r.evidence_ok and d.status <> 'withdrawn'
+where s.public_enabled and r.status = 'published' and r.evidence_ok and r.disclosure_ok and d.status <> 'withdrawn'
   and l.confirmed_at is not null and l.confirmed_version = l.version
   and current_date >= l.valid_from and (l.valid_to is null or current_date <= l.valid_to)
   and l.allows_public_metadata
@@ -298,18 +309,19 @@ where s.public_enabled and r.status = 'published' and r.evidence_ok and d.status
 | 视图 | 过滤 | 列（节选） |
 |---|---|---|
 | `broker_reports_public_v` | `visible_reports` | `report_id, revision, scope, institution_id, title = coalesce(title_public, title_original), title_is_rewritten = (title_public is not null), title_zh, title_en, title_is_translation, published_date, price_as_of_date, report_type, sector_as_stated, primary_target_key, available_at, code_version, published_at, supersedes_report_id, page_count, snippet_max_chars, target_price_public, summary_public` |
-| `broker_report_targets_public_v` | join | `report_id, target_key, ticker_as_stated, security_ticker, issuer_id, rating_raw, rating_normalized, scale_id, target_price = case when allows_public_target_price then … end`（同 `target_currency, target_horizon_months, upside_pct`）, `price_at_report, price_currency, price_as_of_date, upside_formula_version`；不含 `resolution, input_hash` |
-| `broker_report_citations_v` | `fields where status in ('confirmed','corrected','absent')` join；排除 `field in ('target_price','target_currency','target_horizon','upside_stated') and not allows_public_target_price`；排除 `field='analyst'` 除非 `exists (broker_report_analysts a join research_analysts ra … where a.field_id = fields.field_id and ra.public_display)` | `report_id, target_key, field, occurrence, page, value_text/num/currency/unit/date（生效值）, status, extractor_kind` |
+| `broker_report_targets_public_v` | join | `report_id, publication_id = r.current_publication_id, target_key, ticker_as_stated, security_ticker, issuer_id, rating_raw, rating_normalized, scale_id, target_price = case when allows_public_target_price then … end`（同 `target_currency, target_horizon_months, upside_pct`）, `target_price_public = allows_public_target_price, price_at_report, price_currency, price_as_of_date, upside_formula_version`；不含 `resolution, input_hash` |
+| `broker_report_citations_v` | `fields where status in ('confirmed','corrected','absent')` join；排除 `field in ('target_price','target_currency','target_horizon','upside_stated') and not allows_public_target_price`；排除 `field='analyst'` 除非 `exists (broker_report_analysts a join research_analysts ra … where a.field_id = fields.field_id and ra.public_display)`；排除 `field='title' and r.title_restricted` | `report_id, target_key, field, occurrence, page, value_text/num/currency/unit/date（生效值，内联 `case` 表达式）, status, extractor_kind` |
 | `broker_report_snippets_public_v` | `status='approved' and allows_public_snippets and length(text) <= snippet_max_chars` | `snippet_id, report_id, target_key, purpose, page, text, field_id` |
 | `broker_report_summaries_public_v` | `status='approved' and allows_public_summary` | `summary_id, report_id, lang, kind, model_id, registry_hash, prompt_version, input_hash, summary_md, generated_at` |
 | `broker_analysts_public_v` | `public_display` | `report_id, analyst_id, display_name, institution_id, role` |
 | `broker_rating_history_v` | 来自 `targets_public_v`；排除被取代的前任（`report_id in (select supersedes_report_id from visible_reports where supersedes_report_id is not null)`）；`lag(...) over (partition by institution_id, security_ticker, target_currency order by published_date, report_id)` | `report_id, prev_report_id, institution_id, security_ticker, issuer_id, published_date, prev_published_date, rating_normalized, prev_rating_normalized, scale_id, prev_scale_id, target_price, prev_target_price, target_currency, upside_formula_version, prev_upside_formula_version, code_version, prev_code_version, available_at, prev_available_at` |
-| `research_institutions_public_v`、`research_rating_scales_public_v` | 全表 | |
+| `research_institutions_public_v`、`research_rating_scales_public_v` | `join broker_research_settings s on s.id=1 where s.public_enabled`，且机构（或映射行所属机构）在 `visible_reports` 中至少出现一次 | 开关关闭时同样 0 行 |
 
 **内容级披露检查**（`src/lib/broker-research/disclosure.ts`，`DISCLOSURE_VERSION='disclosure/1'`；在片段 / 摘要批准、标题发布阻断第 15 条时执行，结果存 `disclosure_check`）：对文本 T 与报告的 targets 与分析师：
 - 若 `allows_public_target_price=false`：T 中任一数字 token（去千分位、货币符号、百分号后的规范化值）等于任一 target 的 `target_price` 或 `|upside_pct|`（百分数与小数两种写法、四舍五入到 1 位小数后比较）→ 不通过 `restricted_value:target`。
 - 对 `public_display=false` 的分析师：T 含 `display_name` 或任一 `name_variants`（大小写无关，CJK 直接子串）→ 不通过 `restricted_name`。
-- 许可版本变化 → 片段 / 摘要回 `draft`，重批准时重算。
+- 检查面：`title_original`、`title_public`、`title_zh`、`title_en`、每条片段、每条摘要；检查输入 = 当前 targets 的目标价 / 空间 + 当前许可标志 + 当前分析师披露状态；结果与输入哈希一起存 `disclosure_check {version, inputs_hash, passed, hits[]}`。
+- 许可版本变化或分析师披露变化 → 片段 / 摘要回 `draft`、报告 `disclosure_ok=false`；管理员"重跑披露检查"重算后置回 `true`（已发布报告允许此列变化，§4.4 守卫）。**重跑规则**（按 Codex 第四轮 FR4-02 处方实施，未再审计）：重跑沿用发布时的标题策略——`title_original` 不通过在存在通过检查的 `title_public` 替代且 `title` 引用行被抑制（`title_restricted=true`）时视为允许；只检查 `approved` 的片段与摘要，不检查未发布的草稿；若恢复需要改变 `title_restricted`，则必须 `unpublish` 后重新发布。
 
 集成测试：真实 `anon` 与 `authenticated` 角色——基表全拒、视图写拒、`rpc` 全拒（本模块函数无一对两角色开放）、视图读成功；可见性 CTE 每个条件翻转；`public_enabled=false` → 全部视图 0 行；目标价不可公开时在全部视图中**值不出现**；N 调小后超长片段消失；`lag` 分区与排序；被取代前任不出现在历史。
 
@@ -321,9 +333,9 @@ where s.public_enabled and r.status = 'published' and r.evidence_ok and d.status
 
 | 对象 | anon / authenticated | service_role |
 |---|---|---|
-| 20 张基表 | `revoke all` | 全部 |
+| 21 张基表 | `revoke all` | 全部 |
 | §4.11 视图 | 仅 `select` | `select` |
-| 全部函数（`publish_blockers`、`publish`、`unpublish`、`materialize`、`field_review`、`field_effective`） | `revoke execute from public, anon, authenticated` | `execute` |
+| 全部函数（`publish_blockers`、`publish`、`unpublish`、`materialize`、`field_review`、`field_add`、`field_effective`、`extract_commit`、`quarantine_resolve`） | `revoke execute from public, anon, authenticated` | `execute` |
 | 桶 | 无 | 全部 |
 
 ### 4.14 数据访问契约 `src/lib/broker-research/db.ts`
@@ -420,31 +432,39 @@ export interface BrokerResearchDb {
 
 1. 浏览器算 sha256；`POST …/documents/intent {sha256, byte_size, licence_id, original_filename}`：`documents.sha256` 已存在 → `409 duplicate_document {document_id}`；写意向（`open`，`expires_at = now() + 2 小时`，与 Supabase 签名上传 URL 文档有效期一致，本地栈验证）；签发 `createSignedUploadUrl('staging/{intent_id}.pdf')`；返回 `{intentId, uploadUrl, token}`。
 2. 浏览器直传暂存路径。
-3. `POST …/documents/commit {intentId}`：`transitionIntent(open→validating, by=当前管理员)` 失败 → `409 intent_mismatch`（含已 `committed` 时返回 `200 {documentId}` 的重试语义）；下载暂存对象、复算 sha256 / 大小 / `%PDF-` 头；不符 → 删**暂存对象**、意向 `abandoned`、`422 …`；相符 → 若 `reports/{sha}.pdf` 已存在于桶但 `documents` 无行（上次崩溃）则直接复用，否则 `move(staging → reports/{sha}.pdf)`；插入 `documents(status='uploaded')`；意向 `committed`（`document_id`）；日志 `upload`；审计。同 sha 并发：`documents.sha256` 唯一 → 后者插入失败 → 删自己的暂存对象、意向 `abandoned`、`409 duplicate_document`。
+3. `POST …/documents/commit {intentId}`（可重复调用；每步是持久检查点，重试从意向当前状态续作；同一意向并发调用由 CAS 串行化，失败者 `409 intent_busy`）：
+   - `open → validating`（CAS；`created_by` 必须是当前管理员，过期 → `expired`，`409 intent_mismatch`）：下载暂存对象、复算 sha256 / 大小 / `%PDF-` 头；不符 → 删**暂存对象**、意向 `abandoned`、`422 …`；相符 → `validated`（`checkpoint_at`）。
+   - `validated → promoting`：插入 `documents(status='uploaded', promotion_pending=true)`；`documents.sha256` 唯一冲突 → 删自己的暂存对象、意向 `abandoned`、`409 duplicate_document`（已存在文档 id 返回）；成功 → 意向写 `document_id`。
+   - `promoting`：`move(staging → reports/{sha}.pdf)`；若正式路径已存在且暂存已不存在（上次在 move 之后崩溃）视为已完成；若两者都不存在 → 文档 `withdrawn(reason='promotion_lost')`、意向 `abandoned`、`500 promotion_lost`；完成 → `documents.promotion_pending=false`、意向 `committed`、日志 `upload`、审计。
+   - **`promotion_lost` 的恢复**（按 Codex 第四轮 FR4-01 处方实施，未再审计）：对 `promotion_lost` 的文档，允许创建一个**绑定既有 `document_id`** 的替换上传意向（`intents.document_id` 预填，`intent` 路由对该 sha 不再返回 `duplicate_document`）；提交时续作提升进入该文档，而不是插入另一条 sha 行；在校验与提升成功之前文档保持 `withdrawn` 且不可访问；成功后 `withdrawn_at/withdrawn_reason` 清空、`status='uploaded'`、`promotion_pending=false`。
+   - `committed`：直接 `200 {documentId}`。
+   `promotion_pending=true` 的文档对解析 / 抽取 / 签名 URL 一律 `409 promotion_pending`。
 4. 过期意向：管理员"清理孤儿对象"只删 `staging/` 下其意向 `expired/abandoned` 的对象，从不删 `reports/`。
 
 ### 6.2 解析与抽取（两个独立管理员动作，各自请求、各自 `maxDuration=300`）
 
 **parse**：处理授权谓词为真（否则 `409 licence_forbids_processing`）；取租约（失败 `409 lease_held`）；文档 `parsing`；插入 `runs(kind='parse', licence_version)`；F3 `extractDocument`（deadline = 请求剩余 − 20 s，提案）；成功 → 围栏写 `artifact_path/hash`、文档 `parsed` + `current_parse_run_id`；失败 → 运行 `failed`，文档回 `parse_failed`（无先前成功）或 `parsed`（有）；释放租约。批次 `producer='broker-research-parse'`：成功 `counts={fetched:1, inserted:1}` → `success`；失败 `counts={fetched:1, failed:1}` + 非信息错误 → `failed`（`accounted=1`，`landed=0`）。
 
-**extract**：文档 `parsed`；处理授权；租约；`ensureReport`；插入 `runs(kind='extract', parse_run_id=current, …)`；平台 LLM（无 → `llm_unavailable`）；按页分块：每块 ≤ `CHUNK_PAGES`（提案 8 页）且 ≤ 模型上下文的 60%（提案），每块同 schema，合并同字段取最高 `confidence`，`detail.chunks`；请求 / 响应原文入桶；ajv；定位；`markSuperseded` 旧候选；`insertCandidateFields`；`materialize`（候选基准）；规则 → 回执；隔离；`finishBatch`：`fetched = 候选字段数`、`inserted = 已定位数`、`quarantined = 隔离数`、`failed = 0`；`unverified > 0` 时加非信息错误 `span_unverified_summary` → `partial`；LLM / schema 失败时 `fetched=0` + 非信息错误 → `failed`；`recordAttempt(client,'broker_research',{ok, cadence:'event'})`（手动触发、文档级租约不串行化数据集级新鲜度；`recordAttempt` 最后写入者胜，可接受——它只表示"最近一次尝试"）；释放租约。请求级取消：无（请求结束即中止；运行 `running` 超过租约 TTL 视为 `failed:lease_expired`，由下一次取租约时标记）。
+**extract**：文档 `parsed` 且 `promotion_pending=false`；处理授权；租约；`ensureReport`；插入 `runs(kind='extract', parse_run_id=current, behavior_digest, …)`；平台 LLM（无 → `llm_unavailable`）；按页分块：每块 ≤ `CHUNK_PAGES`（提案 8 页）且 ≤ 模型上下文的 60%（提案），每块同 schema；请求 / 响应原文入桶；ajv；定位。
+**分块合并**（`merge.ts`，`MERGE_VERSION='merge/1'`）：候选身份 = `(target_key, field, occurrence)`；`target_key` 由各块的 `ticker` 证据经 `parseBrokerTicker` 规范化；`analyst`/`ticker` 的 `occurrence` 按规范化值（去空白、大小写无关）分配，不同值 = 不同 occurrence，同值跨块 = 同一 occurrence 只保留一条（页码最小者，`detail.merged_from=[chunk…]`）；其余字段同一身份出现 ≥ 2 个**不同**规范化值 → 全部保留、共享一个 `conflict_group`，**没有任何一条被自动选中**，复核页以冲突组展示，管理员 `confirm` 其一（其余自动 `rejected`）；`confidence` 只作展示，不参与选择。
+写入经单个 RPC `broker_extract_commit(document_id, lease_token, run_id, candidate_rows)`：函数内校验 `lease_token` 相等**且** `lease_until > now()`（否则 `lease_lost`，不写任何行）、`markSuperseded` 旧候选、插入候选、调用物化（候选基准），同一事务。随后 TS 跑规则 → 回执（`input_hash=rules_input_hash`）；隔离；`finishBatch`：六计数器全部显式给出：`fetched = 候选行数`、`inserted = 已定位行数`、`duplicates = 0`、`versioned = 0`、`quarantined = 隔离项数`、`failed = 0`；`unverified > 0` → 非信息错误 `span_unverified_summary`；`quarantined > 0` → 非信息错误 `rules_failed_summary`（否则 `batchStatusFromCounts` 把只有隔离的批次判为 `success`）；两者使批次 `partial`；LLM / schema 失败 → `fetched=0` + 非信息错误 → `failed`。手动的 parse / extract / summary **不**调用 `recordAttempt`（它维护连续错误与最近成功状态，假定单生产者；并发管理员会互相覆盖）；数据集新鲜度只由每日核验 cron（单生产者）写（§8.3）。释放租约。请求级取消：无；`running` 超过租约 TTL 的运行在下一次取租约时标 `failed:lease_expired`。
 
 ### 6.3 复核与物化
 
 **物化函数** `broker_report_materialize(p_report_id)`（SQL，行锁）：
 1. `effective_hash` := 生效证据行（`confirmed/corrected/absent`）按 `(target_key, field, occurrence)` 排序的规范化 JSON 的 sha256。
 2. 每个 `target_key`（来自 `ticker` 字段，候选或生效）生成 targets 行：`basis='effective'` 若该 target 全部必填字段都生效，否则 `candidate`；数值用生效值选择器；`rating_normalized/scale_id` 按 `published_date` 选映射行（无 / 多 → 空）；币种来自同 target 的 `*_currency` 字段；`upside_pct` 仅当两币种相等且两值都有；解析：覆盖表 > `resolution` 快照（由 TS 在插入候选时写入）；`input_hash` 为该 target 证据哈希。
-3. 报告级列（`title_original` 等）从生效 / 候选字段同步（草稿允许空）；`materialized_hash := effective_hash`。
-4. `approved` 摘要 `input_hash ≠ 新值` → `draft`。
+3. 报告级列（`title_original` 等）从生效 / 候选字段同步（草稿允许空）；`materialized_hash := effective_hash`；`rules_input_hash := sha256(生效行 ‖ 覆盖行 ‖ institution_id ‖ 选中的 scale 行 ‖ published_date ‖ uploaded_at ‖ resolution ‖ RULES_VERSION)`；`summary_input_digest := sha256(effective_hash ‖ current_parse_run.artifact_hash ‖ institution_id ‖ coalesce(title_public,''))`。
+4. `approved` 摘要 `input_hash ≠ summary_input_digest` → `draft`（证据与解析产物未变时该值不变，摘要不失效）。
 5. 返回回执。**不**调用 TS、不调用 F4。
 
-**复核 RPC** `broker_field_review(p_field_id, p_action, p_payload, p_by)`：同一事务内改字段状态（`confirm/correct/reject/absent`）并调用物化；人工新增 `broker_field_add(...)` 同理。之后 TS 运行 §7 规则（输入 = 物化后的 targets 与生效行），写 `rule_receipts(input_hash=effective_hash)`，新的不通过项隔离。并发：物化与发布都对报告行加锁；发布在锁下重新读取 `effective_hash`、`materialized_hash`、回执，三者不一致 → 阻断 11/12。
+**复核 RPC** `broker_field_review(p_field_id, p_action, p_payload, p_by)`：**先** `select … for update` 父报告行（`published` → `published_immutable`），再在同一事务内改字段状态（`confirm/correct/reject/absent`；`confirm` 一条冲突组成员时同组其余候选置 `rejected`）并调用物化；人工新增 `broker_field_add(...)`、覆盖 upsert、机构 / 分析师绑定同样先锁父行。之后 TS 运行 §7 规则（输入 = 物化后的 targets 与生效行），写 `rule_receipts(input_hash=rules_input_hash)`，新的不通过项隔离。并发：物化与发布都对报告行加锁；发布在锁下重新读取 `effective_hash`、`materialized_hash`、`rules_input_hash` 与回执，不一致 → 阻断 11/12。
 
 复核页动作：`confirm`、`correct`（类型化载荷）、`reject`、`add`、`absent`、绑定机构 / 分析师（分析师绑定指向 `analyst` 证据行）/ `scope` / `report_type` / `primary_target_key` / `supersedes_report_id` / `title_public`、解析覆盖。"标记已复核"条件 = 复核就绪谓词（§4.4）。
 
 ### 6.4 独立摘要
 
-处理授权；租约；`runs(kind='summary')`；输入 = 解析文本 + 生效字段 JSON；提示词 `prompts/independent-summary.v1.md`：四段，禁止逐字引用，禁止生效字段之外的数字；输出后三项检查：(a) `max_verbatim_overlap`（`overlap.ts`）；(b) **数值落地**（`grounding.ts`，`GROUNDING_VERSION='grounding/1'`）：抽出每个数字，要求存在生效字段使 (i) 规范化数值相等（百分数 / 小数两写法、四舍五入 1 位小数）**且** (ii) 该数字所在句含该字段的关键词之一（`GROUNDING_KEYWORDS` 版本化：如 `target_price` ↔ `目标价|target|PT`，`wacc` ↔ `WACC|折现率`）；任一不满足 → `rejected:summary_ungrounded`；(c) 披露检查（§4.11）。zh / en 各自生成。管理员 `approve`（触发器复核 §4.7 四条件）。
+处理授权；租约；`runs(kind='summary')`；输入 = 解析文本 + 生效字段 JSON；`input_hash := reports.summary_input_digest`（§6.3）；提示词 `prompts/independent-summary.v1.md`：四段，禁止逐字引用，禁止生效字段之外的数字，**每个数字必须以"<标的代码> 的 <字段名> <数值 单位>"的形式出现**（提示词给出模板）；输出后三项检查：(a) `max_verbatim_overlap`（`overlap.ts`）；(b) **数值落地**（`grounding.ts`，`GROUNDING_VERSION='grounding/1'`）：把摘要按句切分；每个含数字的句子必须**恰好**匹配一条断言模式 `(<target_key 或 ticker_as_stated>)? <字段关键词> <数值><单位>`，并满足：(i) 字段关键词 ∈ `GROUNDING_KEYWORDS[field]`（版本化）；(ii) 报告有多个 target 时句中必须出现该 target 的代码，单 target 时可省略；(iii) 规范化数值 **且单位**（`pct/price/months`）与该 `(target_key, field)` 的生效值相等（百分数 / 小数两写法、四舍五入 1 位小数）；(iv) 同一句内出现的每个数字都各自满足 (i)–(iii)——一句含"目标价 100 与营收 100"时"营收"不在关键词表，整句不通过。**标识符处理**（按 Codex 第四轮 FR4-03 处方实施，未再审计）：扫描数值断言之前先把可识别的标的标识符（`target_key`、`ticker_as_stated`、`security_ticker`，如 `9988.HK`）切分为标识符 token；标识符中的数字只用于确定 target 身份，不参与数值检查；每个含数字的句子要求**恰好一条**字段断言，句中其余每个数字 token 都必须属于该断言的数值或单位，否则该句不通过。结果 `numeric_grounding = {version, passed, assertions:[{sentence_idx, target_key, field, value, unit, field_id}]}`；任一不通过 → `rejected:summary_ungrounded`；(c) 披露检查（§4.11）。zh / en 各自生成。管理员 `approve`（触发器复核 §4.7 四条件，`input_hash = reports.summary_input_digest`）。
 
 ### 6.5 发布、取消发布、撤回、清除
 
@@ -483,7 +503,7 @@ export interface BrokerResearchDb {
 
 ### 7.3 处理钩子
 
-`POST /api/admin/dq/quarantine/[id]` 对本 dataset：先执行钩子（只写**覆盖 / 映射**表，幂等 upsert），再 `resolveQuarantine`；钩子失败不翻转；`already_resolved` 时钩子写无害（同键 upsert）。不同管理员带不同载荷竞争同一项：后者的 `resolveQuarantine` 得 `already_resolved` → 其覆盖写被**回滚**（钩子与翻转在同一 TS 流程中按"先写覆盖、翻转失败则删除本次覆盖"处理；覆盖表记录 `set_by`，删除只删自己的）。
+`POST /api/admin/dq/quarantine/[id]` 对 `dataset='broker_research'` 不走 TS 的 `resolveQuarantine`，而是调用 SQL 函数 `broker_quarantine_resolve(p_id, p_status, p_by, p_payload)`，**一个事务**内按序：(1) `select … for update` 隔离行，`status <> 'open'` → 返回 `already_resolved`，不做任何写；(2) `select … for update` 所属报告行（`published` → 抛 `published_immutable`）；(3) 按 `reason_code` 写覆盖 / 映射行（§4.5 覆盖表 upsert、§4.9 映射行插入；参数缺失 → 抛 `hook_params_required`，事务回滚）；(4) 调用物化；(5) 翻转隔离行并写 `resolved_by/at`。竞争的两个管理员：后者在 (1) 得 `already_resolved`，没有任何写发生；没有补偿删除。路由把函数结果映射为与 `resolveQuarantine` 相同的 `resolved/not_found/already_resolved` 并写 `research_audit_log`。
 - `unknown_rating_label/ambiguous_rating_label` + accept：`{normalized, source_url, valid_from}` → 插映射行（唯一索引幂等）→ `materialize`。
 - `unresolved_ticker/ticker_issuer_conflict` + accept：`{target_key, security_ticker}` → `upsertTargetOverride` → `materialize`。
 - `possible_version` + accept：`{supersedes_report_id}`。
@@ -528,7 +548,7 @@ export interface BrokerResearchDb {
 
 ### 8.3 cron（`CRON_SECRET`，`vercel.json` 在 FR-5 登记）
 
-- `/api/cron/broker-research-verify`（每日）：按 `documents.last_verified_at` 升序取文档，预算 250 s（提案），对已发布报告的生效证据行重跑 R1；不一致 → `evidence_ok=false`（视图即时隐藏）+ `dq_quarantine(reason='span_drift')`；一致 → `last_verified_at=now()`。回执 `producer='broker-research-verify'`。管理员处理后重跑该报告核验恢复 `evidence_ok=true`。
+- `/api/cron/broker-research-verify`（每日）：按 `documents.last_verified_at` 升序（null 最先）取文档，预算 250 s（提案），对已发布报告的生效证据行重跑 R1；**无论结果如何都写 `last_verified_at=now()` 与 `verify_status`**（`ok` / `failed`=不一致 / `error`=产物不可读），失败文档不会饿死后面的文档；不一致 → `evidence_ok=false`（视图即时隐藏）+ `dq_quarantine(reason='span_drift')`；产物不可读 → `evidence_ok=false` + 隔离 `artifact_unreadable`。回执 `producer='broker-research-verify'`；这是本 dataset **唯一**的 `recordAttempt` 调用者（`cadence:'daily'`）。管理员处理后"重跑核验"（单文档路由）通过则 `evidence_ok=true`。
 - `/api/cron/broker-research-outbox`（每 10 分钟，提案）：投递 `pending` 事件到 F4（§11.2），失败重试（`attempts` ≤ 10 后 `failed` 并进管理员总览）。F4 未落地时 cron 不登记，事件积压在表里。
 
 ---
@@ -592,8 +612,10 @@ export interface BrokerResearchDb {
 
 ### 10.2 登记（outbox 事件 `claim.register`，适配器 `judgments.ts`）
 
+事件身份与 claim 身份分离：每个 outbox 事件有唯一 `event_id`（uuid，消费者按它去重）；每个 claim 有稳定 `claim_key = broker_target_price:${publication_id}:${target_key}` 与单调递增 `claim_seq`（`register`=1，`retract`=2，`revise` 不用于本 claim_type——修订一律是新 `publication_id` 即新 `claim_key`）。消费者对同一 `claim_key` 只应用 `claim_seq` 更大的事件；**先到的 retract**（seq 2）写墓碑，之后到的 register（seq 1）被忽略；重复投递同 `event_id` 幂等。
+
 ```ts
-{ idempotency_key: `broker_target_price:${publication_id}:${target_key}`,
+{ event_id, claim_key: `broker_target_price:${publication_id}:${target_key}`, claim_seq: 1 | 2, kind: 'claim.register' | 'claim.retract',
   claim_type: 'broker_target_price', methodology_version: 'broker-claim/1',
   subject: { security_ticker, issuer_id, market, currency: target_currency },
   claimant: { kind: 'institution', id: institution_id },
@@ -603,17 +625,17 @@ export interface BrokerResearchDb {
   visibility_ref: { view: 'broker_report_targets_public_v', report_id, target_key } }
 ```
 
-`unpublish` / `withdraw` / 许可隐藏 → `claim.retract {idempotency_key}`；重新发布 → 新 `publication_id` → 新登记（旧的已 retract）。`licence.changed` 事件让 F4 重查 `visibility_ref`。
+`unpublish` / `withdraw` / 许可隐藏 / `disclosure_ok=false` / `evidence_ok=false` → `claim.retract {event_id, claim_key, claim_seq: 2}`（同一 `claim_key` 只发一次 retract，outbox 唯一索引 `(claim_key, claim_seq)`）；重新发布 → 新 `publication_id` → 新 `claim_key` 的 register。`licence.changed` 事件让 F4 重查 `visibility_ref`。
 
 ### 10.3 结算契约（F4 执行）
 
 - 证券与币种：只用 `subject.security_ticker` 的 K 线；市场币种 ≠ `claim.currency` → `unsettleable:currency`。
 - `ForwardCall` 映射：`market` 由 `security_ticker` 后缀；`action = direction>0 ? 'buy' : direction<0 ? 'sell' : 'hold'`；`confidence=null`；`at = published_date + 'T00:00:00'` 在交易所时区 → `exchangeDate` 得 `published_date`；基准 = **当日或之后**首根 K 线（`base_rule='first_bar_on_or_after_published_date'`）。
-- 复权：取 `none` 与 `qfq` 两个序列并都留存；窗口内 `none/qfq` 比值变化 > 0（零容差，§15.3）→ `unsettleable:adjustment_discontinuity`（不断言原因）；否则用 `none` 序列与名义目标价比较。
+- 复权：取 `none` 与 `qfq` 两个序列并都留存；两序列按 `time` 内连接对齐，任一序列缺少对方有的日期 → `unsettleable:series_misaligned`；任一序列缺失或为空 → `unsettleable:series_missing`；某日 `qfq.close ≤ 0` 或非有限数 → `unsettleable:bad_bar`；比值 `none.close / qfq.close` 四舍五入到 6 位小数后在窗口内不全相等 → `unsettleable:adjustment_discontinuity`（不断言原因）；否则用 `none` 序列与名义目标价比较。
 - 窗口：5/20/60 交易日（`scoreForward` 原样）；到期命中仅 `horizon_months` 非空：`horizon_end` = `base_date` 加 `horizon_months` 日历月后 ≤ 该日的最后一根 K 线；`+1`：`max(high) ≥ target`；`−1`：`min(low) ≤ target`；`0`：null。
 - 完整性：K 线未覆盖窗口末端 → 该窗口 `pending`；基准 K 线不在取数窗口 → `unsettleable:history_truncated`。
 - 快照：两序列原样写 `settlements/{claim_id}/{settled_at}/{none|qfq}.json`，结算行记路径与哈希、`price_source='eastmoney:kline'`、`methodology_version='broker-settle/1'`、`code_version`；只追加。
-- 可得性：`retrospective = exchangeDate(available_at, market) > base_date`。
+- 可得性：`retrospective = available_at > base_close_at`，其中 `base_close_at` = `base_date` 当日交易所收盘时刻（`EXCHANGE_CLOSE`：A 股 15:00 Asia/Shanghai；港股 16:00 Asia/Hong_Kong；美股 16:00 America/New_York；常量表版本化，半日市不单独处理——记为已知近似，§15.3）；同一交易日但晚于收盘上传的报告是 `retrospective=true`。
 
 ### 10.4 显示（F4 落地后）
 
@@ -633,7 +655,7 @@ Brier；相对基准；分析师个人命中率对外。
 
 ### 11.2 F4 判断框架
 
-需要：outbox 消费端点 `POST <F4>/claims/events`（接受 `claim.register|revise|retract|licence.changed`，按 `idempotency_key` 幂等，返回 `{accepted, claim_id?}`）；`settleClaims`（§10.3 契约）；`settlementOf(claim_id)`；`claimantStats(claimant, {minN, split:'retrospective'})` 只计 `active` 且 `visibility_ref` 当前可见（F4 用 anon 读视图核对）的 claim；F4 页面同样核对。`minN` 由 F4 定，截止：FR-7 前（owner 事项）。
+需要：outbox 消费端点 `POST <F4>/claims/events`（接受 `claim.register|claim.retract|licence.changed`；按 `event_id` 去重；对同一 `claim_key` 只应用 `claim_seq` 更大的事件，retract 先到写墓碑；返回 `{accepted, applied, claim_id?}`）；`settleClaims`（§10.3 契约）；`settlementOf(claim_id)`；`claimantStats(claimant, {minN, split:'retrospective'})`。**claim 资格**（F4 每次读取与汇总时核对，用 anon 读 `broker_report_targets_public_v`）：存在行 `report_id = source.report_id and target_key = … and publication_id = source.publication_id and target_price is not null`——即当前发布仍是登记时那次、且目标价当前允许公开；不满足的 claim 不计入任何展示与汇总（`active` 但 `ineligible`）。F4 页面同样核对。`minN` 由 F4 定（O12）。F4 规格 §11.2 目前把卖方登记列为"待可见性 / 所有权支持后"的延期项：本接口是**请求的集成契约**，不是已存在能力；F3 与 F4 接口须在 FR-2 / FR-7 开始前由双方规格作者签字（O13）。
 
 ### 11.3 F6 评测
 
@@ -676,7 +698,11 @@ anon **与 authenticated** 读 `reports/*`、`staging/*` 被拒；签名上传 U
 | 情形 | 行为 | 码 / HTTP | 批次 |
 |---|---|---|---|
 | sha 已存在 | 不写 | `409 duplicate_document` | — |
-| 意向不匹配 / 过期 / 他人 | 不提交 | `409 intent_mismatch` | — |
+| 意向不匹配 / 过期 / 他人 / 并发 | 不提交 | `409 intent_mismatch` / `409 intent_busy` | — |
+| 提升丢失（暂存与正式对象都不存在） | 文档 `withdrawn`、意向 abandoned | `500 promotion_lost` | — |
+| 文档提升未完成 | 拒绝处理 | `409 promotion_pending` | — |
+| 候选冲突未解决 | 阻断 | `publish_blocked:conflict_unresolved:*` | — |
+| 核验产物不可读 | `evidence_ok=false` + 隔离 | `artifact_unreadable` | partial |
 | 提交校验不符 | 删暂存对象、意向 abandoned | `422 sha_mismatch\|size_mismatch\|not_pdf` | — |
 | 对象超 50 MiB | 桶拒绝 | `413` | — |
 | 处理授权为假 | 不处理 | `409 licence_forbids_processing` | — |
@@ -703,7 +729,7 @@ anon **与 authenticated** 读 `reports/*`、`staging/*` 被拒；签名上传 U
 
 | 工作包 | 交付 | 退出条件 | 估计 |
 |---|---|---|---|
-| FR-0 迁移、视图、函数、契约 | 20 表、桶、9 视图、函数（blockers、publish、unpublish、materialize、field_review、field_add、field_effective）、触发器、权限、锁文件、types、`BrokerResearchDb` 三实现、§12.2 | `test:db`、`test:migrations` 绿；两角色视图读成功、其余全拒 | 5 人日 |
+| FR-0 迁移、视图、函数、契约 | 21 表、桶、9 视图、函数（blockers、publish、unpublish、materialize、field_review、field_add、field_effective、extract_commit、quarantine_resolve）、触发器、权限、锁文件、types、`BrokerResearchDb` 三实现、§12.2 | `test:db`、`test:migrations` 绿；两角色视图读成功、其余全拒 | 5.5 人日 |
 | FR-1 许可、上传、存储 | 版本化许可、开关、意向 / 暂存 / 提交、签名 URL + 日志、撤回 / 清除步骤表、孤儿清理、总览 / 上传 / 文档页、`storage-check.ts` | `test:storage` 全绿 | 4 人日 |
 | FR-2 解析、抽取、复核、评测回执 | F3 适配、运行表、schema、定位、类型化、`parseBrokerTicker`、物化、复核 RPC、规则回执、隔离与钩子、复核页、合成与录制夹具、`eval-gold.ts` + 回执写库、`pipeline.integration` | 全链路绿；16 条阻断有测试；`synthetic` 回执只在测试库 | 7 人日（不含 F3） |
 | FR-3 摘要、发布、公开页（预览） | 摘要三检查、披露检查、发布 / 取消发布与快照、公开 API（`no-store`）、列表 / 详情 / 机构页、`/stock` 块 + mock 删除 + consensus 修改、预览页 | 合成报告在管理员预览可见；DTO 值级绿；开关关闭时 anon 视图 0 行 | 5 人日 |
@@ -747,6 +773,8 @@ Codex 两轮 + 处置（本目录）；每日核验（漂移即隐藏）；规�
 | O10 Supabase 存储访问日志 | owner | FR-1 后 |
 | O11 清除时是否删摘要文本 | owner | FR-1 前 |
 | O12 F4 `minN` | F4 规格 | FR-7 前 |
+| O13 F3（§11.1）与 F4（§11.2）接口签字：两份并行规格的作者各自确认本规格请求的契约可交付；未签字则 FR-2（F3）/ FR-7（F4）不开始 | F3 / F4 作者 + owner | FR-2 前 / FR-7 前 |
+| O14 批准黄金集清单（写 `settings.approved_gold_corpus_hash`）；清单变更需重新批准，之前的回执随之失效 | owner | FR-5 前 |
 | 生产：迁移、建桶、`CRON_SECRET`（已有）、开关 | owner | 合并后 |
 
 ### 15.3 参数登记
@@ -760,7 +788,9 @@ Codex 两轮 + 处置（本目录）；每日核验（漂移即隐藏）；规�
 | `maxDuration` | 300 s | 现有路由 | 固定 |
 | 意向有效期 | 2 小时 | Supabase 文档；本地栈验证 | 验证后固定 |
 | 评测数值容差 | 0 | 本规格（值必须逐字相等） | 固定 |
-| 复权不连续阈值 | 比值变化 > 0 | 本规格（零容差） | 固定 |
+| 复权不连续阈值 | 比值四舍五入到 6 位小数后不全相等 | 本规格（零容差，6 位为提案） | D7 |
+| 交易所收盘时刻表 `EXCHANGE_CLOSE` | A 15:00 / HK 16:00 / US 16:00（本地时区；半日市不处理） | 本规格（已知近似） | D7 |
+| 行为摘要输入清单 `BEHAVIOR_DIGEST_INPUTS` | 见 §4.3 | 本规格 | 固定（变更须改版本） |
 | 片段硬上限 | 500 字 | 提案 | D2/D7 |
 | `source_label` 长度 | 120 | 提案 | D7 |
 | `quote` 上限 | 400 字 | 提案 | D7 |

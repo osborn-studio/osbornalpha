@@ -74,3 +74,44 @@
 - Supabase Storage / Vercel / Postgres 视图与触发器语义的实机验证（§16 1、8；FR-1 `storage-check.ts` 与 FR-0 迁移测试给出答案）。
 - 许可（D1）、黄金集回执、`test:storage` 回执三项对外门禁尚无证据；对外发布停在 FR-6。
 - 第 3 稿未经 Codex 复审；计划编写前再跑一轮。
+
+## 第三轮（`04-codex-round3.md`，对第 3 稿）→ 第 4 稿处置
+
+第三轮 verdict 原文："Verdict: Not ready for an implementation plan: blocking gaps remain in publication/input validity, disclosure and claim eligibility, evidence preservation, atomic quarantine resolution, upload recovery, evaluation identity, numeric grounding and availability classification, plus FR3-01–03."
+
+| ID | 严重度 | 决策 | 第 4 稿落点 / 理由 |
+|---|---|---|---|
+| FR3-01 摘要输入哈希两种定义 | P1 | ACCEPT | §4.4 新列 `summary_input_digest`（物化输出）；§4.7、§6.3 第 4 步、§6.4、§4.4 第 14 条四处只与该列比较 |
+| FR3-02 分块合并丢弃证据 | P1 | ACCEPT | §6.2"分块合并"：身份 `(target_key, field, occurrence)`；`analyst/ticker` 按规范化值分配 occurrence；同身份不同值全部保留为 `conflict_group`，无自动选择；§4.4 第 17 条 `conflict_unresolved` 阻断；§6.3 `confirm` 一条则同组其余 `rejected` |
+| FR3-03 register/retract 同一幂等键 | P1 | ACCEPT | §10.2：`event_id`（去重）与 `claim_key + claim_seq`（排序）分离；retract 先到写墓碑；outbox 唯一 `(claim_key, claim_seq)`；§11.2 消费契约 |
+| FR2-03 规则输入哈希 / 父锁 | PARTIAL→ACCEPT | §4.4 `rules_input_hash`（全部规则输入）；§4.8 回执绑定它；§6.3 复核 / 新增 / 覆盖 / 绑定都先锁父行 |
+| FR2-04 机构 / 映射视图未受开关 | PARTIAL→ACCEPT | §4.11 两视图加 `public_enabled` 且仅限有可见报告的机构 |
+| FR2-07 显式清空 | PARTIAL→ACCEPT | §4.6 `corrected jsonb`：键存在且 null = 清空、键不存在 = 继承；选择器同规则 |
+| FR2-11 标题 / 译名逃逸、分析师披露变更 | PARTIAL→ACCEPT | §4.4 第 15 条覆盖 `title_public/zh/en` 与片段摘要；`title_restricted` 排除引用；§4.9 分析师触发器与 §4.11 `disclosure_ok` + 重跑检查 |
+| FR2-13 围栏只查 token | PARTIAL→ACCEPT | §6.2 `broker_extract_commit` 校验 token 且未过期，候选插入与物化同事务 |
+| FR2-14 快照只存 id | PARTIAL→ACCEPT | §4.8 快照含片段 / 摘要全文与出处、覆盖行、披露输入 |
+| FR2-15 钩子破坏性补偿 | PARTIAL→ACCEPT | §7.3 `broker_quarantine_resolve` 单事务：锁隔离行 → 锁报告 → 写覆盖 → 物化 → 翻转；无补偿删除 |
+| FR2-16 目标视图存在≠目标价可公开 | PARTIAL→ACCEPT | §4.11 targets 视图暴露 `publication_id`、`target_price_public`；§11.2 资格 = 同 publication 且 `target_price is not null` |
+| FR2-18 对齐 / 缺失 / 零除 / 舍入 | PARTIAL→ACCEPT | §10.3 内连接对齐、`series_missing/series_misaligned/bad_bar`、6 位舍入（§15.3） |
+| FR2-20 仅隔离的批次为 success | PARTIAL→ACCEPT | §6.2 六计数器显式 + 非信息错误 `rules_failed_summary` |
+| FR2-21 核验饿死 / 新鲜度并发 / 签字 | PARTIAL→ACCEPT | §8.3 失败也推进游标；手动运行不调 `recordAttempt`，仅核验 cron 调；O13 F3/F4 签字 |
+| FR-04 评测身份 | DECLINED-NOT-ACCEPTABLE→ACCEPT | §4.3 `behavior_digest`（影响抽取结果的组件清单，与部署 sha 无关）；§4.10 回执按它匹配；§4.1 `approved_gold_corpus_hash` 由 owner 批准（O14），回执 `corpus_hash` 必须相等 |
+| FR-14 同日晚于收盘 | PARTIAL→ACCEPT | §10.3 `retrospective = available_at > base_close_at`（`EXCHANGE_CLOSE` 表） |
+| FR-15 意向卡在 validating | PARTIAL→ACCEPT | §4.2、§6.1 状态机 `open→validating→validated→promoting→committed`，每步持久检查点、重试续作、`promotion_pending` 文档列、`promotion_lost` 处置 |
+| FR-25 数字 + 关键词不够 | PARTIAL→ACCEPT | §6.4 断言模式：每个含数字的句子须恰好匹配 `(<target>)? <字段关键词> <数值><单位>`，多标的须带代码，单位须一致，同句每个数字各自落地 |
+| 其余 RESOLVED 项 | — | — | 不动 |
+
+第 4 稿由 Codex 第四轮复审（`05-codex-round4.md`，范围限定为"第 4 稿新引入的缺陷 + 最终 verdict"）。
+
+## 第四轮（`05-codex-round4.md`，对第 4 稿，范围限定为新引入缺陷 + 最终 verdict）
+
+第四轮 verdict 原文："Verdict: READY WITH P2 FIXES for implementation planning."
+FR3-01 / FR3-02 / FR3-03：Codex 判定 RESOLVED。
+
+| ID | 严重度 | 决策 | 落点 |
+|---|---|---|---|
+| FR4-01 `promotion_lost` 后重上传被判重复 | P2 | ACCEPT — 按 Codex 处方逐字实施，未再审计 | §6.1 "`promotion_lost` 的恢复"：绑定既有 `document_id` 的替换意向，续作提升，成功前保持 `withdrawn` |
+| FR4-02 披露重跑要求原标题也通过 | P2 | ACCEPT — 按 Codex 处方逐字实施，未再审计 | §4.11 "重跑规则"：沿用发布时标题策略；只检查 `approved` 面；改 `title_restricted` 需 unpublish/republish |
+| FR4-03 标识符数字被当作数值 | P2 | ACCEPT — 按 Codex 处方逐字实施，未再审计 | §6.4 "标识符处理"：先切分标识符 token；每句恰好一条断言；其余数字 token 必须属于断言值或单位 |
+
+Codex 第四轮标注 Unsure：Storage 提升语义与 F3/F4 执行行为未实机验证（已在 §16 1 与 O13 登记）。本轮之后停止，不再追加审计。
