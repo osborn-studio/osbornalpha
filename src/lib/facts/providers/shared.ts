@@ -39,7 +39,8 @@ export interface Pacer{admit(o:AdmitOptions):Promise<void>;reset():void}
  * One process-wide request pacer per upstream. Admissions are SERIALISED (a promise chain), and each wait is computed from the
  * previous ACTUAL dispatch time recorded when admit() resolves, so a timer delayed by the event loop can never let two requests
  * start closer than the interval. A wait that would end inside the cleanup reserve (remaining - wait <= reserveMs) is rejected
- * up front with budget_exhausted instead of sleeping; an aborted budget gives budget_aborted. The caller issues its request
+ * up front with budget_exhausted instead of sleeping; an aborted budget gives budget_aborted (a queued caller is released as soon
+ * as its own signal aborts, and its entry is skipped when its turn comes). The caller issues its request
  * right after admit() resolves.
  */
 export function createPacer(defaultIntervalMs:number):Pacer{
@@ -57,7 +58,19 @@ export function createPacer(defaultIntervalMs:number):Pacer{
   lastStart=now();
  };
  return {
-  admit(o){const p=chain.then(()=>run(o));chain=p.catch(()=>undefined);return p;},
+  admit(o){
+   // The internal chain keeps serialising; the caller-facing promise also races its OWN signal, so an aborted caller is released
+   // at once instead of waiting behind earlier admissions. When its turn comes the cancelled entry is skipped by run()'s first
+   // check (no dispatch, lastStart unchanged).
+   const p=chain.then(()=>run(o));chain=p.catch(()=>undefined);
+   const signal=o.budget.signal;
+   if(signal.aborted)return Promise.reject(new PacerError('budget_aborted'));
+   return new Promise<void>((resolve,reject)=>{
+    const onAbort=()=>reject(new PacerError('budget_aborted'));
+    signal.addEventListener('abort',onAbort,{once:true});
+    p.then(resolve,reject).finally(()=>signal.removeEventListener('abort',onAbort));
+   });
+  },
   reset(){chain=Promise.resolve();lastStart=-Infinity;},
  };
 }

@@ -53,4 +53,25 @@ describe('createPacer',()=>{
   await pacer.admit({budget:budget(),reserveMs:0,now:()=>t,sleep});
   expect(sleep).not.toHaveBeenCalled();
  });
+ it('a queued admission is released at once when its own signal aborts; its entry is skipped and the next one still waits the full interval',async()=>{
+  vi.useFakeTimers();
+  try{
+   const pacer=createPacer(500);const starts:number[]=[];const mk=()=>new AbortController();
+   const c1=mk(),c2=mk(),c3=mk();
+   const admit=async(c:AbortController,tag:string)=>{await pacer.admit({budget:budget(300_000,c.signal),reserveMs:0});starts.push(Date.now());return tag;};
+   await admit(c1,'prime');starts.length=0;           // last start = now
+   const p1=admit(c1,'1').catch(()=>'x');             // sleeping 500 ms
+   const p2=admit(c2,'2');
+   const p3=admit(c3,'3');
+   const r3=expect(p3).rejects.toMatchObject({code:'budget_aborted'});
+   await vi.advanceTimersByTimeAsync(100);
+   c3.abort();
+   await r3;                                           // rejected promptly, while the 1st is still sleeping
+   expect(starts).toHaveLength(0);
+   await vi.advanceTimersByTimeAsync(5000);
+   await p1;await p2;
+   expect(starts).toHaveLength(2);
+   expect(starts[1]-starts[0]).toBeGreaterThanOrEqual(500);
+  }finally{vi.useRealTimers();}
+ });
 });
