@@ -63,7 +63,7 @@ src/lib/facts/providers/tushare-fixtures.ts     loadTushareFixtures（测试与�
 src/lib/facts/providers/cninfo-link.ts          linkCninfoFiling（Task 13）
 src/lib/facts/fixtures/edgar/*.json, fixtures/tushare/_synthetic/*.json（+ 有 token 时 fixtures/tushare/*.json）, fixtures/cninfo/*.json, fixtures/gold/plan2.json
 src/lib/facts/*.test.ts, src/lib/facts/providers/*.test.ts   单测
-src/lib/facts/sync-us.integration.test.ts        录制回放（critical；Task 11，Task 15 追加物化一致用例）
+src/lib/facts/sync-us.integration.test.ts        录制回放（critical；Task 11，含"物化两次一致"用例——Task 11 在 Task 15 之后执行，见推荐顺序）
 src/lib/facts/sync-cn.integration.test.ts        只在 A 股真实夹具存在时创建（critical；Task 13）
 src/lib/dq/batches.ts             INFO_CODES += rule_warning_summary, coverage_summary, deadline_hit（Task 6）
 src/lib/dq/facts-resolver.ts      resolveFactsItem（钩子；Task 9）
@@ -167,6 +167,8 @@ export interface FactsDb{
  updateFilingLink(filingId:string,patch:{document_ref?:string|null;document_url?:string|null;link_attempts:number}):Promise<void>;
  reconcileScope(market:Market,rows:{issuer_id:string;reasons:string[];priority:number;fetch_key:string}[]):Promise<number>;
  scopeDue(market:Market,now:string,limit:number):Promise<ScopeRow[]>;
+ /** 指定发行人的 scope 行（不看 priority / next_due_at；缺行者不返回），供脚本 `--issuer` 与回放测试直指发行人（审计 round-1 #13） */
+ scopeRows(market:Market,issuerIds:string[]):Promise<ScopeRow[]>;
  metricsOfIssuer(issuer:string,market:Market,formulaVersion:string):Promise<MetricRow[]>;
 }
 /** stageFilings 的输入行（写入端生成 filing_id） */
@@ -197,7 +199,7 @@ export interface FactInsert{fact_id:string;issuer_id:string;market:Market;filing
 | `memory-facts-db.ts`（Task 2） | `memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantine:['id']})):MemoryFactsDb` | `MemoryFactsDb extends FactsDb{tables;setNow(iso|null);expireLease(issuer,market);runs():MemoryRun[];filings():FilingRow[];facts():FactRow[];metrics():MetricRow[];scope():ScopeRow[]}`——`runs()` 等是**方法**，不是 Map |
 | `db-contract.ts`（Task 2） | `factsDbContract(label,setup:()=>Promise<ContractHarness>)`、`ContractHarness`、`filingInsert(issuer,o?)`、`factInsert(issuer,filing,o?)` | 内存与 pg 契约共用 |
 | `pg-facts-db.ts`（Task 3） | `pgFactsDb(pool:Pool):FactsDb` | 仅测试 |
-| `concepts.ts`（Task 4） | `FACT_CONCEPTS:readonly ConceptDef[]`、`CONCEPT_IDS`、`MAX_READ_CONCEPTS`、`MAPPING_GEN=1`、`MAPPING_VERSION='facts-map/1'`、`conceptById`、`isConceptId`、`conceptsForTushare(api)`、`tushareFieldsFor(api)` | |
+| `concepts.ts`（Task 4） | `FACT_CONCEPTS:readonly ConceptDef[]`、`CONCEPT_IDS`、`MAX_READ_CONCEPTS`、`MAPPING_GEN=1`、`MAPPING_VERSION='facts-map/1'`、`conceptById`、`isConceptId`、`conceptsForTushare(api):readonly ConceptDef[]`、`tushareFieldsFor(api)` | 目录是 `readonly`；所有接受概念列表的参数（`ParseOptions.concepts`、`ParseTushareOptions.concepts`、`FetchTushareOptions.concepts`、`fieldsFor(api,concepts)`）一律 `readonly ConceptDef[]`（审计 round-1 #4） |
 | `units.ts`（Task 4） | `normalizeUnit(raw:string):string|null`、`rawUnitOf(kind,currency='CNY')`、`allowedUnits(kind)`、`unitKindOf(unit):UnitKind|null`、`CURRENCIES`、`MAX_UNIT_LENGTH` | **单参数**；按概念单位种类过滤由调用方用 `unitKindOf(normalized)===concept.unitKind` 完成（Task 10） |
 | `classify.ts`（Task 4） | `classifyDuration(start:string|null,end:string):Duration|'odd'`、`daysBetween`、`dateMs`、`isDate`、`DURATION_BANDS` | odd 用字面量 `'odd'`，**不是** `null` |
 | `json-numbers.ts`（Task 4） | `scanJsonNumbers(input:Uint8Array|string):unknown`、`decodeWithSchema(value,schema:NumberSchema,field?)`、`decodeColumns(fields,items,schema)`、`canonicalDecimal(raw):string`、`decimalEquals(a,b)`、`NumberSchema`、`EDGAR_NUMBER_SCHEMA`、`TUSHARE_CONTROL_FIELDS`、`NumToken`、`isNumToken`、`decodeNumber` | |
@@ -207,14 +209,14 @@ export interface FactInsert{fact_id:string;issuer_id:string;market:Market;filing
 | `read.ts`（Task 7） | `sequencesOf(rows,opts:SequenceOptions):FactRow[]`、`currentFacts(rows,opts)` | 骨架名 `readCurrentFacts / sequences` 作废 |
 | `errors.ts`（Task 8） | `SyncError{code:SyncErrorCode}`、`SyncErrorCode='quota_exhausted'|'sec_unavailable'|'no_companyfacts'|'snapshot_too_large'|'snapshot_upload_failed'|'parse_error'|'code_version_unavailable'|'tushare_unavailable'` | 抓取器/解析器抛的就是它（Part C 的 `ProviderError` 是它的别名） |
 | `snapshot-store.ts`（Task 8） | `SnapshotStore{put(snapshot,path,budget):Promise<'stored'|'exists'>}`、`supabaseSnapshotStore(admin)`、`memorySnapshotStore()`、`snapshotPath(source,issuerId,sha256)`、`metaPath`、`SNAPSHOT_BUCKET` | |
-| `sync.ts`（Task 8） | `runFactsSync(deps:SyncDeps,opts:SyncOptions):Promise<SyncReceipt>`、`syncIssuerFacts`、`makeBudget`、`resolveCodeVersion(env?,exec?)`、`LEASE_TTL_S` 等常量 | `SyncDeps={db;tables;storage;fetchUs(cik10,b);fetchCn(tsCode,sinceYear,b);parseUs(snapshot,{sinceYear});parseCn(snapshots,{sinceYear});linkCn?(filing:FilingRow,b);now;deadline;codeVersion:string|null}`；`SyncOptions={market;limit;issuerIds?;dryRun;triggeredBy;sinceYear?;mappingGen?}`；`SyncReceipt={batchId:string|null;status:BatchStatus|'dry_run';counts;errors;issuers:IssuerOutcome[];idle;detail:{attempted,published,failed,skipped,idle}}`；`IssuerOutcome={issuerId;fetchKey;runId:string|null;outcome:'published'|'planned'|'failed'|'skipped';code?;counts;errors;warnings:Map;snapshotSha256:string[]}`；`issuerIds` 给定时**不**先对账范围、不受 `next_due_at` 限制 |
+| `sync.ts`（Task 8） | `runFactsSync(deps:SyncDeps,opts:SyncOptions):Promise<SyncReceipt>`、`syncIssuerFacts`、`makeBudget`、`resolveCodeVersion(env?,exec?)`、`LEASE_TTL_S` 等常量 | `SyncDeps={db;tables;storage;fetchUs(cik10,b);fetchCn(tsCode,sinceYear,b);parseUs(snapshot,{sinceYear});parseCn(snapshots,{sinceYear});linkCn?(filing:FilingRow,b);coverageCn?(parsed:ParseResult):CoverageEntry[];now;deadline;codeVersion:string|null}`；`SyncOptions={market;limit;issuerIds?;dryRun;triggeredBy;sinceYear?;mappingGen?}`；`SyncReceipt={batchId:string|null;status:BatchStatus|'dry_run';counts;errors;issuers:IssuerOutcome[];idle;detail:{attempted,published,failed,skipped,idle}}`；`IssuerOutcome={issuerId;fetchKey;runId:string|null;outcome:'published'|'planned'|'failed'|'skipped';code?;counts;errors;warnings:Map;snapshotSha256:string[]}`；`issuerIds` 给定时**不**先对账范围、不受 `next_due_at` 限制：scope 行用 `db.scopeRows` 直取，缺行者 apply 模式由 `scopeRowFor` 算出后 `reconcileScope` 补建（`reasons:['explicit']`），dry-run 构造只读行，算不出 `fetch_key` 的发行人以 `outcome:'failed', code:'scope_unresolved'` 计入回执（审计 round-1 #13） |
 | `facts-resolver.ts`（Task 9） | `resolveFactsItem(db,tables,item,input):Promise<FactsResolveResult>`、`HookState`、`FactsResolveOutcome`、`ResolveFactsInput`、`FACT_ROW_REASONS` | |
 | `providers/shared.ts`（Task 10） | `ProviderError`（= `SyncError`）、`ProviderErrorCode`（= `SyncErrorCode`）、`sha256Hex`、`rawHashOf(snapshotSha256,locator)`、`snapshotOf(bytes,meta)`、`padCik`、`sleep`、`ymd`、`nearestDuration`、`budgetFor`、`stringifyPreservingNumbers` | `raw_hash = sha256Hex(`${snapshot.sha256}\n${locator}`)`；EDGAR locator `facts.<tax>.<tag>.units.<rawUnit>[accn=…,start=…,end=…]`，Tushare locator `<api>:rt<n>:p<k>[end_date=…,ann=…,update_flag=…,row=…]` |
 | `providers/edgar-companyfacts.ts`（Task 10） | `fetchCompanyFacts(cik10,budget,opts?)`、`parseCompanyFacts(snapshot,{concepts?,sinceYear?,today?})`、`companyFactsUrl`、`tagsOf`、`decodeCompanyFacts`、`mapForm`、`mapFp` | |
 | `providers/tushare-statements.ts`（Task 12） | `fetchTushareStatements(tsCode,sinceYear,budget,opts?)`、`parseTushareStatements(snapshots,{concepts?,sinceYear?,today?})`、`coverageSummary(result)`、`fieldsFor(api)`、`addDecimals`、`isTushareQuotaMessage` | |
 | `providers/cninfo-link.ts`（Task 13） | `linkCninfoFiling(filing:LinkFiling,issuer:LinkIssuer,opts:LinkOptions):Promise<CninfoLinkResult>`、`matchesAnnouncement`、`cninfoQueryBody`、`CNINFO_PAGE_SIZE` | `LinkFiling={form_type;fiscal_year;period_end;available_date;corrected?}`、`LinkIssuer={ts_code;cninfo_org_id}`、`LinkOptions={fetch?;userAgent?;budget;minIntervalMs?}`；`SyncDeps.linkCn(filing:FilingRow,b)` 由 `deps.ts` 包装（Task 17） |
 | `src/lib/data/sources/tushare.ts`（Task 12） | `tushareCallRaw(api,params,fields,opts?):Promise<TushareRaw>`、`TushareRaw`、`TushareRawOptions` | |
-| `scope.ts`（Task 14） | `reconcileScope(deps:{tables;db:Pick<FactsDb,'reconcileScope'>},market,opts?:{today?}):Promise<ScopeReconcileResult>`、`fetchKey(market,{cik?|ticker?})` | `ScopeReconcileResult={desired;retired;changed;skipped}` |
+| `scope.ts`（Task 14） | `reconcileScope(deps:{tables;db:Pick<FactsDb,'reconcileScope'>},market,opts?:{today?}):Promise<ScopeReconcileResult>`、`fetchKey(market,{cik?|ticker?})`、`scopeRowFor(tables,market,issuerId,opts?:{today?}):Promise<ScopeInputRow|null>`、`currentSecurities(tables,today)` | `ScopeReconcileResult={desired;retired;changed;skipped}`；`ScopeInputRow={issuer_id;reasons;priority;fetch_key}`；有效期谓词复用 `src/lib/entities/resolve.ts` 导出的 `isCurrentSecurity(row,today)`（`valid_from <= today && (valid_to is null || valid_to > today)`） |
 | `derive.ts`（Task 15） | `deriveMetrics(rows,{market,asOf,basedOnRev?}):MetricRow[]`、`materialize(db:Pick<FactsDb,'readFacts'|'replaceMetrics'>,issuer,market,opts?:{today?}):Promise<MaterializeResult>`、`FORMULA_VERSION='facts-derive/1.0'`、`DERIVE_CONCEPTS`、`Q_SINGLE_CONCEPTS`、`metricNames(market)` | `MaterializeResult={rows;stateRev;retried}` |
 | `public-route.ts`（Task 16） | `readParams`、`dateParam`、`intParam`、`listParam`、`asOfParam`、`flagParam`、`errorResponse`、`paramErrorResponse`、`resolvePublicIssuer`、`publicClients`、`successHeaders`、`citationOf`、`publicFiling`、`publicFact`、`TICKER_RE`、`UUID_RE`、`QueryError` | |
 | `deps.ts`（Task 17） | `productionSyncDeps({deadline,codeVersion,now?}):SyncDeps`、`resolveCodeVersion({allowGit}):string|null` | 后者委托 `sync.ts` 的 `resolveCodeVersion` |
@@ -245,7 +247,7 @@ export interface FactInsert{fact_id:string;issuer_id:string;market:Market;filing
 | §10 错误处理 | Task 8（核心错误流）、Task 10/12（抓取码）、Task 15（`stale_computation` 重算） |
 | §11.1 单元测试 | Task 2、4、5、6、7、8、9、10、12、13、14、15、16、17 |
 | §11.2 数据库测试 | Task 1、3 |
-| §11.3 离线集成 | Task 11（美股）、Task 13（A 股，条件创建）、Task 15（物化一致用例） |
+| §11.3 离线集成 | Task 11（美股，含物化两次一致用例）、Task 13（A 股，条件创建） |
 | §11.4 黄金断言 | Task 11（模板与条件断言）、Task 13（CN） |
 | §11.5 清单规则 | Task 1、11、13（`criticalSuites`） |
 | §12 分期与退出条件 | F2-0 = Task 1–3；F2-1 = 4–7；F2-2 = 8–9；F2-3 = 10–11；F2-4 = 12–13；F2-5 = 14、17；F2-6 = 15–16；F2-7 = 18 |
@@ -254,7 +256,20 @@ export interface FactInsert{fact_id:string;issuer_id:string;market:Market;filing
 | §15 开放问题第 1 条（Tushare 核对） | Task 12 Step 10（核对）、Task 18 Step 2（8.7 表） |
 | §16 实施记录与偏差 | Task 18 Step 3 |
 
-任务编号：Part A = Task 1–3（F2-0）；Part B = Task 4–9（F2-1、F2-2）；Part C = Task 10–13（F2-3、F2-4）；Part D = Task 14–18（F2-5、F2-6、F2-7）。各任务独立可提交；后一任务只依赖前一任务已合入的导出名。**推荐合入顺序**（Task 8/9 直接 import `scope.ts` 与 `derive.ts`）：Task 1–3 → Task 4–7 → Task 14、15 → Task 8、9 → Task 10–13 → Task 16–18。
+任务编号：Part A = Task 1–3（F2-0）；Part B = Task 4–9（F2-1、F2-2）；Part C = Task 10–13（F2-3、F2-4）；Part D = Task 14–18（F2-5、F2-6、F2-7）。各任务独立可提交；后一任务只依赖前一任务已合入的导出名。
+
+**执行顺序（必须按此顺序整任务执行；审计 round-1 #20 消除了原顺序的循环）**：
+
+| 序 | 任务 | 依赖（必须已合入） |
+|---|---|---|
+| 1 | Task 1 → 2 → 3 | — |
+| 2 | Task 4 → 5 → 6 → 7 | Task 2 的 `types.ts` |
+| 3 | Task 14（`scope.ts`）→ Task 15（`derive.ts`，只含纯实现与单测，**不碰**任何集成测试文件） | Task 2、4、7 |
+| 4 | Task 8 → 9 | Task 14、15（`sync.ts` 直接 import `./scope` 与 `./derive`） |
+| 5 | Task 10 → 11 → 12 → 13 | Task 8；Task 11 的 `sync-us.integration.test.ts` 自带"物化两次一致"用例（`derive.ts` 此时已存在） |
+| 6 | Task 16 → 17 → 18 | Task 15、8、13 |
+
+任何任务都不得修改比它晚执行的任务创建的文件；Task 15 不再追加 `sync-us.integration.test.ts`。
 
 ---
 
@@ -268,7 +283,7 @@ export interface FactInsert{fact_id:string;issuer_id:string;market:Market;filing
 - `src/lib/facts/memory-facts-db.ts`：`memoryFactsDb(tables?)` 返回 `MemoryFactsDb`（`FactsDb` + `tables`、`setNow`、`expireLease`、`runs()/filings()/facts()/metrics()/scope()` 快照）；`numericEquals(a,b)`（规范十进制字符串相等，Part B 的 `decimalEquals` 落地后可替换）。
 - `src/lib/facts/db-contract.ts`（新文件，非测试文件）：`factsDbContract(label, setup)` 与 `ContractHarness` 类型——内存与 pg 两实现共用的契约用例；`filingInsert()`、`factInsert()` 夹具工厂。
 - `src/lib/db/pg-table-client.ts`：`typeParsers` 改为导出（一行改动，Task 3）。
-- SQL 侧骨架未列但本部分定义的函数：`promote_quarantined(p_issuer uuid, p_market text, p_fact_ids uuid[]) returns int`（规格 §4.5 表内有）；内部助手 `fact_scope_lock`、`fact_run_lock`、`fact_abandon_run`、`fact_promote_rows`（不授予任何客户端角色）。骨架之外的异常消息：`run_abandoned`、`item_not_open`（P0001，程序错误路径，映射为 `unknown`）、`run_not_found`（P0002）、`invalid_market`/`invalid_rows`/`invalid_chosen`/`invalid_ttl`/`invalid_mapping_gen`/`invalid_outcome`/`invalid_resolver`（22023）。
+- SQL 侧骨架未列但本部分定义的函数：`promote_quarantined(p_issuer uuid, p_market text, p_fact_ids uuid[]) returns int`（规格 §4.5 表内有）；内部助手 `fact_scope_lock`、`fact_run_lock`、`fact_abandon_run`、`fact_promote_rows`、`fact_item_members(jsonb) returns uuid[]`（不授予任何客户端角色；回滚时先于表删除，见 runbook 8.10）。骨架之外的异常消息：`run_abandoned`、`item_not_open`（P0001，程序错误路径，映射为 `unknown`）、`run_not_found`（P0002）、`invalid_market`/`invalid_rows`/`invalid_chosen`/`invalid_ttl`/`invalid_mapping_gen`/`invalid_outcome`/`invalid_resolver`（22023）。
 
 ---
 
@@ -430,11 +445,19 @@ describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()
   await expect(q(base,[id,iss,f,run,'ok'])).rejects.toThrow(/append_only:/);
   await q(base,[id,iss,f,run,'staged']);
   await expect(q(`update public.financial_facts set value=101 where fact_id=$1`,[id])).rejects.toThrow(/append_only:/);
+  await expect(q(`update public.financial_facts set raw_hash='h2' where fact_id=$1`,[id])).rejects.toThrow(/append_only:/);
   await expect(q(`update public.financial_facts set status='staged' where fact_id=$1`,[id])).rejects.toThrow(/append_only:/);
-  await q(`update public.financial_facts set status='ok' where fact_id=$1`,[id]);
+  // Every permitted transition, as a plain UPDATE in a BEFORE trigger (round-1 #1: the generated
+  // value_text is not computed for NEW yet, so the immutable-field check must not compare it).
+  await q(`update public.financial_facts set status='ok' where fact_id=$1`,[id]);                 // staged → ok
   await expect(q(`update public.financial_facts set status='staged' where fact_id=$1`,[id])).rejects.toThrow(/append_only:/);
-  await q(`update public.financial_facts set status='quarantined' where fact_id=$1`,[id]);
-  await q(`update public.financial_facts set status='ok' where fact_id=$1`,[id]);
+  await q(`update public.financial_facts set status='quarantined' where fact_id=$1`,[id]);        // ok → quarantined
+  await q(`update public.financial_facts set status='ok' where fact_id=$1`,[id]);                 // quarantined → ok
+  const id2=randomUUID();
+  await q(base.replace("'2023-10-01','2023-12-31'","'2023-07-01','2023-09-30'"),[id2,iss,f,run,'staged']);
+  await q(`update public.financial_facts set status='quarantined' where fact_id=$1`,[id2]);       // staged → quarantined
+  await expect(q(`update public.financial_facts set status='staged' where fact_id=$1`,[id2])).rejects.toThrow(/append_only:/);
+  expect((await q(`select value_text from public.financial_facts where fact_id=any($1::uuid[]) order by period_end`,[[id,id2]])).map(x=>x.value_text)).toEqual(['100','100']);
   await expect(q(`delete from public.financial_facts where fact_id=$1`,[id])).rejects.toThrow(/append_only:/);
   await expect(q(`update public.filings set url='x' where filing_id=$1`,[f])).rejects.toThrow(/append_only:/);
   await q(`update public.filings set document_ref='a',document_url='u',link_attempts=1,mapping_gen=2 where filing_id=$1`,[f]);
@@ -589,6 +612,29 @@ describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()
    expect(await pending).toEqual({promoted:1,skipped:0});                                       // saw the published run, not run_pending
   }finally{await c1.query('rollback').catch(()=>{});c1.release();}
   expect(await status(r)).toBe('ok');expect(await status(c)).toBe('quarantined');expect(await rev(iss)).toBe(3);
+ });
+
+ it('a merge that commits while a resolution waits for the scope lock is seen by that resolution: the member set is rebuilt under the lock (round-1 #2)',async()=>{
+  const {iss,b,r}=await published();
+  const runB=await begin(iss,b);const fb=await filing(runB);const {ids:[c]}=await stage(runB,[{filing_id:fb,value:'200'}]);
+  const itemId=await conflictItem(iss,b,runB,[c,r]);await quarantine(runB,[c],itemId);await publish(runB,[fb]);
+  // Members [c, r] are both published: resolvable. Run C now stages c2 and merges it into the item
+  // inside an open transaction (quarantine_facts holds the scope row lock through fact_run_lock).
+  const runC=await begin(iss,b);const fc=await filing(runC);const {ids:[c2]}=await stage(runC,[{filing_id:fc,value:'300'}]);
+  const c1=await admin.connect();
+  try{
+   await c1.query('begin');await c1.query(`select public.quarantine_facts($1,$2::uuid[],$3)`,[runC,[c2],itemId]);
+   let settled=false;
+   const pending=fails(resolve(itemId,[r])).then(v=>{settled=true;return v;});       // provisional read saw [c, r]; now blocked on the scope lock
+   await new Promise(res=>setTimeout(res,300));expect(settled).toBe(false);
+   await c1.query('commit');
+   expect(await pending).toMatchObject({message:'run_pending',code:'P0001'});          // rebuilt members include c2, whose run C is staged
+  }finally{await c1.query('rollback').catch(()=>{});c1.release();}
+  expect(await item(itemId)).toMatchObject({status:'open',fact_ids:[c,r,c2]});
+  expect(await status(r)).toBe('quarantined');                                        // nothing was promoted on the stale member set
+  await publish(runC,[fc]);
+  expect(await resolve(itemId,[r])).toEqual({promoted:1,skipped:0});
+  expect(await status(r)).toBe('ok');expect(await status(c2)).toBe('quarantined');
  });
 
  it('replace_financial_metrics refuses a stale based_on_rev across publish and promote, and replaces the issuer atomically',async()=>{
@@ -869,6 +915,9 @@ set public = false,
 -- Backstops for the function write path. financial_facts: inserted as staged; only the status may
 -- change, along staged→ok, staged→quarantined, quarantined→ok, ok→quarantined; rows are deleted
 -- only together with their abandoned run (the run is marked first, §4.5).
+-- The immutable-field check lists the base columns explicitly: in a BEFORE UPDATE trigger the
+-- generated column value_text is not yet computed for NEW (PostgreSQL 17 trigger docs), so a
+-- to_jsonb(NEW) comparison would refuse every legitimate status change (audit round-1 #1).
 create or replace function public.financial_facts_lifecycle() returns trigger
 language plpgsql set search_path = public as $$
 declare v_run_status text;
@@ -879,7 +928,13 @@ begin
     end if;
     return new;
   elsif tg_op = 'UPDATE' then
-    if (to_jsonb(new) - 'status') <> (to_jsonb(old) - 'status') then
+    if (new.fact_id, new.issuer_id, new.market, new.filing_id, new.run_id, new.concept, new.source_concept, new.statement,
+        new.period_start, new.period_end, new.duration, new.value, new.unit, new.consolidation, new.available_date,
+        new.mapping_gen, new.mapping_version, new.raw_hash, new.created_at)
+       is distinct from
+       (old.fact_id, old.issuer_id, old.market, old.filing_id, old.run_id, old.concept, old.source_concept, old.statement,
+        old.period_start, old.period_end, old.duration, old.value, old.unit, old.consolidation, old.available_date,
+        old.mapping_gen, old.mapping_version, old.raw_hash, old.created_at) then
       raise exception 'append_only: financial_facts allows status changes only' using errcode = '23514';
     end if;
     if not ((old.status, new.status) in (('staged','ok'), ('staged','quarantined'), ('quarantined','ok'), ('ok','quarantined'))) then
@@ -971,10 +1026,20 @@ begin
 end $$;
 revoke execute on function public.fact_abandon_run(uuid, boolean) from public, anon, authenticated, service_role;
 
+-- payload.fact_ids of a quarantine item as uuid[] (empty when absent or not an array).
+create or replace function public.fact_item_members(p_payload jsonb)
+returns uuid[] language sql immutable set search_path = public as $$
+  select coalesce(array_agg(e::uuid), '{}'::uuid[])
+  from jsonb_array_elements_text(case when jsonb_typeof(p_payload -> 'fact_ids') = 'array' then p_payload -> 'fact_ids' else '[]'::jsonb end) e
+$$;
+revoke execute on function public.fact_item_members(jsonb) from public, anon, authenticated, service_role;
+
 -- Promotion eligibility (§4.5 promote_quarantined / §7.3). Caller holds the scope lock. A row is
 -- promoted only if it is quarantined, its run is published, its filing's active generation is the
--- row's generation, no OPEN quarantine item references it, and every RESOLVED same_day_conflict
--- item that references it chose it (detail.chosen_fact_ids). Returns the number promoted.
+-- row's generation, no OPEN quarantine item references it, no OPEN same_day_conflict item disputes
+-- its (K, available_date) — matched on the components stored in payload.key, whether or not the
+-- row is in that item's member list (spec §4.5; audit round-1 #3) — and every RESOLVED
+-- same_day_conflict item that references it chose it (detail.chosen_fact_ids). Returns the number promoted.
 create or replace function public.fact_promote_rows(p_issuer uuid, p_market text, p_fact_ids uuid[])
 returns int language plpgsql security definer set search_path = public as $$
 declare n int;
@@ -988,6 +1053,15 @@ begin
       select 1 from public.dq_quarantine q
       where q.table_name = 'financial_facts' and q.status = 'open'
         and jsonb_typeof(q.payload -> 'fact_ids') = 'array' and q.payload -> 'fact_ids' ? f.fact_id::text)
+    and not exists (
+      select 1 from public.dq_quarantine q
+      where q.table_name = 'financial_facts' and q.reason_code = 'same_day_conflict' and q.status = 'open'
+        and q.payload -> 'key' ->> 'issuer_id' = f.issuer_id::text and q.payload -> 'key' ->> 'market' = f.market
+        and q.payload -> 'key' ->> 'concept' = f.concept
+        and coalesce(q.payload -> 'key' ->> 'period_start', '') = coalesce(f.period_start::text, '')
+        and q.payload -> 'key' ->> 'period_end' = f.period_end::text
+        and q.payload -> 'key' ->> 'consolidation' = f.consolidation and q.payload -> 'key' ->> 'unit' = f.unit
+        and q.payload -> 'key' ->> 'available_date' = f.available_date::text)
     and not exists (
       select 1 from public.dq_quarantine q
       where q.table_name = 'financial_facts' and q.reason_code = 'same_day_conflict' and q.status <> 'open'
@@ -1213,22 +1287,25 @@ end $$;
 revoke execute on function public.promote_quarantined(uuid, text, uuid[]) from public, anon, authenticated;
 grant execute on function public.promote_quarantined(uuid, text, uuid[]) to service_role;
 
--- Admin hook (§4.5, §7.3; audits R6-1, R7-1). Lock order: scope row (derived from the member
--- rows, else from payload.run_id) then the item row — the same order quarantine_facts uses.
--- Any member row whose run is still staged → run_pending (item stays open). Otherwise, in one
--- transaction: item → resolved_accept with detail.chosen_fact_ids (the verdict for
--- same_day_conflict — must be a subset of payload.fact_ids — or all member ids otherwise),
--- promotion by the eligibility rules (the item itself is closed by then, so it no longer blocks
--- its members), state_rev + 1. Returns {promoted, skipped}.
+-- Admin hook (§4.5, §7.3; audits R6-1, R7-1; round-1 #2, #10). Lock order: scope row (derived
+-- from a provisional read of the member rows, else from payload.run_id) then the item row — the
+-- same order quarantine_facts uses. Under the lock the item is re-read and the member set is
+-- REBUILT, so a quarantine_facts merge that committed while this call waited is validated too.
+-- Any member row whose run is still staged, or an anchor run (payload.run_id) that is still
+-- staged — the only run bookkeeping an item without fact rows has — → run_pending (item stays
+-- open). Otherwise, in one transaction: item → resolved_accept with detail.chosen_fact_ids (the
+-- verdict for same_day_conflict — must be a subset of payload.fact_ids — or all member ids
+-- otherwise), promotion by the eligibility rules (the item itself is closed by then, so it no
+-- longer blocks its members), state_rev + 1. Returns {promoted, skipped}.
 create or replace function public.resolve_facts_quarantine(p_item uuid, p_chosen uuid[], p_resolved_by uuid)
 returns jsonb language plpgsql security definer set search_path = public as $$
-declare q public.dq_quarantine; v_ids uuid[]; v_issuer uuid; v_market text; v_chosen uuid[]; v_promoted int := 0;
+declare q public.dq_quarantine; v_ids uuid[]; v_issuer uuid; v_market text; v_chosen uuid[]; v_promoted int := 0; v_run uuid;
 begin
   if p_resolved_by is null then raise exception 'invalid_resolver' using errcode = '22023'; end if;
   select * into q from public.dq_quarantine where id = p_item;
   if not found or q.status <> 'open' then raise exception 'item_not_open' using errcode = 'P0001'; end if;
-  select coalesce(array_agg(e::uuid), '{}'::uuid[]) into v_ids
-  from jsonb_array_elements_text(case when jsonb_typeof(q.payload -> 'fact_ids') = 'array' then q.payload -> 'fact_ids' else '[]'::jsonb end) e;
+  -- 1. provisional member read, only to locate the scope row to lock
+  v_ids := public.fact_item_members(q.payload);
   select f.issuer_id, f.market into v_issuer, v_market from public.financial_facts f where f.fact_id = any(v_ids) limit 1;
   if v_issuer is null then
     select r.issuer_id, r.market into v_issuer, v_market from public.fact_sync_runs r where r.run_id = (q.payload ->> 'run_id')::uuid;
@@ -1236,9 +1313,16 @@ begin
   if v_issuer is not null then
     perform 1 from public.fact_sync_scope where issuer_id = v_issuer and market = v_market for update;
   end if;
+  -- 2. re-read and rebuild the member set under the lock (a concurrent merge is now visible)
   select * into q from public.dq_quarantine where id = p_item for update;
   if q.status <> 'open' then raise exception 'item_not_open' using errcode = 'P0001'; end if;
+  v_ids := public.fact_item_members(q.payload);
+  -- 3. every member run, and the anchor run, must have left the staged state
   if exists (select 1 from public.financial_facts f join public.fact_sync_runs r on r.run_id = f.run_id where f.fact_id = any(v_ids) and r.status = 'staged') then
+    raise exception 'run_pending' using errcode = 'P0001';
+  end if;
+  v_run := (q.payload ->> 'run_id')::uuid;
+  if v_run is not null and exists (select 1 from public.fact_sync_runs r where r.run_id = v_run and r.status = 'staged') then
     raise exception 'run_pending' using errcode = 'P0001';
   end if;
   if q.reason_code = 'same_day_conflict' then
@@ -1392,7 +1476,7 @@ Expected: 打印 `50`（原 49 条 + 本迁移）；`git diff supabase/migration
 - [ ] **Step 6: 运行集成测试与迁移检查**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:db`
-Expected: `facts.integration.test.ts` 15 个用例全部通过；`reports/research-db-summary.json` 的 `criticalSuites` 计数 +1。
+Expected: `facts.integration.test.ts` 16 个用例全部通过；`reports/research-db-summary.json` 的 `criticalSuites` 计数 +1。
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:migrations`
 Expected: PASS（fresh 与 seeded-upgrade 两次 `pg_dump --schema-only` 一致）。
 
@@ -1610,6 +1694,8 @@ export interface FactsDb{
  updateFilingLink(filingId:string,patch:{document_ref?:string|null;document_url?:string|null;link_attempts:number}):Promise<void>;
  reconcileScope(market:Market,rows:{issuer_id:string;reasons:string[];priority:number;fetch_key:string}[]):Promise<number>;
  scopeDue(market:Market,now:string,limit:number):Promise<ScopeRow[]>;
+ /** 指定发行人的 scope 行（不看 priority / next_due_at；缺行者不返回），供脚本 `--issuer` 与回放测试直指发行人（审计 round-1 #13） */
+ scopeRows(market:Market,issuerIds:string[]):Promise<ScopeRow[]>;
  metricsOfIssuer(issuer:string,market:Market,formulaVersion:string):Promise<MetricRow[]>;
 }
 /** stageFilings 的输入行（写入端生成 filing_id） */
@@ -1815,7 +1901,67 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect(await db.reconcileScope('US',[{issuer_id:iss,reasons:['sp500'],priority:5,fetch_key:'0000000001'}])).toBe(1);
    expect((await db.scopeDue('US','2100-01-01T00:00:00.000Z',1000)).find(x=>x.issuer_id===iss)).toMatchObject({market:'US',reasons:['sp500'],priority:5,fetch_key:'0000000001',lease_batch_id:b,state_rev:3,last_status:null,last_batch_id:null});
    expect(await db.scopeDue('US','2100-01-01T00:00:00.000Z',0)).toEqual([]);
+   expect((await db.scopeRows('US',[iss,randomUUID()])).map(x=>[x.issuer_id,x.priority,x.fetch_key])).toEqual([[iss,5,'0000000001']]);   // by id, whatever priority / next_due_at
+   expect(await db.reconcileScope('US',[{issuer_id:iss,reasons:[],priority:0,fetch_key:'0000000001'}])).toBe(1);
+   expect((await db.scopeRows('US',[iss])).map(x=>x.priority)).toEqual([0]);
+   expect(await db.scopeRows('CN',[iss])).toEqual([]);
+   expect(await db.scopeRows('US',[])).toEqual([]);
   });
+
+  it("promotion blocks on an OPEN same_day_conflict for the row's (K, date) even when the row is not in that item's member list (round-1 #3)",async()=>{
+   const {iss,b,r}=await published();                                                     // r: revenue 100 on 2024-02-01, ok
+   const runB=await db.beginRun(iss,'US',b,1);const fb=filingInsert(iss);await db.stageFilings(runB,[fb]);
+   const c=factInsert(iss,fb,{value:'200'});await db.stageFacts(runB,[c]);
+   const dispute=await conflict(iss,b,runB,[c.fact_id,r]);                                // open dispute on (K, 2024-02-01): members c, r
+   await db.quarantineFacts(runB,[c.fact_id],dispute);
+   expect(await db.publishRun(runB,[fb.filing_id])).toBe(0);                              // r disposed
+   // Run C discloses the same K on the same day (value 100) from a third filing, parked by an
+   // identity item only: it is NOT a member of the dispute.
+   const runC=await db.beginRun(iss,'US',b,1);const fc=filingInsert(iss);await db.stageFilings(runC,[fc]);
+   const c3=factInsert(iss,fc,{value:'100'});await db.stageFacts(runC,[c3]);
+   const identity=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${iss}:US:IS:${randomUUID()}`,reasonCode:'identity_gp',batchId:b,payload:{key:{issuer_id:iss,market:'US'},fact_ids:[c3.fact_id],run_id:runC}});
+   await db.quarantineFacts(runC,[c3.fact_id],identity);
+   expect(await db.publishRun(runC,[fc.filing_id])).toBe(0);
+   expect(await db.resolveFactsQuarantine(identity,[],randomUUID())).toEqual({promoted:0,skipped:1});   // (K, 2024-02-01) is still disputed
+   expect(await statusOf(c3.fact_id)).toBe('quarantined');
+   expect((await current(iss,['revenue'],false)).rows.map(y=>y.value)).toEqual(['90']);                  // the day still has no ok value
+   expect(await db.resolveFactsQuarantine(dispute,[r],randomUUID())).toEqual({promoted:1,skipped:0});
+   expect(await statusOf(r)).toBe('ok');expect(await statusOf(c3.fact_id)).toBe('quarantined');       // c3 waits for promote_quarantined (§7.3), the dispute no longer blocks it
+   expect((await current(iss,['revenue'],false)).rows.map(y=>y.fact_id)).toEqual([r]);
+  });
+
+  it('an item without fact rows is run_pending while its anchor run is staged; acknowledged once that run is published or abandoned (round-1 #10)',async()=>{
+   const {iss,b}=await published();
+   const run=await db.beginRun(iss,'US',b,1);
+   const parked=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${iss}:US:cash::2023-09-30:consolidated:USD:acc-9:1`,reasonCode:'ambiguous_value',batchId:b,payload:{key:{issuer_id:iss,market:'US'},fact_ids:[],run_id:run}});
+   expect(await code(db.resolveFactsQuarantine(parked,[],randomUUID()))).toBe('run_pending:run_pending');
+   expect((await item(parked)).status).toBe('open');
+   expect(await db.publishRun(run,[])).toBe(0);
+   expect(await db.resolveFactsQuarantine(parked,[],randomUUID())).toEqual({promoted:0,skipped:0});
+   expect((await item(parked)).status).toBe('resolved_accept');
+   expect((await current(iss)).stateRev).toBe(3);                                         // publish + resolution
+   const run2=await db.beginRun(iss,'US',b,1);
+   const parked2=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${iss}:US:cash::2023-06-30:consolidated:USD:acc-9:1`,reasonCode:'odd_duration',batchId:b,payload:{key:{issuer_id:iss,market:'US'},fact_ids:[],run_id:run2}});
+   expect(await code(db.resolveFactsQuarantine(parked2,[],randomUUID()))).toBe('run_pending:run_pending');
+   await db.abandonRun(run2);
+   expect(await db.resolveFactsQuarantine(parked2,[],randomUUID())).toEqual({promoted:0,skipped:0});
+  });
+
+  it('complete-set reads return every row past 1,000: filingsOfIssuer without limit, metricsOfIssuer, scopeRows (round-1 #7)',async()=>{
+   const {iss,b,r}=await published();
+   const run=await db.beginRun(iss,'US',b,1);
+   const many=Array.from({length:1001},(_,i)=>filingInsert(iss,{availableDate:'2020-01-01',sourceRef:`bulk-${iss}-${String(i).padStart(4,'0')}`}));   // (source, source_ref) is globally unique
+   expect((await db.stageFilings(run,many)).size).toBe(1001);
+   expect(await db.publishRun(run,many.map(f=>f.filing_id))).toBe(0);
+   expect((await db.filingsOfIssuer(iss,'US',{})).length).toBe(1003);
+   expect((await db.filingsOfIssuer(iss,'US',{limit:5})).length).toBe(5);
+   expect((await db.filingsOfIssuer(iss,'US',{from:'2020-01-01',to:'2020-01-01'})).length).toBe(1001);
+   const rev=(await current(iss)).stateRev;
+   const rows=Array.from({length:1001},(_,i):MetricRow=>({issuer_id:iss,market:'US',metric:`m${String(i).padStart(4,'0')}`,period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:String(i),unit:'ratio',input_unit:'USD',basis:'us_standard',formula_version:'facts-derive/1.0',inputs:[{fact_id:r,concept:'revenue',filing_id:'f',available_date:'2024-02-01'}],based_on_rev:rev,as_of:'2024-03-01'}));
+   expect(await db.replaceMetrics(iss,'US',rev,rows)).toBe(1001);
+   const got=await db.metricsOfIssuer(iss,'US','facts-derive/1.0');
+   expect(got.length).toBe(1001);expect(got.at(-1)).toMatchObject({metric:'m1000',value:'1000'});
+  },60000);
  });
 }
 ```
@@ -1895,11 +2041,52 @@ describe('toFactsDbError',()=>{
 
 describe('supabaseFactsDb',()=>{
  type Call={fn:string;args:Record<string,unknown>};
- const stub=(respond:(fn:string,args:Record<string,unknown>)=>{data?:unknown;error?:{message:string;code?:string}|null})=>{
+ type Op=[string,unknown[]];
+ type FromResponder=(table:string,ops:Op[])=>unknown[];
+ /** A thenable PostgREST-like builder: every chained call is recorded, `respond` answers when awaited. */
+ const builder=(table:string,respond:FromResponder)=>{
+  const ops:Op[]=[];
+  const proxy:Record<string|symbol,unknown>=new Proxy({},{get:(_t,m)=>m==='then'
+   ?(res:(v:unknown)=>unknown,rej:(e:unknown)=>unknown)=>Promise.resolve({data:respond(table,ops),error:null}).then(res,rej)
+   :(...a:unknown[])=>{ops.push([String(m),a]);return proxy;}});
+  return proxy;
+ };
+ const stub=(respond:(fn:string,args:Record<string,unknown>)=>{data?:unknown;error?:{message:string;code?:string}|null},from:FromResponder=()=>{throw new Error('from() not expected');})=>{
   const calls:Call[]=[];
-  const client={rpc:async(fn:string,args:Record<string,unknown>)=>{calls.push({fn,args});const r=respond(fn,args);return {data:r.data??null,error:r.error??null};},from:()=>{throw new Error('from() not expected');}};
+  const client={rpc:async(fn:string,args:Record<string,unknown>)=>{calls.push({fn,args});const r=respond(fn,args);return {data:r.data??null,error:r.error??null};},from:(table:string)=>builder(table,from)};
   return {calls,db:supabaseFactsDb(client as unknown as SupabaseClient)};
  };
+ it('pages complete-set table reads past PostgREST max_rows in a fixed order and pushes filters into the query (round-1 #7)',async()=>{
+  const metric=(i:number)=>({issuer_id:'iss',market:'US',metric:`m${String(i).padStart(4,'0')}`,period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:1,value_text:'1',unit:'u',input_unit:'USD',basis:'us_standard',formula_version:'v',inputs:[],based_on_rev:'2',as_of:'2024-01-01'});
+  const scope=(i:number)=>({issuer_id:`i${i}`,market:'US',reasons:[],priority:10,fetch_key:'k',next_due_at:'2026-01-01T00:00:00+00:00',lease_until:null,lease_batch_id:null,state_rev:'0',last_attempt_at:null,last_success_at:null,last_batch_id:null,last_status:null});
+  const pages:Op[][]=[];
+  const totals:Record<string,number>={financial_metrics:1005,filings:1002,fact_sync_scope:3,financial_facts:2};
+  const {db}=stub(()=>({data:null}),(table,ops)=>{
+   pages.push(ops);
+   const [from,to]=ops.find(o=>o[0]==='range')![1] as [number,number];
+   return Array.from({length:Math.max(0,Math.min(totals[table],to+1)-from)},(_,i)=>table==='financial_metrics'?metric(from+i):table==='filings'?{filing_id:`f${from+i}`,value_text:'1'}:table==='fact_sync_scope'?scope(from+i):{fact_id:`a${from+i}`,value_text:'1'});
+  });
+  const ranges=(from:number)=>pages.slice(from).map(ops=>ops.find(o=>o[0]==='range')![1]);
+  const metrics=await db.metricsOfIssuer('iss','US','v');
+  expect(metrics).toHaveLength(1005);expect(metrics[1004]).toMatchObject({metric:'m1004',based_on_rev:2});
+  expect(pages[0]).toContainEqual(['eq',['formula_version','v']]);                       // filtered in the query, not after the read
+  expect(ranges(0)).toEqual([[0,999],[1000,1999]]);                                      // full page → next page; short page → stop
+  let n=pages.length;
+  expect(await db.filingsOfIssuer('iss','US',{})).toHaveLength(1002);
+  expect(ranges(n)).toEqual([[0,999],[1000,1999]]);
+  expect(pages[n]).toContainEqual(['order',['available_date',{ascending:false}]]);
+  n=pages.length;
+  expect(await db.filingsOfIssuer('iss','US',{limit:3})).toHaveLength(3);
+  expect(ranges(n)).toEqual([[0,2]]);                                                    // an explicit limit is a cap, not a page size
+  n=pages.length;
+  expect((await db.scopeRows('US',['i0','i1','i2'])).map(s=>s.issuer_id)).toEqual(['i0','i1','i2']);
+  expect(pages[n]).toContainEqual(['in',['issuer_id',['i0','i1','i2']]]);
+  expect(pages[n]).toContainEqual(['eq',['market','US']]);
+  n=pages.length;
+  expect(await db.factsByIds(['a0','a1'])).toHaveLength(2);
+  expect(pages[n]).toContainEqual(['in',['fact_id',['a0','a1']]]);
+  expect(await db.scopeRows('US',[])).toEqual([]);expect(await db.factsByIds([])).toEqual([]);
+ });
  it('calls the SQL functions with p_ arguments and chunks staging at 500 rows (an empty batch still calls once)',async()=>{
   const {calls,db}=stub((fn,args)=>fn==='stage_facts'?{data:(args.p_rows as unknown[]).length}:fn==='stage_filings'?{data:Object.fromEntries((args.p_rows as {source_ref:string;filing_id:string}[]).map(r=>[r.source_ref,r.filing_id]))}:{data:true});
   const iss=randomUUID();const f=filingInsert(iss);
@@ -1954,7 +2141,10 @@ Expected: FAIL，`Cannot find module './db'`（以及 `./db-contract`、`./memor
 // stale_computation P0001); toFactsDbError maps that, 23505 → duplicate_key, the rest → unknown.
 // The read_facts envelope is normalised here so all three implementations return identical rows
 // (value = value_text, null sequence fields → undefined). New RPCs are not registered in
-// database.types.ts (repo convention): the client is narrowed locally.
+// database.types.ts (repo convention): the client is narrowed locally. Table reads that feed
+// planning, evidence or scheduling are COMPLETE-SET reads: PostgREST silently truncates at
+// max_rows (1,000 locally and hosted), so they page by `.range()` in a fixed order until a short
+// page (audit round-1 #7); an explicit `limit` caps the total instead.
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {FactsDbError} from './types';
 import type {ConflictItem,FactRow,FactsDb,FactsDbErrorCode,FilingInsert,FilingRow,Market,MetricRow,ReadFactsOptions,ReadFactsResult,ScopeRow} from './types';
@@ -1965,6 +2155,10 @@ export type {FactsDb} from './types';
 export const STAGE_CHUNK=500;
 /** read_facts hard cap (§4.6); above it the envelope is truncated and carries no rows. */
 export const READ_FACTS_CAP=10000;
+/** Page size of complete-set table reads (= PostgREST max_rows). */
+export const READ_PAGE=1000;
+/** ids per `.in()` filter (URL length). */
+export const IN_CHUNK=200;
 const MESSAGE_CODES:readonly FactsDbErrorCode[]=['run_pending','run_published','mapping_gen_regression','stale_computation'];
 
 export interface PgErrorLike{message?:string;code?:string|null;details?:string|null;hint?:string|null}
@@ -2024,15 +2218,32 @@ export function chunk<T>(rows:T[],size=STAGE_CHUNK):T[][]{
  if(rows.length===0)return [[]];
  const out:T[][]=[];for(let i=0;i<rows.length;i+=size)out.push(rows.slice(i,i+size));return out;
 }
+/** Plain id chunking for `.in()` filters (an empty input yields no chunk). */
+export function chunkIds(ids:string[],size=IN_CHUNK):string[][]{
+ const out:string[][]=[];for(let i=0;i<ids.length;i+=size)out.push(ids.slice(i,i+size));return out;
+}
 
 interface RpcResult{data:unknown;error:PgErrorLike|null}
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// The query builder is left untyped on purpose (same as table-client.ts): the hand-maintained
+// Database type lacks the Relationships/Views that supabase-js inference now needs.
 interface NarrowClient{rpc:(fn:string,args:Record<string,unknown>)=>PromiseLike<RpcResult>;from:(table:string)=>any}
+type Query=PromiseLike<RpcResult>&{range:(from:number,to:number)=>Query};
 
 export function supabaseFactsDb(client:SupabaseClient):FactsDb{
  const c=client as unknown as NarrowClient;
  const call=async<T>(fn:string,args:Record<string,unknown>):Promise<T>=>{const {data,error}=await c.rpc(fn,args);if(error)throw toFactsDbError(error);return data as T;};
  const rows=async<T>(q:PromiseLike<RpcResult>):Promise<T[]>=>{const {data,error}=await q;if(error)throw toFactsDbError(error);return (data??[]) as T[];};
+ /** `make` builds the filtered AND ordered query afresh per page (builders are single-use); pages until a short page or `limit` rows. */
+ const pageAll=async<T>(make:()=>Query,limit?:number):Promise<T[]>=>{
+  const out:T[]=[];
+  for(let from=0;;from+=READ_PAGE){
+   const size=limit===undefined?READ_PAGE:Math.min(READ_PAGE,limit-out.length);
+   if(size<=0)return out;
+   const part=await rows<T>(make().range(from,from+size-1));
+   out.push(...part);
+   if(part.length<size)return out;
+  }
+ };
  return {
   claimLease:(issuer,market,batch,ttl)=>call<boolean>('claim_fact_sync_lease',{p_issuer:issuer,p_market:market,p_batch:batch,p_ttl_seconds:ttl}),
   beginRun:(issuer,market,batch,gen)=>call<string>('begin_sync_run',{p_issuer:issuer,p_market:market,p_batch:batch,p_mapping_gen:gen}),
@@ -2050,27 +2261,35 @@ export function supabaseFactsDb(client:SupabaseClient):FactsDb{
   replaceMetrics:(issuer,market,rev,input)=>call<number>('replace_financial_metrics',{p_issuer:issuer,p_market:market,p_based_on_rev:rev,p_rows:input.map(metricArgs)}),
   async readFacts(issuer,market,opts){return resultFromEnvelope(await call<ReadFactsEnvelope>('read_facts',readArgs(issuer,market,opts)));},
   async factsByIds(ids){
-   if(ids.length===0)return [];
-   return (await rows<Record<string,unknown>>(c.from('financial_facts').select('*').in('fact_id',ids))).map(factRowFromTable);
+   const out:FactRow[]=[];
+   for(const part of chunkIds(ids))out.push(...(await pageAll<Record<string,unknown>>(()=>c.from('financial_facts').select('*').in('fact_id',part).order('fact_id'))).map(factRowFromTable));
+   return out;
   },
   async openConflicts(issuer,market){
-   return (await rows<{id:string;natural_key:string;payload:Record<string,unknown>}>(c.from('dq_quarantine').select('id,natural_key,payload').eq('table_name','financial_facts').eq('reason_code','same_day_conflict').eq('status','open').like('natural_key',`${conflictPrefix(issuer,market)}%`).order('created_at').limit(1000))).map(conflictFromItem);
+   return (await pageAll<{id:string;natural_key:string;payload:Record<string,unknown>}>(()=>c.from('dq_quarantine').select('id,natural_key,payload').eq('table_name','financial_facts').eq('reason_code','same_day_conflict').eq('status','open').like('natural_key',`${conflictPrefix(issuer,market)}%`).order('created_at').order('id'))).map(conflictFromItem);
   },
   async filingsOfIssuer(issuer,market,opts){
-   let q=c.from('filings').select('*').eq('issuer_id',issuer).eq('market',market);
-   if(opts.from!==undefined)q=q.gte('available_date',opts.from);
-   if(opts.to!==undefined)q=q.lte('available_date',opts.to);
-   if(opts.unlinkedOnly)q=q.is('document_ref',null);
-   return rows<FilingRow>(q.order('available_date',{ascending:false}).order('filing_id').limit(opts.limit??1000));
+   return pageAll<FilingRow>(()=>{
+    let q=c.from('filings').select('*').eq('issuer_id',issuer).eq('market',market);
+    if(opts.from!==undefined)q=q.gte('available_date',opts.from);
+    if(opts.to!==undefined)q=q.lte('available_date',opts.to);
+    if(opts.unlinkedOnly)q=q.is('document_ref',null);
+    return q.order('available_date',{ascending:false}).order('filing_id');
+   },opts.limit);
   },
   async updateFilingLink(filingId,patch){const {error}=await c.from('filings').update(linkPatch(patch)).eq('filing_id',filingId);if(error)throw toFactsDbError(error);},
   reconcileScope:(market,input)=>call<number>('reconcile_fact_sync_scope',{p_market:market,p_rows:input}),
   async scopeDue(market,now,limit){
    if(limit<1)return [];
-   return (await rows<Record<string,unknown>>(c.from('fact_sync_scope').select('*').eq('market',market).gt('priority',0).lte('next_due_at',now).order('next_due_at').order('priority',{ascending:false}).order('issuer_id').limit(limit))).map(scopeFromTable);
+   return (await pageAll<Record<string,unknown>>(()=>c.from('fact_sync_scope').select('*').eq('market',market).gt('priority',0).lte('next_due_at',now).order('next_due_at').order('priority',{ascending:false}).order('issuer_id'),limit)).map(scopeFromTable);
+  },
+  async scopeRows(market,issuerIds){
+   const out:ScopeRow[]=[];
+   for(const part of chunkIds(issuerIds))out.push(...(await pageAll<Record<string,unknown>>(()=>c.from('fact_sync_scope').select('*').eq('market',market).in('issuer_id',part).order('issuer_id'))).map(scopeFromTable));
+   return out;
   },
   async metricsOfIssuer(issuer,market,formulaVersion){
-   return (await rows<Record<string,unknown>>(c.from('financial_metrics').select('*').eq('issuer_id',issuer).eq('market',market).eq('formula_version',formulaVersion).order('metric').order('period_end').order('period_start').order('input_unit').order('basis'))).map(metricFromTable);
+   return (await pageAll<Record<string,unknown>>(()=>c.from('financial_metrics').select('*').eq('issuer_id',issuer).eq('market',market).eq('formula_version',formulaVersion).order('metric').order('period_end').order('period_start').order('input_unit').order('basis'))).map(metricFromTable);
   },
  };
 }
@@ -2157,8 +2376,15 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
  const items=(match:Row)=>tables.select('dq_quarantine',{table_name:'financial_facts',...match});
  const idsOf=(row:Row)=>{const p=row.payload as {fact_ids?:unknown}|undefined;return Array.isArray(p?.fact_ids)?p.fact_ids.filter((x):x is string=>typeof x==='string'):[];};
  const chosenOf=(row:Row)=>{const d=row.detail as {chosen_fact_ids?:unknown}|undefined;return Array.isArray(d?.chosen_fact_ids)?d.chosen_fact_ids.filter((x):x is string=>typeof x==='string'):[];};
+ const runIdOf=(row:Row)=>{const p=row.payload as {run_id?:unknown}|undefined;return typeof p?.run_id==='string'?p.run_id:null;};
+ /** Does this same_day_conflict item dispute the row's (K, available_date)? Matched on payload.key like the SQL (round-1 #3). */
+ const disputes=(item:Row,f:FactRow)=>{
+  const k=(item.payload as {key?:Record<string,string|null>}|undefined)?.key;
+  return !!k&&k.issuer_id===f.issuer_id&&k.market===f.market&&k.concept===f.concept&&(k.period_start??'')===(f.period_start??'')&&k.period_end===f.period_end&&k.consolidation===f.consolidation&&k.unit===f.unit&&k.available_date===f.available_date;
+ };
  // promote_quarantined eligibility (§4.5): quarantined, run published, filing on the row's
- // generation, not referenced by any OPEN item, and chosen by every RESOLVED conflict that lists it.
+ // generation, not referenced by any OPEN item, its (K, date) not disputed by any OPEN
+ // same_day_conflict item, and chosen by every RESOLVED conflict that lists it.
  const promote=async(issuer:string,market:Market,ids:string[])=>{
   const open=await items({status:'open'});
   const resolvedConflicts=(await items({reason_code:'same_day_conflict'})).filter(i=>i.status!=='open');
@@ -2169,6 +2395,7 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
    if(runs.get(f.run_id)?.status!=='published')continue;
    if(filings.get(f.filing_id)?.mapping_gen!==f.mapping_gen)continue;
    if(open.some(i=>idsOf(i).includes(id)))continue;
+   if(open.some(i=>i.reason_code==='same_day_conflict'&&disputes(i,f)))continue;
    if(resolvedConflicts.some(i=>idsOf(i).includes(id)&&!chosenOf(i).includes(id)))continue;
    f.status='ok';n++;
   }
@@ -2276,9 +2503,12 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
    if(!it||it.status!=='open')throw unknown('item_not_open');
    const ids=idsOf(it);
    const existing=ids.map(id=>facts.get(id)).filter((f):f is FactRow=>!!f);
-   const runId=(it.payload as {run_id?:unknown}).run_id;
-   const anchor=existing[0]??(typeof runId==='string'?runs.get(runId):undefined);
+   const runId=runIdOf(it);
+   const anchor=existing[0]??(runId!==null?runs.get(runId):undefined);
+   // run_pending: any member row's run still staged, or the anchor run itself (the only run an
+   // item without fact rows has; spec §7.3, round-1 #10). Single-threaded, so no re-read is needed.
    if(existing.some(f=>runs.get(f.run_id)?.status==='staged'))throw new FactsDbError('run_pending');
+   if(runId!==null&&runs.get(runId)?.status==='staged')throw new FactsDbError('run_pending');
    let picked:string[];
    if(it.reason_code==='same_day_conflict'){picked=[...chosen];if(picked.some(id=>!ids.includes(id)))throw unknown('invalid_chosen');}
    else picked=ids;
@@ -2319,7 +2549,7 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
   async filingsOfIssuer(issuer,market,opts){
    const rows=[...filings.values()].filter(g=>g.issuer_id===issuer&&g.market===market&&(opts.from===undefined||g.available_date>=opts.from)&&(opts.to===undefined||g.available_date<=opts.to)&&(!opts.unlinkedOnly||g.document_ref===null));
    rows.sort((a,b)=>cmp(b.available_date,a.available_date)||cmp(a.filing_id,b.filing_id));
-   return clone(rows.slice(0,opts.limit??1000));
+   return clone(opts.limit===undefined?rows:rows.slice(0,opts.limit));   // no implicit cap: complete-set read (round-1 #7)
   },
   async updateFilingLink(filingId,patch){
    const p=linkPatch(patch);const g=filings.get(filingId);if(!g)return;
@@ -2340,6 +2570,10 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
    rows.sort((a,b)=>cmp(a.next_due_at,b.next_due_at)||(b.priority-a.priority)||cmp(a.issuer_id,b.issuer_id));
    return clone(rows.slice(0,limit));
   },
+  async scopeRows(market,issuerIds){
+   const want=new Set(issuerIds);
+   return clone([...scope.values()].filter(s=>s.market===market&&want.has(s.issuer_id)).sort((a,b)=>cmp(a.issuer_id,b.issuer_id)));
+  },
   async metricsOfIssuer(issuer,market,formulaVersion){
    const rows=metrics.filter(m=>m.issuer_id===issuer&&m.market===market&&m.formula_version===formulaVersion);
    rows.sort((a,b)=>cmp(a.metric,b.metric)||cmp(a.period_end,b.period_end)||cmp(a.period_start,b.period_start)||cmp(a.input_unit,b.input_unit)||cmp(a.basis,b.basis));
@@ -2353,7 +2587,9 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
 - [ ] **Step 6: 运行通过**
 
 Run: `npm test -- src/lib/facts/db.test.ts`
-Expected: `memoryFactsDb contract` 6 个用例、`memoryFactsDb specifics` 3 个、`numericEquals` 1 个、`toFactsDbError` 1 个、`supabaseFactsDb` 3 个全部通过（14 passed）。
+Expected: `memoryFactsDb contract` 9 个用例、`memoryFactsDb specifics` 3 个、`numericEquals` 1 个、`toFactsDbError` 1 个、`supabaseFactsDb` 4 个全部通过（18 passed）。
+Run: `npm run lint`
+Expected: 无警告——`db.ts` 里不得有 `eslint-disable` 指令（仓库 ESLint 没有启用 `no-explicit-any`，未用到的 disable 指令本身就是警告，`--max-warnings=0` 会失败；审计 round-1 #6）。
 Run: `npm run typecheck && npm run lint`
 Expected: 退出码 0。
 
@@ -2475,7 +2711,7 @@ describe.skipIf(!enabled)('pgFactsDb on real PostgreSQL',()=>{
 - [ ] **Step 2: 运行，确认失败**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:db`
-Expected: `facts.integration.test.ts` 整个文件无法加载：`Cannot find module './pg-facts-db'`（Task 1 的 15 个用例随之不跑；本步只确认缺口）。
+Expected: `facts.integration.test.ts` 整个文件无法加载：`Cannot find module './pg-facts-db'`（Task 1 的 16 个用例随之不跑；本步只确认缺口）。
 
 - [ ] **Step 3: 导出 `typeParsers`**
 
@@ -2541,8 +2777,9 @@ export function pgFactsDb(pool:Pool):FactsDb{
    if(opts.from!==undefined){values.push(opts.from);where+=` and available_date >= $${values.length}::date`;}
    if(opts.to!==undefined){values.push(opts.to);where+=` and available_date <= $${values.length}::date`;}
    if(opts.unlinkedOnly)where+=` and document_ref is null`;
-   values.push(opts.limit??1000);
-   return (await run(`select * from ${rel('filings')} where ${where} order by available_date desc, filing_id limit $${values.length}`,values)).rows as FilingRow[];
+   let limit='';
+   if(opts.limit!==undefined){values.push(opts.limit);limit=` limit $${values.length}`;}   // no implicit cap (round-1 #7)
+   return (await run(`select * from ${rel('filings')} where ${where} order by available_date desc, filing_id${limit}`,values)).rows as FilingRow[];
   },
   async updateFilingLink(filingId,patch){
    const p=linkPatch(patch);const cols=Object.keys(p);
@@ -2552,6 +2789,10 @@ export function pgFactsDb(pool:Pool):FactsDb{
   async scopeDue(market,now,limit){
    if(limit<1)return [];
    return (await run(`select * from ${rel('fact_sync_scope')} where market = $1 and priority > 0 and next_due_at <= $2::timestamptz order by next_due_at, priority desc, issuer_id limit $3`,[market,now,limit])).rows.map(scopeFromTable);
+  },
+  async scopeRows(market,issuerIds){
+   if(issuerIds.length===0)return [];
+   return (await run(`select * from ${rel('fact_sync_scope')} where market = $1 and issuer_id = any($2::uuid[]) order by issuer_id`,[market,issuerIds])).rows.map(scopeFromTable);
   },
   async metricsOfIssuer(issuer,market,formulaVersion){
    return (await run(`select * from ${rel('financial_metrics')} where issuer_id = $1 and market = $2 and formula_version = $3 order by metric, period_end, period_start, input_unit, basis`,[issuer,market,formulaVersion])).rows.map(metricFromTable);
@@ -2563,9 +2804,9 @@ export function pgFactsDb(pool:Pool):FactsDb{
 - [ ] **Step 5: 运行通过**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:db`
-Expected: `facts.integration.test.ts` 全部通过：迁移 describe 15 个 + `pgFactsDb contract` 6 个 + `concurrency` 3 个 = 24 passed；`reports/research-db-summary.json` criticalSuites 计数与 Task 1 相同（同一文件）。
+Expected: `facts.integration.test.ts` 全部通过：迁移 describe 16 个 + `pgFactsDb contract` 9 个 + `concurrency` 3 个 = 28 passed；`reports/research-db-summary.json` criticalSuites 计数与 Task 1 相同（同一文件）。
 Run: `npm test -- src/lib/facts`
-Expected: `db.test.ts` 14 passed；`facts.integration.test.ts` skipped（无 `S4_TEST_STATE`）。
+Expected: `db.test.ts` 18 passed；`facts.integration.test.ts` skipped（无 `S4_TEST_STATE`）。
 Run: `npm run typecheck && npm run lint`
 Expected: 退出码 0。
 
@@ -2582,7 +2823,7 @@ git commit -m "test(facts): pg FactsDb for integration tests, shared contract on
 
 - 规格覆盖：§4.1–§4.5 五表与全部函数（含 `promote_quarantined` 与 `fact_state_rev`）、§4.6 信封与 10,000 上限、§4.7 权限/策略/桶/列级 update、§4.8 三实现、§5.4 锁与原子性（并发用例）、§11.2 清单逐项（租约互斥/过期/续租、并发 `lease_lost`、先标后删、废弃拒绝已发布、发布原子 + 争议组处置 + 登记—废弃—重试—发布、`mapping_gen_regression`、`state_rev`、`fact_state_rev` 对 anon 可用而 `fact_sync_scope` 不可读、`resolve` 的 `run_pending`、提升资格全部规则、R7-1 回归、并入与发布串行、`stale_computation` 交错、1,001/10,001 行、`reconcile` 不动租约与调度列、真实角色权限、`value_text` 20 位）。
 - 引入的名字：见顶部"本部分新增导出"；`FactsDbErrorCode` 未扩展，骨架外的 SQL 异常消息映射为 `unknown`（Part B 的 `sync.ts` 对 `unknown` 按"该发行人 failed"处理即可）。
-- 设计决定（与规格一致但规格未明说）：`claim_fact_sync_lease` 无 scope 行返回 false；`scopeDue` 只取 `priority > 0`；`filingsOfIssuer.unlinkedOnly` = `document_ref is null`（`link_attempts < 5` 由 Part C 过滤）；`read_facts` 的 `p_history=false` 不返回非 ok 行；`replace_financial_metrics` 空 manifest 的发布也 `state_rev + 1`；`abandon_sync_run` 幂等；`resolve_facts_quarantine` 对无事实行的项按 `payload.run_id` 定位发行人并仅翻转状态。
+- 设计决定（与规格一致但规格未明说）：`claim_fact_sync_lease` 无 scope 行返回 false；`scopeDue` 只取 `priority > 0`；`filingsOfIssuer.unlinkedOnly` = `document_ref is null`（`link_attempts < 5` 由 Part C 过滤）；`filingsOfIssuer` 不给 `limit` 时返回全部行（Supabase 实现按 1,000 行分页）；`read_facts` 的 `p_history=false` 不返回非 ok 行；`replace_financial_metrics` 空 manifest 的发布也 `state_rev + 1`；`abandon_sync_run` 幂等；`resolve_facts_quarantine` 对无事实行的项按 `payload.run_id` 定位发行人，该锚定运行仍 staged 时同样 `run_pending`，否则仅翻转状态；成员集在取得 scope 锁后重建；提升资格另含"该行 (K, available_date) 无 open 的 `same_day_conflict` 项"（按 `payload.key` 匹配）。
 - 开放问题：(1) 内存实现的 `numericEquals` 不处理指数形式，Part B 的 `canonicalDecimal` 落地后应在 `stageFacts` 入口规范化（或改为调用 `decimalEquals`）；(2) `dq_quarantine_fact_ids_idx`（GIN）建在计划一已锁的表上，`test:migrations` 的 schema 对比应通过，若托管库 `dq_quarantine` 已有大量非 facts 行，建索引耗时可忽略；(3) 本机 `test:db` 全量套件已知偶发（见记忆 `alpha-local-db-harness-env.md`），`facts.integration.test.ts` 的 10,001 行用例设置了 120 s 超时。
 
 
@@ -2609,7 +2850,7 @@ git commit -m "test(facts): pg FactsDb for integration tests, shared contract on
 
 跨部分依赖（必须先于本部分对应任务合入）：
 - Task 4–9 依赖 Part A 的 `src/lib/facts/types.ts`；Task 8 的 `sync.test.ts` 依赖 Part A 的 `memoryFactsDb(tables: TableClient)`（签名一致；`MemoryFactsDb` 的 `runs()/filings()/facts()/metrics()/scope()` 是返回数组快照的**方法**，`sync.test.ts` 按此调用）；Task 9 依赖 Part A 的 `supabaseFactsDb(admin)`（`src/lib/facts/db.ts`）。
-- Task 8 的 `sync.ts` 直接 `import {reconcileScope} from './scope'`（Task 14：`reconcileScope({db,tables},market):Promise<ScopeReconcileResult>`，返回值在 `sync.ts` 里不使用）与 `import {materialize,FORMULA_VERSION} from './derive'`（Task 15：`materialize(db,issuer,market):Promise<MaterializeResult>`，返回值不使用）；Task 9 的 `facts-resolver.ts` 同样 import `materialize`。**推荐合入顺序：Part A → Task 4–7 → Task 14、Task 15 → Task 8、Task 9 → Part C → Part D 其余。** 单测用 `vi.mock('./scope')`/`vi.mock('./derive')`，不依赖两者的真实实现。
+- Task 8 的 `sync.ts` 直接 `import {reconcileScope,scopeRowFor} from './scope'`（Task 14：`reconcileScope({db,tables},market):Promise<ScopeReconcileResult>`，返回值在 `sync.ts` 里不使用；`scopeRowFor(tables,market,issuerId,{today}):Promise<ScopeInputRow|null>` 供显式发行人补建 scope 行）与 `import {materialize,FORMULA_VERSION} from './derive'`（Task 15：`materialize(db,issuer,market):Promise<MaterializeResult>`，返回值不使用）；Task 9 的 `facts-resolver.ts` 同样 import `materialize`。**执行顺序见顶部"执行顺序"表：Part A → Task 4–7 → Task 14、Task 15 → Task 8、Task 9 → Part C → Part D 其余。** 单测用 `vi.mock('./scope')`（提供 `reconcileScope` 与 `scopeRowFor` 两个 mock）/`vi.mock('./derive')`，不依赖两者的真实实现。
 - 规格 §3 正文写"33 个概念"，但 §3 表有 **34** 行（IS 14 + BS 11 + CF 9）。本部分按表逐行落地 34 个；`MAX_READ_CONCEPTS = FACT_CONCEPTS.length`。见末尾开放问题 1。
 
 ---
@@ -3186,8 +3427,8 @@ export const MAX_READ_CONCEPTS=FACT_CONCEPTS.length;
 const BY_ID=new Map(FACT_CONCEPTS.map(c=>[c.id,c]));
 export const conceptById=(id:string):ConceptDef|undefined=>BY_ID.get(id);
 export const isConceptId=(id:unknown):id is string=>typeof id==='string'&&BY_ID.has(id);
-/** Concepts fed by one Tushare table, in catalogue order. */
-export const conceptsForTushare=(api:Api):ConceptDef[]=>FACT_CONCEPTS.filter(c=>c.tushare!==null&&c.tushare.api===api);
+/** Concepts fed by one Tushare table, in catalogue order (readonly like the catalogue). */
+export const conceptsForTushare=(api:Api):readonly ConceptDef[]=>FACT_CONCEPTS.filter(c=>c.tushare!==null&&c.tushare.api===api);
 /** Tushare columns a table request must ask for (value fields only; the adapter adds control fields). */
 export const tushareFieldsFor=(api:Api):string[]=>[...new Set(conceptsForTushare(api).flatMap(c=>c.tushare!==null&&'sum' in c.tushare?c.tushare.sum:[(c.tushare as {field:string}).field]))];
 ```
@@ -3857,7 +4098,10 @@ git commit -m "feat(facts): identity rules and warning summaries; INFO_CODES += 
 
 ```ts
 // src/lib/facts/read.test.ts
+import {randomUUID} from 'node:crypto';
 import {describe,it,expect} from 'vitest';
+import {factInsert,filingInsert} from './db-contract';
+import {memoryFactsDb} from './memory-facts-db';
 import {sequencesOf,currentFacts} from './read';
 import type {FactRow} from './types';
 
@@ -3890,12 +4134,33 @@ describe('sequencesOf',()=>{
   expect(sequencesOf([old,orphan,fy23],{asOf:'2030-01-01',filings,history:true}).map(r=>r.fact_id)).toEqual([fy23.fact_id]);
   expect(sequencesOf([fy23],{asOf:'2030-01-01',filings:new Map([[F1,2]]),history:true})).toEqual([]);
  });
- it('hides staged and quarantined rows unless includeNonOk, which then seats them in the sequence like the SQL window',()=>{
+ it('hides staged and quarantined rows unless includeNonOk, which lists them OUTSIDE the sequence (no seq, never current) like the SQL window (round-1 #14)',()=>{
   const parked=row(F2,'1','2024-11-01',{status:'quarantined'});
   const staged=row(F3,'2','2025-01-01',{status:'staged'});
   expect(sequencesOf([fy23,parked,staged],{asOf:'2030-01-01',filings,history:true}).map(r=>r.fact_id)).toEqual([fy23.fact_id]);
   const all=sequencesOf([fy23,parked,staged],{asOf:'2030-01-01',filings,history:true,includeNonOk:true});
-  expect(all.map(r=>[r.status,r.disclosure_seq,r.is_current])).toEqual([['ok',1,false],['quarantined',2,false],['staged',3,true]]);
+  expect(all.map(r=>[r.status,r.disclosure_seq??null,r.is_current,r.is_revision])).toEqual([['ok',1,true,false],['quarantined',null,false,false],['staged',null,false,false]]);
+  expect(sequencesOf([fy23,parked,staged],{asOf:'2030-01-01',filings,history:false,includeNonOk:true}).map(r=>r.fact_id)).toEqual([fy23.fact_id]);
+ });
+ it('agrees with memoryFactsDb.readFacts on one fixture: ok rows sequence, quarantined rows listed without sequence fields (round-1 #14)',async()=>{
+  const db=memoryFactsDb();const iss=randomUUID();const b=randomUUID();
+  await db.reconcileScope('US',[{issuer_id:iss,reasons:[],priority:1,fetch_key:'k'}]);await db.claimLease(iss,'US',b,600);
+  const disclose=async(available:string,value:string)=>{const run=await db.beginRun(iss,'US',b,1);const f=filingInsert(iss,{availableDate:available});await db.stageFilings(run,[f]);const x=factInsert(iss,f,{value});await db.stageFacts(run,[x]);await db.publishRun(run,[f.filing_id]);return x.fact_id;};
+  await disclose('2024-02-01','100');await disclose('2024-05-01','100');await disclose('2024-08-01','120');
+  const run=await db.beginRun(iss,'US',b,1);const f=filingInsert(iss,{availableDate:'2024-09-01'});await db.stageFilings(run,[f]);
+  const qd=factInsert(iss,f,{value:'121'});await db.stageFacts(run,[qd]);
+  const itemId=randomUUID();
+  await db.tables.insert('dq_quarantine',{id:itemId,dataset:'facts.us',table_name:'financial_facts',natural_key:`${iss}:US:IS:x`,reason_code:'identity_gp',status:'open',payload:{key:{issuer_id:iss,market:'US'},fact_ids:[],run_id:run},detail:{},batch_id:b,resolved_by:null,resolved_at:null,created_at:'2026-01-01T00:00:00.000Z'});
+  await db.quarantineFacts(run,[qd.fact_id],itemId);await db.publishRun(run,[f.filing_id]);
+  const gens=new Map(db.filings().map(g=>[g.filing_id,g.mapping_gen]));
+  const shape=(rs:FactRow[])=>rs.map(r=>[r.fact_id,r.status,r.disclosure_seq??null,r.is_current,r.is_revision]).sort((a,b)=>String(a[0]).localeCompare(String(b[0])));
+  for(const history of [true,false]){
+   const fromDb=(await db.readFacts(iss,'US',{concepts:['revenue'],asOf:'2030-01-01',history,includeNonOk:true})).rows;
+   const pure=sequencesOf(db.facts(),{asOf:'2030-01-01',filings:gens,history,includeNonOk:true,concepts:['revenue']});
+   expect(shape(pure)).toEqual(shape(fromDb));
+   expect(pure.filter(r=>r.status==='ok').map(r=>r.disclosure_seq)).toEqual(history?[1,2,3]:[3]);
+   expect(pure.filter(r=>r.status!=='ok').map(r=>[r.disclosure_seq??null,r.is_current])).toEqual(history?[[null,false]]:[]);
+  }
  });
  it('orders ties by created_at then fact_id and keys by concept, period_end, period_start, unit',()=>{
   const b=row(F2,'2','2023-11-03',{created_at:'2024-01-01T00:00:00.000Z',fact_id:'20000000-0000-4000-8000-00000000000b'});
@@ -3922,13 +4187,14 @@ Expected: FAIL，`Failed to resolve import "./read"`。
 
 ```ts
 // src/lib/facts/read.ts
-// Reference read semantics of read_facts (spec §4.6, §5.2), pure, for the in-memory FactsDb,
-// derive and tests. Per filing only rows whose mapping_gen equals the filing's activated
-// mapping_gen count; rows visible at asOf (available_date <= asOf) and, unless includeNonOk,
-// status ok form one sequence per K ordered by (available_date, created_at, fact_id);
-// disclosure_seq is the position, is_current marks the last row, is_revision a value change
-// against the previous row in canonical decimal form. history=false keeps current rows only.
-// Like the SQL window, the sequence runs over whatever rows passed the filters.
+// Reference read semantics of read_facts (spec §4.6, §5.2), pure, for derive and tests. Per
+// filing only rows whose mapping_gen equals the filing's activated mapping_gen count; rows
+// visible at asOf (available_date <= asOf) with status ok form one sequence per K ordered by
+// (available_date, created_at, fact_id); disclosure_seq is the position, is_current marks the
+// last row, is_revision a value change against the previous row in canonical decimal form.
+// includeNonOk adds staged/quarantined rows OUTSIDE the sequences (disclosure_seq undefined,
+// is_current false, is_revision false) exactly like the SQL window and memoryFactsDb (audit
+// round-1 #14); history=false keeps current rows only, so non-ok rows never appear there.
 import type {FactRow} from './types';
 import {factKey} from './keys';
 import {canonicalDecimal} from './json-numbers';
@@ -3948,7 +4214,7 @@ export function sequencesOf(rows:FactRow[],opts:SequenceOptions):FactRow[]{
  const visible=rows.filter(r=>opts.filings.get(r.filing_id)===r.mapping_gen&&r.available_date<=opts.asOf&&(opts.includeNonOk||r.status==='ok')
   &&(concepts===null||concepts.has(r.concept))&&(opts.from===undefined||r.period_end>=opts.from)&&(opts.to===undefined||r.period_end<=opts.to));
  const byKey=new Map<string,FactRow[]>();
- for(const r of visible){const k=factKey(r);const g=byKey.get(k)??[];g.push(r);byKey.set(k,g);}
+ for(const r of visible)if(r.status==='ok'){const k=factKey(r);const g=byKey.get(k)??[];g.push(r);byKey.set(k,g);}
  const out:FactRow[]=[];
  for(const g of byKey.values()){
   g.sort(order);
@@ -3957,6 +4223,7 @@ export function sequencesOf(rows:FactRow[],opts:SequenceOptions):FactRow[]{
    out.push({...r,disclosure_seq:i+1,is_current:i===g.length-1,is_revision:prev!==null&&canonicalDecimal(prev.value)!==canonicalDecimal(r.value)});
   });
  }
+ for(const r of visible)if(r.status!=='ok')out.push({...r,disclosure_seq:undefined,is_current:false,is_revision:false});
  const kept=opts.history?out:out.filter(r=>r.is_current);
  return kept.sort((a,b)=>keyOrder(a,b)||order(a,b));
 }
@@ -3968,12 +4235,12 @@ export const currentFacts=(rows:FactRow[],opts:Omit<SequenceOptions,'history'|'i
 - [ ] **Step 4: 运行通过**
 
 Run: `npm test -- src/lib/facts/read.test.ts`
-Expected: `Tests 6 passed`。
+Expected: `Tests 7 passed`。
 
 - [ ] **Step 5: 类型与 lint**
 
 Run: `npm run typecheck && npm run lint`
-Expected: 无错误。Part A 的 `memory-facts-db.ts::readFacts` 保留自己的实现，**不**改为调用本文件：它还要复刻 SQL 的键排序（`period_end desc, concept, period_start desc nulls last, consolidation, unit`）、`limit`（自然键数）与 10,000 行上限，而 `sequencesOf` 只负责序列语义、输出按 `(concept, period_end, period_start, unit, consolidation)` 升序，供 `derive.test.ts`、`read.test.ts` 与离线断言使用。两者对同一输入给出相同的 `disclosure_seq / is_current / is_revision`，由 `read.test.ts` 与 `db.test.ts` 各自覆盖。
+Expected: 无错误。Part A 的 `memory-facts-db.ts::readFacts` 保留自己的实现，**不**改为调用本文件：它还要复刻 SQL 的键排序（`period_end desc, concept, period_start desc nulls last, consolidation, unit`）、`limit`（自然键数）与 10,000 行上限，而 `sequencesOf` 只负责序列语义、输出按 `(concept, period_end, period_start, unit, consolidation)` 升序，供 `derive.test.ts`、`read.test.ts` 与离线断言使用。三者（SQL 窗口、内存 `readFacts`、`sequencesOf`）对同一输入给出相同的 `disclosure_seq / is_current / is_revision`，且非 ok 行一律不进序列（`disclosure_seq` 空、`is_current=false`）；`read.test.ts` 的最后一个用例把同一组行同时喂给内存库与 `sequencesOf` 做逐行比对（审计 round-1 #14）。
 
 - [ ] **Step 6: 提交**
 
@@ -4064,14 +4331,14 @@ describe('supabaseSnapshotStore',()=>{
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 import {createHash} from 'node:crypto';
 
-const mocks=vi.hoisted(()=>({reconcileScope:vi.fn(),materialize:vi.fn()}));
-vi.mock('./scope',()=>({reconcileScope:mocks.reconcileScope}));
+const mocks=vi.hoisted(()=>({reconcileScope:vi.fn(),scopeRowFor:vi.fn(),materialize:vi.fn()}));
+vi.mock('./scope',()=>({reconcileScope:mocks.reconcileScope,scopeRowFor:mocks.scopeRowFor}));
 vi.mock('./derive',()=>({materialize:mocks.materialize,FORMULA_VERSION:'facts-derive/1.0'}));
 
 import {memoryTableClient} from '../db/memory-table-client';
 import {memoryFactsDb} from './memory-facts-db';
 import {memorySnapshotStore} from './snapshot-store';
-import {runFactsSync,makeBudget,resolveCodeVersion,LEASE_TTL_S} from './sync';
+import {runFactsSync,makeBudget,resolveCodeVersion,LEASE_TTL_S,MAX_LINK_ATTEMPTS} from './sync';
 import type {SyncDeps} from './sync';
 import {SyncError} from './errors';
 import {FactsDbError} from './types';
@@ -4092,8 +4359,14 @@ function harness(parse:ParseResult|(()=>ParseResult)=FY23,over:Partial<SyncDeps>
  for(const s of scopes)void tables.insert('issuers',{issuer_id:s.issuer_id,status:'active'});
  const deps:SyncDeps={db,tables,storage,fetchUs:async()=>snap('{"facts":{}}'),fetchCn:async()=>[snap('{"code":0}')],parseUs:()=>typeof parse==='function'?parse():parse,parseCn:()=>typeof parse==='function'?parse():parse,now:()=>NOW,deadline:null,codeVersion:'a'.repeat(40),...over};
  mocks.reconcileScope.mockImplementation(async(d:{db:FactsDb},market:Market)=>d.db.reconcileScope(market,scopes.filter(s=>(s.market??'US')===market).map(s=>({issuer_id:s.issuer_id,reasons:['sp500'],priority:10,fetch_key:s.fetch_key}))));
+ // scopeRowFor (Task 14) answers for the issuers this harness knows; anyone else is unresolvable.
+ mocks.scopeRowFor.mockImplementation(async(_tables:unknown,market:Market,issuerId:string)=>{const s=scopes.find(x=>x.issuer_id===issuerId&&(x.market??'US')===market);return s?{issuer_id:issuerId,reasons:['explicit'],priority:10,fetch_key:s.fetch_key}:null;});
  return {tables,db,storage,deps};
 }
+const CN_REF='600519.SH:20231231:1:20240403';
+const cnFiling=()=>filing(CN_REF,'2024-04-03',{market:'CN',source:'tushare',origin:'sse',formType:'annual',periodEnd:'2023-12-31'});
+const cnRevenue=()=>cand(CN_REF,'revenue','100',{periodStart:'2023-01-01',periodEnd:'2023-12-31',unit:'CNY'});
+const CN_SCOPE=[{issuer_id:ISSUER,fetch_key:'600519.SH',market:'CN' as Market}];
 const run=(deps:SyncDeps,over:Partial<Parameters<typeof runFactsSync>[1]>={})=>runFactsSync(deps,{market:'US',limit:25,dryRun:false,triggeredBy:'script',...over});
 const current=(db:FactsDb,asOf=NOW.toISOString().slice(0,10))=>db.readFacts(ISSUER,'US',{concepts:['revenue','net_income_parent','total_assets','liabilities_and_equity'],asOf,history:false});
 
@@ -4228,7 +4501,13 @@ describe('runFactsSync — failures',()=>{
   db.readFacts=async(...a)=>({...(await real(...a)),truncated:true});
   expect((await run(deps,{issuerIds:[ISSUER]})).issuers[0]).toMatchObject({outcome:'failed',code:'read_truncated'});
   expect(db.runs().every(x=>x.status==='abandoned')).toBe(true);
-  expect((await db.filingsOfIssuer(ISSUER,'US',{}))).toEqual([]);   // filings of abandoned runs with no facts and gen 0 are removed
+  // abandon_sync_run keeps the filings the run staged (gen 0, no facts); only begin_sync_run prunes,
+  // and only for runs still staged at that moment. The next run reuses the row by source_ref
+  // (stage_filings on-conflict) and activates it on publish (round-1 #17a).
+  expect(await db.filingsOfIssuer(ISSUER,'US',{})).toEqual([expect.objectContaining({source_ref:'acc-1',mapping_gen:0})]);
+  db.readFacts=real;
+  expect((await run(deps,{issuerIds:[ISSUER]})).issuers[0].outcome).toBe('published');
+  expect(await db.filingsOfIssuer(ISSUER,'US',{})).toEqual([expect.objectContaining({source_ref:'acc-1',mapping_gen:1})]);
  });
  it('stops the issuer on lease_lost without calling abandon or release',async()=>{
   const {db,deps}=harness();
@@ -4285,6 +4564,76 @@ describe('runFactsSync — failures',()=>{
   mocks.reconcileScope.mockRejectedValueOnce(new Error('db down'));
   await expect(run(deps)).rejects.toThrow('db down');
   expect(tables.rows('ingest_batches')[0]).toMatchObject({status:'failed',errors:[{code:'unknown',message:'db down'}]});
+ });
+});
+
+describe('runFactsSync — round-1 audit cases',()=>{
+ it('an input whose rows all lack an available date publishes an empty run AND parks every row as missing_available_date (#9)',async()=>{
+  const {tables,db,deps}=harness(parsed([],[],{missingAvailableDate:[{accn:'0000320193-23-000106',tag:'us-gaap:Revenues',end:'2023-09-30'},{accn:'0000320193-23-000106',tag:'us-gaap:Assets',end:'2023-09-30'}]}));
+  const r=await run(deps);
+  expect(r.issuers[0]).toMatchObject({outcome:'published',code:'no_rows'});
+  expect(r.counts).toMatchObject({fetched:0,inserted:0,quarantined:2,failed:0});
+  expect(tables.rows('dq_quarantine').map(i=>[i.reason_code,i.natural_key]).sort()).toEqual([
+   ['missing_available_date',`${ISSUER}:0000320193:0000320193-23-000106:us-gaap:Assets`],
+   ['missing_available_date',`${ISSUER}:0000320193:0000320193-23-000106:us-gaap:Revenues`],
+  ]);
+  expect(db.runs()[0]).toMatchObject({status:'published',manifest:[]});
+  expect(r.status).toBe('success');
+ });
+ it('a failure after publication keeps the run published, records the original error, releases the lease as failed and never calls abandonRun (#11)',async()=>{
+  const {db,deps}=harness();
+  mocks.materialize.mockRejectedValueOnce(new Error('metrics table missing'));
+  const abandonSpy=vi.spyOn(db,'abandonRun');
+  const r=await run(deps);
+  expect(r.issuers[0]).toMatchObject({outcome:'published'});
+  expect(r.errors).toEqual([{code:'unknown',key:ISSUER,message:'metrics table missing'}]);
+  expect(r.status).toBe('partial');expect(r.counts.failed).toBe(0);
+  expect(abandonSpy).not.toHaveBeenCalled();
+  expect(db.runs()[0].status).toBe('published');
+  expect((await current(db)).rows).toHaveLength(2);
+  expect((await db.scopeDue('US','9999-12-31T00:00:00.000Z',10))[0]).toMatchObject({last_status:'failed',lease_batch_id:null,next_due_at:'2027-03-02T08:00:00.000Z'});
+ });
+ it('parser skip counters become one skipped_summary(parser) and CN coverage one compact coverage_summary per issuer (#12)',async()=>{
+  const cn=parsed([cnFiling()],[cnRevenue()],{skipped:[{reason:'is_calc',n:1},{reason:'null:bonds_payable',n:3}]});
+  const {deps}=harness(cn,{coverageCn:()=>[{api:'income',report_type:1,years:{'2023':1}},{api:'cashflow',report_type:1,years:{'2022':4,'2023':4}}]},CN_SCOPE);
+  const r=await run(deps,{market:'CN'});
+  expect(r.status).toBe('success');
+  expect(r.errors).toEqual([
+   {code:'skipped_summary',key:`${ISSUER}:parser`,message:JSON.stringify({'null:bonds_payable':3,is_calc:1})},
+   {code:'coverage_summary',key:ISSUER,message:JSON.stringify({'income:rt1':'2023-2023:1','cashflow:rt1':'2022-2023:8'})},
+  ]);
+  expect(r.counts).toMatchObject({inserted:1,quarantined:0});
+ });
+ it('explicit issuers without a scope row: apply seeds the row (reasons explicit) and publishes; dry-run plans on a constructed row and writes nothing; an unresolvable issuer fails with scope_unresolved (#13)',async()=>{
+  const {tables,db,deps}=harness(FY23,{},[{issuer_id:ISSUER,fetch_key:'0000320193'}]);   // known to scopeRowFor, never reconciled
+  const dry=await run(deps,{dryRun:true,issuerIds:[ISSUER,ISSUER2]});
+  expect(dry.issuers.map(i=>[i.issuerId,i.outcome,i.code??null])).toEqual([[ISSUER,'planned',null],[ISSUER2,'failed','scope_unresolved']]);
+  expect(dry.detail).toEqual({attempted:2,published:0,failed:1,skipped:0,idle:false});
+  expect(db.scope()).toEqual([]);                                                        // the dry run constructed the row, never wrote it
+  const r=await run(deps,{issuerIds:[ISSUER,ISSUER2]});
+  expect(r.issuers.map(i=>[i.issuerId,i.outcome,i.code??null])).toEqual([[ISSUER,'published',null],[ISSUER2,'failed','scope_unresolved']]);
+  expect(r.errors).toEqual([{code:'scope_unresolved',key:ISSUER2}]);
+  expect(r.status).toBe('partial');expect(r.detail).toEqual({attempted:2,published:1,failed:1,skipped:0,idle:false});
+  expect(db.scope()).toEqual([expect.objectContaining({issuer_id:ISSUER,reasons:['explicit'],priority:10,fetch_key:'0000320193',last_status:'success',lease_batch_id:null})]);
+  expect(mocks.reconcileScope).not.toHaveBeenCalled();                                   // explicit issuers never reconcile the whole market
+  expect(mocks.scopeRowFor).toHaveBeenCalledWith(tables,'US',ISSUER2,{today:'2027-03-01'});
+  expect((await current(db)).rows).toHaveLength(2);
+ });
+ it('a thrown cninfo request still counts as a persisted link attempt, capped at MAX_LINK_ATTEMPTS; a budget cancelled before the request counts nothing (#21)',async()=>{
+  const linkCn=vi.fn(async()=>{throw new Error('cninfo 500');});
+  const {db,deps}=harness(parsed([cnFiling()],[cnRevenue()]),{linkCn},CN_SCOPE);
+  const r=await run(deps,{market:'CN'});
+  expect(r.issuers[0].errors).toContainEqual({code:'skipped_summary',key:`${ISSUER}:cninfo_link`,message:'{"link_failed":1}'});
+  expect((await db.filingsOfIssuer(ISSUER,'CN',{}))[0]).toMatchObject({document_ref:null,link_attempts:1});
+  for(let i=0;i<6;i++)await run(deps,{market:'CN',issuerIds:[ISSUER]});
+  expect((await db.filingsOfIssuer(ISSUER,'CN',{}))[0].link_attempts).toBe(MAX_LINK_ATTEMPTS);
+  expect(linkCn).toHaveBeenCalledTimes(MAX_LINK_ATTEMPTS);
+  const cancelled=vi.fn(async(_f:unknown,b:{signal:AbortSignal})=>{const c=new AbortController();c.abort();Object.defineProperty(b,'signal',{value:c.signal});throw new Error('aborted');});
+  const second=harness(parsed([cnFiling()],[cnRevenue()]),{linkCn:cancelled as unknown as SyncDeps['linkCn']},CN_SCOPE);
+  const r2=await run(second.deps,{market:'CN'});
+  expect(r2.issuers[0].outcome).toBe('published');
+  expect(r2.issuers[0].errors.some(e=>e.key===`${ISSUER}:cninfo_link`)).toBe(false);
+  expect((await second.db.filingsOfIssuer(ISSUER,'CN',{}))[0].link_attempts).toBe(0);
  });
 });
 
@@ -4438,9 +4787,12 @@ import {planFactWrites} from './plan';
 import {evaluateFactRules,mergeWarnings,summarizeWarnings} from './rules';
 import {snapshotPath} from './snapshot-store';
 import type {SnapshotStore} from './snapshot-store';
-import {reconcileScope} from './scope';
+import {reconcileScope,scopeRowFor} from './scope';
+import type {ScopeInputRow} from './scope';
 import {FORMULA_VERSION,materialize} from './derive';
 
+/** Shape of providers/tushare-statements.ts::coverageSummary entries (the adapter is injected, never imported here). */
+export interface CoverageEntry{api:string;report_type:number;years:Record<string,number>}
 export interface SyncDeps{
  db:FactsDb;tables:TableClient;storage:SnapshotStore;
  fetchUs:(cik10:string,b:Budget)=>Promise<RawSnapshot>;
@@ -4449,9 +4801,17 @@ export interface SyncDeps{
  parseUs:(snapshot:RawSnapshot,opts:{sinceYear:number})=>ParseResult;
  parseCn:(snapshots:RawSnapshot[],opts:{sinceYear:number})=>ParseResult;
  linkCn?:(filing:FilingRow,b:Budget)=>Promise<{document_ref:string;document_url:string}|'none'|'ambiguous'>;
+ /** CN coverage summary (§6.3 coverage_summary), wired by deps.ts to coverageSummary (round-1 #12). */
+ coverageCn?:(parsed:ParseResult)=>CoverageEntry[];
  now:()=>Date;deadline:Date|null;codeVersion:string|null;
 }
-/** issuerIds given (scripts, replay tests): those issuers run directly — no reconcileScope first, next_due_at ignored, but a fact_sync_scope row must exist to hold the lease. */
+/**
+ * issuerIds given (scripts, replay tests): those issuers run directly — no reconcileScope first,
+ * next_due_at ignored. Their scope rows are read by id; a missing row is computed from the issuer
+ * tables (scopeRowFor): seeded through reconcileScope with reasons ['explicit'] when applying,
+ * constructed read-only for a dry run. An issuer whose fetch_key cannot be derived is reported as
+ * outcome 'failed' / code 'scope_unresolved' — never silently skipped (round-1 #13).
+ */
 export interface SyncOptions{market:Market;limit:number;issuerIds?:string[];dryRun:boolean;triggeredBy:TriggeredBy;sinceYear?:number;mappingGen?:number}
 /** 'planned' is the dry-run outcome of an issuer that fetched, parsed and planned without writing. */
 export type IssuerOutcomeKind='published'|'planned'|'failed'|'skipped';
@@ -4469,13 +4829,22 @@ export const MAX_LINK_ATTEMPTS=5;
 export const LINKABLE_FORMS=new Set(['annual','semiannual','q1','q3','restatement']);
 const COUNTERS=['fetched','inserted','duplicates','versioned','quarantined','failed'] as const;
 const ALL_CONCEPTS=FACT_CONCEPTS.map(c=>c.id);
-const FAR_FUTURE='9999-12-31T00:00:00.000Z';
 const isoDate=(d:Date)=>d.toISOString().slice(0,10);
 const errMsg=(e:unknown)=>(e instanceof Error?e.message:String(e)).slice(0,200);
 const dbCode=(e:unknown)=>e instanceof FactsDbError?e.code:null;
 const datasetOf=(m:Market)=>m==='US'?'facts.us':'facts.cn';
 const sourceOf=(m:Market):Source=>m==='US'?'edgar':'tushare';
 const summary=(key:string,reason:string):BatchError=>({code:'skipped_summary',key,message:JSON.stringify({[reason]:1})});
+const MAX_SKIP_REASONS=20;
+/** One skipped_summary(parser) per issuer: the adapter's skip counters, top MAX_SKIP_REASONS by count, the rest folded into `_more` (round-1 #12). */
+const skippedSummary=(issuer:string,skipped:{reason:string;n:number}[]):BatchError=>{
+ const sorted=[...skipped].sort((a,b)=>b.n-a.n||a.reason.localeCompare(b.reason));
+ const body:Record<string,number>=Object.fromEntries(sorted.slice(0,MAX_SKIP_REASONS).map(s=>[s.reason,s.n]));
+ if(sorted.length>MAX_SKIP_REASONS)body._more=sorted.slice(MAX_SKIP_REASONS).reduce((n,s)=>n+s.n,0);
+ return {code:'skipped_summary',key:`${issuer}:parser`,message:JSON.stringify(body)};
+};
+/** `<api>:rt<n>` → `<first year>-<last year>:<distinct end dates>`; compact enough for the 500-char batch error message cap. */
+const compactCoverage=(entries:CoverageEntry[]):string=>JSON.stringify(Object.fromEntries(entries.map(e=>{const ys=Object.keys(e.years).sort();return [`${e.api}:rt${e.report_type}`,`${ys[0]??''}-${ys.at(-1)??''}:${Object.values(e.years).reduce((n,v)=>n+v,0)}`];})));
 
 /** Remaining time and an abort signal that fires at the deadline; no deadline means unlimited. */
 export function makeBudget(deadline:Date|null,now:()=>Date=()=>new Date()):Budget{
@@ -4516,21 +4885,41 @@ export async function syncIssuerFacts(deps:SyncDeps,batchId:string,input:{scope:
  const [issuerRow]=await tables.select('issuers',{issuer_id:issuer},{limit:1});
  if(issuerRow?.status==='merged')return skip('issuer_merged');
  if(!await db.claimLease(issuer,market,batchId,LEASE_TTL_S))return skip('leased');
- let leaseHeld=true;let runId:string|null=null;let fetched=0;
+ let leaseHeld=true;let runId:string|null=null;let fetched=0;let publishedRun=false;
  const fail=(code:string,message?:string)=>{out.outcome='failed';out.code=code;out.errors.push(message===undefined?{code,key:issuer}:{code,key:issuer,message});out.counts.failed+=Math.max(1,fetched);return out;};
- const abandon=async()=>{if(runId===null||!leaseHeld)return;try{await db.abandonRun(runId);}catch(e){if(dbCode(e)!=='lease_lost')throw e;leaseHeld=false;}};
+ // Only a run that is still staged can be abandoned: once publishRun committed the run is immutable
+ // (abandon would raise run_published and mask the real failure) and its facts stay (round-1 #11).
+ const abandon=async()=>{if(runId===null||!leaseHeld||publishedRun)return;try{await db.abandonRun(runId);}catch(e){if(dbCode(e)!=='lease_lost')throw e;leaseHeld=false;}};
  const release=async(outcome:'success'|'failed')=>{
   if(!leaseHeld)return;
   const next=new Date(deps.now().getTime()+(outcome==='success'?NEXT_DUE_OK_MS:NEXT_DUE_FAIL_MS)).toISOString();
   try{await db.releaseLease(issuer,market,batchId,outcome,next);}catch(e){if(dbCode(e)!=='lease_lost')throw e;leaseHeld=false;}
  };
+ // Failure AFTER publication (link, materialize, release): the run stays published and the issuer
+ // outcome stays 'published'; the original failure is recorded under its own code and the lease is
+ // released as failed so the issuer returns in a day for the post-publish work (round-1 #11).
+ const afterPublish=async(code:string,e:unknown)=>{out.errors.push({code,key:issuer,message:errMsg(e)});await release('failed');return out;};
  try{
   runId=await db.beginRun(issuer,market,batchId,gen);out.runId=runId;
   const {parsed,sha256s}=await fetchAndParse(deps,market,issuer,scope.fetch_key,sinceYear,budget,true);
   out.snapshotSha256=sha256s;
   fetched=parsed.candidates.length;out.counts.fetched=fetched;
+  const park=(reasonCode:string,naturalKey:string,payload:Record<string,unknown>)=>quarantine(tables,{dataset,table:'financial_facts',naturalKey,reasonCode,batchId,payload:{...payload,run_id:runId}});
+  // Parser leftovers come FIRST (round-1 #9): they need no filing row, and an input whose rows all
+  // lack an available date must still leave its missing_available_date evidence behind even though
+  // the empty-result branch below publishes an empty run. Parser-level ambiguity: the adapter's
+  // `key` is its own grouping string (it knows no issuer); the §7.1 natural key is rendered here
+  // from the first candidate and the parser key kept in the payload.
+  let parserParked=0;
+  for(const a of parsed.ambiguous){const c0=a.candidates[0];await park('ambiguous_value',ambiguousKey(issuer,market,keyOfCandidate(c0),c0.filingRef,gen),{key:keyComponents(issuer,market,keyOfCandidate(c0)),parser_key:a.key,candidates:a.candidates});parserParked+=a.candidates.length;}
+  for(const c of parsed.oddDuration){await park('odd_duration',ambiguousKey(issuer,market,keyOfCandidate(c),c.filingRef,gen),{key:keyComponents(issuer,market,keyOfCandidate(c)),candidate:c});parserParked++;}
+  for(const r of parsed.missingAvailableDate){await park('missing_available_date',missingDateKey(issuer,scope.fetch_key,r),{row:r});parserParked++;}
+  out.counts.quarantined+=parserParked;
+  // Adapter summaries → the batch info channel (round-1 #12): skip counters always, CN coverage when wired.
+  if(parsed.skipped.length>0)out.errors.push(skippedSummary(issuer,parsed.skipped));
+  if(market==='CN'&&deps.coverageCn)out.errors.push({code:'coverage_summary',key:issuer,message:compactCoverage(deps.coverageCn(parsed))});
   if(parsed.filings.length===0&&parsed.candidates.length===0){
-   await db.publishRun(runId,[]);await release('success');out.outcome='published';return skip('no_rows');
+   await db.publishRun(runId,[]);publishedRun=true;await release('success');out.outcome='published';return skip('no_rows');
   }
   const staged=await stageFilings(db,runId,issuer,market,parsed);
   const filingCandidates=parsed.filings.map(f=>({...f,availableDate:staged.filingRows.get(staged.filingIds.get(f.sourceRef)??'')!.available_date}));
@@ -4539,13 +4928,6 @@ export async function syncIssuerFacts(deps:SyncDeps,batchId:string,input:{scope:
   const open=await db.openConflicts(issuer,market);
   const plan=planFactWrites({existing:read.rows,openConflicts:open,candidates:parsed.candidates,filingCandidates,filings:staged.filingIds,issuerId:issuer,market,mappingGen:gen,mappingVersion:MAPPING_VERSION});
   if(plan.inserts.length>0)await db.stageFacts(runId,plan.inserts);
-  const park=(reasonCode:string,naturalKey:string,payload:Record<string,unknown>)=>quarantine(tables,{dataset,table:'financial_facts',naturalKey,reasonCode,batchId,payload:{...payload,run_id:runId}});
-  let parserParked=0;
-  // Parser-level ambiguity: the adapter's `key` is its own grouping string (it knows no issuer); the
-  // §7.1 natural key is rendered here from the first candidate and the parser key kept in the payload.
-  for(const a of parsed.ambiguous){const c0=a.candidates[0];await park('ambiguous_value',ambiguousKey(issuer,market,keyOfCandidate(c0),c0.filingRef,gen),{key:keyComponents(issuer,market,keyOfCandidate(c0)),parser_key:a.key,candidates:a.candidates});parserParked+=a.candidates.length;}
-  for(const c of parsed.oddDuration){await park('odd_duration',ambiguousKey(issuer,market,keyOfCandidate(c),c.filingRef,gen),{key:keyComponents(issuer,market,keyOfCandidate(c)),candidate:c});parserParked++;}
-  for(const r of parsed.missingAvailableDate){await park('missing_available_date',missingDateKey(issuer,scope.fetch_key,r),{row:r});parserParked++;}
   for(const a of plan.ambiguous)await park('ambiguous_value',a.naturalKey,{key:a.key,candidates:a.candidates});
   for(const c of plan.conflicts){
    const itemId=await park('same_day_conflict',c.naturalKey,{key:c.key,fact_ids:[...c.newFactIds,...c.existingOkFactIds],values:c.values});
@@ -4563,10 +4945,11 @@ export async function syncIssuerFacts(deps:SyncDeps,batchId:string,input:{scope:
   out.warnings=rules.warnings;
   for(const o of plan.outcomes.values())out.counts[o]++;
   out.counts.duplicates=plan.counts.duplicates;
-  out.counts.quarantined+=plan.ambiguous.reduce((n,a)=>n+a.candidates.length,0)+parserParked;
+  out.counts.quarantined+=plan.ambiguous.reduce((n,a)=>n+a.candidates.length,0);
   const manifest=parsed.filings.map(f=>staged.filingIds.get(f.sourceRef)!);
   try{await db.publishRun(runId,manifest);}
   catch(e){if(dbCode(e)!=='mapping_gen_regression')throw e;await abandon();await release('failed');return fail('mapping_gen_regression');}
+  publishedRun=true;
   out.outcome='published';
   if(market==='CN'&&deps.linkCn)await linkFilings(deps,issuer,market,budget,out);
   try{await materialize(db,issuer,market);}
@@ -4574,11 +4957,13 @@ export async function syncIssuerFacts(deps:SyncDeps,batchId:string,input:{scope:
   await release('success');
   return out;
  }catch(e){
-  if(dbCode(e)==='lease_lost'){leaseHeld=false;return fail('lease_lost');}
+  if(dbCode(e)==='lease_lost'){leaseHeld=false;if(publishedRun){out.errors.push({code:'lease_lost',key:issuer});return out;}return fail('lease_lost');}
   if(budget.signal.aborted||(e instanceof Error&&e.name==='AbortError')){
+   if(publishedRun)return afterPublish('deadline_hit',e);
    await abandon();await release('failed');
    out.outcome='failed';out.code='deadline_hit';out.errors.push({code:'deadline_hit',key:issuer});return out;
   }
+  if(publishedRun)return afterPublish(e instanceof SyncError?e.code:dbCode(e)??'unknown',e);
   await abandon();await release('failed');
   return fail(e instanceof SyncError?e.code:'unknown',e instanceof SyncError?undefined:errMsg(e));
  }
@@ -4601,27 +4986,58 @@ async function linkFilings(deps:SyncDeps,issuer:string,market:Market,budget:Budg
  const pending=(await deps.db.filingsOfIssuer(issuer,market,{unlinkedOnly:true})).filter(f=>f.link_attempts<MAX_LINK_ATTEMPTS&&f.origin!=='bse'&&LINKABLE_FORMS.has(f.form_type));
  let failed=0;
  for(const f of pending){
-  if(budget.remainingMs()<MIN_ISSUER_MS/3)break;
+  // Cancellation before a request starts is not an attempt: link_attempts stays untouched (round-1 #21).
+  if(budget.signal.aborted||budget.remainingMs()<MIN_ISSUER_MS/3)break;
+  let patch:{document_ref?:string;document_url?:string;link_attempts:number}={link_attempts:f.link_attempts+1};
   try{
    const r=await deps.linkCn!(f,budget);
-   await deps.db.updateFilingLink(f.filing_id,typeof r==='string'?{link_attempts:f.link_attempts+1}:{...r,link_attempts:f.link_attempts+1});
-  }catch(e){if(dbCode(e)==='lease_lost')throw e;failed++;}
+   if(typeof r!=='string')patch={...r,link_attempts:f.link_attempts+1};
+  }catch(e){
+   if(dbCode(e)==='lease_lost')throw e;
+   if(budget.signal.aborted)break;                       // cut by the budget mid-request: not a refusal
+   failed++;                                             // transport/HTTP failure: the attempt counts towards the five-attempt cap (§6.3)
+  }
+  await deps.db.updateFilingLink(f.filing_id,patch);     // none / ambiguous / success / thrown — every started request is persisted
  }
  if(failed>0)out.errors.push({code:'skipped_summary',key:`${issuer}:cninfo_link`,message:JSON.stringify({link_failed:failed})});
 }
 
-async function dueScopes(deps:SyncDeps,opts:SyncOptions):Promise<ScopeRow[]>{
- if(opts.issuerIds===undefined)return deps.db.scopeDue(opts.market,deps.now().toISOString(),opts.limit);
- const wanted=new Set(opts.issuerIds);
- return (await deps.db.scopeDue(opts.market,FAR_FUTURE,Math.max(opts.limit,1000))).filter(s=>wanted.has(s.issuer_id)).slice(0,opts.limit);
+type Selected={scope:ScopeRow}|{unresolved:string};
+const unresolvedOutcome=(issuerId:string):IssuerOutcome=>({issuerId,fetchKey:'',runId:null,outcome:'failed',code:'scope_unresolved',counts:{...emptyCounts(),failed:1},errors:[{code:'scope_unresolved',key:issuerId}],warnings:new Map(),snapshotSha256:[]});
+/**
+ * Scheduled path: the due rows. Explicit issuers (round-1 #13): their scope rows by id, in the
+ * order given; a missing row is computed from the issuer tables (scopeRowFor) — seeded through
+ * reconcileScope when applying (reasons ['explicit'], priority SCOPE_PRIORITY; the next cron
+ * reconcile retires it to priority 0 unless a source lists the issuer), constructed read-only for
+ * a dry run — and an issuer whose fetch_key cannot be derived is reported, never silently dropped.
+ */
+async function selectScopes(deps:SyncDeps,opts:SyncOptions):Promise<Selected[]>{
+ if(opts.issuerIds===undefined)return (await deps.db.scopeDue(opts.market,deps.now().toISOString(),opts.limit)).map(scope=>({scope}));
+ const ids=[...new Set(opts.issuerIds)].slice(0,opts.limit);
+ const have=new Map((await deps.db.scopeRows(opts.market,ids)).map(s=>[s.issuer_id,s]));
+ const today=isoDate(deps.now());const seed:ScopeInputRow[]=[];
+ for(const id of ids){
+  if(have.has(id))continue;
+  const row=await scopeRowFor(deps.tables,opts.market,id,{today});
+  if(row===null)continue;
+  if(opts.dryRun)have.set(id,{...row,market:opts.market,next_due_at:deps.now().toISOString(),lease_until:null,lease_batch_id:null,state_rev:0,last_attempt_at:null,last_success_at:null,last_batch_id:null,last_status:null});
+  else seed.push(row);
+ }
+ if(seed.length>0){
+  await deps.db.reconcileScope(opts.market,seed);
+  for(const s of await deps.db.scopeRows(opts.market,seed.map(r=>r.issuer_id)))have.set(s.issuer_id,s);
+ }
+ return ids.map(id=>{const scope=have.get(id);return scope?{scope}:{unresolved:id};});
 }
 
 /** Dry run: fetch, parse and plan against the current rows, write nothing (no batch, lease, snapshot or run). Planned issuers report outcome 'planned'. */
 async function dryRun(deps:SyncDeps,opts:SyncOptions,sinceYear:number,gen:number,budget:Budget):Promise<SyncReceipt> {
  const counts=emptyCounts();const errors:BatchError[]=[];const issuers:IssuerOutcome[]=[];
- const due=await dueScopes(deps,opts);
+ const selected=await selectScopes(deps,opts);
  let failed=0;
- for(const scope of due){
+ for(const sel of selected){
+  if('unresolved' in sel){const u=unresolvedOutcome(sel.unresolved);failed++;issuers.push(u);counts.failed+=1;errors.push(...u.errors);continue;}
+  const scope=sel.scope;
   const out:IssuerOutcome={issuerId:scope.issuer_id,fetchKey:scope.fetch_key,runId:null,outcome:'skipped',counts:emptyCounts(),errors:[],warnings:new Map(),snapshotSha256:[]};
   try{
    const {parsed,sha256s}=await fetchAndParse(deps,opts.market,scope.issuer_id,scope.fetch_key,sinceYear,budget,false);
@@ -4634,8 +5050,8 @@ async function dryRun(deps:SyncDeps,opts:SyncOptions,sinceYear:number,gen:number
   }catch(e){failed++;out.outcome='failed';out.code=e instanceof SyncError?e.code:'unknown';out.errors.push({code:out.code,key:scope.issuer_id,message:errMsg(e)});}
   issuers.push(out);for(const k of COUNTERS)counts[k]+=out.counts[k];errors.push(...out.errors);
  }
- const idle=due.length===0;
- return {batchId:null,status:'dry_run',counts,errors,issuers,idle,detail:{attempted:due.length,published:0,failed,skipped:0,idle}};
+ const idle=selected.length===0;
+ return {batchId:null,status:'dry_run',counts,errors,issuers,idle,detail:{attempted:selected.length,published:0,failed,skipped:0,idle}};
 }
 
 export async function runFactsSync(deps:SyncDeps,opts:SyncOptions):Promise<SyncReceipt>{
@@ -4652,12 +5068,14 @@ export async function runFactsSync(deps:SyncDeps,opts:SyncOptions):Promise<SyncR
   // tests) skip it: their scope rows were put there by the caller and must not be retired by sources
   // the caller does not control.
   if(opts.issuerIds===undefined)await reconcileScope({db:deps.db,tables:deps.tables},market);
-  const due=await dueScopes(deps,opts);
-  idle=due.length===0;
-  for(let i=0;i<due.length;i++){
-   const scope=due[i];
+  const selected=await selectScopes(deps,opts);
+  idle=selected.length===0;
+  for(let i=0;i<selected.length;i++){
+   const sel=selected[i];
+   if('unresolved' in sel){const u=unresolvedOutcome(sel.unresolved);attempted++;failed++;issuers.push(u);counts.failed+=1;errors.push(...u.errors);continue;}
+   const scope=sel.scope;
    if(quota){skipped++;errors.push(summary(scope.issuer_id,'quota_exhausted'));continue;}
-   if(budget.remainingMs()<MIN_ISSUER_MS){errors.push({code:'deadline_hit',message:JSON.stringify({not_started:due.length-i})});break;}
+   if(budget.remainingMs()<MIN_ISSUER_MS){errors.push({code:'deadline_hit',message:JSON.stringify({not_started:selected.length-i})});break;}
    attempted++;
    const r=await syncIssuerFacts(deps,batchId,{scope,market,sinceYear,mappingGen:gen,budget});
    issuers.push(r);for(const k of COUNTERS)counts[k]+=r.counts[k];errors.push(...r.errors);mergeWarnings(warnings,r.warnings);
@@ -4680,12 +5098,12 @@ export async function runFactsSync(deps:SyncDeps,opts:SyncOptions):Promise<SyncR
 }
 ```
 
-实现要点对照 §6.1 步骤：0 未指定 `issuerIds` 时先 `reconcileScope({db,tables},market)` 再 `scopeDue`；指定时直接取这些发行人的 scope 行（不对账、不看 `next_due_at`）；1 `claimLease(…,600)`（失败 → `skipped_summary(leased)`）；2 `beginRun`；3 抓取 + `storage.put`（快照 sha256 记入 `IssuerOutcome.snapshotSha256`）；4 解析（异常 → `parse_error`，只带消息前 200 字；适配器抛的 `ProviderError` 是 `SyncError` 的别名，其 `code` 直接成为批次错误码）；解析器的 `ambiguous[].key` 只是适配器内部分组串，落库时用 `ambiguousKey(issuer,market,K,filingRef,gen)` 渲染 §7.1 自然键并把原串存为 `payload.parser_key`；5 先 `stageFilings`（on-conflict 返回既有 id，使 FactInsert 在规划前就有 `filing_id` 与权威 `available_date`），再 `readFacts(all, 今天, history, includeNonOk)`（`truncated` → `read_truncated` 废弃）+ `openConflicts` → `planFactWrites`；6 `stageFacts`；7 解析器遗留三类 → `quarantine()`；`ambiguous_value`；`same_day_conflict` → `quarantine()` 后 `quarantineFacts(run, newIds, item)`；争议并入 → `quarantineFacts(run, ids, item)`；规则 → `quarantine()` + `quarantineFacts`；8 `publishRun(run, manifest=全部 filing)`（`mapping_gen_regression` → 废弃、failed）；9 CN `linkCn` 对 `document_ref is null and link_attempts < 5` 且非 BJ、`form_type ∈ LINKABLE_FORMS` 的 filing，`updateFilingLink`；10 `materialize`（`stale_computation`/`read_truncated` 记错不撤发布；重算一次在 Task 15 的 `materialize` 内完成）；11 `releaseLease(outcome, now+7d | now+1d)`。`lease_lost` 在任何位置 → 该发行人 failed，不再调用 `abandonRun/releaseLease`。预算中止（`AbortError` 或 `budget.signal.aborted`）→ 废弃运行、失败释放、`deadline_hit`（信息码，不计 `failed`）。`fetched` = 候选数；发行人级失败 `failed += max(1, fetched)`，使"fetched>0 无结果"不会被误判为 `unaccounted`。
+实现要点对照 §6.1 步骤：0 未指定 `issuerIds` 时先 `reconcileScope({db,tables},market)` 再 `scopeDue`；指定时 `selectScopes` 用 `db.scopeRows` 按 id 直取（不对账、不看 `next_due_at`），缺行者 `scopeRowFor` 算出 → apply 时 `reconcileScope` 补建（`reasons:['explicit']`）、dry-run 时构造只读行，算不出的以 `scope_unresolved` 失败计入回执（round-1 #13）；1 `claimLease(…,600)`（失败 → `skipped_summary(leased)`）；2 `beginRun`；3 抓取 + `storage.put`（快照 sha256 记入 `IssuerOutcome.snapshotSha256`）；4 解析（异常 → `parse_error`，只带消息前 200 字；适配器抛的 `ProviderError` 是 `SyncError` 的别名，其 `code` 直接成为批次错误码）；**解析器遗留三类先落隔离**（`ambiguous_value` / `odd_duration` / `missing_available_date`，不依赖 filing 行；round-1 #9），`parsed.skipped` → `skipped_summary(<issuer>:parser)`，CN 且注入 `coverageCn` → `coverage_summary`（紧凑串，round-1 #12），然后才判"无文件无候选 → 发布空运行 + `no_rows`"；解析器的 `ambiguous[].key` 只是适配器内部分组串，落库时用 `ambiguousKey(issuer,market,K,filingRef,gen)` 渲染 §7.1 自然键并把原串存为 `payload.parser_key`；5 先 `stageFilings`（on-conflict 返回既有 id，使 FactInsert 在规划前就有 `filing_id` 与权威 `available_date`），再 `readFacts(all, 今天, history, includeNonOk)`（`truncated` → `read_truncated` 废弃）+ `openConflicts` → `planFactWrites`；6 `stageFacts`；7 `ambiguous_value`；`same_day_conflict` → `quarantine()` 后 `quarantineFacts(run, newIds, item)`；争议并入 → `quarantineFacts(run, ids, item)`；规则 → `quarantine()` + `quarantineFacts`；8 `publishRun(run, manifest=全部 filing)`（`mapping_gen_regression` → 废弃、failed）；**发布成功后置 `publishedRun=true`：之后任何失败都不再 `abandonRun`**（它只会抛 `run_published` 盖掉原错误），发行人 outcome 保持 `published`，原错误按自身码记入 `errors`，租约以 `failed` 释放（round-1 #11）；9 CN `linkCn` 对 `document_ref is null and link_attempts < 5` 且非 BJ、`form_type ∈ LINKABLE_FORMS` 的 filing，`updateFilingLink`——none / ambiguous / 成功 / **请求抛错**都持久化 `link_attempts+1`，只有预算在请求开始前已取消（`budget.signal.aborted`）才不计（round-1 #21）；10 `materialize`（`stale_computation`/`read_truncated` 记错不撤发布；重算一次在 Task 15 的 `materialize` 内完成）；11 `releaseLease(outcome, now+7d | now+1d)`。`lease_lost` 在任何位置 → 不再调用 `abandonRun/releaseLease`；发布前 → 该发行人 failed，发布后 → 保持 published 并记 `lease_lost`。预算中止（`AbortError` 或 `budget.signal.aborted`）→ 发布前：废弃运行、失败释放、`deadline_hit`（信息码，不计 `failed`）；发布后：不废弃、失败释放、记 `deadline_hit`。`fetched` = 候选数；发行人级失败 `failed += max(1, fetched)`，使"fetched>0 无结果"不会被误判为 `unaccounted`。
 
 - [ ] **Step 7: 运行通过**
 
 Run: `npm test -- src/lib/facts/snapshot-store.test.ts src/lib/facts/sync.test.ts`
-Expected: `snapshot-store.test.ts` 5 passed；`sync.test.ts` 21 passed。
+Expected: `snapshot-store.test.ts` 5 passed；`sync.test.ts` 26 passed（含 `round-1 audit cases` 5 个）。
 
 - [ ] **Step 8: 类型与 lint**
 
@@ -5007,7 +5425,9 @@ Expected: `facts-resolver.test.ts` FAIL（`Failed to resolve import "./facts-res
 ```ts
 // src/lib/dq/facts-resolver.ts
 // Admin hook for facts.* quarantine items (spec §7.3). Accepting is done entirely by the SQL
-// function resolve_facts_quarantine (run_pending check on every member row, status flip,
+// function resolve_facts_quarantine (run_pending check on every member row AND on the item's
+// anchor run payload.run_id — so an item without fact rows is also refused while its run is
+// staged and stays open until that run is published or abandoned (round-1 #10); status flip,
 // verdict in detail.chosen_fact_ids, promotion — one transaction). This module validates the
 // verdict (same_day_conflict: chosen ⊆ payload.fact_ids with one value), calls the function,
 // then runs materialize and records detail.hook = {stage, state, at, message?}; a later POST on
@@ -5225,7 +5645,7 @@ git commit -m "feat(dq): facts quarantine hook — resolve_facts_quarantine, cho
 | `src/lib/facts/snapshot-store.ts` | `memorySnapshotStore():SnapshotStore&{objects:Map}` |
 | `src/lib/facts/pg-facts-db.ts` | `pgFactsDb(pool:Pool):FactsDb` |
 | `src/lib/facts/errors.ts` | `SyncError`、`SyncErrorCode`（含 `tushare_unavailable`）；本部分的 `ProviderError` 是它的别名 |
-| `src/lib/facts/sync.ts` | `runFactsSync(deps:SyncDeps,opts:SyncOptions):Promise<SyncReceipt>`；`SyncOptions={market;limit;issuerIds?;dryRun;triggeredBy;sinceYear?;mappingGen?}`（`mappingGen` 在 **opts** 上，缺省 `MAPPING_GEN`，供映射升级回放）；`SyncDeps` 比规格 §6.1 多 `parseUs/parseCn`（回放测试注入 `parseCompanyFacts`/`parseTushareStatements`）；`SyncReceipt={batchId;status;counts;errors;issuers;idle;detail:{attempted,published,failed,skipped,idle}}`；`issuerIds` 给定时直接对这些发行人跑、不先 reconcile（仍要求 `fact_sync_scope` 行存在以持锁，不受 `next_due_at` 限制）；抓取/解析抛出的 `ProviderError`（= `SyncError`）以其 `code` 作为批次错误码 |
+| `src/lib/facts/sync.ts` | `runFactsSync(deps:SyncDeps,opts:SyncOptions):Promise<SyncReceipt>`；`SyncOptions={market;limit;issuerIds?;dryRun;triggeredBy;sinceYear?;mappingGen?}`（`mappingGen` 在 **opts** 上，缺省 `MAPPING_GEN`，供映射升级回放）；`SyncDeps` 比规格 §6.1 多 `parseUs/parseCn`（回放测试注入 `parseCompanyFacts`/`parseTushareStatements`）；`SyncReceipt={batchId;status;counts;errors;issuers;idle;detail:{attempted,published,failed,skipped,idle}}`；`issuerIds` 给定时直接对这些发行人跑、不先 reconcile（scope 行按 id 直取，缺行时 apply 补建、dry-run 构造只读行，不受 `next_due_at` 限制；round-1 #13）；`SyncDeps.coverageCn` 注入 `coverageSummary` 才会出 `coverage_summary`（round-1 #12）；抓取/解析抛出的 `ProviderError`（= `SyncError`）以其 `code` 作为批次错误码 |
 
 ### 本部分新增导出
 
@@ -5268,17 +5688,20 @@ const doc=(facts:Record<string,unknown>)=>snapshotOf(bytes(JSON.stringify({cik:3
 const entry=(o:Record<string,unknown>)=>({accn:'0000320193-23-000106',fy:2023,fp:'FY',form:'10-K',filed:'2023-11-03',...o});
 const revenue=FACT_CONCEPTS.find(c=>c.id==='revenue')!;
 const assets=FACT_CONCEPTS.find(c=>c.id==='total_assets')!;
+// Mocks are typed against the real callable (round-1 #5): a zero-argument vi.fn() has no call
+// arguments to index, and `typeof fetch` takes RequestInfo | URL, not a bare string.
+type FetchFn=(input:RequestInfo|URL,init?:RequestInit)=>Promise<Response>;
 
 describe('fetchCompanyFacts',()=>{
  const ok=()=>new Response('{"cik":320193,"facts":{}}',{status:200,headers:{'content-length':'25'}});
  it('backs off 1/2/4/8 s on 429/503 and keeps the 120 ms pace, then returns a sha256-stamped snapshot',async()=>{
   const waits:number[]=[];const sleep=vi.fn(async(ms:number)=>{waits.push(ms);});
   let t=1_000_000;const now=()=>t;
-  const fetch=vi.fn(async()=>{t+=10;return fetch.mock.calls.length<3?new Response('',{status:fetch.mock.calls.length===1?429:503}):ok();});
+  const fetch=vi.fn<FetchFn>(async()=>{t+=10;return fetch.mock.calls.length<3?new Response('',{status:fetch.mock.calls.length===1?429:503}):ok();});
   const s=await fetchCompanyFacts('0000320193',budget(300_000),{fetch,sleep,now,userAgent:'ua'});
   expect(fetch).toHaveBeenCalledTimes(3);
   expect(fetch.mock.calls[0][0]).toBe(companyFactsUrl('0000320193'));
-  expect((fetch.mock.calls[0][1] as RequestInit).headers).toMatchObject({'User-Agent':'ua','Accept-Encoding':'gzip, deflate'});
+  expect(fetch.mock.calls[0][1]?.headers).toMatchObject({'User-Agent':'ua','Accept-Encoding':'gzip, deflate'});
   expect(waits.filter(w=>w>=1000)).toEqual([1000,2000]);
   expect(waits.filter(w=>w<1000).every(w=>w<=120)).toBe(true);
   expect(s.sha256).toMatch(/^[0-9a-f]{64}$/);expect(s.meta).toMatchObject({source:'edgar',http_status:200,url:companyFactsUrl('0000320193')});
@@ -5286,7 +5709,7 @@ describe('fetchCompanyFacts',()=>{
  it('maps 404 → no_companyfacts, exhausted retries → sec_unavailable, >50 MB → snapshot_too_large, no budget → sec_unavailable without a request',async()=>{
   const sleep=async()=>{};
   await expect(fetchCompanyFacts('0000000001',budget(300_000),{fetch:async()=>new Response('',{status:404}),sleep})).rejects.toMatchObject({code:'no_companyfacts'});
-  const always429=vi.fn(async()=>new Response('',{status:429}));
+  const always429=vi.fn<FetchFn>(async()=>new Response('',{status:429}));
   await expect(fetchCompanyFacts('0000000001',budget(300_000),{fetch:always429,sleep})).rejects.toMatchObject({code:'sec_unavailable'});
   expect(always429).toHaveBeenCalledTimes(5);
   await expect(fetchCompanyFacts('0000000001',budget(300_000),{fetch:async()=>new Response('{}',{status:200,headers:{'content-length':String(51*1024*1024)}}),sleep})).rejects.toMatchObject({code:'snapshot_too_large'});
@@ -5494,7 +5917,7 @@ export const tagsOf=(c:ConceptDef)=>[...c.usGaap.map(t=>qualify(t,'us-gaap')),..
 const daysBetween=(a:string,b:string)=>Math.round((Date.parse(b)-Date.parse(a))/86_400_000);
 const isDate=(s:unknown):s is string=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s);
 
-export interface ParseOptions{concepts?:ConceptDef[];sinceYear?:number;today?:Date}
+export interface ParseOptions{concepts?:readonly ConceptDef[];sinceYear?:number;today?:Date}   // readonly: FACT_CONCEPTS is readonly (round-1 #4)
 export function parseCompanyFacts(snapshot:RawSnapshot,opts:ParseOptions={}):ParseResult{
  const doc=decodeCompanyFacts(snapshot.bytes);
  const concepts=opts.concepts??FACT_CONCEPTS;
@@ -5593,8 +6016,10 @@ const SINCE_END='2019-01-01';
 const USAGE='usage: record-fixture.ts --edgar <cik> | --edgar-revise <cik> | --tushare <ts_code> [--since-year y] | --cninfo <ts_code> <YYYY-MM-DD> <fiscal_year> <annual|semiannual|q1|q3>';
 const TAGS=new Set(FACT_CONCEPTS.flatMap(tagsOf));
 // The revision used by sync-us.integration.test.ts: FY2023 revenue re-disclosed by a later 10-K with a
-// different value. start/end are copied from the base entry so the natural key matches exactly.
-const REVISION={baseAccn:'0000320193-23-000106',tag:'RevenueFromContractWithCustomerExcludingAssessedTax',accn:'0000320193-25-900001',fy:'2025',filed:'2025-11-01',val:'383285000001'};
+// different value. The base entry is selected by accn AND the exact period (a 10-K carries comparative
+// years under the same accn, round-1 #18) and its literal must equal baseVal before anything is written;
+// the same start/end/val/filed literals are asserted downstream (Task 10 Step 9, Task 11).
+const REVISION={baseAccn:'0000320193-23-000106',tag:'RevenueFromContractWithCustomerExcludingAssessedTax',start:'2022-09-25',end:'2023-09-30',baseVal:'383285000000',accn:'0000320193-25-900001',fy:'2025',filed:'2025-11-01',val:'383285000001'};
 type Tree=Record<string,unknown>;
 const num=(v:unknown)=>v&&typeof v==='object'&&typeof (v as {__num?:unknown}).__num==='string'?(v as {__num:string}).__num:null;
 const write=(rel:string,text:string)=>{const p=join(ROOT,rel);mkdirSync(join(p,'..'),{recursive:true});writeFileSync(p,text);console.log(`wrote ${p} (${text.length} chars)`);};
@@ -5627,10 +6052,11 @@ function reviseEdgar(cik:string){
  const tree=scanJsonNumbers(new Uint8Array(readFileSync(join(ROOT,`edgar/CIK${cik10}.trimmed.json`)))) as Tree;
  const units=(((tree.facts as Tree)['us-gaap'] as Tree)[REVISION.tag] as {units:Record<string,Tree[]>}).units;
  const usd=units.USD??fail(`no USD entries for ${REVISION.tag}`);
- const base=usd.find(e=>e.accn===REVISION.baseAccn&&e.fp==='FY')??fail(`base entry ${REVISION.baseAccn} not found`);
+ const base=usd.find(e=>e.accn===REVISION.baseAccn&&e.fp==='FY'&&e.start===REVISION.start&&e.end===REVISION.end)??fail(`base entry ${REVISION.baseAccn} for ${REVISION.start}..${REVISION.end} not found`);
+ if(num(base.val)!==REVISION.baseVal)fail(`base value ${num(base.val)} differs from the expected ${REVISION.baseVal}: verify the fixture (Task 10 Step 8) before revising`);
  if(usd.some(e=>e.accn===REVISION.accn))fail('already revised');
- usd.push({start:base.start,end:base.end,val:{__num:REVISION.val},accn:REVISION.accn,fy:{__num:REVISION.fy},fp:'FY',form:'10-K',filed:REVISION.filed,frame:'CY2023'});
- (tree.__recorded as Tree).revision={...REVISION,start:base.start,end:base.end,base_val:num(base.val)};
+ usd.push({start:REVISION.start,end:REVISION.end,val:{__num:REVISION.val},accn:REVISION.accn,fy:{__num:REVISION.fy},fp:'FY',form:'10-K',filed:REVISION.filed,frame:'CY2023'});
+ (tree.__recorded as Tree).revision={...REVISION};
  write(`edgar/CIK${cik10}.revised.json`,stringifyPreservingNumbers(tree,1));
 }
 async function recordTushare(tsCode:string,sinceYear:number){
@@ -5683,7 +6109,7 @@ ls -la src/lib/facts/fixtures/edgar/
 ```
 Expected: 三个文件；trimmed 各约 0.2–0.6 MB（原始 companyfacts 十几 MB）。若 SEC 返回 403，设置 `EDGAR_USER_AGENT='<姓名> <邮箱>'` 重试。
 
-- [ ] **Step 8: 核对夹具字面量（文档化步骤，不凭记忆写数字）**
+- [ ] **Step 8: 核对夹具字面量（文档化步骤，不凭记忆写数字；含修订夹具的期间核对，round-1 #18）**
 
 Run:
 ```bash
@@ -5691,12 +6117,18 @@ node -e "
 const {readFileSync}=require('fs');
 const d=JSON.parse(readFileSync('src/lib/facts/fixtures/edgar/CIK0000320193.trimmed.json','utf8'));
 const u=d.facts['us-gaap'].RevenueFromContractWithCustomerExcludingAssessedTax.units.USD;
-console.log(u.filter(e=>e.end==='2023-09-30'&&e.fp==='FY').map(e=>[e.accn,e.filed,e.start,e.val]));
+console.log('AAPL FY2023 rows', u.filter(e=>e.end==='2023-09-30'&&e.fp==='FY').map(e=>[e.accn,e.filed,e.start,e.val]));
 const m=JSON.parse(readFileSync('src/lib/facts/fixtures/edgar/CIK0000789019.trimmed.json','utf8'));
-console.log(m.facts['us-gaap'].RevenueFromContractWithCustomerExcludingAssessedTax.units.USD.filter(e=>e.end==='2023-06-30'&&e.fp==='FY').map(e=>[e.accn,e.filed,e.start,e.val]));
+console.log('MSFT FY2023 rows', m.facts['us-gaap'].RevenueFromContractWithCustomerExcludingAssessedTax.units.USD.filter(e=>e.end==='2023-06-30'&&e.fp==='FY').map(e=>[e.accn,e.filed,e.start,e.val]));
+const r=JSON.parse(readFileSync('src/lib/facts/fixtures/edgar/CIK0000320193.revised.json','utf8'));
+const rev=r.__recorded.revision; const added=r.facts['us-gaap'][rev.tag].units.USD.filter(e=>e.accn===rev.accn);
+const base=u.find(e=>e.accn===rev.baseAccn&&e.fp==='FY'&&e.start===rev.start&&e.end===rev.end);
+console.log('revision', rev, 'added', added);
+const ok=added.length===1&&added[0].start===rev.start&&added[0].end===rev.end&&String(added[0].val)===rev.val&&added[0].filed===rev.filed&&!!base&&String(base.val)===rev.baseVal&&rev.start==='2022-09-25'&&rev.end==='2023-09-30'&&rev.val==='383285000001'&&rev.filed==='2025-11-01';
+console.log(ok?'REVISION OK':'REVISION MISMATCH'); process.exitCode=ok?0:1;
 "
 ```
-Expected（待核对的预期值；以打印结果为准）：AAPL 第一行 `['0000320193-23-000106','2023-11-03','2022-09-25',383285000000]`，并有更晚 10-K 的同期行；MSFT 一行 `filed 2023-07-27`、`val 211915000000`。**若打印值与 Step 9 测试里的字面量不同，以夹具为准修改测试字面量，并在提交信息里写明"literals verified against fixture sha256 <…>"。**
+Expected（待核对的预期值；以打印结果为准）：AAPL 第一行 `['0000320193-23-000106','2023-11-03','2022-09-25',383285000000]`，并有更晚 10-K 的同期行（同一 accn 下还有 FY2022/FY2021 的比较期行——修订脚本按 accn **加** start/end 选基准行，不会取到它们）；MSFT 一行 `filed 2023-07-27`、`val 211915000000`；最后一行 `REVISION OK`（脚本退出码 0）。**若打印值与 Step 9 / Task 11 测试里的字面量（`383285000000`、`383285000001`、`2022-09-25`、`2023-09-30`、`2025-11-01`、`0000320193-25-900001`）不同，以夹具为准修改 `REVISION` 常量与测试字面量，重跑 Step 7 的 `--edgar-revise`，并在提交信息里写明"literals verified against fixture sha256 <…>"。**
 
 - [ ] **Step 9: 追加夹具测试**
 
@@ -5763,13 +6195,14 @@ git commit -m "feat(facts): EDGAR companyfacts adapter, fixture recorder and AAP
 - Create: `src/lib/facts/sync-us.integration.test.ts`
 - Modify: `scripts/ci/research-checks.ts`
 
-- [ ] **Step 1: 黄金文件（模板，owner 录入前 `recorded_by: '<pending>'`）**
+- [ ] **Step 1: 黄金文件（模板，owner 录入前 `recorded_by: '<pending>'`；`required.US` 默认 true，是真正的门禁）**
 
 ```json
 {
  "version": 1,
- "note": "Plan 2 §11.4 gold assertions. A human transcribes value/page from the primary document; entries with recorded_by '<pending>' are templates and are never asserted. required.US/CN flips to true when the owner has recorded the listed issuers; then the suite demands those entries exist. as_of is the asOf used to read the fact (defaults to today).",
- "required": {"US": false, "CN": false},
+ "note": "Plan 2 §11.4 gold assertions (round-1 #19). A human transcribes value/page from the primary document. required.US is TRUE BY DEFAULT: sync-us.integration.test.ts fails until every fixture-backed US issuer (AAPL, MSFT) has at least one entry whose recorded_by is not '<pending>' — that failure is the designed incomplete status, never flip it to false. required.CN flips to true when the A-share fixtures are recorded. ready: the owner sets it to true when the whole file is transcribed; from then on any '<pending>' entry is a failure and the suite enforces the §11.4 matrix (>= 6 issuers, each >= 2 period_ends and >= 6 concepts) and that every asserted issuer has a recorded fixture. as_of is the asOf used to read the fact (defaults to today).",
+ "ready": false,
+ "required": {"US": true, "CN": false},
  "entries": [
   {"issuer": {"ticker": "AAPL", "market": "US"}, "concept": "revenue", "period_end": "2023-09-30", "unit": "USD", "value": "383285000000", "as_of": "2023-11-03",
    "source": {"document": "Apple Inc. Form 10-K for the fiscal year ended September 30, 2023 (accession 0000320193-23-000106)", "page_or_row": "<pending>", "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019323000106/"},
@@ -5784,7 +6217,7 @@ git commit -m "feat(facts): EDGAR companyfacts adapter, fixture recorder and AAP
 }
 ```
 
-文件模式（供 owner 录入）：`entries[]` 每项 `{issuer:{ticker,market}, concept, period_end, unit, value(规范十进制字符串), as_of?(YYYY-MM-DD|null), source:{document,page_or_row,url}, recorded_by(姓名|'<pending>'), recorded_at(ISO|null)}`。规格要求 6 家 × 2 期 × 6 科目；模板只给 3 条示例，owner 按同格式扩充。
+文件模式（供 owner 录入）：`entries[]` 每项 `{issuer:{ticker,market}, concept, period_end, unit, value(规范十进制字符串), as_of?(YYYY-MM-DD|null), source:{document,page_or_row,url}, recorded_by(姓名|'<pending>'), recorded_at(ISO|null)}`；顶层 `ready:boolean`、`required:{US,CN}`。规格要求 6 家 × 2 期 × 6 科目；模板只给 3 条示例，owner 按同格式扩充。**门禁语义（round-1 #19）**：`required.US=true`（默认）→ AAPL 与 MSFT 各至少一条已录入条目，否则套件失败并打印 `gold entry for <ticker> is still <pending>`；`ready=true` → 文件内不得再有 `<pending>`、每个被断言的美股发行人必须有 `fixtures/edgar/CIK<10>.trimmed.json`（`record-fixture.ts --edgar`，并把它加进测试的 `CIK`/`FIX` 表）、且满足 ≥ 6 家 × 每家 ≥ 2 期 × ≥ 6 科目；已录入条目逐条从 `read_facts` 回放核对 `value_text`。owner 步骤见 runbook 8.11-6。
 
 - [ ] **Step 2: 写集成测试（先失败）**
 
@@ -5792,9 +6225,11 @@ git commit -m "feat(facts): EDGAR companyfacts adapter, fixture recorder and AAP
 // src/lib/facts/sync-us.integration.test.ts
 // Plan 2 §11.3 offline replay on real PostgreSQL: AAPL + MSFT trimmed companyfacts fixtures injected as
 // fetchUs, pgFactsDb + pgTableClient, memory snapshot store. Two runs (second = all duplicates), a later
-// 10-K revision fixture (versioned=1, asOf replay on both sides), mapping-gen bump (old generation invisible
-// but fetchable by id), two concurrent runs on one issuer (lease), stale replaceMetrics rejected, and the
-// US gold assertions from fixtures/gold/plan2.json (only entries a human has recorded).
+// 10-K revision fixture (versioned=1, asOf replay on both sides; the revised fixture then STAYS active so
+// later generations cover it, round-1 #15), mapping-gen bump (old generation invisible but fetchable by id;
+// the active generation is carried forward to every later run), two concurrent runs on one issuer (lease),
+// stale replaceMetrics rejected, materialize twice identical (§11.3; derive.ts lands before this task,
+// round-1 #20), and the US gold gate (fixtures/gold/plan2.json, round-1 #19).
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
@@ -5804,26 +6239,30 @@ import {pgFactsDb} from './pg-facts-db';
 import {memorySnapshotStore} from './snapshot-store';
 import {runFactsSync,type SyncDeps,type SyncOptions} from './sync';
 import {MAPPING_GEN} from './concepts';
+import {FORMULA_VERSION,materialize} from './derive';
 import {ProviderError,snapshotOf} from './providers/shared';
 import {companyFactsUrl,parseCompanyFacts} from './providers/edgar-companyfacts';
 import type {FactRow,FactsDb,RawSnapshot} from './types';
 
 const enabled=!!process.env.S4_TEST_STATE;
 // Deterministic issuer ids so any other suite loading the same fixture shares the issuer (filings.source_ref is global).
-const CIK={AAPL:'320193',MSFT:'789019'} as const;
+// Every gold-asserted US issuer must appear here with a recorded fixture (gold `ready` gate).
+const CIK:Record<string,string>={AAPL:'320193',MSFT:'789019'};
 const FIX:Record<string,string>={'0000320193':'CIK0000320193.trimmed.json','0000789019':'CIK0000789019.trimmed.json'};
 const REVISED='CIK0000320193.revised.json';
 const fx=(n:string)=>new Uint8Array(readFileSync(new URL(`./fixtures/edgar/${n}`,import.meta.url)));
 const today=()=>new Date().toISOString().slice(0,10);
 interface GoldEntry{issuer:{ticker:string;market:'US'|'CN'};concept:string;period_end:string;unit:string;value:string;as_of?:string|null;recorded_by:string}
-interface GoldFile{required:{US:boolean;CN:boolean};entries:GoldEntry[]}
+interface GoldFile{ready:boolean;required:{US:boolean;CN:boolean};entries:GoldEntry[]}
+const isPending=(e:GoldEntry)=>e.recorded_by==='<pending>'||e.value==='<pending>';
 
 describe.skipIf(!enabled)('F2-3 US offline replay on real PostgreSQL',()=>{
  let admin:Pool;let db:FactsDb;let deps:SyncDeps;
  const issuers:Record<string,string>={};
  const fixtures={...FIX};
+ let activeGen=MAPPING_GEN;   // bumped by the mapping-gen test; every later run must use it (a lower gen is mapping_gen_regression)
  // mappingGen is a SyncOptions field (Part B), not a SyncDeps field.
- const run=(ids:string[],extra:Partial<SyncOptions>={})=>runFactsSync(deps,{market:'US',limit:10,issuerIds:ids,dryRun:false,triggeredBy:'script',...extra});
+ const run=(ids:string[],extra:Partial<SyncOptions>={})=>runFactsSync(deps,{market:'US',limit:10,issuerIds:ids,dryRun:false,triggeredBy:'script',mappingGen:activeGen,...extra});
  const revenueFy23=(asOf:string,history=true)=>db.readFacts(issuers.AAPL,'US',{concepts:['revenue'],asOf,from:'2023-09-30',to:'2023-09-30',history}).then(r=>r.rows.filter(x=>x.duration==='12M'));
  beforeAll(async()=>{
   const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
@@ -5866,9 +6305,10 @@ describe.skipIf(!enabled)('F2-3 US offline replay on real PostgreSQL',()=>{
 
  it('a later 10-K with a different FY2023 revenue is versioned=1 and replays on both sides of its filed date',async()=>{
   const before=await revenueFy23('2025-10-31');
+  // The revised fixture stays active for the rest of the suite: the synthetic filing must be part of
+  // every later manifest, or the generation bump below would leave it on the old generation (round-1 #15).
   fixtures['0000320193']=REVISED;
   const r3=await run([issuers.AAPL]);
-  fixtures['0000320193']=FIX['0000320193'];
   expect(r3.status).toBe('success');expect(r3.counts).toMatchObject({versioned:1,inserted:0,quarantined:0});
   const after=await revenueFy23('2025-12-31');
   expect(after).toHaveLength(before.length+1);
@@ -5879,24 +6319,33 @@ describe.skipIf(!enabled)('F2-3 US offline replay on real PostgreSQL',()=>{
   expect((await revenueFy23('2024-06-30',false))[0].value_text).toBe('383285000000');
  },120_000);
 
- it('a mapping-gen bump re-publishes under the new generation; old-generation rows leave read_facts but stay fetchable by id',async()=>{
+ it('a mapping-gen bump re-publishes under the new generation per filing; old-generation rows leave read_facts but stay fetchable by id',async()=>{
   const old=await revenueFy23(today());
-  const r4=await run([issuers.AAPL],{mappingGen:MAPPING_GEN+1});
+  expect(old.some(x=>x.available_date==='2025-11-01')).toBe(true);                   // the synthetic revision is part of the set being bumped
+  activeGen=MAPPING_GEN+1;
+  const r4=await run([issuers.AAPL]);
   expect(r4.status).toBe('success');expect(r4.counts.inserted).toBeGreaterThan(100);
   const now=await revenueFy23(today());
   expect(now.length).toBe(old.length);
-  for(const x of now)expect(x.mapping_gen).toBe(MAPPING_GEN+1);
+  for(const x of now)expect(x.mapping_gen).toBe(activeGen);
   expect(new Set(now.map(x=>x.fact_id)).size).toBe(now.length);
   expect(now.some(x=>old.some(o=>o.fact_id===x.fact_id))).toBe(false);
+  // per-filing generation: every AAPL filing was in the manifest and is now on the active generation
+  const filings=await db.filingsOfIssuer(issuers.AAPL,'US',{});
+  expect(filings.length).toBeGreaterThan(10);
+  expect(filings.filter(g=>g.mapping_gen!==activeGen).map(g=>g.source_ref)).toEqual([]);
+  const all=await db.readFacts(issuers.AAPL,'US',{concepts:['revenue','total_assets'],asOf:today(),history:true});
+  expect(all.rows.every(x=>x.mapping_gen===activeGen)).toBe(true);
   const byId=await db.factsByIds(old.map(o=>o.fact_id));
   expect(byId.map((x:FactRow)=>x.fact_id).sort()).toEqual(old.map(o=>o.fact_id).sort());
   for(const x of byId)expect(x).toMatchObject({mapping_gen:MAPPING_GEN,status:'ok'});
+  expect((await revenueFy23('2024-06-30',false))[0]).toMatchObject({value_text:'383285000000',mapping_gen:activeGen});   // asOf replay is generation-independent
  },120_000);
 
  it('two concurrent runs on one issuer: the lease serialises them, no staged run is left behind',async()=>{
   const published=async()=>(await admin.query(`select status,count(*)::int n from public.fact_sync_runs where issuer_id=$1 and market='US' group by status`,[issuers.AAPL])).rows as {status:string;n:number}[];
   const before=Object.fromEntries((await published()).map(r=>[r.status,r.n]));
-  const [a,b]=await Promise.all([run([issuers.AAPL]),run([issuers.AAPL])]);
+  const [a,b]=await Promise.all([run([issuers.AAPL]),run([issuers.AAPL])]);     // both on activeGen: a lower gen would be mapping_gen_regression
   const total=a.detail.published+b.detail.published;
   expect(total).toBeGreaterThanOrEqual(1);
   for(const r of [a,b])if(r.detail.published===0){expect(r.detail.skipped).toBe(1);expect(r.errors.map(e=>e.code)).toContain('skipped_summary');}
@@ -5912,12 +6361,38 @@ describe.skipIf(!enabled)('F2-3 US offline replay on real PostgreSQL',()=>{
   await expect(db.replaceMetrics(issuers.AAPL,'US',stateRev-1,[])).rejects.toMatchObject({code:'stale_computation'});
  });
 
- it('US gold assertions recorded by a human replay from the published facts',async()=>{
+ it('materialize twice yields identical metric rows (computed_at is not part of MetricRow) and a non-empty set for AAPL',async()=>{
+  const first=await materialize(db,issuers.AAPL,'US');
+  expect(first.rows).toBeGreaterThan(0);
+  const a=await db.metricsOfIssuer(issuers.AAPL,'US',FORMULA_VERSION);
+  const second=await materialize(db,issuers.AAPL,'US');
+  expect(second.stateRev).toBe(first.stateRev);expect(second.rows).toBe(first.rows);
+  const b=await db.metricsOfIssuer(issuers.AAPL,'US',FORMULA_VERSION);
+  expect(b).toEqual(a);
+  expect(a.some(m=>m.metric==='gross_margin'&&m.duration==='12M')).toBe(true);
+  for(const m of a)expect(m).toMatchObject({issuer_id:issuers.AAPL,market:'US',formula_version:FORMULA_VERSION,based_on_rev:first.stateRev});
+ },120_000);
+
+ it('US gold gate: fixture-backed issuers must be recorded by a human and every recorded entry replays from the published facts (round-1 #19)',async()=>{
   const gold=JSON.parse(readFileSync(new URL('./fixtures/gold/plan2.json',import.meta.url),'utf8')) as GoldFile;
   expect(gold.entries.length).toBeGreaterThan(0);
-  const recorded=gold.entries.filter(e=>e.issuer.market==='US'&&e.recorded_by!=='<pending>');
-  if(gold.required.US){for(const t of ['AAPL','MSFT'])expect(recorded.some(e=>e.issuer.ticker===t),`gold entry for ${t}`).toBe(true);}
-  for(const e of recorded){
+  const us=gold.entries.filter(e=>e.issuer.market==='US');
+  // 1. required.US (true by default): an explicit, named failure until the owner records AAPL and MSFT.
+  if(gold.required.US)for(const t of Object.keys(CIK))expect(us.some(e=>e.issuer.ticker===t&&!isPending(e)),`gold entry for ${t} is still <pending> — owner step (runbook 8.11-6) blocks F2-7`).toBe(true);
+  // 2. ready: the file is complete — no template left, every asserted US issuer fixture-backed, §11.4 matrix (6 × 2 × 6) satisfied.
+  if(gold.ready){
+   expect(gold.entries.filter(isPending).map(e=>`${e.issuer.ticker}/${e.concept}/${e.period_end}`),'pending entries in a ready gold file').toEqual([]);
+   for(const e of us)expect(e.issuer.ticker in CIK,`${e.issuer.ticker}: no recorded fixture (record-fixture.ts --edgar, then add it to CIK/FIX here)`).toBe(true);
+   const byIssuer=new Map<string,GoldEntry[]>();
+   for(const e of gold.entries)(byIssuer.get(e.issuer.ticker)??byIssuer.set(e.issuer.ticker,[]).get(e.issuer.ticker)!).push(e);
+   expect(byIssuer.size,'§11.4: at least 6 issuers').toBeGreaterThanOrEqual(6);
+   for(const [t,es] of byIssuer){
+    expect(new Set(es.map(e=>e.period_end)).size,`${t}: at least 2 periods`).toBeGreaterThanOrEqual(2);
+    expect(new Set(es.map(e=>e.concept)).size,`${t}: at least 6 concepts`).toBeGreaterThanOrEqual(6);
+   }
+  }
+  // 3. every recorded US entry replays (asOf = as_of or today; the current row of that period and unit).
+  for(const e of us.filter(e=>!isPending(e))){
    const issuer=issuers[e.issuer.ticker];
    expect(issuer,`no fixture-backed issuer for ${e.issuer.ticker}`).toBeDefined();
    const res=await db.readFacts(issuer,'US',{concepts:[e.concept],asOf:e.as_of??today(),from:e.period_end,to:e.period_end});
@@ -5941,16 +6416,16 @@ Expected: `sync-us.integration.test.ts` 失败：第一个用例 `expected 0 to 
 - [ ] **Step 5: 运行通过**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:db && npm run typecheck && npm run lint`
-Expected: 7 passed in `sync-us.integration.test.ts`；`reports/research-db-summary.json` 的 `criticalSuites` 比之前多 1。
+Expected: `sync-us.integration.test.ts` 8 个用例中 7 passed，**1 failed = 黄金门禁**：`gold entry for AAPL is still <pending> — owner step (runbook 8.11-6) blocks F2-7`。这是设计的"未完成"状态（round-1 #19）：`required.US` 必须保持 true，不得为了变绿改模板；owner 录入 AAPL/MSFT 条目后该用例转绿。`reports/research-db-summary.json` 的 `criticalSuites` 比之前多 1。typecheck、lint 无错误。
 
 - [ ] **Step 6: 提交**
 
 ```bash
 git add src/lib/facts/fixtures/gold/plan2.json src/lib/facts/sync-us.integration.test.ts scripts/ci/research-checks.ts
-git commit -m "test(facts): US offline replay on PostgreSQL (duplicates, revision, mapping bump, lease, stale metrics) and gold template" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git commit -m "test(facts): US offline replay on PostgreSQL (duplicates, revision, mapping bump, lease, stale metrics, materialize twice) and the gold gate" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
-规格 §11.3 的"`materialize` 两次一致"用例由 Task 15 Step 5 追加到本文件（`derive.ts` 在那时才存在）；本任务不含。
+提交信息里注明黄金门禁在 owner 录入前为红（设计如此）。本文件此后不再被任何任务修改（round-1 #20）。
 
 ---
 
@@ -5975,12 +6450,14 @@ import {describe,expect,it,vi} from 'vitest';
 import {TUSHARE_ENDPOINT,TushareError,tushareCallRaw} from './tushare';
 
 const body='{"request_id":"r-1","code":0,"msg":null,"data":{"fields":["ts_code","end_date","report_type","total_revenue"],"items":[["600519.SH","20231231",1,1.5056e11],["600519.SH","20221231",1,12345678901234567890]],"has_more":true}}';
+// Mocks typed against the real `typeof fetch` input (RequestInfo | URL, init optional), round-1 #5.
+type FetchFn=(input:RequestInfo|URL,init?:RequestInit)=>Promise<Response>;
 describe('tushareCallRaw',()=>{
  it('posts api/params/fields with limit+offset, keeps bytes, sha256, request_id, has_more and raw number literals, never the token in the result',async()=>{
-  const fetch=vi.fn(async()=>new Response(body,{status:200}));
+  const fetch=vi.fn<FetchFn>(async()=>new Response(body,{status:200}));
   const r=await tushareCallRaw('income',{ts_code:'600519.SH',start_date:'20140101',report_type:'1'},'ts_code,end_date,report_type,total_revenue',{limit:2000,offset:4000,fetch,token:'tok'});
   expect(fetch.mock.calls[0][0]).toBe(TUSHARE_ENDPOINT);
-  expect(JSON.parse(String((fetch.mock.calls[0][1] as RequestInit).body))).toEqual({api_name:'income',token:'tok',params:{ts_code:'600519.SH',start_date:'20140101',report_type:'1',limit:2000,offset:4000},fields:'ts_code,end_date,report_type,total_revenue'});
+  expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({api_name:'income',token:'tok',params:{ts_code:'600519.SH',start_date:'20140101',report_type:'1',limit:2000,offset:4000},fields:'ts_code,end_date,report_type,total_revenue'});
   expect(Buffer.from(r.bytes).toString('utf8')).toBe(body);
   expect(r.sha256).toBe(createHash('sha256').update(body).digest('hex'));
   expect(r).toMatchObject({httpStatus:200,requestId:'r-1',code:0,msg:'',hasMore:true,fields:['ts_code','end_date','report_type','total_revenue']});
@@ -5996,7 +6473,7 @@ describe('tushareCallRaw',()=>{
  });
  it('aborts on the budget and on the per-call timeout',async()=>{
   const ctl=new AbortController();ctl.abort(new Error('budget'));
-  const fetch=vi.fn(async(_u:string,init:RequestInit)=>{init.signal!.throwIfAborted();return new Response(body);});
+  const fetch=vi.fn<FetchFn>(async(_u,init)=>{init?.signal?.throwIfAborted();return new Response(body);});
   await expect(tushareCallRaw('income',{},'',{fetch,token:'t',budget:{remainingMs:()=>60_000,signal:ctl.signal}})).rejects.toBeDefined();
   await expect(tushareCallRaw('income',{},'',{fetch,token:'t',budget:{remainingMs:()=>10_000,signal:new AbortController().signal}})).rejects.toMatchObject({code:-2});
  });
@@ -6133,7 +6610,8 @@ describe('fieldsFor / addDecimals / quota detection',()=>{
 
 describe('fetchTushareStatements',()=>{
  it('calls 3 apis × report types 1/4/5 with start_date, pages by limit/offset until has_more is false or a short page, one snapshot per page',async()=>{
-  const call=vi.fn(async(api:string,params:Record<string,unknown>,_f:string,o:{limit?:number;offset?:number})=>{
+  // typed like tushareCallRaw: the options argument is optional there, so the mock takes it with a default (round-1 #5)
+  const call=vi.fn(async(api:string,params:Record<string,unknown>,_f:string,o:{limit?:number;offset?:number}={})=>{
    if(api==='income'&&params.report_type==='1')return o.offset===0?raw([['600519.SH','20231231'],['600519.SH','20230930']],true):raw([['600519.SH','20230630']],false);
    return raw([],false);
   });
@@ -6173,7 +6651,9 @@ describe('parseTushareStatements (600519.SH fixtures)',()=>{
   expect(f.availableDate).toBe(`${f.sourceRef.slice(-8,-4)}-${f.sourceRef.slice(-4,-2)}-${f.sourceRef.slice(-2)}`);
  });
  it('sums sga_expense exactly, types eps as CNY/share and total_share as INSTANT shares, skips null fields and is_calc=1 rows',()=>{
-  const annual=r.filings.find(x=>x.formType==='annual'&&x.sourceRef.split(':')[2]==='1')!.sourceRef;
+  // FY2023 explicitly: filings sort by availableDate then sourceRef, so the first annual type-1 filing is
+  // FY2022 (same announcement date), whose BS/CF rows the fixture does not carry (round-1 #17b).
+  const annual=r.filings.find(x=>x.formType==='annual'&&x.fiscalYear===2023&&x.sourceRef.split(':')[2]==='1')!.sourceRef;
   const sga=find('sga_expense',annual)!;
   expect(sga.sourceConcept).toBe('income.sell_exp+admin_exp');
   if(synthetic)expect(sga.value).toBe('14378000000');
@@ -6278,7 +6758,8 @@ const RESERVE_MS=20_000;
 const API_OF_STATEMENT:Record<string,TushareApi|undefined>={IS:'income',BS:'balancesheet',CF:'cashflow'};
 let lastTushareRequestAt=0;
 
-export function fieldsFor(api:TushareApi,concepts:ConceptDef[]=FACT_CONCEPTS):string{
+// `readonly ConceptDef[]` throughout: FACT_CONCEPTS is a readonly catalogue and must not be assigned to a mutable parameter (TS4104, round-1 #4).
+export function fieldsFor(api:TushareApi,concepts:readonly ConceptDef[]=FACT_CONCEPTS):string{
  const set=new Set(COMMON_FIELDS);
  if(api==='cashflow')set.add('is_calc');
  for(const c of concepts){const t=c.tushare;if(!t||t.api!==api)continue;if('field' in t)set.add(t.field);else t.sum.forEach(f=>set.add(f));}
@@ -6286,7 +6767,7 @@ export function fieldsFor(api:TushareApi,concepts:ConceptDef[]=FACT_CONCEPTS):st
 }
 export const isTushareQuotaMessage=(msg:string)=>/积分|权限|每分钟|每天最多|最多访问|访问频率|超过.*次/.test(msg);
 
-export interface FetchTushareOptions{call?:typeof tushareCallRaw;pageSize?:number;sleep?:typeof sleep;now?:()=>number;concepts?:ConceptDef[]}
+export interface FetchTushareOptions{call?:typeof tushareCallRaw;pageSize?:number;sleep?:typeof sleep;now?:()=>number;concepts?:readonly ConceptDef[]}
 export async function fetchTushareStatements(tsCode:string,sinceYear:number,budget:Budget,opts:FetchTushareOptions={}):Promise<RawSnapshot[]>{
  if(!/^\d{6}\.(SH|SZ|BJ)$/.test(tsCode))throw new ProviderError('parse_error',`bad ts_code ${tsCode}`);
  const call=opts.call??tushareCallRaw,pageSize=opts.pageSize??PAGE_SIZE,wait=opts.sleep??sleep,now=opts.now??Date.now;
@@ -6339,7 +6820,7 @@ const formTypeOf=(rt:number,endDate:string):FormType=>rt===4?'restatement':FORM_
 const originOf=(tsCode:string):Origin=>tsCode.endsWith('.SH')?'sse':tsCode.endsWith('.SZ')?'szse':'bse';
 const unitOf=(c:ConceptDef)=>c.unitKind==='money'?'CNY':c.unitKind==='per_share'?'CNY/share':'shares';
 
-export interface ParseTushareOptions{concepts?:ConceptDef[];sinceYear?:number;today?:Date}
+export interface ParseTushareOptions{concepts?:readonly ConceptDef[];sinceYear?:number;today?:Date}
 export function parseTushareStatements(snapshots:RawSnapshot[],opts:ParseTushareOptions={}):ParseResult{
  const concepts=opts.concepts??FACT_CONCEPTS;
  const sinceYear=opts.sinceYear??(opts.today??new Date()).getUTCFullYear()-10;
@@ -6510,6 +6991,16 @@ describe('matchesAnnouncement',()=>{
   expect(matchesAnnouncement('贵州茅台：2024年年度报告',{...annual,form_type:'other'})).toBe(false);
   expect(matchesAnnouncement('贵州茅台：2024年年度报告',{...annual,fiscal_year:null})).toBe(false);
  });
+ it('report kinds are mutually exclusive: a semiannual title never matches an annual filing and vice versa (round-1 #8)',()=>{
+  const semi:LinkFiling={...annual,form_type:'semiannual',period_end:'2024-06-30',available_date:'2024-08-03'};
+  for(const t of ['贵州茅台：2024年半年度报告','贵州茅台：2024年半年报','贵州茅台：2024年中期报告','贵州茅台：关于2024年半年度报告的更正公告'])expect(matchesAnnouncement(t,annual),t).toBe(false);
+  expect(matchesAnnouncement('贵州茅台：关于2024年半年度报告的更正公告',{...annual,corrected:true})).toBe(false);
+  for(const t of ['贵州茅台：2024年年度报告','贵州茅台：2024年年报','贵州茅台：2024年第三季度报告'])expect(matchesAnnouncement(t,semi),t).toBe(false);
+  expect(matchesAnnouncement('贵州茅台：2024年半年度报告',semi)).toBe(true);
+  expect(matchesAnnouncement('贵州茅台：2024年半年报',semi)).toBe(true);
+  expect(matchesAnnouncement('贵州茅台：2024年年报',annual)).toBe(true);
+  expect(matchesAnnouncement('贵州茅台：2024年第一季度报告',{...annual,form_type:'q3',period_end:'2024-09-30'})).toBe(false);
+ });
 });
 
 describe('linkCninfoFiling',()=>{
@@ -6582,6 +7073,8 @@ export const CNINFO_STATIC='http://static.cninfo.com.cn/';
 export const CNINFO_PAGE_SIZE=30;
 export const CNINFO_WINDOW_DAYS=3;
 export const KIND_WORDS={annual:['年度报告','年报'],semiannual:['半年度报告','半年报','中期报告'],q1:['第一季度报告','一季度报告','第一季度季报'],q3:['第三季度报告','三季度报告','第三季度季报']} as const;
+/** Kinds are mutually exclusive: 半年度报告 / 半年报 contain the annual words, so an annual filing refuses any 半年 title (round-1 #8). */
+export const KIND_VETO:Partial<Record<keyof typeof KIND_WORDS,RegExp>>={annual:/半年/};
 export const EXCLUDE=/摘要|英文|已取消|补充/;
 export type CninfoLinkResult={document_ref:string;document_url:string}|'none'|'ambiguous';
 export interface LinkFiling{form_type:FilingRow['form_type'];fiscal_year:number|null;period_end:string|null;available_date:string;corrected?:boolean}
@@ -6600,6 +7093,8 @@ export function matchesAnnouncement(title:string,f:LinkFiling):boolean{
  if(!kind||f.fiscal_year===null)return false;
  const t=title.replace(/<[^>]+>/g,'').replace(/\s+/g,'');
  if(EXCLUDE.test(t))return false;
+ const veto=KIND_VETO[kind];
+ if(veto&&veto.test(t))return false;
  const correction=f.form_type==='restatement'||f.corrected===true;
  if(correction!==t.includes('更正'))return false;
  if(!t.includes(`${f.fiscal_year}年`))return false;
@@ -6638,7 +7133,7 @@ export async function linkCninfoFiling(filing:LinkFiling,issuer:LinkIssuer,opts:
 - [ ] **Step 4: 运行（录制前最后一个测试 skip）**
 
 Run: `npm test -- src/lib/facts/providers/cninfo-link.test.ts`
-Expected: 6 passed, 1 skipped。
+Expected: 7 passed, 1 skipped。
 
 - [ ] **Step 5: 补录制脚本的 `--cninfo` 分支并录制**
 
@@ -6648,7 +7143,7 @@ Expected: 6 passed, 1 skipped。
 npx tsx scripts/facts/record-fixture.ts --cninfo 600519.SH <YYYY-MM-DD> 2024 annual
 npm test -- src/lib/facts/providers/cninfo-link.test.ts
 ```
-Expected: 写出 `src/lib/facts/fixtures/cninfo/600519.SH-2024-annual.json`；7 passed, 0 skipped。若 cninfo 从本机不可达（超时/非 200），保留 skip，并在 `docs/audits/2026-11-04-data-foundation-2/16-implementation-log.md` 的核对表增加一行 `| 巨潮夹具 | 未录制（<原因>） | cninfo-link.test.ts 最后一个用例 skip |`（Task 18 把它抄进 runbook 8.7）。
+Expected: 写出 `src/lib/facts/fixtures/cninfo/600519.SH-2024-annual.json`；8 passed, 0 skipped。若 cninfo 从本机不可达（超时/非 200），保留 skip，并在 `docs/audits/2026-11-04-data-foundation-2/16-implementation-log.md` 的核对表增加一行 `| 巨潮夹具 | 未录制（<原因>） | cninfo-link.test.ts 最后一个用例 skip |`（Task 18 把它抄进 runbook 8.7）。
 
 - [ ] **Step 6: 门禁 + 提交**
 
@@ -6666,9 +7161,10 @@ git commit -m "feat(facts): cninfo announcement linkage for A-share filings (yea
 ```ts
 // src/lib/facts/sync-cn.integration.test.ts
 // Plan 2 §11.3 A-share offline replay on real PostgreSQL with the recorded Tushare pages (fetchCn) and the
-// recorded cninfo page set (linkCn): publish, revision pair (type 5 vs type 1, asOf on both sides of the
-// correction date), same-day conflict from a mutated page (both rows quarantined, the day has no ok value),
-// annual filing linked to a cninfo PDF, and the CN gold assertions. Created only once real fixtures exist.
+// recorded cninfo page set (linkCn): publish (with coverage_summary), revision pair (type 5 vs type 1, asOf
+// on both sides of the correction date), same-day conflict from a SECOND filing (a type-4 page row with the
+// same K and announcement date, round-1 #16), same-filing re-publication as plain duplicates, annual filing
+// linked to a cninfo PDF, and the CN gold gate. Created only once real fixtures exist.
 import {existsSync,readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
@@ -6679,7 +7175,7 @@ import {memorySnapshotStore} from './snapshot-store';
 import {runFactsSync,type SyncDeps} from './sync';
 import {scanJsonNumbers} from './json-numbers';
 import {ProviderError,snapshotOf,stringifyPreservingNumbers} from './providers/shared';
-import {parseTushareStatements} from './providers/tushare-statements';
+import {coverageSummary,parseTushareStatements} from './providers/tushare-statements';
 import {loadTushareFixtures,TUSHARE_FIXTURE_DIR} from './providers/tushare-fixtures';
 import {linkCninfoFiling} from './providers/cninfo-link';
 import {CNINFO_HISTORY} from '../research/ingest/collectors/cninfo';
@@ -6692,6 +7188,11 @@ const CNINFO_FIXTURE=new URL('./fixtures/cninfo/600519.SH-2024-annual.json',impo
 const today=()=>new Date().toISOString().slice(0,10);
 const rt=(ref:string)=>ref.split(':')[2];
 interface GoldEntry{issuer:{ticker:string;market:'US'|'CN'};concept:string;period_end:string;unit:string;value:string;as_of?:string|null;recorded_by:string}
+const isPending=(e:GoldEntry)=>e.recorded_by==='<pending>'||e.value==='<pending>';
+type Page={data:{fields:string[];items:unknown[][]}|null};
+const pageOf=(s:RawSnapshot)=>scanJsonNumbers(s.bytes) as Page;
+const incomePage=(pages:RawSnapshot[],reportType:string)=>pages.find(s=>s.meta.api==='income'&&(s.meta.params as {report_type:string}).report_type===reportType)!;
+const replacePage=(pages:RawSnapshot[],page:RawSnapshot,tree:Page)=>pages.map(s=>s===page?snapshotOf(new TextEncoder().encode(stringifyPreservingNumbers(tree)),{...page.meta}):s);
 
 describe.skipIf(!enabled)('F2-4 A-share offline replay on real PostgreSQL',()=>{
  let admin:Pool;let db:FactsDb;let deps:SyncDeps;
@@ -6722,6 +7223,7 @@ describe.skipIf(!enabled)('F2-4 A-share offline replay on real PostgreSQL',()=>{
    fetchCn:async(tsCode:string)=>{const s=snapshots[tsCode];if(!s)throw new ProviderError('tushare_unavailable',tsCode);return s;},
    parseUs:()=>{throw new ProviderError('parse_error','not in this suite');},
    parseCn:(pages,o)=>parseTushareStatements(pages,{sinceYear:o.sinceYear}),
+   coverageCn:coverageSummary,   // wired exactly like deps.ts (round-1 #12)
    linkCn:(filing,b)=>linkCninfoFiling({form_type:filing.form_type,fiscal_year:filing.fiscal_year,period_end:filing.period_end,available_date:filing.available_date},{ts_code:TS_CODE,cninfo_org_id:cninfo?.__recorded.org_id??null},{fetch:cninfoFetch,budget:b,minIntervalMs:0}),
    now:()=>new Date(),deadline:null,codeVersion:'test'};
  });
@@ -6751,15 +7253,20 @@ describe.skipIf(!enabled)('F2-4 A-share offline replay on real PostgreSQL',()=>{
   expect(after.length).toBe(before.length+1);
  });
 
- it('the same page re-published with one changed value on the same announcement date → same_day_conflict: both rows quarantined, the day has no ok value',async()=>{
+ it('a SECOND filing (type-4 page row) with the same K on the same announcement date and another value → same_day_conflict: both rows quarantined, the day has no ok value (round-1 #16)',async()=>{
   const parsed=parseTushareStatements(snapshots[TS_CODE],{sinceYear:2000});
   const target=parsed.candidates.filter(c=>c.concept==='revenue'&&c.duration==='12M'&&rt(c.filingRef)==='1').sort((a,b)=>b.periodEnd.localeCompare(a.periodEnd))[0];
-  const income=snapshots[TS_CODE].find(s=>s.meta.api==='income'&&(s.meta.params as {report_type:string}).report_type==='1')!;
-  const tree=scanJsonNumbers(income.bytes) as {data:{fields:string[];items:unknown[][]}};
-  const fi=tree.data.fields.indexOf('total_revenue'),ei=tree.data.fields.indexOf('end_date');
-  const row=tree.data.items.find(r=>r[ei]===target.periodEnd.replace(/-/g,''))!;
-  row[fi]={__num:`${target.value}1`};
-  const mutated=snapshots[TS_CODE].map(s=>s===income?snapshotOf(new TextEncoder().encode(stringifyPreservingNumbers(tree)),{...income.meta}):s);
+  const page1=incomePage(snapshots[TS_CODE],'1'),page4=incomePage(snapshots[TS_CODE],'4');
+  const t1=pageOf(page1),t4=pageOf(page4);
+  const fields=t1.data!.fields;const ei=fields.indexOf('end_date'),ri=fields.indexOf('report_type'),fi=fields.indexOf('total_revenue');
+  const src=t1.data!.items.find(r=>r[ei]===target.periodEnd.replace(/-/g,''))!;
+  // Clone the type-1 row into the type-4 page: same end_date and f_ann_date/ann_date (→ same K and
+  // available_date) under report_type 4 (→ a distinct source_ref / filing), value + 1. A changed value
+  // inside the SAME filing would be a duplicate candidate key, not a second conflicting fact (next test).
+  const row=[...src];row[ri]={__num:'4'};row[fi]={__num:`${target.value}1`};
+  const data4=t4.data??{fields,items:[]};
+  expect(data4.fields,'the type-4 page must carry the type-1 columns').toEqual(fields);
+  const mutated=replacePage(snapshots[TS_CODE],page4,{data:{fields,items:[...data4.items,row]}});
   const original=snapshots[TS_CODE];snapshots[TS_CODE]=mutated;
   const r=await run([issuers[TS_CODE]]);
   snapshots[TS_CODE]=original;
@@ -6767,9 +7274,26 @@ describe.skipIf(!enabled)('F2-4 A-share offline replay on real PostgreSQL',()=>{
   const avail=parsed.filings.find(f=>f.sourceRef===target.filingRef)!.availableDate;
   const rows=(await db.readFacts(issuers[TS_CODE],'CN',{concepts:['revenue'],asOf:today(),from:target.periodEnd,to:target.periodEnd,history:true,includeNonOk:true})).rows.filter(x=>x.duration==='12M'&&x.available_date===avail);
   expect(rows.length).toBe(2);expect(rows.every(x=>x.status==='quarantined')).toBe(true);
+  expect(new Set(rows.map(x=>x.filing_id)).size).toBe(2);                                             // two filings: the type-1 row and the type-4 restatement
   expect(new Set(rows.map(x=>x.value_text))).toEqual(new Set([target.value,`${target.value}1`]));
+  expect((await db.readFacts(issuers[TS_CODE],'CN',{concepts:['revenue'],asOf:today(),from:target.periodEnd,to:target.periodEnd})).rows.filter(x=>x.duration==='12M'&&x.available_date===avail)).toEqual([]);   // the day has no ok value
   const items=(await admin.query(`select payload from public.dq_quarantine where reason_code='same_day_conflict' and status='open' and table_name='financial_facts' and natural_key like $1`,[`${issuers[TS_CODE]}:CN:revenue:%:${avail}`])).rows;
   expect(items).toHaveLength(1);expect((items[0].payload as {fact_ids:string[]}).fact_ids.sort()).toEqual(rows.map(x=>x.fact_id).sort());
+ },180_000);
+
+ it('the same page re-published with a changed value inside the SAME filing is a duplicate candidate key: no new row, no conflict',async()=>{
+  const parsed=parseTushareStatements(snapshots[TS_CODE],{sinceYear:2000});
+  const target=parsed.candidates.filter(c=>c.concept==='revenue'&&c.duration==='12M'&&rt(c.filingRef)==='1').sort((a,b)=>b.periodEnd.localeCompare(a.periodEnd))[1];   // a day the previous test did not dispute
+  const page1=incomePage(snapshots[TS_CODE],'1');const t1=pageOf(page1);
+  const fields=t1.data!.fields;const ei=fields.indexOf('end_date'),fi=fields.indexOf('total_revenue');
+  const row=t1.data!.items.find(r=>r[ei]===target.periodEnd.replace(/-/g,''))!;row[fi]={__num:`${target.value}1`};
+  const original=snapshots[TS_CODE];snapshots[TS_CODE]=replacePage(snapshots[TS_CODE],page1,t1);
+  const r=await run([issuers[TS_CODE]]);
+  snapshots[TS_CODE]=original;
+  expect(r.status).toBe('success');expect(r.counts).toMatchObject({inserted:0,versioned:0,quarantined:0});expect(r.counts.duplicates).toBeGreaterThan(0);
+  const filingId=(await db.filingsOfIssuer(issuers[TS_CODE],'CN',{})).find(f=>f.source_ref===target.filingRef)!.filing_id;
+  const rows=(await db.readFacts(issuers[TS_CODE],'CN',{concepts:['revenue'],asOf:today(),from:target.periodEnd,to:target.periodEnd,history:true,includeNonOk:true})).rows.filter(x=>x.duration==='12M'&&x.filing_id===filingId);
+  expect(rows.map(x=>[x.status,x.value_text])).toEqual([['ok',target.value]]);   // one row for that filing, the stored value untouched
  },180_000);
 
  it.skipIf(!cninfo)('the recorded annual filing is linked to one cninfo PDF; other filings carry a counted attempt',async()=>{
@@ -6781,10 +7305,15 @@ describe.skipIf(!enabled)('F2-4 A-share offline replay on real PostgreSQL',()=>{
   expect(other.length).toBeGreaterThan(0);for(const f of other)expect(f.link_attempts).toBeGreaterThanOrEqual(1);
  });
 
- it('CN gold assertions recorded by a human replay from the published facts',async()=>{
-  const gold=JSON.parse(readFileSync(new URL('./fixtures/gold/plan2.json',import.meta.url),'utf8')) as {required:{CN:boolean};entries:GoldEntry[]};
-  const recorded=gold.entries.filter(e=>e.issuer.market==='CN'&&e.recorded_by!=='<pending>');
-  if(gold.required.CN)expect(recorded.some(e=>e.issuer.ticker===TS_CODE),`gold entry for ${TS_CODE}`).toBe(true);
+ it('CN gold gate: required.CN demands recorded entries for the fixture-backed issuers; ready forbids <pending>; recorded entries replay (round-1 #19)',async()=>{
+  const gold=JSON.parse(readFileSync(new URL('./fixtures/gold/plan2.json',import.meta.url),'utf8')) as {ready:boolean;required:{CN:boolean};entries:GoldEntry[]};
+  const cn=gold.entries.filter(e=>e.issuer.market==='CN');
+  if(gold.required.CN)for(const code of Object.keys(issuers))expect(cn.some(e=>e.issuer.ticker===code&&!isPending(e)),`gold entry for ${code} is still <pending> — owner step (runbook 8.11-5/6)`).toBe(true);
+  if(gold.ready){
+   expect(cn.filter(isPending).map(e=>`${e.issuer.ticker}/${e.concept}/${e.period_end}`),'pending CN entries in a ready gold file').toEqual([]);
+   for(const e of cn)expect(e.issuer.ticker in issuers,`${e.issuer.ticker}: no recorded Tushare fixture`).toBe(true);
+  }
+  const recorded=cn.filter(e=>!isPending(e));
   for(const e of recorded){
    const issuer=issuers[e.issuer.ticker];expect(issuer,`no fixture-backed issuer for ${e.issuer.ticker}`).toBeDefined();
    const res=await db.readFacts(issuer,'CN',{concepts:[e.concept],asOf:e.as_of??today(),from:e.period_end,to:e.period_end});
@@ -6800,7 +7329,7 @@ describe.skipIf(!enabled)('F2-4 A-share offline replay on real PostgreSQL',()=>{
 然后：`scripts/ci/research-checks.ts` 的 `.concat(...)` 末尾追加 `'src/lib/facts/sync-cn.integration.test.ts'`。
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:db && npm run typecheck && npm run lint`
-Expected: `sync-cn.integration.test.ts` 5 passed；`criticalSuites` 再 +1。
+Expected: `sync-cn.integration.test.ts` 6 passed（`required.CN` 仍为 false 时黄金用例只回放已录入条目；owner 把 `required.CN` 置 true 后它与美股门禁同样在录入前为红）；`criticalSuites` 再 +1。`sync-us.integration.test.ts` 的黄金门禁状态见 Task 11 Step 5。
 
 ```bash
 git add src/lib/facts/sync-cn.integration.test.ts scripts/ci/research-checks.ts src/lib/facts/fixtures/tushare
@@ -6842,6 +7371,7 @@ git commit -m "test(facts): A-share offline replay on PostgreSQL (revision pair,
 
 **Files:**
 - Create: `src/lib/facts/scope.ts`
+- Modify: `src/lib/entities/resolve.ts`（一行：导出已落地的有效期谓词 `isCurrentSecurity`；round-1 #22）
 - Test: `src/lib/facts/scope.test.ts`
 
 - [ ] **Step 1: 写失败测试**
@@ -6851,11 +7381,14 @@ git commit -m "test(facts): A-share offline replay on PostgreSQL (revision pair,
 import {describe,it,expect} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import {memoryFactsDb} from './memory-facts-db';
-import {fetchKey,reconcileScope} from './scope';
+import {fetchKey,reconcileScope,scopeRowFor} from './scope';
 import type {FactsDb,Market} from './types';
 
 const A='11111111-1111-4111-8111-111111111111',M='22222222-2222-4222-8222-222222222222',K='33333333-3333-4333-8333-333333333333';
+// One frozen clock for the whole file: reconciliation reads `today`, the memory db stamps next_due_at
+// with its own clock, and the due queries ask for TODAY — all three must agree (round-1 #23).
 const TODAY='2026-11-04';
+const NOW_ISO=`${TODAY}T00:00:00.000Z`;
 async function seed(){
  const c=memoryTableClient({issuers:['issuer_id'],issuer_securities:['issuer_id','ticker','valid_from']});
  await c.insert('issuers',{issuer_id:A,cik:'320193',status:'active'});
@@ -6874,9 +7407,9 @@ async function seed(){
  await c.insert('research_entity_keys',{user_id:'u',entity_id:'e3',in_scope:false,issuer_id:A,home_market:'US'});
  return c;
 }
-/** memoryFactsDb plus a recorder of what reconcileScope received. */
+/** memoryFactsDb on the frozen clock plus a recorder of what reconcileScope received. */
 function recordingDb(){
- const db=memoryFactsDb();const calls:{market:Market;rows:Parameters<FactsDb['reconcileScope']>[1]}[]=[];
+ const db=memoryFactsDb();db.setNow(NOW_ISO);const calls:{market:Market;rows:Parameters<FactsDb['reconcileScope']>[1]}[]=[];
  const wrapped:FactsDb={...db,reconcileScope:(market,rows)=>{calls.push({market,rows});return db.reconcileScope(market,rows);}};
  return {db:wrapped,calls};
 }
@@ -6918,6 +7451,30 @@ describe('reconcileScope',()=>{
   expect(calls[2].rows).toEqual([{issuer_id:A,reasons:[],priority:0,fetch_key:'0000320193'}]);
   expect(await db.scopeDue('US',`${TODAY}T23:59:59Z`,10)).toEqual([]);
  });
+ it('ownership with a scheduled future end is still current; an end at or before today is not (the landed validity predicate, round-1 #22)',async()=>{
+  const tables=await seed();const {db,calls}=recordingDb();
+  await tables.update('issuer_securities',{issuer_id:A,ticker:'AAPL'},{valid_to:'2030-12-31'});   // ends in the future: AAPL is still owned today
+  expect(await reconcileScope({tables,db},'US',{today:TODAY})).toMatchObject({desired:1,retired:0});
+  expect(calls[0].rows.map(x=>x.issuer_id)).toEqual([A]);
+  expect((await db.scopeDue('US',`${TODAY}T23:59:59Z`,10)).map(s=>[s.issuer_id,s.next_due_at])).toEqual([[A,NOW_ISO]]);
+  await tables.update('issuer_securities',{issuer_id:A,ticker:'AAPL'},{valid_to:TODAY});          // valid_to > today fails: no owner today
+  expect((await reconcileScope({tables,db},'US',{today:TODAY})).skipped).toMatchObject({unknown_ticker:2});
+  expect(await scopeRowFor(tables,'CN',K,{today:'2001-08-26'})).toBeNull();                      // 600519.OLD ends 2001-08-26, 600519.SH starts 2001-08-27
+  expect(await scopeRowFor(tables,'CN',K,{today:'2001-08-27'})).toMatchObject({fetch_key:'600519.SH'});
+ });
+});
+
+describe('scopeRowFor',()=>{
+ it('derives one explicit scope row per market from the issuer tables; null when the issuer is unknown, merged or has no fetch key (round-1 #13)',async()=>{
+  const tables=await seed();
+  expect(await scopeRowFor(tables,'US',A,{today:TODAY})).toEqual({issuer_id:A,reasons:['explicit'],priority:10,fetch_key:'0000320193'});
+  expect(await scopeRowFor(tables,'US',M,{today:TODAY})).toBeNull();                              // no CIK
+  expect(await scopeRowFor(tables,'CN',K,{today:TODAY})).toEqual({issuer_id:K,reasons:['explicit'],priority:10,fetch_key:'600519.SH'});
+  expect(await scopeRowFor(tables,'CN',A,{today:TODAY})).toBeNull();                              // no A-share listing
+  expect(await scopeRowFor(tables,'US','44444444-4444-4444-8444-444444444444',{today:TODAY})).toBeNull();
+  await tables.update('issuers',{issuer_id:A},{status:'merged'});
+  expect(await scopeRowFor(tables,'US',A,{today:TODAY})).toBeNull();
+ });
 });
 ```
 
@@ -6926,7 +7483,14 @@ describe('reconcileScope',()=>{
 Run: `npm test -- src/lib/facts/scope.test.ts`
 Expected: FAIL，`Cannot find module './scope'`。
 
-- [ ] **Step 3: 实现**
+- [ ] **Step 3: 实现（先在 `src/lib/entities/resolve.ts` 导出谓词，再写 `scope.ts`）**
+
+`src/lib/entities/resolve.ts` 的 `const isCurrent=(r:Row,today:string)=>{…};` 之后加一行（谓词本身不动）：
+
+```ts
+/** The one validity predicate (valid_from <= today && (valid_to is null || valid_to > today)); reused by the facts scope (plan 2 Task 14). */
+export const isCurrentSecurity=isCurrent;
+```
 
 ```ts
 // src/lib/facts/scope.ts
@@ -6935,14 +7499,19 @@ Expected: FAIL，`Cannot find module './scope'`。
 // FactsDb.reconcileScope (SQL reconcile_fact_sync_scope), which only touches reasons/priority/
 // fetch_key and never the scheduling or lease columns.
 //  US: active tickers of universes sp500/nasdaq_top500/us_china → the issuer currently owning the
-//      ticker (open issuer_securities row) that has a CIK; fetch_key = 10-digit CIK; priority 10.
+//      ticker (issuer_securities row current at `today` by the landed predicate of
+//      entities/resolve.ts — a scheduled future end keeps the owner current, round-1 #22) that has
+//      a CIK; fetch_key = 10-digit CIK; priority 10.
 //  CN: research_entity_keys.in_scope and issuer_id is not null → the issuer's current primary
 //      .SH/.SZ/.BJ ticker; reasons ['cohort']; priority 10 (owner decision A).
 //  Watchlists are never a source (owner decision B).
-// Reads go through TableClient (selectAll pages in a fixed order); the CN key read is a single
-// page because the table has no unique single column to page on, and fails loudly if it fills.
+// scopeRowFor derives ONE issuer's row the same way for explicit --issuer / replay runs (round-1
+// #13; reasons ['explicit']). Reads go through TableClient (selectAll pages in a fixed order);
+// the CN key read and the "ending" securities read are single pages (no unique column to page
+// on / few rows) and fail loudly if they fill.
 import {MAX_PAGE,selectAll} from '../db/table-client';
 import type {Row,TableClient} from '../db/table-client';
+import {isCurrentSecurity} from '../entities/resolve';
 import type {FactsDb,Market} from './types';
 
 export const US_UNIVERSES=['sp500','nasdaq_top500','us_china'] as const;
@@ -6962,15 +7531,25 @@ export function fetchKey(market:Market,issuer:{cik?:string|null;ticker?:string|n
 
 export interface ScopeDeps{tables:TableClient;db:Pick<FactsDb,'reconcileScope'>}
 export interface ScopeReconcileResult{desired:number;retired:number;changed:number;skipped:Record<string,number>}
-type DesiredRow={issuer_id:string;reasons:string[];priority:number;fetch_key:string};
+/** One reconcile_fact_sync_scope input row. */
+export type ScopeInputRow={issuer_id:string;reasons:string[];priority:number;fetch_key:string};
+type DesiredRow=ScopeInputRow;
 
 const str=(v:unknown)=>typeof v==='string'?v:null;
 const normTicker=(t:string)=>t.trim().toUpperCase().replace(/\//g,'.');
 const bump=(m:Record<string,number>,k:string)=>{m[k]=(m[k]??0)+1;};
+const isoToday=()=>new Date().toISOString().slice(0,10);
 
-/** Open (valid_to null) security rows already valid at `today`, keyed by normalized ticker. */
-async function openSecurities(tables:TableClient,today:string):Promise<Row[]>{
- return (await selectAll(tables,'issuer_securities',{valid_to:null},'ticker')).filter(r=>{const from=str(r.valid_from);return from!==null&&from<=today;});
+/**
+ * Security rows current at `today` by the landed predicate (isCurrentSecurity). Open rows page by
+ * ticker (unique among them: issuer_securities_open_owner_idx); rows with a scheduled end are few
+ * and read in one page (gte valid_to today, then the predicate keeps valid_to > today only).
+ */
+export async function currentSecurities(tables:TableClient,today:string):Promise<Row[]>{
+ const open=await selectAll(tables,'issuer_securities',{valid_to:null},'ticker');
+ const ending=await tables.select('issuer_securities',{},{gte:{valid_to:today},orderBy:'ticker',limit:MAX_PAGE});
+ if(ending.length>=MAX_PAGE)throw new Error('scope_securities_page_full');
+ return [...open,...ending].filter(r=>isCurrentSecurity(r,today));
 }
 
 async function desiredUs(tables:TableClient,today:string,skipped:Record<string,number>):Promise<DesiredRow[]>{
@@ -6982,7 +7561,7 @@ async function desiredUs(tables:TableClient,today:string,skipped:Record<string,n
   }
  }
  const ownerByTicker=new Map<string,string>();
- for(const s of await openSecurities(tables,today)){const id=str(s.issuer_id);if(id)ownerByTicker.set(normTicker(String(s.ticker)),id);}
+ for(const s of await currentSecurities(tables,today)){const id=str(s.issuer_id);if(id)ownerByTicker.set(normTicker(String(s.ticker)),id);}
  const issuers=new Map<string,Row>();
  for(const i of await selectAll(tables,'issuers',{status:'active'},'issuer_id'))issuers.set(String(i.issuer_id),i);
  const out=new Map<string,DesiredRow>();
@@ -7005,7 +7584,7 @@ async function desiredCn(tables:TableClient,today:string,skipped:Record<string,n
  const issuerIds=new Set<string>();
  for(const k of keys){const id=str(k.issuer_id);if(id)issuerIds.add(id);else bump(skipped,'no_issuer');}
  const primaryByIssuer=new Map<string,string[]>();
- for(const s of await openSecurities(tables,today)){
+ for(const s of await currentSecurities(tables,today)){
   const id=str(s.issuer_id),t=normTicker(String(s.ticker));
   if(!id||s.is_primary!==true||!CN_TICKER.test(t))continue;
   (primaryByIssuer.get(id)??primaryByIssuer.set(id,[]).get(id)!).push(t);
@@ -7020,8 +7599,25 @@ async function desiredCn(tables:TableClient,today:string,skipped:Record<string,n
  return out;
 }
 
+/**
+ * One issuer's scope input row for explicit runs (scripts --issuer, replay tests): US from
+ * issuers.cik, CN from the current primary .SH/.SZ/.BJ listing. Null when the issuer is unknown,
+ * merged, or has no fetch key — the sync core reports that issuer as scope_unresolved.
+ */
+export async function scopeRowFor(tables:TableClient,market:Market,issuerId:string,opts:{today?:string}={}):Promise<ScopeInputRow|null>{
+ const today=opts.today??isoToday();
+ const [issuer]=await tables.select('issuers',{issuer_id:issuerId},{limit:1});
+ if(!issuer||issuer.status==='merged')return null;
+ try{
+  if(market==='US')return {issuer_id:issuerId,reasons:['explicit'],priority:SCOPE_PRIORITY,fetch_key:fetchKey('US',{cik:str(issuer.cik)})};
+  const tickers=(await tables.select('issuer_securities',{issuer_id:issuerId,is_primary:true},{limit:MAX_PAGE})).filter(r=>isCurrentSecurity(r,today)).map(r=>normTicker(String(r.ticker))).filter(t=>CN_TICKER.test(t)).sort();
+  if(tickers.length===0)return null;
+  return {issuer_id:issuerId,reasons:['explicit'],priority:SCOPE_PRIORITY,fetch_key:fetchKey('CN',{ticker:tickers[0]})};
+ }catch{return null;}
+}
+
 export async function reconcileScope(deps:ScopeDeps,market:Market,opts:{today?:string}={}):Promise<ScopeReconcileResult>{
- const today=opts.today??new Date().toISOString().slice(0,10);
+ const today=opts.today??isoToday();
  const skipped:Record<string,number>={};
  const desired=market==='US'?await desiredUs(deps.tables,today,skipped):await desiredCn(deps.tables,today,skipped);
  const wanted=new Set(desired.map(d=>d.issuer_id));
@@ -7039,14 +7635,14 @@ export async function reconcileScope(deps:ScopeDeps,market:Market,opts:{today?:s
 
 - [ ] **Step 4: 运行通过 + 类型与 lint**
 
-Run: `npm test -- src/lib/facts/scope.test.ts && npm run typecheck && npm run lint`
-Expected: 4 passed；typecheck、lint 无错误。若 `memoryFactsDb().scopeDue` 对 `priority=0` 的行仍返回，说明 Part A 的内存实现未按 §4.5 的部分索引语义过滤，改 Part A 的 `scopeDue`（`priority>0 and next_due_at<=now`），不要改本测试。
+Run: `npm test -- src/lib/facts/scope.test.ts src/lib/entities/resolve.test.ts && npm run typecheck && npm run lint`
+Expected: `scope.test.ts` 6 passed（`fetchKey` 1、`reconcileScope` 4、`scopeRowFor` 1）；`resolve.test.ts` 不变；typecheck、lint 无错误。若 `memoryFactsDb().scopeDue` 对 `priority=0` 的行仍返回，说明 Part A 的内存实现未按 §4.5 的部分索引语义过滤，改 Part A 的 `scopeDue`（`priority>0 and next_due_at<=now`），不要改本测试。测试对内存库调用 `setNow(NOW_ISO)`：不冻结时钟，`next_due_at` 会取真实墙钟，`TODAY` 之后的任何一天这些断言都会失效（round-1 #23）。
 
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/lib/facts/scope.ts src/lib/facts/scope.test.ts
-git commit -m "feat(facts): reconcile sync scope from public universes and in-scope entity keys" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git add src/lib/facts/scope.ts src/lib/facts/scope.test.ts src/lib/entities/resolve.ts
+git commit -m "feat(facts): reconcile sync scope from public universes and in-scope entity keys; explicit issuer scope rows" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
@@ -7056,7 +7652,8 @@ git commit -m "feat(facts): reconcile sync scope from public universes and in-sc
 **Files:**
 - Create: `src/lib/facts/derive.ts`
 - Test: `src/lib/facts/derive.test.ts`
-- Modify: `src/lib/facts/sync-us.integration.test.ts`（Step 5：追加"物化两次一致"用例，规格 §11.3）
+
+本任务只含纯实现与单测，不碰任何集成测试文件：规格 §11.3 的"物化两次一致"用例在 Task 11 的 `sync-us.integration.test.ts` 里（Task 11 在本任务之后执行；round-1 #20）。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -7199,10 +7796,12 @@ describe('materialize',()=>{
   const rows=[dur('revenue','2024-01-01','2024-03-31','10'),dur('gross_profit','2024-01-01','2024-03-31','4')];
   const {db,calls,reads}=fakeDb([env(7,rows),env(8,rows)],{staleFirst:true});
   const r=await materialize(db,'I','US',{today:'2025-01-01'});
-  expect(r).toEqual({rows:1,stateRev:8,retried:true});
+  expect(r).toEqual({rows:2,stateRev:8,retried:true});   // gross_margin + q_single_revenue (the direct 3M revenue fact is itself a single quarter), round-1 #17c
   expect(reads()).toBe(2);
   expect(calls[0].basedOnRev).toBe(8);
+  expect(calls[0].rows.map(x=>x.metric)).toEqual(['gross_margin','q_single_revenue']);
   expect(calls[0].rows[0]).toMatchObject({metric:'gross_margin',value:'0.4',based_on_rev:8,as_of:'2025-01-01'});
+  expect(calls[0].rows[1]).toMatchObject({metric:'q_single_revenue',value:'10',period_start:'2024-01-01',period_end:'2024-03-31'});
  });
  it('gives up after the second stale_computation',async()=>{
   const {db}=fakeDb([env(1,[])]);
@@ -7425,33 +8024,14 @@ export async function materialize(db:MaterializeDb,issuer:string,market:Market,o
 Run: `npm test -- src/lib/facts/derive.test.ts && npm run typecheck && npm run lint`
 Expected: 15 passed（含 200 次属性迭代的 1 个用例）；typecheck、lint 无错误。`canonicalDecimal`（Task 4）接受纯十进制文本并对无指数、无尾零的输入恒等，这里直接用它收尾，不需要 `__num` 包装。
 
-- [ ] **Step 5: 在 `sync-us.integration.test.ts` 追加"物化两次一致"用例（规格 §11.3）**
-
-文件头 import 区追加 `import {FORMULA_VERSION,materialize} from './derive';`，在 `replaceMetrics accepts the current state_rev…` 用例之后追加：
-
-```ts
- it('materialize twice yields identical metric rows (computed_at is not part of MetricRow) and a non-empty set for AAPL',async()=>{
-  const first=await materialize(db,issuers.AAPL,'US');
-  expect(first.rows).toBeGreaterThan(0);
-  const a=await db.metricsOfIssuer(issuers.AAPL,'US',FORMULA_VERSION);
-  const second=await materialize(db,issuers.AAPL,'US');
-  expect(second.stateRev).toBe(first.stateRev);expect(second.rows).toBe(first.rows);
-  const b=await db.metricsOfIssuer(issuers.AAPL,'US',FORMULA_VERSION);
-  expect(b).toEqual(a);
-  expect(a.some(m=>m.metric==='gross_margin'&&m.duration==='12M')).toBe(true);
-  for(const m of a)expect(m).toMatchObject({issuer_id:issuers.AAPL,market:'US',formula_version:FORMULA_VERSION,based_on_rev:first.stateRev});
- },120_000);
-```
-
-Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:db`
-Expected: `sync-us.integration.test.ts` 8 passed（Task 11 的 7 个 + 本用例）。`metricsOfIssuer` 返回的 `MetricRow` 不含 `computed_at`（`metricFromTable` 不取该列），所以"除 `computed_at` 外全部列相等"在这里就是 `toEqual`。
-
-- [ ] **Step 6: 提交**
+- [ ] **Step 5: 提交**
 
 ```bash
-git add src/lib/facts/derive.ts src/lib/facts/derive.test.ts src/lib/facts/sync-us.integration.test.ts
+git add src/lib/facts/derive.ts src/lib/facts/derive.test.ts
 git commit -m "feat(facts): derive metrics (facts-derive/1.0) and materialize with stale-computation retry" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
+
+（`metricsOfIssuer` 返回的 `MetricRow` 不含 `computed_at`——`metricFromTable` 不取该列——所以 Task 11 的"物化两次一致"用例里"除 `computed_at` 外全部列相等"就是 `toEqual`。）
 
 ---
 
@@ -7480,6 +8060,7 @@ vi.mock('@/lib/facts/db',()=>({supabaseFactsDb:()=>({readFacts:mocks.readFacts,f
 import {GET} from './route';
 
 const ISSUER='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',FID='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',F1='cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+const OTHER='99999999-9999-4999-8999-999999999999';   // a VALID uuid: the route validates factIds before filtering, so '9'.repeat(36) would be a 400 (round-1 #17d)
 const fact=(p:Partial<FactRow>={}):FactRow=>({fact_id:F1,issuer_id:ISSUER,market:'US',filing_id:FID,run_id:'r',concept:'revenue',source_concept:'Revenues',statement:'IS',period_start:'2022-09-25',period_end:'2023-09-30',duration:'12M',value:'383285000000',value_text:'383285000000',unit:'USD',consolidation:'consolidated',available_date:'2023-11-03',mapping_gen:1,mapping_version:'facts-map/1',status:'ok',raw_hash:'h',created_at:'2024-01-01T00:00:00Z',disclosure_seq:1,is_current:true,is_revision:false,...p});
 const filing=(p:Partial<FilingRow>={}):FilingRow=>({filing_id:FID,issuer_id:ISSUER,market:'US',source:'edgar',origin:'sec',form_type:'10-K',fiscal_year:2023,fiscal_period:'FY',period_end:'2023-09-30',available_date:'2023-11-03',source_ref:'0000320193-23-000106',url:'https://www.sec.gov/x',document_ref:null,document_url:null,link_attempts:0,mapping_gen:1,run_id:'r',created_at:'2024-01-01T00:00:00Z',...p});
 const get=(ticker:string,qs:string)=>GET(new Request(`https://alpha.example/api/facts/${ticker}?${qs}`),{params:Promise.resolve({ticker})});
@@ -7518,10 +8099,12 @@ describe('GET /api/facts/[ticker]',()=>{
   expect(res.headers.get('cache-control')).toBe('no-store');
  });
  it('factIds evidence mode: ≤100 uuids, no concepts, other issuers filtered out, no limit/durations',async()=>{
-  mocks.factsByIds.mockResolvedValue([fact(),fact({fact_id:'9'.repeat(36),issuer_id:'other'})]);
-  const res=await get('AAPL',`factIds=${F1},${'9'.repeat(36)}`);
+  mocks.factsByIds.mockResolvedValue([fact(),fact({fact_id:OTHER,issuer_id:'other'})]);
+  const res=await get('AAPL',`factIds=${F1},${OTHER}`);
+  expect(res.status).toBe(200);
   const body=await res.json();
   expect(body.facts.map((f:{factId:string})=>f.factId)).toEqual([F1]);
+  expect(mocks.factsByIds).toHaveBeenCalledWith([F1,OTHER]);
   expect(mocks.readFacts).not.toHaveBeenCalled();
   expect((await get('AAPL',`factIds=${F1}&concepts=revenue`)).status).toBe(400);
   expect((await get('AAPL',`factIds=${Array.from({length:101},()=>F1).join(',')}`)).status).toBe(400);
@@ -8038,7 +8621,9 @@ describe('facts sync cron',()=>{
 // src/lib/facts/deps.test.ts
 import {afterEach,describe,expect,it,vi} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
-import {cninfoLinker,resolveCodeVersion} from './deps';
+import {cninfoLinker,productionSyncDeps,resolveCodeVersion} from './deps';
+import {coverageSummary,parseTushareStatements} from './providers/tushare-statements';
+import {loadTushareFixtures} from './providers/tushare-fixtures';
 import type {Budget,FactsDb,FilingRow} from './types';
 
 const SHA='c'.repeat(40);
@@ -8086,6 +8671,37 @@ describe('cninfoLinker',()=>{
   expect(await link(filing({issuer_id:'U'}),budget())).toBe('none');
   expect(fetch).not.toHaveBeenCalled();
  });
+ it('reads the current A-share listing by the landed validity predicate: a scheduled future end still counts, a past end does not',async()=>{
+  const tables=memoryTableClient({issuers:['issuer_id']});
+  await tables.insert('issuers',{issuer_id:'I',cninfo_org_id:'9900000227',status:'active'});
+  await tables.insert('issuer_securities',{issuer_id:'I',ticker:'600519.SH',is_primary:true,valid_from:'2001-08-27',valid_to:'2030-12-31'});
+  const bodies:string[]=[];
+  const fetch=vi.fn(async(_input:RequestInfo|URL,init?:RequestInit)=>{bodies.push(String(init?.body));return new Response(JSON.stringify({announcements:[],hasMore:false}),{status:200});});
+  expect(await cninfoLinker(tables,fakeDb([]),{fetch,minIntervalMs:0,today:'2026-11-04'})(filing(),budget())).toBe('none');
+  expect(bodies[0]).toContain('stock=600519%2C9900000227');                                            // the listing was resolved → a query went out
+  const noCall=vi.fn();
+  expect(await cninfoLinker(tables,fakeDb([]),{fetch:noCall,today:'2031-01-01'})(filing(),budget())).toBe('none');   // listing ended → no ts_code → no request
+  expect(noCall).not.toHaveBeenCalled();
+ });
+});
+
+describe('productionSyncDeps',()=>{
+ it('assembles both adapters, the cninfo linker and the CN coverage summary over the admin client (round-1 #12)',()=>{
+  const saved={url:process.env.NEXT_PUBLIC_SUPABASE_URL,key:process.env.SUPABASE_SERVICE_ROLE_KEY};
+  process.env.NEXT_PUBLIC_SUPABASE_URL='https://example.supabase.co';process.env.SUPABASE_SERVICE_ROLE_KEY='service-role-test-key';   // createClient never connects at construction
+  try{
+   const deps=productionSyncDeps({deadline:null,codeVersion:'c'.repeat(40)});
+   for(const k of ['fetchUs','fetchCn','parseUs','parseCn','linkCn','coverageCn','now'] as const)expect(typeof deps[k],k).toBe('function');
+   expect(deps.coverageCn).toBe(coverageSummary);
+   const parsed=parseTushareStatements(loadTushareFixtures('600519.SH'),{sinceYear:2014});
+   expect(deps.coverageCn!(parsed)).toEqual(coverageSummary(parsed));
+   expect(deps.coverageCn!(parsed).find(x=>x.api==='income'&&x.report_type===1)).toBeDefined();
+   expect(deps).toMatchObject({deadline:null,codeVersion:'c'.repeat(40)});
+  }finally{
+   if(saved.url===undefined)delete process.env.NEXT_PUBLIC_SUPABASE_URL;else process.env.NEXT_PUBLIC_SUPABASE_URL=saved.url;
+   if(saved.key===undefined)delete process.env.SUPABASE_SERVICE_ROLE_KEY;else process.env.SUPABASE_SERVICE_ROLE_KEY=saved.key;
+  }
+ });
 });
 ```
 
@@ -8107,10 +8723,11 @@ Expected: 两个文件 FAIL，模块不存在。
 import {getAdminSupabase} from '../supabase/admin';
 import {supabaseTableClient} from '../db/table-client';
 import type {TableClient} from '../db/table-client';
+import {isCurrentSecurity} from '../entities/resolve';
 import {supabaseFactsDb} from './db';
 import {supabaseSnapshotStore} from './snapshot-store';
 import {fetchCompanyFacts,parseCompanyFacts} from './providers/edgar-companyfacts';
-import {fetchTushareStatements,parseTushareStatements} from './providers/tushare-statements';
+import {coverageSummary,fetchTushareStatements,parseTushareStatements} from './providers/tushare-statements';
 import {linkCninfoFiling} from './providers/cninfo-link';
 import type {LinkIssuer} from './providers/cninfo-link';
 import {resolveCodeVersion as resolveFromEnvOrGit} from './sync';
@@ -8123,22 +8740,22 @@ export function resolveCodeVersion(opts:{allowGit:boolean}):string|null{
 }
 
 const CN_TICKER=/\.(SH|SZ|BJ)$/;
-/** ts_code (current primary A-share listing) and cninfo_org_id of an issuer; null ts_code → the linker answers 'none'. */
-async function cnIssuer(tables:TableClient,issuerId:string):Promise<LinkIssuer>{
+/** ts_code (primary A-share listing current at `today` by the landed validity predicate, round-1 #22) and cninfo_org_id of an issuer; '' ts_code → the linker answers 'none'. */
+async function cnIssuer(tables:TableClient,issuerId:string,today:string):Promise<LinkIssuer>{
  const [issuer]=await tables.select('issuers',{issuer_id:issuerId},{limit:1});
- const securities=await tables.select('issuer_securities',{issuer_id:issuerId,is_primary:true,valid_to:null},{limit:50});
+ const securities=(await tables.select('issuer_securities',{issuer_id:issuerId,is_primary:true},{limit:50})).filter(r=>isCurrentSecurity(r,today));
  const ts=securities.map(s=>String(s.ticker).toUpperCase()).filter(t=>CN_TICKER.test(t)).sort()[0]??'';
  return {ts_code:ts,cninfo_org_id:typeof issuer?.cninfo_org_id==='string'?issuer.cninfo_org_id:null};
 }
 /** A type-1 filing is "corrected" when a type-5 filing exists for the same ts_code:end_date (spec §6.3: match 更正 titles). */
 const correctedKeys=(filings:FilingRow[])=>new Set(filings.filter(f=>f.source_ref.split(':')[2]==='5').map(f=>f.source_ref.split(':').slice(0,2).join(':')));
 
-export interface LinkerOptions{fetch?:typeof fetch;userAgent?:string;minIntervalMs?:number}
+export interface LinkerOptions{fetch?:typeof fetch;userAgent?:string;minIntervalMs?:number;today?:string}
 export function cninfoLinker(tables:TableClient,db:Pick<FactsDb,'filingsOfIssuer'>,opts:LinkerOptions={}):NonNullable<SyncDeps['linkCn']>{
  const cache=new Map<string,Promise<{issuer:LinkIssuer;corrected:Set<string>}>>();
  const context=(issuerId:string)=>{
   let p=cache.get(issuerId);
-  if(!p){p=Promise.all([cnIssuer(tables,issuerId),db.filingsOfIssuer(issuerId,'CN',{})]).then(([issuer,filings])=>({issuer,corrected:correctedKeys(filings)}));cache.set(issuerId,p);}
+  if(!p){p=Promise.all([cnIssuer(tables,issuerId,opts.today??new Date().toISOString().slice(0,10)),db.filingsOfIssuer(issuerId,'CN',{})]).then(([issuer,filings])=>({issuer,corrected:correctedKeys(filings)}));cache.set(issuerId,p);}
   return p;
  };
  return async(filing:FilingRow,b:Budget)=>{
@@ -8158,6 +8775,7 @@ export function productionSyncDeps(opts:ProductionDepsOptions):SyncDeps{
   fetchCn:(tsCode,sinceYear,b)=>fetchTushareStatements(tsCode,sinceYear,b),
   parseUs:(snapshot,o)=>parseCompanyFacts(snapshot,{sinceYear:o.sinceYear}),
   parseCn:(snapshots,o)=>parseTushareStatements(snapshots,{sinceYear:o.sinceYear}),
+  coverageCn:coverageSummary,   // → coverage_summary in the batch receipt (round-1 #12)
   linkCn:cninfoLinker(tables,db),
   now:opts.now??(()=>new Date()),deadline:opts.deadline,codeVersion:opts.codeVersion,
  };
@@ -8216,7 +8834,7 @@ export async function POST(request:Request){return run(request);}
 - [ ] **Step 5: 运行通过**
 
 Run: `npm test -- src/app/api/cron/facts-sync/route.test.ts src/lib/facts/deps.test.ts`
-Expected: 5 passed + 5 passed（`deps.test.ts`：`resolveCodeVersion` 3 个、`cninfoLinker` 2 个）。
+Expected: 5 passed + 7 passed（`deps.test.ts`：`resolveCodeVersion` 3 个、`cninfoLinker` 3 个、`productionSyncDeps` 1 个）。
 
 - [ ] **Step 6: 脚本 `scripts/facts/sync.ts`**
 
@@ -8231,8 +8849,12 @@ Expected: 5 passed + 5 passed（`deps.test.ts`：`resolveCodeVersion` 3 个、`c
  * Dry run: fetches, parses and plans against the database (read-only; no batch, no lease, no
  * writes). --apply records an ingest_batches receipt (dataset facts.us|facts.cn, triggered_by
  * script) and needs a code version (VERCEL_GIT_COMMIT_SHA or a git checkout). --issuer tickers
- * are resolved by today's ownership; unknown → exit 2. --no-db (US only, with --cik) runs the dry
- * run against empty in-memory stores: a network-only smoke that needs no environment at all.
+ * are resolved by today's ownership; unknown → exit 2. An issuer without a fact_sync_scope row is
+ * handled by the core (round-1 #13): --apply seeds the row (reasons ['explicit']; the next cron
+ * reconcile retires it unless a source lists the issuer), a dry run plans on a constructed row,
+ * and an issuer without a derivable fetch key is reported as scope_unresolved (exit 1).
+ * --no-db (US only, with --cik) runs the dry run against empty in-memory stores: a network-only
+ * smoke that needs no environment at all.
  * Exit 0 on success, 1 when the batch (or any issuer in a dry run) failed, 2 on bad arguments.
  * tsx does NOT load .env.local: use node --env-file as above (never commit that file).
  */
@@ -8521,7 +9143,7 @@ node --env-file=.env.local --import tsx scripts/facts/materialize.ts --market US
 node --env-file=.env.local --import tsx scripts/facts/materialize.ts --market US --all
 ```
 
-cron：`GET|POST /api/cron/facts-sync?market=US|CN[&limit=n]`，Bearer `CRON_SECRET`，`maxDuration=300`，截止 240 s，默认 `limit=25`；`vercel.json` 只登记 `market=US`（`5 */4 * * *`）。CN 只在 A 股夹具与黄金断言进入 CI 后加入。回执：`{ok, market, limit, started_at, receipt:{batchId, status, counts, errors, idle, detail:{attempted, published, failed, skipped, idle}, issuers:[{issuerId, fetchKey, runId, outcome:'published'|'planned'|'failed'|'skipped', code?, counts, errors, warnings, snapshotSha256:[…]}]}}`（`SyncReceipt`，`src/lib/facts/sync.ts`）。cron 先 `reconcileScope` 再取到期发行人；脚本 `--issuer` / `--no-db` 直指发行人时不对账。新鲜度 dataset `facts.us` / `facts.cn`，`ok` = 空转或 `published ≥ max(1, ceil(attempted/2))`。
+cron：`GET|POST /api/cron/facts-sync?market=US|CN[&limit=n]`，Bearer `CRON_SECRET`，`maxDuration=300`，截止 240 s，默认 `limit=25`；`vercel.json` 只登记 `market=US`（`5 */4 * * *`）。CN 只在 A 股夹具与黄金断言进入 CI 后加入。回执：`{ok, market, limit, started_at, receipt:{batchId, status, counts, errors, idle, detail:{attempted, published, failed, skipped, idle}, issuers:[{issuerId, fetchKey, runId, outcome:'published'|'planned'|'failed'|'skipped', code?, counts, errors, warnings, snapshotSha256:[…]}]}}`（`SyncReceipt`，`src/lib/facts/sync.ts`）。cron 先 `reconcileScope` 再取到期发行人；脚本 `--issuer` / `--no-db` 直指发行人时不对账：scope 行按 id 直取，缺行时 `--apply` 由发行人表算出并补建（`reasons:['explicit']`，下一次 cron 对账若来源表不含该发行人会把它退到 `priority 0`），dry-run 构造只读行；算不出 `fetch_key`（无 CIK / 无 A 股上市）的发行人以 `outcome:'failed', code:'scope_unresolved'` 出现在回执里，脚本退出码 1。`errors` 的信息码：`skipped_summary`（含 `<issuer>:parser` 的解析器跳过计数与 `<issuer>:cninfo_link`）、`coverage_summary`（CN，`{"<api>:rt<n>":"<首年>-<末年>:<期末数>"}`）、`rule_warning_summary`、`deadline_hit`。发布之后的失败（挂接、物化、释放）不撤发布：发行人 outcome 仍 `published`，原错误按自身码记入 `errors`，租约以 `failed` 释放（1 天后重试）。新鲜度 dataset `facts.us` / `facts.cn`，`ok` = 空转或 `published ≥ max(1, ceil(attempted/2))`。
 
 ### 8.9 悬空 `running` 批次
 
@@ -8538,9 +9160,10 @@ update public.ingest_batches
 
 ### 8.10 回滚顺序
 
-先导出 `dq_quarantine`（`dataset like 'facts.%'`）与 `fact_sync_runs`（审计证据）。然后（迁移角色执行）：
+先导出 `dq_quarantine`（`dataset like 'facts.%'`）与 `fact_sync_runs`（审计证据）。依赖顺序（round-1 #24）：客户端函数 → 内部助手（`fact_scope_lock` / `fact_run_lock` 的返回类型是表的复合类型，必须先于表删除）→ 表（行触发器随表删除）→ 触发器函数（表删除后才无依赖）→ 计划一表上的索引 → 桶。然后（迁移角色执行）：
 
 ```sql
+-- 1. client-facing functions
 drop function if exists public.read_facts(uuid,text,text[],date,date,date,boolean,int,boolean);
 drop function if exists public.fact_state_rev(uuid,text);
 drop function if exists public.replace_financial_metrics(uuid,text,bigint,jsonb);
@@ -8555,15 +9178,31 @@ drop function if exists public.stage_filings(uuid,jsonb);
 drop function if exists public.begin_sync_run(uuid,text,uuid,int);
 drop function if exists public.claim_fact_sync_lease(uuid,text,uuid,int);
 drop function if exists public.reconcile_fact_sync_scope(text,jsonb);
+-- 2. internal helpers (return types depend on the tables' composite types)
+drop function if exists public.fact_promote_rows(uuid,text,uuid[]);
+drop function if exists public.fact_item_members(jsonb);
+drop function if exists public.fact_abandon_run(uuid,boolean);
+drop function if exists public.fact_run_lock(uuid);
+drop function if exists public.fact_scope_lock(uuid,text,uuid);
+-- 3. tables (row triggers go with them; FK order: facts → filings → runs; metrics and scope independent)
 drop table if exists public.financial_metrics;
-drop table if exists public.financial_facts;      -- 触发器 financial_facts_lifecycle 随表删除
-drop table if exists public.filings;              -- 触发器 filings_limited_update 随表删除
+drop table if exists public.financial_facts;
+drop table if exists public.filings;
 drop table if exists public.fact_sync_runs;
 drop table if exists public.fact_sync_scope;
-delete from storage.buckets where id='disclosure-raw';   -- 先清空桶内对象（Storage API），再删桶
+-- 4. trigger functions (only now free of dependants)
+drop function if exists public.financial_facts_lifecycle();
+drop function if exists public.filings_limited_update();
+-- 5. the one object this migration added to a plan-1 table
+drop index if exists public.dq_quarantine_fact_ids_idx;
+-- 6. bucket: empty it through the Storage API first, then
+delete from storage.buckets where id='disclosure-raw';
+-- 7. inventory: nothing of the facts layer may remain
+select proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and (proname like 'fact\_%' or proname in ('read_facts','begin_sync_run','stage_filings','stage_facts','quarantine_facts','publish_sync_run','abandon_sync_run','release_fact_sync_lease','claim_fact_sync_lease','reconcile_fact_sync_scope','promote_quarantined','resolve_facts_quarantine','replace_financial_metrics','financial_facts_lifecycle','filings_limited_update'));
+select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and relname in ('fact_sync_runs','filings','financial_facts','financial_metrics','fact_sync_scope','dq_quarantine_fact_ids_idx');
 ```
 
-`ingest_batches` 中 `producer='facts-sync'` 的回执与 `dq_freshness` 的 `facts.*` 行保留。同时从 `vercel.json` 移除 `facts-sync` 条目并重新部署，否则 cron 会打到已无表的函数上（503/500 进入 Vercel 日志）。
+两个清单查询都必须返回 0 行。**演练**（合并前一次，在 `test:db` 的临时库上）：应用全部迁移 → 执行本节脚本 → 两个清单为空 → 重新应用 `20261106090000_financial_facts.sql` → `facts.integration.test.ts` 通过。`ingest_batches` 中 `producer='facts-sync'` 的回执与 `dq_freshness` 的 `facts.*` 行保留。同时从 `vercel.json` 移除 `facts-sync` 条目并重新部署，否则 cron 会打到已无表的函数上（503/500 进入 Vercel 日志）。
 
 ### 8.11 owner 步骤
 
@@ -8571,8 +9210,8 @@ delete from storage.buckets where id='disclosure-raw';   -- 先清空桶内对�
 2. 生产迁移 `20261106090000_financial_facts.sql`（按 `alpha-production-deploy-and-hosted-db` 记忆的 Management API 方式；非超级用户，不 `alter function … owner`）。
 3. `scripts/facts/sync.ts --market US --limit 20 --apply` 首轮；查看 `/admin/dq` 的 `facts.us` 新鲜度与隔离项。
 4. `GET /api/facts/AAPL?concepts=revenue&asOf=2024-06-30` 核对验收样例 1（期末 2023-09-30 的 2023-11-03 披露行，`disclosureSeq=1`）。
-5. CN：提供 `TUSHARE_TOKEN` 给录制环境 → 完成 8.7 核对 → 夹具与黄金断言进 CI → 把 `facts-sync?market=CN` 加入 `vercel.json`。
-6. 黄金集抄录（F2-6 前）：由实施者之外的人完成。
+5. CN：提供 `TUSHARE_TOKEN` 给录制环境 → 完成 8.7 核对 → 夹具与黄金断言进 CI → 把 `fixtures/gold/plan2.json` 的 `required.CN` 置 true → 把 `facts-sync?market=CN` 加入 `vercel.json`。
+6. 黄金集抄录（**F2-7 完成的阻塞项**，由实施者之外的人完成）：`src/lib/facts/fixtures/gold/plan2.json` 的 `required.US` 默认 true，`sync-us.integration.test.ts` 的黄金用例在 AAPL 与 MSFT 各有至少一条 `recorded_by` 非 `<pending>` 的条目之前**一直失败**（打印 `gold entry for <ticker> is still <pending>`）——这是设计的未完成状态，不要为了变绿改 `required`。步骤：(a) 对每条目从一手文件（10-K / 年报 PDF）抄 `value`（规范十进制字符串）、`source.page_or_row`、`source.url`，填 `recorded_by`（姓名）与 `recorded_at`（ISO）；(b) 跑 `npm run test:db`，黄金用例逐条回放 `read_facts(asOf = as_of)`；(c) 全部 6 家 × 2 期 × 6 科目抄录完毕后把顶层 `ready` 置 true：此后任何 `<pending>` 都是失败，套件还会检查 ≥ 6 家、每家 ≥ 2 期 × ≥ 6 科目，且每个被断言的发行人都有录制夹具（美股：`record-fixture.ts --edgar <cik>` 并把 ticker/CIK 加进 `sync-us.integration.test.ts` 的 `CIK`/`FIX` 表；A 股：`--tushare`）。
 ```
 
 - [ ] **Step 3: 规格 §16 存根**
@@ -8589,6 +9228,10 @@ delete from storage.buckets where id='disclosure-raw';   -- 先清空桶内对�
 | 2026-11-04 | F2-5 | §6.5 | `sync.ts` 增加 `--no-db --cik` 内存库冒烟模式 | 无环境也能做真实 SEC 网络冒烟 | 接受；不写任何表 |
 | 2026-11-04 | F2-2 | §6.1 | dry-run 不建 `ingest_batches` 行（`status:'dry_run'`，`batchId:null`，发行人 `outcome:'planned'`） | 零写入的 dry-run 才能在只读环境与 `--no-db` 下运行 | 接受；`--apply` 才落回执 |
 | 2026-11-04 | F2-2 | §6.1 | `issuerIds` 给定时不先 `reconcileScope` | 脚本 `--issuer`/`--no-db` 与回放测试的 scope 行由调用方放置，不能被来源表清零 | 接受；cron 路径不变 |
+| 2026-11-04 | F2-2/F2-5 | §6.1、§6.5 | 显式发行人缺 scope 行时由 `scopeRowFor` 算出：`--apply` 经 `reconcile_fact_sync_scope` 补建（`reasons:['explicit']`），dry-run 构造只读行；算不出的记 `scope_unresolved` | 规格只说"取这些发行人"，没说缺行怎么办；审计 round-1 #13 | 接受；补建行会被下一次 cron 对账退到 priority 0（除非来源表含该发行人） |
+| 2026-11-04 | F2-2 | §6.1、§10 | 发布之后的失败不撤发布：outcome 保持 `published`，原错误按自身码记入 `errors`，租约以 `failed` 释放 | `abandon_sync_run` 对已发布运行只会抛 `run_published`；审计 round-1 #11 | 接受 |
+| 2026-11-04 | F2-4 | §6.3 | `coverage_summary` 的 message 是紧凑串 `{"<api>:rt<n>":"<首年>-<末年>:<期末数>"}`，不是 `coverageSummary()` 的逐年对象 | `ingest_batches.errors` 单条 message 上限 500 字；审计 round-1 #12 | 接受；逐年对象可由 `coverageSummary(parseTushareStatements(快照))` 重算 |
+| 2026-11-04 | F2-3/F2-7 | §11.4 | 黄金文件 `required.US` 默认 true、新增 `ready`：owner 录入前 `sync-us.integration.test.ts` 黄金用例为红 | 审计 round-1 #19：门禁不能零人工断言通过 | 接受；runbook 8.11-6 为 F2-7 完成的阻塞项 |
 | 2026-11-04 | F2-2 | §6.1 | `SyncDeps` 多 `parseUs/parseCn` | 避免 `sync.ts` 直接 import 适配器 | 接受；`deps.ts` 注入 |
 | 2026-11-04 | F2-1 | §3 | 概念目录按表落地 34 行（正文写 33） | 表为准 | 待 owner 确认是否删一行 |
 | 2026-11-04 | F2-1 | §7.2 | `gross_margin_range` 取 [-1, 1] | 规格未给上下界 | 待 owner 确认 |
@@ -8625,7 +9268,7 @@ Expected: 退出码 0；stdout 一个 JSON，形状为
  "detail": {"attempted": 3, "published": 0, "failed": 0, "skipped": 0, "idle": false}
 }
 ```
-核对点：`status='dry_run'`（dry-run 不建批次，`batchId=null`）；三家 `outcome='planned'`；每家 `snapshotSha256` 恰一个 64 位 hex（companyfacts 单个响应）；`counts.fetched` = 候选数，`inserted` 对 AAPL ≥ 200（10 年 × 34 概念 × 多期的量级；companyfacts 里没有的概念保持缺失，不计失败；`--no-db` 下库是空的，所以 `inserted = fetched − quarantined`）；`errors` 为空（SEC 429/503 时为 `sec_unavailable`，等 60 s 重跑一次再判）；`warnings` 在 JSON 里是 `{}`（`Map` 序列化）。把三家的 `snapshotSha256`、`counts` 与运行日期追加到 `docs/audits/2026-11-04-data-foundation-2/16-implementation-log.md`（Task 12 Step 11 创建；只写日期、命令、sha256、计数）。断网时每家 `outcome='failed'`、`errors=[{code:'sec_unavailable',…}]`、退出码 1——这是规格 §10 的预期行为，不是缺陷。
+核对点：`status='dry_run'`（dry-run 不建批次，`batchId=null`）；三家 `outcome='planned'`（有 `.env.local` 的路径下 AAPL/MSFT/NVDA 若尚无 `fact_sync_scope` 行，核心按 round-1 #13 用 `scopeRowFor` 构造只读行——dry-run 不写库；某家若 `outcome:'failed', code:'scope_unresolved'`，说明 `issuers` 里没有它的 CIK，先补主数据再重跑）；每家 `snapshotSha256` 恰一个 64 位 hex（companyfacts 单个响应）；`counts.fetched` = 候选数，`inserted` 对 AAPL ≥ 200（10 年 × 34 概念 × 多期的量级；companyfacts 里没有的概念保持缺失，不计失败；`--no-db` 下库是空的，所以 `inserted = fetched − quarantined`）；`errors` 为空（SEC 429/503 时为 `sec_unavailable`，等 60 s 重跑一次再判）；`warnings` 在 JSON 里是 `{}`（`Map` 序列化）。把三家的 `snapshotSha256`、`counts` 与运行日期追加到 `docs/audits/2026-11-04-data-foundation-2/16-implementation-log.md`（Task 12 Step 11 创建；只写日期、命令、sha256、计数）。断网时每家 `outcome='failed'`、`errors=[{code:'sec_unavailable',…}]`、退出码 1——这是规格 §10 的预期行为，不是缺陷。
 
 - [ ] **Step 5: 全量门禁**
 
@@ -8635,7 +9278,7 @@ npm test && npm run typecheck && npm run lint
 LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:db
 LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:migrations
 ```
-Expected: 全部绿；`test:db` 的 critical 清单包含 `src/lib/facts/facts.integration.test.ts` 与 `src/lib/facts/sync-us.integration.test.ts`（`sync-cn` 只在夹具存在时存在），`verifyCriticalSuiteInventory` 无 `Database suite inventory drift`。已知本地全套偶发失败见记忆 `alpha-local-db-harness-env`，重跑一次仍失败才算失败。
+Expected: 全部绿，**唯一允许的红是 `sync-us.integration.test.ts` 的黄金门禁**（`gold entry for <ticker> is still <pending>`，round-1 #19）——它在 owner 完成 runbook 8.11-6 之前一直是红，F2-7 在那之前**不算完成**；把这一状态写进 `docs/audits/2026-11-04-data-foundation-2/16-implementation-log.md`（"F2-7：代码与文档齐备；黄金门禁待 owner 录入，日期"）。owner 录入后（`required.US` 仍为 true，`ready` 按 8.11-6 置 true）重跑本步，必须全绿。`test:db` 的 critical 清单包含 `src/lib/facts/facts.integration.test.ts` 与 `src/lib/facts/sync-us.integration.test.ts`（`sync-cn` 只在夹具存在时存在），`verifyCriticalSuiteInventory` 无 `Database suite inventory drift`。已知本地全套偶发失败见记忆 `alpha-local-db-harness-env`，重跑一次仍失败才算失败。
 
 - [ ] **Step 6: 提交**
 
@@ -8677,7 +9320,7 @@ git commit -m "docs(facts): runbook chapter for the disclosure log, spec §16 de
 16. `read.ts` 与内存 `readFacts`：Part B Task 7 要求用 `sequencesOf` 替换 Part A 的内存实现，但 `sequencesOf` 没有 SQL 的键排序/`limit`/上限，替换会打破 Part A 的契约用例 → 不替换，改 Task 7 的说明；两者的序列语义各有测试。
 17. 契约块与 `types.ts`：共享契约块缺 Task 2 的文件头注释、`stageFilings` 注释形式不同 → 改契约块，与 Task 2 逐字一致（已用 diff 核对）。
 18. runbook "## 8." 两份：Part C Task 12 Step 11 与 Part D Task 18 Step 2 各追加一个 `## 8.` → Task 12/13 改为写实施记录 `docs/audits/2026-11-04-data-foundation-2/16-implementation-log.md`，Task 18 的 8.7 表合并两份模板的行并从记录抄；runbook 只在 Task 18 追加一次。
-19. 规格 §11.3"`materialize` 两次一致"：Part C 留给 Part D，Part D 没接 → Task 15 新增 Step 5 追加到 `sync-us.integration.test.ts`。
+19. 规格 §11.3"`materialize` 两次一致"：Part C 留给 Part D，Part D 没接 → 用例放在 Task 11 的 `sync-us.integration.test.ts` 里（Task 11 按执行顺序在 Task 15 之后，`derive.ts` 已存在）；Task 15 只含纯实现，不碰集成测试文件（原"Task 15 追加"会让 Task 15 修改 Task 11 才创建的文件，与执行顺序循环——Codex round-1 #20）。
 20. runbook 8.4/8.6/8.8 与代码不符（`raw_hash` 描述、`record-fixture.ts --source edgar --cik` 的 CLI、回执字段）→ 改为 Part C/B 的实际规则与 CLI。
 21. 文件结构清单缺 `keys.ts`、`errors.ts`、`db-contract.ts`、`public-route.ts`、`deps.ts`、`providers/shared.ts`、`providers/tushare-fixtures.ts`、实施记录等，且 `read.ts` 仍写骨架名 → 补齐并标注任务号。
 
@@ -8691,6 +9334,8 @@ git commit -m "docs(facts): runbook chapter for the disclosure log, spec §16 de
 
 **占位扫描**：全文无 TBD/待定/"类似 Task N"/"适当处理"；黄金文件的 `'<pending>'` 是 owner 录入前的模板值，测试按它跳过，不是占位；Task 13 Step 5 的 `<YYYY-MM-DD>` 是实施者在 cninfo 核实后填入的命令参数；Task 12 Step 10 的 `<修订对公司>` 由录制结果决定。
 
-**类型一致性**：`FactsDb` 18 个方法在 `supabaseFactsDb`、`memoryFactsDb`、`pgFactsDb` 三处签名一致并由同一份 `factsDbContract` 验证；`FactRow.value` 在三实现里都来自 `value_text`；`FilingInsert` 用 camelCase 候选字段（`sourceRef/formType/availableDate`），`FactInsert`/`FactRow`/`FilingRow` 用 snake_case 表列，转换只在 `db.ts::filingArgs` 与 `plan.ts` 内；`SyncDeps/SyncOptions/SyncReceipt/IssuerOutcome` 在 `sync.ts`（定义）、`sync.test.ts`、`sync-us/cn.integration.test.ts`、`deps.ts`、cron 路由、两个脚本、runbook 8.8 与 Task 18 的预期 JSON 九处一致；`ProviderError`=`SyncError`，`SyncErrorCode` 八个码与 §10 加 `code_version_unavailable`、`tushare_unavailable`；自然键只由 `keys.ts` 渲染（`plan.ts`、`rules.ts`、`sync.ts`、集成测试的 `like` 模式与 `db-contract.ts` 的手写键格式一致）；`MetricRow.inputs[]` 元素固定四字段，`derive.ts`、`metrics` 路由、`db.ts::metricFromTable`、SQL `replace_financial_metrics` 一致；`classifyDuration` 的 `'odd'`、`normalizeUnit` 单参数、`decodeWithSchema(value,schema,field?)` 在 Part C 两个适配器里按 Part B 定义调用。
+**类型一致性**：`FactsDb` 19 个方法（round-1 加 `scopeRows`）在 `supabaseFactsDb`、`memoryFactsDb`、`pgFactsDb` 三处签名一致并由同一份 `factsDbContract` 验证；`FactRow.value` 在三实现里都来自 `value_text`；`FilingInsert` 用 camelCase 候选字段（`sourceRef/formType/availableDate`），`FactInsert`/`FactRow`/`FilingRow` 用 snake_case 表列，转换只在 `db.ts::filingArgs` 与 `plan.ts` 内；`SyncDeps/SyncOptions/SyncReceipt/IssuerOutcome` 在 `sync.ts`（定义）、`sync.test.ts`、`sync-us/cn.integration.test.ts`、`deps.ts`、cron 路由、两个脚本、runbook 8.8 与 Task 18 的预期 JSON 九处一致；`ProviderError`=`SyncError`，`SyncErrorCode` 八个码与 §10 加 `code_version_unavailable`、`tushare_unavailable`；自然键只由 `keys.ts` 渲染（`plan.ts`、`rules.ts`、`sync.ts`、集成测试的 `like` 模式与 `db-contract.ts` 的手写键格式一致）；`MetricRow.inputs[]` 元素固定四字段，`derive.ts`、`metrics` 路由、`db.ts::metricFromTable`、SQL `replace_financial_metrics` 一致；`classifyDuration` 的 `'odd'`、`normalizeUnit` 单参数、`decodeWithSchema(value,schema,field?)` 在 Part C 两个适配器里按 Part B 定义调用。
 
 **提交纪律**：19 个提交步骤都是单独一行 `git commit -m … -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"`，命令块里没有 `-n` token（`grep` 一律用 `-c` 或无行号）；三个含 `S4_TEST_STATE` 的测试文件（`facts.integration`、`sync-us.integration`、`sync-cn.integration`）各有一步把自己加进 `criticalSuites`，`sync-cn` 与其登记在同一提交。
+
+**Codex round-1 审计（2026-11-04，`docs/audits/2026-11-04-data-foundation-2-plan/01-codex-plan-audit-round1.md`，24 条：9 P1 + 15 P2）**：全部 ACCEPT 并落实（处置表 `docs/audits/2026-11-04-data-foundation-2-plan/02-round1-disposition.md`）。要点：BEFORE UPDATE 触发器改为显式列比较（#1）；`resolve_facts_quarantine` 锁后重建成员集并检查锚定运行（#2、#10）；提升资格加 (K, date) 的 open 争议检查（#3）；`readonly ConceptDef[]`、mock 类型、未用的 eslint-disable（#4–#6）；Supabase 完整集读取分页 + `scopeRows`（#7、#13）；报告类型互斥（#8）；解析器遗留先于 `no_rows`（#9）；发布后失败不撤发布（#11）；`coverage_summary`/`skipped_summary(parser)` 接入回执（#12）；`sequencesOf` 非 ok 行不进序列（#14）；修订夹具保持生效 + 代号前推（#15）；A 股同日冲突改用第二份 filing（#16）；四处断言修正（#17）；`reviseEdgar` 按期间选基准（#18）；黄金门禁默认强制（#19）；执行顺序去循环（#20）；抛错的巨潮请求也计次（#21）；复用落地的有效期谓词（#22）；冻结内存库时钟（#23）；回滚顺序补全（#24）。审计"未验证"项（真实 PostgreSQL 17 执行、完整装配后的 typecheck/vitest、录制夹具字面量、黄金值）仍由各任务的 Run/Expected 步骤在实施时验证。
