@@ -1,7 +1,7 @@
 # 数据底座二 · F2 披露事实库 设计规格
 
 日期：2026-11-04（第 8 稿。审计轨迹 `docs/audits/2026-11-04-data-foundation-2/`：01 Codex 一轮、02 独立 Claude 复审、03 Codex 二轮、04 二轮处置、05 Codex 三轮、06 三轮处置、07 Codex 四轮、08 四轮处置、09 Codex 五轮、10 五轮处置、11 Codex 六轮、12 六轮处置、13 Codex 七轮、14 七轮处置）
-状态：Codex 第八轮判定"可进入实施计划"（`docs/audits/2026-11-04-data-foundation-2/15-*.md`）；待 owner 评审与 §14 三项决策
+状态：Codex 第八轮判定"可进入实施计划"（`docs/audits/2026-11-04-data-foundation-2/15-*.md`）；owner 2026-11-04 决定 §14 A/B/C 取默认值，进入计划编写
 上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（下称"规格一"）§4、§8–§10 的 F2 部分。本规格**取代**规格一 §4；规格一 §14 记录的计划一偏差在此视为既定事实。
 总纲：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5（owner 2026-11-04 确认）。本规格逐条对照其硬约束：只用一手来源（EDGAR、交易所定期报告；Tushare 仅作适配器并记录上游与巨潮公告定位）、每个数字可回放（源文件哈希、行定位、可得日期、变换、代码版本）、事实与判断分离、缺失保持缺失（不做代理指标、不填占位、不做静默换算、不混口径、不混报表版本）。
 已定决策（owner 2026-11-04）：美股事实来源 EDGAR companyfacts；A 股事实来源 Tushare 三表 + 公告日期字段；港股延后到 F3；本规格不含任何页面。
@@ -543,9 +543,9 @@ Codex 七轮（01/03/05/07/09/11/13）与处置（04/06/08/10/12/14）；独立 
 
 | 事项 | 谁 | 何时 |
 |---|---|---|
-| **决策 A**：A 股范围 = in_scope 队列（公开事实可反推队列）还是公开宇宙 | owner | 计划前；默认队列 |
-| **决策 B**：自选股是否进入范围 | owner | 默认不进入 |
-| **决策 C**：A 股事实在计划三逐值核对前是否公共可见（默认可见并带 `citation`；严格选择：CN 行不发布为 `ok`，留 `quarantined` 直到核对） | owner | 计划前 |
+| **决策 A**：A 股范围 = in_scope 队列（公开事实可反推队列）还是公开宇宙 | owner | **已决（2026-11-04）：in_scope 队列** |
+| **决策 B**：自选股是否进入范围 | owner | **已决（2026-11-04）：不进入** |
+| **决策 C**：A 股事实在计划三逐值核对前是否公共可见（默认可见并带 `citation`；严格选择：CN 行不发布为 `ok`，留 `quarantined` 直到核对） | owner | 计划前 | owner | **已决（2026-11-04）：默认——可见并带 `citation` 状态** |
 | `TUSHARE_TOKEN`（仓库外 env） | owner | F2-4 前 |
 | Vercel `EDGAR_USER_AGENT`、确认 `TUSHARE_TOKEN`、`CRON_SECRET` | owner | 部署前 |
 | 生产迁移；首轮 `sync.ts --market US --limit 20 --apply`；cron 与脚本不同时运行 | owner | 合并后 |
