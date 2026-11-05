@@ -29,6 +29,18 @@ describe('resolvePublicIssuer (real resolveIssuer)',()=>{
   for(const t of ['600519','SH600519','600519.SS','600519.SH','sh600519'])
    expect(await resolvePublicIssuer(c,t,TODAY)).toEqual({issuerId:id(4),ticker:'600519.SH',market:'CN'});
  });
+ it('a merged issuer\'s old ticker serves the TARGET issuer with the source ticker and its market; an expired source row and a merged HK ticker are rejected',async()=>{
+  const c=await seeded();
+  await c.insert('issuers',{...issuer(7),status:'merged',merged_into:id(6)});
+  await c.insert('issuer_securities',sec(7,'OLDX'));
+  await c.insert('issuers',{...issuer(8),status:'merged',merged_into:id(4)});
+  await c.insert('issuer_securities',sec(8,'300999.SZ'));
+  await c.insert('issuers',{...issuer(9),status:'merged',merged_into:id(6)});
+  await c.insert('issuer_securities',sec(9,'01234.HK'));
+  expect(await resolvePublicIssuer(c,'OLDX',TODAY)).toEqual({issuerId:id(6),ticker:'OLDX',market:'US'});
+  expect(await resolvePublicIssuer(c,'300999',TODAY)).toEqual({issuerId:id(4),ticker:'300999.SZ',market:'CN'});
+  expect(await resolvePublicIssuer(c,'01234.HK',TODAY)).toBeNull();
+ });
  it('HK tickers (even when they resolve) and unknown tickers are rejected',async()=>{
   const c=await seeded();
   expect(await resolvePublicIssuer(c,'00700.HK',TODAY)).toBeNull();

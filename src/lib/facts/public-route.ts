@@ -9,7 +9,7 @@ import {NextResponse} from 'next/server';
 import {getAnonSupabase} from '../supabase/anon';
 import {supabaseTableClient} from '../db/table-client';
 import type {TableClient} from '../db/table-client';
-import {resolveIssuer,successCacheControl} from '../entities/resolve';
+import {isCurrentSecurity,resolveIssuer,successCacheControl} from '../entities/resolve';
 import {inferCoreMarket,normalizeSecurityTicker} from '../securities/ticker';
 import {supabaseFactsDb} from './db';
 import type {FactRow,FactsDb,FilingRow,Market} from './types';
@@ -67,7 +67,7 @@ export function publicMarketOf(ticker:string):Market|null{
  * Ticker → issuer by today's ownership (one merge hop is followed by resolveIssuer). resolveIssuer
  * matches the exact upper-cased ticker first and falls back to the normalised one (so BRK.A is never
  * BRK, and 600519 / SH600519 / 600519.SS find 600519.SH). Market and echoed ticker come from the
- * issuer's security row that matches one of those two forms (exact first); none matching, or a
+ * issuer's security row that matches one of those two forms (exact first; for a merged issuer, the source row read directly); none matching, or a
  * market the facts layer does not serve (HK), is null (→ 404 unknown_ticker).
  * Throws Error('ambiguous_owner') through.
  */
@@ -77,10 +77,20 @@ export async function resolvePublicIssuer(tables:TableClient,rawTicker:string,to
  if(!r)return null;
  const core=inferCoreMarket(given);
  const normalised=core?normalizeSecurityTicker(given,core):null;
- const sec=r.securities.find(x=>x.ticker.toUpperCase()===given)??(normalised?r.securities.find(x=>x.ticker.toUpperCase()===normalised):undefined);
- if(!sec)return null;
- const market=publicMarketOf(sec.ticker);
- return market?{issuerId:r.issuer_id,ticker:sec.ticker,market}:null;
+ let ticker=(r.securities.find(x=>x.ticker.toUpperCase()===given)??(normalised?r.securities.find(x=>x.ticker.toUpperCase()===normalised):undefined))?.ticker;
+ if(ticker===undefined){
+  // Merged issuer: resolveIssuer returned the TARGET's securities. Read the source row directly
+  // (exact ticker first; the first form with any rows is authoritative, like the resolver).
+  for(const t of normalised&&normalised!==given?[given,normalised]:[given]){
+   const rows=await tables.select('issuer_securities',{ticker:t});
+   if(rows.length===0)continue;
+   if(rows.some(x=>isCurrentSecurity(x,today)))ticker=t;
+   break;
+  }
+ }
+ if(ticker===undefined)return null;
+ const market=publicMarketOf(ticker);
+ return market?{issuerId:r.issuer_id,ticker,market}:null;
 }
 /** Failure → response: ambiguous ownership is the caller's 409, everything else a logged, code-only 500. */
 export function failureResponse(e:unknown,tag:string,internalMessage:string){
