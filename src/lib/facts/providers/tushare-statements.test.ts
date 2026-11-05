@@ -295,9 +295,30 @@ describe('fixture manifest loader and recorder',()=>{
   writeRecording(src,'600519.SH',[page('true'),page('false')]);
   const r=commitRecording(src,dst,'600519.SH');
   expect(r.removed).toEqual(expect.arrayContaining(['600519.SH.balancesheet.rt1.p1.json','600519.SH.cashflow.rt1.p1.json','600519.SH.income.rt4.p1.json']));
-  expect(readdirSync(dst).filter(f=>f.startsWith('600519.SH.')&&f.endsWith('.json')&&!f.endsWith('.meta.json')).sort()).toEqual(['600519.SH.income.rt1.p1.json','600519.SH.income.rt1.p2.json','600519.SH.manifest.json']);
+  expect(readdirSync(dst).filter(f=>f.startsWith('600519.SH.')&&f.endsWith('.json')&&!f.endsWith('.meta.json')&&!f.includes('manifest')).every(f=>/^600519\.SH\.g[0-9a-z]+\.income\.rt1\.p[12]\.json$/.test(f))).toBe(true);
+  expect(readdirSync(dst).filter(f=>f.startsWith('600519.SH.')&&f.endsWith('.json')&&!f.endsWith('.meta.json')&&!f.includes('manifest'))).toHaveLength(2);
   expect(readdirSync(dst)).toContain('000333.SZ.keep.txt');
   expect(loadTushareFixtures('600519.SH',dst).map(x=>x.meta.page)).toEqual([1,2]);
   mkdirSync(join(dst,'x'));   // unrelated entries do not matter
+ });
+ it('is generational: a failure after the new pages are written but before the manifest rename leaves the old generation intact and loadable; the next commit sweeps the leftovers',()=>{
+  const dst=tmp();copySynthetic(dst);
+  const before=loadTushareFixtures('600519.SH',dst);
+  const page=(t:string,n:number)=>snapshotOf(new TextEncoder().encode(`{"request_id":"x${n}","code":0,"msg":null,"data":{"fields":["ts_code"],"items":[["600519.SH"]],"has_more":${t}}}`),{source:'tushare',api:'income',params:{ts_code:'600519.SH',report_type:'1'},page:n,has_more:t==='true'});
+  const src=tmp();writeRecording(src,'600519.SH',[page('false',1)],undefined,'gnew1');
+  const manifestBefore=readFileSync(join(dst,manifestName('600519.SH')),'utf8');
+  expect(()=>commitRecording(src,dst,'600519.SH',{beforeManifest:()=>{throw new Error('interrupted');}})).toThrow('interrupted');
+  expect(readdirSync(dst)).toContain('600519.SH.gnew1.income.rt1.p1.json');   // new generation is on disk ...
+  expect(readFileSync(join(dst,manifestName('600519.SH')),'utf8')).toBe(manifestBefore);   // ... but the pointer did not move
+  const after=loadTushareFixtures('600519.SH',dst);
+  expect(after.map(x=>x.sha256)).toEqual(before.map(x=>x.sha256));   // old generation fully intact
+  expect(readdirSync(dst).some(f=>f.endsWith('.tmp'))).toBe(false);
+  const r=commitRecording(src,dst,'600519.SH');
+  expect(r.removed).toContain('600519.SH.income.rt1.p1.json');
+  expect(loadTushareFixtures('600519.SH',dst)).toHaveLength(1);
+  // a re-record never reuses a name referenced by the current manifest
+  const src2=tmp();writeRecording(src2,'600519.SH',[page('false',1)]);
+  const names=JSON.parse(readFileSync(join(src2,manifestName('600519.SH')),'utf8')).pages.map((p:{file:string})=>p.file);
+  expect(names.some((n:string)=>readdirSync(dst).includes(n))).toBe(false);
  });
 });
