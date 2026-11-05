@@ -86,6 +86,11 @@ export function chunk<T>(rows:T[],size=STAGE_CHUNK):T[][]{
  if(rows.length===0)return [[]];
  const out:T[][]=[];for(let i=0;i<rows.length;i+=size)out.push(rows.slice(i,i+size));return out;
 }
+/** stage_filings omits a source_ref already owned by another issuer; a missing key is an error for every adapter, never a silent skip. */
+export function assertAllStaged(input:FilingInsert[],out:Map<string,string>):Map<string,string>{
+ for(const r of input)if(!out.has(r.sourceRef))throw new FactsDbError('unknown',`filing_not_staged:${r.source}:${r.sourceRef}`);
+ return out;
+}
 /** Plain id chunking for `.in()` filters (an empty input yields no chunk). */
 export function chunkIds(ids:string[],size=IN_CHUNK):string[][]{
  const out:string[][]=[];for(let i=0;i<ids.length;i+=size)out.push(ids.slice(i,i+size));return out;
@@ -118,7 +123,7 @@ export function supabaseFactsDb(client:SupabaseClient):FactsDb{
   async stageFilings(run,input){
    const out=new Map<string,string>();
    for(const part of chunk(input)){const m=await call<Record<string,string>|null>('stage_filings',{p_run:run,p_rows:filingArgs(part)});for(const [k,v] of Object.entries(m??{}))out.set(k,v);}
-   return out;
+   return assertAllStaged(input,out);
   },
   async stageFacts(run,input){let n=0;for(const part of chunk(input))n+=Number(await call<number>('stage_facts',{p_run:run,p_rows:part}));return n;},
   async quarantineFacts(run,ids,item){return Number(await call<unknown>('quarantine_facts',{p_run:run,p_fact_ids:ids,p_item:item}));},

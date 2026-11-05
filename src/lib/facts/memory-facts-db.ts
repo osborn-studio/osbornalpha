@@ -14,7 +14,7 @@
 import {randomUUID} from 'node:crypto';
 import {memoryTableClient} from '../db/memory-table-client';
 import type {Row,TableClient} from '../db/table-client';
-import {READ_FACTS_CAP,conflictFromItem,conflictPrefix,linkPatch} from './db';
+import {READ_FACTS_CAP,assertAllStaged,conflictFromItem,conflictPrefix,linkPatch} from './db';
 import {FactsDbError} from './types';
 import type {FactRow,FactsDb,FilingRow,Market,MetricRow,RunStatus,ScopeRow} from './types';
 
@@ -148,7 +148,7 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
     out.set(row.sourceRef,row.filing_id);
    }
    for(const g of pending)filings.set(g.filing_id,g);
-   return out;
+   return assertAllStaged(input,out);
   },
   async stageFacts(run,input){
    const r=runLock(run);const at=stamp();

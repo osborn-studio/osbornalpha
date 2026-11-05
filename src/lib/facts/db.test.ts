@@ -172,6 +172,10 @@ describe('supabaseFactsDb',()=>{
   await db.replaceMetrics(iss,'US',3,[{issuer_id:iss,market:'US',metric:'m',period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:'1',unit:'u',input_unit:'USD',basis:'us_standard',formula_version:'v',inputs:[],based_on_rev:3,as_of:'2024-01-01'}]);
   expect(calls.at(-1)!.args).toEqual({p_issuer:iss,p_market:'US',p_based_on_rev:3,p_rows:[{metric:'m',period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:'1',unit:'u',input_unit:'USD',basis:'us_standard',formula_version:'v',inputs:[],as_of:'2024-01-01'}]});
  });
+ it('stageFilings treats a source_ref missing from the returned map (owned by another issuer) as an error',async()=>{
+  const {db}=stub(()=>({data:{}}));
+  await expect(db.stageFilings('run',[filingInsert(randomUUID())])).rejects.toMatchObject({name:'FactsDbError',code:'unknown',message:expect.stringContaining('filing_not_staged')});
+ });
  it('normalises the read_facts envelope: numeric state_rev, value from value_text, null sequence fields dropped',async()=>{
   const {calls,db}=stub(()=>({data:{state_rev:'7',truncated:false,row_count:2,rows:[{fact_id:'a',value:123,value_text:'123',disclosure_seq:1,is_current:true,is_revision:false},{fact_id:'b',value:1,value_text:'1.0',disclosure_seq:null,is_current:false,is_revision:false}]}}));
   const out=await db.readFacts('iss','US',{concepts:['revenue'],asOf:'2024-06-30',history:true});

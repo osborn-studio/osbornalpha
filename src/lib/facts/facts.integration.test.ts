@@ -10,6 +10,11 @@ import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import type {PoolClient} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {pgTableClient} from '../db/pg-table-client';
+import {quarantine} from '../dq/quarantine';
+import {factInsert,factsDbContract,filingInsert} from './db-contract';
+import type {ContractHarness} from './db-contract';
+import {pgFactsDb} from './pg-facts-db';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261106090000_financial_facts.sql';
@@ -453,5 +458,88 @@ describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()
     expect((await c.query(`select document_ref from public.filings where filing_id=$1`,[f])).rows[0].document_ref).toBe('doc');
    }
   }finally{await c.query('reset role').catch(()=>{});c.release();}
+ });
+});
+
+interface PgHarness extends ContractHarness{pool:Pool;close():Promise<void>}
+async function pgHarness():Promise<PgHarness>{
+ const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
+ const pool=new Pool({connectionString:state.adminUrl});
+ return {
+  pool,db:pgFactsDb(pool),tables:pgTableClient(pool),
+  issuer:async()=>{const id=randomUUID();await pool.query(`insert into public.issuers(issuer_id,canonical_name_en) values($1,'ZZ Facts Contract')`,[id]);return id;},
+  batch:async()=>{const id=randomUUID();await pool.query(`insert into public.ingest_batches(batch_id,producer,dataset) values($1,'facts-sync','facts.us')`,[id]);return id;},
+  expireLease:async(issuer,market)=>{await pool.query(`update public.fact_sync_scope set lease_until=now()-interval '1 second' where issuer_id=$1 and market=$2`,[issuer,market]);},
+  close:async()=>{await pool.end();},
+ };
+}
+
+describe.skipIf(!enabled)('pgFactsDb on real PostgreSQL',()=>{
+ // The same scenarios memoryFactsDb passes in db.test.ts, now against the SQL functions.
+ factsDbContract('pgFactsDb contract',pgHarness);
+
+ describe('concurrency',()=>{
+  let h:PgHarness;
+  beforeAll(async()=>{h=await pgHarness();});
+  afterAll(async()=>{await h?.close();});
+  const ready=async()=>{const iss=await h.issuer();const b=await h.batch();await h.db.reconcileScope('US',[{issuer_id:iss,reasons:['t'],priority:1,fetch_key:'k'}]);expect(await h.db.claimLease(iss,'US',b,600)).toBe(true);return {iss,b};};
+
+  it('claimLease: eight batches race for one issuer and exactly one wins; the winner renews, the rest stay refused',async()=>{
+   const iss=await h.issuer();await h.db.reconcileScope('US',[{issuer_id:iss,reasons:['t'],priority:1,fetch_key:'k'}]);
+   const batches=await Promise.all(Array.from({length:8},()=>h.batch()));
+   const won=await Promise.all(batches.map(b=>h.db.claimLease(iss,'US',b,600)));
+   expect(won.filter(Boolean)).toHaveLength(1);
+   const winner=batches[won.indexOf(true)];
+   const again=await Promise.all(batches.map(b=>h.db.claimLease(iss,'US',b,600)));
+   expect(again).toEqual(batches.map(b=>b===winner));
+  });
+
+  it('a stale worker: the new holder abandons its staged run, every later write is lease_lost, published and quarantined rows survive',async()=>{
+   const {db}=h;const {iss,b:b1}=await ready();const b2=await h.batch();
+   const run1=await db.beginRun(iss,'US',b1,1);const f1=filingInsert(iss);await db.stageFilings(run1,[f1]);
+   const ok=factInsert(iss,f1);const qd=factInsert(iss,f1,{concept:'total_assets',statement:'BS',period_start:null,duration:'INSTANT'});
+   expect(await db.stageFacts(run1,[ok,qd])).toBe(2);
+   const item=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${iss}:US:BS:${randomUUID()}`,reasonCode:'identity_bs',batchId:b1,payload:{key:{},fact_ids:[qd.fact_id],run_id:run1}});
+   expect(await db.quarantineFacts(run1,[qd.fact_id],item)).toBe(1);
+   expect(await db.publishRun(run1,[f1.filing_id])).toBe(1);
+   const run2=await db.beginRun(iss,'US',b1,1);const f2=filingInsert(iss);await db.stageFilings(run2,[f2]);
+   const x=factInsert(iss,f2,{value:'7'});expect(await db.stageFacts(run2,[x])).toBe(1);
+   await h.expireLease(iss,'US');
+   expect(await db.claimLease(iss,'US',b2,600)).toBe(true);
+   const run3=await db.beginRun(iss,'US',b2,1);                               // abandons run2 under b1
+   expect(await db.factsByIds([x.fact_id])).toEqual([]);
+   expect((await db.filingsOfIssuer(iss,'US',{})).map(g=>g.filing_id)).toEqual([f1.filing_id]);
+   const stale:Array<()=>Promise<unknown>>=[
+    ()=>db.stageFacts(run2,[x]),()=>db.quarantineFacts(run2,[x.fact_id],item),()=>db.publishRun(run2,[]),()=>db.abandonRun(run2),
+    ()=>db.beginRun(iss,'US',b1,1),()=>db.releaseLease(iss,'US',b1,'failed','2030-01-01T00:00:00.000Z'),
+   ];
+   for(const call of stale)await expect(call()).rejects.toMatchObject({name:'FactsDbError',code:'lease_lost'});
+   expect((await db.factsByIds([ok.fact_id,qd.fact_id])).map(y=>y.status).sort()).toEqual(['ok','quarantined']);
+   expect((await db.readFacts(iss,'US',{concepts:['revenue'],asOf:'2030-01-01'})).rows.map(y=>y.fact_id)).toEqual([ok.fact_id]);
+   expect(await db.publishRun(run3,[])).toBe(0);
+   await db.releaseLease(iss,'US',b2,'success','2030-01-01T00:00:00.000Z');
+  });
+
+  it('a reader sees nothing of an in-flight publish and the whole run after commit; beginRun waits behind it',async()=>{
+   const {db}=h;const {iss,b}=await ready();
+   const run=await db.beginRun(iss,'US',b,1);const f=filingInsert(iss);await db.stageFilings(run,[f]);
+   const a=factInsert(iss,f);const t=factInsert(iss,f,{concept:'total_assets',statement:'BS',period_start:null,duration:'INSTANT'});
+   expect(await db.stageFacts(run,[a,t])).toBe(2);
+   const c1=await h.pool.connect();
+   try{
+    await c1.query('begin');
+    await c1.query(`select public.publish_sync_run($1,$2::uuid[])`,[run,[f.filing_id]]);
+    const during=await db.readFacts(iss,'US',{concepts:['revenue','total_assets'],asOf:'2030-01-01',history:true,includeNonOk:true});
+    expect(during).toEqual({stateRev:0,rows:[],truncated:false});                        // not blocked, nothing visible
+    let settled=false;
+    const next=db.beginRun(iss,'US',b,1).then(id=>{settled=true;return id;});
+    await new Promise(res=>setTimeout(res,300));expect(settled).toBe(false);              // waits for the scope lock
+    await c1.query('commit');
+    const run2=await next;expect(run2).not.toBe(run);
+   }finally{await c1.query('rollback').catch(()=>{});c1.release();}
+   const after=await db.readFacts(iss,'US',{concepts:['revenue','total_assets'],asOf:'2030-01-01',history:true});
+   expect(after.stateRev).toBe(1);expect(after.rows.map(y=>y.fact_id).sort()).toEqual([a.fact_id,t.fact_id].sort());
+   expect((await db.factsByIds([a.fact_id])).map(y=>y.status)).toEqual(['ok']);         // run stayed published; beginRun abandoned nothing of it
+  });
  });
 });

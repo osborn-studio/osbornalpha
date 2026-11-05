@@ -172,6 +172,15 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect((await db.metricsOfIssuer(iss,'US','facts-derive/1.0')).map(m=>m.value)).toEqual(['0.5']);
   });
 
+  it('stageFilings: a source_ref already owned by another issuer is an error, never a silent skip, and the owner keeps its row',async()=>{
+   const {iss,f}=await published();
+   const {iss:other,b:bo}=await ready();
+   const run=await db.beginRun(other,'US',bo,1);
+   expect((await code(db.stageFilings(run,[filingInsert(other,{sourceRef:f.sourceRef})]))).startsWith('unknown:filing_not_staged')).toBe(true);
+   expect((await db.filingsOfIssuer(iss,'US',{})).map(g=>g.filing_id)).toContain(f.filing_id);
+   expect((await db.filingsOfIssuer(other,'US',{})).filter(g=>g.source_ref===f.sourceRef)).toEqual([]);
+  });
+
   it('stageFilings validates the whole batch: a reused filing_id with a new source_ref rejects the call and writes nothing; factsByIds is deduped and ordered',async()=>{
    const {iss,b,f,r0,r}=await published();
    const run=await db.beginRun(iss,'US',b,1);
