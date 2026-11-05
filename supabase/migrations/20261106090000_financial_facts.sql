@@ -296,10 +296,10 @@ begin
       where q.table_name = 'financial_facts' and q.reason_code = 'same_day_conflict' and q.status = 'open'
         and q.payload -> 'key' ->> 'issuer_id' = f.issuer_id::text and q.payload -> 'key' ->> 'market' = f.market
         and q.payload -> 'key' ->> 'concept' = f.concept
-        and coalesce(q.payload -> 'key' ->> 'period_start', '') = coalesce(f.period_start::text, '')
-        and q.payload -> 'key' ->> 'period_end' = f.period_end::text
+        and f.period_start is not distinct from nullif(q.payload -> 'key' ->> 'period_start', '')::date
+        and (q.payload -> 'key' ->> 'period_end')::date = f.period_end
         and q.payload -> 'key' ->> 'consolidation' = f.consolidation and q.payload -> 'key' ->> 'unit' = f.unit
-        and q.payload -> 'key' ->> 'available_date' = f.available_date::text)
+        and (q.payload -> 'key' ->> 'available_date')::date = f.available_date)
     and not exists (
       select 1 from public.dq_quarantine q
       where q.table_name = 'financial_facts' and q.reason_code = 'same_day_conflict' and q.status <> 'open'
@@ -474,8 +474,9 @@ revoke execute on function public.publish_sync_run(uuid, uuid[]) from public, an
 grant execute on function public.publish_sync_run(uuid, uuid[]) to service_role;
 
 -- Lease check; published → run_published; already abandoned → no-op; staged → mark, delete facts
--- (filings this run created stay until the next begin_sync_run prunes them). Published rows and
--- open conflict items are untouched.
+-- (this function never prunes filings: those the run created stay and a later run reuses them by
+-- source_ref; only a begin_sync_run that itself abandons a still-staged run prunes its empty gen-0
+-- filings). Published rows and open conflict items are untouched.
 create or replace function public.abandon_sync_run(p_run uuid)
 returns void language plpgsql security definer set search_path = public as $$
 declare r public.fact_sync_runs;
@@ -553,7 +554,7 @@ begin
   end if;
   -- 2. re-read and rebuild the member set under the lock (a concurrent merge is now visible)
   select * into q from public.dq_quarantine where id = p_item for update;
-  if q.status <> 'open' then raise exception 'item_not_open' using errcode = 'P0001'; end if;
+  if not found or q.status <> 'open' then raise exception 'item_not_open' using errcode = 'P0001'; end if;
   v_ids := public.fact_item_members(q.payload);
   -- 3. every member run, and the anchor run, must have left the staged state
   if exists (select 1 from public.financial_facts f join public.fact_sync_runs r on r.run_id = f.run_id where f.fact_id = any(v_ids) and r.status = 'staged') then
