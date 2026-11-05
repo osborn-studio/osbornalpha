@@ -73,11 +73,52 @@ describe('planFactWrites',()=>{
  it('does not conflict a re-mapped filing with its own superseded row, but still detects distinct-filing conflicts',()=>{
   const old=row(F1,'100','2023-11-03',{mapping_gen:0});
   const fix=plan({existing:[old],candidates:[cand('acc-1','101')]});
-  expect(fix.conflicts).toHaveLength(0);expect(fix.counts).toEqual({inserted:0,versioned:1,duplicates:0,quarantined:0});
+  expect(fix.conflicts).toHaveLength(0);expect(fix.counts).toEqual({inserted:1,versioned:0,duplicates:0,quarantined:0}); // the superseded row is gone after publish, so there is no prior value to differ from
   const other=row(F2,'100','2023-11-03');
   expect(plan({existing:[old,other],candidates:[cand('acc-1','101')]}).conflicts).toHaveLength(1);
   const old2=row(F2,'200','2023-11-03',{mapping_gen:0});
   expect(plan({existing:[old2],candidates:[cand('acc-1','100')]}).conflicts).toHaveLength(0);
+ });
+ it('detects three-way and mixed conflicts, parks everything, and references the disagreeing ok row',()=>{
+  const three=plan({candidates:[cand('acc-1','1'),cand('acc-2','2'),cand('acc-2b','3')],filings:new Map([...filings,['acc-2b','10000000-0000-4000-8000-000000000004']]),filingCandidates:[...filingCandidates,fc('acc-2b','2023-11-03')]});
+  expect(three.conflicts).toHaveLength(1);expect(three.conflicts[0].newFactIds).toHaveLength(3);expect(three.counts.quarantined).toBe(3);
+  const two=plan({existing:[row(F3,'1','2023-11-03')],candidates:[cand('acc-1','2'),cand('acc-2','3')]});
+  expect(two.conflicts[0].newFactIds).toHaveLength(2);expect(two.conflicts[0].existingOkFactIds).toHaveLength(1);
+  const mixed=plan({existing:[row(F3,'100','2023-11-03')],candidates:[cand('acc-1','100'),cand('acc-2','200')]});
+  expect(mixed.conflicts).toHaveLength(1);expect(mixed.conflicts[0].newFactIds).toHaveLength(2);expect(mixed.conflicts[0].existingOkFactIds).toHaveLength(1);
+  expect(mixed.counts).toEqual({inserted:0,versioned:0,duplicates:0,quarantined:2});
+ });
+ it('plans independent conflict groups next to a clean insert, with consistent outcomes',()=>{
+  const item:ConflictItem={id:'44444444-0000-4000-8000-000000000002',natural_key:sameDayConflictKey(ISSUER,'US',{...K,concept:'net_income'},'2023-11-03'),fact_ids:['x'],available_date:'2023-11-03',key:{}};
+  const out=plan({openConflicts:[item],candidates:[cand('acc-1','1'),cand('acc-2','2'),cand('acc-1','5',{concept:'cost_of_revenue'}),cand('acc-1','7',{concept:'net_income'}),
+   cand('acc-1','10',{concept:'gross_profit'}),cand('acc-2','11',{concept:'gross_profit'}),cand('acc-3','9',{concept:'operating_income'})]});
+  expect(out.conflicts).toHaveLength(2);
+  expect(out.contestedJoins).toHaveLength(1);
+  expect(out.counts).toEqual({inserted:2,versioned:0,duplicates:0,quarantined:5});
+  expect(out.outcomes.size).toBe(out.inserts.length);
+  expect([...out.quarantinedFactIds].sort()).toEqual([...out.conflicts.flatMap(c=>c.newFactIds),...out.contestedJoins.flatMap(j=>j.factIds)].sort());
+ });
+ it('compares same-day values as decimals',()=>{
+  expect(plan({existing:[row(F1,'100.0','2023-11-03')],candidates:[cand('acc-2','1e2')]}).conflicts).toHaveLength(0);
+ });
+ it('conflicts instants with a null period_start and an empty segment in the natural key',()=>{
+  const inst=(ref:string,v:string)=>cand(ref,v,{concept:'total_assets',statement:'BS',periodStart:null,duration:'INSTANT'});
+  const out=plan({candidates:[inst('acc-1','1'),inst('acc-2','2')]});
+  expect(out.conflicts).toHaveLength(1);
+  expect(out.conflicts[0].key.period_start).toBeNull();
+  expect(out.conflicts[0].naturalKey).toContain(':total_assets::2023-09-30:');
+ });
+ it('measures the current value on active rows: a remapped filing no longer counts',()=>{
+  const r1=row(F1,'100','2023-11-03');const r2=row(F2,'200','2024-11-01',{mapping_gen:0});
+  const out=plan({existing:[r1,r2],filings:new Map([['acc-2',F2]]),candidates:[cand('acc-2','100')]});
+  expect(out.counts).toEqual({inserted:1,versioned:0,duplicates:0,quarantined:0});
+  // a lower generation of the same filing in `existing` is superseded even if the filing is not remapped
+  const old=row(F1,'999','2023-11-03',{mapping_gen:0});const cur=row(F1,'100','2023-11-03',{mapping_gen:1});
+  expect(plan({existing:[old,cur],candidates:[cand('acc-2','100')]}).conflicts).toHaveLength(0);
+ });
+ it('picks the surviving repeat deterministically',()=>{
+  const a=cand('acc-1','100',{sourceConcept:'B',rawHash:'2'}),b=cand('acc-1','100',{sourceConcept:'A',rawHash:'9'}),c=cand('acc-1','100',{sourceConcept:'A',rawHash:'3'});
+  for(const order of [[a,b,c],[c,b,a],[b,a,c]]){const out=plan({candidates:order});expect(out.inserts[0].source_concept).toBe('A');expect(out.inserts[0].raw_hash).toBe('3');expect(out.duplicates).toHaveLength(2);}
  });
  it('is independent of arrival order: one run with both, or either filing first, yields the same conflict',()=>{
   const both=plan({candidates:[cand('acc-1','100'),cand('acc-2','200')]});

@@ -1,14 +1,17 @@
 // src/lib/facts/plan.ts
-// Write planning (spec §5.3), pure. Given what the issuer already has (every row of the current
-// generation, any status), the open same_day_conflict items and the parsed candidates, decide
+// Write planning (spec §5.3), pure. Given what the issuer already has (read_facts(includeNonOk)
+// output: every stored row of the issuer, any status and generation), the open same_day_conflict items and the parsed candidates, decide
 // per candidate: duplicate (candidate key = K + filing + mapping_gen already exists, any status),
 // ambiguous_value (same candidate key, different values — no row), contested (an open item for
-// (K, available_date) exists — row is staged then parked into that item, whatever its value),
+// (K, available_date) exists — the row is staged as a new fact and parked into that item, whatever its value),
 // same-day conflict (another value for (K, available_date) among published ok rows or this
 // run's candidates — all new rows parked, a new item references them and the ok rows), or a
 // plain insert counted as inserted (value equals the current value, or no prior disclosure) /
-// versioned (value differs). Conflict detection works on sets, so arrival order cannot change
-// the outcome. Values compare in canonical decimal form.
+// versioned (value differs). inserted/versioned compare against the stored current value only
+// (the last active ok row by available_date, created_at, fact_id), never against sibling
+// candidates of the same run. Conflict detection works on sets of ACTIVE rows (rows that remain
+// visible after this run publishes: superseded generations of a filing are excluded), so arrival
+// order cannot change the outcome. Values compare in canonical decimal form.
 import {randomUUID} from 'node:crypto';
 import type {BatchCounts} from '../dq/batches';
 import type {ConflictItem,FactCandidate,FactInsert,FactRow,FilingCandidate,Market} from './types';
@@ -17,7 +20,9 @@ import type {FactKey} from './keys';
 import {canonicalDecimal} from './json-numbers';
 
 export interface PlanInput{
+ /** read_facts(includeNonOk) output for the issuer: all statuses, all generations. */
  existing:FactRow[];openConflicts:ConflictItem[];candidates:FactCandidate[];filingCandidates:FilingCandidate[];
+ /** This run's filings: source_ref to filing_id. A filing listed here is (re)mapped at mappingGen by this run. */
  filings:Map<string,string>;issuerId:string;market:Market;mappingGen:number;mappingVersion:string;newId?:()=>string;
 }
 export interface PlanConflict{naturalKey:string;key:Record<string,string|null>;availableDate:string;newFactIds:string[];existingOkFactIds:string[];values:{filing:string;value:string}[]}
@@ -32,7 +37,10 @@ export interface PlanResult{
 
 const keyOf=(c:FactCandidate):FactKey=>({concept:c.concept,period_start:c.periodStart,period_end:c.periodEnd,consolidation:c.consolidation,unit:c.unit});
 const rowKey=(r:FactRow):FactKey=>({concept:r.concept,period_start:r.period_start,period_end:r.period_end,consolidation:r.consolidation,unit:r.unit});
-const seqOrder=(a:FactRow,b:FactRow)=>a.available_date.localeCompare(b.available_date)||a.created_at.localeCompare(b.created_at)||a.fact_id.localeCompare(b.fact_id);
+const cmp=(a:string,b:string)=>a<b?-1:a>b?1:0;
+const cmpTime=(a:string,b:string)=>{const x=Date.parse(a),y=Date.parse(b);return (Number.isNaN(x)||Number.isNaN(y)||x===y)?cmp(a,b):x<y?-1:1;};
+// C-collation parity with SQL: plain code-unit comparison, never localeCompare.
+const seqOrder=(a:FactRow,b:FactRow)=>cmp(a.available_date,b.available_date)||cmpTime(a.created_at,b.created_at)||cmp(a.fact_id,b.fact_id);
 
 export function planFactWrites(input:PlanInput):PlanResult{
  const {issuerId,market,mappingGen,mappingVersion}=input;const newId=input.newId??randomUUID;
@@ -42,7 +50,12 @@ export function planFactWrites(input:PlanInput):PlanResult{
  // Rows that stay active after this run publishes: an ok row of a filing re-mapped in this run
  // (older generation) is superseded, so it must not compete with its own replacement.
  const stagedFilingIds=new Set(input.filings.values());
- const activeRows=okRows.filter(r=>!(r.mapping_gen<mappingGen&&stagedFilingIds.has(r.filing_id)));
+ // Also superseded: a lower-generation row of a filing that has a higher-generation row in `existing`.
+ const topGen=new Map<string,number>();
+ for(const r of input.existing)topGen.set(r.filing_id,Math.max(topGen.get(r.filing_id)??-Infinity,r.mapping_gen));
+ const activeRows=okRows.filter(r=>!(r.mapping_gen<mappingGen&&stagedFilingIds.has(r.filing_id))&&r.mapping_gen>=(topGen.get(r.filing_id)??r.mapping_gen));
+ const activeByDay=new Map<string,FactRow[]>();
+ for(const r of activeRows){const dk=sameDayConflictKey(issuerId,market,rowKey(r),r.available_date);const g=activeByDay.get(dk)??[];g.push(r);activeByDay.set(dk,g);}
  const openByKey=new Map(input.openConflicts.map(i=>[i.natural_key,i]));
  const result:PlanResult={inserts:[],counts:{inserted:0,versioned:0,duplicates:0,quarantined:0},duplicates:[],ambiguous:[],conflicts:[],contestedJoins:[],outcomes:new Map(),quarantinedFactIds:[]};
  // 1. duplicates against the store, then group by candidate key
@@ -60,17 +73,19 @@ export function planFactWrites(input:PlanInput):PlanResult{
   const values=new Set(cands.map(c=>canonicalDecimal(c.value)));
   const k=keyOf(cands[0]);
   if(values.size>1){result.ambiguous.push({naturalKey:ambiguousKey(issuerId,market,k,cands[0].filingRef,mappingGen),key:keyComponents(issuerId,market,k),candidates:cands});result.counts.quarantined+=cands.length;continue;}
-  result.duplicates.push(...cands.slice(1));
-  const availableDate=dateOf.get(cands[0].filingRef);
-  if(!availableDate)throw new Error(`unknown_filing_date:${cands[0].filingRef}`);
-  accepted.push({c:cands[0],filingId,availableDate,value:[...values][0]});
+  // equal values: keep the repeat with the smallest (sourceConcept, rawHash), independent of input order
+  const sorted=[...cands].sort((x,y)=>cmp(x.sourceConcept,y.sourceConcept)||cmp(x.rawHash,y.rawHash));
+  result.duplicates.push(...sorted.slice(1));
+  const availableDate=dateOf.get(sorted[0].filingRef);
+  if(!availableDate)throw new Error(`unknown_filing_date:${sorted[0].filingRef}`);
+  accepted.push({c:sorted[0],filingId,availableDate,value:[...values][0]});
  }
  result.counts.duplicates=result.duplicates.length;
  // 3. (K, available_date) groups: contested → join; >1 value among candidates ∪ ok rows → conflict
  const byDay=new Map<string,typeof accepted>();
  for(const a of accepted){const dk=sameDayConflictKey(issuerId,market,keyOf(a.c),a.availableDate);const g=byDay.get(dk)??[];g.push(a);byDay.set(dk,g);}
  const currentByK=new Map<string,FactRow>();
- for(const r of [...okRows].sort(seqOrder))currentByK.set(factKey(rowKey(r)),r);
+ for(const r of [...activeRows].sort(seqOrder))currentByK.set(factKey(rowKey(r)),r);
  for(const [dk,group] of byDay){
   const k=keyOf(group[0].c);const date=group[0].availableDate;
   const inserts=group.map(a=>{
@@ -82,7 +97,7 @@ export function planFactWrites(input:PlanInput):PlanResult{
   const park=()=>{for(const r of inserts){result.outcomes.set(r.fact_id,'quarantined');result.quarantinedFactIds.push(r.fact_id);}result.counts.quarantined+=inserts.length;};
   const open=openByKey.get(dk);
   if(open){result.contestedJoins.push({itemId:open.id,factIds:inserts.map(r=>r.fact_id)});park();continue;}
-  const sameDayOk=activeRows.filter(r=>r.available_date===date&&sameDayConflictKey(issuerId,market,rowKey(r),r.available_date)===dk);
+  const sameDayOk=activeByDay.get(dk)??[];
   const values=new Set([...inserts.map(r=>r.value),...sameDayOk.map(r=>canonicalDecimal(r.value))]);
   if(values.size>1){
    result.conflicts.push({naturalKey:dk,key:keyComponents(issuerId,market,k,date),availableDate:date,newFactIds:inserts.map(r=>r.fact_id),existingOkFactIds:sameDayOk.map(r=>r.fact_id),
