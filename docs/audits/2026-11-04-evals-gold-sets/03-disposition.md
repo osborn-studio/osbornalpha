@@ -1,9 +1,9 @@
 # F6 评测与黄金集规格 · Codex 两轮审计处置表
 
 目标：`docs/superpowers/specs/2026-11-04-evals-and-gold-sets-design.md`
-审计：`01-codex-round1.md`（gpt-6-astra, medium，针对第 1 稿，28 条）、`02-codex-round2.md`（针对第 2 稿，22 条新发现 N1–N22 + 对第一轮 28 条的解决状态）。
+审计：`01-codex-round1.md`（gpt-6-astra, medium，针对第 1 稿，28 条）、`02-codex-round2.md`（针对第 2 稿，22 条新发现 N1–N22 + 对第一轮 28 条的解决状态）、`04-codex-round3.md`（针对第 3 稿，3 条新 P1 + N1–N22 的状态，其中 12 条 PARTIAL）。
 处置人：架构师（Claude Fable 5.1）。决定：ACCEPT（已在第 3 稿实施，`implemented_in` 指向节号）/ DECLINE（附理由）/ OWNER（需 owner 决定，已列入规格 §16）/ OPEN-verify（实施前核对，已列入规格 §17）。
-按 common brief 规则，Codex 规格审计最多两轮；第二轮的发现在第 3 稿实施后**没有**再送第三轮，由下一个实施任务的提交审计覆盖。
+按 common brief 规则 Codex 规格审计最多两轮；协调人随后追加了第三轮（针对第 3 稿）与第四轮（针对第 4 稿，只问新缺陷与最终判语）。
 
 Codex 第二轮最终判语（针对第 2 稿）："**Verdict: not ready for implementation planning—the rewrite improves structure substantially, but still permits misleading passes and leaves incompatible read, replay, persistence, and release-evidence contracts.**" 第 3 稿逐条处置如下；第二轮判语针对的是第 2 稿，不是第 3 稿。
 
@@ -67,9 +67,39 @@ Codex 第二轮最终判语（针对第 2 稿）："**Verdict: not ready for imp
 | N21 gold-diff 基线 | ACCEPT | §4.4 PR merge-base / push `HEAD~1` / dispatch `origin/main`；`fetch-depth: 0` |
 | N22 依赖修订 | ACCEPT | 题头与 §2 钉到规格二第 8 稿提交 `15b17e6`；`fact_state_rev` 对 anon 可用 |
 
+## 第三轮（04，针对第 3 稿）→ 第 4 稿
+
+| # | 决定 | 实施 / 理由 |
+|---|---|---|
+| R3-P1-1 清单与冻结回放/对照证据矛盾 | ACCEPT | §10 改为按证据种类认证：生产运行对 `dq_eval_runs`；`replay_frozen` 接受 `mode='ci'`，认证仓库副本 sha256 + `ci_run_url`（`ci_check:'manual'`）；`reference_regression` 接受 `evidence_class='comparison'`；§1.1 成功标准同步 |
+| R3-P1-2 抽取归约把"已评分"当通过 | ACCEPT | §3.3 抽取案例 = 字段，`pass ⇔ P_f ≥ 0.95 ∧ R_f ≥ 0.95`，否则 `fail`；零支持 `skipped`；§11.1 定义 `P_f` 零预测 = 0；§13.1 增"全解析 TP=0 → fail"夹具 |
+| R3-P1-3 七天宽限 | ACCEPT | §10 删除；所有证据 `evaluator_code_version == release_commit`（在线回放走库路径，重跑便宜） |
+| N1 PARTIAL | ACCEPT | §3.2 定义 `evaluated_optional/evaluated` 的增量；明确各 kind 内部结果对象只是中间产物，`summary` 永远是 §3.2 形状 |
+| N5 PARTIAL | ACCEPT | §5.1.4 `--verify-artifacts`（下载快照、重算 sha256、按 `raw_hash` 规则定位到值）与 `--verify-sources`（取官方文件比对 `source.sha256`）；metrics 对每个输入事实递归同样解析；清单要求 `provenance.verified` |
+| N6 PARTIAL | ACCEPT | §5.3.1 `setup` 增 `initial_state`、`issuer_seed`、`setup_sha256` |
+| N7 PARTIAL | ACCEPT | §5.3.3 frozen 命中加 `from_setup_sha256/to_setup_sha256` |
+| N9 PARTIAL | ACCEPT | §5.4 哨兵走完整比较路径（测试读适配器对 `__canary__` 返回值）；增 (d) 用 anon 客户端真实尝试写入并断言被拒 |
+| N11 PARTIAL | ACCEPT | §5.2 (b) 读路径只读文本列、API 不输出数值列；夹具同时覆盖 numeric 作字符串与作数字两种到达形态 |
+| N13 PARTIAL | ACCEPT | §10 `scope.markets` 必须等于集内 subject 市场集合、`data_state_rev_min` 校验、新鲜度读 `dq_freshness`；审计开放 P1/P2 阻断 |
+| N14 PARTIAL | ACCEPT | §9 `codex-audit.ts` 要求被审文件已提交并写入 `target_sha256`（字节可由 git 取回）；清单拒绝未实施/未核实的 P1/P2 |
+| N16 PARTIAL | ACCEPT | §13.3 facts 集成只哈希三张 facts 表；宏观三表移到 `evals-reference.integration.test.ts`，F6-C2 标明宏观迁移为前置 |
+| N17 PARTIAL | ACCEPT | §5.5 报告两边 `fact_id/raw_hash` 并特权解析；"已处置"要求隔离项 `natural_key` 等于观测键且 `chosen_fact_ids` 含所用行 |
+| N19 PARTIAL | ACCEPT | §11.1 确定性配对顺序（IoU、page、bbox 字典序）；`FP_citation` 计入 FP；零预测正支持 `P_f=0` |
+| N21 PARTIAL | ACCEPT | §4.4 push 用 `github.event.before`、dispatch 用 merge-base 并在 main 上跳过；§13.1 增临时 git 仓库测试 |
+
+## 第四轮（05，针对第 4 稿；两条 P2 按 Codex 处方在第 5 稿实施，未再送审）
+
+判语："**Verdict: not ready for implementation planning—the fourth draft closes two round-3 P1s, but the authentication rewrite and extraction matching rule introduce two P2 defects.**" 三条 R3 P1：两条 CLOSED，一条 PARTIAL（即 R4-1）。
+
+| # | 决定 | 处置 |
+|---|---|---|
+| R4-1 P2 §10 对照证据继承了 `privileged=true` | ACCEPT — implemented per Codex's prescribed fix (round 4), not re-audited（第 5 稿 §10） | §10 认证表为 `reference_regression` 单列一行——运行必须 `privileged=false`（anon 读取器，无 service 密钥），报告哈希由校验器用自己的 service-role 连接对 `dq_eval_runs.report_sha256` 核对；不继承生产者的特权要求 |
+| R4-2 P2 §11.1 贪心配对先看 IoU 后看页 | ACCEPT — implemented per Codex's prescribed fix (round 4), not re-audited（第 5 稿 §11.1、§13.1） | 候选对先限定同页且 IoU ≥ 0.5 的同值对，在其中最大化匹配数（按 IoU 降序、bbox 字典序确定性打破平手），其余再分类；增"同值跨页坐标交叉"两页夹具 |
+
 ## 汇总
 
-- ACCEPT：50/50（其中 4 条同时标 OWNER：#11、#28、N8、N10；1 条标 OPEN-verify：N11）。
+- 第一轮 28 + 第二轮 22 + 第三轮 3 新 P1 与 12 条 PARTIAL 复核：全部 ACCEPT（#11、#28、N8、N10 同时标 OWNER；N11 另标 OPEN-verify）。
+- 第四轮 2 条 P2：ACCEPT，已按 Codex 处方在第 5 稿实施，未再审计。
 - DECLINE：0。
 - OWNER 决策：§16 D1–D8。
 - OPEN-verify：§17 1–8。

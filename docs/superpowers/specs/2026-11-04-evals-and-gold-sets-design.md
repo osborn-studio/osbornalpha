@@ -1,6 +1,6 @@
 # 数据底座 · F6 评测与黄金集 设计规格
 
-日期：2026-11-04（第 3 稿。审计轨迹 `docs/audits/2026-11-04-evals-gold-sets/`：01 Codex 一轮（28 条）、02 Codex 二轮（22 条新发现 N1–N22）、03 两轮处置表、`index.json`）
+日期：2026-11-04（第 5 稿，第 4 稿 + Codex 四轮的 R4-1/R4-2 按其处方实施，未再送审。审计轨迹 `docs/audits/2026-11-04-evals-gold-sets/`：01 Codex 一轮（28 条）、02 Codex 二轮（22 条新发现 N1–N22）、03 处置表（三轮）、04 Codex 三轮（3 条新 P1 + 12 条 PARTIAL）、05 Codex 四轮、`index.json`）
 状态：草案，待 owner 评审（§16 列 owner 决策）
 上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（规格一；§5 DQ 设施已落地，§9 黄金集与 §11 独立验证的条款由本规格接管）、`docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md`（规格二，**以提交 `15b17e6` 的第 8 稿为依赖基线**；§4.2–4.3 表、§4.5 函数含 `fact_state_rev`、§4.6 `read_facts`、§4.8 `FactsDb`、§9 读接口、§11.4 黄金断言）、`docs/superpowers/specs/2026-11-04-macro-workbench-design.md`（§4.3 快照、§12 测试）。
 总纲：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5 要求每个板块交付"独立验证证据：官方对账结果、双来源一致性、黄金集评测分数、历史回放一致性、第三方模型审计报告、领域专家抽样记录"。本规格把这六类证据做成**一个**评测框架和**一份**板块发布证据清单。
@@ -24,7 +24,7 @@
 1. **一个黄金集文件契约**（§4）：印刷值与规范值分列、单位进 `target`、一手文件标识与哈希、录入者与审核者、版本（含集级字段）与锁、对基线修订的差异校验。
 2. **一个运行器、六种评测**（§5）：`official_reconciliation`、`dual_source`、`replay_consistency`（frozen / live）、`reference_regression`、`extraction_gold`（F3 接口）、`judgment_calibration`（F4 接口），各自的案例结果经**同一张归约表**（§3.3）得到三维结论。
 3. **三维结论与门槛**（§3.2）：正确性、覆盖率、执行完整性；`gate ∈ {pass, fail, incomplete}`；`incomplete` 永远不能作为证据。
-4. **板块发布证据清单**（§10）：校验器重新打开每份报告、重算 gate、核对哈希、拒绝合成/脏树/错误范围的运行；不可豁免项与可豁免项分列。
+4. **板块发布证据清单**（§10）：校验器按证据种类分别认证（生产运行对 `dq_eval_runs`，CI 冻结回放对提交副本与 CI 运行），重算 gate，拒绝合成/脏树/非发布提交的运行；不可豁免项与可豁免项分列。
 5. **人工记录可校验**（§8、§9）。
 6. **管理员只读区块**（§12）。
 
@@ -34,7 +34,7 @@
 - 特权 `report` 运行对生产库跑完后：`docs/evals/<date>/facts-official_reconciliation-<run8>.{json,md}` 存在且 `report_sha256` 与 `dq_eval_runs` 行一致；失败案例出现在 `/admin/dq` 的"对账失败"列表。
 - `replay live` 对每个案例给出 `identical | data_drift | explained_diff | unexplained_diff`；未入账本的差异 → 退出码 1。
 - `reference_regression` 运行前后六张表内容哈希不变；哨兵值不出现在 `/api/admin/evals` 响应、服务端日志与公开报告 `.md` 中。
-- `validate.ts --manifest` 对一份引用了 `mode='ci'` 运行的清单退出码 1。
+- `validate.ts --manifest` 对一份把 `mode='ci'` 运行用作 `official_reconciliation` 的清单退出码 1；对 `replay_frozen` 引用 `ci` 运行且副本哈希相符的清单接受该项。
 
 ### 1.2 本规格之外
 
@@ -101,7 +101,7 @@
 3. 可选案例存在且 `evaluated_optional / optional < min_coverage_optional` → `incomplete`。
 4. 否则 `pass`。
 
-案例缺省 `required: true`；`optional` 只用于集文件头显式声明的案例（例如 IFRS 申报人"若存在"）。退出码：`pass` 0、`fail` 1、`incomplete` 3、运行前拒绝 2。
+案例缺省 `required: true`；`optional` 只用于集文件头显式声明的案例（例如 IFRS 申报人"若存在"）。`evaluated_optional` = 可选案例中结果归入 correctness 任一计数器（含 `expected_absent`）的数量；`evaluated` 同理计全部案例。各 kind 内部结果对象（如 §5.4 的 `ReferenceResult`、§11.1 的字段指标）只是中间产物，写入 `dq_eval_runs.summary` 与报告的永远是本节形状，经 §3.3 归约。退出码：`pass` 0、`fail` 1、`incomplete` 3、运行前拒绝 2。
 
 ### 3.3 案例结果归约表（所有 kind 共用一张）
 
@@ -124,7 +124,8 @@
 | | `beyond_explained` | correctness.pass |
 | | `beyond_unexplained`（无条目或 `unknown`） | correctness.unexplained_diff |
 | | `unavailable`（样本无值） | coverage.skipped |
-| extraction | 文档级 `scored` / `unscorable` | correctness.pass / execution.read_error（指标在 `detail`） |
+| extraction | 案例 = 字段（跨文档集合）：`pass`（`P_f ≥ 0.95 且 R_f ≥ 0.95`）/ `fail` | correctness.pass / correctness.fail（`detail` 含 TP/FP/FP_citation/FN/P/R） |
+| | 字段支持数 0 → `skipped(zero_support)`；文档不可解析 → 该文档所涉字段 `read_error` | coverage.skipped / execution.read_error |
 | calibration | 样本 `eligible` / `ineligible` | population / coverage.skipped |
 
 空总体、全撤回、全缺失都落在规则 1 → `incomplete`。
@@ -215,7 +216,7 @@ metrics 案例的 `target` 为 `{metric, period_start, period_end, basis, input_
 
 - 下列任一变化 → `version + 1` 并写 `history.fields`：任何案例的 `target/expect/printed/canonical/binding/source/tolerance/retracted/required`；集级 `tolerance/thresholds/optional_cases/module/artifact_class/module_implementers`；`recorders.json` 本身有独立 `version`。
 - `lock.json` 不匹配 → `gold_lock_mismatch`。
-- `validate.ts --gold-diff <base>`：`base` 由 `ci.yml` 决定——PR：`git merge-base origin/<base_ref> HEAD`（`fetch-depth: 0`）；push 到 main：`HEAD~1`；`workflow_dispatch`：`origin/main`。校验：案例不消失、`case_id` 不改名、语义或集级变化必有 `version+1`、`recorders.json` 与 `module_implementers` 的变化单列到 job summary。
+- `validate.ts --gold-diff <base>`：`base` 由 `ci.yml` 决定——PR：`git merge-base origin/<base_ref> HEAD`（`fetch-depth: 0`）；push 到 main：`${{ github.event.before }}`（覆盖多提交推送；为全零 sha 时跳过并在 job summary 说明）；`workflow_dispatch`：`git merge-base origin/main HEAD`，若等于 `HEAD`（在 main 上触发）则跳过并说明。校验：案例不消失、`case_id` 不改名、语义或集级变化必有 `version+1`、`recorders.json` 与 `module_implementers` 的变化单列到 job summary。
 - **独立批准**：`fixtures/gold/**`、`recorders.json`、`fixtures/replay/**` 的 PR 需要另一人审核才能合并。仓库目前没有 CODEOWNERS 与分支保护；开启后 `gold_approval='enforced'`，否则 `'process'`。发布清单默认只接受 `enforced`（§10；§16 D2 可豁免但须写入清单）。
 
 ### 4.5 公开与受限工件
@@ -268,11 +269,11 @@ metrics 案例的 `target` 为 `{metric, period_start, period_end, basis, input_
 
 | 模块 | 必需字段 | 特权运行解析 |
 |---|---|---|
-| facts | `fact_id, filing_id, source_ref, available_date, mapping_gen, mapping_version, raw_hash, run_id` | `disclosure-raw/{source}/{issuer_id}/{raw_hash 所指快照 sha256}.json` 存在（`storage.objects` 查询）；`fact_sync_runs.run_id → batch_id → ingest_batches.code_version` 非空 → `producer_code_version` |
-| metrics | `metric, formula_version, basis, input_unit, inputs[].fact_id, based_on_rev` | 每个 `inputs[].fact_id` 经 `factsByIds` 存在；其 filing 的 `source_ref` 记入报告 |
+| facts | `fact_id, filing_id, source_ref, available_date, mapping_gen, mapping_version, raw_hash, run_id` | `--verify-artifacts`：下载 `disclosure-raw/{source}/{issuer_id}/{sha256}.json`，重算 sha256 等于对象名，按规格二 `raw_hash` 定位规则在原文里找到该行并与 `value_text` 相等；`fact_sync_runs.run_id → batch_id → ingest_batches.code_version` 非空 → `producer_code_version`；`--verify-sources`：按黄金 `source.url` 取官方文件并比对 `source.sha256`（报告记 `source_verified: true|false|skipped`，`false` → `provenance_incomplete`） |
+| metrics | `metric, formula_version, basis, input_unit, inputs[].fact_id, based_on_rev` | 每个 `inputs[].fact_id` 经 `factsByIds` 存在，并对每个输入事实执行上一行的全部解析（快照下载与定位、生产者版本）；输入事实各自的 `source_ref/raw_hash/producer_code_version` 记入报告 |
 | macro | `observation_id, vintage_id, raw_hash, available_at, batch_id` | `macro-raw/<batch_id>/<series_id>.json` 存在；`ingest_batches.code_version` |
 
-非特权运行只检查字段存在，`producer_code_version='unavailable:anon'`；发布清单要求特权运行（§10）。
+非特权运行只检查字段存在，`producer_code_version='unavailable:anon'`；发布清单要求带 `--verify-artifacts --verify-sources` 的特权运行（§10）。官方文件本身不由我们保留（SEC/巨潮公开存档是一手来源），`source.sha256` 让任何人能确认看的是同一份字节。
 
 ### 5.2 比较原语 `src/lib/evals/compare.ts`
 
@@ -281,7 +282,7 @@ export function compareDecimal(left: string, right: string, rel: string): {passe
 ```
 - 十进制字符串对齐小数位后 `BigInt`，无浮点；`passed ⇔ |l−r| ≤ rel × max(|l|,|r|,1)`（整数运算）；`relDiff` 10 位截断，仅展示。
 - 计划三 `reconcile.ts` 复用同一函数。
-- **数值在生产路径的保真**：`dq_reconciliations` 增 `left_text`/`right_text`（`generated always as (left_value::text) stored`，与规格二 `value_text` 同法）；管理读路径只读文本列。测试：(a) `pgTableClient` 往返；(b) 用录制的 PostgREST 响应夹具（`numeric` 字段为 JSON 字符串）测 `supabaseTableClient` 行映射不做 `Number()`；(c) runbook 要求首次部署后对生产 `GET /api/admin/evals/[run_id]` 人工核对一条 20 位值。部署的 PostgREST 版本未在本规格核实（§17）。
+- **数值在生产路径的保真**：`dq_reconciliations` 增 `left_text`/`right_text`（`generated always as (left_value::text) stored`，与规格二 `value_text` 同法）；管理读路径只读文本列。测试：(a) `pgTableClient` 往返；(b) 管理读路径**只读** `left_text/right_text`（text），API 响应不输出 `left_value/right_value`；用两份录制夹具（`numeric` 字段作 JSON 字符串、作 JSON 数字）测行映射都不触碰数值列且文本列逐字透传；(c) runbook 要求首次部署后对生产 `GET /api/admin/evals/[run_id]` 人工核对一条 20 位值。部署的 PostgREST 版本未在本规格核实（§17）。
 
 ### 5.3 `replay_consistency`
 
@@ -291,13 +292,16 @@ export function compareDecimal(left: string, right: string, rel: string): {passe
 
 ```jsonc
 {"case_id": "…", "request": {"issuer": {"market":"US","cik":"320193"}, "concepts": ["revenue"], "asOf": "2024-06-30", "durations": ["12M"]},
- "setup": {"fixture_manifest": [{"path": "fixtures/edgar/CIK0000320193.trimmed.json", "sha256": "…"}],
+ "setup": {"initial_state": "empty_after_migrations",
+           "issuer_seed": {"path": "fixtures/issuers/plan2-seed.json", "sha256": "…"},         // issuers / issuer_securities 的种子（规格一 load-sec 夹具）
+           "fixture_manifest": [{"path": "fixtures/edgar/CIK0000320193.trimmed.json", "sha256": "…"}],
            "sync_order": ["CIK0000320193.trimmed.json"], "today": "2026-11-20", "mapping_gen": 3, "formula_version": "v1",
-           "quarantine_resolutions": [], "config_sha256": "<src/lib/facts/concepts.ts + units.ts + rules.ts 的联合 sha256>"},
+           "quarantine_resolutions": [], "config_sha256": "<src/lib/facts/concepts.ts + units.ts + rules.ts 的联合 sha256>",
+           "setup_sha256": "<以上全部字段规范 JSON 的 sha256>"},
  "recorded": {"code_version": "<40 hex>", "at": "…"},
  "expected": {"projection_hash": "…", "projection": {…}}}
 ```
-- 执行：规格二离线集成测试按 `setup` 重建库（校验夹具 sha256 后装载、固定 `today`、按序同步、应用列出的隔离处置），再以库路径算投影。`setup` 任一项与实际不符 → `read_error(setup_mismatch)`。
+- 执行：规格二离线集成测试按 `setup` 重建库（迁移后的空库、装载 `issuer_seed`、校验夹具 sha256 后装载、固定 `today`、按序同步、应用列出的隔离处置），再以库路径算投影。`setup` 任一项与实际不符（含 `setup_sha256` 重算不等）→ `read_error(setup_mismatch)`。
 - 投影（`src/lib/evals/projections/<module>.ts`）：facts 行 → `{concept, period_start, period_end, duration, consolidation, unit, value_text, available_date, source_ref, disclosure_seq, is_current, is_revision}`，按 `(concept, period_start, period_end, consolidation, unit, available_date, source_ref)` 排序；metrics → `{metric, period_start, period_end, duration, basis, formula_version, value, unit, inputs:[{concept, period_end, source_ref}]}`；macro → `{snapshot:{region, as_of, methodology_version, primary_state, secondary_state, margin, coverage}, scores, contributions(按 series_id)}`。
 - 结果：`identical`；否则查账本 → `explained_diff` / `unexplained_diff`。frozen 没有 `data_drift`。
 - 录制 `record-replay.ts --mode frozen --case <id>`：**只能新增**案例；已有案例的 `expected` 改变必须 `--supersede` 并引用一条已批准的账本条目，否则拒绝（`replay_rerecord_refused`）。测试：对一个当前 `unexplained_diff` 的案例执行重录 → 拒绝。
@@ -317,25 +321,27 @@ export function compareDecimal(left: string, right: string, rel: string): {passe
  "changed_fields": ["facts[revenue/…].value_text", "facts[revenue/…].disclosure_seq"],   // 必须覆盖该案例的全部变化字段
  "before_hash": "…", "after_hash": "…",
  "from_code": "…", "to_code": "…",                     // frozen：录制与当前 evaluator_code_version；live：录制与当前 evaluator_code_version
- "from_state_rev": 12, "to_state_rev": 15,             // live 必填；frozen 用 setup.config_sha256 前后值
+ "from_state_rev": 12, "to_state_rev": 15,             // live 必填
+ "from_setup_sha256": "…", "to_setup_sha256": "…",     // frozen 必填（§5.3.1 setup_sha256）
  "reason_code": "quarantine_resolved",                 // late_filing | quarantine_resolved | mapping_gen_upgrade | formula_version_change | ticker_reassignment | bug_fixed
  "evidence": {"quarantine_id": "…"},                   // bug_fixed: {"pr": 123, "regression_test": "<file>::<name>"}
  "added_by": "<id>", "added_at": "…", "approved_by": "<id>", "approval_ref": "<PR review URL>", "approved_at": "…"}
 ```
-命中条件：`case_id, mode, before_hash, after_hash, from_code, to_code`（live 另加 `from_state_rev, to_state_rev`）全等，且 `changed_fields` 等于实际变化字段集合。部分覆盖 → `unexplained_diff(partial_ledger)`。`approved_by ≠ added_by`，`approval_ref` 必填。
+命中条件：`case_id, mode, before_hash, after_hash, from_code, to_code` 加 mode 专属对（live：`from_state_rev, to_state_rev`；frozen：`from_setup_sha256, to_setup_sha256`）全等，且 `changed_fields` 等于实际变化字段集合。部分覆盖 → `unexplained_diff(partial_ledger)`。`approved_by ≠ added_by`，`approval_ref` 必填。
 
 ### 5.4 `reference_regression`
 
 - 样本：`fixtures/reference/chaosai/macro-strategy.json` 36 格（§2），每条 `{sample_id, doc, doc_sha256, line, page_url, page_sha256, captured_at, as_displayed, parsed_value, parsed_unit, their_declared_source, our_target:{series_id, period_end, which: 'latest'|'previous'}, canary: false}`；LPR 行与资产价格记 `unavailable`。行业/公司页需 owner 决定是否补抓并**保留页面字节**（§16 D5）。
 - 结果类型 `ReferenceResult = {total, within, beyond_explained, beyond_unexplained, unavailable}`，运行时用 schema 校验：键集合**严格相等**，值为非负整数；其他对象一律拒绝（结构类型的"多余属性"在运行时被拒）。写入只经 `writeReferenceSummary(run_id, result)`。
-- 隔离测试：(a) 运行前后 `financial_facts`、`financial_metrics`、`filings`、`macro_observations`、`macro_snapshots`、`macro_regime_results` 的 `md5(string_agg(t::text, '|' order by <pk>))` 相等；(b) 用 `ReadDeps` 对象尝试调用任何写方法（反射遍历属性，断言没有 `insert/update/upsert/store`）；(c) **哨兵**：样本文件含一条 `canary: true`、`parsed_value='918273645.5'` 的记录，运行后断言该字符串不出现在 `/api/admin/evals*` 响应体、公开 `.md`、`dq_eval_runs.summary`、捕获的服务端日志中；哨兵记录永远 `unavailable`，不计入样本。
+- 隔离测试：(a) 运行前后 `financial_facts`、`financial_metrics`、`filings`、`macro_observations`、`macro_snapshots`、`macro_regime_results` 的 `md5(string_agg(t::text, '|' order by <pk>))` 相等；(b) 用 `ReadDeps` 对象尝试调用任何写方法（反射遍历属性，断言没有 `insert/update/upsert/store`）；(c) **哨兵**：样本文件含一条 `canary: true`、`parsed_value='918273645.5'`、`our_target.series_id='__canary__'` 的记录；测试用的读适配器对 `__canary__` 返回固定值 `1`，于是哨兵走完整的 `beyond_unexplained` 比较路径；运行后断言该字符串不出现在 `/api/admin/evals*` 响应体、公开 `.md`、`dq_eval_runs.summary`、捕获的服务端日志中（只允许出现在报告 `cases[]`）。生产没有 `__canary__` 序列，哨兵 → `unavailable`；哨兵不计入 `population`。(d) **拒写**：集成测试用 `reference_regression` 实际持有的 anon 客户端尝试 `insert dq_eval_runs` 与 `update macro_observations`，断言被 RLS/权限拒绝（真实的拒写，不只是反射）。
 - 比较 `rel 0.01`；超差必须有账本条目 `{sample_id, their_value, our_value, our_run_id, reason_code ∈ {membership_pointintime, aggregation_method, restatement, unit_or_basis, their_placeholder, their_proxy, their_stale_snapshot, unknown}, evidence:{type:'computation'|'document', ref}, added_by, approved_by, approval_ref}`，`their_value/our_value` 必须等于本次比较的两值。
 - 门槛：`ci` 不跑；`report` 下 `beyond_unexplained = 0` → `pass`，`evidence_class='comparison'`。
 
 ### 5.5 `dual_source`
 
 `pairs.ts`：`{pair_id, module, left:{source, upstream}, right:{source, upstream}, independence: 'independent_publication'|'same_upstream_independent_extraction'|'same_feed', key:{concepts, period_end_from, period_end_to, consolidation}, tolerance:{rel:'0.005'}}`。
-- 观测键 = `(issuer, concept, period_start, period_end, duration, consolidation, unit)`；每边取**各自**对该期的披露中 `available_date <= asOf` 的当前值，`asOf = max(两边该键首次披露的 available_date)`（两边都已可见）；报告记两边的 `source_ref`。
+- 观测键 = `(issuer, concept, period_start, period_end, duration, consolidation, unit)`；每边取**各自**对该期的披露中 `available_date <= asOf` 的当前值，`asOf = max(两边该键首次披露的 available_date)`（两边都已可见）；报告记两边的 `fact_id, source_ref, raw_hash, available_date`（特权运行按 §5.1.4 解析两边快照）。
+- "已处置"的判定：对应的 `dq_quarantine` 项 `natural_key` 必须等于本观测键的规范串，`status ∈ {resolved_accept, resolved_reject}`，且项的 `detail.chosen_fact_ids`（若有）包含本次比较所用的 `fact_id` 之一；否则该 fail 仍计入。
 - `independence='same_feed'` → `evidence_class='adapter_check'`，发布清单不接受为双源证据。
 - 门槛：`max_fail=0`，其中"每个 `fail` 都有对应的 `dq_quarantine` 项（计划三生产者写）且该项已处置"视为已处理（`detail.disposition`），已处理的 fail 不计入；趋势指标 `pass/(pass+fail)` 只在报告里展示（规格一 §9 的 95% 作为告警线，不是门槛）。
 
@@ -502,7 +508,7 @@ JSON：`run_id, kind, module, mode, privileged, artifact_class, set{id,version,s
  "dispositions":[{"file":"03-disposition.md","covers_rounds":[1,2]}],
  "open":{"owner":["…"],"verify":["…"]},"final_verdict":"…"}
 ```
-`validate.ts --audit`：文件存在；每轮每个编号在某份处置表出现；处置表里 `ACCEPT` 条目有 `implemented_in`（提交或"本稿 §x"）；`open` 与处置表一致；`target_git_ref='uncommitted'` 的轮次标 `unverified_target: true`（历史目录允许，但发布清单要求最后一轮 `target_git_ref` 是提交）。既有 `2026-11-04-data-foundation-2` 目录只补 `index.json`。
+`validate.ts --audit`：文件存在；每轮每个编号在某份处置表出现；处置表里 `ACCEPT` 条目有 `implemented_in`（提交或"本稿 §x"）；`open` 与处置表一致；`target_git_ref='uncommitted'` 的轮次标 `unverified_target: true`（历史目录允许）。新规则：运行 Codex 的脚本 `scripts/evals/codex-audit.ts` 先要求被审文件已提交（否则拒绝），把 `target_sha256` 与提交写入 `index.json`，审计字节因此可由 git 取回；发布清单要求最后一轮 `target_git_ref` 是提交，且不存在 P1/P2 发现处于 `OPEN-verify` 或缺 `implemented_in` 的 `ACCEPT`。既有 `2026-11-04-data-foundation-2` 目录只补 `index.json`。
 
 ---
 
@@ -516,7 +522,7 @@ JSON：`run_id, kind, module, mode, privileged, artifact_class, set{id,version,s
  "gold_approval":"enforced",
  "evidence":{
    "official_reconciliation":{"run_id":"…","report":"docs/evals/…json"},
-   "replay_frozen":{"ci_run_url":"<GitHub Actions run>","report":"reports/evals/<run_id>.json 的仓库副本 docs/evals/…"},
+   "replay_frozen":{"ci_run_url":"<GitHub Actions run>","report":"docs/evals/…/facts-replay_frozen-<run8>.json","report_sha256":"…","ci_check":"manual"},
    "replay_live":{"run_id":"…","report":"…"},
    "dual_source":{"run_id":"…"} | {"not_applicable":{"reason":"…","approved_by":"owner","at":"…"}},
    "reference_regression":{"run_id":"…"} | {"not_applicable":{…}},
@@ -525,7 +531,16 @@ JSON：`run_id, kind, module, mode, privileged, artifact_class, set{id,version,s
  "waivers":[{"item":"gold_approval","reason":"…","approved_by":"owner","at":"…"}]}
 ```
 
-校验器对每项**打开文件重算**：报告 sha256 = `dq_eval_runs.report_sha256`（特权运行时经 service-role 查；无库访问时记 `db_check:'skipped'` 且清单不通过）；由 `cases[]` 重算 `summary` 与 `gate`，必须 `pass`；`mode='report'`、`privileged=true`（official 与 live）、`dirty=false`、`provenance_kind≠synthetic`、`set.sha256` 等于 `lock.json`、`evaluator_code_version == release_commit`（`replay_live` 允许 ≤ 7 天内的提交）、`evidence_class='truth'`（dual_source 不接受 `adapter_check`）、`scope.markets` ⊆ 集覆盖的市场；专家记录与审计索引按 §8/§9 校验且 `population.evaluated_run_id` 等于 `official_reconciliation.run_id`。
+校验器对每项**打开文件重算**，按证据种类分别认证：
+
+| 证据 | 认证 | 必须满足 |
+|---|---|---|
+| `official_reconciliation`、`replay_live`、`dual_source` | `mode='report'`、`privileged=true`，报告 sha256 = `dq_eval_runs.report_sha256`（service-role 查；无库访问 → 清单不通过） | `evaluator_code_version == release_commit`；official 的报告 `provenance.verified={artifacts:true, sources:true}`；`evidence_class='truth'` |
+| `replay_frozen` | `mode='ci'`；仓库副本 `docs/evals/<date>/facts-replay_frozen-<run8>.json` 的 sha256 等于清单 `report_sha256`；`ci_run_url` 指向该提交的成功 CI 运行（校验器记录 URL，运行与副本的一致性由 CI 在 job summary 打印的 sha256 人工比对，清单记 `ci_check:'manual'`） | `evaluator_code_version == release_commit`、`dirty=false` |
+| `reference_regression` | `mode='report'`、**`privileged=false`**（运行只持 anon 读取器，不加载 service 密钥，§5.4）；报告 sha256 由**校验器自己的** service-role 连接对 `dq_eval_runs.report_sha256` 核对（不继承生产者的特权要求） | `evidence_class='comparison'`（接受）；`gate='pass'` |
+| `expert_sampling`、`model_audit` | §8、§9 校验 | `population.evaluated_run_id == official_reconciliation.run_id`；审计最后一轮 `target_git_ref` 为提交且无未实施/未核实的 P1/P2 |
+
+共同规则：由 `cases[]` 重算 `summary` 与 `gate`，必须 `pass`；`provenance_kind≠synthetic`；`set.sha256` 等于 `lock.json`；`scope.markets` 等于集内 subject 市场的集合（不多不少），`scope.data_state_rev_min` ≤ official 报告的 `environment.db_state_rev`；`freshness`：校验器读 `dq_freshness`，模块数据集在 `prepared_at` 时为 `fresh`（无库访问 → 不通过）。**没有**按提交时间的宽限：任何证据的 `evaluator_code_version` 都必须等于 `release_commit`（在线回放走库路径，重跑成本低）。
 不可豁免：`official_reconciliation`、`replay_frozen`、`model_audit`、`expert_sampling`（首次发布）。可豁免（写 `not_applicable`）：`dual_source`（无第二来源）、`reference_regression`（无样本）、`replay_live`（首次发布前无生产数据）。`gold_approval='process'` 需要 `waivers` 条目。清单不替代 owner 上线决定。
 
 ---
@@ -535,7 +550,7 @@ JSON：`run_id, kind, module, mode, privileged, artifact_class, set{id,version,s
 ### 11.1 F3 → `extraction_gold`
 
 标注（受限集）：`{documents:[{document_sha256, page_count, bbox_space:'pdf_points_top_left'}], labels:[{label_id, document_sha256, field, occurrence, value_type:'text'|'decimal'|'date'|'enum', value, locator:{page, bbox:[x0,y0,x1,y1]}, recorded_by, reviewed_by}]}`；预测：`{document_sha256, fields:[{field, value, page, bbox}]}`。
-匹配：按 `(document_sha256, field)` 分组，组内一对一匹配——先按值相等（`decimal` 用 `compareDecimal rel 0`；`text` 规范化空白/全半角；`date` ISO）配对，再按 bbox IoU 降序配对剩余；配对成功且 `page` 相等且 IoU ≥ 0.5 → TP；值相等但定位不符 → `FP_citation` + FN；值不等 → FP + FN；未配对预测 → FP；未配对标注 → FN。字段级 P/R，支持数为 0 的字段不计入并列出；宏平均；门槛 `min(P_f, R_f) ≥ 0.95`（总纲 §3.5）；附一份手算的对抗夹具（含重复值、错页、多出现）。
+匹配：按 `(document_sha256, field)` 分组，组内一对一匹配，分两步且顺序确定。第一步只考虑**同页、IoU ≥ 0.5、值相等**的（标注, 预测）对（`decimal` 用 `compareDecimal rel 0`；`text` 规范化空白/全半角；`date` ISO），在这些合格对中求**最大匹配数**（二分图最大匹配；多解时按 IoU 降序、再按 bbox 字典序确定性打破平手），匹配到的即 TP；第二步对剩余标注与预测，按值相等优先、再按 IoU 降序配对，用于分类错误。第二步配对的：值相等但定位不符 → `FP_citation`（计入 FP）+ FN；值不等 → FP + FN；未配对预测 → FP；未配对标注 → FN。字段级 `P_f = TP/(TP+FP)`（预测数为 0 且支持数 > 0 时 `P_f = 0`）、`R_f = TP/(TP+FN)`；支持数 0 的字段 `skipped(zero_support)`；案例 = 字段（§3.3），门槛 `P_f ≥ 0.95 且 R_f ≥ 0.95`（总纲 §3.5）；附一份手算的对抗夹具（含同值多出现、错页、零预测），一条"同值跨页、坐标交叉"的两页夹具（两页各有一个同值标注与一个同页预测，跨页 IoU 高于同页 IoU，正确结果必须是两个 TP），以及一条"全部文档成功解析但 TP=0"的夹具必须 `gate='fail'`。
 
 ### 11.2 规格二与计划三
 
@@ -569,15 +584,15 @@ Claude Design 画布待设计清单：1. `/admin/dq` 评测运行区块；2. 运
 ### 13.1 单元（`src/lib/evals/*.test.ts`）
 
 - `compare.test.ts`：整数、20 位整数、18 位小数、负数、`rel 0`、分母 1、`relDiff` 截断；属性测试 200 次：自反 pass、容差单调。
-- `gold.test.ts`：§4 每条规则一条反例（含 `target.unit` 缺失、`scale` 非法、`sha256` 缺失、集级字段变化无 version bump）；`--gold-diff` 用两份内存树（案例消失、改名、阈值变化、`recorders.json` 变化、整集删除）；对 `fixtures/gold/**` 通过。
+- `gold.test.ts`：§4 每条规则一条反例（含 `target.unit` 缺失、`scale` 非法、`sha256` 缺失、集级字段变化无 version bump）；`--gold-diff` 用两份内存树（案例消失、改名、阈值变化、`recorders.json` 变化、整集删除），再用临时 git 仓库（`git init` + 三个提交，模拟多提交推送与 `event.before`）跑真实的 `git diff` 路径；对 `fixtures/gold/**` 通过。
 - `kinds/official.test.ts`（内存适配器）：§3.3 每种结果各一；变异：改返回值 → `fail`；去 `raw_hash` → `provenance_incomplete`；去必需案例 → `incomplete`；去可选案例至比例以下 → `incomplete`；`population=0` → `incomplete`。
 - `kinds/replay.test.ts`：投影稳定；frozen/live 各态；账本命中六元组、`changed_fields` 不全 → `partial_ledger`、`approved_by == added_by` 拒绝、`after_hash` 变后旧条目失效；重录拒绝；`setup_mismatch`。
 - `kinds/reference.test.ts`：`ReadDeps` 无写方法；`ReferenceResult` 多键/缺键/负数拒绝；哨兵不出现在摘要与 `.md`；`unknown`/无条目/值不等的条目 → `beyond_unexplained`。
 - `kinds/dual-source.test.ts`：键含 `period_start/duration`；`asOf` 取两边最大；`same_feed` → `adapter_check`；已处置 fail 不计入。
-- `kinds/extraction.test.ts`：手算对抗夹具。
+- `kinds/extraction.test.ts`：手算对抗夹具；同值跨页坐标交叉两页夹具 → 两个 TP；TP=0 全解析语料 → `fail`；零预测正支持 → `P_f=0`。
 - `report.test.ts`：两次渲染一致；受限报告公开侧只摘要；`environment` 无凭据。
 - `store.test.ts`：顺序、23505 内容比对、终态更新命中 0 的两种情况、resume 的 sha 校验。
-- `validate.test.ts`：专家（重算、80% 阈、follow-up 关闭）、审计（编号覆盖、`implemented_in`）、清单（重算 gate、`ci` 运行拒绝、合成/脏/错提交拒绝、`adapter_check` 拒绝、豁免规则）、`--redact` 各模式。
+- `validate.test.ts`：专家（重算、80% 阈、follow-up 关闭）、审计（编号覆盖、`implemented_in`、未提交目标）、清单（按证据种类认证：frozen 的 `ci` 模式与副本哈希接受、official 的 `ci` 拒绝、reference 的 `comparison` 接受且 `privileged=true` 的 reference 运行拒绝、`adapter_check` 拒绝、合成/脏/非发布提交拒绝、`scope.markets` 不等于集市场拒绝、新鲜度不 fresh 拒绝、official 未 `verified` 拒绝、豁免规则）、`--redact` 各模式。
 - `route-equivalence.test.ts`：内存 DB 上投影(库) == 投影(路由响应)。
 
 ### 13.2 数据库 `evals-store.integration.test.ts`（critical，不依赖规格二表）
@@ -589,8 +604,8 @@ Claude Design 画布待设计清单：1. `/admin/dq` 评测运行区块；2. 运
 - 规格二夹具同步后：`runGoldSet(plan2-us)` → `pass`；用装饰器包 `pgFactsDb` 读结果改一个值 → `fail`；装饰器去掉一个必需案例 → `incomplete`；三条经同一入口并断言退出码。
 - 重述：经 `beginRun → stageFilings → stageFacts → publishRun` 发布更晚的合成 10-K/A 改同键值；`binding='document'` 案例仍 `pass`；同案例 `binding='current'` 副本、`asOf` = 合成文件可得日 → `fail`；特权 `readNonVisible` 对被隔离行返回 `quarantined` → `not_visible` → `incomplete`。
 - `replayFrozen` 全 `identical`；篡改一个夹具字节 → `setup_mismatch`。
-- `reference_regression` 前后六表哈希相同；哨兵缺席。
-A 股部分随 CN 夹具进入。
+- `reference_regression` 前后 `financial_facts/financial_metrics/filings` 三表哈希相同；哨兵缺席；拒写测试（§5.4 (d)）。
+A 股部分随 CN 夹具进入。宏观三表（`macro_observations/macro_snapshots/macro_regime_results`）的同类断言在 `evals-reference.integration.test.ts`（critical）里，随 F6-C2 在宏观工作台迁移落地后创建；宏观迁移是 F6-C2 的前置。
 
 ### 13.4 清单规则
 
@@ -625,11 +640,11 @@ A 股部分随 CN 夹具进入。
 |---|---|---|---|
 | F6-A1 契约与校验 | `fixtures/gold/{lock,recorders}.json`、`src/lib/evals/{types,gold,compare,report}.ts`、`validate.ts`（gold、lock、gold-diff、redact、expert、audit、manifest）、`hash-source.ts`、单测、`ci.yml`（`fetch-depth: 0`、`--gold-diff`、`reports/evals/**`）、既有审计目录 `index.json` | §13.1 的 compare/gold/report/validate 绿 | 3.5 |
 | F6-A2 存储 | 迁移、types、`store.ts`、`evals-store.integration.test.ts` | `test:db`、`test:migrations` 绿 | 1.5 |
-| F6-B1 官方对账与接入 | `adapters/facts.ts`（含特权读）、`kinds/official.ts`、`runGoldSet`、`run.ts`、`evals-facts.integration.test.ts`、规格二断言替换 | §1.1 三条路径；对生产一次特权 `report` 并提交 | 3 |
+| F6-B1 官方对账与接入 | `adapters/facts.ts`（含特权读、`--verify-artifacts/--verify-sources`）、`kinds/official.ts`、`runGoldSet`、`run.ts`、`codex-audit.ts`、`evals-facts.integration.test.ts`、规格二断言替换 | §1.1 三条路径；对生产一次特权 `report` 并提交 | 3 |
 | F6-B2 回放 | `projections/facts.ts`、`kinds/replay.ts`、`record-replay.ts`、`facts.frozen.json`（≥ 10）、`facts.live.json`、账本、`route-equivalence.test.ts` | frozen 全 identical；live 一次 | 2.5 |
 | F6-B3 发布清单与专家记录 | 首份 `facts-release-manifest.json`、专家记录模板与首次记录 | `--manifest` 通过 | 1 |
 | F6-C1 管理区块 | `/api/admin/evals`、区块与抽屉、i18n | parity、白名单、哨兵测试 | 1.5 |
-| F6-C2 双源与对照 | `pairs.ts`、`kinds/dual-source.ts`、`kinds/reference.ts`、`macro-strategy.json`（36 格 + 哨兵） | 隔离测试；宏观落地后一次对照 | 2 |
+| F6-C2 双源与对照（前置：宏观工作台迁移已落地） | `pairs.ts`、`kinds/dual-source.ts`、`kinds/reference.ts`、`macro-strategy.json`（36 格 + 哨兵）、`evals-reference.integration.test.ts` | 隔离与拒写测试；一次对照 | 2 |
 | F6-后续 | cron、`extraction_gold`、`judgment_calibration` | 各自规格 | — |
 
 合计约 15 人日（A 5、B 6.5、C 3.5），不含录入、专家与规格二。
