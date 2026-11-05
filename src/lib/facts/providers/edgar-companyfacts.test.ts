@@ -1,10 +1,10 @@
 // src/lib/facts/providers/edgar-companyfacts.test.ts
 import {readFileSync} from 'node:fs';
-import {describe,expect,it,vi} from 'vitest';
+import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import type {Budget,ConceptDef} from '../types';
 import {FACT_CONCEPTS} from '../concepts';
 import {ProviderError,rawHashOf,snapshotOf,stringifyPreservingNumbers} from './shared';
-import {companyFactsUrl,fetchCompanyFacts,parseCompanyFacts} from './edgar-companyfacts';
+import {companyFactsUrl,fetchCompanyFacts,parseCompanyFacts,resetSecPacing} from './edgar-companyfacts';
 import {scanJsonNumbers} from '../json-numbers';
 
 const budget=(ms:number):Budget=>({remainingMs:()=>ms,signal:new AbortController().signal});
@@ -18,10 +18,12 @@ const assets=FACT_CONCEPTS.find(c=>c.id==='total_assets')!;
 type FetchFn=(input:RequestInfo|URL,init?:RequestInit)=>Promise<Response>;
 
 describe('fetchCompanyFacts',()=>{
+ beforeEach(()=>{resetSecPacing();});
+ afterEach(()=>{vi.useRealTimers();});
  const ok=()=>new Response('{"cik":320193,"facts":{}}',{status:200,headers:{'content-length':'25'}});
  it('backs off 1/2/4/8 s on 429/503 and keeps the 120 ms pace, then returns a sha256-stamped snapshot',async()=>{
-  const waits:number[]=[];const sleep=vi.fn(async(ms:number)=>{waits.push(ms);});
   let t=1_000_000;const now=()=>t;
+  const waits:number[]=[];const sleep=vi.fn(async(ms:number)=>{waits.push(ms);t+=ms;});
   let attempts=0;   // own counter: an initializer that reads `fetch.mock.calls` refers to the variable being declared (TS7022/TS7024, round-2 #5)
   const fetch=vi.fn<FetchFn>(async()=>{attempts++;t+=10;return attempts<3?new Response('',{status:attempts===1?429:503}):ok();});
   const s=await fetchCompanyFacts('0000320193',budget(300_000),{fetch,sleep,now,userAgent:'ua'});
@@ -153,9 +155,81 @@ describe('parseCompanyFacts (landed-code additions)',()=>{
   const r=parseCompanyFacts(doc({'us-gaap':{Revenues:{units:{USD:[entry({start:'2022-09-25',end:'2023-09-30',val:'abc'}),entry({start:'2022-02-30',end:'2023-09-30',val:1})]}}}}),{concepts:[revenue],sinceYear:2019});
   expect(r.candidates).toEqual([]);expect(r.skipped).toContainEqual({reason:'entry_shape',n:2});
  });
- it('raw_hash is sha256(snapshot.sha256 + newline + locator)',()=>{
+ it('raw_hash is sha256(snapshot.sha256 + newline + row-level locator with the array index)',()=>{
   const s=doc({'us-gaap':{Revenues:{units:{USD:[entry({start:'2022-09-25',end:'2023-09-30',val:1})]}}}});
   const r=parseCompanyFacts(s,{concepts:[revenue],sinceYear:2019});
-  expect(r.candidates[0].rawHash).toBe(rawHashOf(s.sha256,'facts.us-gaap.Revenues.units.USD[accn=0000320193-23-000106,start=2022-09-25,end=2023-09-30]'));
+  expect(r.candidates[0].rawHash).toBe(rawHashOf(s.sha256,'facts.us-gaap.Revenues.units.USD[0](accn=0000320193-23-000106,start=2022-09-25,end=2023-09-30)'));
+ });
+});
+
+describe('review follow-up: selection, odd durations, locators, evidence',()=>{
+ const base={start:'2022-09-25',end:'2023-09-30'};
+ const P={concepts:[revenue],sinceYear:2019};
+ it('an undated higher-priority row claims its slot: it parks as missing_available_date and the lower tag does not substitute',()=>{
+  const s=doc({'us-gaap':{Revenues:{units:{USD:[{...entry({...base,val:1,frame:'CY2023'}),filed:undefined}]}},RevenueFromContractWithCustomerExcludingAssessedTax:{units:{USD:[entry({...base,val:2})]}}}});
+  const r=parseCompanyFacts(s,P);
+  expect(r.candidates).toEqual([]);
+  expect(r.missingAvailableDate).toEqual([expect.objectContaining({accn:'0000320193-23-000106',tag:'us-gaap:Revenues',start:base.start,end:base.end,unit:'USD',value:'1',frame:'CY2023',snapshot_sha256:s.sha256,locator:'facts.us-gaap.Revenues.units.USD[0](accn=0000320193-23-000106,start=2022-09-25,end=2023-09-30)'})]);
+ });
+ it('same tag, one undated value 1 and one dated value 2 → ambiguous (either order), not a silent 2',()=>{
+  const undated={...entry({...base,val:1}),filed:undefined},dated=entry({...base,val:2});
+  for(const list of [[undated,dated],[dated,undated]]){
+   const r=parseCompanyFacts(doc({'us-gaap':{Revenues:{units:{USD:list}}}}),P);
+   expect(r.candidates).toEqual([]);expect(r.missingAvailableDate).toEqual([]);
+   expect(r.ambiguous).toHaveLength(1);expect(r.ambiguous[0].candidates.map(c=>c.value).sort()).toEqual(['1','2']);
+  }
+ });
+ it('odd duration: disagreement → ambiguous; agreement → every entry parked; same result in both input orders',()=>{
+  const odd={start:'2023-01-01',end:'2023-05-15'};
+  for(const [a,b] of [[1,2],[2,1]]){
+   const r=parseCompanyFacts(doc({'us-gaap':{Revenues:{units:{USD:[entry({...odd,val:a}),entry({...odd,val:b})]}}}}),P);
+   expect(r.oddDuration).toEqual([]);expect(r.ambiguous).toHaveLength(1);expect(r.ambiguous[0].candidates.map(c=>c.value).sort()).toEqual(['1','2']);
+  }
+  const same=parseCompanyFacts(doc({'us-gaap':{Revenues:{units:{USD:[entry({...odd,val:1}),entry({...odd,val:1,accn:'0000320193-23-000106'})]}}}}),P);
+  expect(same.oddDuration).toHaveLength(2);expect(same.oddDuration.every(c=>(c as {periodDays?:number}).periodDays===134)).toBe(true);
+  expect(new Set(same.oddDuration.map(c=>c.rawHash)).size).toBe(2);
+ });
+ it('every source row has a distinct rawHash and exposes its locator', ()=>{
+  const r=parseCompanyFacts(doc({'us-gaap':{Revenues:{units:{USD:[entry({...base,val:1}),entry({...base,val:1,filed:'2024-01-01'})]}}}}),P);
+  expect(r.candidates).toHaveLength(1);
+  expect((r.candidates[0] as {locator?:string}).locator).toContain('[0](accn=');
+ });
+ it('unit_not_allowed is counted per entry', ()=>{
+  const r=parseCompanyFacts(doc({'us-gaap':{Revenues:{units:{shares:[entry({...base,val:1}),entry({...base,val:2})]}}}}),P);
+  expect(r.skipped).toContainEqual({reason:'unit_not_allowed:us-gaap:Revenues:shares',n:2});
+ });
+});
+
+describe('fetchCompanyFacts: pacing and body failures',()=>{
+ beforeEach(()=>{resetSecPacing();});
+ afterEach(()=>{vi.useRealTimers();});
+ it('12 concurrent calls start at least 120 ms apart',async()=>{
+  vi.useFakeTimers();
+  const starts:number[]=[];
+  const fetch=vi.fn<FetchFn>(async()=>{starts.push(Date.now());return new Response('{"cik":1,"facts":{}}',{status:200});});
+  const calls=Array.from({length:12},()=>fetchCompanyFacts('0000000001',budget(300_000),{fetch,userAgent:'ua'}));
+  await vi.advanceTimersByTimeAsync(5000);
+  await Promise.all(calls);
+  expect(starts).toHaveLength(12);
+  for(let i=1;i<starts.length;i++)expect(starts[i]-starts[i-1]).toBeGreaterThanOrEqual(120);
+ });
+ it('a body failure is retried like a network error and ends as sec_unavailable; too-large stays non-retryable',async()=>{
+  const sleep=async()=>{};
+  const broken=()=>new Response(new ReadableStream({start(c){c.error(new Error('socket hang up'));}}),{status:200});
+  const failing=vi.fn<FetchFn>(async()=>broken());
+  await expect(fetchCompanyFacts('0000000001',budget(300_000),{fetch:failing,sleep})).rejects.toMatchObject({code:'sec_unavailable'});
+  expect(failing).toHaveBeenCalledTimes(5);
+  let n=0;
+  const flaky=vi.fn<FetchFn>(async()=>(++n<2?broken():new Response('{"cik":1,"facts":{}}',{status:200})));
+  await expect(fetchCompanyFacts('0000000001',budget(300_000),{fetch:flaky,sleep})).resolves.toMatchObject({meta:{http_status:200}});
+  expect(flaky).toHaveBeenCalledTimes(2);
+  const big=vi.fn<FetchFn>(async()=>new Response('{}',{status:200,headers:{'content-length':String(51*1024*1024)}}));
+  await expect(fetchCompanyFacts('0000000001',budget(300_000),{fetch:big,sleep})).rejects.toMatchObject({code:'snapshot_too_large'});
+  expect(big).toHaveBeenCalledTimes(1);
+ });
+ it('a per-request timeout (AbortError) is wrapped as sec_unavailable, not a deadline abort',async()=>{
+  const timeout=vi.fn<FetchFn>(async()=>{throw new DOMException('The operation was aborted','AbortError');});
+  await expect(fetchCompanyFacts('0000000001',budget(300_000),{fetch:timeout,sleep:async()=>{}})).rejects.toMatchObject({code:'sec_unavailable',name:'SyncError'});
+  expect(timeout).toHaveBeenCalledTimes(5);
  });
 });

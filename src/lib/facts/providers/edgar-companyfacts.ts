@@ -6,6 +6,14 @@
 // in catalogue order with an entry wins and lower tags only fill missing periods, same-tag disagreement
 // → ambiguous_value (frame only there), filings.period_end = max end of the accn's duration entries,
 // fy/fp only on filings.
+// Deviations from the first plan text (Task 10 review follow-up): (1) tag selection and ambiguity run over all
+// entries before availability filtering; an undated higher-priority row claims its slot and parks as
+// missing_available_date (its lower tags never substitute). (2) raw_hash locator is ROW level, not group level
+// (spec §4.7 says group): facts.<tax>.<tag>.units.<rawUnit>[<array index>](accn=…,start=…,end=…); the string is
+// also exposed as `locator` on candidates/ambiguous/odd entries and in missingAvailableDate payloads.
+// (3) odd durations: disagreement → ambiguous, otherwise every entry is parked. (4) SEC pacing reserves request
+// slots synchronously (concurrency-safe). (5) The body download sits inside the retry boundary. (6) Filings
+// of other forms (8-K, DEF 14A, …) become formType 'other' filings and are kept as disclosures, by design.
 import type {Budget,ConceptDef,Duration,FactCandidate,FilingCandidate,FormType,ParseResult,RawSnapshot} from '../types';
 import {FACT_CONCEPTS} from '../concepts';
 import {EDGAR_NUMBER_SCHEMA,canonicalDecimal,decodeWithSchema,scanJsonNumbers} from '../json-numbers';
@@ -22,7 +30,16 @@ export const SEC_MIN_INTERVAL_MS=120;
 export const COMPANYFACTS_SCHEMA:NumberSchema=EDGAR_NUMBER_SCHEMA;
 const BACKOFF_MS=[1000,2000,4000,8000];
 const RESERVE_MS=20_000;
-let lastSecRequestAt=0;   // module-level: one pace across every issuer handled by this process
+let nextSlotAt=0;   // module-level: one pace across every issuer and every concurrent caller of this process
+/** Test hook: forget the reserved pacing slots (tests use fake clocks). */
+export const resetSecPacing=()=>{nextSlotAt=0;};
+/** Reserve the next request-start slot synchronously (so concurrent callers queue in call order), then wait for it. */
+async function paceSlot(now:()=>number,wait:typeof sleep,signal:AbortSignal){
+ const at=Math.max(now(),nextSlotAt);
+ nextSlotAt=at+SEC_MIN_INTERVAL_MS;
+ const gap=at-now();
+ if(gap>0)await wait(gap,signal);
+}
 
 export interface FetchOptions{fetch?:typeof fetch;userAgent?:string;sleep?:typeof sleep;now?:()=>number}
 
@@ -32,28 +49,31 @@ export async function fetchCompanyFacts(cik10:string,budget:Budget,opts:FetchOpt
  const ua=opts.userAgent??process.env.EDGAR_USER_AGENT??DEFAULT_USER_AGENT;
  const url=companyFactsUrl(cik10);
  for(let attempt=0;;attempt++){
+  if(budget.remainingMs()-RESERVE_MS<=0)throw new ProviderError('sec_unavailable','budget_exhausted');
+  try{await paceSlot(now,wait,budget.signal);}catch{throw new ProviderError('sec_unavailable','budget_aborted');}
+  // re-check after the pacing wait: the budget may have run out or been cancelled while queued
   const timeoutMs=Math.min(60_000,budget.remainingMs()-RESERVE_MS);
-  if(timeoutMs<=0)throw new ProviderError('sec_unavailable','budget_exhausted');
-  const gap=lastSecRequestAt+SEC_MIN_INTERVAL_MS-now();
-  if(gap>0)await wait(gap,budget.signal);
-  lastSecRequestAt=now();
-  let res:Response;
+  if(budget.signal.aborted||timeoutMs<=0)throw new ProviderError('sec_unavailable','budget_exhausted');
+  let detail:string;
   try{
-   res=await doFetch(url,{headers:{'User-Agent':ua,'Accept-Encoding':'gzip, deflate',Accept:'application/json'},signal:AbortSignal.any([budget.signal,AbortSignal.timeout(timeoutMs)])});
+   const res=await doFetch(url,{headers:{'User-Agent':ua,'Accept-Encoding':'gzip, deflate',Accept:'application/json'},signal:AbortSignal.any([budget.signal,AbortSignal.timeout(timeoutMs)])});
+   if(res.status===404)throw new ProviderError('no_companyfacts',`404 ${url}`);
+   if(res.status===429||res.status===503)detail=`http_${res.status}_retries_exhausted`;
+   else{
+    if(!res.ok)throw new ProviderError('sec_unavailable',`http_${res.status}`);
+    const declared=Number(res.headers.get('content-length')??'0');
+    if(declared>MAX_SNAPSHOT_BYTES)throw new ProviderError('snapshot_too_large',`content-length ${declared}`);
+    // the body download is inside the retry boundary: a disconnect or per-request timeout mid-body retries like a network error
+    return snapshotOf(await readBounded(res,MAX_SNAPSHOT_BYTES),{source:'edgar',url,http_status:res.status});
+   }
   }catch(e){
+   if(e instanceof ProviderError)throw e;
    if(budget.signal.aborted)throw new ProviderError('sec_unavailable','budget_aborted');
-   if(attempt>=BACKOFF_MS.length)throw new ProviderError('sec_unavailable',`network: ${(e as Error).message}`);
-   await backoff(attempt,budget,wait);continue;
+   // includes the per-request timeout (an AbortError/TimeoutError here is not the global deadline)
+   detail=`network: ${(e as Error).message}`;
   }
-  if(res.status===404)throw new ProviderError('no_companyfacts',`404 ${url}`);
-  if(res.status===429||res.status===503){
-   if(attempt>=BACKOFF_MS.length)throw new ProviderError('sec_unavailable',`http_${res.status}_retries_exhausted`);
-   await backoff(attempt,budget,wait);continue;
-  }
-  if(!res.ok)throw new ProviderError('sec_unavailable',`http_${res.status}`);
-  const declared=Number(res.headers.get('content-length')??'0');
-  if(declared>MAX_SNAPSHOT_BYTES)throw new ProviderError('snapshot_too_large',`content-length ${declared}`);
-  return snapshotOf(await readBounded(res,MAX_SNAPSHOT_BYTES),{source:'edgar',url,http_status:res.status});
+  if(attempt>=BACKOFF_MS.length)throw new ProviderError('sec_unavailable',detail);
+  await backoff(attempt,budget,wait);
  }
 }
 async function backoff(attempt:number,budget:Budget,wait:typeof sleep){
@@ -100,44 +120,53 @@ export function parseCompanyFacts(snapshot:RawSnapshot,opts:ParseOptions={}):Par
   if(!f){f={sourceRef:e.accn,market:'US',source:'edgar',origin:'sec',formType:mapForm(e.form),fiscalYear:typeof e.fy==='number'?e.fy:null,fiscalPeriod:mapFp(e.fp),periodEnd:null,availableDate:e.filed,url:`https://www.sec.gov/Archives/edgar/data/${cikPlain}/${e.accn.replace(/-/g,'')}/`,maxDurationEnd:null};filings.set(e.accn,f);}
   if(isDuration&&(f.maxDurationEnd===null||e.end>f.maxDurationEnd))f.maxDurationEnd=e.end;
  };
+ type Ent={e:CompanyFactsEntry;index:number;rawUnit:string;unit:string;dated:boolean;value:string};
  for(const concept of concepts){
   const taken=new Set<string>();
   for(const qualified of tagsOf(concept)){
    const [tax,tag]=qualified.split(':');
    const units=doc.facts[tax]?.[tag]?.units;
    if(!units||typeof units!=='object')continue;
-   const groups=new Map<string,{entries:CompanyFactsEntry[];unit:string;rawUnit:string}>();
+   // Selection and ambiguity are decided over ALL entries of the tag (dated or not); availability only
+   // decides afterwards whether a surviving period becomes a candidate or a missing_available_date row.
+   const groups=new Map<string,Ent[]>();
    for(const [rawUnit,entries] of Object.entries(units)){
     if(!Array.isArray(entries))continue;
     // normalizeUnit (units.ts) is shape-only; the concept's unit kind is enforced here (§3: a money
     // concept never takes 'shares', 'pure' matches no concept).
     const normalized=normalizeUnit(rawUnit);
     const unit=normalized!==null&&unitKindOf(normalized)===concept.unitKind?normalized:null;
-    if(unit===null){bump(`unit_not_allowed:${qualified}:${rawUnit}`);continue;}
-    for(const e of entries){
-     if(!isDate(e?.end)||typeof e.val!=='string'||typeof e.accn!=='string'||!validDecimal(e.val)||(e.start!==undefined&&!isDate(e.start))){bump('entry_shape');continue;}
-     if(e.end<sinceDate){bump('before_since_year');continue;}
+    if(unit===null){for(let n=0;n<entries.length;n++)bump(`unit_not_allowed:${qualified}:${rawUnit}`);continue;}
+    entries.forEach((e,index)=>{
+     if(!isDate(e?.end)||typeof e.val!=='string'||typeof e.accn!=='string'||!validDecimal(e.val)||(e.start!==undefined&&!isDate(e.start))){bump('entry_shape');return;}
+     if(e.end<sinceDate){bump('before_since_year');return;}
      const isDuration=isDate(e.start);
-     if(isDuration!==(concept.nature==='duration')){bump(`nature_mismatch:${qualified}`);continue;}
-     if(!isDate(e.filed)){out.missingAvailableDate.push({accn:e.accn,tag:qualified,start:e.start??null,end:e.end,unit:rawUnit,form:e.form??null});continue;}
-     touchFiling(e,isDuration);
+     if(isDuration!==(concept.nature==='duration')){bump(`nature_mismatch:${qualified}`);return;}
+     if(isDate(e.filed))touchFiling(e,isDuration);
      const key=`${e.accn}|${e.start??''}|${e.end}|${unit}`;
-     if(taken.has(key))continue;                       // a higher-priority tag already covers this period
-     const g=groups.get(key)??{entries:[],unit,rawUnit};g.entries.push(e);groups.set(key,g);
-    }
+     if(taken.has(key))return;                         // a higher-priority tag already claimed this period (even if its row was parked)
+     const list=groups.get(key)??[];list.push({e,index,rawUnit,unit,dated:isDate(e.filed),value:canonicalDecimal(e.val)});groups.set(key,list);
+    });
    }
    for(const [key,g] of groups){
     taken.add(key);
-    const first=g.entries[0];
-    const locator=(e:CompanyFactsEntry)=>`facts.${tax}.${tag}.units.${g.rawUnit}[accn=${e.accn},start=${e.start??''},end=${e.end}]`;
-    const build=(e:CompanyFactsEntry,duration:Duration):FactCandidate=>({concept:concept.id,sourceConcept:qualified,statement:tax==='dei'?'DEI':concept.statement,periodStart:e.start??null,periodEnd:e.end,duration,value:canonicalDecimal(e.val),unit:g.unit,consolidation:'consolidated',filingRef:e.accn,rawHash:rawHashOf(snapshot.sha256,locator(e))});
+    const first=g[0].e,unit=g[0].unit;
+    const locator=(x:Ent)=>`facts.${tax}.${tag}.units.${x.rawUnit}[${x.index}](accn=${x.e.accn},start=${x.e.start??''},end=${x.e.end})`;
+    const build=(x:Ent,duration:Duration):FactCandidate&{locator:string}=>({concept:concept.id,sourceConcept:qualified,statement:tax==='dei'?'DEI':concept.statement,periodStart:x.e.start??null,periodEnd:x.e.end,duration,value:x.value,unit,consolidation:'consolidated',filingRef:x.e.accn,rawHash:rawHashOf(snapshot.sha256,locator(x)),locator:locator(x)});
     const duration=first.start?classifyDuration(first.start,first.end):'INSTANT';
-    if(duration==='odd'){const days=daysBetween(first.start!,first.end);out.oddDuration.push(Object.assign(build(first,nearestDuration(days)),{periodDays:days}));continue;}
-    if(new Set(g.entries.map(e=>canonicalDecimal(e.val))).size>1){
-     out.ambiguous.push({key:`${concept.id}:${first.start??''}:${first.end}:${g.unit}:${first.accn}`,candidates:g.entries.map(e=>Object.assign(build(e,duration),{frame:e.frame??null}))});
+    const days=first.start?daysBetween(first.start,first.end):0;
+    const asDuration:Duration=duration==='odd'?nearestDuration(days):duration;
+    if(new Set(g.map(x=>x.value)).size>1){
+     out.ambiguous.push({key:`${concept.id}:${first.start??''}:${first.end}:${unit}:${first.accn}`,candidates:g.map(x=>Object.assign(build(x,asDuration),{frame:x.e.frame??null}))});
      continue;
     }
-    out.candidates.push(build(first,duration));
+    if(duration==='odd'){for(const x of g)out.oddDuration.push(Object.assign(build(x,asDuration),{periodDays:days}));continue;}
+    const dated=g.find(x=>x.dated);
+    if(!dated){
+     for(const x of g)out.missingAvailableDate.push({accn:x.e.accn,tag:qualified,start:x.e.start??null,end:x.e.end,unit:x.rawUnit,form:x.e.form??null,value:x.value,frame:x.e.frame??null,snapshot_sha256:snapshot.sha256,locator:locator(x)});
+     continue;
+    }
+    out.candidates.push(build(dated,duration));
    }
   }
  }
