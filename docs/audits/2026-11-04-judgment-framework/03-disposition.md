@@ -1,6 +1,6 @@
 # F4 判断层框架规格 · 审计处置表
 
-日期：2026-11-04。对象：`docs/superpowers/specs/2026-11-04-judgment-framework-design.md`。审计：Codex CLI gpt-6-astra（medium）两轮（`01-codex-round1.md` 对第 1 稿，`02-codex-round2.md` 对第 2 稿）。本表对两轮的每一条给出处置；第 3 稿是处置后的结果。两轮上限已用完，第 3 稿未再送 Codex；§"第 3 稿自查"列出作者对第 3 稿新改动的自查结论。
+日期：2026-11-04。对象：`docs/superpowers/specs/2026-11-04-judgment-framework-design.md`。审计：Codex CLI gpt-6-astra（medium）四轮（`01` 对第 1 稿，`02` 对第 2 稿，`04-codex-round3.md` 对第 3 稿——协调人追加，`05-codex-round4.md` 对第 4 稿——只审新引入缺陷与最终判定）。本表对每轮的每一条给出处置；第 4 稿是第三轮处置后的结果。
 
 状态含义：ACCEPT = 已按建议（或等价方案）改入第 3 稿；DECLINE = 不改，附理由；OWNER = 转为 §17 owner 决策；OPEN-verify = 规格已给出规则，但依赖实施期验证（§18 开放问题）。
 
@@ -80,14 +80,60 @@
 - G08 的"按历史披露序列选最早合格版本"：规格二的 `readFacts` 只给某 `asOf` 的当前值，没有"该期第一次披露"的读取接口；v1 用 `first_observed` 并如实披露，列入 §18.4 与规格二对齐时一起看。
 - F19 / G17 的统计保证：第 3 稿明确 N 是运营门槛，且写明宏观在默认阈值下长期"未校准"是正确结果；没有声称显著性。
 
-## 第 3 稿自查（未送 Codex）
+## 第三轮（对第 3 稿：N1–N3 + PARTIAL 行）
+
+| ID | P | 处置 | 第 4 稿落点 / 理由 |
+|---|---|---|---|
+| N1 | P1 | ACCEPT | §5.6：anon / authenticated 的 `select` 策略改为按 `judgment_methodologies.publishable` 判定（`judgments` / `judgment_settlements` / `judgment_calibrations` 三表），公共读 RPC 全部 `security invoker` 所以同受约束；`calibration_cohort` 对不可发布方法返回空；service_role 另有内部读 |
+| N2 | P1 | ACCEPT（按协调人建议用独立表） | §5.5b `judgment_calibration_validity(revision)`：`append_settlement` 在 withdrawn / reopened 时同事务 `+1`；校准行记 `validity_revision`，显示有效 ⇔ revision 相等且未过期；`insert_calibration` 以 `expected_revision` 拦截并发撤回；`dq_freshness` 只做心跳，不再存状态；补偿 marker 与校准游标迁入 `judgment_job_state` |
+| N3 | P1 | ACCEPT | §5.1 `created_at` 不可变；§5.1b `judgment_methodology_events` 只追加事件史（registered / status_changed / publishable_changed / resynced），`sync_methodology` RPC 写双表；§10 `as_known` 的方法状态取 `occurred_at ≤ cutoff` 的最后事件，`synced_at` 不参与；发布准入按当前值 |
+| G06 | PARTIAL→ACCEPT | §5.6 service_role 对八表 `select`；直接写全部收口到 RPC |
+| G10 | PARTIAL→ACCEPT | §5.3 `judgment_settlements.request_key not null unique`；`append_settlement` 按它判 `already_applied` |
+| G12 | PARTIAL→ACCEPT | §7.6 候选携带完整 `derivation`（底层事实投影、`state_rev`、`cutoff`）；`choose_fact` 裁决冻结整个候选；结算不读事实层、不重抓 |
+| G19 | PARTIAL→ACCEPT | 随 N2：revision + `stale_revision` |
+| G20 | PARTIAL→ACCEPT | §4.1 `implementation_sha256` = 本地 import 闭包的有序 digest（不区分目录），`deps` 只补非 import 依赖；§3.5 `financial_metric` 投影携带 `input_facts` 完整投影，回放零外部读；§11.1 `gather` 冻结 `macro_series` 目录行 |
+| G21 | PARTIAL→ACCEPT | §6.2 `settle_after / settle_by` 进入比较集，`register_judgment` 重算核对；只排除 `registered_at / retrospective / code_version / batch_id / created_at` |
+| G22 | PARTIAL→ACCEPT | §5.6 `judgment_history` / `calibration_cohort` 增 `p_view / p_cutoff`；`methodology_state_at` |
+| G23 | PARTIAL→ACCEPT | §9.4 `scenario_event_hash = digest(thesis.condition)` 事件绑定 |
+| G25 | PARTIAL→ACCEPT | §6.4 `produce` 带 `binding`，`gather` 把 `snapshot_id` 作为输入引用；§7.1 按 `(created_at, snapshot_id)` 逐个推进 marker |
+| G26 | PARTIAL→ACCEPT | §8.3 单元内分页游标 + 固定 `cutoff` + 桶内 JSONL 分页对象，跨运行续跑；`set_job_state` 乐观锁 |
+| G27 | PARTIAL→ACCEPT | 随 N1（发布准入下沉到 RLS） |
+| G08 | DECLINED-ACCEPTABLE（Codex 原判） | 维持 `first_observed` |
+| G18 的"非重叠不等于独立" | 已在 §8.4 承认 N 是运营门槛 | 不再声称独立性 |
+
+## 第 3 稿自查（历史记录）
 
 - 改名残留：`macro_axis`、`first_release`、`n_effective`、`axis-v1`、`settled_sample`、`latest_judgments(` 已全部清除（grep 为 0）。
 - 新增的数字：`deferred` 计数器（无数字）；留出段 30% / 最少 20 条（标政策常量并给出来源量级）；`valid_until` 14 天（两个周跑周期）；小批 20 条与 30 s 收尾（政策常量，§7.1 写明预算推导依赖 resolver 声明的 `maxFetchMs`）；K 线范围 `base_date − 10 天`、`+ 20 天`（政策常量，覆盖长假）。
 - 仍依赖实施期验证的项全部在 §18（复权能力、PostgREST `max_rows`、`maxDuration`、security definer owner、宏观规格补齐）。
 
-## Codex 最终判定（第二轮原句）
+## Codex 第三轮判定（原句）
+
+> Verdict: Not ready for an implementation plan: fix N1–N3 and close the remaining permission, idempotency, replay-evidence, deadline-consistency, historical-read, event-binding, snapshot-binding, and calibration-resumption gaps identified in the PARTIAL rows.
+
+第 4 稿即对此的处置；第四轮结论见 `05-codex-round4.md` 与下节。
+
+## Codex 第二轮判定（原句，历史）
 
 > Verdict: 该规格在修复所列 P1/P2 后可实施，目前不可直接按稿实施。
 
 第 3 稿即"修复所列 P1/P2"后的版本；按 owner 规则两轮已满，下一次 Codex 复审在计划四（实施计划）成稿时进行。
+
+## 第四轮（对第 4 稿，`05-codex-round4.md`）
+
+N1 / N2 / N3 全部 RESOLVED。新引入缺陷 6 条，按协调人指示在第 5 稿**逐字按 Codex 处方实施，未再送审**：
+
+| ID | P | 处置 | 第 5 稿落点 |
+|---|---|---|---|
+| R01 | P1 | implemented per Codex's prescribed fix (round 4), not re-audited | §5.5b：CHECK 改为 `length(job) between 1 and 512`；`job-keys.ts::jobKey()` 中心化构造，组件 percent-encoding；测试覆盖 `v1`、`US`、全部 scope key |
+| R02 | P1 | implemented per Codex's prescribed fix (round 4), not re-audited | §8.3：每页上传到唯一不可变对象；job state 存 `generation` + 有序 manifest `{start_after,end_after,path,sha256}`；manifest 条目与游标同一次 CAS；只消费 manifest 列出的对象；CAS 失败丢弃对象；崩溃于上传后 CAS 前 → 孤儿对象不被消费；§14.2 加崩溃与并发测试 |
+| R03 | P2 | implemented per Codex's prescribed fix (round 4), not re-audited | §5.6 `calibration_cohort` 登记按 `registered_at ≤ p_cutoff`、结算按 `settled_at ≤ p_cutoff`；`query_bounds` 固定并逐页应用；§14.2 游标两侧并发登记测试 |
+| R04 | P2 | implemented per Codex's prescribed fix (round 4), not re-audited | §5.6 新 `calibration_cohort_internal`（service_role，不受发布门控）供 cron；公共路径保留门控；§5.7 `calibrationCohortInternal`；§14.2 未发布方法内部可校准 / anon 为空 |
+| R05 | P2 | implemented per Codex's prescribed fix (round 4), not re-audited | §5.5 指纹含 `validity_revision` + `query_bounds`；`insert_calibration` 要求 `row.validity_revision = p_expected_revision = 锁住的 revision`；§8.3 `inserted` 或 `duplicate` 后都 CAS 清空代际，`stale_revision` 清空并用新 bounds 重算；清空失败重试 |
+| R06 | P2 | implemented per Codex's prescribed fix (round 4), not re-audited | §5.3 `request_digest` 列；§5.6 `append_settlement` 先查 `request_key`：judgment_id 与载荷摘要匹配 → `already_applied`（不校验租约），否则 `request_key_conflict`；只对新操作校验租约；23505 重读后同一比较；§14.2 响应丢失重试与键重用测试 |
+
+## Codex 第四轮判定（原句）
+
+> Verdict: not ready — the new job-state constraint blocks recovery, and page persistence can corrupt resumed calibration cohorts.
+
+第 5 稿按上表逐字实施了 R01–R06；按协调人指示不再送 Codex，上述六项状态为"implemented per Codex's prescribed fix (round 4), not re-audited"。

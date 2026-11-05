@@ -1,6 +1,6 @@
 # 数据底座四 · F4 判断层框架 设计规格
 
-日期：2026-11-04（第 3 稿。审计轨迹：`docs/audits/2026-11-04-judgment-framework/` —— 01 Codex 第一轮（8 P1 / 21 P2 / 1 P3）、02 Codex 第二轮（对第 2 稿：4 P1 / 25 P2 / 3 P3，判定"修复 P1/P2 后可实施"）、03 处置表（逐条 ACCEPT / DECLINE / OWNER / OPEN）。第 3 稿吸收了 02 的全部 P1 与大部分 P2；未吸收项在 03 说明理由）
+日期：2026-11-04（第 5 稿。审计轨迹：`docs/audits/2026-11-04-judgment-framework/` —— 01 Codex 第一轮（8 P1 / 21 P2 / 1 P3）、02 Codex 第二轮（对第 2 稿：4 P1 / 25 P2 / 3 P3）、03 处置表、04 Codex 第三轮（对第 3 稿：3 个新 P1 N1–N3 + 11 个 PARTIAL，判定"not ready"）、05 Codex 第四轮（对第 4 稿，只审新引入缺陷：N1–N3 RESOLVED，新 R01–R06）。第 4 稿修 N1–N3 与全部 PARTIAL；第 5 稿按 05 的处方逐字实施 R01–R06（见 03 第四轮节），未再送审）
 状态：草案，待 owner 评审（§17 列出 owner 决策）
 上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（规格一，§1 把"判断层：预测登记、结算、校准"划给 F4）；`docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md`（规格二，**第 8 稿**：`fact_sync_runs` / `filings` / `financial_facts` / `financial_metrics`（主键含 `market`、`based_on_rev`）/ `FactsDb{readFacts, factsByIds, metricsOfIssuer, …}`；本规格以该稿为准，规格二再改动时 §12.2 随之更新）；`docs/superpowers/specs/2026-11-04-macro-workbench-design.md`（宏观规格：`macro_snapshots` / `macro_regime_results` 与 `methodology_version`）。
 总纲：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5 约束 3（owner 2026-11-04 确认）："财务数字是事实；生命周期阶段、胜率、值博率、评级是判断，必须有 `methodology_version`、输入快照、可证伪条件，并被结算与校准（Brier 分数、可靠性曲线）。没有结算机制的'胜率'不得显示为百分比。"本规格逐条落实：每条判断是一条内容寻址、只追加的登记记录；输入快照把**值本身**（不只是哈希）冻结在登记行里，所以回放不依赖供应商重抓；每条判断登记时就固定可证伪条件、目标期与标签政策；结算由 cron 对照后来的事实 / 价格 / 宏观观测写入证据；校准报告决定页面能不能把概率显示成百分比，且"样本够"与"校准通过"是两道门。
@@ -162,7 +162,7 @@ interface InputRef<K, R, S> {
 }
 type Input =
   | InputRef<'financial_fact',   { fact_id },                                                    { fact_id, issuer_id, market, concept, period_start, period_end, duration, value_text, unit, consolidation, available_date, filing_id, mapping_gen }>
-  | InputRef<'financial_metric', { issuer_id, market, metric, period_start, period_end, input_unit, basis, formula_version }, { …复合键, value_text, unit, duration, as_of, based_on_rev, input_fact_ids: string[] }>
+  | InputRef<'financial_metric', { issuer_id, market, metric, period_start, period_end, input_unit, basis, formula_version }, { …复合键, value_text, unit, duration, as_of, based_on_rev, input_facts: FactProjection[] }>   // input_facts = 全部底层事实的完整投影（同 financial_fact 的 snapshot 形状），回放不需要再读事实层（审计 G20）
   | InputRef<'macro_observation',{ series_id, period_end, vintage_id },                            { series_id, period_end, value, unit, vintage_id, available_at }>
   | InputRef<'macro_snapshot',   { snapshot_id },                                                 { snapshot_id, region, as_of, methodology_version, observation_ids, primary_state, secondary_state, scores, coverage, margin, growth_axis, inflation_axis }>
   | InputRef<'price_bar',        { ticker, market, date, source: KlineSourceName, adjustment },   { ticker, market, date, source, adjustment, open: number|null, high: number|null, low: number|null, close, volume: number|null, amount?: number|null, fields_present: string[] }>   // DataGateway close-only 分支只有 close：其余字段 null，不合成（审计 G27）
@@ -177,7 +177,7 @@ type Input =
 - **输入只能由固定构造器生成**（审计 G03）：`src/lib/judgments/inputs.ts` 对每种 `kind` 导出 `buildInput(ref, inputsDb)`，它只通过 `JudgmentInputsDb` 的**公共读取路径**（facts / macro / table_rows 用 **anon 客户端**实现，RLS 生效：只看得到 `status='ok'`、公开的行；`judgment` 只查公共表；`price_bar` 走 K 线适配器）取值并生成 `snapshot`、`available_at`、`origin`。`registerJudgment` 对每个输入**重新执行构造器**并要求结果与提交的 `snapshot` 字节一致（`input_snapshot_mismatch`）；构造器取不到（行不存在、被隔离、不公开）→ `input_not_public`。service-role 能读到的隔离行因此进不了公共表。结算证据走同一规则（§7.3 的 `fact_metric / macro_regime_replay` 用 anon 路径取值）。
 - `origin` 不是自由文本：`publisher / adapter / locator 模板 / transform / license_status` 来自冻结表 `src/lib/judgments/origins.ts`（按 `kind × adapter` 键；例如 `price_bar × eastmoney → publisher: '交易所行情（经东方财富转发）', license_status: 'unverified'`），构造器填充，登记校验键存在。`license_status='unverified'` 的输入可以登记，但该方法的 `publishable=false` 直到 owner 确认（§4.1、§17）。
 - 登记校验 `max(inputs.available_at) ≤ as_of 的日终`（§3.7），否则 `lookahead`。
-- `financial_metric` 的冻结投影带 `input_fact_ids`，回放用 `factsByIds` 取底层事实重算（物化行是可替换缓存，不是版本；审计 F03）。
+- `financial_metric` 的冻结投影带 `input_facts`（完整事实投影），回放直接用它们重算派生值（物化行是可替换缓存，不是版本；审计 F03 / G20）；`factsByIds` 只在 `--reconcile` 对账时用。
 
 ### 3.6 生产者与 nonce
 
@@ -215,7 +215,7 @@ export interface Methodology<C extends Claim> {
 }
 ```
 
-- `formula_hash = digest({ id, version, params, params_json, horizon, upstream, doc_sha256, implementation_sha256, deps_sha256 })`，`implementation_sha256` = 方法模块源文件的 sha256，`deps_sha256` = `deps` 列表中每个文件 sha256 的有序 digest（`sync-methodologies.ts` 读文件计算；`deps` 漏列由 lint 规则兜底：方法模块的 import 图里凡在 `src/lib/judgments/` 之外且不在 `deps` 的本地模块报错）；改实现或依赖不升版本 → 同步脚本报 `formula_hash_drift` 并拒绝同步（审计 F22 / G20）。
+- `formula_hash = digest({ id, version, params, params_json, horizon, upstream, doc_sha256, implementation_sha256, deps_sha256 })`，`implementation_sha256` = 方法模块**本地 import 闭包**（`sync-methodologies.ts` 从方法模块出发遍历所有相对 / `@/` 导入，不区分是否在 `src/lib/judgments/` 内，排除 `node_modules`）中每个文件 sha256 的有序 digest；`deps_sha256` = `deps` 列出的**非 import 依赖**（数据文件、规则表 JSON、能力表、目录快照）的有序 digest。闭包自动计算，`deps` 只补 import 图看不到的东西，所以不存在"漏列共享模块"（审计 G20）；改实现或依赖不升版本 → 同步脚本报 `formula_hash_drift` 并拒绝同步（审计 F22）。
 - `status ∈ {draft, active, retired}`：`draft` 只能在测试与 `--dry-run` 下登记；`retired` 不再登记但继续结算与校准。`publishable boolean`（默认 `false`）：只有 owner 确认该方法全部输入 `origin.license_status='confirmed'` 后由同步脚本置 `true`；`publishable=false` 的方法照常登记、结算、校准，但读接口**不返回**它的卡片（`/admin/judgments` 可见）。这是总纲"一手来源 + 许可先行"的发布准入（审计 F29）。
 
 ### 4.2 公式文档固定章节
@@ -240,7 +240,7 @@ export interface Methodology<C extends Claim> {
 
 ## 5. 数据模型
 
-迁移 `supabase/migrations/20261108090000_judgments.sql`（晚于规格二 `20261106090000`；并行规格撞号时取更晚的分钟位），可重放；补 `migrations.lock.json`；`database.types.ts` 手工补五个 Row 类型与四个 `Functions`。
+迁移 `supabase/migrations/20261108090000_judgments.sql`（晚于规格二 `20261106090000`；并行规格撞号时取更晚的分钟位），可重放；补 `migrations.lock.json`；`database.types.ts` 手工补八个 Row 类型（§5.1–§5.5b 八张表）与 §5.6 的全部 `Functions`。
 
 ### 5.1 `judgment_methodologies`（代码镜像）
 
@@ -267,11 +267,34 @@ formula_hash      text not null check (formula_hash ~ '^[0-9a-f]{64}$')
 status            text not null check (status in ('draft','active','retired'))
 publishable       boolean not null default false
 code_version      text not null
-synced_at         timestamptz not null default now()
+created_at        timestamptz not null default now()      -- 首次同步时刻，不可变（审计 N3）
+synced_at         timestamptz not null default now()      -- 最近一次同步（运行元数据，不参与历史判定）
 primary key (methodology_id, version)
 ```
 
-触发器 `judgment_methodologies_limited_update`：`update` 只允许改 `status / publishable / synced_at / code_version`，其余列变化 → `23514 append_only:judgment_methodologies`；`delete` 禁止。
+触发器 `judgment_methodologies_limited_update`：`update` 只允许改 `status / publishable / synced_at / code_version`，其余列（含 `created_at`）变化 → `23514 append_only:judgment_methodologies`；`delete` 禁止。当前行只是"现在的状态"；历史状态来自下表。
+
+#### 5.1b `judgment_methodology_events`（方法状态的只追加事件史，审计 N3）
+
+```
+event_id         uuid primary key
+methodology_id   text not null
+version          text not null
+seq              integer not null check (seq >= 1)
+event            text not null check (event in ('registered','status_changed','publishable_changed','resynced'))
+status           text not null check (status in ('draft','active','retired'))     -- 事件后的状态
+publishable      boolean not null                                                 -- 事件后的值
+formula_hash     text not null
+code_version     text not null
+actor            text not null check (actor ~ '^(script|admin:[0-9a-f-]{36})$')
+reason           text
+occurred_at      timestamptz not null
+unique (methodology_id, version, seq)
+foreign key (methodology_id, version) references judgment_methodologies(methodology_id, version)
+index (methodology_id, version, occurred_at)
+```
+
+只追加触发器。`sync_methodology` RPC（§5.6）在一个事务里：首次 → 插当前行 + `registered` 事件；状态 / 可发布变化 → 更新当前行允许列 + 对应事件；无变化的重同步 → 只更新 `synced_at` + `resynced` 事件（不改 `created_at`）。"截至 `cutoff` 的方法状态" = `occurred_at ≤ cutoff` 的最后一条事件（没有 → 该方法当时不存在）。
 
 ### 5.2 `judgments`
 
@@ -331,9 +354,12 @@ resolver_version  text not null
 reason            text
 actor             text not null check (actor ~ '^(cron|script|admin:[0-9a-f-]{36})$')
 settled_at        timestamptz not null
+request_key       text not null check (length(request_key) between 8 and 128)   -- 调用方幂等键（cron: `<batch_id>:<judgment_id>:<seq 预期>`；admin: 请求 uuid）；持久化供重放判定（审计 G10）
+request_digest    text not null check (request_digest ~ '^[0-9a-f]{64}$')          -- digest(canonical 操作载荷：kind/outcome/realized/evidence/resolver/reason/actor)；重放比对用（R06）
 code_version      text not null
 batch_id          uuid not null references ingest_batches(batch_id) on delete restrict
 unique (judgment_id, seq)
+unique (request_key)
 constraint settlements_outcome_iff_settled check ((kind = 'settled') = (outcome is not null) and (kind = 'settled') = (realized is not null))
 constraint settlements_reason_unless_settled check (kind = 'settled' or reason is not null)
 index (settled_at desc)
@@ -384,13 +410,14 @@ state               text not null check (
   (kind = 'score' and state in ('insufficient','evaluated')) or
   (kind <> 'score' and state in ('insufficient','failed','calibrated')))
 valid_until         timestamptz not null                  -- computed_at + 2 × 校准周期（周跑 → 14 天）；过期按 insufficient 显示（§9.1）
+validity_revision   bigint not null                       -- 计算开始时读到的 judgment_calibration_validity.revision；与当前不等即失效（审计 N2 / G19）
 metrics             jsonb not null check (jsonb_typeof(metrics) = 'object')
 reliability         jsonb not null check (jsonb_typeof(reliability) = 'array')
 isotonic_segments   jsonb check (isotonic_segments is null or jsonb_typeof(isotonic_segments) = 'array')   -- isotonicFit().segments
 cohort_path         text not null                         -- 桶 judgments-calibration/<calibration_id>.json：窗口内全部登记 {judgment_id, lifecycle, retrospective, settlement_id?, group, selected_for_independent, p|value|selected, realized?}
 cohort_sha256       text not null
 query_bounds        jsonb not null                        -- {window_from, window_to, max_settled_at, max_registered_at}：重算的查询边界
-fingerprint         text not null                         -- digest({methodology, version, scope, window, threshold_n, ece_max, algorithm_version, cohort_sha256})
+fingerprint         text not null                         -- digest({methodology, version, scope, window, threshold_n, ece_max, algorithm_version, cohort_sha256, validity_revision, query_bounds})（R05：窗口外撤回会升 revision 而不改 cohort，指纹必须随之变化）
 algorithm_version   text not null
 code_version        text not null
 computed_at         timestamptz not null
@@ -399,22 +426,55 @@ unique (fingerprint)
 index (methodology_id, methodology_version, scope_type, scope_key, computed_at desc)
 ```
 
+### 5.5b `judgment_calibration_validity` 与 `judgment_job_state`（可变运行状态；不再借用 `dq_freshness.detail`，审计 N2）
+
+```
+judgment_calibration_validity
+  methodology_id   text not null
+  version          text not null
+  revision         bigint not null default 1
+  bumped_at        timestamptz not null default now()
+  reason           text                                  -- 'withdrawn:<settlement_id>' | 'reopened:<settlement_id>' | 'initial'
+  primary key (methodology_id, version)
+  foreign key (methodology_id, version) references judgment_methodologies(methodology_id, version)
+
+judgment_job_state
+  job              text primary key check (length(job) between 1 and 512)   -- 由 jobKey() 中心化构造（R01）：'produce:<id>@<version>' | 'calibrate:<id>@<version>:<scope_type>:<encoded_scope_key>'
+  state            jsonb not null default '{}' check (jsonb_typeof(state) = 'object')
+  updated_at       timestamptz not null default now()
+```
+
+- `validity.revision` 由 `append_settlement` 在 `withdrawn / reopened` 转移时原子 `+1`（同一事务）；`sync_methodology` 首次注册时插 `revision=1`。它只有一列数字，没有被"整体替换"的可能（`recordAttempt()` 整体替换 `dq_freshness.detail` 的行为因此与它无关；`dq_freshness` 只用于心跳）。
+- `judgment_job_state` 保存 §7.1 的补偿 marker 与 §8.3 的校准续跑状态（代际 id + 页 manifest + 游标）；只经服务写 RPC `set_job_state(job, expected_updated_at, state)`（乐观锁）更新。键由 `src/lib/judgments/job-keys.ts::jobKey()` 中心化构造（R01）：`produce:<id>@<version>`、`calibrate:<id>@<version>:<scope_type>:<encoded_scope_key>`，每个组件先 percent-encoding（`encodeURIComponent`），所以 `v1`、`US`、含 `:` 或非 ASCII 的 scope key 都合法；`job-keys.test.ts` 覆盖 `v1`、`US` 与全部支持的 scope key。
+
 ### 5.6 权限与 SQL 函数
 
-- 五张表：`revoke all on … from public, anon, authenticated, service_role`；`grant select to anon, authenticated` + 策略 `"<t> public read" for select using (true)`（`judgment_settle_queue` 除外：无 anon 读）；`service_role`：**对 `judgments` 与 `judgment_settlements` 没有直接 insert 权限**，只能经下表的写 RPC（RPC 内校验方法一致性、形状与时间戳；审计 G11）；`judgment_calibrations` → `select, insert`；`judgment_methodologies` → `select, insert, update`（触发器限列）；`judgment_settle_queue` → `select`（写也只经 RPC）。写 RPC 的调用者只有 cron 路由、脚本与 `requireAdminUser()` 门控的管理员路由，全部经 `getAdminSupabase()`。
-- SQL 函数分两组（`search_path=''`；PostgREST 的 `max_rows` 在托管端未核实，所以所有多行读取都走带 keyset 的 RPC）。**公共读 RPC**：`security invoker`，`grant execute to anon, authenticated, service_role`，只读公共表；**服务写 RPC**：`security definer`，函数 owner 为迁移执行者，`revoke execute from public, anon, authenticated`、`grant execute to service_role`：
+- 八张表全部 `revoke all on … from public, anon, authenticated, service_role`，再按下面授权。**发布准入在 RLS 读边界执行**（审计 N1）：anon / authenticated 的 `select` 策略不是 `using (true)`，而是
+  - `judgment_methodologies`、`judgment_methodology_events`、`judgment_calibration_validity`：`using (true)`（只有方法元数据、状态、修订号，没有被许可约束的数据）；
+  - `judgments`：`using (exists (select 1 from judgment_methodologies m where m.methodology_id = judgments.methodology_id and m.version = judgments.methodology_version and m.publishable))`；
+  - `judgment_settlements`：`using (exists (select 1 from judgments j join judgment_methodologies m on … where j.judgment_id = judgment_settlements.judgment_id and m.publishable))`；
+  - `judgment_calibrations`：按 `(methodology_id, methodology_version)` 的 `publishable`；
+  - `judgment_settle_queue`、`judgment_job_state`：无 anon / authenticated 读。
+  公共读 RPC 都是 `security invoker`，所以同样受这些策略约束（`calibration_cohort` 对 `publishable=false` 的方法返回空）。方法被改回 `publishable=false` 时，它的判断、结算、校准立即从公共读路径消失（当前值生效，历史查询也不例外——许可不是历史状态）。
+- `service_role`（Supabase 下绕过 RLS）：`select` 八张表（内部读：登记时的 `getJudgment`、结算时的 `settlementsOf`、校准页经服务端读；审计 G06）；**对 `judgments / judgment_settlements / judgment_methodology_events / judgment_settle_queue / judgment_calibration_validity / judgment_job_state` 没有直接 insert / update 权限**，只能经服务写 RPC；`judgment_calibrations` 也只经 `insert_calibration` RPC；`judgment_methodologies` 只经 `sync_methodology` RPC。写 RPC 的调用者只有 cron 路由、脚本与 `requireAdminUser()` 门控的管理员路由，全部经 `getAdminSupabase()`。
+- SQL 函数分两组（`search_path=''`；PostgREST 的 `max_rows` 在托管端未核实，所以所有多行读取都走带 keyset 的 RPC）。**公共读 RPC**：`security invoker`，`grant execute to anon, authenticated, service_role`；**服务写 RPC**：`security definer`，函数 owner 为迁移执行者，`revoke execute from public, anon, authenticated`、`grant execute to service_role`：
 
 | 函数 | 组 | 作用 |
 |---|---|---|
 | `judgments_server_time() → timestamptz` | 公共读 | `now()`；登记与结算的时间戳 |
-| `latest_judgment_cards(p_subject_type, p_subject_key, p_types text[], p_view text, p_cutoff timestamptz) → setof judgment_envelope` | 公共读 | `judgment_envelope = (judgment judgments, settlement judgment_settlements, calibration judgment_calibrations, methodology judgment_methodologies)`；每 `(judgment_type, methodology)` 一条；只返回 `publishable=true` 方法的判断；排序 `as_of desc, registered_at desc, judgment_id`；`p_view='as_known'` 时判断 `registered_at ≤ p_cutoff`、结算 `settled_at ≤ p_cutoff`、校准 `computed_at ≤ p_cutoff`（§10）；合并发行人反查（§12.4） |
-| `judgment_history(p_subject_type, p_subject_key, p_type, p_methodology, p_version, p_before uuid, p_limit) → setof judgment_envelope` | 公共读 | keyset 分页 |
-| `calibration_cohort(p_methodology, p_version, p_window_from, p_window_to, p_after uuid, p_limit) → setof judgment_envelope` | 公共读 | 窗口内全部活跃登记（含未结算 / void / retrospective）+ 最新结算；keyset 分页（`judgment_id > p_after`）；校准任务与校准页都用它 |
-| `register_judgment(row jsonb, queue jsonb) → uuid` | 服务写 | 一个事务：校验方法 `active`、`kind/producer_kind/subject_types/input_kinds` 与方法行一致、形状约束；`registered_at = now()`；插 `judgments`；活跃判断同时插 `judgment_settle_queue`；23505 原样抛出 |
+| `latest_judgment_cards(p_subject_type, p_subject_key, p_types text[], p_view text, p_cutoff timestamptz) → setof judgment_envelope` | 公共读 | `judgment_envelope = (judgment judgments, settlement judgment_settlements, calibration judgment_calibrations, calibration_valid boolean, methodology_state judgment_methodology_events)`；每 `(judgment_type, methodology)` 一条；排序 `as_of desc, registered_at desc, judgment_id`；`p_view='as_known'` 时判断 `registered_at ≤ p_cutoff`、结算 `settled_at ≤ p_cutoff`、校准 `computed_at ≤ p_cutoff`、`methodology_state` = `occurred_at ≤ p_cutoff` 的最后一条事件（没有 → 该判断不返回）（§10）；`calibration_valid = (calibration.validity_revision = validity.revision and calibration.valid_until > coalesce(p_cutoff, now()))`；发布准入由 RLS 施加（当前值）；合并发行人反查（§12.4） |
+| `judgment_history(p_subject_type, p_subject_key, p_type, p_methodology, p_version, p_view, p_cutoff, p_before uuid, p_limit) → setof judgment_envelope` | 公共读 | keyset 分页；`as_known` 语义同上（审计 G22） |
+| `calibration_cohort(p_methodology, p_version, p_window_from, p_window_to, p_cutoff timestamptz, p_after uuid, p_limit) → setof judgment_envelope` | 公共读 | 窗口内（按 `as_of`）且 **`registered_at ≤ p_cutoff`** 的全部活跃登记（含未结算 / void / retrospective）+ `settled_at ≤ p_cutoff` 的最新结算（R03：登记与结算都按同一固定截止，使分页间的新登记、新结算都不混入）；keyset 分页（`judgment_id > p_after`）；这是**公共**路径（invoker，受发布门控）；校准 cron 走 `calibration_cohort_internal`（下一行） |
+| `calibration_cohort_internal(…同参数…) → setof judgment_envelope` | 服务写组（definer，仅 service_role 执行；只读） | 与 `calibration_cohort` 同一查询与同一截止语义，但**不受 `publishable` 门控**：未发布的方法也照常校准（R04，对应 §4.1）；`publishable` 过滤只存在于公共路径 |
+| `methodology_state_at(p_methodology, p_version, p_cutoff) → judgment_methodology_events` | 公共读 | §10 历史读取用 |
+| `sync_methodology(row jsonb, p_actor, p_reason) → (changed boolean, seq integer)` | 服务写 | §5.1b 的事务：首次插当前行 + validity 行 + `registered` 事件；允许列变化 → 更新 + 事件；无变化 → `synced_at` + `resynced` 事件；`formula_hash` 与已有行不等 → `formula_hash_drift` 拒绝 |
+| `register_judgment(row jsonb, queue jsonb) → uuid` | 服务写 | 一个事务：校验方法 `active`、`kind/producer_kind/subject_types/input_kinds` 与方法行一致、形状约束、`settle_after/settle_by` 与 `target`+方法 `grace_days` 重算一致（审计 G21）；`registered_at = now()`；插 `judgments`；活跃判断同时插 `judgment_settle_queue`；23505 原样抛出 |
 | `claim_due_judgments(p_limit, p_lease_seconds) → setof judgment_settle_queue` | 服务写 | 按 §5.4 顺序 `for update skip locked` 领取，写 `leased_until / lease_token` |
 | `release_lease(p_judgment_id, p_lease_token, p_patch jsonb) → void` | 服务写 | token 不匹配 → `lease_lost`；更新 `last_status / last_detail / next_attempt_at / attempts`，清空租约 |
-| `append_settlement(p_judgment_id, p_lease_token, p_request_key text, row jsonb) → (seq integer, status text)` | 服务写 | 一个事务：锁队列行；token 校验（admin 路径传 null 且 `actor` 为 `admin:*`）；`request_key` 已存在 → `('already_applied', seq)`；队列已 `closed_at` 且请求是自动结算 → `('already_final', seq)`（不是错误）；`seq = coalesce(max,0)+1`；校验转移；插入；更新队列（`closed_at` / `next_attempt_at` / `attempts` / 清租约）；返回 `('applied', seq)` |
-| `apply_quarantine_override(p_judgment_id, p_override jsonb) → void` | 服务写 | §7.6 钩子：写 `override`，`next_attempt_at = now()` |
+| `append_settlement(p_judgment_id, p_lease_token, p_request_key text, row jsonb) → (seq integer, status text)` | 服务写 | 一个事务：**先**按 `p_request_key` 查 `judgment_settlements`（R06）：命中且该行的 `judgment_id = p_judgment_id` 且 `request_digest = digest(canonical(row 的操作载荷))` → `('already_applied', 该行 seq)`，**不校验租约**（响应丢失后的重试在租约已被清空后仍能收敛）；命中但 judgment_id 或载荷摘要不同 → `('request_key_conflict', 该行 seq)`；未命中 → 新操作：锁队列行；token 校验（admin 路径传 null 且 `actor` 为 `admin:*`）；队列已 `closed_at` 且请求是自动结算 → `('already_final', seq)`（不是错误）；`seq = coalesce(max,0)+1`；校验转移；插入（含 `request_key`、`request_digest`）；`unique(request_key)` 23505 → 重读该键并按同一比较返回 `already_applied` / `request_key_conflict`；更新队列（`closed_at` / `next_attempt_at` / `attempts` / 清租约）；`withdrawn / reopened` 时 `judgment_calibration_validity.revision + 1`（同事务，审计 N2）；返回 `('applied', seq)` |
+| `apply_quarantine_override(p_judgment_id, p_override jsonb, p_quarantine_id, p_audit jsonb) → void` | 服务写 | §7.6 钩子：写 `override`，`next_attempt_at = now()`，翻转 `dq_quarantine` 项，写 `research_audit_log`，同一事务 |
+| `insert_calibration(row jsonb, p_expected_revision bigint) → (status text)` | 服务写 | 锁 validity 行；要求 `row.validity_revision = p_expected_revision = 锁住的 validity.revision`，任一不等 → `('stale_revision')`，不写（审计 G19 的并发撤回；R05）；`fingerprint` 已存在 → `('duplicate')`；否则插入 → `('inserted')` |
+| `set_job_state(p_job, p_expected_updated_at, p_state jsonb) → boolean` | 服务写 | 乐观锁更新 `judgment_job_state`；首次 `p_expected_updated_at = null` |
 | `repair_stale_batches(p_dataset, p_older_than interval) → integer` | 服务写 | 把 `judgments.*` 数据集中 `running` 超过 `p_older_than`（默认 15 分钟）的批次标 `failed`（`errors += {code:'stale_running'}`）；每次 cron 开头调用（审计 G26） |
 
 ### 5.7 数据访问契约 `src/lib/judgments/db.ts`
@@ -431,10 +491,16 @@ export interface JudgmentsDb {        // 生产实现 = PostgREST from() + rpc()
   claimDue(limit): Promise<QueueRow[]>;                          // rpc claim_due_judgments
   releaseLease(judgmentId, leaseToken, patch): Promise<void>;    // rpc release_lease
   settlementsOf(judgmentIds): Promise<SettlementRow[]>;
-  appendSettlement(judgmentId, leaseToken | null, requestKey, row): Promise<{ seq; status: 'applied'|'already_applied'|'already_final' }>;
-  calibrationCohort(methodology, version, window): AsyncIterable<Envelope>;   // rpc calibration_cohort 分页（anon）
-  latestCalibration(methodology, version, scope): Promise<CalibrationRow | null>;
-  insertCalibration(row): Promise<'inserted' | 'duplicate'>;     // unique(fingerprint) → duplicate
+  appendSettlement(judgmentId, leaseToken | null, requestKey, row): Promise<{ seq; status: 'applied'|'already_applied'|'already_final'|'request_key_conflict' }>;
+  calibrationCohort(methodology, version, window, cutoff, after?): AsyncIterable<Envelope>;   // 公共读：rpc calibration_cohort（anon，受发布门控；校准页用）
+  calibrationCohortInternal(methodology, version, window, cutoff, after?): AsyncIterable<Envelope>;   // 服务读：rpc calibration_cohort_internal（service_role，不受发布门控；校准 cron 用，R04）
+  latestCalibration(methodology, version, scope): Promise<{ row: CalibrationRow; valid: boolean } | null>;   // valid = revision 相等且未过期
+  calibrationValidity(methodology, version): Promise<{ revision: bigint }>;
+  insertCalibration(row, expectedRevision): Promise<'inserted' | 'duplicate' | 'stale_revision'>;   // rpc insert_calibration（row.validity_revision 必须等于 expectedRevision）
+  syncMethodology(row, actor, reason): Promise<{ changed; seq }>;  // rpc sync_methodology
+  methodologyStateAt(id, version, cutoff): Promise<MethodologyEvent | null>;
+  jobState(job): Promise<{ state; updated_at } | null>;
+  setJobState(job, expectedUpdatedAt, state): Promise<boolean>;   // rpc set_job_state
 }
 export interface JudgmentInputsDb {   // gather / replay / resolver 的只读事实层入口；facts / macro / tableRows 的实现用 anon 客户端（§3.5）
   facts: Pick<FactsDb, 'readFacts' | 'factsByIds' | 'metricsOfIssuer' | 'filingsOfIssuer'> & { deriveMetricsAsOf(issuer, market, asOf, formulaVersion): Promise<MetricRow[]> };   // 规格二 §4.8 + §12.2
@@ -465,7 +531,7 @@ judgment_id = uuidV8(sha256(canonicalize({
 
 1. 校验：方法存在且 `active`（`draft` 仅 `dryRun`）；`subject` 格式、类型在方法 `subject_types` 与公共表允许集内、存在性；`producer_kind ∈ {rule, model}`；`code_version` 非空；每个输入 `kind ∈ 方法.input_kinds ∩ 公共白名单`，**重跑构造器**并与提交的 `snapshot` 字节一致（§3.5），`origin` 键在冻结表内；`max(available_at) ≤ as_of 日终`（否则 `lookahead`）；`registered_at = serverTime()`；`retrospective` 按 §3.4（含 `labelAvailableAt` 检查）。
 2. 活跃判断：`claim` 按 kind 校验；`condition` 走对应 resolver 的 `validateParams()`；`horizon` 与方法声明一致；`target = resolveTarget(...)`（失败 → 转为 abstain `target_unresolvable`）；算 `settle_after / settle_by`。
-3. 算 id；`getJudgment(id)`：存在且**完整规范化登记载荷**相同 → `{ id, duplicate: true }`；不同 → `quarantine(dataset='judgments', table_name='judgments', natural_key=id, reason_code='idempotency_conflict', payload={registered, attempted})`，抛 `idempotency_conflict`。规范化载荷 = 行的全部列**减去**运行元数据 `registered_at / retrospective / settle_after / settle_by / code_version / batch_id / created_at`（这些由时间或环境决定），即含 `subject_*, judgment_type, methodology_*, kind, producer_kind, producer_ref, producer_nonce, as_of, inputs, inputs_hash, abstained, abstain_reason, claim, condition, horizon, target, label_policy`（审计 G21）。
+3. 算 id；`getJudgment(id)`：存在且**完整规范化登记载荷**相同 → `{ id, duplicate: true }`；不同 → `quarantine(dataset='judgments', table_name='judgments', natural_key=id, reason_code='idempotency_conflict', payload={registered, attempted})`，抛 `idempotency_conflict`。规范化载荷 = 行的全部列**减去**真正的运行元数据 `registered_at / retrospective / code_version / batch_id / created_at`（由登记时刻或环境决定），即含 `subject_*, judgment_type, methodology_*, kind, producer_kind, producer_ref, producer_nonce, as_of, inputs, inputs_hash, abstained, abstain_reason, claim, condition, horizon, target, label_policy, settle_after, settle_by`——`settle_after / settle_by` 由 `target` 与方法 `grace_days` 确定性导出（§3.4），所以参与比较，且 `register_judgment` RPC 会重算核对（审计 G21）。
 4. `registerJudgment` RPC；23505 → 回到第 3 步重读。
 5. 返回 `{ id, duplicate: false }`。调用方负责批次（dataset `judgments.produce.<methodology_id>`，counts：`inserted` 新行、`duplicates`、`quarantined`、`failed`；弃权行计 `inserted`，`errors` 加信息码 `abstained_summary`）。
 
@@ -478,7 +544,7 @@ judgment_id = uuidV8(sha256(canonicalize({
 
 ### 6.4 生产者 runner `src/lib/judgments/produce.ts`
 
-`produce(methodology, subjects, asOf, { db, inputsDb, batch, signal })`：逐主体 `gather → compute → condition → registerJudgment`；单主体失败不影响其他；回执 `errors` 带 `{code, key: subject_key}`。宏观 WP-M3 的发布步骤、§7.1 的补偿扫描、行业 / 公司规格的 cron 都调它。
+`produce(methodology, work: Array<{ subject, asOf, binding?: Record<string, string> }>, { db, inputsDb, batch, signal })`：逐项 `gather(subject, asOf, binding, db) → compute → condition → registerJudgment`；`binding` 是生产者要绑定的上游对象（宏观：`{ snapshot_id }`），`gather` 必须把它作为输入引用（宏观：`macro_snapshot` 的 `ref.snapshot_id`），所以同区域同日的两个快照得到两条不同 `inputs_hash`、不同 id 的判断，补偿扫描按 `snapshot_id` 逐个核对（审计 G25）；单项失败不影响其他；回执 `errors` 带 `{code, key: subject_key, binding}`。宏观 WP-M3 的发布步骤、§7.1 的补偿扫描、行业 / 公司规格的 cron 都调它。
 
 ---
 
@@ -488,7 +554,7 @@ judgment_id = uuidV8(sha256(canonicalize({
 
 - `GET|POST /api/cron/judgments-settle`（`CRON_SECRET` Bearer，`force-dynamic`，`maxDuration = 300`——仓库已有先例 `securities-sync`，部署套餐是否允许由 owner 在生产确认；`vercel.json` 增 `{ "path": "/api/cron/judgments-settle", "schedule": "0 3 * * *" }`：03:00 UTC 时前一交易日的美、A、港收盘都已可得；现有 cron 时段 00:00 / 00:30 / 01:30 / 16:15 / 21:30 UTC，不冲突）。`?preview=1` 不写库。脚本 `scripts/judgments/settle.ts` 共用核心。
 - 预算：整个运行用一个 `deadline = start + 280 s` 与派生的 `AbortSignal` 贯穿 resolver 与 provider 调用（`fetchEastmoneyKline` / `fetchDatagatewayDailyKline` 都接受 `signal`）。领取按**小批**进行：每批 20 条，只有当"剩余预算 > 批内最坏取数时间 + 30 s 收尾"时才领取下一批；批内最坏取数时间 = `20 / 4 并发 × 每条最坏`，每条最坏 = resolver 声明的 `maxFetchMs`（`price_return`：主序列 + 基准序列，各按 provider 的超时 × 尝试次数；东方财富美股多前缀尝试每个默认 5 s，DataGateway 7 s）。`start + 200 s` 后不再领取。`finally` 里 `finishBatch`；无论如何每次 cron 开头先 `repair_stale_batches('judgments.settle', '15 minutes')`，所以进程被硬终止也不会留下永久 `running`（审计 G26）。未处理完的租约按 §5.4 自然过期。
-- 步骤 0（补偿，审计 F28 / G25）：`dq_freshness.detail.produce_marker`（dataset `judgments.produce.macro_regime`）记录上次扫描到的宏观快照 `created_at`；本次扫描 `macro_snapshots` 中 `created_at > marker` 且 `status ∈ {active, superseded}`（失败快照除外）的全部快照，对每个用 GIN 索引 `inputs @> [{"kind":"macro_snapshot","ref":{"snapshot_id":…}}]` 查是否已有判断（含弃权行），缺的调 `produce(macro_regime_v1, …)`；全部成功后推进 marker（失败不推进）。
+- 步骤 0（补偿，审计 F28 / G25 / N2）：`judgment_job_state['produce:macro_regime@v1'].state = { marker_created_at, marker_snapshot_id }` 记录上次处理到的宏观快照；本次用 `MacroReadApi.snapshotsSince(marker, 200)` 取 `status ∈ {active, superseded}`（失败快照除外）的快照，按 `(created_at, snapshot_id)` 顺序逐个：GIN 查 `inputs @> [{"kind":"macro_snapshot","ref":{"snapshot_id":…}}]` 是否已有判断（含弃权行），缺的调 `produce(macro_regime_v1, [{ subject, asOf: snapshot.as_of, binding: { snapshot_id } }])`；每成功一个就 `set_job_state` 推进 marker（乐观锁；失败的那个不推进，下次从它开始）。
 - 步骤 1：`startBatch({producer:'ts-judgments', dataset:'judgments.settle', codeVersion})` → 循环 `claimDue(20)` → 按 resolver 分组，≤ 4 并发 → 每条按 §7.2 处理 → `finishBatch` → `recordAttempt('judgments.settle', {ok, cadence:'daily'})`。
 - 校准不在本任务里：独立 `GET|POST /api/cron/judgments-calibrate`（`0 4 * * 1`，每周一；§8.3），同样的预算与小单元续跑规则。
 
@@ -540,11 +606,11 @@ resolver 返回 `Resolved{value, label?, from, to, label_available_at, evidence}
 |---|---|---|---|
 | `idempotency_conflict` | §6.2 | `judgment_id` | `{registered, attempted}` |
 | `settlement_basis_mismatch` | §7.4 | `judgment_id` | `{registered_bar, refetched_bar, source, evidence（完整 bars）, evidence_hash}` |
-| `settlement_ambiguous_fact` | §7.3 | `judgment_id` | `{candidates: [{fact_ids, key, value_text}], evidence_hash}` |
+| `settlement_ambiguous_fact` | §7.3 | `judgment_id` | `{candidates: [{ key, value_text, derivation: { formula_version, input_facts: FactProjection[], state_rev, cutoff } }], evidence_hash}`（每个候选是完整的派生行，含全部底层事实投影与可得日期） |
 | `settlement_base_bar_missing` | §7.3 | `judgment_id` | `{base_date, series_from, series_to, bars_near_base, evidence_hash}` |
 | `settlement_benchmark_gap` | §7.3 | `judgment_id` | `{missing_dates, evidence_hash}` |
 
-钩子 `src/lib/dq/judgments-resolver.ts`（挂 `/api/admin/dq/quarantine/[id]`；`POST` body 可带 `resolution`）：`resolved_accept` 的裁决按原因码定义，必须能直接推出唯一实现值（审计 G12）：`basis_mismatch` → `resolution = {kind:'accept_refetched', evidence_hash}`（以隔离时保存的完整 `evidence` 结算，不再重抓）；`ambiguous_fact` → `resolution = {kind:'choose_fact', fact_ids}`（必须是 `candidates` 之一）；`base_bar_missing` / `benchmark_gap` → 只能 `resolved_reject`（缺的 bar 无法由人补出；接受请求 → 400 `resolution_not_applicable`）。`apply_quarantine_override` 把 `override = {reason_code, resolution, evidence_hash, resolved_by, at}` 写入队列并 `next_attempt_at = now`；下次结算直接用 `override.resolution` 构造 `Resolved`（不重抓），证据里带 `override`。`resolved_reject` → `append_settlement(void, reason='quarantine_rejected')`。钩子幂等；`research_audit_log` 记录；写队列、写审计、翻转隔离项在同一个 RPC 事务内。
+钩子 `src/lib/dq/judgments-resolver.ts`（挂 `/api/admin/dq/quarantine/[id]`；`POST` body 可带 `resolution`）：`resolved_accept` 的裁决按原因码定义，必须能直接推出唯一实现值（审计 G12）：`basis_mismatch` → `resolution = {kind:'accept_refetched', evidence_hash}`（以隔离时保存的完整 `evidence` 结算，不再重抓）；`ambiguous_fact` → `resolution = {kind:'choose_fact', chosen: <candidates 之一的完整对象，含 derivation>}`（钩子校验 `digest(chosen)` 在 `candidates` 的 digest 集合内）；`base_bar_missing` / `benchmark_gap` → 只能 `resolved_reject`（缺的 bar 无法由人补出；接受请求 → 400 `resolution_not_applicable`）。`apply_quarantine_override` 把 `override = {reason_code, resolution, evidence_hash, resolved_by, at}` 写入队列并 `next_attempt_at = now`；下次结算**不读事实层、不重抓**，直接从 `override.resolution` 里冻结的完整证据构造 `Resolved`（`accept_refetched` 用隔离时的完整 bars，`choose_fact` 用 `chosen.derivation`），`label_available_at` 取自该证据，证据里带 `override`（审计 G12）。`resolved_reject` → `append_settlement(void, reason='quarantine_rejected')`。钩子幂等；写队列、写 `research_audit_log`、翻转隔离项在同一个 RPC 事务内（`apply_quarantine_override`）。
 
 ---
 
@@ -566,7 +632,7 @@ resolver 返回 `Resolved{value, label?, from, to, label_available_at, evidence}
 
 ### 8.3 任务与持久化
 
-`/api/cron/judgments-calibrate`：工作单元 = 一个 `(methodology@version, scope)`；每次运行按注册表顺序逐单元处理，预算规则同 §7.1，预算不足时记录 `next_unit` 到 `dq_freshness.detail`（dataset `judgments.calibrate`）下次续跑。单元：`calibrationCohort` 分页取 cohort → 算 §8.1 / §8.2 → cohort 清单（§5.5 `cohort_path`，含 `query_bounds`；私有桶，service role；校准页经服务端读）→ `fingerprint` 相同 → `duplicate`，否则 `insertCalibration`。只有 `scope='all'` 的行决定状态（§9.1）；分层行只展示。cohort 不是一致性快照（分页之间可能有新结算），所以 `cohort_sha256 + query_bounds` 记录实际用到的集合与边界，报告据此可完全重算 `n_registered / n_settled / n_void / n_retrospective_excluded / n_independent` 与全部指标（审计 G19）。**失效**：`valid_until = computed_at + 14 天`（两个周跑周期），过期的 `calibrated` 按 `insufficient` 显示；admin `withdraw / reopen` 一条结算时，同一 RPC 事务把该方法的最新校准行标记进 `dq_freshness.detail.invalidated[]`，读取时视为过期，直到下次校准运行写出新行。
+`/api/cron/judgments-calibrate`：工作单元 = 一个 `(methodology@version, scope)`；每次运行按注册表顺序逐单元处理，预算规则同 §7.1。单元的续跑状态在 `judgment_job_state[jobKey('calibrate', …)]`：`{ generation: uuid, cutoff, expected_revision, query_bounds, after: judgment_id | null, manifest: Array<{ start_after, end_after, path, sha256 }> }`（审计 G26；R02）。流程：开始时生成 `generation`、读 `validity.revision` 为 `expected_revision`、`cutoff = now()`，并把 `query_bounds = { window_from, window_to, registered_at_lte: cutoff, settled_at_lte: cutoff }` 一次性固定（R03）；cron 用 **service-role 客户端**调 `calibration_cohort_internal(…, cutoff, after)`（R04：未发布的方法照常校准；公共 `calibration_cohort` 只给校准页）逐页取；每页先上传到**唯一的不可变对象** `judgments-calibration/partial/<unit>/<generation>/<start_after>.json`，再用**一次** `set_job_state`（乐观锁）同时追加 manifest 条目 `{start_after, end_after, path, sha256}` 并推进 `after`；CAS 失败（并发 worker 已推进）→ 丢弃本 worker 的对象，从已提交状态重新读 `after`；崩溃在上传后、CAS 前 → 对象成为孤儿（不在 manifest 内，永不被消费，按前缀定期清理），重试从已提交的 `after` 重新取同一页。预算不足就停，下次从 `after` 继续同一 `generation / cutoff / query_bounds`。全部页取完后**只按 manifest 列出的对象**（逐个校验 `sha256`）重组 cohort → 算 §8.1 / §8.2 → 写最终 cohort 清单（§5.5 `cohort_path`，含 `query_bounds`）→ `insert_calibration(row{validity_revision: expected_revision, …}, expected_revision)`：`inserted` **或** `duplicate`（同指纹，即同 cohort、同 revision、同 bounds 的报告已存在）→ CAS 清空该 `generation` 的单元状态（R05：`duplicate` 不再把已完成的截止钉在队列里）；清空失败（CAS 冲突）→ 下次运行发现 manifest 完整且 `insert_calibration` 再次返回 `duplicate` 时重试清空；`stale_revision`（期间有撤回 / 重开）→ 清空单元状态并以新的 `generation / cutoff / bounds` 重算。只有 `scope='all'` 的行决定状态（§9.1）；分层行只展示。报告据 `cohort_sha256 + query_bounds` 可完全重算 `n_registered / n_settled / n_void / n_retrospective_excluded / n_independent` 与全部指标（审计 G19）。**失效**（审计 N2）：显示有效 ⇔ `calibration.validity_revision = validity.revision` **且** `valid_until > now`（`valid_until = computed_at + 14 天`，两个周跑周期）；`append_settlement` 在 `withdrawn / reopened` 时原子 `revision + 1`，所以撤回后旧报告立即失效，无论校准任务何时再跑；校准任务开始后发生的撤回由 `insert_calibration` 的 `stale_revision` 拦截。
 
 ### 8.4 显示阈值 `threshold_n` 与 `ece_max`（**运营门槛，不是统计保证**；owner 决策 O2）
 
@@ -592,7 +658,7 @@ resolver 返回 `Resolved{value, label?, from, to, label_available_at, evidence}
 
 ```
 lifecycle   := abstained | open | settled(hit|miss) | void | withdrawn | pending_fill   // 单条判断：最新结算行 + 队列；pending_fill 仅私有适配器（§11.2）
-calibration := insufficient | failed | calibrated | evaluated | self_assessed   // 方法级：scope='all' 最新且未过期（valid_until）、未被 invalidated 的校准行（score 型 evaluated；私有 self_assessed）；方法 publishable=false 时公共读接口不返回卡片
+calibration := insufficient | failed | calibrated | evaluated | self_assessed   // 方法级：scope='all' 最新校准行，且 calibration_valid（validity_revision 相等且 valid_until 未过）；无效 → 按 insufficient 显示（score 型 evaluated；私有 self_assessed）；方法 publishable=false 时 RLS 层就不返回任何行
 ```
 
 显示规则由二者共同决定；"已结算"不是"已校准"的更高等级：一条判断知道了答案，不说明方法的概率可信。
@@ -636,8 +702,8 @@ interface JudgmentCard {
 
 读取时由底层判断计算，不登记、不结算。前提（任一不满足 → 显示"不计算"并给出原因；审计 G23）：
 1. 底层 `thesis_win_rate` 与 `return_range` **两者**都 `lifecycle='open'`，且两者方法都 `calibration='calibrated'`；
-2. `return_range.scenarios` 存在（`[{label:'up', p, value}, {label:'down', p, value}]`，`Σp = 1`，`value_up > 0 > value_down`，均有限），且与 `thesis_win_rate` 同主体、同 `target`、同 `condition.params`（同一事件、同一价格口径 `source/adjustment`、同一 `unit`）；
-3. 两者 `as_of` 相同；`scenarios` 里 `p_up` 与 `thesis_win_rate.p` 之差 ≤ 0.01（否则两个判断自相矛盾，显示"输入不一致"）。
+2. `return_range.scenarios` 存在（`[{label:'up', p, value}, {label:'down', p, value}]`，`Σp = 1`，`value_up > 0 > value_down`，均有限），且**事件绑定**成立：`return_range.claim.scenario_event_hash = digest(thesis_win_rate.condition)`——情景必须声明自己是"对同一个 `condition`（resolver + params + predicate）的条件分布"，`up` 情景 ⇔ 该 predicate 为真；只比较 `params` 不够（`return > 10%` 的事件与"涨 / 跌"的情景不是同一事件；审计 G23）。公司规格的 `return_range` 方法在登记时必须写入这个哈希；
+3. 两者 `as_of` 相同、同主体、同 `target`、同 `unit`；`scenarios` 里 `p_up` 与 `thesis_win_rate.p` 之差 ≤ 0.01（否则两个判断自相矛盾，显示"输入不一致"）。
 赔率 `b = value_up / |value_down|`；分数凯利 `f = k · (p·b − (1 − p)) / b`（`b > 0` 由前提 2 保证），`k` 是公司规格参数（总纲 §2.2 给出 ¼–½ 的区间）；星级映射由公司规格定义。
 
 ### 9.5 UI 流程
@@ -663,7 +729,7 @@ interface JudgmentCard {
 
 ## 10. 读取接口
 
-共同约定：公共只读（anon 客户端 + RPC）；`force-dynamic`；参数重复 → 400 `invalid_parameter:<name>`；错误与空结果 `no-store`；成功 `Cache-Control: public, max-age=300, s-maxage=600`；响应顶层含 `codeVersion`。两种读取语义：`view=latest`（默认：最新判断 + 最新结算 + 最新有效校准）与 `view=as_known&asOf=`（系统事件时间截止 `cutoff = asOf 日终`：判断 `registered_at ≤ cutoff`（**不是** `as_of`，补登记的历史判断只有登记后才"已知"；审计 G22）、结算 `settled_at ≤ cutoff`、校准 `computed_at ≤ cutoff`、方法行按 `synced_at ≤ cutoff` 的版本；合并发行人关系按当前读取，卡上标注）。同日多条按 `registered_at desc, judgment_id` 定序。只返回 `publishable=true` 方法的卡片。
+共同约定：公共只读（anon 客户端 + RPC）；`force-dynamic`；参数重复 → 400 `invalid_parameter:<name>`；错误与空结果 `no-store`；成功 `Cache-Control: public, max-age=300, s-maxage=600`；响应顶层含 `codeVersion`。两种读取语义：`view=latest`（默认：最新判断 + 最新结算 + 最新有效校准 + 方法当前状态）与 `view=as_known&asOf=`（系统事件时间截止 `cutoff = asOf 日终`：判断 `registered_at ≤ cutoff`（**不是** `as_of`，补登记的历史判断只有登记后才"已知"；审计 G22）、结算 `settled_at ≤ cutoff`、校准 `computed_at ≤ cutoff` 且其 `validity_revision` 等于**当前** revision（撤回后的报告在历史视图里也不再算有效——历史页面不应复活已知错误的标签）、方法状态 = `judgment_methodology_events` 中 `occurred_at ≤ cutoff` 的最后一条（`synced_at` 不参与；审计 N3）；**发布准入永远按当前 `publishable`**（RLS 施加）；合并发行人关系按当前读取，卡上标注）。同日多条按 `registered_at desc, judgment_id` 定序。
 
 | 路径 | 参数 | 返回 |
 |---|---|---|
@@ -684,9 +750,9 @@ interface JudgmentCard {
 
 ### 11.1 `macro_regime@v1`（公共，`producer_kind='rule'`）
 
-- **触发**：宏观 WP-M3 `publishSnapshot()` 置 active 后调用 `produce(macro_regime_v1, [{type:'macro_region', key: region}], as_of = snapshot.as_of)`；失败不阻塞宏观发布；§7.1 步骤 0 的补偿扫描兜底（幂等：同快照同输入 → 同 id）。
+- **触发**：宏观 WP-M3 `publishSnapshot()` 置 active 后调用 `produce(macro_regime_v1, [{ subject: {type:'macro_region', key: region}, asOf: snapshot.as_of, binding: { snapshot_id } }])`；失败不阻塞宏观发布；§7.1 步骤 0 的补偿扫描兜底（幂等：同快照同输入 → 同 id；不同快照即使同区域同日也是不同判断，§6.4）。
 - **上游绑定**：`upstream.macro_methodology_version = 'v1.0'`（宏观规格 §5.2）；快照的 `methodology_version` 不同 → abstain `upstream_version_mismatch`，并要求登记新的 F4 方法版本。
-- **`gather`**：`macro_snapshot` 输入（投影含 `scores / coverage / margin / growth_axis / inflation_axis`，`available_at` = 其观测 `available_at` 的最大值）+ 该快照 `observation_ids` 每条 `macro_observation` 输入（冻结 `value / vintage_id / available_at`）。
+- **`gather`**：`binding.snapshot_id` 指定的 `macro_snapshot` 输入（投影含 `scores / coverage / margin / growth_axis / inflation_axis / catalog_version`，`available_at` = 其观测 `available_at` 的最大值）+ 该快照 `observation_ids` 每条 `macro_observation` 输入（冻结 `value / vintage_id / available_at`）+ `table_rows{ table:'macro_series', natural_key: region }`（冻结目录权重与 `definition_version`，回放与证据不依赖目录表的后续改动）。
 - **`compute`**：`selected = primary_state`，`classes = [recovery, overheat, stagflation, recession]`，`distribution = norm`，`scores_are_not_probabilities = true`，`margin_pp = (norm[primary] − norm[secondary]) × 100`（§8.1）。`deps` 含宏观 `regime.ts`、规则表与目录快照模块（`catalog_version` 冻结进 `claim`），改动即升版本。
 - **判断的内容与可检验标签（审计 G02 / G05 / G29）**：判断是**当前期 nowcast**——"参考期 `reference_period = as_of 所在月`，用截至 `as_of` 可见的数据判定处于象限 X"。客观标签 = **同一分类函数**（宏观 `regime.ts` 同版本规则表、同目录权重、同 argmax）对**同一参考期**在**截止 vintage** 下重算得到的 `primary_state`：`resolver='macro_regime_replay'`，`params = { region, reference_period, macro_methodology_version: 'v1.0', catalog_version }`，`horizon = { calendar_months, 3 }`，`target = { period: reference_period + 3 }`（给迟到发布与修订留 3 个月，取宏观规格 §5.2 Δ(3M) 的同一时间尺度），`label_policy='cutoff_vintage'`，`settle_by = target 月末 + 30 天`（§3.4）。混频序列（CN GDP 季度）、未匹配规则、缺失观测的处理**完全沿用宏观 `regime.ts`**（缺失不贡献、计入 `uncovered_weight`；`coverage < 0.6` → 不判定）——F4 不另写轴规则，所以不存在第二套分类函数；重算时 `coverage < 0.6` → `Unavailable(coverage)` → 到期 `void`。这检验的是"nowcast 在数据补全与修订后是否仍成立"（时效 + 修订风险）；它不检验资产表现，也不检验 3 个月后的状态。
 - **资产含义的检验**（美林时钟的配置含义：recovery → 股票优于债券……）是另一种判断类型 `macro_regime_asset_pair`，需要：配对 resolver（`r_long − r_short`，同币种、同回报口径、同日对齐）、宏观目录里标明"回报序列 vs 收益率序列"的资产序列（现金 / 短期国债、债券总回报等目前目录没有）、以及按 `margin_pp` 分档的 `p` 表的样本外来源。**v1 不实现**（§3.3、§18.1）；是否立项是 owner 决策 O3。
@@ -713,7 +779,7 @@ interface JudgmentCard {
 
 ### 12.2 披露事实（规格二第 8 稿）
 
-已满足：`readFacts(issuer, market, {concepts, asOf}) → {stateRev, rows, truncated}`（截止读取；F4 消费完整信封，`truncated=true` 时拒绝使用）、`factsByIds(ids)`（回放）、`metricsOfIssuer(issuer, market, formulaVersion)`（仅 `gather` 读当前缓存时用，投影里带 `input_fact_ids` 与 `based_on_rev`）、`filingsOfIssuer`（财期序列）。需要：`deriveMetricsAsOf(issuer, market, asOf, formulaVersion)` 库函数（规格二 §9 读接口的 `asOf` 实时 derive 路径已有此能力，需作为库函数暴露；结算与回放只用它，不读缓存）；`financial_metrics` 没有 `status` 列，"该期可见"的判定以底层事实在 `cutoff` 可见为准。anon 可读：`financial_facts(status='ok')` 与 `filings` 为 public read（规格二 §4.7），`fact_sync_scope` 不是——F4 不读它。
+已满足：`readFacts(issuer, market, {concepts, asOf}) → {stateRev, rows, truncated}`（截止读取；F4 消费完整信封，`truncated=true` 时拒绝使用）、`factsByIds(ids)`（回放）、`metricsOfIssuer(issuer, market, formulaVersion)`（仅 `gather` 读当前缓存时用，投影里带全部底层事实投影 `input_facts` 与 `based_on_rev`）、`filingsOfIssuer`（财期序列）。需要：`deriveMetricsAsOf(issuer, market, asOf, formulaVersion)` 库函数（规格二 §9 读接口的 `asOf` 实时 derive 路径已有此能力，需作为库函数暴露；结算与回放只用它，不读缓存）；`financial_metrics` 没有 `status` 列，"该期可见"的判定以底层事实在 `cutoff` 可见为准。anon 可读：`financial_facts(status='ok')` 与 `filings` 为 public read（规格二 §4.7），`fact_sync_scope` 不是——F4 不读它。
 
 ### 12.3 文档管道（F3）与外资研报
 
@@ -739,6 +805,10 @@ interface JudgmentCard {
 | 事实读取 `truncated=true` | 不用不完整数据；结算退避 | `unavailable_summary(truncated)` | — |
 | 隔离项到 `settle_by` 仍未处理 | `void(unresolved_inconsistency)` | `voided_summary` | — |
 | 租约 token 不匹配 | 该条放弃，不写 | `lease_lost`（信息） | — |
+| 校准期间发生撤回 / 重开 | 丢弃本次报告，下次重算 | `stale_revision`（信息） | — |
+| 同 `request_key` 不同 judgment / 载荷 | 不写，上报 | `request_key_conflict` | partial |
+| `set_job_state` 乐观锁失败（并发 cron） | 本次放弃该单元 | `job_state_conflict`（信息） | — |
+| 方法同步 `formula_hash` 漂移 | 拒绝同步，脚本退出码 2 | `formula_hash_drift` | — |
 | 输入可得时刻晚于 `as_of` 日终 | 拒绝 | `lookahead` | partial |
 | 同 id 不同语义字段 | 隔离 + 拒绝 | `idempotency_conflict` | partial |
 | `claim / condition` 校验失败 | 拒绝 | `invalid_claim` / `invalid_condition` | partial |
@@ -776,7 +846,7 @@ interface JudgmentCard {
 
 ### 14.2 数据库（`test:db`）
 
-`src/lib/judgments/judgments.integration.test.ts`（含 `S4_TEST_STATE`，进 `criticalSuites`）：迁移可重放；五表触发器（只追加、方法表限列、`settlement_sequence` 每条转移与序号示例）；`register_judgment` 同事务插队列、拒绝与方法行不一致的 `kind`；`claim_due_judgments` 的 `skip locked` 与租约 token；`append_settlement` 并发（两个连接同一判断：先到者 `applied`，后到者 `already_final`，不是 23505；过期 token → `lease_lost`）；`request_key` 重放 → `already_applied`；RLS 真实角色（anon 读四表不读队列、写被拒；service_role 对 `judgments / judgment_settlements` 直接 insert 被拒、经 RPC 成功；anon 能执行公共读 RPC、不能执行写 RPC）；`latest_judgment_cards` 的 `as_known`（含 `registered_at` 截止）与合并发行人反查、`publishable=false` 过滤；`calibration_cohort` 分页；`repair_stale_batches`；注册表 ↔ 表 `formula_hash` 一致；GIN 查询。
+`src/lib/judgments/judgments.integration.test.ts`（含 `S4_TEST_STATE`，进 `criticalSuites`）：迁移可重放；八表触发器（只追加、方法表限列且 `created_at` 不可变、事件表只追加、`settlement_sequence` 每条转移与序号示例）；`register_judgment` 同事务插队列、拒绝与方法行不一致的 `kind`、拒绝与 `target` 重算不符的 `settle_after/by`；`claim_due_judgments` 的 `skip locked` 与租约 token；`append_settlement` 并发（两个连接同一判断：先到者 `applied`，后到者 `already_final`，不是 23505；过期 token → `lease_lost`）；`request_key` 重放 → `already_applied`（持久化在 `judgment_settlements.request_key`；响应丢失、租约已清空后的重试仍 `already_applied`；同键不同 judgment / 载荷 → `request_key_conflict`；R06）；校准续跑：上传后 CAS 前崩溃 → 孤儿对象不被消费、重试同页；两个 worker 并发 → 只有 CAS 胜者的页进 manifest（R02）；`calibration_cohort` 对游标两侧的并发登记都按 `registered_at ≤ cutoff` 判定（R03）；`publishable=false` 的方法 `calibration_cohort` 为空而 `calibration_cohort_internal` 完整（R04）；窗口外撤回后指纹变化、`duplicate` 后单元状态被清空、清空失败后重试（R05）；`withdrawn` 使 `validity.revision + 1`；`insert_calibration` 的 `stale_revision`；`sync_methodology` 三种事件与 `formula_hash_drift`；**RLS 真实角色**（anon：`publishable=true` 方法的判断 / 结算 / 校准可读，`publishable=false` 的四表都读不到（直接 `select` 与公共 RPC 都为空），队列 / job_state 读不到，写被拒；service_role 读八表、对 `judgments / judgment_settlements / 队列 / 事件 / validity / job_state` 直接 insert / update 被拒、经 RPC 成功；anon 能执行公共读 RPC、不能执行写 RPC）；`latest_judgment_cards` 的 `as_known`（`registered_at` 截止、方法事件史：重同步后历史查询仍返回当时存在的方法）与合并发行人反查；`calibration_cohort` 带 `cutoff` 分页；`set_job_state` 乐观锁；`repair_stale_batches`；注册表 ↔ 表 `formula_hash` 一致；GIN 查询。
 
 ### 14.3 离线集成
 
@@ -796,7 +866,7 @@ interface JudgmentCard {
 
 | 工作包 | 交付 | 退出条件 | 估算（人日，经验值） |
 |---|---|---|---|
-| F4-0 契约与迁移 | `contract.ts`、`types.ts`、迁移（五表、触发器、十个 RPC、权限）、锁文件、`database.types.ts`、`JudgmentsDb` 三实现、`uuid-v8.ts` 抽取、集成测试 §14.2 | `test:db`、`test:migrations` 绿；`ledger.test.ts` 原样通过 | 3.5 |
+| F4-0 契约与迁移 | `contract.ts`、`types.ts`、迁移（八表、触发器、§5.6 全部 RPC、按 `publishable` 的 RLS 策略）、锁文件、`database.types.ts`、`JudgmentsDb` 三实现、`uuid-v8.ts` 抽取、集成测试 §14.2 | `test:db`、`test:migrations` 绿；`ledger.test.ts` 原样通过 | 4 |
 | F4-1 注册表、登记、回放 | `registry.ts`、方法接口（含 `deps`、`resolveTarget`）、`sync-methodologies.ts`（`formula_hash_drift`、`deps` lint）、`docs/methodologies/README.md`、`inputs.ts` 构造器（anon 路径）、`origins.ts`、`register.ts`、`produce.ts`、`replay.ts` + 脚本、回放夹具 | 单测 + 回放夹具绿 | 3 |
 | F4-2 结算 | `settle.ts`、队列逻辑、`resolvers/{price,facts,macro}.ts`、`price-capabilities.ts` + 验证程序与夹具、K 线适配器 `endDate` / 分页、隔离钩子与裁决、cron 路由、`batches.ts` 的 `deferred` 计数器与 `INFO_CODES`、`repair_stale_batches`、`vercel.json`、脚本 | `settle.test.ts` + 离线集成绿；`preview=1` 对真实库空转回执；能力表至少一个 `verified` 条目或如实全 `unsupported` | 4 |
 | F4-3 校准与显示 | `calibration.ts`（非重叠抽样、留出段、按 kind 门控）、校准 cron（工作单元续跑）、桶、失效规则、`display.ts` | 校准数学单测（外部算出的期望值）绿 | 3 |
@@ -805,7 +875,7 @@ interface JudgmentCard {
 | F4-5b 分析师适配器 | `adapters/recommendation.ts`（`PrivateJudgmentCard`）、`/api/analyst/book.self_assessment`、`/analyst` 页信心列 | 页面显示未校准态；无百分比 | 1 |
 | F4-6 文档与收尾 | runbook、接口对齐记录、§19 | 全量门禁绿；Codex 复审无 P1 | 1 |
 
-合计约 20 人日（估算，非证据）。
+合计约 20.5 人日（估算，非证据）。
 
 验收样例：
 1. 同一 `RegimeResult` 两次 `produce` → 第二次 `duplicates=1`，行数不变。
@@ -815,6 +885,9 @@ interface JudgmentCard {
 5. 管理员 `withdrawn(2)` → 卡 `lifecycle='withdrawn'`，该方法校准行立即视为失效（`insufficient`），下次校准不计入；`reopened(3)` 后重结算 `settled(4)`。
 6. 断网跑结算 cron：全 `deferred(unavailable)` → 批次 `success` + 信息码，无结算写入；resolver 抛错的运行 → `failed`，连续两次后 `dq_freshness` `error`；进程被杀后下次 cron 的 `repair_stale_batches` 把残留 `running` 标 `failed`。
 7. service_role 直接 `insert into judgments` → 权限拒绝；经 `register_judgment` 成功且队列行同时出现。
+8. 方法 `publishable=false` 时，anon 对 `judgments / judgment_settlements / judgment_calibrations` 的直接 `select` 与公共 RPC 都返回空；置 `true` 后立即可读；再置 `false` 立即消失。
+9. 重同步一个已存在的方法（`synced_at` 更新）后，`view=as_known&asOf=<同步前某日>` 仍返回该方法当时的判断与当时的状态事件。
+10. 校准任务运行中管理员撤回一条结算 → `insert_calibration` 返回 `stale_revision`，无新报告；页面上该方法的旧报告已因 `revision` 变化显示为 `insufficient`。
 
 ---
 
