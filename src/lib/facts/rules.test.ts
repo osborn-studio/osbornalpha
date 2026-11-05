@@ -51,7 +51,7 @@ describe('evaluateFactRules',()=>{
   const jump=run([ins('revenue','1000',IS)],[prior]);
   expect(jump.warnings.get('revenue_jump')).toHaveLength(1);
   expect(run([ins('revenue','100',IS)],[prior]).warnings.get('revenue_jump')).toEqual([]);
-  expect(run([ins('revenue','1000',IS)],[prior,ok('revenue','20',{...IS,filing_id:F1,period_start:'2021-10-01',period_end:'2022-09-30'})]).warnings.get('revenue_jump')).toEqual([]); // ambiguous prior → no warning
+  expect(run([ins('revenue','1000',IS)],[prior,ok('revenue','20',{...IS,filing_id:F1,period_start:'2021-10-02',period_end:'2022-09-30'})]).warnings.get('revenue_jump')).toEqual([]); // ambiguous prior → no warning
  });
  it('summarises warnings as one informational batch error per rule and merges across issuers',()=>{
   const a=new Map([['gross_margin_range',['k1']],['revenue_jump',[]]]);
@@ -108,5 +108,16 @@ describe('evaluateFactRules',()=>{
   const prior=ok('revenue','10',{...IS,filing_id:F2,period_start:'2021-10-01',period_end:'2022-09-30',is_current:true});
   expect(run([ins('revenue','110',IS)],[prior]).warnings.get('revenue_jump')).toEqual([]);
   expect(run([ins('revenue','111',IS)],[prior]).warnings.get('revenue_jump')).toHaveLength(1);
+ });
+ it('resolves prior disclosures to the current one before the ambiguity check (bulk = incremental)',()=>{
+  const key={...IS,filing_id:F2,period_start:'2021-10-01',period_end:'2022-09-30'};
+  const p10=ins('revenue','10',{...key,available_date:'2022-11-01'}),p20=ins('revenue','20',{...key,available_date:'2023-01-01',filing_id:F1});
+  const cur=ins('revenue','1000',IS);
+  const bulk=run([p10,p20,cur]).warnings.get('revenue_jump');
+  const storedAll=[p10,p20].map(r=>ok(r.concept,r.value,{...key,filing_id:r.filing_id,available_date:r.available_date,is_current:true}));
+  expect(bulk).toHaveLength(1);
+  expect(run([cur],storedAll).warnings.get('revenue_jump')).toHaveLength(1);
+  // 20 is current: 1000 vs 20 jumps; 150 vs 20 does not (it would vs 10 only if 10 were current: 150 > 10*max(10,1)+10)
+  expect(run([p10,p20,ins('revenue','150',IS)]).warnings.get('revenue_jump')).toEqual([]);
  });
 });

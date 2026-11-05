@@ -124,8 +124,14 @@ export function evaluateFactRules(input:FactRulesInput):FactRulesResult{
   const revRow=get('revenue');
   if(revRow!==undefined&&g.fresh.has('revenue')&&revRow.duration!=='INSTANT'){
    // prior-year candidates come from stored ok rows and from the other new rows, so bulk and incremental ingestion agree
-   const prior=[...input.okRows,...input.newRows].filter(r=>r!==revRow&&r.concept==='revenue'&&(r as FactRow).is_current!==false&&r.unit===revRow.unit&&r.duration===revRow.duration&&(r as FactRow).is_current!==false&&(()=>{const dd=daysBetween(r.period_end,revRow.period_end);return dd!==null&&dd>=350&&dd<=380;})());
-   const prev=new Set(prior.map(r=>dec(r.value)).map(x=>x===null?'':text(x)));
+   const newSet=new Set<AnyFactRow>(input.newRows);
+   const eligible=[...input.okRows,...input.newRows].filter(r=>r!==revRow&&r.concept==='revenue'&&(r as FactRow).is_current!==false&&r.unit===revRow.unit&&r.duration===revRow.duration&&(()=>{const dd=daysBetween(r.period_end,revRow.period_end);return dd!==null&&dd>=350&&dd<=380;})());
+   // resolve each fact key to its CURRENT disclosure (read.ts order: available_date, stored before new on ties, fact_id; last wins),
+   // so bulk and incremental ingestion see the same prior value; ambiguity is then only between distinct keys
+   const rank=(r:AnyFactRow)=>`${r.available_date}|${newSet.has(r)?1:0}|${r.fact_id}`;
+   const current=new Map<string,AnyFactRow>();
+   for(const r of eligible){const k=`${r.period_start??''}|${r.period_end}|${r.consolidation}`;const c=current.get(k);if(c===undefined||rank(r)>rank(c))current.set(k,r);}
+   const prev=new Set([...current.values()].map(r=>dec(r.value)).map(x=>x===null?'':text(x)));
    const cur=dec(revRow.value);
    if(prev.size===1&&!prev.has('')&&cur!==null){
     const p=dec([...prev][0])!;
