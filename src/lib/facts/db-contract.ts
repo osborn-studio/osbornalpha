@@ -172,6 +172,16 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect((await db.metricsOfIssuer(iss,'US','facts-derive/1.0')).map(m=>m.value)).toEqual(['0.5']);
   });
 
+  it('stageFilings validates the whole batch: a reused filing_id with a new source_ref rejects the call and writes nothing; factsByIds is deduped and ordered',async()=>{
+   const {iss,b,f,r0,r}=await published();
+   const run=await db.beginRun(iss,'US',b,1);
+   const fresh=filingInsert(iss);
+   expect((await code(db.stageFilings(run,[fresh,filingInsert(iss,{filing_id:f.filing_id})]))).startsWith('duplicate_key')).toBe(true);
+   expect((await db.filingsOfIssuer(iss,'US',{})).some(g=>g.filing_id===fresh.filing_id)).toBe(false);
+   const ids=[r0,r].sort();
+   expect((await db.factsByIds([ids[1],ids[0],ids[1],randomUUID()])).map(y=>y.fact_id)).toEqual(ids);
+  });
+
   it('metrics: stale based_on_rev is refused after publish; replacement is per issuer and atomic; metricsOfIssuer filters by formula version',async()=>{
    const {iss,b,r}=await published();
    const row=(v:string,metric='gross_margin'):MetricRow=>({issuer_id:iss,market:'US',metric,period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:v,unit:'ratio',input_unit:'USD',basis:'us_standard',formula_version:'facts-derive/1.0',inputs:[{fact_id:r,concept:'revenue',filing_id:'f',available_date:'2024-02-01'}],based_on_rev:0,as_of:'2024-03-01'});

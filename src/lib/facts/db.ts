@@ -113,7 +113,7 @@ export function supabaseFactsDb(client:SupabaseClient):FactsDb{
   }
  };
  return {
-  claimLease:(issuer,market,batch,ttl)=>call<boolean>('claim_fact_sync_lease',{p_issuer:issuer,p_market:market,p_batch:batch,p_ttl_seconds:ttl}),
+  async claimLease(issuer,market,batch,ttl){return (await call<unknown>('claim_fact_sync_lease',{p_issuer:issuer,p_market:market,p_batch:batch,p_ttl_seconds:ttl}))===true;},
   beginRun:(issuer,market,batch,gen)=>call<string>('begin_sync_run',{p_issuer:issuer,p_market:market,p_batch:batch,p_mapping_gen:gen}),
   async stageFilings(run,input){
    const out=new Map<string,string>();
@@ -121,17 +121,17 @@ export function supabaseFactsDb(client:SupabaseClient):FactsDb{
    return out;
   },
   async stageFacts(run,input){let n=0;for(const part of chunk(input))n+=Number(await call<number>('stage_facts',{p_run:run,p_rows:part}));return n;},
-  quarantineFacts:(run,ids,item)=>call<number>('quarantine_facts',{p_run:run,p_fact_ids:ids,p_item:item}),
-  publishRun:(run,manifest)=>call<number>('publish_sync_run',{p_run:run,p_manifest:manifest}),
+  async quarantineFacts(run,ids,item){return Number(await call<unknown>('quarantine_facts',{p_run:run,p_fact_ids:ids,p_item:item}));},
+  async publishRun(run,manifest){return Number(await call<unknown>('publish_sync_run',{p_run:run,p_manifest:manifest}));},
   async abandonRun(run){await call('abandon_sync_run',{p_run:run});},
   async releaseLease(issuer,market,batch,outcome,nextDue){await call('release_fact_sync_lease',{p_issuer:issuer,p_market:market,p_batch:batch,p_outcome:outcome,p_next_due:nextDue});},
-  resolveFactsQuarantine:(item,chosen,by)=>call<{promoted:number;skipped:number}>('resolve_facts_quarantine',{p_item:item,p_chosen:chosen,p_resolved_by:by}),
-  replaceMetrics:(issuer,market,rev,input)=>call<number>('replace_financial_metrics',{p_issuer:issuer,p_market:market,p_based_on_rev:rev,p_rows:input.map(metricArgs)}),
+  async resolveFactsQuarantine(item,chosen,by){const x=await call<{promoted:unknown;skipped:unknown}>('resolve_facts_quarantine',{p_item:item,p_chosen:chosen,p_resolved_by:by});return {promoted:Number(x.promoted),skipped:Number(x.skipped)};},
+  async replaceMetrics(issuer,market,rev,input){return Number(await call<unknown>('replace_financial_metrics',{p_issuer:issuer,p_market:market,p_based_on_rev:rev,p_rows:input.map(metricArgs)}));},
   async readFacts(issuer,market,opts){return resultFromEnvelope(await call<ReadFactsEnvelope>('read_facts',readArgs(issuer,market,opts)));},
   async factsByIds(ids){
    const out:FactRow[]=[];
-   for(const part of chunkIds(ids))out.push(...(await pageAll<Record<string,unknown>>(()=>c.from('financial_facts').select('*').in('fact_id',part).order('fact_id'))).map(factRowFromTable));
-   return out;
+   for(const part of chunkIds([...new Set(ids)]))out.push(...(await pageAll<Record<string,unknown>>(()=>c.from('financial_facts').select('*').in('fact_id',part).order('fact_id'))).map(factRowFromTable));
+   return out.sort((a,b)=>a.fact_id<b.fact_id?-1:a.fact_id>b.fact_id?1:0);   // deduped, ordered by fact_id across chunks
   },
   async openConflicts(issuer,market){
    return (await pageAll<{id:string;natural_key:string;payload:Record<string,unknown>}>(()=>c.from('dq_quarantine').select('id,natural_key,payload').eq('table_name','financial_facts').eq('reason_code','same_day_conflict').eq('status','open').like('natural_key',`${conflictPrefix(issuer,market)}%`).order('created_at').order('id'))).map(conflictFromItem);
@@ -146,7 +146,7 @@ export function supabaseFactsDb(client:SupabaseClient):FactsDb{
    },opts.limit);
   },
   async updateFilingLink(filingId,patch){const {error}=await c.from('filings').update(linkPatch(patch)).eq('filing_id',filingId);if(error)throw toFactsDbError(error);},
-  reconcileScope:(market,input)=>call<number>('reconcile_fact_sync_scope',{p_market:market,p_rows:input}),
+  async reconcileScope(market,input){return Number(await call<unknown>('reconcile_fact_sync_scope',{p_market:market,p_rows:input}));},
   async scopeDue(market,now,limit){
    if(limit<1)return [];
    return (await pageAll<Record<string,unknown>>(()=>c.from('fact_sync_scope').select('*').eq('market',market).gt('priority',0).lte('next_due_at',now).order('next_due_at').order('priority',{ascending:false}).order('issuer_id'),limit)).map(scopeFromTable);

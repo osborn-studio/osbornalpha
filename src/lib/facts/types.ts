@@ -72,6 +72,7 @@ export interface FactsDb{
  resolveFactsQuarantine(itemId:string,chosen:string[],resolvedBy:string):Promise<{promoted:number;skipped:number}>;
  replaceMetrics(issuer:string,market:Market,basedOnRev:number,rows:MetricRow[]):Promise<number>;
  readFacts(issuer:string,market:Market,opts:ReadFactsOptions):Promise<ReadFactsResult>;
+ /** Rows for the given ids: deduped, ordered by fact_id; unknown ids are omitted. */
  factsByIds(ids:string[]):Promise<FactRow[]>;
  openConflicts(issuer:string,market:Market):Promise<ConflictItem[]>;
  filingsOfIssuer(issuer:string,market:Market,opts:{from?:string;to?:string;limit?:number;unlinkedOnly?:boolean}):Promise<FilingRow[]>;

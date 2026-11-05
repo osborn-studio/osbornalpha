@@ -39,6 +39,9 @@ const canon=(s:string)=>{
 export function numericEquals(a:string,b:string):boolean{return canon(a)===canon(b);}
 
 const ASYNC_METHODS=['claimLease','beginRun','stageFilings','stageFacts','quarantineFacts','publishRun','abandonRun','releaseLease','resolveFactsQuarantine','replaceMetrics','readFacts','factsByIds','openConflicts','filingsOfIssuer','updateFilingLink','reconcileScope','scopeDue','scopeRows','metricsOfIssuer'] as const satisfies readonly (keyof FactsDb)[];
+/** Compile-time check: ASYNC_METHODS must cover every FactsDb method. */
+export type AsyncMethodsComplete=[Exclude<keyof FactsDb,typeof ASYNC_METHODS[number]>] extends [never]?true:never;
+export const asyncMethodsComplete:AsyncMethodsComplete=true;   // type error here ⇒ a FactsDb method is missing from ASYNC_METHODS
 const sk=(issuer:string,market:Market)=>`${issuer}|${market}`;
 type KeyPart=Pick<FactRow,'concept'|'period_start'|'period_end'|'consolidation'|'unit'>;
 const keyOf=(f:KeyPart)=>[f.concept,f.period_start??'',f.period_end,f.consolidation,f.unit].join('|');
@@ -112,8 +115,9 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
 
  const raw:MemoryFactsDb={
   tables,
-  setNow:iso=>{fixedNow=iso;},
+  setNow:iso=>{fixedNow=iso===null?null:new Date(iso).toISOString();},
   expireLease:(issuer,market)=>{const s=scopeOf(issuer,market);if(s&&s.lease_until!==null)s.lease_until='1970-01-01T00:00:00.000Z';},
+  // Inspection helpers below are test-only and bypass the mutex (they read the maps synchronously).
   runs:()=>clone([...runs.values()]),filings:()=>clone([...filings.values()]),facts:()=>clone([...facts.values()]),metrics:()=>clone(metrics),scope:()=>clone([...scope.values()]),
 
   async claimLease(issuer,market,batch,ttl){
@@ -134,13 +138,16 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
   },
   async stageFilings(run,input){
    const r=runLock(run);const out=new Map<string,string>();
+   const pending:FilingRow[]=[];   // validate the whole batch first (existing rows and rows pending in this call), write after the loop
    for(const row of input){
-    const existing=[...filings.values()].find(g=>g.source===row.source&&g.source_ref===row.sourceRef);
+    const same=(g:FilingRow)=>g.source===row.source&&g.source_ref===row.sourceRef;
+    const existing=[...filings.values()].find(same)??pending.find(same);
     if(existing){if(existing.issuer_id===r.issuer_id&&existing.market===r.market)out.set(row.sourceRef,existing.filing_id);continue;}
-    if(filings.has(row.filing_id))throw new FactsDbError('duplicate_key','filings_pkey');
-    filings.set(row.filing_id,{filing_id:row.filing_id,issuer_id:r.issuer_id,market:r.market,source:row.source,origin:row.origin,form_type:row.formType,fiscal_year:row.fiscalYear,fiscal_period:row.fiscalPeriod,period_end:row.periodEnd,available_date:row.availableDate,source_ref:row.sourceRef,url:row.url,document_ref:null,document_url:null,link_attempts:0,mapping_gen:0,run_id:run,created_at:now()});
+    if(filings.has(row.filing_id)||pending.some(g=>g.filing_id===row.filing_id))throw new FactsDbError('duplicate_key','filings_pkey');
+    pending.push({filing_id:row.filing_id,issuer_id:r.issuer_id,market:r.market,source:row.source,origin:row.origin,form_type:row.formType,fiscal_year:row.fiscalYear,fiscal_period:row.fiscalPeriod,period_end:row.periodEnd,available_date:row.availableDate,source_ref:row.sourceRef,url:row.url,document_ref:null,document_url:null,link_attempts:0,mapping_gen:0,run_id:run,created_at:now()});
     out.set(row.sourceRef,row.filing_id);
    }
+   for(const g of pending)filings.set(g.filing_id,g);
    return out;
   },
   async stageFacts(run,input){
@@ -148,13 +155,13 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
    const existingKeys=new Set([...facts.values()].filter(f=>f.issuer_id===r.issuer_id).map(f=>`${keyOf(f)}|${f.filing_id}|${f.mapping_gen}`));
    const fresh:FactRow[]=[];
    for(const row of input){
-    const g=filings.get(row.filing_id);
-    if(!g||g.issuer_id!==r.issuer_id||g.market!==r.market)throw unknown('financial_facts_filing_fkey');
-    if(g.available_date!==row.available_date)throw unknown('financial_facts_filing_date_fkey');
     if((row.period_start===null)!==(row.duration==='INSTANT'))throw unknown('financial_facts_instant');
     if(row.period_start!==null&&!(row.period_start<row.period_end))throw unknown('financial_facts_period');
     const candidate=`${keyOf(row)}|${row.filing_id}|${r.mapping_gen}`;
-    if(existingKeys.has(candidate))continue;
+    if(existingKeys.has(candidate))continue;   // FKs are checked on inserted rows only (Postgres)
+    const g=filings.get(row.filing_id);
+    if(!g||g.issuer_id!==r.issuer_id||g.market!==r.market)throw unknown('financial_facts_filing_fkey');
+    if(g.available_date!==row.available_date)throw unknown('financial_facts_filing_date_fkey');
     if(facts.has(row.fact_id)||fresh.some(f=>f.fact_id===row.fact_id))throw new FactsDbError('duplicate_key','financial_facts_pkey');
     existingKeys.add(candidate);
     fresh.push({fact_id:row.fact_id,issuer_id:r.issuer_id,market:r.market,filing_id:row.filing_id,run_id:run,concept:row.concept,source_concept:row.source_concept,statement:row.statement,period_start:row.period_start,period_end:row.period_end,duration:row.duration,value:row.value,value_text:row.value,unit:row.unit,consolidation:row.consolidation,available_date:row.available_date,mapping_gen:r.mapping_gen,mapping_version:row.mapping_version,status:'staged',raw_hash:row.raw_hash,created_at:at});
@@ -200,7 +207,7 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
    const s=scopeOf(issuer,market);
    if(!s||s.lease_batch_id!==batch)throw new FactsDbError('lease_lost');
    const t=now();
-   Object.assign(s,{lease_until:null,lease_batch_id:null,last_attempt_at:t,last_success_at:outcome==='success'?t:s.last_success_at,last_batch_id:batch,last_status:outcome,next_due_at:nextDue});
+   Object.assign(s,{lease_until:null,lease_batch_id:null,last_attempt_at:t,last_success_at:outcome==='success'?t:s.last_success_at,last_batch_id:batch,last_status:outcome,next_due_at:new Date(nextDue).toISOString()});
   },
   async resolveFactsQuarantine(itemId,chosen,resolvedBy){
    const [it]=await tables.select('dq_quarantine',{id:itemId},{limit:1});
@@ -248,7 +255,7 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
    if(picked.length>READ_FACTS_CAP)return {stateRev,rows:[],truncated:true};
    return {stateRev,rows:picked,truncated:false};
   },
-  async factsByIds(ids){return ids.map(id=>facts.get(id)).filter((f):f is FactRow=>!!f).map(f=>clone(f));},
+  async factsByIds(ids){return [...new Set(ids)].sort().map(id=>facts.get(id)).filter((f):f is FactRow=>!!f).map(f=>clone(f));},   // deduped, ordered by fact_id
   async openConflicts(issuer,market){
    const prefix=conflictPrefix(issuer,market);
    const rows=(await items({status:'open',reason_code:'same_day_conflict'})).filter(i=>String(i.natural_key).startsWith(prefix));
@@ -275,7 +282,7 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
   },
   async scopeDue(market,at,limit){
    if(limit<1)return [];
-   const rows=[...scope.values()].filter(s=>s.market===market&&s.priority>0&&s.next_due_at<=at);
+   const rows=[...scope.values()].filter(s=>s.market===market&&s.priority>0&&s.next_due_at<=new Date(at).toISOString());
    rows.sort((a,b)=>cmp(a.next_due_at,b.next_due_at)||(b.priority-a.priority)||cmp(a.issuer_id,b.issuer_id));
    return clone(rows.slice(0,limit));
   },
