@@ -1,10 +1,10 @@
 # 数据底座四 · F4 判断层框架 设计规格
 
-日期：2026-11-04（第 1 稿。审计轨迹：`docs/audits/2026-11-04-judgment-framework/`）
+日期：2026-11-04（第 3 稿。审计轨迹：`docs/audits/2026-11-04-judgment-framework/` —— 01 Codex 第一轮（8 P1 / 21 P2 / 1 P3）、02 Codex 第二轮（对第 2 稿：4 P1 / 25 P2 / 3 P3，判定"修复 P1/P2 后可实施"）、03 处置表（逐条 ACCEPT / DECLINE / OWNER / OPEN）。第 3 稿吸收了 02 的全部 P1 与大部分 P2；未吸收项在 03 说明理由）
 状态：草案，待 owner 评审（§17 列出 owner 决策）
-上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（规格一，§1 把"判断层：预测登记、结算、校准"划给 F4）；`docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md`（规格二，第 3 稿：`financial_facts` / `financial_metrics` / `filings` 与读接口）；`docs/superpowers/specs/2026-11-04-macro-workbench-design.md`（宏观规格：`macro_snapshots` / `macro_regime_results` 与 `methodology_version`）。
-总纲：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5 约束 3（owner 2026-11-04 确认）："财务数字是事实；生命周期阶段、胜率、值博率、评级是判断，必须有 `methodology_version`、输入快照、可证伪条件，并被结算与校准（Brier 分数、可靠性曲线）。没有结算机制的'胜率'不得显示为百分比。"本规格逐条落实：每条判断是一条内容寻址、只追加的登记记录；输入快照按 id + 哈希指向事实层，可按 `as_of` 回放；每条判断登记时就带可证伪条件与期限；结算由 cron 对照后来的事实 / 价格 / 宏观观测写入证据；校准报告（Brier、可靠性分箱、ECE、isotonic）决定页面能不能把概率显示成百分比。
-已定决策（本稿作者，待 owner 确认）：系统判断进新的公共表 `judgments` 家族，而不是扩展 S4 判断台账（理由见 §2.4）；用户私有判断复用 `recommendations` / `recommendation_scores`（经适配器进入同一契约，不复制行）；第三方判断（外资研报评级 / 目标价）本期只定接口，不入库（§12.3）。
+上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（规格一，§1 把"判断层：预测登记、结算、校准"划给 F4）；`docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md`（规格二，**第 8 稿**：`fact_sync_runs` / `filings` / `financial_facts` / `financial_metrics`（主键含 `market`、`based_on_rev`）/ `FactsDb{readFacts, factsByIds, metricsOfIssuer, …}`；本规格以该稿为准，规格二再改动时 §12.2 随之更新）；`docs/superpowers/specs/2026-11-04-macro-workbench-design.md`（宏观规格：`macro_snapshots` / `macro_regime_results` 与 `methodology_version`）。
+总纲：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5 约束 3（owner 2026-11-04 确认）："财务数字是事实；生命周期阶段、胜率、值博率、评级是判断，必须有 `methodology_version`、输入快照、可证伪条件，并被结算与校准（Brier 分数、可靠性曲线）。没有结算机制的'胜率'不得显示为百分比。"本规格逐条落实：每条判断是一条内容寻址、只追加的登记记录；输入快照把**值本身**（不只是哈希）冻结在登记行里，所以回放不依赖供应商重抓；每条判断登记时就固定可证伪条件、目标期与标签政策；结算由 cron 对照后来的事实 / 价格 / 宏观观测写入证据；校准报告决定页面能不能把概率显示成百分比，且"样本够"与"校准通过"是两道门。
+已定决策（本稿作者，待 owner 确认）：系统判断进新的公共表 `judgments` 家族，而不是扩展 S4 判断台账（§2.4）；v1 只登记**公共生产者 + 公共输入白名单**的判断（§3.5、§5.5）；用户私有判断复用 `recommendations` / `recommendation_scores`（只读适配器，不复制行，且不解锁百分比显示，§11.2）；第三方判断（外资研报评级 / 目标价）本期只定接口（§12.3）。
 
 ---
 
@@ -12,30 +12,31 @@
 
 ### 1.1 目标
 
-1. **一个契约。** 宏观 / 行业 / 公司 / 外资研报四个模块的任何"判断型数字"都落在同一个 TypeScript 契约与同一组表上：`subject`（发行人 / 行业代码 / 宏观区域或序列 / 文档）、`judgment_type`、`methodology_id@version`、`inputs`（id + 哈希 + 可得日期）、`claim`（概率 / 类别 / 分值 / 区间）、`condition`（可证伪条件）、`horizon`、`settle_after/settle_by`。
-2. **方法注册表。** `src/lib/judgments/methodologies/*` 里每个方法是一个纯函数模块 + 一份公式文档（`docs/methodologies/<id>/<version>.md`）；数据库表 `judgment_methodologies` 是代码的镜像，供外键与公共读取。没有注册的方法不能登记判断。
-3. **回放。** 任何判断可以用它登记时的 `inputs` 按 `as_of` 从事实层（规格二读接口、宏观观测、文档）重新取值、校验哈希、重跑方法，得到同一个 `judgment_id` 与同一个 `claim`（规则型生产者）；模型型生产者至少校验输入哈希。
-4. **结算。** cron 扫描到期判断，按 `condition.resolver` 从后来的价格 / 事实 / 宏观观测取实现值，写只追加的 `judgment_settlements`，证据（所用 K 线、事实 id、哈希、来源、复权口径、抓取时间）随行保存，因为仓库没有持久化的日线表（§2.3）。
-5. **校准决定显示。** 每个 `methodology_id@version` 的校准报告（`judgment_calibrations`）给出已结算数、Brier、ECE、可靠性分箱、isotonic 拟合；`display.ts` 用它把每条判断映射到 `uncalibrated | calibrated | settled | void | withdrawn` 五态；概率型判断只有在 `calibrated` 态才渲染为百分比。
-6. **首批生产者。** 两个不需要新数据源的生产者证明链路端到端：`recommendation_call@v1`（把现有 `recommendations.confidence` + `recommendation_scores.hit` 适配进契约并出校准报告，私有）和 `macro_regime@v1`（宏观 WP-M3 发布快照时登记一条判断，公共）。行业 / 公司 / 外资三个模块的方法由各自规格按 §4 的模板注册。
+1. **一个契约。** 宏观 / 行业 / 公司 / 外资研报的任何"判断型数字"都落在同一个 TypeScript 契约与同一组表上：`subject`、`judgment_type`、`methodology_id@version`、`inputs`（冻结投影 + 哈希 + 可得日期 + 原始来源定位）、`claim`（概率 / 类别 / 分值 / 区间）、`condition`（按 resolver 区分的可证伪条件）、`target`（登记时已固定的目标 session / 日期 / 财期）、`label_policy`。
+2. **方法注册表。** `src/lib/judgments/methodologies/*` 里每个方法是纯函数模块 + 公式文档（`docs/methodologies/<id>/<version>.md`）；`judgment_methodologies` 是代码的镜像，`formula_hash` 覆盖文档、参数、期限**和实现源码**；没有注册的方法不能登记。
+3. **回放不靠重抓。** 登记行里冻结了每个输入的投影值；`replay` 用冻结输入重跑方法得到同 id 同 `claim`；对供应商的重抓只是额外的对账结果，不是回放的前提。
+4. **结算。** cron 扫描到期判断（独立的可变队列表负责公平调度与重试），按 `condition.resolver` 取实现值，写只追加的 `judgment_settlements`，证据里保存重算所需的完整窗口（整段 K 线、事实 id 与值、宏观观测与 vintage）。价格判断只在能拿到复权口径一致的序列时结算，拿不到就是 `void`，不进校准。
+5. **校准决定显示。** 每个 `methodology_id@version` 的校准报告给出独立样本数、Brier、Brier skill、**原始 `p` 在时间外留出段上的 ECE**、可靠性分箱、isotonic 拟合；方法级校准态 `insufficient | failed | calibrated`（score 型为 `evaluated`）；概率型判断只有在方法 `calibrated` 时才渲染为百分比。门控验证的就是页面显示的那个预测器（原始 `p`）；isotonic 映射只进报告（§8.5）。
+6. **首批生产者。** `macro_regime@v1`（公共，宏观 WP-M3 发布快照时登记，补偿扫描保证不断链）和 `recommendation_call@v1`（私有只读适配器，把 `recommendations` 读成卡片；其"自评校准"永不解锁百分比）。行业 / 公司 / 外资三个模块的方法由各自规格按 §4 模板注册。
 
 成功标准（计划四退出条件）：
-- `registerJudgment()` 对同一 `(subject, type, methodology, inputs, as_of)` 两次调用返回同一 `judgment_id`，第二次 `duplicate=true`，表内行数不变；同 id 不同 `claim` → `idempotency_conflict` 并进 `dq_quarantine`。
-- 回放夹具（§14.4）：每条夹具判断回放后 `judgment_id` 与 `claim` 字节一致；篡改任一输入的哈希后回放报 `input_hash_mismatch`。
-- 结算 cron 对夹具 K 线 / 事实跑通 `price_return`、`fact_metric`、`recommendation_hit` 三个 resolver；到期未取到数据的判断在 `settle_by` 后变 `void(no_data)`；每次运行有 `ingest_batches` 回执与 `dq_freshness('judgments.settle')` 心跳。
-- 校准数学对已知样本给出已知答案（§14.1）：完美预报 Brier = 0，恒 0.5 预报 Brier = 0.25，可靠性分箱与 Wilson 区间与手算一致。
-- `GET /api/judgments?subject_type=macro_region&subject_key=US` 返回 active 宏观快照对应的判断卡；`n_settled < N` 时 `state='uncalibrated'` 且响应里没有百分比字段；`/analyst` 页的"信心"列按 §9 规则显示（未校准不显示为百分比）。
+- `registerJudgment()` 对同一 `(subject, type, methodology, inputs, as_of, nonce)` 两次调用返回同一 `judgment_id`，第二次 `duplicate=true`，表内行数不变；同 id 不同语义字段 → `idempotency_conflict` 并进 `dq_quarantine`。
+- 回放夹具（§14.4）：每条夹具判断用冻结输入回放后 `judgment_id` 与 `claim` 字节一致；篡改任一冻结投影后回放报 `input_hash_mismatch`。
+- 结算 cron 对夹具 K 线 / 事实跑通 `price_return`、`fact_metric`、`macro_regime_replay` 三个 resolver；超过 `settle_by` 仍无数据 → `void(no_data)`；每次运行有 `ingest_batches` 回执与 `dq_freshness('judgments.settle')` 心跳；连续两次 cron 不重复处理同一条。
+- 校准数学对已知样本给出已知答案（§14.1，期望值由实施者之外的人用 Python 算出）。
+- `GET /api/judgments?subject_type=macro_region&subject_key=US` 返回 active 宏观快照对应的判断卡；方法未 `calibrated` 时响应里没有 `percent` 字段；`/analyst` 页"信心"列不再显示百分比（§11.2）。
 - 迁移可重放、`database.types.ts` 手工补齐、含 `S4_TEST_STATE` 的新测试文件进 `scripts/ci/research-checks.ts::criticalSuites`、全量门禁绿。
 
 ### 1.2 本规格之外
 
-- 具体业务方法（生命周期分类器、景气评分、估值结论、论点胜率、卖方评级映射）的公式与阈值：由行业 / 公司 / 外资研报规格各自按 §4 模板提交；本规格只交付框架、两个首批生产者和方法模板。
-- 第三方判断（外资研报的评级 / 目标价）入库与其私有可见性：待 F3 文档管道与外资研报规格（§12.3 给接口）。
-- 用户自建的"我的判断"（没有现成表的私有判断类型）：本期不做；`judgments` 表 v1 只有公共行（§5.5 给出扩展路径）。
-- 组合层 `decisions` / `decision_reviews` 的适配器：与 `recommendation_call@v1` 同内核，本期不接（§18.2）。
-- 持久化日线表：本期不建；结算证据随行保存（§7.4）。
-- 任何对 S4 判断台账（`research_judgments` 等四表）、S6 评价、fan-out 校准脚本的改动：不动；只复用其纯函数（`isotonicFit`、`wilson`）。
-- 页面像素设计：按 owner 规则在 Claude Design 画布完成（§9.6 待设计清单）。
+- 具体业务方法（生命周期分类器、景气评分、估值结论、论点胜率、卖方评级映射）的公式与阈值：由行业 / 公司 / 外资规格各自按 §4 提交。
+- 第三方判断入库与其可见性：待 F3 与外资规格（§12.3）。
+- 用户自建私有判断：本期不做；`judgments` v1 只有公共行（§5.5 给扩展路径，含 id 命名空间）。
+- 组合层 `decisions` / `decision_reviews` 的适配器（§18.2）。
+- 持久化日线表：本期不建；结算证据保存完整窗口（§7.4）。
+- 可信的私有结算证据表（让分析师信心可以解锁百分比）：§17 O5 的第二阶段。
+- 对 S4 台账、S6、fan-out 校准脚本的行为改动：不动；只抽出 `uuidV8()` 纯函数（§2.4 第 5 点，台账测试不变）并 import `isotonicFit / applyIsotonic / wilson`。
+- 页面像素设计：Claude Design 画布（§9.6）。
 
 ---
 
@@ -45,47 +46,47 @@
 
 | 组件 | 位置 | 做什么 | 与 F4 的关系 |
 |---|---|---|---|
-| S4 判断台账 | `supabase/migrations/20260926000000_research_judgment_ledger.sql`；`src/lib/research/s4/ledger.ts`；`docs/superpowers/specs/2026-09-26-judgment-ledger-design.md` | 四张只追加表 `research_judgments / research_labels / research_decisions / research_outcomes`，主键 `(user_id, id)`，外键到 `research_source_documents` 与 `research_theses`（都是每用户表）；`judgment_id` = RFC 9562 v8 内容寻址 uuid（`sha256(canonical{snapshot_id, question_set_version, backend, backend_model, question_id})`）；`snapshot` 固定五字段；`backend ∈ {rule, llm_deepseek, jev, jev_escalated, local_probe, human}`；`replayJudgments()` 按来源 `available_at ≤ as_of` 过滤；写入走 `transaction()`（`ALPHA_S4_DATABASE_URL` 独立连接池，`ALPHA_S4_ENABLED=1` 门控，角色 `alpha_s4_runtime`，`research_s4_immutable()` 触发器） | 它记录的是"某后端对某来源 × 论点的问题集回答"，是研究方法自检的台账（ADR `docs/adr/2026-10-17-research-analyst-portfolio-boundary.md` §1.1 第 2 点）。F4 复用它的三个做法：内容寻址 id 的构造、`canonicalize/digest`（`src/lib/research/ingest/pa-v1/json.js`，RFC 8785）、只追加触发器 + 幂等冲突语义。不扩展它（§2.4） |
-| S6 存储与臂血缘 | `src/lib/research/s6/store.ts`、`arm-lineage.ts`、`arm-report.ts`；`research_s6_evaluations`（`20260922100000_research_s6.sql`） | 对 S4 观察（`research_s4_records` 六类记录链：Observation → Decision → InputSnapshot → ChangeCard → ThesisRevision → HumanLabel）调用外部 evaluator（`dsh-trade-strategy-evaluator`，market-policy/2.0：XNYS 日历 `docs/handoffs/alpha-s4/calendar.json`、SPY/ARCX 基准、固定交易日窗口）；`validateArmS4Lineage()` 逐条校验哈希链；四臂报表按 `(thesis_id, week_of)` 配对 | 证明"输入快照哈希链 + 固定窗口 + 外部结算"这套模式在仓库里已经跑通，但它只服务 XNYS/USD/SPY 的论点观察，且全部每用户私有。F4 借用其"结算窗口按交易日计数、结果带 `data_insufficient/pending_start/resolved` 状态"的状态集（§7.2） |
-| fan-out 校准 | `src/lib/research/fanout/calibration.ts`、`report.ts`、`report-db.ts`；`scripts/calibration-report.ts`；`docs/superpowers/specs/2026-09-26-calibration-refit-design.md` | 纯函数：`isotonicFit`（PAV）、`applyIsotonic`、`wilson`、`crossFittedEce`（5 折）、`MIN_LABELS = 30`、阈值重拟与停止规则；脚本只读台账写 `docs/calibration/<date>.{json,md}`，不写库 | F4 直接 import `isotonicFit / applyIsotonic / wilson`；Brier、可靠性分箱、分类混淆矩阵是新写的（§8.1）。`MIN_LABELS = 30` 是本仓库已有的"最少样本"先例，§8.3 用它推导显示阈值 |
-| 分析师评分层 | `20261017090000_analyst_scoring.sql`、`20261017120000_recommendations_append_only.sql`、`20261018090000_recommendation_scores_base_close.sql`；`src/lib/scoring/forward.ts`、`src/lib/analyst/{score-store,book}.ts`；`docs/superpowers/specs/2026-10-17-analyst-scoring-layer-design.md`、`2026-10-18-playbook-to-recommendation-design.md` | `recommendations`（每用户、BEFORE UPDATE 触发器只允许一次撤回与一次成交价写入）带 `confidence int 0–100`、`action`、`horizon`、`target_price`；`recommendation_scores` 由 `scoreForward()` 写 5/20/60 交易日前向收益、`hit`（5 日方向）、`score`、`calibration_bucket`（信心 20 分一档）、`base_close/base_date`（当前复权基准）；K 线来自 `fetchEastmoneyKline(ticker,'D',120)`（A 股前复权，港美不复权）；评分是用户按需 POST，无 cron | 这就是"用户私有判断 + 结算"的现成实现。F4 不复制这些行：`recommendation_call@v1` 是只读适配器，把 `(confidence/100, hit)` 读成 `(p, outcome)` 做校准（§11.2）。`calibration_bucket` 的 20 分分档被 §8.1 的 10 分箱取代（只在报告层，不改表） |
-| 组合决定层 | `20260702090000_decision_layer.sql`：`decisions`（`confidence 0–100`、`target_price`、`horizon`）、`trades`、`positions`、`decision_reviews`（与 `recommendation_scores` 同形）；`src/lib/portfolio/review.ts::scoreDecision` 是 `scoreForward` 的薄包装 | 实盘账本上的采纳事件 | 同内核，本期不接适配器（§18.2） |
-| 宏观规格的判断期望 | `2026-11-04-macro-workbench-design.md` §4.3（`macro_snapshots{snapshot_id, methodology_version, observation_ids, coverage}`、`macro_regime_results{scores, contributions, primary_state, margin, coverage, growth_axis, inflation_axis}`）、§5.3（"归一化得分不称为概率"、`coverage < 0.6` 不发布）、§8（所有读接口响应含 `methodologyVersion`） | 规则打分型判断，已经有方法版本与快照，但没有可证伪条件、结算与校准；`REPORT.md` §10.1 明确"若后续要提供概率，需定义可检验标签、时间外验证、基准模型、可靠性曲线和 Brier score" | F4 的 `macro_regime@v1` 给它补上条件、结算与校准（§11.1）；宏观表本身不动 |
-| 数据质量底座（计划一，已落地） | `20261105090000_dq_foundation.sql`：`ingest_batches`（六个固定计数器）、`dq_quarantine`（每键一条 open 项）、`dq_reconciliations`、`dq_freshness`（`consecutive_errors`，daily 宽限 2 天）；`src/lib/dq/{batches,quarantine,freshness,rules,dashboard}.ts`；`src/lib/db/table-client.ts`（Supabase / memory / pg，无事务） | 所有数据集共用的回执 / 隔离 / 新鲜度 | 结算与校准任务用 `startBatch/finishBatch`（dataset `judgments.settle` / `judgments.calibrate`）、`quarantine()`、`recordAttempt()` |
-| 发行人与行业分类（计划一，已落地） | `20261105091000_issuers.sql`：`issuers(issuer_id, cik, usci, lei, …, status, merged_into)`、`issuer_securities`（持有窗口互斥）、`industry_classifications(scheme ∈ {sw2021, sw2014, gics, csrc, custom}, version, code, level)`、`issuer_industry_memberships(valid_from, valid_to)`；anon 可读 | 主体主数据 | `subject_type='issuer'` 用 `issuer_id`；`'industry'` 用 `scheme:version:code`（§3.1） |
-| 披露事实（规格二，待实施） | `filings` / `financial_facts(fact_id, raw_hash, value_text, available_date, mapping_gen)` / `financial_metrics`（复合主键 `(issuer_id, metric, period_start, period_end, input_unit, basis, formula_version)`，无单列 id）；`FactsDb.factsOfIssuer(issuer, {availableLte, …})`、`metricsOfIssuer(issuer, formulaVersion)`；读接口 `/api/facts/[ticker]{,/metrics}` | 事实层 | 输入引用 `financial_fact` 用 `fact_id`，`financial_metric` 用复合键（§3.5）；结算 resolver `fact_metric` 用 `availableLte`（§7.3） |
+| S4 判断台账 | `supabase/migrations/20260926000000_research_judgment_ledger.sql`；`src/lib/research/s4/ledger.ts`；`docs/superpowers/specs/2026-09-26-judgment-ledger-design.md` | 四张只追加表 `research_judgments / research_labels / research_decisions / research_outcomes`，主键 `(user_id, id)`，外键到 `research_source_documents` 与 `research_theses`（每用户表）；`judgmentId()` = sha256 前 32 位十六进制改写版本位 `8` 与变体位后格式化为 uuid（RFC 9562 v8）；`snapshot` 固定五字段；`backend` 固定枚举；`replayJudgments()` 按来源 `available_at ≤ as_of` 过滤；写入走 `transaction()`（`ALPHA_S4_DATABASE_URL` 独立连接池，`ALPHA_S4_ENABLED=1` 门控，角色 `alpha_s4_runtime`，`research_s4_immutable()` 触发器） | 研究方法自检台账（ADR `docs/adr/2026-10-17-research-analyst-portfolio-boundary.md` §1.1 第 2 点）。F4 照搬三个做法：内容寻址 id 的构造、`canonicalize/digest`（`src/lib/research/ingest/pa-v1/json.js`，RFC 8785）、只追加触发器 + `duplicate / idempotency_conflict` 语义。不扩展它（§2.4） |
+| S6 存储与臂血缘 | `src/lib/research/s6/store.ts`、`arm-lineage.ts`、`arm-report.ts`；`research_s6_evaluations` | 对 S4 观察六类记录链逐条校验哈希；外部 evaluator（market-policy/2.0：XNYS 日历 `docs/handoffs/alpha-s4/calendar.json`、SPY/ARCX 基准、固定交易日窗口）；报表状态 `resolved / open / pending_start / data_insufficient` | 证明"输入哈希链 + 固定窗口 + 外部结算"在仓库已跑通，但只服务 XNYS/USD/SPY 且全部私有。F4 借用其结算状态集（§7.2） |
+| fan-out 校准 | `src/lib/research/fanout/calibration.ts`、`report.ts`、`report-db.ts`；`scripts/calibration-report.ts`；`docs/superpowers/specs/2026-09-26-calibration-refit-design.md` | 纯函数 `isotonicFit(points) → {segments}`、`applyIsotonic(fit, score)`、`wilson(k, n)`、`crossFittedEce`（5 折）、`MIN_LABELS = 30`（每问题的标签总量门槛）；脚本只读台账写 `docs/calibration/<date>.{json,md}` | F4 import 前三个函数；Brier、可靠性分箱、混淆矩阵、有效样本分组是新写的（§8.1） |
+| 分析师评分层 | `20261017090000_analyst_scoring.sql`、`20261017120000_recommendations_append_only.sql`、`20261018090000_recommendation_scores_base_close.sql`；`src/lib/scoring/forward.ts`、`src/lib/analyst/score-store.ts`；两份 2026-10-17/18 规格 | `recommendations`（每用户；BEFORE UPDATE 触发器只允许一次撤回与一次 `fill_price/fill_date` 写入）带 `confidence int 0–100`；`recommendation_scores` 由 `scoreForward()` 写 5/20/60 交易日前向收益、`hit`（第 5 根后续 bar 的方向）、`calibration_bucket`、`base_close/base_date`；**RLS 给 owner select/insert/update/delete，评分刷新是 upsert**；K 线 `fetchEastmoneyKline(ticker,'D',120)`；评分由用户按需 POST | 现成的"私有判断 + 前向评分"。但 `recommendation_scores` 可被 owner 改写、刷新会重写，所以它是**自评**而非可信结算证据（审计 F07）。F4 的 `recommendation_call@v1` 只读它做卡片与自评报告，不据此解锁百分比（§11.2） |
+| 组合决定层 | `20260702090000_decision_layer.sql`：`decisions`、`decision_reviews`（与 `recommendation_scores` 同形）；`src/lib/portfolio/review.ts::scoreDecision` | 实盘账本上的采纳事件；`decisions` 没有只追加触发器 | 同内核，本期不接（§18.2） |
+| 宏观规格的判断期望 | 宏观规格 §4.3、§5.3、§8 | 规则打分型判断，有方法版本与快照（`macro_snapshots.observation_ids`、`coverage`、`margin`、`growth_axis`、`inflation_axis`），"归一化得分不称为概率"，`coverage < 0.6` 不发布；`REPORT.md` §10.1："若后续要提供概率，需定义可检验标签、时间外验证、基准模型、可靠性曲线和 Brier score" | F4 的 `macro_regime@v1` 给它补上可检验标签（§11.1）、结算与校准；宏观表不动 |
+| 数据质量底座（计划一，已落地） | `20261105090000_dq_foundation.sql`；`src/lib/dq/{batches,quarantine,freshness,rules,dashboard}.ts`；`src/lib/db/table-client.ts`（Supabase / memory / pg；**无事务、无 rpc**） | `ingest_batches` 六个固定计数器，`INFO_CODES = ['skipped_summary','relink']`，`batchStatusFromCounts`：`fetched > 0` 且无 accounted → `failed`；非信息码错误 → partial/failed；`dq_quarantine` 每键一条 open；`dq_freshness` daily 宽限 2 天 | 结算 / 校准任务用 `startBatch/finishBatch`、`quarantine()`、`recordAttempt()`；需要在 `INFO_CODES` 里显式加 F4 的信息码，并加 `deferred` 计数器（§7.5） |
+| 发行人与行业分类（计划一，已落地） | `20261105091000_issuers.sql`：`issuers(status, merged_into)`、`issuer_securities`（持有窗口互斥）、`industry_classifications(scheme, version, code)`、`issuer_industry_memberships(valid_from, valid_to)`；anon 可读 | 主体主数据 | `subject_type='issuer'` 用 `issuer_id`；`'industry'` 用 `scheme:version:code` |
+| 披露事实（规格二第 8 稿，待实施） | `financial_facts(fact_id, raw_hash, value_text, available_date, mapping_gen, status)`；`financial_metrics` 主键 `(issuer_id, market, metric, period_start, period_end, input_unit, basis, formula_version)`，含 `inputs[{fact_id,…}]`、`based_on_rev`；`FactsDb.readFacts(issuer, market, {concepts, asOf, …}) → {stateRev, rows, truncated}`（rpc `read_facts`）、`factsByIds(ids)`、`metricsOfIssuer(issuer, market, formulaVersion)`；读接口 `GET /api/facts/[ticker]?factIds=`（≤ 100） | 事实层 | 输入引用 `financial_fact` 用 `fact_id`（回放走 `factsByIds`）；`financial_metric` 引用复合键 + 物化行的 `inputs` 事实 id 列表 + `based_on_rev`，冻结投影里带全部底层 `fact_id`（§3.5）；结算 `fact_metric` 用 `readFacts(…, asOf = 截止日)`（§7.3） |
 
-### 2.2 对方四个页面上的判断型数字（来自 `EXPERT_PLAYBOOK_AND_BRIEF.md` §1.1 / §2.1 / §3.1、`MACRO_STRATEGY_DEEP_DIVE.md` §4.1、`REPORT.md` §3 / §6）
+### 2.2 对方四个页面上的判断型数字（`EXPERT_PLAYBOOK_AND_BRIEF.md` §1.1 / §2.1 / §3.1、`MACRO_STRATEGY_DEEP_DIVE.md` §4.1、`REPORT.md` §3 / §6）
 
 | 页面 | 数字 | 分类 | F4 处理 |
 |---|---|---|---|
-| 宏观 | 四象限主判定 + "置信度"（归一化得分 `score[q]/Σscore` 被叫作概率）、备选象限、流动性阶段、资产配置建议、超 / 低配行业、"回测准确率 2/3" | 判断（类别型，带未校准分值） | `macro_regime`：类别型判断，`claim.distribution` 存归一化得分并标 `scores_are_not_probabilities=true`；可证伪条件见 §11.1；"置信度"一词不再出现，改为 `margin` + 校准态 |
-| 行业 | 6 阶段生命周期（三段 3 年 CAGR a/b/c + 宏观定性修正）、88 细分行业 × 6 阶段矩阵、Gartner 曲线位置、6 阶段选股模型 | 判断（类别型） | `industry_lifecycle_stage`：条件 = 未来 3 年行业营收 CAGR 落在该阶段定义的区间（行业规格给区间） |
-| 行业 | 5 维景气雷达（估值维度 50 占位、现金流用利润增速代理，`REPORT.md` Q10） | 判断（分值型） | `industry_prosperity`：分值型；缺维度就缺（`coverage` 字段），不补 50、不用代理；方法必须声明一个二元实现事件供结算（§3.3） |
-| 行业 | PE / PB / PS 11 年分位 | 派生事实（纯统计变换） | 不是判断，归行业规格的派生指标（`metric_version`） |
-| 行业 | PB + PS 均值分位 30 / 70 → 高估 / 低估结论 | 判断（类别型） | `valuation_verdict`：条件 = 未来 12 个月相对基准收益的方向 |
-| 公司 | 值博率星级、胜率、预期涨幅、下跌空间、赔率、凯利仓位、季度上调 / 下调 | 胜率 = 概率型判断；涨幅 / 下跌空间 = 区间型判断；赔率 / 凯利 / 星级 = 由前两者派生 | `thesis_win_rate`（概率）、`return_range`（区间）；赔率、凯利、星级**不单独登记**，读取时由底层判断计算并继承最弱状态（§9.4） |
-| 公司 | 覆盖时价格、研究日期、DCF 勾选 | 事实 / 元数据 | 价格作为 `price_bar` 输入进快照 |
-| 监控 | 核心跟踪指标（目标标准 / 实际 / 置信度变化 / 权重）、跟踪事件超 / 低于预期、胜率 / 赔率 / 凯利 before→after、下次跟踪节点 | 跟踪指标 = 可证伪条件的检查点；before→after = 同一 `(subject, type)` 的两条判断（后者 `as_of` 更晚） | `condition` 的检查点语义（§3.4）；不设"修改"，只有新登记 |
-| 监控 | 机构评级表 | 第三方判断 | `sellside_rating` / `sellside_target_price`：本期只定接口（§12.3） |
-| 外资研报 | 评级 OW / MIXED / N/A、目标价 / 空间、方法论（WACC、g、终值占比）、风险与边界 | 第三方判断 + 第三方假设 | 同上；假设是文档抽取字段，不是判断 |
-| （任务书提到的）拥挤度 | 本次 teardown 三份文档与 `PAGE_INVENTORY.csv` 中均未出现 | — | 不定义类型；缺就是缺 |
+| 宏观 | 四象限主判定 + "置信度"（归一化得分 `score[q]/Σscore` 被叫作概率）、备选象限、流动性阶段、资产配置建议、超 / 低配行业、"回测准确率 2/3" | 判断（类别型，带非概率得分） | `macro_regime`：类别型；`claim.distribution` 存归一化得分并标 `scores_are_not_probabilities=true`；标签 = **同一分类函数、同一参考期、截止 vintage** 下重算的主判定（§11.1）；"置信度"一词不再出现 |
+| 行业 | 6 阶段生命周期、88 细分行业 × 6 阶段矩阵、Gartner 曲线位置、6 阶段选股模型 | 判断（类别型） | `industry_lifecycle_stage`：标签 = 未来 3 年行业营收 CAGR 落在该阶段的区间（行业规格给区间与 `fiscal_quarters` 期限） |
+| 行业 | 5 维景气雷达（估值维度 50 占位、现金流用利润增速代理，`REPORT.md` Q10） | 判断（分值型） | `industry_prosperity`：分值型；缺维度就缺（`coverage`），不补 50、不用代理；方法必须声明实现指标（排序评估，§8.1） |
+| 行业 | PE / PB / PS 11 年分位 | 派生事实 | 不是判断，归行业规格的派生指标 |
+| 行业 | PB + PS 均值分位 30 / 70 → 高估 / 低估结论 | 判断（类别型） | `valuation_verdict`：标签 = 未来 12 个月相对基准收益的方向 |
+| 公司 | 值博率星级、胜率、预期涨幅、下跌空间、赔率、凯利仓位、季度上调 / 下调 | 胜率 = 概率型；涨幅 / 下跌空间 = 情景区间型；赔率 / 凯利 / 星级 = 派生 | `thesis_win_rate`（概率）、`return_range`（区间，必须带情景概率，§9.4）；赔率、凯利、星级**不单独登记**，读取时派生并受 §9.4 门控 |
+| 公司 | 覆盖时价格、研究日期、DCF 勾选 | 事实 / 元数据 | 价格作为 `price_bar` 输入冻结进快照 |
+| 监控 | 核心跟踪指标（目标标准 / 实际 / 置信度变化 / 权重）、跟踪事件、胜率 / 赔率 / 凯利 before→after、下次跟踪节点 | 检查点 = 可证伪条件；before→after = 同主体同类型的两条判断 | 不设"修改"，只有新登记；历史接口 §10 |
+| 监控 / 外资研报 | 机构评级、目标价 / 空间、OW / MIXED / N/A、方法论假设（WACC、g、终值占比）、风险 | 第三方判断 + 第三方假设 | `sellside_rating` / `sellside_target_price` 本期只定接口（§12.3）；假设是文档抽取字段，不是判断；在登记为判断之前，页面必须把它们标为"第三方判断（未结算）"，不得以事实样式展示 |
+| （任务书提到的）拥挤度 | 三份 teardown 文档与 `PAGE_INVENTORY.csv` 均未出现 | — | 不定义类型 |
 
 ### 2.3 结算可用的数据能力
 
-- **价格**：仓库没有持久化日线表（`supabase/migrations` 无 `daily_bars` / `kline` / `price_history`；`quote_alert_window_samples` 是告警抽样函数，不是行情）。可用的日线抓取：`fetchDatagatewayDailyKline`（`src/lib/data/sources/datagateway.ts`，返回 `SourceKlineSeries{source, bars, adjustment ∈ qfq|hfq|none|intraday, volumeUnit}`，`DATAGATEWAY_DAILY_TIMEOUT_MS = 7000`，仅在 `isDatagatewayConfigured()` 时）、`fetchEastmoneyKline(ticker, 'D', n)`（分析师评分层在用；A 股前复权，港美不复权）、`fetchTencentKline` / `fetchSinaIntradayKline`。`src/lib/data/kline/types.ts` 定义 `KlineProvider{name, market, adjustment, timeoutMs, maxAttempts}` 与失败分类 `KlineProviderFailureKind`。
-- **交易日历**：只有 XNYS（`docs/handoffs/alpha-s4/calendar.json`，2026–2028 冻结）。A / HK 没有日历；`scoreForward` 用"K 线序号"数交易日，不用日历。
-- **事实**：规格二读接口与 `FactsDb`（待实施）。
+- **价格**：仓库没有持久化日线表（`supabase/migrations` 无 `daily_bars` / `kline` / `price_history`；`quote_alert_window_samples` 是告警抽样函数）。日线抓取：`fetchDatagatewayDailyKline(ticker, market, limit, adjustment, {signal, timeoutMs})`（`datagatewayDailyKlineBody` 以**当前时间**为终点、`max(30, limit × 3)` 天为窗口；`DATAGATEWAY_DAILY_TIMEOUT_MS = 7000`；仅 `isDatagatewayConfigured()` 时）；`fetchEastmoneyKline(ticker, 'D', limit, {adjustment, signal, timeoutMs})`（URL 固定 `end=20500101`，即"最新 `limit` 根"；美股 `tickerToSecid` 失败时按前缀逐个尝试；每次默认 5 s；A 股默认 `qfq`，HK / US 默认 `none`，但 `adjustment` 参数可传 `qfq/hfq`——**东方财富对港美股的复权是否有效未验证**）；`fetchTencentKline` / `fetchSinaIntradayKline`。两个日线适配器都**没有"按历史日期范围取"的参数**：F4 必须给它们加 `endDate` 选项（东方财富 `end=` 参数本就存在；DataGateway body 已有 `startDate/endDate`），否则迟到结算会取不到基准 bar（审计 F17）。
+- **交易日历**：只有 XNYS（`calendar.json`，2026–2028 冻结）。A / HK 无日历；`scoreForward` 用 K 线序号数交易日。
+- **事实**：规格二第 8 稿 `FactsDb`（待实施）。
 - **宏观观测**：宏观规格 `macro_observations(series_id, period_end, value, available_at, vintage_id)`（待实施）。
-- **代码版本**：`ingest_batches.code_version`（计划一）；部署环境有 `VERCEL_GIT_COMMIT_SHA`。
+- **代码版本**：`ingest_batches.code_version`；部署环境 `VERCEL_GIT_COMMIT_SHA`。
+- **数据源许可**：东方财富 / DataGateway / Tushare 都是**适配器**，原发布方分别是交易所行情（经数据商转发）、SEC / 交易所。F4 在输入与证据里记录 `origin`（原发布方）、`adapter`、`locator`、`transform`；展示许可是 owner 事项（§17），仓库里没有证据能证明。
 
 ### 2.4 为什么新建 `judgments` 而不是扩展 `research_judgments`
 
 1. 可见性相反：台账主键含 `user_id`，RLS 只给 owner；总纲要求系统判断公共可读。
-2. 外键指向每用户表（`research_source_documents`、`research_theses`）；系统判断的主体是 `issuers` / `industry_classifications` / 宏观区域，输入是 `financial_facts` / `macro_observations`，没有来源文档与论点。
-3. `snapshot` 固定为五字段、`backend` 固定枚举、键里有 `question_set_version/question_id`，是 fan-out 问题集的形状；改它等于改 `docs/contracts/judgment-ledger-v1.md` 契约（台账规格明言"先改契约再改表"）。
-4. 运行环境不同：台账走 `ALPHA_S4_DATABASE_URL` 独立连接池与 `alpha_s4_runtime` 角色、`ALPHA_S4_ENABLED` 门控；公共读接口走 anon PostgREST（计划一惯例）。
-5. 反过来，台账的三件事值得照搬：内容寻址 id、`canonicalize/digest`、只追加触发器与 `duplicate / idempotency_conflict` 语义。F4 照搬并引用同一实现，不复制代码（`judgmentId()` 的 uuid v8 格式化逻辑抽成 `src/lib/research/ingest/pa-v1/uuid-v8.ts` 供两处共用，台账行为不变、`ledger.test.ts` 不改）。
+2. 外键指向每用户表；系统判断的主体是 `issuers` / `industry_classifications` / 宏观区域，输入是 `financial_facts` / `macro_observations`。
+3. `snapshot` 固定五字段、`backend` 固定枚举、键里有 `question_set_version/question_id`，是 fan-out 问题集的形状；改它等于改 `docs/contracts/judgment-ledger-v1.md` 契约（台账规格明言"先改契约再改表"）。
+4. 运行环境不同：台账走独立连接池与 `alpha_s4_runtime` 角色；公共读接口走 anon PostgREST（计划一惯例）。
+5. 台账里值得照搬的只有三件事（§2.1 第一行）。其中 uuid v8 格式化是 `judgmentId()` 内 4 行纯逻辑，抽到 `src/lib/research/ingest/pa-v1/uuid-v8.ts::uuidV8(hex64)` 供两处调用——这是对 S4 代码的一次有限、行为不变的改动（`ledger.test.ts` 原样通过是 F4-0 的退出条件）。
 
 ---
 
@@ -95,79 +96,99 @@
 
 ```ts
 type Subject =
-  | { type: 'issuer';       key: string }   // issuers.issuer_id（uuid）；登记时必须 status='active'
-  | { type: 'industry';     key: string }   // `${scheme}:${version}:${code}`，三段都必须存在于 industry_classifications
+  | { type: 'issuer';       key: string }   // issuers.issuer_id；登记时 status='active'
+  | { type: 'industry';     key: string }   // `${scheme}:${version}:${code}`，三段都在 industry_classifications
   | { type: 'macro_region'; key: 'US' | 'CN' }
   | { type: 'macro_series'; key: string }   // macro_series.id（宏观规格 §4.2 白名单）
-  | { type: 'document';     key: string };  // F3 文档 id（§12.3；v1 不登记）
+  | { type: 'security';     key: string }   // `${market}:${ticker}`；只给私有适配器用（§11.2），公共表拒绝
+  | { type: 'document';     key: string };  // F3 文档 id（§12.3；v1 公共表拒绝）
 ```
 
-`subject_key` 的格式由 `validateSubject()` 按类型校验；存在性由 `JudgmentsDb.subjectExists()` 在登记时查（发行人 `merged/dissolved` → `subject_inactive`）。
+`validateSubject()` 校验格式；`JudgmentsDb.subjectExists()` 查存在性（发行人 `merged/dissolved` → `subject_inactive`）。公共表 v1 只接受前四种。
 
 ### 3.2 判断种类 `kind` 与主张 `claim`
 
-| `kind` | `claim` | 校准指标 | 百分比规则 |
+| `kind` | `claim` | 校准指标（§8.1） | 百分比规则 |
 |---|---|---|---|
-| `probability` | `{ p: number ∈ [0,1], event: string }`（`event` 是 `condition` 的人读描述） | Brier、可靠性分箱、ECE、isotonic | **只有 `calibrated` 态才显示 `p` 为百分比** |
-| `categorical` | `{ selected: string, classes: string[], distribution?: Record<string, number>, scores_are_not_probabilities: boolean }` | 准确率（Wilson 区间）、混淆矩阵、按 `margin` 分箱的准确率 | `distribution` 永不显示为百分比；显示 `selected` + 历史准确率（`calibrated` 态） |
-| `score` | `{ value: number, scale: { min: number, max: number }, dims: Array<{ id, value: number \| null, weight, coverage: boolean }>, coverage: number }` | 方法声明的二元实现事件的 Brier（把 `value` 线性映射到 `[0,1]` 作为 `p`）+ Spearman（`value` vs 实现值） | 分值本身可显示（它不是概率），但带状态徽章；缺维度显示为缺口 |
-| `interval` | `{ metric: string, low: number, high: number, unit: string, central?: number }` | 覆盖率（实现值落在区间内的比例）、区间宽度中位数 | 显示区间；`calibrated` 态附历史覆盖率 |
+| `probability` | `{ p: number ∈ [0,1], event: {zh,en} }` | Brier、Brier skill、可靠性分箱、ECE、isotonic | **只有方法校准态 `calibrated` 才显示 `p` 为百分比** |
+| `categorical` | `{ selected, classes: string[], distribution?: Record<string, number>, scores_are_not_probabilities: boolean, margin?: number }` | 准确率（Wilson）、混淆矩阵、按 `margin` 分箱的准确率；`distribution` **不**进 Brier | `distribution` 永不显示为百分比 |
+| `score` | `{ value, scale: {min, max}, dims: Array<{id, value: number \| null, weight, coverage: boolean}>, coverage: number, realized_metric: string }` | Spearman（`value` vs 实现指标）、按分值三分位分组的实现指标均值；**不做 Brier** | 分值可显示（不是概率），带校准徽章；缺维度显示缺口 |
+| `interval` | `{ metric, low, high, unit, nominal_coverage: number ∈ (0,1), scenarios?: Array<{label, p, value}> }` | 实际覆盖率 vs `nominal_coverage`（Wilson）、区间宽度分布 | 显示区间 + 名义覆盖；`calibrated` 态附实际覆盖率 |
 
-`abstained=true` 的判断没有 `claim`，只有 `abstain_reason`（例如 `coverage_below_min`、`missing_input:<id>`）；它被登记是为了页面能说"为什么没有判断"，不进入结算与校准。
+主张是判别联合 `Active | Abstained`：`Abstained = { abstained: true, reason: string, missing?: string[] }`，允许 `inputs` 为空（缺输入正是常见的弃权原因）；`Active` 必须有 `claim / condition / target / horizon / label_policy`。弃权行被登记是为了页面能说"为什么没有判断"，不结算、不进校准。
 
-### 3.3 可证伪条件 `condition`
+### 3.3 可证伪条件 `condition`（按 resolver 区分的联合类型）
 
 ```ts
-interface Condition {
-  resolver: 'price_return' | 'fact_metric' | 'macro_axis' | 'recommendation_hit' | 'industry_aggregate';
-  params: Record<string, string | number | boolean>;   // resolver 自己校验（§7.3）
-  predicate: { op: '>' | '>=' | '<' | '<=' | 'in' | 'between' | 'eq'; rhs: number | string | [number, number] | string[] };
-  text: { zh: string; en: string };                   // 人读版本，登记时由方法模板生成
+type Condition =
+  | { resolver: 'price_return';   params: { ticker; market; adjustment: 'qfq'|'hfq'; base_date: string; benchmark?: { ticker; market } };
+      predicate: { op: '>'|'>='|'<'|'<='|'between'; rhs: number | [number, number] }; text: {zh,en} }
+  | { resolver: 'fact_metric';    params: { issuer_id; market; metric; period_start; period_end; duration; unit; input_unit; basis; formula_version; compare: 'value'|'yoy' };   // 完整 financial_metrics 自然键
+      predicate: { op: '>'|'>='|'<'|'<='|'between'; rhs: number | [number, number] }; text }
+  | { resolver: 'macro_regime_replay'; params: { region; reference_period: string /* YYYY-MM */; macro_methodology_version: string; catalog_version: string };
+      predicate: { op: 'eq'; rhs: 'recovery'|'overheat'|'stagflation'|'recession' }; text }   // §11.1：同一分类函数在截止 vintage 下重算
+  | { resolver: 'industry_aggregate'; params: Record<string, string|number>; predicate: …; text }   // 行业规格定义
+  | { resolver: 'recommendation_hit'; params: { recommendation_id }; predicate: { op: 'eq'; rhs: true }; text };   // 仅私有适配器；公共表拒绝
+```
+
+`categorical` 的 `predicate.op='eq'`、`rhs = claim.selected`，实现值是 resolver 给出的实现类别；`interval` 用 `between [low, high]`；`probability` 的事件由 `predicate` 定义，`hit = predicate(实现值)`。方法模块的 `condition()` 是纯函数；条件登记后不可改。每个 resolver 导出 `validateParams()`（JSON Schema，ajv，仓库已有）与 `labelAvailableAt(params, target)`（标签最早可得时刻的估计，§3.4 前瞻资格用），登记时调用。"资产配对"条件（`r_long − r_short`）**不在 v1 的联合类型里**：它需要独立的 resolver、序列配对读取、币种与回报口径契约，列为未实现能力（§11.1、§18.1）。
+
+### 3.4 目标期 `target`、期限 `horizon`、标签政策 `label_policy`
+
+```ts
+type Horizon = { unit: 'trading_sessions' | 'calendar_days' | 'calendar_months' | 'fiscal_quarters'; n: number };
+type Target  =
+  | { kind: 'session_index'; base_date: string; n: number }                 // 第 n 根 base_date 之后的 bar（含义同 scoreForward）
+  | { kind: 'date';          date: string }                                 // 交易所本地 / UTC 日期（§3.7）
+  | { kind: 'period';        period: string }                               // YYYY-MM（calendar_months：as_of 所在月 + n；n=0 表示 as_of 所在月本身）
+  | { kind: 'fiscal_period'; period_end: string; calendar: { anchor_period_end: string; months: 3 }; extrapolated: boolean };
+type LabelPolicy = 'first_observed' | 'cutoff_vintage';
+```
+
+- `target` 在登记时由方法的 `resolveTarget(subject, asOf, horizon, inputsDb)` 固定（方法级解析器；本规格给默认实现）：`session_index` 需要 `base_date` = 登记输入里的 `price_bar.date`；`date` = `as_of + n 天`；`period` = `as_of 所在月 + n`；`fiscal_period`：`anchor_period_end` = `filingsOfIssuer` 已知的最新 `period_end`，以 3 个月为步长外推得到 `as_of` 之后第 n 个季末（`n ≥ 1`，允许多季；冻结 `calendar` 使回放不依赖之后的 filing；已知序列覆盖时 `extrapolated=false`）；无任何 filing → abstain `target_unresolvable`。
+- `settle_after`（扫描提示，不是期限）= `session_index`: `base_date + n 天`（交易日 ≥ 自然日，这是最早可能到期）；`date`: 该日；`period`: 该月末；`fiscal_period`: `period_end + 1 天`。`settle_by`（超过即 `void(no_data)`）= `settle_after + grace`，`grace` 是**方法参数**（`params.grace_days`），本规格给默认值并说明依据：价格类 60 天（覆盖分析师规格 §5 记录的 60 交易日 ≈ 86–91 自然日的长假偏差再留余量——政策常量，非推导）；`calendar_days / calendar_months` 类 30 天（一个月度发布周期——政策常量）；`fiscal_period` 类 120 天（规格一 §5.2 财报日历：A 股年报截止期末后 120 天，美股 10-K 最长 90 天；取最长）。
+- `label_policy`：`first_observed` = 结算 cron **首次观测到**实现值时结算（实现值是当时的当前值，之后的修订不再改动结算；证据记录观测时刻与 `state_rev / vintage`，这个政策对调度时刻有依赖，文档如实披露）；`cutoff_vintage` = 只在 `settle_by` 当天用当时可见的当前值结算（宏观默认，因修订频繁）。两种政策都要求实现值的可得时刻 `≤ settle_by`，否则 `void(no_data)`。
+- **预测承诺时刻** = `registered_at`。`retrospective = true` 当且仅当以下任一成立：`as_of < registered_at::date`；`target` 对应的最早到期时刻 `≤ registered_at`；resolver 的 `labelAvailableAt(params, target) ≤ registered_at`（标签在登记时已可得）。`retrospective` 的判断照常结算，但**不进前瞻校准**（§8.2）。历史补登记只有在能给出不可变的发布证据（例如当时已发布的宏观快照 `created_at` 与内容哈希）时才可申请"恢复前瞻资格"（§17 O7，v1 不实现）。
+
+### 3.5 输入引用 `InputRef`（冻结投影 + 哈希 + 来源定位）
+
+```ts
+interface InputRef<K, R, S> {
+  kind: K; ref: R;                 // 定位（可查回）
+  snapshot: S;                     // 登记时冻结的投影值（回放用它，不重抓）
+  hash: string;                    // digest(snapshot)
+  available_at: string;            // 该输入的可得时刻（§3.7）
+  origin: { publisher: string; adapter: string; locator: string; transform?: string; license?: string };
 }
+type Input =
+  | InputRef<'financial_fact',   { fact_id },                                                    { fact_id, issuer_id, market, concept, period_start, period_end, duration, value_text, unit, consolidation, available_date, filing_id, mapping_gen }>
+  | InputRef<'financial_metric', { issuer_id, market, metric, period_start, period_end, input_unit, basis, formula_version }, { …复合键, value_text, unit, duration, as_of, based_on_rev, input_fact_ids: string[] }>
+  | InputRef<'macro_observation',{ series_id, period_end, vintage_id },                            { series_id, period_end, value, unit, vintage_id, available_at }>
+  | InputRef<'macro_snapshot',   { snapshot_id },                                                 { snapshot_id, region, as_of, methodology_version, observation_ids, primary_state, secondary_state, scores, coverage, margin, growth_axis, inflation_axis }>
+  | InputRef<'price_bar',        { ticker, market, date, source: KlineSourceName, adjustment },   { ticker, market, date, source, adjustment, open: number|null, high: number|null, low: number|null, close, volume: number|null, amount?: number|null, fields_present: string[] }>   // DataGateway close-only 分支只有 close：其余字段 null，不合成（审计 G27）
+  | InputRef<'table_rows',       { table: PublicTable, natural_key },                             { table, natural_key, rows: Row[] }>        // PublicTable = anon 可读表白名单（issuer_industry_memberships、industry_classifications、macro_series…）
+  | InputRef<'judgment',         { judgment_id },                                                 { judgment_id, claim, as_of }>              // 只能引用公共表里的判断
+  | InputRef<'legacy_fill',      { recommendation_id },                                           { recommendation_id, fill_price, fill_date, market, ticker }>   // 仅私有适配器
+  | InputRef<'document_span',    …>;                                                              // 保留给 F3；v1 公共表拒绝
 ```
 
-结算把 `resolver(params)` 的实现值代入 `predicate` 得到 `hit | miss`；`categorical` 的 `predicate.op='eq'`、`rhs = claim.selected`，实现值是 resolver 给出的实现类别；`interval` 用 `between`。方法模块的 `condition(subject, inputs, claim)` 必须是纯函数，条件在登记时固定，之后不可改。
+- `hash = digest(snapshot)`；`inputs_hash = digest(inputs 按 (kind, canonical(ref)) 排序后的 [kind, ref, hash] 数组)`。
+- **公共输入白名单**（v1 公共表接受的 `kind`）：`financial_fact`、`financial_metric`、`macro_observation`、`macro_snapshot`、`price_bar`、`table_rows`（表白名单）、`judgment`（公共）。每个方法再声明自己的 `input_kinds ⊆ 白名单`；登记时双重检查（审计 F01）。
+- **输入只能由固定构造器生成**（审计 G03）：`src/lib/judgments/inputs.ts` 对每种 `kind` 导出 `buildInput(ref, inputsDb)`，它只通过 `JudgmentInputsDb` 的**公共读取路径**（facts / macro / table_rows 用 **anon 客户端**实现，RLS 生效：只看得到 `status='ok'`、公开的行；`judgment` 只查公共表；`price_bar` 走 K 线适配器）取值并生成 `snapshot`、`available_at`、`origin`。`registerJudgment` 对每个输入**重新执行构造器**并要求结果与提交的 `snapshot` 字节一致（`input_snapshot_mismatch`）；构造器取不到（行不存在、被隔离、不公开）→ `input_not_public`。service-role 能读到的隔离行因此进不了公共表。结算证据走同一规则（§7.3 的 `fact_metric / macro_regime_replay` 用 anon 路径取值）。
+- `origin` 不是自由文本：`publisher / adapter / locator 模板 / transform / license_status` 来自冻结表 `src/lib/judgments/origins.ts`（按 `kind × adapter` 键；例如 `price_bar × eastmoney → publisher: '交易所行情（经东方财富转发）', license_status: 'unverified'`），构造器填充，登记校验键存在。`license_status='unverified'` 的输入可以登记，但该方法的 `publishable=false` 直到 owner 确认（§4.1、§17）。
+- 登记校验 `max(inputs.available_at) ≤ as_of 的日终`（§3.7），否则 `lookahead`。
+- `financial_metric` 的冻结投影带 `input_fact_ids`，回放用 `factsByIds` 取底层事实重算（物化行是可替换缓存，不是版本；审计 F03）。
 
-### 3.4 期限 `horizon` 与到期
+### 3.6 生产者与 nonce
 
-```ts
-type Horizon =
-  | { unit: 'trading_sessions'; n: number }   // 用 K 线序号计数（同 scoreForward），不用日历
-  | { unit: 'calendar_days';    n: number }
-  | { unit: 'fiscal_quarters';  n: number };  // 以 as_of 所在期的下 n 个 period_end 为准
-```
+`producer_kind ∈ {rule, model, human, third_party}`；`producer_ref`：`rule` → `{}`；`model` → `{ model, prompt_sha256, run_id }`；`human` → `{ analyst_id, source_record: { table, id } }`；`third_party` → `{ institution, document_id, version_hash }`。`producer_nonce`（进 id）：`rule` → `''`；`model` → `run_id`（同一 run 重试 → 同 id；新采样 = 新 run_id）；`human` → `${analyst_id}:${source_record.table}:${source_record.id}`（稳定，重试收敛）；`third_party` → `${document_id}:${version_hash}`。
 
-登记时计算两个时刻（服务器时间）：
+### 3.7 日期与时刻语义
 
-| `unit` | `settle_after`（最早可结算） | `settle_by`（超过则 `void(no_data)`） | 依据 |
-|---|---|---|---|
-| `trading_sessions` | `registered_at + ceil(n × 1.52) 天` | `settle_after + 60 天` | 分析师规格 §5："60 个交易日约 86–91 个自然日"→ 91/60 = 1.52；60 天宽限覆盖长假与 K 线源故障 |
-| `calendar_days` | `registered_at + n 天` | `settle_after + 30 天` | 宽限 = 计划一 daily 数据集 2 天宽限的量级放大到月度观测的发布滞后（宏观 CPI/PMI 月度发布晚于数据期 ≤ 30 天） |
-| `fiscal_quarters` | `as_of + n × 92 天` | `settle_after + 120 天` | 规格一 §5.2 财报日历：A 股年报截止 4-30（期末后 120 天），美股 10-K 60/75/90 天；取最长 |
-
-`settle_after` 只是扫描触发条件；精确到期由 resolver 判定（例如 `trading_sessions` 要数到第 n 根 K 线才算到期，不够返回 `pending`）。
-
-### 3.5 输入引用 `InputRef`
-
-```ts
-type InputRef =
-  | { kind: 'financial_fact';   ref: { fact_id: string };                                        hash: string; available_at: string }
-  | { kind: 'financial_metric'; ref: { issuer_id, metric, period_start, period_end, input_unit, basis, formula_version }; hash: string; available_at: string }
-  | { kind: 'macro_observation'; ref: { series_id: string; period_end: string; vintage_id: string }; hash: string; available_at: string }
-  | { kind: 'macro_snapshot';   ref: { snapshot_id: string };                                     hash: string; available_at: string }
-  | { kind: 'price_bar';        ref: { ticker: string; market: 'A'|'HK'|'US'; date: string; source: KlineSourceName; adjustment: KlineAdjustment }; hash: string; available_at: string }
-  | { kind: 'document_span';    ref: { document_id: string; version_hash: string; page: number; span?: string }; hash: string; available_at: string }
-  | { kind: 'judgment';         ref: { judgment_id: string };                                     hash: string; available_at: string }
-  | { kind: 'table_rows';       ref: { table: string; natural_key: string };                      hash: string; available_at: string };
-```
-
-`hash = digest(projection)`，`projection` 按 `kind` 在 `src/lib/judgments/inputs.ts` 固定：`financial_fact` → `{fact_id, concept, period_start, period_end, value_text, unit, available_date, mapping_gen}`；`financial_metric` → `{复合键…, value_text, as_of}`；`macro_observation` → `{series_id, period_end, value, vintage_id, available_at}`；`macro_snapshot` → `{snapshot_id, methodology_version, observation_ids, primary_state, scores, coverage, margin}`；`price_bar` → `{ticker, market, date, source, adjustment, open, high, low, close, volume}`；`document_span` → `{document_id, version_hash, page, span_text_sha256}`；`judgment` → `{judgment_id, claim}`；`table_rows` → `{table, natural_key, rows_sha256}`（行业聚合等多行输入，行集合由各规格定义并给出自然键）。`available_at` 是该输入的可得日期（事实 `available_date`、宏观 `available_at`、K 线为 `date` 当日收盘、文档为入库 `available_at`）；登记校验 `max(available_at) ≤ as_of`，否则 `lookahead`。
-
-`inputs_hash = digest(inputs 按 (kind, canonical(ref)) 排序后的数组)`。
-
-### 3.6 生产者
-
-`producer_kind ∈ {rule, model, human, third_party}`；`producer_ref`：`rule` → `{}`；`model` → `{ model: string, prompt_sha256: string, run_id: string }`；`human` → `{ analyst_id: string }`；`third_party` → `{ institution: string, document_id: string }`。`producer_nonce`（进 id，§6.1）：`rule` 为空串；`model` 为 `prompt_sha256 + ':' + model`；`human` 为 `analyst_id + ':' + registered_at`；`third_party` 为 `document_id + ':' + version_hash`。
+- `as_of` 是**日期**；"可见"⇔ `available_at ≤ as_of 的 23:59:59.999Z（UTC）`。
+- 各输入的 `available_at`：事实 = `available_date` 的 UTC 日终（规格二只到日期精度）；宏观观测 = `macro_observations.available_at`（timestamptz）；宏观快照 = **其 `observation_ids` 的 `available_at` 最大值**（不是快照 `created_at`，审计 F10）；K 线 = 该交易日在交易所时区的收盘时刻换算到 UTC（`EXCHANGE_TZ` 来自 `forward.ts`；收盘时刻 A 15:00、HK 16:00、US 16:00 本地）；`table_rows` = 行的 `updated_at` 或 `valid_from` 日终。
+- `price_bar.date`、`target.base_date` 是交易所本地日期（`exchangeDate()`）；`target.date`（`calendar_days`）是 UTC 日期；`period_end` 是财务日期。
+- `registered_at` 是数据库 `now()`（§5.6 `judgments_server_time()`），不是进程时钟。
 
 ---
 
@@ -176,51 +197,50 @@ type InputRef =
 ### 4.1 模块接口
 
 ```ts
-export interface Methodology<I, C extends Claim> {
-  id: string;                 // 'macro_regime'
-  version: string;            // 'v1'（整数递增；任何公式、阈值、输入集合、条件或期限的改动都是新版本）
-  judgment_type: JudgmentType;
-  kind: Kind;
-  producer_kind: ProducerKind;
-  subject_types: Subject['type'][];
-  doc: string;                // 'docs/methodologies/macro_regime/v1.md'
-  params: Record<string, number | string>;   // 公式参数，写入 judgment_methodologies.params，进 formula_hash
+export interface Methodology<C extends Claim> {
+  id: string; version: string;                         // 'v1'；任何公式、阈值、输入集合、条件、期限、标签政策或实现的改动都是新版本
+  judgment_type: JudgmentType; kind: Kind; producer_kind: ProducerKind;
+  subject_types: Subject['type'][]; markets?: Array<'A'|'HK'|'US'>;   // 价格类方法声明支持的市场（§7.4）
+  input_kinds: Input['kind'][];                        // ⊆ 公共白名单
+  upstream?: { macro_methodology_version?: string; facts_formula_version?: string };   // 上游方法版本绑定（审计 F28）
+  doc: string;                                         // docs/methodologies/<id>/<version>.md
+  params: Record<string, number | string>;             // 含 grace_days、label_policy 等（标量）；需要表状参数的方法用 params_json（JSON Schema 校验）
+  params_json?: Record<string, unknown>;
   horizon: Horizon;
-  gather(subject: Subject, asOf: string, db: JudgmentInputsDb): Promise<InputRef[] | Abstain>;   // 取输入并算哈希
-  compute(subject: Subject, inputs: ResolvedInput[]): C | Abstain;                               // 纯函数
-  condition(subject: Subject, inputs: ResolvedInput[], claim: C): Condition;                     // 纯函数
+  deps: string[];                                      // 本方法依赖的共享模块路径（resolver、规则表、目录快照…），进 formula_hash（审计 G20）
+  gather(subject, asOf, db: JudgmentInputsDb): Promise<Input[] | Abstained>;   // 唯一允许 I/O 的函数；只能经 inputs.ts 的构造器
+  resolveTarget(subject, asOf, horizon, db): Promise<Target | Abstained>;       // §3.4
+  compute(subject, inputs: Input[]): Active<C> | Abstained;                   // 纯函数
+  condition(subject, inputs, claim: C): Condition;                            // 纯函数
 }
 ```
 
-- `gather` 是唯一允许 I/O 的函数，且只能通过 `JudgmentInputsDb`（§5.6）读事实层；`compute / condition` 对同一输入必须字节一致（属性测试，§14.1）。
-- `formula_hash = digest({ id, version, params, horizon, doc_sha256 })`；文档改动即哈希改动 → 必须升版本（CI 测试：注册表里每个 `id@version` 的 `formula_hash` 与 `judgment_methodologies` 行一致，§14.2）。
-- `REGISTRY: Map<'${id}@${version}', Methodology>`；`status ∈ {draft, active, retired}`：`draft` 只能在测试与 `--dry-run` 下登记；`retired` 不再登记但仍结算与校准已有判断。
+- `formula_hash = digest({ id, version, params, params_json, horizon, upstream, doc_sha256, implementation_sha256, deps_sha256 })`，`implementation_sha256` = 方法模块源文件的 sha256，`deps_sha256` = `deps` 列表中每个文件 sha256 的有序 digest（`sync-methodologies.ts` 读文件计算；`deps` 漏列由 lint 规则兜底：方法模块的 import 图里凡在 `src/lib/judgments/` 之外且不在 `deps` 的本地模块报错）；改实现或依赖不升版本 → 同步脚本报 `formula_hash_drift` 并拒绝同步（审计 F22 / G20）。
+- `status ∈ {draft, active, retired}`：`draft` 只能在测试与 `--dry-run` 下登记；`retired` 不再登记但继续结算与校准。`publishable boolean`（默认 `false`）：只有 owner 确认该方法全部输入 `origin.license_status='confirmed'` 后由同步脚本置 `true`；`publishable=false` 的方法照常登记、结算、校准，但读接口**不返回**它的卡片（`/admin/judgments` 可见）。这是总纲"一手来源 + 许可先行"的发布准入（审计 F29）。
 
-### 4.2 公式文档 `docs/methodologies/<id>/<version>.md` 固定章节
+### 4.2 公式文档固定章节
 
-1 判断回答什么问题；2 主体与输入（每个输入的 `kind`、来源表、`available_at` 口径）；3 公式与参数（与 `params` 一致，参数来源注明"读自何处"）；4 可证伪条件与期限（人读与 `Condition` 一致）；5 结算 resolver 与实现值定义；6 已知局限与不适用情形（何时 `abstain`）；7 版本历史（与上一版的差异）。读接口 `/api/methodologies/[id]` 原样返回该文档（§10）。
+1 回答什么问题；2 主体与输入（每个 `kind`、来源表、`available_at` 口径、`origin`）；3 公式与参数（与 `params` 一致，参数来源注明）；4 可证伪条件、目标期、标签政策；5 结算 resolver 与实现值定义（自然键、单位、覆盖要求）；6 不适用情形（何时 abstain）；7 版本历史。
 
 ### 4.3 v1 声明的判断类型
 
 | `judgment_type` | `kind` | 主体 | 首个方法 | 归属规格 |
 |---|---|---|---|---|
 | `macro_regime` | categorical | macro_region | `macro_regime@v1`（§11.1） | 本规格 + 宏观 |
-| `recommendation_call` | probability | issuer（经 ticker） | `recommendation_call@v1`（§11.2，私有适配器） | 本规格 |
+| `macro_regime_asset_pair` | probability | macro_region | —（**未实现能力**：需要配对 resolver 与回报序列契约，§11.1、§18.1；O3 决定是否立项） | 本规格 + 宏观 |
+| `recommendation_call` | probability | security / issuer | `recommendation_call@v1`（§11.2，私有适配器） | 本规格 |
 | `industry_lifecycle_stage` | categorical | industry | — | 行业规格 |
 | `industry_prosperity` | score | industry | — | 行业规格 |
 | `valuation_verdict` | categorical | industry / issuer | — | 行业规格 |
 | `thesis_win_rate` | probability | issuer | — | 公司规格 |
 | `return_range` | interval | issuer | — | 公司规格 |
-| `sellside_rating` | categorical（third_party） | issuer | — | 外资研报规格（需 §12.3） |
-| `sellside_target_price` | interval（third_party） | issuer | — | 同上 |
-
-类型表在 `src/lib/judgments/types.ts`，新增类型是代码改动 + 本表更新。
+| `sellside_rating` / `sellside_target_price` | categorical / interval（third_party） | issuer | — | 外资规格（需 §12.3） |
 
 ---
 
 ## 5. 数据模型
 
-迁移 `supabase/migrations/20261108090000_judgments.sql`（时间戳晚于规格二的 `20261106090000`；若与并行规格撞号，取更晚的分钟位），可重放；补 `supabase/migrations.lock.json`；`src/lib/supabase/database.types.ts` 手工补四个 Row 类型。所有表先 `revoke all from public, anon, authenticated`，再按 §5.5 授权（计划一模式）。
+迁移 `supabase/migrations/20261108090000_judgments.sql`（晚于规格二 `20261106090000`；并行规格撞号时取更晚的分钟位），可重放；补 `migrations.lock.json`；`database.types.ts` 手工补五个 Row 类型与四个 `Functions`。
 
 ### 5.1 `judgment_methodologies`（代码镜像）
 
@@ -231,72 +251,84 @@ judgment_type     text not null
 kind              text not null check (kind in ('probability','categorical','score','interval'))
 producer_kind     text not null check (producer_kind in ('rule','model','human','third_party'))
 subject_types     text[] not null
+input_kinds       text[] not null
+markets           text[]
 title_zh          text not null
 title_en          text not null
 doc_path          text not null
 doc_sha256        text not null check (doc_sha256 ~ '^[0-9a-f]{64}$')
+implementation_sha256 text not null check (implementation_sha256 ~ '^[0-9a-f]{64}$')
 params            jsonb not null default '{}' check (jsonb_typeof(params) = 'object')
+params_json       jsonb not null default '{}' check (jsonb_typeof(params_json) = 'object')
 horizon           jsonb not null check (jsonb_typeof(horizon) = 'object')
+upstream          jsonb not null default '{}' check (jsonb_typeof(upstream) = 'object')
+deps_sha256       text not null check (deps_sha256 ~ '^[0-9a-f]{64}$')
 formula_hash      text not null check (formula_hash ~ '^[0-9a-f]{64}$')
 status            text not null check (status in ('draft','active','retired'))
+publishable       boolean not null default false
 code_version      text not null
 synced_at         timestamptz not null default now()
 primary key (methodology_id, version)
 ```
 
-只由 `scripts/judgments/sync-methodologies.ts` 写（service role，`upsert` 允许改 `status / synced_at / code_version`，其余列变化 → 触发器 `23514 append_only:judgment_methodologies`，即公式一旦同步过就不可改，只能升版本）。
+触发器 `judgment_methodologies_limited_update`：`update` 只允许改 `status / publishable / synced_at / code_version`，其余列变化 → `23514 append_only:judgment_methodologies`；`delete` 禁止。
 
 ### 5.2 `judgments`
 
 ```
-judgment_id         uuid primary key                       -- 内容寻址（§6.1）
-subject_type        text not null check (subject_type in ('issuer','industry','macro_region','macro_series','document'))
+judgment_id         uuid primary key
+subject_type        text not null check (subject_type in ('issuer','industry','macro_region','macro_series'))   -- v1 公共表只收这四种
 subject_key         text not null check (length(subject_key) between 1 and 128)
 judgment_type       text not null
 methodology_id      text not null
 methodology_version text not null
 kind                text not null check (kind in ('probability','categorical','score','interval'))
-producer_kind       text not null check (producer_kind in ('rule','model','human','third_party'))
+producer_kind       text not null check (producer_kind in ('rule','model'))                  -- v1 公共表：human/third_party 拒绝（§5.5）
 producer_ref        jsonb not null default '{}' check (jsonb_typeof(producer_ref) = 'object')
 producer_nonce      text not null default ''
-as_of               date not null                           -- 信息截止日（§3.5）
-registered_at       timestamptz not null                    -- 服务器时间
-inputs              jsonb not null check (jsonb_typeof(inputs) = 'array')
+as_of               date not null
+registered_at       timestamptz not null
+retrospective       boolean not null
+inputs              jsonb not null check (jsonb_typeof(inputs) = 'array')                     -- 可为空数组（仅弃权）
 inputs_hash         text not null check (inputs_hash ~ '^[0-9a-f]{64}$')
-abstained           boolean not null default false
+abstained           boolean not null
 abstain_reason      text
-claim               jsonb check (jsonb_typeof(claim) = 'object')
-condition           jsonb check (jsonb_typeof(condition) = 'object')
-horizon             jsonb check (jsonb_typeof(horizon) = 'object')
+claim               jsonb check (claim is null or jsonb_typeof(claim) = 'object')
+condition           jsonb check (condition is null or jsonb_typeof(condition) = 'object')
+horizon             jsonb check (horizon is null or jsonb_typeof(horizon) = 'object')
+target              jsonb check (target is null or jsonb_typeof(target) = 'object')
+label_policy        text check (label_policy in ('first_observed','cutoff_vintage'))
 settle_after        timestamptz
 settle_by           timestamptz
 code_version        text not null check (length(code_version) between 7 and 64)
 batch_id            uuid not null references ingest_batches(batch_id) on delete restrict
 created_at          timestamptz not null default now()
 foreign key (methodology_id, methodology_version) references judgment_methodologies(methodology_id, version) on delete restrict
-constraint judgments_claim_iff_not_abstained check (abstained = (claim is null) and abstained = (condition is null) and abstained = (settle_after is null))
-constraint judgments_abstain_reason check (not abstained or abstain_reason is not null)
+constraint judgments_active_shape check (
+  (abstained and claim is null and condition is null and horizon is null and target is null and label_policy is null and settle_after is null and settle_by is null and abstain_reason is not null)
+  or (not abstained and claim is not null and condition is not null and horizon is not null and target is not null and label_policy is not null and settle_after is not null and settle_by is not null and abstain_reason is null))
+constraint judgments_active_has_inputs check (abstained or jsonb_array_length(inputs) > 0)
 constraint judgments_settle_order check (settle_by is null or settle_by > settle_after)
-index (subject_type, subject_key, judgment_type, as_of desc, registered_at desc)
-index (methodology_id, methodology_version, settle_after) where not abstained
+index (subject_type, subject_key, judgment_type, as_of desc, registered_at desc, judgment_id)
+index (methodology_id, methodology_version, as_of) where not abstained
 index using gin (inputs jsonb_path_ops)
 ```
 
-触发器 `judgments_append_only`：`update` / `delete` 一律 `23514 append_only:judgments`。没有状态列：状态由最新结算行派生（§9.1）。"替换"= 同主体同类型同方法登记一条 `as_of` 更晚的判断；读取默认取最新 `as_of`（§10）。
+触发器 `judgments_append_only`：`update` / `delete` 一律 `23514 append_only:judgments`。没有状态列；生命周期由最新结算行与队列派生（§7.2、§9.1）。
 
-### 5.3 `judgment_settlements`
+### 5.3 `judgment_settlements`（证据，只追加）
 
 ```
 settlement_id     uuid primary key
 judgment_id       uuid not null references judgments(judgment_id) on delete restrict
-seq               integer not null check (seq >= 1)           -- 同一判断第 seq 次结算记录；最新 seq 有效
-kind              text not null check (kind in ('settled','void','withdrawn'))
-outcome           text check (outcome in ('hit','miss'))     -- settled 必填；其余 null
-realized          jsonb check (jsonb_typeof(realized) = 'object')   -- {value, label?, unit, at, from, to}
+seq               integer not null check (seq >= 1)
+kind              text not null check (kind in ('settled','void','withdrawn','reopened'))
+outcome           text check (outcome in ('hit','miss'))
+realized          jsonb check (realized is null or jsonb_typeof(realized) = 'object')     -- {value, label?, unit, from, to, label_policy}
 evidence          jsonb not null default '{}' check (jsonb_typeof(evidence) = 'object')
 resolver          text not null
 resolver_version  text not null
-reason            text                                        -- void / withdrawn 必填
+reason            text
 actor             text not null check (actor ~ '^(cron|script|admin:[0-9a-f-]{36})$')
 settled_at        timestamptz not null
 code_version      text not null
@@ -304,13 +336,33 @@ batch_id          uuid not null references ingest_batches(batch_id) on delete re
 unique (judgment_id, seq)
 constraint settlements_outcome_iff_settled check ((kind = 'settled') = (outcome is not null) and (kind = 'settled') = (realized is not null))
 constraint settlements_reason_unless_settled check (kind = 'settled' or reason is not null)
-index (judgment_id, seq desc)
 index (settled_at desc)
 ```
 
-只追加触发器同上。`seq > 1` 只允许两种情形：前一条是 `settled` 且本条是 `withdrawn`（管理员作废错误结算，`reason` 必填，`evidence.supersedes_settlement_id`），或前一条是 `void` 且本条是 `settled`（数据迟到后补结算）。其他组合触发器拒绝（`23514 settlement_sequence`）。
+只追加触发器 + `settlement_sequence` 触发器：`seq` 必须等于 `1 + max(seq)`（`append_settlement` RPC 在锁住队列行后计算；直接插入的行若 `seq` 不连续 → `23514 settlement_sequence`）；允许的转移：`∅ → settled | void`；`void → reopened`（仅 admin）；`reopened → settled | void`；`settled → withdrawn`（仅 admin）；`withdrawn → reopened`（仅 admin，纠错后重结算）。其他转移 `23514 settlement_sequence`。**只有 `settled` 行有 `outcome / realized`**（与 CHECK 一致）。序号示例：`settled(1) → withdrawn(2) → reopened(3) → settled(4)`；`void(1) → reopened(2) → settled(3)`。
 
-### 5.4 `judgment_calibrations`
+### 5.4 `judgment_settle_queue`（可变的调度状态，不是证据）
+
+```
+judgment_id       uuid primary key references judgments(judgment_id) on delete restrict
+settle_after      timestamptz not null
+settle_by         timestamptz not null
+label_policy      text not null
+next_attempt_at   timestamptz not null
+attempts          integer not null default 0
+last_status       text check (last_status in ('pending','unavailable','inconsistent','error'))
+last_detail       jsonb not null default '{}'
+leased_until      timestamptz
+lease_token       uuid                         -- 领取时生成；释放 / 追加必须带同一 token（fencing，审计 G10）
+override          jsonb                        -- 隔离项接受后的裁决：{reason_code, resolution, resolved_by, at}（§7.6）
+closed_at         timestamptz                  -- 终态（settled / void / withdrawn）时填；reopened 清空
+updated_at        timestamptz not null default now()
+index (next_attempt_at, judgment_id) where closed_at is null
+```
+
+登记活跃判断时同事务（RPC，§5.6）插入一行；结算写入后更新。扫描顺序 `next_attempt_at asc, judgment_id asc`，取 `closed_at is null and next_attempt_at <= now and (leased_until is null or leased_until < now)`；领取时 `leased_until = now + 10 分钟`（一次 cron 的最长时间 300 s 的两倍）并生成 `lease_token`；`releaseLease / append_settlement` 带 token，不匹配 → `lease_lost`（过期 worker 不能覆盖新 worker）。退避：`pending` = `max(1 天, (target 估计到期 − now) / 2)`；`unavailable` = 1 天 × min(attempts, 7)；`inconsistent` = 等隔离处理，`next_attempt_at = min(settle_by, now + 7 天)`，到 `settle_by` 仍未处理 → `void(unresolved_inconsistency)`（隔离项保留作审计；审计 G09）。任何退避都不能把 `next_attempt_at` 设成过去的时刻。
+
+### 5.5 `judgment_calibrations`（只追加）
 
 ```
 calibration_id      uuid primary key
@@ -320,58 +372,84 @@ scope_type          text not null check (scope_type in ('all','market','subject_
 scope_key           text not null default ''
 window_from         date not null
 window_to           date not null
-n_registered        integer not null check (n_registered >= 0)
-n_settled           integer not null check (n_settled >= 0)
-n_void              integer not null check (n_void >= 0)
-threshold_n         integer not null                      -- 计算时生效的 N（§8.3）
-state               text not null check (state in ('insufficient','calibrated'))
+n_registered        integer not null                      -- 窗口内全部活跃登记（cohort）
+n_settled           integer not null
+n_independent       integer not null                      -- §8.2 独立样本（非重叠抽样）
+n_void              integer not null
+n_retrospective_excluded integer not null
+threshold_n         integer not null
+ece_max             numeric not null
+kind                text not null check (kind in ('probability','categorical','score','interval'))
+state               text not null check (
+  (kind = 'score' and state in ('insufficient','evaluated')) or
+  (kind <> 'score' and state in ('insufficient','failed','calibrated')))
+valid_until         timestamptz not null                  -- computed_at + 2 × 校准周期（周跑 → 14 天）；过期按 insufficient 显示（§9.1）
 metrics             jsonb not null check (jsonb_typeof(metrics) = 'object')
 reliability         jsonb not null check (jsonb_typeof(reliability) = 'array')
-isotonic            jsonb check (isotonic is null or jsonb_typeof(isotonic) = 'array')
-settlement_ids_hash text not null check (settlement_ids_hash ~ '^[0-9a-f]{64}$')   -- 输入集合指纹，报告可回放
+isotonic_segments   jsonb check (isotonic_segments is null or jsonb_typeof(isotonic_segments) = 'array')   -- isotonicFit().segments
+cohort_path         text not null                         -- 桶 judgments-calibration/<calibration_id>.json：窗口内全部登记 {judgment_id, lifecycle, retrospective, settlement_id?, group, selected_for_independent, p|value|selected, realized?}
+cohort_sha256       text not null
+query_bounds        jsonb not null                        -- {window_from, window_to, max_settled_at, max_registered_at}：重算的查询边界
+fingerprint         text not null                         -- digest({methodology, version, scope, window, threshold_n, ece_max, algorithm_version, cohort_sha256})
+algorithm_version   text not null
 code_version        text not null
 computed_at         timestamptz not null
 batch_id            uuid not null references ingest_batches(batch_id) on delete restrict
-foreign key (methodology_id, methodology_version) references judgment_methodologies(methodology_id, version)
+unique (fingerprint)
 index (methodology_id, methodology_version, scope_type, scope_key, computed_at desc)
 ```
 
-只追加；显示用"每 `(methodology, scope)` 最新一条"。私有适配器（§11.2）的校准**不写本表**，按请求实时计算（§8.4）。
+### 5.6 权限与 SQL 函数
 
-### 5.5 权限
+- 五张表：`revoke all on … from public, anon, authenticated, service_role`；`grant select to anon, authenticated` + 策略 `"<t> public read" for select using (true)`（`judgment_settle_queue` 除外：无 anon 读）；`service_role`：**对 `judgments` 与 `judgment_settlements` 没有直接 insert 权限**，只能经下表的写 RPC（RPC 内校验方法一致性、形状与时间戳；审计 G11）；`judgment_calibrations` → `select, insert`；`judgment_methodologies` → `select, insert, update`（触发器限列）；`judgment_settle_queue` → `select`（写也只经 RPC）。写 RPC 的调用者只有 cron 路由、脚本与 `requireAdminUser()` 门控的管理员路由，全部经 `getAdminSupabase()`。
+- SQL 函数分两组（`search_path=''`；PostgREST 的 `max_rows` 在托管端未核实，所以所有多行读取都走带 keyset 的 RPC）。**公共读 RPC**：`security invoker`，`grant execute to anon, authenticated, service_role`，只读公共表；**服务写 RPC**：`security definer`，函数 owner 为迁移执行者，`revoke execute from public, anon, authenticated`、`grant execute to service_role`：
 
-- `judgment_methodologies`、`judgments`、`judgment_settlements`、`judgment_calibrations`：`enable row level security`；`grant select to anon, authenticated` + 策略 `"<t> public read" for select using (true)`；`grant select, insert to service_role`（无 update/delete 授权；触发器再兜底）。写入者只有 cron 路由（`CRON_SECRET`）、脚本与 `requireAdminUser()` 门控的管理员路由，全部经 `getAdminSupabase()`。
-- v1 没有私有行。扩展路径（不在本期）：加 `owner_user_id uuid null` + `visibility` + `"own select/insert"` 策略；内容寻址 id 不含 owner，所以私有行与公共行不会撞 id，但 `producer_nonce` 对 `human` 含 `analyst_id`，足以区分。
+| 函数 | 组 | 作用 |
+|---|---|---|
+| `judgments_server_time() → timestamptz` | 公共读 | `now()`；登记与结算的时间戳 |
+| `latest_judgment_cards(p_subject_type, p_subject_key, p_types text[], p_view text, p_cutoff timestamptz) → setof judgment_envelope` | 公共读 | `judgment_envelope = (judgment judgments, settlement judgment_settlements, calibration judgment_calibrations, methodology judgment_methodologies)`；每 `(judgment_type, methodology)` 一条；只返回 `publishable=true` 方法的判断；排序 `as_of desc, registered_at desc, judgment_id`；`p_view='as_known'` 时判断 `registered_at ≤ p_cutoff`、结算 `settled_at ≤ p_cutoff`、校准 `computed_at ≤ p_cutoff`（§10）；合并发行人反查（§12.4） |
+| `judgment_history(p_subject_type, p_subject_key, p_type, p_methodology, p_version, p_before uuid, p_limit) → setof judgment_envelope` | 公共读 | keyset 分页 |
+| `calibration_cohort(p_methodology, p_version, p_window_from, p_window_to, p_after uuid, p_limit) → setof judgment_envelope` | 公共读 | 窗口内全部活跃登记（含未结算 / void / retrospective）+ 最新结算；keyset 分页（`judgment_id > p_after`）；校准任务与校准页都用它 |
+| `register_judgment(row jsonb, queue jsonb) → uuid` | 服务写 | 一个事务：校验方法 `active`、`kind/producer_kind/subject_types/input_kinds` 与方法行一致、形状约束；`registered_at = now()`；插 `judgments`；活跃判断同时插 `judgment_settle_queue`；23505 原样抛出 |
+| `claim_due_judgments(p_limit, p_lease_seconds) → setof judgment_settle_queue` | 服务写 | 按 §5.4 顺序 `for update skip locked` 领取，写 `leased_until / lease_token` |
+| `release_lease(p_judgment_id, p_lease_token, p_patch jsonb) → void` | 服务写 | token 不匹配 → `lease_lost`；更新 `last_status / last_detail / next_attempt_at / attempts`，清空租约 |
+| `append_settlement(p_judgment_id, p_lease_token, p_request_key text, row jsonb) → (seq integer, status text)` | 服务写 | 一个事务：锁队列行；token 校验（admin 路径传 null 且 `actor` 为 `admin:*`）；`request_key` 已存在 → `('already_applied', seq)`；队列已 `closed_at` 且请求是自动结算 → `('already_final', seq)`（不是错误）；`seq = coalesce(max,0)+1`；校验转移；插入；更新队列（`closed_at` / `next_attempt_at` / `attempts` / 清租约）；返回 `('applied', seq)` |
+| `apply_quarantine_override(p_judgment_id, p_override jsonb) → void` | 服务写 | §7.6 钩子：写 `override`，`next_attempt_at = now()` |
+| `repair_stale_batches(p_dataset, p_older_than interval) → integer` | 服务写 | 把 `judgments.*` 数据集中 `running` 超过 `p_older_than`（默认 15 分钟）的批次标 `failed`（`errors += {code:'stale_running'}`）；每次 cron 开头调用（审计 G26） |
 
-### 5.6 数据访问契约 `src/lib/judgments/db.ts`
+### 5.7 数据访问契约 `src/lib/judgments/db.ts`
 
 ```ts
-export interface JudgmentsDb {
+export interface JudgmentsDb {        // 生产实现 = PostgREST from() + rpc()；memory 实现复刻触发器与 RPC 语义；pg 实现只用于集成测试
+  serverTime(): Promise<string>;
   methodology(id, version): Promise<MethodologyRow | null>;
   subjectExists(subject): Promise<'active' | 'inactive' | 'missing'>;
   getJudgment(id): Promise<JudgmentRow | null>;
-  insertJudgment(row): Promise<void>;                                   // 23505 → 调用方按 §6.2 处理
-  latestJudgments(subject, opts: { types?, asOf?, includeAbstained? }): Promise<JudgmentRow[]>;   // 每 (type, methodology) 一条
-  dueJudgments(now, limit): Promise<JudgmentRow[]>;                     // settle_after <= now 且最新结算不是 settled/withdrawn
+  registerJudgment(row, queue | null): Promise<void>;            // rpc register_judgment
+  latestCards(subject, opts: { types?; view; cutoff? }): Promise<Envelope[]>;   // rpc latest_judgment_cards（anon）
+  historyOf(subject, type, methodology, opts: { before?: string; limit }): Promise<Envelope[]>;   // rpc judgment_history（anon）
+  claimDue(limit): Promise<QueueRow[]>;                          // rpc claim_due_judgments
+  releaseLease(judgmentId, leaseToken, patch): Promise<void>;    // rpc release_lease
   settlementsOf(judgmentIds): Promise<SettlementRow[]>;
-  insertSettlement(row): Promise<void>;
-  settledRows(methodology, version, window, scope): Promise<Array<{ judgment: JudgmentRow; settlement: SettlementRow }>>;
+  appendSettlement(judgmentId, leaseToken | null, requestKey, row): Promise<{ seq; status: 'applied'|'already_applied'|'already_final' }>;
+  calibrationCohort(methodology, version, window): AsyncIterable<Envelope>;   // rpc calibration_cohort 分页（anon）
   latestCalibration(methodology, version, scope): Promise<CalibrationRow | null>;
-  insertCalibration(row): Promise<void>;
+  insertCalibration(row): Promise<'inserted' | 'duplicate'>;     // unique(fingerprint) → duplicate
 }
-export interface JudgmentInputsDb {                                     // gather / replay / resolver 的只读事实层入口
-  facts: Pick<FactsDb, 'factsOfIssuer' | 'metricsOfIssuer' | 'filingsOfIssuer'>;   // 规格二 §4.8
-  macro: MacroReadApi;                                                   // §12.1
-  kline(ticker, market, opts: { bars: number; adjustment }): Promise<SourceKlineSeries | KlineFailure>;
-  issuerPrimarySecurity(issuer_id, on: string): Promise<{ ticker; market } | null>;   // issuer_securities 持有窗口
+export interface JudgmentInputsDb {   // gather / replay / resolver 的只读事实层入口；facts / macro / tableRows 的实现用 anon 客户端（§3.5）
+  facts: Pick<FactsDb, 'readFacts' | 'factsByIds' | 'metricsOfIssuer' | 'filingsOfIssuer'> & { deriveMetricsAsOf(issuer, market, asOf, formulaVersion): Promise<MetricRow[]> };   // 规格二 §4.8 + §12.2
+  macro: MacroReadApi;                                           // §12.1
+  tableRows(table: PublicTable, naturalKey): Promise<Row[]>;
+  kline(req: { ticker; market; adjustment: 'qfq'|'hfq'; source: KlineSourceName; from: string; to: string; signal: AbortSignal }): Promise<SourceKlineSeries | KlineFailure>;   // 按冻结的 source 与日期范围（含两端）取；§7.4
+  issuerPrimarySecurity(issuer_id, on: string): Promise<{ ticker; market } | null>;   // issuer_securities ⋈ stocks_universe(market)
 }
 ```
 
-三种实现：`supabaseJudgmentsDb`（PostgREST；读用 anon 客户端子集，写用 service role）、`memoryJudgmentsDb`（单测，实现触发器语义：只追加、`seq` 规则）、`pgJudgmentsDb`（集成测试直连 SQL）。批次 / 隔离 / 新鲜度仍走计划一 `TableClient`。
+批次 / 隔离 / 新鲜度仍走计划一 `TableClient`。
 
 ---
 
-## 6. 登记、内容寻址与回放 `src/lib/judgments/register.ts`、`replay.ts`
+## 6. 登记、内容寻址与回放
 
 ### 6.1 内容寻址 id
 
@@ -381,198 +459,224 @@ judgment_id = uuidV8(sha256(canonicalize({
 })))
 ```
 
-`uuidV8` 与台账 `judgmentId()` 同一实现（§2.4 第 5 点）。`claim` 不进 id：规则型生产者对同输入必须给同 `claim`，所以同 id 不同 `claim` 就是代码漂移或非确定性，按 §6.2 当冲突处理；这正是把 `claim` 排除在外的目的。
+`claim` 不进 id：规则型生产者对同输入必须给同 `claim`，所以同 id 不同语义字段就是代码漂移或非确定性，按 §6.2 当冲突处理。未来私有行（§1.2）进表前必须把 `owner_user_id` 加进哈希（id 命名空间按租户），本稿不实现。
 
 ### 6.2 `registerJudgment(actor, input)` 流程
 
-1. 校验：方法存在且 `status ∈ {active}`（`draft` 仅 `dryRun`）；`subject` 格式与存在性；`code_version` 非空；`inputs` 非空且每个 `hash` 形状合法；`max(inputs.available_at) ≤ as_of`（否则 `lookahead`）；`registered_at = serverTime`（`select now()` 经 `rpc` 或由 `pg` 直连；不用进程时钟）。
-2. 若非 `abstain`：`claim` 按 `kind` 校验（概率 ∈ [0,1]；类别 `selected ∈ classes`；区间 `low ≤ high`；分值 `value ∈ scale`）；`condition.resolver` 在注册的 resolver 表内且 `params` 过 resolver 的校验；`horizon` 与方法声明一致；算 `settle_after / settle_by`（§3.4）。
-3. 算 id；`getJudgment(id)`：存在且 `canonical(claim, condition, abstained, abstain_reason)` 相同 → `{ id, duplicate: true }`；不同 → `quarantine(dataset='judgments', table='judgments', natural_key=id, reason='idempotency_conflict', payload={registered: 旧, attempted: 新})`，抛 `idempotency_conflict`。
-4. `insertJudgment`；23505（并发同 id）→ 重读按第 3 步判定。
-5. 返回 `{ id, duplicate: false }`。调用方（生产者）负责 `startBatch/finishBatch`（dataset `judgments.<methodology_id>`，counts：`inserted` = 新行、`duplicates`、`quarantined`、`failed`）。
+1. 校验：方法存在且 `active`（`draft` 仅 `dryRun`）；`subject` 格式、类型在方法 `subject_types` 与公共表允许集内、存在性；`producer_kind ∈ {rule, model}`；`code_version` 非空；每个输入 `kind ∈ 方法.input_kinds ∩ 公共白名单`，**重跑构造器**并与提交的 `snapshot` 字节一致（§3.5），`origin` 键在冻结表内；`max(available_at) ≤ as_of 日终`（否则 `lookahead`）；`registered_at = serverTime()`；`retrospective` 按 §3.4（含 `labelAvailableAt` 检查）。
+2. 活跃判断：`claim` 按 kind 校验；`condition` 走对应 resolver 的 `validateParams()`；`horizon` 与方法声明一致；`target = resolveTarget(...)`（失败 → 转为 abstain `target_unresolvable`）；算 `settle_after / settle_by`。
+3. 算 id；`getJudgment(id)`：存在且**完整规范化登记载荷**相同 → `{ id, duplicate: true }`；不同 → `quarantine(dataset='judgments', table_name='judgments', natural_key=id, reason_code='idempotency_conflict', payload={registered, attempted})`，抛 `idempotency_conflict`。规范化载荷 = 行的全部列**减去**运行元数据 `registered_at / retrospective / settle_after / settle_by / code_version / batch_id / created_at`（这些由时间或环境决定），即含 `subject_*, judgment_type, methodology_*, kind, producer_kind, producer_ref, producer_nonce, as_of, inputs, inputs_hash, abstained, abstain_reason, claim, condition, horizon, target, label_policy`（审计 G21）。
+4. `registerJudgment` RPC；23505 → 回到第 3 步重读。
+5. 返回 `{ id, duplicate: false }`。调用方负责批次（dataset `judgments.produce.<methodology_id>`，counts：`inserted` 新行、`duplicates`、`quarantined`、`failed`；弃权行计 `inserted`，`errors` 加信息码 `abstained_summary`）。
 
-`registerJudgment` 不在事务内（`TableClient` 无事务）：第 3–4 步的竞争由主键与重读收敛，与计划一 `quarantine()` 的 23505 收敛同模式。
+### 6.3 回放 `replayJudgment(id, inputsDb?)` 与脚本 `scripts/judgments/replay.ts --id <uuid> [--reconcile] [--json]`
 
-### 6.3 回放 `replayJudgment(id, inputsDb)` 与脚本 `scripts/judgments/replay.ts --id <uuid> [--json]`
-
-1. 读判断行；对每个 `InputRef` 按 `kind` 从 `JudgmentInputsDb` 以 `asOf = judgment.as_of` 重新取值（事实用 `availableLte`，宏观用 `available_at ≤ as_of` 的最新 vintage，K 线用登记的 `source/adjustment` 重抓并取该 `date` 的 bar），重算投影哈希；任一不等 → `input_hash_mismatch`（报告列出哪一个）。K 线 `adjustment ∈ {qfq, hfq}` 的 bar 允许因后续复权重算而变化：此时记 `basis_shift`（信息）而不是 mismatch，并同时用 `none` 口径复核 `close` 相对关系（§7.4）。
-2. `producer_kind='rule'`：重跑 `compute / condition`；`claim`、`condition`、`judgment_id` 三者字节一致 → `replay: 'exact'`；否则 `replay: 'diverged'`（列差异）。`model / human / third_party`：只到第 1 步，`replay: 'inputs_only'`。
-3. 输出 JSON `{ judgment_id, as_of, inputs: [{kind, ref, stored_hash, replayed_hash, status}], replay, diff? }`。不写库；CI 对夹具跑（§14.4）。
+1. 读判断行；对每个输入复算 `digest(snapshot)` 与存储的 `hash` 比较 → 不等即 `input_hash_mismatch`（存储层被改动）。
+2. `producer_kind='rule'`：用冻结的 `snapshot` 重跑 `compute / condition`；`claim`、`condition`、`judgment_id` 字节一致 → `replay='exact'`，否则 `'diverged'`（列差异）。`model`：`replay='inputs_only'`。
+3. `--reconcile`（可选）：按 `ref` 从 `JudgmentInputsDb` 以 `asOf` 重取并与 `snapshot` 比较，输出 `reconcile: [{kind, ref, status: 'same'|'changed'|'unavailable', diff?}]`——这是对上游的对账，不影响 `replay` 结论。
+4. 不写库；CI 对夹具跑（§14.4）。
 
 ### 6.4 生产者 runner `src/lib/judgments/produce.ts`
 
-`produce(methodology, subjects, asOf, { db, inputsDb, batch })`：对每个主体 `gather → compute → condition → registerJudgment`；一个主体失败不影响其他；回执 `errors` 带 `{code, key: subject_key}`。宏观 WP-M3 的发布步骤与行业 / 公司规格的 cron 都调它。
+`produce(methodology, subjects, asOf, { db, inputsDb, batch, signal })`：逐主体 `gather → compute → condition → registerJudgment`；单主体失败不影响其他；回执 `errors` 带 `{code, key: subject_key}`。宏观 WP-M3 的发布步骤、§7.1 的补偿扫描、行业 / 公司规格的 cron 都调它。
 
 ---
 
 ## 7. 结算 `src/lib/judgments/settle.ts`、`resolvers/*`
 
-### 7.1 任务
+### 7.1 任务与调度
 
-`GET|POST /api/cron/judgments-settle`（`CRON_SECRET` Bearer，`force-dynamic`，`maxDuration = 300`；`vercel.json` 增 `{ "path": "/api/cron/judgments-settle", "schedule": "0 3 * * *" }`——03:00 UTC 时前一交易日的美股、A 股、港股收盘都已可得；现有 cron 时段为 00:00 / 00:30 / 01:30 / 16:15 / 21:30 UTC，不冲突）。可选 `?preview=1` 不写库。本机脚本 `scripts/judgments/settle.ts` 共用核心。
+- `GET|POST /api/cron/judgments-settle`（`CRON_SECRET` Bearer，`force-dynamic`，`maxDuration = 300`——仓库已有先例 `securities-sync`，部署套餐是否允许由 owner 在生产确认；`vercel.json` 增 `{ "path": "/api/cron/judgments-settle", "schedule": "0 3 * * *" }`：03:00 UTC 时前一交易日的美、A、港收盘都已可得；现有 cron 时段 00:00 / 00:30 / 01:30 / 16:15 / 21:30 UTC，不冲突）。`?preview=1` 不写库。脚本 `scripts/judgments/settle.ts` 共用核心。
+- 预算：整个运行用一个 `deadline = start + 280 s` 与派生的 `AbortSignal` 贯穿 resolver 与 provider 调用（`fetchEastmoneyKline` / `fetchDatagatewayDailyKline` 都接受 `signal`）。领取按**小批**进行：每批 20 条，只有当"剩余预算 > 批内最坏取数时间 + 30 s 收尾"时才领取下一批；批内最坏取数时间 = `20 / 4 并发 × 每条最坏`，每条最坏 = resolver 声明的 `maxFetchMs`（`price_return`：主序列 + 基准序列，各按 provider 的超时 × 尝试次数；东方财富美股多前缀尝试每个默认 5 s，DataGateway 7 s）。`start + 200 s` 后不再领取。`finally` 里 `finishBatch`；无论如何每次 cron 开头先 `repair_stale_batches('judgments.settle', '15 minutes')`，所以进程被硬终止也不会留下永久 `running`（审计 G26）。未处理完的租约按 §5.4 自然过期。
+- 步骤 0（补偿，审计 F28 / G25）：`dq_freshness.detail.produce_marker`（dataset `judgments.produce.macro_regime`）记录上次扫描到的宏观快照 `created_at`；本次扫描 `macro_snapshots` 中 `created_at > marker` 且 `status ∈ {active, superseded}`（失败快照除外）的全部快照，对每个用 GIN 索引 `inputs @> [{"kind":"macro_snapshot","ref":{"snapshot_id":…}}]` 查是否已有判断（含弃权行），缺的调 `produce(macro_regime_v1, …)`；全部成功后推进 marker（失败不推进）。
+- 步骤 1：`startBatch({producer:'ts-judgments', dataset:'judgments.settle', codeVersion})` → 循环 `claimDue(20)` → 按 resolver 分组，≤ 4 并发 → 每条按 §7.2 处理 → `finishBatch` → `recordAttempt('judgments.settle', {ok, cadence:'daily'})`。
+- 校准不在本任务里：独立 `GET|POST /api/cron/judgments-calibrate`（`0 4 * * 1`，每周一；§8.3），同样的预算与小单元续跑规则。
 
-流程：`startBatch({producer:'ts-judgments', dataset:'judgments.settle', triggeredBy, codeVersion})` → `dueJudgments(now, 200)` → 按 `condition.resolver` 分组 → 每个 resolver 以 ≤ 4 并发取实现值 → 对每条：`pending`（未到期）跳过；`resolved` → 代入 `predicate` → `insertSettlement(kind='settled')`；`unavailable` 且 `now > settle_by` → `insertSettlement(kind='void', reason='no_data:<failure_kind>')`；`unavailable` 且未超期 → 跳过（`errors` 记 `{code:'skipped_summary', key:'unavailable', message:'n=…'}`）；`inconsistent` → `quarantine(...)`（§7.5），不写结算 → 截止前 240 s 停止取新判断（`deadline_hit` 信息码）→ `finishBatch` → `recordAttempt('judgments.settle', {ok, cadence:'daily'})`。200 条 / 次的上限：每条 resolver 调用 ≤ 7 s（`DATAGATEWAY_DAILY_TIMEOUT_MS`），4 并发，≤ 350 s 的最坏情况被截止保护。
+### 7.2 结算状态机（队列 × 证据）
 
-### 7.2 结算状态（借 S6 市场评价的状态集）
+resolver 返回 `Resolved{value, label?, from, to, label_available_at, evidence} | Pending{reason, estimated_at?} | Unavailable{failure} | Inconsistent{detail, evidence_hash, evidence}`。`label_available_at` = 实现值的可得时刻（价格：end bar 的收盘时刻；事实：`available_date` 日终；宏观：所用观测 `available_at` 的最大值）。
 
-resolver 返回 `{ status: 'resolved', value, label?, from, to, evidence } | { status: 'pending', reason } | { status: 'unavailable', failure: KlineProviderFailureKind | 'no_fact' | 'no_observation' } | { status: 'inconsistent', detail }`。
+| 返回 | `label_policy` | 动作 |
+|---|---|---|
+| `Resolved`，`label_available_at ≤ settle_by` | `first_observed` | `append_settlement(settled)`，`realized.label_policy='first_observed'`，证据记录观测时刻 |
+| `Resolved`，`label_available_at > settle_by` | 任意 | `void(reason='no_data:late')`（数据在截止后才可得；按可得时刻判断，不按执行时刻） |
+| `Resolved` | `cutoff_vintage` 且 `now < settle_by` | 不写；队列 `pending`，`next_attempt_at = settle_by` |
+| `Resolved` | `cutoff_vintage` 且 `now ≥ settle_by` | 以 `cutoff = settle_by` 重取（resolver 收到 `cutoff` 参数，只用 `available_at ≤ cutoff` 的 vintage）→ `settled`（证据记录 vintage） |
+| `Pending` | 任意，`now ≤ settle_by` | 队列退避（§5.4） |
+| `Pending` / `Unavailable` | `now > settle_by` | `void(reason='no_data:<failure 或 pending reason>')` |
+| `Unavailable` | `now ≤ settle_by` | 队列退避；`attempts` +1 |
+| `Unavailable{failure:'adjustment_unsupported' \| 'delisted'}` | 任意 | 立即 `void`（不可能再可得） |
+| `Inconsistent` | 任意 | `quarantine(reason_code 见 §7.6, payload 含完整 evidence)`；队列 `inconsistent`（退避见 §5.4）；若队列 `override` 存在且与本次情形匹配（§7.6），按 `override.resolution` 得到 `Resolved` |
+| 任意，队列 `now > settle_by` 且仍 `inconsistent` | 任意 | `void(reason='unresolved_inconsistency')` |
 
-### 7.3 v1 resolvers
+终态 `settled / void / withdrawn` → 队列 `closed_at`；admin `reopened` → 清空 `closed_at`、`next_attempt_at = now`。
 
-| resolver | `params` | 实现值 | 到期判定 | 证据 `evidence` |
-|---|---|---|---|---|
-| `price_return` | `{ ticker, market, base_date, adjustment, benchmark?: 'SPY'\|'000300'\|'HSI' }` | `close[base + n] / close[base] − 1`（`horizon.unit='trading_sessions'`，`n` 从 `horizon`）；`calendar_days` 则取 ≤ `base_date + n` 的最后一根 | 第 `base + n` 根 bar 存在 | `{ source, adjustment, base_bar, end_bar, bars_sha256, fetched_at, benchmark_bars? }` |
-| `fact_metric` | `{ issuer_id, metric, period_end, basis?, formula_version?, compare: 'value'\|'yoy' }` | 规格二 `metricsOfIssuer` / `factsOfIssuer` 以 `availableLte = now` 取 `period_end` 的当前值（`yoy` 则再取上年同期） | 该期事实 `status='ok'` 已存在 | `{ fact_ids, filing_ids, available_dates, values, mapping_gen }` |
-| `macro_axis` | `{ region, series_ids: string[], from_period, to_period, rule: 'delta_sign' }` | 宏观观测在 `to_period` 相对 `from_period` 的变化符号（按 §12.1 接口） | `to_period` 的观测 `available_at ≤ now` | `{ observation_refs:[{series_id, period_end, vintage_id, value}] }` |
-| `recommendation_hit` | `{ recommendation_id }` | `recommendation_scores.hit`（布尔） | 该行 `hit is not null` | `{ recommendation_id, scored_at, base_close, base_date, forward_5d_pct }` |
-| `industry_aggregate` | 由行业规格定义 | — | — | — |
+### 7.3 v1 resolvers（实现值定义必须唯一）
 
-K 线选择（`JudgmentInputsDb.kline`）：`isDatagatewayConfigured()` → `fetchDatagatewayDailyKline`；否则 `fetchEastmoneyKline(ticker,'D', bars)`。`adjustment` 由方法在登记时固定（默认与分析师评分层一致：A 股 `qfq`，HK / US `none`），结算与回放都按登记值取。`bars` = 到期所需根数 + 登记日前 5 根（定位 `base_date`，同 `scoreForward` 的 `findIndex(b => b.time >= date)`）。
+| resolver | 实现值 | 到期判定 | 证据 `evidence` |
+|---|---|---|---|
+| `price_return` | `r = close[end] / close[base] − 1`；读取按冻结的 `source / adjustment`，日期范围 `[base_date − 10 自然日, to]`，`to` = `session_index`: `base_date + ceil(n × 1.52) + 10 天`（§3.4 的自然日上界），`date`: `target.date + 20 天`；返回不含 `base_date` 根（`time == base_date`，必须与登记输入 `price_bar.date` 同日）→ `Inconsistent(base_bar_missing)`；`session_index`：`end = base + n`（范围内不足 n 根 → 按 `to` 再向后分页一次，仍不足 → `Pending`）；`date`：`end` = `time ≥ target.date` 的第一根（没有 → `Pending`；`to` 之后仍没有 → `Unavailable(empty)`）；有 `benchmark` 时基准序列按**同一组 bar 日期**对齐（基准缺任一日 → `Inconsistent(benchmark_gap)`），`r_rel = (1 + r) / (1 + r_b) − 1` | `end` 根存在 | `{ source, adjustment, from, to, bars: 全部 bar（base 前 5 根到 end，即至少 n + 6 根）, bars_sha256, benchmark_bars?, fetched_at, origin, capability: §7.4 能力表条目 }` |
+| `fact_metric` | `deriveMetricsAsOf(issuer, market, cutoff, formula_version)`（不读物化缓存，审计 G13）后按**完整自然键** `(metric, period_start, period_end, duration, unit, input_unit, basis, formula_version)` 精确匹配；多于一条 → `Inconsistent(ambiguous_fact)`；`compare='yoy'` 再取上年同期同键；底层事实经 `readFacts(…, asOf: cutoff)` 读取，返回 `truncated=true` → `Unavailable(truncated)`（不用不完整数据） | 该期底层事实在 `cutoff` 可见 | `{ fact_ids, filing_ids, available_dates, value_texts, mapping_gen, state_rev, cutoff, formula_version }` |
+| `macro_regime_replay` | `MacroReadApi.classifyAsOf(region, reference_period, cutoff, macro_methodology_version)`：用宏观 `regime.ts` 的**同一分类函数**（同版本规则表、同目录权重 `catalog_version`）对 `reference_period` 的观测在 `available_at ≤ cutoff` 的 vintage 上重算 → `primary_state`；宏观自身的 `coverage < 0.6` 规则在此同样生效 → `Unavailable(coverage)` | `cutoff` 已到（`cutoff_vintage`） | `{ observation_refs: [{series_id, period_end, vintage_id, value, available_at}], catalog: {version, weights, rules_version}, regime_result }` |
+| `recommendation_hit` | `recommendation_scores.hit`（私有适配器专用，不写公共结算） | `hit is not null` | — |
+| `industry_aggregate` | 行业规格定义 | — | — |
 
-### 7.4 价格证据与复权口径
+`cutoff` 对 `first_observed` = `now`（证据记录）；对 `cutoff_vintage` = `settle_by`。
 
-同一次抓取内的 `base_bar` 与 `end_bar` 口径一致，收益按它们计算（与分析师规格 §6"成交价与最新价同出一个 K 线源"一致）。登记时快照里的 `price_bar.close` 与结算抓到的 `base_bar.close` 比较：`adjustment='none'` 且 |差| > 0.5% → `inconsistent`（供应商改了历史数据；0.5% 沿用计划一恒等式容差）；`qfq/hfq` 下差异记入 `evidence.basis_shift = {registered_close, refetched_close}`，不算不一致。港美股不复权在拆股日的失真沿用分析师规格的"如实显示，不修正"：拆股后的 `end_bar/base_bar` 会把收益算错，v1 不处理（§18.3 开放问题；方法可通过 `benchmark` 参数记录基准同窗收益供人工判读）。
+### 7.4 价格口径与证据
 
-### 7.5 隔离与警告
+- 方法在登记时固定 `source ∈ KlineSourceName` 与 `adjustment ∈ {qfq, hfq}`（**不允许 `none`**：不复权序列跨拆股会给出错误收益且仓库没有公司行动数据；审计 F08）。结算与回放都按冻结的 `source` 读，不随环境配置换源（审计 G16）。
+- **复权能力表** `src/lib/judgments/resolvers/price-capabilities.ts`（冻结，进 `deps`）：行 = `(source, market, adjustment) → { status: 'verified' | 'unverified' | 'unsupported', evidence: fixture path, verified_at }`。初始状态**全部 `unverified`**（审计 G04：`datagateway.ts` 在上游省略字段时把 `adjustment` 回填为请求值，`eastmoney.ts` 也只是回显请求的 `fqt`，所以"返回值等于请求值"不是证据）。验证程序（F4-2）：对每个 `(source, market)` 取一只在录制窗口内有已知除权 / 拆股事件的证券（事件日期来自交易所公告，记在夹具头），录制 `qfq` / `hfq` / `none` 三份序列；`qfq` 或 `hfq` 在事件日前后与 `none` 的收盘比值发生与公告比例一致的跳变 → 该 `(source, market, adjustment)` 标 `verified` 并把夹具路径写进表；三份序列相同 → `unsupported`。只有 `verified` 条目可用于登记与结算；`gather` 对方法 `markets` 里无 `verified` 条目的市场 abstain `market_unsupported`；结算时能力表条目被改回非 `verified`（新证据）→ `Unavailable(adjustment_unsupported)` → `void`。
+- 两个适配器都加 `endDate`（东方财富 URL `end=`；DataGateway body `endDate`）；`JudgmentInputsDb.kline` 以 `[from, to]` 含两端语义读取，必要时向前 / 向后分页直到覆盖所需窗口；返回序列校验：按 `time` 升序、无重复、`base_date` 根存在、`time` 连续性不做假设。DataGateway 的 close-only 分支（适配器合成 OHLC、`volume=0`）在 `price_bar.snapshot` 里只保留 `close`，其余 `null` 且 `fields_present=['close']`，`origin.transform='close_only'`；证据同样如此（审计 G27）。
+- 登记输入 `price_bar.close` 与结算 `base` 根 `close` 之差 > 0.5%（政策常量，取自计划一恒等式容差，仅表示"同一来源同一口径应几乎一致"）→ `Inconsistent(basis_mismatch)`；复权序列的历史重算会让两者差异超限，这时管理员在 `/admin/dq` 接受（`override`），结算以本次抓取的 `base/end` 同口径收益为准，证据记录两者。
+
+### 7.5 批次计数与信息码
+
+`fetched` = 领取条数；`inserted` = 本次写 `settled`；`versioned` = 本次写 `void`；`duplicates` = 领取后发现已终态（`already_final`）；`quarantined`；`failed` = resolver 抛错；**新增第七个计数器 `deferred`** = `pending / unavailable` 退避的条数。这需要改 `src/lib/dq/batches.ts`：`BatchCounts` 加 `deferred`（默认 0，`emptyCounts()` 同步），`accounted()` 把它计入，`batchStatusFromCounts` 不变地沿用"`fetched > 0` 且无 accounted → failed"（全 deferred 的运行因此是 `success`，审计 G05），`assertCounts` 允许新键；`batches.test.ts` 补用例；规格二等已有生产者不传 `deferred` 时按 0 处理（向后兼容）。信息码 `pending_summary`、`unavailable_summary`、`deadline_hit`、`voided_summary`、`abstained_summary` 显式加入 `INFO_CODES`。新鲜度：批次 `success | partial` → `ok=true`；`failed | rejected` → `ok=false`。
+
+### 7.6 隔离与处理钩子
 
 | reason_code | 触发 | natural_key | payload |
 |---|---|---|---|
 | `idempotency_conflict` | §6.2 | `judgment_id` | `{registered, attempted}` |
-| `settlement_basis_mismatch` | §7.4 `none` 口径 > 0.5% | `judgment_id` | `{registered_bar, refetched_bar, source}` |
-| `settlement_fact_revised` | `fact_metric` 的实现值在 `settle_by` 前被修订（同一 `period_end` 出现 `is_revision=true` 的更晚披露） | `judgment_id` | `{values_by_available_date}`；结算等待至 `settle_by` 再以当时当前值结算 |
-| `resolver_param_invalid` | 结算时 resolver 拒绝参数（方法 bug） | `judgment_id` | `{condition}` |
+| `settlement_basis_mismatch` | §7.4 | `judgment_id` | `{registered_bar, refetched_bar, source, evidence（完整 bars）, evidence_hash}` |
+| `settlement_ambiguous_fact` | §7.3 | `judgment_id` | `{candidates: [{fact_ids, key, value_text}], evidence_hash}` |
+| `settlement_base_bar_missing` | §7.3 | `judgment_id` | `{base_date, series_from, series_to, bars_near_base, evidence_hash}` |
+| `settlement_benchmark_gap` | §7.3 | `judgment_id` | `{missing_dates, evidence_hash}` |
 
-接受处理钩子（`src/lib/dq/judgments-resolver.ts`，挂到 `/api/admin/dq/quarantine/[id]`）：`resolved_accept` → 下次 cron 对该判断重试结算（`basis_mismatch` 接受 = 以重抓 bar 为准）；`resolved_reject` → 写 `void(reason='quarantine_rejected')`。
+钩子 `src/lib/dq/judgments-resolver.ts`（挂 `/api/admin/dq/quarantine/[id]`；`POST` body 可带 `resolution`）：`resolved_accept` 的裁决按原因码定义，必须能直接推出唯一实现值（审计 G12）：`basis_mismatch` → `resolution = {kind:'accept_refetched', evidence_hash}`（以隔离时保存的完整 `evidence` 结算，不再重抓）；`ambiguous_fact` → `resolution = {kind:'choose_fact', fact_ids}`（必须是 `candidates` 之一）；`base_bar_missing` / `benchmark_gap` → 只能 `resolved_reject`（缺的 bar 无法由人补出；接受请求 → 400 `resolution_not_applicable`）。`apply_quarantine_override` 把 `override = {reason_code, resolution, evidence_hash, resolved_by, at}` 写入队列并 `next_attempt_at = now`；下次结算直接用 `override.resolution` 构造 `Resolved`（不重抓），证据里带 `override`。`resolved_reject` → `append_settlement(void, reason='quarantine_rejected')`。钩子幂等；`research_audit_log` 记录；写队列、写审计、翻转隔离项在同一个 RPC 事务内。
 
 ---
 
 ## 8. 校准 `src/lib/judgments/calibration.ts`
 
-### 8.1 纯函数
+### 8.1 按 kind 的评估（纯函数）
 
-输入 `rows: Array<{ p: number; outcome: 0|1 }>`（概率型；分值型先把 `value` 线性映射到 `[0,1]`；类别型把 `selected` 的 `distribution` 归一化值作 `p`，`outcome = selected == realized`，并另算混淆矩阵）：
+所有指标都只在 §8.2 选出的**独立样本**上计算（Wilson、ECE、Brier 的 `n` 都是独立样本数）；全体样本只报 `n_total` 与同一指标的"参考值"（标 `correlated`，不进门控）。
+- **probability**：`brier = mean((p − y)²)`；`brier_climatology = mean((ȳ − y)²)`；`brier_skill = 1 − brier / brier_climatology`（分母 0 → null）；`reliability(bins=10)` 等宽分箱 `[0,0.1),…,[0.9,1]`，每箱 `{bin_low, bin_high, n, mean_p, hit_rate, wilson_low, wilson_high}`（`wilson` 来自 fan-out，95%），空箱保留 `hit_rate=null`；`ece_raw = Σ_b (n_b/n)·|mean_p_b − hit_rate_b|`（**原始 `p`**，即页面显示的预测器）；时间外留出：按 `as_of` 排序取后 30% 为留出段（边界处与前段目标窗口重叠的样本剔除，避免泄漏），报 `ece_raw_holdout`、`brier_holdout`、`brier_skill_holdout`；isotonic（`isotonicFit(前 70%).segments`，`applyIsotonic` 在留出段上的 `ece_mapped_holdout`）只进报告。
+- **categorical**：`accuracy` + Wilson；基准 = 独立样本中实现类别的最大占比 `majority_rate`（不是 `1/|classes|`）；`confusion[selected][realized]`；按 `margin_pp` 分箱 `[0,5),[5,15),[15,100]`（宏观规格 §5.3 的三档文案阈值；**`margin_pp` = `(norm[primary] − norm[secondary]) × 100`，百分点**——宏观规格 §5.3 的 `norm` 是比例、文案阈值 5/15 是百分点，F4 在 `claim.margin_pp` 冻结百分点值并在 §12.1 要求宏观规格同样写明单位；审计 G28）的准确率。不算 Brier（`distribution` 不是概率）。
+- **score**：`spearman(value, realized_metric)`；按分值三分位分组的实现指标均值与 Wilson（当实现指标是二元时）；不算 Brier。
+- **interval**：`coverage = mean(low ≤ realized ≤ high)` + Wilson；`coverage − nominal_coverage`；`width_median` 与基准宽度（同主体实现值在窗口内的经验分位区间宽度）之比 `width_ratio`；`scenarios` 存在时对每个情景的 `p` 另做 probability 评估。
 
-- `brier(rows) = mean((p − outcome)²)`；`brier_climatology = mean((base_rate − outcome)²)`，`base_rate = mean(outcome)`；`brier_skill = 1 − brier / brier_climatology`（`brier_climatology = 0` 时 `null`）。
-- `reliability(rows, bins = 10)`：等宽分箱 `[0,0.1), …, [0.9,1]`；每箱 `{ bin_low, bin_high, n, mean_p, hit_rate, wilson_low, wilson_high }`（`wilson` 来自 `fanout/calibration.ts`，95%）；`n = 0` 的箱保留但 `hit_rate = null`。
-- `ece(rows) = Σ_bins (n_b / n) × |mean_p_b − hit_rate_b|`；`ece_cross_fitted` 复用 `isotonicFit` 做 5 折（折分按 `judgment_id` 字节序确定性切分，同 fan-out 的"按行序确定性分折"）。
-- `isotonic(rows)` = `isotonicFit(rows.map(r => ({score: p, hit: outcome})))`。
-- 区间型：`coverage = mean(low ≤ realized ≤ high)`，`width_median`；类别型：`accuracy` + Wilson + `confusion: Record<selected, Record<realized, n>>` + 按 `margin` 分箱（`[0,5), [5,15), [15,∞)`，与宏观规格 §5.3 的三档文案阈值一致）的准确率；分值型另加 Spearman（`value` vs 实现值）。
+### 8.2 样本、分组与有效样本
 
-### 8.2 报告任务
+- cohort = 该 `methodology@version` 在窗口 `[computed_at − window_years, computed_at]` 内（按 `as_of`）的全部活跃登记（`calibration_cohort` RPC）；样本 = 其中最新 `seq` 为 `settled` 且 `retrospective=false` 的（`window_years` 是方法参数，默认 3——政策常量，须 ≥ 方法 `horizon` 对应自然日的 3 倍，sync 脚本校验）。
+- **独立样本（非重叠抽样）**（审计 F19 / G17 / G18）：按 `subject_key` 分流，每流内按 `as_of` 升序扫描，取第一条，然后跳过所有目标窗口 `[as_of, target 对应日期]` 与已选中那条重叠的判断，再取下一条不重叠的……（贪心，确定性）；跨主体不合并。`n_independent` = 选中条数；未选中的只进 `n_total`。这样宏观每区域每 91 天贡献 1 条（不是连通分量 1 条，也不是日度 n 条），同一股票连续建议按窗口去重。方法可在 `params.embargo_days` 要求相邻窗口再隔开若干天（默认 0）。
+- **状态**：`n_independent < threshold_n` → `insufficient`；否则 probability 型要求 `ece_raw_holdout ≤ ece_max` 且 `brier_skill_holdout > 0` → `calibrated`，不满足 → `failed`（门控验证的是**原始 `p` 在时间外留出段**的表现，即页面显示的预测器；审计 G01）；categorical 型要求 `accuracy 的 Wilson 下界 > majority_rate` → `calibrated`，否则 `failed`；interval 型要求 `|coverage − nominal| ≤ ece_max` 且 `width_ratio ≤ 1` → `calibrated`，否则 `failed`；score 型 `n_independent ≥ threshold_n` → `evaluated`（不存在"校准"概念，徽章显示 Spearman）。
 
-`judgments-settle` cron 的第二阶段（同一请求，结算后）：对每个 `active/retired` 方法 × scope（`all`；再按 `market`（issuer 主体按主证券市场）与 `subject_type`）取窗口 `[computed_at − 3 年, computed_at]` 内最新 `seq` 为 `settled` 的行 → 算 §8.1 → `insertCalibration`（`state = n_settled ≥ threshold_n ? 'calibrated' : 'insufficient'`；`settlement_ids_hash = digest(sorted settlement_ids)`）。同一输入集合指纹重复则不写新行（`duplicates`）。3 年窗口：覆盖 `fiscal_quarters` 期限（最长 4 季 + 120 天宽限）的 2 轮以上；旧版本方法 `retired` 后仍出报告，页面能展示历史。
+### 8.3 任务与持久化
 
-### 8.3 显示阈值 N（提案，owner 决策 O2）
+`/api/cron/judgments-calibrate`：工作单元 = 一个 `(methodology@version, scope)`；每次运行按注册表顺序逐单元处理，预算规则同 §7.1，预算不足时记录 `next_unit` 到 `dq_freshness.detail`（dataset `judgments.calibrate`）下次续跑。单元：`calibrationCohort` 分页取 cohort → 算 §8.1 / §8.2 → cohort 清单（§5.5 `cohort_path`，含 `query_bounds`；私有桶，service role；校准页经服务端读）→ `fingerprint` 相同 → `duplicate`，否则 `insertCalibration`。只有 `scope='all'` 的行决定状态（§9.1）；分层行只展示。cohort 不是一致性快照（分页之间可能有新结算），所以 `cohort_sha256 + query_bounds` 记录实际用到的集合与边界，报告据此可完全重算 `n_registered / n_settled / n_void / n_retrospective_excluded / n_independent` 与全部指标（审计 G19）。**失效**：`valid_until = computed_at + 14 天`（两个周跑周期），过期的 `calibrated` 按 `insufficient` 显示；admin `withdraw / reopen` 一条结算时，同一 RPC 事务把该方法的最新校准行标记进 `dq_freshness.detail.invalidated[]`，读取时视为过期，直到下次校准运行写出新行。
 
-**N = 100 条已结算（`settled`，不含 `void`）判断，按 `(methodology_id@version, scope='all')` 计。**
+### 8.4 显示阈值 `threshold_n` 与 `ece_max`（**运营门槛，不是统计保证**；owner 决策 O2）
 
-推导：
-- 可靠性分箱的意义在于能分辨"声称 0.8 实际 0.5"这种粗差。10 等宽箱下，实际登记的概率通常集中在 3–5 个箱；n = 100 时每个有效箱约 20–30 条，Wilson 95% 区间半宽约 0.18–0.21（p ≈ 0.5、n = 25：1.96 × √(0.25/25) ≈ 0.196），能把 0.3 的偏差判为显著，但分辨不了 0.1。
-- 整体命中率在 n = 100 时半宽约 0.10（1.96 × √(0.25/100) ≈ 0.098）：足以给出"历史命中 62%（52–72%）"这种可读区间。
-- 仓库先例：fan-out 校准对每个问题要求 `MIN_LABELS = 30` 才报 isotonic 后 ECE（`calibration.ts:70`）；N = 100 对应每个有效箱 ≈ 30 的量级。
-- 备选：N = 50（每箱 ≈ 12，半宽 ≈ 0.28，只能发现极端失准）、N = 200（半宽 ≈ 0.07，但按分析师评分层目前的登记节奏要数年才达到）。
+- 默认 `threshold_n = 100`（独立样本数）、`ece_max = 0.10`。
+- 依据：n = 100、p ≈ 0.5 时整体命中率的 95% 区间半宽 ≈ 0.10（正态近似 1.96·√(0.25/100)，Wilson 在此 n 下相近）；把 `ece_max` 设为这个分辨率意味着"报告能分辨的失准才算失准"。每箱样本数由数据决定，报告如实列出各箱 `n`，不假设分布。fan-out 的 `MIN_LABELS = 30` 是每问题总量门槛，只说明仓库先例的量级，不是每箱先例。
+- 后果（如实写明）：`macro_regime@v1` 每区域每 91 天只贡献 1 条独立样本，US + CN 合计一年约 8 条，按默认阈值要十几年才能 `calibrated`——这意味着宏观象限在可预见的时间内一直显示为"未校准"，这是正确的结果（它本来就没有足够的独立检验），不是要通过降低阈值解决的问题；O2 若为宏观单独设更低阈值，必须同时接受更宽的区间。
+- 备选：`threshold_n = 50`（半宽 ≈ 0.14）或 `200`（≈ 0.07）。`threshold_n / ece_max / algorithm_version` 写进每条校准行，改阈值不改历史。
+- 留出段（§8.1）既是门控依据也是报告内容；留出段独立样本 < 20 时（政策常量：留出段 30% × 阈值 100 的下取整量级）`ece_raw_holdout` 记 `null` 并判 `insufficient`。
 
-`threshold_n` 写进每条校准行，改阈值不改历史。`scope='market'` 等细分报告只做展示，不参与状态判定（避免同一方法在不同页面状态不一致）；是否按市场分层判定是 owner 决策 O2 的一部分。
+### 8.5 isotonic 映射的用途
 
-### 8.4 私有适配器的校准
+只进报告（校准页画"映射后 vs 原始"），v1 不用映射值替代显示；要显示映射值必须作为新方法版本（`params.display_mapping = 'isotonic@<calibration_id>'`），因为映射本身就是公式的一部分。
 
-`recommendation_call@v1` 的行是用户私有的，不写 `judgment_calibrations`。`GET /api/analyst/book?analyst=` 响应增加 `calibration` 字段（服务端用用户会话读 `recommendations ⟕ recommendation_scores`，调同一 `calibration.ts`），`threshold_n` 同 §8.3；`n_settled` 很少会到 100，这正是总纲要求的效果——分析师页的"信心"在达到之前不显示为百分比（§11.2）。
+### 8.6 私有适配器的自评
+
+`recommendation_call@v1` 的样本来自可被 owner 改写的 `recommendation_scores`（§2.1），所以只算**自评报告**（`GET /api/analyst/book` 响应 `self_assessment` 字段：同一套 §8.1 数学，`state` 固定为 `self_assessed`，显示时标"自评，不可审计"），永不进入 `judgment_calibrations`、永不解锁百分比。可审计的私有结算（append-only 证据表、service role 写）是 §17 O5 的第二阶段。
 
 ---
 
 ## 9. 显示契约 `src/lib/judgments/display.ts`
 
-### 9.1 状态机
+### 9.1 两个维度
 
 ```
-最新结算 kind = 'withdrawn'                      → 'withdrawn'
-最新结算 kind = 'void'                           → 'void'
-最新结算 kind = 'settled'                        → 'settled'
-无结算，方法最新校准 state = 'calibrated'          → 'calibrated'
-其余（无结算、无校准或 insufficient）              → 'uncalibrated'
-abstained = true                                 → 'abstained'（独立于上面）
+lifecycle   := abstained | open | settled(hit|miss) | void | withdrawn | pending_fill   // 单条判断：最新结算行 + 队列；pending_fill 仅私有适配器（§11.2）
+calibration := insufficient | failed | calibrated | evaluated | self_assessed   // 方法级：scope='all' 最新且未过期（valid_until）、未被 invalidated 的校准行（score 型 evaluated；私有 self_assessed）；方法 publishable=false 时公共读接口不返回卡片
 ```
 
-### 9.2 `JudgmentCard`（读接口与组件共用）
+显示规则由二者共同决定；"已结算"不是"已校准"的更高等级：一条判断知道了答案，不说明方法的概率可信。
+
+### 9.2 `JudgmentCard`
 
 ```ts
 interface JudgmentCard {
-  judgment_id: string;
-  subject: Subject;
-  judgment_type: JudgmentType;
-  kind: Kind;
-  state: 'uncalibrated' | 'calibrated' | 'settled' | 'void' | 'withdrawn' | 'abstained';
+  judgment_id: string; subject: Subject; judgment_type: JudgmentType; kind: Kind;
+  lifecycle: Lifecycle; calibration: CalibrationState; retrospective: boolean;
   as_of: string; registered_at: string;
-  methodology: { id: string; version: string; title: {zh,en}; href: string };            // /intel/methods/<id>/<version>
-  display: {                                                                             // 由 kind × state 决定（§9.3），服务端生成
-    headline: { zh: string; en: string };                                                // 例："研究员信心：高（未校准，已结算 12/100）"
-    percent: number | null;                                                              // 只在 probability × calibrated 非空
-    value: number | string | [number, number] | null;                                    // 分值 / 类别 / 区间
-    scale?: { min: number; max: number };
-    dims?: Array<{ id; label: {zh,en}; value: number | null; coverage: boolean }>;       // 分值型，缺维度 value=null
-    band?: 'low' | 'mid' | 'high';                                                       // 概率型未校准：按三分位 [0,1/3) [1/3,2/3) [2/3,1]
+  methodology: { id; version; title: {zh,en}; href };
+  display: {
+    headline: {zh,en};
+    percent: number | null;                      // 仅 probability × calibration='calibrated'
+    value: number | string | [number, number] | null;
+    scale?: {min,max}; dims?: Array<{id; label; value: number|null; coverage: boolean}>;
+    band?: 'low'|'mid'|'high';                   // probability 未校准：p 的三分位 [0,1/3) [1/3,2/3) [2/3,1]
+    nominal_coverage?: number;
   };
-  condition: { text: {zh,en}; horizon: Horizon; settle_after: string; settle_by: string };
+  condition: { text: {zh,en}; horizon; target; label_policy; settle_after; settle_by } | null;   // 弃权为 null
   settlement: { kind; outcome; realized; settled_at; evidence_summary } | null;
-  calibration: { n_settled: number; threshold_n: number; brier: number | null; ece: number | null; hit_rate: {rate, low, high} | null; href: string } | null;
-  inputs: Array<{ kind; ref; available_at; href: string | null }>;                      // 抽屉；href 指向事实 / 宏观 / 文档的来源抽屉
-  abstain_reason?: string;
+  calibration_summary: { n_independent; n_total; threshold_n; brier; brier_skill; ece_raw_holdout; valid_until; hit_rate: {rate, low, high} | null; accuracy?; coverage?; spearman?; href } | null;
+  inputs: Array<{ kind; ref; available_at; origin; href: string | null }>;   // 抽屉
+  abstain_reason?: string; missing?: string[];
 }
 ```
 
-### 9.3 kind × state 渲染规则
+### 9.3 kind × 状态渲染规则
 
-| kind | uncalibrated | calibrated | settled |
+| kind | `calibration ∈ {insufficient, failed, self_assessed}` | `calibration='calibrated'` | `lifecycle='settled'`（叠加） |
 |---|---|---|---|
-| probability | `percent = null`；`band` + 文案"研究员信心 / 模型信心（未校准，已结算 n/N）"；登记值只在抽屉里以小数显示并标"登记值（未校准）" | `percent = round(p × 100)` + "历史命中 x%（Wilson 区间）" + 可靠性图链接 | 结果 `hit/miss` + 实现值 + 登记的 `p` |
-| categorical | `selected` + "未校准"徽章；`distribution` 只在抽屉显示为"得分"，永不带 % | `selected` + "该方法历史准确率 x%（n）" | `selected` vs 实现类别 |
-| score | 分值 + 刻度 + 维度条（缺维度画缺口并写"缺失：估值维度无数据"）+ "未校准"徽章 | 同左 + "分值 ≥ 阈值的实现率 x%" | 分值 + 实现值 |
-| interval | 区间 + "未校准" | 区间 + "历史覆盖率 x%" | 区间 vs 实现值（在内 / 在外） |
+| probability | `percent=null`；`band` + 文案"研究员信心 / 模型信心：高（未校准：有效样本 n/N）"或"（校准未通过：ECE x）"；登记的 `p` 只在抽屉以小数显示并标"登记值（未校准）" | `percent = round(p×100)` + "该方法历史命中 x%（区间）" + 可靠性图链接 | 追加"结果：命中 / 未命中 · 实现值" |
+| categorical | `selected` + "未校准"徽章；`distribution` 只在抽屉显示为"得分"，不带 % | `selected` + "历史准确率 x%（n）" | `selected` vs 实现类别 |
+| score | 分值 + 刻度 + 维度条（缺维度画缺口并写原因）+ "评估：Spearman x（n）/ 样本不足" | — | 分值 + 实现指标 |
+| interval | 区间 + 名义覆盖 + "未校准" | 区间 + "历史覆盖 x%（名义 y%）" | 区间 vs 实现值 |
 
-共同：每张卡底部一行"方法 `id@version` · 截至 `as_of` · 条件：… · 结算 `settle_after`"；`void` / `withdrawn` 显示原因；所有卡的图（可靠性、维度雷达）都有表格等价视图（`reliability` 数组本身就是表）。
+共同：卡底一行"方法 `id@version` · 截至 `as_of` · 条件：… · 目标：… · 结算：…"；`void / withdrawn / abstained` 显示原因；`retrospective` 显示"补登记"；所有图（可靠性、维度雷达）有表格等价视图。
 
-### 9.4 派生判断
+### 9.4 派生判断（赔率、凯利、星级）
 
-赔率 = `E[up] / E[down]`、分数凯利 `f = ¼ × (p × b − (1 − p)) / b`（b = 赔率）、值博率星级（公司规格定义映射）等由 `p`（`thesis_win_rate`）与区间（`return_range`）在读取时计算，不登记、不结算；`state = min(输入判断的 state)`（顺序 `uncalibrated < calibrated < settled`）；任一输入 `uncalibrated` 时凯利只显示为"不计算（胜率未校准）"。¼ 凯利取总纲 §2.2"分数凯利（¼–½ Kelly）"区间的下限；具体分数是公司规格的参数。
+读取时由底层判断计算，不登记、不结算。前提（任一不满足 → 显示"不计算"并给出原因；审计 G23）：
+1. 底层 `thesis_win_rate` 与 `return_range` **两者**都 `lifecycle='open'`，且两者方法都 `calibration='calibrated'`；
+2. `return_range.scenarios` 存在（`[{label:'up', p, value}, {label:'down', p, value}]`，`Σp = 1`，`value_up > 0 > value_down`，均有限），且与 `thesis_win_rate` 同主体、同 `target`、同 `condition.params`（同一事件、同一价格口径 `source/adjustment`、同一 `unit`）；
+3. 两者 `as_of` 相同；`scenarios` 里 `p_up` 与 `thesis_win_rate.p` 之差 ≤ 0.01（否则两个判断自相矛盾，显示"输入不一致"）。
+赔率 `b = value_up / |value_down|`；分数凯利 `f = k · (p·b − (1 − p)) / b`（`b > 0` 由前提 2 保证），`k` 是公司规格参数（总纲 §2.2 给出 ¼–½ 的区间）；星级映射由公司规格定义。
 
-### 9.5 UI 流程（页面级实现归各模块规格，这里定公共部分）
+### 9.5 UI 流程
 
-- 入口：宏观 / 行业 / 公司页面在相应位置嵌 `JudgmentCard` 组件（`src/components/judgments/JudgmentCard.tsx`）；点击方法名 → `/intel/methods/[id]/[version]`（公式文档、参数、版本历史、校准报告：可靠性图 + 分箱表、Brier / ECE / n、最近结算列表）；点击"输入" → `InputsDrawer`（列表 → 各自来源抽屉：事实行 → 规格二 `citation`，宏观观测 → 宏观 `SourceDrawer`，文档 → F3）；点击"结算" → `SettlementTimeline`（登记 → 到期 → 结算 / 作废，证据摘要）。
-- `/intel/methods`：方法注册表页（表格：方法、类型、版本、状态、已登记 / 已结算 / N、Brier、最新校准时间）。
-- `/admin/judgments`：到期队列（`dueJudgments`）、隔离项（链接 `/admin/dq`）、"作废结算"（写 `withdrawn`，`reason` 必填，`actor='admin:<uuid>'`，`research_audit_log` 记录）、"立即结算一条"（调同一核心）。
-- 空 / 缺失：主体没有任何判断 → 卡不渲染，页面位置显示"尚无判断：方法 X 需要输入 Y（缺 Z）"（来自 `abstained` 行的 `abstain_reason`，没有 abstain 行则"方法未对该主体运行"）；校准不足 → 永远可见的徽章，不是隐藏。
-- zh / en：`messages/{zh,en}/judgments.json` 注册到 `src/i18n/request.ts::MESSAGE_DOMAINS`；`display.headline` 两语都由服务端生成；`src/i18n/messages-parity.test.ts` 自动覆盖。
-- `DESIGN.md`：单一黄铜强调色只用于 `calibrated` 徽章与当前选中；`uncalibrated` 用中性灰；`hit/miss` 用 `--up/--down`（随 `data-color-scheme`）；数字 Geist Mono；无渐变 / 紫色。
+- 入口：宏观 / 行业 / 公司页面嵌 `JudgmentCard`（`src/components/judgments/JudgmentCard.tsx`）；方法名 → `/intel/methods/[id]/[version]`（公式文档、参数、版本历史、校准报告：可靠性图 + 分箱表、混淆矩阵、时间顺序验证、最近结算列表）；"输入" → `InputsDrawer`（输入列表 → 各自来源抽屉：事实行 → 规格二 `citation`，宏观观测 → 宏观 `SourceDrawer`）；"结算" → `SettlementTimeline`（登记 → 目标 → 结算 / 作废 / 重开 → 证据摘要）。
+- `/intel/methods`：注册表页。
+- `/admin/judgments`：队列（到期、退避、租约）、隔离项（链接 `/admin/dq`）、"作废结算"（`withdrawn`，`reason` 必填）、"重开"（`reopened`）、"立即结算一条"；均 `requireAdminUser()` + `research_audit_log`。
+- 空 / 缺失：主体无判断 → 卡不渲染，页面位置显示 `abstain_reason`（"方法 X 需要输入 Y，缺 Z"）或"方法未对该主体运行"；校准不足 → 永远可见的徽章。
+- zh / en：`messages/{zh,en}/judgments.json` 注册到 `src/i18n/request.ts::MESSAGE_DOMAINS`；`display.headline` 两语由服务端生成；`src/i18n/messages-parity.test.ts` 自动覆盖。
+- `DESIGN.md`：黄铜强调色只用于 `calibrated` 徽章与选中态；未校准用中性灰；`hit/miss` 用 `--up/--down`；数字 Geist Mono；无渐变 / 紫色。
 
 ### 9.6 Claude Design 画布待设计清单
 
-1. `JudgmentCard` 四种 kind × 六种 state 的全部组合（24 态）+ 抽屉触发区。
-2. `InputsDrawer`（输入列表、哈希校验态、来源跳转）。
-3. `SettlementTimeline`（登记 / 到期 / 结算 / 作废 / 证据摘要）。
-4. `/intel/methods` 列表与 `/intel/methods/[id]/[version]` 详情（公式文档、可靠性图 + 等价表、混淆矩阵表、版本历史）。
-5. `/admin/judgments`（到期队列、隔离、作废对话框）。
-6. `/analyst` 页"信心"列的未校准 / 已校准两态（§11.2）。
-7. 移动端：卡片折叠态（只显 headline + 状态徽章 + 方法名）。
+1. `JudgmentCard`：4 kind × lifecycle 5 态 × calibration 5 态中实际可达的组合（`display.ts` 导出枚举，画布按它画）。
+2. `InputsDrawer`（输入列表、哈希校验态、`origin`、来源跳转）。
+3. `SettlementTimeline`。
+4. `/intel/methods` 与 `/intel/methods/[id]/[version]`（公式文档、可靠性图 + 等价表、混淆矩阵表、时间顺序验证表、版本历史）。
+5. `/admin/judgments`。
+6. `/analyst` 页"信心"列未校准带状显示 + 自评区块（§11.2）。
+7. 移动端折叠态。
 
 ---
 
 ## 10. 读取接口
 
-共同约定：公共只读（anon 客户端的 `supabaseJudgmentsDb` 读子集）；`force-dynamic`；参数重复 → 400 `invalid_parameter:<name>`；错误与空结果 `no-store`；成功 `Cache-Control: public, max-age=300, s-maxage=600`（判断与结算只追加，缓存失效只影响"最新"的切换时延）；响应顶层含 `codeVersion`。
+共同约定：公共只读（anon 客户端 + RPC）；`force-dynamic`；参数重复 → 400 `invalid_parameter:<name>`；错误与空结果 `no-store`；成功 `Cache-Control: public, max-age=300, s-maxage=600`；响应顶层含 `codeVersion`。两种读取语义：`view=latest`（默认：最新判断 + 最新结算 + 最新有效校准）与 `view=as_known&asOf=`（系统事件时间截止 `cutoff = asOf 日终`：判断 `registered_at ≤ cutoff`（**不是** `as_of`，补登记的历史判断只有登记后才"已知"；审计 G22）、结算 `settled_at ≤ cutoff`、校准 `computed_at ≤ cutoff`、方法行按 `synced_at ≤ cutoff` 的版本；合并发行人关系按当前读取，卡上标注）。同日多条按 `registered_at desc, judgment_id` 定序。只返回 `publishable=true` 方法的卡片。
 
 | 路径 | 参数 | 返回 |
 |---|---|---|
-| `GET /api/judgments` | `subject_type`、`subject_key`（必填）、`types`（逗号，白名单）、`asOf`（`YYYY-MM-DD`，取 `as_of ≤ asOf` 的最新）、`include_abstained=1` | `{ subject, asOf, cards: JudgmentCard[] }`，每 `(judgment_type, methodology)` 一张 |
-| `GET /api/judgments/[id]` | — | `{ card: JudgmentCard, judgment: 全行, settlements: [...], calibration: 最新报告摘要 }` |
-| `GET /api/judgments/[id]/history` | `limit`（默认 50，最大 500） | 同主体同类型同方法按 `as_of` 倒序的 `cards`（监控页 before→after） |
-| `GET /api/methodologies` | `status` | 注册表行 + 最新校准摘要 |
+| `GET /api/judgments` | `subject_type`、`subject_key`（必填）、`types`、`asOf`、`view`、`include_abstained=1` | `{ subject, asOf, view, cards: JudgmentCard[] }`，每 `(judgment_type, methodology)` 一张；发行人主体包含被合并进它的旧发行人的判断（§12.4） |
+| `GET /api/judgments/[id]` | `view`、`asOf` | `{ card, judgment, settlements, calibration }` |
+| `GET /api/judgments/[id]/history` | `limit`（默认 50，最大 500）、`before` | 同主体同类型同方法按 `as_of` 倒序 |
+| `GET /api/methodologies` | `status` | 注册表行 + 最新 `scope='all'` 校准摘要 |
 | `GET /api/methodologies/[id]/[version]` | — | `{ row, doc_markdown, calibrations: [{scope, …最新}], recent_settlements }` |
-| `GET /api/methodologies/[id]/[version]/calibration` | `scope_type`、`scope_key` | 最新 `judgment_calibrations` 行（含 `reliability` 表） |
-| `POST /api/admin/judgments/[id]/withdraw` | body `{ reason }` | `requireAdminUser()`；写 `withdrawn`；审计 |
-| `POST /api/admin/judgments/[id]/settle` | — | 立即跑结算核心；返回 resolver 状态 |
-| `GET\|POST /api/cron/judgments-settle` | `preview=1` | 批次回执 `{ batchId, status, counts, calibrations }` |
+| `GET /api/methodologies/[id]/[version]/calibration` | `scope_type`、`scope_key`、`sample=1`（服务端从桶读样本清单） | 最新校准行（含 `reliability`、`temporal_split`、样本） |
+| `POST /api/admin/judgments/[id]/withdraw` / `reopen` / `settle` | `{ reason }` | `requireAdminUser()`；审计 |
+| `GET\|POST /api/cron/judgments-settle`、`/judgments-calibrate` | `preview=1` | 批次回执 |
 
-分析师：`GET /api/analyst/book` 响应增 `calibration`（§8.4）；`GET /api/analyst/recommendations` 每行增 `judgment_card`（§11.2）。
+分析师：`GET /api/analyst/book` 增 `self_assessment`（§8.6）；`GET /api/analyst/recommendations` 每行增 `judgment_card`（§11.2）。
 
 ---
 
@@ -580,27 +684,24 @@ interface JudgmentCard {
 
 ### 11.1 `macro_regime@v1`（公共，`producer_kind='rule'`）
 
-- 触发：宏观 WP-M3 `snapshots.publish()` 把快照置 `active` 后调用 `produce(macro_regime_v1, [{type:'macro_region', key: region}], as_of = snapshot.as_of)`（§12.1 接口）。
-- `gather`：`[{ kind:'macro_snapshot', ref:{snapshot_id}, hash, available_at: snapshot.created_at }]` + 该快照 `observation_ids` 对应的 `macro_observation` 引用（逐条 id + 哈希，让回放不依赖快照表）。
-- `compute`：直接搬 `macro_regime_results`：`selected = primary_state`，`classes = [recovery, overheat, stagflation, recession]`，`distribution = norm`，`scores_are_not_probabilities = true`；`coverage < 0.6` 时宏观根本不发布快照，所以这里不会 abstain；`margin` 写进 `claim.margin`。
-- `condition`（提案，owner 决策 O3）：美林时钟对象限的资产含义是这个判断唯一可外部检验的内容。`resolver='price_return'` 的配对版本 `params = { pair: [long_series, short_series], region, base_date: as_of }`，`horizon = { unit:'calendar_days', n: 91 }`（与宏观规格 §5.2 规则表用的 Δ(3M) 同一时间尺度），`predicate: { op:'>', rhs: 0 }` 作用在 `return(long) − return(short)`：
+- **触发**：宏观 WP-M3 `publishSnapshot()` 置 active 后调用 `produce(macro_regime_v1, [{type:'macro_region', key: region}], as_of = snapshot.as_of)`；失败不阻塞宏观发布；§7.1 步骤 0 的补偿扫描兜底（幂等：同快照同输入 → 同 id）。
+- **上游绑定**：`upstream.macro_methodology_version = 'v1.0'`（宏观规格 §5.2）；快照的 `methodology_version` 不同 → abstain `upstream_version_mismatch`，并要求登记新的 F4 方法版本。
+- **`gather`**：`macro_snapshot` 输入（投影含 `scores / coverage / margin / growth_axis / inflation_axis`，`available_at` = 其观测 `available_at` 的最大值）+ 该快照 `observation_ids` 每条 `macro_observation` 输入（冻结 `value / vintage_id / available_at`）。
+- **`compute`**：`selected = primary_state`，`classes = [recovery, overheat, stagflation, recession]`，`distribution = norm`，`scores_are_not_probabilities = true`，`margin_pp = (norm[primary] − norm[secondary]) × 100`（§8.1）。`deps` 含宏观 `regime.ts`、规则表与目录快照模块（`catalog_version` 冻结进 `claim`），改动即升版本。
+- **判断的内容与可检验标签（审计 G02 / G05 / G29）**：判断是**当前期 nowcast**——"参考期 `reference_period = as_of 所在月`，用截至 `as_of` 可见的数据判定处于象限 X"。客观标签 = **同一分类函数**（宏观 `regime.ts` 同版本规则表、同目录权重、同 argmax）对**同一参考期**在**截止 vintage** 下重算得到的 `primary_state`：`resolver='macro_regime_replay'`，`params = { region, reference_period, macro_methodology_version: 'v1.0', catalog_version }`，`horizon = { calendar_months, 3 }`，`target = { period: reference_period + 3 }`（给迟到发布与修订留 3 个月，取宏观规格 §5.2 Δ(3M) 的同一时间尺度），`label_policy='cutoff_vintage'`，`settle_by = target 月末 + 30 天`（§3.4）。混频序列（CN GDP 季度）、未匹配规则、缺失观测的处理**完全沿用宏观 `regime.ts`**（缺失不贡献、计入 `uncovered_weight`；`coverage < 0.6` → 不判定）——F4 不另写轴规则，所以不存在第二套分类函数；重算时 `coverage < 0.6` → `Unavailable(coverage)` → 到期 `void`。这检验的是"nowcast 在数据补全与修订后是否仍成立"（时效 + 修订风险）；它不检验资产表现，也不检验 3 个月后的状态。
+- **资产含义的检验**（美林时钟的配置含义：recovery → 股票优于债券……）是另一种判断类型 `macro_regime_asset_pair`，需要：配对 resolver（`r_long − r_short`，同币种、同回报口径、同日对齐）、宏观目录里标明"回报序列 vs 收益率序列"的资产序列（现金 / 短期国债、债券总回报等目前目录没有）、以及按 `margin_pp` 分档的 `p` 表的样本外来源。**v1 不实现**（§3.3、§18.1）；是否立项是 owner 决策 O3。
+- **展示**：宏观状态卡保留 §3.2 的"主判定 / 次判定 / margin / coverage"，增加 `JudgmentCard` 的 lifecycle / calibration 徽章与"历史准确率（n）"；`distribution` 不再被称为"概率 / 置信度"。
 
-  | 象限 | long | short | 来源 |
-  |---|---|---|---|
-  | recovery | 股票指数 | 国债 ETF / 10Y 指数 | 美林时钟：复苏期股票优于债券 |
-  | overheat | 商品（原油 / 铜） | 债券 | 过热期商品优于债券 |
-  | stagflation | 现金（短期国债 / 货币基金代理序列） | 股票 | 滞胀期现金优于股票 |
-  | recession | 债券 | 股票 | 衰退期债券优于股票 |
+### 11.2 `recommendation_call@v1`（私有只读适配器，`producer_kind='human'`）
 
-  具体序列 id 取宏观目录（§12.1）里 US / CN 各自的资产序列；目录没有某类资产时该象限 abstain 并记 `missing_input:<asset>`，不用代理。备选条件（持续性检验：3 个月后用当时可得数据重算主判定是否相同）只检验稳定性不检验正确性，列为 O3 的选项 B。
-- 展示：宏观状态卡的"主判定 / 次判定 / margin / coverage"保持宏观规格 §3.2 的形式，增加一枚 `JudgmentCard` 状态徽章与"历史命中（n）"；`distribution` 不再被称为"概率 / 置信度"。
-
-### 11.2 `recommendation_call@v1`（私有适配器，`producer_kind='human'`）
-
-- 不写 `judgments` 行。`src/lib/judgments/adapters/recommendation.ts::toJudgmentCard(rec, score, calibration)`：`subject = issuer`（经 `issuer_securities` 由 `(ticker, market)` 反查；查不到则 `subject_key = '<market>:<ticker>'` 并标 `unresolved_issuer`）；`kind='probability'`；`claim.p = confidence / 100`，`event = "5 个交易日内收盘价沿建议方向变动"`；`condition = { resolver:'recommendation_hit', params:{recommendation_id}, predicate:{op:'eq', rhs:true} }`；`horizon = { unit:'trading_sessions', n: 5 }`；`settle_after` 按 §3.4；`inputs = [{ kind:'price_bar', ref:{ticker, market, date: fill_date, source:'eastmoney', adjustment: market==='A'?'qfq':'none'}, hash: digest({…, close: fill_price}) }]`（`fill_price` 是首评分时冻结的基准收盘，分析师规格 §6）。`confidence` 为 null 或 `action='hold'` → `abstained`（`no_confidence` / `no_direction`）。`withdrawn_at` 非空 → `state='withdrawn'`。
-- 结算：已有 `recommendation_scores.hit`；`state='settled'` 当 `hit is not null`。
-- 校准：§8.4，scope 为 `analyst_id`。
-- `/analyst` 页改动：建议表的"信心"列改为 `JudgmentCard.display.headline`（未校准：`高 / 中 / 低（未校准，n/100）`，登记值移到行展开里）；统计摘要的"命中率"已是结算统计，保留；增加"校准：Brier、n、状态"。免责声明不变。这是对 2026-10-17 规格 §3.2 的最小修订，表与 API 形状不变。
+- 不写 `judgments`。`src/lib/judgments/adapters/recommendation.ts::toJudgmentCard(rec, score)` 产出 `PrivateJudgmentCard`——与 `JudgmentCard` 同形的判别联合，多一个 `source: 'recommendation'` 与 `lifecycle='pending_fill'` 态（审计 G24）。`judgment_id = uuidV8(sha256('recommendation:' + rec.id))`：这是**域分离的内容 id**（哈希输入域与公共表不同），不是数学上不相交的保证，也不承担任何授权语义——私有卡片只经用户会话读取（审计 G31）。`subject` 优先 `issuer`（`issuer_securities ⋈ stocks_universe(market)` 按 `(ticker, market)` 在 `recommended_at` 当日反查），查不到用 `{type:'security', key:'<market>:<ticker>'}`；`kind='probability'`；`claim.p = confidence/100`，`event = "第 5 个后续交易日收盘价相对基准日收盘沿建议方向变动"`；`condition = { resolver:'recommendation_hit', … }`；`horizon = {trading_sessions, 5}`。
+- 按状态的形状：
+  - **未评分**（`fill_price` 为空）：`lifecycle='pending_fill'`，`inputs=[]`，`target=null`，`condition` 仍给出（文案），显示"待定价"。
+  - **已评分**：`target = {session_index, base_date: fill_date, n: 5}`；`inputs = [legacy_fill{ ref:{recommendation_id}, snapshot:{recommendation_id, fill_price, fill_date, market, ticker}, available_at: fill_date 的交易所收盘时刻, origin: origins 表 `legacy_fill × eastmoney` }]`（分析师评分层冻结过的唯一价格证据只有 `close`，所以用 `legacy_fill` 而不是 `price_bar`）；`label_policy='first_observed'`。
+  - `hit is not null` → `settled`；`withdrawn_at` 非空 → **`withdrawn` 优先于一切**（即使已有 `hit`）；`confidence` 为 null 或 `action='hold'` → `abstained(no_confidence | no_direction)`（优先级低于 `withdrawn`）。
+- 回放：`scripts/judgments/replay.ts --recommendation <id>` 走私有入口（用户会话），只做 `inputs_only`。
+- 校准：§8.6 自评；`calibration` 固定 `self_assessed` → `percent=null`。
+- `/analyst` 页改动（owner 决策 O5）：建议表"信心"列显示 `band`（高 / 中 / 低）+ "未校准"，登记值在行展开里；统计摘要保留"命中率（n）"（它是结算统计），增加"自评：Brier、n（不可审计）"。表与 API 形状不变。
 
 ---
 
@@ -608,23 +709,23 @@ interface JudgmentCard {
 
 ### 12.1 宏观工作台（WP-M3）
 
-需要：`publishSnapshot()` 完成后调用 `produce(...)`（§11.1）；`MacroReadApi { observation(series_id, period_end, asOf): {value, vintage_id, available_at} | null; snapshot(snapshot_id): {methodology_version, observation_ids, regime: RegimeResult, as_of, created_at} | null; assetSeriesFor(region): { equity, bond, commodity, cash } → series_id | null }`；资产序列按 `available_at ≤ asOf` 的月末或日频取值规则由宏观 `normalize.ts` 提供。宏观规格 §8 的 `GET /api/macro/overview` 响应增 `judgment: JudgmentCard`（或前端另请求 `/api/judgments?subject_type=macro_region&subject_key=US`）。
+`publishSnapshot()` 后调用 `produce(...)`；`MacroReadApi { observation(series_id, period_end, asOf): {value, unit, vintage_id, available_at} | null; snapshot(snapshot_id): {region, as_of, methodology_version, catalog_version, observation_ids, regime: RegimeResult, created_at, status} | null; snapshotsSince(createdAfter, limit): SnapshotRow[]; classifyAsOf(region, referencePeriod, cutoff, macroMethodologyVersion): { regime: RegimeResult | null /* coverage<0.6 时 null */, observation_refs, catalog: {version, weights, rules_version} } }`（`classifyAsOf` 必须调用与发布快照**同一个** `regime.ts` 函数，只是输入换成"`period_end ≤ referencePeriod` 且 `available_at ≤ cutoff` 的最新 vintage"）；`macro_regime_results.margin` 的单位须在宏观规格里写明为百分点（§8.1）。anon 可读路径：`macro_observations(status='ok')`、`macro_snapshots`、`macro_regime_results` 都是 public read（宏观规格 §4.3），所以 F4 的输入构造器（§3.5）可以用 anon 客户端实现。宏观 `GET /api/macro/overview` 响应增 `judgment: JudgmentCard`。`macro_regime_asset_pair`（未实现）将来还需要 `assetSeriesFor(region)` 与"回报序列 / 收益率序列"标记。
 
-### 12.2 披露事实（规格二）
+### 12.2 披露事实（规格二第 8 稿）
 
-`FactsDb` 的 `factsOfIssuer / metricsOfIssuer / filingsOfIssuer` 已满足 `gather` 与 `fact_metric`；需要补一个 `metricsOfIssuer(issuer, formulaVersion, { availableLte })`（规格二 §9 的 `asOf` 实时 derive 路径已有此能力，只需暴露给库调用）。`financial_metrics` 没有单列 id，F4 用复合键 + `value_text` 做哈希（§3.5）。
+已满足：`readFacts(issuer, market, {concepts, asOf}) → {stateRev, rows, truncated}`（截止读取；F4 消费完整信封，`truncated=true` 时拒绝使用）、`factsByIds(ids)`（回放）、`metricsOfIssuer(issuer, market, formulaVersion)`（仅 `gather` 读当前缓存时用，投影里带 `input_fact_ids` 与 `based_on_rev`）、`filingsOfIssuer`（财期序列）。需要：`deriveMetricsAsOf(issuer, market, asOf, formulaVersion)` 库函数（规格二 §9 读接口的 `asOf` 实时 derive 路径已有此能力，需作为库函数暴露；结算与回放只用它，不读缓存）；`financial_metrics` 没有 `status` 列，"该期可见"的判定以底层事实在 `cutoff` 可见为准。anon 可读：`financial_facts(status='ok')` 与 `filings` 为 public read（规格二 §4.7），`fact_sync_scope` 不是——F4 不读它。
 
 ### 12.3 文档管道（F3）与外资研报
 
-需要：文档稳定 id、`version_hash`、页码 / 跨度定位、`available_at`、以及**每文档的可见范围**（用户私有 / 团队 / 公开元数据）。`sellside_rating / sellside_target_price` 的登记要等 `judgments` 加 `owner_user_id/visibility`（§5.5 扩展路径）且 F3 给出可见范围判定函数；在此之前外资研报页只展示文档抽取字段，不作为判断登记。
+需要：文档稳定 id、`version_hash`、页码 / 跨度、`available_at`、每文档可见范围判定函数。`sellside_*` 登记要等 `judgments` 加 `owner_user_id/visibility`（id 加租户命名空间）与 F3 的可见范围；在此之前外资研报页展示抽取字段时必须标"第三方判断（未结算）"并遵守文档权限。
 
 ### 12.4 计划三（标识符与对账）
 
-发行人合并后的判断归属：`subject_key` 是合并前的 `issuer_id`，读取时按 `issuers.merged_into` 链跟随到当前发行人并在卡上标"登记于合并前主体"；`issuer_securities` 的历史持有窗口用于 `issuerPrimarySecurity(issuer_id, on)`。
+合并发行人：`latest_judgment_cards(issuer X)` 包含 `subject_key ∈ {X} ∪ {Y : Y.merged_into 链到 X}` 的判断，卡上标"登记于合并前主体 Y"；`issuerPrimarySecurity(issuer_id, on)` 用 `issuer_securities` 的历史持有窗口；证券在期限内退市 → `Unavailable(delisted)` → `void`。
 
 ### 12.5 评测（F6）
 
-`producer_kind='model'` 的方法在进入 `active` 前需要 F6 的黄金集分数；`judgment_methodologies.status` 从 `draft` 升 `active` 的条件由 F6 规格定义，本规格只要求 `draft` 不能登记正式判断。
+`producer_kind='model'` 的方法从 `draft` 升 `active` 的条件由 F6 定义；本规格只保证 `draft` 不能登记正式判断。
 
 ---
 
@@ -633,21 +734,27 @@ interface JudgmentCard {
 | 情形 | 行为 | 码 | 批次 |
 |---|---|---|---|
 | 方法不存在 / `draft` / `retired` 登记 | 拒绝该主体 | `methodology_unavailable` | partial |
-| 主体不存在 / 非活跃 | 拒绝 | `subject_missing` / `subject_inactive` | partial |
-| 输入可得日期晚于 `as_of` | 拒绝 | `lookahead` | partial |
-| 同 id 不同内容 | 隔离 + 拒绝 | `idempotency_conflict` | partial |
-| `claim` / `condition` 校验失败（方法 bug） | 拒绝 | `invalid_claim` / `invalid_condition` | partial |
+| 主体不存在 / 非活跃 / 类型不在公共集 | 拒绝 | `subject_missing` / `subject_inactive` / `subject_type_not_public` | partial |
+| 输入 kind 不在白名单 / 构造器重跑不一致 / 构造器取不到（不公开、被隔离）/ `origin` 键不在冻结表 | 拒绝 | `input_not_allowed` / `input_snapshot_mismatch` / `input_not_public` / `input_origin_unknown` | partial |
+| 事实读取 `truncated=true` | 不用不完整数据；结算退避 | `unavailable_summary(truncated)` | — |
+| 隔离项到 `settle_by` 仍未处理 | `void(unresolved_inconsistency)` | `voided_summary` | — |
+| 租约 token 不匹配 | 该条放弃，不写 | `lease_lost`（信息） | — |
+| 输入可得时刻晚于 `as_of` 日终 | 拒绝 | `lookahead` | partial |
+| 同 id 不同语义字段 | 隔离 + 拒绝 | `idempotency_conflict` | partial |
+| `claim / condition` 校验失败 | 拒绝 | `invalid_claim` / `invalid_condition` | partial |
+| `target` 不可解析 | 转弃权 | `abstained_summary`（信息） | — |
 | `code_version` 缺失 | 整批拒绝 | `code_version_missing` | rejected |
-| resolver 数据源超时 / 限频 | 该判断跳过，下次重试 | `skipped_summary(unavailable:<kind>)` | — |
-| 超过 `settle_by` 仍无数据 | `void(no_data)` | `voided_summary`（信息） | — |
-| 价格基准不一致 | 隔离，不结算 | `settlement_basis_mismatch` | partial |
-| 事实在期限内被修订 | 隔离（信息），到期后以当前值结算 | `settlement_fact_revised` | — |
-| 截止 | 不再取新判断 | `deadline_hit`（信息） | — |
-| 无到期判断 | 空转，新鲜度心跳 ok | `detail.idle=true` | success |
-| 校准输入集合未变 | 不写新报告 | `duplicates` 计数 | success |
-| 回放输入哈希不符 | 脚本退出码 2，列出不符项 | `input_hash_mismatch` | — |
+| resolver 超时 / 限频 / 空 | 退避重试 | `unavailable_summary`（信息） | — |
+| 未到期 | 退避 | `pending_summary`（信息） | — |
+| 超过 `settle_by` | `void(no_data)` | `voided_summary`（信息） | — |
+| 复权不支持 / 退市 | 立即 `void` | 同上 | — |
+| 基准不一致 / 事实多候选 / 基准 bar 缺 | 隔离，不结算 | `settlement_*` | partial |
+| 截止 | 不再领取 | `deadline_hit`（信息） | — |
+| 无到期 | 空转，心跳 ok | `detail.idle=true` | success |
+| 校准指纹重复 | 不写 | `duplicates` 计数 | success |
+| 回放哈希不符 | 脚本退出码 2 | `input_hash_mismatch` | — |
 | 读接口 | 400 `invalid_parameter:<name>` / 404 `unknown_judgment` / `unknown_methodology` | | |
-| 管理员作废已作废的结算 | 409 `already_withdrawn` | | |
+| 管理员非法转移 | 409 `settlement_sequence` | | |
 
 ---
 
@@ -655,28 +762,29 @@ interface JudgmentCard {
 
 ### 14.1 单元（vitest，`memoryJudgmentsDb`）
 
-- `contract.test.ts`：主体格式、`claim` 按 kind 校验、`horizon → settle_after/settle_by` 三种单位的日期算术（含闰年、月末）。
-- `inputs.test.ts`：每种 `InputRef` 投影哈希对固定夹具稳定；字段顺序无关；`financial_fact` 夹具取规格二 `fixtures/edgar/CIK0000320193.trimmed.json` 派生的事实行；`inputs_hash` 与数组顺序无关。
-- `register.test.ts`：同输入同 id；任一字段变 id 变；`claim` 不进 id；`duplicate` / `idempotency_conflict` 两支；`lookahead`；`abstain` 行无 `claim/condition/settle_after`；23505 重读。
-- 属性测试（种子随机 200 次）：对注册表中每个 `rule` 方法，`compute / condition` 对同一输入两次调用字节一致；打乱 `inputs` 顺序 id 不变。
-- `settle.test.ts`：resolver 分派；`price_return` 用夹具 K 线（从 `fetchEastmoneyKline` 录制 120 根：600519、00700、AAPL，各含一个交易日缺口）验证第 n 根 bar 的到期判定、`pending`、`calendar_days` 取值、证据形状、`basis_mismatch` 阈值两侧；`fact_metric` 用规格二 `memoryFactsDb`；`void` 在 `settle_by` 后才写；`seq` 规则（`settled→withdrawn` 允许，`settled→settled` 拒绝）；截止；200 条上限。
-- `calibration.test.ts`：完美预报 Brier 0；恒 0.5 → 0.25；`brier_skill`；分箱计数与手算；Wilson 与 fan-out 同函数；ECE 对已知样本；交叉拟合分折确定性；区间覆盖率；混淆矩阵；分值 Spearman；`n < N → insufficient`。
-- `display.test.ts`：状态机六态；概率型 `uncalibrated` 的 `percent === null` 且 `band` 正确；`calibrated` 的 `percent`；派生判断继承最弱状态；zh / en headline 都非空。
-- `macro-regime.v1.test.ts`：用宏观规格 §14 验收样例 9 的夹具（对方 2026-09-11 快照经 v1.0 规则）构造 `RegimeResult`，登记 → 条件里的 long/short 序列正确；缺资产序列 → abstain。
-- `recommendation.adapter.test.ts`：`hold` / 无信心 → abstain；撤回 → withdrawn；`hit` → settled；ticker 反查失败标记。
-- 路由测试：参数校验、缓存头、`include_abstained`、`asOf` 取最新、admin 鉴权、cron Bearer。
+- `contract.test.ts`：主体格式；`claim` 按 kind；`Active | Abstained` 判别；`resolveTarget`（`session_index`、`date`、`period`、`fiscal_period` 多季外推与冻结日历）；`settle_after/settle_by` 算术（闰年、月末）；`retrospective` 三条规则（含 `labelAvailableAt`）。
+- `inputs.test.ts`：每种输入构造器对夹具稳定、与字段顺序无关；`financial_fact` 夹具取规格二 `fixtures/edgar/CIK0000320193.trimmed.json` 派生行；被隔离 / 非 `ok` 行 → `input_not_public`；`price_bar` close-only 分支字段为 null；`origins` 表键校验；`inputs_hash` 与数组顺序无关；白名单拒绝 `document_span / legacy_fill`。
+- `register.test.ts`：同输入同 id；`claim` 不进 id；`duplicate` / `idempotency_conflict`（比较完整规范化载荷，含 `producer_ref / kind / target / horizon / label_policy`）；构造器重跑不一致 → `input_snapshot_mismatch`；`lookahead`（含宏观快照 `available_at` 取观测最大值）；弃权空输入可登记；nonce：`human` 重试同 id，`model` 新 `run_id` 新 id；23505 重读。
+- 属性测试（种子随机 200 次）：注册表中每个 `rule` 方法 `compute/condition` 两次调用字节一致；打乱输入顺序 id 不变。
+- `settle.test.ts`：状态机表（§7.2 每行一个用例，含 `label_available_at > settle_by → void(late)`、`unresolved_inconsistency`）；队列顺序、退避、租约 token 不匹配；`price_return` 用录制夹具（复权能力验证夹具：每个 `(source, market)` 一只含已知除权 / 拆股事件的证券，`qfq/hfq/none` 三份；验证程序的 `verified / unsupported` 判定）：`session_index` 到期与向后分页、`date` 终点、`benchmark` 同日对齐与 `benchmark_gap`、`base_bar_missing`、`basis_mismatch` 两侧、close-only 证据；能力表非 `verified` → `void`；`fact_metric` 用规格二 `memoryFactsDb` + `deriveMetricsAsOf`：完整键、多候选、`yoy`、`truncated`；`cutoff_vintage` 在 `settle_by` 前不结算、到期以 `cutoff` 重取；`deadline` 与 `signal` 传递、小批领取；批次计数（`deferred` 计数器；全 deferred 为 `success`）与信息码；`override.resolution` 两种裁决。
+- `calibration.test.ts`：完美预报 Brier 0；恒 0.5 → 0.25；`brier_skill`；分箱与 Wilson；`ece_raw` 与 `ece_raw_holdout`；留出段边界重叠剔除；非重叠抽样（宏观日度 91 天窗口 → 每 91 天 1 条；同股票连续建议去重；`embargo_days`）；三态判定（含 G01 的反例：原始 ECE 0.12 / 映射后 ≈ 0 → `failed`）；categorical `majority_rate` 基准、`margin_pp` 分箱；interval `width_ratio`；score `evaluated`；期望值由实施者之外的人用 Python（`sklearn.calibration.calibration_curve` + 手写 Brier）算出并抄入。
+- `display.test.ts`：lifecycle × calibration 组合；probability 未校准 `percent===null` 且 `band` 正确；`self_assessed` 永不出 `percent`；校准行过期 / invalidated → `insufficient`；`publishable=false` 不出卡；派生判断门控（两者 open、情景一致、`p` 差 ≤ 0.01）；zh / en headline 非空。
+- `macro-regime.v1.test.ts`：宏观规格 §14 验收样例 9 的夹具 → 登记（`margin_pp` 单位、`catalog_version` 冻结）；`macro_regime_replay` 用夹具 `classifyAsOf`：同 vintage → `hit`，修订后 argmax 变化 → `miss`，`coverage < 0.6` → `Unavailable`；上游版本不匹配 abstain。
+- `recommendation.adapter.test.ts`：`hold` / 无信心 → abstain；无 fill → `pending_fill`（空输入、空目标可序列化）；撤回优先于 `hit`；`hit` → settled；ticker 反查失败 → `security` 主体；id 域分离。
+- `batches.test.ts`（计划一文件）：`deferred` 计数器与向后兼容。
+- 路由测试：参数、缓存头、`view=as_known`、admin 鉴权、cron Bearer、`preview`。
 
 ### 14.2 数据库（`test:db`）
 
-`src/lib/judgments/judgments.integration.test.ts`（含 `S4_TEST_STATE`，进 `criticalSuites`）：迁移可重放；四表只追加触发器（update / delete 被拒）；`judgment_methodologies` 只允许 `status/synced_at/code_version` 变化；`seq` 触发器；RLS 真实角色（anon 读得到四表、写被拒；service_role 可插入）；注册表 ↔ 表 `formula_hash` 一致（`sync-methodologies` 后比对）；`dueJudgments` SQL 与内存实现对同一数据集结果一致；GIN 索引下按 `inputs @> [{"ref":{"fact_id":…}}]` 能查到引用该事实的判断。
+`src/lib/judgments/judgments.integration.test.ts`（含 `S4_TEST_STATE`，进 `criticalSuites`）：迁移可重放；五表触发器（只追加、方法表限列、`settlement_sequence` 每条转移与序号示例）；`register_judgment` 同事务插队列、拒绝与方法行不一致的 `kind`；`claim_due_judgments` 的 `skip locked` 与租约 token；`append_settlement` 并发（两个连接同一判断：先到者 `applied`，后到者 `already_final`，不是 23505；过期 token → `lease_lost`）；`request_key` 重放 → `already_applied`；RLS 真实角色（anon 读四表不读队列、写被拒；service_role 对 `judgments / judgment_settlements` 直接 insert 被拒、经 RPC 成功；anon 能执行公共读 RPC、不能执行写 RPC）；`latest_judgment_cards` 的 `as_known`（含 `registered_at` 截止）与合并发行人反查、`publishable=false` 过滤；`calibration_cohort` 分页；`repair_stale_batches`；注册表 ↔ 表 `formula_hash` 一致；GIN 查询。
 
 ### 14.3 离线集成
 
-`src/lib/judgments/settle.integration.test.ts`（critical）：夹具 K 线 + `pgJudgmentsDb`，跑两遍 cron 核心：第一遍 `inserted > 0`，第二遍全部 `duplicates`、`success`；注入迟到数据 → 原 `void` 行后出现 `seq=2 settled`。
+`src/lib/judgments/settle.integration.test.ts`（critical）：夹具 K 线 + `pgJudgmentsDb`，cron 核心两遍：第一遍 `inserted > 0`，第二遍领取为空（终态行不再入队）、`success`；`void(1)` 后 admin `reopened(2)` → 补数据 → `settled(3)`；`settled(1) → withdrawn(2) → reopened(3) → settled(4)`。
 
 ### 14.4 回放夹具（黄金）
 
-`fixtures/judgments/replay/*.json`：至少 3 条判断（`macro_regime@v1` 一条、`recommendation_call@v1` 一条、一条用规格二夹具事实的合成 `fact_metric` 判断），每条含登记行 + 全部输入投影；`replay.test.ts` 对每条断言 `replay==='exact'`（规则型）或 `'inputs_only'`，篡改任一输入后断言 `input_hash_mismatch`。夹具由实施者之外的人核对一次（§16）。
+`fixtures/judgments/replay/*.json`：至少 3 条（`macro_regime@v1`、合成 `fact_metric` 判断、`recommendation_call@v1` 私有一条），每条含登记行与全部冻结投影；`replay.test.ts` 断言 `exact` / `inputs_only`，篡改投影后 `input_hash_mismatch`。夹具由实施者之外的人核对。
 
 ### 14.5 清单规则
 
@@ -686,35 +794,37 @@ interface JudgmentCard {
 
 ## 15. 分期（供计划四拆任务）
 
-| 工作包 | 交付 | 退出条件 | 估算 |
+| 工作包 | 交付 | 退出条件 | 估算（人日，经验值） |
 |---|---|---|---|
-| F4-0 契约与迁移 | `contract.ts`、`types.ts`、迁移（四表、触发器、权限）、锁文件、`database.types.ts`、`JudgmentsDb` 三实现、`uuid-v8.ts` 抽取（台账测试不变）、集成测试 §14.2 | `test:db`、`test:migrations` 绿；`ledger.test.ts` 原样通过 | 2.5 人日 |
-| F4-1 注册表、登记、回放 | `registry.ts`、方法接口、`sync-methodologies.ts`、`docs/methodologies/README.md`（§4.2 模板）、`inputs.ts`、`register.ts`、`produce.ts`、`replay.ts` + 脚本、回放夹具 | 单测 + 回放夹具绿 | 2.5 |
-| F4-2 结算 | `settle.ts`、`resolvers/{price,facts,macro,recommendation}.ts`、隔离钩子、cron 路由、`vercel.json`、脚本、夹具 K 线录制 | `settle.test.ts` + 离线集成绿；`preview=1` 对真实库空转回执 | 3 |
-| F4-3 校准与显示 | `calibration.ts`、报告阶段、`display.ts`、`judgment_calibrations` 写入 | 校准数学单测绿；阈值行为可配 | 2 |
-| F4-4 读接口与 UI 契约 | 六个读路由、两个 admin 路由、`JudgmentCard` / `InputsDrawer` / `SettlementTimeline` 组件（按画布稿）、`/intel/methods*`、`/admin/judgments`、`messages/*/judgments.json` | 路由测试绿；parity 绿；DESIGN.md 审查 | 3 |
-| F4-5 首批生产者 | `macro_regime@v1`（含文档）、`recommendation_call@v1` 适配器、`/analyst` 页信心列改造、`/api/analyst/book.calibration` | 宏观 WP-M3 合并后端到端登记一条；分析师页显示未校准态 | 2 |
-| F4-6 文档与收尾 | runbook（cron、隔离处理、作废、回放）、宏观 / 规格二接口对齐记录、§19 偏差记录 | 全量门禁绿；Codex 复审无 P1 | 1 |
+| F4-0 契约与迁移 | `contract.ts`、`types.ts`、迁移（五表、触发器、十个 RPC、权限）、锁文件、`database.types.ts`、`JudgmentsDb` 三实现、`uuid-v8.ts` 抽取、集成测试 §14.2 | `test:db`、`test:migrations` 绿；`ledger.test.ts` 原样通过 | 3.5 |
+| F4-1 注册表、登记、回放 | `registry.ts`、方法接口（含 `deps`、`resolveTarget`）、`sync-methodologies.ts`（`formula_hash_drift`、`deps` lint）、`docs/methodologies/README.md`、`inputs.ts` 构造器（anon 路径）、`origins.ts`、`register.ts`、`produce.ts`、`replay.ts` + 脚本、回放夹具 | 单测 + 回放夹具绿 | 3 |
+| F4-2 结算 | `settle.ts`、队列逻辑、`resolvers/{price,facts,macro}.ts`、`price-capabilities.ts` + 验证程序与夹具、K 线适配器 `endDate` / 分页、隔离钩子与裁决、cron 路由、`batches.ts` 的 `deferred` 计数器与 `INFO_CODES`、`repair_stale_batches`、`vercel.json`、脚本 | `settle.test.ts` + 离线集成绿；`preview=1` 对真实库空转回执；能力表至少一个 `verified` 条目或如实全 `unsupported` | 4 |
+| F4-3 校准与显示 | `calibration.ts`（非重叠抽样、留出段、按 kind 门控）、校准 cron（工作单元续跑）、桶、失效规则、`display.ts` | 校准数学单测（外部算出的期望值）绿 | 3 |
+| F4-4 读接口与 UI | 读路由、admin 路由、`JudgmentCard` / `InputsDrawer` / `SettlementTimeline`（按画布稿）、`/intel/methods*`、`/admin/judgments`、i18n | 路由测试、parity 绿；DESIGN.md 审查 | 3 |
+| F4-5a 宏观生产者 | `macro_regime@v1` + 文档、`classifyAsOf` 接口对接、补偿扫描与 marker | WP-M3 合并后端到端登记一条；WP-M3 未合并则用夹具完成并在 §19 记录 | 1.5 |
+| F4-5b 分析师适配器 | `adapters/recommendation.ts`（`PrivateJudgmentCard`）、`/api/analyst/book.self_assessment`、`/analyst` 页信心列 | 页面显示未校准态；无百分比 | 1 |
+| F4-6 文档与收尾 | runbook、接口对齐记录、§19 | 全量门禁绿；Codex 复审无 P1 | 1 |
 
-合计约 16 人日。F4-5 的宏观部分依赖 WP-M3；若先合并，F4-5 用夹具 `RegimeResult` 完成并在 §19 记录待接。
+合计约 20 人日（估算，非证据）。
 
 验收样例：
-1. 对同一 `RegimeResult` 两次 `produce` → 第二次 `duplicates=1`，表行数不变。
-2. 篡改回放夹具里一个 `macro_observation` 的 `value` → `replay.ts` 退出码 2 并指出该 `series_id`。
-3. 登记一条 `trading_sessions n=5` 的合成判断，夹具 K 线只有 4 根后续 bar → `pending`；补第 5 根 → `settled`，`evidence.end_bar.time` 是第 5 根。
-4. 99 条已结算 → `insufficient`，`percent=null`；第 100 条后 cron → `calibrated`，`percent` 非空。
-5. 管理员作废一条结算 → `seq=2 withdrawn`，卡状态 `withdrawn`，校准报告下一次不再计入它。
-6. 断网跑 cron：批次 `failed`，无结算写入，`dq_freshness` 连续两次后 `error`。
+1. 同一 `RegimeResult` 两次 `produce` → 第二次 `duplicates=1`，行数不变。
+2. 篡改回放夹具里一个 `macro_observation` 的冻结 `value` → `replay.ts` 退出码 2 并指出 `series_id`。
+3. `session_index n=5` 的合成判断，夹具只有 4 根后续 bar → 队列 `deferred(pending)`，退避；补第 5 根 → `settled`，`evidence.bars` 含 base 前 5 根到 end（≥ 11 根）。
+4. 独立样本 99 → `insufficient`；第 100 条后校准 cron → 留出段原始 ECE ≤ 0.10 且 skill > 0 → `calibrated`，`percent` 非空；构造"原始 ECE 0.12、isotonic 映射后 ≈ 0"的样本 → `failed`，`percent` 仍为空。
+5. 管理员 `withdrawn(2)` → 卡 `lifecycle='withdrawn'`，该方法校准行立即视为失效（`insufficient`），下次校准不计入；`reopened(3)` 后重结算 `settled(4)`。
+6. 断网跑结算 cron：全 `deferred(unavailable)` → 批次 `success` + 信息码，无结算写入；resolver 抛错的运行 → `failed`，连续两次后 `dq_freshness` `error`；进程被杀后下次 cron 的 `repair_stale_batches` 把残留 `running` 标 `failed`。
+7. service_role 直接 `insert into judgments` → 权限拒绝；经 `register_judgment` 成功且队列行同时出现。
 
 ---
 
 ## 16. 独立验证
 
-- Codex（gpt-6-astra，medium）：规格两轮（`01`、`02`）与处置（`03`）；每个工作包提交再审。
-- 校准数学对照：用 Python（`sklearn.calibration.calibration_curve` + 手写 Brier）对同一合成样本算一遍，把结果抄进 `calibration.test.ts` 的期望值（由实施者之外的人跑）。
-- 回放夹具由实施者之外的人核对输入投影与来源。
-- 宏观条件（§11.1）与行业 / 公司方法的"可证伪条件是否真的可证伪"请一位买方分析师读 `docs/methodologies/*` 并记录意见到 `docs/audits/2026-11-04-judgment-framework/expert-notes.md`。
-- 上线后 6 个月：第一份真实校准报告（`macro_regime@v1` 两区域 + 分析师私有）作为本框架的客观证据（总纲 §2.6"结算即验证"）。
+- Codex（gpt-6-astra，medium）：规格两轮与处置；每个工作包提交再审。
+- 校准数学：外部 Python 计算期望值（§14.1）。
+- 回放夹具由实施者之外的人核对。
+- 方法文档（`macro_regime@v1` 的"同函数截止 vintage 重算"标签；行业 / 公司方法）请一位买方分析师读并记录"条件是否真的可证伪、标签是否客观"到 `docs/audits/2026-11-04-judgment-framework/expert-notes.md`。
+- 上线后 6 个月：第一份真实校准报告（总纲 §2.6"结算即验证"）。
 
 ---
 
@@ -722,25 +832,31 @@ interface JudgmentCard {
 
 | 事项 | 谁 | 何时 |
 |---|---|---|
-| **决策 O1**：首批生产者 = `macro_regime@v1` + `recommendation_call@v1`（本稿默认）；是否把组合 `decisions` 也接适配器（§18.2） | owner | 计划编写前 |
-| **决策 O2**：显示阈值 N = 100（§8.3）；备选 50 / 200；是否按市场分层判定状态 | owner | 计划编写前 |
-| **决策 O3**：`macro_regime@v1` 的可证伪条件：A 资产含义配对（默认）或 B 3 个月持续性检验，或两者都登记为两个方法版本 | owner（与宏观规格作者） | F4-5 前 |
-| **决策 O4**：`trading_sessions` 期限统一用 K 线序号（默认，与 `scoreForward` 一致）还是引入 A / HK 交易日历（新数据源） | owner | F4-2 前 |
-| **决策 O5**：`/analyst` 页信心列改为未校准带状显示（§11.2）——这是对已上线页面的可见改动 | owner | F4-5 前 |
+| **决策 O1**：首批 = `macro_regime@v1`（公共）+ `recommendation_call@v1`（私有适配器）；是否把组合 `decisions` 也接适配器（§18.2） | owner | 计划编写前 |
+| **决策 O2**：`threshold_n = 100`、`ece_max = 0.10`、`window_years = 3`（§8.4）；备选 50 / 200 | owner | 计划编写前 |
+| **决策 O3**：`macro_regime@v1` 的标签 = 同一分类函数在截止 vintage 下对同一参考期重算（默认，§11.1）；`macro_regime_asset_pair`（资产含义检验）是否作为后续工作包立项 | owner + 宏观规格作者 | F4-5a 前 |
+| **决策 O7**：历史补登记能否凭不可变发布证据恢复前瞻资格（§3.4）；v1 默认不能 | owner | 计划编写前 |
+| 发布准入：逐方法确认全部输入 `origin.license_status='confirmed'` 后置 `publishable=true`；未确认前公共页不显示该方法的卡片 | owner | 每个方法上线前 |
+| **决策 O4**：`trading_sessions` 用 K 线序号（默认）还是引入 A / HK 交易日历 | owner | F4-2 前 |
+| **决策 O5**：`/analyst` 页信心列改为带状 + 自评（§11.2）；第二阶段是否建 service-role 写的只追加私有结算证据表以解锁分析师百分比 | owner | F4-5b 前 |
+| **决策 O6**：港美股复权来源：若 DataGateway / 东方财富对 HK / US 的复权都验证无效，HK / US 价格判断在 v1 一律 `void(adjustment_unsupported)`，还是等新来源 | owner | F4-2 验证后 |
+| 数据源展示许可：东方财富 / DataGateway 日线用于公开页面的结算证据是否在许可范围内 | owner | F4-2 前 |
 | 画布：§9.6 七项 | owner（Claude Design） | F4-4 前 |
-| 生产：执行迁移、`sync-methodologies`、`vercel.json` cron 生效、`CRON_SECRET` 已有 | owner | 合并后 |
-| 买方分析师阅读方法文档（§16） | owner 安排 | F4-6 前 |
+| 生产：执行迁移、`sync-methodologies`、桶 `judgments-calibration`、cron 生效（含 `maxDuration=300` 套餐确认） | owner | 合并后 |
+| 买方分析师阅读方法文档 | owner 安排 | F4-6 前 |
 
 ---
 
 ## 18. 开放问题（实施前核对）
 
-1. 宏观目录是否含"现金"类资产序列（短期国债收益率或货币基金指数）；没有则 `stagflation` 象限只能 abstain（§11.1）。
-2. `decisions` / `decision_reviews` 适配器：与建议同内核，但 `decisions` 表没有只追加触发器（分析师规格明言是 v4 M1a 既有债务），登记前是否先补触发器。
-3. 港美股不复权下的拆股：`price_return` 在拆股日跨窗会错；是否接入 DataGateway 的 `hfq` 作为港美默认口径（需确认 DataGateway 对 HK / US 的复权支持）。
-4. `financial_metrics` 的 `availableLte` 读法是否由规格二直接暴露（§12.2）。
-5. 发行人主证券在期限内切换（退市 / 换代码）时 `price_return` 的 ticker 取登记时的还是结算时的；默认登记时的，退市则 `void(delisted)`。
-6. 校准 3 年窗口是否对 `fiscal_quarters` 方法够用，待行业规格确定期限后复核。
+1. `macro_regime_asset_pair`（未实现）需要的配对 resolver、回报序列标记、现金 / 债券总回报序列与 `p` 表来源——立项前先回答。
+2. `decisions` 适配器：`decisions` 无只追加触发器，登记前是否先补。
+3. 复权能力验证（§7.4）的结果：哪些 `(source, market, adjustment)` 能 `verified`；全部 `unsupported` 时价格类方法在 v1 没有可用市场（决定 O6）。
+4. 规格二 `deriveMetricsAsOf` 库函数的暴露（§12.2）。
+5. 校准桶 cohort 清单在样本上万时的体积（每条约 200 B，1 万条 ≈ 2 MB，可接受；更大时分片）。
+6. `window_years` 对 `fiscal_quarters` 方法是否够（行业规格给出期限后复核）。
+7. 托管 PostgREST 的 `max_rows`、Vercel 套餐的 `maxDuration=300`、Supabase 对 `security definer` 函数 owner 的处理（`20261018120000_anchor_runner.sql` 的注释记录了非超级用户执行迁移的坑）——F4-0 在预览环境核对。
+8. 宏观规格需补：`margin` 单位（百分点）、`macro_snapshots.catalog_version`、`classifyAsOf` 与 `snapshotsSince`（§12.1）。
 
 ---
 
