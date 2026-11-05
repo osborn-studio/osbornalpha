@@ -12,7 +12,7 @@ export const revalidate = 3600;  // 1h cache
 
 interface Ctx { params: Promise<{ ticker: string }> }
 
-export async function GET(_req: Request, { params }: Ctx) {
+async function handle(_req: Request, { params }: Ctx) {
   const { ticker: raw } = await params;
   const ticker = decodeURIComponent(raw);
 
@@ -91,4 +91,13 @@ export async function GET(_req: Request, { params }: Ctx) {
       { status: 502 }
     );
   }
+}
+
+// Spec (data foundation 2) §9: this Tushare summary is superseded by the disclosure log.
+export async function GET(req: Request, ctx: Ctx) {
+  const { ticker } = await ctx.params;
+  const res = await handle(req, ctx);
+  res.headers.set('Deprecation', 'true');
+  res.headers.set('Link', `</api/facts/${encodeURIComponent(decodeURIComponent(ticker))}>; rel="successor-version"`);
+  return res;
 }
