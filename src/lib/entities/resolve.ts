@@ -25,6 +25,8 @@ export interface ResolveOptions{includeExpired?:boolean;today?:string}
 
 const str=(v:unknown)=>typeof v==='string'?v:null;
 const isCurrent=(r:Row,today:string)=>{const from=str(r.valid_from),to=str(r.valid_to);return from!==null&&from<=today&&(to===null||to>today);};
+/** The one validity predicate (valid_from <= today && (valid_to is null || valid_to > today)); reused by the facts scope (plan 2 Task 14). */
+export const isCurrentSecurity=isCurrent;
 const toSecurity=(r:Row):ResolvedSecurity=>({ticker:String(r.ticker),isin:str(r.isin),figi:str(r.figi),share_class:str(r.share_class),is_primary:r.is_primary===true,valid_from:String(r.valid_from),valid_to:str(r.valid_to)});
 
 /** Validates `today` as a real calendar date 'YYYY-MM-DD'; defaults to the current UTC date. */
