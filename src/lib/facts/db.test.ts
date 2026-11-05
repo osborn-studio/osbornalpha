@@ -131,6 +131,9 @@ describe('supabaseFactsDb',()=>{
   n=pages.length;
   expect(await db.factsByIds(['a0','a1'])).toHaveLength(2);
   expect(pages[n]).toContainEqual(['in',['fact_id',['a0','a1']]]);
+  n=pages.length;
+  expect((await db.scopeAll('US')).length).toBeGreaterThan(0);
+  expect(pages[n]).toContainEqual(['eq',['market','US']]);expect(pages[n]).toContainEqual(['order',['issuer_id']]);
   expect(await db.scopeRows('US',[])).toEqual([]);expect(await db.factsByIds([])).toEqual([]);
  });
  it('table reads normalise PostgREST timestamps (offset form, microseconds) to toISOString() form',async()=>{

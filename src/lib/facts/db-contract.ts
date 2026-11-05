@@ -251,6 +251,8 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect((await db.scopeRows('US',[iss])).map(x=>x.priority)).toEqual([0]);
    expect(await db.scopeRows('CN',[iss])).toEqual([]);
    expect(await db.scopeRows('US',[])).toEqual([]);
+   expect((await db.scopeAll('US')).find(x=>x.issuer_id===iss)).toMatchObject({priority:0,fetch_key:'0000000001'});   // scopeAll keeps priority 0 rows
+   expect((await db.scopeAll('CN')).find(x=>x.issuer_id===iss)).toBeUndefined();
   });
 
   it("promotion blocks on an OPEN same_day_conflict for the row's (K, date) even when the row is not in that item's member list (round-1 #3)",async()=>{

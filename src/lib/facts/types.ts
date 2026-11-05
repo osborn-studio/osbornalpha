@@ -81,6 +81,8 @@ export interface FactsDb{
  scopeDue(market:Market,now:string,limit:number):Promise<ScopeRow[]>;
  /** 指定发行人的 scope 行（不看 priority / next_due_at；缺行者不返回），供脚本 `--issuer` 与回放测试直指发行人（审计 round-1 #13） */
  scopeRows(market:Market,issuerIds:string[]):Promise<ScopeRow[]>;
+ /** Every scope row of the market, priority 0 included, ordered by issuer_id (complete set, paged to exhaustion) */
+ scopeAll(market:Market):Promise<ScopeRow[]>;
  metricsOfIssuer(issuer:string,market:Market,formulaVersion:string):Promise<MetricRow[]>;
 }
 /** stageFilings 的输入行（写入端生成 filing_id） */

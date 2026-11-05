@@ -38,7 +38,7 @@ const canon=(s:string)=>{
 /** numeric equality on decimal strings without exponent: sign of zero, leading and trailing zeros ignored. */
 export function numericEquals(a:string,b:string):boolean{return canon(a)===canon(b);}
 
-const ASYNC_METHODS=['claimLease','beginRun','stageFilings','stageFacts','quarantineFacts','publishRun','abandonRun','releaseLease','resolveFactsQuarantine','replaceMetrics','readFacts','factsByIds','openConflicts','filingsOfIssuer','updateFilingLink','reconcileScope','scopeDue','scopeRows','metricsOfIssuer'] as const satisfies readonly (keyof FactsDb)[];
+const ASYNC_METHODS=['claimLease','beginRun','stageFilings','stageFacts','quarantineFacts','publishRun','abandonRun','releaseLease','resolveFactsQuarantine','replaceMetrics','readFacts','factsByIds','openConflicts','filingsOfIssuer','updateFilingLink','reconcileScope','scopeDue','scopeRows','scopeAll','metricsOfIssuer'] as const satisfies readonly (keyof FactsDb)[];
 /** Compile-time check: ASYNC_METHODS must cover every FactsDb method. */
 export type AsyncMethodsComplete=[Exclude<keyof FactsDb,typeof ASYNC_METHODS[number]>] extends [never]?true:never;
 export const asyncMethodsComplete:AsyncMethodsComplete=true;   // type error here ⇒ a FactsDb method is missing from ASYNC_METHODS
@@ -289,6 +289,9 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
   async scopeRows(market,issuerIds){
    const want=new Set(issuerIds);
    return clone([...scope.values()].filter(s=>s.market===market&&want.has(s.issuer_id)).sort((a,b)=>cmp(a.issuer_id,b.issuer_id)));
+  },
+  async scopeAll(market){
+   return clone([...scope.values()].filter(s=>s.market===market).sort((a,b)=>cmp(a.issuer_id,b.issuer_id)));
   },
   async metricsOfIssuer(issuer,market,formulaVersion){
    const rows=metrics.filter(m=>m.issuer_id===issuer&&m.market===market&&m.formula_version===formulaVersion);

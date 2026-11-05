@@ -166,6 +166,7 @@ export function supabaseFactsDb(client:SupabaseClient):FactsDb{
    for(const part of chunkIds(issuerIds))out.push(...(await pageAll<Record<string,unknown>>(()=>c.from('fact_sync_scope').select('*').eq('market',market).in('issuer_id',part).order('issuer_id'))).map(scopeFromTable));
    return out;
   },
+  async scopeAll(market){return (await pageAll<Record<string,unknown>>(()=>c.from('fact_sync_scope').select('*').eq('market',market).order('issuer_id'))).map(scopeFromTable);},
   async metricsOfIssuer(issuer,market,formulaVersion){
    // Pages may span a concurrent replace_financial_metrics: accept a read only when every row carries
    // the same based_on_rev and the row count equals the first page's exact count; else retry, then fail.

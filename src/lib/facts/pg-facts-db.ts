@@ -66,6 +66,9 @@ export function pgFactsDb(pool:Pool):FactsDb{
    if(issuerIds.length===0)return [];
    return (await run(`select * from ${rel('fact_sync_scope')} where market = $1 and issuer_id = any($2::uuid[]) order by issuer_id`,[market,issuerIds])).rows.map(r=>scopeFromTable(r));
   },
+  async scopeAll(market){
+   return (await run(`select * from ${rel('fact_sync_scope')} where market = $1 order by issuer_id`,[market])).rows.map(r=>scopeFromTable(r));
+  },
   async metricsOfIssuer(issuer,market,formulaVersion){
    return (await run(`select * from ${rel('financial_metrics')} where issuer_id = $1 and market = $2 and formula_version = $3 order by metric, period_end, period_start, input_unit, basis`,[issuer,market,formulaVersion])).rows.map(metricFromTable);
   },

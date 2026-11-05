@@ -11,17 +11,21 @@
 //      .SH/.SZ/.BJ ticker; reasons ['cohort']; priority 10 (owner decision A).
 //  Watchlists are never a source (owner decision B).
 // scopeRowFor derives ONE issuer's row the same way for explicit --issuer / replay runs (round-1
-// #13; reasons ['explicit']). Reads go through TableClient (selectAll pages in a fixed order);
-// the CN key read and the "ending" securities read are single pages (no unique column to page
-// on / few rows) and fail loudly if they fill.
+// #13; reasons ['explicit']). Source reads go through TableClient and always page to exhaustion
+// (selectAll, fixed order; completeness is never inferred from one page). Rows already in the scope
+// table are read through FactsDb.scopeAll (the table client cannot see the memory adapter's rows).
+// CN ticker choice: the current primary A-share (.SH/.SZ/.BJ, B shares excluded); no primary → the
+// single current A-share; several primaries or several non-primary candidates → ambiguous_cn_ticker.
 import {MAX_PAGE,selectAll} from '../db/table-client';
-import type {Row,TableClient} from '../db/table-client';
+import type {RangeOptions,Row,TableClient} from '../db/table-client';
 import {isCurrentSecurity} from '../entities/resolve';
 import type {FactsDb,Market} from './types';
 
 export const US_UNIVERSES=['sp500','nasdaq_top500','us_china'] as const;
 export const SCOPE_PRIORITY=10;
 const CN_TICKER=/\.(SH|SZ|BJ)$/;
+// B shares trade under A-share-looking codes but are another class (same pattern as entities/link-research.ts, not exported there).
+const B_SHARE=/^(900\d{3}\.SH|200\d{3}\.SZ)$/;
 
 export function fetchKey(market:Market,issuer:{cik?:string|null;ticker?:string|null}):string{
  if(market==='US'){
@@ -34,16 +38,27 @@ export function fetchKey(market:Market,issuer:{cik?:string|null;ticker?:string|n
  return t;
 }
 
-export interface ScopeDeps{tables:TableClient;db:Pick<FactsDb,'reconcileScope'>}
+export interface ScopeDeps{tables:TableClient;db:Pick<FactsDb,'reconcileScope'|'scopeAll'>}
 export interface ScopeReconcileResult{desired:number;retired:number;changed:number;skipped:Record<string,number>}
 /** One reconcile_fact_sync_scope input row. */
 export type ScopeInputRow={issuer_id:string;reasons:string[];priority:number;fetch_key:string};
 type DesiredRow=ScopeInputRow;
 
+const FETCH_KEY_ERRORS=new Set(['missing_cik','not_cn_ticker']);   // the only errors scopeRowFor turns into null
 const str=(v:unknown)=>typeof v==='string'?v:null;
 const normTicker=(t:string)=>t.trim().toUpperCase().replace(/\//g,'.');
 const bump=(m:Record<string,number>,k:string)=>{m[k]=(m[k]??0)+1;};
 const isoToday=()=>new Date().toISOString().slice(0,10);
+
+/** selectAll with a range filter: same paging contract (fixed order, stop on an empty page). */
+async function pageAllRange(tables:TableClient,table:string,range:RangeOptions,orderBy:string):Promise<Row[]>{
+ const out:Row[]=[];
+ for(let offset=0;;){
+  const page=await tables.select(table,{},{...range,orderBy,offset,limit:MAX_PAGE});
+  if(page.length===0)return out;
+  out.push(...page);offset+=page.length;
+ }
+}
 
 /**
  * Security rows current at `today` by the landed predicate (isCurrentSecurity). Open rows page by
@@ -52,8 +67,8 @@ const isoToday=()=>new Date().toISOString().slice(0,10);
  */
 export async function currentSecurities(tables:TableClient,today:string):Promise<Row[]>{
  const open=await selectAll(tables,'issuer_securities',{valid_to:null},'ticker');
- const ending=await tables.select('issuer_securities',{},{gte:{valid_to:today},orderBy:'ticker',limit:MAX_PAGE});
- if(ending.length>=MAX_PAGE)throw new Error('scope_securities_page_full');
+ // Rows with a scheduled end: paged to exhaustion by ticker (a tie on ticker needs two future-dated rows of one ticker; offset pages stay stable in practice).
+ const ending=await pageAllRange(tables,'issuer_securities',{gte:{valid_to:today}},'ticker');
  return [...open,...ending].filter(r=>isCurrentSecurity(r,today));
 }
 
@@ -83,23 +98,42 @@ async function desiredUs(tables:TableClient,today:string,skipped:Record<string,n
  return [...out.values()];
 }
 
+/**
+ * The issuer's A-share ticker among its current securities rows: primary first, else the single
+ * candidate; null + reason when none or ambiguous.
+ */
+function chooseCnTicker(secs:Row[]):{ticker:string}|{reason:'no_cn_ticker'|'ambiguous_cn_ticker'}{
+ const cands=new Map<string,Row>();
+ for(const r of secs){const t=normTicker(String(r.ticker));if(CN_TICKER.test(t)&&!B_SHARE.test(t))cands.set(t,r);}
+ const narrow=(list:[string,Row][])=>{
+  if(list.length<=1)return list;
+  const a=list.filter(([,r])=>str(r.share_class)?.toUpperCase()==='A');
+  return a.length===1?a:list;
+ };
+ const all=[...cands.entries()];
+ const primary=narrow(all.filter(([,r])=>r.is_primary===true));
+ if(primary.length===1)return {ticker:primary[0][0]};
+ if(primary.length>1)return {reason:'ambiguous_cn_ticker'};
+ const rest=narrow(all);
+ if(rest.length===1)return {ticker:rest[0][0]};
+ return {reason:rest.length===0?'no_cn_ticker':'ambiguous_cn_ticker'};
+}
+
 async function desiredCn(tables:TableClient,today:string,skipped:Record<string,number>):Promise<DesiredRow[]>{
- const keys=await tables.select('research_entity_keys',{in_scope:true},{limit:MAX_PAGE});
- if(keys.length>=MAX_PAGE)throw new Error('scope_cn_page_full');
+ // (user_id, entity_id) is the key and TableClient orders by one column: entity_id is a random uuid, unique in practice.
+ const keys=await selectAll(tables,'research_entity_keys',{in_scope:true},'entity_id');
  const issuerIds=new Set<string>();
  for(const k of keys){const id=str(k.issuer_id);if(id)issuerIds.add(id);else bump(skipped,'no_issuer');}
- const primaryByIssuer=new Map<string,string[]>();
+ const byIssuer=new Map<string,Row[]>();
  for(const s of await currentSecurities(tables,today)){
-  const id=str(s.issuer_id),t=normTicker(String(s.ticker));
-  if(!id||s.is_primary!==true||!CN_TICKER.test(t))continue;
-  (primaryByIssuer.get(id)??primaryByIssuer.set(id,[]).get(id)!).push(t);
+  const id=str(s.issuer_id);if(!id)continue;
+  (byIssuer.get(id)??byIssuer.set(id,[]).get(id)!).push(s);
  }
  const out:DesiredRow[]=[];
  for(const id of [...issuerIds].sort()){
-  const tickers=(primaryByIssuer.get(id)??[]).sort();
-  if(tickers.length===0){bump(skipped,'no_cn_ticker');continue;}
-  if(tickers.length>1)bump(skipped,'multiple_primary');   // schema should prevent it; the smallest ticker wins deterministically
-  out.push({issuer_id:id,reasons:['cohort'],priority:SCOPE_PRIORITY,fetch_key:fetchKey('CN',{ticker:tickers[0]})});
+  const c=chooseCnTicker(byIssuer.get(id)??[]);
+  if('reason' in c){bump(skipped,c.reason);continue;}
+  out.push({issuer_id:id,reasons:['cohort'],priority:SCOPE_PRIORITY,fetch_key:fetchKey('CN',{ticker:c.ticker})});
  }
  return out;
 }
@@ -113,12 +147,13 @@ export async function scopeRowFor(tables:TableClient,market:Market,issuerId:stri
  const today=opts.today??isoToday();
  const [issuer]=await tables.select('issuers',{issuer_id:issuerId},{limit:1});
  if(!issuer||issuer.status==='merged')return null;
+ const secs=market==='CN'?(await selectAll(tables,'issuer_securities',{issuer_id:issuerId},'ticker')).filter(r=>isCurrentSecurity(r,today)):[];   // DB errors propagate
  try{
   if(market==='US')return {issuer_id:issuerId,reasons:['explicit'],priority:SCOPE_PRIORITY,fetch_key:fetchKey('US',{cik:str(issuer.cik)})};
-  const tickers=(await tables.select('issuer_securities',{issuer_id:issuerId,is_primary:true},{limit:MAX_PAGE})).filter(r=>isCurrentSecurity(r,today)).map(r=>normTicker(String(r.ticker))).filter(t=>CN_TICKER.test(t)).sort();
-  if(tickers.length===0)return null;
-  return {issuer_id:issuerId,reasons:['explicit'],priority:SCOPE_PRIORITY,fetch_key:fetchKey('CN',{ticker:tickers[0]})};
- }catch{return null;}
+  const c=chooseCnTicker(secs);
+  if('reason' in c)return null;
+  return {issuer_id:issuerId,reasons:['explicit'],priority:SCOPE_PRIORITY,fetch_key:fetchKey('CN',{ticker:c.ticker})};
+ }catch(e){if(e instanceof Error&&FETCH_KEY_ERRORS.has(e.message))return null;throw e;}
 }
 
 export async function reconcileScope(deps:ScopeDeps,market:Market,opts:{today?:string}={}):Promise<ScopeReconcileResult>{
@@ -127,7 +162,7 @@ export async function reconcileScope(deps:ScopeDeps,market:Market,opts:{today?:s
  const desired=market==='US'?await desiredUs(deps.tables,today,skipped):await desiredCn(deps.tables,today,skipped);
  const wanted=new Set(desired.map(d=>d.issuer_id));
  // Rows that left the sources keep their fetch_key and drop to priority 0 (never deleted: scheduling history stays).
- const retired:DesiredRow[]=(await selectAll(deps.tables,'fact_sync_scope',{market},'issuer_id'))
+ const retired:DesiredRow[]=(await deps.db.scopeAll(market))
   .filter(r=>Number(r.priority)>0&&!wanted.has(String(r.issuer_id)))
   .map(r=>({issuer_id:String(r.issuer_id),reasons:[],priority:0,fetch_key:String(r.fetch_key)}));
  const rows=[...desired,...retired].sort((a,b)=>a.issuer_id<b.issuer_id?-1:a.issuer_id>b.issuer_id?1:0);
