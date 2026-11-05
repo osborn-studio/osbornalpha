@@ -14,8 +14,9 @@
  * and an issuer without a derivable fetch key is reported as scope_unresolved (exit 1).
  * --no-db (US only, with --cik) runs the dry run against empty in-memory stores: a network-only
  * smoke that needs no environment at all.
- * CN is gated like the cron route: --market CN --apply needs FACTS_CN_ENABLED=1 (dry run is free). Do not run
- * --apply for a market while its cron may be running (scope reconcile is not concurrency-safe).
+ * CN is gated like the cron route: --market CN --apply needs FACTS_CN_ENABLED=1 (dry run is free).
+ * Scope retirement is guarded in SQL (reconcile_fact_sync_scope p_snapshot_at), so overlapping runs cannot
+ * retire an issuer another run just activated; per-issuer leases serialise the actual fetching.
  * Exit 0 on success, 1 when the batch (or any issuer in a dry run) failed, 2 on bad arguments.
  * tsx does NOT load .env.local: use node --env-file as above (never commit that file).
  */
@@ -81,12 +82,14 @@ async function main(){
   await deps.db.reconcileScope('US',rows);
   issuerIds=rows.map(r=>r.issuer_id);
  }else{
-  deps=productionSyncDeps({deadline:null,codeVersion});
+  const admin=getAdminSupabase();   // one admin client for the deps and the ticker lookups
+  deps=productionSyncDeps({deadline:null,codeVersion,admin});
   if(args.issuers.length>0){
+   const tables=supabaseTableClient(admin);
    const today=new Date().toISOString().slice(0,10);
    issuerIds=[];
    for(const t of args.issuers){
-    const r=await resolveIssuer(supabaseTableClient(getAdminSupabase()),{ticker:t},{today});
+    const r=await resolveIssuer(tables,{ticker:t},{today});
     if(!r){console.error(`unknown ticker: ${t}`);process.exit(2);}
     issuerIds.push(r.issuer_id);
    }

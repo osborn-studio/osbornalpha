@@ -136,7 +136,7 @@ describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()
    expect(await fn(role,'public.read_facts(uuid,text,text[],date,date,date,boolean,int,boolean)')).toBe(true);
    expect(await fn(role,'public.fact_state_rev(uuid,text)')).toBe(true);
   }
-  for(const sig of ['public.begin_sync_run(uuid,text,uuid,int)','public.reconcile_fact_sync_scope(text,jsonb)','public.resolve_facts_quarantine(uuid,uuid[],uuid)','public.replace_financial_metrics(uuid,text,bigint,jsonb)']){
+  for(const sig of ['public.begin_sync_run(uuid,text,uuid,int)','public.reconcile_fact_sync_scope(text,jsonb,timestamptz)','public.resolve_facts_quarantine(uuid,uuid[],uuid)','public.replace_financial_metrics(uuid,text,bigint,jsonb)']){
    for(const role of ['anon','authenticated'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});
    expect({sig,ok:await fn('service_role',sig)}).toEqual({sig,ok:true});
   }
@@ -450,6 +450,16 @@ describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()
   expect(s).toEqual({reasons:['sp500'],priority:0,fetch_key:'0000000002',lease_batch_id:b,state_rev:'5',due:'2030-01-01'});
   expect((await fails(q(`select public.reconcile_fact_sync_scope('HK','[]'::jsonb)`))).message).toBe('invalid_market');
   expect((await fails(q(`select public.reconcile_fact_sync_scope('US','{}'::jsonb)`))).message).toBe('invalid_rows');
+ });
+
+ it('reconcile_fact_sync_scope: a retirement from an older snapshot does not undo a newer activation; activations always apply',async()=>{
+  const iss=await issuer();
+  const call=(p:number,snap:string|null)=>one(`select public.reconcile_fact_sync_scope('US',$1::jsonb,$2::timestamptz) v`,[JSON.stringify([{issuer_id:iss,reasons:['r'],priority:p,fetch_key:'0000000003'}]),snap]);
+  expect(await call(10,null)).toBe(1);
+  expect(await call(0,'2000-01-01T00:00:00Z')).toBe(0);   // snapshot older than the row's last scope change → refused
+  expect((await q(`select priority from public.fact_sync_scope where issuer_id=$1`,[iss]))[0].priority).toBe(10);
+  expect(await call(0,'2100-01-01T00:00:00Z')).toBe(1);   // snapshot newer → retired
+  expect(await call(10,'2000-01-01T00:00:00Z')).toBe(1);  // activation applies whatever the snapshot
  });
 
  it('roles: no role writes the fact tables directly; service_role updates link columns only; anon and authenticated cannot call write functions',async()=>{

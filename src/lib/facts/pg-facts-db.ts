@@ -57,7 +57,7 @@ export function pgFactsDb(pool:Pool):FactsDb{
    const p=linkPatch(patch);const cols=Object.keys(p);
    await run(`update ${rel('filings')} set ${cols.map((c,i)=>`${ident(c)} = $${i+2}`).join(', ')} where filing_id = $1`,[filingId,...cols.map(c=>p[c])]);
   },
-  reconcileScope:(market,input)=>fn<number>('public.reconcile_fact_sync_scope($1,$2::jsonb)',[market,JSON.stringify(input)]),
+  reconcileScope:(market,input,snapshotAt)=>fn<number>('public.reconcile_fact_sync_scope($1,$2::jsonb,$3::timestamptz)',[market,JSON.stringify(input),snapshotAt??null]),
   async scopeDue(market,now,limit){
    if(limit<1)return [];
    return (await run(`select * from ${rel('fact_sync_scope')} where market = $1 and priority > 0 and next_due_at <= $2::timestamptz order by next_due_at, priority desc, issuer_id limit $3`,[market,now,limit])).rows.map(r=>scopeFromTable(r));

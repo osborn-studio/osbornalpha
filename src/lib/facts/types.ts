@@ -78,7 +78,8 @@ export interface FactsDb{
  openConflicts(issuer:string,market:Market):Promise<ConflictItem[]>;
  filingsOfIssuer(issuer:string,market:Market,opts:{from?:string;to?:string;limit?:number;unlinkedOnly?:boolean}):Promise<FilingRow[]>;
  updateFilingLink(filingId:string,patch:{document_ref?:string|null;document_url?:string|null;link_attempts:number}):Promise<void>;
- reconcileScope(market:Market,rows:{issuer_id:string;reasons:string[];priority:number;fetch_key:string}[]):Promise<number>;
+ /** snapshotAt: when the sources behind `rows` were read. A retirement (priority 0 over a stored priority > 0) applies only to a row whose scope was not changed after it (scope_changed_at <= snapshotAt); activations and upserts always apply. */
+ reconcileScope(market:Market,rows:{issuer_id:string;reasons:string[];priority:number;fetch_key:string}[],snapshotAt?:string):Promise<number>;
  scopeDue(market:Market,now:string,limit:number):Promise<ScopeRow[]>;
  /** 指定发行人的 scope 行（不看 priority / next_due_at；缺行者不返回），供脚本 `--issuer` 与回放测试直指发行人（审计 round-1 #13） */
  scopeRows(market:Market,issuerIds:string[]):Promise<ScopeRow[]>;

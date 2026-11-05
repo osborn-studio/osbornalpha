@@ -35,7 +35,8 @@ export interface SyncDeps{
  /** Adapters (Part C): parseCompanyFacts / parseTushareStatements wired by the route and scripts. */
  parseUs:(snapshot:RawSnapshot,opts:{sinceYear:number})=>ParseResult;
  parseCn:(snapshots:RawSnapshot[],opts:{sinceYear:number})=>ParseResult;
- linkCn?:(filing:FilingRow,b:Budget)=>Promise<{document_ref:string;document_url:string}|'none'|'ambiguous'>;
+ /** 'unlinkable' = issuer metadata (no current A-share ticker) prevented any request: not an attempt, link_attempts stays untouched. */
+ linkCn?:(filing:FilingRow,b:Budget)=>Promise<{document_ref:string;document_url:string}|'none'|'ambiguous'|'unlinkable'>;
  /** CN coverage summary (§6.3 coverage_summary), wired by deps.ts to coverageSummary (round-1 #12). */
  coverageCn?:(parsed:ParseResult)=>CoverageEntry[];
  now:()=>Date;deadline:Date|null;codeVersion:string|null;
@@ -315,7 +316,7 @@ async function stageFilings(db:FactsDb,runId:string,issuer:string,market:Market,
 
 async function linkFilings(deps:SyncDeps,issuer:string,market:Market,budget:Budget,out:IssuerOutcome,renew:()=>Promise<void>):Promise<void>{
  const pending=(await deps.db.filingsOfIssuer(issuer,market,{unlinkedOnly:true})).filter(f=>f.link_attempts<MAX_LINK_ATTEMPTS&&f.origin!=='bse'&&LINKABLE_FORMS.has(f.form_type));
- let failed=0;
+ let failed=0,unlinkable=0;
  for(const f of pending){
   // Cancellation BEFORE a request starts is not an attempt: link_attempts stays untouched (round-1 #21).
   if(budget.signal.aborted||budget.remainingMs()<MIN_ISSUER_MS/3)break;
@@ -324,6 +325,7 @@ async function linkFilings(deps:SyncDeps,issuer:string,market:Market,budget:Budg
   let cut=false;
   try{
    const r=await deps.linkCn!(f,budget);
+   if(r==='unlinkable'){unlinkable++;continue;}   // no request was possible: nothing persisted, no attempt consumed
    if(typeof r!=='string')patch={...r,link_attempts:f.link_attempts+1};
   }catch(e){
    if(dbCode(e)==='lease_lost')throw e;
@@ -334,6 +336,7 @@ async function linkFilings(deps:SyncDeps,issuer:string,market:Market,budget:Budg
   if(cut)break;                                          // no budget left for the next request
  }
  if(failed>0)out.errors.push({code:'skipped_summary',key:`${issuer}:cninfo_link`,message:JSON.stringify({link_failed:failed})});
+ if(unlinkable>0)out.errors.push({code:'skipped_summary',key:`${issuer}:cninfo_unlinkable`,message:JSON.stringify({unlinkable})});
 }
 
 type Selected={scope:ScopeRow}|{unresolved:string};

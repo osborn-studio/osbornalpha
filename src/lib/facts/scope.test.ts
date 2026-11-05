@@ -30,8 +30,8 @@ async function seed(){
 }
 /** memoryFactsDb on the frozen clock plus a recorder of what reconcileScope received. */
 function recordingDb(){
- const db=memoryFactsDb();db.setNow(NOW_ISO);const calls:{market:Market;rows:Parameters<FactsDb['reconcileScope']>[1]}[]=[];
- const wrapped:FactsDb={...db,reconcileScope:(market,rows)=>{calls.push({market,rows});return db.reconcileScope(market,rows);}};
+ const db=memoryFactsDb();db.setNow(NOW_ISO);const calls:{market:Market;rows:Parameters<FactsDb['reconcileScope']>[1];snapshot?:string}[]=[];
+ const wrapped:FactsDb={...db,reconcileScope:(market,rows,snapshot)=>{calls.push({market,rows,snapshot});return db.reconcileScope(market,rows,snapshot);}};
  return {db:wrapped,calls};
 }
 
@@ -93,6 +93,21 @@ describe('scopeRowFor',()=>{
   expect(await scopeRowFor(tables,'US','44444444-4444-4444-8444-444444444444',{today:TODAY})).toBeNull();
   await tables.update('issuers',{issuer_id:A},{status:'merged'});
   expect(await scopeRowFor(tables,'US',A,{today:TODAY})).toBeNull();
+ });
+});
+
+describe('reconcileScope: snapshot guard',()=>{
+ it('passes snapshotAt (taken before the sources are read) to the database; a stale snapshot cannot retire a newer activation',async()=>{
+  const tables=await seed();const {db,calls}=recordingDb();
+  await reconcileScope({tables,db},'US',{today:TODAY});          // activates the desired issuers now
+  const active=(await db.scopeAll('US')).filter(r=>r.priority>0);
+  expect(active.length).toBeGreaterThan(0);
+  expect(typeof calls[0].snapshot).toBe('string');
+  // sources lose every issuer, but the snapshot predates the activation → nothing is retired
+  const empty=memoryTableClient({issuers:['issuer_id']});
+  const r=await reconcileScope({tables:empty,db},'US',{today:TODAY,snapshotAt:'2000-01-01T00:00:00.000Z'});
+  expect(r.retired).toBe(active.length);expect(r.changed).toBe(0);
+  expect((await db.scopeAll('US')).filter(x=>x.priority>0).length).toBe(active.length);
  });
 });
 

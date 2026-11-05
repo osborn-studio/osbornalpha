@@ -274,6 +274,19 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect((await db.scopeAll('CN')).find(x=>x.issuer_id===iss)).toBeUndefined();
   });
 
+  it('reconcileScope snapshotAt: a retirement from an older snapshot does not undo a newer activation; activations and later snapshots apply',async()=>{
+   const iss=await h.issuer();
+   const row=(priority:number)=>[{issuer_id:iss,reasons:priority>0?['r']:[],priority,fetch_key:'0000000007'}];
+   const older=new Date(Date.now()-3_600_000).toISOString(),newer=new Date(Date.now()+3_600_000).toISOString();
+   expect(await db.reconcileScope('US',row(10))).toBe(1);                       // activation just now
+   expect(await db.reconcileScope('US',row(0),older)).toBe(0);                  // stale retirement refused
+   expect((await db.scopeRows('US',[iss]))[0].priority).toBe(10);
+   expect(await db.reconcileScope('US',row(0),newer)).toBe(1);                  // snapshot taken after the last change: retires
+   expect((await db.scopeRows('US',[iss]))[0].priority).toBe(0);
+   expect(await db.reconcileScope('US',row(10),older)).toBe(1);                 // activation applies whatever the snapshot
+   expect((await db.scopeRows('US',[iss]))[0].priority).toBe(10);
+  });
+
   it("promotion blocks on an OPEN same_day_conflict for the row's (K, date) even when the row is not in that item's member list (round-1 #3)",async()=>{
    const {iss,b,r}=await published();                                                     // r: revenue 100 on 2024-02-01, ok
    const runB=await db.beginRun(iss,'US',b,1);const fb=filingInsert(iss);await db.stageFilings(runB,[fb]);

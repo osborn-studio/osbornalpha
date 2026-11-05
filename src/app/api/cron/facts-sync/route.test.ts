@@ -30,7 +30,7 @@ describe('facts sync cron',()=>{
   expect(mocks.deps).not.toHaveBeenCalled();expect(mocks.run).not.toHaveBeenCalled();
  });
  it('validates market and limit',async()=>{
-  for(const qs of ['','market=HK','market=us','market=US&limit=0','market=US&limit=201','market=US&limit=x','market=US&market=CN'])expect((await GET(req(qs,AUTH))).status,qs).toBe(400);
+  for(const qs of ['','market=HK','market=us','market=US&limit=0','market=US&limit=201','market=US&limit=x','market=US&market=CN','market=US&limit=5&limit=6'])expect((await GET(req(qs,AUTH))).status,qs).toBe(400);
   expect(mocks.run).not.toHaveBeenCalled();
  });
  it('refuses to apply without a code version',async()=>{
@@ -63,5 +63,28 @@ describe('facts sync cron',()=>{
   const res=await POST(req('market=CN&limit=5',AUTH));
   expect(await res.json()).toMatchObject({ok:false,market:'CN',limit:5});
   expect(mocks.run.mock.calls[0][1]).toMatchObject({market:'CN',limit:5});
+ });
+ it('repeated limit is invalid_parameter:limit',async()=>{
+  const res=await GET(req('market=US&limit=5&limit=6',AUTH));
+  expect(res.status).toBe(400);expect((await res.json()).error.code).toBe('invalid_parameter:limit');
+ });
+ it('a rejected run answers a codes-only 500 (SyncError code, else sync_failed), no-store',async()=>{
+  const {SyncError}=await import('@/lib/facts/errors');
+  mocks.run.mockRejectedValueOnce(new Error('secret db detail'));
+  let res=await GET(req('market=US',AUTH));
+  expect(res.status).toBe(500);expect(res.headers.get('cache-control')).toBe('no-store');
+  expect(JSON.stringify(await res.json())).not.toContain('secret');
+  mocks.run.mockRejectedValueOnce(new SyncError('code_version_unavailable'));
+  res=await GET(req('market=US',AUTH));
+  expect((await res.json()).error.code).toBe('code_version_unavailable');
+  mocks.deps.mockImplementationOnce(()=>{throw new Error('missing env SUPABASE_KEY');});
+  res=await GET(req('market=US',AUTH));
+  expect(res.status).toBe(500);expect((await res.json()).error).toEqual({code:'sync_failed',message:'Facts sync failed'});
+ });
+ it('the HTTP receipt carries codes and counts only: error messages, warnings and hashes are dropped',async()=>{
+  mocks.run.mockResolvedValue({batchId:'b',status:'partial',counts:{fetched:1,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:1},errors:[{code:'unknown',key:'k',message:'leaky detail'}],idle:false,detail:{attempted:1,published:0,failed:1,skipped:0,idle:false},issuers:[{issuerId:'i',fetchKey:'f',runId:'r',outcome:'failed',code:'unknown',counts:{fetched:1,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:1},errors:[{code:'unknown',key:'i',message:'leaky'}],warnings:new Map([['w',['x']]]),snapshotSha256:['abc']}]});
+  const text=JSON.stringify(await (await GET(req('market=US',AUTH))).json());
+  expect(text).not.toContain('leaky');expect(text).not.toContain('abc');
+  expect(text).toContain('"code":"unknown"');
  });
 });

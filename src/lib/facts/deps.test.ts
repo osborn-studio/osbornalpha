@@ -1,8 +1,7 @@
 // src/lib/facts/deps.test.ts
 import {afterEach,describe,expect,it,vi} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
-import {cninfoLinker,guardedReconcileDb,productionSyncDeps,resolveCodeVersion} from './deps';
-import {memoryFactsDb} from './memory-facts-db';
+import {cninfoLinker,productionSyncDeps,resolveCodeVersion} from './deps';
 import {coverageSummary,parseTushareStatements} from './providers/tushare-statements';
 import {loadTushareFixtures} from './providers/tushare-fixtures';
 import type {Budget,FactsDb,FilingRow} from './types';
@@ -39,18 +38,37 @@ describe('cninfoLinker',()=>{
   const fetch=vi.fn(async(_input:RequestInfo|URL,init?:RequestInit)=>{bodies.push(String(init?.body));return new Response(JSON.stringify({announcements:[{announcementId:'2',announcementTitle:'贵州茅台：关于2024年年度报告的更正公告',adjunctUrl:'finalpage/2025-04-03/2.PDF'}],hasMore:false}),{status:200});});
   const db=fakeDb([filing(),filing({filing_id:'h',source_ref:'600519.SH:20241231:5:20250301',available_date:'2025-03-01'})]);
   const link=cninfoLinker(await tablesWithMoutai(),db,{fetch,minIntervalMs:0});
-  expect(await link(filing(),budget())).toEqual({document_ref:'2',document_url:'http://static.cninfo.com.cn/finalpage/2025-04-03/2.PDF'});   // corrected → a 更正 title is the match
+  expect(await link(filing(),budget())).toEqual({document_ref:'2',document_url:'https://static.cninfo.com.cn/finalpage/2025-04-03/2.PDF'});   // corrected → a 更正 title is the match
   expect(bodies[0]).toContain('stock=600519%2C9900000227');expect(bodies[0]).toContain('column=sse');expect(bodies[0]).toContain('seDate=2025-03-31%7E2025-04-06');
   expect(await link(filing({filing_id:'q',form_type:'q1',period_end:'2024-03-31',source_ref:'600519.SH:20240331:1:20240426',available_date:'2024-04-26'}),budget())).toBe('none');   // not corrected → 更正 title excluded
   expect(fetch).toHaveBeenCalledTimes(2);   // issuer context is cached: only the two hisAnnouncement queries
  });
- it("answers 'none' without touching the network when the issuer has no current A-share listing",async()=>{
+ it("answers 'unlinkable' (no attempt consumed) without touching the network when the issuer has no current A-share listing",async()=>{
   const tables=memoryTableClient({issuers:['issuer_id']});
   await tables.insert('issuers',{issuer_id:'U',cninfo_org_id:null,status:'active'});
   const fetch=vi.fn();
   const link=cninfoLinker(tables,fakeDb([]),{fetch});
-  expect(await link(filing({issuer_id:'U'}),budget())).toBe('none');
+  expect(await link(filing({issuer_id:'U'}),budget())).toBe('unlinkable');
   expect(fetch).not.toHaveBeenCalled();
+ });
+ it('uses the scope A-share selection: B shares are excluded, two undecidable A-shares are ambiguous (unlinkable), a sole non-primary A-share is used',async()=>{
+  const mk=async(secs:{ticker:string;is_primary:boolean;share_class?:string}[])=>{
+   const t=memoryTableClient({issuers:['issuer_id']});
+   await t.insert('issuers',{issuer_id:'I',cninfo_org_id:'9900000227',status:'active'});
+   for(const x of secs)await t.insert('issuer_securities',{issuer_id:'I',valid_from:'2001-08-27',valid_to:null,...x});
+   return t;
+  };
+  const body=async(t:Awaited<ReturnType<typeof mk>>)=>{
+   const bodies:string[]=[];
+   const fetch=vi.fn(async(_i:RequestInfo|URL,init?:RequestInit)=>{bodies.push(String(init?.body));return new Response(JSON.stringify({announcements:[],hasMore:false}),{status:200});});
+   const r=await cninfoLinker(t,fakeDb([]),{fetch,minIntervalMs:0,today:'2026-11-04'})(filing(),budget());
+   return {r,bodies};
+  };
+  const b=await body(await mk([{ticker:'900901.SH',is_primary:true},{ticker:'600519.SH',is_primary:false}]));
+  expect(b.bodies[0]).toContain('stock=600519%2C');                       // the B share (900xxx.SH) is never queried
+  expect((await body(await mk([{ticker:'900901.SH',is_primary:true}]))).r).toBe('unlinkable');
+  expect((await body(await mk([{ticker:'600519.SH',is_primary:true},{ticker:'000001.SZ',is_primary:true}]))).r).toBe('unlinkable');   // ambiguous
+  expect((await body(await mk([{ticker:'600519.SH',is_primary:false}]))).bodies.length).toBe(1);
  });
  it('reads the current A-share listing by the landed validity predicate: a scheduled future end still counts, a past end does not',async()=>{
   const tables=memoryTableClient({issuers:['issuer_id']});
@@ -61,7 +79,7 @@ describe('cninfoLinker',()=>{
   expect(await cninfoLinker(tables,fakeDb([]),{fetch,minIntervalMs:0,today:'2026-11-04'})(filing(),budget())).toBe('none');
   expect(bodies[0]).toContain('stock=600519%2C9900000227');                                            // the listing was resolved → a query went out
   const noCall=vi.fn();
-  expect(await cninfoLinker(tables,fakeDb([]),{fetch:noCall,today:'2031-01-01'})(filing(),budget())).toBe('none');   // listing ended → no ts_code → no request
+  expect(await cninfoLinker(tables,fakeDb([]),{fetch:noCall,today:'2031-01-01'})(filing(),budget())).toBe('unlinkable');   // listing ended → no ts_code → no request
   expect(noCall).not.toHaveBeenCalled();
  });
 });
@@ -85,25 +103,3 @@ describe('productionSyncDeps',()=>{
  });
 });
 
-describe('guardedReconcileDb (concurrent reconcile guard)',()=>{
- it('retires only issuers absent from both source reads and passes upserts through',async()=>{
-  const tables=memoryTableClient({issuers:['issuer_id'],issuer_securities:['ticker'],security_universe_memberships:['universe','ticker']});
-  const db=memoryFactsDb(tables);
-  const A='00000000-0000-4000-8000-00000000000a',B='00000000-0000-4000-8000-00000000000b';
-  await db.reconcileScope('US',[{issuer_id:A,reasons:['x'],priority:10,fetch_key:'0000000001'},{issuer_id:B,reasons:['x'],priority:10,fetch_key:'0000000002'}]);
-  // sources: B is back in the universe (added by a concurrent run after the first, stale read); A is not.
-  await tables.insert('issuers',{issuer_id:B,status:'active',cik:'2'});
-  await tables.insert('issuer_securities',{issuer_id:B,ticker:'BBB',is_primary:true,valid_from:'2000-01-01',valid_to:null});
-  await tables.insert('security_universe_memberships',{universe:'sp500',ticker:'BBB',is_active:true});
-  const guarded=guardedReconcileDb(db,tables);
-  const stale=[{issuer_id:A,reasons:[],priority:0,fetch_key:'0000000001'},{issuer_id:B,reasons:[],priority:0,fetch_key:'0000000002'}];
-  await guarded.reconcileScope('US',stale);
-  const rows=await db.scopeAll('US');
-  expect(rows.find(r=>r.issuer_id===A)!.priority).toBe(0);
-  expect(rows.find(r=>r.issuer_id===B)!.priority).toBe(10);
- });
- it('delegates other methods untouched',async()=>{
-  const tables=memoryTableClient({});const db=memoryFactsDb(tables);
-  expect(typeof guardedReconcileDb(db,tables).claimLease).toBe('function');
- });
-});

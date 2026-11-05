@@ -563,4 +563,14 @@ describe('runFactsSync — grouped parser evidence',()=>{
   expect((shared.payload as {row:{locator:string}}).row.locator).toBe('l1');
   expect(r.counts).toMatchObject({fetched:3,quarantined:3,failed:0});balanced(r.counts);
  });
+ it("an 'unlinkable' answer (no usable A-share listing) consumes no link attempt, persists nothing and is summarised",async()=>{
+  const linkCn=vi.fn(async()=>'unlinkable' as const);
+  const {db,deps}=harness(parsed([cnFiling()],[cnRevenue()]),{linkCn},CN_SCOPE);
+  const r=await run(deps,{market:'CN'});
+  expect(r.issuers[0].outcome).toBe('published');
+  expect(r.issuers[0].errors).toContainEqual({code:'skipped_summary',key:`${ISSUER}:cninfo_unlinkable`,message:'{"unlinkable":1}'});
+  expect((await db.filingsOfIssuer(ISSUER,'CN',{}))[0]).toMatchObject({document_ref:null,link_attempts:0});
+  for(let i=0;i<7;i++)await run(deps,{market:'CN',issuerIds:[ISSUER]});
+  expect((await db.filingsOfIssuer(ISSUER,'CN',{}))[0].link_attempts).toBe(0);          // never reaches MAX_LINK_ATTEMPTS
+ });
 });

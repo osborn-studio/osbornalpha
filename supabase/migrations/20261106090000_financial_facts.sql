@@ -136,9 +136,11 @@ create table if not exists public.fact_sync_scope (
   last_batch_id    uuid,
   last_status      text check (last_status is null or last_status in ('success','failed')),
   updated_at       timestamptz not null default now(),
+  scope_changed_at timestamptz not null default now(),   -- set only by reconcile_fact_sync_scope when reasons/priority/fetch_key change (retirement guard)
   primary key (issuer_id, market),
   constraint fact_sync_scope_lease_pair check ((lease_until is null) = (lease_batch_id is null))
 );
+alter table public.fact_sync_scope add column if not exists scope_changed_at timestamptz not null default now();
 create index if not exists fact_sync_scope_due_idx on public.fact_sync_scope(market, next_due_at, priority desc, issuer_id) where priority > 0;
 
 -- ---------------------------------------------------------------- 4.7 bucket
@@ -313,7 +315,12 @@ revoke execute on function public.fact_promote_rows(uuid, text, uuid[]) from pub
 -- ---------------------------------------------------------------- 4.5 functions
 -- Schedule inputs only: reasons/priority/fetch_key. Never touches next_due_at, lease_*, state_rev,
 -- last_*. Returns the number of rows inserted or actually changed.
-create or replace function public.reconcile_fact_sync_scope(p_market text, p_rows jsonb)
+drop function if exists public.reconcile_fact_sync_scope(text, jsonb);
+-- p_snapshot_at: when the sources behind p_rows were read. A row being retired (input priority 0 over a stored
+-- priority > 0) is only retired if its scope was not changed after that instant (scope_changed_at <= p_snapshot_at):
+-- a newer reconcile's activation survives an older, stale retirement. Upserts and activations always apply;
+-- null p_snapshot_at applies everything (legacy callers, tests).
+create or replace function public.reconcile_fact_sync_scope(p_market text, p_rows jsonb, p_snapshot_at timestamptz default null)
 returns int language plpgsql security definer set search_path = public as $$
 declare n int;
 begin
@@ -323,14 +330,15 @@ begin
   select distinct on ((x ->> 'issuer_id')) (x ->> 'issuer_id')::uuid, p_market, coalesce(x -> 'reasons', '[]'::jsonb), (x ->> 'priority')::int, x ->> 'fetch_key'
   from jsonb_array_elements(p_rows) x
   on conflict (issuer_id, market) do update
-    set reasons = excluded.reasons, priority = excluded.priority, fetch_key = excluded.fetch_key, updated_at = now()
+    set reasons = excluded.reasons, priority = excluded.priority, fetch_key = excluded.fetch_key, updated_at = now(), scope_changed_at = now()
     where (fact_sync_scope.reasons, fact_sync_scope.priority, fact_sync_scope.fetch_key)
-          is distinct from (excluded.reasons, excluded.priority, excluded.fetch_key);
+          is distinct from (excluded.reasons, excluded.priority, excluded.fetch_key)
+      and (p_snapshot_at is null or excluded.priority > 0 or fact_sync_scope.priority = 0 or fact_sync_scope.scope_changed_at <= p_snapshot_at);
   get diagnostics n = row_count;
   return n;
 end $$;
-revoke execute on function public.reconcile_fact_sync_scope(text, jsonb) from public, anon, authenticated;
-grant execute on function public.reconcile_fact_sync_scope(text, jsonb) to service_role;
+revoke execute on function public.reconcile_fact_sync_scope(text, jsonb, timestamptz) from public, anon, authenticated;
+grant execute on function public.reconcile_fact_sync_scope(text, jsonb, timestamptz) to service_role;
 
 -- Unleased, expired, or held by the same batch → (re)lease and true; otherwise false.
 -- No scope row → false (nothing to lease; reconcile first).

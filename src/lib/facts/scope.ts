@@ -114,7 +114,7 @@ async function desiredUs(tables:TableClient,today:string,skipped:Record<string,n
  * The issuer's A-share ticker among its current securities rows: primary first, else the single
  * candidate; null + reason when none or ambiguous.
  */
-function chooseCnTicker(secs:Row[]):{ticker:string}|{reason:'no_cn_ticker'|'ambiguous_cn_ticker'}{
+export function chooseCnTicker(secs:Row[]):{ticker:string}|{reason:'no_cn_ticker'|'ambiguous_cn_ticker'}{
  const cands=new Map<string,Row>();
  for(const r of secs){const t=normTicker(String(r.ticker));if(CN_TICKER.test(t)&&!B_SHARE.test(t))cands.set(t,r);}
  const narrow=(list:[string,Row][])=>{
@@ -168,7 +168,15 @@ export async function scopeRowFor(tables:TableClient,market:Market,issuerId:stri
  }catch(e){if(e instanceof Error&&FETCH_KEY_ERRORS.has(e.message))return null;throw e;}
 }
 
-export async function reconcileScope(deps:ScopeDeps,market:Market,opts:{today?:string}={}):Promise<ScopeReconcileResult>{
+/**
+ * snapshotAt (default: now, taken BEFORE any source is read) travels with the write: the database
+ * retires a still-active row only if no newer reconcile changed it since (a stale run can no longer
+ * undo another run's activation). The client clock is compared with the database's now(): skew in
+ * either direction only ever delays a retirement to the next reconcile or, for a client clock running
+ * ahead, lets a change made within the skew window be retired — keep the host clock in sync.
+ */
+export async function reconcileScope(deps:ScopeDeps,market:Market,opts:{today?:string;snapshotAt?:string}={}):Promise<ScopeReconcileResult>{
+ const snapshotAt=opts.snapshotAt??new Date().toISOString();
  const today=opts.today??isoToday();
  const skipped:Record<string,number>={};
  const desired=market==='US'?await desiredUs(deps.tables,today,skipped):await desiredCn(deps.tables,today,skipped);
@@ -178,6 +186,6 @@ export async function reconcileScope(deps:ScopeDeps,market:Market,opts:{today?:s
   .filter(r=>Number(r.priority)>0&&!wanted.has(String(r.issuer_id)))
   .map(r=>({issuer_id:String(r.issuer_id),reasons:[],priority:0,fetch_key:String(r.fetch_key)}));
  const rows=[...desired,...retired].sort((a,b)=>a.issuer_id<b.issuer_id?-1:a.issuer_id>b.issuer_id?1:0);
- const changed=rows.length===0?0:await deps.db.reconcileScope(market,rows);
+ const changed=rows.length===0?0:await deps.db.reconcileScope(market,rows,snapshotAt);
  return {desired:desired.length,retired:retired.length,changed,skipped};
 }

@@ -156,7 +156,7 @@ export function supabaseFactsDb(client:SupabaseClient):FactsDb{
    },opts.limit)).map(filingFromTable);
   },
   async updateFilingLink(filingId,patch){const {error}=await c.from('filings').update(linkPatch(patch)).eq('filing_id',filingId);if(error)throw toFactsDbError(error);},
-  async reconcileScope(market,input){return Number(await call<unknown>('reconcile_fact_sync_scope',{p_market:market,p_rows:input}));},
+  async reconcileScope(market,input,snapshotAt){return Number(await call<unknown>('reconcile_fact_sync_scope',{p_market:market,p_rows:input,p_snapshot_at:snapshotAt??null}));},
   async scopeDue(market,now,limit){
    if(limit<1)return [];
    return (await pageAll<Record<string,unknown>>(()=>c.from('fact_sync_scope').select('*').eq('market',market).gt('priority',0).lte('next_due_at',now).order('next_due_at').order('priority',{ascending:false}).order('issuer_id'),limit)).map(scopeFromTable);
