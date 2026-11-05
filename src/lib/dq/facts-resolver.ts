@@ -26,7 +26,9 @@ export interface HookState{stage:'materialize'|'done';state:'done'|'failed';at:s
 export type FactsResolveOutcome='resolved'|'not_found'|'already_resolved'|'hook_retried'|'invalid_choice';
 export interface FactsResolveResult{outcome:FactsResolveOutcome;hook?:HookState;promoted?:number;skipped?:number;chosenFactIds?:string[];
  /** What the route should audit: undefined = the outcome itself; null = nothing (retry of an already audited item). */
- auditAs?:'resolved'|'hook_retried'|null}
+ auditAs?:'resolved'|'hook_retried'|null;
+ /** Set when auditAs='resolved' on a retry: the audit row describes the PERSISTED resolution (original resolver, accept, committed ids); the retrying admin is recorded separately. */
+ recovered?:{resolvedBy:string;status:'resolved_accept';chosenFactIds:string[];recoveredBy:string;recoveredAt:string}}
 export interface ResolveFactsInput{status:Exclude<QuarantineStatus,'open'>;chosenFactIds?:string[];resolvedBy:string;now?:()=>Date}
 /** Reason codes whose items reference fact rows; the other three (ambiguous_value, odd_duration, missing_available_date) have none. */
 export const FACT_ROW_REASONS:readonly string[]=['same_day_conflict','identity_bs','identity_gp'];
@@ -83,10 +85,14 @@ export async function resolveFactsItem(db:FactsDb,tables:TableClient,item:Row,in
  const now=input.now??(()=>new Date());const id=String(item.id);const where=target(item);
  if(item.status!=='open'){
   const hook=hookOf(item);
-  if(item.status==='resolved_accept'&&FACT_ROW_REASONS.includes(String(item.reason_code))&&hook?.state!=='done'&&where!==null){
+  if(input.status==='resolved_accept'&&item.status==='resolved_accept'&&FACT_ROW_REASONS.includes(String(item.reason_code))&&hook?.state!=='done'&&where!==null){
    const audited=detailOf(item).audit_written===true;
    const ran=await runHook(db,tables,id,where,now);
-   return {outcome:'hook_retried',hook:ran,auditAs:audited?(ran.state==='done'?'hook_retried':null):'resolved'};
+   const persisted=detailOf(item).chosen_fact_ids;
+   const chosenFactIds=Array.isArray(persisted)?persisted.map(String):[];
+   const base:FactsResolveResult={outcome:'hook_retried',hook:ran,chosenFactIds,auditAs:audited?(ran.state==='done'?'hook_retried':null):'resolved'};
+   if(audited)return base;
+   return {...base,recovered:{resolvedBy:String(item.resolved_by),status:'resolved_accept',chosenFactIds,recoveredBy:input.resolvedBy,recoveredAt:now().toISOString()}};
   }
   return hook===undefined?{outcome:'already_resolved'}:{outcome:'already_resolved',hook};
  }

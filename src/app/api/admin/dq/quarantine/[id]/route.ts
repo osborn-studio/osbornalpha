@@ -75,6 +75,7 @@ export async function POST(request: Request, { params }: Ctx) {
     let auditAs: Outcome | null | undefined;
     let hookFailed = false;
     let isFacts = false;
+    let recovered: Awaited<ReturnType<typeof resolveFactsItem>>['recovered'];
     let extra: Record<string, unknown> = {};
     if (String(item.dataset).startsWith('facts.')) {
       isFacts = true;
@@ -84,6 +85,7 @@ export async function POST(request: Request, { params }: Ctx) {
         });
         outcome = r.outcome;
         auditAs = r.auditAs;
+        recovered = r.recovered;
         hookFailed = r.hook?.state === 'failed';
         extra = { hook: r.hook ?? null, promoted: r.promoted ?? null, skipped: r.skipped ?? null, chosen_fact_ids: r.chosenFactIds ?? null };
       } catch (e) {
@@ -100,7 +102,15 @@ export async function POST(request: Request, { params }: Ctx) {
       // resolving admin). The resolution is already committed, so an audit failure is logged
       // rather than turned into a 500 that would invite a retry answered with 409.
       try {
-        await audit({ supabase: admin as unknown as ResearchSupabase, userId: user.id }, 'dq.quarantine_resolve', id, { id, status, outcome: auditOutcome, ...extra });
+        // A recovered 'resolved' row describes the persisted resolution (original resolver, accept,
+        // committed ids); the retrying admin is recorded separately.
+        if (recovered) {
+          await audit({ supabase: admin as unknown as ResearchSupabase, userId: recovered.resolvedBy }, 'dq.quarantine_resolve', id, {
+            id, status: recovered.status, outcome: auditOutcome, ...extra, chosen_fact_ids: recovered.chosenFactIds, recovered_by: recovered.recoveredBy, recovered_at: recovered.recoveredAt,
+          });
+        } else {
+          await audit({ supabase: admin as unknown as ResearchSupabase, userId: user.id }, 'dq.quarantine_resolve', id, { id, status, outcome: auditOutcome, ...extra });
+        }
         if (isFacts) await markAudited(client, id);
       } catch (auditError) {
         console.error('[admin/dq] audit failed', auditError instanceof Error ? auditError.message : auditError);

@@ -197,6 +197,19 @@ describe('POST /api/admin/dq/quarantine/[id]', () => {
     expect(mocks.markAudited).toHaveBeenCalledWith(client, ID);
   });
 
+  it('a recovered resolved audit row uses the original resolver, accept status and committed ids, and names the retrying admin', async () => {
+    await facts();
+    mocks.requireAdmin.mockResolvedValue({ id: 'retrying-admin' });
+    mocks.resolveFacts.mockResolvedValue({
+      outcome: 'hook_retried', hook: HOOK, chosenFactIds: [FACT_A, FACT_B], auditAs: 'resolved',
+      recovered: { resolvedBy: ADMIN, status: 'resolved_accept', chosenFactIds: [FACT_A, FACT_B], recoveredBy: 'retrying-admin', recoveredAt: HOOK.at },
+    });
+    expect((await json({ status: 'resolved_accept' })).status).toBe(200);
+    expect(mocks.insert.mock.calls[0][0]).toMatchObject({
+      user_id: ADMIN, detail: { status: 'resolved_accept', outcome: 'resolved', chosen_fact_ids: [FACT_A, FACT_B], recovered_by: 'retrying-admin', recovered_at: HOOK.at },
+    });
+  });
+
   it('retry of an already audited item writes no second audit row (null) and a hook_retried one when it finally succeeds', async () => {
     await facts();
     mocks.resolveFacts.mockResolvedValue({ outcome: 'hook_retried', hook: { ...HOOK, state: 'failed' }, auditAs: null });

@@ -83,7 +83,7 @@ describe('resolveFactsItem',()=>{
   await tables.update('dq_quarantine',{id:it_.id},{status:'resolved_accept',resolved_by:ADMIN,resolved_at:'x'});
   const later=()=>new Date('2026-11-04T10:00:00.000Z');
   const second=await resolveFactsItem(db,tables,await row(String(it_.id)),{status:'resolved_accept',resolvedBy:ADMIN,now:later});
-  expect(second).toEqual({outcome:'hook_retried',hook:{stage:'done',state:'done',at:'2026-11-04T10:00:00.000Z'},auditAs:'resolved'});
+  expect(second).toMatchObject({outcome:'hook_retried',hook:{stage:'done',state:'done',at:'2026-11-04T10:00:00.000Z'},auditAs:'resolved'});
   expect(resolve).toHaveBeenCalledTimes(1);
   expect(mocks.materialize).toHaveBeenCalledTimes(2);
   const third=await resolveFactsItem(db,tables,await row(String(it_.id)),{status:'resolved_accept',resolvedBy:ADMIN});
@@ -126,7 +126,7 @@ describe('resolveFactsItem',()=>{
    const it_=await item('identity_bs',[A]);
    await tables.update('dq_quarantine',{id:it_.id},{status:'resolved_accept',resolved_by:ADMIN,resolved_at:'x',detail});
    const r=await resolveFactsItem(db,tables,await row(String(it_.id)),{status:'resolved_accept',resolvedBy:ADMIN,now:NOW});
-   expect(r).toEqual({outcome:'hook_retried',hook:{stage:'done',state:'done',at:'2026-11-04T09:00:00.000Z'},auditAs:'resolved'});
+   expect(r).toMatchObject({outcome:'hook_retried',hook:{stage:'done',state:'done',at:'2026-11-04T09:00:00.000Z'},auditAs:'resolved'});
    expect(resolve).not.toHaveBeenCalled();
    expect(mocks.materialize).toHaveBeenCalledTimes(1);
    await markAudited(tables,String(it_.id));
@@ -152,6 +152,19 @@ describe('resolveFactsItem',()=>{
   const r=await resolveFactsItem(db,tables,it_,{status:'resolved_accept',resolvedBy:ADMIN,now:NOW});
   expect(r.hook).toEqual({stage:'materialize',state:'failed',at:'2026-11-04T09:00:00.000Z',message:'no_target'});
   expect(mocks.materialize).not.toHaveBeenCalled();
+ });
+ it('a different admin recovering an unfinished accept gets a recovered record of the persisted resolution; a reject POST on an accepted item never retries',async()=>{
+  const {tables,db,resolve,item,row}=harness();
+  const OTHER='11111111-2222-4333-8444-555555555555';
+  const it_=await item('same_day_conflict',[A,B]);
+  await tables.update('dq_quarantine',{id:it_.id},{status:'resolved_accept',resolved_by:ADMIN,resolved_at:'x',detail:{chosen_fact_ids:[A,B],hook:{stage:'materialize',state:'pending',at:'x'}}});
+  expect(await resolveFactsItem(db,tables,await row(String(it_.id)),{status:'resolved_reject',resolvedBy:OTHER})).toMatchObject({outcome:'already_resolved'});
+  expect(mocks.materialize).not.toHaveBeenCalled();
+  const r=await resolveFactsItem(db,tables,await row(String(it_.id)),{status:'resolved_accept',resolvedBy:OTHER,now:NOW});
+  expect(r.auditAs).toBe('resolved');
+  expect(r.chosenFactIds).toEqual([A,B]);
+  expect(r.recovered).toEqual({resolvedBy:ADMIN,status:'resolved_accept',chosenFactIds:[A,B],recoveredBy:OTHER,recoveredAt:'2026-11-04T09:00:00.000Z'});
+  expect(resolve).not.toHaveBeenCalled();
  });
  it('rejects through the generic transition and never touches fact rows',async()=>{
   const {tables,db,resolve,item,row}=harness();
