@@ -8,6 +8,10 @@ import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {pgTableClient} from '../db/pg-table-client';
+import {EvalError} from './errors';
+import {evalStore,persistRun} from './store';
+import type {EvalStore} from './store';
+import type {CaseReport,EvalReport,Summary} from './types';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261110090000_dq_eval_runs.sql';
@@ -160,5 +164,103 @@ describe.skipIf(!enabled)('F6 dq_eval_runs / dq_eval_case_results on real Postgr
   for(const k of ['left_text','right_text','abs_diff','rel_diff','tolerance'] as const)expect({k,v:back[k]}).toEqual({k,v:row[k]});
   expect(typeof back.left_text).toBe('string');
   expect(back.detail).toEqual({locator:{page:1}});
+ });
+});
+
+// ── Task 6: persistRun (spec §6.3) on real PostgreSQL ──
+
+const SUMMARY:Summary={
+ population:3,required:3,correctness:{pass:1,fail:1,unit_mismatch:0,provenance_incomplete:0,unexplained_diff:0},
+ coverage:{evaluated:2,evaluated_optional:0,missing_required:1,missing_optional:0,not_visible:0,skipped:0},execution:{read_error:0,truncated:0,subset:false},
+ thresholds:{max_fail:0,min_coverage_optional:'0.95'},gold:{format:'f6',ready:true,pending:0,provenance_gaps:0},
+ gate:'incomplete',evidence_class:'truth',reconciliations_truncated:false,
+};
+const storeCase=(case_id:string,outcome:CaseReport['outcome'],left:string|null,right:string|null):CaseReport=>({
+ case_id,required:true,outcome,left,right,abs_diff:left&&right?'1':null,rel_diff:left&&right?'0.0099009900':null,tolerance:'0',provenance:null,detail:{locator:{page:28}},
+});
+const storeReport=(run_id:string):EvalReport=>({
+ schema_version:1,run_id,kind:'official_reconciliation',module:'facts',mode:'ci',privileged:false,artifact_class:'public',
+ set:{id:'facts/synthetic-us',version:1,sha256:'a'.repeat(64),format:'f6',path:'src/lib/evals/fixtures/gold/facts/synthetic-us.json'},
+ evaluator_code_version:'b'.repeat(40),dirty:false,started_at:'2026-11-10T00:00:00.000Z',finished_at:'2026-11-10T00:01:00.000Z',
+ environment:{db_host:null,app_origin:null,db_state_rev:1},thresholds:{max_fail:0,min_coverage_optional:'0.95'},provenance:{verified:{artifacts:false,sources:false}},
+ summary:SUMMARY,
+ cases:[storeCase('A/pass',{result:'pass'},'100','100'),storeCase('B/fail',{result:'fail',reason:'value'},'12345678901234567891','12345678901234567890'),storeCase('C/missing',{result:'missing'},null,'100')],
+});
+
+describe.skipIf(!enabled)('F6 persistRun on real PostgreSQL (interrupt + resume, concurrent resume)',()=>{
+ let admin:Pool;let store:EvalStore;
+ const runs:string[]=[];
+ const newRunId=()=>{const id=randomUUID();runs.push(id);return id;};
+ const filesOf=(id:string)=>({ref:`reports/evals/${id}.json`,sha256:'c'.repeat(64)});
+ const state=async(id:string)=>({
+  run:(await admin.query(`select status,finished_at is not null finished,summary from public.dq_eval_runs where run_id=$1`,[id])).rows,
+  cases:(await admin.query(`select case_id,result,left_text from public.dq_eval_case_results where eval_run_id=$1 order by case_id`,[id])).rows,
+ });
+ beforeAll(async()=>{
+  const s=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
+  admin=new Pool({connectionString:s.adminUrl,max:6});
+  store=evalStore(pgTableClient(admin));
+ });
+ afterAll(async()=>{
+  if(admin){
+   await admin.query(`delete from public.dq_eval_case_results where eval_run_id=any($1::uuid[])`,[runs]);
+   await admin.query(`delete from public.dq_eval_runs where run_id=any($1::uuid[])`,[runs]);
+   await admin.end();
+  }
+ });
+
+ it('persists a run end to end: terminal status, summary, only the non-pass case rows with exact text decimals',async()=>{
+  const id=newRunId();
+  await persistRun(store,storeReport(id),filesOf(id),{triggeredBy:'ci'});
+  const s=await state(id);
+  expect(s.run).toEqual([{status:'incomplete',finished:true,summary:SUMMARY}]);
+  expect(s.cases).toEqual([{case_id:'B/fail',result:'fail',left_text:'12345678901234567891'},{case_id:'C/missing',result:'missing',left_text:null}]);
+  expect((await store.getRun(id))?.report_sha256).toBe('c'.repeat(64));
+ });
+
+ it('interrupted after step 3 leaves the run running; --resume completes it without duplicating case rows',async()=>{
+  const id=newRunId();
+  const crashing:EvalStore={...store,finishRun:async()=>{throw new Error('process killed');}};
+  await expect(persistRun(crashing,storeReport(id),filesOf(id),{triggeredBy:'script'})).rejects.toMatchObject({code:'store_partial'});
+  let s=await state(id);
+  expect(s.run.map(r=>r.status)).toEqual(['running']);expect(s.cases).toHaveLength(2);
+  await expect(persistRun(store,storeReport(id),{...filesOf(id),sha256:'d'.repeat(64)},{triggeredBy:'script',resume:true})).rejects.toBeInstanceOf(EvalError);
+  await persistRun(store,storeReport(id),filesOf(id),{triggeredBy:'script',resume:true});
+  s=await state(id);
+  expect(s.run.map(r=>r.status)).toEqual(['incomplete']);expect(s.cases).toHaveLength(2);
+ });
+
+ it('interrupted inside step 3 (after the first case row) resumes to the full set of case rows',async()=>{
+  const id=newRunId();let n=0;
+  const crashing:EvalStore={...store,insertCaseResult:async r=>{if(++n===2)throw new Error('connection reset');await store.insertCaseResult(r);}};
+  await expect(persistRun(crashing,storeReport(id),filesOf(id),{triggeredBy:'script'})).rejects.toMatchObject({code:'store_partial'});
+  expect((await state(id)).cases.map(r=>r.case_id)).toEqual(['B/fail']);
+  await persistRun(store,storeReport(id),filesOf(id),{triggeredBy:'script',resume:true});
+  const s=await state(id);
+  expect(s.run.map(r=>r.status)).toEqual(['incomplete']);expect(s.cases.map(r=>r.case_id)).toEqual(['B/fail','C/missing']);
+ });
+
+ it('two concurrent resumes both succeed with exactly one terminal row and no duplicate case rows',async()=>{
+  const id=newRunId();
+  const crashing:EvalStore={...store,insertCaseResult:async()=>{throw new Error('crash before any case row');}};
+  await expect(persistRun(crashing,storeReport(id),filesOf(id),{triggeredBy:'script'})).rejects.toMatchObject({code:'store_partial'});
+  const results=await Promise.allSettled([
+   persistRun(evalStore(pgTableClient(admin)),storeReport(id),filesOf(id),{triggeredBy:'script',resume:true}),
+   persistRun(evalStore(pgTableClient(admin)),storeReport(id),filesOf(id),{triggeredBy:'script',resume:true}),
+  ]);
+  expect(results.map(r=>r.status)).toEqual(['fulfilled','fulfilled']);
+  const s=await state(id);
+  expect(s.run).toEqual([{status:'incomplete',finished:true,summary:SUMMARY}]);
+  expect(s.cases.map(r=>r.case_id)).toEqual(['B/fail','C/missing']);
+  expect((await admin.query(`select count(*)::int n from public.dq_eval_case_results where eval_run_id=$1`,[id])).rows[0].n).toBe(2);
+ });
+
+ it('a conflicting stored case row stops the resume with store_conflict and keeps the run running',async()=>{
+  const id=newRunId();
+  const crashing:EvalStore={...store,insertCaseResult:async()=>{throw new Error('crash');}};
+  await expect(persistRun(crashing,storeReport(id),filesOf(id),{triggeredBy:'script'})).rejects.toMatchObject({code:'store_partial'});
+  await admin.query(`insert into public.dq_eval_case_results(eval_run_id,case_id,result,reason,left_text,right_text,abs_diff,rel_diff,tolerance,detail) values($1,'B/fail','fail','value','999','12345678901234567890','1','0.0099009900','0','{"locator":{"page":28}}')`,[id]);
+  await expect(persistRun(store,storeReport(id),filesOf(id),{triggeredBy:'script',resume:true})).rejects.toMatchObject({code:'store_conflict'});
+  expect((await state(id)).run.map(r=>r.status)).toEqual(['running']);
  });
 });
