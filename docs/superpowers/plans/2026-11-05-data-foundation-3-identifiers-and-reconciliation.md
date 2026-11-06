@@ -13571,7 +13571,7 @@ describe('enrichAcceptance (spec §4.5)',()=>{
  it('writes acceptance for matching filings; a filingDate ≠ available_date becomes a sec.filing_date_vs_submissions result and no write; unknown or time-less accessions are skipped_summary',async()=>{
   const {db,iss,ok,mismatch,snap}=await seeded();
   const record=vi.fn(async()=>{});
-  const submissions=vi.fn(async()=>snap);
+  const submissions=vi.fn(async(_c:string,_b:Budget,_coverFrom:string)=>snap);
   const out=await enrichAcceptance({db,submissions,recordDateMismatch:record},{issuerId:iss,cik10:'0000320193'},budget);
   expect(submissions).toHaveBeenCalledWith('0000320193',budget,'2024-01-25');   // coverFrom = earliest pending available_date − 7 days (plan audit R3)
   expect(out.counts).toMatchObject({fetched:2,inserted:1,duplicates:0,failed:1});
