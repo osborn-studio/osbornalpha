@@ -6,7 +6,7 @@
 // query parameter, or a UUID (user ids are UUIDs; no public provenance value needs one).
 export const PROVENANCE_KEYS=['isin','figi','valid_from','valid_to','pending_change'] as const;
 export const ISSUER_PROVENANCE_KEYS=['lei','cik','usci','cninfo_org_id','hkex_stock_code_primary','canonical_name_zh','canonical_name_en','country_code'] as const;
-export type ProvenanceErrorCode='not_object'|'unknown_key'|'secret_key'|'url_credentials'|'secret_text'|'uuid_value'|'bad_value'|'too_deep'|'too_long';
+export type ProvenanceErrorCode='not_object'|'unknown_key'|'secret_key'|'url_credentials'|'secret_text'|'uuid_value'|'bad_value'|'too_deep'|'too_long'|'too_large';
 
 export class ProvenanceError extends Error{
  constructor(readonly code:ProvenanceErrorCode,readonly path:string){
@@ -15,14 +15,16 @@ export class ProvenanceError extends Error{
  }
 }
 
-// These rules are exactly those of the SQL guard claim_provenance_safe (migration 20261107090000), which
-// is authoritative: TS must reject everything SQL rejects, and adds no check of its own.
-const SECRET_KEY=/(secret|token|passw|api[_-]?key|authorization|user_?id|cookie|credential|private)/i;
+// These rules include every rule of the SQL guard claim_provenance_safe (migration 20261107090000), which
+// is authoritative: TS must reject everything SQL rejects. TS may be stricter (URL userinfo, auth/session/
+// email keys, 8 KB total): a claim then fails at filing instead of at acceptance.
+const SECRET_KEY=/(secret|token|passw|api[_-]?key|apikey|auth|authorization|user_?id|cookie|session|credential|private|email)/i;
 const UUID=/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-const URL_QUERY=/[a-z][a-z0-9+.-]*:\/\/[^\s]*[?#]|\?[^\s]*=/i;
+const URL_QUERY=/[a-z][a-z0-9+.-]*:\/\/[^\s]*[?#]|\?[^\s]*=|:\/\/[^/\s]*@/i;
 const SECRET_TEXT=/(token|secret|passw[a-z]*|api[_-]?key|\bkey)\s*[=:]/i;
 const MAX_DEPTH=4;
 const MAX_STRING=500;
+const MAX_JSON=8192;
 const isPlainObject=(v:unknown):v is Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v)&&Object.getPrototypeOf(v)===Object.prototype;
 
 function clean(v:unknown,path:string,depth:number):unknown{
@@ -53,5 +55,7 @@ function clean(v:unknown,path:string,depth:number):unknown{
 export function sanitizeProvenance(p:unknown,allowed:readonly string[]=PROVENANCE_KEYS):Record<string,unknown>{
  if(!isPlainObject(p))throw new ProvenanceError('not_object','$');
  for(const k of Object.keys(p))if(!allowed.includes(k))throw new ProvenanceError('unknown_key',k);
- return clean(p,'$',0) as Record<string,unknown>;
+ const out=clean(p,'$',0) as Record<string,unknown>;
+ if(JSON.stringify(out).length>MAX_JSON)throw new ProvenanceError('too_large','$');
+ return out;
 }

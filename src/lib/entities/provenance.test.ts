@@ -25,7 +25,9 @@ describe('sanitizeProvenance',()=>{
   expect(code({exchange:'NYSE'})).toBe('unknown_key@exchange');
   expect(code({valid_from:{source:'x',api_key:'k'}})).toBe('secret_key@$.valid_from.api_key');
   expect(code({valid_from:{source:'x',row:{user_id:'u'}}})).toBe('secret_key@$.valid_from.row.user_id');
+  for(const k of ['auth','session_id','email','apikey'])expect(code({valid_from:{[k]:'x'}})).toBe(`secret_key@$.valid_from.${k}`);
   expect(code({isin:{locator:'https://api.example/x?token=abc'}})).toBe('url_credentials@$.isin.locator');
+  expect(code({isin:{locator:'https://bob:pw@example.com/f.csv'}})).toBe('url_credentials@$.isin.locator');
   expect(code({isin:{locator:'https://www.hkex.com.hk/eng/services/trading/securities/securitieslists/ListOfSecurities.xlsx'}})).toBe('ok');
   expect(code({valid_from:{source:'curated',entity:'5f0c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f'}})).toBe('uuid_value@$.valid_from.entity');
   expect(code({figi:{level:Number.POSITIVE_INFINITY}})).toBe('bad_value@$.figi.level');
@@ -34,6 +36,7 @@ describe('sanitizeProvenance',()=>{
   expect(code(null)).toBe('not_object@$');
   expect(code({valid_from:{a:{b:{c:{d:{e:{f:{g:1}}}}}}}})).toBe('too_deep@$.valid_from.a.b.c.d');
   expect(code({figi:{x:'y'.repeat(501)}})).toBe('too_long@$.figi.x');
+  expect(code({figi:Object.fromEntries(Array.from({length:25},(_,i)=>[`k${i}`,'y'.repeat(400)]))})).toBe('too_large@$');
  });
  it('takes another whitelist for issuer provenance',()=>{
   expect(sanitizeProvenance({lei:{source:'gleif',as_of:'2026-11-05'}},ISSUER_PROVENANCE_KEYS)).toEqual({lei:{source:'gleif',as_of:'2026-11-05'}});
