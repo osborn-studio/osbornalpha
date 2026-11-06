@@ -7,7 +7,8 @@
 import {createHash} from 'node:crypto';
 import type {Projection} from './types';
 
-export function canonicalJson(v:unknown):string{
+export function canonicalJson(v:unknown):string{return walk(v,new WeakSet<object>());}
+function walk(v:unknown,ancestors:WeakSet<object>):string{
  if(v===null)return 'null';
  switch(typeof v){
   case 'string':return JSON.stringify(v);
@@ -16,12 +17,27 @@ export function canonicalJson(v:unknown):string{
    if(!Number.isFinite(v))throw new RangeError('canonical_json:non_finite_number');
    return JSON.stringify(v);
   case 'object':{
-   if(Array.isArray(v))return `[${v.map(x=>{if(x===undefined)throw new TypeError('canonical_json:undefined_in_array');return canonicalJson(x);}).join(',')}]`;
-   const proto=Object.getPrototypeOf(v);
-   if(proto!==Object.prototype&&proto!==null)throw new TypeError('canonical_json:not_a_plain_object');
-   const o=v as Record<string,unknown>;
-   const keys=Object.keys(o).filter(k=>o[k]!==undefined).sort();
-   return `{${keys.map(k=>`${JSON.stringify(k)}:${canonicalJson(o[k])}`).join(',')}}`;
+   if(ancestors.has(v))throw new TypeError('canonical_json:cycle');
+   if(!Array.isArray(v)){
+    const proto=Object.getPrototypeOf(v);
+    if(proto!==Object.prototype&&proto!==null)throw new TypeError('canonical_json:not_a_plain_object');
+   }
+   ancestors.add(v);
+   try{
+    if(Array.isArray(v)){
+     const parts:string[]=[];
+     for(let i=0;i<v.length;i++){
+      if(!(i in v))throw new TypeError('canonical_json:sparse_array');
+      const x=v[i];
+      if(x===undefined)throw new TypeError('canonical_json:undefined_in_array');
+      parts.push(walk(x,ancestors));
+     }
+     return `[${parts.join(',')}]`;
+    }
+    const o=v as Record<string,unknown>;
+    const keys=Object.keys(o).filter(k=>o[k]!==undefined).sort();
+    return `{${keys.map(k=>`${JSON.stringify(k)}:${walk(o[k],ancestors)}`).join(',')}}`;
+   }finally{ancestors.delete(v);}
   }
   default:throw new TypeError(`canonical_json:unsupported_${typeof v}`);
  }

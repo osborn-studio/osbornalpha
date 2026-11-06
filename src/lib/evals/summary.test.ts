@@ -119,6 +119,19 @@ describe('gate (§3.2 rules)',()=>{
   expect(summarize(eighteenOfTwenty,ctx()).gate).toBe('incomplete');
   expect(summarize([rep(PASS),rep({result:'missing'},false)],ctx({thresholds:{max_fail:0,min_coverage_optional:'0'}})).gate).toBe('pass');
  });
+ it('rule 3 denominator: skipped(unavailable) optional cases stay in the denominator',()=>{
+  const cases=[rep(PASS),...Array.from({length:18},()=>rep(PASS,false)),rep({result:'skipped',reason:'unavailable'},false),rep({result:'skipped',reason:'unavailable'},false)];
+  const s=summarize(cases,ctx());
+  expect(s.coverage.evaluated_optional).toBe(18);expect(s.population-s.required).toBe(20);
+  expect(s.gate).toBe('incomplete');
+ });
+ it('min_coverage_optional outside [0,1] is a RangeError',()=>{
+  const base=summarize([rep(PASS),rep(PASS,false)],ctx());
+  const {gate:_g,...rest}=base;
+  for(const bad of ['-0.1','1.1','2'])expect(()=>gateOf({...rest,thresholds:{max_fail:0,min_coverage_optional:bad}}),bad).toThrow(RangeError);
+  expect(gateOf({...rest,thresholds:{max_fail:0,min_coverage_optional:'1'}})).toBe('pass');
+  expect(gateOf({...rest,thresholds:{max_fail:0,min_coverage_optional:'0'}})).toBe('pass');
+ });
  it('gateOf decides from a summary alone',()=>{
   const s=summarize([rep(PASS)],ctx());
   const {gate:_gate,...rest}=s;
@@ -133,6 +146,10 @@ describe('goldBlockOf / exitCodeOf / statusOfGate',()=>{
  it('counts pending and gap cases among non-retracted cases only',()=>{
   const set={format:'legacy_plan2',ready:false,cases:[gc({pending:true,provenance_gaps:['source.sha256']}),gc({provenance_gaps:['printed']}),gc({pending:true,provenance_gaps:['x'],retracted:{at:'2026-11-06',by:'owner',reason:'r'}}),gc({})]} as unknown as GoldSet;
   expect(goldBlockOf(set)).toEqual({format:'legacy_plan2',ready:false,pending:1,provenance_gaps:2});
+ });
+ it('counts gaps per case, not per gap entry',()=>{
+  const set={format:'legacy_plan2',ready:true,cases:[gc({provenance_gaps:['source.sha256','reviewed_by']})]} as unknown as GoldSet;
+  expect(goldBlockOf(set).provenance_gaps).toBe(1);
  });
  it('maps gates to exit codes and run statuses',()=>{
   expect([exitCodeOf('pass'),exitCodeOf('fail'),exitCodeOf('incomplete')]).toEqual([0,1,3]);

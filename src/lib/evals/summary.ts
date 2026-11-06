@@ -6,7 +6,7 @@
 // - population = cases whose outcome is not skipped(retracted); required = those with required=true.
 // - Retracted cases still count in coverage.skipped (§3.3 row "skipped(retracted | subset)").
 // - evaluated / evaluated_optional = population cases (all / required=false) whose outcome lands in any
-//   correctness counter (pass, expected_absent and fail alike).
+//   correctness counter (pass, fail, unit_mismatch, provenance_incomplete, unexplained_diff).
 // - read_error(truncated) increments execution.read_error AND execution.truncated.
 // - data_drift with ≥ 1 ledger id → pass, with none → unexplained_diff; an explained_diff or
 //   beyond_explained without a ledger id is treated as unexplained (an explanation needs an entry).
@@ -76,13 +76,14 @@ export function summarize(cases:CaseReport[],ctx:SummaryContext):Summary{
  *  was evaluated (coverage.evaluated = the sum of the correctness counters = 0; Codex plan round 1 P1-1): a run whose
  *  population is entirely skipped(unavailable|zero_support|ineligible|…) is never a pass. */
 export function gateOf(s:Omit<Summary,'gate'>):Gate{
+ const min=parseDecimalParts(s.thresholds.min_coverage_optional);
+ if(min.unscaled<0n||min.unscaled>10n**BigInt(min.scale))throw new RangeError('invalid_threshold:min_coverage_optional');
  if(s.population===0||s.coverage.evaluated===0||s.execution.read_error>0||s.execution.subset||s.coverage.missing_required>0||s.coverage.not_visible>0
   ||!s.gold.ready||s.gold.pending>0||s.gold.provenance_gaps>0)return 'incomplete';
  const failures=s.correctness.fail+s.correctness.unit_mismatch+s.correctness.provenance_incomplete+s.correctness.unexplained_diff;
  if(failures>s.thresholds.max_fail)return 'fail';
  const optional=s.population-s.required;
  if(optional>0){
-  const min=parseDecimalParts(s.thresholds.min_coverage_optional);
   // evaluated_optional / optional < min  ⇔  evaluated_optional·10^scale < unscaled·optional
   if(BigInt(s.coverage.evaluated_optional)*10n**BigInt(min.scale)<min.unscaled*BigInt(optional))return 'incomplete';
  }

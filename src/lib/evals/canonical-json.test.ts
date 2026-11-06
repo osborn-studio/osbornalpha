@@ -30,6 +30,22 @@ describe('canonicalJson',()=>{
  });
 });
 
+describe('canonicalJson: sparse arrays and cycles',()=>{
+ it('rejects holes in sparse arrays',()=>{
+  expect(()=>canonicalJson(Array(1))).toThrow(new TypeError('canonical_json:sparse_array'));
+  expect(()=>canonicalJson(Array(2))).toThrow(TypeError);
+  expect(()=>canonicalJson({a:{b:[1,,3]}})).toThrow(new TypeError('canonical_json:sparse_array'));
+ });
+ it('rejects cycles but allows shared (non-cyclic) references',()=>{
+  const a:Record<string,unknown>={};a.self=a;
+  expect(()=>canonicalJson(a)).toThrow(new TypeError('canonical_json:cycle'));
+  const arr:unknown[]=[];arr.push(arr);
+  expect(()=>canonicalJson(arr)).toThrow(new TypeError('canonical_json:cycle'));
+  const shared={x:'1'};
+  expect(canonicalJson({a:shared,b:shared})).toBe('{"a":{"x":"1"},"b":{"x":"1"}}');
+ });
+});
+
 describe('sha256Hex / projectionHash',()=>{
  it('hashes strings as UTF-8 and bytes as given',()=>{
   expect(sha256Hex('abc')).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
