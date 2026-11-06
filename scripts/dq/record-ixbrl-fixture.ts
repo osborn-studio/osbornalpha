@@ -1,0 +1,61 @@
+// scripts/dq/record-ixbrl-fixture.ts
+/**
+ * Records a reproducible trimmed inline XBRL fixture from a real SEC primary document (plan 3 Task 13c).
+ *
+ *   npx tsx scripts/dq/record-ixbrl-fixture.ts --cik 320193 --accn 0000320193-23-000106 --out src/lib/dq/fixtures/ixbrl/aapl-20230930.trimmed.htm
+ *
+ * 1. GET https://data.sec.gov/submissions/CIK##########.json and find the accession in filings.recent
+ *    (primaryDocument, isInlineXBRL, form, filingDate, reportDate) plus the top-level category and
+ *    fiscalYearEnd. An accession only reachable through filings.files[] pages is refused (exit 1).
+ * 2. GET https://www.sec.gov/Archives/edgar/data/<cik>/<accession without dashes>/<primaryDocument>.
+ * 3. trimInlineXbrl(document, {keep: factConceptKeep, dropDimensional: true}); write <out> and
+ *    <out>.meta.json {source_url, source_sha256, source_bytes, fetched_at, trim_version, parser_version,
+ *    trimmed_sha256, facts, contexts, units, submissions:{url, sha256, accession, form, filingDate,
+ *    reportDate, primaryDocument, isInlineXBRL, category, fiscalYearEnd}}.
+ * User-Agent = EDGAR_USER_AGENT or DEFAULT_USER_AGENT; paced by the process-wide secPacer. Nothing is
+ * written unless both downloads and the trim succeed. Exit 1 on failure, 2 on bad arguments.
+ */
+import {createHash} from 'node:crypto';
+import {writeFileSync} from 'node:fs';
+import {DEFAULT_USER_AGENT} from '../../src/lib/research/ingest/collectors/shared';
+import {budgetFor,secPacer} from '../../src/lib/facts/providers/shared';
+import {IXBRL_PARSER_VERSION,MAX_IXBRL_BYTES} from '../../src/lib/dq/reconcile/ixbrl';
+import {IXBRL_TRIM_VERSION,factConceptKeep,trimInlineXbrl} from '../../src/lib/dq/reconcile/ixbrl-trim';
+
+const USAGE='usage: record-ixbrl-fixture.ts --cik <digits> --accn <##########-##-######> --out <path.htm>';
+const sha=(b:Uint8Array|string)=>createHash('sha256').update(b).digest('hex');
+
+async function get(url:string):Promise<Uint8Array>{
+ await secPacer.admit({budget:budgetFor(120_000),reserveMs:0});   // the one process-wide SEC pacer
+ const res=await fetch(url,{headers:{'User-Agent':process.env.EDGAR_USER_AGENT??DEFAULT_USER_AGENT,Accept:'*/*'},signal:AbortSignal.timeout(60_000)});
+ if(!res.ok)throw new Error(`http_${res.status} ${url}`);
+ const bytes=new Uint8Array(await res.arrayBuffer());
+ if(bytes.byteLength>MAX_IXBRL_BYTES)throw new Error(`too_large ${url}`);
+ return bytes;
+}
+
+async function main(){
+ const argv=process.argv.slice(2);let cik='',accn='',out='';
+ for(let i=0;i<argv.length;i+=2){const k=argv[i],v=argv[i+1]??'';if(k==='--cik')cik=v;else if(k==='--accn')accn=v;else if(k==='--out')out=v;else{console.error(USAGE);process.exit(2);}}
+ if(!/^[1-9]\d{0,9}$/.test(cik)||!/^\d{10}-\d{2}-\d{6}$/.test(accn)||!out.endsWith('.htm')){console.error(USAGE);process.exit(2);}
+ const subUrl=`https://data.sec.gov/submissions/CIK${cik.padStart(10,'0')}.json`;
+ const subBytes=await get(subUrl);
+ const sub=JSON.parse(new TextDecoder().decode(subBytes)) as {category?:string;fiscalYearEnd?:string;filings?:{recent?:Record<string,unknown[]>}};
+ const recent=sub.filings?.recent??{};
+ const idx=(recent.accessionNumber??[]).indexOf(accn);
+ if(idx<0)throw new Error(`accession ${accn} not in filings.recent (filings.files pages are not supported by this recorder)`);
+ const at=(k:string)=>(recent[k]??[])[idx];
+ const primaryDocument=String(at('primaryDocument')??'');
+ if(!primaryDocument)throw new Error('no primaryDocument');
+ const sourceUrl=`https://www.sec.gov/Archives/edgar/data/${cik}/${accn.replace(/-/g,'')}/${primaryDocument}`;
+ const source=await get(sourceUrl);
+ const trimmed=trimInlineXbrl(new TextDecoder('utf-8').decode(source),{keep:factConceptKeep,dropDimensional:true});
+ const meta={source_url:sourceUrl,source_sha256:sha(source),source_bytes:source.byteLength,fetched_at:new Date().toISOString(),trim_version:IXBRL_TRIM_VERSION,parser_version:IXBRL_PARSER_VERSION,
+  trimmed_sha256:sha(trimmed.html),facts:trimmed.facts,contexts:trimmed.contexts,units:trimmed.units,
+  submissions:{url:subUrl,sha256:sha(subBytes),accession:accn,form:at('form')??null,filingDate:at('filingDate')??null,reportDate:at('reportDate')??null,primaryDocument,isInlineXBRL:at('isInlineXBRL')===1||at('isInlineXBRL')===true,category:sub.category??null,fiscalYearEnd:sub.fiscalYearEnd??null}};
+ writeFileSync(out,trimmed.html);
+ writeFileSync(`${out}.meta.json`,`${JSON.stringify(meta,null,1)}\n`);
+ console.log(JSON.stringify({out,source_sha256:meta.source_sha256,trimmed_sha256:meta.trimmed_sha256,facts:trimmed.facts}));
+}
+
+main().catch(e=>{console.error(e instanceof Error?e.message:String(e));process.exit(1);});
