@@ -5,7 +5,7 @@
 import {describe,it,expect} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import type {SecExchangeRow} from '../research/entity-keys/parsers';
-import {applySecLoad,checkSnapshot,detectTickerChanges,fileTickerIndex,lastSeenFromSnapshots,planSecLoad,sameSecTicker,snapshotMetaOf,unknownIdentities,type TickerChangeDeps} from './load-sec';
+import {applySecLoad,checkSnapshot,detectTickerChanges,fileTickerIndex,lastSeenFromSnapshots,lastSeenInReceipts,planSecLoad,priorSnapshots,recordRefusal,sameSecTicker,snapshotMetaOf,unknownIdentities,type TickerChangeDeps} from './load-sec';
 import {parseSecCompanyTickersExchange} from '../research/entity-keys/parsers';
 import type {Row,TableClient} from '../db/table-client';
 import {resolveIssuer} from './resolve';
@@ -18,7 +18,7 @@ const CIK='1000001',OTHER='1000002';
 const UNIVERSE=new Set(['OLD','NEW','BRK.B','BRK.A']);
 const snap=(sha:string)=>`sec-tickers-exchange/${sha}.json`;
 const r=(cik:string,ticker:string):SecExchangeRow=>({cik,name:cik===CIK?'ZZ Change Co':'ZZ Other Co',ticker,exchange:'Nasdaq'});
-const KEYS={issuers:['issuer_id'],issuer_identifier_claims:['id'],dq_quarantine:['id']};
+const KEYS={issuers:['issuer_id'],issuer_identifier_claims:['id'],dq_quarantine:['id'],ingest_batches:['batch_id'],dq_freshness:['dataset']};
 const confirmed=(tickers:string[]):TickerChangeDeps['confirm']=>async()=>({tickers,sha256:H('e')});
 async function run(c:TableClient&{rows(t:string):Row[]},rows:SecExchangeRow[],asOf:string,fileSha:string,confirm=confirmed(['NEW']),rejected:{cik?:string;ticker?:string}[]=[],lastSeen:TickerChangeDeps['lastSeenAsOf']=async()=>T0){
  await applySecLoad(c,planSecLoad(rows,UNIVERSE,asOf),{asOf,batchId:BATCH,batchProducerMeta:{sourceRows:rows.length,rejected:[]}});
@@ -212,5 +212,79 @@ describe('review fixes',()=>{
   await run(c,[r(CIK,'NEW')],T2,H('2'),confirmed(['NEW']),[],async(cik,t,b)=>{seen.push([cik,t,b]);return null;});
   expect(seen).toEqual([[CIK,'OLD',T1]]);
   expect(prov(rowOf(c,'OLD')).valid_to!.last_seen_as_of).toBeNull();
+ });
+});
+
+describe('review round 2',()=>{
+ it('a refused apply leaves a rejected batch with the code and a failed freshness attempt',async()=>{
+  const c=memoryTableClient(KEYS);
+  const id=await recordRefusal(c,{dataset:'entities.sec',cadence:'daily',toolVersions:{file:'x.json',as_of:T1,fetched_at:F(T1)},code:'stale_snapshot'});
+  expect(c.rows('ingest_batches')).toHaveLength(1);
+  expect(c.rows('ingest_batches')[0]).toMatchObject({batch_id:id,status:'rejected',dataset:'entities.sec'});
+  expect((c.rows('ingest_batches')[0].errors as {code:string}[]).map(e=>e.code)).toEqual(['stale_snapshot']);
+  expect(c.rows('dq_freshness')[0]).toMatchObject({dataset:'entities.sec',consecutive_errors:1});
+  expect(await priorSnapshots(c,'entities.sec')).toEqual([]);      // a refusal is never a prior snapshot
+ });
+ it('last-seen search covers more than 50 receipts (paginated), stopping at the latest match',async()=>{
+  const c=memoryTableClient(KEYS);
+  for(let i=0;i<120;i++){
+   const d=new Date(Date.UTC(2026,0,1)+i*86_400_000).toISOString().slice(0,10);
+   await c.insert('ingest_batches',{batch_id:`00000000-0000-4000-8000-${String(i).padStart(12,'0')}`,dataset:'entities.sec',status:'success',started_at:`${d}T06:00:00.000Z`,tool_versions:{as_of:d,fetched_at:`${d}T06:00:00.000Z`,rows:'1',sha256:H('1'),raw_path:`sec-tickers-exchange/${d}.json`}});
+  }
+  const receipts=await priorSnapshots(c,'entities.sec');
+  expect(receipts).toHaveLength(120);expect(receipts[0].as_of>receipts[119].as_of).toBe(true);
+  const loaded:string[]=[];
+  const load=async(p:string)=>{loaded.push(p);return p.includes('2026-01-03')?[r(CIK,'OLD')]:[r(CIK,'NEW')];};
+  expect(await lastSeenInReceipts(receipts,load,CIK,'OLD','2026-06-01')).toBe('2026-01-03');
+  expect(loaded.length).toBe(118);      // everything newer than the only hit within the window was examined
+  expect(await lastSeenInReceipts(receipts,async()=>[r(OTHER,'OLD')],CIK,'OLD','2026-06-01')).toBeNull();
+ });
+ it('the unavailable reason of the second source is kept in sec_unavailable',async()=>{
+  const c=memoryTableClient(KEYS);
+  await run(c,[r(CIK,'OLD')],T0,H('0'));
+  await run(c,[r(CIK,'NEW')],T1,H('1'));
+  const t2=await run(c,[r(CIK,'NEW')],T2,H('2'),async()=>({unavailable:'sec_unavailable: http_503'}));
+  expect(t2.errors.find(e=>e.code==='sec_unavailable')?.message).toContain('http_503');
+  expect(rowOf(c,'OLD').valid_to).toBeNull();
+ });
+ const cycle=async(c:TableClient&{rows(t:string):Row[]},afterFirstClose?:()=>void)=>{
+  await run(c,[r(CIK,'OLD')],T0,H('0'));
+  await run(c,[r(CIK,'NEW')],T1,H('1'));
+  await run(c,[r(CIK,'NEW')],T2,H('2'));                              // first close (valid_to T1)
+  afterFirstClose?.();
+  await run(c,[r(CIK,'OLD'),r(CIK,'NEW')],T3,H('5'));                 // reappears: new row from T3
+  await run(c,[r(CIK,'NEW')],'2026-11-21',H('6'));                    // first miss again
+  return run(c,[r(CIK,'NEW')],'2026-11-30',H('7'));                   // second close (valid_to 2026-11-21)
+ };
+ it('close, reappear, close again: the second close evidence is appended to the pending claim',async()=>{
+  const c=memoryTableClient(KEYS);
+  const last=await cycle(c);
+    expect(c.rows('issuer_identifier_claims')).toHaveLength(1);
+  const d=c.rows('issuer_identifier_claims')[0].detail as {evidence:{evidence_sha256:string};sources:{evidence_sha256:string}[]};
+  expect([d.evidence,...d.sources].map(e=>e.evidence_sha256).sort()).toEqual([H('2'),H('7')].sort());
+ });
+ it('close, claim resolved, reappear, close again whose claim write fails: the repair files THIS close (an older resolved claim is not enough)',async()=>{
+  const mem=memoryTableClient(KEYS);
+  let fail=false;
+  const c=new Proxy(mem,{get(t,k,rcv){
+   if(k==='insert')return async(table:string,row:Row)=>{if(fail&&table==='issuer_identifier_claims')throw new Error('boom');return t.insert(table,row);};
+   const v=Reflect.get(t,k,rcv);return typeof v==='function'?v.bind(t):v;
+  }}) as unknown as typeof mem;
+  await run(c,[r(CIK,'OLD')],T0,H('0'));
+  await run(c,[r(CIK,'NEW')],T1,H('1'));
+  await run(c,[r(CIK,'NEW')],T2,H('2'));
+  await mem.update('issuer_identifier_claims',{id:mem.rows('issuer_identifier_claims')[0].id},{status:'accepted',resolved_at:new Date().toISOString()});
+  await run(c,[r(CIK,'OLD'),r(CIK,'NEW')],T3,H('5'));
+  await run(c,[r(CIK,'NEW')],'2026-11-21',H('6'));
+  fail=true;
+  await run(c,[r(CIK,'NEW')],'2026-11-30',H('7'));
+  expect(mem.rows('issuer_identifier_claims')).toHaveLength(1);
+  fail=false;
+  const next=await run(c,[r(CIK,'NEW')],'2026-12-01',H('8'));
+  expect(next.claims).toBe(1);
+  const claims=mem.rows('issuer_identifier_claims');
+  expect(claims.map(k=>k.status)).toEqual(['accepted','pending']);
+  expect((claims[1].detail as {params:{first_missing_as_of:string}}).params.first_missing_as_of).toBe('2026-11-21');
+  expect((await run(c,[r(CIK,'NEW')],'2026-12-02',H('9'))).claims).toBe(0);
  });
 });

@@ -75,8 +75,8 @@ const MEMORY_RPC:Record<string,(rowsOf:(t:string)=>Row[],a:Row)=>unknown>={
  },
  // Task 5a: guarded evidenced-window write (date + method + one provenance key). Not mirrored: claim_provenance_safe and the no-overlap exclusion (DB suite).
  set_security_window(rowsOf,a){
-  const side=a.p_side,pv=a.p_provenance,nd=a.p_new_date,tm=a.p_to_method===undefined?'delisting':a.p_to_method;
-  if((side!=='from'&&side!=='to')||typeof nd!=='string'||!isObj(pv)||Object.keys(pv).length!==1||!(`valid_${side}` in pv)||(side==='to'&&tm!=='delisting'&&tm!=='sec_file_absent'))
+  const side=a.p_side,pv=a.p_provenance,nd=a.p_new_date,tm='delisting';
+  if((side!=='from'&&side!=='to')||typeof nd!=='string'||!isObj(pv)||Object.keys(pv).length!==1||!(`valid_${side}` in pv)|| 'p_to_method' in a)
    throw new TableError('rpc','set_security_window','invalid_window_write','22023');
   if(!rowsOf('issuers').some(r=>r.issuer_id===a.p_issuer))return 'not_found';
   const row=rowsOf('issuer_securities').find(r=>r.issuer_id===a.p_issuer&&r.ticker===a.p_ticker&&r.valid_from===a.p_valid_from);

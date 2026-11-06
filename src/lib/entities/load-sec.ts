@@ -5,6 +5,8 @@
 // domicile and the file carries no share class, so country_code is never set and share_class is
 // always 'unknown'.
 import {callRpc,selectAll,type Row,type TableClient} from '../db/table-client';
+import {finishBatch,startBatch} from '../dq/batches';
+import {recordAttempt,type Cadence} from '../dq/freshness';
 import {fileClaim} from './claims';
 import {sanitizeProvenance} from './provenance';
 import type {ClaimEvidence} from './types';
@@ -244,9 +246,11 @@ export interface TickerChangeInput{
  /** rejected rows of this file: their CIKs/tickers are unknown, never absent */
  rejected?:readonly {cik?:string;ticker?:string}[];
 }
+/** null / {unavailable} = the second source could not be read: the close is deferred (the message is kept in the error). */
+export type ConfirmResult={tickers:string[];sha256:string;path?:string}|{unavailable:string}|null;
 export interface TickerChangeDeps{
  /** submissions tickers[] for a CIK fetched in this run (the second source); null = SEC unavailable */
- confirm:(cik:string)=>Promise<{tickers:string[];sha256:string;path?:string}|null>;
+ confirm:(cik:string)=>Promise<ConfirmResult>;
  /** as_of of the latest RETAINED snapshot before `before` that listed `ticker` under `cik`, or null */
  lastSeenAsOf:(cik:string,ticker:string,before:string)=>Promise<string|null>;
 }
@@ -264,6 +268,14 @@ const patchProvenance=(client:TableClient,issuer:string,ticker:string,validFrom:
  callRpc(client,'patch_security_provenance',{p_issuer:issuer,p_ticker:ticker,p_valid_from:validFrom,p_set:set,p_remove:remove});
 
 interface CloseEvidence{issuerId:string;cik:string;ticker:string;replacement:string[];firstMissingAsOf:string;asOf:string;closingSha256:string;closingRawPath:string|null;submissionsSha256:string|null}
+/** True when the claim already holds this close: params.first_missing_as_of equals the close's, or an evidence item carries its closing_sha256. */
+function claimCarriesClose(claim:Row,vt:Record<string,unknown>):boolean{
+ const d=(claim.detail&&typeof claim.detail==='object'?claim.detail:{}) as {params?:Record<string,unknown>;evidence?:{evidence_sha256?:unknown};sources?:{evidence_sha256?:unknown}[]};
+ const sha=vt.closing_sha256;
+ if(typeof vt.first_missing_as_of==='string'&&d.params?.first_missing_as_of===vt.first_missing_as_of)return true;
+ return typeof sha==='string'&&(d.evidence?.evidence_sha256===sha||(Array.isArray(d.sources)&&d.sources.some(e=>e?.evidence_sha256===sha)));
+}
+
 /** The evidence_only ticker-change claim of a sec_file_absent close (idempotent: fileClaim appends evidence to a pending twin). */
 async function fileCloseClaim(client:TableClient,e:CloseEvidence):Promise<boolean>{
  const evidence:ClaimEvidence={source:SEC_SOURCE,as_of:e.asOf,evidence_sha256:e.closingSha256,...(e.closingRawPath?{locator:e.closingRawPath}:{})};
@@ -299,7 +311,7 @@ export async function detectTickerChanges(client:TableClient,input:TickerChangeI
   if(!cikCache.has(issuerId)){const [i]=await client.select('issuers',{issuer_id:issuerId},{limit:1});cikCache.set(issuerId,i&&i.status==='active'&&typeof i.cik==='string'?i.cik:null);}
   return cikCache.get(issuerId)!;
  };
- const confirmCache=new Map<string,{tickers:string[];sha256:string;path?:string}|null>();
+ const confirmCache=new Map<string,ConfirmResult>();
  const confirmOf=async(cik:string)=>{if(!confirmCache.has(cik))confirmCache.set(cik,await deps.confirm(cik));return confirmCache.get(cik)!;};
  for(const row of open){
   const ticker=String(row.ticker),issuerId=String(row.issuer_id),validFrom=String(row.valid_from);
@@ -334,7 +346,7 @@ export async function detectTickerChanges(client:TableClient,input:TickerChangeI
    }
    if(Date.parse(input.fetchedAt)-Date.parse(pc.first_missing_fetched_at)<CLOSE_MIN_DAYS*DAY_MS||input.fileSha256===pc.first_missing_sha256){skipped.push('close_pending');continue;}
    const conf=await confirmOf(cik);
-   if(!conf){skipped.push('close_unconfirmed');errors.push({code:'sec_unavailable',key:cik,message:'submissions not available: close deferred'});continue;}
+   if(!conf||'unavailable' in conf){skipped.push('close_unconfirmed');errors.push({code:'sec_unavailable',key:cik,message:`submissions not available: close deferred${conf?` (${conf.unavailable})`:''}`.slice(0,500)});continue;}
    if(conf.tickers.some(t=>sameSecTicker(t,ticker))){skipped.push('close_unconfirmed');continue;}
    if(pc.first_missing_as_of<=validFrom){counts.failed++;errors.push({code:'invalid_window',key:`${ticker}:${validFrom}`,message:`first_missing_as_of ${pc.first_missing_as_of} <= valid_from`});continue;}
    const lastSeen=await deps.lastSeenAsOf(cik,ticker,pc.first_missing_as_of);
@@ -350,10 +362,12 @@ export async function detectTickerChanges(client:TableClient,input:TickerChangeI
  for(const row of await selectAll(client,'issuer_securities',{valid_to_method:'sec_file_absent',source:SEC_SOURCE},'ticker')){
   const ticker=String(row.ticker),issuerId=String(row.issuer_id);
   try{
-   if((await client.select('issuer_identifier_claims',{issuer_id:issuerId,id_type:'ticker',value:ticker,op:'evidence_only'},{limit:1})).length)continue;
-   const cik=await cikOf(issuerId);
    const prov=(row.provenance&&typeof row.provenance==='object'?row.provenance:{}) as Record<string,unknown>;
    const vt=(prov.valid_to&&typeof prov.valid_to==='object'?prov.valid_to:{}) as Record<string,unknown>;
+   // THIS close's evidence must be persisted (any status): an older / unrelated / resolved claim is not enough.
+   const existing=await selectAll(client,'issuer_identifier_claims',{issuer_id:issuerId,id_type:'ticker',value:ticker,op:'evidence_only'},'id');
+   if(existing.some(k=>claimCarriesClose(k,vt)))continue;
+   const cik=await cikOf(issuerId);
    const pc=pendingOf(prov.pending_change);
    if(!cik||typeof vt.as_of!=='string'||typeof vt.closing_sha256!=='string'||typeof vt.first_missing_as_of!=='string'){errors.push({code:'claim_repair_skipped',key:`${ticker}:${String(row.valid_from)}`});continue;}
    if(await fileCloseClaim(client,{issuerId,cik,ticker,replacement:pc?.replacement_tickers??[],firstMissingAsOf:vt.first_missing_as_of,asOf:vt.as_of,closingSha256:vt.closing_sha256,
@@ -364,4 +378,35 @@ export async function detectTickerChanges(client:TableClient,input:TickerChangeI
  const skippedSummary=summarizeSkips(skipped);
  const lead:BatchError[]=claims?[{code:'claims_summary',message:JSON.stringify({evidence_only:claims})}]:[];
  return {counts,errors:withSkippedSummary([...lead,...errors],skippedSummary),skippedSummary,rejectedSummary:{},pending,cleared,closed,claims};
+}
+
+/** Every successful (success/partial) entities.sec receipt, newest first; paginates all of them (never a capped page). */
+export async function priorSnapshots(client:TableClient,dataset:string):Promise<SnapshotMeta[]>{
+ const rows:Row[]=[];
+ for(const status of ['success','partial'])rows.push(...await selectAll(client,'ingest_batches',{dataset,status},'batch_id'));
+ return rows.sort((a,b)=>String(b.started_at).localeCompare(String(a.started_at))).map(snapshotMetaOf).filter((m):m is SnapshotMeta=>m!==null);
+}
+
+/**
+ * as_of of the latest retained receipt (as_of < before, newest first, over ALL receipts) whose archived file
+ * listed the ticker under the CIK; stops at the first hit, null when history is exhausted.
+ */
+export async function lastSeenInReceipts(receipts:readonly SnapshotMeta[],load:(path:string)=>Promise<readonly SecExchangeRow[]|null>,cik:string,ticker:string,before:string):Promise<string|null>{
+ for(const m of [...receipts].sort((a,b)=>b.as_of.localeCompare(a.as_of))){
+  if(!m.raw_path||m.as_of>=before)continue;
+  const rows=await load(m.raw_path);
+  if(rows?.some(r=>r.cik===cik&&sameSecTicker(r.ticker,ticker)))return m.as_of;
+ }
+ return null;
+}
+
+/**
+ * A refused --apply run still leaves evidence: a rejected batch carrying the code, and a failed freshness attempt.
+ * Returns the batch id.
+ */
+export async function recordRefusal(client:TableClient,input:{dataset:string;cadence:Cadence;toolVersions:Record<string,string>;code:string;message?:string}):Promise<string>{
+ const {batchId}=await startBatch(client,{producer:'sec-company-tickers',dataset:input.dataset,toolVersions:input.toolVersions});
+ await finishBatch(client,batchId,{counts:emptyCounts(),errors:[{code:input.code,...(input.message?{message:input.message.slice(0,500)}:{})}],rejected:true});
+ await recordAttempt(client,input.dataset,{ok:false,cadence:input.cadence,detail:{refused:input.code}});
+ return batchId;
 }

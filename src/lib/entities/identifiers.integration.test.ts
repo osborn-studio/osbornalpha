@@ -709,7 +709,7 @@ describe.skipIf(!enabled)('plan 3 migration one: resolve_identifier_claim',()=>{
 
  it('grants the functions to service_role only, keeps the helpers private and has one replace_filing_expectations signature',async()=>{
   const FNS=['public.resolve_identifier_claim(uuid,text,uuid,jsonb)','public.replace_filing_expectations(uuid,text,jsonb,jsonb)','public.claim_calendar_pass(text,uuid)','public.fail_calendar_member(jsonb,uuid,text)','public.finish_calendar_pass(jsonb)',
-   'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb)','public.set_security_identifier(uuid,text,date,text,text,jsonb)','public.set_issuer_identifier(uuid,text,text,jsonb)','public.set_security_window(uuid,text,date,text,date,jsonb,text)','public.patch_security_provenance(uuid,text,date,jsonb,text[])','public.close_security_absent(uuid,text,date,date,text,jsonb)'];
+   'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb)','public.set_security_identifier(uuid,text,date,text,text,jsonb)','public.set_issuer_identifier(uuid,text,text,jsonb)','public.set_security_window(uuid,text,date,text,date,jsonb)','public.patch_security_provenance(uuid,text,date,jsonb,text[])','public.close_security_absent(uuid,text,date,date,text,jsonb)'];
   const HELPERS=['public.claim_text_is_date(text)','public.claim_keys_within(jsonb,text[])','public.claim_evidence_ok(jsonb)','public.identifier_claim_target_key(text,jsonb)','public.identifier_claim_problem(text,text,text,uuid,jsonb)','public.dq_calendar_lock_pass(jsonb)','public.claim_provenance_safe(jsonb,integer)'];
   for(const fn of [...FNS,...HELPERS])for(const role of ['anon','authenticated','service_role']){
    const ok=(await q(`select has_function_privilege($1,$2,'EXECUTE') ok`,[role,fn]))[0].ok;
@@ -1027,8 +1027,8 @@ describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (appen
  });
 
  // Task 5a: evidenced window writes land date + method + one provenance key in one locked UPDATE.
- const setWin=(a:string,t:string,from:string,side:string,date:string,prov:unknown,on:Pool|PoolClient=admin,toMethod?:string)=>
-  on.query(`select public.set_security_window($1,$2,$3::date,$4,$5::date,$6::jsonb${toMethod?',$7':''}) v`,[a,t,from,side,date,JSON.stringify(prov),...(toMethod?[toMethod]:[])]).then(r=>r.rows[0].v as string);
+ const setWin=(a:string,t:string,from:string,side:string,date:string,prov:unknown,on:Pool|PoolClient=admin)=>
+  on.query(`select public.set_security_window($1,$2,$3::date,$4,$5::date,$6::jsonb) v`,[a,t,from,side,date,JSON.stringify(prov)]).then(r=>r.rows[0].v as string);
  const winState=async(t:string)=>(await q(`select to_char(valid_from,'YYYY-MM-DD') valid_from,to_char(valid_to,'YYYY-MM-DD') valid_to,valid_from_method,valid_to_method,provenance from public.issuer_securities where ticker=$1`,[t]))[0];
  const WF={valid_from:{source:'stocks_universe.list_date',provider:'tushare_stock_basic',as_of:'2026-11-05',row:{list_date:'2001-08-27'}}};
  const WT={valid_to:{source:'stocks_universe.delist_date',provider:'tushare_stock_basic',as_of:'2026-11-05',row:{delist_date:'2026-06-30'}}};
@@ -1064,8 +1064,8 @@ describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (appen
   expect(await patchProv(a,t,'2024-03-01',PC,[])).toBe('written');
   expect(await patchProv(a,t,'2024-03-01',PC,[])).toBe('duplicate');
   expect((await winState(t)).provenance).toEqual({exchange:'Nasdaq',...PC});
-  expect(await setWin(a,t,'2024-03-01','to','2024-11-02',{valid_to:{source:'sec_company_tickers_exchange',as_of:'2026-11-09'}},admin,'sec_file_absent')).toBe('written');
-  expect(await winState(t)).toMatchObject({valid_to:'2024-11-02',valid_to_method:'sec_file_absent',provenance:{exchange:'Nasdaq',...PC,valid_to:{source:'sec_company_tickers_exchange',as_of:'2026-11-09'}}});
+  expect(await closeAbs(a,t,'2024-03-01','2026-11-02',PC.pending_change.first_missing_sha256,{valid_to:{source:'sec_company_tickers_exchange',as_of:'2026-11-09'}})).toBe('written');
+  expect(await winState(t)).toMatchObject({valid_to:'2026-11-02',valid_to_method:'sec_file_absent',provenance:{exchange:'Nasdaq',...PC,valid_to:{source:'sec_company_tickers_exchange',as_of:'2026-11-09'}}});
   expect(await patchProv(a,t,'2024-03-01',{},['pending_change'])).toBe('not_found');   // closed
   const u=await ticker();
   await sec(a,u,'2024-03-01',null,{provenance:JSON.stringify({exchange:'Nasdaq'})});
@@ -1076,8 +1076,10 @@ describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (appen
   expect(await patchProv(a,await ticker(),'2024-03-01',PC,[])).toBe('not_found');
   expect(await patchProv(randomUUID(),u,'2024-03-01',PC,[])).toBe('not_found');
   for(const bad of [()=>patchProv(a,u,'2024-03-01',{isin:'x'},[]),()=>patchProv(a,u,'2024-03-01',{},['exchange']),()=>patchProv(a,u,'2024-03-01',{pending_change:{url:'https://a.example/p?token=1'}},[]),
-   ()=>setWin(a,u,'2024-03-01','to','2025-01-01',{valid_to:{source:'x'}},admin,'curated')])
+  ])
    expect(await fails(bad())).toMatchObject({message:expect.stringMatching(/invalid_(provenance_patch|window_write)/),code:'22023'});
+  // set_security_window cannot close as sec_file_absent: there is no method argument any more
+  await expect(admin.query(`select public.set_security_window($1,$2,'2024-03-01'::date,'to','2025-01-01'::date,'{"valid_to":{"source":"x"}}'::jsonb,'sec_file_absent')`,[a,u])).rejects.toThrow(/does not exist/);
  });
  const closeAbs=(a:string,t:string,from:string,to:string,sha:string,prov:unknown,on:Pool|PoolClient=admin)=>
   on.query(`select public.close_security_absent($1,$2,$3::date,$4::date,$5,$6::jsonb) v`,[a,t,from,to,sha,JSON.stringify(prov)]).then(r=>r.rows[0].v as string);
@@ -1117,7 +1119,7 @@ describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (appen
   });
   expect((await winState(t)).valid_to).toBeNull();
  });
- it('set_security_window leaves ONE function after the signature change; the 6-argument call (default method) closes with delisting; unknown methods are refused',async()=>{
+ it('set_security_window leaves ONE function after the signature change; a window close is always delisting',async()=>{
   expect(await q(`select count(*)::int n from pg_proc p join pg_namespace s on s.oid=p.pronamespace where s.nspname='public' and p.proname='set_security_window'`)).toEqual([{n:1}]);
   const a=await issuer();const t=await ticker();
   await sec(a,t,'2024-03-01',null);
