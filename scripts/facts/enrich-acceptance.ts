@@ -26,7 +26,7 @@ import {memoryRawStore,supabaseRawStore} from '../../src/lib/dq/raw-store';
 import {fetchSubmissions} from '../../src/lib/entities/identifiers/sec-submissions';
 import {resolveIssuer} from '../../src/lib/entities/resolve';
 import {supabaseFactsDb} from '../../src/lib/facts/db';
-import {recordReconciliation} from '../../src/lib/dq/reconcile/record';
+import {recordReconciliationDetailed} from '../../src/lib/dq/reconcile/record';
 import type {ReconcileResultInput} from '../../src/lib/dq/reconcile/types';
 import {DATE_MISMATCH_PAIR,enrichAcceptance} from '../../src/lib/facts/providers/sec-acceptance';
 import type {AcceptanceDeps} from '../../src/lib/facts/providers/sec-acceptance';
@@ -77,12 +77,12 @@ async function main():Promise<void>{
   if(!codeVersion){console.error('code version unavailable (VERCEL_GIT_COMMIT_SHA or a git checkout)');process.exit(1);}
   batchId=(await startBatch(tables,{producer:'enrich-acceptance',dataset:DATASETS.acceptance,toolVersions:{source:'sec_submissions'},codeVersion,triggeredBy:'script'})).batchId;
  }
- const counts:BatchCounts=emptyCounts();const errors:BatchError[]=[];let mismatches=0,issuerFailures=0;
+ const counts:BatchCounts=emptyCounts();const errors:BatchError[]=[];let mismatches=0,mismatchDuplicates=0,issuerFailures=0;
  const budget=makeBudget(null);
  for(const it of issuers){
   try{
    const out=await enrichAcceptance({db:writes,submissions:(c,b,coverFrom)=>fetchSubmissions(c,{fetch,userAgent:process.env.EDGAR_USER_AGENT,raw,budget:b},{coverFrom}),
-    ...(apply?{recordDateMismatch:async(r:ReconcileResultInput)=>{await recordReconciliation(tables,{...r,pair:DATE_MISMATCH_PAIR,batch_id:batchId});}}:{})},{issuerId:it.issuerId,cik10:it.cik10},budget,{fullHistory});
+    ...(apply?{recordDateMismatch:async(r:ReconcileResultInput)=>{if((await recordReconciliationDetailed(tables,{...r,pair:DATE_MISMATCH_PAIR,batch_id:batchId})).duplicate)mismatchDuplicates++;}}:{})},{issuerId:it.issuerId,cik10:it.cik10},budget,{fullHistory});
    for(const k of Object.keys(counts) as (keyof BatchCounts)[])counts[k]+=out.counts[k];
    errors.push(...out.errors);mismatches+=out.mismatches.length;
    if(out.counts.failed>0||out.errors.some(e=>!isInfoError(e)))issuerFailures++;
@@ -98,7 +98,7 @@ async function main():Promise<void>{
   status=await finishBatch(tables,batchId,{counts,errors});
   await recordAttempt(tables,DATASETS.acceptance,{ok:status==='success',cadence:'daily',detail:{issuers:issuers.length,...counts,date_mismatches:mismatches}});
  }
- console.log(JSON.stringify({status,issuers:issuers.length,counts,date_mismatches:mismatches}));
+ console.log(JSON.stringify({status,issuers:issuers.length,counts,date_mismatches:mismatches,...(apply?{date_mismatch_duplicates:mismatchDuplicates}:{})}));
  process.exit((batchId!==null&&(status==='failed'||status==='partial'))||(batchId===null&&issuerFailures>0)?1:0);
 }
 

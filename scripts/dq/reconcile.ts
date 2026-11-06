@@ -16,27 +16,14 @@ import {supabaseTableClient} from '../../src/lib/db/table-client';
 import {resolveIssuer} from '../../src/lib/entities/resolve';
 import {resolveCodeVersion} from '../../src/lib/facts/deps';
 import {memoryRawStore} from '../../src/lib/dq/raw-store';
-import {cnPairEnabled,productionReconcileDeps} from '../../src/lib/dq/reconcile/deps';
-import {RECONCILE_PAIRS} from '../../src/lib/dq/reconcile/pairs';
+import {parseReconcileArgs,productionReconcileDeps} from '../../src/lib/dq/reconcile/deps';
 import {runReconcile} from '../../src/lib/dq/reconcile/run';
-import {CYCLE_PAIR_IDS} from '../../src/lib/dq/reconcile/types';
-import type {CyclePairId} from '../../src/lib/dq/reconcile/types';
 import {getAdminSupabase} from '../../src/lib/supabase/admin';
 
-const USAGE='usage: reconcile.ts --pair <cycle pair id> [--issuer <ticker>...] [--apply]';
-
 async function main(){
- const argv=process.argv.slice(2);let pair='',apply=false;const tickers:string[]=[];
- for(let i=0;i<argv.length;i++){
-  const x=argv[i],v=argv[i+1];
-  if(x==='--pair'&&v){pair=v;i++;}
-  else if(x==='--issuer'&&v){tickers.push(v);i++;}
-  else if(x==='--apply')apply=true;
-  else{console.error(USAGE);process.exit(2);}
- }
- if(!(CYCLE_PAIR_IDS as readonly string[]).includes(pair)){console.error(USAGE);process.exit(2);}
- if(apply&&!cnPairEnabled(pair)){console.error('cn_disabled: --apply for cn.* pairs needs FACTS_CN_ENABLED=1');process.exit(2);}   // before any production deps
- if(!RECONCILE_PAIRS[pair as CyclePairId]){console.error(`${USAGE}\nregistered: ${Object.keys(RECONCILE_PAIRS).join(', ')}`);process.exit(2);}
+ const args=parseReconcileArgs(process.argv.slice(2));
+ if('exit' in args){console.error(args.message);process.exit(args.exit);}
+ const {pair,apply,tickers}=args;
  const sb=getAdminSupabase();const tables=supabaseTableClient(sb);const today=new Date().toISOString().slice(0,10);
  const issuerIds:string[]=[];
  for(const t of tickers){const r=await resolveIssuer(tables,{ticker:t},{today});if(!r){console.error(`unknown ticker: ${t}`);process.exit(2);}issuerIds.push(r.issuer_id);}
@@ -44,7 +31,7 @@ async function main(){
  if(!codeVersion){console.error('code_version unavailable (VERCEL_GIT_COMMIT_SHA or git HEAD): refusing to apply');process.exit(2);}
  const base=productionReconcileDeps({deadline:null,codeVersion,admin:sb});
  const deps=apply?base:{...base,raw:memoryRawStore()};
- const receipt=await runReconcile(deps,{pair:pair as CyclePairId,triggeredBy:'script',dryRun:!apply,...(issuerIds.length?{issuerIds}:{})});
+ const receipt=await runReconcile(deps,{pair,triggeredBy:'script',dryRun:!apply,...(issuerIds.length?{issuerIds}:{})});
  if(!apply){
   let n=0;
   for(const m of receipt.dryRun??[])for(const r of m.results){n++;console.log(JSON.stringify({issuer:m.issuerId,market:m.market,natural_key:r.natural_key,outcome:r.outcome,passed:r.passed,action:r.action}));}

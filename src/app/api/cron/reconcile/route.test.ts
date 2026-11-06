@@ -3,7 +3,7 @@ import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 
 const mocks=vi.hoisted(()=>({run:vi.fn(),deps:vi.fn(),codeVersion:vi.fn()}));
 vi.mock('@/lib/dq/reconcile/run',async importOriginal=>({...(await importOriginal<typeof import('@/lib/dq/reconcile/run')>()),runReconcile:mocks.run}));
-vi.mock('@/lib/dq/reconcile/deps',()=>({productionReconcileDeps:mocks.deps}));
+vi.mock('@/lib/dq/reconcile/deps',()=>({productionReconcileDeps:mocks.deps,cnPairEnabled:(pair:string)=>!pair.startsWith('cn.')||process.env.FACTS_CN_ENABLED==='1'}));
 vi.mock('@/lib/dq/reconcile/pairs',async importOriginal=>{const o=await importOriginal<typeof import('@/lib/dq/reconcile/pairs')>();return {...o,RECONCILE_PAIRS:{...o.RECONCILE_PAIRS,'cn.tushare_vs_cninfo_pdf_gold':{id:'cn.tushare_vs_cninfo_pdf_gold'}}};});   // a CN pair registered (as Task 16a will) so the gate is reached
 vi.mock('@/lib/facts/deps',()=>({resolveCodeVersion:mocks.codeVersion}));
 

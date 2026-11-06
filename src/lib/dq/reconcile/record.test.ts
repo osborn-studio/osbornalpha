@@ -1,7 +1,7 @@
 // src/lib/dq/reconcile/record.test.ts
 import {describe,expect,it} from 'vitest';
 import {memoryTableClient} from '../../db/memory-table-client';
-import {recordReconciliation} from './record';
+import {recordReconciliation,recordReconciliationDetailed} from './record';
 import type {ReconcileResultInput} from './types';
 
 const text=(over:Partial<ReconcileResultInput>={}):ReconcileResultInput=>({natural_key:'320193:0000320193-23-000106',kind:'text',outcome:'compared',passed:true,left_value:null,right_value:null,abs_diff:null,rel_diff:null,tolerance:'0',left_source:'sec.submissions',right_source:'edgar.ixbrl.dei',detail:{left_text:'Large accelerated filer',right_text:'Large Accelerated Filer'},action:'record',...over});
@@ -48,5 +48,16 @@ describe('recordReconciliation (out-of-cycle rows, spec §5.1)',()=>{
   const [row]=t.rows('dq_reconciliations');
   expect(row).toMatchObject({left_value:'1.1',right_value:'1',abs_diff:'0.1',rel_diff:'0',tolerance:'0.005',created_at:'2026-01-02T03:04:05.000Z'});
   expect(row.detail).toMatchObject({tolerance_exact:'0.005',abs_diff_exact:'0.1'});
+ });
+ it('is idempotent per (pair, natural_key) over identical values; a changed side or another pair writes a new row',async()=>{
+  const t=memoryTableClient({dq_reconciliations:['id']});
+  const d=(l:string,r:string)=>({...text({kind:'date',passed:false,detail:{left_text:l,right_text:r}}),pair:'sec.filing_date_vs_submissions' as const,batch_id:'b'});
+  const a=await recordReconciliationDetailed(t,d('2024-02-01','2024-02-02'));
+  const b=await recordReconciliationDetailed(t,{...d('2024-02-01','2024-02-02'),batch_id:'b2'});
+  expect(a.duplicate).toBe(false);expect(b).toEqual({id:a.id,duplicate:true});
+  expect(await recordReconciliation(t,d('2024-02-01','2024-02-02'))).toBe(a.id);
+  expect(t.rows('dq_reconciliations')).toHaveLength(1);
+  expect((await recordReconciliationDetailed(t,d('2024-02-01','2024-02-03'))).duplicate).toBe(false);
+  expect(t.rows('dq_reconciliations')).toHaveLength(2);
  });
 });

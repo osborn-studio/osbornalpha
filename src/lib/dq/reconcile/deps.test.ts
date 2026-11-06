@@ -3,8 +3,7 @@ import {describe,expect,it,vi} from 'vitest';
 import type {SupabaseClient} from '@supabase/supabase-js';
 const mocks=vi.hoisted(()=>({hash:vi.fn()}));
 vi.mock('./pairs',async importOriginal=>({...(await importOriginal<typeof import('./pairs')>()),inputsHashNow:mocks.hash}));
-import {spawnSync} from 'node:child_process';
-import {REPO_FILE_PREFIXES,cnPairEnabled,readRepoFileFromDisk,restoreInputsHashNow} from './deps';
+import {REPO_FILE_PREFIXES,cnPairEnabled,parseReconcileArgs,readRepoFileFromDisk,restoreInputsHashNow} from './deps';
 
 describe('restoreInputsHashNow (quarantine route + admin dashboard, spec §5.6)',()=>{
  it('passes the hash through; known data gaps become inputs_unavailable, an unobtainable current right side current_evidence_unavailable (plan audit P2); anything else is rethrown',async()=>{
@@ -36,13 +35,16 @@ describe('CN gate (FACTS_CN_ENABLED)',()=>{
   expect(cnPairEnabled('cn.tushare_vs_cninfo_pdf_gold',{FACTS_CN_ENABLED:'true'})).toBe(false);
   expect(cnPairEnabled('cn.tushare_vs_cninfo_pdf_gold',{FACTS_CN_ENABLED:'1'})).toBe(true);
  });
- const run=(env:Record<string,string>,args:string[])=>spawnSync('npx',['tsx','scripts/dq/reconcile.ts',...args],{encoding:'utf8',env:{...process.env,FACTS_CN_ENABLED:'',...env},timeout:60_000});
- it('scripts/dq/reconcile.ts refuses --apply for a cn.* pair unless enabled, before building production deps; the enabled run gets past the gate',()=>{
-  const off=run({},['--pair','cn.tushare_vs_cninfo_pdf_gold','--apply']);
-  expect(off.status).toBe(2);expect(off.stderr).toContain('cn_disabled');
-  const on=run({FACTS_CN_ENABLED:'1'},['--pair','cn.tushare_vs_cninfo_pdf_gold','--apply']);
-  expect(on.status).toBe(2);expect(on.stderr).not.toContain('cn_disabled');expect(on.stderr).toContain('registered:');   // CN pair is not registered until Task 16a: the next check answers
-  const dry=run({},['--pair','cn.tushare_vs_cninfo_pdf_gold']);
-  expect(dry.stderr).not.toContain('cn_disabled');   // a dry run needs no gate
- },120_000);
+ it('parseReconcileArgs: --apply of a cn.* pair is refused unless enabled; enabled and dry runs pass the gate; bad arguments exit 2',()=>{
+  const cn='cn.tushare_vs_cninfo_pdf_gold';
+  const reg={[cn]:{},'facts.lineage_same_day':{}};
+  expect(parseReconcileArgs(['--pair',cn,'--apply'],{},reg)).toEqual({exit:2,message:expect.stringContaining('cn_disabled')});
+  expect(parseReconcileArgs(['--pair',cn,'--apply'],{FACTS_CN_ENABLED:'0'},reg)).toMatchObject({exit:2});
+  expect(parseReconcileArgs(['--pair',cn,'--apply'],{FACTS_CN_ENABLED:'1'},reg)).toEqual({pair:cn,apply:true,tickers:[]});
+  expect(parseReconcileArgs(['--pair',cn],{},reg)).toEqual({pair:cn,apply:false,tickers:[]});   // dry run: no gate
+  expect(parseReconcileArgs(['--pair','facts.lineage_same_day','--issuer','AAPL','--issuer','MSFT','--apply'],{},reg)).toEqual({pair:'facts.lineage_same_day',apply:true,tickers:['AAPL','MSFT']});
+  for(const argv of [[],['--pair'],['--pair','bogus'],['--pair','facts.lineage_same_day','--wat'],['--issuer','AAPL']])expect(parseReconcileArgs(argv,{},reg),argv.join(' ')).toEqual({exit:2,message:expect.stringContaining('usage:')});
+  const unreg=parseReconcileArgs(['--pair','us.companyfacts_vs_gold'],{},{});
+  expect(unreg).toEqual({exit:2,message:expect.stringContaining('registered:')});
+ });
 });

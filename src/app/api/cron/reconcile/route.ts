@@ -3,13 +3,13 @@
 // /api/cron/facts-sync: CRON_SECRET bearer (constant-time), maxDuration 300 with a 240 s deadline handed to
 // the runner (which starts a member only with >= 60 s left), a missing code_version refuses the run. The pair
 // must be given once and be a REGISTERED cycle pair; cn.* pairs are refused unless FACTS_CN_ENABLED=1 (no
-// Tushare token, no verified gold yet; vercel.json schedules US iXBRL 02:00 and lineage 04:00 UTC only).
+// Tushare token, no verified gold yet; vercel.json schedules lineage 04:00 UTC only; the US iXBRL entry (02:00) is added with its pair in Task 15a).
 // A duplicate cron delivery is harmless: cursor claims are fenced, a second worker finds nothing claimable.
 // The HTTP receipt carries codes, keys and counts only — never error messages or dry-run results.
 import {timingSafeEqual} from 'node:crypto';
 import {NextResponse} from 'next/server';
 import {resolveCodeVersion} from '@/lib/facts/deps';
-import {productionReconcileDeps} from '@/lib/dq/reconcile/deps';
+import {cnPairEnabled,productionReconcileDeps} from '@/lib/dq/reconcile/deps';
 import {ReconcileConfigError} from '@/lib/dq/reconcile/pair-support';
 import {RECONCILE_PAIRS} from '@/lib/dq/reconcile/pairs';
 import {ReconcileError,runReconcile} from '@/lib/dq/reconcile/run';
@@ -38,7 +38,7 @@ async function run(request:Request):Promise<NextResponse>{
  const pairs=new URL(request.url).searchParams.getAll('pair');
  const pair=pairs.length===1?pairs[0]:'';
  if(!(CYCLE_PAIR_IDS as readonly string[]).includes(pair)||!RECONCILE_PAIRS[pair as CyclePairId])return err('invalid_parameter:pair','pair must be one registered cycle pair',400);
- if(pair.startsWith('cn.')&&process.env.FACTS_CN_ENABLED!=='1')return err('cn_disabled','CN reconciliation is not enabled (FACTS_CN_ENABLED)',403);
+ if(!cnPairEnabled(pair))return err('cn_disabled','CN reconciliation is not enabled (FACTS_CN_ENABLED)',403);
  const codeVersion=resolveCodeVersion({allowGit:false});
  if(!codeVersion)return err('code_version_unavailable','VERCEL_GIT_COMMIT_SHA not set',503);
  const started=new Date();

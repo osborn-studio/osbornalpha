@@ -16,7 +16,10 @@ import type {ReconcilePairId,ReconcileResultInput} from './types';
 const isStr=(v:unknown):v is string=>typeof v==='string';
 /** Numeric columns are written canonical; ratio columns (rel_diff) are derived/display, pass/fail is `passed`, decided by exact comparison.
  * detail.tolerance_exact / abs_diff_exact keep the exact values next to the columns. */
-export async function recordReconciliation(tables:TableClient,input:ReconcileResultInput&{pair:ReconcilePairId;batch_id:string|null},opts:{now?:()=>Date}={}):Promise<string>{
+export type RecordInput=ReconcileResultInput&{pair:ReconcilePairId;batch_id:string|null};
+export async function recordReconciliation(tables:TableClient,input:RecordInput,opts:{now?:()=>Date}={}):Promise<string>{return (await recordReconciliationDetailed(tables,input,opts)).id;}
+/** Re-recording the same (pair, natural_key) with identical outcome, values and text sides writes nothing and answers the existing row: {duplicate:true} (a re-run over unchanged evidence adds no rows). */
+export async function recordReconciliationDetailed(tables:TableClient,input:RecordInput,opts:{now?:()=>Date}={}):Promise<{id:string;duplicate:boolean}>{
  if(!(RECONCILE_PAIR_IDS as readonly string[]).includes(input.pair))throw new Error('invalid_pair');
  if((CYCLE_PAIR_IDS as readonly string[]).includes(input.pair))throw new Error('cycle_pair_requires_runner');
  if(input.action!=='record')throw new Error('record_action_only');
@@ -33,6 +36,10 @@ export async function recordReconciliation(tables:TableClient,input:ReconcileRes
  if(input.outcome!=='compared'&&input.passed)throw new Error('passed_requires_compared');
  const c=(v:string|null)=>v===null?null:canonicalDecimal(v);
  const tolerance=canonicalDecimal(input.tolerance),abs=c(input.abs_diff);
+ const text=(d:unknown,k:string)=>{const v=(d as Record<string,unknown>|null|undefined)?.[k];return v===undefined?null:v;};
+ const lt=text(input.detail,'left_text'),rt=text(input.detail,'right_text');
+ for(const e of await tables.select('dq_reconciliations',{pair:input.pair,natural_key:input.natural_key}))
+  if(e.outcome===input.outcome&&e.passed===input.passed&&e.left_value===c(input.left_value)&&e.right_value===c(input.right_value)&&text(e.detail,'left_text')===lt&&text(e.detail,'right_text')===rt)return {id:String(e.id),duplicate:true};
  const id=randomUUID();
  await tables.insert('dq_reconciliations',{
   id,dataset:DATASETS.reconcile(input.pair),pair:input.pair,kind:input.kind,outcome:input.outcome,natural_key:input.natural_key,
@@ -41,5 +48,5 @@ export async function recordReconciliation(tables:TableClient,input:ReconcileRes
   detail:{...input.detail,tolerance_exact:tolerance,...(abs===null?{}:{abs_diff_exact:abs}),...(input.inputs_hash===undefined?{}:{inputs_hash:input.inputs_hash})},
   batch_id:input.batch_id,cycle_id:null,issuer_id:null,market:null,attempt:null,created_at:(opts.now??(()=>new Date()))().toISOString(),
  });
- return id;
+ return {id,duplicate:false};
 }

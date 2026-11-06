@@ -132,5 +132,8 @@ describe('productionSyncDeps step 9b date-mismatch recording (plan 3 Task 14c)',
   expect(rows).toHaveLength(1);
   expect(rows[0]).toMatchObject({dataset:'reconcile.sec.filing_date_vs_submissions',kind:'date',outcome:'compared',passed:false,batch_id:null,cycle_id:null,issuer_id:null,natural_key:`320193:${filing.source_ref}`});
   expect(rows[0].detail).toMatchObject({left_text:availableDate,right_text:'2020-01-02'});
+  // a second run over the same evidence adds no row (recorder dedupe)
+  await productionSyncDeps({deadline:null,codeVersion:SHA,admin:{} as never}).enrichAcceptance!('I','0000320193',budget);
+  expect(await tables.select('dq_reconciliations',{pair:'sec.filing_date_vs_submissions'})).toHaveLength(1);
  });
 });
