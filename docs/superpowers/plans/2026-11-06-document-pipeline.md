@@ -17,7 +17,7 @@
 - **工作树**：`/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/document-pipeline-3cfbb4`，分支 `claude/document-pipeline-3cfbb4`。不要 cd 出去；不要裸 `git stash`；只动本任务 Files 列表里的文件。
 - **协作边界（兄弟模块并行开发）**：不得修改 `src/lib/facts/*` 已有文件（可以 import；新文件只放 `src/lib/documents/`）、`src/lib/judgments/*`、`src/lib/evals/*`。不得替换规格二的 SQL 函数与触发器（迁移二只 `drop constraint if exists … add constraint …` 扩展检查约束、新增本规格自有函数）。对 `src/lib/dq/batches.ts`（F3 块 `F3_INFO_CODES` + `isInfoError`；`INFO_CODES` 被规格二测试钉死，不改）、`src/lib/supabase/database.types.ts`、`scripts/ci/research-checks.ts::criticalSuites`、`vercel.json`、`package.json` 的改动放在**独立块**并加 `// F3` 注释（JSON 文件无注释：放在数组/对象末尾，提交信息说明），便于与兄弟分支合并。
 - **迁移**：`supabase/migrations/20261108090000_disclosure_documents.sql`、`supabase/migrations/20261108091000_fact_citations.sql`；可重放（`create table if not exists`、`create or replace function`、`drop policy if exists` 后 `create policy`、`drop trigger if exists` 后 `create trigger`、`drop constraint if exists` 后 `add constraint`、桶 `insert … on conflict (id) do update`）。写入 `supabase/migrations.lock.json`（追加 `{file, sha256}`，文件字节 hex；**已锁文件不可再改**——锁在该任务全部复审通过后的最后一个提交里加）。`scripts/ci/research-checks.ts::migrationInventory` 要求未锁迁移时间戳晚于已锁最新（当前 `20261106090000`）。
-- **测试数据库**：`test:db`（`scripts/ci/research-db.ts`）起本地 PostgreSQL 17，按序执行全部迁移，再跑 vitest。集成测试用 `process.env.S4_TEST_STATE` 读 `adminUrl`，`describe.skipIf(!enabled)`。**任何包含字符串 `S4_TEST_STATE` 的 `.test.ts` 都必须加进 `criticalSuites`**，否则 "Database suite inventory drift"。重放迁移用计划一/二的 `replayMigration` 助手（复制到新测试文件，它未导出；见 `src/lib/facts/facts.integration.test.ts`）。真实角色测试按 `src/lib/facts/facts.integration.test.ts` 的 `set local role anon|authenticated|service_role` 写法。
+- **测试数据库**：`test:db`（`scripts/ci/research-db.ts`）起本地 PostgreSQL 17，按序执行全部迁移，再跑 vitest。集成测试用 `process.env.S4_TEST_STATE` 读 `adminUrl`，`describe.skipIf(!enabled)`。**任何包含字符串 `S4_TEST_STATE` 的 `.test.ts` 都必须加进 `criticalSuites`**，否则 "Database suite inventory drift"。重放迁移**不在共享测试库里做**（计划审计 P2-2：并行套件会看到被重放回退的策略/约束）：用 Task 1 的 `src/lib/documents/fresh-db.ts::freshMigratedDatabase(adminUrl)` 建专用临时库（全部迁移）后 `replayFiles`，结束 `drop()`。真实角色测试按 `src/lib/facts/facts.integration.test.ts` 的 `set local role anon|authenticated|service_role` 写法。
 - **单文件跑数据库测试**：`.claude/scratch/db-one.ts`（未提交；内容见 `docs/superpowers/plans/2026-11-04-HANDOFF-data-foundation-2-execution.md` §5，丢了按原文重建）：`LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/documents/documents.integration.test.ts`。
 - **本地 harness 限制**：只有 `storage.buckets(id,name,public,file_size_limit,allowed_mime_types)`，迁移不得引用 `storage.objects`；没有 PostgREST（`max_rows=1000` 截断只在真实 Supabase）；托管实例 `postgres` 非超级用户（`security definer` owner = 迁移角色，`set search_path = public`，不要 `alter function … owner to`）。
 - **权限模式**：所有新表 `revoke all on … from public, anon, authenticated, service_role`，再按规格 §4.12 授权。Supabase 默认给 anon/authenticated 新函数 EXECUTE：**每个函数后显式 `revoke execute on function … from public, anon, authenticated`**，再 `grant execute … to service_role`（`read_documents` 例外：anon/authenticated/service_role）。内部助手函数连 service_role 也 revoke。
@@ -86,6 +86,7 @@ src/lib/documents/fixtures/edgar/index-000132165526000039.json                  
 src/lib/documents/fixtures/gold/hk-facts.json                                   Task 18（ready:false 模板）
 src/lib/documents/*.test.ts、**/*.test.ts                        单测
 src/lib/documents/documents.integration.test.ts                 迁移一（critical；Task 1、3）
+src/lib/documents/fresh-db.ts                                   测试用：专用临时库 + 全部迁移 + 重放（P2-2；Task 1，Task 13 复用）
 src/lib/documents/fact-citations.integration.test.ts            迁移二（critical；Task 13）
 src/lib/documents/sync-hk.integration.test.ts                   港股端到端（critical；Task 18）
 src/lib/documents/sync-us.integration.test.ts                   美股文档（critical；Task 18）
@@ -209,7 +210,10 @@ export interface CandidateRow{
 export type CandidateInsert=Pick<CandidateRow,'kind'|'extractor_kind'|'extractor_ref'|'natural_key'|'citations'|'payload'|'fingerprint'|'input_snapshot'>;
 export interface PublicationRow{candidate_id:string;pub_gen:number;run_id:string;fact_id:string;state:PublicationState;created_at:string;updated_at:string}
 export interface ApprovalRow{approval_id:string;extractor_ref:string;extractor_version:string;table_algo_version:string;code_version:string;concepts:string[];gold_sha256:string;precision:string;recall:string;report_path:string;approved_by:string;approved_at:string;revoked_at:string|null}
-export interface DocScopeCursor{segment:string|null;index:number;item_attempts:number}
+/** Source-ref checkpoint inside one segment pass (codex plan round 1 P2-5): last_ref = the furthest listed item
+ *  processed in this pass; settled = refs processed in this pass without a stored row (404, quarantined,
+ *  exhausted); attempts = failed attempts per source_ref; seq = strictly increasing per checkpoint (P2-4). */
+export interface DocScopeCursor{segment:string|null;last_ref:string|null;settled:string[];attempts:Record<string,number>;seq:number}
 export interface DocScopeRow{
  issuer_id:string;source:ListedSource;reasons:string[];priority:number;fetch_key:string;backfill_cursor:DocScopeCursor|Record<string,never>;backfill_done:boolean;
  poll_cursor:DocScopeCursor|Record<string,never>;next_due_at:string;lease_until:string|null;lease_batch_id:string|null;
@@ -221,7 +225,7 @@ export type HumanDecision={kind:'human';decided_by:string;status:'confirmed'|'re
 export type AutoDecision={kind:'auto';approval_id:string};
 export interface CandidatesFilter{source?:ListedSource;issuer_id?:string;document_id?:string}
 
-export type DocumentsDbErrorCode='lease_lost'|'not_eligible'|'revision_exists'|'evidence_incomplete'|'approval_revoked'|'not_publishable'|'invalid_citation'|'decided'|'already_staged'|'binding_conflict'|'invalid_expected_rev'|'stale_plan'|'not_hk_item'|'run_pending'|'invalid_chosen'|'item_not_open'|'too_many_approvals'|'not_found'|'invalid_input'|'unknown';
+export type DocumentsDbErrorCode='lease_lost'|'not_eligible'|'revision_exists'|'evidence_incomplete'|'approval_revoked'|'not_publishable'|'invalid_citation'|'decided'|'already_staged'|'binding_conflict'|'invalid_expected_rev'|'stale_plan'|'not_hk_item'|'run_pending'|'invalid_chosen'|'item_not_open'|'too_many_approvals'|'not_found'|'invalid_input'|'cursor_regression'|'unknown';
 export class DocumentsDbError extends Error{constructor(public code:DocumentsDbErrorCode,message?:string){super(message??code);this.name='DocumentsDbError';}}
 
 export interface DocumentsDb{
@@ -230,14 +234,16 @@ export interface DocumentsDb{
  claimSyncLease(issuer:string,source:ListedSource,batch:string,ttlSeconds:number):Promise<boolean>;
  insertDocumentVersion(issuer:string,source:ListedSource,batch:string,doc:DocumentInsert,assets:AssetInsert[]):Promise<InsertVersionResult>;
  insertUploadDocument(owner:string,doc:DocumentInsert):Promise<InsertVersionResult>;
- advanceCursor(issuer:string,source:ListedSource,batch:string,mode:'backfill'|'poll',cursor:DocScopeCursor|null,done:boolean):Promise<void>;
+ advanceCursor(issuer:string,source:ListedSource,batch:string,mode:'backfill'|'poll',cursor:DocScopeCursor|null,done:boolean,reset?:boolean):Promise<void>;   // never backwards unless reset (P2-4): cursor_regression
  releaseSyncLease(issuer:string,source:ListedSource,batch:string,outcome:'success'|'failed',nextDue:string):Promise<void>;
  reclassifyDocument(document:string,patch:Partial<Pick<DocumentRow,'doc_class'|'classifier_gen'|'fiscal_year'|'fiscal_period'|'period_end'|'filing_source_ref'>>,actor:string):Promise<void>;
  claimExtractLease(document:string,batch:string,ttlSeconds:number):Promise<boolean>;
+ renewExtractLease(document:string,batch:string,ttlSeconds:number):Promise<boolean>;      // holder only, no attempt counted; false = taken over / moved on (P2-7)
  finishExtract(document:string,batch:string,extraction:ExtractionInsert,pages:PageInsert[]):Promise<string>;
  failExtract(document:string,batch:string,code:string):Promise<void>;
  requestExtract(document:string,actor:string):Promise<void>;
  claimCandidatesLease(extraction:string,batch:string,ttlSeconds:number):Promise<boolean>;
+ renewCandidatesLease(extraction:string,batch:string,ttlSeconds:number):Promise<boolean>;  // holder only, no attempt counted (P2-7)
  finishCandidates(extraction:string,batch:string,status:'done'|'failed'):Promise<void>;
  requestCandidatesRegen(filter:CandidatesFilter,actor:string):Promise<number>;
  writeCandidateChecks(extraction:string,batch:string,rows:{candidate_id:string;checks:CheckResult[];checks_passed:boolean}[]):Promise<{written:number;inherited:number}>;
@@ -290,6 +296,7 @@ export interface PagesJson{extractor_version:string;table_algo_version:string;co
 ```ts
 export type HkMarket='HK';
 export interface HkFilingInsert{filing_id:string;issuer_id:string;source:'hkex';origin:'hkex';formType:'annual'|'semiannual';fiscalYear:number|null;fiscalPeriod:'FY'|'H1'|null;periodEnd:string|null;availableDate:string;sourceRef:string;url:string|null}
+export interface HkZeroOutput{document_id:string;extraction_id:string}   // a zero-output document and the current extraction planning saw (P1-4)
 export interface HkFactsPort{
  // pass-through to spec-2 rpc with market='HK' (cast lives only in this file)
  claimLease(issuer:string,batch:string,ttlSeconds:number):Promise<boolean>;
@@ -307,7 +314,7 @@ export interface HkFactsPort{
  ensureHkScope(issuer:string,fetchKey:string):Promise<void>;
  bindFilingDocuments(run:string,rows:{filing_id:string;document_id:string}[]):Promise<number>;
  insertFactCitations(run:string,rows:{fact_id:string;citation_id:string;role:CitationRole}[]):Promise<number>;
- publishHkRun(issuer:string,batch:string,run:string,manifest:string[],expectedRev:number):Promise<number>;
+ publishHkRun(issuer:string,batch:string,run:string,manifest:string[],expectedRev:number,zeroOutput:readonly HkZeroOutput[]):Promise<number>;   // zeroOutput: the planned zero-output selection, revalidated under the document locks (P1-4)
  finishCandidatePublications(run:string):Promise<{published:number;still_staged:number;abandoned:number}>;
  abandonCandidatePublications(run:string):Promise<number>;
  promotionDue(pubGen:number,limit:number):Promise<{issuerId:string}[]>;
@@ -329,10 +336,11 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
 
 | 文件（任务） | 导出 | 签名 / 形状 |
 |---|---|---|
-| `db.ts`（2） | `toDocumentsDbError(e:{message?;code?})`、`encodeCursor(parts:(string|number)[])`、`decodeCursor(c):(string|number)[]`、`chunk`、`allPages(read:(p:PageOpts)=>Promise<Page<T>>,limit=PAGE_LIMIT_MAX):Promise<T[]>`、`supabaseDocumentsDb(client):DocumentsDb`、`REFS_CHUNK=500`/`IDS_MAX=100`/`IN_CHUNK=100`/`WRITE_CHUNK=500`、`checkLimit`、`checkIds`、`*FromRow` 行归一（document/asset/extraction/page/citation/candidate/publication/approval/scope） | 错误码 = SQL 异常消息首词（`raise exception 'lease_lost'`），`55P03` → `lease_lost`；23514/23502/23503/22P02/22007/22008/22003/22023 → `invalid_input`；`23505` 与未知 → `unknown`。`stage_candidate_publication` 返回 `{outcome:'approval_revoked'}` 时三实现都在回退已提交后抛 `DocumentsDbError('approval_revoked')` |
+| `db.ts`（2） | `toDocumentsDbError(e:{message?;code?})`、`encodeCursor(parts:(string|number)[])`、`decodeCursor(c):(string|number)[]`、`chunk`、`allPages(read:(p:PageOpts)=>Promise<Page<T>>,limit=PAGE_LIMIT_MAX):Promise<T[]>`、`supabaseDocumentsDb(client):DocumentsDb`、`REFS_CHUNK=500`/`IDS_MAX=100`/`IN_CHUNK=100`/`WRITE_CHUNK=500`、`checkLimit`、`checkIds`、`LOOKAHEAD_MAX=999`/`lookaheadLimit`/`checkApprovalsLimit`（limit+1 预读：`documentVersions`/`extractionsOf` 每页 ≤ 999 行，`approvalsFor` 的 limit ≤ 999，三实现一致，P2-1）、`*FromRow` 行归一（document/asset/extraction/page/citation/candidate/publication/approval/scope） | 错误码 = SQL 异常消息首词（`raise exception 'lease_lost'`），`55P03` → `lease_lost`；23514/23502/23503/22P02/22007/22008/22003/22023 → `invalid_input`；`23505` 与未知 → `unknown`。`stage_candidate_publication` 返回 `{outcome:'approval_revoked'}` 时三实现都在回退已提交后抛 `DocumentsDbError('approval_revoked')` |
 | `memory-documents-db.ts`（2） | `memoryDocumentsDb(opts?:{now?:()=>Date}):MemoryDocumentsDb` | `MemoryDocumentsDb extends DocumentsDb{setNow(iso|null);expireSyncLease(issuer,source);expireExtractLease(doc);expireCandidatesLease(extraction);documents();extractions();pages();citations();candidates();publications();approvals();scope();assets();_raw:{documents,assets,extractions,pages,citations,candidates,publications,approvals,scope}}`——检查方法返回克隆；`_raw` 是活对象 Map（`publications` 键 `${candidate_id}|${pub_gen}`），只给 `memoryHkFactsPort` 与需要特殊状态的测试 |
 | `db-contract.ts`（2） | `documentsDbContract(label,setup)`、`DocsContractHarness={db;issuerId;issuer():Promise<string>;batchId():Promise<string>;user():Promise<string>;expire(kind:'sync'|'extract'|'candidates',key,source?);abandonPublication(candidateId,pubGen);close?()}`、`docInsert(o?)`、`assetInsert(o?)`、`sha`、`cpLen`、`cpSlice`、`pageInsert(page_no,text,o?)`、`extractionInsert(pageCount,o?)`、`code(p)`、`drain(read,limit)`、`PAGE_TEXT` | 内存与 pg 共用 |
 | `pg-documents-db.ts`（3） | `pgDocumentsDb(pool:Pool):DocumentsDb` | 仅测试 |
+| `fresh-db.ts`（1） | `freshMigratedDatabase(adminUrl):Promise<{pool;name;drop()}>`、`replayFiles(pool,files)` | 仅测试；重放迁移的断言只在专用临时库里跑（P2-2） |
 | `object-store.ts`（4） | `supabaseObjectStore(client,bucket=DOCS_BUCKET)`、`memoryObjectStore(opts?:{failPut?:(path)=>boolean})`（附 `objects():Map<string,MemoryObject>`，`MemoryObject={bytes:Uint8Array;mime:string}`）、`blobPath(sha256,mime)`、`pagesJsonPath(contentSha,pagesSha)`、`extOfMime(mime)`、`ObjectStoreError{code:'object_put_failed'|'object_get_failed'|'object_not_found'|'invalid_path'|'signed_url_failed'}`、`isStorePath`、`MAX_SIGNED_SECONDS` | `put` 把"已存在"归一为 `'exists'`；非法路径抛 `invalid_path`、不发请求 |
 | `decimal.ts`（4） | `type Scale`、`scaleDecimal(digits,scale):string`、`negate(d)`、`addDecimal(a,b)`、`subDecimal(a,b)`、`isDecimal(s)`、`parsePresented(cell):{digits;negative}|'dash'|null` | 结果经 `canonicalDecimal` |
 | `classify.ts`（5） | `classify(source:ListedSource,input:{form_type?;title;headline?;source_ref}):{doc_class;fiscal_year;fiscal_period;period_end;filing_source_ref;language}`、`cnDate(s):string|null`、`CLASSIFIER_GEN`（re-export） | HK 的 `filing_source_ref` 恒 null；`fiscal_*` 只在标题含"截至…止"/"for the … ended …"时填 |
@@ -351,7 +359,7 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
 | `test-seed.ts`（10） | `docInsertFor`、`seedPublicDocument(db,bytes,o?,store?)`（建 scope 行、取租约、插入后**释放**租约）、`seedUpload`、`seedExtraction`、`withOverride`、`rlsView`、`ISSUER/OWNER_A/OWNER_B/SEED_BATCH` | 只被测试 import |
 | `read-route.ts`（11/12） | `docParams(url,today)`、`publicDocumentView(row)`、`cacheHeadersFor(kind,asOf,now)`、`resolveDocIssuer(tables,ticker,today)`、`publicDocs()`、`serviceStore()`、`sessionUserId()`、`docDetail`、`pageDetail`、`notFound`；Task 12 追加 `ownerReadDeps()`、`ownerDocumentView(row)`、`auditFailedResponse()` | HK ticker（`.HK`）在此支持 |
 | `upload.ts`（12） | `ingestUpload(deps:UploadDeps,input):Promise<{documentId;duplicate}>`、`readOwnedDocument<T>(deps:OwnerReadDeps,{documentId,requester,route,pageNo?,citationId?,signedUrlIssued?,load}):Promise<{doc;data:T}|null>`、`OwnerAuditError` | |
-| `hk-facts/facts-port.ts`（13） | `HkFactsPort`、`supabaseHkFactsPort(admin)`、`memoryHkFactsPort(facts,docs,opts?:{now?})`、`HK_MARKET`、`toFilingInsert(r):FilingInsert`、`planHkFactWrites(input:Omit<PlanInput,'market'>):PlanResult`、`evaluateHkFactRules(input:Omit<FactRulesInput,'market'>):FactRulesResult`、`asDocumentsDbError(e)`、`HkPublicationOutcome`、`HkResolveOutcome`、`HkRunStatus`、`CITATION_ROLES` | **`'HK'` 类型断言只在本文件**（整合决定 5）；透传方法抛 `FactsDbError`，F3 自有方法与 `runStatus` 抛 `DocumentsDbError` |
+| `hk-facts/facts-port.ts`（13） | `HkFactsPort`、`supabaseHkFactsPort(admin)`、`memoryHkFactsPort(facts,docs,opts?:{now?})`、`HK_MARKET`、`toFilingInsert(r):FilingInsert`、`planHkFactWrites(input:Omit<PlanInput,'market'>):PlanResult`、`evaluateHkFactRules(input:Omit<FactRulesInput,'market'>):FactRulesResult`、`asDocumentsDbError(e)`、`HkPublicationOutcome`、`HkResolveOutcome`、`HkRunStatus`、`HkZeroOutput={document_id;extraction_id}`、`CITATION_ROLES` | **`'HK'` 类型断言只在本文件**（整合决定 5）；透传方法抛 `FactsDbError`，F3 自有方法与 `runStatus` 抛 `DocumentsDbError`；`publishHkRun(…,expectedRev,zeroOutput)` 的第 6 参是计划所用零输出选择，SQL 在文档锁下复核、变了即 `stale_plan`（计划审计 P1-4） |
 | `hk-facts/pg-facts-port.ts`（13） | `pgHkFactsPort(pool:Pool):HkFactsPort` | 仅测试（D1-1） |
 | `hk-facts/facts-port-contract.ts`（13） | `hkFactsPortContract(label,setup)`、`HkPortHarness`、`hkWorld`、`hkExtraction`、`hkCite`、`hkFilingRow`、`hkStagedRun`、`stateRev`、`sha256`、`code` | 非测试文件 |
 | `hk-facts/exact.ts`（14） | `toScaled(a,b):{a:bigint;b:bigint;scale:number}`、`exactIdentity(left,right,tol:{num:bigint;den:bigint}):{passed;diff:string}`、`sumDecimals(xs):string` | |
@@ -366,7 +374,7 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
 | `hk-facts/eval.ts`（18） | `scoreHkFacts`、`scoredRows`、`offlineHkCandidates`、`loadRecordedFixture(raw):{header;pages;recordedPageNos}`、`goldNaturalKey`、`goldProvenanceGaps`、`isPendingGold`、`ratio`、`HkGoldFile` | `--pages` 子集夹具展开为 `page_count` 页（未录页为空页） |
 | `dq/batches.ts`（14） | `F3_INFO_CODES`、`F3InfoCode`、`isInfoError`（查 `INFO_CODES` ∪ `F3_INFO_CODES`） | `INFO_CODES` 不动（D1-5） |
 
-SQL（迁移一，Part A）在规格 §4.8 之外的签名（所有调用方已按此写）：`request_document_extract(p_document uuid, p_actor uuid, p_extractor_version text, p_table_algo_version text)`；`read_documents(p_issuer uuid, p_as_of date, p_source text, p_doc_class text, p_from date, p_to date, p_cursor jsonb, p_limit int, p_all_versions boolean default false)`；`stage_candidate_publication(uuid,int,uuid,uuid) returns jsonb {outcome:'staged'|'approval_revoked'}`；只读服务函数 `documents_stored_due(int)`、`extractions_candidates_due(int)`、`known_source_refs(uuid,text,text[])`、`list_candidates(uuid,text,uuid,jsonb,int)`、`list_candidate_publications(uuid[],uuid,uuid,int,text,jsonb,int)`（`security invoker`，只授 `service_role`）。迁移二（Part D1）：`hk_promotion_due(p_pub_gen int, p_extractor_ref text, p_limit int) returns uuid[]`、`hk_zero_output_documents(p_issuer uuid, p_pub_gen int) returns uuid[]`；`document_citations` 读策略名 `"document_citations public read"` / `"document_citations service read"`。
+SQL（迁移一，Part A）在规格 §4.8 之外的签名（所有调用方已按此写）：`request_document_extract(p_document uuid, p_actor uuid, p_extractor_version text, p_table_algo_version text)`；`read_documents(p_issuer uuid, p_as_of date, p_source text, p_doc_class text, p_from date, p_to date, p_cursor jsonb, p_limit int, p_all_versions boolean default false)`；`stage_candidate_publication(uuid,int,uuid,uuid) returns jsonb {outcome:'staged'|'approval_revoked'}`；只读服务函数 `documents_stored_due(int)`、`extractions_candidates_due(int)`、`known_source_refs(uuid,text,text[])`、`list_candidates(uuid,text,uuid,jsonb,int)`、`list_candidate_publications(uuid[],uuid,uuid,int,text,jsonb,int)`（`security invoker`，只授 `service_role`）。迁移二（Part D1）：`publish_hk_run(p_issuer uuid, p_batch uuid, p_run uuid, p_manifest uuid[], p_expected_rev bigint, p_zero_output jsonb)`（P1-4）；`hk_promotion_due(p_pub_gen int, p_extractor_ref text, p_limit int) returns uuid[]`（条件 (c) 不含"运行已发布且事实仍隔离"的等待项，P2-6）、`hk_zero_output_documents(p_issuer uuid, p_pub_gen int) returns uuid[]`；`document_citations` 读策略名 `"document_citations public read"` / `"document_citations service read"`。
 
 ### 规格覆盖表
 
@@ -474,6 +482,7 @@ SQL（迁移一，Part A）在规格 §4.8 之外的签名（所有调用方已�
 **Files:**
 - Create: `supabase/migrations/20261108090000_disclosure_documents.sql`
 - Create: `src/lib/documents/documents.integration.test.ts`
+- Create: `src/lib/documents/fresh-db.ts`（仅测试用：专用临时库里重放迁移，计划审计 P2-2）
 - Modify: `scripts/ci/research-checks.ts:15`（`criticalSuites` 的 F3 块）
 - Modify: `scripts/s4/local-db.ts:60`（`initdb` 加 UTF8，`// F3` 注释）
 - Modify: `src/lib/supabase/database.types.ts`（F3 块两处）
@@ -483,6 +492,65 @@ SQL（迁移一，Part A）在规格 §4.8 之外的签名（所有调用方已�
 **Depends on:** —
 
 - [ ] **Step 1: 写集成测试（真实 PostgreSQL，先失败）**
+
+`src/lib/documents/fresh-db.ts`（P2-2：重放断言只在专用临时库里跑，见文件头注释）：
+
+```ts
+// src/lib/documents/fresh-db.ts
+// Test-only (plan F3 Task 1; codex plan round 1 P2-2): migration-replay assertions run in a dedicated
+// temporary database of the test cluster, never in the shared test database the other suites use —
+// replaying an earlier migration there (migration one's document_citations policy, or the spec-2
+// migration's market checks without 'HK') would undo later migrations under concurrent suites until
+// the suffix is re-applied. freshMigratedDatabase(adminUrl) creates f3_replay_<random> (the harness
+// admin is a superuser), installs the auth/storage stand-ins of scripts/s4/local-db.ts (keep the two
+// in sync; the cluster roles postgres/anon/authenticated/service_role already exist and the
+// migrations create their own roles only if missing), applies every supabase/migrations file in
+// order and returns a pool on it; drop() closes the pool and drops the database. replayFiles applies
+// files again, each in one transaction. Not a test file: it never reads S4_TEST_STATE itself.
+import {randomBytes} from 'node:crypto';
+import {readdirSync,readFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {Pool} from 'pg';
+
+const MIGRATIONS_DIR='supabase/migrations';
+const SHIM=`create schema auth; create table auth.users(id uuid primary key,email text,raw_user_meta_data jsonb default '{}');
+ create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
+ create function auth.role() returns text language sql stable as $$ select current_setting('request.jwt.claim.role',true) $$;
+ create schema storage; create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);`;
+
+export interface FreshDatabase{pool:Pool;name:string;drop():Promise<void>}
+async function onAdmin(adminUrl:string,sql:string):Promise<void>{
+ const a=new Pool({connectionString:adminUrl,max:1});a.on('error',()=>{});
+ try{await a.query(sql);}finally{await a.end();}
+}
+export async function freshMigratedDatabase(adminUrl:string):Promise<FreshDatabase>{
+ const name=`f3_replay_${randomBytes(6).toString('hex')}`;
+ await onAdmin(adminUrl,`create database ${name}`);
+ const url=new URL(adminUrl);url.pathname=`/${name}`;
+ const pool=new Pool({connectionString:url.toString(),max:2});pool.on('error',()=>{});
+ let dropped=false;
+ const drop=async()=>{if(dropped)return;dropped=true;await pool.end().catch(()=>{});await onAdmin(adminUrl,`drop database if exists ${name} with (force)`);};
+ try{
+  await pool.query(SHIM);
+  for(const file of readdirSync(MIGRATIONS_DIR).filter(n=>n.endsWith('.sql')).sort()){
+   try{await pool.query(readFileSync(join(MIGRATIONS_DIR,file),'utf8'));}
+   catch(e){throw new Error(`fresh database: migration ${file}: ${(e as Error).message}`);}
+  }
+ }catch(e){await drop().catch(()=>{});throw e;}
+ return {pool,name,drop};
+}
+/** Applies each file again, in order, each in one transaction (a replay). */
+export async function replayFiles(pool:Pool,files:string[]):Promise<void>{
+ for(const file of files){
+  const c=await pool.connect();
+  try{await c.query(`begin;\n${readFileSync(file,'utf8')}\n;commit;`);}
+  catch(e){await c.query('rollback').catch(()=>{});throw e;}
+  finally{c.release();}
+ }
+}
+```
+
+然后：
 
 ```ts
 // src/lib/documents/documents.integration.test.ts
@@ -498,6 +566,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import type {PoolClient} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {freshMigratedDatabase,replayFiles} from './fresh-db';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261108090000_disclosure_documents.sql';
@@ -506,34 +575,20 @@ const PUBLIC_TABLES=['disclosure_documents','document_assets','document_extracti
 const SERVICE_TABLES=['extraction_candidates','candidate_publications','extraction_approvals','document_sync_scope'];
 const WRITE_FUNCTIONS=[
  'public.reconcile_document_sync_scope(text,jsonb)','public.claim_document_sync_lease(uuid,text,uuid,int)','public.insert_document_version(uuid,text,uuid,jsonb,jsonb)',
- 'public.insert_upload_document(uuid,jsonb)','public.advance_document_cursor(uuid,text,uuid,text,jsonb,boolean)','public.release_document_sync_lease(uuid,text,uuid,text,timestamptz)',
+ 'public.insert_upload_document(uuid,jsonb)','public.advance_document_cursor(uuid,text,uuid,text,jsonb,boolean,boolean)','public.release_document_sync_lease(uuid,text,uuid,text,timestamptz)',
  'public.reclassify_document(uuid,jsonb,uuid)','public.claim_document_extract_lease(uuid,uuid,int)','public.finish_document_extract(uuid,uuid,jsonb,jsonb)',
  'public.fail_document_extract(uuid,uuid,text)','public.request_document_extract(uuid,uuid,text,text)','public.claim_candidates_lease(uuid,uuid,int)',
  'public.finish_candidates(uuid,uuid,text)','public.request_candidates_regen(jsonb,uuid)','public.write_candidate_checks(uuid,uuid,jsonb)','public.insert_citation(jsonb)',
  'public.publish_citations(uuid[])','public.insert_candidates(uuid,uuid,jsonb)','public.decide_candidate(uuid,jsonb)','public.stage_candidate_publication(uuid,int,uuid,uuid)',
  'public.documents_stored_due(int)','public.extractions_candidates_due(int)','public.known_source_refs(uuid,text,text[])','public.list_candidates(uuid,text,uuid,jsonb,int)',
- 'public.list_candidate_publications(uuid[],uuid,uuid,int,text,jsonb,int)',
+ 'public.list_candidate_publications(uuid[],uuid,uuid,int,text,jsonb,int)','public.renew_document_extract_lease(uuid,uuid,int)','public.renew_candidates_lease(uuid,uuid,int)',
 ];
 const INTERNAL_FUNCTIONS=['public.doc_scope_lock(uuid,text,uuid)','public.doc_extract_lock(uuid,uuid)','public.doc_candidates_lock(uuid,uuid)','public.candidate_citation_ids(jsonb)'];
+/** Trigger-only functions (P2-3): no client role may execute them. */
+const TRIGGER_FUNCTIONS=['public.disclosure_documents_limited_update()','public.document_rows_immutable()','public.document_extractions_limited_update()','public.document_citations_limited_update()',
+ 'public.extraction_candidates_lifecycle()','public.candidate_publications_lifecycle()','public.extraction_approvals_limited_update()'];
 const READ_DOCUMENTS='public.read_documents(uuid,date,text,text,date,date,jsonb,int,boolean)';
 
-// Same replay policy as src/lib/facts/facts.integration.test.ts (not exported there): one
-// transaction, short lock_timeout, retry on lock timeout (55P03) and deadlock (40P01).
-const RETRYABLE=new Set(['55P03','40P01']);
-async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
- for(let attempt=1;;attempt++){
-  const c=await pool.connect();
-  try{
-   await c.query(`begin; set local lock_timeout='3s';\n${sql}\n;commit;`);
-   return;
-  }catch(e){
-   await c.query('rollback').catch(()=>{});
-   const code=(e as {code?:string}).code;
-   if(attempt>=attempts||!code||!RETRYABLE.has(code))throw e;
-   await new Promise(r=>setTimeout(r,250*attempt+Math.floor(Math.random()*250)));
-  }finally{c.release();}
- }
-}
 /** Runs body as `role` on one connection inside a transaction that is always rolled back. */
 async function asRole(pool:Pool,role:'anon'|'authenticated'|'service_role',body:(c:PoolClient)=>Promise<void>):Promise<void>{
  const c=await pool.connect();
@@ -555,7 +610,7 @@ const cps=(s:string)=>Array.from(s);
 const TEXT='綜合損益表 a\u{2000B}b\u{1F600}c 收益 1,234\n毛利 (56)';
 
 describe.skipIf(!enabled)('F3-0 disclosure documents migration on real PostgreSQL',()=>{
- let admin:Pool;
+ let admin:Pool;let adminUrl='';
  const q=async(text:string,values:unknown[]=[])=>(await admin.query(text,values)).rows as Record<string,any>[];
  const one=async(text:string,values:unknown[]=[])=>(await q(text,values))[0]?.v;
  const issuer=async()=>{const id=randomUUID();await q(`insert into public.issuers(issuer_id,canonical_name_en) values($1,'ZZ Docs Test')`,[id]);return id;};
@@ -610,7 +665,7 @@ describe.skipIf(!enabled)('F3-0 disclosure documents migration on real PostgreSQ
 
  beforeAll(async()=>{
   const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
-  admin=new Pool({connectionString:state.adminUrl});
+  adminUrl=state.adminUrl;admin=new Pool({connectionString:adminUrl});
   expect(await one(`select getdatabaseencoding() v`)).toBe('UTF8');   // code-point offsets need a UTF8 database (harness --encoding=UTF8)
  });
  afterAll(async()=>{await admin?.end();});
@@ -635,10 +690,22 @@ describe.skipIf(!enabled)('F3-0 disclosure documents migration on real PostgreSQ
    for(const role of ['anon','authenticated'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});
    expect({sig,ok:await fn('service_role',sig)}).toEqual({sig,ok:true});
   }
-  for(const sig of INTERNAL_FUNCTIONS)for(const role of ['anon','authenticated','service_role'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});
+  for(const sig of [...INTERNAL_FUNCTIONS,...TRIGGER_FUNCTIONS])for(const role of ['anon','authenticated','service_role'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});
   for(const role of ['anon','authenticated','service_role'])expect(await fn(role,READ_DOCUMENTS)).toBe(true);
-  await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();
- },60000);
+  // P2-3: every function the migration defines is in exactly one list — enumerated from pg_proc by the names in the file
+  const names=[...new Set([...readFileSync(MIGRATION,'utf8').matchAll(/create or replace function public\.(\w+)\(/g)].map(m=>m[1]))];
+  const defined=(await q(`select 'public.'||p.proname||'('||oidvectortypes(p.proargtypes)||')' sig from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname=any($1) order by 1`,[names]))
+   .map(r=>String(r.sig).replace(/, /g,',').replace(/\binteger\b/g,'int').replace(/timestamp with time zone/g,'timestamptz'));
+  expect(defined.sort()).toEqual([...WRITE_FUNCTIONS,...INTERNAL_FUNCTIONS,...TRIGGER_FUNCTIONS,READ_DOCUMENTS].sort());
+  for(const sig of defined)for(const role of ['anon','authenticated'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:sig===READ_DOCUMENTS});
+  // P2-2: the replay runs in a dedicated temporary database (every migration applied, then migration one again), never in the shared one
+  const fresh=await freshMigratedDatabase(adminUrl);
+  try{
+   await expect(replayFiles(fresh.pool,[MIGRATION,MIGRATION])).resolves.toBeUndefined();
+   expect((await fresh.pool.query(`select count(*)::int n from pg_policies where schemaname='public' and tablename=any($1)`,[TABLES])).rows[0].n).toBeGreaterThan(0);
+  }finally{await fresh.drop();}
+  expect(await one(`select count(*)::int v from pg_database where datname=$1`,[fresh.name])).toBe(0);   // dropped
+ },120000);
 
  it('enforces the document checks, both unique keys, de_role_status, ec_decision_shape and ea_threshold',async()=>{
   const iss=await issuer();const b=await batch();const owner=await user();
@@ -747,9 +814,13 @@ describe.skipIf(!enabled)('F3-0 disclosure documents migration on real PostgreSQ
   expect(await claim(iss,b)).toBe(false);                                   // no scope row yet
   expect(await scope(iss)).toBe(1);expect(await scope(iss)).toBe(0);
   expect(await claim(iss,b)).toBe(true);
-  await q(`select public.advance_document_cursor($1,'hkexnews',$2,'backfill','{"segment":"2024","index":2,"item_attempts":0}'::jsonb,false)`,[iss,b]);
+  await q(`select public.advance_document_cursor($1,'hkexnews',$2,'backfill','{"segment":"2024","last_ref":"r2","settled":[],"attempts":{},"seq":2}'::jsonb,false)`,[iss,b]);
+  const regress=await fails(q(`select public.advance_document_cursor($1,'hkexnews',$2,'backfill','{"segment":"2024","last_ref":"r1","settled":[],"attempts":{},"seq":1}'::jsonb,false)`,[iss,b]));
+  expect(regress).toMatchObject({message:'cursor_regression',code:'P0001'});   // P2-4: never backwards …
+  await q(`select public.advance_document_cursor($1,'hkexnews',$2,'backfill','{"segment":"2024","last_ref":"r1","settled":[],"attempts":{},"seq":1}'::jsonb,false,true)`,[iss,b]);   // … unless reset
+  await q(`select public.advance_document_cursor($1,'hkexnews',$2,'backfill','{"segment":"2024","last_ref":"r2","settled":[],"attempts":{},"seq":2}'::jsonb,false)`,[iss,b]);
   expect(await scope(iss,'hkexnews',5)).toBe(1);                             // priority change counted …
-  expect((await q(`select priority,backfill_cursor,lease_batch_id from public.document_sync_scope where issuer_id=$1`,[iss]))[0]).toEqual({priority:5,backfill_cursor:{segment:'2024',index:2,item_attempts:0},lease_batch_id:b});   // … cursor and lease untouched
+  expect((await q(`select priority,backfill_cursor,lease_batch_id from public.document_sync_scope where issuer_id=$1`,[iss]))[0]).toEqual({priority:5,backfill_cursor:{segment:'2024',last_ref:'r2',settled:[],attempts:{},seq:2},lease_batch_id:b});   // … cursor and lease untouched
   await q(`update public.document_sync_scope set lease_until=now()-interval '1 second' where issuer_id=$1`,[iss]);
   const racers=await Promise.all(Array.from({length:8},()=>batch()));
   const won=await Promise.all(racers.map(r=>claim(iss,r)));
@@ -1355,6 +1426,7 @@ begin
   end if;
   return new;
 end $$;
+revoke execute on function public.disclosure_documents_limited_update() from public, anon, authenticated, service_role;   -- trigger-only (P2-3)
 drop trigger if exists disclosure_documents_limited_update on public.disclosure_documents;
 create trigger disclosure_documents_limited_update before update or delete on public.disclosure_documents
   for each row execute function public.disclosure_documents_limited_update();
@@ -1365,6 +1437,7 @@ language plpgsql set search_path = public as $$
 begin
   raise exception 'append_only: % rows are immutable', tg_table_name using errcode = '23514';
 end $$;
+revoke execute on function public.document_rows_immutable() from public, anon, authenticated, service_role;   -- trigger-only (P2-3)
 drop trigger if exists document_assets_immutable on public.document_assets;
 create trigger document_assets_immutable before update or delete on public.document_assets
   for each row execute function public.document_rows_immutable();
@@ -1385,6 +1458,7 @@ begin
   end if;
   return new;
 end $$;
+revoke execute on function public.document_extractions_limited_update() from public, anon, authenticated, service_role;   -- trigger-only (P2-3)
 drop trigger if exists document_extractions_limited_update on public.document_extractions;
 create trigger document_extractions_limited_update before update or delete on public.document_extractions
   for each row execute function public.document_extractions_limited_update();
@@ -1405,6 +1479,7 @@ begin
   end if;
   return new;
 end $$;
+revoke execute on function public.document_citations_limited_update() from public, anon, authenticated, service_role;   -- trigger-only (P2-3)
 drop trigger if exists document_citations_limited_update on public.document_citations;
 create trigger document_citations_limited_update before update or delete on public.document_citations
   for each row execute function public.document_citations_limited_update();
@@ -1431,6 +1506,7 @@ begin
   end if;
   return new;
 end $$;
+revoke execute on function public.extraction_candidates_lifecycle() from public, anon, authenticated, service_role;   -- trigger-only (P2-3)
 drop trigger if exists extraction_candidates_lifecycle on public.extraction_candidates;
 create trigger extraction_candidates_lifecycle before update or delete on public.extraction_candidates
   for each row execute function public.extraction_candidates_lifecycle();
@@ -1454,6 +1530,7 @@ begin
   end if;
   return new;
 end $$;
+revoke execute on function public.candidate_publications_lifecycle() from public, anon, authenticated, service_role;   -- trigger-only (P2-3)
 drop trigger if exists candidate_publications_lifecycle on public.candidate_publications;
 create trigger candidate_publications_lifecycle before update or delete on public.candidate_publications
   for each row execute function public.candidate_publications_lifecycle();
@@ -1473,6 +1550,7 @@ begin
   end if;
   return new;
 end $$;
+revoke execute on function public.extraction_approvals_limited_update() from public, anon, authenticated, service_role;   -- trigger-only (P2-3)
 drop trigger if exists extraction_approvals_limited_update on public.extraction_approvals;
 create trigger extraction_approvals_limited_update before update or delete on public.extraction_approvals
   for each row execute function public.extraction_approvals_limited_update();
@@ -1643,12 +1721,28 @@ revoke execute on function public.insert_upload_document(uuid, jsonb) from publi
 grant execute on function public.insert_upload_document(uuid, jsonb) to service_role;
 
 -- Scope lock + sync lease. backfill → backfill_cursor/backfill_done; poll → poll_cursor (null clears).
-create or replace function public.advance_document_cursor(p_issuer uuid, p_source text, p_batch uuid, p_mode text, p_cursor jsonb, p_done boolean)
+-- Never backwards unless p_reset (an operator replay; codex plan round 1 P2-4): a finished backfill
+-- (backfill_done) accepts only a repeated completion (null cursor, done) — no new backfill cursor and
+-- no done → false; once the stored cursor carries seq, a new cursor must carry a strictly greater
+-- seq (the sync core bumps it at every checkpoint). Refused → cursor_regression (P0001), no change.
+create or replace function public.advance_document_cursor(p_issuer uuid, p_source text, p_batch uuid, p_mode text, p_cursor jsonb, p_done boolean, p_reset boolean default false)
 returns void language plpgsql security definer set search_path = public as $$
+declare s public.document_sync_scope; v_old jsonb;
 begin
   if p_mode is null or p_mode not in ('backfill','poll') then raise exception 'invalid_input: mode' using errcode = '22023'; end if;
   if p_cursor is not null and jsonb_typeof(p_cursor) <> 'object' then raise exception 'invalid_input: cursor' using errcode = '22023'; end if;
-  perform public.doc_scope_lock(p_issuer, p_source, p_batch);
+  if p_cursor is not null and p_cursor ? 'seq' and jsonb_typeof(p_cursor -> 'seq') <> 'number' then raise exception 'invalid_input: cursor seq' using errcode = '22023'; end if;
+  s := public.doc_scope_lock(p_issuer, p_source, p_batch);
+  if not coalesce(p_reset, false) then
+    if p_mode = 'backfill' and s.backfill_done and not (p_cursor is null and coalesce(p_done, false)) then
+      raise exception 'cursor_regression' using errcode = 'P0001', detail = 'backfill_done';
+    end if;
+    v_old := case when p_mode = 'backfill' then s.backfill_cursor else s.poll_cursor end;
+    if p_cursor is not null and v_old ? 'seq' and jsonb_typeof(v_old -> 'seq') = 'number'
+       and (not (p_cursor ? 'seq') or (p_cursor ->> 'seq')::numeric <= (v_old ->> 'seq')::numeric) then
+      raise exception 'cursor_regression' using errcode = 'P0001', detail = 'seq';
+    end if;
+  end if;
   if p_mode = 'backfill' then
     update public.document_sync_scope set backfill_cursor = coalesce(p_cursor, '{}'::jsonb), backfill_done = coalesce(p_done, false), updated_at = now()
     where issuer_id = p_issuer and source = p_source;
@@ -1657,8 +1751,8 @@ begin
     where issuer_id = p_issuer and source = p_source;
   end if;
 end $$;
-revoke execute on function public.advance_document_cursor(uuid, text, uuid, text, jsonb, boolean) from public, anon, authenticated;
-grant execute on function public.advance_document_cursor(uuid, text, uuid, text, jsonb, boolean) to service_role;
+revoke execute on function public.advance_document_cursor(uuid, text, uuid, text, jsonb, boolean, boolean) from public, anon, authenticated;
+grant execute on function public.advance_document_cursor(uuid, text, uuid, text, jsonb, boolean, boolean) to service_role;
 
 -- Holder check (an expired but unclaimed lease may still be released); records the outcome.
 create or replace function public.release_document_sync_lease(p_issuer uuid, p_source text, p_batch uuid, p_outcome text, p_next_due timestamptz)
@@ -1724,6 +1818,23 @@ begin
 end $$;
 revoke execute on function public.claim_document_extract_lease(uuid, uuid, int) from public, anon, authenticated;
 grant execute on function public.claim_document_extract_lease(uuid, uuid, int) to service_role;
+
+-- Document row lock. The holder (extract_lease_batch_id = p_batch — an expired lease nobody else
+-- claimed is still the holder's) extends its lease without counting an attempt (codex plan round 1
+-- P2-7: long extractions renew before each mutating phase); status must still be 'stored'. Another
+-- batch took over, or the document moved on → false, nothing changes.
+create or replace function public.renew_document_extract_lease(p_document uuid, p_batch uuid, p_ttl int)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare d public.disclosure_documents;
+begin
+  if p_ttl is null or p_ttl < 1 then raise exception 'invalid_input: ttl' using errcode = '22023'; end if;
+  select * into d from public.disclosure_documents where document_id = p_document for update;
+  if not found or d.status <> 'stored' or d.extract_lease_batch_id is distinct from p_batch then return false; end if;
+  update public.disclosure_documents set extract_lease_until = now() + make_interval(secs => p_ttl) where document_id = p_document;
+  return true;
+end $$;
+revoke execute on function public.renew_document_extract_lease(uuid, uuid, int) from public, anon, authenticated;
+grant execute on function public.renew_document_extract_lease(uuid, uuid, int) to service_role;
 
 -- Document row lock + extract lease. Inserts the immutable extraction (candidates role/status
 -- decided here, spec §7.3: hkexnews + HK + annual/interim + text layer → zh primary, else
@@ -1835,6 +1946,21 @@ begin
 end $$;
 revoke execute on function public.claim_candidates_lease(uuid, uuid, int) from public, anon, authenticated;
 grant execute on function public.claim_candidates_lease(uuid, uuid, int) to service_role;
+
+-- Extraction row lock. The holder extends its candidates lease without counting an attempt (P2-7);
+-- candidates_status must still be pending|failed. Taken over or moved on → false.
+create or replace function public.renew_candidates_lease(p_extraction uuid, p_batch uuid, p_ttl int)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare e public.document_extractions;
+begin
+  if p_ttl is null or p_ttl < 1 then raise exception 'invalid_input: ttl' using errcode = '22023'; end if;
+  select * into e from public.document_extractions where extraction_id = p_extraction for update;
+  if not found or e.candidates_status not in ('pending','failed') or e.candidates_lease_batch_id is distinct from p_batch then return false; end if;
+  update public.document_extractions set candidates_lease_until = now() + make_interval(secs => p_ttl) where extraction_id = p_extraction;
+  return true;
+end $$;
+revoke execute on function public.renew_candidates_lease(uuid, uuid, int) from public, anon, authenticated;
+grant execute on function public.renew_candidates_lease(uuid, uuid, int) to service_role;
 
 -- Extraction row lock + candidates lease. pending|failed → done|failed; lease cleared.
 create or replace function public.finish_candidates(p_extraction uuid, p_batch uuid, p_status text)
@@ -2516,7 +2642,7 @@ Expected: 两者退出码 0、无输出（lint 只可能出现 Next 的 `Pages d
 - [ ] **Step 7: 提交（不含锁）**
 
 ```bash
-git add supabase/migrations/20261108090000_disclosure_documents.sql src/lib/documents/documents.integration.test.ts scripts/ci/research-checks.ts scripts/s4/local-db.ts src/lib/supabase/database.types.ts
+git add supabase/migrations/20261108090000_disclosure_documents.sql src/lib/documents/documents.integration.test.ts src/lib/documents/fresh-db.ts scripts/ci/research-checks.ts scripts/s4/local-db.ts src/lib/supabase/database.types.ts
 ```
 ```bash
 git commit -m "feat(documents): migration one — document library tables, view, bucket, lease/version/candidate functions, triggers, privileges; UTF8 test harness" -m "research-checks criticalSuites and local-db initdb edits are separate F3-marked blocks." -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
@@ -2649,7 +2775,10 @@ export interface CandidateRow{
 export type CandidateInsert=Pick<CandidateRow,'kind'|'extractor_kind'|'extractor_ref'|'natural_key'|'citations'|'payload'|'fingerprint'|'input_snapshot'>;
 export interface PublicationRow{candidate_id:string;pub_gen:number;run_id:string;fact_id:string;state:PublicationState;created_at:string;updated_at:string}
 export interface ApprovalRow{approval_id:string;extractor_ref:string;extractor_version:string;table_algo_version:string;code_version:string;concepts:string[];gold_sha256:string;precision:string;recall:string;report_path:string;approved_by:string;approved_at:string;revoked_at:string|null}
-export interface DocScopeCursor{segment:string|null;index:number;item_attempts:number}
+/** Source-ref checkpoint inside one segment pass (codex plan round 1 P2-5): last_ref = the furthest listed item
+ *  processed in this pass; settled = refs processed in this pass without a stored row (404, quarantined,
+ *  exhausted); attempts = failed attempts per source_ref; seq = strictly increasing per checkpoint (P2-4). */
+export interface DocScopeCursor{segment:string|null;last_ref:string|null;settled:string[];attempts:Record<string,number>;seq:number}
 export interface DocScopeRow{
  issuer_id:string;source:ListedSource;reasons:string[];priority:number;fetch_key:string;backfill_cursor:DocScopeCursor|Record<string,never>;backfill_done:boolean;
  poll_cursor:DocScopeCursor|Record<string,never>;next_due_at:string;lease_until:string|null;lease_batch_id:string|null;
@@ -2661,7 +2790,7 @@ export type HumanDecision={kind:'human';decided_by:string;status:'confirmed'|'re
 export type AutoDecision={kind:'auto';approval_id:string};
 export interface CandidatesFilter{source?:ListedSource;issuer_id?:string;document_id?:string}
 
-export type DocumentsDbErrorCode='lease_lost'|'not_eligible'|'revision_exists'|'evidence_incomplete'|'approval_revoked'|'not_publishable'|'invalid_citation'|'decided'|'already_staged'|'binding_conflict'|'invalid_expected_rev'|'stale_plan'|'not_hk_item'|'run_pending'|'invalid_chosen'|'item_not_open'|'too_many_approvals'|'not_found'|'invalid_input'|'unknown';
+export type DocumentsDbErrorCode='lease_lost'|'not_eligible'|'revision_exists'|'evidence_incomplete'|'approval_revoked'|'not_publishable'|'invalid_citation'|'decided'|'already_staged'|'binding_conflict'|'invalid_expected_rev'|'stale_plan'|'not_hk_item'|'run_pending'|'invalid_chosen'|'item_not_open'|'too_many_approvals'|'not_found'|'invalid_input'|'cursor_regression'|'unknown';
 export class DocumentsDbError extends Error{constructor(public code:DocumentsDbErrorCode,message?:string){super(message??code);this.name='DocumentsDbError';}}
 
 export interface DocumentsDb{
@@ -2670,14 +2799,16 @@ export interface DocumentsDb{
  claimSyncLease(issuer:string,source:ListedSource,batch:string,ttlSeconds:number):Promise<boolean>;
  insertDocumentVersion(issuer:string,source:ListedSource,batch:string,doc:DocumentInsert,assets:AssetInsert[]):Promise<InsertVersionResult>;
  insertUploadDocument(owner:string,doc:DocumentInsert):Promise<InsertVersionResult>;
- advanceCursor(issuer:string,source:ListedSource,batch:string,mode:'backfill'|'poll',cursor:DocScopeCursor|null,done:boolean):Promise<void>;
+ advanceCursor(issuer:string,source:ListedSource,batch:string,mode:'backfill'|'poll',cursor:DocScopeCursor|null,done:boolean,reset?:boolean):Promise<void>;   // never backwards unless reset (P2-4): cursor_regression
  releaseSyncLease(issuer:string,source:ListedSource,batch:string,outcome:'success'|'failed',nextDue:string):Promise<void>;
  reclassifyDocument(document:string,patch:Partial<Pick<DocumentRow,'doc_class'|'classifier_gen'|'fiscal_year'|'fiscal_period'|'period_end'|'filing_source_ref'>>,actor:string):Promise<void>;
  claimExtractLease(document:string,batch:string,ttlSeconds:number):Promise<boolean>;
+ renewExtractLease(document:string,batch:string,ttlSeconds:number):Promise<boolean>;      // holder only, no attempt counted; false = taken over / moved on (P2-7)
  finishExtract(document:string,batch:string,extraction:ExtractionInsert,pages:PageInsert[]):Promise<string>;
  failExtract(document:string,batch:string,code:string):Promise<void>;
  requestExtract(document:string,actor:string):Promise<void>;
  claimCandidatesLease(extraction:string,batch:string,ttlSeconds:number):Promise<boolean>;
+ renewCandidatesLease(extraction:string,batch:string,ttlSeconds:number):Promise<boolean>;  // holder only, no attempt counted (P2-7)
  finishCandidates(extraction:string,batch:string,status:'done'|'failed'):Promise<void>;
  requestCandidatesRegen(filter:CandidatesFilter,actor:string):Promise<number>;
  writeCandidateChecks(extraction:string,batch:string,rows:{candidate_id:string;checks:CheckResult[];checks_passed:boolean}[]):Promise<{written:number;inherited:number}>;
@@ -2739,7 +2870,7 @@ export interface PagesJson{extractor_version:string;table_algo_version:string;co
 import {createHash,randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {DocumentsDbError,EXTRACTOR_VERSION,TABLE_ALGO_VERSION} from './types';
-import type {AssetInsert,CandidateInsert,CitationInsert,DocumentInsert,DocumentsDb,ExtractionInsert,ListedSource,Page,PageInsert,PageOpts} from './types';
+import type {AssetInsert,CandidateInsert,CitationInsert,DocScopeCursor,DocumentInsert,DocumentsDb,ExtractionInsert,ListedSource,Page,PageInsert,PageOpts} from './types';
 
 export interface DocsContractHarness{
  db:DocumentsDb;
@@ -2841,11 +2972,11 @@ export function documentsDbContract(label:string,setup:()=>Promise<DocsContractH
    expect(await db.claimSyncLease(iss,'hkexnews',b,600)).toBe(true);
    expect(await db.claimSyncLease(iss,'hkexnews',b2,600)).toBe(false);
    expect(await db.claimSyncLease(iss,'hkexnews',b,600)).toBe(true);
-   expect(await code(db.advanceCursor(iss,'hkexnews',b2,'backfill',{segment:'2024',index:1,item_attempts:0},false))).toBe('lease_lost');
-   await db.advanceCursor(iss,'hkexnews',b,'backfill',{segment:'2024',index:3,item_attempts:1},false);
-   await db.advanceCursor(iss,'hkexnews',b,'poll',{segment:'p',index:0,item_attempts:0},false);
+   expect(await code(db.advanceCursor(iss,'hkexnews',b2,'backfill',{segment:'2024',last_ref:'r1',settled:[],attempts:{},seq:1},false))).toBe('lease_lost');
+   await db.advanceCursor(iss,'hkexnews',b,'backfill',{segment:'2024',last_ref:'r3',settled:['r2'],attempts:{r4:1},seq:3},false);
+   await db.advanceCursor(iss,'hkexnews',b,'poll',{segment:'p',last_ref:null,settled:[],attempts:{},seq:1},false);
    await db.advanceCursor(iss,'hkexnews',b,'poll',null,false);
-   expect((await db.scopeRows('hkexnews',[iss]))[0]).toMatchObject({issuer_id:iss,source:'hkexnews',priority:20,reasons:['in_scope'],backfill_cursor:{segment:'2024',index:3,item_attempts:1},backfill_done:false,poll_cursor:{},lease_batch_id:b});
+   expect((await db.scopeRows('hkexnews',[iss]))[0]).toMatchObject({issuer_id:iss,source:'hkexnews',priority:20,reasons:['in_scope'],backfill_cursor:{segment:'2024',last_ref:'r3',settled:['r2'],attempts:{r4:1},seq:3},backfill_done:false,poll_cursor:{},lease_batch_id:b});
    await h.expire('sync',iss,'hkexnews');
    expect(await db.claimSyncLease(iss,'hkexnews',b2,600)).toBe(true);
    expect(await code(db.advanceCursor(iss,'hkexnews',b,'backfill',null,true))).toBe('lease_lost');
@@ -2867,6 +2998,57 @@ export function documentsDbContract(label:string,setup:()=>Promise<DocsContractH
    expect(all.find(r=>r.issuer_id===iss0)?.priority).toBe(0);
    expect(all.some(r=>r.issuer_id===iss)).toBe(true);
    expect((await db.scopeAll('cninfo')).some(r=>r.issuer_id===iss)).toBe(false);
+  });
+
+  it('advanceCursor never moves backwards without reset (P2-4): stale or missing seq, reopening a finished backfill',async()=>{
+   const {iss,b}=await ready();
+   const cur=(seq:number,last_ref:string|null='r'):DocScopeCursor=>({segment:'y2026',last_ref,settled:[],attempts:{},seq});
+   await db.advanceCursor(iss,'hkexnews',b,'backfill',cur(5),false);
+   expect(await code(db.advanceCursor(iss,'hkexnews',b,'backfill',cur(5,'older'),false))).toBe('cursor_regression');
+   expect(await code(db.advanceCursor(iss,'hkexnews',b,'backfill',cur(4),false))).toBe('cursor_regression');
+   expect(await code(db.advanceCursor(iss,'hkexnews',b,'backfill',{segment:'y2026'} as unknown as DocScopeCursor,false))).toBe('cursor_regression');
+   expect(await code(db.advanceCursor(iss,'hkexnews',b,'backfill',{...cur(9),seq:'9'} as unknown as DocScopeCursor,false))).toBe('invalid_input');
+   expect((await db.scopeRows('hkexnews',[iss]))[0].backfill_cursor).toEqual(cur(5));               // nothing changed
+   await db.advanceCursor(iss,'hkexnews',b,'backfill',cur(6),false);
+   await db.advanceCursor(iss,'hkexnews',b,'backfill',null,true);                                    // completion
+   await db.advanceCursor(iss,'hkexnews',b,'backfill',null,true);                                    // a repeated completion is fine
+   expect(await code(db.advanceCursor(iss,'hkexnews',b,'backfill',null,false))).toBe('cursor_regression');   // done → not done
+   expect(await code(db.advanceCursor(iss,'hkexnews',b,'backfill',cur(1),false))).toBe('cursor_regression'); // a backfill cursor after completion
+   expect((await db.scopeRows('hkexnews',[iss]))[0]).toMatchObject({backfill_done:true,backfill_cursor:{}});
+   await db.advanceCursor(iss,'hkexnews',b,'backfill',null,false,true);                              // explicit operator reset
+   expect((await db.scopeRows('hkexnews',[iss]))[0]).toMatchObject({backfill_done:false,backfill_cursor:{}});
+   await db.advanceCursor(iss,'hkexnews',b,'poll',cur(2),false);
+   expect(await code(db.advanceCursor(iss,'hkexnews',b,'poll',cur(2),false))).toBe('cursor_regression');
+   await db.advanceCursor(iss,'hkexnews',b,'poll',cur(1),false,true);                                // reset may move it back
+   expect((await db.scopeRows('hkexnews',[iss]))[0].poll_cursor).toEqual(cur(1));
+   await db.releaseSyncLease(iss,'hkexnews',b,'success','2030-01-01T00:00:00.000Z');
+  });
+
+  it('renewExtractLease / renewCandidatesLease (P2-7): the holder extends without counting an attempt; after a takeover they are false',async()=>{
+   const {doc,b}=await stored();const b2=await h.batchId();
+   expect(await db.renewExtractLease(doc,b,600)).toBe(false);                                        // not leased
+   expect(await db.claimExtractLease(doc,b,600)).toBe(true);
+   expect(await db.renewExtractLease(doc,b,600)).toBe(true);
+   expect(await db.renewExtractLease(doc,b2,600)).toBe(false);
+   expect((await db.documentById(doc))!.extract_attempts).toBe(1);
+   await h.expire('extract',doc);
+   expect(await db.renewExtractLease(doc,b,600)).toBe(true);                                         // expired but nobody took over: still ours
+   await h.expire('extract',doc);
+   expect(await db.claimExtractLease(doc,b2,600)).toBe(true);                                        // takeover
+   expect(await db.renewExtractLease(doc,b,600)).toBe(false);
+   expect(await code(db.finishExtract(doc,b,extractionInsert(1),[pageInsert(1,'x')]))).toBe('lease_lost');
+   expect(await code(db.renewExtractLease(doc,b2,0))).toBe('invalid_input');
+   const x=await extracted();
+   expect(await db.renewCandidatesLease(x.ext,x.b,600)).toBe(false);
+   expect(await db.claimCandidatesLease(x.ext,x.b,600)).toBe(true);
+   expect(await db.renewCandidatesLease(x.ext,x.b,600)).toBe(true);
+   expect((await db.extractionById(x.ext))!.candidates_attempts).toBe(1);
+   await h.expire('candidates',x.ext);
+   expect(await db.claimCandidatesLease(x.ext,b2,600)).toBe(true);
+   expect(await db.renewCandidatesLease(x.ext,x.b,600)).toBe(false);
+   expect(await code(db.finishCandidates(x.ext,x.b,'done'))).toBe('lease_lost');
+   await db.finishCandidates(x.ext,b2,'done');
+   expect(await db.renewCandidatesLease(x.ext,b2,600)).toBe(false);                                  // moved on
   });
 
   it('insertDocumentVersion: inserted, duplicate, versioned with supersedes; assets in the same call; lease and issuer guards',async()=>{
@@ -3054,6 +3236,7 @@ export function documentsDbContract(label:string,setup:()=>Promise<DocsContractH
    const wrongCode=await db.insertApproval({...approval,code_version:'other'});
    expect((await db.approvalsFor(base.extractor_ref,{limit:100})).find(x=>x.approval_id===A)).toMatchObject({precision:'0.96',recall:'0.97',revoked_at:null,concepts:['revenue']});
    expect(await code(db.approvalsFor(base.extractor_ref,{limit:1}))).toBe('too_many_approvals');
+   expect(await code(db.approvalsFor(base.extractor_ref,{limit:1000}))).toBe('invalid_input');   // P2-1: a look-ahead limit stays ≤ 999 everywhere
    expect(await code(db.decideCandidate(byKey('d'),{kind:'auto',approval_id:A}))).toBe('not_eligible');        // checks not passed
    expect(await code(db.decideCandidate(byKey('c'),{kind:'auto',approval_id:A}))).toBe('not_eligible');        // concept out of scope
    expect(await code(db.decideCandidate(byKey('a'),{kind:'auto',approval_id:wrongCode}))).toBe('not_eligible'); // code_version differs from the extraction row
@@ -3306,6 +3489,18 @@ describe('supabaseDocumentsDb wiring',()=>{
   expect(queries[0].ops).toContainEqual(['is',['revoked_at',null]]);expect(queries[0].ops).toContainEqual(['limit',[2]]);
   expect((await db.approvalsFor('r',{limit:5}))[0]).toMatchObject({precision:'0.96',recall:'0.97',approved_at:'2026-01-01T00:00:00.000Z'});
  });
+ it('P2-1: limit + 1 look-ahead reads never ask PostgREST for more than its 1,000-row ceiling, so pagination and overflow stay correct',async()=>{
+  const versions=Array.from({length:1001},(_,i)=>({...pgDocRow,document_id:`d${i+1}`,source_version:i+1}));
+  const {db,queries}=stub({},{disclosure_documents:versions});
+  const limitOf=(k:number)=>queries[k].ops.find(o=>o[0]==='limit')![1][0] as number;
+  const page=await db.documentVersions('cninfo','r_c',{limit:1000});
+  expect(limitOf(0)).toBe(1000);                                    // 999 + the look-ahead row: within max_rows = 1000, so the look-ahead survives …
+  expect(page.rows).toHaveLength(999);expect(page.nextCursor).not.toBeNull();   // … and the page knows there is more
+  await db.extractionsOf('d1',{limit:1000});
+  expect(limitOf(1)).toBe(1000);
+  await expect(db.approvalsFor('r',{limit:1000})).rejects.toMatchObject({code:'invalid_input'});
+  expect(queries).toHaveLength(2);                                  // refused before any request
+ });
  it('documentFromRow normalises pg text, PostgREST json and to_jsonb rows alike',()=>{
   const a=documentFromRow(pgDocRow);const b=documentFromRow({...pgDocRow,bytes:1024,published_at:'2026-03-20T09:00:00.123+00:00'});
   expect(a).toEqual(b);expect(a.acquisition).toEqual({http_status:200});expect(a.fiscal_year).toBe(2025);
@@ -3352,7 +3547,7 @@ export const IDS_MAX=100;
 export const IN_CHUNK=100;
 /** rows per insert_candidates / write_candidate_checks call. */
 export const WRITE_CHUNK=500;
-const MESSAGE_CODES:readonly DocumentsDbErrorCode[]=['lease_lost','not_eligible','revision_exists','evidence_incomplete','approval_revoked','not_publishable','invalid_citation','decided','already_staged','binding_conflict','invalid_expected_rev','stale_plan','not_hk_item','run_pending','invalid_chosen','item_not_open','too_many_approvals','not_found','invalid_input'];
+const MESSAGE_CODES:readonly DocumentsDbErrorCode[]=['lease_lost','not_eligible','revision_exists','evidence_incomplete','approval_revoked','not_publishable','invalid_citation','decided','already_staged','binding_conflict','invalid_expected_rev','stale_plan','not_hk_item','run_pending','invalid_chosen','item_not_open','too_many_approvals','not_found','invalid_input','cursor_regression'];
 const INPUT_STATES=new Set(['23514','23502','23503','22023','22P02','22007','22008','22003']);
 
 export interface PgErrorLike{message?:string;code?:string|null;details?:string|null;hint?:string|null}
@@ -3380,6 +3575,16 @@ export function chunk<T>(xs:T[],size:number):T[][]{const out:T[][]=[];for(let i=
 export function checkLimit(limit:number):number{
  if(!Number.isInteger(limit)||limit<1||limit>PAGE_LIMIT_MAX)throw new DocumentsDbError('invalid_input',`invalid_limit:${limit}`);
  return limit;
+}
+/** PostgREST answers at most 1,000 rows (max_rows), so a limit + 1 look-ahead read must ask for ≤ 1,000 (codex plan round 1 P2-1). */
+export const LOOKAHEAD_MAX=999;
+/** Page size of a limit + 1 look-ahead read (documentVersions, extractionsOf), the same in all three implementations: a valid limit capped at LOOKAHEAD_MAX (a short page with a next cursor is an ordinary page). */
+export const lookaheadLimit=(limit:number)=>Math.min(checkLimit(limit),LOOKAHEAD_MAX);
+/** approvalsFor detects overflow by look-ahead, so its limit itself must be ≤ LOOKAHEAD_MAX (all three implementations). */
+export function checkApprovalsLimit(limit:number):number{
+ const l=checkLimit(limit);
+ if(l>LOOKAHEAD_MAX)throw new DocumentsDbError('invalid_input',`invalid_limit:${limit}`);
+ return l;
 }
 export function checkIds<T>(ids:T[],max=IDS_MAX):T[]{if(ids.length>max)throw new DocumentsDbError('invalid_input',`too_many_ids:${ids.length}`);return ids;}
 
@@ -3508,14 +3713,16 @@ export function supabaseDocumentsDb(client:SupabaseClient):DocumentsDb{
   async claimSyncLease(issuer,source,batch,ttl){return (await call('claim_document_sync_lease',{p_issuer:issuer,p_source:source,p_batch:batch,p_ttl:ttl}))===true;},
   insertDocumentVersion:(issuer,source,batch,doc,assets)=>call<InsertVersionResult>('insert_document_version',{p_issuer:issuer,p_source:source,p_batch:batch,p_doc:docArg(doc),p_assets:assetsArg(assets)}),
   insertUploadDocument:(owner,doc)=>call<InsertVersionResult>('insert_upload_document',{p_owner:owner,p_doc:docArg(doc)}),
-  async advanceCursor(issuer,source,batch,mode,cursor,done){await call('advance_document_cursor',{p_issuer:issuer,p_source:source,p_batch:batch,p_mode:mode,p_cursor:cursor,p_done:done});},
+  async advanceCursor(issuer,source,batch,mode,cursor,done,reset=false){await call('advance_document_cursor',{p_issuer:issuer,p_source:source,p_batch:batch,p_mode:mode,p_cursor:cursor,p_done:done,p_reset:reset});},
   async releaseSyncLease(issuer,source,batch,outcome,nextDue){await call('release_document_sync_lease',{p_issuer:issuer,p_source:source,p_batch:batch,p_outcome:outcome,p_next_due:nextDue});},
   async reclassifyDocument(document,patch,actor){await call('reclassify_document',{p_document:document,p_patch:patch,p_actor:actor});},
   async claimExtractLease(document,batch,ttl){return (await call('claim_document_extract_lease',{p_document:document,p_batch:batch,p_ttl:ttl}))===true;},
+  async renewExtractLease(document,batch,ttl){return (await call('renew_document_extract_lease',{p_document:document,p_batch:batch,p_ttl:ttl}))===true;},
   async finishExtract(document,batch,extraction,pages){return String(await call('finish_document_extract',{p_document:document,p_batch:batch,p_extraction:extractionArg(extraction),p_pages:pagesArg(pages)}));},
   async failExtract(document,batch,code){await call('fail_document_extract',{p_document:document,p_batch:batch,p_code:code});},
   async requestExtract(document,actor){await call('request_document_extract',{p_document:document,p_actor:actor,p_extractor_version:EXTRACTOR_VERSION,p_table_algo_version:TABLE_ALGO_VERSION});},
   async claimCandidatesLease(extraction,batch,ttl){return (await call('claim_candidates_lease',{p_extraction:extraction,p_batch:batch,p_ttl:ttl}))===true;},
+  async renewCandidatesLease(extraction,batch,ttl){return (await call('renew_candidates_lease',{p_extraction:extraction,p_batch:batch,p_ttl:ttl}))===true;},
   async finishCandidates(extraction,batch,status){await call('finish_candidates',{p_extraction:extraction,p_batch:batch,p_status:status});},
   async requestCandidatesRegen(filter,actor){return Number(await call('request_candidates_regen',{p_filter:regenFilter(filter),p_actor:actor}));},
   async writeCandidateChecks(extraction,batch,input){
@@ -3545,7 +3752,7 @@ export function supabaseDocumentsDb(client:SupabaseClient):DocumentsDb{
    if(changed.length===0&&!(await maybe(c.from('extraction_approvals').select('approval_id').eq('approval_id',approvalId).maybeSingle())))throw new DocumentsDbError('not_found');
   },
   async documentVersions(source,sourceRef,page){
-   const limit=checkLimit(page.limit);
+   const limit=lookaheadLimit(page.limit);
    let q=c.from('disclosure_documents').select('*').eq('source',source).eq('source_ref',sourceRef);
    if(page.cursor)q=q.gt('source_version',Number(decodeCursor(page.cursor)[0]));
    return sliceRows(await rows(q.order('source_version').limit(limit+1)),limit,documentFromRow,r=>[Number(r.source_version)]);
@@ -3559,7 +3766,7 @@ export function supabaseDocumentsDb(client:SupabaseClient):DocumentsDb{
   async documentById(id){const r=await maybe(c.from('disclosure_documents').select('*').eq('document_id',id).maybeSingle());return r?documentFromRow(r):null;},
   async assetsOf(documentId){return (await rows(c.from('document_assets').select('*').eq('document_id',documentId).order('role').order('filename').limit(PAGE_LIMIT_MAX))).map(assetFromRow);},
   async extractionsOf(documentId,page){
-   const limit=checkLimit(page.limit);
+   const limit=lookaheadLimit(page.limit);
    let q=c.from('document_extractions').select('*').eq('document_id',documentId);
    if(page.cursor){const [at,id]=decodeCursor(page.cursor);q=q.or(`created_at.lt."${at}",and(created_at.eq."${at}",extraction_id.lt.${id})`);}
    return sliceRows(await rows(q.order('created_at',{ascending:false}).order('extraction_id',{ascending:false}).limit(limit+1)),limit,extractionFromRow,r=>[String(r.created_at),String(r.extraction_id)]);
@@ -3582,7 +3789,7 @@ export function supabaseDocumentsDb(client:SupabaseClient):DocumentsDb{
    return pageOf(await call<Envelope>('list_candidate_publications',{...publicationsWhere(where),p_cursor:sqlCursor(page.cursor,PUBLICATION_KEYS),p_limit:checkLimit(page.limit)}),publicationFromRow,PUBLICATION_KEYS);
   },
   async approvalsFor(extractorRef,opts){
-   const limit=checkLimit(opts.limit);
+   const limit=checkApprovalsLimit(opts.limit);
    const r=await rows(c.from('extraction_approvals').select('*').eq('extractor_ref',extractorRef).is('revoked_at',null).order('approved_at',{ascending:false}).order('approval_id').limit(limit+1));
    if(r.length>limit)throw new DocumentsDbError('too_many_approvals',`more than ${limit} approvals for ${extractorRef}`);
    return r.map(approvalFromRow);
@@ -3637,7 +3844,7 @@ export async function allPages<T>(read:(page:PageOpts)=>Promise<Page<T>>,limit=P
 // migration-one function produces (e.g. a publication marked abandoned by migration two).
 import {createHash,randomUUID} from 'node:crypto';
 import {canonicalDecimal} from '../facts/json-numbers';
-import {checkIds,checkLimit,decodeCursor,encodeCursor,regenFilter} from './db';
+import {checkApprovalsLimit,checkIds,checkLimit,decodeCursor,encodeCursor,lookaheadLimit,regenFilter} from './db';
 import {DocumentsDbError,EXTRACTOR_VERSION,PAGE_LIMIT_MAX,TABLE_ALGO_VERSION} from './types';
 import type {
  ApprovalRow,AssetRow,CandidateRow,CitationRow,DocScopeRow,DocumentInsert,DocumentRow,DocumentsDb,ExtractionRow,ListedSource,Page,PageRow,PublicationRow,
@@ -3773,9 +3980,18 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
    if(s.lease_batch_id===null||!live(s.lease_until)||s.lease_batch_id===batch){s.lease_batch_id=batch;s.lease_until=later(ttl);s.updated_at=now();return true;}
    return false;
   },
-  async advanceCursor(issuer,source,batch,mode,cursor,done){
+  async advanceCursor(issuer,source,batch,mode,cursor,done,reset=false){
    if(mode!=='backfill'&&mode!=='poll')throw invalid('mode');
+   if(cursor!==null&&(typeof cursor!=='object'||Array.isArray(cursor)))throw invalid('cursor');
+   const seqOf=(c:unknown)=>isObj(c)&&'seq' in c?c.seq:undefined;
+   if(cursor!==null&&seqOf(cursor)!==undefined&&typeof seqOf(cursor)!=='number')throw invalid('cursor');
    const s=scopeLock(issuer,source,batch);
+   if(!reset){
+    // never backwards (P2-4): a finished backfill takes only a repeated completion; seq strictly increases
+    if(mode==='backfill'&&s.backfill_done&&!(cursor===null&&done===true))throw new DocumentsDbError('cursor_regression','cursor_regression: backfill_done');
+    const old=seqOf(mode==='backfill'?s.backfill_cursor:s.poll_cursor);
+    if(cursor!==null&&typeof old==='number'){const next=seqOf(cursor);if(typeof next!=='number'||next<=old)throw new DocumentsDbError('cursor_regression','cursor_regression: seq');}
+   }
    if(mode==='backfill'){s.backfill_cursor=cursor?{...cursor}:{};s.backfill_done=done===true;}else s.poll_cursor=cursor?{...cursor}:{};
    s.updated_at=now();
   },
@@ -3841,6 +4057,13 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
    d.extract_lease_batch_id=batch;d.extract_lease_until=later(ttl);d.extract_attempts+=1;
    return true;
   },
+  async renewExtractLease(document,batch,ttl){
+   ttlCheck(ttl);
+   const d=documents.get(document);
+   if(!d||d.status!=='stored'||d.extract_lease_batch_id!==batch)return false;   // an expired lease nobody took over is still ours
+   d.extract_lease_until=later(ttl);
+   return true;
+  },
   async finishExtract(document,batch,extraction,input){
    const d=extractLock(document,batch);
    if(!extraction.extractor_version||!extraction.table_algo_version||typeof extraction.has_text_layer!=='boolean'||!Number.isInteger(extraction.page_count)||extraction.page_count<0)throw invalid('extraction fields');
@@ -3879,6 +4102,13 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
    if(!(e.candidates_lease_batch_id===null||!live(e.candidates_lease_until)||e.candidates_lease_batch_id===batch))return false;
    if(e.candidates_attempts>=3){e.candidates_status='exhausted';e.candidates_lease_until=null;e.candidates_lease_batch_id=null;return false;}
    e.candidates_lease_batch_id=batch;e.candidates_lease_until=later(ttl);e.candidates_attempts+=1;
+   return true;
+  },
+  async renewCandidatesLease(extraction,batch,ttl){
+   ttlCheck(ttl);
+   const e=extractions.get(extraction);
+   if(!e||(e.candidates_status!=='pending'&&e.candidates_status!=='failed')||e.candidates_lease_batch_id!==batch)return false;
+   e.candidates_lease_until=later(ttl);
    return true;
   },
   async finishCandidates(extraction,batch,status){
@@ -4026,7 +4256,7 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
 
   // ---------------------------------------------------------------- reads
   async documentVersions(source,sourceRef,p){
-   const limit=checkLimit(p.limit);const a=after(p.cursor,1);
+   const limit=lookaheadLimit(p.limit);const a=after(p.cursor,1);
    return page(versionsOf(source,sourceRef).filter(d=>!a||d.source_version>Number(a[0])),limit,d=>[d.source_version]);
   },
   async knownSourceRefs(issuer,source,refs){
@@ -4048,7 +4278,7 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
   async documentById(id){const d=documents.get(id);return d?clone(d):null;},
   async assetsOf(documentId){return [...assets.values()].filter(a=>a.document_id===documentId).sort((x,y)=>cmp(x.role,y.role)||cmp(x.filename,y.filename)).slice(0,PAGE_LIMIT_MAX).map(clone);},
   async extractionsOf(documentId,p){
-   const limit=checkLimit(p.limit);const a=after(p.cursor,2);
+   const limit=lookaheadLimit(p.limit);const a=after(p.cursor,2);
    const rows=[...extractions.values()].filter(e=>e.document_id===documentId&&(!a||gt2([String(a[0]),String(a[1])],[e.created_at,e.extraction_id])))
     .sort((x,y)=>cmp(y.created_at,x.created_at)||cmp(y.extraction_id,x.extraction_id));
    return page(rows,limit,e=>[e.created_at,e.extraction_id]);
@@ -4086,7 +4316,7 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
    return page(rows,limit,x=>[x.candidate_id,x.pub_gen]);
   },
   async approvalsFor(extractorRef,o){
-   const limit=checkLimit(o.limit);
+   const limit=checkApprovalsLimit(o.limit);
    const rows=[...approvals.values()].filter(a=>a.extractor_ref===extractorRef&&a.revoked_at===null).sort((x,y)=>cmp(y.approved_at,x.approved_at)||cmp(x.approval_id,y.approval_id));
    if(rows.length>limit)throw new DocumentsDbError('too_many_approvals',`more than ${limit} approvals for ${extractorRef}`);
    return rows.map(clone);
@@ -4225,6 +4455,7 @@ describe.skipIf(!enabled)('pgDocumentsDb on real PostgreSQL',()=>{
     from generate_series(1,1001) g`,[iss,b,ref]);
    const versions=await drain(p=>h.db.documentVersions('cninfo',ref,p),1000);
    expect(versions.rows.map(r=>r.source_version)).toEqual(Array.from({length:1001},(_,i)=>i+1));expect(versions.pages).toBe(2);
+   expect((await h.db.documentVersions('cninfo',ref,{limit:1000})).rows).toHaveLength(999);   // P2-1: look-ahead pages hold ≤ LOOKAHEAD_MAX rows in every implementation
    // 1,001 candidates on one extraction, inserted in one statement (equal created_at: the candidate_id tiebreak decides)
    await h.db.reconcileScope('hkexnews',[{issuer_id:iss,reasons:['t'],priority:1,fetch_key:'00001'}]);
    expect(await h.db.claimSyncLease(iss,'hkexnews',b,600)).toBe(true);
@@ -4266,8 +4497,8 @@ Expected: FAIL —— `Failed to load url ./pg-documents-db`，整个文件不�
 import type {Pool} from 'pg';
 import {typeParsers} from '../db/pg-table-client';
 import {
- CANDIDATE_KEYS,IN_CHUNK,PUBLICATION_KEYS,READ_DOC_KEYS,REFS_CHUNK,WRITE_CHUNK,approvalFromRow,assetFromRow,candidateFromRow,candidatesWhere,checkIds,checkLimit,chunk,citationFromRow,
- decodeCursor,documentFromRow,extractionFromRow,pageFromRow,pageOf,publicationFromRow,publicationsWhere,readDocumentsArgs,regenFilter,scopeFromRow,sliceRows,sqlCursor,toDocumentsDbError,
+ CANDIDATE_KEYS,IN_CHUNK,PUBLICATION_KEYS,READ_DOC_KEYS,REFS_CHUNK,WRITE_CHUNK,approvalFromRow,assetFromRow,candidateFromRow,candidatesWhere,checkApprovalsLimit,checkIds,checkLimit,chunk,citationFromRow,
+ decodeCursor,documentFromRow,extractionFromRow,lookaheadLimit,pageFromRow,pageOf,publicationFromRow,publicationsWhere,readDocumentsArgs,regenFilter,scopeFromRow,sliceRows,sqlCursor,toDocumentsDbError,
 } from './db';
 import type {Envelope,PgErrorLike} from './db';
 import {DocumentsDbError,EXTRACTOR_VERSION,PAGE_LIMIT_MAX,TABLE_ALGO_VERSION} from './types';
@@ -4286,14 +4517,16 @@ export function pgDocumentsDb(pool:Pool):DocumentsDb{
   async claimSyncLease(issuer,source,batch,ttl){return (await fn<boolean>('public.claim_document_sync_lease($1,$2,$3,$4)',[issuer,source,batch,ttl]))===true;},
   insertDocumentVersion:(issuer,source,batch,doc,assets)=>fn<InsertVersionResult>('public.insert_document_version($1,$2,$3,$4::jsonb,$5::jsonb)',[issuer,source,batch,json(doc),json(assets)]),
   insertUploadDocument:(owner,doc)=>fn<InsertVersionResult>('public.insert_upload_document($1,$2::jsonb)',[owner,json(doc)]),
-  async advanceCursor(issuer,source,batch,mode,cursor,done){await fn('public.advance_document_cursor($1,$2,$3,$4,$5::jsonb,$6)',[issuer,source,batch,mode,json(cursor),done]);},
+  async advanceCursor(issuer,source,batch,mode,cursor,done,reset=false){await fn('public.advance_document_cursor($1,$2,$3,$4,$5::jsonb,$6,$7)',[issuer,source,batch,mode,json(cursor),done,reset]);},
   async releaseSyncLease(issuer,source,batch,outcome,nextDue){await fn('public.release_document_sync_lease($1,$2,$3,$4,$5::timestamptz)',[issuer,source,batch,outcome,nextDue]);},
   async reclassifyDocument(document,patch,actor){await fn('public.reclassify_document($1,$2::jsonb,$3)',[document,json(patch),actor]);},
   async claimExtractLease(document,batch,ttl){return (await fn<boolean>('public.claim_document_extract_lease($1,$2,$3)',[document,batch,ttl]))===true;},
+  async renewExtractLease(document,batch,ttl){return (await fn<boolean>('public.renew_document_extract_lease($1,$2,$3)',[document,batch,ttl]))===true;},
   async finishExtract(document,batch,extraction,pages){return String(await fn('public.finish_document_extract($1,$2,$3::jsonb,$4::jsonb)',[document,batch,json(extraction),json(pages)]));},
   async failExtract(document,batch,code){await fn('public.fail_document_extract($1,$2,$3)',[document,batch,code]);},
   async requestExtract(document,actor){await fn('public.request_document_extract($1,$2,$3,$4)',[document,actor,EXTRACTOR_VERSION,TABLE_ALGO_VERSION]);},
   async claimCandidatesLease(extraction,batch,ttl){return (await fn<boolean>('public.claim_candidates_lease($1,$2,$3)',[extraction,batch,ttl]))===true;},
+  async renewCandidatesLease(extraction,batch,ttl){return (await fn<boolean>('public.renew_candidates_lease($1,$2,$3)',[extraction,batch,ttl]))===true;},
   async finishCandidates(extraction,batch,status){await fn('public.finish_candidates($1,$2,$3)',[extraction,batch,status]);},
   async requestCandidatesRegen(filter,actor){return Number(await fn('public.request_candidates_regen($1::jsonb,$2)',[json(regenFilter(filter)),actor]));},
   async writeCandidateChecks(extraction,batch,input){
@@ -4324,7 +4557,7 @@ export function pgDocumentsDb(pool:Pool):DocumentsDb{
    if(changed.rowCount===0&&!(await one(`select 1 from public.extraction_approvals where approval_id = $1`,[approvalId])))throw new DocumentsDbError('not_found');
   },
   async documentVersions(source,sourceRef,page){
-   const limit=checkLimit(page.limit);const after=page.cursor?Number(decodeCursor(page.cursor)[0]):null;
+   const limit=lookaheadLimit(page.limit);const after=page.cursor?Number(decodeCursor(page.cursor)[0]):null;
    const r=await run(`select * from public.disclosure_documents where source = $1 and source_ref = $2 and ($3::int is null or source_version > $3) order by source_version limit $4`,[source,sourceRef,after,limit+1]);
    return sliceRows(r.rows,limit,documentFromRow,x=>[Number(x.source_version)]);
   },
@@ -4340,7 +4573,7 @@ export function pgDocumentsDb(pool:Pool):DocumentsDb{
   async documentById(id){const r=await one(`select * from public.disclosure_documents where document_id = $1`,[id]);return r?documentFromRow(r):null;},
   async assetsOf(documentId){return (await run(`select * from public.document_assets where document_id = $1 order by role, filename limit $2`,[documentId,PAGE_LIMIT_MAX])).rows.map(assetFromRow);},
   async extractionsOf(documentId,page){
-   const limit=checkLimit(page.limit);const [at,id]=page.cursor?decodeCursor(page.cursor):[null,null];
+   const limit=lookaheadLimit(page.limit);const [at,id]=page.cursor?decodeCursor(page.cursor):[null,null];
    const r=await run(`select * from public.document_extractions where document_id = $1 and ($2::timestamptz is null or (created_at, extraction_id) < ($2::timestamptz, $3::uuid))
     order by created_at desc, extraction_id desc limit $4`,[documentId,at,id,limit+1]);
    return sliceRows(r.rows,limit,extractionFromRow,x=>[String(x.created_at),String(x.extraction_id)]);
@@ -4365,7 +4598,7 @@ export function pgDocumentsDb(pool:Pool):DocumentsDb{
    return pageOf(await fn<Envelope>('public.list_candidate_publications($1::uuid[],$2,$3,$4,$5,$6::jsonb,$7)',[w.p_candidate_ids,w.p_run,w.p_issuer,w.p_pub_gen,w.p_state,json(sqlCursor(page.cursor,PUBLICATION_KEYS)),checkLimit(page.limit)]),publicationFromRow,PUBLICATION_KEYS);
   },
   async approvalsFor(extractorRef,opts){
-   const limit=checkLimit(opts.limit);
+   const limit=checkApprovalsLimit(opts.limit);
    const r=(await run(`select * from public.extraction_approvals where extractor_ref = $1 and revoked_at is null order by approved_at desc, approval_id limit $2`,[extractorRef,limit+1])).rows;
    if(r.length>limit)throw new DocumentsDbError('too_many_approvals',`more than ${limit} approvals for ${extractorRef}`);
    return r.map(approvalFromRow);
@@ -4903,7 +5136,7 @@ git commit -m "feat(documents): content-addressed ObjectStore (Supabase + memory
 - `memoryDocumentsDb()` 返回的对象可被展开（`{...db}`）且方法不依赖 `this`；`setNow(iso)` 同时驱动租约到期判断与 `reconcileScope` 新行的 `next_due_at`。
 - `reconcileScope` 新建行：`backfill_cursor={}`、`poll_cursor={}`、`backfill_done=false`、`next_due_at=now`、租约空、`last_*` 为 null；已有行只改 `reasons/priority/fetch_key`。
 - `claimSyncLease`：行不存在 → false；他批次未过期 → false；同批次 → 续租 true。`releaseSyncLease`：仅持有者（否则 `DocumentsDbError('lease_lost')`）；写 `last_attempt_at=now`、`last_status`、成功时 `last_success_at=now`、`next_due_at=p_next_due`（原样），清租约。
-- `insertDocumentVersion` / `advanceCursor`：租约不是本批次或已过期 → `DocumentsDbError('lease_lost')`；`advanceCursor(…,cursor=null,…)` 存 `{}`；`'backfill'` 模式写 `backfill_cursor` 与 `backfill_done`，`'poll'` 模式只写 `poll_cursor`。
+- `insertDocumentVersion` / `advanceCursor`：租约不是本批次或已过期 → `DocumentsDbError('lease_lost')`；`advanceCursor(…,cursor=null,…)` 存 `{}`；`'backfill'` 模式写 `backfill_cursor` 与 `backfill_done`，`'poll'` 模式只写 `poll_cursor`；不带 `reset` 时只进不退（已完成回填只接受重复完成；新游标 `seq` 必须大于已存的），否则 `cursor_regression`（P2-4）。
 - `insertDocumentVersion` 的版本语义按 §4.8：同 `(source,source_ref)` 已有同哈希 → `duplicate`；否则 `source_version=max+1`、`supersedes_document_id`=上一最高版本、`observed_replacement=(max>0)`；资产随文档写入（`assets()` 可读）。函数**不改** `p_doc.available_at`（替换版本的 `available_at=fetched_at` 由本 Part 在调用前决定，见 Task 7）。
 - `knownSourceRefs(issuer,source,refs)` 只返回该发行人该来源已入库的引用；`documentVersions(source,ref,{limit})` 返回该引用全部版本（顺序不限）。
 - `scopeDue(source,now,limit)`：`priority>0 and next_due_at<=now`（是否同时排除未过期租约都可以，本 Part 不依赖）。
@@ -4916,7 +5149,7 @@ git commit -m "feat(documents): content-addressed ObjectStore (Supabase + memory
 1. **§6.1 `SyncDeps` 形状**：规格写 `list/segments` 两个函数，骨架契约写 `adapter:SourceAdapter`。按骨架。
 2. **§6.1 第 5 步"先 HEAD/Content-Length"**：实现为**一次 GET**：响应头 `Content-Length` 超限即取消读取返回 `too_large`，否则流式读到上限即 `cancel()`。效果相同（正文从不读过上限），请求数减半（HKEX 1 req/s）。
 3. **替换版本的 `available_at`**（§5.2）：SQL 函数接收的 `p_doc` 已带 `available_at`，函数内才知道是否"替换"。本 Part 在插入前读 `documentVersions`：已有版本且无同哈希 → `available_at=fetched_at`。同步租约串行化同发行人同来源；同一 `source_ref` 被两个发行人列出（联合公告）时理论上可竞争，此时版本号仍由函数正确分配，只有 `available_at` 可能取发布时间——记入 §17 偏差候选。
-4. **`document_fetch_exhausted` 的 payload"含三次错误"**：游标契约只有 `{segment,index,item_attempts}`，不存历史错误；payload 记 `attempts` 与最后一次 `{code,message}`，前两次错误在各自批次的 `errors` 中。
+4. **`document_fetch_exhausted` 的 payload"含三次错误"**：游标契约只有 `{segment,last_ref,settled,attempts,seq}`（按 source_ref 记次数，P2-5），不存历史错误；payload 记 `attempts` 与最后一次 `{code,message}`，前两次错误在各自批次的 `errors` 中。
 5. **`maxPerIssuer` 与 hkexnews 默认 `refetch=true`**：规格"新项计数"——已知项（即使重新下载）不计数。代价：hkex 每次运行重新下载窗口内已知 PDF（轮询窗口 1–2 天，量小）。
 6. **轮询窗口未走完**（上限或截止）：规格未定。段 id 为 `poll:<from>`，游标保存该 id，下次从同一 `from` 继续同一列表（新项只会追加在末尾）；走完才清游标。
 7. **EDGAR 覆盖缺口**：`files[]` 未核对时，`recent` 走完后 `backfill_done` 保持 false、回填游标重置为 `{}`（下次从头，已知项是不下载的重复）、回执 `coverage_summary`、`next_due=now+1d`（不是"回填未完 → now"，否则每次 cron 都重列）。
@@ -5569,7 +5802,7 @@ describe('segments',()=>{
  });
  it('poll: from last success − 1 day; an unfinished window resumes from its own start; 7 days when never successful',()=>{
   expect(pollSegment(scope({last_success_at:'2026-11-04T16:00:00.000Z'}),now)).toEqual({id:'poll:2026-11-03',from:'2026-11-03',to:'2026-11-06'});
-  expect(pollSegment(scope({last_success_at:'2026-11-04T16:00:00.000Z',poll_cursor:{segment:'poll:2026-10-30',index:4,item_attempts:0}}),now).id).toBe('poll:2026-10-30');
+  expect(pollSegment(scope({last_success_at:'2026-11-04T16:00:00.000Z',poll_cursor:{segment:'poll:2026-10-30',last_ref:'2026103000001_c',settled:[],attempts:{},seq:4}}),now).id).toBe('poll:2026-10-30');
   expect(pollSegment(scope(),now).from).toBe('2026-10-29');
  });
  it('orderListed sorts by (published_at, source_ref) and keeps the first of each source_ref',()=>{
@@ -6199,9 +6432,10 @@ git commit -m "feat(documents): source adapters (segments, complete ordered list
 - 批次 `producer='documents-sync'`、`dataset='documents.<source>'`、`tool_versions={classifier_gen,source}`；`codeVersion` 缺失且非 dry-run → 在建批次前抛 `DocumentsSyncError('code_version_unavailable')`；适配器来源与 `opts.source` 不符 → `adapter_mismatch`。
 - 定时路径先 `reconcileDocumentScope`，再 `scopeDue(source, now, limit)`；显式 `issuerIds` 不调和、不看到期，缺行由 `documentScopeRowFor` 建（apply 写入、dry-run 只在内存构造），建不出 → `scope_unresolved`（failed）。
 - 剩余预算 < 90 s 不开始新发行人（`deadline_hit` 信息码，`{not_started}`）；剩余 < 25 s 不开始新项（发行人 `deadline_hit`、游标落盘、`next_due=now`）。
-- 游标：每项开始网络/写入**之前**落盘（`advanceCursor`），所以崩溃从该项重来；连续的已知重复只在下一次落盘时合并写一次。存储的段 id 不在本次段列表 → 从第一段重来。
+- 认领租约后**重读**本行（`scopeRows`），模式与游标取重读值，不用选择时的快照（计划审计 P2-4：别的批次可能在选择与认领之间推进并释放）。
+- 游标是 source_ref 检查点 `{segment,last_ref,settled,attempts,seq}`（计划审计 P2-5，不再用下标）：续跑时重新列表，`settled`（本轮处理过但没入库：404/隔离/耗尽）跳过；已入库且位置不晚于 `last_ref` 在新列表中位置的跳过；未入库的项一律处理（插入不会被跳过，删除不会让后续项被跳过）；重试次数按 source_ref 记。每次落盘 `seq+1`，SQL 拒绝不递增的 `seq` 与把已完成回填改回未完成（`cursor_regression`，`reset` 例外）。每项开始网络/写入**之前**落盘（`advanceCursor`），所以崩溃从该项重来；连续的已知重复只在下一次落盘时合并写一次。存储的段 id 不在本次段列表 → 从第一段重来。
 - 已知项（`knownSourceRefs`）且 `refetch=false` → `duplicates`，不下载、不计入 `maxPerIssuer`（默认 50）；hkexnews 默认 `refetch=true`。新项达到上限 → 停在该项（`code='item_limit'`、`next_due=now`）。
-- 404 → `skipped_summary(document_missing)` 前进；`too_large` → 隔离 `document_too_large` 前进；MIME 嗅探不在本来源允许集 → 隔离 `unexpected_mime` 前进；抓取/上传/必抓资产失败 → 不前进、`item_attempts+1`、发行人 failed（`next_due=now+6h`），第三次 → 隔离 `document_fetch_exhausted` 并前进、继续后续项。隔离键：`dataset=documents.<source>`、`table='disclosure_documents'`、`natural_key='<source>:<source_ref>'`。
+- 404 → `skipped_summary(document_missing)` 前进；`too_large` → 隔离 `document_too_large` 前进；MIME 嗅探不在本来源允许集 → 隔离 `unexpected_mime` 前进；抓取/上传/必抓资产失败 → 不前进、`attempts[source_ref]+1`、发行人 failed（`next_due=now+6h`），第三次 → 隔离 `document_fetch_exhausted` 并前进、继续后续项。隔离键：`dataset=documents.<source>`、`table='disclosure_documents'`、`natural_key='<source>:<source_ref>'`。
 - 写入顺序：原件 `store.put(blobPath)` → 资产（EDGAR `index.json` 必抓；`assetsFromIndex` 给出的 XBRL 实例可选，失败/超限 → `skipped_summary(xbrl_skipped)`）→ `insertDocumentVersion`（文档 + 资产一次事务）。替换版本 `available_at = fetched_at`，首版 `= published_at`；`available_date` 按来源时区（US 纽约，CN/HK UTC+8）。
 - 段全部走完：回填 → `advanceCursor(null, done = coverageGap===null)`；有缺口时回执 `coverage_summary`；轮询 → 清游标；`next_due=now+1d`。
 - `lease_lost`（插入/游标/续租）→ 发行人 failed，之后对该发行人不再调用任何写函数（不释放）。
@@ -6301,7 +6535,7 @@ describe('runDocumentsSync — backfill, idempotence, versions',()=>{
   const s=await setup();backfillLists(s);
   const first=await s.run();
   await s.db.claimSyncLease(H,'hkexnews',OPS,600);
-  await s.db.advanceCursor(H,'hkexnews',OPS,'backfill',null,false);   // replay the whole backfill
+  await s.db.advanceCursor(H,'hkexnews',OPS,'backfill',null,false,true);   // operator reset: replay the whole backfill
   await s.db.releaseSyncLease(H,'hkexnews',OPS,'success',NOW_ISO);
   const calls=s.f.calls.length;
   const again=await s.run({refetch:false});
@@ -6337,20 +6571,20 @@ describe('runDocumentsSync — cursor, item cap, deadline',()=>{
   // reset to backfill over a longer list: three known + three new
   s.a.lists.y2026=all;
   await s.db.claimSyncLease(H,'hkexnews',OPS,600);
-  await s.db.advanceCursor(H,'hkexnews',OPS,'backfill',null,false);
+  await s.db.advanceCursor(H,'hkexnews',OPS,'backfill',null,false,true);   // operator reset
   await s.db.releaseSyncLease(H,'hkexnews',OPS,'success',NOW_ISO);
   const r=await s.run({maxPerIssuer:2,refetch:false});
   expect(r.counts).toMatchObject({duplicates:3,inserted:2});
   expect(r.issuers[0]).toMatchObject({outcome:'success',code:'item_limit'});
-  expect(s.scopeRow()).toMatchObject({backfill_done:false,backfill_cursor:{segment:'y2026',index:5,item_attempts:0},next_due_at:NOW_ISO});
+  expect(s.scopeRow()).toMatchObject({backfill_done:false,backfill_cursor:{segment:'y2026',last_ref:'b2',settled:[],attempts:{}},next_due_at:NOW_ISO});
   const rest=await s.run({maxPerIssuer:2,refetch:false});
   expect(rest.counts).toMatchObject({inserted:1,duplicates:0});
   expect(s.scopeRow().backfill_done).toBe(true);
  });
- it('resumes inside a segment from the stored cursor; an unknown segment id restarts from the first segment',async()=>{
+ it('resumes inside a segment from the stored checkpoint (a settled ref is not fetched again); an unknown segment id restarts from the first segment',async()=>{
   const s=await setup();backfillLists(s);
   await s.db.claimSyncLease(H,'hkexnews',OPS,600);
-  await s.db.advanceCursor(H,'hkexnews',OPS,'backfill',{segment:'y2026',index:1,item_attempts:0},false);
+  await s.db.advanceCursor(H,'hkexnews',OPS,'backfill',{segment:'y2026',last_ref:'2026031900200_c',settled:['2026031900200_c'],attempts:{},seq:1},false);
   await s.db.releaseSyncLease(H,'hkexnews',OPS,'success',NOW_ISO);
   const r=await s.run();
   expect(s.a.listed).toEqual(['y2026']);
@@ -6358,7 +6592,7 @@ describe('runDocumentsSync — cursor, item cap, deadline',()=>{
   expect(s.db.documents().map(d=>d.source_ref)).toEqual(['2026090300863_c']);
   const t=await setup();backfillLists(t);
   await t.db.claimSyncLease(H,'hkexnews',OPS,600);
-  await t.db.advanceCursor(H,'hkexnews',OPS,'backfill',{segment:'y2019',index:7,item_attempts:2},false);
+  await t.db.advanceCursor(H,'hkexnews',OPS,'backfill',{segment:'y2019',last_ref:'x',settled:[],attempts:{x:2},seq:7},false);
   await t.db.releaseSyncLease(H,'hkexnews',OPS,'success',NOW_ISO);
   await t.run();
   expect(t.a.listed).toEqual(['y2025','y2026']);
@@ -6379,6 +6613,50 @@ describe('runDocumentsSync — cursor, item cap, deadline',()=>{
   expect(t.db.documents()).toHaveLength(0);
   expect(t.scopeRow()).toMatchObject({backfill_cursor:{},backfill_done:false,last_status:'success',next_due_at:'2026-11-06T02:01:20.000Z'});   // nothing started: due again at once
  });
+ it('P2-5: resumes by source_ref — a removal before the checkpoint skips nothing, an insertion before it is still fetched, retries stay with their source_ref',async()=>{
+  const s=await setup();
+  const [A,B,C,X,Y]=['r-a','r-b','r-c','r-x','r-y'].map((r,i)=>item(r,`2026-0${i+1}-01`));
+  for(const l of [A,B,C,X,Y])s.f.set(l.source_url,s.f.ok(pdfBytes(l.source_ref)));
+  const refs=()=>s.db.documents().map(d=>d.source_ref).sort();
+  s.a.lists={y2025:[],y2026:[A,B,C]};
+  expect((await s.run({maxPerIssuer:1,refetch:false})).issuers[0]).toMatchObject({outcome:'success',code:'item_limit'});
+  expect(s.scopeRow().backfill_cursor).toMatchObject({segment:'y2026',last_ref:'r-a'});
+  s.a.lists.y2026=[B,C];                                                      // A left the listing: an ordinal 1 would now skip B
+  await s.run({maxPerIssuer:1,refetch:false});
+  expect(refs()).toEqual(['r-a','r-b']);
+  s.a.lists.y2026=[X,B,C];                                                    // X inserted before the checkpoint
+  s.f.set(C.source_url,new Error('ECONNRESET'));
+  const r3=await s.run({maxPerIssuer:5,refetch:false});
+  expect(refs()).toEqual(['r-a','r-b','r-x']);
+  expect(r3.issuers[0]).toMatchObject({outcome:'failed',code:'fetch_failed'});
+  expect(s.scopeRow().backfill_cursor).toMatchObject({segment:'y2026',attempts:{'r-c':1}});
+  s.a.lists.y2026=[X,B,Y,C];                                                  // another insertion ahead of the failing item: its retry count stays with r-c
+  await s.run({maxPerIssuer:5,refetch:false});
+  expect(refs()).toEqual(['r-a','r-b','r-x','r-y']);
+  expect(s.scopeRow().backfill_cursor).toMatchObject({last_ref:'r-y',attempts:{'r-c':2}});
+  await s.run({maxPerIssuer:5,refetch:false});
+  expect(s.quarantined()).toEqual([expect.objectContaining({natural_key:'hkexnews:r-c',reason_code:'document_fetch_exhausted'})]);
+  expect(s.quarantined()[0].payload).toMatchObject({attempts:3});
+  expect(s.scopeRow()).toMatchObject({backfill_done:true,backfill_cursor:{}});
+ });
+ it('P2-4: a batch that finished the backfill between our selection and our claim is not regressed — the row is reread under our lease',async()=>{
+  const s=await setup();backfillLists(s);
+  const OTHER='00000000-0000-4000-8000-0000000000bb';
+  const claim=s.db.claimSyncLease;let raced=false;
+  s.deps.db={...s.db,claimSyncLease:async(i,src,b,ttl)=>{
+   if(!raced&&b!==OTHER){
+    raced=true;                                                               // selection already read backfill_done=false
+    expect(await claim(i,src,OTHER,600)).toBe(true);
+    await s.db.advanceCursor(i,src,OTHER,'backfill',null,true);
+    await s.db.releaseSyncLease(i,src,OTHER,'success',NOW_ISO);
+   }
+   return claim(i,src,b,ttl);
+  }};
+  const r=await s.run();
+  expect(r.issuers[0]).toMatchObject({outcome:'success'});
+  expect(s.a.listed).toEqual(['poll:2026-11-05']);                             // poll mode from the reread row, not a stale backfill
+  expect(s.scopeRow()).toMatchObject({backfill_done:true,backfill_cursor:{},poll_cursor:{}});
+ });
 });
 
 describe('runDocumentsSync — item failures',()=>{
@@ -6390,9 +6668,9 @@ describe('runDocumentsSync — item failures',()=>{
   expect(r1.status).toBe('failed');
   expect(r1.issuers[0]).toMatchObject({outcome:'failed',code:'fetch_failed'});
   expect(r1.errors[0]).toMatchObject({code:'fetch_failed',key:`${H}:2025082500100_c`});
-  expect(s.scopeRow()).toMatchObject({backfill_cursor:{segment:'y2025',index:0,item_attempts:1},last_status:'failed',next_due_at:'2026-11-06T08:00:00.000Z'});
+  expect(s.scopeRow()).toMatchObject({backfill_cursor:{segment:'y2025',last_ref:null,settled:[],attempts:{'2025082500100_c':1},seq:1},last_status:'failed',next_due_at:'2026-11-06T08:00:00.000Z'});
   await s.run();
-  expect(s.scopeRow().backfill_cursor).toEqual({segment:'y2025',index:0,item_attempts:2});
+  expect(s.scopeRow().backfill_cursor).toEqual({segment:'y2025',last_ref:null,settled:[],attempts:{'2025082500100_c':2},seq:2});
   const r3=await s.run();
   expect(r3.counts).toMatchObject({quarantined:1,inserted:2,failed:0});
   expect(r3.status).toBe('success');
@@ -6430,7 +6708,7 @@ describe('runDocumentsSync — item failures',()=>{
   const r=await s.run();
   expect(r.issuers[0]).toMatchObject({outcome:'failed',code:'object_put_failed'});
   expect(s.db.documents()).toEqual([]);
-  expect(s.scopeRow().backfill_cursor).toEqual({segment:'y2025',index:0,item_attempts:1});
+  expect(s.scopeRow().backfill_cursor).toEqual({segment:'y2025',last_ref:null,settled:[],attempts:{'2025082500100_c':1},seq:1});
  });
  it('a list failure stops the issuer without moving the cursor (list_failed)',async()=>{
   const s=await setup();backfillLists(s);
@@ -6477,7 +6755,7 @@ describe('runDocumentsSync — EDGAR assets and coverage',()=>{
   const r2=await t.run();
   expect(r2.issuers[0]).toMatchObject({outcome:'failed',code:'asset_fetch_failed'});
   expect(t.db.documents()).toEqual([]);
-  expect(t.scopeRow().backfill_cursor).toEqual({segment:'recent',index:0,item_attempts:1});
+  expect(t.scopeRow().backfill_cursor).toEqual({segment:'recent',last_ref:null,settled:[],attempts:{'0001321655-26-000041/pltr-20260630.htm':1},seq:1});
  });
  it('with a coverage gap the finished backfill is not marked done: cursor reset, coverage_summary, due in a day',async()=>{
   const s=await edgarSetup();s.f.set(XBRL,'not_found');
@@ -6591,15 +6869,23 @@ Expected: FAIL，`Failed to resolve import "./sync"`。
 // dataset documents.<source>); the scheduled path reconciles the scope first (§6.4), then walks the
 // due issuers until the budget has less than 90 s left (deadline_hit). Per issuer: lease → mode
 // (backfill until backfill_done, then poll) → segments from the adapter → for each segment the
-// complete ordered list → items from the cursor. The cursor {segment, index, item_attempts} names
-// the next item; it is persisted before any network or write work on an item, so a crash resumes
-// at that item. Per item: a known source_ref with refetch=false is a duplicate (no download, does
+// complete ordered list → its items, resumed from the source_ref checkpoint (codex plan round 1
+// P2-5; never an ordinal into the freshly fetched, mutable list): the cursor {segment, last_ref,
+// settled, attempts, seq} names the furthest item processed in this segment pass, the refs processed
+// without a stored row (404 / quarantined / exhausted) and the failed attempts per source_ref. On
+// resume a settled ref, or a known (stored) ref at or before last_ref's position in the new list, is
+// skipped; an unknown ref is always processed (an insertion is never skipped, a removal skips
+// nothing); retries stay with their own source_ref. seq increases at every checkpoint and the SQL
+// refuses a stale one (P2-4); the scope row is reread after the lease is claimed, so a batch that
+// advanced and released between selection and claim is never regressed. The checkpoint is persisted
+// before any network or write work on an item, so a crash resumes at that item. Per item: a known
+// source_ref with refetch=false is a duplicate (no download, does
 // not count against maxPerIssuer); otherwise fetch (≤ MAX_DOC_BYTES) → MIME → sha256 → object
 // put (content-addressed, before the row) → assets (EDGAR index required, XBRL optional) →
 // insert_document_version (document + assets in one transaction). too_large / unexpected_mime →
 // quarantine and advance; 404 → skipped_summary(document_missing) and advance; fetch / put /
-// required-asset failures do NOT advance: item_attempts+1, the issuer stops as failed, and the third
-// failure quarantines document_fetch_exhausted and advances. A replacement version (an earlier
+// required-asset failures do NOT advance: attempts[source_ref]+1, the issuer stops as failed, and the
+// third failure quarantines document_fetch_exhausted and advances. A replacement version (an earlier
 // version of the same source_ref exists) is available from the fetch instant, never back-dated
 // (§5.2). Lease release: done → now+1 d; success but unfinished (item cap, deadline) → now;
 // failed → now+6 h; lease_lost → no further database call for that issuer. Batch status always
@@ -6650,7 +6936,8 @@ const sha256Hex=(b:Uint8Array)=>createHash('sha256').update(b).digest('hex');
 const isLeaseLost=(e:unknown)=>e instanceof DocumentsDbError&&e.code==='lease_lost';
 
 interface RunCtx{deps:SyncDeps;source:ListedSource;batchId:string|null;sinceYear:number;refetch:boolean;maxPerIssuer:number;budget:Budget}
-type ItemResult={advance:true}|{advance:false;code:string;message:string};
+type ItemResult={advance:true;stored:boolean}|{advance:false;code:string;message:string};
+const isRecord=(v:unknown):v is Record<string,unknown>=>typeof v==='object'&&v!==null&&!Array.isArray(v);
 class RetryItem extends Error{constructor(readonly code:string,message:string){super(message);}}
 
 function acquisitionOf(got:FetchedBytes,userAgent:string):Acquisition{
@@ -6659,10 +6946,10 @@ function acquisitionOf(got:FetchedBytes,userAgent:string):Acquisition{
   etag:got.headers.etag??null,last_modified:got.headers['last-modified']??null,user_agent:userAgent};
 }
 
-async function syncIssuer(ctx:RunCtx,scope:DocScopeRow):Promise<DocIssuerOutcome>{
+async function syncIssuer(ctx:RunCtx,selected:DocScopeRow):Promise<DocIssuerOutcome>{
  const {deps,source,batchId,budget}=ctx;const {db}=deps;const dry=batchId===null;
- const issuer=scope.issuer_id;
- const out:DocIssuerOutcome={issuerId:issuer,fetchKey:scope.fetch_key,outcome:'skipped',counts:emptyCounts(),errors:[]};
+ const issuer=selected.issuer_id;
+ const out:DocIssuerOutcome={issuerId:issuer,fetchKey:selected.fetch_key,outcome:'skipped',counts:emptyCounts(),errors:[]};
  const skips=new Map<string,number>();
  const skip=(reason:string)=>skips.set(reason,(skips.get(reason)??0)+1);
  const finish=(outcome:IssuerOutcomeKind,code?:string)=>{
@@ -6673,6 +6960,9 @@ async function syncIssuer(ctx:RunCtx,scope:DocScopeRow):Promise<DocIssuerOutcome
  const [issuerRow]=await deps.tables.select('issuers',{issuer_id:issuer},{limit:1});
  if(issuerRow?.status==='merged'){skip('issuer_merged');return finish('skipped','issuer_merged');}
  if(!dry&&!await db.claimSyncLease(issuer,source,batchId,LEASE_TTL_S)){skip('leased');return finish('skipped','leased');}
+ // P2-4: the selection's snapshot may be stale (another batch may have advanced and released in
+ // between); mode and cursors come from the row reread under our lease
+ const scope=dry?selected:(await db.scopeRows(source,[issuer]))[0]??selected;
  let leaseUntil=deps.now().getTime()+LEASE_TTL_S*1000;let released=false;
  const renew=async()=>{
   if(dry||leaseUntil-deps.now().getTime()>=LEASE_RENEW_MS)return;
@@ -6687,18 +6977,21 @@ async function syncIssuer(ctx:RunCtx,scope:DocScopeRow):Promise<DocIssuerOutcome
  const mode:'backfill'|'poll'=scope.backfill_done?'poll':'backfill';
  const segments=deps.adapter.segments(scope,mode,ctx.sinceYear,deps.now());
  const stored=(mode==='backfill'?scope.backfill_cursor:scope.poll_cursor) as Partial<DocScopeCursor>;
+ let seq=typeof stored.seq==='number'&&Number.isSafeInteger(stored.seq)&&stored.seq>=0?stored.seq:0;
  let seg=segments.findIndex(s=>s.id===stored.segment);
- let index=0,attempts=0;
+ let lastRef:string|null=null;let settled=new Set<string>();let attempts=new Map<string,number>();
  if(seg<0)seg=0;
  else{
-  index=typeof stored.index==='number'&&Number.isInteger(stored.index)&&stored.index>=0?stored.index:0;
-  attempts=typeof stored.item_attempts==='number'&&Number.isInteger(stored.item_attempts)&&stored.item_attempts>=0?stored.item_attempts:0;
+  lastRef=typeof stored.last_ref==='string'?stored.last_ref:null;
+  settled=new Set(Array.isArray(stored.settled)?stored.settled.filter((x):x is string=>typeof x==='string'):[]);
+  if(isRecord(stored.attempts))for(const [ref,n] of Object.entries(stored.attempts))if(typeof n==='number'&&Number.isInteger(n)&&n>0)attempts.set(ref,n);
  }
  let dirty=false;
  const persist=async()=>{
   if(dry||!dirty||seg>=segments.length)return;
   await renew();
-  await db.advanceCursor(issuer,source,batchId!,mode,{segment:segments[seg].id,index,item_attempts:attempts},false);
+  seq++;
+  await db.advanceCursor(issuer,source,batchId!,mode,{segment:segments[seg].id,last_ref:lastRef,settled:[...settled],attempts:Object.fromEntries(attempts),seq},false);
   dirty=false;
  };
  const park=async(reason:string,item:Listed,payload:Record<string,unknown>)=>{
@@ -6710,16 +7003,16 @@ async function syncIssuer(ctx:RunCtx,scope:DocScopeRow):Promise<DocIssuerOutcome
   let got:FetchedBytes|'too_large'|'not_found';
   try{got=await deps.fetchBytes(item.source_url,budget,MAX_DOC_BYTES);}
   catch(e){return {advance:false,code:'fetch_failed',message:errMsg(e)};}
-  if(got==='not_found'){skip('document_missing');return {advance:true};}
-  if(got==='too_large'){await park('document_too_large',item,{max_bytes:MAX_DOC_BYTES});return {advance:true};}
+  if(got==='not_found'){skip('document_missing');return {advance:true,stored:false};}
+  if(got==='too_large'){await park('document_too_large',item,{max_bytes:MAX_DOC_BYTES});return {advance:true,stored:false};}
   const mime=sniffMime(got.mime,got.bytes);
-  if(mime===null||!ALLOWED_MIMES[source].includes(mime)){await park('unexpected_mime',item,{declared:got.mime,sniffed:mime});return {advance:true};}
+  if(mime===null||!ALLOWED_MIMES[source].includes(mime)){await park('unexpected_mime',item,{declared:got.mime,sniffed:mime});return {advance:true,stored:false};}
   const sha=sha256Hex(got.bytes);
   const prior=await db.documentVersions(source,item.source_ref,{limit:1000});
   if(dry){
    out.counts.fetched++;
    if(prior.rows.some(r=>r.content_sha256===sha))out.counts.duplicates++;else if(prior.rows.length>0)out.counts.versioned++;else out.counts.inserted++;
-   return {advance:true};
+   return {advance:true,stored:true};
   }
   try{
    await deps.store.put(blobPath(sha,mime),got.bytes,mime);
@@ -6744,7 +7037,7 @@ async function syncIssuer(ctx:RunCtx,scope:DocScopeRow):Promise<DocIssuerOutcome
   const r=await db.insertDocumentVersion(issuer,source,batchId!,doc,assets);
   out.counts.fetched++;
   if(r.outcome==='inserted')out.counts.inserted++;else if(r.outcome==='versioned')out.counts.versioned++;else out.counts.duplicates++;
-  return {advance:true};
+  return {advance:true,stored:true};
  };
  /** Required assets failing → RetryItem; optional ones → skipped_summary(xbrl_skipped). The index may name more assets. */
  const fetchAssets=async(item:Listed):Promise<AssetInsert[]>=>{
@@ -6771,7 +7064,7 @@ async function syncIssuer(ctx:RunCtx,scope:DocScopeRow):Promise<DocIssuerOutcome
  try{
   let newItems=0;let stop:null|'limit'|'deadline'=null;
   segLoop:
-  for(;seg<segments.length;seg++,index=0,attempts=0,dirty=true){
+  for(;seg<segments.length;seg++,lastRef=null,settled=new Set(),attempts=new Map(),dirty=true){
    const segment=segments[seg];
    let items:Listed[];
    try{items=await deps.adapter.list(scope,segment,budget);}
@@ -6780,29 +7073,34 @@ async function syncIssuer(ctx:RunCtx,scope:DocScopeRow):Promise<DocIssuerOutcome
     out.counts.failed++;out.errors.push({code:'list_failed',key:`${issuer}:${segment.id}`,message:errMsg(e)});
     await release('failed',NEXT_DUE_FAIL_MS);return finish('failed','list_failed');
    }
-   const known=await db.knownSourceRefs(issuer,source,items.slice(index).map(i=>i.source_ref));
-   while(index<items.length){
-    const item=items[index];const isKnown=known.has(item.source_ref);
-    if(isKnown&&!ctx.refetch){out.counts.fetched++;out.counts.duplicates++;index++;attempts=0;dirty=true;continue;}
+   const known=await db.knownSourceRefs(issuer,source,items.map(i=>i.source_ref));
+   // furthest position of this pass in the NEW list (-1: fresh pass, or the checkpoint item is gone)
+   let reached=lastRef===null?-1:items.findIndex(i=>i.source_ref===lastRef);
+   for(let i=0;i<items.length;i++){
+    const item=items[i];const ref=item.source_ref;const isKnown=known.has(ref);
+    const passed=()=>{if(i>reached){reached=i;lastRef=ref;}attempts.delete(ref);dirty=true;};
+    if(settled.has(ref))continue;                                   // processed in this pass without a stored row
+    if(isKnown&&i<=reached)continue;                                // stored and already passed in this pass
+    if(isKnown&&!ctx.refetch){out.counts.fetched++;out.counts.duplicates++;passed();continue;}
     if(!isKnown&&newItems>=ctx.maxPerIssuer){stop='limit';break segLoop;}
     if(budget.remainingMs()<MIN_ITEM_MS){stop='deadline';break segLoop;}
     await persist();
     const r=await processItem(item);
     if(!isKnown)newItems++;
-    if(r.advance){index++;attempts=0;dirty=true;continue;}
-    attempts++;
-    if(attempts>=MAX_ITEM_ATTEMPTS){
-     await park('document_fetch_exhausted',item,{attempts,last_error:{code:r.code,message:r.message}});
-     index++;attempts=0;dirty=true;continue;
+    if(r.advance){if(!r.stored)settled.add(ref);passed();continue;}
+    const n=(attempts.get(ref)??0)+1;
+    if(n>=MAX_ITEM_ATTEMPTS){
+     await park('document_fetch_exhausted',item,{attempts:n,last_error:{code:r.code,message:r.message}});
+     settled.add(ref);passed();continue;
     }
-    dirty=true;await persist();
+    attempts.set(ref,n);dirty=true;await persist();
     out.counts.fetched++;out.counts.failed++;out.errors.push({code:r.code,key:`${issuer}:${item.source_ref}`,message:r.message});
     await release('failed',NEXT_DUE_FAIL_MS);return finish('failed',r.code);
    }
   }
   if(stop!==null){
    await persist();
-   if(stop==='deadline')out.errors.push({code:'deadline_hit',key:issuer,message:JSON.stringify({segment:segments[seg]?.id??null,index})});
+   if(stop==='deadline')out.errors.push({code:'deadline_hit',key:issuer,message:JSON.stringify({segment:segments[seg]?.id??null,last_ref:lastRef})});
    await release('success',0);return finish(dry?'planned':'success',stop==='limit'?'item_limit':'deadline_hit');
   }
   // Every segment done.
@@ -6893,7 +7191,7 @@ export async function runDocumentsSync(deps:SyncDeps,opts:SyncOptions):Promise<D
 - [ ] **Step 4: Run tests, typecheck, lint**
 
 Run: `npm test -- src/lib/documents/sync.test.ts src/lib/documents/scope.test.ts src/lib/documents/sources`
-Expected: `sync.test.ts` 23 passed；其余同 Task 5/6。
+Expected: `sync.test.ts` 25 passed；其余同 Task 5/6。
 
 Run: `npm run typecheck && npm run lint`
 Expected: 无错误。
@@ -8455,6 +8753,26 @@ describe('runDocumentsExtract',()=>{
   const idle=await run(deps);
   expect(idle).toMatchObject({idle:true,status:'success',documents:[]});
  });
+ it('P2-7: an extraction that outlives its lease while another batch takes over gets lease_lost and writes nothing',async()=>{
+  const h=harness();
+  const doc=await seedPublicDocument(h.db,enc('%PDF-long'),{},h.store);
+  const OTHER=randomUUID();
+  const r=await run({...h.deps,extractPdf:async()=>{
+   h.db.expireExtractLease(doc);                                               // the 600 s lease ran out during a long extraction …
+   expect(await h.db.claimExtractLease(doc,OTHER,600)).toBe(true);           // … and another batch claimed the document
+   return {pages:[layoutPage(1,'綜合損益表')],hasTextLayer:true};
+  }});
+  expect(r.documents).toEqual([{documentId:doc,outcome:'failed',code:'lease_lost'}]);
+  expect(r.counts).toMatchObject({fetched:1,failed:1,inserted:0});
+  expect([...h.store.objects().keys()].some(k=>k.startsWith('extractions/'))).toBe(false);   // no pages.json
+  expect(await h.db.documentById(doc)).toMatchObject({status:'stored',current_extraction_id:null,extract_lease_batch_id:OTHER});
+  expect(h.db.extractions()).toEqual([]);
+  // the holder renews: an extraction that outlives an untaken lease still finishes
+  const g=harness();
+  const d2=await seedPublicDocument(g.db,enc('%PDF-slow-but-alone'),{},g.store);
+  const r2=await run({...g.deps,extractPdf:async()=>{g.db.expireExtractLease(d2);return {pages:[layoutPage(1,'x')],hasTextLayer:true};}});
+  expect(r2.documents[0]).toMatchObject({documentId:d2,outcome:'extracted'});
+ });
  it('extract_timeout, content hash mismatch, missing object and unsupported MIME are coded failures',async()=>{
   const {db,store,deps}=harness({extractPdf:async()=>{throw new ExtractTimeout();}});
   const slow=await seedPublicDocument(db,enc('%PDF-slow'),{},store);
@@ -8703,6 +9021,8 @@ export async function citationView(db:Pick<DocumentsDb,'pagesOf'|'documentById'>
 //   extractPdf (application/pdf) | extractHtml (text/html, application/xhtml+xml, application/xml,
 //   text/xml); other MIME → failExtract('unsupported_mime'); a throw → failExtract('extract_error'),
 //   the budget → failExtract('extract_timeout');
+//   renewExtractLease before each mutating phase (codex plan round 1 P2-7: an extraction may outlive
+//   the 600 s lease — local scripts have no deadline): false → lease_lost, nothing more is written;
 //   buildPagesJson → store.put(pagesJsonPath(content_sha256, sha)) — a put failure leaves the lease to
 //   expire (no failExtract, no finishExtract; the claim already counted the attempt);
 //   finishExtract(doc, batch, extraction, pageInsertsOf(json)) (role/status decided in SQL).
@@ -8783,6 +9103,13 @@ export async function runDocumentsExtract(deps:ExtractDeps,opts:ExtractOptions):
   counts.failed++;errors.push({code,key:doc.document_id,...(message?{message}:{})});documents.push({documentId:doc.document_id,outcome:'failed',code});
   if(callFail){try{await db.failExtract(doc.document_id,batchId,code);}catch(e){errors.push({code:errCode(e),key:doc.document_id,message:'fail_extract'});}}
  };
+ /** P2-7: the holder renews before a mutating phase; taken over (false) or a failing call → the document fails, nothing more is written. */
+ const keep=async(doc:DocumentRow):Promise<boolean>=>{
+  let ok=false;let code='lease_lost';
+  try{ok=await db.renewExtractLease(doc.document_id,batchId,EXTRACT_LEASE_TTL_S);}catch(e){code=errCode(e);}
+  if(!ok){counts.failed++;errors.push({code,key:doc.document_id});documents.push({documentId:doc.document_id,outcome:'failed',code});}
+  return ok;
+ };
  let started=0;
  for(const doc of due){
   if(remaining(deps)<MIN_DOC_MS){errors.push({code:'deadline_hit',message:`${due.length-started} documents not started`});break;}
@@ -8804,8 +9131,10 @@ export async function runDocumentsExtract(deps:ExtractDeps,opts:ExtractOptions):
   }
   const built=buildPagesJson({content_sha256:doc.content_sha256,code_version:codeVersion,has_text_layer:layout.hasTextLayer,pages:layout.pages});
   const path=pagesJsonPath(doc.content_sha256,built.sha256);
+  if(!await keep(doc))continue;
   try{await store.put(path,built.bytes,'application/json');}
   catch{await fail(doc,'object_put_failed',undefined,false);continue;}
+  if(!await keep(doc))continue;
   try{
    const extractionId=await db.finishExtract(doc.document_id,batchId,{extractor_version:EXTRACTOR_VERSION,table_algo_version:TABLE_ALGO_VERSION,code_version:codeVersion,
     has_text_layer:layout.hasTextLayer,page_count:layout.pages.length,pages_json_path:path,pages_json_sha256:built.sha256},pageInsertsOf(built.json));
@@ -10774,7 +11103,8 @@ export function hkFactsPortContract(label:string,setup:()=>Promise<HkPortHarness
    expect(await h.port.runStatus(randomUUID())).toBeNull();
    expect(await dueIds(h,HK_PUB_GEN)).toContain(w.iss);                                          // (c) staged links
    const rev=await stateRev(h,w.iss);
-   expect(await h.port.publishHkRun(w.iss,r.batch,r.run,[r.filingId],rev)).toBe(2);
+   expect(await code(h.port.publishHkRun(w.iss,r.batch,r.run,[r.filingId],rev,[{document_id:w.docId,extraction_id:'x'}]))).toBe('invalid_input');
+   expect(await h.port.publishHkRun(w.iss,r.batch,r.run,[r.filingId],rev,[{document_id:w.docId,extraction_id:w.extractionId}])).toBe(2);   // the zero-output selection still holds
    expect(await h.port.runStatus(r.run)).toBe('published');
    expect(await h.port.finishCandidatePublications(r.run)).toEqual({published:2,still_staged:0,abandoned:0});
    expect(await h.port.finishCandidatePublications(r.run)).toEqual({published:0,still_staged:0,abandoned:0});   // idempotent (crash recovery)
@@ -10851,7 +11181,7 @@ export function hkFactsPortContract(label:string,setup:()=>Promise<HkPortHarness
 
   it('publishHkRun refuses a missing revision, incomplete evidence, a foreign batch and a stale plan without publishing anything',async()=>{
    const w=await hkWorld(h);const r=await hkStagedRun(h,w,{evidence:false});const rev=await stateRev(h,w.iss);
-   const publish=(batch=r.batch,expected=rev)=>h.port.publishHkRun(w.iss,batch,r.run,[r.filingId],expected);
+   const publish=(batch=r.batch,expected=rev)=>h.port.publishHkRun(w.iss,batch,r.run,[r.filingId],expected,[]);
    expect(await code(publish(r.batch,Number.NaN))).toBe('invalid_expected_rev');
    expect(await code(publish())).toBe('evidence_incomplete');
    const rows=evidenceRows(w,r.fact25.fact_id,r.fact24.fact_id);
@@ -10866,7 +11196,7 @@ export function hkFactsPortContract(label:string,setup:()=>Promise<HkPortHarness
    expect(await publish()).toBe(2);
    // evidence complete but no candidate_publications link: still incomplete
    const v=await hkWorld(h);const s=await hkStagedRun(h,v,{link:false});
-   expect(await code(h.port.publishHkRun(v.iss,s.batch,s.run,[s.filingId],await stateRev(h,v.iss)))).toBe('evidence_incomplete');
+   expect(await code(h.port.publishHkRun(v.iss,s.batch,s.run,[s.filingId],await stateRev(h,v.iss),[]))).toBe('evidence_incomplete');
    expect(await h.port.runStatus(s.run)).toBe('staged');
   });
 
@@ -10874,11 +11204,11 @@ export function hkFactsPortContract(label:string,setup:()=>Promise<HkPortHarness
    const w=await hkWorld(h);const r=await hkStagedRun(h,w);
    const item=await quarantine(h.tables,{dataset:'facts.hk',table:'financial_facts',naturalKey:`${w.iss}:HK:revenue:2024-01-01:2024-12-31:consolidated:CNY:2026-03-20`,reasonCode:'identity_gp',batchId:r.batch,payload:{fact_ids:[],run_id:r.run}});
    expect(await h.port.quarantineFacts(r.run,[r.fact24.fact_id],item)).toBe(1);
-   expect(await h.port.publishHkRun(w.iss,r.batch,r.run,[r.filingId],await stateRev(h,w.iss))).toBe(1);
+   expect(await h.port.publishHkRun(w.iss,r.batch,r.run,[r.filingId],await stateRev(h,w.iss),[])).toBe(1);
    expect(await h.port.finishCandidatePublications(r.run)).toEqual({published:1,still_staged:1,abandoned:0});
    expect((await h.docs.candidateById(w.cand25))?.status).toBe('promoted');
    expect((await h.docs.candidateById(w.cand24))?.status).toBe('confirmed');
-   expect(await dueIds(h,HK_PUB_GEN)).toContain(w.iss);                                          // (c) recovery pending
+   expect(await dueIds(h,HK_PUB_GEN)).not.toContain(w.iss);                                      // (c) the staged link waits on the owner's decision: not due (P2-6)
    expect(await code(h.port.abandonCandidatePublications(r.run))).toBe('invalid_input');          // a published run is never abandoned
    const stray=await quarantine(h.tables,{dataset:'facts.hk',table:'financial_facts',naturalKey:`${w.iss}:HK:stray`,reasonCode:'identity_bs',batchId:r.batch,payload:{fact_ids:[],run_id:randomUUID()}});
    expect(await code(h.port.resolveHkFactsQuarantine(stray,[],w.user))).toBe('not_hk_item');
@@ -10889,9 +11219,24 @@ export function hkFactsPortContract(label:string,setup:()=>Promise<HkPortHarness
    expect(it1.status).toBe('resolved_accept');
    expect((it1.detail as {hook?:unknown}).hook).toMatchObject({stage:'done',state:'done',message:'hk_no_metrics'});
    expect(await code(h.port.resolveHkFactsQuarantine(item,[],w.user))).toBe('item_not_open');
+   expect(await dueIds(h,HK_PUB_GEN)).toContain(w.iss);                                          // (c) the decision made the link actionable
    expect(await h.port.finishCandidatePublications(r.run)).toEqual({published:1,still_staged:0,abandoned:0});
    expect((await h.docs.candidateById(w.cand24))?.status).toBe('promoted');
    expect(await dueIds(h,HK_PUB_GEN)).not.toContain(w.iss);
+  });
+
+  it('publishHkRun revalidates the zero-output selection under the document locks (P1-4): a switched extraction is stale_plan and publishes nothing',async()=>{
+   const w=await hkWorld(h);const r=await hkStagedRun(h,w);const rev=await stateRev(h,w.iss);
+   const planned=[{document_id:w.docId,extraction_id:w.extractionId}];
+   const next=await hkReextract(h,w);                                                            // between selection and publish: a new extraction, candidates pending
+   expect((await h.docs.extractionById(next))?.candidates_status).toBe('pending');
+   expect(await code(h.port.publishHkRun(w.iss,r.batch,r.run,[r.filingId],rev,planned))).toBe('stale_plan');
+   expect(await code(h.port.publishHkRun(w.iss,r.batch,r.run,[r.filingId],rev,[{document_id:w.docId,extraction_id:next}]))).toBe('stale_plan');   // current, but candidates not done
+   expect(await h.port.runStatus(r.run)).toBe('staged');
+   expect(await stateRev(h,w.iss)).toBe(rev);                                                    // no generation advance, nothing published
+   expect((await h.port.factsByIds([r.fact25.fact_id,r.fact24.fact_id])).map(f=>f.status)).toEqual(['staged','staged']);
+   expect(await h.port.hkFilingOfDocument(w.docId)).toMatchObject({filing_id:r.filingId});
+   await h.port.abandonRun(r.run);await h.port.releaseLease(w.iss,r.batch,'failed','2030-01-01T00:00:00.000Z');
   });
 
   it('abandoned runs: links of a staged run cannot be closed; after abandonRun they are abandoned, evidence is gone, and a later run re-stages them',async()=>{
@@ -10909,7 +11254,7 @@ export function hkFactsPortContract(label:string,setup:()=>Promise<HkPortHarness
    const r2=await hkStagedRun(h,w);                                                              // abandoned → staged with the new run's facts
    expect(r2.filingId).toBe(r.filingId);                                                          // abandonRun keeps filings; stage_filings reuses it …
    expect(r2.bound).toBe(0);                                                                      // … with its binding
-   expect(await h.port.publishHkRun(w.iss,r2.batch,r2.run,[r2.filingId],await stateRev(h,w.iss))).toBe(2);
+   expect(await h.port.publishHkRun(w.iss,r2.batch,r2.run,[r2.filingId],await stateRev(h,w.iss),[])).toBe(2);
    expect(await h.port.finishCandidatePublications(r2.run)).toEqual({published:2,still_staged:0,abandoned:0});
   });
 
@@ -10992,6 +11337,7 @@ import type {PoolClient} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {pgTableClient} from '../db/pg-table-client';
 import {quarantine} from '../dq/quarantine';
+import {freshMigratedDatabase,replayFiles} from './fresh-db';
 import {HK_PUB_GEN} from './types';
 import {pgDocumentsDb} from './pg-documents-db';
 import {pgHkFactsPort} from './hk-facts/pg-facts-port';
@@ -11003,26 +11349,9 @@ const MIGRATION_TWO='supabase/migrations/20261108091000_fact_citations.sql';
 const SPEC2_MIGRATION='supabase/migrations/20261106090000_financial_facts.sql';
 const SPEC2_TABLES=['fact_sync_runs','filings','financial_facts','financial_metrics','fact_sync_scope'];
 const SPEC2_FUNCTIONS=['financial_facts_lifecycle','filings_limited_update','fact_scope_lock','fact_run_lock','fact_abandon_run','fact_item_members','fact_promote_rows','reconcile_fact_sync_scope','claim_fact_sync_lease','begin_sync_run','stage_filings','stage_facts','quarantine_facts','publish_sync_run','abandon_sync_run','release_fact_sync_lease','promote_quarantined','resolve_facts_quarantine','replace_financial_metrics','fact_state_rev','read_facts'];
-const F3_RPC=['public.bind_filing_documents(uuid,jsonb)','public.insert_fact_citations(uuid,jsonb)','public.publish_hk_run(uuid,uuid,uuid,uuid[],bigint)','public.finish_candidate_publications(uuid)','public.abandon_candidate_publications(uuid)','public.ensure_hk_fact_scope(uuid,text)','public.resolve_hk_facts_quarantine(uuid,uuid[],uuid)','public.hk_promotion_due(int,text,int)','public.hk_zero_output_documents(uuid,int)'];
+const F3_RPC=['public.bind_filing_documents(uuid,jsonb)','public.insert_fact_citations(uuid,jsonb)','public.publish_hk_run(uuid,uuid,uuid,uuid[],bigint,jsonb)','public.finish_candidate_publications(uuid)','public.abandon_candidate_publications(uuid)','public.ensure_hk_fact_scope(uuid,text)','public.resolve_hk_facts_quarantine(uuid,uuid[],uuid)','public.hk_promotion_due(int,text,int)','public.hk_zero_output_documents(uuid,int)'];
 const F3_INTERNAL=['public.assert_run_evidence_complete(uuid)','public.fact_citations_guard()','public.filing_documents_guard()'];
 
-// Same replay policy as facts.integration.test.ts (not exported there): one transaction,
-// short lock_timeout, retry on lock timeout (55P03) and deadlock (40P01).
-const RETRYABLE=new Set(['55P03','40P01']);
-async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
- for(let attempt=1;;attempt++){
-  const c=await pool.connect();
-  try{
-   await c.query(`begin; set local lock_timeout='3s';\n${sql}\n;commit;`);
-   return;
-  }catch(e){
-   await c.query('rollback').catch(()=>{});
-   const code=(e as {code?:string}).code;
-   if(attempt>=attempts||!code||!RETRYABLE.has(code))throw e;
-   await new Promise(r=>setTimeout(r,250*attempt+Math.floor(Math.random()*250)));
-  }finally{c.release();}
- }
-}
 /** Runs body inside one transaction on its own connection (pid known); rolls back unless committed. */
 interface Tx{c:PoolClient;pid:number;commit():Promise<void>}
 async function inTx(pool:Pool,body:(tx:Tx)=>Promise<void>):Promise<void>{
@@ -11065,7 +11394,7 @@ async function pgHkHarness():Promise<PgHkHarness>{
 }
 
 describe.skipIf(!enabled)('F3 migration two (fact_citations, filing_documents, HK functions) on real PostgreSQL',()=>{
- let admin:Pool;let h:PgHkHarness;
+ let admin:Pool;let adminUrl='';let h:PgHkHarness;
  const q=async(text:string,values:unknown[]=[])=>(await admin.query(text,values)).rows as Record<string,any>[];
  const one=async(text:string,values:unknown[]=[])=>(await q(text,values))[0]?.v;
  const count=async(text:string,values:unknown[]=[])=>Number(await one(text,values));
@@ -11076,14 +11405,15 @@ describe.skipIf(!enabled)('F3 migration two (fact_citations, filing_documents, H
   finally{await c.query('rollback').catch(()=>{});c.release();}
  };
  const checksOf=(table:string)=>q(`select conname, pg_get_constraintdef(oid) def from pg_constraint where conrelid=('public.'||$1)::regclass and contype='c' order by conname`,[table]);
- const spec2Defs=async()=>({
-  functions:await q(`select p.proname||'('||pg_get_function_identity_arguments(p.oid)||')' sig, md5(pg_get_functiondef(p.oid)) h from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname=any($1) order by 1`,[SPEC2_FUNCTIONS]),
-  triggers:await q(`select c.relname, t.tgname, md5(pg_get_triggerdef(t.oid)) h from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1) and not t.tgisinternal order by 1,2`,[SPEC2_TABLES]),
+ /** Definitions of the spec-2 functions and triggers, read through `read` (the shared or a fresh database). */
+ const spec2Defs=async(read:(text:string,values?:unknown[])=>Promise<Record<string,any>[]>=q)=>({
+  functions:await read(`select p.proname||'('||pg_get_function_identity_arguments(p.oid)||')' sig, md5(pg_get_functiondef(p.oid)) h from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname=any($1) order by 1`,[SPEC2_FUNCTIONS]),
+  triggers:await read(`select c.relname, t.tgname, md5(pg_get_triggerdef(t.oid)) h from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1) and not t.tgisinternal order by 1,2`,[SPEC2_TABLES]),
  });
 
  beforeAll(async()=>{
   const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
-  admin=new Pool({connectionString:state.adminUrl});
+  adminUrl=state.adminUrl;admin=new Pool({connectionString:adminUrl});
   h=await pgHkHarness();
  });
  afterAll(async()=>{await h?.close();await admin?.end();});
@@ -11136,20 +11466,37 @@ describe.skipIf(!enabled)('F3 migration two (fact_citations, filing_documents, H
    expect({sig,ok:await fn('service_role',sig)}).toEqual({sig,ok:true});
   }
   for(const sig of F3_INTERNAL)for(const role of ['anon','authenticated','service_role'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});
+  // P2-3: every function migration two defines is listed (enumerated from pg_proc by the names in the file)
+  const names=[...new Set([...readFileSync(MIGRATION_TWO,'utf8').matchAll(/create or replace function public\.(\w+)\(/g)].map(m=>m[1]))];
+  const defined=(await q(`select 'public.'||p.proname||'('||oidvectortypes(p.proargtypes)||')' sig from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname=any($1) order by 1`,[names]))
+   .map(r=>String(r.sig).replace(/, /g,',').replace(/\binteger\b/g,'int'));
+  expect(defined.sort()).toEqual([...F3_RPC,...F3_INTERNAL].sort());
   expect((await q(`select policyname from pg_policies where schemaname='public' and tablename='document_citations' order by 1`)).map(r=>r.policyname)).toEqual(['document_citations public read','document_citations service read']);
-  await expect(replayMigration(admin,readFileSync(MIGRATION_TWO,'utf8'))).resolves.toBeUndefined();
- },60000);
+  // P2-2: replays run in a dedicated temporary database, never in the shared one
+  const fresh=await freshMigratedDatabase(adminUrl);
+  try{
+   await expect(replayFiles(fresh.pool,[MIGRATION_TWO,MIGRATION_TWO])).resolves.toBeUndefined();
+   expect((await fresh.pool.query(`select policyname from pg_policies where schemaname='public' and tablename='document_citations' order by 1`)).rows.map(r=>r.policyname)).toEqual(['document_citations public read','document_citations service read']);
+  }finally{await fresh.drop();}
+ },120000);
 
  it('spec-2 functions and triggers are unchanged: identical definitions before and after replaying the spec-2 migration and then migration two; migration two defines none of them',async()=>{
   const before=await spec2Defs();
   expect(before.functions.map(r=>String(r.sig).split('(')[0]).sort()).toEqual([...SPEC2_FUNCTIONS].sort());   // one overload each
   expect(before.triggers.map(r=>[r.relname,r.tgname])).toEqual([['filings','filings_limited_update'],['financial_facts','financial_facts_lifecycle']]);
-  await replayMigration(admin,readFileSync(SPEC2_MIGRATION,'utf8'));
-  const spec2=await spec2Defs();
-  await replayMigration(admin,readFileSync(MIGRATION_TWO,'utf8'));
-  const after=await spec2Defs();
-  expect(spec2).toEqual(before);
-  expect(after).toEqual(before);
+  // P2-2: replaying the spec-2 migration drops 'HK' from its market checks until migration two runs
+  // again — so this happens in a dedicated temporary database, never in the shared one
+  const fresh=await freshMigratedDatabase(adminUrl);
+  try{
+   const read=async(text:string,values:unknown[]=[])=>(await fresh.pool.query(text,values)).rows as Record<string,any>[];
+   expect(await spec2Defs(read)).toEqual(before);
+   await replayFiles(fresh.pool,[SPEC2_MIGRATION]);
+   const spec2=await spec2Defs(read);
+   await replayFiles(fresh.pool,[MIGRATION_TWO]);
+   const after=await spec2Defs(read);
+   expect(spec2).toEqual(before);
+   expect(after).toEqual(before);
+  }finally{await fresh.drop();}
   const sql=readFileSync(MIGRATION_TWO,'utf8');
   for(const name of SPEC2_FUNCTIONS)expect({name,defined:new RegExp(`create\\s+(or\\s+replace\\s+)?function\\s+public\\.${name}\\s*\\(`,'i').test(sql)}).toEqual({name,defined:false});
   expect(/create\s+trigger[^;]*\son\s+public\.(fact_sync_runs|filings|financial_facts|financial_metrics|fact_sync_scope)\b/i.test(sql)).toBe(false);
@@ -11168,7 +11515,7 @@ describe.skipIf(!enabled)('F3 migration two (fact_citations, filing_documents, H
   expect(await count(`select count(*) v from public.filing_documents where filing_id=$1`,[r.filingId])).toBe(0);
   expect(await count(`select count(*) v from public.filings where filing_id=$1`,[r.filingId])).toBe(0);
   const v=await hkWorld(h);const s=await hkStagedRun(h,v);
-  expect(await h.port.publishHkRun(v.iss,s.batch,s.run,[s.filingId],await stateRev(h,v.iss))).toBe(2);
+  expect(await h.port.publishHkRun(v.iss,s.batch,s.run,[s.filingId],await stateRev(h,v.iss),[])).toBe(2);
   await expect(q(`delete from public.financial_facts where fact_id=$1`,[s.fact25.fact_id])).rejects.toThrow(/append_only:/);
   expect(await count(`select count(*) v from public.fact_citations where fact_id=$1`,[s.fact25.fact_id])).toBe(5);
  });
@@ -11190,11 +11537,13 @@ describe.skipIf(!enabled)('F3 migration two (fact_citations, filing_documents, H
 
  it('publish_hk_run: a null expected revision fails at the SQL boundary; the scope row is locked before the document rows',async()=>{
   const w=await hkWorld(h);const r=await hkStagedRun(h,w);const rev=await stateRev(h,w.iss);
-  const e=await fails(q(`select public.publish_hk_run($1,$2,$3,$4::uuid[],null)`,[w.iss,r.batch,r.run,[r.filingId]]));
+  const e=await fails(q(`select public.publish_hk_run($1,$2,$3,$4::uuid[],null,'[]'::jsonb)`,[w.iss,r.batch,r.run,[r.filingId]]));
   expect(e.message).toBe('invalid_expected_rev');expect(e.code).toBe('22023');
+  const z=await fails(q(`select public.publish_hk_run($1,$2,$3,$4::uuid[],$5,null)`,[w.iss,r.batch,r.run,[r.filingId],rev]));
+  expect(z.message).toBe('invalid_input');expect(z.code).toBe('22023');
   await inTx(admin,async({c,pid,commit})=>{
    await c.query(`select 1 from public.disclosure_documents where document_id=$1 for update`,[w.docId]);
-   const p=h.port.publishHkRun(w.iss,r.batch,r.run,[r.filingId],rev);p.catch(()=>{});
+   const p=h.port.publishHkRun(w.iss,r.batch,r.run,[r.filingId],rev,[{document_id:w.docId,extraction_id:w.extractionId}]);p.catch(()=>{});
    await stillBlockedBehind(admin,pid,p);                                          // publish waits on the document row …
    const nowait=await fails(admin.query(`select 1 from public.fact_sync_scope where issuer_id=$1 and market='HK' for update nowait`,[w.iss]));
    expect(nowait.code).toBe('55P03');                                               // … while already holding the scope row
@@ -11220,7 +11569,7 @@ describe.skipIf(!enabled)('F3 migration two (fact_citations, filing_documents, H
   const w=await hkWorld(h);const r=await hkStagedRun(h,w);
   const item=await quarantine(h.tables,{dataset:'facts.hk',table:'financial_facts',naturalKey:`${w.iss}:HK:revenue:2024-01-01:2024-12-31:consolidated:CNY:2026-03-20`,reasonCode:'identity_gp',batchId:r.batch,payload:{fact_ids:[],run_id:r.run}});
   await h.port.quarantineFacts(r.run,[r.fact24.fact_id],item);
-  await h.port.publishHkRun(w.iss,r.batch,r.run,[r.filingId],await stateRev(h,w.iss));
+  await h.port.publishHkRun(w.iss,r.batch,r.run,[r.filingId],await stateRev(h,w.iss),[]);
   const state=async()=>(await q(`select q.status, q.detail->'hook' hook, f.status fact from public.dq_quarantine q, public.financial_facts f where q.id=$1 and f.fact_id=$2`,[item,r.fact24.fact_id]))[0];
   await inTx(admin,async({c})=>{                                                    // rolled back: nothing of it may survive
    const v=(await c.query(`select public.resolve_hk_facts_quarantine($1,'{}'::uuid[],$2) v`,[item,w.user])).rows[0].v;
@@ -11260,7 +11609,7 @@ describe.skipIf(!enabled)('F3 migration two (fact_citations, filing_documents, H
    filings:(await asRole(role,`select filing_id::text id from public.filing_documents where filing_id=$1`,[r.filingId])).map(x=>String(x.id)),
   });
   for(const role of ['anon','authenticated'] as const)expect(await seen(role)).toEqual({citations:[],facts:[],filings:[]});
-  await h.port.publishHkRun(w.iss,r.batch,r.run,[r.filingId],await stateRev(h,w.iss));       // fact25 ok, fact24 quarantined
+  await h.port.publishHkRun(w.iss,r.batch,r.run,[r.filingId],await stateRev(h,w.iss),[]);       // fact25 ok, fact24 quarantined
   const okOnly=[w.cit.v25,w.cit.title,w.cit.label,w.cit.unit,w.cit.col25].sort();
   for(const role of ['anon','authenticated'] as const)expect(await seen(role)).toEqual({citations:okOnly,facts:[r.fact25.fact_id],filings:[r.filingId]});
   expect((await asRole('service_role',`select count(*)::int n from public.document_citations where citation_id=any($1::uuid[])`,[all]))[0].n).toBe(8);
@@ -11534,13 +11883,24 @@ revoke execute on function public.assert_run_evidence_complete(uuid) from public
 -- the issuer's HK scope row with the caller's lease (fact_scope_lock), the run (must be this issuer's
 -- staged HK run of p_batch), every filing of the run, of its facts or of the manifest (filing_id
 -- order), their filing_documents rows (filing_id order), the bound disclosure_documents (document_id
--- order). Then the evidence check, then the unchanged spec-2 publish_sync_run under the same locks
+-- order). p_zero_output = the planned zero-output selection [{document_id, extraction_id}] (codex plan
+-- round 1 P1-4): under the document locks, and with the expected extraction rows share-locked
+-- (extraction_id order; documents → extractions everywhere), each entry must still be a public
+-- Chinese HKEXnews document of this issuer bound to one of the run's filings whose current
+-- extraction is the expected one, primary, candidates done — else stale_plan (the caller replans).
+-- Then the evidence check, then the unchanged spec-2 publish_sync_run under the same locks
 -- (stale_plan propagates; any failure rolls the whole call back). Returns the rows that became ok.
-create or replace function public.publish_hk_run(p_issuer uuid, p_batch uuid, p_run uuid, p_manifest uuid[], p_expected_rev bigint)
+create or replace function public.publish_hk_run(p_issuer uuid, p_batch uuid, p_run uuid, p_manifest uuid[], p_expected_rev bigint, p_zero_output jsonb)
 returns int language plpgsql security definer set search_path = public as $$
-declare r public.fact_sync_runs; v_manifest uuid[] := coalesce(p_manifest, '{}'::uuid[]); v_filings uuid[]; v_docs uuid[];
+declare r public.fact_sync_runs; v_manifest uuid[] := coalesce(p_manifest, '{}'::uuid[]); v_filings uuid[]; v_docs uuid[]; v_stale uuid;
+  c_uuid constant text := '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
 begin
   if p_expected_rev is null then raise exception 'invalid_expected_rev' using errcode = '22023'; end if;
+  if p_zero_output is null or jsonb_typeof(p_zero_output) <> 'array'
+     or exists (select 1 from jsonb_array_elements(p_zero_output) z
+                where jsonb_typeof(z) <> 'object' or coalesce(z ->> 'document_id', '') !~* c_uuid or coalesce(z ->> 'extraction_id', '') !~* c_uuid) then
+    raise exception 'invalid_input' using errcode = '22023', detail = 'zero_output';
+  end if;
   perform public.fact_scope_lock(p_issuer, 'HK', p_batch);
   select * into r from public.fact_sync_runs where run_id = p_run for update;
   if not found or r.issuer_id <> p_issuer or r.market <> 'HK' or r.batch_id <> p_batch or r.status <> 'staged' then
@@ -11556,11 +11916,27 @@ begin
     select fd.document_id from public.filing_documents fd where fd.filing_id = any(v_filings)
     order by fd.filing_id for update of fd) x;
   perform 1 from public.disclosure_documents d where d.document_id = any(v_docs) order by d.document_id for update of d;
+  perform 1 from public.document_extractions e
+  where e.extraction_id in (select (z ->> 'extraction_id')::uuid from jsonb_array_elements(p_zero_output) z)
+  order by e.extraction_id for share of e;
+  select x.document_id into v_stale from (
+    select (z ->> 'document_id')::uuid as document_id, (z ->> 'extraction_id')::uuid as extraction_id from jsonb_array_elements(p_zero_output) z
+  ) x
+  where not exists (
+    select 1 from public.disclosure_documents d
+    join public.document_extractions e on e.extraction_id = d.current_extraction_id
+    where d.document_id = x.document_id and d.document_id = any(v_docs)
+      and d.issuer_id = p_issuer and d.source = 'hkexnews' and d.language = 'zh' and d.permission = 'public'
+      and d.current_extraction_id = x.extraction_id and e.candidates_role = 'primary' and e.candidates_status = 'done')
+  order by x.document_id limit 1;
+  if v_stale is not null then
+    raise exception 'stale_plan' using errcode = 'P0001', detail = 'zero_output:' || v_stale;
+  end if;
   perform public.assert_run_evidence_complete(p_run);
   return public.publish_sync_run(p_run, v_manifest, p_expected_rev);
 end $$;
-revoke execute on function public.publish_hk_run(uuid, uuid, uuid, uuid[], bigint) from public, anon, authenticated;
-grant execute on function public.publish_hk_run(uuid, uuid, uuid, uuid[], bigint) to service_role;
+revoke execute on function public.publish_hk_run(uuid, uuid, uuid, uuid[], bigint, jsonb) from public, anon, authenticated;
+grant execute on function public.publish_hk_run(uuid, uuid, uuid, uuid[], bigint, jsonb) to service_role;
 
 -- Requires a published run (staged → run_pending, abandoned → invalid_input, absent → not_found).
 -- Locks the candidates behind this run's staged links (candidate_id order), then decides each link:
@@ -11663,7 +12039,10 @@ grant execute on function public.resolve_hk_facts_quarantine(uuid, uuid[], uuid)
 -- (ab) an active candidate — financial_fact, rule, extractor_ref = p_extractor_ref, checks_passed,
 --      confirmed|promoted, on the current extraction of a public Chinese HKEXnews document — without a
 --      staged|published link under p_pub_gen;
--- (c)  a staged link under p_pub_gen (crash or quarantine recovery);
+-- (c)  a staged link under p_pub_gen that recovery can act on (crash recovery; a quarantined fact
+--      that became ok or disappeared). A link whose run is published and whose fact is still
+--      quarantined waits on the owner's decision — step 0a would leave it staged — and is NOT due,
+--      so unchanged quarantine waits never occupy the batch (codex plan round 1 P2-6);
 -- (d)  (R5-13) a public Chinese HKEXnews document whose current extraction is primary and done and
 --      whose bound filing sits on 1 <= mapping_gen < p_pub_gen (zero-output generation activation).
 create or replace function public.hk_promotion_due(p_pub_gen int, p_extractor_ref text, p_limit int)
@@ -11681,7 +12060,10 @@ returns uuid[] language sql stable security definer set search_path = public as 
     select d.issuer_id from public.candidate_publications cp
     join public.extraction_candidates c on c.candidate_id = cp.candidate_id
     join public.disclosure_documents d on d.document_id = c.document_id
+    left join public.fact_sync_runs r on r.run_id = cp.run_id
+    left join public.financial_facts f on f.fact_id = cp.fact_id
     where cp.pub_gen = p_pub_gen and cp.state = 'staged' and d.issuer_id is not null
+      and not (coalesce(r.status, '') = 'published' and coalesce(f.status, '') = 'quarantined')
   ), zero as (
     select docs.issuer_id from docs
     join public.document_extractions e on e.extraction_id = docs.current_extraction_id
@@ -11751,6 +12133,8 @@ export interface HkFilingInsert{filing_id:string;issuer_id:string;source:'hkex';
 export interface HkPublicationOutcome{published:number;still_staged:number;abandoned:number}
 export interface HkResolveOutcome{promoted:number;skipped:number;chosenFactIds:string[]}
 export type HkRunStatus='staged'|'published'|'abandoned';
+/** A zero-output document of the plan and the current extraction planning saw (codex plan round 1 P1-4). */
+export interface HkZeroOutput{document_id:string;extraction_id:string}
 export interface HkFactsPort{
  // pass-through to spec-2 rpc with market='HK' (cast lives only in this file)
  claimLease(issuer:string,batch:string,ttlSeconds:number):Promise<boolean>;
@@ -11768,7 +12152,7 @@ export interface HkFactsPort{
  ensureHkScope(issuer:string,fetchKey:string):Promise<void>;
  bindFilingDocuments(run:string,rows:{filing_id:string;document_id:string}[]):Promise<number>;
  insertFactCitations(run:string,rows:{fact_id:string;citation_id:string;role:CitationRole}[]):Promise<number>;
- publishHkRun(issuer:string,batch:string,run:string,manifest:string[],expectedRev:number):Promise<number>;
+ publishHkRun(issuer:string,batch:string,run:string,manifest:string[],expectedRev:number,zeroOutput:readonly HkZeroOutput[]):Promise<number>;   // zeroOutput: the planned zero-output selection, revalidated under the document locks (P1-4)
  finishCandidatePublications(run:string):Promise<HkPublicationOutcome>;
  abandonCandidatePublications(run:string):Promise<number>;
  promotionDue(pubGen:number,limit:number):Promise<{issuerId:string}[]>;
@@ -11826,7 +12210,7 @@ export function supabaseHkFactsPort(admin:SupabaseClient):HkFactsPort{
   async ensureHkScope(issuer,fetchKey){await call('ensure_hk_fact_scope',{p_issuer:issuer,p_fetch_key:fetchKey});},
   async bindFilingDocuments(run,input){return Number(await call('bind_filing_documents',{p_run:run,p_rows:input}));},
   async insertFactCitations(run,input){return Number(await call('insert_fact_citations',{p_run:run,p_rows:input}));},
-  async publishHkRun(issuer,batch,run,manifest,expectedRev){assertExpectedRev(expectedRev);return Number(await call('publish_hk_run',{p_issuer:issuer,p_batch:batch,p_run:run,p_manifest:manifest,p_expected_rev:expectedRev}));},
+  async publishHkRun(issuer,batch,run,manifest,expectedRev,zeroOutput){assertExpectedRev(expectedRev);return Number(await call('publish_hk_run',{p_issuer:issuer,p_batch:batch,p_run:run,p_manifest:manifest,p_expected_rev:expectedRev,p_zero_output:zeroOutput}));},
   async finishCandidatePublications(run){return publicationOutcomeOf(await call<Record<string,unknown>|null>('finish_candidate_publications',{p_run:run}));},
   async abandonCandidatePublications(run){return Number(await call('abandon_candidate_publications',{p_run:run}));},
   async promotionDue(pubGen,limit){return ((await call<string[]|null>('hk_promotion_due',{p_pub_gen:pubGen,p_extractor_ref:HK_EXTRACTOR_REF,p_limit:limit}))??[]).map(issuerId=>({issuerId:String(issuerId)}));},
@@ -11871,6 +12255,7 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
  const docMap=()=>new Map<string,DocumentRow>(docs.documents().map(d=>[d.document_id,d]));
  const intact=(c:CitationRow,pages:PageRow[])=>{const p=pages.find(x=>x.extraction_id===c.extraction_id&&x.page_no===c.page_no);return !!p&&p.text_hash===c.text_hash&&cpSlice(p.text,c.char_start,c.char_end)===c.snippet;};
  const eligibleDoc=(d:DocumentRow)=>d.source==='hkexnews'&&d.language==='zh'&&d.permission==='public'&&d.issuer_id!==null&&d.current_extraction_id!==null;
+ const ZERO_UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  /** promotionDue condition (d): document id → issuer id. */
  const zeroOutput=(pubGen:number)=>{
   const out=new Map<string,string>();const ext=new Map(docs.extractions().map(e=>[e.extraction_id,e]));const filings=new Map(facts.filings().map(g=>[g.filing_id,g]));
@@ -11934,11 +12319,21 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
    for(const x of input){if(have.some(y=>y.fact_id===x.fact_id&&y.role===x.role&&y.citation_id===x.citation_id))continue;have.push({fact_id:x.fact_id,citation_id:x.citation_id,role:x.role});n++;}
    return n;
   },
-  async publishHkRun(issuer,batch,run,manifest,expectedRev){
+  async publishHkRun(issuer,batch,run,manifest,expectedRev,zeroOutput){
    assertExpectedRev(expectedRev);
+   if(!Array.isArray(zeroOutput)||zeroOutput.some(z=>typeof z!=='object'||z===null||!ZERO_UUID.test(String(z.document_id))||!ZERO_UUID.test(String(z.extraction_id))))throw fail('invalid_input','zero_output');
    if(!leaseHeld(issuer,HK_MARKET,batch))throw fail('lease_lost');
    const r=runOf(run);
    if(!r||r.issuer_id!==issuer||r.market!==HK_MARKET||r.batch_id!==batch||r.status!=='staged')throw fail('invalid_input','run');
+   // P1-4: the zero-output selection is revalidated (SQL: under the document and extraction locks)
+   const runFilings=new Set([...facts.filings().filter(g=>g.run_id===run).map(g=>g.filing_id),...manifest,...facts.facts().filter(f=>f.run_id===run).map(f=>f.filing_id)]);
+   const boundDocs=new Set([...liveBindings().values()].filter(b=>runFilings.has(b.filing_id)).map(b=>b.document_id));
+   const D=docMap();const ext=new Map(docs.extractions().map(e=>[e.extraction_id,e]));
+   for(const z of [...zeroOutput].sort((a,b)=>cmp(a.document_id,b.document_id))){
+    const d=D.get(z.document_id);const e=ext.get(z.extraction_id);
+    const ok=!!d&&boundDocs.has(d.document_id)&&eligibleDoc(d)&&d.issuer_id===issuer&&d.current_extraction_id===z.extraction_id&&!!e&&e.candidates_role==='primary'&&e.candidates_status==='done';
+    if(!ok)throw fail('stale_plan',`zero_output:${z.document_id}`);
+   }
    assertEvidence(run);
    try{return await facts.publishRun(run,manifest,expectedRev);}catch(e){throw asDocumentsDbError(e);}
   },
@@ -11977,7 +12372,12 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
     if(!pubs.some(p=>p.candidate_id===c.candidate_id&&p.pub_gen===pubGen&&(p.state==='staged'||p.state==='published')))due.add(d.issuer_id!);   // (ab)
    }
    const byCandidate=new Map(docs.candidates().map(c=>[c.candidate_id,c]));
-   for(const p of pubs)if(p.pub_gen===pubGen&&p.state==='staged'){const c=byCandidate.get(p.candidate_id);const iss=c?D.get(c.document_id)?.issuer_id:null;if(iss)due.add(iss);}   // (c)
+   const factStatus=new Map(facts.facts().map(f=>[f.fact_id,f.status]));
+   for(const p of pubs){
+    if(p.pub_gen!==pubGen||p.state!=='staged')continue;
+    if(runOf(p.run_id)?.status==='published'&&factStatus.get(p.fact_id)==='quarantined')continue;   // waits on the owner's decision: recovery cannot act (P2-6)
+    const c=byCandidate.get(p.candidate_id);const iss=c?D.get(c.document_id)?.issuer_id:null;if(iss)due.add(iss);   // (c)
+   }
    for(const iss of zeroOutput(pubGen).values())due.add(iss);                                                                                                // (d)
    return [...due].sort(cmp).slice(0,Math.min(Math.max(limit,0),1000)).map(issuerId=>({issuerId}));
   },
@@ -12035,7 +12435,7 @@ export function pgHkFactsPort(pool:Pool):HkFactsPort{
   async ensureHkScope(issuer,fetchKey){await fn('public.ensure_hk_fact_scope($1::uuid,$2::text)',[issuer,fetchKey]);},
   async bindFilingDocuments(id,rows){return Number(await fn('public.bind_filing_documents($1::uuid,$2::jsonb)',[id,JSON.stringify(rows)]));},
   async insertFactCitations(id,rows){return Number(await fn('public.insert_fact_citations($1::uuid,$2::jsonb)',[id,JSON.stringify(rows)]));},
-  async publishHkRun(issuer,batch,id,manifest,expectedRev){assertExpectedRev(expectedRev);return Number(await fn('public.publish_hk_run($1::uuid,$2::uuid,$3::uuid,$4::uuid[],$5::bigint)',[issuer,batch,id,manifest,expectedRev]));},
+  async publishHkRun(issuer,batch,id,manifest,expectedRev,zeroOutput){assertExpectedRev(expectedRev);return Number(await fn('public.publish_hk_run($1::uuid,$2::uuid,$3::uuid,$4::uuid[],$5::bigint,$6::jsonb)',[issuer,batch,id,manifest,expectedRev,JSON.stringify(zeroOutput)]));},
   async finishCandidatePublications(id){return publicationOutcomeOf(await fn<Record<string,unknown>|null>('public.finish_candidate_publications($1::uuid)',[id]));},
   async abandonCandidatePublications(id){return Number(await fn('public.abandon_candidate_publications($1::uuid)',[id]));},
   async promotionDue(pubGen,limit){return ((await fn<string[]|null>('public.hk_promotion_due($1::int,$2::text,$3::int)',[pubGen,HK_EXTRACTOR_REF,limit]))??[]).map(issuerId=>({issuerId:String(issuerId)}));},
@@ -12665,7 +13065,9 @@ describe('values (spec §7.5 step 5): exact decimal strings, brackets negative, 
   expect(applySign('net_change_in_cash','0','現金及現金等價物減少淨額')).toEqual({value:'0',sign_flip:false});
   expect(applySign('investing_cash_flow','-120000000','投資活動所用現金淨額')).toEqual({value:'-120000000',sign_flip:false});
   expect(applySign('income_tax','10185000','Income tax credit 所得稅沖回')).toEqual({value:'-10185000',sign_flip:true});   // a credit is a negative expense
-  expect(applySign('income_tax','-5000','所得稅抵免')).toEqual({value:'5000',sign_flip:true});
+  expect(applySign('income_tax','-5000','所得稅抵免')).toEqual({value:'-5000',sign_flip:false});   // already printed negative: −|x|, no flip (P1-3)
+  expect(applySign('income_tax','0','Income tax credit')).toEqual({value:'0',sign_flip:false});
+  expect(applySign('income_tax','-10185000','Income tax credit 所得稅沖回')).toEqual({value:'-10185000',sign_flip:false});
  });
 });
 ```
@@ -12676,7 +13078,7 @@ import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {describe,expect,it} from 'vitest';
 import {allowedUnits,unitKindOf} from '../../facts/units';
-import {SYNTHETIC_NAMES,syntheticPagesJson} from '../fixtures/hkex/_synthetic/build';
+import {SYNTHETIC_NAMES,buildPagesJson,syntheticPagesJson} from '../fixtures/hkex/_synthetic/build';
 import {EXTRACTOR_VERSION,HK_EXTRACTOR_REF,HK_LABEL_GEN,HK_RULES_VERSION,TABLE_ALGO_VERSION} from '../types';
 import type {CandidateInsert,DocClass,DocumentRow,ExtractionRow,FactCitations,FinancialFactPayload,PagesJson} from '../types';
 import {canonicalJson,generateHkCandidates,naturalKey} from './generate';
@@ -12698,8 +13100,8 @@ function extRow():ExtractionRow{
   pages_json_sha256:'e'.repeat(64),candidates_role:'primary',candidates_status:'pending',candidates_attempts:1,candidates_lease_until:null,candidates_lease_batch_id:null,batch_id:'00000000-0000-4000-8000-0000000000b1',created_at:'2026-03-20T10:00:00.000Z'};
 }
 /** Generates with a fake cite that hands out ids per distinct range and resolves ids back to snippets. */
-async function run(name:string,docClass:DocClass='annual_report',language:'zh'|'en'='zh'){
- const json=fixture(name);const ids=new Map<string,string>();const calls:CiteInput[]=[];
+async function run(name:string|PagesJson,docClass:DocClass='annual_report',language:'zh'|'en'='zh'){
+ const json=typeof name==='string'?fixture(name):name;const ids=new Map<string,string>();const calls:CiteInput[]=[];
  const cite=async(i:CiteInput)=>{calls.push(i);const k=`${i.page_no}:${i.char_start}:${i.char_end}`;if(!ids.has(k))ids.set(k,`cit-${ids.size+1}`);return ids.get(k)!;};
  const snippet=(id:string)=>{const k=[...ids].find(([,v])=>v===id)?.[0];if(!k)throw new Error(`unknown citation ${id}`);const [p,s,e]=k.split(':').map(Number);return cpSlice(json.pages.find(x=>x.page_no===p)!.text,s,e);};
  const out=await generateHkCandidates(json,{document:docRow(docClass,language),extraction:extRow(),cite});
@@ -12807,6 +13209,16 @@ describe('generateHkCandidates (spec §7.5)',()=>{
   expect(r.snippet(cits(op).label)).toBe('Net cash inflow/(outflow) from 經營活動產生╱（所用）淨現金\noperating activities');   // two-line label cited as one range
   expect(pay(r.by.get('net_change_in_cash:2026-01-01:2026-06-30:6M:CNY'))).toMatchObject({value:'-129836000',sign_flip:false});
   expect(pay(r.by.get('cash::2026-06-30:INSTANT:CNY'))).toMatchObject({value:'1563484000',period_derivation:{rule:'title_instant'}});
+ });
+ it('tax credit labels (P1-3): positive, parenthesised and zero amounts all become −|x|; sign_flip only when the printed sign changes',async()=>{
+  const isPage=(page_no:number,tax:[string,string])=>({page_no,lines:['Consolidated Statement of Profit or Loss','For the year ended 31 December 2025',{header:['2025','2024'] as [string,string]},{header:["RMB'000","RMB'000"] as [string,string]},
+   {label:'Revenue',values:['1,000','900'] as [string,string]},{label:'Income tax credit',values:tax}]});
+  const a=await run(buildPagesJson('tax-credit-a',[isPage(1,['(10,185)','24,458'])]),'annual_report','en');
+  expect(pay(a.by.get('income_tax:2025-01-01:2025-12-31:12M:CNY'))).toMatchObject({value:'-10185000',presented:'(10,185)',sign_flip:false});
+  expect(pay(a.by.get('income_tax:2024-01-01:2024-12-31:12M:CNY'))).toMatchObject({value:'-24458000',presented:'24,458',sign_flip:true});
+  const b=await run(buildPagesJson('tax-credit-b',[isPage(1,['0','(0)'])]),'annual_report','en');
+  expect(pay(b.by.get('income_tax:2025-01-01:2025-12-31:12M:CNY'))).toMatchObject({value:'0',presented:'0',sign_flip:false});
+  expect(pay(b.by.get('income_tax:2024-01-01:2024-12-31:12M:CNY'))).toMatchObject({value:'0',presented:'(0)',sign_flip:false});
  });
  it('edge cases: not consolidated, non-consecutive statement pages, conflicting duplicate labels (identical duplicates kept once), dash cells',async()=>{
   const r=await run('edge-cases');
@@ -13308,8 +13720,9 @@ export function headingSection(text:string,previousRowLabel:string|null):Section
 // and the lone dashes – - — (no value for that period: no candidate, never 0); value = presented ×
 // scale by decimal-string arithmetic (scaleDecimal), never a float. Sign rules: cost_of_revenue and
 // income_tax shown negative → absolute value, sign_flip; income_tax under a credit label (credit /
-// 抵免 / 沖回, e.g. "Income tax credit 所得稅沖回") is a negative expense → the presented value negated,
-// sign_flip; net_change_in_cash shown positive under a
+// 抵免 / 沖回, e.g. "Income tax credit 所得稅沖回") is a negative expense → −|x| whatever the printed
+// sign (`10,185` and `(10,185)` both give −10185000; 0 stays 0), and sign_flip records only an actual
+// change of sign (codex plan round 1 P1-3); net_change_in_cash shown positive under a
 // decrease-only label (減少/减少/decrease without 增加/increase) → negated, sign_flip; everything else as
 // presented (cash flows keep their printed sign).
 import {negate,parsePresented,scaleDecimal} from '../decimal';
@@ -13327,7 +13740,7 @@ const ABS_IF_NEGATIVE=new Set(['cost_of_revenue','income_tax']);
 const DECREASE=/減少|减少|decrease/i,INCREASE=/增加|increase/i,CREDIT=/credit|抵免|沖回|冲回/i;
 export function applySign(concept:string,value:string,label:string):{value:string;sign_flip:boolean}{
  const negative=value.startsWith('-');
- if(concept==='income_tax'&&CREDIT.test(label))return value==='0'?{value,sign_flip:false}:{value:negate(value),sign_flip:true};
+ if(concept==='income_tax'&&CREDIT.test(label)){const v=negative||value==='0'?value:negate(value);return {value:v,sign_flip:v!==value};}
  if(ABS_IF_NEGATIVE.has(concept)&&negative)return {value:negate(value),sign_flip:true};
  if(concept==='net_change_in_cash'&&DECREASE.test(label)&&!INCREASE.test(label)&&!negative&&value!=='0')return {value:negate(value),sign_flip:true};
  return {value,sign_flip:false};
@@ -13716,7 +14129,7 @@ export function buildSeedPages(facts:readonly SeedFact[],meta:{contentSha256:str
  statements.forEach((s,i)=>{
   const page_no=i+1;
   const rows=facts.filter(f=>f.statement===s);
-  const texts=['金蝶國際𠀋軟件集團有限公司',TITLES[s],s==='BS'?`於${year}年12月31日`:`截至${year}年12月31日止年度`,'人民幣千元',`${year} ${prior}`,...rows.map(f=>`${labelOf(f)} ${presentedOf(f)}`)];
+  const texts=['金蝶國際𠀋軟件集團有限公司',TITLES[s],s==='BS'?`於${year}年12月31日`:`截至${year}年12月31日止年度`,'單位：元 幣種：人民幣',`${year} ${prior}`,...rows.map(f=>`${labelOf(f)} ${presentedOf(f)}`)];
   const lines:LayoutLine[]=[];let pos=0;
   texts.forEach((text,index)=>{const n=cpLength(text);const y=800-index*20;lines.push({index,y,x0:50,x1:500,text,char_start:pos,char_end:pos+n,items:[{text,x0:50,x1:500,y,h:10,char_start:pos,char_end:pos+n}]});pos+=n+1;});
   const span=(li:number,from=0,to?:number):Span=>({page_no,start:lines[li].char_start+from,end:to===undefined?lines[li].char_end:lines[li].char_start+to});
@@ -13830,18 +14243,20 @@ const IS25:Base={statement:'IS',period_start:'2025-01-01',period_end:'2025-12-31
 const IS24:Base={statement:'IS',period_start:'2024-01-01',period_end:'2024-12-31',duration:'12M'};
 const BS25:Base={statement:'BS',period_start:null,period_end:'2025-12-31',duration:'INSTANT'};
 const CF25:Base={...IS25,statement:'CF'};
-interface Over{concept:string;value:string;presented?:string;unit?:string;scale?:string|null;rule?:FinancialFactPayload['period_derivation']['rule'];title?:string;roles?:('statement_title'|'column_header')[];snippet?:string;dropUnit?:boolean}
+interface Over{concept:string;value:string;presented?:string;unit?:string;scale?:string|null;rule?:FinancialFactPayload['period_derivation']['rule'];title?:string;roles?:('statement_title'|'column_header')[];snippet?:string;dropUnit?:boolean;label?:string;unitSnippet?:string;signFlip?:boolean}
 let seq=0;
+/** Unit evidence consistent with (unit, scale): what scale.ts reads back as that unit and multiplier. */
+const UNIT_TEXT:Record<string,string>={'CNY|1':'單位：元 幣種：人民幣','CNY|1000':'人民幣千元','CNY|1000000':'人民幣百萬元','HKD|1000':'千港元','CNY/share|0.01':'RMB cents','CNY/share|1':'人民幣元','HKD/share|0.01':'港仙'};
 function cand(base:Base,o:Over,verify:Map<string,CitationCheck|null>):CandidateRow{
  const n=++seq;const id=(r:string)=>`cit-${n}-${r}`;
- const presented=o.presented??o.value;const unit=o.unit??'CNY';
+ const presented=o.presented??o.value;const unit=o.unit??'CNY';const scale=o.scale===undefined?'1':o.scale;
  verify.set(id('value'),{integrity:'ok',currentExtraction:true,snippet:o.snippet??presented});
- verify.set(id('label'),{integrity:'ok',currentExtraction:true,snippet:o.concept});
- verify.set(id('unit'),{integrity:'ok',currentExtraction:true,snippet:'人民幣千元'});
+ verify.set(id('label'),{integrity:'ok',currentExtraction:true,snippet:o.label??o.concept});
+ verify.set(id('unit'),{integrity:'ok',currentExtraction:true,snippet:o.unitSnippet??UNIT_TEXT[`${unit}|${scale}`]??'人民幣千元'});
  verify.set(id('title'),{integrity:'ok',currentExtraction:true,snippet:o.title??'綜合損益表'});
  verify.set(id('header'),{integrity:'ok',currentExtraction:true,snippet:base.period_end.slice(0,4)});
  const payload={concept:o.concept,statement:base.statement,period_start:base.period_start,period_end:base.period_end,duration:base.duration,value:o.value,presented,unit,
-  scale:o.scale===undefined?'1000':o.scale,sign_flip:false,period_derivation:{rule:o.rule??(base.duration==='INSTANT'?'title_instant':'title_duration'),title_date:'2025-12-31',column_text:base.period_end.slice(0,4)},consolidation:'consolidated'} as unknown as FinancialFactPayload;
+  scale,sign_flip:o.signFlip??false,period_derivation:{rule:o.rule??(base.duration==='INSTANT'?'title_instant':'title_duration'),title_date:'2025-12-31',column_text:base.period_end.slice(0,4)},consolidation:'consolidated'} as unknown as FinancialFactPayload;
  const citations={value:id('value'),label:id('label'),...(o.dropUnit?{}:{unit:id('unit')}),period:(o.roles??['statement_title','column_header']).map(r=>({role:r,citation_id:r==='statement_title'?id('title'):id('header')}))};
  return {candidate_id:`cand-${n}`,document_id:EX.document_id,extraction_id:EX.extraction_id,kind:'financial_fact',extractor_kind:'rule',extractor_ref:HK_EXTRACTOR_REF,
   natural_key:`${o.concept}:${base.period_start??''}:${base.period_end}:${base.duration}:${unit}`,citations,payload,fingerprint:'f'.repeat(64),checks:[],checks_passed:false,status:'candidate',
@@ -13861,9 +14276,9 @@ describe('HK_CONCEPT_IDS',()=>{
 });
 
 describe('runHkChecks',()=>{
- it('records all seven checks in order; a consistent column passes every blocking check',()=>{
+ it('records all eight checks in order; a consistent column passes every blocking check',()=>{
   const {out}=bs('20000','8000','12000');
-  expect(out.map(r=>r.checks.map(c=>c.check))).toEqual(Array(3).fill(['citation_verified','unit_known','period_known','consolidated','identity_bs','comparative_consistent','en_cross_check']));
+  expect(out.map(r=>r.checks.map(c=>c.check))).toEqual(Array(3).fill(['citation_verified','unit_known','value_replays','period_known','consolidated','identity_bs','comparative_consistent','en_cross_check']));
   expect(out.every(r=>r.checks_passed)).toBe(true);
   expect(check(out[0],'identity_bs')).toMatchObject({blocking:true,passed:true});
   expect(check(out[0],'comparative_consistent')).toMatchObject({blocking:false,passed:null,detail:{reason:'primary_column'}});
@@ -13918,6 +14333,38 @@ describe('runHkChecks',()=>{
   const v=new Map<string,CitationCheck|null>();
   const out=runHkChecks([cand(IS25,{concept:'revenue',value:'1',scale:null},v),cand(IS25,{concept:'eps_basic',value:'0.1',unit:'CNY',scale:'1'},v),cand(IS25,{concept:'eps_diluted',value:'0.1',unit:'CNY/share',scale:'0.01'},v)],ctx(v));
   expect(out.map(r=>check(r,'unit_known').passed)).toEqual([false,false,true]);
+ });
+ it('value_replays (P1-2): the cited number × the recorded scale, signed by the label rule, must equal payload.value exactly',()=>{
+  const v=new Map<string,CitationCheck|null>();
+  const lone=cand(IS25,{concept:'revenue',value:'999',presented:'1',scale:'1000',snippet:'1'},v);              // 1 × 1000 ≠ 999: blocked
+  const right=cand(IS25,{concept:'revenue',value:'1000',presented:'1',scale:'1000',snippet:'1'},v);
+  const big=cand(IS25,{concept:'revenue',value:'12345678901234567890000',presented:'12,345,678,901,234,567,890',scale:'1000'},v);
+  const off=cand(IS25,{concept:'revenue',value:'12345678901234567891000',presented:'12,345,678,901,234,567,890',scale:'1000'},v);   // 1 unit off beyond double precision
+  const cost=cand(IS25,{concept:'cost_of_revenue',value:'600000',presented:'(600)',scale:'1000',signFlip:true},v);
+  const costNoFlip=cand(IS25,{concept:'cost_of_revenue',value:'600000',presented:'(600)',scale:'1000',signFlip:false},v);
+  const credit=cand(IS25,{concept:'income_tax',value:'-10185000',presented:'(10,185)',scale:'1000',label:'Income tax credit'},v);
+  const creditFlipped=cand(IS25,{concept:'income_tax',value:'10185000',presented:'(10,185)',scale:'1000',label:'Income tax credit',signFlip:true},v);
+  const out=runHkChecks([lone,right,big,off,cost,costNoFlip,credit,creditFlipped],ctx(v));
+  expect(check(out[0],'value_replays')).toMatchObject({blocking:true,passed:false,detail:{reason:'value_mismatch',snippet:'1',scale:'1000',replayed:'1000',recorded:'999'}});
+  expect(check(out[0],'citation_verified').passed).toBe(true);                                                 // digits of snippet and presented agree: only the replay catches it
+  expect(out[0].checks_passed).toBe(false);
+  expect(out.map(r=>check(r,'value_replays').passed)).toEqual([false,true,true,false,true,false,true,false]);
+  expect((check(out[5],'value_replays').detail as {reason:string}).reason).toBe('sign_flip_mismatch');
+  expect((check(out[7],'value_replays').detail as {reason:string}).reason).toBe('sign_flip_mismatch');
+ });
+ it('value_replays (P1-2): the recorded scale and unit must be what the unit citation says',()=>{
+  const v=new Map<string,CitationCheck|null>();
+  const out=runHkChecks([
+   cand(IS25,{concept:'revenue',value:'1000',presented:'1',scale:'1000'},v),                                      // 人民幣千元 → CNY × 1000
+   cand(IS25,{concept:'revenue',value:'1000000',presented:'1',scale:'1000000',unitSnippet:'人民幣千元'},v),      // scale 1000000 recorded, evidence says 1000
+   cand(IS25,{concept:'revenue',value:'1000',presented:'1',scale:'1000',unit:'HKD',unitSnippet:'人民幣千元'},v), // currency differs
+   cand(IS25,{concept:'revenue',value:'1',presented:'1',scale:'1',unitSnippet:'港元 港元'},v),                   // no multiplier in the evidence
+   cand(IS25,{concept:'eps_basic',value:'0.0155',presented:'1.55',unit:'CNY/share',scale:'0.01'},v),             // RMB cents
+   cand(IS25,{concept:'eps_basic',value:'1.55',presented:'1.55',unit:'CNY/share',scale:'1',unitSnippet:'RMB cents'},v),
+   cand(IS25,{concept:'revenue',value:'1000',presented:'1',scale:'7'},v),
+  ],ctx(v));
+  expect(out.map(r=>check(r,'value_replays').passed)).toEqual([true,false,false,false,true,false,false]);
+  expect(out.slice(1).filter((_,i)=>i!==3).map(r=>(check(r,'value_replays').detail as {reason:string}).reason)).toEqual(['scale_mismatch','scale_mismatch','unit_evidence','scale_mismatch','scale_invalid']);
  });
  it('period_known: duration band, instant without start, both evidence roles',()=>{
   const v=new Map<string,CitationCheck|null>();
@@ -13990,7 +14437,11 @@ Expected: FAIL — `Failed to resolve import "./checks"`。
 // never Number. Identities group the candidates of one statement column (statement, period_start,
 // period_end) over money concepts; a failure blocks every candidate of that column, a missing
 // input is recorded as passed with detail {skipped:true} ("缺任一不检"; passed=null is reserved
-// for non-blocking checks). hkCheckFindings turns failures into plan-1 quarantine items
+// for non-blocking checks). value_replays (blocking; codex plan round 1 P1-2) recomputes the
+// canonical value from the cited value snippet — values.ts cellValue with the recorded scale, then
+// applySign with the cited label — and requires it to equal payload.value exactly; the recorded
+// unit and scale must be what the unit citation says (scale.ts detectAmountUnit / detectEpsUnit on
+// the unit snippet) and sign_flip what the label evidence gives. hkCheckFindings turns failures into plan-1 quarantine items
 // (hk_identity_* per column, hk_restated_comparative / hk_en_zh_mismatch per candidate) plus one
 // info code per extraction; buildCheckContext performs the reads.
 import type {BatchError} from '../../dq/batches';
@@ -14005,13 +14456,16 @@ import {HK_EXTRACTOR_REF} from '../types';
 import type {CandidateRow,CheckResult,CitationRow,DocumentRow,DocumentsDb,ExtractionRow,FactCitations,FinancialFactPayload} from '../types';
 import {exactIdentity,sumDecimals} from './exact';
 import type {HkFactsPort} from './facts-port';
+import {detectAmountUnit,detectEpsUnit} from './scale';
+import type {Currency,Scale} from './scale';
+import {applySign,cellValue} from './values';
 
 /** The 18 HK concepts of spec §7.5 第 4 条 (all ids of the landed spec-2 FACT_CONCEPTS). */
 export const HK_CONCEPT_IDS:readonly string[]=['revenue','cost_of_revenue','gross_profit','operating_income','income_tax','net_income','net_income_parent','eps_basic','eps_diluted',
  'total_assets','total_liabilities','equity_parent','equity_total','cash','operating_cash_flow','investing_cash_flow','financing_cash_flow','net_change_in_cash'];
 export const TOL_HALF_PERCENT={num:5n,den:1000n} as const;
 export const TOL_CF={num:2n,den:100n} as const;
-export const CHECK_ORDER=['citation_verified','unit_known','period_known','consolidated','identity','comparative_consistent','en_cross_check'] as const;
+export const CHECK_ORDER=['citation_verified','unit_known','value_replays','period_known','consolidated','identity','comparative_consistent','en_cross_check'] as const;
 export interface CitationCheck{integrity:'ok'|'corrupt';currentExtraction:boolean;snippet:string}
 export interface CheckContext{verify:Map<string,CitationCheck|null>;priorFacts:FactRow[];enCandidates:CandidateRow[]}
 export interface CheckRowResult{candidate_id:string;checks:CheckResult[];checks_passed:boolean}
@@ -14048,6 +14502,38 @@ function unitKnown(p:FinancialFactPayload):CheckResult{
  if(!def)return fail('unit_known',true,{reason:'unknown_concept',concept:p.concept});
  if(!allowedUnits(def.unitKind).includes(p.unit))return fail('unit_known',true,{reason:'unit_not_allowed',unit:p.unit,unit_kind:def.unitKind});
  return pass('unit_known',true);
+}
+const SCALES:ReadonlySet<string>=new Set(['1','0.01','1000','1000000']);
+const CURRENCIES:ReadonlySet<string>=new Set(['HKD','CNY','USD']);
+const canonOrNull=(v:unknown):string|null=>{if(typeof v!=='string')return null;try{return canonicalDecimal(v);}catch{return null;}};
+/** What the unit citation says: the amount unit line (currency + multiplier) or the per-share sub-unit token. */
+function unitEvidence(unit:unknown,text:string):{ok:true;unit:string;scale:Scale}|{ok:false;reason:string}{
+ if(typeof unit!=='string')return {ok:false,reason:'no_unit'};
+ if(/\/share$/.test(unit)){
+  const ccy=unit.replace(/\/share$/,'');
+  const r=detectEpsUnit([{page_no:0,text,char_start:0}],CURRENCIES.has(ccy)?ccy as Currency:null);
+  return r.ok?{ok:true,unit:r.unit,scale:r.scale}:{ok:false,reason:r.reason};
+ }
+ const r=detectAmountUnit([{page_no:0,line:{index:0,y:0,x0:0,x1:0,text,char_start:0,char_end:Array.from(text).length,items:[]}}]);
+ return r.ok?{ok:true,unit:r.currency,scale:r.scale}:{ok:false,reason:r.reason};
+}
+/** Replays the cited number through the recorded transformation (P1-2): exact decimal strings only. */
+function valueReplays(c:CandidateRow,p:FinancialFactPayload,ctx:CheckContext):CheckResult{
+ const cs=citesOf(c);
+ const snip=(id:unknown)=>typeof id==='string'?ctx.verify.get(id)?.snippet??null:null;
+ const value=snip(cs.value),label=snip(cs.label),unitText=snip(cs.unit);
+ if(value===null||label===null||unitText===null)return fail('value_replays',true,{reason:'evidence_unavailable'});
+ if(typeof p.scale!=='string'||!SCALES.has(p.scale))return fail('value_replays',true,{reason:'scale_invalid',scale:p.scale??null});
+ const ev=unitEvidence(p.unit,unitText);
+ if(!ev.ok)return fail('value_replays',true,{reason:'unit_evidence',evidence:ev.reason,unit_snippet:unitText});
+ if(ev.unit!==p.unit||ev.scale!==p.scale)return fail('value_replays',true,{reason:'scale_mismatch',recorded:{unit:p.unit,scale:p.scale},evidence:{unit:ev.unit,scale:ev.scale},unit_snippet:unitText});
+ const cell=cellValue(value,p.scale as Scale);
+ if(cell.kind!=='value')return fail('value_replays',true,{reason:'value_unparsed',snippet:value});
+ const signed=applySign(p.concept,cell.value,label);
+ if(signed.sign_flip!==p.sign_flip)return fail('value_replays',true,{reason:'sign_flip_mismatch',recorded:p.sign_flip??null,evidence:signed.sign_flip,label_snippet:label});
+ const recorded=canonOrNull(p.value);
+ if(recorded===null||canonicalDecimal(signed.value)!==recorded)return fail('value_replays',true,{reason:'value_mismatch',snippet:value,scale:p.scale,replayed:signed.value,recorded:p.value??null});
+ return pass('value_replays',true);
 }
 function periodKnown(c:CandidateRow,p:FinancialFactPayload):CheckResult{
  const roles=new Set((Array.isArray(citesOf(c).period)?citesOf(c).period:[]).map(x=>x.role));
@@ -14120,7 +14606,7 @@ export function runHkChecks(candidates:CandidateRow[],ctx:CheckContext):CheckRow
  const identity=identityChecks(facts);
  return facts.map(c=>{
   const p=payloadOf(c);
-  const checks=[citationVerified(c,ctx),unitKnown(p),periodKnown(c,p),consolidated(c,p,ctx),identity.get(c.candidate_id)!,comparative(p,ctx),enCross(c,p,ctx)];
+  const checks=[citationVerified(c,ctx),unitKnown(p),valueReplays(c,p,ctx),periodKnown(c,p),consolidated(c,p,ctx),identity.get(c.candidate_id)!,comparative(p,ctx),enCross(c,p,ctx)];
   return {candidate_id:c.candidate_id,checks,checks_passed:checks.every(x=>!x.blocking||x.passed===true)};
  });
 }
@@ -14197,7 +14683,7 @@ export async function buildCheckContext(deps:CheckDeps,doc:DocumentRow,ex:Extrac
 - [ ] **Step 4: Run the checks test, expect PASS**
 
 Run: `npm test -- src/lib/documents/hk-facts/checks.test.ts`
-Expected: PASS（13 tests）。
+Expected: PASS（15 tests）。
 
 - [ ] **Step 5: Write the failing test（候选运行，内存实现；生成器以 mock 替身，检查与库函数是真实的）**
 
@@ -14240,7 +14726,7 @@ describe('runDocumentsCandidates — candidates phase',()=>{
   expect(r.errors).toContainEqual(expect.objectContaining({code:'label_ambiguous',key:ex.extractionId}));
   const cands=h.docs.candidates().filter(c=>c.extraction_id===ex.extractionId);
   expect(cands).toHaveLength(6);
-  expect(cands.every(c=>c.status==='candidate'&&c.checks_passed&&c.checks.length===7)).toBe(true);
+  expect(cands.every(c=>c.status==='candidate'&&c.checks_passed&&c.checks.length===8)).toBe(true);
   expect((await h.docs.extractionById(ex.extractionId))!.candidates_status).toBe('done');
   const cites=h.docs.citations().filter(c=>c.extraction_id===ex.extractionId);
   expect(cites.length).toBe(6*5);                                         // value, label, unit, statement title, column header
@@ -14324,6 +14810,43 @@ describe('runDocumentsCandidates — candidates phase',()=>{
  });
 });
 
+describe('runDocumentsCandidates — leases and budget (P2-7)',()=>{
+ it('a lease that expires while another batch takes over: lease_lost, no citation, candidate or finish written',async()=>{
+  const h=hkHarness();const ex=await pending(h);
+  const OTHER=await h.batch();const deps=candidatesDepsOf(h);
+  const r=await run(h,{},{...deps,store:{...deps.store,get:async(p:string)=>{
+   h.docs.expireCandidatesLease(ex.extractionId);                              // reading pages.json took longer than the lease …
+   expect(await h.docs.claimCandidatesLease(ex.extractionId,OTHER,600)).toBe(true);   // … and another batch claimed the extraction
+   return h.store.get(p);
+  }}});
+  expect(r.extractions).toEqual([expect.objectContaining({extractionId:ex.extractionId,outcome:'failed',code:'lease_lost',inserted:0,written:0})]);
+  expect(mocks.generate).not.toHaveBeenCalled();
+  expect(h.docs.citations().filter(c=>c.extraction_id===ex.extractionId)).toEqual([]);
+  expect(h.docs.candidates().filter(c=>c.extraction_id===ex.extractionId)).toEqual([]);
+  expect(await h.docs.extractionById(ex.extractionId)).toMatchObject({candidates_status:'pending',candidates_lease_batch_id:OTHER});
+ });
+ it('a takeover during generation stops before the insert; a phase without budget is deadline_hit and retried later',async()=>{
+  const h=hkHarness();const ex=await pending(h);
+  const OTHER=await h.batch();
+  const generate=mocks.generate.getMockImplementation()!;
+  mocks.generate.mockImplementationOnce(async(...a:unknown[])=>{
+   const out=await generate(...a);
+   h.docs.expireCandidatesLease(ex.extractionId);
+   expect(await h.docs.claimCandidatesLease(ex.extractionId,OTHER,600)).toBe(true);
+   return out;
+  });
+  const r=await run(h);
+  expect(r.extractions[0]).toMatchObject({outcome:'failed',code:'lease_lost',inserted:0});
+  expect(h.docs.candidates().filter(c=>c.extraction_id===ex.extractionId)).toEqual([]);
+  const g=hkHarness();const gx=await pending(g,FY25,'2026032500102_c');
+  let clock=Date.parse('2026-11-06T02:00:00.000Z');
+  const late=await run(g,{},{...candidatesDepsOf(g),now:()=>new Date(clock),deadline:new Date(clock+95_000),
+   store:{...g.store,get:async(p:string)=>{clock+=80_000;return g.store.get(p);}}});   // reading took 80 s: 15 s left
+  expect(late.extractions[0]).toMatchObject({outcome:'failed',code:'deadline_hit'});
+  expect(await g.docs.extractionById(gx.extractionId)).toMatchObject({candidates_status:'failed',candidates_lease_batch_id:null});
+ });
+});
+
 describe('runDocumentsCandidates — auto phase',()=>{
  const approval=(h:HkHarness,over:Record<string,unknown>={})=>h.docs.insertApproval({extractor_ref:HK_EXTRACTOR_REF,extractor_version:EXTRACTOR_VERSION,table_algo_version:TABLE_ALGO_VERSION,code_version:CODE,
   concepts:['revenue','gross_profit'],gold_sha256:'a'.repeat(64),precision:'0.97',recall:'0.96',report_path:'docs/audits/2026-11-06-document-pipeline/eval-hk-facts.json',approved_by:ADMIN,...over});
@@ -14385,7 +14908,11 @@ Expected: FAIL — `Failed to resolve import "./run"`。
 //     rows) → §7.6 checks over this version's undecided rule candidates → writeCandidateChecks
 //     (the only checks writer; it applies human-decision inheritance) → plan-1 quarantine of the
 //     findings (dataset documents.candidates) → finishCandidates(done); any throw →
-//     finishCandidates(failed) and candidates_error.
+//     finishCandidates(failed) and candidates_error. The lease is renewed (renewCandidatesLease, no
+//     attempt counted) before each mutating phase — generation (citations), insert, checks, findings —
+//     and a takeover stops the extraction with lease_lost and no further write; generation and the
+//     checks start only with MIN_PHASE_MS of budget left (else deadline_hit, finishCandidates(failed))
+//     (codex plan round 1 P2-7).
 //  2. auto — every undecided, checks-passed rule candidate (any batch: a crash is repaired by the
 //     next run) whose extractor_ref has an unrevoked approval whose extractor_version /
 //     table_algo_version / code_version equal the candidate's extraction row and whose concepts
@@ -14418,6 +14945,8 @@ export const DEFAULT_PHASES:readonly CandidatesPhase[]=['candidates','auto'];
 export const CANDIDATES_DATASET='documents.candidates';
 export const LEASE_TTL_S=600;
 export const MIN_ITEM_MS=90_000;
+/** Budget a costly phase (generation, checks) needs to start (P2-7). */
+export const MIN_PHASE_MS=20_000;
 export const APPROVALS_LIMIT=100;
 export interface CandidatesDeps{db:DocumentsDb;tables:TableClient;store:ObjectStore;port:HkFactsPort;now:()=>Date;deadline:Date|null;codeVersion:string|null}
 export interface CandidatesOptions{limit:number;extractionIds?:string[];dryRun:boolean;triggeredBy:TriggeredBy;phases?:CandidatesPhase[]}
@@ -14444,6 +14973,7 @@ export function supabaseCandidatesDeps(admin:SupabaseClient,opts:{deadline:Date|
   now:opts.now??(()=>new Date()),deadline:opts.deadline,codeVersion:opts.codeVersion};
 }
 
+class PhaseDeadline extends Error{constructor(){super('deadline_hit');}}
 const blank=(ex:{extraction_id:string;document_id:string|null}):ExtractionOutcome=>({extractionId:ex.extraction_id,documentId:ex.document_id,outcome:'skipped',inserted:0,written:0,inherited:0,quarantined:0});
 
 /** candidatesDue, or the given ids (only those still pending/failed; the rest are reported as not_due). */
@@ -14463,27 +14993,35 @@ async function candidatesFor(deps:CandidatesDeps,batchId:string,ex:ExtractionRow
   errors.push({code:'skipped_summary',key:ex.extraction_id,message:JSON.stringify({leased_or_exhausted:1})});
   return;
  }
+ // P2-7: renew before every mutating phase; a takeover → lease_lost (no finishCandidates, nothing more written)
+ const keep=async()=>{if(!await deps.db.renewCandidatesLease(ex.extraction_id,batchId,LEASE_TTL_S))throw new DocumentsDbError('lease_lost');};
+ const budget=()=>{if(remainingMs(deps)<MIN_PHASE_MS)throw new PhaseDeadline();};
  try{
   const doc=await deps.db.documentById(ex.document_id);
   if(!doc)throw new Error('document_not_found');
   const bytes=await deps.store.get(ex.pages_json_path);
   if(sha256Hex(bytes)!==ex.pages_json_sha256)throw new Error('pages_json_hash_mismatch');
   const pages=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)) as PagesJson;
+  budget();await keep();
   const gen=await generateHkCandidates(pages,{document:doc,extraction:ex,
    cite:at=>cite(deps.db,{document_id:doc.document_id,extraction_id:ex.extraction_id,page_no:at.page_no,char_start:at.char_start,char_end:at.char_end,bbox:at.bbox??null,created_by:'extractor',created_ref:HK_EXTRACTOR_REF})});
   errors.push(...gen.info);
+  await keep();
   const {inserted}=await deps.db.insertCandidates(ex.extraction_id,batchId,gen.candidates);
   out.inserted=inserted;
   counts.fetched+=gen.candidates.length;counts.inserted+=inserted;counts.duplicates+=gen.candidates.length-inserted;
   const open=(await allPages(cursor=>deps.db.candidatesOf({extractionId:ex.extraction_id},{cursor,limit:1000})))
    .filter(c=>c.status==='candidate'&&c.kind==='financial_fact'&&c.extractor_kind==='rule'&&c.extractor_ref===HK_EXTRACTOR_REF);
   if(open.length>0){
+   budget();
    const ctx=await buildCheckContext(deps,doc,ex,open,today);
    const results=runHkChecks(open,ctx);
+   await keep();
    const w=await deps.db.writeCandidateChecks(ex.extraction_id,batchId,results);
    out.written=w.written;out.inherited=w.inherited;
    const {findings,info}=hkCheckFindings(ex,open,results);
    errors.push(...info);
+   await keep();
    for(const f of findings)await quarantine(deps.tables,{dataset:CANDIDATES_DATASET,table:'extraction_candidates',naturalKey:f.naturalKey,reasonCode:f.reasonCode,batchId,payload:{...f.payload,candidate_ids:f.candidateIds}});
    out.quarantined=findings.length;counts.quarantined+=findings.length;
   }
@@ -14492,7 +15030,8 @@ async function candidatesFor(deps:CandidatesDeps,batchId:string,ex:ExtractionRow
  }catch(e){
   out.outcome='failed';counts.failed++;
   if(e instanceof DocumentsDbError&&e.code==='lease_lost'){out.code='lease_lost';errors.push({code:'lease_lost',key:ex.extraction_id});return;}
-  out.code='candidates_error';errors.push({code:'candidates_error',key:ex.extraction_id,message:errMsg(e)});
+  if(e instanceof PhaseDeadline){out.code='deadline_hit';errors.push({code:'deadline_hit',key:ex.extraction_id,message:'phase'});}
+  else{out.code='candidates_error';errors.push({code:'candidates_error',key:ex.extraction_id,message:errMsg(e)});}
   try{await deps.db.finishCandidates(ex.extraction_id,batchId,'failed');}
   catch(e2){errors.push({code:'cleanup_failed',key:ex.extraction_id,message:errMsg(e2)});}
  }
@@ -14669,7 +15208,7 @@ main().catch(e=>{console.error(e instanceof Error?e.stack??e.message:e);process.
 - [ ] **Step 9: Run tests, typecheck, lint**
 
 Run: `npm test -- src/lib/documents/hk-facts/checks.test.ts src/lib/documents/candidates/run.test.ts`
-Expected: PASS（checks 13、run 12）。
+Expected: PASS（checks 15、run 14）。
 Run: `npm run typecheck`
 Expected: 0 errors。
 Run: `npm run lint`
@@ -14944,6 +15483,76 @@ describe('runHkFactsSync',()=>{
   expect(await h.docs.candidateById(id)).toMatchObject({status:'candidate',decision_kind:null,approval_id:null});
   expect(h.docs.publications().every(p=>p.state!=='staged')).toBe(true);
  });
+ it('P1-4: a zero-output document that switches to a new extraction between selection and publish → stale_plan, no generation advance; the next run replans',async()=>{
+  const h=hkHarness();
+  await confirmedDoc(h,[FY25[0]],'2026032500010_c');
+  const half:SeedFact={concept:'revenue',statement:'IS',period_start:'2025-01-01',period_end:'2025-06-30',duration:'6M',value:'3000000'};
+  const b=await seedHkExtraction(h,{sourceRef:'2025082500011_c',docClass:'interim_report',periodEnd:'2025-06-30',availableAt:'2025-08-25T08:30:00.000Z',facts:[half],extractorVersion:'docs-extract/0.9'});
+  await confirm(h,(await seedHkCandidates(h,b)).values());
+  expect((await run(h)).outcome).toBe('published');
+  await h.docs.requestExtract(b.document.document_id,ADMIN);
+  await seedHkCandidates(h,await seedExtraction(h,b.document.document_id,[],'docs-extract/0.95'));   // zero output (an intermediate extractor, so a later re-extraction is allowed)
+  const next=HK_PUB_GEN+1;const before=h.facts.filings().map(f=>[f.filing_id,f.mapping_gen]);const gen1=okFacts(h).map(f=>f.fact_id).sort();
+  let switched='';
+  const racing={...h.port,publishHkRun:async(...a:Parameters<typeof h.port.publishHkRun>)=>{
+   expect(a[5].map(z=>z.document_id)).toContain(b.document.document_id);
+   await h.docs.requestExtract(b.document.document_id,ADMIN);                                    // another worker re-extracts B: new extraction, candidates pending
+   switched=(await seedExtraction(h,b.document.document_id,[half])).extractionId;
+   return h.port.publishHkRun(...a);
+  }};
+  const o=await run(h,{port:racing},next);
+  expect(o).toMatchObject({outcome:'failed',code:'stale_plan'});
+  expect((await h.docs.extractionById(switched))!.candidates_status).toBe('pending');
+  expect(h.facts.filings().map(f=>[f.filing_id,f.mapping_gen])).toEqual(before);               // no generation advance
+  expect(okFacts(h).map(f=>f.fact_id).sort()).toEqual(gen1);                                    // nothing hidden, nothing new
+  expect(h.facts.runs().filter(r=>r.status==='staged')).toEqual([]);
+  expect(h.facts.scope().find(s=>s.issuer_id===ISSUER)).toMatchObject({lease_batch_id:null,last_status:'failed'});
+ });
+ it('P2-7: a lease taken over between phases is lease_lost with nothing staged; a phase without budget is deadline_hit',async()=>{
+  const h=hkHarness();await confirmedDoc(h);
+  const OTHER=await h.batch();
+  const port={...h.port,readFacts:async(i:string,opts:Parameters<typeof h.port.readFacts>[1])=>{
+   const r=await h.port.readFacts(i,opts);
+   h.facts.expireLease(ISSUER,'HK' as unknown as Market);                     // planning outlived the lease …
+   expect(await h.port.claimLease(ISSUER,OTHER,600)).toBe(true);             // … and another batch took the issuer
+   return r;
+  }};
+  const o=await run(h,{port});
+  expect(o).toMatchObject({outcome:'failed',code:'lease_lost'});
+  expect(h.facts.filings()).toEqual([]);expect(h.facts.facts()).toEqual([]);expect(h.docs.publications()).toEqual([]);
+  expect(h.facts.scope().find(s=>s.issuer_id===ISSUER)).toMatchObject({lease_batch_id:OTHER});
+  const g=hkHarness();await confirmedDoc(g);
+  let clock=Date.parse(NOW);
+  const slow={...g.port,readFacts:async(i:string,opts:Parameters<typeof g.port.readFacts>[1])=>{clock+=50_000;return g.port.readFacts(i,opts);}};   // 15 s left after planning
+  const late=await run(g,{port:slow,now:()=>new Date(clock),deadline:new Date(clock+65_000)});
+  expect(late).toMatchObject({outcome:'failed',code:'deadline_hit'});
+  expect(g.facts.runs().every(r=>r.status==='abandoned')).toBe(true);
+  expect(g.docs.publications()).toEqual([]);
+  expect(g.facts.scope().find(s=>s.issuer_id===ISSUER)).toMatchObject({lease_batch_id:null,last_status:'failed'});
+ });
+ it('P2-6: issuers whose only staged work waits on an owner quarantine decision are not due, so a later issuer is not starved by a limit-1 batch',async()=>{
+  const B='00000000-0000-4000-8000-0000000000a2';
+  const h=hkHarness({issuers:[{issuer_id:ISSUER,code:'00268'},{issuer_id:B,code:'00700'}]});
+  const runFor=async(issuer:string)=>(await runHkFactsSync(candidatesDepsOf(h),{issuerIds:[issuer],batchId:await h.batch(),triggeredBy:'script'}))[0];
+  // ISSUER: a same-day replacement leaves one link staged behind a quarantined fact (spec §12 example 10)
+  await confirmedDoc(h,[FY25[0]],'2026032500012_c');
+  expect((await runFor(ISSUER)).outcome).toBe('published');
+  const v2=await seedHkExtraction(h,{sourceRef:'2026032500012_c',bytesTag:'v2',facts:[{...FY25[0],value:'6256999'}]});
+  await confirm(h,(await seedHkCandidates(h,v2)).values());
+  expect(await runFor(ISSUER)).toMatchObject({outcome:'published',finish:{published:0,still_staged:1,abandoned:0}});
+  // B: an ordinary confirmed candidate, created after ISSUER's wait began
+  const bx=await seedHkExtraction(h,{issuerId:B,sourceRef:'2026032600013_c',facts:[FY25[0]]});
+  await confirm(h,(await seedHkCandidates(h,bx)).values());
+  expect((await h.port.promotionDue(HK_PUB_GEN,1)).map(x=>x.issuerId)).toEqual([B]);         // batch 1 (limit 1): ISSUER's quarantine wait does not take the slot
+  expect((await runFor(B)).outcome).toBe('published');
+  expect(await h.port.promotionDue(HK_PUB_GEN,1)).toEqual([]);                                  // batch 2: nothing actionable while the decision is unchanged
+  const item=h.tables.rows('dq_quarantine').find(r=>r.dataset==='facts.hk'&&r.reason_code==='same_day_conflict')!;
+  const chosen=h.facts.facts().find(f=>f.concept==='revenue'&&f.issuer_id===ISSUER&&f.value==='6256999')!.fact_id;
+  await h.port.resolveHkFactsQuarantine(String(item.id),[chosen],ADMIN);
+  expect((await h.port.promotionDue(HK_PUB_GEN,1)).map(x=>x.issuerId)).toEqual([ISSUER]);   // batch 3: the decision changed, the link is actionable again
+  expect(await runFor(ISSUER)).toMatchObject({outcome:'skipped',code:'nothing_to_publish'});
+  expect(await h.port.promotionDue(HK_PUB_GEN,10)).toEqual([]);
+ });
 });
 ```
 
@@ -14979,13 +15588,18 @@ Expected: FAIL — `Failed to resolve import "./promote"`。
 //  3. fact_citations for every NEW fact while all are still staged: value, label, unit, each period
 //     evidence (evidence_failed); then same-day conflicts and contested joins are parked exactly like
 //     facts/sync.ts (dataset facts.hk).
-//  4. spec-2 identity rules on new rows ∪ ok rows → quarantineFacts; publishHkRun(expectedRev).
+//  4. spec-2 identity rules on new rows ∪ ok rows → quarantineFacts; publishHkRun(expectedRev, the
+//     zero-output selection {document_id, extraction_id} — revalidated under the document locks:
+//     a document that switched extraction or whose candidates are no longer done → stale_plan).
 //     evidence_incomplete / stale_plan / anything else (publish_failed) → abandon run + its
 //     publications, release(failed). stale_plan is never retried with a new revision: promotionDue
 //     (ab) brings the issuer back and step 1 re-reads. Success → finishCandidatePublications →
 //     release(success). No materialization (R5-3).
 // Every exit releases the lease (a lost lease stops all writes); after publish nothing can undo
-// the run: a later failure is reported next to outcome 'published' and step 0a repairs it.
+// the run: a later failure is reported next to outcome 'published' and step 0a repairs it. The HK
+// lease is renewed (same-batch claimLease) before steps 2, 3 and 4 and a takeover is lease_lost with
+// no further write; steps 2 and 4 start only with MIN_PHASE_MS of budget left, else deadline_hit
+// (run abandoned, lease released) (codex plan round 1 P2-7).
 // raw_hash = value-citation locator hkex:<sha256[0:16]>:<extraction_id>:p<page>:c<start>-<end>.
 import {randomUUID} from 'node:crypto';
 import type {TableClient} from '../../db/table-client';
@@ -14997,7 +15611,7 @@ import {canonicalDecimal} from '../../facts/json-numbers';
 import {summarizeWarnings} from '../../facts/rules';
 import type {FactCandidate} from '../../facts/types';
 import {cpSlice} from '../extract/pages-json';
-import {HK_EXTRACTOR_REF,HK_PUB_GEN} from '../types';
+import {DocumentsDbError,HK_EXTRACTOR_REF,HK_PUB_GEN} from '../types';
 import type {CandidateRow,CitationRole,CitationRow,DocumentRow,DocumentsDb,FactCitations,FinancialFactPayload,Page,PublicationRow} from '../types';
 import {HK_CONCEPT_IDS} from './checks';
 import {evaluateHkFactRules,planHkFactWrites,toFilingInsert} from './facts-port';
@@ -15005,6 +15619,8 @@ import type {HkFactsPort,HkFilingInsert} from './facts-port';
 
 export const PROMOTE_LEASE_TTL_S=600;
 export const MIN_ISSUER_MS=60_000;
+/** Budget step 2 (staging) and step 4 (publish) need to start (P2-7). */
+export const MIN_PHASE_MS=20_000;
 export const HK_FACTS_DATASET='facts.hk';
 const COUNTERS=['fetched','inserted','duplicates','versioned','quarantined','failed'] as const;
 export interface PromoteDeps{db:DocumentsDb;port:HkFactsPort;tables:TableClient;now:()=>Date;deadline:Date|null}
@@ -15067,6 +15683,9 @@ async function promoteIssuer(deps:PromoteDeps,batchId:string,issuer:string,pubGe
   try{await port.releaseLease(issuer,batchId,outcome,nowIso());}catch(e){if(isLeaseLoss(e))leaseHeld=false;else cleanupFailed('release',e);}
  };
  const stop=async(code:string,message?:string)=>{await abandonOnce();await release('failed');return fail(code,message);};
+ /** P2-7: same-batch claimLease extends our lease; false = another batch took over → lease_lost, nothing more is written. */
+ const renew=async()=>{if(!await port.claimLease(issuer,batchId,PROMOTE_LEASE_TTL_S)){leaseHeld=false;throw new DocumentsDbError('lease_lost');}};
+ const outOfBudget=()=>remaining(deps)<MIN_PHASE_MS;
  try{
   // ---- 0a: settle staged publications of this generation (no abandonRun on foreign runs)
   const leftover:string[]=[];
@@ -15110,6 +15729,8 @@ async function promoteIssuer(deps:PromoteDeps,batchId:string,issuer:string,pubGe
   }
   o.counts.fetched=toStage.length;o.staged=toStage.length;
   if(toStage.length===0&&zeroDocs.length===0){await abandonOnce();await release('success');return skip('nothing_to_publish');}
+  if(outOfBudget())return await stop('deadline_hit');
+  await renew();
   const docs=[...new Map([...active.map(c=>docCache.get(c.document_id)!),...zeroDocs].map(d=>[d.document_id,d])).values()].sort((a,b)=>a.document_id<b.document_id?-1:1);
   const inserts:HkFilingInsert[]=[];
   for(const d of docs){
@@ -15166,6 +15787,7 @@ async function promoteIssuer(deps:PromoteDeps,batchId:string,issuer:string,pubGe
    add(f,x.value,'value');add(f,x.label,'label');add(f,x.unit,'unit');
    for(const p of x.period)add(f,p.citation_id,'period');
   }
+  await renew();
   try{if(evidence.size>0)await port.insertFactCitations(run,[...evidence.values()]);}
   catch(e){if(isLeaseLoss(e))throw e;return await stop('evidence_failed',errMsg(e));}
   const park=(reasonCode:string,naturalKey:string,payload:Record<string,unknown>)=>quarantine(tables,{dataset:HK_FACTS_DATASET,table:'financial_facts',naturalKey,reasonCode,batchId,payload:{...payload,run_id:run}});
@@ -15185,7 +15807,12 @@ async function promoteIssuer(deps:PromoteDeps,batchId:string,issuer:string,pubGe
   }
   o.errors.push(...summarizeWarnings(rules.warnings));
   const manifest=[...new Set(docs.map(d=>filingOfDoc(d.document_id)))];
-  try{await port.publishHkRun(issuer,batchId,run,manifest,expectedRev);}
+  // P1-4: the zero-output selection as planned (document + the current extraction planning saw);
+  // publish_hk_run rechecks it under the document locks and raises stale_plan if it changed
+  const zeroOutput=zeroDocs.map(d=>({document_id:d.document_id,extraction_id:d.current_extraction_id!}));
+  if(outOfBudget())return await stop('deadline_hit');
+  await renew();
+  try{await port.publishHkRun(issuer,batchId,run,manifest,expectedRev,zeroOutput);}
   catch(e){
    if(isLeaseLoss(e))throw e;
    const c=codeOf(e);
@@ -15229,7 +15856,7 @@ export async function promoteIssuerNow(deps:PromoteDeps&{codeVersion:string|null
 - [ ] **Step 5: Run the promote test, expect PASS**
 
 Run: `npm test -- src/lib/documents/hk-facts/promote.test.ts`
-Expected: PASS（15 tests）。
+Expected: PASS（18 tests）。
 
 - [ ] **Step 6: 接入候选阶段 3（修改 `candidates/run.ts`）**
 
@@ -15330,7 +15957,7 @@ describe('runDocumentsCandidates — promote phase',()=>{
 ```
 
 Run: `npm test -- src/lib/documents/candidates/run.test.ts`
-Expected: PASS（15 tests）。
+Expected: PASS（17 tests）。
 
 - [ ] **Step 8: Write the failing cron route test**
 
@@ -15813,7 +16440,7 @@ import {finalizeHkHooks} from '../hk-facts/resolve';
 ```
 
 Run: `npm test -- src/lib/documents/candidates/run.test.ts`
-Expected: PASS（16 tests）。
+Expected: PASS（18 tests）。
 
 - [ ] **Step 4: Implement the shared admin HTTP helper**
 
@@ -17584,7 +18211,7 @@ update public.ingest_batches
    and triggered_by='cron' and status='running' and started_at < now() - interval '10 minutes';
 ```
 
-脚本批次（`triggered_by='script'`）无截止，可以合法地跑很久：先确认进程已不在，再去掉 `triggered_by` 条件单独处理。
+脚本批次（`triggered_by='script'`）无截止，可以合法地跑很久：先确认进程已不在，再去掉 `triggered_by` 条件单独处理。抽取、候选与晋升在每个写入阶段前续租（`renew_document_extract_lease` / `renew_candidates_lease` / 同批次 `claim_fact_sync_lease`，不计尝试次数）；租约过期且已被别的批次认领时，原批次在下一个写入阶段前得到 `lease_lost` 并停止写入（计划审计 P2-7）。
 
 **租约不要手工清**：三类租约（`document_sync_scope.lease_*`、`disclosure_documents.extract_lease_*`、`document_extractions.candidates_lease_*`）TTL 600 s，到期后下一次 claim 自动接管；`extract_attempts` / `candidates_attempts` 在 claim 时计数，第三次失败后终态 `extract_failed` / `exhausted`。HK 晋升的规格二运行：本批次崩溃留下的 `staged` 运行由下一次 `beginRun` 在新租约下废弃（promote 第 0b 步），不要 `abandon_sync_run` 别人的运行。
 
@@ -17633,15 +18260,16 @@ select o.name, o.created_at, (o.metadata->>'size')::bigint as bytes
 select source, count(*) filter (where backfill_done) as backfilled, count(*) filter (where not backfill_done) as backfilling,
        count(*) filter (where next_due_at <= now() and priority > 0) as due, count(*) filter (where last_status='failed') as failed
   from public.document_sync_scope group by source order by source;
--- 某发行人的游标（{segment, index, item_attempts}；{} = 从头/无进行中的窗口）
+-- 某发行人的游标（{segment, last_ref, settled, attempts, seq}；{} = 从头/无进行中的窗口；按 source_ref 续跑，计划审计 P2-5）
 select source, priority, reasons, fetch_key, backfill_done, backfill_cursor, poll_cursor, next_due_at, last_status
   from public.document_sync_scope where issuer_id = '<uuid>';
--- 回填卡在同一项（item_attempts 递增；第三次失败的项以 document_fetch_exhausted 隔离后前进）
-select issuer_id, source, backfill_cursor from public.document_sync_scope
- where (backfill_cursor->>'item_attempts')::int >= 2 order by source;
+-- 回填卡在同一项（attempts[source_ref] 递增；第三次失败的项以 document_fetch_exhausted 隔离后前进）
+select s.issuer_id, s.source, a.key as source_ref, a.value::int as attempts from public.document_sync_scope s
+ cross join lateral jsonb_each_text(coalesce(s.backfill_cursor->'attempts','{}'::jsonb)) a
+ where a.value::int >= 2 order by s.source;
 ```
 
-EDGAR：`files[]` 未核对（`EDGAR_FILES_VERIFIED=false`）时 `recent` 走完不置 `backfill_done`、回执 `coverage_summary`，`next_due=now+1d`——这是有意的，见 §10(a)。要让某发行人从头回填：只能经 `advance_document_cursor`（持租约）或等待 `reconcile` 新行；不要直接 `update document_sync_scope`。
+EDGAR：`files[]` 未核对（`EDGAR_FILES_VERIFIED=false`）时 `recent` 走完不置 `backfill_done`、回执 `coverage_summary`，`next_due=now+1d`——这是有意的，见 §10(a)。要让某发行人从头回填：只能经 `advance_document_cursor(…, p_cursor => null, p_done => false, p_reset => true)`（持租约；不带 `p_reset` 时游标只进不退——已完成的回填不能改回未完成、`seq` 必须递增，否则 `cursor_regression`，计划审计 P2-4）或等待 `reconcile` 新行；不要直接 `update document_sync_scope`。
 
 ## 7. 候选、检查、审批与自动决定
 
@@ -17751,7 +18379,7 @@ node --env-file=.env.local --import tsx scripts/documents/validate-extraction.ts
 | §7.5-2 期间证据 | `citations.period` 含两条 `statement_title`（报表名称行——`consolidated` 检查读它；期间短语——期间推导依据；同一区间则一条）与 `column_header` | 规格"报表标题行"与期间推导依据都要可回溯 |
 | §7.5-3 `scale=null` | 单位/倍数不明 → 不产候选，记 `unit_ambiguous`；金额表头只有"人民幣元"时倍数为空（保守）；每股另认 `RMB cents|人民幣分 → CNY 0.01` | 契约 `scale` 不可为 null；否则 `RMB cents` 先命中 `RMB` |
 | §7.5-4 标签 | 双语标签单元格按书写系统拆分分别匹配、概念取并集（同一概念经两种文字命中不算歧义）；两行标签（数值在第二行）按"上一行纯文字 + 本行标签"匹配并引用为一个区间；增补真实变体（`與客戶之間的合同產生的收入`、`當期盈利╱（虧損）`、`Profit/(loss) for the period`、`所得稅沖回`、`稀釋`、`Net cash inflow/(outflow) from … activities`、`經營活動產生╱（所用）淨現金`、`Net (decrease)/increase in cash…`、`Earnings/(losses) per share`）；表内的纯标签行（如 "Profit/(loss) attributable to:"）也能开启小节；EPS 子单位可在小节标题之下的说明行；`equity_parent` 不要求小节；`net_income_parent` 只在利润归属小节；同表重复且各列原文完全相同的行视为同一披露 | 真实 HKEX 双语版式 |
-| §7.5-4 符号 | `所得稅` 在 credit/抵免/沖回 标签下按负的开支记（列示值取反，`sign_flip`）；`net_change_in_cash` 只对"只含减少"的标签取负 | 税项抵免是负开支；"增加/(減少)" 正值即增加 |
+| §7.5-4 符号 | `所得稅` 在 credit/抵免/沖回 标签下按负的开支记（一律 −|x|；只在符号确实改变时记 `sign_flip`，计划审计 P1-3）；`net_change_in_cash` 只对"只含减少"的标签取负 | 税项抵免是负开支；"增加/(減少)" 正值即增加 |
 | §7.6 阻断性恒等式"缺任一不检" | 记 `{blocking:true, passed:true, detail:{skipped:true, missing:[…]}}` | `CheckResult` 注释规定 `passed=null` 只给非阻断检查 |
 | §7.6 `comparative_consistent` | 与同 K 的当前 ok 值（`readFacts(history:false)`）比较，不区分来源 filing | 规格未定 |
 | §7.7 第 2–3 步顺序 | 先为本运行全部新事实写 `fact_citations`（此时都还是 `staged`；`insert_fact_citations` 只收 staged 事实），再停放同日冲突与争议连接 | 先停放会使被停放事实无法写证据 |
@@ -17877,3 +18505,21 @@ git commit -m "docs(documents): F3 runbook, spec §17 deviations, implementation
 - 含 `S4_TEST_STATE` 的测试文件恰为四个，均在其任务里登记进 `criticalSuites`（Task 1、13、18）。
 - 每个任务都有提交步骤（Task 1 两次提交：代码与最后的锁条目）。
 - 依赖列只含更早的任务；没有任务修改更晚任务创建的文件（Task 10 的 `next.config.mjs` 只登记后续路由的路径字符串）。
+
+### Codex 计划审计第 1 轮处置
+
+审计：`docs/audits/2026-11-06-document-pipeline/01-codex-plan-round1.md`（行号对应提交 `b2d908b`）；处置记录：`docs/audits/2026-11-06-document-pipeline/02-disposition-round1.md`。改后在沙箱（工作树副本 + 抽出的全部计划文件）复跑：`tsc --noEmit` 0 错误；`eslint --max-warnings=0`（F3 全部 119 个 TS 文件 + `batches.ts`/`local-db.ts`）0 输出；F3 单测 43 个文件 337 例通过；本机 PostgreSQL 17（UTF8 harness）四个 F3 critical 套件 57 例通过。
+
+| ID | 处置 | 改动位置 |
+|---|---|---|
+| P1-1 | **拒绝**，不改代码。规格决定 C：自动决定必须有 owner 记录的审批行，且该行以评测 precision 与 recall 均 ≥ 0.95 为门槛（`ea_threshold`）；默认没有审批行，所以一切都是人工决定。记录审批是 owner 本人的行为；审批按 `extractor_ref` + 三个版本列 + `concepts` 限定，可撤销，并在暂存时再查一次（撤销 → `approval_revoked`，候选回 `candidate`，整次晋升废弃）。保留 auto-decide。 | 无 |
+| P1-2 | 接受。新增阻断检查 `value_replays`：用值引用的 snippet 经 `values.ts::cellValue`（记录的 scale，十进制字符串精确算术）与 `applySign`（标签引用）重算规范值，必须等于 `payload.value`；记录的 unit/scale 必须是单位引用经 `scale.ts::detectAmountUnit`/`detectEpsUnit` 读出的值，`sign_flip` 必须与标签证据一致。检查数 7 → 8 | Task 15 `checks.ts`（`valueReplays`、`unitEvidence`、`CHECK_ORDER`）、`checks.test.ts`（snippet 1 / scale 1000 / value 999 → 阻断；超双精度差 1；sign_flip 不符；scale 与单位引用不符、币种不符、无倍数、eps 子单位、非法 scale；`cand` 助手改为一致的单位证据，默认 scale 1）、`test-support.ts` 种子单位行改为 `單位：元 幣種：人民幣`（与种子 scale 1 一致）、`candidates/run.test.ts`（`checks.length===8`） |
+| P1-3 | 接受。`applySign`：抵免类标签一律 −\|x\|，只在符号确实改变时记 `sign_flip` | Task 14 `values.ts`、`values.test.ts`（`-5000` 抵免 → `-5000` 不翻转；0；已负值）、`generate.test.ts` 新用例（经生成：`(10,185)` → −10185000 不翻转；`24,458` → −24458000 翻转；`0`、`(0)` → 0 不翻转；`run` 助手接受 `PagesJson`）；§17 偏差表措辞。晋升测试不覆盖税项，未加 |
+| P1-4 | 接受。`publish_hk_run` 加第 6 参 `p_zero_output jsonb`（`[{document_id, extraction_id}]`）：格式错 → `invalid_input`；在文档锁下、并对预期抽取行 `for share`（文档 → 抽取的锁序）复核：仍是本发行人公开中文 HKEX 文档、绑定在本运行的 filing 上、当前抽取未变、primary、候选 done，否则 `stale_plan`（调用方按原 stale_plan 路径废弃并下次重规划）。端口 `publishHkRun(…,expectedRev,zeroOutput)` 三实现同步；新类型 `HkZeroOutput` | Task 13 迁移二 SQL + 头注、`facts-port.ts`（接口、Supabase、内存）、`pg-facts-port.ts`、`facts-port-contract.ts`（端到端用有效选择发布；格式错；新用例：选择与发布之间文档换到新抽取 → `stale_plan`、不前进代、事实仍 staged；当前但候选未 done 也 `stale_plan`）、`fact-citations.integration.test.ts`（`F3_RPC` 签名、null 参数）、全部 5 参调用补 `[]`；Task 16 `promote.ts` 传零输出选择 + 竞态测试（发布前另一工作者重抽 → `stale_plan`、filing 代不变、可见事实不变）；计划头部接口与契约补充 |
+| P2-1 | 接受。`db.ts` 加 `LOOKAHEAD_MAX=999`、`lookaheadLimit`、`checkApprovalsLimit`：`documentVersions`/`extractionsOf` 每页 ≤ 999 行（预读请求 ≤ 1000，PostgREST 上限内），`approvalsFor` 的 limit > 999 → `invalid_input`；三实现一致 | Task 2 `db.ts`、`memory-documents-db.ts`、`db.test.ts`（存根：limit 1000 请求 1000 行、页 999 行且有 next；`approvalsFor(1000)` 不发请求即拒绝）、`db-contract.ts`（`approvalsFor(1000)` → `invalid_input`）；Task 3 `pg-documents-db.ts`、>1000 行用例（首页 999 行）；契约补充表 |
+| P2-2 | 接受。新文件 `src/lib/documents/fresh-db.ts`：`freshMigratedDatabase(adminUrl)` 用 harness 超级用户建 `f3_replay_<随机>` 临时库、装与 `local-db.ts` 相同的 auth/storage 桩、按序应用全部迁移；`replayFiles` 重放；`drop()` 删库。所有重放断言改在临时库里跑，不再碰共享库（`test:migrations` 的双库排演不变） | Task 1 新文件 + `documents.integration.test.ts`（删 `replayMigration`；迁移一重放两次）；Task 13 `fact-citations.integration.test.ts`（删 `replayMigration`；迁移二重放、规格二 → 迁移二重放的定义比对都在临时库）；仓库约定、文件结构、契约补充、Task 1 `git add` |
+| P2-3 | 接受。迁移一七个触发器函数各加 `revoke execute … from public, anon, authenticated, service_role`；权限测试按迁移文件里的函数名从 `pg_proc` 枚举全部签名，要求恰为 写函数 ∪ 内部 ∪ 触发器 ∪ `read_documents`，且 anon/authenticated 只能执行 `read_documents`；迁移二同样按文件枚举，要求恰为 `F3_RPC ∪ F3_INTERNAL` | Task 1 SQL、`documents.integration.test.ts`（`TRIGGER_FUNCTIONS`、枚举断言）；Task 13 `fact-citations.integration.test.ts` |
+| P2-4 | 接受。`syncIssuer` 认领租约后重读本行（`scopeRows`），模式与游标取重读值；`advance_document_cursor` 加 `p_reset boolean default false`：不带 reset 时已完成回填只接受重复完成（不得改回未完成、不得写新回填游标），游标带 `seq` 后新游标 `seq` 必须严格递增，否则 `cursor_regression`（P0001）；TS `advanceCursor(…,done,reset?)`、错误码 `cursor_regression` 三实现同步 | Task 1 SQL + 测试（回退被拒、reset 允许）；共享契约 `types.ts` 两处；Task 2 `db.ts`（`MESSAGE_CODES`、Supabase）、内存实现、`db-contract.ts` 新用例；Task 3 pg；Task 7 `sync.ts` + 并发用例（选择与认领之间别的批次完成回填并释放 → 本批次走轮询、不回退）、运维重放用例改用 reset；runbook §6 |
+| P2-5 | 接受。游标改为 source_ref 检查点 `{segment,last_ref,settled,attempts,seq}`：续跑时 `settled` 跳过、已入库且不晚于 `last_ref` 新位置的跳过、未入库项一律处理；重试次数按 source_ref；`knownSourceRefs` 查整张新列表 | 共享契约 `DocScopeCursor`；Task 7 `sync.ts`（头注、续跑算法、`ItemResult.stored`）、`sync.test.ts`（全部游标断言改形；新用例：检查点项被移出列表时不跳过 B、检查点前插入的 X 仍抓取、失败项前再插入时次数仍记在 r-c、第三次耗尽隔离）；Task 6 `pollSegment` 测试游标；Part B 说明与 runbook §6 SQL |
+| P2-6 | 接受。`hk_promotion_due` 条件 (c) 排除"运行已发布且事实仍隔离"的暂存发布行（等 owner 裁决，0a 步也动不了它）；裁决使事实变 ok 或消失后重新到期。内存实现同步 | Task 13 迁移二 SQL + 头注、内存 `promotionDue`、契约用例（裁决前不到期、裁决后到期）；Task 16 `promote.test.ts` 新用例（limit 1：首个发行人等隔离裁决时第二个发行人被选中；第二批空；裁决后首个发行人回来） |
+| P2-7 | 接受。迁移一新增 `renew_document_extract_lease`、`renew_candidates_lease`（持有者续租、不计尝试；被接管或状态已变 → false）；`DocumentsDb.renewExtractLease`/`renewCandidatesLease` 三实现；抽取在上传 pages.json 与 `finishExtract` 前续租；候选在生成、插入、写检查、隔离前续租，生成与检查前查预算（`MIN_PHASE_MS=20s`，不足 → `deadline_hit`、`finishCandidates(failed)`）；晋升在第 2/3/4 步前以同批次 `claimLease` 续租，第 2、4 步前查预算。被接管 → `lease_lost`、不再写 | Task 1 SQL + 权限列表；共享契约两处；Task 2/3 三实现 + 契约用例；Task 10 `extract/run.ts` + 用例（被接管 → 无 pages.json、无抽取；未被接管 → 续租后完成）；Task 15 `candidates/run.ts` + 2 个用例；Task 16 `promote.ts` + 用例（被接管 → 无 filing/事实/发布行；预算不足 → `deadline_hit`、运行废弃、租约释放）；runbook §4 |
