@@ -70,3 +70,26 @@ skeleton (everything above the TASKS marker) + `### Task N` sections of part-A�
   `classification_name_conflict` (deviation 13); left as is.
 - `in_date >= delist_date` (spec says `>`) chosen to avoid empty windows (deviation 50) — owner/Codex should confirm.
 - Page components (`*.tsx` without path headers) and E2E were not executed in the harness.
+
+## Round 1 fixes (Codex plan audit `06-codex-plan-round1.md`, on top of e200d7c)
+
+| # | Tasks touched | Change | Tests added/changed |
+|---|---|---|---|
+| 1 P1 | 10, 15, 17, 20, skeleton | New `src/lib/industry/method-constants.ts` (no imports) holds `METHOD_VERSION`/`DISPLAY_*`; `method.ts` re-exports; `display.ts` imports the constants module, so no client graph reaches `canonical-json.ts`→`node:crypto`. Task 20 gates add `npm run build` + rendered drawer check. | Task 17 `client-bundle.test.ts` (walks every `'use client'` module's static import graph; fails on any `node:`/builtin; self-check that the walker sees `method.ts`→`node:crypto`); Task 10 `method.test` asserts the constants file has no imports. |
+| 2 P1 | 18 (+ modifies Task 16 licences route/test), skeleton | New `stale-views.ts` store (per dataset key, 2 h expiry, bounded); `loadView(key,build,{scheme})` serves a stale view only after a successful, positive `isDatasetPublic` re-check, else fails closed and forgets the dataset; licences route calls `forgetViews(key)`. | `page-data.test` +2 (revoke then failed read → null; gate down → null; expiry; per-dataset forget); licences route test asserts `forgetViews`. |
+| 3 P1 | 8, skeleton | `reconcileDelistings`: every run fetches `stock_basic(D)`; resolved current records with still-open ok rows get re-applied through `apply_industry_memberships` (its close step), closing rows in place at `windowEnd`; differing closed windows → `membership_delist_conflict`. `records` gains `delistClosed/delistConflicts`. | resolve test: two-run (listed → delisted, identical member payload; same membership ids closed at 2022-06-23; third run no-op). |
+| 4 P1 | 1, 2, 3, 4, 11, skeleton contract | GC claim/tombstone: `industry_manifests.gc_claimed_at`; `gc_industry_manifest_candidates` claims (FOR UPDATE SKIP LOCKED, stale claim > 1 h re-claimable); `put_industry_manifest` and staging (new internal `industry_manifests_lock_for_reference`, FOR SHARE) raise `manifest_gc_in_progress` on a claim; delete only claimed rows. `ManifestStore.put` registers first, uploads after. New contract error code `manifest_gc_in_progress`. | Task 2 SQL test rewritten + new interleaving test (claimed → stage/put refused; stage holding FOR SHARE → GC skips); contract case (memory + pg); manifest.test GC race on memoryIndustryDb; supabase store order test. |
+| 5 P2 | 2, 3 | Successor = target whose `provenance.source_membership_id` is the old row's record's descendant in `p_source_ids` (recursive `fwd`/`heir` CTE; memory mirrors). | Contract case: two disjoint windows of one issuer corrected in one call (later window first); every superseded row points at its own lineage. |
+| 6 P2 | 9, 14 | `claimSicScopeRow` CAS on `(updated_at, lease_batch_id)`; `finishSicScopeRow` fenced by `lease_batch_id` (`lease_lost`); `syncSicScope` inserts only (23505 ignored). | sic.test CAS/fence case; Task 14 two-connection test (two pools, `Promise.all` claims → exactly one wins; loser cannot complete). |
+| 7 P2 | 9 | Departed issuers' scope rows retired (`next_due_at = RETIRED_DUE`, CAS, not while leased), re-activated on return; due rows paged and filtered (active + lease free) until `limit` eligible. | sic.test: retire/reactivate/no-overwrite case; 450 inactive overdue rows ahead → 6 active processed, 450 retired. |
+| 8 P2 | 15 (comment), 20 | `e2e-fixture.ts` builds one manifest per (code, period_end) through `computeAggregateCell`+`buildAggregateManifest`; cells come from those manifests; `E2E_TAMPERED` (电子 2025) deliberately mismatched. E2E happy path asserts `[data-reproduced="true"]`; new tampered E2E case asserts `"false"` (6 cases). `manifestOf` documented as layout-only (replay mocked). | `e2e-fixture.test.ts`: every ok cell replays true except the tampered one. |
+
+Skeleton: file map (method-constants, stale-views, client-bundle.test, e2e-fixture.test), interface A7/A14/B1b/B1c/C5/C6, contract (`manifest_gc_in_progress`, `ManifestStore.put` order), deviations 53–60 (Task 20 §18 table regenerated: 60 rows), order table (Task 14 ← 9, Task 18 ← 16).
+
+Found by the new `next build` gate (not by Codex): `tushare-industry.ts` and `sec-sic.ts` defined fixture dirs as
+`new URL('../fixtures/…/', import.meta.url)`; webpack bundles them into the cron route and cannot resolve a directory URL
+→ build failure. Now `join(process.cwd(),'src/lib/industry/fixtures/…')` (tests/scripts run from the repo root).
+
+Verification on a repo copy rebuilt from the plan: tsc 0 industry errors; eslint industry dirs clean; vitest 71 files /
+569 tests pass; test:db industry files 49 pass (7 + 35 + 7); `next build` succeeds (all industry routes/pages compiled;
+the Task 18/19 INDUSTRY blocks in `/intel` and `/stock/[ticker]` were not applied in the copy; E2E not run).
