@@ -7,7 +7,7 @@
 | 数据底座一（F1 发行人 + F5 质量设施） | `2026-11-04-data-foundation-design.md` | 已实施（§14 偏差） | 任务级审计 | — | PR #100 待合并 |
 | 数据底座二（F2 披露事实库） | `2026-11-04-data-foundation-2-disclosure-facts-design.md` | 8 | 第八轮："ready for an implementation plan with owner decisions A/B/C pending" | `2026-11-04-data-foundation-2/`（01–15 + README） | owner 决策 A/B/C → 写计划二 |
 | 数据底座三（F1b 标识符 + F5 对账与日历新鲜度） | `2026-11-04-data-foundation-3-identifiers-and-reconciliation-design.md` | 5 | 第四轮 "not ready"；S1–S7 已按 Codex 原方案实现，未复审 | `2026-11-04-data-foundation-3/` | 计划前再做一轮 Codex；依赖计划二落地 |
-| F3 披露文档管道 | `2026-11-04-document-pipeline-design.md` | 5 | 第四轮 "not ready"；R4-1–7 已按原方案实现，未复审 | `2026-11-04-document-pipeline/` | 同上；owner 决策 A–G |
+| F3 披露文档管道 | `2026-11-04-document-pipeline-design.md` | 6 | 第五轮（增量 + 落地代码核对）"not ready"；R5-1–13 已按原方案实现 | `2026-11-04-document-pipeline/` | 计划 `2026-11-06-document-pipeline.md`；owner 决策 A–F 取默认 |
 | F4 判断层框架 | `2026-11-04-judgment-framework-design.md` | 5 | 第四轮 "not ready"；R01–R06 已按原方案实现，未复审 | `2026-11-04-judgment-framework/` | 同上；owner 决策 O1–O7 |
 | F6 评测与黄金集 | `2026-11-04-evals-and-gold-sets-design.md` | 5 | 第四轮 "not ready"（仅两条 P2）；已按原方案实现，未复审 | `2026-11-04-evals-gold-sets/` | owner 决策 D1–D8 |
 | 行业研究 | `2026-11-04-industry-research-design.md` | 5 | 第四轮 "not ready"；U1–U6 已按原方案实现，未复审 | `2026-11-04-industry-research/` | 依赖 F2/F4；owner 决策 A–G；Claude Design 画布 |

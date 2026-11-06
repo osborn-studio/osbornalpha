@@ -1,9 +1,30 @@
 # 数据底座三 · F3 披露文档管道 设计规格
 
-日期：2026-11-04（第 5 稿，吸收 Codex 四轮共 57 项；第四轮 R4-1～R4-7 按 Codex 给定修法逐字落入，未再审计；审计轨迹：`docs/audits/2026-11-04-document-pipeline/`——01 Codex 一轮、02 Codex 二轮、03 处置表、04 Codex 三轮、05 Codex 四轮）
+日期：2026-11-04；第 6 稿 2026-11-06（第 5 稿吸收 Codex 四轮共 57 项；第 6 稿按落地的规格二代码与 Codex 第五轮 R5-1～R5-13 逐条修订，修订点集中列在 §0；审计轨迹：`docs/audits/2026-11-04-document-pipeline/`——01 Codex 一轮、02 Codex 二轮、03 处置表、04 Codex 三轮、05 Codex 四轮、06 Codex 五轮）
 状态：草案，待 owner 评审（§14 有七项 owner 决策）
-上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（规格一，F1 发行人与 F5 质量设施已落地，§14 偏差视为既定事实）；`docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md`（规格二，本稿写作时为第 8 稿：`fact_sync_runs` 同步运行、写入只经 `security definer` 函数、`read_facts` 信封、`materialize(issuer, market)`；港股事实与 PDF 页码引用明确延后到本规格。规格二仍在修订，本规格对它的依赖集中在 §16，以其落地版本为准）。
+上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（规格一，已落地，§14 偏差视为既定事实）；`docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md`（规格二，**已落地**于 `main`（PR #102，迁移 `20261106090000_financial_facts.sql`、`src/lib/facts/*`），其 §16 偏差是既定事实；本规格对它的依赖以落地代码为准，集中在 §16）。协作约束：本规格的实现不得修改 `src/lib/facts/*` 已有文件、不得替换规格二的触发器函数与 SQL 函数，只能新增文件、在自己的迁移里扩展约束与新增函数（§0）。
 总纲：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §4"文档管道"行与 §5 硬约束。本规格逐条对照：只用一手披露文件（EDGAR、巨潮、HKEXnews；PDF/HTML 原件入私有桶）、每个数字可回放到"源文件哈希 + 抽取版本 + 页码/字符区间 + 可得时间 + 变换 + 代码版本"、事实与判断分离（抽取结果先是候选，确认后才是事实；候选永不公开）、缺失保持缺失（扫描件不做 OCR 猜测、找不到的科目不补、倍数不明的值不晋升）、研报原文永不对外分发（许可先于功能）、本规格不含任何面向用户的页面，只定义"来源抽屉"的数据契约与待设计清单。
+
+
+## 0. 第 6 稿修订（按落地代码与 Codex 第五轮）
+
+| 编号 | 修订 | 位置 |
+|---|---|---|
+| R5-1 | `stage_facts` 保持返回插入数；`fact_id` 由 `plan.inserts` 与规划快照按候选键推出；返回数必须等于 `plan.inserts.length`；同 filing 事实键唯一 | §7.7 第 1–2 步 |
+| R5-2 | 迁移二只扩展四处 `market` 约束与 `filings.source/origin`；规格二类型不改，HK 调用集中在 `facts-port.ts`；HK scope 行经 `ensure_hk_fact_scope` | §4.8、§4.9、§7.7 |
+| R5-3 | 港股不物化：删除 `hk_materialization_due`、`clear_materialization_due`、条件 (d) 旧义与所有物化调用；港股指标为接口请求 | §1.1、§4.8、§4.11、§7.7、§16 |
+| R5-4 | 新增 `GET /api/citations?factId=`；`/api/facts` 的 `.HK` 与 `citations=1` 为接口请求；验收样例 3/9 改写 | §9、§12、§16 |
+| R5-5 | 第 0 步不对他批次运行调用 `abandonRun`；由 `beginRun` 在当前租约下废弃，再清理发布关联 | §7.7 第 0 步 |
+| R5-6 | 不在 `filings` 加列、不替换 `filings_limited_update`；自有表 `filing_documents` + `bind_filing_documents`；发布锁序加入绑定行 | §4.8、§4.9 |
+| R5-7 | `publish_hk_run` 必传 `p_expected_rev`；`stale_plan` → 废弃并在下次 cron 重新规划 | §4.8、§7.7 第 4 步 |
+| R5-8 | 港股财务检查全部精确十进制 | §7.6 |
+| R5-9 | 迁移时间戳 `20261108090000`/`20261108091000` | §2、§4、§12 |
+| R5-10 | 复用已落地的 `deadline_hit/coverage_summary` 信息码 | §2、§10 |
+| R5-11 | `ensure_hk_fact_scope` 只建缺失行、不改已有行；港股调度由 `promotionDue` 决定 | §4.8、§7.7 |
+| R5-12 | `resolve_hk_facts_quarantine` + `POST /api/admin/documents/hk-quarantine/[id]`；候选 cron 收尾误用通用路由的项 | §4.8、§7.7 第 5 步、§9 |
+| R5-13 | `promotionDue` 条件 (d)：零输出代激活 | §4.11、§7.7 第 2 步、§12 样例 9 |
+| 补 | 第 5 稿只写"与第 2 稿相同的 18 个概念"而未列出；第 6 稿补全概念、标签与单位规则 | §7.5 第 4 条 |
+| 补 | `raw_hash` 定位串明确为值引用位置（≤ 128 字符） | §7.7 末段 |
 
 ---
 
@@ -13,7 +34,7 @@
 
 1. **全局文档库。** 一张与用户无关、以 `issuers.issuer_id` 为主挂接的 `disclosure_documents` 表，记录三个市场的官方披露文件（EDGAR 主文档与申报索引、巨潮公告 PDF、HKEXnews 公告 PDF）：来源、来源引用、内容哈希、字节数、发布时间与可得时间、版本、权限、处理状态、获取记录。原件字节存私有桶，内容寻址；写入只经数据库函数（§4.8 的变更清单给出每个函数的锁与授权来源）。
 2. **不可变的抽取版本与页级引用。** 每次抽取是一个不可变的 `document_extractions` 版本（抽取器版本 + 版面 JSON 哈希），其逐页文本 `document_pages` 永不删除或改写；任何模块引用一个数字时写一条 `document_citations`（抽取版本、页、Unicode 码点区间、可选 bbox、文本哈希、片段）。重新抽取只是新增版本并切换"当前版本"，旧引用继续指向旧版本的页。
-3. **港股事实作为规格二的扩展。** 从港股年报/中报 PDF 的三张主表抽取候选值（规则抽取，引用角色：值、科目标签、期间证据（报表标题 + 所选列头）、单位标题），经阻断性确定性检查与人工确认（或经审批记录授权的自动决定）后，以规格二的同步运行模型写入 `financial_facts`（`filings.source='hkex'`），证据 `fact_citations` 在发布前已暂存并经 `assert_run_evidence_complete` 校验，随事实发布原子可见。未确认的永远只是候选，候选表对非 service_role 不可见。
+3. **港股事实作为规格二的扩展。** 从港股年报/中报 PDF 的三张主表抽取候选值（规则抽取，引用角色：值、科目标签、期间证据（报表标题 + 所选列头）、单位标题），经阻断性确定性检查与人工确认（或经审批记录授权的自动决定）后，以规格二的同步运行模型写入 `financial_facts`（`filings.source='hkex'`），证据 `fact_citations` 在发布前已暂存并经 `assert_run_evidence_complete` 校验，随事实发布原子可见。港股**不产生派生指标**（`financial_metrics` 的港股口径与物化是对规格二的接口请求，§16），公共事实路由的 `.HK` 支持同样是接口请求；本规格以 `GET /api/citations?factId=` 与直接查询事实表验证（R5-3、R5-4）。未确认的永远只是候选，候选表对非 service_role 不可见。
 4. **LLM 边界。** LLM 只能产出候选（同样必须由服务端定位到页内字符区间），永不直接产出事实，永不自动晋升。
 5. **公共/私有分层。** 官方披露的元数据、页文本、已随事实发布或由模块公开的引用公共只读；原件副本不对匿名公开；授权研报（外资研报规格的输入）以 `permission='licensed'` 走同一管道，任何行对非持有人不可见，持有人只能经服务端路由读取（每次读取写审计，审计失败则请求失败），响应 `private, no-store`。
 6. **读接口与运维。** 按 ticker 与 as-of 的文档列表、按文档的元数据/页文本、按引用 id 的片段校验、管理员重处理与候选决定、三个 cron 路由（采集；抽取；候选 + 自动决定 + 晋升）与同核心的本机脚本。
@@ -51,7 +72,7 @@
 | 写入与版本 | `collectors/write.ts::ingestVersioned`：按 `(user_id, url)` 查旧行，`content_hash` 相同为重复，否则 `source_version = max + 1` | 版本语义沿用到 `(source, source_ref)` 粒度，分配改在数据库函数内完成 |
 | 脚本 | `scripts/research-collect.ts`：`RESEARCH_OWNER_USER_ID` 必填，service-role ctx，范围 = `listEntityKeys` 的 `in_scope` 公司 | 保留；新增 `scripts/documents/*` |
 | 发行人 | `issuers(issuer_id, cik, cninfo_org_id, hkex_stock_code_primary ~ '^[0-9]{5}$', status)`；`issuer_securities(ticker, is_primary, valid_from, valid_to)`；`research_entity_keys.issuer_id`；`resolveIssuer(client, {ticker|cik|…}, {today})`（`src/lib/entities/resolve.ts`）；`successCacheControl(now)` 返回 `public, s-maxage=…, stale-while-revalidate=600` | 文档只挂 `issuer_id`；港股范围用 `hkex_stock_code_primary`；只有匿名可见的公共响应才用 `successCacheControl` |
-| 质量设施 | `ingest_batches`（六计数器、`INFO_CODES=['skipped_summary','relink']`；`batchStatusFromCounts`：有非信息错误时 `landed>0 ? 'partial' : 'failed'`，只有隔离不降级）、`dq_quarantine`（同键 open 唯一，`quarantine()` 已存在时返回旧项且不更新 payload）、`dq_freshness`（连续两次失败才 `error`）、`rules.ts`（`identityRule/rangeRule/jumpRule/unitRule` 不抛异常；只接受 `number`，字符串返回 `not_a_number`） | 复用；批次状态一律由 `batchStatusFromCounts` 得出（§10）；规则输入按 §7.6 显式转换 |
+| 质量设施 | `ingest_batches`（六计数器、`INFO_CODES=['skipped_summary','relink','rule_warning_summary','coverage_summary','deadline_hit']`（规格二落地时已加后三项）；`batchStatusFromCounts`：有非信息错误时 `landed>0 ? 'partial' : 'failed'`，只有隔离不降级）、`dq_quarantine`（同键 open 唯一，`quarantine()` 已存在时返回旧项且不更新 payload）、`dq_freshness`（连续两次失败才 `error`）、`rules.ts`（`identityRule/rangeRule/jumpRule/unitRule` 不抛异常；只接受 `number`，字符串返回 `not_a_number`） | 复用；批次状态一律由 `batchStatusFromCounts` 得出（§10）；规则输入按 §7.6 显式转换 |
 | 审计日志 | `research_audit_log(user_id not null, actor, action, object_type not null, object_id uuid, detail jsonb)`；`src/lib/research/store.ts::audit(ctx, action, objectId, detail)` 以 `action` 的点前缀作 `object_type`，失败抛错 | 私有文档访问日志用它（§8.2） |
 | 存储 | 唯一私有桶 `security-snapshots`（`file_size_limit 52428800`，`allowed_mime_types ['application/json']`，迁移内 `insert into storage.buckets … on conflict (id) do update`）；上传代码 `src/lib/securities/sync/writer.ts`（`client.storage.from(...).upload(path, body, {contentType, upsert:true})`）；规格二将新建 `disclosure-raw`（仅 JSON） | 新建 `disclosure-docs` 桶（PDF/HTML/XML/JSON），`upsert:false`；SDK 对重复上传的错误形态与签名 URL 行为**未在本仓库核对**（§15 问题 6），F3-0 冒烟记录 |
 | 数据库访问 | `TableClient`（`src/lib/db/table-client.ts`：select/insert/update、`gte/lt`、单列排序、`select` 单页 ≤ 1000、`selectAll` 分页；无 delete/rpc/事务） | 批次/隔离/新鲜度继续用它；文档库定义自己的 `DocumentsDb`（§4.11），每个读方法都有显式分页或显式"完整读"实现 |
@@ -61,8 +82,8 @@
 | cron | `src/app/api/cron/securities-sync/route.ts`：`CRON_SECRET` Bearer + `timingSafeEqual`，`force-dynamic`，`maxDuration=300`；`vercel.json` 六条日频 cron（`0 0`、`30 0`、`30 1`、`15 16`、`30 21`、`30 0`） | 同法；新增五条（§6.3） |
 | 管理 | `requireAdminUser()`（`src/lib/admin/auth.ts`）；`POST /api/admin/dq/quarantine/[id]`（JSON 内容类型、Origin 校验、`research_audit_log`）；`getServerSupabase()`（`src/lib/supabase/server.ts`）会话客户端 | 同法 |
 | LLM | `src/lib/llm/`（`openai-compat.ts::chat/toolChat`、`anthropic-compat.ts`、registry 快照、计量） | 只作候选抽取器的调用通道（§7.8）；本规格不实现调用 |
-| 规格二（第 8 稿，未落地） | 写入模型 = 同步运行：`claimLease → beginRun → stageFilings → stageFacts → quarantineFacts → publishRun(manifest) → releaseLease`，全部为带租约校验的 `security definer` 函数；`abandon_sync_run`/`begin_sync_run` 会**删除**未发布运行的事实行；`stage_facts(run, rows jsonb) → int`（不返回 id）；`service_role` 对事实层表无直接写，唯一例外是 `filings.document_ref/document_url/link_attempts` 列级 update；`financial_facts` 有 `market` 列、无 `source` 列（来源在 `filings.source`）；重复规划按 K + filing + `mapping_gen`，同日冲突由规划器（`planFactWrites` + `openConflicts`）构造；`filings.mapping_gen` 按 filing 单调（`publishRun` 校验 `filings.mapping_gen > run.mapping_gen → mapping_gen_regression`）；枚举只含 `US/CN`；`raw_hash` 指向桶内快照；`read_facts(p_market, …)` 信封含 `state_rev`；`materialize(issuer, market)`；`/api/facts` 的 `market` 由 ticker 后缀决定（`.SH/.SZ/.BJ` → CN，否则 US） | 港股事实经同一运行模型写入（§7.7）；枚举加法、`primary_document_id`、`stage_facts` 返回 id、ticker 路由与派生口径列入 §16 |
-| 迁移 | 最新已锁 `20261105091000_issuers.sql`；规格二占 `20261106090000_financial_facts.sql`；`database.types.ts` 手工维护 | 本规格两个迁移，默认时间戳 `20261106100000_disclosure_documents.sql`（无 SQL 依赖）、`20261106110000_fact_citations.sql`（依赖规格二落地）；合并顺序改变时按 §12 重新分配 |
+| 规格二（已落地，PR #102） | 写入模型 = 同步运行：`claimLease → beginRun → stageFilings → stageFacts → quarantineFacts → publishRun(manifest, expectedRev) → releaseLease`，全部为带租约校验的 `security definer` 函数，**运行级函数（`stage_*`、`quarantine_facts`、`publish_sync_run`、`abandon_sync_run`）校验的是运行自己 `batch_id` 的租约**（`fact_run_lock`/`fact_scope_lock`）；`begin_sync_run` 废弃并删除本发行人本市场全部 `staged` 运行的事实；`stage_facts(run, rows) → int`（插入数；`fact_id` 由调用方生成；候选键冲突静默跳过）；`publish_sync_run(run, manifest, p_expected_rev)`，修订号不等 → `stale_plan`；`reconcile_fact_sync_scope(p_market, p_rows, p_snapshot_at)` 拒绝 `US/CN` 以外的市场；五处 `market` 检查约束 `('US','CN')`，`filings.source in ('edgar','tushare')`、`origin in ('sec','sse','szse','bse')`；`filings_limited_update` 只允许 `document_ref/document_url/link_attempts/mapping_gen`（计划三另行替换此触发器）；TS `Market='US'|'CN'`；`derive.ts`/`materialize` 只有 US/CN 口径，`financial_metrics.basis` 无港股取值；公共路由 `resolvePublicIssuer` 拒绝港股证券；`resolveFactsItem` 只接受 US/CN 目标；`rules.ts` 用精确十进制 | 港股事实经同一运行模型写入，适配方式见 §0 与 §7.7；不改规格二任何已有文件与函数 |
+| 迁移 | 最新已锁 `20261106090000_financial_facts.sql`；计划三（兄弟分支）用 `20261107*`；`database.types.ts` 手工维护 | 本规格两个迁移 `20261108090000_disclosure_documents.sql`、`20261108091000_fact_citations.sql`（R5-9；锁定前按合并时已锁最大值复核） |
 | 环境 | 本机无 `EDGAR_USER_AGENT`；生产有 `CRON_SECRET`、`SUPABASE_SERVICE_ROLE_KEY` | 采集夹具录制与首轮真实运行需 owner 配 UA（§14） |
 
 ---
@@ -78,13 +99,13 @@
 
 因此：**新建** `disclosure_documents` 及其子表（§4），`issuer_id` 挂接，写入只经 `security definer` 函数（与规格二同一纪律），公共元数据按 RLS 只读。现有三个采集器与 `research_source_documents` 保持不变（Research OS 仍是 owner 的私有工作台）；两者的桥接不在本规格。新采集器复用 `shared.ts` 的客户端与节奏代码，但不复用其写入函数。
 
-与规格二 `filings` 的关系：`filings` 是"一次申报"（事实的挂接点），`disclosure_documents` 是"一个文件"。一次申报可有多个文件（主文档、索引、XBRL 实例），一个文件也可能不对应任何 `filings` 行（8-K、普通公告）。两者通过 §4.9 的 `filings.primary_document_id`（依赖规格二落地）与 `disclosure_documents.filing_source_ref`（本规格自有）互指，不互相嵌套。
+与规格二 `filings` 的关系：`filings` 是"一次申报"（事实的挂接点），`disclosure_documents` 是"一个文件"。一次申报可有多个文件（主文档、索引、XBRL 实例），一个文件也可能不对应任何 `filings` 行（8-K、普通公告）。两者通过 §4.9 的 `filing_documents`（本规格自有，港股）与 `disclosure_documents.filing_source_ref`（本规格自有）互指，不互相嵌套。
 
 ---
 
 ## 4. 数据模型
 
-迁移一 `supabase/migrations/20261106100000_disclosure_documents.sql`、迁移二 `20261106110000_fact_citations.sql`（§4.9，要求规格二迁移已应用；时间戳按 §12 合并顺序可重新分配）；两者可重放（`create table if not exists`、`drop policy if exists` 后 `create policy`、函数 `create or replace`、约束 `drop constraint if exists` 后 `add constraint`、桶 `on conflict do update`），补 `migrations.lock.json`，`database.types.ts` 手工补 Row 类型。所有新表显式 `revoke all from public, anon, authenticated, service_role` 后按 §4.12 授权——**`service_role` 对下列表不开放直接 insert/update/delete**：`disclosure_documents`、`document_assets`、`document_extractions`、`document_pages`、`document_citations`、`extraction_candidates`、`candidate_publications`、`document_sync_scope`、`fact_citations`（删除只经级联）；写只经 §4.8 的函数。`extraction_approvals` 由 service_role 直接 insert 与 `update(revoked_at)`（审批记录不改变任何可见性）。
+迁移一 `supabase/migrations/20261108090000_disclosure_documents.sql`、迁移二 `20261108091000_fact_citations.sql`（§4.9，依赖已落地的规格二迁移）；两者可重放（`create table if not exists`、`drop policy if exists` 后 `create policy`、函数 `create or replace`、约束 `drop constraint if exists` 后 `add constraint`、桶 `on conflict do update`），补 `migrations.lock.json`，`database.types.ts` 手工补 Row 类型。所有新表显式 `revoke all from public, anon, authenticated, service_role` 后按 §4.12 授权——**`service_role` 对下列表不开放直接 insert/update/delete**：`disclosure_documents`、`document_assets`、`document_extractions`、`document_pages`、`document_citations`、`extraction_candidates`、`candidate_publications`、`document_sync_scope`、`fact_citations`、`filing_documents`（删除只经级联）；写只经 §4.8 的函数。`extraction_approvals` 由 service_role 直接 insert 与 `update(revoked_at)`（审批记录不改变任何可见性）。
 
 ### 4.1 `disclosure_documents`
 
@@ -354,13 +375,15 @@ document_sync_scope
 | `stage_candidate_publication(p_candidate, p_pub_gen, p_run, p_fact_id)` | 候选行锁 | 要求 `status in ('confirmed','promoted')`；本候选在 `p_pub_gen` 下：无行 → 插入 `staged`；`abandoned` → 更新为 `staged`（新 `run_id/fact_id`）；`staged|published` → `raise 'already_staged'`（调用方按 §7.7 的筛选规则不会走到这里）；自动决定的候选再校验其审批行仍未撤销（否则 `raise 'approval_revoked'`，候选回 `candidate`） |
 | `finish_candidate_publications(p_run)` → jsonb | 候选行锁（批量；迁移二，因需读 `financial_facts`） | 要求该运行 `fact_sync_runs.status='published'`；对本运行每条 `staged` 行**逐条判定**：其 `fact_id` 的事实 `status='ok'` → `published`，候选 `confirmed→promoted`；事实 `quarantined` → 保持 `staged`；事实不存在 → `abandoned`。返回 `{published, still_staged, abandoned}`。同一函数用于正常完成与崩溃恢复（幂等） |
 | `abandon_candidate_publications(p_run)` → int | 同上 | 本运行全部 `staged → abandoned`（候选状态不变） |
-| `publish_hk_run(p_issuer, p_batch, p_run, p_manifest uuid[])` → int | 迁移二；（R4-2 修法）锁契约：**在证据校验之前，先锁该发行人/HK 的 `fact_sync_scope` 行 `FOR UPDATE`，校验当前批次租约有效且 `p_run` 属于本发行人、本市场且状态为 `staged`；然后锁本运行或 manifest 引用的全部 `filings`（按 `filing_id` 排序）`FOR UPDATE`；再锁这些 filing 引用的 `disclosure_documents` 行（按 `document_id` 排序）`FOR UPDATE`。只有在取得这些锁之后才执行证据校验，然后在不释放任何锁的情况下调用规格二 `publish_sync_run(p_run, p_manifest)`，所有锁持有到事务结束。** 校验失败则整个事务回滚，事实不发布。（R4-7 修法）发布成功时在同一事务内原子写入 `hk_materialization_due(issuer_id, run_id, set_at)`（`on conflict (issuer_id) do update`） | 这是港股事实**唯一**的发布入口（`runHkFactsSync` 不直接调用 `publishRun`），证据完整性与绑定在发布事务内被锁保护 |
-| `assert_run_evidence_complete(p_run)` | 只在 `publish_hk_run` 内、取锁之后调用 | （R4-3 修法）输入谓词 **`run_id = p_run AND status IN ('staged','quarantined')`**（不是按发布行迭代）：对**该集合中的每个事实**：`fact_citations` 必须含 `value`、`label`、`unit` 各恰好一条与 `period` 至少一条；每条引用的文档 = 该事实 filing 的 `primary_document_id`，抽取版本 = 该文档 `current_extraction_id`，引用 `integrity='ok'`；且该集合中的每个事实恰有一条本运行的 `candidate_publications(staged)` 指向它；任一不满足 `raise 'evidence_incomplete'`。**隔离不豁免发布时证据校验：任一被隔离事实缺角色、绑定无效或缺发布关联都会中止整个运行的发布** |
-| `clear_materialization_due(p_issuer, p_state_rev bigint)` | 迁移二；`hk_materialization_due` 行锁 | （R4-7 修法）只有当 `materialize(issuer,'HK')` 成功且其所依据的 `state_rev` 不小于标记行写入时的 `fact_state_rev` 时删除标记；否则不删（标记保持，`promotionDue` 条件 (d) 会再次选中该发行人） |
-| `insert_fact_citations(p_run, p_rows jsonb)` → int | 无（迁移二） | 校验逐行条件（文档公共、文档 = filing 的 `primary_document_id`、抽取版本 = 当前、事实 `status='staged'` 且属于 `p_run`、角色集合合法）；插入 |
+| `publish_hk_run(p_issuer, p_batch, p_run, p_manifest uuid[], p_expected_rev bigint)` → int | 迁移二；锁契约（R4-2，R5-6 修订）：**在证据校验之前**，先锁该发行人/HK 的 `fact_sync_scope` 行 `FOR UPDATE`，校验当前批次租约有效且 `p_run` 属于本发行人、本市场、`batch_id = p_batch` 且状态为 `staged`；然后锁本运行或 manifest 引用的全部 `filings`（按 `filing_id` 排序）`FOR UPDATE`；再锁这些 filing 的 `filing_documents` 行（按 `filing_id` 排序）`FOR UPDATE`；再锁其 `document_id` 所指 `disclosure_documents` 行（按 `document_id` 排序）`FOR UPDATE`。取得这些锁之后执行证据校验，然后在不释放任何锁的情况下调用规格二 `publish_sync_run(p_run, p_manifest, p_expected_rev)`（R5-7：`p_expected_rev` **必填非空**，取自规划时 `readFacts` 信封的 `state_rev`；为空 → `raise 'invalid_expected_rev'`）；`stale_plan` 原样上抛、不发布。校验失败则整个事务回滚 | 港股事实**唯一**的发布入口（`runHkFactsSync` 不直接调用 `publishRun`）；不写任何物化标记（R5-3） |
+| `assert_run_evidence_complete(p_run)` | 只在 `publish_hk_run` 内、取锁之后调用 | （R4-3 修法）输入谓词 **`run_id = p_run AND status IN ('staged','quarantined')`**（不是按发布行迭代）：对**该集合中的每个事实**：`fact_citations` 必须含 `value`、`label`、`unit` 各恰好一条与 `period` 至少一条；每条引用的文档 = 该事实 filing 在 `filing_documents` 中绑定的 `document_id`，抽取版本 = 该文档 `current_extraction_id`，引用 `integrity='ok'`；且该集合中的每个事实恰有一条本运行的 `candidate_publications(staged)` 指向它；任一不满足 `raise 'evidence_incomplete'`。**隔离不豁免发布时证据校验：任一被隔离事实缺角色、绑定无效或缺发布关联都会中止整个运行的发布** |
+| `bind_filing_documents(p_run, p_rows jsonb)` → int | 迁移二；`fact_run_lock(p_run)`（运行所属批次的租约）后按 `filing_id` 排序锁 `filing_documents` | （R5-6）`p_rows=[{filing_id, document_id}]`：校验 filing 的 `issuer_id/market` = 运行的、`source='hkex'`、`source_ref = 'hkex:' || 文档 source_ref || ':v' || 文档 source_version`；文档 `source='hkexnews'`、`language='zh'`、`permission='public'`、`issuer_id` = 运行发行人；已有绑定且 `document_id` 相同 → 跳过，不同 → `raise 'binding_conflict'`；插入；返回插入数 |
+| `insert_fact_citations(p_run, p_rows jsonb)` → int | 迁移二；`fact_run_lock(p_run)` | 校验逐行条件（文档公共、文档 = 事实 filing 在 `filing_documents` 中绑定的文档、抽取版本 = 该文档当前版本、事实 `status='staged'` 且属于 `p_run`、角色合法）；插入 |
+| `ensure_hk_fact_scope(p_issuer, p_fetch_key)` → void | 迁移二 | （R5-2、R5-11）规格二 `reconcile_fact_sync_scope` 拒绝 HK，故由本函数为 HK 建租约用的 scope 行：不存在 → 插入 `market='HK'`、`priority=0`、`reasons=['documents']`、`fetch_key`；存在 → 不改任何列（调度输入、租约、`state_rev` 原样）。港股的调度由 `promotionDue` 决定，不经规格二 `scopeDue` |
+| `resolve_hk_facts_quarantine(p_item, p_chosen uuid[], p_resolved_by)` → jsonb | 迁移二；调用规格二 `resolve_facts_quarantine`（其内部锁与校验原样） | （R5-12）只接受成员事实 `market='HK'` 的 `financial_facts` 隔离项（否则 `raise 'not_hk_item'`）；调用 `resolve_facts_quarantine(p_item, p_chosen, p_resolved_by)` 后在**同一事务**内把该项 `detail.hook` 置为 `{stage:'done', state:'done', at, message:'hk_no_metrics'}`；返回规格二函数的结果。`resolved_reject` 仍走计划一的通用路径（不涉事实可见性） |
 | `read_documents(p_issuer, p_as_of date, p_source, p_doc_class, p_from, p_to, p_cursor jsonb, p_limit int)` → jsonb | `security invoker`（RLS 生效） | 信封 `{rows, next_cursor, row_count}`：在 `available_date <= p_as_of` 的行中按 `(source, source_ref)` 取最高 `source_version`，再按 `available_date between p_from and p_to` 过滤，按 `(available_at desc, document_id desc)` 游标分页；`p_limit ≤ 1000` |
 
-### 4.9 迁移二：`fact_citations` 与规格二表的衔接
+### 4.9 迁移二：`fact_citations`、`filing_documents` 与规格二表的衔接
 
 ```
 fact_citations
@@ -369,20 +392,18 @@ fact_citations
   role         text not null check (role in ('value','label','period','unit'))
   primary key (fact_id, role, citation_id)
 
-alter table filings add column if not exists primary_document_id uuid references disclosure_documents(document_id) on delete restrict;
-
-hk_materialization_due                        -- （R4-7 修法）发行人级"待物化"持久标记
-  issuer_id    uuid primary key references issuers(issuer_id) on delete cascade
-  run_id       uuid not null
-  state_rev    bigint not null                 -- 写入时的 fact_state_rev(issuer,'HK')
-  set_at       timestamptz not null default now()
+filing_documents                                -- （R5-6）规格二 filing ↔ 本规格文档；不在 filings 上加列、不替换 filings_limited_update
+  filing_id    uuid primary key references filings(filing_id) on delete cascade   -- 规格二 begin_sync_run 剪除空的 gen-0 filing 时绑定随之删除
+  document_id  uuid not null references disclosure_documents(document_id) on delete restrict
+  created_at   timestamptz not null default now()
+  index (document_id)
 ```
 
-- `hk_materialization_due` 只由 `publish_hk_run` 原子写入、只由 `clear_materialization_due` 在修订号校验通过的成功物化后删除；无角色可直接写。
-- 插入只经 `insert_fact_citations`（§4.8）；触发器禁止 `update` 与非级联 `delete`（`delete` 仅当 `pg_trigger_depth() > 0`，即由 `financial_facts` 的级联触发）。
-- 规格二枚举的**加法**修改（§16；若规格二在落地前自行纳入则本迁移对应语句为空操作）：`filings.market`、`financial_facts.market`、`fact_sync_runs.market`、`fact_sync_scope.market` 加 `'HK'`；`filings.source` 加 `'hkex'`；`filings.origin` 加 `'hkex'`。
-- 港股 `filings`：`source='hkex'`，`origin='hkex'`，`market='HK'`，**`source_ref = 'hkex:<文件标识>:v<source_version>'`**（如 `hkex:2026090300863_c:v1`）：每个中文文档行恰好一个 filing；替换版本是另一次申报，有自己的 `available_date`（= 文档 `available_date`，替换版本为观察日，不回溯）；英文版不建 filing。`form_type = 'annual'|'semiannual'`，`period_end`、`fiscal_year/fiscal_period` 来自文档行，`document_ref = document_id`，`document_url = source_url`，`url = source_url`，`primary_document_id = document_id`。同日冲突：原版与替换版同一 `available_date` 且同 K 不同值时，由规格二的规划器构造 `same_day_conflict`（§7.7），本规格不另设规则。
-- `primary_document_id` 比照规格二对 `document_ref/document_url/link_attempts` 的明示例外：`service_role` 获得该列的列级 `update`，规格二的 `filings_limited_update` 触发器把它加入允许列。回填：US 行在本规格采集到 `filing_source_ref = filings.source_ref` 的主文档时；CN 行在规格二挂接 `document_ref` 后按 `disclosure_documents(source='cninfo', source_ref=document_ref)` 反查。
+- `filing_documents` 只经 `bind_filing_documents` 写入（§4.8）；触发器禁止 `update`，`delete` 仅当 `pg_trigger_depth() > 0`（级联）。权限：anon/authenticated `select`，策略 `using (exists (select 1 from filings g where g.filing_id = filing_documents.filing_id and g.mapping_gen > 0))`；service_role `select`。
+- `fact_citations` 插入只经 `insert_fact_citations`（§4.8）；触发器禁止 `update` 与非级联 `delete`（`delete` 仅当 `pg_trigger_depth() > 0`，即由 `financial_facts` 的级联触发）。
+- 规格二约束的**加法**扩展（R5-2；以 `drop constraint if exists <落地约束名>` 后 `add constraint` 的可重放写法）：`fact_sync_runs.market`、`filings.market`、`financial_facts.market`、`fact_sync_scope.market` 加 `'HK'`；`filings.source` 加 `'hkex'`；`filings.origin` 加 `'hkex'`。`financial_metrics.market` **不改**（港股不物化，R5-3）。不替换规格二任何函数与触发器。
+- 港股 `filings`：`source='hkex'`，`origin='hkex'`，`market='HK'`，**`source_ref = 'hkex:<文件标识>:v<source_version>'`**（如 `hkex:2026090300863_c:v1`）：每个中文文档行恰好一个 filing；替换版本是另一次申报，有自己的 `available_date`（= 文档 `available_date`，替换版本为观察日，不回溯）；英文版不建 filing。`form_type = 'annual'|'semiannual'`，`period_end`、`fiscal_year/fiscal_period` 来自文档行，`url = source_url`。规格二 `stage_filings` 不写 `document_ref/document_url`，文档关联只在 `filing_documents`。同日冲突：原版与替换版同一 `available_date` 且同 K 不同值时，由规格二的规划器构造 `same_day_conflict`（§7.7），本规格不另设规则。
+- US/CN filing 与文档的绑定（EDGAR 主文档、巨潮原文）不在本期：其授权（非港股运行的租约）需另定，列为后续（§16）。
 
 ### 4.10 桶 `disclosure-docs`
 
@@ -422,8 +443,8 @@ export interface DocumentsDb {
   approvalsFor(extractorRef, opts: {limit: 100}): Promise<ApprovalRow[]>;         // 超过 limit 条 → 抛 DocumentsDbError('too_many_approvals')，调用方停止自动决定
   storedDue(limit): Promise<DocumentRow[]>;          // status='stored' 且租约空/过期；不按 attempts 过滤（终态转换在 claim 内）
   candidatesDue(limit): Promise<ExtractionRow[]>;    // candidates_status in ('pending','failed') 且租约空/过期且 extraction_id = 所属文档 current_extraction_id；不按 attempts 过滤
-  promotionDue(pubGen, limit): Promise<{issuerId}[]>;   // （R4-5 修法）发行人满足任一条件：(ab) 存在活动候选 status in ('confirmed','promoted') 且不存在 candidate_publications 行满足 pub_gen = pubGen and state in ('staged','published')；(c) 在 pubGen 下有 staged 行（崩溃或隔离后的恢复）；(d)（R4-7 修法）hk_materialization_due 存在该发行人的标记
-  clearMaterializationDue(issuer, stateRev): Promise<boolean>;   // rpc clear_materialization_due
+  promotionDue(pubGen, limit): Promise<{issuerId}[]>;   // 发行人满足任一条件：(ab) 存在活动候选 status in ('confirmed','promoted') 且不存在 candidate_publications 行满足 pub_gen = pubGen and state in ('staged','published')；(c) 在 pubGen 下有 staged 行（崩溃或隔离后的恢复）；(d)（R5-13）存在 primary 角色、candidates_status='done' 的当前抽取版本，其文档经 filing_documents 绑定的 filing 满足 1 <= mapping_gen < pubGen（零输出代激活；mapping_gen 推进后自然不再命中；抽取或候选仍 pending/failed 的文档不命中）
+  bindFilingDocuments(run, rows): Promise<number>; ensureHkScope(issuer, fetchKey): Promise<void>; resolveHkFactsQuarantine(item, chosen, resolvedBy): Promise<{promoted:number;skipped:number;chosenFactIds:string[]}>;
   scopeDue(source, now, limit): Promise<ScopeRow[]>;
 }
 export interface ObjectStore {
@@ -564,9 +585,9 @@ type Cursor = { segment: string|null; index: number; item_attempts: number }   /
 
 - `runDocumentsExtract(deps, {limit, documentIds?, dryRun, triggeredBy})`：批次 `producer='documents-extract'`、`dataset='documents.extract'`。`storedDue(limit)`（（R4-6 修法）`status='stored'`，租约空或过期，按 `created_at` 排序；**不按 attempts 过滤**），逐文档（剩余预算 < 90 s 不再开始）：`claimExtractLease(doc, batch, 600)`（计数点）；**返回 false 则跳过本文档的抽取与后续全部写入——claim 可能已把它终态转换为 `extract_failed`** → `store.get` → `extractPdf/extractHtml`（超预算 → `failExtract(extract_timeout)`；抛错 → `failExtract(extract_error)`）→ `store.put(pages.json)`（失败 → 不调 `finishExtract`，租约到期后重试，计数已在 claim）→ `finishExtract`。`candidates_role` 在函数内判定：`market='HK' and doc_class in ('annual_report','interim_report') and has_text_layer` → `language='zh'` ? `primary` : `comparison`；否则 `none`；`role <> 'none'` → `candidates_status='pending'`。新鲜度 `recordAttempt('documents.extract', {ok, cadence:'daily'})`。
 - `runDocumentsCandidates(deps, {limit, extractionIds?, dryRun, triggeredBy})`：批次 `producer='documents-candidates'`、`dataset='documents.candidates'`、`tool_versions={hk_label_gen, hk_rules_version}`。三个阶段，各受预算约束：
-  1. **候选**：`candidatesDue(limit)`（§4.11；attempts 的终态转换由 `claimCandidatesLease` 完成）→ `claimCandidatesLease(…, 600)`（计数点；返回 false 则跳过）→ `store.get(pages_json_path)` → §7.5（`comparison` 版本同样产候选，只用于 §7.6 的 `en_cross_check`，永不可晋升）→ `insertCandidates`（幂等；含决定继承）→ 对本版本 `status='candidate'` 的候选跑 §7.6 检查 → `writeCandidateChecks`（唯一写入路径；已决定的行不重算）→ `finishCandidates(done)`；抛错 → `finishCandidates(failed)`。
+  1. **候选**：`candidatesDue(limit)`（§4.11；attempts 的终态转换由 `claimCandidatesLease` 完成）→ `claimCandidatesLease(…, 600)`（计数点；返回 false 则跳过）→ `store.get(pages_json_path)` → §7.5（`comparison` 版本同样产候选，只用于 §7.6 的 `en_cross_check`，永不可晋升）→ `insertCandidates`（幂等；只插入 `candidate`，不套用继承）→ 对本版本 `status='candidate'` 的候选跑 §7.6 检查 → `writeCandidateChecks`（唯一写入路径；检查通过的行在此原子套用人工决定继承；已决定的行不重算）→ `finishCandidates(done)`；抛错 → `finishCandidates(failed)`。
   2. **自动决定**：对 `status='candidate' and checks_passed and extractor_kind='rule'` 的候选（不限本批次——崩溃后重跑即可补上），若 `approvalsFor(extractor_ref)` 有未撤销且与候选所属抽取版本行三个版本列匹配的审批行且概念在范围内 → `decideCandidate({kind:'auto', approval_id})`；幂等。
-  3. **晋升**：`promotionDue(HK_PUB_GEN, limit)`（§4.11 的三类条件：待首发、待新代、待恢复）→ 逐发行人 `runHkFactsSync`（§7.7）。人工确认的候选也由这一阶段兜底（§9 的确认路由会立即触发一次，失败则等 cron）。
+  3. **晋升**：`promotionDue(HK_PUB_GEN, limit)`（§4.11 的四类条件：待首发、待新代、待恢复、零输出代激活）→ 逐发行人 `runHkFactsSync`（§7.7）。人工确认的候选也由这一阶段兜底（§9 的确认路由会立即触发一次，失败则等 cron）。
   新鲜度 `recordAttempt('documents.candidates', {ok, cadence:'daily'})`。
 - `HK_LABEL_GEN`/`HK_RULES_VERSION` 升级：`scripts/documents/candidates.ts --regenerate [--filter …]` 调 `request_candidates_regen`（只对当前抽取版本、`role <> 'none'` 的版本）；新 `extractor_ref` 产生新候选行（旧行保留）；**决定继承**只对人工决定、按 `fingerprint`（自然键 + 完整 payload + 四类引用片段）完全相同时发生，写新的 `decided_at` 与 `inherited_from`；自动决定永不继承（审批绑定旧版本）。`EXTRACTOR_VERSION` 升级：`request_document_extract` 对每份文档开新版本，新版本的候选从零生成，同样走继承。
 
@@ -588,13 +609,36 @@ type Cursor = { segment: string|null; index: number; item_attempts: number }   /
    - 倍数词按长度降序尝试：`'000,000` → 1000000；`百萬|百万|million` → 1000000；`'000|千元|千` → 1000；`元|dollars`（且不是 `港元|千元|人民幣元` 的一部分）→ 1。货币：`港幣|港元|HK\$` → HKD；`人民幣|RMB` → CNY；`美元|US\$` → USD。货币词先于倍数词从文本中剔除后再匹配倍数，避免 `港元` 中的 `元` 被当作倍数。货币出现但无倍数词 → `scale=null`；多个货币 → `unit_ambiguous`。
    - 每股行（eps）：子单位 `港仙|仙|HK cents|cents` → `scale='0.01'`、`unit='<货币>/share'`；`港元|HK\$|人民幣元|RMB` → `scale='1'`；无子单位词 → `scale=null`。eps 不继承表头倍数。
    - `scale=null` 永远不通过 `unit_known`。
-4. **科目映射** `labels.ts`（与第 2 稿相同的 18 个概念与正则、符号规则：`cost_of_revenue`、`income_tax` 列示为负取绝对值并 `sign_flip=true`；现金流量按列示；`net_change_in_cash` 标签为"減少"且值为正取负；其余如列示）。一行标签命中多个概念或一个概念被多行命中 → `label_ambiguous`，不产候选。港股主表常不列示"資產總值/負債總額"——保持缺失，不从分项相加。
+4. **科目映射** `labels.ts`：18 个概念（全部是规格二已落地 `FACT_CONCEPTS` 的 id）与标签规则如下表（第 6 稿补全；正则按 NFKC 规范化后的标签单元格整串匹配，去掉尾随附注号 `\s*\d+(\(\w\))?$`；繁/简/英任一命中即可）。符号规则：`cost_of_revenue`、`income_tax` 列示为负取绝对值并 `sign_flip=true`；现金流量按列示；`net_change_in_cash` 标签含"減少/减少/decrease"且值为正取负（`sign_flip=true`）；其余如列示。一行标签命中多个概念或一个概念被同表多行命中 → `label_ambiguous`，不产候选。港股主表常不列示"資產總值/負債總額"——保持缺失，不从分项相加。归属行（`net_income_parent`、`equity_parent`）只在"以下人士應佔/應佔/Attributable to"小节标题之后、下一个小节标题之前的行中匹配；每股行（`eps_*`）只在"每股盈利/每股收益/Earnings per share"小节内匹配。
+
+   | 概念 | 表 | 标签（繁 / 简 / 英，示意；`labels.ts` 为准，F3-4 用录制夹具校验并在评测报告记录命中率） |
+   |---|---|---|
+   | `revenue` | IS | `收益|收入|營業額|营业额|Revenue|Turnover` |
+   | `cost_of_revenue` | IS | `銷售成本|销售成本|Cost of sales|Cost of revenue` |
+   | `gross_profit` | IS | `毛利|Gross profit` |
+   | `operating_income` | IS | `經營溢利|经营溢利|經營利潤|经营利润|Operating profit` |
+   | `income_tax` | IS | `所得稅(開支\|抵免)?|所得税(开支\|抵免)?|Income tax (expense\|credit)?` |
+   | `net_income` | IS | `(年內\|期內\|本年度\|本期間)(溢利\|利潤)|Profit for the (year\|period)` |
+   | `net_income_parent` | IS | 归属小节内 `本公司(擁有人\|权益持有人\|擁有者)|Owners of the Company|Equity holders of the Company` |
+   | `eps_basic` | IS | 每股小节内 `基本|Basic` |
+   | `eps_diluted` | IS | 每股小节内 `攤薄|摊薄|Diluted` |
+   | `total_assets` | BS | `資產總值|总资产|總資產|Total assets` |
+   | `total_liabilities` | BS | `負債總額|负债总额|總負債|Total liabilities` |
+   | `equity_parent` | BS | 归属小节内 `本公司(擁有人\|权益持有人)應佔權益|Equity attributable to owners of the Company` |
+   | `equity_total` | BS | `權益總額|权益总额|總權益|Total equity` |
+   | `cash` | BS | `現金及現金等價物|现金及现金等价物|Cash and cash equivalents` |
+   | `operating_cash_flow` | CF | `經營活動(所得\|產生\|所用)的?現金(流量)?淨額|经营活动(所得\|产生\|所用)的?现金(流量)?净额|Net cash (generated from\|used in\|from) operating activities` |
+   | `investing_cash_flow` | CF | 同上，`投資/投资/investing` |
+   | `financing_cash_flow` | CF | 同上，`融資/融资/financing` |
+   | `net_change_in_cash` | CF | `現金及現金等價物(增加\|減少)(淨額)?|现金及现金等价物(增加\|减少)(净额)?|Net (increase\|decrease) in cash and cash equivalents` |
+
+   单位：金额类 `unit` = 货币码（`HKD/CNY/USD`），每股类 `<货币>/share`；须在规格二 `units.ts::allowedUnits(unitKind)` 允许的集合内，否则 `unit_known` 失败（不改规格二目录）。
 5. **值解析** `values.ts`：单元格 `^\(?([\d,]+(\.\d+)?)\)?$`，括号 = 负数；`–|-|—` 单独出现 = 该期无值（不产候选，不写 0）；`presented` = 原文；`value` = 十进制字符串算术（`src/lib/documents/decimal.ts`：字符串乘 10 的幂、带符号加减，无浮点）得到的 `presented × scale`，再按符号规则处理。
 6. **候选**：每个 (概念, 期间列) 一条，`natural_key = <concept>:<period_start|''>:<period_end>:<duration>:<unit>`；引用（值、标签、单位、期间证据数组）都在 `insert_candidates` 前以 `cite()` 创建（`created_by='extractor'`）；`consolidation='consolidated'`；`fingerprint` 按 §4.6。上年比较列是**本文件对上一期间的披露**，同样产候选。
 
 ### 7.6 确定性检查 `checks.ts`
 
-数值检查前把十进制字符串显式转换为 `number`（`Number(value)`，15 位有效数字，与规格二审计 N8 的决定一致——恒等式用 0.5%/2% 容差，双精度足够；转换失败记 `not_a_number`），再调用 `rules.ts`。每条候选记录全部检查到 `checks`；`checks_passed` = 全部 `blocking` 通过：
+（R5-8）全部财务检查用十进制字符串与定标整数（BigInt）运算，不经 `Number`：和、差与比较都精确；恒等式 `identity(left, right, tol)` 判定为 `|left − right| × tol.den ≤ max(|left|, |right|, 1) × tol.num`，BS/GP/比较数 `tol = 5/1000`，CF `tol = 2/100`；检查 `detail` 保留精确字符串。实现在本规格自有文件 `hk-facts/exact.ts`（复用规格二 `json-numbers.ts::canonicalDecimal` 的规范形式，不改其文件）；`rules.ts` 的数值版不用于港股财务检查。每条候选记录全部检查到 `checks`；`checks_passed` = 全部 `blocking` 通过：
 
 | check | blocking | 规则 | 失败处理 |
 |---|---|---|---|
@@ -610,21 +654,27 @@ type Cursor = { segment: string|null; index: number; item_attempts: number }   /
 
 ### 7.7 晋升 `promote.ts::runHkFactsSync(deps, {issuerIds, triggeredBy})`
 
-**发布代 `HK_PUB_GEN`**（整数常量，F3 拥有）：`EXTRACTOR_VERSION`、`TABLE_ALGO_VERSION`、`HK_LABEL_GEN`、`HK_RULES_VERSION` 任一改动，或需要替换已发布值的修正，都 +1。它作为规格二 `beginRun(…, mapping_gen)` 的 `mapping_gen`：规格二按 K + filing + `mapping_gen` 去重并按 filing 整体激活代，因此新代能替换同 K 的旧值，旧代行留作历史（与规格二美股映射升级同一机制；`filings.mapping_gen` 只需按 filing 单调，港股 filing 的代序列独立于美股）。
+**发布代 `HK_PUB_GEN`**（整数常量，F3 拥有）：`EXTRACTOR_VERSION`、`TABLE_ALGO_VERSION`、`HK_LABEL_GEN`、`HK_RULES_VERSION` 任一改动，或需要替换已发布值的修正，都 +1。它作为规格二 `beginRun(…, mapping_gen)` 的 `mapping_gen`：规格二按候选键（K + filing + `mapping_gen`）去重并按 filing 整体激活代，因此新代能替换同 K 的旧值，旧代行留作历史（`filings.mapping_gen` 只需按 filing 单调，港股 filing 的代序列独立于美股）。
 
-**活动候选集**：对一份港股中文文档 = `extraction_id = current_extraction_id` 且 `extractor_ref = 当前 extractor_ref` 且 `status in ('confirmed','promoted')` 且满足资格（`kind='financial_fact'`、`extractor_kind='rule'`、文档 `permission='public'`、`source='hkexnews'`、`language='zh'`、`issuer_id` 等于运行发行人、`checks_passed`）的候选；其他代/版本的候选不参与（它们的发布行留作历史）。
+**规格二接口的适配**（R5-2）：落地的 `Market/Source/Origin` 类型不含港股取值，且本模块不得修改 `src/lib/facts/*` 已有文件。新文件 `src/lib/documents/hk-facts/facts-port.ts` 定义 `HkFactsPort`：只暴露经核对可透传 `market='HK'` 的操作——`claimLease/beginRun/stageFilings/stageFacts/quarantineFacts/abandonRun/releaseLease/readFacts/factsByIds/openConflicts`（运行时把市场串原样传给 rpc；类型断言只出现在这一个文件里）与本规格自有的 `ensureHkScope/bindFilingDocuments/insertFactCitations/publishHkRun/resolveHkFactsQuarantine`；`planFactWrites` 经同一文件调用。不得经此端口调用 `reconcileScope`、`scopeDue`、`materialize`、`replaceMetrics` 或公共路由助手。内存与 pg 实现以真实 `'HK'` 值跑同一契约用例（内存实现对 `reconcileScope` 不校验市场，故契约用例只走端口方法）。
+
+**活动候选集**：对一份港股中文文档 = `extraction_id = current_extraction_id` 且 `extractor_ref = 当前 extractor_ref` 且 `status in ('confirmed','promoted')` 且满足资格（`kind='financial_fact'`、`extractor_kind='rule'`、文档 `permission='public'`、`source='hkexnews'`、`language='zh'`、`issuer_id` 等于运行发行人、`checks_passed`）的候选；同一文档内候选的 `natural_key` 唯一（§4.6 唯一键），所以每个事实键在每个 filing 至多一个候选（R5-1）。其他代/版本的候选不参与（它们的发布行留作历史）。
 
 运行（一个发行人一次；每一步幂等，崩溃后重跑从第 0 步开始）：
-0. **租约先于恢复**（R4-1 修法）：先 `reconcileScope('HK', [{issuer, priority: 0, fetch_key: hkex_stock_code_primary, reasons:['documents']}])`，再为当前批次取得该发行人的 HK 租约 `claimLease(issuer,'HK',batch,600)`；返回 false → 以 `skipped_summary(leased)` 退出，**不做任何恢复写入**。持有该租约后执行恢复：对该发行人在 `HK_PUB_GEN` 下所有 `staged` 发布行，按 `run_id` 分组：运行 `published` → （R4-7 修法）先置本次运行的 `needs_materialization=true`，再 `finishCandidatePublications(run)`（逐条判定：事实 `ok` → `published`；`quarantined` → 保持 `staged`，本次运行不再暂存该候选；事实不存在 → `abandoned`）；运行 `staged`（上次崩溃在发布前）→ `abandonRun(run)`（级联删证据）+ `abandonCandidatePublications(run)`；运行 `abandoned` → `abandonCandidatePublications(run)`。所有恢复中的废弃调用都以当前租约持有者身份执行。`hk_materialization_due` 存在本发行人标记 → 同样置 `needs_materialization=true`。恢复完成后才 `beginRun(issuer,'HK',batch, HK_PUB_GEN)`。**每条正常退出路径（含 `nothing_to_publish`）都释放租约。**
-1. （并入第 0 步。）
-2. **本次暂存的候选** = 活动候选集中在 `HK_PUB_GEN` 下**没有** `staged|published` 行的候选（无行或 `abandoned`）；活动集中已 `published` 的候选不再暂存（它们的事实已是 `ok`，同代下规格二也会判为重复），`staged` 且事实 `quarantined` 的候选等待规格二隔离处理。对该发行人每份有活动候选集的文档（以及文档虽有候选但活动集为空的——零输出 filing 也进 manifest，使旧代行被新代"隐藏"）：`stageFilings`（§4.9 的港股 filing）；候选 → 事实行（`concept/statement/period/duration/value/unit/consolidation` 来自 `payload`，`source_concept` = 标签片段，`available_date` = 文档 `available_date`，`raw_hash` = `content_sha256`，`fact_id` 由写入端生成）；**规划用规格二的 `planFactWrites` + `openConflicts` 原样**（重复、同日冲突、`versioned` 计数都由它决定；港股原版与替换版同日不同值即进 `same_day_conflict`）；`stageFacts(run, rows)`（§16：返回每个输入键的 `fact_id` 与 `inserted|duplicate` 结果）→ 对每个本次暂存的候选 `stageCandidatePublication(candidate, HK_PUB_GEN, run, fact_id)`（结果为 `duplicate` 的候选也登记，`fact_id` 为既有行；既有行若已 `ok` 则第 4 步直接判为 `published`）。本次没有任何候选可暂存且没有零输出 filing → （R4-7 修法）废弃刚创建的空运行；若 `needs_materialization`，先调用 `materialize(issuer,'HK')`（成功后 `clearMaterializationDue(issuer, stateRev)`），再释放租约并以 `skipped_summary(nothing_to_publish)` 返回。物化失败必须独立于候选发布状态可持久重试：标记保留，`promotionDue` 条件 (d) 再次选中。
-3. **证据**：对本运行新暂存的每个事实 `insertFactCitations(run, rows)`（值、标签、单位各一条，期间证据数组每条一行）；失败 → `abandonRun`（级联删除未发布事实与其证据）→ `abandonCandidatePublications(run)` → 该发行人 `failed`（`evidence_failed`）。
-4. 规格二 `identity_bs/identity_gp` 规则（输入 = 本运行新行 ∪ 该 filing 当前 ok 行）→ `quarantineFacts` → **`publishHkRun(issuer, batch, run, manifest)`**（一个事务：先 `assert_run_evidence_complete`（对运行内全部 staged 事实），再规格二 `publish_sync_run`；证据不全则整个事务回滚、事实不发布，`evidence_incomplete` → `abandonRun` + `abandonCandidatePublications`，`failed`）→ `finishCandidatePublications(run)`（逐条判定，隔离行保持 `staged`）→ `materialize(issuer, 'HK')`（成功后 `clearMaterializationDue(issuer, stateRev)`；失败则标记保留、`promotionDue` 条件 (d) 重试）→ `releaseLease`。
-5. 被规格二隔离的行：其候选的发布行停在 `staged`（事实 `quarantined`），规格二隔离处理提升为 `ok` 后，`promotionDue` 条件 (c) 使下次运行在第 0 步补 `published`。`publishHkRun` 抛其他错 → `abandonRun` + `abandonCandidatePublications`，`publish_failed`。
+0. **租约与恢复**（R4-1，R5-5、R5-11 修订）：`ensureHkScope(issuer, hkex_stock_code_primary)` → `claimLease(issuer,'HK',batch,600)`；返回 false → `skipped_summary(leased)` 退出，不做任何写入。持有租约后：
+   a. 对该发行人在 `HK_PUB_GEN` 下所有 `staged` 发布行按 `run_id` 分组：运行 `published` → `finishCandidatePublications(run)`（逐条判定：事实 `ok` → `published`；`quarantined` → 保持 `staged`；事实不存在 → `abandoned`）；运行 `abandoned` → `abandonCandidatePublications(run)`；运行 `staged`（属于更早崩溃的批次）**不调用 `abandonRun`**（规格二运行级函数校验的是运行自己批次的租约，会 `lease_lost`），留给 b。
+   b. `beginRun(issuer,'HK',batch,HK_PUB_GEN)`：规格二在当前租约下废弃并删除本发行人全部 `staged` 运行的事实（证据随级联删除、空的 gen-0 filing 被剪除、其绑定随级联删除）。
+   c. 对 a 中留下的、现已 `abandoned` 的旧运行调用 `abandonCandidatePublications(run)`。在 b 与 c 之间崩溃时，下次运行的 a 会看到这些运行已 `abandoned` 并完成同一清理（幂等）。
+   **每条正常退出路径（含 `nothing_to_publish`）都释放租约。**新建运行的清理（`abandonRun(本运行)`）使用本批次租约，合法。
+1. **规划快照**：`readFacts(issuer,'HK',{asOf: 今天, history:true, includeNonOk:true, 全部 HK 概念, 无键数上限})`；`truncated=true` → 废弃本运行、`failed`（`read_truncated`）。记下信封的 `state_rev` 作为 `expectedRev`。
+2. **本次暂存的候选** = 活动候选集中在 `HK_PUB_GEN` 下**没有** `staged|published` 行的候选（无行或 `abandoned`）；已 `published` 的不再暂存；`staged` 且事实 `quarantined` 的等待隔离处理。对该发行人每份有活动候选集的文档，以及 `promotionDue` 条件 (d) 命中的文档（零输出 filing 也进 manifest，使旧代行被新代"隐藏"，R5-13）：`stageFilings`（§4.9 的港股 filing）→ `bindFilingDocuments(run, [{filing_id, document_id}])`；候选 → `FactCandidate`（`concept/statement/period/duration/value/unit` 来自 `payload`，`consolidation='consolidated'`，`sourceConcept` = 标签片段，`filingRef` = filing `source_ref`，`rawHash` = §7.7 末段定位串）；**规划用规格二的 `planFactWrites({existing: 第 1 步快照, openConflicts, candidates, filings, market:'HK', mappingGen: HK_PUB_GEN, …})` 原样**（重复、同日冲突、`versioned` 计数都由它决定）。**`fact_id` 的确定**（R5-1）：每个候选按候选键（K + filing + `mapping_gen`）先在 `plan.inserts` 中找（新行，`fact_id` 由规划器生成），再在 `existing` 中找（既有行）；`plan.ambiguous` 中的候选不应出现（同 filing 键唯一），出现即视为实现错误 → 运行 `failed`（`plan_inconsistent`）；两处都找不到 → 同样 `plan_inconsistent`。`stageFacts(run, plan.inserts)` 的返回值必须等于 `plan.inserts.length`（租约持有期间无并发写），否则 `plan_inconsistent`、废弃本运行。随后对每个本次暂存的候选 `stageCandidatePublication(candidate, HK_PUB_GEN, run, fact_id)`（指向既有行的也登记；既有行若已 `ok`，第 4 步直接判为 `published`）。同日冲突（`plan.conflicts`）与已存在冲突项（`plan.contestedJoins`）按规格二 `sync.ts` 同样的方式写隔离项（`dataset='facts.hk'`）并 `quarantineFacts`。本次没有任何候选可暂存且没有零输出 filing → 废弃本运行，释放租约，`skipped_summary(nothing_to_publish)` 返回。
+3. **证据**：对本运行新暂存的每个事实 `insertFactCitations(run, rows)`（值、标签、单位各一条，期间证据数组每条一行）；失败 → `abandonRun(本运行)` → `abandonCandidatePublications(run)` → 该发行人 `failed`（`evidence_failed`）。
+4. 规格二 `identity_bs/identity_gp` 规则（输入 = 本运行新行 ∪ 该 filing 当前 ok 行，经端口调用规格二 `rules.ts` 的纯函数）→ `quarantineFacts` → **`publishHkRun(issuer, batch, run, manifest, expectedRev)`**（一个事务：取锁 → `assert_run_evidence_complete` → 规格二 `publish_sync_run(…, expectedRev)`）。`evidence_incomplete` → `abandonRun` + `abandonCandidatePublications`，`failed`；**`stale_plan`**（R5-7）→ 不发布，`abandonRun` + `abandonCandidatePublications`，释放租约（`failed`，`next_due_at` 不适用于港股），`promotionDue` 条件 (ab) 在下一次 cron 运行重新选中该发行人并从第 1 步重新读取与规划——**绝不**以新修订号重试旧规划。成功 → `finishCandidatePublications(run)`（逐条判定，隔离行保持 `staged`）→ `releaseLease(success)`。不物化（R5-3）。
+5. 被规格二隔离的行：其候选的发布行停在 `staged`（事实 `quarantined`）。管理员经 `POST /api/admin/documents/hk-quarantine/[id]`（§9）裁决，`resolve_hk_facts_quarantine` 原子完成提升与钩子收尾（R5-12）；提升为 `ok` 后 `promotionDue` 条件 (c) 使下次运行在第 0 步 a 补 `published`。`publishHkRun` 抛其他错 → `abandonRun` + `abandonCandidatePublications`，`publish_failed`。
 
-**同代第二次确认**：新确认的候选在下次运行按第 2 步单独暂存（已发布的不重复暂存），manifest 仍含其 filing，`filings.mapping_gen` 不变（规格二 `publishRun` 对相等的代不抛 `mapping_gen_regression`）。
+**同代第二次确认**：新确认的候选在下次运行按第 2 步单独暂存（已发布的不重复暂存），manifest 仍含其 filing，`filings.mapping_gen` 不变（规格二对相等的代不抛 `mapping_gen_regression`）。
 
-`raw_hash` 对港股的定位规则：桶内 `blobs/{content_sha256}.pdf` 的 `fact_citations(role='value')` 所指抽取版本、页与 bbox。
+`raw_hash`（规格二列，≤ 128 字符）对港股的定位串：`hkex:<content_sha256 前 16 位>:<extraction_id>:p<page_no>:c<char_start>-<char_end>`（值引用的位置）；完整回放经 `fact_citations(role='value')`。
 
 ### 7.8 LLM 抽取边界
 
@@ -675,7 +725,8 @@ ingestUpload(deps, {ownerUserId, bytes, filename, mime: 'application/pdf', permi
 | `GET /api/documents/doc/[id]/pages/[n]` | `extraction`（默认当前）、`layout=1` | `{documentId, extractionId, pageNo, text, textHash, charCount, width, height, lines?, tables?}` |
 | `GET /api/citations/[id]` | — | `{citationId, documentId, extractionId, pageNo, charStart, charEnd, bbox, snippet, textHash, integrity, currentExtraction, createdBy, createdRef, document:{title, sourceUrl, publishedAt, availableAt, docClass, language}}`；不可见引用对匿名 404 |
 | `GET /api/documents/doc/[id]/file` | — | 需登录；`{url, expiresAt}`；`private, no-store`；licensed 非持有人 404 |
-| `GET /api/facts/[ticker]`（规格二，扩展） | `citations=1` | 每行追加 `citations:[{role, citationId, extractionId, pageNo}]`；港股 `filings.citation='page'`；`.HK` → `market='HK'`（§16） |
+| `GET /api/citations?factId=<uuid>` | `factId`（必填，恰好一个） | （R5-4）`{factId, concept, periodStart, periodEnd, unit, valueText, citations:[{role, citationId, documentId, extractionId, pageNo}]}`；只对 `status='ok'` 且其 filing `mapping_gen > 0` 的事实返回（旧代 `ok` 行可经 id 取回）；引用按 §4.12 可见性过滤；不存在或不可见 → 404；`/api/facts` 的 `.HK` 支持是对规格二的接口请求（§16） |
+| `POST /api/admin/documents/hk-quarantine/[id]` | body `{status:'resolved_accept'|'resolved_reject', chosenFactIds?}` | （R5-12）`requireAdminUser()`，JSON 与 Origin 校验；accept → `resolve_hk_facts_quarantine`（`run_pending` → 409，`invalid_chosen` → 422，`not_hk_item` → 404）；reject → 计划一通用 `resolveQuarantine`；审计；`private, no-store`。港股事实隔离项的 `dataset='facts.hk'`；通用 `/api/admin/dq/quarantine/[id]` 对 `facts.hk` 不得用于 accept（规格二 `resolveFactsItem` 会把钩子记为 `no_target` 失败）——候选 cron 每次运行把已 `resolved_accept` 且钩子非 `done` 的 `facts.hk` 项补写为 `done`（`hk_no_metrics`），使误用也能收尾 |
 | `POST /api/admin/documents/[id]/reprocess` | body `{stage:'extract'|'classify'}` | `requireAdminUser()`，JSON 与 Origin 校验同 `/api/admin/dq/quarantine/[id]`；`extract` → `requestExtract`（`revision_exists` → 409）后立即跑一次 `runDocumentsExtract({documentIds:[id]})`；`classify` → `reclassifyDocument`；审计；`private, no-store` |
 | `GET /api/admin/documents/candidates` | `status`、`extraction`、`issuer`、`cursor`、`limit` | 候选列表（含 `checks`、各引用片段、文档标题、`publications`） |
 | `POST /api/admin/documents/candidates/[id]` | body `{status:'confirmed'|'rejected'|'candidate'}` | `decideCandidate(human)`；`confirmed` 后对该发行人立即跑一次 `runHkFactsSync`（失败由 cron 兜底）；返回 `{status, run:{state:'published'|'failed'|'skipped', message?}}`；`not_eligible` → 409；幂等 |
@@ -715,6 +766,8 @@ ingestUpload(deps, {ownerUserId, bytes, filename, mime: 'application/pdf', permi
 | 港股候选：阻断检查失败 | 不可晋升；恒等式失败另写隔离 `hk_identity_*` | — | `quarantined+1` |
 | 港股候选：比较数/中英不一致 | 可晋升；隔离 `hk_restated_comparative` / `hk_en_zh_mismatch` | 信息码 `restated_comparative` / `en_zh_mismatch` | `quarantined+1` |
 | 晋升：证据写入失败 / `publishHkRun` 证据校验回滚 / 其他发布错误 | `abandonRun` + `abandonCandidatePublications` | `evidence_failed` / `evidence_incomplete` / `publish_failed` | `failed+1` |
+| 晋升：规划后修订号变化 | 不发布；`abandonRun` + `abandonCandidatePublications`；下次 cron 重新规划 | `stale_plan` | `failed+1` |
+| 晋升：规划快照截断 / 规划与暂存不一致 | 废弃本运行 | `read_truncated` / `plan_inconsistent` | `failed+1` |
 | 晋升：无候选可暂存 | `abandonRun` | `skipped_summary(nothing_to_publish)` | 信息 |
 | 晋升：规格二规则隔离 | 发布行停在 `staged` | 规格二隔离项 | `quarantined+1` |
 | 决定：不合格候选 / 审批撤销 | 409 `not_eligible` / 候选回 `candidate` | `approval_revoked` | — |
@@ -726,7 +779,7 @@ ingestUpload(deps, {ownerUserId, bytes, filename, mime: 'application/pdf', permi
 | `fetched>0` 无结果 | `unaccounted` | — | failed |
 | 读接口 | 404 `unknown_ticker` / `not_found`；400 `invalid_parameter:<name>`；401 `unauthenticated`；409 `revision_exists` / `not_eligible`；422 `threshold` | | |
 
-新增信息码（加入 `INFO_CODES`）：`deadline_hit`、`coverage_summary`、`locate_ambiguous`、`period_unparsed`、`unit_ambiguous`、`label_ambiguous`、`not_consolidated`、`restated_comparative`、`en_zh_mismatch`、`extractor_disagreement`、`llm_uncited`。规格二已申请 `deadline_hit`/`coverage_summary`，以先落地者为准。
+新增信息码（加入 `INFO_CODES`，在 `src/lib/dq/batches.ts` 中以 `// F3` 注释分隔的独立块）：`locate_ambiguous`、`period_unparsed`、`unit_ambiguous`、`label_ambiguous`、`not_consolidated`、`restated_comparative`、`en_zh_mismatch`、`extractor_disagreement`、`llm_uncited`。`deadline_hit`、`coverage_summary` 已由规格二落地，直接复用（R5-10）。
 
 ---
 
@@ -742,13 +795,13 @@ ingestUpload(deps, {ownerUserId, bytes, filename, mime: 'application/pdf', permi
 - `extract/html.test.ts`：复用 `edgar-8k-pltr-20260803.htm`；分页标记切页；无截断。
 - `citations.test.ts`：`cite/verify`、越界与空片段拒绝、码点 vs UTF-16 夹具、`integrity`、`currentExtraction`、`publish_citations` 只对 human/module。
 - `decimal.test.ts`：字符串乘 10 的幂、带符号加减、20 位整数。
-- `hk-facts/*.test.ts`：`locate`、`period`（年度/六個月、英文、中文数字、BS instant、中期 BS 只含年份 → 不产、期间证据两条）、`scale`（最长匹配、`港元` 不触发 `元`、只有货币 → null、eps 子单位）、`labels`、`values`、`checks`（blocking/非 blocking、显式数值转换、`identity_cf` 2%）、`decide`（人工 `checks_passed=false` → `not_eligible`；自动只在审批四版本完全相等；llm 永不；撤销后 `approval_revoked`）、`promote`（活动候选集；同代第二次确认只暂存新候选；零输出 filing 进 manifest；`HK_PUB_GEN` 升级替换旧值；`publishHkRun` 证据不全回滚；混合结果运行的逐条判定（`published/still_staged/abandoned`）；`abandoned→staged` 重暂存；第 0 步对三种运行状态的恢复；`promotionDue` 三类条件；规划器同日冲突；第三次崩溃后 `claim` 收尾为 `extract_failed/exhausted`；`writeCandidateChecks` 对已决定行拒绝）、`regenerate`（人工决定按 `fingerprint` 继承、自动不继承）。
+- `hk-facts/*.test.ts`：`locate`、`period`（年度/六個月、英文、中文数字、BS instant、中期 BS 只含年份 → 不产、期间证据两条）、`scale`（最长匹配、`港元` 不触发 `元`、只有货币 → null、eps 子单位）、`labels`、`values`、`checks`（blocking/非 blocking、显式数值转换、`identity_cf` 2%）、`decide`（人工 `checks_passed=false` → `not_eligible`；自动只在审批四版本完全相等；llm 永不；撤销后 `approval_revoked`）、`promote`（活动候选集；同代第二次确认只暂存新候选；零输出 filing 进 manifest；`HK_PUB_GEN` 升级替换旧值；`publishHkRun` 证据不全回滚；混合结果运行的逐条判定（`published/still_staged/abandoned`）；`abandoned→staged` 重暂存；第 0 步对三种运行状态的恢复；`promotionDue` 四类条件（含零输出代激活）；规划器同日冲突；第三次崩溃后 `claim` 收尾为 `extract_failed/exhausted`；`writeCandidateChecks` 对已决定行拒绝）、`regenerate`（人工决定按 `fingerprint` 继承、自动不继承）。
 - 路由测试：参数、`asOf` 选版、游标、缓存头按类别（含 owner → 匿名、owner A → owner B）、`integrity/currentExtraction`、licensed 非持有人 404、`file` 未登录 401、管理接口的媒体类型/Origin、候选 POST 幂等与 409、审批 422。
 
 ### 11.2 数据库（`test:db`，全部 critical）
 
 `src/lib/documents/documents.integration.test.ts`：迁移一可重放；唯一键；检查约束（`dd_*`、`de_role_status`、`ec_decision_shape`、`ea_threshold`）；触发器（限定列、状态迁移集合、页与引用不可删改、`insert_citation` 校验、`publish_citations` 限制、候选生命周期）；函数（租约互斥/过期/续租、`lease_lost`、`insert_document_version` 版本分配与重复、`finish_document_extract` 无删除、`request_document_extract` 的 `revision_exists`、`claim_*` 的计数与 `exhausted`、`decide_candidate` 资格、`insert_candidates` 的引用一致性校验与继承、`service_role` 直接 insert/update/delete 被拒、anon 不可执行写函数、`read_documents` as-of 选版）；RLS 真实角色（anon/authenticated 直接查表与查 `disclosure_documents_public` 都读不到 licensed 行、候选表、未公开引用）；游标分页在 > 1000 行上的正确性（`pgDocumentsDb`）；码点 `substr` 与 JS 码点切片一致（增补平面夹具）。
-`src/lib/documents/fact-citations.integration.test.ts`：迁移二在规格二迁移之后可重放；`fact_citations` 级联（删除 staged 事实 → 证据消失；ok 事实不可删）；`insert_fact_citations` 守卫（私有文档、跨 filing 文档、非当前抽取版本被拒）；`assert_run_evidence_complete`；`document_citations` 的事实联动可见性；`filings.primary_document_id` 列级 update；枚举加法。本套件只在规格二 F2-0 落地后创建。
+`src/lib/documents/fact-citations.integration.test.ts`：迁移二在规格二迁移之后可重放；约束扩展后 HK 行可经规格二函数写入（`stage_filings/stage_facts/publish_sync_run` 以 `market='HK'`）；`fact_citations` 级联（删除 staged 事实 → 证据消失；ok 事实不可删）；`insert_fact_citations` 守卫（私有文档、未绑定或绑定其他文档的 filing、非当前抽取版本被拒）；`bind_filing_documents` 校验与 `binding_conflict`、`begin_sync_run` 剪除 gen-0 filing 时绑定级联删除；`assert_run_evidence_complete`；`publish_hk_run` 的 `invalid_expected_rev` 与 `stale_plan`；`ensure_hk_fact_scope` 不改已有行；`resolve_hk_facts_quarantine` 提升 + 钩子 `done` 同一事务、非 HK 项被拒；`document_citations` 的事实联动可见性；规格二表未被本迁移改动的函数与触发器保持原样（函数定义哈希比对）。
 
 ### 11.3 离线集成（录制回放）
 
@@ -770,7 +823,7 @@ ingestUpload(deps, {ownerUserId, bytes, filename, mime: 'application/pdf', permi
 
 ## 12. 分期（供计划三-文档 拆任务）
 
-**合并顺序（owner 决策 G）**：迁移时间戳必须晚于合并时 `migrations.lock.json` 的最大值（CI `Non-append migration` 门禁）。默认顺序：规格二 F2-0 先合并（锁 `20261106090000`），本规格 F3-0 之后合并（`20261106100000`）。若 owner 决定 F3-0 先合并，则 F3-0 保留 `20261106100000`，规格二需重新分配晚于它的时间戳；两者不能各自按预占时间戳独立合并。
+**合并顺序（owner 决策 G，已由事实决定）**：规格二已落地；本规格迁移时间戳 `20261108090000`/`20261108091000`，必须晚于合并时 `migrations.lock.json` 的最大值（CI `Non-append migration` 门禁）；与兄弟模块（计划三 `20261107*`、F4/F6/行业研究）合并前复核，冲突时顺延本规格时间戳（R5-9）。
 
 | 工作包 | 交付 | 退出条件 | 工作量 |
 |---|---|---|---|
@@ -787,13 +840,13 @@ ingestUpload(deps, {ownerUserId, bytes, filename, mime: 'application/pdf', permi
 验收样例：
 1. `scripts/documents/sync.ts --source hkexnews --issuer <0268.HK 的 issuer_id> --since-year 2016 --apply` 两次：第二次 `inserted=0`，`duplicates=第一次 inserted`，游标不回退，`backfill_done=true`（在 HKEX 范围上限核对后）。
 2. `documents-extract` 后 `GET /api/documents/doc/<id>/pages/<损益表页>?layout=1` 文本含 `綜合損益表`，`has_tables=true`，某单元格 `charStart..charEnd` 的码点切片等于其 `text`。
-3. 管理员确认一条 `checks_passed` 的 `revenue` 候选 → `GET /api/facts/0268.HK?concepts=revenue&citations=1` 该行 `citations` 含 `value/label/unit` 与 ≥ 2 条 `period`，`GET /api/citations/<value>` `integrity='ok'`、`currentExtraction=true`；确认一条 `checks_passed=false` 的候选 → 409。
+3. 管理员确认一条 `checks_passed` 的 `revenue` 候选 → 事实表出现该行（`market='HK'`、`status='ok'`），`GET /api/citations?factId=<fact_id>` 返回 `value/label/unit` 各一条与 ≥ 2 条 `period`，`GET /api/citations/<value>` `integrity='ok'`、`currentExtraction=true`；确认一条 `checks_passed=false` 的候选 → 409。
 4. 抽取器版本升级后 `reprocess(extract)` → 新 `extraction_id`，旧引用 `currentExtraction=false`、`integrity='ok'`，`document_pages` 行数只增不减；同版本再次 `reprocess` → 409。
 5. HKEX 同一 `source_ref` 返回不同字节 → `source_version=2`、`observed_replacement=true`、`available_at` 为抓取时刻；`GET /api/documents/0268.HK?asOf=<替换前日期>` 返回 v1。
 6. anon 与 owner B 读 owner A 的 licensed 文档 → 404；owner A → 200、`private, no-store`、`research_audit_log` 多一行。
 7. 断网运行三个 cron：批次 `failed`，内容表与桶无新行/对象。
 8. 自动决定：无审批行 → 候选全部 `candidate`；`precision=0.94` 的审批 → 422；合格审批后 → 范围内概念 `confirmed(auto)` 并在同一 cron 运行内发布；`HK_LABEL_GEN` 升级后 → 新候选无自动决定，人工决定按 `fingerprint` 继承。
-9. `HK_PUB_GEN` 升级后一次运行：同 K 新值以新代发布；旧代行保留为历史，`asOf` 读取（`read_facts` 只看 `filings.mapping_gen` 当前代）不再返回它们，但 `GET /api/facts/0268.HK?factIds=<旧 fact_id>` 仍能取回（规格二 `factsByIds` 不限代），其 `fact_citations` 仍可见。
+9. `HK_PUB_GEN` 升级后一次运行：同 K 新值以新代发布；旧代行保留为历史，`read_facts`（只看 `filings.mapping_gen` 当前代）不再返回它们；`GET /api/citations?factId=<旧 fact_id>` 仍返回其证据（旧代 `ok` 行仍是 `ok`，其 filing 已发布）。新代没有任何可晋升候选的文档：`promotionDue` 条件 (d) 选中该发行人，零输出 filing 进 manifest，旧代行被隐藏（R5-13）。
 10. 混合结果运行：一次运行中 3 条新行发布、1 条被规格二 `identity_bs` 隔离 → `finishCandidatePublications` 返回 `{published:3, still_staged:1, abandoned:0}`，被隔离候选保持 `confirmed`、发布行 `staged`；管理员接受隔离项后下一次 cron 运行第 0 步把它转为 `published`。
 
 ---
@@ -818,7 +871,7 @@ ingestUpload(deps, {ownerUserId, bytes, filename, mime: 'application/pdf', permi
 | **决策 D**：批准新依赖 `pdfjs-dist`；若 Vercel 冒烟失败，接受"抽取与候选只在本机脚本运行"的降级 | owner | F3-0 |
 | **决策 E**：桶 `disclosure-docs` 的容量预算与 `file_size_limit`（默认 52428800）；F3-1 实测后定 | owner | F3-1 后 |
 | **决策 F**：授权研报的许可条款、片段是否可对持有人以外展示（默认不可）、`license.ref` 的登记方式 | owner + 外资研报规格 | F3-5 前 |
-| **决策 G**：规格二与本规格的合并顺序（默认规格二先） | owner | 计划编写前 |
+| ~~决策 G~~：已由事实决定（规格二已落地，本规格时间戳 `20261108*`） | — | — |
 | 已入库 HKEX 文档的周期性重核验节奏（§15 问题 2 核对后；默认不做，替换只在轮询窗口内发现） | owner | F3-1 后 |
 | Vercel 环境变量 `EDGAR_USER_AGENT`（本机也需要）、`CRON_SECRET`；确认 Vercel 计划为 Pro 及以上（每小时 cron） | owner | 部署前 |
 | 生产执行迁移；首轮 `scripts/documents/sync.ts --source hkexnews --limit 5 --apply`；cron 与脚本不同时运行 | owner | 合并后 |
@@ -842,7 +895,7 @@ ingestUpload(deps, {ownerUserId, bytes, filename, mime: 'application/pdf', permi
 
 | 对方 | 本规格需要 | 本规格提供 |
 |---|---|---|
-| 规格二（事实库） | (a) 四处 `market` 枚举加 `HK`，`filings.source/origin` 加 `hkex`；(b) `filings.primary_document_id` 与其列级 update 例外、触发器允许列；(c) **`stage_facts(run, rows jsonb)` 返回 `jsonb`：`{<input_key>: {fact_id, outcome:'inserted'|'duplicate'}}`，`input_key` 由调用方在每行提供，`fact_id` 由调用方生成随行传入（重复时返回既有行 id）；分块 ≤ 500 时每块返回各自映射；三种 `FactsDb` 实现与测试同步更新；(d) `FactsDb` 的 `reconcileScope/claimLease/beginRun/stageFilings/stageFacts/quarantineFacts/publishRun/abandonRun/releaseLease/factsByIds/readFacts/replaceMetrics/openConflicts` 与 `planFactWrites`、`materialize(issuer, market)` 可被 §7.7 以 `market='HK'` 调用；`abandon_sync_run`/`begin_sync_run` 删除未发布事实时允许 `fact_citations` 级联（本规格以 `on delete cascade` 配合）；`publish_sync_run` 可被本规格的 `publish_hk_run`（同为 `security definer`，service_role 调用）在同一事务内调用，且对 `filings.mapping_gen = run.mapping_gen`（同代再次发布）不抛 `mapping_gen_regression`；(e) `/api/facts`、`/api/filings` 的 ticker 路由：`.HK` 后缀 → `market='HK'`；(f) 派生层对 `market='HK'` 的口径：`gross_margin = gross_profit / revenue`（无 `gross_profit` 时 `(revenue − cost_of_revenue)/revenue`）、`net_margin = net_income_parent / revenue`、`basis='standard'`；`fcf/borrowings_total/capex/q_single_*/ttm_*/roe` 因概念未抽取或只有 12M/6M 期间而缺失——本规格**不请求**新增年度 ROE 指标，港股 `roe` 在本期保持缺失；(g) `/api/facts` 接受 `citations=1`；(h) `INFO_CODES` 的 `deadline_hit/coverage_summary` 共用 | `fact_citations`（随事实级联）；港股 `filings`/`financial_facts` 的唯一写入者（经规格二函数）；A 股 `filings.document_ref` 反查 `document_id` |
+| 规格二（事实库，已落地） | **本规格自行完成、不需要规格二改动**：(a) 四处 `market` 约束加 `HK`、`filings.source/origin` 加 `hkex`（迁移二，§4.9）；(b) 文档绑定用自有表 `filing_documents`（R5-6）；(c) `stage_facts` 维持返回插入数，重复行的 `fact_id` 由规划输入推出（§7.7，R5-1）；(d) HK scope 行经 `ensure_hk_fact_scope`（R5-11）；(e) HK 隔离项裁决经 `resolve_hk_facts_quarantine`（R5-12）；`publish_sync_run` 同代再次发布不抛 `mapping_gen_regression`（落地代码已如此）。**对规格二所有者的接口请求（本期不做，PR 中列出）**：(1) `/api/facts`、`/api/filings` 的 `.HK` 路由与 `citations=1`；(2) 派生层港股口径与 `financial_metrics.market/basis` 的 HK 取值、港股物化与修订号安全的重试调度（原 R4-7 标记机制随之移交）；(3) 通用隔离裁决路由对 `facts.hk` 的分派（现由本规格的专用路由处理）；(4) `Market/Source/Origin` 类型加入 HK 取值后，本规格的 `src/lib/documents/hk-facts/facts-port.ts` 适配层可删除；(5) US/CN filing 与文档绑定的授权方式 | `fact_citations`（随事实级联）；`filing_documents`；港股 `filings`/`financial_facts` 的唯一写入者（经规格二函数） |
 | 规格四（判断框架） | 无 | 判断的输入快照可引用 `citation_id`；`created_by='module'`；发布判断时自行 `publish_citations` |
 | 规格六（评测） | 黄金集格式与阈值由其统一；LLM 候选的评测 harness | `eval-hk-facts.ts` 的输出格式；`extraction_candidates`、`extraction_approvals` 作为评测样本与审批记录 |
 | 计划三（标识符/对账） | 港股无第二事实来源，`dq_reconciliations` 对港股只能用"比较列 vs 上期主列"；租约表合并 | `hk_restated_comparative` 隔离项与信息码 |
