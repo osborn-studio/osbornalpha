@@ -5,7 +5,7 @@ import {describe,it,expect} from 'vitest';
 import {memoryRawStore} from '../../dq/raw-store';
 import {
  ALLOWED_SECURITY_TYPES,BACKOFF_MS,EXCH_MAP,EXCH_MAP_VERSION,OPENFIGI_URL,OpenFigiError,
- exchCodeFor,groupFigiResults,mapIsins,mapJobs,mapTickers,openFigiLimits,securityTickerFor,type FigiRecord,
+ createFigiLimiter,exchCodeFor,groupFigiResults,mapIsins,mapJobs,mapTickers,openFigiLimits,securityTickerFor,type FigiRecord,
 } from './openfigi';
 
 const eq=(o:Partial<FigiRecord>):FigiRecord=>({figi:'BBG000B9XRY4',compositeFIGI:'BBG000B9XRY4',ticker:'AAPL',exchCode:'US',securityType:'Common Stock',marketSector:'Equity',...o});
@@ -24,7 +24,7 @@ function harness(replies:Reply[]){
  const calls:{url:string;init:RequestInit}[]=[];const sleeps:number[]=[];let t=0;
  const fetch=(async(url:string|URL|Request,init?:RequestInit)=>{calls.push({url:String(url),init:init??{}});const r=replies.shift();if(!r)throw new Error('unexpected fetch');return r();}) as typeof globalThis.fetch;
  const raw=memoryRawStore();
- return {calls,sleeps,raw,deps:{fetch,raw,now:()=>t,sleep:async(ms:number)=>{sleeps.push(ms);t+=ms;}}};
+ return {calls,sleeps,raw,deps:{fetch,raw,limiter:createFigiLimiter(),now:()=>t,sleep:async(ms:number)=>{sleeps.push(ms);t+=ms;}}};
 }
 const isinItems=(n:number)=>Array.from({length:n},()=>({data:AAPL}));
 
@@ -191,9 +191,44 @@ describe('failure evidence, shared throttling, own-property lookups',()=>{
  });
 });
 
+describe('round 2: body read, budget, shared back-off, schema',()=>{
+ const bad=():Response=>{const r=new Response('{}',{status:429});Object.defineProperty(r,'arrayBuffer',{value:()=>Promise.reject(new TypeError('terminated'))});return r;};
+ const budgetOf=(ms:number,signal=new AbortController().signal)=>({remainingMs:()=>ms,signal});
+ it('retries when the body read fails, recording body_read_failed',async()=>{
+  const h=harness([bad,ok([{data:TENCENT}])]);
+  const out=await mapJobs([{idType:'ID_ISIN',idValue:'A'}],h.deps);
+  expect(h.sleeps).toContain(BACKOFF_MS);expect(out.exhausted).toBe(false);
+  expect(out.failures).toEqual([{status:429,request_sha256:expect.any(String),response_sha256:null,error:'body_read_failed'}]);
+  const h2=harness([bad,bad]);
+  expect((await mapJobs([{idType:'ID_ISIN',idValue:'A'}],h2.deps)).exhausted).toBe(true);
+ });
+ it('rejects an aborted budget and a budget too short for the back-off without sleeping',async()=>{
+  const ctl=new AbortController();ctl.abort();
+  const h=harness([ok([{data:TENCENT}])]);
+  await expect(mapJobs([{idType:'ID_ISIN',idValue:'A'}],{...h.deps,budget:budgetOf(1e9,ctl.signal)})).rejects.toMatchObject({code:'budget_aborted'});
+  expect(h.calls).toHaveLength(0);
+  const h2=harness([status(429),ok([{data:TENCENT}])]);
+  const out=await mapJobs([{idType:'ID_ISIN',idValue:'A'}],{...h2.deps,budget:budgetOf(BACKOFF_MS+500),reserveMs:1000});
+  expect(out.exhausted).toBe(true);expect(h2.sleeps).toEqual([]);expect(h2.calls).toHaveLength(1);
+ });
+ it('makes concurrent callers wait out a back-off started by another',async()=>{
+  const h=harness([status(429),ok([{data:TENCENT}]),ok([{data:TENCENT}])]);
+  await Promise.all([mapIsins(['A'],h.deps),mapIsins(['B'],h.deps)]);
+  expect(h.calls).toHaveLength(3);
+  expect(h.sleeps.filter(ms=>ms===BACKOFF_MS).length).toBeGreaterThanOrEqual(1);
+  expect(h.deps.now()).toBeGreaterThanOrEqual(BACKOFF_MS);
+  expect(h.sleeps.reduce((a,b)=>a+b,0)).toBeLessThan(BACKOFF_MS*2);
+ });
+ it('rejects non-string ticker/exchCode/compositeFIGI/securityType',async()=>{
+  for(const k of ['ticker','exchCode','compositeFIGI','securityType'])
+   await expect(mapJobs([{idType:'ID_ISIN',idValue:'A'}],harness([ok([{data:[{...eq({}),[k]:700}]}])]).deps)).rejects.toThrow('invalid_schema');
+ });
+});
+
 const RECORDED=new URL('../fixtures/openfigi/recorded-probe-isin.json',import.meta.url);
 describe('recorded probe (Task 3b Step 8)',()=>{
- it.skipIf(!existsSync(RECORDED))('maps AAPL, 600519 and 0700 to exactly one group per ticker (Tencent ISIN also lists 80700.HK and the OTC line TCTZF)',()=>{
+ it('maps AAPL, 600519 and 0700 to exactly one group per ticker (Tencent ISIN also lists 80700.HK and the OTC line TCTZF)',()=>{
+  expect(existsSync(RECORDED)).toBe(true);
   const items=JSON.parse(readFileSync(RECORDED,'utf8')) as {data?:FigiRecord[]}[];
   const tickers=items.map(i=>groupFigiResults(i.data??[]).candidates.map(c=>`${c.ticker}:${c.groups.length}`));
   expect(tickers).toEqual([['AAPL:1'],['600519.SH:1'],['00700.HK:1','80700.HK:1','TCTZF:1']]);

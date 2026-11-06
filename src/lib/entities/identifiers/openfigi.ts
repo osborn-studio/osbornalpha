@@ -8,6 +8,7 @@
 // or figi (venue level), sorted so the order of API results never changes the outcome. No venue
 // preference is invented: several groups for one ticker means "do not write, file claims".
 import type {Budget} from '../../facts/types';
+import {PacerError,createPacer,sleep as abortableSleep,type Pacer} from '../../facts/providers/shared';
 import type {RawStore} from '../../dq/raw-store';
 import {normalizeSecurityTicker} from '../../securities/ticker';
 
@@ -30,12 +31,17 @@ export interface FigiEvidence{request_sha256:string;response_sha256:string;index
 export type FigiJobResult=
  |{job:FigiJob;status:'ok';records:FigiRecord[];evidence:FigiEvidence}
  |{job:FigiJob;status:'not_found'|'error';message:string;evidence:FigiEvidence};
-export interface FigiFailure{status:number|null;request_sha256:string;response_sha256:string|null}
+export interface FigiFailure{status:number|null;request_sha256:string;response_sha256:string|null;error?:'body_read_failed'}
 export interface MapResult{results:(FigiJobResult|null)[];exhausted:boolean;requests:number;failures:FigiFailure[]}
 export interface MappedBy{byKey:Map<string,FigiJobResult>;exhausted:boolean;unprocessed:string[];unsupported:string[];requests:number;failures:FigiFailure[]}
-export interface OpenFigiDeps{fetch:typeof fetch;raw:RawStore;apiKey?:string|null;sleep?:(ms:number)=>Promise<void>;now?:()=>number;budget?:Budget}
+/** Shared pacing state for one quota identity: the landed serialized pacer plus a back-off horizon every caller honours. */
+export interface FigiLimiter{pacer:Pacer;blockedUntil:number}
+export const createFigiLimiter=():FigiLimiter=>({pacer:createPacer(3000),blockedUntil:-Infinity});
+export interface OpenFigiDeps{fetch:typeof fetch;raw:RawStore;apiKey?:string|null;sleep?:(ms:number,signal?:AbortSignal)=>Promise<void>;now?:()=>number;budget?:Budget;
+ /** Cleanup reserve kept free of back-off waits (default 0). */reserveMs?:number;
+ /** Default: one process-wide limiter per quota identity (key vs no key), shared by all mapJobs calls. Tests inject their own for isolation. */limiter?:FigiLimiter}
 export class OpenFigiError extends Error{
- constructor(readonly code:'invalid_schema'|'openfigi_http',detail?:string,readonly evidence?:FigiFailure){super(detail?`${code}: ${detail}`:code);this.name='OpenFigiError';}
+ constructor(readonly code:'invalid_schema'|'openfigi_http'|'budget_aborted',detail?:string,readonly evidence?:FigiFailure){super(detail?`${code}: ${detail}`:code);this.name='OpenFigiError';}
 }
 
 export function openFigiLimits(apiKey?:string|null):{jobsPerRequest:number;minIntervalMs:number}{
@@ -50,6 +56,7 @@ function parseItem(job:FigiJob,item:unknown,evidence:FigiEvidence):FigiJobResult
  if(Array.isArray(o.data)){
   const records=o.data.map(r=>{
    if(!r||typeof r!=='object'||typeof (r as FigiRecord).figi!=='string')throw new OpenFigiError('invalid_schema','record');
+   for(const k of ['ticker','exchCode','compositeFIGI','securityType'] as const){const v=(r as Record<string,unknown>)[k];if(v!==undefined&&v!==null&&typeof v!=='string')throw new OpenFigiError('invalid_schema',`record.${k}`);}
    return r as FigiRecord;
   });
   return records.length?{job,status:'ok',records,evidence}:{job,status:'not_found',message:'empty data',evidence};
@@ -59,32 +66,24 @@ function parseItem(job:FigiJob,item:unknown,evidence:FigiEvidence):FigiJobResult
  throw new OpenFigiError('invalid_schema','job result');
 }
 
-/** One serialized pacer per (fetch, quota identity): every mapJobs call sharing them queues behind the same clock. */
-interface Pacer{last:number|null;tail:Promise<void>}
-const PACERS=new WeakMap<object,Map<string,Pacer>>();
-function pacerFor(deps:OpenFigiDeps):Pacer{
- let m=PACERS.get(deps.fetch);
- if(!m){m=new Map();PACERS.set(deps.fetch,m);}
+// Process-wide limiters keyed on quota identity only (key vs no key), not on the fetch function.
+const LIMITERS=new Map<string,FigiLimiter>();
+function limiterFor(deps:OpenFigiDeps):FigiLimiter{
+ if(deps.limiter)return deps.limiter;
  const id=deps.apiKey?`key:${deps.apiKey}`:'anon';
- let p=m.get(id);
- if(!p){p={last:null,tail:Promise.resolve()};m.set(id,p);}
- return p;
+ let l=LIMITERS.get(id);
+ if(!l){l=createFigiLimiter();LIMITERS.set(id,l);}
+ return l;
 }
-async function pace(p:Pacer,interval:number,now:()=>number,sleep:(ms:number)=>Promise<void>):Promise<void>{
- const prev=p.tail;let release!:()=>void;
- p.tail=new Promise<void>(r=>{release=r;});
- await prev;
- try{
-  if(p.last!==null){const wait=p.last+interval-now();if(wait>0)await sleep(wait);}
-  p.last=now();
- }finally{release();}
-}
+const NO_LIMIT:Budget={remainingMs:()=>Infinity,signal:new AbortController().signal};
 
 export async function mapJobs(jobs:readonly FigiJob[],deps:OpenFigiDeps):Promise<MapResult>{
  const {jobsPerRequest,minIntervalMs}=openFigiLimits(deps.apiKey);
- const sleep=deps.sleep??((ms:number)=>new Promise<void>(r=>setTimeout(r,ms)));
+ const wait=deps.sleep??abortableSleep;
  const now=deps.now??Date.now;
- const pacer=pacerFor(deps);
+ const budget=deps.budget??NO_LIMIT;
+ const reserveMs=deps.reserveMs??0;
+ const limiter=limiterFor(deps);
  const results:(FigiJobResult|null)[]=jobs.map(()=>null);
  const failures:FigiFailure[]=[];
  const headers:Record<string,string>={'Content-Type':'application/json'};
@@ -95,33 +94,65 @@ export async function mapJobs(jobs:readonly FigiJob[],deps:OpenFigiDeps):Promise
   try{JSON.parse(new TextDecoder().decode(bytes));}catch{json=false;}
   return deps.raw.put({kind:'openfigi',bytes,contentType:json?'application/json':'text/html',meta},deps.budget);
  };
+ const done=(exhausted:boolean):MapResult=>({results,exhausted,requests,failures});
+ /** false = the budget cannot afford the wait (caller reports exhausted). Aborts become OpenFigiError('budget_aborted'). */
+ const waitUntilUnblocked=async():Promise<boolean>=>{
+  const gap=limiter.blockedUntil-now();
+  if(gap<=0)return true;
+  if(budget.remainingMs()-gap<=reserveMs)return false;
+  try{await wait(gap,budget.signal);}catch{throw new OpenFigiError('budget_aborted');}
+  return true;
+ };
  /** The request is stored before it is sent; every received response is stored before anything else happens. */
- const send=async(body:string,reqSha:string):Promise<{res:Response|null;bytes:Uint8Array|null;sha:string|null}>=>{
-  await pace(pacer,minIntervalMs,now,sleep);
+ const send=async(body:string,reqSha:string):Promise<{res:Response|null;bytes:Uint8Array|null;sha:string|null}|'exhausted'>=>{
+  if(!(await waitUntilUnblocked()))return 'exhausted';
+  try{await limiter.pacer.admit({budget,reserveMs,now,sleep:wait,minIntervalMs});}
+  catch(e){
+   if(e instanceof PacerError)return e.code==='budget_exhausted'?'exhausted':(()=>{throw new OpenFigiError('budget_aborted');})();
+   throw e;
+  }
   requests++;
   let res:Response;
-  try{res=await deps.fetch(OPENFIGI_URL,{method:'POST',headers,body,signal:deps.budget?.signal});}
-  catch(e){if(deps.budget?.signal.aborted)throw e;failures.push({status:null,request_sha256:reqSha,response_sha256:null});return {res:null,bytes:null,sha:null};}
-  const bytes=new Uint8Array(await res.arrayBuffer());
+  try{res=await deps.fetch(OPENFIGI_URL,{method:'POST',headers,body,signal:budget.signal});}
+  catch(e){
+   if(budget.signal.aborted)throw new OpenFigiError('budget_aborted',e instanceof Error?e.name:undefined);
+   failures.push({status:null,request_sha256:reqSha,response_sha256:null});return {res:null,bytes:null,sha:null};
+  }
+  let bytes:Uint8Array;
+  try{bytes=new Uint8Array(await res.arrayBuffer());}
+  catch{
+   if(budget.signal.aborted)throw new OpenFigiError('budget_aborted');
+   failures.push({status:res.status,request_sha256:reqSha,response_sha256:null,error:'body_read_failed'});return {res:null,bytes:null,sha:null};
+  }
   const stored=await store(bytes,{role:'response',request_sha256:reqSha,http_status:res.status});
   if(!res.ok)failures.push({status:res.status,request_sha256:reqSha,response_sha256:stored.sha256});
   return {res,bytes,sha:stored.sha256};
  };
  const retryable=(r:Response|null)=>r===null||r.status===429||r.status>=500;
+ /** Every caller sharing the limiter backs off, not only this one. */
+ const backoff=()=>{limiter.blockedUntil=Math.max(limiter.blockedUntil,now()+BACKOFF_MS);};
  for(let start=0;start<jobs.length;start+=jobsPerRequest){
+  if(budget.signal.aborted)throw new OpenFigiError('budget_aborted');
   const chunk=jobs.slice(start,start+jobsPerRequest);
   const body=JSON.stringify(chunk);
   const req=await store(new TextEncoder().encode(body),{role:'request',jobs:chunk.length});
   let out=await send(body,req.sha256);
-  if(retryable(out.res)){await sleep(BACKOFF_MS);out=await send(body,req.sha256);}
-  if(out.res===null||retryable(out.res))return {results,exhausted:true,requests,failures};
-  if(!out.res.ok)throw new OpenFigiError('openfigi_http',String(out.res.status),failures[failures.length-1]);
+  if(out==='exhausted')return done(true);
+  if(retryable(out.res)){
+   if(budget.remainingMs()-BACKOFF_MS<=reserveMs)return done(true);
+   backoff();
+   out=await send(body,req.sha256);
+   if(out==='exhausted')return done(true);
+  }
+  if(retryable(out.res)){backoff();return done(true);}
+  const res=out.res!;
+  if(!res.ok)throw new OpenFigiError('openfigi_http',String(res.status),failures[failures.length-1]);
   let parsed:unknown;
-  try{parsed=JSON.parse(new TextDecoder().decode(out.bytes!));}catch{throw new OpenFigiError('invalid_schema','response is not JSON',{status:out.res.status,request_sha256:req.sha256,response_sha256:out.sha});}
-  if(!Array.isArray(parsed)||parsed.length!==chunk.length)throw new OpenFigiError('invalid_schema','response length',{status:out.res.status,request_sha256:req.sha256,response_sha256:out.sha});
+  try{parsed=JSON.parse(new TextDecoder().decode(out.bytes!));}catch{throw new OpenFigiError('invalid_schema','response is not JSON',{status:res.status,request_sha256:req.sha256,response_sha256:out.sha});}
+  if(!Array.isArray(parsed)||parsed.length!==chunk.length)throw new OpenFigiError('invalid_schema','response length',{status:res.status,request_sha256:req.sha256,response_sha256:out.sha});
   parsed.forEach((item,i)=>{results[start+i]=parseItem(chunk[i],item,{request_sha256:req.sha256,response_sha256:out.sha!,index:i});});
  }
- return {results,exhausted:false,requests,failures};
+ return done(false);
 }
 
 function keyed(keys:readonly string[],jobs:FigiJob[],out:MapResult,unsupported:string[]):MappedBy{
