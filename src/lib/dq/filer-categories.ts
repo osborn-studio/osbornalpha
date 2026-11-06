@@ -18,6 +18,7 @@ import type {RawStore} from './raw-store';
 import {CALENDAR_RULES_VERSION,fiscalYearOfPeriodEnd} from './calendar';
 import type {Acceleration,FilerCategoryRow} from './calendar';
 import {IXBRL_PARSER_VERSION,parseInlineXbrl} from './reconcile/ixbrl';
+import {filerClass,readLimited} from './reconcile/pair-us-ixbrl';
 import {recordReconciliation} from './reconcile/record';
 import {primaryDocumentUrl} from '../research/ingest/collectors/edgar';
 import {DEFAULT_USER_AGENT} from '../research/ingest/collectors/shared';
@@ -39,12 +40,9 @@ export function submissionsView(s:SubmissionsSnapshot):SubmissionsView{
  * reporting status is only ever `true` (the words appear) or null (unknown) — never inferred false.
  */
 export function parseFilerCategory(raw:string):{acceleration:Acceleration;smaller_reporting:boolean|null}|null{
- const t=raw.replace(/\s+/g,' ').trim().toLowerCase();
- const src=t.includes('smaller reporting')?true:null;
- if(/non-?\s?accelerated/.test(t))return {acceleration:'non_accelerated',smaller_reporting:src};
- if(t.includes('large accelerated'))return {acceleration:'large_accelerated',smaller_reporting:src};
- if(t.includes('accelerated filer'))return {acceleration:'accelerated',smaller_reporting:src};
- return null;
+ const acceleration=filerClass(raw.replace(/\s+/g,' ').trim());   // the one classifier (pair-us-ixbrl.ts), shared with the reconcile pair
+ if(acceleration===null)return null;
+ return {acceleration,smaller_reporting:raw.toLowerCase().includes('smaller reporting')?true:null};
 }
 const norm=(s:string)=>s.replace(/\s+/g,' ').trim().toLowerCase();
 /** Latest n original 10-Ks by filing date (amendments never: a 10-K/A cover restates, it does not determine status). */
@@ -73,10 +71,12 @@ export async function fetchSecDocument(url:string,budget:Budget,opts:DocumentFet
  try{res=await (opts.fetch??fetch)(url,{headers:{'User-Agent':opts.userAgent??process.env.EDGAR_USER_AGENT??DEFAULT_USER_AGENT,Accept:'text/html'},signal:AbortSignal.any([budget.signal,AbortSignal.timeout(timeoutMs)])});}
  catch{throw new FilerCategoryError('document_unavailable','network');}
  if(!res.ok)throw new FilerCategoryError('document_unavailable',`http_${res.status}`);
- if(Number(res.headers.get('content-length')??'0')>MAX_DOCUMENT_BYTES)throw new FilerCategoryError('document_too_large');
- const bytes=new Uint8Array(await res.arrayBuffer());
- if(bytes.byteLength>MAX_DOCUMENT_BYTES)throw new FilerCategoryError('document_too_large');
- return bytes;
+ const cl=res.headers.get('content-length');
+ if(cl!==null&&/^\d+$/.test(cl)&&Number(cl)>MAX_DOCUMENT_BYTES){await res.body?.cancel().catch(()=>undefined);throw new FilerCategoryError('document_too_large');}
+ let got:{bytes:Uint8Array;exceeded:boolean};
+ try{got=await readLimited(res,MAX_DOCUMENT_BYTES);}catch{throw new FilerCategoryError('document_unavailable','network');}   // capped while streaming; no unbounded arrayBuffer()
+ if(got.exceeded)throw new FilerCategoryError('document_too_large');
+ return got.bytes;
 }
 
 export interface FilerCategoryDeps{
@@ -97,8 +97,11 @@ export async function syncFilerCategories(deps:FilerCategoryDeps,opts:FilerCateg
  const counts=emptyCounts();const errors:BatchError[]=[];const rows:FilerCategoryRow[]=[];const recs:FilerCategoryReceipt['reconciliations']=[];
  const skipped:Record<string,number>={};const skip=(r:string)=>{skipped[r]=(skipped[r]??0)+1;};
  const batchId=opts.dryRun?null:(await startBatch(deps.tables,{producer:'filer-categories',dataset:DATASETS.filerCategories,toolVersions:{parser:IXBRL_PARSER_VERSION,rules:CALENDAR_RULES_VERSION},codeVersion:deps.codeVersion??undefined,triggeredBy:opts.triggeredBy})).batchId;
+ let processed=0,incomplete=false,fatal:unknown=null;
+ try{
  for(const m of members){
-  if(deps.budget.remainingMs()<MIN_ISSUER_MS){errors.push({code:'deadline_hit',message:JSON.stringify({not_started:members.length-members.indexOf(m)})});break;}
+  if(deps.budget.remainingMs()<MIN_ISSUER_MS){incomplete=true;errors.push({code:'deadline_hit',message:JSON.stringify({not_started:members.length-processed})});break;}
+  processed++;
   let view:SubmissionsView;
   try{view=await deps.submissions(m.fetch_key,deps.budget);}
   catch(e){counts.fetched++;counts.failed++;errors.push({code:'sec_unavailable',key:m.issuer_id,message:(e as Error).message.slice(0,200)});continue;}
@@ -111,31 +114,41 @@ export async function syncFilerCategories(deps:FilerCategoryDeps,opts:FilerCateg
    catch(err){fail(err instanceof FilerCategoryError?err.code:'document_unavailable');continue;}
    try{sha256=(await deps.raw.put({kind:'sec-document',bytes,contentType:'text/html',meta:{cik:view.cik10,accession:e.accessionNumber,document:e.primaryDocument}},deps.budget)).sha256;}
    catch{fail('raw_upload_failed');continue;}   // no evidence in the bucket → no row depends on it (spec §3.1 bucket rule)
-   const cover=coverOf(new TextDecoder().decode(bytes));
-   if(i===0&&view.category!==null&&cover.category!==null){
-    const passed=norm(view.category)===norm(cover.category);
-    recs.push({natural_key:`${view.cik10}:${e.accessionNumber}`,passed});
-    if(batchId)await recordReconciliation(deps.tables,{pair:'sec.filer_category',batch_id:batchId,natural_key:`${view.cik10}:${e.accessionNumber}`,kind:'text',outcome:'compared',passed,
-     left_value:null,right_value:null,abs_diff:null,rel_diff:null,tolerance:'0',left_source:'sec_submissions.category',right_source:'ixbrl_dei.EntityFilerCategory',
-     detail:{left_text:view.category,right_text:cover.category,left:{sha256:view.sha256},right:{document:e.primaryDocument,sha256}},action:'record'});
-   }
+   // One bad document never escapes the loop: a parse or write failure is that document's failure.
+   let cover:ReturnType<typeof coverOf>;
+   try{cover=coverOf(new TextDecoder().decode(bytes));}catch{fail('parse_error');continue;}
    const parsed=cover.category===null?null:parseFilerCategory(cover.category);
-   if(!parsed){skip(cover.category===null?'no_category':'category_unusable');continue;}
    const periodEnd=e.reportDate&&ISO.test(e.reportDate)?e.reportDate:cover.periodEnd;
-   if(!periodEnd){skip('no_period_end');continue;}
-   const fiscalYear=fiscalYearOfPeriodEnd(periodEnd);
-   if(seen.has(fiscalYear)){skip('fiscal_year_duplicate');continue;}   // a newer 10-K already covers this fiscal year
-   seen.add(fiscalYear);
-   const row:FilerCategoryRow={issuer_id:m.issuer_id,fiscal_year:fiscalYear,acceleration:parsed.acceleration,smaller_reporting:parsed.smaller_reporting,category_raw:cover.category!,source:'ixbrl_dei',accession:e.accessionNumber,evidence_sha256:sha256,as_of:today};
-   rows.push(row);
-   if(batchId)await deps.tables.upsert('issuer_filer_categories',{...row},'issuer_id,fiscal_year');
-   counts.fetched++;counts.inserted++;
+   const fiscalYear=parsed&&periodEnd?fiscalYearOfPeriodEnd(periodEnd):null;
+   try{
+    if(i===0&&view.category!==null&&cover.category!==null){
+     const passed=norm(view.category)===norm(cover.category);
+     if(batchId)await recordReconciliation(deps.tables,{pair:'sec.filer_category',batch_id:batchId,natural_key:`${view.cik10}:${e.accessionNumber}`,kind:'text',outcome:'compared',passed,
+      left_value:null,right_value:null,abs_diff:null,rel_diff:null,tolerance:'0',left_source:'sec_submissions.category',right_source:'ixbrl_dei.EntityFilerCategory',
+      detail:{left_text:view.category,right_text:cover.category,left:{sha256:view.sha256},right:{document:e.primaryDocument,sha256}},action:'record'});
+     recs.push({natural_key:`${view.cik10}:${e.accessionNumber}`,passed});
+    }
+    if(!parsed){skip(cover.category===null?'no_category':'category_unusable');continue;}
+    if(!periodEnd||fiscalYear===null){skip('no_period_end');continue;}
+    if(seen.has(fiscalYear)){skip('fiscal_year_duplicate');continue;}   // a newer 10-K already covers this fiscal year
+    const row:FilerCategoryRow={issuer_id:m.issuer_id,fiscal_year:fiscalYear,acceleration:parsed.acceleration,smaller_reporting:parsed.smaller_reporting,category_raw:cover.category!,source:'ixbrl_dei',accession:e.accessionNumber,evidence_sha256:sha256,as_of:today};
+    // Ordering limitation: issuer_filer_categories has no filing-date/accepted_at column (only as_of = run date) and TableClient.update
+    // matches on equality only, so a stale concurrent worker could overwrite a newer 10-K's row for the same fiscal year.
+    // Runs are serialised by cadence (event/script); a conditional write needs a schema change (reported, not done here).
+    if(batchId)await deps.tables.upsert('issuer_filer_categories',{...row},'issuer_id,fiscal_year');
+    seen.add(fiscalYear);rows.push(row);
+    counts.fetched++;counts.inserted++;
+   }catch{fail('write_failed');}
   }
  }
+ }catch(e){fatal=e;errors.push({code:'unexpected',message:(e instanceof Error?e.message:String(e)).slice(0,200)});counts.failed++;}
  if(Object.keys(skipped).length)errors.push({code:'skipped_summary',key:'filer-categories',message:JSON.stringify(skipped)});
  if(!batchId)return {batchId:null,status:'dry_run',counts,errors,rows,reconciliations:recs};
+ // The receipt is always finalised once the batch exists (finishBatch + one freshness attempt), also after an unexpected error.
  const status=await finishBatch(deps.tables,batchId,{counts,errors},deps.now());
  const cadence=DQ_DATASET_INVENTORY.find(d=>d.dataset===DATASETS.filerCategories)!.cadence;
- await recordAttempt(deps.tables,DATASETS.filerCategories,{ok:status==='success',cadence,now:deps.now(),detail:{batch_id:batchId,rows:rows.length,issuers:members.length}});
+ // Fresh only when every selected issuer was processed and nothing failed (incomplete coverage must not advance last_ok_at).
+ const ok=fatal===null&&!incomplete&&status==='success';
+ await recordAttempt(deps.tables,DATASETS.filerCategories,{ok,cadence,now:deps.now(),detail:{batch_id:batchId,rows:rows.length,issuers:members.length,processed,incomplete}});
  return {batchId,status,counts,errors,rows,reconciliations:recs};
 }

@@ -54,7 +54,7 @@ const storeOf=(ctx:PairContext):RawStore=>runContextOf(ctx).dryRun?memoryRawStor
  * Reads at most `limit` bytes of the body while streaming; past the limit the stream is cancelled and
  * exceeded=true (bytes then hold the first `limit` bytes). A response without a stream falls back to arrayBuffer.
  */
-async function readLimited(res:Response,limit:number):Promise<{bytes:Uint8Array;exceeded:boolean}>{
+export async function readLimited(res:Response,limit:number):Promise<{bytes:Uint8Array;exceeded:boolean}>{
  if(!res.body){const all=new Uint8Array(await res.arrayBuffer());return all.byteLength>limit?{bytes:all.slice(0,limit),exceeded:true}:{bytes:all,exceeded:false};}
  const reader=res.body.getReader();const chunks:Uint8Array[]=[];let n=0;
  for(;;){

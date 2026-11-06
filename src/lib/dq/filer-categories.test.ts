@@ -7,6 +7,8 @@ import {coverOf,latestTenKs,parseFilerCategory,submissionsView,syncFilerCategori
 import type {SubmissionsView} from './filer-categories';
 import {memoryRawStore} from './raw-store';
 import type {Budget,FactsDb,ScopeRow} from '../facts/types';
+import {fetchSecDocument,FilerCategoryError} from './filer-categories';
+import {secPacer} from '../facts/providers/shared';
 
 const ISSUER='00000000-0000-4000-8000-0000000000f1';
 const budget=():Budget=>({remainingMs:()=>300_000,signal:new AbortController().signal});
@@ -117,5 +119,74 @@ describe('syncFilerCategories',()=>{
   expect(submissionsView({cik:'1',fetchedAt:'2026-11-05T00:00:00.000Z',main:{name:'main',sha256:'s',path:'sec-submissions/s.json'},pages:[],parsed,complete:true}))
    .toEqual({cik10:'0000000001',sha256:'s',category:'Accelerated filer',fiscalYearEnd:'0630',entries:[{accessionNumber:'a',filingDate:'2025-08-01',reportDate:null,form:'10-K',primaryDocument:'a.htm',isInlineXBRL:true},
     {accessionNumber:'b',filingDate:'2025-05-01',reportDate:null,form:'10-Q',primaryDocument:'',isInlineXBRL:false}]});
+ });
+});
+
+describe('review fixes: isolation, freshness, caps',()=>{
+ const scope:ScopeRow={issuer_id:ISSUER,market:'US',reasons:['t'],priority:10,fetch_key:'0000000001',next_due_at:'2026-01-01T00:00:00Z',lease_until:null,lease_batch_id:null,state_rev:0,last_attempt_at:null,last_success_at:null,last_batch_id:null,last_status:null};
+ const v=(entries:SubmissionsView['entries']):SubmissionsView=>({cik10:'0000000001',sha256:'s',category:null,fiscalYearEnd:'1231',entries});
+ const mk=(docs:Record<string,string>,view:SubmissionsView,b:Budget=budget())=>{
+  const tables=memoryTableClient({issuer_filer_categories:['issuer_id','fiscal_year'],dq_freshness:['dataset'],ingest_batches:['batch_id']});
+  const deps={tables,raw:memoryRawStore(),db:{scopeAll:async()=>[scope]} as Pick<FactsDb,'scopeAll'>,submissions:async()=>view,
+   fetchDocument:async(url:string)=>{const d=docs[url.split('/').at(-1)!];if(d===undefined)throw new Error('404');return new TextEncoder().encode(d);},
+   now:()=>new Date('2026-11-05T03:00:00Z'),budget:b,codeVersion:'c'.repeat(40)};
+  return {deps,tables};
+ };
+ const opts={limit:25,dryRun:false,triggeredBy:'script' as const};
+ it('a malformed document fails alone; the next valid one lands and the batch is finished',async()=>{
+  const {deps,tables}=mk({'a1.htm':'<html xmlns:ix="http://www.xbrl.org/2013/inlineXBRL"><ix:nonNumeric name="dei:EntityFilerCategory"','a2.htm':cover('Accelerated Filer','2023-12-31')},v([entry('a1','2025-02-20','2024-12-31'),entry('a2','2024-02-20','2023-12-31')]));
+  await syncFilerCategories(deps,opts);
+  expect(tables.rows('issuer_filer_categories').map(s=>s.accession)).toEqual(['a2']);
+  expect(tables.rows('ingest_batches')[0].finished_at).toBeTruthy();
+  expect(tables.rows('dq_freshness')).toHaveLength(1);
+ });
+ it('a failing write is that document failure and the batch still finishes',async()=>{
+  const {deps,tables}=mk({'a1.htm':cover('Accelerated Filer')},v([entry('a1','2025-02-20','2024-12-31')]));
+  const up=tables.upsert.bind(tables);tables.upsert=async(t,row,k)=>{if(t==='issuer_filer_categories')throw new Error('db down');return up(t,row,k);};
+  const r=await syncFilerCategories(deps,opts);
+  expect(r.counts.failed).toBe(1);expect(r.errors).toContainEqual({code:'write_failed',key:`${ISSUER}:a1`});
+  expect(tables.rows('ingest_batches')[0].finished_at).toBeTruthy();
+  expect(tables.rows('dq_freshness')[0].status).not.toBe('fresh');
+ });
+ it('zero budget processes nobody and does not mark the dataset fresh',async()=>{
+  const {deps,tables}=mk({},v([]),{remainingMs:()=>0,signal:new AbortController().signal});
+  const r=await syncFilerCategories(deps,opts);
+  expect(r.errors[0].code).toBe('deadline_hit');
+  expect(tables.rows('dq_freshness').every(f=>f.status!=='fresh')).toBe(true);
+ });
+ it('stores smaller_reporting:true when the cover says so',async()=>{
+  const {deps,tables}=mk({'a1.htm':cover('Non-accelerated Filer Smaller Reporting Company')},v([entry('a1','2025-02-20','2024-12-31')]));
+  await syncFilerCategories(deps,opts);
+  expect(tables.rows('issuer_filer_categories')[0]).toMatchObject({acceleration:'non_accelerated',smaller_reporting:true});
+ });
+ it('two 10-Ks of the same fiscal year: the newer one wins, the older is skipped',async()=>{
+  const {deps,tables}=mk({'n.htm':cover('Accelerated Filer','2024-12-31'),'o.htm':cover('Large Accelerated Filer','2024-12-31')},v([entry('o','2025-01-10','2024-12-31'),entry('n','2025-02-20','2024-12-31')]));
+  const r=await syncFilerCategories(deps,opts);
+  expect(tables.rows('issuer_filer_categories').map(s=>s.accession)).toEqual(['n']);
+  expect(r.errors).toContainEqual({code:'skipped_summary',key:'filer-categories',message:JSON.stringify({fiscal_year_duplicate:1})});
+ });
+});
+
+describe('fetchSecDocument',()=>{
+ const b=budget();
+ const run=(f:()=>Response)=>{secPacer.reset();return fetchSecDocument('https://www.sec.gov/x.htm',b,{fetch:(async()=>f()) as typeof fetch});};
+ it('returns the bytes',async()=>{expect(new TextDecoder().decode(await run(()=>new Response('hello')))).toBe('hello');});
+ it('rejects a declared length over the cap; a non-numeric content-length is not trusted',async()=>{
+  await expect(run(()=>new Response('x',{headers:{'content-length':String(60*1024*1024)}}))).rejects.toMatchObject({code:'document_too_large'});
+  expect(new TextDecoder().decode(await run(()=>new Response('ok',{headers:{'content-length':'abc'}})))).toBe('ok');
+ });
+ it('enforces the cap while streaming when no length is declared',async()=>{
+  const chunk=new Uint8Array(8*1024*1024);let sent=0;
+  const stream=new ReadableStream<Uint8Array>({pull(c){if(sent++>=20)c.close();else c.enqueue(chunk);}});
+  await expect(run(()=>new Response(stream))).rejects.toMatchObject({code:'document_too_large'});
+  expect(sent).toBeLessThan(20);
+ });
+ it('maps HTTP errors and network failures to document_unavailable',async()=>{
+  await expect(run(()=>new Response('no',{status:404}))).rejects.toMatchObject({code:'document_unavailable',message:'http_404'});
+  await expect(run(()=>{throw new Error('boom');})).rejects.toBeInstanceOf(FilerCategoryError);
+ });
+ it('a rejected pacer admission is document_unavailable',async()=>{
+  secPacer.reset();
+  await expect(fetchSecDocument('https://www.sec.gov/x.htm',{remainingMs:()=>1000,signal:new AbortController().signal},{fetch:(async()=>new Response('x')) as typeof fetch})).rejects.toMatchObject({code:'document_unavailable',message:'budget_exhausted'});
  });
 });
