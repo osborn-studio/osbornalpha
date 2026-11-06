@@ -38,7 +38,7 @@
 ## 文件结构
 
 ```
-supabase/migrations/20261107090000_identifiers_and_dq.sql   issuer_securities 方法列、claims 扩展、dq_reconciliations 扩展、对账周期/游标、日历遍、日历/档案/类别表、weekly、reconcile-raw 桶（Task 1a）；resolve_identifier_claim、replace_filing_expectations 与遍函数、拓扑守卫触发器（insert 与 update，Task 1b）
+supabase/migrations/20261107090000_identifiers_and_dq.sql   issuer_securities 方法列、claims 扩展、dq_reconciliations 扩展、对账周期/游标、日历遍、日历/档案/类别表、weekly、reconcile-raw 桶（Task 1a）；resolve_identifier_claim、replace_filing_expectations 与遍函数、拓扑守卫触发器（insert 与 update）、行锁 jsonb 补丁函数 append_claim_evidence / patch_quarantine_detail（Task 1b）
 supabase/migrations/20261107091000_facts_extensions.sql     filings 受理列、financial_metrics.based_on_lineage、fact_promote_rows 谓词、read_filing_facts、read_facts_lineage（read_facts 改为包装）、replace_financial_metrics_lineage（旧函数改包装）、set_filing_acceptance、adopt_candidate、restore_reconciled、resolve_lineage_conflict、apply_reconcile_result、游标三函数、set_merge、set_dissolved（Task 8a/8b/8c）
 supabase/migrations.lock.json                               追加 2 条（Task 1b、8c）
 src/lib/supabase/database.types.ts                          新表 Row/Insert/Update + 既有表新列（Task 1a、8a）
@@ -53,7 +53,8 @@ src/lib/dq/raw-store.ts              RawStore / supabaseRawStore / memoryRawStor
 src/lib/entities/types.ts            ValidFromMethod / ValidToMethod / ClaimIdType += ticker / ClaimOp / EvidenceKind / ClaimTarget / ClaimDetail（Task 2b）
 src/lib/entities/provenance.ts       sanitizeProvenance / PROVENANCE_KEYS / ProvenanceError（Task 2b）
 src/lib/entities/securities.ts       attachSecurity 写方法列 + 经 sanitizeProvenance（Task 2b）
-src/lib/entities/claims.ts           fileClaim(claim/1) / validateClaimDetail / claimTargetKey（Task 2b；调用方同步）
+src/lib/entities/claims.ts           fileClaim(claim/1) / validateClaimDetail / claimTargetKey（Task 2b；调用方同步；追加证据经 append_claim_evidence）
+src/lib/db/table-client.ts、memory-table-client.ts、pg-table-client.ts   TableClient.rpc? / callRpc；内存实现模拟迁移一两个补丁函数（Task 2b）
 src/lib/entities/identifiers/gleif.ts        parseGleifCsv / subsetForLeis（Task 3a）
 src/lib/entities/identifiers/openfigi.ts     mapIsins / mapTickers / groupFigiResults / EXCH_MAP / EXCH_MAP_VERSION / exchCodeFor（Task 3b）
 src/lib/entities/identifiers/hkex-list.ts    parseHkexList / HKEX_LIST_FILES（Task 3a）
@@ -148,7 +149,7 @@ export interface ClaimDetail{schema:'claim/1';evidence_kind:EvidenceKind;target:
 // IssuerSecurityInput 增加：valid_from_method?:ValidFromMethod（缺省：source==='curated' ? 'curated' : 'first_observed'）；valid_to_method?:ValidToMethod|null（valid_to 非空时必填）
 ```
 
-`src/lib/entities/claims.ts`：`ClaimInput{issuer_id;id_type:ClaimIdType;value:string;source:string;op:Exclude<ClaimOp,'legacy'>;detail:ClaimDetail}`；`fileClaim(client,c):Promise<boolean>`（同 `(issuer_id,id_type,value,op,target_key)` pending 已存在 → 守卫更新追加 `detail.sources[]`，返回 false）；`validateClaimDetail(op,idType,detail):{ok:true}|{ok:false;error:string}`；`claimTargetKey(op,target):string`（= `op + ':' + (issuer_id | issuer_id|ticker|valid_from)`）。`src/lib/entities/provenance.ts`：`PROVENANCE_KEYS=['isin','figi','valid_from','valid_to','pending_change'] as const`、`sanitizeProvenance(p):Record<string,unknown>`（未知键、含 URL token/私密键/用户 UUID 的值 → `throw new ProvenanceError(code)`）。
+`src/lib/entities/claims.ts`：`ClaimInput{issuer_id;id_type:ClaimIdType;value:string;source:string;op:Exclude<ClaimOp,'legacy'>;detail:ClaimDetail}`；`fileClaim(client,c):Promise<boolean>`（同 `(issuer_id,id_type,value,op,target_key)` pending 已存在 → 经迁移一 `append_claim_evidence`（行锁、去重、只 `jsonb_set` `detail.sources`；`TableClient.rpc` 经 `callRpc`）追加证据，返回 false；并发追加不丢证据，计划审计 P3）；`validateClaimDetail(op,idType,detail):{ok:true}|{ok:false;error:string}`；`claimTargetKey(op,target):string`（= `op + ':' + (issuer_id | issuer_id|ticker|valid_from)`）。`src/lib/entities/provenance.ts`：`PROVENANCE_KEYS=['isin','figi','valid_from','valid_to','pending_change'] as const`、`sanitizeProvenance(p):Record<string,unknown>`（未知键、含 URL token/私密键/用户 UUID 的值 → `throw new ProvenanceError(code)`）。
 
 ### C3 · 对账（`src/lib/dq/reconcile/types.ts`：Task 2a 前两行 → Task 9a 至 `MemberCounts` → Task 13a 其余）
 
@@ -224,7 +225,7 @@ export type CalendarFiling=FilingRow&{run_status:RunStatus;accepted_at:string|nu
 
 （`types.ts` 从 `../dq/reconcile/types` 只 `import type`，避免运行时循环。）
 
-`src/lib/dq/facts-resolver.ts`（Task 11）：`ResolveFactsInput.inputsHashNow?:InputsHashNow`（`type InputsHashNow=(item:Row)=>Promise<string|null>`）。未注入 → `reconcile_mismatch` 接受答 409 `{error:'not_passing', detail:{restore_note:'reconcile_wiring_missing'}}`；注入但返回 null → `restore_note:'inputs_unavailable'`；永不提升。Task 14c 的 `src/lib/dq/reconcile/deps.ts::restoreInputsHashNow(admin?)` 是唯一的生产实现，注入隔离路由（14c）与看板 `restorable`（19a）。
+`src/lib/dq/facts-resolver.ts`（Task 11）：`ResolveFactsInput.inputsHashNow?:InputsHashNow`（`type InputsHashNow=(item:Row)=>Promise<string|InputsUnavailable>`，`InputsUnavailable={unavailable:'inputs_unavailable'|'current_evidence_unavailable'}`）。未注入 → `reconcile_mismatch` 接受答 409 `{error:'not_passing', detail:{restore_note:'reconcile_wiring_missing'}}`；注入但答 `{unavailable}` → `restore_note` 即该值（`current_evidence_unavailable` = 该对的**当前**右侧证据取不到，计划审计 P2）；永不提升。Task 14c 的 `src/lib/dq/reconcile/deps.ts::restoreInputsHashNow(admin?)` 是唯一的生产实现，注入隔离路由（14c）与看板 `restorable`（19a）。
 
 ### C5 · SQL 函数签名与错误码（迁移与 TS 适配器之间的契约）
 
@@ -237,6 +238,8 @@ export type CalendarFiling=FilingRow&{run_status:RunStatus;accepted_at:string|nu
 | `claim_calendar_pass`（1） | `(p_market text, p_batch uuid) returns jsonb` → `{market, pass_id, batch_id}` 或 null；创建以 `pg_advisory_xact_lock(hashtext('dq_calendar_pass:'\|\|p_market))` 串行化 | `invalid_market` `invalid_batch`（22023） |
 | `fail_calendar_member`（1） | `(p_pass_token jsonb, p_issuer uuid, p_error text) returns void` | `fence_failed` `member_not_claimable` |
 | `finish_calendar_pass`（1） | `(p_pass_token jsonb) returns text`（终态） | `fence_failed` `pass_incomplete` |
+| `append_claim_evidence`（1） | `(p_issuer uuid, p_id_type text, p_value text, p_op text, p_target_key text, p_evidence jsonb) returns text` → `'appended'\|'duplicate'\|'not_found'`；`for update` 锁住五列键的 pending 行，与 `detail.evidence`/`detail.sources[]` 按 `source + evidence_sha256` 去重，只 `jsonb_set(detail,'{sources}',…)`；TS 包装 `claims.ts::appendEvidence` → `callRpc`（Task 2b；计划审计 P3） | `invalid_evidence`（22023） |
+| `patch_quarantine_detail`（1） | `(p_id uuid, p_key text, p_value jsonb) returns boolean`（项不存在 → false）；`for update` 锁住项后 `detail = detail \|\| jsonb_build_object(p_key, p_value)`，只允许 `p_key ∈ {hook, audit_written}`；TS 包装 `quarantine.ts::patchQuarantineDetail`（Task 11；`facts-resolver.ts::writeHook/markAudited`、`run.ts` 钩子写入都经它；计划审计 P4） | `invalid_detail_key`（22023） |
 | 触发器 `issuers_topology_guard`（1） | `before insert or update of status, merged_into on issuers`：update 改变拓扑、或 insert 时 `status<>'active'` / `merged_into is not null`，且 `entities.allow_topology_write` 不为 `on` → 拒绝（接口对齐记录 #7） | `topology_write_forbidden`（23514） |
 | `set_filing_acceptance`（2） | `(p_filing uuid, p_accepted timestamptz, p_source text) returns boolean` | `acceptance_conflict` |
 | `read_filing_facts`（2） | `(p_filing uuid, p_include_non_ok boolean) returns jsonb` → `{rows:[…+run_status]}` | — |
@@ -348,7 +351,7 @@ export function rollForward(iso:string):string;   // Rule 0-3 顺延；SEC_HOLID
 
 | # | 问题（来源 Part） | 决定 | 改动位置（Task/Step） |
 |---|---|---|---|
-| 1 | 恢复所需的当前输入哈希与 `sec.filing_date_vs_submissions` 记录器都晚于使用方落地（C7、D1） | 注入式：`ResolveFactsInput.inputsHashNow?:(item:Row)=>Promise<string\|null>`（类型 `InputsHashNow`，替代 Part C 原稿的 `inputsHashOf` 与 `restore_unavailable` outcome）。未注入 → `{outcome:'conflict',code:'not_passing',restoreNote:'reconcile_wiring_missing'}`（HTTP 409，永不提升）；返回 null → `restoreNote:'inputs_unavailable'`。Task 14c 新增 `reconcile/deps.ts::restoreInputsHashNow(admin?)`（包装 14a `pairs.ts::inputsHashNow`，`pair_not_registered/left_fact_missing/no_latest_result` → null，其余重抛），并修改 Task 11 的隔离路由与测试注入它。Task 12 的 `AcceptanceDeps.recordDateMismatch?` 保持可选；Task 14c 在 `src/lib/facts/deps.ts::productionSyncDeps`（`batch_id:null`）与 `scripts/facts/enrich-acceptance.ts`（仅 `--apply`，`batch_id`=该批次）接上 `recordReconciliation(…, pair:DATE_MISMATCH_PAIR)` | Task 11 正文首段、Step 1 用例、`facts-resolver.ts` 类型与 `restore()`、Step 7 路由与路由测试；Task 14c Files、Step 1 `deps.test.ts`、Step 3 `deps.ts`、新增 Step 3b、Step 4/6 |
+| 1 | 恢复所需的当前输入哈希与 `sec.filing_date_vs_submissions` 记录器都晚于使用方落地（C7、D1） | 注入式：`ResolveFactsInput.inputsHashNow?:(item:Row)=>Promise<string\|InputsUnavailable>`（类型 `InputsHashNow`，替代 Part C 原稿的 `inputsHashOf` 与 `restore_unavailable` outcome）。未注入 → `{outcome:'conflict',code:'not_passing',restoreNote:'reconcile_wiring_missing'}`（HTTP 409，永不提升）；答 `{unavailable}` → `restoreNote` = `'inputs_unavailable'` 或 `'current_evidence_unavailable'`（计划审计 P2）。Task 14c 新增 `reconcile/deps.ts::restoreInputsHashNow(admin?)`（包装 14a `pairs.ts::inputsHashNow`，`pair_not_registered/left_fact_missing/no_latest_result` → `{unavailable:'inputs_unavailable'}`，`current_evidence_unavailable` → `{unavailable:'current_evidence_unavailable'}`，其余重抛），并修改 Task 11 的隔离路由与测试注入它。Task 12 的 `AcceptanceDeps.recordDateMismatch?` 保持可选；Task 14c 在 `src/lib/facts/deps.ts::productionSyncDeps`（`batch_id:null`）与 `scripts/facts/enrich-acceptance.ts`（仅 `--apply`，`batch_id`=该批次）接上 `recordReconciliation(…, pair:DATE_MISMATCH_PAIR)` | Task 11 正文首段、Step 1 用例、`facts-resolver.ts` 类型与 `restore()`、Step 7 路由与路由测试；Task 14c Files、Step 1 `deps.test.ts`、Step 3 `deps.ts`、新增 Step 3b、Step 4/6 |
 | 2 | C3 类型在 Task 9 已被 `FactsDb` 需要，而骨架让 Task 13 才落地（C1） | Task 9a 逐字追加 `CYCLE_PAIR_IDS`、`CyclePairId`、`ReconcileKind`、`ReconcileOutcome`、`ReconcileAction`、`Fence`、`ReconcileResultInput`、`ApplyReconcileOutcome`、`MemberCounts`；Task 13a 只改 import 行并追加 `RECONCILE_OUTCOMES`、`CycleStatus`、`CursorState`、`MAX_CURSOR_ATTEMPTS`、`ExpectedKey`、`MemberPlan`、`PairContext`、`ReconcilePair`，不得重复声明（13a 加 grep 计数核对 = 9） | 骨架 C1 注、C3 标题；Task 9a Step 3；Task 13a Files 与 types.ts 段 |
 | 3 | `set_merge` 占位 scope 行 `fetch_key=''` 违反落地 1–32 字符约束（C2） | 占位行 `fetch_key='topology'`、`priority=0`、`reasons='[]'`，`on conflict (issuer_id, market) do nothing`，从不覆盖已有行（规格 T12） | Task 8a `fact_topology_lock`（原稿已如此）；骨架 C5 `set_merge` 行 |
 | 4 | 日历遍测试锁两处不同（A8 用 `hashtext('test:dq_calendar_pass')`，E7 用 `724311001`） | 一个登记表：SQL 函数用 `pg_advisory_xact_lock(hashtext('dq_calendar_pass:'\|\|market))`（规格 U1）；测试串行化锁 `CALENDAR_TEST_LOCK = 724311001`（会话级），Part A 的 `withCalendarLock` 与 Part E 的 `calendar.integration.test.ts` 同名同值 | 骨架"仓库约定"新增 Advisory lock 登记；Task 1a `withCalendarLock`；Task 18b 原稿已用该常量 |
@@ -359,7 +362,7 @@ export function rollForward(iso:string):string;   // Rule 0-3 顺延；SEC_HOLID
 | 9 | 两个路由的 409 体不一致（B11、E11） | 统一为至少 `{error:<code>, id}`：声明路由 `{id, error}`；隔离路由的计划三拒绝 `{id, outcome, error:<code>, detail?:{restore_note}}`（落地计划二的 `{id, outcome}` 409 不变，避免改落地测试）。`issuer_not_active` 归 409；`claim_not_found`（1b 的 P0002）→ 404 | Task 11 Step 7 路由与路由测试；Task 7b 路由加 `claim_not_found`；Task 19b 客户端 `post()` 读 `detail.restore_note ?? error ?? outcome`，200 读 `restore.restore_note` |
 | 10 | `lineage_conflict` 的 `payload.values` 缺 `fact_id`，自然键格式（C8、E12） | `values:[{fact_id, issuer_id, filing, value}]`；`natural_key=<T>:<factKey(K)>:<available_date>`（7 段）。Part D 的自然键函数改名 `lineageNaturalKey`（与 Task 9a `facts/db.ts::lineageKey(LineageRev[])` 区分） | Task 14a `pair-lineage.ts`（values 原稿已带 `fact_id`；改名）；骨架 C3 末段 |
 | 11 | CN 日历 cron 是否受 `FACTS_CN_ENABLED` 门控（E13） | 不门控（只读法定节点与上游）；未核实的 CN 上游保持 `upstream_lookup='unavailable'` → `unknown_upstream`（规格 T15）。`vercel.json` 有 `filing-calendar?market=US` 与 `?market=CN`；CN **对账** cron 不加 | Task 18b（原稿）；骨架文件结构 `vercel.json` 行 |
-| 12 | Task 19b 画布与三个开放问题 | 画布 https://claude.ai/artifact/YM8CqAEWFpz1LZFnkfT3Y1（8 个 artboard）。(a) `GET /api/admin/dq` 对每个 `reconcile_mismatch` 隔离行返回服务器计算的 `restorable`（`latest_result.passed && latest_result.inputs_hash === inputsHashNow(row)`），`loadDqDashboard(…, opts?:{inputsHashNow})`、`restorableOf`，路由注入 `restoreInputsHashNow`；页面 `quarantineControl` 只按 `restorable` 启用恢复，新原因 `inputs_changed`（i18n 两语）；(b) `evidence_only` 修订表单的 op 下拉仅 `backdate_window`/`close_security`；(c) 红色沿用现有 `text-danger`（#e11d48），不新增颜色，对比度在实施日志记录 | Task 19a Files、依赖段、`dashboard-view.ts` 与测试、Step 5 第 6/7 点、提交；Task 19b Step 1、i18n（`quarantine.restore.inputs_changed`、`conflicts.reconcile_wiring_missing/inputs_unavailable`）、客户端 `post()` |
+| 12 | Task 19b 画布与三个开放问题 | 画布 https://claude.ai/artifact/YM8CqAEWFpz1LZFnkfT3Y1（8 个 artboard）。(a) `GET /api/admin/dq` 对每个 `reconcile_mismatch` 隔离行返回服务器计算的 `restorable`（`latest_result.passed && latest_result.inputs_hash === inputsHashNow(row)`；`inputsHashNow` 按对取**当前**右侧证据，取不到答 `{unavailable}` → false，计划审计 P2），`loadDqDashboard(…, opts?:{inputsHashNow})`、`restorableOf`，路由注入 `restoreInputsHashNow`；页面 `quarantineControl` 只按 `restorable` 启用恢复，新原因 `inputs_changed`（i18n 两语）；(b) `evidence_only` 修订表单的 op 下拉仅 `backdate_window`/`close_security`；(c) 红色沿用现有 `text-danger`（#e11d48），不新增颜色，对比度在实施日志记录 | Task 19a Files、依赖段、`dashboard-view.ts` 与测试、Step 5 第 6/7 点、提交；Task 19b Step 1、i18n（`quarantine.restore.inputs_changed`、`conflicts.reconcile_wiring_missing/inputs_unavailable/current_evidence_unavailable/read_truncated`）、客户端 `post()` |
 | 13 | `RawKind` 无巨潮类别；`claims_summary` 不在 `INFO_CODES`（B3、B4） | `'cninfo'` 由 Task 4b 加入 `RawKind` 与 `RAW_KINDS`（2a 的测试不断言 `RAW_KINDS` 全集，无需改）；`claims_summary` 由 Task 4a 加入 `INFO_CODES` 并同步两个全集断言。之后任务不得重复加 | Task 4a Step 6（原稿）；Task 4b Step 4、提交；骨架 C6 |
 | 14 | 规格 §6.3"`ReconcilePairId` 与 `pairs.ts` 一致"在 2a 无法断言（A9） | Task 14a 往 `src/lib/dq/datasets.test.ts` 追加断言（`RECONCILE_PAIRS` 键 ⊆ `CYCLE_PAIR_IDS` ⊆ `RECONCILE_PAIR_IDS`，每个 pair 有清单项） | Task 14a Files、Step 1 追加、Step 4、提交 |
 | 15 | 落地 provenance 键不在白名单（A1、B8） | 新写入一律放 `valid_from`/`valid_to` 键下（`{valid_from:{source, as_of, row:{exchange}}}`）；库中旧对象不改写，合并时只 `sanitizeProvenance` 本次新增的单个键 | Task 2b、4a、5a（原稿） |
@@ -404,6 +407,13 @@ export function rollForward(iso:string):string;   // Rule 0-3 顺延；SEC_HOLID
 | 54 | 自然键函数与 `facts/db.ts::lineageKey` 重名 | Part D 改名 `lineageNaturalKey` | Task 14a `pair-lineage.ts`、本部分新增导出表 |
 | 55 | 数据集字面量绕过 `DATASETS`（Task 2a 的源码扫描会失败） | `memory-facts-db.ts`（9a）、`facts-resolver.ts`（11）、`pair-us-gold.ts`（14a）中的 `'facts.us'/'facts.cn'` 改为 `DATASETS.facts(...)` 并加 import | Task 9a import 段与实现；Task 11 import 与 `marketOfDataset`；Task 14a `pair-us-gold.ts` |
 | 56 | 运行时记录槽位 | 核对文档模板里的 `<填>`、`<日期>` 是实施者按实测值/当天日期填写的记录槽位，不是计划占位；Task 20 Step 的 grep 确保最终文档里没有残留。Task 5b 路由里的 `// TODO: add application-level throttling` 是落地代码原文，保留 | Task 3a/3b/6a/15b/16b/17a/20（原稿） |
+| 57 | 并发追加声明证据会丢失（Codex 计划审计第一轮 P3） | 迁移一新函数 `append_claim_evidence(uuid,text,text,text,text,jsonb) returns text`（`'appended'\|'duplicate'\|'not_found'`；`for update` 锁 pending 行、按 `source+evidence_sha256` 去重、只 `jsonb_set` `detail.sources`；`invalid_evidence` 22023；仅 `service_role`）。TS：`TableClient.rpc?` + `callRpc`（无 `rpc` → `rpc_unavailable:<fn>`），三实现（Supabase `rpc`、内存模拟、pg 命名参数）；`claims.ts::appendEvidence` 只调用该函数 | Task 1b SQL 与用例；Task 2b Files、`claims.ts`、`table-client.ts`/`memory-table-client.ts`/`pg-table-client.ts`、`claims.test.ts`、`table-client.test.ts`、`issuers-write.integration.test.ts`；骨架 C2、C5 |
+| 58 | 钩子/审计写入整体替换 `detail` 会回滚较新的 `latest_result`（P4） | 迁移一新函数 `patch_quarantine_detail(uuid,text,jsonb) returns boolean`（行锁、只改 `hook`/`audit_written` 一个键；`invalid_detail_key` 22023；仅 `service_role`）；TS 包装 `quarantine.ts::patchQuarantineDetail`。落地 `facts-resolver.ts::writeHook/markAudited`（Task 11 整文件替换时）与 `run.ts::setHook`（Task 14b）都改经它；`pending-hooks.ts` 经 `writeHook`。SQL 侧（8a–8c）本就在锁内 `detail \|\| …`，不变 | Task 1b；Task 11 Files、`quarantine.ts`、`facts-resolver.ts`、交错用例、落地 hook-write 失败用例改 spy `rpc`；Task 14b `run.ts`、交错用例；骨架 C5 |
+| 59 | 恢复的"当前输入"复用了上次的右侧证据（P2） | `RegisteredPair.currentRight(ctx,rec)`（`CurrentRight`）：iXBRL 按当前样本找到该键的主文档现抓现哈希；US 黄金 = 当前黄金文件 sha256（条目仍在且非 `<pending>`）；CN 黄金 = 当前清单行 `source.pdf_sha256`；谱系恒 null。`inputsHashNow` 只用它，取不到抛 `current_evidence_unavailable`。`InputsHashNow` 答 `string\|InputsUnavailable`；`restoreInputsHashNow` 映射两种 `unavailable`；恢复 409 `not_passing` + `restore_note:'current_evidence_unavailable'`；看板 `restorableOf` 用同一函数（对象答案 ≠ 哈希 → false） | Task 11 类型与 `restore()`；Task 14a `pair-support.ts`/`pairs.ts`/`pair-us-gold.ts`/`pair-lineage.ts` 与用例；Task 14b `stubPair`；Task 14c `deps.ts` 与用例；Task 15a `pair-us-ixbrl.ts` 与用例；Task 15c 文档变化用例；Task 16a `pair-cn-gold.ts`；Task 19a 文字与路由测试桩；Task 19b i18n `conflicts.current_evidence_unavailable`；骨架 C4、#1、#12 |
+| 60 | 采用候选时后来的披露挤掉候选 filing 的平衡行（P1） | `adopt()` 的 `readFacts` 带 `history:true`；`truncated` → `FactsDbError('read_truncated')` → `conflict read_truncated`（`CONFLICT_CODES` 增该码，i18n `conflicts.read_truncated`）；`ruleFailure` 只取候选 filing 且 `mapping_gen=filing.mapping_gen` 的 ok 行；`expected_rev` 检查不变 | Task 11 正文、`facts-resolver.ts`、两个回归用例；Task 19b i18n |
+| 61 | 成员恢复仍依赖重新评估（P5） | `run.ts::acceptedKeys(tables,fence)` 先读回本周期本成员已提交的结果行；已有键计 `duplicates` 不评估，只评估缺失键（子计划），全部已有 → 直接 `completeReconcileMember`；挂起钩子由第 0 步独立补做 | Task 14b 正文第 3 点、`run.ts`、崩溃后上游不可用用例 |
+| 62 | 年报-only 发行人拿不到 6 个报告期（P6） | 先按适用种类过滤再取 `PERIODS`；`SLOT_COUNT=PERIODS+2`；`strideOf(regime)`（20-F/40-F = 12 个月，其余 3）；`filingsWindowStart` = 往前 `12×SLOT_COUNT+12` 个月月末 − 7 天 | Task 17a 规则要点、`calendar.ts`、20-F/40-F 六行与窗口用例；Task 20 规格 §15 偏差行 |
+| 63 | 严格 TS 5.9.3 编译阻断（P7–P11） | P7：`ixbrl.ts` 解析器状态收进显式类型对象 `ParseState`（`st.*`）；P8：`apply.test.ts` 的 `SecFixture` 显式类型；P9：17a/18a 日历夹具补 `acceptance_source:null`；P10：`new Response(new Uint8Array(bytes))`、`sampleBytes:Uint8Array`；P11：`lineage.integration.test.ts` 在 `beforeAll` 插入 `ADMIN` 到 `auth.users`（审计外键不放宽） | Task 13b Step 3/5；Task 4a Step 2；Task 17a/18a Step 1；Task 15a/15c Step 1；Task 15c Step 1 |
 
 ---
 
@@ -422,11 +432,12 @@ export function rollForward(iso:string):string;   // Rule 0-3 顺延；SEC_HOLID
 
 **本部分新增导出**（骨架未列、本部分定义；后续 Part 可直接使用）：
 
-- SQL（迁移一）：内部助手 `claim_text_is_date(text) returns boolean`、`claim_keys_within(jsonb, text[]) returns boolean`、`claim_evidence_ok(jsonb) returns boolean`、`identifier_claim_target_key(text, jsonb) returns text`、`identifier_claim_problem(text, text, text, uuid, jsonb) returns text`（null = 合法，否则字段名）、`dq_calendar_lock_pass(jsonb) returns dq_calendar_passes`（全部 `revoke … from public, anon, authenticated, service_role`）。触发器函数 `issuers_topology_guard()`。
+- SQL（迁移一）：内部助手 `claim_text_is_date(text) returns boolean`、`claim_keys_within(jsonb, text[]) returns boolean`、`claim_evidence_ok(jsonb) returns boolean`、`identifier_claim_target_key(text, jsonb) returns text`、`identifier_claim_problem(text, text, text, uuid, jsonb) returns text`（null = 合法，否则字段名）、`dq_calendar_lock_pass(jsonb) returns dq_calendar_passes`（全部 `revoke … from public, anon, authenticated, service_role`）。触发器函数 `issuers_topology_guard()`。服务端函数（仅 `service_role`；计划审计 P3/P4）：`append_claim_evidence(uuid, text, text, text, text, jsonb) returns text`、`patch_quarantine_detail(uuid, text, jsonb) returns boolean`（见 C5）。
 - SQL 码（C5 之外）：`resolve_identifier_claim` 另抛 `claim_not_found`（P0002，路由应映射 404）；`fail_calendar_member` 另抛 `member_not_claimable`（成员不存在 / 已 `done` / `attempts >= 3`）；`claim_calendar_pass` 另抛 `invalid_market`、`invalid_batch`（22023）。业务码一律 P0001，`invalid_claim`/`invalid_rows` 为 22023，`topology_write_forbidden` 为 23514。
 - SQL 行为补充：`claim_calendar_pass` 允许**当前持租批次续租**（同 `claim_fact_sync_lease`）；`replace_filing_expectations` 与 `fail_calendar_member` 成功时把租约续到 `clock_timestamp() + 10 min`。
 - 约束名（测试与后续 Part 依赖）：`issuer_securities_valid_from_method_check`、`issuer_securities_valid_to_method_check`、`issuer_securities_to_method_iff_to`、`issuer_identifier_claims_{id_type_check,op_check,target_key_check,target_key_required,detail_object,pending_has_no_resolution}`、索引 `issuer_identifier_claims_pending_unique`（5 列）、`dq_reconciliations_{pair_check,kind_check,outcome_check,detail_object,market_check,attempt_check,cycle_cols,numeric_sides,nonnumeric_sides}`、索引 `dq_reconciliations_cycle_key`、`dq_reconciliations_pair_created_idx`、`dq_reconcile_cycles_{members_array,detail_object,finished_iff_terminal}`、索引 `dq_reconcile_cycles_running_uniq`、`dq_reconcile_cursor_cycle_fkey`、`drc_*`、`dq_calendar_passes_open_uniq`、`dcp_finished_iff_terminal`、`dq_calendar_pass_members_pass_fkey`、`dq_filing_expectations_detail_object`、`dfe_*`。
 - `src/lib/supabase/database.types.ts`：`ValidFromMethod`、`ValidToMethod`、`IssuerClaimOp`、`DqReconcileKind`、`DqReconcileOutcome`、`DqReconcileCycle`、`DqReconcileCursor`、`DqCalendarPass`、`DqCalendarPassMember`、`IssuerFilerCategory`、`DqFilingExpectation`、`IssuerFilingProfile`。
+- `src/lib/db/table-client.ts`：`TableClient.rpc?(fn, args): Promise<unknown>`（可选：落地的测试桩不受影响）、`callRpc(client, fn, args)`（无 `rpc` → `throw new Error('rpc_unavailable:<fn>')`）；`memoryTableClient` 模拟 `append_claim_evidence`、`patch_quarantine_detail`（未知函数 → `TableError` 42883）；`pgTableClient.rpc` 用命名参数调用 `public.<fn>`。
 - `src/lib/dq/datasets.ts`：`DQ_DATASET_NAMES: readonly string[]`、`inventoryEntry(dataset: string): DatasetEntry`（未知 → `throw new Error('unknown_dataset:<d>')`；生产者写新鲜度时用它取 cadence）。
 - `src/lib/dq/freshness.ts`：`CADENCES`（改为导出）。
 - `src/lib/dq/dashboard.ts`：`dashboardDatasets(loaded: Iterable<unknown>, selected?: string): string[]`；`DqDashboard.datasets: string[]`。
@@ -1380,12 +1391,12 @@ git commit -m "feat(dq): migration one schema — window methods, claim/1 column
 ```
 
 ---
-### Task 1b: 迁移一函数半（声明、日历遍、拓扑守卫）+ 集成测试 + 锁文件
+### Task 1b: 迁移一函数半（声明、日历遍、行锁 jsonb 补丁、拓扑守卫）+ 集成测试 + 锁文件
 
 **Files:**
 - Modify: `supabase/migrations/20261107090000_identifiers_and_dq.sql`（末尾追加；本任务结束时锁定）
 - Modify: `supabase/migrations.lock.json`
-- Modify: `src/lib/entities/identifiers.integration.test.ts`（加一行 import，末尾追加三个 describe）
+- Modify: `src/lib/entities/identifiers.integration.test.ts`（加一行 import，末尾追加四个 describe；第四个是计划审计 P3/P4 的补丁函数与交错用例）
 - Modify: `src/lib/entities/issuers.integration.test.ts`（拓扑写入与出生即非活跃的插入改经 `topo()` / `newIssuerTopo()`）
 - Modify: `src/lib/entities/issuers-write.integration.test.ts`（同上）
 
@@ -1616,7 +1627,8 @@ describe.skipIf(!enabled)('plan 3 migration one: resolve_identifier_claim',()=>{
  });
 
  it('grants the functions to service_role only, keeps the helpers private and has one replace_filing_expectations signature',async()=>{
-  const FNS=['public.resolve_identifier_claim(uuid,text,uuid,jsonb)','public.replace_filing_expectations(uuid,text,jsonb,jsonb)','public.claim_calendar_pass(text,uuid)','public.fail_calendar_member(jsonb,uuid,text)','public.finish_calendar_pass(jsonb)'];
+  const FNS=['public.resolve_identifier_claim(uuid,text,uuid,jsonb)','public.replace_filing_expectations(uuid,text,jsonb,jsonb)','public.claim_calendar_pass(text,uuid)','public.fail_calendar_member(jsonb,uuid,text)','public.finish_calendar_pass(jsonb)',
+   'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb)'];
   const HELPERS=['public.claim_text_is_date(text)','public.claim_keys_within(jsonb,text[])','public.claim_evidence_ok(jsonb)','public.identifier_claim_target_key(text,jsonb)','public.identifier_claim_problem(text,text,text,uuid,jsonb)','public.dq_calendar_lock_pass(jsonb)'];
   for(const fn of [...FNS,...HELPERS])for(const role of ['anon','authenticated','service_role']){
    const ok=(await q(`select has_function_privilege($1,$2,'EXECUTE') ok`,[role,fn]))[0].ok;
@@ -1808,6 +1820,59 @@ describe.skipIf(!enabled)('plan 3 migration one: calendar pass functions',()=>{
   });
  },60000);
 });
+
+// Plan audit round 1, P3/P4: the two row-locking jsonb patches. Each concurrent case holds the row in
+// one transaction and proves the second writer waits on it and then keeps the first writer's keys.
+describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (append_claim_evidence, patch_quarantine_detail)',()=>{
+ const ev=(sha:string)=>({source:'test',as_of:'2026-11-05',evidence_sha256:sha});
+ const append=(k:{issuer:string;value:string},e:unknown,on:Pool|PoolClient=admin)=>
+  on.query(`select public.append_claim_evidence($1,'lei',$2,'set_identifier',$3,$4::jsonb) v`,[k.issuer,k.value,`set_identifier:${k.issuer}`,JSON.stringify(e)]).then(r=>r.rows[0].v as string);
+ const sources=async(id:string)=>(await q(`select detail->'sources' s from public.issuer_identifier_claims where id=$1`,[id]))[0].s;
+ it('append_claim_evidence dedupes against the evidence and the sources, patches only detail.sources and leaves resolved claims alone',async()=>{
+  const a=await issuer();const value=randomLei();const k={issuer:a,value};
+  const id=await newClaim({issuer:a,id_type:'lei',value,op:'set_identifier',target:{issuer_id:a}});
+  expect(await append(k,EVIDENCE)).toBe('duplicate');                                   // the claim's own evidence
+  expect(await append(k,ev('b'.repeat(64)))).toBe('appended');
+  expect(await append(k,ev('b'.repeat(64)))).toBe('duplicate');                        // already a source
+  expect(await sources(id)).toEqual([ev('b'.repeat(64))]);
+  expect((await q(`select detail->'evidence' e,detail->'target' t,detail->'params' p from public.issuer_identifier_claims where id=$1`,[id]))[0]).toEqual({e:EVIDENCE,t:{issuer_id:a},p:{}});
+  expect((await fails(append(k,{source:'test',as_of:'2026-11-05',evidence_sha256:'nope'}))).message).toBe('invalid_evidence');
+  await resolve(id,'rejected');
+  expect(await append(k,ev('c'.repeat(64)))).toBe('not_found');
+  expect(await sources(id)).toEqual([ev('b'.repeat(64))]);
+ });
+ it('two concurrent appenders both keep their evidence: the second waits on the claim row lock',async()=>{
+  const a=await issuer();const value=randomLei();const k={issuer:a,value};
+  const id=await newClaim({issuer:a,id_type:'lei',value,op:'set_identifier',target:{issuer_id:a}});
+  await inTx(admin,async tx=>{
+   expect(await append(k,ev('1'.repeat(64)),tx.c)).toBe('appended');
+   const second=append(k,ev('2'.repeat(64)));
+   await stillBlockedBehind(admin,tx.pid,second);
+   await tx.commit();
+   expect(await second).toBe('appended');
+  });
+  expect(await sources(id)).toEqual([ev('1'.repeat(64)),ev('2'.repeat(64))]);
+ });
+ it('patch_quarantine_detail replaces only its key: a hook write interleaved with a newer latest_result and a resolution keeps both',async()=>{
+  const id=randomUUID();const b=await batch('facts.us','dq-resolver');
+  await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload,detail) values($1,'facts.us','financial_facts',$2,'reconcile_mismatch',$3,'{}'::jsonb,$4::jsonb)`,
+   [id,`test:${id}`,b,JSON.stringify({pair:'test',latest_result:{passed:false,reconciliation_id:'r1'},hook:{stage:'materialize',state:'pending'}})]);
+  const patch=(key:string,value:unknown,on:Pool|PoolClient=admin)=>on.query(`select public.patch_quarantine_detail($1,$2,$3::jsonb) v`,[id,key,JSON.stringify(value)]).then(r=>r.rows[0].v as boolean);
+  await inTx(admin,async tx=>{
+   // a newer verdict (apply_reconcile_result / restore_reconciled) holds the item row
+   await tx.c.query(`update public.dq_quarantine set detail=detail||'{"latest_result":{"passed":true,"reconciliation_id":"r2"}}'::jsonb,status='resolved_accept',resolved_by=$2,resolved_at=now() where id=$1`,[id,REVIEWER]);
+   const hook=patch('hook',{stage:'done',state:'done',at:'2026-11-05T00:00:00.000Z'});
+   await stillBlockedBehind(admin,tx.pid,hook);
+   await tx.commit();
+   expect(await hook).toBe(true);
+  });
+  expect(await patch('audit_written',true)).toBe(true);
+  expect((await q(`select status,resolved_by,detail from public.dq_quarantine where id=$1`,[id]))[0]).toEqual({status:'resolved_accept',resolved_by:REVIEWER,
+   detail:{pair:'test',latest_result:{passed:true,reconciliation_id:'r2'},hook:{stage:'done',state:'done',at:'2026-11-05T00:00:00.000Z'},audit_written:true}});
+  expect((await fails(patch('latest_result',{passed:false}))).message).toBe('invalid_detail_key');
+  expect(await admin.query(`select public.patch_quarantine_detail($1,'hook','{}'::jsonb) v`,[randomUUID()]).then(r=>r.rows[0].v)).toBe(false);
+ });
+});
 ```
 
 - [ ] **Step 2: 既有集成测试的拓扑写入改经开关**
@@ -1863,7 +1928,7 @@ Expected: `issuers.integration.test.ts:12`、`issuers-write.integration.test.ts:
 - [ ] **Step 3: 跑测试确认失败**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/entities/identifiers.integration.test.ts`
-Expected: FAIL——Task 1a 的 11 个用例仍通过；新用例报 `function public.resolve_identifier_claim(unknown, unknown, unknown, jsonb) does not exist`、`function public.claim_calendar_pass(unknown, unknown) does not exist`；守卫用例 `expected rejection`（无触发器时直接 update 成功）。
+Expected: FAIL——Task 1a 的 11 个用例仍通过；新用例报 `function public.resolve_identifier_claim(unknown, unknown, unknown, jsonb) does not exist`、`function public.claim_calendar_pass(unknown, unknown) does not exist`、`function public.append_claim_evidence(…) does not exist`、`function public.patch_quarantine_detail(…) does not exist`；守卫用例 `expected rejection`（无触发器时直接 update 成功）。
 
 - [ ] **Step 4: 在迁移文件末尾追加函数半**
 
@@ -2242,6 +2307,54 @@ end $$;
 revoke execute on function public.finish_calendar_pass(jsonb) from public, anon, authenticated;
 grant execute on function public.finish_calendar_pass(jsonb) to service_role;
 
+-- ---------------------------------------------------------------- row-locked jsonb patches (plan audit round 1, P3/P4)
+-- append_claim_evidence is the only writer of a pending claim's detail.sources after filing (claims.ts
+-- fileClaim). It locks the pending row of the five-column key, drops evidence that already is the claim's
+-- evidence or one of its sources (same source + evidence_sha256) and appends the rest with jsonb_set on
+-- detail.sources alone: two concurrent filers both keep their evidence (the old read-then-replace lost
+-- one). 'not_found' = no pending row any more (resolved meanwhile); nothing is written then.
+create or replace function public.append_claim_evidence(p_issuer uuid, p_id_type text, p_value text, p_op text, p_target_key text, p_evidence jsonb)
+returns text language plpgsql security definer set search_path = public as $$
+declare v_id uuid; v_detail jsonb; v_sources jsonb;
+begin
+  if not public.claim_evidence_ok(p_evidence) then
+    raise exception 'invalid_evidence' using errcode = '22023';
+  end if;
+  select id, detail into v_id, v_detail from public.issuer_identifier_claims
+  where issuer_id = p_issuer and id_type = p_id_type and value = p_value and op = p_op and target_key = p_target_key and status = 'pending'
+  for update;
+  if not found then return 'not_found'; end if;
+  v_sources := case when jsonb_typeof(v_detail -> 'sources') = 'array' then v_detail -> 'sources' else '[]'::jsonb end;
+  if coalesce(v_detail -> 'evidence' ->> 'source' = p_evidence ->> 'source' and v_detail -> 'evidence' ->> 'evidence_sha256' = p_evidence ->> 'evidence_sha256', false)
+     or exists (select 1 from jsonb_array_elements(v_sources) s
+                where s ->> 'source' = p_evidence ->> 'source' and s ->> 'evidence_sha256' = p_evidence ->> 'evidence_sha256') then
+    return 'duplicate';
+  end if;
+  update public.issuer_identifier_claims set detail = jsonb_set(detail, '{sources}', v_sources || jsonb_build_array(p_evidence), true) where id = v_id;
+  return 'appended';
+end $$;
+revoke execute on function public.append_claim_evidence(uuid, text, text, text, text, jsonb) from public, anon, authenticated;
+grant execute on function public.append_claim_evidence(uuid, text, text, text, text, jsonb) to service_role;
+
+-- patch_quarantine_detail is the only TS-side writer of dq_quarantine.detail once an item exists (the
+-- materialize hook state and the audit mark; quarantine.ts::patchQuarantineDetail). It locks the item and
+-- replaces ONLY the named key, so a concurrent apply_reconcile_result / restore_reconciled / adoption that
+-- rewrote latest_result, the chosen ids or the resolution columns is never rolled back to an older read.
+-- Two keys only: 'hook' and 'audit_written'. false = no such item.
+create or replace function public.patch_quarantine_detail(p_id uuid, p_key text, p_value jsonb)
+returns boolean language plpgsql security definer set search_path = public as $$
+begin
+  if p_key is null or p_key not in ('hook', 'audit_written') or p_value is null then
+    raise exception 'invalid_detail_key' using errcode = '22023';
+  end if;
+  perform 1 from public.dq_quarantine where id = p_id for update;
+  if not found then return false; end if;
+  update public.dq_quarantine set detail = detail || jsonb_build_object(p_key, p_value) where id = p_id;
+  return true;
+end $$;
+revoke execute on function public.patch_quarantine_detail(uuid, text, jsonb) from public, anon, authenticated;
+grant execute on function public.patch_quarantine_detail(uuid, text, jsonb) to service_role;
+
 -- ---------------------------------------------------------------- topology guard (§3.1, S1)
 -- issuers.status/merged_into change only inside set_merge/set_dissolved (migration two), which switch
 -- the transaction-local setting on and restore it on every exit path. A never-defined setting reads
@@ -2275,7 +2388,7 @@ create trigger issuers_topology_guard before insert or update of status, merged_
 - [ ] **Step 5: 跑测试确认通过；全量回归；迁移演练**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/entities/identifiers.integration.test.ts src/lib/entities/issuers.integration.test.ts src/lib/entities/issuers-write.integration.test.ts src/lib/dq/dq-foundation.integration.test.ts`
-Expected: PASS——`identifiers.integration.test.ts` 11 + 9 + 4 + 5 = 29 个用例全部通过；另三套件全部通过（拓扑夹具经 `topo()`，计划一触发器的错误原样出现）。
+Expected: PASS——`identifiers.integration.test.ts` 11 + 9 + 4 + 5 + 3 = 32 个用例全部通过；另三套件全部通过（拓扑夹具经 `topo()`，计划一触发器的错误原样出现）。
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:db`
 Expected: PASS（10 分钟以上；`reports/research-db-summary.json` 的 `criticalSuites` 比计划二结束时 +1，`criticalSkipped: 0`）。若 `facts.integration`/`sync-us.integration` 出现计划二交接文档登记过的本地偶发失败，单独重跑该文件确认后继续。
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:migrations`
@@ -2802,7 +2915,8 @@ git commit -m "feat(dq): typed dataset registry, weekly cadence, dashboard datas
 - Modify: `src/lib/entities/load-sec.ts:22,52`、`src/lib/entities/link-research.ts:15,18,25,112`（provenance 进白名单键、方法与证据；行号为 Task 2a 加一行 import 之后的）
 - Modify: `src/lib/entities/issuers.test.ts`（`attachSecurity` 整个 describe 替换、import）
 - Modify: `src/lib/entities/load-sec.test.ts:52-55`、`src/lib/entities/link-research.test.ts:58-62`
-- Modify: `src/lib/entities/issuers-write.integration.test.ts`（`fileClaim` 用例、`sec` 助手、声明期望）
+- Modify: `src/lib/entities/issuers-write.integration.test.ts`（`fileClaim` 用例、`sec` 助手、声明期望、并发追加用例）
+- Modify: `src/lib/db/table-client.ts`（`TableClient.rpc?`、`callRpc`、`supabaseTableClient.rpc`）、`src/lib/db/memory-table-client.ts`（`rpc`：模拟迁移一的 `append_claim_evidence`、`patch_quarantine_detail`）、`src/lib/db/pg-table-client.ts`（`rpc`）、`src/lib/db/table-client.test.ts`（追加 rpc 用例）——计划审计 P3/P4：声明证据的追加与隔离项 `detail` 的补丁只经 Task 1b 的行锁函数，不再读后整体替换
 
 调用方清单（`grep -rn 'fileClaim\|attachSecurity' src scripts` 于 2026-11-05）：`fileClaim` ← `securities.ts`（2 处）、`issuers.ts::claimFor`、`issuers-write.integration.test.ts`；`attachSecurity` ← `load-sec.ts:146`、`link-research.ts:166`、`issuers.test.ts`、`issuers-write.integration.test.ts`（`load-sec.test.ts`/`link-research.test.ts` 只 mock）。`scripts/` 下无直接调用。
 
@@ -2985,6 +3099,15 @@ describe('fileClaim',()=>{
   const later={...EV,evidence_sha256:'d'.repeat(64)};
   expect(await fileClaim(c,input({detail:d({evidence:later})}))).toBe(false);
   expect((c.rows('issuer_identifier_claims')[0].detail as ClaimDetail).sources).toEqual([later]);
+ });
+ it('concurrent filers of the same pending key both keep their evidence (append_claim_evidence, plan audit P3)',async()=>{
+  const c=client();
+  await fileClaim(c,input());
+  const e1={...EV,evidence_sha256:'e'.repeat(64)},e2={...EV,evidence_sha256:'f'.repeat(64)};
+  expect(await Promise.all([fileClaim(c,input({detail:d({evidence:e1})})),fileClaim(c,input({detail:d({evidence:e2})}))])).toEqual([false,false]);
+  expect((c.rows('issuer_identifier_claims')[0].detail as ClaimDetail).sources).toEqual([e1,e2]);
+  const {rpc:_rpc,...noRpc}=c;
+  await expect(fileClaim(noRpc,input({detail:d({evidence:{...EV,evidence_sha256:'9'.repeat(64)}})}))).rejects.toThrow('rpc_unavailable:append_claim_evidence');
  });
  it('validates before touching the database',async()=>{
   const c=client();
@@ -3230,6 +3353,50 @@ describe('attachSecurity',()=>{
   expect(row).toMatchObject({op:'set_identifier',target_key:`set_identifier:${id}`,confidence:null});
   expect(row.detail.sources).toEqual([{source:'test',as_of:'2026-11-05',evidence_sha256:'b'.repeat(64)}]);
  });
+ it('concurrent appends to one pending claim keep every evidence record (append_claim_evidence row lock, plan audit P3)',async()=>{
+  const id=await newIssuer();
+  const lei=randomLei();
+  const claim=(sha:string)=>({issuer_id:id,id_type:'lei' as const,value:lei,source:'test',op:'set_identifier' as const,
+   detail:buildClaimDetail({evidence_kind:'hard_identifier',target:{issuer_id:id},evidence:{source:'test',as_of:'2026-11-05',evidence_sha256:sha}})});
+  expect(await fileClaim(db,claim('a'.repeat(64)))).toBe(true);
+  expect(await Promise.all(['c','d','e'].map(x=>fileClaim(db,claim(x.repeat(64)))))).toEqual([false,false,false]);
+  const row=(await admin.query(`select detail from public.issuer_identifier_claims where issuer_id=$1 and status='pending'`,[id])).rows[0];
+  expect(row.detail.sources.map((s:{evidence_sha256:string})=>s.evidence_sha256).sort()).toEqual(['c','d','e'].map(x=>x.repeat(64)));
+ });
+```
+`src/lib/db/table-client.test.ts`：import 行 `import {selectAll,supabaseTableClient,TableError,MAX_PAGE} from './table-client';` 改为 `import {callRpc,selectAll,supabaseTableClient,TableError,MAX_PAGE} from './table-client';`，文件末尾追加：
+```ts
+describe('rpc (plan 3 row-locking jsonb patches; plan audit P3/P4)',()=>{
+ const EV={source:'gleif',as_of:'2026-11-05',evidence_sha256:'b'.repeat(64)};
+ const later=(c:string)=>({...EV,evidence_sha256:c.repeat(64)});
+ it('memoryTableClient emulates append_claim_evidence: dedupe, append to detail.sources only, not_found once resolved',async()=>{
+  const c=memoryTableClient({issuer_identifier_claims:['id']});
+  await c.insert('issuer_identifier_claims',{id:'c1',issuer_id:'i',id_type:'lei',value:'v',op:'set_identifier',target_key:'set_identifier:i',status:'pending',detail:{evidence:EV,sources:[],params:{x:1}}});
+  const args=(e:unknown)=>({p_issuer:'i',p_id_type:'lei',p_value:'v',p_op:'set_identifier',p_target_key:'set_identifier:i',p_evidence:e});
+  expect(await callRpc(c,'append_claim_evidence',args(EV))).toBe('duplicate');
+  expect(await Promise.all([callRpc(c,'append_claim_evidence',args(later('c'))),callRpc(c,'append_claim_evidence',args(later('d')))])).toEqual(['appended','appended']);
+  expect(await callRpc(c,'append_claim_evidence',args(later('c')))).toBe('duplicate');
+  expect(c.rows('issuer_identifier_claims')[0].detail).toEqual({evidence:EV,params:{x:1},sources:[later('c'),later('d')]});
+  await expect(callRpc(c,'append_claim_evidence',args({source:'x',as_of:'2026-11-05',evidence_sha256:'nope'}))).rejects.toMatchObject({code:'22023'});
+  await c.update('issuer_identifier_claims',{id:'c1'},{status:'rejected'});
+  expect(await callRpc(c,'append_claim_evidence',args(later('e')))).toBe('not_found');
+ });
+ it('memoryTableClient emulates patch_quarantine_detail: only hook / audit_written, every other key untouched',async()=>{
+  const c=memoryTableClient({dq_quarantine:['id']});
+  await c.insert('dq_quarantine',{id:'q1',status:'resolved_accept',detail:{latest_result:{passed:true},hook:{state:'pending'}}});
+  expect(await callRpc(c,'patch_quarantine_detail',{p_id:'q1',p_key:'hook',p_value:{stage:'done',state:'done',at:'t'}})).toBe(true);
+  expect(await callRpc(c,'patch_quarantine_detail',{p_id:'q1',p_key:'audit_written',p_value:true})).toBe(true);
+  expect(c.rows('dq_quarantine')[0].detail).toEqual({latest_result:{passed:true},hook:{stage:'done',state:'done',at:'t'},audit_written:true});
+  await expect(callRpc(c,'patch_quarantine_detail',{p_id:'q1',p_key:'latest_result',p_value:{}})).rejects.toMatchObject({code:'22023'});
+  expect(await callRpc(c,'patch_quarantine_detail',{p_id:'nope',p_key:'hook',p_value:{}})).toBe(false);
+ });
+ it('callRpc refuses a client without rpc; an unknown function fails like PostgreSQL (42883)',async()=>{
+  const c=memoryTableClient();
+  const {rpc:_rpc,...noRpc}=c;
+  await expect(callRpc(noRpc,'append_claim_evidence',{})).rejects.toThrow('rpc_unavailable:append_claim_evidence');
+  await expect(callRpc(c,'nope',{})).rejects.toMatchObject({code:'42883'});
+ });
+});
 ```
 - `it('classifies attachSecurity as inserted/duplicate/conflict …')` 内 `expect(await pendingClaims(b)).toEqual([{id_type:'isin',value:'US0378331005'}]);` 改为
 ```ts
@@ -3351,7 +3518,7 @@ export function sanitizeProvenance(p:unknown,allowed:readonly string[]=PROVENANC
 // (issuer_id, id_type, value, op, target_key) while pending (partial unique index); filing the same key
 // again only appends new evidence to detail.sources and never changes target or params.
 import {createHash,randomUUID} from 'node:crypto';
-import {TableError} from '../db/table-client';
+import {TableError,callRpc} from '../db/table-client';
 import type {Row,TableClient} from '../db/table-client';
 import {ProvenanceError,sanitizeProvenance} from './provenance';
 import type {ClaimDetail,ClaimEvidence,ClaimIdType,ClaimOp,ClaimTarget,EvidenceKind} from './types';
@@ -3483,18 +3650,15 @@ export function buildClaimDetail(input:{evidence_kind:EvidenceKind;target:ClaimT
   ...(input.provenance_written?{provenance_written:input.provenance_written}:{})};
 }
 
-const sameEvidence=(a:unknown,b:ClaimEvidence)=>isObj(a)&&a.source===b.source&&a.evidence_sha256===b.evidence_sha256;
-
-/** Appends `evidence` to the pending claim matching `key` unless it is already its evidence or a source. */
+/**
+ * Appends `evidence` to the pending claim matching `key` (plan audit round 1, P3): ONE call of the
+ * row-locking SQL function append_claim_evidence (migration 20261107090000, Task 1b), which dedupes
+ * against the claim's evidence and sources and patches detail.sources only — concurrent filers never
+ * lose each other's evidence, target / params / the first evidence are never touched. A claim resolved
+ * meanwhile answers 'not_found' and is left alone. Needs client.rpc (callRpc: rpc_unavailable otherwise).
+ */
 async function appendEvidence(client:TableClient,key:Row,evidence:ClaimEvidence):Promise<false>{
- const [row]=await client.select('issuer_identifier_claims',key,{limit:1});
- if(!row)return false;
- const detail=isObj(row.detail)?row.detail:{};
- const sources=Array.isArray(detail.sources)?detail.sources:[];
- if(sameEvidence(detail.evidence,evidence)||sources.some(s=>sameEvidence(s,evidence)))return false;
- // Guarded on the row still pending. A concurrent append may be lost: sources are supplementary
- // evidence, the claim itself and its first evidence are never touched.
- await client.update('issuer_identifier_claims',{id:row.id,status:'pending'},{detail:{...detail,sources:[...sources,evidence]}});
+ await callRpc(client,'append_claim_evidence',{p_issuer:key.issuer_id,p_id_type:key.id_type,p_value:key.value,p_op:key.op,p_target_key:key.target_key,p_evidence:evidence});
  return false;
 }
 
@@ -3705,12 +3869,90 @@ export interface PlannedSecurity{entity_key:string;user_id:string;entity_id:stri
    claimEvidence:{kind:'provider_mapping',evidence:claimEvidence({source:CURATED,asOf,record,note:'curated research security'})}});
 ```
 
+**`TableClient.rpc`（计划审计 P3/P4；Task 1b 的两个补丁函数的唯一 TS 入口）**
+
+`src/lib/db/table-client.ts`：
+- `interface TableClient` 的 `count(…)` 一行之后加：
+```ts
+ /**
+  * Calls a service-role SQL function and returns its result (plan 3: the row-locking jsonb patches
+  * append_claim_evidence / patch_quarantine_detail of migration 20261107090000). Optional so the landed
+  * test stubs stay valid; callers go through callRpc, which fails loudly when it is missing.
+  */
+ rpc?(fn:string,args:Row):Promise<unknown>;
+```
+- `export function assertMatch` 之前加：
+```ts
+/** Calls `fn` through client.rpc. A client without rpc is a wiring error (rpc_unavailable:<fn>), never a silent no-op. */
+export async function callRpc(client:TableClient,fn:string,args:Row):Promise<unknown>{
+ if(!client.rpc)throw new Error(`rpc_unavailable:${fn}`);
+ return client.rpc(fn,args);
+}
+```
+- `supabaseTableClient` 返回对象里 `count` 方法之后加：
+```ts
+  async rpc(fn,args){
+   const {data,error}=await (client as unknown as {rpc:(f:string,a:Row)=>PromiseLike<{data:unknown;error:PgError|null}>}).rpc(fn,args);
+   if(error)fail('rpc',fn,error);
+   return data;
+  },
+```
+
+`src/lib/db/memory-table-client.ts`：文件头注释末尾加一行 `//  - rpc emulates only the plan-3 row-locking jsonb patches (append_claim_evidence, patch_quarantine_detail); one synchronous JS turn stands for the row lock.`；签名改为 `export function memoryTableClient(keys:Record<string,string[]>={}):TableClient&{rows(table:string):Row[];rpc(fn:string,args:Row):Promise<unknown>}{`（内存实现必有 `rpc`，测试可直接 `vi.spyOn(tables,'rpc')` 或调用 `tables.rpc`）；`const inRange=…;` 之后加：
+```ts
+// Plan 3 row-locking jsonb patches (migration 20261107090000, Task 1b) with the SQL functions' answers
+// and error codes; an unknown function fails like PostgreSQL (42883).
+const isObj=(v:unknown):v is Row=>!!v&&typeof v==='object'&&!Array.isArray(v);
+const sameEvidence=(a:unknown,b:Row)=>isObj(a)&&a.source===b.source&&a.evidence_sha256===b.evidence_sha256;
+const SHA256=/^[0-9a-f]{64}$/;
+const MEMORY_RPC:Record<string,(rowsOf:(t:string)=>Row[],a:Row)=>unknown>={
+ append_claim_evidence(rowsOf,a){
+  const e=a.p_evidence;
+  if(!isObj(e)||typeof e.source!=='string'||e.source.length<1||e.source.length>64||typeof e.as_of!=='string'||typeof e.evidence_sha256!=='string'||!SHA256.test(e.evidence_sha256))
+   throw new TableError('rpc','append_claim_evidence','invalid_evidence','22023');
+  const row=rowsOf('issuer_identifier_claims').find(r=>r.status==='pending'&&r.issuer_id===a.p_issuer&&r.id_type===a.p_id_type&&r.value===a.p_value&&r.op===a.p_op&&r.target_key===a.p_target_key);
+  if(!row)return 'not_found';
+  const d=isObj(row.detail)?row.detail:{};
+  const sources=Array.isArray(d.sources)?d.sources:[];
+  if(sameEvidence(d.evidence,e)||sources.some(s=>sameEvidence(s,e)))return 'duplicate';
+  row.detail={...d,sources:[...sources,clone(e)]};
+  return 'appended';
+ },
+ patch_quarantine_detail(rowsOf,a){
+  const key=a.p_key;
+  if(key!=='hook'&&key!=='audit_written')throw new TableError('rpc','patch_quarantine_detail','invalid_detail_key','22023');
+  if(a.p_value===null||a.p_value===undefined)throw new TableError('rpc','patch_quarantine_detail','invalid_detail_key','22023');
+  const row=rowsOf('dq_quarantine').find(r=>r.id===a.p_id);
+  if(!row)return false;
+  row.detail={...(isObj(row.detail)?row.detail:{}),[key]:clone(a.p_value)};
+  return true;
+ },
+};
+```
+返回对象里 `upsert` 方法之后加：
+```ts
+  async rpc(fn,args){
+   const impl=MEMORY_RPC[fn];
+   if(!impl)throw new TableError('rpc',fn,`function public.${fn} does not exist`,'42883');
+   return clone(impl(rowsOf,clone(args)));
+  },
+```
+
+`src/lib/db/pg-table-client.ts`：文件头注释 "Semantics mirror the Supabase adapter:" 一句末尾补 `; rpc calls public.<fn> with named arguments (objects / arrays / booleans as jsonb)`；返回对象里 `count` 方法之后加：
+```ts
+  async rpc(fn,args){
+   const names=Object.keys(args);
+   const text=`select ${ident(schema)}.${ident(fn)}(${names.map((k,i)=>`${ident(k)} => $${i+1}`).join(', ')}) as result`;
+   return (await run('rpc',fn,text,names.map(k=>param(args[k])))).rows[0]?.result;
+  },
+```
+
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `npm test -- src/lib/entities src/lib/dq src/lib/facts`
-Expected: PASS——`provenance.test.ts` 3、`claims.test.ts` 10、`issuers.test.ts`（`attachSecurity` describe 23 个，upsert 用例不变）、`load-sec.test.ts`、`link-research.test.ts` 全部通过；`src/lib/dq`、`src/lib/facts` 不回归。
+Run: `npm test -- src/lib/entities src/lib/dq src/lib/facts src/lib/db`
+Expected: PASS——`provenance.test.ts` 3、`claims.test.ts` 11、`table-client.test.ts` 旧用例 + 3、`issuers.test.ts`（`attachSecurity` describe 23 个，upsert 用例不变）、`load-sec.test.ts`、`link-research.test.ts` 全部通过；`src/lib/dq`、`src/lib/facts` 不回归。
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/entities/issuers-write.integration.test.ts src/lib/entities/issuers.integration.test.ts src/lib/entities/identifiers.integration.test.ts`
-Expected: PASS（`issuers-write` 在真实 schema 上：claim/1 行、5 列 pending 唯一索引、`attach_security`/`correct_identifier` 声明、关闭窗口带 `unrecorded` 方法）。
+Expected: PASS（`issuers-write` 在真实 schema 上：claim/1 行、5 列 pending 唯一索引、并发追加经 `append_claim_evidence` 不丢证据、`attach_security`/`correct_identifier` 声明、关闭窗口带 `unrecorded` 方法）。
 
 - [ ] **Step 5: typecheck + lint**
 
@@ -3720,7 +3962,7 @@ Expected: 退出码 0、无警告（`const {claimEvidence:_ev,...bare}` 的下�
 - [ ] **Step 6: 提交**
 
 ```bash
-git add src/lib/entities/types.ts src/lib/entities/provenance.ts src/lib/entities/provenance.test.ts src/lib/entities/claims.ts src/lib/entities/claims.test.ts src/lib/entities/securities.ts src/lib/entities/issuers.ts src/lib/entities/load-sec.ts src/lib/entities/link-research.ts src/lib/entities/issuers.test.ts src/lib/entities/load-sec.test.ts src/lib/entities/link-research.test.ts src/lib/entities/issuers-write.integration.test.ts
+git add src/lib/entities/types.ts src/lib/entities/provenance.ts src/lib/entities/provenance.test.ts src/lib/entities/claims.ts src/lib/entities/claims.test.ts src/lib/entities/securities.ts src/lib/entities/issuers.ts src/lib/entities/load-sec.ts src/lib/entities/link-research.ts src/lib/entities/issuers.test.ts src/lib/entities/load-sec.test.ts src/lib/entities/link-research.test.ts src/lib/entities/issuers-write.integration.test.ts src/lib/db/table-client.ts src/lib/db/memory-table-client.ts src/lib/db/pg-table-client.ts src/lib/db/table-client.test.ts
 ```
 ```bash
 git commit -m "feat(entities): claim/1 claims, provenance whitelist and window-method columns in attachSecurity; migrate callers" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
@@ -4715,8 +4957,11 @@ const I1='10000000-0000-4000-8000-000000000001';
 const LEI1='HWUPKR0MPOU8FGXBT394';
 const job:FigiJob={idType:'ID_ISIN',idValue:'US0378331005'};
 const rec=(o:Partial<FigiRecord>={}):FigiRecord=>({figi:'BBG000B9XRY4',compositeFIGI:'BBG000B9XRY4',ticker:'AAPL',exchCode:'US',securityType:'Common Stock',marketSector:'Equity',...o});
-const secRow={issuer_id:I1,ticker:'AAPL',isin:null,figi:null,share_class:'unknown',is_primary:true,valid_from:'2026-01-02',valid_to:null,valid_from_method:'first_observed',valid_to_method:null,source:'sec_company_tickers_exchange',provenance:{exchange:'Nasdaq'}};
-async function setup(over:Partial<typeof secRow>={}){
+// Explicit row type: inferred from the literal, isin/figi/valid_to would be `null` only and Partial<…> would
+// reject setup({figi:'BBG000OTHER1'}) under strict TS (plan audit P8).
+interface SecFixture{issuer_id:string;ticker:string;isin:string|null;figi:string|null;share_class:string;is_primary:boolean;valid_from:string;valid_to:string|null;valid_from_method:string;valid_to_method:string|null;source:string;provenance:Record<string,unknown>}
+const secRow:SecFixture={issuer_id:I1,ticker:'AAPL',isin:null,figi:null,share_class:'unknown',is_primary:true,valid_from:'2026-01-02',valid_to:null,valid_from_method:'first_observed',valid_to_method:null,source:'sec_company_tickers_exchange',provenance:{exchange:'Nasdaq'}};
+async function setup(over:Partial<SecFixture>={}){
  const c=memoryTableClient({issuer_identifier_claims:['id'],dq_quarantine:['id'],dq_reconciliations:['id']});
  await c.insert('issuer_securities',{...secRow,...over});
  return c;
@@ -8404,8 +8649,9 @@ git commit -m "feat(admin): identifier claim review route (resolve_identifier_cl
 | `src/lib/facts/db-contract.ts` | `ContractHarness.user()`、`ContractHarness.expireReconcileClaim(pair,cycleId,issuer,market)` | 契约夹具 |
 | `src/lib/facts/derive.ts` | `deriveLineageMetrics(rows,target,lineage,opts)`；`DeriveOptions.basedOn?`；`MaterializeDb`（改为谱系方法）；`MaterializeResult`（增 `target`、`basedOn`） | §4.4 / T9 |
 | `src/lib/facts/public-route.ts` | `tickerAsOfParam(p,today)`、`lineageFilings(db,lineage,market,opts)`、`publicConflict(c)`、`publicResolution(i)`；`PublicIssuer` 增 `tickerAsOf`、`validFromMethod`；`resolvePublicIssuer(tables,raw,today,tickerAsOf?)` | §4.3.5 / §4.4 |
-| `src/lib/dq/facts-resolver.ts` | `VERDICT_REASONS`、`hookTarget(item)`、`writeHook(tables,id,hook)`（改为导出）、`InputsHashNow`；`ResolveFactsInput` 增 `chosenCandidateIndex?`、`keepFactId?`、`inputsHashNow?`、`today?`；`FactsResolveOutcome` 增 `'rule_failed'\|'conflict'`；`FactsResolveResult` 增 `code?`、`restoreNote?`、`adoptedFactId?`、`restore?`、`quarantined?` | §4.6 / T10 |
+| `src/lib/dq/facts-resolver.ts` | `VERDICT_REASONS`、`hookTarget(item)`、`writeHook(tables,id,hook)`（改为导出；经 `patchQuarantineDetail`）、`InputsHashNow`（答 `string\|InputsUnavailable`）、`InputsUnavailable`（`{unavailable:'inputs_unavailable'\|'current_evidence_unavailable'}`）；`ResolveFactsInput` 增 `chosenCandidateIndex?`、`keepFactId?`、`inputsHashNow?`、`today?`；`FactsResolveOutcome` 增 `'rule_failed'\|'conflict'`；`FactsResolveResult` 增 `code?`、`restoreNote?`、`adoptedFactId?`、`restore?`、`quarantined?` | §4.6 / T10 |
 | `src/lib/dq/pending-hooks.ts` | `findPendingHooks(tables)`、`runPendingHooks(deps)`、`PendingHookItem`、`PendingHookReport` | U2 |
+| `src/lib/dq/quarantine.ts` | `patchQuarantineDetail(client,id,key:'hook'\|'audit_written',value):Promise<boolean>`（Task 11；迁移一 `patch_quarantine_detail` 的包装） | 计划审计 P4 |
 | `src/lib/facts/providers/sec-acceptance.ts` | `ACCEPTANCE_SOURCE`、`DATE_MISMATCH_PAIR`、`AcceptanceEntry`、`parseAcceptanceDateTime(v)`、`acceptanceIndex(entries)`、`filingDateMismatch(cik,filing,entry,sha256)`、`enrichAcceptance(deps,issuer,budget)`、`AcceptanceDeps`、`AcceptanceOutcome` | §4.5 |
 | `src/lib/facts/sync.ts` | `SyncDeps.enrichAcceptance?` | `(issuer:string,cik10:string,b:Budget)=>Promise<AcceptanceOutcome>`（第 9b 步） |
 | SQL（迁移二，内部，不授予任何角色） | `fact_topology_lock(uuid[])`、`fact_set_merge_body(uuid,uuid,uuid)`、`fact_set_dissolved_body(uuid,uuid)`、`reconcile_fence_lock(jsonb)` | 拓扑锁集合 / 围栏校验 |
@@ -11993,13 +12239,18 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ### Task 11: 被隔离候选的人工选定与分派（T10）、隔离路由、`materialize.ts --pending-hooks`（U2）、E8
 
 **Files:**
-- Modify: `src/lib/dq/facts-resolver.ts`（整文件替换）、`src/lib/dq/facts-resolver.test.ts`（追加）
+- Modify: `src/lib/dq/facts-resolver.ts`（整文件替换）、`src/lib/dq/facts-resolver.test.ts`（追加；落地用例 "a hook-write failure…" 的 `vi.spyOn(tables,'update')` 改为 `vi.spyOn(tables,'rpc')`）
+- Modify: `src/lib/dq/quarantine.ts`（`patchQuarantineDetail`：Task 1b `patch_quarantine_detail` 的 TS 包装，计划审计 P4）、`src/lib/dq/quarantine.test.ts`（追加）
 - Modify: `src/app/api/admin/dq/quarantine/[id]/route.ts`、`src/app/api/admin/dq/quarantine/[id]/route.test.ts`（追加）
 - Create: `src/lib/dq/pending-hooks.ts`、`src/lib/dq/pending-hooks.test.ts`
 - Modify: `scripts/facts/materialize.ts`（`--pending-hooks`）
 - Modify: `src/lib/dq/dq-extensions.integration.test.ts`（追加 E8 端到端用例与 import）
 
-**恢复分支的哈希（接口对齐记录 #1）**：`computeInputsHash` 与各对的输入配方在 Part D 才落地，本任务**按注入实现**：`ResolveFactsInput.inputsHashNow?:(item:Row)=>Promise<string|null>`（类型名 `InputsHashNow`）。没传 → `reconcile_mismatch` 的接受答 409 `{error:'not_passing', detail:{restore_note:'reconcile_wiring_missing'}}`（不写库、永不提升）；传了但返回 `null`（当前输入不可得：无 `latest_result`、左侧事实缺失、对未登记）→ 409 `{error:'not_passing', detail:{restore_note:'inputs_unavailable'}}`。本任务的路由**不传**；**Part D Task 14c Step 4** 把真实的 `restoreInputsHashNow`（`src/lib/dq/reconcile/deps.ts`，包装 Task 14a 的 `pairs.ts::inputsHashNow`）注入路由并改路由测试。分派表与测试在本任务就穷举全部分支（含未接线与有哈希时的完整恢复）。
+**恢复分支的哈希（接口对齐记录 #1）**：`computeInputsHash` 与各对的输入配方在 Part D 才落地，本任务**按注入实现**：`ResolveFactsInput.inputsHashNow?:(item:Row)=>Promise<string|null>`（类型名 `InputsHashNow`）。没传 → `reconcile_mismatch` 的接受答 409 `{error:'not_passing', detail:{restore_note:'reconcile_wiring_missing'}}`（不写库、永不提升）；传了但答 `{unavailable:'inputs_unavailable'}`（当前输入不可得：无 `latest_result`、左侧事实缺失、对未登记）或 `{unavailable:'current_evidence_unavailable'}`（该对的**当前**右侧证据取不到：主文档抓不到、清单条目已删，计划审计 P2）→ 409 `{error:'not_passing', detail:{restore_note:<该值>}}`。
+
+**采用的规则读取（计划审计 P1）**：`readFacts` 带 `history:true`（后来的披露不会把候选所在 filing 的平衡行挤出当前视图），`truncated` → `conflict read_truncated`（不评估、不写），规则只对**候选 filing 且 `mapping_gen = filing.mapping_gen` 的全部 ok 行**评估；`expected_rev` 修订检查不变。
+
+**钩子与审计标记（计划审计 P4）**：`writeHook`/`markAudited` 不再读后整体替换 `detail`，改经 `quarantine.ts::patchQuarantineDetail`（Task 1b `patch_quarantine_detail`，行锁、只改 `hook` / `audit_written` 一个键），与并发的 `apply_reconcile_result`/恢复/采用交错时不回滚较新的 `latest_result` 与裁决字段。本任务的路由**不传**；**Part D Task 14c Step 4** 把真实的 `restoreInputsHashNow`（`src/lib/dq/reconcile/deps.ts`，包装 Task 14a 的 `pairs.ts::inputsHashNow`）注入路由并改路由测试。分派表与测试在本任务就穷举全部分支（含未接线与有哈希时的完整恢复）。
 
 - [ ] **Step 1: 写失败测试 —— 分派**
 
@@ -12016,7 +12267,7 @@ describe('resolveFactsItem — plan 3 dispatch (spec §4.6, §5.6, T10)',()=>{
   const revs=[...(o.revs??[4])];
   const db={
    findFilingBySourceRef:vi.fn(async(source:string,ref:string)=>source==='edgar'&&ref==='0000320193-23-000106'?filingRow():null),
-   readFacts:vi.fn(async()=>({stateRev:revs.length>1?revs.shift()!:revs[0],rows:o.readRows??[],truncated:false})),
+   readFacts:vi.fn(async(_issuer:string,_market:string,_opts:{history?:boolean})=>({stateRev:revs.length>1?revs.shift()!:revs[0],rows:o.readRows??[],truncated:false})),
    adoptCandidate:vi.fn(async()=>({factId:'50000000-0000-4000-8000-000000000005',runId:'60000000-0000-4000-8000-000000000006',issuerId:ISSUER,market:'US' as const})),
    restoreReconciled:vi.fn(async()=>({promoted:1,skipped:[]})),
    resolveLineageConflict:vi.fn(async()=>({quarantined:1})),
@@ -12036,7 +12287,7 @@ describe('resolveFactsItem — plan 3 dispatch (spec §4.6, §5.6, T10)',()=>{
   const it_=await item('ambiguous_value',ambiguousPayload());
   const r=await resolveFactsItem(db,tables,it_,{status:'resolved_accept',chosenCandidateIndex:1,resolvedBy:ADMIN,now:NOW,today:'2026-11-04'});
   expect(db.findFilingBySourceRef).toHaveBeenCalledWith('edgar','0000320193-23-000106');
-  expect(db.readFacts).toHaveBeenCalledWith(ISSUER,'US',expect.objectContaining({asOf:'2026-11-04',from:'2023-09-30',to:'2023-09-30'}));
+  expect(db.readFacts).toHaveBeenCalledWith(ISSUER,'US',expect.objectContaining({asOf:'2026-11-04',from:'2023-09-30',to:'2023-09-30',history:true}));
   const [batch]=tables.rows('ingest_batches');
   expect(batch).toMatchObject({producer:'dq-resolver',dataset:'facts.us',status:'success',triggered_by:'manual'});
   expect(db.adoptCandidate).toHaveBeenCalledWith(it_.id,1,batch.batch_id,4,ADMIN);
@@ -12047,6 +12298,29 @@ describe('resolveFactsItem — plan 3 dispatch (spec §4.6, §5.6, T10)',()=>{
   const {tables,db,item}=h3({readRows:[okRow({concept:'liabilities_and_equity',statement:'BS',period_start:null,duration:'INSTANT',value:'200',value_text:'200'})]});
   const it_=await item('ambiguous_value',ambiguousPayload([cand({concept:'total_assets',statement:'BS',periodStart:null,duration:'INSTANT',value:'100'})]));
   expect(await resolveFactsItem(db,tables,it_,{status:'resolved_accept',chosenCandidateIndex:0,resolvedBy:ADMIN,now:NOW})).toEqual({outcome:'rule_failed',code:'identity_bs'});
+  expect(db.adoptCandidate).not.toHaveBeenCalled();expect(tables.rows('ingest_batches')).toEqual([]);
+ });
+ it('plan audit P1: a later filing that supersedes the balancing rows does not hide them — history read, only the candidate filing at its active generation counts',async()=>{
+  const LATER='30000000-0000-4000-8000-000000000009';
+  const bs={concept:'liabilities_and_equity',statement:'BS' as const,period_start:null,duration:'INSTANT' as const};
+  const own=okRow({...bs,value:'200',value_text:'200',is_current:false});                                        // the candidate filing's own row, superseded
+  const later=okRow({...bs,fact_id:'20000000-0000-4000-8000-0000000000bb',filing_id:LATER,value:'100',value_text:'100',is_current:true});
+  const {tables,db,item}=h3();
+  db.readFacts.mockImplementation(async(_i:string,_m:string,opts:{history?:boolean})=>({stateRev:4,rows:opts.history?[own,later]:[later],truncated:false}));
+  const it_=await item('ambiguous_value',ambiguousPayload([cand({concept:'total_assets',statement:'BS',periodStart:null,duration:'INSTANT',value:'100'})]));
+  const go=()=>resolveFactsItem(db,tables,it_,{status:'resolved_accept',chosenCandidateIndex:0,resolvedBy:ADMIN,now:NOW});
+  expect(await go()).toEqual({outcome:'rule_failed',code:'identity_bs'});                                         // 100 ≠ 200 of its own filing
+  expect(db.readFacts).toHaveBeenCalledWith(ISSUER,'US',expect.objectContaining({history:true}));
+  expect(db.adoptCandidate).not.toHaveBeenCalled();
+  db.readFacts.mockImplementation(async()=>({stateRev:4,rows:[{...own,mapping_gen:2},later],truncated:false}));   // another generation / another filing never count
+  expect((await go()).outcome).toBe('resolved');
+  expect(db.adoptCandidate).toHaveBeenCalledTimes(1);
+ });
+ it('plan audit P1: a truncated read refuses the adoption (conflict read_truncated), no batch, nothing written',async()=>{
+  const {tables,db,item}=h3();
+  db.readFacts.mockResolvedValue({stateRev:4,rows:[],truncated:true});
+  const it_=await item('ambiguous_value',ambiguousPayload());
+  expect(await resolveFactsItem(db,tables,it_,{status:'resolved_accept',chosenCandidateIndex:0,resolvedBy:ADMIN,now:NOW})).toEqual({outcome:'conflict',code:'read_truncated'});
   expect(db.adoptCandidate).not.toHaveBeenCalled();expect(tables.rows('ingest_batches')).toEqual([]);
  });
  it('stale_evaluation: re-read and re-evaluate once, then adopt under the new rev; a second stale answer is a 409 conflict',async()=>{
@@ -12084,11 +12358,12 @@ describe('resolveFactsItem — plan 3 dispatch (spec §4.6, §5.6, T10)',()=>{
   await resolveFactsItem(db,tables,it_,{status:'resolved_accept',resolvedBy:ADMIN,now:NOW});
   expect(db.resolveFactsQuarantine).toHaveBeenCalledWith(it_.id,[],ADMIN);expect(db.adoptCandidate).not.toHaveBeenCalled();
  });
- it('reconcile_mismatch: without inputsHashNow → 409 not_passing + reconcile_wiring_missing (no write); null hash → inputs_unavailable; with it → restoreReconciled(item, batch, hash) and materialize of the persisted target; promoted 0 → restore_note; not_passing → conflict',async()=>{
+ it('reconcile_mismatch: without inputsHashNow → 409 not_passing + reconcile_wiring_missing (no write); {unavailable} → that note (inputs_unavailable / current_evidence_unavailable); with a hash → restoreReconciled(item, batch, hash) and materialize of the persisted target; promoted 0 → restore_note; not_passing → conflict',async()=>{
   const {tables,db,item}=h3();
   const it_=await item('reconcile_mismatch',{fact_ids:[A]},{detail:{issuer_id:ISSUER,market:'US',pair:'us.companyfacts_vs_ixbrl',hook:{stage:'materialize',state:'pending'}}});
   expect(await resolveFactsItem(db,tables,it_,{status:'resolved_accept',resolvedBy:ADMIN,now:NOW})).toEqual({outcome:'conflict',code:'not_passing',restoreNote:'reconcile_wiring_missing'});
-  expect(await resolveFactsItem(db,tables,it_,{status:'resolved_accept',resolvedBy:ADMIN,now:NOW,inputsHashNow:async()=>null})).toEqual({outcome:'conflict',code:'not_passing',restoreNote:'inputs_unavailable'});
+  expect(await resolveFactsItem(db,tables,it_,{status:'resolved_accept',resolvedBy:ADMIN,now:NOW,inputsHashNow:async()=>({unavailable:'inputs_unavailable' as const})})).toEqual({outcome:'conflict',code:'not_passing',restoreNote:'inputs_unavailable'});
+  expect(await resolveFactsItem(db,tables,it_,{status:'resolved_accept',resolvedBy:ADMIN,now:NOW,inputsHashNow:async()=>({unavailable:'current_evidence_unavailable' as const})})).toEqual({outcome:'conflict',code:'not_passing',restoreNote:'current_evidence_unavailable'});
   expect(db.restoreReconciled).not.toHaveBeenCalled();expect(tables.rows('ingest_batches')).toEqual([]);
   const hashOf=vi.fn(async()=>'hash-now');
   const r=await resolveFactsItem(db,tables,it_,{status:'resolved_accept',resolvedBy:ADMIN,now:NOW,inputsHashNow:hashOf});
@@ -12146,6 +12421,39 @@ describe('resolveFactsItem — plan 3 dispatch (spec §4.6, §5.6, T10)',()=>{
   expect((await resolveFactsItem(db,tables,lineage,{status:'resolved_accept',resolvedBy:ADMIN,now:NOW})).outcome).toBe('hook_retried');
   const ack=await done('ambiguous_value',{hook:{stage:'done',state:'done',at:'x'}});
   expect((await resolveFactsItem(db,tables,ack,{status:'resolved_accept',resolvedBy:ADMIN,now:NOW})).outcome).toBe('already_resolved');
+ });
+ it('plan audit P4: hook and audit writes patch only their key — a newer latest_result committed right before the write survives',async()=>{
+  const {tables,db,item}=h3();
+  const it_=await item('lineage_conflict',{fact_ids:[KEEP,A]},{naturalKey:`${T}:revenue:2023-07-01:2023-09-30:consolidated:USD:2023-11-03`,detail:{latest_result:{passed:true,reconciliation_id:'r-old'}}});
+  // a concurrent writer (apply_reconcile_result / another verdict) commits just before our first detail write;
+  // the old read-then-replace would have written its stale copy back over it
+  const newer=async()=>{const [cur]=await tables.select('dq_quarantine',{id:it_.id});await tables.update('dq_quarantine',{id:it_.id},{detail:{...(cur.detail as Record<string,unknown>),latest_result:{passed:false,reconciliation_id:'r-newer'}}});};
+  let fired=false;
+  const racing:typeof tables={...tables,
+   async update(t,m,p){if(t==='dq_quarantine'&&'detail' in p&&!fired){fired=true;await newer();}return tables.update(t,m,p);},
+   async rpc(fn,a){if(fn==='patch_quarantine_detail'&&!fired){fired=true;await newer();}return tables.rpc(fn,a);}};
+  const r=await resolveFactsItem(db,racing,it_,{status:'resolved_accept',keepFactId:KEEP,resolvedBy:ADMIN,now:NOW});
+  expect(r.hook).toMatchObject({stage:'done',state:'done'});
+  await markAudited(racing,String(it_.id));
+  const [row]=await tables.select('dq_quarantine',{id:it_.id});
+  expect(row.detail).toMatchObject({latest_result:{passed:false,reconciliation_id:'r-newer'},hook:{stage:'done',state:'done'},audit_written:true});
+ });
+});
+```
+
+落地用例 `it('a hook-write failure after the function committed still answers resolved with hook failed',…)` 内两处：`const update=vi.spyOn(tables,'update').mockRejectedValue(new Error('db gone secret-detail'));` 改为 `const rpc=vi.spyOn(tables,'rpc').mockRejectedValue(new Error('db gone secret-detail'));`，`update.mockRestore();` 改为 `rpc.mockRestore();`（钩子写入改经 `patch_quarantine_detail`；断言不变）。
+
+`src/lib/dq/quarantine.test.ts` 的 import 行 `import {quarantine,resolveQuarantine,listOpenQuarantine} from './quarantine';` 改为 `import {patchQuarantineDetail,quarantine,resolveQuarantine,listOpenQuarantine} from './quarantine';`，文件末尾追加：
+```ts
+describe('patchQuarantineDetail (plan audit P4)',()=>{
+ it('sets only the named key through patch_quarantine_detail; an unknown item answers false',async()=>{
+  const c=memoryTableClient({dq_quarantine:['id']});
+  const {batchId}=await startBatch(c,{producer:'test',dataset:'facts.us'});
+  const id=await quarantine(c,{dataset:'facts.us',table:'financial_facts',naturalKey:'k:p4',reasonCode:'reconcile_mismatch',batchId,detail:{latest_result:{passed:true}}});
+  expect(await patchQuarantineDetail(c,id,'hook',{stage:'done',state:'done',at:'t'})).toBe(true);
+  expect(await patchQuarantineDetail(c,id,'audit_written',true)).toBe(true);
+  expect((await c.select('dq_quarantine',{id}))[0].detail).toEqual({latest_result:{passed:true},hook:{stage:'done',state:'done',at:'t'},audit_written:true});
+  expect(await patchQuarantineDetail(c,'00000000-0000-4000-8000-0000000000aa','hook',{})).toBe(false);
  });
 });
 ```
@@ -12337,13 +12645,15 @@ import {resolveFactsItem} from './facts-resolver';
 // Accept dispatch (exhaustive; tests mirror this table):
 //  ambiguous_value + chosenCandidateIndex → adopt: the filing comes from the candidate's filingRef
 //   (findFilingBySourceRef, source by market; the payload is not trusted); readFacts of that issuer
-//   at `today` for the candidate's period (every concept) gives stateRev and the ok rows that the
-//   plan-2 §7 statement rules check together with the candidate (failure → rule_failed, nothing
-//   written); then a batch (producer dq-resolver, dataset = item.dataset) and adoptCandidate under
+//   at `today` for the candidate's period (every concept, history:true so a later disclosure cannot
+//   hide the filing's own rows; truncated → conflict read_truncated) gives stateRev and the rows of the
+//   candidate's filing at its active generation that the plan-2 §7 statement rules check together
+//   with the candidate (failure → rule_failed, nothing written; plan audit P1); then a batch (producer dq-resolver, dataset = item.dataset) and adoptCandidate under
 //   stateRev (stale_evaluation → re-read and re-evaluate once, then 409); materialize T(issuer).
 //  reconcile_mismatch → restore: inputsHashNow(item) is injected (the hash of the CURRENT inputs,
-//   plan 3 Task 14c); absent → conflict not_passing + restoreNote 'reconcile_wiring_missing', null →
-//   'inputs_unavailable'; nothing written, never promotes. restoreReconciled → materialize
+//   plan 3 Task 14c); absent → conflict not_passing + restoreNote 'reconcile_wiring_missing', an
+//   {unavailable} answer → that note ('inputs_unavailable' | 'current_evidence_unavailable', plan audit
+//   P2); nothing written, never promotes. restoreReconciled → materialize
 //   the persisted target; promoted 0 → restore_note 'no_rows_promoted' with the skipped reasons.
 //  lineage_conflict + keepFactId → resolveLineageConflict → materialize T (natural key's first
 //   segment); without keepFactId → invalid_choice (keep_fact_id_required): the generic resolver
@@ -12353,11 +12663,12 @@ import {resolveFactsItem} from './facts-resolver';
 //   is an acknowledgement).
 // Reject is the plan-1 flip for every reason; fact rows stay quarantined. The three new visibility
 // verdicts write detail.hook = pending and the target (detail.issuer_id/market) in their SQL
-// transaction; an accepted item whose hook is missing / pending / failed is UNFINISHED and a later
+// transaction; every later hook / audit write patches ONLY its key through patchQuarantineDetail
+// (row lock, plan audit P4), never a read-then-replace of detail; an accepted item whose hook is missing / pending / failed is UNFINISHED and a later
 // POST re-runs materialize only, on the persisted target (materialize re-derives T(i) then).
 // Code → outcome: invalid_choice / invalid_candidate → invalid_choice (400); generation_moved /
 // conflict_exists / duplicate / replay_required / filing_not_found / not_passing / lineage_changed
-// / scope_missing / unresolved / stale_evaluation (after the retry) → conflict (409);
+// / scope_missing / unresolved / stale_evaluation (after the retry) / read_truncated → conflict (409);
 // item_not_open, batch_mismatch and anything else are thrown (the route: 409 already_resolved /
 // 500). Everything after a verdict commits is best-effort and never throws. Client-visible hook
 // messages are codes only; full errors go to the server log.
@@ -12370,7 +12681,7 @@ import {FactsDbError} from '../facts/types';
 import type {FactCandidate,FactInsert,FactRow,FactsDb,FilingRow,Market} from '../facts/types';
 import {emptyCounts,finishBatch,startBatch} from './batches';
 import {DATASETS} from './datasets';
-import {resolveQuarantine} from './quarantine';
+import {patchQuarantineDetail,resolveQuarantine} from './quarantine';
 import type {QuarantineStatus} from './quarantine';
 
 export interface HookState{stage:'materialize'|'done';state:'done'|'failed';at:string;message?:string}
@@ -12379,7 +12690,7 @@ export interface FactsResolveResult{outcome:FactsResolveOutcome;hook?:HookState;
  /** machine code of a refusal (rule id, SQL code) */
  code?:string;
  /** why a reconcile_mismatch restore was refused before reaching SQL (route: detail.restore_note) */
- restoreNote?:'reconcile_wiring_missing'|'inputs_unavailable';
+ restoreNote?:'reconcile_wiring_missing'|InputsUnavailable['unavailable'];
  adoptedFactId?:string;
  restore?:{promoted:number;skipped:{fact_id:string;reason:string}[];restore_note?:'no_rows_promoted'};
  quarantined?:number;
@@ -12387,8 +12698,10 @@ export interface FactsResolveResult{outcome:FactsResolveOutcome;hook?:HookState;
  auditAs?:'resolved'|'hook_retried'|null;
  /** Set when auditAs='resolved' on a retry: the audit row describes the PERSISTED resolution (original resolver, accept, committed ids); the retrying admin is recorded separately. */
  recovered?:{resolvedBy:string;status:'resolved_accept';chosenFactIds:string[];recoveredBy:string;recoveredAt:string}}
-/** Hash of the CURRENT reconciliation inputs of a reconcile_mismatch item (computeInputsHash over left raw_hash, right sha256, gold/sample sha256, parser version). */
-export type InputsHashNow=(item:Row)=>Promise<string|null>;
+/** Why the current inputs of a reconcile_mismatch item cannot be hashed now (restore stays refused). */
+export interface InputsUnavailable{unavailable:'inputs_unavailable'|'current_evidence_unavailable'}
+/** Hash of the CURRENT reconciliation inputs of a reconcile_mismatch item (computeInputsHash over left raw_hash, the pair's CURRENT right evidence sha256, gold/sample sha256, parser version), or why it cannot be computed now. */
+export type InputsHashNow=(item:Row)=>Promise<string|InputsUnavailable>;
 export interface ResolveFactsInput{status:Exclude<QuarantineStatus,'open'>;chosenFactIds?:string[];chosenCandidateIndex?:number;keepFactId?:string;resolvedBy:string;now?:()=>Date;
  /** the evaluation date of an adoption (default: now's UTC date) */
  today?:string;
@@ -12400,7 +12713,7 @@ export const VERDICT_REASONS:readonly string[]=['ambiguous_value','reconcile_mis
 const TABLE='dq_quarantine';
 const MARKETS:readonly string[]=['US','CN'];
 const CHOICE_CODES:readonly string[]=['invalid_choice','invalid_candidate'];
-const CONFLICT_CODES:readonly string[]=['generation_moved','conflict_exists','duplicate','replay_required','filing_not_found','not_passing','lineage_changed','scope_missing','unresolved','stale_evaluation'];
+const CONFLICT_CODES:readonly string[]=['generation_moved','conflict_exists','duplicate','replay_required','filing_not_found','not_passing','lineage_changed','scope_missing','unresolved','stale_evaluation','read_truncated'];
 const PROBE_ID='00000000-0000-4000-8000-000000000000';
 
 interface Payload{key?:Record<string,string|null>;fact_ids?:string[];candidates?:unknown}
@@ -12428,11 +12741,10 @@ function unfinished(item:Row):boolean{
  return false;
 }
 
-/** Re-reads the item (the SQL function may have written detail) and merges `hook` into detail. Never throws. */
+/** Sets detail.hook alone through patchQuarantineDetail (row lock; plan audit P4): a concurrent verdict or result written meanwhile is kept. Never throws. */
 export async function writeHook(tables:TableClient,id:string,hook:HookState):Promise<HookState>{
  try{
-  const [fresh]=await tables.select(TABLE,{id},{limit:1});
-  await tables.update(TABLE,{id},{detail:{...detailOf(fresh??{}),hook}});
+  await patchQuarantineDetail(tables,id,'hook',hook);
   return hook;
  }catch(e){
   console.error('[admin/dq] hook write',e instanceof Error?e.message:String(e));
@@ -12453,12 +12765,10 @@ async function runHook(db:FactsDb,tables:TableClient,id:string,where:{issuer:str
  return writeHook(tables,id,hook);
 }
 
-/** Marks that the audit row of this resolution was written (best-effort; a missing mark only causes one extra audit row on retry). */
+/** Marks that the audit row of this resolution was written: detail.audit_written alone, through patchQuarantineDetail (plan audit P4). Best-effort; a missing mark only causes one extra audit row on retry. */
 export async function markAudited(tables:TableClient,id:string):Promise<void>{
- try{
-  const [fresh]=await tables.select(TABLE,{id},{limit:1});
-  await tables.update(TABLE,{id},{detail:{...detailOf(fresh??{}),audit_written:true}});
- }catch(e){console.error('[admin/dq] audit mark',e instanceof Error?e.message:String(e));}
+ try{await patchQuarantineDetail(tables,id,'audit_written',true);}
+ catch(e){console.error('[admin/dq] audit mark',e instanceof Error?e.message:String(e));}
 }
 
 /** A verdict under its own dq-resolver batch; the batch is finished whatever happens (best-effort after success). */
@@ -12493,11 +12803,16 @@ function candidateOf(x:unknown):FactCandidate|null{
  if(!(c.periodStart===null||s('periodStart'))||(c.periodStart===null)!==(c.duration==='INSTANT'))return null;
  return c as unknown as FactCandidate;
 }
-/** plan-2 §7 statement rules on {candidate} ∪ the filing's current ok rows; the failing rule id, else null. */
-function ruleFailure(c:FactCandidate,filing:FilingRow,okRows:FactRow[]):string|null{
+/**
+ * plan-2 §7 statement rules on {candidate} ∪ EVERY ok row of the candidate's filing at the filing's
+ * active generation (the read carries history, so rows a later disclosure superseded still count —
+ * they are the filing's own balancing inputs; plan audit P1); the failing rule id, else null.
+ */
+function ruleFailure(c:FactCandidate,filing:FilingRow,rows:FactRow[]):string|null{
  const row:FactInsert={fact_id:PROBE_ID,issuer_id:filing.issuer_id,market:filing.market,filing_id:filing.filing_id,concept:c.concept,source_concept:c.sourceConcept,statement:c.statement,period_start:c.periodStart,period_end:c.periodEnd,
   duration:c.duration,value:c.value,unit:c.unit,consolidation:'consolidated',available_date:filing.available_date,mapping_gen:filing.mapping_gen,mapping_version:MAPPING_VERSION,raw_hash:c.rawHash};
- const res=evaluateFactRules({newRows:[row],okRows:okRows.filter(r=>r.filing_id===filing.filing_id),sourceRefOf:new Map([[filing.filing_id,filing.source_ref]]),issuerId:filing.issuer_id,market:filing.market,mappingGen:filing.mapping_gen});
+ const own=rows.filter(r=>r.filing_id===filing.filing_id&&r.mapping_gen===filing.mapping_gen&&r.status==='ok');
+ const res=evaluateFactRules({newRows:[row],okRows:own,sourceRefOf:new Map([[filing.filing_id,filing.source_ref]]),issuerId:filing.issuer_id,market:filing.market,mappingGen:filing.mapping_gen});
  return res.quarantine.find(q=>q.factIds.includes(PROBE_ID))?.reason??null;
 }
 
@@ -12510,10 +12825,13 @@ async function adopt(db:FactsDb,tables:TableClient,item:Row,input:ResolveFactsIn
  if(!filing||filing.market!==market)return {outcome:'conflict',code:'filing_not_found'};
  const today=input.today??now().toISOString().slice(0,10);
  const evaluate=async()=>{
-  const read=await db.readFacts(filing.issuer_id,filing.market,{concepts:[...CONCEPT_IDS],asOf:today,from:cand.periodEnd,to:cand.periodEnd});
+  // history:true — a later disclosure must not hide the candidate filing's own rows; a truncated read could (plan audit P1)
+  const read=await db.readFacts(filing.issuer_id,filing.market,{concepts:[...CONCEPT_IDS],asOf:today,from:cand.periodEnd,to:cand.periodEnd,history:true});
+  if(read.truncated)throw new FactsDbError('read_truncated');
   return {stateRev:read.stateRev,failure:ruleFailure(cand,filing,read.rows)};
  };
- let ev=await evaluate();
+ let ev:Awaited<ReturnType<typeof evaluate>>;
+ try{ev=await evaluate();}catch(e){const m=mapRefusal(e);if(m)return m;throw e;}
  if(ev.failure!==null)return {outcome:'rule_failed',code:ev.failure};
  let out:Awaited<ReturnType<FactsDb['adoptCandidate']>>;
  try{
@@ -12535,7 +12853,7 @@ async function adopt(db:FactsDb,tables:TableClient,item:Row,input:ResolveFactsIn
 async function restore(db:FactsDb,tables:TableClient,item:Row,input:ResolveFactsInput,now:()=>Date):Promise<FactsResolveResult>{
  if(!input.inputsHashNow)return {outcome:'conflict',code:'not_passing',restoreNote:'reconcile_wiring_missing'};
  const id=String(item.id);const hash=await input.inputsHashNow(item);
- if(hash===null)return {outcome:'conflict',code:'not_passing',restoreNote:'inputs_unavailable'};
+ if(typeof hash!=='string')return {outcome:'conflict',code:'not_passing',restoreNote:hash.unavailable};
  let r:Awaited<ReturnType<FactsDb['restoreReconciled']>>;
  try{r=await withBatch(tables,String(item.dataset),batchId=>db.restoreReconciled(id,batchId,hash,input.resolvedBy));}
  catch(e){const m=mapRefusal(e);if(m)return m;throw e;}
@@ -12599,6 +12917,20 @@ export async function resolveFactsItem(db:FactsDb,tables:TableClient,item:Row,in
 ```
 
 （落地用例全部保留：`target()` 改名 `hookTarget()` 后对计划二项仍取 `payload.key`；落地的"无目标 → `no_target`"仍成立。计划二的 `ambiguous_value` 确认知晓路径不变。）
+
+`src/lib/dq/quarantine.ts`（计划审计 P4）：import 行 `import {TableError} from '../db/table-client';` 改为 `import {TableError,callRpc} from '../db/table-client';`，文件末尾追加：
+
+```ts
+/**
+ * Sets ONE key of an item's detail — 'hook' or 'audit_written' — through the row-locking SQL function
+ * patch_quarantine_detail (migration 20261107090000; plan audit round 1, P4). Every other detail key
+ * (latest_result, chosen ids, …) and the resolution columns stay as the latest committed writer left
+ * them. false = no such item. Needs client.rpc (callRpc: rpc_unavailable otherwise).
+ */
+export async function patchQuarantineDetail(client:TableClient,id:string,key:'hook'|'audit_written',value:unknown):Promise<boolean>{
+ return (await callRpc(client,'patch_quarantine_detail',{p_id:id,p_key:key,p_value:value}))===true;
+}
+```
 
 - [ ] **Step 7: 实现路由**
 
@@ -12750,7 +13082,7 @@ export async function runPendingHooks(deps:PendingHookDeps):Promise<PendingHookR
 
 - [ ] **Step 10: 跑测试确认通过**
 
-`npm test -- src/lib/dq src/app/api/admin/dq` —— Expected: PASS（落地 `facts-resolver.test.ts` 全部旧用例 + 新 10 个；路由旧用例 + 新 3 个；`pending-hooks.test.ts` 3 个）。
+`npm test -- src/lib/dq src/app/api/admin/dq` —— Expected: PASS（落地 `facts-resolver.test.ts` 全部旧用例 + 新 13 个；`quarantine.test.ts` 旧用例 + 1；路由旧用例 + 新 3 个；`pending-hooks.test.ts` 3 个）。
 `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/dq/dq-extensions.integration.test.ts` —— Expected: PASS（含 E8）。
 
 - [ ] **Step 11: typecheck + lint**
@@ -12760,7 +13092,7 @@ export async function runPendingHooks(deps:PendingHookDeps):Promise<PendingHookR
 - [ ] **Step 12: 提交**
 
 ```bash
-git add src/lib/dq/facts-resolver.ts src/lib/dq/facts-resolver.test.ts "src/app/api/admin/dq/quarantine/[id]/route.ts" "src/app/api/admin/dq/quarantine/[id]/route.test.ts" src/lib/dq/pending-hooks.ts src/lib/dq/pending-hooks.test.ts scripts/facts/materialize.ts src/lib/dq/dq-extensions.integration.test.ts
+git add src/lib/dq/facts-resolver.ts src/lib/dq/facts-resolver.test.ts src/lib/dq/quarantine.ts src/lib/dq/quarantine.test.ts "src/app/api/admin/dq/quarantine/[id]/route.ts" "src/app/api/admin/dq/quarantine/[id]/route.test.ts" src/lib/dq/pending-hooks.ts src/lib/dq/pending-hooks.test.ts scripts/facts/materialize.ts src/lib/dq/dq-extensions.integration.test.ts
 ```
 ```bash
 git commit -m "feat(dq): candidate adoption, restore and lineage verdict dispatch, pending-hook scan, E8 (F3-4)
@@ -13205,12 +13537,12 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 | `ReconcileInputs` | `{left_raw_hash;right_sha256;gold_or_sample_sha256;parser_version}` | `reconcile/inputs-hash.ts` |
 | `IxFact` 增字段 `entity`、`contextRef`、`unitRef`；`IxUnsupported`（`{reason;name?;contextRef?;periodStart?;periodEnd?}`）；`IxbrlParseError`；`MAX_IXBRL_BYTES`；`NS`；`TRANSFORM_NS`；`DEI_NON_NUMERIC`；`XmlToken`；`tokenizeXml(doc)`；`decodeEntities(s)`；`NsMap`；`resolveQName(q,ns,useDefault)`；`canonicalConcept(uri,local)`；`parseFactText(format,text)`；`ixFactKey(f)`；`indexIxFacts(facts)` | 见 Task 13b | `reconcile/ixbrl.ts` |
 | `IXBRL_TRIM_VERSION`、`trimInlineXbrl(doc,opts)`、`factConceptKeep(name)` | 见 Task 13c | `reconcile/ixbrl-trim.ts` |
-| `PairInputs`、`RegisteredPair`（= `ReconcilePair & {inputs}`）、`PairRunContext`（= `PairContext & {batchId;dryRun}`）、`runContextOf`、`ReconcileConfigError`/`ReconcileConfigCode`、`sha256Hex`、`todayOf`、`readRepoJson`、`activeRows`、`factKeyOf`、`fractionDigits`、`mismatchItemKey`、`OpenMismatch`/`openMismatches`、`Sides`/`ResultExtras`、`notCompared`、`comparedNumeric`、`actionFor`、`mismatchItem` | 见 Task 14a | `reconcile/pair-support.ts` |
-| `RECONCILE_PAIRS`（`Partial<Record<CyclePairId,RegisteredPair>>`）、`inputsHashNow(ctx,item)` | 见 Task 14a | `reconcile/pairs.ts` |
+| `PairInputs`、`RegisteredPair`（= `ReconcilePair & {inputs; currentRight}`）、`CurrentRight`（`(ctx,rec:Row)=>Promise<string\|null>`，计划审计 P2）、`PairRunContext`（= `PairContext & {batchId;dryRun}`）、`runContextOf`、`ReconcileConfigError`/`ReconcileConfigCode`、`sha256Hex`、`todayOf`、`readRepoJson`、`activeRows`、`factKeyOf`、`fractionDigits`、`mismatchItemKey`、`OpenMismatch`/`openMismatches`、`Sides`/`ResultExtras`、`notCompared`、`comparedNumeric`、`actionFor`、`mismatchItem` | 见 Task 14a | `reconcile/pair-support.ts` |
+| `RECONCILE_PAIRS`（`Partial<Record<CyclePairId,RegisteredPair>>`）、`inputsHashNow(ctx,item)`（右侧取 `pair.currentRight`；取不到抛 `current_evidence_unavailable`） | 见 Task 14a | `reconcile/pairs.ts` |
 | `lineageSameDayPair(opts?)`、`lineageNaturalKey(target,c)`；`usCompanyfactsVsGoldPair()`、`US_GOLD_PATH`、`US_GOLD_PARSER`、`UsGoldEntry`、`usGoldEntries(json)`、`usGoldKey(e)` | 见 Task 14a | `reconcile/pair-lineage.ts`、`reconcile/pair-us-gold.ts` |
 | `reconcileTables()`、`SeedFact`、`seedPublished(db,o)`（Task 14a）、`goldRow(...)`（Task 16a） | TEST-ONLY | `reconcile/testing.ts` |
 | `runReconcile(deps,opts)`、`ReconcileDeps`、`ReconcileOptions`、`ReconcileReceipt`、`MemberReport`、`CycleReport`、`ReconcileError`、`MIN_MEMBER_MS`、`CYCLE_TABLE`、`CURSOR_TABLE` | 见 Task 14b | `reconcile/run.ts` |
-| `productionReconcileDeps(opts)`、`readRepoFileFromDisk(path)`、`REPO_FILE_PREFIXES`、`restoreInputsHashNow(admin?):InputsHashNow`（Task 14c；隔离路由与看板 `restorable` 共用） | 见 Task 14c | `reconcile/deps.ts` |
+| `productionReconcileDeps(opts)`、`readRepoFileFromDisk(path)`、`REPO_FILE_PREFIXES`、`restoreInputsHashNow(admin?):InputsHashNow`（Task 14c；隔离路由与看板 `restorable` 共用；数据缺口 → `{unavailable:'inputs_unavailable'}`，当前右侧证据取不到 → `{unavailable:'current_evidence_unavailable'}`） | 见 Task 14c | `reconcile/deps.ts` |
 | `US_SAMPLE_SCHEMA`、`US_SAMPLE_PATH`、`MIN_KEYS_PER_SIDE`、`KeyOrigin`、`SampleKey`、`SampleFiling`、`SampleIssuer`、`UsSample`、`usNaturalKey`、`entityIs`、`validateUsSample`、`companyfactsKeys`、`ixbrlKeys`、`BuildFilingInput`、`buildSampleFiling`、`SampleCandidate`、`pickSample` | 见 Task 15a | `reconcile/us-sample.ts` |
 | `usCompanyfactsVsIxbrlPair()`、`DocFetch`、`fetchSecDocument(url,ctx)`、`filerClass(text)`（Part E 的 `filer-categories.ts` 宜复用，契约问题 13） | 见 Task 15a | `reconcile/pair-us-ixbrl.ts` |
 | `GOLD_CN_SCHEMA`、`CN_GOLD_PATH`、`CN_GOLD_PARSER`、`CN_GOLD_CONCEPTS`/`CnGoldConcept`、`CN_GOLD_FISCAL_YEARS`、`CN_GOLD_MULTIPLIERS`、`GoldCnSource`、`GoldCnRow`、`GoldCnFile`、`validateGoldCn`、`cnGoldKey`、`printedInterval`、`autoQuarantinable`、`cnPeriodOf`、`pickCnSample`、`goldTemplate`；`cnTushareVsGoldPair()` | 见 Task 16a | `reconcile/gold-cn.ts`、`reconcile/pair-cn-gold.ts` |
@@ -13969,6 +14301,17 @@ interface RawCtx{id:string;scheme:string;ident:string;start:string;end:string;in
 interface RawUnit{id:string;measures:string[];num:string[];den:string[]}
 interface FactFrame{kind:'nf'|'nn';attrs:[string,string][];ns:NsMap;text:string;inner:string|null}
 interface RawFact{kind:'nf'|'nn';attrs:[string,string][];ns:NsMap;text:string}
+/**
+ * Mutable parser state, one explicitly typed object (plan audit P7): the open/close callbacks and the token
+ * loop all read and write it through `st.*`. Closure `let`s assigned inside callbacks are invisible to the
+ * loop's control-flow analysis (TS narrows them to their initial null/false → `never`, TS2322/TS2339 under
+ * strict 5.9); property reads of a typed object are narrowed per use instead.
+ */
+interface ParseState{
+ sawIx:boolean;exclude:number;
+ ctx:RawCtx|null;ctxField:'ident'|'start'|'end'|'instant'|null;segDepth:number;
+ unit:RawUnit|null;unitPart:'num'|'den'|null;measure:{ns:NsMap;text:string}|null;
+}
 const DATE=/^\d{4}-\d{2}-\d{2}$/;
 
 function periodOf(c:RawCtx):{start:string|null;end:string}|null{
@@ -13989,42 +14332,40 @@ export function parseInlineXbrl(doc:string):IxbrlDocument{
  const stack:Frame[]=[];
  const contexts=new Map<string,RawCtx>();const units=new Map<string,RawUnit>();const rawFacts:RawFact[]=[];
  const open:FactFrame[]=[];
- let sawIx=false,exclude=0;
- let ctx:RawCtx|null=null;let ctxField:'ident'|'start'|'end'|'instant'|null=null;let segDepth=-1;
- let unit:RawUnit|null=null;let unitPart:'num'|'den'|null=null;let measure:{ns:NsMap;text:string}|null=null;
+ const st:ParseState={sawIx:false,exclude:0,ctx:null,ctxField:null,segDepth:-1,unit:null,unitPart:null,measure:null};
 
  const onOpen=(f:Frame,attrs:[string,string][])=>{
-  if(ctx!==null&&segDepth>=0){ctx.dimensional=true;return;}   // any element inside segment / scenario
+  if(st.ctx!==null&&st.segDepth>=0){st.ctx.dimensional=true;return;}   // any element inside segment / scenario
   if(f.uri===NS.ix){
-   sawIx=true;
+   st.sawIx=true;
    if(f.local==='nonFraction'||f.local==='nonNumeric'){
     if(attrOf(attrs,'tupleRef')!==undefined)out.unsupported.push({reason:'tuple_member',name:attrOf(attrs,'name')});
     open.push({kind:f.local==='nonFraction'?'nf':'nn',attrs,ns:f.ns,text:'',inner:null});
-   }else if(f.local==='exclude')exclude++;
+   }else if(f.local==='exclude')st.exclude++;
    else if(f.local==='fraction'||f.local==='tuple')out.unsupported.push({reason:`ix_${f.local}`,name:attrOf(attrs,'name')});
    return;
   }
   if(f.uri!==NS.xbrli)return;
-  if(f.local==='context'){ctx={id:attrOf(attrs,'id')??'',scheme:'',ident:'',start:'',end:'',instant:'',forever:false,dimensional:false};return;}
-  if(ctx!==null){
-   if(f.local==='segment'||f.local==='scenario'){segDepth=stack.length;return;}
-   if(f.local==='identifier'){ctx.scheme=attrOf(attrs,'scheme')??'';ctxField='ident';return;}
-   if(f.local==='startDate'){ctxField='start';return;}
-   if(f.local==='endDate'){ctxField='end';return;}
-   if(f.local==='instant'){ctxField='instant';return;}
-   if(f.local==='forever'){ctx.forever=true;return;}
+  if(f.local==='context'){st.ctx={id:attrOf(attrs,'id')??'',scheme:'',ident:'',start:'',end:'',instant:'',forever:false,dimensional:false};return;}
+  if(st.ctx!==null){
+   if(f.local==='segment'||f.local==='scenario'){st.segDepth=stack.length;return;}
+   if(f.local==='identifier'){st.ctx.scheme=attrOf(attrs,'scheme')??'';st.ctxField='ident';return;}
+   if(f.local==='startDate'){st.ctxField='start';return;}
+   if(f.local==='endDate'){st.ctxField='end';return;}
+   if(f.local==='instant'){st.ctxField='instant';return;}
+   if(f.local==='forever'){st.ctx.forever=true;return;}
    return;
   }
-  if(f.local==='unit'){unit={id:attrOf(attrs,'id')??'',measures:[],num:[],den:[]};return;}
-  if(unit!==null){
-   if(f.local==='unitNumerator')unitPart='num';
-   else if(f.local==='unitDenominator')unitPart='den';
-   else if(f.local==='measure')measure={ns:f.ns,text:''};
+  if(f.local==='unit'){st.unit={id:attrOf(attrs,'id')??'',measures:[],num:[],den:[]};return;}
+  if(st.unit!==null){
+   if(f.local==='unitNumerator')st.unitPart='num';
+   else if(f.local==='unitDenominator')st.unitPart='den';
+   else if(f.local==='measure')st.measure={ns:f.ns,text:''};
   }
  };
  const onClose=(f:Frame)=>{
   if(f.uri===NS.ix){
-   if(f.local==='exclude'){exclude=Math.max(0,exclude-1);return;}
+   if(f.local==='exclude'){st.exclude=Math.max(0,st.exclude-1);return;}
    if(f.local==='nonFraction'||f.local==='nonNumeric'){
     const fr=open.pop();if(!fr)return;
     const text=fr.inner??fr.text;
@@ -14035,28 +14376,28 @@ export function parseInlineXbrl(doc:string):IxbrlDocument{
    return;
   }
   if(f.uri!==NS.xbrli)return;
-  if(ctx!==null){
-   if(f.local==='context'){contexts.set(ctx.id,ctx);ctx=null;ctxField=null;segDepth=-1;return;}
-   if((f.local==='segment'||f.local==='scenario')&&segDepth===stack.length){segDepth=-1;return;}
-   if(f.local==='identifier'||f.local==='startDate'||f.local==='endDate'||f.local==='instant')ctxField=null;
+  if(st.ctx!==null){
+   if(f.local==='context'){contexts.set(st.ctx.id,st.ctx);st.ctx=null;st.ctxField=null;st.segDepth=-1;return;}
+   if((f.local==='segment'||f.local==='scenario')&&st.segDepth===stack.length){st.segDepth=-1;return;}
+   if(f.local==='identifier'||f.local==='startDate'||f.local==='endDate'||f.local==='instant')st.ctxField=null;
    return;
   }
-  if(unit!==null){
-   if(f.local==='unit'){units.set(unit.id,unit);unit=null;unitPart=null;return;}
-   if(f.local==='measure'&&measure!==null){
-    const r=resolveQName(measure.text.trim(),measure.ns,true);
+  if(st.unit!==null){
+   if(f.local==='unit'){units.set(st.unit.id,st.unit);st.unit=null;st.unitPart=null;return;}
+   if(f.local==='measure'&&st.measure!==null){
+    const r=resolveQName(st.measure.text.trim(),st.measure.ns,true);
     const m=r.uri===NS.iso4217||r.uri===NS.xbrli?r.local:`{${r.uri??''}}${r.local}`;
-    (unitPart==='num'?unit.num:unitPart==='den'?unit.den:unit.measures).push(m);measure=null;return;
+    (st.unitPart==='num'?st.unit.num:st.unitPart==='den'?st.unit.den:st.unit.measures).push(m);st.measure=null;return;
    }
-   if(f.local==='unitNumerator'||f.local==='unitDenominator')unitPart=null;
+   if(f.local==='unitNumerator'||f.local==='unitDenominator')st.unitPart=null;
   }
  };
 
  for(const tok of tokenizeXml(doc)){
   if(tok.t==='text'){
-   if(ctx!==null&&ctxField!==null&&segDepth<0)ctx[ctxField]+=tok.text;
-   if(measure!==null)measure.text+=tok.text;
-   if(open.length>0&&exclude===0)open[open.length-1].text+=tok.text;
+   if(st.ctx!==null&&st.ctxField!==null&&st.segDepth<0)st.ctx[st.ctxField]+=tok.text;
+   if(st.measure!==null)st.measure.text+=tok.text;
+   if(open.length>0&&st.exclude===0)open[open.length-1].text+=tok.text;
    continue;
   }
   if(tok.t==='open'){
@@ -14075,7 +14416,7 @@ export function parseInlineXbrl(doc:string):IxbrlDocument{
   onClose(frame);
  }
  if(stack.length>0)throw new IxbrlParseError('unclosed_elements');
- if(!sawIx)return {facts:[],nonNumeric:{},unsupported:[{reason:'not_inline_xbrl'}]};
+ if(!st.sawIx)return {facts:[],nonNumeric:{},unsupported:[{reason:'not_inline_xbrl'}]};
 
  for(const f of rawFacts){
   const nameQ=attrOf(f.attrs,'name');
@@ -14128,7 +14469,7 @@ Expected: PASS（`it.each` 17 例 + 其余 19 个用例）
 - [ ] **Step 5: typecheck + lint**
 
 Run: `npm run typecheck && npm run lint`
-Expected: 0 errors、0 warnings
+Expected: 0 errors、0 warnings。`npm run typecheck`（`tsc --noEmit`，strict，锁定 TypeScript 5.9.3）必须原样通过上面的解析器代码块（计划审计 P7）：解析器的可变状态只能在 `ParseState` 对象 `st` 里；若出现涉及 `never` 的 TS2322/TS2339，说明有人把状态改回了闭包 `let`——改回 `st.*`，不得加 `as` 断言绕过。
 
 - [ ] **Step 6: 提交**
 
@@ -14380,6 +14721,7 @@ git commit -m "feat(dq): deterministic inline XBRL fixture trimmer and SEC recor
 - 绑定（T1、S2）：常规绑定只用 `activeRows`（`mapping_gen = filings.mapping_gen > 0`、运行 `published`、`ok|quarantined`）；**显式复查**——该结果自然键有 open `reconcile_mismatch` 项时，绑定到项的 `payload.fact_ids[0]`，不论代、不论状态，绝不换行。
 - 动作规则 `actionFor`（契约问题 2）：经 open 项绑定 → `quarantine_left`；未绑定且 `compared && !passed && 左侧 ok` → 对的 `onFail`（`quarantine_left` 或 A 股舍入印刷的 `review_item`）；其余 `record`。
 - `us.companyfacts_vs_gold`：只比较非 `<pending>` 条目（`recorded_by==='<pending>' || value==='<pending>'`，与落地黄金门同一判定）；每个 `<pending>` 条目恰一行 `incomplete_gold`，绝不比较占位值（T15）。落地的 `plan2.json` 现有两条 US 条目都是 pending（AAPL 的 `recorded_by` 仍为 `<pending>`），因此当前该对只产出 2 行 `incomplete_gold`，周期 `complete_with_gaps`、新鲜度 `ok:false`——这是如实状态，不是缺陷。
+- **当前右侧证据（计划审计 P2）**：`RegisteredPair.currentRight(ctx, rec)` 按对解析结果行 `rec`（`dq_reconciliations`，按其 `natural_key`）**此刻**的右侧证据 sha256——iXBRL：按当前样本清单找到该键的主文档并**现抓现哈希**；黄金对：当前清单该键的证据（US = 当前黄金文件 sha256 且条目仍在、非 `<pending>`；CN = 当前清单行的 `source.pdf_sha256`）；谱系对不产生 `reconcile_mismatch` 项，恒 null。取不到 → null → `inputsHashNow` 抛 `current_evidence_unavailable`（恢复与看板 `restorable` 均禁用）。绝不复用 `rec.detail.right.sha256`（那是上次运行读到的）。
 - `facts.lineage_same_day`：成员 = 每个有引用方的目标 T（`issuers.status='merged'` 的 `merged_into` 去重）× 两市场中 `readFactsLineage` 有 `conflicts` 的市场；预期键 = 建周期时的冲突（冻结）。评估时冲突仍在 → `compared`、`passed=false`、`lineage_item`（建 `lineage_conflict` 项，`natural_key=<T>:<K>:<available_date>`，`payload={fact_ids, values:[{issuer_id, filing, fact_id, value}], key, available_date, target}`）；冲突已消失 → 原 `fact_ids` 中仍 `ok` 的行值一致 → `compared passed=true record`（`reason='conflict_cleared'`），无 `ok` 行 → `left_missing`。
 
 - [ ] **Step 1: 写失败测试**
@@ -14397,7 +14739,7 @@ import {memoryRawStore} from '../raw-store';
 import {computeInputsHash} from './inputs-hash';
 import {ReconcileConfigError,actionFor,activeRows,openMismatches,sha256Hex} from './pair-support';
 import {lineageSameDayPair} from './pair-lineage';
-import {US_GOLD_PARSER,US_GOLD_PATH,usCompanyfactsVsGoldPair,usGoldEntries} from './pair-us-gold';
+import {US_GOLD_PARSER,US_GOLD_PATH,usCompanyfactsVsGoldPair,usGoldEntries,usGoldKey} from './pair-us-gold';
 import {RECONCILE_PAIRS,inputsHashNow} from './pairs';
 import {reconcileTables,seedPublished} from './testing';
 import {CYCLE_PAIR_IDS} from './types';
@@ -14424,7 +14766,7 @@ const FY23={period_start:'2023-01-01',period_end:'2023-12-31'};
 
 describe('registry',()=>{
  it('holds only cycle pairs, keyed by their own id, with lineage and US gold registered by Task 14',()=>{
-  for(const [id,p] of Object.entries(RECONCILE_PAIRS)){expect(CYCLE_PAIR_IDS as readonly string[]).toContain(id);expect(p!.id).toBe(id);}
+  for(const [id,p] of Object.entries(RECONCILE_PAIRS)){expect(CYCLE_PAIR_IDS as readonly string[]).toContain(id);expect(p!.id).toBe(id);expect(typeof p!.currentRight).toBe('function');}
   expect(RECONCILE_PAIRS['facts.lineage_same_day']).toBeDefined();
   expect(RECONCILE_PAIRS['us.companyfacts_vs_gold']?.inputs).toEqual({repoFile:US_GOLD_PATH,parserVersion:US_GOLD_PARSER,goldSchema:'plan2-gold/1'});
  });
@@ -14544,17 +14886,24 @@ describe('facts.lineage_same_day (§4.4)',()=>{
 });
 
 describe('inputsHashNow (restore-side recomputation, spec §5.6)',()=>{
- it('recomputes from the current fact raw_hash, the latest result right sha256, the CURRENT gold file and parser version',async()=>{
+ it('recomputes from the current fact raw_hash, the pair\'s CURRENT right evidence for the key (never the recorded right sha256), the CURRENT gold file and parser version (plan audit P2)',async()=>{
   const {tables,db,ctx,files}=setup();const id=await issuer(tables,'ZGOLD');
   const seeded=await seedPublished(db,{issuer:id,market:'US',sourceRef:'0009990100-24-000003',availableDate:'2024-02-01',facts:[{concept:'revenue',value:'1000',...FY23}]});
   const [fact]=await db.factsByIds(seeded.factIds);
+  const nk=usGoldKey(usGoldEntries(goldFile([entry()])).entries[0]);
   const rec=randomUUID();
-  await tables.insert('dq_reconciliations',{id:rec,dataset:'reconcile.us.companyfacts_vs_gold',pair:'us.companyfacts_vs_gold',detail:{right:{sha256:'right-sha'}}});
+  await tables.insert('dq_reconciliations',{id:rec,dataset:'reconcile.us.companyfacts_vs_gold',pair:'us.companyfacts_vs_gold',natural_key:nk,detail:{right:{sha256:'recorded-by-the-last-run'}}});
   const item={id:randomUUID(),reason_code:'reconcile_mismatch',status:'open',payload:{fact_ids:[fact.fact_id]},detail:{pair:'us.companyfacts_vs_gold',latest_result:{passed:true,reconciliation_id:rec}}};
+  const at=(gold:Uint8Array)=>computeInputsHash({left_raw_hash:fact.raw_hash,right_sha256:sha256Hex(gold),gold_or_sample_sha256:sha256Hex(gold),parser_version:US_GOLD_PARSER});
   const v1=enc(goldFile([entry()]));files.set(US_GOLD_PATH,v1);
-  expect(await inputsHashNow(ctx,item)).toBe(computeInputsHash({left_raw_hash:fact.raw_hash,right_sha256:'right-sha',gold_or_sample_sha256:sha256Hex(v1),parser_version:US_GOLD_PARSER}));
-  files.set(US_GOLD_PATH,enc(goldFile([entry({value:'1001'})])));
-  expect(await inputsHashNow(ctx,item)).not.toBe(computeInputsHash({left_raw_hash:fact.raw_hash,right_sha256:'right-sha',gold_or_sample_sha256:sha256Hex(v1),parser_version:US_GOLD_PARSER}));
+  expect(await inputsHashNow(ctx,item)).toBe(at(v1));
+  const v2=enc(goldFile([entry({value:'1001'})]));files.set(US_GOLD_PATH,v2);
+  expect(await inputsHashNow(ctx,item)).toBe(at(v2));                                     // changed evidence → a different hash
+  files.set(US_GOLD_PATH,enc(goldFile([entry({recorded_by:'<pending>'})])));
+  await expect(inputsHashNow(ctx,item)).rejects.toThrow('current_evidence_unavailable');  // the entry is pending again
+  files.set(US_GOLD_PATH,enc(goldFile([entry({concept:'net_income_parent'})])));
+  await expect(inputsHashNow(ctx,item)).rejects.toThrow('current_evidence_unavailable');  // the key left the manifest
+  files.set(US_GOLD_PATH,v1);
   await expect(inputsHashNow(ctx,{...item,detail:{pair:'us.companyfacts_vs_gold'}})).rejects.toThrow('no_latest_result');
   await expect(inputsHashNow(ctx,{...item,detail:{pair:'sec.filer_category',latest_result:{reconciliation_id:rec}}})).rejects.toThrow('pair_not_registered');
   await expect(inputsHashNow(ctx,{...item,payload:{fact_ids:[randomUUID()]}})).rejects.toThrow('left_fact_missing');
@@ -14599,7 +14948,7 @@ Expected: FAIL（`Cannot find module './pair-support'` 等）
 // kind/side rules; actionFor is the one action rule every fact-backed pair uses (contract note 2).
 import {createHash} from 'node:crypto';
 import {selectAll} from '../../db/table-client';
-import type {TableClient} from '../../db/table-client';
+import type {Row,TableClient} from '../../db/table-client';
 import {keyComponents} from '../../facts/keys';
 import type {FactRow,FactStatus,FilingFactRow,FilingRow,Market} from '../../facts/types';
 import {DATASETS} from '../datasets';
@@ -14607,7 +14956,15 @@ import {absDecimal,relDiff,subDecimal} from './decimal';
 import type {CyclePairId,PairContext,ReconcileAction,ReconcileKind,ReconcileOutcome,ReconcilePair,ReconcileResultInput} from './types';
 
 export interface PairInputs{repoFile:string|null;parserVersion:string;goldSchema:string|null}
-export interface RegisteredPair extends ReconcilePair{inputs:PairInputs}
+/**
+ * The CURRENT right-side evidence of one stored result (restore, spec §3.2 / §5.6; plan audit P2): the
+ * sha256 the pair would read NOW for `rec` (its dq_reconciliations row, keyed by rec.natural_key) — iXBRL:
+ * the current primary document fetched and hashed now; gold pairs: the current manifest's evidence for the
+ * key — or null when it cannot be obtained now (fetch failed, entry gone or pending). Never the sha256 the
+ * last run recorded (rec.detail.right.sha256).
+ */
+export type CurrentRight=(ctx:PairContext,rec:Row)=>Promise<string|null>;
+export interface RegisteredPair extends ReconcilePair{inputs:PairInputs;currentRight:CurrentRight}
 export interface PairRunContext extends PairContext{batchId:string|null;dryRun:boolean}
 /** The run context behind a PairContext; a context without the flags counts as a dry run (no side writes). */
 export const runContextOf=(ctx:PairContext):PairRunContext=>{const c=ctx as Partial<PairRunContext>;return {...ctx,batchId:c.batchId??null,dryRun:c.dryRun??true};};
@@ -14735,6 +15092,14 @@ export function usCompanyfactsVsGoldPair():RegisteredPair{
  return {
   id:PAIR,kind:'numeric',left:DATASETS.facts('US'),right:'gold.plan2',
   inputs:{repoFile:US_GOLD_PATH,parserVersion:US_GOLD_PARSER,goldSchema:'plan2-gold/1'},
+  // the current gold file is this pair's right evidence; its entry for the key must still exist and be recorded (plan audit P2)
+  async currentRight(ctx,rec){
+   try{
+    const {json,sha256}=await readRepoJson(ctx,US_GOLD_PATH,'invalid_gold_file');
+    const e=usGoldEntries(json).entries.find(x=>usGoldKey(x)===String(rec.natural_key));
+    return e&&!e.pending&&e.value!==null?sha256:null;
+   }catch(err){if(err instanceof ReconcileConfigError)return null;throw err;}
+  },
   async members(ctx){
    const {json}=await readRepoJson(ctx,US_GOLD_PATH,'invalid_gold_file');
    const byTicker=new Map<string,UsGoldEntry[]>();
@@ -14814,6 +15179,7 @@ export function lineageSameDayPair(opts:{targets?:readonly string[]}={}):Registe
  return {
   id:'facts.lineage_same_day',kind:'numeric',left:'facts.lineage',right:'facts.lineage',
   inputs:{repoFile:null,parserVersion:'lineage/1',goldSchema:null},
+  async currentRight(){return null;},   // never produces reconcile_mismatch items (lineage verdicts are lineage_conflict items)
   async members(ctx){
    const merged=await selectAll(ctx.tables,'issuers',{status:'merged'},'issuer_id');
    const targets=[...new Set(merged.map(r=>r.merged_into).filter((x):x is string=>typeof x==='string'))]
@@ -14866,9 +15232,11 @@ export function lineageSameDayPair(opts:{targets?:readonly string[]}={}):Registe
 // cn.tushare_vs_cninfo_pdf_gold. The three non-cycle pairs (sec.filing_date_vs_submissions,
 // sec.filer_category, entities.isin_hkex_vs_gleif) are recorded inline through record.ts and are
 // deliberately absent. inputsHashNow recomputes a reconcile_mismatch item's inputs_hash from CURRENT
-// inputs for restore_reconciled (spec §5.6): left raw_hash from the item's fact, right sha256 from the
-// result row named by latest_result (the right document the last run actually read), the CURRENT gold or
-// sample file bytes, the CURRENT parser version. Any change since the last passing run → a different hash.
+// inputs for restore_reconciled (spec §5.6): left raw_hash from the item's fact, the pair's CURRENT right
+// evidence for the natural key of the result row named by latest_result (RegisteredPair.currentRight —
+// iXBRL fetches and hashes the primary document now, gold pairs resolve the current manifest entry; never
+// the sha256 that run recorded; unobtainable → current_evidence_unavailable, plan audit P2), the CURRENT
+// gold or sample file bytes, the CURRENT parser version. Any change since the last passing run → a different hash.
 import type {Row} from '../../db/table-client';
 import {computeInputsHash} from './inputs-hash';
 import {lineageSameDayPair} from './pair-lineage';
@@ -14893,8 +15261,9 @@ export async function inputsHashNow(ctx:PairContext,item:Row):Promise<string>{
  const recId=detail.latest_result?.reconciliation_id;
  if(typeof recId!=='string')throw new Error('no_latest_result');
  const [rec]=await ctx.tables.select('dq_reconciliations',{id:recId},{limit:1});
- const right=((rec?.detail??{}) as {right?:{sha256?:unknown}}).right?.sha256;
- if(typeof right!=='string')throw new Error('no_latest_result');
+ if(!rec)throw new Error('no_latest_result');
+ const right=await pair.currentRight(ctx,rec);   // what the right side says NOW (plan audit P2)
+ if(right===null)throw new Error('current_evidence_unavailable');
  const file=pair.inputs.repoFile===null?'':sha256Hex(await ctx.readRepoFile(pair.inputs.repoFile));
  return computeInputsHash({left_raw_hash:fact.raw_hash,right_sha256:right,gold_or_sample_sha256:file,parser_version:pair.inputs.parserVersion});
 }
@@ -14932,7 +15301,7 @@ export async function seedPublished(db:MemoryFactsDb,o:{issuer:string;market:Mar
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `npm test -- src/lib/dq/reconcile/pairs.test.ts src/lib/dq/datasets.test.ts`
-Expected: PASS（12 个用例 + datasets 1 个新用例）。谱系三个用例依赖 Task 9a 的 `memoryFactsDb.setTopology/lineageOf/readFactsLineage`；`LineageConflict.key` 的字段为 `concept/period_start/period_end/consolidation/unit`（Task 8a SQL 与 9a 内存实现一致），`lineageNaturalKey` 按此取值。
+Expected: PASS（12 个用例 + datasets 1 个新用例；`inputsHashNow` 用例含当前证据变化 / 待录 / 移出清单三种情形）。谱系三个用例依赖 Task 9a 的 `memoryFactsDb.setTopology/lineageOf/readFactsLineage`；`LineageConflict.key` 的字段为 `concept/period_start/period_end/consolidation/unit`（Task 8a SQL 与 9a 内存实现一致），`lineageNaturalKey` 按此取值。
 
 - [ ] **Step 5: typecheck + lint**
 
@@ -14960,7 +15329,7 @@ git commit -m "feat(dq): reconcile pair registry with lineage same-day and plan-
 0. **挂起钩子扫描**：本 pair 的 open `reconcile_mismatch` 项中 `detail.hook.state ∈ {pending, failed}` 者先物化（`T(i)=issuers.merged_into ?? i`，`detail.issuer_id/market` 取发行人），钩子置 `done`/`failed`（U2：`apply_reconcile_result` 提交后、物化前崩溃的补做）。
 1. **周期**：有 `running` 周期就用；否则 `pair.members(ctx)` ∪ 旧周期行 `detail.pending_members`（契约问题 3）冻结为新周期（`cycle_id=<pair>-<started_at 日期>-<uuid 前 8 位>`，`members=[{issuer_id, market, expected_keys}]`，`expected_total=Σ`）；插入撞部分唯一索引（23505）→ 读回赢家。每次运行都为冻结成员补建缺失的游标行（建周期者中途崩溃可自愈）。
 2. **认领**：按 `(issuer_id, market)` 顺序，游标可认领（`pending` | `claimed` 且租约过期 | `failed` 且 `attempts<3`）且剩余预算 ≥ 60 s 才调用 `claimReconcileMember`；返回 null → `skipped_summary(<issuer>:<market>:claimed)`。
-3. **逐键提交**：每个预期键一次 `applyReconcileResult(fence, result)`；`reused` 计 `duplicates`；`fence_failed` → 本工作者立即停止（已提交键有效）；可见性变化在成员末尾按目标去重物化一次，并把各项钩子置 `done`/`failed`；`completeReconcileMember` 推导计数；其余异常 → `failReconcileMember(fence, code)`。`evaluate` 结果数或自然键顺序与预期键不一致 → `evaluate_contract` 异常。
+3. **逐键提交**：先读回本成员在本周期已提交的结果行（`dq_reconciliations` 按 `(pair, cycle_id, issuer_id, market)`，规格 T2、计划审计 P5）——已有的键直接计 `duplicates`、**不再评估**；只对缺失的预期键调用 `evaluate`（子计划，键序不变）；全部键都已存在 → 不评估、直接 `completeReconcileMember`（上游不可用也能完成）；这些键的挂起钩子由第 0 步独立补做。其余每个预期键一次 `applyReconcileResult(fence, result)`；`reused` 计 `duplicates`；`fence_failed` → 本工作者立即停止（已提交键有效）；可见性变化在成员末尾按目标去重物化一次，并把各项钩子置 `done`/`failed`（钩子只经 `quarantine.ts::patchQuarantineDetail` 改 `detail.hook` 一个键，不回滚并发写入的 `latest_result`，计划审计 P4）；`completeReconcileMember` 推导计数；其余异常 → `failReconcileMember(fence, code)`。`evaluate` 结果数或自然键顺序与预期键不一致 → `evaluate_contract` 异常。
 4. **结算**：全部游标 `done` 或 `failed` 且 `attempts≥3` 时，逐个 `done` 游标断言三计数非空、非负且和 = `expected`（`drc_done_accounted`，**不 coalesce**，不满足 → 不结算、记 `cursor_unaccounted`）；`status = not_compared=0 且无失败成员 ? complete : complete_with_gaps`；带 `status='running'` 守卫更新周期行，**只有本工作者结算成功时**记新鲜度 `recordAttempt(DATASETS.reconcile(pair), {ok: status==='complete', cadence:'weekly', detail:{cycle_id, 四计数}})`。
 5. **批次计数**（§5.5）：`fetched`=本次提交的键数；`inserted`=passed；`duplicates`=复用；`quarantined`=不一致且进了项（`action≠'record'`）；`failed`=全部非 `compared` + 不一致但只记录 + 成员执行失败；`errors`：`outcome_summary`（按 outcome 计数的 JSON）、`fence_failed`、`materialize_error`、`member_failed`、`cursor_unaccounted`、`deadline_hit`（信息）、`skipped_summary`（信息）。配置错误（黄金/样本文件无效、发行人不可解析）→ 批次 `failed`、错误码即 `ReconcileConfigError.code`，不建周期。
 6. **dry run**：不建批次/周期，只 `members` + `evaluate`（`ctx.dryRun=true`），返回结果。
@@ -14990,7 +15359,7 @@ const rec=(nk:string,over:Partial<ReconcileResultInput>={}):ReconcileResultInput
 const miss=(nk:string)=>rec(nk,{outcome:'right_missing',passed:false,right_value:null,left_value:null,abs_diff:null,rel_diff:null});
 const keys=(...nks:string[])=>nks.map(naturalKey=>({naturalKey,locator:{}}));
 function stubPair(members:MemberPlan[],evaluate:(m:MemberPlan)=>Promise<ReconcileResultInput[]>|ReconcileResultInput[]):RegisteredPair{
- return {id:PAIR,kind:'numeric',left:'l',right:'r',inputs:{repoFile:null,parserVersion:'stub/1',goldSchema:null},members:async()=>members,evaluate:async(_ctx,m)=>evaluate(m)};
+ return {id:PAIR,kind:'numeric',left:'l',right:'r',inputs:{repoFile:null,parserVersion:'stub/1',goldSchema:null},currentRight:async()=>null,members:async()=>members,evaluate:async(_ctx,m)=>evaluate(m)};
 }
 function harness(pair:RegisteredPair,over:Partial<ReconcileDeps>={}){
  const tables=reconcileTables();const db=memoryFactsDb(tables);let clock=T0;db.setNow(clock);
@@ -15098,6 +15467,21 @@ describe('runReconcile — fences, failures, budget',()=>{
   expect(await h.tables.select('dq_reconciliations',{cycle_id:cycle.cycle_id})).toHaveLength(2);
   expect(r3.cycle).toMatchObject({settled:true,status:'complete'});
  });
+ it('T2 / plan audit P5: a worker that dies after committing every key is completed from the accepted rows — no re-evaluation, even with the upstream down',async()=>{
+  let calls=0;
+  const h=harness(stubPair([{issuerId:A,market:'US',expectedKeys:keys('k1','k2')}],()=>{calls++;if(calls>1)throw new Error('sec_unavailable:http_503');return [rec('k1'),rec('k2')];}));
+  const dying:FactsDb={...h.db,completeReconcileMember:async()=>{throw new Error('worker_killed');},failReconcileMember:async()=>{throw new Error('worker_killed');}};
+  await expect(runReconcile({...h.deps,db:dying},{pair:PAIR,triggeredBy:'cron'})).rejects.toThrow('worker_killed');   // both keys committed, nothing completed
+  expect((await cursors(h.tables))[0]).toMatchObject({state:'claimed',attempts:1});
+  h.advance(11*60_000);                                                                                                 // the lease expires
+  const r=await runReconcile(h.deps,{pair:PAIR,triggeredBy:'cron'});
+  expect(calls).toBe(1);                                                                                                // the upstream is never asked again
+  expect(r.members).toEqual([{issuerId:A,market:'US',outcome:'done',counts:{compared_passed:2,compared_failed:0,not_compared:0}}]);
+  expect(r.counts).toMatchObject({fetched:2,duplicates:2,inserted:0,failed:0});
+  expect(r.cycle).toMatchObject({settled:true,status:'complete'});
+  const [cycle]=await h.tables.select(CYCLE_TABLE,{pair:PAIR});
+  expect(await h.tables.select('dq_reconciliations',{cycle_id:cycle.cycle_id})).toHaveLength(2);
+ });
  it('evaluate failures are retried up to three attempts, then the member is terminal and the cycle settles with gaps',async()=>{
   const h=harness(stubPair([{issuerId:A,market:'US',expectedKeys:keys('k1')}],()=>{throw new Error('sec_unavailable:http_503');}));
   for(let i=1;i<=3;i++){
@@ -15164,6 +15548,21 @@ describe('runReconcile — hooks and dry run',()=>{
   const state=async(id:string)=>((await h.tables.select('dq_quarantine',{id}))[0].detail as {hook:{state:string}}).hook.state;
   expect([await state(mine.id),await state(failed.id),await state(done.id),await state(other.id)]).toEqual(['done','done','done','pending']);
  });
+ it('plan audit P4: a hook write patches only detail.hook — a newer latest_result committed right before it survives',async()=>{
+  const h=harness(stubPair([],()=>[]));
+  const id=randomUUID();
+  await h.tables.insert('dq_quarantine',{id,dataset:'facts.us',table_name:'financial_facts',natural_key:`${PAIR}:k:p4`,reason_code:'reconcile_mismatch',detail:{pair:PAIR,issuer_id:A,market:'US',latest_result:{passed:false,reconciliation_id:'r1'},hook:{stage:'materialize',state:'pending',at:T0}},payload:{},batch_id:randomUUID(),status:'open',resolved_by:null,resolved_at:null,created_at:T0});
+  // a concurrent apply_reconcile_result commits a newer result just before our hook write; the old read-then-replace wrote its stale copy back
+  const newer=async()=>{const [cur]=await h.tables.select('dq_quarantine',{id});await h.tables.update('dq_quarantine',{id},{detail:{...(cur.detail as Row),latest_result:{passed:true,reconciliation_id:'r2'}}});};
+  let fired=false;
+  const racing:TableClient={...h.tables,
+   async update(t,m,p){if(t==='dq_quarantine'&&'detail' in p&&!fired){fired=true;await newer();}return h.tables.update(t,m,p);},
+   async rpc(fn,a){if(fn==='patch_quarantine_detail'&&!fired){fired=true;await newer();}return h.tables.rpc(fn,a);}};
+  const r=await runReconcile({...h.deps,tables:racing},{pair:PAIR,triggeredBy:'cron'});
+  expect(r.hooks).toEqual({retried:1,failed:0});
+  const [row]=await h.tables.select('dq_quarantine',{id});
+  expect(row.detail).toMatchObject({latest_result:{passed:true,reconciliation_id:'r2'},hook:{stage:'done',state:'done'}});
+ });
  it('a materialize failure leaves the hook failed and reports materialize_error (visibility already committed)',async()=>{
   const h=harness(stubPair([],()=>[]),{materialize:async()=>{throw new FactsDbError('stale_computation');}});
   await h.tables.insert('dq_quarantine',{id:randomUUID(),dataset:'facts.us',table_name:'financial_facts',natural_key:`${PAIR}:k:x`,reason_code:'reconcile_mismatch',detail:{pair:PAIR,issuer_id:A,market:'US',hook:{stage:'materialize',state:'pending',at:T0}},payload:{},batch_id:randomUUID(),status:'open',resolved_by:null,resolved_at:null,created_at:T0});
@@ -15204,10 +15603,14 @@ Expected: FAIL（`Cannot find module './run'`）
 //     member on every run, so a creator that died half-way is healed;
 //  2. members in (issuer_id, market) order whose cursor is claimable; a member starts only with >= 60 s of
 //     budget; every claim goes through claim_reconcile_member (fence);
-//  3. one apply_reconcile_result per expected key (result row + item + visibility, atomic); a reused key is
-//     a duplicate; fence_failed stops this worker at once (committed keys stay valid, the next claimer
-//     reuses them); visibility changes are materialized once per target at the end of the member and the
-//     item hooks set done/failed; complete_reconcile_member derives the counts; any other exception →
+//  3. keys this member already committed in this cycle (an earlier attempt) are read back first and are
+//     final: they count as duplicates and are NEVER re-evaluated; evaluate runs only for the missing keys,
+//     and a member whose keys all exist completes without any upstream read (spec T2; plan audit P5; their
+//     pending hooks are step 0's job). One apply_reconcile_result per remaining key (result row + item +
+//     visibility, atomic); a reused key is a duplicate; fence_failed stops this worker at once (committed
+//     keys stay valid, the next claimer reuses them); visibility changes are materialized once per target at
+//     the end of the member and the item hooks set done/failed — detail.hook alone, through
+//     patchQuarantineDetail (row lock; a concurrent latest_result is never rolled back, plan audit P4); complete_reconcile_member derives the counts; any other exception →
 //     fail_reconcile_member (the third failure is terminal);
 //  4. settlement when every cursor is done or terminally failed: each done cursor must satisfy
 //     drc_done_accounted (never coalesced); complete iff not_compared = 0 and no failed member; freshness
@@ -15227,6 +15630,7 @@ import {emptyCounts,finishBatch,startBatch} from '../batches';
 import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '../batches';
 import {DATASETS} from '../datasets';
 import {recordAttempt} from '../freshness';
+import {patchQuarantineDetail} from '../quarantine';
 import type {RawStore} from '../raw-store';
 import {ReconcileConfigError,sha256Hex} from './pair-support';
 import type {PairRunContext,RegisteredPair} from './pair-support';
@@ -15328,11 +15732,10 @@ async function targetOf(tables:TableClient,issuer:string):Promise<string>{
  const [r]=await tables.select('issuers',{issuer_id:issuer},{limit:1});
  return typeof r?.merged_into==='string'?r.merged_into:issuer;
 }
+/** detail.hook alone, through the row-locking patch (plan audit P4); a missing item is a no-op. Never throws. */
 async function setHook(tables:TableClient,id:string,hook:Hook):Promise<void>{
- try{
-  const [r]=await tables.select('dq_quarantine',{id},{limit:1});if(!r)return;
-  await tables.update('dq_quarantine',{id},{detail:{...((r.detail??{}) as Row),hook}});
- }catch(e){console.error('[reconcile] hook write',e instanceof Error?e.message:String(e));}
+ try{await patchQuarantineDetail(tables,id,'hook',hook);}
+ catch(e){console.error('[reconcile] hook write',e instanceof Error?e.message:String(e));}
 }
 /** Materializes each distinct target once and writes every listed item's hook; never throws. Returns the number of failed targets' items. */
 async function runHooks(deps:ReconcileDeps,list:{itemId:string|null;issuerId:string;market:Market}[],errors:BatchError[]):Promise<number>{
@@ -15365,6 +15768,11 @@ async function retryPendingHooks(deps:ReconcileDeps,pair:CyclePairId,errors:Batc
  return {retried:rows.length,failed};
 }
 
+/** Natural keys this member already committed in this cycle (any earlier attempt); final, never re-evaluated (spec T2; plan audit P5). */
+async function acceptedKeys(tables:TableClient,fence:Fence):Promise<Set<string>>{
+ const rows=await selectAll(tables,'dq_reconciliations',{pair:fence.pair,cycle_id:fence.cycle_id,issuer_id:fence.issuer_id,market:fence.market},'natural_key');
+ return new Set(rows.map(r=>String(r.natural_key)));
+}
 function assertOnePerKey(plan:MemberPlan,results:ReconcileResultInput[]):void{
  if(results.length!==plan.expectedKeys.length||results.some((r,i)=>r.natural_key!==plan.expectedKeys[i].naturalKey))throw new ReconcileError('evaluate_contract');
 }
@@ -15382,8 +15790,12 @@ async function processMember(deps:ReconcileDeps,pair:RegisteredPair,ctx:PairRunC
  const hooks:{itemId:string|null;issuerId:string;market:Market}[]=[];
  const flush=async()=>{if(hooks.length>0){await runHooks(deps,hooks.splice(0),errors);}};
  try{
-  const results=await pair.evaluate(ctx,plan);
-  assertOnePerKey(plan,results);
+  const accepted=await acceptedKeys(deps.tables,fence);
+  const missing:MemberPlan={...plan,expectedKeys:plan.expectedKeys.filter(k=>!accepted.has(k.naturalKey))};
+  const reused=plan.expectedKeys.length-missing.expectedKeys.length;
+  counts.fetched+=reused;counts.duplicates+=reused;
+  const results=missing.expectedKeys.length===0?[]:await pair.evaluate(ctx,missing);   // all keys committed → no upstream read at all
+  assertOnePerKey(missing,results);
   for(const result of results){
    let out:ApplyReconcileOutcome;
    try{out=await deps.db.applyReconcileResult(fence,result);}
@@ -15479,7 +15891,7 @@ export async function runReconcile(deps:ReconcileDeps,opts:ReconcileOptions):Pro
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `npm test -- src/lib/dq/reconcile/run.test.ts`
-Expected: PASS（16 个用例）。这些用例依赖 Task 9 的 memoryFactsDb 对账方法按规格 §3.2 运作（围栏、同键复用、`complete` 从已接受结果行推导计数、`quarantine_left` 建项并写 `hook:pending` 且返回 `materialize`、`review_item` 建非隔离项）。若某用例因 memoryFactsDb 行为与规格不一致而失败，先对照规格修 memoryFactsDb（Task 9 的文件，允许修改），不得改本测试的期望。
+Expected: PASS（18 个用例：原 16 个 + 计划审计 P5 崩溃恢复、P4 钩子交错）。这些用例依赖 Task 9 的 memoryFactsDb 对账方法按规格 §3.2 运作（围栏、同键复用、`complete` 从已接受结果行推导计数、`quarantine_left` 建项并写 `hook:pending` 且返回 `materialize`、`review_item` 建非隔离项）。若某用例因 memoryFactsDb 行为与规格不一致而失败，先对照规格修 memoryFactsDb（Task 9 的文件，允许修改），不得改本测试的期望。
 
 - [ ] **Step 5: typecheck + lint**
 
@@ -15599,11 +16011,12 @@ vi.mock('./pairs',async importOriginal=>({...(await importOriginal<typeof import
 import {REPO_FILE_PREFIXES,readRepoFileFromDisk,restoreInputsHashNow} from './deps';
 
 describe('restoreInputsHashNow (quarantine route + admin dashboard, spec §5.6)',()=>{
- it('passes the hash through; known data gaps become null; anything else is rethrown',async()=>{
+ it('passes the hash through; known data gaps become inputs_unavailable, an unobtainable current right side current_evidence_unavailable (plan audit P2); anything else is rethrown',async()=>{
   const fn=restoreInputsHashNow({} as SupabaseClient);   // the factories only capture the client
   const item={id:'q',detail:{pair:'us.companyfacts_vs_gold'}};
   mocks.hash.mockResolvedValueOnce('h1');expect(await fn(item)).toBe('h1');
-  for(const code of ['pair_not_registered','left_fact_missing','no_latest_result']){mocks.hash.mockRejectedValueOnce(new Error(code));expect(await fn(item)).toBeNull();}
+  for(const code of ['pair_not_registered','left_fact_missing','no_latest_result']){mocks.hash.mockRejectedValueOnce(new Error(code));expect(await fn(item)).toEqual({unavailable:'inputs_unavailable'});}
+  mocks.hash.mockRejectedValueOnce(new Error('current_evidence_unavailable'));expect(await fn(item)).toEqual({unavailable:'current_evidence_unavailable'});
   mocks.hash.mockRejectedValueOnce(new Error('db down'));await expect(fn(item)).rejects.toThrow('db down');
  });
 });
@@ -15656,7 +16069,7 @@ export async function readRepoFileFromDisk(path:string):Promise<Uint8Array>{
  return new Uint8Array(await readFile(join(process.cwd(),n)));
 }
 
-/** Data gaps of pairs.ts::inputsHashNow that mean "cannot restore now" (→ null → 409 not_passing / restorable=false), not a bug. */
+/** Data gaps of pairs.ts::inputsHashNow that mean "cannot restore now" (→ {unavailable:'inputs_unavailable'} → 409 not_passing / restorable=false), not a bug. */
 const RESTORE_GAP_CODES:readonly string[]=['pair_not_registered','left_fact_missing','no_latest_result'];
 /**
  * The CURRENT inputs hash of a reconcile_mismatch item (spec §5.6), injected into the quarantine route
@@ -15669,7 +16082,12 @@ export function restoreInputsHashNow(admin?:SupabaseClient):InputsHashNow{
   fetch:globalThis.fetch.bind(globalThis),readRepoFile:readRepoFileFromDisk};
  return async(item:Row)=>{
   try{return await inputsHashNow(ctx,item);}
-  catch(e){if(e instanceof Error&&RESTORE_GAP_CODES.includes(e.message))return null;throw e;}
+  catch(e){
+   // the pair's CURRENT right evidence cannot be obtained now (plan audit P2): restore stays disabled
+   if(e instanceof Error&&e.message==='current_evidence_unavailable')return {unavailable:'current_evidence_unavailable'};
+   if(e instanceof Error&&RESTORE_GAP_CODES.includes(e.message))return {unavailable:'inputs_unavailable'};
+   throw e;
+  }
  };
 }
 
@@ -15977,7 +16395,7 @@ import {IXBRL_PARSER_VERSION} from './ixbrl';
 import {sha256Hex} from './pair-support';
 import type {PairRunContext} from './pair-support';
 import {filerClass,usCompanyfactsVsIxbrlPair} from './pair-us-ixbrl';
-import {RECONCILE_PAIRS} from './pairs';
+import {RECONCILE_PAIRS,inputsHashNow} from './pairs';
 import {reconcileTables,seedPublished} from './testing';
 import {US_SAMPLE_PATH,US_SAMPLE_SCHEMA} from './us-sample';
 import type {SampleKey,UsSample} from './us-sample';
@@ -16016,7 +16434,7 @@ async function setup(o:{sample:UsSample;docs:Record<string,Uint8Array|number>}){
   {concept:'total_assets',value:'5000',...I,source_concept:'us-gaap:Assets'},{concept:'equity_parent',value:'2000',...I,source_concept:'us-gaap:StockholdersEquity'},
   {concept:'operating_income',value:'300',...D,source_concept:'us-gaap:OperatingIncomeLoss'},{concept:'rd_expense',value:'50',...D,source_concept:'us-gaap:ResearchAndDevelopmentExpense'}]});
  const sampleBytes=new TextEncoder().encode(JSON.stringify(o.sample));
- const fetch=vi.fn(async(url:string)=>{const d=o.docs[url];return typeof d==='number'?new Response('',{status:d}):d?new Response(d,{status:200}):new Response('',{status:404});});
+ const fetch=vi.fn(async(url:string)=>{const d=o.docs[url];return typeof d==='number'?new Response('',{status:d}):d?new Response(new Uint8Array(d),{status:200}):new Response('',{status:404});});   // an owned Uint8Array<ArrayBuffer> is a DOM BodyInit (TS 5.9; plan audit P10)
  const raw=memoryRawStore();
  const c:PairRunContext={db,tables,raw,now:()=>new Date('2026-11-05T00:00:00Z'),budget:makeBudget(null),fetch:fetch as unknown as typeof globalThis.fetch,
   readRepoFile:async p=>{if(p!==US_SAMPLE_PATH)throw new Error(p);return sampleBytes;},batchId:randomUUID(),dryRun:false};
@@ -16027,6 +16445,23 @@ async function setup(o:{sample:UsSample;docs:Record<string,Uint8Array|number>}){
 describe('us.companyfacts_vs_ixbrl',()=>{
  it('is registered with its sample and parser version',()=>{
   expect(RECONCILE_PAIRS['us.companyfacts_vs_ixbrl']?.inputs).toEqual({repoFile:US_SAMPLE_PATH,parserVersion:IXBRL_PARSER_VERSION,goldSchema:US_SAMPLE_SCHEMA});
+ });
+ it('plan audit P2: restore inputs hash the CURRENT primary document — a changed document with unchanged sample bytes changes the hash; an unobtainable document is current_evidence_unavailable',async()=>{
+  const docs:Record<string,Uint8Array|number>={[URL1]:docOf('5,001')};
+  const s=await setup({sample:sample([filing(ACCN,URL1,KEYS)]),docs});
+  const pair=usCompanyfactsVsIxbrlPair();const [m]=await pair.members(s.c);
+  const res=await pair.evaluate(s.c,m);
+  const assets=s.facts.get('total_assets')!;
+  const rec=randomUUID();
+  await s.tables.insert('dq_reconciliations',{id:rec,dataset:'reconcile.us.companyfacts_vs_ixbrl',pair:'us.companyfacts_vs_ixbrl',natural_key:res[2].natural_key,detail:res[2].detail});
+  const item={id:randomUUID(),reason_code:'reconcile_mismatch',status:'open',payload:{fact_ids:[assets.fact_id]},detail:{pair:'us.companyfacts_vs_ixbrl',latest_result:{passed:false,reconciliation_id:rec,inputs_hash:res[2].inputs_hash}}};
+  expect(await inputsHashNow(s.c,item)).toBe(res[2].inputs_hash);                     // same document, same sample → same hash
+  docs[URL1]=docOf('5,000');                                                           // the document changes, the sample bytes do not
+  const changed=await inputsHashNow(s.c,item);
+  expect(changed).not.toBe(res[2].inputs_hash);
+  expect(changed).toBe(computeInputsHash({left_raw_hash:assets.raw_hash,right_sha256:sha256Hex(docOf('5,000')),gold_or_sample_sha256:s.sampleSha,parser_version:IXBRL_PARSER_VERSION}));
+  docs[URL1]=404;
+  await expect(inputsHashNow(s.c,item)).rejects.toThrow('current_evidence_unavailable');
  });
  it('one result per expected key: passed, tag fallback, mismatch → quarantine_left, right_ambiguous, unsupported(nil), left_missing, right_missing',async()=>{
   const docBytes=docOf('5,001');
@@ -16269,6 +16704,8 @@ export function pickSample(candidates:readonly SampleCandidate[],required:readon
 //     precision.decimals = fraction digits of value_text}, right {document, sha256, path, locator {name,
 //     contextRef, unitRef}, precision {decimals, scale}}, inputs_hash = computeInputsHash(left raw_hash, right
 //     sha256, sample sha256, IXBRL_PARSER_VERSION).
+// currentRight (restore, plan audit P2): the sample filing that holds the result's natural key, its primary
+// document fetched NOW and hashed; unobtainable (sample gone, not inline, 404, too large, SEC down) → null.
 // sec.filer_category is NOT recorded here: its single producer is scripts/dq/filer-categories.ts (Task 17b,
 // spec §6.1; plan 3 接口对齐记录). filerClass stays exported for select-us-sample.ts.
 import {conceptById} from '../../facts/concepts';
@@ -16280,7 +16717,7 @@ import {compareDecimal} from './decimal';
 import {computeInputsHash} from './inputs-hash';
 import {IXBRL_PARSER_VERSION,IxbrlParseError,MAX_IXBRL_BYTES,indexIxFacts,ixFactKey,parseInlineXbrl} from './ixbrl';
 import type {IxbrlDocument,IxFact} from './ixbrl';
-import {ReconcileConfigError,actionFor,activeRows,comparedNumeric,factKeyOf,fractionDigits,mismatchItem,notCompared,openMismatches,readRepoJson} from './pair-support';
+import {ReconcileConfigError,actionFor,activeRows,comparedNumeric,factKeyOf,fractionDigits,mismatchItem,notCompared,openMismatches,readRepoJson,sha256Hex} from './pair-support';
 import type {RegisteredPair} from './pair-support';
 import type {MemberPlan,PairContext,ReconcileOutcome,ReconcileResultInput} from './types';
 import {US_SAMPLE_PATH,US_SAMPLE_SCHEMA,entityIs,usNaturalKey,validateUsSample} from './us-sample';
@@ -16348,6 +16785,15 @@ export function usCompanyfactsVsIxbrlPair():RegisteredPair{
  return {
   id:PAIR,kind:'numeric',left:'edgar.companyfacts',right:'edgar.ixbrl',
   inputs:{repoFile:US_SAMPLE_PATH,parserVersion:IXBRL_PARSER_VERSION,goldSchema:US_SAMPLE_SCHEMA},
+  async currentRight(ctx,rec){
+   let sample:UsSample;
+   try{sample=(await loadSample(ctx)).sample;}catch(e){if(e instanceof ReconcileConfigError)return null;throw e;}
+   const nk=String(rec.natural_key);
+   const entry=sample.issuers.flatMap(i=>i.filings.map(f=>({cik:i.cik,f}))).find(x=>x.f.expected_keys.some(k=>usNaturalKey(x.cik,x.f.accn,k)===nk))?.f;
+   if(!entry||entry.is_inline_xbrl===false)return null;
+   try{const got=await fetchSecDocument(entry.doc_url,ctx);return got.status==='ok'?sha256Hex(got.bytes):null;}
+   catch(e){console.error('[reconcile] current right document',e instanceof Error?e.message:String(e));return null;}
+  },
   async members(ctx){
    const {sample}=await loadSample(ctx);
    const out:MemberPlan[]=[];
@@ -16427,7 +16873,7 @@ export function usCompanyfactsVsIxbrlPair():RegisteredPair{
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `npm test -- src/lib/dq/reconcile/us-sample.test.ts src/lib/dq/reconcile/pair-us-ixbrl.test.ts src/lib/dq/reconcile/pairs.test.ts src/app/api/cron/reconcile/route.test.ts`
-Expected: PASS（us-sample 3+1+9+2 = 15；pair-us-ixbrl 7；pairs 与 route 不回归）
+Expected: PASS（us-sample 3+1+9+2 = 15；pair-us-ixbrl 8（含计划审计 P2 当前主文档用例）；pairs 与 route 不回归）
 
 若 `buildSampleFiling` 的期望键顺序断言失败，打印实际 `expected_keys` 与 `parseCompanyFacts` 的 `skipped`：常见原因是 `sinceYear` 过滤或单位种类过滤与本测试设定不一致——按适配器的规则改测试输入，不得在 `us-sample.ts` 里放宽并集规则。
 
@@ -16739,7 +17185,8 @@ git commit -m "feat(dq): recorded AAPL/MSFT inline XBRL fixtures, US sample gene
 //     metrics drop the dependent ratio;
 //  3. restore before a passing re-run → not_passing;
 //  4. the right document is corrected (1001), a new cycle passes, latest_result.passed with inputs_hash equal to
-//     the restore-side recomputation; a changed sample after the pass → not_passing; then restore_reconciled
+//     the restore-side recomputation; a changed sample or a changed / missing primary document after the pass
+//     → not_passing / current_evidence_unavailable (plan audit P2); then restore_reconciled
 //     promotes the row, it is current again and the metric comes back after materialize.
 // The cases share state and run in order.
 import {randomUUID} from 'node:crypto';
@@ -16815,8 +17262,8 @@ describe.skipIf(!enabled)('us.companyfacts_vs_ixbrl on real PostgreSQL (§9.3)',
  let admin:Pool;let db:FactsDb;let tables:TableClient;
  const ids:Record<string,string>={};
  const docs=new Map<string,Uint8Array>();
- let sampleBytes=new Uint8Array();let firstCycle='';let scope:{issuer_id:string;fetch_key:string}[]=[];
- const fakeFetch=(async(url:string|URL)=>{const b=docs.get(String(url));return b?new Response(b,{status:200}):new Response('',{status:404});}) as unknown as typeof fetch;
+ let sampleBytes:Uint8Array=new Uint8Array();let firstCycle='';let scope:{issuer_id:string;fetch_key:string}[]=[];   // widened: buildSample returns Uint8Array (plan audit P10)
+ const fakeFetch=(async(url:string|URL)=>{const b=docs.get(String(url));return b?new Response(new Uint8Array(b),{status:200}):new Response('',{status:404});}) as unknown as typeof fetch;   // owned copy = DOM BodyInit
  const readRepoFile=async(p:string)=>p===US_SAMPLE_PATH?sampleBytes:new Uint8Array(readFileSync(p));
  const rdeps=():ReconcileDeps=>({db,tables,raw:memoryRawStore(),fetch:fakeFetch,readRepoFile,now:()=>new Date(),deadline:null,codeVersion:'test',pairs:{[PAIR]:usCompanyfactsVsIxbrlPair()}});
  const pairCtx=(over:Partial<PairContext>={}):PairContext=>({db,tables,raw:memoryRawStore(),now:()=>new Date(),budget:makeBudget(null),fetch:fakeFetch,readRepoFile,...over});
@@ -16921,6 +17368,15 @@ describe.skipIf(!enabled)('us.companyfacts_vs_ixbrl on real PostgreSQL (§9.3)',
   expect(changed).not.toBe(hashNow);
   const {batchId}=await startBatch(tables,{producer:'dq-resolver',dataset:'facts.us'});
   await expect(db.restoreReconciled(item.id,batchId,changed,ADMIN)).rejects.toMatchObject({code:'not_passing'});
+  // plan audit P2: the primary document changes after the pass while the sample bytes stay → a different current hash, restore refused
+  const passedDoc=docs.get(ZZ_URL)!;docs.set(ZZ_URL,zzDoc('1,002'));
+  const docChanged=await inputsHashNow(pairCtx(),item);
+  expect(docChanged).not.toBe(hashNow);
+  await expect(db.restoreReconciled(item.id,batchId,docChanged,ADMIN)).rejects.toMatchObject({code:'not_passing'});
+  docs.delete(ZZ_URL);
+  await expect(inputsHashNow(pairCtx(),item)).rejects.toThrow('current_evidence_unavailable');   // 404 now → restore stays disabled
+  docs.set(ZZ_URL,passedDoc);
+  expect(await inputsHashNow(pairCtx(),item)).toBe(hashNow);
   const res=await db.restoreReconciled(item.id,batchId,hashNow,ADMIN);
   expect(res).toEqual({promoted:1,skipped:[]});
   expect((await zzItem()).status).toBe('resolved_accept');
@@ -16979,6 +17435,8 @@ describe.skipIf(!enabled)('facts.lineage_same_day on real PostgreSQL (§9.3)',()
   const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
   admin=new Pool({connectionString:state.adminUrl});db=pgFactsDb(admin);tables=pgTableClient(admin);
   expect((await q(`select count(*)::int as n from public.dq_reconcile_cycles where pair=$1 and status='running'`,[PAIR]))[0].n,'a foreign running cycle of this pair (contract note 14)').toBe(0);
+  // set_merge audits into research_audit_log, whose user_id references auth.users: the resolver must exist (Task 8a's user fixture; plan audit P11)
+  await q(`insert into auth.users(id,email) values($1,$2) on conflict (id) do nothing`,[ADMIN,`${ADMIN}@lineage.test`]);
   const provision=async(x:typeof S)=>{
    await q(`insert into public.stocks_universe(ticker,name,market) values($1,$2,'US') on conflict (ticker) do nothing`,[x.ticker,x.name]);
    await q(`insert into public.issuers(issuer_id,canonical_name_en,country_code,cik) values($1,$2,'US',$3) on conflict do nothing`,[randomUUID(),x.name,x.cik]);
@@ -17435,6 +17893,11 @@ export function cnTushareVsGoldPair():RegisteredPair{
  return {
   id:PAIR,kind:'numeric',left:'tushare',right:'cninfo.pdf.gold',
   inputs:{repoFile:CN_GOLD_PATH,parserVersion:CN_GOLD_PARSER,goldSchema:GOLD_CN_SCHEMA},
+  // the current gold manifest row of the key names the PDF evidence (source.pdf_sha256); gone → null (plan audit P2)
+  async currentRight(ctx,rec){
+   try{const {file}=await loadGold(ctx);return file.rows.find(r=>cnGoldKey(r)===String(rec.natural_key))?.source.pdf_sha256??null;}
+   catch(e){if(e instanceof ReconcileConfigError)return null;throw e;}
+  },
   async members(ctx){
    const {file}=await loadGold(ctx);
    const out:MemberPlan[]=[];
@@ -17794,7 +18257,7 @@ git commit -m "feat(dq): A-share gold sample template and PDF upload scripts, tr
 规则要点（全部写进代码与测试，实施者无需再读规格）：
 - 申报人类别按财年：财年 N 的各期（N 的 10-Q 与 N 的 10-K）用**财年 N−1** 的 10-K 封面类别；没有 N−1 行 → `deadline_state='no_rule'`、`due_rule='none.no_category_for_fy/1'`、`detail.no_category=true`。财年标签 = 财年末日期最近的月末所在日历年（`fiscalYearOfPeriodEnd`），17b 写 `issuer_filer_categories.fiscal_year` 用同一函数。
 - 期限表：10-K 大型加速 60/40 天（`us.laf/1`）、加速 75/40（`us.acc/1`）、非加速 90/45（`us.non/1`）；20-F 财年末后 4 个月（月末锚定，`us.20f/1`），无季报期望；40-F `no_rule`（`none.40f/1`）；CN 年报次年 4-30、Q1 4-30、H1 8-31、Q3 10-31（`cn.<kind>/1`），A 股不顺延。美股期限按 Rule 0-3 顺延到下一个 SEC 营业日。
-- 期望期间：以年报月为锚的季度月末网格上最近 **6 个已结束**（期末 < today）的槽；20-F/40-F 的非年报槽不产生行；CN 锚 12 月。锚月：最近一份已收到年报的实际期末（最近月末的月份）优先于 submissions `fiscalYearEnd`，不一致 → 每行 `detail.fye_mismatch=true`。无 `fiscal_year_end` → 不出行。
+- 期望期间：最近 **6 个已结束**（期末 < today）且**有适用报告种类**的槽（先按种类过滤、再取 6 个，计划审计 P6）。10-K 与 CN 用以年报月为锚的季度月末网格；20-F/40-F 只有年报，槽距 12 个月（即最近 6 个已结束财年末）；生成 `PERIODS+2` 个槽（当前未结束的槽与 52/53 周期末可能晚于 today 的槽）。CN 锚 12 月。`filingsWindowStart(today)` 覆盖最宽槽距的最老槽、±7 天匹配窗与一年 52/53 周估计依据（= today 所在月往前 `12×(PERIODS+2)+12` 个月的月末再减 7 天）。锚月：最近一份已收到年报的实际期末（最近月末的月份）优先于 submissions `fiscalYearEnd`，不一致 → 每行 `detail.fye_mismatch=true`。无 `fiscal_year_end` → 不出行。
 - 52/53 周（`week52_pattern`）：每个槽的期末 = 同位置（同锚月）最近一次观测到的实际期末（已收到的 filing ∪ SEC submissions `reportDate`）+ 364 天，若结果不在锚月再 +7；逐年推进；无观测 → 该槽月末。`period_end_estimated=true`、`deadline_state='estimated'`、`due_rule` 加 `/est`；估计行**永不 `overdue`**，到期未收到为 `pending` + `detail.estimated_due_passed=true`。收到的 filing 与估计期末相差 ≤ 7 天 → 以实际期末替换该行（非估计、按法定）。
 - 状态：`received` = 存在 `form_type` 恰为该种类（修订件 `/A` 不算）、所属运行 `published`、`mapping_gen>0`、期末匹配的 filing，取最早 `available_date`；`> due_date` → `received_late`；`no_rule` 行收到即 `received`。未收到：`upstream_lookup='unavailable'` → `unknown_upstream`；上游有（US：同 `form`、`reportDate` 与期末相差 ≤ 7 天，取最早 `filingDate`；CN：同 `end_date` 中 `ann_date` 最大行的 `actual_date` 非空）→ `filed_not_ingested`（`upstream_filed_date`）；否则 `today > due_date` 且 `statutory` → `overdue`，其余 `pending`。CN `expected_date` = 同 `end_date` 中 `ann_date` 最大行的 `pre_date`，`modify_date` 非空 → `detail.schedule_modified=true`。
 
@@ -17803,7 +18266,7 @@ git commit -m "feat(dq): A-share gold sample template and PDF upload scripts, tr
 ```ts
 // src/lib/dq/calendar.test.ts
 import {describe,expect,it} from 'vitest';
-import {SEC_HOLIDAYS,addMonthsAnchored,applicableCategory,computeExpectations,estimatePeriodEnd,fiscalYearOfPeriodEnd,isSecBusinessDay,nearestMonthEnd,rollForward} from './calendar';
+import {SEC_HOLIDAYS,addMonthsAnchored,applicableCategory,computeExpectations,estimatePeriodEnd,filingsWindowStart,fiscalYearOfPeriodEnd,isSecBusinessDay,nearestMonthEnd,rollForward} from './calendar';
 import type {CalendarUpstream,ExpectationRow,FilerCategoryRow,FilingProfile} from './calendar';
 import type {CalendarFiling} from '../facts/types';
 
@@ -17811,7 +18274,8 @@ const ISSUER='00000000-0000-4000-8000-0000000000c1';
 const profile=(p:Partial<FilingProfile>={}):FilingProfile=>({issuer_id:ISSUER,market:'US',category_raw_current:'Large accelerated filer',regime:'10-K',fiscal_year_end:'1231',week52_pattern:false,source:'sec_submissions',source_sha256:'s'.repeat(64),as_of:'2026-11-01',...p});
 const cat=(fy:number,acceleration:FilerCategoryRow['acceleration']):FilerCategoryRow=>({issuer_id:ISSUER,fiscal_year:fy,acceleration,smaller_reporting:null,category_raw:acceleration,source:'ixbrl_dei',accession:`0000000000-${fy}-000001`,evidence_sha256:'e'.repeat(64),as_of:'2026-11-01'});
 let n=0;
-const filing=(form:CalendarFiling['form_type'],periodEnd:string,available:string,p:Partial<CalendarFiling>={}):CalendarFiling=>({filing_id:`10000000-0000-4000-8000-${String(++n).padStart(12,'0')}`,issuer_id:ISSUER,market:'US',source:'edgar',origin:'sec',form_type:form,fiscal_year:null,fiscal_period:null,period_end:periodEnd,available_date:available,source_ref:`acc-${n}`,url:null,document_ref:null,document_url:null,link_attempts:0,mapping_gen:1,run_id:'r',created_at:`${available}T00:00:00Z`,run_status:'published',accepted_at:null,...p});
+// complete C4 CalendarFiling (FilingRow incl. acceptance_source) before the override spread (plan audit P9)
+const filing=(form:CalendarFiling['form_type'],periodEnd:string,available:string,p:Partial<CalendarFiling>={}):CalendarFiling=>({filing_id:`10000000-0000-4000-8000-${String(++n).padStart(12,'0')}`,issuer_id:ISSUER,market:'US',source:'edgar',origin:'sec',form_type:form,fiscal_year:null,fiscal_period:null,period_end:periodEnd,available_date:available,source_ref:`acc-${n}`,url:null,document_ref:null,document_url:null,link_attempts:0,mapping_gen:1,run_id:'r',created_at:`${available}T00:00:00Z`,run_status:'published',accepted_at:null,acceptance_source:null,...p});
 const OK:CalendarUpstream={lookup:'ok',us:[]};
 const run=(o:{profile?:Partial<FilingProfile>;categories?:FilerCategoryRow[];filings?:CalendarFiling[];upstream?:CalendarUpstream;today?:string})=>
  computeExpectations({profile:profile(o.profile),categories:o.categories??[cat(2024,'accelerated'),cat(2025,'large_accelerated')],filings:o.filings??[],upstream:o.upstream??OK,today:o.today??'2026-11-05'});
@@ -17890,15 +18354,24 @@ describe('deadline table (10-K regime, FYE 12-31, today 2026-11-05)',()=>{
   expect(at(r,'2025-12-31').detail).toMatchObject({no_category:true,fiscal_year:2025});
   expect(at(r,'2026-09-30').deadline_state).toBe('statutory');
  });
- it('20-F: one annual expectation per ended fiscal year end within the 6 slots, due 4 months later; no quarterly rows',()=>{
+ it('20-F: six ended annual periods (annual-only slots a year apart, plan audit P6), due 4 months later; years without a holiday table are no_rule; no quarterly rows',()=>{
   const r=run({profile:{regime:'20-F'}});
-  expect(r.map(x=>[x.report_kind,x.period_end,x.due_date,x.due_rule])).toEqual([['20-F','2025-12-31','2026-04-30','us.20f/1']]);
+  expect(r.map(x=>[x.report_kind,x.period_end,x.due_date,x.due_rule])).toEqual([
+   ['20-F','2025-12-31','2026-04-30','us.20f/1'],['20-F','2024-12-31','2025-04-30','us.20f/1'],['20-F','2023-12-31','2024-04-30','us.20f/1'],
+   ['20-F','2022-12-31',null,'none.holiday_table_missing/1'],['20-F','2021-12-31',null,'none.holiday_table_missing/1'],['20-F','2020-12-31',null,'none.holiday_table_missing/1']]);
+  expect(r[3].detail).toMatchObject({holiday_year:2023});
  });
- it('40-F has no rule but can still be received',()=>{
+ it('40-F: six ended annual periods, no rule, and can still be received (plan audit P6)',()=>{
   const f=filing('40-F','2025-12-31','2026-03-20');
   const r=run({profile:{regime:'40-F'},filings:[f]});
-  expect(r).toHaveLength(1);
+  expect(r).toHaveLength(6);
+  expect(r.map(x=>[x.report_kind,x.period_end,x.deadline_state,x.disclosure_state])).toEqual(['2025','2024','2023','2022','2021','2020'].map((y,i)=>['40-F',`${y}-12-31`,'no_rule',i===0?'received':'pending']));
   expect(r[0]).toMatchObject({deadline_state:'no_rule',due_rule:'none.40f/1',due_date:null,disclosure_state:'received',received_filing_id:f.filing_id,received_date:'2026-03-20'});
+ });
+ it('filingsWindowStart covers the oldest annual slot, its match window and one year of 52/53-week basis (plan audit P6)',()=>{
+  expect(filingsWindowStart('2026-11-05')).toBe('2017-11-23');   // month end 108 months back (2017-11-30) − 7 days
+  const oldest=run({profile:{regime:'20-F'}}).at(-1)!.period_end;
+  expect(filingsWindowStart('2026-11-05')<oldest).toBe(true);
  });
  it('no fiscal_year_end → no rows',()=>{expect(run({profile:{fiscal_year_end:null}})).toEqual([]);});
  it('a fiscal year end that differs from the latest received 10-K: anchor on the 10-K and flag fye_mismatch',()=>{
@@ -18154,9 +18627,12 @@ function kindOf(regime:FilingProfile['regime'],month:number,anchor:number):Repor
 const counts=(f:CalendarFiling,kind:ReportKind)=>f.form_type===kind&&f.run_status==='published'&&f.mapping_gen>0&&f.period_end!==null;
 export const MATCH_DAYS=7;
 export const PERIODS=6;
-const SLOT_LOOKBACK=12;   // quarter slots generated before filtering to the PERIODS most recent ended ones
-/** Earliest period_end the rules can look at (oldest slot, its ±7-day match window, and one year of 52/53-week estimation basis): calendar-sync passes it as filingsForCalendar fromPeriodEnd. */
-export function filingsWindowStart(today:string):string{const {y,m}=ym(today);return addDays(monthEnd(y,m-3*SLOT_LOOKBACK-12),-MATCH_DAYS);}
+/** Slots generated before filtering: PERIODS ended ones plus the current slot and one whose 52/53-week end may still lie after today. */
+const SLOT_COUNT=PERIODS+2;
+/** Months between slots: 20-F / 40-F issuers file only the annual report, so their slots are a year apart (plan audit P6). */
+const strideOf=(regime:FilingProfile['regime'])=>regime==='20-F'||regime==='40-F'?12:3;
+/** Earliest period_end the rules can look at (the oldest slot at the widest stride, its ±7-day match window, and one year of 52/53-week estimation basis): calendar-sync passes it as filingsForCalendar fromPeriodEnd and as the submissions coverFrom. */
+export function filingsWindowStart(today:string):string{const {y,m}=ym(today);return addDays(monthEnd(y,m-12*SLOT_COUNT-12),-MATCH_DAYS);}
 
 interface Estimate{periodEnd:string;basis:Record<string,unknown>}
 /** 52/53-week estimate for the slot ending in grid month-end `grid`: latest observed actual of the same position + 364 days per year (+7 when the result leaves the anchor month); no observation → the grid month end. */
@@ -18187,11 +18663,12 @@ export function computeExpectations(input:{profile:FilingProfile;categories:File
  }
  const usEntries=upstream.lookup==='ok'?upstream.us??[]:[];
  const cnRows=upstream.lookup==='ok'?upstream.cn??[]:[];
- // quarter-slot grid, newest first
+ // slot grid, newest first: quarter months around the anchor, or the anchor month only for annual-only regimes
+ const stride=strideOf(regime);
  const slots:{grid:string;month:number}[]=[];
- for(let {y,m}=ym(today),i=0;slots.length<SLOT_LOOKBACK&&i<48;i++,m--){
+ for(let {y,m}=ym(today),i=0;slots.length<SLOT_COUNT&&i<SLOT_COUNT*stride+12;i++,m--){
   if(m<1){m+=12;y--;}
-  if(((m-anchor)%3+3)%3===0)slots.push({grid:monthEnd(y,m),month:m});
+  if(((m-anchor)%stride+stride)%stride===0)slots.push({grid:monthEnd(y,m),month:m});
  }
  const rows:ExpectationRow[]=[];
  const planned:{grid:string;month:number;kind:ReportKind|null;periodEnd:string;estimated:boolean;received:CalendarFiling|null;basis?:Record<string,unknown>}[]=[];
@@ -18209,7 +18686,8 @@ export function computeExpectations(input:{profile:FilingProfile;categories:File
   if(received)planned.push({...s,kind,periodEnd:received.period_end!,estimated:false,received,basis:{replaced_estimate:est.periodEnd}});
   else planned.push({...s,kind,periodEnd:est.periodEnd,estimated:true,received:null,basis:est.basis});
  }
- const ended=planned.filter(p=>p.periodEnd<today).slice(0,PERIODS);
+ // applicable report kinds first, THEN the PERIODS limit (plan audit P6: a slot without a kind never takes a place)
+ const ended=planned.filter(p=>p.kind!==null&&p.periodEnd<today).slice(0,PERIODS);
  for(const p of ended){
   if(!p.kind)continue;
   const monthsAhead=((anchor-p.month)%12+12)%12;
@@ -18247,7 +18725,7 @@ const earliestEntry=(es:UsUpstreamEntry[])=>{const e=[...es].sort((a,b)=>a.filin
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `npm test -- src/lib/dq/calendar.test.ts`
-Expected: PASS（40 个用例）。若某个顺延日期用例失败，先用 `node -e "console.log(new Date(Date.UTC(2026,2,1)).getUTCDay())"` 之类核对星期，不要改常量表去迁就测试。
+Expected: PASS（41 个用例）。若某个顺延日期用例失败，先用 `node -e "console.log(new Date(Date.UTC(2026,2,1)).getUTCDay())"` 之类核对星期，不要改常量表去迁就测试。
 
 - [ ] **Step 5: 记录假日来源核对**
 
@@ -18773,7 +19251,8 @@ const view=(p:Partial<SubmissionsView>={}):SubmissionsView=>({cik10:'0000000001'
  {accessionNumber:'0000000001-26-000020',filingDate:'2026-08-04',reportDate:'2026-06-30',form:'10-Q',primaryDocument:'q2.htm',isInlineXBRL:true},
  {accessionNumber:'0000000001-26-000005',filingDate:'2026-02-20',reportDate:'2025-12-31',form:'10-K',primaryDocument:'k.htm',isInlineXBRL:true},
  {accessionNumber:'0000000001-24-000001',filingDate:'2024-01-10',reportDate:'2023-09-30',form:'10-Q',primaryDocument:'old.htm',isInlineXBRL:true}],...p});
-const published=(issuer:string,form:CalendarFiling['form_type'],periodEnd:string,available:string,p:Partial<CalendarFiling>={}):CalendarFiling=>({filing_id:`f-${issuer.slice(-2)}-${periodEnd}`,issuer_id:issuer,market:'US',source:'edgar',origin:'sec',form_type:form,fiscal_year:null,fiscal_period:null,period_end:periodEnd,available_date:available,source_ref:`ref-${periodEnd}`,url:null,document_ref:null,document_url:null,link_attempts:0,mapping_gen:1,run_id:'r',created_at:`${available}T00:00:00Z`,run_status:'published',accepted_at:null,...p});
+// complete C4 CalendarFiling (FilingRow incl. acceptance_source) before the override spread (plan audit P9)
+const published=(issuer:string,form:CalendarFiling['form_type'],periodEnd:string,available:string,p:Partial<CalendarFiling>={}):CalendarFiling=>({filing_id:`f-${issuer.slice(-2)}-${periodEnd}`,issuer_id:issuer,market:'US',source:'edgar',origin:'sec',form_type:form,fiscal_year:null,fiscal_period:null,period_end:periodEnd,available_date:available,source_ref:`ref-${periodEnd}`,url:null,document_ref:null,document_url:null,link_attempts:0,mapping_gen:1,run_id:'r',created_at:`${available}T00:00:00Z`,run_status:'published',accepted_at:null,acceptance_source:null,...p});
 
 async function harness(o:{market?:Market;members?:string[];filings?:Record<string,CalendarFiling[]>;submissions?:(cik:string)=>Promise<SubmissionsView>;disclosure?:(ts:string)=>Promise<TushareRaw>;budgetMs?:number}={}){
  const market=o.market??'US';const members=o.members??[A,B];
@@ -19794,7 +20273,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 依赖：Task 1（`dq_filing_expectations`、`dq_reconcile_cycles`、`issuer_identifier_claims.op/detail`、`dq_reconciliations.pair/kind/outcome/detail`）、Task 2（`dashboard.ts` 的 `datasets`；本任务不动它）、Task 9a/13a（`reconcile/types.ts` 的 `RECONCILE_PAIR_IDS`/`CYCLE_PAIR_IDS`）、Task 14c（`reconcile/deps.ts::restoreInputsHashNow`）。`market` 经 `parseDqQuery` 进入 `DqQuery`，非法 → 既有 400 分支返回 `{error:'invalid_market'}`。
 
-**服务器计算的 `restorable`（接口对齐记录 #12）**：`quarantine.rows` 中每个 `reason_code='reconcile_mismatch'` 的行多一个布尔 `restorable` = `detail.latest_result.passed===true` 且 `detail.latest_result.inputs_hash` 等于 `inputsHashNow(row)`（Task 14c 的 `restoreInputsHashNow`，与隔离路由恢复时用的同一函数；返回 null 或抛错 → false）。`loadDqDashboard` 新增可选第四参数 `opts:{inputsHashNow?:InputsHashNow}`（不传 → 全部 false）；路由传入真实函数。页面只按 `restorable` 启用"恢复"，SQL 仍是最终裁决（409 `not_passing`）。
+**服务器计算的 `restorable`（接口对齐记录 #12）**：`quarantine.rows` 中每个 `reason_code='reconcile_mismatch'` 的行多一个布尔 `restorable` = `detail.latest_result.passed===true` 且 `detail.latest_result.inputs_hash` 等于 `inputsHashNow(row)`（Task 14c 的 `restoreInputsHashNow`，与隔离路由恢复时用的同一函数，按对取**当前**右侧证据——计划审计 P2；答 `{unavailable}` 或抛错 → false）。`loadDqDashboard` 新增可选第四参数 `opts:{inputsHashNow?:InputsHashNow}`（不传 → 全部 false）；路由传入真实函数。页面只按 `restorable` 启用"恢复"，SQL 仍是最终裁决（409 `not_passing`）。
 
 响应新字段（规格 §7）：`calendar:{overdueByMarket, filedNotIngestedByMarket, unknownUpstreamByMarket, noRuleByMarket, estimatedByMarket, rows(≤100：逾期 + 已申报未入库 + 7 日内到期 + 上游不可查，按此顺序再按应披露日), noRuleRows(≤50)}`（各 `ByMarket` 恒为两市场计数，不受 `market` 筛选影响；`rows/noRuleRows` 受筛选）、`claims:{rows(pending，最新 50), total, securitiesByIssuer(只为 evidence_only 行的发行人)}`、`reconciliationsByPair:{<pair>:{failed, lastCycle|null}}`（全部 7 个 pair；只有周期 pair 有 `lastCycle`）。
 
@@ -20201,7 +20680,7 @@ import type {InputsHashNow} from './facts-resolver';
 在 `loadDqDashboard` 之前加：
 
 ```ts
-/** Server-side restore eligibility of a reconcile_mismatch item (spec §7.2): passing latest_result AND its inputs_hash equals the CURRENT inputs hash. */
+/** Server-side restore eligibility of a reconcile_mismatch item (spec §7.2): passing latest_result AND its inputs_hash equals the CURRENT inputs hash (same function as the restore route; an {unavailable} answer is never equal → false). */
 export async function restorableOf(row:Row,hashNow?:InputsHashNow):Promise<boolean>{
  const latest=((row.detail??{}) as {latest_result?:{passed?:unknown;inputs_hash?:unknown}}).latest_result;
  if(!hashNow||latest?.passed!==true||typeof latest.inputs_hash!=='string')return false;
@@ -20211,7 +20690,7 @@ export async function restorableOf(row:Row,hashNow?:InputsHashNow):Promise<boole
 
 签名改为 `export async function loadDqDashboard(client:TableClient,query:DqQuery,now:Date,opts:{inputsHashNow?:InputsHashNow}={}):Promise<DqDashboard>`；返回对象里 `quarantine:{rows:quarantineRows,…}` 的 `rows` 改为 `rows:await Promise.all(quarantineRows.map(async r=>r.reason_code==='reconcile_mismatch'?{...r,restorable:await restorableOf(r,opts.inputsHashNow)}:r))`。`dashboard.test.ts` 加一个用例：两条 `reconcile_mismatch` 行（`latest_result:{passed:true,inputs_hash:'h'}`），`inputsHashNow` 对第一条返回 `'h'`、第二条返回 `'x'` → `restorable` 依次 `true/false`；不传 `opts` → 都为 `false`；非 `reconcile_mismatch` 行没有 `restorable` 键。
 
-7. `src/app/api/admin/dq/route.ts`：import `restoreInputsHashNow` from `@/lib/dq/reconcile/deps`，把 `loadDqDashboard(client, parsed.query, new Date())` 改为 `loadDqDashboard(client, parsed.query, new Date(), { inputsHashNow: restoreInputsHashNow(admin) })`（`admin` = 该路由里传给 `supabaseTableClient` 的同一个 `getAdminSupabase()` 客户端；若当前写法是内联调用，先提成 `const admin = getAdminSupabase();`）。`route.test.ts` 加 `vi.mock('@/lib/dq/reconcile/deps',()=>({restoreInputsHashNow:()=>async()=>null}))`，断言 200 响应形状不变。
+7. `src/app/api/admin/dq/route.ts`：import `restoreInputsHashNow` from `@/lib/dq/reconcile/deps`，把 `loadDqDashboard(client, parsed.query, new Date())` 改为 `loadDqDashboard(client, parsed.query, new Date(), { inputsHashNow: restoreInputsHashNow(admin) })`（`admin` = 该路由里传给 `supabaseTableClient` 的同一个 `getAdminSupabase()` 客户端；若当前写法是内联调用，先提成 `const admin = getAdminSupabase();`）。`route.test.ts` 加 `vi.mock('@/lib/dq/reconcile/deps',()=>({restoreInputsHashNow:()=>async()=>({unavailable:'inputs_unavailable'})}))`，断言 200 响应形状不变。
 
 - [ ] **Step 6: 跑测试确认通过**
 
@@ -20599,7 +21078,7 @@ export function AdminDqClient() {
         reload();
       } else if (r.status === 409) {
         // Both routes answer 409 with {error:<code>, id} (plan 3 接口对齐记录 #9); the quarantine route keeps {outcome} and may add
-        // detail.restore_note (reconcile_wiring_missing / inputs_unavailable); landed plan-2 409s carry only {id, outcome}.
+        // detail.restore_note (reconcile_wiring_missing / inputs_unavailable / current_evidence_unavailable); landed plan-2 409s carry only {id, outcome}.
         const j = (await r.json().catch(() => ({}))) as { error?: string; outcome?: string; detail?: { restore_note?: string } };
         const code = j.detail?.restore_note ?? j.error ?? j.outcome;
         setNotice(code && t.has(`conflicts.${code}`) ? t(`conflicts.${code}`) : t('alreadyResolved'));
@@ -20886,6 +21365,8 @@ export function AdminDqClient() {
   "not_passing": "最近一次对账未通过或输入已变化，请先重跑对账。",
   "reconcile_wiring_missing": "服务器尚未接上对账输入哈希，暂不能恢复。",
   "inputs_unavailable": "当前对账输入不可得（无最近结果或左侧事实缺失），请先重跑对账。",
+  "current_evidence_unavailable": "此刻取不到该对账对的当前右侧证据（主文档或清单条目），暂不能恢复。",
+  "read_truncated": "读取结果被截断，未做评估，请稍后重试。",
   "stale_evaluation": "数据刚刚变化，请刷新后重试。",
   "generation_moved": "映射代已变化，请刷新后重试。",
   "conflict_exists": "同键同日存在争议或不同的现值，不能直接采用。",
@@ -20979,6 +21460,8 @@ export function AdminDqClient() {
   "not_passing": "The latest reconciliation did not pass or its inputs changed; re-run it first.",
   "reconcile_wiring_missing": "The server has no reconciliation input hash wired yet; restore is unavailable.",
   "inputs_unavailable": "The current reconciliation inputs are unavailable (no latest result or the left fact is missing); re-run it first.",
+  "current_evidence_unavailable": "The pair's current right-side evidence (document or manifest entry) cannot be obtained right now; restore is unavailable.",
+  "read_truncated": "The read was truncated, so nothing was evaluated; try again later.",
   "stale_evaluation": "The data just changed; refresh and try again.",
   "generation_moved": "The mapping generation changed; refresh and try again.",
   "conflict_exists": "A disputed or different current value exists for this key and date; adoption refused.",
@@ -21207,7 +21690,9 @@ Expected: `1`
 | 日期 | 条款 | 偏差 | 原因 | 位置 |
 |---|---|---|---|---|
 | 2026-11-05 | §6.1 封面类别解析顺序（Large → Accelerated → Non） | 先判 "non-accelerated"，再 "large accelerated"，再 "accelerated filer" | "Non-accelerated Filer" 也含 "accelerated filer"，按正文顺序会误判为加速；结果集与正文意图相同 | `src/lib/dq/filer-categories.ts::parseFilerCategory` |
-| 2026-11-05 | §6.1 "最近 6 个已结束报告期" | 解释为以年报月为锚的季度网格上最近 6 个已结束的季度槽；20-F/40-F 只在其中的年报槽出行（因此 1–2 行） | 正文未定义 20-F 的"报告期"；季度槽使三种 regime 的观察窗口一致（约 18 个月） | `src/lib/dq/calendar.ts::computeExpectations` |
+| 2026-11-05 | §6.1 "最近 6 个已结束报告期" | 先按适用报告种类过滤、再取最近 6 个已结束的槽：10-K/CN 为以年报月为锚的季度槽；20-F/40-F 只有年报，槽距 12 个月（6 个财年末；无假日表的年份 `no_rule`） | 正文未定义 20-F 的"报告期"；计划审计 P6 要求年报-only 发行人也得到 6 个已结束报告期 | `src/lib/dq/calendar.ts::computeExpectations`、`filingsWindowStart` |
+| 2026-11-05 | §3.1 迁移一函数清单 | 新增 `append_claim_evidence`、`patch_quarantine_detail`（行锁 jsonb 补丁，仅 `service_role`） | Codex 计划审计第一轮 P3/P4：读后整体替换会丢并发证据、回滚较新的 `latest_result` | `supabase/migrations/20261107090000_identifiers_and_dq.sql`、`src/lib/db/table-client.ts::callRpc` |
+| 2026-11-05 | §3.2 / §5.6 恢复的"当前输入" | 右侧证据按对现取（iXBRL 现抓主文档哈希；黄金对取当前清单该键的证据），取不到 → 409 `not_passing` + `restore_note='current_evidence_unavailable'`，看板 `restorable=false` | 计划审计 P2：不得复用上次运行记录的右侧 sha256 | `src/lib/dq/reconcile/pairs.ts::inputsHashNow`、各 `pair-*.ts::currentRight` |
 | 2026-11-05 | §6.1 52/53 周"最近观测到的同类实际 period_end" | 观测集合 = 已收到的 filing ∪ SEC submissions 同 form 的 `reportDate`；无观测 → 该槽月末作估计 | submissions 是一手来源，能在本库尚无历史时给出估计基准；替换仍只由已收到的 filing 触发 | `estimatePeriodEnd` |
 | 2026-11-05 | §6.1 锚月 | 最近一份已收到年报的实际期末（最近月末的月份）优先于 `fiscalYearEnd` | 正文"仍按 10-K 实际 period_end 推算"的落实；不一致标 `detail.fye_mismatch` | 同上 |
 | 2026-11-05 | §6.1 Rule 0-3 | `SEC_HOLIDAYS` 覆盖 2024–2027（OPM 观察日）+ `SEC_CLOSURES`（EDGAR 公告关闭日）；表外年份的行为 `no_rule`（`none.holiday_table_missing/1`） | 不猜日期；来源见 `verification.md` | `src/lib/dq/calendar.ts` |
