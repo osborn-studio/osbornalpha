@@ -137,11 +137,11 @@ describe('document-level behaviour and the tokenizer bounds',()=>{
  it('a document without any ix element is not_inline_xbrl',()=>{
   expect(parseInlineXbrl('<html><body><p>Annual report</p></body></html>')).toEqual({facts:[],nonNumeric:{},unsupported:[{reason:'not_inline_xbrl'}]});
  });
- it('ix:fraction, ix:tuple and tuple members are unsupported; conflicting dei texts keep the first and report',()=>{
+ it('ix:fraction, ix:tuple and tuple members are unsupported; conflicting dei texts drop the key and report',()=>{
   const d=one('<ix:tuple name="us-gaap:T" tupleID="t1"></ix:tuple><ix:fraction name="us-gaap:F" contextRef="d" unitRef="usd"><ix:numerator>1</ix:numerator><ix:denominator>2</ix:denominator></ix:fraction>'+nf('tupleRef="t1"','1')+'<ix:nonNumeric name="dei:EntityFilerCategory" contextRef="d">Accelerated Filer</ix:nonNumeric><ix:nonNumeric name="dei:EntityFilerCategory" contextRef="d">Non-accelerated Filer</ix:nonNumeric>');
   expect(d.facts).toEqual([]);
   expect(d.unsupported.map(u=>u.reason)).toEqual(['ix_tuple','ix_fraction','tuple_member','nonnumeric_conflict']);
-  expect(d.nonNumeric['dei:EntityFilerCategory']).toBe('Accelerated Filer');
+  expect(d.nonNumeric['dei:EntityFilerCategory']).toBeUndefined();   // conflicting → unavailable
  });
  it('decodes the five XML entities, &nbsp; and numeric references; leaves unknown entities literal',()=>{
   expect(decodeEntities('a&lt;b&gt;&amp;&quot;&apos;&nbsp;&#65;&#x42;&bogus;')).toBe('a<b>&"\' AB&bogus;');
@@ -160,5 +160,44 @@ describe('document-level behaviour and the tokenizer bounds',()=>{
  it('tokens carry source offsets (used by the trimmer)',()=>{
   const src='<a x="1">hi</a>';
   expect([...tokenizeXml(src)].map(t=>[t.t,src.slice(t.start,t.end)])).toEqual([['open','<a x="1">'],['text','hi'],['close','</a>']]);
+ });
+});
+
+describe('plan-review hardening (Codex round)',()=>{
+ it('facts nested anywhere inside ix:tuple are excluded and reported, with or without tupleRef',()=>{
+  const d=one('<ix:tuple name="us-gaap:T" tupleID="t1"><ix:nonNumeric name="dei:EntityFilerCategory" contextRef="d">Accelerated Filer</ix:nonNumeric><ix:tuple name="us-gaap:U" tupleID="t2">'+nf('','7')+'</ix:tuple></ix:tuple>'+nf('','8','us-gaap:Assets','i'));
+  expect(d.facts.map(f=>f.value)).toEqual(['8']);
+  expect(d.nonNumeric).toEqual({});
+  expect(d.unsupported.map(u=>u.reason)).toEqual(['ix_tuple','tuple_member','ix_tuple','tuple_member']);
+ });
+ it('validates measure namespace and local name together',()=>{
+  const res=RES+'<xbrli:unit id="bad1"><xbrli:measure>xbrli:USD</xbrli:measure></xbrli:unit><xbrli:unit id="bad2"><xbrli:measure>iso4217:shares</xbrli:measure></xbrli:unit><xbrli:unit id="bad3"><xbrli:divide><xbrli:unitNumerator><xbrli:measure>iso4217:USD</xbrli:measure></xbrli:unitNumerator><xbrli:unitDenominator><xbrli:measure>iso4217:shares</xbrli:measure></xbrli:unitDenominator></xbrli:divide></xbrli:unit>';
+  const d=parseInlineXbrl(doc(nf('','1','us-gaap:Revenues','d','bad1')+nf('','1','us-gaap:Revenues','d','bad2')+nf('','1','us-gaap:Revenues','d','bad3')+nf('','1'),res));
+  expect(d.unsupported.map(u=>u.reason)).toEqual(['unit','unit','unit']);
+  expect(d.facts.map(f=>f.unit)).toEqual(['USD']);
+ });
+ it('a repeated value after a conflict does not resurrect the dei key',()=>{
+  const e=(t:string)=>`<ix:nonNumeric name="dei:EntityFilerCategory" contextRef="d">${t}</ix:nonNumeric>`;
+  const d=one(e('A')+e('B')+e('A')+e('B'));
+  expect(d.nonNumeric).toEqual({});
+  expect(d.unsupported.map(u=>u.reason)).toEqual(['nonnumeric_conflict']);
+ });
+ it('continuedAt facts are unsupported(continuation); fragments never reach nonNumeric',()=>{
+  const d=one('<ix:nonNumeric name="dei:EntityFilerCategory" contextRef="d" continuedAt="k1">Large Acc</ix:nonNumeric><ix:continuation id="k1">elerated Filer</ix:continuation>'+nf('continuedAt="k2"','1')+nf('','2','us-gaap:Assets','i'));
+  expect(d.nonNumeric).toEqual({});
+  expect(d.facts.map(f=>f.value)).toEqual(['2']);
+  expect(d.unsupported.map(u=>u.reason)).toEqual(['continuation','continuation']);
+ });
+ it('an out-of-bounds numeric literal is a fact-level unsupported(decimal_bounds); other facts survive',()=>{
+  const d=one(nf('','1'.repeat(513))+nf('','5','us-gaap:Assets','i')+nf('scale="99"','1'.repeat(450),'us-gaap:Liabilities'));
+  expect(d.facts.map(f=>f.value)).toEqual(['5']);
+  expect(d.unsupported.map(u=>u.reason)).toEqual(['decimal_bounds','decimal_bounds']);
+ });
+ it('a duplicate context id makes facts referencing it unsupported; a context without identifier is unsupported(entity)',()=>{
+  const noId='<xbrli:context id="noid"><xbrli:entity></xbrli:entity><xbrli:period><xbrli:instant>2024-12-31</xbrli:instant></xbrli:period></xbrli:context>';
+  const res=RES+ctx('dup',DUR)+ctx('dup','<xbrli:instant>2024-01-01</xbrli:instant>')+noId;
+  const d=parseInlineXbrl(doc(nf('','1','us-gaap:Revenues','dup')+nf('','2','us-gaap:Revenues','noid')+nf('','3'),res));
+  expect(d.facts.map(f=>f.value)).toEqual(['3']);
+  expect(d.unsupported.map(u=>[u.reason,u.contextRef])).toEqual([['context_duplicate','dup'],['entity','noid']]);
  });
 });

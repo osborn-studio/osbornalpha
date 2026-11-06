@@ -175,9 +175,9 @@ export function indexIxFacts(facts:readonly IxFact[]):Map<string,{values:string[
 // ---------------- parser ----------------
 interface Frame{name:string;ns:NsMap;uri:string|null;local:string}
 interface RawCtx{id:string;scheme:string;ident:string;start:string;end:string;instant:string;forever:boolean;dimensional:boolean}
-interface RawUnit{id:string;measures:string[];num:string[];den:string[]}
-interface FactFrame{kind:'nf'|'nn';attrs:[string,string][];ns:NsMap;text:string;inner:string|null}
-interface RawFact{kind:'nf'|'nn';attrs:[string,string][];ns:NsMap;text:string}
+interface RawUnit{id:string;measures:string[];num:string[];den:string[];bad:boolean}
+interface FactFrame{kind:'nf'|'nn';attrs:[string,string][];ns:NsMap;text:string;inner:string|null;tuple:boolean}
+interface RawFact{kind:'nf'|'nn';attrs:[string,string][];ns:NsMap;text:string;tuple:boolean}
 /**
  * Mutable parser state, one explicitly typed object (plan audit P7): the open/close callbacks and the token
  * loop all read and write it through `st.*`. Closure `let`s assigned inside callbacks are invisible to the
@@ -185,7 +185,7 @@ interface RawFact{kind:'nf'|'nn';attrs:[string,string][];ns:NsMap;text:string}
  * strict 5.9); property reads of a typed object are narrowed per use instead.
  */
 interface ParseState{
- sawIx:boolean;exclude:number;
+ sawIx:boolean;exclude:number;tuple:number;
  ctx:RawCtx|null;ctxField:'ident'|'start'|'end'|'instant'|null;segDepth:number;
  unit:RawUnit|null;unitPart:'num'|'den'|null;measure:{ns:NsMap;text:string}|null;
 }
@@ -199,6 +199,7 @@ function periodOf(c:RawCtx):{start:string|null;end:string}|null{
  return null;
 }
 function unitString(u:RawUnit):string|null{
+ if(u.bad)return null;
  if(u.num.length>0||u.den.length>0)return u.num.length===1&&u.den.length===1&&u.measures.length===0?`${u.num[0]}/${u.den[0]}`:null;
  return u.measures.length===1?u.measures[0]:null;
 }
@@ -209,17 +210,22 @@ export function parseInlineXbrl(doc:string):IxbrlDocument{
  const stack:Frame[]=[];
  const contexts=new Map<string,RawCtx>();const units=new Map<string,RawUnit>();const rawFacts:RawFact[]=[];
  const open:FactFrame[]=[];
- const st:ParseState={sawIx:false,exclude:0,ctx:null,ctxField:null,segDepth:-1,unit:null,unitPart:null,measure:null};
+ const dupCtx=new Set<string>(),dupUnits=new Set<string>(),conflicted=new Set<string>();
+ const st:ParseState={sawIx:false,exclude:0,tuple:0,ctx:null,ctxField:null,segDepth:-1,unit:null,unitPart:null,measure:null};
 
  const onOpen=(f:Frame,attrs:[string,string][])=>{
   if(st.ctx!==null&&st.segDepth>=0){st.ctx.dimensional=true;return;}   // any element inside segment / scenario
   if(f.uri===NS.ix){
    st.sawIx=true;
    if(f.local==='nonFraction'||f.local==='nonNumeric'){
-    if(attrOf(attrs,'tupleRef')!==undefined)out.unsupported.push({reason:'tuple_member',name:attrOf(attrs,'name')});
-    open.push({kind:f.local==='nonFraction'?'nf':'nn',attrs,ns:f.ns,text:'',inner:null});
+    const member=attrOf(attrs,'tupleRef')!==undefined||st.tuple>0;   // directly or transitively inside ix:tuple
+    if(member)out.unsupported.push({reason:'tuple_member',name:attrOf(attrs,'name')});
+    open.push({kind:f.local==='nonFraction'?'nf':'nn',attrs,ns:f.ns,text:'',inner:null,tuple:member});
    }else if(f.local==='exclude')st.exclude++;
-   else if(f.local==='fraction'||f.local==='tuple')out.unsupported.push({reason:`ix_${f.local}`,name:attrOf(attrs,'name')});
+   else if(f.local==='fraction'||f.local==='tuple'){
+    if(f.local==='tuple')st.tuple++;
+    out.unsupported.push({reason:`ix_${f.local}`,name:attrOf(attrs,'name')});
+   }
    return;
   }
   if(f.uri!==NS.xbrli)return;
@@ -233,7 +239,7 @@ export function parseInlineXbrl(doc:string):IxbrlDocument{
    if(f.local==='forever'){st.ctx.forever=true;return;}
    return;
   }
-  if(f.local==='unit'){st.unit={id:attrOf(attrs,'id')??'',measures:[],num:[],den:[]};return;}
+  if(f.local==='unit'){st.unit={id:attrOf(attrs,'id')??'',measures:[],num:[],den:[],bad:false};return;}
   if(st.unit!==null){
    if(f.local==='unitNumerator')st.unitPart='num';
    else if(f.local==='unitDenominator')st.unitPart='den';
@@ -243,27 +249,31 @@ export function parseInlineXbrl(doc:string):IxbrlDocument{
  const onClose=(f:Frame)=>{
   if(f.uri===NS.ix){
    if(f.local==='exclude'){st.exclude=Math.max(0,st.exclude-1);return;}
+   if(f.local==='tuple'){st.tuple=Math.max(0,st.tuple-1);return;}
    if(f.local==='nonFraction'||f.local==='nonNumeric'){
     const fr=open.pop();if(!fr)return;
     const text=fr.inner??fr.text;
     const parent=open[open.length-1];
     if(parent){if(parent.kind==='nf')parent.inner=text;else parent.text+=text;}
-    rawFacts.push({kind:fr.kind,attrs:fr.attrs,ns:fr.ns,text});
+    rawFacts.push({kind:fr.kind,attrs:fr.attrs,ns:fr.ns,text,tuple:fr.tuple});
    }
    return;
   }
   if(f.uri!==NS.xbrli)return;
   if(st.ctx!==null){
-   if(f.local==='context'){contexts.set(st.ctx.id,st.ctx);st.ctx=null;st.ctxField=null;st.segDepth=-1;return;}
+   if(f.local==='context'){if(contexts.has(st.ctx.id))dupCtx.add(st.ctx.id);contexts.set(st.ctx.id,st.ctx);st.ctx=null;st.ctxField=null;st.segDepth=-1;return;}
    if((f.local==='segment'||f.local==='scenario')&&st.segDepth===stack.length){st.segDepth=-1;return;}
    if(f.local==='identifier'||f.local==='startDate'||f.local==='endDate'||f.local==='instant')st.ctxField=null;
    return;
   }
   if(st.unit!==null){
-   if(f.local==='unit'){units.set(st.unit.id,st.unit);st.unit=null;st.unitPart=null;return;}
+   if(f.local==='unit'){if(units.has(st.unit.id))dupUnits.add(st.unit.id);units.set(st.unit.id,st.unit);st.unit=null;st.unitPart=null;return;}
    if(f.local==='measure'&&st.measure!==null){
     const r=resolveQName(st.measure.text.trim(),st.measure.ns,true);
-    const m=r.uri===NS.iso4217||r.uri===NS.xbrli?r.local:`{${r.uri??''}}${r.local}`;
+    // namespace and local name are validated together: iso4217 → ISO currency code, xbrli → shares | pure
+    const okMeasure=(r.uri===NS.iso4217&&/^[A-Z]{3}$/.test(r.local))||(r.uri===NS.xbrli&&(r.local==='shares'||r.local==='pure'));
+    if(!okMeasure)st.unit.bad=true;
+    const m=okMeasure?r.local:`{${r.uri??''}}${r.local}`;
     (st.unitPart==='num'?st.unit.num:st.unitPart==='den'?st.unit.den:st.unit.measures).push(m);st.measure=null;return;
    }
    if(f.local==='unitNumerator'||f.local==='unitDenominator')st.unitPart=null;
@@ -300,25 +310,30 @@ export function parseInlineXbrl(doc:string):IxbrlDocument{
   if(!nameQ){out.unsupported.push({reason:'name'});continue;}
   const q=resolveQName(nameQ.trim(),f.ns,true);const name=canonicalConcept(q.uri,q.local);
   if(f.kind==='nn'){
-   if(!DEI_NON_NUMERIC.includes(name))continue;
+   if(!DEI_NON_NUMERIC.includes(name)||f.tuple)continue;
+   if(attrOf(f.attrs,'continuedAt')!==undefined){out.unsupported.push({reason:'continuation',name});continue;}
+   if(conflicted.has(name))continue;   // once conflicting, unavailable for good
    const text=f.text.replace(/\s+/g,' ').trim();
    const prev=out.nonNumeric[name];
    if(prev===undefined)out.nonNumeric[name]=text;
-   else if(prev!==text)out.unsupported.push({reason:'nonnumeric_conflict',name});
+   else if(prev!==text){delete out.nonNumeric[name];conflicted.add(name);out.unsupported.push({reason:'nonnumeric_conflict',name});}
    continue;
   }
-  if(attrOf(f.attrs,'tupleRef')!==undefined)continue;   // reported when opened
+  if(f.tuple)continue;   // reported when opened
+  if(attrOf(f.attrs,'continuedAt')!==undefined){out.unsupported.push({reason:'continuation',name});continue;}
   const contextRef=attrOf(f.attrs,'contextRef')??'';
   const c=contexts.get(contextRef);
   if(!c){out.unsupported.push({reason:'context',name,contextRef});continue;}
+  if(dupCtx.has(contextRef)){out.unsupported.push({reason:'context_duplicate',name,contextRef});continue;}
   if(c.dimensional)continue;
+  if(c.ident.trim()===''||c.scheme.trim()===''){out.unsupported.push({reason:'entity',name,contextRef});continue;}
   const period=periodOf(c);
   if(!period){out.unsupported.push({reason:'period',name,contextRef});continue;}
   const where={name,contextRef,periodStart:period.start,periodEnd:period.end};
   const nil=nsAttr(f.attrs,f.ns,NS.xsi,'nil');
   if(nil==='true'||nil==='1'){out.unsupported.push({reason:'nil',...where});continue;}
   const unitRef=attrOf(f.attrs,'unitRef')??'';
-  const u=units.get(unitRef);const raw=u?unitString(u):null;const unitNorm=raw===null?null:normalizeUnit(raw);
+  const u=dupUnits.has(unitRef)?undefined:units.get(unitRef);const raw=u?unitString(u):null;const unitNorm=raw===null?null:normalizeUnit(raw);
   if(unitNorm===null){out.unsupported.push({reason:'unit',...where});continue;}
   const scaleRaw=(attrOf(f.attrs,'scale')??'0').trim();
   if(!/^-?\d{1,2}$/.test(scaleRaw)){out.unsupported.push({reason:'scale',...where});continue;}
@@ -328,7 +343,8 @@ export function parseInlineXbrl(doc:string):IxbrlDocument{
   const digits=fmt===null?null:parseFactText(fmt,f.text);
   if(digits===null){out.unsupported.push({reason:'format',...where});continue;}
   const scale=Number(scaleRaw);
-  let value=canonicalDecimal(`${digits}e${scale}`);
+  let value:string;
+  try{value=canonicalDecimal(`${digits}e${scale}`);}catch{out.unsupported.push({reason:'decimal_bounds',...where});continue;}
   if(sign==='-'&&value!=='0')value=value.startsWith('-')?value.slice(1):`-${value}`;
   out.facts.push({name,periodStart:period.start,periodEnd:period.end,unit:unitNorm,value,decimals:attrOf(f.attrs,'decimals')??null,scale,entity:`${c.scheme}#${c.ident.trim()}`,contextRef,unitRef});
  }
