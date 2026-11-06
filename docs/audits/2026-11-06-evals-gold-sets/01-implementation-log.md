@@ -21,3 +21,9 @@
 - ci.yml: F6 frozen replay report digest step after test:db.
 - Deviations from plan text: ledger loads take the injected policy (loadRecorders().recorders); live recording / replay use projectWithRev so state_rev binds the projection; record.test self-approval case uses added_by=approved_by=owner (an implementer approver no longer parses); recorded in a clean detached git worktree because an untracked docs/audits/.../tasks/ directory dirties the main tree.
 - Not done (owner items): facts.live.json and the first live run; lock.json does not list replay files (CCR 5).
+
+## Task 13 — admin read API
+
+- src/lib/evals/admin.ts (whitelist: run columns, §3.2 summary keys type-checked incl. coverage.evaluated_optional, case text columns + detail.locator/document_id; ≤ 100 case rows; gate_failing_30d = failed+incomplete+error in 30 days, global), GET /api/admin/evals, GET /api/admin/evals/[run_id].
+- Tests: exact key sets, sentinel 918273645.5 planted in summary extras and case detail never in responses or logs, 401/403 before the admin client, 400/404.
+- UI section and drawer: after the Claude Design canvas and plan 3 Task 19 (§0 R5-11).
