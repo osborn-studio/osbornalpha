@@ -12,7 +12,7 @@ import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '../dq/batches
 import {recordAttempt} from '../dq/freshness';
 import {quarantine} from '../dq/quarantine';
 import {RULES_VERSION} from '../dq/rules';
-import {DATASETS} from '../dq/datasets';
+import {DATASETS,inventoryEntry} from '../dq/datasets';
 import {FactsDbError} from './types';
 import type {Budget,FactCandidate,FactsDb,FilingInsert,FilingRow,Market,ParseResult,RawSnapshot,ScopeRow,Source} from './types';
 import {FACT_CONCEPTS,MAPPING_GEN,MAPPING_VERSION} from './concepts';
@@ -427,13 +427,13 @@ export async function runFactsSync(deps:SyncDeps,opts:SyncOptions):Promise<SyncR
   const status=await finishBatch(deps.tables,batchId,{counts,errors},deps.now());
   const ok=idle||published>=Math.max(1,Math.ceil(attempted/2));
   const detail:SyncDetail={attempted,published,failed,skipped,idle};
-  await recordAttempt(deps.tables,dataset,{ok,cadence:'daily',now:deps.now(),detail:{...detail}});
+  await recordAttempt(deps.tables,dataset,{ok,cadence:inventoryEntry(dataset).cadence,now:deps.now(),detail:{...detail}});
   return {batchId,status,counts,errors,issuers,idle,detail};
  }catch(e){
   // Infrastructure failure outside an issuer: close the receipt so no running batch dangles, then rethrow.
   errors.push({code:'unknown',message:errMsg(e)});
   try{await finishBatch(deps.tables,batchId,{counts,errors},deps.now());}catch{/* left running; runbook SQL marks it failed */}
-  try{await recordAttempt(deps.tables,dataset,{ok:false,cadence:'daily',now:deps.now(),detail:{attempted,published,failed,skipped,idle,error:errMsg(e)}});}catch{/* same */}
+  try{await recordAttempt(deps.tables,dataset,{ok:false,cadence:inventoryEntry(dataset).cadence,now:deps.now(),detail:{attempted,published,failed,skipped,idle,error:errMsg(e)}});}catch{/* same */}
   throw e;
  }
 }

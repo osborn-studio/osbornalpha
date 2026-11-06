@@ -21,7 +21,7 @@ import {emptyCounts,finishBatch,startBatch} from '../../src/lib/dq/batches';
 import type {BatchError,BatchStatus} from '../../src/lib/dq/batches';
 import {recordAttempt} from '../../src/lib/dq/freshness';
 import {applySecLoad,errorMessage,loaderOutcome,planSecLoad} from '../../src/lib/entities/load-sec';
-import {DATASETS} from '../../src/lib/dq/datasets';
+import {DATASETS,inventoryEntry} from '../../src/lib/dq/datasets';
 import {MAX_SEC_FILE_BYTES,parseSecCompanyTickersExchange} from '../../src/lib/research/entity-keys/parsers';
 import {getAdminSupabase} from '../../src/lib/supabase/admin';
 
@@ -84,7 +84,7 @@ async function apply(client:TableClient,file:string,asOf:string):Promise<0|1>{
   catch(e){console.error(`finishBatch failed: ${errorMessage(e)}`);status='failed';}
  }
  const outcome=loaderOutcome(status,counts,rejected);
- await recordAttempt(client,DATASET,{ok:outcome.ok,cadence:'event'});
+ await recordAttempt(client,DATASET,{ok:outcome.ok,cadence:inventoryEntry(DATASET).cadence});
  console.log(JSON.stringify({batchId,status,counts,skipped,rejected,errors:errors.slice(0,20)},null,1));
  return outcome.exitCode;
 }

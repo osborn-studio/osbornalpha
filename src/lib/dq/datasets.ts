@@ -1,8 +1,9 @@
 // src/lib/dq/datasets.ts
 // Typed dataset registry (spec 3 §6.3; plan 3 contract C1). Producers take dataset strings ONLY from
 // DATASETS (datasets.test.ts scans the source tree for stray literals). DQ_DATASET_INVENTORY lists
-// every dataset with its producer and freshness cadence, so the /admin/dq dropdown and the freshness
-// panel show datasets that have not run yet, and producers read their cadence from inventoryEntry.
+// every dataset with its producer and cadence: the /admin/dq dataset dropdown shows all of them,
+// including ones that have not run yet (it creates no freshness rows), and producers read their
+// cadence from inventoryEntry.
 import type {Market} from '../facts/types';
 import type {Cadence} from './freshness';
 import {RECONCILE_PAIR_IDS,type ReconcilePairId} from './reconcile/types';
