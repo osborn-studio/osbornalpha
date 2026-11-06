@@ -140,5 +140,6 @@ export function pickSample(candidates:readonly SampleCandidate[],required:readon
    picked.splice(out,1,incoming);
   }
  }
- return {picked:picked.sort((a,b)=>cmp(a.ticker,b.ticker)),unmet:QUOTAS.filter(q=>count(q)<q.min).map(q=>q.name)};
+ const missing=[...req].filter(t=>!picked.some(p=>p.ticker===t)).sort().map(t=>`required:${t}`);
+ return {picked:picked.sort((a,b)=>cmp(a.ticker,b.ticker)),unmet:[...missing,...QUOTAS.filter(q=>count(q)<q.min).map(q=>q.name)]};
 }

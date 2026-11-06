@@ -8,7 +8,7 @@ import {computeInputsHash} from './inputs-hash';
 import {IXBRL_PARSER_VERSION} from './ixbrl';
 import {sha256Hex} from './pair-support';
 import type {PairRunContext} from './pair-support';
-import {filerClass,usCompanyfactsVsIxbrlPair} from './pair-us-ixbrl';
+import {fetchSecDocument,filerClass,usCompanyfactsVsIxbrlPair} from './pair-us-ixbrl';
 import {RECONCILE_PAIRS,inputsHashNow} from './pairs';
 import {reconcileTables,seedPublished} from './testing';
 import {US_SAMPLE_PATH,US_SAMPLE_SCHEMA} from './us-sample';
@@ -121,6 +121,7 @@ describe('us.companyfacts_vs_ixbrl',()=>{
   expect(res.slice(KEYS.length).map(r=>r.outcome)).toEqual(['left_unlinked','left_unlinked','left_unlinked','left_unlinked']);
   expect(s.fetch.mock.calls.map(c=>c[0])).toEqual([URL1]);
   expect(await s.tables.select('dq_reconciliations',{})).toEqual([]);
+  expect(s.raw.objects.size).toBe(0);   // dry run: the 404 body went to an ephemeral store
  });
  it('is_inline_xbrl=false → every key unsupported(not_inline_xbrl), no fetch; an invalid sample refuses the run',async()=>{
   const s=await setup({sample:sample([filing(ACCN,URL1,KEYS,{is_inline_xbrl:false})]),docs:{}});
@@ -144,6 +145,45 @@ describe('us.companyfacts_vs_ixbrl',()=>{
   const meta=[...s.raw.objects.entries()].filter(([p])=>p.endsWith('.meta.json')||p.includes('meta')).map(([,b])=>new TextDecoder().decode(b)).join('');
   expect(meta).toContain('"http_status":404');expect(meta).not.toContain('?');
   expect(JSON.stringify(s.fetch.mock.calls.map(c=>c[0]))).not.toContain('?');
+ });
+ it('left precision is not published (canonicalised value_text falsifies trailing zeros)',async()=>{
+  const s=await setup({sample:sample([filing(ACCN,URL1,KEYS)]),docs:{[URL1]:docOf('5,001')}});
+  const pair=usCompanyfactsVsIxbrlPair();const [m]=await pair.members(s.c);
+  const res=await pair.evaluate(s.c,m);
+  expect(res[0].detail.left).toMatchObject({precision:null,precision_note:'not_retained'});
+ });
+ it('dry run writes nothing to the injected raw store, for a success and a failure response',async()=>{
+  const s=await setup({sample:sample([filing(ACCN,URL1,KEYS)]),docs:{[URL1]:docOf('5,001')}});
+  const pair=usCompanyfactsVsIxbrlPair();const dry:PairRunContext={...s.c,dryRun:true};
+  const [m]=await pair.members(dry);
+  const res=await pair.evaluate(dry,m);
+  expect(res[0].right_value).toBe('1000');expect(res[0].detail.right).toMatchObject({sha256:sha256Hex(docOf('5,001'))});
+  expect(s.raw.objects.size).toBe(0);
+  const bad:PairRunContext={...s.c,dryRun:true,fetch:(async()=>new Response('nope',{status:404})) as unknown as typeof fetch};
+  expect(await fetchSecDocument(URL1,bad)).toEqual({status:'not_found'});
+  expect(s.raw.objects.size).toBe(0);
+ });
+ it('enforces byte limits while streaming, without Content-Length',async()=>{
+  const s=await setup({sample:sample([filing(ACCN,URL1,KEYS)]),docs:{}});
+  const MB=1024*1024;let pulled=0;
+  const stream=(chunks:number)=>new ReadableStream<Uint8Array>({pull(c){if(pulled>=chunks){c.close();return;}pulled++;c.enqueue(new Uint8Array(MB));}});
+  const big:PairRunContext={...s.c,fetch:(async()=>new Response(stream(80),{status:200})) as unknown as typeof fetch};
+  expect(await fetchSecDocument(URL1,big)).toEqual({status:'too_large'});
+  expect(pulled).toBeLessThanOrEqual(52);   // cancelled shortly after 50 MB, not drained
+  pulled=0;
+  const fail:PairRunContext={...s.c,fetch:(async()=>new Response(stream(5),{status:404})) as unknown as typeof fetch};
+  expect(await fetchSecDocument(URL1,fail)).toEqual({status:'not_found'});
+  const bodies=[...s.raw.objects.entries()].filter(([p])=>!p.endsWith('.meta.json'));
+  expect(bodies).toHaveLength(1);expect(bodies[0][1].byteLength).toBe(MB);
+  expect([...s.raw.objects.entries()].filter(([p])=>p.endsWith('.meta.json')).map(([,b])=>new TextDecoder().decode(b)).join('')).toContain('"truncated":1');
+ },30_000);
+ it('stored metadata never carries a query string, even when the URL handed to the storing path has one',async()=>{
+  const s=await setup({sample:sample([filing(ACCN,URL1,KEYS)]),docs:{}});
+  const withQuery=`${URL1}?token=secret&x=1#frag`;
+  const ok:PairRunContext={...s.c,fetch:(async()=>new Response('x',{status:404})) as unknown as typeof fetch};
+  await fetchSecDocument(withQuery,ok);
+  const meta=[...s.raw.objects.entries()].filter(([p])=>p.endsWith('.meta.json')).map(([,b])=>new TextDecoder().decode(b)).join('');
+  expect(meta).toContain('zix-20241231.htm');expect(meta).not.toMatch(/token|secret|\?|#frag/);
  });
  it('filerClass: case-insensitive, non-accelerated before accelerated, SRC alone is unknown',()=>{
   expect([filerClass('Large Accelerated Filer'),filerClass('Accelerated Filer'),filerClass('Non-accelerated Filer'),filerClass('Non-accelerated filer<br>Smaller reporting company'),filerClass('Smaller reporting company'),filerClass(null)])

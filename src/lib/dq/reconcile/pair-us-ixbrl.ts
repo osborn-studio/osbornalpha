@@ -16,7 +16,7 @@
 //     right_missing; several distinct values → right_ambiguous (never quarantines);
 //  5. exact comparison (tolerance 0: the iXBRL value is the filed value); action by actionFor (quarantine
 //     only an ok left row, bound keys go back to their item). detail: left {fact_id, raw_hash, status,
-//     precision.decimals = fraction digits of value_text}, right {document, sha256, path, locator {name,
+//     precision null (value_text is canonicalised, trailing zeros are not retained)}, right {document, sha256, path, locator {name,
 //     contextRef, unitRef}, precision {decimals, scale}}, inputs_hash = computeInputsHash(left raw_hash, right
 //     sha256, sample sha256, IXBRL_PARSER_VERSION).
 // currentRight (restore, plan audit P2): the sample filing that holds the result's natural key, its primary
@@ -26,13 +26,15 @@
 import {conceptById} from '../../facts/concepts';
 import {tagsOf} from '../../facts/providers/edgar-companyfacts';
 import {secPacer,sleep} from '../../facts/providers/shared';
+import {memoryRawStore} from '../raw-store';
+import type {RawStore} from '../raw-store';
 import type {FactRow} from '../../facts/types';
 import {DEFAULT_USER_AGENT} from '../../research/ingest/collectors/shared';
 import {compareDecimal} from './decimal';
 import {computeInputsHash} from './inputs-hash';
 import {IXBRL_PARSER_VERSION,IxbrlParseError,MAX_IXBRL_BYTES,indexIxFacts,ixFactKey,parseInlineXbrl} from './ixbrl';
 import type {IxbrlDocument,IxFact} from './ixbrl';
-import {ReconcileConfigError,actionFor,activeRows,comparedNumeric,factKeyOf,fractionDigits,mismatchItem,notCompared,openMismatches,readRepoJson,sha256Hex} from './pair-support';
+import {ReconcileConfigError,runContextOf,actionFor,activeRows,comparedNumeric,factKeyOf,mismatchItem,notCompared,openMismatches,readRepoJson,sha256Hex} from './pair-support';
 import type {RegisteredPair} from './pair-support';
 import type {MemberPlan,PairContext,ReconcileOutcome,ReconcileResultInput} from './types';
 import {US_SAMPLE_PATH,US_SAMPLE_SCHEMA,entityIs,usNaturalKey,validateUsSample} from './us-sample';
@@ -46,11 +48,29 @@ export type DocFetch={status:'ok';bytes:Uint8Array}|{status:'not_found'}|{status
 /** Raw-evidence metadata never carries a query string, fragment or credentials: scheme, host and path only. */
 const evidenceUrl=(u:string):string=>{try{const x=new URL(u);return `${x.protocol}//${x.host}${x.pathname}`;}catch{return '';}};
 const FAILURE_BODY_CAP=1024*1024;
-/** A non-accepted response body is evidence too (404 page, SEC error page): stored content-addressed, capped, best effort on read. */
+/** Dry runs never write production storage: evidence goes to an ephemeral in-memory store (hashes are still computed locally). */
+const storeOf=(ctx:PairContext):RawStore=>runContextOf(ctx).dryRun?memoryRawStore():ctx.raw;
+/**
+ * Reads at most `limit` bytes of the body while streaming; past the limit the stream is cancelled and
+ * exceeded=true (bytes then hold the first `limit` bytes). A response without a stream falls back to arrayBuffer.
+ */
+async function readLimited(res:Response,limit:number):Promise<{bytes:Uint8Array;exceeded:boolean}>{
+ if(!res.body){const all=new Uint8Array(await res.arrayBuffer());return all.byteLength>limit?{bytes:all.slice(0,limit),exceeded:true}:{bytes:all,exceeded:false};}
+ const reader=res.body.getReader();const chunks:Uint8Array[]=[];let n=0;
+ for(;;){
+  const {done,value}=await reader.read();
+  if(done)break;
+  if(n+value.byteLength>limit){chunks.push(value.slice(0,limit-n));n=limit;await reader.cancel().catch(()=>undefined);return {bytes:concat(chunks,n),exceeded:true};}
+  chunks.push(value);n+=value.byteLength;
+ }
+ return {bytes:concat(chunks,n),exceeded:false};
+}
+function concat(chunks:Uint8Array[],n:number):Uint8Array{const out=new Uint8Array(n);let o=0;for(const c of chunks){out.set(c,o);o+=c.byteLength;}return out;}
+/** A non-accepted response body is evidence too (404 page, SEC error page): stored content-addressed, capped at 1 MB (truncated + flagged). */
 async function storeFailure(ctx:PairContext,res:Response,url:string):Promise<void>{
- let bytes:Uint8Array;
- try{bytes=new Uint8Array(await res.arrayBuffer()).slice(0,FAILURE_BODY_CAP);}catch{bytes=new Uint8Array();}
- await ctx.raw.put({kind:'sec-document',bytes,contentType:'text/html',meta:{url:evidenceUrl(url),http_status:res.status,outcome:'failure'}},ctx.budget);
+ let got:{bytes:Uint8Array;exceeded:boolean};
+ try{got=await readLimited(res,FAILURE_BODY_CAP);}catch{got={bytes:new Uint8Array(),exceeded:false};}
+ await storeOf(ctx).put({kind:'sec-document',bytes:got.bytes,contentType:'text/html',meta:{url:evidenceUrl(url),http_status:res.status,outcome:'failure',...(got.exceeded?{truncated:1}:{})}},ctx.budget);
 }
 export async function fetchSecDocument(url:string,ctx:PairContext):Promise<DocFetch>{
  const ua=process.env.EDGAR_USER_AGENT??DEFAULT_USER_AGENT;
@@ -66,9 +86,9 @@ export async function fetchSecDocument(url:string,ctx:PairContext):Promise<DocFe
    throw new Error(`sec_unavailable:http_${res.status}`);
   }
   if(!res.ok){await storeFailure(ctx,res,url);throw new Error(`sec_unavailable:http_${res.status}`);}
-  if(Number(res.headers.get('content-length')??'0')>MAX_IXBRL_BYTES)return {status:'too_large'};
-  const bytes=new Uint8Array(await res.arrayBuffer());
-  return bytes.byteLength>MAX_IXBRL_BYTES?{status:'too_large'}:{status:'ok',bytes};
+  if(Number(res.headers.get('content-length')??'0')>MAX_IXBRL_BYTES){await res.body?.cancel().catch(()=>undefined);return {status:'too_large'};}
+  const got=await readLimited(res,MAX_IXBRL_BYTES);
+  return got.exceeded?{status:'too_large'}:{status:'ok',bytes:got.bytes};
  }
 }
 
@@ -94,7 +114,7 @@ async function rightSide(ctx:PairContext,f:SampleFiling,cik:string):Promise<Righ
  if(f.is_inline_xbrl===false)return {kind:'unsupported',reason:'not_inline_xbrl',sha256:''};
  const got=await fetchSecDocument(f.doc_url,ctx);
  if(got.status!=='ok')return {kind:'unsupported',reason:got.status==='not_found'?'document_not_found':'document_too_large',sha256:''};
- const stored=await ctx.raw.put({kind:'sec-document',bytes:got.bytes,contentType:'text/html',meta:{url:evidenceUrl(f.doc_url),accn:f.accn,http_status:200}},ctx.budget);
+ const stored=await storeOf(ctx).put({kind:'sec-document',bytes:got.bytes,contentType:'text/html',meta:{url:evidenceUrl(f.doc_url),accn:f.accn,http_status:200}},ctx.budget);
  let doc:IxbrlDocument;
  try{doc=parseInlineXbrl(new TextDecoder('utf-8').decode(got.bytes));}
  catch(e){if(e instanceof IxbrlParseError)return {kind:'unsupported',reason:`parse_error:${e.code}`,sha256:stored.sha256};throw e;}
@@ -152,7 +172,7 @@ export function usCompanyfactsVsIxbrlPair():RegisteredPair{
      const rightSha=right.sha256;
      const inputs_hash=computeInputsHash({left_raw_hash:left?.raw_hash??'',right_sha256:rightSha,gold_or_sample_sha256:sampleSha,parser_version:IXBRL_PARSER_VERSION});
      const base={accn,origin:loc.origin,unit:loc.unit,tolerance_rule:'exact/1',inputs_hash,
-      left:left?{fact_id:left.fact_id,raw_hash:left.raw_hash,status:left.status,precision:{decimals:fractionDigits(left.value_text)}}:null};
+      left:left?{fact_id:left.fact_id,raw_hash:left.raw_hash,status:left.status,precision:null,precision_note:'not_retained'}:null};
      const backToItem=bound!==undefined&&left!==null;
      const nc=(outcome:Exclude<ReconcileOutcome,'compared'>,detail:Record<string,unknown>)=>notCompared(nk,'numeric',outcome,SIDES,{...base,...detail},{inputs_hash,...(left?{left_fact_id:left.fact_id}:{}),...(backToItem?{action:'quarantine_left' as const,item:mismatchItem(PAIR,nk,left!,null,{document:entry.doc_url,accn},inputs_hash)}:{})});
      if(right.kind==='unsupported'){results[i]=nc('unsupported',{reason:right.reason,right:{document:entry.doc_url,sha256:rightSha}});continue;}

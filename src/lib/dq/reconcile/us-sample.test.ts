@@ -73,6 +73,11 @@ describe('pickSample (spec §5.3 sample rule)',()=>{
   expect(new Set(picked.map(p=>p.ticker)).size).toBe(30);
   expect(picked.map(p=>p.ticker)).toEqual([...picked.map(p=>p.ticker)].sort());
  });
+ it('reports a mandatory gold ticker that is not a candidate even when every quota passes',()=>{
+  const all=[...Array.from({length:60},(_,i)=>cand(i)),cand(101,{ticker:'MSFT',exchange:'Nasdaq',fiscalYearEnd:'0630'}),cand(102,{ticker:'ZNAS',exchange:'Nasdaq'}),cand(103,{ticker:'ZNAS2',exchange:'Nasdaq'}),cand(104,{ticker:'ZACC',acceleration:'accelerated'}),cand(105,{ticker:'ZNON',acceleration:'non_accelerated',fiscalYearEnd:'0630'})];
+  const {picked,unmet}=pickSample(all,['AAPL','MSFT'],30);
+  expect(unmet).toEqual(['required:AAPL']);expect(picked.map(p=>p.ticker)).toContain('MSFT');
+ });
  it('reports a quota that cannot be met instead of inventing candidates',()=>{
   const {picked,unmet}=pickSample(Array.from({length:10},(_,i)=>cand(i)),[],30);
   expect(picked).toHaveLength(10);
