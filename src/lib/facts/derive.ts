@@ -223,7 +223,9 @@ export interface MaterializeResult{rows:number;stateRev:number;retried:boolean;t
 export function deriveLineageMetrics(rows:FactRow[],target:string,lineage:readonly string[],opts:{market:Market;asOf:string;basedOn:LineageRev[]}):MetricRow[]{
  const members=new Set(lineage);
  if(!members.has(target)||rows.some(r=>!members.has(r.issuer_id)||r.market!==opts.market))throw new Error(`derive_scope_mismatch:${target}/${opts.market}`);
- const basedOnRev=opts.basedOn.find(x=>x.issuer_id===target)?.state_rev??0;
+ const own=opts.basedOn.find(x=>x.issuer_id===target);
+ if(!own)throw new Error(`derive_scope_mismatch:${target}/basedOn`);   // the vector must carry the target's rev
+ const basedOnRev=own.state_rev;
  return deriveMetrics(rows.map(r=>r.issuer_id===target?r:{...r,issuer_id:target}),{market:opts.market,asOf:opts.asOf,basedOnRev,basedOn:opts.basedOn});
 }
 /** as_of = today; materialises T(issuer) over its current lineage (see the header). */

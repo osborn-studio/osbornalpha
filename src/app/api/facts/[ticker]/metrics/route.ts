@@ -19,6 +19,7 @@ import type {LineageConflict,MetricRow} from '@/lib/facts/types';
 
 export const dynamic='force-dynamic';
 const PARAMS=['metrics','from','to','asOf','limit','tickerAsOf'] as const;
+const ALL_METRICS=new Set<string>([...metricNames('US'),...metricNames('CN')]);
 const DEFAULT_LIMIT=200,MAX_LIMIT=1000;
 const publicMetric=(m:MetricRow)=>({metric:m.metric,periodStart:m.period_start,periodEnd:m.period_end,duration:m.duration,value:m.value,unit:m.unit,inputUnit:m.input_unit,basis:m.basis,inputs:m.inputs,basedOnRev:m.based_on_rev,basedOnLineage:m.based_on_lineage});
 
@@ -31,6 +32,7 @@ export async function GET(req:Request,{params}:{params:Promise<{ticker:string}>}
   p=readParams(new URL(req.url),PARAMS);
   from=dateParam(p,'from');to=dateParam(p,'to');asOf=dateParam(p,'asOf');limit=intParam(p,'limit',DEFAULT_LIMIT,MAX_LIMIT);tickerAsOf=tickerAsOfParam(p,today);
   if(asOf!==undefined&&asOf>today)throw new QueryError('asOf');
+  listParam(p,'metrics',ALL_METRICS,ALL_METRICS.size);   // syntax and vocabulary of either market first: a bad value is 400 even for an unknown ticker
  }catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
  try{
   const {tables,db}=publicClients();
@@ -47,8 +49,9 @@ export async function GET(req:Request,{params}:{params:Promise<{ticker:string}>}
    try{
     rows=await db.metricsOfIssuer(target,issuer.market,FORMULA_VERSION);
     // conflicts withheld from current values, read inside the same before/after bracket
-    const env=await db.readFactsLineage(lineage,issuer.market,{concepts:[...DERIVE_CONCEPTS[issuer.market]],asOf:today});
-    conflicts=env.conflicts;if(env.truncated)truncated=true;
+    // limit:1 — the clash CTE ignores p_limit, so conflicts are complete; this read's `truncated` is not the response's (rows come from the metrics table)
+    const env=await db.readFactsLineage(lineage,issuer.market,{concepts:[...DERIVE_CONCEPTS[issuer.market]],asOf:today,limit:1});
+    conflicts=env.conflicts;
    }catch(e){if(e instanceof FactsDbError&&e.message==='metrics_unstable'){rows=[];stale=true;}else throw e;}
    if(!stale){   // the guard runs for an empty read too: a lineage or rev that moved during it is stale, never an empty answer
     const lineageAfter=await db.lineageOf(target);

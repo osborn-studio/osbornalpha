@@ -292,6 +292,7 @@ describe('materialize (lineage contract, spec §4.4 / T9)',()=>{
   const other=fakeDb([env([{issuer_id:'I',state_rev:5}],[dur('revenue','2024-01-01','2024-03-31','1',{issuer_id:'OTHER'})])]);
   await expect(materialize(other.db,'I','US')).rejects.toThrow('derive_scope_mismatch');
   expect(other.calls).toEqual([]);
+  expect(()=>deriveLineageMetrics([],'I',['I'],{market:'US',asOf:'2025-01-01',basedOn:[]})).toThrow('derive_scope_mismatch');
   expect(()=>deriveLineageMetrics([dur('revenue','2024-01-01','2024-03-31','1',{market:'CN'})],'I',['I'],{market:'US',asOf:'2025-01-01',basedOn:[]})).toThrow('derive_scope_mismatch');
  });
  it('refuses a truncated envelope with read_truncated and writes nothing',async()=>{

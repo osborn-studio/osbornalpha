@@ -8,6 +8,8 @@
 // Plan 3 (spec §4.3.5, §4.4): tickerAsOf (default today, future → 400) picks the ticker's owner at
 // that date; the answer names the lineage target T (issuerId), its lineage, the cross-issuer
 // conflicts withheld from current values, each row's recordedIssuerId and each filing's acceptedAt.
+// Note: a past asOf answer is cached for 1h (s-maxage=3600) and can change after a LATER merge (the
+// lineage grows); that cache bounds the staleness.
 import {NextResponse} from 'next/server';
 import {getAnonSupabase} from '../supabase/anon';
 import {supabaseTableClient} from '../db/table-client';

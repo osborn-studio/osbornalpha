@@ -139,4 +139,16 @@ describe('GET /api/facts/[ticker]/metrics',()=>{
   mocks.stateRevs.mockResolvedValueOnce(V3).mockResolvedValue([{issuer_id:ISSUER,state_rev:4}]);
   expect(await (await get('AAPL','')).json()).toMatchObject({stale:true,conflicts:[]});
  });
+ it('conflicts read passes limit:1 and its truncated flag is not the response\'s: fresh cache, truncated:false',async()=>{
+  mocks.readFactsLineage.mockResolvedValue({stateRevs:V3,lineage:[ISSUER],conflicts:[],truncated:true,rows:[]});
+  const res=await get('AAPL','');
+  expect(await res.json()).toMatchObject({truncated:false,stale:false});
+  expect(res.headers.get('cache-control')).toBe('public, max-age=0, s-maxage=60');
+  expect(mocks.readFactsLineage.mock.calls[0][2]).toMatchObject({limit:1});
+ });
+ it('a bad metrics value is 400 even for an unknown ticker (validated before resolution)',async()=>{
+  mocks.resolve.mockResolvedValue(null);
+  expect((await get('ZZZZ','metrics=not_a_metric')).status).toBe(400);
+  expect((await get('ZZZZ','metrics=gross_margin')).status).toBe(404);
+ });
 });
