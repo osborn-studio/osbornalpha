@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 落地规格 `docs/superpowers/specs/2026-11-04-judgment-framework-design.md`（第 7 稿 = 第 6 稿 + 计划审计第一轮 P1-03/P1-09/P1-10 修订，审计见 `docs/audits/2026-11-06-judgment-framework-plan/01-codex-plan-round1.md`；第 6 稿的 Codex 第五轮处方见 `docs/audits/2026-11-04-judgment-framework/03-disposition.md` 第五轮节）：公共判断表家族（九表 + RPC + 按 `publishable` 的 RLS）、方法注册表与 `formula_hash`、冻结输入的登记与回放、结算队列与三个 resolver、校准与显示门控、读接口与 UI、首批生产者 `macro_regime@v1`（夹具对接宏观接口）与 `recommendation_call@v1`（私有只读适配器）。
+**Goal:** 落地规格 `docs/superpowers/specs/2026-11-04-judgment-framework-design.md`（第 7 稿 = 第 6 稿 + 计划审计第一轮 P1-03/P1-09/P1-10 修订 + 第二轮 Q1-01/Q1-02/Q1-03/Q1-05 修订，审计见 `docs/audits/2026-11-06-judgment-framework-plan/01-codex-plan-round1.md`、`02-codex-plan-round2.md`；第 6 稿的 Codex 第五轮处方见 `docs/audits/2026-11-04-judgment-framework/03-disposition.md` 第五轮节）：公共判断表家族（九表 + RPC + 按 `publishable` 的 RLS）、方法注册表与 `formula_hash`、冻结输入的登记与回放、结算队列与三个 resolver、校准与显示门控、读接口与 UI、首批生产者 `macro_regime@v1`（夹具对接宏观接口）与 `recommendation_call@v1`（私有只读适配器）。
 
 **Architecture:** 一个迁移 `20261109150000_judgments.sql` 建九表、触发器、RLS、全部 §5.6 函数；`src/lib/judgments/db.ts` 的 `JudgmentsDb` 契约有 Supabase（rpc）/ 内存 / pg 三实现；`JudgmentInputsDb` 只走 anon 公共读路径与 K 线适配器；登记、回放、结算、校准、显示全是依赖注入的纯核心 + 薄路由；宏观工作台尚不存在，F4 定义 `MacroReadApi` 接口并用夹具实现。
 
@@ -54,6 +54,8 @@ src/lib/judgments/memory-judgments-db.ts           memoryJudgmentsDb()（复刻�
 src/lib/judgments/db-contract.ts                   内存与 pg 共用契约用例 judgmentsDbContract + 夹具工厂 + withClaimLock / F4_CLAIM_LOCK（非测试文件；Task 4）
 src/lib/judgments/pg-judgments-db.ts               pgJudgmentsDb(pool)（集成测试用；Task 4）
 src/lib/judgments/judgments.integration.test.ts    迁移/触发器/RLS/函数（critical；Task 2、3）
+src/lib/judgments/rpc-inventory.ts                 F4 SQL 函数唯一清单 PUBLIC_RPCS / SERVICE_RPCS / INTERNAL_FUNCTIONS（名字 → 参数签名；Task 3 建，Task 3/4/22 的权限、路由与运行手册核对共用，计划审计 Q1-06）
+src/lib/judgments/rpc-inventory.test.ts            运行手册 §1 / §8 列全清单（Task 22）
 src/lib/judgments/judgments-db.integration.test.ts pg 契约 + 并发（critical；Task 4）
 src/lib/dq/batches.ts                              // F4 块：可选 deferred 计数器 + normalizeCounts + JUDGMENT_INFO_CODES / ALL_INFO_CODES（INFO_CODES 不变；Task 5）
 src/lib/judgments/origins.ts                       ORIGINS 冻结表 + originFor() / originKnown()（不含许可状态，决策 D3；Task 6）
@@ -284,18 +286,28 @@ export interface JudgmentsDb{
  queueList(opts:{filter:'due'|'backoff'|'leased'|'all';limit:number;after?:string}):Promise<QueueRow[]>;
  settlementsOf(judgmentIds:string[]):Promise<SettlementRow[]>;
  appendSettlement(judgmentId:string,leaseToken:string|null,requestKey:string,row:SettlementInsert):Promise<{seq:number;status:AppendStatus}>;
- /** Atomic acceptance (plan audit P1-04): locks queue then item; only for the open queue's current inconsistency. */
+ /** Lease-checked quarantine publish (plan audit Q1-02): ONE transaction locks the queue row, checks the lease, upserts the open
+  *  dq_quarantine item ('judgments' / 'judgment_settlements' / judgment_id / reasonCode) with payload, writes last_status
+  *  'inconsistent' + last_detail ∪ {quarantine_id} (quarantined_at kept while the incident is unresolved, Q1-01) + next_attempt_at,
+  *  clears the lease; attempts unchanged. A lost lease writes nothing. */
+ quarantineSettlement(judgmentId:string,leaseToken:string,reasonCode:string,payload:Record<string,unknown>,patch:QueuePatch,batchId:string):Promise<{status:'quarantined'|'lease_lost';quarantine_id:string|null}>;
+ /** Atomic acceptance (plan audit P1-04): locks queue then item; only for the open queue's current inconsistency. override.evidence_hash /
+  *  override.cutoff are the identity the hook read: both must equal the locked queue last_detail AND the locked item payload (Q1-03). */
  applyQuarantineOverride(judgmentId:string,override:QuarantineOverride,quarantineId:string,audit:Record<string,unknown>):Promise<'applied'|'stale'|'closed'|'item_not_open'>;
- /** Atomic rejection (plan audit P1-05): void + item resolved_reject + audit in one transaction; replay-safe on requestKey. */
- rejectQuarantinedSettlement(judgmentId:string,quarantineId:string,requestKey:string,row:SettlementInsert,audit:Record<string,unknown>):Promise<{seq:number;status:AppendStatus|'stale'|'item_not_open'}>;
+ /** Atomic rejection (plan audit P1-05): void + item resolved_reject + audit in one transaction; replay-safe on requestKey. expected = the
+  *  evidence_hash / cutoff the hook read; any difference from the locked queue last_detail or item payload → 'stale' (Q1-03). */
+ rejectQuarantinedSettlement(judgmentId:string,quarantineId:string,expected:{evidence_hash:string;cutoff:string},requestKey:string,row:SettlementInsert,audit:Record<string,unknown>):Promise<{seq:number;status:AppendStatus|'stale'|'item_not_open'}>;
  /** Public envelope by id (plan audit P2-01; RLS-gated, judgment_history view semantics). */
  envelopeById(id:string,opts:{view:CardView;cutoff?:string}):Promise<Envelope|null>;
  calibrationCohort(methodology:string,version:string,window:{from:string;to:string},cutoff:string,after:string|null,limit:number):Promise<Envelope[]>;
  calibrationCohortInternal(methodology:string,version:string,window:{from:string;to:string},cutoff:string,after:string|null,limit:number):Promise<Envelope[]>;
- /** Freezes a calibration generation's cohort in one statement (plan audit P1-10). */
- freezeCalibrationCohort(generation:string,methodology:string,version:string,window:{from:string;to:string}):Promise<{frozen_at:string;n:number}>;
+ /** Freezes a calibration generation's cohort in one statement (plan audit P1-10). The generation is claimed first (marker
+  *  cohort:<generation>, Q1-05): an already claimed generation — even an empty one — returns already_frozen with its stored
+  *  frozen_at / n and inserts nothing. */
+ freezeCalibrationCohort(generation:string,methodology:string,version:string,window:{from:string;to:string}):Promise<{status:'frozen'|'already_frozen';frozen_at:string;n:number}>;
  /** The frozen members of a generation, keyset on judgment_id; settlement = the one frozen with it. */
  cohortMembers(generation:string,after:string|null,limit:number):Promise<Envelope[]>;
+ /** Deletes the generation's members and its marker; returns the member rows deleted. */
  clearCalibrationGeneration(generation:string):Promise<number>;
  latestCalibration(methodology:string,version:string,scope:CalibrationScope):Promise<{row:CalibrationRow;valid:boolean}|null>;
  calibrationValidity(methodology:string,version:string):Promise<{revision:number}>;
@@ -683,18 +695,28 @@ export interface JudgmentsDb{
  queueList(opts:{filter:'due'|'backoff'|'leased'|'all';limit:number;after?:string}):Promise<QueueRow[]>;
  settlementsOf(judgmentIds:string[]):Promise<SettlementRow[]>;
  appendSettlement(judgmentId:string,leaseToken:string|null,requestKey:string,row:SettlementInsert):Promise<{seq:number;status:AppendStatus}>;
- /** Atomic acceptance (plan audit P1-04): locks queue then item; only for the open queue's current inconsistency. */
+ /** Lease-checked quarantine publish (plan audit Q1-02): ONE transaction locks the queue row, checks the lease, upserts the open
+  *  dq_quarantine item ('judgments' / 'judgment_settlements' / judgment_id / reasonCode) with payload, writes last_status
+  *  'inconsistent' + last_detail ∪ {quarantine_id} (quarantined_at kept while the incident is unresolved, Q1-01) + next_attempt_at,
+  *  clears the lease; attempts unchanged. A lost lease writes nothing. */
+ quarantineSettlement(judgmentId:string,leaseToken:string,reasonCode:string,payload:Record<string,unknown>,patch:QueuePatch,batchId:string):Promise<{status:'quarantined'|'lease_lost';quarantine_id:string|null}>;
+ /** Atomic acceptance (plan audit P1-04): locks queue then item; only for the open queue's current inconsistency. override.evidence_hash /
+  *  override.cutoff are the identity the hook read: both must equal the locked queue last_detail AND the locked item payload (Q1-03). */
  applyQuarantineOverride(judgmentId:string,override:QuarantineOverride,quarantineId:string,audit:Record<string,unknown>):Promise<'applied'|'stale'|'closed'|'item_not_open'>;
- /** Atomic rejection (plan audit P1-05): void + item resolved_reject + audit in one transaction; replay-safe on requestKey. */
- rejectQuarantinedSettlement(judgmentId:string,quarantineId:string,requestKey:string,row:SettlementInsert,audit:Record<string,unknown>):Promise<{seq:number;status:AppendStatus|'stale'|'item_not_open'}>;
+ /** Atomic rejection (plan audit P1-05): void + item resolved_reject + audit in one transaction; replay-safe on requestKey. expected = the
+  *  evidence_hash / cutoff the hook read; any difference from the locked queue last_detail or item payload → 'stale' (Q1-03). */
+ rejectQuarantinedSettlement(judgmentId:string,quarantineId:string,expected:{evidence_hash:string;cutoff:string},requestKey:string,row:SettlementInsert,audit:Record<string,unknown>):Promise<{seq:number;status:AppendStatus|'stale'|'item_not_open'}>;
  /** Public envelope by id (plan audit P2-01; RLS-gated, judgment_history view semantics). */
  envelopeById(id:string,opts:{view:CardView;cutoff?:string}):Promise<Envelope|null>;
  calibrationCohort(methodology:string,version:string,window:{from:string;to:string},cutoff:string,after:string|null,limit:number):Promise<Envelope[]>;
  calibrationCohortInternal(methodology:string,version:string,window:{from:string;to:string},cutoff:string,after:string|null,limit:number):Promise<Envelope[]>;
- /** Freezes a calibration generation's cohort in one statement (plan audit P1-10). */
- freezeCalibrationCohort(generation:string,methodology:string,version:string,window:{from:string;to:string}):Promise<{frozen_at:string;n:number}>;
+ /** Freezes a calibration generation's cohort in one statement (plan audit P1-10). The generation is claimed first (marker
+  *  cohort:<generation>, Q1-05): an already claimed generation — even an empty one — returns already_frozen with its stored
+  *  frozen_at / n and inserts nothing. */
+ freezeCalibrationCohort(generation:string,methodology:string,version:string,window:{from:string;to:string}):Promise<{status:'frozen'|'already_frozen';frozen_at:string;n:number}>;
  /** The frozen members of a generation, keyset on judgment_id; settlement = the one frozen with it. */
  cohortMembers(generation:string,after:string|null,limit:number):Promise<Envelope[]>;
+ /** Deletes the generation's members and its marker; returns the member rows deleted. */
  clearCalibrationGeneration(generation:string):Promise<number>;
  latestCalibration(methodology:string,version:string,scope:CalibrationScope):Promise<{row:CalibrationRow;valid:boolean}|null>;
  calibrationValidity(methodology:string,version:string):Promise<{revision:number}>;
@@ -1650,6 +1672,7 @@ Expected: PASS（`ledger.test.ts` 全部原有用例绿；`git diff --stat src/l
 - `uuidV8` 放在 `src/lib/judgments/uuid-v8.ts`（规格 §2.4 第 5 点写的是 `src/lib/research/ingest/pa-v1/uuid-v8.ts`）：那个目录不在 F4 的拥有范围内，新文件也无法加 F4 围栏（计划审计 P2-03）；`ledger.ts` 在自己的 `// F4` 围栏里 import 它，行为不变。
 - `jobKey('calibrate_round')`：校准 cron 的全局轮次游标键（计划审计 P2-02，Task 16）。
 - 共享契约按计划审计第一轮修订：`QuarantineOverride.cutoff`（P1-03）、`QueryBounds.frozen_at / n`（P1-10）、`JudgmentsDb.applyQuarantineOverride` 返回状态、新增 `rejectQuarantinedSettlement`（P1-04/05）、`envelopeById`（P2-01）、`freezeCalibrationCohort / cohortMembers / clearCalibrationGeneration`（P1-10）。
+- 共享契约按计划审计第二轮修订：新增 `JudgmentsDb.quarantineSettlement`（租约校验的隔离发布，Q1-02）；`rejectQuarantinedSettlement` 增参 `expected:{evidence_hash,cutoff}`（Q1-03）；`freezeCalibrationCohort` 返回 `{status:'frozen'|'already_frozen',frozen_at,n}`（Q1-05）。
 ```
 
 - [ ] **Step 8: 类型检查与 lint**
@@ -2444,6 +2467,7 @@ git commit -m "feat(judgments): F4 Task 2 judgments migration I (nine tables, tr
 **Files:**
 - Modify: `supabase/migrations/20261109150000_judgments.sql`（在 Task 2 内容之后追加本任务的 SQL 段；不改 Task 2 已写的语句）
 - Modify: `src/lib/judgments/judgments.integration.test.ts`（在文件末尾追加第二个 `describe`；不改 Task 2 的用例）
+- Create: `src/lib/judgments/rpc-inventory.ts`（F4 SQL 函数的唯一清单；本任务的权限用例、Task 4 的客户端分工用例与 Task 22 的运行手册核对都从它推导，计划审计 Q1-06）
 
 **Exports（SQL；`setof judgment_envelope` 的行 = `{judgment, settlement, calibration, calibration_valid, methodology_state}`）:**
 ```sql
@@ -2458,16 +2482,17 @@ public.methodology_state_at(p_methodology text, p_version text, p_cutoff timesta
 public.judgment_envelope_by_id(p_id uuid, p_view text, p_cutoff timestamptz) returns setof public.judgment_envelope   -- 0 or 1 row; RLS-gated (P2-01)
 -- service write (security definer; service_role only)
 public.calibration_cohort_internal(…same as calibration_cohort…) returns setof public.judgment_envelope
-public.freeze_calibration_cohort(p_generation uuid, p_methodology text, p_version text, p_window_from date, p_window_to date) returns jsonb   -- {frozen_at, n} (P1-10)
+public.freeze_calibration_cohort(p_generation uuid, p_methodology text, p_version text, p_window_from date, p_window_to date) returns jsonb   -- {status:'frozen'|'already_frozen', frozen_at, n} (P1-10, Q1-05)
 public.calibration_cohort_members(p_generation uuid, p_after uuid, p_limit integer) returns setof public.judgment_envelope                 -- the frozen set, keyset on judgment_id (P1-10)
-public.clear_calibration_generation(p_generation uuid) returns integer                                                                   -- rows deleted (P1-10)
+public.clear_calibration_generation(p_generation uuid) returns integer                                                                   -- member rows deleted; the cohort:<generation> marker goes too (P1-10, Q1-05)
 public.sync_methodology(p_row jsonb, p_actor text, p_reason text) returns jsonb            -- {changed boolean, seq integer}
 public.register_judgment(p_row jsonb, p_queue jsonb) returns jsonb                          -- {judgment_id, registered_at, retrospective}
 public.claim_due_judgments(p_limit integer, p_lease_seconds integer) returns setof public.judgment_settle_queue
 public.release_lease(p_judgment_id uuid, p_lease_token uuid, p_patch jsonb) returns void
 public.append_settlement(p_judgment_id uuid, p_lease_token uuid, p_request_key text, p_row jsonb) returns jsonb   -- {seq integer, status text}; p_row carries request_digest
-public.apply_quarantine_override(p_judgment_id uuid, p_override jsonb, p_quarantine_id uuid, p_audit jsonb) returns text   -- 'applied' | 'stale' | 'closed' | 'item_not_open' (P1-04)
-public.reject_quarantined_settlement(p_judgment_id uuid, p_quarantine_id uuid, p_request_key text, p_row jsonb, p_audit jsonb) returns jsonb   -- {seq, status}: AppendStatus | 'stale' | 'item_not_open' (P1-05)
+public.quarantine_settlement(p_judgment_id uuid, p_lease_token uuid, p_reason_code text, p_payload jsonb, p_patch jsonb, p_batch_id uuid) returns jsonb   -- {status:'quarantined'|'lease_lost', quarantine_id} (Q1-02)
+public.apply_quarantine_override(p_judgment_id uuid, p_override jsonb, p_quarantine_id uuid, p_audit jsonb) returns text   -- 'applied' | 'stale' | 'closed' | 'item_not_open' (P1-04, Q1-03)
+public.reject_quarantined_settlement(p_judgment_id uuid, p_quarantine_id uuid, p_expected jsonb, p_request_key text, p_row jsonb, p_audit jsonb) returns jsonb   -- {seq, status}: AppendStatus | 'stale' | 'item_not_open'; p_expected = {evidence_hash, cutoff} (P1-05, Q1-03)
 public.insert_calibration(p_row jsonb, p_expected_revision bigint) returns text            -- 'inserted' | 'duplicate' | 'stale_revision'
 public.set_job_state(p_job text, p_expected_updated_at timestamptz, p_state jsonb) returns boolean
 public.repair_stale_batches(p_dataset text, p_older_than interval) returns integer
@@ -2489,15 +2514,69 @@ public.judgment_append_settlement_internal(uuid, uuid, text, jsonb) returns json
 - `judgment_history` 的 keyset 顺序为 `as_of desc, registered_at desc, judgment_id desc`（三列同向才能用行比较做 keyset；`latest_judgment_cards` 仍按规格 `judgment_id` 升序作末位）。`judgment_history` 不做合并发行人展开（§12.4 只对 `latest_judgment_cards` 规定）。
 - `repair_stale_batches` 只接受 `^judgments\.[a-z0-9_.]{1,54}$` 的单个数据集（精确匹配）且 `p_older_than ≥ 1 minute`；`errors` 追加 `{code:'stale_running', message}`。
 - `set_job_state` 写 `updated_at = greatest(date_trunc('milliseconds', clock_timestamp()), 旧值 + 1 ms)`：毫秒精度让 ISO 字符串往返后仍能精确比较；严格递增避免同一毫秒内两次更新让陈旧的 `expected_updated_at` 误中（ABA）。
-- **`apply_quarantine_override` 原子化**（计划审计 P1-04）：先锁队列行、再锁隔离项；返回 `text` 而不是抛错：项不存在 / 不属于该判断 / 已裁决 → `'item_not_open'`；队列已 `closed_at` → `'closed'`；队列 `last_status ≠ 'inconsistent'`、`last_detail.evidence_hash ≠ override.evidence_hash`、隔离项 `payload.evidence_hash ≠ override.evidence_hash` 或 `payload.cutoff ≠ override.cutoff` → `'stale'`（这三种都不写任何行）；否则写 `override`、`next_attempt_at = now()`、**清空 `leased_until / lease_token`**（在途 worker 之后的 `release_lease` / `append_settlement` 得到 `lease_lost`，不能覆盖已接受的裁决）、翻转隔离项、写审计 → `'applied'`。队列行不存在仍抛 `unknown_judgment`（P0002），参数不合法仍抛 22023。
-- **`reject_quarantined_settlement`**（计划审计 P1-05，新增服务写 RPC）：一个事务内先按 `request_key` 重放检查（命中 → `already_applied` / `request_key_conflict`，不看隔离项），再锁队列行、锁隔离项、锁内再查一次 `request_key`；项未开 → `item_not_open`；队列已关闭、不是 `inconsistent` 或 `last_detail.evidence_hash ≠ payload.evidence_hash` → `stale`；否则经 `judgment_append_settlement_internal`（与 `append_settlement` 同一段逻辑，admin 行为人、无租约）追加 `void`，把项置 `resolved_reject`，写 `research_audit_log`（`action='dq.quarantine_resolve'`，`detail ∪ {judgment_id, decision:'reject', seq}`），返回 `{seq, status:'applied'}`。`p_row.kind` 必须是 `void`、`actor` 必须是 `admin:<uuid>`。
+- **`apply_quarantine_override` 原子化**（计划审计 P1-04）：先锁队列行、再锁隔离项；返回 `text` 而不是抛错：项不存在 / 不属于该判断 / 已裁决 → `'item_not_open'`；队列已 `closed_at` → `'closed'`；队列 `last_status ≠ 'inconsistent'`、`last_detail.evidence_hash ≠ override.evidence_hash` 或 `last_detail.cutoff ≠ override.cutoff`、隔离项 `payload.evidence_hash ≠ override.evidence_hash` 或 `payload.cutoff ≠ override.cutoff` → `'stale'`（都不写任何行；`override.evidence_hash / cutoff` 就是钩子读到的证据身份，计划审计 Q1-03 要求它同时等于锁住的队列与锁住的项）；否则写 `override`、`next_attempt_at = now()`、**清空 `leased_until / lease_token`**（在途 worker 之后的 `release_lease` / `append_settlement` 得到 `lease_lost`，不能覆盖已接受的裁决）、翻转隔离项、写审计 → `'applied'`。队列行不存在仍抛 `unknown_judgment`（P0002），参数不合法仍抛 22023。
+- **`reject_quarantined_settlement`**（计划审计 P1-05，新增服务写 RPC）：一个事务内先按 `request_key` 重放检查（命中 → `already_applied` / `request_key_conflict`，不看隔离项），再锁队列行、锁隔离项、锁内再查一次 `request_key`；项未开 → `item_not_open`；队列已关闭、不是 `inconsistent`，或钩子读到的 `p_expected.evidence_hash / cutoff` 与锁住的队列 `last_detail.evidence_hash / cutoff` **或**锁住的项 `payload.evidence_hash / cutoff` 任一不等 → `stale`（计划审计 Q1-03：钩子读到 A 之后 worker 把队列与项都刷新成 B，旧请求不再被接受）；否则经 `judgment_append_settlement_internal`（与 `append_settlement` 同一段逻辑，admin 行为人、无租约）追加 `void`，把项置 `resolved_reject`，写 `research_audit_log`（`action='dq.quarantine_resolve'`，`detail ∪ {judgment_id, decision:'reject', seq}`），返回 `{seq, status:'applied'}`。`p_row.kind` 必须是 `void`、`actor` 必须是 `admin:<uuid>`。
+- **`quarantine_settlement`**（计划审计 Q1-02，新增服务写 RPC）：结算发布不一致的唯一写路径，替代 TS 侧 `quarantine()` + 刷新 payload + `release_lease` 三次写。一个事务内先锁队列行（不存在 → `unknown_judgment` P0002），租约 token 不等（含已关闭、已被吊销、已被新 worker 换新）→ 返回 `{status:'lease_lost', quarantine_id:null}` 且**什么都不写**；否则按 `quarantine()` 的语义 upsert 未结项（`dataset='judgments'`、`table_name='judgment_settlements'`、`natural_key = judgment_id`、`reason_code`；同键同原因的 open 项由 `dq_quarantine_open_key_uniq` 部分唯一索引保证至多一条：`insert … on conflict (dataset, table_name, natural_key, reason_code) where status = 'open' do update set payload = excluded.payload`，复用的项保留原 `id / batch_id / created_at / detail`），再写队列 `last_status='inconsistent'`、`last_detail = p_patch.last_detail ∪ {quarantine_id}`、`next_attempt_at = greatest(p_patch.next_attempt_at, now())`、`attempts` 不变、清空租约。`quarantined_at`（计划审计 Q1-01）：锁住的队列行已是 `inconsistent` 且带 `quarantined_at` → 保留旧值（同一未解决事件的复核期从第一次隔离起算），否则用 `p_patch.last_detail.quarantined_at`。参数：`p_patch.last_status` 必须是 `inconsistent`、`attempts_increment` 必须是 0，`p_payload` 必须带 64 位十六进制 `evidence_hash` 与 `cutoff`，且等于 `p_patch.last_detail` 的同名字段 → 否则 22023。于是过期 worker 在新 worker 之后刷新 → `lease_lost`、无写入；刷新与释放之间不再有崩溃窗口。
 - `append_settlement` 的函数体移到内部函数 `judgment_append_settlement_internal`（无客户端授权、非 definer；只被两个 definer 函数调用），`append_settlement` 只转调，行为不变。
-- **校准成员冻结**（计划审计 P1-10，规格第 7 稿 §5.5b/§5.6/§8.3）：`freeze_calibration_cohort` 用**一条** `insert … select` 把窗口内（按 `as_of`）全部非弃权登记连同该语句快照下的最新结算 id 写入 `judgment_calibration_cohort_members`（`ord = row_number() over (order by judgment_id)`），返回 `{frozen_at: statement_timestamp(), n}`；同一 `generation` 已有成员 → `invalid_parameter: generation`（一个代际只冻结一次）。在快照之前开始、之后提交的事务**一致地**不在成员内（不会在游标之后"补进来"）。`calibration_cohort_members` 只读冻结集（keyset `judgment_id > p_after`）；结算取冻结时的 `settlement_id`，之后的结算不改变已冻结代际的内容。`clear_calibration_generation` 删除整代并返回行数。公共 `calibration_cohort` 保持时间戳截止语义，只给校准页用。
+- **校准成员冻结**（计划审计 P1-10，规格第 7 稿 §5.5b/§5.6/§8.3）：`freeze_calibration_cohort` 用**一条** `insert … select` 把窗口内（按 `as_of`）全部非弃权登记连同该语句快照下的最新结算 id 写入 `judgment_calibration_cohort_members`（`ord = row_number() over (order by judgment_id)`），返回 `{status:'frozen', frozen_at: statement_timestamp(), n}`。**代际先认领**（计划审计 Q1-05）：函数第一条写是 `insert into judgment_job_state(job, state) values ('cohort:' || generation, {frozen_at, n:null, methodology, version, window}) on conflict (job) do nothing`；认领失败（该代际已冻结过，**含 0 成员的代际**；或并发的另一冻结已认领——唯一键让后到者等先到者提交）→ 不插成员，返回 `{status:'already_frozen', frozen_at, n}`（取自已存的标记）；认领成功 → 一条 `insert … select` 插成员，再把标记的 `n` 写成实际行数。标记键 `cohort:<generation>` 只由这两个 SQL 函数写 / 删，不经 TS 的 `jobKey`（它与 `produce:` / `calibrate:` / `calibrate_round` 命名空间不相交，`parseJobKey` 拒绝它；TS 不读它）。在快照之前开始、之后提交的事务**一致地**不在成员内（不会在游标之后"补进来"）。`calibration_cohort_members` 只读冻结集（keyset `judgment_id > p_after`）；结算取冻结时的 `settlement_id`，之后的结算不改变已冻结代际的内容。`clear_calibration_generation` 删除整代成员与 `cohort:<generation>` 标记，返回删除的成员行数（之后同一代际可重新冻结）。公共 `calibration_cohort` 保持时间戳截止语义，只给校准页用。
 - **`judgment_envelope_by_id`**（计划审计 P2-01，公共读 invoker）：按 id 取一条信封，`latest` / `as_known` 语义同 `judgment_history`（`as_known` 要求 `registered_at ≤ cutoff` 且方法有 `≤ cutoff` 的事件）；RLS 照常生效，未发布 → 空。
 - `apply_quarantine_override` 幂等：项已 `resolved_accept` 且队列 `override` 与本次完全相同 → 无操作返回 `'applied'`；否则 `'item_not_open'`。审计行写 `research_audit_log(user_id = override.resolved_by, actor='user', action='dq.quarantine_resolve', object_type='dq', object_id = 隔离项 id, detail = p_audit ∪ {judgment_id, override})`（列与 `src/lib/research/store.ts::audit()` 写的形状一致；`user_id` 外键到 `auth.users`，所以 `resolved_by` 必须是真实管理员 id）。
 - `register_judgment` 的结算窗口在 UTC 日期上算（`date + grace` 再 `::timestamp at time zone 'UTC'`），不受会话时区影响；`next_attempt_at` 初值 = `settle_after`。
 
 - [ ] **Step 1: 在集成测试文件末尾追加函数用例（先失败）**
+
+先建函数清单 `src/lib/judgments/rpc-inventory.ts`（计划审计 Q1-06：权限断言、Task 4 的客户端分工断言与 Task 22 的运行手册核对都从这一份推导；新增 SQL 函数先加在这里）：
+
+```ts
+// src/lib/judgments/rpc-inventory.ts
+// The single inventory of F4 SQL functions (spec §5.6; plan audit Q1-06): name → argument signature as
+// has_function_privilege spells it. PUBLIC_RPCS are security invoker and executable by anon / authenticated /
+// service_role; SERVICE_RPCS are security definer and executable by service_role only; INTERNAL_FUNCTIONS have no
+// client EXECUTE. judgments.integration.test.ts asserts the catalog against it, db.test.ts checks the supabase client
+// split against it, rpc-inventory.test.ts (Task 22) checks the runbook lists every name. Add a function here first.
+export const PUBLIC_RPCS={
+ judgments_server_time:'()',
+ judgment_envelope_of:'(public.judgments,text,timestamptz)',
+ latest_judgment_cards:'(text,text,text[],text,timestamptz)',
+ judgment_history:'(text,text,text,text,text,text,timestamptz,uuid,integer)',
+ calibration_cohort:'(text,text,date,date,timestamptz,uuid,integer)',
+ methodology_state_at:'(text,text,timestamptz)',
+ judgment_envelope_by_id:'(uuid,text,timestamptz)',
+} as const;
+export const SERVICE_RPCS={
+ calibration_cohort_internal:'(text,text,date,date,timestamptz,uuid,integer)',
+ sync_methodology:'(jsonb,text,text)',
+ register_judgment:'(jsonb,jsonb)',
+ claim_due_judgments:'(integer,integer)',
+ release_lease:'(uuid,uuid,jsonb)',
+ append_settlement:'(uuid,uuid,text,jsonb)',
+ quarantine_settlement:'(uuid,uuid,text,jsonb,jsonb,uuid)',
+ apply_quarantine_override:'(uuid,jsonb,uuid,jsonb)',
+ reject_quarantined_settlement:'(uuid,uuid,jsonb,text,jsonb,jsonb)',
+ freeze_calibration_cohort:'(uuid,text,text,date,date)',
+ calibration_cohort_members:'(uuid,uuid,integer)',
+ clear_calibration_generation:'(uuid)',
+ insert_calibration:'(jsonb,bigint)',
+ set_job_state:'(text,timestamptz,jsonb)',
+ repair_stale_batches:'(text,interval)',
+} as const;
+export const INTERNAL_FUNCTIONS={
+ judgments_settle_after_date:'(jsonb)',
+ judgments_grace_days:'(jsonb,jsonb)',
+ judgment_operation_payload:'(uuid,jsonb)',
+ judgment_settlement_payload:'(public.judgment_settlements)',
+ judgment_replay_status:'(public.judgment_settlements,uuid,text,jsonb)',
+ judgment_append_settlement_internal:'(uuid,uuid,text,jsonb)',
+} as const;
+export type PublicRpc=keyof typeof PUBLIC_RPCS;
+export type ServiceRpc=keyof typeof SERVICE_RPCS;
+export type InternalFunction=keyof typeof INTERNAL_FUNCTIONS;
+export const PUBLIC_RPC_NAMES=Object.keys(PUBLIC_RPCS) as PublicRpc[];
+export const SERVICE_RPC_NAMES=Object.keys(SERVICE_RPCS) as ServiceRpc[];
+export const INTERNAL_FUNCTION_NAMES=Object.keys(INTERNAL_FUNCTIONS) as InternalFunction[];
+/** Every F4 non-trigger function with its signature (trigger functions are Task 2's and listed there). */
+export const F4_FUNCTIONS:Readonly<Record<string,string>>={...PUBLIC_RPCS,...SERVICE_RPCS,...INTERNAL_FUNCTIONS};
+```
 
 在 `src/lib/judgments/judgments.integration.test.ts` 顶部 import 区追加（放在 `import {afterAll,…} from 'vitest';` 之后）：
 
@@ -2506,6 +2585,7 @@ import {judgmentIdOf} from './contract';
 import {inputsHash} from './canonical';
 import {settleWindowOf} from './time';
 import {operationDigest} from './settlement-digest';
+import {F4_FUNCTIONS,INTERNAL_FUNCTION_NAMES,PUBLIC_RPC_NAMES,SERVICE_RPC_NAMES} from './rpc-inventory';
 import type {Horizon,SettlementInsert,Target} from './types';
 ```
 
@@ -2579,14 +2659,11 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
  });
  afterAll(async()=>{await admin?.end();});
 
- const READS=['judgments_server_time','judgment_envelope_of','latest_judgment_cards','judgment_history','calibration_cohort','methodology_state_at','judgment_envelope_by_id'];
- const WRITES=['calibration_cohort_internal','sync_methodology','register_judgment','claim_due_judgments','release_lease','append_settlement','apply_quarantine_override','reject_quarantined_settlement','freeze_calibration_cohort','calibration_cohort_members','clear_calibration_generation','insert_calibration','set_job_state','repair_stale_batches'];
- const INTERNAL=['judgments_settle_after_date','judgments_grace_days','judgment_operation_payload','judgment_settlement_payload','judgment_replay_status','judgment_append_settlement_internal'];
- const SIG:Record<string,string>={judgments_server_time:'()',judgment_envelope_of:'(public.judgments,text,timestamptz)',latest_judgment_cards:'(text,text,text[],text,timestamptz)',judgment_history:'(text,text,text,text,text,text,timestamptz,uuid,integer)',
-  calibration_cohort:'(text,text,date,date,timestamptz,uuid,integer)',methodology_state_at:'(text,text,timestamptz)',calibration_cohort_internal:'(text,text,date,date,timestamptz,uuid,integer)',sync_methodology:'(jsonb,text,text)',register_judgment:'(jsonb,jsonb)',
-  claim_due_judgments:'(integer,integer)',release_lease:'(uuid,uuid,jsonb)',append_settlement:'(uuid,uuid,text,jsonb)',apply_quarantine_override:'(uuid,jsonb,uuid,jsonb)',insert_calibration:'(jsonb,bigint)',set_job_state:'(text,timestamptz,jsonb)',repair_stale_batches:'(text,interval)',
-  reject_quarantined_settlement:'(uuid,uuid,text,jsonb,jsonb)',freeze_calibration_cohort:'(uuid,text,text,date,date)',calibration_cohort_members:'(uuid,uuid,integer)',clear_calibration_generation:'(uuid)',judgment_envelope_by_id:'(uuid,text,timestamptz)',
-  judgments_settle_after_date:'(jsonb)',judgments_grace_days:'(jsonb,jsonb)',judgment_operation_payload:'(uuid,jsonb)',judgment_settlement_payload:'(public.judgment_settlements)',judgment_replay_status:'(public.judgment_settlements,uuid,text,jsonb)',judgment_append_settlement_internal:'(uuid,uuid,text,jsonb)'};
+ // Q1-06: the privilege assertions derive from the one inventory (rpc-inventory.ts); a function missing there fails here.
+ const READS:readonly string[]=PUBLIC_RPC_NAMES;
+ const WRITES:readonly string[]=SERVICE_RPC_NAMES;
+ const INTERNAL:readonly string[]=INTERNAL_FUNCTION_NAMES;
+ const SIG:Readonly<Record<string,string>>=F4_FUNCTIONS;
 
  it('defines judgment_envelope and every §5.6 function with the declared security, search_path and execute grants; the whole file replays',async()=>{
   expect((await q(`select a.attname from pg_attribute a join pg_type t on t.typrelid=a.attrelid join pg_namespace n on n.oid=t.typnamespace where n.nspname='public' and t.typname='judgment_envelope' and a.attnum>0 order by a.attnum`)).map(r=>r.attname)).toEqual(['judgment','settlement','calibration','calibration_valid','methodology_state']);
@@ -2940,15 +3017,21 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
   const item=randomUUID();
   await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload) values($1,'judgments','judgment_settlements',$2,'settlement_basis_mismatch',$3,$4::jsonb)`,[item,j,b,JSON.stringify({evidence_hash:hash,cutoff,judgment_id:j})]);
   const t=String((await claim()).find(x=>x.judgment_id===j)!.lease_token);
-  await release(j,t,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:hash,quarantine_id:item},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0});
+  await release(j,t,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:hash,cutoff,quarantine_id:item},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0});
   return {j,item};
  };
+ /** The settle worker's single quarantine write (Q1-02); patchOf builds settle.ts's inconsistent patch (parked in 2099 by default). */
+ const qs=(j:string,token:string,payload:Record<string,unknown>,patch:Record<string,unknown>,b:string,reason='settlement_basis_mismatch')=>
+  one(`select public.quarantine_settlement($1,$2,$3,$4::jsonb,$5::jsonb,$6) v`,[j,token,reason,JSON.stringify(payload),JSON.stringify(patch),b]) as Promise<{status:string;quarantine_id:string|null}>;
+ const patchOf=(hash:string,cutoff:string,extra:Record<string,unknown>={},next='2099-06-01T00:00:00.000Z')=>({last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:hash,cutoff,quarantined_at:cutoff,...extra},next_attempt_at:next,attempts_increment:0});
  const adminUser=async()=>{const id=randomUUID();await q(`insert into auth.users(id,email) values($1,$2)`,[id,`${id}@judgments.test`]);return id;};
  const overrideOf=(by:string,hash=H('e'),cutoff='2026-03-02T04:00:00.000Z')=>({reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched',evidence_hash:hash,evidence:{bars:[]}},evidence_hash:hash,resolved_by:by,at:new Date().toISOString(),cutoff});
  type Conn={query:(text:string,values?:unknown[])=>Promise<{rows:any[]}>};
  const applyQ=(jid:string,o:unknown,qid:string,c:Conn=admin)=>c.query(`select public.apply_quarantine_override($1,$2::jsonb,$3,$4::jsonb) v`,[jid,JSON.stringify(o),qid,JSON.stringify({route:'test'})]).then(r=>r.rows[0].v as string);
  const voidRow=(b:string,by:string):SettlementInsert=>({kind:'void',outcome:null,realized:null,evidence:{quarantine:true},resolver:'macro_regime_replay',resolver_version:'1.0.0',reason:'quarantine_rejected',actor:`admin:${by}`,code_version:'abcdef1',batch_id:b});
- const rejectQ=(jid:string,qid:string,key:string,row:SettlementInsert,c:Conn=admin)=>c.query(`select public.reject_quarantined_settlement($1,$2,$3,$4::jsonb,$5::jsonb) v`,[jid,qid,key,JSON.stringify({...row,request_digest:operationDigest(jid,row)}),JSON.stringify({route:'test'})]).then(r=>r.rows[0].v as {seq:number;status:string});
+ /** What the hook read from the item (Q1-03): the default matches quarantined()'s hash and cutoff. */
+ const EXP={evidence_hash:H('e'),cutoff:'2026-03-02T04:00:00.000Z'};
+ const rejectQ=(jid:string,qid:string,key:string,row:SettlementInsert,c:Conn=admin,exp:{evidence_hash:string;cutoff:string}=EXP)=>c.query(`select public.reject_quarantined_settlement($1,$2,$3::jsonb,$4,$5::jsonb,$6::jsonb) v`,[jid,qid,JSON.stringify(exp),key,JSON.stringify({...row,request_digest:operationDigest(jid,row)}),JSON.stringify({route:'test'})]).then(r=>r.rows[0].v as {seq:number;status:string});
  const queueOf=async(j:string)=>(await q(`select override,next_attempt_at,leased_until,lease_token,last_status,last_detail,closed_at from public.judgment_settle_queue where judgment_id=$1`,[j]))[0];
 
  it('apply_quarantine_override: locks queue then item; writes override, schedules now, REVOKES the lease, flips the item, audits — atomically; idempotent; stale / closed / item_not_open write nothing (P1-04)',async()=>{
@@ -2985,6 +3068,10 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
    const s2=await quarantined(m,b);
    expect(await applyQ(s2.j,overrideOf(by,H('e'),'2026-01-01T00:00:00.000Z'),s2.item)).toBe('stale');
    expect((await queueOf(s2.j)).override).toBeNull();
+   // stale (Q1-03): item matches the override, but the locked queue's last_detail names another cutoff
+   await q(`update public.judgment_settle_queue set last_detail=last_detail||jsonb_build_object('cutoff','2026-01-01T00:00:00.000Z') where judgment_id=$1`,[s2.j]);
+   expect(await applyQ(s2.j,overrideOf(by),s2.item)).toBe('stale');
+   expect((await q(`select status from public.dq_quarantine where id=$1`,[s2.item]))[0].status).toBe('open');
    // stale: the queue is no longer inconsistent
    await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[s2.j]);
    const t2=String((await claim()).find(x=>x.judgment_id===s2.j)!.lease_token);
@@ -3027,8 +3114,57 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
    expect(await rejectQ(s.j,s.item,`adm:${randomUUID()}`,row)).toEqual({seq:0,status:'stale'});
    expect(await q(`select 1 from public.judgment_settlements where judgment_id=$1`,[s.j])).toHaveLength(0);
    expect((await q(`select status from public.dq_quarantine where id=$1`,[s.item]))[0].status).toBe('open');
+   // stale (Q1-03): queue and item agree with each other but not with what the hook read
+   const e2=await quarantined(m,b);
+   expect(await rejectQ(e2.j,e2.item,`adm:${randomUUID()}`,row,admin,{...EXP,evidence_hash:H('f')})).toEqual({seq:0,status:'stale'});
+   expect(await rejectQ(e2.j,e2.item,`adm:${randomUUID()}`,row,admin,{...EXP,cutoff:'2026-01-01T00:00:00.000Z'})).toEqual({seq:0,status:'stale'});
+   expect(await q(`select 1 from public.judgment_settlements where judgment_id=$1`,[e2.j])).toHaveLength(0);
    for(const bad of [{...row,kind:'settled'},{...row,actor:'cron'}] as SettlementInsert[])
     expect(await fails(rejectQ(s.j,s.item,`adm:${randomUUID()}`,bad))).toMatchObject({code:'22023'});
+   for(const exp of [{evidence_hash:'x',cutoff:EXP.cutoff},{evidence_hash:EXP.evidence_hash}] as {evidence_hash:string;cutoff:string}[])
+    expect(await fails(rejectQ(s.j,s.item,`adm:${randomUUID()}`,row,admin,exp))).toMatchObject({code:'22023'});
+  });
+ });
+
+ it('quarantine_settlement: ONE lease-checked transaction upserts the open item and publishes the queue state; an expired worker refreshing after its replacement gets lease_lost and writes nothing; quarantined_at of an unresolved incident is kept (Q1-01, Q1-02)',async()=>{
+  const m=await syncNew();const b=await batch();
+  await withClaimLock(async()=>{
+   const r=judgmentRow(m,b,{target:DUE});await register(r);const j=String(r.row.judgment_id);
+   const c1='2026-03-02T04:00:00.000Z',c2='2026-03-05T04:00:00.000Z';
+   const t1=String((await claim()).find(x=>x.judgment_id===j)!.lease_token);
+   const first=await qs(j,t1,{evidence_hash:H('e'),cutoff:c1,judgment_id:j},patchOf(H('e'),c1),b);
+   expect(first.status).toBe('quarantined');
+   const item=String(first.quarantine_id);
+   expect((await q(`select dataset,table_name,natural_key,reason_code,status,batch_id,payload->>'evidence_hash' h,payload->>'cutoff' c from public.dq_quarantine where id=$1`,[item]))[0])
+    .toEqual({dataset:'judgments',table_name:'judgment_settlements',natural_key:j,reason_code:'settlement_basis_mismatch',status:'open',batch_id:b,h:H('e'),c:c1});
+   const q1=await queueOf(j);
+   expect(q1).toMatchObject({last_status:'inconsistent',leased_until:null,lease_token:null,last_detail:{evidence_hash:H('e'),cutoff:c1,quarantined_at:c1,quarantine_id:item}});
+   expect(q1.next_attempt_at.toISOString()).toBe('2099-06-01T00:00:00.000Z');
+   // Worker A claims and stalls past its lease; worker B claims (new token) and publishes another inconsistency.
+   await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[j]);
+   const tA=String((await claim()).find(x=>x.judgment_id===j)!.lease_token);
+   await q(`update public.judgment_settle_queue set leased_until=now()-interval '1 second' where judgment_id=$1`,[j]);
+   const tB=String((await claim()).find(x=>x.judgment_id===j)!.lease_token);
+   expect(tB).not.toBe(tA);
+   expect(await qs(j,tB,{evidence_hash:H('f'),cutoff:c2,judgment_id:j},patchOf(H('f'),c2),b)).toEqual({status:'quarantined',quarantine_id:item});   // same open item, refreshed
+   // A wakes up and refreshes after its replacement: lease_lost, neither the item nor the queue changes.
+   expect(await qs(j,tA,{evidence_hash:H('d'),cutoff:c2,judgment_id:j},patchOf(H('d'),c2),b)).toEqual({status:'lease_lost',quarantine_id:null});
+   expect((await q(`select payload->>'evidence_hash' h,payload->>'cutoff' c from public.dq_quarantine where id=$1`,[item]))[0]).toEqual({h:H('f'),c:c2});
+   // Q1-01: the incident is still unresolved, so the first quarantined_at survives B's publish.
+   expect((await queueOf(j)).last_detail).toEqual({reason_code:'settlement_basis_mismatch',evidence_hash:H('f'),cutoff:c2,quarantined_at:c1,quarantine_id:item});
+   expect((await q(`select attempts from public.judgment_settle_queue where judgment_id=$1`,[j]))[0].attempts).toBe(0);
+   expect((await q(`select count(*)::int n from public.dq_quarantine where natural_key=$1 and status='open'`,[j]))[0].n).toBe(1);
+   // Another reason code opens its own item (the open key includes reason_code, exactly like quarantine()).
+   await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[j]);
+   const t3=String((await claim()).find(x=>x.judgment_id===j)!.lease_token);
+   const gapPatch=patchOf(H('9'),c2,{reason_code:'settlement_benchmark_gap'});
+   const gap=await qs(j,t3,{evidence_hash:H('9'),cutoff:c2,judgment_id:j},gapPatch,b,'settlement_benchmark_gap');
+   expect(gap.status).toBe('quarantined');expect(gap.quarantine_id).not.toBe(item);
+   // Parameters are checked before any lock or write.
+   const ok={evidence_hash:H('9'),cutoff:c2,judgment_id:j};
+   for(const [payload,patch] of [[ok,{...gapPatch,last_status:'pending'}],[ok,{...gapPatch,attempts_increment:1}],[{cutoff:c2},gapPatch],[{...ok,cutoff:c1},gapPatch]] as const)
+    expect(await fails(qs(j,randomUUID(),payload,patch,b,'settlement_benchmark_gap'))).toMatchObject({code:'22023'});
+   expect(await fails(qs(randomUUID(),randomUUID(),ok,gapPatch,b))).toMatchObject({code:'P0002',message:'unknown_judgment'});
   });
  });
 
@@ -3075,6 +3211,18 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
    }finally{e.release();}
    expect(await q(`select 1 from public.judgment_settlements where judgment_id=$1`,[x.j])).toHaveLength(0);
    const mine=(await claim()).find(z=>z.judgment_id===x.j)!;await park(x.j,String(mine.lease_token));   // the accepted row is due now
+   // 4. Q1-03: the hook reads the item (hash e, cutoff c1); a worker then re-resolves to another inconsistency and publishes it
+   //    through quarantine_settlement (same open item and queue refreshed to f / c2); the old verdicts are stale and write nothing.
+   const y=await quarantined(m,b);
+   const read=(await q(`select payload from public.dq_quarantine where id=$1`,[y.item]))[0].payload as {evidence_hash:string;cutoff:string};
+   await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[y.j]);
+   const ty=String((await claim()).find(z=>z.judgment_id===y.j)!.lease_token);
+   const c2='2026-03-09T04:00:00.000Z';
+   expect(await qs(y.j,ty,{evidence_hash:H('f'),cutoff:c2,judgment_id:y.j},patchOf(H('f'),c2),b)).toEqual({status:'quarantined',quarantine_id:y.item});
+   expect(await rejectQ(y.j,y.item,`adm:${randomUUID()}`,voidRow(b,by),admin,{evidence_hash:read.evidence_hash,cutoff:read.cutoff})).toEqual({seq:0,status:'stale'});
+   expect(await applyQ(y.j,overrideOf(by,read.evidence_hash,read.cutoff),y.item)).toBe('stale');
+   expect(await q(`select 1 from public.judgment_settlements where judgment_id=$1`,[y.j])).toHaveLength(0);
+   expect((await q(`select status from public.dq_quarantine where id=$1`,[y.item]))[0].status).toBe('open');
   });
  });
 
@@ -3091,7 +3239,7 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
   // A registration whose transaction began BEFORE the freeze and commits AFTER it.
   const late=judgmentRow(m,b,{asOf:'2025-07-01'});
   const gen=randomUUID();
-  let frozen={frozen_at:'',n:-1};
+  let frozen={status:'',frozen_at:'',n:-1};
   const c=await admin.connect();
   try{
    await c.query('begin');
@@ -3099,7 +3247,7 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
    frozen=await one(`select public.freeze_calibration_cohort($1,$2,'v1','2025-01-01','2025-12-31') v`,[gen,m]);
    await c.query('commit');
   }finally{c.release();}
-  expect(frozen.n).toBe(4);expect(Number.isFinite(Date.parse(frozen.frozen_at))).toBe(true);
+  expect(frozen).toMatchObject({status:'frozen',n:4});expect(Number.isFinite(Date.parse(frozen.frozen_at))).toBe(true);
   const members=async(g:string,after:string|null,limit:number)=>q(`select (e.judgment).judgment_id id,(e.settlement).settlement_id sid from public.calibration_cohort_members($1,$2,$3) e`,[g,after,limit]);
   const sorted=[...ids].sort();
   const p1=await members(gen,null,2);expect(p1.map(r=>r.id)).toEqual(sorted.slice(0,2));
@@ -3118,14 +3266,45 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
   expect((await one(`select public.freeze_calibration_cohort($1,$2,'v1','2025-01-01','2025-12-31') v`,[gen2,m])).n).toBe(5);
   expect((await members(gen2,null,100)).filter(r=>r.sid!==null).map(r=>r.id)).toEqual([dueId]);
   expect(await q(`select ord from public.judgment_calibration_cohort_members where generation=$1 order by judgment_id`,[gen2])).toEqual([1,2,3,4,5].map(ord=>({ord:String(ord)})));
-  expect(await fails(q(`select public.freeze_calibration_cohort($1,$2,'v1','2025-01-01','2025-12-31')`,[gen,m]))).toMatchObject({code:'22023'});   // once per generation
+  // Q1-05: once per generation — a second freeze returns the stored marker and inserts nothing
+  expect(await one(`select public.freeze_calibration_cohort($1,$2,'v1','2025-01-01','2025-12-31') v`,[gen,m])).toEqual({status:'already_frozen',frozen_at:frozen.frozen_at,n:4});
+  expect(Number(await one(`select count(*)::int v from public.judgment_calibration_cohort_members where generation=$1`,[gen]))).toBe(4);
+  expect(await q(`select state->>'methodology' m,state->>'version' v,(state->>'n')::int n from public.judgment_job_state where job=$1`,[`cohort:${gen}`])).toEqual([{m,v:'v1',n:4}]);
+  // Q1-05: an EMPTY generation is frozen too — after a new registration in its window, reuse still returns already_frozen with n = 0
+  const m0=await syncNew();const empty=randomUUID();
+  expect(await one(`select public.freeze_calibration_cohort($1,$2,'v1','2025-01-01','2025-12-31') v`,[empty,m0])).toMatchObject({status:'frozen',n:0});
+  await register(judgmentRow(m0,b,{asOf:'2025-02-01'}));
+  expect(await one(`select public.freeze_calibration_cohort($1,$2,'v1','2025-01-01','2025-12-31') v`,[empty,m0])).toMatchObject({status:'already_frozen',n:0});
+  expect(await members(empty,null,10)).toEqual([]);
   expect(await fails(q(`select public.freeze_calibration_cohort($1,$2,'v1','2025-12-31','2025-01-01')`,[randomUUID(),m]))).toMatchObject({code:'22023'});
   expect(await fails(q(`select * from public.calibration_cohort_members($1,null,0)`,[gen]))).toMatchObject({code:'22023'});
   expect(await one(`select public.clear_calibration_generation($1) v`,[gen])).toBe(4);
   expect(await members(gen,null,100)).toEqual([]);
+  expect(await q(`select 1 from public.judgment_job_state where job=$1`,[`cohort:${gen}`])).toHaveLength(0);   // the marker goes with the members
   expect(await one(`select public.clear_calibration_generation($1) v`,[gen])).toBe(0);
+  expect(await one(`select public.clear_calibration_generation($1) v`,[empty])).toBe(0);
+  expect((await one(`select public.freeze_calibration_cohort($1,$2,'v1','2025-01-01','2025-12-31') v`,[empty,m0])).status).toBe('frozen');   // cleared → claimable again
+  await one(`select public.clear_calibration_generation($1) v`,[empty]);
   for(const role of ['anon','authenticated'])
    expect(await fails(asRole(admin,role,c2=>c2.query(`select * from public.calibration_cohort_members($1,null,10)`,[gen2])))).toMatchObject({code:'42501'});
+ });
+
+ it('freeze_calibration_cohort: two concurrent freezes of one generation — the second waits on the claim and returns already_frozen; members are inserted once (Q1-05)',async()=>{
+  const m=await syncNew();const b=await batch();
+  for(const d of ['2025-03-01','2025-06-01'])await register(judgmentRow(m,b,{asOf:d}));
+  const gen=randomUUID();
+  const c=await admin.connect();
+  try{
+   await c.query('begin');
+   const first=(await c.query(`select public.freeze_calibration_cohort($1,$2,'v1','2025-01-01','2025-12-31') v`,[gen,m])).rows[0].v as {status:string;frozen_at:string;n:number};
+   const second=one(`select public.freeze_calibration_cohort($1,$2,'v1','2025-01-01','2025-12-31') v`,[gen,m]);   // blocks on the marker's primary key
+   await pause(200);
+   await c.query('commit');
+   expect(first).toMatchObject({status:'frozen',n:2});
+   expect(await second).toEqual({status:'already_frozen',frozen_at:first.frozen_at,n:2});
+  }finally{c.release();}
+  expect(Number(await one(`select count(*)::int v from public.judgment_calibration_cohort_members where generation=$1`,[gen]))).toBe(2);
+  expect(await one(`select public.clear_calibration_generation($1) v`,[gen])).toBe(2);
  });
 
  it('judgment_envelope_by_id: one envelope under latest / as_known, RLS-gated by publishable, empty for an unknown id (P2-01)',async()=>{
@@ -3614,9 +3793,51 @@ language sql security definer set search_path = '' as $$
   select public.judgment_append_settlement_internal(p_judgment_id, p_lease_token, p_request_key, p_row)
 $$;
 
+-- §7.6 / plan audit Q1-02: the settle worker's ONLY quarantine write. One transaction: lock the queue row, check the
+-- lease (a stale / revoked / replaced worker gets lease_lost and NOTHING is written), upsert the open item with
+-- quarantine()'s semantics (one OPEN item per dataset/table/natural_key/reason_code via dq_quarantine_open_key_uniq;
+-- a reused item keeps id, batch_id, created_at and detail, its payload is refreshed), then publish the queue state
+-- (last_detail ∪ quarantine_id; quarantined_at of a still-unresolved incident is kept, plan audit Q1-01), never in the
+-- past, attempts unchanged, lease cleared. Item and queue therefore always name the same evidence.
+create or replace function public.quarantine_settlement(p_judgment_id uuid, p_lease_token uuid, p_reason_code text, p_payload jsonb, p_patch jsonb, p_batch_id uuid) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare v_q public.judgment_settle_queue; v_id uuid; v_detail jsonb := p_patch -> 'last_detail';
+begin
+  if p_judgment_id is null or p_batch_id is null or coalesce(p_reason_code, '') = '' or pg_catalog.length(p_reason_code) > 64
+     or p_payload is null or pg_catalog.jsonb_typeof(p_payload) <> 'object'
+     or coalesce(p_payload ->> 'evidence_hash', '') !~ '^[0-9a-f]{64}$' or (p_payload ->> 'cutoff') is null
+     or p_patch is null or pg_catalog.jsonb_typeof(p_patch) <> 'object' or pg_catalog.jsonb_typeof(v_detail) is distinct from 'object'
+     or (p_patch ->> 'last_status') is distinct from 'inconsistent' or (p_patch ->> 'attempts_increment') is distinct from '0'
+     or (p_patch ->> 'next_attempt_at') is null
+     or (v_detail ->> 'evidence_hash') is distinct from (p_payload ->> 'evidence_hash')
+     or (v_detail ->> 'cutoff') is distinct from (p_payload ->> 'cutoff') then
+    raise exception 'invalid_parameter: quarantine_settlement' using errcode = '22023';
+  end if;
+  select x.* into v_q from public.judgment_settle_queue x where x.judgment_id = p_judgment_id for update;
+  if not found then raise exception 'unknown_judgment' using errcode = 'P0002'; end if;
+  if v_q.lease_token is null or v_q.lease_token is distinct from p_lease_token then
+    return pg_catalog.jsonb_build_object('status', 'lease_lost', 'quarantine_id', null);
+  end if;
+  insert into public.dq_quarantine as x (id, dataset, table_name, natural_key, reason_code, detail, payload, batch_id, status, resolved_by, resolved_at, created_at)
+  values (pg_catalog.gen_random_uuid(), 'judgments', 'judgment_settlements', p_judgment_id::text, p_reason_code, '{}'::jsonb, p_payload, p_batch_id, 'open', null, null, pg_catalog.now())
+  on conflict (dataset, table_name, natural_key, reason_code) where status = 'open'
+  do update set payload = excluded.payload
+  returning x.id into v_id;
+  if v_q.last_status = 'inconsistent' and pg_catalog.jsonb_typeof(v_q.last_detail -> 'quarantined_at') = 'string' then
+    v_detail := v_detail || pg_catalog.jsonb_build_object('quarantined_at', v_q.last_detail -> 'quarantined_at');
+  end if;
+  update public.judgment_settle_queue x
+  set last_status = 'inconsistent', last_detail = v_detail || pg_catalog.jsonb_build_object('quarantine_id', v_id::text),
+      next_attempt_at = greatest((p_patch ->> 'next_attempt_at')::timestamptz, pg_catalog.now()),
+      leased_until = null, lease_token = null, updated_at = pg_catalog.now()
+  where x.judgment_id = p_judgment_id;
+  return pg_catalog.jsonb_build_object('status', 'quarantined', 'quarantine_id', v_id::text);
+end $$;
+
 -- §7.6 / plan audit P1-04: the quarantine hook's acceptance, one transaction, locks queue row THEN item. It is
 -- usable only for the inconsistency it was raised for: the queue must be open, still 'inconsistent' with
--- last_detail.evidence_hash = override.evidence_hash, and the item open with the same evidence_hash and cutoff;
+-- last_detail.evidence_hash / cutoff = override.evidence_hash / cutoff (the identity the hook read, Q1-03), and the
+-- item open with the same evidence_hash and cutoff;
 -- otherwise a status is returned and NOTHING is written. Applying sets the override, schedules now and REVOKES
 -- any lease (an in-flight worker then gets lease_lost instead of overwriting last_status / last_detail), flips
 -- the item and writes research_audit_log. Idempotent for the same override ('applied').
@@ -3645,6 +3866,7 @@ begin
   if v_q.closed_at is not null then return 'closed'; end if;
   if v_q.last_status is distinct from 'inconsistent'
      or (v_q.last_detail ->> 'evidence_hash') is distinct from (p_override ->> 'evidence_hash')
+     or (v_q.last_detail ->> 'cutoff') is distinct from (p_override ->> 'cutoff')
      or (v_i.payload ->> 'evidence_hash') is distinct from (p_override ->> 'evidence_hash')
      or (v_i.payload ->> 'cutoff') is distinct from (p_override ->> 'cutoff') then
     return 'stale';
@@ -3662,10 +3884,12 @@ begin
 end $$;
 
 -- §7.6 / plan audit P1-05: the quarantine hook's rejection, ONE transaction: replay check on the request key →
--- lock queue row THEN item → replay check again → validate (item open; queue open, inconsistent, same evidence
--- hash as the item) → the void through the single append implementation → item resolved_reject → audit row.
--- A crash can no longer leave a void with an open item, and a concurrent acceptance cannot interleave.
-create or replace function public.reject_quarantined_settlement(p_judgment_id uuid, p_quarantine_id uuid, p_request_key text, p_row jsonb, p_audit jsonb) returns jsonb
+-- lock queue row THEN item → replay check again → validate (item open; queue open and inconsistent; the evidence
+-- identity the hook read, p_expected = {evidence_hash, cutoff}, equals BOTH the locked queue last_detail and the
+-- locked item payload — plan audit Q1-03) → the void through the single append implementation → item
+-- resolved_reject → audit row. A crash can no longer leave a void with an open item, a concurrent acceptance cannot
+-- interleave, and a worker refresh between the hook's read and this call makes the request stale.
+create or replace function public.reject_quarantined_settlement(p_judgment_id uuid, p_quarantine_id uuid, p_expected jsonb, p_request_key text, p_row jsonb, p_audit jsonb) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare
   v_digest text := p_row ->> 'request_digest';
@@ -3680,6 +3904,8 @@ begin
   if p_row is null or pg_catalog.jsonb_typeof(p_row) <> 'object' or (p_row ->> 'kind') is distinct from 'void'
      or coalesce(v_actor, '') !~ '^admin:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
      or coalesce(v_digest, '') !~ '^[0-9a-f]{64}$' or p_request_key is null
+     or p_expected is null or pg_catalog.jsonb_typeof(p_expected) <> 'object'
+     or coalesce(p_expected ->> 'evidence_hash', '') !~ '^[0-9a-f]{64}$' or (p_expected ->> 'cutoff') is null
      or p_audit is null or pg_catalog.jsonb_typeof(p_audit) <> 'object' then
     raise exception 'invalid_parameter: rejection' using errcode = '22023';
   end if;
@@ -3696,7 +3922,10 @@ begin
     return pg_catalog.jsonb_build_object('seq', v_seq, 'status', 'item_not_open');
   end if;
   if v_q.closed_at is not null or v_q.last_status is distinct from 'inconsistent'
-     or (v_q.last_detail ->> 'evidence_hash') is distinct from (v_i.payload ->> 'evidence_hash') then
+     or (v_q.last_detail ->> 'evidence_hash') is distinct from (p_expected ->> 'evidence_hash')
+     or (v_q.last_detail ->> 'cutoff') is distinct from (p_expected ->> 'cutoff')
+     or (v_i.payload ->> 'evidence_hash') is distinct from (p_expected ->> 'evidence_hash')
+     or (v_i.payload ->> 'cutoff') is distinct from (p_expected ->> 'cutoff') then
     return pg_catalog.jsonb_build_object('seq', v_seq, 'status', 'stale');
   end if;
   v_res := public.judgment_append_settlement_internal(p_judgment_id, null, p_request_key, p_row);
@@ -3714,15 +3943,25 @@ end $$;
 -- §8.3 / plan audit P1-10: freeze one calibration generation's cohort in ONE statement (one MVCC snapshot):
 -- every non-abstained registration with as_of in the window and its latest settlement at that snapshot. A
 -- transaction that began before and commits after the freeze is consistently outside the generation.
+-- Plan audit Q1-05: the generation is CLAIMED first through the marker judgment_job_state['cohort:<generation>']
+-- (insert … on conflict do nothing: a concurrent freeze of the same generation waits on the key and then sees the
+-- claim). A claimed generation — including an empty one — returns already_frozen from the marker and inserts nothing.
 create or replace function public.freeze_calibration_cohort(p_generation uuid, p_methodology text, p_version text, p_window_from date, p_window_to date) returns jsonb
 language plpgsql security definer set search_path = '' as $$
-declare n bigint; v_at timestamptz := pg_catalog.statement_timestamp();
+declare n bigint; v_at timestamptz := pg_catalog.statement_timestamp(); v_job text; v_claimed text; v_marker jsonb;
 begin
   if p_generation is null or p_methodology is null or p_version is null or p_window_from is null or p_window_to is null or p_window_from > p_window_to then
     raise exception 'invalid_parameter: window' using errcode = '22023';
   end if;
-  if exists (select 1 from public.judgment_calibration_cohort_members c where c.generation = p_generation) then
-    raise exception 'invalid_parameter: generation % is already frozen', p_generation using errcode = '22023';
+  v_job := 'cohort:' || p_generation::text;
+  insert into public.judgment_job_state (job, state, updated_at)
+  values (v_job, pg_catalog.jsonb_build_object('frozen_at', v_at, 'n', null, 'methodology', p_methodology, 'version', p_version,
+          'window', pg_catalog.jsonb_build_object('from', p_window_from, 'to', p_window_to)), pg_catalog.date_trunc('milliseconds', pg_catalog.clock_timestamp()))
+  on conflict (job) do nothing
+  returning job into v_claimed;
+  if v_claimed is null then
+    select s.state into v_marker from public.judgment_job_state s where s.job = v_job;
+    return pg_catalog.jsonb_build_object('status', 'already_frozen', 'frozen_at', v_marker -> 'frozen_at', 'n', coalesce((v_marker ->> 'n')::bigint, 0));
   end if;
   insert into public.judgment_calibration_cohort_members (generation, judgment_id, settlement_id, ord)
   select p_generation, j.judgment_id,
@@ -3732,7 +3971,8 @@ begin
   where j.methodology_id = p_methodology and j.methodology_version = p_version and not j.abstained
     and j.as_of between p_window_from and p_window_to;
   get diagnostics n = row_count;
-  return pg_catalog.jsonb_build_object('frozen_at', v_at, 'n', n);
+  update public.judgment_job_state s set state = s.state || pg_catalog.jsonb_build_object('n', n) where s.job = v_job;
+  return pg_catalog.jsonb_build_object('status', 'frozen', 'frozen_at', v_at, 'n', n);
 end $$;
 
 -- The frozen members of a generation as envelopes (settlement = the one frozen with it), keyset by judgment_id.
@@ -3759,6 +3999,7 @@ begin
   if p_generation is null then raise exception 'invalid_parameter: generation' using errcode = '22023'; end if;
   delete from public.judgment_calibration_cohort_members c where c.generation = p_generation;
   get diagnostics n = row_count;
+  delete from public.judgment_job_state s where s.job = 'cohort:' || p_generation::text;   -- Q1-05: the claim goes with the members
   return n;
 end $$;
 
@@ -3837,8 +4078,9 @@ do $$ declare f text; begin
     'public.claim_due_judgments(integer, integer)',
     'public.release_lease(uuid, uuid, jsonb)',
     'public.append_settlement(uuid, uuid, text, jsonb)',
+    'public.quarantine_settlement(uuid, uuid, text, jsonb, jsonb, uuid)',
     'public.apply_quarantine_override(uuid, jsonb, uuid, jsonb)',
-    'public.reject_quarantined_settlement(uuid, uuid, text, jsonb, jsonb)',
+    'public.reject_quarantined_settlement(uuid, uuid, jsonb, text, jsonb, jsonb)',
     'public.freeze_calibration_cohort(uuid, text, text, date, date)',
     'public.calibration_cohort_members(uuid, uuid, integer)',
     'public.clear_calibration_generation(uuid)',
@@ -3863,7 +4105,7 @@ end $$;
 - [ ] **Step 4: 运行，确认通过**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/judgments/judgments.integration.test.ts`
-Expected: PASS（28 tests：Task 2 的 7 个 + Task 3 的 21 个）。
+Expected: PASS（30 tests：Task 2 的 7 个 + Task 3 的 23 个）。
 
 - [ ] **Step 5: 迁移彩排**
 
@@ -3878,7 +4120,7 @@ Expected: 无错误、无警告。
 - [ ] **Step 7: 暂存**
 
 ```bash
-git add supabase/migrations/20261109150000_judgments.sql src/lib/judgments/judgments.integration.test.ts
+git add supabase/migrations/20261109150000_judgments.sql src/lib/judgments/judgments.integration.test.ts src/lib/judgments/rpc-inventory.ts
 ```
 
 - [ ] **Step 8: 提交**
@@ -3959,6 +4201,7 @@ export function pgJudgmentsDb(pool:Pool):JudgmentsDb;
 - `queueList` 过滤器的精确定义（规格只给名字）：`due` = 未关闭且 `next_attempt_at ≤ now` 且租约空闲 / 过期；`backoff` = 未关闭且 `next_attempt_at > now` 且租约空闲 / 过期；`leased` = 未关闭且 `leased_until ≥ now`；`all` = 全部（含已关闭）；按 `judgment_id` 升序 keyset，`limit` 1..500。
 - `latestCalibration` 的 `valid` 用 `serverTime()` 判过期（与 SQL `calibration_valid` 同式：`validity_revision = 当前 revision 且 valid_until > now`）。
 - `pgJudgmentsDb` 的"其余走 admin"在事务内 `set local role service_role` 执行（不是超级用户直连），所以 pg 契约同时证明 service_role 的授权恰好够用。
+- 计划审计第二轮：`quarantineSettlement`（Q1-02）在内存实现里是一次串行操作（租约校验 → 按 `quarantine()` 语义复用 / 新建 open 项并刷新 payload → 发布队列状态，保留未解决事件的 `quarantined_at`）；`rejectQuarantinedSettlement` 的 `expected` 与 `applyQuarantineOverride` 的 `override.evidence_hash / cutoff` 同时对比队列 `last_detail` 与项 `payload`（Q1-03）；`freezeCalibrationCohort` 在内存实现里也写 `cohort:<generation>` 标记到 job-state 表，`clearCalibrationGeneration` 一并删除（Q1-05）。`db.test.ts` 的 supabase 桩用例按 `rpc-inventory.ts` 断言 admin 客户端只调服务 RPC、anon 只调公共 RPC（Q1-06）。
 
 - [ ] **Step 1: 写共用契约 `db-contract.ts`（非测试文件）与两个测试文件（先失败）**
 
@@ -4340,14 +4583,19 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
    expect(await code(db.repairStaleBatches(ds,30))).toBe('invalid_parameter');
   });
 
-  /** A judgment whose queue is 'inconsistent' for `hash` with an open item of the same hash and cutoff (settle.ts shape). Call inside exclusiveClaims. */
-  const inconsistent=async(m:MethodologySync,b:string,hash=H('e'),cutoff='2026-03-02T04:00:00.000Z')=>{
+  const CUT='2026-03-02T04:00:00.000Z';
+  /** settle.ts's inconsistent patch (Q1-02), parked in 2099. */
+  const incPatch=(hash:string,cutoff:string,quarantined_at=cutoff,reason='settlement_basis_mismatch'):QueuePatch=>({last_status:'inconsistent',last_detail:{reason_code:reason,evidence_hash:hash,cutoff,quarantined_at},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0});
+  /** A judgment whose queue is 'inconsistent' for `hash` with an open item of the same hash and cutoff, published the way settle.ts does
+   *  it: ONE quarantineSettlement under the claimed lease (Q1-02). Call inside exclusiveClaims. */
+  const inconsistent=async(m:MethodologySync,b:string,hash=H('e'),cutoff=CUT)=>{
    const j=await registered(m,b,{target:DUE});
-   const itemId=await quarantine(h.tables,{dataset:'judgments',table:'judgment_settlements',naturalKey:j.id,reasonCode:'settlement_basis_mismatch',batchId:b,payload:{evidence_hash:hash,cutoff,judgment_id:j.id}});
    const mine=(await db.claimDue(100,600)).find(r=>r.judgment_id===j.id)!;
-   await db.releaseLease(j.id,mine.lease_token!,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:hash,quarantine_id:itemId},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0});
-   return {j,itemId};
+   const r=await db.quarantineSettlement(j.id,mine.lease_token!,'settlement_basis_mismatch',{evidence_hash:hash,cutoff,judgment_id:j.id},incPatch(hash,cutoff),b);
+   expect(r.status).toBe('quarantined');
+   return {j,itemId:r.quarantine_id!};
   };
+  const EXP={evidence_hash:H('e'),cutoff:CUT};
   const overrideOf=(by:string,hash=H('e'),cutoff='2026-03-02T04:00:00.000Z'):QuarantineOverride=>({reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched',evidence_hash:hash,evidence:{bars:[]}},evidence_hash:hash,resolved_by:by,at:new Date().toISOString(),cutoff});
   const rejectRow=(b:string,by:string)=>settlementFixture(b,{kind:'void',outcome:null,realized:null,reason:'quarantine_rejected',actor:`admin:${by}`});
 
@@ -4392,7 +4640,7 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
     const itemId=await quarantine(h.tables,{dataset:'judgments',table:'judgment_settlements',naturalKey:j.id,reasonCode:'settlement_basis_mismatch',batchId:b,payload:{evidence_hash:H('e'),cutoff:'2026-03-02T04:00:00.000Z',judgment_id:j.id}});
     const first=(await db.claimDue(100,600)).find(r=>r.judgment_id===j.id)!;
     // inconsistent, and due again at once (next_attempt_at in the past is clamped to now)
-    await db.releaseLease(j.id,first.lease_token!,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:H('e'),quarantine_id:itemId},next_attempt_at:'2000-01-01T00:00:00.000Z',attempts_increment:0});
+    await db.releaseLease(j.id,first.lease_token!,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:H('e'),cutoff:CUT,quarantine_id:itemId},next_attempt_at:'2000-01-01T00:00:00.000Z',attempts_increment:0});
     const worker=(await db.claimDue(100,600)).find(r=>r.judgment_id===j.id)!;
     expect(await db.applyQuarantineOverride(j.id,overrideOf(by),itemId,{})).toBe('applied');
     expect((await db.queueRow(j.id))!).toMatchObject({lease_token:null,leased_until:null,last_status:'inconsistent'});
@@ -4408,24 +4656,67 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
    await h.exclusiveClaims(async()=>{
     const {j,itemId}=await inconsistent(m,b);
     const key=`adm:${randomUUID()}`;const row=rejectRow(b,by);
-    expect(await db.rejectQuarantinedSettlement(j.id,itemId,key,row,{route:'contract'})).toEqual({seq:1,status:'applied'});
+    expect(await db.rejectQuarantinedSettlement(j.id,itemId,EXP,key,row,{route:'contract'})).toEqual({seq:1,status:'applied'});
     expect((await db.settlementsOf([j.id])).map(s=>[s.kind,s.reason,s.actor])).toEqual([['void','quarantine_rejected',`admin:${by}`]]);
     expect((await h.tables.select('dq_quarantine',{id:itemId}))[0]).toMatchObject({status:'resolved_reject',resolved_by:by});
     expect((await db.queueRow(j.id))!.closed_at).not.toBeNull();
     expect(await h.tables.select('research_audit_log',{object_id:itemId})).toHaveLength(1);
-    expect(await db.rejectQuarantinedSettlement(j.id,itemId,key,row,{})).toEqual({seq:1,status:'already_applied'});
-    expect(await db.rejectQuarantinedSettlement(j.id,itemId,key,{...row,reason:'x'},{})).toEqual({seq:1,status:'request_key_conflict'});
-    expect(await db.rejectQuarantinedSettlement(j.id,itemId,`adm:${randomUUID()}`,row,{})).toEqual({seq:1,status:'item_not_open'});
+    expect(await db.rejectQuarantinedSettlement(j.id,itemId,EXP,key,row,{})).toEqual({seq:1,status:'already_applied'});
+    expect(await db.rejectQuarantinedSettlement(j.id,itemId,EXP,key,{...row,reason:'x'},{})).toEqual({seq:1,status:'request_key_conflict'});
+    expect(await db.rejectQuarantinedSettlement(j.id,itemId,EXP,`adm:${randomUUID()}`,row,{})).toEqual({seq:1,status:'item_not_open'});
     expect(await h.tables.select('research_audit_log',{object_id:itemId})).toHaveLength(1);
     const s=await inconsistent(m,b,H('e'));
     expect(await db.applyQuarantineOverride(s.j.id,overrideOf(by,H('f')),s.itemId,{})).toBe('stale');   // writes nothing
-    const other=await quarantine(h.tables,{dataset:'judgments',table:'judgment_settlements',naturalKey:s.j.id,reasonCode:'settlement_benchmark_gap',batchId:b,payload:{evidence_hash:H('9')}});
-    expect(await db.rejectQuarantinedSettlement(s.j.id,other,`adm:${randomUUID()}`,row,{})).toEqual({seq:0,status:'stale'});   // the queue's inconsistency is not this item's
+    const other=await quarantine(h.tables,{dataset:'judgments',table:'judgment_settlements',naturalKey:s.j.id,reasonCode:'settlement_benchmark_gap',batchId:b,payload:{evidence_hash:H('9'),cutoff:CUT}});
+    expect(await db.rejectQuarantinedSettlement(s.j.id,other,{evidence_hash:H('9'),cutoff:CUT},`adm:${randomUUID()}`,row,{})).toEqual({seq:0,status:'stale'});   // the queue's inconsistency is not this item's
+    // Q1-03: queue and item agree with each other but not with what the hook read → stale, nothing written
+    expect(await db.rejectQuarantinedSettlement(s.j.id,s.itemId,{...EXP,evidence_hash:H('f')},`adm:${randomUUID()}`,row,{})).toEqual({seq:0,status:'stale'});
+    expect(await db.rejectQuarantinedSettlement(s.j.id,s.itemId,{...EXP,cutoff:'2026-01-01T00:00:00.000Z'},`adm:${randomUUID()}`,row,{})).toEqual({seq:0,status:'stale'});
     expect(await db.settlementsOf([s.j.id])).toEqual([]);
-    expect(await code(db.rejectQuarantinedSettlement(s.j.id,s.itemId,`adm:${randomUUID()}`,{...row,kind:'settled'},{}))).toBe('invalid_parameter');
-    expect(await code(db.rejectQuarantinedSettlement(s.j.id,s.itemId,`adm:${randomUUID()}`,{...row,actor:'cron'},{}))).toBe('invalid_parameter');
-    expect(await db.rejectQuarantinedSettlement(s.j.id,s.itemId,`adm:${randomUUID()}`,row,{})).toMatchObject({status:'applied'});
+    expect(await code(db.rejectQuarantinedSettlement(s.j.id,s.itemId,EXP,`adm:${randomUUID()}`,{...row,kind:'settled'},{}))).toBe('invalid_parameter');
+    expect(await code(db.rejectQuarantinedSettlement(s.j.id,s.itemId,EXP,`adm:${randomUUID()}`,{...row,actor:'cron'},{}))).toBe('invalid_parameter');
+    expect(await code(db.rejectQuarantinedSettlement(s.j.id,s.itemId,{evidence_hash:'x',cutoff:CUT},`adm:${randomUUID()}`,row,{}))).toBe('invalid_parameter');
+    expect(await db.rejectQuarantinedSettlement(s.j.id,s.itemId,EXP,`adm:${randomUUID()}`,row,{})).toMatchObject({status:'applied'});
    });
+  });
+
+  it('quarantineSettlement: lease-checked single write — an expired worker refreshing after its replacement gets lease_lost and changes nothing; the open item is reused and refreshed; quarantined_at of the unresolved incident is kept; a refresh between the hook read and the verdict makes it stale (Q1-01, Q1-02, Q1-03)',async()=>{
+   const m=await synced();const b=await h.batch();const by=await h.adminUser();
+   const C2='2026-03-05T04:00:00.000Z';
+   const pubOf=(id:string,token:string,hash:string,cutoff:string,next?:string)=>db.quarantineSettlement(id,token,'settlement_basis_mismatch',{evidence_hash:hash,cutoff,judgment_id:id},{...incPatch(hash,cutoff),...(next?{next_attempt_at:next}:{})},b);
+   let jid='';
+   await h.exclusiveClaims(async()=>{
+    const j=await registered(m,b,{target:DUE});jid=j.id;
+    // First publication; due again at once (a past next_attempt_at is clamped to now).
+    const t1=(await db.claimDue(100,600)).find(r=>r.judgment_id===j.id)!.lease_token!;
+    const first=await pubOf(j.id,t1,H('e'),CUT,'2000-01-01T00:00:00.000Z');
+    expect(first.status).toBe('quarantined');const itemId=first.quarantine_id!;
+    expect((await db.queueRow(j.id))!).toMatchObject({last_status:'inconsistent',lease_token:null,leased_until:null,attempts:0,last_detail:{evidence_hash:H('e'),cutoff:CUT,quarantined_at:CUT,quarantine_id:itemId}});
+    const [item]=await h.tables.select('dq_quarantine',{id:itemId});
+    expect(item).toMatchObject({dataset:'judgments',table_name:'judgment_settlements',natural_key:j.id,reason_code:'settlement_basis_mismatch',status:'open',batch_id:b});
+    const read=item.payload as {evidence_hash:string;cutoff:string};                           // what the hook reads
+    // Worker A claims with a 1 s lease and stalls past it; worker B claims the row with a new token and publishes.
+    const a=(await db.claimDue(100,1)).find(r=>r.judgment_id===j.id)!;
+    await pause(1100);
+    const w=(await db.claimDue(100,600)).find(r=>r.judgment_id===j.id)!;
+    expect(w.lease_token).not.toBe(a.lease_token);
+    expect(await pubOf(j.id,w.lease_token!,H('f'),C2)).toEqual({status:'quarantined',quarantine_id:itemId});   // same open item, refreshed
+    // A wakes up and refreshes after its replacement: lease_lost, neither the item nor the queue changes.
+    expect(await pubOf(j.id,a.lease_token!,H('d'),C2)).toEqual({status:'lease_lost',quarantine_id:null});
+    expect((await h.tables.select('dq_quarantine',{id:itemId}))[0].payload).toMatchObject({evidence_hash:H('f'),cutoff:C2});
+    // Q1-01: the incident is still unresolved, so the first quarantined_at survives B's publish.
+    expect((await db.queueRow(j.id))!.last_detail).toEqual({reason_code:'settlement_basis_mismatch',evidence_hash:H('f'),cutoff:C2,quarantined_at:CUT,quarantine_id:itemId});
+    expect(await h.tables.select('dq_quarantine',{natural_key:j.id,status:'open'})).toHaveLength(1);
+    // Q1-03: the hook read (e, CUT) before B's refresh → both verdicts are stale and write nothing.
+    expect(await db.rejectQuarantinedSettlement(j.id,itemId,read,`adm:${randomUUID()}`,rejectRow(b,by),{})).toEqual({seq:0,status:'stale'});
+    expect(await db.applyQuarantineOverride(j.id,overrideOf(by,read.evidence_hash,read.cutoff),itemId,{})).toBe('stale');
+    expect(await db.settlementsOf([j.id])).toEqual([]);
+    expect((await h.tables.select('dq_quarantine',{id:itemId}))[0].status).toBe('open');
+   });
+   expect(await code(db.quarantineSettlement(randomUUID(),randomUUID(),'settlement_basis_mismatch',{evidence_hash:H('e'),cutoff:CUT},incPatch(H('e'),CUT),b))).toBe('unknown_judgment');
+   expect(await code(db.quarantineSettlement(jid,randomUUID(),'settlement_basis_mismatch',{evidence_hash:H('e'),cutoff:CUT},{...incPatch(H('e'),CUT),last_status:'pending'},b))).toBe('invalid_parameter');
+   expect(await code(db.quarantineSettlement(jid,randomUUID(),'settlement_basis_mismatch',{evidence_hash:H('e'),cutoff:'2026-01-01T00:00:00.000Z'},incPatch(H('e'),CUT),b))).toBe('invalid_parameter');
+   expect(await code(db.quarantineSettlement(jid,randomUUID(),'settlement_basis_mismatch',{evidence_hash:H('e'),cutoff:CUT},{...incPatch(H('e'),CUT),attempts_increment:1},b))).toBe('invalid_parameter');
   });
 
   it('envelopeById: the history view semantics by id, publishable-gated; null for unknown ids (P2-01)',async()=>{
@@ -4439,7 +4730,7 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
    expect(await code(db.envelopeById(j.id,{view:'as_known'}))).toBe('invalid_parameter');
   });
 
-  it('freezeCalibrationCohort / cohortMembers / clearCalibrationGeneration: a frozen set with its settlements, stable across pages and later writes (P1-10)',async()=>{
+  it('freezeCalibrationCohort / cohortMembers / clearCalibrationGeneration: a frozen set with its settlements, stable across pages and later writes; a generation is claimed once, even when empty (P1-10, Q1-05)',async()=>{
    const m=await synced();const b=await h.batch();
    const ids:string[]=[];
    for(const as_of of ['2025-03-01','2025-06-01','2025-09-01'])ids.push((await registered(m,b,{as_of})).id);
@@ -4447,7 +4738,7 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
    const w={from:'2025-01-01',to:'2025-12-31'};
    const gen=randomUUID();
    const f=await db.freezeCalibrationCohort(gen,m.methodology_id,'v1',w);
-   expect(f.n).toBe(3);expect(Number.isFinite(Date.parse(f.frozen_at))).toBe(true);
+   expect(f).toMatchObject({status:'frozen',n:3});expect(Number.isFinite(Date.parse(f.frozen_at))).toBe(true);
    const later=await registered(m,b,{as_of:'2025-07-01'});                                    // after the freeze
    const p1=await db.cohortMembers(gen,null,2);
    expect(ids.slice().sort().slice(0,2)).toEqual(p1.map(e=>e.judgment.judgment_id));
@@ -4456,11 +4747,22 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
    expect(await db.cohortMembers(gen,p2[0].judgment.judgment_id,2)).toEqual([]);
    expect([...p1,...p2].map(e=>e.judgment.judgment_id)).not.toContain(later.id);
    expect([...p1,...p2].every(e=>e.settlement===null&&e.calibration===null&&e.calibration_valid===false)).toBe(true);
-   expect(await code(db.freezeCalibrationCohort(gen,m.methodology_id,'v1',w))).toBe('invalid_parameter');
+   expect(await db.freezeCalibrationCohort(gen,m.methodology_id,'v1',w)).toEqual({status:'already_frozen',frozen_at:f.frozen_at,n:3});   // Q1-05: the stored marker, no new members
+   expect(await db.cohortMembers(gen,null,10)).toHaveLength(3);
+   // Q1-05: an EMPTY generation is claimed too — reuse after a registration in its window stays empty
+   const m0=await synced();const empty=randomUUID();
+   expect(await db.freezeCalibrationCohort(empty,m0.methodology_id,'v1',w)).toMatchObject({status:'frozen',n:0});
+   await registered(m0,b,{as_of:'2025-02-01'});
+   expect(await db.freezeCalibrationCohort(empty,m0.methodology_id,'v1',w)).toMatchObject({status:'already_frozen',n:0});
+   expect(await db.cohortMembers(empty,null,10)).toEqual([]);
+   expect(await db.clearCalibrationGeneration(empty)).toBe(0);
+   expect((await db.freezeCalibrationCohort(empty,m0.methodology_id,'v1',w)).status).toBe('frozen');   // cleared → claimable again
+   await db.clearCalibrationGeneration(empty);
    expect(await code(db.freezeCalibrationCohort(randomUUID(),m.methodology_id,'v1',{from:'2025-12-31',to:'2025-01-01'}))).toBe('invalid_parameter');
    expect(await code(db.cohortMembers(gen,null,1001))).toBe('invalid_parameter');
    expect(await db.clearCalibrationGeneration(gen)).toBe(3);
    expect(await db.cohortMembers(gen,null,10)).toEqual([]);
+   expect(await db.jobState(`cohort:${gen}`)).toBeNull();                                      // the marker goes with the members
    expect(await db.clearCalibrationGeneration(gen)).toBe(0);
   });
 
@@ -4503,6 +4805,7 @@ import {calibrationFixture,judgmentFixture,judgmentsDbContract,methodologyFixtur
 import {envelopeFromRpc,supabaseJudgmentsDb,toJudgmentError,transitionAllowed} from './db';
 import {JudgmentError} from './errors';
 import {memoryJudgmentsDb} from './memory-judgments-db';
+import {PUBLIC_RPC_NAMES,SERVICE_RPC_NAMES} from './rpc-inventory';
 import {operationDigest} from './settlement-digest';
 
 judgmentsDbContract('memoryJudgmentsDb contract',async()=>{
@@ -4631,7 +4934,8 @@ describe('supabaseJudgmentsDb wiring',()=>{
   const Q=(id:string,next:string)=>({judgment_id:id,settle_after:TS,settle_by:TS,label_policy:'first_observed',next_attempt_at:next,attempts:0,last_status:null,last_detail:{},leased_until:TS,lease_token:'0b0e1d8e-0000-4000-8000-0000000000aa',override:null,closed_at:null,updated_at:TS});
   const s=stub({register_judgment:{judgment_id:J,registered_at:TS,retrospective:true},append_settlement:{seq:2,status:'applied'},claim_due_judgments:[Q('b',TS),Q('a',TS),Q('c','2026-01-01T00:00:00+00:00')],release_lease:null,
    calibration_cohort_internal:[],sync_methodology:{changed:false,seq:3},insert_calibration:'stale_revision',set_job_state:true,repair_stale_batches:2,apply_quarantine_override:'stale',
-   reject_quarantined_settlement:{seq:3,status:'applied'},freeze_calibration_cohort:{frozen_at:'2026-11-06T03:00:00.123456+00:00',n:'7'},calibration_cohort_members:[],clear_calibration_generation:7},{judgment_settle_queue:[]});
+   reject_quarantined_settlement:{seq:3,status:'applied'},freeze_calibration_cohort:{status:'already_frozen',frozen_at:'2026-11-06T03:00:00.123456+00:00',n:'7'},calibration_cohort_members:[],clear_calibration_generation:7,
+   quarantine_settlement:{status:'quarantined',quarantine_id:'0b0e1d8e-0000-4000-8000-0000000000bb'}},{judgment_settle_queue:[]});
   const db=supabaseJudgmentsDb({anon:a.client,admin:s.client});
   const m=methodologyFixture();const f=judgmentFixture(m,'0b0e1d8e-0000-4000-8000-000000000001');
   expect(await db.registerJudgment(f.row,f.queue)).toEqual({registered_at:'2026-11-06T03:00:00.123Z',retrospective:true});
@@ -4648,10 +4952,12 @@ describe('supabaseJudgmentsDb wiring',()=>{
   const override={reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched' as const,evidence_hash:'e'.repeat(64),evidence:{}},evidence_hash:'e'.repeat(64),resolved_by:J,at:TS,cutoff:TS};
   expect(await db.applyQuarantineOverride(J,override,'0b0e1d8e-0000-4000-8000-0000000000bb',{route:'x'})).toBe('stale');
   const voidRow=settlementFixture('0b0e1d8e-0000-4000-8000-000000000001',{kind:'void',outcome:null,realized:null,reason:'quarantine_rejected',actor:`admin:${J}`});
-  expect(await db.rejectQuarantinedSettlement(J,'0b0e1d8e-0000-4000-8000-0000000000bb','adm:key-0002',voidRow,{route:'x'})).toEqual({seq:3,status:'applied'});
-  expect(await db.freezeCalibrationCohort('0b0e1d8e-0000-4000-8000-0000000000cc','m','v1',{from:'2023-01-01',to:'2026-01-01'})).toEqual({frozen_at:'2026-11-06T03:00:00.123Z',n:7});
+  expect(await db.rejectQuarantinedSettlement(J,'0b0e1d8e-0000-4000-8000-0000000000bb',{evidence_hash:'e'.repeat(64),cutoff:TS},'adm:key-0002',voidRow,{route:'x'})).toEqual({seq:3,status:'applied'});
+  expect(await db.freezeCalibrationCohort('0b0e1d8e-0000-4000-8000-0000000000cc','m','v1',{from:'2023-01-01',to:'2026-01-01'})).toEqual({status:'already_frozen',frozen_at:'2026-11-06T03:00:00.123Z',n:7});
   await db.cohortMembers('0b0e1d8e-0000-4000-8000-0000000000cc',J,10);
   expect(await db.clearCalibrationGeneration('0b0e1d8e-0000-4000-8000-0000000000cc')).toBe(7);
+  const qpatch={last_status:'inconsistent' as const,last_detail:{evidence_hash:'e'.repeat(64),cutoff:TS},next_attempt_at:TS,attempts_increment:0 as const};
+  expect(await db.quarantineSettlement(J,'0b0e1d8e-0000-4000-8000-0000000000aa','settlement_basis_mismatch',{evidence_hash:'e'.repeat(64),cutoff:TS},qpatch,'0b0e1d8e-0000-4000-8000-000000000001')).toEqual({status:'quarantined',quarantine_id:'0b0e1d8e-0000-4000-8000-0000000000bb'});
   await db.queueList({filter:'due',limit:10,after:J});
   expect(s.calls).toEqual([
    {fn:'register_judgment',args:{p_row:f.row,p_queue:f.queue}},
@@ -4664,11 +4970,15 @@ describe('supabaseJudgmentsDb wiring',()=>{
    {fn:'set_job_state',args:{p_job:'produce:m@v1',p_expected_updated_at:null,p_state:{x:1}}},
    {fn:'repair_stale_batches',args:{p_dataset:'judgments.settle',p_older_than:'900 seconds'}},
    {fn:'apply_quarantine_override',args:{p_judgment_id:J,p_override:override,p_quarantine_id:'0b0e1d8e-0000-4000-8000-0000000000bb',p_audit:{route:'x'}}},
-   {fn:'reject_quarantined_settlement',args:{p_judgment_id:J,p_quarantine_id:'0b0e1d8e-0000-4000-8000-0000000000bb',p_request_key:'adm:key-0002',p_row:{...voidRow,request_digest:operationDigest(J,voidRow)},p_audit:{route:'x'}}},
+   {fn:'reject_quarantined_settlement',args:{p_judgment_id:J,p_quarantine_id:'0b0e1d8e-0000-4000-8000-0000000000bb',p_expected:{evidence_hash:'e'.repeat(64),cutoff:TS},p_request_key:'adm:key-0002',p_row:{...voidRow,request_digest:operationDigest(J,voidRow)},p_audit:{route:'x'}}},
    {fn:'freeze_calibration_cohort',args:{p_generation:'0b0e1d8e-0000-4000-8000-0000000000cc',p_methodology:'m',p_version:'v1',p_window_from:'2023-01-01',p_window_to:'2026-01-01'}},
    {fn:'calibration_cohort_members',args:{p_generation:'0b0e1d8e-0000-4000-8000-0000000000cc',p_after:J,p_limit:10}},
    {fn:'clear_calibration_generation',args:{p_generation:'0b0e1d8e-0000-4000-8000-0000000000cc'}},
+   {fn:'quarantine_settlement',args:{p_judgment_id:J,p_lease_token:'0b0e1d8e-0000-4000-8000-0000000000aa',p_reason_code:'settlement_basis_mismatch',p_payload:{evidence_hash:'e'.repeat(64),cutoff:TS},p_patch:qpatch,p_batch_id:'0b0e1d8e-0000-4000-8000-000000000001'}},
   ]);
+  // Q1-06: the admin client calls only service RPCs, the anon client only public ones — both checked against the one inventory.
+  for(const c of s.calls)expect({fn:c.fn,service:(SERVICE_RPC_NAMES as readonly string[]).includes(c.fn)}).toEqual({fn:c.fn,service:true});
+  for(const c of a.calls)expect({fn:c.fn,public:(PUBLIC_RPC_NAMES as readonly string[]).includes(c.fn)}).toEqual({fn:c.fn,public:true});
   expect(s.reads.map(r=>r.table)).toEqual(['judgment_settle_queue']);
   expect(s.reads[0].ops).toEqual(expect.arrayContaining(['is("closed_at",null)','lte("next_attempt_at","2026-11-06T03:00:00.123Z")','gt("judgment_id","'+J+'")','limit(10)']));
   expect(a.calls.map(c=>c.fn)).toEqual(['judgments_server_time']);   // queueList asks the server clock through anon
@@ -4774,10 +5084,10 @@ describe.skipIf(!enabled)('pgJudgmentsDb on real PostgreSQL',()=>{
      const H='e'.repeat(64),cutoff='2026-03-02T04:00:00.000Z';
      const item=await quarantine(tables,{dataset:'judgments',table:'judgment_settlements',naturalKey:j,reasonCode:'settlement_basis_mismatch',batchId:b,payload:{evidence_hash:H,cutoff,judgment_id:j}});
      const t=(await d1.claimDue(100,600)).find(r=>r.judgment_id===j)!.lease_token!;
-     await d1.releaseLease(j,t,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:H,quarantine_id:item},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0});
+     await d1.releaseLease(j,t,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:H,cutoff,quarantine_id:item},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0});
      const override={reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched' as const,evidence_hash:H,evidence:{}},evidence_hash:H,resolved_by:by,at:new Date().toISOString(),cutoff};
      const row=settlementFixture(b,{kind:'void',outcome:null,realized:null,reason:'quarantine_rejected',actor:`admin:${by}`});
-     const [acc,rej]=await Promise.all([d1.applyQuarantineOverride(j,override,item,{}),d2.rejectQuarantinedSettlement(j,item,`adm:${randomUUID()}`,row,{})]);
+     const [acc,rej]=await Promise.all([d1.applyQuarantineOverride(j,override,item,{}),d2.rejectQuarantinedSettlement(j,item,{evidence_hash:H,cutoff},`adm:${randomUUID()}`,row,{})]);
      expect([acc==='applied',rej.status==='applied'].filter(Boolean)).toHaveLength(1);
      const [it]=await tables.select('dq_quarantine',{id:item});
      const q=(await d1.queueRow(j))!;
@@ -5002,17 +5312,21 @@ export function supabaseJudgmentsDb(clients:{anon:SupabaseClient;admin:SupabaseC
    const r=await call<{seq:number;status:AppendStatus}>(admin,'append_settlement',{p_judgment_id:judgmentId,p_lease_token:leaseToken,p_request_key:requestKey,p_row:settlementArgs(judgmentId,row)});
    return {seq:Number(r.seq),status:r.status};
   },
+  async quarantineSettlement(judgmentId,leaseToken,reasonCode,payload,patch,batchId){
+   const r=await call<{status:'quarantined'|'lease_lost';quarantine_id:string|null}>(admin,'quarantine_settlement',{p_judgment_id:judgmentId,p_lease_token:leaseToken,p_reason_code:reasonCode,p_payload:payload,p_patch:patch,p_batch_id:batchId});
+   return {status:r.status,quarantine_id:r.quarantine_id??null};
+  },
   async applyQuarantineOverride(judgmentId,override,quarantineId,audit){return await call<'applied'|'stale'|'closed'|'item_not_open'>(admin,'apply_quarantine_override',{p_judgment_id:judgmentId,p_override:override,p_quarantine_id:quarantineId,p_audit:audit});},
-  async rejectQuarantinedSettlement(judgmentId,quarantineId,requestKey,row,audit){
-   const r=await call<{seq:number;status:AppendStatus|'stale'|'item_not_open'}>(admin,'reject_quarantined_settlement',{p_judgment_id:judgmentId,p_quarantine_id:quarantineId,p_request_key:requestKey,p_row:settlementArgs(judgmentId,row),p_audit:audit});
+  async rejectQuarantinedSettlement(judgmentId,quarantineId,expected,requestKey,row,audit){
+   const r=await call<{seq:number;status:AppendStatus|'stale'|'item_not_open'}>(admin,'reject_quarantined_settlement',{p_judgment_id:judgmentId,p_quarantine_id:quarantineId,p_expected:expected,p_request_key:requestKey,p_row:settlementArgs(judgmentId,row),p_audit:audit});
    return {seq:Number(r.seq),status:r.status};
   },
   async envelopeById(id,o){const [e]=await envelopes(anon,'judgment_envelope_by_id',{p_id:id,p_view:o.view,p_cutoff:o.cutoff??null});return e??null;},
   calibrationCohort:(m,v,w,cutoff,after,limit)=>envelopes(anon,'calibration_cohort',{p_methodology:m,p_version:v,p_window_from:w.from,p_window_to:w.to,p_cutoff:cutoff,p_after:after,p_limit:limit}),
   calibrationCohortInternal:(m,v,w,cutoff,after,limit)=>envelopes(admin,'calibration_cohort_internal',{p_methodology:m,p_version:v,p_window_from:w.from,p_window_to:w.to,p_cutoff:cutoff,p_after:after,p_limit:limit}),
   async freezeCalibrationCohort(generation,m,v,w){
-   const r=await call<{frozen_at:string;n:number}>(admin,'freeze_calibration_cohort',{p_generation:generation,p_methodology:m,p_version:v,p_window_from:w.from,p_window_to:w.to});
-   return {frozen_at:isoTs(r.frozen_at),n:Number(r.n)};
+   const r=await call<{status:'frozen'|'already_frozen';frozen_at:string;n:number}>(admin,'freeze_calibration_cohort',{p_generation:generation,p_methodology:m,p_version:v,p_window_from:w.from,p_window_to:w.to});
+   return {status:r.status,frozen_at:isoTs(r.frozen_at),n:Number(r.n)};
   },
   cohortMembers:(generation,after,limit)=>envelopes(admin,'calibration_cohort_members',{p_generation:generation,p_after:after,p_limit:limit}),
   async clearCalibrationGeneration(generation){return Number(await call<unknown>(admin,'clear_calibration_generation',{p_generation:generation}));},
@@ -5060,9 +5374,10 @@ export function supabaseJudgmentsDb(clients:{anon:SupabaseClient;admin:SupabaseC
 // and the next_attempt_at clamp; append_settlement in the R06 order (request_key first, then queue,
 // already_final for cron/script on a closed queue, lease, transition, validity +1 on
 // withdrawn/reopened); insert_calibration's revision check; set_job_state's optimistic lock with a
-// strictly increasing millisecond updated_at; repair_stale_batches, apply_quarantine_override (statuses, lease
-// revocation) and reject_quarantined_settlement on the shared TableClient; the frozen calibration cohorts
-// (freeze / members / clear) — and the RLS publishable gate on the public reads (latestCards,
+// strictly increasing millisecond updated_at; repair_stale_batches, quarantine_settlement (lease-checked item
+// upsert + queue publish, Q1-02), apply_quarantine_override (statuses, lease revocation) and
+// reject_quarantined_settlement (expected evidence identity, Q1-03) on the shared TableClient; the frozen calibration
+// cohorts (claim marker / freeze / members / clear, Q1-05) — and the RLS publishable gate on the public reads (latestCards,
 // historyOf, envelopeById, calibrationCohort, latestCalibration; listMethodologies and methodologyStateAt are open
 // like their tables). Replays compare digest + judgment id: the digest is computed from the same
 // nine fields the SQL rebuilds, so digest equality is payload equality here. Operations run one at a
@@ -5290,6 +5605,26 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
   },
   async settlementsOf(ids){const want=new Set(ids);return clone(settlements.filter(s=>want.has(s.judgment_id)).sort(bySettlementOrder));},
   appendSettlement:(judgmentId,leaseToken,requestKey,row)=>appendCore(judgmentId,leaseToken,requestKey,row),
+  /** quarantine_settlement (Q1-02): one serialised operation — lease check, quarantine()-style upsert of the open item
+   *  (same key + reason reused, payload refreshed), queue publish keeping an unresolved incident's quarantined_at (Q1-01). */
+  async quarantineSettlement(judgmentId,leaseToken,reasonCode,payload,patch,batchId){
+   const d=(isObj(patch)&&isObj(patch.last_detail)?patch.last_detail:null) as Record<string,unknown>|null;
+   if(!isObj(payload)||typeof payload.evidence_hash!=='string'||!HEX64.test(payload.evidence_hash)||typeof payload.cutoff!=='string'
+    ||typeof reasonCode!=='string'||reasonCode===''||reasonCode.length>64||typeof batchId!=='string'||!isObj(patch)||patch.last_status!=='inconsistent'||patch.attempts_increment!==0
+    ||typeof patch.next_attempt_at!=='string'||!Number.isFinite(ms(patch.next_attempt_at))||d===null||d.evidence_hash!==payload.evidence_hash||d.cutoff!==payload.cutoff)fail('invalid_parameter','quarantine_settlement');
+   const q=queue.get(judgmentId);
+   if(!q)return fail('unknown_judgment');
+   if(q.lease_token===null||q.lease_token!==leaseToken)return {status:'lease_lost',quarantine_id:null};
+   const at=now();
+   const key={dataset:'judgments',table_name:'judgment_settlements',natural_key:judgmentId,reason_code:reasonCode};
+   const [open]=await tables.select('dq_quarantine',{...key,status:'open'},{limit:1});
+   let id:string;
+   if(open){id=String(open.id);await tables.update('dq_quarantine',{id,status:'open'},{payload:clone(payload)});}
+   else{id=randomUUID();await tables.insert('dq_quarantine',{id,...key,detail:{},payload:clone(payload),batch_id:batchId,status:'open',resolved_by:null,resolved_at:null,created_at:at});}
+   const kept=q.last_status==='inconsistent'&&typeof q.last_detail.quarantined_at==='string'?{quarantined_at:q.last_detail.quarantined_at}:{};
+   Object.assign(q,{last_status:'inconsistent',last_detail:{...clone(d!),...kept,quarantine_id:id},next_attempt_at:new Date(Math.max(ms(patch.next_attempt_at),ms(at))).toISOString(),leased_until:null,lease_token:null,updated_at:at});
+   return {status:'quarantined',quarantine_id:id};
+  },
   async applyQuarantineOverride(judgmentId,override,quarantineId,audit){
    const o=override as unknown as Record<string,unknown>;
    if(!isObj(o)||!isObj(o.resolution)||typeof o.reason_code!=='string'||o.reason_code===''||typeof o.evidence_hash!=='string'||!HEX64.test(o.evidence_hash)
@@ -5301,15 +5636,16 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    if(item.status!=='open')return item.status==='resolved_accept'&&same(q.override,override)?'applied':'item_not_open';
    if(q.closed_at!==null)return 'closed';
    const payload=(isObj(item.payload)?item.payload:{}) as Record<string,unknown>;
-   if(q.last_status!=='inconsistent'||q.last_detail.evidence_hash!==override.evidence_hash||payload.evidence_hash!==override.evidence_hash||payload.cutoff!==override.cutoff)return 'stale';
+   if(q.last_status!=='inconsistent'||q.last_detail.evidence_hash!==override.evidence_hash||q.last_detail.cutoff!==override.cutoff||payload.evidence_hash!==override.evidence_hash||payload.cutoff!==override.cutoff)return 'stale';
    const at=now();
    Object.assign(q,{override:clone(override),next_attempt_at:at,leased_until:null,lease_token:null,updated_at:at});   // the lease is revoked (P1-04)
    await tables.update('dq_quarantine',{id:quarantineId,status:'open'},{status:'resolved_accept',resolved_by:override.resolved_by,resolved_at:at,detail:{...(item.detail as Record<string,unknown>??{}),override}});
    await tables.insert('research_audit_log',{id:randomUUID(),user_id:override.resolved_by,actor:'user',action:'dq.quarantine_resolve',object_type:'dq',object_id:quarantineId,detail:{...audit,judgment_id:judgmentId,override},created_at:at});
    return 'applied';
   },
-  async rejectQuarantinedSettlement(judgmentId,quarantineId,requestKey,row,audit){
-   if(!isObj(row)||row.kind!=='void'||typeof row.actor!=='string'||!/^admin:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(row.actor)||typeof requestKey!=='string'||!isObj(audit))fail('invalid_parameter','rejection');
+  async rejectQuarantinedSettlement(judgmentId,quarantineId,expected,requestKey,row,audit){
+   if(!isObj(row)||row.kind!=='void'||typeof row.actor!=='string'||!/^admin:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(row.actor)||typeof requestKey!=='string'||!isObj(audit)
+    ||!isObj(expected)||typeof expected.evidence_hash!=='string'||!HEX64.test(expected.evidence_hash)||typeof expected.cutoff!=='string')fail('invalid_parameter','rejection');
    const digest=operationDigest(judgmentId,row);
    const hit=settlements.find(s=>s.request_key===requestKey);
    if(hit)return {seq:hit.seq,status:hit.judgment_id===judgmentId&&hit.request_digest===digest?'already_applied':'request_key_conflict'};
@@ -5319,7 +5655,9 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    const seq=historyOfJ(judgmentId).at(-1)?.seq??0;
    if(!item||item.dataset!=='judgments'||item.natural_key!==judgmentId||item.status!=='open')return {seq,status:'item_not_open'};
    const payload=(isObj(item.payload)?item.payload:{}) as Record<string,unknown>;
-   if(q.closed_at!==null||q.last_status!=='inconsistent'||q.last_detail.evidence_hash!==payload.evidence_hash)return {seq,status:'stale'};
+   // Q1-03: the identity the hook read must still be the locked queue's AND the locked item's.
+   if(q.closed_at!==null||q.last_status!=='inconsistent'||q.last_detail.evidence_hash!==expected.evidence_hash||q.last_detail.cutoff!==expected.cutoff
+    ||payload.evidence_hash!==expected.evidence_hash||payload.cutoff!==expected.cutoff)return {seq,status:'stale'};
    const res=await appendCore(judgmentId,null,requestKey,row);
    if(res.status!=='applied')return res;
    const at=now();const by=row.actor.slice('admin:'.length);
@@ -5335,11 +5673,15 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
   },
   async freezeCalibrationCohort(generation,m,v,w){
    if(typeof generation!=='string'||!UUID.test(generation)||!w.from||!w.to||w.from>w.to)fail('invalid_parameter','window');
-   if((members.get(generation)?.length??0)>0)fail('invalid_parameter',`generation ${generation} is already frozen`);
+   // Q1-05: claim the generation first (marker cohort:<generation> in the job-state map, like the SQL); a claimed one — even empty — is reported, not refrozen.
+   const marker=`cohort:${generation}`;const claimed=jobs.get(marker);
+   if(claimed)return {status:'already_frozen',frozen_at:String(claimed.state.frozen_at),n:Number(claimed.state.n??0)};
+   const at=now();
    const list=[...judgments.values()].filter(j=>j.methodology_id===m&&j.methodology_version===v&&!j.abstained&&j.as_of>=w.from&&j.as_of<=w.to)
     .sort((a,b)=>cmp(a.judgment_id,b.judgment_id)).map((j,i)=>({judgment_id:j.judgment_id,settlement_id:historyOfJ(j.judgment_id).at(-1)?.settlement_id??null,ord:i+1}));
    members.set(generation,list);
-   return {frozen_at:now(),n:list.length};
+   jobs.set(marker,{state:{frozen_at:at,n:list.length,methodology:m,version:v,window:{from:w.from,to:w.to}},updated_at:at});
+   return {status:'frozen',frozen_at:at,n:list.length};
   },
   async cohortMembers(generation,after,limit){
    if(typeof generation!=='string'||!UUID.test(generation))fail('invalid_parameter','generation');
@@ -5349,7 +5691,7 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
   },
   async clearCalibrationGeneration(generation){
    if(typeof generation!=='string'||!UUID.test(generation))fail('invalid_parameter','generation');
-   const n=members.get(generation)?.length??0;members.delete(generation);return n;
+   const n=members.get(generation)?.length??0;members.delete(generation);jobs.delete(`cohort:${generation}`);return n;
   },
   calibrationCohort:cohort(true),
   calibrationCohortInternal:cohort(false),
@@ -5502,15 +5844,19 @@ export function pgJudgmentsDb(pool:Pool):JudgmentsDb{
    const r=await first(svc(`select public.append_settlement($1::uuid,$2::uuid,$3,$4::jsonb) v`,[judgmentId,leaseToken,requestKey,JSON.stringify(settlementArgs(judgmentId,row))])) as {seq:number;status:AppendStatus};
    return {seq:Number(r.seq),status:r.status};
   },
+  async quarantineSettlement(judgmentId,leaseToken,reasonCode,payload,patch,batchId){
+   const r=await first(svc(`select public.quarantine_settlement($1::uuid,$2::uuid,$3,$4::jsonb,$5::jsonb,$6::uuid) v`,[judgmentId,leaseToken,reasonCode,JSON.stringify(payload),JSON.stringify(patch),batchId])) as {status:'quarantined'|'lease_lost';quarantine_id:string|null};
+   return {status:r.status,quarantine_id:r.quarantine_id??null};
+  },
   async applyQuarantineOverride(judgmentId,override,quarantineId,audit){return await first(svc(`select public.apply_quarantine_override($1::uuid,$2::jsonb,$3::uuid,$4::jsonb) v`,[judgmentId,JSON.stringify(override),quarantineId,JSON.stringify(audit)])) as 'applied'|'stale'|'closed'|'item_not_open';},
-  async rejectQuarantinedSettlement(judgmentId,quarantineId,requestKey,row,audit){
-   const r=await first(svc(`select public.reject_quarantined_settlement($1::uuid,$2::uuid,$3,$4::jsonb,$5::jsonb) v`,[judgmentId,quarantineId,requestKey,JSON.stringify(settlementArgs(judgmentId,row)),JSON.stringify(audit)])) as {seq:number;status:AppendStatus|'stale'|'item_not_open'};
+  async rejectQuarantinedSettlement(judgmentId,quarantineId,expected,requestKey,row,audit){
+   const r=await first(svc(`select public.reject_quarantined_settlement($1::uuid,$2::uuid,$3::jsonb,$4,$5::jsonb,$6::jsonb) v`,[judgmentId,quarantineId,JSON.stringify(expected),requestKey,JSON.stringify(settlementArgs(judgmentId,row)),JSON.stringify(audit)])) as {seq:number;status:AppendStatus|'stale'|'item_not_open'};
    return {seq:Number(r.seq),status:r.status};
   },
   async envelopeById(id,o){const [x]=await pub(srf('judgment_envelope_by_id','$1::uuid,$2,$3::timestamptz'),[id,o.view,o.cutoff??null]);return x?envelopeFromRpc(x as Row):null;},
   async freezeCalibrationCohort(generation,m,v,w){
-   const r=await first(svc(`select public.freeze_calibration_cohort($1::uuid,$2,$3,$4::date,$5::date) v`,[generation,m,v,w.from,w.to])) as {frozen_at:string;n:number};
-   return {frozen_at:isoTs(r.frozen_at),n:Number(r.n)};
+   const r=await first(svc(`select public.freeze_calibration_cohort($1::uuid,$2,$3,$4::date,$5::date) v`,[generation,m,v,w.from,w.to])) as {status:'frozen'|'already_frozen';frozen_at:string;n:number};
+   return {status:r.status,frozen_at:isoTs(r.frozen_at),n:Number(r.n)};
   },
   async cohortMembers(generation,after,limit){return (await svc(srf('calibration_cohort_members','$1::uuid,$2::uuid,$3'),[generation,after,limit])).map(x=>envelopeFromRpc(x as Row));},
   async clearCalibrationGeneration(generation){return Number(await first(svc(`select public.clear_calibration_generation($1::uuid) v`,[generation])));},
@@ -5545,7 +5891,7 @@ export function pgJudgmentsDb(pool:Pool):JudgmentsDb{
 - [ ] **Step 6: 运行单元测试，确认通过**
 
 Run: `npm test -- src/lib/judgments/db.test.ts`
-Expected: PASS（内存契约 17 个用例 + 内存专属 3 个 + 转移表 1 个 + supabase 桩 4 个）。
+Expected: PASS（内存契约 18 个用例 + 内存专属 3 个 + 转移表 1 个 + supabase 桩 4 个）。
 
 - [ ] **Step 7: pg 集成测试进 `criticalSuites`，运行**
 
@@ -5558,7 +5904,7 @@ Expected: PASS（内存契约 17 个用例 + 内存专属 3 个 + 转移表 1 �
 ```
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/judgments/judgments-db.integration.test.ts src/lib/judgments/judgments.integration.test.ts`
-Expected: PASS（pg 契约 17 个 + 并发 5 个；同时跑 Task 2/3 的 28 个，证明领取锁让两个文件并行时互不领走对方的行）。
+Expected: PASS（pg 契约 18 个 + 并发 5 个；同时跑 Task 2/3 的 30 个，证明领取锁让两个文件并行时互不领走对方的行）。
 
 Run: `npx tsx -e "import('./scripts/ci/research-checks.ts').then(m=>{m.verifyCriticalSuiteInventory();console.log('inventory ok')})"`
 Expected: `inventory ok`。
@@ -10721,7 +11067,7 @@ export function planOf(q:QueueRow,now:string):SettlePlan;          // P1-03: cut
 export function backoff(kind:'pending'|'unavailable'|'inconsistent'|'error',x:{now:string;attempts:number;settleBy:string;estimatedAt?:string|null}):string;
 export function predicateHolds(p:Condition['predicate'],v:number|string|boolean):boolean;
 export const REVIEW_WINDOW_DAYS=7;
-export function reviewDeadline(q:QueueRow):string;   // max(settle_by, last_detail.quarantined_at + REVIEW_WINDOW_DAYS)
+export function reviewDeadline(q:QueueRow):string;   // max(settle_by, last_detail.quarantined_at + REVIEW_WINDOW_DAYS); quarantined_at = first quarantine of the unresolved incident; expired ⇔ now >= deadline (Q1-01)
 export const isUnresolvedInconsistency:(q:QueueRow,now:string,plan:Pick<SettlePlan,'viaOverride'|'overrideDiscarded'>)=>boolean;
 export function decide(x:DecideInput):Decision;
 export interface SettleContext{deps:SettleDeps;batchId:string|null;now:string;signal:AbortSignal;preview:boolean}
@@ -10736,7 +11082,8 @@ export function runSettle(deps:SettleDeps,opts?:SettleOptions):Promise<SettleRec
 规格偏差（记入实施记录）：
 - **`planOf` 与 `cutoff_vintage`**（规格第 7 稿 §7.2，计划审计 P1-03）：`cutoff_vintage` 在 `now < settle_by` 时**不调用 resolver**（也不用 override），直接 `defer` 到 `settle_by`；之后 `cutoff = settle_by`，队列 override 只在 `override.cutoff = settle_by` 时使用，否则丢弃并重新解析一次（重新解析仍不一致且已过 `settle_by` → `void(unresolved_inconsistency)`，不再开新的复核窗口）。override 只匹配它被接受时的那次不一致（`reason_code` 与 `evidence_hash` 都相同，P1-04）。**已知后果（交 owner）**：`cutoff_vintage` 的解析只在 `settle_by` 当时及之后发生，于是它的 `Inconsistent` 在下一次运行（`now > settle_by`）就会 `void(unresolved_inconsistency)`，管理员几乎没有复核窗口；v1 唯一的 `cutoff_vintage` resolver（`macro_regime_replay`）不返回 `Inconsistent`，所以 v1 不受影响；将来把 `cutoff_vintage` 与会返回 `Inconsistent` 的 resolver 组合的方法，需要在规格里另定复核窗口。
 - **截止可得性**（计划审计 P1-07）：`Resolved` 还要求 `label_available_at ≤ cutoff`；否则 `defer(label_after_cutoff)`，按 `pending` 公式退避到标签时刻（`first_observed` 的 `cutoff = now`；`cutoff_vintage` 的 `cutoff = settle_by` 已被"晚于 `settle_by` → `void(no_data:late)`"覆盖）。
-- **隔离项负载刷新**（计划审计 P1-04）：`quarantine()` 复用同键同原因的未结项而不改其负载；结算在 `quarantine()` 之后把该未结项的 `payload` 更新为本次不一致（含 `cutoff`），使裁决看到的证据哈希与队列 `last_detail.evidence_hash` 一致。
+- **隔离发布 = 一次 `quarantineSettlement`**（计划审计 P1-04 → Q1-02）：不再 `quarantine()` + 刷新 payload + `releaseLease` 三次写；Task 3 的 `quarantine_settlement` 在一个事务里锁队列、校验租约、按 `quarantine()` 语义复用 / 新建 open 项并把 payload 刷新为本次不一致（含 `cutoff`）、发布队列状态。过期 worker 在替代者之后刷新 → `lease_lost`（计 `deferred`，什么都不写）；两次写之间崩溃的窗口不存在。`settle.ts` 不再 import `quarantine()`，也不直接写 `dq_quarantine`。
+- **复核期从第一次隔离起算**（计划审计 Q1-01，指挥决策）：队列已是 `inconsistent` 时再次隔离（同一或不同证据）保留 `last_detail.quarantined_at`；只有 override 结算、拒绝作废或 `reopened` 清掉状态后才开始新事件。`reviewDeadline = max(settle_by, quarantined_at + 7 天)`，到期判定含边界（`now >= deadline`），`inconsistent` 退避 `min(deadline, now + 7 天)` 恰好落在截止、绝不晚于它。
 - **退避不越过 `settle_by`**：`pending / unavailable / error` 的 §5.4 公式结果若晚于 `settle_by`（且 `settle_by` 仍在将来），夹紧到 `settle_by`，使 `cutoff_vintage` 的截止重取与 `void(no_data)` 准时发生；`inconsistent` 本来就是 `min(settle_by, now + 7 天)`。任何结果最后再 `max(·, now)`（"不设成过去的时刻"）。`unavailable` 的 `attempts` 取本次之后的值（第一次失败退 1 天）。
 - **resolver 抛错**：队列 `last_status='error'`、`attempts + 1`、按 `unavailable` 公式退避；计 `failed`，`errors` 加非信息码 `resolver_failed`（全部抛错 → 批次 `failed`，连续两次 → `dq_freshness` `error`，验收样例 6）。
 - **`lease_lost` 计入 `deferred`**：该条由别的 worker 持有、会被它处理，计数器需要一个"有去向"的格子（`accounted()` 计 `deferred`），否则全是 `lease_lost` 的运行会被判 `unaccounted`；信息码 `lease_lost` 带 `key`。
@@ -10974,7 +11321,7 @@ import type {CompensationReport} from './compensate';
 import {JudgmentError} from './errors';
 import {memoryJudgmentsDb} from './memory-judgments-db';
 import {priceReturnResolverWith} from './resolvers/price';
-import {BATCH_SIZE,DAY_MS,LEASE_SECONDS,STALE_BATCH_SECONDS,backoff,planOf,predicateHolds,runSettle,settleNow} from './settle';
+import {BATCH_SIZE,DAY_MS,LEASE_SECONDS,REVIEW_WINDOW_DAYS,STALE_BATCH_SECONDS,backoff,decide,isUnresolvedInconsistency,planOf,predicateHolds,reviewDeadline,runSettle,settleNow} from './settle';
 import type {SettleDeps} from './settle';
 import {TEST_CODE_VERSION,fixtureKline,loadKlineFixture,priceJudgment,stubInputsDb,stubResolver,testMethodologyRow,truncateFixture,verifiedCapability,withOverrides} from './testing/fixtures';
 import type {KlineFixture,PriceJudgmentSpec} from './testing/fixtures';
@@ -11130,7 +11477,30 @@ describe('settle state machine (spec §7.2)',()=>{
   expect(after).toHaveLength(1);
   // P1-04: the reused open item now carries THIS inconsistency, matching the queue
   expect(after[0].payload).toMatchObject({evidence:{bars:[4,5,6]},evidence_hash:'d'.repeat(64),cutoff:at(T0,7*DAY_MS)});
-  expect(await h.queue(id)).toMatchObject({last_detail:{evidence_hash:'d'.repeat(64)}});
+  // Q1-01: same unresolved incident → quarantined_at stays T0; deadline max(settle_by, T0 + 7 d) = settle_by; backoff min(deadline, now + 7 d)
+  expect(await h.queue(id)).toMatchObject({last_detail:{evidence_hash:'d'.repeat(64),quarantined_at:T0},next_attempt_at:at(T0,14*DAY_MS)});
+ });
+ it('a quarantine is ONE quarantineSettlement call under the claimed lease — settle.ts writes no item and no separate release; lease_lost there is deferred (Q1-02)',async()=>{
+  const h=await harness();const id=await h.register();
+  const qs=vi.fn<JudgmentsDb['quarantineSettlement']>(async()=>({status:'quarantined',quarantine_id:'00000000-0000-4000-8000-0000000000aa'}));
+  const release=vi.fn(h.db.releaseLease.bind(h.db));
+  const db=withOverrides<JudgmentsDb>(h.db,{quarantineSettlement:qs,releaseLease:release});
+  const r=await runSettle(h.deps(stubResolver(scripted(INC)),{db}));
+  expect(r.counts.quarantined).toBe(1);
+  expect(qs).toHaveBeenCalledTimes(1);
+  const [jid,token,reason,payload,patch,batch]=qs.mock.calls[0];
+  expect({jid,reason,batch}).toEqual({jid:id,reason:'settlement_basis_mismatch',batch:r.batchId});
+  expect(typeof token).toBe('string');
+  expect(payload).toMatchObject({evidence_hash:'e'.repeat(64),cutoff:T0,judgment_id:id,evidence:{bars:[1,2,3]}});
+  expect(patch).toEqual({last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:'e'.repeat(64),cutoff:T0,quarantined_at:T0},next_attempt_at:at(T0,7*DAY_MS),attempts_increment:0});
+  expect(release).not.toHaveBeenCalled();
+  expect(h.tables.rows('dq_quarantine')).toEqual([]);                                         // nothing written outside the one RPC: no crash window
+  const h2=await harness();await h2.register();
+  const lost=withOverrides<JudgmentsDb>(h2.db,{quarantineSettlement:async()=>({status:'lease_lost' as const,quarantine_id:null})});
+  const r2=await runSettle(h2.deps(stubResolver(scripted(INC)),{db:lost}));
+  expect(r2.counts).toMatchObject({quarantined:0,deferred:1});
+  expect(r2.errors).toContainEqual(expect.objectContaining({code:'lease_lost'}));
+  expect(h2.tables.rows('dq_quarantine')).toEqual([]);
  });
  it('an override matching the queued inconsistency settles through fromOverride without calling resolve',async()=>{
   const h=await harness();const id=await h.register();
@@ -11158,16 +11528,34 @@ describe('settle state machine (spec §7.2)',()=>{
   expect(r.errors).toContainEqual({code:'voided_summary',message:JSON.stringify({unresolved_inconsistency:1})});
   expect(h.tables.rows('dq_quarantine')[0]).toMatchObject({status:'open'});
  });
- it('an inconsistency quarantined at settle_by keeps a 7-day review window before the unresolved void',async()=>{
+ it('an inconsistency quarantined past settle_by keeps a 7-day review window from its FIRST quarantine: repeats inside the window keep the deadline, the backoff lands on it, and the void happens exactly at it (Q1-01)',async()=>{
   const h=await harness();const id=await h.register();
   h.db.setNow(AFTER);                                   // first resolution happens past settle_by (e.g. cutoff_vintage)
   await runSettle(h.deps(stubResolver(scripted(INC))));
   expect(await h.settlements(id)).toEqual([]);          // quarantined, not voided
-  h.db.setNow(new Date(Date.parse(AFTER)+6*86_400_000).toISOString());
-  await runSettle(h.deps(stubResolver(scripted(INC))));
-  expect(await h.settlements(id)).toEqual([]);          // still inside the review window
-  h.db.setNow(new Date(Date.parse(AFTER)+8*86_400_000).toISOString());
-  await runSettle(h.deps(stubResolver(scripted(resolved()))));
+  const deadline=at(AFTER,REVIEW_WINDOW_DAYS*DAY_MS);
+  const q1=(await h.queue(id))!;
+  expect(q1).toMatchObject({last_status:'inconsistent',next_attempt_at:deadline,last_detail:{quarantined_at:AFTER}});
+  expect(reviewDeadline(q1)).toBe(deadline);
+  // Repeats inside the window — identical evidence or another inconsistency — keep quarantined_at and the deadline.
+  const j=(await h.db.getJudgment(id))!;const meta={name:'price_return' as const,version:'stub/1'};
+  const day6=at(AFTER,6*DAY_MS);
+  for(const r of [INC,{...INC,evidence:{bars:[9]},evidence_hash:'d'.repeat(64)} as ResolverResult]){
+   const d=decide({judgment:j,queue:q1,resolver:meta,result:r,now:day6,cutoff:day6,viaOverride:false});
+   expect(d).toMatchObject({action:'quarantine',patch:{last_detail:{quarantined_at:AFTER,cutoff:day6},next_attempt_at:deadline}});
+  }
+  // A new incident (the queue left 'inconsistent', e.g. after a reopen) starts a fresh window.
+  expect(decide({judgment:j,queue:{...q1,last_status:null,last_detail:{}},resolver:meta,result:INC,now:day6,cutoff:day6,viaOverride:false}))
+   .toMatchObject({action:'quarantine',patch:{last_detail:{quarantined_at:day6},next_attempt_at:at(day6,7*DAY_MS)}});
+  // The boundary is inclusive: 1 ms before → still reviewable; at the deadline → unresolved.
+  const none={viaOverride:false,overrideDiscarded:false};
+  expect(isUnresolvedInconsistency(q1,at(deadline,-1),none)).toBe(false);
+  expect(isUnresolvedInconsistency(q1,deadline,none)).toBe(true);
+  // The cron run scheduled at exactly the deadline voids without reading.
+  h.db.setNow(deadline);
+  const resolve=scripted(INC);
+  await runSettle(h.deps(stubResolver(resolve)));
+  expect(resolve).not.toHaveBeenCalled();
   expect((await h.settlements(id))[0]).toMatchObject({kind:'void',reason:'unresolved_inconsistency'});
  });
 });
@@ -11367,17 +11755,17 @@ Expected: FAIL —— `Failed to resolve import "./settle"`。
 // AbortSignal (external abort ∪ the 280 s deadline) reaches every resolver / provider call.
 // settleOne applies the §7.2 state machine through the pure decide(): exactly one of settle / void (append_settlement
 // under the lease token, request_key `<batch_id>:<judgment_id>:<expected seq>`), defer (release_lease with the §5.4
-// backoff, clamped to settle_by and never in the past) or quarantine (dq_quarantine item with the full evidence +
-// release as inconsistent). A queued override matching the queued inconsistency (reason_code + evidence_hash; for
-// cutoff_vintage also override.cutoff = settle_by) settles from resolver.fromOverride (no reads); cutoff_vintage
-// rows never resolve before settle_by (planOf, P1-03); a still-inconsistent row past settle_by voids as
-// unresolved_inconsistency. Counters (§7.5): fetched
+// backoff, clamped to settle_by and never in the past) or quarantine (ONE lease-checked quarantine_settlement RPC: the
+// dq_quarantine item with the full evidence and the inconsistent queue state in one transaction, plan audit Q1-02). A
+// queued override matching the queued inconsistency (reason_code + evidence_hash; for cutoff_vintage also override.cutoff
+// = settle_by) settles from resolver.fromOverride (no reads); cutoff_vintage rows never resolve before settle_by
+// (planOf, P1-03); a row still inconsistent at its review deadline (max(settle_by, first quarantined_at + 7 d),
+// inclusive; Q1-01) voids as unresolved_inconsistency. Counters (§7.5): fetched
 // claimed, inserted settled, versioned void, duplicates already_final, quarantined, failed resolver errors, deferred
 // pending / unavailable / lease_lost. preview=true lists the due queue without claiming and reports the decisions.
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '../dq/batches';
 import {recordAttempt} from '../dq/freshness';
-import {quarantine} from '../dq/quarantine';
 import type {TableClient} from '../db/table-client';
 import {COMPENSATION_BUDGET_MS,compensateMacro} from './compensate';
 import type {CompensateDeps,CompensationReport} from './compensate';
@@ -11457,7 +11845,10 @@ export function predicateHolds(p:Condition['predicate'],v:number|string|boolean)
 }
 /** Commander decision (plan audit round 1 follow-up): a quarantined inconsistency always gets an admin review window of
  *  REVIEW_WINDOW_DAYS after it was quarantined, even when quarantined at or near settle_by (cutoff_vintage resolves only at
- *  settle_by). The settlement cutoff is unchanged; only the void deadline moves. Spec 7th draft §5.4/§7.2. */
+ *  settle_by). The settlement cutoff is unchanged; only the void deadline moves. Spec 7th draft §5.4/§7.2.
+ *  Plan audit Q1-01: quarantined_at is the FIRST quarantine of the unresolved incident (a repeat while the queue is still
+ *  inconsistent keeps it; only an override / reject / reopen clearing the state starts a new incident), so the deadline
+ *  cannot move; expiry is inclusive (now >= deadline) and the inconsistent backoff lands exactly on the deadline. */
 export const REVIEW_WINDOW_DAYS=7;
 export function reviewDeadline(q:QueueRow):string{
  const at=typeof q.last_detail.quarantined_at==='string'?Date.parse(q.last_detail.quarantined_at):Number.NaN;
@@ -11465,7 +11856,7 @@ export function reviewDeadline(q:QueueRow):string{
  return new Date(Math.max(Date.parse(q.settle_by),win)).toISOString();
 }
 /** A row still inconsistent past its review deadline with no usable override voids without a read; a discarded (wrong-cutoff) override re-resolves once instead. */
-export const isUnresolvedInconsistency=(q:QueueRow,now:string,plan:Pick<SettlePlan,'viaOverride'|'overrideDiscarded'>)=>!plan.viaOverride&&!plan.overrideDiscarded&&q.last_status==='inconsistent'&&now>reviewDeadline(q);
+export const isUnresolvedInconsistency=(q:QueueRow,now:string,plan:Pick<SettlePlan,'viaOverride'|'overrideDiscarded'>)=>!plan.viaOverride&&!plan.overrideDiscarded&&q.last_status==='inconsistent'&&now>=reviewDeadline(q);
 
 /** The §7.2 table as a pure function; result=null when the resolver was not called (cutoff_vintage before settle_by, or
  *  the unresolved-inconsistency row). */
@@ -11503,11 +11894,15 @@ export function decide(x:DecideInput):Decision{
    next_attempt_at:backoff('unavailable',{now,attempts:q.attempts+1,settleBy}),attempts_increment:1}};
  }
  // A re-resolution after a discarded (wrong-cutoff) override that is inconsistent again past settle_by gets no new review window.
- if(x.overrideDiscarded===true&&now>reviewDeadline(q))
+ if(x.overrideDiscarded===true&&now>=reviewDeadline(q))
   return voided('unresolved_inconsistency',{reason_code:r.reason_code,quarantine_id:q.last_detail.quarantine_id??null,settle_by:settleBy,override_discarded:true});
  // cutoff in the payload and last_detail: an acceptance is bound to the cutoff this evidence was resolved at (P1-03).
+ // Q1-01: a repeat inside the unresolved incident keeps the first quarantined_at, so the deadline never moves; the
+ // backoff is min(deadline, now + 7 d) — exactly the deadline at the latest.
+ const quarantinedAt=q.last_status==='inconsistent'&&typeof q.last_detail.quarantined_at==='string'?q.last_detail.quarantined_at:now;
+ const deadline=reviewDeadline({...q,last_detail:{...q.last_detail,quarantined_at:quarantinedAt}});
  return {action:'quarantine',reasonCode:r.reason_code,payload:{...r.detail,evidence:r.evidence,evidence_hash:r.evidence_hash,judgment_id:j.judgment_id,cutoff:x.cutoff},
-  patch:{last_status:'inconsistent',last_detail:{reason_code:r.reason_code,evidence_hash:r.evidence_hash,cutoff:x.cutoff,quarantined_at:now},next_attempt_at:backoff('inconsistent',{now,attempts:q.attempts,settleBy:new Date(Math.max(Date.parse(settleBy),Date.parse(now)+REVIEW_WINDOW_DAYS*DAY_MS)).toISOString()}),attempts_increment:0}};
+  patch:{last_status:'inconsistent',last_detail:{reason_code:r.reason_code,evidence_hash:r.evidence_hash,cutoff:x.cutoff,quarantined_at:quarantinedAt},next_attempt_at:backoff('inconsistent',{now,attempts:q.attempts,settleBy:deadline}),attempts_increment:0}};
 }
 
 export interface SettleContext{deps:SettleDeps;batchId:string|null;now:string;signal:AbortSignal;preview:boolean}
@@ -11531,7 +11926,7 @@ function planned(id:string,d:Decision):SettleItem{
  return d.action==='defer'?item(id,'deferred',d.reason):item(id,'quarantined',d.reasonCode);
 }
 async function apply(ctx:SettleContext,j:JudgmentRow,q:QueueRow,d:Decision,latestSeq:number):Promise<SettleOutcome>{
- const {db,tables}=ctx.deps,id=j.judgment_id;
+ const {db}=ctx.deps,id=j.judgment_id;
  try{
   if(d.action==='append'){
    const res=await db.appendSettlement(id,q.lease_token,`${ctx.batchId}:${id}:${latestSeq+1}`,{...d.row,actor:ctx.deps.actor,code_version:ctx.deps.codeVersion,batch_id:ctx.batchId!});
@@ -11544,11 +11939,11 @@ async function apply(ctx:SettleContext,j:JudgmentRow,q:QueueRow,d:Decision,lates
    await db.releaseLease(id,q.lease_token!,d.patch);
    return {item:item(id,'deferred',d.reason),counter:'deferred',summary:{kind:d.summary,reason:d.reason},errors:[]};
   }
-  const quarantineId=await quarantine(tables,{dataset:'judgments',table:'judgment_settlements',naturalKey:id,reasonCode:d.reasonCode,payload:d.payload,batchId:ctx.batchId!});
-  // quarantine() reuses an OPEN item with the same key and reason and keeps its old payload: refresh it to THIS
-  // inconsistency so an acceptance names the evidence the queue now holds (plan audit P1-04).
-  await tables.update('dq_quarantine',{id:quarantineId,status:'open'},{payload:d.payload});
-  await db.releaseLease(id,q.lease_token!,{...d.patch,last_detail:{...d.patch.last_detail,quarantine_id:quarantineId}});
+  // Q1-02: ONE lease-checked RPC upserts the open item (quarantine() semantics: same key + reason reused, payload refreshed
+  // to THIS inconsistency) and publishes the queue state; a stale worker gets lease_lost and writes nothing, and there is
+  // no second write to crash before.
+  const r=await db.quarantineSettlement(id,q.lease_token!,d.reasonCode,d.payload,d.patch,ctx.batchId!);
+  if(r.status==='lease_lost')return leaseLost(id);
   return {item:item(id,'quarantined',d.reasonCode),counter:'quarantined',summary:null,errors:[{code:d.reasonCode,key:id}]};
  }catch(e){
   if(isLeaseLost(e))return leaseLost(id);
@@ -11697,7 +12092,7 @@ export async function runSettle(deps:SettleDeps,opts:SettleOptions={}):Promise<S
 - [ ] **Step 8: 运行，确认通过**
 
 Run: `npm test -- src/lib/judgments/settle.test.ts src/lib/judgments/compensate.test.ts`
-Expected: PASS（`settle.test.ts` 28 项、`compensate.test.ts` 7 项）。override 用例依赖 Task 4 的 `applyQuarantineOverride` 只写 `override / next_attempt_at` 并清空租约、不改 `last_status / last_detail`（规格 §5.6，计划审计 P1-04）；若内存实现改了它们，按规格修 Task 4 的内存实现，不改本用例。
+Expected: PASS（`settle.test.ts` 29 项、`compensate.test.ts` 7 项）。override 用例依赖 Task 4 的 `applyQuarantineOverride` 只写 `override / next_attempt_at` 并清空租约、不改 `last_status / last_detail`（规格 §5.6，计划审计 P1-04）；若内存实现改了它们，按规格修 Task 4 的内存实现，不改本用例。
 
 - [ ] **Step 9: 类型检查与 lint**
 
@@ -12249,7 +12644,7 @@ export async function GET(request:Request):Promise<NextResponse>;export async fu
 
 规格偏差（记入实施记录）：
 - **`code_version` 缺失**：规格 §13 的 `code_version_missing → rejected` 针对登记批次；结算 cron 沿用 facts-sync 先例在路由层拒绝（503 `code_version_unavailable`，不建批次）。`preview=1` 不写库，以 `'preview'` 作代码版本运行。
-- **隔离钩子的 `reject`** 先看该判断最新结算：已是终态（例如到 `settle_by` 已被 `unresolved_inconsistency` 作废）就不再追加（`void → void` 是非法转移），只翻转隔离项（路由审计）；否则经**一个** RPC `rejectQuarantinedSettlement`（计划审计 P1-05：锁队列 → 锁隔离项 → 校验 → `void(quarantine_rejected)` → 项 `resolved_reject` → 审计，同一事务；`request_key = quarantine-reject:<item id>`，在一个 `triggered_by='manual'` 的 `judgments.settle` 批次里），不再"先追加、再翻转"。`accept` 经 `applyQuarantineOverride`（P1-04：同样锁队列再锁项，只接受队列**当前**那次不一致，并吊销在途租约）。两者都在 RPC 内写 `research_audit_log`，所以路由对它们不再审计（`audited=true`）；RPC 报 `stale`（队列已换成另一次不一致或已关闭）→ 结果 `stale`（409，不写任何行）、`item_not_open` → `already_resolved`。普通项由路由审计（与 facts 一致）。
+- **隔离钩子的 `reject`** 先看该判断最新结算：已是终态（例如到 `settle_by` 已被 `unresolved_inconsistency` 作废）就不再追加（`void → void` 是非法转移），只翻转隔离项（路由审计）；否则经**一个** RPC `rejectQuarantinedSettlement`（计划审计 P1-05：锁队列 → 锁隔离项 → 校验 → `void(quarantine_rejected)` → 项 `resolved_reject` → 审计，同一事务；`request_key = quarantine-reject:<item id>`，在一个 `triggered_by='manual'` 的 `judgments.settle` 批次里），不再"先追加、再翻转"。`accept` 经 `applyQuarantineOverride`（P1-04：同样锁队列再锁项，只接受队列**当前**那次不一致，并吊销在途租约）。两者都在 RPC 内写 `research_audit_log`，所以路由对它们不再审计（`audited=true`）；RPC 报 `stale`（队列已换成另一次不一致或已关闭）→ 结果 `stale`（409，不写任何行）、`item_not_open` → `already_resolved`。拒绝带钩子读到的 `payload.evidence_hash / cutoff` 作 `expected`（计划审计 Q1-03：读后 worker 刷新了队列与项 → RPC 报 `stale`），项缺任一 → `invalid_resolution`；接受的 `override.evidence_hash / cutoff` 本来就取自同一次读取。普通项由路由审计（与 facts 一致）。
 - **`override.cutoff`**（计划审计 P1-03）取自隔离项 `payload.cutoff`（结算写入的解析截止）；缺失 → `invalid_resolution`。
 - **离线集成用一个手建的方法行** `synthetic_price_return@v1`（`judgment_type` 借用测试专用的 `synthetic_fact_metric`）经 `syncMethodology` 登记——合成 `fact_metric` 方法（Task 13）只覆盖事实结算，本测试要的是 K 线夹具上的 `price_return` 生命周期；`acceptance 5` 的卡片 `lifecycle='withdrawn'` 由 Task 17/18 断言，这里断言证据序列与 `validity.revision` 两次 `+1`。
 - **共享库隔离**：`test:db` 的库被多个套件共用，集成测试用包装的 `claimDue` 只处理本文件登记的判断，别的套件的到期行原样释放。
@@ -12363,9 +12758,11 @@ Expected: PASS（3 项）。
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import {digest} from '../judgments/canonical';
+import {memoryJudgmentsDb} from '../judgments/memory-judgments-db';
 import {PRICE_RESOLVER_VERSION} from '../judgments/resolvers/price';
-import {priceJudgment} from '../judgments/testing/fixtures';
+import {priceJudgment,testMethodologyRow} from '../judgments/testing/fixtures';
 import type {JudgmentsDb,SettlementRow} from '../judgments/types';
+import {startBatch} from './batches';
 import {resolveJudgmentsItem} from './judgments-resolver';
 
 const ITEM='3f2b6c1e-8a4d-4f0e-9b7a-1c2d3e4f5a6b',ADMIN='9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d',SHA='a'.repeat(40);
@@ -12434,20 +12831,23 @@ describe('resolveJudgmentsItem',()=>{
   }
   expect(db.applyQuarantineOverride).not.toHaveBeenCalled();
  });
- it('reject → ONE rejectQuarantinedSettlement RPC (void(quarantine_rejected) as admin:<id>, request_key quarantine-reject:<item>, item flip and audit in one transaction) in a manual judgments.settle batch (P1-05)',async()=>{
-  const row=await item('settlement_benchmark_gap',{missing_dates:['2026-01-14'],evidence_hash:H});
+ it('reject → ONE rejectQuarantinedSettlement RPC (void(quarantine_rejected) as admin:<id>, request_key quarantine-reject:<item>, bound to the evidence identity read from the item, item flip and audit in one transaction) in a manual judgments.settle batch (P1-05, Q1-03)',async()=>{
+  const row=await item('settlement_benchmark_gap',{missing_dates:['2026-01-14'],evidence_hash:H,cutoff:CUTOFF});
   const r=await run(row,'resolved_reject');
   expect(r).toEqual({outcome:'resolved',audited:true,judgmentId:J.judgment_id,resolution:'quarantine_rejected',seq:1});
-  expect(db.rejectQuarantinedSettlement).toHaveBeenCalledWith(J.judgment_id,ITEM,`quarantine-reject:${ITEM}`,expect.objectContaining({
+  expect(db.rejectQuarantinedSettlement).toHaveBeenCalledWith(J.judgment_id,ITEM,{evidence_hash:H,cutoff:CUTOFF},`quarantine-reject:${ITEM}`,expect.objectContaining({
    kind:'void',outcome:null,realized:null,reason:'quarantine_rejected',actor:`admin:${ADMIN}`,resolver:'price_return',resolver_version:PRICE_RESOLVER_VERSION,code_version:SHA,
    evidence:{quarantine_id:ITEM,reason_code:'settlement_benchmark_gap',evidence_hash:H}}),expect.objectContaining({action:'dq.quarantine_resolve',user_id:ADMIN,object_id:ITEM}));
   expect(db.appendSettlement).not.toHaveBeenCalled();
-  const batchId=db.rejectQuarantinedSettlement.mock.calls[0][3].batch_id;
+  const batchId=db.rejectQuarantinedSettlement.mock.calls[0][4].batch_id;
   expect((await tables.select('ingest_batches',{batch_id:batchId},{limit:1}))[0]).toMatchObject({dataset:'judgments.settle',producer:'ts-judgments',triggered_by:'manual',status:'success',counts:expect.objectContaining({fetched:1,versioned:1})});
   expect((await stored()).status).toBe('open');                                              // the RPC flips the item; the hook never does it separately
  });
- it('reject: the RPC answering stale → stale (nothing written), item_not_open → already_resolved (P1-05)',async()=>{
-  const row=await item('settlement_benchmark_gap',{missing_dates:['2026-01-14'],evidence_hash:H});
+ it('reject: the RPC answering stale → stale (nothing written), item_not_open → already_resolved; an item without evidence_hash / cutoff → invalid_resolution (P1-05, Q1-03)',async()=>{
+  const bare=await item('settlement_benchmark_gap',{missing_dates:['2026-01-14'],evidence_hash:H});
+  expect((await run(bare,'resolved_reject')).outcome).toBe('invalid_resolution');
+  expect(db.rejectQuarantinedSettlement).not.toHaveBeenCalled();
+  const row={...bare,payload:{missing_dates:['2026-01-14'],evidence_hash:H,cutoff:CUTOFF}};
   db.rejectQuarantinedSettlement.mockResolvedValueOnce({seq:0,status:'stale'});
   expect(await run(row,'resolved_reject')).toMatchObject({outcome:'stale',audited:false,seq:null});
   db.rejectQuarantinedSettlement.mockResolvedValueOnce({seq:0,status:'item_not_open'});
@@ -12460,6 +12860,24 @@ describe('resolveJudgmentsItem',()=>{
   expect(await run(row,'resolved_reject')).toMatchObject({outcome:'resolved',resolution:'quarantine_rejected',seq:1});
   expect(db.appendSettlement).not.toHaveBeenCalled();expect(db.rejectQuarantinedSettlement).not.toHaveBeenCalled();
   expect((await stored()).status).toBe('resolved_reject');
+ });
+ it('hook read → worker refresh → reject: the real RPC sees the refreshed queue and item and answers stale; nothing is written (Q1-03)',async()=>{
+  const t=memoryTableClient({dq_quarantine:['id'],ingest_batches:['batch_id'],research_audit_log:['id']});
+  const mdb=memoryJudgmentsDb({tables:t});mdb.setNow(CUTOFF);
+  await mdb.syncMethodology(testMethodologyRow(),'script',null);
+  const {batchId}=await startBatch(t,{producer:'ts-judgments',dataset:'judgments.settle',codeVersion:SHA});
+  const {insert,queue}=priceJudgment({baseDate:'2026-01-12',registeredClose:107,batchId});await mdb.registerJudgment(insert,queue);
+  const id=insert.judgment_id;
+  const patch=(hash:string,cutoff:string)=>({last_status:'inconsistent' as const,last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:hash,cutoff,quarantined_at:cutoff},next_attempt_at:'2000-01-01T00:00:00.000Z',attempts_increment:0 as const});
+  const lease=async()=>(await mdb.claimDue(10,600)).find(q=>q.judgment_id===id)!.lease_token!;
+  const first=await mdb.quarantineSettlement(id,await lease(),'settlement_basis_mismatch',{evidence:EVIDENCE,evidence_hash:H,cutoff:CUTOFF,judgment_id:id},patch(H,CUTOFF),batchId);
+  const read=(await t.select('dq_quarantine',{id:first.quarantine_id!},{limit:1}))[0];          // the route loads the item: (H, CUTOFF)
+  const H2='f'.repeat(64),C2='2026-03-03T04:00:00.000Z';
+  expect(await mdb.quarantineSettlement(id,await lease(),'settlement_basis_mismatch',{evidence:{bars:[]},evidence_hash:H2,cutoff:C2,judgment_id:id},patch(H2,C2),batchId)).toEqual({status:'quarantined',quarantine_id:first.quarantine_id});
+  const r=await resolveJudgmentsItem({db:mdb,tables:t,codeVersion:SHA,now:()=>NOW},read,{status:'resolved_reject',resolvedBy:ADMIN});
+  expect(r).toMatchObject({outcome:'stale',audited:false,seq:null});
+  expect(await mdb.settlementsOf([id])).toEqual([]);
+  expect((await t.select('dq_quarantine',{id:first.quarantine_id!},{limit:1}))[0].status).toBe('open');
  });
  it('reject without a code version → code_version_unavailable, nothing written',async()=>{
   const row=await item('settlement_basis_mismatch',{evidence:EVIDENCE,evidence_hash:H});
@@ -12505,8 +12923,9 @@ Expected: FAIL —— `Failed to resolve import "./judgments-resolver"`。
 // queue's CURRENT inconsistency, revokes any lease, flips the item and writes research_audit_log in ONE transaction
 // (audited=true: the route must not audit again); override.cutoff = payload.cutoff (P1-03). Reject of a settlement
 // item = reject_quarantined_settlement: void(quarantine_rejected) as admin:<id> (request_key quarantine-reject:<item
-// id>, a manual judgments.settle batch) + item flip + audit in ONE transaction (plan audit P1-05), unless the
-// judgment is already final (then a plain flip). RPC 'stale' / 'closed' → stale (nothing written); 'item_not_open' →
+// id>, a manual judgments.settle batch) + item flip + audit in ONE transaction (plan audit P1-05), bound to the
+// payload's evidence_hash / cutoff read here (Q1-03: a worker refresh in between → stale; an item without them →
+// invalid_resolution), unless the judgment is already final (then a plain flip). RPC 'stale' / 'closed' → stale (nothing written); 'item_not_open' →
 // already_resolved. Other judgments reasons (idempotency_conflict on table judgments) are a plain resolveQuarantine.
 import type {Row,TableClient} from '../db/table-client';
 import {digest} from '../judgments/canonical';
@@ -12537,13 +12956,13 @@ export async function resolveJudgmentsItem(deps:JudgmentsResolveDeps,item:Row,in
  if(!judgment||!judgment.condition)return result('unknown_judgment');
  const payload=isObj(item.payload)?item.payload:{};
  const evidenceHash=typeof payload.evidence_hash==='string'?payload.evidence_hash:null;
+ const cutoff=typeof payload.cutoff==='string'?payload.cutoff:null;   // the resolution cutoff of this inconsistency (P1-03)
  const jid=judgment.judgment_id;
  const audit=(extra:Record<string,unknown>)=>({action:'dq.quarantine_resolve',user_id:input.resolvedBy,object_id:id,
   detail:{id,status:input.status,outcome:'resolved',reason_code:reason,judgment_id:jid,evidence_hash:evidenceHash,...extra}});
  if(input.status==='resolved_accept'){
   if(REJECT_ONLY.includes(reason))return result('resolution_not_applicable');
   const res=input.resolution;
-  const cutoff=typeof payload.cutoff==='string'?payload.cutoff:null;   // the resolution cutoff of this inconsistency (P1-03)
   if(!isObj(res)||cutoff===null)return result('invalid_resolution');
   const at=(deps.now??(()=>new Date()))().toISOString();
   let override:QuarantineOverride;
@@ -12567,12 +12986,14 @@ export async function resolveJudgmentsItem(deps:JudgmentsResolveDeps,item:Row,in
   const flipped=await resolveQuarantine(deps.tables,id,{status:'resolved_reject',resolvedBy:input.resolvedBy});
   return result(flipped==='resolved'?'resolved':'already_resolved',{resolution:'quarantine_rejected',seq:latest.seq});
  }
+ // Q1-03: the rejection is bound to the evidence identity read here; a worker refresh in between makes the RPC answer stale.
+ if(evidenceHash===null||cutoff===null)return result('invalid_resolution');
  const resolver=resolverFor(judgment.condition.resolver);
  const {batchId}=await startBatch(deps.tables,{producer:'ts-judgments',dataset:'judgments.settle',codeVersion:deps.codeVersion,triggeredBy:'manual'});
  const counts={...emptyCounts(),fetched:1};
  try{
   // P1-05: void + item flip + audit in ONE transaction (locks queue then item; replay-safe on the request key).
-  const r=await deps.db.rejectQuarantinedSettlement(judgment.judgment_id,id,`quarantine-reject:${id}`,{kind:'void',outcome:null,realized:null,
+  const r=await deps.db.rejectQuarantinedSettlement(judgment.judgment_id,id,{evidence_hash:evidenceHash,cutoff},`quarantine-reject:${id}`,{kind:'void',outcome:null,realized:null,
    evidence:{quarantine_id:id,reason_code:reason,evidence_hash:evidenceHash},resolver:resolver.name,resolver_version:resolver.version,reason:'quarantine_rejected',
    actor:`admin:${input.resolvedBy}`,code_version:deps.codeVersion,batch_id:batchId},audit({resolution:'quarantine_rejected'}));
   if(r.status==='applied')counts.versioned=1;else counts.duplicates=1;
@@ -12593,7 +13014,7 @@ export async function resolveJudgmentsItem(deps:JudgmentsResolveDeps,item:Row,in
 - [ ] **Step 8: 运行，确认通过**
 
 Run: `npm test -- src/lib/dq/judgments-resolver.test.ts`
-Expected: PASS（12 项）。
+Expected: PASS（13 项）。
 
 - [ ] **Step 9: 给隔离路由加 judgments 分支的失败测试（`route.test.ts`，围栏内）**
 
@@ -13098,7 +13519,7 @@ describe.skipIf(!enabled)('F4 settlement core on real PostgreSQL',()=>{
   expect(await admin(id,'withdrawn','correction',2)).toEqual({seq:2,status:'already_applied'});   // request_key replay converges
  }));
 
- it('basis mismatch → quarantined on the real dq tables (partial); after the review window the next pass voids it as unresolved_inconsistency',async()=>withClaimLock(pool,async()=>{
+ it('basis mismatch → quarantined on the real dq tables through quarantine_settlement (partial); after the review window the next pass voids it as unresolved_inconsistency',async()=>withClaimLock(pool,async()=>{
   const id=await register({registeredClose:107});
   const r=await settle();
   expect(r).toMatchObject({status:'partial',counts:{fetched:1,quarantined:1}});
@@ -13106,6 +13527,9 @@ describe.skipIf(!enabled)('F4 settlement core on real PostgreSQL',()=>{
   expect(item).toMatchObject({table_name:'judgment_settlements',reason_code:'settlement_basis_mismatch',status:'open',batch_id:r.batchId});
   expect((item.payload as {evidence_hash:string}).evidence_hash).toMatch(/^[0-9a-f]{64}$/);
   expect(await db.queueRow(id)).toMatchObject({last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',quarantine_id:item.id}});
+  // Q1-02: item and queue were published by ONE quarantine_settlement transaction, so they name the same evidence
+  const p0=item.payload as {evidence_hash:string;cutoff:string};
+  expect((await db.queueRow(id))!.last_detail).toMatchObject({evidence_hash:p0.evidence_hash,cutoff:p0.cutoff});
   await settle();
   expect(await history(id)).toEqual([]);   // inside the 7-day review window (REVIEW_WINDOW_DAYS): not voided yet
   // Simulate the review window elapsing (owner connection; the table has no client write grants).
@@ -14205,7 +14629,8 @@ export function stepUnit(ctx:StepContext,unit:Unit):Promise<StepOutcome>;
 export function runUnit(ctx:StepContext,unit:Unit,outOfBudget:()=>boolean):Promise<{outcome:UnitOutcome;pages:number;calibration_id?:string;infos:BatchError[]}>;
 export function runCalibrate(deps:CalibrateDeps):Promise<CalibrateReceipt>;
 export const ROUND_JOB:string;                                   // jobKey('calibrate_round') (P2-02)
-export interface RoundState{round:number;done:string[]}          // unit jobs finished (or failed) in the current round
+export type RoundOutcome='completed'|'failed'|'in_progress';     // Q1-04
+export interface RoundState{round:number;outcomes:Record<string,RoundOutcome>}   // per unit job in the current round
 export interface UnitPreview{job:string;methodology_id:string;version:string;scope:CalibrationScope;state:'idle'|'paging'|'finalizing'|'invalid';generation:string|null;pages:number;expected_revision:number|null;current_revision:number;stale:boolean}
 export function previewCalibrate(deps:Pick<CalibrateDeps,'db'|'methods'>):Promise<UnitPreview[]>;
 // src/lib/judgments/calibrate-deps.ts
@@ -14218,7 +14643,7 @@ export const dynamic='force-dynamic'; export const maxDuration=300; export funct
 1. 空闲 → 读 `calibrationValidity().revision` 为 `expected_revision`，`cutoff = serverTime()`（只用于定窗口），`window = [cutoff 日期 − window_years 年, cutoff 日期]`，新 `generation`；**先** `freezeCalibrationCohort(generation, …, window)`（计划审计 P1-10：一条语句、一个 MVCC 快照冻结全部成员及其当时最新结算），`query_bounds = {window_from, window_to, registered_at_lte: frozen_at, settled_at_lte: frozen_at, frozen_at, n}` 一次固定；再 CAS 写入单元状态（失败 → `clearCalibrationGeneration(generation)` 删掉自己冻结的集合，`conflict`）。冻结后、CAS 前崩溃 → 该代际的成员行无人引用、永不被读（运行手册给出查询与清理语句）。
 2. 分页 → `cohortMembers(generation, after, pageSize)`（service role，R04；读冻结集，keyset `judgment_id`）；本页（按 scope 过滤后的 `CohortEntry[]`）规范化为字节，上传到**每次上传唯一**的 `partial/<unitPath>/<generation>/<after|start>.<attempt_uuid>.json`（`upsert:false`；已存在 → `cohort_path_collision` 抛错，S01）；**一次** CAS 同时追加 manifest `{start_after, end_after, path, sha256, count}` 并推进 `after`。**只有空页才置 `done`**（计划审计 P1-02：短页不是耗尽，PostgREST 的行数上限可以小于 `pageSize`）。CAS 失败 → 只删除本次 attempt 的对象（`page_lost`），下一步重读 `after`。上传后、CAS 前崩溃 → 孤儿对象不在任何 manifest 里，永不被读；重试用新 attempt uuid。
 3. 收尾 → 只读 manifest 列出的对象，逐个校验 `sha256`、`generation`、`start_after/end_after` 链与 `count`（任一不符 → 清空单元并以 `cohort_object_invalid` 失败，下次从头）；`evaluateCohort`；cohort 文件 `{algorithm_version, methodology_id, methodology_version, scope_type, scope_key, query_bounds, entries}` 内容寻址写到 `cohorts/<cohort_sha256>.json`；`fingerprint` 按 §5.5；`calibration_id = uuidV8(fingerprint)`；`computed_at = serverTime()`，`valid_until = computed_at + 14 天`；`insertCalibration(row{validity_revision: expected_revision}, expected_revision)`：`inserted | duplicate` → CAS 清空（清空失败 → 信息码 `job_state_conflict`，下次同指纹 `duplicate` 再清，R05）并删除本代际 manifest 对象；`stale_revision` → 清空，本次运行内以新代际重算一次（第二次仍 stale → `deferred` + `stale_revision`，下次运行重来）。单元状态被清空时同时 `clearCalibrationGeneration(generation)`（成员行随代际删除）。
-4. 轮次（计划审计 P2-02）：`judgment_job_state[jobKey('calibrate_round')] = {round, done: job[]}`。每次运行先处理**有未完成代际**（单元状态非空）的单元，再按注册表顺序处理本轮 `done` 之外的单元；单元结果为 `inserted / duplicate / stale_revision / failed / skipped` 时把它的 job 并入 `done`（乐观锁重试 3 次，失败只记信息码），`paused / conflict` 不并入（下次续跑）。本轮全部单元都在 `done` 里且没有未完成代际 → 开新一轮 `{round+1, done:[]}` 并从注册表头开始。这样一个耗时的前排单元不会在每次运行都重开新代际、饿死后排单元。
+4. 轮次（计划审计 P2-02、Q1-04）：`judgment_job_state[jobKey('calibrate_round')] = {round, outcomes: {job → 'completed'|'failed'|'in_progress'}}`。单元跑完后按结果记入本轮（乐观锁重试 3 次，失败只记信息码）：`failed` → `failed`；`paused / conflict` → `in_progress`；`inserted / duplicate / stale_revision / skipped` → 单元状态已清空则 `completed`，否则（例如插入成功但清空 CAS 失败）`in_progress`（下次恢复）。每次运行的工作单：先是**有未完成代际**（单元状态非空）且本轮不是 `failed` 的单元（可续跑的优先），再是本轮还没有结果或是 `in_progress`、且无未完成代际的单元；本轮 `failed` 的单元**整轮排除**（即使它还留着代际状态），直到开新一轮。本轮每个单元都是 `failed`，或是 `completed` 且无未完成代际 → 开新一轮 `{round+1, outcomes:{}}` 并从注册表头开始（新一轮里留着代际的失败单元又排在最前、续跑）。这样一个耗时的前排单元不会在每次运行都重开新代际，一个每次都耗尽预算再失败的前排单元也不会饿死后排单元。
 5. 预算：`deadline − now < 30 s` 就不再做下一步（单元 `paused`，信息码 `deadline_hit`，下次从 `after` 续同一 generation / cutoff / bounds）；未开始的单元同样记 `deadline_hit`。
 6. 批次：`startBatch({producer:'ts-judgments', dataset:'judgments.calibrate'})` 前先 `repairStaleBatches('judgments.calibrate', 900)`；计数：`fetched` = 开始处理的单元数，`inserted` / `duplicates` = 插入 / 重复的单元，`deferred` = paused / conflict / stale 的单元，`failed` = 抛错的单元（错误 `{code, key: job, message}`）；`finally` 里 `finishBatch` + `recordAttempt('judgments.calibrate', {ok: success|partial, cadence:'event'})`。
 
@@ -14232,7 +14657,8 @@ export const dynamic='force-dynamic'; export const maxDuration=300; export funct
 7. 新鲜度 cadence 用 `'event'`（`dq_freshness` 没有 weekly；daily 会让周跑每周报 stale）。
 8. 集成测试的结算走正常路径（决策 D6）：在 `withClaimLock`（Task 4，`pg_advisory_lock(20261109)`）内把该判断的队列行设为到期、`claimDue` 领到它（同时领到的别的套件的行持有到结束再原样释放）、以 `actor='cron'` 与领到的 `lease_token` 调 `appendSettlement`；登记也在锁内进行，并立即把不结算的队列行 `next_attempt_at` 推到 `2099-01-01`（测试连接直接 `update`），使其永不被别的套件领取。撤回（`withdrawn`）仍是 admin 动作（`lease=null`、`actor='admin:<uuid>'`），这是它的正常路径。
 9. 成员冻结（规格第 7 稿 §8.3，计划审计 P1-10）：时间戳截止不能冻结 MVCC 下的 cohort（`registered_at = now()` 是事务开始时刻，截止前开始、截止后提交的事务会在游标之后"补进来"），所以 cohort 由 `freeze_calibration_cohort` 一次物化；`calibration_cohort_internal` 仍保留（R04 测试与运维核对用），校准任务不再调用它。冻结成功但单元状态 CAS 之前崩溃的代际成员行无人引用：运行手册给出列出 / 清理它们的 SQL（`generation` 不出现在任何 `calibrate:*` 单元状态里的成员行）。
-10. 轮次游标（计划审计 P2-02）：见流程第 4 点；`RoundState` 存在全局键 `calibrate_round`；失败的单元也计入本轮 `done`（下一轮再试），避免一个持续失败的单元让本轮永远不结束。
+10. 轮次游标（计划审计 P2-02、Q1-04）：见流程第 4 点；`RoundState` 存在全局键 `calibrate_round`；失败的单元在本轮记 `failed` 并被排除到本轮结束（下一轮再试），避免一个持续失败的单元让本轮永远不结束、或每次运行都先耗尽预算（第一轮审计后的 `done` 列表会让留着代际的失败单元每次排在最前）。
+11. 冻结返回 `already_frozen`（计划审计 Q1-05）：`stepUnit` 每次开始都用新的 `generation`（`uuid()`），所以正常不会遇到；遇到即说明 uuid 被复用（测试注入或缺陷）——该代际属于别人，不清它，抛 `CalibrateError('generation_reused')`（单元 `failed`）。
 
 - [ ] **Step 1: 写 `cohort-store` 的失败测试**
 
@@ -14399,24 +14825,27 @@ function fakeDb(rows:MethodologyRow[],envelopes:Envelope[]){
  const tick=()=>new Date(clock+=1000).toISOString();
  /** generation → the members frozen at freeze time (a later push into `envelopes` never reaches a frozen set: MVCC). */
  const frozen=new Map<string,Envelope[]>();
+ /** generation → its claim marker (the SQL's judgment_job_state['cohort:<generation>'], Q1-05). */
+ const markers=new Map<string,{frozen_at:string;n:number}>();
  const db={
   async serverTime(){return tick();},
   async methodology(id:string,v:string){return rows.find(r=>r.methodology_id===id&&r.version===v)??null;},
   async calibrationValidity(){return {revision};},
   async freezeCalibrationCohort(generation:string,id:string,v:string,w:{from:string;to:string}){
-   if(frozen.has(generation))throw new Error(`generation ${generation} is already frozen`);
+   const claimed=markers.get(generation);                                                        // Q1-05: claimed once, even when empty
+   if(claimed)return {status:'already_frozen' as const,...claimed};
    const at=tick();
    const set=envelopes.filter(e=>e.judgment.methodology_id===id&&e.judgment.methodology_version===v&&!e.judgment.abstained&&e.judgment.as_of>=w.from&&e.judgment.as_of<=w.to&&e.judgment.registered_at<=at)
     .sort((a,b)=>a.judgment.judgment_id<b.judgment.judgment_id?-1:1)
     .map(e=>({...e,settlement:e.settlement&&e.settlement.settled_at<=at?e.settlement:null}));
-   frozen.set(generation,structuredClone(set));
-   return {frozen_at:at,n:set.length};
+   frozen.set(generation,structuredClone(set));markers.set(generation,{frozen_at:at,n:set.length});
+   return {status:'frozen' as const,frozen_at:at,n:set.length};
   },
   async cohortMembers(generation:string,after:string|null,limit:number){
    hooks.onCohort?.(++cohortCalls);
    return structuredClone((frozen.get(generation)??[]).filter(e=>after===null||e.judgment.judgment_id>after).slice(0,limit));
   },
-  async clearCalibrationGeneration(generation:string){const n=frozen.get(generation)?.length??0;frozen.delete(generation);return n;},
+  async clearCalibrationGeneration(generation:string){const n=frozen.get(generation)?.length??0;frozen.delete(generation);markers.delete(generation);return n;},
   async insertCalibration(row:CalibrationRow,expected:number){
    if(row.validity_revision!==expected||expected!==revision)return 'stale_revision' as const;
    if(fingerprints.has(row.fingerprint))return 'duplicate' as const;
@@ -14557,9 +14986,50 @@ describe('runCalibrate',()=>{
   const r2=await run();expect(inserted(r2)).toEqual(['market']);                               // the paused unit first, not a new 'all' generation
   const r3=await run();expect(inserted(r3)).toEqual(['subject_type']);
   expect(f.calibrations.map(c=>c.scope_type)).toEqual(['all','market','subject_type']);         // nobody ran twice before everybody ran once
-  expect(f.round()).toEqual({round:1,done:unitsOf(m).map(u=>u.job)});
+  expect(f.round()).toEqual({round:1,outcomes:Object.fromEntries(unitsOf(m).map(u=>[u.job,'completed']))});
   const r4=await run();expect(r4.units[0]).toMatchObject({scope:{scope_type:'all'}});          // round complete → the next round starts at the head
   expect(f.round()!.round).toBe(2);
+ });
+ it('a unit that fails every run after spending the budget is excluded until the round advances; a later unit still completes (Q1-04)',async()=>{
+  const m=methodologyRow({markets:['A'],subject_types:['security']});                          // units: all, market A
+  const f=fakeDb([m],cohort(3));const inner=memoryCohortStore();
+  let now=T0,failing=0;
+  // every page upload of the 'all' unit burns 30 s of the 55 s budget and then fails (its generation stays open)
+  const store:CohortStore={put:async(path,bytes,o)=>{if(path.includes('.all/')){failing++;now+=30_000;throw new Error('storage down');}return inner.put(path,bytes,o);},get:p=>inner.get(p),remove:p=>inner.remove(p)};
+  const run=()=>{now=T0;return runCalibrate(deps(f.db,store,{methods:[{id:m.methodology_id,version:'v1'}],deadline:new Date(T0+55_000),now:()=>new Date(now)}));};
+  const [all,market]=unitsOf(m).map(u=>u.job);
+  const r1=await run();
+  expect(r1.units.map(u=>[u.scope.scope_type,u.outcome])).toEqual([['all','failed'],['market','paused']]);   // the failure spent the budget
+  expect(f.round()).toEqual({round:1,outcomes:{[all]:'failed'}});
+  expect(f.jobs.get(all)?.state).toMatchObject({generation:expect.any(String)});                // still holds a generation
+  const r2=await run();
+  expect(r2.units.map(u=>[u.scope.scope_type,u.outcome])).toEqual([['market','inserted']]);     // the failed unit is not retried this round
+  expect(failing).toBe(1);
+  expect(f.round()).toEqual({round:1,outcomes:{[all]:'failed',[market]:'completed'}});
+  const r3=await run();                                                                          // round complete → round 2 resumes the failed unit first
+  expect(r3.units[0]).toMatchObject({scope:{scope_type:'all'},outcome:'failed'});
+  expect(failing).toBe(2);
+  expect(f.round()).toEqual({round:2,outcomes:{[all]:'failed'}});
+  const r4=await run();
+  expect(r4.units.map(u=>[u.scope.scope_type,u.outcome])).toEqual([['market','inserted']]);     // every round still reaches the later unit
+ });
+ it('an insert whose clear failed stays in_progress for the round and is recovered first next run (Q1-04)',async()=>{
+  const f=fakeDb([METHOD],cohort(4));const store=memoryCohortStore();
+  f.failNextClear();
+  const first=await runCalibrate(deps(f.db,store));
+  expect(first.counts.inserted).toBe(1);
+  expect(f.round()).toEqual({round:1,outcomes:{[unitAll.job]:'in_progress'}});
+  const second=await runCalibrate(deps(f.db,store));
+  expect(second.counts.duplicates).toBe(1);
+  expect(f.round()).toEqual({round:1,outcomes:{[unitAll.job]:'completed'}});
+ });
+ it('a reused generation uuid is never refrozen nor cleared: already_frozen fails the unit (Q1-05)',async()=>{
+  const f=fakeDb([METHOD],cohort(2));const store=memoryCohortStore();
+  const g='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  await f.db.freezeCalibrationCohort(g,METHOD.methodology_id,'v1',{from:'2020-01-01',to:'2030-01-01'});
+  const r=await runCalibrate(deps(f.db,store,{uuid:()=>g}));
+  expect(r.units[0]).toMatchObject({outcome:'failed',code:'generation_reused'});
+  expect(f.frozen.get(g)).toHaveLength(2);                                                       // the other owner's set is intact
  });
  it('a failed clear after insert is retried: the next run sees duplicate and clears (R05)',async()=>{
   const f=fakeDb([METHOD],cohort(4));const store=memoryCohortStore();
@@ -14698,8 +15168,10 @@ Expected: FAIL — `Failed to resolve import "./calibrate"`。
 // calibration_cohort_members (R04: unpublished methods calibrate too) until an EMPTY page (P1-02), uploads
 // each page to a fresh per-attempt object with upsert:false, then appends the manifest entry and advances
 // `after` in ONE optimistic set_job_state (S01, R02). Clearing a unit also clears its generation's members.
-// Units run in a persisted round (judgment_job_state['calibrate_round'], P2-02): unfinished generations first,
-// then units not yet done this round, so an expensive early unit cannot starve the later ones. A lost CAS removes only this attempt's object;
+// Units run in a persisted round (judgment_job_state['calibrate_round'] = {round, outcomes}, P2-02 / Q1-04): resumable
+// unfinished generations first, then units without a final outcome this round; a unit that FAILED this round is
+// excluded until the round advances, so neither an expensive nor a consistently failing early unit can starve the
+// later ones. A lost CAS removes only this attempt's object;
 // a crash between upload and CAS leaves an orphan that no manifest names. Finalisation reads only
 // the manifest's objects (sha256-checked), evaluates (calibration.ts), writes the content-addressed
 // cohort file, and calls insert_calibration: inserted | duplicate → CAS-clear the unit (R05),
@@ -14719,9 +15191,10 @@ import {PUBLIC_SUBJECT_TYPES} from './types';
 import type {CalibrationRow,CalibrationScope,JudgmentsDb,MethodologyRow,QueryBounds} from './types';
 
 export const CALIBRATE_DATASET='judgments.calibrate';
-/** The calibration cron's persisted round cursor (plan audit P2-02). */
+/** The calibration cron's persisted round cursor (plan audit P2-02); per-unit outcome of the current round (Q1-04). */
 export const ROUND_JOB=jobKey('calibrate_round');
-export interface RoundState{round:number;done:string[]}
+export type RoundOutcome='completed'|'failed'|'in_progress';
+export interface RoundState{round:number;outcomes:Record<string,RoundOutcome>}
 export const PAGE_SIZE=500,RESERVE_MS=30_000,VALID_DAYS=14,STALE_BATCH_SECONDS=900,MAX_STEPS=10_000;
 
 export interface ManifestEntry{start_after:string|null;end_after:string;path:string;sha256:string;count:number}
@@ -14800,6 +15273,8 @@ export async function stepUnit(ctx:StepContext,unit:Unit):Promise<StepOutcome>{
   // P1-10: one statement freezes every member and its latest settlement (one MVCC snapshot); the generation is
   // recorded only afterwards, and a lost start race drops the loser's frozen set.
   const frozen=await ctx.db.freezeCalibrationCohort(generation,m.methodology_id,m.version,w);
+  // Q1-05: a fresh uuid can only be already frozen if it was reused; that generation is someone else's — never clear it.
+  if(frozen.status==='already_frozen')throw new CalibrateError('generation_reused',generation);
   const next:UnitState={generation,cutoff,expected_revision:Number(revision),
    query_bounds:{window_from:w.from,window_to:w.to,registered_at_lte:frozen.frozen_at,settled_at_lte:frozen.frozen_at,frozen_at:frozen.frozen_at,n:frozen.n},after:null,done:false,manifest:[]};
   if(await ctx.db.setJobState(unit.job,cur?.updated_at??null,next as unknown as Record<string,unknown>))return {kind:'started',generation};
@@ -14901,30 +15376,39 @@ export async function runUnit(ctx:StepContext,unit:Unit,outOfBudget:()=>boolean)
 const codeOf=(e:unknown)=>e instanceof CalibrateError?e.code:'calibrate_failed';
 const messageOf=(e:unknown)=>(e instanceof Error?e.message:String(e)).slice(0,300);
 
-/** Outcomes that finish a unit for the current round (failed / stale ones retry next round, not in a tight loop). */
-const ROUND_DONE:ReadonlySet<UnitOutcome>=new Set(['inserted','duplicate','stale_revision','failed','skipped']);
-const isRoundState=(s:Record<string,unknown>):s is Record<string,unknown>&RoundState=>Number.isSafeInteger(s.round)&&(s.round as number)>=1&&Array.isArray(s.done)&&(s.done as unknown[]).every(str);
+const ROUND_OUTCOMES:readonly string[]=['completed','failed','in_progress'];
+const isRoundState=(s:Record<string,unknown>):s is Record<string,unknown>&RoundState=>Number.isSafeInteger(s.round)&&(s.round as number)>=1&&
+ !!s.outcomes&&typeof s.outcomes==='object'&&!Array.isArray(s.outcomes)&&Object.values(s.outcomes as Record<string,unknown>).every(v=>typeof v==='string'&&ROUND_OUTCOMES.includes(v));
 async function readRound(db:JudgmentsDb):Promise<{state:RoundState;updatedAt:string|null}>{
  const cur=await db.jobState(ROUND_JOB);
  const s=cur?.state??{};
- return {state:isRoundState(s)?{round:s.round,done:[...s.done]}:{round:1,done:[]},updatedAt:cur?.updated_at??null};
+ return {state:isRoundState(s)?{round:s.round,outcomes:{...s.outcomes}}:{round:1,outcomes:{}},updatedAt:cur?.updated_at??null};
 }
-/** Adds `job` to the round's done list (optimistic, 3 tries); false when another run moved the round on or kept winning. */
-async function markRoundDone(db:JudgmentsDb,round:number,job:string):Promise<boolean>{
+const hasGeneration=async(db:JudgmentsDb,job:string)=>Object.keys((await db.jobState(job))?.state??{}).length>0;
+/** Q1-04: failed → failed (excluded until the round advances); paused / conflict → in_progress; a final outcome is completed
+ *  only once the unit state is clear — an insert whose clear CAS lost stays in_progress so the next run recovers it. */
+async function roundOutcomeOf(db:JudgmentsDb,job:string,outcome:UnitOutcome):Promise<RoundOutcome>{
+ if(outcome==='failed')return 'failed';
+ if(outcome==='paused'||outcome==='conflict')return 'in_progress';
+ return await hasGeneration(db,job)?'in_progress':'completed';
+}
+/** Records `job`'s outcome in the round (optimistic, 3 tries); false when another run moved the round on or kept winning. */
+async function markRound(db:JudgmentsDb,round:number,job:string,outcome:RoundOutcome):Promise<boolean>{
  for(let i=0;i<3;i++){
   const cur=await readRound(db);
   if(cur.state.round!==round)return false;
-  if(cur.state.done.includes(job))return true;
-  if(await db.setJobState(ROUND_JOB,cur.updatedAt,{round,done:[...cur.state.done,job]}))return true;
+  if(cur.state.outcomes[job]===outcome)return true;
+  if(await db.setJobState(ROUND_JOB,cur.updatedAt,{round,outcomes:{...cur.state.outcomes,[job]:outcome}}))return true;
  }
  return false;
 }
 
 interface Planned{job:string;row:MethodologyRow|null;unit:Unit|null;ref:{id:string;version:string}}
 /**
- * The run's work list (plan audit P2-02): every unit with an unfinished generation first (registry order), then the
- * units not yet done in this round. When every unit is done and none is unfinished, the next round opens and the
- * list restarts at the registry head.
+ * The run's work list (plan audit P2-02, Q1-04): every unit with an unfinished generation that has not FAILED this round
+ * first (registry order), then the units without an unfinished generation whose round outcome is absent or in_progress.
+ * A unit failed this round is excluded until the round advances. When every unit is failed, or completed with no
+ * unfinished generation, the next round opens (outcomes {}) and the list restarts at the registry head.
  */
 async function planRound(db:JudgmentsDb,methods:CalibrateDeps['methods']):Promise<{round:number;list:Planned[]}>{
  const all:Planned[]=[];
@@ -14934,14 +15418,16 @@ async function planRound(db:JudgmentsDb,methods:CalibrateDeps['methods']):Promis
   for(const unit of unitsOf(row))all.push({job:unit.job,row,unit,ref});
  }
  const unfinished=new Set<string>();
- for(const p of all)if(p.unit&&Object.keys((await db.jobState(p.job))?.state??{}).length>0)unfinished.add(p.job);
+ for(const p of all)if(p.unit&&await hasGeneration(db,p.job))unfinished.add(p.job);
  let {state,updatedAt}=await readRound(db);
- const open=(s:RoundState)=>all.filter(p=>!unfinished.has(p.job)&&!s.done.includes(p.job));
- if(unfinished.size===0&&open(state).length===0){
-  const next={round:state.round+1,done:[]};
-  if(await db.setJobState(ROUND_JOB,updatedAt,next))state=next;else({state,updatedAt}=await readRound(db));
+ const resumable=(s:RoundState)=>all.filter(p=>unfinished.has(p.job)&&s.outcomes[p.job]!=='failed');
+ const open=(s:RoundState)=>all.filter(p=>!unfinished.has(p.job)&&(s.outcomes[p.job]===undefined||s.outcomes[p.job]==='in_progress'));
+ const finished=(s:RoundState)=>all.every(p=>s.outcomes[p.job]==='failed'||(s.outcomes[p.job]==='completed'&&!unfinished.has(p.job)));
+ if(finished(state)){
+  const next:RoundState={round:state.round+1,outcomes:{}};
+  if(await db.setJobState(ROUND_JOB,updatedAt,next as unknown as Record<string,unknown>))state=next;else({state,updatedAt}=await readRound(db));
  }
- return {round:state.round,list:[...all.filter(p=>unfinished.has(p.job)),...open(state)]};
+ return {round:state.round,list:[...resumable(state),...open(state)]};
 }
 
 export async function runCalibrate(deps:CalibrateDeps):Promise<CalibrateReceipt>{
@@ -14955,7 +15441,7 @@ export async function runCalibrate(deps:CalibrateDeps):Promise<CalibrateReceipt>
  let status:BatchStatus='failed';
  try{
   const {round,list}=await planRound(deps.db,deps.methods);
-  const finished=async(job:string,outcome:UnitOutcome)=>{if(ROUND_DONE.has(outcome)&&!(await markRoundDone(deps.db,round,job)))errors.push({code:'job_state_conflict',key:ROUND_JOB});};
+  const finished=async(job:string,outcome:UnitOutcome)=>{if(!(await markRound(deps.db,round,job,await roundOutcomeOf(deps.db,job,outcome))))errors.push({code:'job_state_conflict',key:ROUND_JOB});};
   for(const p of list){
    if(!p.row||!p.unit){
     units.push({job:p.job,methodology_id:p.ref.id,version:p.ref.version,scope:{scope_type:'all',scope_key:''},outcome:'skipped',pages:0,code:'methodology_unsynced'});
@@ -15010,7 +15496,7 @@ export async function previewCalibrate(deps:Pick<CalibrateDeps,'db'|'methods'>):
 - [ ] **Step 8: 运行，确认通过**
 
 Run: `npm test -- src/lib/judgments/calibrate.test.ts src/lib/judgments/cohort-store.test.ts`
-Expected: PASS — 26 tests（calibrate 22 + cohort-store 4）。若 `runCalibrate` 的"stops paging when the budget is gone"用例报 `status 'failed'`：说明 Task 5 的 `accounted()` 没有计入 `deferred`——回到 Task 5 修，不要改这里。
+Expected: PASS — 29 tests（calibrate 25 + cohort-store 4）。若 `runCalibrate` 的"stops paging when the budget is gone"用例报 `status 'failed'`：说明 Task 5 的 `accounted()` 没有计入 `deferred`——回到 Task 5 修，不要改这里。
 
 - [ ] **Step 9: 写生产装配 `src/lib/judgments/calibrate-deps.ts`**
 
@@ -21896,6 +22382,7 @@ git commit -m "feat(judgments): judgment UI per the Claude Design canvas — car
 
 **Files:**
 - Create: `docs/runbooks/judgments.md`
+- Create: `src/lib/judgments/rpc-inventory.test.ts`（运行手册 §1 / §8 列全 `rpc-inventory.ts` 的每个函数，计划审计 Q1-06）
 - Modify: `docs/superpowers/specs/2026-11-04-judgment-framework-design.md`（只改 §19 正文：替换 `（实施后补记。）`）
 - Modify: `supabase/migrations.lock.json`（追加 `20261109150000_judgments.sql` 一条）
 - Modify: `docs/audits/2026-11-06-judgment-framework/implementation-log.md`
@@ -21928,13 +22415,21 @@ Expected: 第一行 ≥ 21（每个任务至少一个提交）；没有任何 `M
 | `judgment_methodology_events` | 全部行 | 只读；只经 `sync_methodology` 追加 | 方法状态事件史（`as_known` 查询用） |
 | `judgments` | 仅 `publishable` 方法的行 | 只读；只经 `register_judgment` | 只追加；没有状态列 |
 | `judgment_settlements` | 仅 `publishable` 方法的行 | 只读；只经 `append_settlement` | 只追加；`settlement_sequence` 触发器管转移 |
-| `judgment_settle_queue` | 无 | 只读；只经 `register_judgment / claim_due_judgments / release_lease / append_settlement / apply_quarantine_override / reject_quarantined_settlement` | 可变调度状态（不是证据） |
+| `judgment_settle_queue` | 无 | 只读；只经 `register_judgment / claim_due_judgments / release_lease / append_settlement / quarantine_settlement / apply_quarantine_override / reject_quarantined_settlement` | 可变调度状态（不是证据）；`last_detail.quarantined_at` = 未解决不一致事件的第一次隔离时刻 |
 | `judgment_calibrations` | 仅 `publishable` 方法的行 | 只读；只经 `insert_calibration` | 只追加；`fingerprint` 唯一 |
 | `judgment_calibration_validity` | 全部行 | 只读；`append_settlement`（撤回 / 重开 +1）、`sync_methodology`（首次 = 1） | 校准失效修订号 |
-| `judgment_job_state` | 无 | 只读；只经 `set_job_state`（乐观锁） | 补偿 marker、校准续跑状态、校准轮次游标 `calibrate_round` |
+| `judgment_job_state` | 无 | 只读；只经 `set_job_state`（乐观锁）；`cohort:<generation>` 标记只经 `freeze_calibration_cohort` 写、`clear_calibration_generation` 删 | 补偿 marker、校准续跑状态、校准轮次游标 `calibrate_round = {round, outcomes}`、冻结代际认领标记 `cohort:<generation> = {frozen_at, n, methodology, version, window}` |
 | `judgment_calibration_cohort_members` | 无 | 只读；只经 `freeze_calibration_cohort` 写、`clear_calibration_generation` 删 | 校准代际冻结的成员（一条语句一个快照）；不是只追加表 |
 
-桶 `judgments-calibration`（私有）：`<calibration_id>.json`（cohort 清单）与 `partial/<unit>/<generation>/<start_after>.<attempt_uuid>.json`（续跑分页，`upsert:false`）。公共读 RPC（`security invoker`，anon / authenticated / service_role 可执行）：`judgments_server_time`、`latest_judgment_cards`、`judgment_history`、`calibration_cohort`、`methodology_state_at`。服务写 RPC（`security definer`，只 service_role）：`sync_methodology`、`register_judgment`、`claim_due_judgments`、`release_lease`、`append_settlement`、`apply_quarantine_override`、`insert_calibration`、`set_job_state`、`repair_stale_batches`、`calibration_cohort_internal`（只读但不受发布门控）。RPC 不登记到 `database.types.ts` 的 `Functions`（调用处 `RpcFn` 断言，`src/lib/judgments/db.ts`）。
+桶 `judgments-calibration`（私有）：`cohorts/<cohort_sha256>.json`（内容寻址的 cohort 清单）与 `partial/<unit>/<generation>/<start_after>.<attempt_uuid>.json`（续跑分页，`upsert:false`）。函数清单的唯一来源是 `src/lib/judgments/rpc-inventory.ts`（`judgments.integration.test.ts` 按它断言目录与授权，`rpc-inventory.test.ts` 断言本节与 §8 列全）：
+
+公共读 RPC（`security invoker`，anon / authenticated / service_role 可执行）：`judgments_server_time`、`judgment_envelope_of`、`latest_judgment_cards`、`judgment_history`、`calibration_cohort`、`methodology_state_at`、`judgment_envelope_by_id`。
+
+服务写 RPC（`security definer`，只 service_role）：`calibration_cohort_internal`（只读但不受发布门控）、`sync_methodology`、`register_judgment`、`claim_due_judgments`、`release_lease`、`append_settlement`、`quarantine_settlement`（结算发布不一致的唯一写路径：锁队列 → 校验租约 → upsert open 项 → 发布队列状态，一个事务；返回 `{status:'quarantined'|'lease_lost', quarantine_id}`）、`apply_quarantine_override`（返回 `'applied'|'stale'|'closed'|'item_not_open'`，不抛）、`reject_quarantined_settlement`（`p_expected = {evidence_hash, cutoff}`；返回 `{seq, status}`，`status ∈ AppendStatus ∪ {'stale','item_not_open'}`，不抛）、`freeze_calibration_cohort`（返回 `{status:'frozen'|'already_frozen', frozen_at, n}`）、`calibration_cohort_members`（只读）、`clear_calibration_generation`（删成员与认领标记）、`insert_calibration`、`set_job_state`、`repair_stale_batches`。
+
+内部函数（无客户端 EXECUTE）：`judgments_settle_after_date`、`judgments_grace_days`、`judgment_operation_payload`、`judgment_settlement_payload`、`judgment_replay_status`、`judgment_append_settlement_internal`。触发器函数（Task 2，同样无客户端 EXECUTE）随表一起删（§8 步骤 4）。
+
+RPC 不登记到 `database.types.ts` 的 `Functions`（调用处 `RpcFn` 断言，`src/lib/judgments/db.ts`）。
 
 ## 2. 部署步骤（owner，合并后按顺序；顺序错了会让 cron 打到不存在的函数）
 
@@ -21998,10 +22493,11 @@ Expected: 第一行 ≥ 21（每个任务至少一个提交）；没有任何 `M
 ## 7. 日常运维
 
 - **队列**：`/admin/judgments`（到期 / 退避 / 租约 / 全部）。"立即结算"把一条交给 `POST /api/admin/judgments/[id]/settle`；"撤回…"（`withdrawn`，原因必填）只对已 `settled` 的判断；"重开"只对 `void / withdrawn`。三者都写 `research_audit_log`；证据只追加，旧结算行保留。撤回 / 重开会让该方法的校准行立即失效（`judgment_calibration_validity.revision + 1`）。
-- **隔离项**：`/admin/dq`，数据集 `judgments`；`settlement_basis_mismatch` 只能"接受重抓"（裁决携带隔离时的完整证据），`settlement_ambiguous_fact` 选一个候选，`settlement_base_bar_missing / settlement_benchmark_gap` 只能拒绝（→ `void(quarantine_rejected)`）。到 `settle_by` 仍未处理 → `void(unresolved_inconsistency)`。
+- **隔离项**：`/admin/dq`，数据集 `judgments`；`settlement_basis_mismatch` 只能"接受重抓"（裁决携带隔离时的完整证据），`settlement_ambiguous_fact` 选一个候选，`settlement_base_bar_missing / settlement_benchmark_gap` 只能拒绝（→ `void(quarantine_rejected)`）。到复核截止（`max(settle_by, 第一次隔离 + 7 天)`，含边界；同一未解决事件里再次隔离不延后截止）仍未处理 → `void(unresolved_inconsistency)`。
 - **悬空批次**：每次 cron 开头 `repair_stale_batches('judgments.settle' | 'judgments.calibrate', '15 minutes')` 自动把残留 `running` 标 `failed`（`errors += stale_running`），不需要手工 SQL。
-- **无人引用的冻结代际**（校准单元冻结成员后、写单元状态前崩溃留下；只占空间，永不被读）：`select m.generation, count(*) from public.judgment_calibration_cohort_members m where not exists (select 1 from public.judgment_job_state s where s.job like 'calibrate:%' and s.state->>'generation' = m.generation::text) group by 1;` 列出，逐个 `select public.clear_calibration_generation('<generation>');` 清理（service_role）。
-- **隔离裁决返回 409 `stale`**：队列在裁决期间已换成另一次不一致或已关闭，什么都没写；刷新 `/admin/dq` 看当前项再裁决。
+- **无人引用的冻结代际**（校准单元冻结成员后、写单元状态前崩溃留下；只占空间，永不被读）：每个冻结过的代际都有认领标记 `cohort:<generation>`（成员与标记同一事务写入，0 成员的代际也有标记）。`select substr(s.job, 8) as generation, s.state->>'n' as n, s.state->>'frozen_at' as frozen_at from public.judgment_job_state s where s.job like 'cohort:%' and not exists (select 1 from public.judgment_job_state u where u.job like 'calibrate:%' and u.state->>'generation' = substr(s.job, 8));` 列出，逐个 `select public.clear_calibration_generation('<generation>');` 清理（service_role；成员与标记一起删）。
+- **隔离裁决返回 409 `stale`**：队列在裁决期间已换成另一次不一致或已关闭，或裁决页读到该项之后结算又把同一项刷新成新的证据（拒绝与接受都绑定读到的 `evidence_hash / cutoff`），什么都没写；刷新 `/admin/dq` 看当前项再裁决。
+- **隔离写入的原子性**：结算只经 `quarantine_settlement` 一次写隔离项与队列状态；过期 worker 的刷新得到 `lease_lost`（批次信息码 `lease_lost`，计 `deferred`），不会让项与队列指向不同证据。
 - **回放**：`npx tsx scripts/judgments/replay.ts --id <judgment_id> [--reconcile] [--json]`；退出码 2 = `input_hash_mismatch`（存储被改动，输出指出输入定位，宏观观测为 `series_id`）。私有：`--recommendation <id>`（用户会话，只 `inputs_only`）。
 - **校准**：每周一 04:00 UTC；`threshold_n=100`、`ece_max=0.10`、`window_years=3`（owner O2 默认）。宏观每区域每 91 天约 1 条独立样本，按默认阈值在可预见时间内一直"未校准"——这是正确结果（规格 §8.4），不要为此降阈值。
 
@@ -22014,14 +22510,19 @@ Expected: 第一行 ≥ 21（每个任务至少一个提交）；没有任何 `M
 do $$ declare r record; begin
   for r in select p.oid::regprocedure as sig from pg_proc p join pg_namespace n on n.oid=p.pronamespace
             where n.nspname='public' and p.prorettype <> 'pg_catalog.trigger'::regtype
-              and p.proname in ('judgments_server_time','latest_judgment_cards','judgment_history','calibration_cohort','calibration_cohort_internal',
-                                'methodology_state_at','sync_methodology','register_judgment','claim_due_judgments','release_lease','append_settlement',
-                                'apply_quarantine_override','insert_calibration','set_job_state','repair_stale_batches')
+              and p.proname in ('judgments_server_time','judgment_envelope_of','latest_judgment_cards','judgment_history','calibration_cohort',
+                                'methodology_state_at','judgment_envelope_by_id',
+                                'calibration_cohort_internal','sync_methodology','register_judgment','claim_due_judgments','release_lease','append_settlement',
+                                'quarantine_settlement','apply_quarantine_override','reject_quarantined_settlement','freeze_calibration_cohort',
+                                'calibration_cohort_members','clear_calibration_generation','insert_calibration','set_job_state','repair_stale_batches',
+                                'judgments_settle_after_date','judgments_grace_days','judgment_operation_payload','judgment_settlement_payload',
+                                'judgment_replay_status','judgment_append_settlement_internal')
   loop execute 'drop function if exists '||r.sig; end loop;
 end $$;
 -- 2. the envelope composite type used by the read RPCs
 drop type if exists public.judgment_envelope;
--- 3. tables, dependants first (row triggers go with them)
+-- 3. tables, dependants first (row triggers go with them); the frozen members reference judgments and settlements
+drop table if exists public.judgment_calibration_cohort_members;
 drop table if exists public.judgment_settle_queue;
 drop table if exists public.judgment_settlements;
 drop table if exists public.judgment_calibrations;
@@ -22039,7 +22540,7 @@ end $$;
 -- 5. bucket: empty it through the Storage API first, then
 delete from storage.buckets where id='judgments-calibration';
 -- 6. inventory: both must return 0 rows
-select proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and (p.proname like 'judgment%' or p.proname in ('register_judgment','claim_due_judgments','release_lease','append_settlement','apply_quarantine_override','insert_calibration','set_job_state','repair_stale_batches','sync_methodology','calibration_cohort','calibration_cohort_internal','methodology_state_at','latest_judgment_cards'));
+select proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and (p.proname like 'judgment%' or p.proname in ('register_judgment','claim_due_judgments','release_lease','append_settlement','quarantine_settlement','apply_quarantine_override','reject_quarantined_settlement','freeze_calibration_cohort','calibration_cohort_members','clear_calibration_generation','insert_calibration','set_job_state','repair_stale_batches','sync_methodology','calibration_cohort','calibration_cohort_internal','methodology_state_at','latest_judgment_cards'));
 select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and relname like 'judgment%';
 ```
 
@@ -22074,6 +22575,42 @@ select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where
 - 行业 / 公司 / 外资方法按 `docs/methodologies/README.md` 模板注册（规格 §4.3）。
 - 复权能力验证结果（§4）决定价格类方法在 v1 是否有可用市场（规格 §18 第 3 条）。
 ````
+
+再写运行手册与函数清单的一致性测试（计划审计 Q1-06：§1 与 §8 不得漏掉 `rpc-inventory.ts` 里的任何函数；新增 RPC 时这条测试逼着运行手册同步）：
+
+```ts
+// src/lib/judgments/rpc-inventory.test.ts
+// F4 Task 22 (plan audit Q1-06): the runbook's function inventory (§1, by group) and rollback (§8) name every SQL
+// function of rpc-inventory.ts — the same list judgments.integration.test.ts asserts against the catalog and grants.
+import {readFileSync} from 'node:fs';
+import {describe,expect,it} from 'vitest';
+import {F4_FUNCTIONS,INTERNAL_FUNCTION_NAMES,PUBLIC_RPC_NAMES,SERVICE_RPC_NAMES} from './rpc-inventory';
+
+const RUNBOOK=readFileSync('docs/runbooks/judgments.md','utf8');
+const section=(n:number)=>{const start=RUNBOOK.indexOf(`\n## ${n}. `);const end=RUNBOOK.indexOf('\n## ',start+1);return RUNBOOK.slice(start,end===-1?undefined:end);};
+/** Word boundaries: calibration_cohort is not satisfied by calibration_cohort_internal, append_settlement not by judgment_append_settlement_internal. */
+const mentions=(text:string,name:string)=>new RegExp(`\\b${name}\\b`).test(text);
+
+describe('runbook function inventory (Q1-06)',()=>{
+ it('§1 lists every public, service and internal function in its own group',()=>{
+  const s1=section(1);
+  const pub=s1.slice(s1.indexOf('公共读 RPC'),s1.indexOf('服务写 RPC'));
+  const svc=s1.slice(s1.indexOf('服务写 RPC'),s1.indexOf('内部函数'));
+  const internal=s1.slice(s1.indexOf('内部函数'));
+  expect([pub,svc,internal].every(x=>x.length>0)).toBe(true);
+  for(const n of PUBLIC_RPC_NAMES)expect({n,ok:mentions(pub,n)}).toEqual({n,ok:true});
+  for(const n of SERVICE_RPC_NAMES)expect({n,ok:mentions(svc,n)}).toEqual({n,ok:true});
+  for(const n of INTERNAL_FUNCTION_NAMES)expect({n,ok:mentions(internal,n)}).toEqual({n,ok:true});
+ });
+ it('§8 rollback drops and inventories every function',()=>{
+  const s8=section(8);
+  for(const n of Object.keys(F4_FUNCTIONS))expect({n,ok:mentions(s8,n)}).toEqual({n,ok:true});
+ });
+});
+```
+
+Run: `npm test -- src/lib/judgments/rpc-inventory.test.ts`
+Expected: PASS（2 项）。失败 → 补运行手册对应小节，不改清单。
 
 - [ ] **Step 3: 收集实施记录里的偏差**
 
@@ -22217,7 +22754,7 @@ Expected: 两个 `up to date`；同步计划 0 退出，每个 REGISTRY 方法�
 - [ ] **Step 11: 暂存**
 
 ```bash
-git add docs/runbooks/judgments.md docs/superpowers/specs/2026-11-04-judgment-framework-design.md supabase/migrations.lock.json docs/audits/2026-11-06-judgment-framework/implementation-log.md
+git add docs/runbooks/judgments.md src/lib/judgments/rpc-inventory.test.ts docs/superpowers/specs/2026-11-04-judgment-framework-design.md supabase/migrations.lock.json docs/audits/2026-11-06-judgment-framework/implementation-log.md
 ```
 
 - [ ] **Step 12: 提交**
@@ -22298,6 +22835,17 @@ git commit -m "docs(judgments): runbook, spec §19 implementation record, lock t
 - P2-03 uuid 帮助函数：`uuid-v8.ts` 移到 `src/lib/judgments/uuid-v8.ts`（测试同目录），全部 import 改路径，`ledger.ts` 在 F4 围栏内 import 它；文件结构表更新、Task 1 偏差注明与规格 §2.4 路径不同 → 改骨架、1、6、16、20
 - P3-01 触发器函数权限：三个触发器函数 `revoke execute … from public, anon, authenticated, service_role`，Task 2 用例断言每个客户端角色无 EXECUTE 且 PUBLIC 无授权 → 改 2
 
+### 计划审计第二轮修复
+
+2026-11-06，按 `docs/audits/2026-11-06-judgment-framework-plan/02-codex-plan-round2.md` 与指挥决策；一行一条：ID → 修复 → 改动的任务。共享契约两份（骨架 §共享契约、Task 1 `types.ts`）同步修改并逐字核对一致。
+- Q1-01 复核期不可后移：`quarantined_at` = 未解决事件的第一次隔离（队列已 `inconsistent` 时再隔离保留原值，`decide()` 与 `quarantine_settlement` 两处都保证；override / 拒绝 / reopen 清掉状态后才是新事件）；`isUnresolvedInconsistency` 与丢弃 override 分支改 `now >= reviewDeadline(q)`（含边界）；`inconsistent` 退避 `min(deadline, now + 7 天)` 恰在截止；用例：截止前 1 ms / 恰在截止、窗口内重复（同 / 不同证据）保留截止、新事件重新起算、cron 恰在截止作废且不调 resolver，复用项用例补 `quarantined_at` 与退避断言；规格 §5.4 → 改 12、3、规格
+- Q1-02 隔离发布原子化：新服务写 RPC `quarantine_settlement(p_judgment_id, p_lease_token, p_reason_code, p_payload, p_patch, p_batch_id) → {status:'quarantined'|'lease_lost', quarantine_id}`（锁队列 → 校验租约 → `on conflict … where status='open'` 复刻 `quarantine()` 的 open 键 upsert → 发布 `last_status / last_detail ∪ {quarantine_id} / next_attempt_at`，`attempts` 不变，清租约；`lease_lost` 不写）；契约 `JudgmentsDb.quarantineSettlement`（两份）、三实现（内存复刻）、`settle.ts::apply` 改为单次调用（删 `quarantine()` + payload 刷新 + `releaseLease`，`lease_lost` → `deferred`）；用例：SQL 与契约里过期 worker 在替代者之后刷新 → `lease_lost` 且项 / 队列不变、同键复用与另一原因码新项、参数校验；`settle.test` 断言只调一次且 `settle.ts` 不直接写 `dq_quarantine`；离线集成断言项与队列证据一致；契约与 Task 3 的 `inconsistent / quarantined` 夹具改走同一路径或补 `cutoff`；规格 §5.6 新行 → 改骨架、1、3、4、12、14、规格
+- Q1-03 裁决绑定证据身份：`reject_quarantined_settlement` 增参 `p_expected jsonb {evidence_hash, cutoff}`（签名 `(uuid,uuid,jsonb,text,jsonb,jsonb)`），与锁住的队列 `last_detail` 和项 `payload` 都比较，不等 → `stale`；`apply_quarantine_override` 签名不变（`override.evidence_hash / cutoff` 本就取自钩子读到的项），SQL 与内存补比较队列 `last_detail.cutoff`；契约 `rejectQuarantinedSettlement(judgmentId, quarantineId, expected, requestKey, row, audit)`、三实现、Task 14 钩子（从 payload 取 `evidence_hash / cutoff`，缺 → `invalid_resolution`）、钩子桩用例参数位置；竞争用例"钩子读 → worker 经 `quarantine_settlement` 刷新 → 拒绝 / 接受 → `stale`、无写"在 SQL（Task 3 races 第 4 段）、契约（Task 4）与钩子（Task 14，真内存库）三层；规格 §5.6 两行 → 改骨架、1、3、4、14、规格
+- Q1-04 校准轮次不再被失败单元饿死：`RoundState = {round, outcomes: Record<job, 'completed'|'failed'|'in_progress'>}`（`RoundOutcome` 新导出）；`failed` 整轮排除（即使留着代际），`paused / conflict` 与"插入成功但清空失败"（单元状态非空）记 `in_progress`、可续跑者优先；本轮全部 `failed` 或 `completed` 且无未完成代际才开新一轮；用例：每次都耗尽预算再失败的前排单元 + 后排单元每轮都完成、清空失败的插入下次恢复、原轮次用例改断言 `outcomes` → 改 16
+- Q1-05 空代际也不可复用：`freeze_calibration_cohort` 先 `insert … on conflict do nothing` 认领 `judgment_job_state['cohort:<generation>'] = {frozen_at, n, methodology, version, window}`，认领失败返回 `{status:'already_frozen', frozen_at, n}` 且不插成员；`clear_calibration_generation` 同删标记；契约返回 `{status:'frozen'|'already_frozen',frozen_at,n}`（两份）、三实现、Task 16 假库与 `stepUnit`（`already_frozen` → `CalibrateError('generation_reused')`，不清别人的代际）；用例：空代际复用、两连接并发冻结同一代际（后到者等待后 `already_frozen`、成员只插一次）、清空后可再冻结；运行手册孤儿代际查询改按标记；规格 §5.6 两行 → 改骨架、1、3、4、16、22、规格
+- Q1-06 文档与清单单一来源：Task 3 新建 `src/lib/judgments/rpc-inventory.ts`（`PUBLIC_RPCS / SERVICE_RPCS / INTERNAL_FUNCTIONS` 名字 → 签名），Task 3 权限用例的 READS / WRITES / INTERNAL / SIG 由它推导，Task 4 supabase 桩用例断言 admin 只调服务 RPC、anon 只调公共 RPC，Task 22 新建 `rpc-inventory.test.ts` 断言运行手册 §1（按组）与 §8 回滚列全；运行手册 §1 改为完整清单与返回状态契约（`apply_quarantine_override` / `reject_quarantined_settlement` / `quarantine_settlement` / `freeze_calibration_cohort` 返回状态、不抛），§8 回滚补全部函数与第九张表（先删 `judgment_calibration_cohort_members`），桶路径改 `cohorts/<cohort_sha256>.json`；附录 Part A / Part C 的 `item_not_open` 抛错说法改为返回状态 → 改骨架文件表、3、4、22、附录
+- 已核对：skeleton 与 Task 1 `types.ts` 两块逐字一致（脚本比对）；全部 ```ts 块语法解析与改前同一组既有片段告警、无新增；`release_lease` 仍只给延期 / 错误路径；`quarantine()` 只剩 Task 10 登记冲突与测试夹具使用
+
 
 ---
 
@@ -22326,7 +22874,7 @@ git commit -m "docs(judgments): runbook, spec §19 implementation record, lock t
 - `src/lib/judgments/db.ts`（Task 4）：`supabaseJudgmentsDb({anon,admin})`、`type RpcFn`、`toJudgmentError(e)`、`type PgErrorLike`、`isoTs(v)`、行归一 `methodologyFromTable / eventFromTable / judgmentFromTable / settlementFromTable / queueFromTable / calibrationFromTable / envelopeFromRpc`、转移表 `transitionAllowed(prev,next,actor)`、`PUBLIC_INPUT_KIND_SET`、常量 `QUEUE_LIST_MAX=500`、`COHORT_PAGE_MAX=1000`、`HISTORY_LIMIT_MAX=500`、`CLAIM_LIMIT_MAX=100`。
 - `src/lib/judgments/memory-judgments-db.ts`（Task 4）：`memoryJudgmentsDb(opts?:{tables?:TableClient})` 返回 `MemoryJudgmentsDb`（`JudgmentsDb` + `tables`、`setNow(iso|null)`、`addIssuer(id,status?,mergedInto?)`、`addIndustry(scheme,version,code)`、`expireLease(judgmentId)`、`snapshot()`）。
 - `src/lib/judgments/db-contract.ts`（Task 4，非测试文件）：`judgmentsDbContract(label,setup)`、`type JudgmentsContractHarness`、夹具工厂 `methodologyFixture(o?)`、`judgmentFixture(m,batchId,o?)`、`calibrationFixture(m,batchId,revision,o?)`、`settlementFixture(o?)`、常量 `F4_CLAIM_LOCK=20261109`、`withClaimLock(pool,fn)`。**任何调用 `claim_due_judgments` 的集成测试（Task 3、4、14）都必须在 `withClaimLock`（或同键的 `pg_advisory_lock(20261109)`）内登记到期判断并领取**，否则并行运行的测试文件会领走彼此的行；不领取的活跃判断一律用远期 `target`（默认 `2099-01-01`），永不到期。
-- SQL 侧（Task 3）与规格字面签名的差异全部写在 Task 3 的"规格偏差"里：复合结果返回 `jsonb` 对象；`append_settlement` 的 `request_digest` 放在 `row` 里；`register_judgment` 返回 `{judgment_id, registered_at, retrospective}`。SQL 异常一律以码作消息头（`lease_lost` 55P03；`methodology_unavailable`、`formula_hash_drift`、`item_not_open` P0001；`unknown_judgment`、`unknown_methodology` P0002；`methodology_mismatch`、`settle_window_mismatch`、`subject_type_not_public`、`input_not_allowed`、`invalid_parameter` 22023；触发器 `append_only:<表>`、`settlement_sequence: …` 23514），`toJudgmentError` 按消息头映射。
+- SQL 侧（Task 3）与规格字面签名的差异全部写在 Task 3 的"规格偏差"里：复合结果返回 `jsonb` 对象；`append_settlement` 的 `request_digest` 放在 `row` 里；`register_judgment` 返回 `{judgment_id, registered_at, retrospective}`。SQL 异常一律以码作消息头（`lease_lost` 55P03；`methodology_unavailable`、`formula_hash_drift` P0001；`item_not_open` 整合后不再作为异常抛出——`apply_quarantine_override` / `reject_quarantined_settlement` 返回它，`quarantine_settlement` 返回 `lease_lost` 状态，计划审计 P1-04/Q1-02/Q1-06；`unknown_judgment`、`unknown_methodology` P0002；`methodology_mismatch`、`settle_window_mismatch`、`subject_type_not_public`、`input_not_allowed`、`invalid_parameter` 22023；触发器 `append_only:<表>`、`settlement_sequence: …` 23514），`toJudgmentError` 按消息头映射。
 
 ---
 
@@ -22389,7 +22937,7 @@ git commit -m "docs(judgments): runbook, spec §19 implementation record, lock t
 export type JudgmentErrorCode=/* …Task 1 已有… */
  |'invalid_condition'            // resolverFor() 拒绝 recommendation_hit / 未实现 resolver（§3.3、§13）
  |'lease_lost'                   // releaseLease / appendSettlement 租约 token 不匹配（§5.4、§13）
- |'item_not_open'                // apply_quarantine_override 遇到已处理的隔离项（§7.6 钩子幂等）
+ |'item_not_open'                // 码表保留；整合后 apply_quarantine_override / reject_quarantined_settlement 以返回状态报告它，不抛（计划审计 P1-04、Q1-06）
  |'override_mismatch'            // fromOverride() 收到与 resolver / 原因码不符或摘要不符的裁决（§7.6）
  |'unsupported_formula_version'; // deriveMetricsAsOf 的 formulaVersion ≠ FORMULA_VERSION（§3.5、§12.2）
 ```
@@ -22402,7 +22950,7 @@ export type JudgmentErrorCode=/* …Task 1 已有… */
 | 1 `errors.ts` | `JudgmentError` | `new JudgmentError(code:JudgmentErrorCode,message?:string)`，实例有 `.code` |
 | 1 `time.ts` | `closeInstantUtc`、`endOfUtcDay`、`addDaysIso`、`monthEndIso` | `closeInstantUtc(date:'YYYY-MM-DD',market:PriceMarket):string`（ISO，毫秒）；`endOfUtcDay(date):string` = `${date}T23:59:59.999Z`；`addDaysIso(date,n):string`；`monthEndIso('YYYY-MM'):'YYYY-MM-DD'` |
 | 1 `job-keys.ts` | `jobKey` | `jobKey('produce',methodologyId,version):string` = `produce:<id>@<version>`（组件 percent-encoding） |
-| 4 `db.ts` / `memory-judgments-db.ts` / `pg-judgments-db.ts` | `supabaseJudgmentsDb`、`memoryJudgmentsDb`、`pgJudgmentsDb` | `supabaseJudgmentsDb({anon,admin})`；`memoryJudgmentsDb(opts?:{tables?:TableClient})`（Task 4 实际签名：对象参数）返回 `MemoryJudgmentsDb`（`JudgmentsDb & {tables;setNow(iso:string\|null):void;…}`）（`setNow` 决定 `serverTime / registered_at / claimDue / releaseLease 抬升 / applyQuarantineOverride 的 now`；`applyQuarantineOverride` 翻转 `tables` 里的 `dq_quarantine` 项）；`pgJudgmentsDb(pool:Pool)`。三者在租约 token 不匹配时以 `JudgmentError('lease_lost')` 拒绝，在隔离项已非 open 时 `applyQuarantineOverride` 以 `JudgmentError('item_not_open')` 拒绝；`appendSettlement` 内部用 `operationDigest` 算 `request_digest` |
+| 4 `db.ts` / `memory-judgments-db.ts` / `pg-judgments-db.ts` | `supabaseJudgmentsDb`、`memoryJudgmentsDb`、`pgJudgmentsDb` | `supabaseJudgmentsDb({anon,admin})`；`memoryJudgmentsDb(opts?:{tables?:TableClient})`（Task 4 实际签名：对象参数）返回 `MemoryJudgmentsDb`（`JudgmentsDb & {tables;setNow(iso:string\|null):void;…}`）（`setNow` 决定 `serverTime / registered_at / claimDue / releaseLease 抬升 / quarantineSettlement / applyQuarantineOverride 的 now`；`quarantineSettlement / applyQuarantineOverride / rejectQuarantinedSettlement` 读写 `tables` 里的 `dq_quarantine` 项）；`pgJudgmentsDb(pool:Pool)`。三者在租约 token 不匹配时：`releaseLease / appendSettlement` 以 `JudgmentError('lease_lost')` 拒绝，`quarantineSettlement` **返回** `{status:'lease_lost', quarantine_id:null}`（计划审计 Q1-02，不写任何行）；隔离项已非 open / 不属于该判断时 `applyQuarantineOverride` **返回** `'item_not_open'`、`rejectQuarantinedSettlement` **返回** `{seq, status:'item_not_open'}`，队列已换证据 / 已关闭 / 证据身份与钩子读到的不符时返回 `'stale'` / `'closed'`（计划审计 P1-04/P1-05/Q1-03，都是返回状态、不抛）；`freezeCalibrationCohort` 对已认领的代际返回 `{status:'already_frozen',…}`（Q1-05）；`appendSettlement` 内部用 `operationDigest` 算 `request_digest`（整合后以 Task 4 正文与 `rpc-inventory.ts` 为准） |
 | 5 `batches.ts` | `BatchCounts.deferred`、`JUDGMENT_INFO_CODES` | （Task 5 实际设计，集成者定稿）`deferred` 可选、`emptyCounts()` **不含**它——判断层写 `{...emptyCounts(),deferred:0}`；`accounted()` 计入 `deferred`；`pending_summary`、`unavailable_summary`、`voided_summary`、`abstained_summary`、`lease_lost`、`stale_revision`、`job_state_conflict`、`macro_unavailable` 在 `JUDGMENT_INFO_CODES`，`deadline_hit` 在 `INFO_CODES`；`isInfoError` 对两者都判信息码（`INFO_CODES` 本身不变） |
 | 6 `macro-api.ts` | `MacroUnavailable`、`unavailableMacroReadApi` | `class MacroUnavailable extends Error`（`new MacroUnavailable(message?)`）；`unavailableMacroReadApi():MacroReadApi`（每个方法抛 `MacroUnavailable`） |
 | 6/7 `inputs-db.ts` | `anonJudgmentInputsDb` | `anonJudgmentInputsDb({anon,macro}):JudgmentInputsDb`，`kline` 由 Task 7 内部接 `readKlineRange`（`[from,to]` 含两端、升序去重；无数据返回 `bars:[]` 的序列或 `KlineFailure`） |
