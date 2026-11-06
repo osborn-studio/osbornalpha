@@ -143,6 +143,54 @@ describe('mapJobs',()=>{
  });
 });
 
+describe('failure evidence, shared throttling, own-property lookups',()=>{
+ const sha=(b:Uint8Array)=>createHash('sha256').update(b).digest('hex');
+ const stored=(h:{raw:{objects:Map<string,Uint8Array>}})=>[...h.raw.objects.entries()].filter(([k])=>!k.endsWith('.meta.json')).map(([,v])=>sha(v));
+ it('stores the request before sending and every failure body before retrying or throwing',async()=>{
+  const body=(t:string)=>()=>new Response(t,{status:429});
+  const h=harness([body('{"error":"first"}'),body('slow down')]);
+  const out=await mapJobs([{idType:'ID_ISIN',idValue:'A'}],h.deps);
+  expect(out.exhausted).toBe(true);expect(out.failures).toHaveLength(2);
+  const hashes=stored(h);
+  expect(hashes).toContain(out.failures[0].request_sha256);
+  expect(hashes).toContain(sha(new TextEncoder().encode('{"error":"first"}')));
+  expect(out.failures.map(f=>f.response_sha256)).toEqual([sha(new TextEncoder().encode('{"error":"first"}')),sha(new TextEncoder().encode('slow down'))]);
+  expect(out.failures.map(f=>f.status)).toEqual([429,429]);
+  // terminal 4xx: the error carries the evidence and the body is stored
+  const h2=harness([()=>new Response('{"error":"bad"}',{status:400})]);
+  const err=await mapJobs([{idType:'ID_ISIN',idValue:'A'}],h2.deps).catch(e=>e) as OpenFigiError;
+  expect(err).toBeInstanceOf(OpenFigiError);expect(err.evidence?.status).toBe(400);
+  expect(stored(h2)).toContain(err.evidence!.response_sha256);expect(stored(h2)).toContain(err.evidence!.request_sha256);
+  // a network error stores the request only
+  const h3=harness([boom,boom]);
+  const net=await mapJobs([{idType:'ID_ISIN',idValue:'A'}],h3.deps);
+  expect(net.failures.map(f=>f.response_sha256)).toEqual([null,null]);expect(stored(h3)).toContain(net.failures[0].request_sha256);
+ });
+ it('spaces requests across mapIsins then mapTickers with shared deps',async()=>{
+  const h=harness([ok([{data:AAPL}]),ok([{data:AAPL}])]);
+  const times:number[]=[];const f0=h.deps.fetch;
+  const deps={...h.deps,fetch:(async(...a:Parameters<typeof fetch>)=>{times.push(h.deps.now());return f0(...a);}) as typeof fetch};
+  await mapIsins(['US0378331005'],deps);
+  await mapTickers(['AAPL'],deps);
+  expect(times[1]-times[0]).toBeGreaterThanOrEqual(3000);
+  expect(h.sleeps).toEqual([3000]);
+ });
+ it('queues concurrent calls on one limiter',async()=>{
+  const h=harness([ok([{data:AAPL}]),ok([{data:AAPL}]),ok([{data:AAPL}])]);
+  await Promise.all([mapIsins(['A1'],h.deps),mapIsins(['A2'],h.deps),mapTickers(['AAPL'],h.deps)]);
+  // three requests, each queued 3 s behind the previous one (virtual clock: sleeps accumulate to 6 s)
+  expect(h.calls).toHaveLength(3);expect(h.sleeps).toEqual([3000,3000]);expect(h.deps.now()).toBe(6000);
+ });
+ it('treats Object.prototype names as unknown exchange codes',()=>{
+  for(const c of ['toString','__proto__','constructor','hasOwnProperty'])expect(securityTickerFor(c,'AAPL')).toEqual({ok:false,reason:`exch_unknown:${c}`});
+  expect(groupFigiResults([eq({exchCode:'constructor'})]).skipped).toEqual(['exch_unknown:constructor']);
+ });
+ it('infers the board from the code prefix only for CH',()=>{
+  expect(securityTickerFor('CG','000001')).toEqual({ok:true,market:'CN',ticker:'000001.SH'});
+  expect(securityTickerFor('CS','600519')).toEqual({ok:true,market:'CN',ticker:'600519.SZ'});
+ });
+});
+
 const RECORDED=new URL('../fixtures/openfigi/recorded-probe-isin.json',import.meta.url);
 describe('recorded probe (Task 3b Step 8)',()=>{
  it.skipIf(!existsSync(RECORDED))('maps AAPL, 600519 and 0700 to exactly one group per ticker (Tencent ISIN also lists 80700.HK and the OTC line TCTZF)',()=>{

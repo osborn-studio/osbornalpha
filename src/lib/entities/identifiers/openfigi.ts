@@ -30,11 +30,12 @@ export interface FigiEvidence{request_sha256:string;response_sha256:string;index
 export type FigiJobResult=
  |{job:FigiJob;status:'ok';records:FigiRecord[];evidence:FigiEvidence}
  |{job:FigiJob;status:'not_found'|'error';message:string;evidence:FigiEvidence};
-export interface MapResult{results:(FigiJobResult|null)[];exhausted:boolean;requests:number}
-export interface MappedBy{byKey:Map<string,FigiJobResult>;exhausted:boolean;unprocessed:string[];unsupported:string[];requests:number}
+export interface FigiFailure{status:number|null;request_sha256:string;response_sha256:string|null}
+export interface MapResult{results:(FigiJobResult|null)[];exhausted:boolean;requests:number;failures:FigiFailure[]}
+export interface MappedBy{byKey:Map<string,FigiJobResult>;exhausted:boolean;unprocessed:string[];unsupported:string[];requests:number;failures:FigiFailure[]}
 export interface OpenFigiDeps{fetch:typeof fetch;raw:RawStore;apiKey?:string|null;sleep?:(ms:number)=>Promise<void>;now?:()=>number;budget?:Budget}
 export class OpenFigiError extends Error{
- constructor(readonly code:'invalid_schema'|'openfigi_http',detail?:string){super(detail?`${code}: ${detail}`:code);this.name='OpenFigiError';}
+ constructor(readonly code:'invalid_schema'|'openfigi_http',detail?:string,readonly evidence?:FigiFailure){super(detail?`${code}: ${detail}`:code);this.name='OpenFigiError';}
 }
 
 export function openFigiLimits(apiKey?:string|null):{jobsPerRequest:number;minIntervalMs:number}{
@@ -58,43 +59,75 @@ function parseItem(job:FigiJob,item:unknown,evidence:FigiEvidence):FigiJobResult
  throw new OpenFigiError('invalid_schema','job result');
 }
 
+/** One serialized pacer per (fetch, quota identity): every mapJobs call sharing them queues behind the same clock. */
+interface Pacer{last:number|null;tail:Promise<void>}
+const PACERS=new WeakMap<object,Map<string,Pacer>>();
+function pacerFor(deps:OpenFigiDeps):Pacer{
+ let m=PACERS.get(deps.fetch);
+ if(!m){m=new Map();PACERS.set(deps.fetch,m);}
+ const id=deps.apiKey?`key:${deps.apiKey}`:'anon';
+ let p=m.get(id);
+ if(!p){p={last:null,tail:Promise.resolve()};m.set(id,p);}
+ return p;
+}
+async function pace(p:Pacer,interval:number,now:()=>number,sleep:(ms:number)=>Promise<void>):Promise<void>{
+ const prev=p.tail;let release!:()=>void;
+ p.tail=new Promise<void>(r=>{release=r;});
+ await prev;
+ try{
+  if(p.last!==null){const wait=p.last+interval-now();if(wait>0)await sleep(wait);}
+  p.last=now();
+ }finally{release();}
+}
+
 export async function mapJobs(jobs:readonly FigiJob[],deps:OpenFigiDeps):Promise<MapResult>{
  const {jobsPerRequest,minIntervalMs}=openFigiLimits(deps.apiKey);
  const sleep=deps.sleep??((ms:number)=>new Promise<void>(r=>setTimeout(r,ms)));
  const now=deps.now??Date.now;
+ const pacer=pacerFor(deps);
  const results:(FigiJobResult|null)[]=jobs.map(()=>null);
+ const failures:FigiFailure[]=[];
  const headers:Record<string,string>={'Content-Type':'application/json'};
  if(deps.apiKey)headers['X-OPENFIGI-APIKEY']=deps.apiKey;
- let last:number|null=null,requests=0;
- const send=async(body:string):Promise<Response|null>=>{
-  if(last!==null){const wait=last+minIntervalMs-now();if(wait>0)await sleep(wait);}
-  last=now();requests++;
-  try{return await deps.fetch(OPENFIGI_URL,{method:'POST',headers,body,signal:deps.budget?.signal});}
-  catch(e){if(deps.budget?.signal.aborted)throw e;return null;}
+ let requests=0;
+ const store=async(bytes:Uint8Array,meta:Record<string,string|number>)=>{
+  let json=true;
+  try{JSON.parse(new TextDecoder().decode(bytes));}catch{json=false;}
+  return deps.raw.put({kind:'openfigi',bytes,contentType:json?'application/json':'text/html',meta},deps.budget);
+ };
+ /** The request is stored before it is sent; every received response is stored before anything else happens. */
+ const send=async(body:string,reqSha:string):Promise<{res:Response|null;bytes:Uint8Array|null;sha:string|null}>=>{
+  await pace(pacer,minIntervalMs,now,sleep);
+  requests++;
+  let res:Response;
+  try{res=await deps.fetch(OPENFIGI_URL,{method:'POST',headers,body,signal:deps.budget?.signal});}
+  catch(e){if(deps.budget?.signal.aborted)throw e;failures.push({status:null,request_sha256:reqSha,response_sha256:null});return {res:null,bytes:null,sha:null};}
+  const bytes=new Uint8Array(await res.arrayBuffer());
+  const stored=await store(bytes,{role:'response',request_sha256:reqSha,http_status:res.status});
+  if(!res.ok)failures.push({status:res.status,request_sha256:reqSha,response_sha256:stored.sha256});
+  return {res,bytes,sha:stored.sha256};
  };
  const retryable=(r:Response|null)=>r===null||r.status===429||r.status>=500;
  for(let start=0;start<jobs.length;start+=jobsPerRequest){
   const chunk=jobs.slice(start,start+jobsPerRequest);
   const body=JSON.stringify(chunk);
-  let res=await send(body);
-  if(retryable(res)){await sleep(BACKOFF_MS);res=await send(body);}
-  if(res===null||retryable(res))return {results,exhausted:true,requests};
-  if(!res.ok)throw new OpenFigiError('openfigi_http',String(res.status));
-  const bytes=new Uint8Array(await res.arrayBuffer());
-  const req=await deps.raw.put({kind:'openfigi',bytes:new TextEncoder().encode(body),contentType:'application/json',meta:{role:'request',jobs:chunk.length}},deps.budget);
-  const resp=await deps.raw.put({kind:'openfigi',bytes,contentType:'application/json',meta:{role:'response',request_sha256:req.sha256}},deps.budget);
+  const req=await store(new TextEncoder().encode(body),{role:'request',jobs:chunk.length});
+  let out=await send(body,req.sha256);
+  if(retryable(out.res)){await sleep(BACKOFF_MS);out=await send(body,req.sha256);}
+  if(out.res===null||retryable(out.res))return {results,exhausted:true,requests,failures};
+  if(!out.res.ok)throw new OpenFigiError('openfigi_http',String(out.res.status),failures[failures.length-1]);
   let parsed:unknown;
-  try{parsed=JSON.parse(new TextDecoder().decode(bytes));}catch{throw new OpenFigiError('invalid_schema','response is not JSON');}
-  if(!Array.isArray(parsed)||parsed.length!==chunk.length)throw new OpenFigiError('invalid_schema','response length');
-  parsed.forEach((item,i)=>{results[start+i]=parseItem(chunk[i],item,{request_sha256:req.sha256,response_sha256:resp.sha256,index:i});});
+  try{parsed=JSON.parse(new TextDecoder().decode(out.bytes!));}catch{throw new OpenFigiError('invalid_schema','response is not JSON',{status:out.res.status,request_sha256:req.sha256,response_sha256:out.sha});}
+  if(!Array.isArray(parsed)||parsed.length!==chunk.length)throw new OpenFigiError('invalid_schema','response length',{status:out.res.status,request_sha256:req.sha256,response_sha256:out.sha});
+  parsed.forEach((item,i)=>{results[start+i]=parseItem(chunk[i],item,{request_sha256:req.sha256,response_sha256:out.sha!,index:i});});
  }
- return {results,exhausted:false,requests};
+ return {results,exhausted:false,requests,failures};
 }
 
 function keyed(keys:readonly string[],jobs:FigiJob[],out:MapResult,unsupported:string[]):MappedBy{
  const byKey=new Map<string,FigiJobResult>();const unprocessed:string[]=[];
  keys.forEach((k,i)=>{const r=out.results[i];if(r)byKey.set(k,r);else unprocessed.push(k);});
- return {byKey,exhausted:out.exhausted,unprocessed,unsupported,requests:out.requests};
+ return {byKey,exhausted:out.exhausted,unprocessed,unsupported,requests:out.requests,failures:out.failures};
 }
 
 export async function mapIsins(isins:readonly string[],deps:OpenFigiDeps):Promise<MappedBy>{
@@ -124,13 +157,13 @@ export async function mapTickers(tickers:readonly string[],deps:OpenFigiDeps):Pr
 }
 
 export function securityTickerFor(exchCode:string|null|undefined,ticker:string|null|undefined):{ok:true;market:FigiMarket;ticker:string}|{ok:false;reason:string}{
- const kind=exchCode?EXCH_MAP[exchCode]:undefined;
+ const kind=exchCode&&Object.hasOwn(EXCH_MAP,exchCode)?EXCH_MAP[exchCode]:undefined;
  if(!kind)return {ok:false,reason:`exch_unknown:${exchCode??'null'}`};
  const raw=(ticker??'').trim().toUpperCase();
  if(kind==='US'){const t=normalizeSecurityTicker(raw,'US');return t?{ok:true,market:'US',ticker:t}:{ok:false,reason:'ticker_invalid'};}
  if(kind==='HK'){const t=normalizeSecurityTicker(raw,'HK');return t?{ok:true,market:'HK',ticker:t}:{ok:false,reason:'ticker_invalid'};}
  if(!/^\d{6}$/.test(raw))return {ok:false,reason:'ticker_invalid'};
- const suffix=kind==='SH'?'SH':kind==='SZ'?'SZ':/^[69]/.test(raw)?'SH':/^[03]/.test(raw)?'SZ':null;
+ const suffix=kind==='SH'?'SH':kind==='SZ'?'SZ':kind==='CH'?(/^[69]/.test(raw)?'SH':/^[03]/.test(raw)?'SZ':null):null;
  if(!suffix)return {ok:false,reason:`exch_unknown:CH:${raw[0]}`};
  return {ok:true,market:'CN',ticker:`${raw}.${suffix}`};
 }
