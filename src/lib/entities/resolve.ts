@@ -2,8 +2,10 @@
 // its securities. Zero identifiers → 'empty_query'; more than one → 'ambiguous_query' (callers
 // must not rely on an implicit precedence between conflicting identifiers).
 // Effective dates: validity windows are DATE-level and evaluated against a UTC calendar date
-// (`today`, default = current UTC date); exchange-local trading dates are out of scope. A security
-// row is current at `today` iff valid_from <= today and (valid_to is null or valid_to > today).
+// (`asOf`, default = current UTC date; `today` is the deprecated synonym, spec 3 §4.3.5);
+// exchange-local trading dates are out of scope. A security row is current at `asOf` iff
+// valid_from <= asOf and (valid_to is null or valid_to > asOf). Each security carries its window
+// methods (observation bounds vs evidenced dates, spec 3 §4.3.1) so callers can judge the ends.
 // `date` columns arrive from PostgREST as 'YYYY-MM-DD' strings, so ISO strings compare
 // lexicographically; the in-memory client used in tests must be fed the same string form.
 // Merges: one merged_into hop is followed (result carries redirected_from); a merged target
@@ -12,30 +14,52 @@
 import type {Row,TableClient} from '../db/table-client';
 import {inferCoreMarket,normalizeSecurityTicker} from '../securities/ticker';
 import {isValidIsin,isValidLei,normalizeCik} from '../research/entity-keys/identifiers';
+import type {ValidFromMethod,ValidToMethod} from './types';
 
 export interface ResolveQuery{ticker?:string;isin?:string;cik?:string;lei?:string}
-export interface ResolvedSecurity{ticker:string;isin:string|null;figi:string|null;share_class:string|null;is_primary:boolean;valid_from:string;valid_to:string|null}
+export interface ResolvedSecurity{ticker:string;isin:string|null;figi:string|null;share_class:string|null;is_primary:boolean;valid_from:string;valid_to:string|null;valid_from_method:ValidFromMethod|null;valid_to_method:ValidToMethod|null}
 export interface ResolvedIssuer{
  issuer_id:string;status:string;redirected_from?:string;
  names:{zh:string|null;en:string|null};
  identifiers:{cik:string|null;lei:string|null;usci:string|null};
  securities:ResolvedSecurity[];
 }
-export interface ResolveOptions{includeExpired?:boolean;today?:string}
+export interface ResolveOptions{
+ includeExpired?:boolean;
+ /** Evaluation date 'YYYY-MM-DD' (UTC calendar date); default = current UTC date. */
+ asOf?:string;
+ /** @deprecated use asOf (same meaning). Both given and different → invalid_as_of. */
+ today?:string;
+}
+/** Cache-Control for a resolve evaluated at a past date (spec 3 §4.3.5). */
+export const HISTORICAL_CACHE_CONTROL='public, max-age=600, s-maxage=3600';
+
+const FROM_METHODS:readonly string[]=['first_observed','listing_date','ticker_change','curated'];
+const TO_METHODS:readonly string[]=['delisting','ticker_change','sec_file_absent','curated','merge_close','unrecorded'];
 
 const str=(v:unknown)=>typeof v==='string'?v:null;
 const isCurrent=(r:Row,today:string)=>{const from=str(r.valid_from),to=str(r.valid_to);return from!==null&&from<=today&&(to===null||to>today);};
 /** The one validity predicate (valid_from <= today && (valid_to is null || valid_to > today)); reused by the facts scope (plan 2 Task 14). */
 export const isCurrentSecurity=isCurrent;
-const toSecurity=(r:Row):ResolvedSecurity=>({ticker:String(r.ticker),isin:str(r.isin),figi:str(r.figi),share_class:str(r.share_class),is_primary:r.is_primary===true,valid_from:String(r.valid_from),valid_to:str(r.valid_to)});
+const toSecurity=(r:Row):ResolvedSecurity=>({
+ ticker:String(r.ticker),isin:str(r.isin),figi:str(r.figi),share_class:str(r.share_class),is_primary:r.is_primary===true,valid_from:String(r.valid_from),valid_to:str(r.valid_to),
+ valid_from_method:typeof r.valid_from_method==='string'&&FROM_METHODS.includes(r.valid_from_method)?r.valid_from_method as ValidFromMethod:null,
+ valid_to_method:typeof r.valid_to_method==='string'&&TO_METHODS.includes(r.valid_to_method)?r.valid_to_method as ValidToMethod:null,
+});
 
-/** Validates `today` as a real calendar date 'YYYY-MM-DD'; defaults to the current UTC date. */
-function resolveToday(today?:string):string{
- if(today===undefined)return new Date().toISOString().slice(0,10);
- if(!/^\d{4}-\d{2}-\d{2}$/.test(today))throw new Error('invalid_today');
- const ms=Date.parse(`${today}T00:00:00Z`);
- if(Number.isNaN(ms)||new Date(ms).toISOString().slice(0,10)!==today)throw new Error('invalid_today');
- return today;
+/** A real calendar date in the exact form 'YYYY-MM-DD' (2026-02-30 and ' 2026-11-05' are rejected). */
+export function isCalendarDate(s:string):boolean{
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(s))return false;
+ const ms=Date.parse(`${s}T00:00:00Z`);
+ return !Number.isNaN(ms)&&new Date(ms).toISOString().slice(0,10)===s;
+}
+
+/** asOf wins; today is its deprecated synonym (invalid_today kept for callers that still pass it). */
+function resolveAsOf(opts:ResolveOptions):string{
+ if(opts.asOf!==undefined&&opts.today!==undefined&&opts.asOf!==opts.today)throw new Error('invalid_as_of');
+ if(opts.asOf!==undefined){if(!isCalendarDate(opts.asOf))throw new Error('invalid_as_of');return opts.asOf;}
+ if(opts.today!==undefined){if(!isCalendarDate(opts.today))throw new Error('invalid_today');return opts.today;}
+ return new Date().toISOString().slice(0,10);
 }
 
 /**
@@ -80,7 +104,7 @@ function currentOwner(rows:Row[],today:string):string|null{
 
 export async function resolveIssuer(client:TableClient,q:ResolveQuery,opts:ResolveOptions={}):Promise<ResolvedIssuer|null>{
  const lookup=parseQuery(q);
- const today=resolveToday(opts.today);
+ const today=resolveAsOf(opts);
  let issuerId:string|null=null;
  if(lookup.column==='lei'||lookup.column==='cik'){
   issuerId=str((await client.select('issuers',{[lookup.column]:lookup.value},{limit:1}))[0]?.issuer_id);

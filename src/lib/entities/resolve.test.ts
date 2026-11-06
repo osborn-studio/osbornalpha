@@ -101,6 +101,21 @@ describe('resolveIssuer',()=>{
   expect((await resolveIssuer(c,{isin},{today:TODAY}))?.issuer_id).toBe('x2');
   expect((await resolveIssuer(c,{isin},{today:'2010-06-01'}))?.issuer_id).toBe('x1');
  });
+ it('accepts asOf as the evaluation date; today is a deprecated synonym',async()=>{
+  const c=await seed();
+  expect((await resolveIssuer(c,{ticker:'AAPL.FUT'},{asOf:'2030-06-01'}))?.issuer_id).toBe('a');
+  expect((await resolveIssuer(c,{ticker:'AAPL.OLD'},{asOf:'1995-01-01'}))?.issuer_id).toBe('a');
+  expect((await resolveIssuer(c,{ticker:'AAPL.OLD'},{asOf:'1995-01-01',today:'1995-01-01'}))?.issuer_id).toBe('a');
+  await expect(resolveIssuer(c,{ticker:'AAPL'},{asOf:'2026-11-05',today:'2026-11-04'})).rejects.toThrow('invalid_as_of');
+  for(const asOf of ['2026-02-30','20261105',' 2026-11-05'])await expect(resolveIssuer(c,{ticker:'AAPL'},{asOf})).rejects.toThrow('invalid_as_of');
+ });
+ it('returns the window methods of each security (null when the row predates the method columns)',async()=>{
+  const c=await seed();
+  await c.insert('issuer_securities',{issuer_id:'a',ticker:'AAPL.W',isin:null,figi:null,share_class:'other',is_primary:false,valid_from:'2001-01-01',valid_to:'2002-01-01',valid_from_method:'listing_date',valid_to_method:'sec_file_absent',source:'sec'});
+  const out=await resolveIssuer(c,{ticker:'AAPL'},{asOf:TODAY,includeExpired:true});
+  expect(out?.securities.find(s=>s.ticker==='AAPL.W')).toMatchObject({valid_from_method:'listing_date',valid_to_method:'sec_file_absent'});
+  expect(out?.securities.find(s=>s.ticker==='AAPL')).toMatchObject({valid_from_method:null,valid_to_method:null});
+ });
  it('resolves a secondary security of a merged issuer to the target and its securities',async()=>{
   const c=await seed();
   await c.insert('issuer_securities',{issuer_id:'old',ticker:'OLDX',isin:null,figi:null,share_class:'common',is_primary:false,valid_from:'2001-01-01',valid_to:null,source:'sec'});
