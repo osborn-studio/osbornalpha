@@ -15,13 +15,13 @@
 ## 仓库约定（动手前必读）
 
 - **工作树**：`/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/evals-gold-sets-75bfc9`，分支 `claude/evals-gold-sets-75bfc9`。不要 `cd` 出去；不要用裸 `git stash`（栈与其他工作树共享）。
-- **所有权边界**（并行兄弟：计划三、F3、F4、行业研究）：只新建/修改 `src/lib/evals/**`、`scripts/evals/**`、`docs/evals/**`、`docs/audits/2026-11-06-evals-gold-sets/**`、新迁移 `supabase/migrations/20261110090000_dq_eval_runs.sql`、新路由 `src/app/api/admin/evals/**`。共享文件只做**标记块**修改，块首尾各一行 `// F6 begin` / `// F6 end`（YAML 用 `# F6 begin/end`，JSON 无注释则只追加条目）：`supabase/migrations.lock.json`（追加一条）、`scripts/ci/research-checks.ts`（`criticalSuites` 追加两项）、`src/lib/supabase/database.types.ts`（两张表）、`.github/workflows/ci.yml`（`fetch-depth: 0`、一个 validate 步骤、上传 `reports/evals/**`）、`src/i18n/messages/*.json` 本期**不改**（UI 延后）。`src/lib/facts/**`、`src/lib/dq/**`、`src/app/(app)/admin/dq/**` 一律只读。
+- **所有权边界**（并行兄弟：计划三、F3、F4、行业研究）：只新建/修改 `src/lib/evals/**`、`scripts/evals/**`、`docs/evals/**`、`docs/audits/2026-11-06-evals-gold-sets/**`、新迁移 `supabase/migrations/20261110090000_dq_eval_runs.sql`、新路由 `src/app/api/admin/evals/**`，以及 F6 自己的规格 `docs/superpowers/specs/2026-11-04-evals-and-gold-sets-design.md`（Task 16 只追加 §18）与规格索引 `docs/superpowers/specs/2026-11-04-SPEC-INDEX.md` 里 **F6 那一行**（Codex 计划第 1 轮 P2-4；`docs/audits/2026-11-04-data-foundation-2/**` 属计划二，本计划不写，其 `index.json` 延后为后续事项）。一次性/本地辅助脚本放 `.claude/scratch/`（git 忽略、工作树本地，沿用既有交接约定；P2-4 的这一部分 DECLINE）。共享文件只做**标记块**修改，块首尾各一行 `// F6 begin` / `// F6 end`（YAML 用 `# F6 begin/end`，JSON 无注释则只追加条目）：`supabase/migrations.lock.json`（追加一条）、`scripts/ci/research-checks.ts`（`criticalSuites` 追加两项）、`src/lib/supabase/database.types.ts`（两张表）、`.github/workflows/ci.yml`（`fetch-depth: 0`、一个 validate 步骤、上传 `reports/evals/**`，Task 11 再加 `test:db` 之后的 frozen 报告摘要步骤）、`src/i18n/messages/*.json` 本期**不改**（UI 延后）。`src/lib/facts/**`、`src/lib/dq/**`、`src/app/(app)/admin/dq/**` 一律只读。
 - **迁移**：时间戳 `20261110HHMMSS`，本计划只用 `20261110090000_dq_eval_runs.sql`。可重放（`create table if not exists`、`drop constraint if exists` 后 `add constraint`）。**不触碰 `dq_reconciliations`**（规格 §0 R5-3）。锁：`supabase/migrations.lock.json` 追加 `{file, sha256}`（文件字节 hex，`shasum -a 256`）；已锁文件不可改。落地顺序（§0 R5-4）：计划三先合并；若 F6 先于计划三合并，PR 描述里提示计划三把未入锁迁移改时间戳。
 - **数据库测试**：`describe.skipIf(!process.env.S4_TEST_STATE)`，`JSON.parse(readFileSync(process.env.S4_TEST_STATE,'utf8')).adminUrl`。任何含字符串 `S4_TEST_STATE` 的 `.test.ts` 必须进 `scripts/ci/research-checks.ts::criticalSuites`（否则 `test:db` 报 inventory drift），且 critical 套件里**不能有 skip 的用例**。重放迁移用 `replayMigration`（从 `src/lib/dq/dq-foundation.integration.test.ts:17` 复制，未导出；`lock_timeout='3s'`，55P03/40P01 重试）。
 - **单文件真实库运行**：`.claude/scratch/db-one.ts`（未提交；内容见 `docs/superpowers/plans/2026-11-04-HANDOFF-data-foundation-2-execution.md` §5，丢了按那里重建）：`LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/evals/evals-store.integration.test.ts`。`LC_ALL=C` 只给 `test:db`/`test:migrations`/db-one，**不要**导出给 `npm test`。
 - **共享库污染**：`test:db` 的所有套件共享一个库。`filings.source_ref` 全局唯一，`sync-us.integration.test.ts` 也会同步 AAPL/MSFT 夹具。F6 的 facts 集成测试**只用 F6 自己的合成 CIK**（`999xxxx` 段，见 Task 9 种子）与从 AAPL 夹具派生、改写了 CIK 与 accession 的副本，绝不复用 AAPL/MSFT 的 CIK 与 accession。
 - **数值**：一律十进制字符串，不转 `Number`。解析/规范化复用 `src/lib/facts/json-numbers.ts::canonicalDecimal`；比较用本计划 `compare.ts::compareWithinTolerance`（BigInt）。
-- **代码版本**：`resolveCodeVersion({allowGit:true})`（`src/lib/facts/deps.ts:24`，返回 `sha` 或 `sha-dirty` 或 `null`）；本计划 `version.ts` 把它拆成 `{sha, dirty}`，`sha` 必须是 40 位 hex。
+- **代码版本**（Codex 计划第 1 轮 P1-7）：`version.ts::evaluatorVersion()` 在 git 检出里用 `git rev-parse HEAD` + `git status --porcelain --untracked-files=normal`（非空即 dirty），**忽略** `VERCEL_GIT_COMMIT_SHA`；只有不在检出里（Vercel 函数包）才用 `VERCEL_GIT_COMMIT_SHA`（dirty=false）。不用也不改 `src/lib/facts/deps.ts::resolveCodeVersion`（它优先取环境变量）。`sha` 必须是 40 位 hex。
 - **管理员与客户端**：`requireAdminUser()`（`src/lib/admin/auth.ts`）、`getAdminSupabase()`（`src/lib/supabase/admin.ts`）、`getAnonSupabase()`（`src/lib/supabase/anon.ts`）、`supabaseTableClient`（`src/lib/db/table-client.ts`）、`memoryTableClient`（`src/lib/db/memory-table-client.ts`）、`pgTableClient`（`src/lib/db/pg-table-client.ts`）。
 - **代码风格**：沿用 `src/lib/facts` 的紧凑风格（单空格缩进、少空行、文件头注释写职责与规格条目）。每个导出函数有测试。错误用 `EvalError`（§共享契约）。
 - **提交**：`git commit` 单独一条命令（仓库钩子拦截同一命令里出现的任何 `-n` 记号，包括 `grep -n`、`head -n`）；不 `--no-verify`；信息末尾 `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`（实施代理）或 `Claude Opus 5.5`（指挥）。
@@ -32,7 +32,7 @@
 
 1. **契约补充**（已写进下方 §共享契约与 Task 1 的 `types.ts`）：`Summary.coverage.evaluated_optional`（W1 CCR-1）；`ValidatorFinding{code,where,message}`（W2；`validate/finding.ts` 只再导出）；`ProvenanceCheck.inputs?:{fact_id;check}[]`（W3 CCR 1；facts 适配器的富输入链名为 `FactProvenance.input_chains`，写入 `CaseReport.detail.inputs`）；`ModuleReader.stateRev()` 的语义注释（W3 CCR 2）。
 2. **校验 CLI**：标志表在 `src/lib/evals/validate/cli.ts::HANDLERS`（W1），`scripts/evals/validate.ts` 是薄壳；处理器可 async、可声明 `modifiers`（`--release`）；退出 0 通过 / 1 检查失败 / 2 用法错误（规格 §1.1 要求 `--manifest` 失败退出 1）。Task 12 只往表尾追加三项。
-3. **`--redact` 扫描范围（规格偏差）**：对各兄弟分支的 `docs/audits/**` 实跑 W1 的扫描会命中他人审计文件（`2026-11-05-data-foundation-3/codex/*` 约 195 条：原样引用的邮箱与查询串），F6 不得改它们；`REDACT_ROOTS` 收窄为 F6 自有路径：`src/lib/evals/fixtures/**`、`docs/evals/**`、`docs/audits/2026-11-06-evals-gold-sets/**`，外加 F6 写的 `docs/audits/2026-11-04-data-foundation-2/index.json`。CI 步骤不变（`--gold --lock --redact [--gold-diff]`）。规格 §18 记此偏差（Task 16）。
+3. **`--redact` 扫描范围（规格偏差）**：对各兄弟分支的 `docs/audits/**` 实跑 W1 的扫描会命中他人审计文件（`2026-11-05-data-foundation-3/codex/*` 约 195 条：原样引用的邮箱与查询串），F6 不得改它们；`REDACT_ROOTS` 收窄为 F6 自有路径：`src/lib/evals/fixtures/**`、`docs/evals/**`、`docs/audits/2026-11-06-evals-gold-sets/**`。CI 步骤不变（`--gold --lock --redact [--gold-diff]`）。规格 §18 记此偏差（Task 16）。
 4. **frozen 建库不写 `dq_freshness`**：`runFactsSync` 无开关地记录 `facts.us`；`replay/setup.ts` 给同步依赖的 `tables` 套 `withoutFreshness`（丢弃 `dq_freshness` 写、读照常），固定时钟不会在共享库留陈旧行。
 5. **`replay/setup.ts` 形状**：以 Task 9 为准——`FrozenBuild={ok:false;mismatch:string}|{ok:true;issuers;world}`、`buildFrozenDb(pool,setup,root?)`；Task 11 读 `world.db/world.tables/world.setup.setup_sha256`；W4 的"只写路径的草稿"成为 `FrozenSetupPathsDraft` + `sealSetupFromPaths`。变更测试只用 ZZEVC（CIK 9990603），frozen 回放只投影 ZZEVA/ZZEVB。
 6. **kind 启用表只有一个**：`src/lib/evals/kinds/registry.ts::KIND_REGISTRY`（official_reconciliation、replay_consistency 启用；dual_source「plan 3 merged」、reference_regression「macro migrations」、extraction_gold「D8」、judgment_calibration「F4」未启用）。`cli/run-cli.ts::KIND_RUNNERS` 只放运行器，`runCli` 先 `assertKindEnabled`；注册表测试断言 `KIND_RUNNERS` 的键 = 启用的 kind。
@@ -40,7 +40,8 @@
 8. **`buildReport`**：调用方按 Task 4 的 `BuildReportInput`（无 `module`，取 `set.module`）；`runGoldSet` 用 `summary.ts::goldBlockOf`（撤回案例不计 pending/缺口）和 `caseRowsTruncated({run_id,kind,artifact_class,cases})`。
 9. **报告与归约**：`renderMarkdown` 对 `reference_regression` 不渲染任何案例值（Task 4 已有测试）；`data_drift` 的 `ledger_ids=[]` → `unexplained_diff`，`identical/within/expected_absent/explained_diff(非空)/beyond_explained(非空)/data_drift(非空)/pass` → `correctness.pass`（Task 1 已有逐行测试）。
 10. **回放文件不入 `lock.json`**（W4 CCR 5）：锁只收 `GoldFormat` 黄金集；发布清单对黄金集类证据查锁，对回放/对照报告查夹具文件的提交字节（`manifest_fixture`，Task 12）。`lock.json` 由 Task 2 建、Task 9 追加 `synthetic-us.json`；Task 1 的锁测试用 `toContainEqual`。
-11. **机械核验**（集成时，从本文件抽取全部代码块与 Edit 到 HEAD 的临时工作树）：`npx tsc --noEmit -p .` 0 错误；`npx vitest run src/lib/evals src/app/api/admin/evals` 44 文件 507 用例通过（2 个 critical 套件无 `S4_TEST_STATE` 时 skipped）；eslint 0 警告；`ci-contract.test.ts` 通过（因此把 `record-cli.test.ts` 里的 `S4_TEST_STATE` 字面量改为拼接，否则 `test:db` 报 inventory drift）；真实 PostgreSQL 17：Task 11 Step 10 录制 12 个案例成功，`evals-store` + `evals-facts` 两个 critical 套件 21/21 通过（含 frozen 回放全 identical 与篡改 → setup_mismatch），`run.ts --kind replay_consistency --mode ci` gate pass。全仓 `vitest run` 另有 1–2 个与 F6 无关的计时/进程抖动用例（每次不同）。
+11. **机械核验**（Codex 计划第 1 轮处置之后重跑；从本文件抽取全部代码块与 Edit 到 HEAD 的临时工作树）：`npx tsc --noEmit -p .` 0 错误；`npx vitest run src/lib/evals src/app/api/admin/evals` 45 文件 530 用例通过（2 个 critical 套件无 `S4_TEST_STATE` 时 skipped）；eslint 0 警告；`ci-contract.test.ts` 通过（`record-cli.test.ts` 不含 `S4_TEST_STATE` 字面量，否则 `test:db` 报 inventory drift）；真实 PostgreSQL 17：在无 git 检出的副本里（`VERCEL_GIT_COMMIT_SHA` = HEAD，因 `record-replay.ts` 拒绝脏树）录制 12 个案例成功；`evals-store` + `evals-facts` 两个 critical 套件 22/22 通过（含 frozen 回放全 identical、`CI=1` 时写出 `reports/evals/<run_id>.json`、篡改 → setup_mismatch、P2-1 两个 setup 冲突被拒）；`run.ts --kind replay_consistency --mode ci` gate pass；脏树下 `record-replay.ts` 退出 2（`dirty_tree`）。
+12. **Codex 计划第 1 轮**（`docs/audits/2026-11-06-evals-gold-sets/02-codex-plan-round1.md`）：15 条处置见 `03-disposition-plan.md`（P1-1…P1-10、P2-1…P2-3、P2-5 ACCEPT；P2-4 PARTIAL）；改动落在各任务正文，并在代码注释里标出编号。
 
 ## 文件结构
 
@@ -122,7 +123,6 @@ scripts/evals/codex-audit.ts    薄壳 → validate/codex-audit.ts（Task 12）
 docs/evals/README.md            运行手册（Task 16）
 docs/evals/templates/expert-sampling.template.json、release-manifest.template.json（Task 12）
 docs/audits/2026-11-06-evals-gold-sets/01-implementation-log.md（Task 1 建，每任务追加）
-docs/audits/2026-11-04-data-foundation-2/index.json   新文件（规格 §9；Task 12）
 docs/superpowers/specs/2026-11-04-evals-and-gold-sets-design.md   只追加 §18 实施记录（Task 16）
 ```
 
@@ -177,6 +177,9 @@ export interface GoldHistoryEntry{version:number;changed_at:string;changed_by:st
 export interface GoldSet{
  schema_version:1;format:GoldFormat;set_id:string;version:number;module:EvalModule;artifact_class:ArtifactClass;
  module_implementers:string[];tolerance:{rel:string};thresholds:Thresholds;optional_cases:string[];history:GoldHistoryEntry[];
+ /** §4.6 second reviewer (Codex plan round 1 P2-3): f6 header field, required; true ⇒ every case has reviewed_by ≠ recorded_by;
+  *  set ids starting 'facts/plan3' (the 30-company set) must set it. legacy_plan2: false. */
+ review_required:boolean;
  cases:GoldCase[];
  /** legacy_plan2: the file's `ready`; f6: always true. */
  ready:boolean;
@@ -363,13 +366,13 @@ export function assertKindEnabled(kind:string):void;                    // EvalE
 | 9 | `cli/deps.ts`、`cli/run-cli.ts` + 薄壳 `scripts/evals/run.ts`、`replay/setup.ts`（不留 `dq_freshness` 行）、F6 种子与合成夹具与合成集、`evals-facts.integration.test.ts`（四条路径、重述、隔离 not_visible、旧格式 incomplete） | §1.1、§7.1、§13.3、§0 R5-1/R5-2 | W3 | 6、8 |
 | 10 | `projections/facts.ts`、`replay/ledger.ts`、`kinds/replay.ts` + 单测（frozen/live 各态、账本六元组、partial、自批、setup_mismatch） | §5.3、§0 R5-7 | W4 | 1、7 |
 | 11 | `scripts/evals/record-replay.ts`（只增、`--supersede`）、`facts.frozen.json`（≥ 10）、`explanations.json`、frozen 回放进集成测试、`route-equivalence.test.ts`、`cli/run-replay.ts`（`run.ts --kind replay_consistency`）与 `withProjector` | §5.3.1、§5.3.3 | W4 | 9、10 |
-| 12 | `validate/expert.ts`、`validate/audit.ts`、`validate/manifest.ts`、`validate/cli.ts` 追加三项（--expert/--audit/--manifest）、`codex-audit.ts`、模板、`data-foundation-2/index.json` + 单测 | §8、§9、§10 | W2 | 3、4、6 |
+| 12 | `validate/expert.ts`、`validate/audit.ts`、`validate/manifest.ts`、`validate/cli.ts` 追加三项（--expert/--audit/--manifest）、`codex-audit.ts`、模板 + 单测（`data-foundation-2/index.json` 延后，P2-4） | §8、§9、§10 | W2 | 3、4、6、10、14 |
 | 13 | `admin.ts` + 两个路由 + 单测（白名单键集合、哨兵缺席、非管理员 403） | §12、§0 R5-11 | W4 | 6 |
 | 14 | `kinds/dual-source.ts`（`PairSource`）、`kinds/reference.ts`（`ReferenceResult`、哨兵、`ReadDeps` 无写方法）+ 单测；`kinds/registry.ts`（唯一启用表）+ `run-cli.ts` 调 `assertKindEnabled`，这两个 kind `kind_not_enabled` | §5.4、§5.5、§0 R5-10/R5-12 | W4 | 1、8、9、11 |
 | 15 | `kinds/extraction.ts`（两步最大匹配）、`kinds/calibration.ts` + 单测（对抗夹具）；注册表登记 `extraction_gold`、`judgment_calibration` 为未启用（`kind_not_enabled`） | §11.1、§11.3、§16 D8 | W4 | 1 |
 | 16 | `docs/evals/README.md` 运行手册、规格 §18 实施记录、全量门禁 | — | 指挥 | 全部 |
 
-推荐执行顺序：1 → 2 → 4 → 3 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 → 16。
+推荐执行顺序：1 → 2 → 4 → 3 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 13 → 14 → 15 → 12 → 16（Codex 计划第 1 轮后：Task 12 的清单校验器复用 Task 14 的 `reduce.ts` 与 `kinds/reference.ts`，所以 12 排在 14、15 之后）。
 
 <!-- TASKS BELOW: written by part writers W1–W4, integrated by the commander -->
 
@@ -461,6 +464,9 @@ export interface GoldHistoryEntry{version:number;changed_at:string;changed_by:st
 export interface GoldSet{
  schema_version:1;format:GoldFormat;set_id:string;version:number;module:EvalModule;artifact_class:ArtifactClass;
  module_implementers:string[];tolerance:{rel:string};thresholds:Thresholds;optional_cases:string[];history:GoldHistoryEntry[];
+ /** §4.6 second reviewer (Codex plan round 1 P2-3): f6 header field, required; true ⇒ every case has reviewed_by ≠ recorded_by;
+  *  set ids starting 'facts/plan3' (the 30-company set) must set it. legacy_plan2: false. */
+ review_required:boolean;
  cases:GoldCase[];
  /** legacy_plan2: the file's `ready`; f6: always true. */
  ready:boolean;
@@ -927,6 +933,15 @@ describe('gate (§3.2 rules)',()=>{
   const s=summarize([rep({result:'skipped',reason:'retracted'}),rep({result:'skipped',reason:'retracted'})],ctx());
   expect(s.population).toBe(0);expect(s.coverage.skipped).toBe(2);expect(s.gate).toBe('incomplete');
  });
+ it('rule 1 (P1-1): nothing evaluated → incomplete — all unavailable, all zero_support, all skipped',()=>{
+  for(const reason of ['unavailable','zero_support','ineligible','pending'] as const){
+   const s=summarize([rep({result:'skipped',reason}),rep({result:'skipped',reason})],ctx());
+   expect(s.population,reason).toBe(2);expect(s.coverage.evaluated).toBe(0);expect(s.gate,reason).toBe('incomplete');
+  }
+  const mixed=summarize([rep({result:'skipped',reason:'unavailable'}),rep({result:'skipped',reason:'zero_support'}),rep({result:'skipped',reason:'subset'})],ctx());
+  expect(mixed.gate).toBe('incomplete');
+  expect(summarize([rep(PASS),rep({result:'skipped',reason:'unavailable'})],ctx()).gate).toBe('pass');
+ });
  it('rule 1: read_error, subset, missing_required, not_visible → incomplete',()=>{
   expect(summarize([rep(PASS),rep({result:'read_error',reason:'subject_unresolved'})],ctx()).gate).toBe('incomplete');
   expect(summarize([rep(PASS)],ctx({subset:true})).gate).toBe('incomplete');
@@ -1062,9 +1077,11 @@ export function summarize(cases:CaseReport[],ctx:SummaryContext):Summary{
  return {...s,gate:gateOf(s)};
 }
 
-/** §3.2 gate rules, in order: 1 incomplete, 2 fail, 3 optional coverage, 4 pass. */
+/** §3.2 gate rules, in order: 1 incomplete, 2 fail, 3 optional coverage, 4 pass. Rule 1 also fires when nothing
+ *  was evaluated (coverage.evaluated = the sum of the correctness counters = 0; Codex plan round 1 P1-1): a run whose
+ *  population is entirely skipped(unavailable|zero_support|ineligible|…) is never a pass. */
 export function gateOf(s:Omit<Summary,'gate'>):Gate{
- if(s.population===0||s.execution.read_error>0||s.execution.subset||s.coverage.missing_required>0||s.coverage.not_visible>0
+ if(s.population===0||s.coverage.evaluated===0||s.execution.read_error>0||s.execution.subset||s.coverage.missing_required>0||s.coverage.not_visible>0
   ||!s.gold.ready||s.gold.pending>0||s.gold.provenance_gaps>0)return 'incomplete';
  const failures=s.correctness.fail+s.correctness.unit_mismatch+s.correctness.provenance_incomplete+s.correctness.unexplained_diff;
  if(failures>s.thresholds.max_fail)return 'fail';
@@ -1083,7 +1100,7 @@ export const statusOfGate=(g:Gate):'passed'|'failed'|'incomplete'=>g==='pass'?'p
 - [ ] **Step 14: 跑测试，确认通过**
 
 Run: `npm test -- src/lib/evals/summary.test.ts`
-Expected: PASS（41 tests）
+Expected: PASS（42 tests）
 
 - [ ] **Step 15: 类型检查与 lint**
 
@@ -1151,7 +1168,7 @@ const goodCase=():J=>({
  provenance_kind:'transcribed',recorded_by:'owner',recorded_at:'2026-11-06T00:00:00Z',reviewed_by:'reviewer2',reviewed_at:'2026-11-07T00:00:00Z',retracted:null,notes:'',
 });
 const instantCase=():J=>({...goodCase(),case_id:'AAPL/total_assets/2023-09-30',target:{type:'fact',concept:'total_assets',period_start:null,period_end:'2023-09-30',duration:'INSTANT',consolidation:'consolidated',unit:{kind:'currency',currency:'USD'}},printed:{text:'352,583',unit_label:'In millions',scale:'1000000'},canonical:{value:'352583000000'}});
-const goodSet=():J=>({schema_version:1,set_id:'facts/test',version:1,module:'facts',artifact_class:'public',module_implementers:['claude-code','codex'],tolerance:{rel:'0'},thresholds:{max_fail:0,min_coverage_optional:'0.95'},optional_cases:[],history:[],cases:[goodCase(),instantCase()]});
+const goodSet=():J=>({schema_version:1,set_id:'facts/test',version:1,module:'facts',artifact_class:'public',module_implementers:['claude-code','codex'],review_required:false,tolerance:{rel:'0'},thresholds:{max_fail:0,min_coverage_optional:'0.95'},optional_cases:[],history:[],cases:[goodCase(),instantCase()]});
 function errorsOf(mutate:(s:J)=>void,recorders:RecordersFile=RECORDERS):string[]{
  const s=goodSet();mutate(s);
  try{parseGoldSetF6(s,META,recorders);return [];}
@@ -1238,6 +1255,21 @@ describe('parseGoldSetF6: one counter-example per rule',()=>{
  });
 });
 
+describe('parseGoldSetF6: review_required (§4.6, Codex plan round 1 P2-3)',()=>{
+ it('is a required boolean header field',()=>{
+  expect(errorsOf(s=>{delete s.review_required;})).toEqual(['review_required: boolean_required']);
+  expect(errorsOf(s=>{s.review_required='yes';})).toEqual(['review_required: boolean_required']);
+ });
+ it('true: every case needs a reviewer different from the recorder (30-company counter-example)',()=>{
+  expect(errorsOf(s=>{s.review_required=true;})).toEqual([]);
+  expect(errorsOf(s=>{s.review_required=true;(s.cases as J[])[0].reviewed_by=null;(s.cases as J[])[0].reviewed_at=null;})).toEqual([`cases[${String(goodCase().case_id)}].reviewed_by: required_by_review_required`]);
+ });
+ it("set ids under 'facts/plan3' must set review_required true",()=>{
+  expect(errorsOf(s=>{s.set_id='facts/plan3-30';})).toEqual(['review_required: must_be_true_for_this_set']);
+  expect(errorsOf(s=>{s.set_id='facts/plan3-30';s.review_required=true;})).toEqual([]);
+ });
+});
+
 describe('canonicalFromPrinted / unitOfSpec',()=>{
  const usd={kind:'currency',currency:'USD'} as const;
  it('removes thousands separators and applies the scale',()=>{
@@ -1305,7 +1337,9 @@ const TIMESTAMP=/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2
 const HEX64=/^[0-9a-f]{64}$/;
 const SET_ID=/^[a-z0-9][a-z0-9_-]*(\/[a-z0-9][a-z0-9_.-]*)+$/;
 const ACCESSION=/^\d{10}-\d{2}-\d{6}$/;
-const SET_KEYS=new Set(['schema_version','set_id','version','module','artifact_class','module_implementers','tolerance','thresholds','optional_cases','history','cases']);
+const SET_KEYS=new Set(['schema_version','set_id','version','module','artifact_class','module_implementers','review_required','tolerance','thresholds','optional_cases','history','cases']);
+/** §4.6: the 30-company set needs a second reviewer on every case (Codex plan round 1 P2-3). */
+export const REVIEW_REQUIRED_PREFIXES:readonly string[]=['facts/plan3'];
 const CASE_KEYS=new Set(['case_id','subject','target','expect','printed','canonical','binding','source','provenance_kind','recorded_by','recorded_at','reviewed_by','reviewed_at','retracted','notes']);
 const FACT_KEYS=new Set(['type','concept','period_start','period_end','duration','consolidation','unit']);
 const METRIC_KEYS=new Set(['type','metric','period_start','period_end','duration','basis','input_unit','formula_version','unit']);
@@ -1380,6 +1414,8 @@ export function parseGoldSetF6(raw:unknown,meta:{path:string;sha256:string},reco
  if(raw.artifact_class!=='public'&&raw.artifact_class!=='restricted')err('artifact_class','invalid');
  const implementers=Array.isArray(raw.module_implementers)&&raw.module_implementers.length>0&&raw.module_implementers.every(isStr)?raw.module_implementers as string[]:null;
  if(!implementers)err('module_implementers','non_empty_string_array');
+ if(typeof raw.review_required!=='boolean')err('review_required','boolean_required');
+ else if(!raw.review_required&&typeof raw.set_id==='string'&&REVIEW_REQUIRED_PREFIXES.some(p=>(raw.set_id as string).startsWith(p)))err('review_required','must_be_true_for_this_set');
  const tolerance=isObj(raw.tolerance)?raw.tolerance:null;
  if(!tolerance||Object.keys(tolerance).join()!=='rel'||!isRelTolerance(tolerance.rel))err('tolerance','must_be_{rel}_with_0<=rel<1');
  const th=isObj(raw.thresholds)?raw.thresholds:null;
@@ -1403,12 +1439,13 @@ export function parseGoldSetF6(raw:unknown,meta:{path:string;sha256:string},reco
   ids.add(parsed.case_id);kinds.add(parsed.provenance_kind);
   cases.push({...parsed,required:!(optional??[]).includes(parsed.case_id)});
  });
+ if(raw.review_required===true)for(const c of cases)if(c.reviewed_by===null||c.reviewed_by===c.recorded_by)err(`cases[${c.case_id}].reviewed_by`,'required_by_review_required');
  for(const id of optional??[])if(!ids.has(id))err('optional_cases',`unknown_case:${id}`);
  if(kinds.size>1)err('cases','mixed_provenance_kind');
  if(errors.length>0)throw fail();
  return {
   schema_version:1,format:'f6',set_id:raw.set_id as string,version:raw.version as number,module:mod,artifact_class:raw.artifact_class as GoldSet['artifact_class'],
-  module_implementers:implementers!,tolerance:{rel:tolerance!.rel as string},
+  module_implementers:implementers!,review_required:raw.review_required as boolean,tolerance:{rel:tolerance!.rel as string},
   thresholds:{max_fail:th!.max_fail as number,min_coverage_optional:th!.min_coverage_optional as string},
   optional_cases:optional!,history,cases,ready:true,path:meta.path,sha256:meta.sha256,
  };
@@ -1615,7 +1652,7 @@ function parseSource(v:unknown,at:string,c:J,x:CaseCtx):CaseSource|null{
 - [ ] **Step 4: 跑测试，确认通过**
 
 Run: `npm test -- src/lib/evals/gold/schema.test.ts`
-Expected: PASS（61 tests）
+Expected: PASS（64 tests）
 
 - [ ] **Step 5: 写 legacy 适配器的失败测试（真实 plan2.json + 测试内的已录入变体）**
 
@@ -1810,7 +1847,7 @@ export function parseLegacyPlan2(raw:unknown,meta:{path:string;sha256:string}):G
  return {
   schema_version:1,format:'legacy_plan2',set_id:LEGACY_SET_ID,version:raw.version as number,module:'facts',artifact_class:'public',
   module_implementers:[...LEGACY_IMPLEMENTERS],tolerance:{rel:'0'},thresholds:{max_fail:0,min_coverage_optional:'0.95'},
-  optional_cases:cases.filter(c=>!c.required).map(c=>c.case_id),history:[],cases,ready:raw.ready as boolean,path:meta.path,sha256:meta.sha256,
+  optional_cases:cases.filter(c=>!c.required).map(c=>c.case_id),history:[],review_required:false,cases,ready:raw.ready as boolean,path:meta.path,sha256:meta.sha256,
  };
 }
 ```
@@ -1907,7 +1944,7 @@ describe('format detection and file errors',()=>{
   const root=mkdtempSync(join(tmpdir(),'f6-load-'));
   mkdirSync(join(root,GOLD_DIR,'facts'),{recursive:true});
   writeFileSync(join(root,GOLD_DIR,'recorders.json'),JSON.stringify({version:1,recorders:[{id:'owner',role:'owner',modules:['facts'],added_at:'2026-11-06',approved_by:'owner'}]}));
-  const set={schema_version:1,set_id:'facts/tmp',version:1,module:'facts',artifact_class:'public',module_implementers:['claude-code'],tolerance:{rel:'0'},thresholds:{max_fail:0,min_coverage_optional:'0.95'},optional_cases:[],history:[],
+  const set={schema_version:1,set_id:'facts/tmp',version:1,module:'facts',artifact_class:'public',module_implementers:['claude-code'],review_required:false,tolerance:{rel:'0'},thresholds:{max_fail:0,min_coverage_optional:'0.95'},optional_cases:[],history:[],
    cases:[{case_id:'X/cash/2023-12-31',subject:{market:'US',cik:'1'},target:{type:'fact',concept:'cash',period_start:null,period_end:'2023-12-31',duration:'INSTANT',consolidation:'consolidated',unit:{kind:'currency',currency:'USD'}},expect:'missing',binding:'document',
     source:{document_type:'10-K',document_id:{kind:'edgar_accession',value:'0000000001-24-000001'},url:'https://www.sec.gov/x',sha256:'c'.repeat(64)},provenance_kind:'transcribed',recorded_by:'owner',recorded_at:'2026-11-06',reviewed_by:null,reviewed_at:null,retracted:null,notes:''}]};
   writeFileSync(join(root,GOLD_DIR,'facts','tmp.json'),JSON.stringify(set));
@@ -2093,7 +2130,7 @@ git commit -m "feat(evals): F6 gold-set schema, read-only plan2.json legacy adap
 - legacy 文件经 `parseLegacyPlan2` 比较；把某个 `<pending>` 值录成真值算 `canonical` 变化，需要升 `version`（同时 `lock.json` 必须更新，所以这类变更总要碰 F6 的目录）。翻转 `ready` 也算集级变化。
 - git 侧：`resolveCommit(ref)` 用 `git rev-parse --verify --quiet <ref>^{commit}`，失败 → `EvalError('gold_diff_violation',…,{reason:'base_not_found'})`；变更文件用 `git diff --name-only --no-renames <base> HEAD -- <GOLD_DIR> <base 与 HEAD 的 lock.json 里位于 GOLD_DIR 之外的路径>`；字节用 `git show <ref>:<path>`。比较的是**已提交的 HEAD**，不是工作区。
 - `--redact` 的发现只报 `{path, rule, line, field?}`，**从不输出匹配到的文本**（job summary 不会因此泄漏）。查询串令牌要求前面是 `?` 或 `&`（散文里的 `key=` 不算）；RFC 2606 示例域（`example.com/.org/.net/.invalid`）的邮箱豁免（测试用）；桶路径规则只匹配具体路径段（模板 `{source}/{issuer_id}` 不算）；200 字符上限只对 `.json` 文件里键名为 `text/note/notes` 的字符串生效（任意深度）。提醒：以后放进 `docs/audits/**` 的 Codex 报告如果原样引用 `postgres://` 之类的串会被拦，引用时写成 `postgres:／／` 或代码块外的描述。
-- **扫描范围（集成偏差，记入规格 §18）**：规格 §4.5/§7.3 写的是 `docs/audits/**`，但对各兄弟分支的 `docs/audits/**` 实跑本扫描会命中（如 `2026-11-05-data-foundation-3/codex/*` 原样引用 Codex 输出里的邮箱与查询串，共约 195 条），F6 又不得改他人审计文件；所以 `REDACT_ROOTS` 只含 F6 自有路径：`src/lib/evals/fixtures/**`、`docs/evals/**`、`docs/audits/2026-11-06-evals-gold-sets/**` 与 F6 写的 `docs/audits/2026-11-04-data-foundation-2/index.json`。
+- **扫描范围（集成偏差，记入规格 §18）**：规格 §4.5/§7.3 写的是 `docs/audits/**`，但对各兄弟分支的 `docs/audits/**` 实跑本扫描会命中（如 `2026-11-05-data-foundation-3/codex/*` 原样引用 Codex 输出里的邮箱与查询串，共约 195 条），F6 又不得改他人审计文件；所以 `REDACT_ROOTS` 只含 F6 自有路径：`src/lib/evals/fixtures/**`、`docs/evals/**`、`docs/audits/2026-11-06-evals-gold-sets/**`。
 - `validate/cli.ts` 是一张 flag → handler 表（`HANDLERS`）；检查按表的顺序执行（与 argv 顺序无关），每个选中的检查都跑，抛错转为 `{ok:false,error}`；处理器可以是 async（`runValidate` 返回 Promise）；全部 ok → 退出 0，有检查失败 → 1，用法错误 → 2（集成时与 §3.2 退出码对齐：2 只表示运行前拒绝）。处理器可声明 `modifiers`（如 `--release`），紧跟在其 flag/值之后的这些裸 flag 以集合传给 `run`。**Task 12 加 `--expert/--audit/--manifest` 只需往 `HANDLERS` 末尾追加三项**，不改 `runValidate`；Task 12 的检查结果是 `findingsCheck(ValidatorFinding[])`。`scripts/evals/validate.ts` 只是一层薄壳（vitest 只收 `src/**/*.test.ts`，所以逻辑放在 `src/lib/evals/validate/cli.ts` 才能测）。
 - `hash-source`：同理，逻辑在 `src/lib/evals/hash-source.ts`（可注入 `fetch`），脚本只打印 JSON。只接受 https；非 2xx → 抛错；从不落盘。
 - CI：`push` 时 `event.before` 不在已取回的历史里（强推）也跳过并说明（规格只写了全零；强推时 `git show` 必失败，与其让 CI 红，不如跳过并在 summary 说明）。`upload-artifact` 的 `path:` 是块标量，`# F6 begin/end` 只能写在块里面：`@actions/glob` 把 `#` 开头的行当注释；即使不当注释，一个什么都匹配不到的模式也无害（只要其他模式匹配到文件，就不会触发 `if-no-files-found`）。
@@ -2129,7 +2166,7 @@ const enc=(v:unknown)=>new TextEncoder().encode(JSON.stringify(v,null,1));
 const kase=(id:string,value='100'):J=>({case_id:id,subject:{market:'US',cik:'1'},target:{type:'fact',concept:'revenue',period_start:'2023-01-01',period_end:'2023-12-31',duration:'12M',consolidation:'consolidated',unit:{kind:'currency',currency:'USD'}},
  expect:'present',printed:{text:value,unit_label:'',scale:'1'},canonical:{value},binding:'document',source:{document_type:'10-K',document_id:{kind:'edgar_accession',value:'0000000001-24-000001'},url:'https://www.sec.gov/x',sha256:'c'.repeat(64),locator:{page:1}},
  provenance_kind:'transcribed',recorded_by:'owner',recorded_at:'2026-11-06',reviewed_by:null,reviewed_at:null,retracted:null,notes:''});
-const set=(over:J={}):J=>({schema_version:1,set_id:'facts/a',version:1,module:'facts',artifact_class:'public',module_implementers:['claude-code'],tolerance:{rel:'0'},thresholds:{max_fail:0,min_coverage_optional:'0.95'},optional_cases:[],history:[],cases:[kase('A'),kase('B')],...over});
+const set=(over:J={}):J=>({schema_version:1,set_id:'facts/a',version:1,module:'facts',artifact_class:'public',module_implementers:['claude-code'],review_required:false,tolerance:{rel:'0'},thresholds:{max_fail:0,min_coverage_optional:'0.95'},optional_cases:[],history:[],cases:[kase('A'),kase('B')],...over});
 const recorders=(version:number,ids=['owner'])=>({version,recorders:ids.map(id=>({id,role:'owner',modules:['facts'],added_at:'2026-11-06',approved_by:'owner'}))});
 const tree=(entries:Record<string,unknown>):GoldTree=>new Map(Object.entries(entries).map(([k,v])=>[k,typeof v==='string'?new TextEncoder().encode(v):enc(v)]));
 const codes=(r:{violations:{code:string}[]})=>r.violations.map(v=>v.code);
@@ -2437,7 +2474,7 @@ describe('repository',()=>{
  it('the F6-owned paths (fixtures, docs/evals, the F6 audit directory) are clean',()=>{
   const files=redactTargets();
   expect(files.some(f=>f.path.startsWith('docs/audits/2026-11-06-evals-gold-sets/'))).toBe(true);
-  expect(files.filter(f=>f.path.startsWith('docs/audits/')&&!f.path.startsWith('docs/audits/2026-11-06-evals-gold-sets/')&&f.path!=='docs/audits/2026-11-04-data-foundation-2/index.json')).toEqual([]);
+  expect(files.filter(f=>f.path.startsWith('docs/audits/')&&!f.path.startsWith('docs/audits/2026-11-06-evals-gold-sets/'))).toEqual([]);
   expect(files.some(f=>f.path==='src/lib/evals/fixtures/gold/lock.json')).toBe(true);
   expect(redactScan(files)).toEqual([]);
  });
@@ -2456,7 +2493,7 @@ Expected: FAIL，`Error: Cannot find module './redact' imported from …/src/lib
 ```ts
 // src/lib/evals/redact.ts
 // --redact (spec §4.5): scans the F6-owned evidence paths — src/lib/evals/fixtures/**, docs/evals/**,
-// docs/audits/2026-11-06-evals-gold-sets/** and the F6-written docs/audits/2026-11-04-data-foundation-2/index.json —
+// and docs/audits/2026-11-06-evals-gold-sets/** —
 // for credential and personal-data shapes. Not all of docs/audits/**: other modules' audit files quote Codex output
 // with e-mail addresses and query tokens (integration check over the sibling branches) and F6 may not edit them. Findings carry path, rule and line — NEVER the matched text, so the CI
 // job summary cannot leak what it found. Rules: query-string tokens (?token= &key= ?sig=,
@@ -2468,7 +2505,7 @@ import {readFileSync,readdirSync,statSync} from 'node:fs';
 import {join,sep} from 'node:path';
 
 /** Directories (scanned recursively) or single files; integration narrowed docs/audits/** to F6-owned paths. */
-export const REDACT_ROOTS:readonly string[]=['src/lib/evals/fixtures','docs/evals','docs/audits/2026-11-06-evals-gold-sets','docs/audits/2026-11-04-data-foundation-2/index.json'];
+export const REDACT_ROOTS:readonly string[]=['src/lib/evals/fixtures','docs/evals','docs/audits/2026-11-06-evals-gold-sets'];
 export const LONG_FIELD_LIMIT=200;
 export interface RedactFinding{path:string;rule:string;line:number|null;field?:string}
 const LONG_FIELDS=new Set(['text','note','notes']);
@@ -2677,7 +2714,7 @@ describe('runValidate on a temp repository with violations',()=>{
   g('init','-q','-b','main');
   write(RECORDERS_PATH,JSON.stringify({version:1,recorders:[{id:'owner',role:'owner',modules:['facts'],added_at:'2026-11-06',approved_by:'owner'}]}));
   write(LOCK_PATH,JSON.stringify({files:[]}));
-  write(`${GOLD_DIR}/facts/bad.json`,JSON.stringify({schema_version:1,set_id:'facts/bad',version:1,module:'facts',artifact_class:'public',module_implementers:['claude-code'],tolerance:{rel:'0'},thresholds:{max_fail:0,min_coverage_optional:'0.95'},optional_cases:[],history:[],cases:[{case_id:'X'}]}));
+  write(`${GOLD_DIR}/facts/bad.json`,JSON.stringify({schema_version:1,set_id:'facts/bad',version:1,module:'facts',artifact_class:'public',module_implementers:['claude-code'],review_required:false,tolerance:{rel:'0'},thresholds:{max_fail:0,min_coverage_optional:'0.95'},optional_cases:[],history:[],cases:[{case_id:'X'}]}));
   g('add','-A');g('commit','-q','-m','c1');
   const c1=g('rev-parse','HEAD');
   g('rm','-q',`${GOLD_DIR}/facts/bad.json`);g('commit','-q','-m','c2');
@@ -3003,7 +3040,7 @@ git commit -m "feat(evals): gold-diff (pure + git), redact scan, validate CLI fl
 ### Task 4: 评测器代码版本与报告（`version.ts` / `report.ts`）
 
 **本任务定死的约定：**
-- `evaluatorVersion(resolve?)`：默认 `resolve = () => resolveCodeVersion({allowGit:true})`（`src/lib/facts/deps.ts`）；可注入以便单测。`null` → `EvalError('code_version_missing')`；去掉末尾 `-dirty` 得到 `dirty:true`；剩下的必须是 40 位小写 hex，否则 `code_version_missing`。`ci` 记录 `dirty`，`report` 拒绝 `dirty_tree` 的判断留给 `run.ts`（Task 9）。
+- `evaluatorVersion(deps?)`：`deps = {env?, cwd?, git?}` 可注入以便单测；检出内：HEAD + `status --porcelain --untracked-files=normal`，忽略 `VERCEL_GIT_COMMIT_SHA`；检出外：`VERCEL_GIT_COMMIT_SHA`（dirty=false）；缺失或非 40 位 hex → `EvalError('code_version_missing')`（P1-7）。
 - `buildReport(input:BuildReportInput):EvalReport`（骨架只给了签名名字，本任务定输入形状，见代码）：`module`、`artifact_class`、`thresholds`、`set{…}` 一律取自 `GoldSet`；`run_id` 必须是 UUID（`dq_eval_runs.run_id uuid`）；`summary.thresholds` 必须等于集的阈值；`cases` 按 `case_id` 码元序排列。
 - `renderMarkdown`：固定章节顺序（头表 → Gate → Summary → Correctness → Coverage → Execution → Thresholds → Gold → 案例），只用报告自己的字段；案例表只列非 pass（`isPassOutcome` 为假）的案例并按 `case_id` 排；单元格里的 `|`、`\`、换行转义；`reference_regression` 从不渲染 `cases[]` 的任何值或 id，只有摘要计数（哨兵规则 §5.4）。
 - `reportPaths(r, root?)`：不给 `root` 返回仓库相对路径（即 `report_ref`），给了返回 `join(root, …)`。日期 = `started_at` 前 10 个字符（ISO UTC 日期）。受限工件：`ci` → `restricted_in_ci`；`report` → `kind_not_enabled`（本期不建 `eval-restricted` 桶，§16 D8）。
@@ -3013,7 +3050,7 @@ git commit -m "feat(evals): gold-diff (pure + git), redact scan, validate CLI fl
 **Files:**
 - Create: `src/lib/evals/version.ts`, `src/lib/evals/report.ts`
 - Test: `src/lib/evals/version.test.ts`, `src/lib/evals/report.test.ts`
-- Read only: `src/lib/facts/deps.ts`（`resolveCodeVersion({allowGit})`）
+- Read only: `src/lib/facts/deps.ts`（不使用、不修改；见 P1-7）
 
 - [ ] **Step 1: 写 version 的失败测试**
 
@@ -3021,28 +3058,49 @@ git commit -m "feat(evals): gold-diff (pure + git), redact scan, validate CLI fl
 
 ```ts
 // src/lib/evals/version.test.ts
-import {describe,expect,it} from 'vitest';
+import {execFileSync} from 'node:child_process';
+import {mkdtempSync,rmSync,writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {afterAll,describe,expect,it} from 'vitest';
 import {EvalError} from './errors';
 import {evaluatorVersion} from './version';
 
 const SHA='0123456789abcdef0123456789abcdef01234567';
 const codeOf=(f:()=>unknown)=>{try{f();return null;}catch(e){expect(e).toBeInstanceOf(EvalError);return (e as EvalError).code;}};
+const env=Object.fromEntries(Object.entries(process.env).filter(([k])=>!k.startsWith('GIT_'))) as NodeJS.ProcessEnv;
+const roots:string[]=[];
+afterAll(()=>{for(const r of roots)rmSync(r,{recursive:true,force:true});});
+function repo(){
+ const root=mkdtempSync(join(tmpdir(),'f6-version-'));roots.push(root);
+ const g=(...a:string[])=>execFileSync('git',['-c','user.name=f6','-c','user.email=f6@test.invalid','-c','commit.gpgsign=false','-c','core.hooksPath=/dev/null',...a],{cwd:root,env,encoding:'utf8'}).trim();
+ g('init','-q');writeFileSync(join(root,'a.txt'),'1\n');g('add','.');g('commit','-q','-m','c1');
+ return {root,head:g('rev-parse','HEAD')};
+}
 
-describe('evaluatorVersion',()=>{
- it('splits a clean and a dirty version',()=>{
-  expect(evaluatorVersion(()=>SHA)).toEqual({sha:SHA,dirty:false});
-  expect(evaluatorVersion(()=>`${SHA}-dirty`)).toEqual({sha:SHA,dirty:true});
+describe('evaluatorVersion (P1-7)',()=>{
+ it('a clean checkout: HEAD and dirty false; VERCEL_GIT_COMMIT_SHA is ignored inside a checkout',()=>{
+  const {root,head}=repo();
+  expect(evaluatorVersion({cwd:root,env:{VERCEL_GIT_COMMIT_SHA:SHA}})).toEqual({sha:head,dirty:false});
  });
- it('null or a non-40-hex value → code_version_missing',()=>{
-  expect(codeOf(()=>evaluatorVersion(()=>null))).toBe('code_version_missing');
-  expect(codeOf(()=>evaluatorVersion(()=>'abc123'))).toBe('code_version_missing');
-  expect(codeOf(()=>evaluatorVersion(()=>SHA.toUpperCase()))).toBe('code_version_missing');
-  expect(codeOf(()=>evaluatorVersion(()=>`${SHA}-dirty-dirty`))).toBe('code_version_missing');
+ it('an env sha plus a dirty tree is reported dirty (modified or untracked files)',()=>{
+  const {root,head}=repo();
+  writeFileSync(join(root,'a.txt'),'2\n');
+  expect(evaluatorVersion({cwd:root,env:{VERCEL_GIT_COMMIT_SHA:SHA}})).toEqual({sha:head,dirty:true});
+  const u=repo();writeFileSync(join(u.root,'new.txt'),'x\n');
+  expect(evaluatorVersion({cwd:u.root,env:{}})).toEqual({sha:u.head,dirty:true});
  });
- it('defaults to plan 2 resolveCodeVersion (this checkout has a git HEAD)',()=>{
+ it('no checkout: VERCEL_GIT_COMMIT_SHA with dirty false; missing or malformed → code_version_missing',()=>{
+  const outside=mkdtempSync(join(tmpdir(),'f6-version-nogit-'));roots.push(outside);
+  const noGit=()=>{throw new Error('not a git repository');};
+  expect(evaluatorVersion({cwd:outside,env:{VERCEL_GIT_COMMIT_SHA:SHA},git:noGit})).toEqual({sha:SHA,dirty:false});
+  expect(codeOf(()=>evaluatorVersion({cwd:outside,env:{},git:noGit}))).toBe('code_version_missing');
+  expect(codeOf(()=>evaluatorVersion({cwd:outside,env:{VERCEL_GIT_COMMIT_SHA:'abc123'},git:noGit}))).toBe('code_version_missing');
+  expect(codeOf(()=>evaluatorVersion({cwd:outside,env:{VERCEL_GIT_COMMIT_SHA:SHA.toUpperCase()},git:noGit}))).toBe('code_version_missing');
+ });
+ it('this repository: a 40-hex HEAD and a boolean dirty flag',()=>{
   const v=evaluatorVersion();
-  expect(v.sha).toMatch(/^[0-9a-f]{40}$/);
-  expect(typeof v.dirty).toBe('boolean');
+  expect(v.sha).toMatch(/^[0-9a-f]{40}$/);expect(typeof v.dirty).toBe('boolean');
  });
 });
 ```
@@ -3058,27 +3116,47 @@ Expected: FAIL，`Error: Cannot find module './version' imported from …/src/li
 
 ```ts
 // src/lib/evals/version.ts
-// evaluator_code_version (spec §6.4): VERCEL_GIT_COMMIT_SHA, else `git rev-parse HEAD` (+ '-dirty' when the
-// tree has changes) via plan 2's resolveCodeVersion({allowGit:true}). Split into {sha, dirty}; the sha
-// must be 40 lowercase hex (dq_eval_runs check). ci records dirty:true, report refuses it (run.ts).
-import {resolveCodeVersion} from '../facts/deps';
+// evaluator_code_version (spec §6.4; Codex plan round 1 P1-7). Inside a git checkout the checkout itself decides:
+// sha = `git rev-parse HEAD`, dirty = `git status --porcelain --untracked-files=normal` is non-empty — and
+// VERCEL_GIT_COMMIT_SHA is IGNORED there (an exported env sha must never make a dirty tree look clean). Only without a
+// checkout (a Vercel function bundle) is VERCEL_GIT_COMMIT_SHA used, with dirty false. The sha must be 40 lowercase
+// hex (dq_eval_runs check). ci records dirty:true, report refuses it (run.ts), record-replay refuses it. Plan 2's
+// src/lib/facts/deps.ts::resolveCodeVersion is not used (it prefers the env sha) and not changed.
+import {execFileSync} from 'node:child_process';
 import {EvalError} from './errors';
 
 const SHA=/^[0-9a-f]{40}$/;
-export function evaluatorVersion(resolve:()=>string|null=()=>resolveCodeVersion({allowGit:true})):{sha:string;dirty:boolean}{
- const v=resolve();
- if(v===null)throw new EvalError('code_version_missing','no VERCEL_GIT_COMMIT_SHA and no git HEAD');
- const dirty=v.endsWith('-dirty');
- const sha=dirty?v.slice(0,-'-dirty'.length):v;
- if(!SHA.test(sha))throw new EvalError('code_version_missing',`not a 40-hex commit: ${v.slice(0,60)}`,{value:v.slice(0,60)});
- return {sha,dirty};
+export interface VersionDeps{
+ env?:Record<string,string|undefined>;cwd?:string;
+ /** runs git with args in cwd and returns stdout; throws when git fails (e.g. not a checkout). */
+ git?:(args:string[],cwd:string)=>string;
+}
+// GIT_* variables (exported by git hooks) would point git at another repository.
+const gitEnv=()=>Object.fromEntries(Object.entries(process.env).filter(([k])=>!k.startsWith('GIT_'))) as NodeJS.ProcessEnv;
+const defaultGit=(args:string[],cwd:string)=>execFileSync('git',args,{cwd,env:gitEnv(),encoding:'utf8',stdio:['ignore','pipe','ignore']});
+
+export function evaluatorVersion(deps:VersionDeps={}):{sha:string;dirty:boolean}{
+ const env=deps.env??process.env,cwd=deps.cwd??process.cwd(),git=deps.git??defaultGit;
+ let inside=false;
+ try{inside=git(['rev-parse','--is-inside-work-tree'],cwd).trim()==='true';}catch{inside=false;}
+ if(inside){
+  let head:string;
+  try{head=git(['rev-parse','HEAD'],cwd).trim();}catch{throw new EvalError('code_version_missing','git checkout without a HEAD commit');}
+  if(!SHA.test(head))throw new EvalError('code_version_missing',`not a 40-hex commit: ${head.slice(0,60)}`,{value:head.slice(0,60)});
+  const status=git(['status','--porcelain','--untracked-files=normal'],cwd);
+  return {sha:head,dirty:status.trim().length>0};
+ }
+ const v=env.VERCEL_GIT_COMMIT_SHA;
+ if(v===undefined||v==='')throw new EvalError('code_version_missing','no git checkout and no VERCEL_GIT_COMMIT_SHA');
+ if(!SHA.test(v))throw new EvalError('code_version_missing',`not a 40-hex commit: ${v.slice(0,60)}`,{value:v.slice(0,60)});
+ return {sha:v,dirty:false};
 }
 ```
 
 - [ ] **Step 4: 跑测试，确认通过**
 
 Run: `npm test -- src/lib/evals/version.test.ts`
-Expected: PASS（3 tests；第三条在工作树里走 `git rev-parse HEAD`）
+Expected: PASS（4 tests；临时 git 仓库覆盖干净 / 脏 / 无检出，第四条在本仓库走 `git rev-parse HEAD`）
 
 - [ ] **Step 5: 写 report 的失败测试**
 
@@ -3098,7 +3176,7 @@ import type {CaseOutcome,CaseReport,EvalReport,GoldSet,ReportEnvironment} from '
 
 const RUN='3f2a9c1e-7b4d-4e2a-9c1e-7b4d4e2a9c1e';
 const SHA='0123456789abcdef0123456789abcdef01234567';
-const SET={schema_version:1,format:'f6',set_id:'facts/synthetic-us',version:2,module:'facts',artifact_class:'public',module_implementers:['claude-code'],tolerance:{rel:'0'},thresholds:{max_fail:0,min_coverage_optional:'0.95'},
+const SET={schema_version:1,format:'f6',set_id:'facts/synthetic-us',version:2,module:'facts',artifact_class:'public',module_implementers:['claude-code'],review_required:false,tolerance:{rel:'0'},thresholds:{max_fail:0,min_coverage_optional:'0.95'},
  optional_cases:[],history:[],cases:[],ready:true,path:'src/lib/evals/fixtures/gold/facts/synthetic-us.json',sha256:'d'.repeat(64)} as GoldSet;
 const rep=(id:string,outcome:CaseOutcome,left:string|null=null,right:string|null=null):CaseReport=>({case_id:id,required:true,outcome,left,right,abs_diff:null,rel_diff:null,tolerance:'0',provenance:null,detail:{}});
 const CASES=[rep('Z/pass',{result:'pass'},'1','1'),rep('A|pipe/fail',{result:'fail',reason:'value'},'101','100'),rep('M/missing',{result:'missing'},null,'5')];
@@ -5203,7 +5281,7 @@ export function gcase(over:Partial<GoldCase>={}):GoldCase{
   required:true,pending:false,provenance_gaps:[],...over};
 }
 export function gset(cases:GoldCase[],over:Partial<GoldSet>={}):GoldSet{
- return {schema_version:1,format:'f6',set_id:'facts/unit',version:1,module:'facts',artifact_class:'public',module_implementers:['claude-code','codex'],
+ return {schema_version:1,format:'f6',set_id:'facts/unit',version:1,module:'facts',artifact_class:'public',module_implementers:['claude-code','codex'],review_required:false,
   tolerance:{rel:'0'},thresholds:{max_fail:0,min_coverage_optional:'0.95'},optional_cases:cases.filter(c=>!c.required).map(c=>c.case_id),history:[],cases,
   ready:true,path:'src/lib/evals/fixtures/gold/facts/unit.json',sha256:'e'.repeat(64),...over};
 }
@@ -5372,6 +5450,14 @@ describe('evaluateOfficial — every §3.3 outcome (spec §5.1)',()=>{
   expect((await one(c,{},{verify:VERIFY_SOURCES,fetchSource:async()=>{throw new Error('503');}})).outcome).toEqual({result:'provenance_incomplete',reason:'source_fetch_failed'});
   expect((await one(gcase({source:{...gcase().source,sha256:undefined}}),{},{verify:VERIFY_SOURCES,fetchSource:async()=>bytes})).outcome).toEqual({result:'provenance_incomplete',reason:'source_sha256_missing'});
  });
+ it('P1-8: an absence case is source-verified too — a bad source hash is provenance_incomplete, a good one expected_absent with source_verified',async()=>{
+  const bytes=new TextEncoder().encode('the 10-K bytes');
+  const bad=await one({...MISSING,source:{...MISSING.source,sha256:'0'.repeat(64)}},{rows:()=>[]},{verify:VERIFY_SOURCES,fetchSource:async()=>bytes});
+  expect(bad.outcome).toEqual({result:'provenance_incomplete',reason:'source_sha256_mismatch'});expect(bad.provenance?.source_verified).toBe(false);
+  const good=await one({...MISSING,source:{...MISSING.source,sha256:sha256Hex(bytes)}},{rows:()=>[]},{verify:VERIFY_SOURCES,fetchSource:async()=>bytes});
+  expect(good.outcome).toEqual({result:'expected_absent'});expect(good.provenance?.source_verified).toBe(true);
+  expect((await one(MISSING,{rows:()=>[]})).provenance).toBeNull();
+ });
  it('metric rows (unprivileged): metric, formula_version, basis, input_unit, inputs[].fact_id, based_on_rev must be present',async()=>{
   const target:MetricTarget={type:'metric',metric:'gross_margin',period_start:'2023-01-01',period_end:'2023-12-31',duration:'12M',basis:'us_standard',input_unit:'USD',formula_version:'facts-derive/1.0',unit:{kind:'ratio'}};
   const m=gcase({case_id:'metric',target,binding:'current',as_of:'2024-02-15',canonical:{value:'0.4'},printed:{text:'40%',unit_label:'percent',scale:'1'}});
@@ -5397,7 +5483,7 @@ Create `src/lib/evals/run-gold-set.test.ts`:
 import {describe,expect,it} from 'vitest';
 import {fakeReader,gcase,gset,env,readRow} from './kinds/official-test-support';
 import type {FakeReader,FakeReaderOptions} from './kinds/official-test-support';
-import {runGoldSet,selectCases} from './run-gold-set';
+import {runGoldSet,selectCases,verifiedOf} from './run-gold-set';
 import {goldBlockOf} from './summary';
 import type {RunGoldSetOptions} from './run-gold-set';
 import type {CaseTarget,FactTarget,GoldCase,ReadRow,ReportEnvironment} from './types';
@@ -5432,6 +5518,13 @@ describe('runGoldSet — report and gate (spec §3.2, §7.2)',()=>{
   expect(p.report).toMatchObject({privileged:true,provenance:{verified:{artifacts:true,sources:false}}});
   const u=await run({set:gset(THREE()),verify:{artifacts:true,sources:false}});
   expect(u.report).toMatchObject({privileged:false,provenance:{verified:{artifacts:false,sources:false}}});
+ });
+ it('P1-8: verified.sources is derived from completed checks, not from the flag',async()=>{
+  const noFetch=await run({set:gset(THREE()),verify:{artifacts:false,sources:true}});
+  expect(noFetch.report.provenance.verified.sources).toBe(false);   // no fetchSource → every case provenance_incomplete, nothing verified
+  expect(verifiedOf([{case_id:'a',required:true,outcome:{result:'expected_absent'},left:null,right:null,abs_diff:null,rel_diff:null,tolerance:'0',provenance:{ok:true,missing:[],source_verified:true},detail:{}}],{artifacts:true,sources:true},true)).toEqual({artifacts:true,sources:true});
+  expect(verifiedOf([{case_id:'a',required:true,outcome:{result:'fail',reason:'value'},left:'1',right:'2',abs_diff:'1',rel_diff:'0.5',tolerance:'0',provenance:null,detail:{}}],{artifacts:true,sources:true},true)).toEqual({artifacts:false,sources:false});
+  expect(verifiedOf([],{artifacts:true,sources:true},true)).toEqual({artifacts:false,sources:false});
  });
 });
 
@@ -5531,7 +5624,9 @@ Create `src/lib/evals/kinds/official.ts`:
 // official_reconciliation (spec §5.1, §3.3, §4.6), per case in input order: retracted → skipped(retracted); a legacy
 // '<pending>' entry → skipped(pending); subject → read_error(subject_unresolved); the read by binding (document: the
 // filing named by source.document_id, at env.today; current: as_of ?? env.today); a reader error or truncation →
-// read_error(reason); expect 'missing': a row in the target unit → fail(unexpected_value), none → expected_absent;
+// read_error(reason); expect 'missing': a row in the target unit → fail(unexpected_value), none → expected_absent —
+// with verify.sources the official source is fetched and hashed for absence cases too (an absence is only evidence
+// when the document was checked; Codex plan round 1 P1-8), a failed check → provenance_incomplete(reason);
 // no row: privileged readNonVisible → not_visible(reason), else missing; units (gold/schema.ts::unitOfSpec): no row
 // in the target unit → unit_mismatch, more than one → fail(ambiguous); value: compareWithinTolerance(system, gold,
 // set rel) → fail(value); source chain (§5.1.4): unprivileged = required fields present, producer_code_version
@@ -5605,7 +5700,13 @@ async function evaluateCase(c:GoldCase,reader:ModuleReader,ctx:OfficialContext,m
  const rows=read.rows;
  const inUnit=rows.filter(r=>unit!==null&&r.unit===unit);
  if(c.expect==='missing'){
-  if(inUnit.length===0)return done({result:'expected_absent'},{detail:{rows:rows.length,expected_unit:unit}});
+  if(inUnit.length===0){
+   const detail={rows:rows.length,expected_unit:unit};
+   if(!ctx.verify.sources)return done({result:'expected_absent'},{detail});
+   const check=await verifySource(c,ctx,memo);
+   const provenance={ok:check===true,missing:[],...(check===true?{}:{reason:check}),source_verified:check===true};
+   return done(check===true?{result:'expected_absent'}:{result:'provenance_incomplete',reason:check},{provenance,detail});
+  }
   return done({result:'fail',reason:'unexpected_value'},{left:inUnit.length===1?inUnit[0].value_text:null,detail:{...rowDetail(inUnit[0],unit),rows:inUnit.length}});
  }
  if(rows.length===0){
@@ -5656,7 +5757,7 @@ import {EvalError} from './errors';
 import {evaluateOfficial} from './kinds/official';
 import {buildReport} from './report';
 import {caseRowsTruncated} from './store';
-import {exitCodeOf,goldBlockOf,summarize} from './summary';
+import {bucketOf,exitCodeOf,goldBlockOf,summarize} from './summary';
 import type {CaseReport,EvalEnv,EvalMode,GoldCase,GoldSet,ModuleReader,ReportEnvironment,RunOutcome} from './types';
 
 export interface RunGoldSetOptions{set:GoldSet;mode:EvalMode;reader:ModuleReader;env:EvalEnv;environment:ReportEnvironment;runId?:string;caseIds?:string[];limit?:number;verify?:{artifacts:boolean;sources:boolean};fetchSource?:(url:string)=>Promise<Uint8Array>}
@@ -5676,6 +5777,19 @@ export function assertRunnable(set:GoldSet,mode:EvalMode,env:EvalEnv):void{
  if(mode==='report'&&env.dirty)throw new EvalError('dirty_tree','report runs need a clean working tree');
 }
 
+
+const CORRECTNESS=new Set(['pass','fail','unit_mismatch','provenance_incomplete','unexplained_diff']);
+/** report.provenance.verified from the checks actually completed (Codex plan round 1 P1-8), never from the requested flags:
+ *  sources = requested and EVERY evaluated case (any correctness outcome) has provenance.source_verified === true;
+ *  artifacts = requested, privileged, and every evaluated case except expected_absent resolved to a raw object (provenance.ok
+ *  with object_path). No evaluated case → false. */
+export function verifiedOf(cases:CaseReport[],verify:{artifacts:boolean;sources:boolean},privileged:boolean):{artifacts:boolean;sources:boolean}{
+ const evaluated=cases.filter(c=>CORRECTNESS.has(bucketOf(c.outcome)));
+ if(evaluated.length===0)return {artifacts:false,sources:false};
+ const sources=verify.sources&&evaluated.every(c=>c.provenance?.source_verified===true);
+ const artifacts=verify.artifacts&&privileged&&evaluated.filter(c=>c.outcome.result!=='expected_absent').every(c=>c.provenance?.ok===true&&typeof c.provenance.object_path==='string');
+ return {artifacts,sources};
+}
 
 /** Ids of the cases to evaluate: --case filter (unknown id → gold_invalid), then the first `limit` in file order. */
 export function selectCases(set:GoldSet,caseIds?:string[],limit?:number):Set<string>{
@@ -5709,7 +5823,7 @@ export async function runGoldSet(o:RunGoldSetOptions):Promise<RunOutcome>{
  const environment:ReportEnvironment={...o.environment,db_state_rev:o.environment.db_state_rev??await reader.stateRev()};
  const finishedAt=env.now().toISOString();
  const report=buildReport({runId,kind:'official_reconciliation',mode,privileged,set,env,startedAt,finishedAt,environment,
-  verified:{artifacts:verify.artifacts&&privileged,sources:verify.sources},summary,cases});
+  verified:verifiedOf(cases,verify,privileged),summary,cases});
  return {report,exitCode:exitCodeOf(summary.gate)};
 }
 ```
@@ -5856,7 +5970,7 @@ import {FORMULA_VERSION} from '../../facts/derive';
 import {sameDayConflictKey} from '../../facts/keys';
 import {sha256Hex} from '../canonical-json';
 import {memoryTableClient} from '../../db/memory-table-client';
-import {buildFrozenMemory,configSha256,sealSetup,sealSetupFromPaths,setupSha256,withoutFreshness} from './setup';
+import {buildFrozenMemory,configSha256,groupSealedSetups,sealSetup,sealSetupFromPaths,setupSha256,withoutFreshness} from './setup';
 import type {FrozenBuild,FrozenSetup,FrozenSetupDraft,FrozenWorld} from './setup';
 
 const EDGAR='src/lib/evals/fixtures/edgar/';
@@ -5950,6 +6064,16 @@ describe('buildFrozenMemory (spec §5.3.1, §0 R5-2)',()=>{
   await expect(w.sync('CIK0009990603.other.json')).rejects.toMatchObject({name:'SetupMismatch',field:'fixture_manifest'});
  });
 });
+
+describe('groupSealedSetups (P1-6)',()=>{
+ it('recomputes every case: a tampered second case keeping the declared hash is a mismatch, never grouped with the first',()=>{
+  const a=setup();const tampered={...a,today:'2026-11-21'};   // same declared setup_sha256, different content
+  const r=groupSealedSetups([{case_id:'c1',setup:a},{case_id:'c2',setup:tampered},{case_id:'c3',setup:{...a}}]);
+  expect(r.groups.map(g=>g.cases.map(c=>c.case_id))).toEqual([['c1','c3']]);
+  expect(r.mismatched.map(m=>[m.case.case_id,m.mismatch])).toEqual([['c2','setup_sha256']]);
+  expect(groupSealedSetups([{case_id:'x',setup:null}]).mismatched.map(m=>m.mismatch)).toEqual(['setup']);
+ });
+});
 ```
 
 - [ ] **Step 5: Run it to verify it fails**
@@ -5978,6 +6102,13 @@ Create `src/lib/evals/replay/setup.ts`:
 // stale for every other suite sharing the database, so the world's sync deps get withoutFreshness(tables): writes to
 // dq_freshness are dropped, reads pass through. The world build therefore leaves dq_freshness untouched.
 // sealSetupFromPaths() seals a replay draft that names files by path only (Task 11's facts.frozen.json drafts).
+// Declared initial state is enforced (Codex plan round 1 P2-1): per database (pg connection string) and process a
+// registry records which setup_sha256 built which seed CIKs. A setup whose CIKs another setup already built in this
+// process → {ok:false, mismatch:'state_not_empty:cik_shared'} (different setups must use disjoint CIKs); the first build
+// of a setup in this process refuses a database where any seed issuer already has filings, facts or financial_facts
+// quarantine items → 'state_not_empty'; a rebuild of the same setup in the same process is the duplicate-only sync. A
+// listed quarantine resolution that is already resolved must have chosen exactly members carrying a listed value.
+// groupSealedSetups() recomputes EVERY case's setup before grouping or caching (P1-6).
 import {readFileSync} from 'node:fs';
 import {basename,join} from 'node:path';
 import type {Pool} from 'pg';
@@ -6048,6 +6179,22 @@ export function withoutFreshness(t:TableClient):TableClient{
  return {insert:(table,row)=>skip(table)?Promise.resolve(row):t.insert(table,row),update:(table,m,p)=>skip(table)?Promise.resolve(0):t.update(table,m,p),
   select:(table,m,o)=>t.select(table,m,o),upsert:(table,row,c)=>skip(table)?Promise.resolve():t.upsert(table,row,c),count:(table,m,o)=>t.count(table,m,o)};
 }
+/** P1-6: group sealed case setups by their RECOMPUTED setup_sha256 (never the declared one); a case whose declared hash
+ *  differs, or whose setup is not canonically equal to its group's, is returned in `mismatched` and never grouped. */
+export function groupSealedSetups<T extends {case_id:string;setup:unknown}>(cases:T[]):{groups:{setup:FrozenSetup;cases:T[]}[];mismatched:{case:T;mismatch:string}[]}{
+ const groups=new Map<string,{setup:FrozenSetup;canon:string;cases:T[]}>();const mismatched:{case:T;mismatch:string}[]=[];
+ for(const c of cases){
+  const s=c.setup as FrozenSetup;
+  if(typeof s!=='object'||s===null||typeof s.setup_sha256!=='string'){mismatched.push({case:c,mismatch:'setup'});continue;}
+  const got=setupSha256(s);
+  if(got!==s.setup_sha256){mismatched.push({case:c,mismatch:'setup_sha256'});continue;}
+  const canon=canonicalJson(s);const g=groups.get(got);
+  if(!g)groups.set(got,{setup:s,canon,cases:[c]});
+  else if(g.canon!==canon)mismatched.push({case:c,mismatch:'setup_not_equal'});
+  else g.cases.push(c);
+ }
+ return {groups:[...groups.values()].map(g=>({setup:g.setup,cases:g.cases})),mismatched};
+}
 export function loadSetup(path:string,root=process.cwd()):FrozenSetup{return JSON.parse(readFileSync(join(root,path),'utf8')) as FrozenSetup;}
 
 function readBytes(root:string,path:string,field:string):Uint8Array{
@@ -6079,14 +6226,23 @@ export function verifySetup(setup:FrozenSetup,root=process.cwd()):{seed:IssuerSe
  return {seed,files};
 }
 
-interface Backend{db:FactsDb;tables:TableClient;provision(s:SeedIssuer):Promise<string>}
+interface Backend{db:FactsDb;tables:TableClient;provision(s:SeedIssuer):Promise<string>;
+ /** P2-1: refuse a non-empty initial state (mismatch string) or null; built() records a successful build. */
+ guard?(seed:SeedIssuer[]):Promise<string|null>;built?(seed:SeedIssuer[]):void}
 
 async function resolveListed(b:Backend,q:QuarantineResolution):Promise<void>{
  const key={table_name:'financial_facts',natural_key:q.natural_key};
  const [open]=await b.tables.select('dq_quarantine',{...key,status:'open'},{limit:1});
  if(!open){
   const [done]=await b.tables.select('dq_quarantine',key,{limit:1});
-  if(done)return;                                    // resolved by an earlier build of the same world
+  if(done){                                          // resolved by an earlier build of the same world: verify its verdict (P2-1)
+   const detail=(done.detail??{}) as {chosen_fact_ids?:unknown};
+   const ids=Array.isArray(detail.chosen_fact_ids)?detail.chosen_fact_ids.filter((x):x is string=>typeof x==='string'):[];
+   const rows=await b.db.factsByIds(ids);
+   if(rows.length===0||rows.length!==ids.length||!rows.every(f=>q.chosen_values.some(v=>decimalEquals(v,f.value_text))))
+    throw new SetupMismatch('quarantine_resolutions',`${q.natural_key}: the existing resolution chose other values`);
+   return;
+  }
   throw new SetupMismatch('quarantine_resolutions',q.natural_key);
  }
  const payload=(open.payload??{}) as {fact_ids?:unknown};
@@ -6102,6 +6258,8 @@ async function buildWorld(setup:FrozenSetup,root:string,backendAt:(now:Date)=>Ba
  const {seed,files}=verified;
  const now=new Date(`${setup.today}T12:00:00.000Z`);
  const backend=backendAt(now);
+ const refused=backend.guard?await backend.guard(seed.issuers):null;
+ if(refused!==null)return {ok:false,mismatch:refused};
  try{
   const issuers:Record<string,string>={};
   for(const s of seed.issuers)issuers[s.ticker]=await backend.provision(s);
@@ -6128,12 +6286,31 @@ async function buildWorld(setup:FrozenSetup,root:string,backendAt:(now:Date)=>Ba
   for(const name of setup.sync_order)await sync(name);
   for(const q of setup.quarantine_resolutions)await resolveListed(backend,q);
   const world:FrozenWorld={db:backend.db,tables:backend.tables,storage,issuers,seed:seed.issuers,today:setup.today,now,setup,sync};
+  backend.built?.(seed.issuers);
   return {ok:true,issuers,world};
  }catch(e){if(e instanceof SetupMismatch)return {ok:false,mismatch:e.mismatch};throw e;}
 }
 
+/** P2-1 registry: database key → builds of this process ({setup_sha256, padded seed CIKs}). */
+const BUILT=new Map<string,{setup:string;ciks:Set<string>}[]>();
+const dbKeyOf=(pool:Pool)=>(pool as unknown as {options?:{connectionString?:string;host?:string;port?:number;database?:string}}).options?.connectionString
+ ??JSON.stringify((pool as unknown as {options?:Record<string,unknown>}).options??{});
 export function buildFrozenDb(pool:Pool,setup:FrozenSetup,root=process.cwd()):Promise<FrozenBuild>{
+ const key=dbKeyOf(pool);
  return buildWorld(setup,root,()=>({db:pgFactsDb(pool),tables:pgTableClient(pool),
+  async guard(seed){
+   const builds=BUILT.get(key)??[];
+   const ciks=new Set(seed.map(s=>padCik(s.cik)));
+   const other=builds.find(b=>b.setup!==setup.setup_sha256&&[...ciks].some(c=>b.ciks.has(c)));
+   if(other)return `state_not_empty:cik_shared with setup ${other.setup.slice(0,12)}`;
+   if(builds.some(b=>b.setup===setup.setup_sha256))return null;           // this process built it: a rebuild is duplicate-only
+   const ids=seed.map(s=>s.issuer_id);
+   const r=await pool.query(`select (select count(*) from public.filings where issuer_id = any($1::uuid[]))
+     + (select count(*) from public.financial_facts where issuer_id = any($1::uuid[]))
+     + (select count(*) from public.dq_quarantine where table_name = 'financial_facts' and split_part(natural_key, ':', 1) = any($2::text[])) as n`,[ids,ids]);
+   return Number(r.rows[0].n)>0?'state_not_empty':null;
+  },
+  built(seed){const list=BUILT.get(key)??[];list.push({setup:setup.setup_sha256,ciks:new Set(seed.map(s=>padCik(s.cik)))});BUILT.set(key,list);},
   async provision(s){
    await pool.query(`insert into public.stocks_universe(ticker,name,market) values($1,$2,'US') on conflict (ticker) do nothing`,[s.ticker,s.name]);
    await pool.query(`insert into public.issuers(issuer_id,canonical_name_en,country_code,cik) values($1,$2,'US',$3) on conflict do nothing`,[s.issuer_id,s.name,s.cik]);
@@ -6160,7 +6337,7 @@ export function buildFrozenMemory(setup:FrozenSetup,root=process.cwd()):Promise<
 - [ ] **Step 7: Run it to verify it passes**
 
 Run: `npm test -- src/lib/evals/replay/setup.test.ts`
-Expected: PASS — 7 tests.
+Expected: PASS — 9 tests.
 
 - [ ] **Step 8: Generate the base setup and the synthetic gold set; append the lock**
 
@@ -6233,7 +6410,7 @@ const cases=SPECS.map(s=>{
  const v=valueOf(s.who.file,s.tag,s.unit??'USD',s.who.accn,start,s.who.end);
  return {...base,printed:{text:group(v),unit_label:perShare?'USD per share':'USD',scale:'1'},canonical:{value:v}};
 });
-const set={schema_version:1,set_id:'facts/synthetic-us',version:1,module:'facts',artifact_class:'public',module_implementers:['claude-code','codex'],
+const set={schema_version:1,set_id:'facts/synthetic-us',version:1,module:'facts',artifact_class:'public',module_implementers:['claude-code','codex'],review_required:false,
  tolerance:{rel:'0'},thresholds:{max_fail:0,min_coverage_optional:'0.95'},optional_cases:cases.filter((_,i)=>SPECS[i].optional).map(c=>c.case_id),history:[],cases};
 mkdirSync('src/lib/evals/fixtures/gold/facts',{recursive:true});
 writeFileSync(GOLD,`${JSON.stringify(set,null,1)}\n`);
@@ -7762,12 +7939,13 @@ Expected: FAIL — `Failed to resolve import "./replay"`。
 // hit → unexplained_diff(no_hints) (partial / self-approved reasons take precedence). The live tuple uses
 // recorded.state_rev → ctx.stateRev(case). A ProjectionError is read_error(reason); any other failure of a
 // case (projection, state rev, hints) is read_error(read_failed). Pure: every read is injected.
-import {projectionHash} from '../canonical-json';
+import {basename} from 'node:path';
+import {projectionHash,sha256Hex} from '../canonical-json';
 import {ProjectionError,diffProjections} from '../projections/facts';
 import type {FrozenReplayCase,LiveReplayCase,ReplayCase,ReplayMode} from '../replay/fixture';
 import {matchLedger} from '../replay/ledger';
-import type {LedgerEntry,LedgerMatch} from '../replay/ledger';
-import type {CaseOutcome,CaseReport,Hint,Projection,ReplayRequest,SummaryContext,Thresholds} from '../types';
+import type {LedgerEntry,LedgerMatch,ObservedDiff} from '../replay/ledger';
+import type {CaseOutcome,CaseReport,EvalModule,GoldSet,Hint,Projection,ReplayRequest,SummaryContext,Thresholds} from '../types';
 
 export type ProjectFn=(request:ReplayRequest)=>Promise<Projection>;
 export type SetupCheck={ok:true;setupSha256:string}|{ok:false;mismatch:string[]};
@@ -7781,7 +7959,23 @@ export interface ReplayContext{
  hints?:(request:ReplayRequest,since:string)=>Promise<Hint[]>;
 }
 export const REPLAY_THRESHOLDS:Thresholds={max_fail:0,min_coverage_optional:'0.95'};
+/** The report's set block for a replay file: replay files are not gold sets — set_id 'replay/<file>', version 1, sha256 =
+ *  the file bytes, format 'f6', thresholds REPLAY_THRESHOLDS (used by run.ts and the critical frozen test, P1-10). */
+export function replaySetOf(path:string,bytes:Uint8Array,module:EvalModule):GoldSet{
+ return {schema_version:1,format:'f6',set_id:`replay/${basename(path,'.json')}`,version:1,module,artifact_class:'public',module_implementers:[],review_required:false,tolerance:{rel:'0'},
+  thresholds:REPLAY_THRESHOLDS,optional_cases:[],history:[],cases:[],ready:true,path,sha256:sha256Hex(bytes)};
+}
 export const replaySummaryContext=(subset:boolean):SummaryContext=>({thresholds:REPLAY_THRESHOLDS,gold:{format:'f6',ready:true,pending:0,provenance_gaps:0},subset,evidenceClass:'truth'});
+
+/** The ledger key of one observed change — the ONLY builder: replay below and replay/record.ts --supersede (Codex plan
+ *  round 1 P1-5) both use it. frozen: setup pair (recorded case setup → the setup the projection was built from); live:
+ *  state_rev pair (recorded → current). changed_fields = diffProjections, or ['projection'] when only the hash differs. */
+export function observedDiffOf(c:ReplayCase,mode:ReplayMode,actual:Projection,to:{code:string;setupSha256?:string;stateRev?:number|null}):ObservedDiff{
+ const diff=diffProjections(c.expected.projection,actual);
+ const base={case_id:c.case_id,before_hash:c.expected.projection_hash,after_hash:projectionHash(actual),from_code:c.recorded.code_version,to_code:to.code,changed_fields:diff.length>0?diff:['projection']};
+ if(mode==='frozen')return {...base,mode,from_setup_sha256:(c as FrozenReplayCase).setup.setup_sha256,to_setup_sha256:to.setupSha256??''};
+ return {...base,mode,from_state_rev:(c as LiveReplayCase).recorded.state_rev,to_state_rev:to.stateRev??null};
+}
 
 const report=(c:ReplayCase,outcome:CaseOutcome,detail:Record<string,unknown>):CaseReport=>({case_id:c.case_id,required:true,outcome,left:null,right:null,abs_diff:null,rel_diff:null,tolerance:'0',provenance:null,detail});
 const missReason=(m:LedgerMatch,fallback:'diff'|'no_hints'):'diff'|'no_hints'|'partial_ledger'|'ledger_self_approved'=>
@@ -7803,19 +7997,19 @@ async function one(c:ReplayCase,project:ProjectFn,ledger:LedgerEntry[],ctx:Repla
  catch(e){return report(c,{result:'read_error',reason:e instanceof ProjectionError?e.reason:'read_failed'},{...detail,message:e instanceof Error?e.message:String(e)});}
  const after=projectionHash(actual);detail.after_hash=after;
  if(after===before)return report(c,{result:'identical'},detail);
- const diff=diffProjections(c.expected.projection,actual);
- const changed=diff.length>0?diff:['projection'];
- detail.changed_fields=changed;
- const base={case_id:c.case_id,before_hash:before,after_hash:after,from_code:c.recorded.code_version,to_code:ctx.evaluatorCodeVersion,changed_fields:changed};
  if(ctx.mode==='frozen'){
-  const m=matchLedger(ledger,{...base,mode:'frozen',from_setup_sha256:(c as FrozenReplayCase).setup.setup_sha256,to_setup_sha256:setupSha});
+  const d=observedDiffOf(c,'frozen',actual,{code:ctx.evaluatorCodeVersion,setupSha256:setupSha});
+  detail.changed_fields=d.changed_fields;
+  const m=matchLedger(ledger,d);
   detail.ledger=m;
   return report(c,m.kind==='hit'?{result:'explained_diff',ledger_ids:m.ledger_ids}:{result:'unexplained_diff',reason:missReason(m,'diff')},detail);
  }
  const lc=c as LiveReplayCase;
  const toRev=ctx.stateRev?await ctx.stateRev(lc):null;
  detail.from_state_rev=lc.recorded.state_rev;detail.to_state_rev=toRev;
- const m=matchLedger(ledger,{...base,mode:'live',from_state_rev:lc.recorded.state_rev,to_state_rev:toRev});
+ const d=observedDiffOf(c,'live',actual,{code:ctx.evaluatorCodeVersion,stateRev:toRev});
+ detail.changed_fields=d.changed_fields;
+ const m=matchLedger(ledger,d);
  detail.ledger=m;
  const hints=ctx.hints?await ctx.hints(c.request,lc.recorded.at):null;
  if(hints!==null&&hints.length>0)return report(c,{result:'data_drift',ledger_ids:m.kind==='hit'?m.ledger_ids:[],hints},detail);
@@ -7898,6 +8092,7 @@ import type {Projection} from '../types';
 import type {FrozenReplayCase,ReplayFile} from './fixture';
 import {parseLedger} from './ledger';
 import {applyRecording} from './record';
+import {diffProjections} from '../projections/facts';
 
 const C1='1'.repeat(40),C2='2'.repeat(40),S='5'.repeat(64),AT='2026-11-06T00:00:00.000Z';
 const P0:Projection={module:'facts',rows:[{concept:'revenue',value_text:'100'}]};
@@ -7906,7 +8101,8 @@ const request={issuer:{market:'US' as const,cik:'9990601'},concepts:['revenue'],
 const setup={setup_sha256:S,today:'2026-11-06',initial_state:'empty_after_migrations'};
 const draftFile=():ReplayFile=>({schema_version:1,module:'facts',mode:'frozen',cases:[{case_id:'c1',request,setup:{today:'2026-11-06'},recorded:null,expected:null}]});
 const recordedFile=():ReplayFile=>({schema_version:1,module:'facts',mode:'frozen',cases:[{case_id:'c1',request,setup,recorded:{code_version:C1,at:AT},expected:{projection_hash:projectionHash(P0),projection:P0}}]});
-const entry=(p:Record<string,unknown>={})=>({ledger_id:'L9',case_id:'c1',mode:'frozen',changed_fields:['facts[x].value_text'],before_hash:projectionHash(P0),after_hash:projectionHash(P1),from_code:C1,to_code:C2,from_setup_sha256:S,to_setup_sha256:S,
+const CHANGED=diffProjections(P0,P1);
+const entry=(p:Record<string,unknown>={})=>({ledger_id:'L9',case_id:'c1',mode:'frozen',changed_fields:CHANGED,before_hash:projectionHash(P0),after_hash:projectionHash(P1),from_code:C1,to_code:C2,from_setup_sha256:S,to_setup_sha256:S,
  reason_code:'bug_fixed',evidence:{pr:7,regression_test:'src/lib/facts/derive.test.ts::y'},added_by:'claude-code',added_at:AT,approved_by:'owner',approval_ref:'https://github.com/osborn-studio/OsbornAlpha/pull/7#pullrequestreview-9',approved_at:AT,...p});
 const refusal=(f:()=>unknown)=>{try{f();return 'ok';}catch(e){return e instanceof EvalError?e.code:`other:${String(e)}`;}};
 const input=(projection:Projection,p:Record<string,unknown>={})=>({case_id:'c1',projection,setup,code_version:C2,at:'2026-11-07T00:00:00.000Z',...p});
@@ -7948,6 +8144,15 @@ describe('applyRecording',()=>{
   expect(sup(entry({after_hash:'c'.repeat(64)}))).toBe('replay_rerecord_refused');
   expect(refusal(()=>applyRecording(draftFile(),input(P0),{supersede:'L9',ledger:parseLedger([entry()])}))).toBe('replay_rerecord_refused');
  });
+ it('P1-5: --supersede needs a full ledger hit — wrong code versions, wrong setup pair or wrong changed_fields are refused',()=>{
+  const sup=(e:Record<string,unknown>)=>refusal(()=>applyRecording(recordedFile(),input(P1),{supersede:'L9',ledger:parseLedger([e])}));
+  expect(sup(entry())).toBe('ok');
+  expect(sup(entry({from_code:'3'.repeat(40)}))).toBe('replay_rerecord_refused');
+  expect(sup(entry({to_code:'3'.repeat(40)}))).toBe('replay_rerecord_refused');
+  expect(sup(entry({to_setup_sha256:'6'.repeat(64)}))).toBe('replay_rerecord_refused');
+  expect(sup(entry({changed_fields:['facts[x].value_text']}))).toBe('replay_rerecord_refused');
+  expect(sup(entry({changed_fields:[...CHANGED,'facts[y].unit']}))).toBe('replay_rerecord_refused');
+ });
  it('unknown case → gold_invalid; frozen draft without setup → gold_invalid; live needs state_rev; bad code version → code_version_missing',()=>{
   expect(refusal(()=>applyRecording(draftFile(),input(P0,{case_id:'zz'}),{ledger:[]}))).toBe('gold_invalid');
   expect(refusal(()=>applyRecording(draftFile(),input(P0,{setup:undefined}),{ledger:[]}))).toBe('gold_invalid');
@@ -7973,14 +8178,17 @@ Expected: FAIL — `Failed to resolve import "./record"`。
 // recorded {code_version, at[, state_rev]} and (frozen) the sealed setup. A recorded case whose new
 // projection hash equals the stored one is left untouched. A changed one is refused unless --supersede
 // names a ledger entry that is approved (approved_by ≠ added_by), for this case and mode, whose
-// before_hash is the stored hash and whose after_hash is the new hash; then expected/recorded are replaced,
+// before_hash is the stored hash and whose after_hash is the new hash, AND that matchLedger reports as a hit for the
+// same ObservedDiff replay builds (kinds/replay.ts::observedDiffOf: code versions, setup / state_rev pair, the exact
+// changed_fields — Codex plan round 1 P1-5); then expected/recorded are replaced,
 // the setup is kept and the supersession is appended to case.supersessions. Pure: returns a new file.
 import {projectionHash} from '../canonical-json';
 import {EvalError} from '../errors';
 import type {Projection} from '../types';
 import {isDraft} from './fixture';
 import type {FrozenReplayCase,LiveReplayCase,ReplayFile,SealedSetup} from './fixture';
-import {isSelfApproved} from './ledger';
+import {observedDiffOf} from '../kinds/replay';
+import {isSelfApproved,matchLedger} from './ledger';
 import type {LedgerEntry} from './ledger';
 
 export interface RecordInput{case_id:string;projection:Projection;setup?:SealedSetup;code_version:string;at:string;state_rev?:number|null}
@@ -8023,6 +8231,9 @@ export function applyRecording(file:ReplayFile,input:RecordInput,opts:RecordOpti
  const why=!e?'ledger_id not found':isSelfApproved(e)?'ledger entry is self-approved':e.case_id!==c.case_id?'ledger entry is for another case'
   :e.mode!==file.mode?'ledger entry is for another mode':e.before_hash!==before?'ledger before_hash ≠ recorded projection hash':e.after_hash!==hash?'ledger after_hash ≠ new projection hash':null;
  if(why!==null||!e)throw refuse(`case ${c.case_id}: ${why}`,{...detail,ledger_id:opts.supersede});
+ const observed=observedDiffOf(c,file.mode,input.projection,{code:input.code_version,setupSha256:input.setup?.setup_sha256??(c as FrozenReplayCase).setup?.setup_sha256,stateRev:input.state_rev??null});
+ const m=matchLedger([e],observed);
+ if(m.kind!=='hit')throw refuse(`case ${c.case_id}: ledger entry ${e.ledger_id} does not match the observed change (${m.kind}: code versions, setup/state pair or changed_fields differ)`,{...detail,ledger_id:e.ledger_id,observed});
  next.cases[i]={...c,recorded:recorded(),expected,supersessions:[...(c.supersessions??[]),{ledger_id:e.ledger_id,before_hash:before,after_hash:hash,at:input.at}]} as FrozenReplayCase|LiveReplayCase;
  return {file:next,action:'superseded',projection_hash:hash};
 }
@@ -8031,7 +8242,7 @@ export function applyRecording(file:ReplayFile,input:RecordInput,opts:RecordOpti
 - [ ] **Step 4: 运行，确认通过**
 
 Run: `npm test -- src/lib/evals/replay/record.test.ts`
-Expected: PASS（6 个用例）。
+Expected: PASS（7 个用例）。
 
 - [ ] **Step 5: 写 CLI `scripts/evals/record-replay.ts`**
 
@@ -8050,6 +8261,8 @@ Expected: PASS（6 个用例）。
  * with buildFrozenDb, and the projection is read over that database (projections/facts.ts::projectRequest).
  * live: production over the anon client (NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY, e.g.
  * node --env-file=.env.local --import tsx …), recording fact_state_rev after the projection.
+ * Refuses a dirty checkout (EvalError dirty_tree, exit 2 — evaluator_code_version must name committed code; Codex plan
+ * round 1 P1-7): commit the code and the drafts first, then record, then commit the recording.
  * The file is written once, only after every requested case succeeded. Prints "<action> <case_id> <hash>".
  * Exit 0 ok, 2 refused or bad arguments, 1 any other failure.
  */
@@ -8063,7 +8276,7 @@ import {isDraft,parseReplayFile,serializeReplayFile} from '../../src/lib/evals/r
 import type {DraftReplayCase,FrozenReplayCase,ReplayCase,ReplayFile,ReplayMode,SealedSetup} from '../../src/lib/evals/replay/fixture';
 import {loadLedger} from '../../src/lib/evals/replay/ledger';
 import {applyRecording} from '../../src/lib/evals/replay/record';
-import {buildFrozenDb,sealSetupFromPaths} from '../../src/lib/evals/replay/setup';
+import {buildFrozenDb,sealSetupFromPaths,setupSha256} from '../../src/lib/evals/replay/setup';
 import type {FrozenSetup,FrozenSetupPathsDraft} from '../../src/lib/evals/replay/setup';
 import type {Projection} from '../../src/lib/evals/types';
 import {evaluatorVersion} from '../../src/lib/evals/version';
@@ -8101,6 +8314,8 @@ function frozenEnv():Env{
  return {
   async project(c){
    const setup:FrozenSetup=isDraft(c)?sealSetupFromPaths(c.setup as unknown as FrozenSetupPathsDraft):(c as FrozenReplayCase).setup as unknown as FrozenSetup;
+   // P1-6: every case's setup is recomputed before the cache lookup (a recorded case may not carry a stale hash)
+   if(setupSha256(setup)!==setup.setup_sha256)throw new EvalError('gold_invalid',`case ${c.case_id}: setup_mismatch (setup_sha256 does not match the setup)`,{case_id:c.case_id,mismatch:'setup_sha256'});
    let deps=built.get(setup.setup_sha256);
    if(!deps){
     const r=await buildFrozenDb(pool,setup);
@@ -8137,7 +8352,7 @@ function liveEnv():Env{
 
 async function main(argv:string[]):Promise<void>{
  const a=parseArgs(argv);
- const {sha}=evaluatorVersion();
+ const v=evaluatorVersion();
  const file=parseReplayFile(readJson(a.file),{allowDrafts:true,file:a.file});
  if(file.mode!==a.mode)throw new EvalError('gold_invalid',`${a.file} is a ${file.mode} file`,{file:a.file});
  for(const id of a.cases)if(!file.cases.some(c=>c.case_id===id))throw new EvalError('gold_invalid',`${a.file}: unknown case ${id}`,{file:a.file,case_id:id});
@@ -8146,10 +8361,11 @@ async function main(argv:string[]):Promise<void>{
  let cur:ReplayFile=file;
  const lines:string[]=[];
  try{
+  if(v.dirty)throw new EvalError('dirty_tree','record-replay needs a clean checkout: commit the code and drafts first (git status --porcelain --untracked-files=normal is not empty)');
   for(const id of a.cases){
    const c=cur.cases.find(x=>x.case_id===id)!;
    const got=await env.project(c);
-   const r=applyRecording(cur,{case_id:id,projection:got.projection,setup:got.setup,code_version:sha,at:new Date().toISOString(),state_rev:got.stateRev},{supersede:a.supersede,ledger});
+   const r=applyRecording(cur,{case_id:id,projection:got.projection,setup:got.setup,code_version:v.sha,at:new Date().toISOString(),state_rev:got.stateRev},{supersede:a.supersede,ledger});
    cur=r.file;lines.push(`${r.action} ${id} ${r.projection_hash}`);
   }
  }finally{await env.close();}
@@ -8228,7 +8444,7 @@ Expected: PASS（3 个用例）。若第一次运行时 `scripts/evals/record-re
 []
 ```
 
-`src/lib/evals/fixtures/replay/facts.frozen.json`（12 个草稿；`setup` 是 Task 9 的 `FrozenSetupPathsDraft`（只写路径，`record-replay.ts` 用 `sealSetupFromPaths` 补齐全部哈希）——若 Task 9 落地的草稿类型字段名不同，以 Task 9 的类型为准改写这一对象，其余不变；`today` 固定 `2026-11-06`）：
+`src/lib/evals/fixtures/replay/facts.frozen.json`（12 个草稿；`setup` 是 Task 9 的 `FrozenSetupPathsDraft`（只写路径，`record-replay.ts` 用 `sealSetupFromPaths` 补齐全部哈希）——若 Task 9 落地的草稿类型字段名不同，以 Task 9 的类型为准改写这一对象，其余不变）。**每个草稿的 `setup` 都与 Task 9 的 `f6-base.setup.json` 内容相同**（5 个夹具、`sync_order` 前 3 个、`today` `2026-11-20`；经 `sealSetupFromPaths` 封装的 `setup_sha256` 与基础 setup 相等）：自 P2-1 起 `buildFrozenDb` 在同一库同一进程内拒绝与已建 setup 共用 CIK 的另一个 setup，而 Task 9 的集成测试先用基础 setup 建了同一个库：
 
 ```json
 {
@@ -8236,18 +8452,18 @@ Expected: PASS（3 个用例）。若第一次运行时 `scripts/evals/record-re
  "module": "facts",
  "mode": "frozen",
  "cases": [
-  {"case_id": "zzeva-revenue-12m-2024-06-30", "request": {"issuer": {"market": "US", "cik": "9990601"}, "concepts": ["revenue"], "asOf": "2024-06-30", "durations": ["12M"]}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json"], "today": "2026-11-06", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
-  {"case_id": "zzeva-revenue-all-2026-11-05", "request": {"issuer": {"market": "US", "cik": "9990601"}, "concepts": ["revenue"], "asOf": "2026-11-05"}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json"], "today": "2026-11-06", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
-  {"case_id": "zzeva-net-income-3m-2025-03-31", "request": {"issuer": {"market": "US", "cik": "9990601"}, "concepts": ["net_income_parent"], "asOf": "2025-03-31", "durations": ["3M"]}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json"], "today": "2026-11-06", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
-  {"case_id": "zzeva-balance-sheet-2026-11-05", "request": {"issuer": {"market": "US", "cik": "9990601"}, "concepts": ["total_assets", "total_liabilities", "equity_parent"], "asOf": "2026-11-05", "durations": ["INSTANT"]}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json"], "today": "2026-11-06", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
-  {"case_id": "zzeva-cash-2021-06-30", "request": {"issuer": {"market": "US", "cik": "9990601"}, "concepts": ["cash"], "asOf": "2021-06-30"}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json"], "today": "2026-11-06", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
-  {"case_id": "zzeva-eps-2026-11-05", "request": {"issuer": {"market": "US", "cik": "9990601"}, "concepts": ["eps_basic", "eps_diluted"], "asOf": "2026-11-05"}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json"], "today": "2026-11-06", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
-  {"case_id": "zzeva-cash-flow-12m-2025-12-31", "request": {"issuer": {"market": "US", "cik": "9990601"}, "concepts": ["operating_cash_flow", "capex"], "asOf": "2025-12-31", "durations": ["12M"]}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json"], "today": "2026-11-06", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
-  {"case_id": "zzeva-before-first-filing-2010-01-01", "request": {"issuer": {"market": "US", "cik": "9990601"}, "concepts": ["revenue"], "asOf": "2010-01-01"}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json"], "today": "2026-11-06", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
-  {"case_id": "zzeva-metrics-2026-11-05", "request": {"issuer": {"market": "US", "cik": "9990601"}, "concepts": [], "metrics": ["gross_margin", "net_margin", "revenue_yoy"], "asOf": "2026-11-05"}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json"], "today": "2026-11-06", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
-  {"case_id": "zzevb-revenue-12m-2026-11-05", "request": {"issuer": {"market": "US", "cik": "9990602"}, "concepts": ["revenue"], "asOf": "2026-11-05", "durations": ["12M"]}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json"], "today": "2026-11-06", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
-  {"case_id": "zzevb-total-assets-2025-06-30", "request": {"issuer": {"market": "US", "cik": "9990602"}, "concepts": ["total_assets"], "asOf": "2025-06-30", "durations": ["INSTANT"]}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json"], "today": "2026-11-06", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
-  {"case_id": "zzevb-metrics-ttm-2026-06-30", "request": {"issuer": {"market": "US", "cik": "9990602"}, "concepts": [], "metrics": ["ttm_revenue", "roe"], "asOf": "2026-06-30"}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json"], "today": "2026-11-06", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null}
+  {"case_id": "zzeva-revenue-12m-2024-06-30", "request": {"issuer": {"market": "US", "cik": "9990601"}, "concepts": ["revenue"], "asOf": "2024-06-30", "durations": ["12M"]}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.amended.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.conflict.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json", "CIK0009990603.json"], "today": "2026-11-20", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
+  {"case_id": "zzeva-revenue-all-2026-11-05", "request": {"issuer": {"market": "US", "cik": "9990601"}, "concepts": ["revenue"], "asOf": "2026-11-05"}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.amended.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.conflict.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json", "CIK0009990603.json"], "today": "2026-11-20", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
+  {"case_id": "zzeva-net-income-3m-2025-03-31", "request": {"issuer": {"market": "US", "cik": "9990601"}, "concepts": ["net_income_parent"], "asOf": "2025-03-31", "durations": ["3M"]}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.amended.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.conflict.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json", "CIK0009990603.json"], "today": "2026-11-20", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
+  {"case_id": "zzeva-balance-sheet-2026-11-05", "request": {"issuer": {"market": "US", "cik": "9990601"}, "concepts": ["total_assets", "total_liabilities", "equity_parent"], "asOf": "2026-11-05", "durations": ["INSTANT"]}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.amended.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.conflict.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json", "CIK0009990603.json"], "today": "2026-11-20", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
+  {"case_id": "zzeva-cash-2021-06-30", "request": {"issuer": {"market": "US", "cik": "9990601"}, "concepts": ["cash"], "asOf": "2021-06-30"}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.amended.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.conflict.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json", "CIK0009990603.json"], "today": "2026-11-20", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
+  {"case_id": "zzeva-eps-2026-11-05", "request": {"issuer": {"market": "US", "cik": "9990601"}, "concepts": ["eps_basic", "eps_diluted"], "asOf": "2026-11-05"}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.amended.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.conflict.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json", "CIK0009990603.json"], "today": "2026-11-20", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
+  {"case_id": "zzeva-cash-flow-12m-2025-12-31", "request": {"issuer": {"market": "US", "cik": "9990601"}, "concepts": ["operating_cash_flow", "capex"], "asOf": "2025-12-31", "durations": ["12M"]}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.amended.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.conflict.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json", "CIK0009990603.json"], "today": "2026-11-20", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
+  {"case_id": "zzeva-before-first-filing-2010-01-01", "request": {"issuer": {"market": "US", "cik": "9990601"}, "concepts": ["revenue"], "asOf": "2010-01-01"}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.amended.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.conflict.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json", "CIK0009990603.json"], "today": "2026-11-20", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
+  {"case_id": "zzeva-metrics-2026-11-05", "request": {"issuer": {"market": "US", "cik": "9990601"}, "concepts": [], "metrics": ["gross_margin", "net_margin", "revenue_yoy"], "asOf": "2026-11-05"}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.amended.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.conflict.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json", "CIK0009990603.json"], "today": "2026-11-20", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
+  {"case_id": "zzevb-revenue-12m-2026-11-05", "request": {"issuer": {"market": "US", "cik": "9990602"}, "concepts": ["revenue"], "asOf": "2026-11-05", "durations": ["12M"]}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.amended.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.conflict.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json", "CIK0009990603.json"], "today": "2026-11-20", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
+  {"case_id": "zzevb-total-assets-2025-06-30", "request": {"issuer": {"market": "US", "cik": "9990602"}, "concepts": ["total_assets"], "asOf": "2025-06-30", "durations": ["INSTANT"]}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.amended.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.conflict.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json", "CIK0009990603.json"], "today": "2026-11-20", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null},
+  {"case_id": "zzevb-metrics-ttm-2026-06-30", "request": {"issuer": {"market": "US", "cik": "9990602"}, "concepts": [], "metrics": ["ttm_revenue", "roe"], "asOf": "2026-06-30"}, "setup": {"initial_state": "empty_after_migrations", "issuer_seed": {"path": "src/lib/evals/fixtures/issuers/f6-seed.json"}, "fixture_manifest": [{"path": "src/lib/evals/fixtures/edgar/CIK0009990601.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990602.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.amended.json"}, {"path": "src/lib/evals/fixtures/edgar/CIK0009990603.conflict.json"}], "sync_order": ["CIK0009990601.json", "CIK0009990602.json", "CIK0009990603.json"], "today": "2026-11-20", "mapping_gen": 1, "formula_version": "facts-derive/1.0", "quarantine_resolutions": []}, "recorded": null, "expected": null}
  ]
 }
 ```
@@ -8282,7 +8498,18 @@ main();
 
 （`startLocalDatabase()` 返回对象带 `stateFile`，与 `db-one.ts` 用法一致；`.claude/scratch/` 在 `tsconfig` 的 `**/*.ts` 范围内，`npm run typecheck` 会检查它。）
 
-- [ ] **Step 10: 对真实本地库录制全部 12 个案例（不手写哈希）**
+- [ ] **Step 10: 先提交代码与草稿，再对真实本地库录制全部 12 个案例（不手写哈希）**
+
+`record-replay.ts` 拒绝脏工作树（`dirty_tree`，退出 2；Codex 计划第 1 轮 P1-7）：录下的 `recorded.code_version` 必须是已提交的代码。先提交 Step 1–8 的文件（`.claude/scratch/` 被 git 忽略，不算脏）：
+
+```bash
+git add src/lib/evals/replay/record.ts src/lib/evals/replay/record.test.ts src/lib/evals/replay/record-cli.test.ts scripts/evals/record-replay.ts src/lib/evals/fixtures/replay/facts.frozen.json src/lib/evals/fixtures/replay/explanations.json
+```
+```bash
+git commit -m "feat(evals): append-only replay recorder and 12 frozen drafts (F6 Task 11, before recording)" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+Run: `git status --porcelain --untracked-files=normal`
+Expected: 无输出。
 
 Run:
 ```bash
@@ -8290,15 +8517,23 @@ LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/
 ```
 Expected: 12 行 `recorded <case_id> <64 hex>`，退出码 0；`facts.frozen.json` 现在每个案例都有 `setup.setup_sha256`、`recorded.code_version`（40 hex）、`expected.projection_hash`、`expected.projection`。
 
-- [ ] **Step 11: 在另一个全新的库上重跑，证明确定性**
+- [ ] **Step 11: 提交录制结果，在另一个全新的库上重跑，证明确定性**
 
-Run: 与 Step 10 完全相同的命令。
+录制改了 `facts.frozen.json`，工作树又脏了；先提交它（重跑同样拒绝脏树）：
+```bash
+git add src/lib/evals/fixtures/replay/facts.frozen.json
+```
+```bash
+git commit -m "test(evals): record the 12 frozen replay cases on a fresh local database (F6 Task 11)" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+
+Run: 与 Step 10 完全相同的录制命令。
 Expected: 12 行 `unchanged <case_id> <与 Step 10 相同的哈希>`，退出码 0；`git diff --stat src/lib/evals/fixtures/replay/facts.frozen.json` 与 Step 10 之后相比无变化（只做 `serializeReplayFile` 原样回写）。
 
 - [ ] **Step 12: 检查投影内容不是空壳**
 
 Run: `node -e "const f=require('./src/lib/evals/fixtures/replay/facts.frozen.json');for(const c of f.cases)console.log(c.case_id,c.expected.projection.module,c.expected.projection.rows.length)"`
-Expected: 12 行；`zzeva-before-first-filing-2010-01-01` 为 `facts 0`，其余 11 个行数 > 0，两个 metrics 案例 module 为 `metrics`。若除 2010 案例之外有行数为 0 的案例：用 `node -e "console.log(Object.keys(require('./src/lib/evals/fixtures/edgar/CIK0009990602.json').facts['us-gaap']).join(','))"` 查该发行人夹具里有的 us-gaap 概念，把该**草稿**的 `concepts`/`metrics` 换成存在的概念（`src/lib/facts/concepts.ts` 的映射）后，把该案例的 `setup/recorded/expected` 恢复为草稿（`recorded:null, expected:null`、`setup` 换回 Step 8 的草稿对象），再对该案例执行 Step 10 与 Step 11（只增：其他 11 个案例输出 `unchanged`，不改）。
+Expected: 12 行；`zzeva-before-first-filing-2010-01-01` 为 `facts 0`，其余 11 个行数 > 0，两个 metrics 案例 module 为 `metrics`。若除 2010 案例之外有行数为 0 的案例：用 `node -e "console.log(Object.keys(require('./src/lib/evals/fixtures/edgar/CIK0009990602.json').facts['us-gaap']).join(','))"` 查该发行人夹具里有的 us-gaap 概念，把该**草稿**的 `concepts`/`metrics` 换成存在的概念（`src/lib/facts/concepts.ts` 的映射）后，把该案例的 `setup/recorded/expected` 恢复为草稿（`recorded:null, expected:null`、`setup` 换回 Step 8 的草稿对象），先提交改回草稿的文件，再对该案例执行 Step 10 的录制命令与 Step 11（只增：其他 11 个案例输出 `unchanged`，不改）。
 
 - [ ] **Step 13: 在集成测试里追加 frozen 回放块**
 
@@ -8310,13 +8545,15 @@ import {cpSync as cpReplay,mkdtempSync as mkdtempReplay,readFileSync as readRepl
 import {tmpdir as replayTmpdir} from 'node:os';
 import {join as joinReplay} from 'node:path';
 import {Pool as ReplayPool} from 'pg';
-import {evaluateReplay,replaySummaryContext} from './kinds/replay';
+import {randomUUID as replayRunId} from 'node:crypto';
+import {evaluateReplay,replaySetOf,replaySummaryContext} from './kinds/replay';
 import type {SetupCheck} from './kinds/replay';
+import {buildReport as buildReplayReport,writeReportFiles as writeReplayReportFiles} from './report';
 import {projectRequest,resolveFactsSubject} from './projections/facts';
 import {parseReplayFile,recordedCases} from './replay/fixture';
 import type {FrozenReplayCase} from './replay/fixture';
 import {loadLedger} from './replay/ledger';
-import {buildFrozenDb as buildFrozenDbForReplay} from './replay/setup';
+import {buildFrozenDb as buildFrozenDbForReplay,groupSealedSetups,loadSetup as loadSetupForReplay,sealSetup as sealSetupForReplay} from './replay/setup';
 import type {FrozenSetup as FrozenSetupForReplay} from './replay/setup';
 import {summarize as summarizeReplay} from './summary';
 import type {CaseReport as ReplayCaseReport,ReplayRequest as ReplayRequestForReplay,Subject as ReplaySubject} from './types';
@@ -8337,26 +8574,49 @@ describe.skipIf(!process.env.S4_TEST_STATE)('evals-facts: replay frozen (Task 11
  const frozenCases=()=>recordedCases(parseReplayFile(JSON.parse(readReplayFile(FROZEN,'utf8')),{allowDrafts:false,file:FROZEN})) as FrozenReplayCase[];
  const ctxOf=(check:SetupCheck)=>({mode:'frozen' as const,evaluatorCodeVersion:replayEvaluatorVersion().sha,checkSetup:async()=>check});
 
- it('every committed frozen case replays identical and the replay gate passes',async()=>{
+ it('every committed frozen case replays identical; the real EvalReport is built, and written to reports/evals/ under CI (P1-10)',async()=>{
   const cases=frozenCases();const ledger=loadLedger(LEDGER);
   expect(cases.length).toBeGreaterThanOrEqual(10);
-  const groups=new Map<string,FrozenReplayCase[]>();
-  for(const c of cases){const g=groups.get(c.setup.setup_sha256)??[];g.push(c);groups.set(c.setup.setup_sha256,g);}
+  const startedAt=new Date().toISOString();
+  // P1-6: every case's setup is recomputed before grouping; nothing may be mismatched in the committed file
+  const {groups,mismatched}=groupSealedSetups(cases);
+  expect(mismatched.map(m=>m.case.case_id)).toEqual([]);
   const reports:ReplayCaseReport[]=[];
-  for(const group of groups.values()){
-   const setup=group[0].setup as unknown as FrozenSetupForReplay;
+  for(const group of groups){
+   const setup=group.setup;
    const built=await buildFrozenDbForReplay(replayPool,setup);
-   if(!built.ok){reports.push(...await evaluateReplay(group,async()=>{throw new Error('setup not built');},ledger,ctxOf({ok:false,mismatch:[built.mismatch]})));continue;}
+   if(!built.ok){reports.push(...await evaluateReplay(group.cases,async()=>{throw new Error('setup not built');},ledger,ctxOf({ok:false,mismatch:[built.mismatch]})));continue;}
    const tables=built.world.tables;
    const deps={db:built.world.db,resolve:(s:ReplaySubject,t:string)=>resolveFactsSubject(tables,s,t)};
-   reports.push(...await evaluateReplay(group,(r:ReplayRequestForReplay)=>projectRequest(deps,r,setup.today),ledger,ctxOf({ok:true,setupSha256:built.world.setup.setup_sha256})));
+   reports.push(...await evaluateReplay(group.cases,(r:ReplayRequestForReplay)=>projectRequest(deps,r,setup.today),ledger,ctxOf({ok:true,setupSha256:built.world.setup.setup_sha256})));
   }
   expect(reports.filter(r=>r.outcome.result!=='identical').map(r=>({case_id:r.case_id,outcome:r.outcome,changed:r.detail.changed_fields??null}))).toEqual([]);
   const s=summarizeReplay(reports,replaySummaryContext(false));
   expect(s.population).toBe(cases.length);
   expect(s.correctness.pass).toBe(cases.length);
   expect(s.gate).toBe('pass');
+  // P1-10: the release evidence is this run's real report (mode ci), built with the same builder as run.ts
+  const v=replayEvaluatorVersion();const now=new Date();
+  const report=buildReplayReport({runId:replayRunId(),kind:'replay_consistency',mode:'ci',privileged:false,set:replaySetOf(FROZEN,new Uint8Array(readReplayFile(FROZEN)),'facts'),
+   env:{today:now.toISOString().slice(0,10),now:()=>now,evaluatorCodeVersion:v.sha,dirty:v.dirty},environment:{db_host:null,app_origin:null,db_state_rev:null},
+   startedAt,finishedAt:now.toISOString(),verified:{artifacts:false,sources:false},summary:s,cases:reports});
+  expect(report).toMatchObject({kind:'replay_consistency',mode:'ci',set:{id:'replay/facts.frozen',path:FROZEN},summary:{gate:'pass',population:cases.length}});
+  if(process.env.CI){
+   const files=writeReplayReportFiles(report);
+   expect(files.json).toContain('reports/evals/');expect(files.sha256).toMatch(/^[0-9a-f]{64}$/);
+  }
  },600000);
+ it('P2-1: a second setup sharing the seed CIKs is refused on the same database; a first build on a non-empty database is refused',async()=>{
+  const base=loadSetupForReplay('src/lib/evals/fixtures/replay/f6-base.setup.json');
+  const other=sealSetupForReplay({...base,today:'2026-11-21'});
+  const shared=await buildFrozenDbForReplay(replayPool,other);
+  expect(shared).toMatchObject({ok:false,mismatch:expect.stringMatching(/^state_not_empty:cik_shared/)});
+  const url=new URL(JSON.parse(readReplayFile(process.env.S4_TEST_STATE!,'utf8')).adminUrl as string);
+  url.searchParams.set('application_name','f6-p2-1');   // another registry key = what a fresh process sees
+  const fresh=new ReplayPool({connectionString:url.toString()});
+  try{expect(await buildFrozenDbForReplay(fresh,base)).toEqual({ok:false,mismatch:'state_not_empty'});}
+  finally{await fresh.end();}
+ },120000);
 
  it('one flipped fixture byte (temp copy of the tree) → read_error(setup_mismatch), nothing projected',async()=>{
   const root=mkdtempReplay(joinReplay(replayTmpdir(),'f6-replay-tamper-'));
@@ -8382,6 +8642,62 @@ describe.skipIf(!process.env.S4_TEST_STATE)('evals-facts: replay frozen (Task 11
  },120000);
 });
 // Task 11 end
+```
+
+同一步（Codex 计划第 1 轮 P1-10）：CI 必须产出并公布 frozen 报告。`scripts/ci/research-db.ts` 以 `env:{...process.env, S4_TEST_STATE}` 启动 vitest，GitHub Actions 的 `CI=true` 因此传到上面的测试，测试把真实 `EvalReport` 写到 `reports/evals/<run_id>.json`（已在 Task 3 的上传 glob 里）。在 `.github/workflows/ci.yml` 加第 4 个 F6 块，紧接在 `npm run test:db` 步骤之后 — old:
+
+````yaml
+        run: npm run test:db
+        env:
+          S4_POSTGRES_BIN: /usr/lib/postgresql/17/bin
+      - name: Fresh and seeded migration rehearsal
+````
+
+new:
+
+````yaml
+        run: npm run test:db
+        env:
+          S4_POSTGRES_BIN: /usr/lib/postgresql/17/bin
+      # F6 begin
+      - name: F6 frozen replay report digest (spec §10)
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          found=()
+          for f in reports/evals/*.json; do
+            if grep -q '"kind":"replay_consistency"' "$f" && grep -q '"mode":"ci"' "$f"; then found+=("$f"); fi
+          done
+          echo "### F6 frozen replay report" >> "$GITHUB_STEP_SUMMARY"
+          if [ ${#found[@]} -eq 0 ]; then
+            echo "no frozen replay report under reports/evals/" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          { echo '```'; sha256sum "${found[@]}"; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+      # F6 end
+      - name: Fresh and seeded migration rehearsal
+````
+
+并改 `src/lib/evals/ci-workflow.test.ts`（Task 3 所有）— old:
+
+```ts
+  expect(lines.filter(l=>l.trim()==='# F6 begin').length).toBe(3);
+  expect(lines.filter(l=>l.trim()==='# F6 end').length).toBe(3);
+```
+
+new:
+
+```ts
+  expect(lines.filter(l=>l.trim()==='# F6 begin').length).toBe(4);
+  expect(lines.filter(l=>l.trim()==='# F6 end').length).toBe(4);
+ });
+ it('publishes the frozen replay report digest after test:db and fails without one (P1-10, Task 11)',()=>{
+  const i=yml.indexOf('run: npm run test:db');const j=yml.indexOf('F6 frozen replay report digest');
+  expect(i).toBeGreaterThan(0);expect(j).toBeGreaterThan(i);
+  const step=yml.slice(j,yml.indexOf('# F6 end',j));
+  expect(step).toContain('if: always()');expect(step).toContain('sha256sum');expect(step).toContain('"kind":"replay_consistency"');expect(step).toContain('exit 1');
 ```
 
 - [ ] **Step 14: 运行集成测试（单文件、全新本地库）**
@@ -8479,6 +8795,7 @@ import {describe,expect,it} from 'vitest';
 import {projectionHash,sha256Hex} from '../canonical-json';
 import {EvalError} from '../errors';
 import type {Projection,ReplayRequest} from '../types';
+import {setupSha256} from '../replay/setup';
 import {parseRunArgs,runCli} from './run-cli';
 import type {CliDeps} from './run-cli';
 import {LEDGER_PATH,defaultReplayBackend,replayFileOf,replayRunner} from './run-replay';
@@ -8487,7 +8804,8 @@ import type {ReplayBackend,ReplayBackendFactory} from './run-replay';
 const P:Projection={module:'facts',rows:[{concept:'revenue',value_text:'383285000000',available_date:'2023-11-03'}]};
 const P2:Projection={module:'facts',rows:[{concept:'revenue',value_text:'383285000001',available_date:'2023-11-03'}]};
 const REQ:ReplayRequest={issuer:{market:'US',cik:'9990601'},concepts:['revenue'],asOf:'2024-06-30'};
-const SETUP={setup_sha256:'a'.repeat(64),today:'2026-11-20'};
+const SETUP_BODY={initial_state:'empty_after_migrations',today:'2026-11-20'};
+const SETUP={...SETUP_BODY,setup_sha256:setupSha256(SETUP_BODY as unknown as Parameters<typeof setupSha256>[0])};
 const rec={code_version:'c'.repeat(40),at:'2026-11-20T00:00:00.000Z'};
 const frozenFile={schema_version:1,module:'facts',mode:'frozen',cases:['f-1','f-2'].map(case_id=>({case_id,request:REQ,setup:SETUP,recorded:rec,expected:{projection_hash:projectionHash(P),projection:P}}))};
 const liveFile={schema_version:1,module:'facts',mode:'live',cases:[{case_id:'l-1',request:REQ,recorded:{...rec,state_rev:5},expected:{projection_hash:projectionHash(P),projection:P}}]};
@@ -8532,6 +8850,13 @@ describe('replay_consistency runner (run.ts --kind replay_consistency)',()=>{
   const bad=await replayRunner(fake({check:'mismatch'}).factory,{})(args('--mode','ci'),cli());
   expect(bad.outcome.report.cases[0].outcome).toEqual({result:'read_error',reason:'setup_mismatch'});expect(bad.outcome.exitCode).toBe(3);
  });
+ it('P1-6: a tampered second case (same declared setup_sha256) is read_error(setup_mismatch); the first still replays',async()=>{
+  const tampered={...frozenFile,cases:[frozenFile.cases[0],{...frozenFile.cases[1],setup:{...SETUP,today:'2026-11-21'}}]};
+  const f=fake();
+  const {outcome}=await replayRunner(f.factory,{})(args('--mode','ci'),cli({readFile:p=>p===replayFileOf('facts','frozen')?enc(tampered):FILES[p]}));
+  expect(outcome.report.cases.map(c=>[c.case_id,c.outcome])).toEqual([['f-1',{result:'identical'}],['f-2',{result:'read_error',reason:'setup_mismatch'}]]);
+  expect(outcome.report.cases[1].detail.mismatch).toEqual(['setup_sha256']);
+ });
  it('--case makes a subset: the other cases are skipped(subset), exit 3',async()=>{
   const {outcome}=await replayRunner(fake().factory,{})(args('--mode','ci','--case','f-1'),cli());
   expect(outcome.report.cases.map(c=>[c.case_id,c.outcome.result])).toEqual([['f-1','identical'],['f-2','skipped']]);
@@ -8572,7 +8897,9 @@ Expected: FAIL — `Failed to resolve import "./run-replay"`。
 // run.ts --kind replay_consistency (spec §5.3, §7.1; integration step of Task 11). ci = frozen: every recorded case of
 // src/lib/evals/fixtures/replay/<module>.frozen.json (or --set) is replayed over a database built from ITS sealed setup
 // (replay/setup.ts::buildFrozenDb on the S4_TEST_STATE database — a frozen replay without one is refused, like
-// record-replay.ts), one build per setup_sha256. report = live: <module>.live.json over production — anon (unprivileged:
+// record-replay.ts), one build per RECOMPUTED setup_sha256: every case's setup is recomputed first
+// (groupSealedSetups, Codex plan round 1 P1-6); a case whose setup does not hash to its declared value is
+// read_error(setup_mismatch) without any build. report = live: <module>.live.json over production — anon (unprivileged:
 // a difference without a ledger hit is unexplained_diff(no_hints)) or, with --write-db, service_role (privileged hints,
 // dq_eval_* store). The ledger is fixtures/replay/explanations.json. Every case gets exactly one CaseReport (--case /
 // --limit: the rest skipped(subset) → incomplete); summary via replaySummaryContext; one report whose set block names
@@ -8580,7 +8907,6 @@ Expected: FAIL — `Failed to resolve import "./run-replay"`。
 // 'f6', thresholds REPLAY_THRESHOLDS). --http (the route smoke, §5.3.2) is not built in this phase → kind_not_enabled.
 import {randomUUID} from 'node:crypto';
 import {readFileSync} from 'node:fs';
-import {basename} from 'node:path';
 import {Pool} from 'pg';
 import {supabaseTableClient} from '../../db/table-client';
 import {supabaseFactsDb} from '../../facts/db';
@@ -8588,33 +8914,27 @@ import {getAdminSupabase} from '../../supabase/admin';
 import {getAnonSupabase} from '../../supabase/anon';
 import {privilegedFactsReader} from '../adapters/facts';
 import {supabaseRawStorage} from '../adapters/provenance';
-import {sha256Hex} from '../canonical-json';
 import {EvalError} from '../errors';
-import {REPLAY_THRESHOLDS,evaluateReplay,replaySummaryContext} from '../kinds/replay';
+import {evaluateReplay,replaySetOf,replaySummaryContext} from '../kinds/replay';
 import type {ProjectFn,ReplayContext,SetupCheck} from '../kinds/replay';
 import {projectRequest,resolveFactsSubject} from '../projections/facts';
 import type {ProjectionDeps} from '../projections/facts';
 import {parseReplayFile,recordedCases} from '../replay/fixture';
 import type {FrozenReplayCase,LiveReplayCase,ReplayCase,ReplayMode} from '../replay/fixture';
 import {parseLedger} from '../replay/ledger';
-import {buildFrozenDb} from '../replay/setup';
+import {buildFrozenDb,groupSealedSetups} from '../replay/setup';
 import type {FrozenSetup} from '../replay/setup';
 import {buildReport} from '../report';
 import {evalStore} from '../store';
 import type {EvalStore} from '../store';
 import {exitCodeOf,summarize} from '../summary';
-import type {CaseReport,EvalEnv,EvalModule,GoldSet,Hint,ReplayRequest,ReportEnvironment} from '../types';
+import type {CaseReport,EvalEnv,EvalModule,Hint,ReplayRequest,ReportEnvironment} from '../types';
 import {LANDED_PARSERS,hostOf} from './deps';
 import type {KindRunner} from './run-cli';
 
 export const LEDGER_PATH='src/lib/evals/fixtures/replay/explanations.json';
 export const replayFileOf=(module:EvalModule,mode:ReplayMode)=>`src/lib/evals/fixtures/replay/${module}.${mode}.json`;
 
-/** The report's set block for a replay file (see header). */
-export function replaySetOf(path:string,bytes:Uint8Array,module:EvalModule):GoldSet{
- return {schema_version:1,format:'f6',set_id:`replay/${basename(path,'.json')}`,version:1,module,artifact_class:'public',module_implementers:[],tolerance:{rel:'0'},
-  thresholds:REPLAY_THRESHOLDS,optional_cases:[],history:[],cases:[],ready:true,path,sha256:sha256Hex(bytes)};
-}
 
 /** What the replay runner reads through; the default opens real databases, tests inject one. */
 export interface ReplayBackend{
@@ -8688,11 +9008,11 @@ export function replayRunner(factory:ReplayBackendFactory=defaultReplayBackend,e
    const startedAt=evalEnv.now().toISOString();
    const reports:CaseReport[]=[];
    if(mode==='frozen'){
-    const groups=new Map<string,FrozenReplayCase[]>();
-    for(const c of chosen as FrozenReplayCase[]){const g=groups.get(c.setup.setup_sha256)??[];g.push(c);groups.set(c.setup.setup_sha256,g);}
-    for(const group of groups.values()){
-     const built=await backend.frozen!(group[0].setup as unknown as FrozenSetup);
-     reports.push(...await evaluateReplay(group,built.project,ledger,{mode,evaluatorCodeVersion:v.sha,checkSetup:async()=>built.check}));
+    const {groups,mismatched}=groupSealedSetups(chosen as FrozenReplayCase[]);
+    for(const m of mismatched)reports.push(...await evaluateReplay([m.case],async()=>{throw new Error('setup not built');},ledger,{mode,evaluatorCodeVersion:v.sha,checkSetup:async()=>({ok:false,mismatch:[m.mismatch]})}));
+    for(const group of groups){
+     const built=await backend.frozen!(group.setup);
+     reports.push(...await evaluateReplay(group.cases,built.project,ledger,{mode,evaluatorCodeVersion:v.sha,checkSetup:async()=>built.check}));
     }
    }else{
     const ctx:ReplayContext={mode,evaluatorCodeVersion:v.sha,...(backend.stateRev?{stateRev:backend.stateRev}:{}),...(backend.hints?{hints:backend.hints}:{})};
@@ -8802,7 +9122,7 @@ In `src/lib/evals/cli/deps.test.ts`, after the line `   expect(r.rows.map(x=>x.v
 - [ ] **Step 19: 运行 CLI 测试**
 
 Run: `npm test -- src/lib/evals/cli`
-Expected: PASS（`run-replay.test.ts` 6 个用例、`deps.test.ts` 5 个、`run-cli.test.ts` 不变）。
+Expected: PASS（`run-replay.test.ts` 7 个用例、`deps.test.ts` 5 个、`run-cli.test.ts` 不变）。
 
 Run（Step 10 录制之后，全新本地库）: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-run.ts npx tsx scripts/evals/run.ts --kind replay_consistency --module facts --mode ci; echo "exit=$?"`
 Expected: 一行回执 `"kind":"replay_consistency"`、`"gate":"pass"`、`"population":12`，`exit=0`（集成时实跑通过）。
@@ -8829,7 +9149,7 @@ Expected: 全绿；0 类型错误；0 lint 警告。
 - [ ] **Step 22: 提交（`.claude/scratch/db-run.ts` 不提交）**
 
 ```bash
-git add src/lib/evals/replay/record.ts src/lib/evals/replay/record.test.ts src/lib/evals/replay/record-cli.test.ts scripts/evals/record-replay.ts src/lib/evals/fixtures/replay/facts.frozen.json src/lib/evals/fixtures/replay/explanations.json src/lib/evals/evals-facts.integration.test.ts src/lib/evals/route-equivalence.test.ts src/lib/evals/cli/run-replay.ts src/lib/evals/cli/run-replay.test.ts src/lib/evals/cli/run-cli.ts src/lib/evals/cli/deps.ts src/lib/evals/cli/deps.test.ts docs/audits/2026-11-06-evals-gold-sets/01-implementation-log.md
+git add src/lib/evals/fixtures/replay/facts.frozen.json src/lib/evals/evals-facts.integration.test.ts src/lib/evals/route-equivalence.test.ts src/lib/evals/cli/run-replay.ts src/lib/evals/cli/run-replay.test.ts src/lib/evals/cli/run-cli.ts src/lib/evals/cli/deps.ts src/lib/evals/cli/deps.test.ts docs/audits/2026-11-06-evals-gold-sets/01-implementation-log.md
 ```
 ```bash
 git commit -m "feat(evals): append-only replay recorder, 12 frozen facts cases, frozen DB replay and route equivalence (F6 Task 11)" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
@@ -8837,14 +9157,15 @@ git commit -m "feat(evals): append-only replay recorder, 12 frozen facts cases, 
 
 ---
 
-### Task 12: validators (expert, audit, manifest), `validate.ts` flags, `codex-audit.ts`, templates, data-foundation-2 `index.json`
+### Task 12: validators (expert, audit, manifest), `validate.ts` flags, `codex-audit.ts`, templates
+
+**Order and inputs after Codex plan round 1:** Task 12 runs after Tasks 13–15 (it reuses Task 14's `src/lib/evals/reduce.ts::reduceForKind` and `kinds/reference.ts`, Task 10's `replay/fixture.ts`, Task 6's `caseRowsTruncated`, and plan 1's `src/lib/dq/freshness.ts::computeFreshness`, read-only). The manifest validator reads release inputs at `release_commit` and committed evidence at `evidence_commit` with `git show` (P1-3), recomputes freshness at `prepared_at` (P1-4) and re-derives every summary from the authenticated fixture (P1-2, P2-2); the audit validator matches dispositions by round (P1-9).
 
 **Task 3 interface (as landed):** `src/lib/evals/validate/cli.ts` holds `HANDLERS:ValidateHandler[]` (async-capable `run(root,value,modifiers)`, optional `modifiers` such as `--release`, `findingsCheck`); a failing check exits 1. Task 12 keeps all of its logic in `src/lib/evals/validate/**` and touches only `cli.ts` in Step 22 (one import + three table entries).
 
 **Files:**
 - Create: `src/lib/evals/validate/finding.ts` (shared finding type and format regexes)
 - Create: `src/lib/evals/validate/audit.ts`, `src/lib/evals/validate/audit.test.ts`
-- Create: `docs/audits/2026-11-04-data-foundation-2/index.json`
 - Create: `src/lib/evals/validate/expert.ts`, `src/lib/evals/validate/expert.test.ts`
 - Create: `src/lib/evals/validate/manifest.ts`, `src/lib/evals/validate/manifest.test.ts`
 - Create: `src/lib/evals/validate/codex-audit.ts` (testable core), `src/lib/evals/validate/codex-audit.test.ts`, `scripts/evals/codex-audit.ts` (CLI)
@@ -8876,16 +9197,16 @@ export const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 
 - [ ] **Step 2: Write the failing audit test**
 
-Create `src/lib/evals/validate/audit.test.ts`. Its last `describe` runs against the REAL directories `docs/audits/2026-11-04-evals-gold-sets/` (expects no findings; release mode exactly `N11`) and `docs/audits/2026-11-04-data-foundation-2/` (expects exactly the 29 round-1 ids without a per-id disposition, and in release mode additionally `uncommitted` + `#27` + `N11`):
+Create `src/lib/evals/validate/audit.test.ts`. Its last `describe` runs against the REAL directory `docs/audits/2026-11-04-evals-gold-sets/` (expects no findings with round-aware matching, P1-9; release mode exactly `N11`):
 
 ```ts
 // src/lib/evals/validate/audit.test.ts
 // Spec §9: report/disposition parsing rules, index.json validation on synthetic directories, and the
-// REAL audit directories docs/audits/2026-11-04-evals-gold-sets and 2026-11-04-data-foundation-2.
+// REAL audit directory docs/audits/2026-11-04-evals-gold-sets (round-aware matching, Codex plan round 1 P1-9).
 import {createHash} from 'node:crypto';
-import {mkdtempSync,rmSync,writeFileSync} from 'node:fs';
+import {mkdtempSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {join,relative} from 'node:path';
 import {afterEach,describe,expect,it} from 'vitest';
 import {isAccept,isOpenVerify,isOwner,markdownTables,parseDispositions,parseFindings,parseVerdict,tableCells,validateAuditDir} from './audit';
 
@@ -8968,7 +9289,33 @@ describe('validateAuditDir on synthetic directories',()=>{
   expect(codes(auditDir({round:{target_git_ref:'HEAD'}}))).toEqual(['audit_target_ref']);
  });
  it('requires every finding id in some disposition table',()=>{
-  expect(validateAuditDir(auditDir({dispo:DISPO.replace('| 3 c | DECLINE | minor |\n','')}),{gitShow})).toEqual([{code:'audit_finding_undisposed',where:'round 1 #3',message:'finding id appears in no disposition table'}]);
+  expect(validateAuditDir(auditDir({dispo:DISPO.replace('| 3 c | DECLINE | minor |\n','')}),{gitShow})).toEqual([{code:'audit_finding_undisposed',where:'round 1 #3',message:'no disposition row for this round and id'}]);
+ });
+ it('P1-9: dispositions are matched by (round, id): covers_rounds and Round-N qualifiers; ambiguous reuse disposes nothing',()=>{
+  const two=(dispo:string,covers:number[])=>{
+   const d=auditDir({dispo,index:{dispositions:[{file:'02-disposition.md',covers_rounds:covers}]}});
+   writeFileSync(join(d,'03-codex-round2.md'),REPORT);
+   const idx=JSON.parse(readFileSync(join(d,'index.json'),'utf8'));
+   idx.rounds.push({...idx.rounds[0],n:2,prompt_file:null,report_file:'03-codex-round2.md'});
+   writeFileSync(join(d,'index.json'),JSON.stringify(idx));
+   return validateAuditDir(d,{gitShow}).map(f=>[f.code,f.where]);
+  };
+  // round 1's table cannot close round 2's #1–#3
+  expect(two(DISPO,[1])).toEqual([['audit_finding_undisposed','round 2 #1'],['audit_finding_undisposed','round 2 #2'],['audit_finding_undisposed','round 2 #3']]);
+  // one unqualified table covering both rounds with ids repeated in both: ambiguous, nothing disposed
+  const amb=two(DISPO,[1,2]);
+  expect(amb.filter(x=>x[0]==='audit_disposition_ambiguous').length).toBe(3);
+  expect(amb.filter(x=>x[0]==='audit_finding_undisposed').length).toBe(6);
+  // explicit qualifiers resolve it
+  const q='| # | 决定 | 实施 |\n|---|---|---|\n'+[1,2].flatMap(n=>[`| Round-${n} #1 a | ACCEPT | §1 |`,`| Round-${n} #2 b | ACCEPT | §17 |`,`| Round-${n} #3 c | DECLINE | minor |`]).join('\n')+'\n';
+  expect(two(q,[1,2])).toEqual([]);
+ });
+ it('reads through deps.readFile (committed bytes) when given, never the working tree',()=>{
+  const d=auditDir();const rel=(f:string)=>relative(process.cwd(),join(d,f)).split('\\').join('/');
+  const files=new Map(['index.json','00-prompt-round1.md','01-codex-round1.md','02-disposition.md'].map(f=>[rel(f),new Uint8Array(readFileSync(join(d,f)))]));
+  rmSync(join(d,'02-disposition.md'));
+  expect(validateAuditDir(d,{gitShow,readFile:p=>files.get(p)??null})).toEqual([]);
+  expect(validateAuditDir(d,{gitShow,readFile:()=>null}).map(f=>f.code)).toEqual(['audit_index_missing']);
  });
  it('requires implemented_in on ACCEPT rows',()=>expect(codes(auditDir({dispo:DISPO.replace('| 1 a | ACCEPT | §1 |','| 1 a | ACCEPT |  |')}))).toEqual(['audit_accept_unimplemented']));
  it('requires open.verify / open.owner to be non-empty when such dispositions exist',()=>{
@@ -8989,17 +9336,6 @@ describe('validateAuditDir on the real audit directories',()=>{
  it('docs/audits/2026-11-04-evals-gold-sets is consistent; release mode reports only N11 (P1, OPEN-verify)',()=>{
   expect(validateAuditDir('docs/audits/2026-11-04-evals-gold-sets')).toEqual([]);
   expect(validateAuditDir('docs/audits/2026-11-04-evals-gold-sets',{release:true})).toEqual([{code:'audit_release_open_verify',where:'round 2 #N11',message:'P1 finding is OPEN-verify'}]);
- });
- it('docs/audits/2026-11-04-data-foundation-2 (reconstructed index): only the round-1 findings without a per-id disposition',()=>{
-  const found=validateAuditDir('docs/audits/2026-11-04-data-foundation-2');
-  expect(new Set(found.map(f=>f.code))).toEqual(new Set(['audit_finding_undisposed']));
-  const expected=Array.from({length:31},(_,i)=>String(i+1)).filter(id=>id!=='27'&&id!=='29').map(id=>`round 1 #${id}`);
-  expect(found.map(f=>f.where)).toEqual(expected);
-  const release=validateAuditDir('docs/audits/2026-11-04-data-foundation-2',{release:true}).filter(f=>f.code!=='audit_finding_undisposed');
-  expect(release.map(f=>[f.code,f.where])).toEqual([
-   ['audit_release_uncommitted','docs/audits/2026-11-04-data-foundation-2/index.json#rounds[n=8]'],
-   ['audit_release_open_verify','round 1 #27'],['audit_release_open_verify','round 2 #N11'],
-  ]);
  });
 });
 ```
@@ -9026,6 +9362,12 @@ Create `src/lib/evals/validate/audit.ts`:
 //    whitespace token of the first cell ("Round-1 #27 …" → "27"); implemented_in is the column named
 //    `implemented_in`, else the column right after the decision column.
 //  - Decisions: ACCEPT = /\bACCEPT\b/i; OPEN-verify = /OPEN[\s-]*\(?verify\)?/i; OWNER = /\bOWNER\b/i.
+//  - Rounds (Codex plan round 1 P1-9): a disposition row's round is explicit when its first cell is "Round-N #id" or its id is
+//    "R<N>-…"; otherwise it applies to every round in its file's covers_rounds. A finding (round n, id) is disposed only by a
+//    row with that id applying to round n. A row without an explicit round whose id is a finding in two or more of its
+//    rounds is ambiguous (audit_disposition_ambiguous) and disposes nothing.
+//  - File access goes through deps.readFile (repo-relative path → bytes) when given — the release manifest reads the
+//    directory as committed at evidence_commit — else the working tree under root.
 import {execFileSync} from 'node:child_process';
 import {existsSync,readFileSync} from 'node:fs';
 import {isAbsolute,join,relative} from 'node:path';
@@ -9035,10 +9377,10 @@ import type {ValidatorFinding} from './finding';
 
 export type Severity='P1'|'P2'|'P3';
 export interface ParsedFinding{id:string;severity:Severity}
-export interface DispositionRow{id:string;decision:string;implemented_in:string;file:string}
+export interface DispositionRow{id:string;round:number|null;decision:string;implemented_in:string;file:string}
 export interface AuditRound{n:number;target_sha256:string|null;target_git_ref:string;unverified_target?:boolean;prompt_file:string|null;report_file:string;model:string;effort:string;verdict:string;findings:Record<string,number>}
 export interface AuditIndex{topic:string;target:{path:string};rounds:AuditRound[];dispositions:{file:string;covers_rounds:number[]}[];open:{owner:string[];verify:string[]};final_verdict:string}
-export interface AuditDeps{root?:string;release?:boolean;gitShow?:(ref:string,path:string)=>Uint8Array|null}
+export interface AuditDeps{root?:string;release?:boolean;gitShow?:(ref:string,path:string)=>Uint8Array|null;readFile?:(repoPath:string)=>Uint8Array|null}
 
 const strip=(c:string)=>c.replace(/\*/g,'').trim();
 /** Splits one table line into cells; `|` inside backtick spans does not split. */
@@ -9089,8 +9431,11 @@ export function parseDispositions(md:string,file:string):DispositionRow[]{
   const named=h.indexOf('implemented_in');const impl=named>=0?named:d+1;
   for(const r of t.rows){
    const first=strip(r[0]??'');if(!first)continue;
-   const id=/^Round-\d+\s*#(\d+)/i.exec(first)?.[1]??first.split(/\s+/)[0];
-   out.push({id,decision:strip(r[d]??''),implemented_in:strip(r[impl]??''),file});
+   const q=/^Round-(\d+)\s*#(\S+)/i.exec(first);
+   const id=q?.[2]??first.split(/\s+/)[0];
+   const named=/^R(\d+)-/.exec(id);
+   const round=q?Number(q[1]):named?Number(named[1]):null;
+   out.push({id,round,decision:strip(r[d]??''),implemented_in:strip(r[impl]??''),file});
   }
  }
  return out;
@@ -9134,11 +9479,16 @@ export function validateAuditDir(dir:string,deps:AuditDeps={}):ValidatorFinding[
  const root=deps.root??process.cwd();
  const abs=isAbsolute(dir)?dir:join(root,dir);
  const rel=(f:string)=>relative(root,join(abs,f));
+ /** UTF-8 text of a file of this directory, or null when absent. */
+ const read=(f:string):string|null=>{
+  if(deps.readFile){const b=deps.readFile(rel(f).split('\\').join('/'));return b?new TextDecoder().decode(b):null;}
+  return existsSync(join(abs,f))?readFileSync(join(abs,f),'utf8'):null;
+ };
  const out:ValidatorFinding[]=[];
- const indexPath=join(abs,'index.json');
- if(!existsSync(indexPath))return [finding('audit_index_missing',rel('index.json'),'index.json not found')];
+ const indexText=read('index.json');
+ if(indexText===null)return [finding('audit_index_missing',rel('index.json'),'index.json not found')];
  let raw:unknown;
- try{raw=JSON.parse(readFileSync(indexPath,'utf8'));}catch{return [finding('audit_index_invalid',rel('index.json'),'index.json is not valid JSON')];}
+ try{raw=JSON.parse(indexText);}catch{return [finding('audit_index_invalid',rel('index.json'),'index.json is not valid JSON')];}
  const bad=indexShape(raw);
  if(bad)return [finding('audit_index_invalid',rel('index.json'),`invalid field: ${bad}`)];
  const index=raw as AuditIndex;
@@ -9147,9 +9497,10 @@ export function validateAuditDir(dir:string,deps:AuditDeps={}):ValidatorFinding[
  index.rounds.forEach((r,i)=>{
   const where=`${rel('index.json')}#rounds[n=${r.n}]`;
   if(r.n!==i+1)out.push(finding('audit_round_order',where,`round ${r.n} at position ${i+1}`));
-  if(r.prompt_file!==null&&!existsSync(join(abs,r.prompt_file)))out.push(finding('audit_file_missing',rel(r.prompt_file),'prompt file not found'));
-  if(!existsSync(join(abs,r.report_file))){out.push(finding('audit_file_missing',rel(r.report_file),'report file not found'));byRound.set(r.n,[]);return;}
-  const parsed=parseFindings(readFileSync(join(abs,r.report_file),'utf8'),r.n);
+  if(r.prompt_file!==null&&read(r.prompt_file)===null)out.push(finding('audit_file_missing',rel(r.prompt_file),'prompt file not found'));
+  const reportText=read(r.report_file);
+  if(reportText===null){out.push(finding('audit_file_missing',rel(r.report_file),'report file not found'));byRound.set(r.n,[]);return;}
+  const parsed=parseFindings(reportText,r.n);
   byRound.set(r.n,parsed);
   const c=severityCounts(parsed);
   for(const k of ['p1','p2','p3'] as const)if((r.findings[k]??0)!==c[k])out.push(finding('audit_findings_count',where,`findings.${k}=${r.findings[k]??0} but the report has ${c[k]}`));
@@ -9164,12 +9515,23 @@ export function validateAuditDir(dir:string,deps:AuditDeps={}):ValidatorFinding[
   }
  });
  const rows:DispositionRow[]=[];
+ const covers=new Map<string,number[]>();
  for(const d of index.dispositions){
-  if(!existsSync(join(abs,d.file))){out.push(finding('audit_file_missing',rel(d.file),'disposition file not found'));continue;}
-  rows.push(...parseDispositions(readFileSync(join(abs,d.file),'utf8'),d.file));
+  const text=read(d.file);
+  if(text===null){out.push(finding('audit_file_missing',rel(d.file),'disposition file not found'));continue;}
+  covers.set(d.file,d.covers_rounds);
+  rows.push(...parseDispositions(text,d.file));
  }
- const ids=new Set(rows.map(r=>r.id));
- for(const [n,list] of byRound)for(const f of list)if(!ids.has(f.id))out.push(finding('audit_finding_undisposed',`round ${n} #${f.id}`,'finding id appears in no disposition table'));
+ // P1-9: a row applies to its explicit round, else to its file's covers_rounds; ambiguous reuse disposes nothing.
+ const roundsOf=(r:DispositionRow)=>r.round!==null?[r.round]:covers.get(r.file)??[];
+ const ambiguous=new Set<DispositionRow>();
+ for(const r of rows){
+  if(r.round!==null)continue;
+  const hit=roundsOf(r).filter(n=>(byRound.get(n)??[]).some(f=>f.id===r.id));
+  if(hit.length>1){ambiguous.add(r);out.push(finding('audit_disposition_ambiguous',`${rel(r.file)} #${r.id}`,`row without a round qualifier matches findings of rounds ${hit.join(',')}; write "Round-N #${r.id}"`));}
+ }
+ const rowsFor=(n:number,id:string)=>rows.filter(r=>r.id===id&&!ambiguous.has(r)&&roundsOf(r).includes(n));
+ for(const [n,list] of byRound)for(const f of list)if(rowsFor(n,f.id).length===0)out.push(finding('audit_finding_undisposed',`round ${n} #${f.id}`,'no disposition row for this round and id'));
  for(const r of rows)if(isAccept(r.decision)&&!r.implemented_in)out.push(finding('audit_accept_unimplemented',`${rel(r.file)} #${r.id}`,'ACCEPT row without implemented_in'));
  if(rows.some(r=>isOpenVerify(r.decision))&&index.open.verify.length===0)out.push(finding('audit_open_inconsistent',rel('index.json'),'OPEN-verify dispositions exist but open.verify is empty'));
  if(rows.some(r=>isOwner(r.decision))&&index.open.owner.length===0)out.push(finding('audit_open_inconsistent',rel('index.json'),'OWNER dispositions exist but open.owner is empty'));
@@ -9178,7 +9540,7 @@ export function validateAuditDir(dir:string,deps:AuditDeps={}):ValidatorFinding[
   if(last.target_git_ref==='uncommitted')out.push(finding('audit_release_uncommitted',`${rel('index.json')}#rounds[n=${last.n}]`,'the last round must target a commit'));
   for(const [n,list] of byRound)for(const f of list){
    if(f.severity==='P3')continue;
-   const mine=rows.filter(r=>r.id===f.id);
+   const mine=rowsFor(n,f.id);
    if(mine.some(r=>isOpenVerify(r.decision)))out.push(finding('audit_release_open_verify',`round ${n} #${f.id}`,`${f.severity} finding is OPEN-verify`));
    if(mine.some(r=>isAccept(r.decision)&&!r.implemented_in))out.push(finding('audit_release_unimplemented',`round ${n} #${f.id}`,`${f.severity} ACCEPT without implemented_in`));
   }
@@ -9187,55 +9549,14 @@ export function validateAuditDir(dir:string,deps:AuditDeps={}):ValidatorFinding[
 }
 ```
 
-- [ ] **Step 5: Reconstruct `docs/audits/2026-11-04-data-foundation-2/index.json`**
+- [ ] **Step 5: (deferred) no `docs/audits/2026-11-04-data-foundation-2/index.json` in this plan**
 
-Read from that directory's files (README.md, the eight Codex reports `01/03/05/07/09/11/13/15`, the six dispositions `04/06/08/10/12/14`): verdicts are the `**Verdict:**` first line (rounds 1–2) or the `**Final verdict:**` line (rounds 3–8); counts are what `parseFindings` yields (round 1 = README "11 P1 / 19 P2 / 1 P3"); the target is the plan-2 spec; no prompts were kept. Create `docs/audits/2026-11-04-data-foundation-2/index.json`:
-
-```json
-{
-  "topic": "data-foundation-2",
-  "target": {
-    "path": "docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md"
-  },
-  "reconstructed": {
-    "at": "2026-11-06",
-    "by": "F6 plan Task 12",
-    "method": "Read from the files in this directory and README.md. The audited bytes of every round are unknown (drafts were audited before or while being committed), so every round is target_git_ref 'uncommitted' with unverified_target true; draft_commit_hint names the commit that first recorded that draft and is NOT proof of the audited bytes.",
-    "reviews": [
-      {"file": "02-claude-spec-review-round1.md", "round": 1, "reviewer": "claude-fable-5.1", "note": "independent review, not a Codex round"}
-    ],
-    "non_audit_files": ["16-implementation-log.md", "17-tushare-verification.md", "README.md"]
-  },
-  "rounds": [
-    {"n": 1, "target_draft": 1, "draft_commit_hint": "7d2faa70896980967296bf0a4e96f32060e5e745", "target_sha256": null, "target_git_ref": "uncommitted", "unverified_target": true, "prompt_file": null, "report_file": "01-codex-spec-audit-round1.md", "model": "gpt-6-astra", "effort": "medium", "verdict": "not ready for implementation planning", "findings": {"p1": 11, "p2": 19, "p3": 1}},
-    {"n": 2, "target_draft": 2, "draft_commit_hint": "8412b570b4ee24e4cf49427cafc8388f44fb30d8", "target_sha256": null, "target_git_ref": "uncommitted", "unverified_target": true, "prompt_file": null, "report_file": "03-codex-spec-audit-round2.md", "model": "gpt-6-astra", "effort": "medium", "verdict": "not ready for an implementation plan", "findings": {"p1": 19, "p2": 6, "p3": 0}},
-    {"n": 3, "target_draft": 3, "draft_commit_hint": "2dcf1440891869e283269dc1a34a4da164173837", "target_sha256": null, "target_git_ref": "uncommitted", "unverified_target": true, "prompt_file": null, "report_file": "05-codex-spec-audit-round3.md", "model": "gpt-6-astra", "effort": "medium", "verdict": "not ready for an implementation plan—blocking items are R3-1–R3-7, stale/date-boundary metric materialization (N12), incompatible YTD revisions (N14), unsafe quarantine promotion/recovery (N16), incomplete deadline enforcement (N20), and unresolved correction linkage (N11); owner decisions A/C also remain pending", "findings": {"p1": 7, "p2": 0, "p3": 0}},
-    {"n": 4, "target_draft": 4, "draft_commit_hint": "3d5a98b3ce343eaee124c1fcbd1243b8201b27fc", "target_sha256": null, "target_git_ref": "uncommitted", "unverified_target": true, "prompt_file": null, "report_file": "07-codex-spec-audit-round4.md", "model": "gpt-6-astra", "effort": "medium", "verdict": "not ready for an implementation plan—the blocking items are R4-1–R4-7 and the still-unresolved revision-compatibility requirement N14; owner decisions A/B/C remain pending", "findings": {"p1": 7, "p2": 0, "p3": 0}},
-    {"n": 5, "target_draft": 5, "draft_commit_hint": "b5da42159cd525875247a4cc68517f058bfa3698", "target_sha256": null, "target_git_ref": "uncommitted", "unverified_target": true, "prompt_file": null, "report_file": "09-codex-spec-audit-round5.md", "model": "gpt-6-astra", "effort": "medium", "verdict": "not ready for an implementation plan—the blocking items are R5-1 and R5-2; owner decisions A/B/C remain pending", "findings": {"p1": 2, "p2": 1, "p3": 0}},
-    {"n": 6, "target_draft": 6, "draft_commit_hint": "c7ece9e9e39ba7475383263150f0d752b00b067e", "target_sha256": null, "target_git_ref": "uncommitted", "unverified_target": true, "prompt_file": null, "report_file": "11-codex-spec-audit-round6.md", "model": "gpt-6-astra", "effort": "medium", "verdict": "not ready for an implementation plan—R6-1 is the sole blocking item in this review; owner decisions A/B/C remain pending", "findings": {"p1": 1, "p2": 0, "p3": 0}},
-    {"n": 7, "target_draft": 7, "draft_commit_hint": "f7d6e3fc317747821a7ad5712545cac8bc9725df", "target_sha256": null, "target_git_ref": "uncommitted", "unverified_target": true, "prompt_file": null, "report_file": "13-codex-spec-audit-round7.md", "model": "gpt-6-astra", "effort": "medium", "verdict": "not ready for an implementation plan—blocking items are incomplete R6-1 serialization and R7-1’s self-blocked promotion; owner decisions A/B/C remain pending", "findings": {"p1": 1, "p2": 0, "p3": 0}},
-    {"n": 8, "target_draft": 8, "draft_commit_hint": "fcf178f6c00f436dc8a5542f79d1921f4827e997", "target_sha256": null, "target_git_ref": "uncommitted", "unverified_target": true, "prompt_file": null, "report_file": "15-codex-spec-audit-round8-final.md", "model": "gpt-6-astra", "effort": "medium", "verdict": "ready for an implementation plan with owner decisions A/B/C pending (§14)", "findings": {"p1": 0, "p2": 0, "p3": 0}}
-  ],
-  "dispositions": [
-    {"file": "04-round2-disposition.md", "covers_rounds": [1, 2]},
-    {"file": "06-round3-disposition.md", "covers_rounds": [3]},
-    {"file": "08-round4-disposition.md", "covers_rounds": [4]},
-    {"file": "10-round5-disposition.md", "covers_rounds": [5]},
-    {"file": "12-round6-disposition.md", "covers_rounds": [6]},
-    {"file": "14-round7-disposition.md", "covers_rounds": [7]}
-  ],
-  "open": {
-    "owner": ["A A-share coverage scope", "B watchlists in scope", "C CN facts public before PDF reconciliation"],
-    "verify": ["Round-1 #27 Tushare pagination semantics", "N11 correction identity"]
-  },
-  "final_verdict": "ready for an implementation plan with owner decisions A/B/C pending (§14); round-1 findings have no per-id disposition table (only #27 and #29 are dispositioned in 04)"
-}
-```
+Codex plan round 1 P2-4 (PARTIAL accept): that directory belongs to plan 2, outside F6's ownership boundary, so this plan does not create its `index.json`. Reconstructing it is a follow-up listed in Task 16 and the PR description (the validator already handles historic `uncommitted` rounds with `unverified_target: true`). Nothing to do in this step.
 
 - [ ] **Step 6: Run the audit test — expect pass**
 
 Run: `npm test -- src/lib/evals/validate/audit.test.ts`
-Expected: PASS — `15 passed (15)`. (The real-directory test needs commit `394d5141e88b913d38b816ebf369efce4d9b320a` in the local object store; it is on `main`'s history. If the F6 spec audit directory gains rounds or dispositions later, update this test's pinned expectation in the same commit.)
+Expected: PASS — `16 passed (16)`. (The real-directory test needs commit `394d5141e88b913d38b816ebf369efce4d9b320a` in the local object store; it is on `main`'s history. If the F6 spec audit directory gains rounds or dispositions later, update this test's pinned expectation in the same commit.)
 
 - [ ] **Step 7: Typecheck, lint, commit**
 
@@ -9243,10 +9564,10 @@ Run: `npm run typecheck && npm run lint`
 Expected: both exit 0.
 
 ```bash
-git add src/lib/evals/validate/finding.ts src/lib/evals/validate/audit.ts src/lib/evals/validate/audit.test.ts docs/audits/2026-11-04-data-foundation-2/index.json
+git add src/lib/evals/validate/finding.ts src/lib/evals/validate/audit.ts src/lib/evals/validate/audit.test.ts
 ```
 ```bash
-git commit -m "feat(evals): audit-record validator (spec 9) and reconstructed data-foundation-2 index.json" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+git commit -m "feat(evals): audit-record validator (spec 9, round-aware dispositions)" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
 
 #### 12b — expert sampling records (§8)
@@ -9277,7 +9598,7 @@ const CASES:GoldCase[]=[
  ...['a','b'].map(x=>gc(`C3/${x}`,{market:'CN',ticker:'600000.SH'})),
  gc('C3/r',{market:'CN',ticker:'600000.SH'},{at:'2026-11-03T00:00:00Z',by:'r2',reason:'typo'}),
 ];
-const SET:GoldSet={schema_version:1,format:'f6',set_id:'facts/expert-test',version:2,module:'facts',artifact_class:'public',module_implementers:['claude-code'],
+const SET:GoldSet={schema_version:1,format:'f6',set_id:'facts/expert-test',version:2,module:'facts',artifact_class:'public',module_implementers:['claude-code'],review_required:false,
  tolerance:{rel:'0'},thresholds:{max_fail:0,min_coverage_optional:'0.95'},optional_cases:[],history:[],cases:CASES,ready:true,path:'src/lib/evals/fixtures/gold/facts/expert-test.json',sha256:'9'.repeat(64)};
 const RUN='aaaaaaaa-0000-4000-8000-000000000001';
 const record=(o:Partial<ExpertRecord>={}):ExpertRecord=>{
@@ -9504,18 +9825,18 @@ Create `src/lib/evals/validate/manifest.test.ts` (reports are built with the rea
 
 ```ts
 // src/lib/evals/validate/manifest.test.ts
-// Spec §10 per-evidence-kind authentication and common rules, on in-memory files, a stub service-role
-// getRun, a stub dq_freshness and a temporary committed audit directory.
+// Spec §10 per-evidence-kind authentication and common rules (and Codex plan round 1 P1-2/P1-3/P1-4/P2-2/P2-3), on
+// in-memory committed files per commit, a stub service-role getRun, stub dq_freshness rows and a stub GitHub run.
 import {createHash} from 'node:crypto';
-import {mkdtempSync,rmSync,writeFileSync} from 'node:fs';
-import {tmpdir} from 'node:os';
-import {join} from 'node:path';
-import {afterAll,describe,expect,it} from 'vitest';
+import {describe,expect,it} from 'vitest';
+import {projectionHash} from '../canonical-json';
+import {CANARY_SERIES,CANARY_VALUE,REFERENCE_THRESHOLDS,evaluateReference,referenceSummary} from '../kinds/reference';
+import type {ReferenceSample} from '../kinds/reference';
 import {summarize,statusOfGate} from '../summary';
 import type {CaseReport,EvalKind,EvalReport,EvalRunRow,EvidenceClass,GoldCase,GoldLock,GoldSet} from '../types';
 import {seededSelection} from './expert';
 import {validateManifest} from './manifest';
-import type {ManifestDeps} from './manifest';
+import type {FreshnessRow,ManifestDeps} from './manifest';
 
 const sha=(b:string|Uint8Array)=>createHash('sha256').update(b).digest('hex');
 const RELEASE='e'.repeat(40);
@@ -9525,7 +9846,20 @@ const REPLAY_PATH='src/lib/evals/fixtures/replay/facts.frozen.json';
 const PAIR_PATH='src/lib/evals/fixtures/gold/facts/pairs-us.json';
 const REF_PATH='src/lib/evals/fixtures/reference/chaosai/macro-strategy.json';
 const FROZEN_COPY='docs/evals/2026-11-20/facts-replay_frozen-aaaaaaaa.json';
-const REPLAY_BYTES=new TextEncoder().encode('{"mode":"frozen"}\n'),LIVE_BYTES=new TextEncoder().encode('{"mode":"live"}\n'),REF_BYTES=new TextEncoder().encode('{"samples":[]}\n');
+const enc=(v:unknown)=>new TextEncoder().encode(JSON.stringify(v));
+const EMPTY={module:'facts' as const,rows:[]};
+const REQ={issuer:{market:'US',cik:'9990601'},concepts:['revenue'],asOf:'2024-06-30'};
+const REC={code_version:'c'.repeat(40),at:'2026-11-20T00:00:00Z'};
+const EXP={projection_hash:projectionHash(EMPTY),projection:EMPTY};
+const REPLAY_BYTES=enc({schema_version:1,module:'facts',mode:'frozen',cases:[{case_id:'f1',request:REQ,setup:{setup_sha256:'5'.repeat(64),today:'2026-11-20'},recorded:REC,expected:EXP}]});
+const LIVE_BYTES=enc({schema_version:1,module:'facts',mode:'live',cases:[{case_id:'l1',request:REQ,recorded:{...REC,state_rev:7},expected:EXP}]});
+const sample=(p:Partial<ReferenceSample>={}):ReferenceSample=>({sample_id:'R1',doc:'macro-strategy',doc_sha256:'a'.repeat(64),line:1,page_url:'https://chaos.example/macro',page_sha256:'b'.repeat(64),captured_at:'2026-11-04T00:00:00Z',
+ as_displayed:'1',parsed_value:'1',parsed_unit:'index',their_declared_source:null,our_target:{series_id:'cn.cpi',period_end:'2026-09-30',which:'latest'},canary:false,...p});
+const CANARY=sample({sample_id:'canary',as_displayed:CANARY_VALUE,parsed_value:CANARY_VALUE,our_target:{series_id:CANARY_SERIES,period_end:'2026-09-30',which:'latest'},canary:true});
+const REF_BYTES=enc({schema_version:1,samples:[sample(),CANARY]});
+const AUDIT_DIR='docs/audits/2026-11-20-release-audit';
+const AUDIT_FILES=new Map<string,Uint8Array>([[`${AUDIT_DIR}/01-codex-round1.md`,new TextEncoder().encode('**Verdict: ready.**\n\nNo findings.\n')]]);
+const DESCENDANT='f'.repeat(40);
 const EXPERT_FILE='docs/evals/2026-11-20/expert-sampling-facts-1.json';
 const TH={max_fail:0,min_coverage_optional:'0.95'};
 const GOLD={format:'f6' as const,ready:true,pending:0,provenance_gaps:0};
@@ -9538,12 +9872,14 @@ const goldCase=(case_id:string,market:'US'|'CN'='US',kind:GoldCase['provenance_k
  recorded_by:'r1',recorded_at:'2026-11-01T00:00:00Z',reviewed_by:'r2',reviewed_at:'2026-11-02T00:00:00Z',retracted:null,notes:'',required:true,pending:false,provenance_gaps:[],
 });
 const goldSet=(path:string,sha256:string,cases:GoldCase[]):GoldSet=>({schema_version:1,format:'f6',set_id:path.replace(/^.*fixtures\/gold\//,'').replace(/\.json$/,''),version:1,module:'facts',artifact_class:'public',
- module_implementers:['claude-code'],tolerance:{rel:'0'},thresholds:TH,optional_cases:[],history:[],cases,ready:true,path,sha256});
+ module_implementers:['claude-code'],review_required:false,tolerance:{rel:'0'},thresholds:TH,optional_cases:[],history:[],cases,ready:true,path,sha256});
 const passCase=(case_id:string,result:CaseReport['outcome']={result:'pass'}):CaseReport=>({case_id,required:true,outcome:result,left:'1000000',right:'1000000',abs_diff:'0',rel_diff:'0',tolerance:'0',provenance:null,detail:{}});
 
 interface Fx{
  sets:Record<string,GoldSet>;reports:Record<keyof typeof ID,EvalReport>;rowPatch:Partial<Record<keyof typeof ID,Partial<EvalRunRow>>>;
- manifest:Record<string,any>;expert:Record<string,any>;lock:GoldLock;fresh:Record<string,string>;noRuns?:boolean;noFresh?:boolean;keepSummary?:Set<string>;
+ manifest:Record<string,any>;expert:Record<string,any>;lock:GoldLock;fresh:Record<string,string>;freshRows?:Record<string,FreshnessRow>;noRuns?:boolean;noFresh?:boolean;keepSummary?:Set<string>;
+ /** files missing at evidence_commit (e.g. present only in a working tree) */
+ uncommitted?:Set<string>;origin?:string|null;online?:{conclusion:string|null;head_sha:string}|null;
 }
 function report(run_id:string,kind:EvalKind,o:{mode?:'ci'|'report';privileged?:boolean;evidence?:EvidenceClass;path:string;sha256:string;cases?:CaseReport[]}):EvalReport{
  const cases=o.cases??[passCase('X/revenue'),passCase('X/assets')];
@@ -9553,7 +9889,6 @@ function report(run_id:string,kind:EvalKind,o:{mode?:'ci'|'report';privileged?:b
   environment:{db_host:'db.example.supabase.co',app_origin:null,db_state_rev:7},thresholds:TH,provenance:{verified:{artifacts:true,sources:true}},
   summary:summarize(cases,{thresholds:TH,gold:GOLD,subset:false,evidenceClass:evidence}),cases};
 }
-let auditRoot='';
 function fx():Fx{
  const S={set:'1'.repeat(64),replay:sha(REPLAY_BYTES),live:sha(LIVE_BYTES),pair:'3'.repeat(64),ref:sha(REF_BYTES)};
  const set=goldSet(SET_PATH,S.set,[goldCase('X/revenue'),goldCase('X/assets')]);
@@ -9562,13 +9897,13 @@ function fx():Fx{
   sets:{[SET_PATH]:set,[PAIR_PATH]:goldSet(PAIR_PATH,S.pair,[goldCase('X/revenue'),goldCase('X/assets')])},
   reports:{
    official:report(ID.official,'official_reconciliation',{path:SET_PATH,sha256:S.set}),
-   live:report(ID.live,'replay_consistency',{path:REPLAY_PATH.replace('frozen','live'),sha256:S.live,cases:[passCase('L1',{result:'identical'})]}),
+   live:report(ID.live,'replay_consistency',{path:REPLAY_PATH.replace('frozen','live'),sha256:S.live,cases:[passCase('l1',{result:'identical'})]}),
    dual:report(ID.dual,'dual_source',{path:PAIR_PATH,sha256:S.pair}),
    reference:report(ID.reference,'reference_regression',{privileged:false,evidence:'comparison',path:REF_PATH,sha256:S.ref,cases:[passCase('R1',{result:'within'})]}),
-   frozen:report(ID.frozen,'replay_consistency',{mode:'ci',privileged:false,path:REPLAY_PATH,sha256:S.replay,cases:[passCase('F1',{result:'identical'})]}),
+   frozen:report(ID.frozen,'replay_consistency',{mode:'ci',privileged:false,path:REPLAY_PATH,sha256:S.replay,cases:[passCase('f1',{result:'identical'})]}),
   },
   rowPatch:{},
-  manifest:{schema_version:1,module:'facts',release_commit:RELEASE,prepared_by:'owner',prepared_at:'2026-11-21T00:00:00Z',
+  manifest:{schema_version:1,module:'facts',release_commit:RELEASE,evidence_commit:RELEASE,prepared_by:'owner',prepared_at:'2026-11-21T00:00:00Z',
    scope:{markets:['US'],universes:['sp500'],data_state_rev_min:'5'},gold_approval:'enforced',
    evidence:{
     official_reconciliation:{run_id:ID.official,report:`docs/evals/2026-11-20/${ID.official}.json`},
@@ -9577,7 +9912,7 @@ function fx():Fx{
     dual_source:{not_applicable:{reason:'no second source yet',approved_by:'owner',at:'2026-11-21T00:00:00Z'}},
     reference_regression:{not_applicable:{reason:'no samples for facts',approved_by:'owner',at:'2026-11-21T00:00:00Z'}},
     expert_sampling:{file:EXPERT_FILE},
-    model_audit:{dir:auditRoot},
+    model_audit:{dir:AUDIT_DIR},
    },waivers:[]},
   expert:{schema_version:1,module:'facts',sampled_at:'2026-11-20T00:00:00Z',expert:{alias:'E1',background:'CPA',independence:'not an implementer',contact_held_by:'owner'},
    population:{set_id:set.set_id,set_version:1,set_sha256:S.set,case_count:2,evaluated_run_id:ID.official,db_state_rev:'7'},
@@ -9588,8 +9923,7 @@ function fx():Fx{
   fresh:{'facts.us':'fresh'},
  };
 }
-const enc=(v:unknown)=>new TextEncoder().encode(JSON.stringify(v));
-async function codes(f:Fx):Promise<string[]>{
+async function run(f:Fx):Promise<{codes:string[];notices:string[]}>{
  const files=new Map<string,Uint8Array>();const rows=new Map<string,EvalRunRow>();
  for(const [k,r] of Object.entries(f.reports) as [keyof typeof ID,EvalReport][]){
   const bytes=enc(r);
@@ -9598,26 +9932,30 @@ async function codes(f:Fx):Promise<string[]>{
   rows.set(r.run_id,{run_id:r.run_id,kind:r.kind,module:r.module,mode:r.mode,privileged:r.privileged,artifact_class:r.artifact_class,set_id:r.set.id,set_version:r.set.version,set_sha256:r.set.sha256,
    evaluator_code_version:r.evaluator_code_version,started_at:r.started_at,finished_at:r.finished_at,status:statusOfGate(r.summary.gate),summary:r.summary,report_ref:ref,report_sha256:sha(bytes),triggered_by:'script',...f.rowPatch[k]});
  }
- files.set(EXPERT_FILE,enc(f.expert));files.set(REPLAY_PATH,REPLAY_BYTES);files.set(REPLAY_PATH.replace('frozen','live'),LIVE_BYTES);files.set(REF_PATH,REF_BYTES);
+ files.set(EXPERT_FILE,enc(f.expert));for(const [p,b] of AUDIT_FILES)files.set(p,b);
+ files.set(`${AUDIT_DIR}/index.json`,enc({topic:'t',target:{path:'docs/x.md'},rounds:[{n:1,target_sha256:sha('spec\n'),target_git_ref:'d'.repeat(40),prompt_file:null,report_file:'01-codex-round1.md',model:'gpt-6-astra',effort:'medium',verdict:'ready',findings:{p1:0,p2:0,p3:0}}],dispositions:[],open:{owner:[],verify:[]},final_verdict:'ready'}));
+ const release=new Map<string,Uint8Array>([[REPLAY_PATH,REPLAY_BYTES],[REPLAY_PATH.replace('frozen','live'),LIVE_BYTES],[REF_PATH,REF_BYTES]]);
  const m=structuredClone(f.manifest);
  if(m.evidence.replay_frozen?.report_sha256==='AUTO')m.evidence.replay_frozen.report_sha256=sha(files.get(FROZEN_COPY)!);
  const deps:ManifestDeps={
-  readFile:p=>files.get(p)??null,
+  readAt:(c,p)=>c===m.evidence_commit?(f.uncommitted?.has(p)?null:files.get(p)??release.get(p)??null):c===RELEASE?release.get(p)??null:null,
+  lockAt:()=>f.lock,
+  loadSetAt:(_c,p)=>{const s=f.sets[p];if(!s)throw new Error(`no set ${p}`);return s;},
+  isAncestor:(a,b)=>a===b||(a===RELEASE&&b===DESCENDANT),
+  originRepo:()=>f.origin===undefined?'osborn-studio/osbornalpha':f.origin,
+  ...(f.online!==undefined?{ciRun:async()=>f.online??null}:{}),
   getRun:f.noRuns?undefined:async id=>rows.get(id)??null,
-  freshness:f.noFresh?undefined:async d=>f.fresh[d]?{status:f.fresh[d],last_ok_at:'2026-11-20T00:00:00Z'}:null,
-  lock:f.lock,
-  loadSet:p=>{const s=f.sets[p];if(!s)throw new Error(`no set ${p}`);return s;},
+  freshness:f.noFresh?undefined:async d=>f.freshRows?.[d]??(f.fresh[d]?{expected_cadence:'daily',last_ok_at:f.fresh[d]==='fresh'?'2026-11-20T12:00:00Z':'2026-11-10T00:00:00Z',consecutive_errors:0}:null),
   audit:{gitShow:()=>new TextEncoder().encode('spec\n')},
  };
- return [...new Set((await validateManifest(m,deps)).map(x=>x.code))].sort();
+ const notices:import('./finding').ValidatorFinding[]=[];
+ const found=await validateManifest(m,deps,'manifest',{notices});
+ return {codes:[...new Set(found.map(x=>x.code))].sort(),notices:notices.map(n=>n.code)};
 }
+const codes=async(f:Fx)=>(await run(f)).codes;
 const resummarize=(r:EvalReport)=>{r.summary=summarize(r.cases,{thresholds:r.thresholds,gold:r.summary.gold,subset:false,evidenceClass:r.summary.evidence_class});};
 
 describe('validateManifest (spec §10)',()=>{
- auditRoot=mkdtempSync(join(tmpdir(),'f6-manifest-audit-'));
- writeFileSync(join(auditRoot,'01-codex-round1.md'),'**Verdict: ready.**\n\nNo findings.\n');
- writeFileSync(join(auditRoot,'index.json'),JSON.stringify({topic:'t',target:{path:'docs/x.md'},rounds:[{n:1,target_sha256:sha('spec\n'),target_git_ref:'d'.repeat(40),prompt_file:null,report_file:'01-codex-round1.md',model:'gpt-6-astra',effort:'medium',verdict:'ready',findings:{p1:0,p2:0,p3:0}}],dispositions:[],open:{owner:[],verify:[]},final_verdict:'ready'}));
- afterAll(()=>rmSync(auditRoot,{recursive:true,force:true}));
 
  it('accepts a complete manifest: privileged report runs, frozen ci copy, waived dual/reference, expert and audit',async()=>expect(await codes(fx())).toEqual([]));
  it('rejects malformed manifests',async()=>{
@@ -9649,7 +9987,7 @@ describe('validateManifest (spec §10)',()=>{
  it('accepts reference_regression only from a privileged=false comparison run',async()=>{
   const f=fx();f.manifest.evidence.reference_regression={run_id:ID.reference};expect(await codes(f)).toEqual([]);
   const g=fx();g.manifest.evidence.reference_regression={run_id:ID.reference};g.reports.reference.privileged=true;expect(await codes(g)).toEqual(['manifest_privileged']);
-  const h=fx();h.manifest.evidence.reference_regression={run_id:ID.reference};h.reports.reference.summary.evidence_class='truth';resummarize(h.reports.reference);expect(await codes(h)).toEqual(['manifest_evidence_class']);
+  const h=fx();h.manifest.evidence.reference_regression={run_id:ID.reference};h.reports.reference.summary.evidence_class='truth';resummarize(h.reports.reference);expect(await codes(h)).toEqual(['manifest_evidence_class','manifest_summary_mismatch']);
  });
  it('rejects adapter_check dual-source evidence and accepts a truth dual-source run',async()=>{
   const f=fx();f.manifest.evidence.dual_source={run_id:ID.dual};expect(await codes(f)).toEqual([]);
@@ -9683,6 +10021,9 @@ describe('validateManifest (spec §10)',()=>{
  });
  it('requires dq_freshness fresh for every market dataset',async()=>{
   const f=fx();f.fresh['facts.us']='stale';expect(await codes(f)).toEqual(['manifest_stale']);
+  // P1-4: freshness is recomputed at prepared_at from cadence / last_ok_at / errors — a stored 'fresh' status is ignored
+  const old=fx();old.freshRows={'facts.us':{expected_cadence:'daily',last_ok_at:'2026-11-01T00:00:00Z',consecutive_errors:0,status:'fresh'} as FreshnessRow};expect(await codes(old)).toEqual(['manifest_stale']);
+  const err=fx();err.freshRows={'facts.us':{expected_cadence:'daily',last_ok_at:'2026-11-20T12:00:00Z',consecutive_errors:2}};expect(await codes(err)).toEqual(['manifest_stale']);
   const g=fx();delete g.fresh['facts.us'];expect(await codes(g)).toEqual(['manifest_stale']);
  });
  it('non-waivable items cannot be not_applicable; waivable ones need owner approval',async()=>{
@@ -9706,7 +10047,44 @@ describe('validateManifest (spec §10)',()=>{
   expect(await codes(g)).toEqual(['expert_follow_up_open']);
  });
  it('validates the model audit directory in release mode',async()=>{
-  const f=fx();f.manifest.evidence.model_audit={dir:join(auditRoot,'missing')};expect(await codes(f)).toEqual(['audit_index_missing']);
+  const f=fx();f.manifest.evidence.model_audit={dir:`${AUDIT_DIR}/missing`};expect(await codes(f)).toEqual(['audit_index_missing']);
+ });
+ it('P1-2: membership comes from the authenticated set — a dropped failing case, an extra case or raised thresholds are caught',async()=>{
+  const f=fx();f.reports.official.cases=[f.reports.official.cases[0]];resummarize(f.reports.official);
+  expect(await codes(f)).toEqual(expect.arrayContaining(['manifest_population','manifest_summary_mismatch','manifest_gate']));
+  const g=fx();g.reports.official.cases.push(passCase('X/extra'));resummarize(g.reports.official);
+  expect(await codes(g)).toEqual(expect.arrayContaining(['manifest_population','manifest_summary_mismatch']));
+  const h=fx();h.reports.official.cases[0]={...h.reports.official.cases[0],outcome:{result:'fail',reason:'value'}};
+  h.reports.official.thresholds={max_fail:5,min_coverage_optional:'0.95'};h.reports.official.summary=summarize(h.reports.official.cases,{thresholds:h.reports.official.thresholds,gold:GOLD,subset:false,evidenceClass:'truth'});
+  expect(await codes(h)).toEqual(expect.arrayContaining(['manifest_summary_mismatch','manifest_gate']));
+ });
+ it('P1-3: evidence is read at evidence_commit (a descendant of release_commit); no working-tree files, no absolute or .. paths',async()=>{
+  const f=fx();f.uncommitted=new Set([EXPERT_FILE]);expect(await codes(f)).toEqual(['manifest_report_missing']);
+  const g=fx();g.manifest.evidence_commit=DESCENDANT;expect(await codes(g)).toEqual([]);
+  const h=fx();h.manifest.evidence_commit='9'.repeat(40);expect(await codes(h)).toContain('manifest_evidence_commit');
+  const i=fx();i.manifest.evidence.expert_sampling={file:'/etc/passwd'};expect(await codes(i)).toContain('manifest_path');
+  const j=fx();j.manifest.evidence.model_audit={dir:'docs/../../outside'};expect(await codes(j)).toContain('manifest_path');
+  const k=fx();delete k.manifest.evidence_commit;expect(await codes(k)).toEqual(['manifest_invalid']);
+ });
+ it('P1-3: the CI run must belong to the origin repository; --online checks success at release_commit, offline only a notice',async()=>{
+  const off=await run(fx());expect(off.codes).toEqual([]);expect(off.notices).toEqual(['manifest_ci_unverified']);
+  const f=fx();f.origin='someone/else';expect(await codes(f)).toEqual(['manifest_ci_repo']);
+  const g=fx();g.online={conclusion:'success',head_sha:RELEASE};const on=await run(g);expect(on.codes).toEqual([]);expect(on.notices).toEqual([]);
+  const h=fx();h.online={conclusion:'failure',head_sha:RELEASE};expect(await codes(h)).toEqual(['manifest_ci_run']);
+  const i=fx();i.online={conclusion:'success',head_sha:'9'.repeat(40)};expect(await codes(i)).toEqual(['manifest_ci_run']);
+  const j=fx();j.online=null;expect(await codes(j)).toEqual(['manifest_ci_run']);
+ });
+ it('P2-2: the real Task 14 reference report (canary in cases[], excluded from the summary) passes the validator',async()=>{
+  const run1=await evaluateReference([sample(),CANARY],[],{today:'2026-11-20',evaluatorCodeVersion:RELEASE,reader:{value:async t=>({value_text:t.series_id===CANARY_SERIES?'1':'1',unit:'index',run_id:'r1'})}});
+  const f=fx();
+  f.reports.reference={...f.reports.reference,cases:run1.cases,summary:referenceSummary(run1.result,REFERENCE_THRESHOLDS),thresholds:REFERENCE_THRESHOLDS};
+  f.manifest.evidence.reference_regression={run_id:ID.reference};
+  expect(run1.cases.map(c=>c.case_id)).toEqual(['R1','canary']);
+  expect(await codes(f)).toEqual([]);
+ });
+ it('P2-3: official evidence on a review_required set needs a second reviewer on every case',async()=>{
+  const f=fx();f.sets[SET_PATH].review_required=true;f.sets[SET_PATH].cases[0].reviewed_by=null;expect(await codes(f)).toEqual(['manifest_review_missing']);
+  const g=fx();g.sets[SET_PATH].review_required=true;expect(await codes(g)).toEqual([]);
  });
 });
 ```
@@ -9722,26 +10100,41 @@ Create `src/lib/evals/validate/manifest.ts`:
 
 ```ts
 // src/lib/evals/validate/manifest.ts
-// Module release-evidence manifest validator (spec §10). Every item is re-opened and re-derived:
-//  - official_reconciliation / replay_live / dual_source: the dq_eval_runs row (service-role getRun) must
-//    exist, report bytes sha256 = row.report_sha256, mode 'report', privileged true, evidence_class 'truth'
-//    (dual_source 'adapter_check' is rejected), official additionally provenance.verified {artifacts, sources}.
-//  - replay_frozen: mode 'ci'; the committed copy's sha256 = manifest report_sha256; ci_run_url is a GitHub
-//    Actions run URL and ci_check 'manual' (the CI digest comparison is a human step, spec §10).
-//  - reference_regression: mode 'report', privileged FALSE, evidence_class 'comparison'; digest checked
-//    against dq_eval_runs through the VALIDATOR's own service-role getRun.
+// Module release-evidence manifest validator (spec §10; Codex plan round 1 P1-2, P1-3, P1-4, P2-2, P2-3). Two commits:
+// release_commit (the code and release INPUTS — lock.json, gold sets, replay / reference fixtures — are read there) and
+// evidence_commit (the committed EVIDENCE — report copies, expert records, audit directories — is read there with
+// `git show <evidence_commit>:<path>`); evidence_commit must equal release_commit or descend from it
+// (`git merge-base --is-ancestor`). Paths must be repo-relative (no absolute path, no '..', no backslash); the working
+// tree is never read. Every item is re-opened and re-derived:
+//  - official_reconciliation / replay_live / dual_source: the dq_eval_runs row (service-role getRun) must exist, report
+//    bytes sha256 = row.report_sha256, mode 'report', privileged true, evidence_class 'truth' (dual_source 'adapter_check'
+//    is rejected), official additionally provenance.verified {artifacts, sources}.
+//  - replay_frozen: mode 'ci'; the committed copy's sha256 = manifest report_sha256; ci_run_url names a run of THIS repo
+//    (owner/repo = the origin remote); with --online the GitHub API must report conclusion 'success' and head_sha =
+//    release_commit; offline that check is NOT passed — a notice says so; ci_check 'manual' (the digest comparison
+//    against the CI job summary stays a human step, §10).
+//  - reference_regression: mode 'report', privileged FALSE, evidence_class 'comparison'.
 //  - expert_sampling: §8 validator in release mode against the official run's gold set, evaluated_run_id = official run_id.
-//  - model_audit: §9 validator in release mode.
-// Common: summary recomputed from cases[] equals the stored summary and gate='pass'; evaluator_code_version =
-// release_commit and dirty=false for every report; report.set.{path,sha256} is in lock.json for gold-set kinds (replay/reference: the
-// fixture's committed bytes hash to report.set.sha256 — integration deviation from spec §10's literal wording); gold-set kinds
-// (official, dual_source) load the set: format 'f6', no synthetic case; scope.markets = the set's subject
-// markets; scope.data_state_rev_min ≤ official environment.db_state_rev; dq_freshness '<module>.<market>'
-// is 'fresh' now. No DB access (getRun/freshness absent) fails the manifest. Non-waivable: official,
-// replay_frozen, model_audit, expert_sampling (always treated as first release); waivable via
-// not_applicable: dual_source, reference_regression, replay_live; `waivers` may only waive gold_approval.
+//  - model_audit: §9 validator in release mode over the directory at evidence_commit.
+// Population (P1-2): reduce.ts::reduceForKind over the AUTHENTICATED fixture — gold sets from lock.json at release_commit
+// (lock sha256 = report.set.sha256), replay / reference fixtures by their bytes at release_commit — derives membership,
+// required / retracted flags, thresholds, the gold block and the evidence class; missing / extra / misclassified cases
+// are findings, the stored summary must equal the re-derived one and its gate must be pass. The report's own
+// thresholds / gold / subset are never trusted. Common: evaluator_code_version = release_commit and dirty=false;
+// gold-set kinds: format 'f6', no synthetic case, review_required sets fully reviewed (P2-3); scope.markets = the set's
+// subject markets; scope.data_state_rev_min ≤ official environment.db_state_rev; dq_freshness '<module>.<market>'
+// recomputed AT prepared_at with dq/freshness.ts::computeFreshness from the stored cadence, last_ok_at and
+// consecutive_errors (never the stored status; P1-4) must be 'fresh'. No DB access (getRun/freshness absent) fails the
+// manifest. Non-waivable: official, replay_frozen, model_audit, expert_sampling; waivable via not_applicable:
+// dual_source, reference_regression, replay_live; `waivers` may only waive gold_approval.
+import {computeFreshness} from '../../dq/freshness';
+import type {Cadence} from '../../dq/freshness';
 import {canonicalJson,sha256Hex} from '../canonical-json';
-import {summarize} from '../summary';
+import {parseReferenceSamples} from '../kinds/reference';
+import {reduceForKind} from '../reduce';
+import type {ReductionFixture} from '../reduce';
+import {parseReplayFile} from '../replay/fixture';
+import {caseRowsTruncated} from '../store';
 import type {EvalKind,EvalReport,EvalRunRow,GoldLock,GoldSet} from '../types';
 import {validateAuditDir} from './audit';
 import type {AuditDeps} from './audit';
@@ -9749,31 +10142,47 @@ import {validateExpertRecord} from './expert';
 import {GIT_SHA,ISO_DATE,ISO_TS,UUID,finding,isObject} from './finding';
 import type {ValidatorFinding} from './finding';
 
+export interface FreshnessRow{expected_cadence:string;last_ok_at:string|null;consecutive_errors:number}
 export interface ManifestDeps{
- /** Repo-relative path → bytes; null when absent. */
- readFile(path:string):Uint8Array|null;
+ /** `git show <commit>:<path>` bytes; null when the path does not exist at that commit. */
+ readAt(commit:string,path:string):Uint8Array|null;
+ /** lock.json as committed at `commit`. */
+ lockAt(commit:string):GoldLock;
+ /** gold/load.ts::parseGoldBytes over the bytes (and recorders.json) committed at `commit`. */
+ loadSetAt(commit:string,path:string):GoldSet;
+ /** `git merge-base --is-ancestor ancestor descendant` (true when equal). */
+ isAncestor(ancestor:string,descendant:string):boolean;
+ /** 'owner/repo' of the origin remote, lowercase; null when unknown. */
+ originRepo():string|null;
+ /** --online: GET repos/<owner>/<repo>/actions/runs/<id> (gh api); undefined = offline. */
+ ciRun?:(owner:string,repo:string,runId:string)=>Promise<{conclusion:string|null;head_sha:string}|null>;
  /** Service-role EvalStore.getRun; undefined = no database access. */
  getRun?:(runId:string)=>Promise<EvalRunRow|null>;
- /** dq_freshness row for a dataset ('facts.us'); undefined = no database access. */
- freshness?:(dataset:string)=>Promise<{status:string;last_ok_at:string|null}|null>;
- lock:GoldLock;
- /** gold/load.ts loadGoldSet. */
- loadSet(path:string):GoldSet;
- audit?:AuditDeps;
+ /** the dq_freshness row of a dataset ('facts.us'); undefined = no database access. */
+ freshness?:(dataset:string)=>Promise<FreshnessRow|null>;
+ audit?:Omit<AuditDeps,'readFile'|'release'>;
+}
+export interface ManifestOptions{
+ /** notices: checks that were NOT performed (e.g. the CI run identity offline); never a pass. */
+ notices?:ValidatorFinding[];
 }
 type Item='official_reconciliation'|'replay_frozen'|'replay_live'|'dual_source'|'reference_regression'|'expert_sampling'|'model_audit';
 const ITEMS:Item[]=['official_reconciliation','replay_frozen','replay_live','dual_source','reference_regression','expert_sampling','model_audit'];
 const WAIVABLE=new Set<Item>(['dual_source','reference_regression','replay_live']);
 const RUN_KIND:Record<'official_reconciliation'|'replay_live'|'dual_source'|'reference_regression',EvalKind>={official_reconciliation:'official_reconciliation',replay_live:'replay_consistency',dual_source:'dual_source',reference_regression:'reference_regression'};
-const CI_RUN=/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/runs\/\d+(\/attempts\/\d+)?$/;
+export const CI_RUN=/^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/actions\/runs\/(\d+)(?:\/attempts\/\d+)?$/;
+const CADENCES:readonly string[]=['daily','monthly','quarterly','event'];
 const ts=(v:unknown)=>typeof v==='string'&&(ISO_TS.test(v)||ISO_DATE.test(v));
 const str=(v:unknown)=>typeof v==='string'&&v.length>0;
+/** Repo-relative POSIX path: no absolute path, drive letter, backslash, '.' / '..' or empty segment. */
+export const isRepoPath=(p:unknown):p is string=>typeof p==='string'&&p.length>0&&!p.startsWith('/')&&!/^[A-Za-z]:/.test(p)&&!p.includes('\\')&&p.split('/').every(s=>s!==''&&s!=='.'&&s!=='..');
 
 function manifestShape(m:unknown):string|null{
  if(!isObject(m))return 'manifest';
  if(m.schema_version!==1)return 'schema_version';
  if(!str(m.module))return 'module';
  if(typeof m.release_commit!=='string'||!GIT_SHA.test(m.release_commit))return 'release_commit';
+ if(typeof m.evidence_commit!=='string'||!GIT_SHA.test(m.evidence_commit))return 'evidence_commit';
  if(!str(m.prepared_by))return 'prepared_by';
  if(!ts(m.prepared_at))return 'prepared_at';
  const s=m.scope;
@@ -9792,13 +10201,21 @@ function parseReport(bytes:Uint8Array):EvalReport|null{
  }catch{return null;}
 }
 
-export async function validateManifest(raw:unknown,deps:ManifestDeps,where='manifest'):Promise<ValidatorFinding[]>{
+export async function validateManifest(raw:unknown,deps:ManifestDeps,where='manifest',opts:ManifestOptions={}):Promise<ValidatorFinding[]>{
  const bad=manifestShape(raw);
  if(bad)return [finding('manifest_invalid',`${where}#${bad}`,`invalid or missing field: ${bad}`)];
- const m=raw as {module:string;release_commit:string;prepared_at:string;scope:{markets:string[];universes:string[];data_state_rev_min:string};gold_approval:'enforced'|'process';evidence:Record<string,unknown>;waivers?:unknown[]};
+ const m=raw as {module:string;release_commit:string;evidence_commit:string;prepared_at:string;scope:{markets:string[];universes:string[];data_state_rev_min:string};gold_approval:'enforced'|'process';evidence:Record<string,unknown>;waivers?:unknown[]};
  const out:ValidatorFinding[]=[];
  const at=(item:string)=>`${where}#evidence.${item}`;
- // Waivers: only gold_approval; gold_approval='process' needs one.
+ const REL=m.release_commit,EVI=m.evidence_commit;
+ if(!deps.isAncestor(REL,EVI))out.push(finding('manifest_evidence_commit',`${where}#evidence_commit`,'evidence_commit must equal release_commit or descend from it'));
+ /** committed evidence bytes at evidence_commit; null + finding on a bad path or a missing file */
+ const evidenceBytes=(item:string,path:unknown):Uint8Array|null=>{
+  if(!isRepoPath(path)){out.push(finding('manifest_path',at(item),'paths must be repo-relative without .. segments'));return null;}
+  const b=deps.readAt(EVI,path);
+  if(!b)out.push(finding('manifest_report_missing',at(item),`${path} is not committed at evidence_commit`));
+  return b;
+ };
  const waivers=m.waivers??[];
  for(const [i,w] of waivers.entries()){
   if(!isObject(w)||w.item!=='gold_approval')out.push(finding('manifest_waiver_not_allowed',`${where}#waivers[${i}]`,'only gold_approval can be waived; other items use not_applicable'));
@@ -9808,33 +10225,47 @@ export async function validateManifest(raw:unknown,deps:ManifestDeps,where='mani
   out.push(finding('manifest_gold_approval',`${where}#gold_approval`,"gold_approval 'process' requires a gold_approval waiver"));
  if(!deps.getRun)out.push(finding('manifest_no_db',where,'no service-role database access: run-backed evidence cannot be authenticated'));
  if(!deps.freshness)out.push(finding('manifest_no_db',`${where}#freshness`,'no database access: dq_freshness cannot be read'));
+ let lock:GoldLock|null=null;
+ try{lock=deps.lockAt(REL);}catch(e){out.push(finding('manifest_lock',`${where}#release_commit`,`lock.json unreadable at release_commit: ${(e as Error).message}`));}
 
+ /** The authenticated fixture of a report (P1-2): gold sets via the lock at release_commit, other fixtures by their bytes there. */
+ const fixtureOf=(item:string,r:EvalReport,kind:EvalKind):{fixture:ReductionFixture;set:GoldSet|null}|null=>{
+  const p=r.set?.path;
+  if(!isRepoPath(p)){out.push(finding('manifest_path',at(item),'report.set.path must be repo-relative'));return null;}
+  if(kind==='official_reconciliation'||kind==='dual_source'){
+   const locked=lock?.files.find(f=>f.path===p);
+   if(!locked||locked.sha256!==r.set.sha256){out.push(finding('manifest_lock',at(item),`set ${p} is not in lock.json at release_commit with sha256 ${r.set.sha256}`));return null;}
+   let set:GoldSet;
+   try{set=deps.loadSetAt(REL,p);}catch(e){out.push(finding('manifest_set_unreadable',at(item),(e as Error).message));return null;}
+   if(set.sha256!==r.set.sha256)out.push(finding('manifest_lock',at(item),'set bytes at release_commit differ from report.set.sha256'));
+   if(set.format!=='f6'||r.set.format!=='f6')out.push(finding('manifest_legacy_set',at(item),'legacy_plan2 sets are never release evidence'));
+   if(set.cases.some(c=>c.provenance_kind==='synthetic'))out.push(finding('manifest_synthetic',at(item),'gold set contains synthetic cases'));
+   if(set.review_required&&set.cases.some(c=>c.retracted===null&&(c.reviewed_by===null||c.reviewed_by===c.recorded_by)))
+    out.push(finding('manifest_review_missing',at(item),'review_required set has cases without a second reviewer'));
+   return {fixture:{kind,set},set};
+  }
+  const bytes=deps.readAt(REL,p);
+  if(!bytes||sha256Hex(bytes)!==r.set.sha256){out.push(finding('manifest_fixture',at(item),`fixture ${p} at release_commit does not hash to report.set.sha256 ${r.set.sha256}`));return null;}
+  try{
+   const json=JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+   if(kind==='replay_consistency')return {fixture:{kind,file:parseReplayFile(json,{allowDrafts:false,file:p})},set:null};
+   if(kind==='reference_regression')return {fixture:{kind,samples:parseReferenceSamples(json)},set:null};
+  }catch(e){out.push(finding('manifest_fixture',at(item),`fixture ${p} unparsable: ${(e as Error).message}`));return null;}
+  out.push(finding('manifest_kind',at(item),`no fixture rule for kind ${kind}`));return null;
+ };
  /** Shared report checks; returns the gold set for gold-set kinds. */
  const checkReport=(item:string,r:EvalReport,expectKind:EvalKind):GoldSet|null=>{
   if(r.kind!==expectKind)out.push(finding('manifest_kind',at(item),`report kind ${r.kind}, expected ${expectKind}`));
   if(r.module!==m.module)out.push(finding('manifest_module',at(item),`report module ${r.module}`));
-  if(r.evaluator_code_version!==m.release_commit)out.push(finding('manifest_code_version',at(item),'evaluator_code_version differs from release_commit'));
+  if(r.evaluator_code_version!==REL)out.push(finding('manifest_code_version',at(item),'evaluator_code_version differs from release_commit'));
   if(r.dirty!==false)out.push(finding('manifest_dirty',at(item),'report was produced from a dirty tree'));
-  const s=r.summary;
-  const again=summarize(r.cases,{thresholds:r.thresholds,gold:s.gold,subset:s.execution?.subset===true,evidenceClass:s.evidence_class,reconciliationsTruncated:s.reconciliations_truncated===true});
-  if(canonicalJson(again)!==canonicalJson(s))out.push(finding('manifest_summary_mismatch',at(item),'summary recomputed from cases[] differs'));
-  if(again.gate!=='pass')out.push(finding('manifest_gate',at(item),`recomputed gate ${again.gate}`));
-  if(expectKind==='official_reconciliation'||expectKind==='dual_source'){
-   const locked=deps.lock.files.find(f=>f.path===r.set.path);
-   if(!locked||locked.sha256!==r.set.sha256)out.push(finding('manifest_lock',at(item),`set ${r.set.path} is not in lock.json with sha256 ${r.set.sha256}`));
-  }else{
-   // Replay / reference fixtures are not gold sets (lock.json holds GoldFormat entries only; Task 11 guards replay files by
-   // append-only recording + projection_hash): their bytes at the release commit must hash to report.set.sha256.
-   const fb=deps.readFile(r.set.path);
-   if(!fb||sha256Hex(fb)!==r.set.sha256)out.push(finding('manifest_fixture',at(item),`fixture ${r.set.path} bytes differ from report.set.sha256 ${r.set.sha256}`));
-  }
-  if(expectKind!=='official_reconciliation'&&expectKind!=='dual_source')return null;
-  let set:GoldSet;
-  try{set=deps.loadSet(r.set.path);}catch(e){out.push(finding('manifest_set_unreadable',at(item),(e as Error).message));return null;}
-  if(set.sha256!==r.set.sha256)out.push(finding('manifest_lock',at(item),'set file bytes differ from report.set.sha256'));
-  if(set.format!=='f6'||r.set.format!=='f6')out.push(finding('manifest_legacy_set',at(item),'legacy_plan2 sets are never release evidence'));
-  if(set.cases.some(c=>c.provenance_kind==='synthetic'))out.push(finding('manifest_synthetic',at(item),'gold set contains synthetic cases'));
-  return set;
+  const fx=fixtureOf(item,r,expectKind);
+  if(!fx)return null;
+  const red=reduceForKind(expectKind,r.cases,fx.fixture,{...(expectKind==='dual_source'?{evidenceClass:r.summary.evidence_class}:{}),reconciliationsTruncated:caseRowsTruncated(r)});
+  for(const p of red.problems)out.push(finding('manifest_population',at(item),p));
+  if(canonicalJson(red.summary)!==canonicalJson(r.summary))out.push(finding('manifest_summary_mismatch',at(item),'stored summary differs from the one re-derived from the authenticated fixture'));
+  if(red.summary.gate!=='pass')out.push(finding('manifest_gate',at(item),`re-derived gate ${red.summary.gate}`));
+  return fx.set;
  };
  /** Run-backed evidence (official, live, dual_source, reference). */
  const runBacked=async(item:keyof typeof RUN_KIND,ev:Record<string,unknown>):Promise<{report:EvalReport;set:GoldSet|null}|null>=>{
@@ -9844,8 +10275,8 @@ export async function validateManifest(raw:unknown,deps:ManifestDeps,where='mani
   if(!row){out.push(finding('manifest_run_missing',at(item),`dq_eval_runs has no row ${ev.run_id}`));return null;}
   const path=typeof ev.report==='string'?ev.report:row.report_ref;
   if(typeof ev.report==='string'&&ev.report!==row.report_ref)out.push(finding('manifest_report_ref',at(item),'report path differs from dq_eval_runs.report_ref'));
-  const bytes=deps.readFile(path);
-  if(!bytes){out.push(finding('manifest_report_missing',at(item),`${path} not found`));return null;}
+  const bytes=evidenceBytes(item,path);
+  if(!bytes)return null;
   if(sha256Hex(bytes)!==row.report_sha256)out.push(finding('manifest_report_sha',at(item),'report sha256 differs from dq_eval_runs.report_sha256'));
   const r=parseReport(bytes);
   if(!r){out.push(finding('manifest_report_invalid',at(item),`${path} is not an F6 report`));return null;}
@@ -9854,14 +10285,14 @@ export async function validateManifest(raw:unknown,deps:ManifestDeps,where='mani
   const wantPriv=item!=='reference_regression';
   if(row.privileged!==wantPriv||r.privileged!==wantPriv)out.push(finding('manifest_privileged',at(item),`privileged must be ${wantPriv}`));
   if(row.status!=='passed')out.push(finding('manifest_run_status',at(item),`dq_eval_runs.status ${row.status}`));
-  if(row.evaluator_code_version!==m.release_commit)out.push(finding('manifest_code_version',at(item),'dq_eval_runs.evaluator_code_version differs from release_commit'));
+  if(row.evaluator_code_version!==REL)out.push(finding('manifest_code_version',at(item),'dq_eval_runs.evaluator_code_version differs from release_commit'));
   if(row.set_sha256!==r.set.sha256||row.kind!==r.kind)out.push(finding('manifest_report_run',at(item),'dq_eval_runs row and report disagree on kind/set'));
   const cls=r.summary.evidence_class;
   if(item==='reference_regression'){if(cls!=='comparison')out.push(finding('manifest_evidence_class',at(item),`evidence_class ${cls}, expected comparison`));}
   else if(item==='dual_source'&&cls==='adapter_check')out.push(finding('manifest_adapter_check',at(item),'same_feed dual-source runs are adapter checks, not evidence'));
   else if(cls!=='truth')out.push(finding('manifest_evidence_class',at(item),`evidence_class ${cls}, expected truth`));
   if(item==='official_reconciliation'&&(r.provenance?.verified?.artifacts!==true||r.provenance?.verified?.sources!==true))
-   out.push(finding('manifest_unverified',at(item),'official run lacks --verify-artifacts --verify-sources'));
+   out.push(finding('manifest_unverified',at(item),'official run lacks verified artifacts and sources'));
   return {report:r,set:checkReport(item,r,RUN_KIND[item])};
  };
 
@@ -9881,23 +10312,31 @@ export async function validateManifest(raw:unknown,deps:ManifestDeps,where='mani
    continue;
   }
   if(item==='replay_frozen'){
-   if(typeof ev.ci_run_url!=='string'||!CI_RUN.test(ev.ci_run_url))out.push(finding('manifest_ci_run',at(item),'ci_run_url must be a GitHub Actions run URL'));
-   if(ev.ci_check!=='manual')out.push(finding('manifest_ci_run',at(item),"ci_check must be 'manual'"));
-   if(typeof ev.report!=='string'||typeof ev.report_sha256!=='string'){out.push(finding('manifest_invalid',at(item),'report and report_sha256 required'));continue;}
-   const bytes=deps.readFile(ev.report);
-   if(!bytes){out.push(finding('manifest_report_missing',at(item),`${ev.report} not found`));continue;}
+   const ci=typeof ev.ci_run_url==='string'?CI_RUN.exec(ev.ci_run_url):null;
+   if(!ci)out.push(finding('manifest_ci_run',at(item),'ci_run_url must be a GitHub Actions run URL'));
+   else{
+    const origin=deps.originRepo();
+    if(origin===null||`${ci[1]}/${ci[2]}`.toLowerCase()!==origin)out.push(finding('manifest_ci_repo',at(item),`ci_run_url is not a run of the origin repository (${origin??'unknown'})`));
+    else if(deps.ciRun){
+     const run=await deps.ciRun(ci[1],ci[2],ci[3]);
+     if(!run||run.conclusion!=='success'||run.head_sha!==REL)out.push(finding('manifest_ci_run',at(item),`CI run ${ci[3]}: conclusion ${run?.conclusion??'unknown'}, head_sha ${run?.head_sha??'unknown'}; needs success at release_commit`));
+    }else opts.notices?.push(finding('manifest_ci_unverified',at(item),'CI run conclusion and head_sha were not checked (run with --online); this check did not pass'));
+   }
+   if(ev.ci_check!=='manual')out.push(finding('manifest_ci_run',at(item),"ci_check must be 'manual' (the digest comparison with the CI job summary is a human step)"));
+   if(typeof ev.report_sha256!=='string'){out.push(finding('manifest_invalid',at(item),'report and report_sha256 required'));continue;}
+   const bytes=evidenceBytes(item,ev.report);
+   if(!bytes)continue;
    if(sha256Hex(bytes)!==ev.report_sha256)out.push(finding('manifest_report_sha',at(item),'committed copy sha256 differs from report_sha256'));
    const r=parseReport(bytes);
-   if(!r){out.push(finding('manifest_report_invalid',at(item),`${ev.report} is not an F6 report`));continue;}
+   if(!r){out.push(finding('manifest_report_invalid',at(item),`${String(ev.report)} is not an F6 report`));continue;}
    if(r.mode!=='ci')out.push(finding('manifest_mode',at(item),"frozen replay evidence is a mode 'ci' run"));
    if(r.summary.evidence_class!=='truth')out.push(finding('manifest_evidence_class',at(item),`evidence_class ${r.summary.evidence_class}`));
    checkReport(item,r,'replay_consistency');
    continue;
   }
   if(item==='expert_sampling'){
-   if(typeof ev.file!=='string'){out.push(finding('manifest_invalid',at(item),'file required'));continue;}
-   const bytes=deps.readFile(ev.file);
-   if(!bytes){out.push(finding('manifest_report_missing',at(item),`${ev.file} not found`));continue;}
+   const bytes=evidenceBytes(item,ev.file);
+   if(!bytes)continue;
    let rec:unknown;
    try{rec=JSON.parse(new TextDecoder().decode(bytes));}catch{out.push(finding('expert_invalid',at(item),'not JSON'));continue;}
    const runId=isObject(rec)&&isObject(rec.population)?rec.population.evaluated_run_id:undefined;
@@ -9906,10 +10345,9 @@ export async function validateManifest(raw:unknown,deps:ManifestDeps,where='mani
    out.push(...validateExpertRecord(rec,official?.set??null,{release:true,where:at(item)}));
    continue;
   }
-  if(typeof ev.dir!=='string'){out.push(finding('manifest_invalid',at(item),'dir required'));continue;}
-  out.push(...validateAuditDir(ev.dir,{...deps.audit,release:true}));
+  if(!isRepoPath(ev.dir)){out.push(finding('manifest_path',at(item),'dir must be repo-relative without .. segments'));continue;}
+  out.push(...validateAuditDir(ev.dir,{...deps.audit,release:true,readFile:p=>deps.readAt(EVI,p)}));
  }
- // Scope and data state against the official run.
  if(official?.set){
   const markets=[...new Set(official.set.cases.map(c=>c.subject.market))].sort();
   if(canonicalJson(markets)!==canonicalJson([...new Set(m.scope.markets)].sort())||new Set(m.scope.markets).size!==m.scope.markets.length)
@@ -9922,7 +10360,9 @@ export async function validateManifest(raw:unknown,deps:ManifestDeps,where='mani
  if(deps.freshness)for(const market of new Set(m.scope.markets)){
   const dataset=`${m.module}.${market.toLowerCase()}`;
   const f=await deps.freshness(dataset);
-  if(!f||f.status!=='fresh')out.push(finding('manifest_stale',`${where}#scope.markets.${market}`,`dq_freshness ${dataset} is ${f?.status??'absent'}`));
+  const status=!f?'absent':!CADENCES.includes(f.expected_cadence)?'error'
+   :computeFreshness({cadence:f.expected_cadence as Cadence,lastOkAt:f.last_ok_at?new Date(f.last_ok_at):null,consecutiveErrors:Number(f.consecutive_errors??0),now:new Date(m.prepared_at)});
+  if(status!=='fresh')out.push(finding('manifest_stale',`${where}#scope.markets.${market}`,`dq_freshness ${dataset} recomputed at prepared_at is ${status}`));
  }
  return out;
 }
@@ -9931,7 +10371,7 @@ export async function validateManifest(raw:unknown,deps:ManifestDeps,where='mani
 - [ ] **Step 15: Run it — expect pass; typecheck, lint, commit**
 
 Run: `npm test -- src/lib/evals/validate/manifest.test.ts`
-Expected: PASS — `20 passed (20)`. If the first test (`accepts a complete manifest`) fails with `manifest_summary_mismatch`/`manifest_gate`, Task 1's `summarize` does not follow §3.3 for `identical`/`within` — fix Task 1, not this test.
+Expected: PASS — `25 passed (25)`. If the first test (`accepts a complete manifest`) fails with `manifest_summary_mismatch`/`manifest_gate`, Task 1's `summarize` does not follow §3.3 for `identical`/`within` — fix Task 1, not this test.
 
 Run: `npm run typecheck && npm run lint`
 Expected: both exit 0.
@@ -10222,7 +10662,8 @@ Create `docs/evals/templates/release-manifest.template.json`:
 ```json
 {
   "_how_to": [
-    "Copy to docs/evals/<date>/<module>-release-manifest.json; validate with: npx tsx scripts/evals/validate.ts --manifest <file> (needs SUPABASE_SERVICE_ROLE_KEY and NEXT_PUBLIC_SUPABASE_URL)",
+    "Copy to docs/evals/<date>/<module>-release-manifest.json; validate with: npx tsx scripts/evals/validate.ts --manifest <file> [--online] (needs SUPABASE_SERVICE_ROLE_KEY and NEXT_PUBLIC_SUPABASE_URL; --online also needs an authenticated gh CLI)",
+    "release_commit = the released code (gold sets, lock.json and replay/reference fixtures are read there); evidence_commit = the commit that holds the committed evidence files (equal to or a descendant of release_commit); every path is repo-relative and read with git show, never from the working tree",
     "every evidence item must come from evaluator_code_version == release_commit with dirty=false; non-waivable: official_reconciliation, replay_frozen, expert_sampling, model_audit",
     "not_applicable is allowed only for dual_source, reference_regression and replay_live, approved_by owner",
     "gold_approval 'process' (no CODEOWNERS + branch protection, spec §16 D2) requires the gold_approval waiver below; 'enforced' needs none"
@@ -10230,6 +10671,7 @@ Create `docs/evals/templates/release-manifest.template.json`:
   "schema_version": 1,
   "module": "facts",
   "release_commit": "0000000000000000000000000000000000000000",
+  "evidence_commit": "0000000000000000000000000000000000000000",
   "prepared_by": "owner",
   "prepared_at": "2026-01-01T00:00:00Z",
   "scope": {"markets": ["US"], "universes": ["sp500"], "data_state_rev_min": "0"},
@@ -10261,7 +10703,7 @@ import {f6Handlers} from './handlers';
 import {validateManifest} from './manifest';
 import type {ManifestDeps} from './manifest';
 
-const noDb:ManifestDeps={readFile:()=>null,lock:{files:[]},loadSet:()=>{throw new Error('no set');}};
+const noDb:ManifestDeps={readAt:()=>null,lockAt:()=>({files:[]}),loadSetAt:()=>{throw new Error('no set');},isAncestor:()=>true,originRepo:()=>null};
 const h=f6Handlers(process.cwd(),()=>noDb);
 const codes=async(flag:string,args:string[])=>(await h[flag](args)).map(f=>f.code);
 
@@ -10309,15 +10751,18 @@ Create `src/lib/evals/validate/handlers.ts`:
 ```ts
 // src/lib/evals/validate/handlers.ts
 // The Task-12 flags of scripts/evals/validate.ts (entries in validate/cli.ts HANDLERS): --expert <file> [--release], --audit <dir> [--release],
-// --manifest <file>. `args` are the flag's value followed by its modifiers (validate/cli.ts passes [value,...modifiers]). Production DB
+// --manifest <file> [--online]. The manifest reads committed bytes only (`git show <commit>:<path>` in root), checks
+// ancestry with `git merge-base --is-ancestor`, the origin remote with `git remote get-url origin`, and with --online
+// the CI run with `gh api repos/<owner>/<repo>/actions/runs/<id>` (Codex plan round 1 P1-3). `args` are the flag's value followed by its modifiers (validate/cli.ts passes [value,...modifiers]). Production DB
 // access for --manifest is the service-role client when SUPABASE_SERVICE_ROLE_KEY and
 // NEXT_PUBLIC_SUPABASE_URL are set; without them the manifest fails with manifest_no_db (spec §10).
+import {execFileSync} from 'node:child_process';
 import {existsSync,readFileSync} from 'node:fs';
 import {isAbsolute,join} from 'node:path';
 import {supabaseTableClient} from '../../db/table-client';
 import type {TableClient} from '../../db/table-client';
 import {getAdminSupabase} from '../../supabase/admin';
-import {loadGoldSet} from '../gold/load';
+import {LOCK_PATH as GOLD_LOCK_PATH,RECORDERS_PATH,loadGoldSet,parseGoldBytes,parseLock,parseRecorders} from '../gold/load';
 import {evalStore} from '../store';
 import type {GoldLock} from '../types';
 import {validateAuditDir} from './audit';
@@ -10325,7 +10770,7 @@ import {findSetBySha,validateExpertRecord} from './expert';
 import {finding} from './finding';
 import type {ValidatorFinding} from './finding';
 import {validateManifest} from './manifest';
-import type {ManifestDeps} from './manifest';
+import type {ManifestDeps,ManifestOptions} from './manifest';
 
 export const LOCK_PATH='src/lib/evals/fixtures/gold/lock.json';
 export type Handler=(args:string[])=>Promise<ValidatorFinding[]>;
@@ -10338,22 +10783,45 @@ const usage=(flag:string,what:string)=>[finding('cli_usage',flag,`${flag} requir
 export function serviceTables():TableClient|null{
  try{return supabaseTableClient(getAdminSupabase());}catch{return null;}
 }
-export function manifestDeps(root=process.cwd(),tables:TableClient|null=serviceTables()):ManifestDeps{
+const gitEnv=()=>Object.fromEntries(Object.entries(process.env).filter(([k])=>!k.startsWith('GIT_'))) as NodeJS.ProcessEnv;
+export const gitShowAt=(root:string)=>(commit:string,path:string):Uint8Array|null=>{
+ try{return new Uint8Array(execFileSync('git',['show',`${commit}:${path}`],{cwd:root,env:gitEnv(),stdio:['ignore','pipe','ignore'],maxBuffer:256*1024*1024}));}catch{return null;}
+};
+/** 'owner/repo' (lowercase) of a GitHub remote URL (https or ssh); null otherwise. */
+export function repoOfRemote(url:string):string|null{
+ const m=/github\.com[:/]([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(url.trim());
+ return m?`${m[1]}/${m[2]}`.toLowerCase():null;
+}
+export function manifestDeps(root=process.cwd(),tables:TableClient|null=serviceTables(),opts:{online?:boolean}={}):ManifestDeps{
  const store=tables?evalStore(tables):null;
+ const show=gitShowAt(root);
+ const json=(c:string,p:string)=>{const b=show(c,p);if(!b)throw new Error(`${p} is not committed at ${c}`);return JSON.parse(new TextDecoder().decode(b)) as unknown;};
  return {
-  readFile:p=>existsSync(abs(root,p))?readFileSync(abs(root,p)):null,
+  readAt:show,
+  lockAt:c=>parseLock(json(c,GOLD_LOCK_PATH)),
+  loadSetAt:(c,p)=>{const b=show(c,p);if(!b)throw new Error(`${p} is not committed at ${c}`);return parseGoldBytes(b,p,parseRecorders(json(c,RECORDERS_PATH)));},
+  isAncestor:(a,b)=>{try{execFileSync('git',['merge-base','--is-ancestor',a,b],{cwd:root,env:gitEnv(),stdio:'ignore'});return true;}catch{return false;}},
+  originRepo:()=>{try{return repoOfRemote(execFileSync('git',['remote','get-url','origin'],{cwd:root,env:gitEnv(),encoding:'utf8',stdio:['ignore','pipe','ignore']}));}catch{return null;}},
+  ...(opts.online?{ciRun:async(o:string,r:string,id:string)=>{
+   try{const v=JSON.parse(execFileSync('gh',['api',`repos/${o}/${r}/actions/runs/${id}`],{cwd:root,encoding:'utf8',stdio:['ignore','pipe','ignore']})) as {conclusion?:unknown;head_sha?:unknown};
+    return {conclusion:typeof v.conclusion==='string'?v.conclusion:null,head_sha:typeof v.head_sha==='string'?v.head_sha:''};}catch{return null;}
+  }}:{}),
   getRun:store?id=>store.getRun(id):undefined,
   freshness:tables?async dataset=>{
    const [row]=await tables.select('dq_freshness',{dataset},{limit:1});
-   return row?{status:String(row.status),last_ok_at:row.last_ok_at==null?null:String(row.last_ok_at)}:null;
+   return row?{expected_cadence:String(row.expected_cadence),last_ok_at:row.last_ok_at==null?null:String(row.last_ok_at),consecutive_errors:Number(row.consecutive_errors??0)}:null;
   }:undefined,
-  lock:readLock(root),
-  loadSet:p=>loadGoldSet(p,root),
   audit:{root},
  };
 }
+/** --manifest <file> [--online]: the manifest file itself is read from the working tree (it names the commits). */
+export async function manifestFindings(root:string,file:string,deps:ManifestDeps,opts:ManifestOptions={}):Promise<ValidatorFinding[]>{
+ let m:unknown;
+ try{m=readJson(root,file);}catch(e){return [finding('manifest_invalid',file,`cannot read JSON: ${(e as Error).message}`)];}
+ return validateManifest(m,deps,file,opts);
+}
 
-export function f6Handlers(root=process.cwd(),deps:()=>ManifestDeps=()=>manifestDeps(root)):Record<string,Handler>{
+export function f6Handlers(root=process.cwd(),deps:(o:{online:boolean})=>ManifestDeps=o=>manifestDeps(root,serviceTables(),o)):Record<string,Handler>{
  return {
   '--expert':async args=>{
    const file=args[0];
@@ -10372,9 +10840,7 @@ export function f6Handlers(root=process.cwd(),deps:()=>ManifestDeps=()=>manifest
   '--manifest':async args=>{
    const file=args[0];
    if(!file||file.startsWith('--'))return usage('--manifest','<file>');
-   let m:unknown;
-   try{m=readJson(root,file);}catch(e){return [finding('manifest_invalid',file,`cannot read JSON: ${(e as Error).message}`)];}
-   return validateManifest(m,deps(),file);
+   return manifestFindings(root,file,deps({online:args.includes('--online')}));
   },
  };
 }
@@ -10394,7 +10860,7 @@ import {redactScan,redactTargets} from '../redact';
 new:
 ```ts
 import {redactScan,redactTargets} from '../redact';
-import {f6Handlers} from './handlers';
+import {f6Handlers,manifestDeps,manifestFindings,serviceTables} from './handlers';
 ```
 
 old (the last entry of `HANDLERS` and the array close):
@@ -10413,11 +10879,16 @@ new:
   const findings=redactScan(files);
   return {ok:findings.length===0,files:files.length,findings};
  }},
- // Task 12 (spec §8–§10): --expert <file> [--release], --audit <dir> [--release], --manifest <file>.
+ // Task 12 (spec §8–§10): --expert <file> [--release], --audit <dir> [--release], --manifest <file> [--online].
  // f6Handlers takes the flag's tokens (value first, then modifiers) and returns ValidatorFinding[].
  {flag:'--expert',name:'expert',takesValue:true,modifiers:['--release'],run:async(root,value,mods)=>findingsCheck(await f6Handlers(root)['--expert']([value!,...mods]))},
  {flag:'--audit',name:'audit',takesValue:true,modifiers:['--release'],run:async(root,value,mods)=>findingsCheck(await f6Handlers(root)['--audit']([value!,...mods]))},
- {flag:'--manifest',name:'manifest',takesValue:true,run:async(root,value)=>findingsCheck(await f6Handlers(root)['--manifest']([value!]))},
+ // --manifest [--online]: notices list checks that were NOT performed (offline CI identity); they never count as a pass.
+ {flag:'--manifest',name:'manifest',takesValue:true,modifiers:['--online'],run:async(root,value,mods)=>{
+  const notices:ValidatorFinding[]=[];
+  const findings=await manifestFindings(root,value!,manifestDeps(root,serviceTables(),{online:mods.has('--online')}),{notices});
+  return {...findingsCheck(findings),notices};
+ }},
 ];
 ```
 
@@ -10426,7 +10897,7 @@ Append to `src/lib/evals/validate/handlers.test.ts`:
 describe('validate/cli.ts HANDLERS (Task 12 entries)',()=>{
  it('the three flags are table entries after Task 3\'s four, --release only on --expert/--audit',async()=>{
   const {HANDLERS}=await import('./cli');
-  expect(HANDLERS.map(x=>[x.flag,x.modifiers??[]])).toEqual([['--gold',[]],['--lock',[]],['--gold-diff',[]],['--redact',[]],['--expert',['--release']],['--audit',['--release']],['--manifest',[]]]);
+  expect(HANDLERS.map(x=>[x.flag,x.modifiers??[]])).toEqual([['--gold',[]],['--lock',[]],['--gold-diff',[]],['--redact',[]],['--expert',['--release']],['--audit',['--release']],['--manifest',['--online']]]);
  });
  it('runValidate --audit <dir> --release: exit 1 with the finding in checks.audit.findings',async()=>{
   const {runValidate}=await import('./cli');
@@ -10756,7 +11227,7 @@ export async function getEvalRun(tables:TableClient,runId:string):Promise<EvalRu
 - [ ] **Step 5: 运行，确认通过**
 
 Run: `npm test -- src/lib/evals/admin.test.ts`
-Expected: PASS（7 个用例）。
+Expected: PASS（6 个用例）。
 
 - [ ] **Step 6: 写失败测试 `src/app/api/admin/evals/route.test.ts`**
 
@@ -10997,7 +11468,7 @@ git commit -m "feat(evals): admin read API for eval runs with whitelisted shapes
 
 规格：§5.5、§0 R5-10（注入只读 `PairSource`；非比较结果 → `missing`/`read_error`，永不 pass；`independence/upstream` 由 F6 登记显式给出；计划三 `relDiff` 四舍五入与 F6 截断以一致性向量固定）、§5.4（样本、`ReferenceResult` 严格键集合与非负整数、只经 `writeReferenceSummary`、`ReadDeps` 反射测试、哨兵、`rel 0.01`、账本两值必须等于本次比较值）、§3.3 dual/reference 行、§14、§15.1（两者"纯逻辑 + 注入接口 + 单测"，无真实库测试）。依赖 Task 1（`compare.ts`、`summary.ts`、`types.ts`、`errors.ts`）、Task 4（`renderMarkdown`，CCR 3）、Task 6（`EvalStore` 类型）、Task 9（`src/lib/evals/cli/run-cli.ts`：`runCli`、`KIND_RUNNERS`）、Task 11（`KIND_RUNNERS.replay_consistency`）。
 
-**`run.ts` 归属：** `scripts/evals/run.ts` 与 `src/lib/evals/cli/run-cli.ts` 由 Task 9 拥有。本任务只在 `run-cli.ts` 里加一个 import 与一行 `assertKindEnabled(args.kind)`（Step 17）；注册表本身放在本任务新建的 `src/lib/evals/kinds/registry.ts`，是启用与否的唯一来源。
+**`run.ts` 归属：** `scripts/evals/run.ts` 与 `src/lib/evals/cli/run-cli.ts` 由 Task 9 拥有。本任务只在 `run-cli.ts` 里加一个 import 与一行 `assertKindEnabled(args.kind)`（Step 18）；注册表本身放在本任务新建的 `src/lib/evals/kinds/registry.ts`，是启用与否的唯一来源。
 
 **Files:**
 - Create: `src/lib/evals/kinds/read-only.ts`（`writeLikeProperties`、`assertReadOnly`）
@@ -11006,6 +11477,7 @@ git commit -m "feat(evals): admin read API for eval runs with whitelisted shapes
 - Create: `src/lib/evals/kinds/dual-source.test.ts`
 - Create: `src/lib/evals/kinds/reference.ts`
 - Create: `src/lib/evals/kinds/reference.test.ts`
+- Create: `src/lib/evals/reduce.ts`、`src/lib/evals/reduce.test.ts`（`reduceForKind`：唯一的按夹具归约，Task 12 复用；Codex P1-2/P2-2）
 - Create: `src/lib/evals/kinds/registry.ts`（`KIND_REGISTRY`、`kindEntry`、`assertKindEnabled`）
 - Create: `src/lib/evals/kinds/registry.test.ts`（含对 `run.ts` 的 CLI 退出码 2 测试）
 - Modify: `src/lib/evals/cli/run-cli.ts`（一个 import + `runCli` 里一行 `assertKindEnabled`）
@@ -11353,13 +11825,13 @@ const code=(f:()=>unknown)=>{try{f();return 'ok';}catch(e){return e instanceof E
 const THRESHOLDS={max_fail:0,min_coverage_optional:'0.95'};
 
 describe('parseReferenceResult (strict)',()=>{
- it('accepts exactly {total, within, beyond_explained, beyond_unexplained, unavailable} of non-negative integers that add up',()=>{
-  expect(parseReferenceResult({total:3,within:1,beyond_explained:1,beyond_unexplained:0,unavailable:1})).toEqual({total:3,within:1,beyond_explained:1,beyond_unexplained:0,unavailable:1});
+ it('accepts exactly {total, within, beyond_explained, beyond_unexplained, unavailable, missing} of non-negative integers that add up',()=>{
+  expect(parseReferenceResult({total:3,within:1,beyond_explained:1,beyond_unexplained:0,unavailable:1,missing:0})).toEqual({total:3,within:1,beyond_explained:1,beyond_unexplained:0,unavailable:1,missing:0});
  });
  it('refuses extra / missing keys, negatives, fractions, strings, a wrong total, arrays and class instances',()=>{
-  const ok={total:1,within:1,beyond_explained:0,beyond_unexplained:0,unavailable:0};
-  class R{total=1;within=1;beyond_explained=0;beyond_unexplained=0;unavailable=0;}
-  for(const bad of [{...ok,value:'918273645.5'},{total:1,within:1,beyond_explained:0,beyond_unexplained:0},{...ok,within:-1,total:-1},{...ok,within:0.5,total:0.5},{...ok,within:'1'},{...ok,total:2},[1,1,0,0,0],new R(),null,'ok'])
+  const ok={total:1,within:1,beyond_explained:0,beyond_unexplained:0,unavailable:0,missing:0};
+  class R{total=1;within=1;beyond_explained=0;beyond_unexplained=0;unavailable=0;missing=0;}
+  for(const bad of [{...ok,value:'918273645.5'},{total:1,within:1,beyond_explained:0,beyond_unexplained:0,unavailable:0},{...ok,within:-1,total:-1},{...ok,within:0.5,total:0.5},{...ok,within:'1'},{...ok,total:2},[1,1,0,0,0,0],new R(),null,'ok'])
    expect(code(()=>parseReferenceResult(bad))).toBe('reference_result_schema');
  });
 });
@@ -11380,7 +11852,7 @@ describe('evaluateReference',()=>{
  it(`within at rel ${REFERENCE_REL} (ours left, theirs right)`,async()=>{
   const r=await evaluateReference([sample()],[],deps({'cn.cpi':'100'}));
   expect(r.cases[0]).toMatchObject({case_id:'s1',outcome:{result:'within'},left:'100',right:'100.5',tolerance:'0.01'});
-  expect(r.result).toEqual({total:1,within:1,beyond_explained:0,beyond_unexplained:0,unavailable:0});
+  expect(r.result).toEqual({total:1,within:1,beyond_explained:0,beyond_unexplained:0,unavailable:0,missing:0});
  });
  it('beyond: explained only by an approved, non-unknown entry whose their/our values equal the compared values',async()=>{
   const run=async(e?:Record<string,unknown>)=>(await evaluateReference([sample()],e?parseReferenceLedger([e]):[],deps({'cn.cpi':'110'}))).cases[0].outcome;
@@ -11392,17 +11864,23 @@ describe('evaluateReference',()=>{
   expect(await run(entry({their_value:'100'}))).toEqual({result:'beyond_unexplained'});
   expect(await run(entry({approved_by:'claude-code'}))).toEqual({result:'beyond_unexplained'});
  });
- it('unavailable: no parsed value (LPR rows, asset prices) or no value on our side',async()=>{
+ it('sample without a value (LPR rows, asset prices) → skipped(unavailable); a value on their side but none on ours → missing (P1-1)',async()=>{
   const r=await evaluateReference([sample({sample_id:'lpr',parsed_value:null}),sample({sample_id:'gone'})],[],deps({}));
-  expect(r.cases.map(c=>c.outcome)).toEqual([{result:'skipped',reason:'unavailable'},{result:'skipped',reason:'unavailable'}]);
-  expect(r.result).toEqual({total:2,within:0,beyond_explained:0,beyond_unexplained:0,unavailable:2});
+  expect(r.cases.map(c=>c.outcome)).toEqual([{result:'skipped',reason:'unavailable'},{result:'missing'}]);
+  expect(r.result).toEqual({total:2,within:0,beyond_explained:0,beyond_unexplained:0,unavailable:1,missing:1});
+  expect(referenceSummary(r.result,THRESHOLDS)).toMatchObject({coverage:{missing_required:1,skipped:1,evaluated:0},gate:'incomplete'});
+ });
+ it('P1-1: 36 unavailable samples and zero comparisons are incomplete, never pass',async()=>{
+  const r=await evaluateReference(Array.from({length:36},(_,i)=>sample({sample_id:`s${i}`,parsed_value:null})),[],deps({}));
+  expect(r.result).toMatchObject({total:36,unavailable:36});
+  expect(referenceSummary(r.result,THRESHOLDS).gate).toBe('incomplete');
  });
  it('canary: full comparison path (beyond_unexplained, value only in cases[]); not counted; absent from result, summary, store and the public .md',async()=>{
   const r=await evaluateReference([sample(),canary()],[],deps({'cn.cpi':'100',[CANARY_SERIES]:'1'}));
   const c=r.cases.find(x=>x.case_id==='canary')!;
   expect(c).toMatchObject({outcome:{result:'beyond_unexplained'},left:'1',right:CANARY_VALUE});
   expect(r.countedCases.map(x=>x.case_id)).toEqual(['s1']);
-  expect(r.result).toEqual({total:1,within:1,beyond_explained:0,beyond_unexplained:0,unavailable:0});
+  expect(r.result).toEqual({total:1,within:1,beyond_explained:0,beyond_unexplained:0,unavailable:0,missing:0});
   const finishRun=vi.fn(async(_runId:string,_status:string,_summary:Summary,_at:string)=>{});
   const summary=await referenceSummaryWriter({finishRun},{thresholds:THRESHOLDS,now:()=>new Date('2026-11-06T00:00:00Z')}).writeReferenceSummary('run-1',r.result);
   expect(JSON.stringify(summary)).not.toContain(CANARY_VALUE);
@@ -11422,17 +11900,17 @@ describe('evaluateReference',()=>{
 
 describe('referenceSummary / referenceSummaryWriter',()=>{
  it('§3.2 shape from counts: comparison evidence; beyond_unexplained 0 → pass, > 0 → fail; total 0 → incomplete',()=>{
-  const s:Summary=referenceSummary({total:4,within:2,beyond_explained:1,beyond_unexplained:0,unavailable:1},THRESHOLDS);
+  const s:Summary=referenceSummary({total:4,within:2,beyond_explained:1,beyond_unexplained:0,unavailable:1,missing:0},THRESHOLDS);
   expect(s).toMatchObject({population:4,required:4,correctness:{pass:3,fail:0,unit_mismatch:0,provenance_incomplete:0,unexplained_diff:0},coverage:{evaluated:3,skipped:1},evidence_class:'comparison',gate:'pass'});
-  expect(referenceSummary({total:2,within:1,beyond_explained:0,beyond_unexplained:1,unavailable:0},THRESHOLDS).gate).toBe('fail');
-  expect(referenceSummary({total:0,within:0,beyond_explained:0,beyond_unexplained:0,unavailable:0},THRESHOLDS).gate).toBe('incomplete');
+  expect(referenceSummary({total:2,within:1,beyond_explained:0,beyond_unexplained:1,unavailable:0,missing:0},THRESHOLDS).gate).toBe('fail');
+  expect(referenceSummary({total:0,within:0,beyond_explained:0,beyond_unexplained:0,unavailable:0,missing:0},THRESHOLDS).gate).toBe('incomplete');
  });
  it('the writer validates before writing and finishes the run with the gate status',async()=>{
   const finishRun=vi.fn(async(_runId:string,_status:string,_summary:Summary,_at:string)=>{});
   const w=referenceSummaryWriter({finishRun},{thresholds:THRESHOLDS,now:()=>new Date('2026-11-06T00:00:00Z')});
   await expect(w.writeReferenceSummary('run-1',{total:1,within:1,beyond_explained:0,beyond_unexplained:0,unavailable:0,extra:1})).rejects.toMatchObject({code:'reference_result_schema'});
   expect(finishRun).not.toHaveBeenCalled();
-  await w.writeReferenceSummary('run-1',{total:1,within:0,beyond_explained:0,beyond_unexplained:1,unavailable:0});
+  await w.writeReferenceSummary('run-1',{total:1,within:0,beyond_explained:0,beyond_unexplained:1,unavailable:0,missing:0});
   expect(finishRun).toHaveBeenCalledWith('run-1','failed',expect.objectContaining({gate:'fail'}),'2026-11-06T00:00:00.000Z');
  });
 });
@@ -11467,8 +11945,10 @@ Expected: FAIL — `Failed to resolve import "./reference"`。
 // delete/rpc-like members (EvalError reference_write_attempt). Comparison: ours (left) vs theirs (right) at
 // REFERENCE_REL = 0.01 → within; otherwise beyond_explained only with a ledger entry for the sample whose
 // reason_code ≠ unknown, approved_by ≠ added_by, approval_ref present and their_value / our_value equal (as
-// decimals) to the two compared values; else beyond_unexplained. No parsed value (LPR, asset prices) or
-// no value on our side → skipped(unavailable). The canary (canary: true, series __canary__, parsed_value
+// decimals) to the two compared values; else beyond_unexplained. No parsed value on the sample side (LPR, asset
+// prices) → skipped(unavailable); a sample with a value but nothing on OUR side → missing (coverage: the system
+// failed to produce it — Codex plan round 1 P1-1; ReferenceResult therefore carries `missing`, an integration
+// deviation from §5.4's five keys). The canary (canary: true, series __canary__, parsed_value
 // 918273645.5) goes through the same path and stays in cases[] (report JSON only) but is excluded from
 // countedCases, ReferenceResult and the summary. ReferenceResult is validated strictly at runtime (exact
 // key set, non-negative safe integers, total = sum); the only write path is
@@ -11493,12 +11973,14 @@ export interface ReferenceSampleFile{schema_version:1;samples:ReferenceSample[]}
 export const REFERENCE_REASONS=['membership_pointintime','aggregation_method','restatement','unit_or_basis','their_placeholder','their_proxy','their_stale_snapshot','unknown'] as const;
 export type ReferenceReason=typeof REFERENCE_REASONS[number];
 export interface ReferenceLedgerEntry{sample_id:string;their_value:string;our_value:string;our_run_id:string;reason_code:ReferenceReason;evidence:{type:'computation'|'document';ref:string};added_by:string;approved_by:string;approval_ref:string}
-export interface ReferenceResult{total:number;within:number;beyond_explained:number;beyond_unexplained:number;unavailable:number}
+export interface ReferenceResult{total:number;within:number;beyond_explained:number;beyond_unexplained:number;unavailable:number;missing:number}
+/** reference_regression thresholds (§5.4: beyond_unexplained = 0 → pass); also used by reduce.ts and the manifest validator. */
+export const REFERENCE_THRESHOLDS:Thresholds={max_fail:0,min_coverage_optional:'0.95'};
 export interface ReferenceReader{value(target:OurTarget):Promise<{value_text:string;unit:string|null;run_id:string|null}|null>}
 export interface ReferenceReadDeps{reader:ReferenceReader;today:string;evaluatorCodeVersion:string}
 export interface ReferenceEvaluation{cases:CaseReport[];countedCases:CaseReport[];result:ReferenceResult}
 
-const RESULT_KEYS=['beyond_explained','beyond_unexplained','total','unavailable','within'];
+const RESULT_KEYS=['beyond_explained','beyond_unexplained','missing','total','unavailable','within'];
 const HEX64=/^[0-9a-f]{64}$/,DAY=/^\d{4}-\d{2}-\d{2}$/;
 const isObj=(v:unknown):v is Record<string,unknown>=>typeof v==='object'&&v!==null&&!Array.isArray(v);
 const nonEmpty=(v:unknown):v is string=>typeof v==='string'&&v.trim().length>0;
@@ -11511,8 +11993,8 @@ export function parseReferenceResult(v:unknown):ReferenceResult{
  if(keys.length!==RESULT_KEYS.length||keys.some((k,i)=>k!==RESULT_KEYS[i]))return bad(`keys ${keys.join(',')}`);
  for(const k of RESULT_KEYS){const x=v[k];if(typeof x!=='number'||!Number.isSafeInteger(x)||x<0)return bad(`${k} is not a non-negative integer`);}
  const r=v as unknown as ReferenceResult;
- if(r.total!==r.within+r.beyond_explained+r.beyond_unexplained+r.unavailable)return bad('total ≠ sum');
- return {total:r.total,within:r.within,beyond_explained:r.beyond_explained,beyond_unexplained:r.beyond_unexplained,unavailable:r.unavailable};
+ if(r.total!==r.within+r.beyond_explained+r.beyond_unexplained+r.unavailable+r.missing)return bad('total ≠ sum');
+ return {total:r.total,within:r.within,beyond_explained:r.beyond_explained,beyond_unexplained:r.beyond_unexplained,unavailable:r.unavailable,missing:r.missing};
 }
 
 export function parseReferenceSamples(raw:unknown):ReferenceSampleFile{
@@ -11563,13 +12045,14 @@ const explains=(e:ReferenceLedgerEntry,ours:string,theirs:string)=>e.reason_code
 export async function evaluateReference(samples:ReferenceSample[],ledger:ReferenceLedgerEntry[],deps:ReferenceReadDeps):Promise<ReferenceEvaluation>{
  assertReadOnly(deps,'reference_write_attempt','reference_regression ReadDeps');
  const cases:CaseReport[]=[];const counted:CaseReport[]=[];
- const result:ReferenceResult={total:0,within:0,beyond_explained:0,beyond_unexplained:0,unavailable:0};
+ const result:ReferenceResult={total:0,within:0,beyond_explained:0,beyond_unexplained:0,unavailable:0,missing:0};
  for(const s of samples){
   const rep=(outcome:CaseOutcome,left:string|null,abs:string|null,rel:string|null,detail:Record<string,unknown>):CaseReport=>
    ({case_id:s.sample_id,required:true,outcome,left,right:s.parsed_value,abs_diff:abs,rel_diff:rel,tolerance:REFERENCE_REL,provenance:null,detail:{our_target:s.our_target,parsed_unit:s.parsed_unit,canary:s.canary,...detail}});
   const ours=s.parsed_value===null?null:await deps.reader.value(s.our_target);
   let c:CaseReport;
-  if(s.parsed_value===null||ours===null){c=rep({result:'skipped',reason:'unavailable'},ours?.value_text??null,null,null,{});if(!s.canary)result.unavailable++;}
+  if(s.parsed_value===null){c=rep({result:'skipped',reason:'unavailable'},null,null,null,{});if(!s.canary)result.unavailable++;}
+  else if(ours===null){c=rep(s.canary?{result:'skipped',reason:'unavailable'}:{result:'missing'},null,null,null,{});if(!s.canary)result.missing++;}
   else{
    const cmpRes=compareWithinTolerance(ours.value_text,s.parsed_value,REFERENCE_REL);
    const detail={our_unit:ours.unit,our_run_id:ours.run_id};
@@ -11583,12 +12066,13 @@ export async function evaluateReference(samples:ReferenceSample[],ledger:Referen
  return {cases,countedCases:counted,result:parseReferenceResult(result)};
 }
 
-/** §3.2 summary from validated counts: within + beyond_explained → pass, beyond_unexplained → unexplained_diff, unavailable → skipped. */
+/** §3.2 summary from validated counts: within + beyond_explained → pass, beyond_unexplained → unexplained_diff, unavailable → skipped,
+ *  missing → coverage.missing_required. Equals reduce.ts::reduceForKind over the same cases (reduce.test.ts). */
 export function referenceSummary(raw:unknown,thresholds:Thresholds):Summary{
  const r=parseReferenceResult(raw);
  const base:Omit<Summary,'gate'>={population:r.total,required:r.total,
   correctness:{pass:r.within+r.beyond_explained,fail:0,unit_mismatch:0,provenance_incomplete:0,unexplained_diff:r.beyond_unexplained},
-  coverage:{evaluated:r.within+r.beyond_explained+r.beyond_unexplained,evaluated_optional:0,missing_required:0,missing_optional:0,not_visible:0,skipped:r.unavailable},
+  coverage:{evaluated:r.within+r.beyond_explained+r.beyond_unexplained,evaluated_optional:0,missing_required:r.missing,missing_optional:0,not_visible:0,skipped:r.unavailable},
   execution:{read_error:0,truncated:0,subset:false},thresholds,gold:{format:'f6',ready:true,pending:0,provenance_gaps:0},evidence_class:'comparison',reconciliations_truncated:false};
  return {...base,gate:gateOf(base)};
 }
@@ -11609,9 +12093,134 @@ export function referenceSummaryWriter(sink:ReferenceSummarySink,opts:{threshold
 - [ ] **Step 12: 运行，确认通过**
 
 Run: `npm test -- src/lib/evals/kinds/reference.test.ts`
-Expected: PASS（13 个用例）。若"canary … public .md"用例失败在 `renderMarkdown`：Task 4 的渲染打印了 reference 案例的值——按 CCR 3 修 Task 4（不要在本任务里绕过断言）。
+Expected: PASS（12 个用例）。若"canary … public .md"用例失败在 `renderMarkdown`：Task 4 的渲染打印了 reference 案例的值——按 CCR 3 修 Task 4（不要在本任务里绕过断言）。
 
-- [ ] **Step 13: 写失败测试 `src/lib/evals/kinds/registry.test.ts`**
+- [ ] **Step 13: 写唯一的按 kind 归约 `src/lib/evals/reduce.ts`（Codex 计划第 1 轮 P1-2、P2-2）**
+
+报告的 `summary` 必须能只凭**已认证的夹具**重算：`reduceForKind(kind, cases, fixture)` 从夹具取全集 case_id、每案 `required`、撤回、阈值、gold 块与 evidence class，缺/多/错分类的案例记为 problems；`reference_regression` 的哨兵按夹具的 `canary` 一致地排除。Task 12 的清单校验器只用这一个函数（执行顺序因此改为 14 在 12 之前，见任务总览）。
+
+`src/lib/evals/reduce.test.ts`:
+
+```ts
+// src/lib/evals/reduce.test.ts
+import {describe,expect,it} from 'vitest';
+import {CANARY_SERIES,CANARY_VALUE,REFERENCE_THRESHOLDS,evaluateReference,referenceSummary} from './kinds/reference';
+import type {ReferenceSample} from './kinds/reference';
+import {gcase,gset} from './kinds/official-test-support';
+import {reduceForKind} from './reduce';
+import type {CaseReport,CaseOutcome} from './types';
+
+const rep=(case_id:string,outcome:CaseOutcome={result:'pass'},required=true):CaseReport=>({case_id,required,outcome,left:'1',right:'1',abs_diff:'0',rel_diff:'0',tolerance:'0',provenance:null,detail:{}});
+const sample=(p:Partial<ReferenceSample>={}):ReferenceSample=>({sample_id:'s1',doc:'macro-strategy',doc_sha256:'a'.repeat(64),line:1,page_url:'https://chaos.example/macro',page_sha256:'b'.repeat(64),captured_at:'2026-11-04T00:00:00Z',
+ as_displayed:'100',parsed_value:'100',parsed_unit:'index',their_declared_source:null,our_target:{series_id:'cn.cpi',period_end:'2026-09-30',which:'latest'},canary:false,...p});
+
+describe('reduceForKind (P1-2, P2-2)',()=>{
+ const set=gset([gcase({case_id:'a'}),gcase({case_id:'b'}),gcase({case_id:'r',retracted:{at:'2026-11-01',by:'owner',reason:'wrong period'}})]);
+ const good=[rep('a'),rep('b'),rep('r',{result:'skipped',reason:'retracted'})];
+ it('official: population, required flags, thresholds and gold come from the set; a complete report reduces cleanly',()=>{
+  const r=reduceForKind('official_reconciliation',good,{kind:'official_reconciliation',set});
+  expect(r.problems).toEqual([]);
+  expect(r.summary).toMatchObject({population:2,required:2,gate:'pass',thresholds:set.thresholds,evidence_class:'truth'});
+ });
+ it('rejects a dropped failing case, an extra case, a reclassified case and a fake retraction',()=>{
+  expect(reduceForKind('official_reconciliation',[rep('a'),good[2]],{kind:'official_reconciliation',set}).problems).toEqual(['missing case b']);
+  expect(reduceForKind('official_reconciliation',[...good,rep('z')],{kind:'official_reconciliation',set}).problems).toEqual(['extra case z']);
+  expect(reduceForKind('official_reconciliation',[rep('a'),rep('b',{result:'missing'},false),good[2]],{kind:'official_reconciliation',set}).problems).toEqual(['case b: required=false but the fixture says true']);
+  const r=reduceForKind('official_reconciliation',[rep('a'),rep('b',{result:'skipped',reason:'retracted'}),rep('r')],{kind:'official_reconciliation',set});
+  expect(r.problems).toEqual(['case b is skipped(retracted) but not retracted in the fixture','case r is retracted but not skipped(retracted)']);
+ });
+ it('a misclassified required flag is reduced with the fixture value (missing required → incomplete)',()=>{
+  expect(reduceForKind('official_reconciliation',[rep('a'),rep('b',{result:'missing'},false),good[2]],{kind:'official_reconciliation',set}).summary.gate).toBe('incomplete');
+ });
+ it('reference: the fixture canary is excluded consistently and the result equals referenceSummary of the same run',async()=>{
+  const samples={schema_version:1 as const,samples:[sample(),sample({sample_id:'s2',parsed_value:null}),sample({sample_id:'canary',parsed_value:CANARY_VALUE,our_target:{series_id:CANARY_SERIES,period_end:'2026-09-30',which:'latest'},canary:true})]};
+  const run=await evaluateReference(samples.samples,[],{today:'2026-11-06',evaluatorCodeVersion:'d'.repeat(40),reader:{value:async t=>({value_text:t.series_id===CANARY_SERIES?'1':'100',unit:'index',run_id:'r1'})}});
+  const r=reduceForKind('reference_regression',run.cases,{kind:'reference_regression',samples});
+  expect(r.problems).toEqual([]);
+  expect(r.summary).toEqual(referenceSummary(run.result,REFERENCE_THRESHOLDS));
+  expect(r.summary).toMatchObject({population:2,gate:'pass',evidence_class:'comparison'});
+ });
+});
+```
+
+Run: `npm test -- src/lib/evals/reduce.test.ts`
+Expected: FAIL — `Failed to resolve import "./reduce"`。
+
+`src/lib/evals/reduce.ts`:
+
+```ts
+// src/lib/evals/reduce.ts
+// The one kind-aware reduction of a run's cases against its AUTHENTICATED fixture (Codex plan round 1 P1-2, P2-2).
+// Used by the kinds that build reports (Task 14 reference, and by the release-manifest validator, Task 12) so a stored
+// summary can be re-derived without trusting anything the report says about itself. The fixture decides: the exact
+// case-id population (missing / extra ids are problems; a missing member is reduced as `missing`, so the gate cannot pass), each case's `required` flag, retraction (a retracted gold case
+// must be skipped(retracted), and only those), the thresholds, the gold block (summary.ts::goldBlockOf) and the
+// evidence class. `subset` is read from the cases (any skipped(subset)); the report's own thresholds / gold / subset are
+// never inputs. reference_regression: the fixture-designated canary (sample.canary) is excluded from the population
+// consistently — its case stays in report.cases (§5.4 (c)) but is never reduced.
+import {REFERENCE_THRESHOLDS} from './kinds/reference';
+import type {ReferenceSampleFile} from './kinds/reference';
+import {REPLAY_THRESHOLDS} from './kinds/replay';
+import {recordedCases} from './replay/fixture';
+import type {ReplayFile} from './replay/fixture';
+import {goldBlockOf,summarize} from './summary';
+import type {CaseReport,EvalKind,EvidenceClass,GoldSet,Summary,SummaryContext} from './types';
+
+export type ReductionFixture=
+ |{kind:'official_reconciliation'|'dual_source';set:GoldSet}
+ |{kind:'replay_consistency';file:ReplayFile}
+ |{kind:'reference_regression';samples:ReferenceSampleFile};
+export interface Reduction{summary:Summary;problems:string[]}
+export interface ReduceOptions{
+ /** dual_source only: the pair registration's class (same_feed → adapter_check); other kinds derive it from the kind. */
+ evidenceClass?:EvidenceClass;
+ /** store.ts::caseRowsTruncated of the report (a pure function of its cases). */
+ reconciliationsTruncated?:boolean;
+}
+
+interface Member{id:string;required:boolean;retracted:boolean}
+const isSkip=(c:CaseReport,reason:string)=>c.outcome.result==='skipped'&&c.outcome.reason===reason;
+
+export function reduceForKind(kind:EvalKind,cases:CaseReport[],fixture:ReductionFixture,opts:ReduceOptions={}):Reduction{
+ if(fixture.kind!==kind)throw new Error(`reduceForKind: ${kind} with a ${fixture.kind} fixture`);
+ let members:Member[];let ctx:Omit<SummaryContext,'subset'>;let excluded=new Set<string>();
+ if('set' in fixture){
+  members=fixture.set.cases.map(c=>({id:c.case_id,required:c.required,retracted:c.retracted!==null}));
+  ctx={thresholds:fixture.set.thresholds,gold:goldBlockOf(fixture.set),evidenceClass:fixture.kind==='dual_source'?(opts.evidenceClass??'truth'):'truth'};
+ }else if('file' in fixture){
+  members=recordedCases(fixture.file).map(c=>({id:c.case_id,required:true,retracted:false}));
+  ctx={thresholds:REPLAY_THRESHOLDS,gold:{format:'f6',ready:true,pending:0,provenance_gaps:0},evidenceClass:'truth'};
+ }else{
+  excluded=new Set(fixture.samples.samples.filter(s=>s.canary).map(s=>s.sample_id));
+  members=fixture.samples.samples.filter(s=>!s.canary).map(s=>({id:s.sample_id,required:true,retracted:false}));
+  ctx={thresholds:REFERENCE_THRESHOLDS,gold:{format:'f6',ready:true,pending:0,provenance_gaps:0},evidenceClass:'comparison'};
+ }
+ const problems:string[]=[];
+ const byId=new Map<string,CaseReport>();
+ for(const c of cases){
+  if(excluded.has(c.case_id))continue;
+  if(byId.has(c.case_id))problems.push(`duplicate case ${c.case_id}`);
+  byId.set(c.case_id,c);
+ }
+ const known=new Set(members.map(m=>m.id));
+ for(const id of byId.keys())if(!known.has(id))problems.push(`extra case ${id}`);
+ const reduced:CaseReport[]=[];
+ for(const m of members){
+  const c=byId.get(m.id);
+  if(!c){problems.push(`missing case ${m.id}`);reduced.push({case_id:m.id,required:m.required,outcome:m.retracted?{result:'skipped',reason:'retracted'}:{result:'missing'},left:null,right:null,abs_diff:null,rel_diff:null,tolerance:'0',provenance:null,detail:{}});continue;}
+  if(c.required!==m.required)problems.push(`case ${m.id}: required=${c.required} but the fixture says ${m.required}`);
+  if(m.retracted!==isSkip(c,'retracted'))problems.push(m.retracted?`case ${m.id} is retracted but not skipped(retracted)`:`case ${m.id} is skipped(retracted) but not retracted in the fixture`);
+  reduced.push({...c,required:m.required});
+ }
+ const summary=summarize(reduced,{...ctx,subset:reduced.some(c=>isSkip(c,'subset')),reconciliationsTruncated:opts.reconciliationsTruncated??false});
+ return {summary,problems};
+}
+```
+
+Run: `npm test -- src/lib/evals/reduce.test.ts`
+Expected: PASS（4 个用例）。
+
+- [ ] **Step 14: 写失败测试 `src/lib/evals/kinds/registry.test.ts`**
 
 ```ts
 // src/lib/evals/kinds/registry.test.ts
@@ -11653,12 +12262,12 @@ describe('KIND_REGISTRY',()=>{
 });
 ```
 
-- [ ] **Step 14: 运行，确认失败**
+- [ ] **Step 15: 运行，确认失败**
 
 Run: `npm test -- src/lib/evals/kinds/registry.test.ts`
 Expected: FAIL — `Failed to resolve import "./registry"`。
 
-- [ ] **Step 15: 实现 `src/lib/evals/kinds/registry.ts`**
+- [ ] **Step 16: 实现 `src/lib/evals/kinds/registry.ts`**
 
 ```ts
 // src/lib/evals/kinds/registry.ts
@@ -11683,14 +12292,14 @@ export function assertKindEnabled(kind:string):void{
 }
 ```
 
-- [ ] **Step 16: 运行注册表单测（CLI 用例此时仍失败）**
+- [ ] **Step 17: 运行注册表单测（CLI 用例此时仍失败）**
 
 Run: `npm test -- src/lib/evals/kinds/registry.test.ts`
-Expected: 注册表本身的用例与 `KIND_RUNNERS` 一致性用例 PASS；`scripts/evals/run.ts refuses …` 此时也已退出 2（Task 9 对没有运行器的 kind 同样报 `kind_not_enabled`），Step 17 之后拒绝改由注册表给出（stderr 的 message 带 `prerequisite: …` 原因）。
+Expected: 注册表本身的用例与 `KIND_RUNNERS` 一致性用例 PASS；`scripts/evals/run.ts refuses …` 此时也已退出 2（Task 9 对没有运行器的 kind 同样报 `kind_not_enabled`），Step 18 之后拒绝改由注册表给出（stderr 的 message 带 `prerequisite: …` 原因）。
 
-- [ ] **Step 17: 在 `src/lib/evals/cli/run-cli.ts`（Task 9 所有）调用注册表**
+- [ ] **Step 18: 在 `src/lib/evals/cli/run-cli.ts`（Task 9 所有）调用注册表**
 
-`scripts/evals/run.ts` 是 Task 9 的薄壳（逻辑在 `src/lib/evals/cli/run-cli.ts`，那里的 `KIND_RUNNERS` 只管"哪个 kind 用哪个运行器"）；是否启用只由本任务的 `kinds/registry.ts` 决定（集成决定：注册表是唯一的启用表，`KIND_RUNNERS` 的键必须等于启用的 kind，Step 13 的测试断言这一点）。Edit `src/lib/evals/cli/run-cli.ts` — old:
+`scripts/evals/run.ts` 是 Task 9 的薄壳（逻辑在 `src/lib/evals/cli/run-cli.ts`，那里的 `KIND_RUNNERS` 只管"哪个 kind 用哪个运行器"）；是否启用只由本任务的 `kinds/registry.ts` 决定（集成决定：注册表是唯一的启用表，`KIND_RUNNERS` 的键必须等于启用的 kind，Step 14 的测试断言这一点）。Edit `src/lib/evals/cli/run-cli.ts` — old:
 ```ts
 import {checkLock,loadGoldSet} from '../gold/load';
 ```
@@ -11710,17 +12319,17 @@ new:
 ```
 （`runCli` 已把 `EvalError` 打成一行 JSON `{error:code,…}` 到 stderr 并返回 `exitCodeOfError(e)`；`kind_not_enabled ∈ REFUSAL_CODES` → 2，且发生在任何连接之前。）
 
-- [ ] **Step 18: 运行，确认通过**
+- [ ] **Step 19: 运行，确认通过**
 
 Run: `npm test -- src/lib/evals/kinds`
 Expected: PASS（read-only、dual-source、reference、registry 全绿，含两个 CLI 退出码 2）。
 
-- [ ] **Step 19: 类型与 lint**
+- [ ] **Step 20: 类型与 lint**
 
 Run: `npm run typecheck && npm run lint`
 Expected: 0 错误、0 警告。
 
-- [ ] **Step 20: 实施记录**
+- [ ] **Step 21: 实施记录**
 
 ```markdown
 ## Task 14 — dual_source, reference_regression (pure logic), kind registry
@@ -11731,10 +12340,10 @@ Expected: 0 错误、0 警告。
 - No database tests (critical suites cannot skip; §0 R5-12). Prerequisites listed in the PR.
 ```
 
-- [ ] **Step 21: 提交**
+- [ ] **Step 22: 提交**
 
 ```bash
-git add src/lib/evals/kinds/read-only.ts src/lib/evals/kinds/read-only.test.ts src/lib/evals/kinds/dual-source.ts src/lib/evals/kinds/dual-source.test.ts src/lib/evals/kinds/reference.ts src/lib/evals/kinds/reference.test.ts src/lib/evals/kinds/registry.ts src/lib/evals/kinds/registry.test.ts src/lib/evals/cli/run-cli.ts docs/audits/2026-11-06-evals-gold-sets/01-implementation-log.md
+git add src/lib/evals/kinds/read-only.ts src/lib/evals/kinds/read-only.test.ts src/lib/evals/kinds/dual-source.ts src/lib/evals/kinds/dual-source.test.ts src/lib/evals/kinds/reference.ts src/lib/evals/kinds/reference.test.ts src/lib/evals/reduce.ts src/lib/evals/reduce.test.ts src/lib/evals/kinds/registry.ts src/lib/evals/kinds/registry.test.ts src/lib/evals/cli/run-cli.ts docs/audits/2026-11-06-evals-gold-sets/01-implementation-log.md
 ```
 ```bash
 git commit -m "feat(evals): dual_source and reference_regression pure logic, read-only deps check, kind registry refusal (F6 Task 14)" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
@@ -12172,8 +12781,14 @@ describe('evaluateCalibration',()=>{
   const r=evaluateCalibration([f('p','2',1)]);
   expect(r).toMatchObject({eligible:0,brier:null});
   expect(r.reliability.every(b=>b.n===0)).toBe(true);
-  expect(summarizeCalibration(r,TH).gate).toBe('incomplete');
+  expect(summarizeCalibration(r,TH)).toMatchObject({population:0,coverage:{skipped:1,evaluated:0},gate:'incomplete'});
   expect(summarizeCalibration(evaluateCalibration([]),TH).gate).toBe('incomplete');
+ });
+ it('P2-5: population = eligible forecasts; ineligible ones are skipped outside it (mixed and all-ineligible alike)',()=>{
+  const mixed=evaluateCalibration([f('ok','0.5',1),...Array.from({length:9},(_,i)=>f(`bad${i}`,'2',1))]);
+  expect(summarizeCalibration(mixed,TH)).toMatchObject({population:1,required:1,coverage:{evaluated:1,skipped:9},gate:'pass'});
+  const none=evaluateCalibration(Array.from({length:9},(_,i)=>f(`bad${i}`,'2',1)));
+  expect(summarizeCalibration(none,TH)).toMatchObject({population:0,coverage:{evaluated:0,skipped:9},gate:'incomplete'});
  });
 });
 ```
@@ -12196,9 +12811,11 @@ Expected: FAIL — `Failed to resolve import "./calibration"`。
 // forecast_id) counts, earlier eligible ones are superseded_in_chain. Eligible → pass (population),
 // ineligible → skipped(ineligible). Output: Brier = mean (p − outcome)² and a 10-bucket reliability table
 // ([0,0.1) … [0.9,1.0], p = 1 in the last bucket), both exact on BigInt, as 10-place truncated text. No
-// eligible sample → summarizeCalibration summarizes [] → population 0 → incomplete. Thresholds are F4's.
+// eligible sample → population 0 → incomplete. Population = the ELIGIBLE forecasts only (§3.3 calibration row, Codex
+// plan round 1 P2-5): ineligible ones stay in cases[] as skipped(ineligible) and are counted in coverage.skipped,
+// outside the population, the same way whether 0, some or all forecasts are eligible. Thresholds are F4's.
 import type {CaseReport,Summary,SummaryContext,Thresholds} from '../types';
-import {summarize} from '../summary';
+import {gateOf,summarize} from '../summary';
 import {ratioText} from './ratio';
 
 export interface Settlement{outcome:0|1;settled_at:string;evidence_ref:string;evidence_available_date:string}
@@ -12280,14 +12897,19 @@ export function evaluateCalibration(forecasts:SettledForecast[]):CalibrationResu
 }
 
 export const calibrationSummaryContext=(thresholds:Thresholds):SummaryContext=>({thresholds,gold:{format:'f6',ready:true,pending:0,provenance_gaps:0},subset:false,evidenceClass:'truth'});
-/** No eligible sample → summarize([]) → population 0 → incomplete (§11.3). */
-export const summarizeCalibration=(r:CalibrationResult,thresholds:Thresholds):Summary=>summarize(r.eligible===0?[]:r.cases,calibrationSummaryContext(thresholds));
+/** Population = eligible forecasts; every ineligible one adds to coverage.skipped outside the population (P2-5). No eligible → incomplete. */
+export function summarizeCalibration(r:CalibrationResult,thresholds:Thresholds):Summary{
+ const eligible=r.cases.filter(c=>!(c.outcome.result==='skipped'&&c.outcome.reason==='ineligible'));
+ const {gate:_gate,...s}=summarize(eligible,calibrationSummaryContext(thresholds));
+ const base={...s,coverage:{...s.coverage,skipped:s.coverage.skipped+(r.cases.length-eligible.length)}};
+ return {...base,gate:gateOf(base)};
+}
 ```
 
 - [ ] **Step 12: 运行，确认通过**
 
 Run: `npm test -- src/lib/evals/kinds/calibration.test.ts`
-Expected: PASS（5 个用例）。
+Expected: PASS（6 个用例）。
 
 - [ ] **Step 13: 注册两个未启用的 kind（修改 `src/lib/evals/kinds/registry.ts`）**
 
@@ -12363,6 +12985,7 @@ git commit -m "feat(evals): extraction_gold matching and judgment_calibration me
 **Files:**
 - Create: `docs/evals/README.md`
 - Modify: `docs/superpowers/specs/2026-11-04-evals-and-gold-sets-design.md`（只在 §18 下追加，不改其他节）
+- Modify: `docs/superpowers/specs/2026-11-04-SPEC-INDEX.md`（只改 F6 那一行：计划与实施状态）
 - Modify: `docs/audits/2026-11-06-evals-gold-sets/01-implementation-log.md`
 
 - [ ] **Step 1: 写 `docs/evals/README.md`**
@@ -12417,7 +13040,7 @@ Expected: exit 0（README 不含令牌、邮箱、桶路径）。
 交付（§15.1 可构建子集）：契约与校验（Task 1–4、12）、存储（Task 5–6）、facts 适配器与官方对账（Task 7–9）、回放（Task 10–11，含 `run.ts --kind replay_consistency`）、管理只读 API（Task 13）、`dual_source`/`reference_regression`/`extraction_gold`/`judgment_calibration` 纯逻辑并在 `kinds/registry.ts` 登记为未启用（Task 14–15）。
 
 偏差（均由集成决定，实施时以此为准）：
-1. `--redact` 只扫 F6 自有路径（`src/lib/evals/fixtures/**`、`docs/evals/**`、`docs/audits/2026-11-06-evals-gold-sets/**`、`docs/audits/2026-11-04-data-foundation-2/index.json`），不扫整个 `docs/audits/**`（§4.5、§7.3）：其他模块的审计文件原样引用 Codex 输出（邮箱、查询串），F6 不得改它们。
+1. `--redact` 只扫 F6 自有路径（`src/lib/evals/fixtures/**`、`docs/evals/**`、`docs/audits/2026-11-06-evals-gold-sets/**`），不扫整个 `docs/audits/**`（§4.5、§7.3）：其他模块的审计文件原样引用 Codex 输出（邮箱、查询串），F6 不得改它们。
 2. 发布清单的 `lock.json` 校验只对黄金集类证据（official、dual_source）；回放与对照报告按其夹具文件的提交字节认证（`manifest_fixture`），因为锁只收 `GoldFormat` 黄金集（§10 "共同规则"）。
 3. `validate.ts` 退出码：0 通过、1 检查失败、2 用法错误（与 §3.2 一致：2 只表示运行前拒绝）。
 4. `Summary.coverage` 增 `evaluated_optional`（§3.2 规则 3 需要它，gate 才能只凭摘要重算）。
@@ -12425,9 +13048,18 @@ Expected: exit 0（README 不含令牌、邮箱、桶路径）。
 6. frozen 建库（`replay/setup.ts`）不写 `dq_freshness`：`runFactsSync` 总会记录 `facts.us`，固定时钟会给共享库留下陈旧行，所以同步依赖的 `tables` 丢弃对 `dq_freshness` 的写（`withoutFreshness`）。
 7. `--http` 冒烟本期不建（`run.ts` 以 `kind_not_enabled` 拒绝），§5.3.2 的路由等价由 `route-equivalence.test.ts` 保证。
 8. 回放 frozen 经 `run.ts` 运行需要 `S4_TEST_STATE`（内存世界的投影不保证与录制库字节一致）。
+9. §3.2 规则 1 增：`coverage.evaluated = 0` → `incomplete`（全部 skipped 的总体不能 pass）；`reference_regression` 系统侧无值 → `missing`（覆盖率），只有样本侧无值才 `skipped(unavailable)`，`ReferenceResult` 因此多一个 `missing` 键（§5.4 键集合的偏差）。calibration 的总体只含 eligible 预测（Codex 计划第 1 轮 P1-1、P2-5）。
+10. 黄金集头部新增必填 `review_required`；`facts/plan3*`（30 家）必须为 true，且每案 `reviewed_by ≠ recorded_by`（§4.6，P2-3）。
+11. 发布清单新增 `evidence_commit`（= 或晚于 `release_commit`），证据用 `git show <evidence_commit>:<path>` 读、发布输入在 `release_commit` 读；CI 运行须属 origin 仓库，`--online` 再查 conclusion=success 与 head_sha；新鲜度在 `prepared_at` 用 `computeFreshness` 重算；总体、阈值与 gold 块从已认证夹具经 `reduce.ts::reduceForKind` 重算（P1-2、P1-3、P1-4、P2-2）。
+12. `evaluator_code_version`：检出内只信 `git rev-parse HEAD` 与 `git status --porcelain --untracked-files=normal`，忽略 `VERCEL_GIT_COMMIT_SHA`；`record-replay.ts` 拒绝脏树（P1-7）。官方对账的 `verified.{artifacts,sources}` 由实际完成的检查推出，缺失期望也校验来源字节（P1-8）。
+13. frozen 建库强制初始状态（同库同进程内不同 setup 不得共用 CIK；首次建库要求种子发行人无 filings/facts/隔离项）、每个案例的 setup 先重算再分组（P2-1、P1-6）；`--supersede` 必须是同一 `ObservedDiff` 的账本命中（P1-5）；审计处置按（轮次, 编号）匹配（P1-9）；CI 的 critical frozen 测试写出真实报告并在 job summary 公布 sha256（P1-10）。
 
 未完成（owner 事项，§16）：生产特权 `report` 与其 `dq_eval_runs` 行、`facts.live.json` 录制与首次 live 运行、首份发布清单与专家记录、CODEOWNERS（D2）。
+
+后续事项（不在本计划）：重建 `docs/audits/2026-11-04-data-foundation-2/index.json`（属计划二目录，Codex 计划第 1 轮 P2-4 延后）。
 ```
+
+在 `docs/superpowers/specs/2026-11-04-SPEC-INDEX.md` 的 F6 行（`| F6 评测与黄金集 | …`）把状态列改为“第 6 稿已按计划 `2026-11-06-evals-and-gold-sets.md` 实施，见 §18.1”，其他行不动。
 
 - [ ] **Step 3: 全量门禁**
 
@@ -12444,7 +13076,7 @@ Run: `npx tsx scripts/evals/validate.ts --gold --lock --redact --gold-diff origi
 Expected: `exit=0`；`checks.gold.sets` 含 `plan2.json`（legacy_plan2）与 `synthetic-us.json`（f6）。
 
 Run: `npx tsx scripts/evals/validate.ts --audit docs/audits/2026-11-04-evals-gold-sets; echo "exit=$?"`
-Expected: `exit=0`（加 `--release` 则 exit 1，唯一发现 `audit_release_open_verify`，与 Task 12 的测试一致；`2026-11-04-data-foundation-2` 的历史第 1 轮无逐号处置，`audit.test.ts` 钉住其发现集合，不作门禁）。
+Expected: `exit=0`（加 `--release` 则 exit 1，唯一发现 `audit_release_open_verify`，与 Task 12 的测试一致）。
 
 - [ ] **Step 4: 实施记录收尾**
 
@@ -12453,13 +13085,13 @@ Expected: `exit=0`（加 `--release` 则 exit 1，唯一发现 `audit_release_op
 - [ ] **Step 5: 暂存与提交（指挥）**
 
 ```bash
-git add docs/evals/README.md docs/superpowers/specs/2026-11-04-evals-and-gold-sets-design.md docs/audits/2026-11-06-evals-gold-sets/01-implementation-log.md
+git add docs/evals/README.md docs/superpowers/specs/2026-11-04-evals-and-gold-sets-design.md docs/superpowers/specs/2026-11-04-SPEC-INDEX.md docs/audits/2026-11-06-evals-gold-sets/01-implementation-log.md
 ```
 ```bash
 git commit -m "docs(evals): F6 runbook, spec §18 implementation notes, full gate (F6 Task 16)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-PR 描述列出：§16 默认值（D1–D8）作为假设、§18.1 的偏差与 owner 事项、落地顺序（§0 R5-4：若计划三尚未合并，提示其把未入锁迁移改到 `20261110090000` 之后）。
+PR 描述列出：§16 默认值（D1–D8）作为假设、§18.1 的偏差与 owner 事项、后续事项（data-foundation-2 `index.json`）、落地顺序（§0 R5-4：若计划三尚未合并，提示其把未入锁迁移改到 `20261110090000` 之后）。
 
 ---
 
@@ -12493,7 +13125,7 @@ PR 描述列出：§16 默认值（D1–D8）作为假设、§18.1 的偏差与 
 6. §9 release: P1/P2 only (a P3 OPEN-verify is allowed). On the real F6 spec audit dir release mode therefore reports exactly `N11` (P1, `ACCEPT + OPEN-verify`); the test pins it.
 7. §8 selection: companies ranked by their smallest `sha256(seed + case_id)` (ties: key ascending), retracted cases excluded, `selected_case_ids` compared as a set; "first release" for the non-waivable `expert_sampling` is always assumed; `closure_ref` forms: `dq_quarantine:<uuid>`, a GitHub PR URL, `gold:<set_id>@<version>`.
 8. §10: `provenance_kind ≠ synthetic` is checked on the gold set of gold-set kinds (official, dual_source) — `CaseReport` has no provenance kind and replay/reference fixtures are not gold sets; `scope.markets` comes from the official set; freshness dataset = `<module>.<market lowercased>` (`facts.us`, as plan 2 writes it), read at validation time (no history table exists); `dual_source`/`reference_regression` evidence may omit `report` (the row's `report_ref` is used); `waivers` can only waive `gold_approval`. **Integration:** the lock check applies to gold-set kinds only; replay/reference reports are authenticated by the fixture file's committed bytes (`manifest_fixture`), because `lock.json` entries are `GoldFormat` gold sets and `--lock` parses every entry as one (Task 11 CCR 5).
-9. `data-foundation-2/index.json`: every round `uncommitted` + `unverified_target: true` (the audited bytes are unknown); `draft_commit_hint` records the commit that first stored each draft without claiming it was the audited byte string; the Claude review (02) is listed under `reconstructed.reviews`, not as a round.
+9. (deferred by Codex plan round 1 P2-4 — not created by this plan) `data-foundation-2/index.json`: every round `uncommitted` + `unverified_target: true` (the audited bytes are unknown); `draft_commit_hint` records the commit that first stored each draft without claiming it was the audited byte string; the Claude review (02) is listed under `reconstructed.reviews`, not as a round.
 
 ### B. W3（Task 7、8、9）
 
