@@ -12,6 +12,10 @@ import {Pool} from 'pg';
 import type {PoolClient} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {freshMigratedDatabase,replayFiles} from './fresh-db';
+// F3 Task 3
+import {PAGE_TEXT,docInsert,documentsDbContract,drain,extractionInsert,pageInsert} from './db-contract';
+import type {DocsContractHarness} from './db-contract';
+import {pgDocumentsDb} from './pg-documents-db';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261108090000_disclosure_documents.sql';
@@ -680,5 +684,85 @@ describe.skipIf(!enabled)('F3-0 disclosure documents migration on real PostgreSQ
   for(const fn of ['doc_extract_lock','claim_document_extract_lease','renew_document_extract_lease','reclassify_document','request_document_extract']){
    const d=await def(fn);expect(d).toMatch(/for no key update/i);expect(d).not.toMatch(/disclosure_documents where document_id = p_document for update/i);
   }
+ });
+});
+
+
+// ---------------------------------------------------------------- Task 3: pgDocumentsDb
+interface PgDocsHarness extends DocsContractHarness{pool:Pool;close():Promise<void>}
+async function pgDocsHarness():Promise<PgDocsHarness>{
+ const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
+ const pool=new Pool({connectionString:state.adminUrl,statement_timeout:8000});   // a regression that blocks fails cleanly instead of hanging afterAll
+ const issuer=async()=>{const id=randomUUID();await pool.query(`insert into public.issuers(issuer_id,canonical_name_en) values($1,'ZZ Docs Contract')`,[id]);return id;};
+ return {
+  pool,db:pgDocumentsDb(pool),issuerId:await issuer(),issuer,
+  batchId:async()=>{const id=randomUUID();await pool.query(`insert into public.ingest_batches(batch_id,producer,dataset) values($1,'documents-sync','documents.hkexnews')`,[id]);return id;},
+  user:async()=>{const id=randomUUID();await pool.query(`insert into auth.users(id,email) values($1,$2)`,[id,`${id}@example.test`]);return id;},
+  expire:async(kind,key,source)=>{
+   if(kind==='sync')await pool.query(`update public.document_sync_scope set lease_until=now()-interval '1 second' where issuer_id=$1 and source=$2`,[key,source]);
+   else if(kind==='extract')await pool.query(`update public.disclosure_documents set extract_lease_until=now()-interval '1 second' where document_id=$1`,[key]);
+   else await pool.query(`update public.document_extractions set candidates_lease_until=now()-interval '1 second' where extraction_id=$1`,[key]);
+  },
+  abandonPublication:async(candidate,gen)=>{await pool.query(`update public.candidate_publications set state='abandoned' where candidate_id=$1 and pub_gen=$2`,[candidate,gen]);},
+  close:async()=>{await pool.end();},
+ };
+}
+
+describe.skipIf(!enabled)('pgDocumentsDb on real PostgreSQL',()=>{
+ // The same scenarios memoryDocumentsDb passes in db.test.ts, now against the SQL functions.
+ documentsDbContract('pgDocumentsDb contract',pgDocsHarness);
+
+ describe('keyset paging over more than 1,000 rows (PostgREST max_rows is 1,000)',()=>{
+  let h:PgDocsHarness;
+  beforeAll(async()=>{h=await pgDocsHarness();},60000);
+  afterAll(async()=>{await h?.close();});
+  const N=1203;
+
+  it('readDocuments returns 1,203 documents exactly once, in (available_at desc, document_id desc) order, with ties on available_at',async()=>{
+   const iss=await h.issuer();const b=await h.batchId();const tag=randomUUID().slice(0,8);
+   // three documents per minute share an available_at: the document_id tiebreak is exercised.
+   // extract_failed keeps them out of storedDue for the rest of the suite.
+   await h.pool.query(`insert into public.disclosure_documents(document_id,issuer_id,source,market,source_ref,source_version,doc_class,classifier_gen,title,source_url,content_sha256,bytes,mime,storage_path,acquisition,
+     published_at,published_at_precision,available_at,available_date,permission,status,batch_id,code_version)
+    select gen_random_uuid(),$1,'hkexnews','HK','bulk-'||$3||'-'||g,1,'other',1,'t','https://x',encode(sha256(convert_to($3||g::text,'UTF8')),'hex'),1,'application/pdf','blobs/x.pdf','{}'::jsonb,
+     t.ts,'instant',t.ts,(t.ts at time zone 'UTC')::date,'public','extract_failed',$2,'c'
+    from generate_series(1,$4::int) g cross join lateral (select timestamptz '2020-01-01 00:00:00.000001+00' + make_interval(secs => (g/3)*60) as ts) t`,[iss,b,tag,N]);
+   const expected=(await h.pool.query(`select document_id from public.disclosure_documents where issuer_id=$1 order by available_at desc, document_id desc`,[iss])).rows.map(r=>r.document_id as string);
+   expect(expected).toHaveLength(N);
+   const first=await h.db.readDocuments(iss,{asOf:'2030-01-01',limit:1000});
+   expect(first.rows).toHaveLength(1000);expect(first.nextCursor).not.toBeNull();
+   const second=await h.db.readDocuments(iss,{asOf:'2030-01-01',limit:1000,cursor:first.nextCursor});
+   expect(second.rows).toHaveLength(N-1000);expect(second.nextCursor).toBeNull();
+   expect([...first.rows,...second.rows].map(r=>r.document_id)).toEqual(expected);
+   const small=await drain(p=>h.db.readDocuments(iss,{asOf:'2030-01-01',...p}),7);
+   expect(small.rows.map(r=>r.document_id)).toEqual(expected);expect(small.pages).toBe(Math.ceil(N/7));
+  },120000);
+
+  it('documentVersions and candidatesOf page past 1,000 rows without gaps or repeats',async()=>{
+   const iss=await h.issuer();const b=await h.batchId();const ref=`many-${randomUUID()}`;
+   await h.pool.query(`insert into public.disclosure_documents(document_id,issuer_id,source,market,source_ref,source_version,doc_class,classifier_gen,title,source_url,content_sha256,bytes,mime,storage_path,acquisition,
+     published_at,published_at_precision,available_at,available_date,permission,status,batch_id,code_version)
+    select gen_random_uuid(),$1,'cninfo','CN',$3,g,'other',1,'t','https://x',encode(sha256(convert_to($3||g::text,'UTF8')),'hex'),1,'application/pdf','blobs/x.pdf','{}'::jsonb,
+     now(),'date',now(),current_date,'public','extract_failed',$2,'c'
+    from generate_series(1,1001) g`,[iss,b,ref]);
+   const versions=await drain(p=>h.db.documentVersions('cninfo',ref,p),1000);
+   expect(versions.rows.map(r=>r.source_version)).toEqual(Array.from({length:1001},(_,i)=>i+1));expect(versions.pages).toBe(2);
+   expect((await h.db.documentVersions('cninfo',ref,{limit:1000})).rows).toHaveLength(999);   // P2-1: look-ahead pages hold ≤ LOOKAHEAD_MAX rows in every implementation
+   // 1,001 candidates on one extraction, inserted in one statement (equal created_at: the candidate_id tiebreak decides)
+   await h.db.reconcileScope('hkexnews',[{issuer_id:iss,reasons:['t'],priority:1,fetch_key:'00001'}]);
+   expect(await h.db.claimSyncLease(iss,'hkexnews',b,600)).toBe(true);
+   const {document_id}=await h.db.insertDocumentVersion(iss,'hkexnews',b,docInsert(),[]);
+   expect(await h.db.claimExtractLease(document_id,b,600)).toBe(true);
+   const ext=await h.db.finishExtract(document_id,b,extractionInsert(1),[pageInsert(1,PAGE_TEXT)]);
+   const value=await h.db.insertCitation({document_id,extraction_id:ext,page_no:1,char_start:0,char_end:1,bbox:null,snippet:Array.from(PAGE_TEXT)[0],text_hash:createHash('sha256').update(PAGE_TEXT,'utf8').digest('hex'),created_by:'extractor',created_ref:'t'});
+   expect(await h.db.claimCandidatesLease(ext,b,600)).toBe(true);
+   const rows=Array.from({length:1001},(_,i)=>({kind:'field' as const,extractor_kind:'rule' as const,extractor_ref:'bulk',natural_key:`k${i}`,citations:{value},payload:{i},fingerprint:createHash('sha256').update(String(i)).digest('hex'),input_snapshot:{} as never}));
+   expect(await h.db.insertCandidates(ext,b,rows)).toEqual({inserted:1001});   // one insert_candidates call (WRITE_MAX = 5000, no chunking)
+   const expected=(await h.pool.query(`select candidate_id from public.extraction_candidates where extraction_id=$1 order by created_at, candidate_id`,[ext])).rows.map(r=>r.candidate_id as string);
+   const cands=await drain(p=>h.db.candidatesOf({extractionId:ext},p),1000);
+   expect(cands.rows.map(r=>r.candidate_id)).toEqual(expected);expect(cands.pages).toBe(2);
+   const byIssuer=await drain(p=>h.db.candidatesOf({issuerId:iss,status:'candidate'},p),333);
+   expect(byIssuer.rows).toHaveLength(1001);expect(new Set(byIssuer.rows.map(r=>r.candidate_id)).size).toBe(1001);
+  },120000);
  });
 });
