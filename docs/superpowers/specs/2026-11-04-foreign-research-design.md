@@ -1,8 +1,8 @@
 # 外资研报模块 · 设计规格
 
-日期：2026-11-04（第 4 稿，Codex 三轮审计后；审计轨迹：`docs/audits/2026-11-04-foreign-research/` —— 01 Codex 第一轮、02 Codex 第二轮、03 处置表（含第三轮处置）、04 Codex 第三轮、05 Codex 第四轮）
+日期：2026-11-04（第 4 稿，Codex 三轮审计后；审计轨迹：`docs/audits/2026-11-04-foreign-research/` —— 01 Codex 第一轮、02 Codex 第二轮、03 处置表（含第三轮处置）、04 Codex 第三轮、05 Codex 第四轮）；2026-11-06 第 5 稿：Codex 第五轮（增量，限计划一 / 二落地代码，`docs/audits/2026-11-06-foreign-research/01-codex-spec-round5.md`）FR5-01–04 已按处方落实
 状态：草案，待 owner 评审（§15.2 有七项 owner 决策；其中 D1 许可确认是本模块任何对外功能的前置条件）
-上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（规格一：发行人、DQ 层，已落地，§14 为既定事实）；`docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md`（规格二：披露事实库，设计稿，未落地）；`docs/superpowers/specs/2026-10-17-analyst-scoring-layer-design.md`（前向评分内核，已落地）。并行规格：文档管道 F3、判断框架 F4、评测 F6、计划三（标识符与对账）——依赖接口见 §11。
+上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（规格一：发行人、DQ 层，已落地，§14 为既定事实）；`docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md`（规格二：披露事实库，已经 PR #102 落地，迁移 `20261106090000_financial_facts.sql`）；`docs/superpowers/specs/2026-10-17-analyst-scoring-layer-design.md`（前向评分内核，已落地）。并行规格：文档管道 F3、判断框架 F4、评测 F6、计划三（标识符与对账）——依赖接口见 §11。
 总纲：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §3 与 §5。本规格逐条对照其硬约束：
 - 约束 1（只用一手来源）：研报原件只来自 owner 合法持有的 PDF，由管理员上传；不抓取任何付费墙或对方网站；Tushare `report_rc` 不是来源（§6.6）。
 - 约束 2（每个数字可回放）：每条证据行绑定一次不可变的解析运行（产物哈希）与——若为 LLM 抽取——一次不可变的抽取运行（原始请求 / 响应 / 提示词版本）；带 `page`、`char_start/char_end`、`available_at`（我方入库时间）与 `code_version`；每次发布留一份不可变的发布快照（§4.8）；引用跨度必须在页文本中逐字命中（§7.1 R1），否则不发布。
@@ -40,7 +40,7 @@
 - 任何自动抓取（券商门户、终端、对方网站、邮件附件自动导入）。本模块的唯一入口是管理员手工上传。
 - 对外提供 PDF 下载、全文检索、页面图像、表格数据（包括登录用户）。
 - 盈利预测表（EPS / 营收 / 净利预测）的结构化抽取（§16 问题 3）。
-- **总纲偏差（记录）**：总纲 §3.3"报告与事实对账"本期不做。原因：本期不抽取报告正文中的历史财务数字，没有可对账的左值；规格二 `financial_facts` 尚未落地。恢复条件：预测 / 历史数字表抽取入范围且规格二落地。owner 在 D1 评审时一并知悉。
+- **总纲偏差（记录）**：总纲 §3.3"报告与事实对账"本期不做。原因：本期不抽取报告正文中的历史财务数字，没有可对账的左值（规格二 `financial_facts` 已落地，右值存在，但左值不在本期范围）。恢复条件：预测 / 历史数字表抽取入范围。owner 在 D1 评审时一并知悉。
 - 详情页"最新价 / 与目标价的当前距离"：现有 `/api/quote` 是多提供商级联的实时头条价，无留存快照与代码谱系，不满足约束 2；本期不显示（§16 问题 7）。
 - `/stock/[ticker]` 的 `broker_reports` mock 数据与 `/api/consensus/[ticker]` 的 mock 回退：**不**作为可选项——它们是占位数据（总纲约束 4）。FR-3 的同一变更中隐藏 mock 研报块、`/api/consensus` 的 mock 分支改为返回 `{source:'none'}`（§9.4）；旧表 `broker_reports` 与两个 watchlist 函数不动（§16 问题 5）。
 - 把摘要镜像进 owner 的 Research OS：不做。
@@ -60,15 +60,15 @@
 | 3. 共识接口 | `src/app/api/consensus/[ticker]/route.ts`：A 股 + `TUSHARE_TOKEN` → `fetchTushareReportRc`（`src/lib/data/sources/tushare.ts` 553–602 行；仓库注释称需 5000 积分，未独立核实）→ `deriveConsensus`；否则 mock 回退 | mock 回退改为 `{source:'none'}`（§9.4）；`report_rc` 定位见 §6.6 |
 | 4. 文档摄入 | `src/lib/research/ingest/collectors/*`：公开披露采集；`sources.ts::ingestSource(ctx, input)` 写 `research_source_documents`（租户表、`raw_text` 不可变、`(user_id, content_hash)` 唯一） | 不把研报写进 `research_source_documents` |
 | 5. 发行人解析 | `src/lib/entities/resolve.ts::resolveIssuer(client, {ticker\|cik\|lei\|isin}, {today})`，每次一个标识符，返回 `issuer_id`，无 provenance；`tickerCandidates` 模块私有；`issuers`、`issuer_securities(ticker, valid_from, valid_to, is_primary)` | 本模块自带 `parseBrokerTicker`（§5.4）；解析快照（所用 `issuer_securities` 行与 `today`）写 `targets.resolution` |
-| 6. 质量设施 | `startBatch(client, input)/finishBatch(client, …)`；`batchStatusFromCounts`：`fetched>0` 且无结果 → `failed`；`failed>0` 或任一非信息错误 → 有落地则 `partial` 否则 `failed`；`quarantined` 计入"落地"；`INFO_CODES=['skipped_summary','relink']`；`quarantine(client, input)`（同键 open 唯一）；`recordAttempt(client, dataset, …)`（最后写入者胜，假定单生产者） | 复用；dataset `broker_research`；批次计数见 §6.2；新增信息码见 §7.4 |
+| 6. 质量设施 | `startBatch(client, input)/finishBatch(client, …)`；`batchStatusFromCounts`：`fetched>0` 且无结果 → `failed`；`failed>0` 或任一非信息错误 → 有落地则 `partial` 否则 `failed`；`quarantined` 计入"落地"；`INFO_CODES=['skipped_summary','relink','rule_warning_summary','coverage_summary','deadline_hit']`（计划二落地后五项）；`quarantine(client, input)`（同键 open 唯一）；`recordAttempt(client, dataset, …)`（最后写入者胜，假定单生产者） | 复用；dataset `broker_research`；批次计数见 §6.2；新增信息码见 §7.4 |
 | 7. 隔离处理 | `POST /api/admin/dq/quarantine/[id]`：`requireAdminUser`、Content-Type 与 Origin 校验、`resolveQuarantine`、`research_audit_log` | 同模式；钩子只写覆盖表（§7.3） |
 | 8. 管理员 | `requireAdminUser()`（`profiles.role='admin'`）；`/admin/{dq,securities,usage}` 页面模式 | 新页 `/admin/broker-research` 同模式 |
 | 9. 存储 | 私有桶 `security-snapshots`（`insert into storage.buckets … on conflict do update`，`public=false`，`file_size_limit=52428800`=50 MiB）；`src`、`scripts` 内**没有**签名 URL 调用 | 新桶同法；签名上传 / 读取 URL 与 `move` 首次引入，本地栈验证（§12.3） |
 | 10. 前向评分 | `src/lib/scoring/forward.ts::scoreForward(call, bars)`：基准为调用时刻所在交易所日期**当日或之后**的首根 K 线收盘；5/20/60 交易日；`ForwardCall{market, action, at, confidence}`；`src/lib/analyst/score-store.ts` 有"基准 K 线超出取数窗口则不评分"的截断保护；K 线来自 `fetchEastmoneyKline`（东方财富适配器，支持 `qfq/hfq/none`） | §10.3 |
 | 11. LLM | `resolvePlatformLlm()` 只解析配置；注册表快照 `src/lib/llm/registry/{models,providers}.json`；`ajv@8.20.0`；**没有** PDF 解析依赖 | 原始请求 / 响应由本模块留存（§4.3） |
-| 12. cron | `vercel.json` 六个 cron；`CRON_SECRET` Bearer + `timingSafeEqual`；`maxDuration=300`；hnd1 | 新增每日核验 cron 与 outbox 投递 cron（§8.3） |
+| 12. cron | `vercel.json` 七个 cron（含计划二的 `/api/cron/facts-sync?market=US`，新增时保留）；`CRON_SECRET` Bearer + `timingSafeEqual`；`maxDuration=300`；hnd1 | 新增每日核验 cron 与 outbox 投递 cron（§8.3） |
 | 13. 测试门禁 | `criticalSuites` 精确清单；`scripts/ci/research-db.ts` 起隔离 PostgreSQL；`scripts/s4/local-db.ts` 只建 `storage.buckets` 桩表 | SQL 集成套件进 critical；存储 HTTP 套件另设 `test:storage` |
-| 14. 迁移 | 最新已锁 `20261105091000_issuers.sql`；规格二预定 `20261106090000`；`database.types.ts` 手工维护 | 本规格迁移 `20261107090000_broker_research.sql`（撞号则顺延并记入 §17） |
+| 14. 迁移 | 最新已锁 `20261106090000_financial_facts.sql`（计划二）；并行模块已占 `20261107…`–`20261111…`；`database.types.ts` 手工维护 | 本规格迁移 `20261113090000_broker_research.sql`（本模块只用 `20261113HHMMSS_*`；锁文件只追加） |
 | 15. i18n | `messages/{zh,en}/*.json` + parity 测试 | 新增 `intel.foreignResearch.*`、`admin.brokerResearch.*` |
 | 16. 对方页面 | `REPORT.md` 第 58 行；总纲 §3.1：301 篇一页纸（机构、行业、评级、中英标题、当前价 / 目标价 / 空间、报告定位、核心结论、方法论、风险、代码与日期、分类计数）；交互未验证 | 只作功能参考；§3 逐项分类；不导入任何数据 |
 
@@ -97,7 +97,7 @@
 
 ## 4. 数据模型
 
-迁移 `supabase/migrations/20261107090000_broker_research.sql`，可重放。**所有基表只授 service_role；公开读一律经 §4.11 视图**；对每个视图与函数先 `revoke all … from public, anon, authenticated` 再按需 `grant`。视图**不调用任何函数**（视图里引用的函数需调用者有 EXECUTE 权；许可谓词内联为 SQL 表达式）。`database.types.ts` 手工补齐。
+迁移 `supabase/migrations/20261113090000_broker_research.sql`（如需拆分，同日 `20261113HHMMSS_*`），可重放。**所有基表只授 service_role；公开读一律经 §4.11 视图**；对每个视图与函数先 `revoke all … from public, anon, authenticated` 再按需 `grant`。视图**不调用任何函数**（视图里引用的函数需调用者有 EXECUTE 权；许可谓词内联为 SQL 表达式）。`database.types.ts` 手工补齐。
 
 表清单（21 张）：`broker_research_settings`、`broker_report_licences`、`broker_report_upload_intents`、`broker_report_documents`、`broker_report_runs`、`broker_research_reports`、`broker_report_targets`、`broker_report_target_overrides`、`broker_report_fields`、`broker_report_snippets`、`broker_report_summaries`、`broker_report_publications`、`broker_report_rule_receipts`、`broker_purge_steps`、`research_institutions`、`research_rating_scales`、`research_analysts`、`broker_report_analysts`、`broker_report_access_log`、`broker_eval_receipts`、`broker_outbox`。
 
@@ -511,7 +511,7 @@ export interface BrokerResearchDb {
 
 ### 7.4 批次信息码
 
-新增 `INFO_CODES`：`rule_warning_summary`、`eval_receipt_absent`。非信息码：`f3_failed`、`f3_timeout`、`lease_lost`、`lease_expired`、`llm_unavailable`、`llm_quota`、`llm_schema_invalid`、`span_unverified_summary`。
+`INFO_CODES` 已含 `skipped_summary`、`relink`、`rule_warning_summary`、`coverage_summary`、`deadline_hit`；本模块只追加 `eval_receipt_absent`（保留既有项）。`span_unverified_summary`、`rules_failed_summary` 保持非信息码。非信息码：`f3_failed`、`f3_timeout`、`lease_lost`、`lease_expired`、`llm_unavailable`、`llm_quota`、`llm_schema_invalid`、`span_unverified_summary`。
 
 ---
 
