@@ -919,6 +919,7 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
   const lid=()=>`${LINEAGE}-${randomUUID().slice(0,8)}`;
   /** inside a rolled-back transaction only: no running lineage cycle from another suite, plus a "latest" row set_merge writes to */
   const lineageStage=async(c:PoolClient,pending:unknown[])=>{
+   await c.query(`select pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:'||$1))`,[LINEAGE]);   // pair cycle lock FIRST, then cycle rows (same order as the runner / open_reconcile_cycle; avoids deadlock with the real lineage pair run in lineage.integration.test.ts)
    await c.query(`update public.dq_reconcile_cycles set status='complete', finished_at=now() where pair=$1 and status='running'`,[LINEAGE]);
    const id=`${LINEAGE}-old-${randomUUID().slice(0,8)}`;
    await c.query(`insert into public.dq_reconcile_cycles(pair,cycle_id,started_at,finished_at,members,status,expected_total,detail) values($1,$2,now()+interval '100 years',now()+interval '100 years','[]','complete',0,$3::jsonb)`,[LINEAGE,id,JSON.stringify({pending_members:pending})]);

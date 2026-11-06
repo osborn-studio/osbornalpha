@@ -34,7 +34,7 @@ import {inputsHashNow} from './pairs';
 import {runReconcile} from './run';
 import type {ReconcileDeps} from './run';
 import type {PairContext} from './types';
-import {US_SAMPLE_PATH,buildSampleFiling} from './us-sample';
+import {US_SAMPLE_PATH,buildSampleFiling,usNaturalKey} from './us-sample';
 import type {UsSample} from './us-sample';
 
 const enabled=!!process.env.S4_TEST_STATE;
@@ -100,7 +100,7 @@ describe.skipIf(!enabled)('us.companyfacts_vs_ixbrl on real PostgreSQL (§9.3)',
   return enc(JSON.stringify({...v1,issuers:[...issuers,{cik:ZZ.cik,ticker:ZZ.ticker,regime:'10-K',filings:[zz]}]}));
  }
  const revFactId=async()=>(await q(`select fact_id from public.financial_facts where issuer_id=$1 and concept='revenue'`,[ids.ZZ]))[0].fact_id as string;
- const zzItem=async()=>(await q(`select id,status,dataset,detail,payload from public.dq_quarantine where reason_code='reconcile_mismatch' and detail->>'pair'=$1 and payload->'fact_ids'->>0=$2`,[PAIR,await revFactId()]))[0] as {id:string;status:string;dataset:string;detail:Record<string,any>;payload:Record<string,any>};
+ const zzItem=async()=>{const r=await q(`select id,status,dataset,detail,payload from public.dq_quarantine where reason_code='reconcile_mismatch' and detail->>'pair'=$1 and payload->'fact_ids'->>0=$2`,[PAIR,await revFactId()]);expect(r).toHaveLength(1);return r[0] as {id:string;status:string;dataset:string;detail:Record<string,any>;payload:Record<string,any>};};
  const netMargin=async()=>(await db.metricsOfIssuer(ids.ZZ,'US',FORMULA_VERSION)).find(m=>m.metric==='net_margin'&&m.duration==='12M');
 
  beforeAll(async()=>{
@@ -120,6 +120,7 @@ describe.skipIf(!enabled)('us.companyfacts_vs_ixbrl on real PostgreSQL (§9.3)',
   ids.ZZ=await provision(ZZ.ticker,ZZ.cik,ZZ.name);fixtures.set(ZZ.cik.padStart(10,'0'),zzCompanyfacts());
   scope=Object.entries(ids).map(([t,id])=>({issuer_id:id,fetch_key:(t==='ZZ'?ZZ.cik:rekeyCik(REAL.find(r=>r.ticker===t)!.cik)).padStart(10,'0')}));
   await db.reconcileScope('US',scope.map(x=>({...x,reasons:['test'],priority:10})));
+  // isolation rests on issuerIds filtering in runFactsSync and priority 0 / no reasons after the suite (a sync's lease release overwrites next_due_at)
   await q(`update public.fact_sync_scope set next_due_at='2999-01-01' where issuer_id = any($1::uuid[])`,[Object.values(ids)]);
   const deps:SyncDeps={db,tables,storage:memorySnapshotStore(),
    fetchUs:async(cik10:string):Promise<RawSnapshot>=>{const b=fixtures.get(cik10);if(!b)throw new ProviderError('no_companyfacts',cik10);return snapshotOf(b,{source:'edgar',url:companyFactsUrl(cik10)});},
@@ -151,6 +152,12 @@ describe.skipIf(!enabled)('us.companyfacts_vs_ixbrl on real PostgreSQL (§9.3)',
   expect(r1.members.every(m=>m.outcome==='done')).toBe(true);
   const rows=await q(`select natural_key,outcome,passed,issuer_id from public.dq_reconciliations where pair=$1 and cycle_id=$2`,[PAIR,firstCycle]) as {natural_key:string;outcome:string;passed:boolean;issuer_id:string}[];
   expect(rows.length).toBe(r1.cycle!.expectedTotal);
+  // independent derivation: the complete (natural key → owning issuer) set from the injected, re-keyed manifest
+  const injected=JSON.parse(new TextDecoder().decode(sampleBytes)) as UsSample;
+  const ownerOf=(cik:string)=>cik===ZZ.cik?ids.ZZ:ids[REAL.find(r=>rekeyCik(r.cik)===cik)!.ticker];
+  const expectedPairs=injected.issuers.flatMap(i=>i.filings.flatMap(f=>f.expected_keys.map(k=>`${usNaturalKey(i.cik,f.accn,k)}@${ownerOf(i.cik)}`))).sort();
+  expect(expectedPairs.length).toBeGreaterThan(0);
+  expect(rows.map(r=>`${r.natural_key}@${r.issuer_id}`).sort()).toEqual(expectedPairs);
   expect(new Set(rows.map(r=>r.natural_key)).size).toBe(rows.length);
   const byKey=(a:{natural_key:string},b:{natural_key:string})=>a.natural_key<b.natural_key?-1:1;
   const realFailures=rows.filter(r=>r.issuer_id!==ids.ZZ&&!r.passed).map(r=>({natural_key:unkey(r.natural_key),outcome:r.outcome==='compared'?'compared_failed':r.outcome})).sort(byKey);
@@ -167,9 +174,9 @@ describe.skipIf(!enabled)('us.companyfacts_vs_ixbrl on real PostgreSQL (§9.3)',
   const visible=await db.readFacts(ids.ZZ,'US',{concepts:['revenue'],asOf:today()});
   expect(visible.rows.filter(r=>r.period_end==='2024-12-31')).toEqual([]);
   expect(await netMargin()).toBeUndefined();
-  const [rev]=await db.stateRevs([ids.ZZ],'US');
-  const metric=(await db.metricsOfIssuer(ids.ZZ,'US',FORMULA_VERSION))[0];
-  if(metric)expect(metric.based_on_lineage).toEqual([{issuer_id:ids.ZZ,state_rev:rev.state_rev}]);
+  const metrics=await db.metricsOfIssuer(ids.ZZ,'US',FORMULA_VERSION);
+  // the quarantine hook rematerialized: without revenue no metric of ZZ is left (net_margin was present before)
+  expect(metrics).toEqual([]);
  },300_000);
 
  it('restore is refused while the latest result is not passing',async()=>{

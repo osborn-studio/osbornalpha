@@ -55,6 +55,7 @@ describe.skipIf(!enabled)('facts.lineage_same_day on real PostgreSQL (§9.3)',()
   };
   s=await provision(S);t=await provision(T);
   await db.reconcileScope('US',[{issuer_id:s,reasons:['test'],priority:10,fetch_key:S.cik.padStart(10,'0')},{issuer_id:t,reasons:['test'],priority:10,fetch_key:T.cik.padStart(10,'0')}]);
+  // isolation rests on issuerIds filtering in runFactsSync and priority 0 / no reasons after the suite (a sync's lease release overwrites next_due_at)
   await q(`update public.fact_sync_scope set next_due_at='2999-01-01' where issuer_id = any($1::uuid[])`,[[s,t]]);
   const bytes=new Map([[S.cik.padStart(10,'0'),doc(S,false)],[T.cik.padStart(10,'0'),doc(T,true)]]);
   const sync=await runFactsSync({db,tables,storage:memorySnapshotStore(),
