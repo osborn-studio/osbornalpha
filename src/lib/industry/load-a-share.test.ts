@@ -5,7 +5,8 @@ import {memoryTableClient} from '../db/memory-table-client';
 import {memoryFactsDb} from '../facts/memory-facts-db';
 import {applyAShareLoad,planAShareLoad,runLoadAShare} from './load-a-share';
 import {memoryIndustryDb} from './memory-industry-db';
-import {fixtureTushareCall} from './providers/tushare-industry';
+import {memorySnapshotStore} from '../facts/snapshot-store';
+import {IndustryProviderError,fixtureTushareCall} from './providers/tushare-industry';
 import type {StockBasicRow} from './providers/tushare-industry';
 import type {IndustryDeps,ManifestStore} from './types';
 
@@ -53,7 +54,7 @@ describe('applyAShareLoad',()=>{
   const [issuer]=t.rows('issuers');
   expect(issuer).toMatchObject({canonical_name_zh:'贵州茅台酒股份有限公司',cninfo_org_id:'gssz0600519',status:'active',lei:null,cik:null,usci:null,
    provenance:{cninfo_org_id:{source:'cninfo:topSearch',observed_at:NOW},canonical_name_zh:{source:'tushare:stock_basic',observed_at:NOW}}});
-  expect(t.rows('issuer_securities')).toEqual([{issuer_id:issuer.issuer_id,ticker:'600519.SH',isin:null,figi:null,share_class:'A',is_primary:true,valid_from:'2001-08-27',valid_to:null,source:'tushare:stock_basic',provenance:{list_date:'2001-08-27',exchange:'SSE',list_status:'L'}}]);
+  expect(t.rows('issuer_securities')).toEqual([{issuer_id:issuer.issuer_id,ticker:'600519.SH',isin:null,figi:null,share_class:'A',is_primary:true,valid_from:'2001-08-27',valid_to:null,source:'tushare:stock_basic',provenance:{list_date:'2001-08-27',exchange:'SSE',list_status:'L',listing:{list_date:'2001-08-27',exchange:'SSE',list_status:'L',source:'tushare:stock_basic',observed_at:NOW}}}]);
   const second=await applyAShareLoad(t,plan,opts());
   expect(second.counts).toMatchObject({inserted:0,duplicates:1});
   expect(lookup).toHaveBeenCalledTimes(1);
@@ -127,6 +128,43 @@ describe('applyAShareLoad',()=>{
  });
 });
 
+describe('listing-date evidence, delisting and merged owners',()=>{
+ const sec=(issuer:string,ticker:string,prov:Record<string,unknown>={})=>({issuer_id:issuer,ticker,isin:null,share_class:'A',is_primary:true,valid_from:'2026-01-05',valid_to:null,source:'seed',provenance:prov});
+ it('fast path: an existing security lacking listing provenance gets it (valid_from untouched); a second run does not rewrite it',async()=>{
+  const t=tablesFor();
+  await t.insert('issuers',{issuer_id:'i-1',canonical_name_zh:'茅台',cninfo_org_id:'gssz0600519',status:'active',provenance:{}});
+  await t.insert('issuer_securities',sec('i-1','600519.SH',{keep:1}));
+  const plan=planAShareLoad([sb({})],UNIVERSE,TODAY);
+  const r=await applyAShareLoad(t,plan,opts());
+  expect(r.counts).toMatchObject({duplicates:1,inserted:0});
+  const row=t.rows('issuer_securities')[0];
+  expect(row.valid_from).toBe('2026-01-05');
+  expect(row.provenance).toEqual({keep:1,listing:{list_date:'2001-08-27',exchange:'SSE',list_status:'L',source:'tushare:stock_basic',observed_at:NOW}});
+  const upd=vi.spyOn(t,'update');
+  await applyAShareLoad(t,plan,opts({observedAt:'2026-11-07T22:30:00.000Z'}));
+  expect(upd).not.toHaveBeenCalled();
+ });
+ it('attachSecurity duplicate (recheck path) also records the evidence',async()=>{
+  const t=tablesFor();
+  await t.insert('issuers',{issuer_id:'i-1',canonical_name_zh:'茅台',cninfo_org_id:'gssz0600519',status:'active',provenance:{}});
+  await t.insert('issuer_securities',sec('i-1','600519.SH'));
+  await applyAShareLoad(t,planAShareLoad([sb({})],UNIVERSE,TODAY),opts({recheckOrgIds:true}));
+  expect(t.rows('issuer_securities')[0]).toMatchObject({valid_from:'2026-01-05',provenance:{listing:{list_date:'2001-08-27',source:'tushare:stock_basic',observed_at:NOW}}});
+ });
+ it('a merged owner is not a fast-path duplicate: it goes through the full path and is skipped with a reason',async()=>{
+  const t=tablesFor();lookup.mockClear();
+  await t.insert('issuers',{issuer_id:'i-m',canonical_name_zh:'旧',cninfo_org_id:'gssz0600519',status:'merged',merged_into:'x',provenance:{}});
+  await t.insert('issuer_securities',{...sec('i-m','600519.SH'),valid_to:'2099-01-01'});
+  const r=await applyAShareLoad(t,planAShareLoad([sb({})],UNIVERSE,TODAY),opts());
+  expect(lookup).toHaveBeenCalledTimes(1);
+  expect(r.counts.duplicates).toBe(0);expect(r.skippedSummary).toEqual({issuer_not_active:1});
+ });
+ it('delisted needs list_status D and a delist_date; a D row without one is rejected, not attached',()=>{
+  const plan=planAShareLoad([sb({list_status:'D',delist_date:'20231020'}),sb({ts_code:'000858.SZ',symbol:'000858',list_status:'D',delist_date:null})],UNIVERSE,TODAY);
+  expect(plan.skipped).toEqual(['delisted:600519.SH']);expect(plan.rejected).toEqual(['rejected_delist_date:000858.SZ']);expect(plan.candidates).toEqual([]);
+ });
+});
+
 describe('runLoadAShare (real stock_basic recordings: 10 listed, 2 delisted)',()=>{
  const REAL=['000001.SZ','000858.SZ','000869.SZ','600036.SH','600519.SH','600887.SH','601166.SH','601318.SH','601398.SH','603288.SH'];
  const realLookup=vi.fn(async(symbol:string)=>({orgId:`org${symbol}`,name:symbol,category:'A股'}));
@@ -149,6 +187,23 @@ describe('runLoadAShare (real stock_basic recordings: 10 listed, 2 delisted)',()
   expect(batch).toMatchObject({producer:'load-a-share',dataset:'issuers.a_stock',status:'success',triggered_by:'cron',code_version:'test-sha'});
   expect(batch.errors).toEqual([{code:'skipped_summary',message:JSON.stringify({delisted:2})}]);
   expect(t.rows('dq_freshness')[0]).toMatchObject({dataset:'issuers.a_stock',expected_cadence:'daily',status:'fresh'});
+ });
+ it('apply: a quota error while fetching is receipted (batch failed, ok:false attempt); a dry run with the same error writes nothing',async()=>{
+  const t=tablesFor();const d={...depsFor(t),tushare:async()=>{throw new IndustryProviderError('quota_exhausted','api_code_40203');}};
+  await expect(runLoadAShare(d,{apply:true,sleep:noSleep,lookupOrgId:realLookup})).rejects.toMatchObject({code:'quota_exhausted'});
+  const [batch]=t.rows('ingest_batches');
+  expect(batch).toMatchObject({producer:'load-a-share',status:'failed'});
+  expect(batch.errors).toEqual([{code:'quota_exhausted',message:'api_code_40203'}]);
+  expect(t.rows('dq_freshness')[0]).toMatchObject({dataset:'issuers.a_stock',status:'missing',last_ok_at:null});
+  expect(t.rows('dq_freshness')[0].last_attempt_at).toBeTruthy();
+  const t2=tablesFor();
+  await expect(runLoadAShare({...depsFor(t2),tushare:d.tushare},{apply:false,sleep:noSleep})).rejects.toMatchObject({code:'quota_exhausted'});
+  expect(t2.rows('ingest_batches')).toEqual([]);expect(t2.rows('dq_freshness')).toEqual([]);
+ });
+ it('apply with a snapshot store persists every stock_basic page',async()=>{
+  const t=tablesFor();const d=depsFor(t);await seedUniverse(d);const store=memorySnapshotStore();
+  await runLoadAShare(d,{apply:true,sleep:noSleep,lookupOrgId:realLookup,snapshots:{store}});
+  expect(store.objects.size).toBe(6);   // L, P, D pages × (bytes + meta)
  });
  it('refuses to apply without a code version',async()=>{
   const d={...depsFor(),codeVersion:null};await seedUniverse(d);

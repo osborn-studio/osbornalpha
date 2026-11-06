@@ -71,6 +71,9 @@ async function keysetAll(tables:TableClient,table:string,match:Row,range:RangeOp
  }
 }
 const SEC_KEY=['issuer_id','ticker','valid_from'];
+// INDUSTRY:BEGIN — keyset paging helper reused by src/lib/industry/facts-scope.ts (industry spec §4.10)
+export {keysetAll};
+// INDUSTRY:END
 
 /**
  * Security rows current at `today` by the landed predicate (isCurrentSecurity). Open rows page by

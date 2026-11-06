@@ -32,8 +32,8 @@ import {errorMessage,loaderOutcome,summarizeSkips,withSkippedSummary} from '../e
 import {resolveOrgId} from '../research/ingest/collectors/cninfo';
 import type {OrgLookup} from '../research/ingest/collectors/cninfo';
 import type {IndustryDeps} from './types';
-import type {StockBasicRow,TusharePage} from './providers/tushare-industry';
-import {defaultTushareCall,fetchStockBasic,ymdToIso} from './providers/tushare-industry';
+import type {SnapshotCapture,StockBasicRow,TusharePage} from './providers/tushare-industry';
+import {IndustryProviderError,defaultTushareCall,fetchStockBasic,ymdToIso} from './providers/tushare-industry';
 
 export const A_SHARE_DATASET='issuers.a_stock';
 export const A_SHARE_PRODUCER='load-a-share';
@@ -57,7 +57,11 @@ export function planAShareLoad(rows:StockBasicRow[],universe:ReadonlySet<string>
   if(!m){plan.rejected.push(`rejected_ts_code:${r.ts_code}`);continue;}
   if(seen.has(ts)){plan.skipped.push(`repeated_row:${ts}`);continue;}
   seen.add(ts);
-  if(r.list_status==='D'){plan.skipped.push(`delisted:${ts}`);continue;}
+  if(r.list_status==='D'){
+   // delisted only with a delist_date; a 'D' row without one is anomalous evidence and is rejected, never attached as listed
+   if(r.delist_date?.trim()){plan.skipped.push(`delisted:${ts}`);continue;}
+   plan.rejected.push(`rejected_delist_date:${ts}`);continue;
+  }
   if(B_SHARE.test(ts)){plan.skipped.push(`b_share:${ts}`);continue;}
   if(!universe.has(ts)){plan.skipped.push(`not_in_universe:${ts}`);continue;}
   const listDate=ymdToIso(r.list_date);
@@ -74,6 +78,18 @@ export interface AShareApplyResult{counts:BatchCounts;errors:BatchError[];skippe
 
 const str=(v:unknown)=>typeof v==='string'&&v.length>0?v:null;
 const provOf=(row:Row|undefined)=>(row?.provenance&&typeof row.provenance==='object'?row.provenance:{}) as Record<string,unknown>;
+/**
+ * Persists the stock_basic listing evidence (list_date, source, observed_at) into the provenance of an EXISTING current
+ * security row without touching valid_from (spec 3 owns window reconciliation). Idempotent: unchanged evidence is not rewritten.
+ */
+async function recordListingEvidence(tables:TableClient,sec:Row,c:AShareCandidate,observedAt:string):Promise<void>{
+ if(c.list_date===null)return;
+ const prov=provOf(sec);
+ const have=(prov.listing&&typeof prov.listing==='object'?prov.listing:{}) as Record<string,unknown>;
+ if(have.list_date===c.list_date&&have.exchange===c.exchange&&have.list_status===c.list_status&&have.source===STOCK_BASIC_SOURCE)return;
+ await tables.update('issuer_securities',{issuer_id:String(sec.issuer_id),ticker:String(sec.ticker),valid_from:String(sec.valid_from)},
+  {provenance:{...prov,listing:{list_date:c.list_date,exchange:c.exchange,list_status:c.list_status,source:STOCK_BASIC_SOURCE,observed_at:observedAt}}});
+}
 const isUniqueViolation=(e:unknown)=>e instanceof TableError&&e.code==='23505';
 
 async function issuerByOrgId(tables:TableClient,orgId:string):Promise<Row|null>{
@@ -99,7 +115,10 @@ export async function applyAShareLoad(tables:TableClient,plan:AShareLoadPlan,opt
  for(const c of plan.candidates){
   try{
    const owner=await currentOwner(tables,c.ts_code,today);
-   if(owner&&str(owner.issuer.cninfo_org_id)&&!opts.recheckOrgIds){counts.duplicates++;continue;}   // fast path, no network
+   if(owner&&owner.issuer.status==='active'&&str(owner.issuer.cninfo_org_id)&&!opts.recheckOrgIds){   // fast path, no network
+    await recordListingEvidence(tables,owner.security,c,opts.observedAt);
+    counts.duplicates++;continue;
+   }
    if(lookups>=maxLookups){skips.push(`lookup_deferred:${c.ts_code}`);continue;}
    if(lookups>0)await wait(ORG_LOOKUP_INTERVAL_MS);
    lookups++;
@@ -148,9 +167,14 @@ export async function applyAShareLoad(tables:TableClient,plan:AShareLoadPlan,opt
     skips.push(`claim_pending:${c.ts_code}`);continue;
    }
    const res=await attachSecurity(tables,{issuer_id:issuerId,ticker:c.ts_code,share_class:'A',is_primary:true,valid_from:c.list_date??today,source:STOCK_BASIC_SOURCE,
-    provenance:{list_date:c.list_date,exchange:c.exchange,list_status:c.list_status}});
+    provenance:{list_date:c.list_date,exchange:c.exchange,list_status:c.list_status,
+     listing:{list_date:c.list_date,exchange:c.exchange,list_status:c.list_status,source:STOCK_BASIC_SOURCE,observed_at:opts.observedAt}}});
    if(res==='inserted')counts.inserted++;
-   else if(res==='duplicate')counts.duplicates++;
+   else if(res==='duplicate'){
+    const mine=(await tables.select('issuer_securities',{issuer_id:issuerId,ticker:c.ts_code})).find(r=>isCurrentSecurity(r,today));
+    if(mine)await recordListingEvidence(tables,mine,c,opts.observedAt);
+    counts.duplicates++;
+   }
    else{
     await fileClaim(tables,{issuer_id:issuerId,id_type:'cninfo_org_id',value:orgId,source:STOCK_BASIC_SOURCE});
     skips.push(`claim_pending:${c.ts_code}`);
@@ -162,7 +186,7 @@ export async function applyAShareLoad(tables:TableClient,plan:AShareLoadPlan,opt
  return {counts,errors:withSkippedSummary(errors,skippedSummary,rejectedSummary),skippedSummary,rejectedSummary,issuers,lookups};
 }
 
-export interface RunLoadAShareOptions{apply:boolean;triggeredBy?:TriggeredBy;today?:string;maxLookups?:number;recheckOrgIds?:boolean;lookupOrgId?:(symbol:string)=>Promise<OrgLookup|null>;sleep?:(ms:number)=>Promise<void>}
+export interface RunLoadAShareOptions{apply:boolean;triggeredBy?:TriggeredBy;today?:string;maxLookups?:number;recheckOrgIds?:boolean;lookupOrgId?:(symbol:string)=>Promise<OrgLookup|null>;sleep?:(ms:number)=>Promise<void>;snapshots?:SnapshotCapture}
 export interface RunLoadAShareResult{status:BatchStatus|'dry_run';batchId:string|null;plan:{candidates:number;skipped:Record<string,number>;rejected:Record<string,number>};apply:AShareApplyResult|null;exitCode:0|1}
 
 /** Reads the active a_stock universe (security_universe_memberships; PK (ticker, universe) → ticker unique within it). */
@@ -170,23 +194,32 @@ export async function aStockUniverse(tables:TableClient):Promise<Set<string>>{
  return new Set((await selectAll(tables,'security_universe_memberships',{universe:'a_stock',is_active:true},'ticker')).map(r=>String(r.ticker).trim().toUpperCase()));
 }
 
-/** Job entry (cron / script): stock_basic L, P and D passes → plan → (apply) → receipt + freshness. */
+/** Job entry (cron / script): stock_basic L, P and D passes → plan → (apply) → receipt + freshness. Apply mode opens the batch BEFORE fetching, so a failed fetch or plan is receipted (failed + ok:false attempt); a dry run writes nothing. */
 export async function runLoadAShare(deps:IndustryDeps,opts:RunLoadAShareOptions):Promise<RunLoadAShareResult>{
+ if(opts.apply&&!deps.codeVersion)throw new Error('code_version_missing');
  const call=deps.tushare??defaultTushareCall({fetch:deps.fetch});
  const now=deps.now();const today=opts.today??now.toISOString().slice(0,10);
- const pages:TusharePage<StockBasicRow>[]=[];
- for(const s of ['L','P','D'] as const)pages.push(...await fetchStockBasic(call,{listStatus:s},{sleep:opts.sleep,now:deps.now}));
- const plan=planAShareLoad(pages.flatMap(p=>p.rows),await aStockUniverse(deps.tables),today);
+ const batchId=opts.apply?(await startBatch(deps.tables,{producer:A_SHARE_PRODUCER,dataset:A_SHARE_DATASET,codeVersion:deps.codeVersion!,triggeredBy:opts.triggeredBy??'script'})).batchId:null;
+ const fail=async(e:unknown,fetched:number,candidates:number)=>{
+  await finishBatch(deps.tables,batchId!,{counts:{...emptyCounts(),fetched,failed:Math.max(1,candidates)},errors:[{code:e instanceof IndustryProviderError?e.code:'a_share_error',message:errorMessage(e)}]},deps.now());
+  await recordAttempt(deps.tables,A_SHARE_DATASET,{ok:false,cadence:'daily',now:deps.now()});
+ };
+ let plan:AShareLoadPlan;
+ try{
+  const pages:TusharePage<StockBasicRow>[]=[];
+  for(const s of ['L','P','D'] as const)pages.push(...await fetchStockBasic(call,{listStatus:s},{sleep:opts.sleep,now:deps.now,snapshots:batchId?opts.snapshots:undefined}));
+  plan=planAShareLoad(pages.flatMap(p=>p.rows),await aStockUniverse(deps.tables),today);
+ }catch(e){
+  if(batchId)await fail(e,0,0);
+  throw e;
+ }
  const planSummary={candidates:plan.candidates.length,skipped:summarizeSkips(plan.skipped),rejected:summarizeSkips(plan.rejected)};
- if(!opts.apply)return {status:'dry_run',batchId:null,plan:planSummary,apply:null,exitCode:0};
- if(!deps.codeVersion)throw new Error('code_version_missing');
- const {batchId}=await startBatch(deps.tables,{producer:A_SHARE_PRODUCER,dataset:A_SHARE_DATASET,codeVersion:deps.codeVersion,triggeredBy:opts.triggeredBy??'script'});
+ if(!batchId)return {status:'dry_run',batchId:null,plan:planSummary,apply:null,exitCode:0};
  let result:AShareApplyResult;
  try{
   result=await applyAShareLoad(deps.tables,plan,{batchId,observedAt:now.toISOString(),lookupOrgId:opts.lookupOrgId??(symbol=>resolveOrgId(symbol,{fetch:deps.fetch})),sleep:opts.sleep,maxLookups:opts.maxLookups,recheckOrgIds:opts.recheckOrgIds});
  }catch(e){
-  await finishBatch(deps.tables,batchId,{counts:{...emptyCounts(),fetched:plan.fetched,failed:Math.max(1,plan.candidates.length)},errors:[{code:'a_share_error',message:errorMessage(e)}]},deps.now());
-  await recordAttempt(deps.tables,A_SHARE_DATASET,{ok:false,cadence:'daily',now:deps.now()});
+  await fail(e,plan.fetched,plan.candidates.length);
   throw e;
  }
  const status=await finishBatch(deps.tables,batchId,{counts:result.counts,errors:result.errors},deps.now());

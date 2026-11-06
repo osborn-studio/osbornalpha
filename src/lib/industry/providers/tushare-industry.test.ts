@@ -1,7 +1,8 @@
 // src/lib/industry/providers/tushare-industry.test.ts
 import {describe,it,expect,vi} from 'vitest';
 import {createHash} from 'node:crypto';
-import {decodeText,defaultTushareCall,fetchDailyBasic,fetchIndexClassify,fetchIndexMembers,fetchStockBasic,fixtureTushareCall,INDUSTRY_PAGING_DIR,IndustryProviderError,locatorOf,ymdToIso} from './tushare-industry';
+import {decodeText,defaultTushareCall,fetchDailyBasic,fetchIndexClassify,fetchIndexMembers,fetchStockBasic,fixtureTushareCall,INDUSTRY_PAGING_DIR,industrySnapshotPath,IndustryProviderError,INDEX_MEMBER_FIELDS,locatorOf,ymdToIso} from './tushare-industry';
+import {memorySnapshotStore,SNAPSHOT_BUCKET} from '../../facts/snapshot-store';
 import type {TushareCall} from './tushare-industry';
 
 const noSleep=async()=>{};
@@ -49,7 +50,7 @@ describe('fixtureTushareCall + fetchers (real recordings, 2026-11-06)',()=>{
   expect(y.map(p=>[p.page,p.offset,p.has_more,p.rows.length])).toEqual([[1,0,true,50],[2,50,true,50],[3,100,false,29]]);
   expect(new Set(y.map(p=>p.raw_hash)).size).toBe(3);
   expect(sleep).toHaveBeenCalledTimes(2);
-  expect(locatorOf(y[1],1)).toEqual({api:'index_member_all',params:{l1_code:'801120.SI',is_new:'Y'},page:2,offset:50,row:1});
+  expect(locatorOf(y[1],1)).toEqual({api:'index_member_all',params:{l1_code:'801120.SI',is_new:'Y'},page:2,offset:50,row:1,request:{api:'index_member_all',params:{l1_code:'801120.SI',is_new:'Y',limit:50,offset:50},fields:INDEX_MEMBER_FIELDS.join(',')}});
   const n=await fetchIndexMembers(fx,{l1Code:'801120.SI',isNew:'N'},{sleep:noSleep});
   expect(n[0].rows).toHaveLength(58);
   expect(n[0].rows.slice(0,2).map(r=>[r.ts_code,r.in_date,r.out_date,r.is_new])).toEqual([['600866.SH','19940818','20210729','N'],['000869.SZ','20001010','20070629','N']]);
@@ -87,6 +88,60 @@ describe('fixtureTushareCall + fetchers (real recordings, 2026-11-06)',()=>{
   expect(real[0].rows.find(r=>r.ts_code==='600036.SH')).toEqual({ts_code:'600036.SH',trade_date:'20261030',close:'43.55',total_share:'2521984.5601',free_share:'1171836.1832',total_mv:'109832427.588'});
   expect(pages[0].raw_hash).toBe(createHash('sha256').update(new Uint8Array([7])).digest('hex'));
   expect(()=>fetchDailyBasic(call,{tradeDate:'2024-12-31'})).toThrow('bad_trade_date');
+ });
+});
+
+const MEMBER_ROW=['a','b','c','d','e','f','g','h','20210101',null,'Y'];
+describe('malformed responses are rejected before projection (parse_error)',()=>{
+ const resp=(fields:string[],items:unknown[][]):TushareCall=>async()=>({fields,items,has_more:false,raw:new Uint8Array([1])});
+ const F=[...INDEX_MEMBER_FIELDS] as string[];
+ it('a row narrower than the field list (an absent out_date) never becomes null',async()=>{
+  await expect(fetchIndexMembers(resp(F,[MEMBER_ROW.slice(0,10)]),{l1Code:'a',isNew:'Y'},{sleep:noSleep})).rejects.toMatchObject({code:'parse_error',message:'row_width:10'});
+  await expect(fetchIndexMembers(resp(F,[[...MEMBER_ROW,'x']]),{l1Code:'a',isNew:'Y'},{sleep:noSleep})).rejects.toMatchObject({code:'parse_error'});
+  await expect(fetchStockBasic(resp(['ts_code','symbol','name','fullname','exchange','list_status','list_date','delist_date'],[['600519.SH','600519','n','f','SSE','L','20010827']]),{listStatus:'L'},{sleep:noSleep})).rejects.toMatchObject({code:'parse_error'});
+  await expect(fetchIndexClassify(resp(['index_code','industry_name','parent_code','level','industry_code','is_pub','src'],[['801010.SI']]),{level:'L1'},{sleep:noSleep})).rejects.toMatchObject({code:'parse_error'});
+  await expect(fetchDailyBasic(resp(['ts_code','trade_date','close','total_share','free_share','total_mv'],[['600519.SH','20241231']]),{tradeDate:'20241231'},{sleep:noSleep})).rejects.toMatchObject({code:'parse_error'});
+ });
+ it('duplicate field names and non-array rows are rejected',async()=>{
+  await expect(fetchIndexMembers(resp([...F,'ts_code'],[[...MEMBER_ROW,'x']]),{l1Code:'a',isNew:'Y'},{sleep:noSleep})).rejects.toMatchObject({code:'parse_error',message:'duplicate_field'});
+  await expect(fetchIndexMembers(resp(F,['oops' as unknown as unknown[]]),{l1Code:'a',isNew:'Y'},{sleep:noSleep})).rejects.toMatchObject({code:'parse_error'});
+ });
+ it('a well-formed page with extra upstream columns still passes (projection happens after the check)',async()=>{
+  const pages=await fetchIndexMembers(resp([...F,'extra'],[[...MEMBER_ROW,'z']]),{l1Code:'a',isNew:'Y'},{sleep:noSleep});
+  expect(pages[0].rows[0]).toMatchObject({ts_code:'g',out_date:null});
+ });
+});
+
+describe('page evidence snapshots (spec §4.4: one snapshot per page)',()=>{
+ const bytesOf=(n:number)=>new TextEncoder().encode(`{"page":${n}}`);
+ const pager:TushareCall=async(_a,p)=>{
+  const off=Number(p.offset);
+  return {fields:[...INDEX_MEMBER_FIELDS],items:[[...MEMBER_ROW.slice(0,6),`t${off}`,...MEMBER_ROW.slice(7)]],has_more:off<1,raw:bytesOf(off)};
+ };
+ it('stores the exact bytes of every page, keeps raw_hash = sha256(bytes) and carries the reference plus full request in the locator',async()=>{
+  const store=memorySnapshotStore();
+  const pages=await fetchIndexMembers(pager,{l1Code:'801120.SI',isNew:'Y'},{sleep:noSleep,pageSize:1,snapshots:{store},now:NOW});
+  expect(pages).toHaveLength(2);
+  for(const [i,pg] of pages.entries()){
+   const path=industrySnapshotPath('index_member_all',pg.raw_hash);
+   expect(path).toMatch(/^tushare\/[0-9a-f-]{36}\/[0-9a-f]{64}\.json$/);
+   expect(pg.raw_hash).toBe(createHash('sha256').update(bytesOf(i)).digest('hex'));
+   expect(pg.snapshot).toEqual({bucket:SNAPSHOT_BUCKET,path,sha256:pg.raw_hash});
+   expect(store.read(path)).toEqual(bytesOf(i));
+   const loc=locatorOf(pg,0);
+   expect(loc.snapshot).toEqual(pg.snapshot);
+   expect(loc.request).toEqual({api:'index_member_all',params:{l1_code:'801120.SI',is_new:'Y',limit:1,offset:i},fields:INDEX_MEMBER_FIELDS.join(',')});
+   expect(JSON.parse(String(store.read(path.replace(/\.json$/,'.meta.json'))))).toMatchObject({source:'tushare',api:'index_member_all',page:i+1,has_more:i===0,params:{limit:1,offset:i}});
+  }
+  expect(store.objects.size).toBe(4);   // 2 pages × (bytes + meta)
+ });
+ it('without a store no snapshot is recorded (dry run) and the locator carries only the request',async()=>{
+  const pages=await fetchIndexMembers(pager,{l1Code:'a',isNew:'Y'},{sleep:noSleep,pageSize:1});
+  expect(pages[0].snapshot).toBeNull();expect('snapshot' in locatorOf(pages[0],0)).toBe(false);
+ });
+ it('a failed upload aborts the fetch with the store error',async()=>{
+  const store={put:async()=>{throw new Error('snapshot_upload_failed');}};
+  await expect(fetchIndexMembers(pager,{l1Code:'a',isNew:'Y'},{sleep:noSleep,snapshots:{store}})).rejects.toThrow('snapshot_upload_failed');
  });
 });
 

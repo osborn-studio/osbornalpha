@@ -10,18 +10,22 @@
 // fetch_key: the current A-share ticker (landed chooseCnTicker); an issuer without one (historical member)
 // takes the ticker of its most recently CLOSED A-share window (chooseCnTicker over the rows with the largest
 // valid_to); still none → skipped.no_cn_ticker. Merged issuers are skipped (industry_issuer_merged).
-// Inputs are read to exhaustion: industry_source_memberships pages on its unique `id`, the a_stock memberships
-// on `ticker` (unique within one universe: PK (ticker, universe)), securities through scope.ts::currentSecurities.
+// Inputs are read to exhaustion by KEYSET paging (scope.ts::keysetAll: restart from the last key inclusive, so a row
+// superseded or inserted between pages cannot shift later rows out of the read): industry_source_memberships on its
+// unique `id`, the a_stock memberships on `ticker` (unique within one universe), issuers on `issuer_id`, securities
+// (open and scheduled-end rows) and each issuer's historical rows on `ticker` with the (issuer_id, ticker, valid_from) key.
+// The fallback ticker of a historical member must not be owned today by another issuer (industry_ticker_reused).
 // Reads go through the service-role TableClient (industry_source_memberships grants service_role SELECT), so a
 // memory harness must hold the source rows in its TableClient too.
-import {selectAll} from '../db/table-client';
 import type {Row,TableClient} from '../db/table-client';
-import {SCOPE_PRIORITY,chooseCnTicker,currentSecurities,fetchKey} from '../facts/scope';
+import {isCurrentSecurity} from '../entities/resolve';
+import {SCOPE_PRIORITY,chooseCnTicker,fetchKey,keysetAll} from '../facts/scope';
 import type {ScopeInputRow} from '../facts/scope';
 
 export const INDUSTRY_UNIVERSE_FLAG='FACTS_CN_INDUSTRY_UNIVERSE';
 export const REASON_SW2021='universe:sw2021';
 export const REASON_A_STOCK='universe:a_stock';
+const SEC_KEY=['issuer_id','ticker','valid_from'];
 const CN_TICKER=/\.(SH|SZ|BJ)$/;
 const B_SHARE=/^(900\d{3}\.SH|200\d{3}\.SZ)$/;
 const str=(v:unknown)=>typeof v==='string'&&v.length>0?v:null;
@@ -30,22 +34,29 @@ const bump=(m:Record<string,number>,k:string)=>{m[k]=(m[k]??0)+1;};
 
 export const industryUniverseEnabled=(env:Record<string,string|undefined>=process.env)=>env[INDUSTRY_UNIVERSE_FLAG]==='1';
 
-/** The ticker of the issuer's most recently closed A-share window (rows with the largest valid_to), or a reason. */
-export function closedWindowTicker(secs:Row[]):{ticker:string}|{reason:'no_cn_ticker'|'ambiguous_cn_ticker'}{
- const closed=secs.filter(r=>str(r.valid_to)!==null&&CN_TICKER.test(norm(r.ticker))&&!B_SHARE.test(norm(r.ticker)));
+/** The ticker of the issuer's most recently closed A-share window (valid_to <= today; rows with the largest valid_to), or a reason. */
+export function closedWindowTicker(secs:Row[],today:string):{ticker:string}|{reason:'no_cn_ticker'|'ambiguous_cn_ticker'}{
+ const closed=secs.filter(r=>str(r.valid_to)!==null&&String(r.valid_to)<=today&&CN_TICKER.test(norm(r.ticker))&&!B_SHARE.test(norm(r.ticker)));
  if(closed.length===0)return {reason:'no_cn_ticker'};
  const last=closed.reduce((m,r)=>String(r.valid_to)>m?String(r.valid_to):m,'');
  return chooseCnTicker(closed.filter(r=>String(r.valid_to)===last));
+}
+
+/** Current securities by the landed predicate, read by keyset paging (open rows and scheduled-end rows). */
+async function currentSecuritiesKeyset(tables:TableClient,today:string):Promise<Row[]>{
+ const open=await keysetAll(tables,'issuer_securities',{valid_to:null},{},'ticker',SEC_KEY);
+ const ending=await keysetAll(tables,'issuer_securities',{},{gte:{valid_to:today}},'ticker',SEC_KEY);
+ return [...open,...ending].filter(r=>isCurrentSecurity(r,today));
 }
 
 /** Desired CN scope rows of the industry universe (spec §4.10). `skipped` is the caller's counter map. */
 export async function industryCnUniverse(tables:TableClient,today:string,skipped:Record<string,number>):Promise<ScopeInputRow[]>{
  const reasons=new Map<string,Set<string>>();
  const add=(id:string,r:string)=>{(reasons.get(id)??reasons.set(id,new Set()).get(id)!).add(r);};
- for(const s of await selectAll(tables,'industry_source_memberships',{status:'current',scheme:'sw2021'},'id')){
+ for(const s of await keysetAll(tables,'industry_source_memberships',{status:'current',scheme:'sw2021'},{},'id',['id'])){
   const id=str(s.issuer_id);if(id)add(id,REASON_SW2021);
  }
- const current=await currentSecurities(tables,today);
+ const current=await currentSecuritiesKeyset(tables,today);
  const ownerByTicker=new Map<string,string>();
  const byIssuer=new Map<string,Row[]>();
  for(const s of current){
@@ -53,19 +64,23 @@ export async function industryCnUniverse(tables:TableClient,today:string,skipped
   ownerByTicker.set(norm(s.ticker),id);
   (byIssuer.get(id)??byIssuer.set(id,[]).get(id)!).push(s);
  }
- for(const m of await selectAll(tables,'security_universe_memberships',{universe:'a_stock',is_active:true},'ticker')){
+ for(const m of await keysetAll(tables,'security_universe_memberships',{universe:'a_stock',is_active:true},{},'ticker',['ticker'])){
   const id=ownerByTicker.get(norm(m.ticker));
   if(id)add(id,REASON_A_STOCK);else bump(skipped,'industry_unknown_ticker');
  }
- const issuers=new Map((await selectAll(tables,'issuers',{},'issuer_id')).map(i=>[String(i.issuer_id),i]));
+ const issuers=new Map((await keysetAll(tables,'issuers',{},{},'issuer_id',['issuer_id'])).map(i=>[String(i.issuer_id),i]));
  const out:ScopeInputRow[]=[];
  for(const id of [...reasons.keys()].sort()){
   const issuer=issuers.get(id);
   if(!issuer){bump(skipped,'industry_unknown_issuer');continue;}
   if(issuer.status==='merged'){bump(skipped,'industry_issuer_merged');continue;}
   let choice=chooseCnTicker(byIssuer.get(id)??[]);
-  if('reason' in choice&&choice.reason==='no_cn_ticker')choice=closedWindowTicker(await tables.select('issuer_securities',{issuer_id:id}));
-  if('reason' in choice){bump(skipped,choice.reason);continue;}
+  if('reason' in choice&&choice.reason==='no_cn_ticker'){
+   choice=closedWindowTicker(await keysetAll(tables,'issuer_securities',{issuer_id:id},{},'ticker',SEC_KEY),today);
+   const owner='ticker' in choice?ownerByTicker.get(norm(choice.ticker)):undefined;
+   if(owner&&owner!==id){bump(skipped,'industry_ticker_reused');continue;}
+  }
+  if('reason' in choice){bump(skipped,`industry_${choice.reason}`);continue;}
   out.push({issuer_id:id,reasons:[...reasons.get(id)!].sort(),priority:SCOPE_PRIORITY,fetch_key:fetchKey('CN',{ticker:choice.ticker})});
  }
  return out;

@@ -16,10 +16,13 @@ import {TushareError,tushareCallRaw} from '../../data/sources/tushare';
 import {isTushareQuotaMessage} from '../../facts/providers/tushare-statements';
 import type {NumberSchema} from '../../facts/json-numbers';
 import {decodeColumns,isNumToken,scanJsonNumbers} from '../../facts/json-numbers';
+import type {Budget,RawSnapshot} from '../../facts/types';
+import type {SnapshotStore} from '../../facts/snapshot-store';
+import {SNAPSHOT_BUCKET} from '../../facts/snapshot-store';
 import type {IndustryDeps} from '../types';
 
 export type TushareCall=NonNullable<IndustryDeps['tushare']>;
-export type IndustryProviderErrorCode='quota_exhausted'|'tushare_unavailable'|'tushare_error'|'paging_not_advancing'|'too_many_pages'|'row_shape'|'fixture_missing';
+export type IndustryProviderErrorCode='quota_exhausted'|'tushare_unavailable'|'tushare_error'|'paging_not_advancing'|'too_many_pages'|'row_shape'|'parse_error'|'fixture_missing';
 export class IndustryProviderError extends Error{constructor(public code:IndustryProviderErrorCode,message?:string){super(message??code);this.name='IndustryProviderError';}}
 
 export const STOCK_BASIC_FIELDS=['ts_code','symbol','name','fullname','exchange','list_status','list_date','delist_date'] as const;
@@ -33,12 +36,27 @@ export const PAGE_SIZE:Record<string,number>={stock_basic:5000,index_classify:20
 export const TUSHARE_MIN_INTERVAL_MS=350;
 const MAX_PAGES=200;
 
-export interface TusharePage<T>{api:string;params:Record<string,unknown>;page:number;offset:number;has_more:boolean;raw_hash:string;fetched_at:string;rows:T[]}
+/** Full request of one page (spec §4.4): params include limit/offset; fields are the requested column list. */
+export interface PageRequest{api:string;params:Record<string,unknown>;fields:string}
+/** Reference to the stored exact response bytes of a page (bucket disclosure-raw; sha256 = raw_hash). */
+export interface SnapshotRef{bucket:string;path:string;sha256:string}
+export interface TusharePage<T>{api:string;params:Record<string,unknown>;page:number;offset:number;has_more:boolean;raw_hash:string;fetched_at:string;request:PageRequest;snapshot:SnapshotRef|null;rows:T[]}
 /** Row locator stored with every source record (spec §4.4: raw_hash + locator). */
-export interface RowLocator{api:string;params:Record<string,unknown>;page:number;offset:number;row:number}
-export const locatorOf=(p:TusharePage<unknown>,row:number):RowLocator=>({api:p.api,params:p.params,page:p.page,offset:p.offset,row});
+export interface RowLocator{api:string;params:Record<string,unknown>;page:number;offset:number;row:number;request?:PageRequest;snapshot?:SnapshotRef}
+export const locatorOf=(p:TusharePage<unknown>,row:number):RowLocator=>({api:p.api,params:p.params,page:p.page,offset:p.offset,row,request:p.request,...(p.snapshot?{snapshot:p.snapshot}:{})});
 
-export interface FetchOptions{sleep?:(ms:number)=>Promise<void>;minIntervalMs?:number;pageSize?:number;now?:()=>Date}
+/** Where page evidence goes: every fetched page's exact response bytes are put into the plan-2 snapshot store before its rows are used. */
+export interface SnapshotCapture{store:SnapshotStore;budget?:Budget}
+export interface FetchOptions{sleep?:(ms:number)=>Promise<void>;minIntervalMs?:number;pageSize?:number;now?:()=>Date;snapshots?:SnapshotCapture}
+const UNBOUNDED:Budget={remainingMs:()=>Number.POSITIVE_INFINITY,signal:new AbortController().signal};
+/**
+ * Snapshot path of a page: the landed store only accepts `tushare/<uuid>/<sha256>.json`, so the industry pages of one api
+ * live under a fixed per-api uuid derived from `industry:tushare:<api>` (no new bucket, no change to the store's validation).
+ */
+export function industrySnapshotPath(api:string,sha256:string):string{
+ const h=createHash('sha256').update(`industry:tushare:${api}`).digest('hex');
+ return `tushare/${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20,32)}/${sha256}.json`;
+}
 const sha256Hex=(b:Uint8Array)=>createHash('sha256').update(b).digest('hex');
 const defaultSleep=(ms:number)=>new Promise<void>(r=>setTimeout(r,ms));
 
@@ -144,12 +162,24 @@ async function fetchPaged<T>(call:TushareCall,api:string,params:Record<string,un
   if(page>MAX_PAGES)throw new IndustryProviderError('too_many_pages',api);
   if(page>1)await wait(gap);
   const res=await call(api,{...params,limit:size,offset},fields.join(','));
+  // structure first: duplicate names or a row of another width would let projection turn an absent cell into null
+  if(new Set(res.fields).size!==res.fields.length)throw new IndustryProviderError('parse_error','duplicate_field');
+  for(const r of res.items)if(!Array.isArray(r)||r.length!==res.fields.length)throw new IndustryProviderError('parse_error',`row_width:${Array.isArray(r)?r.length:'not_array'}`);
   for(const f of fields)if(!res.fields.includes(f))throw new IndustryProviderError('row_shape',`missing_field:${f}`);
   const ordered=res.items.map(r=>fields.map(f=>r[res.fields.indexOf(f)]));
   const sig=JSON.stringify(ordered);
   if(page>1&&(sig===prev||(res.items.length===0&&res.has_more)))throw new IndustryProviderError('paging_not_advancing',api);
   prev=sig;
-  out.push({api,params,page,offset,has_more:res.has_more,raw_hash:sha256Hex(res.raw),fetched_at:now().toISOString(),rows:decode([...fields],ordered)});
+  const rawHash=sha256Hex(res.raw);const fetchedAt=now().toISOString();
+  const request:PageRequest={api,params:{...params,limit:size,offset},fields:fields.join(',')};
+  let snapshot:SnapshotRef|null=null;
+  if(opts.snapshots){
+   const path=industrySnapshotPath(api,rawHash);
+   const snap:RawSnapshot={bytes:res.raw,sha256:rawHash,meta:{source:'tushare',api,params:request.params,fields:request.fields,fetched_at:fetchedAt,http_status:200,has_more:res.has_more,page}};
+   await opts.snapshots.store.put(snap,path,opts.snapshots.budget??UNBOUNDED);
+   snapshot={bucket:SNAPSHOT_BUCKET,path,sha256:rawHash};
+  }
+  out.push({api,params,page,offset,has_more:res.has_more,raw_hash:rawHash,fetched_at:fetchedAt,request,snapshot,rows:decode([...fields],ordered)});
   if(!res.has_more)return out;
   offset+=res.items.length;
  }

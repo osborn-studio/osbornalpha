@@ -20,7 +20,7 @@ import {recordAttempt} from '../dq/freshness';
 import {quarantine} from '../dq/quarantine';
 import {errorMessage,loaderOutcome,summarizeSkips,withSkippedSummary} from '../entities/load-sec';
 import type {IndustryDeps,SourceMembershipInput,SourceMembershipRow} from './types';
-import type {IndexMemberRow,RowLocator,TusharePage} from './providers/tushare-industry';
+import type {IndexMemberRow,RowLocator,SnapshotCapture,TusharePage} from './providers/tushare-industry';
 import {IndustryProviderError,defaultTushareCall,fetchIndexMembers,locatorOf,ymdToIso} from './providers/tushare-industry';
 import type {RunResult} from './classifications';
 import {canonicalSwCode} from './sw2021';
@@ -86,7 +86,7 @@ export function planSourceMemberships(rows:FetchedMember[],current:SourceMembers
  return plan;
 }
 
-export interface RunMembershipsSwOptions{apply:boolean;l1Codes?:string[];triggeredBy?:TriggeredBy;sleep?:(ms:number)=>Promise<void>;pageSize?:number}
+export interface RunMembershipsSwOptions{apply:boolean;l1Codes?:string[];triggeredBy?:TriggeredBy;sleep?:(ms:number)=>Promise<void>;pageSize?:number;snapshots?:SnapshotCapture}
 export interface RunMembershipsSwResult extends Omit<RunResult,'status'|'batchId'>{status:RunResult['status']|'dry_run';batchId:string|null;plans:{l1:string;expected:SourcePlan['expected'];inputs:number;ambiguous:number;rejected:number;unknownCodes:number}[]}
 
 /** Job step after runClassificationsSw: both passes per L1 → plan → upsert → quarantine changes; weekly freshness. */
@@ -103,7 +103,7 @@ export async function runMembershipsSw(deps:IndustryDeps,opts:RunMembershipsSwOp
   let pages:TusharePage<IndexMemberRow>[];
   try{
    pages=[];
-   for(const isNew of ['Y','N'] as const)pages.push(...await fetchIndexMembers(call,{l1Code:l1,isNew},{sleep:opts.sleep,now:deps.now,pageSize:opts.pageSize}));
+   for(const isNew of ['Y','N'] as const)pages.push(...await fetchIndexMembers(call,{l1Code:l1,isNew},{sleep:opts.sleep,now:deps.now,pageSize:opts.pageSize,snapshots:batchId?opts.snapshots:undefined}));
   }catch(e){
    errors.push({code:e instanceof IndustryProviderError?e.code:'fetch_error',key:l1,message:errorMessage(e)});
    if(e instanceof IndustryProviderError&&e.code==='quota_exhausted')break;
