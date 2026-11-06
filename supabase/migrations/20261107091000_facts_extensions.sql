@@ -18,7 +18,7 @@
 --  (8b) fact_promote_rows predicates; adopt_candidate; restore_reconciled; resolve_lineage_conflict.
 --  (8c) reconcile cursor claim/complete/fail and apply_reconcile_result.
 -- Lock order everywhere: reconcile cursor row (fenced calls) → fact_sync_scope rows ordered by
--- (issuer_id, market) → issuers rows → dq_quarantine rows → fact rows.
+-- (issuer_id, market) → issuers rows → dq_quarantine rows → fact rows → dq_reconcile_cycles row (last).
 -- Errors carry the code as the message: verdict / fence codes P0001; invalid_* 22023; triggers 23514.
 -- The hosted postgres role is not a superuser: functions keep the migration role as owner, set
 -- search_path = public and qualify every relation. Every function is followed by an explicit
@@ -129,6 +129,8 @@ begin
   select count(*) into v_locked from (
     select 1 from public.fact_sync_scope s where s.issuer_id = any(v_members) and s.market = p_market order by s.issuer_id for update) x;
   if v_locked <> cardinality(v_members) then raise exception 'scope_missing' using errcode = 'P0001'; end if;
+  -- a merged / dissolved issuer is no longer a materialisation target: the caller re-resolves T(i) and retries
+  if not exists (select 1 from public.issuers where issuer_id = p_issuer and status = 'active') then raise exception 'stale_computation' using errcode = 'P0001'; end if;
   select array_agg(l.i order by l.i) into v_lineage
   from (select p_issuer as i union select issuer_id from public.issuers where merged_into = p_issuer) l;
   if v_lineage is distinct from v_members then raise exception 'stale_computation' using errcode = 'P0001'; end if;

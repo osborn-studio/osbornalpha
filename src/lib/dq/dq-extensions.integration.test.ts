@@ -22,7 +22,7 @@ const RETRYABLE=new Set(['55P03','40P01']);
 async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
  for(let attempt=1;;attempt++){
   const c=await pool.connect();
-  try{await c.query(`begin; set local lock_timeout='3s';\n${sql}\n;commit;`);return;}
+  try{await c.query(`begin; set local lock_timeout='3s'; select pg_advisory_xact_lock(hashtext('test:migration-replay'));\n${sql}\n;commit;`);return;}
   catch(e){
    await c.query('rollback').catch(()=>{});
    const code=(e as {code?:string}).code;
@@ -241,7 +241,9 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
    const [row]=await q(`select based_on_rev,based_on_lineage from public.financial_metrics where issuer_id=$1`,[t]);
    expect(row).toEqual({based_on_rev:'2',based_on_lineage:[{issuer_id:t,state_rev:2},{issuer_id:s,state_rev:2}].sort((a,b)=>a.issuer_id<b.issuer_id?-1:1)});
    expect(await fails(replace([{issuer_id:t,state_rev:2},{issuer_id:t,state_rev:2}]))).toMatchObject({message:'invalid_based_on',code:'22023'});
-   expect(await fails(replace([{issuer_id:s,state_rev:2}]))).toMatchObject({message:'invalid_based_on'});              // must contain p_issuer
+   expect(await fails(replace([{issuer_id:s,state_rev:2}]))).toMatchObject({message:'invalid_based_on'});
+   // a merged issuer is no longer a materialisation target: the caller re-resolves T(i) and retries
+   expect(await fails(one(`select public.replace_financial_metrics_lineage($1,'US',$2::jsonb,'[]'::jsonb) v`,[s,JSON.stringify([{issuer_id:s,state_rev:2}])]))).toMatchObject({message:'stale_computation',code:'P0001'});              // must contain p_issuer
    const lone=await issuer();
    expect(await fails(replace([{issuer_id:lone,state_rev:0}],[],lone,'CN'))).toMatchObject({message:'scope_missing',code:'P0001'});
    expect(await fails(one(`select public.replace_financial_metrics($1,'US',0,'[]'::jsonb) v`,[lone]))).toMatchObject({message:'scope_missing'});
@@ -253,6 +255,7 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
    const {iss}=await published();
    expect(await one(`select public.replace_financial_metrics($1,'US',1,$2::jsonb) v`,[iss,JSON.stringify([metric('0.5')])])).toBe(1);
    await inRolledBackTx(admin,async c=>{
+    await c.query("select pg_advisory_xact_lock(hashtext('test:migration-replay'))");   // serialise with every other replay
     await c.query(`alter table public.financial_metrics drop column based_on_lineage`);   // back to the plan-2 shape (its constraint goes with it)
     await c.query(`insert into public.financial_metrics(issuer_id,market,metric,period_start,period_end,duration,value,unit,input_unit,basis,formula_version,inputs,based_on_rev,as_of) values($1,'US','legacy_metric','2023-10-01','2023-12-31','3M',1,'ratio','USD','us_standard','facts-derive/1.0','[]',7,'2024-03-01')`,[iss]);
     await c.query(sql());
@@ -314,6 +317,7 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
   it('set_merge with an empty dq_reconcile_cycles table commits and leaves no cycle row (registration falls back to the runner re-enumerating merged_into, decision #6)',async()=>{
    const s=await issuer(),t=await issuer(),by=await user();
    await inRolledBackTx(admin,async c=>{
+    await c.query("select pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:facts.lineage_same_day'))");   // same key set_merge takes, before the deletes
     await c.query(`delete from public.dq_reconcile_cursor where pair='facts.lineage_same_day'`);
     await c.query(`delete from public.dq_reconcile_cycles where pair='facts.lineage_same_day'`);
     expect((await c.query(`select public.set_merge($1,$2,$3) v`,[s,t,by])).rows[0].v).toEqual({repointed:0});
