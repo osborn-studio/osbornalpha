@@ -3,6 +3,7 @@ import {spawnSync} from 'node:child_process';
 import {resolve} from 'node:path';
 import {describe,expect,it} from 'vitest';
 import {EvalError} from '../errors';
+import type {EvalKind} from '../types';
 import {KIND_REGISTRY,assertKindEnabled,kindEntry} from './registry';
 
 const runCli=(kind:string)=>spawnSync(process.execPath,['--import','tsx',resolve('scripts/evals/run.ts'),'--kind',kind,'--module','facts','--mode','ci'],{encoding:'utf8',timeout:120000});
@@ -32,6 +33,19 @@ describe('KIND_REGISTRY',()=>{
    expect(r.status).toBe(2);
    expect(`${r.stderr}${r.stdout}`).toContain('kind_not_enabled');
    expect(r.stderr).toContain('prerequisite: ');
+  }
+ },240000);
+ it('Task 15: extraction_gold and judgment_calibration are registered, disabled, with their reasons; every EvalKind has exactly one entry',()=>{
+  expect(kindEntry('extraction_gold')).toEqual({kind:'extraction_gold',enabled:false,reason:'D8: license decision pending'});
+  expect(kindEntry('judgment_calibration')).toEqual({kind:'judgment_calibration',enabled:false,reason:'prerequisite: F4 settledForecasts'});
+  const all:EvalKind[]=['official_reconciliation','dual_source','replay_consistency','reference_regression','extraction_gold','judgment_calibration'];
+  expect(KIND_REGISTRY.map(e=>e.kind).sort()).toEqual([...all].sort());
+ });
+ it('Task 15: scripts/evals/run.ts refuses extraction_gold and judgment_calibration with exit 2',()=>{
+  for(const k of ['extraction_gold','judgment_calibration']){
+   const r=runCli(k);
+   expect(r.status).toBe(2);
+   expect(`${r.stderr}${r.stdout}`).toContain('kind_not_enabled');
   }
  },240000);
 });

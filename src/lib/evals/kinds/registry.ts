@@ -11,6 +11,9 @@ export const KIND_REGISTRY:readonly KindRegistryEntry[]=[
  {kind:'replay_consistency',enabled:true},
  {kind:'dual_source',enabled:false,reason:'prerequisite: plan 3 merged'},
  {kind:'reference_regression',enabled:false,reason:'prerequisite: macro migrations'},
+ // Task 15
+ {kind:'extraction_gold',enabled:false,reason:'D8: license decision pending'},
+ {kind:'judgment_calibration',enabled:false,reason:'prerequisite: F4 settledForecasts'},
 ];
 export const kindEntry=(kind:string):KindRegistryEntry|undefined=>KIND_REGISTRY.find(e=>e.kind===kind);
 export function assertKindEnabled(kind:string):void{

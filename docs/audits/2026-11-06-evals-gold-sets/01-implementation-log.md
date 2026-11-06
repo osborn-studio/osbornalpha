@@ -34,3 +34,9 @@
 - kinds/reference.ts: strict ReferenceResult, ReadDeps reflection refusal, canary path (cases[] only), rel 0.01, ledger values must equal the compared values, referenceSummaryWriter(...).writeReferenceSummary as the only write path. reduce.ts::reduceForKind is the one fixture-authenticated reduction (Task 12 reuses it).
 - kinds/registry.ts (the one enablement table) + cli/run-cli.ts assertKindEnabled (after the --resume branch, before the runner lookup): dual_source (prerequisite: plan 3 merged) and reference_regression (prerequisite: macro migrations) -> kind_not_enabled, exit 2. Test asserts KIND_RUNNERS keys == enabled kinds.
 - No database tests (critical suites cannot skip; R5-12). kinds/ratio.ts is Task 15's, not built here.
+
+## Task 15 — extraction_gold and judgment_calibration (pure logic, disabled)
+
+- kinds/extraction.ts: two-step matching (lexicographically first maximum matching over same-page, IoU ≥ 0.5, equal-value edges; greedy classification of the rest), FP_citation, P/R with integer 95% gate, zero support skipped, unparseable → read_error. Fixtures: adversarial (max matching beats greedy; wrong page; zero predictions), crossed two-page (2 TP), all-parsed TP=0 (gate fail).
+- kinds/calibration.ts: eligibility, revision chain (last eligible), exact Brier, 10-bucket reliability (endpoint in bucket 9), no eligible → incomplete.
+- kinds/registry.ts: extraction_gold (D8: license decision pending), judgment_calibration (prerequisite: F4 settledForecasts) → kind_not_enabled, exit 2.

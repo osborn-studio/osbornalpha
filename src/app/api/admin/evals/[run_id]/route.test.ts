@@ -43,7 +43,7 @@ describe('GET /api/admin/evals/[run_id]',()=>{
   expect(raw).not.toContain(SENTINEL);
   expect(raw).toContain('"left_text":"12345678901234567890"');
   const body=JSON.parse(raw);
-  expect(Object.keys(body).sort()).toEqual(['case_total','cases','cases_truncated','run']);
+  expect(Object.keys(body).sort()).toEqual(['cases','cases_stored','cases_truncated','run']);
   expect(body.run.run_id).toBe(RUN_A);
   for(const c of body.cases)expect(Object.keys(c).sort()).toEqual(CASE_KEYS);
  });

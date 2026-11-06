@@ -1,6 +1,9 @@
 // src/lib/evals/admin.test.ts
 import {describe,expect,it} from 'vitest';
-import {EVAL_CASE_ROWS_MAX,getEvalRun,listEvalRuns,parseEvalListQuery,whitelistSummary} from './admin';
+import {EVAL_CASE_ROWS_MAX,getEvalRun,listEvalRuns,parseEvalListQuery,publicCase,whitelistSummary} from './admin';
+import {canonicalJson,sha256Hex} from './canonical-json';
+import {CASE_ROW_LIMIT,caseRowsTruncated,evalStore,persistRun} from './store';
+import type {CaseReport,EvalReport} from './types';
 import {RUN_A,RUN_B,SENTINEL,caseRow,evalTables,runRow,summaryRow} from './test-support/eval-rows';
 
 const RUN_KEYS=['artifact_class','evaluator_code_version','finished_at','kind','mode','module','privileged','report_ref','report_sha256','run_id','set_id','set_sha256','set_version','started_at','status','summary','triggered_by'];
@@ -72,14 +75,14 @@ describe('getEvalRun',()=>{
   await t.insert('dq_eval_case_results',caseRow(RUN_A,'ZZEVA/revenue/2023'));
   await t.insert('dq_eval_case_results',caseRow(RUN_A,'ZZEVA/cash/2023',{result:'missing',reason:null,left_text:null,abs_diff:null,rel_diff:null,detail:{locator:{page:'x',nested:{a:1}},document_id:{kind:'edgar_accession'}}}));
   const d=(await getEvalRun(t,RUN_A))!;
-  expect(keys(d)).toEqual(['case_total','cases','cases_truncated','run']);
+  expect(keys(d)).toEqual(['cases','cases_stored','cases_truncated','run']);
   expect(keys(d.run)).toEqual(RUN_KEYS);
   expect(d.cases.map(c=>c.case_id)).toEqual(['ZZEVA/cash/2023','ZZEVA/revenue/2023']);
   for(const c of d.cases)expect(keys(c)).toEqual(CASE_KEYS);
   expect(d.cases[1]).toEqual({case_id:'ZZEVA/revenue/2023',result:'fail',reason:'value',left_text:'383285000001',right_text:'383285000000',abs_diff:'1',rel_diff:'0.0000000000',tolerance:'0',
    locator:{page:28,table:'CONSOLIDATED STATEMENTS OF OPERATIONS',row:'Total net sales'},document_id:{kind:'edgar_accession',value:'0009990601-24-000001'}});
   expect(d.cases[0]).toMatchObject({result:'missing',reason:null,left_text:null,locator:null,document_id:null});
-  expect(d).toMatchObject({case_total:2,cases_truncated:false});
+  expect(d).toMatchObject({cases_stored:2,cases_truncated:false});
   expect(JSON.stringify(d)).not.toContain(SENTINEL);
  });
  it(`at most ${EVAL_CASE_ROWS_MAX} case rows; total and truncation reported; unknown run → null; other runs' rows excluded`,async()=>{
@@ -90,8 +93,60 @@ describe('getEvalRun',()=>{
   await t.insert('dq_eval_case_results',caseRow(RUN_B,'other'));
   const d=(await getEvalRun(t,RUN_A))!;
   expect(d.cases.length).toBe(EVAL_CASE_ROWS_MAX);
-  expect(d).toMatchObject({case_total:101,cases_truncated:true});
+  expect(d).toMatchObject({cases_stored:101,cases_truncated:true});
   expect(d.cases.some(c=>c.case_id==='other')).toBe(false);
   expect(await getEvalRun(t,'cccccccc-cccc-4ccc-8ccc-cccccccccccc')).toBeNull();
+ });
+});
+
+describe('review fixes',()=>{
+ it('EVAL_CASE_ROWS_MAX is the store cap',()=>{expect(EVAL_CASE_ROWS_MAX).toBe(CASE_ROW_LIMIT);});
+ it('persistRun with 101 non-pass cases → cases_truncated true through the real persistence path',async()=>{
+  const t=evalTables();
+  const cases:CaseReport[]=Array.from({length:101},(_,i)=>({case_id:`c-${String(i).padStart(3,'0')}`,required:true,outcome:{result:'fail',reason:'value'},left:'2',right:'1',abs_diff:'1',rel_diff:'1',tolerance:'0',provenance:null,detail:{locator:{page:1}}}));
+  const base={run_id:RUN_A,kind:'official_reconciliation' as const,artifact_class:'public' as const,cases};
+  const summary={...(summaryRow() as object),reconciliations_truncated:caseRowsTruncated(base)};
+  const report={...base,schema_version:1,module:'facts',mode:'ci',privileged:false,
+   set:{id:'facts/synthetic-us',version:1,sha256:'b'.repeat(64),format:'f6',path:'x'},evaluator_code_version:'c'.repeat(40),dirty:false,started_at:'2026-11-05T10:00:00.000Z',finished_at:'2026-11-05T10:01:00.000Z',
+   environment:{db_host:null,app_origin:null,db_state_rev:1},thresholds:{max_fail:0,min_coverage_optional:'0.95'},provenance:{verified:{artifacts:false,sources:false}},summary} as unknown as EvalReport;
+  await persistRun(evalStore(t),report,{ref:'r.json',sha256:sha256Hex(`${canonicalJson(report)}\n`)},{triggeredBy:'script'});
+  const d=(await getEvalRun(t,RUN_A))!;
+  expect(d.cases.length).toBe(CASE_ROW_LIMIT);
+  expect(d.cases_stored).toBe(CASE_ROW_LIMIT);
+  expect(d.cases_truncated).toBe(true);
+ });
+ it('summary flag alone marks truncation',async()=>{
+  const t=evalTables();
+  await t.insert('dq_eval_runs',runRow({summary:summaryRow({reconciliations_truncated:true})}));
+  expect((await getEvalRun(t,RUN_A))!.cases_truncated).toBe(true);
+ });
+ it('locator keeps a 201-char string and numbers; oversize locator is dropped',()=>{
+  const long='x'.repeat(201);
+  expect(publicCase(caseRow(RUN_A,'a',{detail:{locator:{page:3,row:long}}})).locator).toEqual({page:3,row:long});
+  expect(publicCase(caseRow(RUN_A,'a',{detail:{locator:{row:'y'.repeat(5000)}}})).locator).toBeNull();
+ });
+ it('documentIdOf: unknown kind → null',()=>{
+  expect(publicCase(caseRow(RUN_A,'a',{detail:{document_id:{kind:'rumor',value:'v'}}})).document_id).toBeNull();
+ });
+ it('other kinds and restricted runs return no case rows',async()=>{
+  const t=evalTables();
+  await t.insert('dq_eval_runs',runRow({run_id:RUN_B,kind:'replay_consistency'}));
+  await t.insert('dq_eval_case_results',caseRow(RUN_B,'r1'));
+  const a=(await getEvalRun(t,RUN_B))!;
+  expect(a.cases).toEqual([]);
+  const u='dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  await t.insert('dq_eval_runs',runRow({run_id:u,artifact_class:'restricted'}));
+  await t.insert('dq_eval_case_results',caseRow(u,'r1'));
+  expect((await getEvalRun(t,u))!.cases).toEqual([]);
+ });
+ it('min_coverage_optional limited to 0..1',()=>{
+  for(const v of ['1','0','0.95','1.0'])expect(whitelistSummary(summaryRow({thresholds:{max_fail:0,min_coverage_optional:v}}))).not.toBeNull();
+  for(const v of ['1.5','2','10'])expect(whitelistSummary(summaryRow({thresholds:{max_fail:0,min_coverage_optional:v}}))).toBeNull();
+ });
+ it('30-day window edges',async()=>{
+  const t=evalTables();
+  await t.insert('dq_eval_runs',runRow({run_id:uuid(1),status:'failed',started_at:daysAgo(29.9)}));
+  await t.insert('dq_eval_runs',runRow({run_id:uuid(2),status:'failed',started_at:daysAgo(30.1)}));
+  expect((await listEvalRuns(t,{limit:20},NOW)).gate_failing_30d).toBe(1);
  });
 });

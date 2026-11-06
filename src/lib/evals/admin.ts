@@ -3,26 +3,30 @@
 // whitelist: the dq_eval_runs columns; the §3.2 summary keys, type-checked one by one (any other key in
 // the jsonb — debug fields, a canary — is dropped; a summary that is not a complete §3.2 object, e.g. the
 // '{}' of a running row, is null); the dq_eval_case_results text columns plus detail.locator (flat
-// string/number values only) and detail.document_id ({kind, value}) — nothing else of detail. At most
-// EVAL_CASE_ROWS_MAX case rows per run (ordered by case_id) with the real total. gate_failing_30d counts
+// string/number values kept as stored; the whole object is capped at 4 KB defensively) and detail.document_id ({kind, value}) — nothing else of detail. At most
+// EVAL_CASE_ROWS_MAX case rows per run (ordered by case_id) with the stored count (cases_stored) and cases_truncated (more stored than returned, or
+// summary.reconciliations_truncated); only public official_reconciliation/dual_source runs have case rows, others get []. gate_failing_30d counts
 // runs with status failed | incomplete | error started in the last 30 days, globally (not filtered by the
 // list query), like the /admin/dq KPI tiles; TableClient has no IN filter, so it is three counts.
 import type {Row,TableClient} from '../db/table-client';
+import {EVAL_MODULES} from './gold/schema';
+import {CASE_ROW_LIMIT} from './store';
 import type {ArtifactClass,CaseResultKind,EvalKind,EvalMode,EvalModule,EvalRunStatus,EvalRunRow,Summary} from './types';
 
 export const EVAL_KINDS:readonly EvalKind[]=['official_reconciliation','dual_source','replay_consistency','reference_regression','extraction_gold','judgment_calibration'];
-export const EVAL_MODULES:readonly EvalModule[]=['facts','metrics','macro','industry','company','foreign_research'];
-export const EVAL_LIST_DEFAULT=20,EVAL_LIST_MAX=100,EVAL_CASE_ROWS_MAX=100;
+export {EVAL_MODULES};
+export const EVAL_LIST_DEFAULT=20,EVAL_LIST_MAX=100,EVAL_CASE_ROWS_MAX=CASE_ROW_LIMIT;
 export const GATE_FAILING_STATUSES:readonly EvalRunStatus[]=['failed','incomplete','error'];
 export const EVAL_RUN_ID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DAY_MS=86_400_000;
-const MAX_LOCATOR_TEXT=200;
+const MAX_LOCATOR_TEXT=200;   // document_id.value only
+const MAX_LOCATOR_BYTES=4096;   // defensive cap on a whole locator object; individual values are kept as stored
 
 export interface EvalListQuery{limit:number;module?:EvalModule;kind?:EvalKind}
 export type PublicEvalRun=Omit<EvalRunRow,'summary'>&{summary:Summary|null};
 export interface PublicCaseResult{case_id:string;result:CaseResultKind;reason:string|null;left_text:string|null;right_text:string|null;abs_diff:string|null;rel_diff:string|null;tolerance:string;locator:Record<string,string|number>|null;document_id:{kind:string;value:string}|null}
 export interface EvalRunList{runs:PublicEvalRun[];gate_failing_30d:number;refreshed_at:string}
-export interface EvalRunDetail{run:PublicEvalRun;cases:PublicCaseResult[];case_total:number;cases_truncated:boolean}
+export interface EvalRunDetail{run:PublicEvalRun;cases:PublicCaseResult[];cases_stored:number;cases_truncated:boolean}
 
 export function parseEvalListQuery(p:URLSearchParams):{ok:true;query:EvalListQuery}|{ok:false;error:'invalid_limit'|'invalid_module'|'invalid_kind'}{
  const raw=p.get('limit');let limit=EVAL_LIST_DEFAULT;
@@ -55,7 +59,7 @@ export function whitelistSummary(raw:unknown):Summary|null{
  const ex=raw.execution,th=raw.thresholds,g=raw.gold;
  if(!correctness||!coverage||!isObj(ex)||!isObj(th)||!isObj(g))return null;
  if(!nat(raw.population)||!nat(raw.required)||!nat(ex.read_error)||!nat(ex.truncated)||!bool(ex.subset))return null;
- if(!nat(th.max_fail)||!decimalText(th.min_coverage_optional))return null;
+ if(!nat(th.max_fail)||!decimalText(th.min_coverage_optional)||Number(th.min_coverage_optional)>1)return null;
  if(typeof g.format!=='string'||!FORMATS.has(g.format)||!bool(g.ready)||!nat(g.pending)||!nat(g.provenance_gaps))return null;
  if(typeof raw.gate!=='string'||!GATES.has(raw.gate)||typeof raw.evidence_class!=='string'||!EVIDENCE.has(raw.evidence_class)||!bool(raw.reconciliations_truncated))return null;
  return {population:raw.population,required:raw.required,correctness,coverage,
@@ -77,10 +81,10 @@ function locatorOf(v:unknown):Record<string,string|number>|null{
  const out:Record<string,string|number>={};
  for(const [k,x] of Object.entries(v)){
   if(typeof x==='number'&&Number.isFinite(x))out[k]=x;
-  else if(typeof x==='string'&&x.length<=MAX_LOCATOR_TEXT)out[k]=x;
+  else if(typeof x==='string')out[k]=x;
   else return null;
  }
- return out;
+ return JSON.stringify(out).length>MAX_LOCATOR_BYTES?null:out;
 }
 function documentIdOf(v:unknown):{kind:string;value:string}|null{
  if(!isObj(v)||typeof v.kind!=='string'||typeof v.value!=='string'||v.value.length>MAX_LOCATOR_TEXT)return null;
@@ -108,9 +112,13 @@ export async function listEvalRuns(tables:TableClient,query:EvalListQuery,now:Da
 export async function getEvalRun(tables:TableClient,runId:string):Promise<EvalRunDetail|null>{
  const [r]=await tables.select('dq_eval_runs',{run_id:runId},{limit:1});
  if(!r)return null;
- const [rows,total]=await Promise.all([
+ const run=publicRun(r);
+ // Case rows exist only for public official_reconciliation / dual_source runs (store.ts::caseRowCandidates).
+ const eligible=run.artifact_class==='public'&&(run.kind==='official_reconciliation'||run.kind==='dual_source');
+ const [rows,total]=eligible?await Promise.all([
   tables.select('dq_eval_case_results',{eval_run_id:runId},{orderBy:'case_id',limit:EVAL_CASE_ROWS_MAX}),
   tables.count('dq_eval_case_results',{eval_run_id:runId}),
- ]);
- return {run:publicRun(r),cases:rows.map(publicCase),case_total:total,cases_truncated:total>rows.length};
+ ]):[[] as Row[],0];
+ // Truncated when more rows are stored than returned, or the run itself stored fewer than it had (summary flag).
+ return {run,cases:rows.map(publicCase),cases_stored:total,cases_truncated:total>rows.length||run.summary?.reconciliations_truncated===true};
 }
