@@ -19,12 +19,12 @@
 | `source.cninfo_announcement_id` | 巨潮公告 ID |
 | `source.announcement_date` | 公告日期 `YYYY-MM-DD` |
 | `source.pdf_url` | 巨潮 PDF 下载地址 |
-| `source.pdf_sha256` | 下载得到的 PDF 字节的 sha256（`shasum -a 256 <file>`）；上传后由 `gold-pdf.ts` 再核一次 |
+| `source.pdf_sha256` | 下载得到的 PDF 字节的 sha256（`shasum -a 256 <file>`，必须小写十六进制；大写会被 `gold-pdf.ts` 当作未填）；上传后由 `gold-pdf.ts` 再核一次 |
 | `source.page` | 该表所在的 PDF 页码（阅读器显示的物理页，从 1 起） |
 | `source.table` | 固定 `"主要会计数据和财务指标"` |
 | `tushare_source_ref` | 见第 3 节 |
 | `report_type` | 原始年报不填（=1）；只有专门为"变更前原数"（type-5）建的行才填 5，并且必须有它自己核实的源文档 |
-| `recorded_at` | 抄录时刻 ISO 时间戳 |
+| `recorded_at` | 抄录时刻，完整 ISO 时间戳，须含秒与时区（`Z` 或 `±hh:mm`），例如 `2026-11-06T10:00:00+08:00` |
 
 ## 3. `tushare_source_ref` 的核实（规格 T14，最容易出错的一步）
 - 形式 `<ts_code>:<end_date>:<report_type>:<ann_date>`，取自计划二 `filings.source_ref`（例：`600519.SH:20241231:1:20250403`）。
