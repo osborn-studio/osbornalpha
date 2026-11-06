@@ -44,14 +44,28 @@ const FIX:Record<string,string>=Object.fromEntries(FIXTURE_ISSUERS.map(i=>[i.cik
 const REVISED='CIK0000320193.revised.json';
 const fx=(n:string)=>new Uint8Array(readFileSync(new URL(`./fixtures/edgar/${n}`,import.meta.url)));
 const today=()=>new Date().toISOString().slice(0,10);
-interface GoldEntry{issuer:{ticker:string;market:'US'|'CN'};concept:string;period_end:string;unit:string;duration?:string;value:string;as_of?:string|null;source?:{document?:string;page_or_row?:string;url?:string};recorded_by:string;recorded_at?:string|null}
+interface GoldEntry{issuer:{ticker:string;market:'US'|'CN'};concept:string;period_end:string;unit:string;duration?:string;value:string;as_of?:string|null;source?:{document?:string;page_or_row?:string;url?:string};recorded_by?:string;recorded_at?:string|null}
 interface GoldFile{ready:boolean;required:{US:boolean;CN:boolean};entries:GoldEntry[]}
 const isPending=(e:GoldEntry)=>e.recorded_by==='<pending>'||e.value==='<pending>';
 const blank=(v:unknown)=>typeof v!=='string'||v.trim()===''||v.trim()==='<pending>';
 /** Provenance a human must have written down: document, page/row, url and a recording timestamp. Returns the missing fields. */
-const provenanceGaps=(e:GoldEntry):string[]=>[...(['document','page_or_row','url'] as const).filter(k=>blank(e.source?.[k])).map(k=>`source.${k}`),...(e.recorded_at==null||blank(e.recorded_at)?['recorded_at']:[])];
-/** No CN replay suite exists yet (sync-cn.integration.test.ts is created only with real Tushare fixtures), so CN entries cannot be replay-verified here. */
-const CN_REPLAY_SUITE=false;
+const provenanceGaps=(e:GoldEntry):string[]=>[...(['document','page_or_row','url'] as const).filter(k=>blank(e.source?.[k])).map(k=>`source.${k}`),...(blank(e.recorded_by)?['recorded_by']:[]),...(e.recorded_at==null||blank(e.recorded_at)||Number.isNaN(Date.parse(e.recorded_at))?['recorded_at']:[])];
+/** Runtime shape check of one gold entry (the JSON is hand-edited; shared in spirit with sync-cn.integration.test.ts): returns the problems. */
+const shapeProblems=(e:GoldEntry):string[]=>{
+ const p:string[]=[];const s=(v:unknown)=>typeof v==='string'&&v.trim()!=='';
+ if(!e||typeof e!=='object'||typeof e.issuer!=='object'||e.issuer===null)return ['issuer'];
+ if(!s(e.issuer.ticker))p.push('issuer.ticker');
+ if(e.issuer.market!=='US'&&e.issuer.market!=='CN')p.push('issuer.market');
+ if(!s(e.concept)||!conceptById(e.concept))p.push('concept');
+ if(!s(e.period_end)||!/^\d{4}-\d{2}-\d{2}$/.test(e.period_end))p.push('period_end');
+ if(!s(e.unit))p.push('unit');
+ if(!s(e.value))p.push('value');
+ if(e.as_of!=null&&!(typeof e.as_of==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(e.as_of)))p.push('as_of');
+ if(e.recorded_by!==undefined&&typeof e.recorded_by!=='string')p.push('recorded_by');
+ return p;
+};
+/** sync-cn.integration.test.ts replay-verifies the CN gold entries of the four recorded A-share issuers, so they count towards the §11.4 matrix once required.CN is true. */
+const CN_REPLAY_SUITE=true;
 
 // Synthetic issuer for the quarantine/materialize cases (not a gold issuer): FY2023 revenue disclosed twice on the
 // same day by two accessions with different values (a same_day_conflict), plus one net income in the first accession.
@@ -303,12 +317,15 @@ describe.skipIf(!enabled)('F2-3 US offline replay on real PostgreSQL',()=>{
  it('US gold gate: while ready:false it only reports (INCOMPLETE, non-failing); recorded entries always replay; ready:true enforces the whole matrix (round-1 #19)',async()=>{
   const gold=JSON.parse(readFileSync(new URL('./fixtures/gold/plan2.json',import.meta.url),'utf8')) as GoldFile;
   expect(gold.entries.length).toBeGreaterThan(0);
-  for(const e of gold.entries)expect(['US','CN'],`${e.issuer.ticker}/${e.concept}: market`).toContain(e.issuer.market);
+  expect(gold.entries.map((e,i)=>({i,p:shapeProblems(e)})).filter(x=>x.p.length>0).map(x=>`#${x.i}: ${x.p.join(',')}`),'malformed gold entries').toEqual([]);
   const us=gold.entries.filter(e=>e.issuer.market==='US');
   const missing=Object.keys(CIK).filter(t=>!us.some(e=>e.issuer.ticker===t&&!isPending(e)));
   const gaps=gold.entries.map(e=>({e,gaps:provenanceGaps(e)})).filter(x=>x.gaps.length>0).map(x=>`${x.e.issuer.ticker}/${x.e.concept}/${x.e.period_end}: ${x.gaps.join(',')}`);
+  const usGaps=gaps.filter(g=>!/^\d{6}\.(SH|SZ)\//.test(g));   // CN templates are reported by sync-cn.integration.test.ts
+  const recordedGaps=us.filter(e=>!isPending(e)).map(e=>({e,gaps:provenanceGaps(e)})).filter(x=>x.gaps.length>0).map(x=>`${x.e.issuer.ticker}/${x.e.concept}/${x.e.period_end}: ${x.gaps.join(',')}`);
+  expect(recordedGaps,'recorded US entries must carry document, page_or_row, url, recorded_by and recorded_at').toEqual([]);
   if(!gold.ready){
-   console.warn(`GOLD INCOMPLETE (ready:false, not failing): ${gold.entries.filter(isPending).length}/${gold.entries.length} entries still <pending>; no recorded entry for ${missing.join(', ')||'-'}; incomplete provenance: ${gaps.join(' | ')||'-'}. Owner step (runbook 8.11-6) blocks F2-7.`);
+   console.warn(`GOLD INCOMPLETE (ready:false, not failing): ${us.filter(isPending).length}/${us.length} US entries still <pending>; no recorded entry for ${missing.join(', ')||'-'}; incomplete provenance: ${usGaps.join(' | ')||'-'}. Owner step (runbook 8.11-6) blocks F2-7.`);
   }else{
    // 1. required.US: an explicit, named failure when AAPL / MSFT are not recorded.
    if(gold.required.US)for(const t of Object.keys(CIK))expect(us.some(e=>e.issuer.ticker===t&&!isPending(e)),`gold entry for ${t} is still <pending> — owner step (runbook 8.11-6) blocks F2-7`).toBe(true);
