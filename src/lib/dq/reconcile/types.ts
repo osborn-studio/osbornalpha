@@ -1,8 +1,11 @@
 // src/lib/dq/reconcile/types.ts
-// Reconciliation shared types (spec 3 §5; plan 3 contract C3). Task 2 lands only the pair registry
-// ids, which the dataset registry needs; Task 9a adds the C3 subset FactsDb needs; Task 13 adds the rest
-// and must not change these names.
-import type {Market} from '../../facts/types';
+// Shared reconciliation contract (plan 3 C3; spec §3.1 dq_reconciliations / dq_reconcile_cycles /
+// dq_reconcile_cursor, §5.1 pairs, §5.5 runner). Task 2a: RECONCILE_PAIR_IDS / ReconcilePairId; Task 9a:
+// the FactsDb-facing subset (CYCLE_PAIR_IDS … MemberCounts); Task 13a: the runner/pair remainder below.
+// Values are canonical decimal strings everywhere (never Number). Type-only imports from the facts layer.
+import type {Budget,FactsDb,Market} from '../../facts/types';
+import type {TableClient} from '../../db/table-client';
+import type {RawStore} from '../raw-store';
 export const RECONCILE_PAIR_IDS=['us.companyfacts_vs_ixbrl','cn.tushare_vs_cninfo_pdf_gold','us.companyfacts_vs_gold','sec.filing_date_vs_submissions','sec.filer_category','entities.isin_hkex_vs_gleif','facts.lineage_same_day'] as const;
 export type ReconcilePairId=typeof RECONCILE_PAIR_IDS[number];
 /** Pairs run by the cycle runner; the other three are recorded inline by their producers (record.ts, cycle_id null). */
@@ -27,3 +30,18 @@ export interface PendingMember{issuer_id:string;market:Market;source:string}
 /** open_reconcile_cycle input (plan audit Q2): members frozen with their expected keys (the {naturalKey, locator} shape Task 13a names ExpectedKey); pending = exactly the snapshot entries the runner resolved keys for. */
 export interface OpenCycleInput{pair:CyclePairId;cycleId:string;startedAt:string;members:{issuer_id:string;market:Market;expected_keys:{naturalKey:string;locator:Record<string,unknown>}[]}[];pending:PendingMember[]}
 export interface OpenCycleResult{created:boolean;cycle:Record<string,unknown>;transferred:PendingMember[]}
+export const RECONCILE_OUTCOMES:readonly ReconcileOutcome[]=['compared','left_missing','left_unlinked','left_ambiguous','right_missing','unsupported','right_ambiguous','incomplete_gold'];
+export type CycleStatus='running'|'complete'|'complete_with_gaps';
+export type CursorState='pending'|'claimed'|'done'|'failed';
+/** A cursor whose attempts reached this value in state 'failed' is terminal (spec §5.5, S4). */
+export const MAX_CURSOR_ATTEMPTS=3;
+export interface ExpectedKey{naturalKey:string;locator:Record<string,unknown>}
+export interface MemberPlan{issuerId:string;market:Market;expectedKeys:ExpectedKey[]}
+export interface PairContext{db:FactsDb;tables:TableClient;raw:RawStore;now:()=>Date;budget:Budget;fetch:typeof fetch;readRepoFile:(path:string)=>Promise<Uint8Array>}
+export interface ReconcilePair{
+ id:CyclePairId;kind:ReconcileKind;left:string;right:string;
+ /** frozen at cycle creation (pending_members merged by the runner) */
+ members(ctx:PairContext):Promise<MemberPlan[]>;
+ /** exactly one result per member.expectedKeys entry, same order; never throws for data problems (outcome encodes them) */
+ evaluate(ctx:PairContext,member:MemberPlan):Promise<ReconcileResultInput[]>;
+}
