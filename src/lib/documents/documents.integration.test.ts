@@ -560,4 +560,95 @@ describe.skipIf(!enabled)('F3-0 disclosure documents migration on real PostgreSQ
    expect(await tryAs(c,`select public.documents_stored_due(5)`)).toMatchObject({ok:true});
   });
  });
+
+ // F3 review fixes (Task 1 review round): one regression test per finding.
+ it('review fix: auto decision needs explicit concept membership (missing concept, NULL in approval concepts)',async()=>{
+  const y=await candidateReady();const actor=await user();
+  await insertCands(y.ext,y.b,[candRow(y.cits,{natural_key:'n1',fingerprint:sha('n1'),payload:{}}),
+   candRow(y.cits,{natural_key:'n2',fingerprint:sha('n2'),payload:{concept:'gross_profit'}}),candRow(y.cits,{natural_key:'n3',fingerprint:sha('n3'),payload:{concept:'revenue'}})]);
+  const ids=Object.fromEntries((await candidateIds(y.ext)).map(r=>[r.natural_key,r.candidate_id as string]));
+  const ok=[{check:'citation_verified',blocking:true,passed:true}];
+  await writeChecks(y.ext,y.b,['n1','n2','n3'].map(k=>({candidate_id:ids[k],checks:ok,checks_passed:true})));
+  const A=await approval()(actor);const N=await approval({concepts:['revenue',null],gold_sha256:sha('gold-null')})(actor);
+  expect(await fails(decide(ids.n1,{kind:'auto',approval_id:A}))).toMatchObject({message:'not_eligible'});   // payload without concept
+  expect(await fails(decide(ids.n2,{kind:'auto',approval_id:N}))).toMatchObject({message:'not_eligible'});   // NULL in the approval's concepts must not admit anything
+  expect(await fails(decide(ids.n3,{kind:'auto',approval_id:N}))).toMatchObject({message:'not_eligible'});   // … and an approval containing NULL is unusable
+  expect(await decide(ids.n3,{kind:'auto',approval_id:A})).toEqual({status:'confirmed'});
+  expect((await q(`select status from public.extraction_candidates where candidate_id=any($1::uuid[]) order by natural_key`,[[ids.n1,ids.n2]])).map(r=>r.status)).toEqual(['candidate','candidate']);
+ });
+
+ it('review fix: every citations.period element must be an object with a valid citation id',async()=>{
+  const y=await candidateReady();
+  for(const bad of [[null],[123],['not-a-citation'],[{role:'statement_title',citation_id:y.cits.period},null],[{role:'statement_title'}]]){
+   const row=candRow(y.cits);row.citations.period=bad as never;
+   expect({bad,r:await fails(insertCands(y.ext,y.b,[row]))}).toMatchObject({r:{message:'invalid_citation: reference',code:'22023'}});
+  }
+  expect(Number(await one(`select count(*) v from public.extraction_candidates where extraction_id=$1`,[y.ext]))).toBe(0);
+  expect(await insertCands(y.ext,y.b,[candRow(y.cits)])).toEqual({inserted:1});
+ });
+
+ it('review fix: a backfill cursor cannot be cleared without reset unless it completes the backfill (clear-then-regress)',async()=>{
+  const {iss,b}=await ready();
+  const cur=(seq:number)=>JSON.stringify({segment:'2024',last_ref:`r${seq}`,settled:[],attempts:{},seq});
+  const adv=(c:string|null,done:boolean,reset=false)=>q(`select public.advance_document_cursor($1,'hkexnews',$2,'backfill',$3::jsonb,$4,$5)`,[iss,b,c,done,reset]);
+  await adv(cur(2),false);
+  expect(await fails(adv(null,false))).toMatchObject({message:'cursor_regression',code:'P0001'});
+  expect(await fails(adv(cur(1),false))).toMatchObject({message:'cursor_regression',code:'P0001'});
+  const row=async()=>(await q(`select backfill_cursor,backfill_done from public.document_sync_scope where issuer_id=$1`,[iss]))[0];
+  expect(await row()).toEqual({backfill_cursor:JSON.parse(cur(2)),backfill_done:false});   // the original checkpoint survived both refusals
+  await adv(null,true);                                                                     // clearing is allowed when it completes the backfill
+  expect(await row()).toEqual({backfill_cursor:{},backfill_done:true});
+ });
+
+ it('review fix: ec_decision_shape is NULL-safe (decided state with NULL decision_kind is refused)',async()=>{
+  const x=await extracted();const b=await batch();const owner=await user();const cit=await cite(x.doc,x.ext,'收益');
+  const ins=(status:string,kind:string|null)=>q(`insert into public.extraction_candidates(candidate_id,document_id,extraction_id,kind,extractor_kind,extractor_ref,natural_key,citations,payload,fingerprint,input_snapshot,batch_id,status,decision_kind,decided_by,decided_at)
+   values($1,$2,$3,'financial_fact','rule','r',$4,$5,'{}',$6,'{}',$7,$8,$9,$10,'2026-01-01Z')`,[randomUUID(),x.doc,x.ext,`k-${randomUUID()}`,JSON.stringify({value:cit}),sha('f'),b,status,kind,owner]);
+  for(const status of ['confirmed','rejected','promoted'])await expect(ins(status,null)).rejects.toThrow(/ec_decision_shape/);
+  await ins('confirmed','human');
+ });
+
+ it('review fix: renew_document_extract_lease and renew_candidates_lease are holder-only and never acquire',async()=>{
+  const renewDoc=(doc:string,b:string|null,ttl=600)=>one(`select public.renew_document_extract_lease($1,$2,$3) v`,[doc,b,ttl]);
+  const renewCand=(ext:string,b:string|null,ttl=600)=>one(`select public.renew_candidates_lease($1,$2,$3) v`,[ext,b,ttl]);
+  // extract lease
+  const s=await storedDoc();const other=await batch();
+  expect(await renewDoc(s.doc,s.b)).toBe(false);expect(await renewDoc(s.doc,null)).toBe(false);   // unowned: cannot be acquired by renewing
+  expect((await q(`select extract_lease_batch_id,extract_lease_until,extract_attempts from public.disclosure_documents where document_id=$1`,[s.doc]))[0]).toEqual({extract_lease_batch_id:null,extract_lease_until:null,extract_attempts:0});
+  expect(await claimExtract(s.doc,s.b,60)).toBe(true);
+  const until=async()=>new Date(await one(`select extract_lease_until v from public.disclosure_documents where document_id=$1`,[s.doc])).getTime();
+  const u1=await until();
+  expect(await renewDoc(s.doc,s.b,3600)).toBe(true);
+  expect(await until()).toBeGreaterThan(u1);
+  expect(await one(`select extract_attempts v from public.disclosure_documents where document_id=$1`,[s.doc])).toBe(1);   // no attempt counted
+  expect(await renewDoc(s.doc,other)).toBe(false);expect(await renewDoc(s.doc,null)).toBe(false);
+  expect(await one(`select extract_lease_batch_id v from public.disclosure_documents where document_id=$1`,[s.doc])).toBe(s.b);
+  await finish(s.doc,s.b,extJson(1),[pageJson(1,TEXT)]);                                       // terminal for the lease: status extracted, lease cleared
+  expect(await renewDoc(s.doc,s.b)).toBe(false);
+  // candidates lease
+  const y=await candidateReady();const other2=await batch();
+  const cu=async()=>new Date(await one(`select candidates_lease_until v from public.document_extractions where extraction_id=$1`,[y.ext])).getTime();
+  const c1=await cu();
+  expect(await renewCand(y.ext,y.b,3600)).toBe(true);expect(await cu()).toBeGreaterThan(c1);
+  expect(await one(`select candidates_attempts v from public.document_extractions where extraction_id=$1`,[y.ext])).toBe(1);
+  expect(await renewCand(y.ext,other2)).toBe(false);expect(await renewCand(y.ext,null)).toBe(false);
+  await q(`select public.finish_candidates($1,$2,'done')`,[y.ext,y.b]);
+  expect(await renewCand(y.ext,y.b)).toBe(false);                                              // released / terminal
+  const z=await extracted();                                                                    // pending, never claimed
+  expect(await renewCand(z.ext,z.b)).toBe(false);expect(await renewCand(z.ext,null)).toBe(false);
+  expect((await q(`select candidates_lease_batch_id,candidates_lease_until,candidates_attempts from public.document_extractions where extraction_id=$1`,[z.ext]))[0]).toEqual({candidates_lease_batch_id:null,candidates_lease_until:null,candidates_attempts:0});
+ });
+
+ it('review fix: reconcile_document_sync_scope rejects duplicate issuer ids; lock modes (approval share locks, no-key-update on documents)',async()=>{
+  const iss=await issuer();
+  const rows=[{issuer_id:iss,reasons:['a'],priority:1,fetch_key:'1'},{issuer_id:iss,reasons:['b'],priority:2,fetch_key:'2'}];
+  expect(await fails(one(`select public.reconcile_document_sync_scope('hkexnews',$1::jsonb) v`,[JSON.stringify(rows)]))).toMatchObject({message:'invalid_input: duplicate issuer',code:'22023'});
+  expect(Number(await one(`select count(*) v from public.document_sync_scope where issuer_id=$1`,[iss]))).toBe(0);
+  const def=async(fn:string)=>String(await one(`select pg_get_functiondef(p.oid) v from pg_proc p where p.proname=$1 and p.pronamespace='public'::regnamespace`,[fn]));
+  for(const fn of ['decide_candidate','stage_candidate_publication'])expect(await def(fn)).toMatch(/extraction_approvals[^;]*for share/i);
+  expect(await def('write_candidate_checks')).toMatch(/for share of s/i);
+  for(const fn of ['doc_extract_lock','claim_document_extract_lease','renew_document_extract_lease','reclassify_document','request_document_extract']){
+   const d=await def(fn);expect(d).toMatch(/for no key update/i);expect(d).not.toMatch(/disclosure_documents where document_id = p_document for update/i);
+  }
+ });
 });

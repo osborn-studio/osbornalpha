@@ -195,11 +195,12 @@ create table if not exists public.extraction_candidates (
   batch_id         uuid not null references public.ingest_batches(batch_id) on delete restrict,
   created_at       timestamptz not null default now(),
   constraint extraction_candidates_extraction_fkey foreign key (document_id, extraction_id) references public.document_extractions(document_id, extraction_id) on delete restrict,
-  constraint ec_decision_shape check (
+  -- F3 review fix: NULL-safe (a NULL decision_kind must not make the CHECK evaluate to NULL and pass)
+  constraint ec_decision_shape check (coalesce(
     (status = 'candidate' and decision_kind is null and decided_by is null and approval_id is null and decided_at is null)
     or (status in ('confirmed','rejected','promoted') and decided_at is not null and
         ((decision_kind = 'human' and decided_by is not null and approval_id is null)
-         or (decision_kind = 'auto' and decided_by is null and approval_id is not null and inherited_from is null and status <> 'rejected')))),
+         or (decision_kind = 'auto' and decided_by is null and approval_id is not null and inherited_from is null and status <> 'rejected'))), false)),
   constraint extraction_candidates_key_uniq unique (extraction_id, kind, extractor_ref, natural_key)
 );
 create index if not exists extraction_candidates_doc_status_idx on public.extraction_candidates(document_id, status);
@@ -426,7 +427,7 @@ create or replace function public.doc_extract_lock(p_document uuid, p_batch uuid
 returns public.disclosure_documents language plpgsql security definer set search_path = public as $$
 declare d public.disclosure_documents;
 begin
-  select * into d from public.disclosure_documents where document_id = p_document for update;
+  select * into d from public.disclosure_documents where document_id = p_document for no key update;
   if not found then raise exception 'not_found' using errcode = 'P0002'; end if;
   if d.extract_lease_batch_id is distinct from p_batch or d.extract_lease_until is null or d.extract_lease_until <= now() then
     raise exception 'lease_lost' using errcode = '55P03';
@@ -457,7 +458,7 @@ returns text[] language sql immutable set search_path = public as $$
     select e.value #>> '{}' as x from jsonb_each(p_citations) e where jsonb_typeof(e.value) = 'string'
     union all
     select a ->> 'citation_id' from jsonb_each(p_citations) e cross join lateral jsonb_array_elements(e.value) a
-    where jsonb_typeof(e.value) = 'array' and jsonb_typeof(a) = 'object'
+    where jsonb_typeof(e.value) = 'array'   -- F3 review fix: non-objects yield a NULL id, which insert_candidates rejects
   ) t
 $$;
 revoke execute on function public.candidate_citation_ids(jsonb) from public, anon, authenticated, service_role;
@@ -471,6 +472,10 @@ declare n int;
 begin
   if p_source is null or p_source not in ('edgar','cninfo','hkexnews') then raise exception 'invalid_input: source' using errcode = '22023'; end if;
   if p_rows is null or jsonb_typeof(p_rows) <> 'array' then raise exception 'invalid_input: rows' using errcode = '22023'; end if;
+  -- F3 review fix: duplicate issuer ids in one call are a caller error, not silently collapsed
+  if exists (select 1 from jsonb_array_elements(p_rows) x group by (x ->> 'issuer_id') having count(*) > 1) then
+    raise exception 'invalid_input: duplicate issuer' using errcode = '22023';
+  end if;
   insert into public.document_sync_scope (issuer_id, source, reasons, priority, fetch_key)
   select distinct on ((x ->> 'issuer_id')) (x ->> 'issuer_id')::uuid, p_source, coalesce(x -> 'reasons', '[]'::jsonb), coalesce((x ->> 'priority')::int, 0), x ->> 'fetch_key'
   from jsonb_array_elements(p_rows) x
@@ -586,6 +591,10 @@ begin
   if p_cursor is not null and p_cursor ? 'seq' and jsonb_typeof(p_cursor -> 'seq') <> 'number' then raise exception 'invalid_input: cursor seq' using errcode = '22023'; end if;
   s := public.doc_scope_lock(p_issuer, p_source, p_batch);
   if not coalesce(p_reset, false) then
+    -- F3 review fix: clearing a backfill cursor is only allowed when it marks the backfill complete
+    if p_mode = 'backfill' and p_cursor is null and not coalesce(p_done, false) then
+      raise exception 'cursor_regression' using errcode = 'P0001', detail = 'cleared';
+    end if;
     if p_mode = 'backfill' and s.backfill_done and not (p_cursor is null and coalesce(p_done, false)) then
       raise exception 'cursor_regression' using errcode = 'P0001', detail = 'backfill_done';
     end if;
@@ -634,7 +643,7 @@ begin
      or exists (select 1 from jsonb_object_keys(p_patch) k where k not in ('doc_class','classifier_gen','fiscal_year','fiscal_period','period_end','filing_source_ref')) then
     raise exception 'invalid_input: patch' using errcode = '22023';
   end if;
-  select * into d from public.disclosure_documents where document_id = p_document for update;
+  select * into d from public.disclosure_documents where document_id = p_document for no key update;
   if not found then raise exception 'not_found' using errcode = 'P0002'; end if;
   p := jsonb_populate_record(d, p_patch);
   update public.disclosure_documents
@@ -654,7 +663,7 @@ returns boolean language plpgsql security definer set search_path = public as $$
 declare d public.disclosure_documents;
 begin
   if p_ttl is null or p_ttl < 1 then raise exception 'invalid_input: ttl' using errcode = '22023'; end if;
-  select * into d from public.disclosure_documents where document_id = p_document for update;
+  select * into d from public.disclosure_documents where document_id = p_document for no key update;
   if not found or d.status <> 'stored' then return false; end if;
   if not (d.extract_lease_batch_id is null or d.extract_lease_until is null or d.extract_lease_until <= now() or d.extract_lease_batch_id = p_batch) then
     return false;
@@ -680,8 +689,8 @@ returns boolean language plpgsql security definer set search_path = public as $$
 declare d public.disclosure_documents;
 begin
   if p_ttl is null or p_ttl < 1 then raise exception 'invalid_input: ttl' using errcode = '22023'; end if;
-  select * into d from public.disclosure_documents where document_id = p_document for update;
-  if not found or d.status <> 'stored' or d.extract_lease_batch_id is distinct from p_batch then return false; end if;
+  select * into d from public.disclosure_documents where document_id = p_document for no key update;
+  if not found or p_batch is null or d.status <> 'stored' or d.extract_lease_batch_id is distinct from p_batch then return false; end if;   -- F3 review fix: holder-only, never acquires
   update public.disclosure_documents set extract_lease_until = now() + make_interval(secs => p_ttl) where document_id = p_document;
   return true;
 end $$;
@@ -760,7 +769,7 @@ returns void language plpgsql security definer set search_path = public as $$
 declare d public.disclosure_documents;
 begin
   if p_actor is null or p_extractor_version is null or p_table_algo_version is null then raise exception 'invalid_input: actor/versions' using errcode = '22023'; end if;
-  select * into d from public.disclosure_documents where document_id = p_document for update;
+  select * into d from public.disclosure_documents where document_id = p_document for no key update;
   if not found then raise exception 'not_found' using errcode = 'P0002'; end if;
   if exists (select 1 from public.document_extractions x where x.document_id = p_document and x.extractor_version = p_extractor_version and x.table_algo_version = p_table_algo_version) then
     raise exception 'revision_exists' using errcode = 'P0001';
@@ -807,7 +816,7 @@ declare e public.document_extractions;
 begin
   if p_ttl is null or p_ttl < 1 then raise exception 'invalid_input: ttl' using errcode = '22023'; end if;
   select * into e from public.document_extractions where extraction_id = p_extraction for update;
-  if not found or e.candidates_status not in ('pending','failed') or e.candidates_lease_batch_id is distinct from p_batch then return false; end if;
+  if not found or p_batch is null or e.candidates_status not in ('pending','failed') or e.candidates_lease_batch_id is distinct from p_batch then return false; end if;   -- F3 review fix: holder-only, never acquires
   update public.document_extractions set candidates_lease_until = now() + make_interval(secs => p_ttl) where extraction_id = p_extraction;
   return true;
 end $$;
@@ -980,7 +989,8 @@ begin
       select s.* into src from public.extraction_candidates s
       where s.document_id = c.document_id and s.fingerprint = c.fingerprint and s.candidate_id <> c.candidate_id
         and s.decision_kind = 'human' and s.status in ('confirmed','promoted')
-      order by s.decided_at desc, s.candidate_id limit 1;
+      order by s.decided_at desc, s.candidate_id limit 1
+      for share of s;   -- F3 review fix: the inheritance source cannot be un-decided concurrently
       if found then
         update public.extraction_candidates
         set status = 'confirmed', decision_kind = 'human', decided_by = src.decided_by, approval_id = null,
@@ -1037,12 +1047,14 @@ begin
   if v_approval is null then raise exception 'invalid_input: approval_id' using errcode = '22023'; end if;
   if c.status = 'confirmed' and c.decision_kind = 'auto' and c.approval_id = v_approval then return jsonb_build_object('status', c.status); end if;
   if c.status <> 'candidate' or c.extractor_kind <> 'rule' or not c.checks_passed then raise exception 'not_eligible' using errcode = 'P0001'; end if;
-  select * into a from public.extraction_approvals where approval_id = v_approval;
+  select * into a from public.extraction_approvals where approval_id = v_approval for share;   -- F3 review fix: a concurrent revoke waits
   if not found then raise exception 'not_eligible' using errcode = 'P0001'; end if;
   if a.revoked_at is not null then raise exception 'approval_revoked' using errcode = 'P0001'; end if;
   select * into e from public.document_extractions where extraction_id = c.extraction_id;
   if a.extractor_ref <> c.extractor_ref or a.extractor_version <> e.extractor_version or a.table_algo_version <> e.table_algo_version
-     or a.code_version <> e.code_version or not ((c.payload ->> 'concept') = any(a.concepts)) then
+     or a.code_version <> e.code_version
+     or (c.payload ->> 'concept') is null or array_position(a.concepts, null) is not null
+     or not coalesce((c.payload ->> 'concept') = any(a.concepts), false) then   -- F3 review fix: concept membership must be explicitly TRUE
     raise exception 'not_eligible' using errcode = 'P0001';
   end if;
   update public.extraction_candidates set status = 'confirmed', decision_kind = 'auto', decided_by = null, approval_id = v_approval, decided_at = now(), inherited_from = null
@@ -1066,6 +1078,9 @@ begin
   select * into c from public.extraction_candidates where candidate_id = p_candidate for update;
   if not found then raise exception 'not_found' using errcode = 'P0002'; end if;
   if c.status not in ('confirmed','promoted') then raise exception 'not_eligible' using errcode = 'P0001'; end if;
+  if c.decision_kind = 'auto' then   -- F3 review fix: share-lock the approval so a concurrent revoke is ordered against this call
+    perform 1 from public.extraction_approvals a where a.approval_id = c.approval_id for share;
+  end if;
   if c.decision_kind = 'auto' and exists (select 1 from public.extraction_approvals a where a.approval_id = c.approval_id and a.revoked_at is not null) then
     if c.status = 'confirmed' then
       update public.extraction_candidates set status = 'candidate', decision_kind = null, decided_by = null, approval_id = null, decided_at = null, inherited_from = null
