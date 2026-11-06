@@ -92,3 +92,25 @@ describe('compareWithinTolerance',()=>{
   }
  });
 });
+
+describe('results longer than the 512-char input cap',()=>{
+ it('512-digit operand vs 0.1: the 514-char difference formats without error',()=>{
+  const big='1'.repeat(512);
+  const r=compareWithinTolerance(big,'0.1','0');
+  expect(r.passed).toBe(false);
+  expect(r.absDiff).toBe(`${'1'.repeat(511)}0.9`);
+  expect(r.absDiff.length).toBe(514);
+  expect(r.relDiff).toBe('0.9999999999');
+ });
+ it('max-length operands on both sides stay exact; inputs over 512 are still rejected',()=>{
+  const a='9'.repeat(512),b='-'+'9'.repeat(511);
+  expect(compareWithinTolerance(a,a,'0')).toMatchObject({passed:true,absDiff:'0',relDiff:'0'});
+  expect(compareWithinTolerance(a,b,'0').absDiff.length).toBeGreaterThan(512);
+  expect(()=>compareWithinTolerance('1'.repeat(513),'1','0')).toThrow(RangeError);
+ });
+ it('formatDecimal is canonical without the cap',()=>{
+  expect(formatDecimal(-5000n,3)).toBe('-5');
+  expect(formatDecimal(0n,2)).toBe('0');
+  expect(formatDecimal(10n**600n,0).length).toBe(601);
+ });
+});

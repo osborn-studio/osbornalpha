@@ -6,7 +6,6 @@
 // canonical decimal form; relDiff = |l−r| / max(|l|,|r|,1) truncated toward zero to 10 decimal places
 // (display only — plan 3 rounds, F6 truncates). Input grammar: -?digits(.digits)?, no exponent, no '+',
 // no whitespace, at most 512 characters; rel must also be non-negative. Anything else → RangeError.
-import {canonicalDecimal} from '../facts/json-numbers';
 
 const DECIMAL=/^(-?)(\d+)(?:\.(\d+))?$/;
 const MAX_INPUT=512;
@@ -24,12 +23,13 @@ export function parseDecimalParts(s:string):{unscaled:bigint;scale:number}{
  const magnitude=BigInt(m[2]+frac);
  return {unscaled:m[1]==='-'?-magnitude:magnitude,scale:frac.length};
 }
-/** unscaled × 10^-scale as canonical decimal text ('-0' → '0', no trailing zeros). */
+/** unscaled × 10^-scale as canonical decimal text ('-0' → '0', no trailing zeros); the 512-char cap applies to inputs only. */
 export function formatDecimal(unscaled:bigint,scale:number):string{
  const neg=unscaled<0n;
  const digits=abs(unscaled).toString().padStart(scale+1,'0');
  const text=scale===0?digits:`${digits.slice(0,digits.length-scale)}.${digits.slice(digits.length-scale)}`;
- return canonicalDecimal(`${neg?'-':''}${text}`);
+ const canonical=text.includes('.')?text.replace(/0+$/,'').replace(/\.$/,''):text;   // results are not capped (inputs are): no canonicalDecimal
+ return canonical==='0'?'0':`${neg?'-':''}${canonical}`;
 }
 
 export function compareWithinTolerance(left:string,right:string,rel:string):{passed:boolean;absDiff:string;relDiff:string}{
