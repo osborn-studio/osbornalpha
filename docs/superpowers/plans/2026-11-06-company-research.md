@@ -37,69 +37,81 @@
 ## 文件结构
 
 ```
-supabase/migrations/20261112090000_company_research.sql            六表 + 索引 + 触发器 + RLS + 授权（Task 1）
-supabase/migrations/20261112091000_company_research_functions.sql  全部函数 + 授权（Task 2）
-supabase/migrations.lock.json                                       追加 2 条（Task 2 最后一步）
+supabase/migrations/20261112090000_company_research.sql            六表（company_fact_evidence 含 issuer_id/market 列）+ 索引 + 触发器函数 company_watches_limit / company_watches_touch / company_event_reads_check + RLS + 授权（Task 1）
+supabase/migrations/20261112091000_company_research_functions.sql  全部函数（含 company_list_coverage、内部助手 company_canonical_json / company_ev_* / company_cov_check / company_evidence_check）+ 授权（Task 2）
+supabase/migrations.lock.json                                       追加 2 条（Task 2 最后一步；之后任何任务都不再改 SQL）
 src/lib/supabase/database.types.ts        // COMPANY 块：六个 Row 类型（Task 1）
 scripts/ci/research-checks.ts             // COMPANY 块：criticalSuites += company-research.integration.test.ts（Task 1）
 
+src/lib/company/canonical.ts              canonicalJson / eventIdOf / payloadHashOf / sha256Utf8 / compareCodePoints（与 SQL 逐字节一致；Task 2）
+src/lib/company/canonical.test.ts         （Task 2）
+src/lib/company/company-research.integration.test.ts   迁移/函数/权限/并发 + pg 契约 + digest 回放（critical；Task 1 建，Task 2、4、8 追加）
 src/lib/company/types.ts                  共享契约（本文件 §共享契约 原样落地；Task 3）
-src/lib/company/canonical.ts              canonicalJson / eventIdOf / payloadHashOf（与 SQL 逐字节一致；Task 3）
-src/lib/company/db.ts                     CompanyDb re-export + CompanyDbError + supabaseCompanyDb（Task 3）
-src/lib/company/memory-company-db.ts      memoryCompanyDb（单测；Task 3）
-src/lib/company/db-contract.ts            三实现共用的契约用例 companyDbContract（非测试文件；Task 3）
+src/lib/company/db.ts                     CompanyDb re-export + CompanyDbError + supabaseCompanyDb + MAX_COMPANY_WATCHES（唯一定义）/ MAX_EVENTS_PAGE / 游标 / 行归一化（Task 3）
+src/lib/company/memory-company-db.ts      memoryCompanyDb({facts}) + setNow / registerBatch / registerIssuer（单测；Task 3）
+src/lib/company/db-contract.ts            三实现共用的契约用例 companyDbContract + filingPublishedOf / factRevisedOf（非测试文件；Task 3）
 src/lib/company/db.test.ts                内存契约 + supabase 桩（Task 3）
-src/lib/company/pg-company-db.ts          pgCompanyDb（集成测试；Task 4）
-src/lib/company/company-research.integration.test.ts   迁移/函数/权限/并发 + pg 契约（critical；Task 1、2、4）
-src/lib/company/snapshot-read.ts          readSnapshot(client, issuer, market, opts) → ReadSnapshotResult（company_read_snapshot 包装；Task 3）
+src/lib/company/snapshot-read.ts          readSnapshot / SnapshotReader / snapshotReader / memorySnapshotReader / filingSummaryOf / citationOfFiling / RpcClient（company_read_snapshot 包装；Task 3）
+src/lib/company/pg-company-db.ts          pgCompanyDb(pool) / pgRpcClient(pool, role)（仅集成测试；Task 4）
 
-src/lib/company/events.ts                 EVENTS_VERSION / deriveIssuerEvents（纯；Task 5）
+src/lib/company/decimal.ts                decimalSub / decimalRelChange（Task 5 建）；formatDecimalText / groupThousands / divisorOf / scaleFor / DisplayScale（Task 7 追加）
+src/lib/company/test-builders.ts          单测构造器（非测试文件；Task 5）
+src/lib/company/events.ts                 EVENTS_VERSION / deriveIssuerEvents({rows, filings, cutoff})（纯；Task 5）
 src/lib/company/coverage.ts               summarizeCoverage（纯；Task 5）
-src/lib/company/evidence-index.ts         buildEvidenceIndex（service 作业：快照 → 重新解析 → 全键匹配；Task 6）
-src/lib/company/pdf-locator.ts            PdfLocatorSource + emptyPdfLocatorSource（Task 6）
-src/lib/company/evidence-gate.ts          evidenceEligible / toEvidenceDto / gateFacts（Task 6）
-src/lib/company/decimal.ts                formatDecimalText / divisorOf / scaleFor / decimalSub / decimalRelChange（纯，不经浮点；Task 7）
-src/lib/company/metric-catalog.ts         METRIC_CATALOG（按 FORMULA_VERSION）（Task 7）
-src/lib/company/statements-grid.ts        buildStatementsGrid / periodKeyOf / primaryUnitOf（纯；Task 7）
-src/lib/company/digest.ts                 runCompanyDigest / DigestDeps（Task 8）
-src/lib/company/deps.ts                   productionDigestDeps / productionReadDeps（Task 8）
+src/lib/company/fixtures/manifest.json    夹具清单与人工抄录期望值（Task 5 建骨架，Task 19 迁到最终 schema 并补全）
+src/lib/company/fixture-manifest.ts       旧 schema 读取器 pendingExpectation（Task 5 建；Task 19 删除，由 fixtures/manifest.ts 取代）
+src/lib/company/evidence-index.ts         buildEvidenceIndex + SnapshotObjectStore（Storage 对象读取器；memorySnapshotObjectStore / supabaseSnapshotObjectStore）（Task 6）
+src/lib/company/pdf-locator.ts            PdfLocatorSource.locate(issuerId, market, factIds) + emptyPdfLocatorSource / staticPdfLocatorSource（Task 6）
+src/lib/company/evidence-gate.ts          toEvidenceDto / evidenceEligible / applyGate（纯）/ gateFacts / gateCell / gateEventPayload / metricWithheldReason / eventFactIds（Task 6）
+src/lib/company/metric-catalog.ts         METRIC_CATALOG（按 FORMULA_VERSION）/ catalogFor（Task 7）
+src/lib/company/statements-grid.ts        buildStatementsGrid(snapshot, opts) → GridOutcome（含 otherUnitOnly）/ gridReadConcepts / periodKeyOf / factCellOf / derivedCellOf / badgesOf（纯；Task 7）
+src/lib/company/digest.ts                 runCompanyDigest / DigestDeps / ReadSnapshotFn（Task 8）
+src/lib/company/deps.ts                   productionDigestDeps（Task 8）；ReadDeps / productionReadDeps / EventGateDeps / productionEventGateDeps（Task 9 追加）
 src/app/api/cron/company-digest/route.ts  cron（Task 8）
 scripts/company/digest.ts                 --full [--issuer] [--market] [--apply]（Task 8）
 vercel.json                               + /api/cron/company-digest 20 * * * *（Task 8）
 
-src/lib/company/route.ts                  组合路由共用：resolve、参数、缓存头、门槛应用、admin 变体工厂（Task 9）
-src/app/api/companies/[ticker]/statements/route.ts      （Task 9）
-src/app/api/companies/[ticker]/facts/route.ts           抽屉序列（Task 9）
+src/lib/company/route.ts                  组合路由共用：companyRoute（resolve、参数、缓存头、HK 404、admin 变体）、buildGated（evidenceOf + CN pdf.locate → applyGate）、gateCell、countWithheld（Task 9）
+src/lib/company/route-test-kit.ts         路由单测替身：makeDeps / fakeApplyGate / 行构造器 / eventRow（非测试文件；Task 9 建，Task 10 追加）
+src/lib/company/metrics-computed-at.ts    financial_metrics.computed_at 读取（Task 9）
+src/lib/company/handlers/statements.ts、handlers/facts.ts                 （Task 9）
+src/app/api/companies/[ticker]/statements/route.ts、…/facts/route.ts     （Task 9）
 src/app/api/admin/companies/[ticker]/statements/route.ts、…/facts/route.ts   未脱敏变体（Task 9）
-src/app/api/companies/[ticker]/overview/route.ts        （Task 10）
-src/app/api/companies/[ticker]/events/route.ts          （Task 10）
-src/app/api/companies/[ticker]/metrics/route.ts         指标代理（Task 10）
+src/lib/company/event-dto.ts              PublicEvent / gateEvents / gateEventRows / toPublicEvent（事件门槛唯一入口；Task 10）
+src/lib/company/handlers/{overview,events,metrics,filings}.ts            （Task 10）
+src/app/api/companies/[ticker]/{overview,events,metrics,filings}/route.ts 与 admin 同名四个（Task 10）
 src/app/api/companies/freshness/route.ts                （Task 10）
-src/app/api/companies/snapshot/route.ts                 EDGAR 稳定下载（Task 10）
-src/app/api/admin/companies/[ticker]/{overview,events,metrics}/route.ts、src/app/api/admin/companies/snapshot/route.ts（Task 10）
+src/app/api/companies/snapshot/route.ts、src/app/api/admin/companies/snapshot/route.ts   EDGAR 稳定下载（Task 10）
 
-messages/{zh,en}/company.json、messages/{zh,en}/tracking.json   （Task 11 建骨架；后续 UI 任务追加键）
-src/i18n/request.ts、src/i18n/messages-parity.test.ts           // COMPANY 块（Task 11）
-src/app/(app)/stock/[ticker]/page.tsx     服务端组件（Task 11）
-src/app/(app)/stock/[ticker]/CompanyPage.tsx          客户端外壳：页头、流切换、页签、回放条（Task 11）
-src/app/(app)/stock/[ticker]/legacy/*.tsx             从旧 page.tsx 迁出的 ai / signals / holdings 视图（Task 11）
-src/components/company/*.tsx              视图与抽屉组件（Task 11–13）
-src/lib/company/client.ts                 客户端 fetch 助手与 DTO 类型守卫（Task 11）
-
-src/lib/company/dcf-seed.ts               seedFromFacts（纯；Task 14）
-src/lib/dcf/assemble.ts、src/app/api/dcf/[ticker]/route.ts、src/components/DcfStudio.tsx   读者迁移（Task 14）
-src/app/api/companies/[ticker]/packet/route.ts、src/app/api/admin/companies/[ticker]/packet/route.ts   （Task 15）
+src/lib/company/dcf-seed.ts               seedFromFacts / seedResponse（纯；Task 14）
+src/lib/dcf/bridge.ts                     DcfSeedResponse / DcfRunResponse / bridgeFields / canRun（Task 14）
+src/lib/dcf/assemble.ts、src/app/api/dcf/[ticker]/route.ts、src/components/DcfStudio.tsx（DcfStudio({ticker, asOf?, onOpenFact?})）   读者迁移（Task 14）
+src/lib/company/handlers/packet.ts、src/app/api/companies/[ticker]/packet/route.ts、src/app/api/admin/companies/[ticker]/packet/route.ts   （Task 15）
 src/lib/agent/tools.ts、src/lib/agent/methods/*（措辞）、src/lib/hooks/useQuote.ts（删 useFinancials）、src/app/api/consensus/[ticker]/route.ts、src/app/api/stocks/[ticker]/route.ts（TODO 注释）   （Task 15）
 
-src/app/api/tracking/watches/route.ts、[issuerId]/route.ts、[issuerId]/read/route.ts、import-watchlist/route.ts、src/app/api/tracking/inbox/route.ts   （Task 16）
-src/lib/company/inbox.ts                  收件箱折叠与 keyset 游标（纯；Task 16）
-src/app/(app)/watchlist/tracking/page.tsx + src/components/company/tracking/*   （Task 17）
-src/app/api/companies/route.ts、src/app/(app)/intel/companies/page.tsx、src/app/(app)/intel/page.tsx（入口卡）   （Task 18）
+messages/{zh,en}/company.json、messages/{zh,en}/tracking.json   （Task 11 建骨架；Task 17、18 追加键）
+src/i18n/request.ts、src/i18n/messages-parity.test.ts           // COMPANY 块（Task 11）
+src/app/(app)/stock/[ticker]/page.tsx     服务端组件（未知 ticker → notFound；Task 11）
+src/app/(app)/stock/[ticker]/CompanyPage.tsx          客户端外壳：页头、流切换、页签、回放条（Task 11；Task 12、13 改 renderFactView）
+src/app/(app)/stock/[ticker]/legacy/*.tsx             从旧 page.tsx 迁出的 ai / signals / holdings 视图（Task 11）
+src/lib/company/client.ts                 客户端 fetch 助手与路由 DTO 的客户端类型（与 Task 9/10 服务端 DTO 逐字段一致；Task 11）
+src/lib/company/header-model.ts、page-data.ts                                 （Task 11）
+src/components/company/*.tsx              视图与抽屉组件（Task 11–13）；format.ts 是 Task 7 decimal.ts 的适配层（Task 12）
+src/components/company/tracking/TrackButton.tsx、tracking/CompanyTrackingView.tsx   Task 11 建可用占位，Task 17 整文件覆盖
+src/lib/company/judgments.ts + fixtures/judgments/*.json                        F4 适配（Task 13）
 
-src/lib/company/fixtures/manifest.json    夹具清单与人工抄录期望值（Task 5 建，Task 19 补）
+src/lib/company/inbox.ts                  收件箱折叠与 keyset 游标（纯、浏览器安全；Task 16）
+src/lib/company/tracking-import.ts、tracking-issuers.ts、tracking-route.ts       （Task 16）
+src/app/api/tracking/watches/route.ts、[issuerId]/route.ts、[issuerId]/read/route.ts、import-watchlist/route.ts、src/app/api/tracking/inbox/route.ts   （Task 16）
+src/lib/company/event-text.ts、tracking-client.ts                               （Task 17）
+src/app/(app)/watchlist/tracking/page.tsx + src/components/company/tracking/*   （Task 17）
+src/lib/company/directory.ts、src/app/api/companies/route.ts、src/app/(app)/intel/companies/page.tsx、src/components/company/directory/*、src/app/(app)/intel/page.tsx（入口卡）、src/components/tab-active.ts   （Task 18）
+
+src/lib/company/fixtures/manifest.ts      清单最终读取器 readyExpectation（Task 19）
+scripts/company/e2e-seed.ts、scripts/company/manifest-hash.ts                    （Task 19）
 e2e/company.spec.ts                       （Task 19）
 docs/runbooks/company-research.md         （Task 19）
-docs/audits/2026-11-06-company-research/01-implementation-log.md   （每任务追加）
+docs/audits/2026-11-06-company-research/01-implementation-log.md   （指挥在 Task 1 前创建；每任务追加）
 docs/superpowers/specs/2026-11-04-company-research-design.md §17     实施偏差（Task 19）
 ```
 
@@ -168,7 +180,7 @@ export type WithheldReason='evidence_incomplete'|'citation_pending';
 export interface WithheldCell{kind:'withheld';reason:WithheldReason;factId:string}
 export interface FactCell{kind:'fact';factId:string;value:string;unit:string;availableDate:string;filingId:string;disclosureSeq:number;isRevision:boolean;mappingGen:number;rawHash:string;runId:string;otherUnits:boolean}
 export interface DerivedCell{kind:'derived';metric:string;value:string;unit:string;inputUnit:string;basis:string;formulaVersion:string;inputs:{factId:string;concept:string;filingId:string;availableDate:string}[];rule?:'a'|'b'}
-/** Grid cell (spec §5.3). null = no visible fact for this concept in this period. `otherUnits` drives the U badge. */
+/** Grid cell (spec §5.3). null = no visible fact in the row's primary unit for this period (periods with only other-unit facts are listed in statements-grid GridResult.otherUnitOnly → "—" + U). `otherUnits` drives the U badge on a value cell. */
 export type Cell=FactCell|DerivedCell|WithheldCell|null;
 export interface WithheldCounts{evidenceIncomplete:number;citationPending:number}
 
@@ -222,9 +234,14 @@ export interface CompanyDb{
 | `replace_company_fact_evidence(p_issuer uuid, p_market text, p_rows jsonb) → jsonb {upserted, deleted}` | plpgsql definer | service_role | §0.1 item 2：每行 `fact_id` 必须属于该流；整流替换（不在 p_rows 中的旧行删除） |
 | `company_fact_evidence(p_fact_ids uuid[]) → jsonb` | sql/plpgsql definer stable | anon, authenticated, service_role | §0.1 item 2：≤100；只 ok + published run + 当前代；白名单字段 |
 | `company_read_snapshot(p_issuer uuid, p_market text, p_concepts text[], p_as_of date, p_from date, p_to date, p_history boolean, p_limit int) → jsonb {facts: <read_facts 信封>, filings: [...]}` | sql **invoker** stable | anon, authenticated, service_role | §0.1 item 3 |
-| `company_digest_due(p_now timestamptz, p_limit int) → jsonb`、`company_sweep_due(p_older_than timestamptz, p_now timestamptz, p_limit int) → jsonb`、`company_digest_backlog() → int` | sql definer stable | service_role | §4.7（`fact_sync_scope` 对 service_role 只读，left join 需一条语句） |
+| `company_digest_due(p_now timestamptz, p_limit int) → jsonb`、`company_sweep_due(p_older_than timestamptz, p_now timestamptz, p_limit int) → jsonb`、`company_digest_backlog() → int` | sql definer stable | service_role | §4.7（`fact_sync_scope` 对 service_role 只读，left join 需一条语句）；`company_sweep_due` 只选 `state_rev > 0` |
+| `company_list_coverage(p_market text, p_issuer_ids uuid[], p_sort text, p_offset int, p_limit int) → jsonb {rows, total}` | plpgsql **invoker** stable | anon, authenticated, service_role | §8；`listCoverage` 三实现都调它（`sort='name'` 需联 `issuers` 排序后分页） |
+| 内部助手 `company_canonical_json(jsonb) → text`、`company_ev_keys/_text/_date/_int/_uuid/_fact/_filing/_side/_check`、`company_cov_check`、`company_evidence_check` | definer | **不授任何客户端角色** | §4.6 ⑤、事件/覆盖/证据校验 |
+| 触发器函数 `company_watches_limit()`（≥200 → `watch_limit`）、`company_watches_touch()`、`company_event_reads_check()`（Task 1 表迁移） | plpgsql | 触发器 | 决策 F、§4.3 |
 
-`replace_company_digest` 的 canonical JSON（§4.6 ⑤）与 `src/lib/company/canonical.ts` 必须逐字节一致：对象键按 Unicode 码点升序、无空白、字符串按 JSON 转义（与 `JSON.stringify` 相同）、数值一律以字符串出现（payload 中的值字段本来就是 `value_text` 字符串；整数计数如 `factCount`、`conceptCount` 以 JSON 数字出现，SQL 侧用 `jsonb` 的文本输出前先自建 canonical 序列化函数 `public.company_canonical_json(jsonb) → text`，不要依赖 `jsonb::text`（它在 `:` 与 `,` 后加空格））。Task 2 的集成测试断言 SQL 与 TS 对同一组 payload 的 `event_id`/`payload_hash` 相等。
+错误码（函数消息首词 = `CompanyDbError.code`）：`unknown_stream`、`stale_computation`、`stale_attempt`、`invalid_event`、`invalid_evidence`、`invalid_read`、`watch_limit`；`invalid_attempt`/`invalid_batch`/`invalid_now`/`immutable_watch_key` → `internal`；`markRead` 的外键失败 → `invalid_read`。函数内"今天" = `(now() at time zone 'UTC')::date`；TS 侧 digest `cutoff` 同为 UTC 日期。
+
+`replace_company_digest` 的 canonical JSON（§4.6 ⑤）与 `src/lib/company/canonical.ts`（Task 2 建）必须逐字节一致：对象键按 Unicode 码点升序、无空白、字符串按 JSON 转义（与 `JSON.stringify` 相同）、数值一律以字符串出现（payload 中的值字段本来就是 `value_text` 字符串；整数计数如 `factCount`、`conceptCount` 以 JSON 数字出现，SQL 侧用 `jsonb` 的文本输出前先自建 canonical 序列化函数 `public.company_canonical_json(jsonb) → text`，不要依赖 `jsonb::text`（它在 `:` 与 `,` 后加空格））。Task 2 的集成测试断言 SQL 与 TS 对同一组 payload 的 `event_id`/`payload_hash` 相等。
 
 ### 事件 payload 固定 schema（Task 2 SQL 校验与 Task 5 TS 产出共用）
 
@@ -233,26 +250,26 @@ filing_published   payload {formType:string, fiscalYear:int|null, fiscalPeriod:s
 period_first_seen  payload {periodStart:date, periodEnd:date, duration:string, filingId:uuid, conceptCount:int, headline:{[k in revenue|revenue_operating|net_income_parent|operating_cash_flow]?:{factId:uuid,value:string,unit:string}}, ambiguousUnits:string[]}   meta {headlineAsOf:date}
 fact_revised       payload {concept, statement, periodStart:date, periodEnd:date, duration, consolidation:'consolidated', unit, from:{factId,value,filingId,availableDate}, to:{factId,value,filingId,availableDate}, relChange?:string}   meta {}
 ```
-`relChange` 为精确十进制字符串（`decimalRelChange(from,to)`，10 位小数，四舍五入远离零；`from=0` 时省略）。payload 中 `value` 必须等于对应事实的 `value_text`（函数校验）。
+`relChange` 为精确十进制字符串（Task 5 `decimalRelChange(from,to)`：10 位小数、四舍五入远离零，再去尾零成规范形，如 `'0.2'`；`from=0` 时省略）。SQL 只校验出现条件（当且仅当 `from` 数值 ≠ 0）与格式 `^-?[0-9]+(\.[0-9]+)?$`（去尾零与否都接受），不重算数值。payload 中 `value` 必须等于对应事实的 `value_text`（函数校验）。所有 kind 的顶层键恰为 `kind, natural_key, occurred_on, period_end, concept, filing_id, payload, meta`；`filing_published`：`natural_key = filing_id`、`concept = null`、payload 与 filings 行逐项相等（含 `factCount`，故 digest 以全部概念读取）；`fact_revised`：`filing_id`/`concept` 取自 `to`，INSTANT 的 `periodStart = periodEnd`，每个自然键序列按可得日期折叠（同日只留最后一条），自然键末段为 `to.availableDate`。Task 3 `db-contract.ts` 的 `filingPublishedOf`/`factRevisedOf` 与 Task 5 `deriveIssuerEvents` 逐键一致。
 
 ---
 
 ## 任务总表
 
-推荐顺序：1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 14 → 15 → 11 → 12 → 13 → 16 → 17 → 18 → 19。Part A/B 是后续全部任务的前提；Task 11 之后的 UI 任务依赖 Task 9/10 的路由 DTO。
+推荐顺序：1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 14 → 15 → 11 → 12 → 13 → 16 → 17 → 18 → 19。Part A/B 是后续全部任务的前提；Task 11 之后的 UI 任务依赖 Task 9/10 的路由 DTO（`client.ts` 逐字段镜像）；Task 16 依赖 Task 9 `productionEventGateDeps` 与 Task 10 `gateEventRows`；Task 17 覆盖 Task 11 的两个跟踪占位文件。整合后的跨任务接口以本节、`共享契约` 与各 Part 前言的"整合核对"行为准（见文末自检记录的接口对账表）。
 
 | Task | 工作包 | 内容 | 规格 |
 |---|---|---|---|
 | 1 | C0 | 表迁移 + RLS/授权 + 触发器 + Row 类型 + 集成测试骨架（critical） | §4.1–4.4、§4.6 权限、§0 #64、§0.1 item 2 表 |
-| 2 | C0 | 函数迁移（digest 三函数、证据写/读、同快照读、选择三函数、canonical JSON）+ 并发与角色集成测试 (a)–(f) + 锁定两份迁移 | §4.6、§12.2、§0 #64 #70 |
-| 3 | C0 | `types.ts`、`canonical.ts`、`CompanyDb` 契约 + supabase/内存实现 + `snapshot-read.ts` | §4.7、§0.1 |
+| 2 | C0 | 函数迁移（digest 三函数、证据写/读、同快照读、选择三函数、`company_list_coverage`、canonical JSON）+ `canonical.ts` + 并发与角色集成测试 (a)–(f) + 锁定两份迁移 | §4.6、§12.2、§0 #64 #70 |
+| 3 | C0 | `types.ts`、`CompanyDb` 契约 + supabase/内存实现 + `snapshot-read.ts` | §4.7、§0.1 |
 | 4 | C0 | `pgCompanyDb` + 真实库契约 | §4.7、§12.2 |
-| 5 | C0 | `events.ts`、`coverage.ts` + 夹具清单骨架 | §7、§4.1–4.2、§12.0、§0 #72 |
+| 5 | C0 | `decimal.ts`（差值/相对变化）、`test-builders.ts`、`events.ts`、`coverage.ts` + 夹具清单骨架 | §7、§4.1–4.2、§12.0、§0 #72 |
 | 6 | C0/C1 | 证据索引构建器、`pdf-locator.ts`、`evidence-gate.ts`（DTO + 门槛） | §5.6、§0.1 item 2、§0 #62 #63 |
-| 7 | C1 | `decimal.ts`、`metric-catalog.ts`、`statements-grid.ts` | §5.3、§5.4、§0 #66 |
-| 8 | C0 | `digest.ts` + cron + 脚本 + `vercel.json` + 依赖装配 | §6.3、§11 |
-| 9 | C1 | 组合路由共用层 + statements + facts（抽屉）+ admin 变体 | §6、§6.1、§6.4、§0 #67 #68 #69 |
-| 10 | C1 | overview、events、metrics 代理、freshness、snapshot + admin 变体 | §6.1、§6.4、§0 #62 #64 #67 |
+| 7 | C1 | `decimal.ts` 追加显示格式化、`metric-catalog.ts`、`statements-grid.ts` | §5.3、§5.4、§0 #66 |
+| 8 | C0 | `digest.ts` + cron + 脚本 + `vercel.json` + digest 依赖装配 | §6.3、§11 |
+| 9 | C1 | 读路由装配 `ReadDeps` + 组合路由共用层 + statements + facts（抽屉）+ admin 变体 | §6、§6.1、§6.4、§0 #67 #68 #69 |
+| 10 | C1 | `event-dto.ts`（事件门槛唯一入口）、overview、events、metrics 代理、filings、freshness、snapshot + admin 变体 | §6.1、§6.4、§0 #62 #64 #67 |
 | 11 | C1 | i18n 两域、服务端 `page.tsx`、`CompanyPage` 外壳（页头、流切换、页签、回放条、状态）、旧视图迁出、mock 不再渲染、决策 E/J | §5.1、§5.2、§5.7、§5.9、§5.10、决策 E/J |
 | 12 | C1 | 报表视图 + 披露历史抽屉 + 公式抽屉 + 概念说明 + CSV + 迷你柱 | §5.3、§5.6 |
 | 13 | C1/C5 | 指标视图、文件视图、概览视图、判断视图（F4 开关）、F3 开关、移动端 | §5.4、§5.5、§5.8、§10.3、§10.4 |
@@ -261,7 +278,7 @@ fact_revised       payload {concept, statement, periodStart:date, periodEnd:date
 | 16 | C3 | 跟踪 API（watches/read/import/inbox）+ `inbox.ts` | §6.2、§7.3、§0 #64 |
 | 17 | C3 | `/watchlist/tracking` 页 + 公司页跟踪视图 | §6.2、§7.3、画板 Tracking/M-Tracking |
 | 18 | C4 | `/api/companies` + `/intel/companies` + `/intel` 入口卡 | §8 |
-| 19 | C6 | e2e、夹具清单补全、runbook、规格 §17、全量门禁 | §12.3、§13 C6、§14 |
+| 19 | C6 | e2e、夹具清单迁移与补全（删 Task 5 旧读取器）、runbook、规格 §17、全量门禁 | §12.3、§13 C6、§14 |
 
 ---
 
@@ -271,7 +288,7 @@ fact_revised       payload {concept, statement, periodStart:date, periodEnd:date
 
 ## Part A：迁移、函数、`CompanyDb` 契约与三实现（Tasks 1–4）
 
-本部分对骨架的修订与补充（整合时并入"文件结构"与"SQL 函数签名"）：
+本部分对骨架的修订与补充（**已由整合编辑并入**"文件结构"与"SQL 函数签名"）：
 
 - **`canonical.ts` 改由 Task 2 创建**（连同 `canonical.test.ts`），因为 Task 2 的集成测试要断言 SQL 与 TS 逐字节一致；Task 3 只使用它。文件结构表中 `src/lib/company/canonical.ts` 一行改为"（Task 2）"，并增加 `src/lib/company/canonical.test.ts（Task 2）`。
 - **骨架之外新增的 SQL 对象**（都在 Task 2 的函数迁移里，除触发器外）：
@@ -1070,7 +1087,7 @@ git commit -m "feat(company): event, coverage, watch, receipt, digest-state and 
 指挥决定（Task 2）：
 - `fact_revised` 对 `INSTANT` 事实的 `periodStart` 记为 `periodEnd`（与 `period_first_seen` 相同规则），自然键因而是 `concept:pe:pe:consolidated:unit:date`。理由：规格只对 `period_first_seen` 写明，两种 kind 用同一规则可避免 `null` 进入自然键。
 - 顶层 `filing_id`/`concept`/`period_end`/`occurred_on` 与 payload 必须一致（上表），`filing_published` 的 payload 必须与 filings 行逐项相等（含 `factCount`）：事件是公共可读事实的派生物，服务端能核对的都核对。Part B 的 `deriveIssuerEvents` 必须以 `concepts: CONCEPT_IDS`（全部概念）读取事实，否则 `factCount` 不等。
-- `relChange` 只校验格式与出现条件，不在 SQL 重算其数值（舍入规则归 Task 7 的 `decimalRelChange`）。
+- `relChange` 只校验格式与出现条件，不在 SQL 重算其数值（舍入规则归 Task 5 的 `decimalRelChange`，其输出去尾零；正则同样接受）。
 - `p_coverage` 恰为 `CoverageInput` 九键：三个计数 int ≥ 0、三个日期可空、`citation_summary` 恰为 `{linked, pending, edgar}` 非负整数、`scope_last_success_at` 时间戳字符串或 null、`scope_last_status ∈ {success, failed, null}`；按调用方给的值存储（不改写为锁内的 scope 值）。
 - `company_sweep_due` 只选 `state_rev > 0` 的流（从未发布过事实的流没有可物化的内容）。
 - canonical JSON 规则：对象键按 Unicode 码点升序（= UTF-8 字节序，SQL 用 `collate "C"`，TS 用 `Buffer.compare`；**不是** JS 默认的 UTF-16 排序——`'�' < '😀'`）；无空白；字符串转义与 `JSON.stringify` 相同：`"` `\\` `\b` `\f` `\n` `\r` `\t` 用短转义，其余 U+0000–U+001F 用小写 `\u00xx`，U+007F、U+2028/U+2029、`/` 与全部非 ASCII 原样输出（PostgreSQL `to_json(text)` 恰好是这个规则）；数字只允许安全整数（|n| ≤ 2^53−1），以十进制整数输出（`-0` → `0`）；其他数字 → SQL `invalid_event` / TS `CanonicalJsonError`。TS 侧另外拒绝含 U+0000 或孤立代理项的字符串（PostgreSQL 文本无法表示，两边不可能一致）；对象中值为 `undefined` 的键被省略（与 `JSON.stringify` 送到 SQL 的结果一致），数组中的 `undefined` 抛错。哈希一律对 UTF-8 字节。
@@ -2464,7 +2481,7 @@ export type WithheldReason='evidence_incomplete'|'citation_pending';
 export interface WithheldCell{kind:'withheld';reason:WithheldReason;factId:string}
 export interface FactCell{kind:'fact';factId:string;value:string;unit:string;availableDate:string;filingId:string;disclosureSeq:number;isRevision:boolean;mappingGen:number;rawHash:string;runId:string;otherUnits:boolean}
 export interface DerivedCell{kind:'derived';metric:string;value:string;unit:string;inputUnit:string;basis:string;formulaVersion:string;inputs:{factId:string;concept:string;filingId:string;availableDate:string}[];rule?:'a'|'b'}
-/** Grid cell (spec §5.3). null = no visible fact for this concept in this period. `otherUnits` drives the U badge. */
+/** Grid cell (spec §5.3). null = no visible fact in the row's primary unit for this period (periods with only other-unit facts are listed in statements-grid GridResult.otherUnitOnly → "—" + U). `otherUnits` drives the U badge on a value cell. */
 export type Cell=FactCell|DerivedCell|WithheldCell|null;
 export interface WithheldCounts{evidenceIncomplete:number;citationPending:number}
 
@@ -4024,14 +4041,14 @@ Part B 只依赖下列 Part A（Task 1–4）导出；名字不一致时**改本
 | 来源 | 假设的导出 | Part B 用途 |
 |---|---|---|
 | `src/lib/company/types.ts`（Task 3，按计划共享契约原样） | `EventInput`、`EventKind`、`CoverageInput`、`CitationSummary`、`FilingSummary`、`ReadSnapshotResult`、`ReadSnapshotOptions`（`concepts:null` = 全部概念）、`EvidenceIndexRow`、`EvidenceRecord`、`EvidenceDto`、`PdfLocator`、`WithheldReason`、`WithheldCounts`、`Cell`、`FactCell`、`DerivedCell`、`WithheldCell`、`GridRow`、`PeriodCol`、`Basis`、`StatementKind`、`CompanyDb`、`DueStream`、`ReplaceResult`、`CompanyDbError`、`EVIDENCE_INDEX_VERSION` | 全部 |
-| `src/lib/company/memory-company-db.ts`（Task 3） | `memoryCompanyDb(opts:{facts:MemoryFactsDb;tables:TableClient}):CompanyDb`——`digestDue/sweepDue` 读 `opts.facts.scope()` 的 `state_rev`；`replaceDigest` 对 `opts.facts` 当前 `state_rev` 做 stale 检查、在 `opts.tables` 的 `ingest_batches` 里校验批次 `producer='company-digest'` 且 `status='running'`；方法都是闭包（不依赖 `this`，可被 `{...db, x:override}` 展开包装） | Task 8 单测 |
+| `src/lib/company/memory-company-db.ts`（Task 3） | **（整合核对后）** `memoryCompanyDb(opts:{facts:MemoryFactsDb}):MemoryCompanyDb`——`digestDue/sweepDue` 读 `opts.facts.scope()` 的 `state_rev`；`replaceDigest` 对 `opts.facts` 当前 `state_rev` 做 stale 检查；批次校验（`producer='company-digest'` 且 `status='running'`）查内存 `registerBatch(id, {...})` 登记的批次（内存版没有 `ingest_batches` 表；Task 8 单测把 `replaceDigest` 包一层，先 `registerBatch(batch)` 再转发）；方法都是闭包（不依赖 `this`，可被 `{...db, x:override}` 展开包装） | Task 8 单测 |
 | 同上 | `ReplaceResult.changed` = 本次**新插入**或 `payload_hash` 变化的事件行数（`upserted` = 本次写入的全部行） | Task 8 批次计数 `inserted` 判定 |
-| `src/lib/company/snapshot-read.ts`（Task 3） | `readSnapshot(client:SupabaseClient,issuer,market,opts):Promise<ReadSnapshotResult>`；`memoryReadSnapshot(facts:MemoryFactsDb):(issuer,market,opts)=>Promise<ReadSnapshotResult>`（同 `company_read_snapshot` 语义：信封 + `mapping_gen>0 && available_date<=asOf` 的 filings，`factCount` 按同一快照计数） | Task 6、8 |
-| `src/lib/company/pg-company-db.ts`（Task 4） | `pgCompanyDb(pool:Pool):CompanyDb`、`pgReadSnapshot(pool:Pool):(issuer,market,opts)=>Promise<ReadSnapshotResult>`（以 service_role 调 `company_read_snapshot`）。**若 Task 4 没导出 `pgReadSnapshot`，Task 8 Step 9 先把它补到 `pg-company-db.ts` 末尾**（用 snapshot-read.ts 里把 jsonb 转成 `ReadSnapshotResult` 的同一个转换函数） | Task 8 集成用例 |
+| `src/lib/company/snapshot-read.ts`（Task 3） | `readSnapshot(client:SupabaseClient\|RpcClient,issuer,market,opts):Promise<ReadSnapshotResult>`；`SnapshotReader`（= `(issuer,market,opts)=>Promise<ReadSnapshotResult>`，与 Task 8 `ReadSnapshotFn` 同型）；`snapshotReader(client)`；`memorySnapshotReader(facts:MemoryFactsDb):SnapshotReader`（同 `company_read_snapshot` 语义：信封 + `mapping_gen>0 && available_date<=asOf` 的 filings，`factCount` 按同一快照计数） | Task 6、8 |
+| `src/lib/company/pg-company-db.ts`（Task 4） | `pgCompanyDb(pool:Pool):CompanyDb`、`pgRpcClient(pool:Pool, role):RpcClient`；同快照读 = `snapshotReader(pgRpcClient(pool,'service_role'))`（不另建 `pgReadSnapshot`） | Task 8 集成用例 |
 | `src/lib/company/db.ts`（Task 3） | `supabaseCompanyDb(client:SupabaseClient):CompanyDb` | Task 8 `deps.ts` |
 | `src/lib/company/company-research.integration.test.ts`（Task 1 建、Task 2/4 扩） | 文件存在、已在 `criticalSuites`；顶部已有 `readFileSync`、`Pool`、`describe/it/expect/beforeAll/afterAll` 的 import 与 `const enabled=!!process.env.S4_TEST_STATE` | Task 8 追加一个 `describe` |
 
-Part B 新增、Part C/D/E 会用到的导出（后续任务用这些名字）：`EVENTS_VERSION`、`deriveIssuerEvents`、`summarizeCoverage`（Task 5）；`decimalSub`、`decimalRelChange`（Task 5 建 `decimal.ts`）、`formatDecimalText`、`groupThousands`、`divisorOf`、`scaleFor`、`DisplayScale`（Task 7 追加到 `decimal.ts`）；`SnapshotReader`、`memorySnapshotReader`、`supabaseSnapshotReader`、`buildEvidenceIndex`（Task 6）；`PdfLocatorSource`、`emptyPdfLocatorSource`、`staticPdfLocatorSource`（Task 6）；`toEvidenceDto`、`evidenceEligible`、`applyGate`、`gateFacts`、`gateCell`、`gateEventPayload`、`metricWithheldReason`、`eventFactIds`、`Eligibility`、`GateResult`（Task 6）；`METRIC_CATALOG`、`METRIC_CATALOG_VERSION`、`catalogFor`（Task 7）；`buildStatementsGrid`、`periodKeyOf`、`primaryUnitOf`、`statementConcepts`、`gridReadConcepts`、`badgesOf`、`GridResult`、`GridOutcome`（Task 7）；`runCompanyDigest`、`selectStreams`、`interleave`、`DigestDeps`、`ReadSnapshotFn`、`DigestError`（Task 8）；`productionDigestDeps`、`productionReadDeps`（Task 8 `deps.ts`）；测试构造器 `src/lib/company/test-builders.ts`（Task 5，非测试文件，供后续单测复用）。
+Part B 新增、Part C/D/E 会用到的导出（后续任务用这些名字）：`EVENTS_VERSION`、`deriveIssuerEvents`、`summarizeCoverage`（Task 5）；`decimalSub`、`decimalRelChange`（Task 5 建 `decimal.ts`）、`formatDecimalText`、`groupThousands`、`divisorOf`、`scaleFor`、`DisplayScale`（Task 7 追加到 `decimal.ts`）；`SnapshotObjectStore`、`memorySnapshotObjectStore`、`supabaseSnapshotObjectStore`、`buildEvidenceIndex`（Task 6；整合改名：存储对象读取器与 Task 3 `snapshot-read.ts` 的同快照读取器 `SnapshotReader` 重名，存储侧统一叫 `SnapshotObjectStore`）；`PdfLocatorSource`、`emptyPdfLocatorSource`、`staticPdfLocatorSource`（Task 6）；`toEvidenceDto`、`evidenceEligible`、`applyGate`、`gateFacts`、`gateCell`、`gateEventPayload`、`metricWithheldReason`、`eventFactIds`、`Eligibility`、`GateResult`（Task 6）；`METRIC_CATALOG`、`METRIC_CATALOG_VERSION`、`catalogFor`（Task 7）；`buildStatementsGrid`、`periodKeyOf`、`primaryUnitOf`、`statementConcepts`、`gridReadConcepts`、`factCellOf`、`derivedCellOf`、`badgesOf`、`GridResult`、`GridOutcome`、`GridPeriods`（Task 7）；`runCompanyDigest`、`selectStreams`、`interleave`、`DigestDeps`、`ReadSnapshotFn`、`DigestError`（Task 8）；`productionDigestDeps`（Task 8 `deps.ts`；`ReadDeps`/`productionReadDeps`/`EventGateDeps`/`productionEventGateDeps` 由 Task 9 追加到同文件）；测试构造器 `src/lib/company/test-builders.ts`（Task 5，非测试文件，供后续单测复用）。
 
 **文件表修订（指挥决定）**：`src/lib/company/decimal.ts` 由 **Task 5** 新建（只含 `parseDecimal/decToString/decimalSub/decimalRelChange`，事件 `relChange` 需要它），Task 7 再追加显示格式化函数。理由：保持任务表 5→6→7 的顺序，又不让 Task 5 依赖尚未存在的文件。另新增 `src/lib/company/test-builders.ts`、`src/lib/company/fixture-manifest.ts`（Task 5）。
 
@@ -4064,7 +4081,7 @@ Part B 新增、Part C/D/E 会用到的导出（后续任务用这些名字）�
 7. 迟到的中间披露 B（可得日期在 A、C 之间）：`A→C` 的键（`to` = C 的日期）不变但 payload 变为 `B→C`，并新增 `A→B`。
 8. `decimalRelChange(from, to) = (to − from) ÷ |from|`，BigInt 精确运算，四舍五入远离零到 10 位小数，再 `canonicalDecimal`（去尾零；指挥决定：与 `derive.ts` 比率输出同一规范形）；`from` 为 0 返回 `null`。`decimalSub(a,b)` 精确差，规范形。
 9. `summarizeCoverage({rows, filings, scope})` → `CoverageInput`：`filings_count` = `mappingGen>0` 的 filing 数；`facts_count` = `status='ok'` 的行数（history 信封里每条披露一行；指挥决定："当前可见"按信封可见行计，与 `filing_published.factCount` 之和一致）；`concepts_covered` = 不同概念数；`earliest_period_end`/`latest_period_end` = 行的最小/最大 `period_end`；`latest_available_date` = filings 最大 `availableDate`（含零事实 filing；与目录列"最近文件日"同义）；`citation_summary = {linked, pending, edgar}` 按 `FilingSummary.citation` 计数；`scope_last_success_at`/`scope_last_status` 原样复制 `scope.last_success_at/last_status`（`scope` 为 null 时两者 null）。
-10. 夹具清单 `src/lib/company/fixtures/manifest.json`：列出规格二夹具文件、sha256（`shasum -a 256` 算出，**文件字节**的摘要，不是实现输出）与录制时间；期望值条目全部 `status:"pending"`、`expected:null`、`transcribed_by:null`——**不得以实现输出填期望值**（§0 #72）；`fixture-manifest.ts` 给后续验收测试用 `pendingExpectation(id)` 判断跳过。
+10. 夹具清单 `src/lib/company/fixtures/manifest.json`（整合注：Task 19 把清单迁到最终 schema，并用 `src/lib/company/fixtures/manifest.ts` 取代本任务的 `fixture-manifest.ts`；本任务的骨架与读取器在 Task 5–18 期间有效）：列出规格二夹具文件、sha256（`shasum -a 256` 算出，**文件字节**的摘要，不是实现输出）与录制时间；期望值条目全部 `status:"pending"`、`expected:null`、`transcribed_by:null`——**不得以实现输出填期望值**（§0 #72）；`fixture-manifest.ts` 给后续验收测试用 `pendingExpectation(id)` 判断跳过。
 
 - [ ] **Step 1: 写 `decimal.test.ts`（先失败）**
 
@@ -4602,7 +4619,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 **要求清单：**
 
-A. **快照读取器** `SnapshotReader {list(prefix), get(path), meta(path)}`：`list` 返回 `prefix` 下**数据对象**的完整路径（只匹配 `<64 hex>.json`，排除 `.meta.json`），升序；`get` 返回字节或 `null`（对象不存在）；`meta` 读 `metaPath(path)` 的 sidecar JSON（不存在或不是 JSON → `null`）。两个实现：`memorySnapshotReader(objects)`（包 `memorySnapshotStore().objects`）与 `supabaseSnapshotReader(admin)`（`admin.storage.from(SNAPSHOT_BUCKET)`：`list(folder,{limit:1000,offset,sortBy:{column:'name',order:'asc'}})` 翻页到不足 1000；`download(path)`；不存在 → `null`；其他错误抛 `snapshot_list_failed` / `snapshot_download_failed`，只带固定码，不带响应内容）。
+A. **快照读取器** `SnapshotObjectStore {list(prefix), get(path), meta(path)}`：`list` 返回 `prefix` 下**数据对象**的完整路径（只匹配 `<64 hex>.json`，排除 `.meta.json`），升序；`get` 返回字节或 `null`（对象不存在）；`meta` 读 `metaPath(path)` 的 sidecar JSON（不存在或不是 JSON → `null`）。两个实现：`memorySnapshotObjectStore(objects)`（包 `memorySnapshotStore().objects`）与 `supabaseSnapshotObjectStore(admin)`（`admin.storage.from(SNAPSHOT_BUCKET)`：`list(folder,{limit:1000,offset,sortBy:{column:'name',order:'asc'}})` 翻页到不足 1000；`download(path)`；不存在 → `null`；其他错误抛 `snapshot_list_failed` / `snapshot_download_failed`，只带固定码，不带响应内容）。
 
 B. **构建器** `buildEvidenceIndex({reader}, {issuerId, market, rows, filings, cache?})` → `{rows: EvidenceIndexRow[], stats}`，供 `CompanyDb.replaceEvidence(issuer, market, rows)`（整流替换）。步骤：
  1. `source = US ? 'edgar' : 'tushare'`；列出 `${source}/${issuerId}/` 下全部对象。
@@ -4638,7 +4655,7 @@ import {SYNTHETIC_DIR,loadTushareFixtures} from '@/lib/facts/providers/tushare-f
 import {budgetFor,snapshotOf} from '@/lib/facts/providers/shared';
 import {memorySnapshotStore,metaPath,snapshotPath} from '@/lib/facts/snapshot-store';
 import type {FactCandidate,FactRow,RawSnapshot} from '@/lib/facts/types';
-import {buildEvidenceIndex,edgarPointer,memorySnapshotReader,resolvePointer,tusharePointer} from './evidence-index';
+import {buildEvidenceIndex,edgarPointer,memorySnapshotObjectStore,resolvePointer,tusharePointer} from './evidence-index';
 import {ISSUER,factRow,filingSummary,resetBuilders} from './test-builders';
 import {EVIDENCE_INDEX_VERSION} from './types';
 import type {FilingSummary} from './types';
@@ -4684,7 +4701,7 @@ describe('buildEvidenceIndex — EDGAR',()=>{
   const store=await stored([snap],'edgar');
   const pick=[...cands.slice(0,40),...cands.filter(c=>c.unit==='USD/share').slice(0,3)];
   const {rows,filings}=factsFrom(pick,'US','edgar');
-  const res=await buildEvidenceIndex({reader:memorySnapshotReader(store.objects)},{issuerId:ISSUER,market:'US',rows,filings});
+  const res=await buildEvidenceIndex({reader:memorySnapshotObjectStore(store.objects)},{issuerId:ISSUER,market:'US',rows,filings});
   expect(res.rows).toHaveLength(rows.length);
   expect(res.stats).toMatchObject({objects:1,facts:rows.length,indexed:rows.length,unmatched:0,multiMatch:0,valueMismatch:0,pointerUnresolved:0});
   const doc=decodeCompanyFacts(AAPL);
@@ -4702,7 +4719,7 @@ describe('buildEvidenceIndex — EDGAR',()=>{
   const {rows,filings}=factsFrom(cands.slice(0,5),'US','edgar');
   const other=filingSummary({sourceRef:'0000000000-00-000000'});
   const bad=[{...rows[0],value:'1',value_text:'1'},{...rows[1],filing_id:other.filingId},{...rows[2],raw_hash:'f'.repeat(64)},{...rows[3],concept:'cost_of_revenue'},{...rows[4],status:'quarantined' as const}];
-  const res=await buildEvidenceIndex({reader:memorySnapshotReader(store.objects)},{issuerId:ISSUER,market:'US',rows:bad,filings:[...filings,other]});
+  const res=await buildEvidenceIndex({reader:memorySnapshotObjectStore(store.objects)},{issuerId:ISSUER,market:'US',rows:bad,filings:[...filings,other]});
   expect(res.rows).toEqual([]);
   expect(res.stats).toMatchObject({facts:4,valueMismatch:1,unmatched:3});
  });
@@ -4711,20 +4728,20 @@ describe('buildEvidenceIndex — EDGAR',()=>{
   const {rows,filings}=factsFrom(cands.slice(0,3),'US','edgar');
   const path=snapshotPath('edgar',ISSUER,snap.sha256);
   const tampered=new Map(store.objects);tampered.set(path,new TextEncoder().encode('{"cik":1,"facts":{}}'));
-  expect((await buildEvidenceIndex({reader:memorySnapshotReader(tampered)},{issuerId:ISSUER,market:'US',rows,filings})).stats).toMatchObject({hashMismatch:1,indexed:0});
+  expect((await buildEvidenceIndex({reader:memorySnapshotObjectStore(tampered)},{issuerId:ISSUER,market:'US',rows,filings})).stats).toMatchObject({hashMismatch:1,indexed:0});
   const noMeta=new Map(store.objects);noMeta.delete(metaPath(path));
-  expect((await buildEvidenceIndex({reader:memorySnapshotReader(noMeta)},{issuerId:ISSUER,market:'US',rows,filings})).stats).toMatchObject({missingSidecar:1,indexed:0});
+  expect((await buildEvidenceIndex({reader:memorySnapshotObjectStore(noMeta)},{issuerId:ISSUER,market:'US',rows,filings})).stats).toMatchObject({missingSidecar:1,indexed:0});
   const junk=snapshotOf(new TextEncoder().encode('{"not":"companyfacts"}'),{source:'edgar'});
   const junkStore=await stored([junk],'edgar');
-  expect((await buildEvidenceIndex({reader:memorySnapshotReader(junkStore.objects)},{issuerId:ISSUER,market:'US',rows,filings})).stats).toMatchObject({parseFailed:1,indexed:0});
+  expect((await buildEvidenceIndex({reader:memorySnapshotObjectStore(junkStore.objects)},{issuerId:ISSUER,market:'US',rows,filings})).stats).toMatchObject({parseFailed:1,indexed:0});
   const wrongSource=new Map(store.objects);wrongSource.set(metaPath(path),JSON.stringify({...snap.meta,source:'tushare',sha256:snap.sha256}));
-  expect((await buildEvidenceIndex({reader:memorySnapshotReader(wrongSource)},{issuerId:ISSUER,market:'US',rows,filings})).stats).toMatchObject({hashMismatch:1,indexed:0});
+  expect((await buildEvidenceIndex({reader:memorySnapshotObjectStore(wrongSource)},{issuerId:ISSUER,market:'US',rows,filings})).stats).toMatchObject({hashMismatch:1,indexed:0});
   const elsewhere=new Map<string,string|Uint8Array>();for(const [k,v] of store.objects)elsewhere.set(k.replace(ISSUER,'22222222-2222-4222-8222-222222222222'),v);
-  expect((await buildEvidenceIndex({reader:memorySnapshotReader(elsewhere)},{issuerId:ISSUER,market:'US',rows,filings})).stats).toMatchObject({objects:0,indexed:0,unmatched:3});
+  expect((await buildEvidenceIndex({reader:memorySnapshotObjectStore(elsewhere)},{issuerId:ISSUER,market:'US',rows,filings})).stats).toMatchObject({objects:0,indexed:0,unmatched:3});
  });
  it('a cache shared across calls (stale retry) avoids re-downloading',async()=>{
   const store=await stored([snap],'edgar');
-  const reader=memorySnapshotReader(store.objects);const get=vi.spyOn(reader,'get');
+  const reader=memorySnapshotObjectStore(store.objects);const get=vi.spyOn(reader,'get');
   const {rows,filings}=factsFrom(cands.slice(0,3),'US','edgar');
   const cache=new Map();
   const a=await buildEvidenceIndex({reader},{issuerId:ISSUER,market:'US',rows,filings,cache});
@@ -4739,7 +4756,7 @@ describe('buildEvidenceIndex — Tushare (synthetic 600519.SH)',()=>{
  it('indexes per-snapshot candidates; row pointer + field (sum concepts a+b); one raw_hash shared by several concepts still matches each concept only once',async()=>{
   const store=await stored(snaps,'tushare');
   const {rows,filings}=factsFrom(cands,'CN','tushare');
-  const res=await buildEvidenceIndex({reader:memorySnapshotReader(store.objects)},{issuerId:ISSUER,market:'CN',rows,filings});
+  const res=await buildEvidenceIndex({reader:memorySnapshotObjectStore(store.objects)},{issuerId:ISSUER,market:'CN',rows,filings});
   expect(res.stats).toMatchObject({objects:snaps.length,indexed:rows.length,multiMatch:0,valueMismatch:0,pointerUnresolved:0});
   for(const r of res.rows){expect(r.json_pointer).toMatch(/^\/data\/items\/\d+$/);expect(r.source).toBe('tushare');expect(r.api).toMatch(/^(income|balancesheet|cashflow)$/);expect(JSON.stringify(r.params??{})).not.toMatch(/token/i);}
   const sga=res.rows.find(r=>rows.find(x=>x.fact_id===r.fact_id)!.concept==='sga_expense');
@@ -4751,7 +4768,7 @@ describe('buildEvidenceIndex — Tushare (synthetic 600519.SH)',()=>{
   const store=await stored(snaps,'tushare');
   const {rows,filings}=factsFrom(cands.filter(c=>c.concept==='revenue').slice(0,1),'CN','tushare');
   const swapped=[{...rows[0],concept:'revenue_operating'}];
-  const res=await buildEvidenceIndex({reader:memorySnapshotReader(store.objects)},{issuerId:ISSUER,market:'CN',rows:swapped,filings});
+  const res=await buildEvidenceIndex({reader:memorySnapshotObjectStore(store.objects)},{issuerId:ISSUER,market:'CN',rows:swapped,filings});
   expect(res.rows).toEqual([]);expect(res.stats.unmatched).toBe(1);
  });
 });
@@ -4788,7 +4805,7 @@ import {EVIDENCE_INDEX_VERSION} from './types';
 import type {EvidenceIndexRow,FilingSummary} from './types';
 
 export interface SnapshotSidecar{source:Source;api?:string;url?:string;params?:Record<string,unknown>;fields?:string;fetched_at:string;http_status:number;has_more?:boolean;page?:number;sha256?:string;bytes?:number}
-export interface SnapshotReader{
+export interface SnapshotObjectStore{
  /** Full paths of the data objects (<sha256>.json, sidecars excluded) under prefix, ascending. */
  list(prefix:string):Promise<string[]>;
  get(path:string):Promise<Uint8Array|null>;
@@ -4799,7 +4816,7 @@ const parseSidecar=(v:string|Uint8Array|null|undefined):SnapshotSidecar|null=>{
  if(v===null||v===undefined)return null;
  try{const j=JSON.parse(typeof v==='string'?v:new TextDecoder().decode(v));return j&&typeof j==='object'?j as SnapshotSidecar:null;}catch{return null;}
 };
-export function memorySnapshotReader(objects:Map<string,string|Uint8Array>):SnapshotReader{
+export function memorySnapshotObjectStore(objects:Map<string,string|Uint8Array>):SnapshotObjectStore{
  return {
   async list(prefix){return [...objects.keys()].filter(k=>k.startsWith(prefix)&&OBJECT.test(k.slice(prefix.length))).sort();},
   async get(path){const v=objects.get(path);return v===undefined?null:typeof v==='string'?new TextEncoder().encode(v):new Uint8Array(v);},
@@ -4808,7 +4825,7 @@ export function memorySnapshotReader(objects:Map<string,string|Uint8Array>):Snap
 }
 interface StorageError{message:string;statusCode?:string|number;status?:number}
 const notFound=(e:StorageError)=>['400','404'].includes(String(e.statusCode??e.status??''))||/not found/i.test(e.message);
-export function supabaseSnapshotReader(admin:SupabaseClient):SnapshotReader{
+export function supabaseSnapshotObjectStore(admin:SupabaseClient):SnapshotObjectStore{
  const bucket=()=>admin.storage.from(SNAPSHOT_BUCKET);
  const get=async(path:string):Promise<Uint8Array|null>=>{
   const {data,error}=await bucket().download(path);
@@ -4879,7 +4896,7 @@ const scrub=(p:Record<string,unknown>|undefined)=>{if(!p)return null;const e=Obj
 const sha256=(b:Uint8Array)=>createHash('sha256').update(b).digest('hex');
 const emptyStats=():EvidenceIndexStats=>({objects:0,missingObject:0,missingSidecar:0,hashMismatch:0,parseFailed:0,facts:0,indexed:0,unmatched:0,multiMatch:0,valueMismatch:0,pointerUnresolved:0});
 
-async function loadSnapshot(reader:SnapshotReader,path:string,prefix:string,source:Source):Promise<ParsedSnapshot|{failed:SnapshotFailure}>{
+async function loadSnapshot(reader:SnapshotObjectStore,path:string,prefix:string,source:Source):Promise<ParsedSnapshot|{failed:SnapshotFailure}>{
  const bytes=await reader.get(path);if(!bytes)return {failed:'missingObject'};
  const meta=await reader.meta(path);if(!meta)return {failed:'missingSidecar'};
  const sha=sha256(bytes);
@@ -4893,7 +4910,7 @@ async function loadSnapshot(reader:SnapshotReader,path:string,prefix:string,sour
  }catch{return {failed:'parseFailed'};}
 }
 
-export async function buildEvidenceIndex(deps:{reader:SnapshotReader},input:EvidenceIndexInput):Promise<EvidenceIndexResult>{
+export async function buildEvidenceIndex(deps:{reader:SnapshotObjectStore},input:EvidenceIndexInput):Promise<EvidenceIndexResult>{
  const source:Source=input.market==='US'?'edgar':'tushare';
  const prefix=`${source}/${input.issuerId}/`;
  const cache:ParsedSnapshotCache=input.cache??new Map();
@@ -5682,11 +5699,12 @@ export function primaryUnitOf(entries:Iterable<{period:string;unit:string}>):str
  return best;
 }
 const colOrder=(a:PeriodCol,b:PeriodCol)=>cmp(b.periodEnd,a.periodEnd)||cmp(b.periodStart,a.periodStart)||(DUR_ORDER[a.duration]??9)-(DUR_ORDER[b.duration]??9);
-const factCellOf=(r:FactRow):FactCell=>{
+/** Exported for the overview / packet handlers (Task 10, 15): one FactCell / DerivedCell shape everywhere. */
+export const factCellOf=(r:FactRow,otherUnits=false):FactCell=>{
  if(r.disclosure_seq===undefined||r.is_revision===undefined)throw new Error(`grid_sequence_missing:${r.fact_id}`);
- return {kind:'fact',factId:r.fact_id,value:r.value_text,unit:r.unit,availableDate:r.available_date,filingId:r.filing_id,disclosureSeq:r.disclosure_seq,isRevision:r.is_revision,mappingGen:r.mapping_gen,rawHash:r.raw_hash,runId:r.run_id,otherUnits:false};
+ return {kind:'fact',factId:r.fact_id,value:r.value_text,unit:r.unit,availableDate:r.available_date,filingId:r.filing_id,disclosureSeq:r.disclosure_seq,isRevision:r.is_revision,mappingGen:r.mapping_gen,rawHash:r.raw_hash,runId:r.run_id,otherUnits};
 };
-const derivedCellOf=(m:MetricRow):DerivedCell=>{
+export const derivedCellOf=(m:MetricRow):DerivedCell=>{
  const rules=new Set(m.inputs.map(i=>i.ytd_rule).filter(Boolean));
  const rule=rules.has('same_filing')?'a' as const:rules.has('never_revised')?'b' as const:null;
  return {kind:'derived',metric:m.metric,value:m.value,unit:m.unit,inputUnit:m.input_unit,basis:m.basis,formulaVersion:m.formula_version,
@@ -5799,7 +5817,6 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 - Create: `scripts/company/digest.ts`
 - Modify: `vercel.json`（只在 `crons` 数组末尾追加一个对象）
 - Modify: `src/lib/company/company-research.integration.test.ts`（文件末尾追加一个 `describe`；import 合并到文件顶部）
-- Modify（仅当 Task 4 未导出）：`src/lib/company/pg-company-db.ts` 追加 `pgReadSnapshot`
 
 **要求清单：**
 
@@ -5816,7 +5833,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 6. `detail = {events:{upserted, changed, retired, revived}, attempted, succeeded, failed, skippedStale, skippedUnknown, swept, idle, backlogFailed, evidence:{indexed, facts}}`；`backlogFailed = db.backlog().failedStreams`（在处理完之后读）；`finishBatch` 后 `recordAttempt('company.events', {ok: failed===0 && backlogFailed===0, cadence:'daily', now, detail})`。基础设施异常（选流、`backlog`、`finishBatch` 之外抛出）→ 关闭批次（`errors` 加 `{code:'unknown'}`）、`recordAttempt(ok:false)`，再抛出。
 7. dry-run：不写批次、不调用 `beginAttempt/replaceEvidence/replaceDigest/markDigestFailed`；每流读取、建索引（只计数）、推导，`outcome='planned'`，`events` 为事件数；`status:'dry_run'`。
 8. cron `GET|POST /api/cron/company-digest`：`dynamic='force-dynamic'`、`maxDuration=300`；`CRON_SECRET` 缺失 → 503 `cron_unavailable`；`authorizedCronRequest` 失败 → 401；`limit` 至多一次、1..200（缺省 200），否则 400 `invalid_parameter:limit`；`resolveCodeVersion({allowGit:false})`（landed `src/lib/facts/deps.ts`，只认 40 位 `VERCEL_GIT_COMMIT_SHA`）为空 → 503 `code_version_unavailable`；`productionDigestDeps({deadline: start + 240 s, codeVersion})` → `runCompanyDigest(deps, {mode:'incremental', limit, triggeredBy:'cron'})`；200 回执只含码、键与计数（无 message）；异常 → 500，只带码（`DigestError.code` 或 `digest_failed`）；全部响应 `Cache-Control: no-store`。
-9. `deps.ts`：`productionDigestDeps({deadline, codeVersion, admin?, now?})`（全部 service_role：`supabaseCompanyDb`、`supabaseTableClient`、`readSnapshot(admin,…)`、`supabaseFactsDb`（`scopeRows/scopeAll`）、`supabaseSnapshotReader`）；`productionReadDeps()` → `{service, publicDb, readSnapshot, pdf}`（`service` = service_role `CompanyDb`，用于 §0 #64 事件与证据读取；`publicDb` = anon `CompanyDb`，用于覆盖读取；`readSnapshot` 走 anon；`pdf = emptyPdfLocatorSource`）。Task 9 起的路由用 `productionReadDeps`，可扩展字段但不改这四个。
+9. `deps.ts`：`productionDigestDeps({deadline, codeVersion, admin?, now?})`（全部 service_role：`supabaseCompanyDb`、`supabaseTableClient`、`readSnapshot(admin,…)`、`supabaseFactsDb`（`scopeRows/scopeAll`）、`supabaseSnapshotObjectStore`）。**整合决定**：读路由的装配（`ReadDeps`、`productionReadDeps()`、`EventGateDeps`、`productionEventGateDeps()`）不在本任务建，由 Task 9 Step 1 追加到同一文件（成员见 Task 9；`company` = service_role `CompanyDb` 用于 §0 #64 事件与证据读取，`publicCompany` = anon `CompanyDb` 用于覆盖读取，`snapshot` 走 anon，`pdf = emptyPdfLocatorSource`）。
 10. 脚本 `scripts/company/digest.ts [--full] [--issuer <ticker>]... [--market US|CN] [--limit n] [--apply]`：缺省 dry-run；`--issuer` 需要 `--full`，ticker 以今天的归属 `resolveIssuer` 解析，未知 → 退出 2；`--apply` 需要代码版本（`resolveCodeVersion({allowGit:true})`），没有 → 退出 2；输出 JSON 回执；apply 时批次非 success、dry-run 时有失败流 → 退出 1。cron 与脚本不同时运行（runbook 在 Task 19 写）。
 11. `vercel.json`：`crons` 末尾追加 `{"path": "/api/cron/company-digest", "schedule": "20 * * * *"}`，不改其他条目、不重排（JSON 无注释，所以不加 `// COMPANY` 标记；合并冲突按"保留两边全部 cron"解决）。
 12. 集成用例（真实 PostgreSQL，§1.1 第 4 条）：用 landed `runFactsSync` 回放 AAPL 修剪夹具（改写成合成发行人，避免与 `sync-us.integration.test.ts` 共享 `source_ref`）→ digest 两次：第二次 `changed=0、retired=0`，事件行与 `first_seen_at` 逐行不变；换成修订夹具再同步 → digest 后**恰好**新增一条 `fact_revised`；把该修订行 `ok→quarantined`（并 `state_rev+1`，模拟裁决）→ digest 后该事件 `retired_at` 非空；`promote_quarantined` 提升 → digest 后 `retired_at` 回到 null 且 `first_seen_at` 等于首次值。
@@ -5837,9 +5854,10 @@ import type {Market} from '@/lib/facts/types';
 import {DigestError,interleave,runCompanyDigest,selectStreams} from './digest';
 import type {DigestDeps} from './digest';
 import {deriveIssuerEvents} from './events';
-import {memorySnapshotReader} from './evidence-index';
+import {memorySnapshotObjectStore} from './evidence-index';
 import {memoryCompanyDb} from './memory-company-db';
-import {memoryReadSnapshot} from './snapshot-read';
+import type {MemoryCompanyDb} from './memory-company-db';
+import {memorySnapshotReader} from './snapshot-read';
 import {summarizeCoverage} from './coverage';
 import {CompanyDbError} from './types';
 import type {CompanyDb,DueStream} from './types';
@@ -5848,8 +5866,11 @@ const CODE='a'.repeat(40);
 function harness(){
  const tables=memoryTableClient({dq_quarantine:['id'],dq_freshness:['dataset'],ingest_batches:['batch_id']});
  const facts=memoryFactsDb(tables);
- const db=memoryCompanyDb({facts,tables});
- const deps:DigestDeps={db,tables,readSnapshot:memoryReadSnapshot(facts),facts,reader:memorySnapshotReader(new Map()),now:()=>new Date(),deadline:null,codeVersion:CODE};
+ const mem=memoryCompanyDb({facts});
+ // memoryCompanyDb has no ingest_batches table: every batch id the digest passes was opened by startBatch
+ // (producer 'company-digest', status 'running'), so register it on the way in.
+ const db:MemoryCompanyDb={...mem,replaceDigest:(i,m,b,...rest)=>{mem.registerBatch(b);return mem.replaceDigest(i,m,b,...rest);}};
+ const deps:DigestDeps={db,tables,readSnapshot:memorySnapshotReader(facts),facts,reader:memorySnapshotObjectStore(new Map()),now:()=>new Date(),deadline:null,codeVersion:CODE};
  return {tables,facts,db,deps};
 }
 type H=ReturnType<typeof harness>;
@@ -6047,7 +6068,7 @@ describe('runCompanyDigest',()=>{
 });
 ```
 
-注：本测试依赖 Part A 的 `memoryCompanyDb({facts, tables})` 与 `memoryReadSnapshot(facts)`（见本部分开头的假设表）。若 `memoryCompanyDb` 的方法用了 `this`，`{...h.db, x}` 展开会失效——那是 Task 3 的缺陷，报告指挥，不在本任务绕过。
+注：本测试依赖 Part A 的 `memoryCompanyDb({facts})`（`registerBatch` 登记批次）与 `snapshot-read.ts` 的 `memorySnapshotReader(facts)`（见本部分开头的假设表）。若 `memoryCompanyDb` 的方法用了 `this`，`{...h.db, x}` 展开会失效——那是 Task 3 的缺陷，报告指挥，不在本任务绕过。
 
 - [ ] **Step 2: 运行确认失败**
 
@@ -6079,7 +6100,7 @@ import type {FactsDb,Market,ScopeRow} from '@/lib/facts/types';
 import {summarizeCoverage} from './coverage';
 import {EVENTS_VERSION,deriveIssuerEvents} from './events';
 import {buildEvidenceIndex} from './evidence-index';
-import type {ParsedSnapshotCache,SnapshotReader} from './evidence-index';
+import type {ParsedSnapshotCache,SnapshotObjectStore} from './evidence-index';
 import {CompanyDbError,EVIDENCE_INDEX_VERSION} from './types';
 import type {CompanyDb,ReadSnapshotOptions,ReadSnapshotResult,ReplaceResult} from './types';
 
@@ -6091,7 +6112,7 @@ export const STREAM_MIN_MS=30_000;
 export type ReadSnapshotFn=(issuer:string,market:Market,opts:ReadSnapshotOptions)=>Promise<ReadSnapshotResult>;
 export interface DigestDeps{
  db:CompanyDb;tables:TableClient;readSnapshot:ReadSnapshotFn;
- facts:Pick<FactsDb,'scopeRows'|'scopeAll'>;reader:SnapshotReader;
+ facts:Pick<FactsDb,'scopeRows'|'scopeAll'>;reader:SnapshotObjectStore;
  now:()=>Date;deadline:Date|null;codeVersion:string|null;
 }
 export interface DigestOptions{mode:'incremental'|'full';issuerIds?:string[];market?:Market;limit?:number;now?:Date;dryRun?:boolean;triggeredBy?:TriggeredBy}
@@ -6243,36 +6264,26 @@ Expected: PASS（selection 3 + runCompanyDigest 13）。注意：一个流若在
 // src/lib/company/deps.ts
 // Production wiring (plan Task 8). Digest: every dependency service_role (company_digest_state,
 // issuer_events, company_fact_evidence and fact_sync_scope are not readable by anon, §0 #64).
-// Read routes (Task 9+): `service` (service_role CompanyDb: events, evidence — assembled and gated
-// server-side), `publicDb` (anon CompanyDb: coverage), `readSnapshot` over anon (company_read_snapshot
-// is security invoker), `pdf` = the empty CN PDF locator source until spec 3 lands.
+// The read-route wiring (ReadDeps / productionReadDeps / productionEventGateDeps) is appended by
+// Task 9 Step 1 — this task creates only the digest side.
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {supabaseTableClient} from '../db/table-client';
 import {supabaseFactsDb} from '../facts/db';
 import {getAdminSupabase} from '../supabase/admin';
-import {getAnonSupabase} from '../supabase/anon';
 import {supabaseCompanyDb} from './db';
-import type {DigestDeps,ReadSnapshotFn} from './digest';
-import {supabaseSnapshotReader} from './evidence-index';
-import {emptyPdfLocatorSource} from './pdf-locator';
-import type {PdfLocatorSource} from './pdf-locator';
+import type {DigestDeps} from './digest';
+import {supabaseSnapshotObjectStore} from './evidence-index';
 import {readSnapshot} from './snapshot-read';
-import type {CompanyDb} from './types';
 
 export interface ProductionDigestOptions{deadline:Date|null;codeVersion:string|null;admin?:SupabaseClient;now?:()=>Date}
 export function productionDigestDeps(opts:ProductionDigestOptions):DigestDeps{
  const sb=opts.admin??getAdminSupabase();
  return {db:supabaseCompanyDb(sb),tables:supabaseTableClient(sb),readSnapshot:(i,m,o)=>readSnapshot(sb,i,m,o),facts:supabaseFactsDb(sb),
-  reader:supabaseSnapshotReader(sb),now:opts.now??(()=>new Date()),deadline:opts.deadline,codeVersion:opts.codeVersion};
-}
-export interface ReadDeps{service:CompanyDb;publicDb:CompanyDb;readSnapshot:ReadSnapshotFn;pdf:PdfLocatorSource}
-export function productionReadDeps():ReadDeps{
- const anon=getAnonSupabase(),admin=getAdminSupabase();
- return {service:supabaseCompanyDb(admin),publicDb:supabaseCompanyDb(anon),readSnapshot:(i,m,o)=>readSnapshot(anon,i,m,o),pdf:emptyPdfLocatorSource};
+  reader:supabaseSnapshotObjectStore(sb),now:opts.now??(()=>new Date()),deadline:opts.deadline,codeVersion:opts.codeVersion};
 }
 ```
 
-（若 `supabaseCompanyDb`/`readSnapshot`/`supabaseSnapshotReader` 的参数类型是 `SupabaseClient<Database>` 而传入 `SupabaseClient` 报类型错，按 landed `src/lib/facts/deps.ts` 的写法直接传 `getAdminSupabase()` 的返回值，把 `admin?` 的类型改成 `ReturnType<typeof getAdminSupabase>`。）
+（若 `supabaseCompanyDb`/`readSnapshot`/`supabaseSnapshotObjectStore` 的参数类型是 `SupabaseClient<Database>` 而传入 `SupabaseClient` 报类型错，按 landed `src/lib/facts/deps.ts` 的写法直接传 `getAdminSupabase()` 的返回值，把 `admin?` 的类型改成 `ReturnType<typeof getAdminSupabase>`。）
 
 - [ ] **Step 6: 写 cron 路由测试（先失败）**
 
@@ -6475,7 +6486,7 @@ Expected: `ok`
 
 - [ ] **Step 11: 集成用例（追加到 `src/lib/company/company-research.integration.test.ts` 末尾）**
 
-先确认 `pg-company-db.ts` 导出 `pgReadSnapshot(pool)`；没有就按假设表补上（service_role 调 `select public.company_read_snapshot($1,$2,$3,$4,$5,$6,$7,$8) as j`，参数顺序 `issuer, market, concepts(null=全部), asOf, from, to, history, limit`，再用 `snapshot-read.ts` 的 jsonb → `ReadSnapshotResult` 转换函数）。把下列 import 合并进文件顶部（已有的不要重复）：
+同快照读取用 Task 3/4 已有的 `snapshotReader(pgRpcClient(pool,'service_role'))`（不新增 `pgReadSnapshot`）。把下列 import 合并进文件顶部（已有的不要重复）：
 
 ```ts
 import {randomUUID} from 'node:crypto';
@@ -6491,8 +6502,9 @@ import {ProviderError,snapshotOf} from '../facts/providers/shared';
 import {companyFactsUrl,parseCompanyFacts} from '../facts/providers/edgar-companyfacts';
 import type {FactsDb} from '../facts/types';
 import {runCompanyDigest} from './digest';
-import {memorySnapshotReader} from './evidence-index';
-import {pgCompanyDb,pgReadSnapshot} from './pg-company-db';
+import {memorySnapshotObjectStore} from './evidence-index';
+import {pgCompanyDb,pgRpcClient} from './pg-company-db';
+import {snapshotReader} from './snapshot-read';
 ```
 
 文件末尾追加：
@@ -6517,7 +6529,7 @@ describe.skipIf(!enabled)('company digest on a replayed US fixture (§1.1 #4)',(
    now:()=>new Date(),deadline:null,codeVersion:'test-company'};
   return runFactsSync(deps,{market:'US',limit:1,issuerIds:[issuer],dryRun:false,triggeredBy:'script',mappingGen:MAPPING_GEN});
  };
- const digest=()=>runCompanyDigest({db:pgCompanyDb(pool),tables:pgTableClient(pool),readSnapshot:pgReadSnapshot(pool),facts,reader:memorySnapshotReader(store.objects),
+ const digest=()=>runCompanyDigest({db:pgCompanyDb(pool),tables:pgTableClient(pool),readSnapshot:snapshotReader(pgRpcClient(pool,'service_role')),facts,reader:memorySnapshotObjectStore(store.objects),
   now:()=>new Date(),deadline:null,codeVersion:'test-company-digest'},{mode:'full',issuerIds:[issuer],market:'US',triggeredBy:'script'});
  const rows=async()=>(await pool.query(`select event_id,kind,natural_key,first_seen_at,retired_at,payload_hash from public.issuer_events where issuer_id=$1 and market='US' order by event_id`,[issuer])).rows as {event_id:string;kind:string;natural_key:string;first_seen_at:Date;retired_at:Date|null;payload_hash:string}[];
  let revisedEvent:{event_id:string;first_seen_at:Date}|null=null;let revisedFactId='';
@@ -6593,7 +6605,7 @@ Expected: 全部 critical 套件通过，无 "Database suite inventory drift"
 - [ ] **Step 13: 提交**
 
 ```bash
-git add src/lib/company/digest.ts src/lib/company/digest.test.ts src/lib/company/deps.ts src/app/api/cron/company-digest/route.ts src/app/api/cron/company-digest/route.test.ts scripts/company/digest.ts vercel.json src/lib/company/company-research.integration.test.ts src/lib/company/pg-company-db.ts
+git add src/lib/company/digest.ts src/lib/company/digest.test.ts src/lib/company/deps.ts src/app/api/cron/company-digest/route.ts src/app/api/cron/company-digest/route.test.ts scripts/company/digest.ts vercel.json src/lib/company/company-research.integration.test.ts
 ```
 
 ```bash
@@ -6609,21 +6621,21 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 <!-- PART C (Tasks 9–10, 14–15) -->
 
-## Part C 前言：依赖的跨组接口（本组只按下列签名调用；整合时若其他组签名不同，以本表为准对齐后再执行本组任务）
+## Part C 前言：依赖的跨组接口（整合编辑已按定义任务的实际代码核对并改写本表；本组代码按本表调用）
 
 | 来源 | 名字 | 本组依赖的精确签名 / 语义 |
 |---|---|---|
-| Task 3 `snapshot-read.ts` | `readSnapshot` | `readSnapshot(client:SupabaseClient, issuer:string, market:Market, opts:ReadSnapshotOptions):Promise<ReadSnapshotResult>`；`opts.concepts=null` 表示全部概念；`filings` 已按 `mapping_gen>0 && availableDate<=asOf` 过滤，`FilingSummary.citation` 已算好 |
+| Task 3 `snapshot-read.ts` | `readSnapshot`、`filingSummaryOf` | `readSnapshot(client:SupabaseClient\|RpcClient, issuer:string, market:Market, opts:ReadSnapshotOptions):Promise<ReadSnapshotResult>`；`opts.concepts=null` 表示全部概念；`filings` 已按 `mapping_gen>0 && availableDate<=asOf` 过滤（与 facts `limit` 无关，总是完整），`FilingSummary.citation` 已算好；`filingSummaryOf(row:FilingRow, factCount:number):FilingSummary` |
 | Task 3 `canonical.ts` | `eventIdOf` | `eventIdOf(issuerId:string, market:Market, kind:EventKind, naturalKey:string):string`（同步，hex sha256，与 SQL 一致） |
-| Task 3 `db.ts` | `supabaseCompanyDb` | `supabaseCompanyDb(client:SupabaseClient):CompanyDb`；`eventsOfIssuer` 结果按 `(occurred_on desc, event_id desc)`；非法游标抛 `CompanyDbError('invalid_read')`；`evidenceOf` 内部 ≤100 一批 |
-| Task 5 `events.ts` | `deriveIssuerEvents` | `deriveIssuerEvents(input:{issuerId:string;market:Market;rows:FactRow[];filings:FilingSummary[]}, opts:{cutoff:string}):EventInput[]`（确定性排序；纯） |
-| Task 6 `evidence-gate.ts` | `gateFacts`、`GateFiling` | `export type GateFiling=Pick<FilingSummary,'filingId'\|'citation'\|'documentUrl'>`；`gateFacts(input:{market:Market;admin:boolean;facts:FactRow[];filings:ReadonlyMap<string,GateFiling>;evidence:ReadonlyMap<string,EvidenceRecord>;pdf:ReadonlyMap<string,PdfLocator>}):{evidence:Record<string,EvidenceDto>;verdicts:Map<string,WithheldReason\|null>}`——纯函数；对 `facts` 中每个 id 给出 verdict（`null`=合格），`evidence` 只含合格者的 DTO（内部用 `toEvidenceDto` + `evidenceEligible(dto,fact,filing,market,{admin})`） |
-| Task 6 `pdf-locator.ts` | `PdfLocatorSource`、`emptyPdfLocatorSource` | `interface PdfLocatorSource{locate(factIds:string[]):Promise<Map<string,PdfLocator>>}`；`emptyPdfLocatorSource` 永远返回空 Map |
-| Task 7 `decimal.ts` | `formatDecimalText`、`decimalSub`、`decimalRelChange` | `formatDecimalText(valueText:string, divisor:string, fractionDigits:number):string`（四舍五入远离零、不经浮点、**无千分位分隔**，可直接 `Number()`）；`decimalSub(a:string,b:string):string`（精确）；`decimalRelChange(from:string,to:string):string\|null`（10 位小数，`from=0` → null） |
-| Task 7 `statements-grid.ts` | `buildStatementsGrid`、`periodKeyOf`、`factCellOf`、`derivedCellOf` | `buildStatementsGrid(input:{market:Market;statement:StatementKind;basis:Basis;periods:number;rows:FactRow[];metrics:MetricRow[];filings:FilingSummary[]}):{periods:PeriodCol[];rows:GridRow[]}`——**未过门槛**的网格（`quarterly` 时用 `metrics` 中的 `q_single_*` 行出派生格；`disclosed`/`annual` 忽略 `metrics`）；`periodKeyOf(periodStart:string\|null, periodEnd:string, duration:string):string`（INSTANT 的 start 记为 end，格式 `<start>:<end>:<duration>`）；`factCellOf(r:FactRow, otherUnits:boolean):FactCell`；`derivedCellOf(m:MetricRow):DerivedCell` |
-| Task 8 `deps.ts` | `ReadDeps`、`productionReadDeps` | 见 Task 9 Step 1：本组要求 `ReadDeps` 至少含该步列出的成员；Task 8 已建的同名导出缺成员时由 Task 9 Step 1 **只追加**补齐 |
+| Task 3 `db.ts` | `supabaseCompanyDb` | `supabaseCompanyDb(client:SupabaseClient):CompanyDb`；`eventsOfIssuer` 结果按 `(occurred_on desc, event_id asc)`（整合核对：Task 3 实际顺序，与规格 §4.2 索引 `(occurred_on desc, event_id)` 一致；本组现算模式同序）；非法游标抛 `CompanyDbError('invalid_read')`；`evidenceOf` 内部 ≤100 一批 |
+| Task 5 `events.ts` | `deriveIssuerEvents` | `deriveIssuerEvents(input:{rows:FactRow[];filings:FilingSummary[];cutoff:string}):EventInput[]`（确定性排序；纯；整合核对后的实际签名） |
+| Task 6 `evidence-gate.ts` | `applyGate`、`GateInput`、`GateResult`、`Eligibility`、`gateEventPayload`、`eventFactIds` | `applyGate(input:{factIds:Iterable<string>;facts:Map<string,GateFact>;filings:Map<string,FilingSummary>;records:Map<string,EvidenceRecord>;pdf:Map<string,PdfLocator>;market:Market;admin:boolean}):{evidence:Record<string,EvidenceDto>;eligibility:Map<string,Eligibility>;withheld:WithheldCounts}`——纯函数（整合核对：本组用纯的 `applyGate`，`evidenceOf` 与 CN `pdf.locate` 由 `buildGated` / `gateEvents` 自己调；异步的 `gateFacts(deps,input)` 是同一逻辑的便捷包装，本组不用，以便单测用 `fakeApplyGate` 替身）；`Eligibility={ok:true}\|{ok:false;reason}`；`gateEventPayload(event, eligibility)`（事件 payload 门槛的唯一实现） |
+| Task 6 `pdf-locator.ts` | `PdfLocatorSource`、`emptyPdfLocatorSource` | `interface PdfLocatorSource{locate(issuerId:string,market:Market,factIds:string[]):Promise<Map<string,PdfLocator>>}`；`emptyPdfLocatorSource` 永远返回空 Map；只对 CN 调用 |
+| Task 5/7 `decimal.ts` | `formatDecimalText`、`decimalSub`、`decimalRelChange` | `formatDecimalText(valueText:string, divisor:bigint, fractionDigits:number):string`（四舍五入远离零、不经浮点、**无千分位分隔**，可直接 `Number()`；字符串除数用 `BigInt(divisor)`）；`decimalSub(a:string,b:string):string`（精确，规范形）；`decimalRelChange(from:string,to:string):string\|null`（10 位小数后**去尾零**的规范形，如 `'0.1'`；`from=0` → null） |
+| Task 7 `statements-grid.ts` | `buildStatementsGrid`、`gridReadConcepts`、`periodKeyOf`、`factCellOf`、`derivedCellOf` | `buildStatementsGrid(snapshot:ReadSnapshotResult, opts:{statement;basis;periods:8\|20\|40;market;asOf}):GridOutcome`（`GridResult={ok:true;…;periods;rows;filings:Record<id,FilingSummary>;factIds;otherUnitOnly:Record<concept,periodKey[]>}`）——**未过门槛**；`quarterly` 在同一信封上自己跑 `deriveMetrics`；`gridReadConcepts(statement,basis,market)` 给 `readSnapshot` 的 `concepts`；`periodKeyOf({period_start,period_end,duration})`（对象参数；INSTANT 的 start 记为 end，格式 `<start>:<end>:<duration>`）；`factCellOf(r:FactRow, otherUnits=false):FactCell`；`derivedCellOf(m:MetricRow):DerivedCell` |
+| Task 9 `deps.ts`（本组追加） | `ReadDeps`、`productionReadDeps`、`EventGateDeps`、`productionEventGateDeps` | 见 Task 9 Step 1（Task 8 只建 digest 装配） |
 
-本组新增、供 Part D/E 使用的导出：`src/lib/company/route.ts`（`companyRoute`、`adminGate`、`buildGated`、`gateCell`、`cellFactIds`、`countWithheld`、`RouteError`、`PRIVATE_NO_STORE`、`gateFilingOf`）、`src/lib/company/handlers/*.ts` 的各 DTO 类型（`StatementsDto`、`FactSeriesDto`、`OverviewDto`、`EventsDto`、`MetricsDto`、`PacketDto`）、`src/lib/company/event-dto.ts`（`toEventDto`、`eventFactIds`，Task 16 收件箱复用）、`src/lib/dcf/bridge.ts`（`DcfSeedResponse`/`DcfRunResponse`/`bridgeFields`/`canRun`）、`src/lib/company/dcf-seed.ts`（`seedFromFacts`、`SEED_CONCEPTS`、`SeedResult`）、`src/lib/company/handlers/overview.ts::latestBlock`、`src/lib/company/metrics-computed-at.ts::metricKey`。
+本组新增、供 Part D/E 使用的导出：`src/lib/company/route.ts`（`companyRoute`、`adminGate`、`buildGated`、`gateCell`、`cellFactIds`、`countWithheld`、`RouteError`、`PRIVATE_NO_STORE`、`gateFilingOf`）、`src/lib/company/handlers/*.ts` 的各 DTO 类型（`StatementsDto`、`FactSeriesDto`、`OverviewDto`、`EventsDto`、`MetricsDto`、`FilingsDto`、`PacketDto`）、`src/lib/company/deps.ts`（`ReadDeps`、`productionReadDeps`、`EventGateDeps`、`productionEventGateDeps`）、`src/lib/company/event-dto.ts`（`PublicEvent`、`GateEventItem`、`GatedEvents`、`toPublicEvent`、`gateEvents`、`gateEventRows`、re-export `eventFactIds`；Task 16 收件箱复用 `gateEventRows`）、`src/lib/company/route-test-kit.ts`（`makeDeps`、`KitDeps`、`fakeApplyGate`、行构造器）、`src/lib/dcf/bridge.ts`（`DcfSeedResponse`/`DcfRunResponse`/`bridgeFields`/`canRun`）、`src/lib/company/dcf-seed.ts`（`seedFromFacts`、`SEED_CONCEPTS`、`SeedResult`）、`src/lib/company/handlers/overview.ts::latestBlock`、`src/lib/company/metrics-computed-at.ts::metricKey`。
 
 本组对 Task 11–13（UI）的 DTO 约定：每个组合路由响应都带 `evidence`（只含合格事实）与 `withheld:{evidenceIncomplete,citationPending}`；HK 票据 → 404 `market_not_served`；`DcfStudio` 新签名 `({ticker, asOf?, onOpenFact?})`。
 
@@ -6638,7 +6650,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ### Task 9: 组合路由共用层 + statements + facts（抽屉）+ admin 变体
 
 **Files:**
-- Modify: `src/lib/company/deps.ts`（只追加缺失成员，见 Step 1）
+- Modify: `src/lib/company/deps.ts`（Task 8 建了 digest 部分；本任务追加读路由装配 `ReadDeps`/`productionReadDeps`/`EventGateDeps`/`productionEventGateDeps`，见 Step 1）
 - Create: `src/lib/company/metrics-computed-at.ts`
 - Create: `src/lib/company/route.ts`
 - Create: `src/lib/company/route-test-kit.ts`（测试替身；非 `.test.ts`，不进 vitest include）
@@ -6650,9 +6662,9 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 - Create: `src/app/api/admin/companies/[ticker]/facts/route.ts`
 - Test: `src/lib/company/route.test.ts`、`src/app/api/companies/[ticker]/statements/route.test.ts`、`src/app/api/companies/[ticker]/facts/route.test.ts`
 
-- [ ] **Step 1: 对齐 `ReadDeps`（只追加）并建 `metrics-computed-at.ts`**
+- [ ] **Step 1: 追加读路由装配 `ReadDeps` 并建 `metrics-computed-at.ts`**
 
-打开 `src/lib/company/deps.ts`。`ReadDeps` 必须**至少**含下列成员（名字、类型逐字）；Task 8 已有的成员不改语义，缺的照下方代码追加。若 Task 8 没有建 `ReadDeps`/`productionReadDeps`，把下方整段追加到文件末尾。
+打开 `src/lib/company/deps.ts`（Task 8 只建了 `productionDigestDeps`）。把下方整段追加到文件末尾（成员名字、类型逐字；Task 10、14、15、16 都按这些成员读）。
 
 ```ts
 // --- read side (Tasks 9, 10, 14, 15) --------------------------------------------------------
@@ -6688,6 +6700,8 @@ export interface ReadDeps{
  signSnapshot(path:string,seconds:number):Promise<string>;                  // service_role storage signed URL
  audit(userId:string,action:string,objectId:string,detail:Record<string,unknown>):Promise<void>;   // research_audit_log via service_role
 }
+/** What the shared event gate (Task 10 event-dto.ts gateEvents / gateEventRows) reads: evidence via service_role, facts/filings via anon, CN PDF locators. */
+export type EventGateDeps=Pick<ReadDeps,'company'|'facts'|'pdf'>;
 export function productionReadDeps():ReadDeps{
  const anon=getAnonSupabase() as unknown as SupabaseClient;
  const {tables,db,stateRev}=publicClients();
@@ -6710,9 +6724,11 @@ export function productionReadDeps():ReadDeps{
   audit:(userId,action,objectId,detail)=>audit({supabase:adminClient() as unknown as ResearchSupabase,userId},action,objectId,detail),
  };
 }
+/** Tracking inbox (Task 16): the same members as the read routes, so the inbox and /api/companies/[ticker]/events gate identically. */
+export const productionEventGateDeps=():EventGateDeps=>productionReadDeps();
 ```
 
-（重复的 `import` 合并到文件顶部已有的 import 中；`company` 用 getter 是为了只在真正需要 service_role 的路由上构造 admin 客户端。）
+（重复的 `import` 合并到文件顶部已有的 import 中——Task 8 已 import `SupabaseClient`、`supabaseTableClient`、`getAdminSupabase`、`supabaseCompanyDb`、`readSnapshot`，不要重复；`company` 用 getter 是为了只在真正需要 service_role 的路由上构造 admin 客户端。）
 
 新建 `src/lib/company/metrics-computed-at.ts`：
 
@@ -6742,7 +6758,7 @@ export async function metricsComputedAt(sb:SupabaseClient,issuer:string,market:M
 ```
 
 Run: `npm run typecheck`
-Expected: 无新错误（若 Task 8 的 `ReadDeps` 与上面重名成员类型不一致，改成上面的类型）。
+Expected: 无新错误。
 
 - [ ] **Step 2: 写测试替身 `route-test-kit.ts`**
 
@@ -6750,15 +6766,15 @@ Expected: 无新错误（若 Task 8 的 `ReadDeps` 与上面重名成员类型�
 // src/lib/company/route-test-kit.ts
 // Test-only kit for the company route tests (plan Tasks 9, 10, 14, 15): memory issuer tables read by the
 // REAL resolveIssuer (§0 #69 ticker cases), FactRow / FilingSummary / EvidenceRecord builders, a ReadDeps
-// stub of vi.fn members, and a deterministic double of gateFacts (Task 6 owns the real rules and their
-// tests): no evidence record → evidence_incomplete; CN non-admin without a linked filing AND a PDF locator
+// stub of vi.fn members, and a deterministic double of applyGate (Task 6 owns the real rules and their
+// tests; route code calls applyGate directly so this double replaces it): no fact / no evidence record → evidence_incomplete; CN non-admin without a linked filing AND a PDF locator
 // → citation_pending; admin exempts only the CN conditions. Never imported by application code.
 import {vi} from 'vitest';
 import {memoryTableClient} from '@/lib/db/memory-table-client';
 import type {TableClient} from '@/lib/db/table-client';
 import type {FactRow,FilingRow,Market,MetricRow} from '@/lib/facts/types';
 import type {ReadDeps} from './deps';
-import type {GateFiling} from './evidence-gate';
+import type {Eligibility,GateInput,GateResult} from './evidence-gate';
 import type {CompanyDb,EvidenceDto,EvidenceRecord,FilingSummary,PdfLocator,ReadSnapshotResult,WithheldReason} from './types';
 
 export const kid=(n:number)=>`${String(n).repeat(8)}-${String(n).repeat(4)}-4${String(n).repeat(3)}-8${String(n).repeat(3)}-${String(n).repeat(12)}`;
@@ -6800,7 +6816,7 @@ export function makeDeps(tables:TableClient,opts:{noEvidence?:Set<string>;pdfFor
   snapshot:vi.fn(async()=>emptySnapshot()),
   company,
   publicCompany:{coverageOf:vi.fn(async()=>[]),listCoverage:vi.fn(async()=>({rows:[],total:0}))} as unknown as CompanyDb,
-  pdf:{locate:vi.fn(async(ids:string[])=>new Map<string,PdfLocator>(ids.filter(id=>pdfFor.has(id)).map(id=>[id,{page:12,table:'合并利润表',row:'营业收入',column:'本期发生额',documentUrl:'https://static.cninfo.com.cn/finalpage/2024-04-03/1219574887.PDF'}])))},
+  pdf:{locate:vi.fn(async(_issuer:string,_market:Market,ids:string[])=>new Map<string,PdfLocator>(ids.filter(id=>pdfFor.has(id)).map(id=>[id,{page:12,table:'合并利润表',row:'营业收入',column:'本期发生额',documentUrl:'https://static.cninfo.com.cn/finalpage/2024-04-03/1219574887.PDF'}])))},
   metricsComputedAt:vi.fn(async()=>new Map()),
   freshnessTables:vi.fn(),
   signSnapshot:vi.fn(async(path:string,seconds:number)=>`https://storage.example/sign/${path}?expires=${seconds}`),
@@ -6811,19 +6827,22 @@ const dtoOf=(r:EvidenceRecord,pdf:PdfLocator|null):EvidenceDto=>({factId:r.fact_
  snapshot:{source:r.source,sha256:r.snapshot_sha256,path:r.snapshot_path,api:r.api,url:r.url,params:r.params,capturedAt:r.captured_at,httpStatus:r.http_status,page:r.page,download:r.source==='edgar'?`/api/companies/snapshot?fact=${r.fact_id}`:null},
  locator:{hashLocator:r.hash_locator,jsonPointer:r.json_pointer,field:r.field,pdf},run:{runId:r.run_id,codeVersion:r.code_version,toolVersions:r.tool_versions},
  mappingVersion:r.mapping_version,unitRule:null,sourceDocument:null});
-/** Deterministic double of Task 6 gateFacts (same signature). */
-export function fakeGateFacts(input:{market:Market;admin:boolean;facts:FactRow[];filings:ReadonlyMap<string,GateFiling>;evidence:ReadonlyMap<string,EvidenceRecord>;pdf:ReadonlyMap<string,PdfLocator>}):{evidence:Record<string,EvidenceDto>;verdicts:Map<string,WithheldReason|null>}{
- const evidence:Record<string,EvidenceDto>={};const verdicts=new Map<string,WithheldReason|null>();
- for(const f of input.facts){
-  const rec=input.evidence.get(f.fact_id);
-  if(!rec||!rec.code_version){verdicts.set(f.fact_id,'evidence_incomplete');continue;}
+/** Deterministic double of Task 6 applyGate (same GateInput → GateResult). Tests install it with
+ * vi.mock('<…>/evidence-gate', async(orig)=>({...await orig(), applyGate: fakeApplyGate})) so every other
+ * Task 6 export (gateEventPayload, eventFactIds, …) stays real. */
+export function fakeApplyGate(input:GateInput):GateResult{
+ const evidence:Record<string,EvidenceDto>={};const eligibility=new Map<string,Eligibility>();const withheld={evidenceIncomplete:0,citationPending:0};
+ const no=(id:string,reason:WithheldReason)=>{eligibility.set(id,{ok:false,reason});if(reason==='evidence_incomplete')withheld.evidenceIncomplete++;else withheld.citationPending++;};
+ for(const id of [...new Set(input.factIds)].sort()){
+  const f=input.facts.get(id);const rec=input.records.get(id);
+  if(!f||!rec||!rec.code_version){no(id,'evidence_incomplete');continue;}
   if(input.market==='CN'&&!input.admin){
    const fl=input.filings.get(f.filing_id);
-   if(!fl||fl.citation!=='linked'||!fl.documentUrl||!input.pdf.has(f.fact_id)){verdicts.set(f.fact_id,'citation_pending');continue;}
+   if(!fl||fl.citation!=='linked'||!fl.documentUrl||!input.pdf.has(id)){no(id,'citation_pending');continue;}
   }
-  verdicts.set(f.fact_id,null);evidence[f.fact_id]=dtoOf(rec,input.pdf.get(f.fact_id)??null);
+  eligibility.set(id,{ok:true});evidence[id]=dtoOf(rec,input.pdf.get(id)??null);
  }
- return {evidence,verdicts};
+ return {evidence,eligibility,withheld};
 }
 ```
 
@@ -6836,7 +6855,7 @@ import type {Cell,DerivedCell,FactCell} from './types';
 
 const mocks=vi.hoisted(()=>({deps:null as unknown as import('./route-test-kit').KitDeps,requireAdmin:vi.fn()}));
 vi.mock('./deps',()=>({productionReadDeps:()=>mocks.deps}));
-vi.mock('./evidence-gate',async()=>({gateFacts:(await import('./route-test-kit')).fakeGateFacts}));
+vi.mock('./evidence-gate',async(orig)=>({...(await orig<typeof import('./evidence-gate')>()),applyGate:(await import('./route-test-kit')).fakeApplyGate}));
 vi.mock('@/lib/admin/auth',()=>{class AdminUnauthenticated extends Error{}class AdminForbidden extends Error{}return {AdminUnauthenticated,AdminForbidden,requireAdminUser:mocks.requireAdmin};});
 
 import {buildGated,companyRoute,countWithheld,gateCell} from './route';
@@ -6940,19 +6959,21 @@ Expected: FAIL，`Cannot find module './route'`。
 // (exact-first, normalised fallback, merge redirect; market from the matched security); HK → 404
 // market_not_served (F3 state on the page, never a US fallback). Handlers assemble every DTO per
 // request from readSnapshot (no module cache), so public and admin never share a built object.
-// buildGated() is the single evidence gate (fact rows + filings → gateFacts) every financial value goes
-// through; gateCell() applies it to grid cells (a derived cell is withheld as a whole).
+// buildGated() is the single evidence gate (fact rows + filings → evidenceOf + CN pdf.locate → Task 6
+// applyGate) every financial value goes through; gateCell() applies it to grid cells (a derived cell is
+// withheld as a whole). Events use the same applyGate through event-dto.ts gateEvents.
 import {NextResponse} from 'next/server';
 import {AdminForbidden,AdminUnauthenticated,requireAdminUser} from '@/lib/admin/auth';
-import {TICKER_RE,asOfParam,citationOf,decodeTicker,errorResponse,failureResponse,paramErrorResponse,readParams,resolvePublicIssuer,successHeaders,utcDate} from '@/lib/facts/public-route';
+import {TICKER_RE,asOfParam,decodeTicker,errorResponse,failureResponse,paramErrorResponse,readParams,resolvePublicIssuer,successHeaders,utcDate} from '@/lib/facts/public-route';
 import type {PublicIssuer} from '@/lib/facts/public-route';
 import {inferCoreMarket} from '@/lib/securities/ticker';
 import type {FactRow,FilingRow} from '@/lib/facts/types';
 import {productionReadDeps} from './deps';
 import type {ReadDeps} from './deps';
-import {gateFacts} from './evidence-gate';
-import type {GateFiling} from './evidence-gate';
-import type {Cell,EvidenceDto,WithheldCell,WithheldCounts,WithheldReason} from './types';
+import {applyGate} from './evidence-gate';
+import type {Eligibility} from './evidence-gate';
+import {filingSummaryOf} from './snapshot-read';
+import type {Cell,EvidenceDto,EvidenceRecord,FilingSummary,PdfLocator,WithheldCell,WithheldCounts,WithheldReason} from './types';
 
 export type Mode='public'|'admin';
 export const PRIVATE_NO_STORE='private, no-store';
@@ -7000,9 +7021,14 @@ export function companyRoute(spec:{tag:string;mode:Mode;params:readonly string[]
  };
 }
 
-export const gateFilingOf=(f:FilingRow):GateFiling=>({filingId:f.filing_id,citation:citationOf(f),documentUrl:f.document_url});
+/** A published filings row as the gate's FilingSummary (factCount unknown here → 0; the gate never reads it). */
+export const gateFilingOf=(f:FilingRow):FilingSummary=>filingSummaryOf(f,0);
 export interface Gated{
  evidence:Record<string,EvidenceDto>;
+ /** Task 6 Eligibility per requested id (feed to gateEventPayload / metricWithheldReason). */
+ eligibility:Map<string,Eligibility>;
+ /** The caller's snapshot filings plus any published filing loaded for an unknown fact. */
+ filings:Map<string,FilingSummary>;
  /** null = eligible; unknown or foreign ids are evidence_incomplete. */
  reasonOf(factId:string):WithheldReason|null;
  withheld(factId:string):WithheldCell|null;
@@ -7013,7 +7039,7 @@ export interface Gated{
  * belong to this (issuer, market); filings not in `filings` come from filingsOfIssuer (published only);
  * evidence via the service_role company_fact_evidence read; CN PDF locators via the injected source.
  */
-export async function buildGated(ctx:{deps:ReadDeps;admin:boolean;issuer:PublicIssuer},factIds:Iterable<string>,known:readonly FactRow[],filings:readonly GateFiling[]):Promise<Gated>{
+export async function buildGated(ctx:{deps:ReadDeps;admin:boolean;issuer:PublicIssuer},factIds:Iterable<string>,known:readonly FactRow[],filings:readonly FilingSummary[]):Promise<Gated>{
  const {deps,issuer}=ctx;
  const ids=[...new Set(factIds)];
  const byId=new Map<string,FactRow>();
@@ -7021,16 +7047,16 @@ export async function buildGated(ctx:{deps:ReadDeps;admin:boolean;issuer:PublicI
  const unknown=ids.filter(id=>!byId.has(id));
  if(unknown.length>0)for(const r of await deps.facts.factsByIds(unknown))if(r.issuer_id===issuer.issuerId&&r.market===issuer.market&&r.status==='ok')byId.set(r.fact_id,r);
  const facts=ids.map(id=>byId.get(id)).filter((r):r is FactRow=>r!==undefined);
- const filingMap=new Map<string,GateFiling>(filings.map(f=>[f.filingId,f]));
+ const filingMap=new Map<string,FilingSummary>(filings.map(f=>[f.filingId,f]));
  if(facts.some(r=>!filingMap.has(r.filing_id)))
   for(const f of await deps.facts.filingsOfIssuer(issuer.issuerId,issuer.market,{}))if(f.mapping_gen>0&&!filingMap.has(f.filing_id))filingMap.set(f.filing_id,gateFilingOf(f));
  const present=facts.map(r=>r.fact_id);
- const [evidence,pdf]=present.length>0?await Promise.all([deps.company.evidenceOf(present),deps.pdf.locate(present)]):[new Map(),new Map()];
- const g=gateFacts({market:issuer.market,admin:ctx.admin,facts,filings:filingMap,evidence,pdf});
- const reasonOf=(id:string):WithheldReason|null=>{if(!byId.has(id)||!g.verdicts.has(id))return 'evidence_incomplete';return g.verdicts.get(id)??null;};
- const out:Record<string,EvidenceDto>={};
- for(const id of present)if(reasonOf(id)===null&&g.evidence[id])out[id]=g.evidence[id];
- return {evidence:out,reasonOf,fact:id=>byId.get(id),withheld:id=>{const r=reasonOf(id);return r?{kind:'withheld',reason:r,factId:id}:null;}};
+ const [records,pdf]=present.length>0
+  ?await Promise.all([deps.company.evidenceOf(present),issuer.market==='CN'?deps.pdf.locate(issuer.issuerId,issuer.market,present):Promise.resolve(new Map<string,PdfLocator>())])
+  :[new Map<string,EvidenceRecord>(),new Map<string,PdfLocator>()];
+ const g=applyGate({factIds:ids,facts:new Map(facts.map(r=>[r.fact_id,r])),filings:filingMap,records,pdf,market:issuer.market,admin:ctx.admin});
+ const reasonOf=(id:string):WithheldReason|null=>{const e=g.eligibility.get(id);return !e?'evidence_incomplete':e.ok?null:e.reason;};
+ return {evidence:g.evidence,eligibility:g.eligibility,filings:filingMap,reasonOf,fact:id=>byId.get(id),withheld:id=>{const r=reasonOf(id);return r?{kind:'withheld',reason:r,factId:id}:null;}};
 }
 export const cellFactIds=(c:Cell):string[]=>!c||c.kind==='withheld'?[]:c.kind==='fact'?[c.factId]:c.inputs.map(i=>i.factId);
 /** A fact cell is withheld when its fact fails; a derived cell when ANY input fails (evidence_incomplete wins). */
@@ -7061,7 +7087,7 @@ import type {KitDeps} from '@/lib/company/route-test-kit';
 
 const mocks=vi.hoisted(()=>({deps:null as unknown as KitDeps,requireAdmin:vi.fn(),serverSupabase:vi.fn()}));
 vi.mock('@/lib/company/deps',()=>({productionReadDeps:()=>mocks.deps}));
-vi.mock('@/lib/company/evidence-gate',async()=>({gateFacts:(await import('@/lib/company/route-test-kit')).fakeGateFacts}));
+vi.mock('@/lib/company/evidence-gate',async(orig)=>({...(await orig<typeof import('@/lib/company/evidence-gate')>()),applyGate:(await import('@/lib/company/route-test-kit')).fakeApplyGate}));
 vi.mock('@/lib/admin/auth',()=>{class AdminUnauthenticated extends Error{}class AdminForbidden extends Error{}return {AdminUnauthenticated,AdminForbidden,requireAdminUser:mocks.requireAdmin};});
 vi.mock('@/lib/supabase/server',()=>({getServerSupabase:mocks.serverSupabase}));
 
@@ -7073,8 +7099,8 @@ import {periodKeyOf} from '@/lib/company/statements-grid';
 import {CN,US,cnFact,cnSummary,emptySnapshot,fact,makeDeps,seededTables,summary} from '@/lib/company/route-test-kit';
 
 const get=(h:typeof GET,ticker:string,qs:string)=>h(new Request(`https://alpha.example/api/companies/${ticker}/statements?${qs}`),{params:Promise.resolve({ticker})});
-const KEY=periodKeyOf('2022-09-25','2023-09-30','12M');
-const CN_KEY=periodKeyOf('2023-01-01','2023-12-31','12M');
+const KEY=periodKeyOf({period_start:'2022-09-25',period_end:'2023-09-30',duration:'12M'});
+const CN_KEY=periodKeyOf({period_start:'2023-01-01',period_end:'2023-12-31',duration:'12M'});
 const isConcepts=FACT_CONCEPTS.filter(c=>c.statement==='IS').map(c=>c.id);
 
 describe('GET /api/companies/[ticker]/statements',()=>{
@@ -7170,27 +7196,30 @@ Expected: FAIL，`Cannot find module './route'`。
 
 ```ts
 // src/lib/company/handlers/statements.ts
-// GET /api/companies/[ticker]/statements (spec §5.3, §6.1, §0 #66): disclosed/annual = one snapshot read
-// of the statement's concepts (history false); quarterly = one history read of the market's
-// Q_SINGLE_CONCEPTS of that statement + deriveMetrics on the same envelope (only q_single_* rows; CN
-// q_single_revenue is 营业总收入). BS has no quarterly basis. Every displayed factId (incl. all inputs of
-// derived cells) goes through buildGated; truncated → 200 truncated:true with nothing partial.
-import {MAPPING_GEN,FACT_CONCEPTS} from '@/lib/facts/concepts';
-import {Q_SINGLE_CONCEPTS,deriveMetrics} from '@/lib/facts/derive';
+// GET /api/companies/[ticker]/statements (spec §5.3, §6.1, §0 #66): one snapshot read of
+// gridReadConcepts(statement, basis, market) (history only for quarterly) → Task 7 buildStatementsGrid
+// (disclosed/annual = current disclosures; quarterly = deriveMetrics q_single_* on the SAME envelope; CN
+// q_single_revenue is 营业总收入). BS has no quarterly basis. Every displayed factId (grid.factIds: fact cells
+// and all inputs of derived cells) goes through buildGated; truncated → 200 truncated:true with nothing
+// partial. otherUnitOnly (Task 7) is passed through so the UI renders "—" + U for other-unit-only periods.
+import {MAPPING_GEN} from '@/lib/facts/concepts';
 import {QueryError} from '@/lib/facts/public-route';
-import {buildStatementsGrid} from '../statements-grid';
-import {buildGated,cellFactIds,countWithheld,gateCell} from '../route';
+import {buildStatementsGrid,gridReadConcepts} from '../statements-grid';
+import type {GridPeriods} from '../statements-grid';
+import {buildGated,countWithheld,gateCell} from '../route';
 import type {Handler} from '../route';
-import type {Basis,Cell,EvidenceDto,FilingSummary,GridRow,PeriodCol,StatementKind,WithheldCounts} from '../types';
+import type {Basis,EvidenceDto,FilingSummary,GridRow,PeriodCol,StatementKind,WithheldCounts} from '../types';
 
 export const STATEMENTS_PARAMS=['statement','basis','periods','asOf'] as const;
 const STATEMENTS=new Set<StatementKind>(['IS','BS','CF']);
 const BASES=new Set<Basis>(['disclosed','annual','quarterly']);
 const PERIODS=new Set(['8','20','40']);
-export const statementConcepts=(s:StatementKind):string[]=>FACT_CONCEPTS.filter(c=>c.statement===s).map(c=>c.id);
 export interface StatementsDto{
  issuerId:string;ticker:string;market:'US'|'CN';asOf:string;mappingGen:number;stateRev:number;truncated:boolean;statement:StatementKind;basis:Basis;
- periods:PeriodCol[];rows:GridRow[];filings:Record<string,FilingSummary>;evidence:Record<string,EvidenceDto>;withheld:WithheldCounts;
+ periods:PeriodCol[];rows:GridRow[];filings:Record<string,FilingSummary>;
+ /** concept → period keys where only a non-primary unit was disclosed (cell is null; UI shows "—" + U). */
+ otherUnitOnly:Record<string,string[]>;
+ evidence:Record<string,EvidenceDto>;withheld:WithheldCounts;
 }
 export const statementsHandler:Handler=async(ctx)=>{
  const {params:p,issuer,deps,asOf}=ctx;
@@ -7201,19 +7230,16 @@ export const statementsHandler:Handler=async(ctx)=>{
  const periods=p.get('periods')??'8';
  if(!PERIODS.has(periods))throw new QueryError('periods');
  const quarterly=basis==='quarterly';
- const own=statementConcepts(statement);
- const concepts=quarterly?Q_SINGLE_CONCEPTS[issuer.market].filter(c=>own.includes(c)):own;
+ const concepts=gridReadConcepts(statement,basis,issuer.market);
  const snap=await deps.snapshot(issuer.issuerId,issuer.market,{concepts,asOf,history:quarterly});
  const head={issuerId:issuer.issuerId,ticker:issuer.ticker,market:issuer.market,asOf,mappingGen:MAPPING_GEN,stateRev:snap.stateRev,truncated:snap.truncated,statement,basis};
- if(snap.truncated){const body:StatementsDto={...head,periods:[],rows:[],filings:{},evidence:{},withheld:{evidenceIncomplete:0,citationPending:0}};return {body,empty:true};}
- const metrics=quarterly?deriveMetrics(snap.rows,{market:issuer.market,asOf,basedOnRev:snap.stateRev}).filter(m=>m.metric.startsWith('q_single_')&&concepts.includes(m.metric.slice('q_single_'.length))):[];
- const grid=buildStatementsGrid({market:issuer.market,statement,basis,periods:Number(periods),rows:snap.rows,metrics,filings:snap.filings});
- const raw:Cell[]=grid.rows.flatMap(r=>Object.values(r.cells));
- const g=await buildGated(ctx,raw.flatMap(cellFactIds),snap.rows,snap.filings);
+ const none={periods:[],rows:[],filings:{},otherUnitOnly:{},evidence:{},withheld:{evidenceIncomplete:0,citationPending:0}};
+ if(snap.truncated){const body:StatementsDto={...head,...none};return {body,empty:true};}
+ const grid=buildStatementsGrid(snap,{statement,basis,periods:Number(periods) as GridPeriods,market:issuer.market,asOf});
+ if(!grid.ok){if(grid.error==='invalid_basis')throw new QueryError('basis');const body:StatementsDto={...head,truncated:true,...none};return {body,empty:true};}
+ const g=await buildGated(ctx,grid.factIds,snap.rows,snap.filings);
  const rows=grid.rows.map(r=>({...r,cells:Object.fromEntries(Object.entries(r.cells).map(([k,c])=>[k,gateCell(c,g)]))}));
- const referenced=new Set(raw.flatMap(c=>!c||c.kind==='withheld'?[]:c.kind==='fact'?[c.filingId]:c.inputs.map(i=>i.filingId)));
- const filings=Object.fromEntries(snap.filings.filter(f=>referenced.has(f.filingId)).map(f=>[f.filingId,f]));
- const body:StatementsDto={...head,periods:grid.periods,rows,filings,evidence:g.evidence,withheld:countWithheld(rows.flatMap(r=>Object.values(r.cells)))};
+ const body:StatementsDto={...head,periods:grid.periods,rows,filings:grid.filings,otherUnitOnly:grid.otherUnitOnly,evidence:g.evidence,withheld:countWithheld(rows.flatMap(r=>Object.values(r.cells)))};
  return {body,empty:grid.periods.length===0};
 };
 ```
@@ -7237,7 +7263,7 @@ export const GET=companyRoute({tag:'admin/companies/statements',mode:'admin',par
 ```
 
 Run: `npm test -- 'src/app/api/companies/[ticker]/statements/route.test.ts'`
-Expected: PASS（8 个用例）。若 `quarterly` 用例断言 `q_single_revenue` 派生格失败，先查 Task 7 的 `buildStatementsGrid` 是否按契约用 `metrics` 出派生格——修 Task 7，不在本处理器里补派生。
+Expected: PASS（8 个用例）。若 `quarterly` 用例断言 `q_single_revenue` 派生格失败，先查 Task 7 的 `buildStatementsGrid` quarterly 分支（同一信封上 `deriveMetrics` 取 `q_single_*`）——修 Task 7，不在本处理器里补派生。
 
 - [ ] **Step 7: 写失败测试（抽屉序列 facts 路由）**
 
@@ -7248,7 +7274,7 @@ import type {KitDeps} from '@/lib/company/route-test-kit';
 
 const mocks=vi.hoisted(()=>({deps:null as unknown as KitDeps,requireAdmin:vi.fn()}));
 vi.mock('@/lib/company/deps',()=>({productionReadDeps:()=>mocks.deps}));
-vi.mock('@/lib/company/evidence-gate',async()=>({gateFacts:(await import('@/lib/company/route-test-kit')).fakeGateFacts}));
+vi.mock('@/lib/company/evidence-gate',async(orig)=>({...(await orig<typeof import('@/lib/company/evidence-gate')>()),applyGate:(await import('@/lib/company/route-test-kit')).fakeApplyGate}));
 vi.mock('@/lib/admin/auth',()=>{class AdminUnauthenticated extends Error{}class AdminForbidden extends Error{}return {AdminUnauthenticated,AdminForbidden,requireAdminUser:mocks.requireAdmin};});
 
 import {GET} from './route';
@@ -7272,8 +7298,9 @@ describe('GET /api/companies/[ticker]/facts (drawer series, §0 #68)',()=>{
   expect(body).toMatchObject({concept:'revenue',periodStart:'2022-09-25',periodEnd:'2023-09-30',unit:'USD',otherUnits:['EUR'],stateRev:4,truncated:false});
   expect(body.series.map((s:{factId:string})=>s.factId)).toEqual([a.fact_id,b.fact_id]);
   expect(body.series[0]).toMatchObject({kind:'fact',value:'100',disclosureSeq:1,isCurrent:false,isRevision:false,sourceConcept:'Revenues',mappingVersion:'facts-map/1',mappingGen:1,delta:null,relChange:null});
-  expect(body.series[1]).toMatchObject({kind:'fact',value:'110',disclosureSeq:2,isRevision:true,delta:'10',relChange:'0.1000000000'});
-  expect(Object.keys(body.evidence).sort()).toEqual([a.fact_id,b.fact_id].sort());
+  expect(body.series[1]).toMatchObject({kind:'fact',value:'110',disclosureSeq:2,isRevision:true,delta:'10',relChange:'0.1'});
+  expect(body.otherUnitSeries).toEqual([expect.objectContaining({kind:'fact',factId:other.fact_id,unit:'EUR',delta:null,relChange:null})]);
+  expect(Object.keys(body.evidence).sort()).toEqual([a.fact_id,b.fact_id,other.fact_id].sort());
   expect(Object.keys(body.filings)).toHaveLength(2);
  });
  it('withheld entries carry no value and break the delta chain (no value leaks through a difference)',async()=>{
@@ -7319,7 +7346,8 @@ Expected: FAIL，`Cannot find module './route'`。
 // (concept, periodStart [INSTANT: = periodEnd], periodEnd, consolidated, unit), ascending by
 // disclosure_seq. Each entry carries the transform chain (sourceConcept → concept, mappingVersion,
 // mappingGen, unitRule from the evidence DTO); values gated; delta / relChange only between two
-// adjacent ELIGIBLE entries so a withheld value never leaks through a difference.
+// adjacent ELIGIBLE entries so a withheld value never leaks through a difference. Facts of the same key in
+// OTHER units are listed too (spec §5.3: "主单位以外的事实在抽屉列出"), gated the same way, in otherUnitSeries.
 import {CONCEPT_IDS,MAPPING_GEN} from '@/lib/facts/concepts';
 import {QueryError,dateParam} from '@/lib/facts/public-route';
 import type {FactRow} from '@/lib/facts/types';
@@ -7336,6 +7364,8 @@ export type SeriesEntry=(SeriesBase&{kind:'fact';value:string;rawHash:string;run
 export interface FactSeriesDto{
  issuerId:string;ticker:string;market:'US'|'CN';asOf:string;mappingGen:number;stateRev:number;truncated:boolean;history:true;
  concept:string;periodStart:string;periodEnd:string;unit:string;otherUnits:string[];series:SeriesEntry[];
+ /** Same natural key in other units (ascending, delta/relChange always null); feeds the drawer's other-units table. */
+ otherUnitSeries:SeriesEntry[];
  filings:Record<string,FilingSummary>;evidence:Record<string,EvidenceDto>;withheld:WithheldCounts;
 }
 const cmp=(a:string,b:string)=>a<b?-1:a>b?1:0;
@@ -7347,22 +7377,25 @@ export const factsHandler:Handler=async(ctx)=>{
  const unit=p.get('unit');if(!unit||!UNIT_RE.test(unit))throw new QueryError('unit');
  const snap=await deps.snapshot(issuer.issuerId,issuer.market,{concepts:[concept],asOf,from:periodEnd,to:periodEnd,history:true});
  const head={issuerId:issuer.issuerId,ticker:issuer.ticker,market:issuer.market,asOf,mappingGen:MAPPING_GEN,stateRev:snap.stateRev,truncated:snap.truncated,history:true as const,concept,periodStart,periodEnd,unit};
- if(snap.truncated){const body:FactSeriesDto={...head,otherUnits:[],series:[],filings:{},evidence:{},withheld:{evidenceIncomplete:0,citationPending:0}};return {body,empty:true};}
+ if(snap.truncated){const body:FactSeriesDto={...head,otherUnits:[],series:[],otherUnitSeries:[],filings:{},evidence:{},withheld:{evidenceIncomplete:0,citationPending:0}};return {body,empty:true};}
  const sameKey=(r:FactRow)=>r.concept===concept&&r.consolidation==='consolidated'&&(r.period_start??r.period_end)===periodStart&&r.period_end===periodEnd;
- const series=snap.rows.filter(r=>sameKey(r)&&r.unit===unit).sort((a,b)=>(a.disclosure_seq??0)-(b.disclosure_seq??0)||cmp(a.available_date,b.available_date)||cmp(a.created_at,b.created_at)||cmp(a.fact_id,b.fact_id));
- const otherUnits=[...new Set(snap.rows.filter(r=>sameKey(r)&&r.unit!==unit).map(r=>r.unit))].sort(cmp);
- const g=await buildGated(ctx,series.map(r=>r.fact_id),series,snap.filings);
- let prev:FactRow|null=null;
- const entries:SeriesEntry[]=series.map(r=>{
-  const base:SeriesBase={factId:r.fact_id,availableDate:r.available_date,filingId:r.filing_id,disclosureSeq:r.disclosure_seq??null,isCurrent:r.is_current??null,isRevision:r.is_revision??null,sourceConcept:r.source_concept,mappingVersion:r.mapping_version,mappingGen:r.mapping_gen,unit:r.unit};
+ const seqOrder=(a:FactRow,b:FactRow)=>(a.disclosure_seq??0)-(b.disclosure_seq??0)||cmp(a.available_date,b.available_date)||cmp(a.created_at,b.created_at)||cmp(a.fact_id,b.fact_id);
+ const series=snap.rows.filter(r=>sameKey(r)&&r.unit===unit).sort(seqOrder);
+ const others=snap.rows.filter(r=>sameKey(r)&&r.unit!==unit).sort((a,b)=>cmp(a.unit,b.unit)||seqOrder(a,b));
+ const otherUnits=[...new Set(others.map(r=>r.unit))].sort(cmp);
+ const g=await buildGated(ctx,[...series,...others].map(r=>r.fact_id),[...series,...others],snap.filings);
+ const baseOf=(r:FactRow):SeriesBase=>({factId:r.fact_id,availableDate:r.available_date,filingId:r.filing_id,disclosureSeq:r.disclosure_seq??null,isCurrent:r.is_current??null,isRevision:r.is_revision??null,sourceConcept:r.source_concept,mappingVersion:r.mapping_version,mappingGen:r.mapping_gen,unit:r.unit});
+ const entryOf=(r:FactRow,before:FactRow|null):SeriesEntry=>{
   const reason=g.reasonOf(r.fact_id);
-  if(reason){prev=null;return {...base,kind:'withheld',reason};}
-  const before:FactRow|null=prev;prev=r;
-  return {...base,kind:'fact',value:r.value_text,rawHash:r.raw_hash,runId:r.run_id,unitRule:g.evidence[r.fact_id]?.unitRule??null,
+  if(reason)return {...baseOf(r),kind:'withheld',reason};
+  return {...baseOf(r),kind:'fact',value:r.value_text,rawHash:r.raw_hash,runId:r.run_id,unitRule:g.evidence[r.fact_id]?.unitRule??null,
    delta:before?decimalSub(r.value_text,before.value_text):null,relChange:before?decimalRelChange(before.value_text,r.value_text):null};
- });
- const used=new Set(series.map(r=>r.filing_id));
- const body:FactSeriesDto={...head,otherUnits,series:entries,filings:Object.fromEntries(snap.filings.filter(f=>used.has(f.filingId)).map(f=>[f.filingId,f])),evidence:g.evidence,withheld:countWithheld(entries)};
+ };
+ let prev:FactRow|null=null;
+ const entries:SeriesEntry[]=series.map(r=>{const e=entryOf(r,prev);prev=e.kind==='fact'?r:null;return e;});
+ const otherUnitSeries:SeriesEntry[]=others.map(r=>entryOf(r,null));
+ const used=new Set([...series,...others].map(r=>r.filing_id));
+ const body:FactSeriesDto={...head,otherUnits,series:entries,otherUnitSeries,filings:Object.fromEntries(snap.filings.filter(f=>used.has(f.filingId)).map(f=>[f.filingId,f])),evidence:g.evidence,withheld:countWithheld([...entries,...otherUnitSeries])};
  return {body,empty:entries.length===0};
 };
 ```
@@ -7414,17 +7447,17 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
 
 ---
-### Task 10: overview、events、metrics 代理、freshness、snapshot + admin 变体
+### Task 10: overview、events、metrics 代理、filings、freshness、snapshot + admin 变体
 
 **Files:**
 - Modify: `src/lib/company/route-test-kit.ts`（追加 `eventRow` 构造器）
 - Create: `src/lib/company/event-dto.ts`
-- Create: `src/lib/company/handlers/overview.ts`、`src/lib/company/handlers/events.ts`、`src/lib/company/handlers/metrics.ts`
-- Create: `src/app/api/companies/[ticker]/overview/route.ts`、`…/events/route.ts`、`…/metrics/route.ts`
-- Create: `src/app/api/admin/companies/[ticker]/overview/route.ts`、`…/events/route.ts`、`…/metrics/route.ts`
+- Create: `src/lib/company/handlers/overview.ts`、`src/lib/company/handlers/events.ts`、`src/lib/company/handlers/metrics.ts`、`src/lib/company/handlers/filings.ts`
+- Create: `src/app/api/companies/[ticker]/overview/route.ts`、`…/events/route.ts`、`…/metrics/route.ts`、`…/filings/route.ts`
+- Create: `src/app/api/admin/companies/[ticker]/overview/route.ts`、`…/events/route.ts`、`…/metrics/route.ts`、`…/filings/route.ts`
 - Create: `src/app/api/companies/freshness/route.ts`
 - Create: `src/app/api/companies/snapshot/route.ts`、`src/app/api/admin/companies/snapshot/route.ts`
-- Test: `src/lib/company/event-dto.test.ts`、`src/app/api/companies/[ticker]/overview/route.test.ts`、`…/events/route.test.ts`、`…/metrics/route.test.ts`、`src/app/api/companies/freshness/route.test.ts`、`src/app/api/companies/snapshot/route.test.ts`
+- Test: `src/lib/company/event-dto.test.ts`、`src/app/api/companies/[ticker]/overview/route.test.ts`、`…/events/route.test.ts`、`…/metrics/route.test.ts`、`…/filings/route.test.ts`、`src/app/api/companies/freshness/route.test.ts`、`src/app/api/companies/snapshot/route.test.ts`
 
 **指挥决定：**
 - overview 无 `asOf`：一次 `snapshot(concepts=DERIVE_CONCEPTS[market], history:true)` 供速览与 `latestFiling`，事件读物化表（`eventsOfIssuer limit 3`）；有 `asOf`：一次 `snapshot(concepts=null, history:true)` 供速览、`latestFiling` 与现算事件（同一信封）。速览期间 = 当前市场头条收入概念（US `revenue`、CN `revenue_operating`）的当前非 INSTANT 事实中 `period_end` 最大者，同 `period_end` 取最长期（12M>9M>6M>3M）；同期同概念多单位 → 该格 `null`（不猜主单位）。
@@ -7450,15 +7483,18 @@ export const eventRow=(p:Partial<EventRow>={}):EventRow=>({event_id:'e'.repeat(6
 
 ```ts
 // src/lib/company/event-dto.test.ts
-import {describe,expect,it} from 'vitest';
-import {eventFactIds,gatePayload} from './event-dto';
-import type {WithheldCell} from './types';
+import {describe,expect,it,vi} from 'vitest';
+vi.mock('./evidence-gate',async(orig)=>({...(await orig<typeof import('./evidence-gate')>()),applyGate:(await import('./route-test-kit')).fakeApplyGate}));
+import {eventFactIds,gateEventRows,toPublicEvent} from './event-dto';
+import type {GateEventItem} from './event-dto';
+import type {Eligibility} from './evidence-gate';
+import {CN,HEADLINE_FACT,US,eventRow,fact,filingRow,makeDeps,seededTables} from './route-test-kit';
 
-const W=(id:string):WithheldCell=>({kind:'withheld',reason:'evidence_incomplete',factId:id});
-const gate=(bad:Set<string>)=>({withheld:(id:string)=>bad.has(id)?W(id):null});
+const NO:Eligibility={ok:false,reason:'evidence_incomplete'};const OK:Eligibility={ok:true};
 const revised={concept:'revenue',statement:'IS',periodStart:'2022-09-25',periodEnd:'2023-09-30',duration:'12M',consolidation:'consolidated',unit:'USD',
- from:{factId:'A',value:'100',filingId:'F1',availableDate:'2023-11-03'},to:{factId:'B',value:'110',filingId:'F2',availableDate:'2024-11-01'},relChange:'0.1000000000'};
+ from:{factId:'A',value:'100',filingId:'F1',availableDate:'2023-11-03'},to:{factId:'B',value:'110',filingId:'F2',availableDate:'2024-11-01'},relChange:'0.1'};
 const first={periodStart:'2023-07-02',periodEnd:'2023-09-30',duration:'3M',filingId:'F1',conceptCount:3,headline:{revenue:{factId:'H1',value:'5',unit:'USD'},net_income_parent:{factId:'H2',value:'1',unit:'USD'}},ambiguousUnits:[]};
+const item=(kind:'fact_revised'|'period_first_seen',payload:Record<string,unknown>):GateEventItem=>({e:{kind,natural_key:'k',occurred_on:'2024-11-01',period_end:'2023-09-30',concept:null,filing_id:null,payload,meta:{}},eventId:'e'.repeat(64),issuerId:US,market:'US'});
 
 describe('event payload gate',()=>{
  it('lists every value-bearing fact id per kind; filing_published has none',()=>{
@@ -7467,17 +7503,32 @@ describe('event payload gate',()=>{
   expect(eventFactIds({kind:'filing_published',payload:{formType:'10-K',factCount:9}})).toEqual([]);
  });
  it('fact_revised: an ineligible side replaces its value AND relChange; eligible payload is unchanged',()=>{
-  expect(gatePayload('fact_revised',revised,gate(new Set()))).toEqual(revised);
-  const g=gatePayload('fact_revised',revised,gate(new Set(['A']))) as typeof revised&{from:{value:unknown};relChange:unknown};
-  expect(g.from).toEqual({factId:'A',value:W('A'),filingId:'F1',availableDate:'2023-11-03'});
+  expect(toPublicEvent(item('fact_revised',revised),new Map([['A',OK],['B',OK]]),undefined).payload).toEqual(revised);
+  const g=toPublicEvent(item('fact_revised',revised),new Map([['A',NO],['B',OK]]),undefined).payload as typeof revised&{from:{value:unknown};relChange:unknown};
+  expect(g.from).toEqual({factId:'A',value:{kind:'withheld',reason:'evidence_incomplete',factId:'A'},filingId:'F1',availableDate:'2023-11-03'});
   expect(g.to.value).toBe('110');
-  expect(g.relChange).toEqual(W('A'));
+  expect(g.relChange).toEqual({kind:'withheld',reason:'evidence_incomplete'});
   expect(JSON.stringify(g)).not.toContain('"100"');
  });
  it('period_first_seen: only the ineligible headline value is withheld',()=>{
-  const g=gatePayload('period_first_seen',first,gate(new Set(['H2']))) as {headline:Record<string,{value:unknown}>};
+  const g=toPublicEvent(item('period_first_seen',first),new Map([['H1',OK],['H2',NO]]),undefined).payload as {headline:Record<string,{value:unknown}>};
   expect(g.headline.revenue.value).toBe('5');
-  expect(g.headline.net_income_parent.value).toEqual(W('H2'));
+  expect(g.headline.net_income_parent.value).toEqual({kind:'withheld',reason:'evidence_incomplete',factId:'H2'});
+ });
+ it('gateEventRows: several issuers in order; per-stream reads; filing summary attached; withheld counted',async()=>{
+  const deps=makeDeps(await seededTables());
+  (deps.facts.factsByIds as ReturnType<typeof vi.fn>).mockResolvedValue([fact({fact_id:HEADLINE_FACT})]);
+  (deps.facts.filingsOfIssuer as ReturnType<typeof vi.fn>).mockResolvedValue([filingRow()]);
+  const cnRow=eventRow({event_id:'f'.repeat(64),issuer_id:CN,market:'CN',kind:'filing_published',natural_key:'g',filing_id:null,payload:{formType:'annual'}});
+  const out=await gateEventRows([eventRow(),cnRow],deps,{admin:false});
+  expect(out.events.map(e=>e.eventId)).toEqual(['e'.repeat(64),'f'.repeat(64)]);
+  expect(out.events[0]).toMatchObject({issuerId:US,market:'US',filing:{formType:'10-K',citation:'edgar'},payload:{headline:{revenue:{value:'89498000000'}}}});
+  expect(out.events[1]).toMatchObject({issuerId:CN,market:'CN',filing:null});
+  expect(Object.keys(out.evidence)).toEqual([HEADLINE_FACT]);
+  deps.noEvidence.add(HEADLINE_FACT);
+  const gated=await gateEventRows([eventRow()],deps,{admin:false});
+  expect(gated.events[0].payload).toMatchObject({headline:{revenue:{value:{kind:'withheld',reason:'evidence_incomplete',factId:HEADLINE_FACT}}}});
+  expect(gated.withheld).toEqual({evidenceIncomplete:1,citationPending:0});
  });
 });
 ```
@@ -7491,46 +7542,73 @@ Expected: FAIL，`Cannot find module './event-dto'`。
 // src/lib/company/event-dto.ts
 // Public event DTO and its evidence gate (spec §6.1 events, §6.2 inbox, §0 #64): events are read with
 // service_role and every value in a payload (period_first_seen headline values, fact_revised from/to
-// values and relChange) is replaced by a WithheldCell when the referenced fact fails evidenceEligible.
-// Shared by the events, overview and (Task 16) inbox routes.
-import type {EventInput,EventKind,EventRow,WithheldCell} from './types';
+// values and relChange) is replaced by a withheld marker when the referenced fact fails the gate. The
+// payload rule is Task 6's gateEventPayload (the only implementation); the gate is Task 6's applyGate
+// (evidenceOf + CN pdf.locate per stream here). Shared by the events / overview handlers and the tracking
+// inbox (gateEventRows, Task 16), so the company page and the inbox gate identically.
+import type {FactRow,Market} from '@/lib/facts/types';
+import type {EventGateDeps} from './deps';
+import {applyGate,eventFactIds,gateEventPayload} from './evidence-gate';
+import type {Eligibility} from './evidence-gate';
+import {filingSummaryOf} from './snapshot-read';
+import type {EventInput,EventKind,EventRow,EvidenceDto,EvidenceRecord,FilingSummary,PdfLocator,WithheldCounts} from './types';
 
-export interface EventDto{
- eventId:string;kind:EventKind;naturalKey:string;occurredOn:string;periodEnd:string|null;concept:string|null;filingId:string|null;
+export {eventFactIds};
+/** One event as every public/tracking response carries it (Task 11–13, 17 render this shape). */
+export interface PublicEvent{
+ eventId:string;issuerId:string;market:Market;kind:EventKind;naturalKey:string;occurredOn:string;periodEnd:string|null;concept:string|null;filingId:string|null;
  payload:Record<string,unknown>;meta:Record<string,unknown>;firstSeenAt:string|null;payloadChangedAt:string|null;
+ filing:{formType:string;url:string|null;documentUrl:string|null;citation:'edgar'|'linked'|'pending'}|null;
 }
-type Side={factId:string;value:unknown;filingId:string;availableDate:string};
-type Head={factId:string;value:unknown;unit:string};
-const obj=(v:unknown):Record<string,unknown>|null=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:null;
-export function eventFactIds(e:{kind:EventKind;payload:Record<string,unknown>}):string[]{
- if(e.kind==='fact_revised')return ['from','to'].map(k=>obj(e.payload[k])?.factId).filter((x):x is string=>typeof x==='string');
- if(e.kind==='period_first_seen')return Object.values(obj(e.payload.headline)??{}).map(h=>obj(h)?.factId).filter((x):x is string=>typeof x==='string');
- return [];
+export interface GateEventItem{e:EventInput|EventRow;eventId:string;issuerId:string;market:Market}
+export interface GatedEvents{events:PublicEvent[];evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
+const filingRef=(f:FilingSummary|undefined):PublicEvent['filing']=>f?{formType:f.formType,url:f.url,documentUrl:f.documentUrl,citation:f.citation}:null;
+/** Shapes one event; payload values gated with gateEventPayload over `elig` (missing ids → evidence_incomplete). */
+export function toPublicEvent(item:GateEventItem,elig:Map<string,Eligibility>,filing:FilingSummary|undefined):PublicEvent{
+ const {e}=item;const row=e as Partial<EventRow>;
+ return {eventId:item.eventId,issuerId:item.issuerId,market:item.market,kind:e.kind,naturalKey:e.natural_key,occurredOn:e.occurred_on,periodEnd:e.period_end,concept:e.concept,filingId:e.filing_id,
+  payload:gateEventPayload(e,elig),meta:e.meta,firstSeenAt:row.first_seen_at??null,payloadChangedAt:row.payload_changed_at??null,filing:filingRef(e.filing_id?filing:undefined)};
 }
-export function gatePayload(kind:EventKind,payload:Record<string,unknown>,g:{withheld(factId:string):WithheldCell|null}):Record<string,unknown>{
- if(kind==='fact_revised'){
-  const from=payload.from as Side,to=payload.to as Side;
-  const wf=g.withheld(from.factId),wt=g.withheld(to.factId);
-  if(!wf&&!wt)return payload;
-  const out:Record<string,unknown>={...payload,from:wf?{...from,value:wf}:from,to:wt?{...to,value:wt}:to};
-  if('relChange' in payload)out.relChange=wf??wt;
-  return out;
+/**
+ * Gates events of any number of (issuer, market) streams; output order = input order. Per stream: fact rows
+ * from `known` (same snapshot) else factsByIds (kept only when they belong to the stream and are ok);
+ * filings from `filings` else filingsOfIssuer (published only); one evidenceOf; pdf.locate only for CN.
+ */
+export async function gateEvents(items:GateEventItem[],deps:EventGateDeps,opts:{admin:boolean;known?:readonly FactRow[];filings?:readonly FilingSummary[]}):Promise<GatedEvents>{
+ const evidence:Record<string,EvidenceDto>={};const withheld:WithheldCounts={evidenceIncomplete:0,citationPending:0};
+ const elig=new Map<string,Eligibility>();const filingsOf=new Map<string,Map<string,FilingSummary>>();
+ const groups=new Map<string,GateEventItem[]>();
+ for(const it of items){const k=`${it.issuerId}:${it.market}`;const g=groups.get(k);if(g)g.push(it);else groups.set(k,[it]);}
+ for(const [k,group] of groups){
+  const {issuerId,market}=group[0];
+  const ids=[...new Set(group.flatMap(x=>eventFactIds(x.e)))].sort();
+  const facts=new Map<string,FactRow>();
+  for(const r of opts.known??[])if(r.issuer_id===issuerId&&r.market===market&&r.status==='ok')facts.set(r.fact_id,r);
+  const missing=ids.filter(id=>!facts.has(id));
+  if(missing.length>0)for(const r of await deps.facts.factsByIds(missing))if(r.issuer_id===issuerId&&r.market===market&&r.status==='ok')facts.set(r.fact_id,r);
+  const filings=new Map<string,FilingSummary>((opts.filings??[]).map(f=>[f.filingId,f]));
+  if(group.some(x=>x.e.filing_id!==null&&!filings.has(x.e.filing_id))||[...facts.values()].some(r=>!filings.has(r.filing_id)))
+   for(const f of await deps.facts.filingsOfIssuer(issuerId,market,{}))if(f.mapping_gen>0&&!filings.has(f.filing_id))filings.set(f.filing_id,filingSummaryOf(f,0));
+  filingsOf.set(k,filings);
+  const present=ids.filter(id=>facts.has(id));
+  const [records,pdf]=present.length>0
+   ?await Promise.all([deps.company.evidenceOf(present),market==='CN'?deps.pdf.locate(issuerId,market,present):Promise.resolve(new Map<string,PdfLocator>())])
+   :[new Map<string,EvidenceRecord>(),new Map<string,PdfLocator>()];
+  const g=applyGate({factIds:ids,facts,filings,records,pdf,market,admin:opts.admin});
+  for(const [id,e] of g.eligibility)elig.set(id,e);
+  Object.assign(evidence,g.evidence);
+  withheld.evidenceIncomplete+=g.withheld.evidenceIncomplete;withheld.citationPending+=g.withheld.citationPending;
  }
- if(kind==='period_first_seen'){
-  const headline=(obj(payload.headline)??{}) as Record<string,Head>;
-  return {...payload,headline:Object.fromEntries(Object.entries(headline).map(([k,h])=>{const w=g.withheld(h.factId);return [k,w?{...h,value:w}:h];}))};
- }
- return payload;
+ const events=items.map(it=>toPublicEvent(it,elig,it.e.filing_id?filingsOf.get(`${it.issuerId}:${it.market}`)?.get(it.e.filing_id):undefined));
+ return {events,evidence,withheld};
 }
-export function toEventDto(e:EventInput|EventRow,eventId:string,g:{withheld(factId:string):WithheldCell|null}):EventDto{
- const row=e as Partial<EventRow>;
- return {eventId,kind:e.kind,naturalKey:e.natural_key,occurredOn:e.occurred_on,periodEnd:e.period_end,concept:e.concept,filingId:e.filing_id,
-  payload:gatePayload(e.kind,e.payload,g),meta:e.meta,firstSeenAt:row.first_seen_at??null,payloadChangedAt:row.payload_changed_at??null};
-}
+/** Materialized rows (any issuers, e.g. the tracking inbox) → gated PublicEvents, order kept. */
+export const gateEventRows=(rows:EventRow[],deps:EventGateDeps,opts:{admin:boolean}):Promise<GatedEvents>=>
+ gateEvents(rows.map(r=>({e:r,eventId:r.event_id,issuerId:r.issuer_id,market:r.market})),deps,opts);
 ```
 
 Run: `npm test -- src/lib/company/event-dto.test.ts`
-Expected: PASS（3 个用例）。
+Expected: PASS（4 个用例）。
 
 - [ ] **Step 4: 写失败测试（events 路由）**
 
@@ -7541,7 +7619,7 @@ import type {KitDeps} from '@/lib/company/route-test-kit';
 
 const mocks=vi.hoisted(()=>({deps:null as unknown as KitDeps,requireAdmin:vi.fn(),derive:vi.fn()}));
 vi.mock('@/lib/company/deps',()=>({productionReadDeps:()=>mocks.deps}));
-vi.mock('@/lib/company/evidence-gate',async()=>({gateFacts:(await import('@/lib/company/route-test-kit')).fakeGateFacts}));
+vi.mock('@/lib/company/evidence-gate',async(orig)=>({...(await orig<typeof import('@/lib/company/evidence-gate')>()),applyGate:(await import('@/lib/company/route-test-kit')).fakeApplyGate}));
 vi.mock('@/lib/admin/auth',()=>{class AdminUnauthenticated extends Error{}class AdminForbidden extends Error{}return {AdminUnauthenticated,AdminForbidden,requireAdminUser:mocks.requireAdmin};});
 vi.mock('@/lib/company/events',()=>({deriveIssuerEvents:mocks.derive}));
 
@@ -7584,7 +7662,7 @@ describe('GET /api/companies/[ticker]/events',()=>{
   const res=await get(GET,'AAPL','asOf=2024-06-30&limit=2');
   const body=await res.json();
   expect(mocks.deps.snapshot).toHaveBeenCalledWith(US,'US',{concepts:null,asOf:'2024-06-30',history:true});
-  expect(mocks.derive).toHaveBeenCalledWith({issuerId:US,market:'US',rows:[h],filings:[summary()]},{cutoff:'2024-06-30'});
+  expect(mocks.derive).toHaveBeenCalledWith({rows:[h],filings:[summary()],cutoff:'2024-06-30'});
   expect(mocks.deps.company.eventsOfIssuer).not.toHaveBeenCalled();
   expect(body).toMatchObject({computed:'live',asOf:'2024-06-30',stateRev:5});
   expect(body.rows.map((r:{occurredOn:string})=>r.occurredOn)).toEqual(['2024-02-02','2023-11-03']);
@@ -7622,15 +7700,16 @@ Expected: FAIL，`Cannot find module './route'`。
 // GET /api/companies/[ticker]/events (spec §6.1, §7.2, §0 #64). Without asOf: materialized issuer_events
 // (retired_at is null) read server-side with service_role, keyset paged by CompanyDb. With asOf: one
 // company_read_snapshot(concepts null, history:true) → deriveIssuerEvents(cutoff=asOf), no firstSeenAt,
-// computed 'live', own keyset over (occurred_on desc, event_id desc); truncated → 400 replay_truncated.
-// Payload values pass the evidence gate in both modes.
+// computed 'live', own keyset over (occurred_on desc, event_id asc) — the order Task 3 eventsOfIssuer pages
+// the materialized table; truncated → 400 replay_truncated. Payload values pass the shared event gate
+// (event-dto.ts gateEvents, the same function the tracking inbox uses) in both modes.
 import {QueryError,dateParam,intParam,listParam} from '@/lib/facts/public-route';
 import type {FactRow} from '@/lib/facts/types';
 import {eventIdOf} from '../canonical';
-import {eventFactIds,toEventDto} from '../event-dto';
-import type {EventDto} from '../event-dto';
+import {gateEvents} from '../event-dto';
+import type {PublicEvent} from '../event-dto';
 import {deriveIssuerEvents} from '../events';
-import {RouteError,buildGated,countWithheld} from '../route';
+import {RouteError} from '../route';
 import type {Handler} from '../route';
 import {CompanyDbError,EVENT_KINDS} from '../types';
 import type {EventInput,EventKind,EventRow,EvidenceDto,FilingSummary,WithheldCounts} from '../types';
@@ -7638,7 +7717,7 @@ import type {EventInput,EventKind,EventRow,EvidenceDto,FilingSummary,WithheldCou
 export const EVENTS_PARAMS=['since','until','kinds','cursor','limit','asOf'] as const;
 const KINDS=new Set<string>(EVENT_KINDS);
 const CURSOR_RE=/^[A-Za-z0-9_-]{1,256}$/;
-export interface EventsDto{issuerId:string;ticker:string;market:'US'|'CN';asOf:string|null;computed:'materialized'|'live';stateRev:number|null;rows:EventDto[];nextCursor:string|null;evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
+export interface EventsDto{issuerId:string;ticker:string;market:'US'|'CN';asOf:string|null;computed:'materialized'|'live';stateRev:number|null;rows:PublicEvent[];nextCursor:string|null;evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
 const enc=(occ:string,id:string)=>Buffer.from(`${occ}~${id}`,'utf8').toString('base64url');
 function dec(c:string):{occ:string;id:string}{
  const s=Buffer.from(c,'base64url').toString('utf8');const m=/^(\d{4}-\d{2}-\d{2})~([0-9a-f]{64})$/.exec(s);
@@ -7649,8 +7728,8 @@ export interface LiveEvent{input:EventInput;eventId:string}
 export function pageLive(all:LiveEvent[],f:{since?:string;until?:string;kinds?:string[];cursor?:string;limit:number}):{rows:LiveEvent[];nextCursor:string|null}{
  const after=f.cursor?dec(f.cursor):null;
  const xs=all.filter(e=>(!f.since||e.input.occurred_on>=f.since)&&(!f.until||e.input.occurred_on<=f.until)&&(!f.kinds||f.kinds.includes(e.input.kind)))
-  .sort((a,b)=>a.input.occurred_on<b.input.occurred_on?1:a.input.occurred_on>b.input.occurred_on?-1:a.eventId<b.eventId?1:a.eventId>b.eventId?-1:0)
-  .filter(e=>!after||e.input.occurred_on<after.occ||(e.input.occurred_on===after.occ&&e.eventId<after.id));
+  .sort((a,b)=>a.input.occurred_on<b.input.occurred_on?1:a.input.occurred_on>b.input.occurred_on?-1:a.eventId<b.eventId?-1:a.eventId>b.eventId?1:0)
+  .filter(e=>!after||e.input.occurred_on<after.occ||(e.input.occurred_on===after.occ&&e.eventId>after.id));
  const rows=xs.slice(0,f.limit);
  return {rows,nextCursor:xs.length>f.limit?enc(rows[rows.length-1].input.occurred_on,rows[rows.length-1].eventId):null};
 }
@@ -7669,14 +7748,13 @@ export const eventsHandler:Handler=async(ctx)=>{
  }else{
   const snap=await deps.snapshot(issuer.issuerId,issuer.market,{concepts:null,asOf,history:true});
   if(snap.truncated)throw new RouteError('replay_truncated',400,'replay read truncated');
-  const all=deriveIssuerEvents({issuerId:issuer.issuerId,market:issuer.market,rows:snap.rows,filings:snap.filings},{cutoff:asOf}).map(e=>({input:e,eventId:eventIdOf(issuer.issuerId,issuer.market,e.kind,e.natural_key)}));
+  const all=deriveIssuerEvents({rows:snap.rows,filings:snap.filings,cutoff:asOf}).map(e=>({input:e,eventId:eventIdOf(issuer.issuerId,issuer.market,e.kind,e.natural_key)}));
   const page=pageLive(all,{since,until,kinds,cursor,limit});
   items=page.rows.map(x=>({e:x.input,eventId:x.eventId}));nextCursor=page.nextCursor;known=snap.rows;filings=snap.filings;stateRev=snap.stateRev;
  }
- const ids=items.flatMap(x=>eventFactIds(x.e));
- const g=await buildGated(ctx,ids,known,filings);
- const rows=items.map(x=>toEventDto(x.e,x.eventId,g));
- const body:EventsDto={issuerId:issuer.issuerId,ticker:issuer.ticker,market:issuer.market,asOf:ctx.asOfGiven?asOf:null,computed:ctx.asOfGiven?'live':'materialized',stateRev,rows,nextCursor,evidence:g.evidence,withheld:countWithheld([...new Set(ids)].map(id=>g.withheld(id)))};
+ const gated=await gateEvents(items.map(x=>({e:x.e,eventId:x.eventId,issuerId:issuer.issuerId,market:issuer.market})),deps,{admin:ctx.admin,known,filings});
+ const rows=gated.events;
+ const body:EventsDto={issuerId:issuer.issuerId,ticker:issuer.ticker,market:issuer.market,asOf:ctx.asOfGiven?asOf:null,computed:ctx.asOfGiven?'live':'materialized',stateRev,rows,nextCursor,evidence:gated.evidence,withheld:gated.withheld};
  return {body,empty:rows.length===0};
 };
 ```
@@ -7711,7 +7789,7 @@ import type {KitDeps} from '@/lib/company/route-test-kit';
 
 const mocks=vi.hoisted(()=>({deps:null as unknown as KitDeps,requireAdmin:vi.fn()}));
 vi.mock('@/lib/company/deps',()=>({productionReadDeps:()=>mocks.deps}));
-vi.mock('@/lib/company/evidence-gate',async()=>({gateFacts:(await import('@/lib/company/route-test-kit')).fakeGateFacts}));
+vi.mock('@/lib/company/evidence-gate',async(orig)=>({...(await orig<typeof import('@/lib/company/evidence-gate')>()),applyGate:(await import('@/lib/company/route-test-kit')).fakeApplyGate}));
 vi.mock('@/lib/admin/auth',()=>{class AdminUnauthenticated extends Error{}class AdminForbidden extends Error{}return {AdminUnauthenticated,AdminForbidden,requireAdminUser:mocks.requireAdmin};});
 
 import {GET} from './route';
@@ -7851,7 +7929,7 @@ import type {KitDeps} from '@/lib/company/route-test-kit';
 
 const mocks=vi.hoisted(()=>({deps:null as unknown as KitDeps,requireAdmin:vi.fn(),derive:vi.fn()}));
 vi.mock('@/lib/company/deps',()=>({productionReadDeps:()=>mocks.deps}));
-vi.mock('@/lib/company/evidence-gate',async()=>({gateFacts:(await import('@/lib/company/route-test-kit')).fakeGateFacts}));
+vi.mock('@/lib/company/evidence-gate',async(orig)=>({...(await orig<typeof import('@/lib/company/evidence-gate')>()),applyGate:(await import('@/lib/company/route-test-kit')).fakeApplyGate}));
 vi.mock('@/lib/admin/auth',()=>{class AdminUnauthenticated extends Error{}class AdminForbidden extends Error{}return {AdminUnauthenticated,AdminForbidden,requireAdminUser:mocks.requireAdmin};});
 vi.mock('@/lib/company/events',()=>({deriveIssuerEvents:mocks.derive}));
 
@@ -7884,7 +7962,7 @@ describe('GET /api/companies/[ticker]/overview',()=>{
   expect(mocks.deps.snapshot).toHaveBeenCalledWith(US,'US',expect.objectContaining({concepts:[...DERIVE_CONCEPTS.US],history:true}));
   expect(body.issuer).toMatchObject({issuer_id:US});
   expect(body).toMatchObject({market:'US',coverage:{market:'US'},coverageOtherMarket:null,latestFiling:{filingId:summary().filingId,availableDate:'2023-11-03'},eventsComputed:'materialized'});
-  expect(body.latest).toMatchObject({periodKey:periodKeyOf('2022-09-25','2023-09-30','12M'),stateRev:6,truncated:false,
+  expect(body.latest).toMatchObject({periodKey:periodKeyOf({period_start:'2022-09-25',period_end:'2023-09-30',duration:'12M'}),stateRev:6,truncated:false,
    facts:{revenue:{kind:'fact',value:'383285000000'},net_income_parent:{kind:'fact'},operating_cash_flow:{kind:'fact'}},
    derived:{gross_margin:{kind:'derived',metric:'gross_margin'},revenue_yoy:{kind:'derived',metric:'revenue_yoy'}}});
   expect(mocks.deps.company.eventsOfIssuer).toHaveBeenCalledWith(US,'US',{limit:3});
@@ -7904,7 +7982,7 @@ describe('GET /api/companies/[ticker]/overview',()=>{
   const body=await res.json();
   expect(mocks.deps.snapshot).toHaveBeenCalledTimes(1);
   expect(mocks.deps.snapshot).toHaveBeenCalledWith(US,'US',{concepts:null,asOf:'2024-06-30',history:true});
-  expect(mocks.derive).toHaveBeenCalledWith(expect.objectContaining({issuerId:US,market:'US'}),{cutoff:'2024-06-30'});
+  expect(mocks.derive).toHaveBeenCalledWith(expect.objectContaining({cutoff:'2024-06-30'}));
   expect(mocks.deps.company.eventsOfIssuer).not.toHaveBeenCalled();
   expect(body.eventsComputed).toBe('live');
   expect(res.headers.get('cache-control')).toBe('public, max-age=600, s-maxage=3600');
@@ -7935,8 +8013,8 @@ import type {ResolvedIssuer} from '@/lib/entities/resolve';
 import {DERIVE_CONCEPTS,deriveMetrics} from '@/lib/facts/derive';
 import type {FactRow,Market,MetricRow} from '@/lib/facts/types';
 import {eventIdOf} from '../canonical';
-import {eventFactIds,toEventDto} from '../event-dto';
-import type {EventDto} from '../event-dto';
+import {eventFactIds,toPublicEvent} from '../event-dto';
+import type {PublicEvent} from '../event-dto';
 import {deriveIssuerEvents} from '../events';
 import {buildGated,cellFactIds,countWithheld,gateCell} from '../route';
 import type {Handler} from '../route';
@@ -7948,7 +8026,7 @@ export const HEADLINE:Record<Market,readonly string[]>={US:['revenue','net_incom
 const DERIVED=['gross_margin','revenue_yoy'] as const;
 const DUR_RANK:Record<string,number>={'12M':4,'9M':3,'6M':2,'3M':1};
 export interface LatestBlock{periodKey:string|null;facts:Record<string,Cell>;derived:Record<string,Cell>;stateRev:number;truncated:boolean}
-export interface OverviewDto{issuer:ResolvedIssuer|null;ticker:string;market:Market;asOf:string;coverage:CoverageRow|null;coverageOtherMarket:CoverageRow|null;latestFiling:FilingSummary|null;latest:LatestBlock|null;recentEvents:EventDto[];eventsComputed:'materialized'|'live';evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
+export interface OverviewDto{issuer:ResolvedIssuer|null;ticker:string;market:Market;asOf:string;coverage:CoverageRow|null;coverageOtherMarket:CoverageRow|null;latestFiling:FilingSummary|null;latest:LatestBlock|null;recentEvents:PublicEvent[];eventsComputed:'materialized'|'live';evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
 
 /** Ungated latest block of one envelope (pure; exported for the packet). */
 export function latestBlock(rows:FactRow[],market:Market,asOf:string,stateRev:number):LatestBlock|null{
@@ -7962,7 +8040,7 @@ export function latestBlock(rows:FactRow[],market:Market,asOf:string,stateRev:nu
  const metrics:MetricRow[]=deriveMetrics(rows,{market,asOf,basedOnRev:stateRev});
  const derived:Record<string,Cell>={};
  for(const name of DERIVED){const xs=metrics.filter(m=>m.metric===name&&same(m));derived[name]=xs.length===1?derivedCellOf(xs[0]):null;}
- return {periodKey:periodKeyOf(a.period_start,a.period_end,a.duration),facts,derived,stateRev,truncated:false};
+ return {periodKey:periodKeyOf(a),facts,derived,stateRev,truncated:false};
 }
 export const overviewHandler:Handler=async(ctx)=>{
  const {issuer,deps,asOf}=ctx;const live=ctx.asOfGiven;
@@ -7975,14 +8053,14 @@ export const overviewHandler:Handler=async(ctx)=>{
  const latest:LatestBlock|null=snap.truncated?{periodKey:null,facts:{},derived:{},stateRev:snap.stateRev,truncated:true}:latestBlock(snap.rows,issuer.market,asOf,snap.stateRev);
  let events:{e:EventInput|EventRow;eventId:string}[]=[];
  if(live){
-  if(!snap.truncated)events=deriveIssuerEvents({issuerId:issuer.issuerId,market:issuer.market,rows:snap.rows,filings:snap.filings},{cutoff:asOf})
+  if(!snap.truncated)events=deriveIssuerEvents({rows:snap.rows,filings:snap.filings,cutoff:asOf})
    .map(e=>({e,eventId:eventIdOf(issuer.issuerId,issuer.market,e.kind,e.natural_key)}))
-   .sort((x,y)=>x.e.occurred_on<y.e.occurred_on?1:x.e.occurred_on>y.e.occurred_on?-1:x.eventId<y.eventId?1:-1).slice(0,3);
+   .sort((x,y)=>x.e.occurred_on<y.e.occurred_on?1:x.e.occurred_on>y.e.occurred_on?-1:x.eventId<y.eventId?-1:1).slice(0,3);
  }else events=(await deps.company.eventsOfIssuer(issuer.issuerId,issuer.market,{limit:3})).rows.map(r=>({e:r,eventId:r.event_id}));
  const cells=latest?[...Object.values(latest.facts),...Object.values(latest.derived)]:[];
  const g=await buildGated(ctx,[...cells.flatMap(cellFactIds),...events.flatMap(x=>eventFactIds(x.e))],snap.rows,snap.filings);
  const gatedLatest=latest&&{...latest,facts:Object.fromEntries(Object.entries(latest.facts).map(([k,c])=>[k,gateCell(c,g)])),derived:Object.fromEntries(Object.entries(latest.derived).map(([k,c])=>[k,gateCell(c,g)]))};
- const recentEvents=events.map(x=>toEventDto(x.e,x.eventId,g));
+ const recentEvents=events.map(x=>toPublicEvent({e:x.e,eventId:x.eventId,issuerId:issuer.issuerId,market:issuer.market},g.eligibility,x.e.filing_id?g.filings.get(x.e.filing_id):undefined));
  const eventIds=[...new Set(events.flatMap(x=>eventFactIds(x.e)))];
  const body:OverviewDto={issuer:resolved,ticker:issuer.ticker,market:issuer.market,asOf,
   coverage:coverage.find(c=>c.market===issuer.market)??null,coverageOtherMarket:coverage.find(c=>c.market!==issuer.market)??null,
@@ -8165,6 +8243,87 @@ export async function GET(req:Request){
 Run: `npm test -- src/app/api/companies/freshness src/app/api/companies/snapshot`
 Expected: PASS（4 个用例）。
 
+- [ ] **Step 11b: 文件列表路由 `GET /api/companies/[ticker]/filings` + admin 变体（整合决定：从 Task 11 移入本任务）**
+
+文件视图需要 `fiscalPeriod/linkAttempts/factCount`，页头回放"最近文件"需要按 `asOf` 重算；规格二 `/api/filings` 不含这些字段且只读。数据取自 `company_read_snapshot` 的 filings 子查询（与 facts 的 `limit` 无关，所以 facts 部分只读一个概念、`limit:1`），已是 `mapping_gen > 0 and available_date <= asOf`。无财务数值 → 不过门槛；admin 变体同形（`private, no-store`），供 admin 页面统一走 admin 前缀。HK → 404 `market_not_served`（由 `companyRoute` 统一处理；页面对 HK 不发此请求）。
+
+```ts
+// src/app/api/companies/[ticker]/filings/route.test.ts
+import {beforeEach,describe,expect,it,vi} from 'vitest';
+import type {KitDeps} from '@/lib/company/route-test-kit';
+
+const mocks=vi.hoisted(()=>({deps:null as unknown as KitDeps,requireAdmin:vi.fn()}));
+vi.mock('@/lib/company/deps',()=>({productionReadDeps:()=>mocks.deps}));
+vi.mock('@/lib/admin/auth',()=>{class AdminUnauthenticated extends Error{}class AdminForbidden extends Error{}return {AdminUnauthenticated,AdminForbidden,requireAdminUser:mocks.requireAdmin};});
+
+import {GET} from './route';
+import {GET as ADMIN_GET} from '../../../admin/companies/[ticker]/filings/route';
+import {US,emptySnapshot,makeDeps,seededTables,summary} from '@/lib/company/route-test-kit';
+
+const get=(h:typeof GET,ticker:string,qs:string)=>h(new Request(`https://alpha.example/api/companies/${ticker}/filings?${qs}`),{params:Promise.resolve({ticker})});
+
+describe('GET /api/companies/[ticker]/filings',()=>{
+ beforeEach(async()=>{vi.clearAllMocks();mocks.deps=makeDeps(await seededTables());mocks.requireAdmin.mockResolvedValue({id:'u'});});
+ it('one snapshot read (filings independent of the facts limit), newest first, asOf echoed only when given',async()=>{
+  const older=summary({filingId:'f0000000-0000-4000-8000-00000000000a',availableDate:'2023-02-03'}),newer=summary();
+  (mocks.deps.snapshot as ReturnType<typeof vi.fn>).mockResolvedValue(emptySnapshot({stateRev:3,filings:[older,newer]}));
+  const res=await get(GET,'AAPL','asOf=2024-06-30');
+  const body=await res.json();
+  expect(mocks.deps.snapshot).toHaveBeenCalledWith(US,'US',{concepts:['revenue'],asOf:'2024-06-30',history:false,limit:1});
+  expect(body).toMatchObject({issuerId:US,ticker:'AAPL',market:'US',asOf:'2024-06-30',stateRev:3});
+  expect(body.filings.map((f:{filingId:string})=>f.filingId)).toEqual([newer.filingId,older.filingId]);
+  expect(res.headers.get('cache-control')).toBe('public, max-age=600, s-maxage=3600');
+  expect((await (await get(GET,'AAPL','')).json()).asOf).toBeNull();
+ });
+ it('HK → 404 market_not_served; admin twin is private, no-store',async()=>{
+  const hk=await get(GET,'00700.HK','');expect(hk.status).toBe(404);expect((await hk.json()).error.code).toBe('market_not_served');
+  expect((await get(ADMIN_GET,'AAPL','')).headers.get('cache-control')).toBe('private, no-store');
+ });
+});
+```
+
+```ts
+// src/lib/company/handlers/filings.ts
+// GET /api/companies/[ticker]/filings?asOf= (spec §5.5, §0.1 item 3; moved here from Task 11 at integration):
+// every published filing (mapping_gen > 0) with available_date <= asOf as FilingSummary (fiscal period,
+// citation, linkAttempts, factCount) from ONE company_read_snapshot statement — its filings sub-select is
+// independent of the facts limit, so the facts part is one concept with limit 1. No financial values → no
+// evidence gate; the admin twin has the same body (private, no-store). Newest available_date first.
+import type {Handler} from '../route';
+import type {FilingSummary} from '../types';
+
+export const FILINGS_PARAMS=['asOf'] as const;
+export interface FilingsDto{issuerId:string;ticker:string;market:'US'|'CN';asOf:string|null;stateRev:number;filings:FilingSummary[]}
+export const filingsHandler:Handler=async(ctx)=>{
+ const {issuer,deps,asOf}=ctx;
+ const snap=await deps.snapshot(issuer.issuerId,issuer.market,{concepts:['revenue'],asOf,history:false,limit:1});
+ const filings=[...snap.filings].sort((a,b)=>a.availableDate<b.availableDate?1:a.availableDate>b.availableDate?-1:a.filingId<b.filingId?1:a.filingId>b.filingId?-1:0);
+ const body:FilingsDto={issuerId:issuer.issuerId,ticker:issuer.ticker,market:issuer.market,asOf:ctx.asOfGiven?asOf:null,stateRev:snap.stateRev,filings};
+ return {body,empty:filings.length===0};
+};
+```
+
+```ts
+// src/app/api/companies/[ticker]/filings/route.ts
+// Public filings list (spec §5.5). No values, no gate; never reads the session.
+import {companyRoute} from '@/lib/company/route';
+import {FILINGS_PARAMS,filingsHandler} from '@/lib/company/handlers/filings';
+export const dynamic='force-dynamic';
+export const GET=companyRoute({tag:'companies/filings',mode:'public',params:FILINGS_PARAMS,handler:filingsHandler});
+```
+
+```ts
+// src/app/api/admin/companies/[ticker]/filings/route.ts
+// Admin twin (spec §6.4): same body; requireAdminUser; private, no-store.
+import {companyRoute} from '@/lib/company/route';
+import {FILINGS_PARAMS,filingsHandler} from '@/lib/company/handlers/filings';
+export const dynamic='force-dynamic';
+export const GET=companyRoute({tag:'admin/companies/filings',mode:'admin',params:FILINGS_PARAMS,handler:filingsHandler});
+```
+
+Run: `npm test -- 'src/app/api/companies/[ticker]/filings/route.test.ts'`
+Expected: PASS（2 个用例）。
+
 - [ ] **Step 12: 全量检查**
 
 Run: `npm test -- src/lib/company 'src/app/api/companies' 'src/app/api/admin/companies'`
@@ -8176,7 +8335,7 @@ Expected: 0 error、0 warning。
 - [ ] **Step 13: 提交**
 
 ```bash
-git add src/lib/company/route-test-kit.ts src/lib/company/event-dto.ts src/lib/company/event-dto.test.ts src/lib/company/handlers/overview.ts src/lib/company/handlers/events.ts src/lib/company/handlers/metrics.ts 'src/app/api/companies/[ticker]/overview' 'src/app/api/companies/[ticker]/events' 'src/app/api/companies/[ticker]/metrics' 'src/app/api/admin/companies/[ticker]/overview' 'src/app/api/admin/companies/[ticker]/events' 'src/app/api/admin/companies/[ticker]/metrics' src/app/api/companies/freshness src/app/api/companies/snapshot src/app/api/admin/companies/snapshot
+git add src/lib/company/route-test-kit.ts src/lib/company/event-dto.ts src/lib/company/event-dto.test.ts src/lib/company/handlers/overview.ts src/lib/company/handlers/events.ts src/lib/company/handlers/metrics.ts 'src/app/api/companies/[ticker]/overview' 'src/app/api/companies/[ticker]/events' 'src/app/api/companies/[ticker]/metrics' 'src/app/api/admin/companies/[ticker]/overview' 'src/app/api/admin/companies/[ticker]/events' 'src/app/api/admin/companies/[ticker]/metrics' src/app/api/companies/freshness src/app/api/companies/snapshot src/app/api/admin/companies/snapshot src/lib/company/handlers/filings.ts 'src/app/api/companies/[ticker]/filings' 'src/app/api/admin/companies/[ticker]/filings'
 ```
 
 ```bash
@@ -8193,7 +8352,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ### Task 14: `dcf-seed.ts`、`assemble.ts` 合并与来源、`/api/dcf`、`DcfStudio` 股权桥面板
 
 **Files:**
-- Create: `src/lib/company/dcf-seed.ts`、`src/lib/company/dcf-seed.test.ts`
+- Create: `src/lib/company/dcf-seed.ts`、`src/lib/company/dcf-seed.test.ts`、`src/lib/company/dcf-seed.test-rows.ts`（测试行构造器，非 `.test.ts`）
 - Create: `src/lib/dcf/bridge.ts`、`src/lib/dcf/bridge.test.ts`
 - Modify (rewrite): `src/lib/dcf/assemble.ts`、`src/lib/dcf/assemble.test.ts`
 - Modify (rewrite): `src/app/api/dcf/[ticker]/route.ts`
@@ -8235,7 +8394,7 @@ export function cnRows():FactRow[]{
 ```ts
 // src/lib/company/dcf-seed.test.ts
 import {describe,expect,it,vi} from 'vitest';
-vi.mock('./evidence-gate',async()=>({gateFacts:(await import('./route-test-kit')).fakeGateFacts}));
+vi.mock('./evidence-gate',async(orig)=>({...(await orig<typeof import('./evidence-gate')>()),applyGate:(await import('./route-test-kit')).fakeApplyGate}));
 import {seedFromFacts} from './dcf-seed';
 import {END,cnRows,inst,usRows} from './dcf-seed.test-rows';
 import {CN,FIL_CN_LINKED,cnSummary,emptySnapshot,record,summary} from './route-test-kit';
@@ -8332,7 +8491,7 @@ import {deriveMetrics} from '@/lib/facts/derive';
 import type {FactRow,Market,MetricRow} from '@/lib/facts/types';
 import type {DcfSeedResponse,SeedBridgeField} from '@/lib/dcf/bridge';
 import {decimalSub,formatDecimalText} from './decimal';
-import {gateFacts} from './evidence-gate';
+import {applyGate} from './evidence-gate';
 import type {EvidenceDto,EvidenceRecord,PdfLocator,ReadSnapshotResult,WithheldReason} from './types';
 
 export const SEED_CONCEPTS:Record<Market,readonly string[]>={
@@ -8352,7 +8511,7 @@ export interface SeedResult{
 export interface SeedSecurity{shareClass:string;openSecuritiesInMarket:number}
 interface Cand{field:SeedField;factIds:string[];value:()=>number;metric?:string;basis:string;divisor:string;unit:string}
 const KEY:Record<SeedField,keyof SeedResult['seed']>={'revenueLines[0].baseRevenue':'baseRevenue',grossMarginPct:'grossMarginPct',sharesDiluted:'sharesDiluted',netDebt:'netDebt'};
-const scaled=(v:string,divisor:string)=>Number(formatDecimalText(v,divisor,6));
+const scaled=(v:string,divisor:string)=>Number(formatDecimalText(v,BigInt(divisor),6));
 
 export function seedFromFacts(snapshot:ReadSnapshotResult,security:SeedSecurity,opts:{market:Market;asOf:string;evidence:ReadonlyMap<string,EvidenceRecord>;pdf:ReadonlyMap<string,PdfLocator>;admin:boolean}):SeedResult{
  const {market}=opts;
@@ -8399,8 +8558,8 @@ export function seedFromFacts(snapshot:ReadSnapshotResult,security:SeedSecurity,
  const byId=new Map(rows.map(r=>[r.fact_id,r]));
  const ids=[...new Set(cands.flatMap(c=>c.factIds))];
  const facts=ids.map(id=>byId.get(id)).filter((r):r is FactRow=>r!==undefined);
- const g=gateFacts({market,admin:opts.admin,facts,filings:new Map(snapshot.filings.map(f=>[f.filingId,f])),evidence:opts.evidence,pdf:opts.pdf});
- const reasonOf=(id:string):WithheldReason|null=>!byId.has(id)||!g.verdicts.has(id)?'evidence_incomplete':g.verdicts.get(id)??null;
+ const g=applyGate({factIds:ids,facts:new Map(facts.map(r=>[r.fact_id,r])),filings:new Map(snapshot.filings.map(f=>[f.filingId,f])),records:new Map(opts.evidence),pdf:new Map(opts.pdf),market,admin:opts.admin});
+ const reasonOf=(id:string):WithheldReason|null=>{const e=g.eligibility.get(id);return !byId.has(id)||!e?'evidence_incomplete':e.ok?null:e.reason;};
  for(const c of cands){
   const bad=c.factIds.map(reasonOf).filter((r):r is WithheldReason=>r!==null);
   if(bad.length){miss(c.field,bad.includes('evidence_incomplete')?'evidence_incomplete':bad[0]);continue;}
@@ -8426,7 +8585,7 @@ export function seedResponse(ticker:string,market:Market,s:SeedResult,fallback:{
 }
 ```
 
-（`formatDecimalText` 按 Task 7 契约输出无千分位的纯十进制字符串；若 Task 7 的实现带分组符，改用其无分组变体，不在此处去逗号。）
+（`formatDecimalText(valueText, divisor:bigint, digits)` 按 Task 7 契约输出无千分位的纯十进制字符串（分组另由 `groupThousands` 做），所以可直接 `Number()`。）
 
 Run: `npm test -- src/lib/company/dcf-seed.test.ts`
 Expected: FAIL 仍可能因 `@/lib/dcf/bridge` 不存在——先做 Step 3 再跑。
@@ -8693,7 +8852,7 @@ import type {KitDeps} from '@/lib/company/route-test-kit';
 
 const mocks=vi.hoisted(()=>({deps:null as unknown as KitDeps,llm:vi.fn()}));
 vi.mock('@/lib/company/deps',()=>({productionReadDeps:()=>mocks.deps}));
-vi.mock('@/lib/company/evidence-gate',async()=>({gateFacts:(await import('@/lib/company/route-test-kit')).fakeGateFacts}));
+vi.mock('@/lib/company/evidence-gate',async(orig)=>({...(await orig<typeof import('@/lib/company/evidence-gate')>()),applyGate:(await import('@/lib/company/route-test-kit')).fakeApplyGate}));
 vi.mock('@/lib/llm/resolve',()=>({resolveUserLlm:mocks.llm}));
 vi.mock('@/lib/data/sources/llm',()=>({chatResolved:vi.fn(),extractJson:(s:string)=>JSON.parse(s)}));
 
@@ -8779,6 +8938,7 @@ import {addDays} from '@/lib/facts/derive';
 import {TICKER_RE,decodeTicker,errorResponse,failureResponse,publicMarketOf,resolvePublicIssuer,utcDate} from '@/lib/facts/public-route';
 import type {PublicIssuer} from '@/lib/facts/public-route';
 import {inferCoreMarket} from '@/lib/securities/ticker';
+import type {EvidenceRecord,PdfLocator} from '@/lib/company/types';
 
 export const dynamic='force-dynamic';
 export const maxDuration=60;
@@ -8798,7 +8958,9 @@ async function loadSeed(raw:string):Promise<{issuer:PublicIssuer;seed:SeedResult
  const own=secs.find(r=>String(r.ticker)===issuer.ticker);
  const snapshot=await deps.snapshot(issuer.issuerId,issuer.market,{concepts:[...SEED_CONCEPTS[issuer.market]],asOf:today,from:addDays(today,-SEED_WINDOW_DAYS),history:true});
  const ids=snapshot.rows.filter(r=>r.is_current===true).map(r=>r.fact_id);
- const [evidence,pdf]=ids.length>0?await Promise.all([deps.company.evidenceOf(ids),deps.pdf.locate(ids)]):[new Map(),new Map()];
+ const [evidence,pdf]=ids.length>0
+  ?await Promise.all([deps.company.evidenceOf(ids),issuer.market==='CN'?deps.pdf.locate(issuer.issuerId,issuer.market,ids):Promise.resolve(new Map<string,PdfLocator>())])
+  :[new Map<string,EvidenceRecord>(),new Map<string,PdfLocator>()];
  const seed=seedFromFacts(snapshot,{shareClass:own?String(own.share_class):'unknown',openSecuritiesInMarket:secs.length},{market:issuer.market,asOf:today,evidence,pdf,admin:false});
  return {issuer,seed};
 }
@@ -9103,7 +9265,7 @@ import type {KitDeps} from '@/lib/company/route-test-kit';
 
 const mocks=vi.hoisted(()=>({deps:null as unknown as KitDeps,requireAdmin:vi.fn()}));
 vi.mock('@/lib/company/deps',()=>({productionReadDeps:()=>mocks.deps}));
-vi.mock('@/lib/company/evidence-gate',async()=>({gateFacts:(await import('@/lib/company/route-test-kit')).fakeGateFacts}));
+vi.mock('@/lib/company/evidence-gate',async(orig)=>({...(await orig<typeof import('@/lib/company/evidence-gate')>()),applyGate:(await import('@/lib/company/route-test-kit')).fakeApplyGate}));
 vi.mock('@/lib/admin/auth',()=>{class AdminUnauthenticated extends Error{}class AdminForbidden extends Error{}return {AdminUnauthenticated,AdminForbidden,requireAdminUser:mocks.requireAdmin};});
 
 import {GET} from './route';
@@ -9198,11 +9360,11 @@ Expected: FAIL，`Cannot find module './route'`。
 import {MAPPING_GEN} from '@/lib/facts/concepts';
 import {FORMULA_VERSION,addDays,deriveMetrics} from '@/lib/facts/derive';
 import {intParam} from '@/lib/facts/public-route';
-import type {FactRow,Market,MetricRow} from '@/lib/facts/types';
+import type {Market,MetricRow} from '@/lib/facts/types';
 import {buildGated,cellFactIds,countWithheld,gateCell} from '../route';
 import type {Gated,Handler} from '../route';
 import {buildStatementsGrid,periodKeyOf} from '../statements-grid';
-import type {Basis,Cell,FilingSummary,PeriodCol,StatementKind,WithheldCounts,WithheldReason} from '../types';
+import type {Basis,Cell,PeriodCol,StatementKind,WithheldCounts,WithheldReason} from '../types';
 
 export const PACKET_PARAMS=['annualPeriods','recentPeriods'] as const;
 export const PACKET_METRICS=['gross_margin','net_margin','fcf','revenue_yoy','net_income_yoy','roe'] as const;
@@ -9242,7 +9404,7 @@ function metricsOf(ms:MetricRow[],ends:Set<string>,g:Gated):PacketMetric[]{
   const factIds=m.inputs.map(i=>i.fact_id);
   const availableDate=m.inputs.reduce((d,i)=>i.available_date>d?i.available_date:d,'');
   const bad=factIds.map(id=>g.reasonOf(id)).filter((r):r is WithheldReason=>r!==null);
-  const base={metric:m.metric,periodKey:periodKeyOf(m.period_start,m.period_end,m.duration),unit:m.unit,basis:m.basis,factIds,availableDate};
+  const base={metric:m.metric,periodKey:periodKeyOf(m),unit:m.unit,basis:m.basis,factIds,availableDate};
   return bad.length?{...base,withheld:bad.includes('evidence_incomplete')?'evidence_incomplete':bad[0]}:{...base,value:m.value};
  });
 }
@@ -9252,10 +9414,10 @@ export const packetHandler:Handler=async(ctx)=>{
  const snap=await deps.snapshot(issuer.issuerId,issuer.market,{concepts:null,asOf,from:addDays(asOf,-(annualN+2)*366),history:true});
  const head={issuerId:issuer.issuerId,ticker:issuer.ticker,market:issuer.market,asOf,truncated:snap.truncated,provenance:{mappingGen:MAPPING_GEN,formulaVersion:FORMULA_VERSION,stateRev:snap.stateRev}};
  if(snap.truncated){const body:PacketDto={...head,annual:emptySection(),recent:emptySection(),metrics:[],clipped:{annual:0,recent:0},withheld:{evidenceIncomplete:0,citationPending:0}};return {body,empty:true};}
- const current:FactRow[]=snap.rows.filter(r=>r.is_current===true);
- const grid=(basis:Basis,n:number,s:StatementKind)=>buildStatementsGrid({market:issuer.market,statement:s,basis,periods:n,rows:current,metrics:[],filings:snap.filings as FilingSummary[]});
+ // Task 7 grid on the same envelope (current disclosures only for annual/disclosed); 40 columns, sectionOf clips to n.
+ const grid=(basis:Basis,s:StatementKind)=>{const o=buildStatementsGrid(snap,{statement:s,basis,periods:40,market:issuer.market,asOf});return o.ok?{periods:o.periods,rows:o.rows}:{periods:[],rows:[]};};
  const built:Built={sections:{annual:{} as Built['sections']['annual'],recent:{} as Built['sections']['recent']},metrics:deriveMetrics(snap.rows,{market:issuer.market,asOf,basedOnRev:snap.stateRev})};
- for(const s of STATEMENTS){built.sections.annual[s]=grid('annual',annualN,s);built.sections.recent[s]=grid('disclosed',recentN,s);}
+ for(const s of STATEMENTS){built.sections.annual[s]=grid('annual',s);built.sections.recent[s]=grid('disclosed',s);}
  const ids=[...STATEMENTS.flatMap(s=>[...built.sections.annual[s].rows,...built.sections.recent[s].rows].flatMap(r=>Object.values(r.cells).flatMap(cellFactIds))),...built.metrics.flatMap(m=>m.inputs.map(i=>i.fact_id))];
  const g=await buildGated(ctx,ids,snap.rows,snap.filings);
  const make=(a:number,r:number):PacketDto=>{
@@ -9503,20 +9665,20 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 Part D 只在客户端消费下列 JSON；客户端 DTO 类型在 `src/lib/company/client.ts` 里独立声明（服务端路由文件引入 `next/server`，客户端不能 import），与 Task 9/10 的服务端构造逐字段一致。任何不一致以服务端为准、在复审时改 `client.ts` 一处。
 
 1. **Task 3 / 共享契约**：`src/lib/company/types.ts` 的 `Cell`、`FactCell`、`DerivedCell`、`WithheldCell`、`WithheldReason`、`WithheldCounts`、`PeriodCol`、`GridRow`、`FilingSummary`、`EvidenceDto`、`CoverageRow`、`StatementKind`、`Basis`、`EventKind`（客户端只 `import type`）。`supabaseCompanyDb(client)`（`src/lib/company/db.ts`）返回 `CompanyDb`，本部分只用 `coverageOf(issuerIds)`。`readSnapshot(client, issuerId, market, opts)`（`src/lib/company/snapshot-read.ts`）：`client` 为 `getAnonSupabase()` 返回的 Supabase 客户端，`opts: ReadSnapshotOptions`，返回 `ReadSnapshotResult`；`filings` 子集与 `rows` 的 `limit`/`truncated` 无关（同一 SELECT 的独立子查询，按 §0.1 item 3 已是 `mapping_gen > 0 and available_date <= asOf`）。
-2. **Task 7**：`decimalSub(a: string, b: string): string`（精确十进制 a−b）、`decimalRelChange(from: string, to: string): string | null`（10 位小数，`from=0` 返回 `null`）；`METRIC_CATALOG: Record<string /*FORMULA_VERSION*/, Record<string /*metric*/, {formula: {zh: string; en: string}; inputs: string[]; basisByMarket: Partial<Record<Market, string>>}>>`。显示缩放**不**依赖 `formatDecimalText`（指挥决定：显示层只做 10 的幂移位 + 四舍五入，见 Task 12 `format.ts`，避免对其除数参数形状的耦合）。
-3. **Task 9 `GET /api/companies/[ticker]/statements`**（admin 变体 `/api/admin/companies/[ticker]/statements` 同形）：`{issuerId, ticker, market, asOf: string|null, mappingGen: number, stateRev: number, truncated: boolean, statement, basis, periods: PeriodCol[], rows: GridRow[], filings: Record<filingId, FilingSummary>, evidence: Record<factId, EvidenceDto>, withheld: WithheldCounts}`；`truncated=true` 时 `rows` 可为空，客户端只显示截断错误卡。BS + `basis=quarterly` → 400 `invalid_parameter:basis`（客户端在 BS 下禁用"单季"按钮，不会发出）。
-4. **Task 9 `GET /api/companies/[ticker]/facts?concept=&periodStart=&periodEnd=&unit=&asOf=`**（admin 同形）：`{issuerId, ticker, market, asOf, stateRev, truncated, concept, periodStart, periodEnd, series: SeriesEntry[], filings: Record<filingId, FilingSummary>, evidence: Record<factId, EvidenceDto>, withheld: WithheldCounts}`，`SeriesEntry = {factId, concept, sourceConcept, periodStart, periodEnd, duration, unit, availableDate, filingId, disclosureSeq: number, isRevision: boolean, mappingGen: number, value: string | null, withheld: WithheldReason | null}`，按 `(availableDate, disclosureSeq)` 升序。**假设**：`unit` 可省略（省略 → 返回该期间键下全部单位的序列），INSTANT 的 `periodStart` 传 `periodEnd`（与期间键约定一致）。`U` 徽标的"其他单位"列表靠省略 `unit` 的第二次请求取得。
+2. **Task 5/7 `decimal.ts`**（整合核对）：`decimalSub(a: string, b: string): string`（精确十进制 a−b，规范形）、`decimalRelChange(from: string, to: string): string | null`（10 位小数后去尾零，如 `'0.1'`；`from=0` 返回 `null`）；显示缩放复用 `formatDecimalText(valueText, divisor: bigint, digits)`、`groupThousands`、`scaleFor(unit, locale)`、`DisplayScale`（Task 12 `format.ts` 是它们的薄适配层，整合决定：不另写一套十进制缩放）。`METRIC_CATALOG: Record<string /*FORMULA_VERSION*/, Record<string /*metric*/, {formula: {zh: string; en: string}; inputs: string[]; basisByMarket: Partial<Record<Market, string>>}>>`。
+3. **Task 9 `GET /api/companies/[ticker]/statements`**（admin 变体 `/api/admin/companies/[ticker]/statements` 同形）：`StatementsDto = {issuerId, ticker, market, asOf: string, mappingGen: number, stateRev: number, truncated: boolean, statement, basis, periods: PeriodCol[], rows: GridRow[], filings: Record<filingId, FilingSummary>, otherUnitOnly: Record<concept, periodKey[]>, evidence: Record<factId, EvidenceDto>, withheld: WithheldCounts}`；`otherUnitOnly`（Task 7 `GridResult.otherUnitOnly`）列出"该期只有非主单位事实"的格（格为 `null`，页面渲染"—"+ `U`，共享契约 `Cell` 不变）；`truncated=true` 时 `rows` 为空，客户端只显示截断错误卡。BS + `basis=quarterly` → 400 `invalid_parameter:basis`（客户端在 BS 下禁用"单季"按钮，不会发出）。
+4. **Task 9 `GET /api/companies/[ticker]/facts?concept=&periodStart=&periodEnd=&unit=&asOf=`**（admin 同形；整合核对后的实际 DTO）：`FactSeriesDto = {issuerId, ticker, market, asOf: string, mappingGen, stateRev, truncated, history: true, concept, periodStart, periodEnd, unit, otherUnits: string[], series: SeriesEntry[], otherUnitSeries: SeriesEntry[], filings, evidence, withheld}`；`SeriesEntry = SeriesBase & ({kind:'fact', value, rawHash, runId, unitRule, delta, relChange} | {kind:'withheld', reason})`，`SeriesBase = {factId, availableDate, filingId, disclosureSeq: number|null, isCurrent: boolean|null, isRevision: boolean|null, sourceConcept, mappingVersion, mappingGen, unit}`；按 `disclosure_seq` 升序。`unit` **必填**；INSTANT 的 `periodStart` 传 `periodEnd`。`U` 徽标的"其他单位"表直接用同一响应的 `otherUnitSeries`（不发第二个请求）。
 5. **规格二 `GET /api/facts/[ticker]?factIds=<id>`**（已落地）：只用来把派生输入 / 事件引用的 `factId` 解析成 `{concept, periodStart|null, periodEnd, duration, unit}` 以打开抽屉；其 `value` 不显示（§0 #68）。
-6. **Task 10 `GET /api/companies/[ticker]/overview?asOf=`**（admin 同形）：`{issuer, market, coverage: CoverageRow|null, coverageOtherMarket: CoverageRow|null, latestFiling: FilingSummary|null, latest: {periodKey: string, facts: Record<'revenue'|'revenue_operating'|'net_income_parent'|'operating_cash_flow', Cell>, derived: Record<'gross_margin'|'revenue_yoy', Cell>, stateRev: number, truncated: boolean} | null, recentEvents: PublicEvent[], evidence: Record<factId, EvidenceDto>}`。`PublicEvent = {eventId, kind: EventKind, naturalKey, occurredOn, periodEnd: string|null, concept: string|null, filingId: string|null, payload: Record<string, unknown>, meta: Record<string, unknown>, firstSeenAt?: string, payloadChangedAt?: string|null}`；payload 中经门槛置空的值被替换为 `{kind:'withheld', reason, factId}`（headline 的单项、`fact_revised` 的 `from`/`to`、`relChange`）。
-7. **Task 10 `GET /api/companies/[ticker]/metrics?asOf=`**（admin 同形）：`{issuerId, ticker, market, asOf: string|null, formulaVersion: string, computedAtKind: 'materialized'|'live', stale: boolean, truncated: boolean, metrics: MetricEntry[], evidence: Record<factId, EvidenceDto>, withheld: WithheldCounts}`，`MetricEntry = {metric, periodStart, periodEnd, duration, basedOnRev: number, computedAt: string|null, cell: DerivedCell | WithheldCell}`；`stale=true` 时 `metrics=[]`。
+6. **Task 10 `GET /api/companies/[ticker]/overview?asOf=`**（admin 同形）：`OverviewDto = {issuer, ticker, market, asOf, coverage: CoverageRow|null, coverageOtherMarket: CoverageRow|null, latestFiling: FilingSummary|null, latest: {periodKey: string|null, facts: Record<'revenue'|'revenue_operating'|'net_income_parent'|'operating_cash_flow', Cell>, derived: Record<'gross_margin'|'revenue_yoy', Cell>, stateRev: number, truncated: boolean} | null, recentEvents: PublicEvent[], eventsComputed: 'materialized'|'live', evidence, withheld}`（`periodKey` 只在 `truncated` 时为 null）。`PublicEvent`（`src/lib/company/event-dto.ts`，客户端 `import type`）`= {eventId, issuerId, market, kind, naturalKey, occurredOn, periodEnd: string|null, concept: string|null, filingId: string|null, payload, meta, firstSeenAt: string|null, payloadChangedAt: string|null, filing: {formType, url, documentUrl, citation}|null}`；payload 中经门槛置空的 headline 单项与 `fact_revised` 的 `from.value`/`to.value` 被替换为 `{kind:'withheld', reason, factId}`，`relChange` 替换为 `{kind:'withheld', reason}`（Task 6 `gateEventPayload`）。
+7. **Task 10 `GET /api/companies/[ticker]/metrics?asOf=`**（admin 同形）：`MetricsDto = {issuerId, ticker, market, asOf: string|null, mappingGen: number, formulaVersion: string, stale: boolean, truncated: boolean, metrics: MetricEntry[], evidence, withheld}`，`MetricEntry = {metric, periodStart, periodEnd, duration, basedOnRev: number, computedAt: string|null, computedAtKind: 'materialized'|'live', cell: DerivedCell | WithheldCell}`（`computedAtKind` 在每行，不在响应顶层）；`stale=true` 时 `metrics=[]`。
 8. **Task 10 `GET /api/companies/freshness`**：`{datasets: {dataset: 'facts.us'|'facts.cn'|'company.events', status: 'fresh'|'stale'|'error'|'missing', lastOkAt: string|null, lastAttemptAt: string|null}[]}`。
 9. **Task 10 `GET /api/companies/snapshot?fact=`**：只作为 `EvidenceDto.snapshot.download` 的链接目标，客户端不构造它。
-10. **Task 14**：`<DcfStudio ticker={ticker} />`（`src/components/DcfStudio.tsx`，导出名与 props 不变；股权桥面板与"不挂载即运行"在其内部）。
-11. **Task 16**（跟踪按钮）：`GET /api/tracking/watches` → `200 {watches: {issuerId: string}[]}`（多余字段忽略）；`POST /api/tracking/watches` body `{issuerId}` → 200/201，409 `{error:{code:'watch_limit'}}`；`DELETE /api/tracking/watches/[issuerId]` → 200；未登录 401。路由尚未落地时（404）按钮显示"跟踪暂不可用"并禁用。
-12. **Task 17**：公司页"跟踪"页签渲染 `src/components/company/tracking-slot.tsx` 的 `CompanyTrackingSlot({issuerId, ticker, asOf})`。Task 11 建占位实现；**Task 17 只替换该文件的函数体**（保持导出名与 props），公司页不再改。
+10. **Task 14**（整合核对）：`<DcfStudio ticker={ticker} asOf? onOpenFact? />`（`src/components/DcfStudio.tsx`，Task 14 重写后的签名 `({ticker, asOf?, onOpenFact?})`；股权桥面板与"不挂载即运行"在其内部；Task 13 传 `onOpenFact` 打开 `historyByFact` 抽屉；回放时不挂载）。
+11. **Task 16**（跟踪按钮占位用）：`GET /api/tracking/watches` → `200 {count, limit, unreadComplete, watches: WatchCard[]}`（占位按钮只读 `watches[].issuerId`）；`POST /api/tracking/watches` body `{issuerId}` → 201（新建）/200（已存在），409 `{error:{code:'watch_limit'}}`；`DELETE /api/tracking/watches/[issuerId]` → 200，未跟踪 404 `watch_not_found`；未登录 401。路由尚未落地时（404）占位按钮显示"跟踪暂不可用"并禁用。
+12. **Task 17**（整合决定）：公司页"跟踪"页签渲染 `src/components/company/tracking/CompanyTrackingView.tsx` 的 `CompanyTrackingView({issuerId, ticker, market, asOf})`（`market` 为 `data.market`；HK/无市场 → 事实状态卡），页头渲染 `src/components/company/tracking/TrackButton.tsx` 的 `TrackButton({issuerId})`（`data-testid="track-button"`）。Task 11 建两个可用占位；**Task 17 整文件覆盖这两个文件**（保持导出名、props 与 testid），公司页与页头不再改。
 13. **F3 / F4**：仓库当前没有 `src/components/documents/SourceDrawer*` 与 `src/components/judgments/JudgmentCard*`。Task 13 用本地适配器 `src/components/company/f3-source-drawer.tsx`（`F3_SOURCE_DRAWER_AVAILABLE=false` + 渲染 `null`）与 `src/components/company/judgment-card-adapter.tsx`（本地最小渲染器）；F3/F4 落地时只改这两个适配器文件。
 
-**本部分新增的模块自有路由**（指挥决定：文件视图需要 `fiscalPeriod/linkAttempts/factCount`，规格二 `/api/filings` 不含这些字段且只读不可改；页头回放"最近文件"也需要它）：`GET /api/companies/[ticker]/filings?asOf=` → `{issuerId, ticker, market, asOf: string|null, stateRev, filings: FilingSummary[]}`（`available_date` 降序），由 Task 11 建立。整合时若 Task 10 已提供同路由，删除 Task 11 的对应步骤。
+**模块自有文件列表路由**（整合决定：由 **Task 10** 建立公共 + admin 两个路由，见 Task 10 Step 11b）：`GET /api/companies/[ticker]/filings?asOf=` → `FilingsDto = {issuerId, ticker, market, asOf: string|null, stateRev, filings: FilingSummary[]}`（`available_date` 降序，`available_date ≤ asOf`，来自同一 `company_read_snapshot`）。理由：文件视图需要 `fiscalPeriod/linkAttempts/factCount`，规格二 `/api/filings` 不含这些字段且只读不可改；页头回放"最近文件"也需要它。Task 11/13 只消费。
 
 ---
 
@@ -9531,11 +9693,11 @@ Part D 只在客户端消费下列 JSON；客户端 DTO 类型在 `src/lib/compa
 - Create: `src/lib/company/header-model.ts`、`src/lib/company/header-model.test.ts`
 - Create: `src/lib/company/page-data.ts`、`src/lib/company/page-data.test.ts`
 - Create: `src/lib/company/messages.test.ts`
-- Create: `src/app/api/companies/[ticker]/filings/route.ts`
 - Rewrite: `src/app/(app)/stock/[ticker]/page.tsx`（服务端组件）
 - Create: `src/app/(app)/stock/[ticker]/CompanyPage.tsx`
 - Create: `src/app/(app)/stock/[ticker]/legacy/AiView.tsx`、`legacy/SignalsView.tsx`、`legacy/HoldingsView.tsx`
-- Create: `src/components/company/useCompanyFetch.ts`、`CompanyHeader.tsx`、`ReplayBar.tsx`、`ViewTabs.tsx`、`StateCallout.tsx`、`TrackButton.tsx`、`tracking-slot.tsx`
+- Create: `src/components/company/useCompanyFetch.ts`、`CompanyHeader.tsx`、`ReplayBar.tsx`、`ViewTabs.tsx`、`StateCallout.tsx`
+- Create（占位，Task 17 覆盖）: `src/components/company/tracking/TrackButton.tsx`、`src/components/company/tracking/CompanyTrackingView.tsx`
 
 **实施要点（实施者不读规格，全部要求在此）：**
 - 页面不再使用 `getStockOrStub()` / mock 的 `financials`、`broker_reports`、`news`、`perspectives`（决策 D：`news` 页签退役，`?view=news` 落到 `overview`）。身份来自 `resolveIssuer`；行情行、开高低收格、PE/PB/ROE/股息率/市值卡与 K 线**全部从公司页移除**（决策 J 默认）。`mergeStockDetail` 不再被本页引用。
@@ -9545,6 +9707,8 @@ Part D 只在客户端消费下列 JSON；客户端 DTO 类型在 `src/lib/compa
 - `ai/signals/holdings` 在回放下显示"不支持回放"横幅（虚线框，"显示的是今天的内容"+"回到最新"），内容仍按今天渲染。
 - AI 页签（决策 E）：标题"模型观点（未校准）"，去掉"共识 x.x/10"数字，只保留多/中/空计数与说明"模型生成的观点，未经结算与校准，不是判断层（F4）的判断"。
 - 特殊状态（§5.7）文案见消息文件 `company.states.*`；路由 5xx → 视图级错误卡 + 重试，**不回退到任何其他数据源**。
+- 未知 ticker（无发行人且 `stocks_universe` 无该票据）→ 服务端 `notFound()`（HTTP 404）；HK 发行人：页头照常显示身份（`resolveIssuer`），事实视图显示 F3 空状态"港股披露事实待文档管道"（`factState='hk_pending'`），不请求组合路由（它们对 HK 返回 404 `market_not_served`）。
+- e2e 钩子（Task 19 用，整合补齐）：页头 `data-testid="company-header"`、证券芯片 `security-chip`、数据状态 `data-status`、回放条 `replay-bar`、跟踪按钮 `track-button`（Task 12/13 另有 `grid-row-<concept>`、`cell-<concept>-<periodKey>`、`drawer-*`、`metric-row-<metric>`、`valuation-section`、`filing-row`）。
 
 - [ ] **Step 1: 建立消息文件（整个公司页的键在本任务一次建齐；Task 12/13 只用不加）**
 
@@ -10385,7 +10549,7 @@ describe('hrefs and api urls',()=>{
  it('builds public and admin api urls, omitting empty params',()=>{
   expect(companyApi('statements','AAPL',{statement:'IS',basis:'annual',asOf:undefined})).toBe('/api/companies/AAPL/statements?statement=IS&basis=annual');
   expect(companyApi('facts','AAPL',{concept:'revenue'},true)).toBe('/api/admin/companies/AAPL/facts?concept=revenue');
-  expect(companyApi('filings','AAPL',{},true)).toBe('/api/companies/AAPL/filings');
+  expect(companyApi('filings','AAPL',{},true)).toBe('/api/admin/companies/AAPL/filings');
  });
 });
 
@@ -10422,9 +10586,10 @@ Run: `npm test -- src/lib/company/client.test.ts` → Expected: FAIL（`Failed t
 // src/lib/company/client.ts
 // Client-side helpers of the company page (plan 2026-11-06 Task 11; spec §5.1, §5.10, §6.1):
 // view/asOf parsing, hrefs, api urls, one fetch wrapper, and the client view of every route DTO
-// the page consumes. Types only import from ./types (no server modules), so client components
-// may import this file.
-import type {Market,Cell,DerivedCell,WithheldCell,WithheldReason,WithheldCounts,PeriodCol,GridRow,FilingSummary,EvidenceDto,CoverageRow,StatementKind,Basis,EventKind} from './types';
+// the page consumes. Only `import type` from ./types and ./event-dto (erased at build), so client
+// components may import this file.
+import type {Market,Cell,DerivedCell,WithheldCell,WithheldReason,WithheldCounts,PeriodCol,GridRow,FilingSummary,EvidenceDto,CoverageRow,StatementKind,Basis} from './types';
+import type {PublicEvent} from './event-dto';
 
 export const VIEW_IDS=['overview','statements','metrics','filings','tracking','judgments','ai','signals','holdings'] as const;
 export type ViewId=typeof VIEW_IDS[number];
@@ -10448,9 +10613,9 @@ export function companyHref(ticker:string,o:{view:ViewId;asOf:string|null;extra?
  return `/stock/${encodeURIComponent(ticker)}${qs({view:o.view==='overview'?null:o.view,asOf:o.asOf,...o.extra})}`;
 }
 export type CompanyRoute='statements'|'facts'|'overview'|'events'|'metrics'|'filings';
-/** Public route, or the unredacted admin variant (filings carry no values and have no admin variant). */
+/** Public route, or the admin variant (Task 9/10 build an admin twin of every composed route, filings included). */
 export function companyApi(route:CompanyRoute,ticker:string,params:Record<string,string|null|undefined>,admin=false):string{
- const base=admin&&route!=='filings'?'/api/admin/companies':'/api/companies';
+ const base=admin?'/api/admin/companies':'/api/companies';
  return `${base}/${encodeURIComponent(ticker)}/${route}${qs(params)}`;
 }
 export type FetchResult<T>={status:'ok';data:T}|{status:'error';httpStatus:number;code:string};
@@ -10471,13 +10636,21 @@ export const F3_DRAWER_FLAG=flagOn(process.env.NEXT_PUBLIC_COMPANY_F3_DRAWER);
 export const JUDGMENTS_FLAG=flagOn(process.env.NEXT_PUBLIC_COMPANY_JUDGMENTS);
 
 // ---- client view of the route DTOs (Task 9/10; see part D "依赖的跨组接口") ----
-export interface StatementsResponse{issuerId:string;ticker:string;market:Market;asOf:string|null;mappingGen:number;stateRev:number;truncated:boolean;statement:StatementKind;basis:Basis;periods:PeriodCol[];rows:GridRow[];filings:Record<string,FilingSummary>;evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
-export interface SeriesEntry{factId:string;concept:string;sourceConcept:string;periodStart:string;periodEnd:string;duration:string;unit:string;availableDate:string;filingId:string;disclosureSeq:number;isRevision:boolean;mappingGen:number;value:string|null;withheld:WithheldReason|null}
-export interface FactSeriesResponse{issuerId:string;ticker:string;market:Market;asOf:string|null;stateRev:number;truncated:boolean;concept:string;periodStart:string;periodEnd:string;series:SeriesEntry[];filings:Record<string,FilingSummary>;evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
-export interface PublicEvent{eventId:string;kind:EventKind;naturalKey:string;occurredOn:string;periodEnd:string|null;concept:string|null;filingId:string|null;payload:Record<string,unknown>;meta:Record<string,unknown>;firstSeenAt?:string;payloadChangedAt?:string|null}
-export interface OverviewResponse{market:Market;asOf?:string|null;coverage:CoverageRow|null;coverageOtherMarket:CoverageRow|null;latestFiling:FilingSummary|null;latest:{periodKey:string;facts:Record<string,Cell>;derived:Record<string,Cell>;stateRev:number;truncated:boolean}|null;recentEvents:PublicEvent[];evidence:Record<string,EvidenceDto>}
-export interface MetricEntry{metric:string;periodStart:string;periodEnd:string;duration:string;basedOnRev:number;computedAt:string|null;cell:DerivedCell|WithheldCell}
-export interface MetricsResponse{issuerId:string;ticker:string;market:Market;asOf:string|null;formulaVersion:string;computedAtKind:'materialized'|'live';stale:boolean;truncated:boolean;metrics:MetricEntry[];evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
+// Field-for-field the server DTOs of Task 9 (handlers/statements.ts StatementsDto, handlers/facts.ts FactSeriesDto),
+// Task 10 (event-dto.ts PublicEvent, handlers/overview.ts OverviewDto, handlers/metrics.ts MetricsDto,
+// handlers/filings.ts FilingsDto). Declared here because client components must not import handler modules.
+export interface StatementsResponse{issuerId:string;ticker:string;market:Market;asOf:string;mappingGen:number;stateRev:number;truncated:boolean;statement:StatementKind;basis:Basis;periods:PeriodCol[];rows:GridRow[];filings:Record<string,FilingSummary>;
+ /** concept → period keys with only a non-primary unit (cell null → render "—" + U). */
+ otherUnitOnly:Record<string,string[]>;evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
+interface SeriesBase{factId:string;availableDate:string;filingId:string;disclosureSeq:number|null;isCurrent:boolean|null;isRevision:boolean|null;sourceConcept:string;mappingVersion:string;mappingGen:number;unit:string}
+export type SeriesEntry=(SeriesBase&{kind:'fact';value:string;rawHash:string;runId:string;unitRule:string|null;delta:string|null;relChange:string|null})|(SeriesBase&{kind:'withheld';reason:WithheldReason});
+export interface FactSeriesResponse{issuerId:string;ticker:string;market:Market;asOf:string;mappingGen:number;stateRev:number;truncated:boolean;history:true;concept:string;periodStart:string;periodEnd:string;unit:string;
+ otherUnits:string[];series:SeriesEntry[];otherUnitSeries:SeriesEntry[];filings:Record<string,FilingSummary>;evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
+export type {PublicEvent} from './event-dto';
+export interface OverviewResponse{ticker:string;market:Market;asOf:string;coverage:CoverageRow|null;coverageOtherMarket:CoverageRow|null;latestFiling:FilingSummary|null;
+ latest:{periodKey:string|null;facts:Record<string,Cell>;derived:Record<string,Cell>;stateRev:number;truncated:boolean}|null;recentEvents:PublicEvent[];eventsComputed:'materialized'|'live';evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
+export interface MetricEntry{metric:string;periodStart:string;periodEnd:string;duration:string;basedOnRev:number;computedAt:string|null;computedAtKind:'materialized'|'live';cell:DerivedCell|WithheldCell}
+export interface MetricsResponse{issuerId:string;ticker:string;market:Market;asOf:string|null;mappingGen:number;formulaVersion:string;stale:boolean;truncated:boolean;metrics:MetricEntry[];evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
 export type FreshnessStatus='fresh'|'stale'|'error'|'missing';
 export interface FreshnessResponse{datasets:{dataset:string;status:FreshnessStatus;lastOkAt:string|null;lastAttemptAt:string|null}[]}
 export interface CompanyFilingsResponse{issuerId:string;ticker:string;market:Market;asOf:string|null;stateRev:number;filings:FilingSummary[]}
@@ -10687,42 +10860,9 @@ export async function loadCompanyPageData(deps:PageDataDeps,rawTicker:string,tod
 
 Run: `npm test -- src/lib/company/page-data.test.ts` → Expected: PASS。若 `memoryTableClient` 的 `{...tables, select}` 展开丢失原型方法导致类型错，改为 `Object.assign(Object.create(tables), {select: …})`。
 
-- [ ] **Step 11: 模块自有文件列表路由 `GET /api/companies/[ticker]/filings`**
+- [ ] **Step 11: 文件列表路由（整合决定：已移入 Task 10 Step 11b）**
 
-```ts
-// src/app/api/companies/[ticker]/filings/route.ts
-// Company-page filings list (plan 2026-11-06 Task 11, 指挥决定; spec §5.5, §0.1 item 3): every
-// published filing (mapping_gen > 0) with available_date <= asOf, as FilingSummary (fiscal period,
-// citation, linkAttempts, factCount) from the same company_read_snapshot statement. No financial
-// values → no evidence gate and no admin variant. Newest available_date first.
-import {NextResponse} from 'next/server';
-import {getAnonSupabase} from '@/lib/supabase/anon';
-import {TICKER_RE,asOfParam,decodeTicker,errorResponse,failureResponse,paramErrorResponse,publicClients,readParams,resolvePublicIssuer,successHeaders,utcDate} from '@/lib/facts/public-route';
-import {readSnapshot} from '@/lib/company/snapshot-read';
-
-export const dynamic='force-dynamic';
-const PARAMS=['asOf'] as const;
-
-export async function GET(req:Request,{params}:{params:Promise<{ticker:string}>}){
- const now=new Date();const today=utcDate(now);
- const {ticker:raw}=await params;const ticker=decodeTicker(raw);
- if(ticker===null||!TICKER_RE.test(ticker))return errorResponse('invalid_parameter:ticker','invalid ticker',400);
- let asOf:string,given:boolean;
- try{const p=readParams(new URL(req.url),PARAMS);given=p.has('asOf');asOf=asOfParam(p,today);}
- catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
- try{
-  const {tables}=publicClients();
-  const issuer=await resolvePublicIssuer(tables,ticker,today);
-  if(!issuer)return errorResponse('unknown_ticker','no issuer for ticker',404);
-  // facts are not needed: one concept, limit 1; the filings sub-select is independent of the facts limit.
-  const snap=await readSnapshot(getAnonSupabase(),issuer.issuerId,issuer.market,{concepts:['revenue'],asOf,history:false,limit:1});
-  const filings=[...snap.filings].sort((a,b)=>b.availableDate.localeCompare(a.availableDate)||b.filingId.localeCompare(a.filingId));
-  return NextResponse.json({issuerId:issuer.issuerId,ticker:issuer.ticker,market:issuer.market,asOf:given?asOf:null,stateRev:snap.stateRev,filings},{headers:successHeaders(now,given?asOf:undefined,filings.length===0)});
- }catch(e){return failureResponse(e,'companies/filings','filings read failed');}
-}
-```
-
-（`asOfParam` 缺省返回今天、越界抛 `QueryError('asOf')`；它与 `readParams` 已在规格二实现并测试。若 `readSnapshot` 的第一个参数类型不是 Supabase 客户端，按 Task 3 实际签名改这一处。）
+`GET /api/companies/[ticker]/filings?asOf=` 与 admin 变体由 Task 10 建立（`FilingsDto = {issuerId, ticker, market, asOf: string|null, stateRev, filings: FilingSummary[]}`，`available_date` 降序，来自同一 `company_read_snapshot`）。本任务只在 `client.ts` 声明其客户端类型 `CompanyFilingsResponse`（与 `FilingsDto` 逐字段一致）并通过 `companyApi('filings', …)` 调用；不建路由文件。
 
 - [ ] **Step 12: `dynamic-rendering.test.ts` 登记新服务端页**
 
@@ -10739,6 +10879,7 @@ export async function GET(req:Request,{params}:{params:Promise<{ticker:string}>}
 // Company page entry (plan 2026-11-06 Task 11; spec §5.1): server component. Resolves the issuer and
 // its coverage once on the server, parses view/asOf, and hands everything to the client shell.
 // Identity no longer comes from getStockOrStub(); quote row, K-line and quote ratios are removed (decision J).
+import { notFound } from 'next/navigation';
 import { getLocale } from 'next-intl/server';
 import { getAnonSupabase } from '@/lib/supabase/anon';
 import { supabaseTableClient } from '@/lib/db/table-client';
@@ -10757,6 +10898,14 @@ async function isAdminViewer(): Promise<boolean> {
   try { await requireAdminUser(); return true; } catch { return false; }
 }
 
+/** Spec §5.7 "未知 ticker": no issuer AND not a known security → the framework 404 (stocks_universe is public-read). Fails open. */
+async function knownSecurity(anon: ReturnType<typeof getAnonSupabase>, ticker: string): Promise<boolean> {
+  try {
+    const { data, error } = await anon.from('stocks_universe').select('ticker').eq('ticker', ticker.trim().toUpperCase()).limit(1);
+    return error ? true : (data?.length ?? 0) > 0;
+  } catch { return true; }
+}
+
 export default async function StockPage({ params, searchParams }: { params: Promise<{ ticker: string }>; searchParams: Promise<Search> }) {
   const [{ ticker: raw }, query] = await Promise.all([params, searchParams]);
   let ticker = raw;
@@ -10769,6 +10918,7 @@ export default async function StockPage({ params, searchParams }: { params: Prom
     isAdminViewer(),
     getLocale(),
   ]);
+  if (!data.issuer && !data.errorCode && !(await knownSecurity(anon, ticker))) notFound();   // e2e Task 19 #10: HTTP 404
   const highlight = typeof query.highlight === 'string' && /^[0-9a-f-]{36}$/i.test(query.highlight) ? query.highlight : null;
   return (
     <CompanyPage
@@ -10927,7 +11077,7 @@ export function ReplayBar({ ticker, view, asOf, extra }: { ticker: string; view:
   const t = useTranslations('company.replay');
   const router = useRouter();
   return (
-    <div role="status" className="flex flex-wrap items-center gap-3 rounded-lg border border-[var(--accent)] bg-[var(--accent-wash)] px-4 py-3">
+    <div role="status" data-testid="replay-bar" className="flex flex-wrap items-center gap-3 rounded-lg border border-[var(--accent)] bg-[var(--accent-wash)] px-4 py-3">
       <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--accent)]">{t('label')}</span>
       <span className="text-sm">{t('asOf', { date: asOf })}</span>
       <span className="text-xs text-[var(--text-dim)]">{t('ownershipNote')}</span>
@@ -10961,7 +11111,7 @@ export function ReplayUnsupportedBanner({ ticker, view }: { ticker: string; view
 }
 ```
 
-- [ ] **Step 15: 跟踪按钮的纯状态函数 + 测试，然后 `TrackButton.tsx`、`tracking-slot.tsx`**
+- [ ] **Step 15: 跟踪按钮的纯状态函数 + 测试，然后占位 `tracking/TrackButton.tsx`、`tracking/CompanyTrackingView.tsx`**（整合决定：两个集成点用 Task 17 的路径、导出名与 props；本任务的实现是可用的占位，Task 17 整文件覆盖，公司页与页头不再改）
 
 在 `src/lib/company/client.ts` 末尾追加：
 
@@ -10992,10 +11142,11 @@ describe('trackStateOf',()=>{
 Run: `npm test -- src/lib/company/client.test.ts` → PASS。
 
 ```tsx
-// src/components/company/TrackButton.tsx
+// src/components/company/tracking/TrackButton.tsx
 'use client';
 // Header track toggle against the tracking API (plan 2026-11-06 Task 11 → Task 16 routes; spec §6.2).
 // Fails closed: 404 (routes not deployed) disables the button; watch_limit shows the fixed message.
+// Placeholder: Task 17 overwrites this file (same export TrackButton({issuerId}), same data-testid).
 import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui';
@@ -11034,7 +11185,7 @@ export function TrackButton({ issuerId }: { issuerId: string }) {
   const label = state === 'tracked' ? t('tracking') : state === 'login' ? t('loginRequired') : state === 'unavailable' ? t('unavailable') : t('track');
   return (
     <Button
-      variant="secondary" size="sm" onClick={toggle} aria-pressed={state === 'tracked'}
+      variant="secondary" size="sm" onClick={toggle} aria-pressed={state === 'tracked'} data-testid="track-button"
       disabled={busy || state === 'loading' || state === 'login' || state === 'unavailable'}
       className={state === 'tracked' ? 'border-[var(--border-active)] text-[var(--accent)]' : undefined}
     >
@@ -11045,18 +11196,19 @@ export function TrackButton({ issuerId }: { issuerId: string }) {
 ```
 
 ```tsx
-// src/components/company/tracking-slot.tsx
+// src/components/company/tracking/CompanyTrackingView.tsx
 'use client';
 // Integration point for Task 17 (plan 2026-11-06): the company page's tracking view renders
-// CompanyTrackingSlot. Task 17 replaces this function body with its timeline component and keeps
-// the export name and props; in replay (asOf) events are computed live and read receipts are off.
+// CompanyTrackingView. Task 17 overwrites this file with its timeline component and keeps the export
+// name and props; in replay (asOf) events are computed live and read receipts are off.
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { Card } from '@/components/ui';
+import type { Market } from '@/lib/company/types';
 
-export interface CompanyTrackingSlotProps { issuerId: string; ticker: string; asOf: string | null }
+export interface CompanyTrackingViewProps { issuerId: string; ticker: string; market: Market; asOf: string | null }
 
-export function CompanyTrackingSlot({ asOf }: CompanyTrackingSlotProps) {
+export function CompanyTrackingView({ asOf }: CompanyTrackingViewProps) {
   const t = useTranslations('company');
   return (
     <Card className="flex flex-col gap-2">
@@ -11087,7 +11239,7 @@ import { companyApi, companyHref, type CompanyFilingsResponse, type FreshnessRes
 import { datasetOf, displayNames, padCik, securityChips } from '@/lib/company/header-model';
 import type { CompanyPageData } from '@/lib/company/page-data';
 import { useCompanyFetch } from './useCompanyFetch';
-import { TrackButton } from './TrackButton';
+import { TrackButton } from './tracking/TrackButton';
 
 function WatchlistButton({ ticker }: { ticker: string }) {
   const t = useTranslations('company.header');
@@ -11146,14 +11298,14 @@ export function CompanyHeader({ data, view, asOf, locale }: { data: CompanyPageD
   const marketLabel = (m: string) => (m === 'CN' ? t('marketCN') : m === 'US' ? t('marketUS') : m === 'HK' ? t('marketHK') : m);
 
   return (
-    <section className="flex flex-wrap items-start gap-4 sm:gap-6">
+    <section className="flex flex-wrap items-start gap-4 sm:gap-6" data-testid="company-header">
       <div className="flex min-w-0 flex-col gap-2">
         <h1 className="text-2xl font-semibold tracking-tight">
           {names.title}{names.subtitle && <span className="ml-2 text-base font-normal text-[var(--text-dim)]">{names.subtitle}</span>}
         </h1>
         <div className="flex gap-2 overflow-x-auto whitespace-nowrap pb-0.5 text-xs">
           {chips.map((c) => (
-            <Link key={c.ticker} href={companyHref(c.ticker, { view, asOf }) as never} aria-current={c.current ? 'true' : undefined}
+            <Link key={c.ticker} href={companyHref(c.ticker, { view, asOf }) as never} aria-current={c.current ? 'true' : undefined} data-testid="security-chip"
               title={c.primary ? t('primary') : undefined}
               className={`num inline-flex items-center rounded-full border px-2.5 py-0.5 no-underline ${c.current ? 'border-[var(--accent)] bg-[var(--accent-wash)] text-[var(--accent)]' : 'border-[var(--border)] text-[var(--text-dim)]'}`}>
               {c.ticker}{c.current ? ' ◉' : ''}
@@ -11206,7 +11358,7 @@ export function CompanyHeader({ data, view, asOf, locale }: { data: CompanyPageD
             ) : (
               <span className="col-span-2 text-[var(--text-dim)]">{t('noFacts')}</span>
             )}
-            <span className="flex items-center gap-1.5">
+            <span className="flex items-center gap-1.5" data-testid="data-status">
               <span className="num">{datasetOf(data.market)}</span>
               <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${dot[ds?.status ?? 'missing']}`} />
               <span>{ds ? tf(ds.status) : tf('unknown')}</span>
@@ -11340,7 +11492,7 @@ import { CompanyHeader } from '@/components/company/CompanyHeader';
 import { ViewTabs } from '@/components/company/ViewTabs';
 import { ReplayBar, ReplayOpener, ReplayUnsupportedBanner } from '@/components/company/ReplayBar';
 import { ErrorCard, FactStateCallout } from '@/components/company/StateCallout';
-import { CompanyTrackingSlot } from '@/components/company/tracking-slot';
+import { CompanyTrackingView } from '@/components/company/tracking/CompanyTrackingView';
 import { AiView } from './legacy/AiView';
 import { SignalsView } from './legacy/SignalsView';
 import { HoldingsView } from './legacy/HoldingsView';
@@ -11385,7 +11537,8 @@ function CompanyShell({ data, view, asOf, highlight, isAdmin, locale }: CompanyP
       return <>{asOf && <ReplayUnsupportedBanner ticker={ticker} view={view} />}{body}</>;
     }
     if (view === 'tracking') {
-      return issuer ? <CompanyTrackingSlot issuerId={issuer.issuer_id} ticker={ticker} asOf={asOf} /> : <FactStateCallout state="no_issuer" isAdmin={isAdmin} />;
+      if (issuer && data.market) return <CompanyTrackingView issuerId={issuer.issuer_id} ticker={ticker} market={data.market} asOf={asOf} />;
+      return <FactStateCallout state={issuer ? (data.factState === 'ok' ? 'no_facts' : data.factState as 'no_issuer' | 'no_facts' | 'hk_pending') : 'no_issuer'} isAdmin={isAdmin} />;
     }
     return renderFactView();
   }
@@ -11431,7 +11584,7 @@ Expected: 全部 PASS；lint 0 warning。若 `Link` 的 `href` 类型（typed ro
 - [ ] **Step 21: 提交**
 
 ```bash
-git add messages/zh/company.json messages/en/company.json messages/zh/tracking.json messages/en/tracking.json src/i18n/request.ts src/i18n/messages-parity.test.ts "src/app/(app)/dynamic-rendering.test.ts" src/lib/company/client.ts src/lib/company/client.test.ts src/lib/company/header-model.ts src/lib/company/header-model.test.ts src/lib/company/page-data.ts src/lib/company/page-data.test.ts src/lib/company/messages.test.ts "src/app/api/companies/[ticker]/filings/route.ts" "src/app/(app)/stock/[ticker]" src/components/company docs/audits/2026-11-06-company-research/01-implementation-log.md
+git add messages/zh/company.json messages/en/company.json messages/zh/tracking.json messages/en/tracking.json src/i18n/request.ts src/i18n/messages-parity.test.ts "src/app/(app)/dynamic-rendering.test.ts" src/lib/company/client.ts src/lib/company/client.test.ts src/lib/company/header-model.ts src/lib/company/header-model.test.ts src/lib/company/page-data.ts src/lib/company/page-data.test.ts src/lib/company/messages.test.ts "src/app/(app)/stock/[ticker]" src/components/company docs/audits/2026-11-06-company-research/01-implementation-log.md
 ```
 
 ```bash
@@ -11453,8 +11606,8 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 - Modify: `src/app/(app)/stock/[ticker]/CompanyPage.tsx`（替换 `renderFactView`，外包 `DrawerHost`）
 
 **实施要点：**
-- 控件：报表 IS/BS/CF（缺省 IS）· 口径 按披露/年度/单季（缺省按披露；BS 下"单季"禁用并在 title 写"资产负债表没有单季口径"，切到 BS 时若是单季自动回到按披露）· 期数 8/20/40（缺省 8）· 显示缩放 原值/千/百万/亿（缺省按币种：CNY → 亿、USD → 百万、其他 → 原值，**指挥决定**：按行币种而不是界面语言取缺省，CNY+zh/USD+en 两种组合与规格一致，另两种组合取币种的习惯单位）· 固定芯片"合并 consolidated"· "导出 CSV"· 管理员可见"管理员：未脱敏视图"开关（打开后同一请求改走 `/api/admin/companies/…`，只有这时 `!` 徽标可能出现）。
-- 缩放只作用于 `unitKind='money'` 行；`per_share`、`shares`、`ratio` 行显示原值（`ratio`/单位 `pure` 显示为百分比两位小数）。显示格式化只做 10 的幂移位 + 四舍五入远离零，**不经浮点**；原值不四舍五入、只加千分位。
+- 控件：报表 IS/BS/CF（缺省 IS）· 口径 按披露/年度/单季（缺省按披露；BS 下"单季"禁用并在 title 写"资产负债表没有单季口径"，切到 BS 时若是单季自动回到按披露）· 期数 8/20/40（缺省 8）· 显示缩放 原值/千/百万/亿（缺省 = Task 7 `scaleFor(币种, 界面语言)`：CNY+zh → 亿，其余货币 → 百万，无币种 → 原值；整合决定：与 Task 7 的同一规则，不另立按币种的规则）· 固定芯片"合并 consolidated"· "导出 CSV"· 管理员可见"管理员：未脱敏视图"开关（打开后同一请求改走 `/api/admin/companies/…`，只有这时 `!` 徽标可能出现）。
+- 缩放只作用于 `unitKind='money'` 行；`per_share`、`shares`、`ratio` 行显示原值（`ratio`/单位 `pure` 显示为百分比两位小数）。显示格式化复用 Task 7 `formatDecimalText`/`groupThousands`（四舍五入远离零，**不经浮点**）；原值不四舍五入、只加千分位。
 - 网格：首列冻结（`sticky left-0`），列 = 期间键降序（表头两行：`periodEnd` + 期间时长），累计期与单季期同 `periodEnd` 是两列。单元格：事实 → 按钮（打开披露历史）+ 徽标；派生 → 按钮（打开公式抽屉）；`withheld/citation_pending` → "— 待挂接"（title 全文）；`withheld/evidence_incomplete` → "来源记录不完整"；`null` → "—"（title "该期无此概念的可见披露"）。点 withheld 格打开只含原因的抽屉，不请求数据。
 - 徽标（描边小方块）：`R` = `isRevision`；`n` = `disclosureSeq>1` 且非修订；`!` = 该格所属 filing `citation='pending'`（公共响应中这样的格已置空，所以只在管理员视图出现）；`U` = `otherUnits`。
 - 网格顶部计数条：`withheld.citationPending>0` 与 `withheld.evidenceIncomplete>0` 各一条（文案见消息 `statements.withheldPending/withheldIncomplete`），右侧徽标图例。
@@ -11462,7 +11615,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 - 迷你柱：每行行头旁"迷你柱"开关（`< 640px` 隐藏开关与柱行，CSS `hidden sm:…`），打开后在该行下插入一行内联 SVG，柱色 `var(--accent)` 透明度 .55，置空/缺失格画虚线框；表格仍是主视图；SVG 带 `role="img"` 与 `aria-label`。柱高可用 `Number(value)`（仅作图，不作显示文本）。
 - CSV 列：`concept,unit,period_key,period_start,period_end,duration,kind,fact_id,filing_id,available_date,value_text,withheld_reason`；`value_text` 原样（不缩放）；文件名 `<ticker>_<statement>_<basis>_<asOf|latest>.csv`。
 - 行头按钮 → 概念说明浮层：`sourceConcepts`（逗号分隔）、`notes`（无则"—"）、响应顶层 `mappingGen`；Esc 关闭并把焦点还给行头按钮。
-- 披露历史抽屉（§5.6）：请求 `GET /api/companies/[ticker]/facts?concept=&periodStart=&periodEnd=&unit=&asOf=`（管理员视图走 admin 变体），INSTANT 的 `periodStart` 传 `periodEnd`；`U` 格额外请求同 URL 去掉 `unit`，在"其他单位的事实"表列出非主单位行。列：可得日期 · 文件（`formType sourceRef`，链接：edgar→`url`，linked→`documentUrl`，pending 标"（引用待挂接）"不链接）· 值·单位（`value_text` 原样 + unit；置空行显示原因文本）· 修订（`isRevision` → `decimalSub(本值, 前值)` 按当前缩放显示带符号 + `decimalRelChange(前值, 本值)` 显示为 4 位百分比；非修订但 `disclosureSeq>1` → "0 · 同值"；首条 "—"）· 变换链（① 映射 `sourceConcept → concept`（`mappingVersion · gen`）② 单位规则 `unitRule`（null → "原值"）④ 显示缩放 `÷1e8`/不缩放；派生格的 ③ 只在公式抽屉）· 代码版本 `run.codeVersion` 前 7 位。点行选择该行为"证据"区内容（缺省最后一条非置空行）。证据区：rawHash、snapshot（source、sha256、path、api/url、params JSON、"快照首次抓取时间" capturedAt、httpStatus、page）、locator（hashLocator、jsonPointer、field、pdf：page/table/row/column/documentUrl）、sourceDocument 链接、run（runId、codeVersion、toolVersions JSON）、mappingVersion、unitRule、download（非空 → 链接；空 → "null（Tushare 对象不可再分发）"）、回放步骤一句话。底部"复制可复现查询"把请求的绝对 URL 写入剪贴板。
+- 披露历史抽屉（§5.6）：请求 `GET /api/companies/[ticker]/facts?concept=&periodStart=&periodEnd=&unit=&asOf=`（管理员视图走 admin 变体；`unit` 必填），INSTANT 的 `periodStart` 传 `periodEnd`；同一响应的 `otherUnitSeries`（Task 9，已过门槛）在"其他单位的事实"表列出非主单位行（整合决定：不再发第二个去掉 `unit` 的请求）。e2e 钩子：可得日期按钮 `data-testid="drawer-available-date"`、变换链列头 `drawer-transform-chain`、代码版本格 `drawer-code-version`。列：可得日期 · 文件（`formType sourceRef`，链接：edgar→`url`，linked→`documentUrl`，pending 标"（引用待挂接）"不链接）· 值·单位（`value_text` 原样 + unit；置空行显示原因文本）· 修订（`isRevision` → `decimalSub(本值, 前值)` 按当前缩放显示带符号 + `decimalRelChange(前值, 本值)` 显示为 4 位百分比；非修订但 `disclosureSeq>1` → "0 · 同值"；首条 "—"）· 变换链（① 映射 `sourceConcept → concept`（`mappingVersion · gen`）② 单位规则 `unitRule`（null → "原值"）④ 显示缩放 `÷1e8`/不缩放；派生格的 ③ 只在公式抽屉）· 代码版本 `run.codeVersion` 前 7 位。点行选择该行为"证据"区内容（缺省最后一条非置空行）。证据区：rawHash、snapshot（source、sha256、path、api/url、params JSON、"快照首次抓取时间" capturedAt、httpStatus、page）、locator（hashLocator、jsonPointer、field、pdf：page/table/row/column/documentUrl）、sourceDocument 链接、run（runId、codeVersion、toolVersions JSON）、mappingVersion、unitRule、download（非空 → 链接；空 → "null（Tushare 对象不可再分发）"）、回放步骤一句话。底部"复制可复现查询"把请求的绝对 URL 写入剪贴板。
 - 公式抽屉：标题 `metric 名 · 期间`，值（比率百分比 / 货币缩放）；公式文本取 `METRIC_CATALOG[cell.formulaVersion]?.[metric]?.formula`（当前语言为主、另一语言为副行；缺失 → "公式文本缺失（formula_version x 不在目录中）"）；kv：basis、inputUnit、formulaVersion、rule（a → "a（同一披露）"，b → "b（均未修订）"，无 → "—"）、asOf（无 → "—（最新）"）、computedAt（`computedAtKind='live'` → "本次请求实时计算"，否则时间串 + "物化时刻"）、basedOnRev；inputs 表每行（概念名、可得日期、filingId 前 8 位）是按钮，打开该 `factId` 的披露历史（先经 `/api/facts/[ticker]?factIds=<id>` 取自然键，**不显示其 value**）。
 - 抽屉外壳：`role="dialog" aria-modal="true"`；打开时焦点到关闭按钮；Tab 在抽屉内循环；Esc / 背景点击关闭；关闭后焦点回到打开它的元素；抽屉可叠放（公式 → 输入历史），关闭只关最上层。`< 640px` 为全屏底部抽屉（顶部抓手条），`≥ 640px` 为右侧抽屉（宽 `min(760px,100vw)`）。
 
@@ -11503,7 +11656,7 @@ describe('decimal display helpers (no floating point)',()=>{
   expect(signed('12.30')).toBe('+12.30');expect(signed('-1.00')).toBe('-1.00');expect(signed('0.00')).toBe('0.00');
  });
  it('chooses the default scale by currency and the unit kind by unit code',()=>{
-  expect(defaultScale('CNY')).toBe('hundred_million');expect(defaultScale('USD')).toBe('million');expect(defaultScale('HKD')).toBe('raw');expect(defaultScale(null)).toBe('raw');
+  expect(defaultScale('CNY','zh')).toBe('hundred_million');expect(defaultScale('USD','en')).toBe('million');expect(defaultScale('CNY','en')).toBe('million');expect(defaultScale('HKD','zh')).toBe('million');expect(defaultScale(null,'zh')).toBe('raw');
   expect(unitKindOfUnit('pure')).toBe('ratio');expect(unitKindOfUnit('shares')).toBe('shares');expect(unitKindOfUnit('USD/shares')).toBe('per_share');expect(unitKindOfUnit('CNY')).toBe('money');
  });
  it('formatValue applies the scale to money only',()=>{
@@ -11521,16 +11674,19 @@ Run: `npm test -- src/components/company/format.test.ts` → Expected: FAIL（�
 
 ```ts
 // src/components/company/format.ts
-// Display formatting of decimal value_text (plan 2026-11-06 Task 12; spec §5.3, §5.4): powers-of-ten
-// shifts and half-away-from-zero rounding on strings — never through floating point. value_text
-// itself is never altered; only the display string is derived.
-export type ScaleId='raw'|'thousand'|'million'|'hundred_million';
+// Display formatting of decimal value_text (plan 2026-11-06 Task 12; spec §5.3, §5.4). Integration
+// decision: the scaling, rounding and grouping are Task 7's (src/lib/company/decimal.ts formatDecimalText /
+// groupThousands / scaleFor — string/BigInt, half away from zero, never floating point); this file only
+// adapts them to the page (exponent-based scale ids, percent display, invalid text passed through).
+// value_text itself is never altered; only the display string is derived.
+import {formatDecimalText,groupThousands,scaleFor,type DisplayScale} from '@/lib/company/decimal';
+export type ScaleId=DisplayScale;
 export const SCALES:readonly ScaleId[]=['raw','thousand','million','hundred_million'];
 export const SCALE_EXP:Record<ScaleId,number>={raw:0,thousand:3,million:6,hundred_million:8};
 export type UnitKind='money'|'shares'|'per_share'|'ratio';
 
-/** Default scale by currency (指挥决定): CNY → 亿 (1e8), USD → 百万 (1e6), other → raw. */
-export function defaultScale(currency:string|null):ScaleId{return currency==='CNY'?'hundred_million':currency==='USD'?'million':'raw';}
+/** Default scale = Task 7 scaleFor(currency, locale) (spec §5.3: CNY + zh → 亿, other money → 百万); no currency → raw. */
+export function defaultScale(currency:string|null,locale:'zh'|'en'):ScaleId{return currency===null?'raw':scaleFor(currency,locale);}
 export function unitKindOfUnit(unit:string):UnitKind{
  if(unit==='pure')return 'ratio';
  if(unit==='shares')return 'shares';
@@ -11551,22 +11707,17 @@ export function shiftDecimal(t:string,exp:number):string{
  if(point>digits.length)digits=digits+'0'.repeat(point-digits.length);
  return join(p.neg,digits.slice(0,point),digits.slice(point).replace(/0+$/,''));
 }
-/** Fixed `d` fraction digits, half away from zero, no negative zero. */
+/** Fixed `d` fraction digits, half away from zero, no negative zero (Task 7 formatDecimalText with divisor 1). */
 export function roundDecimal(t:string,d:number):string{
- const p=parse(t);if(!p)return t;
- const frac=p.frac.padEnd(d+1,'0');
- let n=BigInt(p.int+frac.slice(0,d));
- if(frac.charCodeAt(d)-48>=5)n+=1n;
- const s=n.toString().padStart(d+1,'0');
- const int=s.slice(0,s.length-d),f=d>0?s.slice(s.length-d):'';
- const zero=/^0*$/.test(int+f);
- return (p.neg&&!zero?'-':'')+int+(d>0?`.${f}`:'');
+ if(!parse(t))return t;
+ return formatDecimalText(t,1n,d);
 }
-export function groupNumber(t:string):string{
- const m=/^(-?)(\d+)(\.\d+)?$/.exec(t);if(!m)return t;
- return m[1]+m[2].replace(/\B(?=(\d{3})+(?!\d))/g,',')+(m[3]??'');
+export function groupNumber(t:string):string{return parse(t)?groupThousands(t):t;}
+/** value ÷ 10^exp to `digits` places (Task 7 formatDecimalText), grouped; exp 0 = the raw value grouped, unrounded. */
+export function formatScaled(t:string,exp:number,digits=2):string{
+ if(exp===0||!parse(t))return groupNumber(t);
+ return groupThousands(formatDecimalText(t,10n**BigInt(exp),digits));
 }
-export function formatScaled(t:string,exp:number,digits=2):string{return exp===0?groupNumber(t):groupNumber(roundDecimal(shiftDecimal(t,exp),digits));}
 export function formatPercent(t:string,digits=2):string{const s=roundDecimal(shiftDecimal(t,-2),digits);return parse(s)?`${groupNumber(s)}%`:t;}
 export function formatValue(t:string,kind:UnitKind,exp:number):string{
  if(kind==='ratio')return formatPercent(t);
@@ -11592,7 +11743,7 @@ const fact=(o:Partial<FactCell>={}):FactCell=>({kind:'fact',factId:'f1',value:'1
 const filing=(citation:'edgar'|'linked'|'pending'):FilingSummary=>({filingId:'g1',formType:'annual',fiscalYear:2024,fiscalPeriod:'FY',periodEnd:'2024-12-31',availableDate:'2025-04-03',sourceRef:'600519_2024_annual',source:'tushare',url:null,documentUrl:null,citation,linkAttempts:0,factCount:10,mappingGen:1});
 const row=(cells:GridRow['cells'],o:Partial<GridRow>={}):GridRow=>({concept:'revenue_operating',unit:'CNY',unitKind:'money',sourceConcepts:['income.revenue'],notes:null,cells,...o});
 const K1='2024-01-01:2024-12-31:12M',K2='2024-01-01:2024-09-30:9M';
-const resp=(rows:GridRow[],o:Partial<StatementsResponse>={}):StatementsResponse=>({issuerId:'i',ticker:'600519.SH',market:'CN',asOf:null,mappingGen:1,stateRev:4,truncated:false,statement:'IS',basis:'disclosed',periods:[{key:K1,periodStart:'2024-01-01',periodEnd:'2024-12-31',duration:'12M'},{key:K2,periodStart:'2024-01-01',periodEnd:'2024-09-30',duration:'9M'}],rows,filings:{g1:filing('linked')},evidence:{},withheld:{evidenceIncomplete:0,citationPending:0},...o});
+const resp=(rows:GridRow[],o:Partial<StatementsResponse>={}):StatementsResponse=>({issuerId:'i',ticker:'600519.SH',market:'CN',asOf:'2026-11-06',otherUnitOnly:{},mappingGen:1,stateRev:4,truncated:false,statement:'IS',basis:'disclosed',periods:[{key:K1,periodStart:'2024-01-01',periodEnd:'2024-12-31',duration:'12M'},{key:K2,periodStart:'2024-01-01',periodEnd:'2024-09-30',duration:'9M'}],rows,filings:{g1:filing('linked')},evidence:{},withheld:{evidenceIncomplete:0,citationPending:0},...o});
 
 describe('badges',()=>{
  it('R for revisions, n for unchanged re-disclosure, ! only for pending filings, U for other units',()=>{
@@ -11608,6 +11759,7 @@ describe('cellView',()=>{
   expect(cellView(fact({value:'68.64',unit:'CNY/shares'}),row({},{unitKind:'per_share',unit:'CNY/shares'}),8,{})).toMatchObject({text:'68.64'});
   expect(cellView({kind:'withheld',reason:'citation_pending',factId:'f'},row({}),8,{})).toEqual({kind:'withheld',reason:'citation_pending',factId:'f'});
   expect(cellView(null,row({}),8,{})).toEqual({kind:'missing'});
+  expect(cellView(null,row({}),8,{},true)).toEqual({kind:'missing',otherUnitOnly:true});
   expect(cellView({kind:'derived',metric:'q_single_revenue',value:'396490000000',unit:'CNY',inputUnit:'CNY',basis:'disclosed',formulaVersion:'facts-derive/1.0',inputs:[]},row({}),8,{})).toMatchObject({kind:'derived',text:'3,964.90'});
  });
 });
@@ -11651,7 +11803,7 @@ export type CellView=
  |{kind:'fact';text:string;badges:Badge[];cell:FactCell}
  |{kind:'derived';text:string;cell:Extract<Cell,{kind:'derived'}>}
  |{kind:'withheld';reason:WithheldReason;factId:string}
- |{kind:'missing'};
+ |{kind:'missing';otherUnitOnly?:true};
 
 export function badgesOf(c:FactCell,filings:Record<string,FilingSummary>):Badge[]{
  const out:Badge[]=[];
@@ -11661,8 +11813,9 @@ export function badgesOf(c:FactCell,filings:Record<string,FilingSummary>):Badge[
  return out;
 }
 const rowKind=(r:GridRow):UnitKind=>r.unitKind;
-export function cellView(c:Cell,row:GridRow,scaleExp:number,filings:Record<string,FilingSummary>):CellView{
- if(c===null)return {kind:'missing'};
+/** `otherUnitOnly`: Task 7 GridResult.otherUnitOnly lists this period for the row (cell null → "—" + U, spec §5.3). */
+export function cellView(c:Cell,row:GridRow,scaleExp:number,filings:Record<string,FilingSummary>,otherUnitOnly=false):CellView{
+ if(c===null)return otherUnitOnly?{kind:'missing',otherUnitOnly:true}:{kind:'missing'};
  if(c.kind==='withheld')return {kind:'withheld',reason:c.reason,factId:c.factId};
  if(c.kind==='derived')return {kind:'derived',text:formatValue(c.value,c.unit==='pure'?'ratio':unitKindOfUnit(c.unit),scaleExp),cell:c};
  return {kind:'fact',text:formatValue(c.value,rowKind(row),scaleExp),badges:badgesOf(c,filings),cell:c};
@@ -11710,9 +11863,12 @@ import {drawerRows,defaultSelected,factsRequest,keyFromFactRow,filingLink,eviden
 import type {FactSeriesResponse,SeriesEntry} from '@/lib/company/client';
 import type {EvidenceDto,FilingSummary} from '@/lib/company/types';
 
-const e=(o:Partial<SeriesEntry>):SeriesEntry=>({factId:'f',concept:'revenue_operating',sourceConcept:'income.revenue',periodStart:'2024-01-01',periodEnd:'2024-12-31',duration:'12M',unit:'CNY',availableDate:'2025-04-03',filingId:'g1',disclosureSeq:1,isRevision:false,mappingGen:1,value:'170899152276.34',withheld:null,...o});
+type FactEntry=Extract<SeriesEntry,{kind:'fact'}>;
+const base={factId:'f',sourceConcept:'income.revenue',unit:'CNY',availableDate:'2025-04-03',filingId:'g1',disclosureSeq:1,isCurrent:null,isRevision:false,mappingVersion:'facts-map/1',mappingGen:1};
+const e=(o:Partial<FactEntry>):SeriesEntry=>({...base,kind:'fact',value:'170899152276.34',rawHash:'h',runId:'r',unitRule:null,delta:null,relChange:null,...o});
+const w=(o:Partial<typeof base>&{reason:'citation_pending'|'evidence_incomplete'}):SeriesEntry=>({...base,kind:'withheld',...o});
 const ev=(factId:string,codeVersion:string|null):EvidenceDto=>({factId,rawHash:'7f2c',snapshot:{source:'tushare',sha256:'s',path:'tushare/i/x.json',api:'income',url:null,params:{ts_code:'600519.SH'},capturedAt:'2025-04-03T10:20:00Z',httpStatus:200,page:null,download:null},locator:{hashLocator:'income:0',jsonPointer:'/data/items/0',field:'revenue',pdf:{page:112,table:'合并利润表',row:'营业收入',column:'本期发生额',documentUrl:'https://static.cninfo.com.cn/x.pdf'}},run:{runId:'r',codeVersion,toolVersions:{tushare:'1'}},mappingVersion:'facts-map/1',unitRule:'cny_yuan',sourceDocument:{kind:'cninfo_pdf',url:'https://static.cninfo.com.cn/x.pdf'}});
-const resp=(series:SeriesEntry[]):FactSeriesResponse=>({issuerId:'i',ticker:'600519.SH',market:'CN',asOf:null,stateRev:1,truncated:false,concept:'revenue_operating',periodStart:'2024-01-01',periodEnd:'2024-12-31',series,filings:{},evidence:{f1:ev('f1','3f9c2e1aaaa'),f3:ev('f3','5a10b7dbbbb')},withheld:{evidenceIncomplete:0,citationPending:0}});
+const resp=(series:SeriesEntry[]):FactSeriesResponse=>({issuerId:'i',ticker:'600519.SH',market:'CN',asOf:'2026-11-06',mappingGen:1,stateRev:1,truncated:false,history:true,concept:'revenue_operating',periodStart:'2024-01-01',periodEnd:'2024-12-31',unit:'CNY',otherUnits:[],series,otherUnitSeries:[],filings:{},evidence:{f1:ev('f1','3f9c2e1aaaa'),f3:ev('f3','5a10b7dbbbb')},withheld:{evidenceIncomplete:0,citationPending:0}});
 
 describe('drawerRows',()=>{
  it('computes revision differences exactly against the previous visible value and marks same-value re-disclosures',()=>{
@@ -11721,13 +11877,13 @@ describe('drawerRows',()=>{
   expect(rows[0].codeVersion).toBe('3f9c2e1');expect(rows[1].codeVersion).toBeNull();
  });
  it('withheld entries carry no value and break no diff chain',()=>{
-  const rows=drawerRows(resp([e({factId:'f1'}),e({factId:'f2',value:null,withheld:'citation_pending',disclosureSeq:2,isRevision:true})]),8);
+  const rows=drawerRows(resp([e({factId:'f1'}),w({factId:'f2',reason:'citation_pending',disclosureSeq:2,isRevision:true})]),8);
   expect(rows[1]).toMatchObject({valueText:null,revision:{kind:'withheld'}});
   expect(defaultSelected(rows)).toBe('f1');
  });
 });
 describe('requests and links',()=>{
- it('builds the series request; INSTANT uses periodEnd as periodStart; unit omitted for the other-units list',()=>{
+ it('builds the series request; INSTANT uses periodEnd as periodStart; a null unit is simply omitted from the URL',()=>{
   expect(factsRequest('600519.SH',{concept:'cash',periodStart:null,periodEnd:'2024-12-31',unit:'CNY'},'2024-06-30',false)).toBe('/api/companies/600519.SH/facts?concept=cash&periodStart=2024-12-31&periodEnd=2024-12-31&unit=CNY&asOf=2024-06-30');
   expect(factsRequest('AAPL',{concept:'eps_basic',periodStart:'2023-10-01',periodEnd:'2024-09-28',unit:null},null,true)).toBe('/api/admin/companies/AAPL/facts?concept=eps_basic&periodStart=2023-10-01&periodEnd=2024-09-28');
   expect(keyFromFactRow({factId:'x',concept:'cash',periodStart:null,periodEnd:'2024-12-31',duration:'INSTANT',unit:'USD'})).toEqual({concept:'cash',periodStart:'2024-12-31',periodEnd:'2024-12-31',unit:'USD'});
@@ -11769,7 +11925,7 @@ export function drawerRows(r:FactSeriesResponse,scaleExp:number):DrawerRow[]{
  return r.series.map((entry,i)=>{
   const evidence=r.evidence[entry.factId]??null;
   const codeVersion=evidence?.run.codeVersion?.slice(0,7)??null;
-  if(entry.value===null)return {entry,valueText:null,revision:{kind:'withheld'},codeVersion,evidence};
+  if(entry.kind==='withheld')return {entry,valueText:null,revision:{kind:'withheld'},codeVersion,evidence};
   let revision:Revision;
   if(i===0||prev===null)revision={kind:'first'};
   else if(entry.isRevision){
@@ -12010,7 +12166,6 @@ function SeriesDrawer({ ticker, asOf, admin, seriesKey, otherUnits, scaleExp, on
   const tf = useTranslations('company.filings.types');
   const url = seriesKey ? factsRequest(ticker, seriesKey, asOf, admin) : null;
   const main = useCompanyFetch<FactSeriesResponse>(url).state;
-  const all = useCompanyFetch<FactSeriesResponse>(seriesKey && otherUnits ? factsRequest(ticker, { ...seriesKey, unit: null }, asOf, admin) : null).state;
   const rows = useMemo(() => (main.status === 'ok' ? drawerRows(main.data, scaleExp) : []), [main, scaleExp]);
   const [selected, setSelected] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -12040,7 +12195,7 @@ function SeriesDrawer({ ticker, asOf, admin, seriesKey, otherUnits, scaleExp, on
           <div className="overflow-x-auto">
             <table className="w-full min-w-[640px] text-xs">
               <thead className="text-left text-[var(--text-dim)]">
-                <tr><th className="py-1.5 pr-2">{t('colAvailable')}</th><th className="pr-2">{t('colFiling')}</th><th className="pr-2 text-right">{t('colValue')}</th><th className="pr-2 text-right">{t('colRevision')}</th><th className="pr-2">{t('colTransforms')}</th><th>{t('colCode')}</th></tr>
+                <tr><th className="py-1.5 pr-2">{t('colAvailable')}</th><th className="pr-2">{t('colFiling')}</th><th className="pr-2 text-right">{t('colValue')}</th><th className="pr-2 text-right">{t('colRevision')}</th><th className="pr-2" data-testid="drawer-transform-chain">{t('colTransforms')}</th><th>{t('colCode')}</th></tr>
               </thead>
               <tbody>
                 {rows.map((r) => {
@@ -12051,7 +12206,7 @@ function SeriesDrawer({ ticker, asOf, admin, seriesKey, otherUnits, scaleExp, on
                     <tr key={r.entry.factId} aria-selected={r.entry.factId === sel}
                       className={`border-t border-[var(--border)] ${r.entry.factId === sel ? 'bg-[var(--accent-wash)]' : ''}`}>
                       <td className="num py-1.5 pr-2">
-                        <button type="button" onClick={() => setSelected(r.entry.factId)} className="num underline-offset-2 hover:underline">{r.entry.availableDate}</button>
+                        <button type="button" onClick={() => setSelected(r.entry.factId)} className="num underline-offset-2 hover:underline" data-testid="drawer-available-date">{r.entry.availableDate}</button>
                       </td>
                       <td className="pr-2">
                         {f ? (link
@@ -12059,17 +12214,17 @@ function SeriesDrawer({ ticker, asOf, admin, seriesKey, otherUnits, scaleExp, on
                           : <span>{formLabel(f.formType)} {f.sourceRef} <span className="text-[var(--text-dim)]">{f.citation === 'pending' ? t('pendingFiling') : ''}</span></span>) : '—'}
                       </td>
                       <td className="num pr-2 text-right">
-                        {r.valueText !== null ? `${groupNumber(r.valueText)} ${r.entry.unit}` : <span className="text-[var(--text-dim)]">{r.entry.withheld === 'citation_pending' ? t('reasonPending') : t('reasonIncomplete')}</span>}
+                        {r.valueText !== null ? `${groupNumber(r.valueText)} ${r.entry.unit}` : <span className="text-[var(--text-dim)]">{r.entry.kind === 'withheld' && r.entry.reason === 'citation_pending' ? t('reasonPending') : t('reasonIncomplete')}</span>}
                       </td>
                       <td className="num pr-2 text-right">
                         {r.revision.kind === 'diff' ? `${r.revision.abs}${r.revision.rel ? ` · ${r.revision.rel}` : ''}` : r.revision.kind === 'same' ? t('sameValue') : t('firstDisclosure')}
                       </td>
                       <td className="pr-2 text-[11px] text-[var(--text-dim)]">
-                        {t('tMap', { source: r.entry.sourceConcept, concept: r.entry.concept, version: ev?.mappingVersion ?? '—', gen: r.entry.mappingGen })}{' '}
+                        {t('tMap', { source: r.entry.sourceConcept, concept: main.data.concept, version: r.entry.mappingVersion, gen: r.entry.mappingGen })}{' '}
                         {ev?.unitRule ? t('tUnit', { rule: ev.unitRule }) : t('tUnitNone')}{' '}
                         {exp ? t('tScale', { divisor: divisorLabel(exp) }) : t('tScaleNone')}
                       </td>
-                      <td className="num text-[var(--text-dim)]">{r.codeVersion ?? '—'}</td>
+                      <td className="num text-[var(--text-dim)]" data-testid="drawer-code-version">{r.codeVersion ?? '—'}</td>
                     </tr>
                   );
                 })}
@@ -12077,13 +12232,13 @@ function SeriesDrawer({ ticker, asOf, admin, seriesKey, otherUnits, scaleExp, on
             </table>
           </div>
 
-          {otherUnits && all.status === 'ok' && (
+          {(otherUnits || main.data.otherUnitSeries.length > 0) && main.data.otherUnitSeries.length > 0 && (
             <div>
               <div className="mb-1 text-xs text-[var(--text-dim)]">{t('otherUnits')}</div>
               <table className="w-full text-xs"><tbody>
-                {all.data.series.filter((s) => s.unit !== seriesKey?.unit).map((s) => (
+                {main.data.otherUnitSeries.map((s) => (
                   <tr key={s.factId} className="border-t border-[var(--border)]">
-                    <td className="num py-1">{s.unit}</td><td className="num text-right">{s.value !== null ? groupNumber(s.value) : '—'}</td>
+                    <td className="num py-1">{s.unit}</td><td className="num text-right">{s.kind === 'fact' ? groupNumber(s.value) : '—'}</td>
                     <td className="num pl-2">{s.availableDate}</td><td className="pl-2 text-[var(--text-dim)]">{t('unitOther')}</td>
                   </tr>
                 ))}
@@ -12230,7 +12385,7 @@ export function ConceptPopover({ row, mappingGen, label, onClose }: { row: GridR
 // Table is the primary view; values are display strings from value_text; withheld cells never show a value.
 import { Fragment, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { Button, Tag } from '@/components/ui';
 import { companyApi, companyHref, type StatementsResponse } from '@/lib/company/client';
 import type { Basis, GridRow, PeriodCol, StatementKind } from '@/lib/company/types';
@@ -12277,7 +12432,8 @@ export function StatementsView({ ticker, asOf, isAdmin, highlight }: { ticker: s
   const url = companyApi('statements', ticker, { statement, basis, periods: String(periods), asOf }, isAdmin && adminView);
   const { state, retry } = useCompanyFetch<StatementsResponse>(url);
   const data = state.status === 'ok' ? state.data : null;
-  const scaleId = scale ?? defaultScale(data ? moneyCurrency(data.rows) : null);
+  const locale = useLocale() === 'en' ? 'en' : 'zh';
+  const scaleId = scale ?? defaultScale(data ? moneyCurrency(data.rows) : null, locale);
   const exp = SCALE_EXP[scaleId];
   const label = (c: string) => (tc.has(c) ? tc(c) : c);
   const durLabel = (d: string) => (td.has(d) ? td(d) : d);
@@ -12362,7 +12518,7 @@ export function StatementsView({ ticker, asOf, isAdmin, highlight }: { ticker: s
               <tbody>
                 {data.rows.map((row) => (
                   <Fragment key={row.concept}>
-                    <tr className="border-t border-[var(--border)]">
+                    <tr className="border-t border-[var(--border)]" data-testid={`grid-row-${row.concept}`}>
                       <th scope="row" className="sticky left-0 z-10 bg-[var(--bg-card)] px-3 py-1.5 text-left font-normal">
                         <div className="relative flex items-center gap-2">
                           <button type="button" ref={(el) => { if (el) headRefs.current.set(row.concept, el); }}
@@ -12380,19 +12536,20 @@ export function StatementsView({ ticker, asOf, isAdmin, highlight }: { ticker: s
                         </div>
                       </th>
                       {data.periods.map((p) => {
-                        const v = cellView(row.cells[p.key] ?? null, row, exp, data.filings);
+                        const v = cellView(row.cells[p.key] ?? null, row, exp, data.filings, data.otherUnitOnly[row.concept]?.includes(p.key) ?? false);
                         const isHl = !!highlight && v.kind === 'fact' && v.cell.filingId === highlight;
                         return (
                           <td key={p.key} className={`num whitespace-nowrap px-3 py-1.5 text-right ${isHl ? 'bg-[var(--accent-wash)]' : ''}`}>
                             {v.kind === 'missing' && <span className="text-[var(--text-muted)]" title={t('cellMissingTitle')}>—</span>}
+                            {v.kind === 'missing' && v.otherUnitOnly && <BadgeMark b={{ code: 'U' }} />}
                             {v.kind === 'withheld' && (
-                              <button type="button" onClick={() => openCell(row, p)} className="text-[var(--text-dim)]"
+                              <button type="button" onClick={() => openCell(row, p)} className="text-[var(--text-dim)]" data-testid={`cell-${row.concept}-${p.key}`}
                                 title={v.reason === 'citation_pending' ? t('cellPendingTitle') : t('cellIncompleteTitle')}>
                                 {v.reason === 'citation_pending' ? t('cellPending') : t('cellIncomplete')}
                               </button>
                             )}
                             {(v.kind === 'fact' || v.kind === 'derived') && (
-                              <button type="button" onClick={() => openCell(row, p)}
+                              <button type="button" onClick={() => openCell(row, p)} data-testid={`cell-${row.concept}-${p.key}`}
                                 aria-label={`${label(row.concept)} ${p.periodEnd} ${durLabel(p.duration)} ${v.text}`}
                                 className="underline decoration-dotted underline-offset-4 hover:text-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
                                 {v.text}
@@ -12494,11 +12651,11 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 **实施要点：**
 - **指标视图**：数据只来自 `GET /api/companies/[ticker]/metrics?asOf=`（本页从不直接调用规格二 `/metrics`）。行 = `metricNames(market)` 的全部指标（顺序照抄；响应里出现但不在列表中的指标按名字追加），列 = 期间键 `periodStart:periodEnd:duration` 按 `periodEnd` 降序、同 `periodEnd` 按键升序，裁到期数 8/20/40。比率（`unit='pure'`）显示百分比两位小数；货币按缩放；股数原值。置空格同报表（"— 待挂接" / "来源记录不完整"）；无条目的格显示"未产出"，title 固定为"缺输入、单位不一致、分母为 0、期间匹配不唯一或版本不一致（规格二 §8）"——不推断具体原因。顶部芯片：无 `asOf` → "读物化表 · basedOnRev {rev} · formula_version {v}"；有 `asOf` → "回放：实时派生 · formula_version {v}"。`stale=true` → 只显示"指标待重算：物化后事实可见性已变化，稍后自动重算。不显示旧值。"（不是"未产出"、不显示表）；`truncated` → 截断卡。行头与每格点击打开公式抽屉（`computedAt`、`computedAtKind` 来自条目/响应）。
-- **估值模型区**：在指标表下方，灰色分隔线"以下不是事实 · Below is a model, not facts"，标题"估值模型"+芯片"假设含模型/默认/用户估计；不是事实"，内容 `<DcfStudio ticker={ticker} />`（Task 14 已改为不挂载即运行、带股权桥面板）；回放模式下整块替换为"回放模式下不运行估值模型"。
+- **估值模型区**：在指标表下方，灰色分隔线"以下不是事实 · Below is a model, not facts"，标题"估值模型"+芯片"假设含模型/默认/用户估计；不是事实"，内容 `<DcfStudio ticker={ticker} onOpenFact={…} />`（Task 14 已改为不挂载即运行、带股权桥面板；`onOpenFact` 打开该事实的披露历史抽屉）；回放模式下整块替换为"回放模式下不运行估值模型"。e2e 钩子：估值区 `data-testid="valuation-section"`、指标行 `metric-row-<metric>`、文件行 `filing-row`。
 - **文件视图**：`GET /api/companies/[ticker]/filings?asOf=`（Task 11 的路由，已按 `available_date ≤ asOf` 与 `mapping_gen>0` 过滤）。分组"定期报告"表：可得日期 · 类型（CN：`annual` 年报 / `semiannual` 半年报 / `q1` 一季报 / `q3` 三季报 / `restatement` 更正 / 其他；US 原样 `10-K` 等）· 财期（`fiscalYear fiscalPeriod`）· `period_end` · 来源（`EDGAR` / `Tushare → 巨潮`）· 引用徽标（`edgar` → 链接 `url` "edgar · 索引页 ↗"；`linked` → 链接 `documentUrl` "linked · 巨潮 PDF ↗"；`pending` → 灰色"巨潮公告未挂接"，`linkAttempts ≥ 5` → 警示色"挂接失败，待人工（n 次）"）· 事实数 · 操作："在报表中高亮"（跳到 `?view=statements&highlight=<filingId>`，保留 `asOf`）、"原文 ↗"（只在有可链接 URL 时出现；`NEXT_PUBLIC_COMPANY_F3_DRAWER` 关或 F3 组件未接入 → `target="_blank" rel="noopener noreferrer"` 打开 `documentUrl ?? url`；开且已接入 → 打开 `<SourceDrawerAdapter filingId>`）。表后分组"纪要与其他"：只有"待文档管道（F3）。"。
 - **概览视图**（决策 J：无 K 线、无行情卡、无 PE/PB/ROE/股息率/市值卡）：左列"最新财期速览"卡（`overview.latest`：CN 用 `revenue_operating`、US 用 `revenue`，加 `net_income_parent`、`operating_cash_flow`、派生 `gross_margin`、`revenue_yoy`；每个值是打开抽屉的按钮；期间芯片 `periodStart → periodEnd · duration`；脚注"同一信封 · state_rev {rev}"；同比用中性色与 `+`/`-` 符号，不用涨跌色）+"最近事件"三条（`新文件` → "文件 →" 链接 `?view=filings`；`新财期`、`修订` → "报表 →" 链接 `?view=statements&asOf=<occurredOn>`；数值是打开抽屉的按钮；置空值显示"— 待挂接"/"来源记录不完整"；`payloadChangedAt` 非空加"已更新"标）+"全部 → 跟踪"链接 `?view=tracking`。右列"信号"卡：文案"今日无触发"（现有信号卡不变，不接新数据）。`latest.truncated` → 截断卡；`latest=null` → "尚无可速览的财期。"。
 - **判断视图**（§10.4）：`NEXT_PUBLIC_COMPANY_JUDGMENTS` 缺省关闭 → 空状态"判断层（F4）尚未上线 / 这里只渲染 F4 登记、可结算的判断卡。不显示 recommendations。"（决策 A：不列 `recommendations`）。开启时请求 `GET /api/judgments?subject_type=issuer&subject_key=<issuer_id>&view=latest`，回放时 `&view=as_known&asOf=<asOf>`；响应顶层 `view` 必须等于请求的 view，回放时 `asOf` 必须等于请求值，且回放时任一卡的 `registered_at` 或 `settlement.settled_at` 晚于 `asOf` 日终（`asOf + 'T23:59:59.999Z'`）→ 整个判断区不渲染，显示"回放读取失败：响应 view ≠ as_known 或 asOf 与请求不符，不渲染判断区。"（失败关闭）。百分比只在 `calibration === 'calibrated' && (lifecycle === 'open' || lifecycle === 'settled') && Number.isFinite(display.percent)` 时显示（客户端防御，本页从不自行计算百分比）；否则显示"不显示百分比（{calibration}）"与档位（`band`：低/中/高）。渲染用 F4 的 `src/components/judgments/JudgmentCard`——仓库当前不存在，所以经本地适配器 `judgment-card-adapter.tsx` 的最小渲染器；F4 落地后只改适配器。不定义也不显示星级（决策 K）。
-- **跟踪页签**：`CompanyTrackingSlot`（Task 11 建立，Task 17 替换函数体），本任务不改。
+- **跟踪页签**：`tracking/CompanyTrackingView.tsx`（Task 11 占位，Task 17 整文件覆盖），本任务不改。
 - **移动端**（§5.9）：芯片与页签横向滚动（Task 11 已做）、网格首列冻结横向滚动（Task 12）、抽屉全屏底部（Task 12）、迷你柱不渲染（Task 12）；本任务的表格（指标、文件、事件）同样放在 `overflow-x-auto` 容器中，指标表首列 `sticky left-0`。
 
 - [ ] **Step 1: `metrics-model.ts` 的失败测试**
@@ -12509,8 +12666,8 @@ import {describe,it,expect} from 'vitest';
 import {metricsGrid,metricText,basedOnRevOf} from './metrics-model';
 import type {MetricEntry,MetricsResponse} from '@/lib/company/client';
 
-const d=(metric:string,periodStart:string,periodEnd:string,duration:string,value:string,unit='pure'):MetricEntry=>({metric,periodStart,periodEnd,duration,basedOnRev:4182,computedAt:'2026-11-02T04:10:00Z',cell:{kind:'derived',metric,value,unit,inputUnit:'CNY',basis:'cn_standard',formulaVersion:'facts-derive/1.0',inputs:[]}});
-const resp=(metrics:MetricEntry[],o:Partial<MetricsResponse>={}):MetricsResponse=>({issuerId:'i',ticker:'600519.SH',market:'CN',asOf:null,formulaVersion:'facts-derive/1.0',computedAtKind:'materialized',stale:false,truncated:false,metrics,evidence:{},withheld:{evidenceIncomplete:0,citationPending:0},...o});
+const d=(metric:string,periodStart:string,periodEnd:string,duration:string,value:string,unit='pure'):MetricEntry=>({metric,periodStart,periodEnd,duration,basedOnRev:4182,computedAt:'2026-11-02T04:10:00Z',computedAtKind:'materialized',cell:{kind:'derived',metric,value,unit,inputUnit:'CNY',basis:'cn_standard',formulaVersion:'facts-derive/1.0',inputs:[]}});
+const resp=(metrics:MetricEntry[],o:Partial<MetricsResponse>={}):MetricsResponse=>({issuerId:'i',ticker:'600519.SH',market:'CN',asOf:null,mappingGen:1,formulaVersion:'facts-derive/1.0',stale:false,truncated:false,metrics,evidence:{},withheld:{evidenceIncomplete:0,citationPending:0},...o});
 
 describe('metricsGrid',()=>{
  it('rows follow the metric list (extras appended), columns are period keys newest first, clipped',()=>{
@@ -12573,7 +12730,7 @@ Run: `npm test -- src/components/company/metrics-model.test.ts` → PASS。
 // Metrics view + valuation-model area (plan 2026-11-06 Task 13; spec §5.4, §5.10; canvas Metrics).
 // Reads only the company metrics proxy; stale → "pending recomputation", never "not produced" or old values.
 import { useState } from 'react';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { Tag } from '@/components/ui';
 import { DcfStudio } from '@/components/DcfStudio';
 import { metricNames } from '@/lib/facts/derive';
@@ -12599,7 +12756,8 @@ export function MetricsView({ ticker, market, asOf }: { ticker: string; market: 
   const tr = useTranslations('company.replay');
   const drawers = useDrawers();
   const [periods, setPeriods] = useState<(typeof PERIODS)[number]>(8);
-  const [scale, setScale] = useState<ScaleId>(defaultScale(market === 'CN' ? 'CNY' : 'USD'));
+  const locale = useLocale() === 'en' ? 'en' : 'zh';
+  const [scale, setScale] = useState<ScaleId>(defaultScale(market === 'CN' ? 'CNY' : 'USD', locale));
   const { state, retry } = useCompanyFetch<MetricsResponse>(companyApi('metrics', ticker, { asOf }));
   const exp = SCALE_EXP[scale];
   const name = (m: string) => (tn.has(m) ? tn(m) : m);
@@ -12607,7 +12765,7 @@ export function MetricsView({ ticker, market, asOf }: { ticker: string; market: 
 
   function open(e: MetricEntry, c: MetricCol, r: MetricsResponse) {
     if (e.cell.kind === 'withheld') { drawers.open({ kind: 'withheld', reason: e.cell.reason, title: `${name(e.metric)} · ${c.periodEnd} ${dur(c.duration)}` }); return; }
-    drawers.open({ kind: 'formula', metric: e.metric, cell: e.cell, periodLabel: `${c.periodEnd} ${dur(c.duration)}`, computedAt: e.computedAt, computedAtKind: r.computedAtKind, basedOnRev: e.basedOnRev, scaleExp: exp });
+    drawers.open({ kind: 'formula', metric: e.metric, cell: e.cell, periodLabel: `${c.periodEnd} ${dur(c.duration)}`, computedAt: e.computedAt, computedAtKind: e.computedAtKind, basedOnRev: e.basedOnRev, scaleExp: exp });
   }
 
   return (
@@ -12647,7 +12805,7 @@ export function MetricsView({ ticker, market, asOf }: { ticker: string; market: 
                   {g.rows.map((row) => {
                     const firstEntry = g.cols.map((c) => row.cells[c.key]).find((e) => e && e.cell.kind === 'derived');
                     return (
-                      <tr key={row.metric} className="border-t border-[var(--border)]">
+                      <tr key={row.metric} className="border-t border-[var(--border)]" data-testid={`metric-row-${row.metric}`}>
                         <th scope="row" className="sticky left-0 z-10 bg-[var(--bg-card)] px-3 py-1.5 text-left font-normal">
                           {firstEntry ? (
                             <button type="button" className="text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
@@ -12684,9 +12842,9 @@ export function MetricsView({ ticker, market, asOf }: { ticker: string; market: 
       <div className="mt-6 flex items-center gap-3">
         <hr className="flex-1 border-[var(--border)]" /><span className="text-xs text-[var(--text-muted)]">{t('modelDivider')}</span><hr className="flex-1 border-[var(--border)]" />
       </div>
-      <section aria-label={t('modelTitle')} className="flex flex-col gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] p-4">
+      <section aria-label={t('modelTitle')} data-testid="valuation-section" className="flex flex-col gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] p-4">
         <div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">{t('modelTitle')}</h2><Tag>{t('modelChip')}</Tag></div>
-        {asOf ? <Callout>{tr('dcfHidden')}</Callout> : <DcfStudio ticker={ticker} />}
+        {asOf ? <Callout>{tr('dcfHidden')}</Callout> : <DcfStudio ticker={ticker} onOpenFact={(factId) => drawers.open({ kind: 'historyByFact', factId, scaleExp: exp })} />}
       </section>
     </div>
   );
@@ -12818,7 +12976,7 @@ export function FilingsView({ ticker, market, asOf }: { ticker: string; market: 
                     const badge = citationBadge(f);
                     const original = originalHref(f);
                     return (
-                      <tr key={f.filingId} className="border-t border-[var(--border)]">
+                      <tr key={f.filingId} className="border-t border-[var(--border)]" data-testid="filing-row">
                         <td className="num px-4 py-2">{f.availableDate}</td>
                         <td>{'text' in type ? <span className="num">{type.text}</span> : tt(type.key)}</td>
                         <td className="num">{fiscalLabel(f)}</td>
@@ -12867,7 +13025,7 @@ import {describe,it,expect} from 'vitest';
 import {quickItems,eventView} from './overview-model';
 import type {PublicEvent} from '@/lib/company/client';
 
-const ev=(o:Partial<PublicEvent>):PublicEvent=>({eventId:'e',kind:'filing_published',naturalKey:'k',occurredOn:'2025-11-06',periodEnd:null,concept:null,filingId:'g',payload:{},meta:{},...o});
+const ev=(o:Partial<PublicEvent>):PublicEvent=>({eventId:'e',issuerId:'i',market:'CN',kind:'filing_published',naturalKey:'k',occurredOn:'2025-11-06',periodEnd:null,concept:null,filingId:'g',payload:{},meta:{},firstSeenAt:null,payloadChangedAt:null,filing:null,...o});
 describe('overview model',()=>{
  it('quick card uses revenue_operating for CN and revenue for US, then the fixed four',()=>{
   expect(quickItems('CN').map(i=>i.key)).toEqual(['revenue_operating','net_income_parent','operating_cash_flow','gross_margin','revenue_yoy']);
@@ -12935,7 +13093,7 @@ export function eventView(e:PublicEvent,market:Market):EventView{
 // Overview view (plan 2026-11-06 Task 13; spec §5.8, §5.10, decision J; canvas Overview).
 // No K-line, no quote card, no PE/PB/ROE/dividend yield/market cap.
 import Link from 'next/link';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { Card, Tag } from '@/components/ui';
 import { companyApi, companyHref, isWithheld, type OverviewResponse } from '@/lib/company/client';
 import type { Cell, Market } from '@/lib/company/types';
@@ -12962,7 +13120,8 @@ export function OverviewView({ ticker, market, asOf }: { ticker: string; market:
   const tab = useTranslations('company.tabs');
   const drawers = useDrawers();
   const { state, retry } = useCompanyFetch<OverviewResponse>(companyApi('overview', ticker, { asOf }));
-  const exp = SCALE_EXP[defaultScale(market === 'CN' ? 'CNY' : 'USD')];
+  const locale = useLocale() === 'en' ? 'en' : 'zh';
+  const exp = SCALE_EXP[defaultScale(market === 'CN' ? 'CNY' : 'USD', locale)];
   const dur = (d: string) => (td.has(d) ? td(d) : d);
 
   const currency = market === 'CN' ? 'CNY' : 'USD';
@@ -13009,18 +13168,18 @@ export function OverviewView({ ticker, market, asOf }: { ticker: string; market:
               <Card aria-label={t('latestTitle')} className="flex flex-col gap-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="text-lg font-semibold">{t('latestTitle')}</h2>
-                  {latest && !latest.truncated && (() => { const p = periodKeyParts(latest.periodKey); return <Tag><span className="num">{p.periodStart} → {p.periodEnd} · {dur(p.duration)}</span></Tag>; })()}
+                  {latest && !latest.truncated && latest.periodKey && (() => { const p = periodKeyParts(latest.periodKey); return <Tag><span className="num">{p.periodStart} → {p.periodEnd} · {dur(p.duration)}</span></Tag>; })()}
                 </div>
                 {latest?.truncated && <TruncatedCard onRetry={retry} />}
                 {!latest && <Callout>{asOf ? ts('beforeFirst') : t('noLatest')}</Callout>}
-                {latest && !latest.truncated && (
+                {latest && !latest.truncated && latest.periodKey && (
                   <>
                     <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
                       {quickItems(market).map((it) => (
                         <div key={it.key} className="flex flex-col gap-0.5">
                           <span className="text-xs text-[var(--text-dim)]">{tl(it.key)}</span>
                           <span className="num text-[10px] text-[var(--text-muted)]">{it.key}{it.group === 'derived' ? ` · ${t('derived')}` : ''}</span>
-                          <QuickValue cell={(it.group === 'facts' ? latest.facts : latest.derived)[it.key]} k={it.key} periodKey={latest.periodKey} stateRev={latest.stateRev} />
+                          <QuickValue cell={(it.group === 'facts' ? latest.facts : latest.derived)[it.key]} k={it.key} periodKey={latest.periodKey ?? ''} stateRev={latest.stateRev} />
                         </div>
                       ))}
                     </div>
@@ -13452,16 +13611,16 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 ### Part D 指挥决定汇总（整合代理并入"自检记录"）
 
-1. 模块自有 `GET /api/companies/[ticker]/filings?asOf=`（Task 11）：规格二 `/api/filings` 缺 `fiscalPeriod/linkAttempts/factCount` 且只读。
-2. 显示格式化自带十进制移位（`format.ts`），不依赖 Task 7 `formatDecimalText` 的除数参数形状；修订差值仍用 Task 7 `decimalSub/decimalRelChange`。
-3. 缺省缩放按币种（CNY → 亿、USD → 百万、其他原值），覆盖规格的两种组合。
+1. 模块自有 `GET /api/companies/[ticker]/filings?asOf=`（整合后由 **Task 10** 建公共 + admin 两路由）：规格二 `/api/filings` 缺 `fiscalPeriod/linkAttempts/factCount` 且只读。
+2. （整合改）显示格式化复用 Task 7 `formatDecimalText`/`groupThousands`/`scaleFor`，`format.ts` 只是适配层（指数式缩放 id、百分比显示、非法文本原样）；修订差值用 Task 5 `decimalSub/decimalRelChange`。
+3. （整合改）缺省缩放 = Task 7 `scaleFor(币种, 界面语言)`：CNY+zh → 亿、其余货币 → 百万、无币种 → 原值。
 4. 抽屉宿主固定走公共路由（`admin=false`）；管理员未脱敏视图只作用于报表网格。
-5. 页面服务端并行调用 `resolveIssuer` 与 `resolvePublicIssuer`（前者给页头身份、后者给市场），再一次 `coverageOf`；未知 ticker 由客户端按 `/api/quote` 区分"未找到"与"有行情无发行人"。
+5. 页面服务端并行调用 `resolveIssuer` 与 `resolvePublicIssuer`（前者给页头身份、后者给市场），再一次 `coverageOf`；（整合改）无发行人且 `stocks_universe` 无该票据 → 服务端 `notFound()`（HTTP 404，Task 19 e2e #10）；有证券无发行人 → 客户端按 `/api/quote` 显示"有行情无发行人"。
 6. F3/F4 组件缺席时用本地适配器（`f3-source-drawer.tsx`、`judgment-card-adapter.tsx`），F3 开关打开但适配器不可用时仍新窗口打开原文。
 7. 判断回放失败关闭：除 `view/asOf` 回显外，任一卡 `registered_at` 或 `settled_at` 晚于 `asOf` 日终也拒绝渲染。判断夹具按 F4 §9.2 手写，F4 上线后替换为录制响应。
-8. 跟踪页签经 `tracking-slot.tsx` 接入，Task 17 只替换该文件函数体。
+8. （整合改）跟踪页签与页头按钮经 `tracking/CompanyTrackingView.tsx`、`tracking/TrackButton.tsx` 接入，Task 11 建可用占位，Task 17 整文件覆盖。
 9. 跟踪按钮在 Task 16 路由未部署（404）时禁用并显示"跟踪暂不可用"。
-10. 抽屉"其他单位"列表依赖 `facts` 路由允许省略 `unit`（需 Task 9 确认）；"同一期间只有其他单位"的格（规格 §5.3 "—"+`U`）需要 Task 7 用 `FactCell` 以外的形状表示，当前 `Cell` 契约无法表达 → 列入整合核对项。
+10. （整合已解决）抽屉"其他单位"列表用 Task 9 `facts` 响应的 `otherUnitSeries`（`unit` 仍必填）；"同一期间只有其他单位"的格由 Task 7 `GridResult.otherUnitOnly` 经 Task 9 `StatementsDto.otherUnitOnly` 传到页面，`cellView(…, otherUnitOnly)` 渲染"—"+`U`，共享契约 `Cell` 不变。
 
 
 <!-- PART E (Tasks 16–19) -->
@@ -13478,8 +13637,8 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 | Task 3 `src/lib/company/types.ts` | `EventKind`、`EVENT_KINDS`、`EventRow`、`WatchRow`、`CoverageRow`、`CompanyDb`、`CompanyDbError`（码 `watch_limit`、`invalid_read`）、`Market` | 原样 import |
 | Task 3 `src/lib/company/db.ts` | `supabaseCompanyDb(client: SupabaseClient): CompanyDb`（会话客户端 → RLS；admin 客户端 → service_role） | 会话库与服务库各一个实例 |
 | Task 3 `CompanyDb` 语义（Part E 依赖的细节） | `eventsOfIssuers(issuers ≤200, {kinds?, cursor?, limit ≤200})`：`retired_at is null`，按 `(first_seen_at desc, event_id desc)` keyset，返回行数 ≤ `limit`，`nextCursor` 为不透明串、与发行人集合无关地表示"最后一行之后"，耗尽时 `null`；`readEventIds(userId, ids ≤100)`；`markRead(userId, issuerId, ids ≤500)` 为**单条** `insert … on conflict do nothing`（触发器拒绝时整条失败 → `CompanyDbError('invalid_read')`，外键缺 watch 时同码）；`upsertWatch` → `{row, created}`，超限 → `CompanyDbError('watch_limit')`；`patchWatch` 无行 → `null`；`deleteWatch` 无行 → `false`；`listCoverage(filter:{market?, issuerIds?}, sort, {offset, limit})` 支持 `sort='name'`（实现内按 `issuers` 名称排序）、`total` 为过滤后总数 | 收件箱、未读计数、目录 |
-| Task 8 `src/lib/company/deps.ts` | `productionEventGateDeps(): EventGateDeps`（service_role 证据读 + anon 事实/文件读） | 收件箱 payload 门槛 |
-| Task 10 `src/lib/company/event-dto.ts` | `interface PublicEvent{eventId:string;issuerId:string;market:Market;kind:EventKind;naturalKey:string;occurredOn:string;periodEnd:string\|null;concept:string\|null;filingId:string\|null;payload:Record<string,unknown>;meta:Record<string,unknown>;firstSeenAt:string\|null;payloadChangedAt:string\|null;filing:{formType:string;url:string\|null;documentUrl:string\|null;citation:'edgar'\|'linked'\|'pending'}\|null}`；`gateEventRows(rows:EventRow[], deps:EventGateDeps, opts:{admin:boolean}): Promise<{events:PublicEvent[];evidence:Record<string,EvidenceDto>}>`（顺序保持；payload 里不合格的 `value`/`relChange` 替换为 `{kind:'withheld',reason}`）；`/api/companies/[ticker]/events` 响应 `{rows:PublicEvent[], nextCursor:string\|null, evidence, computed?:'live', truncated?:boolean}` | 收件箱与公司页跟踪视图共用同一门槛函数（§6.2） |
+| Task 9 `src/lib/company/deps.ts`（整合核对：Task 9 追加，不是 Task 8） | `type EventGateDeps=Pick<ReadDeps,'company'\|'facts'\|'pdf'>`；`productionEventGateDeps(): EventGateDeps`（= `productionReadDeps()`：service_role 证据读 + anon 事实/文件读 + PDF 定位源） | 收件箱 payload 门槛 |
+| Task 10 `src/lib/company/event-dto.ts`（整合核对后的实际导出） | `interface PublicEvent{eventId:string;issuerId:string;market:Market;kind:EventKind;naturalKey:string;occurredOn:string;periodEnd:string\|null;concept:string\|null;filingId:string\|null;payload:Record<string,unknown>;meta:Record<string,unknown>;firstSeenAt:string\|null;payloadChangedAt:string\|null;filing:{formType:string;url:string\|null;documentUrl:string\|null;citation:'edgar'\|'linked'\|'pending'}\|null}`；`gateEventRows(rows:EventRow[], deps:EventGateDeps, opts:{admin:boolean}): Promise<{events:PublicEvent[];evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}>`（顺序保持；按 (issuer, market) 分组各读一次证据；payload 用 Task 6 `gateEventPayload`：不合格的 headline/`from`/`to` 的 `value` → `{kind:'withheld',reason,factId}`，`relChange` → `{kind:'withheld',reason}`）；`/api/companies/[ticker]/events` 响应 `EventsDto = {issuerId, ticker, market, asOf:string\|null, computed:'materialized'\|'live', stateRev:number\|null, rows:PublicEvent[], nextCursor:string\|null, evidence, withheld}`；回放截断 → 400 `replay_truncated`（不是 200 + `truncated`） | 收件箱与公司页跟踪视图共用同一门槛函数（§6.2） |
 | Task 10 | `GET /api/companies/freshness` → `{datasets:[{dataset,status,lastOkAt,lastAttemptAt}]}` | 目录页新鲜度条 |
 | Task 11 | `messages/{zh,en}/tracking.json`、`company.json` 已存在并已注册到 `MESSAGE_DOMAINS` 与对等测试；`CompanyPage` 在 `view==='tracking'` 时渲染 `src/components/company/tracking/CompanyTrackingView.tsx` 的 `export function CompanyTrackingView(props:{issuerId:string;ticker:string;market:Market;asOf:string\|null})`（Task 11 放占位实现，Task 17 覆盖）；页头"跟踪"按钮位置渲染 `src/components/company/tracking/TrackButton.tsx` 的 `TrackButton({issuerId})`（Task 11 放占位，Task 17 覆盖） | 公司页集成点 |
 | Task 11–13 测试钩子（e2e 用） | `data-testid`：`company-header`、`security-chip`、`data-status`、`grid-row-<concept>`、`cell-<concept>-<periodKey>`（按钮）、`replay-bar`、`valuation-section`、`metric-row-<metric>`、`filing-row`、`quote-row`（决策 J 默认下不渲染）；抽屉 `role="dialog"` 内 `drawer-available-date`、`drawer-transform-chain`、`drawer-code-version`；页签 `role="tab"`；`company` 域含 `concepts.<conceptId>` 标签（缺失时 Part E 显示概念 id）；HK 空状态文案含"港股披露事实待文档管道"；未知 ticker 服务端 `notFound()`（HTTP 404） | Task 19 e2e、Task 17 概念名 |
@@ -13487,7 +13646,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 | Task 8 | `scripts/company/digest.ts --full [--issuer <ticker>] [--market US\|CN] [--apply]` | e2e 种子与 runbook |
 | 规格二（已落地，只读） | `resolveIssuer`、`isCurrentSecurity`（`src/lib/entities/resolve.ts`）；`TICKER_RE`、`UUID_RE`、`readParams`、`intParam`、`listParam`、`flagParam`、`QueryError`、`publicMarketOf`、`successHeaders`、`errorResponse`、`paramErrorResponse`、`failureResponse`、`utcDate`（`src/lib/facts/public-route.ts`）；`FACT_CONCEPTS`（`concepts.ts`）；`runFactsSync`、`productionSyncDeps`、`materialize`、`snapshotOf`、`companyFactsUrl`、`parseCompanyFacts` | 路由、目录、e2e 种子 |
 
-Part E 自有的新导出（供整合核对）：`src/lib/company/inbox.ts`（`MAX_COMPANY_WATCHES`、`INBOX_DEFAULT_LIMIT`、`INBOX_MAX_LIMIT`、`READ_BATCH_MAX`、`UNREAD_CAP`、`assembleInbox`、`unreadCounts`、`readSet`、`inboxIssuerIds`、`inboxFingerprint`、`encodeInboxCursor`、`decodeInboxCursor`、`foldSameIssuerDay`、`firstSeenSection`、`readBatches`、`isUpdated`、`formatUnread`）。若 Task 3 已导出 `MAX_COMPANY_WATCHES`，删掉 `inbox.ts` 中的定义改为 re-export。
+Part E 自有的新导出（供整合核对）：`src/lib/company/inbox.ts`（`INBOX_DEFAULT_LIMIT`、`INBOX_MAX_LIMIT`、`READ_BATCH_MAX`、`UNREAD_CAP`、`assembleInbox`、`unreadCounts`、`readSet`、`inboxIssuerIds`、`inboxFingerprint`、`encodeInboxCursor`、`decodeInboxCursor`、`foldSameIssuerDay`、`firstSeenSection`、`readBatches`、`isUpdated`、`formatUnread`）。`MAX_COMPANY_WATCHES` 只在 Task 3 `db.ts` 定义（整合决定：`inbox.ts` 是浏览器安全模块，不 re-export 服务端模块的常量；服务端路由直接从 `db.ts` import）。
 
 ---
 
@@ -13706,8 +13865,7 @@ Expected: FAIL（`Cannot find module './inbox'` 或导入的符号不存在）�
 import type {EventKind,EventRow,WatchRow} from './types';
 import {EVENT_KINDS} from './types';
 
-/** Decision F (assumed value); the SQL trigger company_watches_limit is the authority. */
-export const MAX_COMPANY_WATCHES=200;
+// MAX_COMPANY_WATCHES (decision F) is defined once in db.ts (Task 3, server-only); this browser-safe module does not re-export it.
 export const INBOX_DEFAULT_LIMIT=50;
 export const INBOX_MAX_LIMIT=200;
 /** POST /api/tracking/watches/[issuerId]/read accepts at most this many ids. */
@@ -14283,9 +14441,8 @@ import {getAdminSupabase} from '../supabase/admin';
 import {supabaseTableClient,type TableClient} from '../db/table-client';
 import {resolveIssuer} from '../entities/resolve';
 import {TICKER_RE,UUID_RE,utcDate} from '../facts/public-route';
-import {supabaseCompanyDb} from './db';
+import {MAX_COMPANY_WATCHES,supabaseCompanyDb} from './db';
 import {CompanyDbError,type CompanyDb,type WatchRow} from './types';
-import {MAX_COMPANY_WATCHES} from './inbox';
 
 export const PRIVATE_NO_STORE={'Cache-Control':'private, no-store'} as const;
 export const EVENT_ID_RE=/^[0-9a-f]{64}$/;
@@ -14368,7 +14525,8 @@ export async function resolveWatchTarget(tables:TableClient,body:Record<string,u
 // POST: {issuerId} | {ticker} → insert … on conflict do nothing; trigger limit → 409 watch_limit.
 import {getAnonSupabase} from '@/lib/supabase/anon';
 import {supabaseCompanyDb} from '@/lib/company/db';
-import {unreadCounts,MAX_COMPANY_WATCHES} from '@/lib/company/inbox';
+import {MAX_COMPANY_WATCHES} from '@/lib/company/db';
+import {unreadCounts} from '@/lib/company/inbox';
 import {loadIssuerLites,toWatchCards,type SelectInClient} from '@/lib/company/tracking-issuers';
 import {jsonObject,mutationGuard,resolveWatchTarget,serviceCompanyDb,trackingError,trackingFailure,trackingJson,trackingSession,unauthenticated,watchDto} from '@/lib/company/tracking-route';
 import {utcDate} from '@/lib/facts/public-route';
@@ -14797,7 +14955,7 @@ export function eventSummary(e:Pick<PublicEvent,'kind'|'payload'>):EventSummary{
 // Browser helpers for the tracking API (spec §6.2). Mutations send Content-Type application/json (the routes'
 // CSRF guard); every call is cache: 'no-store'; a non-2xx answer throws TrackingApiError(code, status).
 import {readBatches} from './inbox';
-import type {EventKind,EvidenceDto} from './types';
+import type {EventKind,EvidenceDto,WithheldCounts} from './types';
 import type {PublicEvent} from './event-dto';
 import type {WatchCard} from './tracking-issuers';
 import type {ImportResult} from './tracking-import';
@@ -14807,7 +14965,8 @@ export interface InboxRowDto extends PublicEvent{read:boolean}
 export interface InboxResponse{rows:InboxRowDto[];nextCursor:string|null;evidence:Record<string,EvidenceDto>}
 export interface WatchesResponse{count:number;limit:number;unreadComplete:boolean;watches:WatchCard[]}
 export interface WatchDto{issuerId:string;note:string|null;muted:boolean;createdAt:string;updatedAt:string}
-export interface EventsResponse{rows:PublicEvent[];nextCursor:string|null;evidence:Record<string,EvidenceDto>;computed?:'live';truncated?:boolean}
+/** Task 10 EventsDto (handlers/events.ts), the fields this client reads; replay truncation is a 400 replay_truncated, not a flag. */
+export interface EventsResponse{rows:PublicEvent[];nextCursor:string|null;evidence:Record<string,EvidenceDto>;computed:'materialized'|'live';withheld:WithheldCounts}
 
 export class TrackingApiError extends Error{
  constructor(public readonly code:string,public readonly status:number){super(code);this.name='TrackingApiError';}
@@ -15932,7 +16091,7 @@ export async function GET(request:Request){
 }
 ```
 
-注意：`q` 先 `trim()` 再校验，`?q=` 的空串经 trim 后不匹配 `{1,24}` → 400，符合"参数非法 → 400"。`issuerIds` 最多约 2000 个（两路各 1000），由 Task 3 的 `listCoverage` 分块；若其实现不分块，在实施日志登记为跨任务缺口，不在本路由截断。
+注意：`q` 先 `trim()` 再校验，`?q=` 的空串经 trim 后不匹配 `{1,24}` → 400，符合"参数非法 → 400"。`issuerIds` 最多约 2000 个（两路各 1000）：整合核对——Task 3 的 `listCoverage` 在三个实现里都调用 Task 2 的 `company_list_coverage(p_market, p_issuer_ids uuid[], p_sort, p_offset, p_limit)`（rpc 走 POST 体，不受 URL 长度限制；`sort='name'` 在 SQL 内联 `issuers` 排序后分页，`total` 为过滤后总数），本路由不截断。
 
 - [ ] **Step 4: 运行通过**
 
@@ -16250,6 +16409,7 @@ git commit -m "feat(company): coverage directory API and page, intel entry card"
 - Create: `src/lib/company/fixtures/manifest.ts`
 - Create: `src/lib/company/fixtures/manifest.test.ts`
 - Modify（补全）: `src/lib/company/fixtures/manifest.json`
+- Delete: `src/lib/company/fixture-manifest.ts`、`src/lib/company/fixture-manifest.test.ts`（整合决定：Task 5 的旧 schema 读取器；Step 3 把 `manifest.json` 迁到本任务的 schema（`status: pending|ready`、`query`、`source.transcribed_*`）后由 `fixtures/manifest.ts` 取代——同一份清单只留一个读取器；旧模块除自身测试外无引用）
 - Create: `e2e/company.spec.ts`
 - Create: `docs/runbooks/company-research.md`
 - Create: `docs/audits/2026-11-04-company-research/regression-sample.md`
@@ -16349,7 +16509,12 @@ export function readyExpectation(id:string,root?:string):ManifestExpectation|nul
 
 - [ ] **Step 3: 补全 `manifest.json`**
 
-先读 Task 5 的骨架：`cat src/lib/company/fixtures/manifest.json`。把它整体替换为下列内容；Task 5 已有而下面没有的条目，按同一 schema 改写后追加到对应数组（`status` 一律 `pending`，除非该条已有人工抄录记录）。`sha256` 先写 `"pending"`，Step 4 由脚本填入。
+先读 Task 5 的骨架：`cat src/lib/company/fixtures/manifest.json`。先删除 Task 5 的旧读取器（它按旧 schema 断言，迁移后会失败）：
+
+Run: `git rm src/lib/company/fixture-manifest.ts src/lib/company/fixture-manifest.test.ts`
+Expected: 两个文件被删除并暂存；`grep -rn "fixture-manifest" src scripts e2e` 无输出。
+
+然后把 `manifest.json` 整体替换为下列内容；Task 5 已有而下面没有的条目，按同一 schema 改写后追加到对应数组（`status` 一律 `pending`，除非该条已有人工抄录记录）。`sha256` 先写 `"pending"`，Step 4 由脚本填入。
 
 ```json
 {
@@ -16809,7 +16974,7 @@ npx playwright test e2e/company.spec.ts --reporter=list,html
 
 ## 7. 跟踪运维
 
-- 上限 200（决策 F）由触发器强制；改上限需要新迁移，并同步 `src/lib/company/inbox.ts::MAX_COMPANY_WATCHES`。
+- 上限 200（决策 F）由触发器强制；改上限需要新迁移，并同步 `src/lib/company/db.ts::MAX_COMPANY_WATCHES`（唯一定义）。
 - 未读计数是扫描式（每页 200、最多 25 页，每个发行人数到 100 即 `99+`）；扫描未完时显示 `n+`，响应带 `unreadComplete:false`。若用户普遍出现 `n+`，在规格 §16 登记并考虑新增计数函数（新迁移）。
 - 收件箱只读未静音的 watch；公司页跟踪视图含静音发行人。回放模式不读物化表、不记已读。
 - 取消跟踪即级联删除回执；重新跟踪后旧事件重新计为未读（预期行为）。
@@ -17029,4 +17194,103 @@ git commit -m "test(company): e2e suite, fixture manifest, runbook and spec devi
 
 ## 自检记录（写计划时完成）
 
-（整合代理填写）
+整合编辑（2026-11-06）按推荐执行顺序 1→2→3→4→5→6→7→8→9→10→14→15→11→12→13→16→17→18→19 逐一核对了每个"一方定义、另一方消费"的名字、签名、路由 DTO 与文件。原则：改消费方去对齐定义方；只有定义方与规格冲突或缺规格要求的能力时才改定义方（下表"改定义方"栏标注）。代码未在本机编译运行——计划内代码块的类型一致性靠逐处人工对照，实施时以 `npm run typecheck` 为准。
+
+### 1. 接口对账表
+
+| 符号 / DTO / 文件 | 定义任务 | 消费任务 | 整合改动 |
+|---|---|---|---|
+| `canonical.ts`（`canonicalJson`/`eventIdOf`/`payloadHashOf`/`sha256Utf8`/`compareCodePoints`）+ `canonical.test.ts` | 2 | 3（db-contract、memory）、10（events/overview `eventIdOf`） | 骨架文件表与任务总表改为 Task 2 创建；Task 3 不再列它 |
+| `decimal.ts` | 5（`decimalSub`/`decimalRelChange`），7（`formatDecimalText(valueText, divisor: bigint, digits)`/`groupThousands`/`divisorOf`/`scaleFor`/`DisplayScale`） | 9、10、12、13、14 | Part C 依赖表改为 `divisor: bigint`；`dcf-seed.ts` 用 `BigInt(divisor)`；Part D `format.ts` 改为 Task 7 的适配层（`roundDecimal`/`groupNumber`/`formatScaled` 内部调用 Task 7），`defaultScale(currency, locale)` = `scaleFor`，三个视图加 `useLocale()` |
+| `relChange` 输出形状 | 5（10 位后去尾零，`'0.1'`） | 2（SQL 格式校验）、9（facts 路由测试）、10（event-dto 测试） | SQL 正则 `^-?[0-9]+(\.[0-9]+)?$` 本就接受去尾零形；骨架 schema 说明与 Task 2 决定改为"Task 5、去尾零"；测试期望 `'0.1000000000'` → `'0.1'` |
+| `SnapshotReader`（同快照读函数型）/`snapshotReader`/`memorySnapshotReader(facts)` | 3 `snapshot-read.ts` | 3 db.test、8 digest（`readSnapshot` 依赖） | Part B 的 Storage 对象读取器与之重名：Task 6/8 全部改名 `SnapshotObjectStore`、`memorySnapshotObjectStore`、`supabaseSnapshotObjectStore`；`DigestDeps.reader` 字段名不变 |
+| `memoryReadSnapshot` / `pgReadSnapshot`（Part B 假设，不存在） | — | 8 digest.test、8 集成用例 | 改用 Task 3 `memorySnapshotReader(facts)` 与 `snapshotReader(pgRpcClient(pool,'service_role'))`；删去"Modify pg-company-db.ts"与其 `git add` |
+| `memoryCompanyDb` | 3 `({facts})` + `registerBatch`/`registerIssuer`/`setNow` | 8 digest.test | 测试夹具改为 `memoryCompanyDb({facts})`，并把 `replaceDigest` 包一层先 `registerBatch(batch)`（`startBatch` 开的批次恒为 `company-digest`/`running`）；Part B 假设表同步 |
+| `deriveIssuerEvents` | 5 `({rows, filings, cutoff})` | 8、10 events/overview 处理器与测试 | Part C 的 `({issuerId,market,rows,filings},{cutoff})` 调用与 mock 断言全部改为实际签名 |
+| `filingPublishedOf`/`factRevisedOf` ↔ `company_ev_check` ↔ `deriveIssuerEvents` | 3/2/5 | — | 逐键核对一致（8 个顶层键、`filing_published` natural_key=filing_id、concept=null、payload=filings 行含 `factCount`；`fact_revised` 的 filing_id/concept 取自 `to`、INSTANT start=end、按日折叠、键末段 `to.availableDate`）；无代码改动，骨架补写规则 |
+| `gateFacts` / `GateFiling` / `verdicts`（Part C 假设） | 6：纯 `applyGate(GateInput)→GateResult{evidence,eligibility,withheld}`；异步 `gateFacts(deps,input)` | 9 `buildGated`、10、14 `dcf-seed`/`/api/dcf` | Part C 改调纯 `applyGate`（证据读与 CN `pdf.locate` 由调用方做）；`GateFiling` → `FilingSummary`（`gateFilingOf = filingSummaryOf(row, 0)`，因 US 需要 `filing.url` 才合格）；`Gated` 增 `eligibility`、`filings`；测试替身 `fakeGateFacts` → `fakeApplyGate`，`vi.mock` 改为保留其余真实导出的部分 mock |
+| `PdfLocatorSource.locate` | 6 `(issuerId, market, factIds)` | 9、10、14、route-test-kit | 全部调用点与 mock 改签名，且只对 CN 调用 |
+| `ReadDeps`/`productionReadDeps`/`EventGateDeps`/`productionEventGateDeps` | 9（整合决定：从 Task 8 移来） | 9、10、14、15、16 | Task 8 `deps.ts` 只留 `productionDigestDeps`；Task 9 Step 1 改为"追加"，新增 `type EventGateDeps = Pick<ReadDeps,'company'|'facts'|'pdf'>` 与 `productionEventGateDeps()`；Part B/C/E 假设表同步 |
+| `buildStatementsGrid` / `gridReadConcepts` / `periodKeyOf` / `factCellOf` / `derivedCellOf` | 7 | 9 statements、10 overview/metrics、15 packet | statements 处理器改为 `buildStatementsGrid(snapshot, opts) → GridOutcome`（读 `gridReadConcepts`）；packet 同；`periodKeyOf` 全部改对象参数；**改定义方**：Task 7 导出 `factCellOf(r, otherUnits=false)`、`derivedCellOf`（原为模块内私有） |
+| "只有其他单位"的格 | 7 `GridResult.otherUnitOnly` | 9 `StatementsDto`、11 `client.ts`、12 `statements-model`/`StatementsView` | `StatementsDto`/`StatementsResponse` 增 `otherUnitOnly`；`cellView(…, otherUnitOnly)` 返回 `{kind:'missing',otherUnitOnly:true}`，网格渲染"—"+`U`；共享契约 `Cell` 不变（两处 `types.ts` 注释同步，仍逐字相同） |
+| 抽屉序列 `FactSeriesDto`/`SeriesEntry` | 9 | 11 `client.ts`、12 `drawer-model`/`DisclosureDrawer` | 客户端类型改为服务端的 `kind` 联合；**改定义方**：facts 处理器增 `otherUnitSeries`（规格 §5.3 要求抽屉列出主单位以外的事实，原 DTO 只有单位名）；抽屉不再发"去掉 unit"的第二个请求（服务端 `unit` 必填） |
+| `event-dto.ts`（`PublicEvent`、`gateEventRows`） | 10 | 10 events/overview、11/13 `client.ts`、16 收件箱、17 跟踪视图 | 重写：`PublicEvent` 取 Part E 形状（含 `issuerId`/`market`/`filing`）；`gateEvents`/`gateEventRows`/`toPublicEvent` 按 (issuer, market) 分组走 Task 6 `applyGate` + `gateEventPayload`（payload 门槛唯一实现；`relChange` 置为 `{kind:'withheld',reason}`）；events/overview 处理器改用它；`client.ts` 改为 `import type` 再导出 |
+| `eventsOfIssuer` 排序 | 3 `(occurred_on desc, event_id asc)` | 10 现算模式 | 现算 keyset 改为同序（Part C 原写 `event_id desc`） |
+| `eventsOfIssuers` 排序/游标 | 3 `(first_seen_at desc, event_id desc)`，游标与发行人集合无关 | 16 | 一致，无改动 |
+| 指标代理 DTO | 10 `MetricsDto`（`computedAtKind` 在行上） | 11 `client.ts`、13 `MetricsView` | 客户端类型与测试夹具改为行级 `computedAtKind`、补 `mappingGen` |
+| overview DTO | 10 `OverviewDto` | 11 `client.ts`、13 `OverviewView` | 客户端补 `ticker`/`eventsComputed`/`withheld`，`latest.periodKey` 可空并加守卫 |
+| `GET /api/companies/[ticker]/filings` | 10（整合决定：从 Task 11 移入，公共 + admin 两路由，`handlers/filings.ts`，带测试） | 11 页头回放"最近文件"、13 文件视图 | Task 11 删除路由步骤与 `git add`；`companyApi('filings', …, admin)` 走 admin 前缀 |
+| `DcfStudio` props | 14 `({ticker, asOf?, onOpenFact?})` | 13 估值模型区 | 传 `onOpenFact` 打开 `historyByFact` 抽屉 |
+| 跟踪集成点 | 11 占位：`src/components/company/tracking/TrackButton.tsx`（`TrackButton({issuerId})`）、`tracking/CompanyTrackingView.tsx`（`({issuerId,ticker,market,asOf})`） | 17 整文件覆盖 | 取 Part E 的路径与名字；删除 `tracking-slot.tsx`/`CompanyTrackingSlot`；HK/无市场时跟踪页签显示事实状态卡 |
+| 跟踪路由 DTO | 16 | 11 占位按钮、17 | 占位按钮只读 `watches[].issuerId`，POST/DELETE 带 JSON Content-Type（CSRF 守卫）；Part D 依赖表按实际响应改写；`tracking-client.ts::EventsResponse` 改为 `EventsDto` 的字段（`computed`、`withheld`；截断是 400） |
+| `MAX_COMPANY_WATCHES` | 3 `db.ts`（唯一定义） | 16 | 从浏览器安全的 `inbox.ts` 删除；`tracking-route.ts`、`watches` 路由改从 `db.ts` import；runbook 同步 |
+| `listCoverage` `sort='name'` | 2 `company_list_coverage` / 3 | 18 | 无代码改动；Task 18 注释改为"rpc POST 体，不受 URL 长度限制" |
+| 夹具清单读取器 | 5 `fixture-manifest.ts` ↔ 19 `fixtures/manifest.ts`（两套 schema） | 19 | Task 19 迁移 schema 后 `git rm` Task 5 旧读取器与测试（Files 列 Delete） |
+| e2e `data-testid` | 11–13、17、18 | 19 | 补齐：`company-header`、`security-chip`、`data-status`、`replay-bar`、`track-button`、`grid-row-<concept>`、`cell-<concept>-<periodKey>`、`drawer-available-date`、`drawer-transform-chain`（列头，唯一）、`drawer-code-version`、`metric-row-<metric>`、`valuation-section`、`filing-row`（`watch-item`/`unread-count`/`inbox-list`/`directory-*` 原已存在） |
+| 未知 ticker | 11 `page.tsx` | 19 e2e #10（HTTP 404） | 无发行人且 `stocks_universe` 无该票据 → `notFound()`；有证券无发行人仍走客户端行情判定 |
+| HK（§0 #69） | 9/10 `companyRoute` 404 `market_not_served` | 11 页面 | 页头照常显示身份，事实视图 `hk_pending` 空状态，页面对 HK 不调组合路由；写入 Task 11 要点 |
+| 提交步骤 | 全部 19 个 | — | 逐个核对：每个 `git commit` 独立成块、块内无 `-n` 记号与绕过钩子的参数、末行 `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`；修正 Task 8、11 的 `git add` 列表；Task 14 Files 补 `dcf-seed.test-rows.ts` |
+| 迁移锁定 | 2 | 3–19 | 核对：Task 3 之后没有任何任务改 SQL；后续需要的 SQL（`company_list_coverage`、证据表的 `issuer_id/market` 列、三个触发器、内部助手）都在 Task 1–2，骨架 SQL 表已补全 |
+
+### 2. 规格覆盖
+
+| 规格条目 | 任务 / 步骤 |
+|---|---|
+| §0.1 item 1 指标目录 | 7 `metric-catalog.ts`（`METRIC_CATALOG_VERSION` = `FORMULA_VERSION` 测试） |
+| §0.1 item 2 / #62 证据 DTO | 1 表 `company_fact_evidence`、2 `replace_company_fact_evidence`/`company_fact_evidence`、6 `evidence-index.ts` + `toEvidenceDto`、8 digest 先写证据 |
+| §0.1 item 2' CN 逐值 PDF | 6 `pdf-locator.ts`（缺省空 → CN 公共 withheld）；接口请求 6 |
+| §0.1 item 2'' 稳定下载 | 10 `/api/companies/snapshot?fact=`（非 EDGAR 403 `not_redistributable`）+ admin 变体（先审计） |
+| §0.1 item 3 同快照 filings | 2 `company_read_snapshot`、3 `snapshot-read.ts`、9/10 全部处理器 |
+| §0.1 item 4 anon FactsDb 子集 | 9 `ReadDeps.facts` |
+| §0.1 item 5 state_rev / 行锁 | 2 函数 + 并发集成测试 (a)–(f) |
+| §0.1 item 6 `deadline_hit` | 8 digest 要求 4 |
+| §0.1 item 7 `financial_history` | 15 Step 7（保留，不读不删） |
+| #63 `evidenceEligible`（含 admin 豁免 CN） | 6；9 `buildGated`；全部组合路由 |
+| #64 事件存储不公开 | 1 授权；10 event-dto（service_role 读）；16 收件箱 |
+| #65 CN 净债务 | 14 `dcf-seed.ts` |
+| #66 单季口径 | 7 `statements-grid.ts`、`metric-catalog.ts` |
+| #67 指标代理守卫 | 10 `handlers/metrics.ts` |
+| #68 抽屉序列 | 9 `handlers/facts.ts`；12 抽屉 |
+| #69 票据与市场 | 9 `companyRoute`（`resolvePublicIssuer`、HK 404）；11 页面；16 跟踪用 `resolveIssuer` |
+| #70 失败幂等 | 2 `mark_company_digest_failed`；8 digest.test |
+| #71 迁移时间戳 | 1、2 |
+| #72 黄金集 | 5 清单骨架（全 pending）；19 清单补全、`events-gold.md`、e2e 只在 `ready` 时断言数值 |
+| §0.3 公共/admin 分离、F3/F4 开关、共享文件 `// COMPANY` 块 | 9/10/15 admin 变体；13 开关；1、8、11 |
+| §1.1 成功标准 1（AAPL 回放） | 9 路由测试；19 e2e #3（数值待抄录） |
+| §1.1 成功标准 2（600519 文件视图 citation） | 10 filings 路由；13 文件视图徽标 |
+| §1.1 成功标准 3（HK） | 9/10 HK 404；11 `hk_pending`；19 e2e #7 |
+| §1.1 成功标准 4（物化两遍/修订/墓碑/复活） | 8 Step 11 集成用例 |
+| §1.1 成功标准 5（RLS） | 1、4 契约、16 路由测试 |
+| §1.1 成功标准 6（DCF 600519） | 14（注入 PDF 定位的 CN 夹具） |
+| §1.1 成功标准 7（全部门禁） | 每任务门禁步骤；19 全量门禁 |
+| §11 参数/票据/asOf/截断/500 行 | 9 `companyRoute` + 各路由测试 |
+| §11 `watch_limit` / `not_authenticated` / `eventIds` / `no_server_watchlist` / `unresolved` | 16 |
+| §11 `evidence_incomplete` / `citation_pending`（网格、事件、收件箱、指标、packet、DCF） | 6、9、10、14、15、16 |
+| §11 `not_redistributable`、管理路由 401/403 | 10；9 `adminGate` |
+| §11 `dcf_bridge_missing` / `dcf_revenue_line_rejected` | 14 |
+| §11 digest 各行（`stale_computation`、`stale_attempt`、`read_truncated`、`invalid_event`、`unknown_stream`、`digest_issuer_failed`、`deadline_hit`、`code_version_missing`） | 8（`invalid_event` 退避为已登记偏差） |
+| §11 函数非 service_role 被拒（42501） | 2 角色集成测试 |
+| §11 `financial_history_not_empty` | 不适用（决策 C 保留表） |
+| §11 cron secret 503/401 | 8 cron 路由测试 |
+| §11 页面 fetch 失败 | 11 `ErrorCard`；12/13 视图错误卡 |
+| §12.0 夹具清单 | 5、19 |
+| §12.1 events / coverage / statements-grid（含 `formatDecimalText`）/ dcf-seed / inbox / judgments-contract / digest / evidence-gate / 路由 / i18n | 5 / 5 / 7 / 14 / 16 / 13 / 8 / 6 / 9、10、15、18 / 11 |
+| §12.2 数据库集成 | 1、2、4、8（`criticalSuites` 登记在 Task 1） |
+| §12.3 e2e 1–11 | 19（#6 按决策 J 断言无 K 线/行情行；#11 直接写 `NEXT_LOCALE` cookie，记入 §17） |
+| §12.4 清单规则 | 1；19 全量门禁 |
+| §13 验收样例 1–8 | 1→9/19；2→10/13；3→8；4→2/4/16；5→8；6→14；7→2；8→16 |
+| §14 独立验证 | 19 runbook、回归对照样本、事件黄金集；每任务 Codex 复审（仓库约定） |
+
+占位符扫描：无 `TBD`/`FIXME`；出现的 `TODO` 只在 Task 15 要求写入 `stocks` 路由的那条注释；Part B 假设表中的"同上"指同一文件行。
+
+### 3. 未决与刻意推迟（需 owner 或实施时确认）
+
+1. **未知 ticker 判定**：规格 §5.7 用"resolve null 且 `/api/quote` 404"；计划在服务端以 `stocks_universe` 无该票据代替行情探测（取得 HTTP 404，满足 e2e #10；读失败时放行）。若 owner 要求严格按行情接口，需在服务端调用行情源。
+2. **改定义方的两处**：Task 7 导出 `factCellOf`/`derivedCellOf`；Task 9 facts 响应新增 `otherUnitSeries`。规格复审时确认这两处与 §5.3/§5.6 一致。
+3. **缺省显示缩放**：统一为 Task 7 `scaleFor(币种, 语言)`（CNY+en、HKD 等取百万）。规格只定义 CNY+zh 与 USD+en 两种组合，其余组合是指挥决定，列入 §17。
+4. **事件现算顺序**：现算模式的 keyset 改为 `(occurred_on desc, event_id asc)`，与物化表一致；若规格本意是 `event_id desc`，需同时改 Task 3 的物化顺序。
+5. **已登记的规格偏差（§17 候选）**：digest `invalid_event` 也退避（无"不退避"的 SQL 函数）；BS 年度口径 = 按披露；跟踪未读计数为扫描下界（`n+`）；`watch_not_found` 404；收件箱 `issuerId` 参数；HK 发行人可跟踪但公司页跟踪页签显示 `hk_pending`（无事实流）；e2e #11 直接写 cookie。
+6. **owner 输入**：夹具期望值与事件黄金集人工抄录（§0 #72，未抄录项一律 `pending` 并跳过）；决策 J 例外（K 线）未批准时 e2e 断言其缺席；`supabase/config.toml` `major_version = 15` 与本机 e2e 栈的兼容性（Task 19 已写判定步骤）。
+7. **外部依赖（接口请求清单 1–8）**：规格二 `p_include_filings`/证据登记/公式文本/`computed_at`/稳定下载，规格三 CN 逐值 PDF 定位，F3 源抽屉，F4 判断卡——全部以本模块适配器先行，落地后替换。
+8. **实施日志**：`docs/audits/2026-11-06-company-research/01-implementation-log.md` 尚不存在，由指挥在 Task 1 前创建；Task 1–10、14、15 的提交不含该文件，指挥自行追加记录。
+9. **未运行验证**：本次整合只改计划文本；计划内代码未编译。实施子代理在各任务的 typecheck/lint 步骤发现的类型细节（如 `Map` 只读/可变、`useLocale` 位置）按本表的名字与签名修正，不改接口。
