@@ -50,8 +50,8 @@ const isPending=(e:GoldEntry)=>e.recorded_by==='<pending>'||e.value==='<pending>
 const blank=(v:unknown)=>typeof v!=='string'||v.trim()===''||v.trim()==='<pending>';
 /** Provenance a human must have written down: document, page/row, url and a recording timestamp. Returns the missing fields. */
 const provenanceGaps=(e:GoldEntry):string[]=>[...(['document','page_or_row','url'] as const).filter(k=>blank(e.source?.[k])).map(k=>`source.${k}`),...(e.recorded_at==null||blank(e.recorded_at)?['recorded_at']:[])];
-/** No CN replay suite exists yet (sync-cn.integration.test.ts is created only with real Tushare fixtures), so CN entries cannot be replay-verified here. */
-const CN_REPLAY_SUITE=false;
+/** sync-cn.integration.test.ts replay-verifies the CN gold entries of the four recorded A-share issuers, so they count towards the §11.4 matrix once required.CN is true. */
+const CN_REPLAY_SUITE=true;
 
 // Synthetic issuer for the quarantine/materialize cases (not a gold issuer): FY2023 revenue disclosed twice on the
 // same day by two accessions with different values (a same_day_conflict), plus one net income in the first accession.
@@ -307,8 +307,9 @@ describe.skipIf(!enabled)('F2-3 US offline replay on real PostgreSQL',()=>{
   const us=gold.entries.filter(e=>e.issuer.market==='US');
   const missing=Object.keys(CIK).filter(t=>!us.some(e=>e.issuer.ticker===t&&!isPending(e)));
   const gaps=gold.entries.map(e=>({e,gaps:provenanceGaps(e)})).filter(x=>x.gaps.length>0).map(x=>`${x.e.issuer.ticker}/${x.e.concept}/${x.e.period_end}: ${x.gaps.join(',')}`);
+  const usGaps=gaps.filter(g=>!/^\d{6}\.(SH|SZ)\//.test(g));   // CN templates are reported by sync-cn.integration.test.ts
   if(!gold.ready){
-   console.warn(`GOLD INCOMPLETE (ready:false, not failing): ${gold.entries.filter(isPending).length}/${gold.entries.length} entries still <pending>; no recorded entry for ${missing.join(', ')||'-'}; incomplete provenance: ${gaps.join(' | ')||'-'}. Owner step (runbook 8.11-6) blocks F2-7.`);
+   console.warn(`GOLD INCOMPLETE (ready:false, not failing): ${us.filter(isPending).length}/${us.length} US entries still <pending>; no recorded entry for ${missing.join(', ')||'-'}; incomplete provenance: ${usGaps.join(' | ')||'-'}. Owner step (runbook 8.11-6) blocks F2-7.`);
   }else{
    // 1. required.US: an explicit, named failure when AAPL / MSFT are not recorded.
    if(gold.required.US)for(const t of Object.keys(CIK))expect(us.some(e=>e.issuer.ticker===t&&!isPending(e)),`gold entry for ${t} is still <pending> — owner step (runbook 8.11-6) blocks F2-7`).toBe(true);
