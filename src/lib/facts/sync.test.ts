@@ -307,6 +307,19 @@ describe('runFactsSync — round-1 audit cases',()=>{
   const both=await run(deps,{dryRun:true,issuerIds:[ISSUER,ISSUER2],limit:1});            // limit never drops a requested issuer (round-2 #13)
   expect(both.issuers.map(i=>i.issuerId)).toEqual([ISSUER,ISSUER2]);
  });
+ it('a set_merge placeholder scope row (fetch_key topology) is treated as missing: explicit run derives and persists the real key; dry-run plans on it; underivable → scope_unresolved',async()=>{
+  const fetchUs=vi.fn(async(_k:string)=>snap('{"facts":{}}'));
+  const {db,deps}=harness(FY23,{fetchUs},[{issuer_id:ISSUER,fetch_key:'0000320193'}]);
+  await db.reconcileScope('US',[{issuer_id:ISSUER,reasons:[],priority:0,fetch_key:'topology'},{issuer_id:ISSUER2,reasons:[],priority:0,fetch_key:'topology'}]);
+  await run(deps,{dryRun:true,issuerIds:[ISSUER]});
+  expect(fetchUs.mock.calls[0][0]).toBe('0000320193');
+  expect(db.scope().find(x=>x.issuer_id===ISSUER)).toMatchObject({fetch_key:'topology'});   // dry run wrote nothing
+  fetchUs.mockClear();
+  const r=await run(deps,{issuerIds:[ISSUER,ISSUER2]});
+  expect(r.issuers.map(i=>[i.issuerId,i.outcome,i.code??null])).toEqual([[ISSUER,'published',null],[ISSUER2,'failed','scope_unresolved']]);
+  expect(fetchUs.mock.calls.map(c=>c[0])).toEqual(['0000320193']);
+  expect(db.scope().find(x=>x.issuer_id===ISSUER)).toMatchObject({fetch_key:'0000320193',last_status:'success'});
+ });
  it('a thrown cninfo request still counts as a persisted link attempt, capped at MAX_LINK_ATTEMPTS; a request cut by the budget counts too; a budget too low BEFORE the request counts nothing (#21)',async()=>{
   const linkCn=vi.fn(async()=>{throw new Error('cninfo 500');});
   const {db,deps}=harness(parsed([cnFiling()],[cnRevenue()]),{linkCn},CN_SCOPE);

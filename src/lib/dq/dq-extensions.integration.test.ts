@@ -311,6 +311,17 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
    });
   });
 
+  it('set_merge with an empty dq_reconcile_cycles table commits and leaves no cycle row (registration falls back to the runner re-enumerating merged_into, decision #6)',async()=>{
+   const s=await issuer(),t=await issuer(),by=await user();
+   await inRolledBackTx(admin,async c=>{
+    await c.query(`delete from public.dq_reconcile_cursor where pair='facts.lineage_same_day'`);
+    await c.query(`delete from public.dq_reconcile_cycles where pair='facts.lineage_same_day'`);
+    expect((await c.query(`select public.set_merge($1,$2,$3) v`,[s,t,by])).rows[0].v).toEqual({repointed:0});
+    expect((await c.query(`select count(*)::int n from public.dq_reconcile_cycles where pair='facts.lineage_same_day'`)).rows[0].n).toBe(0);
+    expect((await c.query(`select status,merged_into from public.issuers where issuer_id=$1`,[s])).rows).toEqual([{status:'merged',merged_into:t}]);
+   });
+  });
+
   it('set_merge serialises with materialisation: a lineage write that waits behind it is refused as stale_computation',async()=>{
    const {iss:t}=await published();const {iss:s}=await sibling('100');const by=await user();
    await inTx(admin,async({c,pid,commit})=>{

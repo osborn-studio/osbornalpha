@@ -354,7 +354,8 @@ async function selectScopes(deps:SyncDeps,opts:SyncOptions):Promise<Selected[]>{
  // Every explicitly requested issuer gets an outcome: `limit` bounds the scheduled path only and is
  // never used to silently drop requested ids (round-2 #13).
  const ids=[...new Set(opts.issuerIds)];
- const have=new Map((await deps.db.scopeRows(opts.market,ids)).map(s=>[s.issuer_id,s]));
+ // A set_merge placeholder (fetch_key 'topology', priority 0) is not a usable schedule row: treat it as missing and derive the real key.
+ const have=new Map((await deps.db.scopeRows(opts.market,ids)).filter(s=>s.fetch_key!=='topology').map(s=>[s.issuer_id,s]));
  const today=isoDate(deps.now());const seed:ScopeInputRow[]=[];
  for(const id of ids){
   if(have.has(id))continue;

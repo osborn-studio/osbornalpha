@@ -326,6 +326,9 @@ begin
   if n <> 1 then raise exception 'source_not_active' using errcode = 'P0001'; end if;
   update public.fact_sync_scope set state_rev = state_rev + 1, updated_at = now() where issuer_id = any(v_set);
   -- the cycle advisory lock is already held (taken first, above)
+  -- Registration is best effort: with no facts.lineage_same_day cycle row the UPDATE below affects 0 rows and
+  -- nothing else happens (no cycle row is created here). Alignment decision #6: the runner's first cycle
+  -- re-enumerates every issuer with merged_into not null, so no merge target is lost.
   update public.dq_reconcile_cycles c
   set detail = jsonb_set(c.detail, '{pending_members}',
         coalesce(case when jsonb_typeof(c.detail -> 'pending_members') = 'array' then c.detail -> 'pending_members' end, '[]'::jsonb)
