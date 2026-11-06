@@ -17,8 +17,12 @@
 --     and restore the previous value on every path (normal return and exception handler, S1).
 --  (8b) fact_promote_rows predicates; adopt_candidate; restore_reconciled; resolve_lineage_conflict.
 --  (8c) reconcile cursor claim/complete/fail and apply_reconcile_result.
--- Lock order everywhere: reconcile cursor row (fenced calls) → fact_sync_scope rows ordered by
--- (issuer_id, market) → issuers rows → dq_quarantine rows → fact rows → dq_reconcile_cycles row (last).
+-- Lock order everywhere: the pair's cycle advisory lock first (set_merge, open_reconcile_cycle: any
+-- function taking a dq_reconcile_cycle:* advisory lock takes it before every row lock) → reconcile
+-- cursor row (fenced calls) → fact_sync_scope rows ordered by (issuer_id, market) → issuers rows →
+-- dq_quarantine rows (apply_reconcile_result also takes a per-item-key advisory lock just before it
+-- creates a review / lineage item; it holds no other member's row) → fact rows → dq_reconcile_cycles
+-- row (last).
 -- Errors carry the code as the message: verdict / fence codes P0001; invalid_* 22023; triggers 23514.
 -- The hosted postgres role is not a superuser: functions keep the migration role as owner, set
 -- search_path = public and qualify every relation. Every function is followed by an explicit
@@ -808,7 +812,8 @@ returns text[] language sql stable security definer set search_path = public as 
   select (select coalesce(array_agg(case jsonb_typeof(k) when 'object' then k ->> 'naturalKey' else k #>> '{}' end), '{}'::text[])
           from jsonb_array_elements(m -> 'expected_keys') k)
   from public.dq_reconcile_cycles y, jsonb_array_elements(y.members) m
-  where y.pair = p_pair and y.cycle_id = p_cycle_id and m ->> 'issuer_id' = p_issuer::text and m ->> 'market' = p_market
+  where y.pair = p_pair and y.cycle_id = p_cycle_id
+    and (case when m ->> 'issuer_id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then (m ->> 'issuer_id')::uuid end) = p_issuer and m ->> 'market' = p_market
     and jsonb_typeof(m -> 'expected_keys') = 'array'
   limit 1
 $$;
@@ -879,8 +884,8 @@ grant execute on function public.fail_reconcile_member(jsonb, text) to service_r
 -- fence check → (pair, cycle_id, natural_key) already accepted → that row is returned (reused,
 -- nothing written) → else, by action:
 --  quarantine_left (left_fact_id of the fence member required; any outcome / passed — 接口对齐记录 #5):
---   QUARANTINES only when outcome = 'compared' AND passed = false AND the left row is ok and its run
---   published: under the member's scope lock, open reconcile_mismatch
+--   opens the item only when outcome = 'compared' AND passed = false AND the left row is ok or already
+--   quarantined (another reason) and its run published; only an ok row is quarantined by it: under the member's scope lock, open reconcile_mismatch
 --   item (reused by natural key <pair>:<natural_key>:<fact_id>) with payload {key, fact_ids,
 --   left_value, right_value, right_locator} and detail {pair, reconciliation_id, inputs_hash,
 --   latest_result, issuer_id, market, hook pending}; the row → quarantined; state_rev + 1;
@@ -944,7 +949,10 @@ begin
     if not found or f.issuer_id <> c.issuer_id or f.market <> c.market then raise exception 'invalid_result' using errcode = '22023'; end if;
     select r.status into v_run from public.fact_sync_runs r where r.run_id = f.run_id;
   end if;
-  if v_action = 'quarantine_left' and f.status = 'ok' and v_run = 'published'
+  -- a failing compare on a published left row that is ok OR already quarantined (for another reason, with no
+  -- open item of this pair yet) opens the reconcile_mismatch item, so fact_promote_rows blocks a later generic
+  -- promotion; only an ok row changes visibility (status, state_rev, hook, materialize).
+  if v_action = 'quarantine_left' and f.status in ('ok', 'quarantined') and v_run = 'published'
      and p_result ->> 'outcome' = 'compared' and (p_result -> 'passed') = 'false'::jsonb then
     v_nk_item := c.pair || ':' || v_nk || ':' || v_left::text;
     if length(v_nk_item) > 512 then raise exception 'invalid_result' using errcode = '22023'; end if;
@@ -956,7 +964,8 @@ begin
       insert into public.dq_quarantine (id, dataset, table_name, natural_key, reason_code, detail, payload, batch_id, status)
       values (v_item, v_dataset, 'financial_facts', v_nk_item, 'reconcile_mismatch',
               jsonb_build_object('pair', c.pair, 'reconciliation_id', v_rid, 'inputs_hash', coalesce(p_result -> 'inputs_hash', 'null'::jsonb), 'latest_result', v_latest,
-                                 'issuer_id', c.issuer_id, 'market', c.market, 'hook', jsonb_build_object('stage', 'materialize', 'state', 'pending', 'at', to_jsonb(v_now))),
+                                 'issuer_id', c.issuer_id, 'market', c.market)
+                || case when f.status = 'ok' then jsonb_build_object('hook', jsonb_build_object('stage', 'materialize', 'state', 'pending', 'at', to_jsonb(v_now))) else '{}'::jsonb end,
               jsonb_build_object('key', jsonb_build_object('issuer_id', f.issuer_id, 'market', f.market, 'concept', f.concept, 'period_start', f.period_start, 'period_end', f.period_end,
                                                            'consolidation', f.consolidation, 'unit', f.unit, 'available_date', f.available_date),
                                  'fact_ids', jsonb_build_array(v_left), 'left_value', coalesce(p_result -> 'left_value', 'null'::jsonb), 'right_value', coalesce(p_result -> 'right_value', 'null'::jsonb),
@@ -964,13 +973,16 @@ begin
               c.claimed_by, 'open');
     else
       update public.dq_quarantine
-      set detail = detail || jsonb_build_object('reconciliation_id', v_rid, 'latest_result', v_latest, 'hook', jsonb_build_object('stage', 'materialize', 'state', 'pending', 'at', to_jsonb(v_now)))
+      set detail = detail || jsonb_build_object('reconciliation_id', v_rid, 'latest_result', v_latest)
+        || case when f.status = 'ok' then jsonb_build_object('hook', jsonb_build_object('stage', 'materialize', 'state', 'pending', 'at', to_jsonb(v_now))) else '{}'::jsonb end
       where id = v_item;
     end if;
-    update public.financial_facts set status = 'quarantined' where fact_id = v_left and status = 'ok';
-    v_q := 1;
-    update public.fact_sync_scope set state_rev = state_rev + 1, updated_at = now() where issuer_id = c.issuer_id and market = c.market;
-    v_mat := jsonb_build_object('issuer_id', c.issuer_id, 'market', c.market);
+    if f.status = 'ok' then
+      update public.financial_facts set status = 'quarantined' where fact_id = v_left and status = 'ok';
+      v_q := 1;
+      update public.fact_sync_scope set state_rev = state_rev + 1, updated_at = now() where issuer_id = c.issuer_id and market = c.market;
+      v_mat := jsonb_build_object('issuer_id', c.issuer_id, 'market', c.market);
+    end if;
   elsif v_left is not null and f.status = 'quarantined' and p_result ->> 'outcome' = 'compared' then
     with upd as (
       update public.dq_quarantine q set detail = q.detail || jsonb_build_object('latest_result', v_latest)
@@ -981,6 +993,8 @@ begin
   end if;
   if v_action in ('review_item','lineage_item') then
     v_reason := case v_action when 'review_item' then 'reconcile_review' else 'lineage_conflict' end;
+    -- two members creating the same item key serialise here, the second reuses the open item (no 23505 on the open-key index)
+    perform pg_advisory_xact_lock(hashtext('dq_item:' || v_dataset || ':' || v_reason || ':' || (p_result -> 'item' ->> 'natural_key')));
     select q.id into v_item from public.dq_quarantine q
     where q.dataset = v_dataset and q.table_name = 'financial_facts' and q.natural_key = p_result -> 'item' ->> 'natural_key' and q.reason_code = v_reason and q.status = 'open';
     if v_item is null then
@@ -1020,7 +1034,7 @@ grant execute on function public.apply_reconcile_result(jsonb, jsonb) to service
 --  while waiting for the advisory lock; set_dissolved takes no advisory lock (one-way wait) — no cycle.
 create or replace function public.open_reconcile_cycle(p_pair text, p_cycle_id text, p_started_at timestamptz, p_members jsonb, p_pending jsonb)
 returns jsonb language plpgsql security definer set search_path = public as $$
-declare v_row public.dq_reconcile_cycles; r record; v_keep jsonb; v_take jsonb; v_from text[] := '{}'; v_moved jsonb := '[]'::jsonb;
+declare v_row public.dq_reconcile_cycles; r record; v_members jsonb; v_keep jsonb; v_take jsonb; v_from text[] := '{}'; v_moved jsonb := '[]'::jsonb;
 begin
   if p_pair is null or p_cycle_id is null or p_started_at is null then raise exception 'invalid_members' using errcode = '22023'; end if;
   perform pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:' || p_pair));
@@ -1028,24 +1042,31 @@ begin
   if found then return jsonb_build_object('created', false, 'cycle', to_jsonb(v_row), 'transferred', '[]'::jsonb); end if;
   if jsonb_typeof(p_members) is distinct from 'array' or jsonb_typeof(p_pending) is distinct from 'array'
      or exists (select 1 from jsonb_array_elements(p_members) m
-                where jsonb_typeof(m) <> 'object' or (m ->> 'issuer_id') is null or coalesce(m ->> 'market', '') not in ('US', 'CN')
+                where jsonb_typeof(m) <> 'object' or coalesce(m ->> 'issuer_id', '') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                   or coalesce(m ->> 'market', '') not in ('US', 'CN')
                    or jsonb_typeof(m -> 'expected_keys') is distinct from 'array')
-     or exists (select 1 from jsonb_array_elements(p_members) m
-                where exists (select 1 from jsonb_array_elements(case when jsonb_typeof(m -> 'expected_keys') = 'array' then m -> 'expected_keys' else '[]'::jsonb end) k
-                              where (case jsonb_typeof(k) when 'object' then k ->> 'naturalKey' when 'string' then k #>> '{}' end) is null)
-                   or (select count(*) from jsonb_array_elements(case when jsonb_typeof(m -> 'expected_keys') = 'array' then m -> 'expected_keys' else '[]'::jsonb end))
-                      <> (select count(distinct (case jsonb_typeof(k) when 'object' then k ->> 'naturalKey' else k #>> '{}' end)) from jsonb_array_elements(case when jsonb_typeof(m -> 'expected_keys') = 'array' then m -> 'expected_keys' else '[]'::jsonb end) k))
-     or (select count(*) from jsonb_array_elements(p_members))
-        <> (select count(distinct (m ->> 'issuer_id', m ->> 'market')) from jsonb_array_elements(p_members) m)
+     or exists (select 1 from jsonb_array_elements(p_pending) p where jsonb_typeof(p) <> 'object' or (p ->> 'source') is null)
+  then raise exception 'invalid_members' using errcode = '22023'; end if;
+  -- freeze issuer_id as canonical (lower-case) uuid text
+  select coalesce(jsonb_agg(jsonb_set(m, '{issuer_id}', to_jsonb(((m ->> 'issuer_id')::uuid)::text)) order by o), '[]'::jsonb)
+    into v_members from jsonb_array_elements(p_members) with ordinality as t(m, o);
+  if exists (select 1 from jsonb_array_elements(v_members) m
+             where exists (select 1 from jsonb_array_elements(m -> 'expected_keys') k
+                           where (case jsonb_typeof(k) when 'object' then k ->> 'naturalKey' when 'string' then k #>> '{}' end) is null))
+     or (select count(*) from jsonb_array_elements(v_members))
+        <> (select count(distinct (m ->> 'issuer_id', m ->> 'market')) from jsonb_array_elements(v_members) m)
+     -- natural keys are unique across the whole cycle: results are accepted per (pair, cycle, natural_key)
+     or (select count(*) from jsonb_array_elements(v_members) m, jsonb_array_elements(m -> 'expected_keys') k)
+        <> (select count(distinct (case jsonb_typeof(k) when 'object' then k ->> 'naturalKey' else k #>> '{}' end))
+            from jsonb_array_elements(v_members) m, jsonb_array_elements(m -> 'expected_keys') k)
      or exists (select 1 from jsonb_array_elements(p_pending) p
-                where jsonb_typeof(p) <> 'object' or (p ->> 'source') is null
-                   or not exists (select 1 from jsonb_array_elements(p_members) m
-                                  where m ->> 'issuer_id' = p ->> 'issuer_id' and m ->> 'market' = p ->> 'market'))
+                where not exists (select 1 from jsonb_array_elements(v_members) m
+                                  where m ->> 'issuer_id' = lower(p ->> 'issuer_id') and m ->> 'market' = p ->> 'market'))
   then raise exception 'invalid_members' using errcode = '22023'; end if;
   begin
     insert into public.dq_reconcile_cycles (pair, cycle_id, started_at, finished_at, members, status, expected_total, detail)
-    values (p_pair, p_cycle_id, p_started_at, null, p_members, 'running',
-            (select coalesce(sum(jsonb_array_length(m -> 'expected_keys')), 0) from jsonb_array_elements(p_members) m), '{}'::jsonb);
+    values (p_pair, p_cycle_id, p_started_at, null, v_members, 'running',
+            (select coalesce(sum(jsonb_array_length(m -> 'expected_keys')), 0) from jsonb_array_elements(v_members) m), '{}'::jsonb);
   exception when unique_violation then
     select * into v_row from public.dq_reconcile_cycles where pair = p_pair and status = 'running';
     if found then return jsonb_build_object('created', false, 'cycle', to_jsonb(v_row), 'transferred', '[]'::jsonb); end if;
@@ -1053,7 +1074,7 @@ begin
   end;
   insert into public.dq_reconcile_cursor (pair, cycle_id, issuer_id, market, expected)
   select p_pair, p_cycle_id, (m ->> 'issuer_id')::uuid, m ->> 'market', jsonb_array_length(m -> 'expected_keys')
-  from jsonb_array_elements(p_members) m;
+  from jsonb_array_elements(v_members) m;
   for r in select c.cycle_id, c.detail from public.dq_reconcile_cycles c
            where c.pair = p_pair and c.cycle_id <> p_cycle_id and jsonb_typeof(c.detail -> 'pending_members') = 'array'
            order by c.cycle_id for update loop

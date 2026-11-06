@@ -762,13 +762,14 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
    const w=await batch(`reconcile.${pair}`);const fence=(await claimM(pair,cy,iss,w))!;
    const run2=await begin(iss,b);
    await inTx(admin,async({c,pid,commit})=>{
-    await c.query(`select public.apply_reconcile_result($1::jsonb,$2::jsonb)`,[JSON.stringify(fence),JSON.stringify(res('k1',{action:'quarantine_left',left_fact_id:r}))]);
+    // 'record' with a left row writes no scope row: only the explicit scope lock can make the publish wait
+    await c.query(`select public.apply_reconcile_result($1::jsonb,$2::jsonb)`,[JSON.stringify(fence),JSON.stringify(res('k1',{action:'record',left_fact_id:r,passed:true,right_value:'100',abs_diff:'0',rel_diff:'0'}))]);
     const p=publish(run2,[]);p.catch(()=>{});
     await stillBlockedBehind(admin,pid,p);
     await commit();
     expect(await p).toBe(0);
    });
-   expect(await rev(iss)).toBe(3);
+   expect(await rev(iss)).toBe(2);                                            // the publish only; apply bumped nothing
   });
 
   it('T2: keys committed before the lease is lost stay valid; the successor reuses them; the old worker is fenced out; counts are not doubled',async()=>{
@@ -800,9 +801,11 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
    const w=await batch(`reconcile.${pair}`);const fence=(await claimM(pair,cy,iss,w))!;
    // a row of an unrelated issuer is refused for the fence member
    expect(await fails(apply(fence,res('kx',{action:'quarantine_left',left_fact_id:x})))).toMatchObject({message:'invalid_result'});
-   // a member merged INTO the fence issuer is still another issuer's row: refused as well
-   await merge(src,iss,by);
-   expect(await fails(apply(fence,res('km',{action:'quarantine_left',left_fact_id:x})))).toMatchObject({message:'invalid_result'});
+   // a member merged INTO the fence issuer is still another issuer's row: refused as well (rolled-back transaction: no topology left behind)
+   await inRolledBackTx(admin,async c=>{
+    await c.query(`select public.set_merge($1,$2,$3)`,[src,iss,by]);
+    expect(await fails(c.query(`select public.apply_reconcile_result($1::jsonb,$2::jsonb)`,[JSON.stringify(fence),JSON.stringify(res('km',{action:'quarantine_left',left_fact_id:x}))]))).toMatchObject({message:'invalid_result'});
+   },1);
    expect(await status(x)).toBe('ok');
    const a=await apply(fence,res('k1',{action:'quarantine_left',left_fact_id:r}));
    const [row]=await q(`select payload,detail from public.dq_quarantine where id=$1`,[a.item_id]);
@@ -842,6 +845,57 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
    expect(await lr()).toMatchObject({passed:true,inputs_hash:'h2'});
    await apply(fence,res('k3',{left_fact_id:r,outcome:'right_missing',right_value:null,abs_diff:null,rel_diff:null,inputs_hash:'h3'}));
    expect(await lr()).toMatchObject({passed:true,inputs_hash:'h2'});         // passing evidence not overwritten
+  });
+
+  it('a failing compare on a left row already quarantined for another reason still opens the reconcile_mismatch item (no visibility change) and generic promotion stays blocked',async()=>{
+   const {iss,r}=await published();const pair=newPair();const cy=await cycle(pair,[{issuer_id:iss,expected:1}]);
+   const w=await batch(`reconcile.${pair}`);const fence=(await claimM(pair,cy,iss,w))!;
+   await q(`update public.financial_facts set status='quarantined' where fact_id=$1`,[r]);     // quarantined by something else
+   const before=await rev(iss);
+   const a=await apply(fence,res('k1',{action:'quarantine_left',left_fact_id:r}));
+   expect(a).toMatchObject({reused:false,quarantined:0,materialize:null});
+   expect(a.item_id).toBeTruthy();
+   const [row]=await q(`select reason_code,status,payload,detail from public.dq_quarantine where id=$1`,[a.item_id]);
+   expect(row).toMatchObject({reason_code:'reconcile_mismatch',status:'open'});
+   expect(row.payload.fact_ids).toEqual([r]);
+   expect(row.detail.latest_result).toMatchObject({passed:false});
+   expect(row.detail.hook).toBeUndefined();
+   expect(await rev(iss)).toBe(before);
+   expect(await one(`select public.promote_quarantined($1,'US',$2::uuid[]) v`,[iss,[r]])).toBe(0);
+   expect(await status(r)).toBe('quarantined');
+  });
+
+  it('two members creating the same review item key serialise: the second reuses the open item (no unique violation)',async()=>{
+   const {iss:a1}=await published();const {iss:a2}=await published();const pair=newPair();
+   const cy=await cycle(pair,[{issuer_id:a1,expected:1,keys:['kA']},{issuer_id:a2,expected:1,keys:['kB']}]);
+   const w1=await batch(`reconcile.${pair}`),w2=await batch(`reconcile.${pair}`);
+   const f1=(await claimM(pair,cy,a1,w1))!,f2=(await claimM(pair,cy,a2,w2))!;
+   const nk=`${pair}:shared-item`;
+   const mk=(key:string)=>res(key,{action:'review_item',item:{natural_key:nk,payload:{fact_ids:[],values:[]}}});
+   let second:Promise<any>|undefined;let first:any;
+   await inTx(admin,async({c,pid,commit})=>{
+    first=(await c.query(`select public.apply_reconcile_result($1::jsonb,$2::jsonb) v`,[JSON.stringify(f1),JSON.stringify(mk('kA'))])).rows[0].v;
+    second=apply(f2,mk('kB'));second.catch(()=>{});
+    await stillBlockedBehind(admin,pid,second);
+    await commit();
+   });
+   const sec=await second!;
+   expect(sec.item_id).toBe(first.item_id);
+   expect(await q(`select count(*)::int n from public.dq_quarantine where natural_key=$1 and status='open'`,[nk])).toEqual([{n:1}]);
+  });
+
+  it('open_reconcile_cycle freezes issuer_id as canonical uuid text (upper-case input works end to end); a non-uuid issuer_id and a natural key repeated across members are invalid_members',async()=>{
+   const {iss}=await published();const pair=newPair();const cy=`${pair}-c`;
+   const out=await openC(admin,pair,cy,[{issuer_id:iss.toUpperCase(),market:'US',expected_keys:[{naturalKey:'k1',locator:{}}]}],[]);
+   expect(out.cycle.members).toEqual([{issuer_id:iss,market:'US',expected_keys:[{naturalKey:'k1',locator:{}}]}]);
+   const w=await batch(`reconcile.${pair}`);const fence=(await claimM(pair,cy,iss,w))!;
+   expect(await apply(fence,res('k1',{passed:true,right_value:'100',abs_diff:'0',rel_diff:'0'}))).toMatchObject({reused:false});
+   expect(await complete(fence)).toEqual({compared_passed:1,compared_failed:0,not_compared:0});
+   const p2=newPair(),other=await issuer();
+   expect(await fails(openC(admin,p2,`${p2}-x`,[{issuer_id:'not-a-uuid',market:'US',expected_keys:[]}],[]))).toMatchObject({message:'invalid_members'});
+   expect(await fails(openC(admin,p2,`${p2}-x`,[{issuer_id:iss,market:'US',expected_keys:[]},{issuer_id:iss.toUpperCase(),market:'US',expected_keys:[]}],[]))).toMatchObject({message:'invalid_members'});
+   expect(await fails(openC(admin,p2,`${p2}-x`,[{issuer_id:iss,market:'US',expected_keys:[{naturalKey:'dup',locator:{}}]},{issuer_id:other,market:'US',expected_keys:['dup']}],[]))).toMatchObject({message:'invalid_members'});
+   expect(await q(`select 1 from public.dq_reconcile_cycles where pair=$1`,[p2])).toEqual([]);
   });
 
   // ---- open_reconcile_cycle (section 13, plan audit Q2): atomic creation, per-entry consumption, the lock shared with set_merge
