@@ -42,11 +42,11 @@ function capErrors(errors:BatchError[]):BatchError[]{
  * Error codes that only inform the receipt reader: `skipped_summary` (input rows left out by
  * expected filtering, e.g. not in the universe or not promotable yet) and `relink` (a research
  * entity re-pointed to another issuer), `rule_warning_summary` (one per warning rule per batch, facts spec §7.2),
- * `coverage_summary` (Tushare coverage summary, §6.3) and `deadline_hit` (issuers not started after the deadline, §6.1). They stay in `errors` but never make a batch partial or
+ * `coverage_summary` (Tushare coverage summary, §6.3), `deadline_hit` (issuers not started after the deadline, §6.1) and `claims_summary` (identifier claims filed per op, data foundation 3 §4.2.2/§8). They stay in `errors` but never make a batch partial or
  * failed. `rejected_summary` (malformed or invalid input rows) is deliberately NOT informational:
  * it makes the batch partial, or failed when nothing landed.
  */
-export const INFO_CODES=['skipped_summary','relink','rule_warning_summary','coverage_summary','deadline_hit'] as const;
+export const INFO_CODES=['skipped_summary','relink','rule_warning_summary','coverage_summary','deadline_hit','claims_summary'] as const;
 export type InfoCode=typeof INFO_CODES[number];
 export const isInfoError=(e:BatchError)=>(INFO_CODES as readonly string[]).includes(e.code);
 
