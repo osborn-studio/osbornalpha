@@ -16,7 +16,7 @@
 // migration-one function produces (e.g. a publication marked abandoned by migration two).
 import {createHash,randomUUID} from 'node:crypto';
 import {canonicalDecimal} from '../facts/json-numbers';
-import {ASSETS_MAX,checkApprovalsLimit,checkIds,checkLimit,checkWriteRows,decodeCursor,encodeCursor,lookaheadLimit,regenFilter} from './db';
+import {ASSETS_MAX,canonTs,checkApprovalsLimit,tsSortKey,checkIds,checkLimit,checkWriteRows,decodeCursor,encodeCursor,lookaheadLimit,regenFilter} from './db';
 import {DocumentsDbError,EXTRACTOR_VERSION,PAGE_LIMIT_MAX,TABLE_ALGO_VERSION} from './types';
 import type {
  ApprovalRow,AssetRow,CandidateRow,CitationRow,DocScopeRow,DocumentInsert,DocumentRow,DocumentsDb,ExtractionRow,ListedSource,Page,PageRow,PublicationRow,
@@ -44,7 +44,9 @@ const invalid=(m:string)=>new DocumentsDbError('invalid_input',m);
 const leaseLost=()=>new DocumentsDbError('lease_lost');
 const notFound=()=>new DocumentsDbError('not_found');
 const clone=<T>(v:T):T=>structuredClone(v);
-const cmp=(a:string|number,b:string|number)=>a<b?-1:a>b?1:0;
+// F3 recheck N1: timestamp-looking strings compare chronologically at microsecond resolution (canonical strings of different widths do not sort lexicographically)
+const cmpKey=(x:string|number):string|number=>typeof x==='string'&&/^\d{4}-\d{2}-\d{2}[T ]/.test(x)?(tsSortKey(x)??x):x;
+const cmp=(a0:string|number,b0:string|number)=>{const a=cmpKey(a0),b=cmpKey(b0);return a<b?-1:a>b?1:0;};
 const sk=(issuer:string,source:string)=>`${issuer}|${source}`;
 const pk=(extraction:string,page:number)=>`${extraction}|${page}`;
 const ck=(candidate:string,gen:number)=>`${candidate}|${gen}`;
@@ -52,7 +54,11 @@ const sha256=(s:string)=>createHash('sha256').update(s,'utf8').digest('hex');
 /** Code points, like PostgreSQL length()/substr() on a UTF8 database. */
 const cps=(s:string)=>Array.from(s);
 /** A timestamp every writer-supplied value is normalised to (canonical UTC ISO), so string order = chronological order like timestamptz in SQL (F3 review). */
-const normTs=(v:unknown,what:string):string=>{const t=typeof v==='string'?Date.parse(v):NaN;if(Number.isNaN(t))throw invalid(what);return new Date(t).toISOString();};
+const normTs=(v:unknown,what:string):string=>{
+ if(typeof v!=='string')throw invalid(what);
+ const c=canonTs(v);if(c!==null)return c;   // string parser: keeps microseconds, handles offsets
+ const t=Date.parse(v);if(Number.isNaN(t))throw invalid(what);return new Date(t).toISOString();
+};
 /** Exact comparison of two non-negative plain decimal strings: <0, 0, >0 (no Number: ea_threshold is numeric in SQL). */
 function cmpDecimal(a:string,b:string):number{
  const parse=(x:string)=>{const m=/^(\d+)(?:\.(\d*))?$/.exec(x);if(!m)throw invalid('decimal');return {int:m[1],frac:m[2]??''};};
@@ -92,8 +98,8 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
  const now=()=>fixedNow??(opts.now?opts.now():new Date()).toISOString();
  const later=(secs:number)=>new Date(Date.parse(now())+secs*1000).toISOString();
  /** created_at: strictly increasing, so (created_at, id) orders like insertion. */
- const stamp=()=>{const t=now();lastStamp=t>lastStamp?t:new Date(Date.parse(lastStamp)+1).toISOString();return lastStamp;};
- const live=(until:string|null)=>until!==null&&until>now();
+ const stamp=()=>{const t=now();lastStamp=cmp(t,lastStamp)>0?t:new Date(Date.parse(lastStamp)+1).toISOString();return lastStamp;};
+ const live=(until:string|null)=>until!==null&&cmp(until,now())>0;
  const ttlCheck=(ttl:number)=>{if(!Number.isInteger(ttl)||ttl<1)throw invalid('ttl');};
  const listed=(source:string)=>{if(!LISTED.includes(source))throw invalid('source');};
 
@@ -436,7 +442,8 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
   },
   async insertApproval(row){
    // exact decimal comparison, like SQL numeric (F3 review): '0.9499999999999999999' fails
-   const inBand=(v:unknown)=>{const t=String(v);return /^\d+(\.\d*)?$/.test(t)&&cmpDecimal(t,'0.95')>=0&&cmpDecimal(t,'1')<=0;};
+   // F3 recheck N2: canonicalise first (numeric accepts exponents: '9.5e-1' = 0.95), then compare exactly
+   const inBand=(v:unknown)=>{let t:string;try{t=canonicalDecimal(String(v));}catch{return false;}return /^\d+(\.\d+)?$/.test(t)&&cmpDecimal(t,'0.95')>=0&&cmpDecimal(t,'1')<=0;};
    if(!inBand(row.precision)||!inBand(row.recall))throw invalid('ea_threshold');
    if(!row.extractor_ref||!row.approved_by||!SHA.test(row.gold_sha256)||!Array.isArray(row.concepts))throw invalid('approval');
    const id=randomUUID();
@@ -527,7 +534,7 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
   async scopeDue(source,at,limit){
    checkLimit(limit);
    const t=normTs(at,'now');
-   return [...scope.values()].filter(s=>s.source===source&&s.priority>0&&s.next_due_at<=t)
+   return [...scope.values()].filter(s=>s.source===source&&s.priority>0&&cmp(s.next_due_at,t)<=0)
     .sort((x,y)=>cmp(x.next_due_at,y.next_due_at)||y.priority-x.priority||cmp(x.issuer_id,y.issuer_id)).slice(0,limit).map(clone);
   },
   async scopeRows(source,issuerIds){

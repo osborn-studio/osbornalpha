@@ -86,7 +86,31 @@ export function checkApprovalsLimit(limit:number):number{
 export function checkIds<T>(ids:T[],max=IDS_MAX):T[]{if(ids.length>max)throw new DocumentsDbError('invalid_input',`too_many_ids:${ids.length}`);return ids;}
 
 // ---------------------------------------------------------------- row normalisation (PostgREST json, to_jsonb, or pg text)
-const ts=(v:unknown):string=>new Date(String(v)).toISOString();
+// F3 recheck N1: timestamps keep PostgreSQL's microseconds. Canonical form = UTC ISO with 3 fractional digits, extended to 6
+// only when the sub-millisecond part is non-zero ('.123Z', '.123456Z'); canonical strings are NOT lexicographically ordered
+// across those two widths, so compare with tsSortKey.
+const TS_PARTS=/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?)?\s*(Z|[+-]\d{2}(?::?\d{2})?)?$/;
+/** String-based timestamptz parser (offsets, 1–9 fractional digits, rounded half up to microseconds); null if not a timestamp. */
+export function canonTs(v:string):string|null{
+ const m=TS_PARTS.exec(v.trim());if(!m)return null;
+ const [y,mo,d,h,mi,sec]=[m[1],m[2],m[3],m[4]??'0',m[5]??'0',m[6]??'0'].map(Number);
+ if(mo<1||mo>12||d<1||d>31||h>23||mi>59||sec>59)return null;
+ let off=0;
+ if(m[8]&&m[8]!=='Z'){const o=m[8];const sign=o[0]==='-'?-1:1;const digits=o.slice(1).replace(':','');const oh=Number(digits.slice(0,2)),om=Number(digits.slice(2)||'0');if(oh>15||om>59)return null;off=sign*(oh*60+om);}
+ const base=Date.UTC(y,mo-1,d,h,mi,sec);const chk=new Date(base);
+ if(Number.isNaN(base)||chk.getUTCDate()!==d||chk.getUTCMonth()!==mo-1)return null;   // 31 February and friends
+ const frac=(m[7]??'').padEnd(7,'0');
+ const micros=BigInt(base-off*60000)*1000n+BigInt(frac.slice(0,6))+(Number(frac[6])>=5?1n:0n);
+ const msPart=micros/1000n,sub=Number(micros%1000n);   // BigInt division truncates toward zero; pre-1970 values are not expected
+ const iso=new Date(Number(msPart)).toISOString();
+ return sub===0?iso:`${iso.slice(0,-1)}${String(sub).padStart(3,'0')}Z`;
+}
+/** Fixed-width key (always 6 fractional digits) so string comparison = chronological comparison; null for non-timestamps. */
+export function tsSortKey(v:string):string|null{
+ const c=canonTs(v);if(c===null)return null;
+ return c.length===24?`${c.slice(0,-1)}000Z`:c;
+}
+const ts=(v:unknown):string=>v instanceof Date?v.toISOString():(canonTs(String(v))??new Date(String(v)).toISOString());
 const tsOrNull=(v:unknown):string|null=>v===null||v===undefined?null:ts(v);
 const strOrNull=(v:unknown):string|null=>v===null||v===undefined?null:String(v);
 const numOrNull=(v:unknown):number|null=>v===null||v===undefined?null:Number(v);

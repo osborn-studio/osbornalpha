@@ -384,6 +384,11 @@ export function documentsDbContract(label:string,setup:()=>Promise<DocsContractH
    expect(await code(db.insertApproval({...approval,precision:'0.9499999999999999999'}))).toBe('invalid_input');   // F3 review: exact decimals, never a float compare
    expect(await code(db.insertApproval({...approval,recall:'1.0000000000000000001'}))).toBe('invalid_input');
    expect(await code(db.insertApproval({...approval,gold_sha256:sha('g95'),precision:'0.95',recall:'1'}))).toBe('resolved');
+   // F3 recheck N2: exponent notation is numeric to PostgreSQL; the boundary is exact
+   expect(await code(db.insertApproval({...approval,gold_sha256:sha('g-exp-1'),precision:'9.5e-1',recall:'1E0'}))).toBe('resolved');
+   expect(await code(db.insertApproval({...approval,gold_sha256:sha('g-exp-2'),precision:'9.4999999e-1'}))).toBe('invalid_input');
+   expect(await code(db.insertApproval({...approval,gold_sha256:sha('g-exp-3'),recall:'1.0000001e0'}))).toBe('invalid_input');
+   expect(await code(db.insertApproval({...approval,gold_sha256:sha('g-exp-4'),recall:'95e-2',precision:'0.9500e0'}))).toBe('resolved');
    const A=await db.insertApproval(approval);
    const wrongCode=await db.insertApproval({...approval,code_version:'other'});
    expect((await db.approvalsFor(base.extractor_ref,{limit:100})).find(x=>x.approval_id===A)).toMatchObject({precision:'0.96',recall:'0.97',revoked_at:null,concepts:['revenue']});
@@ -529,6 +534,24 @@ export function documentsDbContract(label:string,setup:()=>Promise<DocsContractH
    expect(seen.rows.map(r=>r.document_id)).toEqual([a2,a3,a1]);
    expect(seen.pages).toBe(3);
    expect(seen.rows.map(r=>r.available_at)).toEqual(['2026-03-20T02:00:00.000Z','2026-03-20T01:30:00.000Z','2026-03-20T01:00:00.000Z']);
+  });
+
+  it('timestamps keep microseconds like timestamptz (F3 recheck N1): twelve documents .000001Z–.000012Z order and paginate exactly',async()=>{
+   const {iss,b}=await ready();
+   const stamp=(n:number)=>`2026-03-20T00:00:00.${String(n).padStart(6,'0')}Z`;
+   const ids=new Map<number,string>();
+   // shuffled insertion order; #7 arrives with a +08:00 offset, #12 with a space separator and short +00 offset
+   for(const n of [5,12,1,9,3,7,11,2,8,4,10,6]){
+    const x=n===7?'2026-03-20T08:00:00.000007+08:00':n===12?'2026-03-20 00:00:00.000012+00':stamp(n);
+    ids.set(n,(await db.insertDocumentVersion(iss,'hkexnews',b,docInsert({available_at:x,published_at:x,available_date:'2026-03-20'}),[])).document_id);
+   }
+   const want=[12,11,10,9,8,7,6,5,4,3,2,1];
+   for(const limit of [5,1,12]){
+    const seen=await drain(p=>db.readDocuments(iss,{asOf:'2026-03-21',...p}),limit);
+    expect(seen.rows.map(r=>r.document_id)).toEqual(want.map(n=>ids.get(n)));
+    expect(seen.pages).toBe(Math.ceil(12/limit));
+    expect(seen.rows.map(r=>r.available_at)).toEqual(want.map(stamp));
+   }
   });
 
   it('finishExtract stores a missing line_count as 0, like the SQL coalesce (F3 review)',async()=>{

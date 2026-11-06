@@ -5,7 +5,7 @@
 import {randomUUID} from 'node:crypto';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {describe,expect,it} from 'vitest';
-import {REFS_CHUNK,WRITE_MAX,approvalFromRow,chunk,decodeCursor,documentFromRow,encodeCursor,supabaseDocumentsDb,toDocumentsDbError} from './db';
+import {REFS_CHUNK,WRITE_MAX,approvalFromRow,canonTs,tsSortKey,chunk,decodeCursor,documentFromRow,encodeCursor,supabaseDocumentsDb,toDocumentsDbError} from './db';
 import {docInsert,documentsDbContract,extractionInsert,pageInsert} from './db-contract';
 import {memoryDocumentsDb} from './memory-documents-db';
 import {DocumentsDbError,EXTRACTOR_VERSION,TABLE_ALGO_VERSION} from './types';
@@ -149,7 +149,7 @@ describe('supabaseDocumentsDb wiring',()=>{
  it('readDocuments sends the SQL cursor object and returns an opaque next cursor; rows are normalised',async()=>{
   const {db,calls}=stub({read_documents:()=>({rows:[pgDocRow],row_count:1,next_cursor:{available_at:'2026-03-20T09:00:00.123456+00:00',document_id:'d1'}})});
   const p=await db.readDocuments('i',{asOf:'2026-04-01',limit:1});
-  expect(p.rows[0]).toMatchObject({bytes:1024,published_at:'2026-03-20T09:00:00.123Z',available_at:'2026-03-20T09:00:00.123Z',created_at:'2026-03-20T09:00:01.000Z'});
+  expect(p.rows[0]).toMatchObject({bytes:1024,published_at:'2026-03-20T09:00:00.123456Z',available_at:'2026-03-20T09:00:00.123456Z',created_at:'2026-03-20T09:00:01.000Z'});
   expect(decodeCursor(p.nextCursor!)).toEqual(['2026-03-20T09:00:00.123456+00:00','d1']);
   await db.readDocuments('i',{asOf:'2026-04-01',limit:1,cursor:p.nextCursor,source:'hkexnews',allVersions:true});
   expect(calls[1].args).toEqual({p_issuer:'i',p_as_of:'2026-04-01',p_source:'hkexnews',p_doc_class:null,p_from:null,p_to:null,p_cursor:{available_at:'2026-03-20T09:00:00.123456+00:00',document_id:'d1'},p_limit:1,p_all_versions:true});
@@ -199,7 +199,24 @@ describe('supabaseDocumentsDb wiring',()=>{
   expect(queries).toHaveLength(2);                                  // refused before any request
  });
  it('documentFromRow normalises pg text, PostgREST json and to_jsonb rows alike',()=>{
-  const a=documentFromRow(pgDocRow);const b=documentFromRow({...pgDocRow,bytes:1024,published_at:'2026-03-20T09:00:00.123+00:00'});
+  const a=documentFromRow(pgDocRow);const b=documentFromRow({...pgDocRow,bytes:1024,published_at:'2026-03-20T09:00:00.123456+00:00'});
   expect(a).toEqual(b);expect(a.acquisition).toEqual({http_status:200});expect(a.fiscal_year).toBe(2025);
+ });
+});
+
+// F3 recheck N1: canonTs keeps microseconds, handles offsets and rejects non-timestamps; tsSortKey orders across widths
+describe('canonTs / tsSortKey',()=>{
+ it('keeps up to 6 fractional digits, trimming to 3 when the sub-millisecond part is zero',()=>{
+  expect(canonTs('2026-03-20T09:00:00Z')).toBe('2026-03-20T09:00:00.000Z');
+  expect(canonTs('2026-03-20 09:00:00.1+00')).toBe('2026-03-20T09:00:00.100Z');
+  expect(canonTs('2026-03-20T09:00:00.000001Z')).toBe('2026-03-20T09:00:00.000001Z');
+  expect(canonTs('2026-03-20T17:00:00.123456+08:00')).toBe('2026-03-20T09:00:00.123456Z');
+  expect(canonTs('2026-03-20T09:00:00.1234567Z')).toBe('2026-03-20T09:00:00.123457Z');
+  expect(canonTs('2026-02-31T00:00:00Z')).toBeNull();
+  expect(canonTs('not a time')).toBeNull();
+ });
+ it('sort keys order .123Z before .123456Z before .124Z',()=>{
+  const k=['2026-03-20T09:00:00.124Z','2026-03-20T09:00:00.123456Z','2026-03-20T09:00:00.123Z'].map(x=>tsSortKey(x)!);
+  expect([...k].sort()).toEqual([k[2],k[1],k[0]]);
  });
 });
