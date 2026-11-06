@@ -279,8 +279,9 @@ describe.skipIf(!enabled)('I-0 industry research migration on real PostgreSQL',(
   await asRole('anon',async c=>{
    expect(Number((await c.query(`select count(*) n from public.industry_valuations where run_id=$1`,[vr])).rows[0].n)).toBe(1);   // the cell is visible …
    for(const t of rels){
-    const hit=await c.query(`select count(*)::int n from public.${t} x where strpos(x::text,$1) > 0`,[marker]).then(r=>r.rows[0].n as number,()=>0);
-    expect({t,hit}).toEqual({t,hit:0});                                                                                          // … its official value is nowhere
+    // errors are recorded, not swallowed: a relation anon holds SELECT on must be readable (no SQLSTATE) and must not contain the marker
+    const probe=await c.query(`select count(*)::int n from public.${t} x where strpos(x::text,$1) > 0`,[marker]).then(r=>({sqlstate:null as string|null,hit:r.rows[0].n as number}),e=>({sqlstate:String((e as {code?:string}).code??'unknown'),hit:-1}));
+    expect({t,...probe}).toEqual({t,sqlstate:null,hit:0});                                                                      // … its official value is nowhere
    }
   });
  },60000);

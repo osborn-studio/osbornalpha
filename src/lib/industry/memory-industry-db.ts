@@ -11,12 +11,16 @@
 // for run and rows), manifest index with the GC grace window, pruning, state fingerprint (from the
 // injected FactsDb.scopeAll), freshness (dq_freshness rows named industry.* in the injected
 // TableClient) and the unresolved-record count. Every method runs through one promise chain per
-// instance (SQL: one transaction each); a failing call leaves no partial state. Decimal strings are
+// instance (SQL: one transaction each); a failing call leaves no partial state (observation writes include
+// their quarantine items: if filing one fails the whole call rolls back and a retry is idempotent). Foreign keys
+// of the SQL schema are mirrored against the injected tables once those hold rows: issuers (issuer_not_found),
+// stocks_universe (mark tickers), ingest_batches (invalid_batch), judgments (pruneRuns skips referenced runs).
+// Decimal strings are
 // stored as given (callers pass canonical decimals); market_cap is close × total_share with
 // PostgreSQL's result scale (sum of the input scales).
 import {createHash,randomUUID} from 'node:crypto';
 import {memoryTableClient} from '../db/memory-table-client';
-import type {TableClient} from '../db/table-client';
+import type {Row,TableClient} from '../db/table-client';
 import type {FactsDb} from '../facts/types';
 import {MANIFEST_GC_GRACE_SECONDS,distinctTsCodes,levelColumn,sameClassification} from './db';
 import {DEFAULT_LICENSES} from './licenses';
@@ -98,6 +102,12 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
  const now=()=>fixedNow??new Date().toISOString();
  /** Strictly increasing instants within one instance (SQL clock_timestamp()). */
  const tick=()=>{const t=now();last=t>last?t:new Date(Date.parse(last)+1).toISOString();return last;};
+ /** FK mirror: a table without rows is not authoritative (unit tests that do not seed it); once populated the key must exist. */
+ const registered=async(table:string,match:Row)=>(await tables.count(table,{}))===0||(await tables.count(table,match))>0;
+ /** Candidate member of a cell (= industry_candidate_members / memberships.ts::isMemberAt, spec K3). */
+ const candidateIssuers=(s:State,r:{scheme:string;version:string;level:number},code:string,on:string,knownBy:string)=>new Set(okRows(s).filter(m=>m.scheme===r.scheme&&m.version===r.version&&m.level===r.level&&m.code===code
+  &&m.available_date<=knownBy&&m.valid_from<=on&&(m.valid_to===null||(m.valid_to_available_date!==null&&m.valid_to_available_date>knownBy)||m.valid_to>on)).map(m=>m.issuer_id));
+ const sameSet=(a:Set<string>,b:Set<string>)=>a.size===b.size&&[...a].every(x=>b.has(x));
  const classKey=(s:string,v:string,c:string)=>`${s}|${v}|${c}`;
  const depKey=(kind:RunKind,run:string)=>`${kind}|${run}`;
  /** Runs fn on a copy of the state and installs it only when fn returns (SQL: the call is one transaction). */
@@ -212,7 +222,10 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
    return n;
   },
 
-  applyMemberships:(batch,issuer,scheme,version,input,sourceIds,resolution)=>atomic(s=>{
+  applyMemberships:(batch,issuer,scheme,version,input,sourceIds,resolution)=>atomic(async s=>{
+   if(!Array.isArray(input))unknown('invalid_rows');
+   if(resolution!==null&&resolution!==undefined&&(typeof resolution!=='object'||Array.isArray(resolution)))unknown('invalid_resolution');
+   if(!await registered('issuers',{issuer_id:issuer}))unknown('issuer_not_found');
    for(const id of sourceIds){
     const m=s.sources.get(id);
     if(!m||m.status!=='current'||m.scheme!==scheme||(m.issuer_id!==null&&m.issuer_id!==issuer))fail('membership_conflict','membership_conflict: source records must be current, of the scheme, and unresolved or resolved to this issuer');
@@ -257,7 +270,9 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
    for(const id of sourceIds){const r=s.sources.get(id)!;r.issuer_id=issuer;r.resolution={...clone(resolution??{}),membership_ids:[...ids]};r.resolution_error=null;}
    return {inserted,closed,superseded,duplicates,membership_ids:ids} as ApplyMembershipsResult;
   }),
-  correctMembershipWindows:(batch,issuer,scheme,version,sourceId,input)=>atomic(s=>{
+  correctMembershipWindows:(batch,issuer,scheme,version,sourceId,input)=>atomic(async s=>{
+   if(!Array.isArray(input))unknown('invalid_rows');
+   if(!await registered('issuers',{issuer_id:issuer}))unknown('issuer_not_found');
    const src=s.sources.get(sourceId);
    if(!src||src.status!=='current'||src.scheme!==scheme||src.issuer_id!==issuer)fail('membership_conflict',`membership_conflict: source record ${sourceId} is not current and resolved to issuer ${issuer}`);
    let inserted=0,superseded=0,duplicates=0,quarantined=0;const ids:string[]=[];
@@ -280,6 +295,10 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
   }),
   // lease fence (Codex round 2 R2-3): the scope row (in `tables`) must still be leased to fence.leaseBatch and unexpired
   async applySicMembership(batch,issuer,observed,code,provenance,fence){
+   if(!observed)unknown('invalid_rows');
+   const notObject=(v:unknown)=>v!==null&&v!==undefined&&(typeof v!=='object'||Array.isArray(v));
+   if(notObject(provenance)||notObject(fence.secSubmissions))unknown('invalid_provenance');
+   if(!await registered('issuers',{issuer_id:issuer}))unknown('issuer_not_found');
    const [lease]=await tables.select('industry_sync_scope',{issuer_id:issuer,job:'sic'},{limit:1});
    if(!lease||lease.lease_batch_id!==fence.leaseBatch||lease.lease_until==null||Date.parse(String(lease.lease_until))<=Date.parse(now()))fail('lease_lost');
    const outcome=code===null?'none' as const:await applySicRow(batch,issuer,observed,code,provenance);
@@ -304,8 +323,11 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
   },
   async retryFetchEvent(id){const e=st.events.get(id);if(!e)unknown('fetch_event_not_found');e!.attempt++;},
   async applyObservations(kind:'marks'|'official',fetchEventId:string,input:unknown[]):Promise<ObservationResult>{
+   if(kind!=='marks'&&kind!=='official')unknown('invalid_kind');
+   if(!Array.isArray(input))unknown('invalid_rows');
    const items:Parameters<typeof quarantineAfter>[0]=[];
-   const out=await atomic(s=>{
+   // the quarantine items are filed inside the atomic section: if filing fails nothing of the call is installed (a retry is idempotent: one open item per key)
+   return atomic(async s=>{
     const ev=s.events.get(fetchEventId);if(!ev)unknown('fetch_event_not_found');
     let inserted=0,duplicates=0,superseded=0;
     const keyOf=(x:MarkInput|OfficialInput)=>kind==='marks'?`${(x as MarkInput).ticker}:${x.trade_date}`:`${(x as OfficialInput).scheme}:${(x as OfficialInput).version}:${(x as OfficialInput).code}:${x.trade_date}:${(x as OfficialInput).metric}`;
@@ -316,9 +338,6 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
      if(kind==='marks'){
       const m=x as MarkInput;status=m.status??'ok';
       if(status!=='ok'&&status!=='quarantined')unknown('invalid_status');
-      if(decSign(m.close)<=0)unknown('security_marks_close_check');
-      if(decSign(m.total_share)<=0)unknown('security_marks_total_share_check');
-      if(m.free_share!=null&&decSign(m.free_share)<=0)unknown('security_marks_free_share_check');
       hash=sha256(`${trimScale(m.close)}|${trimScale(m.total_share)}|${status}|${m.free_share==null?'':trimScale(m.free_share)}`);
      }else hash=sha256(trimScale((x as OfficialInput).value));
      const rk=`${fetchEventId}|${kind}|${key}`;const rc=s.receipts.get(rk);
@@ -330,12 +349,17 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
       const sameFree=(cur?.free_share??null)===null||(m.free_share??null)===null?(cur?.free_share??null)===(m.free_share??null):decEq(cur!.free_share!,m.free_share!);
       if(cur&&decEq(cur.close,m.close)&&decEq(cur.total_share,m.total_share)&&sameFree){outcome='duplicate';obsId=cur.observation_id;duplicates++;}
       else{
+       // table constraints apply to rows that are actually inserted (after the receipt and current-observation comparison)
+       if(decSign(m.close)<=0)unknown('security_marks_close_check');
+       if(decSign(m.total_share)<=0)unknown('security_marks_total_share_check');
+       if(m.free_share!=null&&decSign(m.free_share)<=0)unknown('security_marks_free_share_check');
+       if(!await registered('stocks_universe',{ticker:m.ticker}))unknown('security_marks_ticker_fkey');
        if(cur)cur.status='superseded';
        obsId=randomUUID();
        s.marks.set(obsId,{observation_id:obsId,ticker:m.ticker,trade_date:m.trade_date,fetch_event_id:fetchEventId,observed_at:at,close:m.close,total_share:m.total_share,free_share:m.free_share??null,
         market_cap:mulDecimalText(m.close,m.total_share),source:m.source,upstream:m.upstream,raw_hash:m.raw_hash,locator:clone(m.locator),batch_id:ev!.batch_id,status,supersedes:cur?.observation_id??null});
        if(cur){outcome='superseded_previous';superseded++;items.push({dataset:'industry.marks',table:'security_marks',key,reason:'mark_revised',detail:{previous:cur.observation_id,current:obsId,fetch_event_id:fetchEventId},batch:ev!.batch_id});}
-       else{outcome='inserted';inserted++;}
+       else{outcome='inserted';inserted++;}   // a 'quarantined' input is stored as evidence and counted here, like the SQL function
       }
      }else{
       const o=x as OfficialInput;
@@ -352,18 +376,17 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
      }
      s.receipts.set(rk,{payload_hash:hash,outcome,observation_id:obsId});
     }
+    await quarantineAfter(items);
     return {inserted,duplicates,superseded};
    });
-   await quarantineAfter(items);
-   return out;
   },
   async currentMarksOn(tradeDate,tickers){
    const want=new Set(tickers);
    return clone([...st.marks.values()].filter(m=>m.trade_date===tradeDate&&m.status==='ok'&&want.has(m.ticker)).sort((a,b)=>cmp(a.ticker,b.ticker)));
   },
 
-  createMetricRun:row=>atomic(s=>{
-   if(!row.batch_id)unknown('invalid_batch');
+  createMetricRun:row=>atomic(async s=>{
+   if(!row.batch_id||!await registered('ingest_batches',{batch_id:row.batch_id}))unknown('invalid_batch');
    const generation=Math.max(0,...[...s.runs.values()].filter(r=>r.scheme===row.scheme&&r.version===row.version&&r.level===row.level).map(r=>r.generation))+1;
    const run_id=randomUUID();
    s.runs.set(run_id,{...clone(row),fingerprint_at:new Date(row.fingerprint_at).toISOString(),run_id,generation,status:'building',coverage_summary:{},created_at:now(),activated_at:null});
@@ -377,6 +400,9 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
   stageMetricRows:(run,input)=>atomic(s=>{
    const r=lockRun(s,run);if(r.status!=='building')fail('run_not_building');
    const cells=s.cells.get(run)!;
+   // manifests.lock_for_reference looks at every referenced hash before any row is written
+   for(const c of input as StagedMetricCell[])if(c.manifest_hash!==null&&s.manifests.get(c.manifest_hash)?.gc_claimed_at!=null)fail('manifest_gc_in_progress');
+   const seen=new Set<string>();
    for(const c of input as StagedMetricCell[]){
     if(!AGG_METRICS.includes(c.metric))unknown('industry_metrics_metric_check');
     if(c.missing_reason!==null&&!MISSING.includes(c.missing_reason))unknown('industry_metrics_missing_reason_check');
@@ -384,30 +410,43 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
     if((c.status==='ok')!==(c.manifest_hash!==null))unknown('industry_metrics_ok_manifest');
     if((c.status==='missing')!==(c.missing_reason!==null))unknown('industry_metrics_missing_reason');
     if(c.manifest_hash!==null&&!s.manifests.has(c.manifest_hash))unknown('industry_metrics_manifest_hash_fkey');
-    if(c.manifest_hash!==null&&s.manifests.get(c.manifest_hash)!.gc_claimed_at!==null)fail('manifest_gc_in_progress');
-    cells.set(`${c.code}|${c.metric}|${c.period_start}|${c.period_end}`,{...clone(c),run_id:run,updated_at:null});
+    // one INSERT … ON CONFLICT cannot affect a row twice (SQLSTATE 21000)
+    const key=`${c.code}|${c.metric}|${c.period_start}|${c.period_end}`;
+    if(seen.has(key))unknown('on_conflict_cardinality');
+    seen.add(key);
+    cells.set(key,{...clone(c),run_id:run,updated_at:null});
    }
    return input.length;
   }),
   stageRunDependencies:(run,kind,input)=>atomic(s=>{
    if(kind==='aggregate'){const r=lockRun(s,run);if(r.status!=='building')fail('run_not_building');}
-   else{const v=s.vruns.get(run);if(!v)unknown('run_not_found');if(v!.status!=='building')fail('run_not_building');}
+   else if(kind==='valuation'){const v=s.vruns.get(run);if(!v)unknown('run_not_found');if(v!.status!=='building')fail('run_not_building');}
+   else unknown('invalid_kind');
    const k=depKey(kind,run);const m=s.deps.get(k)??new Map<string,RunDependency>();s.deps.set(k,m);
-   for(const d of input)m.set(`${d.cell_key}|${d.issuer_id}`,{cell_key:d.cell_key,issuer_id:d.issuer_id,state_rev:Number(d.state_rev)});
+   const seen=new Set<string>();
+   for(const d of input){
+    const key=`${d.cell_key}|${d.issuer_id}`;
+    if(seen.has(key))unknown('on_conflict_cardinality');
+    seen.add(key);
+    m.set(key,{cell_key:d.cell_key,issuer_id:d.issuer_id,state_rev:Number(d.state_rev)});
+   }
    return input.length;
   }),
   activateMetricRun:run=>atomic(s=>{
    const r=lockRun(s,run);if(r.status!=='building')fail('run_not_building');
    const cells=[...s.cells.get(run)!.values()];
    for(const code of r.expected_grid.codes)for(const pe of r.expected_grid.period_ends)for(const metric of r.expected_grid.metrics)
-    for(const [duration,decOnly] of REQUIRED_DURATIONS[metric]){
+    for(const [duration,decOnly] of REQUIRED_DURATIONS[metric]??[]){   // a metric the grid names but the method does not know has no required cells (SQL: join finds nothing)
      if(decOnly&&pe.slice(5)!=='12-31')continue;
      if(!cells.some(c=>c.code===code&&c.metric===metric&&c.duration===duration&&c.period_end===pe))fail('incomplete_run');
     }
    const deps=[...(s.deps.get(depKey('aggregate',run))?.values()??[])];
-   const perCell=new Map<string,number>();
-   for(const c of cells){const k=`${c.code}:${c.period_end}`;perCell.set(k,Math.max(perCell.get(k)??0,c.n_members));}
+   const perCell=new Map<string,number>();const cellAt=new Map<string,{code:string;pe:string}>();
+   for(const c of cells){const k=`${c.code}:${c.period_end}`;perCell.set(k,Math.max(perCell.get(k)??0,c.n_members));cellAt.set(k,{code:c.code,pe:c.period_end});}
    for(const [k,n] of perCell)if(deps.filter(d=>d.cell_key===k).length!==n)fail('dependencies_incomplete');
+   // the dependency issuers of each cell equal its candidate members known by facts_as_of (both directions); no dependency of a cell without rows
+   for(const [k,{code,pe}] of cellAt)if(!sameSet(new Set(deps.filter(d=>d.cell_key===k).map(d=>d.issuer_id)),candidateIssuers(s,r,code,pe,r.facts_as_of)))fail('dependencies_incomplete');
+   if(deps.some(d=>!cellAt.has(d.cell_key)))fail('dependencies_incomplete');
    const active=[...s.runs.values()].find(a=>a.scheme===r.scheme&&a.version===r.version&&a.level===r.level&&a.status==='active');
    if(active){
     if(r.generation<=active.generation||r.facts_as_of<active.facts_as_of)fail('obsolete_run');
@@ -421,6 +460,7 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
    return {activatedAt:t};
   }),
   async failRun(kind,run,reason){
+   if(kind!=='aggregate'&&kind!=='valuation')unknown('invalid_kind');
    if(kind==='aggregate'){
     const r=lockRun(st,run);if(r.status!=='building')fail('illegal_transition',`illegal_transition: aggregate run ${run} is ${r.status}`);
     r.status='failed';r.coverage_summary={...r.coverage_summary,failure_reason:reason};
@@ -467,13 +507,16 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
   },
   async pruneRuns(keep){
    if(!Number.isInteger(keep)||keep<1)unknown('invalid_keep');
+   // runs cited by an F4 judgment (when that table exists and holds rows; conservative text match on the run id, like the SQL function) are never pruned
+   const judgments=(await tables.select('judgments',{})).map(j=>JSON.stringify(j));
+   const cited=(id:string)=>judgments.some(j=>j.includes(id));
    let n=0;
    const families=new Map<string,MetricRunRow[]>();
    for(const r of st.runs.values())if(r.status==='superseded'){const k=`${r.scheme}|${r.version}|${r.level}`;families.set(k,[...(families.get(k)??[]),r]);}
-   for(const rows of families.values())for(const r of rows.sort((a,b)=>b.generation-a.generation).slice(keep)){st.runs.delete(r.run_id);st.cells.delete(r.run_id);st.deps.delete(depKey('aggregate',r.run_id));n++;}
+   for(const rows of families.values())for(const r of rows.sort((a,b)=>b.generation-a.generation).slice(keep)){if(cited(r.run_id))continue;st.runs.delete(r.run_id);st.cells.delete(r.run_id);st.deps.delete(depKey('aggregate',r.run_id));n++;}
    const vfam=new Map<string,ValuationRunRow[]>();
    for(const r of st.vruns.values())if(r.status==='superseded'){const k=`${r.scheme}|${r.version}|${r.level}`;vfam.set(k,[...(vfam.get(k)??[]),r]);}
-   for(const rows of vfam.values())for(const r of rows.sort((a,b)=>b.generation-a.generation).slice(keep)){st.vruns.delete(r.run_id);st.vcells.delete(r.run_id);st.deps.delete(depKey('valuation',r.run_id));n++;}
+   for(const rows of vfam.values())for(const r of rows.sort((a,b)=>b.generation-a.generation).slice(keep)){if(cited(r.run_id))continue;st.vruns.delete(r.run_id);st.vcells.delete(r.run_id);st.deps.delete(depKey('valuation',r.run_id));n++;}
    for(const r of st.runs.values())if(r.reused_from_run!==null&&!st.runs.has(r.reused_from_run))r.reused_from_run=null;   // FK on delete set null
    for(const r of st.vruns.values())if(r.carried_from_run!==null&&!st.vruns.has(r.carried_from_run))r.carried_from_run=null;
    return n;

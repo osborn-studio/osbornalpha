@@ -36,6 +36,7 @@ const FUNCTIONS:Record<string,'read'|'service'|'internal'>={
  'put_industry_manifest(text,text,integer)':'service','gc_industry_manifest_candidates(integer,integer)':'service','delete_industry_manifests(jsonb,integer)':'service','industry_manifests_lock_for_reference(jsonb)':'internal',
  'prune_industry_runs(integer,text,text)':'service',
  'industry_metric_run_lock(uuid)':'internal','industry_valuation_run_lock(uuid)':'internal','industry_manifest_unreferenced(text)':'internal',
+ 'industry_candidate_members(text,text,integer,text,date,date)':'internal',
 };
 const TRIGGER_FUNCTIONS=['issuer_industry_memberships_lifecycle()','industry_source_memberships_immutable()','industry_runs_immutable()','industry_rows_frozen()'];
 
@@ -189,16 +190,17 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
    const m=await manifest(c);
    const r=await createRun(v,b,{},c);
    await c.query(`select public.set_industry_metric_run_coverage($1,'{"facts_scope_ready":true}'::jsonb)`,[r.run_id]);
-   expect(await stage(r.run_id,cells(m,1),c)).toBe(2);
-   expect(await deps(r.run_id,[{cell_key:'A1:2024-12-31',issuer_id:iss,state_rev:1},{cell_key:'B1:2024-12-31',issuer_id:iss,state_rev:1}],'aggregate',c)).toBe(2);
+   expect(await stage(r.run_id,cells(m,1).map(x=>x.code==='B1'?{...x,value:'0',n_members:0,n_with_data:0}:x),c)).toBe(2);   // iss is the only member (of A1)
+   expect(await deps(r.run_id,[{cell_key:'A1:2024-12-31',issuer_id:iss,state_rev:1}],'aggregate',c)).toBe(1);
    expect(await activate(r.run_id,c)).toHaveProperty('activated_at');
    const r2=await createRun(v,b,{},c);await c.query(`select public.fail_industry_run('aggregate',$1,'test')`,[r2.run_id]);
    expect(Array.isArray(await one(`select public.gc_industry_manifest_candidates(10) v`,[],c))).toBe(true);
    expect(await one(`select public.delete_industry_manifests($1::jsonb) v`,[JSON.stringify([{hash:m,claim:randomUUID()}])],c)).toBe(0);
    expect(await one(`select public.prune_industry_runs(5,'sw2021',$1) v`,[v],c)).toBe(0);
    const vr=(await one(`select public.create_industry_valuation_run($1::jsonb) v`,[JSON.stringify({scheme:'sw2021',version:v,level:3,method_version:'industry-val/1.0',config_hash:'c',formula_version:'f',code_version:'x',expected_dates:['2024-12-31'],comparator_basis:'unknown',recompute_from:'2024-01-01',carried_from_run:null,fingerprint_at:'2026-11-06T00:00:00Z',batch_id:b})],c)).run_id;
-   const vrows=['A111','B111'].flatMap(code=>['pe_ttm','pe_static','pb','market_cap'].map(metric=>({code,trade_date:'2024-12-31',metric,status:'missing',missing_reason:'no_members',value:null,facts_as_of:'2024-12-31',n_members:0,n_with_data:0,n_unresolved:0,mcap_coverage:null,manifest_hash:null})));
+   const vrows=['A111','B111'].flatMap(code=>['pe_ttm','pe_static','pb','market_cap'].map(metric=>({code,trade_date:'2024-12-31',metric,status:'missing',missing_reason:'no_members',value:null,facts_as_of:'2024-12-31',n_members:code==='A111'?1:0,n_with_data:0,n_unresolved:0,mcap_coverage:null,manifest_hash:null})));
    expect(await one(`select public.stage_industry_valuations($1,$2::jsonb) v`,[vr,JSON.stringify(vrows)],c)).toBe(8);
+   expect(await deps(vr,[{cell_key:'A111:2024-12-31',issuer_id:iss,state_rev:1}],'valuation',c)).toBe(1);   // iss is a member of A111 on the trade date
    expect(await one(`select public.stage_industry_valuation_pairs($1,$2::jsonb) v`,[vr,JSON.stringify(vrows.map(x=>({code:x.code,trade_date:x.trade_date,metric:x.metric,pair_status:'no_computed'})))],c)).toBe(8);
    expect(await one(`select public.publish_industry_valuations($1) v`,[vr],c)).toEqual({qualified_series:0,published_rows:0});
    expect(await one(`select public.activate_industry_valuation_run($1) v`,[vr],c)).toHaveProperty('activated_at');
@@ -322,16 +324,20 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
  });
 
  it('metric runs: concurrent creation numbers generations; staging needs building; activation checks completeness, dependencies, obsolescence, regression per cell and issuer, and stamps one instant',async()=>{
-  const v=await version();const b=await batch();const i1=await issuer();const i2=await issuer();const m=await manifest();
+  const v=await version();const b=await batch();const i1=await issuer();const i2=await issuer();const i3=await issuer();const m=await manifest();
+  // candidate members: i1, i2 in A1 and i3 in B1 (an issuer holds one level-1 code at a time)
+  await apply(b,i1,v,[target('A1',1)],[]);await apply(b,i2,v,[target('A1',1)],[]);await apply(b,i3,v,[target('B1',1)],[]);
+  const sized=cells(m,0).map(c=>({...c,value:c.code==='A1'?'2':'1',n_members:c.code==='A1'?2:1,n_with_data:c.code==='A1'?2:1}));
+  const dep=(cell:string,issuer_id:string,state_rev:number)=>({cell_key:`${cell}:2024-12-31`,issuer_id,state_rev});
   const gens=(await Promise.all(Array.from({length:4},()=>createRun(v,b)))).map(r=>Number(r.generation)).sort();
   expect(gens).toEqual([1,2,3,4]);
   const r=await createRun(v,b);
-  await stage(r.run_id,cells(m,2).slice(0,1));
+  await stage(r.run_id,sized.slice(0,1));
   expect((await fails(activate(r.run_id))).message).toBe('incomplete_run');
-  await stage(r.run_id,cells(m,2));
+  await stage(r.run_id,sized);
   expect((await fails(activate(r.run_id))).message).toBe('dependencies_incomplete');
   // one issuer at different state_revs in different cells is fine (V6: per cell)
-  await deps(r.run_id,[{cell_key:'A1:2024-12-31',issuer_id:i1,state_rev:3},{cell_key:'A1:2024-12-31',issuer_id:i2,state_rev:1},{cell_key:'B1:2024-12-31',issuer_id:i1,state_rev:5},{cell_key:'B1:2024-12-31',issuer_id:i2,state_rev:1}]);
+  await deps(r.run_id,[dep('A1',i1,3),dep('A1',i2,1),dep('B1',i3,5)]);
   const {activated_at}=await activate(r.run_id);
   const stamps=await q(`select distinct updated_at=$2::timestamptz same from public.industry_metrics where run_id=$1`,[r.run_id,activated_at]);
   expect(stamps).toEqual([{same:true}]);
@@ -341,17 +347,40 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
   expect((await fails(q(`select public.fail_industry_run('aggregate',$1,'x')`,[r.run_id]))).message).toMatch(/^illegal_transition/);
   // a lower generation built earlier cannot activate after a newer one
   const low=await one(`select run_id v from public.industry_metric_runs where version=$1 and generation=1`,[v]);
-  await stage(low,cells(m,0));
+  await stage(low,sized);await deps(low,[dep('A1',i1,3),dep('A1',i2,1),dep('B1',i3,5)]);
   expect((await fails(activate(low))).message).toBe('obsolete_run');
   // regression: the next run reads i1 in cell A1 at an older revision than the active run did
-  const n=await createRun(v,b);await stage(n.run_id,cells(m,2));
-  await deps(n.run_id,[{cell_key:'A1:2024-12-31',issuer_id:i1,state_rev:2},{cell_key:'A1:2024-12-31',issuer_id:i2,state_rev:1},{cell_key:'B1:2024-12-31',issuer_id:i1,state_rev:5},{cell_key:'B1:2024-12-31',issuer_id:i2,state_rev:9}]);
+  const n=await createRun(v,b);await stage(n.run_id,sized);
+  await deps(n.run_id,[dep('A1',i1,2),dep('A1',i2,1),dep('B1',i3,9)]);
   expect((await fails(activate(n.run_id))).message).toBe('dependency_regression');
-  await deps(n.run_id,[{cell_key:'A1:2024-12-31',issuer_id:i1,state_rev:3}]);
+  await deps(n.run_id,[dep('A1',i1,3)]);
   await activate(n.run_id);
   expect(await q(`select run_id,status from public.industry_metric_runs where run_id=any($1::uuid[]) order by generation`,[[r.run_id,n.run_id]])).toEqual([{run_id:r.run_id,status:'superseded'},{run_id:n.run_id,status:'active'}]);
   // two weekly runs in a row both activate
-  for(let i=0;i<2;i++){const w=await createRun(v,b,{facts_as_of:'2025-04-0'+(i+1),knowledge_date:'2025-04-0'+(i+1)});await stage(w.run_id,cells(m,0));expect(await activate(w.run_id)).toHaveProperty('activated_at');}
+  for(let i=0;i<2;i++){const w=await createRun(v,b,{facts_as_of:'2025-04-0'+(i+1),knowledge_date:'2025-04-0'+(i+1)});await stage(w.run_id,sized);await deps(w.run_id,[dep('A1',i1,9),dep('A1',i2,9),dep('B1',i3,9)]);expect(await activate(w.run_id)).toHaveProperty('activated_at');}
+ });
+
+ it('activation: each cell\'s dependency set must equal its candidate-member set as known at facts_as_of (a dependency for an unrelated issuer, a missing member, a closed or not-yet-known member are all refused)',async()=>{
+  const v=await version();const b=await batch();const m=await manifest();
+  const A=await issuer(),E=await issuer(),B=await issuer(),C=await issuer(),D=await issuer();
+  await apply(b,A,v,[target('A1',1)],[]);                                                                                        // member
+  await apply(b,E,v,[target('A1',1,{valid_to:'2024-06-30',valid_to_available_date:'2026-02-01'})],[]);                              // closure not yet known at facts_as_of → still a member
+  await apply(b,C,v,[target('A1',1,{available_date:'2026-01-01'})],[]);                                                            // not yet known at facts_as_of → not a member
+  await apply(b,D,v,[target('A1',1,{valid_to:'2024-06-30',valid_to_available_date:'2024-07-01'})],[]);                             // closed and known → not a member on 2024-12-31
+  const grid={codes:['A1'],period_ends:['2024-12-31'],metrics:['member_count']};
+  const trial=async(issuers:string[],n:number,extra:{cell_key:string;issuer_id:string;state_rev:number}[]=[])=>{
+   const run=await createRun(v,b,{expected_grid:grid});
+   await stage(run.run_id,[cells(m,n)[0]]);
+   await deps(run.run_id,[...issuers.map(i=>({cell_key:'A1:2024-12-31',issuer_id:i,state_rev:1})),...extra]);
+   return run.run_id;
+  };
+  const msg=async(run:string)=>(await fails(activate(run))).message;
+  expect(await msg(await trial([A,B],2))).toBe('dependencies_incomplete');          // E missing, unrelated B present (counts equal)
+  expect(await msg(await trial([A],2))).toBe('dependencies_incomplete');            // E missing
+  expect(await msg(await trial([A,E,C],3))).toBe('dependencies_incomplete');        // C is not known yet
+  expect(await msg(await trial([A,E,D],3))).toBe('dependencies_incomplete');        // D left before the cell date
+  expect(await msg(await trial([A,E],2,[{cell_key:'A1:2020-01-01',issuer_id:A,state_rev:1}]))).toBe('dependencies_incomplete');   // dependency of a cell that does not exist
+  expect(await activate(await trial([A,E],2))).toHaveProperty('activated_at');
  });
 
  it('run immutability and row freeze: no direct status reset, metadata frozen, rows of a left-building run frozen except the activation stamp; building rows are invisible to anon',async()=>{
@@ -393,29 +422,55 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
   expect(typeof activated_at).toBe('string');
  });
 
- it('valuation runs: staging forces unpublished, publish qualifies series once and freezes, activation re-checks and stamps; pairs_mismatch; prune removes a superseded run with rows and pairs (V8)',async()=>{
-  const v=await version();const b=await batch();
+ /** Shared by the valuation tests: a private version with member `iss` of A1 (level 1), 25 month-end dates, official observations for A1 and row/pair builders. */
+ const valuationKit=async()=>{
+  const v=await version();const b=await batch();const iss=await issuer();const m=await manifest();
+  await apply(b,iss,v,[target('A1',1)],[]);
   const dates=Array.from({length:25},(_,i)=>new Date(Date.UTC(2023,i+1,0)).toISOString().slice(0,10));   // 25 month ends
-  const create=async(recomputeFrom='2023-01-01')=>(await one(`select public.create_industry_valuation_run($1::jsonb) v`,[JSON.stringify({scheme:'sw2021',version:v,level:1,method_version:'industry-val/1.0',config_hash:'c',formula_version:'f',code_version:'x',expected_dates:dates,comparator_basis:'ttm',recompute_from:recomputeFrom,carried_from_run:null,fingerprint_at:'2026-11-06T00:00:00Z',batch_id:b})])).run_id as string;
-  const rowsFor=()=>['A1','B1'].flatMap(code=>dates.flatMap(d=>['pe_ttm','pe_static','pb','market_cap'].map(metric=>code==='A1'&&metric==='pb'
-   ?{code,trade_date:d,metric,status:'ok',missing_reason:null,value:'1.5',facts_as_of:d,n_members:0,n_with_data:0,n_unresolved:0,mcap_coverage:'1',manifest_hash:null}
-   :{code,trade_date:d,metric,status:'missing',missing_reason:'no_members',value:null,facts_as_of:d,n_members:0,n_with_data:0,n_unresolved:0,mcap_coverage:null,manifest_hash:null})));
-  /** One pair per row; the first ok row (A1 pb on the first date) is 'outside', the other ok rows 'within'. */
-  const pairsFor=(rows:{code:string;trade_date:string;metric:string;status:string}[])=>{let firstOk=true;return rows.map(x=>{
-   const pair_status=x.status!=='ok'?'no_computed':firstOk?'outside':'within';if(x.status==='ok')firstOk=false;
-   return {code:x.code,trade_date:x.trade_date,metric:x.metric,official_observation_id:null,official_value:null,rel_diff:null,pair_status};});};
-  const stageV=async(run:string,rows:unknown[],pairs:unknown[])=>{
-   await one(`select public.stage_industry_valuations($1,$2::jsonb) v`,[run,JSON.stringify(rows)]);
-   await one(`select public.stage_industry_valuation_pairs($1,$2::jsonb) v`,[run,JSON.stringify(pairs)]);
-  };
-  const r1=await create();const rows=rowsFor();
-  await stageV(r1,rows.map(x=>({...x,published:true,series_qualified:true,updated_at:'2030-01-01'})),pairsFor(rows));   // flags in the input are ignored
+  const create=async(o:Record<string,unknown>={})=>(await one(`select public.create_industry_valuation_run($1::jsonb) v`,[JSON.stringify({scheme:'sw2021',version:v,level:1,method_version:'industry-val/1.0',config_hash:'c',formula_version:'f',code_version:'x',expected_dates:dates,comparator_basis:'ttm',recompute_from:'2023-01-01',carried_from_run:null,fingerprint_at:'2026-11-06T00:00:00Z',batch_id:b,...o})])).run_id as string;
+  const missing=(code:string,d:string,metric:string,n=0)=>({code,trade_date:d,metric,status:'missing',missing_reason:'no_members',value:null,facts_as_of:d,n_members:n,n_with_data:0,n_unresolved:0,mcap_coverage:null,manifest_hash:null});
+  const okRow=(code:string,d:string,metric:string,value:string,hash:string|null=m)=>({code,trade_date:d,metric,status:'ok',missing_reason:null,value,facts_as_of:d,n_members:1,n_with_data:1,n_unresolved:0,mcap_coverage:'1',manifest_hash:hash});
+  /** Every cell of both level-1 codes; `ok` overrides the A1 rows of the given metrics (A1 has one member: n_members 1 everywhere). */
+  const rowsFor=(ok:Record<string,string>={})=>['A1','B1'].flatMap(code=>dates.flatMap(d=>['pe_ttm','pe_static','pb','market_cap'].map(metric=>code==='A1'&&ok[metric]!==undefined?okRow(code,d,metric,ok[metric]):missing(code,d,metric,code==='A1'?1:0))));
+  const e=await one(`select public.begin_industry_fetch_event('official','{}'::jsonb,$1) v`,[b]) as string;
+  const off=(metric:string,d:string,value:string)=>({scheme:'sw2021',version:v,code:'A1',trade_date:d,metric,value,source:'tushare:sw_daily',upstream:'swsresearch',raw_hash:hex(32),locator:{}});
+  // pe: 10.05 except the first date (12); pb: 2.01
+  await observe(e,dates.flatMap((d,i)=>[off('pe',d,i===0?'12':'10.05'),off('pb',d,'2.01')]),'official');
+  const ids=new Map((await q(`select metric,trade_date::text d,observation_id from public.industry_official_valuations where version=$1 and status='ok'`,[v])).map(r=>[`${r.metric}|${r.d}`,r.observation_id as string]));
+  const obs=(metric:string,d:string)=>ids.get(`${metric}|${d}`)!;
+  const comparator:Record<string,string>={pe_ttm:'pe',pe_static:'pe',pb:'pb'};
+  /** One pair per row, with the caller's claim `claim` for every row that has a comparator (derived by the database anyway). */
+  const pairsFor=(rows:{code:string;trade_date:string;metric:string;status:string}[],claim='within')=>rows.map(x=>({code:x.code,trade_date:x.trade_date,metric:x.metric,
+   official_observation_id:x.status==='ok'&&comparator[x.metric]?obs(comparator[x.metric],x.trade_date):null,official_value:'999',rel_diff:'0',pair_status:x.status==='ok'?claim:'no_computed'}));
+  const stageRows=(run:string,rows:unknown[])=>one(`select public.stage_industry_valuations($1,$2::jsonb) v`,[run,JSON.stringify(rows)]);
+  const stagePairs=(run:string,pairs:unknown[])=>one(`select public.stage_industry_valuation_pairs($1,$2::jsonb) v`,[run,JSON.stringify(pairs)]);
+  const stageV=async(run:string,rows:{code:string;trade_date:string;metric:string;status:string}[],pairs=pairsFor(rows))=>{await stageRows(run,rows);await stagePairs(run,pairs);};
+  /** One dependency per A1 cell (the sole member). */
+  const stageDeps=(run:string,rev=1,who=iss)=>deps(run,dates.map(d=>({cell_key:`A1:${d}`,issuer_id:who,state_rev:rev})),'valuation');
+  const publish=(run:string)=>one(`select public.publish_industry_valuations($1) v`,[run]);
+  return {v,b,iss,m,dates,create,missing,okRow,rowsFor,obs,pairsFor,stageRows,stagePairs,stageV,stageDeps,publish};
+ };
+
+ it('valuation runs: staging forces unpublished, pair status is derived from the official observation, publish qualifies series once and freezes, activation re-checks and stamps; pairs_mismatch; prune removes a superseded run with rows, pairs and dependencies (V8)',async()=>{
+  const k=await valuationKit();const {v,dates,create,rowsFor,stageV,stageDeps,publish}=k;
+  const rows=rowsFor({pe_ttm:'10'});
+  const r1=await create();
+  await stageV(r1,rows.map(x=>({...x,published:true,series_qualified:true,updated_at:'2030-01-01'})),k.pairsFor(rows));   // flags in the input are ignored
   expect(await one(`select count(*)::int v from public.industry_valuations where run_id=$1 and (published or series_qualified or updated_at is not null)`,[r1])).toBe(0);
+  // the caller claimed 'within' for every ok row: the database recomputed rel_diff from the staged value and the referenced official observation
+  expect((await q(`select pair_status,count(*)::int n from public.industry_valuation_pairs where run_id=$1 and metric='pe_ttm' and code='A1' group by 1 order by 1`,[r1]))).toEqual([{pair_status:'outside',n:1},{pair_status:'within',n:24}]);
+  const first=(await q(`select official_value::float8 ov,rel_diff::float8 rd,pair_status from public.industry_valuation_pairs where run_id=$1 and code='A1' and metric='pe_ttm' and trade_date=$2`,[r1,dates[0]]))[0];
+  expect(first.pair_status).toBe('outside');expect(first.ov).toBe(12);expect(first.rd).toBeCloseTo(10/12-1,9);   // the caller's official_value 999 / rel_diff 0 are ignored
+  // an extra A1 pe_ttm cell outside expected_dates (inserted directly: admin may write while the run is building) is not counted in the series
+  await q(`insert into public.industry_valuations(run_id,scheme,version,code,trade_date,metric,status,value,facts_as_of,n_members,manifest_hash) values($1,'sw2021',$2,'A1','2030-01-31','pe_ttm','ok',10,'2030-01-31',1,$3)`,[r1,v,k.m]);
+  await q(`insert into public.industry_valuation_pairs(run_id,scheme,version,code,trade_date,metric,pair_status) values($1,'sw2021',$2,'A1','2030-01-31','pe_ttm','outside')`,[r1,v]);
+  await stageDeps(r1);await deps(r1,[{cell_key:'A1:2030-01-31',issuer_id:k.iss,state_rev:1}],'valuation');
   expect((await fails(q(`select public.activate_industry_valuation_run($1)`,[r1]))).message).toMatch(/^illegal_transition/);   // building, not published
-  expect(await one(`select public.publish_industry_valuations($1) v`,[r1])).toEqual({qualified_series:1,published_rows:24});
+  expect(await publish(r1)).toEqual({qualified_series:1,published_rows:24});
+  expect(await one(`select e->>'n_pairs' v from public.industry_valuation_runs r, jsonb_array_elements(r.reconciliation->'series') e where r.run_id=$1 and e->>'code'='A1' and e->>'metric'='pe_ttm'`,[r1])).toBe('25');   // the 2030 cell is not an expected date
   expect(await one(`select count(*)::int v from public.industry_valuations where run_id=$1 and published and trade_date=$2`,[r1,dates[0]])).toBe(0);   // the outside date stays unpublished
   const refused=async(p:Promise<unknown>)=>{const e=await fails(p);expect(e.code).toBe('23514');};
-  await refused(q(`update public.industry_valuations set published=true where run_id=$1 and trade_date=$2 and metric='pb'`,[r1,dates[0]]));
+  await refused(q(`update public.industry_valuations set published=true where run_id=$1 and trade_date=$2 and metric='pe_ttm' and code='A1'`,[r1,dates[0]]));
   await refused(q(`update public.industry_valuation_pairs set pair_status='within' where run_id=$1`,[r1]));
   await refused(q(`delete from public.industry_valuation_pairs where run_id=$1`,[r1]));
   expect((await fails(q(`select public.stage_industry_valuations($1,'[]'::jsonb)`,[r1]))).message).toBe('run_not_building');
@@ -423,20 +478,91 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
   const {activated_at}=await one(`select public.activate_industry_valuation_run($1) v`,[r1]);
   expect(await one(`select bool_and(updated_at=$2::timestamptz) v from public.industry_valuations where run_id=$1`,[r1,activated_at])).toBe(true);
   await q(`update public.industry_dataset_licenses set status='public' where dataset_key=$1`,[`scheme:sw2021:${v}`]);
-  expect(await asRole('anon',async c=>Number((await c.query(`select count(*) n from public.industry_valuations where run_id=$1`,[r1])).rows[0].n))).toBe(24);
+  expect(await asRole('anon',async c=>Number((await c.query(`select count(*) n from public.industry_valuations where run_id=$1 and published`,[r1])).rows[0].n))).toBe(24);
   await q(`update public.industry_dataset_licenses set status='internal' where dataset_key=$1`,[`scheme:sw2021:${v}`]);
   // pairs_mismatch: a valuation row without its pair
-  const bad=await create();await stageV(bad,rows,pairsFor(rows).slice(1));
+  const bad=await create();await stageV(bad,rows,k.pairsFor(rows).slice(1));
   expect((await fails(q(`select public.publish_industry_valuations($1)`,[bad]))).message).toBe('pairs_mismatch');
   await q(`select public.fail_industry_run('valuation',$1,'pairs_mismatch')`,[bad]);
   expect(await one(`select reconciliation->>'failure_reason' v from public.industry_valuation_runs where run_id=$1`,[bad])).toBe('pairs_mismatch');
-  // two more weekly runs with different recompute_from both activate: r1 becomes superseded, then the next; prune(keep 1) removes r1 with its rows and pairs
-  for(const from of ['2023-10-31','2023-11-30']){const r=await create(from);await stageV(r,rows,pairsFor(rows));await one(`select public.publish_industry_valuations($1) v`,[r]);await one(`select public.activate_industry_valuation_run($1) v`,[r]);}
+  // two more weekly runs with different recompute_from both activate: r1 becomes superseded, then the next; prune(keep 1) removes r1 with its rows, pairs and dependencies
+  expect(await one(`select count(*)::int v from public.industry_run_dependencies where run_kind='valuation' and run_id=$1`,[r1])).toBe(26);
+  for(const from of ['2023-10-31','2023-11-30']){const r=await create({recompute_from:from});await stageV(r,rows);await stageDeps(r);await publish(r);await one(`select public.activate_industry_valuation_run($1) v`,[r]);}
   await refused(q(`delete from public.industry_valuation_runs where run_id=$1 and status='active'`,[await one(`select run_id v from public.industry_valuation_runs where version=$1 and status='active'`,[v])]));
   expect(await one(`select public.prune_industry_runs(1,'sw2021',$1) v`,[v])).toBe(1);
   expect(await one(`select count(*)::int v from public.industry_valuation_runs where run_id=$1`,[r1])).toBe(0);
-  expect(await one(`select (select count(*) from public.industry_valuations where run_id=$1)+(select count(*) from public.industry_valuation_pairs where run_id=$1) v`,[r1])).toBe('0');
+  expect(await one(`select (select count(*) from public.industry_valuations where run_id=$1)+(select count(*) from public.industry_valuation_pairs where run_id=$1)+(select count(*) from public.industry_run_dependencies where run_kind='valuation' and run_id=$1) v`,[r1])).toBe('0');
   expect(await one(`select count(*)::int v from public.industry_valuation_runs where version=$1 and status='superseded'`,[v])).toBe(1);
+ },60000);
+
+ it('valuation staging: ok rows need a registered manifest (stage and publish), dates must be expected dates, a pair label is never trusted',async()=>{
+  const k=await valuationKit();const {v,dates,create,okRow,missing,stageRows,stagePairs,pairsFor,m}=k;
+  const run=await create();
+  // item 4: ok without a manifest (null, or a hash nobody registered) is refused at staging; a registered one is accepted
+  for(const hash of [null,hex(32)])expect((await fails(stageRows(run,[okRow('A1',dates[0],'pe_ttm','10',hash)]))).message).toBe('invalid_manifest');
+  expect(await stageRows(run,[okRow('A1',dates[0],'pe_ttm','10',m)])).toBe(1);
+  // … and publish refuses an ok row that reached the table without one (inserted directly: admin may write while building)
+  const bare=await create();
+  await q(`insert into public.industry_valuations(run_id,scheme,version,code,trade_date,metric,status,value,facts_as_of) values($1,'sw2021',$2,'A1',$3,'pe_ttm','ok',10,$3)`,[bare,v,dates[0]]);
+  await q(`insert into public.industry_valuation_pairs(run_id,scheme,version,code,trade_date,metric,pair_status) values($1,'sw2021',$2,'A1',$3,'pe_ttm','no_official')`,[bare,v,dates[0]]);
+  expect((await fails(q(`select public.publish_industry_valuations($1)`,[bare]))).message).toBe('invalid_manifest');
+  // item 6: valuation and pair dates must be in the run's expected_dates
+  expect((await fails(stageRows(run,[missing('A1','2030-01-31','pe_ttm')]))).message).toBe('invalid_trade_date');
+  expect((await fails(stagePairs(run,[{code:'A1',trade_date:'2030-01-31',metric:'pe_ttm',pair_status:'no_computed'}]))).message).toBe('invalid_trade_date');
+  // item 5: the label is ignored — 'within' without an official observation is stored no_official; a wrong-metric, wrong-date, other-code or superseded observation is no official either
+  const pairOf=async(label:string,id:string|null,d=dates[1])=>{
+   await stagePairs(run,[{code:'A1',trade_date:d,metric:'pe_ttm',official_observation_id:id,official_value:'10',rel_diff:'0',pair_status:label}]);
+   return (await q(`select pair_status,official_observation_id,official_value,rel_diff from public.industry_valuation_pairs where run_id=$1 and code='A1' and trade_date=$2 and metric='pe_ttm'`,[run,d]))[0];
+  };
+  await stageRows(run,[okRow('A1',dates[1],'pe_ttm','10',m),okRow('A1',dates[2],'pe_ttm','10',m)]);
+  const none={pair_status:'no_official',official_observation_id:null,official_value:null,rel_diff:null};
+  expect(await pairOf('within',null)).toEqual(none);
+  expect(await pairOf('within',k.obs('pb',dates[1]))).toEqual(none);                 // another metric (pb) is not the pe comparator
+  expect(await pairOf('within',k.obs('pe',dates[2]))).toEqual(none);                 // another trade date
+  const e2=await one(`select public.begin_industry_fetch_event('official','{}'::jsonb,$1) v`,[k.b]) as string;
+  await observe(e2,[{scheme:'sw2021',version:v,code:'A1',trade_date:dates[1],metric:'pe',value:'10.02',source:'tushare:sw_daily',upstream:'swsresearch',raw_hash:hex(32),locator:{}}],'official');   // supersedes the 10.05 observation
+  expect(await pairOf('within',k.obs('pe',dates[1]))).toEqual(none);                // the referenced observation is no longer current
+  const cur=await one(`select observation_id v from public.industry_official_valuations where version=$1 and code='A1' and metric='pe' and trade_date=$2 and status='ok'`,[v,dates[1]]);
+  expect(await pairOf('outside',cur)).toMatchObject({pair_status:'within',official_observation_id:cur});   // 10 / 10.02 - 1 = -0.2 %: the claim 'outside' is ignored
+  expect(await pairOf('within',k.obs('pe',dates[6]),dates[6])).toMatchObject({pair_status:'no_computed'});   // no staged valuation row for that cell
+  // market_cap is never compared; a non-positive official value is an invalid denominator; a missing computed value is no_computed
+  await stageRows(run,[okRow('A1',dates[3],'market_cap','5000',m),missing('A1',dates[4],'pe_ttm'),okRow('A1',dates[5],'pe_ttm','10',m)]);
+  await stagePairs(run,[{code:'A1',trade_date:dates[3],metric:'market_cap',official_observation_id:null,pair_status:'within'},{code:'A1',trade_date:dates[4],metric:'pe_ttm',official_observation_id:k.obs('pe',dates[4]),pair_status:'within'}]);
+  expect((await q(`select metric,pair_status from public.industry_valuation_pairs where run_id=$1 and trade_date in ($2,$3) order by trade_date`,[run,dates[3],dates[4]]))).toEqual([{metric:'market_cap',pair_status:'not_applicable'},{metric:'pe_ttm',pair_status:'no_computed'}]);
+  const zero=await one(`select public.begin_industry_fetch_event('official','{}'::jsonb,$1) v`,[k.b]) as string;
+  await observe(zero,[{scheme:'sw2021',version:v,code:'A1',trade_date:dates[5],metric:'pe',value:'0',source:'tushare:sw_daily',upstream:'swsresearch',raw_hash:hex(32),locator:{}}],'official');
+  const zid=await one(`select observation_id v from public.industry_official_valuations where version=$1 and code='A1' and metric='pe' and trade_date=$2 and status='ok'`,[v,dates[5]]);
+  expect((await pairOf('within',zid,dates[5])).pair_status).toBe('invalid_denominator');
+  // a whole series labelled 'within' by the caller without any official observation is never published
+  const lie=await create();const rows=k.rowsFor({pe_ttm:'10'});
+  await k.stageRows(lie,rows);await k.stagePairs(lie,pairsFor(rows).map(p=>({...p,official_observation_id:null})));
+  expect(await k.publish(lie)).toEqual({qualified_series:0,published_rows:0});
+  expect(await one(`select count(*)::int v from public.industry_valuation_pairs where run_id=$1 and pair_status='no_official'`,[lie])).toBe(25);
+ },60000);
+
+ it('valuation publish gate: pb and market_cap never qualify; pe_ttm only with comparator_basis ttm, pe_static only with static (§6.4 K1)',async()=>{
+  const k=await valuationKit();
+  const cases:[string,string,string,boolean][]=[['ttm','pe_ttm','10',true],['static','pe_ttm','10',false],['static','pe_static','10',true],['ttm','pe_static','10',false],
+   ['ttm','pb','2',false],['static','pb','2',false],['unknown','pe_ttm','10',false],['ttm','market_cap','5000',false]];
+  for(const [basis,metric,value,qualified] of cases){
+   const run=await k.create({comparator_basis:basis});const rows=k.rowsFor({[metric]:value});
+   await k.stageV(run,rows.filter(x=>x.code==='A1'&&x.metric===metric),k.pairsFor(rows.filter(x=>x.code==='A1'&&x.metric===metric),'within'));
+   // pe_ttm: 10 vs 10.05 and the first date 12 (24 of 25 within); pb: 2 vs 2.01 (all within) — a pair-wise perfect pb series still does not qualify
+   const res=await k.publish(run);
+   expect({basis,metric,qualified_series:res.qualified_series}).toEqual({basis,metric,qualified_series:qualified?1:0});
+   const published=Number(await one(`select count(*)::int v from public.industry_valuations where run_id=$1 and published`,[run]));
+   expect({basis,metric,published}).toEqual({basis,metric,published:qualified?24:0});
+  }
+ },60000);
+
+ it('valuation activation: the dependency set of each cell must equal its candidate-member set as known on the trade date',async()=>{
+  const k=await valuationKit();const rows=k.rowsFor({});const stranger=await issuer();
+  const bad=await k.create();await k.stageV(bad,rows);await k.stageDeps(bad,1,stranger);   // n_members 1 and one dependency, but for a non-member
+  await k.publish(bad);
+  expect((await fails(q(`select public.activate_industry_valuation_run($1)`,[bad]))).message).toBe('dependencies_incomplete');
+  const good=await k.create();await k.stageV(good,rows);await k.stageDeps(good);
+  await k.publish(good);
+  expect(await one(`select public.activate_industry_valuation_run($1) v`,[good])).toHaveProperty('activated_at');
  },60000);
 
  it('apply_sic_memberships: insert, duplicate, close-and-open, same_day_change',async()=>{
@@ -543,6 +669,48 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
   expect(await gcHashes()).not.toContain(h2);    // referenced
   expect(await one(`select gc_claimed_at is null v from public.industry_manifests where manifest_hash=$1`,[h2])).toBe(true);
   await q(`select public.fail_industry_run('aggregate',$1,'test')`,[r1]);await q(`select public.fail_industry_run('aggregate',$1,'test')`,[r2]);
+ });
+ it('GC claim re-checks references after taking the locks (Codex review P1): staging that commits between the candidate snapshot and the row lock leaves the hash unclaimed',async()=>{
+  const v=`t${hex(4)}`;await q(`insert into public.industry_dataset_licenses(dataset_key,status,decided_by) values($1,'internal','test')`,[`scheme:sw2021:${v}`]);
+  const b=randomUUID();await q(`insert into public.ingest_batches(batch_id,producer,dataset) values($1,'t','industry.test')`,[b]);
+  const run=(await one(`select public.create_industry_metric_run($1::jsonb) v`,[JSON.stringify({scheme:'sw2021',version:v,level:2,facts_as_of:'2025-03-31',knowledge_date:'2025-03-31',history_class:'reconstruction',method_version:'m',config_hash:'c',formula_version:'f',code_version:'x',expected_grid:{codes:['A1'],period_ends:['2024-12-31'],metrics:['member_count']},fingerprint_at:'2026-11-06T00:00:00Z',reused_from_run:null,batch_id:b})])).run_id as string;
+  const h=hex(32);await q(`select public.put_industry_manifest($1,'aggregate',5)`,[h]);
+  await q(`update public.industry_manifests set created_at=now()-interval '2 days' where manifest_hash=$1`,[h]);
+  const row=JSON.stringify([{code:'A1',metric:'member_count',period_start:'2024-12-31',period_end:'2024-12-31',duration:'INSTANT',status:'ok',missing_reason:null,value:'1',unit:'count',n_members:1,n_with_data:1,n_unresolved:0,manifest_hash:h}]);
+  await inTx(admin,async({c,pid,commit})=>{
+   await c.query('lock table public.industry_metrics in access exclusive mode');
+   const gc=gcHashes();gc.catch(()=>{});
+   await stillBlockedBehind(admin,pid,gc);                                  // the candidate scan took its snapshot and waits to read industry_metrics
+   await c.query(`select public.stage_industry_metrics($1,$2::jsonb)`,[run,row]);   // the reference commits after that snapshot, before the row lock
+   await commit();
+   expect(await gc).not.toContain(h);
+  });
+  expect(await one(`select gc_claimed_at is null v from public.industry_manifests where manifest_hash=$1`,[h])).toBe(true);
+  await q(`select public.fail_industry_run('aggregate',$1,'test')`,[run]);
+ });
+
+ it('apply_industry_memberships and correct_industry_membership_windows lock the source records before validating them (Codex review P2): a record superseded by a concurrent refresh is refused',async()=>{
+  const v=await version();const b=await batch();const iss=await issuer();const s=srcRow();
+  await upsertSources(b,[s]);const [rec]=await currentSource(s.l1_code);
+  await inTx(admin,async({c,pid,commit})=>{
+   expect(await upsertSources(b,[{...s,out_date:'2024-01-02'}],c)).toMatchObject({superseded:1});     // uncommitted: the record is superseded
+   const second=apply(b,iss,v,three(rec.id),[rec.id]);second.catch(()=>{});
+   await stillBlockedBehind(admin,pid,second);
+   await commit();
+   expect((await fails(second)).message).toMatch(/^membership_conflict/);
+  });
+  expect(await rowsOf(iss)).toEqual([]);
+  // the same for a correction of a resolved record
+  const s2=srcRow();await upsertSources(b,[s2]);const [rec2]=await currentSource(s2.l1_code);
+  await apply(b,iss,v,three(rec2.id),[rec2.id]);
+  await inTx(admin,async({c,pid,commit})=>{
+   await upsertSources(b,[{...s2,out_date:'2024-01-02'}],c);
+   const corr=one(`select public.correct_industry_membership_windows($1,$2,'sw2021',$3,$4,$5::jsonb) v`,[b,iss,v,rec2.id,JSON.stringify(three(rec2.id,{valid_to:'2023-06-30',valid_to_available_date:'2023-06-30'}))]);corr.catch(()=>{});
+   await stillBlockedBehind(admin,pid,corr);
+   await commit();
+   expect((await fails(corr)).message).toMatch(/^membership_conflict/);
+  });
+  expect((await rowsOf(iss)).every(r=>r.status==='ok'&&r.valid_to===null)).toBe(true);
  });
 });
 

@@ -5,6 +5,8 @@
 import {randomBytes,randomUUID} from 'node:crypto';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {describe,expect,it} from 'vitest';
+import {memoryTableClient} from '../db/memory-table-client';
+import type {TableClient} from '../db/table-client';
 import type {ScopeRow} from '../facts/types';
 import {IndustryDbError,STAGE_CHUNK,supabaseIndustryDb,toIndustryDbError} from './db';
 import {cell,industryDbContract,mark,newRun,nodes,sha,sourceInput,threeRows} from './db-contract';
@@ -17,9 +19,12 @@ const scopeRow=(issuer_id:string,state_rev:number):ScopeRow=>({issuer_id,market:
 
 industryDbContract('memoryIndustryDb contract',async()=>{
  const scope=new Map<string,number>();
- const db=memoryIndustryDb({facts:{scopeAll:async()=>[...scope].map(([i,r])=>scopeRow(i,r))}});
+ // the injected tables stand for the schema's foreign keys: issuers, ingest_batches and stocks_universe are populated by the harness
+ const tables=memoryTableClient({dq_quarantine:['id'],dq_freshness:['dataset'],issuers:['issuer_id'],ingest_batches:['batch_id'],stocks_universe:['ticker']});
+ const db=memoryIndustryDb({tables,facts:{scopeAll:async()=>[...scope].map(([i,r])=>scopeRow(i,r))}});
  let offset=0;
- return {db,tables:db.tables,issuer:async()=>randomUUID(),batch:async()=>randomUUID(),ticker:async()=>`ZZ${hex(4).toUpperCase()}`,
+ const make=async(table:string,key:string,value:string)=>{await tables.insert(table,{[key]:value});return value;};
+ return {db,tables:db.tables,issuer:()=>make('issuers','issuer_id',randomUUID()),batch:()=>make('ingest_batches','batch_id',randomUUID()),ticker:()=>make('stocks_universe','ticker',`ZZ${hex(4).toUpperCase()}`),
   version:async()=>{const v=`t${hex(4)}`;db.seedLicense(`scheme:sw2021:${v}`,'internal');return v;},
   factScope:async(i,rev)=>{scope.set(i,rev);},
   ageManifest:async(_hash,seconds)=>{offset+=seconds*1000;db.setNow(new Date(Date.now()+offset).toISOString());}};
@@ -91,6 +96,46 @@ describe('memoryIndustryDb specifics',()=>{
   expect((await db.metricRun(ids[2]))!.reused_from_run).toBeNull();
   expect((await db.metricRun(ids[3]))!.status).toBe('active');
   await expect(db.pruneRuns(0)).rejects.toMatchObject({message:'invalid_keep'});
+ });
+ it('observation writes are atomic with their quarantine items: a failing filing rolls the call back and a retry applies it once',async()=>{
+  const base=memoryTableClient({dq_quarantine:['id'],dq_freshness:['dataset']});let failFiling=true;
+  const tables:TableClient={...base,insert:async(t,row)=>{if(t==='dq_quarantine'&&failFiling){failFiling=false;throw new Error('filing_failed');}return base.insert(t,row);}};
+  const db=memoryIndustryDb({tables});const t='ZZATOM';
+  const e1=await db.beginFetchEvent('marks',{},'b');await db.applyObservations('marks',e1,[mark(t,'1')]);
+  const e2=await db.beginFetchEvent('marks',{},'b');
+  await expect(db.applyObservations('marks',e2,[mark(t,'2')])).rejects.toThrow('filing_failed');
+  expect((await db.currentMarksOn('2001-01-05',[t])).map(m=>m.close)).toEqual(['1']);                       // the revision was not installed
+  expect(db.marks().filter(m=>m.status==='superseded')).toEqual([]);
+  expect(await db.applyObservations('marks',e2,[mark(t,'2')])).toEqual({inserted:0,duplicates:0,superseded:1});   // no receipt was left: the retry is a normal revision
+  expect(await tables.select('dq_quarantine',{reason_code:'mark_revised',status:'open'})).toHaveLength(1);
+ });
+ it('foreign keys are mirrored once the injected tables hold rows: unknown issuer, ticker and batch are refused; empty tables are not authoritative',async()=>{
+  const tables=memoryTableClient({dq_quarantine:['id'],dq_freshness:['dataset']});
+  const db=memoryIndustryDb({tables});
+  await db.applyObservations('marks',await db.beginFetchEvent('marks',{},'b'),[mark('ZZANY','1')]);        // stocks_universe empty: accepted
+  await tables.insert('stocks_universe',{ticker:'ZZKNOWN'});
+  const e=await db.beginFetchEvent('marks',{},'b');
+  await expect(db.applyObservations('marks',e,[mark('ZZKNOWN','1',{trade_date:'2001-02-01'}),mark('ZZOTHER','1',{trade_date:'2001-02-01'})])).rejects.toMatchObject({code:'unknown',message:'security_marks_ticker_fkey'});
+  expect(await db.currentMarksOn('2001-02-01',['ZZKNOWN'])).toEqual([]);                                  // mixed batch: nothing written
+  await tables.insert('ingest_batches',{batch_id:'known-batch'});
+  await expect(db.createMetricRun(newRun('v','other-batch'))).rejects.toMatchObject({message:'invalid_batch'});
+  await tables.insert('issuers',{issuer_id:'known-issuer'});
+  await expect(db.applyMemberships('known-batch','other-issuer','sw2021','2021',[],[],{})).rejects.toMatchObject({message:'issuer_not_found'});
+ });
+ it('pruneRuns never prunes a run cited by a judgment (table present in the injected tables, like the SQL function)',async()=>{
+  const tables=memoryTableClient({dq_quarantine:['id'],dq_freshness:['dataset']});
+  const db=memoryIndustryDb({tables});const v=`t${hex(3)}`;
+  await db.upsertClassifications('b',nodes(v));
+  const grid={codes:['A1'],period_ends:['2024-12-31'],metrics:['member_count' as const]};
+  const ids:string[]=[];
+  for(let i=0;i<4;i++){
+   const {runId}=await db.createMetricRun(newRun(v,'b',{expected_grid:grid}));
+   await db.stageMetricRows(runId,[cell({metric:'member_count',period_end:'2024-12-31',n_members:0})]);
+   await db.activateMetricRun(runId);ids.push(runId);
+  }
+  await tables.insert('judgments',{id:'j1',evidence:{run:ids[0]}});
+  expect(await db.pruneRuns(1)).toBe(1);                                                                  // gen 1 is cited; gen 2 goes; gen 3 is kept
+  expect((await db.metricRun(ids[0]))!.status).toBe('superseded');expect(await db.metricRun(ids[1])).toBeNull();expect(await db.metricRun(ids[2])).not.toBeNull();
  });
  it('seeded valuation runs: activeValuationRun and publishedValuations return published rows only',async()=>{
   const db=memoryIndustryDb();

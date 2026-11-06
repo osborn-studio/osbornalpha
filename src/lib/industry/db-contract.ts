@@ -6,6 +6,8 @@
 // memberships and runs use a private version per scenario (harness.version(), which also registers
 // an internal licence key 'scheme:sw2021:<version>'); source records use random ts_code and l1_code;
 // marks use harness tickers. The four real licence rows are only read, never changed.
+// Counting convention (apply_observations): a mark input with status 'quarantined' is stored as evidence and counted in
+// `inserted` (the result has no separate count); it never becomes current.
 import {randomBytes,randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import type {TableClient} from '../db/table-client';
@@ -32,6 +34,8 @@ export interface IndustryContractHarness{
 const hex=(n:number)=>randomBytes(n).toString('hex');
 /** IndustryDbError code of a rejection, 'resolved' when it did not reject. */
 export const code=(p:Promise<unknown>)=>p.then(()=>'resolved',e=>e instanceof IndustryDbError?e.code:`not_industry_db_error:${String(e)}`);
+/** IndustryDbError message of a rejection ('resolved' when it did not reject). */
+export const message=(p:Promise<unknown>)=>p.then(()=>'resolved',e=>e instanceof IndustryDbError?e.message:`not_industry_db_error:${String(e)}`);
 export const sha=()=>hex(32);
 /** Six sw2021 nodes of a private version: A1 > A11 > A111 and B1 > B11 > B111. */
 export function nodes(version:string):ClassificationRow[]{
@@ -315,6 +319,7 @@ export function industryDbContract(label:string,setup:()=>Promise<IndustryContra
 
   it('metric runs: generations, building-only staging, completeness, dependencies, one activation instant, obsolete and regressing runs refused, legal failures only',async()=>{
    const v=await tree();const b=await h.batch();const i1=await h.issuer();const i2=await h.issuer();
+   for(const i of [i1,i2])await db.applyMemberships(b,i,'sw2021',v,[target('A1',1)],[],{});     // the cells' candidate members (dependency sets must equal them)
    const m=sha();expect(await db.registerManifest(m,'aggregate',123)).toBe(true);
    const r1=await db.createMetricRun(newRun(v,b));const r2=await db.createMetricRun(newRun(v,b,{facts_as_of:'2025-06-30',knowledge_date:'2025-06-30'}));
    expect([r1.generation,r2.generation]).toEqual([1,2]);
@@ -422,9 +427,70 @@ export function industryDbContract(label:string,setup:()=>Promise<IndustryContra
    expect(await code(db.registerManifest(raced,'aggregate',10))).toBe('manifest_gc_in_progress');
    const r2=await db.createMetricRun(newRun(v,b));
    expect(await code(db.stageMetricRows(r2.runId,[cell({metric:'member_count',period_end:'2024-06-30',status:'ok',missing_reason:null,value:'1',manifest_hash:raced})]))).toBe('manifest_gc_in_progress');
+   expect(await code(db.stageMetricRows(r2.runId,[cell({metric:'member_count',period_end:'2024-06-30',status:'ok',missing_reason:null,value:'1',manifest_hash:sha()}),
+    cell({metric:'member_count',period_end:'2024-12-31',status:'ok',missing_reason:null,value:'1',manifest_hash:raced})]))).toBe('manifest_gc_in_progress');   // the claim is checked over the whole input before any row's own errors
    expect(await db.deleteManifestIndex([{hash:raced,claim:rc.claim}])).toBe(1);
    expect(await db.registerManifest(raced,'aggregate',10)).toBe(true);
    await db.failRun('aggregate',r.runId,'test');await db.failRun('aggregate',r2.runId,'test');
+  });
+
+  it('activation: each cell\'s dependency issuers equal its candidate members as known at facts_as_of — an unrelated, missing, not-yet-known or already-left issuer is refused',async()=>{
+   const v=await tree();const b=await h.batch();const A=await h.issuer(),E=await h.issuer(),B=await h.issuer(),C=await h.issuer(),D=await h.issuer();
+   const m=sha();await db.registerManifest(m,'aggregate',10);
+   const join=(i:string,o:Partial<MembershipTarget>={})=>db.applyMemberships(b,i,'sw2021',v,[target('A1',1,o)],[],{});
+   await join(A);                                                                                              // member
+   await join(E,{valid_to:'2024-06-30',valid_to_available_date:'2026-02-01'});                                 // its closure is not known at facts_as_of → still a member
+   await join(C,{available_date:'2026-01-01'});                                                                // not known at facts_as_of → not a member
+   await join(D,{valid_to:'2024-06-30',valid_to_available_date:'2024-07-01'});                                 // closed and known → not a member on 2024-12-31
+   const grid={codes:['A1'],period_ends:['2024-12-31'],metrics:['member_count' as const]};
+   const trial=async(issuers:string[],n:number,extra:{cell_key:string;issuer_id:string;state_rev:number}[]=[])=>{
+    const r=await db.createMetricRun(newRun(v,b,{expected_grid:grid}));
+    await db.stageMetricRows(r.runId,[cell({metric:'member_count',period_end:'2024-12-31',status:'ok',missing_reason:null,value:String(n),manifest_hash:m,n_members:n,n_with_data:n})]);
+    await db.stageRunDependencies(r.runId,'aggregate',[...issuers.map(i=>({cell_key:'A1:2024-12-31',issuer_id:i,state_rev:1})),...extra]);
+    return r.runId;
+   };
+   expect(await code(db.activateMetricRun(await trial([A,B],2)))).toBe('dependencies_incomplete');          // E missing, unrelated B present (the counts agree)
+   expect(await code(db.activateMetricRun(await trial([A],2)))).toBe('dependencies_incomplete');
+   expect(await code(db.activateMetricRun(await trial([A,E,C],3)))).toBe('dependencies_incomplete');
+   expect(await code(db.activateMetricRun(await trial([A,E,D],3)))).toBe('dependencies_incomplete');
+   expect(await code(db.activateMetricRun(await trial([A,E],2,[{cell_key:'A1:2020-01-01',issuer_id:A,state_rev:1}])))).toBe('dependencies_incomplete');   // a dependency of a cell without rows
+   expect(await db.activateMetricRun(await trial([A,E],2))).toHaveProperty('activatedAt');
+  });
+
+  it('stage calls: a conflict key twice in one call is refused as a whole (ON CONFLICT cardinality), also for dependencies',async()=>{
+   const v=await tree();const b=await h.batch();const i=await h.issuer();
+   const r=await db.createMetricRun(newRun(v,b));
+   const c1=cell({metric:'member_count',period_end:'2024-06-30'});
+   expect(await code(db.stageMetricRows(r.runId,[c1,cell({metric:'member_count',period_end:'2024-12-31'}),{...c1,n_members:3}]))).toBe('unknown');
+   expect(await db.metricRowsOfRun(r.runId)).toEqual([]);                                                  // nothing of the refused call is staged
+   const d={cell_key:'A1:2024-06-30',issuer_id:i,state_rev:1};
+   expect(await code(db.stageRunDependencies(r.runId,'aggregate',[d,{cell_key:'A1:2024-12-31',issuer_id:i,state_rev:1},{...d,state_rev:2}]))).toBe('unknown');
+   expect(await db.runDependencies('aggregate',r.runId)).toEqual([]);
+   await db.failRun('aggregate',r.runId,'test');
+  });
+
+  it('guards of the SQL functions: invalid kinds, unknown issuer/batch/ticker, resolution shape, unknown grid metrics are ignored, payload change is reported before row constraints',async()=>{
+   const v=await tree();const b=await h.batch();const iss=await h.issuer();
+   const r=await db.createMetricRun(newRun(v,b,{expected_grid:{codes:['A1'],period_ends:['2024-12-31'],metrics:['member_count','bogus_metric' as never]}}));
+   expect(await message(db.stageRunDependencies(r.runId,'bogus' as never,[]))).toBe('invalid_kind');
+   expect(await message(db.failRun('bogus' as never,r.runId,'x'))).toBe('invalid_kind');
+   await db.stageMetricRows(r.runId,[cell({metric:'member_count',period_end:'2024-12-31',n_members:0})]);
+   expect(await db.activateMetricRun(r.runId)).toHaveProperty('activatedAt');                              // the unknown grid metric names no required cell
+   expect(await message(db.createMetricRun(newRun(v,randomUUID())))).toBe('invalid_batch');
+   expect(await message(db.applyMemberships(b,iss,'sw2021',v,[],[],5 as never))).toBe('invalid_resolution');
+   const ghost=randomUUID();
+   expect(await message(db.applyMemberships(b,ghost,'sw2021',v,[target('A1',1)],[],{}))).toBe('issuer_not_found');
+   expect(await message(db.correctMembershipWindows(b,ghost,'sw2021',v,randomUUID(),[]))).toBe('issuer_not_found');
+   expect(await message(db.applySicMembership(b,ghost,'2026-01-05',null,{},{leaseBatch:b}))).toBe('issuer_not_found');
+   // a retry of one event with another payload is reported as such even when the new payload would violate a row constraint
+   const t=await h.ticker();const e1=await db.beginFetchEvent('marks',{},b);
+   await db.applyObservations('marks',e1,[mark(t,'5',{trade_date:'2001-07-01'})]);
+   expect(await code(db.applyObservations('marks',e1,[mark(t,'0',{trade_date:'2001-07-01'})]))).toBe('fetch_event_payload_changed');
+   expect(await code(db.applyObservations('marks',await db.beginFetchEvent('marks',{},b),[mark(t,'0',{trade_date:'2001-07-02'})]))).toBe('unknown');   // check constraint on a new row
+   // a ticker outside stocks_universe fails the whole call
+   const e2=await db.beginFetchEvent('marks',{},b);
+   expect(await code(db.applyObservations('marks',e2,[mark(t,'1',{trade_date:'2001-07-03'}),mark(`ZZ${hex(4).toUpperCase()}`,'1',{trade_date:'2001-07-03'})]))).toBe('unknown');
+   expect(await db.currentMarksOn('2001-07-03',[t])).toEqual([]);
   });
 
   it('state fingerprint and freshness',async()=>{

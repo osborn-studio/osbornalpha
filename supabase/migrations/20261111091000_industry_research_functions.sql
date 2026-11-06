@@ -236,6 +236,21 @@ begin
 end $$;
 revoke execute on function public.industry_manifest_unreferenced(text) from public, anon, authenticated, service_role;
 
+-- Candidate members of one cell (Codex review P1, dependency set equality): distinct issuers with an ok membership of
+-- (scheme, version, level, code) that is a member on p_on as known by p_known_by (spec K3: available_date <= knownBy,
+-- valid_from <= on, effective valid_to null or > on, where the window end counts only when its availability date is
+-- known: valid_to_available_date <= knownBy). Identical to memberships.ts::isMemberAt. Aggregate cells: on = period_end,
+-- knownBy = run.facts_as_of; valuation cells: on = knownBy = trade_date. activate_* requires the per-cell dependency
+-- rows to equal exactly this set.
+create or replace function public.industry_candidate_members(p_scheme text, p_version text, p_level int, p_code text, p_on date, p_known_by date)
+returns setof uuid language sql stable security definer set search_path = pg_catalog, public as $$
+  select distinct m.issuer_id from public.issuer_industry_memberships m
+  where m.scheme = p_scheme and m.version = p_version and m.level = p_level and m.code = p_code and m.status = 'ok'
+    and m.available_date <= p_known_by and m.valid_from <= p_on
+    and (m.valid_to is null or m.valid_to_available_date > p_known_by or m.valid_to > p_on)
+$$;
+revoke execute on function public.industry_candidate_members(text, text, int, text, date, date) from public, anon, authenticated, service_role;
+
 -- ================================================================ licences and freshness
 create or replace function public.set_industry_dataset_license(p_key text, p_status text, p_by text, p_note text)
 returns void language plpgsql security definer set search_path = pg_catalog, public as $$
@@ -336,7 +351,9 @@ grant execute on function public.record_industry_source_resolution_error(uuid[],
 -- 4 insert the remaining targets: same key + same values → duplicate, same key + other values →
 -- membership_conflict, exclusion violation → membership_overlap; a successor id that was neither
 -- inserted nor matched → membership_conflict; 5 resolve the source records (issuer_id, resolution ∪
--- {membership_ids}, resolution_error = null). Any raise rolls everything back.
+-- {membership_ids}, resolution_error = null). The source records are locked (id order) before they are validated.
+-- Any raise rolls everything back. (The source records' own version is not compared with p_version: source records
+-- carry the fixed import version '2021' while memberships may carry a private test version.)
 -- Rows: MembershipTarget[] {code, level, valid_from, valid_to, available_date, valid_to_available_date,
 -- source, provenance}. Returns {inserted, closed, superseded, duplicates, membership_ids}.
 create or replace function public.apply_industry_memberships(p_batch uuid, p_issuer uuid, p_scheme text, p_version text, p_rows jsonb, p_source_ids uuid[], p_resolution jsonb)
@@ -349,6 +366,10 @@ begin
   if p_resolution is not null and jsonb_typeof(p_resolution) <> 'object' then raise exception 'invalid_resolution' using errcode = '22023'; end if;
   perform 1 from public.issuers where issuer_id = p_issuer for update;
   if not found then raise exception 'issuer_not_found' using errcode = 'P0002'; end if;
+  -- lock the source records (fixed id order) BEFORE validating them and keep the locks through the resolution
+  -- bookkeeping: a concurrent refresh (upsert_industry_source_memberships) that supersedes a record either committed
+  -- first (the validation below then sees it) or waits for this transaction (Codex review P2)
+  perform 1 from public.industry_source_memberships where id = any(v_sources) order by id for update;
   if exists (select 1 from unnest(v_sources) s(id)
              left join public.industry_source_memberships m on m.id = s.id
              where m.id is null or m.status <> 'current' or m.scheme <> p_scheme or (m.issuer_id is not null and m.issuer_id <> p_issuer)) then
@@ -448,6 +469,7 @@ begin
   if p_rows is null or jsonb_typeof(p_rows) <> 'array' then raise exception 'invalid_rows' using errcode = '22023'; end if;
   perform 1 from public.issuers where issuer_id = p_issuer for update;
   if not found then raise exception 'issuer_not_found' using errcode = 'P0002'; end if;
+  perform 1 from public.industry_source_memberships where id = p_source for update;   -- lock before validating (Codex review P2)
   if not exists (select 1 from public.industry_source_memberships m
                  where m.id = p_source and m.status = 'current' and m.scheme = p_scheme and m.issuer_id = p_issuer) then
     raise exception 'membership_conflict: source record % is not current and resolved to issuer %', p_source, p_issuer using errcode = 'P0001';
@@ -579,7 +601,8 @@ grant execute on function public.retry_industry_fetch_event(uuid) to service_rol
 -- CURRENT ok observation: equal → duplicate; different (A→B→A included) → current becomes superseded,
 -- then the new ok observation is inserted (supersedes = old id) and an open mark_revised /
 -- official_revised quarantine item is filed; no current → insert. A 'quarantined' mark input is stored
--- as quarantined evidence and never becomes current. Every branch writes the receipt in the same
+-- as quarantined evidence and never becomes current; it is COUNTED in `inserted` (the result shape has no separate
+-- count: a quarantined input is a stored observation) and its receipt outcome is 'inserted'. Every branch writes the receipt in the same
 -- transaction. payload_hash = sha256 of the canonical content (trim_scale of close, total_share, status,
 -- free_share or ''). Mark content compared with the current observation = close, total_share, free_share.
 -- Rows: MarkInput[] / OfficialInput[]. Returns {inserted, duplicates, superseded}.
@@ -819,7 +842,8 @@ revoke execute on function public.stage_industry_run_dependencies(uuid, text, js
 grant execute on function public.stage_industry_run_dependencies(uuid, text, jsonb) to service_role;
 
 -- Rows: ValuationCellRow-like objects without run/scheme/version (taken from the run); published,
--- series_qualified forced false, updated_at null.
+-- series_qualified forced false, updated_at null; trade_date must be one of the run's expected_dates
+-- (invalid_trade_date); an ok row must carry a registered manifest_hash (invalid_manifest).
 create or replace function public.stage_industry_valuations(p_run uuid, p_rows jsonb)
 returns int language plpgsql security definer set search_path = pg_catalog, public as $$
 declare v public.industry_valuation_runs; n int;
@@ -827,7 +851,17 @@ begin
   if p_rows is null or jsonb_typeof(p_rows) <> 'array' then raise exception 'invalid_rows' using errcode = '22023'; end if;
   v := public.industry_valuation_run_lock(p_run);
   if v.status <> 'building' then raise exception 'run_not_building' using errcode = 'P0001'; end if;
+  if exists (select 1 from jsonb_array_elements(p_rows) x
+             where not exists (select 1 from jsonb_array_elements_text(v.expected_dates) d where d::date = (x ->> 'trade_date')::date)) then
+    raise exception 'invalid_trade_date' using errcode = '22023';
+  end if;
   perform public.industry_manifests_lock_for_reference(p_rows);
+  -- an ok cell carries a registered manifest (its evidence); the lock above has refused claimed hashes
+  if exists (select 1 from jsonb_array_elements(p_rows) x
+             where x ->> 'status' = 'ok'
+               and (nullif(x ->> 'manifest_hash', '') is null or not exists (select 1 from public.industry_manifests mf where mf.manifest_hash = x ->> 'manifest_hash'))) then
+    raise exception 'invalid_manifest' using errcode = '22023';
+  end if;
   insert into public.industry_valuations (run_id, scheme, version, code, trade_date, metric, status, missing_reason, value, facts_as_of,
     n_members, n_with_data, n_unresolved, mcap_coverage, manifest_hash, updated_at, series_qualified, published)
   select p_run, v.scheme, v.version, x ->> 'code', (x ->> 'trade_date')::date, x ->> 'metric', x ->> 'status', x ->> 'missing_reason',
@@ -844,6 +878,13 @@ end $$;
 revoke execute on function public.stage_industry_valuations(uuid, jsonb) from public, anon, authenticated;
 grant execute on function public.stage_industry_valuations(uuid, jsonb) to service_role;
 
+-- Pair rows are DERIVED, never trusted (Codex review P1): the caller's pair_status / official_value / rel_diff are
+-- ignored. Per row, in this order: market_cap -> not_applicable (no comparator); the staged valuation row of the cell is
+-- missing or not ok -> no_computed; the referenced official observation is not a current ok observation of the same
+-- scheme/version/code/trade_date and the comparator metric (pe_ttm, pe_static -> 'pe'; pb -> 'pb') -> no_official
+-- (observation id, official_value and rel_diff null); official value <= 0 -> invalid_denominator (official_value kept,
+-- rel_diff null); otherwise rel_diff = computed / official - 1, within iff |rel_diff| <= 0.01, else outside.
+-- trade_date must be one of the run's expected_dates (invalid_trade_date).
 create or replace function public.stage_industry_valuation_pairs(p_run uuid, p_rows jsonb)
 returns int language plpgsql security definer set search_path = pg_catalog, public as $$
 declare v public.industry_valuation_runs; n int;
@@ -851,10 +892,37 @@ begin
   if p_rows is null or jsonb_typeof(p_rows) <> 'array' then raise exception 'invalid_rows' using errcode = '22023'; end if;
   v := public.industry_valuation_run_lock(p_run);
   if v.status <> 'building' then raise exception 'run_not_building' using errcode = 'P0001'; end if;
+  if exists (select 1 from jsonb_array_elements(p_rows) x
+             where not exists (select 1 from jsonb_array_elements_text(v.expected_dates) d where d::date = (x ->> 'trade_date')::date)) then
+    raise exception 'invalid_trade_date' using errcode = '22023';
+  end if;
   insert into public.industry_valuation_pairs (run_id, scheme, version, code, trade_date, metric, official_observation_id, official_value, rel_diff, pair_status)
-  select p_run, v.scheme, v.version, x ->> 'code', (x ->> 'trade_date')::date, x ->> 'metric', nullif(x ->> 'official_observation_id', '')::uuid,
-         (x ->> 'official_value')::numeric, (x ->> 'rel_diff')::numeric, x ->> 'pair_status'
-  from jsonb_array_elements(p_rows) x
+  select p_run, v.scheme, v.version, d.code, d.trade_date, d.metric,
+         case when d.state in ('within','outside','invalid_denominator') then d.obs_id end,
+         case when d.state in ('within','outside','invalid_denominator') then d.official end,
+         case when d.state in ('within','outside') then d.computed / d.official - 1 end,
+         d.state
+  from (
+    select y.code, y.trade_date, y.metric, y.obs_id, y.official, y.computed,
+           case when y.metric = 'market_cap' then 'not_applicable'
+                when y.computed is null then 'no_computed'
+                when y.obs_id is null then 'no_official'
+                when y.official <= 0 then 'invalid_denominator'
+                when abs(y.computed / y.official - 1) <= 0.01 then 'within'
+                else 'outside' end as state
+    from (
+      select x ->> 'code' as code, (x ->> 'trade_date')::date as trade_date, x ->> 'metric' as metric,
+             o.observation_id as obs_id, o.value as official,
+             (select val.value from public.industry_valuations val
+              where val.run_id = p_run and val.scheme = v.scheme and val.version = v.version and val.code = x ->> 'code'
+                and val.trade_date = (x ->> 'trade_date')::date and val.metric = x ->> 'metric' and val.status = 'ok') as computed
+      from jsonb_array_elements(p_rows) x
+      left join public.industry_official_valuations o
+        on o.observation_id = nullif(x ->> 'official_observation_id', '')::uuid and o.status = 'ok'
+       and o.scheme = v.scheme and o.version = v.version and o.code = x ->> 'code' and o.trade_date = (x ->> 'trade_date')::date
+       and o.metric = case x ->> 'metric' when 'pe_ttm' then 'pe' when 'pe_static' then 'pe' when 'pb' then 'pb' end
+    ) y
+  ) d
   on conflict (run_id, scheme, version, code, trade_date, metric) do update
     set official_observation_id = excluded.official_observation_id, official_value = excluded.official_value, rel_diff = excluded.rel_diff, pair_status = excluded.pair_status;
   get diagnostics n = row_count;
@@ -866,7 +934,10 @@ grant execute on function public.stage_industry_valuation_pairs(uuid, jsonb) to 
 -- ================================================================ publish (valuation, §6.4, U5)
 -- Lock the run; building only; every valuation row has its pair row and every pair row its valuation
 -- row (pairs_mismatch); series qualification per (code, metric) over the full snapshot:
--- n_pairs = within + outside >= 0.9 × n_expected, within / n_pairs >= 0.95, n_pairs >= 24; then once:
+-- n_pairs = within + outside (distinct EXPECTED dates only) >= 0.9 × n_expected, within / n_pairs >= 0.95, n_pairs >= 24,
+-- and the method gate (§6.4 K1): pb never qualifies (its comparator is unverified), pe_ttm only with comparator_basis
+-- 'ttm', pe_static only with 'static', market_cap never (its pairs are not_applicable); every ok row carries a
+-- registered manifest_hash (invalid_manifest); then once:
 -- series_qualified, published = qualified and status ok and pair within; run → published.
 -- Returns {qualified_series, published_rows}.
 create or replace function public.publish_industry_valuations(p_run uuid)
@@ -883,18 +954,25 @@ begin
                              and x.code = p.code and x.trade_date = p.trade_date and x.metric = p.metric)) then
     raise exception 'pairs_mismatch' using errcode = 'P0001';
   end if;
+  if exists (select 1 from public.industry_valuations x where x.run_id = p_run and x.status = 'ok'
+             and (x.manifest_hash is null or not exists (select 1 from public.industry_manifests mf where mf.manifest_hash = x.manifest_hash))) then
+    raise exception 'invalid_manifest' using errcode = '22023';
+  end if;
   v_expected := jsonb_array_length(v.expected_dates);
   select coalesce(jsonb_agg(jsonb_build_object('code', q.code, 'metric', q.metric, 'n_expected', v_expected, 'n_pairs', q.n_pairs,
            'n_within', q.n_within, 'n_outside', q.n_outside, 'n_no_official', q.n_no_official,
-           'qualified', q.n_pairs >= 24 and q.n_pairs >= 0.9 * v_expected and q.n_pairs > 0 and q.n_within::numeric / greatest(q.n_pairs, 1) >= 0.95)
+           'qualified', (q.metric = 'pe_ttm' and v.comparator_basis = 'ttm' or q.metric = 'pe_static' and v.comparator_basis = 'static')
+                        and q.n_pairs >= 24 and q.n_pairs >= 0.9 * v_expected and q.n_pairs > 0 and q.n_within::numeric / greatest(q.n_pairs, 1) >= 0.95)
          order by q.code, q.metric), '[]'::jsonb)
     into v_series
   from (select p.code, p.metric,
-               (count(*) filter (where p.pair_status in ('within','outside')))::int as n_pairs,
-               (count(*) filter (where p.pair_status = 'within'))::int as n_within,
-               (count(*) filter (where p.pair_status = 'outside'))::int as n_outside,
-               (count(*) filter (where p.pair_status = 'no_official'))::int as n_no_official
-        from public.industry_valuation_pairs p where p.run_id = p_run group by p.code, p.metric) q;
+               (count(distinct p.trade_date) filter (where p.pair_status in ('within','outside')))::int as n_pairs,
+               (count(distinct p.trade_date) filter (where p.pair_status = 'within'))::int as n_within,
+               (count(distinct p.trade_date) filter (where p.pair_status = 'outside'))::int as n_outside,
+               (count(distinct p.trade_date) filter (where p.pair_status = 'no_official'))::int as n_no_official
+        from public.industry_valuation_pairs p
+        where p.run_id = p_run and exists (select 1 from jsonb_array_elements_text(v.expected_dates) d where d::date = p.trade_date)
+        group by p.code, p.metric) q;
   update public.industry_valuations x
   set series_qualified = s.qualified,
       published = s.qualified and x.status = 'ok' and exists (select 1 from public.industry_valuation_pairs p where p.run_id = x.run_id
@@ -917,8 +995,8 @@ grant execute on function public.publish_industry_valuations(uuid) to service_ro
 -- a row — 3M at every period end for the sums and YoY, 12M only on December 31 (sums, YoY, gross_margin),
 -- TTM for roe, INSTANT for member_count; identical to method.ts::cellSpecs (Task 10) — else
 -- incomplete_run (spec §5.2); per cell
--- '<code>:<period_end>' the dependency rows number max(n_members) of the cell else
--- dependencies_incomplete; non-obsolete: generation > active.generation and facts_as_of >=
+-- '<code>:<period_end>' the dependency rows number max(n_members) of the cell AND their issuers equal the cell's
+-- candidate members (industry_candidate_members, knownBy = facts_as_of) else dependencies_incomplete; non-obsolete: generation > active.generation and facts_as_of >=
 -- active.facts_as_of else obsolete_run; dependency non-regression per (cell_key, issuer_id) against the
 -- active run else dependency_regression; then ONE database time t = clock_timestamp(): active →
 -- superseded, this run → active with activated_at = t, every row updated_at = t. Returns {activated_at}.
@@ -945,10 +1023,20 @@ begin
                         and x.duration = s.duration and x.period_end = p.period_end::date)) then
     raise exception 'incomplete_run' using errcode = 'P0001';
   end if;
+  -- dependency set equality (Codex review P1): per cell the dependency issuers equal the candidate members (ok memberships
+  -- that are members on period_end as known by facts_as_of), in both directions; no dependency of a cell without rows
   if exists (
     select 1 from (select code, period_end, max(n_members) n from public.industry_metrics where run_id = p_run group by code, period_end) g
     where g.n <> (select count(*) from public.industry_run_dependencies d where d.run_kind = 'aggregate' and d.run_id = p_run
                   and d.cell_key = g.code || ':' || to_char(g.period_end, 'YYYY-MM-DD'))) then
+    raise exception 'dependencies_incomplete' using errcode = 'P0001';
+  end if;
+  if exists (
+    with cells as (select distinct code, period_end from public.industry_metrics where run_id = p_run),
+    want as (select c.code || ':' || to_char(c.period_end, 'YYYY-MM-DD') as cell_key, w.issuer_id
+             from cells c cross join lateral public.industry_candidate_members(r.scheme, r.version, r.level, c.code, c.period_end, r.facts_as_of) as w(issuer_id)),
+    have as (select d.cell_key, d.issuer_id from public.industry_run_dependencies d where d.run_kind = 'aggregate' and d.run_id = p_run)
+    select 1 from ((select * from want except select * from have) union all (select * from have except select * from want)) diff) then
     raise exception 'dependencies_incomplete' using errcode = 'P0001';
   end if;
   select * into a from public.industry_metric_runs where scheme = r.scheme and version = r.version and level = r.level and status = 'active' for update;
@@ -973,7 +1061,8 @@ grant execute on function public.activate_industry_metric_run(uuid) to service_r
 -- (every published row has a within pair and series_qualified, else pairs_mismatch); completeness:
 -- every level node of (scheme, version) × expected_dates × the four metrics has a row else
 -- incomplete_run; dependencies per '<code>:<trade_date>' as above; generation > active.generation else
--- obsolete_run; dependency non-regression; one t for run and rows (carried rows included).
+-- obsolete_run; dependency non-regression; one t for run and rows (carried rows included). Dependencies per
+-- '<code>:<trade_date>' as for aggregates, candidate members known by the trade date itself.
 create or replace function public.activate_industry_valuation_run(p_run uuid)
 returns jsonb language plpgsql security definer set search_path = pg_catalog, public as $$
 declare r public.industry_valuation_runs; a public.industry_valuation_runs; v_t timestamptz;
@@ -1001,6 +1090,14 @@ begin
     select 1 from (select code, trade_date, coalesce(max(n_members), 0) n from public.industry_valuations where run_id = p_run group by code, trade_date) g
     where g.n <> (select count(*) from public.industry_run_dependencies d where d.run_kind = 'valuation' and d.run_id = p_run
                   and d.cell_key = g.code || ':' || to_char(g.trade_date, 'YYYY-MM-DD'))) then
+    raise exception 'dependencies_incomplete' using errcode = 'P0001';
+  end if;
+  if exists (
+    with cells as (select distinct code, trade_date from public.industry_valuations where run_id = p_run),
+    want as (select c.code || ':' || to_char(c.trade_date, 'YYYY-MM-DD') as cell_key, w.issuer_id
+             from cells c cross join lateral public.industry_candidate_members(r.scheme, r.version, r.level, c.code, c.trade_date, c.trade_date) as w(issuer_id)),
+    have as (select d.cell_key, d.issuer_id from public.industry_run_dependencies d where d.run_kind = 'valuation' and d.run_id = p_run)
+    select 1 from ((select * from want except select * from have) union all (select * from have except select * from want)) diff) then
     raise exception 'dependencies_incomplete' using errcode = 'P0001';
   end if;
   select * into a from public.industry_valuation_runs where scheme = r.scheme and version = r.version and level = r.level and status = 'active' for update;
@@ -1047,24 +1144,31 @@ revoke execute on function public.put_industry_manifest(text, text, int) from pu
 grant execute on function public.put_industry_manifest(text, text, int) to service_role;
 
 -- GC candidates = CLAIMS: unreferenced, unclaimed (or claim older than 1 h) manifests whose index row is
--- older than p_min_age_seconds (default 24 h), taken FOR UPDATE SKIP LOCKED and marked gc_claimed_at = now() with a
+-- older than p_min_age_seconds (default 24 h), taken FOR UPDATE SKIP LOCKED, re-checked for references in a second
+-- statement (fresh snapshot) and only then marked gc_claimed_at = now() with a
 -- fresh claim token. Returns [{hash, object_path, claim}] oldest first: the collector deletes exactly that object
 -- path (an incarnation) and finalizes with that token, so a stale collector whose claim was taken over can neither
 -- delete a later incarnation's object nor its index row (Codex plan audit round 2 R2-1). Volatile (it writes).
 create or replace function public.gc_industry_manifest_candidates(p_limit int, p_min_age_seconds int default 86400)
 returns jsonb language plpgsql security definer set search_path = pg_catalog, public as $$
-declare v jsonb;
+declare v jsonb; v_locked text[];
 begin
   if p_limit is null or p_limit < 1 then raise exception 'invalid_limit' using errcode = '22023'; end if;
-  with picked as (
-    select m.manifest_hash from public.industry_manifests m
+  -- 1 lock the candidate index rows (a stage holding FOR SHARE makes them skip); the reference test here uses this
+  -- statement's snapshot and is only a pre-filter
+  select coalesce(array_agg(c.manifest_hash order by c.created_at, c.manifest_hash), '{}'::text[]) into v_locked from (
+    select m.manifest_hash, m.created_at from public.industry_manifests m
     where m.created_at <= now() - make_interval(secs => coalesce(p_min_age_seconds, 86400))
       and (m.gc_claimed_at is null or m.gc_claimed_at <= now() - interval '1 hour')
       and public.industry_manifest_unreferenced(m.manifest_hash)
     order by m.created_at, m.manifest_hash limit p_limit
     for update skip locked
-  ), claimed as (
-    update public.industry_manifests m set gc_claimed_at = now(), gc_claim = gen_random_uuid() from picked p where m.manifest_hash = p.manifest_hash
+  ) c;
+  -- 2 re-check the references in a SEPARATE statement (fresh snapshot, READ COMMITTED) while holding the locks: a stage
+  -- that committed between the first snapshot and the lock is seen here and the row is left unclaimed (Codex review P1)
+  with claimed as (
+    update public.industry_manifests m set gc_claimed_at = now(), gc_claim = gen_random_uuid()
+    where m.manifest_hash = any(v_locked) and public.industry_manifest_unreferenced(m.manifest_hash)
     returning m.manifest_hash, m.created_at, m.object_path, m.gc_claim
   ) select coalesce(jsonb_agg(jsonb_build_object('hash', c.manifest_hash, 'object_path', c.object_path, 'claim', c.gc_claim)
                               order by c.created_at, c.manifest_hash), '[]'::jsonb) into v from claimed c;
