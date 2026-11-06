@@ -14,7 +14,7 @@ import type {TableClient} from '../db/table-client';
 import {startBatch} from '../dq/batches';
 import {DATASETS} from '../dq/datasets';
 import {isValidIsin} from '../research/entity-keys/identifiers';
-import {claimTargetKey,fileClaim} from './claims';
+import {claimTargetKey,fileClaim,validateClaimDetail} from './claims';
 import {attachSecurity,upsertIssuerByIdentifiers} from './issuers';
 import type {HkexIsin} from './identifiers/hkex-list';
 import {applyAhLinks,planAhLinks,type AhFigiHit,type AhIssuer,type UniverseListing} from './link-ah';
@@ -199,5 +199,27 @@ describe.skipIf(!enabled)('A+H linking and claim review on real PostgreSQL',()=>
   const after=(await admin.query(`select status,op,detail from public.issuer_identifier_claims where id=$1`,[claim.id])).rows[0];
   expect(after.status).toBe('accepted');
   expect(after.detail.original_params).toMatchObject({suggested_op:'backdate_window',form:'8-A12B'});
+ });
+ it('an attach_security amend without params.ticker is refused by the route pre-check and by SQL, leaving the claim pending',async()=>{
+  const aTicker=await universeRow('A','1998-01-01');
+  const e=await newIssuer('ZZ AH Amend Attach Co., Ltd.',aTicker);
+  const evidence={source:'sec_submissions',as_of:ASOF,evidence_sha256:'b'.repeat(64),locator:'recent#accessionNumber=0000999002-01-000002',note:'8-A12B'};
+  const detail={schema:'claim/1' as const,evidence_kind:'filing_form' as const,target:{issuer_id:e},params:{suggested_op:'attach_security'},evidence,sources:[evidence]};
+  expect(await fileClaim(db,{issuer_id:e,id_type:'ticker',value:'0000999002-01-000002',source:'sec_submissions',op:'evidence_only',detail})).toBe(true);
+  const [claim]=(await admin.query(`select id from public.issuer_identifier_claims where issuer_id=$1`,[e])).rows;
+  const hk=await universeRow('HK','2008-08-08');
+  const noTicker={op:'attach_security',target:{issuer_id:e},params:{share_class:'H',valid_from:'2008-08-08',valid_from_method:'listing_date',source:'curated'}};
+  // route pre-check: params.ticker is mandatory (typeof check), otherwise validateClaimDetail with value=params.ticker
+  expect(typeof (noTicker.params as Record<string,unknown>).ticker).not.toBe('string');
+  // the same amend with a ticker passes the route's validateClaimDetail call ...
+  const withTicker={...noTicker,params:{...noTicker.params,ticker:hk}};
+  expect(validateClaimDetail('attach_security','ticker',{...detail,target:withTicker.target,params:withTicker.params},hk)).toEqual({ok:true});
+  // ... and SQL agrees that the ticker-less amend is not acceptable
+  await expect(resolve(claim.id,'accepted',noTicker)).rejects.toThrow();
+  expect((await admin.query(`select status from public.issuer_identifier_claims where id=$1`,[claim.id])).rows[0].status).toBe('pending');
+  expect((await admin.query(`select count(*)::int as n from public.issuer_securities where ticker=$1`,[hk])).rows[0].n).toBe(0);
+  // with the ticker SQL accepts and inserts the claimed row
+  expect((await resolve(claim.id,'accepted',withTicker)).rows[0].r).toMatchObject({op:'attach_security',applied:true,amended:true});
+  expect((await admin.query(`select issuer_id::text,share_class from public.issuer_securities where ticker=$1`,[hk])).rows[0]).toEqual({issuer_id:e,share_class:'H'});
  });
 });

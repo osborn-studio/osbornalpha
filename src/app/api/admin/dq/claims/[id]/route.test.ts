@@ -85,6 +85,29 @@ describe('POST /api/admin/dq/claims/[id]', () => {
     expect(mocks.rpc).not.toHaveBeenCalled();
   });
 
+  it('amend is limited to evidence_only claims and to attach/close/backdate ops', async () => {
+    const code = async (body: unknown) => { const r = await post(body); return [r.status, (await r.json()).error]; };
+    expect(await code({ status: 'accepted', amend: { ...AMEND, op: 'set_identifier', params: {} } })).toEqual([400, 'invalid_amend']);
+    expect(await code({ status: 'accepted', amend: { ...AMEND, op: 'correct_identifier' } })).toEqual([400, 'invalid_amend']);
+    const client = memoryTableClient({ issuer_identifier_claims: ['id'] });
+    await client.insert('issuer_identifier_claims', { ...CLAIM, op: 'attach_security', detail: { ...CLAIM.detail, params: {} } });
+    mocks.client = client;
+    const res = await post({ status: 'accepted', amend: AMEND });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ id: ID, error: 'amend_not_applicable' });
+    expect(mocks.rpc).not.toHaveBeenCalled();
+  });
+
+  it('an attach_security amend needs a valid params.ticker', async () => {
+    const attach = (params: Record<string, unknown>) => ({ op: 'attach_security', target: { issuer_id: ISSUER }, params: { share_class: 'H', valid_from: '2005-06-30', valid_from_method: 'listing_date', source: 'hkex_list_name_match', ...params } });
+    const code = async (body: unknown) => { const r = await post(body); return [r.status, (await r.json()).error]; };
+    expect(await code({ status: 'accepted', amend: attach({}) })).toEqual([400, 'invalid_amend']);
+    expect(await code({ status: 'accepted', amend: attach({ ticker: 'not a ticker!' }) })).toEqual([400, 'invalid_amend']);
+    expect(mocks.rpc).not.toHaveBeenCalled();
+    expect((await post({ status: 'accepted', amend: attach({ ticker: '00700.HK' }) })).status).toBe(200);
+    expect(mocks.rpc).toHaveBeenCalledTimes(1);
+  });
+
   it('404 for an unknown claim without calling the function', async () => {
     const res = await post({ status: 'accepted' }, { 'content-type': 'application/json' }, '00000000-0000-4000-8000-00000000dead');
     expect(res.status).toBe(404);
@@ -112,8 +135,9 @@ describe('POST /api/admin/dq/claims/[id]', () => {
 
   it('500 for any other function error and for unexpected exceptions, logged', async () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-    mocks.rpc.mockResolvedValueOnce({ data: null, error: { message: 'invalid_claim' } });
+    mocks.rpc.mockResolvedValueOnce({ data: null, error: { message: 'invalid_claim', details: 'params.ticker' } });
     expect((await post({ status: 'accepted' })).status).toBe(500);
+    expect(log).toHaveBeenCalledWith('[admin/dq/claims]', 'invalid_claim', 'params.ticker');
     mocks.rpc.mockRejectedValueOnce(new Error('db down'));
     const res = await post({ status: 'accepted' });
     expect(res.status).toBe(500);

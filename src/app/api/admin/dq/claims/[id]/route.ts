@@ -20,10 +20,10 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const STATUSES = ['accepted', 'rejected'] as const;
 type Status = typeof STATUSES[number];
 type AmendOp = Exclude<ClaimOp, 'legacy' | 'evidence_only'>;
-const AMEND_OPS: readonly AmendOp[] = ['set_identifier', 'correct_identifier', 'attach_security', 'close_security', 'backdate_window'];
+const AMEND_OPS: readonly AmendOp[] = ['attach_security', 'close_security', 'backdate_window'];   // what resolve_identifier_claim's amend path allows
 const CONFLICTS = new Set(['already_resolved', 'legacy_claim', 'amend_required', 'value_conflict', 'ownership_conflict', 'already_closed', 'issuer_not_active']);
 interface Amend { op: AmendOp; target: ClaimDetail['target']; params: Record<string, unknown> }
-type RpcClient = { rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: { message: string } | null }> };
+type RpcClient = { rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: { message: string; details?: string | null } | null }> };
 
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 function parseAmend(v: unknown): Amend | null {
@@ -64,9 +64,14 @@ export async function POST(request: Request, { params }: Ctx) {
     const [claim] = await supabaseTableClient(admin).select('issuer_identifier_claims', { id }, { limit: 1 });
     if (!claim) return NextResponse.json({ id, error: 'claim_not_found' }, { status: 404 });
     if (amend) {
+      // an amendment completes an evidence_only claim; every other claim is accepted as filed
+      if (claim.op !== 'evidence_only') return NextResponse.json({ id, error: 'amend_not_applicable' }, { status: 400 });
       if (amend.target.issuer_id !== claim.issuer_id) return NextResponse.json({ error: 'invalid_amend', detail: 'target_issuer_mismatch' }, { status: 400 });
       const stored = isObj(claim.detail) ? claim.detail : {};
-      const check = validateClaimDetail(amend.op, claim.id_type as ClaimIdType, { ...stored, target: amend.target, params: amend.params } as unknown as ClaimDetail);
+      // attach_security inserts params.ticker (the claim value of an evidence_only claim is an accession): it must be present and valid
+      if (amend.op === 'attach_security' && typeof amend.params.ticker !== 'string') return NextResponse.json({ error: 'invalid_amend', detail: 'params.ticker' }, { status: 400 });
+      const check = validateClaimDetail(amend.op, claim.id_type as ClaimIdType, { ...stored, target: amend.target, params: amend.params } as unknown as ClaimDetail,
+        amend.op === 'attach_security' ? amend.params.ticker as string : undefined);
       if (!check.ok) return NextResponse.json({ error: 'invalid_amend', detail: check.error }, { status: 400 });
     }
 
@@ -74,7 +79,7 @@ export async function POST(request: Request, { params }: Ctx) {
     if (error) {
       if (CONFLICTS.has(error.message)) return NextResponse.json({ id, error: error.message }, { status: 409 });
       if (error.message === 'claim_not_found') return NextResponse.json({ id, error: 'claim_not_found' }, { status: 404 });   // deleted between the read and the rpc (Task 1b P0002)
-      console.error('[admin/dq/claims]', error.message);
+      console.error('[admin/dq/claims]', error.message, error.details ?? '');
       return NextResponse.json({ error: 'claim resolve unavailable' }, { status: 500 });
     }
     const out = isObj(data) ? data : {};
