@@ -4,7 +4,8 @@ import {join} from 'node:path';
 import {describe,it,expect} from 'vitest';
 import {CADENCES} from './freshness';
 import {DATASETS,DQ_DATASET_INVENTORY,DQ_DATASET_NAMES,inventoryEntry} from './datasets';
-import {RECONCILE_PAIR_IDS} from './reconcile/types';
+import {RECONCILE_PAIRS} from './reconcile/pairs';
+import {CYCLE_PAIR_IDS,RECONCILE_PAIR_IDS} from './reconcile/types';
 
 // A dataset literal anywhere but the registry means a producer bypassed DATASETS (spec 3 §6.3).
 const LITERAL=/(['"`])(entities\.(?:sec|research-link|identifiers|cninfo|ah-link|windows|sec-submissions)|facts\.(?:us|cn|acceptance)|dq\.(?:calendar\.(?:us|cn)|filer-categories)|reconcile\.[a-z][a-z_.]*)\1/;
@@ -60,5 +61,13 @@ describe('DATASETS / DQ_DATASET_INVENTORY',()=>{
   const hits=[...sources('src'),...sources('scripts')].filter(p=>!EXEMPT.has(p)).flatMap(p=>
    readFileSync(p,'utf8').split('\n').flatMap((line,i)=>LITERAL.test(line)?[`${p}:${i+1}`]:[]));
   expect(hits).toEqual([]);
+ });
+});
+
+describe('ReconcilePairId ↔ pairs.ts (spec §6.3)',()=>{
+ it('every registered pair is a cycle pair id, every cycle pair id is a ReconcilePairId, and each has an inventory entry',()=>{
+  for(const id of Object.keys(RECONCILE_PAIRS))expect(CYCLE_PAIR_IDS as readonly string[]).toContain(id);
+  for(const id of CYCLE_PAIR_IDS)expect(RECONCILE_PAIR_IDS as readonly string[]).toContain(id);
+  for(const id of RECONCILE_PAIR_IDS)expect(DQ_DATASET_INVENTORY.map(e=>e.dataset)).toContain(DATASETS.reconcile(id));
  });
 });
