@@ -200,6 +200,10 @@
     {
       "file": "20261106090000_financial_facts.sql",
       "sha256": "62edb3eb740e4b652c66cd7bae6388287f35fe54c53afcbf27046ed9ddcf7f4d"
+    },
+    {
+      "file": "20261110090000_dq_eval_runs.sql",
+      "sha256": "7808ea386e4547c8b0e34dc891d2bc1a2c69a2cf2f32fc675a26bf130cd1a591"
     }
   ]
 }
