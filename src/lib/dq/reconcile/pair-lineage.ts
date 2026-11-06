@@ -45,9 +45,14 @@ export function lineageSameDayPair(opts:{targets?:readonly string[]}={}):Registe
    const targets=[...new Set(merged.map(r=>r.merged_into).filter((x):x is string=>typeof x==='string'))]
     .filter(t=>opts.targets===undefined||opts.targets.includes(t)).sort();
    const out:MemberPlan[]=[];
-   for(const target of targets)for(const market of MARKETS){
-    const plan=await planOf(ctx,target,market);
-    if(plan.expectedKeys.length>0)out.push(plan);
+   for(const target of targets){
+    // the natural key carries no market: the same key in both markets of one target cannot be told apart (documented limitation)
+    const seen=new Set<string>();
+    for(const market of MARKETS){
+     const plan=await planOf(ctx,target,market);
+     for(const k of plan.expectedKeys){if(seen.has(k.naturalKey))throw new ReconcileConfigError('lineage_key_collision',k.naturalKey);seen.add(k.naturalKey);}
+     if(plan.expectedKeys.length>0)out.push(plan);
+    }
    }
    return out;
   },

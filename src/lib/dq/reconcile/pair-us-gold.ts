@@ -54,12 +54,14 @@ export function usGoldEntries(json:unknown):{ready:boolean;entries:UsGoldEntry[]
  return {ready:j.ready===true,entries:out};
 }
 
+/** One date rule for owner resolution and the fact read: the entry's as_of, else today (an as_of-less entry is a current-value comparison). */
+const entryDate=(ctx:PairContext,e:Pick<UsGoldEntry,'as_of'>)=>e.as_of??todayOf(ctx);
 /** Is the entry's key reported in conflicts by the lineage read of the member's current target? */
 async function inLineageConflict(ctx:PairContext,issuerId:string,e:UsGoldEntry,left:FactRow):Promise<boolean>{
  const target=await ctx.db.targetOf(issuerId);
  const env=await ctx.db.readFactsLineage(await ctx.db.lineageOf(target),'US',{concepts:[e.concept],asOf:todayOf(ctx)});
  if(env.truncated)throw new ReconcileConfigError('lineage_read_truncated',`${target}/US`);
- return env.conflicts.some(c=>String(c.key.concept)===e.concept&&String(c.key.period_end)===e.period_end&&String(c.key.unit)===e.unit&&(c.key.period_start??null)===(left.period_start??null));
+ return env.conflicts.some(c=>String(c.key.concept)===e.concept&&String(c.key.period_end)===e.period_end&&String(c.key.unit)===e.unit&&(c.key.period_start??null)===(left.period_start??null)&&c.fact_ids.includes(left.fact_id));
 }
 
 export function usCompanyfactsVsGoldPair():RegisteredPair{
@@ -80,7 +82,7 @@ export function usCompanyfactsVsGoldPair():RegisteredPair{
    const entries=[...usGoldEntries(json).entries].sort((x,y)=>x.ticker<y.ticker?-1:x.ticker>y.ticker?1:x.index-y.index);
    for(const e of entries){
     // the ticker's owner AT the entry's own date, never today; a merged owner stays the recorded owner (no redirect)
-    const r=await resolveIssuer(ctx.tables,{ticker:e.ticker},{asOf:e.as_of??e.period_end});
+    const r=await resolveIssuer(ctx.tables,{ticker:e.ticker},{asOf:entryDate(ctx,e)});
     if(!r)throw new ReconcileConfigError('issuer_unresolved',e.ticker);
     const owner=r.redirected_from??r.issuer_id;
     const plan=byOwner.get(owner)??{issuerId:owner,market:'US' as const,expectedKeys:[]};
@@ -98,22 +100,25 @@ export function usCompanyfactsVsGoldPair():RegisteredPair{
     const e=current.get(k.naturalKey);
     if(!e){out.push(notCompared(k.naturalKey,'numeric','incomplete_gold',SIDES,{reason:'entry_removed'}));continue;}
     if(e.pending||e.value===null){out.push(notCompared(k.naturalKey,'numeric','incomplete_gold',SIDES,{reason:'pending',gold_index:e.index}));continue;}
+    const frozenOwner=k.locator.owner_issuer_id;
+    if(k.locator.as_of!==e.as_of||(frozenOwner!==undefined&&frozenOwner!==member.issuerId)){out.push(notCompared(k.naturalKey,'numeric','incomplete_gold',SIDES,{reason:'entry_changed',gold_index:e.index,frozen_as_of:k.locator.as_of??null,as_of:e.as_of}));continue;}
     const bound=open.get(k.naturalKey);
     let rows:FactRow[];
     if(bound)rows=(await ctx.db.factsByIds([bound.factIds[0]])).filter(r=>r.issuer_id===member.issuerId).slice(0,1);   // fenced issuer's facts only
-    else rows=(await ctx.db.readFacts(member.issuerId,'US',{concepts:[e.concept],asOf:e.as_of??todayOf(ctx),from:e.period_end,to:e.period_end})).rows
+    else rows=(await ctx.db.readFacts(member.issuerId,'US',{concepts:[e.concept],asOf:entryDate(ctx,e),from:e.period_end,to:e.period_end})).rows
      .filter(r=>r.period_end===e.period_end&&r.unit===e.unit&&r.duration===e.duration&&r.is_current===true);
     if(rows.length>1){out.push(notCompared(k.naturalKey,'numeric','left_ambiguous',SIDES,{gold_index:e.index,fact_ids:rows.map(r=>r.fact_id)}));continue;}
     const left=rows[0];
     if(!left){out.push(notCompared(k.naturalKey,'numeric','left_missing',SIDES,{gold_index:e.index,as_of:e.as_of}));continue;}
     const passed=compareDecimal(left.value,e.value)===0;
     // a same-day lineage conflict on this key belongs to facts.lineage_same_day: record only, never quarantine here
-    const lineageConflict=bound===undefined&&await inLineageConflict(ctx,member.issuerId,e,left);
+    const lineageConflict=bound===undefined&&!passed&&left.status==='ok'&&await inLineageConflict(ctx,member.issuerId,e,left);
     const inputs_hash=computeInputsHash({left_raw_hash:left.raw_hash,right_sha256:goldSha,gold_or_sample_sha256:goldSha,parser_version:US_GOLD_PARSER});
-    const action=lineageConflict?'record' as const:actionFor({bound:bound!==undefined,leftStatus:left.status,compared:true,passed,onFail:'quarantine_left'});
+    const asOfMissing=e.as_of===null;   // a restated current value must not be quarantined against an original-filing gold value
+    const action=lineageConflict||(asOfMissing&&bound===undefined)?'record' as const:actionFor({bound:bound!==undefined,leftStatus:left.status,compared:true,passed,onFail:'quarantine_left'});
     const locator={document:US_GOLD_PATH,index:e.index,source:e.source};
     out.push(comparedNumeric(k.naturalKey,left.value,e.value,{passed,tolerance:'0',sides:SIDES,inputs_hash,left_fact_id:left.fact_id,action,
-     detail:{left:{fact_id:left.fact_id,raw_hash:left.raw_hash,precision:{decimals:fractionDigits(left.value_text)}},right:{document:US_GOLD_PATH,sha256:goldSha,locator,precision:{exact:true}},unit:e.unit,tolerance_rule:'exact/1',inputs_hash,as_of:e.as_of,...(lineageConflict?{lineage_conflict:true}:{})},
+     detail:{left:{fact_id:left.fact_id,raw_hash:left.raw_hash,precision:{decimals:fractionDigits(left.value_text)}},right:{document:US_GOLD_PATH,sha256:goldSha,locator,precision:{exact:true}},unit:e.unit,tolerance_rule:'exact/1',inputs_hash,as_of:e.as_of,...(lineageConflict?{lineage_conflict:true}:{}),...(asOfMissing?{as_of_missing:true}:{})},
      ...(action==='record'?{}:{item:mismatchItem(PAIR,k.naturalKey,left,e.value,locator,inputs_hash)})}));
    }
    return out;

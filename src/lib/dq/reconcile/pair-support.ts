@@ -40,7 +40,7 @@ export interface PairRunContext extends PairContext{batchId:string|null;dryRun:b
 /** The run context behind a PairContext; a context without the flags counts as a dry run (no side writes). */
 export const runContextOf=(ctx:PairContext):PairRunContext=>{const c=ctx as Partial<PairRunContext>;return {...ctx,batchId:c.batchId??null,dryRun:c.dryRun??true};};
 
-export type ReconcileConfigCode='invalid_gold_file'|'invalid_sample_file'|'issuer_unresolved'|'lineage_read_truncated';
+export type ReconcileConfigCode='invalid_gold_file'|'invalid_sample_file'|'issuer_unresolved'|'lineage_read_truncated'|'lineage_key_collision';
 export class ReconcileConfigError extends Error{constructor(public readonly code:ReconcileConfigCode,message?:string){super(message??code);this.name='ReconcileConfigError';}}
 
 export const sha256Hex=(b:Uint8Array|string):string=>createHash('sha256').update(b).digest('hex');

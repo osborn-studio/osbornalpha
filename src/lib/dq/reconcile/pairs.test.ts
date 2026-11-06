@@ -1,7 +1,7 @@
 // src/lib/dq/reconcile/pairs.test.ts
 import {randomUUID} from 'node:crypto';
 import {readFileSync} from 'node:fs';
-import {describe,expect,it} from 'vitest';
+import {describe,expect,it,vi} from 'vitest';
 import type {TableClient} from '../../db/table-client';
 import {memoryFactsDb} from '../../facts/memory-facts-db';
 import {makeBudget} from '../../facts/sync';
@@ -168,6 +168,64 @@ describe('us.companyfacts_vs_gold identity (Codex review)',()=>{
  });
 });
 
+describe('us.companyfacts_vs_gold review round 2',()=>{
+ const asOfLess=(o:object)=>{const e={...entry(o)} as Record<string,unknown>;delete e.as_of;return e;};
+ async function twoDates(){
+  const s=setup();
+  const target=await issuer(s.tables,'ZT3');const source=await issuer(s.tables,'ZS3',{status:'merged'});
+  await s.tables.update('issuers',{issuer_id:source},{merged_into:target});
+  s.db.setTopology({[source]:{status:'merged',merged_into:target}});
+  await seedPublished(s.db,{issuer:target,market:'US',sourceRef:'0009990400-24-000001',availableDate:'2024-02-15',facts:[{concept:'revenue',value:'1200',...FY23}]});
+  const old=await seedPublished(s.db,{issuer:source,market:'US',sourceRef:'0009990401-24-000001',availableDate:'2024-02-15',facts:[{concept:'revenue',value:'1000',...FY23}]});
+  const late=await seedPublished(s.db,{issuer:source,market:'US',sourceRef:'0009990401-24-000002',availableDate:'2024-03-20',facts:[{concept:'revenue',value:'1100',...FY23}]});
+  return {...s,target,source,old,late};
+ }
+ it('defers to the lineage pair only when the left fact is IN the conflict: a conflict on another disclosure date still quarantines',async()=>{
+  const {ctx,files}=await twoDates();
+  files.set(US_GOLD_PATH,enc(goldFile([entry({ticker:'ZS3',value:'999',as_of:'2024-04-01'})])));
+  const pair=usCompanyfactsVsGoldPair();const [m]=await pair.members(ctx);
+  const [r]=await pair.evaluate(ctx,m);
+  expect(r).toMatchObject({outcome:'compared',passed:false,left_value:'1100',action:'quarantine_left'});
+  expect(r.detail.lineage_conflict).toBeUndefined();
+ });
+ it('a passing comparison never consults lineage conflicts',async()=>{
+  const {ctx,files,db}=await twoDates();
+  const spy=vi.spyOn(db,'readFactsLineage');
+  files.set(US_GOLD_PATH,enc(goldFile([entry({ticker:'ZS3',value:'1100',as_of:'2024-04-01'})])));
+  const pair=usCompanyfactsVsGoldPair();const [m]=await pair.members(ctx);
+  const [r]=await pair.evaluate(ctx,m);
+  expect(r).toMatchObject({passed:true,action:'record'});expect(spy).not.toHaveBeenCalled();
+ });
+ it('an entry without as_of is compared but only recorded (never quarantined), flagged as_of_missing',async()=>{
+  const {ctx,files}=await twoDates();
+  files.set(US_GOLD_PATH,enc(goldFile([asOfLess({ticker:'ZS3',value:'999'})])));
+  const pair=usCompanyfactsVsGoldPair();const [m]=await pair.members(ctx);
+  const [r]=await pair.evaluate(ctx,m);
+  expect(r).toMatchObject({outcome:'compared',passed:false,action:'record',detail:expect.objectContaining({as_of_missing:true})});
+  expect(r.item).toBeUndefined();
+ });
+ it('an entry whose as_of changed since the cycle froze it is incomplete_gold (entry_changed)',async()=>{
+  const {ctx,files}=await twoDates();
+  files.set(US_GOLD_PATH,enc(goldFile([entry({ticker:'ZS3',value:'1100',as_of:'2024-04-01'})])));
+  const pair=usCompanyfactsVsGoldPair();const [m]=await pair.members(ctx);
+  files.set(US_GOLD_PATH,enc(goldFile([entry({ticker:'ZS3',value:'1100',as_of:'2024-05-01'})])));
+  const [r]=await pair.evaluate(ctx,m);
+  expect(r).toMatchObject({outcome:'incomplete_gold',passed:false,detail:expect.objectContaining({reason:'entry_changed'})});
+ });
+ it('evaluate output is accepted by applyReconcileResult through an opened cycle and claimed member',async()=>{
+  const {ctx,files,db,source}=await twoDates();
+  files.set(US_GOLD_PATH,enc(goldFile([entry({ticker:'ZS3',value:'999',as_of:'2024-04-01'}),entry({ticker:'ZS3',concept:'total_assets',value:'5',as_of:'2024-04-01'}),asOfLess({ticker:'ZS3',concept:'net_income_parent',value:'1'})])));
+  const pair=usCompanyfactsVsGoldPair();const [m]=await pair.members(ctx);
+  const cycleId=randomUUID(),batch=randomUUID();
+  await db.openReconcileCycle({pair:pair.id,cycleId,startedAt:'2026-11-05T00:00:00Z',members:[{issuer_id:m.issuerId,market:m.market,expected_keys:m.expectedKeys}],pending:[]});
+  const fence=(await db.claimReconcileMember(pair.id,cycleId,source,'US',batch))!;
+  expect(fence).not.toBeNull();
+  const results=await pair.evaluate(ctx,m);
+  for(const r of results)await expect(db.applyReconcileResult(fence,r)).resolves.toMatchObject({reused:false});
+  expect(await db.completeReconcileMember(fence)).toEqual({compared_passed:0,compared_failed:1,not_compared:2});
+ });
+});
+
 describe('facts.lineage_same_day (§4.4)',()=>{
  async function merged(){
   const s=setup();
@@ -186,6 +244,13 @@ describe('facts.lineage_same_day (§4.4)',()=>{
   // plan audit Q2: the per-target resolver gives a pending target the same keys, and zero keys when it has no conflict
   expect(await lineageSameDayPair({targets:[]}).memberFor!(ctx,target,'US')).toEqual(members[0]);
   expect(await lineageSameDayPair().memberFor!(ctx,target,'CN')).toEqual({issuerId:target,market:'CN',expectedKeys:[]});
+ });
+ it('fails members() when one target would carry the same key in both markets (lineage_key_collision)',async()=>{
+  const {ctx,db,target,source}=await merged();
+  for(const [issuer,ref,v] of [[target,'0009990210-24-000001','1200'],[source,'0009990211-24-000001','1000']] as const)
+   await seedPublished(db,{issuer,market:'CN',sourceRef:ref,availableDate:'2024-02-15',facts:[{concept:'revenue',value:v,unit:'USD',...FY23}]});
+  await expect(lineageSameDayPair().members(ctx)).rejects.toMatchObject({code:'lineage_key_collision'});
+  await expect(lineageSameDayPair().members(ctx)).rejects.toThrow(`${target}:revenue:2023-01-01:2023-12-31:consolidated:USD:2024-02-15`);
  });
  it('a live conflict is compared, failed, and becomes a lineage_item with every value',async()=>{
   const {ctx,target,source,t,src}=await merged();
