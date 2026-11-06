@@ -2,10 +2,12 @@
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 import type {FactRow,FilingRow} from '@/lib/facts/types';
 
-const mocks=vi.hoisted(()=>({resolve:vi.fn(),readFacts:vi.fn(),factsByIds:vi.fn(),filingsOfIssuer:vi.fn()}));
+const mocks=vi.hoisted(()=>({resolve:vi.fn(),readFacts:vi.fn(),factsByIds:vi.fn(),filingsOfIssuer:vi.fn(),lineageOf:vi.fn()}));
 vi.mock('@/lib/supabase/anon',()=>({getAnonSupabase:()=>({})}));
 vi.mock('@/lib/entities/resolve',async(importOriginal)=>({...await importOriginal<typeof import('@/lib/entities/resolve')>(),resolveIssuer:mocks.resolve}));
-vi.mock('@/lib/facts/db',()=>({supabaseFactsDb:()=>({readFacts:mocks.readFacts,factsByIds:mocks.factsByIds,filingsOfIssuer:mocks.filingsOfIssuer})}));
+vi.mock('@/lib/facts/db',()=>({supabaseFactsDb:()=>({factsByIds:mocks.factsByIds,filingsOfIssuer:mocks.filingsOfIssuer,lineageOf:mocks.lineageOf,
+ // the route reads the lineage envelope; tests keep asserting on readFacts-shaped mocks (first member, same options)
+ readFactsLineage:async(issuers:string[],market:string,opts:unknown)=>{const r=await mocks.readFacts(issuers[0],market,opts);return {stateRevs:issuers.map(i=>({issuer_id:i,state_rev:r.stateRev})),lineage:issuers,rows:r.rows,conflicts:r.conflicts??[],truncated:r.truncated};}})}));
 
 import {GET} from './route';
 
@@ -19,6 +21,7 @@ const TODAY=new Date().toISOString().slice(0,10);
 describe('GET /api/facts/[ticker]',()=>{
  beforeEach(()=>{
   vi.clearAllMocks();
+  mocks.lineageOf.mockImplementation(async(t:string)=>[t]);
   mocks.resolve.mockImplementation(async(_c:unknown,q:{ticker:string})=>({issuer_id:ISSUER,status:'active',names:{zh:null,en:'Apple'},identifiers:{cik:'320193',lei:null,usci:null},securities:[{ticker:q.ticker,isin:null,figi:null,share_class:null,is_primary:true,valid_from:'2000-01-01',valid_to:null}]}));
   mocks.readFacts.mockResolvedValue({stateRev:5,rows:[fact()],truncated:false});
   mocks.filingsOfIssuer.mockResolvedValue([filing()]);
@@ -29,8 +32,8 @@ describe('GET /api/facts/[ticker]',()=>{
   expect(res.status).toBe(200);
   const body=await res.json();
   expect(body).toMatchObject({issuerId:ISSUER,ticker:'AAPL',market:'US',asOf:'2024-06-30',mappingGen:1,truncated:false});
-  expect(body.facts[0]).toMatchObject({factId:F1,concept:'revenue',sourceConcept:'Revenues',value:'383285000000',availableDate:'2023-11-03',disclosureSeq:1,isCurrent:true,isRevision:false,mappingGen:1,filingId:FID});
-  expect(body.filings).toEqual([{filingId:FID,formType:'10-K',periodEnd:'2023-09-30',availableDate:'2023-11-03',sourceRef:'0000320193-23-000106',url:'https://www.sec.gov/x',documentRef:null,documentUrl:null,citation:'edgar'}]);
+  expect(body.facts[0]).toMatchObject({factId:F1,concept:'revenue',sourceConcept:'Revenues',value:'383285000000',availableDate:'2023-11-03',disclosureSeq:1,isCurrent:true,isRevision:false,mappingGen:1,filingId:FID,recordedIssuerId:ISSUER});
+  expect(body.filings).toEqual([{filingId:FID,formType:'10-K',periodEnd:'2023-09-30',availableDate:'2023-11-03',sourceRef:'0000320193-23-000106',url:'https://www.sec.gov/x',documentRef:null,documentUrl:null,citation:'edgar',acceptedAt:null,recordedIssuerId:ISSUER}]);
   expect(res.headers.get('cache-control')).toBe('public, max-age=600, s-maxage=3600');
   expect(mocks.readFacts).toHaveBeenCalledWith(ISSUER,'US',{concepts:['revenue'],asOf:'2024-06-30',from:undefined,to:undefined,history:false,limit:200});
   expect(mocks.resolve).toHaveBeenCalledWith(expect.anything(),{ticker:'AAPL'},{asOf:TODAY});
@@ -117,5 +120,29 @@ describe('GET /api/facts/[ticker]',()=>{
   const err=await get('AAPL','concepts=revenue');
   expect(err.status).toBe(500);expect(err.headers.get('cache-control')).toBe('no-store');
   spy.mockRestore();
+ });
+ it('lineage: the target answers with every member\'s rows (recordedIssuerId), the conflicts withheld from current values, and the filings of every member',async()=>{
+  const SRC='dddddddd-dddd-4ddd-8ddd-dddddddddddd',G2='eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  mocks.lineageOf.mockResolvedValue([ISSUER,SRC]);
+  mocks.readFacts.mockResolvedValue({stateRev:3,truncated:false,rows:[fact(),fact({fact_id:'f2',issuer_id:SRC,filing_id:G2})],conflicts:[{key:{concept:'revenue'},available_date:'2023-11-03',fact_ids:['x','y']}]});
+  mocks.filingsOfIssuer.mockImplementation(async(i:string)=>i===SRC?[filing({filing_id:G2,issuer_id:SRC,accepted_at:'2023-11-03T21:00:00.000Z',acceptance_source:'sec_submissions'})]:[filing()]);
+  const body=await (await get('AAPL','concepts=revenue')).json();
+  expect(body).toMatchObject({issuerId:ISSUER,lineage:[ISSUER,SRC],resolution:{tickerAsOf:TODAY,issuerId:ISSUER,validFromMethod:null},conflicts:[{key:{concept:'revenue'},availableDate:'2023-11-03',factIds:['x','y']}]});
+  expect(body.facts.map((f:{recordedIssuerId:string})=>f.recordedIssuerId)).toEqual([ISSUER,SRC]);
+  expect(body.filings.map((f:{filingId:string;acceptedAt:string|null;recordedIssuerId:string})=>[f.filingId,f.acceptedAt,f.recordedIssuerId])).toEqual([[FID,null,ISSUER],[G2,'2023-11-03T21:00:00.000Z',SRC]]);
+  expect(mocks.filingsOfIssuer.mock.calls.map(c=>c[0]).sort()).toEqual([ISSUER,SRC].sort());
+ });
+ it('tickerAsOf: passed to resolveIssuer as asOf and echoed; validFromMethod from the resolved row; a future tickerAsOf is 400; factIds keep lineage members only',async()=>{
+  mocks.resolve.mockImplementationOnce(async(_c:unknown,q:{ticker:string})=>({issuer_id:ISSUER,status:'active',names:{zh:null,en:null},identifiers:{cik:null,lei:null,usci:null},securities:[{ticker:q.ticker,isin:null,figi:null,share_class:null,is_primary:true,valid_from:'2000-01-01',valid_to:null,valid_from_method:'listing_date',valid_to_method:null}]}));
+  const res=await get('AAPL','concepts=revenue&tickerAsOf=2020-01-01');
+  expect(res.status).toBe(200);
+  expect(mocks.resolve).toHaveBeenLastCalledWith(expect.anything(),{ticker:'AAPL'},{asOf:'2020-01-01'});
+  expect((await res.json()).resolution).toEqual({tickerAsOf:'2020-01-01',issuerId:ISSUER,validFromMethod:'listing_date'});
+  const bad=await get('AAPL','concepts=revenue&tickerAsOf=2999-01-01');
+  expect(bad.status).toBe(400);expect((await bad.json()).error.code).toBe('invalid_parameter:tickerAsOf');
+  mocks.lineageOf.mockResolvedValue([ISSUER,'other']);
+  mocks.factsByIds.mockResolvedValue([fact(),fact({fact_id:OTHER,issuer_id:'other'}),fact({fact_id:'99999999-9999-4999-8999-999999999998',issuer_id:'stranger'})]);
+  const ev=await (await get('AAPL',`factIds=${F1},${OTHER}`)).json();
+  expect(ev.facts.map((f:{factId:string})=>f.factId)).toEqual([F1,OTHER]);
  });
 });

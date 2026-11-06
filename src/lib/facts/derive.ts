@@ -11,8 +11,10 @@
 // zero to RATIO_SCALE places; INSTANT metrics carry period_start = period_end (column is not null).
 // Differenced quarters are order-independent: a direct 3M fact wins; conflicting differences = no quarter. ROE with a
 // non-positive average equity is missing. as_of is the UTC date for every market.
-// materialize() reads the envelope, refuses truncated reads (read_truncated), and replaces the
-// issuer's metrics under the envelope's state_rev with one retry on stale_computation.
+// materialize() follows the plan-3 lineage contract (spec §4.4, T9): target T = targetOf(issuer); the
+// current lineage of T; read_facts_lineage (truncated → read_truncated); every row must belong to the
+// lineage and market; derive for T; replace_financial_metrics_lineage under the envelope's rev
+// vector, one retry on stale_computation (a rev or the lineage moved).
 import type {Duration,FactRow,FactsDb,LineageRev,Market,MetricDuration,MetricRow} from './types';
 import {FactsDbError} from './types';
 import {canonicalDecimal} from './json-numbers';
@@ -210,17 +212,31 @@ export function deriveMetrics(allRows:FactRow[],opts:DeriveOptions):MetricRow[]{
  return out.sort((a,b)=>cmpStr(key(a),key(b)));
 }
 
-export type MaterializeDb=Pick<FactsDb,'readFacts'|'replaceMetrics'>;
-export interface MaterializeResult{rows:number;stateRev:number;retried:boolean}
-/** as_of = today; the envelope's state_rev guards replace_financial_metrics; stale_computation → re-read and recompute once. */
+export type MaterializeDb=Pick<FactsDb,'targetOf'|'lineageOf'|'readFactsLineage'|'replaceMetricsLineage'>;
+export interface MaterializeResult{rows:number;stateRev:number;retried:boolean;target:string;basedOn:LineageRev[]}
+/**
+ * Rows of a lineage derived for its target T: every row must belong to the lineage and the market
+ * (replaces plan 2's "rows of this issuer only"); issuer ids are relabelled to T so the
+ * single-issuer derivation applies — the recorded issuer stays traceable through inputs[].fact_id.
+ * based_on_rev = T's rev in basedOn; based_on_lineage = basedOn.
+ */
+export function deriveLineageMetrics(rows:FactRow[],target:string,lineage:readonly string[],opts:{market:Market;asOf:string;basedOn:LineageRev[]}):MetricRow[]{
+ const members=new Set(lineage);
+ if(!members.has(target)||rows.some(r=>!members.has(r.issuer_id)||r.market!==opts.market))throw new Error(`derive_scope_mismatch:${target}/${opts.market}`);
+ const basedOnRev=opts.basedOn.find(x=>x.issuer_id===target)?.state_rev??0;
+ return deriveMetrics(rows.map(r=>r.issuer_id===target?r:{...r,issuer_id:target}),{market:opts.market,asOf:opts.asOf,basedOnRev,basedOn:opts.basedOn});
+}
+/** as_of = today; materialises T(issuer) over its current lineage (see the header). */
 export async function materialize(db:MaterializeDb,issuer:string,market:Market,opts:{today?:string}={}):Promise<MaterializeResult>{
  const asOf=opts.today??new Date().toISOString().slice(0,10);
+ const target=await db.targetOf(issuer);
  for(let attempt=0;;attempt++){
-  const env=await db.readFacts(issuer,market,{concepts:[...DERIVE_CONCEPTS[market]],asOf,history:true});
-  if(env.truncated)throw new FactsDbError('read_truncated',`read_facts truncated for ${issuer}/${market}`);
-  if(env.rows.some(r=>r.issuer_id!==issuer||r.market!==market))throw new Error(`derive_scope_mismatch:${issuer}/${market}`);
-  const rows=deriveMetrics(env.rows,{market,asOf,basedOnRev:env.stateRev});
-  try{const n=await db.replaceMetrics(issuer,market,env.stateRev,rows);return {rows:n,stateRev:env.stateRev,retried:attempt>0};}
+  const lineage=await db.lineageOf(target);
+  const env=await db.readFactsLineage(lineage,market,{concepts:[...DERIVE_CONCEPTS[market]],asOf,history:true});
+  if(env.truncated)throw new FactsDbError('read_truncated',`read_facts_lineage truncated for ${target}/${market}`);
+  const rows=deriveLineageMetrics(env.rows,target,lineage,{market,asOf,basedOn:env.stateRevs});
+  const stateRev=env.stateRevs.find(x=>x.issuer_id===target)?.state_rev??0;
+  try{const n=await db.replaceMetricsLineage(target,market,env.stateRevs,rows);return {rows:n,stateRev,retried:attempt>0,target,basedOn:env.stateRevs};}
   catch(e){if(attempt===0&&e instanceof FactsDbError&&e.code==='stale_computation')continue;throw e;}
  }
 }
