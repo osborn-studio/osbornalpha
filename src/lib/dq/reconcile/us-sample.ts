@@ -22,7 +22,10 @@ export const US_SAMPLE_PATH='src/lib/dq/fixtures/gold/us-ixbrl-sample-v1.json';
 export const MIN_KEYS_PER_SIDE=4;
 export type KeyOrigin='left'|'right'|'both';
 export interface SampleKey{concept:string;period_start:string|null;period_end:string;unit:string;source_concept:string;origin:KeyOrigin}
-export interface SampleFiling{accn:string;form:string;period_end:string|null;primary_document:string;doc_url:string;is_inline_xbrl:boolean|null;submissions_category:string|null;raw_sha256:string;doc_sha256:string;expected_keys:SampleKey[]}
+export interface RawRef{path:string;sha256:string}
+/** Live samples: where the exact bytes the keys were derived from were retained (RawStore paths). */
+export interface SampleProvenance{companyfacts:RawRef;submissions:RawRef;document:RawRef}
+export interface SampleFiling{provenance?:SampleProvenance;accn:string;form:string;period_end:string|null;primary_document:string;doc_url:string;is_inline_xbrl:boolean|null;submissions_category:string|null;raw_sha256:string;doc_sha256:string;expected_keys:SampleKey[]}
 export interface SampleIssuer{cik:string;ticker:string;regime:'10-K'|'20-F';filings:SampleFiling[]}
 export interface UsSample{schema:typeof US_SAMPLE_SCHEMA;generated_at:string;selection:string;issuers:SampleIssuer[]}
 type KeyCore=Omit<SampleKey,'origin'>;
@@ -94,6 +97,16 @@ export function validateUsSample(json:unknown):{ok:true;sample:UsSample}|{ok:fal
    if(f?.submissions_category!==null&&typeof f?.submissions_category!=='string')e(`${fa}.submissions_category`);
    if(typeof f?.raw_sha256!=='string'||!SHA.test(f.raw_sha256))e(`${fa}.raw_sha256`);
    if(typeof f?.doc_sha256!=='string'||!SHA.test(f.doc_sha256))e(`${fa}.doc_sha256`);
+   if(f?.provenance!==undefined){
+    const pv=f.provenance as Partial<SampleProvenance>|null;
+    const ref=(r:unknown,kind:string,sha:unknown)=>{const x=r as Partial<RawRef>|null;return !!x&&typeof x.path==='string'&&typeof x.sha256==='string'&&SHA.test(x.sha256)&&x.path.startsWith(`${kind}/${x.sha256}.`)&&x.sha256===sha;};
+    if(!pv||typeof pv!=='object')e(`${fa}.provenance`);
+    else{
+     if(!ref(pv.companyfacts,'sec-companyfacts',f.raw_sha256))e(`${fa}.provenance.companyfacts`);
+     if(!ref(pv.document,'sec-document',f.doc_sha256))e(`${fa}.provenance.document`);
+     if(!ref(pv.submissions,'sec-submissions',(pv.submissions as Partial<RawRef>|undefined)?.sha256))e(`${fa}.provenance.submissions`);
+    }
+   }
    if(!Array.isArray(f?.expected_keys)){e(`${fa}.expected_keys`);return;}
    let nl=0,nr=0;
    f.expected_keys.forEach((k,ki)=>{
@@ -141,5 +154,7 @@ export function pickSample(candidates:readonly SampleCandidate[],required:readon
   }
  }
  const missing=[...req].filter(t=>!picked.some(p=>p.ticker===t)).sort().map(t=>`required:${t}`);
- return {picked:picked.sort((a,b)=>cmp(a.ticker,b.ticker)),unmet:[...missing,...QUOTAS.filter(q=>count(q)<q.min).map(q=>q.name)]};
+ return {picked:picked.sort((a,b)=>cmp(a.ticker,b.ticker)),unmet:[...missing,...unmetQuotas(picked)]};
 }
+/** Names of the quotas a set of issuers does not meet (used for the pick and again on the final manifest). */
+export const unmetQuotas=(set:readonly SampleCandidate[]):string[]=>QUOTAS.filter(q=>set.filter(q.test).length<q.min).map(q=>q.name);

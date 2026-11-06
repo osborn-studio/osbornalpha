@@ -22,11 +22,9 @@
  * written only after both downloads, their retention and the trim succeeded. Exit 1 on failure, 2 on bad arguments.
  */
 import {createHash} from 'node:crypto';
-import {existsSync,mkdirSync,writeFileSync} from 'node:fs';
-import {dirname,join} from 'node:path';
+import {writeFileSync} from 'node:fs';
 import {DEFAULT_USER_AGENT} from '../../src/lib/research/ingest/collectors/shared';
-import {memoryRawStore,supabaseRawStore} from '../../src/lib/dq/raw-store';
-import type {RawStore} from '../../src/lib/dq/raw-store';
+import {rawStoreFor} from '../../src/lib/dq/raw-dir-store';
 import {budgetFor,secPacer} from '../../src/lib/facts/providers/shared';
 import {IXBRL_PARSER_VERSION,MAX_IXBRL_BYTES} from '../../src/lib/dq/reconcile/ixbrl';
 import {IXBRL_TRIM_VERSION,factConceptKeep,trimInlineXbrl} from '../../src/lib/dq/reconcile/ixbrl-trim';
@@ -43,32 +41,6 @@ async function get(url:string):Promise<Uint8Array>{
  const bytes=new Uint8Array(await res.arrayBuffer());
  if(bytes.byteLength>MAX_IXBRL_BYTES)throw new Error(`too_large ${url}`);
  return bytes;
-}
-
-/** Content-addressed files in a directory, named by the RawStore rules (memoryRawStore prepares path and sidecar; existing files are kept). */
-function dirRawStore(dir:string):RawStore{
- const mem=memoryRawStore();
- return {
-  sha256Of:mem.sha256Of,
-  async put(item,budget){
-   const r=await mem.put(item,budget);
-   for(const [p,bytes] of mem.objects){
-    const full=join(dir,p);
-    if(existsSync(full))continue;
-    mkdirSync(dirname(full),{recursive:true});
-    writeFileSync(full,bytes,{flag:'wx'});
-   }
-   return r;
-  },
- };
-}
-async function rawStoreFor(rawDir:string):Promise<RawStore>{
- if(rawDir)return dirRawStore(rawDir);
- if(process.env.NEXT_PUBLIC_SUPABASE_URL&&process.env.SUPABASE_SERVICE_ROLE_KEY){
-  const {getAdminSupabase}=await import('../../src/lib/supabase/admin');
-  return supabaseRawStore(getAdminSupabase());
- }
- throw new Error('no raw store: pass --raw-dir <dir> or configure Supabase (NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)');
 }
 
 async function main(){
