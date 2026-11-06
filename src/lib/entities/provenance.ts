@@ -20,8 +20,15 @@ export class ProvenanceError extends Error{
 // email keys, 8 KB total): a claim then fails at filing instead of at acceptance.
 const SECRET_KEY=/(secret|token|passw|api[_-]?key|apikey|auth|authorization|user_?id|cookie|session|credential|private|email)/i;
 const UUID=/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-const URL_QUERY=/[a-z][a-z0-9+.-]*:\/\/[^\s]*[?#]|\?[^\s]*=|:\/\/[^/\s]*@/i;
+const URL_QUERY=/[a-z][a-z0-9+.-]*:\/\/[^\s]*[?#]|\?[^\s]*=/i;
 const SECRET_TEXT=/(token|secret|passw[a-z]*|api[_-]?key|\bkey)\s*[=:]/i;
+/** URL userinfo (user:pw@host), also protocol-relative, with extra slashes, or hidden by control/whitespace characters. */
+function hasUserinfo(v:string):boolean{
+ const c=v.replace(/[\x00-\x20\x7f]/g,'');
+ if(/\/\/+[^/?#]*@/.test(c))return true;
+ try{const u=new URL(c,'https://base.invalid/');return u.username!==''||u.password!=='';}
+ catch{return false;}
+}
 const MAX_DEPTH=4;
 const MAX_STRING=500;
 const MAX_JSON=8192;
@@ -33,7 +40,7 @@ function clean(v:unknown,path:string,depth:number):unknown{
  if(typeof v==='number'){if(!Number.isFinite(v))throw new ProvenanceError('bad_value',path);return v;}
  if(typeof v==='string'){
   if(v.length>MAX_STRING)throw new ProvenanceError('too_long',path);
-  if(URL_QUERY.test(v))throw new ProvenanceError('url_credentials',path);
+  if(URL_QUERY.test(v)||hasUserinfo(v))throw new ProvenanceError('url_credentials',path);
   if(UUID.test(v))throw new ProvenanceError('uuid_value',path);
   if(SECRET_TEXT.test(v))throw new ProvenanceError('secret_text',path);
   return v;

@@ -399,6 +399,12 @@ describe('attachSecurity',()=>{
   await expect(attachSecurity(c,{...sec,valid_from_method:'guessed' as never})).rejects.toThrow('invalid_security:valid_from_method');
   expect(c.rows('issuer_securities')).toEqual([]);
  });
+ it('rejects userinfo URLs (extra slashes, protocol-relative, control characters) in provenance before any insert',async()=>{
+  const c=client();
+  for(const u of ['https:////bob:pw@example.com/f.csv','//bob:pw@example.com/f.csv','https://bo\tb:pw@example.com/f.csv'])
+   await expect(attachSecurity(c,{...sec,provenance:{valid_from:{source:'x',locator:u}}})).rejects.toThrow('provenance_rejected:url_credentials');
+  expect(c.rows('issuer_securities')).toEqual([]);
+ });
  it('passes provenance through the public whitelist before any write',async()=>{
   const c=client();
   await expect(attachSecurity(c,{...sec,provenance:{exchange:'Nasdaq'}})).rejects.toBeInstanceOf(ProvenanceError);

@@ -28,6 +28,8 @@ describe('sanitizeProvenance',()=>{
   for(const k of ['auth','session_id','email','apikey'])expect(code({valid_from:{[k]:'x'}})).toBe(`secret_key@$.valid_from.${k}`);
   expect(code({isin:{locator:'https://api.example/x?token=abc'}})).toBe('url_credentials@$.isin.locator');
   expect(code({isin:{locator:'https://bob:pw@example.com/f.csv'}})).toBe('url_credentials@$.isin.locator');
+  for(const u of ['https:////bob:pw@example.com/f.csv','//bob:pw@example.com/f.csv','https://bo\tb:pw@example.com/f.csv','https://bob:p\nw@example.com/f.csv'])
+   expect({u,r:code({isin:{locator:u}})}).toEqual({u,r:'url_credentials@$.isin.locator'});
   expect(code({isin:{locator:'https://www.hkex.com.hk/eng/services/trading/securities/securitieslists/ListOfSecurities.xlsx'}})).toBe('ok');
   expect(code({valid_from:{source:'curated',entity:'5f0c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f'}})).toBe('uuid_value@$.valid_from.entity');
   expect(code({figi:{level:Number.POSITIVE_INFINITY}})).toBe('bad_value@$.figi.level');
