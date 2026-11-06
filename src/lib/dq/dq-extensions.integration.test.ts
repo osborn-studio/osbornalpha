@@ -22,7 +22,7 @@ const RETRYABLE=new Set(['55P03','40P01']);
 async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
  for(let attempt=1;;attempt++){
   const c=await pool.connect();
-  try{await c.query(`begin; set local lock_timeout='3s'; select pg_advisory_xact_lock(hashtext('test:migration-replay'));\n${sql}\n;commit;`);return;}
+  try{await c.query(`begin; set local lock_timeout='3s'; set local deadlock_timeout='50ms'; select pg_advisory_xact_lock(hashtext('test:migration-replay'));\n${sql}\n;commit;`);return;}
   catch(e){
    await c.query('rollback').catch(()=>{});
    const code=(e as {code?:string}).code;
@@ -397,12 +397,29 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
    const other=await item({reason:'identity_bs',b,payload:{key:{},fact_ids:[r]}});
    expect(await resolveFacts(other,[],by)).toMatchObject({promoted:0,skipped:1});                      // resolve_facts_quarantine honours the predicate too
    const m3=await item({reason:'reconcile_mismatch',b,payload:{fact_ids:[r]},detail:latest(false)});
-   expect(await resolveFacts(m3,[],by)).toMatchObject({promoted:0});                                   // the generic resolver cannot bypass restore_reconciled
+   expect(await fails(resolveFacts(m3,[],by))).toMatchObject({message:'use_dedicated_resolver',code:'22023'});   // the generic resolver cannot bypass restore_reconciled
+   expect((await itemRow(m3)).status).toBe('open');
    expect(await status(r)).toBe('quarantined');
    await q(`update public.dq_quarantine set detail=detail||$2::jsonb where id=any($1::uuid[])`,[[m2,m3],JSON.stringify(latest(true))]);
+   await q(`update public.dq_quarantine set status='resolved_accept',resolved_by=$2,resolved_at=now() where id=$1`,[m3,by]);   // closed by hand: the generic resolver refuses it
    expect(await promote(iss,[r])).toBe(0);                                                            // m is still a reject
    await q(`update public.dq_quarantine set status='resolved_accept',detail=detail||$2::jsonb where id=$1`,[m,JSON.stringify(latest(true))]);
    expect(await promote(iss,[r])).toBe(1);
+  });
+
+  it('resolve_facts_quarantine refuses reconcile_mismatch and lineage_conflict (passing result with a changed inputs hash cannot be closed or promoted); restore_reconciled still works with the matching hash',async()=>{
+   const {iss,b,r}=await published();const by=await user();const rb=await batch();
+   await park(r);
+   const m=await item({reason:'reconcile_mismatch',b,payload:{fact_ids:[r]},detail:{...latest(true,'h1'),issuer_id:iss,market:'US'}});
+   expect(await fails(resolveFacts(m,[],by))).toMatchObject({message:'use_dedicated_resolver'});
+   const l=await lineageItem(iss,b,[r]);
+   expect(await fails(resolveFacts(l,[],by))).toMatchObject({message:'use_dedicated_resolver'});
+   expect([(await itemRow(m)).status,(await itemRow(l)).status,await status(r)]).toEqual(['open','open','quarantined']);
+   expect(await fails(restore(m,rb,'changed',by))).toMatchObject({message:'not_passing'});
+   await q(`update public.dq_quarantine set status='resolved_reject',resolved_by=$2,resolved_at=now() where id=$1`,[l,by]);   // only to free the member for the matching-hash restore
+   await q(`update public.dq_quarantine set payload=jsonb_set(payload,'{fact_ids}','[]') where id=$1`,[l]);
+   expect(await restore(m,rb,'h1',by)).toEqual({promoted:1,skipped:[]});
+   expect(await status(r)).toBe('ok');
   });
 
   it('T6: a resolved lineage_conflict binds promotion to its chosen rows, for payload members and for the rows it quarantined',async()=>{
@@ -438,6 +455,19 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
    expect((await itemRow(n)).status).toBe('resolved_accept');expect(await status(r0)).toBe('quarantined');
    const wrong=await item({reason:'identity_bs',b,payload:{key:{},fact_ids:[]}});
    expect(await fails(restore(wrong,rb,'h1',by))).toMatchObject({message:'item_not_open'});
+  });
+
+  it('restore_reconciled skips rows blocked by the new T6 predicates: a resolved lineage_conflict that chose another row, a second reconcile_mismatch resolved_reject',async()=>{
+   const {iss,b,r0,r}=await published();const by=await user();const rb=await batch();
+   await park(r0);await park(r);
+   await item({reason:'lineage_conflict',b,payload:{fact_ids:[r0]},detail:{chosen_fact_ids:[r]},status:'resolved_accept',by});
+   const m1=await item({reason:'reconcile_mismatch',b,payload:{fact_ids:[r0]},detail:{...latest(true,'h1'),issuer_id:iss,market:'US'}});
+   expect(await restore(m1,rb,'h1',by)).toEqual({promoted:0,skipped:[{fact_id:r0,reason:'ineligible'}]});
+   expect(await status(r0)).toBe('quarantined');
+   await item({reason:'reconcile_mismatch',b,payload:{fact_ids:[r]},detail:latest(false),status:'resolved_reject',by});
+   const m2=await item({reason:'reconcile_mismatch',b,payload:{fact_ids:[r]},detail:{...latest(true,'h1'),issuer_id:iss,market:'US'}});
+   expect(await restore(m2,rb,'h1',by)).toEqual({promoted:0,skipped:[{fact_id:r,reason:'ineligible'}]});
+   expect(await status(r)).toBe('quarantined');
   });
 
   it('adopt_candidate (T5): maps the persisted camelCase candidate, takes issuer and market from the filing, generation from the anchor run, mapping_version from retained rows; the hook in the same transaction; a management run',async()=>{
@@ -489,6 +519,9 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
    const run4=await begin(iss,b,2);await publish(run4,[]);                                              // an anchor run without rows
    const rr=await item({reason:'ambiguous_value',b,nk:NK(iss,fRef,2),payload:{candidates:[cand(fRef,'110')],run_id:run4}});
    expect(await fails(adopt(rr,0,await batch(),await rev(iss),by))).toMatchObject({message:'replay_required'});
+   const run5=await begin(iss,b,1);const z=await filing(run5);await publish(run5,[z.id]);                // anchor run without rows, filing without rows at its generation
+   const zr=await item({reason:'ambiguous_value',b,nk:NK(iss,z.sourceRef,1),payload:{candidates:[cand(z.sourceRef,'110')],run_id:run5}});
+   expect(await fails(adopt(zr,0,await batch(),await rev(iss),by))).toMatchObject({message:'replay_required'});
   });
 
   it('adopt_candidate conflict_exists (U3): a visible ok row with another value for (K, date), or an open same_day_conflict / lineage_conflict on it even with no ok competitor left',async()=>{
@@ -506,6 +539,42 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
    expect(await fails(adopt(a,0,await batch(),2,by))).toMatchObject({message:'conflict_exists'});
    await q(`update public.dq_quarantine set status='resolved_reject',resolved_by=$2,resolved_at=now() where id=$1`,[ln,by]);
    expect(await adopt(a,0,await batch(),2,by)).toMatchObject({issuer_id:iss});
+  });
+
+  it('adopt_candidate lineage (Codex P2): a competing ok value at another lineage member, with no open item, → conflict_exists',async()=>{
+   const {iss:t,b}=await published();const by=await user();            // t holds revenue 100 for 2023-10-01..12-31 on 2024-02-01
+   const u=await issuer();const ub=await batch();await scope(u);await claim(u,ub);
+   const run=await begin(u,ub);const g=await filing(run);
+   await stage(run,[{filing_id:g.id,concept:'total_assets',period_start:null,duration:'INSTANT',value:'9'}]);await publish(run,[g.id]);
+   await merge(u,t,by);
+   const key={periodStart:'2023-10-01',periodEnd:'2023-12-31'};
+   const own=await item({reason:'ambiguous_value',b:ub,nk:NK(u,g.sourceRef),payload:{candidates:[cand(g.sourceRef,'150',key),cand(g.sourceRef,'100',key)],run_id:run}});
+   expect(await fails(adopt(own,0,await batch(),await rev(u),by))).toMatchObject({message:'conflict_exists'});   // 150 against t's 100, u has no row of its own
+   expect((await itemRow(own)).status).toBe('open');
+   expect(await adopt(own,1,await batch(),await rev(u),by)).toMatchObject({issuer_id:u});                        // the same value agrees
+   void b;
+  });
+
+  it('adopt_candidate: two adoptions racing on different lineage members serialise; the second sees the first',async()=>{
+   const t=await issuer();const bt=await batch();await scope(t);await claim(t,bt);
+   const a=await sibling('0');const c=await sibling('0');
+   const by=await user();await merge(a.iss,t,by);await merge(c.iss,t,by);
+   const [{source_ref:aref}]=await q(`select source_ref from public.filings where filing_id=$1`,[a.f]);
+   const [{source_ref:cref}]=await q(`select source_ref from public.filings where filing_id=$1`,[c.f]);
+   const ia=await item({reason:'ambiguous_value',b:a.b,nk:NK(a.iss,aref),payload:{candidates:[cand(aref,'111')],run_id:a.run}});
+   const ic=await item({reason:'ambiguous_value',b:c.b,nk:NK(c.iss,cref),payload:{candidates:[cand(cref,'222')],run_id:c.run}});
+   const ab=await batch();
+   await inTx(admin,async({c:cx,pid,commit})=>{
+    await cx.query(`select 1 from public.fact_sync_scope where issuer_id=$1 and market='US' for update`,[c.iss]);
+    const p1=adopt(ia,0,ab,await rev(a.iss),by);p1.catch(()=>{});
+    await stillBlockedBehind(admin,pid,p1);
+    const p2=adopt(ic,0,ab,await rev(c.iss),by);p2.catch(()=>{});
+    await commit();
+    const res=await Promise.allSettled([p1,p2]);
+    expect(res.filter(x=>x.status==='fulfilled')).toHaveLength(1);
+    const bad=res.find(x=>x.status==='rejected') as PromiseRejectedResult;
+    expect(bad.reason).toMatchObject({message:'conflict_exists'});
+   });
   });
 
   it('resolve_lineage_conflict: locks the whole lineage, re-queries under the lock, leaves exactly one ok value, persists the verdict that promote_quarantined then obeys',async()=>{

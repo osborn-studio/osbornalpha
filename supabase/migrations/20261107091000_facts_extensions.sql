@@ -479,6 +479,7 @@ returns jsonb language plpgsql security definer set search_path = public as $$
 declare q public.dq_quarantine; c jsonb; g public.filings; r public.fact_sync_runs; b public.ingest_batches;
         v_source text; v_market text; v_gen int; v_nk_gen int; v_versions text[]; v_rev bigint;
         v_ps date; v_pe date; v_value numeric; v_run uuid := gen_random_uuid(); v_fact uuid := gen_random_uuid(); v_t uuid; v_k text;
+        v_lineage uuid[]; v_now uuid[];
 begin
   if p_resolved_by is null then raise exception 'invalid_resolver' using errcode = '22023'; end if;
   select * into q from public.dq_quarantine where id = p_item;
@@ -536,7 +537,13 @@ begin
   if v_versions is null or cardinality(v_versions) <> 1 then raise exception 'replay_required' using errcode = 'P0001'; end if;
   select * into b from public.ingest_batches where batch_id = p_batch;
   if not found or b.status <> 'running' or b.dataset <> q.dataset then raise exception 'batch_mismatch' using errcode = 'P0001'; end if;
-  select s.state_rev into v_rev from public.fact_sync_scope s where s.issuer_id = g.issuer_id and s.market = g.market for update;
+  -- lock the whole lineage of the filing issuer's target (sorted by issuer_id; no cycle lock is taken here), then revalidate membership
+  v_t := coalesce((select i.merged_into from public.issuers i where i.issuer_id = g.issuer_id), g.issuer_id);
+  v_lineage := array(select l.i from (select v_t as i union select issuer_id from public.issuers where merged_into = v_t) l order by l.i);
+  perform 1 from public.fact_sync_scope s where s.issuer_id = any(v_lineage) and s.market = g.market order by s.issuer_id for update;
+  v_now := array(select l.i from (select v_t as i union select issuer_id from public.issuers where merged_into = v_t) l order by l.i);
+  if v_now <> v_lineage or not (g.issuer_id = any(v_now)) then raise exception 'lineage_changed' using errcode = 'P0001'; end if;
+  select s.state_rev into v_rev from public.fact_sync_scope s where s.issuer_id = g.issuer_id and s.market = g.market;
   if not found then raise exception 'scope_missing' using errcode = 'P0001'; end if;
   if v_rev is distinct from p_expected_rev then raise exception 'stale_evaluation' using errcode = 'P0001'; end if;
   select * into q from public.dq_quarantine where id = p_item for update;
@@ -546,15 +553,14 @@ begin
                and f.consolidation = c ->> 'consolidation' and f.unit = c ->> 'unit' and f.filing_id = g.filing_id and f.mapping_gen = v_gen) then
     raise exception 'duplicate' using errcode = 'P0001';
   end if;
-  v_t := coalesce((select i.merged_into from public.issuers i where i.issuer_id = g.issuer_id), g.issuer_id);
   v_k := (c ->> 'concept') || ':' || coalesce(c ->> 'periodStart', '') || ':' || (c ->> 'periodEnd') || ':' || (c ->> 'consolidation') || ':' || (c ->> 'unit');
   if exists (select 1 from public.financial_facts f join public.filings fg on fg.filing_id = f.filing_id and fg.mapping_gen = f.mapping_gen
-             where f.issuer_id = g.issuer_id and f.market = g.market and f.status = 'ok' and f.concept = c ->> 'concept'
+             where f.issuer_id = any(v_lineage) and f.market = g.market and f.status = 'ok' and f.concept = c ->> 'concept'
                and f.period_start is not distinct from v_ps and f.period_end = v_pe and f.consolidation = c ->> 'consolidation' and f.unit = c ->> 'unit'
                and f.available_date = g.available_date and f.value <> v_value)
      or exists (select 1 from public.dq_quarantine d
                 where d.table_name = 'financial_facts' and d.status = 'open' and d.reason_code = 'same_day_conflict'
-                  and d.payload -> 'key' ->> 'issuer_id' = g.issuer_id::text and d.payload -> 'key' ->> 'market' = g.market
+                  and d.payload -> 'key' ->> 'issuer_id' in (select l::text from unnest(v_lineage) l) and d.payload -> 'key' ->> 'market' = g.market
                   and d.payload -> 'key' ->> 'concept' = c ->> 'concept'
                   and coalesce(d.payload -> 'key' ->> 'period_start', '') = coalesce(c ->> 'periodStart', '')
                   and d.payload -> 'key' ->> 'period_end' = c ->> 'periodEnd'
@@ -704,3 +710,59 @@ begin
 end $$;
 revoke execute on function public.resolve_lineage_conflict(uuid, uuid, uuid, uuid) from public, anon, authenticated;
 grant execute on function public.resolve_lineage_conflict(uuid, uuid, uuid, uuid) to service_role;
+
+-- ---------------------------------------------------------------- 11. generic resolver guard (Codex 8b P1)
+-- The plan-2 body verbatim plus one guard: reconcile_mismatch and lineage_conflict items never close here.
+create or replace function public.resolve_facts_quarantine(p_item uuid, p_chosen uuid[], p_resolved_by uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare q public.dq_quarantine; v_ids uuid[]; v_issuer uuid; v_market text; v_chosen uuid[]; v_promoted int := 0; v_run uuid;
+begin
+  if p_resolved_by is null then raise exception 'invalid_resolver' using errcode = '22023'; end if;
+  select * into q from public.dq_quarantine where id = p_item;
+  if not found or q.status <> 'open' or q.table_name <> 'financial_facts' then raise exception 'item_not_open' using errcode = 'P0001'; end if;
+  -- migration two: these two reasons close only through restore_reconciled / resolve_lineage_conflict
+  if q.reason_code in ('reconcile_mismatch', 'lineage_conflict') then raise exception 'use_dedicated_resolver' using errcode = '22023'; end if;
+  -- 1. provisional member read, only to locate the scope row to lock
+  v_ids := public.fact_item_members(q.payload);
+  select f.issuer_id, f.market into v_issuer, v_market from public.financial_facts f where f.fact_id = any(v_ids) limit 1;
+  if v_issuer is null then
+    select r.issuer_id, r.market into v_issuer, v_market from public.fact_sync_runs r where r.run_id = (q.payload ->> 'run_id')::uuid;
+  end if;
+  if v_issuer is not null then
+    perform 1 from public.fact_sync_scope where issuer_id = v_issuer and market = v_market for update;
+  end if;
+  -- 2. re-read and rebuild the member set under the lock (a concurrent merge is now visible)
+  select * into q from public.dq_quarantine where id = p_item for update;
+  if not found or q.status <> 'open' then raise exception 'item_not_open' using errcode = 'P0001'; end if;
+  v_ids := public.fact_item_members(q.payload);
+  -- 3. every member run, and the anchor run, must have left the staged state
+  if exists (select 1 from public.financial_facts f join public.fact_sync_runs r on r.run_id = f.run_id where f.fact_id = any(v_ids) and r.status = 'staged') then
+    raise exception 'run_pending' using errcode = 'P0001';
+  end if;
+  v_run := (q.payload ->> 'run_id')::uuid;
+  if v_run is not null and exists (select 1 from public.fact_sync_runs r where r.run_id = v_run and r.status = 'staged') then
+    raise exception 'run_pending' using errcode = 'P0001';
+  end if;
+  if q.reason_code = 'same_day_conflict' then
+    v_chosen := coalesce(p_chosen, '{}'::uuid[]);
+    if not (v_chosen <@ v_ids) then raise exception 'invalid_chosen' using errcode = '22023'; end if;
+    -- spec 7.3: the chosen rows (those still existing) must all carry the same numeric value
+    if (select count(distinct f.value) from public.financial_facts f where f.fact_id = any(v_chosen)) > 1 then raise exception 'invalid_chosen' using errcode = '22023'; end if;
+  else
+    v_chosen := v_ids;
+  end if;
+  update public.dq_quarantine
+  set status = 'resolved_accept', resolved_by = p_resolved_by, resolved_at = now(),
+      detail = detail || jsonb_build_object('chosen_fact_ids', to_jsonb(v_chosen))
+        || case when q.reason_code in ('same_day_conflict', 'identity_bs', 'identity_gp')
+                then jsonb_build_object('hook', jsonb_build_object('stage', 'materialize', 'state', 'pending', 'at', to_jsonb(now())))
+                else '{}'::jsonb end
+  where id = p_item;
+  if v_issuer is not null then
+    v_promoted := public.fact_promote_rows(v_issuer, v_market, v_chosen);
+    update public.fact_sync_scope set state_rev = state_rev + 1, updated_at = now() where issuer_id = v_issuer and market = v_market;
+  end if;
+  return jsonb_build_object('promoted', v_promoted, 'skipped', cardinality(v_chosen) - v_promoted, 'chosen_fact_ids', to_jsonb(v_chosen));
+end $$;
+revoke execute on function public.resolve_facts_quarantine(uuid, uuid[], uuid) from public, anon, authenticated;
+grant execute on function public.resolve_facts_quarantine(uuid, uuid[], uuid) to service_role;
