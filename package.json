@@ -27,7 +27,9 @@
     "test:revocation-consumer": "tsx scripts/revocation/consumer-smoke.ts",
     "test:revocation-registration": "tsx scripts/revocation/registration-smoke.ts",
     "test:revocation-retention": "tsx scripts/revocation/retention-smoke.ts",
-    "test:revocation-list": "tsx scripts/revocation/list-smoke.ts"
+    "test:revocation-list": "tsx scripts/revocation/list-smoke.ts",
+    "prebuild": "tsx scripts/documents/build-extract-worker.ts",
+    "predev": "tsx scripts/documents/build-extract-worker.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
@@ -65,7 +67,8 @@
     "tsx": "^4.23.1",
     "typescript": "^5.6.3",
     "typescript-eslint": "^8.65.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "esbuild": "0.28.1"
   },
   "overrides": {
     "@swc/helpers": "0.5.23",
