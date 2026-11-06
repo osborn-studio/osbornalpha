@@ -13,16 +13,18 @@ import {DATASETS} from '../dq/datasets';
 import {isValidLei,isValidUsci,normalizeCik} from '../research/entity-keys/identifiers';
 import {inferCoreMarket,normalizeSecurityTicker} from '../securities/ticker';
 import {attachSecurity,upsertIssuerByIdentifiers} from './issuers';
+import {claimEvidence} from './claims';
 import type {ApplyResult} from './load-sec';
 import {errorMessage,issuerReasonCode,parkConflict,summarizeSkips,withSkippedSummary} from './load-sec';
-import type {IssuerInput,ShareClass} from './types';
+import type {IssuerInput,SecurityClaimEvidence,ShareClass} from './types';
 
 type Market='A'|'HK'|'US'|'other';
 type CoreMarket=Exclude<Market,'other'>;
 export interface EntityKeyRow{user_id:string;entity_id:string;lei:string|null;usci:string|null;cik:string|null;cninfo_org_id:string|null;names_zh:unknown;names_en:unknown;home_market:Market;issuer_id:string|null}
 export interface EntitySecurityRow{user_id:string;id:string;entity_id:string;exchange_code:string;isin:string|null;market:Market;security_type:'common'|'adr'|'preferred'|'other';is_primary:boolean;valid_from:string;valid_to:string|null}
 export interface PlannedIssuer{entity_key:string;user_id:string;entity_id:string;current_issuer_id:string|null;input:IssuerInput}
-export interface PlannedSecurity{entity_key:string;user_id:string;entity_id:string;security_id:string;ticker:string;isin:string|null;share_class:ShareClass;is_primary:boolean;valid_from:string;valid_to:string|null;source:typeof CURATED;provenance:{source:typeof CURATED;as_of:string}}
+type CuratedOrigin={source:typeof CURATED;as_of:string};
+export interface PlannedSecurity{entity_key:string;user_id:string;entity_id:string;security_id:string;ticker:string;isin:string|null;share_class:ShareClass;is_primary:boolean;valid_from:string;valid_to:string|null;valid_to_method:'curated'|null;source:typeof CURATED;provenance:{valid_from:CuratedOrigin;valid_to?:CuratedOrigin};claimEvidence:SecurityClaimEvidence}
 export interface SkippedLink{entity_key:string;security_id?:string;reason:string}
 export interface PlannedLink{fetched:number;issuers:PlannedIssuer[];securities:PlannedSecurity[];skipped:SkippedLink[]}
 
@@ -109,7 +111,14 @@ export function planResearchLink(keys:EntityKeyRow[],securities:EntitySecurityRo
   const listed=universe.get(t);
   if(listed===undefined){skip(`ticker_not_in_universe:${t}`);continue;}
   if(market&&CORE.includes(listed)&&listed!==market){skip(`market_mismatch:${t}`);continue;}
-  plan.securities.push({entity_key,user_id:s.user_id,entity_id:s.entity_id,security_id:s.id,ticker:t,isin:str(s.isin),share_class:shareClass(s,t,entity),is_primary:s.is_primary===true,valid_from:s.valid_from,valid_to:s.valid_to??null,source:CURATED,provenance:{source:CURATED,as_of:asOf}});
+  const isin=str(s.isin),share_class=shareClass(s,t,entity),valid_to=s.valid_to??null;
+  const origin:CuratedOrigin={source:CURATED,as_of:asOf};
+  // The claim evidence hashes only public security fields (never user or entity ids).
+  const record={ticker:t,isin,share_class,valid_from:s.valid_from,valid_to};
+  plan.securities.push({entity_key,user_id:s.user_id,entity_id:s.entity_id,security_id:s.id,ticker:t,isin,share_class,is_primary:s.is_primary===true,
+   valid_from:s.valid_from,valid_to,valid_to_method:valid_to===null?null:'curated',source:CURATED,
+   provenance:valid_to===null?{valid_from:{...origin}}:{valid_from:{...origin},valid_to:{...origin}},
+   claimEvidence:{kind:'provider_mapping',evidence:claimEvidence({source:CURATED,asOf,record,note:'curated research security'})}});
  }
  return plan;
 }

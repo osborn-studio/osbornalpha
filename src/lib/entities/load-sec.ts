@@ -19,7 +19,7 @@ export const SEC_SOURCE='sec_company_tickers_exchange';
 
 type FieldProvenance={source:string;as_of:string};
 export interface PlannedIssuer{cik:string;canonical_name_en:string;provenance:{cik:FieldProvenance;canonical_name_en:FieldProvenance}}
-export interface PlannedSecurity{cik:string;ticker:string;share_class:'unknown';is_primary:boolean;valid_from:string;source:string;provenance:{exchange:string}}
+export interface PlannedSecurity{cik:string;ticker:string;share_class:'unknown';is_primary:boolean;valid_from:string;source:string;provenance:{valid_from:{source:string;as_of:string;row:{exchange:string}}}}
 export interface SecLoadPlan{asOf:string;issuers:PlannedIssuer[];securities:PlannedSecurity[];skipped:string[]}
 
 /**
@@ -49,7 +49,8 @@ export function planSecLoad(rows:SecExchangeRow[],universe:ReadonlySet<string>,a
   if(!ticker){skipped.push(r.ticker);continue;}
   const first=!issuers.has(r.cik);
   if(first)issuers.set(r.cik,{cik:r.cik,canonical_name_en:r.name,provenance:{cik:prov(),canonical_name_en:prov()}});
-  securities.push({cik:r.cik,ticker,share_class:'unknown',is_primary:first,valid_from:asOf,source:SEC_SOURCE,provenance:{exchange:r.exchange}});
+  // Public provenance keeps the whitelist (spec 3 §3.1): the exchange is a copied source-row value of valid_from.
+  securities.push({cik:r.cik,ticker,share_class:'unknown',is_primary:first,valid_from:asOf,source:SEC_SOURCE,provenance:{valid_from:{source:SEC_SOURCE,as_of:asOf,row:{exchange:r.exchange}}}});
  }
  return {asOf,issuers:[...issuers.values()],securities,skipped};
 }

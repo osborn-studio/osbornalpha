@@ -1,6 +1,6 @@
 import {describe,it,expect} from 'vitest';
 import {memoryTableClient} from './memory-table-client';
-import {selectAll,supabaseTableClient,TableError,MAX_PAGE} from './table-client';
+import {callRpc,selectAll,supabaseTableClient,TableError,MAX_PAGE} from './table-client';
 import type {Row,TableClient} from './table-client';
 
 describe('memory table client',()=>{
@@ -204,5 +204,49 @@ describe('supabase table client',()=>{
   expect(err).toBeInstanceOf(TableError);
   expect(err).toMatchObject({code:'23505',details:'Key (id)=(a) already exists.',hint:'retry',table:'t',op:'insert'});
   expect(err.cause).toBe(pgErr);
+ });
+});
+
+describe('rpc (plan 3 row-locking functions; plan audit P3/P4/R2)',()=>{
+ const EV={source:'gleif',as_of:'2026-11-05',evidence_sha256:'b'.repeat(64)};
+ const later=(c:string)=>({...EV,evidence_sha256:c.repeat(64)});
+ it('memoryTableClient emulates append_claim_evidence: dedupe, append to detail.sources only, not_found once resolved',async()=>{
+  const c=memoryTableClient({issuer_identifier_claims:['id']});
+  await c.insert('issuer_identifier_claims',{id:'c1',issuer_id:'i',id_type:'lei',value:'v',op:'set_identifier',target_key:'set_identifier:i',status:'pending',detail:{evidence:EV,sources:[],params:{x:1}}});
+  const args=(e:unknown)=>({p_issuer:'i',p_id_type:'lei',p_value:'v',p_op:'set_identifier',p_target_key:'set_identifier:i',p_evidence:e});
+  expect(await callRpc(c,'append_claim_evidence',args(EV))).toBe('duplicate');
+  expect(await Promise.all([callRpc(c,'append_claim_evidence',args(later('c'))),callRpc(c,'append_claim_evidence',args(later('d')))])).toEqual(['appended','appended']);
+  expect(await callRpc(c,'append_claim_evidence',args(later('c')))).toBe('duplicate');
+  expect(c.rows('issuer_identifier_claims')[0].detail).toEqual({evidence:EV,params:{x:1},sources:[later('c'),later('d')]});
+  await expect(callRpc(c,'append_claim_evidence',args({source:'x',as_of:'2026-11-05',evidence_sha256:'nope'}))).rejects.toMatchObject({code:'22023'});
+  await c.update('issuer_identifier_claims',{id:'c1'},{status:'rejected'});
+  expect(await callRpc(c,'append_claim_evidence',args(later('e')))).toBe('not_found');
+ });
+ it('memoryTableClient emulates patch_quarantine_detail: only hook / audit_written, every other key untouched',async()=>{
+  const c=memoryTableClient({dq_quarantine:['id']});
+  await c.insert('dq_quarantine',{id:'q1',status:'resolved_accept',detail:{latest_result:{passed:true},hook:{state:'pending'}}});
+  expect(await callRpc(c,'patch_quarantine_detail',{p_id:'q1',p_key:'hook',p_value:{stage:'done',state:'done',at:'t'}})).toBe(true);
+  expect(await callRpc(c,'patch_quarantine_detail',{p_id:'q1',p_key:'audit_written',p_value:true})).toBe(true);
+  expect(c.rows('dq_quarantine')[0].detail).toEqual({latest_result:{passed:true},hook:{stage:'done',state:'done',at:'t'},audit_written:true});
+  await expect(callRpc(c,'patch_quarantine_detail',{p_id:'q1',p_key:'latest_result',p_value:{}})).rejects.toMatchObject({code:'22023'});
+  expect(await callRpc(c,'patch_quarantine_detail',{p_id:'nope',p_key:'hook',p_value:{}})).toBe(false);
+ });
+ it('memoryTableClient emulates set_security_identifier: guarded write, one provenance key merged, concurrent ISIN/FIGI both kept (plan audit R2)',async()=>{
+  const c=memoryTableClient();
+  await c.insert('issuer_securities',{issuer_id:'i',ticker:'AAPL',valid_from:'2020-01-01',valid_to:null,isin:null,figi:null,provenance:{exchange:'Nasdaq'}});
+  const args=(col:string,v:string,pv:unknown)=>({p_issuer:'i',p_ticker:'AAPL',p_valid_from:'2020-01-01',p_column:col,p_value:v,p_provenance:pv});
+  const PI={isin:{source:'g'}},PF={figi:{source:'o'}};
+  expect(await Promise.all([callRpc(c,'set_security_identifier',args('isin','US0378331005',PI)),callRpc(c,'set_security_identifier',args('figi','BBG000B9XRY4',PF))])).toEqual(['written','written']);
+  expect(c.rows('issuer_securities')[0]).toMatchObject({isin:'US0378331005',figi:'BBG000B9XRY4',provenance:{exchange:'Nasdaq',...PI,...PF}});
+  expect(await callRpc(c,'set_security_identifier',args('isin','US0378331005',PI))).toBe('duplicate');
+  expect(await callRpc(c,'set_security_identifier',args('isin','US0000000000',PI))).toBe('conflict');
+  expect(await callRpc(c,'set_security_identifier',{...args('isin','X',PI),p_ticker:'NOPE'})).toBe('not_found');
+  await expect(callRpc(c,'set_security_identifier',args('isin','X',PF))).rejects.toMatchObject({code:'22023'});
+ });
+ it('callRpc refuses a client without rpc; an unknown function fails like PostgreSQL (42883)',async()=>{
+  const c=memoryTableClient();
+  const {rpc:_rpc,...noRpc}=c;
+  await expect(callRpc(noRpc,'append_claim_evidence',{})).rejects.toThrow('rpc_unavailable:append_claim_evidence');
+  await expect(callRpc(c,'nope',{})).rejects.toMatchObject({code:'42883'});
  });
 });

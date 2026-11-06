@@ -55,12 +55,17 @@ describe('planResearchLink',()=>{
    {entity_key:`${U}:e1`,user_id:U,entity_id:'e1',current_issuer_id:null,input:{lei:LEI,usci:USCI,cik:null,cninfo_org_id:'gssh0600570',canonical_name_zh:'恒生电子',canonical_name_en:'Hundsun Technologies Inc.',country_code:'CN',provenance:{lei:kprov,usci:kprov,cninfo_org_id:kprov,canonical_name_zh:kprov,canonical_name_en:kprov,country_code:kprov}}},
    {entity_key:`${U}:e3`,user_id:U,entity_id:'e3',current_issuer_id:'already',input:{lei:null,usci:null,cik:'320193',cninfo_org_id:null,canonical_name_zh:null,canonical_name_en:'Apple Inc.',country_code:null,provenance:{cik:kprov,canonical_name_en:kprov}}},
   ]);
-  const sprov={source:'curated',as_of:AS_OF};
+  const sprov={valid_from:{source:'curated',as_of:AS_OF}};
+  const evidence={kind:'provider_mapping',evidence:{source:'curated',as_of:AS_OF,evidence_sha256:expect.stringMatching(/^[0-9a-f]{64}$/),note:'curated research security'}};
   expect(plan.securities).toEqual([
-   {entity_key:`${U}:e1`,user_id:U,entity_id:'e1',security_id:'s1',ticker:'600570.SH',isin:'CNE000001GN7',share_class:'A',is_primary:true,valid_from:'2003-12-16',valid_to:null,source:'curated',provenance:sprov},
-   {entity_key:`${U}:e3`,user_id:U,entity_id:'e3',security_id:'s2',ticker:'AAPL',isin:null,share_class:'ADR',is_primary:false,valid_from:'2000-01-01',valid_to:null,source:'curated',provenance:sprov},
+   {entity_key:`${U}:e1`,user_id:U,entity_id:'e1',security_id:'s1',ticker:'600570.SH',isin:'CNE000001GN7',share_class:'A',is_primary:true,valid_from:'2003-12-16',valid_to:null,valid_to_method:null,source:'curated',provenance:sprov,claimEvidence:evidence},
+   {entity_key:`${U}:e3`,user_id:U,entity_id:'e3',security_id:'s2',ticker:'AAPL',isin:null,share_class:'ADR',is_primary:false,valid_from:'2000-01-01',valid_to:null,valid_to_method:null,source:'curated',provenance:sprov,claimEvidence:evidence},
   ]);
   expect(plan.skipped).toEqual([{entity_key:`${U}:e2`,reason:'no_hard_identifier'},{entity_key:`${U}:e3`,security_id:'s3',reason:'ticker_not_in_universe:NOPE'}]);
+  const again=planResearchLink([key({entity_id:'e3',cik:'320193'})],[sec({id:'s2',entity_id:'e3',exchange_code:'AAPL',valid_to:'2009-12-31'})],universe({AAPL:'US'}),AS_OF);
+  expect(again.securities[0]).toMatchObject({valid_to:'2009-12-31',valid_to_method:'curated',provenance:{valid_from:{source:'curated',as_of:AS_OF},valid_to:{source:'curated',as_of:AS_OF}}});
+  const twice=planResearchLink([key({entity_id:'e3',cik:'320193'})],[sec({id:'s2',entity_id:'e3',exchange_code:'AAPL',valid_to:'2009-12-31'})],universe({AAPL:'US'}),AS_OF);
+  expect(twice.securities[0].claimEvidence.evidence.evidence_sha256).toBe(again.securities[0].claimEvidence.evidence.evidence_sha256);
  });
 
  it('never writes the user id or entity ids into public issuer or security inputs',()=>{

@@ -8,6 +8,7 @@
 //  - ordering and range filters (gte/lt) compare numbers numerically and everything else as
 //    strings by UTF-16 code unit, which matches PostgreSQL only under C collation (ISO-8601
 //    timestamps in one fixed format compare correctly; mixed offsets or locales do not).
+//  - rpc emulates only the plan-3 row-locking functions (append_claim_evidence, patch_quarantine_detail, set_security_identifier); one synchronous JS turn stands for the row lock.
 import {TableError,assertMatch,assertUpdateMatch,checkRangeOptions,checkSelectOptions} from './table-client';
 import type {RangeOptions,Row,TableClient} from './table-client';
 
@@ -28,7 +29,51 @@ const inRange=(row:Row,opts:RangeOptions)=>
  Object.entries(opts.gte??{}).every(([k,v])=>row[k]!=null&&cmp(row[k],v)>=0)&&
  Object.entries(opts.lt??{}).every(([k,v])=>row[k]!=null&&cmp(row[k],v)<0);
 
-export function memoryTableClient(keys:Record<string,string[]>={}):TableClient&{rows(table:string):Row[]}{
+// Plan 3 row-locking functions (migration 20261107090000, Task 1b) with the SQL functions' answers
+// and error codes; an unknown function fails like PostgreSQL (42883).
+const isObj=(v:unknown):v is Row=>!!v&&typeof v==='object'&&!Array.isArray(v);
+const sameEvidence=(a:unknown,b:Row)=>isObj(a)&&a.source===b.source&&a.evidence_sha256===b.evidence_sha256;
+const SHA256=/^[0-9a-f]{64}$/;
+const MEMORY_RPC:Record<string,(rowsOf:(t:string)=>Row[],a:Row)=>unknown>={
+ append_claim_evidence(rowsOf,a){
+  const e=a.p_evidence;
+  if(!isObj(e)||typeof e.source!=='string'||e.source.length<1||e.source.length>64||typeof e.as_of!=='string'||typeof e.evidence_sha256!=='string'||!SHA256.test(e.evidence_sha256))
+   throw new TableError('rpc','append_claim_evidence','invalid_evidence','22023');
+  const row=rowsOf('issuer_identifier_claims').find(r=>r.status==='pending'&&r.issuer_id===a.p_issuer&&r.id_type===a.p_id_type&&r.value===a.p_value&&r.op===a.p_op&&r.target_key===a.p_target_key);
+  if(!row)return 'not_found';
+  const d=isObj(row.detail)?row.detail:{};
+  const sources=Array.isArray(d.sources)?d.sources:[];
+  if(sameEvidence(d.evidence,e)||sources.some(s=>sameEvidence(s,e)))return 'duplicate';
+  row.detail={...d,sources:[...sources,clone(e)]};
+  return 'appended';
+ },
+ patch_quarantine_detail(rowsOf,a){
+  const key=a.p_key;
+  if(key!=='hook'&&key!=='audit_written')throw new TableError('rpc','patch_quarantine_detail','invalid_detail_key','22023');
+  if(a.p_value===null||a.p_value===undefined)throw new TableError('rpc','patch_quarantine_detail','invalid_detail_key','22023');
+  const row=rowsOf('dq_quarantine').find(r=>r.id===a.p_id);
+  if(!row)return false;
+  row.detail={...(isObj(row.detail)?row.detail:{}),[key]:clone(a.p_value)};
+  return true;
+ },
+ // plan audit round 3, R2: guarded ISIN/FIGI write + one provenance key merged (never replaced) in one step
+ set_security_identifier(rowsOf,a){
+  const col=a.p_column,v=a.p_value,pv=a.p_provenance;
+  if((col!=='isin'&&col!=='figi')||typeof v!=='string'||v===''||!isObj(pv)||Object.keys(pv).length!==1||!(col in pv))
+   throw new TableError('rpc','set_security_identifier','invalid_identifier_write','22023');
+  const row=rowsOf('issuer_securities').find(r=>r.issuer_id===a.p_issuer&&r.ticker===a.p_ticker&&r.valid_from===a.p_valid_from&&r.valid_to==null);
+  if(!row)return 'not_found';
+  const prov=isObj(row.provenance)?row.provenance:{};
+  const cur=row[col]==null?null:String(row[col]);
+  if(cur!==null&&cur!==v)return 'conflict';
+  if(cur===v&&col in prov)return 'duplicate';
+  row.provenance={...prov,...clone(pv)};
+  if(cur===null){row[col]=v;return 'written';}
+  return 'duplicate';
+ },
+};
+
+export function memoryTableClient(keys:Record<string,string[]>={}):TableClient&{rows(table:string):Row[];rpc(fn:string,args:Row):Promise<unknown>}{
  const tables=new Map<string,Row[]>();
  const rowsOf=(t:string)=>{if(!tables.has(t))tables.set(t,[]);return tables.get(t)!;};
  const keyOf=(t:string,row:Row)=>(keys[t]??[]).map(k=>String(row[k])).join('\u0000');
@@ -72,6 +117,11 @@ export function memoryTableClient(keys:Record<string,string[]>={}):TableClient&{
    const rows=rowsOf(t);const hit=rows.find(r=>cols.every(c=>r[c]===row[c]));
    if(clashes(t,{...hit,...row},hit))throw dup('upsert',t);
    if(hit)Object.assign(hit,clone(row));else rows.push(clone(row));
+  },
+  async rpc(fn,args){
+   const impl=MEMORY_RPC[fn];
+   if(!impl)throw new TableError('rpc',fn,`function public.${fn} does not exist`,'42883');
+   return clone(impl(rowsOf,clone(args)));
   },
  };
 }

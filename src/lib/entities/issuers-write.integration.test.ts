@@ -9,7 +9,7 @@ import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {pgTableClient} from '../db/pg-table-client';
 import {isValidIsin} from '../research/entity-keys/identifiers';
 import type {TableClient} from '../db/table-client';
-import {fileClaim} from './claims';
+import {buildClaimDetail,fileClaim} from './claims';
 import {attachSecurity,upsertIssuerByIdentifiers} from './issuers';
 
 const enabled=!!process.env.S4_TEST_STATE;
@@ -56,7 +56,8 @@ describe.skipIf(!enabled)('issuer write path on real PostgreSQL',()=>{
   }catch(e){await c.query('rollback').catch(()=>{});throw e;}
   finally{c.release();}
  };
- const sec=(issuer_id:string,ticker:string,valid_from:string,valid_to:string|null=null)=>({issuer_id,ticker,share_class:'common' as const,valid_from,valid_to,source:'test'});
+ const EV={kind:'provider_mapping' as const,evidence:{source:'test',as_of:'2026-11-05',evidence_sha256:'e'.repeat(64)}};
+ const sec=(issuer_id:string,ticker:string,valid_from:string,valid_to:string|null=null)=>({issuer_id,ticker,share_class:'common' as const,valid_from,valid_to,valid_to_method:valid_to===null?null:'unrecorded' as const,source:'test',claimEvidence:EV});
  /** Hides existing ownership rows from the first pre-insert read, so the insert races the DB constraint. */
  const blindFirstRead=(seen:{code?:string|null})=>{
   let blind=true;
@@ -118,15 +119,31 @@ describe.skipIf(!enabled)('issuer write path on real PostgreSQL',()=>{
   expect((await admin.query(`select lei,canonical_name_en from public.issuers where issuer_id=$1`,[id])).rows[0]).toEqual({lei:null,canonical_name_en:'ZZ Write Test'});
  });
 
- it('dedupes claims through the pending-unique index even when the pre-check misses',async()=>{
+ it('dedupes claims through the pending-unique index even when the pre-check misses, appending the new evidence',async()=>{
   const id=await newIssuer();
   const lei=randomLei();
-  expect(await fileClaim(db,{issuer_id:id,id_type:'lei',value:lei,source:'test'})).toBe(true);
-  const blindCount:TableClient={...db,count:async()=>0};
-  expect(await fileClaim(blindCount,{issuer_id:id,id_type:'lei',value:lei,source:'test'})).toBe(false);
-  await expect(admin.query(`insert into public.issuer_identifier_claims(id,issuer_id,id_type,value,source,confidence) values($1,$2,'lei',$3,'test',0.5)`,[randomUUID(),id,lei]))
+  const claim=(sha:string)=>({issuer_id:id,id_type:'lei' as const,value:lei,source:'test',op:'set_identifier' as const,
+   detail:buildClaimDetail({evidence_kind:'hard_identifier',target:{issuer_id:id},evidence:{source:'test',as_of:'2026-11-05',evidence_sha256:sha}})});
+  expect(await fileClaim(db,claim('a'.repeat(64)))).toBe(true);
+  let blind=true;
+  const blindFirstSelect:TableClient={...db,select:async(t,m,o)=>{if(t==='issuer_identifier_claims'&&blind){blind=false;return [];}return db.select(t,m,o);}};
+  expect(await fileClaim(blindFirstSelect,claim('b'.repeat(64)))).toBe(false);
+  await expect(admin.query(`insert into public.issuer_identifier_claims(id,issuer_id,id_type,value,source,op,target_key) values($1,$2,'lei',$3,'test','set_identifier',$4)`,[randomUUID(),id,lei,`set_identifier:${id}`]))
    .rejects.toThrow(/issuer_identifier_claims_pending_unique/);
   expect(await pendingClaims(id)).toEqual([{id_type:'lei',value:lei}]);
+  const row=(await admin.query(`select op,target_key,confidence,detail from public.issuer_identifier_claims where issuer_id=$1`,[id])).rows[0];
+  expect(row).toMatchObject({op:'set_identifier',target_key:`set_identifier:${id}`,confidence:null});
+  expect(row.detail.sources).toEqual([{source:'test',as_of:'2026-11-05',evidence_sha256:'b'.repeat(64)}]);
+ });
+ it('concurrent appends to one pending claim keep every evidence record (append_claim_evidence row lock, plan audit P3)',async()=>{
+  const id=await newIssuer();
+  const lei=randomLei();
+  const claim=(sha:string)=>({issuer_id:id,id_type:'lei' as const,value:lei,source:'test',op:'set_identifier' as const,
+   detail:buildClaimDetail({evidence_kind:'hard_identifier',target:{issuer_id:id},evidence:{source:'test',as_of:'2026-11-05',evidence_sha256:sha}})});
+  expect(await fileClaim(db,claim('a'.repeat(64)))).toBe(true);
+  expect(await Promise.all(['c','d','e'].map(x=>fileClaim(db,claim(x.repeat(64)))))).toEqual([false,false,false]);
+  const row=(await admin.query(`select detail from public.issuer_identifier_claims where issuer_id=$1 and status='pending'`,[id])).rows[0];
+  expect(row.detail.sources.map((s:{evidence_sha256:string})=>s.evidence_sha256).sort()).toEqual(['c','d','e'].map(x=>x.repeat(64)));
  });
 
  it('classifies attachSecurity as inserted/duplicate/conflict, including closed history before an open owner',async()=>{
@@ -136,7 +153,7 @@ describe.skipIf(!enabled)('issuer write path on real PostgreSQL',()=>{
   expect(await attachSecurity(db,sec(a,t,'2010-01-01'))).toBe('duplicate');
   expect(await attachSecurity(db,sec(a,` ${t.toLowerCase()} `,'2015-01-01'))).toBe('duplicate');
   expect(await attachSecurity(db,{...sec(b,t,'2020-01-01'),isin:'US0378331005'})).toBe('conflict');
-  expect(await pendingClaims(b)).toEqual([{id_type:'isin',value:'US0378331005'}]);
+  expect(await pendingClaims(b)).toEqual([{id_type:'ticker',value:t}]);         // attach_security for the incoming security
   // Closed history ending exactly where the open owner starts: half-open windows do not overlap.
   expect(await attachSecurity(db,sec(b,t,'2000-01-01','2005-01-01'))).toBe('inserted');
   expect(await attachSecurity(db,sec(c,t,'2005-01-01','2010-01-01'))).toBe('inserted');
@@ -184,7 +201,7 @@ describe.skipIf(!enabled)('issuer write path on real PostgreSQL',()=>{
   const seen:{code?:string|null}={};
   expect(await attachSecurity(blindFirstRead(seen),{...sec(b,t2,'2015-01-01'),isin})).toBe('conflict');
   expect(seen.code).toBe('23P01');
-  expect(await pendingClaims(b)).toEqual([{id_type:'isin',value:isin}]);
+  expect(await pendingClaims(b)).toEqual([{id_type:'ticker',value:t2}]);
   expect(Number((await admin.query(`select count(*) from public.issuer_securities where ticker=$1`,[t2])).rows[0].count)).toBe(0);
  });
 

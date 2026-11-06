@@ -33,6 +33,18 @@ export interface TableClient{
  select(table:string,match:Row,opts?:SelectOptions):Promise<Row[]>;
  upsert(table:string,row:Row,onConflict:string):Promise<void>;
  count(table:string,match:Row,opts?:RangeOptions):Promise<number>;
+ /**
+  * Calls a service-role SQL function and returns its result (plan 3: the row-locking jsonb patches
+  * append_claim_evidence / patch_quarantine_detail of migration 20261107090000). Optional so the landed
+  * test stubs stay valid; callers go through callRpc, which fails loudly when it is missing.
+  */
+ rpc?(fn:string,args:Row):Promise<unknown>;
+}
+
+/** Calls `fn` through client.rpc. A client without rpc is a wiring error (rpc_unavailable:<fn>), never a silent no-op. */
+export async function callRpc(client:TableClient,fn:string,args:Row):Promise<unknown>{
+ if(!client.rpc)throw new Error(`rpc_unavailable:${fn}`);
+ return client.rpc(fn,args);
 }
 
 /** Rejects `undefined` match values: they would otherwise be dropped or match nothing silently. */
@@ -119,6 +131,11 @@ export function supabaseTableClient(client:SupabaseClient):TableClient{
    if(error)fail('count',table,error);
    if(count===null||count===undefined)throw new Error('count_unavailable');
    return count as number;
+  },
+  async rpc(fn,args){
+   const {data,error}=await (client as unknown as {rpc:(f:string,a:Row)=>PromiseLike<{data:unknown;error:PgError|null}>}).rpc(fn,args);
+   if(error)fail('rpc',fn,error);
+   return data;
   },
  };
 }
