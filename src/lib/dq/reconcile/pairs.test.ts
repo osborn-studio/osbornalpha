@@ -116,6 +116,58 @@ describe('us.companyfacts_vs_gold (T15)',()=>{
  });
 });
 
+describe('us.companyfacts_vs_gold identity (Codex review)',()=>{
+ const sec=(tables:TableClient,issuer_id:string,ticker:string,valid_from:string,valid_to:string|null)=>tables.insert('issuer_securities',{issuer_id,ticker,valid_from,valid_to,is_primary:true,share_class:'common',isin:null,figi:null});
+ const newIssuer=async(tables:TableClient,name:string,status='active')=>{const id=randomUUID();await tables.insert('issuers',{issuer_id:id,status,merged_into:null,cik:null,lei:null,usci:null,canonical_name_en:name,canonical_name_zh:null});return id;};
+ it('resolves each entry at its own date: A owns the ticker in 2024, B from 2025 (not today)',async()=>{
+  const {tables,ctx,files}=setup();
+  const a=await newIssuer(tables,'A'),b=await newIssuer(tables,'B');
+  await sec(tables,a,'ZREUSE','2000-01-01','2025-01-01');await sec(tables,b,'ZREUSE','2025-01-01',null);
+  files.set(US_GOLD_PATH,enc(goldFile([entry({ticker:'ZREUSE',period_end:'2023-12-31',as_of:'2024-03-01'}),entry({ticker:'ZREUSE',period_end:'2024-12-31',as_of:'2025-03-01'})])));
+  const members=await usCompanyfactsVsGoldPair().members(ctx);
+  expect(members.map(m=>[m.issuerId,m.expectedKeys.map(k=>k.naturalKey)]).sort()).toEqual([[a,['ZREUSE:revenue:2023-12-31:12M:USD']],[b,['ZREUSE:revenue:2024-12-31:12M:USD']]].sort());
+  expect(members.find(m=>m.issuerId===a)!.expectedKeys[0].locator.owner_issuer_id).toBe(a);
+ });
+ it('aggregates two share-class tickers of one issuer into one member that openReconcileCycle accepts',async()=>{
+  const {tables,db,ctx,files}=setup();
+  const id=await newIssuer(tables,'Dual');await sec(tables,id,'ZDUALA','2000-01-01',null);await sec(tables,id,'ZDUALB','2000-01-01',null);
+  files.set(US_GOLD_PATH,enc(goldFile([entry({ticker:'ZDUALA'}),entry({ticker:'ZDUALB'})])));
+  const members=await usCompanyfactsVsGoldPair().members(ctx);
+  expect(members).toHaveLength(1);expect(members[0].expectedKeys).toHaveLength(2);
+  const r=await db.openReconcileCycle({pair:'us.companyfacts_vs_gold',cycleId:randomUUID(),startedAt:'2026-11-05T00:00:00Z',members:members.map(m=>({issuer_id:m.issuerId,market:m.market,expected_keys:m.expectedKeys})),pending:[]});
+  expect(r.created).toBe(true);
+ });
+ async function mergedSource(sourceValue:string){
+  const s=setup();
+  const target=await issuer(s.tables,'ZTGT2');const source=await issuer(s.tables,'ZSRC2',{status:'merged'});
+  await s.tables.update('issuers',{issuer_id:source},{merged_into:target});
+  s.db.setTopology({[source]:{status:'merged',merged_into:target}});
+  const t=await seedPublished(s.db,{issuer:target,market:'US',sourceRef:'0009990300-24-000001',availableDate:'2024-02-15',facts:[{concept:'revenue',value:'1200',...FY23}]});
+  const src=await seedPublished(s.db,{issuer:source,market:'US',sourceRef:'0009990301-24-000001',availableDate:'2024-02-15',facts:[{concept:'revenue',value:sourceValue,...FY23}]});
+  return {...s,target,source,t,src};
+ }
+ it('keeps a merged source as the recorded owner and reads its own facts; a lineage-conflicting key is recorded, never quarantined',async()=>{
+  const {ctx,files,source,src}=await mergedSource('1000');
+  files.set(US_GOLD_PATH,enc(goldFile([entry({ticker:'ZSRC2',value:'999'})])));
+  const pair=usCompanyfactsVsGoldPair();const [m]=await pair.members(ctx);
+  expect(m.issuerId).toBe(source);
+  const [r]=await pair.evaluate(ctx,m);
+  expect(r).toMatchObject({outcome:'compared',passed:false,left_value:'1000',right_value:'999',action:'record',left_fact_id:src.factIds[0],detail:expect.objectContaining({lineage_conflict:true})});
+  expect(r.item).toBeUndefined();
+ });
+ it('a bound item whose fact belongs to another issuer is left_missing (record), never an invalid result',async()=>{
+  const {tables,ctx,files,source,t}=await mergedSource('1200');
+  const nk='ZSRC2:revenue:2023-12-31:12M:USD';
+  await tables.insert('dq_quarantine',{id:randomUUID(),dataset:'facts.us',table_name:'financial_facts',natural_key:`us.companyfacts_vs_gold:${nk}:${t.factIds[0]}`,reason_code:'reconcile_mismatch',detail:{pair:'us.companyfacts_vs_gold'},payload:{fact_ids:[t.factIds[0]]},batch_id:randomUUID(),status:'open',resolved_by:null,resolved_at:null,created_at:'2026-11-05T00:00:00Z'});
+  files.set(US_GOLD_PATH,enc(goldFile([entry({ticker:'ZSRC2',value:'1200'})])));
+  const pair=usCompanyfactsVsGoldPair();const [m]=await pair.members(ctx);
+  expect(m.issuerId).toBe(source);
+  const [r]=await pair.evaluate(ctx,m);
+  expect(r).toMatchObject({outcome:'left_missing',action:'record'});
+  expect(r.left_fact_id).toBeUndefined();
+ });
+});
+
 describe('facts.lineage_same_day (§4.4)',()=>{
  async function merged(){
   const s=setup();
