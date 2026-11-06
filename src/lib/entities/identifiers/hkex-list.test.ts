@@ -1,7 +1,8 @@
 // src/lib/entities/identifiers/hkex-list.test.ts
 import * as XLSX from 'xlsx';
 import {describe,it,expect} from 'vitest';
-import {HKEX_LIST_FILES,mergeHkexIsins,parseHkexList} from './hkex-list';
+import {readFileSync,existsSync} from 'node:fs';
+import {HKEX_LIST_FILES,XLSX_MIME,XLS_MIME,mergeHkexIsins,parseHkexList} from './hkex-list';
 
 /** Builds an in-memory .xlsx so no binary fixture is committed. */
 const book=(rows:unknown[][])=>{
@@ -74,5 +75,26 @@ describe('mergeHkexIsins',()=>{
  it('reports hasIsinColumn=false when no file carries ISINs',()=>{
   const m=mergeHkexIsins([parseHkexList(book([['Stock Code','Name of Securities'],['700','TENCENT']]),'list_of_securities')]);
   expect(m.hasIsinColumn).toBe(false);expect(m.byCode.size).toBe(0);
+ });
+});
+
+describe('HKEX_LIST_FILES content types',()=>{
+ it('declares xlsx for ListOfSecurities and legacy xls for the two ISIN workbooks, matching file extensions',()=>{
+  expect(HKEX_LIST_FILES.map(f=>[f.id,f.contentType])).toEqual([['list_of_securities',XLSX_MIME],['isin_hkex',XLS_MIME],['isin_other_agencies',XLS_MIME]]);
+  for(const f of HKEX_LIST_FILES)expect(f.file.endsWith(f.contentType===XLSX_MIME?'.xlsx':'.xls')).toBe(true);
+ });
+ it('XLSX_MIME bytes start with the PK zip magic and XLS_MIME bytes with the OLE d0cf11e0 magic (generated .xlsx; .xls via the BIFF writer)',()=>{
+  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['Stock Code'],['00700']]),'S');
+  const hex=(b:Uint8Array)=>Buffer.from(b.slice(0,4)).toString('hex');
+  expect(hex(new Uint8Array(XLSX.write(wb,{type:'array',bookType:'xlsx'}) as ArrayBuffer))).toBe('504b0304');
+  const xls=new Uint8Array(XLSX.write(wb,{type:'array',bookType:'biff8'}) as ArrayBuffer);
+  expect(hex(xls)).toBe('d0cf11e0');
+  expect(parseHkexList(xls,'isin_other_agencies').rows[0].stockCode).toBe('00700');
+ });
+ const dir='.claude/scratch/verify';
+ it.skipIf(!existsSync(`${dir}/isino.xls`))('the downloaded workbooks have the magic their declared content type implies (local verification files)',()=>{
+  const magic=(f:string)=>readFileSync(`${dir}/${f}`).subarray(0,4).toString('hex');
+  expect(magic('ListOfSecurities.xlsx')).toBe('504b0304');
+  expect(magic('isinsehk.xls')).toBe('d0cf11e0');expect(magic('isino.xls')).toBe('d0cf11e0');
  });
 });

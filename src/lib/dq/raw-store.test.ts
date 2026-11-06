@@ -18,7 +18,7 @@ describe('raw paths',()=>{
   expect(sha256Hex(enc('{}'))).toBe(h);
   expect(rawPath('sec-submissions',h,'json')).toBe(`sec-submissions/${h}.json`);
   expect(rawMetaPath(`cn-gold-pdf/${h}.pdf`)).toBe(`cn-gold-pdf/${h}.pdf.meta.json`);
-  expect(RAW_EXT).toEqual({'application/json':'json','text/html':'html','application/pdf':'pdf','text/csv':'csv','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':'xlsx','application/zip':'zip'});
+  expect(RAW_EXT).toEqual({'application/json':'json','text/html':'html','application/pdf':'pdf','text/csv':'csv','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':'xlsx','application/vnd.ms-excel':'xls','application/zip':'zip'});
   const store=memoryRawStore();
   expect(store.sha256Of(`hkex/${h}.xlsx`)).toBe(h);
   expect(supabaseRawStore({} as never).sha256Of(`gleif/${h}.csv`)).toBe(h);
@@ -48,6 +48,7 @@ describe('memoryRawStore',()=>{
   const store=memoryRawStore();
   expect((await store.put({kind:'cn-gold-pdf',bytes:enc('%PDF-1.7'),contentType:'application/pdf'})).path).toBe(`cn-gold-pdf/${sha('%PDF-1.7')}.pdf`);
   expect((await store.put({kind:'hkex',bytes:enc('PK'),contentType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})).path).toBe(`hkex/${sha('PK')}.xlsx`);
+  expect((await store.put({kind:'hkex',bytes:enc('OLE'),contentType:'application/vnd.ms-excel'})).path).toBe(`hkex/${sha('OLE')}.xls`);
  });
  it('refuses an unknown kind or content type, credential-like meta, a non-finite number and an exhausted budget',async()=>{
   const store=memoryRawStore();

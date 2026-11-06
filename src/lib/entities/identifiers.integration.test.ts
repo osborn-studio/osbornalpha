@@ -147,7 +147,7 @@ describe.skipIf(!enabled)('plan 3 migration one: schema',()=>{
   }finally{await c.query('reset role').catch(()=>{});c.release();}
   expect(await q(`select id,public,file_size_limit::text limit_bytes,allowed_mime_types from storage.buckets where id='reconcile-raw'`)).toEqual([{
    id:'reconcile-raw',public:false,limit_bytes:'52428800',
-   allowed_mime_types:['application/json','text/html','application/pdf','text/csv','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/zip'],
+   allowed_mime_types:['application/json','text/html','application/pdf','text/csv','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel','application/zip'],
   }]);
   // A private bucket with no storage.objects policy is unreadable and unwritable for anon/authenticated
   // on hosted Supabase; the migration must not add one (the local harness has no storage.objects).

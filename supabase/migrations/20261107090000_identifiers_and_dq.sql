@@ -268,7 +268,7 @@ grant select, insert, update, delete on public.issuer_filer_categories, public.i
 -- the service role reaches it. Uploads use upsert:false; 409 means the bytes are already stored.
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('reconcile-raw', 'reconcile-raw', false, 52428800,
-        array['application/json','text/html','application/pdf','text/csv','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/zip'])
+        array['application/json','text/html','application/pdf','text/csv','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel','application/zip'])
 on conflict (id) do update
 set public = false,
     file_size_limit = excluded.file_size_limit,

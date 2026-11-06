@@ -8,13 +8,14 @@ import * as XLSX from 'xlsx';
 import {isValidIsin} from '../../research/entity-keys/identifiers';
 
 export const XLSX_MIME='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' as const;
+export const XLS_MIME='application/vnd.ms-excel' as const;
 export type HkexFileId='list_of_securities'|'isin_hkex'|'isin_other_agencies';
-export interface HkexListFile{id:HkexFileId;file:string;url:string|null;priority:number}
-/** Expected file names inside `--hkex <dir>`. URLs and file names verified 2026-11-05 (docs/audits/2026-11-05-data-foundation-3/verification.md). */
+export interface HkexListFile{id:HkexFileId;file:string;contentType:typeof XLSX_MIME|typeof XLS_MIME;url:string|null;priority:number}
+/** Expected file names inside `--hkex <dir>`; Task 4b stores each under its own `contentType` (the two ISIN workbooks are legacy OLE .xls). URLs and file names verified 2026-11-05 (docs/audits/2026-11-05-data-foundation-3/verification.md). */
 export const HKEX_LIST_FILES:readonly HkexListFile[]=[
- {id:'list_of_securities',file:'ListOfSecurities.xlsx',url:'https://www.hkex.com.hk/eng/services/trading/securities/securitieslists/ListOfSecurities.xlsx',priority:1},
- {id:'isin_hkex',file:'isinsehk.xls',url:'https://www.hkex.com.hk/-/media/HKEX-Market/Services/Trading/Securities/Securities-Lists/ISINs-assigned-by-HKEX/isinsehk.xls',priority:2},
- {id:'isin_other_agencies',file:'isino.xls',url:'https://www.hkex.com.hk/-/media/HKEX-Market/Services/Trading/Securities/Securities-Lists/ISINs-assigned-by-Other-Numbering-Agencies/isino.xls',priority:3},
+ {id:'list_of_securities',file:'ListOfSecurities.xlsx',contentType:XLSX_MIME,url:'https://www.hkex.com.hk/eng/services/trading/securities/securitieslists/ListOfSecurities.xlsx',priority:1},
+ {id:'isin_hkex',file:'isinsehk.xls',contentType:XLS_MIME,url:'https://www.hkex.com.hk/-/media/HKEX-Market/Services/Trading/Securities/Securities-Lists/ISINs-assigned-by-HKEX/isinsehk.xls',priority:2},
+ {id:'isin_other_agencies',file:'isino.xls',contentType:XLS_MIME,url:'https://www.hkex.com.hk/-/media/HKEX-Market/Services/Trading/Securities/Securities-Lists/ISINs-assigned-by-Other-Numbering-Agencies/isino.xls',priority:3},
 ];
 export interface HkexListRow{stockCode:string;name:string|null;category:string|null;isin:string|null;row:number}
 export interface HkexListParse{
