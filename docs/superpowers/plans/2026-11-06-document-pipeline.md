@@ -153,7 +153,7 @@ export type CandidateStatus='candidate'|'confirmed'|'rejected'|'promoted';
 export type DecisionKind='human'|'auto';
 export type PublicationState='staged'|'published'|'abandoned';
 export type CitationCreator='extractor'|'human'|'llm'|'module';
-export type CitationRole='value'|'label'|'period'|'unit';
+export type CitationRole='value'|'label'|'period'|'unit'|'unit_currency';   // unit_currency: the table currency a 仙 / cents EPS inherits (R3-P1-1)
 export type AssetRole='filing_index'|'xbrl_instance'|'exhibit';
 
 export interface Page<T>{rows:T[];nextCursor:string|null}
@@ -193,7 +193,7 @@ export interface CitationRow{
 export type CitationInsert=Omit<CitationRow,'citation_id'|'visibility'|'created_at'>;
 
 export interface PeriodEvidence{role:'statement_title'|'column_header';citation_id:string}
-/** unit_currency: the table's amount-unit citation, present when the per-share token names no currency (仙 / cents, R2-P1-1); published with role 'unit' too. */
+/** unit_currency: the table's amount-unit citation, present exactly when the per-share token names no currency (仙 / cents, R2-P1-1); published with its own role 'unit_currency' (R3-P1-1). */
 export interface FactCitations{value:string;label:string;unit:string;unit_currency?:string;period:PeriodEvidence[]}
 export interface FinancialFactPayload{
  concept:string;statement:'IS'|'BS'|'CF';period_start:string|null;period_end:string;duration:'6M'|'12M'|'INSTANT';
@@ -314,6 +314,7 @@ export interface HkFactsPort{
  runStatus(run:string):Promise<'staged'|'published'|'abandoned'|null>;
  // F3-owned functions of migration two
  ensureHkScope(issuer:string,fetchKey:string):Promise<void>;
+ renewLease(issuer:string,batch:string,ttlSeconds:number):Promise<boolean>;   // holder-only (R3-P2-1): never acquires an unowned, expired or released HK scope
  bindFilingDocuments(run:string,rows:{filing_id:string;document_id:string}[]):Promise<number>;
  insertFactCitations(run:string,rows:{fact_id:string;citation_id:string;role:CitationRole}[]):Promise<number>;
  publishHkRun(issuer:string,batch:string,run:string,manifest:string[],expectedRev:number,zeroOutput:readonly HkZeroOutput[]):Promise<number>;   // zeroOutput: the planned zero-output selection, revalidated under the document locks (P1-4)
@@ -355,14 +356,15 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
 | `extract/tables.ts`（9） | `detectTables(lines:LayoutLine[]):LayoutTable[]`、`isNumericItem(s)` | 标签单元格 col 0，数值列 1..k；`col_x0[0]` 为标签 x |
 | `extract/html.ts`（9） | `extractHtml(bytes):PageLayout[]` | 每行一个跨整行的 item（x=0） |
 | `extract/pages-json.ts`（9） | `buildPagesJson(input:{content_sha256;code_version;has_text_layer;pages}):{json;bytes;sha256}`、`pageInsertsOf(json):PageInsert[]`、`serializePagesJson`、`parseRecordedFixture(text)`、`RecordedPagesFixture`（含可选 `pages_subset:true`）、`normalizeText`、`assemblePage`、`LinePiece`、`sha256Hex(bytes|string)`、`cpLength(s)`、`cpSlice(s,start,end)` | |
-| `lease.ts`（10） | `HEARTBEAT_MS=120_000`、`withLeaseHeartbeat<T>(renew:()=>Promise<boolean>,fn:(signal:AbortSignal)=>Promise<T>,{intervalMs}):Promise<T>`、`guardCalls<T>(target,signal):T` | 长阶段期间定时续租；续租被拒 → 立即 `lease_lost`、signal 中止、受保护客户端之后的调用全部抛 `lease_lost`（第 2 轮 R1-P2-7） |
+| `lease.ts`（10） | `HEARTBEAT_MS=120_000`、`withLeaseHeartbeat<T>(renew:()=>Promise<boolean>,fn:(signal:AbortSignal,quiesce:()=>Promise<void>)=>Promise<T>,{intervalMs;drainMs?}):Promise<T>`、`guardCalls<T>(target,signal):T` | 长阶段期间定时续租；续租被拒 → 立即 `lease_lost`、signal 中止、受保护客户端之后的调用全部抛 `lease_lost`（第 2 轮 R1-P2-7）；`quiesce()` 停表并等在途续租（≤ drainMs），阶段自行释放租约前调用、返回结果前总会调用；`renew` 必须只续持有者（第 3 轮 R3-P2-1） |
+| `extract/isolate.ts`、`extract/worker-job.ts`、`extract/worker-entry.mjs`（10） | `extractInWorker(job:ExtractJob,{hardMs;signal?;entry?}):Promise<ExtractResult>`、`workerEntry(root?)`、`ExtractJob={kind:'pdf'\|'html';bytes;maxPages;softMs}`、`runExtractJob(job)` | 阻塞抽取在 worker 线程；硬截止 `terminate()` → `ExtractTimeout`；signal 中止 → `lease_lost`；生产 `extract/deps.ts` 的 `extractPdf`/`extractHtml` 都经它（第 3 轮 R1-P2-7） |
 | `citations.ts`（10） | `cite(db:Pick<DocumentsDb,'extractionById'|'pagesOf'|'insertCitation'>,input:CiteInput):Promise<string>`、`verify(db,citationId):Promise<{integrity:'ok'|'corrupt';currentExtraction:boolean}|null>`、`citationView(db,citation):Promise<CitationView|null>`、`integrityOf(page,citation)` | `CiteInput={document_id;extraction_id;page_no;char_start;char_end;bbox?;created_by;created_ref}` |
 | `extract/run.ts`（10） | `runDocumentsExtract(deps:ExtractDeps,opts:{limit;documentIds?;dryRun;triggeredBy}):Promise<ExtractReceipt>`、`ExtractDeps={db;tables;store;extractPdf;extractHtml;now;deadline;codeVersion:string|null}` | |
 | `extract/deps.ts`（10） | `productionExtractDeps(opts:{deadline;codeVersion;now?;admin?}):ExtractDeps` | 整合决定 7（C-2） |
 | `test-seed.ts`（10） | `docInsertFor`、`seedPublicDocument(db,bytes,o?,store?)`（建 scope 行、取租约、插入后**释放**租约）、`seedUpload`、`seedExtraction`、`withOverride`、`rlsView`、`ISSUER/OWNER_A/OWNER_B/SEED_BATCH` | 只被测试 import |
 | `read-route.ts`（11/12） | `docParams(url,today)`、`publicDocumentView(row)`、`cacheHeadersFor(kind,asOf,now)`、`resolveDocIssuer(tables,ticker,today)`、`publicDocs()`、`serviceStore()`、`sessionUserId()`、`docDetail`、`pageDetail`、`notFound`；Task 12 追加 `ownerReadDeps()`、`ownerDocumentView(row)`、`auditFailedResponse()` | HK ticker（`.HK`）在此支持 |
 | `upload.ts`（12） | `ingestUpload(deps:UploadDeps,input):Promise<{documentId;duplicate}>`、`readOwnedDocument<T>(deps:OwnerReadDeps,{documentId,requester,route,pageNo?,citationId?,signedUrlIssued?,load}):Promise<{doc;data:T}|null>`、`OwnerAuditError` | |
-| `hk-facts/facts-port.ts`（13） | `HkFactsPort`、`supabaseHkFactsPort(admin)`、`memoryHkFactsPort(facts,docs,opts?:{now?})`、`HK_MARKET`、`toFilingInsert(r):FilingInsert`、`planHkFactWrites(input:Omit<PlanInput,'market'>):PlanResult`、`evaluateHkFactRules(input:Omit<FactRulesInput,'market'>):FactRulesResult`、`asDocumentsDbError(e)`、`HkPublicationOutcome`、`HkResolveOutcome`、`HkRunStatus`、`HkZeroOutput={document_id;extraction_id}`、`CITATION_ROLES` | **`'HK'` 类型断言只在本文件**（整合决定 5）；透传方法抛 `FactsDbError`，F3 自有方法与 `runStatus` 抛 `DocumentsDbError`；`publishHkRun(…,expectedRev,zeroOutput)` 的第 6 参是计划所用零输出选择，SQL 在文档锁下复核、变了即 `stale_plan`（计划审计 P1-4） |
+| `hk-facts/facts-port.ts`（13） | `HkFactsPort`、`supabaseHkFactsPort(admin)`、`memoryHkFactsPort(facts,docs,opts?:{now?})`、`HK_MARKET`、`toFilingInsert(r):FilingInsert`、`planHkFactWrites(input:Omit<PlanInput,'market'>):PlanResult`、`evaluateHkFactRules(input:Omit<FactRulesInput,'market'>):FactRulesResult`、`asDocumentsDbError(e)`、`HkPublicationOutcome`、`HkResolveOutcome`、`HkRunStatus`、`HkZeroOutput={document_id;extraction_id}`、`CITATION_ROLES` | **`'HK'` 类型断言只在本文件**（整合决定 5）；透传方法抛 `FactsDbError`，F3 自有方法与 `runStatus` 抛 `DocumentsDbError`；`publishHkRun(…,expectedRev,zeroOutput)` 的第 6 参是计划所用零输出选择，SQL 在文档锁下复核、变了即 `stale_plan`（计划审计 P1-4）；`renewLease(issuer,batch,ttl)` 只续持有者未过期的租约（SQL `renew_hk_fact_lease`，第 3 轮 R3-P2-1）；`CITATION_ROLES` 含 `unit_currency`（R3-P1-1） |
 | `hk-facts/pg-facts-port.ts`（13） | `pgHkFactsPort(pool:Pool):HkFactsPort` | 仅测试（D1-1） |
 | `hk-facts/facts-port-contract.ts`（13） | `hkFactsPortContract(label,setup)`、`HkPortHarness`、`hkWorld`、`hkExtraction`、`hkCite`、`hkFilingRow`、`hkStagedRun`、`stateRev`、`sha256`、`code` | 非测试文件 |
 | `hk-facts/exact.ts`（14） | `toScaled(a,b):{a:bigint;b:bigint;scale:number}`、`exactIdentity(left,right,tol:{num:bigint;den:bigint}):{passed;diff:string}`、`sumDecimals(xs):string` | |
@@ -377,7 +379,7 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
 | `hk-facts/eval.ts`（18） | `scoreHkFacts`、`scoredRows`、`offlineHkCandidates`、`loadRecordedFixture(raw):{header;pages;recordedPageNos}`、`goldNaturalKey`、`goldProvenanceGaps`、`isPendingGold`、`ratio`、`HkGoldFile` | `--pages` 子集夹具展开为 `page_count` 页（未录页为空页） |
 | `dq/batches.ts`（14） | `F3_INFO_CODES`、`F3InfoCode`、`isInfoError`（查 `INFO_CODES` ∪ `F3_INFO_CODES`） | `INFO_CODES` 不动（D1-5） |
 
-SQL（迁移一，Part A）在规格 §4.8 之外的签名（所有调用方已按此写）：`request_document_extract(p_document uuid, p_actor uuid, p_extractor_version text, p_table_algo_version text)`；`read_documents(p_issuer uuid, p_as_of date, p_source text, p_doc_class text, p_from date, p_to date, p_cursor jsonb, p_limit int, p_all_versions boolean default false)`；`stage_candidate_publication(uuid,int,uuid,uuid) returns jsonb {outcome:'staged'|'approval_revoked'}`；只读服务函数 `documents_stored_due(int)`、`extractions_candidates_due(int)`、`known_source_refs(uuid,text,text[])`、`list_candidates(uuid,text,uuid,jsonb,int)`、`list_candidate_publications(uuid[],uuid,uuid,int,text,jsonb,int)`（`security invoker`，只授 `service_role`）。迁移二（Part D1）：`publish_hk_run(p_issuer uuid, p_batch uuid, p_run uuid, p_manifest uuid[], p_expected_rev bigint, p_zero_output jsonb)`（P1-4）；`hk_promotion_due(p_pub_gen int, p_extractor_ref text, p_limit int) returns uuid[]`（条件 (c) 不含"运行已发布且事实仍隔离"的等待项，P2-6）、`hk_zero_output_documents(p_issuer uuid, p_pub_gen int) returns uuid[]`；`document_citations` 读策略名 `"document_citations public read"` / `"document_citations service read"`。
+SQL（迁移一，Part A）在规格 §4.8 之外的签名（所有调用方已按此写）：`request_document_extract(p_document uuid, p_actor uuid, p_extractor_version text, p_table_algo_version text)`；`read_documents(p_issuer uuid, p_as_of date, p_source text, p_doc_class text, p_from date, p_to date, p_cursor jsonb, p_limit int, p_all_versions boolean default false)`；`stage_candidate_publication(uuid,int,uuid,uuid) returns jsonb {outcome:'staged'|'approval_revoked'}`；只读服务函数 `documents_stored_due(int)`、`extractions_candidates_due(int)`、`known_source_refs(uuid,text,text[])`、`list_candidates(uuid,text,uuid,jsonb,int)`、`list_candidate_publications(uuid[],uuid,uuid,int,text,jsonb,int)`（`security invoker`，只授 `service_role`）。迁移二（Part D1）：`renew_hk_fact_lease(p_issuer uuid, p_batch uuid, p_ttl_seconds int) returns boolean`（R3-P2-1）；`fact_citations.role` 含 `unit_currency`（R3-P1-1）；`publish_hk_run(p_issuer uuid, p_batch uuid, p_run uuid, p_manifest uuid[], p_expected_rev bigint, p_zero_output jsonb)`（P1-4）；`hk_promotion_due(p_pub_gen int, p_extractor_ref text, p_limit int) returns uuid[]`（条件 (c) 不含"运行已发布且事实仍隔离"的等待项，P2-6）、`hk_zero_output_documents(p_issuer uuid, p_pub_gen int) returns uuid[]`；`document_citations` 读策略名 `"document_citations public read"` / `"document_citations service read"`。
 
 ### 规格覆盖表
 
@@ -2720,7 +2722,7 @@ export type CandidateStatus='candidate'|'confirmed'|'rejected'|'promoted';
 export type DecisionKind='human'|'auto';
 export type PublicationState='staged'|'published'|'abandoned';
 export type CitationCreator='extractor'|'human'|'llm'|'module';
-export type CitationRole='value'|'label'|'period'|'unit';
+export type CitationRole='value'|'label'|'period'|'unit'|'unit_currency';   // unit_currency: the table currency a 仙 / cents EPS inherits (R3-P1-1)
 export type AssetRole='filing_index'|'xbrl_instance'|'exhibit';
 
 export interface Page<T>{rows:T[];nextCursor:string|null}
@@ -2760,7 +2762,7 @@ export interface CitationRow{
 export type CitationInsert=Omit<CitationRow,'citation_id'|'visibility'|'created_at'>;
 
 export interface PeriodEvidence{role:'statement_title'|'column_header';citation_id:string}
-/** unit_currency: the table's amount-unit citation, present when the per-share token names no currency (仙 / cents, R2-P1-1); published with role 'unit' too. */
+/** unit_currency: the table's amount-unit citation, present exactly when the per-share token names no currency (仙 / cents, R2-P1-1); published with its own role 'unit_currency' (R3-P1-1). */
 export interface FactCitations{value:string;label:string;unit:string;unit_currency?:string;period:PeriodEvidence[]}
 export interface FinancialFactPayload{
  concept:string;statement:'IS'|'BS'|'CF';period_start:string|null;period_end:string;duration:'6M'|'12M'|'INSTANT';
@@ -8218,7 +8220,7 @@ import type {LinePiece} from './pages-json';
 import {detectTables} from './tables';
 
 /** maxPages: refuse a document with more pages before reading any (ExtractTooManyPages; R1-P2-7 round 2 bounds the blocking work). */
-export interface ExtractBudget{remainingMs():number;maxPages?:number}
+export interface ExtractBudget{remainingMs():number;maxPages?:number;/** aborted when the lease heartbeat stops (round 3: the worker is terminated) */signal?:AbortSignal}
 export class ExtractTimeout extends Error{constructor(){super('extract_timeout');this.name='ExtractTimeout';}}
 export class ExtractTooManyPages extends Error{constructor(readonly pages:number){super('too_many_pages');this.name='ExtractTooManyPages';}}
 /** One text item as pdf.js reports it: string, origin (transform[4], transform[5]), advance width, height. */
@@ -8481,7 +8483,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 ### Task 10: 引用、抽取调度、extract cron、脚本与录制
 
-**Files:** Create: `src/lib/documents/lease.ts`（+ `lease.test.ts`，R1-P2-7 第 2 轮）、`src/lib/documents/citations.ts`、`src/lib/documents/extract/run.ts`、`src/lib/documents/extract/deps.ts`、`src/lib/documents/test-seed.ts`、`src/app/api/cron/documents-extract/route.ts`、`scripts/documents/extract.ts`、`scripts/documents/record-fixture.ts` / Modify: `next.config.mjs`（`// F3` 块：pdf.js CMaps 与标准字体随路由打包） / Test: `src/lib/documents/citations.test.ts`、`src/lib/documents/extract/run.test.ts`、`src/app/api/cron/documents-extract/route.test.ts`
+**Files:** Create: `src/lib/documents/lease.ts`（+ `lease.test.ts`，R1-P2-7 第 2 轮）、`src/lib/documents/extract/{worker-job.ts,worker-entry.mjs,isolate.ts,isolate.test.ts}`、`src/lib/documents/fixtures/worker/slow-worker.mjs`（第 3 轮：抽取在 worker 线程）、`src/lib/documents/citations.ts`、`src/lib/documents/extract/run.ts`、`src/lib/documents/extract/deps.ts`、`src/lib/documents/test-seed.ts`、`src/app/api/cron/documents-extract/route.ts`、`scripts/documents/extract.ts`、`scripts/documents/record-fixture.ts` / Modify: `next.config.mjs`（`// F3` 块：pdf.js CMaps 与标准字体随路由打包） / Test: `src/lib/documents/citations.test.ts`、`src/lib/documents/extract/run.test.ts`、`src/app/api/cron/documents-extract/route.test.ts`
 **Spec:** §4.5、§7.3（第一条）、§7.4、§6.3、§10、§11.1、§11.3
 **Depends on:** Task 9；Task 2（`memoryDocumentsDb`、`db.ts` 游标）、Task 3、Task 4（`ObjectStore`、`pagesJsonPath`、`blobPath`）
 
@@ -8502,32 +8504,51 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 // The phase receives the signal; guardCalls(target, signal) wraps a port/db/store/table client so
 // every call after the abort throws lease_lost — the abandoned phase writes nothing more even
 // though JavaScript cannot cancel it. When the phase ends (either way) the timer stops and the
-// signal is aborted, so a leftover background step can never write later.
+// signal is aborted, so a leftover background step can never write later. Before the phase's result
+// is returned the timer is stopped and a renewal still in flight is awaited (bounded by drainMs), so
+// no renewal of ours runs after the caller's next step (codex plan round 3 R3-P2-1); renew() must be
+// holder-only (renew_document_extract_lease, renew_candidates_lease, renew_hk_fact_lease) so that a
+// renewal arriving late can never re-acquire a released lease.
 import {DocumentsDbError} from './types';
 
 /** Beat interval: well inside the 600 s lease TTL, so two beats may fail before the lease lapses. */
 export const HEARTBEAT_MS=120_000;
-export interface HeartbeatOptions{intervalMs:number}
+/** drainMs: how long the end of the phase waits for a renewal still in flight (default intervalMs). */
+export interface HeartbeatOptions{intervalMs:number;drainMs?:number}
 const lost=(why:string)=>new DocumentsDbError('lease_lost',`lease_lost: ${why}`);
 
-export async function withLeaseHeartbeat<T>(renew:()=>Promise<boolean>,fn:(signal:AbortSignal)=>Promise<T>,opts:HeartbeatOptions):Promise<T>{
+/** fn gets the abort signal and quiesce(): stop the beats and settle one in flight — call it right before the phase releases its own lease (R3-P2-1). */
+export async function withLeaseHeartbeat<T>(renew:()=>Promise<boolean>,fn:(signal:AbortSignal,quiesce:()=>Promise<void>)=>Promise<T>,opts:HeartbeatOptions):Promise<T>{
  if(!Number.isInteger(opts.intervalMs)||opts.intervalMs<1)throw new DocumentsDbError('invalid_input','invalid_interval');
  const ac=new AbortController();
  let reject:(e:DocumentsDbError)=>void=()=>{};
  const refused=new Promise<never>((_,r)=>{reject=r;});
  refused.catch(()=>{});
- let busy=false;
+ let inflight:Promise<void>|null=null;let stopped=false;
  const timer=setInterval(()=>{
-  if(busy||ac.signal.aborted)return;
-  busy=true;
-  renew().then(ok=>{
-   if(!ok&&!ac.signal.aborted){const e=lost('heartbeat renewal refused');ac.abort(e);reject(e);}
-  },()=>{/* transient: retried on the next beat */}).finally(()=>{busy=false;});
+  if(inflight!==null||stopped||ac.signal.aborted)return;
+  inflight=renew().then(ok=>{
+   if(!ok&&!stopped&&!ac.signal.aborted){const e=lost('heartbeat renewal refused');ac.abort(e);reject(e);}
+  },()=>{/* transient: retried on the next beat */}).finally(()=>{inflight=null;});
  },opts.intervalMs);
- const work=fn(ac.signal);
+ // R3-P2-1: stop scheduling, then settle the renewal still in flight (bounded by drainMs) — before a
+ // release inside the phase (quiesce) and always before the result is handed back
+ let drained:Promise<void>|null=null;
+ const quiesce=()=>{                                                    // idempotent: one bounded wait at most
+  if(drained===null){
+   stopped=true;clearInterval(timer);
+   const pending:Promise<void>|null=inflight;
+   drained=pending===null?Promise.resolve():Promise.race([pending,new Promise<void>(r=>setTimeout(r,opts.drainMs??opts.intervalMs))]);
+  }
+  return drained;
+ };
+ const work=fn(ac.signal,quiesce);
  work.catch(()=>{});   // after an abort the phase may still settle (usually with lease_lost); nobody awaits it
  try{return await Promise.race([work,refused]);}
- finally{clearInterval(timer);if(!ac.signal.aborted)ac.abort(lost('phase finished'));}
+ finally{
+  await quiesce();
+  if(!ac.signal.aborted)ac.abort(lost('phase finished'));
+ }
 }
 /** `target` with every method call refused (lease_lost) once `signal` is aborted. */
 export function guardCalls<T extends object>(target:T,signal:AbortSignal):T{
@@ -8576,6 +8597,17 @@ describe('withLeaseHeartbeat (R1-P2-7, codex plan round 2)',()=>{
   expect(write).not.toHaveBeenCalled();                                          // … and writes nothing
   expect(after).toMatchObject({code:'lease_lost'});
  });
+ it('R3-P2-1: the result is held back until a renewal in flight has settled; nothing renews after that',async()=>{
+  let release:()=>void=()=>{};const renew=vi.fn(()=>new Promise<boolean>(r=>{release=()=>r(true);}));
+  let done=false;
+  const p=withLeaseHeartbeat(renew,async()=>{await sleep(1_500);return 'x';},{intervalMs:1_000,drainMs:10_000}).then(v=>{done=true;return v;});
+  await vi.advanceTimersByTimeAsync(1_500);                                    // a beat at 1 s is still in flight when the phase ends at 1.5 s
+  expect(renew).toHaveBeenCalledTimes(1);expect(done).toBe(false);
+  release();await vi.advanceTimersByTimeAsync(0);
+  expect(await p).toBe('x');
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(renew).toHaveBeenCalledTimes(1);
+ });
  it('a renewal that throws is transient (retried); the signal is aborted after a normal finish too',async()=>{
   let n=0;const renew=vi.fn(async()=>{n++;if(n===1)throw new Error('network');return true;});
   let signal:AbortSignal|null=null;
@@ -8586,6 +8618,168 @@ describe('withLeaseHeartbeat (R1-P2-7, codex plan round 2)',()=>{
   expect(signal!.aborted).toBe(true);
   await expect(withLeaseHeartbeat(renew,async()=>1,{intervalMs:0})).rejects.toMatchObject({code:'invalid_input'});
  });
+});
+```
+
+`src/lib/documents/extract/worker-job.ts`、`worker-entry.mjs`、`isolate.ts`（计划审计第 3 轮 R1-P2-7 定稿：阻塞的抽取在 worker 线程里跑；主线程保留心跳并以 `worker.terminate()` 执行硬截止）：
+
+```ts
+// src/lib/documents/extract/worker-job.ts
+// The extraction job a worker thread runs (codex plan round 3, R1-P2-7 final): pdf.js (extract/pdf.ts,
+// page cap + a soft per-page budget) or the HTML parser (extract/html.ts) — both block the event loop,
+// which is why they run off the main thread. The result (pages with lines/tables, hasTextLayer) is a
+// plain structured-cloneable object.
+import type {PageLayout} from '../types';
+import {extractHtml} from './html';
+import {extractPdf} from './pdf';
+
+export type ExtractJobKind='pdf'|'html';
+/** softMs: the worker's own budget (ExtractTimeout before the main thread's hard deadline). */
+export interface ExtractJob{kind:ExtractJobKind;bytes:Uint8Array;maxPages:number;softMs:number}
+export interface ExtractResult{pages:PageLayout[];hasTextLayer:boolean}
+export async function runExtractJob(job:ExtractJob):Promise<ExtractResult>{
+ const until=Date.now()+job.softMs;
+ if(job.kind==='pdf')return extractPdf(job.bytes,{remainingMs:()=>until-Date.now(),maxPages:job.maxPages});
+ if(job.kind==='html'){const pages=extractHtml(job.bytes);return {pages,hasTextLayer:pages.some(p=>p.text!=='')};}
+ throw new Error('unsupported_job');
+}
+```
+
+```js
+// src/lib/documents/extract/worker-entry.mjs
+// Worker-thread entry of the extraction (codex plan round 3, R1-P2-7 final). Plain ESM, so Node starts it
+// as is — under vitest, tsx scripts and the traced Vercel function alike (next.config.mjs ships it, the
+// extract/*.ts sources it imports, types.ts and tsx with esbuild through outputFileTracingIncludes). It
+// registers tsx's ESM loader for this thread only, runs the one job in workerData and answers with one
+// message: {ok:true,result} or {ok:false,error:{name,message,pages}}. The main thread (isolate.ts) owns
+// the deadline and terminates this thread; nothing here writes anywhere.
+import {parentPort,workerData} from 'node:worker_threads';
+import {register} from 'tsx/esm/api';
+
+register();
+try{
+ const {runExtractJob}=await import('./worker-job.ts');
+ parentPort.postMessage({ok:true,result:await runExtractJob(workerData)});
+}catch(e){
+ parentPort.postMessage({ok:false,error:{name:e?.name??'Error',message:String(e?.message??e),pages:e?.pages??null}});
+}
+```
+
+```ts
+// src/lib/documents/extract/isolate.ts
+// Main-thread side of the extraction worker (codex plan round 3, R1-P2-7 final). extractInWorker starts
+// one worker per job (extract/worker-entry.mjs under the app root, located like pdfjsAssets: by
+// process.cwd(); injectable for tests) and settles exactly once: the worker's answer; hardMs elapsed →
+// worker.terminate() and ExtractTimeout ('extract_timeout') — this also stops a worker stuck inside one
+// page or in a synchronous loop, which a budget checked between pages cannot; the signal aborted (the
+// lease heartbeat stopped) → terminate and DocumentsDbError('lease_lost'); a worker error or an exit
+// without an answer → Error. The main thread's event loop stays free, so the heartbeat keeps beating.
+import {join} from 'node:path';
+import {Worker} from 'node:worker_threads';
+import {DocumentsDbError} from '../types';
+import {ExtractTimeout,ExtractTooManyPages} from './pdf';
+import type {ExtractJob,ExtractResult} from './worker-job';
+
+export interface IsolateOptions{hardMs:number;signal?:AbortSignal;/** test-only: another worker script */entry?:string}
+type Reply={ok:true;result:ExtractResult}|{ok:false;error:{name:string;message:string;pages:number|null}};
+export const workerEntry=(root:string=process.cwd())=>join(root,'src','lib','documents','extract','worker-entry.mjs');
+function errorOf(e:{name:string;message:string;pages:number|null}):Error{
+ if(e.name==='ExtractTimeout')return new ExtractTimeout();
+ if(e.name==='ExtractTooManyPages')return new ExtractTooManyPages(e.pages??0);
+ return new Error(e.message);
+}
+export function extractInWorker(job:ExtractJob,opts:IsolateOptions):Promise<ExtractResult>{
+ return new Promise<ExtractResult>((resolve,reject)=>{
+  if(opts.signal?.aborted){reject(new DocumentsDbError('lease_lost','lease_lost: extraction not started'));return;}
+  if(!(opts.hardMs>0)){reject(new ExtractTimeout());return;}
+  const worker=new Worker(opts.entry??workerEntry(),{workerData:job});
+  let settled=false;
+  const onAbort=()=>finish(()=>reject(new DocumentsDbError('lease_lost','lease_lost: extraction worker stopped')));
+  const timer=setTimeout(()=>finish(()=>reject(new ExtractTimeout())),opts.hardMs);
+  function finish(settle:()=>void){
+   if(settled)return;settled=true;
+   clearTimeout(timer);opts.signal?.removeEventListener('abort',onAbort);
+   void worker.terminate();
+   settle();
+  }
+  opts.signal?.addEventListener('abort',onAbort,{once:true});
+  worker.once('message',(m:Reply)=>finish(()=>m.ok?resolve(m.result):reject(errorOf(m.error))));
+  worker.once('error',e=>finish(()=>reject(e)));
+  worker.once('exit',code=>finish(()=>reject(new Error(`extract_worker_exit:${code}`))));
+ });
+}
+```
+
+```js
+// src/lib/documents/fixtures/worker/slow-worker.mjs
+// Test-only stand-in for worker-entry.mjs (isolate.test.ts; no pdf.js, no network). workerData.mode:
+// 'slow-final-page' — three quick pages, then a final page that never finishes (an awaited 10-minute
+// step); 'block' — a synchronous infinite loop (the worker's event loop never turns); 'fail' — answers
+// with an extractor error; 'ok' — answers with one empty page.
+import {parentPort,workerData} from 'node:worker_threads';
+
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+if(workerData.mode==='slow-final-page'){
+ for(let n=1;n<=3;n++)await sleep(5);
+ await sleep(600_000);
+ parentPort.postMessage({ok:true,result:{pages:[],hasTextLayer:false}});
+}else if(workerData.mode==='block'){
+ for(;;){/* never yields */}
+}else if(workerData.mode==='fail'){
+ parentPort.postMessage({ok:false,error:{name:'Error',message:'bad xref',pages:null}});
+}else{
+ parentPort.postMessage({ok:true,result:{pages:[{page_no:1,width:null,height:null,text:'',lines:[],tables:[]}],hasTextLayer:false}});
+}
+```
+
+```ts
+// src/lib/documents/extract/isolate.test.ts
+import {readFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {describe,expect,it} from 'vitest';
+import {withLeaseHeartbeat} from '../lease';
+import {extractInWorker} from './isolate';
+import {ExtractTimeout} from './pdf';
+import type {ExtractJob} from './worker-job';
+
+const SLOW=join(process.cwd(),'src/lib/documents/fixtures/worker/slow-worker.mjs');
+const job=(mode:string):ExtractJob=>({kind:'pdf',bytes:new Uint8Array(),maxPages:10,softMs:60_000,mode} as ExtractJob);
+/** Runs the worker under a 50 ms heartbeat on the main thread; returns the error and how many beats happened. */
+async function underHeartbeat(mode:string,hardMs:number){
+ let beats=0;const t0=Date.now();
+ const err=await withLeaseHeartbeat(async()=>{beats++;return true;},signal=>extractInWorker(job(mode),{hardMs,signal,entry:SLOW}),{intervalMs:50}).then(()=>null,(e:unknown)=>e);
+ return {err,beats,ms:Date.now()-t0};
+}
+
+describe('extractInWorker (codex plan round 3, R1-P2-7 final)',()=>{
+ it('a slow final page is terminated at the hard deadline while the main-thread heartbeat keeps beating',async()=>{
+  const r=await underHeartbeat('slow-final-page',800);
+  expect(r.err).toBeInstanceOf(ExtractTimeout);
+  expect(r.ms).toBeLessThan(5_000);
+  expect(r.beats).toBeGreaterThanOrEqual(8);
+ },20_000);
+ it('a worker whose event loop is blocked forever is terminated at the hard deadline; the heartbeat keeps beating',async()=>{
+  const r=await underHeartbeat('block',800);
+  expect(r.err).toBeInstanceOf(ExtractTimeout);
+  expect(r.ms).toBeLessThan(5_000);
+  expect(r.beats).toBeGreaterThanOrEqual(8);
+ },20_000);
+ it('an aborted heartbeat terminates the worker with lease_lost; answers and errors pass through',async()=>{
+  const ac=new AbortController();setTimeout(()=>ac.abort(),100);
+  await expect(extractInWorker(job('block'),{hardMs:30_000,signal:ac.signal,entry:SLOW})).rejects.toMatchObject({name:'DocumentsDbError',code:'lease_lost'});
+  await expect(extractInWorker(job('fail'),{hardMs:5_000,entry:SLOW})).rejects.toThrow('bad xref');
+  await expect(extractInWorker(job('ok'),{hardMs:5_000,entry:SLOW})).resolves.toMatchObject({pages:[{page_no:1}],hasTextLayer:false});
+  await expect(extractInWorker(job('ok'),{hardMs:0,entry:SLOW})).rejects.toBeInstanceOf(ExtractTimeout);
+ },20_000);
+ it('the real worker entry extracts PDF and HTML off the main thread and keeps the page cap',async()=>{
+  const pdf=new Uint8Array(readFileSync('src/lib/documents/fixtures/pdf/minimal-two-pages.pdf'));
+  const r=await extractInWorker({kind:'pdf',bytes:pdf,maxPages:10,softMs:30_000},{hardMs:60_000});
+  expect(r.pages).toHaveLength(2);expect(r.hasTextLayer).toBe(true);
+  expect(r.pages[0].text).toContain('Revenue');
+  await expect(extractInWorker({kind:'pdf',bytes:pdf,maxPages:1,softMs:30_000},{hardMs:60_000})).rejects.toMatchObject({name:'ExtractTooManyPages',pages:2});
+  const html=await extractInWorker({kind:'html',bytes:new TextEncoder().encode('<p>one</p><hr/><p>two</p>'),maxPages:10,softMs:30_000},{hardMs:60_000});
+  expect(html.pages.map(p=>p.text)).toEqual(['one','two']);
+ },120_000);
 });
 ```
 
@@ -9191,7 +9385,7 @@ const HTML_MIMES=new Set(['text/html','application/xhtml+xml','application/xml',
 export interface ExtractDeps{
  db:DocumentsDb;tables:TableClient;store:ObjectStore;
  extractPdf:(bytes:Uint8Array,budget:ExtractBudget)=>Promise<{pages:PageLayout[];hasTextLayer:boolean}>;
- extractHtml:(bytes:Uint8Array)=>PageLayout[];
+ extractHtml:(bytes:Uint8Array,budget:ExtractBudget)=>PageLayout[]|Promise<PageLayout[]>;   // production: both run in a worker thread (extract/isolate.ts, round 3)
  now:()=>Date;deadline:Date|null;codeVersion:string|null;
 }
 export interface ExtractOptions{limit:number;documentIds?:string[];dryRun:boolean;triggeredBy:TriggeredBy}
@@ -9214,13 +9408,12 @@ async function dueDocuments(db:DocumentsDb,opts:ExtractOptions,errors:BatchError
 
 /** Bytes → layout by MIME; throws ExtractTimeout / any extractor error; 'unsupported_mime' as an Error message. */
 async function layoutOf(deps:ExtractDeps,doc:DocumentRow,bytes:Uint8Array,signal?:AbortSignal):Promise<{pages:PageLayout[];hasTextLayer:boolean}>{
- if(doc.mime==='application/pdf'){
-  // the run deadline less the finish reserve, at most DOC_EXTRACT_MS for this document, 0 once the lease heartbeat stopped
-  const until=deps.now().getTime()+DOC_EXTRACT_MS;
-  const budget:ExtractBudget={remainingMs:()=>signal?.aborted?0:Math.min(remaining(deps)-FINISH_RESERVE_MS,until-deps.now().getTime()),maxPages:MAX_PDF_PAGES};
-  return deps.extractPdf(bytes,budget);
- }
- if(HTML_MIMES.has(doc.mime)){const pages=deps.extractHtml(bytes);return {pages,hasTextLayer:pages.some(p=>p.text!=='')};}
+ // the run deadline less the finish reserve, at most DOC_EXTRACT_MS for this document, 0 once the lease heartbeat stopped;
+ // production extractors enforce it as a hard worker deadline (extract/isolate.ts) and abort on the signal
+ const until=deps.now().getTime()+DOC_EXTRACT_MS;
+ const budget:ExtractBudget={remainingMs:()=>signal?.aborted?0:Math.min(remaining(deps)-FINISH_RESERVE_MS,until-deps.now().getTime()),maxPages:MAX_PDF_PAGES,...(signal?{signal}:{})};
+ if(doc.mime==='application/pdf')return deps.extractPdf(bytes,budget);
+ if(HTML_MIMES.has(doc.mime)){const pages=await deps.extractHtml(bytes,budget);return {pages,hasTextLayer:pages.some(p=>p.text!=='')};}
  throw new Error('unsupported_mime');
 }
 
@@ -9300,20 +9493,30 @@ export async function runDocumentsExtract(deps:ExtractDeps,opts:ExtractOptions):
 // src/lib/documents/extract/deps.ts
 // Production wiring of ExtractDeps (spec §7.3) shared by /api/cron/documents-extract,
 // POST /api/admin/documents/[id]/reprocess and scripts/documents/extract.ts: service-role
-// DocumentsDb / TableClient / ObjectStore (bucket disclosure-docs) and the real extractors.
+// DocumentsDb / TableClient / ObjectStore (bucket disclosure-docs) and the real extractors, each run in a
+// worker thread with a hard deadline (extract/isolate.ts).
 // codeVersion comes from the caller (src/lib/facts/deps.ts::resolveCodeVersion); null = refuse to apply.
 import {getAdminSupabase} from '../../supabase/admin';
 import {supabaseTableClient} from '../../db/table-client';
 import {supabaseDocumentsDb} from '../db';
 import {supabaseObjectStore} from '../object-store';
-import {extractHtml} from './html';
-import {extractPdf} from './pdf';
+import {extractInWorker} from './isolate';
+import type {ExtractBudget} from './pdf';
+import {MAX_PDF_PAGES} from './run';
 import type {ExtractDeps} from './run';
 
+/** Codex plan round 3 (R1-P2-7 final): pdf.js and the HTML parser block the event loop, so they run in a
+ *  worker thread; the main thread keeps the lease heartbeat and terminates the worker at the hard deadline
+ *  (extract_timeout) or when the heartbeat aborts (lease_lost). The worker's own soft budget is 5 s shorter. */
+export const WORKER_SOFT_MARGIN_MS=5_000;
+const viaWorker=(kind:'pdf'|'html')=>(bytes:Uint8Array,budget:ExtractBudget)=>{
+ const hardMs=budget.remainingMs();
+ return extractInWorker({kind,bytes,maxPages:budget.maxPages??MAX_PDF_PAGES,softMs:Math.max(hardMs-WORKER_SOFT_MARGIN_MS,1)},{hardMs,...(budget.signal?{signal:budget.signal}:{})});
+};
 export interface ExtractDepsOptions{deadline:Date|null;codeVersion:string|null;now?:()=>Date;/** Reuse an existing admin client (scripts hold one). */admin?:ReturnType<typeof getAdminSupabase>}
 export function productionExtractDeps(opts:ExtractDepsOptions):ExtractDeps{
  const sb=opts.admin??getAdminSupabase();
- return {db:supabaseDocumentsDb(sb),tables:supabaseTableClient(sb),store:supabaseObjectStore(sb),extractPdf,extractHtml,
+ return {db:supabaseDocumentsDb(sb),tables:supabaseTableClient(sb),store:supabaseObjectStore(sb),extractPdf:viaWorker('pdf'),extractHtml:async(bytes,budget)=>(await viaWorker('html')(bytes,budget)).pages,
   now:opts.now??(()=>new Date()),deadline:opts.deadline,codeVersion:opts.codeVersion};
 }
 ```
@@ -9521,22 +9724,37 @@ async function main(){
 main().catch(e=>fail(e instanceof Error?e.message:String(e),1));
 ```
 
-`next.config.mjs`（`// F3` 块）：抽取在 Vercel 函数里读 `node_modules/pdfjs-dist/cmaps/` 与 `standard_fonts/`（`extract/pdf.ts::pdfjsAssets`，按 `process.cwd()` 定位）；这两个目录不是被 import 的模块，Next 的文件追踪不会自动带上，必须用 `outputFileTracingIncludes` 显式包含到会运行 `extractPdf` 的路由（extract cron、管理重处理路由——它在 `DOCUMENTS_EXTRACT_ENABLED=1` 时就地抽取）以及候选 cron（与抽取同属冒烟门控的一组路由，后续若候选阶段需要重抽也已具备）。在 `outputFileTracingRoot: process.cwd(),` 之后插入：
+`next.config.mjs`（`// F3` 块；文件顶部 import 之后另加常量 `F3_EXTRACT_FILES`，见下）：抽取在 Vercel 函数里读 `node_modules/pdfjs-dist/cmaps/` 与 `standard_fonts/`（`extract/pdf.ts::pdfjsAssets`，按 `process.cwd()` 定位）；这两个目录不是被 import 的模块，Next 的文件追踪不会自动带上，必须用 `outputFileTracingIncludes` 显式包含到会运行 `extractPdf` 的路由（extract cron、管理重处理路由——它在 `DOCUMENTS_EXTRACT_ENABLED=1` 时就地抽取）以及候选 cron（与抽取同属冒烟门控的一组路由，后续若候选阶段需要重抽也已具备）。在 `outputFileTracingRoot: process.cwd(),` 之后插入：
 
 ```js
   // F3 document pipeline: pdf.js CMaps (CID-keyed CJK fonts) and standard font data are read from
   // node_modules/pdfjs-dist at runtime (src/lib/documents/extract/pdf.ts::pdfjsAssets); file tracing
   // does not see them, so ship them with the routes that extract. Verified by the Vercel preview smoke
   // in docs/runbooks/document-pipeline.md before DOCUMENTS_EXTRACT_ENABLED is set.
+  // The extraction runs in a worker thread (src/lib/documents/extract/isolate.ts, codex plan round 3):
+  // its plain-ESM entry, the TypeScript sources it imports and tsx (+ esbuild) that loads them are not
+  // reachable by import tracing either.
   outputFileTracingIncludes: {
-    '/api/cron/documents-extract': ['./node_modules/pdfjs-dist/cmaps/**/*', './node_modules/pdfjs-dist/standard_fonts/**/*'],
-    '/api/cron/documents-candidates': ['./node_modules/pdfjs-dist/cmaps/**/*', './node_modules/pdfjs-dist/standard_fonts/**/*'],
-    '/api/admin/documents/[id]/reprocess': ['./node_modules/pdfjs-dist/cmaps/**/*', './node_modules/pdfjs-dist/standard_fonts/**/*'],
+    '/api/cron/documents-extract': F3_EXTRACT_FILES,
+    '/api/cron/documents-candidates': F3_EXTRACT_FILES,
+    '/api/admin/documents/[id]/reprocess': F3_EXTRACT_FILES,
   },
   // end F3
 ```
 
-（路由 `/api/cron/documents-candidates` 与 `/api/admin/documents/[id]/reprocess` 由 Task 16 / Task 11 创建；这里先登记路径不影响构建。）
+文件顶部（第一个 `import` 之后、`const nextConfig` 之前）加：
+
+```js
+// F3 document pipeline: files the extraction routes read or start at runtime (see outputFileTracingIncludes)
+const F3_EXTRACT_FILES = [
+  './node_modules/pdfjs-dist/cmaps/**/*', './node_modules/pdfjs-dist/standard_fonts/**/*',
+  './src/lib/documents/extract/worker-entry.mjs', './src/lib/documents/extract/*.ts', './src/lib/documents/types.ts',
+  './node_modules/tsx/**/*', './node_modules/esbuild/**/*', './node_modules/@esbuild/**/*', './node_modules/get-tsconfig/**/*', './node_modules/resolve-pkg-maps/**/*',
+];
+// end F3
+```
+
+（路由 `/api/cron/documents-candidates` 与 `/api/admin/documents/[id]/reprocess` 由 Task 16 / Task 11 创建；这里先登记路径不影响构建。worker 在 Vercel 上能否启动由 runbook §9 冒烟核对；失败按决策 D 只在本机脚本抽取。）
 
 - [ ] **Step 4: 运行测试、类型检查、lint；录制脚本的离线自检**
 
@@ -9555,7 +9773,7 @@ node -e "import('./next.config.mjs').then(m=>console.log(Object.keys(m.default.o
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/lib/documents/lease.ts src/lib/documents/lease.test.ts src/lib/documents/citations.ts src/lib/documents/citations.test.ts src/lib/documents/extract/run.ts src/lib/documents/extract/run.test.ts src/lib/documents/extract/deps.ts src/lib/documents/test-seed.ts src/app/api/cron/documents-extract/route.ts src/app/api/cron/documents-extract/route.test.ts scripts/documents/extract.ts scripts/documents/record-fixture.ts next.config.mjs docs/audits/2026-11-06-document-pipeline/implementation-log.md
+git add src/lib/documents/lease.ts src/lib/documents/lease.test.ts src/lib/documents/extract/worker-job.ts src/lib/documents/extract/worker-entry.mjs src/lib/documents/extract/isolate.ts src/lib/documents/extract/isolate.test.ts src/lib/documents/fixtures/worker/slow-worker.mjs src/lib/documents/citations.ts src/lib/documents/citations.test.ts src/lib/documents/extract/run.ts src/lib/documents/extract/run.test.ts src/lib/documents/extract/deps.ts src/lib/documents/test-seed.ts src/app/api/cron/documents-extract/route.ts src/app/api/cron/documents-extract/route.test.ts scripts/documents/extract.ts scripts/documents/record-fixture.ts next.config.mjs docs/audits/2026-11-06-document-pipeline/implementation-log.md
 ```
 
 ```bash
@@ -11369,6 +11587,33 @@ export function hkFactsPortContract(label:string,setup:()=>Promise<HkPortHarness
    expect(await dueIds(h,HK_PUB_GEN)).not.toContain(w.iss);
   });
 
+  it('renewLease (R3-P2-1) extends only a lease the batch holds unexpired; it never acquires an unowned or released scope',async()=>{
+   const w=await hkWorld(h);await h.port.ensureHkScope(w.iss,'00268');
+   const b=await h.batch();const other=await h.batch();
+   expect(await h.port.renewLease(w.iss,b,600)).toBe(false);                                     // unowned: not acquired
+   expect(await h.port.claimLease(w.iss,b,600)).toBe(true);
+   expect(await h.port.renewLease(w.iss,b,600)).toBe(true);
+   expect(await h.port.renewLease(w.iss,other,600)).toBe(false);
+   await h.port.releaseLease(w.iss,b,'success','2030-01-01T00:00:00.000Z');
+   expect(await h.port.renewLease(w.iss,b,600)).toBe(false);                                     // released: stays released
+   expect(await h.port.claimLease(w.iss,other,600)).toBe(true);                                  // free for anyone
+   await h.port.releaseLease(w.iss,other,'success','2030-01-01T00:00:00.000Z');
+   expect(await code(h.port.renewLease(w.iss,b,0))).toBe('invalid_input');
+  });
+
+  it('R3-P1-1: the published unit evidence is exactly what the candidate declared — an undeclared unit_currency or a second unit is evidence_incomplete',async()=>{
+   const w=await hkWorld(h);const r=await hkStagedRun(h,w);
+   expect(await h.port.insertFactCitations(r.run,[{fact_id:r.fact25.fact_id,citation_id:w.cit.title,role:'unit_currency'}])).toBe(1);   // an amount with "currency" evidence
+   expect(await code(h.port.publishHkRun(w.iss,r.batch,r.run,[r.filingId],await stateRev(h,w.iss),[]))).toBe('evidence_incomplete');
+   expect(await h.port.runStatus(r.run)).toBe('staged');
+   await h.port.abandonRun(r.run);await h.port.releaseLease(w.iss,r.batch,'failed','2030-01-01T00:00:00.000Z');
+   const v=await hkWorld(h);const s=await hkStagedRun(h,v);
+   expect(await h.port.insertFactCitations(s.run,[{fact_id:s.fact24.fact_id,citation_id:v.cit.title,role:'unit'}])).toBe(1);             // a second unit citation
+   expect(await code(h.port.publishHkRun(v.iss,s.batch,s.run,[s.filingId],await stateRev(h,v.iss),[]))).toBe('evidence_incomplete');
+   expect((await h.port.factsByIds([s.fact25.fact_id,s.fact24.fact_id])).map(f=>f.status)).toEqual(['staged','staged']);
+   await h.port.abandonRun(s.run);await h.port.releaseLease(v.iss,s.batch,'failed','2030-01-01T00:00:00.000Z');
+  });
+
   it('publishHkRun revalidates the zero-output selection under the document locks (P1-4): a switched extraction is stale_plan and publishes nothing',async()=>{
    const w=await hkWorld(h);const r=await hkStagedRun(h,w);const rev=await stateRev(h,w.iss);
    const planned=[{document_id:w.docId,extraction_id:w.extractionId}];
@@ -11493,7 +11738,7 @@ const MIGRATION_TWO='supabase/migrations/20261108091000_fact_citations.sql';
 const SPEC2_MIGRATION='supabase/migrations/20261106090000_financial_facts.sql';
 const SPEC2_TABLES=['fact_sync_runs','filings','financial_facts','financial_metrics','fact_sync_scope'];
 const SPEC2_FUNCTIONS=['financial_facts_lifecycle','filings_limited_update','fact_scope_lock','fact_run_lock','fact_abandon_run','fact_item_members','fact_promote_rows','reconcile_fact_sync_scope','claim_fact_sync_lease','begin_sync_run','stage_filings','stage_facts','quarantine_facts','publish_sync_run','abandon_sync_run','release_fact_sync_lease','promote_quarantined','resolve_facts_quarantine','replace_financial_metrics','fact_state_rev','read_facts'];
-const F3_RPC=['public.bind_filing_documents(uuid,jsonb)','public.insert_fact_citations(uuid,jsonb)','public.publish_hk_run(uuid,uuid,uuid,uuid[],bigint,jsonb)','public.finish_candidate_publications(uuid)','public.abandon_candidate_publications(uuid)','public.ensure_hk_fact_scope(uuid,text)','public.resolve_hk_facts_quarantine(uuid,uuid[],uuid)','public.hk_promotion_due(int,text,int)','public.hk_zero_output_documents(uuid,int)'];
+const F3_RPC=['public.bind_filing_documents(uuid,jsonb)','public.insert_fact_citations(uuid,jsonb)','public.publish_hk_run(uuid,uuid,uuid,uuid[],bigint,jsonb)','public.finish_candidate_publications(uuid)','public.abandon_candidate_publications(uuid)','public.ensure_hk_fact_scope(uuid,text)','public.renew_hk_fact_lease(uuid,uuid,int)','public.resolve_hk_facts_quarantine(uuid,uuid[],uuid)','public.hk_promotion_due(int,text,int)','public.hk_zero_output_documents(uuid,int)'];
 const F3_INTERNAL=['public.assert_run_evidence_complete(uuid)','public.fact_citations_guard()','public.filing_documents_guard()'];
 
 /** Runs body inside one transaction on its own connection (pid known); rolls back unless committed. */
@@ -11798,7 +12043,8 @@ Expected: FAIL — 同样的 import 失败（迁移二也还不存在；`db-one.
 --   4. document_citations: migration one's public policy replaced by the fact-linked one (§4.12);
 --   5. F3 functions: bind_filing_documents, insert_fact_citations, assert_run_evidence_complete
 --      (internal), publish_hk_run (the only HK publish path), finish/abandon_candidate_publications,
---      ensure_hk_fact_scope, resolve_hk_facts_quarantine, hk_promotion_due, hk_zero_output_documents.
+--      ensure_hk_fact_scope, renew_hk_fact_lease (holder-only, R3-P2-1), resolve_hk_facts_quarantine,
+--      hk_promotion_due, hk_zero_output_documents.
 -- Run-level spec-2 helpers check the RUN's batch lease (fact_run_lock), and so does every run-level
 -- F3 function. Lock order everywhere: fact_sync_scope → filings → filing_documents →
 -- disclosure_documents (publish_hk_run takes all four, in that order, before the evidence check).
@@ -11836,7 +12082,7 @@ create index if not exists filing_documents_document_idx on public.filing_docume
 create table if not exists public.fact_citations (
   fact_id      uuid not null references public.financial_facts(fact_id) on delete cascade,
   citation_id  uuid not null references public.document_citations(citation_id) on delete restrict,
-  role         text not null check (role in ('value','label','period','unit')),
+  role         text not null check (role in ('value','label','period','unit','unit_currency')),
   primary key (fact_id, role, citation_id)
 );
 create index if not exists fact_citations_citation_idx on public.fact_citations(citation_id);
@@ -11958,7 +12204,7 @@ begin
   if r.market <> 'HK' then raise exception 'invalid_input' using errcode = '22023', detail = 'run_market'; end if;
   select x.reason into v_bad from (
     select case
-      when e ->> 'role' is null or e ->> 'role' not in ('value','label','period','unit') then 'role'
+      when e ->> 'role' is null or e ->> 'role' not in ('value','label','period','unit','unit_currency') then 'role'
       when f.fact_id is null then 'fact'
       when f.run_id <> p_run or f.status <> 'staged' then 'fact_state'
       when c.citation_id is null then 'citation'
@@ -11984,8 +12230,9 @@ revoke execute on function public.insert_fact_citations(uuid, jsonb) from public
 grant execute on function public.insert_fact_citations(uuid, jsonb) to service_role;
 
 -- Internal (R4-3): over run_id = p_run AND status IN ('staged','quarantined') — quarantine does not
--- exempt — every fact needs exactly one value and label citation, at least one unit citation (a
--- 仙 / cents EPS also cites the table currency, codex plan round 2 R2-P1-1) and at least one period
+-- exempt — every fact needs exactly one value, label and unit citation, exactly the unit_currency
+-- citation its candidate declares (one for a 仙 / cents EPS, none otherwise; the unit citation must
+-- also be the declared one — codex plan round 3 R3-P1-1) and at least one period
 -- citation, exactly one staged candidate_publications row of this run pointing at it, a bound filing,
 -- and every citation on the bound document, public, on its current extraction, intact (page
 -- text_hash and code-point substr equal the stored values). First failure → evidence_incomplete
@@ -11999,9 +12246,17 @@ begin
       case
         when (select count(*) from public.fact_citations fc where fc.fact_id = f.fact_id and fc.role = 'value') <> 1 then 'value'
         when (select count(*) from public.fact_citations fc where fc.fact_id = f.fact_id and fc.role = 'label') <> 1 then 'label'
-        when (select count(*) from public.fact_citations fc where fc.fact_id = f.fact_id and fc.role = 'unit') < 1 then 'unit'   -- ≥ 1: a 仙 / cents EPS also cites its table currency (R2-P1-1)
+        when (select count(*) from public.fact_citations fc where fc.fact_id = f.fact_id and fc.role = 'unit') <> 1 then 'unit'
         when not exists (select 1 from public.fact_citations fc where fc.fact_id = f.fact_id and fc.role = 'period') then 'period'
         when (select count(*) from public.candidate_publications cp where cp.run_id = p_run and cp.fact_id = f.fact_id and cp.state = 'staged') <> 1 then 'publication'
+        -- R3-P1-1: the unit evidence is exactly what the checked candidate declared — its unit citation,
+        -- plus its unit_currency citation iff it declares one (a 仙 / cents EPS), none otherwise
+        when exists (
+          select 1 from public.candidate_publications cp join public.extraction_candidates ec on ec.candidate_id = cp.candidate_id
+          where cp.run_id = p_run and cp.fact_id = f.fact_id and cp.state = 'staged'
+            and ((select fc.citation_id::text from public.fact_citations fc where fc.fact_id = f.fact_id and fc.role = 'unit') is distinct from ec.citations ->> 'unit'
+                 or coalesce((select array_agg(fc.citation_id::text order by fc.citation_id) from public.fact_citations fc where fc.fact_id = f.fact_id and fc.role = 'unit_currency'), '{}'::text[])
+                    is distinct from (case when ec.citations ? 'unit_currency' then array[ec.citations ->> 'unit_currency'] else '{}'::text[] end))) then 'unit_evidence'
         when not exists (select 1 from public.filing_documents fd where fd.filing_id = f.filing_id) then 'unbound_filing'
         when exists (
           select 1 from public.fact_citations fc
@@ -12150,6 +12405,25 @@ end $$;
 revoke execute on function public.ensure_hk_fact_scope(uuid, text) from public, anon, authenticated;
 grant execute on function public.ensure_hk_fact_scope(uuid, text) to service_role;
 
+-- Holder-only renewal of the HK fact lease (codex plan round 3 R3-P2-1; the landed spec-2 SQL has no
+-- renewal: claim_fact_sync_lease also ACQUIRES an unowned or expired scope, so a delayed heartbeat
+-- could re-take a lease the promotion had already released). Extends lease_until only while
+-- p_batch holds an unexpired lease (a released scope has lease_batch_id null); otherwise false and
+-- nothing changes. Never touches state_rev, schedule or outcome columns.
+create or replace function public.renew_hk_fact_lease(p_issuer uuid, p_batch uuid, p_ttl_seconds int)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare n int;
+begin
+  if p_ttl_seconds is null or p_ttl_seconds < 1 then raise exception 'invalid_input' using errcode = '22023', detail = 'ttl'; end if;
+  update public.fact_sync_scope
+  set lease_until = now() + make_interval(secs => p_ttl_seconds), updated_at = now()
+  where issuer_id = p_issuer and market = 'HK' and lease_batch_id = p_batch and lease_until > now();
+  get diagnostics n = row_count;
+  return n = 1;
+end $$;
+revoke execute on function public.renew_hk_fact_lease(uuid, uuid, int) from public, anon, authenticated;
+grant execute on function public.renew_hk_fact_lease(uuid, uuid, int) to service_role;
+
 -- R5-12: only financial_facts items whose member facts are all HK (or, with no member left, whose
 -- payload.run_id is an HK run) — else not_hk_item, nothing changes. Calls the unchanged spec-2
 -- resolve_facts_quarantine (its locks and checks as they are) and, in the same transaction, closes
@@ -12295,6 +12569,7 @@ export interface HkFactsPort{
  runStatus(run:string):Promise<HkRunStatus|null>;
  // F3-owned functions of migration two
  ensureHkScope(issuer:string,fetchKey:string):Promise<void>;
+ renewLease(issuer:string,batch:string,ttlSeconds:number):Promise<boolean>;   // holder-only (R3-P2-1): never acquires an unowned, expired or released HK scope
  bindFilingDocuments(run:string,rows:{filing_id:string;document_id:string}[]):Promise<number>;
  insertFactCitations(run:string,rows:{fact_id:string;citation_id:string;role:CitationRole}[]):Promise<number>;
  publishHkRun(issuer:string,batch:string,run:string,manifest:string[],expectedRev:number,zeroOutput:readonly HkZeroOutput[]):Promise<number>;   // zeroOutput: the planned zero-output selection, revalidated under the document locks (P1-4)
@@ -12308,7 +12583,7 @@ export interface HkFactsPort{
 }
 type PassThrough=Pick<HkFactsPort,'claimLease'|'beginRun'|'stageFilings'|'stageFacts'|'quarantineFacts'|'abandonRun'|'releaseLease'|'readFacts'|'factsByIds'|'openConflicts'>;
 
-export const CITATION_ROLES:readonly CitationRole[]=['value','label','period','unit'];
+export const CITATION_ROLES:readonly CitationRole[]=['value','label','period','unit','unit_currency'];
 const SHARED_CODES:readonly DocumentsDbErrorCode[]=['lease_lost','stale_plan','run_pending','invalid_chosen','item_not_open'];
 /** FactsDbError (memory spec-2 paths inside an F3 method) → DocumentsDbError with the same code when both know it, else 'unknown' carrying the message. */
 export function asDocumentsDbError(e:unknown):DocumentsDbError{
@@ -12353,6 +12628,7 @@ export function supabaseHkFactsPort(admin:SupabaseClient):HkFactsPort{
   ...hkPassThrough(supabaseFactsDb(admin)),
   async runStatus(run){const [r]=await rows<{status:HkRunStatus}>(c.from('fact_sync_runs').select('status').eq('run_id',run).limit(1));return r?.status??null;},
   async ensureHkScope(issuer,fetchKey){await call('ensure_hk_fact_scope',{p_issuer:issuer,p_fetch_key:fetchKey});},
+  async renewLease(issuer,batch,ttl){return (await call<boolean>('renew_hk_fact_lease',{p_issuer:issuer,p_batch:batch,p_ttl_seconds:ttl}))===true;},
   async bindFilingDocuments(run,input){return Number(await call('bind_filing_documents',{p_run:run,p_rows:input}));},
   async insertFactCitations(run,input){return Number(await call('insert_fact_citations',{p_run:run,p_rows:input}));},
   async publishHkRun(issuer,batch,run,manifest,expectedRev,zeroOutput){assertExpectedRev(expectedRev);return Number(await call('publish_hk_run',{p_issuer:issuer,p_batch:batch,p_run:run,p_manifest:manifest,p_expected_rev:expectedRev,p_zero_output:zeroOutput}));},
@@ -12420,8 +12696,14 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
    const mine=fc.filter(x=>x.fact_id===f.fact_id);
    const n=(role:CitationRole)=>mine.filter(x=>x.role===role).length;
    const b=B.get(f.filing_id);const d=b?D.get(b.document_id):undefined;
-   const reason=n('value')!==1?'value':n('label')!==1?'label':n('unit')<1?'unit':n('period')<1?'period'
-    :pubs.filter(p=>p.run_id===run&&p.fact_id===f.fact_id&&p.state==='staged').length!==1?'publication'
+   const link=pubs.filter(p=>p.run_id===run&&p.fact_id===f.fact_id&&p.state==='staged');
+   const declared=link.length===1?docs._raw.candidates.get(link[0].candidate_id)?.citations as {unit?:unknown;unit_currency?:unknown}|undefined:undefined;
+   const ids=(role:CitationRole)=>mine.filter(x=>x.role===role).map(x=>x.citation_id).sort(cmp);
+   const unitEvidenceOk=!!declared&&JSON.stringify(ids('unit'))===JSON.stringify([declared.unit])
+    &&JSON.stringify(ids('unit_currency'))===JSON.stringify(typeof declared.unit_currency==='string'?[declared.unit_currency]:[]);
+   const reason=n('value')!==1?'value':n('label')!==1?'label':n('unit')!==1?'unit':n('period')<1?'period'
+    :link.length!==1?'publication'
+    :!unitEvidenceOk?'unit_evidence'
     :!b?'unbound_filing'
     :mine.some(x=>{const c=C.get(x.citation_id);return !c||!d||c.document_id!==d.document_id||d.permission!=='public'||c.extraction_id!==d.current_extraction_id||!intact(c,P);})?'citation'
     :null;
@@ -12431,6 +12713,11 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
  return {
   ...hkPassThrough(facts),
   async runStatus(run){return runOf(run)?.status??null;},
+  async renewLease(issuer,batch,ttl){
+   if(!Number.isInteger(ttl)||ttl<1)throw fail('invalid_input','ttl');
+   if(!leaseHeld(issuer,HK_MARKET,batch))return false;            // holder only: never acquires (R3-P2-1)
+   return facts.claimLease(issuer,HK_MARKET,batch,ttl);            // same batch, unexpired: an extension
+  },
   async ensureHkScope(issuer,fetchKey){
    if(!/^[0-9]{5}$/.test(fetchKey))throw fail('invalid_input','fetch_key');
    if((await facts.scopeRows(HK_MARKET,[issuer])).length===0)await facts.reconcileScope(HK_MARKET,[{issuer_id:issuer,reasons:['documents'],priority:0,fetch_key:fetchKey}]);
@@ -12578,6 +12865,7 @@ export function pgHkFactsPort(pool:Pool):HkFactsPort{
   ...hkPassThrough(pgFactsDb(pool)),
   async runStatus(id){const r=(await run(`select status from public.fact_sync_runs where run_id=$1::uuid`,[id])).rows[0] as {status:HkRunStatus}|undefined;return r?.status??null;},
   async ensureHkScope(issuer,fetchKey){await fn('public.ensure_hk_fact_scope($1::uuid,$2::text)',[issuer,fetchKey]);},
+  async renewLease(issuer,batch,ttl){return (await fn<boolean>('public.renew_hk_fact_lease($1::uuid,$2::uuid,$3::int)',[issuer,batch,ttl]))===true;},
   async bindFilingDocuments(id,rows){return Number(await fn('public.bind_filing_documents($1::uuid,$2::jsonb)',[id,JSON.stringify(rows)]));},
   async insertFactCitations(id,rows){return Number(await fn('public.insert_fact_citations($1::uuid,$2::jsonb)',[id,JSON.stringify(rows)]));},
   async publishHkRun(issuer,batch,id,manifest,expectedRev,zeroOutput){assertExpectedRev(expectedRev);return Number(await fn('public.publish_hk_run($1::uuid,$2::uuid,$3::uuid,$4::uuid[],$5::bigint,$6::jsonb)',[issuer,batch,id,manifest,expectedRev,JSON.stringify(zeroOutput)]));},
@@ -14281,7 +14569,8 @@ export function hkHarness(o:{now?:string;issuers?:{issuer_id:string;code:string|
 /** CandidatesDeps over the harness (also a valid PromoteDeps: same db/port/tables/now/deadline). */
 export const candidatesDepsOf=(h:HkHarness):CandidatesDeps=>({db:h.docs,tables:h.tables,store:h.store,port:h.port,now:h.now,deadline:null,codeVersion:CODE});
 
-export interface SeedFact{concept:string;statement:'IS'|'BS'|'CF';period_start:string|null;period_end:string;duration:'6M'|'12M'|'INSTANT';value:string;unit?:string;presented?:string;column?:'primary'|'comparative';label?:string}
+/** cents: a per-share fact whose label carries the currency-less sub-unit （仙）: unit cites 仙, unit_currency the statement unit line, scale 0.01 (R3-P1-1). */
+export interface SeedFact{concept:string;statement:'IS'|'BS'|'CF';period_start:string|null;period_end:string;duration:'6M'|'12M'|'INSTANT';value:string;unit?:string;presented?:string;column?:'primary'|'comparative';label?:string;cents?:boolean}
 const LABELS:Record<string,string>={revenue:'收益',cost_of_revenue:'銷售成本',gross_profit:'毛利',operating_income:'經營溢利',income_tax:'所得稅開支',net_income:'年內溢利',
  net_income_parent:'本公司擁有人',eps_basic:'基本',eps_diluted:'攤薄',total_assets:'資產總值',total_liabilities:'負債總額',equity_parent:'本公司擁有人應佔權益',equity_total:'權益總額',
  cash:'現金及現金等價物',operating_cash_flow:'經營活動所得現金淨額',investing_cash_flow:'投資活動所用現金淨額',financing_cash_flow:'融資活動所用現金淨額',net_change_in_cash:'現金及現金等價物增加淨額'};
@@ -14302,23 +14591,27 @@ const labelOf=(f:SeedFact)=>f.label??LABELS[f.concept]??f.concept;
 const presentedOf=(f:SeedFact)=>f.presented??(f.value.startsWith('-')?`(${f.value.slice(1)})`:f.value);
 
 export interface Span{page_no:number;start:number;end:number}
-export interface SeedLayout{pages:PagesJson;title:Map<string,Span>;header:Map<string,Span>;unit:Map<string,Span>;value:Map<string,Span>;label:Map<string,Span>}
+export interface SeedLayout{pages:PagesJson;title:Map<string,Span>;header:Map<string,Span>;unit:Map<string,Span>;value:Map<string,Span>;label:Map<string,Span>;factUnit:Map<string,Span>}
 /** One page per statement present (an empty fact list still yields one IS page): company, title, period, unit, year header, then one `label value` line per fact. Offsets are code points. */
 export function buildSeedPages(facts:readonly SeedFact[],meta:{contentSha256:string;periodEnd:string;extractorVersion:string}):SeedLayout{
  const present=(['IS','BS','CF'] as const).filter(s=>facts.some(f=>f.statement===s));
  const statements=present.length>0?present:(['IS'] as const);
  const out:SeedLayout={pages:{extractor_version:meta.extractorVersion,table_algo_version:TABLE_ALGO_VERSION,code_version:CODE,content_sha256:meta.contentSha256,has_text_layer:true,pages:[]},
-  title:new Map(),header:new Map(),unit:new Map(),value:new Map(),label:new Map()};
+  title:new Map(),header:new Map(),unit:new Map(),value:new Map(),label:new Map(),factUnit:new Map()};
  const year=meta.periodEnd.slice(0,4);const prior=String(Number(year)-1);
  statements.forEach((s,i)=>{
   const page_no=i+1;
   const rows=facts.filter(f=>f.statement===s);
-  const texts=['金蝶國際𠀋軟件集團有限公司',TITLES[s],s==='BS'?`於${year}年12月31日`:`截至${year}年12月31日止年度`,'單位：元 幣種：人民幣',`${year} ${prior}`,...rows.map(f=>`${labelOf(f)} ${presentedOf(f)}`)];
+  const texts=['金蝶國際𠀋軟件集團有限公司',TITLES[s],s==='BS'?`於${year}年12月31日`:`截至${year}年12月31日止年度`,'單位：元 幣種：人民幣',`${year} ${prior}`,...rows.map(f=>`${labelOf(f)}${f.cents?'（仙）':''} ${presentedOf(f)}`)];
   const lines:LayoutLine[]=[];let pos=0;
   texts.forEach((text,index)=>{const n=cpLength(text);const y=800-index*20;lines.push({index,y,x0:50,x1:500,text,char_start:pos,char_end:pos+n,items:[{text,x0:50,x1:500,y,h:10,char_start:pos,char_end:pos+n}]});pos+=n+1;});
   const span=(li:number,from=0,to?:number):Span=>({page_no,start:lines[li].char_start+from,end:to===undefined?lines[li].char_end:lines[li].char_start+to});
   out.title.set(s,span(1));out.unit.set(s,span(3));out.header.set(s,span(4,0,cpLength(year)));
-  rows.forEach((f,k)=>{const li=5+k;const n=cpLength(labelOf(f));out.label.set(naturalKeyOf(f),span(li,0,n));out.value.set(naturalKeyOf(f),span(li,n+1));});
+  rows.forEach((f,k)=>{
+   const li=5+k;const n=cpLength(labelOf(f));const extra=f.cents?3:0;   // （仙）
+   out.label.set(naturalKeyOf(f),span(li,0,n));out.value.set(naturalKeyOf(f),span(li,n+extra+1));
+   if(f.cents)out.factUnit.set(naturalKeyOf(f),span(li,n+1,n+2));        // the 仙 token
+  });
   out.pages.pages.push({page_no,width:595,height:842,text:texts.join('\n'),lines,tables:[]});
  });
  return out;
@@ -14329,8 +14622,8 @@ export type CiteAt=(at:{page_no:number;char_start:number;char_end:number;bbox?:{
 export async function citeSeedFact(citeAt:CiteAt,layout:SeedLayout,f:SeedFact):Promise<FactCitations>{
  const at=(s:Span|undefined)=>{if(!s)throw new Error(`seed: no span for ${naturalKeyOf(f)}`);return citeAt({page_no:s.page_no,char_start:s.start,char_end:s.end});};
  const k=naturalKeyOf(f);
- return {value:await at(layout.value.get(k)),label:await at(layout.label.get(k)),unit:await at(layout.unit.get(f.statement)),
-  period:[{role:'statement_title',citation_id:await at(layout.title.get(f.statement))},{role:'column_header',citation_id:await at(layout.header.get(f.statement))}]};
+ return {value:await at(layout.value.get(k)),label:await at(layout.label.get(k)),unit:await at(layout.factUnit.get(k)??layout.unit.get(f.statement)),
+  ...(f.cents?{unit_currency:await at(layout.unit.get(f.statement))}:{}),period:[{role:'statement_title',citation_id:await at(layout.title.get(f.statement))},{role:'column_header',citation_id:await at(layout.header.get(f.statement))}]};
 }
 export function snapshotOf(ex:Pick<SeededExtraction,'document'>,row:Pick<ExtractionRow,'pages_json_sha256'|'extractor_version'|'table_algo_version'|'code_version'>):InputSnapshot{
  return {content_sha256:ex.document.content_sha256,pages_json_sha256:row.pages_json_sha256,page_nos:[1,2,3],extractor_version:row.extractor_version,table_algo_version:row.table_algo_version,code_version:row.code_version,hk_label_gen:HK_LABEL_GEN,hk_rules_version:HK_RULES_VERSION};
@@ -14338,7 +14631,7 @@ export function snapshotOf(ex:Pick<SeededExtraction,'document'>,row:Pick<Extract
 export function seedCandidateInsert(f:SeedFact,citations:FactCitations,snapshot:InputSnapshot,titleDate:string,extractor:{kind:'rule'|'llm';ref:string}={kind:'rule',ref:HK_EXTRACTOR_REF}):CandidateInsert{
  const unit=f.unit??'CNY';
  const rule:FinancialFactPayload['period_derivation']['rule']=f.column==='comparative'?(f.duration==='INSTANT'?'column_date':'title_year_substitution'):(f.duration==='INSTANT'?'title_instant':'title_duration');
- const payload:FinancialFactPayload={concept:f.concept,statement:f.statement,period_start:f.period_start,period_end:f.period_end,duration:f.duration,value:f.value,presented:presentedOf(f),unit,scale:'1',sign_flip:false,
+ const payload:FinancialFactPayload={concept:f.concept,statement:f.statement,period_start:f.period_start,period_end:f.period_end,duration:f.duration,value:f.value,presented:presentedOf(f),unit,scale:f.cents?'0.01':'1',sign_flip:false,
   period_derivation:{rule,title_date:titleDate,column_text:f.period_end.slice(0,4)},consolidation:'consolidated'};
  const natural_key=naturalKeyOf(f);
  return {kind:'financial_fact',extractor_kind:extractor.kind,extractor_ref:extractor.ref,natural_key,citations,payload,
@@ -14560,6 +14853,16 @@ describe('runHkChecks',()=>{
   expect(check(out[2],'value_replays').detail).toMatchObject({reason:'unit_evidence',evidence:'eps_currency_uncited'});
   expect(out[1].checks_passed).toBe(false);
  });
+ it('value_replays (R3-P1-1): unit_currency evidence is accepted only where the token needs it — contradictory extra evidence on an amount or an explicit-currency EPS blocks',()=>{
+  const v=new Map<string,CitationCheck|null>();
+  const out=runHkChecks([
+   cand(IS25,{concept:'revenue',value:'1000',presented:'1',scale:'1000',unitCurrencySnippet:'美元千元'},v),                                   // CNY amount + a USD "currency" citation
+   cand(IS25,{concept:'eps_basic',value:'0.0155',presented:'1.55',unit:'CNY/share',scale:'0.01',unitSnippet:'RMB cents',unitCurrencySnippet:'人民幣千元'},v),
+   cand(IS25,{concept:'eps_basic',value:'0.0155',presented:'1.55',unit:'CNY/share',scale:'0.01',unitSnippet:'RMB cents'},v),
+  ],ctx(v));
+  expect(out.map(r=>check(r,'value_replays').passed)).toEqual([false,false,true]);
+  for(const r of out.slice(0,2))expect(check(r,'value_replays').detail).toMatchObject({reason:'unit_evidence',evidence:'unit_currency_unexpected'});
+ });
  it('period_known: duration band, instant without start, both evidence roles',()=>{
   const v=new Map<string,CitationCheck|null>();
   const out=runHkChecks([
@@ -14705,7 +15008,7 @@ function unitEvidence(unit:unknown,text:string,currencyText:string|null):{ok:tru
  if(typeof unit!=='string')return {ok:false,reason:'no_unit'};
  if(/\/share$/.test(unit)){
   const own=detectEpsUnit([{page_no:0,text,char_start:0}],null);
-  if(own.ok)return {ok:true,unit:own.unit,scale:own.scale};
+  if(own.ok)return currencyText===null?{ok:true,unit:own.unit,scale:own.scale}:{ok:false,reason:'unit_currency_unexpected'};   // R3-P1-1: an explicit-currency token takes no extra evidence
   if(own.reason!=='eps_currency')return {ok:false,reason:own.reason};
   if(currencyText===null)return {ok:false,reason:'eps_currency_uncited'};
   const table=amountOf(currencyText);
@@ -14713,6 +15016,7 @@ function unitEvidence(unit:unknown,text:string,currencyText:string|null):{ok:tru
   const r=detectEpsUnit([{page_no:0,text,char_start:0}],table.currency);
   return r.ok?{ok:true,unit:r.unit,scale:r.scale}:{ok:false,reason:r.reason};
  }
+ if(currencyText!==null)return {ok:false,reason:'unit_currency_unexpected'};   // R3-P1-1: an amount carries its own currency
  const r=amountOf(text);
  return r.ok?{ok:true,unit:r.currency,scale:r.scale}:{ok:false,reason:r.reason};
 }
@@ -14882,7 +15186,7 @@ export async function buildCheckContext(deps:CheckDeps,doc:DocumentRow,ex:Extrac
 - [ ] **Step 4: Run the checks test, expect PASS**
 
 Run: `npm test -- src/lib/documents/hk-facts/checks.test.ts`
-Expected: PASS（16 tests）。
+Expected: PASS（17 tests）。
 
 - [ ] **Step 5: Write the failing test（候选运行，内存实现；生成器以 mock 替身，检查与库函数是真实的）**
 
@@ -15224,7 +15528,7 @@ async function candidatesFor(deps:CandidatesDeps,batchId:string,ex:ExtractionRow
  const local={out:{...out},counts:emptyCounts(),errors:[] as BatchError[]};
  try{
   await withLeaseHeartbeat(()=>deps.db.renewCandidatesLease(ex.extraction_id,batchId,LEASE_TTL_S),
-   signal=>candidatesClaimed({...deps,db:guardCalls(deps.db,signal),store:guardCalls(deps.store,signal),tables:guardCalls(deps.tables,signal),port:guardCalls(deps.port,signal)},batchId,ex,today,local.out,local.counts,local.errors),
+   (signal,quiesce)=>candidatesClaimed({...deps,db:guardCalls(deps.db,signal),store:guardCalls(deps.store,signal),tables:guardCalls(deps.tables,signal),port:guardCalls(deps.port,signal)},batchId,ex,today,local.out,local.counts,local.errors,quiesce),
    {intervalMs:HEARTBEAT_MS});
  }catch(e){
   if(!(e instanceof DocumentsDbError&&e.code==='lease_lost'))throw e;
@@ -15233,7 +15537,7 @@ async function candidatesFor(deps:CandidatesDeps,batchId:string,ex:ExtractionRow
  }
  Object.assign(out,local.out);for(const k of COUNTERS)counts[k]+=local.counts[k];errors.push(...local.errors);
 }
-async function candidatesClaimed(deps:CandidatesDeps,batchId:string,ex:ExtractionRow,today:string,out:ExtractionOutcome,counts:BatchCounts,errors:BatchError[]):Promise<void>{
+async function candidatesClaimed(deps:CandidatesDeps,batchId:string,ex:ExtractionRow,today:string,out:ExtractionOutcome,counts:BatchCounts,errors:BatchError[],quiesce:()=>Promise<void>):Promise<void>{
  // P2-7: renew before every mutating phase; a takeover → lease_lost (no finishCandidates, nothing more written)
  const keep=async()=>{if(!await deps.db.renewCandidatesLease(ex.extraction_id,batchId,LEASE_TTL_S))throw new DocumentsDbError('lease_lost');};
  const budget=()=>{if(remainingMs(deps)<MIN_PHASE_MS)throw new PhaseDeadline();};
@@ -15266,6 +15570,7 @@ async function candidatesClaimed(deps:CandidatesDeps,batchId:string,ex:Extractio
    for(const f of findings)await quarantine(deps.tables,{dataset:CANDIDATES_DATASET,table:'extraction_candidates',naturalKey:f.naturalKey,reasonCode:f.reasonCode,batchId,payload:{...f.payload,candidate_ids:f.candidateIds}});
    out.quarantined=findings.length;counts.quarantined+=findings.length;
   }
+  await quiesce();                                                       // no heartbeat beat after the lease ends (R3-P2-1)
   await deps.db.finishCandidates(ex.extraction_id,batchId,'done');
   out.outcome='done';
  }catch(e){
@@ -15273,7 +15578,7 @@ async function candidatesClaimed(deps:CandidatesDeps,batchId:string,ex:Extractio
   if(e instanceof DocumentsDbError&&e.code==='lease_lost'){out.code='lease_lost';errors.push({code:'lease_lost',key:ex.extraction_id});return;}
   if(e instanceof PhaseDeadline){out.code='deadline_hit';errors.push({code:'deadline_hit',key:ex.extraction_id,message:'phase'});}
   else{out.code='candidates_error';errors.push({code:'candidates_error',key:ex.extraction_id,message:errMsg(e)});}
-  try{await deps.db.finishCandidates(ex.extraction_id,batchId,'failed');}
+  try{await quiesce();await deps.db.finishCandidates(ex.extraction_id,batchId,'failed');}
   catch(e2){errors.push({code:'cleanup_failed',key:ex.extraction_id,message:errMsg(e2)});}
  }
 }
@@ -15449,7 +15754,7 @@ main().catch(e=>{console.error(e instanceof Error?e.stack??e.message:e);process.
 - [ ] **Step 9: Run tests, typecheck, lint**
 
 Run: `npm test -- src/lib/documents/hk-facts/checks.test.ts src/lib/documents/candidates/run.test.ts`
-Expected: PASS（checks 16、run 15）。
+Expected: PASS（checks 17、run 15）。
 Run: `npm run typecheck`
 Expected: 0 errors。
 Run: `npm run lint`
@@ -15502,7 +15807,8 @@ import {EXTRACTOR_VERSION,HK_EXTRACTOR_REF,HK_PUB_GEN,TABLE_ALGO_VERSION} from '
 import type {CitationRole} from '../types';
 import {hkFilingSourceRef,hkRawHash,runHkFactsSync} from './promote';
 import type {PromoteDeps} from './promote';
-import {ADMIN,CODE,FY25,ISSUER,NOW,candidatesDepsOf,confirm,hkHarness,naturalKeyOf,seedExtraction,seedHkCandidates,seedHkExtraction} from './test-support';
+import {buildCheckContext,runHkChecks} from './checks';
+import {ADMIN,CODE,FY25,ISSUER,NOW,allCandidatesOf,candidatesDepsOf,confirm,hkHarness,naturalKeyOf,seedExtraction,seedHkCandidates,seedHkExtraction} from './test-support';
 import type {HkHarness,SeedFact} from './test-support';
 
 const run=async(h:HkHarness,over:Partial<PromoteDeps>={},pubGen?:number)=>
@@ -15772,13 +16078,50 @@ describe('runHkFactsSync',()=>{
   expect(g.docs.publications()).toEqual([]);
   expect(g.facts.scope().find(s=>s.issuer_id===ISSUER)).toMatchObject({lease_batch_id:null,last_status:'failed'});
  });
+ it('R3-P2-1: a heartbeat renewal delayed past the end of the promotion leaves the scope released',async()=>{
+  vi.useFakeTimers();
+  try{
+   const h=hkHarness();await confirmedDoc(h);
+   let planning=false;let first=true;const late:boolean[]=[];
+   const port={...h.port,
+    renewLease:async(i:string,b:string,t:number)=>{if(first){first=false;await new Promise(r=>setTimeout(r,3*HEARTBEAT_MS));}const ok=await h.port.renewLease(i,b,t);late.push(ok);return ok;},   // the first (heartbeat) renewal hangs past the drain bound
+    readFacts:async(i:string,opts:Parameters<typeof h.port.readFacts>[1])=>{planning=true;await new Promise(r=>setTimeout(r,HEARTBEAT_MS+1_000));return h.port.readFacts(i,opts);}};
+   const p=run(h,{port});
+   for(let i=0;i<5000&&!planning;i++)await Promise.resolve();
+   await vi.advanceTimersByTimeAsync(HEARTBEAT_MS+1_000);                      // beat at 120 s hangs; planning ends at 121 s; the release waits at most drainMs (120 s) for it
+   await vi.advanceTimersByTimeAsync(HEARTBEAT_MS+10_000);                     // drain bound passed: released at ~241 s
+   const o=await p;
+   expect(o.outcome).toBe('published');
+   expect(h.facts.scope().find(s=>s.issuer_id===ISSUER)).toMatchObject({lease_batch_id:null});
+   await vi.advanceTimersByTimeAsync(3*HEARTBEAT_MS);                          // the hung renewal finally reaches the database, after the release …
+   expect(late.at(-1)).toBe(false);                                            // … and the holder-only renewal refuses
+   expect(h.facts.scope().find(s=>s.issuer_id===ISSUER)).toMatchObject({lease_batch_id:null,lease_until:null,last_status:'success'});   // still released
+  }finally{vi.useRealTimers();}
+ });
+ it('R3-P1-1: a 仙 EPS that inherits the table currency passes the checks and publishes with exactly one unit and one unit_currency citation',async()=>{
+  const h=hkHarness();
+  const eps:SeedFact={concept:'eps_basic',statement:'IS',period_start:'2025-01-01',period_end:'2025-12-31',duration:'12M',value:'0.0155',presented:'1.55',unit:'CNY/share',cents:true};
+  const {ex}=await confirmedDoc(h,[FY25[0],eps],'2026032500014_c');
+  const cands=await allCandidatesOf(h,ex.extractionId);
+  const ctx=await buildCheckContext(candidatesDepsOf(h),ex.document,(await h.docs.extractionById(ex.extractionId))!,cands,'2026-11-06');
+  for(const r of runHkChecks(cands,ctx))expect({id:r.candidate_id,passed:r.checks_passed}).toEqual({id:r.candidate_id,passed:true});
+  expect((await run(h)).outcome).toBe('published');
+  const f=okFacts(h).find(x=>x.concept==='eps_basic')!;
+  expect(f).toMatchObject({value:'0.0155',unit:'CNY/share'});
+  const ev=await h.port.citationsOfFact(f.fact_id);
+  expect(ev.map(e=>e.role).sort()).toEqual(['label','period','period','unit','unit_currency','value']);
+  expect((await h.docs.citationById(ev.find(e=>e.role==='unit')!.citation_id))!.snippet).toBe('仙');
+  expect((await h.docs.citationById(ev.find(e=>e.role==='unit_currency')!.citation_id))!.snippet).toBe('單位：元 幣種：人民幣');
+  const rev=okFacts(h).find(x=>x.concept==='revenue')!;
+  expect((await h.port.citationsOfFact(rev.fact_id)).some(e=>e.role==='unit_currency')).toBe(false);
+ });
  it('R1-P2-7 round 2: a long planning step is covered by timer renewals; a takeover during it is lease_lost with nothing staged',async()=>{
   vi.useFakeTimers();
   try{
    const h=hkHarness();await confirmedDoc(h);
    const OTHER=await h.batch();let planning=false;let renewals=0;
    const port={...h.port,
-    claimLease:async(i:string,b:string,t:number)=>{if(b!==OTHER)renewals++;return h.port.claimLease(i,b,t);},
+    renewLease:async(i:string,b:string,t:number)=>{renewals++;return h.port.renewLease(i,b,t);},
     readFacts:async(i:string,opts:Parameters<typeof h.port.readFacts>[1])=>{planning=true;await new Promise(r=>setTimeout(r,3*600_000));return h.port.readFacts(i,opts);}};
    const p=run(h,{port});
    for(let i=0;i<5000&&!planning;i++)await Promise.resolve();
@@ -15863,7 +16206,7 @@ Expected: FAIL — `Failed to resolve import "./promote"`。
 //     release(success). No materialization (R5-3).
 // Every exit releases the lease (a lost lease stops all writes); after publish nothing can undo
 // the run: a later failure is reported next to outcome 'published' and step 0a repairs it. The HK
-// lease is renewed (same-batch claimLease) on a timer during the whole issuer (lease.ts heartbeat,
+// lease is renewed (holder-only renewLease, R3-P2-1) on a timer during the whole issuer (lease.ts heartbeat,
 // codex plan round 2) and again before steps 2, 3 and 4; a takeover is lease_lost with no further
 // write (guarded clients); steps 2 and 4 start only with MIN_PHASE_MS of budget left, else deadline_hit
 // (run abandoned, lease released) (codex plan round 1 P2-7).
@@ -15939,8 +16282,8 @@ async function promoteIssuer(deps:PromoteDeps,batchId:string,issuer:string,pubGe
  // R1-P2-7 round 2: the issuer's whole promotion runs under the lease heartbeat (same-batch claimLease
  // every HEARTBEAT_MS) with guarded clients; a refused renewal → lease_lost at once, no further write
  try{
-  return await withLeaseHeartbeat(()=>port.claimLease(issuer,batchId,PROMOTE_LEASE_TTL_S),
-   signal=>promoteClaimed({...deps,db:guardCalls(deps.db,signal),port:guardCalls(port,signal),tables:guardCalls(tables,signal)},batchId,issuer,pubGen),
+  return await withLeaseHeartbeat(()=>port.renewLease(issuer,batchId,PROMOTE_LEASE_TTL_S),
+   (signal,quiesce)=>promoteClaimed({...deps,db:guardCalls(deps.db,signal),port:guardCalls(port,signal),tables:guardCalls(tables,signal)},batchId,issuer,pubGen,quiesce),
    {intervalMs:HEARTBEAT_MS});
  }catch(e){
   if(!isLeaseLoss(e))throw e;
@@ -15948,7 +16291,7 @@ async function promoteIssuer(deps:PromoteDeps,batchId:string,issuer:string,pubGe
  }
 }
 
-async function promoteClaimed(deps:PromoteDeps,batchId:string,issuer:string,pubGen:number):Promise<HkIssuerOutcome>{
+async function promoteClaimed(deps:PromoteDeps,batchId:string,issuer:string,pubGen:number,quiesce:()=>Promise<void>=async()=>{}):Promise<HkIssuerOutcome>{
  const {db,port,tables}=deps;
  const o:HkIssuerOutcome={issuerId:issuer,runId:null,outcome:'skipped',counts:emptyCounts(),errors:[],staged:0};
  const skip=(reason:string)=>{o.outcome='skipped';o.code=reason;o.errors.push({code:'skipped_summary',key:issuer,message:JSON.stringify({[reason]:1})});return o;};
@@ -15964,11 +16307,12 @@ async function promoteClaimed(deps:PromoteDeps,batchId:string,issuer:string,pubG
  };
  const release=async(outcome:'success'|'failed')=>{
   if(!leaseHeld||released)return;released=true;
+  await quiesce();                                                      // R3-P2-1: the heartbeat is stopped and settled before the release
   try{await port.releaseLease(issuer,batchId,outcome,nowIso());}catch(e){if(isLeaseLoss(e))leaseHeld=false;else cleanupFailed('release',e);}
  };
  const stop=async(code:string,message?:string)=>{await abandonOnce();await release('failed');return fail(code,message);};
- /** P2-7: same-batch claimLease extends our lease; false = another batch took over → lease_lost, nothing more is written. */
- const renew=async()=>{if(!await port.claimLease(issuer,batchId,PROMOTE_LEASE_TTL_S)){leaseHeld=false;throw new DocumentsDbError('lease_lost');}};
+ /** P2-7: holder-only renewLease (R3-P2-1) extends our lease; false = lost or taken over → lease_lost, nothing more is written. */
+ const renew=async()=>{if(!await port.renewLease(issuer,batchId,PROMOTE_LEASE_TTL_S)){leaseHeld=false;throw new DocumentsDbError('lease_lost');}};
  const outOfBudget=()=>remaining(deps)<MIN_PHASE_MS;
  try{
   // ---- 0a: settle staged publications of this generation (no abandonRun on foreign runs)
@@ -16069,7 +16413,7 @@ async function promoteClaimed(deps:PromoteDeps,batchId:string,issuer:string,pubG
    const f=factOf.get(c.candidate_id)!;if(!newIds.has(f))continue;
    const x=c.citations as FactCitations;
    add(f,x.value,'value');add(f,x.label,'label');add(f,x.unit,'unit');
-   if(typeof x.unit_currency==='string')add(f,x.unit_currency,'unit');   // the table currency of a 仙 / cents EPS (R2-P1-1)
+   if(typeof x.unit_currency==='string')add(f,x.unit_currency,'unit_currency');   // the table currency of a 仙 / cents EPS (R2-P1-1), its own role (R3-P1-1)
    for(const p of x.period)add(f,p.citation_id,'period');
   }
   await renew();
@@ -16141,7 +16485,7 @@ export async function promoteIssuerNow(deps:PromoteDeps&{codeVersion:string|null
 - [ ] **Step 5: Run the promote test, expect PASS**
 
 Run: `npm test -- src/lib/documents/hk-facts/promote.test.ts`
-Expected: PASS（19 tests）。
+Expected: PASS（21 tests）。
 
 - [ ] **Step 6: 接入候选阶段 3（修改 `candidates/run.ts`）**
 
@@ -18818,3 +19162,13 @@ git commit -m "docs(documents): F3 runbook, spec §17 deviations, implementation
 | R2-P1-1（并关闭 P1-2） | 接受。`detectEpsUnit` 回报 `inherited`；仙/cents 这类不含币种的子单位，生成器另记表的金额单位引用 `FactCitations.unit_currency`（晋升时也以 role `unit` 写入 `fact_citations`）；检查只从已引用证据推币种：先读子单位本身，不含币种时用 `unit_currency` 引用的金额单位，没有该引用 → `eps_currency_uncited`；绝不读 `payload.unit`。迁移二 `assert_run_evidence_complete` 与内存实现：unit 引用"恰 1 条"改为"至少 1 条" | 共享契约 `FactCitations`（两处）；Task 14 `scale.ts`/`generate.ts`（Draft.unitCurrency、引用、指纹、page_nos）+ `scale.test.ts`；Task 15 `checks.ts`（`unitEvidence`、`citationIdsOf`）+ `checks.test.ts`（仙 + 人民幣千元：CNY 通过、改成 USD/share 阻断、缺币种引用阻断、cents + 千港元 通过）；`generate.test.ts` 生成→检查用例（CNY 表 + 仙，payload 改 USD/share → `scale_mismatch` 阻断）；Task 13 迁移二 SQL 与内存 `assertEvidence`；Task 16 `promote.ts` 证据 |
 | R2-P2-1 | 接受。`detectAmountUnit` 返回 `evidence`（首个币种行与倍数行）与覆盖两行的单一引用范围 `cite`；该范围是检测输入（标题区 + 首表表头，页首连续行）的子段，检查对引用文本重放得到同一币种与倍数 | Task 14 `scale.ts` + `scale.test.ts`（分行、跨页 → `unit_split_pages`）；`generate.test.ts` 生成→检查用例（`人民幣` 与 `千元` 分两行，全部候选 `value_replays` 通过、`checks_passed`） |
 | R1-P2-7（第 1 轮未关闭） | 接受。新文件 `lease.ts`：`withLeaseHeartbeat(renew, fn, {intervalMs})` 在被等待的长阶段期间每 `HEARTBEAT_MS=120s` 续租；续租返回 false → 立即以 `lease_lost` 拒绝并中止 AbortSignal；续租抛错视为暂时、下一拍重试；阶段结束（无论成败）停表并中止 signal。`guardCalls` 包装客户端，中止后一切调用抛 `lease_lost`，被放弃的阶段不再写。接入：抽取版面（pdf.js）、候选整段（生成、检查、写入，结果仅在完成时合并）、每个发行人的晋升（`promoteIssuer` 拆出 `promoteClaimed`）。阻塞工作有界：`ExtractBudget.maxPages`（`MAX_PDF_PAGES=1500`，超出 → `too_many_pages`）与每文档预算 `DOC_EXTRACT_MS=240s`（远小于 600 s 租约，逐页检查，页间 await 让心跳运行）；第 1 轮的阶段前续租保留 | Task 10 新文件 `lease.ts` + `lease.test.ts`（假定时器：长阶段中续租；接管 → 立即 `lease_lost`、被放弃的阶段写调用被拒；续租抛错重试）、`extract/run.ts` + 假定时器用例（3 次续租后接管 → `lease_lost`、无 pages.json/抽取）；Task 9 `pdf.ts`（`maxPages`、`ExtractTooManyPages`）+ 测试；Task 15 `candidates/run.ts`（`candidatesClaimed`）+ 假定时器用例（生成中续租、接管 → `lease_lost`、生成结束后仍无候选）；Task 16 `promote.ts` + 假定时器用例（规划中续租、接管 → `lease_lost`、之后不暂存任何东西）；文件结构、契约补充 |
+
+### Codex 计划审计第 3 轮处置
+
+审计：`docs/audits/2026-11-06-document-pipeline/05-codex-plan-round3.md`（第 2 轮已提交为 `4b484c2`；R2-P1-1、R2-P2-1 判 CLOSED）；处置记录：`docs/audits/2026-11-06-document-pipeline/06-disposition-round3.md`。Task 1 文本未改（Task 1 正由实施者落地）。改后沙箱复跑：`tsc --noEmit` 0 错误；`eslint --max-warnings=0`（F3 全部 126 个 TS/MJS 文件 + `batches.ts`/`local-db.ts`）0 输出；F3 单测 45 个文件 356 例通过（含真实 worker 线程用例）；本机 PostgreSQL 17 四个 F3 critical 套件 59 例通过。
+
+| ID | 处置 | 改动位置 |
+|---|---|---|
+| R3-P1-1 | 接受。借来的表币种引用改用自己的角色 `unit_currency`（迁移二 `fact_citations.role` 检查、`insert_fact_citations` 角色校验、`CitationRole`/`CITATION_ROLES`）；`unit` 恢复"恰 1 条"（SQL 与内存）；`assert_run_evidence_complete` 新增 `unit_evidence`：已发布的 `unit` 必须是候选声明的那条，`unit_currency` 恰为候选声明的那条（只有仙/cents EPS 才声明），否则为零；检查 `unitEvidence` 对金额与显式币种 EPS 上的 `unit_currency` 一律 `unit_currency_unexpected` 阻断 | 共享契约 `CitationRole`/`FactCitations` 注释（两处）；Task 13 迁移二 SQL（表、`insert_fact_citations`、`assert_run_evidence_complete`）、内存 `assertEvidence`、`CITATION_ROLES`、契约用例（金额事实多一条 `unit_currency`、多一条 `unit` → `evidence_incomplete`，pg 与内存）；Task 15 `checks.ts` + `checks.test.ts`（金额 + 美元币种证据、显式 RMB cents + 币种证据均阻断）；`test-support.ts` 种子支持 `cents`（标签带（仙）、`unit` 引用仙、`unit_currency` 引用单位行、scale 0.01）；Task 16 `promote.ts` 以 `unit_currency` 角色写证据 + 端到端用例（仙 EPS 过检查、发布后恰 1 条 `unit` 与 1 条 `unit_currency`，收益无 `unit_currency`） |
+| R3-P2-1 | 接受。落地的规格二 SQL 没有只续持有者的函数（`claim_fact_sync_lease` 会接手无主/过期/已释放的范围），迁移二新增 `renew_hk_fact_lease`：只在本批次持有且未过期时延长；端口 `renewLease` 三实现；晋升的心跳与阶段续租都改用它。`withLeaseHeartbeat` 给阶段传 `quiesce()`：停表并等在途续租（≤ `drainMs`，幂等）；阶段释放租约前调用（晋升 `release`、候选 `finishCandidates` 前），返回结果前总会调用 | Task 13 迁移二 SQL、`F3_RPC`、端口接口（两处）、Supabase/pg/内存实现、契约用例（无主、他批次、已释放都不接手）；Task 10 `lease.ts` + 用例（结果等在途续租落定、之后不再续租）；Task 15 `candidates/run.ts`；Task 16 `promote.ts` + 假定时器用例（心跳续租卡住超过排空上限：晋升照常发布并释放，迟到的续租被只续持有者的函数拒绝，范围保持已释放）；契约补充 |
+| R1-P2-7（定稿） | 接受。阻塞抽取（PDF 与 HTML）在 `node:worker_threads` 里跑：`extract/worker-entry.mjs`（纯 ESM，为本线程注册 tsx 加载器后运行 `worker-job.ts`）、`extract/isolate.ts::extractInWorker`（主线程保留心跳；硬截止 `worker.terminate()` → `extract_timeout`；心跳中止 → 终止并 `lease_lost`）。生产 `extract/deps.ts` 的 `extractPdf`/`extractHtml` 都经 worker（worker 自身软预算比硬截止短 5 s）；`ExtractBudget` 加 `signal`；`extractHtml` 依赖可异步；页数上限保留。`next.config.mjs` 的 F3 块改为共用常量 `F3_EXTRACT_FILES`：pdf.js 资源 + `worker-entry.mjs` + `extract/*.ts` + `types.ts` + tsx/esbuild 运行文件，随三条抽取路由打包；Vercel 上能否起 worker 由 runbook §9 冒烟核对，失败按决策 D 只在本机抽取 | Task 9 `pdf.ts`（`ExtractBudget.signal`）；Task 10 新文件 `worker-job.ts`、`worker-entry.mjs`、`isolate.ts`、`isolate.test.ts`、测试用 `fixtures/worker/slow-worker.mjs`（最后一页卡住、事件循环被同步死循环阻塞：都在硬截止被终止，期间主线程 50 ms 心跳持续跳动；心跳中止 → `lease_lost`；真实入口抽 PDF/HTML 且页数上限生效），`run.ts`（`layoutOf` 统一预算、带 signal），`deps.ts`，`next.config.mjs` F3 块；契约补充 |
