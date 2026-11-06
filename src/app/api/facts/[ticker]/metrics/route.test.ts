@@ -35,7 +35,8 @@ describe('GET /api/facts/[ticker]/metrics',()=>{
   expect(body).toMatchObject({issuerId:ISSUER,ticker:'AAPL',market:'US',asOf:null,mappingGen:1,formulaVersion:FORMULA_VERSION,truncated:false,stale:false,lineage:[ISSUER],resolution:{tickerAsOf:expect.any(String),issuerId:ISSUER,validFromMethod:null}});
   expect(body.metrics).toEqual([{metric:'gross_margin',periodStart:'2024-01-01',periodEnd:'2024-03-31',duration:'3M',value:'0.4',unit:'pure',inputUnit:'USD',basis:'us_standard',inputs:[{fact_id:'f1',concept:'gross_profit',filing_id:'g',available_date:'2024-05-01'}],basedOnRev:3,basedOnLineage:V3}]);
   expect(mocks.metricsOfIssuer).toHaveBeenCalledWith(ISSUER,'US',FORMULA_VERSION);
-  expect(mocks.readFactsLineage).not.toHaveBeenCalled();
+  expect(mocks.readFactsLineage).toHaveBeenCalledTimes(1);   // conflicts only, inside the bracket
+  expect(body.conflicts).toEqual([]);
   expect(mocks.lineageOf).toHaveBeenCalledTimes(2);expect(mocks.stateRevs).toHaveBeenCalledTimes(2);
   expect(mocks.stateRevs).toHaveBeenCalledWith([ISSUER],'US');
   expect(res.headers.get('cache-control')).toBe('public, max-age=0, s-maxage=60');
@@ -115,5 +116,27 @@ describe('GET /api/facts/[ticker]/metrics',()=>{
   expect(mocks.resolve).toHaveBeenLastCalledWith(expect.anything(),{ticker:'AAPL'},{asOf:'2021-01-04'});
   mocks.resolve.mockResolvedValue(null);
   expect((await get('AAPL','')).status).toBe(404);
+ });
+ it('T8: the after-guard also runs for an empty read: moving membership or revs make it stale with the short cache',async()=>{
+  mocks.metricsOfIssuer.mockResolvedValue([]);
+  mocks.stateRevs.mockResolvedValueOnce(V3).mockResolvedValue([{issuer_id:ISSUER,state_rev:4}]);
+  const a=await get('AAPL','');
+  expect(await a.json()).toMatchObject({stale:true,metrics:[]});
+  expect(a.headers.get('cache-control')).toBe('public, max-age=0, s-maxage=30');
+  mocks.lineageOf.mockResolvedValueOnce([ISSUER]).mockResolvedValue([ISSUER,SRC]);
+  mocks.stateRevs.mockReset();mocks.stateRevs.mockResolvedValue(V3);
+  const b=await get('AAPL','');
+  expect(await b.json()).toMatchObject({stale:true,metrics:[],conflicts:[]});
+  expect(b.headers.get('cache-control')).toBe('public, max-age=0, s-maxage=30');
+ });
+ it('conflicts: exposed on the materialized read (from the bracketed lineage read) and on the live asOf read, in the facts-route shape; dropped when stale',async()=>{
+  const c={key:{concept:'revenue',period_end:'2024-03-31'},available_date:'2024-05-01',fact_ids:['x','y']};
+  mocks.readFactsLineage.mockResolvedValue({stateRevs:V3,lineage:[ISSUER],conflicts:[c],truncated:false,rows:[]});
+  const m=await (await get('AAPL','')).json();
+  expect(m.conflicts).toEqual([{key:c.key,availableDate:'2024-05-01',factIds:['x','y']}]);
+  const live=await (await get('AAPL','asOf=2024-06-30')).json();
+  expect(live.conflicts).toEqual([{key:c.key,availableDate:'2024-05-01',factIds:['x','y']}]);
+  mocks.stateRevs.mockResolvedValueOnce(V3).mockResolvedValue([{issuer_id:ISSUER,state_rev:4}]);
+  expect(await (await get('AAPL','')).json()).toMatchObject({stale:true,conflicts:[]});
  });
 });

@@ -229,8 +229,9 @@ export function deriveLineageMetrics(rows:FactRow[],target:string,lineage:readon
 /** as_of = today; materialises T(issuer) over its current lineage (see the header). */
 export async function materialize(db:MaterializeDb,issuer:string,market:Market,opts:{today?:string}={}):Promise<MaterializeResult>{
  const asOf=opts.today??new Date().toISOString().slice(0,10);
- const target=await db.targetOf(issuer);
  for(let attempt=0;;attempt++){
+  // the target is resolved inside each attempt: a merge that makes the first replace stale moves T, and the retry must follow it
+  const target=await db.targetOf(issuer);
   const lineage=await db.lineageOf(target);
   const env=await db.readFactsLineage(lineage,market,{concepts:[...DERIVE_CONCEPTS[market]],asOf,history:true});
   if(env.truncated)throw new FactsDbError('read_truncated',`read_facts_lineage truncated for ${target}/${market}`);

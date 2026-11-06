@@ -4,6 +4,7 @@ import {FactsDbError} from './types';
 import type {Duration,FactRow,LineageRev,Market,MetricRow,ReadFactsLineageResult} from './types';
 import {FORMULA_VERSION,deriveLineageMetrics,deriveMetrics,materialize,metricNames} from './derive';
 import type {MaterializeDb} from './derive';
+import {memoryFactsDb} from './memory-facts-db';
 
 let n=0;
 type P=Partial<FactRow>&{concept:string;period_end:string;value:string;duration:Duration};
@@ -297,5 +298,20 @@ describe('materialize (lineage contract, spec §4.4 / T9)',()=>{
   const {db,calls}=fakeDb([env([{issuer_id:'I',state_rev:3}],[],true)]);
   await expect(materialize(db,'I','US')).rejects.toMatchObject({code:'read_truncated'});
   expect(calls).toEqual([]);
+ });
+ it('re-resolves the target inside the retry: a merge of T into U before the first replace makes the retry materialise U',async()=>{
+  const mem=memoryFactsDb();
+  await mem.setMerge('00000000-0000-4000-8000-00000000000a','00000000-0000-4000-8000-00000000000b','00000000-0000-4000-8000-0000000000ff');   // a→b: scopes for both exist
+  const T='00000000-0000-4000-8000-00000000000b',U='00000000-0000-4000-8000-00000000000c',A='00000000-0000-4000-8000-00000000000a';
+  mem.setTopology({[U]:{status:'active',merged_into:null}});
+  let merged=false;const replaced:string[]=[];
+  const db:MaterializeDb={targetOf:i=>mem.targetOf(i),lineageOf:t=>mem.lineageOf(t),readFactsLineage:(i,m,o)=>mem.readFactsLineage(i,m,o),
+   async replaceMetricsLineage(i,m,b,r){
+    if(!merged){merged=true;await mem.setMerge(T,U,'00000000-0000-4000-8000-0000000000ff');}   // T becomes merged into U before the first replace lands
+    replaced.push(i);return mem.replaceMetricsLineage(i,m,b,r);
+   }};
+  const res=await materialize(db,A,'US',{today:'2025-01-01'});
+  expect(res).toMatchObject({retried:true,target:U});
+  expect(replaced).toEqual([T,U]);
  });
 });
