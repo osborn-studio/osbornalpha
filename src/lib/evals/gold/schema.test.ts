@@ -208,3 +208,27 @@ describe('review follow-ups: dates, retraction, grammar, history',()=>{
  });
  it('canonicalFromPrinted never throws',()=>{expect(()=>canonicalFromPrinted('9'.repeat(300),'1000000000',{kind:'ratio'})).not.toThrow();});
 });
+
+describe('review round 2: INSTANT metrics and CN bases',()=>{
+ const borrow=(market:'US'|'CN',basis:string,over:J={})=>{
+  const s=metricSet();const c=s.cases[0];
+  c.subject=market==='US'?{market:'US',cik:'320193'}:{market:'CN',ticker:'600519.SH'};
+  c.case_id=`${market}/borrowings_total/2023-09-30`;
+  c.target={...c.target,metric:'borrowings_total',period_start:'2023-09-30',period_end:'2023-09-30',duration:'INSTANT',basis,input_unit:market==='US'?'USD':'CNY',unit:{kind:'currency',currency:market==='US'?'USD':'CNY'},...over};
+  c.printed={text:'1,000',unit_label:'',scale:'1'};c.canonical={value:'1000'};
+  return s;
+ };
+ it('accepts US and CN borrowings_total (period_start === period_end)',()=>{
+  expect(errs(borrow('US','us_standard'))).toEqual([]);
+  expect(errs(borrow('CN','cn_incl_bonds'))).toEqual([]);
+ });
+ it('accepts every basis derive.ts emits for CN',()=>{
+  for(const b of ['cn_standard','cn_incl_intangibles','cn_incl_bonds'])expect(errs(borrow('CN',b)),b).toEqual([]);
+  expect(errs(borrow('US','cn_incl_bonds'))).toContain('cases[0].target.basis: not_emitted_by_derive');
+ });
+ it('INSTANT needs equal dates; duration metrics keep strict ordering',()=>{
+  expect(errs(borrow('US','us_standard',{period_start:'2023-06-30'}))).toContain('cases[0].target: instant_metric_requires_equal_period_dates');
+  const s=metricSet();s.cases[0].target.period_start='2023-09-30';s.cases[0].target.period_end='2023-09-30';
+  expect(errs(s)).toContain('cases[0].target: period_start_must_precede_period_end');
+ });
+});

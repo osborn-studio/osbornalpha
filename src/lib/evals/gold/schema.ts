@@ -24,8 +24,8 @@ const DATE_SHAPE=/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 const DATE={test:(s:string)=>DATE_SHAPE.test(s)&&new Date(`${s}T00:00:00Z`).toISOString().slice(0,10)===s};
 /** Metric durations the derive layer emits (derive.ts emit(): 3M single quarters, ratio rows keep the source duration, TTM). */
 const METRIC_DURATIONS:readonly string[]=['3M','6M','9M','12M','INSTANT','TTM'];
-/** Bases derive.ts emits (derive.ts:110-111): std = us_standard|cn_standard, plus CN capex_incl_intangibles → cn_incl_intangibles. */
-const METRIC_BASES:Record<'US'|'CN',readonly string[]>={US:['us_standard'],CN:['cn_standard','cn_incl_intangibles']};
+/** Bases derive.ts emits (derive.ts:110-111): std = us_standard|cn_standard, plus CN capex_incl_intangibles → cn_incl_intangibles; CN fcf cn_incl_intangibles (line 136); CN borrowings_total cn_incl_bonds (line 145). */
+const METRIC_BASES:Record<'US'|'CN',readonly string[]>={US:['us_standard'],CN:['cn_standard','cn_incl_intangibles','cn_incl_bonds']};
 const TIMESTAMP=/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2}))?$/;
 const HEX64=/^[0-9a-f]{64}$/;
 const SET_ID=/^[a-z0-9][a-z0-9_-]*(\/[a-z0-9][a-z0-9_.-]*)+$/;
@@ -315,7 +315,11 @@ function parseTarget(v:unknown,at:string,x:CaseCtx,market:'US'|'CN'|null):CaseTa
   if(isStr(v.basis)&&market&&!METRIC_BASES[market].includes(v.basis))err(`${at}.basis`,'not_emitted_by_derive');
   if(isStr(v.input_unit)&&specOfUnit(v.input_unit)===null)err(`${at}.input_unit`,'not_a_facts_unit');
   if(isStr(v.formula_version)&&v.formula_version!==FORMULA_VERSION)err(`${at}.formula_version`,'not_FORMULA_VERSION');
-  if(typeof v.period_start==='string'&&typeof v.period_end==='string'&&v.period_start>=v.period_end)err(at,'period_start_must_precede_period_end');
+  if(typeof v.period_start==='string'&&typeof v.period_end==='string'){
+   // derive.ts:138-145: INSTANT metrics (borrowings_total) have period_start === period_end.
+   if(v.duration==='INSTANT'){if(v.period_start!==v.period_end)err(at,'instant_metric_requires_equal_period_dates');}
+   else if(v.period_start>=v.period_end)err(at,'period_start_must_precede_period_end');
+  }
   if(typeof v.period_start!=='string'||!DATE.test(v.period_start))err(`${at}.period_start`,'date');
   if(!unit||!isStr(v.metric)||!isStr(v.duration)||!isStr(v.basis)||!isStr(v.input_unit)||!isStr(v.formula_version)||typeof v.period_start!=='string'||typeof v.period_end!=='string')return null;
   return {type:'metric',metric:v.metric,period_start:v.period_start,period_end:v.period_end,duration:v.duration,basis:v.basis,input_unit:v.input_unit,formula_version:v.formula_version,unit};
