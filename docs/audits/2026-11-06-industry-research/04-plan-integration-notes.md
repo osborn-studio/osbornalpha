@@ -123,3 +123,23 @@ the Task 18/19 INDUSTRY blocks in `/intel` and `/stock/[ticker]` were not applie
 - Verification on the rebuilt repo copy: tsc 0 errors; eslint clean on the industry dirs plus scripts; vitest
   71 files / 573 tests pass (+4); DB tests 51 pass (functions 37, industry 7, sync 7). `next build` was not re-run
   this round (no page or route code changed).
+
+## Round 3 fixes (`docs/audits/2026-11-06-industry-research/10-codex-plan-round3.md`)
+
+- **R3-1 (P1, empty corrected window).** `correct_industry_membership_windows` now handles a corrected
+  `valid_to <= valid_from` (delisted on or before the window start). It moves the stored ok row to `quarantined` in the
+  same transaction, adds `provenance.quarantine{reason:'membership_after_delist', valid_to, batch_id}`, inserts no
+  successor, and returns `quarantined`. The same behaviour is in all three impls; the shared contract adds
+  `CorrectWindowsResult` and `correctResult`. `reconcileDelistings` routes every empty window (open or closed) to
+  this call, then records `dq_quarantine(membership_after_delist)` and `afterDelist`. Tests: a contract case
+  (quarantined:3, no ok rows) and two two-run resolve tests (delist 1997-01-01 before, 1997-06-16 exactly on
+  `valid_from`). Each test checks that `membersAt` includes 600090.SH before and excludes it after, and that a third
+  run is idempotent.
+- **R3-2 (P2, lease expiry after a lock wait).** `apply_sic_memberships` locks the scope row `FOR UPDATE` without
+  conditions, then checks owner and `lease_until > clock_timestamp()` before any write. New two-connection test: A
+  holds the issuer lock, B calls inside a 1.5 s lease, the lease expires, A commits, and B gets `lease_lost` with no
+  membership or provenance written. Checked by mutation: the test fails if the check reverts to `now()`.
+- `types.ts` is now 180 lines (Task 3 awk expectation updated). B1b and B1c are amended; deviations 64–65 were added
+  and section 18 was regenerated (65 rows).
+- Verification on the rebuilt repo copy: tsc 0 errors; eslint clean; vitest 575 pass; DB tests 52 pass
+  (functions 38, industry 7, sync 7).

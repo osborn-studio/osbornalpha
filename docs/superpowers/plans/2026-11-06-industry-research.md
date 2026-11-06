@@ -175,6 +175,8 @@ export interface MembershipRow{
 /** One target row for apply_industry_memberships (membership_id is preallocated inside the function) */
 export interface MembershipTarget{code:string;level:number;valid_from:string;valid_to:string|null;available_date:string;valid_to_available_date:string|null;source:string;provenance:MembershipRow['provenance']}
 export interface ApplyMembershipsResult{inserted:number;closed:number;superseded:number;duplicates:number;membership_ids:string[]}
+/** correctMembershipWindows: quarantined = ok rows whose corrected window is empty (R3-1). */
+export interface CorrectWindowsResult extends ApplyMembershipsResult{quarantined:number}
 
 /** Point-in-time query (spec §4.6) */
 export interface MembersAtQuery{scheme:Scheme;version:SchemeVersion;code:string;level:number;on:string;knownBy:string}
@@ -247,8 +249,8 @@ export interface IndustryDb{
  recordResolutionError(ids:string[],error:{code:string;at:string;detail?:string}):Promise<number>;
  // memberships (rpc apply_industry_memberships / apply_sic_memberships)
  applyMemberships(batch:string,issuer:string,scheme:Scheme,version:SchemeVersion,rows:MembershipTarget[],sourceIds:string[],resolution:Record<string,unknown>):Promise<ApplyMembershipsResult>;
- /** Rewrites already-closed ok windows of ONE current, resolved record (superseded → corrected row; R2-2). */
- correctMembershipWindows(batch:string,issuer:string,scheme:Scheme,version:SchemeVersion,sourceId:string,rows:MembershipTarget[]):Promise<ApplyMembershipsResult>;
+ /** Rewrites ok windows of ONE current, resolved record (superseded → corrected row; R2-2); an empty corrected window quarantines the row (R3-1). */
+ correctMembershipWindows(batch:string,issuer:string,scheme:Scheme,version:SchemeVersion,sourceId:string,rows:MembershipTarget[]):Promise<CorrectWindowsResult>;
  /** Lease-fenced (R2-3): lease_lost unless industry_sync_scope(issuer,'sic') is leased to fence.leaseBatch and unexpired; code null = provenance only ('none'). */
  applySicMembership(batch:string,issuer:string,observed:string,code:string|null,provenance:Record<string,unknown>,fence:{leaseBatch:string;secSubmissions?:Record<string,unknown>|null}):Promise<'inserted'|'duplicate'|'changed'|'none'>;
  /** All rows of the code (any status) whose windows can intersect `on`; callers filter with memberships.ts */
@@ -309,7 +311,7 @@ export type {FactRow};
 - 数据集键：`schemeDatasetKey(scheme,version)='scheme:'+scheme+':'+version`。
 - 错误映射：SQL `raise exception '<code>'`（如 `membership_overlap`）→ `IndustryDbError(code)`；`23P01` → `membership_overlap`；`42501` → `IndustryDbError('unknown','permission_denied')`（测试按 SQLSTATE 断言）。
 - `IndustryDeps.tushare` 返回已用计划二 `decodeColumns` 无损解码前的原始列与行，适配器自己按字段 schema 解码；缺省 `tushareCallRaw` 包装（Task 5）。
-- 契约变更记录（集成）：`ManifestRole` 加 `duration:AggDuration`（同一指标在 12-31 有 12M 与 3M 两格，角色必须分格；清单 `roles` 全序 `(metric, duration, issuer_id)`）。`types.ts` 由 Task 3 Step 1 用 awk 从上面的代码块逐字抽取（178 行），改契约只改这里。
+- 契约变更记录（集成）：`ManifestRole` 加 `duration:AggDuration`（同一指标在 12-31 有 12M 与 3M 两格，角色必须分格；清单 `roles` 全序 `(metric, duration, issuer_id)`）。`types.ts` 由 Task 3 Step 1 用 awk 从上面的代码块逐字抽取（180 行），改契约只改这里。
 - 跨任务的语义与各任务导出的精确签名见下一节《跨任务接口约定》；规格偏差见《已知规格偏差》。
 
 
@@ -391,8 +393,8 @@ export function pgIndustryDb(pool:Pool):IndustryDb;
 
 - **B1 行业事实宇宙读来源记录的方式**：`industryCnUniverse(tables, today, skipped)`（Task 6）经 service-role `TableClient` 直接 `select` `industry_source_memberships`（迁移一给 `service_role` 该表 `select`），因为生产的 `desiredCn` 只持有 `tables` + `FactsDb`。生产（`supabaseTableClient`）与数据库测试（`pgTableClient`）读到的就是 `IndustryDb` 写入的同一张表；纯内存单测直接把来源行写进 `memoryTableClient`（Task 6 的做法）。`memoryIndustryDb` 的来源记录在其私有状态里，**不**经 `TableClient` 可见——不要把 `memoryIndustryDb` 与 `industryCnUniverse` 组合进同一个单测。
 - **B1a 成分窗口（规格第 7 稿 K3）**：`out_date` 是最后成员日（含），退市不关上游窗口。Task 8 写归属：`valid_to = valid_to_available_date = windowEnd(out_date, delist_date) = min(out_date + 1 日, delist_date)`（皆空 → null）；`delist_date` 来自每次运行一次的 `stock_basic(list_status='D')`；`in_date >= delist_date` → 不写，隔离 `membership_after_delist` + `resolution_error`。`stock_basic` 必须显式取 `L`、`D`、`P`（默认只返回 `L`；Task 5 `load-a-share` 三遍取，D 行只记 `skipped_summary(delisted)`）。分类：`parent_code` 属 `industry_code` 命名空间（原值在 `attributes.parent_industry_code`）；成员代码经 `SW2021_CODE_ALIASES` 映射（原值在 `locator.code_aliases`），树外代码隔离 `classification_code_unknown`。Task 14 直接播种归属时也用 `windowEnd`。
-- **B1b 退市后补关窗**（Codex 计划审计第 1 轮 #3）：`runResolveMemberships` 每次都取 `stock_basic(D)`，并对**已解析**的当前来源记录调用 `reconcileDelistings`：其 `ok` 行仍开着而 K3 窗口现已有终点 → 用同一条记录重新 `applyMemberships`（函数第 3 步把开着的行就地关到 `windowEnd`，保留发行人与 membership_id）；已关闭但终点不同（退市晚于窗口关闭才得知）→ `correctMembershipWindows`（Codex 计划审计第 2 轮 R2-2）：同一事务内旧 `ok` 行置 `superseded`、`superseded_by` 指向按 K3 截短的新行（同 `source_membership_id`，谱系保留），记 `delistCorrected`；数据库拒绝时才隔离 `membership_delist_conflict`。
-- **B1c SIC 调度租约**（Codex 计划审计第 1 轮 #6/#7）：`industry_sync_scope` 行以 `(updated_at, lease_batch_id)` 做 compare-and-swap 认领（`claimSicScopeRow`：并发读到同一行的两个 worker 只有一个成功），完成以 `lease_batch_id` 为栅栏（`finishSicScopeRow`：租约被别人接手的 worker 写不进结果，记 `lease_lost`）；**数据写入也在事务内验租约**（Codex 计划审计第 2 轮 R2-3）：`apply_sic_memberships(…, p_lease_batch, p_sec_submissions)` 锁发行人后 `FOR UPDATE` 锁住该调度行并要求 `lease_batch_id = p_lease_batch and lease_until > now()`，否则 `lease_lost`；`issuers.provenance.sec_submissions` 也只经这个函数写；`runMembershipsSic` 收到 `lease_lost` 不隔离、不写完成；`syncSicScope` 只 insert（23505 忽略，从不覆盖已有行与租约），离开 US 事实范围的行 compare-and-swap 置 `next_due_at = RETIRED_DUE`（租约中不动），回到范围时重新激活；`runMembershipsSic` 分页筛选（在范围内、租约空闲）直到凑满 `limit`。
+- **B1b 退市后补关窗**（Codex 计划审计第 1 轮 #3）：`runResolveMemberships` 每次都取 `stock_basic(D)`，并对**已解析**的当前来源记录调用 `reconcileDelistings`：其 `ok` 行仍开着而 K3 窗口现已有终点 → 用同一条记录重新 `applyMemberships`（函数第 3 步把开着的行就地关到 `windowEnd`，保留发行人与 membership_id）；已关闭但终点不同（退市晚于窗口关闭才得知）→ `correctMembershipWindows`（Codex 计划审计第 2 轮 R2-2）：同一事务内旧 `ok` 行置 `superseded`、`superseded_by` 指向按 K3 截短的新行（同 `source_membership_id`，谱系保留），记 `delistCorrected`；数据库拒绝时才隔离 `membership_delist_conflict`。K3 终点 `<=` 窗口起点（退市在窗口开始当日或之前，开着或已关闭都一样；Codex 计划审计第 3 轮 R3-1）→ 同一函数在同一事务内把这些 `ok` 行改为 `quarantined`（provenance 加 `quarantine{reason:'membership_after_delist'}`），聚合不再计入，另记 `dq_quarantine(membership_after_delist)`、`afterDelist`。
+- **B1c SIC 调度租约**（Codex 计划审计第 1 轮 #6/#7）：`industry_sync_scope` 行以 `(updated_at, lease_batch_id)` 做 compare-and-swap 认领（`claimSicScopeRow`：并发读到同一行的两个 worker 只有一个成功），完成以 `lease_batch_id` 为栅栏（`finishSicScopeRow`：租约被别人接手的 worker 写不进结果，记 `lease_lost`）；**数据写入也在事务内验租约**（Codex 计划审计第 2 轮 R2-3）：`apply_sic_memberships(…, p_lease_batch, p_sec_submissions)` 锁发行人后 `FOR UPDATE` 锁住该调度行并要求 `lease_batch_id = p_lease_batch and lease_until > now()`，否则 `lease_lost`（先锁行、再以 `clock_timestamp()` 而非事务起始的 `now()` 判过期，Codex 计划审计第 3 轮 R3-2：等锁等过租约终点的调用也被拒）；`issuers.provenance.sec_submissions` 也只经这个函数写；`runMembershipsSic` 收到 `lease_lost` 不隔离、不写完成；`syncSicScope` 只 insert（23505 忽略，从不覆盖已有行与租约），离开 US 事实范围的行 compare-and-swap 置 `next_due_at = RETIRED_DUE`（租约中不动），回到范围时重新激活；`runMembershipsSic` 分页筛选（在范围内、租约空闲）直到凑满 `limit`。
 - **B2 `membersAtPure`**（Task 8）只返回 `isMemberAt` 成立的行，每个发行人一行（`valid_from` 最大者），按 `issuer_id` 排序；Task 12 的再去重是防御性的。
 - **B3 作业组成**（Task 16 `jobs.ts` 照此调用；每步各自一个批次与新鲜度数据集）：
 
@@ -621,6 +623,10 @@ export async function runMarks(deps:MarksDeps,opts:MarksOptions):Promise<MarksRe
 61. 决定（R2-1）：清单对象键按登记代次区分 `sha256/<hash>/<upload_id>.json.gz`，索引行存 `object_path`，读写都走索引路径；GC 认领发 `gc_claim` 令牌，只删认领到的路径，`delete_industry_manifests(jsonb)` 只删令牌仍匹配的行（规格 §8 的 `sha256/<hash>.json.gz` 路径改为带代次）。
 62. 决定（R2-2）：已关闭窗口在后来得知更早的退市时，由新函数 `correct_industry_membership_windows` 在同一事务内把旧 `ok` 行置 `superseded` 并插入 K3 截短的新行（同来源记录、谱系保留）；只有数据库拒绝时才隔离 `membership_delist_conflict`（取代第 55 条的"不改写"）。
 63. 决定（R2-3）：`apply_sic_memberships` 加 `p_lease_batch`，事务内锁住调度行验证租约归属与未过期，否则 `lease_lost`；`sec_submissions` 出处并入同一事务（新参数 `p_sec_submissions`，`p_code` 为空时只写出处、返回 `none`）。新错误码 `lease_lost` 进共享契约。
+
+**Codex 计划审计第 3 轮（`10-codex-plan-round3.md`）带来的决定**
+64. 决定（R3-1）：已解析成分在得知退市日 `<=` 窗口起点时（无有效区间），`correct_industry_membership_windows` 在同一事务内把这些 `ok` 行改为 `quarantined`（不插后继），聚合排除；同时记 `dq_quarantine(membership_after_delist)`。
+65. 决定（R3-2）：`apply_sic_memberships` 先 `FOR UPDATE` 锁调度行，再以 `clock_timestamp()` 校验租约归属与未过期，然后才做任何写入。
 
 **本轮不实施（规格自己的门，非偏差，照录）**：I-3 估值计算/对账/发布（核对项 1、2 已完成，但 §6.3 公式无法通过申万对照，等 **owner 决策 H**）；§13.4 黄金断言（需 owner 抄录）；`history_class` 恒为 `reconstruction`（K3：2021-07-30 前为回溯映射，之后也只有生效日）。
 
@@ -2582,6 +2588,24 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
   expect(await one(`select provenance->'sec_submissions'->>'fiscal_year_end' v from public.issuers where issuer_id=$1`,[iss])).toBe('0926');
  });
 
+ it('apply_sic_memberships: a call that waits on the issuer lock past its lease end is rejected lease_lost (Codex round 3 R3-2)',async()=>{
+  const b=await batch();const iss=await issuer();const c1=`ZW${hex(2)}`;
+  await q(`insert into public.industry_classifications(scheme,version,code,level,name_en) values('sic','sec-current',$1,1,'Test SIC W')`,[c1]);
+  await q(`insert into public.industry_sync_scope(issuer_id,job,lease_until,lease_batch_id) values($1,'sic',clock_timestamp()+interval '1500 milliseconds',$2)`,[iss,b]);
+  const holder=await admin.connect();const caller=await admin.connect();
+  try{
+   await holder.query('begin');
+   await holder.query(`select 1 from public.issuers where issuer_id=$1 for update`,[iss]);   // connection A holds the issuer lock
+   // connection B starts its statement (now() fixed) while the lease is valid, then blocks on the issuer lock
+   const pending=fails(caller.query(`select public.apply_sic_memberships($1,$2,'sec-current','2026-05-05',$3,'{"raw_hash":"h"}'::jsonb,$1,'{"sic":"x"}'::jsonb)`,[b,iss,c1]));
+   await new Promise(r=>setTimeout(r,2500));   // the lease expires while B waits
+   await holder.query('commit');
+   expect((await pending).message).toBe('lease_lost');
+  }finally{await holder.query('rollback').catch(()=>{});holder.release();caller.release();}
+  expect((await q(`select count(*)::int n from public.issuer_industry_memberships where issuer_id=$1`,[iss]))[0].n).toBe(0);
+  expect(await one(`select provenance->'sec_submissions' v from public.issuers where issuer_id=$1`,[iss])).toBeNull();
+ },20000);
+
  it('manifest index: put touches existing rows, GC honours the grace window and references, delete re-checks the claim token',async()=>{
   const free=hex(32);
   expect(await one(`select public.put_industry_manifest($1,'valuation',5) v`,[free])).toBe(true);
@@ -3109,12 +3133,15 @@ grant execute on function public.apply_industry_memberships(uuid, uuid, text, te
 -- current and resolved to p_issuer (else membership_conflict); per target (one per level, provenance.source_membership_id
 -- = p_source, same code and valid_from as the stored ok row of that level from this record): same window → duplicate;
 -- otherwise the stored row becomes superseded (superseded_by = the new row) and a new ok row with the corrected
--- valid_to / valid_to_available_date is inserted — lineage kept (same source_membership_id, history kept). Returns the
--- ApplyMembershipsResult shape {inserted, closed:0, superseded, duplicates, membership_ids}.
+-- valid_to / valid_to_available_date is inserted — lineage kept (same source_membership_id, history kept). A corrected
+-- window that is empty (valid_to <= valid_from: delisted on or before the window start; Codex round 3 R3-1) leaves no
+-- valid interval: the stored row moves ok → quarantined in the same transaction (provenance gains
+-- quarantine{reason:'membership_after_delist', valid_to, batch_id}), so aggregation no longer counts it. Returns
+-- {inserted, closed:0, superseded, duplicates, quarantined, membership_ids}.
 create or replace function public.correct_industry_membership_windows(p_batch uuid, p_issuer uuid, p_scheme text, p_version text, p_source uuid, p_rows jsonb)
 returns jsonb language plpgsql security definer set search_path = pg_catalog, public as $$
 declare t jsonb; v_old public.issuer_industry_memberships; v_id uuid; v_to date; v_to_avail date;
-  v_ins int := 0; v_sup int := 0; v_dup int := 0; v_ids uuid[] := '{}'::uuid[];
+  v_ins int := 0; v_sup int := 0; v_dup int := 0; v_q int := 0; v_ids uuid[] := '{}'::uuid[];
 begin
   if p_rows is null or jsonb_typeof(p_rows) <> 'array' then raise exception 'invalid_rows' using errcode = '22023'; end if;
   perform 1 from public.issuers where issuer_id = p_issuer for update;
@@ -3135,6 +3162,12 @@ begin
       raise exception 'membership_conflict: no ok row of source % at level % from %', p_source, t ->> 'level', t ->> 'valid_from' using errcode = 'P0001';
     end if;
     v_to := (t ->> 'valid_to')::date; v_to_avail := (t ->> 'valid_to_available_date')::date;
+    if v_to is not null and v_to <= v_old.valid_from then
+      update public.issuer_industry_memberships set status = 'quarantined',
+        provenance = provenance || jsonb_build_object('quarantine', jsonb_build_object('reason', 'membership_after_delist', 'valid_to', v_to, 'batch_id', p_batch))
+      where membership_id = v_old.membership_id;
+      v_q := v_q + 1; v_ids := v_ids || v_old.membership_id; continue;
+    end if;
     if (v_old.valid_to, v_old.valid_to_available_date) is not distinct from (v_to, v_to_avail) then
       v_dup := v_dup + 1; v_ids := v_ids || v_old.membership_id; continue;
     end if;
@@ -3150,7 +3183,7 @@ begin
     end;
     v_sup := v_sup + 1; v_ins := v_ins + 1; v_ids := v_ids || v_id;
   end loop;
-  return jsonb_build_object('inserted', v_ins, 'closed', 0, 'superseded', v_sup, 'duplicates', v_dup, 'membership_ids', to_jsonb(v_ids));
+  return jsonb_build_object('inserted', v_ins, 'closed', 0, 'superseded', v_sup, 'duplicates', v_dup, 'quarantined', v_q, 'membership_ids', to_jsonb(v_ids));
 end $$;
 revoke execute on function public.correct_industry_membership_windows(uuid, uuid, text, text, uuid, jsonb) from public, anon, authenticated;
 grant execute on function public.correct_industry_membership_windows(uuid, uuid, text, text, uuid, jsonb) to service_role;
@@ -3167,15 +3200,20 @@ create or replace function public.apply_sic_memberships(p_batch uuid, p_issuer u
   p_lease_batch uuid, p_sec_submissions jsonb default null)
 returns jsonb language plpgsql security definer set search_path = pg_catalog, public as $$
 declare cur public.issuer_industry_memberships; v_level int; v_id uuid := gen_random_uuid(); v_outcome text := 'inserted';
+  v_lease_batch uuid; v_lease_until timestamptz;
 begin
   if p_observed is null then raise exception 'invalid_rows' using errcode = '22023'; end if;
   if p_provenance is not null and jsonb_typeof(p_provenance) <> 'object' then raise exception 'invalid_provenance' using errcode = '22023'; end if;
   if p_sec_submissions is not null and jsonb_typeof(p_sec_submissions) <> 'object' then raise exception 'invalid_provenance' using errcode = '22023'; end if;
   perform 1 from public.issuers where issuer_id = p_issuer for update;
   if not found then raise exception 'issuer_not_found' using errcode = 'P0002'; end if;
-  perform 1 from public.industry_sync_scope
-  where issuer_id = p_issuer and job = 'sic' and lease_batch_id = p_lease_batch and lease_until > now() for update;
-  if not found then raise exception 'lease_lost' using errcode = 'P0001'; end if;
+  -- lease fence (Codex round 3 R3-2): lock the scope row first, then validate owner and expiry against the wall clock
+  -- (clock_timestamp(), not the transaction-start now()), so a call that waited on a lock past the lease end is rejected
+  select lease_batch_id, lease_until into v_lease_batch, v_lease_until from public.industry_sync_scope
+  where issuer_id = p_issuer and job = 'sic' for update;
+  if not found or v_lease_batch is distinct from p_lease_batch or v_lease_until is null or v_lease_until <= clock_timestamp() then
+    raise exception 'lease_lost' using errcode = 'P0001';
+  end if;
   if p_sec_submissions is not null then
     update public.issuers set provenance = coalesce(provenance, '{}'::jsonb) || jsonb_build_object('sec_submissions', p_sec_submissions), updated_at = now()
     where issuer_id = p_issuer;
@@ -3804,7 +3842,7 @@ grant execute on function public.prune_industry_runs(int, text, text) to service
 - [ ] **Step 3: 运行函数与迁移一测试**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/industry/functions.integration.test.ts src/lib/industry/industry.integration.test.ts src/lib/entities/issuers.integration.test.ts`
-Expected: 全部通过（`functions.integration.test.ts` 17 个、`industry.integration.test.ts` 7 个、`issuers.integration.test.ts` 10 个）。Task 1 的测试按触发器允许的顺序写行，迁移二存在时照样通过。
+Expected: 全部通过（`functions.integration.test.ts` 18 个、`industry.integration.test.ts` 7 个、`issuers.integration.test.ts` 10 个）。Task 1 的测试按触发器允许的顺序写行，迁移二存在时照样通过。
 
 - [ ] **Step 4: 全量数据库门禁与迁移演练**
 
@@ -3857,7 +3895,7 @@ Run:
 ```bash
 awk '/^\/\/ src\/lib\/industry\/types.ts$/{f=1} f&&/^```$/{exit} f{print}' docs/superpowers/plans/2026-11-06-industry-research.md > src/lib/industry/types.ts && wc -l src/lib/industry/types.ts && head -1 src/lib/industry/types.ts && tail -1 src/lib/industry/types.ts
 ```
-Expected: `178 src/lib/industry/types.ts`，首行 `// src/lib/industry/types.ts`，末行 `export type {FactRow};`。不得手改该文件（契约变更须先改计划的共享契约节）。
+Expected: `180 src/lib/industry/types.ts`，首行 `// src/lib/industry/types.ts`，末行 `export type {FactRow};`。不得手改该文件（契约变更须先改计划的共享契约节）。
 
 - [ ] **Step 2: 写共享契约用例 `db-contract.ts` 与单测 `db.test.ts`（先失败）**
 
@@ -4071,6 +4109,12 @@ export function industryDbContract(label:string,setup:()=>Promise<IndustryContra
    expect((await db.membershipsOfIssuer(iss,{on:'2023-09-30'})).filter(m=>m.status==='ok')).toEqual([]);   // excluded between the corrected and the old end
    expect(await db.correctMembershipWindows(b,iss,'sw2021',v,rec.id,fix)).toMatchObject({inserted:0,superseded:0,duplicates:3});
    expect(await code(db.correctMembershipWindows(b,await h.issuer(),'sw2021',v,rec.id,fix))).toBe('membership_conflict');   // not this issuer's record
+   // an empty corrected window (delisted on the window start; R3-1) quarantines the ok rows, no successor
+   const gone=threeRows(rec.id,{valid_to:'2021-07-30',valid_to_available_date:'2021-07-30'});
+   expect(await db.correctMembershipWindows(b,iss,'sw2021',v,rec.id,gone)).toMatchObject({inserted:0,superseded:0,quarantined:3});
+   const q3=(await db.membershipsOfIssuer(iss,{scheme:'sw2021'})).filter(m=>m.status==='quarantined');
+   expect(q3.map(m=>[m.level,m.valid_to,(m.provenance as Record<string,unknown>).quarantine])).toEqual([1,2,3].map(l=>[l,'2023-06-30',{reason:'membership_after_delist',valid_to:'2021-07-30',batch_id:b}]));
+   expect((await db.membershipsOfIssuer(iss,{scheme:'sw2021'})).filter(m=>m.status==='ok')).toEqual([]);
    expect(await code(db.correctMembershipWindows(b,iss,'sw2021',v,rec.id,[target('A1',1,{valid_from:'2020-01-01',provenance:{availability:'effective_date_assumed',source_membership_id:rec.id}})]))).toBe('membership_conflict');
   });
 
@@ -4538,7 +4582,7 @@ import {chunk,chunkIds,isoTs} from '../facts/db';
 import type {PgErrorLike} from '../facts/db';
 import {IndustryDbError} from './types';
 import type {
- AggDuration,AggMetric,ApplyMembershipsResult,ClassificationRow,FreshnessRow,IndustryDb,IndustryDbErrorCode,ManifestGcClaim,ManifestUnresolved,MarkRow,
+ AggDuration,AggMetric,ApplyMembershipsResult,ClassificationRow,CorrectWindowsResult,FreshnessRow,IndustryDb,IndustryDbErrorCode,ManifestGcClaim,ManifestUnresolved,MarkRow,
  MembershipRow,MetricCellRow,MetricRunRow,NewMetricRun,ObservationResult,RunDependency,RunKind,SourceMembershipInput,
  SourceMembershipRow,StagedMetricCell,ValuationCellRow,ValuationRunRow,
 } from './types';
@@ -4661,6 +4705,7 @@ export function upsertSourceResult(x:unknown):{inserted:number;superseded:number
  return {inserted:Number(o.inserted??0),superseded:Number(o.superseded??0),duplicates:Number(o.duplicates??0),
   changed:(Array.isArray(o.changed)?o.changed:[]).map(c=>{const y=obj(c);return {old_id:str(y.old_id),new_id:str(y.new_id),nullToDate:y.null_to_date===true};})};
 }
+export function correctResult(x:unknown):CorrectWindowsResult{return {...applyResult(x),quarantined:Number(obj(x).quarantined??0)};}
 export function applyResult(x:unknown):ApplyMembershipsResult{
  const o=obj(x);
  return {inserted:Number(o.inserted??0),closed:Number(o.closed??0),superseded:Number(o.superseded??0),duplicates:Number(o.duplicates??0),membership_ids:(Array.isArray(o.membership_ids)?o.membership_ids:[]).map(String)};
@@ -4746,7 +4791,7 @@ export function supabaseIndustryDb(client:SupabaseClient):IndustryDb{
   async applyMemberships(batch,issuer,scheme,version,input,sourceIds,resolution){
    return applyResult(await call<unknown>('apply_industry_memberships',{p_batch:batch,p_issuer:issuer,p_scheme:scheme,p_version:version,p_rows:input,p_source_ids:sourceIds,p_resolution:resolution}));
   },
-  async correctMembershipWindows(batch,issuer,scheme,version,sourceId,rows){return applyResult(await call<unknown>('correct_industry_membership_windows',{p_batch:batch,p_issuer:issuer,p_scheme:scheme,p_version:version,p_source:sourceId,p_rows:rows}));},
+  async correctMembershipWindows(batch,issuer,scheme,version,sourceId,rows){return correctResult(await call<unknown>('correct_industry_membership_windows',{p_batch:batch,p_issuer:issuer,p_scheme:scheme,p_version:version,p_source:sourceId,p_rows:rows}));},
   async applySicMembership(batch,issuer,observed,code,provenance,fence){
    const x=await call<{outcome:'inserted'|'duplicate'|'changed'|'none'}>('apply_sic_memberships',{p_batch:batch,p_issuer:issuer,p_version:'sec-current',p_observed:observed,p_code:code,p_provenance:provenance,p_lease_batch:fence.leaseBatch,p_sec_submissions:fence.secSubmissions??null});
    return x.outcome;
@@ -4860,7 +4905,7 @@ import {MANIFEST_GC_GRACE_SECONDS,distinctTsCodes,levelColumn,sameClassification
 import {DEFAULT_LICENSES} from './licenses';
 import {IndustryDbError} from './types';
 import type {
- AggDuration,AggMetric,ApplyMembershipsResult,ClassificationRow,FreshnessRow,IndustryDb,LicenseStatus,ManifestGcClaim,ManifestUnresolved,MarkInput,MarkRow,MembershipRow,
+ AggDuration,AggMetric,ApplyMembershipsResult,ClassificationRow,CorrectWindowsResult,FreshnessRow,IndustryDb,LicenseStatus,ManifestGcClaim,ManifestUnresolved,MarkInput,MarkRow,MembershipRow,
  MetricCellRow,MetricRunRow,ObservationResult,OfficialInput,RunDependency,RunKind,SourceMembershipRow,StagedMetricCell,ValuationCellRow,ValuationRunRow,
 } from './types';
 
@@ -5098,11 +5143,15 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
   correctMembershipWindows:(batch,issuer,scheme,version,sourceId,input)=>atomic(s=>{
    const src=s.sources.get(sourceId);
    if(!src||src.status!=='current'||src.scheme!==scheme||src.issuer_id!==issuer)fail('membership_conflict',`membership_conflict: source record ${sourceId} is not current and resolved to issuer ${issuer}`);
-   let inserted=0,superseded=0,duplicates=0;const ids:string[]=[];
+   let inserted=0,superseded=0,duplicates=0,quarantined=0;const ids:string[]=[];
    for(const t of input){
     if((t.provenance as Record<string,unknown>).source_membership_id!==sourceId)fail('membership_conflict','membership_conflict: correction targets must carry the source record');
     const old=okRows(s).find(m=>m.issuer_id===issuer&&m.scheme===scheme&&m.version===version&&m.source_membership_id===sourceId&&m.level===t.level&&m.code===t.code&&m.valid_from===t.valid_from);
     if(!old)fail('membership_conflict',`membership_conflict: no ok row of source ${sourceId} at level ${t.level} from ${t.valid_from}`);
+    if(t.valid_to!==null&&t.valid_to<=old!.valid_from){   // empty corrected window (R3-1): quarantine, no successor
+     old!.status='quarantined';old!.provenance={...old!.provenance,quarantine:{reason:'membership_after_delist',valid_to:t.valid_to,batch_id:batch}};
+     quarantined++;ids.push(old!.membership_id);continue;
+    }
     if(old!.valid_to===t.valid_to&&old!.valid_to_available_date===t.valid_to_available_date){duplicates++;ids.push(old!.membership_id);continue;}
     const id=randomUUID();
     old!.status='superseded';old!.superseded_by=id;
@@ -5110,7 +5159,7 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
      valid_to_available_date:t.valid_to_available_date,source:t.source,source_membership_id:sourceId,batch_id:batch,status:'ok',superseded_by:null,provenance:clone(t.provenance)});
     superseded++;inserted++;ids.push(id);
    }
-   return {inserted,closed:0,superseded,duplicates,membership_ids:ids} as ApplyMembershipsResult;
+   return {inserted,closed:0,superseded,duplicates,quarantined,membership_ids:ids} as CorrectWindowsResult;
   }),
   // lease fence (Codex round 2 R2-3): the scope row (in `tables`) must still be leased to fence.leaseBatch and unexpired
   async applySicMembership(batch,issuer,observed,code,provenance,fence){
@@ -5451,7 +5500,7 @@ import {chunkIds} from '../facts/db';
 import type {PgErrorLike} from '../facts/db';
 import {ident,typeParsers} from '../db/pg-table-client';
 import {
- DEPS_CHUNK,STAGE_CHUNK,addObservations,applyResult,classificationFromTable,dependencyFromTable,distinctTsCodes,fingerprintFromJson,freshnessFromJson,gcClaimsFromJson,levelColumn,
+ DEPS_CHUNK,STAGE_CHUNK,addObservations,applyResult,classificationFromTable,correctResult,dependencyFromTable,distinctTsCodes,fingerprintFromJson,freshnessFromJson,gcClaimsFromJson,levelColumn,
  markFromTable,membershipFromTable,metricCellFromTable,metricRunFromTable,newRunArgs,observationResult,sameClassification,sourceArgs,sourceFromTable,
  stagedCellArgs,toIndustryDbError,unresolvedFromTable,upsertSourceResult,valuationCellFromTable,valuationRunFromTable,
 } from './db';
@@ -5518,7 +5567,7 @@ export function pgIndustryDb(pool:Pool):IndustryDb{
   async applyMemberships(batch,issuer,scheme,version,input,sourceIds,resolution){
    return applyResult(await fn<unknown>('public.apply_industry_memberships($1,$2,$3,$4,$5::jsonb,$6::uuid[],$7::jsonb)',[batch,issuer,scheme,version,JSON.stringify(input),sourceIds,JSON.stringify(resolution)]));
   },
-  async correctMembershipWindows(batch,issuer,scheme,version,sourceId,rows){return applyResult(await fn<unknown>('public.correct_industry_membership_windows($1,$2,$3,$4,$5,$6::jsonb)',[batch,issuer,scheme,version,sourceId,JSON.stringify(rows)]));},
+  async correctMembershipWindows(batch,issuer,scheme,version,sourceId,rows){return correctResult(await fn<unknown>('public.correct_industry_membership_windows($1,$2,$3,$4,$5,$6::jsonb)',[batch,issuer,scheme,version,sourceId,JSON.stringify(rows)]));},
   async applySicMembership(batch,issuer,observed,code,provenance,fence){
    return (await fn<{outcome:'inserted'|'duplicate'|'changed'|'none'}>(`public.apply_sic_memberships($1,$2,'sec-current',$3::date,$4,$5::jsonb,$6,$7::jsonb)`,[batch,issuer,observed,code,JSON.stringify(provenance),fence.leaseBatch,fence.secSubmissions==null?null:JSON.stringify(fence.secSubmissions)])).outcome;
   },
@@ -5601,7 +5650,7 @@ export function pgIndustryDb(pool:Pool):IndustryDb{
 - [ ] **Step 3: 运行**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/industry/functions.integration.test.ts src/lib/industry/industry.integration.test.ts`
-Expected: 全部通过：`functions.integration.test.ts` 37 个（Task 2 的 17 + `pgIndustryDb contract` 18 + `pg specifics` 2）、`industry.integration.test.ts` 7 个。
+Expected: 全部通过：`functions.integration.test.ts` 38 个（Task 2 的 18 + `pgIndustryDb contract` 18 + `pg specifics` 2）、`industry.integration.test.ts` 7 个。
 Run: `npm test -- src/lib/industry`
 Expected: `db.test.ts` 29、`cadence.test.ts` 2 通过；两个集成文件在无 `S4_TEST_STATE` 时 skipped。
 
@@ -7451,7 +7500,7 @@ import {describe,it,expect} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import {memoryFactsDb} from '../facts/memory-facts-db';
 import {runClassificationsSw} from './classifications';
-import {countUnresolved} from './memberships';
+import {countUnresolved,membersAt} from './memberships';
 import {memoryIndustryDb} from './memory-industry-db';
 import {fixtureTushareCall} from './providers/tushare-industry';
 import type {TushareCall} from './providers/tushare-industry';
@@ -7600,6 +7649,32 @@ describe('runResolveMemberships (real recordings)',()=>{
   expect(tables.rows('dq_quarantine').filter(q=>q.reason_code==='membership_delist_conflict')).toEqual([]);
   // run 3 — idempotent
   expect((await runResolveMemberships({...deps,tushare:earlyDelist},{})).records).toMatchObject({delistCorrected:0,delistConflicts:0});
+ });
+ for(const [label,delistDate] of [['before','19970101'],['exactly on','19970616']] as const)
+ it(`a delisting learned later ${label} an applied window's valid_from quarantines its ok rows; aggregation excludes them (Codex round 3 R3-1)`,async()=>{
+  // run 1 — synthetic edit of a real response: 600090.SH not yet delisted → resolved, window [1997-06-16, 2017-06-29)
+  const listed:TushareCall=async(api,params,fields)=>{
+   const r=await fixtureTushareCall()(api,params,fields);if(api!=='stock_basic')return r;
+   const ts=r.fields.indexOf('ts_code');return {...r,items:r.items.filter(it=>it[ts]!=='600090.SH')};
+  };
+  const {tables,db,deps}=await setup(listed);
+  await runResolveMemberships(deps,{});
+  const q={scheme:'sw2021' as const,version:'2021' as const,code:'801120.SI',level:1,on:'2010-06-30',knownBy:'2026-11-06'};
+  expect((await membersAt(db,q)).some(m=>m.issuer_id===ISSUER['600090.SH'])).toBe(true);
+  // run 2 — synthetic edit of a real response: the delisting dated on/before in_date 1997-06-16
+  const edited:TushareCall=async(api,params,fields)=>{
+   const r=await fixtureTushareCall()(api,params,fields);if(api!=='stock_basic')return r;
+   const ts=r.fields.indexOf('ts_code'),dl=r.fields.indexOf('delist_date');
+   return {...r,items:r.items.map(it=>it[ts]==='600090.SH'?it.map((v,i)=>i===dl?delistDate:v):it)};
+  };
+  const r=await runResolveMemberships({...deps,tushare:edited},{});
+  expect(r.records).toMatchObject({afterDelist:1,delistCorrected:0,delistConflicts:0,failed:0});
+  const all=await db.membershipsOfIssuer(ISSUER['600090.SH'],{scheme:'sw2021'});
+  expect(all.map(m=>m.status)).toEqual(['quarantined','quarantined','quarantined']);
+  expect((await membersAt(db,q)).some(m=>m.issuer_id===ISSUER['600090.SH'])).toBe(false);   // excluded from aggregation
+  expect(tables.rows('dq_quarantine').filter(x=>x.reason_code==='membership_after_delist').map(x=>x.natural_key)).toEqual(['sw2021:2021:600090.SH:1997-06-16']);
+  // run 3 — nothing left to act on
+  expect((await runResolveMemberships({...deps,tushare:edited},{})).records).toMatchObject({afterDelist:0,delistCorrected:0,delistConflicts:0});
  });
  it('in_date on or after the delisting date: not applied, quarantined membership_after_delist, resolution_error recorded',async()=>{
   // synthetic edit of a real response: 600090.SH's delist_date moved before its in_date (upstream has 6 such rows, K3)
@@ -7759,7 +7834,9 @@ export async function applyResolutions(deps:Pick<IndustryDeps,'tables'|'db'|'now
  * keeping the stored issuer and membership ids. A stored, already-closed window that differs from the K3 end
  * (the delisting was learned after the window closed) is superseded through IndustryDb.correctMembershipWindows —
  * the old rows become superseded (superseded_by → the corrected rows), so no incorrect ok row stays eligible
- * (Codex plan audit round 2 R2-2); a correction the DB rejects is quarantined membership_delist_conflict.
+ * (Codex plan audit round 2 R2-2); a correction the DB rejects is quarantined membership_delist_conflict. A K3 end on or
+ * before the window start (no valid interval, open or closed) makes the same call quarantine the ok rows atomically
+ * (status quarantined, so aggregation excludes them) and records dq_quarantine membership_after_delist (round 3 R3-1).
  */
 export async function reconcileDelistings(deps:Pick<IndustryDeps,'tables'|'db'|'now'>,batchId:string,delist:ReadonlyMap<string,string>,result:ApplyResolutionsResult):Promise<void>{
  if(delist.size===0)return;
@@ -7772,12 +7849,18 @@ export async function reconcileDelistings(deps:Pick<IndustryDeps,'tables'|'db'|'
    const end=windowEnd(s.out_date,delist.get(s.ts_code)!);
    const mine=rows.filter(m=>m.source_membership_id===s.id);
    if(end===null||mine.length===0||mine.every(m=>m.valid_to===end&&m.valid_to_available_date===end))continue;
-   if(mine.some(m=>m.valid_to!==null&&m.valid_to!==end)){
+   const empty=end<=s.in_date;   // delisted on or before the window start: no valid interval remains (Codex round 3 R3-1)
+   if(empty||mine.some(m=>m.valid_to!==null&&m.valid_to!==end)){
     // an already-closed window that ends after the K3 end (delisting learned late; Codex round 2 R2-2): the stored rows
     // are superseded by a corrected, K3-bounded version of the same record in one transaction (lineage kept)
     try{
      const res=await deps.db.correctMembershipWindows(batchId,issuer,'sw2021','2021',s.id,targetsFor(s,delist.get(s.ts_code)!));
      if(res.superseded>0){result.counts.versioned++;result.records.delistCorrected++;}
+     if(res.quarantined>0){   // the ok rows were quarantined in that transaction: aggregation no longer counts them
+      await quarantine(deps.tables,{dataset:SW_MEMBERSHIPS_DATASET,table:'issuer_industry_memberships',naturalKey:`sw2021:2021:${s.ts_code}:${s.in_date}`,reasonCode:'membership_after_delist',
+       detail:{in_date:s.in_date,delist_date:delist.get(s.ts_code)!,membership_ids:res.membership_ids},payload:{source_id:s.id,issuer_id:issuer},batchId});
+      result.counts.quarantined++;result.records.afterDelist++;
+     }
      continue;
     }catch(e){
      if(!(e instanceof IndustryDbError))throw e;
@@ -7837,7 +7920,7 @@ export async function runResolveMemberships(deps:IndustryDeps,opts:RunResolveOpt
 - [ ] **Step 8: Run it and confirm it passes**
 
 Run: `npm test -- src/lib/industry/memberships.test.ts src/lib/industry/resolve-memberships.test.ts`
-Expected: `Tests  20 passed (20)`.
+Expected: `Tests  22 passed (22)`.
 
 If only the correction-path test fails, check the plan skeleton's 跨任务接口约定 (A4 membership application: same-level supersession of the older record's `ok` rows; A10 `membershipsOfIssuer` without `on` returns every status) against the Task 3 `memoryIndustryDb`. If only the `unresolvedCount` assertion fails, check A9 (`unresolvedOf/Count` = `memberships.ts::unresolvedAt/countUnresolved`). Fix the memory implementation to the spec, not the test.
 
@@ -8485,7 +8568,7 @@ Run: `npm test -- src/lib/industry/sic.test.ts src/lib/industry/providers/sec-si
 Expected: `Tests  18 passed (18)`.
 
 Run: `npm test -- src/lib/industry src/lib/facts/scope.test.ts`
-Expected: every Task 5–9 file passes: 86 Task 5–9 tests plus 13 landed `scope.test.ts`, plus the Task 3 tests under `src/lib/industry`.
+Expected: every Task 5–9 file passes: 88 Task 5–9 tests plus 13 landed `scope.test.ts`, plus the Task 3 tests under `src/lib/industry`.
 
 - [ ] **Step 10: Typecheck and lint**
 
@@ -18023,7 +18106,7 @@ env -u NEXT_PUBLIC_SUPABASE_URL -u NEXT_PUBLIC_SUPABASE_ANON_KEY -u SUPABASE_SER
 
 - [ ] **Step 6: 规格 §18 记录**
 
-在 `docs/superpowers/specs/2026-11-04-industry-research-design.md` 的 `## 18. 实施记录与偏差` 一节、现有"第 6 稿（2026-11-06）相对第 5 稿的变化…"段落之后、`---` 之前，追加下面整段（这是本计划**全部** 63 条偏差/决定，与计划骨架《已知规格偏差（实施记录 §18 的来源）》节逐条、同编号一致；Task 1–19 不写 §18，全部在这里一次写入。若实施过程中某条被修订或新增偏差，先改骨架那一节，再同步这里）：
+在 `docs/superpowers/specs/2026-11-04-industry-research-design.md` 的 `## 18. 实施记录与偏差` 一节、现有"第 6 稿（2026-11-06）相对第 5 稿的变化…"段落之后、`---` 之前，追加下面整段（这是本计划**全部** 65 条偏差/决定，与计划骨架《已知规格偏差（实施记录 §18 的来源）》节逐条、同编号一致；Task 1–19 不写 §18，全部在这里一次写入。若实施过程中某条被修订或新增偏差，先改骨架那一节，再同步这里）：
 
 ```markdown
 
@@ -18096,6 +18179,8 @@ env -u NEXT_PUBLIC_SUPABASE_URL -u NEXT_PUBLIC_SUPABASE_ANON_KEY -u SUPABASE_SER
 | 61 | Codex 计划审计第 2 轮（`08-codex-plan-round2.md`）带来的决定 | 决定（R2-1） | 清单对象键按登记代次区分 `sha256/<hash>/<upload_id>.json.gz`，索引行存 `object_path`，读写都走索引路径；GC 认领发 `gc_claim` 令牌，只删认领到的路径，`delete_industry_manifests(jsonb)` 只删令牌仍匹配的行（规格 §8 的 `sha256/<hash>.json.gz` 路径改为带代次）。 |
 | 62 | Codex 计划审计第 2 轮（`08-codex-plan-round2.md`）带来的决定 | 决定（R2-2） | 已关闭窗口在后来得知更早的退市时，由新函数 `correct_industry_membership_windows` 在同一事务内把旧 `ok` 行置 `superseded` 并插入 K3 截短的新行（同来源记录、谱系保留）；只有数据库拒绝时才隔离 `membership_delist_conflict`（取代第 55 条的"不改写"）。 |
 | 63 | Codex 计划审计第 2 轮（`08-codex-plan-round2.md`）带来的决定 | 决定（R2-3） | `apply_sic_memberships` 加 `p_lease_batch`，事务内锁住调度行验证租约归属与未过期，否则 `lease_lost`；`sec_submissions` 出处并入同一事务（新参数 `p_sec_submissions`，`p_code` 为空时只写出处、返回 `none`）。新错误码 `lease_lost` 进共享契约。 |
+| 64 | Codex 计划审计第 3 轮（`10-codex-plan-round3.md`）带来的决定 | 决定（R3-1） | 已解析成分在得知退市日 `<=` 窗口起点时（无有效区间），`correct_industry_membership_windows` 在同一事务内把这些 `ok` 行改为 `quarantined`（不插后继），聚合排除；同时记 `dq_quarantine(membership_after_delist)`。 |
+| 65 | Codex 计划审计第 3 轮（`10-codex-plan-round3.md`）带来的决定 | 决定（R3-2） | `apply_sic_memberships` 先 `FOR UPDATE` 锁调度行，再以 `clock_timestamp()` 校验租约归属与未过期，然后才做任何写入。 |
 
 本轮不实施（规格自己的门）：I-3 估值计算/对账/发布（核对项 1、2 已完成，但 §6.3 公式无法通过申万对照，等 **owner 决策 H**）；§13.4 黄金断言（需 owner 抄录）；`history_class` 恒为 `reconstruction`（K3：2021-07-30 前为回溯映射，之后也只有生效日）。
 ```
