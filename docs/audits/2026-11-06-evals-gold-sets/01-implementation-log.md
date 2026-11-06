@@ -5,3 +5,9 @@
 
 | 序 | 任务 | 提交 | 规格复审 | 质量复审 | Codex review / 挑战 | 修复轮次 | 备注 |
 |---|---|---|---|---|---|---|---|
+
+## Task 10 — projections, ledger, replay kind
+
+- Files: src/lib/evals/projections/facts.ts, src/lib/evals/replay/{fixture,ledger}.ts, src/lib/evals/kinds/replay.ts, src/lib/evals/test-support/memory-facts.ts (+ tests).
+- Decisions: projections read history=true; diff notation facts[<concept>/<start>..<end>/<duration>/<unit>/<available_date>/<source_ref>].<field>, null = empty segment, one-sided row = bare path; unprivileged ledger hit = explained_diff; ledger structural errors = gold_invalid.
+- Not wired here: Task 7 factsReader.project → projectRequest (CCR 2).
