@@ -76,6 +76,7 @@ export function summarize(cases:CaseReport[],ctx:SummaryContext):Summary{
  *  was evaluated (coverage.evaluated = the sum of the correctness counters = 0; Codex plan round 1 P1-1): a run whose
  *  population is entirely skipped(unavailable|zero_support|ineligible|…) is never a pass. */
 export function gateOf(s:Omit<Summary,'gate'>):Gate{
+ if(!Number.isSafeInteger(s.thresholds.max_fail)||s.thresholds.max_fail<0)throw new RangeError('max_fail');
  const min=parseDecimalParts(s.thresholds.min_coverage_optional);
  if(min.unscaled<0n||min.unscaled>10n**BigInt(min.scale))throw new RangeError('invalid_threshold:min_coverage_optional');
  if(s.population===0||s.coverage.evaluated===0||s.execution.read_error>0||s.execution.subset||s.coverage.missing_required>0||s.coverage.not_visible>0

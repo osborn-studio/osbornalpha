@@ -132,6 +132,11 @@ describe('gate (§3.2 rules)',()=>{
   expect(gateOf({...rest,thresholds:{max_fail:0,min_coverage_optional:'1'}})).toBe('pass');
   expect(gateOf({...rest,thresholds:{max_fail:0,min_coverage_optional:'0'}})).toBe('pass');
  });
+ it('max_fail must be a non-negative safe integer',()=>{
+  const {gate:_g,...rest}=summarize([rep(PASS)],ctx());
+  for(const bad of [Number.NaN,Infinity,-1,1.5])expect(()=>gateOf({...rest,thresholds:{max_fail:bad,min_coverage_optional:'0.95'}}),String(bad)).toThrow(new RangeError('max_fail'));
+  expect(gateOf({...rest,thresholds:{max_fail:0,min_coverage_optional:'0.95'}})).toBe('pass');
+ });
  it('gateOf decides from a summary alone',()=>{
   const s=summarize([rep(PASS)],ctx());
   const {gate:_gate,...rest}=s;
