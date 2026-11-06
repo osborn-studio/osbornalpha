@@ -147,6 +147,8 @@ export function planAhLinks(input:AhLinkInput):AhLinkPlan{
   const g=groups.get(k)??{issuer,ticker:h.ticker,hits:[]};
   g.hits.push({h,c});groups.set(k,g);
  }
+ const contested=new Map<string,{ticker:string;valid_from:string;owner:string|undefined;contenders:{issuer_id:string;isin:string;isins:string[];classified:Kind[];evidence:Record<string,unknown>}[]}>();
+ const isins0=(gh:{h:AhFigiHit}[])=>[...new Set(gh.map(x=>x.h.isin))].sort();
  const issuersByTicker=new Map<string,string[]>();
  for(const g of groups.values())issuersByTicker.set(g.ticker,[...(issuersByTicker.get(g.ticker)??[]),g.issuer.issuer_id]);
  for(const k of [...groups.keys()].sort()){
@@ -162,10 +164,11 @@ export function planAhLinks(input:AhLinkInput):AhLinkPlan{
    ...(hk0?{hkex_sha256:hk0.sha256,hkex_path:hk0.path}:{})};
   const kinds=[...new Set(gh.map(x=>x.c.kind))].sort();
   if(owner!==undefined||rivals.length){
-   plan.conflicts.push({naturalKey:`${ticker}:${l.valid_from}`,detail:owner!==undefined
-    ?{reason:'ticker_owned_by_other_issuer',rule:'same_lei',owner_issuer_id:owner,classified:kinds,evidence:rawEvidence}
-    :{reason:'ticker_claimed_by_several_issuers',rule:'same_lei',competing_issuer_ids:rivals,classified:kinds,evidence:rawEvidence},
-    payload:{issuer_id:i.issuer_id,ticker,isin:first.isin,valid_from:l.valid_from}});
+   // ONE quarantine entry per contested key: quarantine() reuses an open row without merging, so every contender is aggregated here
+   const key=`${ticker}:${l.valid_from}`;
+   const e=contested.get(key)??{ticker,valid_from:l.valid_from,owner,contenders:[]};
+   e.contenders.push({issuer_id:i.issuer_id,isin:first.isin,isins:isins0(gh),classified:kinds,evidence:rawEvidence});
+   contested.set(key,e);
    continue;
   }
   const isins=[...new Set(gh.map(x=>x.h.isin))].sort();
@@ -205,6 +208,17 @@ export function planAhLinks(input:AhLinkInput):AhLinkPlan{
    evidence,sources,...(Object.keys(l.prov).length?{provenance_written:sanitizeProvenance(l.prov)}:{}),
   }});
   // an unconfirmed provider hint does not suppress rule 2
+ }
+ for(const key of [...contested.keys()].sort()){
+  const e=contested.get(key)!;
+  e.contenders.sort((a,b)=>cmp(a.issuer_id,b.issuer_id));
+  const ids=e.contenders.map(c=>c.issuer_id);
+  const one=e.contenders.length===1?e.contenders[0]:null;
+  plan.conflicts.push({naturalKey:key,
+   detail:e.owner!==undefined
+    ?{reason:'ticker_owned_by_other_issuer',rule:'same_lei',owner_issuer_id:e.owner,...(one?{classified:one.classified,evidence:one.evidence}:{contenders:e.contenders})}
+    :{reason:'ticker_claimed_by_several_issuers',rule:'same_lei',competing_issuer_ids:ids,contenders:e.contenders},
+   payload:one?{issuer_id:one.issuer_id,ticker:e.ticker,isin:one.isin,valid_from:e.valid_from}:{ticker:e.ticker,valid_from:e.valid_from,issuer_ids:ids,isins:[...new Set(e.contenders.flatMap(c=>c.isins))].sort()}});
  }
  if(input.hkex){
   const hk=input.hkex;

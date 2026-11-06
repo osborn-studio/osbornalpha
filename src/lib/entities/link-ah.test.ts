@@ -129,11 +129,17 @@ describe('planAhLinks · review round 2',()=>{
  it('two issuers that would auto-attach the same ticker are both quarantined (no first-wins)',async()=>{
   const p=planAhLinks(input({issuers:[iss({}),iss({issuer_id:B,lei:'529900T8BM49AURSDO66'})],figiHits:[hit(),hit({issuer_id:B,lei:'529900T8BM49AURSDO66'})]}));
   expect(p.attaches).toEqual([]);
-  expect(p.conflicts.map(c=>[c.naturalKey,c.detail.reason,c.payload.issuer_id])).toEqual([['02338.HK:2004-03-11','ticker_claimed_by_several_issuers',A],['02338.HK:2004-03-11','ticker_claimed_by_several_issuers',B]]);
-  expect(p.conflicts[0].detail.competing_issuer_ids).toEqual([B]);
+  expect(p.conflicts).toHaveLength(1);
+  expect(p.conflicts[0]).toMatchObject({naturalKey:'02338.HK:2004-03-11',detail:{reason:'ticker_claimed_by_several_issuers',competing_issuer_ids:[A,B]},payload:{ticker:'02338.HK',issuer_ids:[A,B]}});
   const c=memoryTableClient({issuer_identifier_claims:['id'],dq_quarantine:['id']});
   const r=await applyAhLinks(c,p,{batchId:BATCH,dataset:DATASET});
-  expect(r.counts).toMatchObject({inserted:0,quarantined:2});
+  expect(r.counts).toMatchObject({inserted:0,quarantined:1});
+  const q=c.rows('dq_quarantine');
+  expect(q).toHaveLength(1);
+  const d=q[0].detail as {contenders:{issuer_id:string;isin:string;evidence:{gleif_sha256:string;openfigi_response_sha256:string}}[]};
+  expect(d.contenders.map(x=>x.issuer_id)).toEqual([A,B]);
+  expect(d.contenders.every(x=>x.isin==='CNE1000004L9'&&x.evidence.gleif_sha256==='a'.repeat(64)&&x.evidence.openfigi_response_sha256==='c'.repeat(64))).toBe(true);
+  expect(q[0].payload).toMatchObject({issuer_ids:[A,B]});
  });
 });
 
