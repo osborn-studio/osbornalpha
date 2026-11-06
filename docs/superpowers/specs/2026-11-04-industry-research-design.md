@@ -407,7 +407,7 @@ export interface IndustryDb {
 
 期望网格 `expected_grid`：L1 代码（分类表）× 期间（历史起点至 `facts_as_of` 的每个 3/6/9/12 月末；`gross_margin` 只 12-31）× 指标。每格一行：可算 → `ok`；不可算 → `missing` + `missing_reason ∈ {empty_set, zero_denominator, no_members, financial_excluded, unresolved_over_limit}`。显示阈值 `DISPLAY_MIN_COVERAGE=0.8`（`n_with_data/(n_members+n_unresolved)`）与 `DISPLAY_MAX_UNRESOLVED=0.05`；不满足的 `ok` 格页面显示"覆盖不足 x/y"/"未解析 z"，值在接口里仍返回。
 
-`n_unresolved(code, on, knownBy)` = `industry_source_memberships` 中 `status='current'`、`issuer_id is null`（含 `resolution_error` 非空者）、`l1_code=code`（或 L2/L3）、`in_date <= on`、`(out_date is null or out_date >= on)`（K3：`out_date` 含当日）、`in_date <= knownBy` 的**去重 ts_code** 数。
+`n_unresolved(code, on, knownBy)` = `industry_source_memberships` 中 `status='current'`、`issuer_id is null`（含 `resolution_error` 非空者）、`l1_code=code`（或 L2/L3）、`in_date <= on`、`(out_date is null or out_date >= on)`（K3：`out_date` 含当日）、`in_date <= knownBy` 的**去重 ts_code** 数。另排除 `industry_security_delistings` 中 `delist_date <= on` 的 ts_code（K4：退市股不建发行人，其来源记录永不解析；不排除会让它们在退市后永久计入 `n_unresolved`，与已解析成员按 `delist_date` 截断的口径不一致）。`industry_security_delistings(ts_code pk, delist_date, list_status, observed_at, batch_id, raw_hash)` 由 `load-a-share` 的 `stock_basic list_status='D'` 遍写入，日期变化隔离 `delist_date_changed`；仅 service_role 可读写。
 
 ### 5.3 输入清单（manifest）与离线重算
 
@@ -721,6 +721,8 @@ type IndustryTableRows = InputRef<'table_rows',
 ## 18. 实施记录与偏差
 
 （计划落地后补记，格式同规格一 §14。）
+
+第 7 稿补充 K4（2026-11-06，实施复审发现）：`n_unresolved` 排除已退市 ts_code（新表 `industry_security_delistings`）。
 
 第 7 稿（2026-11-06）：核对项 1–3 与 §17.1 实测（`03-tushare-verification.md`，真实录制夹具 36 份）——K3 窗口 `valid_to=min(out_date+1, delist_date)`、`membership_after_delist`、`stock_basic` 显式 L/D/P、别名表、`parent_code` 命名空间、`n_unresolved` 的 `out_date >= on`；K2 `total_share_basis`；K1 `comparator_basis=ttm`（申万算法）使 §6.3 公式无法通过对照 → 新 owner 决策 H，I-3 仍不进计划，`security_marks.free_share` 先行加列。§17.1 已答：退市公司 `stock_basic`（需 `list_status='D'`）与 `income` 都可取。
 
