@@ -2,7 +2,8 @@
 // FactsDb (spec §4.8): the only data access the facts layer uses. Writes are SQL functions
 // (rpc) because no role may touch the fact tables directly (§4.7); reads that need no snapshot
 // use .from() under RLS (factsByIds, openConflicts, filingsOfIssuer, scopeDue, metricsOfIssuer,
-// targetOf, lineageOf, findFilingBySourceRef, filingsForCalendar,
+// targetOf, lineageOf, findFilingBySourceRef, filingsForCalendar (reads fact_sync_runs, which anon cannot see:
+// it needs a service-role client),
 // and the one column-level write updateFilingLink). The functions raise with the code as the
 // message (lease_lost 55P03; run_pending, run_published, mapping_gen_regression,
 // stale_computation P0001); toFactsDbError maps that, 23505 → duplicate_key, the rest → unknown.
@@ -102,11 +103,17 @@ export function fenceFromJson(x:unknown):Fence|null{
  return {pair:String(f.pair) as CyclePairId,cycle_id:String(f.cycle_id),issuer_id:String(f.issuer_id),market:f.market as Market,batch_id:String(f.batch_id),attempt:Number(f.attempt)};
 }
 export function applyOutcomeFromJson(x:unknown):ApplyReconcileOutcome{
- const o=(x??{}) as Record<string,unknown>;const m=o.materialize as {issuer_id?:unknown;market?:unknown}|null|undefined;
+ if(!x||typeof x!=='object'||Array.isArray(x)||typeof (x as Record<string,unknown>).reconciliation_id!=='string')throw new FactsDbError('unknown','malformed apply_reconcile_result envelope');
+ const o=x as Record<string,unknown>;const m=o.materialize as {issuer_id?:unknown;market?:unknown}|null|undefined;
  return {reused:o.reused===true,reconciliationId:String(o.reconciliation_id),itemId:o.item_id===null||o.item_id===undefined?null:String(o.item_id),quarantined:Number(o.quarantined)===1?1:0,
   materialize:m&&typeof m==='object'?{issuerId:String(m.issuer_id),market:m.market as Market}:null};
 }
-export const countsFromJson=(x:unknown):MemberCounts=>{const o=(x??{}) as Record<string,unknown>;return {compared_passed:Number(o.compared_passed),compared_failed:Number(o.compared_failed),not_compared:Number(o.not_compared)};};
+export const countsFromJson=(x:unknown):MemberCounts=>{
+ const o=(x&&typeof x==='object'&&!Array.isArray(x)?x:{}) as Record<string,unknown>;
+ const n=[o.compared_passed,o.compared_failed,o.not_compared].map(Number);
+ if(n.some(v=>!Number.isInteger(v)||v<0)||o.compared_passed===null||o.compared_failed===null||o.not_compared===null)throw new FactsDbError('unknown','malformed complete_reconcile_member envelope');
+ return {compared_passed:n[0],compared_failed:n[1],not_compared:n[2]};
+};
 /** open_reconcile_cycle envelope → OpenCycleResult (plan audit Q2); the cycle row is passed through as stored (to_jsonb). */
 export function openCycleFromJson(x:unknown):OpenCycleResult{
  const o=(x??{}) as {created?:unknown;cycle?:unknown;transferred?:unknown};
@@ -245,11 +252,21 @@ export function supabaseFactsDb(client:SupabaseClient):FactsDb{
   async replaceMetricsLineage(issuer,market,basedOn,input){return Number(await call<unknown>('replace_financial_metrics_lineage',{p_issuer:issuer,p_market:market,p_based_on:basedOn,p_rows:input.map(metricArgs)}));},
   async findFilingBySourceRef(source,sourceRef){const r=await rows<Record<string,unknown>>(c.from('filings').select('*').eq('source',source).eq('source_ref',sourceRef).limit(1));return r[0]?filingFromTable(r[0]):null;},
   async filingsForCalendar(issuer,market,opts){
-   const list=await pageAll<Record<string,unknown>>(()=>c.from('filings').select('*').eq('issuer_id',issuer).eq('market',market).gte('period_end',opts.fromPeriodEnd).order('period_end').order('available_date').order('filing_id'));
+   // keyset paging on filing_id (stable under concurrent inserts, unlike offsets), deduped, then ordered like pg
+   const byId=new Map<string,Record<string,unknown>>();
+   for(let after:string|null=null;;){
+    const part:Record<string,unknown>[]=await rows<Record<string,unknown>>((()=>{let q=c.from('filings').select('*').eq('issuer_id',issuer).eq('market',market).gte('period_end',opts.fromPeriodEnd);if(after!==null)q=q.gt('filing_id',after);return q.order('filing_id').limit(READ_PAGE);})());
+    for(const r of part)byId.set(String(r.filing_id),r);
+    if(part.length<READ_PAGE)break;
+    after=String(part[part.length-1].filing_id);
+   }
+   const str=(v:unknown)=>v===null||v===undefined?'':String(v);
+   const list=[...byId.values()].sort((a,b)=>str(a.period_end)<str(b.period_end)?-1:str(a.period_end)>str(b.period_end)?1:str(a.available_date)<str(b.available_date)?-1:str(a.available_date)>str(b.available_date)?1:str(a.filing_id)<str(b.filing_id)?-1:1);
    const status=new Map<string,string>();
    for(const part of chunkIds([...new Set(list.map(r=>String(r.run_id)))]))
     for(const r of await pageAll<{run_id:string;status:string}>(()=>c.from('fact_sync_runs').select('run_id,status').in('run_id',part).order('run_id')))status.set(String(r.run_id),String(r.status));
-   return list.map(r=>{const s=status.get(String(r.run_id));if(s===undefined)throw new FactsDbError('unknown',`run_not_found:${String(r.run_id)}`);return calendarFilingFromRow({...r,run_status:s});});
+   // a filing whose run row is missing is omitted (pg inner-joins the run; memory drops it the same way)
+   return list.flatMap(r=>{const s=status.get(String(r.run_id));return s===undefined?[]:[calendarFilingFromRow({...r,run_status:s})];});
   },
   async setFilingAcceptance(filingId,acceptedAt,source){return (await call<unknown>('set_filing_acceptance',{p_filing:filingId,p_accepted:acceptedAt,p_source:source}))===true;},
   async adoptCandidate(item,index,batch,expectedRev,by){return adoptFromJson(await call<unknown>('adopt_candidate',{p_item:item,p_index:index,p_batch:batch,p_expected_rev:expectedRev,p_resolved_by:by}));},

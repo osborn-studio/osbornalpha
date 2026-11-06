@@ -66,7 +66,7 @@ export interface ReadFactsOptions{concepts:string[];asOf:string;from?:string;to?
 export interface ReadFactsResult{stateRev:number;rows:FactRow[];truncated:boolean}
 export interface ReadFactsLineageResult{stateRevs:LineageRev[];lineage:string[];rows:FactRow[];conflicts:LineageConflict[];truncated:boolean}
 export type FilingFactRow=FactRow&{run_status:RunStatus};
-export type CalendarFiling=FilingRow&{run_status:RunStatus;accepted_at:string|null};
+export type CalendarFiling=FilingRow&{run_status:RunStatus};
 
 export type FactsDbErrorCode='lease_lost'|'run_pending'|'run_published'|'mapping_gen_regression'|'stale_computation'|'stale_plan'|'run_abandoned'|'read_truncated'|'duplicate_key'|'invalid_chosen'|'item_not_open'|'unknown'
  |'fence_failed'|'member_incomplete'|'stale_evaluation'|'batch_mismatch'|'invalid_choice'|'invalid_candidate'|'generation_moved'

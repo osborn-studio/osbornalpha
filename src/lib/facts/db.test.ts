@@ -284,14 +284,17 @@ describe('supabaseFactsDb',()=>{
   const N=1250;const status=(i:number)=>['published','staged','abandoned'][i%3];
   const mk=(i:number,over:Record<string,unknown>={})=>({filing_id:`g${String(i).padStart(5,'0')}`,issuer_id:'I',market:'US',run_id:`r${i}`,period_end:`2024-${String(1+i%12).padStart(2,'0')}-28`,available_date:'2024-06-01',mapping_gen:i%4,created_at:'2024-06-01T00:00:00+00:00',accepted_at:null,...over});
   const all=[...Array.from({length:N},(_,i)=>mk(i)),mk(5000,{issuer_id:'OTHER'}),mk(5001,{market:'CN'}),mk(5002,{period_end:'2023-12-31'})];
-  const runIn:number[]=[];
+  const runIn:number[]=[];let filingPages=0;
   const {db}=stub(()=>({data:null}),(table,ops)=>{
    const eq=(c:string)=>ops.filter(o=>o[0]==='eq'&&o[1][0]===c).map(o=>o[1][1]);
    if(table==='filings'){
-    const rows=all.filter(r=>eq('issuer_id').every(v=>r.issuer_id===v)&&eq('market').every(v=>r.market===v)&&ops.filter(o=>o[0]==='gte').every(o=>String(r.period_end)>=String(o[1][1])))
-     .sort((a,b)=>a.period_end<b.period_end?-1:a.period_end>b.period_end?1:a.filing_id<b.filing_id?-1:1);
-    const [from,to]=ops.find(o=>o[0]==='range')![1] as [number,number];
-    return rows.slice(from,to+1);
+    const after=ops.filter(o=>o[0]==='gt'&&o[1][0]==='filing_id').map(o=>String(o[1][1]));
+    const limit=Number(ops.find(o=>o[0]==='limit')![1][0]);
+    expect(ops.some(o=>o[0]==='order'&&o[1][0]==='filing_id')).toBe(true);
+    const rows=all.filter(r=>eq('issuer_id').every(v=>r.issuer_id===v)&&eq('market').every(v=>r.market===v)&&ops.filter(o=>o[0]==='gte').every(o=>String(r.period_end)>=String(o[1][1]))&&after.every(a=>r.filing_id>a))
+     .sort((a,b)=>a.filing_id<b.filing_id?-1:1);
+    filingPages++;
+    return rows.slice(0,limit);
    }
    if(table==='fact_sync_runs'){
     const ids=ops.find(o=>o[0]==='in')![1][1] as string[];runIn.push(ids.length);
@@ -304,8 +307,21 @@ describe('supabaseFactsDb',()=>{
   expect(out).toHaveLength(N);
   expect(new Set(out.map(f=>f.filing_id)).size).toBe(N);
   expect(out.some(f=>f.issuer_id!=='I'||f.market!=='US'||(f.period_end??'')<'2024-01-01')).toBe(false);
+  expect(filingPages).toBe(2);                                                          // 1,000 + 250: keyset pages
+  expect(out.map(f=>[f.period_end,f.available_date,f.filing_id])).toEqual([...out.map(f=>[f.period_end,f.available_date,f.filing_id])].sort());
   expect(runIn.length).toBeGreaterThan(1);expect(Math.max(...runIn)).toBeLessThanOrEqual(200);
   for(const f of out){const i=Number(f.filing_id.slice(1));expect(f.run_status).toBe(status(i));expect(f.mapping_gen).toBe(i%4);expect(f.run_id).toBe(`r${i}`);}
+ });
+ it('filingsForCalendar omits a filing whose run row is missing; a keyset page that repeats a row is deduped',async()=>{
+  const g=(id:string,run:string)=>({filing_id:id,issuer_id:'I',market:'US',run_id:run,period_end:'2024-03-31',available_date:'2024-05-01',created_at:'2024-05-01T00:00:00+00:00'});
+  const {db}=stub(()=>({data:null}),table=>table==='filings'?[g('g1','r1'),g('g1','r1'),g('g2','gone')]:table==='fact_sync_runs'?[{run_id:'r1',status:'published'}]:[]);
+  expect((await db.filingsForCalendar('I','US',{fromPeriodEnd:'2024-01-01'})).map(f=>[f.filing_id,f.run_status])).toEqual([['g1','published']]);
+ });
+ it('malformed reconcile envelopes throw instead of becoming NaN / undefined fields',async()=>{
+  const {db}=stub(fn=>({data:fn==='apply_reconcile_result'?{reused:false}:fn==='complete_reconcile_member'?{compared_passed:'x',compared_failed:0,not_compared:0}:null}));
+  const fence={pair:'us.companyfacts_vs_ixbrl' as const,cycle_id:'c',issuer_id:'i',market:'US' as const,batch_id:'b',attempt:1};
+  await expect(db.applyReconcileResult(fence,{} as never)).rejects.toMatchObject({code:'unknown',message:expect.stringContaining('malformed')});
+  await expect(db.completeReconcileMember(fence)).rejects.toMatchObject({code:'unknown',message:expect.stringContaining('malformed')});
  });
  it('metrics read compares the full based_on_lineage vector across pages: one rev but two vectors is unstable',async()=>{
   const row=(i:number,lineage:unknown)=>({issuer_id:'iss',market:'US',metric:`m${String(i).padStart(4,'0')}`,period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:1,value_text:'1',unit:'u',input_unit:'USD',basis:'us_standard',formula_version:'v',inputs:[],based_on_rev:2,based_on_lineage:lineage,as_of:'2024-01-01'});

@@ -936,6 +936,12 @@ begin
               or coalesce(jsonb_typeof(p_result -> 'item' -> 'payload'), '') <> 'object' or length(p_result -> 'item' ->> 'natural_key') not between 1 and 512)) then
     raise exception 'invalid_result' using errcode = '22023';
   end if;
+  -- mirror dq_reconciliations_numeric_sides / _nonnumeric_sides as invalid_result (22023) before anything is read or written
+  if p_result ->> 'kind' = 'numeric' then
+    if p_result ->> 'outcome' = 'compared' and (v_lv is null or v_rv is null) then raise exception 'invalid_result' using errcode = '22023'; end if;
+  elsif v_lv is not null or v_rv is not null or v_ad is not null or v_rd is not null then
+    raise exception 'invalid_result' using errcode = '22023';
+  end if;
   select * into v_existing from public.dq_reconciliations where pair = c.pair and cycle_id = c.cycle_id and natural_key = v_nk;
   if found then
     if v_existing.issuer_id is distinct from c.issuer_id or v_existing.market is distinct from c.market then raise exception 'invalid_result' using errcode = '22023'; end if;

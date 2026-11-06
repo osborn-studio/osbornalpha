@@ -61,7 +61,7 @@ const cmp=(a:string,b:string)=>a<b?-1:a>b?1:0;
 const clone=<T>(v:T):T=>structuredClone(v);
 const unknown=(message:string)=>new FactsDbError('unknown',message);
 
-export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantine:['id']})):MemoryFactsDb{
+export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantine:['id'],dq_reconcile_cycles:['pair','cycle_id'],dq_reconcile_cursor:['pair','cycle_id','issuer_id','market']})):MemoryFactsDb{
  const scope=new Map<string,ScopeRow>();
  const scopeConfirmed=new Map<string,string>();   // = fact_sync_scope.scope_confirmed_at: set only by reconcile (change or active confirmation)
  const runs=new Map<string,MemoryRun>();
@@ -207,7 +207,7 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
  // read_facts_lineage: the read_facts rules over a member set; with more than one member, ok rows of
  // one (K, available_date) from different issuers with different values leave the sequences and go to conflicts.
  const readLineage=(members:string[],market:Market,o:ReadFactsOptions):ReadFactsLineageResult=>{
-  const set=[...new Set(members)].sort(cmp);const inSet=new Set(set);
+  const set=[...new Set(members.map(m=>m.toLowerCase()))].sort(cmp);const inSet=new Set(set);
   const stateRevs:LineageRev[]=set.map(i=>({issuer_id:i,state_rev:scopeOf(i,market)?.state_rev??0}));
   const base=[...facts.values()].filter(f=>inSet.has(f.issuer_id)&&f.market===market&&o.concepts.includes(f.concept)&&f.available_date<=o.asOf
    &&(o.from===undefined||f.period_end>=o.from)&&(o.to===undefined||f.period_end<=o.to)&&(f.status==='ok'||o.includeNonOk===true)&&visible(f));
@@ -238,8 +238,9 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
   return {stateRevs,lineage:set,rows:picked,conflicts,truncated:false};
  };
  // replace_financial_metrics_lineage: member set = current lineage, every rev equal, else stale_computation.
- const replaceLineage=(issuer:string,market:Market,basedOn:LineageRev[],input:MetricRow[])=>{
-  const norm=lineageRevsFrom(basedOn);
+ const replaceLineage=(issuer0:string,market:Market,basedOn:LineageRev[],input:MetricRow[])=>{
+  const issuer=issuer0.toLowerCase();   // SQL compares uuids, not text
+  const norm=lineageRevsFrom(basedOn.map(x=>({...x,issuer_id:String(x.issuer_id).toLowerCase()})));
   if(norm.length===0||new Set(norm.map(x=>x.issuer_id)).size!==norm.length||!norm.some(x=>x.issuer_id===issuer)||norm.some(x=>!Number.isInteger(x.state_rev)||x.state_rev<0))throw unknown('invalid_based_on');
   if(norm.some(x=>!scopeOf(x.issuer_id,market)))throw new FactsDbError('scope_missing');
   if(topoOf(issuer).status!=='active')throw new FactsDbError('stale_computation');   // a merged / dissolved issuer is no materialisation target
@@ -436,7 +437,7 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
   setTopology:entries=>{for(const [id,t] of Object.entries(entries))topo.set(id,{...t});},
   async targetOf(issuer){return topoOf(issuer).merged_into??issuer;},
   async lineageOf(target){return lineageMembers(target);},
-  async stateRevs(issuers,market){return [...new Set(issuers)].sort(cmp).map(i=>({issuer_id:i,state_rev:scopeOf(i,market)?.state_rev??0}));},
+  async stateRevs(issuers,market){return [...new Set(issuers.map(i=>i.toLowerCase()))].sort(cmp).map(i=>({issuer_id:i,state_rev:scopeOf(i,market)?.state_rev??0}));},
   async readFactsLineage(issuers,market,o){return readLineage(issuers,market,o);},
   async readFilingFacts(filingId,includeNonOk){
    const rows=[...facts.values()].filter(f=>f.filing_id===filingId&&(f.status==='ok'||includeNonOk));
@@ -448,7 +449,8 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
   async filingsForCalendar(issuer,market,o){
    const rows=[...filings.values()].filter(g=>g.issuer_id===issuer&&g.market===market&&g.period_end!==null&&g.period_end>=o.fromPeriodEnd);
    rows.sort((a,b)=>cmp(a.period_end!,b.period_end!)||cmp(a.available_date,b.available_date)||cmp(a.filing_id,b.filing_id));
-   return rows.map(g=>({...clone(g),run_status:(runs.get(g.run_id)?.status??'abandoned') as RunStatus}));
+   // a filing whose run row is missing is omitted (pg inner-joins the run; supabaseFactsDb drops it the same way)
+   return rows.filter(g=>runs.has(g.run_id)).map(g=>({...clone(g),run_status:runs.get(g.run_id)!.status as RunStatus}));
   },
   async setFilingAcceptance(filingId,acceptedAt,source){
    if(source!=='sec_submissions'||!acceptedAt||Number.isNaN(Date.parse(acceptedAt)))throw unknown('invalid_acceptance');

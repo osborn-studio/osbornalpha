@@ -737,6 +737,13 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
    expect(await fails(apply(fence,res('k0',{action:'quarantine_left'})))).toMatchObject({message:'invalid_result'});      // left_fact_id required
    expect(await fails(apply(fence,res('k0',{action:'review_item'})))).toMatchObject({message:'invalid_result'});          // item required
    expect(await fails(apply(fence,res('k0',{left_value:'1e5x'})))).toMatchObject({message:'invalid_result'});
+   // dq_reconciliations_numeric_sides / _nonnumeric_sides surface as invalid_result (22023), not 23514, and write nothing
+   expect(await fails(apply(fence,res('k0',{right_value:null})))).toMatchObject({message:'invalid_result',code:'22023'});
+   expect(await fails(apply(fence,res('k0',{left_value:null})))).toMatchObject({message:'invalid_result',code:'22023'});
+   expect(await fails(apply(fence,res('k0',{kind:'text'})))).toMatchObject({message:'invalid_result',code:'22023'});           // numeric fields on a text compare
+   expect(await fails(apply(fence,res('k0',{kind:'date',left_value:null,right_value:null,abs_diff:'1',rel_diff:null})))).toMatchObject({message:'invalid_result',code:'22023'});
+   expect(await fails(apply(fence,res('k0',{kind:'text',left_value:null,right_value:null,abs_diff:null,rel_diff:'0',action:'quarantine_left',left_fact_id:r})))).toMatchObject({message:'invalid_result',code:'22023'});
+   expect(await status(r)).toBe('ok');
    expect(await resultRows(pair)).toEqual([]);
    const run2=await begin(iss,b);const g=await filing(run2);const [st]=await stage(run2,[{filing_id:g.id,concept:'net_income',value:'3'}]);
    expect(await apply(fence,res('k1',{action:'quarantine_left',left_fact_id:st}))).toMatchObject({quarantined:0,item_id:null,materialize:null});   // staged: recorded only
