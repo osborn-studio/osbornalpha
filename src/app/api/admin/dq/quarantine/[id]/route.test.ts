@@ -227,4 +227,64 @@ describe('POST /api/admin/dq/quarantine/[id]', () => {
     expect((await json({ status: 'resolved_accept' })).status).toBe(500);
     spy.mockRestore();
   });
+  const facts3 = (reason: string) => client.update('dq_quarantine', { id: ID }, { dataset: 'facts.us', table_name: 'financial_facts', reason_code: reason, payload: { fact_ids: [FACT_A] } });
+  it('passes chosen_candidate_index (ambiguous_value) and keep_fact_id (lineage_conflict) through, and audits the index and the adopted fact', async () => {
+    mocks.requireAdmin.mockResolvedValue({ id: ADMIN });
+    await facts3('ambiguous_value');
+    mocks.resolveFacts.mockResolvedValueOnce({ outcome: 'resolved', hook: HOOK, adoptedFactId: FACT_B, chosenFactIds: [FACT_B] });
+    const res = await json({ status: 'resolved_accept', chosen_candidate_index: 1 });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: ID, outcome: 'resolved', hook: HOOK, promoted: null, skipped: null, chosen_fact_ids: [FACT_B], adopted_fact_id: FACT_B, chosen_candidate_index: 1 });
+    expect(mocks.resolveFacts.mock.calls[0][3]).toMatchObject({ status: 'resolved_accept', chosenCandidateIndex: 1, resolvedBy: ADMIN });
+    expect(mocks.insert.mock.calls[0][0]).toMatchObject({ detail: { chosen_candidate_index: 1, adopted_fact_id: FACT_B } });
+    await facts3('lineage_conflict');
+    await json({ status: 'resolved_accept', keep_fact_id: FACT_A });
+    expect(mocks.resolveFacts.mock.calls[1][3]).toMatchObject({ keepFactId: FACT_A });
+  });
+  it('validates and scopes the new body fields: bad values 400, not applicable 400', async () => {
+    await facts3('ambiguous_value');
+    for (const v of [-1, 1.5, '1', 1000]) expect((await json({ status: 'resolved_accept', chosen_candidate_index: v })).status).toBe(400);
+    expect(await (await json({ status: 'resolved_reject', chosen_candidate_index: 0 })).json()).toEqual({ error: 'chosen_candidate_index_not_applicable' });
+    expect(await (await json({ status: 'resolved_accept', keep_fact_id: FACT_A })).json()).toEqual({ error: 'keep_fact_id_not_applicable' });
+    expect((await json({ status: 'resolved_accept', keep_fact_id: 'not-a-uuid' })).status).toBe(400);
+    expect(mocks.resolveFacts).not.toHaveBeenCalled();
+  });
+  it('maps the new outcomes: rule_failed / invalid_choice 400, conflict 409, body {id, outcome, error, detail?}; restore detail on 200; no audit for refusals', async () => {
+    await facts3('reconcile_mismatch');
+    for (const [outcome, code, status] of [['rule_failed', 'identity_bs', 400], ['invalid_choice', 'invalid_candidate', 400], ['conflict', 'not_passing', 409]] as const) {
+      mocks.resolveFacts.mockResolvedValueOnce({ outcome, code });
+      const res = await json({ status: 'resolved_accept' });
+      expect(res.status).toBe(status);
+      expect(await res.json()).toEqual({ id: ID, outcome, error: code });
+    }
+    mocks.resolveFacts.mockResolvedValueOnce({ outcome: 'conflict', code: 'not_passing', restoreNote: 'reconcile_wiring_missing' });
+    const unwired = await json({ status: 'resolved_accept' });
+    expect(unwired.status).toBe(409);
+    expect(await unwired.json()).toEqual({ id: ID, outcome: 'conflict', error: 'not_passing', detail: { restore_note: 'reconcile_wiring_missing' } });
+    expect(mocks.insert).not.toHaveBeenCalled();
+    mocks.resolveFacts.mockResolvedValueOnce({ outcome: 'resolved', hook: HOOK, promoted: 0, restore: { promoted: 0, skipped: [{ fact_id: FACT_A, reason: 'ineligible' }], restore_note: 'no_rows_promoted' } });
+    const ok = await json({ status: 'resolved_accept' });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toMatchObject({ outcome: 'resolved', restore: { restore_note: 'no_rows_promoted' } });
+  });
+  it('maps SQL codes thrown past the resolver: conflict codes 409, choice codes 400, body {id, outcome, error}; unknown codes stay a 500', async () => {
+    await facts3('lineage_conflict');
+    for (const code of ['use_dedicated_resolver', 'target_not_active', 'lineage_changed', 'scope_missing', 'conflict_exists', 'replay_required', 'filing_not_found', 'generation_moved', 'duplicate', 'stale_evaluation', 'batch_mismatch', 'not_passing', 'unresolved'] as const) {
+      mocks.resolveFacts.mockRejectedValueOnce(new FactsDbError(code));
+      const res = await json({ status: 'resolved_accept', keep_fact_id: FACT_A });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ id: ID, outcome: 'conflict', error: code });
+    }
+    for (const code of ['invalid_choice', 'invalid_candidate'] as const) {
+      mocks.resolveFacts.mockRejectedValueOnce(new FactsDbError(code));
+      const res = await json({ status: 'resolved_accept', keep_fact_id: FACT_A });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ id: ID, outcome: 'invalid_choice', error: code });
+    }
+    expect(mocks.insert).not.toHaveBeenCalled();
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.resolveFacts.mockRejectedValueOnce(new FactsDbError('unknown', 'boom'));
+    expect((await json({ status: 'resolved_accept', keep_fact_id: FACT_A })).status).toBe(500);
+    spy.mockRestore();
+  });
 });

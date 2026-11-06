@@ -12,6 +12,10 @@ import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import type {PoolClient} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {pgTableClient} from '../db/pg-table-client';
+import {pgFactsDb} from '../facts/pg-facts-db';
+import {FORMULA_VERSION,materialize} from '../facts/derive';
+import {resolveFactsItem} from './facts-resolver';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261107091000_facts_extensions.sql';
@@ -1026,6 +1030,33 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
    }
    for(const role of ['anon','authenticated','service_role'])expect(await fn(role,'public.reconcile_fence_lock(jsonb)')).toBe(false);
    await expect(replayMigration(admin,sql())).resolves.toBeUndefined();
+  },60000);
+ });
+
+ describe('Task 11: E8 on PostgreSQL',()=>{
+  it('E8: an ambiguous_value item adopted through resolveFactsItem — the value is served by readFacts and financial_metrics.based_on_lineage moves; a repeat POST is already_resolved',async()=>{
+   const db=pgFactsDb(admin);const tables=pgTableClient(admin);
+   const {iss,b,run,f,fRef}=await published();
+   const run2=await begin(iss,b);await stage(run2,[{filing_id:f,concept:'gross_profit',period_start:'2023-07-01',period_end:'2023-09-30',value:'40'}]);await publish(run2,[f]);
+   await materialize(db,iss,'US',{today:'2030-01-01'});
+   const m0=await db.metricsOfIssuer(iss,'US',FORMULA_VERSION);
+   expect(m0.some(m=>m.metric==='gross_margin'&&m.period_end==='2023-09-30')).toBe(false);
+   const cand=(value:string)=>({concept:'revenue',sourceConcept:'us-gaap:Revenues',statement:'IS',periodStart:'2023-07-01',periodEnd:'2023-09-30',duration:'3M',value,unit:'USD',consolidation:'consolidated',filingRef:fRef,rawHash:`h-${value}`});
+   const id=randomUUID();
+   await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload) values($1,'facts.us','financial_facts',$2,'ambiguous_value',$3,$4::jsonb)`,
+    [id,`${iss}:US:revenue:2023-07-01:2023-09-30:consolidated:USD:${fRef}:1`,b,JSON.stringify({key:{issuer_id:iss,market:'US'},candidates:[cand('110'),cand('111')],run_id:run})]);
+   const by=await user();
+   const row=async()=>(await tables.select('dq_quarantine',{id},{limit:1}))[0];
+   const r=await resolveFactsItem(db,tables,await row(),{status:'resolved_accept',chosenCandidateIndex:0,resolvedBy:by,today:'2030-01-01'});
+   expect(r).toMatchObject({outcome:'resolved',hook:{stage:'done',state:'done'}});
+   const env=await db.readFacts(iss,'US',{concepts:['revenue'],asOf:'2030-01-01'});
+   expect(env.rows.find(x=>x.fact_id===r.adoptedFactId)).toMatchObject({value:'110',is_current:true});
+   const m1=await db.metricsOfIssuer(iss,'US',FORMULA_VERSION);
+   expect(m1.find(m=>m.metric==='gross_margin'&&m.period_end==='2023-09-30')!.value).toBe('0.3636363636');
+   expect(m1[0].based_on_lineage).toEqual([{issuer_id:iss,state_rev:await rev(iss)}]);
+   expect(m1[0].based_on_lineage).not.toEqual(m0[0].based_on_lineage);
+   expect((await row()).detail).toMatchObject({chosen_candidate_index:0,adopted_fact_id:r.adoptedFactId,hook:{stage:'done',state:'done'}});
+   expect((await resolveFactsItem(db,tables,await row(),{status:'resolved_accept',chosenCandidateIndex:0,resolvedBy:by})).outcome).toBe('already_resolved');
   },60000);
  });
 });

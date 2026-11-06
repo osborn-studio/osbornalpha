@@ -7,7 +7,7 @@
 // written so the DB invariants hold: (status='open') = (resolved_at is null), and
 // status='open' or resolved_by is not null.
 import {randomUUID} from 'node:crypto';
-import {TableError} from '../db/table-client';
+import {TableError,callRpc} from '../db/table-client';
 import type {Row,TableClient} from '../db/table-client';
 
 export type QuarantineStatus='open'|'resolved_accept'|'resolved_reject';
@@ -70,4 +70,13 @@ export async function listOpenQuarantine(client:TableClient,dataset?:string,limi
  if(!Number.isInteger(limit)||limit<1||limit>MAX_LIST)throw new Error('invalid_limit');
  const match:Row=dataset===undefined?{status:'open'}:{status:'open',dataset};
  return client.select(TABLE,match,{orderBy:'created_at',desc:true,limit});
+}
+/**
+ * Sets ONE key of an item's detail — 'hook' or 'audit_written' — through the row-locking SQL function
+ * patch_quarantine_detail (migration 20261107090000; plan audit round 1, P4). Every other detail key
+ * (latest_result, chosen ids, …) and the resolution columns stay as the latest committed writer left
+ * them. false = no such item. Needs client.rpc (callRpc: rpc_unavailable otherwise).
+ */
+export async function patchQuarantineDetail(client:TableClient,id:string,key:'hook'|'audit_written',value:unknown):Promise<boolean>{
+ return (await callRpc(client,'patch_quarantine_detail',{p_id:id,p_key:key,p_value:value}))===true;
 }
