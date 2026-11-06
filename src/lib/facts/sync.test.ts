@@ -587,3 +587,29 @@ describe('runFactsSync — grouped parser evidence',()=>{
   expect((await db.filingsOfIssuer(ISSUER,'CN',{}))[0].link_attempts).toBe(0);          // never reaches MAX_LINK_ATTEMPTS
  });
 });
+describe('runFactsSync — step 9b acceptance (plan 3 §4.5)',()=>{
+ const outcome=(errors:{code:string;key?:string;message?:string}[])=>({issuerId:ISSUER,counts:{fetched:0,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:0},errors,mismatches:[],snapshotSha256:null});
+ it('runs after materialize for a published US issuer with the scope fetch key (10-digit CIK); its errors join the issuer receipt',async()=>{
+  const enrichAcceptance=vi.fn(async()=>outcome([{code:'skipped_summary',key:`${ISSUER}:acceptance`,message:'{"acceptance_not_found":1}'}]));
+  const {deps}=harness(FY23,{enrichAcceptance});
+  const r=await run(deps);
+  expect(enrichAcceptance).toHaveBeenCalledWith(ISSUER,'0000320193',expect.anything());
+  expect(mocks.materialize.mock.invocationCallOrder[0]).toBeLessThan(enrichAcceptance.mock.invocationCallOrder[0]);
+  expect(r.issuers[0].outcome).toBe('published');
+  expect(r.issuers[0].errors).toContainEqual({code:'skipped_summary',key:`${ISSUER}:acceptance`,message:'{"acceptance_not_found":1}'});
+  expect(r.status).toBe('success');
+ });
+ it('a failing acceptance step never fails the published issuer: acceptance_failed is recorded and the batch is partial',async()=>{
+  const {deps}=harness(FY23,{enrichAcceptance:async()=>{throw new Error('sec down');}});
+  const r=await run(deps);
+  expect(r.issuers[0].outcome).toBe('published');
+  expect(r.issuers[0].errors).toContainEqual({code:'acceptance_failed',key:ISSUER,message:'sec down'});
+  expect(r.status).toBe('partial');
+ });
+ it('is not called for CN',async()=>{
+  const enrichAcceptance=vi.fn(async()=>outcome([]));
+  const {deps}=harness(parsed([cnFiling()],[cnRevenue()]),{enrichAcceptance},CN_SCOPE);
+  await run(deps,{market:'CN'});
+  expect(enrichAcceptance).not.toHaveBeenCalled();
+ });
+});

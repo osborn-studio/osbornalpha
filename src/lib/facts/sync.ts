@@ -26,6 +26,7 @@ import type {SnapshotStore} from './snapshot-store';
 import {reconcileScope,scopeRowFor} from './scope';
 import type {ScopeInputRow} from './scope';
 import {FORMULA_VERSION,materialize} from './derive';
+import type {AcceptanceOutcome} from './providers/sec-acceptance';
 
 /** Shape of providers/tushare-statements.ts::coverageSummary entries (the adapter is injected, never imported here). */
 export interface CoverageEntry{api:string;report_type:number;years:Record<string,number>}
@@ -40,6 +41,8 @@ export interface SyncDeps{
  linkCn?:(filing:FilingRow,b:Budget)=>Promise<{document_ref:string;document_url:string}|'none'|'ambiguous'|'unlinkable'>;
  /** CN coverage summary (§6.3 coverage_summary), wired by deps.ts to coverageSummary (round-1 #12). */
  coverageCn?:(parsed:ParseResult)=>CoverageEntry[];
+ /** Step 9b (plan 3 §4.5): SEC acceptance times for a published US issuer, from the issuer's scope fetch key (10-digit CIK). Wired by deps.ts; its errors join the issuer receipt and never fail a published issuer. */
+ enrichAcceptance?:(issuer:string,cik10:string,b:Budget)=>Promise<AcceptanceOutcome>;
  now:()=>Date;deadline:Date|null;codeVersion:string|null;
 }
 /**
@@ -284,6 +287,11 @@ export async function syncIssuerFacts(deps:SyncDeps,batchId:string,input:{scope:
   await renewIfNeeded();
   try{await materialize(db,issuer,market);}
   catch(e){const code=dbCode(e);if(code!=='stale_computation'&&code!=='read_truncated')throw e;return afterPublish(code,e);}   // published stays; retried on the failure schedule
+  // 9b (plan 3 §4.5): acceptance times; best-effort after publication — errors are recorded, the outcome stays published
+  if(market==='US'&&deps.enrichAcceptance&&!budget.signal.aborted&&budget.remainingMs()>0){
+   try{const a=await deps.enrichAcceptance(issuer,scope.fetch_key,budget);out.errors.push(...a.errors);}
+   catch(e){out.errors.push({code:'acceptance_failed',key:issuer,message:errMsg(e)});}
+  }
   await releaseOnce('success');
   return out;
  }catch(e){

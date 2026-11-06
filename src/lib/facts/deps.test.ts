@@ -90,7 +90,7 @@ describe('productionSyncDeps',()=>{
   process.env.NEXT_PUBLIC_SUPABASE_URL='https://example.supabase.co';process.env.SUPABASE_SERVICE_ROLE_KEY='service-role-test-key';   // createClient never connects at construction
   try{
    const deps=productionSyncDeps({deadline:null,codeVersion:'c'.repeat(40)});
-   for(const k of ['fetchUs','fetchCn','parseUs','parseCn','linkCn','coverageCn','now'] as const)expect(typeof deps[k],k).toBe('function');
+   for(const k of ['fetchUs','fetchCn','parseUs','parseCn','linkCn','coverageCn','enrichAcceptance','now'] as const)expect(typeof deps[k],k).toBe('function');
    expect(deps.coverageCn).toBe(coverageSummary);
    const parsed=parseTushareStatements(loadTushareFixtures('600519.SH'),{sinceYear:2014});
    expect(deps.coverageCn!(parsed)).toEqual(coverageSummary(parsed));

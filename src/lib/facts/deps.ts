@@ -1,7 +1,7 @@
 // src/lib/facts/deps.ts
 // Production wiring of SyncDeps (spec §6.1) shared by /api/cron/facts-sync and scripts/facts/*:
-// Supabase FactsDb / TableClient / snapshot store, the two adapters (fetch + parse), and the cninfo
-// linker, which needs the issuer's A-share ts_code and cninfo_org_id that sync.ts does not pass
+// Supabase FactsDb / TableClient / snapshot store, the two adapters (fetch + parse), the cninfo
+// linker, and step 9b (SEC acceptance times through sec-submissions.ts), which needs the issuer's A-share ts_code and cninfo_org_id that sync.ts does not pass
 // (it hands over the FilingRow only). code_version = VERCEL_GIT_COMMIT_SHA (40 hex), else — scripts
 // only — `git rev-parse HEAD` with "-dirty" when the tree has changes (sync.ts::resolveCodeVersion,
 // which this delegates to); null means "refuse to apply".
@@ -11,6 +11,9 @@ import type {TableClient} from '../db/table-client';
 import {isCurrentSecurity} from '../entities/resolve';
 import {supabaseFactsDb} from './db';
 import {supabaseSnapshotStore} from './snapshot-store';
+import {supabaseRawStore} from '../dq/raw-store';
+import {fetchSubmissions} from '../entities/identifiers/sec-submissions';
+import {enrichAcceptance} from './providers/sec-acceptance';
 import {fetchCompanyFacts,parseCompanyFacts} from './providers/edgar-companyfacts';
 import {coverageSummary,fetchTushareStatements,parseTushareStatements} from './providers/tushare-statements';
 import {linkCninfoFiling} from './providers/cninfo-link';
@@ -68,6 +71,10 @@ export function productionSyncDeps(opts:ProductionDepsOptions):SyncDeps{
   parseCn:(snapshots,o)=>parseTushareStatements(snapshots,{sinceYear:o.sinceYear}),
   coverageCn:coverageSummary,   // → coverage_summary in the batch receipt
   linkCn:cninfoLinker(tables,db),
+  // 9b: one submissions fetch per published US issuer, with the files[] pages back to the earliest pending
+  // filing (coverFrom, plan audit R3); raw bytes into reconcile-raw. sec.filing_date_vs_submissions
+  // results are recorded once plan-3 Part D adds recordDateMismatch (record.ts) here.
+  enrichAcceptance:(issuer,cik10,b)=>enrichAcceptance({db,submissions:(c,bb,coverFrom)=>fetchSubmissions(c,{fetch,userAgent:process.env.EDGAR_USER_AGENT,raw:supabaseRawStore(sb),budget:bb},{coverFrom})},{issuerId:issuer,cik10},b),
   now:opts.now??(()=>new Date()),deadline:opts.deadline,codeVersion:opts.codeVersion,
  };
 }
