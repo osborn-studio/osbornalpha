@@ -304,6 +304,36 @@ language sql immutable set search_path = public as $$
 $$;
 revoke execute on function public.claim_evidence_ok(jsonb) from public, anon, authenticated, service_role;
 
+-- Recursive public-provenance guard (mirrors the TS sanitizeProvenance rules): no secret-like keys, no
+-- URL query strings / fragments, no key=/token= assignments, no UUIDs, bounded depth and length.
+-- Claim evidence may hold private notes; only what passes here may reach a public provenance column.
+create or replace function public.claim_provenance_safe(p jsonb, p_depth int default 0) returns boolean
+language plpgsql immutable set search_path = public as $$
+declare k text; v jsonb; s text;
+begin
+  if p is null or p_depth > 4 then return false; end if;
+  case jsonb_typeof(p)
+    when 'object' then
+      for k, v in select * from jsonb_each(p) loop
+        if k ~* '(secret|token|passw|api[_-]?key|authorization|user_?id|cookie|credential|private)' then return false; end if;
+        if not public.claim_provenance_safe(v, p_depth + 1) then return false; end if;
+      end loop;
+    when 'array' then
+      for v in select * from jsonb_array_elements(p) loop
+        if not public.claim_provenance_safe(v, p_depth + 1) then return false; end if;
+      end loop;
+    when 'string' then
+      s := p #>> '{}';
+      if length(s) > 500 then return false; end if;
+      if s ~* '[a-z][a-z0-9+.-]*://[^[:space:]]*[?#]' or s ~ '\?[^[:space:]]*=' then return false; end if;
+      if s ~* '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' then return false; end if;
+      if s ~* '(token|secret|passw[a-z]*|api[_-]?key|\mkey)\s*[=:]' then return false; end if;
+    else null;
+  end case;
+  return true;
+end $$;
+revoke execute on function public.claim_provenance_safe(jsonb, int) from public, anon, authenticated, service_role;
+
 -- target_key = op ':' issuer_id, or op ':' issuer_id '|' ticker '|' valid_from (claims.ts::claimTargetKey).
 create or replace function public.identifier_claim_target_key(p_op text, p_target jsonb) returns text
 language sql immutable set search_path = public as $$
@@ -359,12 +389,15 @@ begin
     allowed := array[p_id_type];
   elsif p_op = 'attach_security' then
     if p_id_type <> 'ticker' or full_target then return 'op_id_type'; end if;
-    if not public.claim_keys_within(pa, array['share_class','valid_from','valid_from_method','source','isin','note'])
+    if not public.claim_keys_within(pa, array['share_class','valid_from','valid_from_method','source','isin','note','ticker'])
        or coalesce(pa ->> 'share_class', '') not in ('A','H','ADR','common','preferred','other','unknown')
        or not public.claim_text_is_date(pa ->> 'valid_from')
        or coalesce(pa ->> 'valid_from_method', '') not in ('first_observed','listing_date','ticker_change','curated')
        or jsonb_typeof(pa -> 'source') is distinct from 'string' or length(pa ->> 'source') not between 1 and 64
-       or (pa ? 'isin' and coalesce(jsonb_typeof(pa -> 'isin'), '') not in ('string','null')) then return 'params'; end if;
+       or (pa ? 'isin' and coalesce(jsonb_typeof(pa -> 'isin'), '') not in ('string','null'))
+       or (pa ? 'ticker' and (jsonb_typeof(pa -> 'ticker') is distinct from 'string' or (pa ->> 'ticker') !~ '^[A-Z0-9][A-Z0-9.-]{0,31}$')) then return 'params'; end if;
+    -- the inserted ticker is params.ticker, else the claim value (which an evidence_only amendment leaves as the accession)
+    if not (pa ? 'ticker') and p_value !~ '^[A-Z0-9][A-Z0-9.-]{0,31}$' then return 'params.ticker'; end if;
     if jsonb_typeof(pa -> 'isin') = 'string' and (pa ->> 'isin') !~ '^[A-Z]{2}[A-Z0-9]{9}[0-9]$' then return 'params'; end if;
     allowed := array['isin','figi','valid_from'];
   elsif p_op in ('close_security','backdate_window') then
@@ -390,7 +423,7 @@ begin
   else
     return 'op';
   end if;
-  if pw is not null and not public.claim_keys_within(pw, allowed) then return 'provenance_written'; end if;
+  if pw is not null and (not public.claim_keys_within(pw, allowed) or not public.claim_provenance_safe(pw)) then return 'provenance_written'; end if;
   return null;
 end $$;
 revoke execute on function public.identifier_claim_problem(text, text, text, uuid, jsonb) from public, anon, authenticated, service_role;
@@ -408,7 +441,7 @@ returns jsonb language plpgsql security definer set search_path = public as $$
 declare
   c public.issuer_identifier_claims;
   v_op text; v_value text; v_detail jsonb; v_amended boolean := false; v_problem text;
-  t jsonb; pa jsonb; v_pw jsonb; v_key text; v_status text; n int;
+  t jsonb; pa jsonb; v_pw jsonb; v_key text; v_status text; n int; v_ev jsonb; v_safe jsonb; v_ticker text;
 begin
   if p_status is null or p_status not in ('accepted','rejected') or p_resolved_by is null then
     raise exception 'invalid_claim' using errcode = '22023';
@@ -449,7 +482,15 @@ begin
   if v_status is distinct from 'active' then raise exception 'issuer_not_active' using errcode = 'P0001'; end if;
   t := v_detail -> 'target'; pa := v_detail -> 'params';
   v_key := case when v_op in ('set_identifier','correct_identifier') then c.id_type when v_op = 'close_security' then 'valid_to' else 'valid_from' end;
-  v_pw := coalesce(v_detail -> 'provenance_written', jsonb_build_object(v_key, v_detail -> 'evidence'));
+  -- Fallback provenance carries only source / as_of / evidence_sha256 (+ a safe locator): the claim's
+  -- free-form note and any unsafe locator never reach a public column.
+  v_ev := v_detail -> 'evidence';
+  v_safe := jsonb_build_object('source', v_ev -> 'source', 'as_of', v_ev -> 'as_of', 'evidence_sha256', v_ev -> 'evidence_sha256');
+  if coalesce(v_ev ->> 'locator', '') ~ '^[A-Za-z0-9_.:/ ,=\[\]-]{1,200}$' and v_ev ->> 'locator' !~* '(\?|token|secret|passw|key=)' then
+    v_safe := v_safe || jsonb_build_object('locator', v_ev -> 'locator');
+  end if;
+  v_pw := coalesce(v_detail -> 'provenance_written', jsonb_build_object(v_key, v_safe));
+  if not public.claim_provenance_safe(v_pw) then raise exception 'invalid_claim' using errcode = '22023', detail = 'provenance_written'; end if;
 
   begin
     if v_op = 'set_identifier' and c.id_type = 'lei' then
@@ -481,8 +522,12 @@ begin
       update public.issuer_securities set figi = v_value, provenance = provenance || v_pw
       where issuer_id = c.issuer_id and ticker = t ->> 'ticker' and valid_from = (t ->> 'valid_from')::date and figi = pa ->> 'expected_current';
     elsif v_op = 'attach_security' then
+      v_ticker := coalesce(pa ->> 'ticker', v_value);
+      if not exists (select 1 from public.stocks_universe where ticker = v_ticker) then
+        raise exception 'invalid_claim' using errcode = '22023', detail = 'params.ticker';
+      end if;
       insert into public.issuer_securities(issuer_id, ticker, isin, share_class, is_primary, valid_from, valid_to, valid_from_method, valid_to_method, source, provenance)
-      values (c.issuer_id, v_value, nullif(pa ->> 'isin', ''), pa ->> 'share_class', false, (pa ->> 'valid_from')::date, null, pa ->> 'valid_from_method', null, pa ->> 'source', v_pw);
+      values (c.issuer_id, v_ticker, nullif(pa ->> 'isin', ''), pa ->> 'share_class', false, (pa ->> 'valid_from')::date, null, pa ->> 'valid_from_method', null, pa ->> 'source', v_pw);
     elsif v_op = 'close_security' then
       update public.issuer_securities set valid_to = (pa ->> 'valid_to')::date, valid_to_method = pa ->> 'valid_to_method', provenance = provenance || v_pw
       where issuer_id = c.issuer_id and ticker = t ->> 'ticker' and valid_from = (t ->> 'valid_from')::date and valid_to is null;
@@ -715,6 +760,9 @@ begin
      or (select array_agg(k) from jsonb_object_keys(p_provenance) k) is distinct from array[p_column] then
     raise exception 'invalid_identifier_write' using errcode = '22023';
   end if;
+  -- Same order as resolve_identifier_claim (issuer, then security row): FOR SHARE conflicts with its FOR UPDATE.
+  perform 1 from public.issuers where issuer_id = p_issuer for share;
+  if not found then return 'not_found'; end if;
   select case when p_column = 'isin' then s.isin else s.figi end, s.provenance into v_cur, v_prov
   from public.issuer_securities s
   where s.issuer_id = p_issuer and s.ticker = p_ticker and s.valid_from = p_valid_from and s.valid_to is null

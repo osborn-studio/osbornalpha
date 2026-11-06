@@ -526,6 +526,54 @@ describe.skipIf(!enabled)('plan 3 migration one: resolve_identifier_claim',()=>{
   expect((await fails(resolve(ghost,'accepted'))).message).toBe('value_conflict');
  });
 
+ it('never copies private evidence into public provenance: note and unsafe locators are dropped, unsafe provenance_written is invalid_claim',async()=>{
+  const a=await issuer(),b=await issuer();
+  const priv={...EVIDENCE,note:'private reviewer note, contact bob',locator:'https://x.example/doc?token=abc123'};
+  const l1=randomLei();
+  await resolve(await newClaim({issuer:a,id_type:'lei',value:l1,op:'set_identifier',target:{issuer_id:a},over:{evidence:priv}}),'accepted');
+  const prov=(await q(`select provenance->'lei' p from public.issuers where issuer_id=$1`,[a]))[0].p;
+  expect(prov).toEqual({source:'test',as_of:'2026-11-05',evidence_sha256:SHA});
+  expect(JSON.stringify(prov)).not.toMatch(/private|token|example/);
+  // a safe locator is kept, a note is still dropped
+  const l2=randomLei();
+  await resolve(await newClaim({issuer:b,id_type:'lei',value:l2,op:'set_identifier',target:{issuer_id:b},over:{evidence:{...EVIDENCE,note:'secret note',locator:'row:1,col=B'}}}),'accepted');
+  expect((await q(`select provenance->'lei' p from public.issuers where issuer_id=$1`,[b]))[0].p).toEqual({source:'test',as_of:'2026-11-05',evidence_sha256:SHA,locator:'row:1,col=B'});
+  // provenance_written is validated recursively
+  const c=await issuer();
+  const bad=[{lei:{source:'x',nested:{api_key:'k'}}},{lei:{source:'x',url:'https://x.example/a?b=1'}},{lei:{source:'x',who:randomUUID()}},{lei:{source:'x',list:[{password:'p'}]}},{lei:{source:'x',s:'token=abc'}}];
+  for(const pw of bad){
+   const id=await newClaim({issuer:c,id_type:'lei',value:randomLei(),op:'set_identifier',target:{issuer_id:c},over:{provenance_written:pw}});
+   expect({pw,msg:(await fails(resolve(id,'accepted'))).message}).toEqual({pw,msg:'invalid_claim'});
+   expect(await claimState(id)).toMatchObject({status:'pending'});
+   await q(`update public.issuer_identifier_claims set status='rejected',resolved_by=$2,resolved_at=now() where id=$1`,[id,REVIEWER]);
+  }
+  const ok=await newClaim({issuer:c,id_type:'lei',value:randomLei(),op:'set_identifier',target:{issuer_id:c},over:{provenance_written:{lei:{source:'gleif',as_of:'2026-11-05',evidence_sha256:SHA,row:{exchange:'XNAS'}}}}});
+  expect(await resolve(ok,'accepted')).toMatchObject({applied:true});
+ });
+
+ it('attach_security takes params.ticker; an accession-valued evidence_only claim amended to attach_security inserts that ticker and keeps the accession',async()=>{
+  const a=await issuer();const t=await ticker();
+  const accession='0001234567-26-000002';
+  const evParams={suggested_op:'attach_security',accession,form:'8-A12B',filing_date:'2026-02-20'};
+  const mk=()=>newClaim({issuer:a,id_type:'ticker',value:accession,op:'evidence_only',target:{issuer_id:a},params:evParams,over:{evidence_kind:'filing_form'}});
+  const attach=(over:Record<string,unknown>)=>({op:'attach_security',target:{issuer_id:a},params:{share_class:'common',valid_from:'2026-02-20',valid_from_method:'listing_date',source:'sec_8a',...over}});
+  // no usable ticker: the accession is not a universe ticker; an unknown or malformed params.ticker is refused
+  const first=await mk();
+  expect((await fails(resolve(first,'accepted',attach({})))).message).toBe('invalid_claim');
+  expect((await fails(resolve(first,'accepted',attach({ticker:'ZZNOSUCH'})))).message).toBe('invalid_claim');
+  expect((await fails(resolve(first,'accepted',attach({ticker:'zz bad'})))).message).toBe('invalid_claim');
+  expect(await claimState(first)).toMatchObject({status:'pending',op:'evidence_only'});
+  expect(await resolve(first,'accepted',attach({ticker:t}))).toEqual({op:'attach_security',applied:true,amended:true});
+  expect(await q(`select issuer_id,valid_from::text,valid_from_method from public.issuer_securities where ticker=$1`,[t])).toEqual([{issuer_id:a,valid_from:'2026-02-20',valid_from_method:'listing_date'}]);
+  const row=(await q(`select op,value,detail from public.issuer_identifier_claims where id=$1`,[first]))[0];
+  expect(row).toMatchObject({op:'attach_security',value:accession});
+  expect(row.detail).toMatchObject({original_op:'evidence_only',original_params:evParams,params:{ticker:t}});
+  // a direct attach_security claim without params.ticker still uses the claim value
+  const t2=await ticker();
+  expect(await resolve(await newClaim({issuer:a,id_type:'ticker',value:t2,op:'attach_security',target:{issuer_id:a},params:{share_class:'H',valid_from:'2026-01-01',valid_from_method:'curated',source:'x'}}),'accepted')).toMatchObject({applied:true});
+  expect(await q(`select count(*)::int n from public.issuer_securities where ticker=$1`,[t2])).toEqual([{n:1}]);
+ });
+
  it('attach_security inserts the open row with its method and provenance; a held ticker is ownership_conflict',async()=>{
   const a=await issuer(),b=await issuer();const t=await ticker();
   const params={share_class:'H',valid_from:'2004-06-16',valid_from_method:'listing_date',source:'gleif_openfigi',isin:randomIsin()};
@@ -639,7 +687,7 @@ describe.skipIf(!enabled)('plan 3 migration one: resolve_identifier_claim',()=>{
  it('grants the functions to service_role only, keeps the helpers private and has one replace_filing_expectations signature',async()=>{
   const FNS=['public.resolve_identifier_claim(uuid,text,uuid,jsonb)','public.replace_filing_expectations(uuid,text,jsonb,jsonb)','public.claim_calendar_pass(text,uuid)','public.fail_calendar_member(jsonb,uuid,text)','public.finish_calendar_pass(jsonb)',
    'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb)','public.set_security_identifier(uuid,text,date,text,text,jsonb)'];
-  const HELPERS=['public.claim_text_is_date(text)','public.claim_keys_within(jsonb,text[])','public.claim_evidence_ok(jsonb)','public.identifier_claim_target_key(text,jsonb)','public.identifier_claim_problem(text,text,text,uuid,jsonb)','public.dq_calendar_lock_pass(jsonb)'];
+  const HELPERS=['public.claim_text_is_date(text)','public.claim_keys_within(jsonb,text[])','public.claim_evidence_ok(jsonb)','public.identifier_claim_target_key(text,jsonb)','public.identifier_claim_problem(text,text,text,uuid,jsonb)','public.dq_calendar_lock_pass(jsonb)','public.claim_provenance_safe(jsonb,integer)'];
   for(const fn of [...FNS,...HELPERS])for(const role of ['anon','authenticated','service_role']){
    const ok=(await q(`select has_function_privilege($1,$2,'EXECUTE') ok`,[role,fn]))[0].ok;
    expect({fn,role,ok}).toEqual({fn,role,ok:role==='service_role'&&FNS.includes(fn)});
@@ -932,5 +980,20 @@ describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (appen
    });
    expect(await secState(t)).toEqual({isin,figi,provenance:{exchange:'Nasdaq',...PI,figi:EVIDENCE}});
   }
+ });
+ it('set_security_identifier locks the issuer before the security row: it waits behind an issuer lock held by a claim-resolution-order writer, with no deadlock',async()=>{
+  const a=await issuer();const t=await ticker();const k={issuer:a,ticker:t};
+  await sec(a,t,'2020-01-01',null,{provenance:JSON.stringify({exchange:'Nasdaq'})});
+  const isin=randomIsin();
+  await inTx(admin,async tx=>{
+   // session A follows resolve_identifier_claim's order: issuer FOR UPDATE first, security row second
+   await tx.c.query(`select 1 from public.issuers where issuer_id=$1 for update`,[a]);
+   const second=setId(k,'isin',isin,PI);
+   await stillBlockedBehind(admin,tx.pid,second);     // would not block at all if B took the security row first
+   await tx.c.query(`update public.issuer_securities set figi=$2 where ticker=$1 and valid_to is null`,[t,'BBG000000001']);
+   await tx.commit();
+   expect(await second).toBe('written');
+  });
+  expect(await secState(t)).toEqual({isin,figi:'BBG000000001',provenance:{exchange:'Nasdaq',...PI}});
  });
 });
