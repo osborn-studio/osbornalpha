@@ -1,6 +1,7 @@
 // src/lib/entities/link-ah.test.ts
 import {describe,it,expect} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
+import {TableError,type Row,type TableClient} from '../db/table-client';
 import {memoryRawStore} from '../dq/raw-store';
 import {loaderOutcome} from './load-sec';
 import {mapIsins,type FigiJob,type FigiJobResult,type FigiRecord} from './identifiers/openfigi';
@@ -40,7 +41,7 @@ describe('planAhLinks · rule 1 (same LEI, hard identifiers only)',()=>{
   const e={gleif_sha256:'a'.repeat(64),gleif_path:RAWS.gleif.path,openfigi_response_sha256:'c'.repeat(64),openfigi_path:`openfigi/${'c'.repeat(64)}.json`,hkex_sha256:'d'.repeat(64),hkex_path:RAWS.hkex.path};
   const owned=planAhLinks(input({openOwner:new Map([['02338.HK',B]]),raw:RAWS}));
   expect(owned.attaches).toEqual([]);
-  expect(owned.conflicts).toEqual([{naturalKey:`02338.HK:${ASOF}`,detail:{reason:'ticker_owned_by_other_issuer',rule:'same_lei',owner_issuer_id:B,classified:['hard'],evidence:e},payload:{issuer_id:A,ticker:'02338.HK',isin:'CNE1000004L9'}}]);
+  expect(owned.conflicts).toEqual([{naturalKey:'02338.HK:2004-03-11',detail:{reason:'ticker_owned_by_other_issuer',rule:'same_lei',owner_issuer_id:B,classified:['hard'],evidence:e},payload:{issuer_id:A,ticker:'02338.HK',isin:'CNE1000004L9',valid_from:'2004-03-11'}}]);
   const soft=planAhLinks(input({hkexIsins:new Map(),openOwner:new Map([['02338.HK',B]]),raw:RAWS}));
   expect([soft.claims,soft.attaches]).toEqual([[],[]]);
   expect(soft.conflicts[0].detail).toMatchObject({classified:['soft'],owner_issuer_id:B});
@@ -59,7 +60,7 @@ describe('planAhLinks · rule 1 (same LEI, hard identifiers only)',()=>{
   const c=p.claims[0];
   expect(c).toMatchObject({issuer_id:A,id_type:'ticker',value:'02338.HK',op:'attach_security',source:'gleif_openfigi',detail:{evidence_kind:'provider_mapping',target:{issuer_id:A},
    params:{ticker:'02338.HK',isin:'CNE1000004L9',share_class:'H',valid_from:'2004-03-11',valid_from_method:'listing_date',source:'gleif_openfigi'}}});
-  expect(c.detail.sources.map(x=>x.source)).toEqual(['gleif_openfigi','openfigi_ticker']);
+  expect(c.detail.sources.map(x=>x.source)).toEqual(['gleif_openfigi:CNE1000004L9','openfigi_ticker']);
   expect(c.detail.sources[0].note).toContain(`request ${'b'.repeat(64)}`);
   expect(c.detail.sources[0].note).toContain('FIGI BBG000WEICH1, composite');
   expect(c.detail.sources[1]).toMatchObject({evidence_sha256:'9'.repeat(64),locator:`openfigi:${'9'.repeat(64)}#2`});
@@ -72,7 +73,7 @@ describe('planAhLinks · rule 1 (same LEI, hard identifiers only)',()=>{
   expect(d.attaches).toEqual([]);
   expect(d.claims).toHaveLength(1);
   expect(d.claims[0].detail.params).not.toHaveProperty('isin');
-  expect(d.claims[0].detail.sources.map(x=>x.source)).toEqual(['gleif_openfigi','hkex_isin_hkex']);
+  expect(d.claims[0].detail.sources.map(x=>x.source)).toEqual(['gleif_openfigi:CNE1000004L9','hkex_isin_hkex']);
   expect(d.claims[0].detail.sources[1].note).toContain('disagrees');
   const second=planAhLinks(input({issuers:[iss({hTickers:['00001.HK']})]}));
   expect([second.attaches.length,second.claims.length]).toEqual([0,1]);
@@ -111,6 +112,28 @@ describe('planAhLinks · rule 1 (same LEI, hard identifiers only)',()=>{
   expect(p1.claims).toHaveLength(1);
   expect(p1.claims[0].detail.params).not.toHaveProperty('isin');
   expect(p1.claims[0].detail.sources.length).toBeGreaterThanOrEqual(3);
+ });
+});
+
+describe('planAhLinks · review round 2',()=>{
+ it('an unconfirmed provider hint does not suppress rule 2; a name match on the same ticker adds evidence to the one claim',()=>{
+  const list=hkexList([{stockCode:'02899',name:'WEICHAI POWER CO LTD - H',category:'Equity'}]);
+  const p=planAhLinks(input({hkexIsins:new Map(),hkex:list,universe:new Map([...UNI,['02899.HK',{list_date:null,source:'tushare_hk_basic',source_updated_at:null}]])}));
+  expect(p.claims.map(c=>[c.value,c.source]).sort()).toEqual([['02338.HK','gleif_openfigi'],['02899.HK','hkex_list_name_match']]);
+  const same=planAhLinks(input({hkexIsins:new Map(),hkex:hkexList([{stockCode:'02338',name:'WEICHAI POWER CO LTD - H',category:'Equity'}])}));
+  expect(same.claims).toHaveLength(1);
+  expect(same.claims[0].detail.sources.map(x=>x.source)).toEqual(['gleif_openfigi:CNE1000004L9','hkex_list_of_securities']);
+  // a CONFIRMED (auto-attached) link still suppresses rule 2
+  expect(planAhLinks(input({hkex:hkexList([{stockCode:'02899',name:'WEICHAI POWER CO LTD - H',category:'Equity'}])})).claims).toEqual([]);
+ });
+ it('two issuers that would auto-attach the same ticker are both quarantined (no first-wins)',async()=>{
+  const p=planAhLinks(input({issuers:[iss({}),iss({issuer_id:B,lei:'529900T8BM49AURSDO66'})],figiHits:[hit(),hit({issuer_id:B,lei:'529900T8BM49AURSDO66'})]}));
+  expect(p.attaches).toEqual([]);
+  expect(p.conflicts.map(c=>[c.naturalKey,c.detail.reason,c.payload.issuer_id])).toEqual([['02338.HK:2004-03-11','ticker_claimed_by_several_issuers',A],['02338.HK:2004-03-11','ticker_claimed_by_several_issuers',B]]);
+  expect(p.conflicts[0].detail.competing_issuer_ids).toEqual([B]);
+  const c=memoryTableClient({issuer_identifier_claims:['id'],dq_quarantine:['id']});
+  const r=await applyAhLinks(c,p,{batchId:BATCH,dataset:DATASET});
+  expect(r.counts).toMatchObject({inserted:0,quarantined:2});
  });
 });
 
@@ -216,5 +239,35 @@ describe('applyAhLinks',()=>{
   await applyAhLinks(c2,plan,{batchId:BATCH,dataset:DATASET});
   expect(c2.rows('dq_quarantine')[0].reason_code).toBe('window_conflict');
   expect(c2.rows('dq_quarantine')[0].detail).toMatchObject({reason:'window_overlaps_own_row',evidence:{gleif_sha256:'a'.repeat(64)}});
+ });
+
+ it('persists every grouped mapping through fileClaim dedupe, and a replay in a later run adds no quarantine row',async()=>{
+  const c=memoryTableClient({issuer_identifier_claims:['id'],dq_quarantine:['id']});
+  const hits=[hit(),hit({isin:'CNE1000004M7',index:1})];
+  const plan=planAhLinks(input({figiHits:hits,hkexIsins:new Map()}));
+  await applyAhLinks(c,plan,{batchId:BATCH,dataset:DATASET});
+  const rows=c.rows('issuer_identifier_claims');
+  expect(rows).toHaveLength(1);
+  const d=rows[0].detail as {evidence:{source:string;locator?:string};sources:{source:string;locator?:string}[]};
+  const srcs=[d.evidence,...d.sources];   // sources holds the non-primary items
+  expect(srcs.map(x=>x.source).sort()).toEqual(['gleif_openfigi:CNE1000004L9','gleif_openfigi:CNE1000004M7']);
+  expect(srcs.every(x=>x.locator)).toBe(true);
+  // ownership conflict replayed with a different asOf: same stable key, one open row
+  const q=memoryTableClient({issuer_identifier_claims:['id'],dq_quarantine:['id']});
+  const owned=(asOf:string)=>planAhLinks(input({asOf,openOwner:new Map([['02338.HK',B]])}));
+  await applyAhLinks(q,owned('2026-11-05'),{batchId:BATCH,dataset:DATASET});
+  await applyAhLinks(q,owned('2026-11-12'),{batchId:BATCH,dataset:DATASET});
+  expect(q.rows('dq_quarantine').map(r=>r.natural_key)).toEqual(['02338.HK:2004-03-11']);
+ });
+ it('names an identifier conflict when the ISIN is already held by another ticker',async()=>{
+  const mem=memoryTableClient({issuer_identifier_claims:['id'],dq_quarantine:['id']});
+  await mem.insert('issuer_securities',{issuer_id:B,ticker:'600000.SH',isin:'CNE1000004L9',figi:null,share_class:'A',is_primary:true,valid_from:'2000-01-01',valid_to:null,valid_from_method:'first_observed',valid_to_method:null,source:'test',provenance:{}});
+  // the real DB raises its ISIN unique index on insert; the memory client has no such index
+  const c:TableClient={...mem,insert:async(t:string,row:Row)=>{if(t==='issuer_securities')throw new TableError('insert',t,'duplicate key value violates unique constraint "issuer_securities_isin_idx"','23505');return mem.insert(t,row);}};
+  const r=await applyAhLinks(c,planAhLinks(input({raw:RAWS})),{batchId:BATCH,dataset:DATASET});
+  const q=mem.rows('dq_quarantine');
+  expect(q.map(x=>x.reason_code)).toEqual(['identifier_conflict']);
+  expect(q[0].detail).toMatchObject({reason:'isin_held_by_other_row',isin:'CNE1000004L9',holders:[{issuer_id:B,ticker:'600000.SH'}],evidence:{gleif_sha256:'a'.repeat(64)}});
+  expect(r.counts).toMatchObject({quarantined:1,failed:0});
  });
 });

@@ -3,7 +3,8 @@
  * the listing date), rule 2 HKEX list name match (attach_security claims only).
  *   npx tsx scripts/entity-keys/link-ah.ts --gleif <lei-isin.csv> --hkex <dir> [--apply]
  * <dir> holds the HKEX files named in HKEX_LIST_FILES: ListOfSecurities.xlsx (names, categories) and the ISIN
- * workbooks (isinsehk.xls, isino.xls); an OpenFIGI HK ticker is linked only when validated (HKEX code + ISIN, or ticker-level FIGI).
+ * workbooks (isinsehk.xls, isino.xls); an OpenFIGI HK ticker is attached automatically only when the HKEX ISIN of its stock code equals the
+ * ISIN OpenFIGI mapped; every other hit becomes an attach_security claim (a ticker-level FIGI lookup is evidence only).
  * Dry run (default): no batch, nothing written (raw evidence hashed in memory); OpenFIGI is called.
  * --apply refuses while EXCH_MAP_VERIFIED is false (Task 3b) and records an ingest batch
  * (dataset entities.ah-link) and a freshness attempt.
@@ -79,10 +80,10 @@ async function main(){
   // OpenFIGI tickers are hints: only an HKEX ISIN equal to the hit's ISIN attaches automatically; a ticker-level lookup is claim evidence for the rest
   const unvalidated=[...new Set(figiHits.filter(h=>h.figi&&!hkexIsins?.has(h.ticker.slice(0,5))).map(h=>h.ticker))].sort();
   const tickerLookup=new Map<string,TickerLookup>();
-  let exhausted=m.exhausted;
+  let exhausted=m.exhausted,tickerFailures=0;
   if(unvalidated.length&&!exhausted){
    const t=await mapTickers(unvalidated,deps);
-   exhausted=t.exhausted;
+   exhausted=t.exhausted;tickerFailures=t.failures.length+t.unprocessed.length;
    for(const [tk,r] of t.byKey){
     if(r.status!=='ok')continue;
     const c=groupFigiResults(r.records).candidates.find(x=>x.market==='HK'&&x.ticker===tk);
@@ -93,7 +94,7 @@ async function main(){
   const plan=planAhLinks({asOf,issuers,figiHits,universe,openOwner,hkexIsins,hkexSuperseded:new Set((merged?.dropped??[]).map(d=>d.stockCode)),tickerLookup,figiErrors:figiErrorsFromResults(issuers,subset,m.byKey),
    hkex:listParse?{rows:listParse.rows,file:listParse.file,sha256:listParse.sha256}:null,
    raw:{gleif:{sha256:gleifRaw.sha256,path:gleifRaw.path},...(listRaw?{hkex:listRaw}:{})}});
-  return {plan,exhausted,figiFailures:m.failures.length+m.unprocessed.length,result:batchId?await applyAhLinks(tables,plan,{batchId,dataset:DATASET}):null};
+  return {plan,exhausted,figiFailures:m.failures.length+m.unprocessed.length+tickerFailures,result:batchId?await applyAhLinks(tables,plan,{batchId,dataset:DATASET}):null};
  };
  if(!apply){
   const {plan,exhausted}=await run(memoryRawStore(),null);

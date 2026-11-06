@@ -116,10 +116,10 @@ const cmp=(a:string,b:string)=>a<b?-1:a>b?1:0;
 type Kind='hard'|'disagree'|'soft';
 type Classified={skip:string}|{kind:Kind;hk:HkexIsin|null};
 /** Per-hit gate, in this order: superseded counter (rejected before any validation), non-equity, not in universe; then hard / disagree / soft. */
-function classifyHit(h:AhFigiHit,input:AhLinkInput):Classified{
+function classifyHit(h:AhFigiHit,input:AhLinkInput,rowsByCode:ReadonlyMap<string,readonly HkexListRow[]>):Classified{
  const code=h.ticker.slice(0,5);
  const k=input.hkexIsins?.get(code)??null;
- const rows=input.hkex?.rows.filter(r=>r.stockCode===code)??[];
+ const rows=rowsByCode.get(code)??[];
  const live=rows.filter(r=>!SUPERSEDED.test((r.name??'').trim()));
  if((rows.length>0&&live.length===0)||(!k&&input.hkexSuperseded?.has(code)))return {skip:'superseded_counter'};
  if(live.length>0&&!live.some(r=>r.category?.trim().toLowerCase()===HKEX_EQUITY_CATEGORY))return {skip:'not_equity'};
@@ -131,38 +131,46 @@ function classifyHit(h:AhFigiHit,input:AhLinkInput):Classified{
 export function planAhLinks(input:AhLinkInput):AhLinkPlan{
  const plan:AhLinkPlan={attaches:[],attachEvidence:{},conflicts:[],claims:[],skipped:[],figiErrors:[...(input.figiErrors??[])]};
  const byId=new Map(input.issuers.map(i=>[i.issuer_id,i]));
+ // issuers with a CONFIRMED link (auto-attached or already holding the line): only they are skipped by rule 2
  const linked=new Set<string>();
+ const rowsByCode=new Map<string,HkexListRow[]>();
+ for(const r of input.hkex?.rows??[])rowsByCode.set(r.stockCode,[...(rowsByCode.get(r.stockCode)??[]),r]);
  // 1. classify every hit (order independent), 2. group per (issuer, ticker), 3. decide per group
  const groups=new Map<string,{issuer:AhIssuer;ticker:string;hits:{h:AhFigiHit;c:{kind:Kind;hk:HkexIsin|null}}[]}>();
  const hits=[...input.figiHits].sort((a,b)=>cmp(a.issuer_id,b.issuer_id)||cmp(a.ticker,b.ticker)||cmp(a.isin,b.isin)||a.index-b.index);
  for(const h of hits){
   const issuer=byId.get(h.issuer_id);
   if(!issuer)continue;
-  const c=classifyHit(h,input);
+  const c=classifyHit(h,input,rowsByCode);
   if('skip' in c){plan.skipped.push(c.skip);continue;}
   const k=`${h.issuer_id}|${h.ticker}`;
   const g=groups.get(k)??{issuer,ticker:h.ticker,hits:[]};
   g.hits.push({h,c});groups.set(k,g);
  }
+ const issuersByTicker=new Map<string,string[]>();
+ for(const g of groups.values())issuersByTicker.set(g.ticker,[...(issuersByTicker.get(g.ticker)??[]),g.issuer.issuer_id]);
  for(const k of [...groups.keys()].sort()){
   const {issuer:i,ticker,hits:gh}=groups.get(k)!;
   const u=input.universe.get(ticker)!;
   const owner=input.openOwner.get(ticker);
   if(owner===i.issuer_id||i.hTickers.includes(ticker)){plan.skipped.push('already_attached');linked.add(i.issuer_id);continue;}
+  const l=listing(u,input.asOf);   // before the owner check: the quarantine key is `${ticker}:${valid_from}` (stable across runs, like load-sec)
+  const rivals=(issuersByTicker.get(ticker)??[]).filter(x=>x!==i.issuer_id).sort();
   const first=gh[0].h;
   const g0=input.raw?.gleif,hk0=input.raw?.hkex;
   const rawEvidence={gleif_sha256:first.gleifSha256,...(g0?{gleif_path:g0.path}:{}),openfigi_response_sha256:first.responseSha256,openfigi_path:rawPath('openfigi',first.responseSha256,'json'),
    ...(hk0?{hkex_sha256:hk0.sha256,hkex_path:hk0.path}:{})};
   const kinds=[...new Set(gh.map(x=>x.c.kind))].sort();
-  if(owner!==undefined){
-   plan.conflicts.push({naturalKey:`${ticker}:${input.asOf}`,detail:{reason:'ticker_owned_by_other_issuer',rule:'same_lei',owner_issuer_id:owner,classified:kinds,evidence:rawEvidence},
-    payload:{issuer_id:i.issuer_id,ticker,isin:first.isin}});
-   linked.add(i.issuer_id);continue;
+  if(owner!==undefined||rivals.length){
+   plan.conflicts.push({naturalKey:`${ticker}:${l.valid_from}`,detail:owner!==undefined
+    ?{reason:'ticker_owned_by_other_issuer',rule:'same_lei',owner_issuer_id:owner,classified:kinds,evidence:rawEvidence}
+    :{reason:'ticker_claimed_by_several_issuers',rule:'same_lei',competing_issuer_ids:rivals,classified:kinds,evidence:rawEvidence},
+    payload:{issuer_id:i.issuer_id,ticker,isin:first.isin,valid_from:l.valid_from}});
+   continue;
   }
   const isins=[...new Set(gh.map(x=>x.h.isin))].sort();
   const hard=gh.filter(x=>x.c.kind==='hard');
   const auto=hard.length>0&&gh.every(x=>x.c.kind==='hard')&&isins.length===1&&i.hTickers.length===0;
-  const l=listing(u,input.asOf);
   const figiHit=gh.find(x=>x.h.figi);
   if(auto){
    const hk=hard[0].c.hk!;const h=hard[0].h;
@@ -180,7 +188,7 @@ export function planAhLinks(input:AhLinkInput):AhLinkPlan{
   const sources:ClaimEvidence[]=[];
   const add=(e:ClaimEvidence)=>{if(!sources.some(s=>s.source===e.source&&s.evidence_sha256===e.evidence_sha256&&s.locator===e.locator))sources.push(e);};
   for(const {h,c} of gh){
-   add({source:'gleif_openfigi',as_of:input.asOf,evidence_sha256:h.gleifSha256,locator:`gleif:${h.lei},${h.isin};openfigi:${h.responseSha256}#${h.index}`,
+   add({source:`gleif_openfigi:${h.isin}`,as_of:input.asOf,evidence_sha256:h.gleifSha256,locator:`gleif:${h.lei},${h.isin};openfigi:${h.responseSha256}#${h.index}`,
     note:`OpenFIGI mapped ISIN ${h.isin} to ${ticker}${h.figi?` (FIGI ${h.figi}, ${h.level})`:' (no single FIGI group)'}${h.requestSha256?`; request ${h.requestSha256}`:''}`});
    if(c.hk)add({source:`hkex_${c.hk.file}`,as_of:input.asOf,evidence_sha256:c.hk.sha256,locator:`${c.hk.file}:row:${c.hk.row}`,
     note:c.kind==='disagree'?`HKEX ISIN ${c.hk.isin} for stock code ${ticker.slice(0,5)} disagrees with GLEIF/OpenFIGI ISIN ${h.isin}`:`HKEX ISIN ${c.hk.isin} for stock code ${ticker.slice(0,5)}`});
@@ -196,7 +204,7 @@ export function planAhLinks(input:AhLinkInput):AhLinkPlan{
    params:{ticker,share_class:shareClassFor(i),valid_from:l.valid_from,valid_from_method:l.valid_from_method,source:'gleif_openfigi',...(isins.length===1&&!kinds.includes('disagree')?{isin:isins[0]}:{})},
    evidence,sources,...(Object.keys(l.prov).length?{provenance_written:sanitizeProvenance(l.prov)}:{}),
   }});
-  linked.add(i.issuer_id);
+  // an unconfirmed provider hint does not suppress rule 2
  }
  if(input.hkex){
   const hk=input.hkex;
@@ -222,6 +230,8 @@ export function planAhLinks(input:AhLinkInput):AhLinkPlan{
    if(owner!==undefined){plan.skipped.push(owner===i.issuer_id?'already_attached':'name_match_owned');continue;}
    const l=listing(u,input.asOf);
    const evidence:ClaimEvidence={source:`hkex_${hk.file}`,as_of:input.asOf,evidence_sha256:hk.sha256,locator:`${hk.file}:row:${row.row}`,note:`HKEX name "${row.name}" equals an issuer name after ${NAMES_VERSION}`};
+   const existing=plan.claims.find(c=>c.issuer_id===i.issuer_id&&c.value===ticker&&c.op==='attach_security');
+   if(existing){existing.detail.sources.push(evidence);continue;}   // one claim per issuer+ticker: the name match is more evidence for the same hint
    plan.claims.push({issuer_id:i.issuer_id,id_type:'ticker',value:ticker,source:'hkex_list_name_match',op:'attach_security',detail:{
     schema:'claim/1',evidence_kind:'name_match',target:{issuer_id:i.issuer_id},
     params:{ticker,share_class:shareClassFor(i),valid_from:l.valid_from,valid_from_method:l.valid_from_method,source:'hkex_list_name_match',...(row.isin?{isin:row.isin}:{})},
