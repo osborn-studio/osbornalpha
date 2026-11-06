@@ -133,7 +133,7 @@ export interface DatasetEntry{dataset:string;producer:string;cadence:Cadence}
 export const DQ_DATASET_INVENTORY:readonly DatasetEntry[]=[/* Task 2 展开：entities.* 六项 + submissions、facts.us/cn、acceptance、filerCategories、每个 RECONCILE_PAIR_IDS、两个 calendar */];
 ```
 
-`src/lib/dq/reconcile/types.ts` 的 `RECONCILE_PAIR_IDS` 在 Task 2a 以**仅含该常量与类型**的最小文件创建；Task 9a 逐字追加 C3 的 `CYCLE_PAIR_IDS`、`CyclePairId`、`ReconcileKind`、`ReconcileOutcome`、`ReconcileAction`、`Fence`、`ReconcileResultInput`、`ApplyReconcileOutcome`、`MemberCounts`（`FactsDb` 需要）；Task 13a 只追加其余（`ExpectedKey`、`MemberPlan`、`PairContext`、`ReconcilePair` 与 Part D 新增的 `RECONCILE_OUTCOMES`/`CycleStatus`/`CursorState`/`MAX_CURSOR_ATTEMPTS`），不得重复声明或改动前两任务的名字（接口对齐记录 #2）。
+`src/lib/dq/reconcile/types.ts` 的 `RECONCILE_PAIR_IDS` 在 Task 2a 以**仅含该常量与类型**的最小文件创建；Task 9a 逐字追加 C3 的 `CYCLE_PAIR_IDS`、`CyclePairId`、`ReconcileKind`、`ReconcileOutcome`、`ReconcileAction`、`Fence`、`ReconcileResultInput`、`ApplyReconcileOutcome`、`MemberCounts`、`PendingMember`、`OpenCycleInput`、`OpenCycleResult`（`FactsDb` 需要；后三者计划审计 Q2）；Task 13a 只追加其余（`ExpectedKey`、`MemberPlan`、`PairContext`、`ReconcilePair` 与 Part D 新增的 `RECONCILE_OUTCOMES`/`CycleStatus`/`CursorState`/`MAX_CURSOR_ATTEMPTS`），不得重复声明或改动前两任务的名字（接口对齐记录 #2）。
 
 ### C2 · 实体（Task 2b 落地于 `src/lib/entities/types.ts`）
 
@@ -151,7 +151,7 @@ export interface ClaimDetail{schema:'claim/1';evidence_kind:EvidenceKind;target:
 
 `src/lib/entities/claims.ts`：`ClaimInput{issuer_id;id_type:ClaimIdType;value:string;source:string;op:Exclude<ClaimOp,'legacy'>;detail:ClaimDetail}`；`fileClaim(client,c):Promise<boolean>`（同 `(issuer_id,id_type,value,op,target_key)` pending 已存在 → 经迁移一 `append_claim_evidence`（行锁、去重、只 `jsonb_set` `detail.sources`；`TableClient.rpc` 经 `callRpc`）追加证据，返回 false；并发追加不丢证据，计划审计 P3）；`validateClaimDetail(op,idType,detail):{ok:true}|{ok:false;error:string}`；`claimTargetKey(op,target):string`（= `op + ':' + (issuer_id | issuer_id|ticker|valid_from)`）。`src/lib/entities/provenance.ts`：`PROVENANCE_KEYS=['isin','figi','valid_from','valid_to','pending_change'] as const`、`sanitizeProvenance(p):Record<string,unknown>`（未知键、含 URL token/私密键/用户 UUID 的值 → `throw new ProvenanceError(code)`）。
 
-### C3 · 对账（`src/lib/dq/reconcile/types.ts`：Task 2a 前两行 → Task 9a 至 `MemberCounts` → Task 13a 其余）
+### C3 · 对账（`src/lib/dq/reconcile/types.ts`：Task 2a 前两行 → Task 9a 至 `OpenCycleResult`（`PendingMember`/`OpenCycleInput`/`OpenCycleResult` 为计划审计 Q2 新增）→ Task 13a 其余）
 
 ```ts
 export const RECONCILE_PAIR_IDS=['us.companyfacts_vs_ixbrl','cn.tushare_vs_cninfo_pdf_gold','us.companyfacts_vs_gold','sec.filing_date_vs_submissions','sec.filer_category','entities.isin_hkex_vs_gleif','facts.lineage_same_day'] as const;
@@ -175,6 +175,11 @@ export interface ReconcileResultInput{
 }
 export interface ApplyReconcileOutcome{reused:boolean;reconciliationId:string;itemId:string|null;quarantined:0|1;materialize:{issuerId:string;market:Market}|null}
 export interface MemberCounts{compared_passed:number;compared_failed:number;not_compared:number}
+/** set_merge's registration of a merge target (plan audit Q2): one entry per (target, market, merged source). */
+export interface PendingMember{issuer_id:string;market:Market;source:string}
+/** open_reconcile_cycle input (plan audit Q2): members frozen with their expected keys (the {naturalKey, locator} shape Task 13a names ExpectedKey); pending = exactly the snapshot entries the runner resolved keys for. */
+export interface OpenCycleInput{pair:CyclePairId;cycleId:string;startedAt:string;members:{issuer_id:string;market:Market;expected_keys:{naturalKey:string;locator:Record<string,unknown>}[]}[];pending:PendingMember[]}
+export interface OpenCycleResult{created:boolean;cycle:Record<string,unknown>;transferred:PendingMember[]}
 export interface PairContext{db:FactsDb;tables:TableClient;raw:RawStore;now:()=>Date;budget:Budget;fetch:typeof fetch;readRepoFile:(path:string)=>Promise<Uint8Array>}
 export interface ReconcilePair{
  id:CyclePairId;kind:ReconcileKind;left:string;right:string;
@@ -219,6 +224,7 @@ export type CalendarFiling=FilingRow&{run_status:RunStatus;accepted_at:string|nu
  applyReconcileResult(fence:Fence,result:ReconcileResultInput):Promise<ApplyReconcileOutcome>;
  completeReconcileMember(fence:Fence):Promise<MemberCounts>;
  failReconcileMember(fence:Fence,error:string):Promise<void>;
+ openReconcileCycle(input:OpenCycleInput):Promise<OpenCycleResult>;           // 计划审计 Q2：建周期 + 游标 + 只消费所列 pending，一个事务
  setMerge(source:string,target:string,resolvedBy:string):Promise<{repointed:number}>;
  setDissolved(issuer:string,resolvedBy:string):Promise<void>;
 ```
@@ -254,11 +260,12 @@ export type CalendarFiling=FilingRow&{run_status:RunStatus;accepted_at:string|nu
 | `apply_reconcile_result`（2） | `(p_fence jsonb, p_result jsonb) returns jsonb` → `{reused, reconciliation_id, item_id, quarantined, materialize}`；`quarantine_left` 只要求 `left_fact_id`，隔离条件见 C3 末段 | `fence_failed` `invalid_result` |
 | `complete_reconcile_member`（2） | `(p_fence jsonb) returns jsonb` → 三计数 | `fence_failed` `member_incomplete` |
 | `fail_reconcile_member`（2） | `(p_fence jsonb, p_error text) returns void` | `fence_failed` |
-| `set_merge`（2） | `(p_source uuid, p_target uuid, p_resolved_by uuid) returns jsonb` → `{repointed}`；缺失的 scope 行插入占位 `priority=0, reasons='[]', fetch_key='topology'`（`on conflict do nothing`）；`{issuer_id:T, market}`×2 追加进 `facts.lineage_same_day` 最新一行周期（running 优先）的 `detail.pending_members`，无周期行则不写 | `source_not_active` `invalid_merge` + 计划一触发器原样错误 |
+| `set_merge`（2） | `(p_source uuid, p_target uuid, p_resolved_by uuid) returns jsonb` → `{repointed}`；缺失的 scope 行插入占位 `priority=0, reasons='[]', fetch_key='topology'`（`on conflict do nothing`）；持 `pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:facts.lineage_same_day'))`（与 `open_reconcile_cycle` 同一把锁，计划审计 Q2）后把 `{issuer_id:T, market, source:S}`×2（按整条去重）追加进 `facts.lineage_same_day` 最新一行周期（running 优先）的 `detail.pending_members`，无周期行则不写 | `source_not_active` `invalid_merge` + 计划一触发器原样错误 |
+| `open_reconcile_cycle`（2，Task 8c 第 13 节） | `(p_pair text, p_cycle_id text, p_started_at timestamptz, p_members jsonb, p_pending jsonb) returns jsonb` → `{created, cycle, transferred}`；先取 `pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:'\|\|p_pair))`；已有 running 周期 → 原样返回（`created:false`，不消费）；否则一个事务内插周期行（`expected_total=Σ`）、每成员一条 pending 游标、从该 pair 各周期行 `detail.pending_members` **只删 `p_pending` 所列条目**（其后登记的条目留给下一周期）；撞 running 部分唯一索引 → 返回赢家；TS 包装 `FactsDb.openReconcileCycle`（三实现，Task 9a；计划审计 Q2） | `invalid_members`（22023） |
 | `set_dissolved`（2） | `(p_issuer uuid, p_resolved_by uuid) returns void` | `has_referrers` `source_not_active` |
 | `fact_promote_rows`（2 `create or replace`，保留全部落地谓词与 revoke） | `(uuid, text, uuid[])` 不变 | — |
 
-周期表的建立与结算（`dq_reconcile_cycles` 插入、`pending_members` 合并、结算汇总）由 `run.ts` 经 `TableClient` 完成（只读 + 周期行写入，无业务效果）；结算前断言每个 `done` 游标满足 `drc_done_accounted`（不 coalesce）。
+周期行的建立（含游标与 `pending_members` 移交）只经 `open_reconcile_cycle`（计划审计 Q2：与 `set_merge` 的登记串行化，不再由 `run.ts` 整列改写 `detail`）；结算汇总由 `run.ts` 经 `TableClient` 带 `status='running'` 守卫更新（无业务效果）；结算前断言每个 `done` 游标满足 `drc_done_accounted`（不 coalesce）。
 
 ### C6 · 原始证据桶（Task 2a 落地于 `src/lib/dq/raw-store.ts`）
 
@@ -356,7 +363,7 @@ export function rollForward(iso:string):string;   // Rule 0-3 顺延；SEC_HOLID
 | 3 | `set_merge` 占位 scope 行 `fetch_key=''` 违反落地 1–32 字符约束（C2） | 占位行 `fetch_key='topology'`、`priority=0`、`reasons='[]'`，`on conflict (issuer_id, market) do nothing`，从不覆盖已有行（规格 T12） | Task 8a `fact_topology_lock`（原稿已如此）；骨架 C5 `set_merge` 行 |
 | 4 | 日历遍测试锁两处不同（A8 用 `hashtext('test:dq_calendar_pass')`，E7 用 `724311001`） | 一个登记表：SQL 函数用 `pg_advisory_xact_lock(hashtext('dq_calendar_pass:'\|\|market))`（规格 U1）；测试串行化锁 `CALENDAR_TEST_LOCK = 724311001`（会话级），Part A 的 `withCalendarLock` 与 Part E 的 `calendar.integration.test.ts` 同名同值 | 骨架"仓库约定"新增 Advisory lock 登记；Task 1a `withCalendarLock`；Task 18b 原稿已用该常量 |
 | 5 | `quarantine_left` 的语义：原稿 SQL 对 `passed=true`/未比较的 `quarantine_left` 报 `invalid_result`，而运行器对绑定键一律发 `quarantine_left`（D2） | `apply_reconcile_result` 只要求 `quarantine_left` 带 `left_fact_id`；**只在** `outcome='compared' && passed=false && 左侧 ok 且运行 published` 时隔离；左侧已隔离 → 只更新引用它的 open `reconcile_mismatch` 项的 `detail.latest_result`；其余只写结果行。运行器 `actionFor`（14a/14b）原稿即此规则 | Task 8c 函数注释、入口校验、隔离分支条件、Step 1 用例（新增 `k1p`/`k1m`，结果行断言）；Task 9a 内存实现 `validResult` 与分支；骨架 C3 末段、C5 行 |
-| 6 | `pending_members` 的存放位置（C9、D3） | 存在 `dq_reconcile_cycles.detail.pending_members`（元素 `{issuer_id, market}`）：`set_merge` 写进该 pair 最新一行周期（running 优先，否则最近一行）；无任何周期行则不写——运行器的 `facts.lineage_same_day.members()` 每周期都从 `issuers.merged_into` 重新枚举全部谱系，这是兜底。运行器建新周期时并入所有未带 `detail.pending_consumed_by` 的行的 `pending_members`，并给这些行写 `pending_consumed_by=<新 cycle_id>`。不新建表 | Task 8a（原稿）；Task 14b（原稿）；骨架 C5 `set_merge` 行 |
+| 6 | `pending_members` 的存放位置（C9、D3） | 存在 `dq_reconcile_cycles.detail.pending_members`（元素 `{issuer_id, market}`）：`set_merge` 写进该 pair 最新一行周期（running 优先，否则最近一行）；无任何周期行则不写——运行器的 `facts.lineage_same_day.members()` 每周期都从 `issuers.merged_into` 重新枚举全部谱系，这是兜底。运行器建新周期时并入所有未带 `detail.pending_consumed_by` 的行的 `pending_members`，并给这些行写 `pending_consumed_by=<新 cycle_id>`。不新建表。**计划审计 Q2 修订（#64）：元素带 `source`；合并与消费都经 `open_reconcile_cycle` 原子完成，只消费快照条目** | Task 8a（原稿）；Task 14b（原稿）；骨架 C5 `set_merge` 行 |
 | 7 | 拓扑守卫只挡 update，insert 可绕过（A5） | 触发器改为 `before insert or update of status, merged_into`：insert 时 `status<>'active'` 或 `merged_into is not null`、update 时拓扑改变，且开关不为 `on` → `topology_write_forbidden`（23514）。落地 `issuers.integration.test.ts` 第 98/99/101/180/182 行改用新助手 `newIssuerTopo`（期望的计划一错误不变） | Task 1b 触发器 SQL、守卫用例、Step 2 测试修复段与 Files；骨架 C5 触发器行 |
 | 8 | 声明面板归属；无证据的 ISIN 冲突是否建声明（A3、E9） | Task 7b 只交付 `POST /api/admin/dq/claims/[id]` 路由，面板与 `admin.dq.claims.*` 键在 Task 19b。规格 §4.2.1 要求 `claim/1` 必带 `evidence.evidence_sha256`，故保留 Part A 行为：`attachSecurity` 仅在调用方传 `claimEvidence` 时为 ISIN 冲突建声明，否则只返回 `'conflict'` 由调用方隔离；§4.1.2 的"claim + 隔离"由 Task 4a `apply.ts` 带证据完成 | Task 2b（原稿）；Task 4a（原稿）；骨架文件结构 |
 | 9 | 两个路由的 409 体不一致（B11、E11） | 统一为至少 `{error:<code>, id}`：声明路由 `{id, error}`；隔离路由的计划三拒绝 `{id, outcome, error:<code>, detail?:{restore_note}}`（落地计划二的 `{id, outcome}` 409 不变，避免改落地测试）。`issuer_not_active` 归 409；`claim_not_found`（1b 的 P0002）→ 404 | Task 11 Step 7 路由与路由测试；Task 7b 路由加 `claim_not_found`；Task 19b 客户端 `post()` 读 `detail.restore_note ?? error ?? outcome`，200 读 `restore.restore_note` |
@@ -414,6 +421,8 @@ export function rollForward(iso:string):string;   // Rule 0-3 顺延；SEC_HOLID
 | 61 | 成员恢复仍依赖重新评估（P5） | `run.ts::acceptedKeys(tables,fence)` 先读回本周期本成员已提交的结果行；已有键计 `duplicates` 不评估，只评估缺失键（子计划），全部已有 → 直接 `completeReconcileMember`；挂起钩子由第 0 步独立补做 | Task 14b 正文第 3 点、`run.ts`、崩溃后上游不可用用例 |
 | 62 | 年报-only 发行人拿不到 6 个报告期（P6） | 先按适用种类过滤再取 `PERIODS`；`SLOT_COUNT=PERIODS+2`；`strideOf(regime)`（20-F/40-F = 12 个月，其余 3）；`filingsWindowStart` = 往前 `12×SLOT_COUNT+12` 个月月末 − 7 天 | Task 17a 规则要点、`calendar.ts`、20-F/40-F 六行与窗口用例；Task 20 规格 §15 偏差行 |
 | 63 | 严格 TS 5.9.3 编译阻断（P7–P11） | P7：`ixbrl.ts` 解析器状态收进显式类型对象 `ParseState`（`st.*`）；P8：`apply.test.ts` 的 `SecFixture` 显式类型；P9：17a/18a 日历夹具补 `acceptance_source:null`；P10：`new Response(new Uint8Array(bytes))`、`sampleBytes:Uint8Array`；P11：`lineage.integration.test.ts` 在 `beforeAll` 插入 `ADMIN` 到 `auth.users`（审计外键不放宽） | Task 13b Step 3/5；Task 4a Step 2；Task 17a/18a Step 1；Task 15a/15c Step 1；Task 15c Step 1 |
+| 64 | 建周期可能丢失并发登记的合并成员、或让新目标零键冻结（计划审计 Q2） | `pending_members` 元素改为 `{issuer_id, market, source}`（`PendingMember`，按整条去重）；`set_merge` 登记前取 `pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:facts.lineage_same_day'))`；迁移二第 13 节新增 `open_reconcile_cycle(p_pair, p_cycle_id, p_started_at, p_members, p_pending) returns jsonb`（同一把锁；已有 running → 原样返回；否则一个事务插周期行 + 全部游标、只删 `p_pending` 所列条目；`invalid_members`）；`FactsDb.openReconcileCycle(OpenCycleInput):Promise<OpenCycleResult>` 三实现 + `db.ts::openCycleFromJson`；`RegisteredPair.memberFor?(ctx, issuerId, market)`（谱系对实现）。运行器设计：先读 pending 快照，**之后**才解析预期键（`members()`，再对快照中未列出的目标调 `memberFor`），把成员与快照一起交给函数——快照里的合并对解析器已可见，快照之后的登记不被消费、进下一周期；运行器不再整列改写周期行 `detail`，读 pending 时不再看 `pending_consumed_by`（仅审计） | C3/C4/C5；Task 8a `set_merge` 与用例；Task 8c 第 13 节与 4 个用例；Task 9a 类型、三实现、`openCycleFromJson`、存根与内存用例；Task 9b 第 8 个契约用例；Task 13a grep 计数 12；Task 14a `memberFor`；Task 14b 第 1 点、`openCycle`、5 个用例 |
+| 65 | 一个未覆盖的老期间让 US 全部日历行变 `unknown_upstream`（计划审计 Q1） | `calendar-sync.ts::applyUpstreamCoverage(rows, entries)`（导出）逐期判定：`最早 filingDate < period_end` 为已覆盖；未覆盖但有正证据（`received`/`received_late`/`filed_not_ingested`）保持原行；只有未覆盖且无证据的 `pending`/`overdue` 行改为 `unknown_upstream` + `upstream_lookup='unavailable'` + `detail.upstream_incomplete=true` + `detail.upstream_covered_from` | Task 18a 协议、`computeMember`、3 个用例（含 20-F 回归）；顺带把夹具里过期的 `fromPeriodEnd` 期望 `2022-11-23` 改为 P6 后的 `2017-11-23` |
 
 ---
 
@@ -8644,7 +8653,7 @@ git commit -m "feat(admin): identifier claim review route (resolve_identifier_cl
 | `src/lib/facts/db.ts` | `lineageRevsFrom(x:unknown):LineageRev[]` | 规范序（issuer_id 升序）、`state_rev` 为 number |
 | `src/lib/facts/db.ts` | `lineageKey(v:LineageRev[]):string`、`lineageRevsEqual(a,b):boolean` | 完整向量比较（T8） |
 | `src/lib/facts/db.ts` | `ReadFactsLineageEnvelope`、`lineageResultFromEnvelope(env)`、`readLineageArgs(issuers,market,o)` | `read_facts_lineage` 信封归一 |
-| `src/lib/facts/db.ts` | `filingFactFromJson(r)`、`calendarFilingFromRow(r)`、`fenceArgs(f)`、`fenceFromJson(x)`、`applyOutcomeFromJson(x)`、`countsFromJson(x)`、`adoptFromJson(x)`、`restoreFromJson(x)` | 适配器共用归一函数 |
+| `src/lib/facts/db.ts` | `filingFactFromJson(r)`、`calendarFilingFromRow(r)`、`fenceArgs(f)`、`fenceFromJson(x)`、`applyOutcomeFromJson(x)`、`countsFromJson(x)`、`openCycleFromJson(x)`（计划审计 Q2）、`adoptFromJson(x)`、`restoreFromJson(x)` | 适配器共用归一函数 |
 | `src/lib/facts/memory-facts-db.ts` | `MemoryTopology`、`MemoryFactsDb.setTopology(entries)` | `setTopology(entries:Record<string,MemoryTopology>):void`，`MemoryTopology={status:'active'\|'merged'\|'dissolved';merged_into:string\|null}` |
 | `src/lib/facts/db-contract.ts` | `ContractHarness.user()`、`ContractHarness.expireReconcileClaim(pair,cycleId,issuer,market)` | 契约夹具 |
 | `src/lib/facts/derive.ts` | `deriveLineageMetrics(rows,target,lineage,opts)`；`DeriveOptions.basedOn?`；`MaterializeDb`（改为谱系方法）；`MaterializeResult`（增 `target`、`basedOn`） | §4.4 / T9 |
@@ -8666,7 +8675,7 @@ git commit -m "feat(admin): identifier claim review route (resolve_identifier_cl
 6. **并发重放风险**：落地 `facts.integration.test.ts` 第 144 行单独重放 `20261106090000`，会在别的测试文件运行中途把 `fact_promote_rows`/`filings_limited_update`/`read_facts`/`replace_financial_metrics` 还原成计划二版本。Task 8a 把该处改为**在同一事务内**重放 `20261106090000` + `20261107091000`（DDL 事务性，其他会话看不到中间态）。整合者：以后任何重放 `20261106090000` 的测试都必须同样追加 `20261107091000`。 **→ 已裁决：接口对齐记录 #31。**
 7. **注入与后置接线（Part D 必须完成）**：(a) Task 11 的恢复分支用注入的 `inputsHashOf:(item)=>Promise<string>`；路由在 Task 11 不传（`reconcile_mismatch` 接受 → 409 `restore_unavailable`）。**Part D（建议 Task 15，桶 `meta.json` 与样本清单落地后）必须修改 `src/app/api/admin/dq/quarantine/[id]/route.ts`，给 `resolveFactsItem` 传 `inputsHashOf`**（用 `computeInputsHash`）。(b) Task 12 的日期不一致结果用注入的 `recordDateMismatch:(r:ReconcileResultInput)=>Promise<void>`；Task 12 的 `deps.ts`/脚本不接线（不一致只计数并在回执里列出）。**Part D Task 13 落地 `record.ts` 后必须在 `src/lib/facts/deps.ts::productionSyncDeps` 与 `scripts/facts/enrich-acceptance.ts` 接上 `recordDateMismatch:(r)=>recordReconciliation(tables,{...r,pair:'sec.filing_date_vs_submissions',batch_id})`**。 **→ 已裁决：接口对齐记录 #1。**
 8. **`lineage_conflict` 项的 natural_key 格式**：`<T>:<concept>:<period_start>:<period_end>:<consolidation>:<unit>:<available_date>`（= `${T}:${factKey(K)}:${available_date}`，`keys.ts::factKey`，恰 7 段）。`adopt_candidate` 的争议检查与 `resolve_lineage_conflict` 的解析都依赖它；Part D 的 lineage 对必须这样渲染 `item.natural_key`。 **→ 已裁决：接口对齐记录 #10。**
-9. **`pending_members` 的形状与位置**：`set_merge` 把 `{issuer_id:T, market:'CN'|'US'}`（两个市场，去重）追加到 pair `facts.lineage_same_day` **最新一行周期**（`order by (status='running') desc, started_at desc limit 1`）的 `detail.pending_members`；该 pair 还没有任何周期行时不写。Part D 运行器建新周期时读最新周期的 `pending_members`、合并去重；运行器本身也须按拓扑（有引用方的目标）发现成员，不能只靠 `pending_members`。 **→ 已裁决：接口对齐记录 #6。**
+9. **`pending_members` 的形状与位置**：`set_merge` 把 `{issuer_id:T, market:'CN'|'US'}`（两个市场，去重）追加到 pair `facts.lineage_same_day` **最新一行周期**（`order by (status='running') desc, started_at desc limit 1`）的 `detail.pending_members`；该 pair 还没有任何周期行时不写。Part D 运行器建新周期时读最新周期的 `pending_members`、合并去重；运行器本身也须按拓扑（有引用方的目标）发现成员，不能只靠 `pending_members`。 **→ 已裁决：接口对齐记录 #6；元素形状与登记锁按 #64 修订（计划审计 Q2）。**
 10. **pair 列不得有 CHECK 枚举**：本 Part 的测试用 `test.<8 hex>` 作为 pair（每个用例独占，避免与 Part D 的周期测试抢"每 pair 一个 running 周期"的部分唯一索引）。Part A 的 `dq_reconcile_cycles.pair`、`dq_reconcile_cursor.pair`、`dq_reconciliations.pair` 按规格 §3.1 不加枚举 CHECK。 **→ 已裁决：接口对齐记录 #32。**
 11. **`apply_reconcile_result` 的若干约定**：`reconcile_mismatch` 项 natural_key 由 SQL 计算为 `<pair>:<natural_key>:<left_fact_id>`（`quarantine_left` 时忽略 `item`）；`dq_reconciliations.dataset = 'reconcile.' || pair`；结果行 `detail` 合并 `{item_id, inputs_hash}`；项的 `batch_id` = 围栏批次；`review_item`/`lineage_item` 同自然键 open 项复用。 **→ 已裁决：接口对齐记录 #33。**
 12. **假定的 `SubmissionsSnapshot` 形状**（Part B Task 6）：`fetchSubmissions(cik10:string,opts:{fetch:typeof fetch;userAgent?:string;raw:RawStore;budget:Budget}):Promise<SubmissionsSnapshot>`，`SubmissionsSnapshot` 至少有 `sha256:string`（recent 页原始字节的哈希）与 `recent:{accessionNumber:string;filingDate:string;reportDate:string|null;acceptanceDateTime:string|null;form:string;primaryDocument:string;isInlineXBRL:boolean}[]`（**已含全部分页**）。Task 12 只用 `recent` 与 `sha256`。 **→ 已裁决：接口对齐记录 #34。**
@@ -8997,7 +9006,7 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
     await c.query(`insert into public.dq_reconcile_cycles(pair,cycle_id,started_at,finished_at,members,status,expected_total) values('facts.lineage_same_day',$1,now()+interval '100 years',now()+interval '100 years','[]','complete',0)`,[`facts.lineage_same_day-test-${randomUUID().slice(0,8)}`]);
     await c.query(`select public.set_merge($1,$2,$3)`,[s,t,by]);
     const [latest]=(await c.query(`select detail from public.dq_reconcile_cycles where pair='facts.lineage_same_day' order by (status='running') desc, started_at desc limit 1`)).rows;
-    expect(latest.detail.pending_members).toEqual(expect.arrayContaining([{issuer_id:t,market:'CN'},{issuer_id:t,market:'US'}]));
+    expect(latest.detail.pending_members).toEqual(expect.arrayContaining([{issuer_id:t,market:'CN',source:s},{issuer_id:t,market:'US',source:s}]));   // one entry per merged source (plan audit Q2)
    });
   });
 
@@ -9345,7 +9354,9 @@ revoke execute on function public.fact_topology_lock(uuid[]) from public, anon, 
 -- (changed → lineage_changed); referrers of the source re-pointed to the target (row_count = n);
 -- the source retired (row_count = 1, else source_not_active); the plan-1 triggers check the target
 -- is active and the source holds no open security (errors pass through); every affected scope
--- state_rev + 1; the target joins the next facts.lineage_same_day cycle; audit row.
+-- state_rev + 1; the target joins the next facts.lineage_same_day cycle — entry {issuer_id:T, market,
+-- source:S} appended under the cycle lock open_reconcile_cycle also takes (plan audit Q2), so a cycle
+-- creation never overwrites or half-consumes it; audit row.
 create or replace function public.fact_set_merge_body(p_source uuid, p_target uuid, p_resolved_by uuid)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare v_set uuid[]; v_now uuid[]; v_refs uuid[]; n int;
@@ -9370,13 +9381,14 @@ begin
   get diagnostics n = row_count;
   if n <> 1 then raise exception 'source_not_active' using errcode = 'P0001'; end if;
   update public.fact_sync_scope set state_rev = state_rev + 1, updated_at = now() where issuer_id = any(v_set);
+  perform pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:facts.lineage_same_day'));   -- serialises with open_reconcile_cycle (plan audit Q2)
   update public.dq_reconcile_cycles c
   set detail = jsonb_set(c.detail, '{pending_members}',
         coalesce(case when jsonb_typeof(c.detail -> 'pending_members') = 'array' then c.detail -> 'pending_members' end, '[]'::jsonb)
-        || coalesce((select jsonb_agg(jsonb_build_object('issuer_id', p_target, 'market', mk.m) order by mk.m)
+        || coalesce((select jsonb_agg(jsonb_build_object('issuer_id', p_target, 'market', mk.m, 'source', p_source) order by mk.m)
                      from (values ('CN'), ('US')) as mk(m)
                      where not (coalesce(case when jsonb_typeof(c.detail -> 'pending_members') = 'array' then c.detail -> 'pending_members' end, '[]'::jsonb)
-                                @> jsonb_build_array(jsonb_build_object('issuer_id', p_target, 'market', mk.m)))), '[]'::jsonb), true)
+                                @> jsonb_build_array(jsonb_build_object('issuer_id', p_target, 'market', mk.m, 'source', p_source)))), '[]'::jsonb), true)
   where c.pair = 'facts.lineage_same_day'
     and c.cycle_id = (select y.cycle_id from public.dq_reconcile_cycles y where y.pair = 'facts.lineage_same_day' order by (y.status = 'running') desc, y.started_at desc limit 1);
   insert into public.research_audit_log (user_id, actor, action, object_type, object_id, detail)
@@ -10032,10 +10044,10 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 8c: 迁移二（三）—— 游标三函数、`apply_reconcile_result`、类型、锁
+### Task 8c: 迁移二（三）—— 游标三函数、`apply_reconcile_result`、`open_reconcile_cycle`（计划审计 Q2）、类型、锁
 
 **Files:**
-- Modify: `supabase/migrations/20261107091000_facts_extensions.sql`（末尾追加第 11–12 节；之后本文件锁定）
+- Modify: `supabase/migrations/20261107091000_facts_extensions.sql`（末尾追加第 11–13 节；之后本文件锁定）
 - Modify: `src/lib/dq/dq-extensions.integration.test.ts`（追加 `describe('8c: …')`）
 - Modify: `src/lib/supabase/database.types.ts`（`Filing`、`FinancialMetric` 新列，头注释）
 - Modify: `supabase/migrations.lock.json`（追加一条）
@@ -10188,9 +10200,89 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
    expect(await q(`select status,detail->'hook'->>'state' hook,detail->>'issuer_id' issuer from public.dq_quarantine where id=$1`,[a.item_id])).toEqual([{status:'open',hook:'pending',issuer:iss}]);
   });
 
-  it('grants: cursor functions and apply_reconcile_result are service_role only; the fence helper is closed to every role; replays',async()=>{
+  // ---- open_reconcile_cycle (section 13, plan audit Q2): atomic creation, per-entry consumption, the lock shared with set_merge
+  type Opened={created:boolean;cycle:Record<string,any>;transferred:unknown[]};
+  const openC=(c:Pool|PoolClient,pair:string,id:string,members:unknown[],pending:unknown[])=>
+   c.query(`select public.open_reconcile_cycle($1,$2,now(),$3::jsonb,$4::jsonb) v`,[pair,id,JSON.stringify(members),JSON.stringify(pending)]).then(r=>r.rows[0].v as Opened);
+  const LINEAGE='facts.lineage_same_day';
+  const lid=()=>`${LINEAGE}-${randomUUID().slice(0,8)}`;
+  /** inside a rolled-back transaction only: no running lineage cycle from another suite, plus a "latest" row set_merge writes to */
+  const lineageStage=async(c:PoolClient,pending:unknown[])=>{
+   await c.query(`update public.dq_reconcile_cycles set status='complete', finished_at=now() where pair=$1 and status='running'`,[LINEAGE]);
+   const id=`${LINEAGE}-old-${randomUUID().slice(0,8)}`;
+   await c.query(`insert into public.dq_reconcile_cycles(pair,cycle_id,started_at,finished_at,members,status,expected_total,detail) values($1,$2,now()+interval '100 years',now()+interval '100 years','[]','complete',0,$3::jsonb)`,[LINEAGE,id,JSON.stringify({pending_members:pending})]);
+   return id;
+  };
+  const pendingIn=async(c:Pool|PoolClient,pair:string,id:string)=>(await c.query(`select detail from public.dq_reconcile_cycles where pair=$1 and cycle_id=$2`,[pair,id])).rows[0].detail as Record<string,unknown>;
+
+  it('open_reconcile_cycle: cycle row and every cursor in one call; only the listed pending entries are consumed; a running cycle is returned unchanged',async()=>{
+   const t1=await issuer(),t2=await issuer();
+   const e1={issuer_id:t1,market:'US',source:randomUUID()},e2={issuer_id:t2,market:'US',source:randomUUID()};
+   await inRolledBackTx(admin,async c=>{
+    const old=await lineageStage(c,[e1,e2]);
+    const id=lid();
+    const out=await openC(c,LINEAGE,id,[{issuer_id:t1,market:'US',expected_keys:[{naturalKey:'k1',locator:{}},{naturalKey:'k2',locator:{}}]}],[e1]);
+    expect(out).toMatchObject({created:true,transferred:[e1],cycle:{cycle_id:id,status:'running',expected_total:2,detail:{pending_merged_from:[old],pending_transferred:[e1]}}});
+    expect((await c.query(`select issuer_id,market,expected,state from public.dq_reconcile_cursor where pair=$1 and cycle_id=$2`,[LINEAGE,id])).rows).toEqual([{issuer_id:t1,market:'US',expected:2,state:'pending'}]);
+    expect(await pendingIn(c,LINEAGE,old)).toEqual({pending_members:[e2],pending_consumed_by:id});    // e2 was not listed: it waits for the next cycle
+    const again=await openC(c,LINEAGE,lid(),[{issuer_id:t2,market:'US',expected_keys:[]}],[e2]);
+    expect(again).toMatchObject({created:false,transferred:[],cycle:{cycle_id:id}});
+    expect((await pendingIn(c,LINEAGE,old)).pending_members).toEqual([e2]);                        // nothing consumed by the loser
+   });
+  });
+
+  it('open_reconcile_cycle: a merge registered after the runner snapshot survives creation — neither overwritten nor consumed (stale-snapshot interleaving)',async()=>{
+   const s=await issuer(),t=await issuer(),t0=await issuer(),by=await user();
+   const e0={issuer_id:t0,market:'US',source:randomUUID()};
+   await inRolledBackTx(admin,async c=>{
+    const old=await lineageStage(c,[e0]);
+    const snapshot=[e0];                                                          // the runner read pending_members here
+    await c.query(`select public.set_merge($1,$2,$3)`,[s,t,by]);                  // a merge lands before the function runs
+    const out=await openC(c,LINEAGE,lid(),[{issuer_id:t0,market:'US',expected_keys:[]}],snapshot);
+    expect(out.transferred).toEqual([e0]);
+    expect((out.cycle.members as {issuer_id:string}[]).map(m=>m.issuer_id)).toEqual([t0]);
+    expect((await pendingIn(c,LINEAGE,old)).pending_members).toEqual([{issuer_id:t,market:'CN',source:s},{issuer_id:t,market:'US',source:s}]);
+   });
+  });
+
+  it('open_reconcile_cycle and set_merge serialise on the cycle lock, both ways',async()=>{
+   const s1=await issuer(),t1=await issuer(),s2=await issuer(),t2=await issuer(),by=await user();
+   let waiter:Promise<void>|undefined;
+   await inTx(admin,async({c,pid})=>{
+    await c.query(`select public.set_merge($1,$2,$3)`,[s1,t1,by]);                // holds the cycle lock until this transaction ends
+    waiter=inRolledBackTx(admin,async c2=>{await openC(c2,LINEAGE,lid(),[],[]);},1);waiter.catch(()=>{});
+    await stillBlockedBehind(admin,pid,waiter);
+   });                                                                              // rolled back: the merge never happened, the waiter proceeds
+   await expect(waiter).resolves.toBeUndefined();
+   let merger:Promise<unknown>|undefined;
+   await inTx(admin,async({c,pid})=>{
+    await openC(c,LINEAGE,lid(),[],[]);                                             // takes the cycle lock (created or not)
+    merger=one(`select public.set_merge($1,$2,$3) v`,[s2,t2,by]);merger.catch(()=>{});
+    await stillBlockedBehind(admin,pid,merger);
+   });                                                                              // rolled back: no cycle was created
+   await expect(merger).resolves.toEqual({repointed:0});
+  });
+
+  it('open_reconcile_cycle: invalid members are refused; a creator that dies before commit leaves pending, cycle and cursors untouched, and the rerun consumes once (crash recovery)',async()=>{
+   const t1=await issuer();const pair=newPair();
+   const e1={issuer_id:t1,market:'US',source:randomUUID()};
+   expect(await fails(openC(admin,pair,`${pair}-x`,[],[e1]))).toMatchObject({message:'invalid_members',code:'22023'});              // a pending entry without its resolved member
+   expect(await fails(openC(admin,pair,`${pair}-x`,[{issuer_id:t1,market:'US',expected_keys:[]},{issuer_id:t1,market:'US',expected_keys:[]}],[]))).toMatchObject({message:'invalid_members'});
+   expect(await fails(openC(admin,pair,`${pair}-x`,[{issuer_id:t1,market:'US'}],[]))).toMatchObject({message:'invalid_members'});   // keys not resolved
+   const old=`${pair}-old`;
+   await q(`insert into public.dq_reconcile_cycles(pair,cycle_id,started_at,finished_at,members,status,expected_total,detail) values($1,$2,now(),now(),'[]','complete',0,$3::jsonb)`,[pair,old,JSON.stringify({pending_members:[e1]})]);
+   await inRolledBackTx(admin,async c=>{await openC(c,pair,`${pair}-dead`,[{issuer_id:t1,market:'US',expected_keys:[]}],[e1]);});   // the creator dies before commit
+   expect(await q(`select cycle_id from public.dq_reconcile_cycles where pair=$1`,[pair])).toEqual([{cycle_id:old}]);
+   expect(await q(`select count(*)::int n from public.dq_reconcile_cursor where pair=$1`,[pair])).toEqual([{n:0}]);
+   expect((await pendingIn(admin,pair,old)).pending_members).toEqual([e1]);
+   expect(await openC(admin,pair,`${pair}-live`,[{issuer_id:t1,market:'US',expected_keys:[{naturalKey:'k',locator:{}}]}],[e1])).toMatchObject({created:true,transferred:[e1]});
+   expect((await pendingIn(admin,pair,old)).pending_members).toEqual([]);
+   expect(await q(`select count(*)::int n from public.dq_reconcile_cursor where pair=$1 and cycle_id=$2`,[pair,`${pair}-live`])).toEqual([{n:1}]);
+  });
+
+  it('grants: cursor functions, apply_reconcile_result and open_reconcile_cycle are service_role only; the fence helper is closed to every role; replays',async()=>{
    const fn=(role:string,sig:string)=>one(`select has_function_privilege($1,$2,'EXECUTE') v`,[role,sig]);
-   for(const sig of ['public.claim_reconcile_member(text,text,uuid,text,uuid)','public.complete_reconcile_member(jsonb)','public.fail_reconcile_member(jsonb,text)','public.apply_reconcile_result(jsonb,jsonb)']){
+   for(const sig of ['public.claim_reconcile_member(text,text,uuid,text,uuid)','public.complete_reconcile_member(jsonb)','public.fail_reconcile_member(jsonb,text)','public.apply_reconcile_result(jsonb,jsonb)','public.open_reconcile_cycle(text,text,timestamptz,jsonb,jsonb)']){
     for(const role of ['anon','authenticated'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});
     expect(await fn('service_role',sig)).toBe(true);
    }
@@ -10203,9 +10295,9 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 - [ ] **Step 2: 跑测试确认失败**
 
 `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/dq/dq-extensions.integration.test.ts`
-Expected: FAIL —— 8c 用例报 `function public.claim_reconcile_member(...) does not exist`；8a/8b 仍 PASS。
+Expected: FAIL —— 8c 用例报 `function public.claim_reconcile_member(...) does not exist` / `function public.open_reconcile_cycle(...) does not exist`；8a/8b 仍 PASS。
 
-- [ ] **Step 3: 实现第 11–12 节**
+- [ ] **Step 3: 实现第 11–13 节**
 
 在迁移末尾追加：
 
@@ -10411,6 +10503,73 @@ begin
 end $$;
 revoke execute on function public.apply_reconcile_result(jsonb, jsonb) from public, anon, authenticated;
 grant execute on function public.apply_reconcile_result(jsonb, jsonb) to service_role;
+
+-- ---------------------------------------------------------------- 13. atomic cycle creation (spec §3.1, §5.5; plan audit Q2)
+-- The only writer of new dq_reconcile_cycles rows. Under the pair's cycle lock — the advisory lock
+-- set_merge takes right before it registers a pending member (section 8a) — in one transaction:
+--  a running cycle of the pair → returned unchanged (created false, nothing consumed);
+--  else p_members [{issuer_id, market, expected_keys[]}] (distinct (issuer, market), keys resolved by the
+--  runner) and p_pending [{issuer_id, market, source}] (the runner's snapshot; each entry's (issuer,
+--  market) must be a member, i.e. its keys were resolved AFTER the merge was visible) are checked; the
+--  cycle row (expected_total = Σ keys) and one pending cursor per member are inserted; exactly the
+--  p_pending entries leave every cycle row's detail.pending_members (an entry registered after the
+--  snapshot stays and joins the next cycle); the new row's detail records pending_merged_from /
+--  pending_transferred. A writer that bypassed the lock hits the running partial unique index:
+--  unique_violation → the winner is returned (created false). Lock order: advisory lock, then cycle rows
+--  (set_merge: topology locks, advisory lock, cycle row) — no cycle.
+create or replace function public.open_reconcile_cycle(p_pair text, p_cycle_id text, p_started_at timestamptz, p_members jsonb, p_pending jsonb)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_row public.dq_reconcile_cycles; r record; v_keep jsonb; v_take jsonb; v_from text[] := '{}'; v_moved jsonb := '[]'::jsonb;
+begin
+  if p_pair is null or p_cycle_id is null or p_started_at is null then raise exception 'invalid_members' using errcode = '22023'; end if;
+  perform pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:' || p_pair));
+  select * into v_row from public.dq_reconcile_cycles where pair = p_pair and status = 'running';
+  if found then return jsonb_build_object('created', false, 'cycle', to_jsonb(v_row), 'transferred', '[]'::jsonb); end if;
+  if jsonb_typeof(p_members) is distinct from 'array' or jsonb_typeof(p_pending) is distinct from 'array'
+     or exists (select 1 from jsonb_array_elements(p_members) m
+                where jsonb_typeof(m) <> 'object' or (m ->> 'issuer_id') is null or coalesce(m ->> 'market', '') not in ('US', 'CN')
+                   or jsonb_typeof(m -> 'expected_keys') is distinct from 'array')
+     or (select count(*) from jsonb_array_elements(p_members))
+        <> (select count(distinct (m ->> 'issuer_id', m ->> 'market')) from jsonb_array_elements(p_members) m)
+     or exists (select 1 from jsonb_array_elements(p_pending) p
+                where jsonb_typeof(p) <> 'object' or (p ->> 'source') is null
+                   or not exists (select 1 from jsonb_array_elements(p_members) m
+                                  where m ->> 'issuer_id' = p ->> 'issuer_id' and m ->> 'market' = p ->> 'market'))
+  then raise exception 'invalid_members' using errcode = '22023'; end if;
+  begin
+    insert into public.dq_reconcile_cycles (pair, cycle_id, started_at, finished_at, members, status, expected_total, detail)
+    values (p_pair, p_cycle_id, p_started_at, null, p_members, 'running',
+            (select coalesce(sum(jsonb_array_length(m -> 'expected_keys')), 0) from jsonb_array_elements(p_members) m), '{}'::jsonb);
+  exception when unique_violation then
+    select * into v_row from public.dq_reconcile_cycles where pair = p_pair and status = 'running';
+    if found then return jsonb_build_object('created', false, 'cycle', to_jsonb(v_row), 'transferred', '[]'::jsonb); end if;
+    raise;
+  end;
+  insert into public.dq_reconcile_cursor (pair, cycle_id, issuer_id, market, expected)
+  select p_pair, p_cycle_id, (m ->> 'issuer_id')::uuid, m ->> 'market', jsonb_array_length(m -> 'expected_keys')
+  from jsonb_array_elements(p_members) m;
+  for r in select c.cycle_id, c.detail from public.dq_reconcile_cycles c
+           where c.pair = p_pair and c.cycle_id <> p_cycle_id and jsonb_typeof(c.detail -> 'pending_members') = 'array'
+           order by c.cycle_id for update loop
+    select coalesce(jsonb_agg(e) filter (where not (p_pending @> jsonb_build_array(e))), '[]'::jsonb),
+           coalesce(jsonb_agg(e) filter (where p_pending @> jsonb_build_array(e)), '[]'::jsonb)
+      into v_keep, v_take
+    from jsonb_array_elements(r.detail -> 'pending_members') e;
+    if jsonb_array_length(v_take) > 0 then
+      update public.dq_reconcile_cycles
+      set detail = jsonb_set(r.detail, '{pending_members}', v_keep) || jsonb_build_object('pending_consumed_by', p_cycle_id)
+      where pair = p_pair and cycle_id = r.cycle_id;
+      v_from := v_from || r.cycle_id::text; v_moved := v_moved || v_take;
+    end if;
+  end loop;
+  update public.dq_reconcile_cycles
+  set detail = jsonb_build_object('pending_merged_from', to_jsonb(v_from), 'pending_transferred', v_moved)
+  where pair = p_pair and cycle_id = p_cycle_id
+  returning * into v_row;
+  return jsonb_build_object('created', true, 'cycle', to_jsonb(v_row), 'transferred', v_moved);
+end $$;
+revoke execute on function public.open_reconcile_cycle(text, text, timestamptz, jsonb, jsonb) from public, anon, authenticated;
+grant execute on function public.open_reconcile_cycle(text, text, timestamptz, jsonb, jsonb) to service_role;
 ```
 
 （`f` 在没有 `left_fact_id` 时是全 null 的行变量，`f.status = 'ok'` 为 null，分支不进入；`quarantine_left` 已在入口要求 `left_fact_id`。`dq_reconciliations` 的 `dq_reconciliations_numeric_sides`/`nonnumeric_sides`/`cycle_cols` 约束（Part A）在插入时把关；违反 → 23514 原样抛出，整键回滚。）
@@ -10433,7 +10592,7 @@ grant execute on function public.apply_reconcile_result(jsonb, jsonb) to service
 - [ ] **Step 5: 跑测试确认通过**
 
 `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/dq/dq-extensions.integration.test.ts src/lib/facts/facts.integration.test.ts src/lib/facts/sync-us.integration.test.ts src/lib/entities/identifiers.integration.test.ts`
-Expected: PASS（8a 13 + 8b 10 + 8c 8；迁移一套件不回归）。
+Expected: PASS（8a 13 + 8b 10 + 8c 12（含计划审计 Q2 的 4 个 `open_reconcile_cycle` 用例）；迁移一套件不回归）。
 
 - [ ] **Step 6: 锁定迁移**
 
@@ -10495,6 +10654,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
    if(fn==='apply_reconcile_result')return {data:{reused:false,reconciliation_id:'r1',item_id:null,quarantined:1,materialize:{issuer_id:I1,market:'US'}}};
    if(fn==='complete_reconcile_member')return {data:{compared_passed:1,compared_failed:'0',not_compared:2}};
    if(fn==='set_merge')return {data:{repointed:'1'}};
+   if(fn==='open_reconcile_cycle')return {data:{created:true,cycle:{pair:'facts.lineage_same_day',cycle_id:'c'},transferred:[{issuer_id:I1,market:'US',source:I2}]}};
    if(fn==='set_filing_acceptance')return {data:true};
    if(fn==='replace_financial_metrics_lineage')return {data:3};
    return {data:null};
@@ -10522,6 +10682,9 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
   expect(await db.completeReconcileMember(fence)).toEqual({compared_passed:1,compared_failed:0,not_compared:2});
   await db.failReconcileMember(fence,'boom');
   expect(calls.at(-1)).toEqual({fn:'fail_reconcile_member',args:{p_fence:fence,p_error:'boom'}});
+  const open={pair:'facts.lineage_same_day' as const,cycleId:'c',startedAt:'2026-11-05T00:00:00.000Z',members:[{issuer_id:I1,market:'US' as const,expected_keys:[]}],pending:[{issuer_id:I1,market:'US' as const,source:I2}]};
+  expect(await db.openReconcileCycle(open)).toEqual({created:true,cycle:{pair:'facts.lineage_same_day',cycle_id:'c'},transferred:[{issuer_id:I1,market:'US',source:I2}]});
+  expect(calls.at(-1)).toEqual({fn:'open_reconcile_cycle',args:{p_pair:'facts.lineage_same_day',p_cycle_id:'c',p_started_at:'2026-11-05T00:00:00.000Z',p_members:open.members,p_pending:open.pending}});
   expect(await db.setMerge('s','t','adm')).toEqual({repointed:1});
   expect(calls.at(-1)).toEqual({fn:'set_merge',args:{p_source:'s',p_target:'t',p_resolved_by:'adm'}});
   await db.setDissolved('s','adm');
@@ -10576,11 +10739,11 @@ describe('memoryFactsDb plan-3 specifics',()=>{
   expect(await db.lineageOf(c)).toEqual([c,a,b]);expect(await db.targetOf(a)).toBe(c);expect(await db.targetOf(c)).toBe(c);expect(await db.targetOf('unknown')).toBe('unknown');
   expect(await db.stateRevs([c,a,a],'US')).toEqual([{issuer_id:a,state_rev:0},{issuer_id:c,state_rev:0}]);
   await db.tables.insert('dq_reconcile_cycles',{pair:'facts.lineage_same_day',cycle_id:'old',status:'complete',started_at:'2026-01-01T00:00:00.000Z',detail:{}});
-  await db.tables.insert('dq_reconcile_cycles',{pair:'facts.lineage_same_day',cycle_id:'new',status:'complete',started_at:'2026-02-01T00:00:00.000Z',detail:{pending_members:[{issuer_id:c,market:'US'}]}});
+  await db.tables.insert('dq_reconcile_cycles',{pair:'facts.lineage_same_day',cycle_id:'new',status:'complete',started_at:'2026-02-01T00:00:00.000Z',detail:{pending_members:[{issuer_id:c,market:'US',source:'earlier-source'}]}});
   const s=`d0000000-0000-4000-8000-000000000000`;
   expect(await db.setMerge(s,c,'adm')).toEqual({repointed:0});
   const cycles=await db.tables.select('dq_reconcile_cycles',{pair:'facts.lineage_same_day'});
-  expect(cycles.find(x=>x.cycle_id==='new')!.detail).toEqual({pending_members:[{issuer_id:c,market:'US'},{issuer_id:c,market:'CN'}]});
+  expect(cycles.find(x=>x.cycle_id==='new')!.detail).toEqual({pending_members:[{issuer_id:c,market:'US',source:'earlier-source'},{issuer_id:c,market:'CN',source:s},{issuer_id:c,market:'US',source:s}]});   // one entry per merged source (plan audit Q2)
   expect(cycles.find(x=>x.cycle_id==='old')!.detail).toEqual({});
   expect(db.scope().filter(x=>x.issuer_id===s).map(x=>[x.market,x.priority,x.fetch_key,x.state_rev]).sort()).toEqual([['CN',0,'topology',1],['US',0,'topology',1]]);
   const m={issuer_id:'z',market:'US' as const,metric:'m',period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M' as const,value:'1',unit:'u',input_unit:'USD',basis:'us_standard',formula_version:'v',inputs:[],based_on_rev:0,based_on_lineage:[{issuer_id:'z',state_rev:0}],as_of:'2024-01-01'};
@@ -10628,6 +10791,11 @@ export interface ReconcileResultInput{
 }
 export interface ApplyReconcileOutcome{reused:boolean;reconciliationId:string;itemId:string|null;quarantined:0|1;materialize:{issuerId:string;market:Market}|null}
 export interface MemberCounts{compared_passed:number;compared_failed:number;not_compared:number}
+/** set_merge's registration of a merge target (plan audit Q2): one entry per (target, market, merged source). */
+export interface PendingMember{issuer_id:string;market:Market;source:string}
+/** open_reconcile_cycle input (plan audit Q2): members frozen with their expected keys (the {naturalKey, locator} shape Task 13a names ExpectedKey); pending = exactly the snapshot entries the runner resolved keys for. */
+export interface OpenCycleInput{pair:CyclePairId;cycleId:string;startedAt:string;members:{issuer_id:string;market:Market;expected_keys:{naturalKey:string;locator:Record<string,unknown>}[]}[];pending:PendingMember[]}
+export interface OpenCycleResult{created:boolean;cycle:Record<string,unknown>;transferred:PendingMember[]}
 ```
 
 - [ ] **Step 4: `src/lib/facts/types.ts`**
@@ -10640,7 +10808,7 @@ export interface MemberCounts{compared_passed:number;compared_failed:number;not_
 // uses these names verbatim. FactsDb has three implementations: supabaseFactsDb (db.ts, rpc),
 // memoryFactsDb (memory-facts-db.ts, unit tests), pgFactsDb (pg-facts-db.ts, integration tests).
 // The reconciliation types are imported as types only (no runtime cycle with src/lib/dq).
-import type {ApplyReconcileOutcome,CyclePairId,Fence,MemberCounts,ReconcileResultInput} from '../dq/reconcile/types';
+import type {ApplyReconcileOutcome,CyclePairId,Fence,MemberCounts,OpenCycleInput,OpenCycleResult,ReconcileResultInput} from '../dq/reconcile/types';
 export type Market='US'|'CN';
 export type Statement='IS'|'BS'|'CF'|'DEI';
 export type Duration='3M'|'6M'|'9M'|'12M'|'INSTANT';
@@ -10761,6 +10929,8 @@ export interface FactsDb{
  applyReconcileResult(fence:Fence,result:ReconcileResultInput):Promise<ApplyReconcileOutcome>;
  completeReconcileMember(fence:Fence):Promise<MemberCounts>;
  failReconcileMember(fence:Fence,error:string):Promise<void>;
+ /** atomic cycle creation (open_reconcile_cycle, plan audit Q2): under the pair's cycle lock (shared with set_merge) a running cycle is returned unchanged (created:false); else the cycle row and one pending cursor per member are inserted and ONLY the listed pending entries leave the cycle rows' pending_members */
+ openReconcileCycle(input:OpenCycleInput):Promise<OpenCycleResult>;
  setMerge(source:string,target:string,resolvedBy:string):Promise<{repointed:number}>;
  setDissolved(issuer:string,resolvedBy:string):Promise<void>;
 }
@@ -10777,7 +10947,7 @@ export interface FactInsert{fact_id:string;issuer_id:string;market:Market;filing
 ```ts
 import {FactsDbError} from './types';
 import type {CalendarFiling,ConflictItem,FactRow,FactsDb,FactsDbErrorCode,FilingFactRow,FilingInsert,FilingRow,LineageConflict,LineageRev,Market,MetricRow,ReadFactsLineageResult,ReadFactsOptions,ReadFactsResult,RunStatus,ScopeRow} from './types';
-import type {ApplyReconcileOutcome,CyclePairId,Fence,MemberCounts} from '../dq/reconcile/types';
+import type {ApplyReconcileOutcome,CyclePairId,Fence,MemberCounts,OpenCycleResult} from '../dq/reconcile/types';
 ```
 
 (b) `MESSAGE_CODES` 与 `toFactsDbError` 替换为（23505 先于首词判断，见契约问题 4）：
@@ -10849,6 +11019,13 @@ export function applyOutcomeFromJson(x:unknown):ApplyReconcileOutcome{
   materialize:m&&typeof m==='object'?{issuerId:String(m.issuer_id),market:m.market as Market}:null};
 }
 export const countsFromJson=(x:unknown):MemberCounts=>{const o=(x??{}) as Record<string,unknown>;return {compared_passed:Number(o.compared_passed),compared_failed:Number(o.compared_failed),not_compared:Number(o.not_compared)};};
+/** open_reconcile_cycle envelope → OpenCycleResult (plan audit Q2); the cycle row is passed through as stored (to_jsonb). */
+export function openCycleFromJson(x:unknown):OpenCycleResult{
+ const o=(x??{}) as {created?:unknown;cycle?:unknown;transferred?:unknown};
+ if(!o.cycle||typeof o.cycle!=='object')throw new FactsDbError('unknown','open_reconcile_cycle: no cycle');
+ return {created:o.created===true,cycle:o.cycle as Record<string,unknown>,
+  transferred:(Array.isArray(o.transferred)?o.transferred:[]).map(p=>{const e=p as Record<string,unknown>;return {issuer_id:String(e.issuer_id),market:e.market as Market,source:String(e.source)};})};
+}
 export const adoptFromJson=(x:unknown)=>{const o=(x??{}) as Record<string,unknown>;return {factId:String(o.fact_id),runId:String(o.run_id),issuerId:String(o.issuer_id),market:o.market as Market};};
 export const restoreFromJson=(x:unknown)=>{const o=(x??{}) as {promoted?:unknown;skipped?:unknown};return {promoted:Number(o.promoted),skipped:(Array.isArray(o.skipped)?o.skipped:[]).map(s=>({fact_id:String((s as {fact_id:unknown}).fact_id),reason:String((s as {reason:unknown}).reason)}))};};
 ```
@@ -10891,6 +11068,7 @@ export const restoreFromJson=(x:unknown)=>{const o=(x??{}) as {promoted?:unknown
   async applyReconcileResult(fence,result){return applyOutcomeFromJson(await call<unknown>('apply_reconcile_result',{p_fence:fenceArgs(fence),p_result:result}));},
   async completeReconcileMember(fence){return countsFromJson(await call<unknown>('complete_reconcile_member',{p_fence:fenceArgs(fence)}));},
   async failReconcileMember(fence,error){await call('fail_reconcile_member',{p_fence:fenceArgs(fence),p_error:error});},
+  async openReconcileCycle(i){return openCycleFromJson(await call<unknown>('open_reconcile_cycle',{p_pair:i.pair,p_cycle_id:i.cycleId,p_started_at:i.startedAt,p_members:i.members,p_pending:i.pending}));},
   async setMerge(source,target,by){return {repointed:Number((await call<{repointed:unknown}>('set_merge',{p_source:source,p_target:target,p_resolved_by:by})).repointed)};},
   async setDissolved(issuer,by){await call('set_dissolved',{p_issuer:issuer,p_resolved_by:by});},
 ```
@@ -10902,7 +11080,7 @@ export const restoreFromJson=(x:unknown)=>{const o=(x??{}) as {promoted?:unknown
 import 行改为：
 
 ```ts
-import {adoptFromJson,applyOutcomeFromJson,assertAllStaged,calendarFilingFromRow,chunk,conflictFromItem,conflictPrefix,countsFromJson,factRowFromTable,fenceArgs,fenceFromJson,filingArgs,filingFactFromJson,filingFromTable,lineageResultFromEnvelope,lineageRevsFrom,linkPatch,metricArgs,metricFromTable,readArgs,readLineageArgs,restoreFromJson,resultFromEnvelope,scopeFromTable,toFactsDbError} from './db';
+import {adoptFromJson,applyOutcomeFromJson,assertAllStaged,calendarFilingFromRow,chunk,conflictFromItem,conflictPrefix,countsFromJson,factRowFromTable,fenceArgs,fenceFromJson,filingArgs,filingFactFromJson,filingFromTable,lineageResultFromEnvelope,lineageRevsFrom,linkPatch,metricArgs,metricFromTable,openCycleFromJson,readArgs,readLineageArgs,restoreFromJson,resultFromEnvelope,scopeFromTable,toFactsDbError} from './db';
 import type {PgErrorLike,ReadFactsEnvelope,ReadFactsLineageEnvelope} from './db';
 import type {FactsDb,Market,ReadFactsOptions} from './types';
 ```
@@ -10937,6 +11115,7 @@ import type {FactsDb,Market,ReadFactsOptions} from './types';
   async applyReconcileResult(fence,result){return applyOutcomeFromJson(await fn<unknown>('public.apply_reconcile_result($1::jsonb,$2::jsonb)',[JSON.stringify(fenceArgs(fence)),JSON.stringify(result)]));},
   async completeReconcileMember(fence){return countsFromJson(await fn<unknown>('public.complete_reconcile_member($1::jsonb)',[JSON.stringify(fenceArgs(fence))]));},
   async failReconcileMember(fence,error){await fn('public.fail_reconcile_member($1::jsonb,$2)',[JSON.stringify(fenceArgs(fence)),error]);},
+  async openReconcileCycle(i){return openCycleFromJson(await fn<unknown>('public.open_reconcile_cycle($1,$2,$3::timestamptz,$4::jsonb,$5::jsonb)',[i.pair,i.cycleId,i.startedAt,JSON.stringify(i.members),JSON.stringify(i.pending)]));},
   async setMerge(source,target,by){return {repointed:Number((await fn<{repointed:unknown}>('public.set_merge($1,$2,$3)',[source,target,by])).repointed)};},
   async setDissolved(issuer,by){await fn('public.set_dissolved($1,$2)',[issuer,by]);},
 ```
@@ -10953,7 +11132,7 @@ import {READ_FACTS_CAP,assertAllStaged,conflictFromItem,conflictPrefix,lineageRe
 import {factKey} from './keys';
 import {FactsDbError} from './types';
 import type {FactCandidate,FactRow,FactsDb,FilingRow,LineageConflict,LineageRev,Market,MetricRow,ReadFactsLineageResult,ReadFactsOptions,RunStatus,ScopeRow} from './types';
-import type {ApplyReconcileOutcome,Fence,ReconcileResultInput} from '../dq/reconcile/types';
+import type {ApplyReconcileOutcome,Fence,PendingMember,ReconcileResultInput} from '../dq/reconcile/types';
 import {DATASETS} from '../dq/datasets';   // dataset strings only from the registry (datasets.test.ts literal scan)
 ```
 
@@ -10964,7 +11143,7 @@ import {DATASETS} from '../dq/datasets';   // dataset strings only from the regi
  setTopology(entries:Record<string,MemoryTopology>):void;
 ```
 
-(c) `ASYNC_METHODS` 末尾追加 `'targetOf','lineageOf','stateRevs','readFactsLineage','readFilingFacts','replaceMetricsLineage','findFilingBySourceRef','filingsForCalendar','setFilingAcceptance','adoptCandidate','restoreReconciled','resolveLineageConflict','claimReconcileMember','applyReconcileResult','completeReconcileMember','failReconcileMember','setMerge','setDissolved'`；文件头注释末尾加一句：`Plan 3: topology (setTopology / setMerge / setDissolved), lineage reads with cross-issuer suppression, lineage metrics, acceptance, candidate adoption, restore, lineage verdicts and the reconcile cursor, mirroring 20261107091000 (the cursor, cycles and results live in the TableClient so run.ts and this db see the same rows).`
+(c) `ASYNC_METHODS` 末尾追加 `'targetOf','lineageOf','stateRevs','readFactsLineage','readFilingFacts','replaceMetricsLineage','findFilingBySourceRef','filingsForCalendar','setFilingAcceptance','adoptCandidate','restoreReconciled','resolveLineageConflict','claimReconcileMember','applyReconcileResult','completeReconcileMember','failReconcileMember','openReconcileCycle','setMerge','setDissolved'`；文件头注释末尾加一句：`Plan 3: topology (setTopology / setMerge / setDissolved), lineage reads with cross-issuer suppression, lineage metrics, acceptance, candidate adoption, restore, lineage verdicts and the reconcile cursor, mirroring 20261107091000 (the cursor, cycles and results live in the TableClient so run.ts and this db see the same rows).`
 
 (d) 在 `const keyOrder=…;` 之后（`const raw:MemoryFactsDb={` 之前）插入助手，并**替换**原 `promote`（把原 `promote` 定义删掉，用下面这个；它要用到这里定义的 `detailOf`/`listOf`）：
 
@@ -11022,14 +11201,16 @@ import {DATASETS} from '../dq/datasets';   // dataset strings only from the regi
   if(!c||c.state!=='claimed'||c.claimed_by!==f.batch_id||Number(c.attempts)!==f.attempt||typeof c.claim_until!=='string'||c.claim_until<=now())throw new FactsDbError('fence_failed');
   return c;
  };
- const registerPending=async(target:string)=>{
+ // set_merge's registration: one {issuer_id:T, market, source:S} per market (CN, US), deduped by the whole entry (plan audit Q2)
+ const registerPending=async(target:string,source:string)=>{
   const cycles=(await tables.select('dq_reconcile_cycles',{pair:'facts.lineage_same_day'}))
    .sort((a,b)=>Number(b.status==='running')-Number(a.status==='running')||cmp(String(b.started_at),String(a.started_at)));
   const c=cycles[0];if(!c)return;
-  const d=detailOf(c);const list=Array.isArray(d.pending_members)?[...(d.pending_members as {issuer_id:string;market:string}[])]:[];
-  for(const m of MARKETS)if(!list.some(x=>x.issuer_id===target&&x.market===m))list.push({issuer_id:target,market:m});
+  const d=detailOf(c);const list=Array.isArray(d.pending_members)?[...(d.pending_members as PendingMember[])]:[];
+  for(const m of MARKETS)if(!list.some(x=>x.issuer_id===target&&x.market===m&&x.source===source))list.push({issuer_id:target,market:m,source});
   await tables.update('dq_reconcile_cycles',{pair:String(c.pair),cycle_id:String(c.cycle_id)},{detail:{...d,pending_members:list}});
  };
+ const pendingKey=(p:{issuer_id:unknown;market:unknown;source?:unknown})=>`${String(p.issuer_id)}:${String(p.market)}:${String(p.source)}`;
  // promote_quarantined eligibility (§4.5 + plan 3 T6): quarantined, run published, filing on the
  // row's generation, not referenced by any OPEN item, its (K, date) not disputed by an OPEN
  // same_day_conflict, chosen by every RESOLVED same_day_conflict and lineage_conflict that lists it
@@ -11306,6 +11487,33 @@ import {DATASETS} from '../dq/datasets';   // dataset strings only from the regi
    await fenceLock(fence);
    await tables.update('dq_reconcile_cursor',cursorKey(fence),{state:'failed',claim_until:null,last_error:String(error??'unknown').slice(0,2000)});
   },
+  // mirrors open_reconcile_cycle (plan audit Q2): running cycle → returned unchanged; else validate, insert
+  // the cycle row and one pending cursor per member, and remove exactly the listed pending entries.
+  async openReconcileCycle(i){
+   const cycles=await tables.select('dq_reconcile_cycles',{pair:i.pair});
+   const running=cycles.find(c=>c.status==='running');
+   if(running)return {created:false,cycle:running,transferred:[]};
+   const mk=(x:{issuer_id:unknown;market:unknown})=>`${String(x.issuer_id)}:${String(x.market)}`;
+   const memberKeys=new Set(i.members.map(mk));
+   if(memberKeys.size!==i.members.length||i.members.some(m=>typeof m.issuer_id!=='string'||(m.market!=='US'&&m.market!=='CN')||!Array.isArray(m.expected_keys))
+    ||i.pending.some(p=>typeof p.source!=='string'||!memberKeys.has(mk(p))))throw unknown('invalid_members');
+   const row={pair:i.pair,cycle_id:i.cycleId,started_at:i.startedAt,finished_at:null,members:i.members,status:'running',
+    expected_total:i.members.reduce((n,m)=>n+m.expected_keys.length,0),compared_passed:0,compared_failed:0,not_compared:0,exec_failed_members:0,detail:{}};
+   await tables.insert('dq_reconcile_cycles',row);
+   for(const m of i.members)await tables.insert('dq_reconcile_cursor',{pair:i.pair,cycle_id:i.cycleId,issuer_id:m.issuer_id,market:m.market,expected:m.expected_keys.length,state:'pending',claimed_by:null,claim_until:null,attempts:0,last_error:null,done_at:null,compared_passed:null,compared_failed:null,not_compared:null});
+   const listed=new Set(i.pending.map(pendingKey));
+   const from:string[]=[];const moved:PendingMember[]=[];
+   for(const c of [...cycles].sort((a,b)=>cmp(String(a.cycle_id),String(b.cycle_id)))){
+    const d=detailOf(c);if(!Array.isArray(d.pending_members))continue;
+    const list=d.pending_members as PendingMember[];
+    const take=list.filter(p=>listed.has(pendingKey(p)));if(take.length===0)continue;
+    await tables.update('dq_reconcile_cycles',{pair:i.pair,cycle_id:String(c.cycle_id)},{detail:{...d,pending_members:list.filter(p=>!listed.has(pendingKey(p))),pending_consumed_by:i.cycleId}});
+    from.push(String(c.cycle_id));moved.push(...take);
+   }
+   const detail={pending_merged_from:from,pending_transferred:moved};
+   await tables.update('dq_reconcile_cycles',{pair:i.pair,cycle_id:i.cycleId},{detail});
+   return {created:true,cycle:{...row,detail},transferred:moved};
+  },
   async setMerge(source,target,resolvedBy){
    if(!source||!target||source===target)throw unknown('invalid_merge');
    if(!resolvedBy)throw unknown('invalid_resolver');
@@ -11317,7 +11525,7 @@ import {DATASETS} from '../dq/datasets';   // dataset strings only from the regi
    for(const r of refs)topo.set(r,{...topoOf(r),merged_into:target});
    topo.set(source,{status:'merged',merged_into:target});
    for(const i of set)for(const m of MARKETS)bump(i,m);
-   await registerPending(target);
+   await registerPending(target,source);
    return {repointed:refs.length};
   },
   async setDissolved(issuer,resolvedBy){
@@ -11366,7 +11574,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ### Task 9b: `FactsDb` 扩展的共享契约用例（memory 与 pg 同一套）
 
 **Files:**
-- Modify: `src/lib/facts/db-contract.ts`（`ContractHarness` 增 `user`、`expireReconcileClaim`；新增 7 个用例）
+- Modify: `src/lib/facts/db-contract.ts`（`ContractHarness` 增 `user`、`expireReconcileClaim`；新增 8 个用例，第 8 个为计划审计 Q2 的 `openReconcileCycle`）
 - Modify: `src/lib/facts/db.test.ts`（memory 夹具：`batch()` 写 `ingest_batches`，加两个新字段）
 - Modify: `src/lib/facts/facts.integration.test.ts`（`pgHarness` 加两个新字段）
 
@@ -11552,6 +11760,19 @@ factsDbContract('memoryFactsDb contract',async()=>{
    expect((await db.claimReconcileMember(pair,c2,iss,'US',w))!.attempt).toBe(3);
   });
 
+  it('plan 3 openReconcileCycle (plan audit Q2): cycle + cursors in one call; only the listed pending entries are consumed; a running cycle is returned unchanged; unresolved pending is refused',async()=>{
+   const pair=newPair();const t1=await h.issuer(),t2=await h.issuer();const at=()=>new Date().toISOString();
+   const e1={issuer_id:t1,market:'US' as const,source:randomUUID()},e2={issuer_id:t2,market:'US' as const,source:randomUUID()};
+   await h.tables.insert('dq_reconcile_cycles',{pair,cycle_id:`${pair}-old`,started_at:at(),finished_at:at(),members:[],status:'complete',expected_total:0,compared_passed:0,compared_failed:0,not_compared:0,exec_failed_members:0,detail:{pending_members:[e1,e2]}});
+   const out=await db.openReconcileCycle({pair,cycleId:`${pair}-new`,startedAt:at(),members:[{issuer_id:t1,market:'US',expected_keys:[{naturalKey:'k',locator:{}}]}],pending:[e1]});
+   expect(out).toMatchObject({created:true,transferred:[e1],cycle:{cycle_id:`${pair}-new`,status:'running',expected_total:1,detail:{pending_merged_from:[`${pair}-old`],pending_transferred:[e1]}}});
+   expect((await h.tables.select('dq_reconcile_cursor',{pair,cycle_id:`${pair}-new`})).map(c=>[c.issuer_id,c.market,Number(c.expected),c.state])).toEqual([[t1,'US',1,'pending']]);
+   expect((await h.tables.select('dq_reconcile_cycles',{pair,cycle_id:`${pair}-old`}))[0].detail).toEqual({pending_members:[e2],pending_consumed_by:`${pair}-new`});
+   const again=await db.openReconcileCycle({pair,cycleId:`${pair}-other`,startedAt:at(),members:[{issuer_id:t2,market:'US',expected_keys:[]}],pending:[e2]});
+   expect(again).toMatchObject({created:false,transferred:[],cycle:{cycle_id:`${pair}-new`}});
+   expect(await code(db.openReconcileCycle({pair:newPair(),cycleId:'x',startedAt:at(),members:[],pending:[e1]}))).toMatch(/invalid_members/);
+  });
+
   it('plan 3 resolveLineageConflict: after setMerge the disagreement is a conflict; keeping one row quarantines the others of the lineage and clears it',async()=>{
    const {iss:t,r}=await published();const by=await h.user();
    const {iss:s,b:bs,x}=await sibling('200');
@@ -11573,8 +11794,8 @@ factsDbContract('memoryFactsDb contract',async()=>{
 
 - [ ] **Step 3: 跑测试**
 
-`npm test -- src/lib/facts/db.test.ts` —— Expected: PASS（memory 契约新增 7 个用例）。
-`LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/facts/facts.integration.test.ts` —— Expected: PASS（pg 契约新增 7 个用例）。
+`npm test -- src/lib/facts/db.test.ts` —— Expected: PASS（memory 契约新增 8 个用例）。
+`LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/facts/facts.integration.test.ts` —— Expected: PASS（pg 契约新增 8 个用例）。
 若某个用例只在一边失败：以 SQL 行为为准修 `memory-facts-db.ts`，重跑两边。
 
 - [ ] **Step 4: typecheck + lint**
@@ -13537,7 +13758,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 | `ReconcileInputs` | `{left_raw_hash;right_sha256;gold_or_sample_sha256;parser_version}` | `reconcile/inputs-hash.ts` |
 | `IxFact` 增字段 `entity`、`contextRef`、`unitRef`；`IxUnsupported`（`{reason;name?;contextRef?;periodStart?;periodEnd?}`）；`IxbrlParseError`；`MAX_IXBRL_BYTES`；`NS`；`TRANSFORM_NS`；`DEI_NON_NUMERIC`；`XmlToken`；`tokenizeXml(doc)`；`decodeEntities(s)`；`NsMap`；`resolveQName(q,ns,useDefault)`；`canonicalConcept(uri,local)`；`parseFactText(format,text)`；`ixFactKey(f)`；`indexIxFacts(facts)` | 见 Task 13b | `reconcile/ixbrl.ts` |
 | `IXBRL_TRIM_VERSION`、`trimInlineXbrl(doc,opts)`、`factConceptKeep(name)` | 见 Task 13c | `reconcile/ixbrl-trim.ts` |
-| `PairInputs`、`RegisteredPair`（= `ReconcilePair & {inputs; currentRight}`）、`CurrentRight`（`(ctx,rec:Row)=>Promise<string\|null>`，计划审计 P2）、`PairRunContext`（= `PairContext & {batchId;dryRun}`）、`runContextOf`、`ReconcileConfigError`/`ReconcileConfigCode`、`sha256Hex`、`todayOf`、`readRepoJson`、`activeRows`、`factKeyOf`、`fractionDigits`、`mismatchItemKey`、`OpenMismatch`/`openMismatches`、`Sides`/`ResultExtras`、`notCompared`、`comparedNumeric`、`actionFor`、`mismatchItem` | 见 Task 14a | `reconcile/pair-support.ts` |
+| `PairInputs`、`RegisteredPair`（= `ReconcilePair & {inputs; currentRight; memberFor?}`，`memberFor` 计划审计 Q2）、`CurrentRight`（`(ctx,rec:Row)=>Promise<string\|null>`，计划审计 P2）、`PairRunContext`（= `PairContext & {batchId;dryRun}`）、`runContextOf`、`ReconcileConfigError`/`ReconcileConfigCode`、`sha256Hex`、`todayOf`、`readRepoJson`、`activeRows`、`factKeyOf`、`fractionDigits`、`mismatchItemKey`、`OpenMismatch`/`openMismatches`、`Sides`/`ResultExtras`、`notCompared`、`comparedNumeric`、`actionFor`、`mismatchItem` | 见 Task 14a | `reconcile/pair-support.ts` |
 | `RECONCILE_PAIRS`（`Partial<Record<CyclePairId,RegisteredPair>>`）、`inputsHashNow(ctx,item)`（右侧取 `pair.currentRight`；取不到抛 `current_evidence_unavailable`） | 见 Task 14a | `reconcile/pairs.ts` |
 | `lineageSameDayPair(opts?)`、`lineageNaturalKey(target,c)`；`usCompanyfactsVsGoldPair()`、`US_GOLD_PATH`、`US_GOLD_PARSER`、`UsGoldEntry`、`usGoldEntries(json)`、`usGoldKey(e)` | 见 Task 14a | `reconcile/pair-lineage.ts`、`reconcile/pair-us-gold.ts` |
 | `reconcileTables()`、`SeedFact`、`seedPublished(db,o)`（Task 14a）、`goldRow(...)`（Task 16a） | TEST-ONLY | `reconcile/testing.ts` |
@@ -13551,7 +13772,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 1. **恢复路由需要的 `inputs_hash_now` 无法由 Task 11 计算**：`computeInputsHash` 在 Task 13、各对的输入配方在 Task 14–16，均晚于 Task 11（`quarantine/[id]` 路由与 `facts-resolver.ts` 的恢复分支）。本 Part 在 `pairs.ts` 导出 `inputsHashNow(ctx:PairContext,item:Row):Promise<string>`（左 `raw_hash` 取 `factsByIds(payload.fact_ids[0])`；右 sha256 取 `latest_result.reconciliation_id` 那一行 `detail.right.sha256`；黄金/样本 sha256 取仓库**当前**文件；解析器版本取**当前**代码）。建议 Task 11 的恢复分支接受注入的 `inputsHashNow` 函数，由集成者在 Task 14c 之后接线（本 Part 不改 Task 11 的文件，因为其代码未知）。集成测试直接调用 `inputsHashNow` + `db.restoreReconciled`。 **→ 已裁决：接口对齐记录 #1。**
 2. **`apply_reconcile_result` 的 `quarantine_left` 动作须满足两条（Part C 的 SQL/三实现）**：(a) `passed=true` 或 `outcome<>'compared'` 时**绝不**隔离左侧；(b) 左侧已 `quarantined` 且被 open `reconcile_mismatch` 项引用时，无论 `passed`、`outcome` 都只更新该项 `detail.latest_result={passed, reconciliation_id, at, inputs_hash}`。运行器规则（`actionFor`）：经 open 项绑定的键一律发 `quarantine_left`（这样通过的重跑才能把 `latest_result.passed` 置 true）；未绑定且 `compared && !passed && 左侧 ok` 发 `quarantine_left`（A 股舍入印刷发 `review_item`）；其余 `record`。`action≠'record'` 时一定带 `left_fact_id`（谱系项除外）与 `item`。 **→ 已裁决：接口对齐记录 #5。**
-3. **`set_merge` 写 `pending_members` 的位置未定**：运行器的读取规则——取该 pair **全部**周期行中 `detail.pending_members`（元素 `{issuer_id, market}`）非空且无 `detail.pending_consumed_by` 者，并入新周期（无预期键的成员 `expected_keys=[]`），建周期后给这些行写 `detail.pending_consumed_by=<新 cycle_id>`。Part C 的 `set_merge` 须写入这种形状（建议写入该 pair 当前 `running` 周期行；没有运行中周期时可不写——`facts.lineage_same_day` 的 `members()` 每周期都从 `issuers.merged_into` 重新枚举全部谱系，`pending_members` 只是周期进行中合并的补充）。读改写有丢失更新的理论窗口，因上述重新枚举而无业务后果。 **→ 已裁决：接口对齐记录 #6。**
+3. **`set_merge` 写 `pending_members` 的位置未定**：运行器的读取规则——取该 pair **全部**周期行中 `detail.pending_members`（元素 `{issuer_id, market}`）非空且无 `detail.pending_consumed_by` 者，并入新周期（无预期键的成员 `expected_keys=[]`），建周期后给这些行写 `detail.pending_consumed_by=<新 cycle_id>`。Part C 的 `set_merge` 须写入这种形状（建议写入该 pair 当前 `running` 周期行；没有运行中周期时可不写——`facts.lineage_same_day` 的 `members()` 每周期都从 `issuers.merged_into` 重新枚举全部谱系，`pending_members` 只是周期进行中合并的补充）。读改写有丢失更新的理论窗口，因上述重新枚举而无业务后果。 **→ 已裁决：接口对齐记录 #6；计划审计 Q2 已关闭该窗口（#64：`open_reconcile_cycle` 原子移交，预期键在快照之后解析）。**
 4. **`PairContext` 无批次号与 dry-run 标志**：`sec.filer_category` 的周期外记录要 `batch_id`。新增 `PairRunContext extends PairContext{batchId:string|null;dryRun:boolean}`，运行器总是传它；对的实现用 `runContextOf(ctx)` 读取。 **→ 已裁决：接口对齐记录 #37。**
 5. **`ReconcilePair` 无"输入配方"**：`tool_versions` 与 `inputsHashNow` 需要每对的仓库文件路径与解析器版本。新增 `RegisteredPair extends ReconcilePair{inputs:{repoFile:string|null;parserVersion:string;goldSchema:string|null}}`，`RECONCILE_PAIRS` 的值是 `RegisteredPair`。 **→ 已裁决：接口对齐记录 #37。**
 6. **`IxFact` / `unsupported` 增加字段**：`IxFact` 增 `entity`、`contextRef`、`unitRef`（定位与多主体过滤）；`unsupported` 元素增可选 `contextRef/periodStart/periodEnd`（使"该键的事实存在但不受支持"能落 `unsupported` 而不是 `right_missing`）。C3 原有字段不变。 **→ 已裁决：接口对齐记录 #38。**
@@ -13751,8 +13972,8 @@ export interface ReconcilePair{
 }
 ```
 
-Run（确认没有重复声明）: `grep -cE '^export (const|type|interface) (CYCLE_PAIR_IDS|CyclePairId|ReconcileKind|ReconcileOutcome|ReconcileAction|Fence|ReconcileResultInput|ApplyReconcileOutcome|MemberCounts)\b' src/lib/dq/reconcile/types.ts`
-Expected: `9`
+Run（确认没有重复声明）: `grep -cE '^export (const|type|interface) (CYCLE_PAIR_IDS|CyclePairId|ReconcileKind|ReconcileOutcome|ReconcileAction|Fence|ReconcileResultInput|ApplyReconcileOutcome|MemberCounts|PendingMember|OpenCycleInput|OpenCycleResult)\b' src/lib/dq/reconcile/types.ts`
+Expected: `12`（Task 9a 的 9 个 + 计划审计 Q2 的 3 个）
 
 ```ts
 // src/lib/dq/reconcile/decimal.ts
@@ -14860,6 +15081,9 @@ describe('facts.lineage_same_day (§4.4)',()=>{
   const members=await lineageSameDayPair().members(ctx);
   expect(members).toEqual([{issuerId:target,market:'US',expectedKeys:[{naturalKey:`${target}:revenue:2023-01-01:2023-12-31:consolidated:USD:2024-02-15`,locator:expect.objectContaining({available_date:'2024-02-15'})}]}]);
   expect(await lineageSameDayPair({targets:[]}).members(ctx)).toEqual([]);
+  // plan audit Q2: the per-target resolver gives a pending target the same keys, and zero keys when it has no conflict
+  expect(await lineageSameDayPair({targets:[]}).memberFor!(ctx,target,'US')).toEqual(members[0]);
+  expect(await lineageSameDayPair().memberFor!(ctx,target,'CN')).toEqual({issuerId:target,market:'CN',expectedKeys:[]});
  });
  it('a live conflict is compared, failed, and becomes a lineage_item with every value',async()=>{
   const {ctx,target,source,t,src}=await merged();
@@ -14953,7 +15177,7 @@ import {keyComponents} from '../../facts/keys';
 import type {FactRow,FactStatus,FilingFactRow,FilingRow,Market} from '../../facts/types';
 import {DATASETS} from '../datasets';
 import {absDecimal,relDiff,subDecimal} from './decimal';
-import type {CyclePairId,PairContext,ReconcileAction,ReconcileKind,ReconcileOutcome,ReconcilePair,ReconcileResultInput} from './types';
+import type {CyclePairId,MemberPlan,PairContext,ReconcileAction,ReconcileKind,ReconcileOutcome,ReconcilePair,ReconcileResultInput} from './types';
 
 export interface PairInputs{repoFile:string|null;parserVersion:string;goldSchema:string|null}
 /**
@@ -14964,7 +15188,16 @@ export interface PairInputs{repoFile:string|null;parserVersion:string;goldSchema
  * last run recorded (rec.detail.right.sha256).
  */
 export type CurrentRight=(ctx:PairContext,rec:Row)=>Promise<string|null>;
-export interface RegisteredPair extends ReconcilePair{inputs:PairInputs;currentRight:CurrentRight}
+export interface RegisteredPair extends ReconcilePair{
+ inputs:PairInputs;currentRight:CurrentRight;
+ /**
+  * Expected keys of ONE target (plan audit Q2): the runner calls it for every pending_members target that
+  * members(ctx) did not list, after its pending snapshot, so the merge is already visible. Its answer is
+  * final for the cycle (a zero-key plan is a resolved answer). Only pairs that receive pending members
+  * (facts.lineage_same_day) implement it; a pending entry for a pair without it fails the run.
+  */
+ memberFor?(ctx:PairContext,issuerId:string,market:Market):Promise<MemberPlan>;
+}
 export interface PairRunContext extends PairContext{batchId:string|null;dryRun:boolean}
 /** The run context behind a PairContext; a context without the flags counts as a dry run (no side writes). */
 export const runContextOf=(ctx:PairContext):PairRunContext=>{const c=ctx as Partial<PairRunContext>;return {...ctx,batchId:c.batchId??null,dryRun:c.dryRun??true};};
@@ -15175,6 +15408,12 @@ async function conflictsOf(ctx:PairContext,target:string,market:Market):Promise<
  return env.conflicts;
 }
 
+async function planOf(ctx:PairContext,target:string,market:Market):Promise<MemberPlan>{
+ const keys=new Map<string,ExpectedKey>();
+ for(const c of await conflictsOf(ctx,target,market)){const nk=lineageNaturalKey(target,c);if(!keys.has(nk))keys.set(nk,{naturalKey:nk,locator:{key:c.key,available_date:c.available_date,fact_ids:c.fact_ids}});}
+ return {issuerId:target,market,expectedKeys:[...keys.values()]};
+}
+
 export function lineageSameDayPair(opts:{targets?:readonly string[]}={}):RegisteredPair{
  return {
   id:'facts.lineage_same_day',kind:'numeric',left:'facts.lineage',right:'facts.lineage',
@@ -15186,14 +15425,13 @@ export function lineageSameDayPair(opts:{targets?:readonly string[]}={}):Registe
     .filter(t=>opts.targets===undefined||opts.targets.includes(t)).sort();
    const out:MemberPlan[]=[];
    for(const target of targets)for(const market of MARKETS){
-    const conflicts=await conflictsOf(ctx,target,market);
-    if(conflicts.length===0)continue;
-    const keys=new Map<string,ExpectedKey>();
-    for(const c of conflicts){const nk=lineageNaturalKey(target,c);if(!keys.has(nk))keys.set(nk,{naturalKey:nk,locator:{key:c.key,available_date:c.available_date,fact_ids:c.fact_ids}});}
-    out.push({issuerId:target,market,expectedKeys:[...keys.values()]});
+    const plan=await planOf(ctx,target,market);
+    if(plan.expectedKeys.length>0)out.push(plan);
    }
    return out;
   },
+  /** one pending target (plan audit Q2): the same keys members() would give it now; zero conflicts → zero keys */
+  async memberFor(ctx,issuerId,market){return planOf(ctx,issuerId,market);},
   async evaluate(ctx,member){
    let live:Map<string,LineageConflict>;
    try{live=new Map((await conflictsOf(ctx,member.issuerId,member.market)).map(c=>[lineageNaturalKey(member.issuerId,c),c]));}
@@ -15327,7 +15565,7 @@ git commit -m "feat(dq): reconcile pair registry with lineage same-day and plan-
 
 运行器一次调用 = 一个 pair 的一个批次：
 0. **挂起钩子扫描**：本 pair 的 open `reconcile_mismatch` 项中 `detail.hook.state ∈ {pending, failed}` 者先物化（`T(i)=issuers.merged_into ?? i`，`detail.issuer_id/market` 取发行人），钩子置 `done`/`failed`（U2：`apply_reconcile_result` 提交后、物化前崩溃的补做）。
-1. **周期**：有 `running` 周期就用；否则 `pair.members(ctx)` ∪ 旧周期行 `detail.pending_members`（契约问题 3）冻结为新周期（`cycle_id=<pair>-<started_at 日期>-<uuid 前 8 位>`，`members=[{issuer_id, market, expected_keys}]`，`expected_total=Σ`）；插入撞部分唯一索引（23505）→ 读回赢家。每次运行都为冻结成员补建缺失的游标行（建周期者中途崩溃可自愈）。
+1. **周期**（计划审计 Q2，无窗口）：有 `running` 周期就用；否则 ① 先读各周期行 `detail.pending_members` 的快照（元素 `{issuer_id, market, source}`）；② **快照之后**解析预期键：`pair.members(ctx)`，快照中 `members()` 未列出的目标逐个 `pair.memberFor(ctx, issuer, market)`（快照里的合并此时都已可见，零键即真实答案，绝不以 `expected_keys=[]` 占位；没有 `memberFor` 的对收到 pending → `pending_without_resolver`）；③ `db.openReconcileCycle({pair, cycleId, startedAt, members, pending: 快照})`：在与 `set_merge` 共用的周期锁下，一个事务内插周期行（`cycle_id=<pair>-<started_at 日期>-<uuid 前 8 位>`，`members=[{issuer_id, market, expected_keys}]`，`expected_total=Σ`）与全部游标，并**只消费快照所列条目**；快照之后登记的合并留在 `pending_members`，进下一周期；已有 running 周期（并发建周期者）→ 原样返回（`created:false`）。运行器不再整列改写周期行 `detail`。③ 之前崩溃不留痕迹；之后周期与游标已在，`ensureCursors` 仍每次补建缺失游标（自愈保留）。
 2. **认领**：按 `(issuer_id, market)` 顺序，游标可认领（`pending` | `claimed` 且租约过期 | `failed` 且 `attempts<3`）且剩余预算 ≥ 60 s 才调用 `claimReconcileMember`；返回 null → `skipped_summary(<issuer>:<market>:claimed)`。
 3. **逐键提交**：先读回本成员在本周期已提交的结果行（`dq_reconciliations` 按 `(pair, cycle_id, issuer_id, market)`，规格 T2、计划审计 P5）——已有的键直接计 `duplicates`、**不再评估**；只对缺失的预期键调用 `evaluate`（子计划，键序不变）；全部键都已存在 → 不评估、直接 `completeReconcileMember`（上游不可用也能完成）；这些键的挂起钩子由第 0 步独立补做。其余每个预期键一次 `applyReconcileResult(fence, result)`；`reused` 计 `duplicates`；`fence_failed` → 本工作者立即停止（已提交键有效）；可见性变化在成员末尾按目标去重物化一次，并把各项钩子置 `done`/`failed`（钩子只经 `quarantine.ts::patchQuarantineDetail` 改 `detail.hook` 一个键，不回滚并发写入的 `latest_result`，计划审计 P4）；`completeReconcileMember` 推导计数；其余异常 → `failReconcileMember(fence, code)`。`evaluate` 结果数或自然键顺序与预期键不一致 → `evaluate_contract` 异常。
 4. **结算**：全部游标 `done` 或 `failed` 且 `attempts≥3` 时，逐个 `done` 游标断言三计数非空、非负且和 = `expected`（`drc_done_accounted`，**不 coalesce**，不满足 → 不结算、记 `cursor_unaccounted`）；`status = not_compared=0 且无失败成员 ? complete : complete_with_gaps`；带 `status='running'` 守卫更新周期行，**只有本工作者结算成功时**记新鲜度 `recordAttempt(DATASETS.reconcile(pair), {ok: status==='complete', cadence:'weekly', detail:{cycle_id, 四计数}})`。
@@ -15340,11 +15578,10 @@ git commit -m "feat(dq): reconcile pair registry with lineage same-day and plan-
 // src/lib/dq/reconcile/run.test.ts
 import {randomUUID} from 'node:crypto';
 import {describe,expect,it,vi} from 'vitest';
-import {TableError} from '../../db/table-client';
 import type {Row,TableClient} from '../../db/table-client';
 import {memoryFactsDb} from '../../facts/memory-facts-db';
 import {FactsDbError} from '../../facts/types';
-import type {FactsDb} from '../../facts/types';
+import type {FactsDb,Market} from '../../facts/types';
 import {memoryRawStore} from '../raw-store';
 import {ReconcileConfigError} from './pair-support';
 import type {RegisteredPair} from './pair-support';
@@ -15424,26 +15661,79 @@ describe('runReconcile — cycle, counts, settlement',()=>{
   const r=await runReconcile(h.deps,{pair:PAIR,triggeredBy:'cron'});
   expect(r).toMatchObject({status:'success',cycle:{settled:true,status:'complete',expectedTotal:0},members:[]});
  });
- it('a concurrent creator wins the partial unique index: our insert gets 23505 and the winner is used',async()=>{
-  const h=harness(stubPair([{issuerId:A,market:'US',expectedKeys:keys('k1')}],()=>[rec('k1')]));
-  const base=h.tables;let raced=false;
-  const racing:TableClient={...base,async insert(t:string,row:Row){
-   if(t===CYCLE_TABLE&&!raced){raced=true;await base.insert(t,{...row,cycle_id:'winner',members:[{issuer_id:B,market:'US',expected_keys:keys('w1')}],expected_total:1});throw new TableError('insert',t,'duplicate key value violates unique constraint "dq_reconcile_cycles_running_idx"','23505');}
-   return base.insert(t,row);}};
-  const r=await runReconcile({...h.deps,tables:racing,pairs:{[PAIR]:stubPair([{issuerId:A,market:'US',expectedKeys:keys('k1')}],m=>m.issuerId===B?[rec('w1')]:[rec('k1')])}},{pair:PAIR,triggeredBy:'cron'});
+ it('a concurrent creator wins: openReconcileCycle returns its running cycle (created false) and the winner is used',async()=>{
+  const h=harness(stubPair([{issuerId:A,market:'US',expectedKeys:keys('k1')}],m=>m.issuerId===B?[rec('w1')]:[rec('k1')]));
+  const real=h.db.openReconcileCycle.bind(h.db);let raced=false;
+  const racing:FactsDb={...h.db,openReconcileCycle:async i=>{
+   if(!raced){raced=true;await real({...i,cycleId:'winner',members:[{issuer_id:B,market:'US',expected_keys:keys('w1')}],pending:[]});}   // the other runner commits first
+   return real(i);}};
+  const r=await runReconcile({...h.deps,db:racing},{pair:PAIR,triggeredBy:'cron'});
   expect(r.cycle).toMatchObject({cycleId:'winner',created:false});
   expect(r.members.map(m=>m.issuerId)).toEqual([B]);
-  expect(await base.select(CYCLE_TABLE,{pair:PAIR})).toHaveLength(1);
+  expect(await h.tables.select(CYCLE_TABLE,{pair:PAIR})).toHaveLength(1);
  });
- it('pending_members of earlier cycle rows join the next cycle with no keys and are marked consumed',async()=>{
-  const h=harness(stubPair([{issuerId:A,market:'US',expectedKeys:keys('k1')}],m=>m.issuerId===A?[rec('k1')]:[]));
-  await h.tables.insert(CYCLE_TABLE,{pair:PAIR,cycle_id:'old',started_at:'2026-11-01T00:00:00.000Z',finished_at:'2026-11-01T01:00:00.000Z',members:[],status:'complete',expected_total:0,compared_passed:0,compared_failed:0,not_compared:0,exec_failed_members:0,detail:{pending_members:[{issuer_id:B,market:'US'}]}});
+ // ---- pending members (plan audit Q2): keys resolved after the snapshot; only snapshot entries consumed; atomic creation
+ const EB={issuer_id:B,market:'US' as const,source:'src-b'};
+ const oldCycle=(pending:unknown[])=>({pair:PAIR,cycle_id:'old',started_at:'2026-11-01T00:00:00.000Z',finished_at:'2026-11-01T01:00:00.000Z',members:[],status:'complete',expected_total:0,compared_passed:0,compared_failed:0,not_compared:0,exec_failed_members:0,detail:{pending_members:pending}});
+ const pendingPair=(o:{members?:()=>Promise<MemberPlan[]>}={})=>{
+  const memberFor=vi.fn(async(_c:unknown,issuerId:string,market:Market):Promise<MemberPlan>=>({issuerId,market,expectedKeys:keys('b1')}));
+  const base=stubPair([{issuerId:A,market:'US',expectedKeys:keys('k1')}],m=>m.issuerId===A?[rec('k1')]:[rec('b1')]);
+  return {pair:{...base,...(o.members?{members:o.members}:{}),memberFor} as RegisteredPair,memberFor};
+ };
+ const pendingOfOld=async(t:TableClient)=>((await t.select(CYCLE_TABLE,{pair:PAIR,cycle_id:'old'}))[0].detail as {pending_members:unknown[];pending_consumed_by?:string});
+ it('a pending target that members() missed gets its keys from memberFor before freezing (never a zero-key placeholder); its entry is consumed',async()=>{
+  const {pair,memberFor}=pendingPair();const h=harness(pair);
+  await h.tables.insert(CYCLE_TABLE,oldCycle([EB]));
   const r=await runReconcile(h.deps,{pair:PAIR,triggeredBy:'cron'});
   const [fresh]=await h.tables.select(CYCLE_TABLE,{pair:PAIR,cycle_id:r.cycle!.cycleId});
-  expect(fresh.members).toEqual([{issuer_id:A,market:'US',expected_keys:keys('k1')},{issuer_id:B,market:'US',expected_keys:[]}]);
-  const [old]=await h.tables.select(CYCLE_TABLE,{pair:PAIR,cycle_id:'old'});
-  expect((old.detail as {pending_consumed_by?:string}).pending_consumed_by).toBe(r.cycle!.cycleId);
+  expect(fresh.members).toEqual([{issuer_id:A,market:'US',expected_keys:keys('k1')},{issuer_id:B,market:'US',expected_keys:keys('b1')}]);
+  expect(fresh).toMatchObject({expected_total:2,detail:{pending_merged_from:['old'],pending_transferred:[EB]}});
+  expect(memberFor).toHaveBeenCalledTimes(1);
+  expect(await pendingOfOld(h.tables)).toEqual({pending_members:[],pending_consumed_by:r.cycle!.cycleId});
+  expect(r.members.map(m=>[m.issuerId,m.outcome])).toEqual([[A,'done'],[B,'done']]);
   expect(r.cycle).toMatchObject({settled:true,status:'complete'});
+ });
+ for(const when of ['while members() runs','after members(), before openReconcileCycle'] as const){
+  it(`interleaving: a merge registered ${when} (after the snapshot) is neither lost nor frozen with zero keys; the next cycle takes it with resolved keys`,async()=>{
+   let h:ReturnType<typeof harness>;let landed=false;
+   const land=async()=>{if(landed)return;landed=true;const d=await pendingOfOld(h.tables);await h.tables.update(CYCLE_TABLE,{pair:PAIR,cycle_id:'old'},{detail:{...d,pending_members:[...d.pending_members,EB]}});};   // set_merge commits here
+   const {pair,memberFor}=pendingPair(when==='while members() runs'?{members:async()=>{await land();return [{issuerId:A,market:'US',expectedKeys:keys('k1')}];}}:{});
+   h=harness(pair);
+   await h.tables.insert(CYCLE_TABLE,oldCycle([]));
+   const real=h.db.openReconcileCycle.bind(h.db);
+   const db:FactsDb={...h.db,openReconcileCycle:async i=>{if(when!=='while members() runs')await land();return real(i);}};
+   const r1=await runReconcile({...h.deps,db},{pair:PAIR,triggeredBy:'cron'});
+   const [c1]=await h.tables.select(CYCLE_TABLE,{pair:PAIR,cycle_id:r1.cycle!.cycleId});
+   expect(c1.members).toEqual([{issuer_id:A,market:'US',expected_keys:keys('k1')}]);
+   expect(memberFor).not.toHaveBeenCalled();
+   expect((await pendingOfOld(h.tables)).pending_members).toEqual([EB]);                  // still pending: not overwritten, not consumed
+   expect(r1.cycle).toMatchObject({settled:true});
+   h.advance(60_000);
+   const r2=await runReconcile(h.deps,{pair:PAIR,triggeredBy:'cron'});
+   const [c2]=await h.tables.select(CYCLE_TABLE,{pair:PAIR,cycle_id:r2.cycle!.cycleId});
+   expect(c2.members).toEqual([{issuer_id:A,market:'US',expected_keys:keys('k1')},{issuer_id:B,market:'US',expected_keys:keys('b1')}]);
+   expect(memberFor).toHaveBeenCalledTimes(1);
+   expect((await pendingOfOld(h.tables)).pending_members).toEqual([]);
+  });
+ }
+ it('crash recovery: dying before openReconcileCycle commits leaves pending intact; dying right after it leaves the cycle and every cursor, and the next run uses them without consuming again',async()=>{
+  const {pair,memberFor}=pendingPair();const h=harness(pair);
+  await h.tables.insert(CYCLE_TABLE,oldCycle([EB]));
+  const dead:FactsDb={...h.db,openReconcileCycle:async()=>{throw new Error('connection reset');}};
+  await expect(runReconcile({...h.deps,db:dead},{pair:PAIR,triggeredBy:'cron'})).rejects.toThrow('connection reset');
+  expect(await h.tables.select(CYCLE_TABLE,{pair:PAIR})).toHaveLength(1);
+  expect(await cursors(h.tables)).toEqual([]);
+  expect((await pendingOfOld(h.tables)).pending_members).toEqual([EB]);
+  const real=h.db.openReconcileCycle.bind(h.db);
+  const late:FactsDb={...h.db,openReconcileCycle:async i=>{await real(i);throw new Error('worker killed');}};
+  await expect(runReconcile({...h.deps,db:late},{pair:PAIR,triggeredBy:'cron'})).rejects.toThrow('worker killed');
+  const running=await h.tables.select(CYCLE_TABLE,{pair:PAIR,status:'running'});
+  expect(running).toHaveLength(1);
+  expect((await cursors(h.tables)).map(c=>[c.issuer_id,c.state])).toEqual([[A,'pending'],[B,'pending']]);
+  expect(await pendingOfOld(h.tables)).toEqual({pending_members:[],pending_consumed_by:running[0].cycle_id});
+  const r=await runReconcile(h.deps,{pair:PAIR,triggeredBy:'cron'});
+  expect(r.cycle).toMatchObject({cycleId:running[0].cycle_id,created:false,settled:true,status:'complete'});
+  expect(memberFor).toHaveBeenCalledTimes(2);                                               // once per creation attempt, never for the existing cycle
  });
 });
 
@@ -15597,10 +15887,11 @@ Expected: FAIL（`Cannot find module './run'`）
 // functions; §5.6; §8). One call = one batch for one pair:
 //  0. pending hooks: open reconcile_mismatch items of this pair whose detail.hook is pending/failed are
 //     materialized first, at T(i) = issuers.merged_into ?? i (crash between apply and materialize, U2);
-//  1. cycle: the pair's running cycle, else a new one frozen from pair.members(ctx) ∪ pending_members of
-//     earlier cycle rows; a concurrent creator makes our insert fail with 23505 on the partial unique index
-//     (pair) where status='running' → the winner is read back. Cursor rows are ensured for every frozen
-//     member on every run, so a creator that died half-way is healed;
+//  1. cycle: the pair's running cycle, else (plan audit Q2) snapshot pending_members → resolve keys AFTER
+//     the snapshot (pair.members, then pair.memberFor for each snapshot target members() missed) →
+//     db.openReconcileCycle: under the cycle lock set_merge also takes, cycle row + cursors + removal of
+//     exactly the snapshot entries in one transaction (later registrations wait for the next cycle; a
+//     concurrent creator's running cycle is returned). Cursor rows are still ensured on every run (heal);
 //  2. members in (issuer_id, market) order whose cursor is claimable; a member starts only with >= 60 s of
 //     budget; every claim goes through claim_reconcile_member (fence);
 //  3. keys this member already committed in this cycle (an earlier attempt) are read back first and are
@@ -15636,7 +15927,7 @@ import {ReconcileConfigError,sha256Hex} from './pair-support';
 import type {PairRunContext,RegisteredPair} from './pair-support';
 import {RECONCILE_PAIRS} from './pairs';
 import {MAX_CURSOR_ATTEMPTS} from './types';
-import type {ApplyReconcileOutcome,CyclePairId,CycleStatus,ExpectedKey,Fence,MemberCounts,MemberPlan,ReconcileResultInput} from './types';
+import type {ApplyReconcileOutcome,CyclePairId,CycleStatus,ExpectedKey,Fence,MemberCounts,MemberPlan,PendingMember,ReconcileResultInput} from './types';
 
 export const MIN_MEMBER_MS=60_000;
 export const CYCLE_TABLE='dq_reconcile_cycles',CURSOR_TABLE='dq_reconcile_cursor';
@@ -15669,41 +15960,52 @@ function frozenOf(row:Row):FrozenMember[]{
   return {issuer_id:x.issuer_id,market:x.market,expected_keys:x.expected_keys};
  });
 }
-const pendingOf=(row:Row):{issuer_id:string;market:Market}[]=>{
- const d=(row.detail??{}) as {pending_members?:unknown;pending_consumed_by?:unknown};
- if(d.pending_consumed_by!==undefined||!Array.isArray(d.pending_members))return [];
- return d.pending_members.filter((p):p is {issuer_id:string;market:Market}=>!!p&&typeof (p as Row).issuer_id==='string'&&((p as Row).market==='US'||(p as Row).market==='CN'));
+/** set_merge registrations still waiting in a cycle row; an entry leaves only through open_reconcile_cycle (plan audit Q2). */
+const pendingOf=(row:Row):PendingMember[]=>{
+ const d=(row.detail??{}) as {pending_members?:unknown};
+ if(!Array.isArray(d.pending_members))return [];
+ return d.pending_members.filter((p):p is PendingMember=>!!p&&typeof (p as Row).issuer_id==='string'&&typeof (p as Row).source==='string'&&((p as Row).market==='US'||(p as Row).market==='CN'));
 };
-function freeze(plans:MemberPlan[],pending:{issuer_id:string;market:Market}[]):FrozenMember[]{
+function freeze(plans:MemberPlan[]):FrozenMember[]{
  const byKey=new Map<string,FrozenMember>();
  for(const p of plans){
   const k=mkey(p.issuerId,p.market);if(byKey.has(k))throw new ReconcileError('duplicate_member',k);
   if(new Set(p.expectedKeys.map(e=>e.naturalKey)).size!==p.expectedKeys.length)throw new ReconcileError('duplicate_expected_key',k);
   byKey.set(k,{issuer_id:p.issuerId,market:p.market,expected_keys:p.expectedKeys});
  }
- for(const p of pending){const k=mkey(p.issuer_id,p.market);if(!byKey.has(k))byKey.set(k,{issuer_id:p.issuer_id,market:p.market,expected_keys:[]});}
  return [...byKey.values()].sort((a,b)=>a.issuer_id<b.issuer_id?-1:a.issuer_id>b.issuer_id?1:a.market<b.market?-1:a.market>b.market?1:0);
 }
 
+/**
+ * A new cycle without a window (plan audit Q2):
+ *  1. snapshot the pending entries (plain read);
+ *  2. resolve expected keys AFTER the snapshot — pair.members(ctx), then pair.memberFor for each snapshot
+ *     target members() did not list — so every merge in the snapshot is visible to the resolver (a zero-key
+ *     member is a resolved answer, never a placeholder);
+ *  3. db.openReconcileCycle: under the cycle lock set_merge also takes, the cycle row, its cursors and the
+ *     removal of exactly the snapshot entries commit together. An entry registered after the snapshot is not
+ *     consumed and joins the next cycle; a running cycle created meanwhile is returned (created:false).
+ * The runner never rewrites a cycle row's detail. A crash before 3 leaves nothing; after 3 the cycle and
+ * cursors exist and the next run uses them.
+ */
 async function openCycle(deps:ReconcileDeps,pair:RegisteredPair,ctx:PairRunContext):Promise<{row:Row;created:boolean}>{
- const running=async()=>(await deps.tables.select(CYCLE_TABLE,{pair:pair.id,status:'running'},{limit:1}))[0];
- const existing=await running();
+ const [existing]=await deps.tables.select(CYCLE_TABLE,{pair:pair.id,status:'running'},{limit:1});
  if(existing)return {row:existing,created:false};
- const plans=await pair.members(ctx);
- const earlier=(await selectAll(deps.tables,CYCLE_TABLE,{pair:pair.id},'cycle_id')).filter(r=>pendingOf(r).length>0);
- const members=freeze(plans,earlier.flatMap(pendingOf));
+ const pending=(await selectAll(deps.tables,CYCLE_TABLE,{pair:pair.id},'cycle_id')).flatMap(pendingOf);
+ const plans=[...await pair.members(ctx)];
+ const listed=new Set(plans.map(p=>mkey(p.issuerId,p.market)));
+ for(const p of pending){
+  const k=mkey(p.issuer_id,p.market);if(listed.has(k))continue;
+  if(!pair.memberFor)throw new ReconcileError('pending_without_resolver',`${pair.id}:${k}`);
+  const plan=await pair.memberFor(ctx,p.issuer_id,p.market);
+  if(plan.issuerId!==p.issuer_id||plan.market!==p.market)throw new ReconcileError('evaluate_contract',k);
+  plans.push(plan);listed.add(k);
+ }
+ const members=freeze(plans);
  const startedAt=deps.now();
  const cycleId=`${pair.id}-${startedAt.toISOString().slice(0,10)}-${randomUUID().slice(0,8)}`;
- const row:Row={pair:pair.id,cycle_id:cycleId,started_at:startedAt.toISOString(),finished_at:null,members,status:'running',
-  expected_total:members.reduce((n,m)=>n+m.expected_keys.length,0),compared_passed:0,compared_failed:0,not_compared:0,exec_failed_members:0,
-  detail:{pending_merged_from:earlier.map(r=>String(r.cycle_id))}};
- try{await deps.tables.insert(CYCLE_TABLE,row);}
- catch(e){
-  if(e instanceof TableError&&e.code==='23505'){const winner=await running();if(winner)return {row:winner,created:false};}
-  throw e;
- }
- for(const r of earlier)await deps.tables.update(CYCLE_TABLE,{pair:pair.id,cycle_id:String(r.cycle_id)},{detail:{...((r.detail??{}) as Row),pending_consumed_by:cycleId}});
- return {row,created:true};
+ const out=await deps.db.openReconcileCycle({pair:pair.id,cycleId,startedAt:startedAt.toISOString(),members,pending});
+ return {row:out.cycle as Row,created:out.created};
 }
 
 async function readCursors(tables:TableClient,pair:CyclePairId,cycleId:string):Promise<Row[]>{
@@ -15891,7 +16193,7 @@ export async function runReconcile(deps:ReconcileDeps,opts:ReconcileOptions):Pro
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `npm test -- src/lib/dq/reconcile/run.test.ts`
-Expected: PASS（18 个用例：原 16 个 + 计划审计 P5 崩溃恢复、P4 钩子交错）。这些用例依赖 Task 9 的 memoryFactsDb 对账方法按规格 §3.2 运作（围栏、同键复用、`complete` 从已接受结果行推导计数、`quarantine_left` 建项并写 `hook:pending` 且返回 `materialize`、`review_item` 建非隔离项）。若某用例因 memoryFactsDb 行为与规格不一致而失败，先对照规格修 memoryFactsDb（Task 9 的文件，允许修改），不得改本测试的期望。
+Expected: PASS（21 个用例：原 16 个 + 计划审计 P5 崩溃恢复、P4 钩子交错 + 计划审计 Q2 的两种交错与建周期崩溃恢复（竞争建周期与 pending 用例改写为经 `openReconcileCycle`））。这些用例依赖 Task 9 的 memoryFactsDb 对账方法按规格 §3.2 运作（围栏、同键复用、`complete` 从已接受结果行推导计数、`quarantine_left` 建项并写 `hook:pending` 且返回 `materialize`、`review_item` 建非隔离项）。若某用例因 memoryFactsDb 行为与规格不一致而失败，先对照规格修 memoryFactsDb（Task 9 的文件，允许修改），不得改本测试的期望。
 
 - [ ] **Step 5: typecheck + lint**
 
@@ -18222,6 +18524,7 @@ git commit -m "feat(dq): A-share gold sample template and PDF upload scripts, tr
 | `CalendarPassToken` `CalendarPassDb` `CalendarPassError` `toCalendarPassError` `supabaseCalendarPassDb` `expectationArgs` | 遍函数端口（C5 四函数） | `src/lib/dq/calendar-sync.ts` |
 | `runCalendarSync` `previewCalendar` `CalendarSyncDeps` `CalendarSyncOptions` `CalendarReceipt` `CalendarDetail` | `(deps,opts)=>Promise<CalendarReceipt>`；`(deps,{market,issuerIds?,limit})=>Promise<{issuerId;rows;errors}[]>` | 同上 |
 | `profileFromSubmissions` `cnProfile` `parseDisclosureDate` `CN_DISCLOSURE_VERIFIED` `DISCLOSURE_FIELDS` | — | 同上 |
+| `applyUpstreamCoverage` | `(rows:ExpectationRow[],entries:readonly UsUpstreamEntry[])=>ExpectationRow[]`（逐期上游覆盖，计划审计 Q1） | 同上 |
 | `productionCalendarDeps` | `(opts:{deadline:Date\|null;codeVersion:string;now?;admin?})=>CalendarSyncDeps` | `src/lib/dq/calendar-deps.ts` |
 | `loadCalendarBlock` `loadClaimsBlock` `loadReconciliationsByPair` `CalendarBlock` `ClaimsBlock` `ReconciliationsByPair` | 看板三块读模型 | `src/lib/dq/dashboard-blocks.ts` |
 | `disclosureTone` `overdueDays` `sumByMarket` `claimMode` `amendBody` `suggestedOp` `AMEND_METHODS` `quarantineControl` `quarantineAcceptBody` | 页面纯规则 | `src/lib/dq/dashboard-view.ts` |
@@ -19184,7 +19487,7 @@ Expected: 四个函数各至少一处（签名与 C5 一致：`claim_calendar_pa
 - 每次运行一个批次（`producer='filing-calendar'`，`dataset=DATASETS.calendar(market)`，`tool_versions={rules:CALENDAR_RULES_VERSION, market}`），先 `claim_calendar_pass`；返回 null（他人持有未过期租约）→ 本次不处理，`skipped_summary(pass_claimed)`，批次 success。
 - 成员读自 `dq_calendar_pass_members`（冻结），先 `pending` 后 `failed and attempts<3`，各按 `issuer_id` 升序，至多 `limit` 个；剩余预算 < 60 s 不再开始新成员（`deadline_hit`）。
 - 每个成员：US 抓 submissions（失败 → `sec_unavailable` 错误项、`upstream_lookup='unavailable'`，档案退回已存的 `issuer_filing_profiles` 行；都没有 → 不出行，`no_profile` 计数）→ 由 submissions 写档案（`regime` = 最近原始年报 form；`fiscal_year_end` 合法才写；`week52_pattern` = 财年末日不是月末，或最近 3 份年报期末有不是月末者）；CN 档案固定 `regime='cn'`、`'1231'`、`source='cn_statutory'`，上游经 `tushareCallRaw('disclosure_date', …)`：无 token（`TushareError` code −1）→ `no_token`；`code≠0`（积分不足等）→ `api_code_<n>`；成功 → 原始字节入桶 `kind:'tushare-disclosure'` 记 sha256，但 `CN_DISCLOSURE_VERIFIED=false` 时仍 `upstream_lookup='unavailable'`（`schedule_unavailable:'unverified'`）。以上原因汇总为一条 `skipped_summary(schedule_unavailable)`。
-- US 上游覆盖：submissions 最早 `filingDate` 不早于最老期望期末 → 该发行人全部行按 `unavailable` 重算并标 `detail.upstream_incomplete=true`（规格"recent 最早条目早于 period_end 否则补抓分页；仍失败 → unavailable"，分页由 Task 6 抓取器合并）。
+- US 上游覆盖**逐期判定**（计划审计 Q1，`applyUpstreamCoverage`）：某期 `period_end` 晚于 submissions 最早 `filingDate` → 该期已覆盖，行不变；未覆盖但有正证据（`received`/`received_late`/`filed_not_ingested`：匹配的 filing 或匹配的上游条目）→ 行不变；只有未覆盖且无证据的 `pending`/`overdue` 行改为 `unknown_upstream`、`upstream_lookup='unavailable'`、`detail.upstream_incomplete=true`、`detail.upstream_covered_from=<最早 filingDate|null>`（规格"recent 最早条目早于 period_end 否则补抓分页；仍失败 → unavailable"，分页由 Task 6 抓取器合并）。一个未覆盖的老期间不再改写近期行。
 - 行写入只经 `replace_filing_expectations`（原子替换 + 成员 done）；计算失败 → `fail_calendar_member`；任何 `fence_failed` → 立即停止本工作者（不再写任何东西）。行 `detail.display={ticker,name}`（看板用，US 取当前主证券 ticker，CN 取 scope `fetch_key`）、`detail.upstream_sha256`。
 - 无可处理成员时 `finish_calendar_pass`（`pass_incomplete`/`fence_failed` → 不结算，记错误）；结算后新鲜度 `recordAttempt(DATASETS.calendar(market), {ok: status==='complete' && 遍时长 ≤ 2 天, cadence:'daily', detail:{pass_id, started_at, finished_at, status}})`；遍未结算不记新鲜度。
 - 回执 `detail={pass_id, issuers_done, issuers_failed, rows, by_deadline_state, by_disclosure_state, upstream_unavailable, no_fiscal_year_end, no_category, no_profile}`（E6 的计数来源）；计数：每个处理的成员 `fetched+1`，完成 `inserted+1`，失败 `failed+1`。
@@ -19201,7 +19504,7 @@ import type {TushareRaw} from '../data/sources/tushare';
 import type {Budget,CalendarFiling,Market} from '../facts/types';
 import {memoryRawStore} from './raw-store';
 import type {ExpectationRow} from './calendar';
-import {CalendarPassError,expectationArgs,parseDisclosureDate,previewCalendar,profileFromSubmissions,runCalendarSync,toCalendarPassError} from './calendar-sync';
+import {CalendarPassError,applyUpstreamCoverage,expectationArgs,parseDisclosureDate,previewCalendar,profileFromSubmissions,runCalendarSync,toCalendarPassError} from './calendar-sync';
 import type {CalendarPassDb,CalendarPassToken,CalendarSyncDeps} from './calendar-sync';
 import type {SubmissionsView} from './filer-categories';
 
@@ -19267,7 +19570,7 @@ async function harness(o:{market?:Market;members?:string[];filings?:Record<strin
  const passes=memoryPasses(tables,()=>members);
  const raw=memoryRawStore();
  const deps:CalendarSyncDeps={tables,passes,raw,
-  db:{filingsForCalendar:async(issuer,_m,opts)=>{expect(opts.fromPeriodEnd).toBe('2022-11-23');return o.filings?.[issuer]??[];}},
+  db:{filingsForCalendar:async(issuer,_m,opts)=>{expect(opts.fromPeriodEnd).toBe('2017-11-23');return o.filings?.[issuer]??[];}},
   submissions:o.submissions??(async()=>view()),
   disclosureDate:o.disclosure??(async()=>{throw new TushareError(-1,'TUSHARE_TOKEN not configured');}),
   now:()=>NOW,budget:budget(o.budgetMs),codeVersion:'c'.repeat(40)};
@@ -19312,11 +19615,42 @@ describe('runCalendarSync (US)',()=>{
   expect(r.detail).toMatchObject({no_profile:1,upstream_unavailable:2});
   expect(r.errors.filter(e=>e.code==='sec_unavailable').map(e=>e.key)).toEqual([A,B]);
  });
- it('an upstream list that starts after the oldest expected period reads as unavailable (upstream_incomplete)',async()=>{
+ it('upstream coverage is per period: only uncovered periods without evidence read as unavailable (plan audit Q1)',async()=>{
+  // earliest entry 2026-02-20: periods ending after it are covered; older ones are not
   const h=await harness({members:[A],submissions:async()=>view({entries:view().entries.slice(0,2)})});
   await runCalendarSync(h.deps,{market:'US',limit:100,triggeredBy:'cron'});
   const rows=rowsOf(h.tables,A);
-  expect(rows.every(x=>x.upstream_lookup==='unavailable'&&x.detail.upstream_incomplete===true)).toBe(true);
+  const at=(pe:string)=>rows.find(x=>x.period_end===pe)!;
+  expect(at('2026-06-30')).toMatchObject({upstream_lookup:'ok',disclosure_state:'filed_not_ingested',upstream_filed_date:'2026-08-04'});
+  expect(at('2026-09-30')).toMatchObject({upstream_lookup:'ok',disclosure_state:'pending'});          // covered, nothing filed yet
+  expect(at('2026-09-30').detail.upstream_incomplete).toBeUndefined();
+  expect(at('2025-12-31')).toMatchObject({upstream_lookup:'ok',disclosure_state:'filed_not_ingested',upstream_filed_date:'2026-02-20'});   // uncovered, positive evidence kept
+  const old=rows.filter(x=>x.period_end<'2025-12-31');
+  expect(old.length).toBeGreaterThan(0);
+  expect(old.every(x=>x.upstream_lookup==='unavailable'&&x.disclosure_state==='unknown_upstream'&&x.detail.upstream_incomplete===true&&x.detail.upstream_covered_from==='2026-02-20')).toBe(true);
+ });
+ it('20-F with known 2025/2024 filings and incomplete older history keeps the 2025 and 2024 evidence (plan audit Q1 regression)',async()=>{
+  const f20=view({fiscalYearEnd:'1231',category:null,entries:[
+   {accessionNumber:'0000000001-26-000003',filingDate:'2026-04-15',reportDate:'2025-12-31',form:'20-F',primaryDocument:'f25.htm',isInlineXBRL:true},
+   {accessionNumber:'0000000001-25-000004',filingDate:'2025-04-20',reportDate:'2024-12-31',form:'20-F',primaryDocument:'f24.htm',isInlineXBRL:true}]});
+  const h=await harness({members:[A],submissions:async()=>f20});
+  await runCalendarSync(h.deps,{market:'US',limit:100,triggeredBy:'cron'});
+  const rows=rowsOf(h.tables,A);
+  expect(rows.map(x=>x.period_end)).toEqual(['2025-12-31','2024-12-31','2023-12-31','2022-12-31','2021-12-31','2020-12-31']);   // six annual periods reach 2020
+  expect(rows.every(x=>x.report_kind==='20-F')).toBe(true);
+  expect(rows[0]).toMatchObject({upstream_lookup:'ok',disclosure_state:'filed_not_ingested',upstream_filed_date:'2026-04-15'});   // was unknown_upstream before Q1
+  expect(rows[1]).toMatchObject({upstream_lookup:'ok',disclosure_state:'filed_not_ingested',upstream_filed_date:'2025-04-20'});
+  expect(rows.slice(2).every(x=>x.disclosure_state==='unknown_upstream'&&x.upstream_lookup==='unavailable'&&x.detail.upstream_incomplete===true)).toBe(true);
+  expect(rows.some(x=>x.disclosure_state==='overdue')).toBe(false);
+ });
+ it('applyUpstreamCoverage: received rows and covered rows unchanged; an empty list leaves only evidence-bearing rows',()=>{
+  const row=(pe:string,state:ExpectationRow['disclosure_state'],o:Partial<ExpectationRow>={}):ExpectationRow=>({issuer_id:A,market:'US',report_kind:'10-Q',period_end:pe,period_end_estimated:false,deadline_state:'statutory',due_date:null,due_rule:'r',expected_date:null,upstream_lookup:'ok',upstream_filed_date:null,disclosure_state:state,received_filing_id:null,received_date:null,profile_as_of:null,detail:{estimated_due_passed:true},...o});
+  const rows=[row('2026-06-30','overdue'),row('2025-06-30','received',{received_filing_id:'f',received_date:'2025-08-01'}),row('2025-03-31','overdue')];
+  const out=applyUpstreamCoverage(rows,[{form:'10-Q',reportDate:'2025-12-31',filingDate:'2026-02-01',accessionNumber:'a'}]);
+  expect(out[0]).toBe(rows[0]);expect(out[1]).toBe(rows[1]);
+  expect(out[2]).toMatchObject({disclosure_state:'unknown_upstream',upstream_lookup:'unavailable',detail:{upstream_incomplete:true,upstream_covered_from:'2026-02-01'}});
+  expect(out[2].detail.estimated_due_passed).toBeUndefined();
+  expect(applyUpstreamCoverage(rows,[]).map(r=>r.disclosure_state)).toEqual(['unknown_upstream','received','unknown_upstream']);
  });
  it('budget and limit: unprocessed members keep the pass running; a later run finishes it',async()=>{
   const h=await harness();
@@ -19454,7 +19788,7 @@ import {recordAttempt} from './freshness';
 import {DATASETS} from './datasets';
 import type {RawStore} from './raw-store';
 import {CALENDAR_RULES_VERSION,computeExpectations,filingsWindowStart} from './calendar';
-import type {CalendarUpstream,CnScheduleRow,ExpectationRow,FilerCategoryRow,FilingProfile} from './calendar';
+import type {CalendarUpstream,CnScheduleRow,ExpectationRow,FilerCategoryRow,FilingProfile,UsUpstreamEntry} from './calendar';
 import type {SubmissionsView} from './filer-categories';
 
 /** Flip only after docs/audits/2026-11-05-data-foundation-3/verification.md records a real disclosure_date response check (spec §6.1 T15). */
@@ -19532,6 +19866,27 @@ export function parseDisclosureDate(raw:Pick<TushareRaw,'fields'|'items'>):CnSch
  return raw.items.flatMap(it=>{const end=ymd(it[e]);return end?[{end_date:end,ann_date:a<0?null:ymd(it[a]),pre_date:p<0?null:ymd(it[p]),actual_date:ac<0?null:ymd(it[ac]),modify_date:mo<0?null:ymd(it[mo])}]:[];});
 }
 
+/**
+ * Per-period US upstream coverage (plan audit Q1; spec §6.1 "recent 最早条目早于 period_end").
+ * The submissions list can prove "nothing filed" for a period only when its earliest entry is before that
+ * period's end (every filing for the period comes after the period ends). For each row:
+ * - covered (earliest filingDate < period_end) → kept as computed;
+ * - positive evidence (received / received_late / filed_not_ingested, i.e. a matching filing or a matching
+ *   upstream entry) → kept as computed, whatever the coverage;
+ * - otherwise (pending / overdue without coverage) → unknown_upstream, upstream_lookup 'unavailable',
+ *   detail.upstream_incomplete=true, detail.upstream_covered_from=earliest filingDate (null for an empty list).
+ * Only those rows change; one uncovered old period never rewrites a recent row.
+ */
+export function applyUpstreamCoverage(rows:ExpectationRow[],entries:readonly UsUpstreamEntry[]):ExpectationRow[]{
+ const earliest=entries.map(e=>e.filingDate).sort()[0]??null;
+ return rows.map((r):ExpectationRow=>{
+  if(earliest!==null&&earliest<r.period_end)return r;
+  if(r.disclosure_state!=='pending'&&r.disclosure_state!=='overdue')return r;
+  const {estimated_due_passed:_e,...detail}=r.detail;
+  return {...r,upstream_lookup:'unavailable',upstream_filed_date:null,disclosure_state:'unknown_upstream',detail:{...detail,upstream_incomplete:true,upstream_covered_from:earliest}};
+ });
+}
+
 interface MemberResult{rows:ExpectationRow[];upstreamUnavailable:boolean;noProfile:boolean;noFye:boolean;noCategory:boolean;errors:BatchError[];scheduleReason?:string}
 async function display(tables:TableClient,issuerId:string,scope:Row|undefined,market:Market,today:string):Promise<{ticker:string|null;name:string|null}>{
  const [issuer]=await tables.select('issuers',{issuer_id:issuerId},{limit:1});
@@ -19575,12 +19930,8 @@ async function computeMember(deps:CalendarSyncDeps,market:Market,issuerId:string
  const categories=market==='US'?(await selectAll(deps.tables,'issuer_filer_categories',{issuer_id:issuerId},'fiscal_year')).map(categoryFromRow):[];
  const filings=await deps.db.filingsForCalendar(issuerId,market,{fromPeriodEnd:filingsWindowStart(today)});
  let rows=computeExpectations({profile,categories,filings,upstream,today});
- // US: the upstream list only proves "nothing filed" back to its earliest entry; older expected periods read as unavailable.
- if(upstream.lookup==='ok'&&market==='US'&&rows.length){
-  const earliest=upstream.us!.map(e=>e.filingDate).sort()[0];
-  const oldest=rows.map(r=>r.period_end).sort()[0];
-  if(earliest===undefined||earliest>=oldest)rows=computeExpectations({profile,categories,filings,upstream:{lookup:'unavailable',sha256:upstream.sha256},today}).map(r=>({...r,detail:{...r.detail,upstream_incomplete:true}}));
- }
+ // US: coverage is per expected period (plan audit Q1); positive evidence is never discarded.
+ if(upstream.lookup==='ok'&&market==='US')rows=applyUpstreamCoverage(rows,upstream.us??[]);
  const shown=await display(deps.tables,issuerId,scope,market,today);
  rows=rows.map(r=>({...r,detail:{...r.detail,display:shown,...(upstream.sha256?{upstream_sha256:upstream.sha256}:{}),...(scheduleReason?{schedule_unavailable:scheduleReason}:{})}}));
  return {rows,upstreamUnavailable:rows.some(r=>r.upstream_lookup==='unavailable'),noProfile:false,noFye:profile.fiscal_year_end===null,noCategory:rows.some(r=>r.detail.no_category===true),errors,scheduleReason};
@@ -19660,7 +20011,7 @@ export async function previewCalendar(deps:CalendarSyncDeps,opts:{market:Market;
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `npm test -- src/lib/dq/calendar-sync.test.ts src/lib/dq/calendar.test.ts src/lib/dq/filer-categories.test.ts`
-Expected: PASS（calendar-sync 15 个用例）。
+Expected: PASS（calendar-sync 17 个用例）。
 
 - [ ] **Step 5: typecheck + lint**
 
@@ -20670,10 +21021,9 @@ import type {CalendarBlock,ClaimsBlock,ReconciliationsByPair} from './dashboard-
 
 并在返回对象的 `reconciliations,` 之后加 `calendar,claims,reconciliationsByPair,`。
 
-6. `restorable`（接口对齐记录 #12）：import 区再加
+6. `restorable`（接口对齐记录 #12）：`Row` **沿用**第 3 行已有的 `import type {Row,TableClient} from '../db/table-client';`（不得再加一条 `import type {Row}`：重复标识符 TS2300，计划审计 Q3）；import 区只再加
 
 ```ts
-import type {Row} from '../db/table-client';
 import type {InputsHashNow} from './facts-resolver';
 ```
 
