@@ -98,8 +98,13 @@ export async function liveSample(deps:LiveDeps,input:LiveInput):Promise<LiveResu
  for(const p of picked){
   // the submissions bytes are fetched again for picked issuers only: these exact bytes are parsed and retained
   const subUrl=`https://data.sec.gov/submissions/CIK${padCik(p.cik)}.json`;
-  const subBytes=await deps.get(subUrl);
-  const s=json<Submissions>(subBytes);
+  let subBytes:Uint8Array;let s:Submissions;
+  try{subBytes=await deps.get(subUrl);s=json<Submissions>(subBytes);}
+  catch(e){
+   const m=(e as Error).message;
+   if(/http_429/.test(m))throw e;
+   warnings.push(`${p.ticker}: submissions: ${m}`);continue;   // dropped: finalUnmet reports the shortfall
+  }
   const recent=recentOf(s).filter(r=>r.inline);
   const annual=recent.find(r=>r.form==='10-K'||r.form==='20-F');
   if(!annual){warnings.push(`${p.ticker}: no inline 10-K/20-F in filings.recent`);continue;}

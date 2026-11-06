@@ -16,13 +16,15 @@ const AAPL={cik:'320193',accn:'0000320193-23-000106',cf:'src/lib/facts/fixtures/
 const MSFT={cik:'789019',accn:'0000950170-23-035122',cf:'src/lib/facts/fixtures/edgar/CIK0000789019.trimmed.json',doc:'src/lib/dq/fixtures/ixbrl/msft-20230630.trimmed.htm'};
 const submissions=(x:typeof AAPL,primary:string)=>({category:'Large accelerated filer',fiscalYearEnd:'0930',exchanges:['Nasdaq'],filings:{recent:{accessionNumber:[x.accn],form:['10-K'],filingDate:['2023-11-03'],reportDate:['2023-09-30'],primaryDocument:[primary],isInlineXBRL:[1]}}});
 
-function world(opts:{tickers:Record<string,string>;failCompanyfacts?:string[];failSubmissions?:Record<string,string>;store?:RawStore}){
+function world(opts:{tickers:Record<string,string>;failCompanyfacts?:string[];failSubmissions?:Record<string,string>;failRefetch?:Record<string,string>;store?:RawStore}){
  const store=opts.store??memoryRawStore();
+ const calls=new Map<string,number>();
  const byCik:Record<string,typeof AAPL>={[AAPL.cik]:AAPL,[MSFT.cik]:MSFT};
  const deps:LiveDeps={
   async get(url){
    if(url.endsWith('company_tickers.json'))return enc(Object.fromEntries(Object.entries(opts.tickers).map(([t,c],i)=>[String(i),{cik_str:Number(c),ticker:t}])));
    const sub=/submissions\/CIK0*(\d+)\.json$/.exec(url);
+   if(sub){const n=(calls.get(sub[1])??0)+1;calls.set(sub[1],n);if(n>1&&opts.failRefetch?.[sub[1]])throw new Error(opts.failRefetch[sub[1]]);}
    if(sub&&opts.failSubmissions?.[sub[1]])throw new Error(opts.failSubmissions[sub[1]]);
    if(sub)return enc(submissions(byCik[sub[1]],byCik[sub[1]]===AAPL?'aapl-20230930.htm':'msft-20230630.htm'));
    const doc=/Archives\/edgar\/data\/(\d+)\//.exec(url);
@@ -102,5 +104,14 @@ describe('universe scan and helpers',()=>{
  });
  it('normalises exchange case',()=>{
   expect([normalizeExchange('nasdaq'),normalizeExchange('NASDAQ'),normalizeExchange('nyse'),normalizeExchange('Cboe'),normalizeExchange(' '),normalizeExchange(undefined)]).toEqual(['Nasdaq','Nasdaq','NYSE','Cboe',null,null]);
+ });
+ it('drops an issuer whose submissions refetch fails (non-429) and reports it; 429 aborts',async()=>{
+  const a=world({tickers:{AAPL:AAPL.cik,MSFT:MSFT.cik},failRefetch:{[MSFT.cik]:'network: timeout'}});
+  const r=await liveSample(a.deps,{universe:{constituents:[{ticker:'AAPL'},{ticker:'MSFT'}]},required:['AAPL','MSFT'],n:30});
+  expect(r.sample.issuers.map(i=>i.ticker)).toEqual(['AAPL']);
+  expect(r.unmet).toEqual(expect.arrayContaining(['issuers:1/2','required:MSFT']));
+  expect(r.warnings.some(w=>w.startsWith('MSFT: submissions'))).toBe(true);
+  const b=world({tickers:{AAPL:AAPL.cik,MSFT:MSFT.cik},failRefetch:{[MSFT.cik]:'http_429 x'}});
+  await expect(liveSample(b.deps,{universe:{constituents:[{ticker:'AAPL'},{ticker:'MSFT'}]},required:['AAPL','MSFT'],n:30})).rejects.toThrow('http_429');
  });
 });
