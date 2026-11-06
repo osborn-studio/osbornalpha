@@ -26,18 +26,25 @@ export interface WindowPlan{changes:WindowChange[];conflicts:WindowConflict[];un
 /**
  * Pages a table by a NON-unique order column with gte cursors, de-duplicating on keyCols (same
  * approach as the private helper in facts/scope.ts). The server may cap a page below MAX_PAGE, so
- * a short page is NOT the end: paging continues until a page adds no unseen row. Assumes no single
- * order value has more rows than the server cap (a ticker has a handful of holding rows).
+ * a short page is NOT the end: paging continues until a page adds no unseen row. When that happens
+ * a probe (offset = page length) decides: nothing beyond the page means the end; any further row
+ * means one order value has more rows than the server returns per page and the result would be
+ * silently truncated, so it throws page_overflow instead.
  */
 export async function keysetAll(tables:TableClient,table:string,match:Row,range:RangeOptions,orderBy:string,keyCols:readonly string[]):Promise<Row[]>{
  const seen=new Set<string>(),out:Row[]=[];
  let cursor:string|null=null;
  for(;;){
   const gte={...range.gte,...(cursor===null?{}:{[orderBy]:cursor})};
-  const page=await tables.select(table,match,{...range,gte,orderBy,limit:MAX_PAGE});
+  const opts={...range,gte,orderBy};
+  const page=await tables.select(table,match,{...opts,limit:MAX_PAGE});
   let added=0;
   for(const r of page){const k=keyCols.map(c=>String(r[c])).join('\u0000');if(!seen.has(k)){seen.add(k);out.push(r);added++;}}
-  if(page.length===0||added===0)return out;
+  if(page.length===0)return out;
+  if(added===0){
+   if((await tables.select(table,match,{...opts,offset:page.length,limit:1})).length>0)throw new Error('page_overflow');
+   return out;
+  }
   cursor=String(page[page.length-1][orderBy]);
  }
 }
@@ -90,23 +97,19 @@ export async function applyWindowBackfill(tables:TableClient,plan:WindowPlan,opt
  const park=(r:WindowRow,reason:'ownership_conflict'|'window_evidence_conflict',detail:Record<string,unknown>)=>parkConflict(tables,{
   dataset:opts.dataset,table:'issuer_securities',naturalKey:keyOf(r),reasonCode:reason,detail,payload:snapshot(r),batchId:opts.batchId,
  },counts,errors,{code:reason,key:keyOf(r)});
- const blocked=new Set<string>();
  for(const c of plan.changes){
   const id=idOf(c.row);
-  if(c.kind==='to'&&blocked.has(id)){counts.failed++;errors.push({code:'blocked_by_from_change',key:keyOf(c.row)});continue;}
   try{
    const out=await callRpc(tables,'set_security_window',c.kind==='from'
     ?{p_issuer:c.row.issuer_id,p_ticker:c.row.ticker,p_valid_from:c.row.valid_from,p_side:'from',p_new_date:c.newValidFrom,p_provenance:c.provenance}
-    :{p_issuer:c.row.issuer_id,p_ticker:c.row.ticker,p_valid_from:c.validFrom,p_side:'to',p_new_date:c.newValidTo,p_provenance:c.provenance});
+    :{p_issuer:c.row.issuer_id,p_ticker:c.row.ticker,p_valid_from:fromOf(c.row),p_side:'to',p_new_date:c.newValidTo,p_provenance:c.provenance});
    if(out==='written'||out==='duplicate'){
     if(c.kind==='from')current.set(id,c.newValidFrom);
     if(out==='written')counts.versioned++;else counts.duplicates++;
     continue;
    }
-   if(c.kind==='from')blocked.add(id);
    counts.failed++;errors.push({code:'row_changed',key:keyOf(c.row),message:`${c.kind}:${String(out)}`});
   }catch(e){
-   if(c.kind==='from')blocked.add(id);
    if(isUnique(e)){await park(c.row,'ownership_conflict',{reason:'window_overlaps_other_row',change:c.kind,new_value:c.kind==='from'?c.newValidFrom:c.newValidTo});continue;}
    counts.failed++;errors.push({code:'window_write_error',key:keyOf(c.row),message:errorMessage(e)});
   }
@@ -115,6 +118,7 @@ export async function applyWindowBackfill(tables:TableClient,plan:WindowPlan,opt
  const byRow=new Map<string,WindowConflict[]>();
  for(const x of plan.conflicts){const l=byRow.get(idOf(x.row))??[];l.push(x);byRow.set(idOf(x.row),l);}
  for(const xs of byRow.values())await park(xs[0].row,'window_evidence_conflict',{reason:xs[0].reason,reasons:xs.map(x=>x.reason),conflicts:xs.map(x=>({reason:x.reason,...x.detail}))});
+ // fetched counts write attempts and parked conflicts (one per outcome), not source rows
  counts.fetched=counts.inserted+counts.duplicates+counts.versioned+counts.quarantined+counts.failed;
  const skippedSummary:Record<string,number>={};
  for(const s of plan.skipped)skippedSummary[s]=(skippedSummary[s]??0)+1;

@@ -57,6 +57,7 @@ describe('applyWindowBackfill',()=>{
  const row=(o:Partial<WindowRow>={})=>({...w(o),isin:null,figi:null,share_class:'A',is_primary:true,source:'curated'});
  it('applies guarded updates and quarantines evidence conflicts',async()=>{
   const c=memoryTableClient({dq_quarantine:['id']});
+  await c.insert('issuers',{issuer_id:'i1'});
   await c.insert('issuer_securities',row({}));
   await c.insert('issuer_securities',row({ticker:'000001.SZ',valid_from:'1980-01-01'}));
   const plan=planWindowBackfill([w({}),w({ticker:'000001.SZ',valid_from:'1980-01-01'})],new Map([u('600519.SH',{delist_date:'2026-06-30'}),u('000001.SZ',{list_date:'1991-04-03'})]),ASOF);
@@ -67,16 +68,17 @@ describe('applyWindowBackfill',()=>{
   expect(c.rows('dq_quarantine')).toEqual([expect.objectContaining({dataset:DATASET,table_name:'issuer_securities',natural_key:'000001.SZ:1980-01-01',reason_code:'window_evidence_conflict',status:'open'})]);
   expect(res.counts).toMatchObject({fetched:3,versioned:2,quarantined:1,failed:0});
  });
- it('an exclusion violation is an ownership_conflict and blocks the same row\'s close',async()=>{
+ it('an exclusion violation on the listing date is an ownership_conflict; the close is still attempted at the row\'s current start',async()=>{
   const c=memoryTableClient({dq_quarantine:['id']});
+  await c.insert('issuers',{issuer_id:'i1'});
   await c.insert('issuer_securities',row({}));
   const failing:TableClient={...c,rpc:async(fn,args)=>{if(fn==='set_security_window'&&args.p_side==='from')throw new TableError('rpc',fn,'conflicting key value violates exclusion constraint "issuer_securities_no_overlap"','23P01');return c.rpc(fn,args);}};
   const plan=planWindowBackfill([w({})],new Map([u('600519.SH',{delist_date:'2026-06-30'})]),ASOF);
   const res=await applyWindowBackfill(failing,plan,{batchId:BATCH,dataset:DATASET});
   expect(c.rows('dq_quarantine').map(q=>q.reason_code)).toEqual(['ownership_conflict']);
-  expect(c.rows('issuer_securities')[0]).toMatchObject({valid_from:'2024-03-01',valid_to:null});
-  expect(res.counts).toMatchObject({quarantined:1,failed:1,versioned:0});
-  expect(res.errors.map(e=>e.code)).toEqual(['ownership_conflict','blocked_by_from_change']);
+  expect(c.rows('issuer_securities')[0]).toMatchObject({valid_from:'2024-03-01',valid_to:'2026-06-30',valid_to_method:'delisting'});
+  expect(res.counts).toMatchObject({quarantined:1,failed:0,versioned:1});
+  expect(res.errors.map(e=>e.code)).toEqual(['ownership_conflict']);
  });
 });
 
@@ -84,6 +86,7 @@ describe('conflicts after a backdate, aggregation, paging, freshness',()=>{
  const row=(o:Partial<WindowRow>={})=>({...w(o),isin:null,figi:null,share_class:'A',is_primary:true,source:'curated'});
  it('a conflict on a row whose backdate landed is parked under the CURRENT key with the original snapshot, and E2 counts it',async()=>{
   const c=memoryTableClient({dq_quarantine:['id']});
+  await c.insert('issuers',{issuer_id:'i1'});
   await c.insert('issuer_securities',row({}));
   const u1=new Map([u('600519.SH',{delist_date:'2000-01-01'})]);
   const plan=planWindowBackfill([w({})],u1,ASOF);
@@ -100,6 +103,7 @@ describe('conflicts after a backdate, aggregation, paging, freshness',()=>{
  });
  it('two conflicts on one row persist as ONE item carrying both reasons and both evidence rows',async()=>{
   const c=memoryTableClient({dq_quarantine:['id']});
+  await c.insert('issuers',{issuer_id:'i1'});
   await c.insert('issuer_securities',row({valid_from:'2000-01-01'}));
   const plan=planWindowBackfill([w({valid_from:'2000-01-01'})],new Map([u('600519.SH',{list_date:'2001-08-27',delist_date:'1999-12-31'})]),ASOF);
   expect(plan.conflicts.map(x=>x.reason)).toEqual(['list_date_after_first_observed','delist_on_or_before_valid_from']);
@@ -110,6 +114,16 @@ describe('conflicts after a backdate, aggregation, paging, freshness',()=>{
    {reason:'list_date_after_first_observed',list_date:'2001-08-27',valid_from:'2000-01-01',source:'tushare_stock_basic'},
    {reason:'delist_on_or_before_valid_from',delist_date:'1999-12-31',valid_from:'2000-01-01',source:'tushare_stock_basic'}]});
   expect(res.counts).toMatchObject({quarantined:1,failed:0});
+ });
+ it('keysetAll never truncates silently: A,A,A,B with a cap of 3 either returns all rows or throws page_overflow',async()=>{
+  const c=memoryTableClient();
+  let i=0;for(const t of ['A','A','A','B'])await c.insert('t',{ticker:t,issuer_id:`i${i++}`,valid_from:'2020-01-01'});
+  const capped:TableClient={...c,select:(t,m,o)=>c.select(t,m,{...o,limit:Math.min(o?.limit??3,3)})};
+  await expect(keysetAll(capped,'t',{},{},'ticker',['issuer_id','ticker','valid_from'])).rejects.toThrow('page_overflow');
+  expect(await keysetAll(c,'t',{},{},'ticker',['issuer_id','ticker','valid_from'])).toHaveLength(4);
+  const exact=memoryTableClient();await exact.insert('t',{ticker:'A',issuer_id:'x',valid_from:'d'});await exact.insert('t',{ticker:'A',issuer_id:'y',valid_from:'d'});await exact.insert('t',{ticker:'A',issuer_id:'z',valid_from:'d'});
+  const cap3:TableClient={...exact,select:(t,m,o)=>exact.select(t,m,{...o,limit:Math.min(o?.limit??3,3)})};
+  expect(await keysetAll(cap3,'t',{},{},'ticker',['issuer_id','ticker','valid_from'])).toHaveLength(3);   // a full last group is the end, not an overflow
  });
  it('keysetAll continues past a short page when the server caps pages below MAX_PAGE',async()=>{
   const c=memoryTableClient();

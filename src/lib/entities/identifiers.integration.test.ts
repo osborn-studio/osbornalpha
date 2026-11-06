@@ -1090,6 +1090,33 @@ describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (appen
    expect(await second).toBe('written');
   });
  });
+ it('claim attach_security / backdate_window and set_security_window on one ticker serialise on the per-ticker advisory lock (issuer -> row -> advisory)',async()=>{
+  // attach: the claim inserts a holding of ANOTHER issuer while it holds the lock; the window write waits for it (an attach is open-ended, so it can only follow)
+  const a=await issuer(),b=await issuer();const t=await ticker();
+  await sec(a,t,'2024-03-01','2025-01-01',{valid_to_method:'curated'});
+  const id=await newClaim({issuer:b,id_type:'ticker',value:t,op:'attach_security',target:{issuer_id:b},params:{share_class:'A',valid_from:'2030-01-01',valid_from_method:'curated',source:'x'}});
+  await inTx(admin,async tx=>{
+   expect(await resolve(id,'accepted',null,REVIEWER,tx.c)).toMatchObject({applied:true});
+   const second=setWin(a,t,'2024-03-01','from','2001-08-27',WF);
+   await stillBlockedBehind(admin,tx.pid,second);
+   await tx.commit();
+   expect(await second).toBe('written');
+  });
+  expect((await q(`select issuer_id from public.issuer_securities where ticker=$1 and valid_from_method='listing_date'`,[t])).map(r=>r.issuer_id)).toEqual([a]);   // only the earliest row is marked
+  // backdate: the claim holds the lock after locking its row
+  const c=await issuer(),d=await issuer();const t2=await ticker();
+  await sec(c,t2,'2024-03-01',null);
+  await sec(d,t2,'1990-01-01','1995-01-01',{valid_to_method:'curated'});
+  const bd=await newClaim({issuer:d,id_type:'ticker',value:t2,op:'backdate_window',target:{issuer_id:d,ticker:t2,valid_from:'1990-01-01'},params:{new_valid_from:'1980-01-01',valid_from_method:'curated'}});
+  await inTx(admin,async tx=>{
+   expect(await resolve(bd,'accepted',null,REVIEWER,tx.c)).toMatchObject({applied:true});
+   const second=setWin(c,t2,'2024-03-01','from','2001-08-27',WF);
+   await stillBlockedBehind(admin,tx.pid,second);
+   await tx.commit();
+   expect(await second).toBe('conflict');
+  });
+  expect((await q(`select count(*)::int n from public.issuer_securities where ticker=$1 and valid_from_method='listing_date'`,[t2]))[0].n).toBe(0);
+ });
  it('set_security_window refuses a backdate into an earlier holding of the same ticker (earliest-row guard, before the exclusion constraint)',async()=>{
   const a=await issuer();const t=await ticker();
   await sec(a,t,'2010-01-01','2015-01-01',{valid_to_method:'unrecorded'});

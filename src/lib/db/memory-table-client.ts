@@ -78,6 +78,7 @@ const MEMORY_RPC:Record<string,(rowsOf:(t:string)=>Row[],a:Row)=>unknown>={
   const side=a.p_side,pv=a.p_provenance,nd=a.p_new_date;
   if((side!=='from'&&side!=='to')||typeof nd!=='string'||!isObj(pv)||Object.keys(pv).length!==1||!(`valid_${side}` in pv))
    throw new TableError('rpc','set_security_window','invalid_window_write','22023');
+  if(!rowsOf('issuers').some(r=>r.issuer_id===a.p_issuer))return 'not_found';
   const row=rowsOf('issuer_securities').find(r=>r.issuer_id===a.p_issuer&&r.ticker===a.p_ticker&&r.valid_from===a.p_valid_from);
   if(!row)return 'not_found';
   const prov=isObj(row.provenance)?row.provenance:{};

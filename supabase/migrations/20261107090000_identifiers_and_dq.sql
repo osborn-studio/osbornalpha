@@ -536,12 +536,17 @@ begin
       if not exists (select 1 from public.stocks_universe where ticker = v_ticker) then
         raise exception 'invalid_claim' using errcode = '22023', detail = 'params.ticker';
       end if;
+      -- same per-ticker advisory lock as set_security_window (issuer -> row -> advisory): a window write cannot interleave with an insert that could precede it
+      perform pg_advisory_xact_lock(hashtext('issuer_securities_ticker:' || v_ticker));
       insert into public.issuer_securities(issuer_id, ticker, isin, share_class, is_primary, valid_from, valid_to, valid_from_method, valid_to_method, source, provenance)
       values (c.issuer_id, v_ticker, nullif(pa ->> 'isin', ''), pa ->> 'share_class', false, (pa ->> 'valid_from')::date, null, pa ->> 'valid_from_method', null, pa ->> 'source', v_pw);
     elsif v_op = 'close_security' then
       update public.issuer_securities set valid_to = (pa ->> 'valid_to')::date, valid_to_method = pa ->> 'valid_to_method', provenance = provenance || v_pw
       where issuer_id = c.issuer_id and ticker = t ->> 'ticker' and valid_from = (t ->> 'valid_from')::date and valid_to is null;
     elsif v_op = 'backdate_window' then
+      -- lock order issuer -> row -> per-ticker advisory lock, as in set_security_window
+      perform 1 from public.issuer_securities where issuer_id = c.issuer_id and ticker = t ->> 'ticker' and valid_from = (t ->> 'valid_from')::date for update;
+      perform pg_advisory_xact_lock(hashtext('issuer_securities_ticker:' || (t ->> 'ticker')));
       update public.issuer_securities set valid_from = (pa ->> 'new_valid_from')::date, valid_from_method = pa ->> 'valid_from_method', provenance = provenance || v_pw
       where issuer_id = c.issuer_id and ticker = t ->> 'ticker' and valid_from = (t ->> 'valid_from')::date;
     else
