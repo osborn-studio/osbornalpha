@@ -423,15 +423,20 @@ begin
   else
     return 'op';
   end if;
-  if pw is not null and (not public.claim_keys_within(pw, allowed) or not public.claim_provenance_safe(pw)) then return 'provenance_written'; end if;
+  -- provenance_written must carry the op's own provenance key (the one resolve merges), plus only allowed keys.
+  if pw is not null and (not public.claim_keys_within(pw, allowed) or not public.claim_provenance_safe(pw)
+     or (cardinality(allowed) > 0 and not pw ? (case when p_op in ('set_identifier','correct_identifier') then p_id_type when p_op = 'close_security' then 'valid_to' else 'valid_from' end))) then
+    return 'provenance_written';
+  end if;
   return null;
 end $$;
 revoke execute on function public.identifier_claim_problem(text, text, text, uuid, jsonb) from public, anon, authenticated, service_role;
 
 -- ---------------------------------------------------------------- resolve_identifier_claim (§3.1, §4.2.1, §7.1)
--- Locks the claim; refuses non-pending (already_resolved), legacy (legacy_claim) and evidence_only
--- acceptance without an amend (amend_required); validates claim/1 and the stored target_key
--- (invalid_claim); 'rejected' only flips the status. 'accepted' performs the op's business write in
+-- Locks the claim; refuses non-pending (already_resolved) and legacy (legacy_claim, either status)
+-- claims. 'rejected' only flips the status of a non-legacy claim: no claim/1 validation, so a malformed
+-- pending claim can still be cleared. 'accepted' refuses evidence_only without an amend
+-- (amend_required), validates claim/1 and the stored target_key (invalid_claim), then performs the op's business write in
 -- the same transaction with static SQL under a guard that must hit exactly one row of an active
 -- issuer, merges detail.provenance_written (or, absent, the claim's evidence under the op's key) into
 -- the target row's provenance, then records status/resolved_by/resolved_at. Any failure raises and
@@ -467,18 +472,18 @@ begin
   elsif c.op = 'evidence_only' and p_status = 'accepted' then
     raise exception 'amend_required' using errcode = 'P0001';
   end if;
+  if p_status = 'rejected' then
+    -- Rejection never needs a valid detail (spec 3.1): status flip only, so malformed claims can be cleared.
+    update public.issuer_identifier_claims set status = 'rejected', resolved_by = p_resolved_by, resolved_at = clock_timestamp() where id = p_id;
+    return jsonb_build_object('op', c.op, 'applied', false, 'amended', false);
+  end if;
   v_problem := public.identifier_claim_problem(v_op, c.id_type, v_value, c.issuer_id, v_detail);
   if v_problem is not null then raise exception 'invalid_claim' using errcode = '22023', detail = v_problem; end if;
   if c.target_key is distinct from public.identifier_claim_target_key(c.op, c.detail -> 'target') then
     raise exception 'invalid_claim' using errcode = '22023', detail = 'target_key';
   end if;
 
-  if p_status = 'rejected' then
-    update public.issuer_identifier_claims set status = 'rejected', resolved_by = p_resolved_by, resolved_at = clock_timestamp() where id = p_id;
-    return jsonb_build_object('op', c.op, 'applied', false, 'amended', false);
-  end if;
-
-  select status into v_status from public.issuers where issuer_id = c.issuer_id for update;
+  select status into v_status from public.issuers where issuer_id = c.issuer_id for no key update;
   if v_status is distinct from 'active' then raise exception 'issuer_not_active' using errcode = 'P0001'; end if;
   t := v_detail -> 'target'; pa := v_detail -> 'params';
   v_key := case when v_op in ('set_identifier','correct_identifier') then c.id_type when v_op = 'close_security' then 'valid_to' else 'valid_from' end;
@@ -486,10 +491,15 @@ begin
   -- free-form note and any unsafe locator never reach a public column.
   v_ev := v_detail -> 'evidence';
   v_safe := jsonb_build_object('source', v_ev -> 'source', 'as_of', v_ev -> 'as_of', 'evidence_sha256', v_ev -> 'evidence_sha256');
-  if coalesce(v_ev ->> 'locator', '') ~ '^[A-Za-z0-9_.:/ ,=\[\]-]{1,200}$' and v_ev ->> 'locator' !~* '(\?|token|secret|passw|key=)' then
+  if coalesce(v_ev ->> 'locator', '') ~ '^[A-Za-z0-9_.:/ ,=\[\]-]{1,200}$' and v_ev ->> 'locator' !~* '(\?|token|secret|passw|key=)'
+     and public.claim_provenance_safe(to_jsonb(v_ev ->> 'locator')) then
     v_safe := v_safe || jsonb_build_object('locator', v_ev -> 'locator');
   end if;
   v_pw := coalesce(v_detail -> 'provenance_written', jsonb_build_object(v_key, v_safe));
+  -- an attach_security that writes an ISIN records where that ISIN came from
+  if v_op = 'attach_security' and nullif(v_detail -> 'params' ->> 'isin', '') is not null and not v_pw ? 'isin' then
+    v_pw := v_pw || jsonb_build_object('isin', v_safe);
+  end if;
   if not public.claim_provenance_safe(v_pw) then raise exception 'invalid_claim' using errcode = '22023', detail = 'provenance_written'; end if;
 
   begin
@@ -586,7 +596,7 @@ revoke execute on function public.dq_calendar_lock_pass(jsonb) from public, anon
 
 -- U1: creation is serialised per market by a transaction advisory lock. No unfinished pass → create
 -- it, freeze the in-scope active issuers as members, lease it to p_batch. An unfinished pass whose
--- lease is free, expired, or already p_batch's → (re)lease it to p_batch. Otherwise null.
+-- lease is free, expired (claim_until <= now, the same test dq_calendar_lock_pass uses), or already p_batch's → (re)lease it to p_batch. Otherwise null.
 create or replace function public.claim_calendar_pass(p_market text, p_batch uuid)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare p public.dq_calendar_passes; v_pass uuid;
@@ -605,7 +615,7 @@ begin
     where s.market = p_market and s.priority > 0 and i.status = 'active';
     return jsonb_build_object('market', p_market, 'pass_id', v_pass, 'batch_id', p_batch);
   end if;
-  if p.claimed_by is null or p.claim_until is null or p.claim_until < clock_timestamp() or p.claimed_by = p_batch then
+  if p.claimed_by is null or p.claim_until is null or p.claim_until <= clock_timestamp() or p.claimed_by = p_batch then
     update public.dq_calendar_passes set claimed_by = p_batch, claim_until = clock_timestamp() + interval '10 minutes'
     where market = p.market and pass_id = p.pass_id;
     return jsonb_build_object('market', p_market, 'pass_id', p.pass_id, 'batch_id', p_batch);
@@ -743,7 +753,8 @@ grant execute on function public.patch_quarantine_detail(uuid, text, jsonb) to s
 
 -- ---------------------------------------------------------------- guarded identifier write (plan audit round 3, R2)
 -- set_security_identifier is the only writer of issuer_securities.isin/figi outside resolve_identifier_claim
--- (identifiers/apply.ts, Task 4a). It locks the open row (issuer, ticker, valid_from, valid_to null) and
+-- (identifiers/apply.ts, Task 4a). It share-locks the issuer (resolve_identifier_claim's order: issuer, then
+-- security), locks the open row (issuer, ticker, valid_from, valid_to null) and
 -- in ONE UPDATE writes the column (only when empty) and merges the single provenance key with
 -- `provenance || p_provenance` — never a whole-object replacement — so a concurrent write of the other
 -- column, or a claim resolution (which also merges with ||), keeps its key. p_provenance must carry
@@ -753,7 +764,7 @@ grant execute on function public.patch_quarantine_detail(uuid, text, jsonb) to s
 -- uniqueness / no-overlap violations (23505 / 23P01) pass through unchanged.
 create or replace function public.set_security_identifier(p_issuer uuid, p_ticker text, p_valid_from date, p_column text, p_value text, p_provenance jsonb)
 returns text language plpgsql security definer set search_path = public as $$
-declare v_cur text; v_prov jsonb;
+declare v_cur text; v_prov jsonb; n int;
 begin
   if p_column is null or p_column not in ('isin', 'figi') or coalesce(p_value, '') = ''
      or p_provenance is null or jsonb_typeof(p_provenance) <> 'object'
@@ -772,11 +783,13 @@ begin
   if v_cur = p_value and coalesce(v_prov ? p_column, false) then return 'duplicate'; end if;
   if p_column = 'isin' then
     update public.issuer_securities set isin = p_value, provenance = provenance || p_provenance
-    where issuer_id = p_issuer and ticker = p_ticker and valid_from = p_valid_from and valid_to is null;
+    where issuer_id = p_issuer and ticker = p_ticker and valid_from = p_valid_from and valid_to is null and isin is not distinct from v_cur;
   else
     update public.issuer_securities set figi = p_value, provenance = provenance || p_provenance
-    where issuer_id = p_issuer and ticker = p_ticker and valid_from = p_valid_from and valid_to is null;
+    where issuer_id = p_issuer and ticker = p_ticker and valid_from = p_valid_from and valid_to is null and figi is not distinct from v_cur;
   end if;
+  get diagnostics n = row_count;
+  if n <> 1 then return 'conflict'; end if;   -- the value moved between the read and the write
   return case when v_cur is null then 'written' else 'duplicate' end;
 end $$;
 revoke execute on function public.set_security_identifier(uuid, text, date, text, text, jsonb) from public, anon, authenticated;

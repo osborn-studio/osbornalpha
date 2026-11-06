@@ -545,7 +545,7 @@ describe.skipIf(!enabled)('plan 3 migration one: resolve_identifier_claim',()=>{
    const id=await newClaim({issuer:c,id_type:'lei',value:randomLei(),op:'set_identifier',target:{issuer_id:c},over:{provenance_written:pw}});
    expect({pw,msg:(await fails(resolve(id,'accepted'))).message}).toEqual({pw,msg:'invalid_claim'});
    expect(await claimState(id)).toMatchObject({status:'pending'});
-   await q(`update public.issuer_identifier_claims set status='rejected',resolved_by=$2,resolved_at=now() where id=$1`,[id,REVIEWER]);
+   await resolve(id,'rejected');
   }
   const ok=await newClaim({issuer:c,id_type:'lei',value:randomLei(),op:'set_identifier',target:{issuer_id:c},over:{provenance_written:{lei:{source:'gleif',as_of:'2026-11-05',evidence_sha256:SHA,row:{exchange:'XNAS'}}}}});
   expect(await resolve(ok,'accepted')).toMatchObject({applied:true});
@@ -574,13 +574,33 @@ describe.skipIf(!enabled)('plan 3 migration one: resolve_identifier_claim',()=>{
   expect(await q(`select count(*)::int n from public.issuer_securities where ticker=$1`,[t2])).toEqual([{n:1}]);
  });
 
+ it('fallback locator needs the character pattern AND the provenance guard: UUID and key: locators are omitted; provenance_written must carry the op key',async()=>{
+  const a=await issuer();
+  for(const locator of ['doc:550e8400-e29b-41d4-a716-446655440000','key:abc']){
+   const lei=randomLei();
+   const id=await newClaim({issuer:a,id_type:'lei',value:lei,op:'set_identifier',target:{issuer_id:a},over:{evidence:{...EVIDENCE,locator}}});
+   const r=await resolve(id,'accepted');
+   expect({locator,r}).toEqual({locator,r:{op:'set_identifier',applied:true,amended:false}});
+   expect((await q(`select provenance->'lei' p from public.issuers where issuer_id=$1`,[a]))[0].p).toEqual({source:'test',as_of:'2026-11-05',evidence_sha256:SHA});
+   await q(`update public.issuers set lei=null,provenance='{}' where issuer_id=$1`,[a]);
+  }
+  const b=await issuer();const t=await ticker();
+  await sec(b,t,'2020-01-01',null);
+  const cases:[string,Promise<string>][]=[
+   ['empty',newClaim({issuer:b,id_type:'lei',value:randomLei(),op:'set_identifier',target:{issuer_id:b},over:{provenance_written:{}}})],
+   ['wrong key',newClaim({issuer:b,id_type:'isin',value:randomIsin(),op:'set_identifier',target:{issuer_id:b,ticker:t,valid_from:'2020-01-01'},over:{provenance_written:{figi:EVIDENCE}}})],
+   ['attach without valid_from',newClaim({issuer:b,id_type:'ticker',value:await ticker(),op:'attach_security',target:{issuer_id:b},params:{share_class:'H',valid_from:'2021-01-01',valid_from_method:'curated',source:'x'},over:{provenance_written:{isin:EVIDENCE}}})],
+  ];
+  for(const [name,idp] of cases){const id=await idp;expect({name,msg:(await fails(resolve(id,'accepted'))).message}).toEqual({name,msg:'invalid_claim'});}
+ });
+
  it('attach_security inserts the open row with its method and provenance; a held ticker is ownership_conflict',async()=>{
   const a=await issuer(),b=await issuer();const t=await ticker();
   const params={share_class:'H',valid_from:'2004-06-16',valid_from_method:'listing_date',source:'gleif_openfigi',isin:randomIsin()};
   const id=await newClaim({issuer:a,id_type:'ticker',value:t,op:'attach_security',target:{issuer_id:a},params,over:{evidence_kind:'name_match'}});
   expect(await resolve(id,'accepted')).toEqual({op:'attach_security',applied:true,amended:false});
   expect(await q(`select issuer_id,share_class,valid_from::text,valid_to,valid_from_method,valid_to_method,source,isin,is_primary,provenance from public.issuer_securities where ticker=$1`,[t])).toEqual([
-   {issuer_id:a,share_class:'H',valid_from:'2004-06-16',valid_to:null,valid_from_method:'listing_date',valid_to_method:null,source:'gleif_openfigi',isin:params.isin,is_primary:false,provenance:{valid_from:EVIDENCE}},
+   {issuer_id:a,share_class:'H',valid_from:'2004-06-16',valid_to:null,valid_from_method:'listing_date',valid_to_method:null,source:'gleif_openfigi',isin:params.isin,is_primary:false,provenance:{valid_from:EVIDENCE,isin:EVIDENCE}},
   ]);
   const held=await newClaim({issuer:b,id_type:'ticker',value:t,op:'attach_security',target:{issuer_id:b},params:{...params,isin:null,valid_from:'2026-01-01'}});
   expect((await fails(resolve(held,'accepted'))).message).toBe('ownership_conflict');
@@ -663,6 +683,9 @@ describe.skipIf(!enabled)('plan 3 migration one: resolve_identifier_claim',()=>{
   expect((await fails(resolve(badDate,'accepted',null,null))).message).toBe('invalid_claim');
   expect((await fails(resolve(randomUUID(),'accepted'))).message).toBe('claim_not_found');
   for(const id of [mismatch,pairing,foreignProv,wrongKey,badDate,extraParam])expect(await claimState(id)).toMatchObject({status:'pending',resolved:false});
+  // rejection is a status flip: even claims that fail claim/1 validation can be cleared through the function
+  for(const id of [mismatch,pairing,foreignProv,wrongKey,badDate,extraParam])expect({id,r:await resolve(id,'rejected')}).toEqual({id,r:{op:expect.any(String),applied:false,amended:false}});
+  for(const id of [mismatch,pairing,foreignProv,wrongKey,badDate,extraParam])expect(await claimState(id)).toMatchObject({status:'rejected',resolved:true});
   // a dissolved issuer cannot take writes, but its claims can still be rejected
   const gone=await issuer();
   const late=await newClaim({issuer:gone,id_type:'lei',value:randomLei(),op:'set_identifier',target:{issuer_id:gone}});
@@ -792,15 +815,21 @@ describe.skipIf(!enabled)('plan 3 migration one: calendar pass functions',()=>{
   });
  },60000);
 
- it('lets exactly one of two concurrent claimers create and lease the pass (advisory lock)',async()=>{
+ it('lets exactly one of two concurrent claimers create and lease the pass: both wait on the advisory lock',async()=>{
   await withCalendarLock(admin,async()=>{
    const i=await issuer();await scopeRow(i);
    const b1=await batch(),b2=await batch();
-   const got=await Promise.all([claimPass(b1),claimPass(b2)]);
-   expect(got.filter(Boolean)).toHaveLength(1);
-   expect(await q(`select count(*)::int n from public.dq_calendar_passes where market=$1 and finished_at is null`,[CAL])).toEqual([{n:1}]);
-   const tok=(got[0]??got[1])!;
-   await drain(tok);await finish(tok);
+   await inTx(admin,async tx=>{
+    await tx.c.query(`select pg_advisory_xact_lock(hashtext('dq_calendar_pass:'||$1))`,[CAL]);
+    const got=Promise.all([claimPass(b1),claimPass(b2)]);
+    await stillBlockedBehind(admin,tx.pid,got);
+    await tx.commit();
+    const res=await got;
+    expect(res.filter(Boolean)).toHaveLength(1);
+    expect(await q(`select count(*)::int n from public.dq_calendar_passes where market=$1 and finished_at is null`,[CAL])).toEqual([{n:1}]);
+    const tok=(res[0]??res[1])!;
+    await drain(tok);await finish(tok);
+   });
   });
  });
 
@@ -987,7 +1016,7 @@ describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (appen
   const isin=randomIsin();
   await inTx(admin,async tx=>{
    // session A follows resolve_identifier_claim's order: issuer FOR UPDATE first, security row second
-   await tx.c.query(`select 1 from public.issuers where issuer_id=$1 for update`,[a]);
+   await tx.c.query(`select 1 from public.issuers where issuer_id=$1 for no key update`,[a]);
    const second=setId(k,'isin',isin,PI);
    await stillBlockedBehind(admin,tx.pid,second);     // would not block at all if B took the security row first
    await tx.c.query(`update public.issuer_securities set figi=$2 where ticker=$1 and valid_to is null`,[t,'BBG000000001']);
@@ -995,5 +1024,18 @@ describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (appen
    expect(await second).toBe('written');
   });
   expect(await secState(t)).toEqual({isin,figi:'BBG000000001',provenance:{exchange:'Nasdaq',...PI}});
+ });
+ it('two transactions writing different ISINs to the same empty row: the second returns conflict and the first value stays',async()=>{
+  const a=await issuer();const t=await ticker();const k={issuer:a,ticker:t};
+  await sec(a,t,'2020-01-01',null);
+  const i1=randomIsin(),i2=randomIsin();
+  await inTx(admin,async tx=>{
+   expect(await setId(k,'isin',i1,PI,tx.c)).toBe('written');
+   const second=setId(k,'isin',i2,PI);
+   await stillBlockedBehind(admin,tx.pid,second);
+   await tx.commit();
+   expect(await second).toBe('conflict');
+  });
+  expect((await secState(t)).isin).toBe(i1);
  });
 });
