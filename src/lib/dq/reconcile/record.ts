@@ -5,6 +5,11 @@
 // dq_reconciliations_cycle_cols). Cycle pairs must go through run.ts / apply_reconcile_result. The kind
 // rules mirror the two table constraints (numeric compared needs both sides; text/date keep the values in
 // detail.left_text/right_text and leave every numeric column null) so a bad row fails here with a code.
+// Dedupe is best-effort: re-recording identical evidence for the same (pair, natural_key) writes nothing, judged
+// on the exact strings kept in detail (left_exact/right_exact, left_text/right_text) — never on the numeric
+// columns, which PostgREST returns as JSON numbers. There is no unique constraint for out-of-cycle rows and
+// they have no business effect, so concurrent writers may each insert one row. Readers (the /admin/dq
+// dashboard read model, Task 19a) must therefore count DISTINCT (pair, natural_key), not rows.
 import {randomUUID} from 'node:crypto';
 import type {TableClient} from '../../db/table-client';
 import {DATASETS} from '../datasets';
@@ -37,15 +42,16 @@ export async function recordReconciliationDetailed(tables:TableClient,input:Reco
  const c=(v:string|null)=>v===null?null:canonicalDecimal(v);
  const tolerance=canonicalDecimal(input.tolerance),abs=c(input.abs_diff);
  const text=(d:unknown,k:string)=>{const v=(d as Record<string,unknown>|null|undefined)?.[k];return v===undefined?null:v;};
+ const lx=c(input.left_value),rx=c(input.right_value);
  const lt=text(input.detail,'left_text'),rt=text(input.detail,'right_text');
  for(const e of await tables.select('dq_reconciliations',{pair:input.pair,natural_key:input.natural_key}))
-  if(e.outcome===input.outcome&&e.passed===input.passed&&e.left_value===c(input.left_value)&&e.right_value===c(input.right_value)&&text(e.detail,'left_text')===lt&&text(e.detail,'right_text')===rt)return {id:String(e.id),duplicate:true};
+  if(e.outcome===input.outcome&&e.passed===input.passed&&text(e.detail,'left_exact')===lx&&text(e.detail,'right_exact')===rx&&text(e.detail,'left_text')===lt&&text(e.detail,'right_text')===rt)return {id:String(e.id),duplicate:true};
  const id=randomUUID();
  await tables.insert('dq_reconciliations',{
   id,dataset:DATASETS.reconcile(input.pair),pair:input.pair,kind:input.kind,outcome:input.outcome,natural_key:input.natural_key,
   left_source:input.left_source,right_source:input.right_source,left_value:c(input.left_value),right_value:c(input.right_value),
   abs_diff:abs,rel_diff:c(input.rel_diff),tolerance,passed:input.passed,
-  detail:{...input.detail,tolerance_exact:tolerance,...(abs===null?{}:{abs_diff_exact:abs}),...(input.inputs_hash===undefined?{}:{inputs_hash:input.inputs_hash})},
+  detail:{...input.detail,tolerance_exact:tolerance,...(abs===null?{}:{abs_diff_exact:abs}),...(lx===null?{}:{left_exact:lx}),...(rx===null?{}:{right_exact:rx}),...(input.inputs_hash===undefined?{}:{inputs_hash:input.inputs_hash})},
   batch_id:input.batch_id,cycle_id:null,issuer_id:null,market:null,attempt:null,created_at:(opts.now??(()=>new Date()))().toISOString(),
  });
  return {id,duplicate:false};

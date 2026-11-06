@@ -60,4 +60,15 @@ describe('recordReconciliation (out-of-cycle rows, spec §5.1)',()=>{
   expect((await recordReconciliationDetailed(t,d('2024-02-01','2024-02-03'))).duplicate).toBe(false);
   expect(t.rows('dq_reconciliations')).toHaveLength(2);
  });
+ it('numeric dedupe compares the exact strings in detail, never the numeric columns (PostgREST returns numbers)',async()=>{
+  const t=memoryTableClient({dq_reconciliations:['id']});
+  const num=(l:string,r:string)=>({...text({kind:'numeric',left_value:l,right_value:r,abs_diff:'1',rel_diff:'0.5',passed:false}),pair:'entities.isin_hkex_vs_gleif' as const,batch_id:null});
+  const first=await recordReconciliationDetailed(t,num('123456789012345678.5','2'));
+  expect(t.rows('dq_reconciliations')[0].detail).toMatchObject({left_exact:'123456789012345678.5',right_exact:'2'});
+  // a store that hands numeric columns back as JSON numbers (lossy)
+  const lossy={...t,select:async(table:string,match:Record<string,unknown>)=>(await t.select(table,match)).map(r=>({...r,left_value:Number(r.left_value),right_value:Number(r.right_value)}))} as typeof t;
+  expect((await recordReconciliationDetailed(lossy,num('123456789012345678.5','2'))).duplicate).toBe(true);
+  expect((await recordReconciliationDetailed(lossy,num('123456789012345678.6','2'))).duplicate).toBe(false);   // Number() would collapse these two
+  expect(first.duplicate).toBe(false);expect(t.rows('dq_reconciliations')).toHaveLength(2);
+ });
 });
