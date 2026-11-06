@@ -615,6 +615,14 @@ describe('runFactsSync — step 9b acceptance (plan 3 §4.5)',()=>{
   expect(r.issuers[0].errors).toContainEqual({code:'acceptance_failed',key:ISSUER,message:'{"failed":2}'});
   expect(r.status).toBe('partial');
  });
+ it('per-filing non-info errors already explain failed: no extra aggregate acceptance_failed',async()=>{
+  const o={...outcome([{code:'acceptance_conflict',key:'acc-1'}]),counts:{fetched:1,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:1}};
+  const {deps}=harness(FY23,{enrichAcceptance:async()=>o});
+  const r=await run(deps);
+  expect(r.issuers[0].errors.filter(e=>e.code==='acceptance_failed')).toEqual([]);
+  expect(r.issuers[0].errors).toContainEqual({code:'acceptance_conflict',key:'acc-1'});
+  expect(r.status).toBe('partial');
+ });
  it('is not called for CN',async()=>{
   const enrichAcceptance=vi.fn(async()=>outcome([]));
   const {deps}=harness(parsed([cnFiling()],[cnRevenue()]),{enrichAcceptance},CN_SCOPE);

@@ -7,7 +7,7 @@
 import {execFileSync} from 'node:child_process';
 import {createHash,randomUUID} from 'node:crypto';
 import type {TableClient} from '../db/table-client';
-import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
+import {emptyCounts,finishBatch,isInfoError,startBatch} from '../dq/batches';
 import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '../dq/batches';
 import {recordAttempt} from '../dq/freshness';
 import {quarantine} from '../dq/quarantine';
@@ -291,7 +291,7 @@ export async function syncIssuerFacts(deps:SyncDeps,batchId:string,input:{scope:
   if(market==='US'&&deps.enrichAcceptance&&!budget.signal.aborted&&budget.remainingMs()>0){
    try{
     const a=await deps.enrichAcceptance(issuer,scope.fetch_key,budget);out.errors.push(...a.errors);out.acceptance=a.counts;
-    if(a.counts.failed>0)out.errors.push({code:'acceptance_failed',key:issuer,message:JSON.stringify({failed:a.counts.failed})});   // non-informational: the batch is partial, the issuer stays published
+    if(a.counts.failed>0&&!a.errors.some(x=>!isInfoError(x)))out.errors.push({code:'acceptance_failed',key:issuer,message:JSON.stringify({failed:a.counts.failed})});   // only when no per-filing error already says why (those are non-informational too): the batch is partial, the issuer stays published
    }
    catch(e){out.errors.push({code:'acceptance_failed',key:issuer,message:errMsg(e)});}
   }

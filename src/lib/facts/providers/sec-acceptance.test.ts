@@ -1,5 +1,7 @@
 // src/lib/facts/providers/sec-acceptance.test.ts
-import {describe,expect,it,vi} from 'vitest';
+import {afterAll,beforeAll,describe,expect,it,vi} from 'vitest';
+beforeAll(()=>{vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(new Date('2026-11-05T00:00:00Z'));});
+afterAll(()=>{vi.useRealTimers();});
 import {randomUUID} from 'node:crypto';
 import type {SubmissionFiling,SubmissionsSnapshot} from '../../entities/identifiers/sec-submissions';
 import {filingInsert} from '../db-contract';
@@ -54,8 +56,8 @@ describe('enrichAcceptance (spec §4.5)',()=>{
   const submissions=vi.fn(async(_c:string,_b:Budget,_coverFrom:string)=>snap);
   const out=await enrichAcceptance({db,submissions,recordDateMismatch:record},{issuerId:iss,cik10:'0000320193'},budget);
   expect(submissions).toHaveBeenCalledWith('0000320193',budget,'2024-01-25');   // coverFrom = earliest pending available_date − 7 days (plan audit R3)
-  expect(out.counts).toMatchObject({fetched:2,inserted:1,duplicates:0,failed:1});
-  expect(out.errors).toEqual([{code:'skipped_summary',key:`${iss}:acceptance`,message:JSON.stringify({acceptance_not_found:2})}]);
+  expect(out.counts).toEqual({fetched:1,inserted:1,duplicates:0,versioned:0,quarantined:0,failed:0});   // mismatch / not-found are data properties, not failures
+  expect(out.errors).toEqual([{code:'skipped_summary',key:`${iss}:acceptance`,message:JSON.stringify({acceptance_not_found:2,acceptance_mismatch:1})}]);
   expect(record).toHaveBeenCalledTimes(1);
   expect(record.mock.calls[0][0]).toEqual({natural_key:`320193:${mismatch.sourceRef}`,kind:'date',outcome:'compared',passed:false,left_value:null,right_value:null,abs_diff:null,rel_diff:null,tolerance:'0',
    left_source:'filings.available_date',right_source:'sec_submissions.filingDate',action:'record',
@@ -64,7 +66,7 @@ describe('enrichAcceptance (spec §4.5)',()=>{
   expect((await db.findFilingBySourceRef('edgar',mismatch.sourceRef))!.accepted_at).toBeNull();
   // second pass: the accepted filing is no longer pending; the mismatch is reported again
   const again=await enrichAcceptance({db,submissions,recordDateMismatch:record},{issuerId:iss,cik10:'0000320193'},budget);
-  expect(again.counts).toMatchObject({fetched:1,inserted:0,failed:1});
+  expect(again.counts).toMatchObject({fetched:0,inserted:0,failed:0});
   expect(submissions.mock.calls[1][2]).toBe('2024-04-25');                       // the accepted 2024-02-01 filing no longer widens the window
  });
  it('a pending accession listed only in a historical files[] page is fetched through coverFrom and written; a mismatch there cites that page and its hash (plan audit R3)',async()=>{
@@ -91,14 +93,14 @@ describe('enrichAcceptance (spec §4.5)',()=>{
   const {db,iss,snap}=await seeded();
   const out=await enrichAcceptance({db,submissions:async()=>snap},{issuerId:iss,cik10:'0000320193'},budget);
   expect(out.mismatches).toHaveLength(1);
-  expect(out.errors).toEqual([{code:'skipped_summary',key:`${iss}:acceptance`,message:JSON.stringify({acceptance_not_found:2,filing_date_mismatch_unrecorded:1})}]);
+  expect(out.errors).toEqual([{code:'skipped_summary',key:`${iss}:acceptance`,message:JSON.stringify({acceptance_not_found:2,acceptance_mismatch:1,filing_date_mismatch_unrecorded:1})}]);
  });
  it('acceptance_conflict counts as failed with its own error; the same value again is a duplicate; other errors are thrown',async()=>{
   const {db,iss,ok,snap}=await seeded();
   const conflicting={filingsOfIssuer:db.filingsOfIssuer,setFilingAcceptance:vi.fn(async()=>{throw new FactsDbError('acceptance_conflict');})};
   const out=await enrichAcceptance({db:conflicting,submissions:async()=>snap,recordDateMismatch:async()=>{}},{issuerId:iss,cik10:'0000320193'},budget);
-  expect(out.counts).toMatchObject({fetched:2,inserted:0,failed:2});
-  expect(out.errors).toContainEqual({code:'acceptance_conflict',key:ok.sourceRef});
+  expect(out.counts).toMatchObject({fetched:1,inserted:0,failed:1});
+  expect(out.errors.filter(e=>e.code==='acceptance_conflict')).toEqual([{code:'acceptance_conflict',key:ok.sourceRef}]);   // one error per cause
   const dup={filingsOfIssuer:db.filingsOfIssuer,setFilingAcceptance:vi.fn(async()=>false)};
   expect((await enrichAcceptance({db:dup,submissions:async()=>snap,recordDateMismatch:async()=>{}},{issuerId:iss,cik10:'0000320193'},budget)).counts).toMatchObject({duplicates:1});
   const broken={filingsOfIssuer:db.filingsOfIssuer,setFilingAcceptance:vi.fn(async()=>{throw new Error('db down');})};
@@ -125,8 +127,8 @@ describe('enrichAcceptance review fixes (Task 12 Codex)',()=>{
   await db.stageFilings(run,[a,c]);await db.publishRun(run,[a.filing_id,c.filing_id]);
   const snap=snapshot([entry(a.sourceRef,'2024-02-02',null),entry(c.sourceRef,'2024-03-01','bad')]);
   const out=await enrichAcceptance({db,submissions:async()=>snap},{issuerId:iss,cik10:cik},budget);
-  expect(out.mismatches).toHaveLength(1);expect(out.counts).toMatchObject({fetched:1,failed:1,inserted:0});
-  expect(out.errors[0].message).toContain('"acceptance_not_found":1');
+  expect(out.mismatches).toHaveLength(1);expect(out.counts).toMatchObject({fetched:0,failed:0,inserted:0});
+  expect(out.errors[0].message).toBe(JSON.stringify({acceptance_not_found:1,acceptance_mismatch:1,filing_date_mismatch_unrecorded:1}));
  });
  it('stops starting writes when the budget is spent and reports deadline_hit with the remaining count',async()=>{
   const {db,iss,snap}=await seeded();
@@ -145,6 +147,24 @@ describe('enrichAcceptance review fixes (Task 12 Codex)',()=>{
   const out=await enrichAcceptance({db,submissions:(c,bb,from)=>fetchSubmissions(c,{fetch:fetchStub,raw,pacer:createPacer(SEC_MIN_INTERVAL_MS),sleep:async()=>{},now:()=>0,budget:bb},{coverFrom:from}),recordDateMismatch:async()=>{}},{issuerId:iss,cik10:cik},budget);
   expect((await db.findFilingBySourceRef('edgar',ok.sourceRef))!.accepted_at).toBeNull();
   expect(out.errors[0].message).toContain('"acceptance_ambiguous":1');
-  expect(out.counts.failed).toBeGreaterThanOrEqual(1);
+  expect(out.counts).toMatchObject({fetched:0,failed:0});   // ambiguity is informational
+ });
+ it('pending filings older than ACCEPTANCE_LOOKBACK_DAYS are out of the pass and of coverFrom (info count); fullHistory lifts the bound',async()=>{
+  const db=memoryFactsDb();const iss=randomUUID();const b=randomUUID();
+  await db.reconcileScope('US',[{issuer_id:iss,reasons:[],priority:1,fetch_key:cik}]);await db.claimLease(iss,'US',b,600);
+  const run=await db.beginRun(iss,'US',b,1);
+  const old=filingInsert(iss,{sourceRef:'0000320193-20-000001',availableDate:'2020-01-01'}),fresh=filingInsert(iss,{sourceRef:'0000320193-26-000001',availableDate:'2026-06-01'});
+  await db.stageFilings(run,[old,fresh]);await db.publishRun(run,[old.filing_id,fresh.filing_id]);
+  const snap=snapshot([entry(old.sourceRef,'2020-01-01','2020-01-01T10:00:00.000Z'),entry(fresh.sourceRef,'2026-06-01','2026-06-01T10:00:00.000Z')]);
+  const submissions=vi.fn(async(_c:string,_b:Budget,_f:string)=>snap);
+  const out=await enrichAcceptance({db,submissions},{issuerId:iss,cik10:cik},budget);
+  expect(submissions.mock.calls[0][2]).toBe('2026-05-25');
+  expect(out.counts).toMatchObject({inserted:1});
+  expect((await db.findFilingBySourceRef('edgar',old.sourceRef))!.accepted_at).toBeNull();
+  expect(out.errors).toEqual([{code:'skipped_summary',key:`${iss}:acceptance`,message:JSON.stringify({acceptance_out_of_window:1})}]);
+  const full=await enrichAcceptance({db,submissions},{issuerId:iss,cik10:cik},budget,{fullHistory:true});
+  expect(submissions.mock.calls[1][2]).toBe('2019-12-25');
+  expect(full.counts).toMatchObject({inserted:1});
+  expect((await db.findFilingBySourceRef('edgar',old.sourceRef))!.accepted_at).toBe('2020-01-01T10:00:00.000Z');
  });
 });

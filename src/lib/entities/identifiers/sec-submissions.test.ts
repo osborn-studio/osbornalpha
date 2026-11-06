@@ -8,7 +8,7 @@ import {fetchCompanyFacts} from '../../facts/providers/edgar-companyfacts';
 import {sanitizeProvenance} from '../provenance';
 import {
  SEC_MIN_INTERVAL_MS,SecSubmissionsError,fetchSubmissions,filingsByAccession,parseSubmissions,parseSubmissionsPage,
- submissionsCategory,submissionsClient,submissionsEvidenceClaims,submissionsUrl,
+ conflictingAccessions,submissionsCategory,submissionsClient,submissionsEvidenceClaims,submissionsUrl,
 } from './sec-submissions';
 
 const read=(rel:string)=>readFileSync(new URL(rel,import.meta.url),'utf8');
@@ -164,5 +164,20 @@ describe('submissionsEvidenceClaims',()=>{
   expect(claims[1].detail.evidence.locator).toBe('CIK0000999001-submissions-001.json#accessionNumber=0000999001-01-000001');
   // locators and evidence must pass the public-provenance guards (no '?' query, no key=/token: text; the plan's '#accessionNumber=' form is verified to pass them)
   for(const c of claims)expect(()=>sanitizeProvenance({valid_from:c.detail.evidence},['valid_from'])).not.toThrow();
+ });
+});
+
+describe('conflicting copies of one accession (Task 12 review)',()=>{
+ const f=(page:string,accepted:string):import('./sec-submissions').SubmissionFiling=>({accessionNumber:'0000999001-01-000009',filingDate:'2001-02-05',reportDate:null,acceptanceDateTime:accepted,form:'8-A12B',primaryDocument:null,isInlineXBRL:null,page});
+ const parsed=(filings:import('./sec-submissions').SubmissionFiling[])=>({...parseSubmissions(MAIN),filings});
+ it('filingsByAccession leaves a conflicting accession out instead of last-wins; agreeing copies stay',()=>{
+  const bad=parsed([f('recent','2001-02-05T12:00:00.000Z'),f('p1','2001-02-05T13:00:00.000Z')]);
+  expect([...conflictingAccessions(bad.filings)]).toEqual(['0000999001-01-000009']);
+  expect(filingsByAccession(bad).has('0000999001-01-000009')).toBe(false);
+  expect(filingsByAccession(parsed([f('recent','2001-02-05T12:00:00.000Z'),f('p1','2001-02-05T12:00:00.000Z')])).get('0000999001-01-000009')?.page).toBe('recent');
+ });
+ it('submissionsEvidenceClaims files one claim per accession',()=>{
+  const snap={cik:'999001',fetchedAt:'x',main:{name:'main',sha256:'a'.repeat(64),path:'p'},pages:[{name:'p1',sha256:'b'.repeat(64),path:'q'}],parsed:parsed([f('recent','2001-02-05T12:00:00.000Z'),f('p1','2001-02-05T13:00:00.000Z')]),complete:true};
+  expect(submissionsEvidenceClaims(ISSUER,snap,'2026-11-05')).toHaveLength(1);
  });
 });

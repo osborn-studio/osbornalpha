@@ -3,7 +3,9 @@
 // One fetch per CIK serves several consumers. submissionsClient paces requests (declared
 // User-Agent; at least SEC_MIN_INTERVAL_MS apart within one client), stores the exact bytes of the
 // main document and of each fetched filings.files[] page in reconcile-raw, and returns the parsed,
-// merged snapshot. Parsers are pure and strict about the columnar `filings.recent` shape (every
+// merged snapshot. An accession repeated across pages is kept once when the copies agree; copies that
+// disagree on filingDate/acceptanceDateTime are ALL kept (consumers see the conflict: filingsByAccession
+// leaves such an accession out, acceptance enrichment skips it). Parsers are pure and strict about the columnar `filings.recent` shape (every
 // column has one entry per accession). 8-A12B/8-A12G/25/25-NSE become evidence_only claims that
 // never prefill a security or an effective date (the reviewer reads the filing, spec §4.2.1).
 import type {Budget} from '../../facts/types';
@@ -174,7 +176,19 @@ export function submissionsClient(deps:FetchSubmissionsDeps){
 }
 
 export const fetchSubmissions=(cik:string,deps:FetchSubmissionsDeps,opts:{coverFrom?:string|null}={})=>submissionsClient(deps).fetch(cik,opts);
-export const filingsByAccession=(parsed:ParsedSubmissions)=>new Map(parsed.filings.map(f=>[f.accessionNumber,f] as const));
+/** Accessions whose kept copies disagree on filingDate or acceptanceDateTime. */
+export function conflictingAccessions(filings:readonly SubmissionFiling[]):Set<string>{
+ const first=new Map<string,SubmissionFiling>();const bad=new Set<string>();
+ for(const f of filings){const s=first.get(f.accessionNumber);if(!s)first.set(f.accessionNumber,f);else if(s.filingDate!==f.filingDate||s.acceptanceDateTime!==f.acceptanceDateTime)bad.add(f.accessionNumber);}
+ return bad;
+}
+/** accession → filing; an accession with conflicting copies is left out (never last-wins). */
+export function filingsByAccession(parsed:ParsedSubmissions):Map<string,SubmissionFiling>{
+ const bad=conflictingAccessions(parsed.filings);
+ const m=new Map<string,SubmissionFiling>();
+ for(const f of parsed.filings)if(!bad.has(f.accessionNumber)&&!m.has(f.accessionNumber))m.set(f.accessionNumber,f);
+ return m;
+}
 
 export const EVIDENCE_FORMS:Readonly<Record<string,{suggested_op:'backdate_window'|'close_security';note:string}>>={
  '8-A12B':{suggested_op:'backdate_window',note:'12(b) 交易所注册；所指证券类别与生效日须核对原文'},
@@ -186,10 +200,13 @@ export const EVIDENCE_FORMS:Readonly<Record<string,{suggested_op:'backdate_windo
 /** One evidence_only claim per 8-A/25 filing; value = accession number (Part B contract issue 6). */
 export function submissionsEvidenceClaims(issuerId:string,snap:SubmissionsSnapshot,asOf:string):ClaimInput[]{
  const shaOf=(page:string)=>page==='recent'?snap.main.sha256:snap.pages.find(p=>p.name===page)?.sha256??null;
+ const done=new Set<string>();
  return snap.parsed.filings.flatMap(f=>{
+  if(done.has(f.accessionNumber))return [];   // conflicting copies of one accession: one claim
   const rule=Object.prototype.hasOwnProperty.call(EVIDENCE_FORMS,f.form)?EVIDENCE_FORMS[f.form]:null;
   const sha=rule?shaOf(f.page):null;
   if(!rule||!sha)return [];
+  done.add(f.accessionNumber);
   const evidence:ClaimEvidence={source:'sec_submissions',as_of:asOf,evidence_sha256:sha,locator:`${f.page}#accessionNumber=${f.accessionNumber}`,note:rule.note};
   return [{issuer_id:issuerId,id_type:'ticker' as const,value:f.accessionNumber,source:'sec_submissions',op:'evidence_only' as const,detail:{
    schema:'claim/1' as const,evidence_kind:'filing_form' as const,target:{issuer_id:issuerId},
