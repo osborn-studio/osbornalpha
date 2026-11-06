@@ -2,6 +2,7 @@
 import {describe,expect,it} from 'vitest';
 import {sha256Hex} from '../canonical-json';
 import type {CaseReport,GoldCase,MetricTarget,ProvenanceCheck,ReadRow} from '../types';
+import {NonVisibleReadError} from '../adapters/facts';
 import {ANON_PRODUCER,evaluateOfficial} from './official';
 import type {OfficialContext} from './official';
 import {ACCN,ISSUER,env,fakeReader,gcase,readRow} from './official-test-support';
@@ -180,5 +181,13 @@ describe('evaluateOfficial — Codex challenge fixes',()=>{
   const r=await one(m,{rows:()=>[row]});
   expect(r.outcome).toEqual({result:'fail',reason:'value'});
   expect(r.detail).toMatchObject({metric,effective_as_of:'2026-11-20',state_rev:7});
+ });
+ it('NonVisibleReadError(truncated) from readNonVisible → read_error(truncated); other throws stay read_failed',async()=>{
+  for(const c of [gcase(),MISSING]){
+   const reader=fakeReader({rows:()=>[],privileged:{}});
+   (reader as unknown as {readNonVisible:()=>Promise<never>}).readNonVisible=async()=>{throw new NonVisibleReadError('truncated');};
+   const [r]=await evaluateOfficial([c],reader,ctx({privileged:true}));
+   expect(r.outcome).toEqual({result:'read_error',reason:'truncated'});
+  }
  });
 });

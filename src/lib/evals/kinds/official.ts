@@ -11,6 +11,7 @@
 // 'unavailable:anon'; privileged = reader.resolveProvenance({artifacts: verify.artifacts}); verify.sources =
 // sha256(fetchSource(source.url)) equals source.sha256, each url fetched once (anything else → provenance_incomplete);
 // otherwise pass. Pure over the injected reader: no clock, no store, and no gold value is ever produced or corrected.
+import {NonVisibleReadError} from '../adapters/facts';
 import {missingFields} from '../adapters/provenance';
 import type {FactProvenance} from '../adapters/provenance';
 import {sha256Hex} from '../canonical-json';
@@ -81,7 +82,7 @@ async function evaluateCase(c:GoldCase,reader:ModuleReader,ctx:OfficialContext,m
  if(unit===null)return done({result:'unit_mismatch'},{left:rows.length===1?rows[0].value_text:null,detail:{units:[...new Set(rows.map(r=>r.unit))].sort(),expected_unit:null,rows:rows.length}});
  const hiddenOf=async():Promise<{hidden:'quarantined'|'superseded_generation'|null}|CaseReport>=>{
   if(!isPrivileged(reader,ctx))return {hidden:null};
-  try{return {hidden:await reader.readNonVisible(ref,c.target,documentId,asOf)};}catch(e){return readError('read_failed',{message:message(e)});}
+  try{return {hidden:await reader.readNonVisible(ref,c.target,documentId,asOf)};}catch(e){return e instanceof NonVisibleReadError?readError(e.reason,{message:message(e)}):readError('read_failed',{message:message(e)});}
  };
  if(c.expect==='missing'){
   if(inUnit.length===0){
