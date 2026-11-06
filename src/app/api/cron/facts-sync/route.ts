@@ -6,8 +6,8 @@
 // Vercel may deliver one cron event more than once (the batch lease makes a duplicate run harmless:
 // issuers held by the first run are skipped as 'leased'), and sub-daily crons (this one is every 4 h)
 // need a Vercel Pro plan. The HTTP receipt carries codes and counts only: no error messages.
-// CN is gated: the route refuses market=CN unless FACTS_CN_ENABLED=1 (no Tushare token / real CN
-// fixtures yet; vercel.json schedules US only).
+// CN is on by default (real Tushare verification 2026-11-06; vercel.json schedules US and CN). Kill switch:
+// FACTS_CN_ENABLED=0 makes the route refuse market=CN with 403 cn_disabled.
 import {timingSafeEqual} from 'node:crypto';
 import {NextResponse} from 'next/server';
 import {runFactsSync} from '@/lib/facts/sync';
@@ -45,7 +45,7 @@ async function run(request:Request):Promise<NextResponse>{
  const limitRaw=url.searchParams.get('limit');
  let limit=DEFAULT_LIMIT;
  if(limitRaw!==null){if(!/^\d{1,3}$/.test(limitRaw)||Number(limitRaw)<1||Number(limitRaw)>MAX_LIMIT)return err('invalid_parameter:limit',`limit must be 1..${MAX_LIMIT}`,400);limit=Number(limitRaw);}
- if(market==='CN'&&process.env.FACTS_CN_ENABLED!=='1')return err('cn_disabled','CN facts sync is not enabled (FACTS_CN_ENABLED)',403);
+ if(market==='CN'&&process.env.FACTS_CN_ENABLED==='0')return err('cn_disabled','CN facts sync is not enabled (FACTS_CN_ENABLED)',403);
  const codeVersion=resolveCodeVersion({allowGit:false});
  if(!codeVersion)return err('code_version_unavailable','VERCEL_GIT_COMMIT_SHA not set',503);
  const started=new Date();

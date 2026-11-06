@@ -52,13 +52,18 @@ describe('facts sync cron',()=>{
   expect(depsArg.deadline.getTime()-before).toBeLessThan(241_000);
   expect(mocks.codeVersion).toHaveBeenCalledWith({allowGit:false});
  });
- it('refuses market=CN unless FACTS_CN_ENABLED=1 (degraded path: no CN cron, no Tushare data yet)',async()=>{
+ it('refuses market=CN with 403 cn_disabled only when the kill switch FACTS_CN_ENABLED=0 is set',async()=>{
+  process.env.FACTS_CN_ENABLED='0';
   const res=await GET(req('market=CN',AUTH));
   expect(res.status).toBe(403);expect((await res.json()).error.code).toBe('cn_disabled');
   expect(mocks.deps).not.toHaveBeenCalled();expect(mocks.run).not.toHaveBeenCalled();
  });
+ it('market=CN runs when FACTS_CN_ENABLED is unset (CN is on by default)',async()=>{
+  mocks.run.mockResolvedValue({batchId:'b',status:'success',counts:{fetched:1,inserted:1,duplicates:0,versioned:0,quarantined:0,failed:0},errors:[],detail:{attempted:1,published:1,failed:0,skipped:0,idle:false},issuers:[]});
+  const res=await GET(req('market=CN',AUTH));
+  expect(res.status).toBe(200);expect(mocks.run.mock.calls[0][1]).toMatchObject({market:'CN'});
+ });
  it('POST with limit and CN; ok=false when the batch is not success',async()=>{
-  process.env.FACTS_CN_ENABLED='1';
   mocks.run.mockResolvedValue({batchId:'b',status:'partial',counts:{fetched:2,inserted:1,duplicates:0,versioned:0,quarantined:0,failed:1},errors:[{code:'sec_unavailable'}],detail:{attempted:2,published:1,failed:1,skipped:0,idle:false},issuers:[]});
   const res=await POST(req('market=CN&limit=5',AUTH));
   expect(await res.json()).toMatchObject({ok:false,market:'CN',limit:5});

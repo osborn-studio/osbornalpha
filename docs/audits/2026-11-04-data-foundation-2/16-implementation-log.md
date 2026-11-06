@@ -70,3 +70,14 @@
 | NVDA | 2026-01-25 = 215938000000 USD；2025-01-26 = 130497000000 USD（`us-gaap:Revenues`） | 2026-01-25 = 120067000000（同期两次披露行，同值） |
 
 核对点：三家 `outcome='planned'`、`snapshotSha256` 恰一个 64 位 hex、`errors` 为空、`ambiguous/odd/missing` 全 0、`inserted = fetched − quarantined`（`quarantined=0`）。
+
+## 2026-11-06 CN 启用（真实 Tushare）
+
+分支 `claude/facts-cn-tushare`（`git log --oneline origin/main..HEAD`）。
+
+| 提交 | 内容 | Codex 裁决 |
+|---|---|---|
+| `a0fbca7` | test(facts)：录制真实 Tushare 夹具（600519.SH、000333.SZ、600036.SH、000858.SZ 修订对）与规格 §15 report_type / 分页核对 | 待填 |
+| `a101648` | test(facts)：A 股离线回放（修订对、同日冲突、巨潮挂接、黄金模板） | 待填 |
+| `b6c286c` | fix(facts)：多页 Tushare 流失败即关闭（`multi_page_unverified`）；仅带更正日的 rt1 filing 标为 corrected | 待填 |
+| 本分支第四个提交 | feat(facts)：CN 缺省开启（`FACTS_CN_ENABLED=0` 关闭）并登记 CN cron（`35 */4 * * *`），runbook 与规格 §16 同步 | 待填 |
