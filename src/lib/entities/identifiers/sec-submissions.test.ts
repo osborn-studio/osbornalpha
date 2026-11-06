@@ -3,7 +3,8 @@ import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {describe,it,expect} from 'vitest';
 import {memoryRawStore} from '../../dq/raw-store';
-import {createPacer} from '../../facts/providers/shared';
+import {budgetFor,createPacer} from '../../facts/providers/shared';
+import {fetchCompanyFacts} from '../../facts/providers/edgar-companyfacts';
 import {sanitizeProvenance} from '../provenance';
 import {
  SEC_MIN_INTERVAL_MS,SecSubmissionsError,fetchSubmissions,filingsByAccession,parseSubmissions,parseSubmissionsPage,
@@ -61,6 +62,8 @@ describe('parseSubmissions',()=>{
   expect(code({...doc,tickers:[1]})).toBe('invalid_schema');
   expect(code({...doc,filings:{recent:doc.filings.recent}})).toBe('invalid_schema');
   expect(code({...doc,filings:{...doc.filings,files:{}}})).toBe('invalid_schema');
+  const blank=parseSubmissions(JSON.stringify({...doc,tickers:['',' zzfx ']}));
+  expect(blank).toMatchObject({tickers:['ZZFX'],tickerPositions:[1]});
   expect(code({...doc,tickers:[],filings:{...doc.filings,files:[]}})).toBeNull();
   expect(parseSubmissions(JSON.stringify({...doc,tickers:[],filings:{...doc.filings,files:[]}}))).toMatchObject({tickers:[],files:[]});
  });
@@ -105,6 +108,11 @@ describe('submissionsClient',()=>{
   const f=harness({[MAIN_URL]:()=>new Response('nope',{status:503})});
   await expect(fetchSubmissions('999001',f.deps)).rejects.toMatchObject({code:'sec_unavailable'});
   expect(f.raw.objects.size).toBe(2);
+  const err=await fetchSubmissions('999001',{...f.deps,pacer:createPacer(SEC_MIN_INTERVAL_MS)}).catch((e:unknown)=>e) as SecSubmissionsError;
+  expect(err.raw).toEqual({sha256:sha('nope'),path:expect.stringMatching(/^sec-submissions\/[0-9a-f]{64}\.json$/)});
+  expect([...f.raw.objects.keys()]).toContain(err.raw!.path);
+  const bad=await fetchSubmissions('999001',harness({[MAIN_URL]:json('{"cik":"0000999001"}')}).deps).catch((e:unknown)=>e) as SecSubmissionsError;
+  expect(bad).toMatchObject({code:'invalid_schema',raw:{sha256:sha('{"cik":"0000999001"}')}});
   expect(JSON.parse(new TextDecoder().decode([...f.raw.objects].find(([p])=>p.endsWith('.meta.json'))![1]))).toMatchObject({http_status:503});
  });
  it('starts no request and no upload once the budget is aborted',async()=>{
@@ -123,6 +131,15 @@ describe('submissionsClient',()=>{
   await submissionsClient(deps).fetch('999001');
   expect(stamps).toHaveLength(4);
   for(let i=1;i<stamps.length;i++)expect(stamps[i]-stamps[i-1]).toBeGreaterThanOrEqual(SEC_MIN_INTERVAL_MS-5);
+ });
+ it('shares one SEC pacer with companyfacts: a companyfacts call and a submissions call are >= 120 ms apart',async()=>{
+  const stamps:number[]=[];
+  const f=(async()=>{stamps.push(Date.now());return new Response(MAIN,{status:200});}) as typeof globalThis.fetch;
+  await fetchCompanyFacts('0000999001',budgetFor(60_000),{fetch:f});
+  await fetchSubmissions('999001',{fetch:f,raw:memoryRawStore()});
+  await fetchCompanyFacts('0000999001',budgetFor(60_000),{fetch:f});
+  expect(stamps).toHaveLength(3);
+  for(let i=1;i<3;i++)expect(stamps[i]-stamps[i-1]).toBeGreaterThanOrEqual(SEC_MIN_INTERVAL_MS-5);
  });
  it('maps HTTP errors and network failures to sec_unavailable and a CIK mismatch to invalid_schema',async()=>{
   const code=async(p:Promise<unknown>)=>p.then(()=>null,(e:unknown)=>e instanceof SecSubmissionsError?e.code:'other');
@@ -145,7 +162,7 @@ describe('submissionsEvidenceClaims',()=>{
   expect(claims[1].detail.params).toMatchObject({suggested_op:'backdate_window',form:'8-A12B'});
   expect(claims[1].detail.evidence.evidence_sha256).toBe(sha(PAGE));
   expect(claims[1].detail.evidence.locator).toBe('CIK0000999001-submissions-001.json#accessionNumber=0000999001-01-000001');
-  // locators and evidence must pass the public-provenance guards (no '?', '#', key=/token: text)
+  // locators and evidence must pass the public-provenance guards (no '?' query, no key=/token: text; the plan's '#accessionNumber=' form is verified to pass them)
   for(const c of claims)expect(()=>sanitizeProvenance({valid_from:c.detail.evidence},['valid_from'])).not.toThrow();
  });
 });

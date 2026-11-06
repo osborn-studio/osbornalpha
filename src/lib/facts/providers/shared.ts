@@ -74,6 +74,9 @@ export function createPacer(defaultIntervalMs:number):Pacer{
   reset(){chain=Promise.resolve();lastStart=-Infinity;},
  };
 }
+/** SEC fair-access spacing and THE process-wide SEC pacer: every SEC caller (companyfacts, submissions, ...) admits through it. */
+export const SEC_MIN_INTERVAL_MS=120;
+export const secPacer:Pacer=createPacer(SEC_MIN_INTERVAL_MS);
 export function budgetFor(ms:number,parent?:AbortSignal):Budget{
  const until=Date.now()+ms;const ctl=new AbortController();
  parent?.addEventListener('abort',()=>ctl.abort(parent.reason),{once:true});

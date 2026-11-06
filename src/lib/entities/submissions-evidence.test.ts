@@ -44,4 +44,16 @@ describe('applySubmissionsEvidence',()=>{
   const none=await applySubmissionsEvidence(client(),{issuerId:ISSUER,primaryTicker:'ZZF',snapshot:await snapshot(),asOf:'2026-11-05',batchId:BATCH,dataset:DATASET,universe:new Set(['ZZF'])});
   expect(none.skippedSummary).toEqual({ticker_not_in_universe:1});
  });
+ it('indexes the conflict locator in the RAW tickers array and labels an own-row conflict window_conflict',async()=>{
+  const blankFirst=(async(u:string|URL|Request)=>new Response(String(u).endsWith('-001.json')?PAGE:JSON.stringify({...JSON.parse(MAIN),tickers:['','ZZFX']}),{status:200})) as typeof globalThis.fetch;
+  const snap=await fetchSubmissions('999001',{fetch:blankFirst,raw:memoryRawStore(),sleep:async()=>{}},{coverFrom:'1993-01-01'});
+  const c=client();
+  await c.insert('issuer_securities',sec(OTHER,'ZZFX'));
+  await applySubmissionsEvidence(c,{issuerId:ISSUER,primaryTicker:null,snapshot:snap,asOf:'2026-11-05',batchId:BATCH,dataset:DATASET,universe:new Set(['ZZFX'])});
+  expect(c.rows('dq_quarantine')).toEqual([expect.objectContaining({reason_code:'ownership_conflict',detail:expect.objectContaining({locator:'tickers[1]'})})]);
+  const own=client();
+  await own.insert('issuer_securities',sec(ISSUER,'ZZFX',{valid_from:'2026-11-05',valid_to:'2026-12-01',valid_to_method:'curated'}));
+  await applySubmissionsEvidence(own,{issuerId:ISSUER,primaryTicker:null,snapshot:await snapshot(),asOf:'2026-11-05',batchId:BATCH,dataset:DATASET,universe:new Set(['ZZFX'])});
+  expect(own.rows('dq_quarantine')).toEqual([expect.objectContaining({reason_code:'window_conflict',detail:expect.objectContaining({reason:'own_window_conflict'})})]);
+ });
 });

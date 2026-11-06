@@ -15,6 +15,7 @@ import {memoryRawStore,supabaseRawStore} from '../../src/lib/dq/raw-store';
 import {SUBMISSIONS_PARSER_VERSION,SecSubmissionsError,submissionsClient,submissionsEvidenceClaims} from '../../src/lib/entities/identifiers/sec-submissions';
 import {errorMessage,loaderOutcome} from '../../src/lib/entities/load-sec';
 import {applySubmissionsEvidence} from '../../src/lib/entities/submissions-evidence';
+import {normalizeSecurityTicker} from '../../src/lib/securities/ticker';
 import {getAdminSupabase} from '../../src/lib/supabase/admin';
 
 const DATASET=DATASETS.entities.submissions;
@@ -48,18 +49,22 @@ async function main(){
    try{
     const snapshot=await client.fetch(cik,{coverFrom:ALL_PAGES});
     const open=await tables.select('issuer_securities',{issuer_id:issuerId,valid_to:null},{orderBy:'ticker'});
-    const primary=[...open].sort((a,b)=>Number(b.is_primary===true)-Number(a.is_primary===true))[0];
+    // aliases attach to the issuer's primary row only; with no is_primary row there is no primary (apply then skips the names)
+    const primary=open.find(r=>r.is_primary===true);
     const primaryTicker=primary?String(primary.ticker):null;
     if(!batchId){
+     // the preview fetches every page too (coverFrom=ALL_PAGES) but writes nothing
+     const normalized=snapshot.parsed.tickers.map(t=>universe.has(t)?t:normalizeSecurityTicker(t,'US'));
      preview.push({cik,formerNames:snapshot.parsed.formerNames.length,evidenceClaims:submissionsEvidenceClaims(issuerId,snapshot,asOf).length,
-      secOnlyTickers:snapshot.parsed.tickers.filter(t=>!open.some(r=>r.ticker===t)),pages:snapshot.pages.length,complete:snapshot.complete});
+      secOnlyTickers:normalized.filter((t):t is string=>t!==null&&universe.has(t)&&!open.some(r=>r.ticker===t)),pages:snapshot.pages.length,complete:snapshot.complete});
      continue;
     }
     const res=await applySubmissionsEvidence(tables,{issuerId,primaryTicker,snapshot,asOf,batchId,dataset:DATASET,universe});
     add(counts,res.counts);errors=[...errors,...res.errors];
    }catch(e){
     counts.failed++;
-    errors.push({code:e instanceof SecSubmissionsError?e.code:'exception',key:cik,message:errorMessage(e)});
+    const raw=e instanceof SecSubmissionsError&&e.raw?` [raw sha256=${e.raw.sha256} path=${e.raw.path}]`:'';
+    errors.push({code:e instanceof SecSubmissionsError?e.code:'exception',key:cik,message:errorMessage(e)+raw});
    }
   }
  }finally{

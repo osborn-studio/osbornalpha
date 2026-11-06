@@ -8,7 +8,7 @@
 // never prefill a security or an effective date (the reviewer reads the filing, spec §4.2.1).
 import type {Budget} from '../../facts/types';
 import type {Pacer} from '../../facts/providers/shared';
-import {PacerError,createPacer} from '../../facts/providers/shared';
+import {PacerError,SEC_MIN_INTERVAL_MS as SHARED_INTERVAL,secPacer} from '../../facts/providers/shared';
 import type {RawStore} from '../../dq/raw-store';
 import {normalizeCik} from '../../research/entity-keys/identifiers';
 import {DEFAULT_USER_AGENT} from '../../research/ingest/collectors/shared';
@@ -16,7 +16,7 @@ import type {ClaimInput} from '../claims';
 import type {ClaimEvidence} from '../types';
 
 export const SEC_SUBMISSIONS_BASE='https://data.sec.gov/submissions/';
-export const SEC_MIN_INTERVAL_MS=120;
+export const SEC_MIN_INTERVAL_MS=SHARED_INTERVAL;
 export const SUBMISSIONS_PARSER_VERSION='sec-submissions/1';
 const PAGE_NAME=/^CIK\d{10}-submissions-\d{3}\.json$/;
 export const submissionsUrl=(cik:string)=>`${SEC_SUBMISSIONS_BASE}CIK${normalizeCik(cik).padStart(10,'0')}.json`;
@@ -24,11 +24,11 @@ export const submissionsUrl=(cik:string)=>`${SEC_SUBMISSIONS_BASE}CIK${normalize
 export interface SubmissionFiling{accessionNumber:string;filingDate:string;reportDate:string|null;acceptanceDateTime:string|null;form:string;primaryDocument:string|null;isInlineXBRL:boolean|null;page:string}
 export interface SubmissionsPageRef{name:string;filingCount:number|null;filingFrom:string|null;filingTo:string|null}
 export interface FormerName{name:string;from:string|null;to:string|null}
-export interface ParsedSubmissions{cik:string;name:string|null;category:string|null;fiscalYearEnd:string|null;tickers:string[];exchanges:string[];formerNames:FormerName[];filings:SubmissionFiling[];files:SubmissionsPageRef[]}
+export interface ParsedSubmissions{cik:string;name:string|null;category:string|null;fiscalYearEnd:string|null;tickers:string[];/** index of each tickers[] entry in the raw document (blank entries are dropped, positions kept) */tickerPositions:number[];exchanges:string[];formerNames:FormerName[];filings:SubmissionFiling[];files:SubmissionsPageRef[]}
 export interface StoredDoc{name:string;sha256:string;path:string}
 export interface SubmissionsSnapshot{cik:string;fetchedAt:string;main:StoredDoc;pages:StoredDoc[];parsed:ParsedSubmissions;complete:boolean}
 export class SecSubmissionsError extends Error{
- constructor(readonly code:'sec_unavailable'|'invalid_schema',detail?:string){super(detail?`${code}: ${detail}`:code);this.name='SecSubmissionsError';}
+ constructor(readonly code:'sec_unavailable'|'invalid_schema',detail?:string,readonly raw?:{sha256:string;path:string}){super(detail?`${code}: ${detail}`:code);this.name='SecSubmissionsError';}
 }
 export type FilerAcceleration='large_accelerated'|'accelerated'|'non_accelerated'|'unknown';
 
@@ -79,12 +79,17 @@ export function parseSubmissions(json:string):ParsedSubmissions{
  // Absent or malformed tickers / files are NOT empty lists: consumers read [] as "SEC lists none", so they fail instead.
  const requiredArray=(v:unknown,what:string):unknown[]=>{if(!Array.isArray(v))throw invalid(what);return v;};
  const requiredStrings=(v:unknown,what:string)=>requiredArray(v,what).map(x=>{if(typeof x!=='string')throw invalid(what);return x;});
+ const tickerList=(v:unknown)=>{
+  const all=requiredStrings(v,'tickers').map(t=>t.trim().toUpperCase());
+  const tickerPositions=all.flatMap((t,i)=>t===''?[]:[i]);
+  return {tickers:tickerPositions.map(i=>all[i]),tickerPositions};
+ };
  const strings=(v:unknown)=>Array.isArray(v)?v.filter((x):x is string=>typeof x==='string'&&x.trim()!==''):[];
  const fye=text(d.fiscalYearEnd);
  return {
   cik,name:text(d.name),category:text(d.category),
   fiscalYearEnd:fye&&/^(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])$/.test(fye)?fye:null,
-  tickers:requiredStrings(d.tickers,'tickers').map(t=>t.trim().toUpperCase()).filter(t=>t!==''),exchanges:strings(d.exchanges),
+  ...tickerList(d.tickers),exchanges:strings(d.exchanges),
   formerNames:(Array.isArray(d.formerNames)?d.formerNames:[]).flatMap(f=>{
    const o=(f&&typeof f==='object'?f:{}) as Record<string,unknown>;const n=text(o.name);
    return n?[{name:n,from:text(o.from),to:text(o.to)}]:[];
@@ -102,8 +107,16 @@ export interface FetchSubmissionsDeps{fetch:typeof fetch;raw:RawStore;userAgent?
  /** Default: one process-wide SEC pacer shared by every client and fetchSubmissions call. Tests inject their own for isolation. */pacer?:Pacer}
 
 const FETCH_TIMEOUT_MS=30_000;
-// Process-wide: SEC's limit is per source address, so all callers share one serialised pacer (>= 120 ms between requests).
-const SEC_PACER:Pacer=createPacer(SEC_MIN_INTERVAL_MS);
+/** Runs a parse of stored bytes; a schema failure carries the stored document's sha256/path so the evidence can be found. */
+function parseStored<T>(doc:StoredDoc,parse:()=>T):T{
+ try{return parse();}
+ catch(e){
+  if(e instanceof SecSubmissionsError&&!e.raw)throw new SecSubmissionsError(e.code,e.message.replace(/^[a-z_]+: ?/,''),{sha256:doc.sha256,path:doc.path});
+  throw e;
+ }
+}
+// Process-wide: SEC's limit is per source address, so every SEC caller (also companyfacts) shares secPacer.
+const SEC_PACER:Pacer=secPacer;
 const unlimited=():Budget=>({remainingMs:()=>Number.POSITIVE_INFINITY,signal:new AbortController().signal});
 
 export function submissionsClient(deps:FetchSubmissionsDeps){
@@ -127,10 +140,11 @@ export function submissionsClient(deps:FetchSubmissionsDeps){
   catch(e){throw new SecSubmissionsError('sec_unavailable',`${name}: ${e instanceof Error?e.message:String(e)}`);}
   const contentType=(res.headers.get('content-type')??'').includes('html')?'text/html' as const:'application/json' as const;
   if(!res.ok){
-   // Evidence first: the failure body is kept as received (an aborted budget starts no upload), then the failure is reported.
-   try{await deps.raw.put({kind:'sec-submissions',bytes,contentType,meta:{cik,name,http_status:res.status}},budget);}
+   // Evidence first: the failure body is kept as received (an aborted budget starts no upload), then the failure is reported with its sha256/path.
+   let stored:{sha256:string;path:string};
+   try{stored=await deps.raw.put({kind:'sec-submissions',bytes,contentType,meta:{cik,name,http_status:res.status}},budget);}
    catch(e){throw new SecSubmissionsError('sec_unavailable',`${name}: HTTP ${res.status} (raw not stored: ${e instanceof Error?e.message:String(e)})`);}
-   throw new SecSubmissionsError('sec_unavailable',`${name}: HTTP ${res.status}`);
+   throw new SecSubmissionsError('sec_unavailable',`${name}: HTTP ${res.status}`,{sha256:stored.sha256,path:stored.path});
   }
   const stored=await deps.raw.put({kind:'sec-submissions',bytes,contentType,meta:{cik,name,http_status:res.status}},budget);
   return {bytes,doc:{name,sha256:stored.sha256,path:stored.path}};
@@ -141,8 +155,7 @@ export function submissionsClient(deps:FetchSubmissionsDeps){
    const c=normalizeCik(cik);
    const fetchedAt=clock().toISOString();
    const main=await get(submissionsUrl(c),c,'main');
-   const parsed=parseSubmissions(new TextDecoder().decode(main.bytes));
-   if(parsed.cik!==c)throw invalid(`cik ${parsed.cik} != ${c}`);
+   const parsed=parseStored(main.doc,()=>{const x=parseSubmissions(new TextDecoder().decode(main.bytes));if(x.cik!==c)throw invalid(`cik ${x.cik} != ${c}`);return x;});
    const from=opts.coverFrom??null;
    const wanted=from===null?[]:parsed.files.filter(f=>f.filingTo===null||f.filingTo>=from);
    const pages:StoredDoc[]=[];
@@ -151,7 +164,7 @@ export function submissionsClient(deps:FetchSubmissionsDeps){
    for(const f of wanted){
     const p=await get(`${SEC_SUBMISSIONS_BASE}${f.name}`,c,f.name);
     pages.push(p.doc);
-    for(const x of parseSubmissionsPage(new TextDecoder().decode(p.bytes),f.name))if(!seen.has(x.accessionNumber)){seen.add(x.accessionNumber);filings.push(x);}
+    for(const x of parseStored(p.doc,()=>parseSubmissionsPage(new TextDecoder().decode(p.bytes),f.name)))if(!seen.has(x.accessionNumber)){seen.add(x.accessionNumber);filings.push(x);}
    }
    return {cik:c,fetchedAt,main:main.doc,pages,parsed:{...parsed,filings},complete:wanted.length===parsed.files.length};
   },

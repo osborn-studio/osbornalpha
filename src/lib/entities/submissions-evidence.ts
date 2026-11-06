@@ -32,7 +32,8 @@ export async function applySubmissionsEvidence(tables:TableClient,input:Submissi
   catch(e){counts.failed++;errors.push({code:'claim_error',key:c.value,message:errorMessage(e)});}
  }
  const held=new Set((await tables.select('issuer_securities',{issuer_id:input.issuerId,valid_to:null})).map(r=>String(r.ticker)));
- for(const [at,raw] of input.snapshot.parsed.tickers.entries()){
+ for(const [n,raw] of input.snapshot.parsed.tickers.entries()){
+  const at=input.snapshot.parsed.tickerPositions[n];   // position in the raw document
   const ticker=input.universe.has(raw)?raw:normalizeSecurityTicker(raw,'US');
   if(!ticker||!input.universe.has(ticker)){skip('ticker_not_in_universe');continue;}
   if(held.has(ticker)){counts.duplicates++;continue;}
@@ -40,9 +41,14 @@ export async function applySubmissionsEvidence(tables:TableClient,input:Submissi
    const res=await attachSecurity(tables,{issuer_id:input.issuerId,ticker,share_class:'unknown',is_primary:false,valid_from:input.asOf,valid_from_method:'first_observed',source:'sec_submissions',provenance:{valid_from:{source:'sec_submissions',as_of:input.asOf,evidence_sha256:input.snapshot.main.sha256}}});
    if(res==='inserted')counts.inserted++;
    else if(res==='duplicate')counts.duplicates++;
-   else await parkConflict(tables,{dataset:input.dataset,table:'issuer_securities',naturalKey:`${ticker}:${input.asOf}`,reasonCode:'ownership_conflict',
-    detail:{reason:'ticker_owned_by_other_issuer',source:'sec_submissions',sec_ticker:raw,locator:`tickers[${at}]`,fetched_at:input.snapshot.fetchedAt,evidence_sha256:input.snapshot.main.sha256,raw_path:input.snapshot.main.path},payload:{issuer_id:input.issuerId,ticker,valid_from:input.asOf},batchId:input.batchId},
-    counts,errors,{code:'ownership_conflict',key:ticker});
+   else{
+    // Another issuer holds the ticker: ownership_conflict. Only this issuer's own rows in the way: window_conflict.
+    const other=(await tables.select('issuer_securities',{ticker})).some(r=>String(r.issuer_id)!==input.issuerId);
+    const reasonCode=other?'ownership_conflict':'window_conflict';
+    await parkConflict(tables,{dataset:input.dataset,table:'issuer_securities',naturalKey:`${ticker}:${input.asOf}`,reasonCode,
+    detail:{reason:other?'ticker_owned_by_other_issuer':'own_window_conflict',source:'sec_submissions',sec_ticker:raw,locator:`tickers[${at}]`,fetched_at:input.snapshot.fetchedAt,evidence_sha256:input.snapshot.main.sha256,raw_path:input.snapshot.main.path},payload:{issuer_id:input.issuerId,ticker,valid_from:input.asOf},batchId:input.batchId},
+    counts,errors,{code:reasonCode,key:ticker});
+   }
   }catch(e){counts.failed++;errors.push({code:errorMessage(e)==='issuer_not_active'?'issuer_not_active':'security_error',key:ticker,message:errorMessage(e)});}
  }
  counts.fetched=counts.inserted+counts.duplicates+counts.quarantined+counts.failed;
