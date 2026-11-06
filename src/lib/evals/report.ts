@@ -9,7 +9,7 @@
 // canonicalJson(report)+'\n' and returns the sha256 of exactly those bytes; it never overwrites.
 // The environment block must carry no credentials (db_host is a bare host[:port], app_origin an origin).
 import {randomBytes} from 'node:crypto';
-import {closeSync,existsSync,linkSync,mkdirSync,openSync,unlinkSync,writeSync} from 'node:fs';
+import {closeSync,existsSync,linkSync,mkdirSync,openSync,unlinkSync,writeFileSync} from 'node:fs';
 import {dirname,join} from 'node:path';
 import {canonicalJson,sha256Hex} from './canonical-json';
 import {EvalError} from './errors';
@@ -119,7 +119,7 @@ export function writeReportFiles(r:EvalReport,root:string=process.cwd(),ops:Writ
  assertEnvironmentClean(r.environment);
  const rel=reportPaths(r);
  const link=ops.link??linkSync;
- const write=ops.write??((fd:number,d:string|Buffer)=>{writeSync(fd,d);});
+ const write=ops.write??((fd:number,d:string|Buffer)=>{writeFileSync(fd,d);});
  const bytes=Buffer.from(`${canonicalJson(r)}\n`,'utf8');
  const targets:{path:string;data:string|Buffer}[]=[{path:rel.json,data:bytes}];
  if(rel.md!==null)targets.push({path:rel.md,data:renderMarkdown(r)});
