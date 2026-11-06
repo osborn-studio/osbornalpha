@@ -479,7 +479,7 @@ returns jsonb language plpgsql security definer set search_path = public as $$
 declare q public.dq_quarantine; c jsonb; g public.filings; r public.fact_sync_runs; b public.ingest_batches;
         v_source text; v_market text; v_gen int; v_nk_gen int; v_versions text[]; v_rev bigint;
         v_ps date; v_pe date; v_value numeric; v_run uuid := gen_random_uuid(); v_fact uuid := gen_random_uuid(); v_t uuid; v_k text;
-        v_lineage uuid[]; v_now uuid[];
+        v_lineage uuid[]; v_now uuid[]; v_locked int;
 begin
   if p_resolved_by is null then raise exception 'invalid_resolver' using errcode = '22023'; end if;
   select * into q from public.dq_quarantine where id = p_item;
@@ -540,9 +540,15 @@ begin
   -- lock the whole lineage of the filing issuer's target (sorted by issuer_id; no cycle lock is taken here), then revalidate membership
   v_t := coalesce((select i.merged_into from public.issuers i where i.issuer_id = g.issuer_id), g.issuer_id);
   v_lineage := array(select l.i from (select v_t as i union select issuer_id from public.issuers where merged_into = v_t) l order by l.i);
-  perform 1 from public.fact_sync_scope s where s.issuer_id = any(v_lineage) and s.market = g.market order by s.issuer_id for update;
+  select count(*) into v_locked from (
+    select 1 from public.fact_sync_scope s where s.issuer_id = any(v_lineage) and s.market = g.market order by s.issuer_id for update) x;
+  if v_locked <> cardinality(v_lineage) then raise exception 'scope_missing' using errcode = 'P0001'; end if;
   v_now := array(select l.i from (select v_t as i union select issuer_id from public.issuers where merged_into = v_t) l order by l.i);
-  if v_now <> v_lineage or not (g.issuer_id = any(v_now)) then raise exception 'lineage_changed' using errcode = 'P0001'; end if;
+  if v_now <> v_lineage or not (g.issuer_id = any(v_now))
+     or v_t is distinct from coalesce((select i.merged_into from public.issuers i where i.issuer_id = g.issuer_id), g.issuer_id)
+     or not exists (select 1 from public.issuers i where i.issuer_id = v_t and i.status = 'active') then
+    raise exception 'lineage_changed' using errcode = 'P0001';
+  end if;
   select s.state_rev into v_rev from public.fact_sync_scope s where s.issuer_id = g.issuer_id and s.market = g.market;
   if not found then raise exception 'scope_missing' using errcode = 'P0001'; end if;
   if v_rev is distinct from p_expected_rev then raise exception 'stale_evaluation' using errcode = 'P0001'; end if;
@@ -565,10 +571,10 @@ begin
                   and coalesce(d.payload -> 'key' ->> 'period_start', '') = coalesce(c ->> 'periodStart', '')
                   and d.payload -> 'key' ->> 'period_end' = c ->> 'periodEnd'
                   and d.payload -> 'key' ->> 'consolidation' = c ->> 'consolidation' and d.payload -> 'key' ->> 'unit' = c ->> 'unit'
-                  and d.payload -> 'key' ->> 'available_date' = g.available_date::text)
+                  and (d.payload -> 'key' ->> 'available_date') ~ '^\d{4}-\d{2}-\d{2}$' and (d.payload -> 'key' ->> 'available_date')::date = g.available_date)
      or exists (select 1 from public.dq_quarantine d
                 where d.table_name = 'financial_facts' and d.status = 'open' and d.reason_code = 'lineage_conflict'
-                  and d.natural_key = v_t::text || ':' || v_k || ':' || g.available_date::text) then
+                  and d.natural_key = v_t::text || ':' || v_k || ':' || to_char(g.available_date, 'YYYY-MM-DD')) then
     raise exception 'conflict_exists' using errcode = 'P0001';
   end if;
   insert into public.fact_sync_runs (run_id, issuer_id, market, batch_id, mapping_gen, status, manifest, started_at, published_at)
@@ -676,6 +682,7 @@ begin
   select count(*) into v_locked from (
     select 1 from public.fact_sync_scope s where s.issuer_id = any(v_lineage) and s.market = v_market order by s.issuer_id for update) x;
   if v_locked <> cardinality(v_lineage) then raise exception 'scope_missing' using errcode = 'P0001'; end if;
+  if not exists (select 1 from public.issuers i where i.issuer_id = v_t and i.status = 'active') then raise exception 'target_not_active' using errcode = 'P0001'; end if;
   v_now := array(select l.i from (select v_t as i union select issuer_id from public.issuers where merged_into = v_t) l order by l.i);
   if v_now <> v_lineage then raise exception 'lineage_changed' using errcode = 'P0001'; end if;
   select * into q from public.dq_quarantine where id = p_item for update;

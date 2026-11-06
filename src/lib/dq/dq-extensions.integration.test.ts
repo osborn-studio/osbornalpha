@@ -555,6 +555,20 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
    void b;
   });
 
+  it('adopt_candidate: a merge of the filing issuer into a third issuer committing between the target read and the lock → lineage_changed',async()=>{
+   const {iss:g,b,run,fRef}=await published();const w=await issuer();await scope(w);const by=await user();
+   const a=await ambiguous({iss:g,b,run,ref:fRef});const ab=await batch();const expected=await rev(g);
+   await inTx(admin,async({c,pid,commit})=>{
+    await c.query(`select 1 from public.fact_sync_scope where issuer_id=$1 and market='US' for update`,[g]);
+    const p=adopt(a,0,ab,expected,by);p.catch(()=>{});
+    await stillBlockedBehind(admin,pid,p);
+    await c.query(`select public.set_merge($1,$2,$3)`,[g,w,by]);          // same tx as the held lock: the merge commits first
+    await commit();
+    expect(await fails(p)).toMatchObject({message:'lineage_changed'});
+   });
+   expect((await itemRow(a)).status).toBe('open');
+  });
+
   it('adopt_candidate: two adoptions racing on different lineage members serialise; the second sees the first',async()=>{
    const t=await issuer();const bt=await batch();await scope(t);await claim(t,bt);
    const a=await sibling('0');const c=await sibling('0');
@@ -617,6 +631,14 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
    expect([await status(r),await status(x)]).toEqual(['quarantined','ok']);
    const malformed=await item({reason:'lineage_conflict',b,nk:`${t}:revenue:2024-02-01`,payload:{fact_ids:[r]}});
    expect(await fails(resolveLineage(malformed,r,ab,by))).toMatchObject({message:'invalid_choice'});
+  });
+
+  it('resolve_lineage_conflict: a target that is no longer active → target_not_active (distinct from lineage_changed)',async()=>{
+   const {iss:t,b,r}=await published();const w=await issuer();await scope(w);const by=await user();
+   const id=await lineageItem(t,b,[r]);
+   await merge(t,w,by);
+   expect(await fails(resolveLineage(id,r,await batch(),by))).toMatchObject({message:'target_not_active',code:'P0001'});
+   expect((await itemRow(id)).status).toBe('open');
   });
 
   it('grants: the three verdict functions are service_role only',async()=>{
