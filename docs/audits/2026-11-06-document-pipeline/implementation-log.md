@@ -5,3 +5,4 @@
 - Task 3：pgDocumentsDb（pg 实现，写入单次调用 + checkWriteRows，资产上限同步）、整套共享契约在真实 PostgreSQL 上通过、超过 1,000 行的游标分页集成测试 2 个；契约无 SQL/内存分歧；Codex 审计：待审
 - Task 2 recheck：N1 内存时间戳保留微秒（db.ts canonTs/tsSortKey，pg/supabase 行规范化同步）、N2 阈值先规范化指数十进制；新增共享契约用例；Codex 审计：待审
 - Task 4：ObjectStore（Supabase + 内存，内容寻址路径）、十进制字符串算术 decimal.ts、pdfjs-dist 4.10.38 精确依赖、本机 PDF 冒烟脚本（两页 PDF 本机实测 pages=2）；Codex 审计：待审
+- Task 5：classify（doc_class、期间、cnDate）与文档同步范围 scope（edgar/cninfo/hkexnews，未再出现的行置 priority 0）；Codex 审计：待审（2026-11-06）
