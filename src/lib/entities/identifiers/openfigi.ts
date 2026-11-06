@@ -105,11 +105,15 @@ export async function mapJobs(jobs:readonly FigiJob[],deps:OpenFigiDeps):Promise
  };
  /** The request is stored before it is sent; every received response is stored before anything else happens. */
  const send=async(body:string,reqSha:string):Promise<{res:Response|null;bytes:Uint8Array|null;sha:string|null}|'exhausted'>=>{
-  if(!(await waitUntilUnblocked()))return 'exhausted';
-  try{await limiter.pacer.admit({budget,reserveMs,now,sleep:wait,minIntervalMs});}
-  catch(e){
-   if(e instanceof PacerError)return e.code==='budget_exhausted'?'exhausted':(()=>{throw new OpenFigiError('budget_aborted');})();
-   throw e;
+  // The horizon can move while this caller waits in the queue: recheck right before dispatch, then re-admit (keeps spacing).
+  for(;;){
+   if(!(await waitUntilUnblocked()))return 'exhausted';
+   try{await limiter.pacer.admit({budget,reserveMs,now,sleep:wait,minIntervalMs});}
+   catch(e){
+    if(e instanceof PacerError)return e.code==='budget_exhausted'?'exhausted':(()=>{throw new OpenFigiError('budget_aborted');})();
+    throw e;
+   }
+   if(limiter.blockedUntil-now()<=0)break;
   }
   requests++;
   let res:Response;
@@ -139,8 +143,8 @@ export async function mapJobs(jobs:readonly FigiJob[],deps:OpenFigiDeps):Promise
   let out=await send(body,req.sha256);
   if(out==='exhausted')return done(true);
   if(retryable(out.res)){
+   backoff();   // published first: other callers back off even when this caller cannot afford the retry
    if(budget.remainingMs()-BACKOFF_MS<=reserveMs)return done(true);
-   backoff();
    out=await send(body,req.sha256);
    if(out==='exhausted')return done(true);
   }

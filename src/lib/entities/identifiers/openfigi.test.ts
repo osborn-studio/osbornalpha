@@ -225,6 +225,34 @@ describe('round 2: body read, budget, shared back-off, schema',()=>{
  });
 });
 
+describe('round 3: back-off horizon races',()=>{
+ const flush=()=>new Promise<void>(r=>setTimeout(r,0));
+ it('does not dispatch a caller queued in admit before a horizon published meanwhile',async()=>{
+  let t=0;const gates:{ms:number;release:()=>void}[]=[];const fetchTimes:number[]=[];
+  const sleep=(ms:number)=>ms===3000||ms===BACKOFF_MS?new Promise<void>(r=>gates.push({ms,release:()=>{t+=ms;r();}})):(t+=ms,Promise.resolve());
+  let release429!:()=>void;let n=0;
+  const fetch=(async()=>{fetchTimes.push(t);n++;if(n===1)await new Promise<void>(r=>{release429=r;});return n===1?new Response('{}',{status:429}):new Response(JSON.stringify([{data:TENCENT}]),{status:200});}) as typeof globalThis.fetch;
+  const deps={fetch,raw:memoryRawStore(),limiter:createFigiLimiter(),now:()=>t,sleep};
+  const a=mapIsins(['A'],deps);await flush();
+  const b=mapIsins(['B'],deps);await flush();
+  expect(gates.map(g=>g.ms)).toEqual([3000]);                 // B is parked in admit behind the spacing wait
+  release429();await flush();                                  // A gets its 429: horizon = 60000
+  gates.find(g=>g.ms===3000)!.release();await flush();         // B's spacing wait ends at t=3000
+  expect(fetchTimes.slice(1).every(x=>x>=BACKOFF_MS)).toBe(true);  // B never dispatched inside the horizon
+  gates.find(g=>g.ms===BACKOFF_MS)?.release();
+  await Promise.all([a,b]);
+  expect(fetchTimes[1]).toBeGreaterThanOrEqual(BACKOFF_MS);
+  expect(fetchTimes[2]).toBeGreaterThanOrEqual(BACKOFF_MS);
+ });
+ it('publishes the horizon even when the failing caller cannot afford the retry',async()=>{
+  const h=harness([status(429),ok([{data:TENCENT}])]);
+  const a=await mapJobs([{idType:'ID_ISIN',idValue:'A'}],{...h.deps,budget:{remainingMs:()=>BACKOFF_MS+500,signal:new AbortController().signal},reserveMs:1000});
+  expect(a.exhausted).toBe(true);expect(h.sleeps).toEqual([]);
+  const b=await mapJobs([{idType:'ID_ISIN',idValue:'B'}],h.deps);
+  expect(b.exhausted).toBe(false);expect(h.sleeps).toContain(BACKOFF_MS);expect(h.deps.now()).toBeGreaterThanOrEqual(BACKOFF_MS);
+ });
+});
+
 const RECORDED=new URL('../fixtures/openfigi/recorded-probe-isin.json',import.meta.url);
 describe('recorded probe (Task 3b Step 8)',()=>{
  it('maps AAPL, 600519 and 0700 to exactly one group per ticker (Tencent ISIN also lists 80700.HK and the OTC line TCTZF)',()=>{
