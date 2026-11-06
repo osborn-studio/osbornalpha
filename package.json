@@ -40,7 +40,6 @@
     "lightweight-charts": "^4.2.1",
     "next": "15.5.28",
     "next-intl": "^4.13.1",
-    "pdfjs-dist": "4.10.38",
     "pg": "^8.23.0",
     "pinyin-pro": "^3.28.1",
     "react": "^19.2.7",
@@ -48,7 +47,8 @@
     "stripe": "^22.3.0",
     "svix": "^1.98.0",
     "tailwind-merge": "^2.5.4",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "pdfjs-dist": "4.10.38"
   },
   "devDependencies": {
     "@next/eslint-plugin-next": "^15.5.22",

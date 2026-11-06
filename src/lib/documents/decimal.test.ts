@@ -45,6 +45,27 @@ describe('negate / addDecimal / subDecimal',()=>{
  });
 });
 
+describe('parsePresented review fixes',()=>{
+ it('reads U+2212 and U+2012 as minus and lone dash',()=>{
+  expect(parsePresented('\u22121,234')).toEqual({digits:'1234',negative:true});
+  expect(parsePresented('\u201256')).toEqual({digits:'56',negative:true});
+  expect(parsePresented('(\u22125)')).toBeNull();
+  for(const d of ['\u2212','\u2012'])expect(parsePresented(d)).toBe('dash');
+ });
+ it('rejects leading-zero groupings but keeps a bare 0 and 0.x',()=>{
+  for(const bad of ['0,123','01,234','00,123.5','(0,123)'])expect(parsePresented(bad)).toBeNull();
+  expect(parsePresented('0')).toEqual({digits:'0',negative:false});
+  expect(parsePresented('0.25')).toEqual({digits:'0.25',negative:false});
+  expect(parsePresented('(0)')).toEqual({digits:'0',negative:true});
+  expect(parsePresented('1,000')).toEqual({digits:'1000',negative:false});
+ });
+ it('caps the cell length (128 code units after NFKC)',()=>{
+  expect(parsePresented('1'.repeat(128))).toEqual({digits:'1'.repeat(128),negative:false});
+  expect(parsePresented('1'.repeat(129))).toBeNull();
+  expect(parsePresented(`(${'1'.repeat(200)})`)).toBeNull();
+ });
+});
+
 describe('parsePresented',()=>{
  it('reads grouped numbers, parentheses and a leading dash as negative',()=>{
   expect(parsePresented('1,234')).toEqual({digits:'1234',negative:false});

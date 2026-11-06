@@ -44,12 +44,19 @@ function fromScaled(n:bigint,frac:number):string{
 export function addDecimal(a:string,b:string):string{const {x,y,frac}=aligned(a,b);return fromScaled(x+y,frac);}
 export function subDecimal(a:string,b:string):string{const {x,y,frac}=aligned(a,b);return fromScaled(x-y,frac);}
 
-const GROUPED=/^(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$/;
+// A grouped integer part starts with 1-9 (no '0,123', '01,234'); an ungrouped one is any digit run (a bare 0, 0.x, 007).
+const GROUPED=/^(?:[1-9]\d{0,2}(?:,\d{3})+|\d+)(?:\.\d+)?$/;
+/** One table cell is never this long; the cap keeps digits far inside canonicalDecimal's literal limit. */
+const MAX_CELL=128;
+const DASHES='-\\u2010-\\u2015\\u2212';
+const DASH_ONLY=new RegExp(`^[${DASHES}]$`);
+const MINUS_NUM=new RegExp(`^(\\()?([${DASHES}])?([\\d,]+(?:\\.\\d+)?)(\\))?$`);
 /** One presented table cell → unsigned digits (commas removed) and its sign; 'dash' for a lone dash; null otherwise. */
 export function parsePresented(cell:string):{digits:string;negative:boolean}|'dash'|null{
  const s=cell.normalize('NFKC').trim();
- if(/^[-–—]$/.test(s))return 'dash';
- const m=/^(\()?([-–—])?([\d,]+(?:\.\d+)?)(\))?$/.exec(s);
+ if(s.length>MAX_CELL)return null;
+ if(DASH_ONLY.test(s))return 'dash';
+ const m=MINUS_NUM.exec(s);
  if(!m)return null;
  const [,open,minus,body,close]=m;
  if(!!open!==!!close||(open&&minus))return null;
