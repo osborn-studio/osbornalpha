@@ -91,7 +91,7 @@
 
 - 页面：所有登录用户（任何 plan）可读；`/intel/macro/*` 在 `(app)` 布局内，受现有 session 门禁。
 - API：`src/middleware.ts` 不拦 `/api/*`，所以每个 `/api/macro/*` 路由自行鉴权：读路由要求登录 session（`createServerClient` 取 user，无则 401）；分析路由同样要求 session 并只读写本人行；`POST /api/macro/ingest` 只认 `MACRO_INGEST_SECRET`（Bearer，常量时间比较，缺省即拒）；`/api/cron/macro-sync` 用 `authorizedCronRequest`（`src/lib/observability/cron-auth.ts`）。
-- 数据库层：`macro_series`、`macro_observations`（`status='ok'`）、`macro_snapshots`、`macro_regime_results` 是公开参考数据，anon + authenticated 只读（F4 的输入构造器走 anon 客户端，F4 规格 §3.5）；`macro_evidence` 元数据 anon 只读（不含字节；字节在私有桶，服务端代取）；隔离行、批次、隔离队列只 service / admin。
+- 数据库层：`macro_series`、`macro_observations`（`status='ok'`）、`macro_snapshots`、`macro_regime_results` 是公开参考数据，anon + authenticated 只读（F4 的输入构造器走 anon 客户端，F4 规格 §3.5）；`macro_evidence_objects` 与 `macro_retrievals` 元数据 anon 只读（不含字节；字节在私有桶，服务端代取）；隔离行、批次、隔离队列只 service / admin。
 - 分析配额：`create_macro_analysis_run` RPC（security definer，只授 service_role，路由传已验证的 user id）内按用户加事务级咨询锁、数过去 24 小时本人运行数，超过 plan 限额（free 10 / pro 100 / admin 不限，从 `profiles` 读 plan 与 role）则拒绝；计算失败的运行不计数（行写为 `failed` 不占额度由 RPC 规则决定：只数 `status='ok'`）。不改 `usage_events` 及其 RPC。
 
 ---
@@ -277,7 +277,7 @@ Vercel cron 05:30 UTC → GET /api/cron/macro-sync          (CRON_SECRET; ?previ
    1. upsert 目录 → macro_series
    2. FRED CSV 适配器（TS）：startBatch(producer 'ts-fred', dataset 'macro.fred')
       每个 A 状态 FRED 序列：GET https://fred.stlouisfed.org/graph/fredgraph.csv?id=<code>&cosd=2000-01-01
-      → 原始字节存证（macro-raw/fred_csv/<sha256>.csv + macro_evidence）→ 无损解析 → 规则校验 → macro_write_observations
+      → 原始字节存证（macro-raw/fred_csv/<sha256>.csv + macro_evidence_objects + macro_retrievals）→ 无损解析 → 规则校验 → macro_write_observations
       → finishBatch；recordAttempt('macro.fred', cadence 'daily')
    3. 派生（月末、同比、减 100）→ macro_write_observations（code_version、transform、derived_from）
    4. publish('US')（CN 只在 ingest finish 后发布，§0.2 M24/N3）（读各序列最新 ok 版本 → 判定 → publish_macro_snapshot）
@@ -427,7 +427,7 @@ inflation_axis = 同式，只取 inflation_yoy，用 (support[overheat]+support[
 | 方法 路径 | 返回 | 约束 |
 |---|---|---|
 | `GET /api/macro/overview?region=US\|CN\|all&compact=1` | `{regions: {US?: Envelope, CN?: Envelope}}`；`Envelope = {snapshotId, asOf, catalogVersion, methodologyVersion, collection: {dataset, status, lastOkAt}[], indicators: IndicatorRow[], changes[], catalogCounts}` | 登录；读 active 快照；`Cache-Control: private, max-age=60`；判定不在此响应里（由 F4 `/api/judgments` 提供） |
-| `GET /api/macro/series/[id]?from&to&transform&asOf` | `{def, observations[{observation_id, period_end, value_text, version, available_at, availability_basis, evidence_sha256, locator}], cycles[], events[], assetsByCycle[], provenance}` | 登录；目录白名单 id；最多 600 点；`asOf` → `available_at ≤ asOf` |
+| `GET /api/macro/series/[id]?from&to&transform&asOf` | `{def, observations[{observation_id, period_end, value_text, version, available_at, availability_basis, retrieval_id, evidence_sha256, locator}], cycles[], events[], assetsByCycle[], provenance}` | 登录；目录白名单 id；最多 600 点；`asOf` → `available_at ≤ asOf` |
 | `GET /api/macro/evidence/[sha256]` | 证据元数据 + 短期签名下载链接 | 登录 |
 | `GET /api/macro/snapshots/[id]` | 快照全文（观测清单、目录计数；判定结果仅在判断层开启时返回） | 登录 |
 | `POST /api/macro/analyses` | `{runId}` 或 `{error:{code:'quota_exceeded'\|'insufficient_sample'\|…}}` | 登录；ajv 校验 spec；服务端读输入、计算、调 RPC |
