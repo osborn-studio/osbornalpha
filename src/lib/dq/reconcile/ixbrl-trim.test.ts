@@ -77,6 +77,26 @@ describe('trimInlineXbrl (reproducible fixture trimming)',()=>{
    const doc2=mk(CTX('c1')+CTX('c2')+USD,`<ix:nonNumeric name="us-gaap:Assets" contextRef="c1">y <ix:nonFraction name="us-gaap:Other" contextRef="c2" unitRef="usd">1</ix:nonFraction></ix:nonNumeric>`);
    expect(trimInlineXbrl(doc2,{keep:keepAssets})).toMatchObject({facts:1,contexts:2});
   });
+  it('keeps the dimensional context of an unselected fact that sits inside a kept slice',()=>{
+   const seg='<xbrli:segment><x:m xmlns:x="urn:x">m</x:m></xbrli:segment>';
+   const doc=mk(CTX('c1')+CTX('c2',seg)+USD,`<ix:nonNumeric name="us-gaap:Assets" contextRef="c1">y <ix:nonFraction name="us-gaap:Other" contextRef="c2" unitRef="usd">1</ix:nonFraction></ix:nonNumeric>`);
+   const t=trimInlineXbrl(doc,{keep:keepAssets});
+   expect(t).toMatchObject({facts:1,contexts:2});
+   expect(t.html).toContain('urn:x');
+  });
+  it('builds context and unit slices against the resources scope (a binding on ix:header is declared once)',()=>{
+   const doc=`<?xml version="1.0"?>\n${ROOT_US.replace(' xmlns:iso4217="http://www.xbrl.org/2003/iso4217"','')}<head/><body><ix:header xmlns:cur="http://www.xbrl.org/2003/iso4217"><ix:resources>${CTX('c1')}<xbrli:unit id="usd"><xbrli:measure>cur:USD</xbrli:measure></xbrli:unit></ix:resources></ix:header>${NF('us-gaap:Assets','5')}</body></html>`;
+   const t=trimInlineXbrl(doc,{keep:keepAssets});
+   expect(t.html.split('xmlns:cur=').length-1).toBe(1);
+   expect(parseInlineXbrl(t.html).facts.map(f=>f.unit)).toEqual(['USD']);
+  });
+  it('trimInlineXbrl itself throws trim_not_equivalent when copying a context would duplicate a fact nested in it',()=>{
+   const doc=mk(`<xbrli:context id="c1"><xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000000001</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:instant>2023-09-30</xbrli:instant></xbrli:period>${NF('us-gaap:Assets','5')}</xbrli:context>${USD}`,'');
+   expect(parseInlineXbrl(doc).facts).toHaveLength(1);
+   let err:unknown;try{trimInlineXbrl(doc,{keep:keepAssets});}catch(e){err=e;}
+   expect(err).toBeInstanceOf(TrimError);
+   expect((err as TrimError).message).toMatch(/trim_not_equivalent/);
+  });
   it('keeps a selected fact with a missing context (unsupported is preserved, not lost)',()=>{
    const doc=mk(USD,NF('us-gaap:Assets','5','missing'));
    const t=trimInlineXbrl(doc,{keep:keepAssets});

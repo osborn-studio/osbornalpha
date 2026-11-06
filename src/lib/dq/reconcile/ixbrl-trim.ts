@@ -116,13 +116,14 @@ export function trimInlineXbrl(doc:string,opts:TrimOptions):TrimResult{
  const inside=facts.filter(f=>emitted.some(e=>f.start>=e.start&&f.end<=e.end));
  const ctxIds=new Set<string>(),unitIds=new Set<string>();
  for(const f of inside){
-  if(!dropped(f)&&f.contextRef!==''&&contexts.has(f.contextRef))ctxIds.add(f.contextRef);
+  if(f.contextRef!==''&&contexts.has(f.contextRef))ctxIds.add(f.contextRef);   // every fact physically inside a kept slice, dimensional or not
   if(f.unitRef!==null&&f.unitRef!==''&&units.has(f.unitRef))unitIds.add(f.unitRef);
  }
  const bySource=(a:Span,b:Span)=>a.start-b.start;
  const keptContexts=[...ctxIds].flatMap(id=>contexts.get(id)!).sort(bySource);
  const keptUnits=[...unitIds].flatMap(id=>units.get(id)!).sort(bySource);
- const wrap=(s:Span)=>sliceWith(doc,s,rootNs);
+ const resourcesNs=resources.ns;
+ const wrap=(s:Span)=>sliceWith(doc,s,resourcesNs);   // contexts and units are emitted inside <resources>
  const html=['<?xml version="1.0" encoding="utf-8"?>',`<!-- ${IXBRL_TRIM_VERSION}: ${kept.length} facts -->`,rootOpen,'<head><title>trimmed</title></head>','<body>',
   `<div style="display:none"><${header.name}${declsFor(header.ns,rootNs)}><${resources.name}${declsFor(resources.ns,header.ns)}>`,...keptContexts.map(wrap),...keptUnits.map(wrap),`</${resources.name}></${header.name}></div>`,
   ...emitted.map(f=>`<p${declsFor(f.parentNs,rootNs)}>${doc.slice(f.start,f.end)}</p>`),'</body>',`</${rootName}>`,''].join('\n');

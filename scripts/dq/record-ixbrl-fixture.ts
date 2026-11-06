@@ -8,17 +8,18 @@
  *    (primaryDocument, isInlineXBRL, form, filingDate, reportDate) plus the top-level category and
  *    fiscalYearEnd. An accession only reachable through filings.files[] pages is refused (exit 1).
  * 2. GET https://www.sec.gov/Archives/edgar/data/<cik>/<accession without dashes>/<primaryDocument>.
- * 3. trimInlineXbrl(document, {keep: factConceptKeep, dropDimensional: true}); write <out> and
+ * 3. Both downloaded originals (kinds sec-submissions / sec-document) are retained through a RawStore BEFORE the
+ *    trim and before any fixture output; the run fails if retention fails. --raw-dir <dir> writes
+ *    content-addressed files named exactly like RawStore paths (<kind>/<sha>.<ext> plus .meta.json, never
+ *    overwritten); without it the Supabase store is used when NEXT_PUBLIC_SUPABASE_URL and
+ *    SUPABASE_SERVICE_ROLE_KEY are set, otherwise the run refuses.
+ * 4. trimInlineXbrl(document, {keep: factConceptKeep, dropDimensional: true}); write <out> and
  *    <out>.meta.json {source_url, source_sha256, source_bytes, fetched_at, trim_version, parser_version,
- *    trimmed_sha256, facts, contexts, units, submissions:{url, sha256, accession, form, filingDate,
- *    reportDate, primaryDocument, isInlineXBRL, category, fiscalYearEnd}}.
- * 4. Before any fixture output, both downloaded originals (kinds sec-submissions / sec-document) are retained
- *    through a RawStore; the fixture metadata records their paths and sha256 and the run fails if retention
- *    fails. --raw-dir <dir> writes content-addressed files named exactly like RawStore paths (<kind>/<sha>.<ext>
- *    plus .meta.json, never overwritten); without it the Supabase store is used when NEXT_PUBLIC_SUPABASE_URL
- *    and SUPABASE_SERVICE_ROLE_KEY are set, otherwise the run refuses.
- * User-Agent = EDGAR_USER_AGENT or DEFAULT_USER_AGENT; paced by the process-wide secPacer. Nothing is
- * written unless both downloads and the trim succeed. Exit 1 on failure, 2 on bad arguments.
+ *    trimmed_sha256, facts, contexts, units, raw:{document,submissions}:{path,sha256,status},
+ *    submissions:{url, sha256, accession, form, filingDate, reportDate, primaryDocument, isInlineXBRL,
+ *    category, fiscalYearEnd}}.
+ * User-Agent = EDGAR_USER_AGENT or DEFAULT_USER_AGENT; paced by the process-wide secPacer. The fixture files are
+ * written only after both downloads, their retention and the trim succeeded. Exit 1 on failure, 2 on bad arguments.
  */
 import {createHash} from 'node:crypto';
 import {existsSync,mkdirSync,writeFileSync} from 'node:fs';
@@ -37,6 +38,8 @@ async function get(url:string):Promise<Uint8Array>{
  await secPacer.admit({budget:budgetFor(120_000),reserveMs:0});   // the one process-wide SEC pacer
  const res=await fetch(url,{headers:{'User-Agent':process.env.EDGAR_USER_AGENT??DEFAULT_USER_AGENT,Accept:'*/*'},signal:AbortSignal.timeout(60_000)});
  if(!res.ok)throw new Error(`http_${res.status} ${url}`);
+ const declared=Number(res.headers.get('content-length'));
+ if(Number.isFinite(declared)&&declared>MAX_IXBRL_BYTES){await res.body?.cancel();throw new Error(`too_large ${url}`);}
  const bytes=new Uint8Array(await res.arrayBuffer());
  if(bytes.byteLength>MAX_IXBRL_BYTES)throw new Error(`too_large ${url}`);
  return bytes;
@@ -70,7 +73,7 @@ async function rawStoreFor(rawDir:string):Promise<RawStore>{
 
 async function main(){
  const argv=process.argv.slice(2);let cik='',accn='',out='',rawDir='';
- for(let i=0;i<argv.length;i+=2){const k=argv[i],v=argv[i+1]??'';if(k==='--cik')cik=v;else if(k==='--accn')accn=v;else if(k==='--out')out=v;else if(k==='--raw-dir')rawDir=v;else{console.error(USAGE);process.exit(2);}}
+ for(let i=0;i<argv.length;i+=2){const k=argv[i],v=argv[i+1]??'';if(v===''){console.error(USAGE);process.exit(2);}if(k==='--cik')cik=v;else if(k==='--accn')accn=v;else if(k==='--out')out=v;else if(k==='--raw-dir')rawDir=v;else{console.error(USAGE);process.exit(2);}}
  if(!/^[1-9]\d{0,9}$/.test(cik)||!/^\d{10}-\d{2}-\d{6}$/.test(accn)||!out.endsWith('.htm')){console.error(USAGE);process.exit(2);}
  const subUrl=`https://data.sec.gov/submissions/CIK${cik.padStart(10,'0')}.json`;
  const subBytes=await get(subUrl);
