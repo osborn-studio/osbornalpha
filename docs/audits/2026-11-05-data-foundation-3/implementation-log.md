@@ -38,3 +38,4 @@
 
 - 2026-11-06 合并 origin/main（#104 A 股真实夹具与 §15 验证）：冲突 3 处——criticalSuites 并入 sync-cn；sync.ts 取 main 的 idle 心跳逻辑并保留本分支 inventoryEntry(dataset).cadence；vercel.json 保留 CN facts-sync 与两条 reconcile cron。typecheck/lint/相关单测与 sync-cn/sync-us/facts DB 套件全绿（2329970）。计划二 §15 1/4/5 公告日验证已由 #104 完成，本计划不重做。
 | 16a A 股黄金集校验器与 cn.tushare_vs_cninfo_pdf_gold 对 | 4c24061, 34d5f6d | ✅（逐块等同计划） | 初审 Changes requested（测试强度：绑定唯一性、left_ambiguous/过滤/钉住、错误原因断言）→ 已补 | challenge P1 钉住事实跨文件被替代致误判 passed → incomplete_gold(entry_changed, binding_changed)；P2 合并发行人/多 ticker 同发行人 → 按 filing 所有者分组；P3 日期/时间戳/report_type 校验 → 修复；复审无问题。黄金文件仍不建（决策 C：抄录人/复核人未定；TUSHARE_TOKEN 已可用） | 2 |
+| 16b A 股样本清单与 PDF 上传脚本、抄录指引、降级记录 | 593c12e, 18b9b52 | ✅（脚本逐块等同计划；降级条件四项全成立） | Approved with notes（措辞：disclosure_date 录制不依赖决策 C；recorded_at 时区格式；sha256 小写 → 指挥者文档修订 18b9b52） | review/challenge 均无问题 | 1 |
