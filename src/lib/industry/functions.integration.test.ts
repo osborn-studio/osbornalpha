@@ -14,6 +14,11 @@ import {randomBytes,randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import type {PoolClient} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {pgTableClient} from '../db/pg-table-client';
+import {industryDbContract,mark} from './db-contract';
+import type {IndustryContractHarness} from './db-contract';
+import {mulDecimalText} from './memory-industry-db';
+import {pgIndustryDb} from './pg-industry-db';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261111091000_industry_research_functions.sql';
@@ -541,3 +546,43 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
  });
 });
 
+// ---------------------------------------------------------------- Task 4: pgIndustryDb against the shared contract
+async function pgHarness():Promise<IndustryContractHarness>{
+ const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
+ const pool=new Pool({connectionString:state.adminUrl,statement_timeout:8000});   // a regression that blocks fails cleanly instead of hanging afterAll
+ const q=(text:string,values:unknown[]=[])=>pool.query(text,values);
+ return {
+  db:pgIndustryDb(pool),tables:pgTableClient(pool),
+  issuer:async()=>{const id=randomUUID();await q(`insert into public.issuers(issuer_id,canonical_name_zh) values($1,'行业契约测试')`,[id]);return id;},
+  batch:async()=>{const id=randomUUID();await q(`insert into public.ingest_batches(batch_id,producer,dataset) values($1,'industry-test','industry.test')`,[id]);return id;},
+  ticker:async()=>{const t=`ZZ${hex(4).toUpperCase()}`;await q(`insert into public.stocks_universe(ticker,name,market) values($1,'Industry Contract','A')`,[t]);return t;},
+  version:async()=>{const v=`t${hex(4)}`;await q(`insert into public.industry_dataset_licenses(dataset_key,status,decided_by) values($1,'internal','industry-test')`,[`scheme:sw2021:${v}`]);return v;},
+  factScope:async(issuer,rev)=>{await q(`insert into public.fact_sync_scope(issuer_id,market,fetch_key,state_rev) values($1,'CN','x',$2)`,[issuer,rev]);},
+  ageManifest:async(hash,seconds)=>{await q(`update public.industry_manifests set created_at=created_at-make_interval(secs=>$2) where manifest_hash=$1`,[hash,seconds]);},
+  close:async()=>{await pool.end();},
+ };
+}
+
+describe.skipIf(!enabled)('pgIndustryDb on real PostgreSQL',()=>{
+ // The same scenarios memoryIndustryDb passes in db.test.ts, now against the SQL functions.
+ industryDbContract('pgIndustryDb contract',pgHarness);
+
+ describe('pg specifics',()=>{
+  let h:IndustryContractHarness;
+  beforeAll(async()=>{h=await pgHarness();});
+  afterAll(async()=>{await h?.close?.();});
+  it('timestamps come back in toISOString() form and decimals from the *_text columns',async()=>{
+   const b=await h.batch();const t=await h.ticker();
+   const e=await h.db.beginFetchEvent('marks',{trade_date:'2001-05-02'},b);
+   await h.db.applyObservations('marks',e,[mark(t,'12.3400',{trade_date:'2001-05-02',total_share:'123456789012345678.5'})]);
+   const [m]=await h.db.currentMarksOn('2001-05-02',[t]);
+   expect(m.observed_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+   expect([m.close,m.total_share,m.market_cap]).toEqual(['12.3400','123456789012345678.5',mulDecimalText('12.3400','123456789012345678.5')]);
+   expect(await h.db.freshness()).toEqual(expect.any(Array));
+  });
+  it('pruneRuns calls the unscoped function (a large keep prunes nothing)',async()=>{
+   expect(await h.db.pruneRuns(1000000)).toBe(0);
+   await expect(h.db.pruneRuns(0)).rejects.toMatchObject({name:'IndustryDbError',code:'unknown'});
+  });
+ });
+});
