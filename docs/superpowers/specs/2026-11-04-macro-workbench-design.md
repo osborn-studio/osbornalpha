@@ -1,9 +1,46 @@
 # 宏观工作台（Macro Workbench）设计规格 · P1 + P2
 
-日期：2026-11-04
-状态：草案，待 owner 评审
-前置研究：`docs/research/chaosai-integration-2026-11-04/MACRO_STRATEGY_DEEP_DIVE.md`（对方站点逐组件拆解与克隆蓝图）、同目录 `REPORT.md`、`SOURCE_MAP.csv`
-已定决策（2026-11-04 owner 确认）：范围 P1 纵向闭环 + P2 关联与事件；中国宏观数据首期走 AKShare 采集脚本；面向所有登录用户开放。
+日期：2026-11-04（第 1 稿）；2026-11-06 第 2 稿（对齐已落地的计划一/二与总纲，处置 Codex 增量审计 M1–M26，见 §0）
+状态：第 2 稿，待 Codex 复核后写计划
+前置研究：`docs/research/chaosai-integration-2026-11-04/MACRO_STRATEGY_DEEP_DIVE.md`、同目录 `REPORT.md`、`SOURCE_MAP.csv`
+总纲（硬约束）：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5
+已定决策（owner 2026-11-04）：范围 P1 纵向闭环 + P2 关联与事件；中国宏观走 AKShare 采集脚本（只作适配器，记录上游）；美国走 FRED；面向所有登录用户开放。
+上游契约：计划一 DQ 层（`src/lib/dq/*`、迁移 `20261105090000_dq_foundation.sql`）；计划二事实库的证据与无损数值模式（`src/lib/facts/snapshot-store.ts`、`json-numbers.ts`、`publish_sync_run`）；F4 判断层的 `MacroReadApi` / `RegimeResult` / `MacroSnapshotRow`（F4 规格 §11.1、§12.1，计划 `2026-11-06-judgment-framework.md` 共享契约）。
+
+---
+
+## 0. 第 2 稿处置（Codex 增量审计 `docs/audits/2026-11-06-macro-workbench/02-codex-spec-round.md`）
+
+| id | 处置 | 落点 |
+|---|---|---|
+| M1 | 接受。AKShare 只允许"已核实直连官方主机"的函数；每条观测记录实际请求 URL / 主机、原发布机构、适配器函数与版本、证据哈希 | §4.2、§4.3、§4.4 |
+| M2 | 接受。社融存量同比、MLF 从可执行目录移除，标 `missing`（理由写入目录） | §4.2 |
+| M3 | 接受。人民币汇率只取一个口径：国家外汇管理局公布的人民币汇率中间价（USD/CNY，每 100 美元折人民币，原单位保留） | §4.2 |
+| M4 | 接受。yfinance 移除；资产只收官方来源且权利已确认的序列，其余 `enabled:false` 待 owner 确认 | §4.2、§14 |
+| M5 | 接受。FRED 观测的发布方记为"原机构 via FRED"；每个 FRED 序列标 `rights`；第三方版权序列默认不采集；ISM 保持缺失 | §4.2 |
+| M6 | 接受。FRED 走公开 CSV（无 key）；`available_at` = 本系统首次取得该值的时间，`availability_basis='first_seen'`；不声称历史时点回放 | §4.1、§4.4 |
+| M7 | 接受。原始字节按 SHA-256 路径不可变存证；观测带行/JSON 指针定位；证据上传失败阻断发布 | §4.3、§4.4 |
+| M8 | 接受。全链路十进制字符串（`value_text`），复用 `canonicalDecimal` | §4.3、§4.4 |
+| M9 | 接受。`ingest_batches.dataset` 用 `macro.*`；共用 `startBatch/finishBatch`、六个计数器、`quarantine()`、`recordAttempt` | §4.4、§11 |
+| M10 | 接受。版本身份先定义（本地版本 = 同期新值的首次出现）；可修订序列出新版本；不可修订序列或同一证据内矛盾 → 共用隔离，旧值继续服务 | §4.4 |
+| M11 | 接受。采集新鲜度用共用 `dq_freshness`；发布及时性按序列单独计算，不混用 | §4.5 |
+| M12 | 接受。事实快照与判定解耦；判定卡只在 `MACRO_JUDGMENTS_ENABLED`（默认关）下按 F4 契约渲染 | §3、§5 |
+| M13 | 接受。输出逐字采用 F4 的 `RegimeResult`（`margin_pp`、数值轴、`norm`、`catalog_version`、可空） | §5.3 |
+| M14 | 接受。实现 F4 `MacroReadApi` 全部方法 | §5.4 |
+| M15 | 接受。原生频率与派生月度分离 ID；每序列定义期间、调整、单位与月度取值规则 | §4.2 |
+| M16 | 接受。发布走 service-only RPC（区域锁 + 修订号 + 清单校验，一个事务） | §4.3、§4.4 |
+| M17 | 接受。美国政策事件从官方目标区间序列（DFEDTARU/DFEDTARL）的变化派生，标 `derived` 与生效日；FOMC 日程单独存 | §6.1 |
+| M18 | 接受。分析运行冻结全部输入（观测 id、十进制值哈希、截止时点、参数、代码版本），只追加 | §7 |
+| M19 | 接受。默认变化/收益口径；水平口径标"探索性"、不给强度词；定义滞后方向 | §7 |
+| M20 | 接受。三种模式各自样本门槛；周期分段规则确定化 | §6.2、§7 |
+| M21 | 接受。Today 卡去掉全部 mock 行，只显示宏观事实与缺失 | §3.5 |
+| M22 | 接受。不扩展 `usage_events` 的 feature 枚举；用宏观自有的原子计数 RPC | §2、§8 |
+| M23 | 接受。每个 API 路由自行鉴权；表层 anon 只读公开事实（供 F4） | §2、§8 |
+| M24 | 接受。去掉种子 run 与异步重算；"热门分析"改为预填表单；cron 登记进 `vercel.json`；`preview=1` 零写入 | §3.4、§4.4 |
+| M25 | 接受。迁移 `20261114090000_macro_workbench.sql`；锁文件；`criticalSuites`；桶只经 `storage.buckets` | §4.3、§12 |
+| M26 | 接受。`region=all` 返回分区域信封；验收改为"已核实或明确缺失" | §8、§14 |
+
+数据底座规格 §5.1 第 278 行的 `dataset='macro'` 同步改为 `macro.*`。
 
 ---
 
@@ -11,32 +48,32 @@
 
 ### 1.1 目标
 
-把 ChaosAI 宏观策略页最有价值的阅读路径——**状态判定 → 判定依据 → 驱动指标 → 指标周期与事件 → 指标与资产的统计关系**——用 OsbornAlpha 的设计语言和现有工程基础独立实现，并修正对方的四类缺陷：规则类型错配、文案与数值脱节、新鲜度名不副实、来源不可复现。
+把 ChaosAI 宏观策略页最有价值的阅读路径——**驱动指标 → 指标周期与事件 → 指标与资产的统计关系**，以及（判断层启用后）**状态判定 → 判定依据**——在 OsbornAlpha 的设计语言和已落地的数据底座上独立实现，修正对方的四类缺陷：规则类型错配、文案与数值脱节、新鲜度名不副实、来源不可复现。
 
 成功标准：
 
-1. `/intel/macro` 展示美国、中国两套真实指标（US 8、CN 12（含利率 3 项）），每个值都带数据期、最近同步时间、来源与新鲜度状态。
-2. 象限判定可展开到逐指标贡献，同一 `snapshot_id` 驱动概览数字、贡献表、指标详情与 Today 卡片。
-3. 指标详情页有历史序列、周期分段、事件标记、周期内资产区间收益。
-4. 关联工作台可对任意"指标 × 资产"做水平 / 变化 / 滚动 / 事件窗口四种相关分析，结果可保存并复算。
+1. `/intel/macro` 展示美国、中国两套指标目录；每个目录项要么是**已核实**的官方来源观测（带数据期、可得时间及其依据、发布机构、实际取数主机、证据哈希与定位、新鲜度），要么明确显示**缺失**及理由。
+2. 每个展示的数字可从存证原始字节离线重放得到（`replay` 测试）。
+3. 指标详情页有历史序列、周期分段、派生事件标记、周期内（权利已确认的）资产区间变化，全部有表格视图。
+4. 关联工作台对"指标 × 资产"做变化 / 水平（探索性）/ 滚动 / 事件窗口四种分析，结果冻结输入、只追加、可复算。
 5. Today 页 `MacroGlance` 不再读 mock。
-6. 采集失败时页面显示最后一次成功快照并标 stale，永不显示 0 或合成数据。
+6. 采集失败时页面显示最后一次已发布快照并标出采集状态，永不显示 0 或合成数据。
+7. 判定（`macro_regime`）作为 F4 判断：宏观侧计算并发布 `RegimeResult`、实现 `MacroReadApi`；页面判定卡在 `MACRO_JUDGMENTS_ENABLED`（默认关）下按 F4 卡片契约渲染。
 
-### 1.2 本规格之外（后续阶段，另立规格，不是放弃）
+### 1.2 本规格之外
 
-- **P3**：传导链情景图、4 剧本 × 6 维度热力图、FOMC 加息/降息周期资产表。本规格的 `macro_events`、`macro_cycles`、资产 catalog 与 `analysis_runs` 就是为 P3 准备的底座；P3 规格在 P2 验收后立项。
-- **P4**：LLM 生成的周期解读与核心结论、偏差案例库、月度复盘。本规格预留 `snapshot_id` 绑定点与 `ai_runs` 落库路径。
-- 行业财务 / 估值分位、AI 生态榜单、外资研报（`REPORT.md` 的 D/E/F 阶段）。
-- 本规格明确不做的两件事：把象限资产配置模板接到用户组合或交易；把归一化得分称为"概率"（首期输出 score / coverage / margin）。
+- **P3**（传导链情景图、剧本热力图、FOMC 周期资产表）与 **P4**（LLM 解读、偏差案例库、月度复盘）另立规格。
+- F4 判断表、登记、结算、校准由 F4 实现；本规格只交付宏观侧接口与卡片挂载点。
+- 不做：把象限配置模板接到用户组合或交易；把归一化得分称为"概率"或"置信度"；导入对方站点的数据或事件标签。
 
 ---
 
 ## 2. 用户与权限
 
-- 所有登录用户可读概览、指标详情、关联分析结果；受 `middleware.ts` 现有 session 门禁，不走 `requireResearchUser`。
-- 创建关联分析任务（`POST /api/macro/analyses`）按 plan 配额：free 每日 10 次、pro 100 次，admin 不限，走 `limitFor(feature='macro_analysis', plan, role)`（`src/lib/billing/quota.ts` 新增 feature）。
-- 采集与发布只允许服务端（cron secret / ingest secret），用户无写权限。
-- 公共指标数据是公开数据，不做租户隔离；`analysis_runs` 按 `user_id` 隔离（RLS own-rows）。
+- 页面：所有登录用户（任何 plan）可读；`/intel/macro/*` 在 `(app)` 布局内，受现有 session 门禁。
+- API：`src/middleware.ts` 不拦 `/api/*`，所以每个 `/api/macro/*` 路由自行鉴权：读路由要求登录 session（`createServerClient` 取 user，无则 401）；分析路由同样要求 session 并只读写本人行；`POST /api/macro/ingest` 只认 `MACRO_INGEST_SECRET`（Bearer，常量时间比较，缺省即拒）；`/api/cron/macro-sync` 用 `authorizedCronRequest`（`src/lib/observability/cron-auth.ts`）。
+- 数据库层：`macro_series`、`macro_observations`（`status='ok'`）、`macro_snapshots`、`macro_regime_results` 是公开参考数据，anon + authenticated 只读（F4 的输入构造器走 anon 客户端，F4 规格 §3.5）；`macro_evidence` 元数据 anon 只读（不含字节；字节在私有桶，服务端代取）；隔离行、批次、隔离队列只 service / admin。
+- 分析配额：`create_macro_analysis_run` RPC（security definer）内按 `auth.uid()` 加事务级咨询锁、数过去 24 小时本人运行数，超过 plan 限额（free 10 / pro 100 / admin 不限，从 `profiles` 读 plan 与 role）则拒绝；计算失败的运行不计数（行写为 `failed` 不占额度由 RPC 规则决定：只数 `status='ok'`）。不改 `usage_events` 及其 RPC。
 
 ---
 
@@ -46,180 +83,226 @@
 
 | 路由 | 说明 |
 |---|---|
-| `/intel` | 现有页新增第三个 tab "宏观"，内容为概览摘要卡 + "进入工作台"链接（不把整个工作台塞进 intel 页） |
-| `/intel/macro` | 工作台首页：顶部地区切换（US / CN），页内 tab：概览 · 指标 · 关联 · 方法与来源 |
+| `/intel` | 新增"宏观"摘要卡（US/CN 各 3 个关键指标 + 采集状态）与"进入工作台"链接 |
+| `/intel/macro` | 工作台：地区切换（US / CN），页内 tab：概览 · 指标 · 关联 · 方法与来源 |
 | `/intel/macro/[seriesId]` | 指标详情页 |
-| `/intel/macro/analyses/[runId]` | 已保存的关联分析结果页（可分享给同账号） |
+| `/intel/macro/analyses/[runId]` | 本人保存的关联分析结果页 |
 
-不新增底栏 tab；`TabBar` 的 `intel` navKey 对 `/intel/macro/*` 保持高亮（现有 `startsWith` 匹配即可，实施时核对）。
+`TabBar` 的 `intel` navKey 对 `/intel/macro/*` 高亮（实施时核对 `startsWith`）。
 
-### 3.2 页面结构（桌面）
+### 3.2 概览（默认：判断层关闭）
 
 ```
-┌ 宏观工作台                      US ◉ CN ○      截至 2026-11-03 · 同步 03:12 · ● fresh ┐
-├ 概览 | 指标 | 关联 | 方法与来源                                                       ┤
-│ ┌ 状态卡 ──────────────────────┐ ┌ 本期变化 ────────────────┐                        │
-│ │ 增长 ↓ 收缩   通胀 → 温和      │ │ 新发布 3 · 转向 1 · 缺失 1 │                        │
-│ │ 主判定 过热 score 34          │ │ CPI 2.9 (+0.3) 2026-08    │                        │
-│ │ 次判定 衰退 score 24 margin 10│ │ PMI 48.7 (−0.4) 2026-09   │                        │
-│ │ coverage 92%  方法 v1.0       │ │ NAPM 来源缺失 → 已排除     │                        │
-│ └ 查看贡献明细 ▸ ───────────────┘ └──────────────────────────┘                        │
-│ ┌ 贡献明细（折叠）: 指标 | 值 | 规则 | 得分×权重 | 贡献 | 象限 ─────────────────────┐ │
-│ ┌ 指标表: 名称 | 值 | 变化(类型化口径) | 数据期 | 发布日 | 状态 | 迷你走势 ─────────┐ │
-│ │  行选中 → 右侧/下方 IndicatorDetail 预览（历史 + 周期色带 + 事件）                 │ │
-│ └ 来源条: FRED · NBS · PBoC · GAC · yfinance  ▸ 打开血缘抽屉 ─────────────────────┘ │
+┌ 宏观工作台                 US ◉ CN ○     快照 2026-11-03 · 采集 03:12 · ● 正常 ┐
+├ 概览 | 指标 | 关联 | 方法与来源                                                  ┤
+│ ┌ 本期变化 ─────────────────────────┐ ┌ 目录覆盖 ─────────────────────────┐    │
+│ │ 新发布 3 · 修订 1 · 迟发 1 · 缺失 2 │ │ 已核实 6 / 目录 8（缺失：ISM、VIX）│    │
+│ │ CPI 同比 2.9（+0.3pp）2026-09      │ │ 采集：FRED ● 正常                  │    │
+│ └───────────────────────────────────┘ └───────────────────────────────────┘    │
+│ ┌ 指标表: 名称 | 值 | 变化(类型化) | 数据期 | 可得时间 | 状态 | 迷你走势 ───────┐ │
+│ │  行选中 → IndicatorDetail 预览（历史 + 周期色带 + 事件）                      │ │
+│ └ 来源条: BLS via FRED · Fed via FRED · 国家统计局 · 中债 · 外汇局 ▸ 证据抽屉 ─┘ │
+│ ┌ 判定（MACRO_JUDGMENTS_ENABLED 时才出现，F4 卡片契约）────────────────────────┐ │
 ```
 
-- 两条主轴（增长动能 / 通胀动能）是一等公民，象限名是派生标签。与对方"四张高饱和象限卡"不同，这里用一张状态卡 + 四个象限 score 的水平条（当前态黄铜描边，其余中性）。
-- `DESIGN.md` 约束：无紫色、无渐变文字、无发光、圆角 ≤ 6px、数字 Geist Mono、密度层 `[data-density="data"]`。
-- 涨跌色沿用 `data-color-scheme`；但宏观指标"上升"不等于"利好"，表格里只用中性箭头 + 文字，不着红绿色；资产区间收益才用红绿。
+- 判断层关闭时，页面上**不出现**象限、得分、margin、"覆盖率"等判定字样；"目录覆盖"是事实（几个目录项已核实），用计数不用百分比。
+- 判断层开启时，在指标表上方挂 `MacroJudgmentSlot`：读 `GET /api/judgments?subject_type=macro_region&subject_key=<region>`（F4），按 F4 `JudgmentCard` 渲染：主判定类别、生命周期与校准状态、方法版本、输入快照入口；没有 `percent` 字段就不显示任何百分比；F4 接口不可用 → 卡片显示"判断层暂不可用"，不回退到宏观自算数字。贡献明细表（逐指标规则命中）作为卡片的"依据"展开，数据来自 `macro_regime_results.contributions`。
+- `DESIGN.md` 约束：无紫色、无渐变文字、无发光、圆角 ≤ 6px、数字 Geist Mono、密度层 `[data-density="data"]`；宏观指标"上升"不着红绿，只用中性箭头 + 文字；资产区间变化才用 `data-color-scheme` 涨跌色。
+- 证据抽屉（SourceDrawer）：发布机构、"via"转发方、实际取数 URL 与主机、取得时间、证据 SHA-256、行号 / JSON 指针、变换与方法版本、适配器（AKShare 函数 + 版本 / FRED CSV）、权利标注。
 
 ### 3.3 指标详情页
 
-顺序固定为：**当前值 → 与上一可比期的变化（类型化口径）→ 数据期 → 发布/可得时间 → 走势（周期色带 + 事件标记）→ 周期内资产区间收益 → 计算口径 → 来源与修订**。
+顺序：**当前值 → 与上一可比期的变化（类型化口径）→ 数据期 → 可得时间及依据 → 走势（周期色带 + 事件标记）→ 周期内资产区间变化 → 计算口径 → 来源、证据与修订历史**。
 
-- 走势图：`lightweight-charts` LineSeries；周期分段用背景区间色（加息/上行 = `--warn` 低透明，降息/下行 = `--accent-wash`），事件用 marker，hover 显示事件标题与来源链接。
-- 窗口切换：3Y / 5Y / 10Y / 全部；变换切换：原值 / 同比 / 环比差（按 `series_type` 允许的集合）。
-- 所有图表有"表格视图"开关。
+- 走势图：`lightweight-charts` LineSeries；周期背景区间色（上行/加息 = `--warn` 低透明，下行/降息 = `--accent-wash`），派生事件用 marker（形状区分 `derived` 与 `calendar`）。
+- 窗口：3Y / 5Y / 10Y / 全部；变换：原值 / 同比（仅序列声明了 `yoy` 派生时）/ 环比差。
+- 每张图有"表格视图"开关；表格列含 `period_end`、`value_text`、`available_at`、`version`。
 
 ### 3.4 关联工作台
 
-表单：指标（catalog 中 `role=indicator`）× 资产（`role=asset`）× 模式（水平 / 变化 / 滚动 / 事件窗口）× 窗口 × 滞后（−12…+12 月）× 频率（月）。提交后创建 `analysis_run`，结果页显示：
-- 水平 / 变化：双轴折线 + 散点回归（内联 SVG）+ `r, R², n, 样本区间, 变换, 方法版本` + 规则生成的一句统计事实。
-- 滚动：36 个月滚动 r 折线。
-- 事件窗口：以 `macro_events` 为锚，事件前后 ±N 月资产收益分布（中位数、四分位、样本数、极端案例列表）。
+表单：指标（`role=indicator`，已核实）× 资产（`role=asset`，`enabled` 且权利已确认）× 模式（变化〔默认〕/ 水平〔探索性〕/ 滚动 / 事件窗口）× 窗口 × 滞后 k（−12…+12 月，定义见 §7）。提交创建只追加的 `macro_analysis_runs` 行。
 
-"热门分析"区预置 8 组（对方页面的 6+6 组中去掉错误的 MLF↔CGB），作为种子 run，每次新快照自动重算。
+- 变化 / 水平：双轴折线 + 散点拟合（内联 SVG）+ `r, R², n, 样本区间, 变换, 滞后, 方法版本` + 规则生成的一句统计事实；水平口径标"探索性：趋势序列的水平相关不代表关系"，不输出强度词。
+- 滚动：36 个月滚动 r 折线 + 每窗口有效对数。
+- 事件窗口：以派生政策事件为锚，事件前后 ±N 月资产变化分布（中位数、四分位、独立完整事件数、逐事件表）。
+- "热门分析"是 8 组**预填表单**（不预存运行，不自动重算）。
 
 ### 3.5 Today 页
 
-`MacroGlance` 改为读 `GET /api/macro/overview?region=all&compact=1`：显示 US / CN 各一行状态（主判定 + margin）、3 个最新变化、`stale` 徽标，点击进入工作台。原来的指数行情行（SSE/HSI/Nasdaq/DXY）继续由现有行情链路提供，不混入宏观 snapshot。
+`MacroGlance` 改为读 `GET /api/macro/overview?region=all&compact=1`：US / CN 各 2–3 个关键指标（值、变化、数据期、状态点），缺失显示"缺失"；底部"进入工作台"。原 SSE / HSI / Nasdaq / DXY / US10Y 的 mock 行全部删除（US10Y 由宏观目录 `US_DGS10` 提供；其余三项无已确认权利的官方来源，不显示）。判定行只在判断层开启时出现。
 
 ### 3.6 移动端
 
-- 状态卡 → 本期变化 → 指标表（折叠为"名称 + 值 + 变化"三列，点击进入详情页，不做行内预览）。
-- 关联工作台表单纵向堆叠；图表宽度 100%，散点图在 < 640px 隐藏改为表格。
+本期变化 → 指标表（"名称 + 值 + 变化"三列，点进详情页）→ 来源条；关联表单纵向堆叠；< 640px 散点图改表格。
 
-### 3.7 GUI 与 UI 流程设计稿
+### 3.7 设计稿
 
-由 Claude Design 生成的高保真稿与流程图作为本规格的视觉附件（见第 16 节链接，实施前以其为准）。设计稿必须使用 OsbornAlpha 既有 tokens；凡与 `DESIGN.md` 冲突以 `DESIGN.md` 为准。
+Claude Design 画布（§16）是视觉依据；第 2 稿把判定卡移到默认关闭的槽位、增加"目录覆盖"与证据抽屉字段，实施前在同一画布补"判断层关闭"概览与证据抽屉画板。冲突时以 `DESIGN.md` 为准。
 
 ---
 
 ## 4. 数据架构
 
-### 4.1 三类时间与版本
+### 4.1 时间、版本与可得性
 
-每个观测记录 `period_end`（数据期）、`available_at`（发布/可得时间，缺省取供应商首次出现时间）、`ingested_at`（入库时间）、`vintage_id`（修订版本）。历史回放只能用 `available_at <= asOf` 的版本。
+每条观测：`period_end`（数据期，按序列定义，§4.2）、`available_at`（可得时间）、`availability_basis`、`ingested_at`、`version`（同一 `(series_id, period_end)` 内从 1 递增）。
 
-### 4.2 序列目录 `macro_series`（代码即配置）
+- `availability_basis='first_seen'`：本系统首次在官方来源响应中见到这个值的时间（= 该证据的 `fetched_at`）。FRED 公开 CSV 与 AKShare 都没有历史发布时点，所以**首次回填的全部历史**的 `available_at` 都是回填当天。这意味着：回放（`available_at ≤ asOf`）只对系统开始采集之后的日期有意义；页面在"方法与来源"写明。不回填到数据期，不声称历史时点。
+- 将来有 ALFRED（需 `FRED_API_KEY`）时可加 `availability_basis='alfred_realtime_start'`，属后续工作。
+- 版本：同一 `(series_id, period_end)` 首次出现 → `version=1`；以后某次取数在官方响应中出现不同的值（十进制比较）→ 按序列 `revisionPolicy` 处理（§4.4）。版本号是本地身份，不称为 FRED vintage。
 
-`src/lib/macro/catalog.ts` 导出 `MACRO_CATALOG: MacroSeriesDef[]`，迁移时同步写入 `macro_series` 表（表是只读镜像，便于 SQL join 与后台查看）。
+### 4.2 序列目录（代码即配置）
+
+`src/lib/macro/catalog.ts` 导出 `MACRO_CATALOG: readonly MacroSeriesDef[]` 与 `CATALOG_VERSION`（目录内容的规范化 JSON 的 SHA-256 前 12 位，带前缀 `macro-catalog/`）；迁移不写目录内容，`macro-sync` 每次运行先 `upsert` 目录到 `macro_series`（只读镜像，带 `catalog_version`）。
 
 ```ts
-type SeriesType =
-  | 'policy_rate' | 'bond_yield' | 'fx' | 'inflation_yoy'
-  | 'pmi' | 'labor_rate' | 'growth_yoy' | 'liquidity_yoy'
-  | 'risk_index' | 'asset_price';
-
+type SeriesType = 'policy_rate' | 'bond_yield' | 'fx' | 'inflation_yoy' | 'pmi' | 'labor_rate'
+  | 'growth_yoy' | 'liquidity_yoy' | 'risk_index' | 'asset_price';
 interface MacroSeriesDef {
-  id: string;               // 内部主键，例如 'US_DFF'、'CN_CPI_YOY'、'ASSET_IXIC'
-  region: 'US' | 'CN' | 'GLOBAL';
+  id: string;                         // 'US_CPI_YOY'、'CN_PMI_MFG'、'US_WTI_M'
+  region: 'US' | 'CN';
   role: 'indicator' | 'asset';
   type: SeriesType;
   name: { zh: string; en: string };
-  unit: '%' | 'index' | 'pct_yoy' | 'ratio' | 'price';
-  frequency: 'daily' | 'monthly' | 'quarterly';
-  provider: 'fred' | 'akshare' | 'yfinance';
-  providerSeriesId: string; // FRED code / AKShare 函数+字段 / yfinance ticker
-  origin: string;           // 原发布机构，例如 'BLS'、'国家统计局'、'人民银行'
-  transform?: 'yoy_from_index';     // 派生规则
-  weight: number;           // 判定权重；asset 为 0
-  changeKind: 'bp' | 'pp' | 'pct' | 'points';  // 变化口径
-  releaseCalendar?: 'bls_cpi' | 'bls_jobs' | 'ism' | 'nbs_month' | 'pboc_money' | 'gac_trade' | 'nbs_gdp';
+  unit: string;                       // 原单位：'pct'、'index'、'index_prev_year_100'、'cny_per_100usd'、'usd_per_bbl'
+  nativeFrequency: 'daily' | 'monthly' | 'quarterly' | 'event';
+  period: 'day' | 'month' | 'quarter';            // period_end = 当日 / 当月最后一天 / 当季最后一天
+  adjustment: 'sa' | 'nsa' | 'na';
+  status: 'active' | 'missing' | 'restricted';     // missing/restricted 有 reason
+  reason?: { zh: string; en: string };
+  source: {
+    adapter: 'fred_csv' | 'akshare';
+    fetchHost: string;                // 实际请求主机：'fred.stlouisfed.org'、'data.stats.gov.cn'、'yield.chinabond.com.cn'、'www.safe.gov.cn'
+    publisher: { zh: string; en: string };        // 原发布机构：BLS、国家统计局、中央国债登记结算公司、国家外汇管理局…
+    via?: { zh: string; en: string };             // 转发方：'FRED（圣路易斯联储）'；NBS 转载 PBoC/海关数据时 publisher=原机构、via=国家统计局
+    seriesKey: string;                // FRED code / AKShare 函数 + 参数（如 macro_china_nbs_nation|月度数据|采购经理指数 > 制造业采购经理指数|制造业采购经理指数(%)）
+    rights: 'public_domain' | 'official_open' | 'third_party';    // third_party 默认 restricted
+    attribution: { zh: string; en: string };
+  };
+  derive?: { kind: 'yoy_from_index'; from: string } | { kind: 'index_minus_100'; from: string } | { kind: 'month_end'; from: string };
+  revisionPolicy: 'revisable' | 'immutable';
+  weight: number;                     // 判定权重（仅 judgment 用）；asset 为 0
+  changeKind: 'bp' | 'pp' | 'pct' | 'points';
+  releaseLagDays?: number;            // 发布及时性（§4.5）：期末后预期发布天数
   definitionVersion: number;
 }
 ```
 
-首期目录：
+规则：
+- 原生频率与派生月度是不同 ID：日频 `US_DGS10_D`（原值，存证）→ 派生 `US_DGS10`（月末最后一个有效交易日的值，`derive.month_end`）。派生观测记录输入观测 id，不单独存证（证据是输入的证据）。
+- `index_minus_100`：国家统计局"上年同月=100"指数减 100 得同比（pp），是精确的十进制变换，原值与派生值都保存。
+- 当月未结束不产生月末派生值；季度序列不前向填充到月度。
 
-| id | type | provider / 上游 id | origin | 频率 | weight | changeKind |
+首期目录（`status` 列：A = active，M = missing，R = restricted；A 项在实施时以录制夹具核实，核实失败改 M 并写理由）：
+
+| id | type | 适配器 / 主机 / seriesKey | 发布机构（via） | 频率 | weight | 状态 |
 |---|---|---|---|---|---|---|
-| US_DFF | policy_rate | fred / DFF | Fed | daily→月末 | 25 | bp |
-| US_DGS10 | bond_yield | fred / DGS10 | Treasury | daily→月末 | 15 | bp |
-| US_DTWEXBGS | fx | fred / DTWEXBGS | Fed | daily→月末 | 10 | pct |
-| US_CPI_YOY | inflation_yoy | fred / CPIAUCSL（yoy_from_index） | BLS | monthly | 15 | pp |
-| US_UNRATE | labor_rate | fred / UNRATE | BLS | monthly | 10 | pp |
-| US_ISM_PMI | pmi | **akshare / macro_usa_ism_pmi**（FRED 已移除） | ISM | monthly | 15 | points |
-| US_PPI_FD_YOY | inflation_yoy | fred / PPIFIS（yoy_from_index，名称"最终需求"） | BLS | monthly | 5 | pp |
-| US_VIX | risk_index | fred / VIXCLS | Cboe | daily→月末 | 5 | points |
-| CN_MLF_1Y | policy_rate | akshare / macro_china_mlf（事件型） | 人民银行 | event | 10 | bp |
-| CN_LPR_1Y / CN_LPR_5Y | policy_rate | akshare / macro_china_lpr | 同业拆借中心 | monthly | 5 / 5 | bp |
-| CN_CGB_10Y | bond_yield | akshare / bond_zh_us_rate | 中债 | daily→月末 | 15 | bp |
-| CN_USDCNY | fx | akshare / fx_spot_quote 或 currency_boc_sina | 外汇交易中心 | daily→月末 | 5 | pct |
-| CN_CPI_YOY | inflation_yoy | akshare / macro_china_cpi_yearly | 国家统计局 | monthly | 10 | pp |
-| CN_PPI_YOY | inflation_yoy | akshare / macro_china_ppi_yearly | 国家统计局 | monthly | 15 | pp |
-| CN_GDP_YOY | growth_yoy | akshare / macro_china_gdp_yearly | 国家统计局 | quarterly | 5 | pp |
-| CN_M2_YOY | liquidity_yoy | akshare / macro_china_money_supply | 人民银行 | monthly | 10 | pp |
-| CN_AFRE_STOCK_YOY | liquidity_yoy | akshare / macro_china_shrzgm **存量同比字段**（不是增量） | 人民银行 | monthly | 20 | pp |
-| CN_PMI | pmi | akshare / macro_china_pmi_yearly（官方制造业） | 国家统计局 | monthly | 15 | points |
-| CN_EXPORT_YOY | growth_yoy | akshare / macro_china_exports_yoy | 海关总署 | monthly | 10 | pp |
-| ASSET_IXIC / SPX / DJI / CSI300 / HSI / GOLD / COPPER / WTI / TLT / DXY | asset_price | yfinance / ^IXIC ^GSPC ^DJI 000300.SS ^HSI GC=F HG=F CL=F TLT DX-Y.NYB | 交易所/ICE | daily→月末 | 0 | pct |
+| US_FEDFUNDS_EFF_D → US_DFF | policy_rate | fred_csv / DFF | Fed（via FRED） | daily→月末 | 25 | A |
+| US_FED_TARGET_UPPER_D / _LOWER_D | （事件源，weight 0） | fred_csv / DFEDTARU、DFEDTARL | Fed（via FRED） | daily | 0 | A |
+| US_DGS10_D → US_DGS10 | bond_yield | fred_csv / DGS10 | U.S. Treasury（via FRED） | daily→月末 | 15 | A |
+| US_DTWEXBGS_D → US_DTWEXBGS | fx | fred_csv / DTWEXBGS | Fed（via FRED） | daily→月末 | 10 | A |
+| US_CPI_INDEX → US_CPI_YOY | inflation_yoy | fred_csv / CPIAUCSL（`yoy_from_index`） | BLS（via FRED） | monthly | 15 | A |
+| US_UNRATE | labor_rate | fred_csv / UNRATE | BLS（via FRED） | monthly | 10 | A |
+| US_PPI_FD_INDEX → US_PPI_FD_YOY | inflation_yoy | fred_csv / PPIFIS（`yoy_from_index`） | BLS（via FRED） | monthly | 5 | A |
+| US_ISM_PMI | pmi | — | ISM | monthly | 15 | M（FRED 已于 2016 移除 ISM；无可采的原始来源与权利） |
+| US_VIX | risk_index | fred_csv / VIXCLS | Cboe（via FRED） | daily→月末 | 5 | R（第三方版权，待 owner 确认权利） |
+| CN_CPI_INDEX → CN_CPI_YOY | inflation_yoy | akshare / data.stats.gov.cn / `macro_china_nbs_nation` 月度 价格指数 > 居民消费价格分类指数（上年同月=100）> 居民消费价格指数 | 国家统计局 | monthly | 10 | A |
+| CN_PPI_INDEX → CN_PPI_YOY | inflation_yoy | 同上 · 工业生产者出厂价格分类指数（上年同月=100） | 国家统计局 | monthly | 15 | A |
+| CN_PMI_MFG | pmi | 同上 · 采购经理指数 > 制造业采购经理指数 > 制造业采购经理指数(%) | 国家统计局 | monthly | 15 | A |
+| CN_GDP_INDEX → CN_GDP_YOY | growth_yoy | 同上 季度 · 国民经济核算 > 国内生产总值指数（上年同期=100） | 国家统计局 | quarterly | 5 | A |
+| CN_M2_YOY | liquidity_yoy | 同上 月度 · 金融 > 货币供应量 > M2 同比增长 | 中国人民银行（via 国家统计局） | monthly | 10 | A |
+| CN_EXPORT_YOY | growth_yoy | 同上 月度 · 对外经济 > 货物进出口总额 > 出口额同比（美元计） | 海关总署（via 国家统计局） | monthly | 10 | A |
+| CN_CGB_10Y_D → CN_CGB_10Y | bond_yield | akshare / yield.chinabond.com.cn / `bond_china_yield` 中债国债收益率曲线 10 年 | 中央国债登记结算公司 | daily→月末 | 15 | A |
+| CN_USDCNY_CP_D → CN_USDCNY_CP | fx | akshare / www.safe.gov.cn / `currency_boc_safe` 人民币汇率中间价 美元 | 国家外汇管理局 | daily→月末 | 5 | A（原单位"人民币/100 美元"，不换算） |
+| CN_LPR_1Y | policy_rate | — | 全国银行间同业拆借中心 | monthly | 10 | M（AKShare 仅有东方财富转载） |
+| CN_MLF_1Y | policy_rate | — | 中国人民银行 | event | 10 | M（无已核实官方接口） |
+| CN_AFRE_STOCK_YOY | liquidity_yoy | — | 中国人民银行 | monthly | 20 | M（AKShare 只有商务部转载的增量口径，口径不同不得替代） |
+| US_WTI_D → US_WTI | asset_price | fred_csv / DCOILWTICO | EIA（via FRED） | daily→月末 | 0 | A |
+| US_UST10Y（= US_DGS10，资产视角，bp） | asset_price | 复用 US_DGS10 | — | 月 | 0 | A |
+| CN_CGB10Y（= CN_CGB_10Y，资产视角，bp） | asset_price | 复用 CN_CGB_10Y | — | 月 | 0 | A |
+| US_SP500 / US_NASDAQCOM / US_DJIA | asset_price | fred_csv / SP500、NASDAQCOM、DJIA | S&P DJI、Nasdaq（via FRED） | daily→月末 | 0 | R（第三方版权） |
+| CN_CSI300 | asset_price | akshare / www.csindex.com.cn / `stock_zh_index_hist_csindex` 000300 | 中证指数公司 | daily→月末 | 0 | R（再分发权利未确认） |
 
-AKShare 具体函数名以实施时 AKShare 当前版本文档为准；采集脚本必须记录 `akshare.__version__` 与函数名到回执。`DXY`（ICE）与 `DTWEXBGS`（广义）是两个 ID，界面名称分别为"美元指数 DXY"与"广义美元指数"。
+- 资产"视角复用"不复制数据：资产条目指向同一观测，`changeKind='bp'`。
+- `restricted` 序列不采集、不入库（不是"采了不显示"）；owner 确认权利后把状态改 A 并发新的目录版本。
+- AKShare 函数与参数以录制夹具时的 `akshare.__version__` 为准，写入 `scripts/macro/requirements.txt`（锁版本）与每个批次的 `tool_versions`。
 
-### 4.3 存储（Supabase 迁移 `supabase/migrations/2026110xxxxxxx_macro_workbench.sql`）
+### 4.3 存储（迁移 `supabase/migrations/20261114090000_macro_workbench.sql`）
 
 | 表 | 主要列 | 约束 / RLS |
 |---|---|---|
-| `macro_series` | id PK, region, role, type, unit, frequency, provider, provider_series_id, origin, weight, change_kind, definition_version, updated_at | public read；写仅 service role |
-| `macro_observations` | id, series_id FK, period_end date, value numeric, available_at timestamptz, ingested_at, vintage_id text, raw_hash text, status ('ok'/'quarantined'), batch_id | UNIQUE(series_id, period_end, vintage_id)；public read where status='ok' |
-| （共用）`ingest_batches` | 见数据底座规格 §5.1；本模块以 `dataset='macro'`、producer ∈ {'ts-fred','py-akshare','py-yfinance'} 写入，不单建 `macro_ingest_batches` | admin 可读，service 写 |
-| `macro_snapshots` | snapshot_id PK, region, as_of, methodology_version, status ('active'/'superseded'/'failed'), observation_ids bigint[], coverage numeric, freshness jsonb, created_at | public read；每 region 仅一条 active（partial unique index） |
-| `macro_regime_results` | snapshot_id FK, region, scores jsonb {recovery,overheat,stagflation,recession}, contributions jsonb[], primary_state, secondary_state, margin, coverage, growth_axis, inflation_axis | public read |
-| `macro_events` | event_id PK, region, event_date, announced_at, event_type ('policy_rate'/'fomc'/'data_release'/'shock'/'manual'), title {zh,en}, value_change numeric, related_series text[], source_url, source_kind ('official'/'editorial'), revised_from | public read；写 service / admin |
-| `macro_cycles` | cycle_id, series_id, kind ('hike'/'cut'/'up'/'down'/'easing'/'tightening'), start_period, end_period (null=进行中), method_version, derived_from_event_ids | public read |
-| `macro_analysis_runs` | run_id PK, user_id, kind ('level'/'change'/'rolling'/'event_window'), spec jsonb, snapshot_id, results jsonb, code_version, status, created_at | own-rows RLS；`seed=true` 的系统 run public read |
+| `macro_series` | `id` PK, region, role, type, unit, native_frequency, period, status, source jsonb, weight numeric, change_kind, definition_version, catalog_version, updated_at | anon/authenticated select；写仅经 service |
+| `macro_evidence` | `sha256` PK（hex64）, `object_path`（`macro-raw` 桶内，`<adapter>/<sha256>.<ext>`）, adapter, fetch_url, fetch_host, http_status, content_type, byte_length, fetched_at, batch_id FK `ingest_batches`, tool_versions jsonb | anon select（无字节）；写仅 service |
+| `macro_observations` | `observation_id` uuid PK, series_id FK, period_end date, `value numeric`（无精度限制）, `value_text`（canonical 十进制）, version int ≥ 1, available_at timestamptz, availability_basis, ingested_at, status ('ok'/'quarantined'/'superseded_conflict'), evidence_sha256 FK（原生观测必填）, locator jsonb（`{kind:'csv_row',line,column}` / `{kind:'json_pointer',pointer}`）, derived_from uuid[]（派生观测必填）, transform text, code_version, batch_id FK | UNIQUE(series_id, period_end, version)；anon/authenticated select **where status='ok'**；写仅经 RPC |
+| `macro_snapshots` | `snapshot_id` uuid PK, region, as_of date, `revision` bigint, methodology_version, catalog_version, observation_ids uuid[], catalog_counts jsonb `{verified, missing, restricted}`, status ('active'/'superseded'/'failed'), failure_reason, created_at | anon/authenticated select；每 region 仅一条 active（partial unique index）；写仅经 RPC |
+| `macro_regime_results` | snapshot_id PK/FK, region, `regime jsonb`（F4 `RegimeResult` 或 null）, contributions jsonb, rules_version, uncovered_weight numeric | anon/authenticated select；写仅经 RPC |
+| `macro_publish_state` | region PK, revision bigint, updated_at | service only |
+| `macro_analysis_runs` | run_id uuid PK, user_id, kind ('change'/'level'/'rolling'/'event_window'), spec jsonb, inputs jsonb（冻结清单，§7）, inputs_hash, results jsonb, code_version, method_version, status ('ok'/'failed'), error, created_at | RLS own-rows select；insert 只经 `create_macro_analysis_run`；无 update/delete |
 
-原始响应 JSON 存 Supabase Storage bucket `macro-raw/<batch_id>/<series_id>.json`，`raw_hash` 指向它。
+- 桶：`insert into storage.buckets (id,name,public,file_size_limit,allowed_mime_types) values ('macro-raw','macro-raw',false,…,array['text/csv','application/json','text/html','text/plain']) on conflict …`（同计划二，迁移不引用 `storage.objects`）。
+- RPC（全部 `security definer`、`set search_path=public`、只授 service_role，除注明外）：
+  - `macro_write_observations(p_batch uuid, p_rows jsonb)`：逐行按 §4.4 规则插入新版本 / 跳过重复 / 标冲突，返回计数；在 RPC 内校验证据存在、派生行的输入存在且 `ok`。
+  - `publish_macro_snapshot(p_region text, p_expected_revision bigint, p_as_of date, p_methodology_version text, p_catalog_version text, p_observation_ids uuid[], p_catalog_counts jsonb, p_regime jsonb, p_contributions jsonb, p_rules_version text, p_uncovered_weight numeric)`：`select … for update` 区域状态行，修订号不符 → `stale_publisher`；校验所有观测存在且 `status='ok'`、属于该区域目录；插入快照与判定结果；旧 active → `superseded`；新行 active；`revision+1`；一个事务。
+  - `record_failed_macro_snapshot(...)`：只记失败快照，不动 active。
+  - `create_macro_analysis_run(p_kind, p_spec, p_inputs, p_inputs_hash, p_results, p_code_version, p_method_version, p_status, p_error)`：授 authenticated；`user_id = auth.uid()`；咨询锁 + 24h 计数配额（§2）；返回 run_id 或 `quota_exceeded`。
+- 隔离：观测冲突不仅标 `status`，同时调共用 `quarantine()` 写 `dq_quarantine`（dataset `macro.<adapter>`，table `macro_observations`，natural_key `series_id|period_end`），使 `/admin/dq` 可见；裁决后的落地动作（接受新值 → 新版本 ok，拒绝 → 保持）由 `scripts/macro/resolve-quarantine.ts` 调 RPC 完成并写 `research_audit_log`。
 
 ### 4.4 采集链路
 
 ```
-Vercel cron 05:30 UTC  →  GET /api/cron/macro-sync        (CRON_SECRET)
-                             ├─ FRED adapter (TS)  → 写 observations (producer=ts-fred)
-                             ├─ 触发 Python 采集?  否：Python 由 Mac Studio launchd 自行调度
-                             └─ 结束后调用 publish(region) 重新计算 snapshot
+Vercel cron 05:30 UTC → GET /api/cron/macro-sync          (CRON_SECRET; ?preview=1 零写入)
+   1. upsert 目录 → macro_series
+   2. FRED CSV 适配器（TS）：startBatch(producer 'ts-fred', dataset 'macro.fred')
+      每个 A 状态 FRED 序列：GET https://fred.stlouisfed.org/graph/fredgraph.csv?id=<code>&cosd=2000-01-01
+      → 原始字节存证（macro-raw/fred_csv/<sha256>.csv + macro_evidence）→ 无损解析 → 规则校验 → macro_write_observations
+      → finishBatch；recordAttempt('macro.fred', cadence 'daily')
+   3. 派生（月末、同比、减 100）→ macro_write_observations（code_version、transform、derived_from）
+   4. publish(region) 对 US 与 CN 各一次（读各序列最新 ok 版本 → 判定 → publish_macro_snapshot）
+   5. 判断层钩子：flag 开启且 F4 生产者可用时调用 F4 produce（失败不影响发布；F4 补偿扫描兜底）
 
-Mac Studio launchd 05:00 UTC → python scripts/macro/collect.py --producer akshare,yfinance
-                             → POST /api/macro/ingest  (Bearer MACRO_INGEST_SECRET)
-                               body: { batch, observations[], tool_versions }
+Mac（Studio）launchd 05:00 UTC → scripts/macro/collect.py（uv 虚拟环境，requirements 锁版本）
+   AKShare 调用期间安装响应录制钩子：每个 HTTP 响应的 URL、状态、Content-Type、原始字节 → 证据
+   → POST /api/macro/ingest（Bearer MACRO_INGEST_SECRET，≤ 4 MB / 请求，按序列分块）
+      body: { batch: {producer:'py-akshare', dataset:'macro.akshare', tool_versions}, evidence:[{sha256, url, status, content_type, fetched_at, bytes_b64}], claims:[{series_id, period_label, value_text}] }
+   服务端：校验 sha256 = 字节 → 存证 → 用 TS 端的定位解析器从原始字节提取值（不信任 Python 的数值）→ 与 AKShare 的 claim 十进制比较（不一致 → 隔离 `adapter_mismatch`）→ 规则 → 写入 → 回执
+   → 最后一块带 complete:true 时 finishBatch、recordAttempt('macro.akshare','daily')、publish('CN')
 ```
 
-- FRED 适配器 `src/lib/macro/providers/fred.ts`：`GET https://api.stlouisfed.org/fred/series/observations?series_id=..&api_key=FRED_API_KEY&observation_start=2010-01-01`；月度指标取原频率，日频指标在 `normalize.ts` 里取月末值（并保存日频原值）。
-- Python 采集器 `scripts/macro/collect.py`（仓库已有 Python 脚本先例 `scripts/quotes/probe_quality.py`），依赖 `akshare`、`yfinance`、`requests`，`scripts/macro/requirements.txt` 锁版本；输出规范化记录 `{series_id, period_end, value, available_at?, raw}`，不做任何派生计算。
-- `POST /api/macro/ingest`：校验 secret → ajv schema 校验 → 范围检查（`quality.ts`：单位范围、跳变 > N σ 隔离）→ 幂等写入（同键同值跳过，同键不同值 quarantined + 新 vintage）→ 返回回执。
-- 发布 `src/lib/macro/snapshots.ts::publish(region)`：读各序列最新 ok 观测 → 计算 regime → 一致性检查（coverage ≥ 0.6，否则 snapshot status=failed，保留旧 active）→ 事务内切换 active。
-- 失败策略：任一 provider 失败不阻塞其他；新快照失败不覆盖旧快照；回执写共用的 `ingest_batches.errors`（见数据底座规格 §5.1）。
+- **数值只认 TS 解析器从存证字节里取出的十进制字符串**；AKShare 的 DataFrame 值只作交叉核对。离线 `replay` 测试：给定证据字节 + 解析器版本 → 得到完全相同的 `value_text` 与定位。
+- FRED CSV 解析：逐行，`observation_date,<CODE>`；值 `.` 表示缺失（不入库）；`value_text` 取原文（`canonicalDecimal`）；定位 `{kind:'csv_row', line, column:1}`。
+- 写入规则（`macro_write_observations`，与 M10 一致）：
+  - 同 `(series_id, period_end)` 当前最新版本值相同（十进制相等）→ `duplicates+1`，不写；
+  - 不存在 → `version=1`，`inserted+1`；
+  - 存在且值不同：`revisionPolicy='revisable'` → `version+1`、`versioned+1`，旧版本仍保留（`ok`，查询取最新版本）；`'immutable'` → 新行 `quarantined` + `quarantine(reason 'unexpected_revision')`，`quarantined+1`，旧值继续服务；
+  - 同一证据内同期出现两个不同值 → 两者都不写，`quarantine(reason 'conflicting_rows')`。
+- 规则校验（共用 `src/lib/dq/rules.ts` 的 `rangeRule` / `jumpRule` / `unitRule`，宏观专用阈值在 `src/lib/macro/quality.ts`，版本 `macro-rules/1`）：PMI ∈ [0,100]、利率 ∈ [−5,30]、"上年同月=100"指数 ∈ [50,200]；失败 → 隔离 `rule_failed:<ruleId>`。
+- 失败策略：单序列失败计 `failed` 并写 `errors`，其余继续；证据上传失败 → 该序列不写观测；新快照失败不覆盖旧快照；所有批次经 `finishBatch` 得到 `success/partial/failed`。
+- `preview=1`：执行抓取与解析，返回将要写入的计数与样本，零数据库写入、零存证上传（测试断言）。
 
-### 4.5 新鲜度
+### 4.5 新鲜度（两个概念，分开显示）
 
-`freshness.ts` 按 `releaseCalendar` 判断：数据期 + 预期发布滞后（CPI ≈ 15 天、PMI ≈ 1 天、中国月度 ≈ 15 天、GDP ≈ 20 天）→ 若当前日期超过预期发布日 + 3 天仍无新观测，标 `stale`；provider 失败连续 2 次标 `error`；catalog 存在但无观测标 `missing`。状态在指标表、状态卡、Today 卡片同时显示。
+- **采集状态**：共用 `dq_freshness`，dataset `macro.fred`、`macro.akshare`，cadence `daily`；读时用 `freshnessOf` 重算（连续 2 次失败才是 `error`）。界面文案"采集：正常 / 过期 / 失败 / 无记录"。
+- **发布及时性**（逐序列，`freshness.ts` 纯函数）：最新数据期 + `releaseLagDays` + 3 天宽限 < 今天且没有更新的数据期 → `late`；目录 A 状态但无观测 → `missing`；否则 `current`。重复抓到同一旧值不会让及时性变绿。
 
 ---
 
-## 5. 判定引擎 `src/lib/macro/regime.ts`
+## 5. 判定（judgment 侧）
+
+判定是 F4 意义上的判断，宏观侧只负责：同一个分类函数、发布时冻结的结果、`MacroReadApi`。页面默认不展示（§3.2）。
 
 ### 5.1 规则类型化
 
 ```ts
-type Rule = { when: (v: number, delta: number) => boolean; support: Partial<Record<State, number>>; label: {zh,en} };
-const RULES: Record<SeriesType, Rule[]> = { policy_rate: [...], fx: [...], ... };
+type Rule = { id: string; when: (v: number, delta3m: number | null, delta1: number | null) => boolean;
+              support: Partial<Record<Regime, number>>; label: { zh: string; en: string } };
+const RULES: Record<SeriesType, Rule[]>;    // 版本 RULES_VERSION = 'macro-regime-rules/1.0'
 ```
 
-一个序列只会匹配自己 `type` 下的规则；没有匹配则该指标不贡献且计入 `uncovered_weight`。单元测试覆盖"汇率值 7.12 永远不命中 policy_rate 规则"。
+一个序列只匹配自己 `type` 的规则（单测："7.12 的汇率永远不命中 policy_rate 规则"）；无匹配或无观测 → 不贡献，计入 `uncovered_weight`。规则输入是有限数（由 `value_text` 转 `Number`，转换在此边界发生并在方法文档写明）。
 
-### 5.2 v1.0 规则表（修正自对方规则，阈值可在 `methodology_version` 内调参）
+### 5.2 v1.0 规则表
+
+（同第 1 稿表格，略有改动：`fx` 规则对 `CN_USDCNY_CP` 用 3M 变化率；`risk_index` 在 VIX 为 restricted 期间无输入。）
 
 | type | 条件 | 复苏 | 过热 | 滞胀 | 衰退 |
 |---|---|---|---|---|---|
@@ -230,7 +313,7 @@ const RULES: Record<SeriesType, Rule[]> = { policy_rate: [...], fx: [...], ... }
 | bond_yield | Δ(3M) ≥ +25bp | — | 0.5 | 0.3 | — |
 | bond_yield | Δ(3M) ≤ −25bp | 0.2 | — | — | 0.5 |
 | bond_yield | 其他 | 0.2 | 0.2 | 0.2 | 0.2 |
-| fx (美元类) | 3M 变化 ≥ +2% | — | 0.4 | 0.3 | — |
+| fx | 3M 变化 ≥ +2% | — | 0.4 | 0.3 | — |
 | fx | 3M 变化 ≤ −2% | 0.5 | — | — | 0.2 |
 | inflation_yoy | v < 1 | 0.1 | — | — | 0.7 |
 | inflation_yoy | 1 ≤ v < 2 | 0.5 | — | — | 0.3 |
@@ -243,7 +326,7 @@ const RULES: Record<SeriesType, Rule[]> = { policy_rate: [...], fx: [...], ... }
 | pmi | v < 47 | — | — | 0.3 | 0.7 |
 | labor_rate | Δ(3M) ≥ +0.3pp | — | — | 0.4 | 0.5 |
 | labor_rate | Δ(3M) ≤ −0.1pp | 0.5 | 0.4 | — | — |
-| growth_yoy (CN GDP/出口) | Δ ≥ 0 且 v ≥ 5 | 0.5 | 0.3 | — | — |
+| growth_yoy | Δ ≥ 0 且 v ≥ 5 | 0.5 | 0.3 | — | — |
 | growth_yoy | v < 4.5 | — | — | 0.3 | 0.6 |
 | liquidity_yoy | v ≥ 8 且 Δ ≥ 0 | 0.5 | 0.3 | — | — |
 | liquidity_yoy | v ≥ 8 且 Δ < 0 | 0.2 | 0.4 | 0.2 | — |
@@ -252,45 +335,67 @@ const RULES: Record<SeriesType, Rule[]> = { policy_rate: [...], fx: [...], ... }
 | risk_index | 15 ≤ v < 25 | 0.3 | 0.3 | 0.2 | 0.2 |
 | risk_index | v ≥ 25 | — | — | 0.5 | 0.5 |
 
-Δ 默认与上一可比期比较；标注 Δ(3M) 的用 3 个月前。
+Δ 与上一可比期（同序列前一个 `period_end`）比较；Δ(3M) 与 3 个月前的 `period_end` 比较（季度序列用前一季度）；所需比较期缺失 → 该规则不命中。区间外的组合（例如 growth_yoy 4.5 ≤ v < 5 或 Δ < 0 且 v ≥ 5）无匹配 → 不贡献。
 
-### 5.3 输出
+### 5.3 输出（逐字采用 F4 `RegimeResult`）
 
 ```
-score[s]    = Σ_i weight_i × support_i[s]
-coverage    = Σ(matched weight) / Σ(catalog weight for region)
-norm[s]     = score[s] / Σ score   （coverage < 0.6 → 不发布）
-primary     = argmax norm；secondary = 次高；margin = norm[primary] − norm[secondary]
-growth_axis = 由 pmi/labor/growth 类的加权倾向 → 'expanding' | 'contracting' | 'flat'
-inflation_axis = 由 inflation_yoy 类 → 'rising' | 'falling' | 'stable'
+score[s]     = Σ_i weight_i × support_i[s]                    s ∈ recovery, overheat, stagflation, recession
+coverage     = Σ(matched weight) / Σ(目录中该区域 role=indicator 的全部 weight，含 missing/restricted)
+regime       = null 当 coverage < 0.6 或 Σscore = 0
+norm[s]      = score[s] / Σ score
+primary      = argmax norm（并列时按 recovery < overheat < stagflation < recession 的固定顺序取先者）
+secondary    = 次高（同样的并列规则；只有一个非零则 null）
+margin_pp    = 100 × (norm[primary] − norm[secondary ?? primary 之外的最大值])
+growth_axis  = Σ_{pmi,labor_rate,growth_yoy} weight × (support[recovery]+support[overheat]−support[stagflation]−support[recession]) / Σ 这些类型的命中 weight；无命中 → null；范围 [−1,1]
+inflation_axis = 同式，只取 inflation_yoy，用 (support[overheat]+support[stagflation]−support[recovery]−support[recession])
 ```
 
-界面文案：`margin < 5` 显示"四象限接近，判定不稳"；`5–15` 显示"相邻象限可能漂移"；`> 15` 不提示。所有数字标注 `methodology_version`。
+`RegimeResult = {primary_state, secondary_state, scores, norm, coverage, margin_pp, growth_axis, inflation_axis}`；结果存 `macro_regime_results.regime`（可为 null）与逐指标 `contributions`（series_id、observation_id、rule_id、weight、support、contribution）。`methodology_version='v1.0'`（F4 上游绑定），`rules_version='macro-regime-rules/1.0'`，`catalog_version` 冻结在快照上。
+
+快照与判定解耦：快照是"这一刻各目录项的最新 ok 观测清单"，**不论 coverage 都发布**；`regime=null` 只表示这一快照不产生判定。
+
+### 5.4 `MacroReadApi` 实现（`src/lib/macro/read-api.ts`）
+
+按 F4 计划共享契约逐字实现（宏观侧镜像类型 `src/lib/macro/judgment-contract.ts`，F4 合并后改为从 `src/lib/judgments` 导入并由类型测试锁定一致）：
+
+- `observation(observationId)` → `{series_id, period_end, vintage_id: String(version), value: Number(value_text), unit, available_at}`，只返回 `status='ok'`。
+- `snapshot(snapshotId)` → `MacroSnapshotRow`（`observation_ids` 为 uuid 字符串，`regime` 可空）。
+- `snapshotsSince(marker, limit)`：`status in ('active','superseded')`，按 `(created_at, snapshot_id)` 严格大于 marker 升序，`limit ≤ 200`。
+- `seriesCatalog(region)` → 目录行（含权重、`definition_version`、`catalog_version`）。
+- `classifyAsOf(region, referencePeriod, cutoff, macroMethodologyVersion)`：版本不等于 `v1.0` → 抛 `methodology_mismatch`；每个指标取 `period_end ≤ referencePeriod 月末` 且 `available_at ≤ cutoff` 的最新期、该期内 `available_at ≤ cutoff` 的最高版本；用**同一个** `classifyRegime()`；返回 `{regime, observation_refs, catalog:{version, weights, rules_version}}`。
+- 所有读取走 anon 可读路径（不读隔离行），分页读完或显式报 `truncated` 错误。
 
 ---
 
 ## 6. 事件与周期（P2）
 
-### 6.1 事件来源
+### 6.1 事件（读时派生，不建事件表）
 
-- 自动：`policy_rate` 序列的任何变化自动生成 `policy_rate` 事件（value_change = bp，source_kind=official，source_url 指向 FRED/人民银行）；FOMC 日程从一个版本化 JSON `src/lib/macro/data/fomc-meetings.json` 导入（手工维护，官方日程）。
-- 编辑型：admin 通过 `scripts/macro/events-import.ts` 从 `docs/macro/events.yaml` 导入（对方站点那类"YY-MM 事件标签"），`source_kind=editorial`，界面上与官方事件用不同 marker 形状区分。
+- **美国政策事件（derived）**：`US_FED_TARGET_UPPER_D` / `_LOWER_D` 日频序列中相邻两个有效日的值变化 → 事件 `{kind:'policy_target_change', region:'US', effective_date, upper_from, upper_to, lower_from, lower_to, change_bp, source:'derived', evidence: 两个输入观测 id}`。界面标"由联储目标区间序列变化推导（生效日）"，不称为"公告"。
+- **FOMC 会议日程（calendar）**：`src/lib/macro/data/fomc-meetings.json`，每年一项 `{year, meetings:[{start,end}], source_url: federalreserve.gov 日程页, retrieved_at, sha256}`，原页面字节存证进 `macro-raw`（`scripts/macro/record-fomc.ts`）；与决策事件分开显示。
+- **中国**：LPR / MLF 缺失期间无官方自动事件；不导入编辑型事件标签（第 1 稿开放问题 4 取"只保留官方"）。
+- 事件派生函数 `events.ts` 版本 `macro-events/1`，纯函数，输入观测清单 → 输出事件；同输入同输出。
 
-### 6.2 周期分段 `cycles.ts`
+### 6.2 周期分段（`cycles.ts`，版本 `macro-cycles/1`，读时计算）
 
-- `policy_rate`：按事件方向分段，同方向连续事件合并；方向翻转开启新周期；> 12 个月无变化记"平台期"。
-- 其他序列：对 12 个月移动中位数求方向，连续同向 ≥ 6 个月成段；最小段长 6 个月，短于则并入前段。方法版本化（`method_version`）。
-- 每段计算"周期内资产区间收益"：资产序列在 `start_period` 月末与 `end_period`（或最新）月末的 pct；收益率类资产用 bp。
+- 政策周期：按派生政策事件方向，同方向连续合并；方向翻转开新周期；最后一次变化后 ≥ 12 个月无变化 → 记"平台期"段。
+- 其他月度序列：只用**截至当期的尾随** 12 个月中位数（需 ≥ 12 个有效月，否则该月无方向）；方向 = 中位数相对上月的符号（相等 = 无变化，延续前方向）；连续同向 ≥ 6 个月成段，短于 6 个月的段并入前一段（首段过短则标 `insufficient` 不显示）；缺失月中断计数。段的确认时间 = 满 6 个月的那个月（界面标注确认滞后）。
+- 周期内资产区间变化：资产月度序列在段起止月末之间的变化（价格类用 pct，收益率类用 bp）；端点缺失 → 显示缺失；只用 `enabled` 资产。
 
 ---
 
-## 7. 关联分析 `correlation.ts`（P2）
+## 7. 关联分析（`correlation.ts`，P2，版本 `macro-correlation/1`）
 
-- 对齐：月度 `period_end` 内连接；缺失不插值；`n < 24` 拒绝计算。
-- 变换：`level`；`change`（指标 Δ 与资产对数收益）；`rolling`（36M 窗口 r 序列）；`event_window`（按事件 ±N 月的资产收益分布）。
-- 输出 `results: { r, r2, slope, intercept, n, from, to, lag, transform, series_versions, code_version }`。
-- 统计事实文案由 `explain.ts` 规则生成：`|r| < 0.3` "弱" / `< 0.6` "中等" / 否则 "强"，符号与数字强绑定；不写机制解释。
-- 种子 run 由 `publish()` 之后异步重算；用户 run 在请求内同步计算（120×2 点，毫秒级）。
+- 对齐：月度 `period_end` 内连接；先把资产序列按滞后 k 平移日历月再连接：**k > 0 表示指标领先**，计算 `corr(indicator[t], asset[t+k])`；缺失不插值。
+- 变换：
+  - `change`（默认）：指标 Δ（`changeKind` 口径）与资产变化（价格类对数收益，收益率类 bp 差）；
+  - `level`（探索性）：原值；结果不输出强度词，固定附说明；
+  - `rolling`：36 个月窗口的 `change` 口径 r 序列，每窗口有效对 < 30 的点不输出；
+  - `event_window`：锚 = 派生政策事件生效日所在月；窗口 ±N（N ∈ {3,6,12}）月资产变化；只用前后窗口完整的事件；相邻事件窗口重叠时只保留较早事件；独立完整事件 < 5 → 只给逐事件表，不给分布统计。
+- 样本门槛：`change`/`level` 有效对 n ≥ 36（月度 3 年）否则拒绝并说明；零方差或对数收益遇非正价格 → 拒绝（错误码）。
+- 输出 `results: {r, r2, slope, intercept, n, from, to, lag, transform, method_version, code_version}`（滚动 / 事件模式各有自己的结构）；`explain.ts` 规则文案只在 `change` 口径下给强度词（|r| < 0.3 弱 / < 0.6 中等 / 否则强），符号与数字绑定，不写机制解释。
+- 冻结输入：`inputs = {indicator:{series_id, observations:[{observation_id, period_end, value_text}]}, asset:{…}, events?: [...], cutoff: 运行时刻, catalog_version}`，`inputs_hash` = 规范化 JSON 的 SHA-256；运行只追加；复算 = 用冻结输入重跑同版本函数并比较结果（测试）。读取输入时分页读完，读不完 → 报错不计算。
 
 ---
 
@@ -298,16 +403,16 @@ inflation_axis = 由 inflation_yoy 类 → 'rising' | 'falling' | 'stable'
 
 | 方法 路径 | 返回 | 约束 |
 |---|---|---|
-| `GET /api/macro/overview?region=US\|CN\|all&compact=1` | `{snapshotId, asOf, methodologyVersion, regime, changes[], freshness, sources[]}` | 读 active snapshot；`Cache-Control: s-maxage=300` |
-| `GET /api/macro/series/[id]?from&to&transform&asOf` | `{def, observations[], cycles[], events[], assetsByCycle[], provenance}` | 白名单 id；最多 600 点 |
-| `GET /api/macro/snapshots/[id]` | 快照全文（贡献表、observation_ids） | 公开 |
-| `POST /api/macro/analyses` | 创建 run，返回 `{runId}` | session + 配额；ajv 校验 spec |
-| `GET /api/macro/analyses/[runId]` | run 结果 | own 或 seed |
-| `GET /api/macro/events?region&from&to` | 事件列表 | 公开 |
-| `POST /api/macro/ingest` | 回执 | `MACRO_INGEST_SECRET`；body ≤ 2 MB |
-| `GET /api/cron/macro-sync?preview=1` | 同步 + 发布回执 | `CRON_SECRET`，沿用 `authorizedCronRequest` |
+| `GET /api/macro/overview?region=US\|CN\|all&compact=1` | `{regions: {US?: Envelope, CN?: Envelope}}`；`Envelope = {snapshotId, asOf, catalogVersion, methodologyVersion, collection: {dataset, status, lastOkAt}[], indicators: IndicatorRow[], changes[], catalogCounts}` | 登录；读 active 快照；`Cache-Control: private, max-age=60`；判定不在此响应里（由 F4 `/api/judgments` 提供） |
+| `GET /api/macro/series/[id]?from&to&transform&asOf` | `{def, observations[{observation_id, period_end, value_text, version, available_at, availability_basis, evidence_sha256, locator}], cycles[], events[], assetsByCycle[], provenance}` | 登录；目录白名单 id；最多 600 点；`asOf` → `available_at ≤ asOf` |
+| `GET /api/macro/evidence/[sha256]` | 证据元数据 + 短期签名下载链接 | 登录 |
+| `GET /api/macro/snapshots/[id]` | 快照全文（观测清单、目录计数；判定结果仅在判断层开启时返回） | 登录 |
+| `POST /api/macro/analyses` | `{runId}` 或 `{error:{code:'quota_exceeded'\|'insufficient_sample'\|…}}` | 登录；ajv 校验 spec；服务端读输入、计算、调 RPC |
+| `GET /api/macro/analyses/[runId]` | run（本人） | 登录；`private, no-store` |
+| `POST /api/macro/ingest` | 回执 | `MACRO_INGEST_SECRET`；单请求 ≤ 4 MB |
+| `GET /api/cron/macro-sync?preview=1` | 同步 + 发布回执 | `CRON_SECRET`（`authorizedCronRequest`）；登记进 `vercel.json` |
 
-所有读接口响应含 `snapshotId`、`asOf`、`methodologyVersion`、`freshness`；错误用 `{error:{code,message}}`。
+错误统一 `{error:{code,message}}`；所有读响应带 `catalogVersion`。
 
 ---
 
@@ -315,34 +420,43 @@ inflation_axis = 由 inflation_yoy 类 → 'rising' | 'falling' | 'stable'
 
 ```
 src/lib/macro/
-  catalog.ts            MACRO_CATALOG + 类型
-  providers/fred.ts     FRED 适配器（fetch + 解析 + 回执）
-  normalize.ts          月末取值、yoy_from_index、单位校验
-  quality.ts            范围 / 跳变 / 唯一性
-  ingest.ts             写入与隔离逻辑（供 API 与 cron 共用）
-  freshness.ts
-  regime.ts             规则表 + 评分
-  cycles.ts  events.ts  correlation.ts  explain.ts
-  snapshots.ts          publish / active / 回放
-  *.test.ts             每个模块同目录测试
-src/app/api/macro/...   路由
+  catalog.ts            MACRO_CATALOG、CATALOG_VERSION、类型
+  judgment-contract.ts  F4 契约镜像类型（Regime、RegimeResult、MacroSnapshotRow、MacroObservationRef、MacroReadApi）
+  decimal.ts            复用 facts/json-numbers 的 canonicalDecimal；十进制减法/比较的最小实现
+  evidence.ts           证据存储接口（Supabase 桶 + 内存实现，同 snapshot-store 模式）
+  parsers/fred-csv.ts  parsers/nbs.ts  parsers/chinabond.ts  parsers/safe.ts   原始字节 → {period_end, value_text, locator}[]
+  providers/fred.ts     FRED CSV 抓取
+  derive.ts             月末、同比、减 100（十进制）
+  quality.ts            宏观规则阈值（调用 dq/rules）
+  ingest.ts             写入编排（批次、证据、规则、RPC、隔离）——cron 与 ingest 路由共用
+  freshness.ts          发布及时性
+  regime.ts             规则表 + classifyRegime（纯函数）
+  snapshots.ts          publish(region)
+  read-api.ts           MacroReadApi 实现
+  events.ts  cycles.ts  correlation.ts  explain.ts
+  db.ts                 MacroDb 契约 + Supabase / 内存实现
+  *.test.ts
+src/app/api/macro/{overview,series/[id],evidence/[sha256],snapshots/[id],analyses,analyses/[runId],ingest}/route.ts
 src/app/api/cron/macro-sync/route.ts
 src/app/(app)/intel/macro/{page.tsx,[seriesId]/page.tsx,analyses/[runId]/page.tsx}
 src/components/macro/
-  RegimeSummary.tsx  ContributionTable.tsx  IndicatorTable.tsx  IndicatorDetail.tsx
-  CorrelationWorkbench.tsx  SourceFooter.tsx  SourceDrawer.tsx
-  charts/{MacroLineChart.tsx (lightweight-charts), Sparkline.tsx, ScatterFit.tsx, ScoreBars.tsx}
-  macro-format.ts       变化口径格式化（bp/pp/pct/points），可测
-scripts/macro/collect.py  requirements.txt  events-import.ts
-messages/{zh,en}/macro.json（注册到 MESSAGE_DOMAINS）
-supabase/migrations/..._macro_workbench.sql
+  IndicatorTable.tsx  ChangesCard.tsx  CatalogCoverage.tsx  IndicatorDetail.tsx  SourceFooter.tsx  SourceDrawer.tsx
+  CorrelationWorkbench.tsx  MacroJudgmentSlot.tsx  macro-format.ts
+  charts/{MacroLineChart.tsx, Sparkline.tsx, ScatterFit.tsx, DataTableToggle.tsx}
+scripts/macro/collect.py  recorder.py  requirements.txt  test_collect.py  launchd.plist.template
+scripts/macro/record-fred-fixtures.ts  record-fomc.ts  resolve-quarantine.ts
+messages/{zh,en}/macro.json（注册到 MESSAGE_DOMAINS，`// MACRO` 块）
+supabase/migrations/20261114090000_macro_workbench.sql
+docs/runbooks/macro-sync.md
 ```
+
+共享文件改动都包在 `// MACRO` 注释块里：`src/i18n/request.ts`、`src/lib/supabase/database.types.ts`、`scripts/ci/research-checks.ts`（`criticalSuites`）、`vercel.json`、`supabase/migrations.lock.json`、`src/components/today/MacroGlance.tsx`、`/intel` 页。
 
 ---
 
 ## 10. i18n
 
-新域 `macro`；指标名称来自 catalog（zh/en 双写），规则标签、状态文案、表头、来源抽屉文案进 `messages/*/macro.json`；`messages-parity.test.ts` 自动校验双语对等。
+新域 `macro`；目录名称与理由在 catalog 里双写；表头、状态、证据抽屉、方法说明、错误文案进 `messages/*/macro.json`；`messages-parity` 测试校验双语对等。
 
 ---
 
@@ -350,32 +464,36 @@ supabase/migrations/..._macro_workbench.sql
 
 | 情形 | 行为 |
 |---|---|
-| provider 超时/5xx | 重试 3 次退避；写 batch.errors；其余序列继续 |
-| 同键不同值 | 新行 `quarantined` + 新 `vintage_id`，旧值继续服务；admin 页列出待处理 |
-| 单位异常（CPI 同比 > 50、PMI > 100） | 拒收，回执标错 |
-| coverage < 0.6 | 不发布新快照；概览显示旧快照 + "数据覆盖不足"横幅 |
-| catalog 新增序列无历史 | `missing`，判定排除，不补中性分 |
-| 用户 run 参数非法 | 400 + 字段级错误 |
+| provider 超时 / 5xx | 退避重试 3 次；序列计 `failed`，`errors` 带 `{code, key: series_id}`；其他序列继续 |
+| 证据上传失败 | 该序列不写观测，计 `failed` |
+| TS 解析值 ≠ AKShare claim | 隔离 `adapter_mismatch`，不写观测 |
+| 不可修订序列出现新值 / 同证据内矛盾 | 隔离，旧值继续服务；`/admin/dq` 可见 |
+| 规则失败（范围 / 单位 / 跳变） | 隔离 `rule_failed:<id>` |
+| 目录 A 项无观测 | 及时性 `missing`，判定不贡献，不补中性分 |
+| coverage < 0.6 | 快照照常发布；`regime=null` |
+| 并发发布 | `stale_publisher`，后到者放弃；旧 active 不受影响 |
+| 用户分析参数非法 / 样本不足 | 400 + 字段级错误码 |
 
 ---
 
 ## 12. 测试策略
 
-- 纯函数单元测试（vitest，`src/**/*.test.ts`）：`regime`（类型隔离、coverage、margin、固定夹具重现对方 US/CN 快照并对比修正后的结果）、`normalize`（yoy_from_index、月末取值）、`cycles`（分段）、`correlation`（与 numpy 预算值对比的夹具）、`macro-format`（bp/pp/pct）。
-- 迁移：`npm run test:migrations` + `check:migration-history`。
-- 数据库集成（`test:db`）：ingest 幂等与隔离、active snapshot 唯一、RLS（匿名可读 ok 行、不可读 quarantined）。
-- API：`/api/macro/ingest` schema 拒收夹具；`/api/cron/macro-sync?preview=1`。
-- E2E（Playwright）：登录 → `/intel/macro` 概览可见 → 展开贡献 → 进入指标详情 → 创建一个 level 分析 → Today 卡片显示状态。
-- Python：`scripts/macro/test_collect.py` 对采集器输出 schema 做离线夹具测试（不打网络）。
+- 纯函数（vitest）：`catalog`（版本稳定、A/M/R 不变量、无 yfinance、AKShare 主机白名单）、`parsers/*`（录制夹具 → 精确 `value_text` 与定位）、`derive`（十进制同比与减 100、跨年、缺月）、`regime`（类型隔离、coverage、`margin_pp`、并列、null）、`read-api`（`classifyAsOf` 的 `available_at ≤ cutoff` 与版本选择）、`events`、`cycles`（确定性夹具）、`correlation`（与预算值对比、滞后方向、门槛）、`freshness`、`macro-format`。
+- `replay.test.ts`：从夹具证据字节重放得到页面所用的全部观测（US + CN 各一条完整链）。
+- 数据库集成（`test:db`，`S4_TEST_STATE`，加入 `criticalSuites`）：`macro_write_observations` 的重复 / 新版本 / 隔离；`publish_macro_snapshot` 的事务与 `stale_publisher`；anon 只读 ok 行、读不到隔离行与分析运行；`create_macro_analysis_run` 的配额与 own-rows；grants/revokes。
+- 迁移：`npm run test:migrations`；锁文件追加。
+- API：ingest 的哈希校验、TS 解析交叉核对、schema 拒收；`macro-sync?preview=1` 零写入；读路由 401。
+- Python：`scripts/macro/test_collect.py`（录制钩子、分块、请求体 schema；离线，不打网络）。
+- 端到端：现有 verify 流程对 `/intel/macro`（判断层关闭）可见指标表、证据抽屉、详情页表格视图、创建一个 change 分析；Today 卡无 mock 文案。
 
 ---
 
 ## 13. 性能与运维
 
-- 概览接口 p95 < 300ms（读单表 + jsonb）；指标详情 < 500ms；页面首屏 payload < 60 KB（不含图表库）。
-- 采集：FRED 18 个请求 / 日；Python 约 15 次 AKShare + 10 次 yfinance / 日。
-- 环境变量新增：`FRED_API_KEY`、`MACRO_INGEST_SECRET`；Python 侧 `MACRO_INGEST_URL`、`MACRO_INGEST_SECRET`。
-- 运行手册 `docs/runbooks/macro-sync.md`：手动触发、隔离处理、回滚 active snapshot。
+- 概览 p95 < 300 ms；详情 < 500 ms；首屏 payload < 60 KB（不含图表库）。
+- 采集：FRED ~10 个 CSV / 日；Python ~8 次 AKShare 调用 / 日。
+- 环境变量：`MACRO_INGEST_SECRET`（Vercel + Mac）、`MACRO_INGEST_URL`（Mac）、`MACRO_JUDGMENTS_ENABLED`（默认未设 = 关）；不需要 `FRED_API_KEY`。
+- 运行手册 `docs/runbooks/macro-sync.md`：uv 虚拟环境与 launchd 安装、手动触发、隔离裁决、回滚 active 快照、权利确认后启用 restricted 序列的步骤。
 
 ---
 
@@ -383,29 +501,32 @@ supabase/migrations/..._macro_workbench.sql
 
 | 工作包 | 交付 | 退出条件 |
 |---|---|---|
-| WP-M1 目录与迁移 | catalog、迁移、RLS、ingest API、FRED 适配器、cron 骨架 | `preview=1` 返回 US 8 序列回执；test:db 通过 |
-| WP-M2 Python 采集 | collect.py、requirements、launchd plist 模板、ingest 对接 | CN 12 + 资产 10 序列入库；回执含 tool_versions |
-| WP-M3 判定与快照 | regime、snapshots、freshness、overview API | 夹具重现 + 修正；active 切换事务 |
-| WP-M4 工作台 UI | 概览、指标表、详情、来源抽屉、Today 替换、i18n | E2E 通过；DESIGN.md 审查 |
-| WP-M5 事件与周期 | events、fomc json、cycles、详情页色带与资产区间收益 | 分段单测；事件 marker 可见 |
-| WP-M6 关联工作台 | correlation、analyses API、UI、种子 run | 四种模式；配额生效 |
+| WP-M1 目录、迁移、证据、FRED | catalog、迁移 + 锁、MacroDb、证据存储、FRED CSV 解析与适配器、写入 RPC、cron（含 preview） | US A 项夹具重放一致；`preview=1` 零写入；test:db 通过 |
+| WP-M2 Python 采集与 ingest | collect.py + 录制钩子、requirements、NBS/中债/外汇局 TS 解析器、ingest 路由、launchd 模板 | CN A 项夹具（真实录制）重放一致；不一致即隔离的测试；核实失败的项改 M 并写理由 |
+| WP-M3 判定、快照、读接口 | regime、snapshots、publish RPC、freshness、overview/series/snapshots/evidence API、MacroReadApi | 规则夹具；并发发布测试；`classifyAsOf` 测试 |
+| WP-M4 工作台 UI | 概览（判断层关闭）、指标表、详情、证据抽屉、Today 替换、`/intel` 摘要卡、判定槽位（flag）、i18n | verify 流程通过；DESIGN.md 审查；表格视图齐全 |
+| WP-M5 事件与周期 | events、FOMC 日程存证、cycles、详情页色带与资产区间变化 | 分段确定性单测；marker 可见 |
+| WP-M6 关联工作台 | correlation、analyses API + RPC、UI、预填表单 | 四种模式；冻结输入复算测试；配额测试 |
 
-验收样例（沿用 `REPORT.md` 12.3 的 1–8 条）加：
-9. 对方站点 2026-09-11 快照夹具输入我们的 v1.0 规则，DTWEXBGS / USDCNY / GDP 三项不再命中利率或 PMI 规则。
-10. 断网运行 `macro-sync`：概览仍返回旧 snapshot，`freshness.status='error'`，无 0 值。
+验收样例：
+1. 每个目录项要么已核实（夹具重放一致），要么显示缺失 / 受限及理由；页面无 yfinance、东方财富、金十来源。
+2. 对方站点 2026-09-11 快照的规则错配回归：汇率 / GDP 类观测不命中利率或 PMI 规则（用我们自己的夹具值，不导入对方数据）。
+3. 断网运行 `macro-sync`：概览仍返回旧快照，采集状态最终为 `error`（连续两次失败），无 0 值。
+4. 判断层关闭时页面与 API 不出现象限 / 得分 / margin；开启且 F4 不可用时显示"暂不可用"。
 
 ---
 
-## 15. 开放问题
+## 15. 开放问题与 owner 事项
 
-1. AKShare 的 `macro_china_shrzgm` 是否含存量同比字段；若无，需从人民银行月度存量表另算（WP-M2 第一周验证）。
-2. 美国 ISM PMI 走 AKShare `macro_usa_ism_pmi` 的数据使用许可是否可接受；否则缺失，并在方法说明里公开。
-3. Python 采集器部署在 Mac Studio（与 DataGateway 同机）还是 GitHub Actions；默认 Mac Studio launchd，失败时可手动跑。
-4. 对方站点那些"YY-MM 事件标签"是否要整理成我们的 `events.yaml` 种子；需逐条附来源链接，否则只保留官方自动事件。
+1. **权利确认**（owner）：VIXCLS、SP500 / NASDAQCOM / DJIA（via FRED）、中证 300 的展示与再分发权利；确认前保持 restricted（不采集）。
+2. `FRED_API_KEY`（可选）：提供后可做 ALFRED 实时起点，替代 `first_seen`（后续工作）。
+3. Python 采集部署在 Mac Studio launchd（默认）；`MACRO_INGEST_SECRET` 需在 Vercel 与 Mac 两边配置。
+4. 国家统计局转载 PBoC M2 / 海关出口：`publisher` 记原机构、`via` 记国家统计局；若 owner 要求直连人民银行 / 海关官网，另立采集项。
 
 ---
 
 ## 16. 附件
 
 - 对方站点拆解与克隆蓝图：`docs/research/chaosai-integration-2026-11-04/MACRO_STRATEGY_DEEP_DIVE.md`
-- GUI / UI 流程设计稿（Claude Design 画布，私有链接，含 6 块画板：UI 流程与数据链路、概览页、指标详情页、关联工作台、手机概览、Today 卡片）：https://claude.ai/artifact/StRedLKWSN4EVb26GSg7KH
+- GUI / UI 流程设计稿（Claude Design 画布，私有链接，6 块画板：UI 流程与数据链路、概览页、指标详情页、关联工作台、手机概览、Today 卡片）：https://claude.ai/artifact/StRedLKWSN4EVb26GSg7KH ——第 2 稿需补"判断层关闭"概览与证据抽屉画板（§3.7）。
+- Codex 增量审计：`docs/audits/2026-11-06-macro-workbench/02-codex-spec-round.md`

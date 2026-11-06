@@ -275,7 +275,7 @@ dq_freshness
   dataset PK, expected_cadence text ('daily'|'monthly'|'quarterly'|'event'), last_ok_at, last_attempt_at, status ('fresh'|'stale'|'error'|'missing'), detail jsonb
 ```
 
-宏观规格 §4.3 的 `macro_ingest_batches` 改用本表 `ingest_batches`（dataset='macro'），不再单建。
+宏观规格 §4.3 的 `macro_ingest_batches` 改用本表 `ingest_batches`（dataset='macro.*'，如 'macro.fred'、'macro.akshare'），不再单建。
 
 ### 5.2 规则库 `src/lib/dq/`
 
